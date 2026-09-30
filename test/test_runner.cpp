@@ -13,6 +13,8 @@
 #include "micant/dispatcher.hpp"
 #include "micant/ps.hpp"
 #include "micant/section.hpp"
+#include "micant/sync.hpp"
+#include "micant/io.hpp"
 
 using namespace micant;
 
@@ -252,6 +254,121 @@ void Test_ProcessAndSectionManager() {
     TEST_ASSERT(thread->getState() == ps::ThreadState::Terminated, "Threads must be transitioned to Terminated");
 }
 
+// ============================================================================
+// Suite 6: Synchronization Primitives Tests (KEVENT, KMUTANT, KSEMAPHORE)
+// ============================================================================
+void Test_SynchronizationPrimitives() {
+    // 1. Notification Event (Manual Reset)
+    sync::EventObject notifEvent(sync::EventType::NotificationEvent, false);
+    TEST_ASSERT(!notifEvent.isSignaled(), "Event should initially be unsignaled");
+    notifEvent.set();
+    TEST_ASSERT(notifEvent.isSignaled(), "Event should be signaled after set()");
+    TEST_ASSERT(notifEvent.wait(0), "Wait on signaled notification event should succeed without timeout");
+    TEST_ASSERT(notifEvent.isSignaled(), "Notification event should remain signaled after wait");
+    notifEvent.reset();
+    TEST_ASSERT(!notifEvent.isSignaled(), "Event should be unsignaled after reset()");
+
+    // 2. Synchronization Event (Auto Reset)
+    sync::EventObject syncEvent(sync::EventType::SynchronizationEvent, false);
+    syncEvent.set();
+    TEST_ASSERT(syncEvent.wait(0), "Wait on signaled synchronization event should succeed");
+    TEST_ASSERT(!syncEvent.isSignaled(), "Synchronization event must auto-reset after wait");
+
+    // 3. Mutant Object (Recursive Mutex)
+    sync::MutantObject mutant(false);
+    TEST_ASSERT(mutant.acquire(1, 0), "Thread 1 must acquire free mutant");
+    TEST_ASSERT(mutant.acquire(1, 0), "Thread 1 must recursively acquire mutant");
+    TEST_ASSERT(mutant.getRecursionCount() == 2, "Recursion count should be 2");
+    TEST_ASSERT(!mutant.acquire(2, 0), "Thread 2 must fail to acquire held mutant with timeout 0");
+    TEST_ASSERT(!mutant.release(2), "Thread 2 must not be able to release Thread 1's mutant");
+    TEST_ASSERT(mutant.release(1), "Thread 1 releases recursion 1");
+    TEST_ASSERT(mutant.release(1), "Thread 1 releases recursion 2 (mutant now free)");
+    TEST_ASSERT(mutant.getOwner() == 0, "Mutant must be unowned");
+
+    // 4. Semaphore Object
+    sync::SemaphoreObject sem(1, 3);
+    TEST_ASSERT(sem.wait(0), "Wait on semaphore with count 1 should succeed");
+    TEST_ASSERT(sem.getCount() == 0, "Count should be 0 after wait");
+    TEST_ASSERT(!sem.wait(0), "Wait on exhausted semaphore should fail");
+    int32_t prev = 0;
+    TEST_ASSERT(sem.release(2, &prev), "Releasing 2 counts should succeed");
+    TEST_ASSERT(prev == 0, "Previous count should be 0");
+    TEST_ASSERT(sem.getCount() == 2, "Current count should be 2");
+    TEST_ASSERT(!sem.release(2), "Exceeding max count (3) should fail");
+}
+
+// ============================================================================
+// Suite 7: I/O Request Packet (IRP) & I/O Completion Port (IOCP) Tests
+// ============================================================================
+void Test_IoAndCompletionPorts() {
+    auto& ioMgr = io::IoManager::get();
+
+    // 1. Driver and Device Object Graph
+    io::DriverObject nullDriver;
+    nullDriver.driverName = L"\\Driver\\Null";
+    nullDriver.setDispatch(io::IRP_MJ_CREATE, [](io::DeviceObject*, io::Irp* irp) -> NtStatus {
+        irp->ioStatus.status = NtStatus::Success;
+        return NtStatus::Success;
+    });
+    nullDriver.setDispatch(io::IRP_MJ_WRITE, [](io::DeviceObject*, io::Irp* irp) -> NtStatus {
+        irp->ioStatus.status = NtStatus::Success;
+        irp->ioStatus.information = irp->length; // Discard bytes successfully
+        return NtStatus::Success;
+    });
+
+    auto nullDev = ioMgr.createDevice(&nullDriver, L"\\Device\\Null", io::DeviceType::Null);
+    TEST_ASSERT(nullDev != nullptr, "Null device creation should succeed");
+
+    auto lookedUp = ioMgr.lookupDevice(L"\\Device\\Null");
+    TEST_ASSERT(lookedUp == nullDev, "Device lookup in \\Device should succeed");
+
+    // Dispatch IRP_MJ_WRITE
+    io::Irp testIrp{
+        .majorFunction = io::IRP_MJ_WRITE,
+        .deviceObject = nullDev.get(),
+        .length = 1024
+    };
+    NtStatus irpStatus = nullDriver.dispatch(nullDev.get(), &testIrp);
+    TEST_ASSERT(NT_SUCCESS(irpStatus), "Dispatched IRP_MJ_WRITE must succeed");
+    TEST_ASSERT(testIrp.ioStatus.information == 1024, "IRP information must report 1024 bytes processed");
+
+    // 2. I/O Completion Port (IOCP)
+    io::IoCompletionPort iocp(4);
+    TEST_ASSERT(iocp.getQueuedCount() == 0, "New IOCP must have 0 queued packets");
+
+    // Post completions
+    NtStatus post1 = iocp.postCompletion(0x1337, 0x00007FF71000, NtStatus::Success, 4096);
+    TEST_ASSERT(NT_SUCCESS(post1), "Posting completion 1 must succeed");
+    NtStatus post2 = iocp.postCompletion(0xABCD, 0x00007FF72000, NtStatus::BufferOverflow, 512);
+    TEST_ASSERT(NT_SUCCESS(post2), "Posting completion 2 must succeed");
+    TEST_ASSERT(iocp.getQueuedCount() == 2, "IOCP should have 2 queued packets");
+
+    // Remove completions in FIFO order
+    uint64_t key1 = 0;
+    uintptr_t ov1 = 0;
+    IoStatusBlock iosb1{};
+    NtStatus rem1 = iocp.removeCompletion(key1, ov1, iosb1, 0);
+    TEST_ASSERT(NT_SUCCESS(rem1), "Removing packet 1 must succeed");
+    TEST_ASSERT(key1 == 0x1337, "Key 1 must match 0x1337");
+    TEST_ASSERT(ov1 == 0x00007FF71000, "Overlapped 1 must match");
+    TEST_ASSERT(iosb1.information == 4096, "Bytes transferred must match 4096");
+
+    uint64_t key2 = 0;
+    uintptr_t ov2 = 0;
+    IoStatusBlock iosb2{};
+    NtStatus rem2 = iocp.removeCompletion(key2, ov2, iosb2, 0);
+    TEST_ASSERT(rem2 == NtStatus::BufferOverflow, "Packet 2 status must match BufferOverflow");
+    TEST_ASSERT(key2 == 0xABCD, "Key 2 must match 0xABCD");
+    TEST_ASSERT(iosb2.information == 512, "Bytes transferred must match 512");
+
+    // Check empty queue with timeout
+    uint64_t emptyKey = 0;
+    uintptr_t emptyOv = 0;
+    IoStatusBlock emptyIosb{};
+    NtStatus emptyRem = iocp.removeCompletion(emptyKey, emptyOv, emptyIosb, 0);
+    TEST_ASSERT(emptyRem == NtStatus::Timeout, "Removing from empty IOCP must return Timeout");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -262,6 +379,8 @@ int main() {
     RUN_TEST(Test_PeLoader_ValidAndCorruptedHeaders);
     RUN_TEST(Test_SyscallDispatcher_DispatchFlow);
     RUN_TEST(Test_ProcessAndSectionManager);
+    RUN_TEST(Test_SynchronizationPrimitives);
+    RUN_TEST(Test_IoAndCompletionPorts);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
@@ -269,3 +388,4 @@ int main() {
 
     return (g_FailedTests == 0) ? 0 : 1;
 }
+

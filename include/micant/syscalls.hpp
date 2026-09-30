@@ -26,6 +26,16 @@ inline constexpr uint32_t SSN_NtTerminateThread          = 0x0053;
 inline constexpr uint32_t SSN_NtWaitForSingleObject      = 0x0004;
 inline constexpr uint32_t SSN_NtQuerySystemInformation   = 0x0036;
 
+// Synchronization & IOCP SSNs
+inline constexpr uint32_t SSN_NtCreateEvent              = 0x0048;
+inline constexpr uint32_t SSN_NtSetEvent                 = 0x004E;
+inline constexpr uint32_t SSN_NtResetEvent               = 0x004F;
+inline constexpr uint32_t SSN_NtCreateMutant             = 0x00B2;
+inline constexpr uint32_t SSN_NtReleaseMutant            = 0x001D;
+inline constexpr uint32_t SSN_NtCreateIoCompletion       = 0x0164;
+inline constexpr uint32_t SSN_NtSetIoCompletion          = 0x0165;
+inline constexpr uint32_t SSN_NtRemoveIoCompletion       = 0x0009;
+
 /**
  * @brief Native NT Syscall Signatures in Modern C++23
  */

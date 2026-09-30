@@ -12,6 +12,8 @@
 #include "micant/pe.hpp"
 #include "micant/ps.hpp"
 #include "micant/section.hpp"
+#include "micant/sync.hpp"
+#include "micant/io.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -21,7 +23,7 @@ void PrintBanner() {
     std::cout << "========================================================================\n";
     std::cout << "       __  __ _            _   _ _____                                  \n";
     std::cout << "      |  \\/  (_)          | \\ | |_   _|                                 \n";
-    std::cout << "      | \\  / |_  ___ __ _ |  \| | | |                                   \n";
+    std::cout << "      | \\  / |_  ___ __ _ |  \\| | | |                                   \n";
     std::cout << "      | |\\/| | |/ __/ _` || . ` | | |                                   \n";
     std::cout << "      | |  | | | (_| (_| || |\\  | | |                                   \n";
     std::cout << "      |_|  |_|_|\\___\\__,_||_| \\_| |_|                                   \n";
@@ -49,14 +51,43 @@ int main(int argc, char* argv[]) {
     // 2. Initialize Memory Manager
     std::cout << "[MicaNT Boot] [Mm] Initializing 64-bit Virtual Memory Manager...\n";
 
-    // 3. Initialize KiSystemCall64 Central Dispatcher Table
+    // 3. Initialize I/O Manager & Device Object Graph
+    std::cout << "[MicaNT Boot] [Io] Initializing I/O Manager and Device Object Graph...\n";
+    auto& ioMgr = io::IoManager::get();
+    io::DriverObject nullDriver{ .driverName = L"\\Driver\\Null" };
+    io::DriverObject diskDriver{ .driverName = L"\\Driver\\Disk" };
+    auto nullDev = ioMgr.createDevice(&nullDriver, L"\\Device\\Null", io::DeviceType::Null);
+    auto diskDev = ioMgr.createDevice(&diskDriver, L"\\Device\\Harddisk0", io::DeviceType::Disk);
+    std::cout << "[MicaNT Boot] [Io] Created system device nodes: \\Device\\Null, \\Device\\Harddisk0 (Registered: " 
+              << ioMgr.getDeviceCount() << " devices)\n";
+
+    // 4. Initialize I/O Completion Port (IOCP) Subsystem
+    std::cout << "[MicaNT Boot] [Io & IOCP] Initializing I/O Completion Port Subsystem...\n";
+    io::IoCompletionPort systemIocp(4);
+    systemIocp.postCompletion(0x1337, 0x00007FF71000, NtStatus::Success, 4096);
+    uint64_t iocpKey = 0;
+    uintptr_t iocpOv = 0;
+    IoStatusBlock iocpIosb{};
+    NtStatus iocpStatus = systemIocp.removeCompletion(iocpKey, iocpOv, iocpIosb, 0);
+    if (NT_SUCCESS(iocpStatus)) {
+        std::cout << "[MicaNT Boot] [Io & IOCP] Async completion cycle verified: Key 0x" 
+                  << std::hex << iocpKey << std::dec << " Transferred: " << iocpIosb.information << " bytes.\n";
+    }
+
+    // 5. Initialize Synchronization Subsystem
+    std::cout << "[MicaNT Boot] [Sync] Initializing KEVENT / KMUTANT / KSEMAPHORE primitives...\n";
+    sync::EventObject bootEvent(sync::EventType::NotificationEvent, false);
+    bootEvent.set();
+    std::cout << "[MicaNT Boot] [Sync] Boot synchronization event signaled: OK\n";
+
+    // 6. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";
     auto& dispatcher = sys::SyscallDispatcher::get();
     dispatcher.initializeStandardTable();
     std::cout << "[MicaNT Boot] [KiSystemCall64] " << dispatcher.getRegisteredCount() 
               << " core NT syscalls registered in LSTAR dispatch table.\n";
 
-    // 4. Test Simulated Ring 3 Syscall via Dispatcher
+    // 7. Test Simulated Ring 3 Syscall via Dispatcher
     std::cout << "[MicaNT Boot] [Test] Simulating Ring 3 -> Ring 0 'syscall' invocation...\n";
     uintptr_t userAllocBase = 0;
     size_t userAllocSize = 128 * 1024; // 128 KB
@@ -81,7 +112,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "[MicaNT Boot] [Test] Syscall dispatch failed: " << NtStatusToString(syscallResult) << "\n";
     }
 
-    // 5. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
+    // 8. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
     const char* targetAppPath = "bin/userland_app.exe";
     std::ifstream testCheck(targetAppPath, std::ios::binary);
     if (!testCheck.is_open() && argc > 0 && argv[0]) {
@@ -115,7 +146,7 @@ int main(int argc, char* argv[]) {
                               << " Flags: 0x" << sec.characteristics << std::dec << "\n";
                 }
 
-                // 6. Section Mapping & Process/Thread Instantiation
+                // 9. Section Mapping & Process/Thread Instantiation
                 std::cout << "\n[MicaNT Boot] [Ps & Section] Spawning EProcess for " << targetAppPath << "...\n";
                 auto& pm = ps::ProcessManager::get();
                 auto proc = pm.createProcess(L"userland_app.exe");
@@ -154,7 +185,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 7. Ingested win32metadata Catalog Verification
+    // 10. Ingested win32metadata Catalog Verification
     std::cout << "\n[MicaNT Boot] [Metadata] Verifying win32metadata API surface:\n";
     std::cout << "  - Auto-generated Nt/Zw System Calls: " 
               << generated::NtSystemCallCatalog.size() << " registered.\n";
