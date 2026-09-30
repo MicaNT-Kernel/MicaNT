@@ -1,0 +1,16 @@
+# Build artifacts
+bin/
+build/
+*.obj
+*.pdb
+*.ilk
+*.exe
+
+# IDE / Editor
+.vscode/
+.vs/
+*.sln
+*.vcxproj*
+
+# Codegen cache
+node_modules/
