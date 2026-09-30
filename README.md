@@ -13,9 +13,11 @@
 ---
 
 <p align="center">
-  <img src="docs/bootscreen.png" alt="MicaNT Boot Screen" width="640">
+  <img src="docs/bootscreen_splash.png" alt="MicaNT UEFI Boot Splash" width="420">
+  &nbsp;&nbsp;
+  <img src="docs/conhost_desktop.png" alt="MicaNT ConHost Desktop" width="420">
   <br>
-  <em>MicaNT Bare-Metal UEFI Boot Splash featuring Dave Cutler's 1988 DEC Mica Prism Emblem</em>
+  <em>Left: Bare-metal UEFI GOP Boot Splash (Dave Cutler 1988 DEC Prism). Right: Interactive ConHost Win32 Terminal Desktop.</em>
 </p>
 
 ---
