@@ -26,6 +26,7 @@
 #include "micant/fs.hpp"
 #include "micant/ex_work.hpp"
 #include "micant/boot.hpp"
+#include "micant/probe.hpp"
 
 using namespace micant;
 
@@ -948,6 +949,133 @@ void Test_BootContract_LoaderParameterBlock() {
     TEST_ASSERT(lpb.acpiTablePhysicalAddress != 0, "ACPI RSDP physical address must be populated");
 }
 
+// ============================================================================
+// Suite 18: Kernel Stress, Concurrency & Pointer Probing Hardening
+// ============================================================================
+void Test_KernelStressAndConcurrencyHardening() {
+    // 1. ProbeForRead and ProbeForWrite Validation
+    int validUserStackVal = 42;
+    TEST_ASSERT(NT_SUCCESS(mm::ProbeForRead(&validUserStackVal, sizeof(validUserStackVal), alignof(int))), 
+                "Valid user stack address probe must succeed");
+
+    TEST_ASSERT(mm::ProbeForRead(nullptr, 4, 4) == NtStatus::AccessViolation, 
+                "Null pointer probe must return AccessViolation");
+
+    // Unaligned address probe
+    uintptr_t unalignedPtr = reinterpret_cast<uintptr_t>(&validUserStackVal) | 1;
+    TEST_ASSERT(mm::ProbeForRead(reinterpret_cast<void*>(unalignedPtr), 4, 4) == NtStatus::DatatypeMisalignment, 
+                "Unaligned pointer probe must return DatatypeMisalignment");
+
+    // Kernel-space address probe (must reject)
+    void* kernelAddr = reinterpret_cast<void*>(0xFFFFF80000000000ULL);
+    TEST_ASSERT(mm::ProbeForRead(kernelAddr, 64, 8) == NtStatus::AccessViolation, 
+                "Kernel space address in user probe must return AccessViolation");
+
+    // 2. High-Throughput Spinlock Contention & IRQL Verification
+    ke::SpinLock stressLock;
+    std::atomic<uint64_t> sharedCounter{0};
+    constexpr int NUM_SPIN_THREADS = 8;
+    constexpr int ITERATIONS_PER_THREAD = 1000;
+    std::vector<std::thread> spinThreads;
+    spinThreads.reserve(NUM_SPIN_THREADS);
+
+    for (int t = 0; t < NUM_SPIN_THREADS; ++t) {
+        spinThreads.emplace_back([&]() {
+            for (int i = 0; i < ITERATIONS_PER_THREAD; ++i) {
+                ke::SpinLockGuard guard(stressLock);
+                sharedCounter.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    for (auto& t : spinThreads) {
+        t.join();
+    }
+    TEST_ASSERT(sharedCounter.load() == NUM_SPIN_THREADS * ITERATIONS_PER_THREAD, 
+                "Spinlock protected shared counter must equal exactly 8,000 without data races");
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, 
+                "IRQL must return to PASSIVE_LEVEL after spinlock release");
+
+    // 3. Multithreaded Executive Pool Concurrency Stress
+    constexpr int NUM_POOL_THREADS = 8;
+    constexpr int ALLOCS_PER_THREAD = 50;
+    std::vector<std::thread> poolThreads;
+    poolThreads.reserve(NUM_POOL_THREADS);
+    std::atomic<bool> poolSuccess{true};
+
+    for (int t = 0; t < NUM_POOL_THREADS; ++t) {
+        poolThreads.emplace_back([&, t]() {
+            for (int i = 0; i < ALLOCS_PER_THREAD; ++i) {
+                size_t sz = 64 + ((i * 17) % 512);
+                void* p = ex::ExAllocatePoolWithTag(ex::PoolType::NonPagedPool, sz, ex::TAG_MICA_CORE);
+                if (!p) {
+                    poolSuccess = false;
+                    break;
+                }
+                // Write and verify pattern
+                uint8_t byteVal = static_cast<uint8_t>((t ^ i) & 0xFF);
+                std::memset(p, byteVal, sz);
+                auto* bytes = static_cast<uint8_t*>(p);
+                for (size_t b = 0; b < sz; ++b) {
+                    if (bytes[b] != byteVal) {
+                        poolSuccess = false;
+                        break;
+                    }
+                }
+                ex::ExFreePoolWithTag(p, ex::TAG_MICA_CORE);
+            }
+        });
+    }
+
+    for (auto& t : poolThreads) {
+        t.join();
+    }
+    TEST_ASSERT(poolSuccess.load(), "Multithreaded pool allocation and data integrity must hold 100%");
+
+    // 4. High-Throughput I/O Completion Port (IOCP) Multi-Producer / Multi-Consumer Stress
+    io::IoCompletionPort stressIocp(4);
+    constexpr int NUM_PRODUCERS = 4;
+    constexpr int PACKETS_PER_PRODUCER = 250;
+    constexpr int TOTAL_PACKETS = NUM_PRODUCERS * PACKETS_PER_PRODUCER; // 1,000 packets
+
+    std::vector<std::thread> producers;
+    for (int p = 0; p < NUM_PRODUCERS; ++p) {
+        producers.emplace_back([&, p]() {
+            for (int i = 0; i < PACKETS_PER_PRODUCER; ++i) {
+                uint64_t key = (static_cast<uint64_t>(p) << 32) | static_cast<uint64_t>(i);
+                stressIocp.postCompletion(key, 0, NtStatus::Success, 64);
+            }
+        });
+    }
+
+    std::atomic<int> packetsConsumed{0};
+    std::atomic<uint64_t> totalBytesTransferred{0};
+    constexpr int NUM_CONSUMERS = 4;
+    std::vector<std::thread> consumers;
+
+    for (int c = 0; c < NUM_CONSUMERS; ++c) {
+        consumers.emplace_back([&]() {
+            while (packetsConsumed.load() < TOTAL_PACKETS) {
+                uint64_t key = 0;
+                uintptr_t ov = 0;
+                IoStatusBlock iosb{};
+                NtStatus st = stressIocp.removeCompletion(key, ov, iosb, 100);
+                if (NT_SUCCESS(st)) {
+                    packetsConsumed.fetch_add(1, std::memory_order_relaxed);
+                    totalBytesTransferred.fetch_add(iosb.information, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& t : producers) t.join();
+    for (auto& t : consumers) t.join();
+
+    TEST_ASSERT(packetsConsumed.load() >= TOTAL_PACKETS, "All 1,000 IOCP packets must be consumed");
+    TEST_ASSERT(totalBytesTransferred.load() == static_cast<uint64_t>(TOTAL_PACKETS * 64), 
+                "Total transferred bytes across all IOCP completions must match 64,000 bytes");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -970,6 +1098,7 @@ int main() {
     RUN_TEST(Test_VirtualFileSystem_Fat32AndFileObjects);
     RUN_TEST(Test_ExecutiveWorkQueues_Dispatch);
     RUN_TEST(Test_BootContract_LoaderParameterBlock);
+    RUN_TEST(Test_KernelStressAndConcurrencyHardening);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

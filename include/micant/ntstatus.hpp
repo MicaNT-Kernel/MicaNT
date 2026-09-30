@@ -24,7 +24,8 @@ enum class NtStatus : uint32_t {
     Timeout                          = 0x00000102,
     Pending                          = 0x00000103,
 
-    // 0x40000000 - Informational
+    // 0x80000000 - Warnings / Info
+    DatatypeMisalignment             = 0x80000002,
     BufferOverflow                   = 0x80000005,
     NoMoreFiles                      = 0x80000006,
     HandlesClosed                    = 0x8000000A,
@@ -82,6 +83,7 @@ enum class NtStatus : uint32_t {
         case NtStatus::Success: return "STATUS_SUCCESS";
         case NtStatus::Timeout: return "STATUS_TIMEOUT";
         case NtStatus::Pending: return "STATUS_PENDING";
+        case NtStatus::DatatypeMisalignment: return "STATUS_DATATYPE_MISALIGNMENT";
         case NtStatus::BufferOverflow: return "STATUS_BUFFER_OVERFLOW";
         case NtStatus::NoMoreFiles: return "STATUS_NO_MORE_FILES";
         case NtStatus::Unsuccessful: return "STATUS_UNSUCCESSFUL";
