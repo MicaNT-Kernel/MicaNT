@@ -1,12 +1,25 @@
 # MicaNT (Project MICA)
 
 > **"The cleanest NT architecture on Earth."**  
-> An open-source, zero-telemetry, modern C++23 NT-compatible operating system kernel and executive, powered by Microsoft's [`win32metadata`](https://github.com/microsoft/win32metadata).
+> An open-source, zero-telemetry, modern C++23 NT-compatible operating system kernel and executive, built as a **strict clean-room implementation** using Microsoft's official [`win32metadata`](https://github.com/microsoft/win32metadata) repository for interface reference.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Clean Room: Certified](https://img.shields.io/badge/Clean%20Room-Certified-success.svg)](docs/CLEAN_ROOM.md)
 [![Standard: C++23](https://img.shields.io/badge/Language-C%2B%2B23-blue.svg)](https://en.cppreference.com/w/cpp/23)
-[![Architecture: x86__64](https://img.shields.io/badge/Arch-x86__64-orange.svg)]()
+[![Reference: win32metadata](https://img.shields.io/badge/Reference-microsoft%2Fwin32metadata-purple.svg)](https://github.com/microsoft/win32metadata)
+[![Arch: x86__64](https://img.shields.io/badge/Arch-x86__64-orange.svg)]()
 [![Build: CMake](https://img.shields.io/badge/Build-CMake%203.25%2B-green.svg)]()
+
+---
+
+> [!IMPORTANT]
+> **CLEAN-ROOM IMPLEMENTATION & REFERENCE NOTICE**  
+> MicaNT is a **100% clean-room engineering project**. All kernel subsystems, memory managers, schedulers, and object tables are original implementations authored in modern ISO C++23.  
+> 
+> System service interfaces, data structures, and status codes are referenced and auto-generated strictly from Microsoft's MIT-licensed open-source repository:  
+> **[`https://github.com/microsoft/win32metadata`](https://github.com/microsoft/win32metadata)**  
+> 
+> In accordance with the U.S. Supreme Court precedent in *Google LLC v. Oracle America, Inc.* (2021), reimplementing functional declaring code and interface signatures for binary interoperability is protected fair use. No proprietary or leaked Microsoft source code was used or referenced. See [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md) and [docs/LEGAL.md](docs/LEGAL.md) for full compliance documentation.
 
 ---
 
@@ -96,31 +109,34 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 
 ---
 
-## 4. Legal & Interoperability Foundation
+## 4. Legal & Clean-Room Methodology
 
 MicaNT is a clean-room reimplementation created strictly for software interoperability:
 - **API Copyright & Fair Use**: In *Google LLC v. Oracle America, Inc.* (593 U.S. 1, 2021), the United States Supreme Court held that reimplementing declaring code, method signatures, and API structures for interoperability is fair use as a matter of law.
-- **win32metadata**: Microsoft provides the authoritative definitions of Win32 and NT APIs under the permissive **MIT License** in the [microsoft/win32metadata](https://github.com/microsoft/win32metadata) repository.
-- **No Proprietary Code**: No leaked or reverse-engineered proprietary Microsoft binary source code is used. All kernel logic is clean-room C++23.
+- **Reference Repository**: All API metadata and interfaces are derived from Microsoft's MIT-licensed [microsoft/win32metadata](https://github.com/microsoft/win32metadata) project.
+- **Clean-Room Policy**: Full non-contamination details and engineering protocols are documented in [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md).
 
 ---
 
 ## 5. Building & Running
 
 ### Prerequisites
-- Modern C++23 compiler: **LLVM Clang 17+** or **GCC 13+** (or MSVC 2022 v17.8+)
+- Modern C++23 compiler: **Visual Studio 2022/2026** (MSVC `/std:c++latest`), **LLVM Clang 17+**, or **GCC 13+**
 - **CMake 3.25+**
-- **Ninja** or **Make**
-- Optional: **QEMU** (`qemu-system-x86_64`) for bare-metal / VM emulation.
+- Optional: **Node.js** (for running the metadata code generator in `tools/codegen`)
 
-### Host Simulator Build (Run on your existing OS)
+### Generate Metadata Headers
 ```bash
-git clone https://github.com/ssfdre38/MicaNT.git
-cd MicaNT
-mkdir build && cd build
-cmake .. -G Ninja
-ninja
-./bin/micant_kernel --test-subsystems
+node tools/codegen/generate_syscalls.js
+```
+
+### Build Host Kernel Simulator
+```bash
+# With MSVC Developer Prompt:
+cl /std:c++latest /EHsc /W4 /Iinclude kernel\main.cpp kernel\syscalls.cpp /Fe:bin\micant_kernel.exe
+
+# Run the Executive:
+.\bin\micant_kernel.exe
 ```
 
 ---
