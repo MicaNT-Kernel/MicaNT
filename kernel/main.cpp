@@ -47,7 +47,7 @@ void PrintBanner() {
     std::cout << "                                                                        \n";
     std::cout << "  Project MICA: Memory, IPC, Compute, Architecture                      \n";
     std::cout << "  Clean-Room NT Architecture in Modern ISO C++23                        \n";
-    std::cout << "  Zero Telemetry | Sub-32MB Footprint | Powered by win32metadata        \n";
+    std::cout << "  Zero Telemetry | Sub-32MB Footprint | Pure Clean-Room NT Kernel       \n";
     std::cout << "========================================================================\n\n";
 }
 
@@ -383,8 +383,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 17. Ingested win32metadata Catalog Verification
-    std::cout << "\n[MicaNT Boot] [Metadata] Verifying win32metadata API surface:\n";
+    // 17. NT System Call Interface Catalog Verification
+    std::cout << "\n[MicaNT Boot] [Catalog] Verifying NT System Call API surface:\n";
     std::cout << "  - Auto-generated Nt/Zw System Calls: " 
               << generated::NtSystemCallCatalog.size() << " registered.\n";
     std::cout << "  - Auto-generated Rtl Runtime Routines: " 
