@@ -10,7 +10,7 @@ include_directories(
     include
 )
 
-# Core Executable
+# Core Kernel Executable
 add_executable(micant_kernel
     kernel/main.cpp
     kernel/syscalls.cpp
@@ -25,21 +25,39 @@ target_compile_definitions(micant_kernel PRIVATE
     UNICODE
 )
 
+# Unit Test Runner
+add_executable(micant_tests
+    test/test_runner.cpp
+    kernel/syscalls.cpp
+    kernel/dispatcher.cpp
+)
+
+target_compile_definitions(micant_tests PRIVATE
+    _UNICODE
+    UNICODE
+)
+
+# Standalone Ring 3 Userland Test Application
+add_executable(userland_app
+    test/userland_app.cpp
+)
+
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(micant_kernel PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-        -O2
-    )
+    target_compile_options(micant_kernel PRIVATE -Wall -Wextra -Wpedantic -O2)
+    target_compile_options(micant_tests PRIVATE -Wall -Wextra -Wpedantic -O2)
+    target_compile_options(userland_app PRIVATE -Wall -Wextra -O2)
 elseif (MSVC)
-    target_compile_options(micant_kernel PRIVATE
-        /W4
-        /permissive-
-        /O2
-    )
+    target_compile_options(micant_kernel PRIVATE /W4 /permissive- /O2)
+    target_compile_options(micant_tests PRIVATE /W4 /permissive- /O2)
+    target_compile_options(userland_app PRIVATE /W4 /permissive- /O2)
 endif()
 
 set_target_properties(micant_kernel PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+set_target_properties(micant_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+set_target_properties(userland_app PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

@@ -10,6 +10,8 @@
 #include "micant/syscalls.hpp"
 #include "micant/dispatcher.hpp"
 #include "micant/pe.hpp"
+#include "micant/ps.hpp"
+#include "micant/section.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -19,7 +21,7 @@ void PrintBanner() {
     std::cout << "========================================================================\n";
     std::cout << "       __  __ _            _   _ _____                                  \n";
     std::cout << "      |  \\/  (_)          | \\ | |_   _|                                 \n";
-    std::cout << "      | \\  / |_  ___ __ _ |  \\| | | |                                   \n";
+    std::cout << "      | \\  / |_  ___ __ _ |  \| | | |                                   \n";
     std::cout << "      | |\\/| | |/ __/ _` || . ` | | |                                   \n";
     std::cout << "      | |  | | | (_| (_| || |\\  | | |                                   \n";
     std::cout << "      |_|  |_|_|\\___\\__,_||_| \\_| |_|                                   \n";
@@ -46,7 +48,6 @@ int main(int argc, char* argv[]) {
 
     // 2. Initialize Memory Manager
     std::cout << "[MicaNT Boot] [Mm] Initializing 64-bit Virtual Memory Manager...\n";
-    mm::ProcessAddressSpace kernelProcessSpace;
 
     // 3. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";
@@ -80,11 +81,17 @@ int main(int argc, char* argv[]) {
         std::cerr << "[MicaNT Boot] [Test] Syscall dispatch failed: " << NtStatusToString(syscallResult) << "\n";
     }
 
-    // 5. Test PE Loader on executable binary
-    const char* exePath = (argc > 0 && argv[0]) ? argv[0] : "bin/micant_kernel.exe";
-    std::cout << "\n[MicaNT Boot] [PeLoader] Inspecting 64-bit Portable Executable: " << exePath << "\n";
+    // 5. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
+    const char* targetAppPath = "bin/userland_app.exe";
+    std::ifstream testCheck(targetAppPath, std::ios::binary);
+    if (!testCheck.is_open() && argc > 0 && argv[0]) {
+        targetAppPath = argv[0];
+    }
+    testCheck.close();
+
+    std::cout << "\n[MicaNT Boot] [PeLoader] Inspecting 64-bit Target Executable: " << targetAppPath << "\n";
     
-    std::ifstream exeFile(exePath, std::ios::binary | std::ios::ate);
+    std::ifstream exeFile(targetAppPath, std::ios::binary | std::ios::ate);
     if (exeFile.is_open()) {
         std::streamsize fileSize = exeFile.tellg();
         exeFile.seekg(0, std::ios::beg);
@@ -107,13 +114,47 @@ int main(int argc, char* argv[]) {
                               << " Size: 0x" << std::setw(8) << sec.misc.virtualSize
                               << " Flags: 0x" << sec.characteristics << std::dec << "\n";
                 }
+
+                // 6. Section Mapping & Process/Thread Instantiation
+                std::cout << "\n[MicaNT Boot] [Ps & Section] Spawning EProcess for " << targetAppPath << "...\n";
+                auto& pm = ps::ProcessManager::get();
+                auto proc = pm.createProcess(L"userland_app.exe");
+                proc->setImageBase(ntHeaders.optionalHeader.imageBase);
+                proc->setEntryPoint(ntHeaders.optionalHeader.imageBase + ntHeaders.optionalHeader.addressOfEntryPoint);
+
+                // Create Section Object
+                auto& sm = section::SectionManager::get();
+                Handle secHandle = 0;
+                std::shared_ptr<section::SectionObject> secObj;
+                sm.createSection(
+                    secHandle,
+                    proc->getHandleTable(),
+                    static_cast<size_t>(ntHeaders.optionalHeader.sizeOfImage),
+                    section::SEC_IMAGE | section::SEC_COMMIT,
+                    mm::PAGE_EXECUTE_READWRITE,
+                    secObj
+                );
+
+                // Map View of Section into target process
+                uintptr_t viewBase = ntHeaders.optionalHeader.imageBase;
+                size_t viewSize = static_cast<size_t>(ntHeaders.optionalHeader.sizeOfImage);
+                sm.mapViewOfSection(secObj, *proc, viewBase, viewSize, mm::MEM_COMMIT, mm::PAGE_EXECUTE_READWRITE);
+
+                // Create Primary EThread
+                auto thread = proc->createThread(proc->getEntryPoint());
+                thread->setState(ps::ThreadState::Ready);
+
+                std::cout << "[MicaNT Boot] [Ps] Process Created: PID " << proc->getPid() << "\n";
+                std::cout << "  - PEB Address:     0x" << std::hex << proc->getPebAddress() << std::dec << "\n";
+                std::cout << "  - Image Mapped At: 0x" << std::hex << viewBase << " - 0x" << (viewBase + viewSize) << std::dec << "\n";
+                std::cout << "  - Primary Thread:  TID " << thread->getTid() << " (State: READY)\n";
+                std::cout << "  - Initial RIP:     0x" << std::hex << thread->getContext().rip << std::dec << "\n";
+                std::cout << "  - Initial RSP:     0x" << std::hex << thread->getContext().rsp << std::dec << "\n";
             }
         }
-    } else {
-        std::cout << "[MicaNT Boot] [PeLoader] (Note: Binary self-inspection skipped in simulator mode)\n";
     }
 
-    // 6. Ingested win32metadata Catalog Verification
+    // 7. Ingested win32metadata Catalog Verification
     std::cout << "\n[MicaNT Boot] [Metadata] Verifying win32metadata API surface:\n";
     std::cout << "  - Auto-generated Nt/Zw System Calls: " 
               << generated::NtSystemCallCatalog.size() << " registered.\n";
