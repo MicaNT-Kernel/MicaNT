@@ -1,6 +1,10 @@
 #include "micant/dispatcher.hpp"
 #include "micant/sync.hpp"
 #include "micant/io.hpp"
+#include "micant/cm.hpp"
+#include "micant/se.hpp"
+#include "micant/lpc.hpp"
+#include "micant/ps.hpp"
 #include <iostream>
 
 namespace micant::sys {
@@ -9,6 +13,9 @@ namespace micant::sys {
 static std::unordered_map<Handle, std::shared_ptr<sync::EventObject>> g_KernelEvents;
 static std::unordered_map<Handle, std::shared_ptr<sync::MutantObject>> g_KernelMutants;
 static std::unordered_map<Handle, std::shared_ptr<io::IoCompletionPort>> g_KernelIocpPorts;
+static std::unordered_map<Handle, std::shared_ptr<cm::KeyObject>> g_KernelKeys;
+static std::unordered_map<Handle, std::shared_ptr<se::TokenObject>> g_KernelTokens;
+static std::unordered_map<Handle, std::shared_ptr<lpc::PortObject>> g_KernelPorts;
 static Handle g_NextSyncHandle = 0x100;
 
 void SyscallDispatcher::initializeStandardTable() {
@@ -44,6 +51,9 @@ void SyscallDispatcher::initializeStandardTable() {
         g_KernelEvents.erase(h);
         g_KernelMutants.erase(h);
         g_KernelIocpPorts.erase(h);
+        g_KernelKeys.erase(h);
+        g_KernelTokens.erase(h);
+        g_KernelPorts.erase(h);
         return NtClose(h);
     });
 
@@ -184,6 +194,177 @@ void SyscallDispatcher::initializeStandardTable() {
         if (outKey) *outKey = key;
         if (outOverlapped) *outOverlapped = ov;
         if (outIoStatus) *outIoStatus = iosb;
+        return res;
+    });
+
+    // 15. NtOpenKey (SSN: 0x0012)
+    registerSyscall(SSN_NtOpenKey, "NtOpenKey", 3, [](const SyscallFrame& f) -> NtStatus {
+        auto* outHandle = reinterpret_cast<Handle*>(f.arg1);
+        auto* objAttr = reinterpret_cast<ObjectAttributes*>(f.arg3);
+        if (!outHandle || !objAttr || !objAttr->objectName) return NtStatus::InvalidParameter;
+
+        auto keyObj = cm::ConfigurationManager::get().resolvePath(objAttr->objectName->view());
+        if (!keyObj) return NtStatus::ObjectNameNotFound;
+
+        Handle h = g_NextSyncHandle;
+        g_NextSyncHandle += 4;
+        g_KernelKeys[h] = keyObj;
+        *outHandle = h;
+        return NtStatus::Success;
+    });
+
+    // 16. NtQueryValueKey (SSN: 0x0016)
+    registerSyscall(SSN_NtQueryValueKey, "NtQueryValueKey", 6, [](const SyscallFrame& f) -> NtStatus {
+        Handle h = static_cast<Handle>(f.arg1);
+        auto* valName = reinterpret_cast<UnicodeString*>(f.arg2);
+        void* outBuffer = reinterpret_cast<void*>(f.arg4);
+        if (!valName) return NtStatus::InvalidParameter;
+
+        auto it = g_KernelKeys.find(h);
+        if (it == g_KernelKeys.end()) return NtStatus::InvalidHandle;
+
+        const auto* val = it->second->getValue(valName->view());
+        if (!val) return NtStatus::ObjectNameNotFound;
+
+        size_t bufLen = 0;
+        size_t* retLen = nullptr;
+        if (f.stackArgs && f.stackArgCount >= 2) {
+            bufLen = static_cast<size_t>(f.stackArgs[0]);
+            retLen = reinterpret_cast<size_t*>(f.stackArgs[1]);
+        }
+
+        if (retLen) *retLen = val->data.size();
+        if (outBuffer && bufLen >= val->data.size()) {
+            std::memcpy(outBuffer, val->data.data(), val->data.size());
+            return NtStatus::Success;
+        }
+
+        return (bufLen < val->data.size()) ? NtStatus::BufferTooSmall : NtStatus::Success;
+    });
+
+    // 17. NtSetValueKey (SSN: 0x0060)
+    registerSyscall(SSN_NtSetValueKey, "NtSetValueKey", 6, [](const SyscallFrame& f) -> NtStatus {
+        Handle h = static_cast<Handle>(f.arg1);
+        auto* valName = reinterpret_cast<UnicodeString*>(f.arg2);
+        uint32_t type = static_cast<uint32_t>(f.arg4);
+        if (!valName) return NtStatus::InvalidParameter;
+
+        auto it = g_KernelKeys.find(h);
+        if (it == g_KernelKeys.end()) return NtStatus::InvalidHandle;
+
+        const void* data = nullptr;
+        uint32_t dataSize = 0;
+        if (f.stackArgs && f.stackArgCount >= 2) {
+            data = reinterpret_cast<const void*>(f.stackArgs[0]);
+            dataSize = static_cast<uint32_t>(f.stackArgs[1]);
+        }
+        if (!data || dataSize == 0) return NtStatus::InvalidParameter;
+
+        if (type == static_cast<uint32_t>(cm::RegType::Sz)) {
+            std::wstring strVal(reinterpret_cast<const wchar_t*>(data), dataSize / sizeof(wchar_t));
+            it->second->setValueString(valName->view(), strVal);
+        } else if (type == static_cast<uint32_t>(cm::RegType::Dword) && dataSize >= sizeof(uint32_t)) {
+            it->second->setValueDword(valName->view(), *reinterpret_cast<const uint32_t*>(data));
+        } else if (type == static_cast<uint32_t>(cm::RegType::Qword) && dataSize >= sizeof(uint64_t)) {
+            it->second->setValueQword(valName->view(), *reinterpret_cast<const uint64_t*>(data));
+        }
+
+        return NtStatus::Success;
+    });
+
+    // 18. NtOpenProcessToken (SSN: 0x00BE)
+    registerSyscall(SSN_NtOpenProcessToken, "NtOpenProcessToken", 3, [](const SyscallFrame& f) -> NtStatus {
+        Handle procHandle = static_cast<Handle>(f.arg1);
+        auto* outTokenHandle = reinterpret_cast<Handle*>(f.arg3);
+        if (!outTokenHandle) return NtStatus::InvalidParameter;
+
+        auto proc = ps::ProcessManager::get().getProcess(procHandle);
+        std::shared_ptr<se::TokenObject> token;
+        if (proc) {
+            token = proc->getToken();
+        }
+        if (!token) {
+            token = se::TokenObject::createSystemToken();
+        }
+
+        Handle h = g_NextSyncHandle;
+        g_NextSyncHandle += 4;
+        g_KernelTokens[h] = token;
+        *outTokenHandle = h;
+        return NtStatus::Success;
+    });
+
+    // 19. NtAccessCheck (SSN: 0x0182)
+    registerSyscall(SSN_NtAccessCheck, "NtAccessCheck", 5, [](const SyscallFrame& f) -> NtStatus {
+        auto* secDesc = reinterpret_cast<se::SecurityDescriptor*>(f.arg1);
+        Handle tokenHandle = static_cast<Handle>(f.arg2);
+        uint32_t desiredAccess = static_cast<uint32_t>(f.arg3);
+        auto* grantedAccess = reinterpret_cast<uint32_t*>(f.arg4);
+        auto* accessStatus = (f.stackArgs && f.stackArgCount >= 1) ? reinterpret_cast<NtStatus*>(f.stackArgs[0]) : nullptr;
+
+        if (!secDesc || !grantedAccess) return NtStatus::InvalidParameter;
+
+        auto it = g_KernelTokens.find(tokenHandle);
+        if (it == g_KernelTokens.end()) return NtStatus::InvalidHandle;
+
+        NtStatus res = se::SecurityReferenceMonitor::accessCheck(*it->second, *secDesc, desiredAccess, *grantedAccess);
+        if (accessStatus) *accessStatus = res;
+        return res;
+    });
+
+    // 20. NtCreatePort (SSN: 0x0093)
+    registerSyscall(SSN_NtCreatePort, "NtCreatePort", 4, [](const SyscallFrame& f) -> NtStatus {
+        auto* outPortHandle = reinterpret_cast<Handle*>(f.arg1);
+        auto* objAttr = reinterpret_cast<ObjectAttributes*>(f.arg2);
+        if (!outPortHandle || !objAttr || !objAttr->objectName) return NtStatus::InvalidParameter;
+
+        auto port = lpc::PortManager::get().createPort(objAttr->objectName->view());
+        if (!port) return NtStatus::ObjectNameCollision;
+
+        Handle h = g_NextSyncHandle;
+        g_NextSyncHandle += 4;
+        g_KernelPorts[h] = port;
+        *outPortHandle = h;
+        return NtStatus::Success;
+    });
+
+    // 21. NtConnectPort (SSN: 0x0096)
+    registerSyscall(SSN_NtConnectPort, "NtConnectPort", 4, [](const SyscallFrame& f) -> NtStatus {
+        auto* outPortHandle = reinterpret_cast<Handle*>(f.arg1);
+        auto* portName = reinterpret_cast<UnicodeString*>(f.arg2);
+        if (!outPortHandle || !portName) return NtStatus::InvalidParameter;
+
+        std::shared_ptr<lpc::PortObject> clientPort;
+        std::shared_ptr<lpc::PortObject> serverPort;
+        NtStatus status = lpc::PortManager::get().connectPort(portName->view(), clientPort, serverPort);
+        if (!NT_SUCCESS(status)) return status;
+
+        Handle h = g_NextSyncHandle;
+        g_NextSyncHandle += 4;
+        g_KernelPorts[h] = clientPort;
+        *outPortHandle = h;
+        return NtStatus::Success;
+    });
+
+    // 22. NtRequestWaitReplyPort (SSN: 0x0022)
+    registerSyscall(SSN_NtRequestWaitReplyPort, "NtRequestWaitReplyPort", 3, [](const SyscallFrame& f) -> NtStatus {
+        Handle h = static_cast<Handle>(f.arg1);
+        auto* reqMsg = reinterpret_cast<lpc::PortMessage*>(f.arg2);
+        auto* replyMsg = reinterpret_cast<lpc::PortMessage*>(f.arg3);
+        if (!reqMsg || !replyMsg) return NtStatus::InvalidParameter;
+
+        auto it = g_KernelPorts.find(h);
+        if (it == g_KernelPorts.end()) return NtStatus::InvalidHandle;
+
+        const uint8_t* reqData = reinterpret_cast<const uint8_t*>(reqMsg + 1);
+        size_t reqDataLen = reqMsg->u1.dataLength;
+
+        std::vector<uint8_t> replyData;
+        NtStatus res = it->second->requestWaitReply(*reqMsg, std::span<const uint8_t>(reqData, reqDataLen), *replyMsg, replyData, 5000);
+        if (NT_SUCCESS(res) && !replyData.empty()) {
+            uint8_t* outReplyData = reinterpret_cast<uint8_t*>(replyMsg + 1);
+            std::memcpy(outReplyData, replyData.data(), std::min<size_t>(replyData.size(), 256));
+        }
         return res;
     });
 }

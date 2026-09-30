@@ -10,6 +10,7 @@
 #include "ntstatus.hpp"
 #include "ob.hpp"
 #include "mm.hpp"
+#include "se.hpp"
 
 namespace micant::ps {
 
@@ -188,6 +189,9 @@ public:
         return thread;
     }
 
+    [[nodiscard]] std::shared_ptr<se::TokenObject> getToken() const noexcept { return token_; }
+    void setToken(std::shared_ptr<se::TokenObject> token) noexcept { token_ = std::move(token); }
+
     [[nodiscard]] const std::vector<std::shared_ptr<EThread>>& getThreads() const noexcept {
         return threads_;
     }
@@ -197,6 +201,7 @@ private:
     std::wstring imageFileName_;
     mm::ProcessAddressSpace addressSpace_;
     ob::HandleTable handleTable_;
+    std::shared_ptr<se::TokenObject> token_;
     uintptr_t imageBase_{0};
     uintptr_t entryPoint_{0};
     uintptr_t pebAddress_{0};
@@ -216,7 +221,7 @@ public:
         return instance;
     }
 
-    std::shared_ptr<EProcess> createProcess(std::wstring_view imageName) {
+    std::shared_ptr<EProcess> createProcess(std::wstring_view imageName, std::shared_ptr<se::TokenObject> token = nullptr) {
         Handle pid = static_cast<Handle>(nextPid_++);
         auto proc = std::make_shared<EProcess>(pid, std::wstring(imageName));
 
@@ -224,6 +229,12 @@ public:
         uintptr_t pebAddr = 0x00007FFDF0000000ULL;
         proc->getAddressSpace().allocate(pebAddr, sizeof(Peb), mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE);
         proc->setPebAddress(pebAddr);
+
+        if (token) {
+            proc->setToken(std::move(token));
+        } else {
+            proc->setToken(se::TokenObject::createSystemToken());
+        }
 
         processes_[pid] = proc;
         return proc;

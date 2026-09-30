@@ -14,6 +14,9 @@
 #include "micant/section.hpp"
 #include "micant/sync.hpp"
 #include "micant/io.hpp"
+#include "micant/cm.hpp"
+#include "micant/se.hpp"
+#include "micant/lpc.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -80,14 +83,39 @@ int main(int argc, char* argv[]) {
     bootEvent.set();
     std::cout << "[MicaNT Boot] [Sync] Boot synchronization event signaled: OK\n";
 
-    // 6. Initialize KiSystemCall64 Central Dispatcher Table
+    // 6. Initialize Configuration Manager (CM) Registry Hives
+    std::cout << "[MicaNT Boot] [Cm] Initializing Configuration Manager & mounting \\Registry...\n";
+    auto& cmMgr = cm::ConfigurationManager::get();
+    auto sessionMgrKey = cmMgr.resolvePath(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Session Manager");
+    if (sessionMgrKey) {
+        std::wcout << L"[MicaNT Boot] [Cm] Mounted Session Manager hive: " 
+                   << sessionMgrKey->getValue(L"OSName")->asString() 
+                   << L" (Build " << sessionMgrKey->getValue(L"OSBuild")->asDword() << L")\n";
+    }
+
+    // 7. Initialize Security Reference Monitor (SRM)
+    std::cout << "[MicaNT Boot] [Se] Initializing Security Reference Monitor (SRM)...\n";
+    auto systemToken = se::TokenObject::createSystemToken();
+    std::wcout << L"[MicaNT Boot] [Se] Kernel Primary Token: " << systemToken->getUserSid().toString() 
+               << L" (SeDebugPrivilege: " << (systemToken->hasPrivilege(se::SE_DEBUG_NAME) ? L"ENABLED" : L"DISABLED") << L")\n";
+
+    // 8. Initialize Advanced Local Procedure Call (ALPC) Subsystem
+    std::cout << "[MicaNT Boot] [Lpc] Initializing ALPC Subsystem & \\RPC Control port directory...\n";
+    auto& lpcMgr = lpc::PortManager::get();
+    auto csrssPort = lpcMgr.createPort(L"\\RPC Control\\MicaCsrPort");
+    std::shared_ptr<lpc::PortObject> clientEndpoint;
+    std::shared_ptr<lpc::PortObject> serverEndpoint;
+    lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
+    std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
+
+    // 9. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";
     auto& dispatcher = sys::SyscallDispatcher::get();
     dispatcher.initializeStandardTable();
     std::cout << "[MicaNT Boot] [KiSystemCall64] " << dispatcher.getRegisteredCount() 
               << " core NT syscalls registered in LSTAR dispatch table.\n";
 
-    // 7. Test Simulated Ring 3 Syscall via Dispatcher
+    // 10. Test Simulated Ring 3 Syscall via Dispatcher
     std::cout << "[MicaNT Boot] [Test] Simulating Ring 3 -> Ring 0 'syscall' invocation...\n";
     uintptr_t userAllocBase = 0;
     size_t userAllocSize = 128 * 1024; // 128 KB
@@ -112,7 +140,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "[MicaNT Boot] [Test] Syscall dispatch failed: " << NtStatusToString(syscallResult) << "\n";
     }
 
-    // 8. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
+    // 11. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
     const char* targetAppPath = "bin/userland_app.exe";
     std::ifstream testCheck(targetAppPath, std::ios::binary);
     if (!testCheck.is_open() && argc > 0 && argv[0]) {
@@ -146,10 +174,10 @@ int main(int argc, char* argv[]) {
                               << " Flags: 0x" << sec.characteristics << std::dec << "\n";
                 }
 
-                // 9. Section Mapping & Process/Thread Instantiation
+                // 12. Section Mapping & Process/Thread Instantiation
                 std::cout << "\n[MicaNT Boot] [Ps & Section] Spawning EProcess for " << targetAppPath << "...\n";
                 auto& pm = ps::ProcessManager::get();
-                auto proc = pm.createProcess(L"userland_app.exe");
+                auto proc = pm.createProcess(L"userland_app.exe", systemToken);
                 proc->setImageBase(ntHeaders.optionalHeader.imageBase);
                 proc->setEntryPoint(ntHeaders.optionalHeader.imageBase + ntHeaders.optionalHeader.addressOfEntryPoint);
 
@@ -176,6 +204,7 @@ int main(int argc, char* argv[]) {
                 thread->setState(ps::ThreadState::Ready);
 
                 std::cout << "[MicaNT Boot] [Ps] Process Created: PID " << proc->getPid() << "\n";
+                std::wcout << L"  - Primary Token:   " << proc->getToken()->getUserSid().toString() << L" (LocalSystem)\n";
                 std::cout << "  - PEB Address:     0x" << std::hex << proc->getPebAddress() << std::dec << "\n";
                 std::cout << "  - Image Mapped At: 0x" << std::hex << viewBase << " - 0x" << (viewBase + viewSize) << std::dec << "\n";
                 std::cout << "  - Primary Thread:  TID " << thread->getTid() << " (State: READY)\n";
@@ -185,7 +214,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 10. Ingested win32metadata Catalog Verification
+    // 13. Ingested win32metadata Catalog Verification
     std::cout << "\n[MicaNT Boot] [Metadata] Verifying win32metadata API surface:\n";
     std::cout << "  - Auto-generated Nt/Zw System Calls: " 
               << generated::NtSystemCallCatalog.size() << " registered.\n";

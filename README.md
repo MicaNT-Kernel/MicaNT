@@ -44,8 +44,12 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 1. **Modern C++23 Core**: Built with RAII, concepts, compile-time type safety, and atomic synchronization. No 1990s naked pointers or raw un-checked buffers.
 2. **Metadata-Driven Syscall Surface**: The entire `Zw*` / `Nt*` system call table, types, and NTSTATUS codes are auto-generated from Microsoft's MIT-licensed [`win32metadata`](https://github.com/microsoft/win32metadata) repository.
 3. **Pure Object Manager**: Dave Cutler's clean handle-based namespace (`\Device`, `\DosDevices`, `\KernelObjects`, `\BaseNamedObjects`).
-4. **Zero Telemetry**: No Cortana, no advertising IDs, no diagnostic tracking, no network dial-home. Pure, unadulterated computing.
-5. **Native Windows ABI**: Implements the standard x86-64 `KiSystemCall64` / `syscall` interface, userland `TEB`/`PEB` layout, and `ntdll.dll` executive contract.
+4. **Subsystem Trinity**:
+   - **Configuration Manager (`cm/`)**: In-memory registry hive mounted under `\Registry` with hierarchical keys and typed values (`REG_SZ`, `REG_DWORD`, `REG_QWORD`).
+   - **Security Reference Monitor (`se/`)**: SIDs, DACLs, ACEs, Process Access Tokens, and Dave Cutler's `accessCheck` validation algorithm.
+   - **Advanced Local Procedure Call (`lpc/`)**: High-speed message passing with named ports in `\RPC Control`, FIFO queues, and synchronous `requestWaitReply` rendezvous.
+5. **Zero Telemetry**: No Cortana, no advertising IDs, no diagnostic tracking, no network dial-home. Pure, unadulterated computing.
+6. **Native Windows ABI**: Implements the standard x86-64 `KiSystemCall64` / `syscall` interface, userland `TEB`/`PEB` layout, and `ntdll.dll` executive contract.
 
 ---
 
@@ -90,6 +94,14 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 | - Reference Count|                | - Pool Allocator |                | - Scheduler      |
 +------------------+                +------------------+                +------------------+
          |                                    |                                    |
+         v                                    v                                    v
++------------------+                +------------------+                +------------------+
+|  Config Manager  |                |   Security SRM   |                |  ALPC Messaging  |
+|      (Cm)        |                |      (Se)        |                |      (Lpc)       |
+| - \Registry Hive |                | - SIDs, DACLs    |                | - \RPC Control   |
+| - Typed Values   |                | - Tokens & Access|                | - RequestWaitRepl|
++------------------+                +------------------+                +------------------+
+         |                                    |                                    |
          +-------------------------+          |          +-------------------------+
                                    |          |          |
                                    v          v          v
@@ -114,7 +126,8 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 MicaNT is a clean-room reimplementation created strictly for software interoperability:
 - **API Copyright & Fair Use**: In *Google LLC v. Oracle America, Inc.* (593 U.S. 1, 2021), the United States Supreme Court held that reimplementing declaring code, method signatures, and API structures for interoperability is fair use as a matter of law.
 - **Reference Repository**: All API metadata and interfaces are derived from Microsoft's MIT-licensed [microsoft/win32metadata](https://github.com/microsoft/win32metadata) project.
-- **Clean-Room Policy**: Full non-contamination details and engineering protocols are documented in [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md).
+- **Clean-Room Policy**: Full non-contamination details, Section 3 non-contamination pillar, and engineering protocols are documented in [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md).
+- **Clean-Room Sentinel CI**: An automated provenance auditor ([scripts/clean_room_sentinel.js](scripts/clean_room_sentinel.js)) runs against every pull request using heuristic checks and Gemini AI to guarantee zero decompiled code or leaked materials enter the tree.
 
 ---
 
@@ -123,17 +136,26 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 ### Prerequisites
 - Modern C++23 compiler: **Visual Studio 2022/2026** (MSVC `/std:c++latest`), **LLVM Clang 17+**, or **GCC 13+**
 - **CMake 3.25+**
-- Optional: **Node.js** (for running the metadata code generator in `tools/codegen`)
+- Optional: **Node.js** (for running the metadata code generator in `tools/codegen` and the sentinel auditor)
 
 ### Generate Metadata Headers
 ```bash
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build Host Kernel Simulator
+### Build & Run Unit Test Suite (10 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
-cl /std:c++latest /EHsc /W4 /Iinclude kernel\main.cpp kernel\syscalls.cpp /Fe:bin\micant_kernel.exe
+cl /std:c++latest /EHsc /W4 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
+
+# Run the 10 Test Suites:
+.\bin\micant_tests.exe
+```
+
+### Build Host Kernel Simulator & Boot
+```bash
+# With MSVC Developer Prompt:
+cl /std:c++latest /EHsc /W4 /Iinclude kernel\main.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_kernel.exe
 
 # Run the Executive:
 .\bin\micant_kernel.exe

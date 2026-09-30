@@ -36,6 +36,21 @@ inline constexpr uint32_t SSN_NtCreateIoCompletion       = 0x0164;
 inline constexpr uint32_t SSN_NtSetIoCompletion          = 0x0165;
 inline constexpr uint32_t SSN_NtRemoveIoCompletion       = 0x0009;
 
+// Configuration Manager (Registry) SSNs
+inline constexpr uint32_t SSN_NtCreateKey                = 0x0029;
+inline constexpr uint32_t SSN_NtOpenKey                  = 0x0012;
+inline constexpr uint32_t SSN_NtQueryValueKey            = 0x0016;
+inline constexpr uint32_t SSN_NtSetValueKey              = 0x0060;
+
+// Security Reference Monitor SSNs
+inline constexpr uint32_t SSN_NtOpenProcessToken         = 0x00BE;
+inline constexpr uint32_t SSN_NtAccessCheck              = 0x0182;
+
+// Advanced Local Procedure Call (ALPC) SSNs
+inline constexpr uint32_t SSN_NtCreatePort               = 0x0093;
+inline constexpr uint32_t SSN_NtConnectPort              = 0x0096;
+inline constexpr uint32_t SSN_NtRequestWaitReplyPort     = 0x0022;
+
 /**
  * @brief Native NT Syscall Signatures in Modern C++23
  */

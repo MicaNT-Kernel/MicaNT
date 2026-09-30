@@ -4,6 +4,7 @@
 #include <string>
 #include <span>
 #include <memory>
+#include <thread>
 #include "micant/ntstatus.hpp"
 #include "micant/ntdef.hpp"
 #include "micant/ob.hpp"
@@ -15,6 +16,9 @@
 #include "micant/section.hpp"
 #include "micant/sync.hpp"
 #include "micant/io.hpp"
+#include "micant/cm.hpp"
+#include "micant/se.hpp"
+#include "micant/lpc.hpp"
 
 using namespace micant;
 
@@ -369,6 +373,190 @@ void Test_IoAndCompletionPorts() {
     TEST_ASSERT(emptyRem == NtStatus::Timeout, "Removing from empty IOCP must return Timeout");
 }
 
+// ============================================================================
+// Suite 8: Configuration Manager (CM) Registry Hive & Path Resolution Tests
+// ============================================================================
+void Test_ConfigurationManager_HiveAndValues() {
+    auto& cm = cm::ConfigurationManager::get();
+    auto root = cm.getRootKey();
+    TEST_ASSERT(root != nullptr, "Registry root key must not be null");
+    TEST_ASSERT(root->getName() == L"\\Registry", "Root key name must be \\Registry");
+
+    // Resolve standard NT Session Manager path
+    auto sessionMgr = cm.resolvePath(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Session Manager");
+    TEST_ASSERT(sessionMgr != nullptr, "Session Manager key path must resolve successfully");
+
+    // Verify predefined values
+    const auto* osNameVal = sessionMgr->getValue(L"OSName");
+    TEST_ASSERT(osNameVal != nullptr, "OSName value must exist");
+    TEST_ASSERT(osNameVal->type == cm::RegType::Sz, "OSName must be REG_SZ");
+    TEST_ASSERT(osNameVal->asString() == L"MicaNT Modern C++23 Clean-Room Executive", "OSName content must match");
+
+    const auto* osBuildVal = sessionMgr->getValue(L"OSBuild");
+    TEST_ASSERT(osBuildVal != nullptr, "OSBuild value must exist");
+    TEST_ASSERT(osBuildVal->type == cm::RegType::Dword, "OSBuild must be REG_DWORD");
+    TEST_ASSERT(osBuildVal->asDword() == 26100, "OSBuild must be 26100");
+
+    const auto* telemetryVal = sessionMgr->getValue(L"ZeroTelemetryEnabled");
+    TEST_ASSERT(telemetryVal != nullptr, "ZeroTelemetryEnabled must exist");
+    TEST_ASSERT(telemetryVal->asDword() == 1, "ZeroTelemetryEnabled must be 1");
+
+    // Create custom key hierarchy: \Registry\Machine\SOFTWARE\MicaCorp\Config
+    auto software = cm.resolvePath(L"Machine\\SOFTWARE");
+    TEST_ASSERT(software != nullptr, "SOFTWARE key must exist");
+    auto micaCorp = software->createSubkey(L"MicaCorp");
+    auto config = micaCorp->createSubkey(L"Config");
+    config->setValueString(L"ReleaseRing", L"Canary");
+    config->setValueDword(L"MaxThreads", 64);
+    config->setValueQword(L"MaxMemoryQuota", 0x100000000ULL);
+
+    // Verify resolved custom key
+    auto resolvedConfig = cm.resolvePath(L"\\Registry\\Machine\\SOFTWARE\\MicaCorp\\Config");
+    TEST_ASSERT(resolvedConfig != nullptr, "Created custom key path must resolve");
+    TEST_ASSERT(resolvedConfig->getValue(L"ReleaseRing")->asString() == L"Canary", "ReleaseRing must be Canary");
+    TEST_ASSERT(resolvedConfig->getValue(L"MaxThreads")->asDword() == 64, "MaxThreads must be 64");
+    TEST_ASSERT(resolvedConfig->getValue(L"MaxMemoryQuota")->asQword() == 0x100000000ULL, "MaxMemoryQuota must match");
+
+    // Nonexistent path must return nullptr
+    auto badKey = cm.resolvePath(L"\\Registry\\Machine\\NonExistent\\Key");
+    TEST_ASSERT(badKey == nullptr, "Nonexistent path must return nullptr");
+}
+
+// ============================================================================
+// Suite 9: Security Reference Monitor (SRM) SIDs, DACLs, Tokens & AccessCheck
+// ============================================================================
+void Test_SecurityReferenceMonitor_AccessCheck() {
+    // 1. SIDs string formatting & equality
+    se::Sid localSystem = se::Sid::localSystem();
+    se::Sid admins = se::Sid::administrators();
+    se::Sid users = se::Sid::users();
+    se::Sid everyone = se::Sid::everyone();
+
+    TEST_ASSERT(localSystem.toString() == L"S-1-5-18", "LocalSystem SID must format as S-1-5-18");
+    TEST_ASSERT(admins.toString() == L"S-1-5-32-544", "Admins SID must format as S-1-5-32-544");
+    TEST_ASSERT(users.toString() == L"S-1-5-32-545", "Users SID must format as S-1-5-32-545");
+    TEST_ASSERT(everyone.toString() == L"S-1-1-0", "Everyone SID must format as S-1-1-0");
+    TEST_ASSERT(!(admins == users), "Admins and Users SIDs must not be equal");
+
+    // 2. Token creation and privilege validation
+    auto sysToken = se::TokenObject::createSystemToken();
+    TEST_ASSERT(sysToken->getUserSid() == localSystem, "System token user SID must be LocalSystem");
+    TEST_ASSERT(sysToken->hasSid(admins), "System token must contain Administrators group");
+    TEST_ASSERT(sysToken->hasPrivilege(se::SE_DEBUG_NAME), "System token must hold SeDebugPrivilege enabled");
+
+    se::Sid userSid(5, {21, 100, 200, 300, 1001});
+    auto userToken = se::TokenObject::createUserToken(userSid);
+    TEST_ASSERT(userToken->getUserSid() == userSid, "User token user SID must match created SID");
+    TEST_ASSERT(userToken->hasSid(users), "User token must contain Users group");
+    TEST_ASSERT(!userToken->hasSid(admins), "User token must NOT contain Administrators group");
+    TEST_ASSERT(!userToken->hasPrivilege(se::SE_DEBUG_NAME), "User token must NOT have SeDebugPrivilege");
+
+    // 3. Security Descriptor & DACL Evaluation
+    // Case A: Null DACL (No DACL present) -> Full access granted
+    se::SecurityDescriptor nullDaclSd;
+    uint32_t granted = 0;
+    NtStatus s1 = se::SecurityReferenceMonitor::accessCheck(*userToken, nullDaclSd, 0x1234, granted);
+    TEST_ASSERT(NT_SUCCESS(s1), "Null DACL must grant full access");
+    TEST_ASSERT(granted == 0x1234, "Granted access must match desired access");
+
+    // Case B: Empty DACL (DACL present with 0 ACEs) -> Access Denied
+    se::SecurityDescriptor emptyDaclSd;
+    emptyDaclSd.setDacl(se::Acl());
+    NtStatus s2 = se::SecurityReferenceMonitor::accessCheck(*userToken, emptyDaclSd, 0x1, granted);
+    TEST_ASSERT(s2 == NtStatus::AccessDenied, "Empty DACL must deny all access");
+
+    // Case C: DACL allowing Admins, denying Users
+    se::Acl acl;
+    acl.addDeniedAce(users, 0x00000001); // Deny read to Users
+    acl.addAllowedAce(admins, 0x00000003); // Allow read/write to Admins
+    acl.addAllowedAce(everyone, 0x00000001); // Allow read to Everyone
+
+    se::SecurityDescriptor sdWithAcl;
+    sdWithAcl.setDacl(acl);
+
+    // Admin should succeed with 0x3
+    NtStatus sAdmin = se::SecurityReferenceMonitor::accessCheck(*sysToken, sdWithAcl, 0x00000003, granted);
+    TEST_ASSERT(NT_SUCCESS(sAdmin), "Admin token must be granted desired access");
+    TEST_ASSERT(granted == 0x00000003, "Admin granted mask must match 0x3");
+
+    // User requests 0x1 -> Denied ACE matches first, immediate denial!
+    NtStatus sUser = se::SecurityReferenceMonitor::accessCheck(*userToken, sdWithAcl, 0x00000001, granted);
+    TEST_ASSERT(sUser == NtStatus::AccessDenied, "User token must be denied by Deny ACE");
+
+    // Case D: Owner Rights (Owner is always granted READ_CONTROL & WRITE_DAC)
+    se::SecurityDescriptor ownerSd;
+    ownerSd.setOwner(userSid);
+    ownerSd.setDacl(se::Acl()); // Even with empty DACL, owner gets READ_CONTROL
+    NtStatus sOwner = se::SecurityReferenceMonitor::accessCheck(*userToken, ownerSd, se::READ_CONTROL | se::WRITE_DAC, granted);
+    TEST_ASSERT(NT_SUCCESS(sOwner), "Owner must be granted READ_CONTROL and WRITE_DAC");
+    TEST_ASSERT((granted & (se::READ_CONTROL | se::WRITE_DAC)) == (se::READ_CONTROL | se::WRITE_DAC), "Owner mask must match");
+}
+
+// ============================================================================
+// Suite 10: Advanced Local Procedure Call (ALPC) Message Rendezvous Tests
+// ============================================================================
+void Test_Alpc_MessageRendezvous() {
+    auto& portMgr = lpc::PortManager::get();
+
+    // 1. Create named connection port
+    auto serverPort = portMgr.createPort(L"\\RPC Control\\MicaLpcTest");
+    TEST_ASSERT(serverPort != nullptr, "Creating LPC port should succeed");
+    TEST_ASSERT(serverPort->getType() == lpc::PortType::ConnectionPort, "Port type must be ConnectionPort");
+
+    // Duplicate create should fail
+    auto dupPort = portMgr.createPort(L"\\RPC Control\\MicaLpcTest");
+    TEST_ASSERT(dupPort == nullptr, "Duplicate port creation must fail");
+
+    // 2. Connect client and server communication endpoints
+    std::shared_ptr<lpc::PortObject> clientComm;
+    std::shared_ptr<lpc::PortObject> serverComm;
+    NtStatus connStatus = portMgr.connectPort(L"MicaLpcTest", clientComm, serverComm);
+    TEST_ASSERT(NT_SUCCESS(connStatus), "Port connection should succeed");
+    TEST_ASSERT(clientComm != nullptr && serverComm != nullptr, "Both comm endpoints must be valid");
+    TEST_ASSERT(clientComm->isConnected(), "Client port must be connected");
+    TEST_ASSERT(serverComm->isConnected(), "Server port must be connected");
+
+    // 3. Multithreaded Synchronous Request-Wait-Reply Rendezvous
+    // Start server worker thread to listen, process request, and send reply
+    std::thread serverThread([serverComm]() {
+        lpc::PortMessage reqMsg{};
+        std::vector<uint8_t> reqPayload;
+
+        NtStatus recStatus = serverComm->receiveMessage(reqMsg, reqPayload, 3000);
+        if (NT_SUCCESS(recStatus)) {
+            std::string reqStr(reinterpret_cast<char*>(reqPayload.data()), reqPayload.size());
+            if (reqStr == "PING_REQUEST") {
+                std::string replyStr = "PONG_REPLY_OK";
+                std::vector<uint8_t> replyBytes(replyStr.begin(), replyStr.end());
+                serverComm->reply(reqMsg, replyBytes);
+            }
+        }
+    });
+
+    // Client initiates synchronous rendezvous
+    lpc::PortMessage sendMsg{};
+    std::string clientReq = "PING_REQUEST";
+    std::vector<uint8_t> clientData(clientReq.begin(), clientReq.end());
+
+    lpc::PortMessage replyMsg{};
+    std::vector<uint8_t> replyData;
+
+    NtStatus rpcStatus = clientComm->requestWaitReply(
+        sendMsg,
+        clientData,
+        replyMsg,
+        replyData,
+        3000
+    );
+
+    serverThread.join();
+
+    TEST_ASSERT(NT_SUCCESS(rpcStatus), "Synchronous requestWaitReply must succeed");
+    std::string replyString(reinterpret_cast<char*>(replyData.data()), replyData.size());
+    TEST_ASSERT(replyString == "PONG_REPLY_OK", "Reply payload must match PONG_REPLY_OK");
+    TEST_ASSERT(replyMsg.u2.type == static_cast<uint16_t>(lpc::PortMessageType::LpcReply), "Message type must be LpcReply");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -381,6 +569,9 @@ int main() {
     RUN_TEST(Test_ProcessAndSectionManager);
     RUN_TEST(Test_SynchronizationPrimitives);
     RUN_TEST(Test_IoAndCompletionPorts);
+    RUN_TEST(Test_ConfigurationManager_HiveAndValues);
+    RUN_TEST(Test_SecurityReferenceMonitor_AccessCheck);
+    RUN_TEST(Test_Alpc_MessageRendezvous);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
