@@ -37,6 +37,18 @@ inline constexpr uint32_t SSN_NtCreateIoCompletion       = 0x0164;
 inline constexpr uint32_t SSN_NtSetIoCompletion          = 0x0165;
 inline constexpr uint32_t SSN_NtRemoveIoCompletion       = 0x0009;
 
+// Multi-Object Wait & Execution Delay SSNs
+inline constexpr uint32_t SSN_NtWaitForMultipleObjects   = 0x005A;
+inline constexpr uint32_t SSN_NtDelayExecution           = 0x0034;
+
+// Kernel Timer SSNs
+inline constexpr uint32_t SSN_NtCreateTimer              = 0x0057;
+inline constexpr uint32_t SSN_NtSetTimer                 = 0x0078;
+inline constexpr uint32_t SSN_NtCancelTimer              = 0x0077;
+
+// Power Management & Shutdown SSN
+inline constexpr uint32_t SSN_NtShutdownSystem           = 0x0118;
+
 // Configuration Manager (Registry) SSNs
 inline constexpr uint32_t SSN_NtCreateKey                = 0x0029;
 inline constexpr uint32_t SSN_NtOpenKey                  = 0x0012;
@@ -154,6 +166,45 @@ NtStatus NtWaitForSingleObject(
     Handle handle,
     bool alertable,
     LargeInteger* timeout
+);
+
+NtStatus NtWaitForMultipleObjects(
+    uint32_t count,
+    const Handle* handles,
+    WaitType waitType,
+    bool alertable,
+    LargeInteger* timeout
+);
+
+NtStatus NtDelayExecution(
+    bool alertable,
+    const LargeInteger* interval
+);
+
+NtStatus NtShutdownSystem(
+    uint32_t action
+);
+
+NtStatus NtCreateTimer(
+    Handle* timerHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    uint32_t timerType
+);
+
+NtStatus NtSetTimer(
+    Handle timerHandle,
+    LargeInteger* dueTime,
+    void* timerApcRoutine,
+    void* timerContext,
+    bool resumeTimer,
+    uint32_t period,
+    bool* previousState
+);
+
+NtStatus NtCancelTimer(
+    Handle timerHandle,
+    bool* currentSignaledState
 );
 
 NtStatus NtQuerySystemInformation(

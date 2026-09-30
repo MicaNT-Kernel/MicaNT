@@ -23,6 +23,9 @@ inline constexpr uint8_t IRP_MJ_QUERY_INFO     = 0x05;
 inline constexpr uint8_t IRP_MJ_SET_INFO       = 0x06;
 inline constexpr uint8_t IRP_MJ_DEVICE_CONTROL = 0x0E;
 inline constexpr uint8_t IRP_MJ_CLEANUP        = 0x12;
+inline constexpr uint8_t IRP_MJ_POWER          = 0x16;
+inline constexpr uint8_t IRP_MJ_SYSTEM_CONTROL = 0x17;
+inline constexpr uint8_t IRP_MJ_PNP            = 0x1B;
 
 // Device Types
 enum class DeviceType : uint32_t {

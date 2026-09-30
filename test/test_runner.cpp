@@ -28,6 +28,9 @@
 #include "micant/boot.hpp"
 #include "micant/probe.hpp"
 #include "micant/driver.hpp"
+#include "micant/timer.hpp"
+#include "micant/lookaside.hpp"
+#include "micant/po.hpp"
 
 using namespace micant;
 
@@ -1232,6 +1235,337 @@ void Test_DriverModel_DriverEntryAndDeviceIoControl() {
     sys::NtClose(devHandle);
 }
 
+void Test_KernelTimers_DpcAndDelayExecution() {
+    // 1. Initialize KTIMER
+    timer::KTIMER timerObj;
+    timer::KeInitializeTimer(&timerObj);
+    TEST_ASSERT(!timer::KeReadStateTimer(&timerObj), "Newly initialized timer must not be signaled");
+
+    // 2. Set Timer with KDPC callback
+    static std::atomic<uint32_t> s_DpcCount{0};
+    s_DpcCount = 0;
+    ke::KDPC dpcObj{};
+    dpcObj.routine = [](ke::KDPC*, void*, void*, void*) {
+        s_DpcCount++;
+    };
+
+    LargeInteger dueTime{};
+    dueTime.quadPart = -10000; // -1ms
+    bool wasSet = timer::KeSetTimer(&timerObj, dueTime, &dpcObj);
+    TEST_ASSERT(!wasSet, "Initial KeSetTimer should report previously uninserted");
+    TEST_ASSERT(timer::TimerManager::get().getActiveTimerCount() >= 1, "TimerManager must contain registered timer");
+
+    // Sleep 5ms so deadline passes
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    size_t expiredCount = timer::TimerManager::get().processTimers();
+    TEST_ASSERT(expiredCount >= 1, "processTimers must process at least 1 expired timer");
+    TEST_ASSERT(timer::KeReadStateTimer(&timerObj), "Expired timer must be signaled");
+
+    // Drain DPC queue and verify execution at DISPATCH_LEVEL
+    size_t dpcsDrained = ke::DpcQueue::get().drainDpcs();
+    TEST_ASSERT(dpcsDrained >= 1, "DpcQueue must drain at least 1 DPC");
+    TEST_ASSERT(s_DpcCount == 1, "Timer DPC callback must have executed exactly once");
+
+    // 3. Test KeCancelTimer
+    timer::KTIMER cancelTestTimer;
+    timer::KeInitializeTimer(&cancelTestTimer);
+    dueTime.quadPart = -100000000; // -10 seconds
+    timer::KeSetTimer(&cancelTestTimer, dueTime, nullptr);
+    bool cancelled = timer::KeCancelTimer(&cancelTestTimer);
+    TEST_ASSERT(cancelled, "KeCancelTimer must return true for active unexpired timer");
+
+    // 4. Test NtDelayExecution syscall
+    auto start = std::chrono::steady_clock::now();
+    LargeInteger delayInterval{};
+    delayInterval.quadPart = -30000; // -3ms
+    NtStatus delayStatus = sys::NtDelayExecution(false, &delayInterval);
+    TEST_ASSERT(NT_SUCCESS(delayStatus), "NtDelayExecution must succeed");
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    TEST_ASSERT(elapsed >= 2, "NtDelayExecution must delay execution for at least requested duration");
+
+    // Zero delay yields
+    delayInterval.quadPart = 0;
+    TEST_ASSERT(NT_SUCCESS(sys::NtDelayExecution(false, &delayInterval)), "Zero delay execution must succeed");
+
+    // Null pointer returns AccessViolation
+    TEST_ASSERT(sys::NtDelayExecution(false, nullptr) == NtStatus::AccessViolation, "Null delay pointer must return STATUS_ACCESS_VIOLATION");
+
+    // 5. Test Timer Syscalls via SyscallDispatcher (KiSystemCall64)
+    auto& dispatcher = sys::SyscallDispatcher::get();
+
+    Handle hTimer = 0;
+    sys::SyscallFrame frame{};
+    frame.ssn = sys::SSN_NtCreateTimer;
+    frame.arg1 = reinterpret_cast<uint64_t>(&hTimer);
+    frame.arg2 = 0x1F0003; // TIMER_ALL_ACCESS
+    frame.arg3 = 0;
+    frame.arg4 = 0; // NotificationTimer
+    NtStatus status = dispatcher.dispatch(frame);
+    TEST_ASSERT(NT_SUCCESS(status) && hTimer != 0, "NtCreateTimer must succeed with valid handle");
+
+    LargeInteger timerDue{};
+    timerDue.quadPart = -20000; // -2ms
+    frame = sys::SyscallFrame{};
+    frame.ssn = sys::SSN_NtSetTimer;
+    frame.arg1 = static_cast<uint64_t>(hTimer);
+    frame.arg2 = reinterpret_cast<uint64_t>(&timerDue);
+    frame.arg3 = 0;
+    frame.arg4 = 0;
+    status = dispatcher.dispatch(frame);
+    TEST_ASSERT(NT_SUCCESS(status), "NtSetTimer must succeed");
+
+    // Sleep 4ms and signal timer
+    std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    auto timObj = sync::DispatcherRegistry::get().lookupAs<timer::TimerObject>(hTimer);
+    TEST_ASSERT(timObj != nullptr, "TimerObject must be retrievable from DispatcherRegistry");
+    timObj->setSignaled();
+
+    // Wait on timer handle via NtWaitForSingleObject
+    frame = sys::SyscallFrame{};
+    frame.ssn = sys::SSN_NtWaitForSingleObject;
+    frame.arg1 = static_cast<uint64_t>(hTimer);
+    frame.arg2 = 0;
+    frame.arg3 = 0;
+    status = dispatcher.dispatch(frame);
+    TEST_ASSERT(status == NtStatus::Success, "NtWaitForSingleObject on signaled timer must succeed");
+
+    // Close timer handle
+    frame = sys::SyscallFrame{};
+    frame.ssn = sys::SSN_NtClose;
+    frame.arg1 = static_cast<uint64_t>(hTimer);
+    (void)dispatcher.dispatch(frame);
+}
+
+void Test_WaitMultipleObjects_MultiHandleSync() {
+    auto& dispatcher = sys::SyscallDispatcher::get();
+
+    // 1. Create 3 events
+    Handle ev1 = 0, ev2 = 0, ev3 = 0;
+    sys::SyscallFrame frame{};
+
+    frame.ssn = sys::SSN_NtCreateEvent;
+    frame.arg1 = reinterpret_cast<uint64_t>(&ev1);
+    frame.arg3 = 0; // NotificationEvent
+    frame.arg4 = 0; // Unsignaled
+    (void)dispatcher.dispatch(frame);
+
+    frame.arg1 = reinterpret_cast<uint64_t>(&ev2);
+    (void)dispatcher.dispatch(frame);
+
+    frame.arg1 = reinterpret_cast<uint64_t>(&ev3);
+    (void)dispatcher.dispatch(frame);
+
+    TEST_ASSERT(ev1 != 0 && ev2 != 0 && ev3 != 0, "All 3 events must be created");
+
+    Handle handles[3] = { ev1, ev2, ev3 };
+
+    // 2. Test WaitAny when none are signaled with 5ms timeout -> Timeout
+    LargeInteger timeout{};
+    timeout.quadPart = -50000; // -5ms
+    NtStatus waitStatus = sys::NtWaitForMultipleObjects(3, handles, WaitType::WaitAny, false, &timeout);
+    TEST_ASSERT(waitStatus == NtStatus::Timeout, "NtWaitForMultipleObjects WaitAny with none signaled must timeout");
+
+    // 3. Signal Event 2 (index 1), verify WaitAny returns STATUS_WAIT_1 (0x00000001)
+    frame = sys::SyscallFrame{};
+    frame.ssn = sys::SSN_NtSetEvent;
+    frame.arg1 = static_cast<uint64_t>(ev2);
+    (void)dispatcher.dispatch(frame);
+
+    waitStatus = sys::NtWaitForMultipleObjects(3, handles, WaitType::WaitAny, false, nullptr);
+    TEST_ASSERT(waitStatus == NtStatus::Wait1, "WaitAny must return STATUS_WAIT_1 when handle index 1 is signaled");
+
+    // Reset Event 2
+    frame.ssn = sys::SSN_NtResetEvent;
+    (void)dispatcher.dispatch(frame);
+
+    // 4. Test WaitAll: signal ev1 and ev2, leave ev3 unsignaled -> Timeout
+    frame = sys::SyscallFrame{};
+    frame.ssn = sys::SSN_NtSetEvent;
+    frame.arg1 = static_cast<uint64_t>(ev1);
+    (void)dispatcher.dispatch(frame);
+    frame.arg1 = static_cast<uint64_t>(ev2);
+    (void)dispatcher.dispatch(frame);
+
+    waitStatus = sys::NtWaitForMultipleObjects(3, handles, WaitType::WaitAll, false, &timeout);
+    TEST_ASSERT(waitStatus == NtStatus::Timeout, "WaitAll must timeout if not all handles are signaled");
+
+    // Signal ev3 -> now all 3 are signaled
+    frame.arg1 = static_cast<uint64_t>(ev3);
+    (void)dispatcher.dispatch(frame);
+
+    waitStatus = sys::NtWaitForMultipleObjects(3, handles, WaitType::WaitAll, false, &timeout);
+    TEST_ASSERT(waitStatus == NtStatus::Success, "WaitAll must succeed when all handles are signaled");
+
+    // 5. Test Parameter Validation
+    TEST_ASSERT(sys::NtWaitForMultipleObjects(0, handles, WaitType::WaitAny, false, nullptr) == NtStatus::InvalidParameter1,
+                "Count 0 must return STATUS_INVALID_PARAMETER_1");
+    TEST_ASSERT(sys::NtWaitForMultipleObjects(65, handles, WaitType::WaitAny, false, nullptr) == NtStatus::InvalidParameter1,
+                "Count > 64 must return STATUS_INVALID_PARAMETER_1");
+    TEST_ASSERT(sys::NtWaitForMultipleObjects(3, nullptr, WaitType::WaitAny, false, nullptr) == NtStatus::AccessViolation,
+                "Null handles pointer must return STATUS_ACCESS_VIOLATION");
+
+    Handle invalidHandles[2] = { ev1, 0x99999 };
+    TEST_ASSERT(sys::NtWaitForMultipleObjects(2, invalidHandles, WaitType::WaitAny, false, nullptr) == NtStatus::InvalidHandle,
+                "Invalid handle in array must return STATUS_INVALID_HANDLE");
+
+    // 6. Test Multi-Wait via KiSystemCall64
+    uint64_t stackArgs[1] = { reinterpret_cast<uint64_t>(&timeout) };
+    frame = sys::SyscallFrame{};
+    frame.ssn = sys::SSN_NtWaitForMultipleObjects;
+    frame.arg1 = 3;
+    frame.arg2 = reinterpret_cast<uint64_t>(handles);
+    frame.arg3 = static_cast<uint64_t>(WaitType::WaitAll);
+    frame.arg4 = 0;
+    frame.stackArgs = stackArgs;
+    frame.stackArgCount = 1;
+    waitStatus = dispatcher.dispatch(frame);
+    TEST_ASSERT(waitStatus == NtStatus::Success, "NtWaitForMultipleObjects dispatched through KiSystemCall64 must succeed");
+
+    // Clean up handles
+    sys::NtClose(ev1);
+    sys::NtClose(ev2);
+    sys::NtClose(ev3);
+}
+
+void Test_LookasideLists_FastAllocAndTelemetry() {
+    // 1. NonPaged Lookaside List
+    ex::NPagedLookasideList npList;
+    uint32_t tag = ex::makePoolTag('L', 'o', 'o', 'k');
+    npList.initialize(128, tag, 16);
+
+    std::vector<void*> blocks;
+    // Initial 8 allocations: empty cache -> 8 pool misses
+    for (int i = 0; i < 8; ++i) {
+        void* ptr = npList.allocate();
+        TEST_ASSERT(ptr != nullptr, "NPagedLookasideList allocate must return non-null pointer");
+        std::memset(ptr, 0xAA, 128);
+        blocks.push_back(ptr);
+    }
+
+    const auto& stats1 = npList.getStats();
+    TEST_ASSERT(stats1.totalAllocates == 8, "Total allocates must be 8");
+    TEST_ASSERT(stats1.allocateMisses == 8, "All 8 initial allocates must be pool misses");
+    TEST_ASSERT(stats1.depth == 0, "Depth must be 0 while blocks are active");
+
+    // Free all 8 blocks back to list
+    for (void* ptr : blocks) {
+        npList.free(ptr);
+    }
+    blocks.clear();
+
+    const auto& stats2 = npList.getStats();
+    TEST_ASSERT(stats2.totalFrees == 8, "Total frees must be 8");
+    TEST_ASSERT(stats2.freeMisses == 0, "All 8 frees must be cached in lookaside list");
+    TEST_ASSERT(stats2.depth == 8, "Depth must be 8 after caching freed blocks");
+
+    // Re-allocate 8 blocks: 100% cache hits, zero new pool misses!
+    for (int i = 0; i < 8; ++i) {
+        void* ptr = npList.allocate();
+        TEST_ASSERT(ptr != nullptr, "Cached allocate must return non-null pointer");
+        blocks.push_back(ptr);
+    }
+
+    const auto& stats3 = npList.getStats();
+    TEST_ASSERT(stats3.totalAllocates == 16, "Total allocates must be 16");
+    TEST_ASSERT(stats3.allocateMisses == 8, "Allocate misses must still be 8 (8 consecutive cache hits!)");
+    TEST_ASSERT(stats3.depth == 0, "Depth must be 0 after re-allocating all cached blocks");
+
+    // Free and flush
+    for (void* ptr : blocks) {
+        npList.free(ptr);
+    }
+    npList.flush();
+    TEST_ASSERT(npList.getStats().depth == 0, "Depth must be 0 after flush");
+
+    // 2. Paged Lookaside List & IRQL Enforcement
+    ex::PagedLookasideList pList;
+    pList.initialize(64, tag, 8);
+
+    void* pagedPtr = pList.allocate();
+    TEST_ASSERT(pagedPtr != nullptr, "PagedLookasideList allocate at PASSIVE_LEVEL must succeed");
+    pList.free(pagedPtr);
+
+    // Raise IRQL to DISPATCH_LEVEL and verify BugCheck / refusal to allocate PagedPool
+    ke::KIRQL oldIrql = ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    void* illegalPtr = pList.allocate();
+    TEST_ASSERT(illegalPtr == nullptr, "PagedLookasideList must refuse allocation at DISPATCH_LEVEL");
+    ke::KeLowerIrql(oldIrql);
+}
+
+namespace test_power {
+    static std::atomic<uint32_t> g_PowerIrpCount{0};
+    static std::atomic<uint32_t> g_LastMinor{0xFF};
+    static std::atomic<uint32_t> g_LastSystemState{0xFF};
+    static std::atomic<uint32_t> g_LastDeviceState{0xFF};
+
+    static NtStatus PowerDispatchRoutine(io::DeviceObject* dev, io::Irp* irp) {
+        (void)dev;
+        if (irp && irp->majorFunction == io::IRP_MJ_POWER) {
+            g_PowerIrpCount++;
+            g_LastMinor = irp->minorFunction;
+            g_LastSystemState = irp->byteOffset.lowPart;
+            g_LastDeviceState = static_cast<uint32_t>(irp->byteOffset.highPart);
+            irp->ioStatus.status = NtStatus::Success;
+            return NtStatus::Success;
+        }
+        return NtStatus::InvalidDeviceRequest;
+    }
+}
+
+void Test_PowerManagement_IrpAndShutdown() {
+    po::PowerManager::get().resetForTesting();
+    TEST_ASSERT(po::PowerManager::get().getSystemPowerState() == po::SystemPowerState::PowerSystemWorking,
+                "Initial system power state must be PowerSystemWorking (S0)");
+
+    // 1. Create power-aware device and driver
+    io::DriverObject pwrDriver{};
+    pwrDriver.driverName = L"TestPowerDriver";
+    pwrDriver.setDispatch(io::IRP_MJ_POWER, test_power::PowerDispatchRoutine);
+
+    io::DeviceObject pwrDevice{};
+    pwrDevice.driverObject = &pwrDriver;
+    pwrDevice.deviceType = io::DeviceType::Unknown;
+    pwrDevice.deviceName = L"\\Device\\TestPowerDevice";
+
+    po::PowerManager::get().registerDevice(&pwrDevice);
+    TEST_ASSERT(po::PowerManager::get().getRegisteredDeviceCount() == 1, "Registered device count must be 1");
+
+    // 2. Request power IRP
+    test_power::g_PowerIrpCount = 0;
+    NtStatus pwrStatus = po::PoRequestPowerIrp(
+        &pwrDevice,
+        po::IRP_MN_QUERY_POWER,
+        po::SystemPowerState::PowerSystemSleeping3,
+        po::DevicePowerState::PowerDeviceD2
+    );
+    TEST_ASSERT(NT_SUCCESS(pwrStatus), "PoRequestPowerIrp must succeed");
+    TEST_ASSERT(test_power::g_PowerIrpCount == 1, "Power driver must have received 1 power IRP");
+    TEST_ASSERT(test_power::g_LastMinor == po::IRP_MN_QUERY_POWER, "Minor must match IRP_MN_QUERY_POWER");
+    TEST_ASSERT(test_power::g_LastSystemState == static_cast<uint32_t>(po::SystemPowerState::PowerSystemSleeping3),
+                "System state must be PowerSystemSleeping3");
+
+    // 3. Test NtShutdownSystem syscall via SyscallDispatcher (SSN 0x0118)
+    auto& dispatcher = sys::SyscallDispatcher::get();
+
+    sys::SyscallFrame frame{};
+    frame.ssn = sys::SSN_NtShutdownSystem;
+    frame.arg1 = static_cast<uint64_t>(po::ShutdownAction::ShutdownPowerOff);
+    NtStatus shutdownStatus = dispatcher.dispatch(frame);
+    TEST_ASSERT(NT_SUCCESS(shutdownStatus), "NtShutdownSystem via dispatcher must succeed");
+
+    TEST_ASSERT(po::PowerManager::get().isShutdown(), "PowerManager must register system is shut down");
+    TEST_ASSERT(po::PowerManager::get().getLastShutdownAction() == po::ShutdownAction::ShutdownPowerOff,
+                "Last shutdown action must be ShutdownPowerOff");
+    TEST_ASSERT(po::PowerManager::get().getSystemPowerState() == po::SystemPowerState::PowerSystemShutdown,
+                "System power state must be PowerSystemShutdown (S5)");
+    TEST_ASSERT(test_power::g_LastDeviceState == static_cast<uint32_t>(po::DevicePowerState::PowerDeviceD3),
+                "Hardware device must have been transitioned to PowerDeviceD3 (powered off)");
+
+    // Unregister and reset
+    po::PowerManager::get().unregisterDevice(&pwrDevice);
+    po::PowerManager::get().resetForTesting();
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -1256,6 +1590,10 @@ int main() {
     RUN_TEST(Test_BootContract_LoaderParameterBlock);
     RUN_TEST(Test_KernelStressAndConcurrencyHardening);
     RUN_TEST(Test_DriverModel_DriverEntryAndDeviceIoControl);
+    RUN_TEST(Test_KernelTimers_DpcAndDelayExecution);
+    RUN_TEST(Test_WaitMultipleObjects_MultiHandleSync);
+    RUN_TEST(Test_LookasideLists_FastAllocAndTelemetry);
+    RUN_TEST(Test_PowerManagement_IrpAndShutdown);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

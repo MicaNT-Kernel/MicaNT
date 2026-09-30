@@ -19,6 +19,9 @@ enum class NtStatus : uint32_t {
     Success                          = 0x00000000,
     Wait0                            = 0x00000000,
     Wait1                            = 0x00000001,
+    Wait2                            = 0x00000002,
+    Wait3                            = 0x00000003,
+    Wait63                           = 0x0000003F,
     Abandoned                        = 0x00000080,
     UserApc                          = 0x000000C0,
     Timeout                          = 0x00000102,
@@ -58,8 +61,15 @@ enum class NtStatus : uint32_t {
     SectionTooBig                    = 0xC0000040,
     PortConnectionRefused            = 0xC0000041,
     ProcessIsTerminating             = 0xC000010A,
-    PrivilegeNotHeld                 = 0xC0000061
+    PrivilegeNotHeld                 = 0xC0000061,
+    InvalidParameter1                = 0xC00000EF,
+    InvalidParameter2                = 0xC00000F0,
+    InvalidParameter3                = 0xC00000F1
 };
+
+[[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
+    return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);
+}
 
 // Standard NT macro semantics evaluated constexpr
 [[nodiscard]] constexpr bool NT_SUCCESS(NtStatus status) noexcept {

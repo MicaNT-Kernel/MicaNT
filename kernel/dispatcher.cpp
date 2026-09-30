@@ -1,5 +1,7 @@
 #include "micant/dispatcher.hpp"
 #include "micant/sync.hpp"
+#include "micant/timer.hpp"
+#include "micant/po.hpp"
 #include "micant/io.hpp"
 #include "micant/cm.hpp"
 #include "micant/se.hpp"
@@ -10,8 +12,6 @@
 namespace micant::sys {
 
 // Global simulated kernel sync & IOCP structures
-static std::unordered_map<Handle, std::shared_ptr<sync::EventObject>> g_KernelEvents;
-static std::unordered_map<Handle, std::shared_ptr<sync::MutantObject>> g_KernelMutants;
 static std::unordered_map<Handle, std::shared_ptr<io::IoCompletionPort>> g_KernelIocpPorts;
 static std::unordered_map<Handle, std::shared_ptr<cm::KeyObject>> g_KernelKeys;
 static std::unordered_map<Handle, std::shared_ptr<se::TokenObject>> g_KernelTokens;
@@ -48,8 +48,7 @@ void SyscallDispatcher::initializeStandardTable() {
     // 3. NtClose (SSN: 0x000F)
     registerSyscall(SSN_NtClose, "NtClose", 1, [](const SyscallFrame& f) -> NtStatus {
         Handle h = static_cast<Handle>(f.arg1);
-        g_KernelEvents.erase(h);
-        g_KernelMutants.erase(h);
+        sync::DispatcherRegistry::get().unregister(h);
         g_KernelIocpPorts.erase(h);
         g_KernelKeys.erase(h);
         g_KernelTokens.erase(h);
@@ -69,14 +68,6 @@ void SyscallDispatcher::initializeStandardTable() {
         Handle h = static_cast<Handle>(f.arg1);
         bool alertable = f.arg2 != 0;
         auto* timeout = reinterpret_cast<LargeInteger*>(f.arg3);
-
-        auto it = g_KernelEvents.find(h);
-        if (it != g_KernelEvents.end()) {
-            uint32_t ms = timeout ? static_cast<uint32_t>(timeout->quadPart / -10000) : 0xFFFFFFFF;
-            bool signaled = it->second->wait(ms);
-            return signaled ? NtStatus::Success : NtStatus::Timeout;
-        }
-
         return NtWaitForSingleObject(h, alertable, timeout);
     });
 
@@ -97,9 +88,8 @@ void SyscallDispatcher::initializeStandardTable() {
         sync::EventType evType = (f.arg3 == 0) ? sync::EventType::NotificationEvent : sync::EventType::SynchronizationEvent;
         bool initialState = (f.arg4 != 0);
 
-        Handle h = g_NextSyncHandle;
-        g_NextSyncHandle += 4;
-        g_KernelEvents[h] = std::make_shared<sync::EventObject>(evType, initialState);
+        auto ev = std::make_shared<sync::EventObject>(evType, initialState);
+        Handle h = sync::DispatcherRegistry::get().registerObject(ev);
         *outHandle = h;
         return NtStatus::Success;
     });
@@ -107,18 +97,18 @@ void SyscallDispatcher::initializeStandardTable() {
     // 8. NtSetEvent (SSN: 0x004E)
     registerSyscall(SSN_NtSetEvent, "NtSetEvent", 2, [](const SyscallFrame& f) -> NtStatus {
         Handle h = static_cast<Handle>(f.arg1);
-        auto it = g_KernelEvents.find(h);
-        if (it == g_KernelEvents.end()) return NtStatus::InvalidHandle;
-        it->second->set();
+        auto ev = sync::DispatcherRegistry::get().lookupAs<sync::EventObject>(h);
+        if (!ev) return NtStatus::InvalidHandle;
+        ev->set();
         return NtStatus::Success;
     });
 
     // 9. NtResetEvent (SSN: 0x004F)
     registerSyscall(SSN_NtResetEvent, "NtResetEvent", 2, [](const SyscallFrame& f) -> NtStatus {
         Handle h = static_cast<Handle>(f.arg1);
-        auto it = g_KernelEvents.find(h);
-        if (it == g_KernelEvents.end()) return NtStatus::InvalidHandle;
-        it->second->reset();
+        auto ev = sync::DispatcherRegistry::get().lookupAs<sync::EventObject>(h);
+        if (!ev) return NtStatus::InvalidHandle;
+        ev->reset();
         return NtStatus::Success;
     });
 
@@ -128,9 +118,8 @@ void SyscallDispatcher::initializeStandardTable() {
         if (!outHandle) return NtStatus::InvalidParameter;
 
         bool initialOwner = (f.arg3 != 0);
-        Handle h = g_NextSyncHandle;
-        g_NextSyncHandle += 4;
-        g_KernelMutants[h] = std::make_shared<sync::MutantObject>(initialOwner);
+        auto mut = std::make_shared<sync::MutantObject>(initialOwner);
+        Handle h = sync::DispatcherRegistry::get().registerObject(mut);
         *outHandle = h;
         return NtStatus::Success;
     });
@@ -138,9 +127,9 @@ void SyscallDispatcher::initializeStandardTable() {
     // 11. NtReleaseMutant (SSN: 0x001D)
     registerSyscall(SSN_NtReleaseMutant, "NtReleaseMutant", 2, [](const SyscallFrame& f) -> NtStatus {
         Handle h = static_cast<Handle>(f.arg1);
-        auto it = g_KernelMutants.find(h);
-        if (it == g_KernelMutants.end()) return NtStatus::InvalidHandle;
-        bool ok = it->second->release(1);
+        auto mut = sync::DispatcherRegistry::get().lookupAs<sync::MutantObject>(h);
+        if (!mut) return NtStatus::InvalidHandle;
+        bool ok = mut->release(1);
         return ok ? NtStatus::Success : NtStatus::Unsuccessful;
     });
 
@@ -485,6 +474,63 @@ void SyscallDispatcher::initializeStandardTable() {
         }
 
         return NtDeviceIoControlFile(fileHandle, event, apcRoutine, apcContext, iosb, ioControlCode, inBuf, inLen, outBuf, outLen);
+    });
+
+    // 28. NtWaitForMultipleObjects (SSN: 0x005A)
+    registerSyscall(SSN_NtWaitForMultipleObjects, "NtWaitForMultipleObjects", 5, [](const SyscallFrame& f) -> NtStatus {
+        uint32_t count = static_cast<uint32_t>(f.arg1);
+        auto* handles = reinterpret_cast<const Handle*>(f.arg2);
+        WaitType waitType = static_cast<WaitType>(f.arg3);
+        bool alertable = f.arg4 != 0;
+        LargeInteger* timeout = nullptr;
+        if (f.stackArgs && f.stackArgCount >= 1) {
+            timeout = reinterpret_cast<LargeInteger*>(f.stackArgs[0]);
+        }
+        return NtWaitForMultipleObjects(count, handles, waitType, alertable, timeout);
+    });
+
+    // 29. NtDelayExecution (SSN: 0x0034)
+    registerSyscall(SSN_NtDelayExecution, "NtDelayExecution", 2, [](const SyscallFrame& f) -> NtStatus {
+        bool alertable = f.arg1 != 0;
+        auto* interval = reinterpret_cast<const LargeInteger*>(f.arg2);
+        return NtDelayExecution(alertable, interval);
+    });
+
+    // 30. NtCreateTimer (SSN: 0x0057)
+    registerSyscall(SSN_NtCreateTimer, "NtCreateTimer", 4, [](const SyscallFrame& f) -> NtStatus {
+        auto* outHandle = reinterpret_cast<Handle*>(f.arg1);
+        uint32_t desiredAccess = static_cast<uint32_t>(f.arg2);
+        auto* objAttr = reinterpret_cast<ObjectAttributes*>(f.arg3);
+        uint32_t timerType = static_cast<uint32_t>(f.arg4);
+        return NtCreateTimer(outHandle, desiredAccess, objAttr, timerType);
+    });
+
+    // 31. NtSetTimer (SSN: 0x0078)
+    registerSyscall(SSN_NtSetTimer, "NtSetTimer", 7, [](const SyscallFrame& f) -> NtStatus {
+        Handle h = static_cast<Handle>(f.arg1);
+        auto* dueTime = reinterpret_cast<LargeInteger*>(f.arg2);
+        void* apcRoutine = reinterpret_cast<void*>(f.arg3);
+        void* apcContext = reinterpret_cast<void*>(f.arg4);
+        bool resumeTimer = false;
+        uint32_t period = 0;
+        bool* previousState = nullptr;
+        if (f.stackArgs && f.stackArgCount >= 1) resumeTimer = f.stackArgs[0] != 0;
+        if (f.stackArgs && f.stackArgCount >= 2) period = static_cast<uint32_t>(f.stackArgs[1]);
+        if (f.stackArgs && f.stackArgCount >= 3) previousState = reinterpret_cast<bool*>(f.stackArgs[2]);
+        return NtSetTimer(h, dueTime, apcRoutine, apcContext, resumeTimer, period, previousState);
+    });
+
+    // 32. NtCancelTimer (SSN: 0x0077)
+    registerSyscall(SSN_NtCancelTimer, "NtCancelTimer", 2, [](const SyscallFrame& f) -> NtStatus {
+        Handle h = static_cast<Handle>(f.arg1);
+        auto* currentSignaledState = reinterpret_cast<bool*>(f.arg2);
+        return NtCancelTimer(h, currentSignaledState);
+    });
+
+    // 33. NtShutdownSystem (SSN: 0x0118)
+    registerSyscall(SSN_NtShutdownSystem, "NtShutdownSystem", 1, [](const SyscallFrame& f) -> NtStatus {
+        uint32_t action = static_cast<uint32_t>(f.arg1);
+        return NtShutdownSystem(action);
     });
 }
 

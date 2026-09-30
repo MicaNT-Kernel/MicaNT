@@ -59,6 +59,13 @@ struct ClientId {
     Handle uniqueThread{0};
 };
 
+inline constexpr uint32_t MAXIMUM_WAIT_OBJECTS = 64;
+
+enum class WaitType : uint32_t {
+    WaitAll = 0,
+    WaitAny = 1
+};
+
 /**
  * @brief Standard NT Object Attributes for kernel object instantiation.
  */

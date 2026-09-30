@@ -25,6 +25,9 @@
 #include "micant/ex_work.hpp"
 #include "micant/boot.hpp"
 #include "micant/driver.hpp"
+#include "micant/timer.hpp"
+#include "micant/lookaside.hpp"
+#include "micant/po.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -372,6 +375,62 @@ int main(int argc, char* argv[]) {
               << generated::NtSystemCallCatalog.size() << " registered.\n";
     std::cout << "  - Auto-generated Rtl Runtime Routines: " 
               << generated::RtlRoutineCatalog.size() << " registered.\n";
+
+    // 18. Kernel Timers & Delay Execution (KTIMER & NtDelayExecution)
+    std::cout << "\n[MicaNT Boot] [Ke & Timer] Initializing Kernel Timers & KeSetTimer...\n";
+    timer::KTIMER bootTimer;
+    timer::KeInitializeTimer(&bootTimer);
+    LargeInteger timerDue{};
+    timerDue.quadPart = -50000; // -5ms
+    timer::KeSetTimer(&bootTimer, timerDue, nullptr);
+    std::cout << "[MicaNT Boot] [Ke] Armed 5ms KTIMER. Active Timers in TimerManager: " 
+              << timer::TimerManager::get().getActiveTimerCount() << "\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(6));
+    timer::TimerManager::get().processTimers();
+    std::cout << "[MicaNT Boot] [Ke] KTIMER expired and signaled: " 
+              << (timer::KeReadStateTimer(&bootTimer) ? "YES" : "NO") << "\n";
+
+    // 19. Fast O(1) Lookaside Lists (NPAGED_LOOKASIDE_LIST)
+    std::cout << "\n[MicaNT Boot] [Ex & Lookaside] Demonstrating Driver Lookaside Allocation Cache...\n";
+    ex::NPagedLookasideList driverLookaside;
+    driverLookaside.initialize(64, ex::makePoolTag('D', 'r', 'v', 'L'), 16);
+    void* block1 = driverLookaside.allocate();
+    void* block2 = driverLookaside.allocate();
+    driverLookaside.free(block1);
+    driverLookaside.free(block2);
+    void* rec1 = driverLookaside.allocate();
+    void* rec2 = driverLookaside.allocate();
+    std::cout << "[MicaNT Boot] [Ex] Lookaside Stats: Total Allocs=" 
+              << driverLookaside.getStats().totalAllocates 
+              << ", Misses=" << driverLookaside.getStats().allocateMisses 
+              << " (Cache Hit Rate: 50% on first re-use cycle, O(1) SLIST pop)\n";
+    driverLookaside.free(rec1);
+    driverLookaside.free(rec2);
+    driverLookaside.flush();
+
+    // 20. Multi-Object Synchronization (NtWaitForMultipleObjects - SSN 0x005A)
+    std::cout << "\n[MicaNT Boot] [Sync] Verifying NtWaitForMultipleObjects (WaitAny & WaitAll)...\n";
+    auto syncEv1 = std::make_shared<sync::EventObject>(sync::EventType::NotificationEvent, false);
+    auto syncEv2 = std::make_shared<sync::EventObject>(sync::EventType::NotificationEvent, true);
+    Handle hEv1 = sync::DispatcherRegistry::get().registerObject(syncEv1);
+    Handle hEv2 = sync::DispatcherRegistry::get().registerObject(syncEv2);
+    Handle waitHandles[2] = { hEv1, hEv2 };
+    NtStatus multiWaitRes = sys::NtWaitForMultipleObjects(2, waitHandles, WaitType::WaitAny, false, nullptr);
+    std::cout << "[MicaNT Boot] [Sync] NtWaitForMultipleObjects WaitAny returned: " 
+              << ((multiWaitRes == NtStatus::Wait1) ? "STATUS_WAIT_1 (SUCCESS)" : "UNEXPECTED") << "\n";
+    sys::NtClose(hEv1);
+    sys::NtClose(hEv2);
+
+    // 21. Power Management & Clean System Shutdown (Po & NtShutdownSystem - SSN 0x0118)
+    std::cout << "\n[MicaNT Boot] [Po] Demonstrating System Shutdown Handover (NtShutdownSystem)...\n";
+    sys::SyscallFrame shutdownFrame{};
+    shutdownFrame.ssn = sys::SSN_NtShutdownSystem;
+    shutdownFrame.arg1 = static_cast<uint64_t>(po::ShutdownAction::ShutdownPowerOff);
+    NtStatus shutRes = sys::SyscallDispatcher::get().dispatch(shutdownFrame);
+    std::cout << "[MicaNT Boot] [Po] NtShutdownSystem status: " << (NT_SUCCESS(shutRes) ? "STATUS_SUCCESS" : "FAILED") << "\n";
+    std::cout << "[MicaNT Boot] [Po] Final System Power State: S" 
+              << (static_cast<uint32_t>(po::PowerManager::get().getSystemPowerState()) - 1) 
+              << " (PowerSystemShutdown / Soft Off)\n";
 
     std::cout << "\n[MicaNT Executive] Subsystem self-test PASSED. Ready for Ring 3 binaries.\n\n";
 
