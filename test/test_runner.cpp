@@ -27,6 +27,7 @@
 #include "micant/ex_work.hpp"
 #include "micant/boot.hpp"
 #include "micant/probe.hpp"
+#include "micant/driver.hpp"
 
 using namespace micant;
 
@@ -1076,6 +1077,161 @@ void Test_KernelStressAndConcurrencyHardening() {
                 "Total transferred bytes across all IOCP completions must match 64,000 bytes");
 }
 
+// ============================================================================
+// Suite 19: Driver Model, DriverEntry & NtDeviceIoControlFile
+// ============================================================================
+namespace test_driver {
+
+struct MicaTelemetryData {
+    uint32_t cpuTemperature;
+    uint32_t fanSpeedRpm;
+    uint64_t uptimeNanoseconds;
+    uint32_t activeCores;
+};
+
+inline constexpr uint32_t FILE_DEVICE_MICA_SENSOR = 0x8000;
+inline constexpr uint32_t IOCTL_MICA_GET_VITALS = driver::CTL_CODE(
+    FILE_DEVICE_MICA_SENSOR, 0x801, driver::METHOD_BUFFERED, driver::FILE_READ_ACCESS
+);
+inline constexpr uint32_t IOCTL_MICA_SET_POWER_MODE = driver::CTL_CODE(
+    FILE_DEVICE_MICA_SENSOR, 0x802, driver::METHOD_BUFFERED, driver::FILE_WRITE_ACCESS
+);
+
+static uint32_t g_DriverPowerMode = 1;
+
+static NtStatus MicaDriverDispatchDeviceControl(io::DeviceObject* dev, io::Irp* irp) {
+    (void)dev;
+    if (!irp) return NtStatus::InvalidParameter;
+
+    uint32_t ioctl = irp->byteOffset.lowPart;
+    if (ioctl == IOCTL_MICA_GET_VITALS) {
+        if (!irp->userBuffer || irp->length < sizeof(MicaTelemetryData)) {
+            irp->ioStatus.status = NtStatus::BufferTooSmall;
+            irp->ioStatus.information = 0;
+            return NtStatus::BufferTooSmall;
+        }
+
+        auto* vitals = static_cast<MicaTelemetryData*>(irp->userBuffer);
+        vitals->cpuTemperature = 48; // 48 deg C
+        vitals->fanSpeedRpm = 1850;  // 1850 RPM
+        vitals->uptimeNanoseconds = 1'000'000'000ULL;
+        vitals->activeCores = 4;
+
+        irp->ioStatus.status = NtStatus::Success;
+        irp->ioStatus.information = sizeof(MicaTelemetryData);
+        return NtStatus::Success;
+    } else if (ioctl == IOCTL_MICA_SET_POWER_MODE) {
+        if (!irp->systemBuffer || irp->byteOffset.highPart < sizeof(uint32_t)) {
+            irp->ioStatus.status = NtStatus::InvalidParameter;
+            return NtStatus::InvalidParameter;
+        }
+        g_DriverPowerMode = *static_cast<const uint32_t*>(irp->systemBuffer);
+        irp->ioStatus.status = NtStatus::Success;
+        irp->ioStatus.information = sizeof(uint32_t);
+        return NtStatus::Success;
+    }
+
+    irp->ioStatus.status = NtStatus::InvalidDeviceRequest;
+    return NtStatus::InvalidDeviceRequest;
+}
+
+static NtStatus MicaDriverEntry(io::DriverObject* driverObject, const UnicodeString* registryPath) {
+    (void)registryPath;
+    if (!driverObject) return NtStatus::InvalidParameter;
+
+    // Register IOCTL handler
+    driverObject->setDispatch(io::IRP_MJ_DEVICE_CONTROL, &MicaDriverDispatchDeviceControl);
+
+    // Create device node \Device\MicaVitals
+    auto devNode = io::IoManager::get().createDevice(
+        driverObject,
+        L"\\Device\\MicaVitals",
+        static_cast<io::DeviceType>(FILE_DEVICE_MICA_SENSOR)
+    );
+
+    return devNode ? NtStatus::Success : NtStatus::Unsuccessful;
+}
+
+} // namespace test_driver
+
+void Test_DriverModel_DriverEntryAndDeviceIoControl() {
+    auto& drvMgr = driver::DriverManager::get();
+    NtStatus loadStatus = drvMgr.loadDriver(
+        L"\\Driver\\MicaVitals",
+        test_driver::MicaDriverEntry,
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\MicaVitals"
+    );
+    TEST_ASSERT(NT_SUCCESS(loadStatus), "DriverManager must successfully load driver via DriverEntry");
+    TEST_ASSERT(drvMgr.getLoadedDriverCount() >= 1, "Loaded driver count must be at least 1");
+    TEST_ASSERT(drvMgr.lookupDriver(L"\\Driver\\MicaVitals") != nullptr, "Driver lookup must succeed");
+
+    // Open handle to \Device\MicaVitals via NtOpenFile
+    UnicodeString devPath(L"\\Device\\MicaVitals");
+    ObjectAttributes objAttr{};
+    objAttr.objectName = &devPath;
+    Handle devHandle = 0;
+    IoStatusBlock iosb{};
+
+    NtStatus openStatus = sys::NtOpenFile(&devHandle, fs::FILE_GENERIC_READ | fs::FILE_GENERIC_WRITE, &objAttr, &iosb, 0, 0);
+    TEST_ASSERT(NT_SUCCESS(openStatus), "NtOpenFile must succeed opening \\Device\\MicaVitals");
+    TEST_ASSERT(devHandle != 0, "Device handle must be valid");
+
+    // 1. Send IOCTL_MICA_GET_VITALS via NtDeviceIoControlFile
+    test_driver::MicaTelemetryData vitalsOut{};
+    NtStatus ioctlStatus = sys::NtDeviceIoControlFile(
+        devHandle,
+        0,
+        nullptr,
+        nullptr,
+        &iosb,
+        test_driver::IOCTL_MICA_GET_VITALS,
+        nullptr,
+        0,
+        &vitalsOut,
+        sizeof(vitalsOut)
+    );
+    TEST_ASSERT(NT_SUCCESS(ioctlStatus), "NtDeviceIoControlFile for GET_VITALS must succeed");
+    TEST_ASSERT(iosb.information == sizeof(test_driver::MicaTelemetryData), "Returned size must match struct size");
+    TEST_ASSERT(vitalsOut.cpuTemperature == 48, "Vitals CPU temperature must match driver value (48 C)");
+    TEST_ASSERT(vitalsOut.fanSpeedRpm == 1850, "Vitals fan speed must match driver value (1850 RPM)");
+    TEST_ASSERT(vitalsOut.activeCores == 4, "Vitals active cores must match driver value (4)");
+
+    // 2. Send IOCTL_MICA_SET_POWER_MODE via NtDeviceIoControlFile
+    uint32_t newPowerMode = 2; // High Performance
+    ioctlStatus = sys::NtDeviceIoControlFile(
+        devHandle,
+        0,
+        nullptr,
+        nullptr,
+        &iosb,
+        test_driver::IOCTL_MICA_SET_POWER_MODE,
+        &newPowerMode,
+        sizeof(newPowerMode),
+        nullptr,
+        0
+    );
+    TEST_ASSERT(NT_SUCCESS(ioctlStatus), "NtDeviceIoControlFile for SET_POWER_MODE must succeed");
+    TEST_ASSERT(test_driver::g_DriverPowerMode == 2, "Driver state must be updated to High Performance mode");
+
+    // 3. Test buffer too small condition
+    ioctlStatus = sys::NtDeviceIoControlFile(
+        devHandle,
+        0,
+        nullptr,
+        nullptr,
+        &iosb,
+        test_driver::IOCTL_MICA_GET_VITALS,
+        nullptr,
+        0,
+        &vitalsOut,
+        4 // Too small
+    );
+    TEST_ASSERT(ioctlStatus == NtStatus::BufferTooSmall, "Small output buffer must return STATUS_BUFFER_TOO_SMALL");
+
+    // Close device handle
+    sys::NtClose(devHandle);
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -1099,6 +1255,7 @@ int main() {
     RUN_TEST(Test_ExecutiveWorkQueues_Dispatch);
     RUN_TEST(Test_BootContract_LoaderParameterBlock);
     RUN_TEST(Test_KernelStressAndConcurrencyHardening);
+    RUN_TEST(Test_DriverModel_DriverEntryAndDeviceIoControl);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

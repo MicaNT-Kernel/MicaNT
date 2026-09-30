@@ -14,6 +14,7 @@ inline constexpr uint32_t SSN_NtCreateFile               = 0x0055;
 inline constexpr uint32_t SSN_NtOpenFile                 = 0x0033;
 inline constexpr uint32_t SSN_NtReadFile                 = 0x0006;
 inline constexpr uint32_t SSN_NtWriteFile                = 0x0008;
+inline constexpr uint32_t SSN_NtDeviceIoControlFile       = 0x0007;
 inline constexpr uint32_t SSN_NtClose                    = 0x000F;
 inline constexpr uint32_t SSN_NtAllocateVirtualMemory    = 0x0018;
 inline constexpr uint32_t SSN_NtFreeVirtualMemory        = 0x001E;
@@ -126,6 +127,19 @@ NtStatus NtWriteFile(
     uint32_t length,
     LargeInteger* byteOffset,
     uint32_t* key
+);
+
+NtStatus NtDeviceIoControlFile(
+    Handle fileHandle,
+    Handle event,
+    void* apcRoutine,
+    void* apcContext,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t ioControlCode,
+    const void* inputBuffer,
+    uint32_t inputBufferLength,
+    void* outputBuffer,
+    uint32_t outputBufferLength
 );
 
 NtStatus NtClose(Handle handle);

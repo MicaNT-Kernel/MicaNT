@@ -460,6 +460,32 @@ void SyscallDispatcher::initializeStandardTable() {
 
         return NtWriteFile(fileHandle, event, apcRoutine, apcContext, iosb, buffer, length, byteOffset, key);
     });
+
+    // 27. NtDeviceIoControlFile (SSN: 0x0007)
+    registerSyscall(SSN_NtDeviceIoControlFile, "NtDeviceIoControlFile", 10, [](const SyscallFrame& f) -> NtStatus {
+        Handle fileHandle = static_cast<Handle>(f.arg1);
+        Handle event = static_cast<Handle>(f.arg2);
+        void* apcRoutine = reinterpret_cast<void*>(f.arg3);
+        void* apcContext = reinterpret_cast<void*>(f.arg4);
+
+        IoStatusBlock* iosb = nullptr;
+        uint32_t ioControlCode = 0;
+        const void* inBuf = nullptr;
+        uint32_t inLen = 0;
+        void* outBuf = nullptr;
+        uint32_t outLen = 0;
+
+        if (f.stackArgs && f.stackArgCount >= 2) {
+            iosb = reinterpret_cast<IoStatusBlock*>(f.stackArgs[0]);
+            ioControlCode = static_cast<uint32_t>(f.stackArgs[1]);
+            if (f.stackArgCount >= 3) inBuf = reinterpret_cast<const void*>(f.stackArgs[2]);
+            if (f.stackArgCount >= 4) inLen = static_cast<uint32_t>(f.stackArgs[3]);
+            if (f.stackArgCount >= 5) outBuf = reinterpret_cast<void*>(f.stackArgs[4]);
+            if (f.stackArgCount >= 6) outLen = static_cast<uint32_t>(f.stackArgs[5]);
+        }
+
+        return NtDeviceIoControlFile(fileHandle, event, apcRoutine, apcContext, iosb, ioControlCode, inBuf, inLen, outBuf, outLen);
+    });
 }
 
 } // namespace micant::sys

@@ -24,6 +24,7 @@
 #include "micant/fs.hpp"
 #include "micant/ex_work.hpp"
 #include "micant/boot.hpp"
+#include "micant/driver.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -98,6 +99,29 @@ int main(int argc, char* argv[]) {
     auto& vfs = fs::VirtualFileSystem::get();
     vfs.initialize();
     std::cout << "[MicaNT Boot] [Fastfat & VFS] Mounted \\DosDevices\\C: -> \\Device\\Harddisk0\\Partition1 (Status: MOUNTED)\n";
+
+    // 5.2 Initialize Kernel Hardware Telemetry Driver via DriverEntry
+    std::cout << "[MicaNT Boot] [Driver] Loading Kernel Telemetry Driver via DriverEntry...\n";
+    auto& drvMgr = driver::DriverManager::get();
+    drvMgr.loadDriver(
+        L"\\Driver\\MicaTelemetry",
+        [](io::DriverObject* drv, const UnicodeString* reg) -> NtStatus {
+            (void)reg;
+            drv->setDispatch(io::IRP_MJ_DEVICE_CONTROL, [](io::DeviceObject*, io::Irp* irp) -> NtStatus {
+                if (irp && irp->userBuffer && irp->length >= sizeof(uint32_t)) {
+                    *static_cast<uint32_t*>(irp->userBuffer) = 48; // 48 deg C
+                    irp->ioStatus.status = NtStatus::Success;
+                    irp->ioStatus.information = sizeof(uint32_t);
+                    return NtStatus::Success;
+                }
+                return NtStatus::InvalidParameter;
+            });
+            auto dev = io::IoManager::get().createDevice(drv, L"\\Device\\MicaTelemetry", io::DeviceType::Unknown);
+            return dev ? NtStatus::Success : NtStatus::Unsuccessful;
+        },
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\MicaTelemetry"
+    );
+    std::cout << "[MicaNT Boot] [Driver] Loaded \\Driver\\MicaTelemetry on \\Device\\MicaTelemetry (Status: ACTIVE)\n";
 
     // 6. Initialize I/O Completion Port (IOCP) Subsystem
     std::cout << "[MicaNT Boot] [Io & IOCP] Initializing I/O Completion Port Subsystem...\n";
@@ -224,6 +248,49 @@ int main(int argc, char* argv[]) {
                   << std::hex << ntdllSyscallHandle << std::dec << "\n";
         sys::NtClose(ntdllSyscallHandle);
     }
+
+    // 14.2 Test Simulated Ring 3 DeviceIoControl via Dispatcher
+    std::cout << "[MicaNT Boot] [Test] Simulating Ring 3 -> Ring 0 DeviceIoControl (NtDeviceIoControlFile)...\n";
+    UnicodeString devPath(L"\\Device\\MicaTelemetry");
+    ObjectAttributes devAttr{};
+    devAttr.objectName = &devPath;
+    Handle devSysHandle = 0;
+    IoStatusBlock devIosb{};
+
+    sys::SyscallFrame openDevFrame{
+        .ssn = sys::SSN_NtOpenFile,
+        .arg1 = reinterpret_cast<uint64_t>(&devSysHandle),
+        .arg2 = fs::FILE_GENERIC_READ | fs::FILE_GENERIC_WRITE,
+        .arg3 = reinterpret_cast<uint64_t>(&devAttr),
+        .arg4 = reinterpret_cast<uint64_t>(&devIosb)
+    };
+    (void)dispatcher.dispatch(openDevFrame);
+
+    uint32_t telemetryResult = 0;
+    uint64_t ioctlStackArgs[6] = {
+        reinterpret_cast<uint64_t>(&devIosb),
+        0x80002004, // Custom IOCTL code
+        0, 0,       // No input buffer
+        reinterpret_cast<uint64_t>(&telemetryResult),
+        sizeof(telemetryResult)
+    };
+
+    sys::SyscallFrame ioctlFrame{
+        .ssn = sys::SSN_NtDeviceIoControlFile,
+        .arg1 = static_cast<uint64_t>(devSysHandle),
+        .arg2 = 0,
+        .arg3 = 0,
+        .arg4 = 0,
+        .stackArgs = ioctlStackArgs,
+        .stackArgCount = 6
+    };
+    NtStatus ioctlSysStatus = dispatcher.dispatch(ioctlFrame);
+    if (NT_SUCCESS(ioctlSysStatus)) {
+        std::cout << "[MicaNT Boot] [Test] Syscall NtDeviceIoControlFile (SSN 0x" 
+                  << std::hex << sys::SSN_NtDeviceIoControlFile << std::dec << ") succeeded! "
+                  << "Polled Hardware Core Temp: " << telemetryResult << " C\n";
+    }
+    sys::NtClose(devSysHandle);
 
     // 15. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
     const char* targetAppPath = "bin/userland_app.exe";

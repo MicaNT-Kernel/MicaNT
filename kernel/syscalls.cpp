@@ -195,6 +195,46 @@ NtStatus NtWriteFile(
     return status;
 }
 
+NtStatus NtDeviceIoControlFile(
+    Handle fileHandle,
+    Handle /*event*/,
+    void* /*apcRoutine*/,
+    void* /*apcContext*/,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t ioControlCode,
+    const void* inputBuffer,
+    uint32_t inputBufferLength,
+    void* outputBuffer,
+    uint32_t outputBufferLength
+) {
+    auto it = g_KernelFiles.find(fileHandle);
+    if (it == g_KernelFiles.end() || !it->second) {
+        return NtStatus::InvalidHandle;
+    }
+
+    auto* devObj = it->second->getDeviceObject();
+    if (!devObj || !devObj->driverObject) {
+        return NtStatus::InvalidDeviceRequest;
+    }
+
+    // Build I/O Request Packet (IRP) for IRP_MJ_DEVICE_CONTROL
+    io::Irp irp{};
+    irp.majorFunction = io::IRP_MJ_DEVICE_CONTROL;
+    irp.deviceObject = devObj;
+    irp.systemBuffer = const_cast<void*>(inputBuffer);
+    irp.userBuffer = outputBuffer;
+    irp.length = outputBufferLength;
+    irp.byteOffset.lowPart = ioControlCode;
+    irp.byteOffset.highPart = static_cast<int32_t>(inputBufferLength);
+
+    NtStatus status = fs::IoCallDriver(devObj, &irp);
+
+    if (ioStatusBlock) {
+        *ioStatusBlock = irp.ioStatus;
+    }
+    return status;
+}
+
 NtStatus NtClose(Handle handle) {
     if (handle == 0 || handle == InvalidHandleValue) {
         return NtStatus::InvalidHandle;

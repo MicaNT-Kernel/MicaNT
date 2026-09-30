@@ -192,6 +192,19 @@ public:
         std::shared_ptr<FileObject>& outFileObj
     ) {
         std::lock_guard<std::mutex> lock(mutex_);
+
+        // 1. Check if path targets a registered device node in \Device
+        auto directDevice = io::IoManager::get().lookupDevice(path);
+        if (directDevice) {
+            outFileObj = std::make_shared<FileObject>(directDevice.get(), path, desiredAccess);
+            openFiles_[outFileObj.get()] = nullptr; // Device handle
+            
+            io::Irp createIrp{};
+            createIrp.majorFunction = io::IRP_MJ_CREATE;
+            createIrp.deviceObject = directDevice.get();
+            return IoCallDriver(directDevice.get(), &createIrp);
+        }
+
         std::wstring normalized = normalizePath(path);
 
         auto entry = findEntry(normalized);
