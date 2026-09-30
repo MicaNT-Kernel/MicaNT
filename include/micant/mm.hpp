@@ -133,6 +133,20 @@ public:
 
     [[nodiscard]] size_t getRegionCount() const noexcept { return vads_.size(); }
 
+    [[nodiscard]] VirtualAddressDescriptor* findVad(uintptr_t addr) noexcept {
+        for (auto& vad : vads_) {
+            if (vad.contains(addr)) return &vad;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] const VirtualAddressDescriptor* findVad(uintptr_t addr) const noexcept {
+        for (const auto& vad : vads_) {
+            if (vad.contains(addr)) return &vad;
+        }
+        return nullptr;
+    }
+
 private:
     uintptr_t nextFreeAddress_;
     std::vector<VirtualAddressDescriptor> vads_;

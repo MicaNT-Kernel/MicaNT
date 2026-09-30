@@ -43,13 +43,18 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 
 1. **Modern C++23 Core**: Built with RAII, concepts, compile-time type safety, and atomic synchronization. No 1990s naked pointers or raw un-checked buffers.
 2. **Metadata-Driven Syscall Surface**: The entire `Zw*` / `Nt*` system call table, types, and NTSTATUS codes are auto-generated from Microsoft's MIT-licensed [`win32metadata`](https://github.com/microsoft/win32metadata) repository.
-3. **Pure Object Manager**: Dave Cutler's clean handle-based namespace (`\Device`, `\DosDevices`, `\KernelObjects`, `\BaseNamedObjects`).
-4. **Subsystem Trinity**:
+3. **Pure Object Manager (`ob/`)**: Dave Cutler's clean handle-based namespace (`\Device`, `\DosDevices`, `\KernelObjects`, `\BaseNamedObjects`).
+4. **Complete Ring 0 Kernel Architecture**:
+   - **Kernel Core (`ke/`)**: IRQL state machine (`PASSIVE_LEVEL` to `HIGH_LEVEL`), `KSPIN_LOCK` with IRQL elevation, `KDPC`/`KAPC` queues, and a 32-Queue priority scheduler with quantum decay.
+   - **Executive Memory Pools (`ex/`)**: `NonPagedPool` and `PagedPool` with strict IRQL access enforcement and 4-byte diagnostic tagging (`'Mica'`, `'Proc'`, `'SecO'`).
+   - **Trap & Fault Engine (`ke/trap.hpp`)**: Demand paging, Copy-on-Write (`#PF`), Structured Exception Dispatching (`KiDispatchException`), and `KeBugCheckEx` crash panic.
+   - **Hardware Abstraction Layer (`hal/`)**: Multi-core SMP topology, `KPCR` at `GS:[0]`, `KPRCB`, and 1 GHz nanosecond high-precision performance timers (`KeQueryPerformanceCounter`).
+5. **Subsystem Trinity**:
    - **Configuration Manager (`cm/`)**: In-memory registry hive mounted under `\Registry` with hierarchical keys and typed values (`REG_SZ`, `REG_DWORD`, `REG_QWORD`).
    - **Security Reference Monitor (`se/`)**: SIDs, DACLs, ACEs, Process Access Tokens, and Dave Cutler's `accessCheck` validation algorithm.
    - **Advanced Local Procedure Call (`lpc/`)**: High-speed message passing with named ports in `\RPC Control`, FIFO queues, and synchronous `requestWaitReply` rendezvous.
-5. **Zero Telemetry**: No Cortana, no advertising IDs, no diagnostic tracking, no network dial-home. Pure, unadulterated computing.
-6. **Native Windows ABI**: Implements the standard x86-64 `KiSystemCall64` / `syscall` interface, userland `TEB`/`PEB` layout, and `ntdll.dll` executive contract.
+6. **Zero Telemetry**: No Cortana, no advertising IDs, no diagnostic tracking, no network dial-home. Pure, unadulterated computing.
+7. **Native 64-bit Windows ABI**: Implements the standard x86-64 `KiSystemCall64` / `syscall` interface, userland `TEB`/`PEB` layout, and `ntdll.dll` executive contract.
 
 ---
 
@@ -91,7 +96,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 |      (Ob)        |                |      (Mm)        |                |      (Ps)        |
 | - Root Directory |                | - PML4 Paging    |                | - EPROCESS       |
 | - Handle Tables  |                | - VAD Trees      |                | - ETHREAD        |
-| - Reference Count|                | - Pool Allocator |                | - Scheduler      |
+| - Reference Count|                | - Demand Paging  |                | - Scheduler      |
 +------------------+                +------------------+                +------------------+
          |                                    |                                    |
          v                                    v                                    v
@@ -100,6 +105,14 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 |      (Cm)        |                |      (Se)        |                |      (Lpc)       |
 | - \Registry Hive |                | - SIDs, DACLs    |                | - \RPC Control   |
 | - Typed Values   |                | - Tokens & Access|                | - RequestWaitRepl|
++------------------+                +------------------+                +------------------+
+         |                                    |                                    |
+         v                                    v                                    v
++------------------+                +------------------+                +------------------+
+| Kernel Core (Ke) |                |  Executive Pools |                | Trap Engine (Ke) |
+| - IRQL Machine   |                |      (Ex)        |                | - Page Fault #PF |
+| - KSPIN_LOCK     |                | - NonPagedPool   |                | - SEH Dispatcher |
+| - 32-Queue Sched |                | - PagedPool (Tag)|                | - KeBugCheckEx   |
 +------------------+                +------------------+                +------------------+
          |                                    |                                    |
          +-------------------------+          |          +-------------------------+
@@ -116,6 +129,9 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
                              +-------------------------------+
                              |  Hardware Abstraction Layer   |
                              |             (HAL)             |
+                             |  - KPCR / KPRCB (GS:[0])      |
+                             |  - SMP Multi-Core Topology    |
+                             |  - 1 GHz Performance Counter  |
                              +-------------------------------+
 ```
 
@@ -143,12 +159,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (10 Suites, 100% Passing)
+### Build & Run Unit Test Suite (14 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run the 10 Test Suites:
+# Run the 14 Test Suites:
 .\bin\micant_tests.exe
 ```
 

@@ -17,6 +17,10 @@
 #include "micant/cm.hpp"
 #include "micant/se.hpp"
 #include "micant/lpc.hpp"
+#include "micant/ke.hpp"
+#include "micant/ex.hpp"
+#include "micant/trap.hpp"
+#include "micant/hal.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -42,7 +46,20 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[MicaNT Boot] Initializing Executive subsystems...\n";
 
-    // 1. Initialize Object Manager Root Namespace
+    // 1. Initialize Hardware Abstraction Layer & CPU Topology
+    std::cout << "[MicaNT Boot] [Hal] Initializing Hardware Abstraction Layer...\n";
+    auto& hal = hal::HardwareAbstractionLayer::get();
+    hal.initialize(4); // 4-core SMP
+    auto* kpcr0 = hal.getKpcr(0);
+    std::cout << "[MicaNT Boot] [Hal] Initialized 4-core SMP topology. KPCR at GS:[0] (CPU 0 Core Clock: " 
+              << kpcr0->prcb.coreClockMhz << " MHz, Arch: AMD64)\n";
+
+    // 2. Initialize Executive Memory Pools (NonPagedPool & PagedPool)
+    std::cout << "[MicaNT Boot] [Ex] Initializing Executive Pools (NonPagedPool & PagedPool)...\n";
+    void* bootPoolBuffer = ex::ExAllocatePoolWithTag(ex::PoolType::NonPagedPool, 64 * 1024, ex::TAG_MICA_CORE);
+    std::cout << "[MicaNT Boot] [Ex] Allocated 64 KB NonPaged Pool [Tag: 'Mica'] at 0x" << bootPoolBuffer << "\n";
+
+    // 3. Initialize Object Manager Root Namespace
     std::cout << "[MicaNT Boot] [Ob] Initializing Object Manager root namespace...\n";
     ob::DirectoryObject rootDirectory(L"\\");
     auto devDir = std::make_unique<ob::DirectoryObject>(L"Device");
@@ -51,10 +68,10 @@ int main(int argc, char* argv[]) {
     auto baseDir = std::make_unique<ob::DirectoryObject>(L"BaseNamedObjects");
     std::cout << "[MicaNT Boot] [Ob] Created standard NT namespaces: \\Device, \\DosDevices, \\KernelObjects, \\BaseNamedObjects\n";
 
-    // 2. Initialize Memory Manager
+    // 4. Initialize Memory Manager
     std::cout << "[MicaNT Boot] [Mm] Initializing 64-bit Virtual Memory Manager...\n";
 
-    // 3. Initialize I/O Manager & Device Object Graph
+    // 5. Initialize I/O Manager & Device Object Graph
     std::cout << "[MicaNT Boot] [Io] Initializing I/O Manager and Device Object Graph...\n";
     auto& ioMgr = io::IoManager::get();
     io::DriverObject nullDriver{ .driverName = L"\\Driver\\Null" };
@@ -64,7 +81,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Io] Created system device nodes: \\Device\\Null, \\Device\\Harddisk0 (Registered: " 
               << ioMgr.getDeviceCount() << " devices)\n";
 
-    // 4. Initialize I/O Completion Port (IOCP) Subsystem
+    // 6. Initialize I/O Completion Port (IOCP) Subsystem
     std::cout << "[MicaNT Boot] [Io & IOCP] Initializing I/O Completion Port Subsystem...\n";
     io::IoCompletionPort systemIocp(4);
     systemIocp.postCompletion(0x1337, 0x00007FF71000, NtStatus::Success, 4096);
@@ -77,13 +94,26 @@ int main(int argc, char* argv[]) {
                   << std::hex << iocpKey << std::dec << " Transferred: " << iocpIosb.information << " bytes.\n";
     }
 
-    // 5. Initialize Synchronization Subsystem
+    // 7. Initialize Synchronization Subsystem
     std::cout << "[MicaNT Boot] [Sync] Initializing KEVENT / KMUTANT / KSEMAPHORE primitives...\n";
     sync::EventObject bootEvent(sync::EventType::NotificationEvent, false);
     bootEvent.set();
     std::cout << "[MicaNT Boot] [Sync] Boot synchronization event signaled: OK\n";
 
-    // 6. Initialize Configuration Manager (CM) Registry Hives
+    // 8. Initialize Kernel Core (KE) Spinlocks, DPCs, and 32-Queue Priority Scheduler
+    std::cout << "[MicaNT Boot] [Ke] Initializing Kernel Core & 32-Queue Priority Scheduler...\n";
+    auto& scheduler = ke::PriorityScheduler::get();
+    scheduler.readyThread(ke::ScheduledThreadEntry{
+        .tid = 0, .basePriority = ke::PRIORITY_IDLE, .currentPriority = ke::PRIORITY_IDLE, .name = "Idle Loop"
+    });
+    std::cout << "[MicaNT Boot] [Ke] IRQL State: PASSIVE_LEVEL (0). Idle thread queued at Priority 0.\n";
+
+    // 9. Initialize Trap & Exception Engine
+    std::cout << "[MicaNT Boot] [Ke/Trap] Initializing Trap Engine & Demand Paging (#PF Vector 14)...\n";
+    auto& trapEngine = ke::TrapEngine::get();
+    std::cout << "[MicaNT Boot] [Ke/Trap] Registered SEH Dispatcher and KeBugCheckEx panic handler.\n";
+
+    // 10. Initialize Configuration Manager (CM) Registry Hives
     std::cout << "[MicaNT Boot] [Cm] Initializing Configuration Manager & mounting \\Registry...\n";
     auto& cmMgr = cm::ConfigurationManager::get();
     auto sessionMgrKey = cmMgr.resolvePath(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Session Manager");
@@ -93,13 +123,13 @@ int main(int argc, char* argv[]) {
                    << L" (Build " << sessionMgrKey->getValue(L"OSBuild")->asDword() << L")\n";
     }
 
-    // 7. Initialize Security Reference Monitor (SRM)
+    // 11. Initialize Security Reference Monitor (SRM)
     std::cout << "[MicaNT Boot] [Se] Initializing Security Reference Monitor (SRM)...\n";
     auto systemToken = se::TokenObject::createSystemToken();
     std::wcout << L"[MicaNT Boot] [Se] Kernel Primary Token: " << systemToken->getUserSid().toString() 
                << L" (SeDebugPrivilege: " << (systemToken->hasPrivilege(se::SE_DEBUG_NAME) ? L"ENABLED" : L"DISABLED") << L")\n";
 
-    // 8. Initialize Advanced Local Procedure Call (ALPC) Subsystem
+    // 12. Initialize Advanced Local Procedure Call (ALPC) Subsystem
     std::cout << "[MicaNT Boot] [Lpc] Initializing ALPC Subsystem & \\RPC Control port directory...\n";
     auto& lpcMgr = lpc::PortManager::get();
     auto csrssPort = lpcMgr.createPort(L"\\RPC Control\\MicaCsrPort");
@@ -108,14 +138,14 @@ int main(int argc, char* argv[]) {
     lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
     std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
 
-    // 9. Initialize KiSystemCall64 Central Dispatcher Table
+    // 13. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";
     auto& dispatcher = sys::SyscallDispatcher::get();
     dispatcher.initializeStandardTable();
     std::cout << "[MicaNT Boot] [KiSystemCall64] " << dispatcher.getRegisteredCount() 
               << " core NT syscalls registered in LSTAR dispatch table.\n";
 
-    // 10. Test Simulated Ring 3 Syscall via Dispatcher
+    // 14. Test Simulated Ring 3 Syscall via Dispatcher
     std::cout << "[MicaNT Boot] [Test] Simulating Ring 3 -> Ring 0 'syscall' invocation...\n";
     uintptr_t userAllocBase = 0;
     size_t userAllocSize = 128 * 1024; // 128 KB
@@ -140,7 +170,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "[MicaNT Boot] [Test] Syscall dispatch failed: " << NtStatusToString(syscallResult) << "\n";
     }
 
-    // 11. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
+    // 15. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
     const char* targetAppPath = "bin/userland_app.exe";
     std::ifstream testCheck(targetAppPath, std::ios::binary);
     if (!testCheck.is_open() && argc > 0 && argv[0]) {
@@ -174,7 +204,7 @@ int main(int argc, char* argv[]) {
                               << " Flags: 0x" << sec.characteristics << std::dec << "\n";
                 }
 
-                // 12. Section Mapping & Process/Thread Instantiation
+                // 16. Section Mapping & Process/Thread Instantiation
                 std::cout << "\n[MicaNT Boot] [Ps & Section] Spawning EProcess for " << targetAppPath << "...\n";
                 auto& pm = ps::ProcessManager::get();
                 auto proc = pm.createProcess(L"userland_app.exe", systemToken);
@@ -214,7 +244,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 13. Ingested win32metadata Catalog Verification
+    // 17. Ingested win32metadata Catalog Verification
     std::cout << "\n[MicaNT Boot] [Metadata] Verifying win32metadata API surface:\n";
     std::cout << "  - Auto-generated Nt/Zw System Calls: " 
               << generated::NtSystemCallCatalog.size() << " registered.\n";

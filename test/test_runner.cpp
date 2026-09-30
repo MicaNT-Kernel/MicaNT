@@ -19,6 +19,10 @@
 #include "micant/cm.hpp"
 #include "micant/se.hpp"
 #include "micant/lpc.hpp"
+#include "micant/ke.hpp"
+#include "micant/ex.hpp"
+#include "micant/trap.hpp"
+#include "micant/hal.hpp"
 
 using namespace micant;
 
@@ -557,6 +561,231 @@ void Test_Alpc_MessageRendezvous() {
     TEST_ASSERT(replyMsg.u2.type == static_cast<uint16_t>(lpc::PortMessageType::LpcReply), "Message type must be LpcReply");
 }
 
+// ============================================================================
+// Suite 11: Kernel Core (KE) IRQLs, Spinlocks, DPCs, and Priority Scheduler
+// ============================================================================
+void Test_KernelCore_IrqlSpinLockAndScheduler() {
+    // 1. IRQL state machine
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "Initial IRQL must be PASSIVE_LEVEL");
+    ke::KIRQL old = ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    TEST_ASSERT(old == ke::PASSIVE_LEVEL, "Previous IRQL must be PASSIVE_LEVEL");
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::DISPATCH_LEVEL, "Current IRQL must be DISPATCH_LEVEL");
+    ke::KeLowerIrql(ke::PASSIVE_LEVEL);
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "Lowered IRQL must be PASSIVE_LEVEL");
+
+    // 2. Kernel Spinlock
+    ke::SpinLock spinLock;
+    {
+        ke::SpinLockGuard guard(spinLock);
+        TEST_ASSERT(spinLock.isLocked(), "Spinlock must be in locked state");
+        TEST_ASSERT(ke::KeGetCurrentIrql() == ke::DISPATCH_LEVEL, "Acquiring spinlock must raise IRQL to DISPATCH_LEVEL");
+        TEST_ASSERT(guard.getPreviousIrql() == ke::PASSIVE_LEVEL, "Previous IRQL in guard must be PASSIVE_LEVEL");
+    }
+    TEST_ASSERT(!spinLock.isLocked(), "Spinlock must be unlocked after guard destruction");
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "IRQL must be restored to PASSIVE_LEVEL");
+
+    // 3. Deferred Procedure Call (KDPC)
+    static bool s_DpcExecuted = false;
+    static void* s_DpcArg = nullptr;
+    ke::KDPC dpc{
+        .routine = [](ke::KDPC*, void*, void* arg1, void*) {
+            s_DpcExecuted = true;
+            s_DpcArg = arg1;
+        },
+        .deferredContext = nullptr
+    };
+
+    auto& dpcQueue = ke::DpcQueue::get();
+    bool queued = dpcQueue.queueDpc(&dpc, reinterpret_cast<void*>(0x1337));
+    TEST_ASSERT(queued, "Queueing DPC must succeed");
+    TEST_ASSERT(dpcQueue.getQueuedCount() == 1, "DPC queue must contain 1 entry");
+
+    size_t drained = dpcQueue.drainDpcs();
+    TEST_ASSERT(drained == 1, "Draining DPC queue must process 1 entry");
+    TEST_ASSERT(s_DpcExecuted, "DPC routine must have executed");
+    TEST_ASSERT(s_DpcArg == reinterpret_cast<void*>(0x1337), "DPC argument must match 0x1337");
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "IRQL must return to PASSIVE_LEVEL after DPC drain");
+
+    // 4. 32-Queue Priority Thread Scheduler
+    auto& scheduler = ke::PriorityScheduler::get();
+    ke::ScheduledThreadEntry tIdle{ .tid = 0, .basePriority = ke::PRIORITY_IDLE, .currentPriority = ke::PRIORITY_IDLE, .name = "SystemIdle" };
+    ke::ScheduledThreadEntry tNormal{ .tid = 100, .basePriority = ke::PRIORITY_NORMAL, .currentPriority = ke::PRIORITY_NORMAL, .name = "NormalWorker" };
+    ke::ScheduledThreadEntry tRealtime{ .tid = 200, .basePriority = 24, .currentPriority = 24, .name = "RealTimeAudio" };
+
+    scheduler.readyThread(tIdle);
+    scheduler.readyThread(tNormal);
+    scheduler.readyThread(tRealtime);
+
+    // Highest priority (Realtime 24) must be selected first
+    auto next1 = scheduler.selectNextThread();
+    TEST_ASSERT(next1.has_value(), "Scheduler must select runnable thread");
+    TEST_ASSERT(next1->tid == 200, "Real-time thread 200 must be scheduled first");
+    TEST_ASSERT(next1->currentPriority == 24, "Priority must be 24");
+
+    // Next must be Normal (8)
+    auto next2 = scheduler.selectNextThread();
+    TEST_ASSERT(next2.has_value() && next2->tid == 100, "Normal thread 100 must be scheduled next");
+
+    // Next must be Idle (0)
+    auto next3 = scheduler.selectNextThread();
+    TEST_ASSERT(next3.has_value() && next3->tid == 0, "Idle thread 0 must be scheduled last");
+
+    // Queue empty
+    auto next4 = scheduler.selectNextThread();
+    TEST_ASSERT(!next4.has_value(), "Run queues must now be empty");
+}
+
+// ============================================================================
+// Suite 12: Executive Memory Pools (EX) NonPaged/Paged Pools, Tags, and IRQL
+// ============================================================================
+void Test_ExecutivePools_AllocationAndIrql() {
+    auto& pool = ex::ExecutivePool::get();
+
+    // 1. Allocate NonPagedPool with tag 'Mica'
+    void* pNonPaged = ex::ExAllocatePoolWithTag(ex::PoolType::NonPagedPool, 4096, ex::TAG_MICA_CORE);
+    TEST_ASSERT(pNonPaged != nullptr, "NonPagedPool allocation of 4KB must succeed");
+    std::memset(pNonPaged, 0xAA, 4096);
+    TEST_ASSERT(pool.getTotalNonPagedBytes() >= 4096, "NonPaged bytes tracking must reflect allocation");
+
+    auto tagStats = pool.getTagStats(ex::TAG_MICA_CORE);
+    TEST_ASSERT(tagStats.activeAllocations >= 1, "Tag 'Mica' active allocations must be >= 1");
+    TEST_ASSERT(tagStats.activeBytes >= 4096, "Tag 'Mica' active bytes must be >= 4096");
+
+    // 2. Allocate PagedPool with tag 'Proc' at PASSIVE_LEVEL
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "Current IRQL must be PASSIVE_LEVEL");
+    void* pPaged = ex::ExAllocatePoolWithTag(ex::PoolType::PagedPool, 8192, ex::TAG_PROCESS);
+    TEST_ASSERT(pPaged != nullptr, "PagedPool allocation at PASSIVE_LEVEL must succeed");
+    std::memset(pPaged, 0xBB, 8192);
+    TEST_ASSERT(pool.getTotalPagedBytes() >= 8192, "Paged bytes tracking must reflect allocation");
+
+    // 3. Verify IRQL Enforcement: Attempting to allocate PagedPool at DISPATCH_LEVEL must fail!
+    ke::KIRQL old = ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    void* pIllegalPaged = ex::ExAllocatePoolWithTag(ex::PoolType::PagedPool, 1024, ex::TAG_SECTION);
+    TEST_ASSERT(pIllegalPaged == nullptr, "PagedPool allocation at DISPATCH_LEVEL must fail and be rejected!");
+
+    // Allocating NonPagedPool at DISPATCH_LEVEL is valid and allowed
+    void* pValidNonPagedAtDpc = ex::ExAllocatePoolWithTag(ex::PoolType::NonPagedPool, 1024, ex::TAG_SECTION);
+    TEST_ASSERT(pValidNonPagedAtDpc != nullptr, "NonPagedPool allocation at DISPATCH_LEVEL must succeed");
+    ke::KeLowerIrql(old);
+
+    // 4. Free allocations with tag verification
+    ex::ExFreePoolWithTag(pValidNonPagedAtDpc, ex::TAG_SECTION);
+    ex::ExFreePoolWithTag(pPaged, ex::TAG_PROCESS);
+    ex::ExFreePoolWithTag(pNonPaged, ex::TAG_MICA_CORE);
+
+    auto finalMicaStats = pool.getTagStats(ex::TAG_MICA_CORE);
+    TEST_ASSERT(finalMicaStats.activeAllocations == 0, "All 'Mica' allocations must be freed");
+    TEST_ASSERT(finalMicaStats.activeBytes == 0, "Active 'Mica' bytes must be 0");
+}
+
+// ============================================================================
+// Suite 13: Trap & Fault Engine (KE/TRAP) Page Faults, SEH, and BugCheck
+// ============================================================================
+void Test_TrapEngine_PageFaultAndBugCheck() {
+    auto& trap = ke::TrapEngine::get();
+    auto& pm = ps::ProcessManager::get();
+    auto proc = pm.createProcess(L"TrapTestProcess.exe");
+
+    // 1. Setup VAD region with PAGE_WRITECOPY
+    uintptr_t vadBase = 0;
+    size_t vadSize = 64 * 1024;
+    NtStatus allocStatus = proc->getAddressSpace().allocate(
+        vadBase,
+        vadSize,
+        mm::MEM_RESERVE,
+        mm::PAGE_WRITECOPY
+    );
+    TEST_ASSERT(NT_SUCCESS(allocStatus), "VAD allocation should succeed");
+
+    // Test Demand Paging & Copy-on-Write page fault
+    NtStatus pfStatus = trap.handlePageFault(*proc, vadBase + 0x1000, true, false);
+    TEST_ASSERT(NT_SUCCESS(pfStatus), "Page fault handler should resolve demand page");
+    auto* vad = proc->getAddressSpace().findVad(vadBase + 0x1000);
+    TEST_ASSERT(vad != nullptr, "VAD region must exist");
+    TEST_ASSERT(vad->committed, "Demand paging must commit VAD page");
+    TEST_ASSERT(vad->protection == mm::PAGE_READWRITE, "Copy-on-Write fault must transition to PAGE_READWRITE");
+
+    // Test access fault at unmapped address (must return STATUS_ACCESS_VIOLATION)
+    NtStatus badPf = trap.handlePageFault(*proc, 0x00007FFF99990000ULL, true, false);
+    TEST_ASSERT(badPf == NtStatus::AccessViolation, "Unmapped address fault must return AccessViolation");
+
+    // Test instruction execution fault on non-executable page
+    NtStatus execPf = trap.handlePageFault(*proc, vadBase + 0x1000, false, true);
+    TEST_ASSERT(execPf == NtStatus::AccessViolation, "Executing non-executable page must return AccessViolation");
+
+    // 2. Structured Exception Dispatcher (KiDispatchException)
+    auto thread = proc->createThread(0x140001000);
+    ke::ExceptionRecord record{
+        .exceptionCode = ke::EXCEPTION_BREAKPOINT,
+        .exceptionAddress = reinterpret_cast<void*>(0x140001000)
+    };
+    ps::ContextFrame ctx = thread->getContext();
+    ctx.cs = 0x33; // User mode
+
+    // Install user SEH filter
+    static bool s_SehHandled = false;
+    trap.setUserSehHandler([](const ke::ExceptionRecord& rec, ps::ContextFrame&) -> bool {
+        if (rec.exceptionCode == ke::EXCEPTION_BREAKPOINT) {
+            s_SehHandled = true;
+            return true; // Exception Handled
+        }
+        return false;
+    });
+
+    NtStatus dispRes = trap.dispatchException(record, ctx, *thread, true);
+    TEST_ASSERT(NT_SUCCESS(dispRes), "User SEH handler should handle first-chance breakpoint");
+    TEST_ASSERT(s_SehHandled, "SEH callback flag must be set");
+
+    // Second chance unhandled terminates process
+    trap.setUserSehHandler(nullptr);
+    ke::ExceptionRecord unhandledRecord{
+        .exceptionCode = ke::EXCEPTION_ACCESS_VIOLATION,
+        .exceptionAddress = reinterpret_cast<void*>(0x140002000)
+    };
+    NtStatus unhandledRes = trap.dispatchException(unhandledRecord, ctx, *thread, false);
+    TEST_ASSERT(unhandledRes == NtStatus::ProcessIsTerminating, "Unhandled second-chance exception must terminate process");
+    TEST_ASSERT(proc->isTerminated(), "Process must be terminated");
+
+    // 3. Kernel Bug Check (KeBugCheckEx)
+    ke::KeBugCheckEx(ke::PAGE_FAULT_IN_NONPAGED_AREA, 0x1111, 0x2222, 0x3333, 0x4444);
+    const auto& lastBugCheck = trap.getLastBugCheck();
+    TEST_ASSERT(lastBugCheck.dumpGenerated, "BugCheck must record crash dump generated");
+    TEST_ASSERT(lastBugCheck.bugCheckCode == ke::PAGE_FAULT_IN_NONPAGED_AREA, "BugCheck code must match PAGE_FAULT_IN_NONPAGED_AREA (0x50)");
+    TEST_ASSERT(lastBugCheck.param1 == 0x1111, "Param 1 must match");
+    TEST_ASSERT(lastBugCheck.param2 == 0x2222, "Param 2 must match");
+}
+
+// ============================================================================
+// Suite 14: Hardware Abstraction Layer (HAL) KPCR, KPRCB, and Timers
+// ============================================================================
+void Test_HardwareAbstractionLayer_KPCRAndTimers() {
+    auto& hal = hal::HardwareAbstractionLayer::get();
+    TEST_ASSERT(hal.getProcessorCount() >= 1, "HAL must detect at least 1 processor core");
+
+    auto* kpcr0 = hal.getKpcr(0);
+    TEST_ASSERT(kpcr0 != nullptr, "KPCR 0 must not be null");
+    TEST_ASSERT(kpcr0->self == kpcr0, "KPCR self pointer must point to itself");
+    TEST_ASSERT(kpcr0->prcb.cpuId == 0, "CPU ID must be 0");
+    TEST_ASSERT(kpcr0->prcb.architecture == hal::ProcessorArchitecture::Amd64, "Architecture must be AMD64");
+
+    // Performance counter
+    LargeInteger c1{};
+    LargeInteger c2{};
+    LargeInteger freq{};
+    hal::KeQueryPerformanceCounter(c1, &freq);
+    TEST_ASSERT(freq.quadPart == 1'000'000'000, "Performance frequency must be 1 GHz (nanosecond precision)");
+
+    hal::KeStallExecutionProcessor(50); // Stall 50 microseconds
+    hal::KeQueryPerformanceCounter(c2, &freq);
+    TEST_ASSERT(c2.quadPart > c1.quadPart, "Performance counter must strictly advance over stall");
+
+    // Clock tick accounting
+    uint64_t initialInterrupts = kpcr0->prcb.interruptsServiced;
+    hal.dispatchClockTick(0);
+    hal.dispatchClockTick(0);
+    TEST_ASSERT(kpcr0->prcb.interruptsServiced == initialInterrupts + 2, "Dispatched clock ticks must increment interrupt count");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -572,6 +801,10 @@ int main() {
     RUN_TEST(Test_ConfigurationManager_HiveAndValues);
     RUN_TEST(Test_SecurityReferenceMonitor_AccessCheck);
     RUN_TEST(Test_Alpc_MessageRendezvous);
+    RUN_TEST(Test_KernelCore_IrqlSpinLockAndScheduler);
+    RUN_TEST(Test_ExecutivePools_AllocationAndIrql);
+    RUN_TEST(Test_TrapEngine_PageFaultAndBugCheck);
+    RUN_TEST(Test_HardwareAbstractionLayer_KPCRAndTimers);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
