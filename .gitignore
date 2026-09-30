@@ -5,6 +5,7 @@ build/
 *.pdb
 *.ilk
 *.exe
+*.bmp
 
 # IDE / Editor
 .vscode/

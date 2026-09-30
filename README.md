@@ -12,6 +12,14 @@
 
 ---
 
+<p align="center">
+  <img src="docs/bootscreen.png" alt="MicaNT Boot Screen" width="640">
+  <br>
+  <em>MicaNT Bare-Metal UEFI Boot Splash featuring Dave Cutler's 1988 DEC Mica Prism Emblem</em>
+</p>
+
+---
+
 > [!IMPORTANT]
 > **CLEAN-ROOM IMPLEMENTATION & REFERENCE NOTICE**  
 > MicaNT is a **100% clean-room engineering project**. All kernel subsystems, memory managers, schedulers, and object tables are original implementations authored in modern ISO C++23.  
