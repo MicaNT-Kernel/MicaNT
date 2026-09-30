@@ -14,6 +14,7 @@ include_directories(
 add_executable(micant_kernel
     kernel/main.cpp
     kernel/syscalls.cpp
+    kernel/dispatcher.cpp
 )
 
 target_compile_definitions(micant_kernel PRIVATE
