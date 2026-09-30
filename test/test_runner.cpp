@@ -23,6 +23,9 @@
 #include "micant/ex.hpp"
 #include "micant/trap.hpp"
 #include "micant/hal.hpp"
+#include "micant/fs.hpp"
+#include "micant/ex_work.hpp"
+#include "micant/boot.hpp"
 
 using namespace micant;
 
@@ -786,6 +789,165 @@ void Test_HardwareAbstractionLayer_KPCRAndTimers() {
     TEST_ASSERT(kpcr0->prcb.interruptsServiced == initialInterrupts + 2, "Dispatched clock ticks must increment interrupt count");
 }
 
+// ============================================================================
+// Suite 15: Virtual File System & Fastfat Driver Tests
+// ============================================================================
+void Test_VirtualFileSystem_Fat32AndFileObjects() {
+    auto& vfs = fs::VirtualFileSystem::get();
+    vfs.initialize();
+
+    auto* partitionDev = vfs.getPartitionDevice();
+    TEST_ASSERT(partitionDev != nullptr, "Partition device node must be registered");
+    TEST_ASSERT(partitionDev->deviceType == io::DeviceType::FileSystem, "Device type must be FileSystem");
+
+    // Test 1: Create a file via NtCreateFile
+    UnicodeString filePath(L"\\DosDevices\\C:\\Windows\\test_output.log");
+    ObjectAttributes objAttr{};
+    objAttr.objectName = &filePath;
+    Handle fileHandle = 0;
+    IoStatusBlock iosb{};
+
+    NtStatus st = sys::NtCreateFile(
+        &fileHandle,
+        fs::FILE_GENERIC_READ | fs::FILE_GENERIC_WRITE,
+        &objAttr,
+        &iosb,
+        nullptr,
+        fs::FILE_ATTRIBUTE_NORMAL,
+        0,
+        fs::FILE_CREATE,
+        0,
+        nullptr,
+        0
+    );
+    TEST_ASSERT(NT_SUCCESS(st), "NtCreateFile must succeed creating file");
+    TEST_ASSERT(fileHandle != 0, "File handle must be valid");
+    TEST_ASSERT(iosb.information == 2, "iosb.information must be 2 (FILE_CREATED)");
+
+    // Test 2: Write data to file via NtWriteFile
+    std::string testPayload = "Hello MicaNT Kernel Storage Subsystem!";
+    st = sys::NtWriteFile(
+        fileHandle,
+        0,
+        nullptr,
+        nullptr,
+        &iosb,
+        testPayload.data(),
+        static_cast<uint32_t>(testPayload.size()),
+        nullptr,
+        nullptr
+    );
+    TEST_ASSERT(NT_SUCCESS(st), "NtWriteFile must succeed");
+    TEST_ASSERT(iosb.information == testPayload.size(), "Bytes written must match payload length");
+
+    // Close the file
+    st = sys::NtClose(fileHandle);
+    TEST_ASSERT(NT_SUCCESS(st), "NtClose must close file handle");
+
+    // Test 3: Re-open file via NtOpenFile and read back contents
+    fileHandle = 0;
+    st = sys::NtOpenFile(
+        &fileHandle,
+        fs::FILE_GENERIC_READ,
+        &objAttr,
+        &iosb,
+        0,
+        0
+    );
+    TEST_ASSERT(NT_SUCCESS(st), "NtOpenFile must reopen created file");
+    TEST_ASSERT(fileHandle != 0, "Reopened handle must be valid");
+
+    std::vector<char> readBuffer(64, 0);
+    st = sys::NtReadFile(
+        fileHandle,
+        0,
+        nullptr,
+        nullptr,
+        &iosb,
+        readBuffer.data(),
+        static_cast<uint32_t>(readBuffer.size()),
+        nullptr,
+        nullptr
+    );
+    TEST_ASSERT(NT_SUCCESS(st), "NtReadFile must succeed");
+    TEST_ASSERT(iosb.information == testPayload.size(), "Bytes read must match written bytes");
+    std::string readStr(readBuffer.data(), iosb.information);
+    TEST_ASSERT(readStr == testPayload, "Read content must match payload");
+
+    sys::NtClose(fileHandle);
+
+    // Test 4: Open pre-seeded system binary \DosDevices\C:\Windows\System32\ntdll.dll
+    UnicodeString ntdllPath(L"\\DosDevices\\C:\\Windows\\System32\\ntdll.dll");
+    ObjectAttributes ntdllAttr{};
+    ntdllAttr.objectName = &ntdllPath;
+    Handle ntdllHandle = 0;
+    st = sys::NtOpenFile(&ntdllHandle, fs::FILE_GENERIC_READ, &ntdllAttr, &iosb, 0, 0);
+    TEST_ASSERT(NT_SUCCESS(st), "NtOpenFile must locate system binary ntdll.dll");
+    TEST_ASSERT(ntdllHandle != 0, "ntdll handle must be valid");
+
+    std::vector<char> ntdllHeader(32, 0);
+    st = sys::NtReadFile(ntdllHandle, 0, nullptr, nullptr, &iosb, ntdllHeader.data(), 32, nullptr, nullptr);
+    TEST_ASSERT(NT_SUCCESS(st), "NtReadFile must read ntdll header");
+    std::string headerStr(ntdllHeader.data(), iosb.information);
+    TEST_ASSERT(headerStr.find("MZ-MICANT") != std::string::npos, "ntdll header magic must be found");
+
+    sys::NtClose(ntdllHandle);
+}
+
+// ============================================================================
+// Suite 16: Executive Worker Queues Tests
+// ============================================================================
+void Test_ExecutiveWorkQueues_Dispatch() {
+    auto& workMgr = ex::ExecutiveWorkQueueManager::get();
+    workMgr.initialize(2);
+    TEST_ASSERT(workMgr.getActiveWorkerCount() == 2, "Active worker count must be 2");
+
+    std::atomic<int> completedTasks{0};
+    auto workerCallback = [](void* ctx) {
+        auto* counter = static_cast<std::atomic<int>*>(ctx);
+        (*counter)++;
+    };
+
+    ex::WorkQueueItem item1;
+    ex::ExInitializeWorkItem(&item1, workerCallback, &completedTasks);
+    ex::ExQueueWorkItem(&item1, ex::WorkQueueType::CriticalWorkQueue);
+
+    ex::WorkQueueItem item2;
+    ex::ExInitializeWorkItem(&item2, workerCallback, &completedTasks);
+    ex::ExQueueWorkItem(&item2, ex::WorkQueueType::DelayedWorkQueue);
+
+    // Wait for workers to complete
+    int retries = 50;
+    while (completedTasks.load() < 2 && retries-- > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    TEST_ASSERT(completedTasks.load() == 2, "Both executive work items must be processed");
+    TEST_ASSERT(workMgr.getTotalProcessed() >= 2, "Total processed counter must be >= 2");
+}
+
+// ============================================================================
+// Suite 17: Loader Parameter Block & Boot Contract Tests
+// ============================================================================
+void Test_BootContract_LoaderParameterBlock() {
+    auto lpb = boot::createDefaultUefiBootBlock();
+    TEST_ASSERT(lpb.hasOption("/ZERO_TELEMETRY=1"), "Loader block must have zero telemetry enabled");
+    TEST_ASSERT(lpb.hasOption("/DEBUG"), "Loader block must contain /DEBUG option");
+    TEST_ASSERT(lpb.osBuildNumber == 26100, "Build number must match 26100");
+
+    TEST_ASSERT(!lpb.memoryDescriptors.empty(), "Memory descriptors must not be empty");
+    uint64_t totalRam = lpb.getTotalMemoryBytes();
+    uint64_t freeRam  = lpb.getFreeMemoryBytes();
+    TEST_ASSERT(totalRam > 0, "Total RAM must be positive");
+    TEST_ASSERT(freeRam > 0 && freeRam <= totalRam, "Free RAM must be valid portion of total");
+
+    TEST_ASSERT(lpb.bootModules.size() >= 3, "Must have at least 3 boot modules (ntoskrnl, hal, fastfat)");
+    TEST_ASSERT(lpb.bootModules[0].baseDllName == L"ntoskrnl.exe", "Module 0 must be ntoskrnl.exe");
+    TEST_ASSERT(lpb.bootModules[1].baseDllName == L"hal.dll", "Module 1 must be hal.dll");
+    TEST_ASSERT(lpb.bootModules[2].baseDllName == L"fastfat.sys", "Module 2 must be fastfat.sys");
+    TEST_ASSERT(lpb.acpiTablePhysicalAddress != 0, "ACPI RSDP physical address must be populated");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -805,6 +967,9 @@ int main() {
     RUN_TEST(Test_ExecutivePools_AllocationAndIrql);
     RUN_TEST(Test_TrapEngine_PageFaultAndBugCheck);
     RUN_TEST(Test_HardwareAbstractionLayer_KPCRAndTimers);
+    RUN_TEST(Test_VirtualFileSystem_Fat32AndFileObjects);
+    RUN_TEST(Test_ExecutiveWorkQueues_Dispatch);
+    RUN_TEST(Test_BootContract_LoaderParameterBlock);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

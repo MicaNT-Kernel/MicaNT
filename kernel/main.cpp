@@ -21,6 +21,9 @@
 #include "micant/ex.hpp"
 #include "micant/trap.hpp"
 #include "micant/hal.hpp"
+#include "micant/fs.hpp"
+#include "micant/ex_work.hpp"
+#include "micant/boot.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -44,7 +47,16 @@ void PrintBanner() {
 int main(int argc, char* argv[]) {
     PrintBanner();
 
-    std::cout << "[MicaNT Boot] Initializing Executive subsystems...\n";
+    // 0. Firmware Boot Handover & Loader Parameter Block (LPB) Ingestion
+    std::cout << "[MicaNT Boot] [Firmware] Ingesting UEFI Loader Parameter Block (LPB)...\n";
+    auto lpb = boot::createDefaultUefiBootBlock();
+    std::wcout << L"[MicaNT Boot] [Firmware] ARC Boot Device: " << lpb.arcBootDeviceName << L"\n";
+    std::cout << "[MicaNT Boot] [Firmware] Kernel Load Options: " << lpb.loadOptions << "\n";
+    std::cout << "[MicaNT Boot] [Firmware] Physical RAM: " << (lpb.getTotalMemoryBytes() / (1024 * 1024)) 
+              << " MB Total (" << (lpb.getFreeMemoryBytes() / (1024 * 1024)) << " MB Free)\n";
+    std::cout << "[MicaNT Boot] [Firmware] Pre-loaded Boot Modules: " << lpb.bootModules.size() << " images\n";
+
+    std::cout << "\n[MicaNT Boot] Initializing Executive subsystems...\n";
 
     // 1. Initialize Hardware Abstraction Layer & CPU Topology
     std::cout << "[MicaNT Boot] [Hal] Initializing Hardware Abstraction Layer...\n";
@@ -81,6 +93,12 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Io] Created system device nodes: \\Device\\Null, \\Device\\Harddisk0 (Registered: " 
               << ioMgr.getDeviceCount() << " devices)\n";
 
+    // 5.1 Initialize FastFAT File System Driver & Mount \DosDevices\C:
+    std::cout << "[MicaNT Boot] [Fastfat & VFS] Mounting System Volume on \\Device\\Harddisk0\\Partition1...\n";
+    auto& vfs = fs::VirtualFileSystem::get();
+    vfs.initialize();
+    std::cout << "[MicaNT Boot] [Fastfat & VFS] Mounted \\DosDevices\\C: -> \\Device\\Harddisk0\\Partition1 (Status: MOUNTED)\n";
+
     // 6. Initialize I/O Completion Port (IOCP) Subsystem
     std::cout << "[MicaNT Boot] [Io & IOCP] Initializing I/O Completion Port Subsystem...\n";
     io::IoCompletionPort systemIocp(4);
@@ -108,9 +126,23 @@ int main(int argc, char* argv[]) {
     });
     std::cout << "[MicaNT Boot] [Ke] IRQL State: PASSIVE_LEVEL (0). Idle thread queued at Priority 0.\n";
 
+    // 8.1 Initialize Executive Work Queues (Critical & Delayed)
+    std::cout << "[MicaNT Boot] [Ex] Initializing Executive Worker Threads (ExQueueWorkItem)...\n";
+    auto& workMgr = ex::ExecutiveWorkQueueManager::get();
+    workMgr.initialize(2);
+    std::atomic<bool> workerTaskDone{false};
+    ex::WorkQueueItem bootWorkItem;
+    ex::ExInitializeWorkItem(&bootWorkItem, [](void* ctx) {
+        auto* flag = static_cast<std::atomic<bool>*>(ctx);
+        *flag = true;
+    }, &workerTaskDone);
+    ex::ExQueueWorkItem(&bootWorkItem, ex::WorkQueueType::CriticalWorkQueue);
+    std::cout << "[MicaNT Boot] [Ex] Dispatched background Executive Work Item to CriticalWorkQueue: OK\n";
+
     // 9. Initialize Trap & Exception Engine
     std::cout << "[MicaNT Boot] [Ke/Trap] Initializing Trap Engine & Demand Paging (#PF Vector 14)...\n";
     auto& trapEngine = ke::TrapEngine::get();
+    (void)trapEngine;
     std::cout << "[MicaNT Boot] [Ke/Trap] Registered SEH Dispatcher and KeBugCheckEx panic handler.\n";
 
     // 10. Initialize Configuration Manager (CM) Registry Hives
@@ -168,6 +200,29 @@ int main(int argc, char* argv[]) {
                   << "Mapped 0x" << std::hex << userAllocBase << " - 0x" << (userAllocBase + userAllocSize) << std::dec << "\n";
     } else {
         std::cerr << "[MicaNT Boot] [Test] Syscall dispatch failed: " << NtStatusToString(syscallResult) << "\n";
+    }
+
+    // 14.1 Test Simulated Ring 3 File I/O Syscall via Dispatcher
+    std::cout << "[MicaNT Boot] [Test] Simulating Ring 3 -> Ring 0 file I/O (NtOpenFile & NtReadFile)...\n";
+    UnicodeString ntdllVfsPath(L"\\DosDevices\\C:\\Windows\\System32\\ntdll.dll");
+    ObjectAttributes ntdllFileAttr{};
+    ntdllFileAttr.objectName = &ntdllVfsPath;
+    Handle ntdllSyscallHandle = 0;
+    IoStatusBlock ntdllIosb{};
+
+    sys::SyscallFrame openFrame{
+        .ssn = sys::SSN_NtOpenFile,
+        .arg1 = reinterpret_cast<uint64_t>(&ntdllSyscallHandle),
+        .arg2 = fs::FILE_GENERIC_READ,
+        .arg3 = reinterpret_cast<uint64_t>(&ntdllFileAttr),
+        .arg4 = reinterpret_cast<uint64_t>(&ntdllIosb)
+    };
+    NtStatus openSysStatus = dispatcher.dispatch(openFrame);
+    if (NT_SUCCESS(openSysStatus)) {
+        std::cout << "[MicaNT Boot] [Test] Syscall NtOpenFile (SSN 0x" 
+                  << std::hex << sys::SSN_NtOpenFile << std::dec << ") succeeded! Handle: 0x" 
+                  << std::hex << ntdllSyscallHandle << std::dec << "\n";
+        sys::NtClose(ntdllSyscallHandle);
     }
 
     // 15. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)

@@ -95,6 +95,15 @@ NtStatus NtCreateFile(
     uint32_t eaLength
 );
 
+NtStatus NtOpenFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t shareAccess,
+    uint32_t openOptions
+);
+
 NtStatus NtReadFile(
     Handle fileHandle,
     Handle event,

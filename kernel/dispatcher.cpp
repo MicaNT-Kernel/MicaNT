@@ -367,6 +367,99 @@ void SyscallDispatcher::initializeStandardTable() {
         }
         return res;
     });
+
+    // 23. NtCreateFile (SSN: 0x0055)
+    registerSyscall(SSN_NtCreateFile, "NtCreateFile", 11, [](const SyscallFrame& f) -> NtStatus {
+        auto* fileHandle = reinterpret_cast<Handle*>(f.arg1);
+        uint32_t desiredAccess = static_cast<uint32_t>(f.arg2);
+        auto* objAttr = reinterpret_cast<ObjectAttributes*>(f.arg3);
+        auto* iosb = reinterpret_cast<IoStatusBlock*>(f.arg4);
+
+        LargeInteger* allocSize = nullptr;
+        uint32_t fileAttr = 0;
+        uint32_t share = 0;
+        uint32_t disposition = 1; // FILE_OPEN
+        uint32_t options = 0;
+        void* eaBuf = nullptr;
+        uint32_t eaLen = 0;
+
+        if (f.stackArgs && f.stackArgCount >= 4) {
+            allocSize = reinterpret_cast<LargeInteger*>(f.stackArgs[0]);
+            fileAttr = static_cast<uint32_t>(f.stackArgs[1]);
+            share = static_cast<uint32_t>(f.stackArgs[2]);
+            disposition = static_cast<uint32_t>(f.stackArgs[3]);
+            if (f.stackArgCount >= 5) options = static_cast<uint32_t>(f.stackArgs[4]);
+            if (f.stackArgCount >= 6) eaBuf = reinterpret_cast<void*>(f.stackArgs[5]);
+            if (f.stackArgCount >= 7) eaLen = static_cast<uint32_t>(f.stackArgs[6]);
+        }
+
+        return NtCreateFile(fileHandle, desiredAccess, objAttr, iosb, allocSize, fileAttr, share, disposition, options, eaBuf, eaLen);
+    });
+
+    // 24. NtOpenFile (SSN: 0x0033)
+    registerSyscall(SSN_NtOpenFile, "NtOpenFile", 6, [](const SyscallFrame& f) -> NtStatus {
+        auto* fileHandle = reinterpret_cast<Handle*>(f.arg1);
+        uint32_t desiredAccess = static_cast<uint32_t>(f.arg2);
+        auto* objAttr = reinterpret_cast<ObjectAttributes*>(f.arg3);
+        auto* iosb = reinterpret_cast<IoStatusBlock*>(f.arg4);
+
+        uint32_t share = 0;
+        uint32_t options = 0;
+        if (f.stackArgs && f.stackArgCount >= 2) {
+            share = static_cast<uint32_t>(f.stackArgs[0]);
+            options = static_cast<uint32_t>(f.stackArgs[1]);
+        }
+
+        return NtOpenFile(fileHandle, desiredAccess, objAttr, iosb, share, options);
+    });
+
+    // 25. NtReadFile (SSN: 0x0006)
+    registerSyscall(SSN_NtReadFile, "NtReadFile", 9, [](const SyscallFrame& f) -> NtStatus {
+        Handle fileHandle = static_cast<Handle>(f.arg1);
+        Handle event = static_cast<Handle>(f.arg2);
+        void* apcRoutine = reinterpret_cast<void*>(f.arg3);
+        void* apcContext = reinterpret_cast<void*>(f.arg4);
+
+        IoStatusBlock* iosb = nullptr;
+        void* buffer = nullptr;
+        uint32_t length = 0;
+        LargeInteger* byteOffset = nullptr;
+        uint32_t* key = nullptr;
+
+        if (f.stackArgs && f.stackArgCount >= 3) {
+            iosb = reinterpret_cast<IoStatusBlock*>(f.stackArgs[0]);
+            buffer = reinterpret_cast<void*>(f.stackArgs[1]);
+            length = static_cast<uint32_t>(f.stackArgs[2]);
+            if (f.stackArgCount >= 4) byteOffset = reinterpret_cast<LargeInteger*>(f.stackArgs[3]);
+            if (f.stackArgCount >= 5) key = reinterpret_cast<uint32_t*>(f.stackArgs[4]);
+        }
+
+        return NtReadFile(fileHandle, event, apcRoutine, apcContext, iosb, buffer, length, byteOffset, key);
+    });
+
+    // 26. NtWriteFile (SSN: 0x0008)
+    registerSyscall(SSN_NtWriteFile, "NtWriteFile", 9, [](const SyscallFrame& f) -> NtStatus {
+        Handle fileHandle = static_cast<Handle>(f.arg1);
+        Handle event = static_cast<Handle>(f.arg2);
+        void* apcRoutine = reinterpret_cast<void*>(f.arg3);
+        void* apcContext = reinterpret_cast<void*>(f.arg4);
+
+        IoStatusBlock* iosb = nullptr;
+        const void* buffer = nullptr;
+        uint32_t length = 0;
+        LargeInteger* byteOffset = nullptr;
+        uint32_t* key = nullptr;
+
+        if (f.stackArgs && f.stackArgCount >= 3) {
+            iosb = reinterpret_cast<IoStatusBlock*>(f.stackArgs[0]);
+            buffer = reinterpret_cast<const void*>(f.stackArgs[1]);
+            length = static_cast<uint32_t>(f.stackArgs[2]);
+            if (f.stackArgCount >= 4) byteOffset = reinterpret_cast<LargeInteger*>(f.stackArgs[3]);
+            if (f.stackArgCount >= 5) key = reinterpret_cast<uint32_t*>(f.stackArgs[4]);
+        }
+
+        return NtWriteFile(fileHandle, event, apcRoutine, apcContext, iosb, buffer, length, byteOffset, key);
+    });
 }
 
 } // namespace micant::sys

@@ -1,13 +1,17 @@
 #include "micant/syscalls.hpp"
 #include "micant/ob.hpp"
 #include "micant/mm.hpp"
+#include "micant/fs.hpp"
 #include <iostream>
+#include <unordered_map>
 
 namespace micant::sys {
 
 // Global simulated kernel state
 static ob::HandleTable g_KernelHandleTable;
 static mm::ProcessAddressSpace g_KernelAddressSpace;
+static std::unordered_map<Handle, std::shared_ptr<fs::FileObject>> g_KernelFiles;
+static Handle g_NextFileHandle = 0x200;
 
 NtStatus NtAllocateVirtualMemory(
     Handle processHandle,
@@ -59,9 +63,147 @@ NtStatus NtProtectVirtualMemory(
     return NtStatus::Success;
 }
 
+NtStatus NtCreateFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    LargeInteger* /*allocationSize*/,
+    uint32_t /*fileAttributes*/,
+    uint32_t /*shareAccess*/,
+    uint32_t createDisposition,
+    uint32_t /*createOptions*/,
+    void* /*eaBuffer*/,
+    uint32_t /*eaLength*/
+) {
+    if (!fileHandle || !objectAttributes || !objectAttributes->objectName) {
+        return NtStatus::InvalidParameter;
+    }
+
+    std::shared_ptr<fs::FileObject> fileObj;
+    NtStatus status = fs::VirtualFileSystem::get().createOrOpenFile(
+        objectAttributes->objectName->view(),
+        desiredAccess,
+        createDisposition,
+        fileObj
+    );
+
+    if (!NT_SUCCESS(status)) {
+        if (ioStatusBlock) {
+            ioStatusBlock->status = status;
+            ioStatusBlock->information = 0;
+        }
+        return status;
+    }
+
+    Handle h = g_NextFileHandle;
+    g_NextFileHandle += 4;
+    g_KernelFiles[h] = fileObj;
+    *fileHandle = h;
+
+    if (ioStatusBlock) {
+        ioStatusBlock->status = NtStatus::Success;
+        ioStatusBlock->information = (createDisposition == fs::FILE_CREATE) ? 2 : 1; // FILE_CREATED / FILE_OPENED
+    }
+    return NtStatus::Success;
+}
+
+NtStatus NtOpenFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t /*shareAccess*/,
+    uint32_t /*openOptions*/
+) {
+    return NtCreateFile(
+        fileHandle,
+        desiredAccess,
+        objectAttributes,
+        ioStatusBlock,
+        nullptr,
+        fs::FILE_ATTRIBUTE_NORMAL,
+        0,
+        fs::FILE_OPEN,
+        0,
+        nullptr,
+        0
+    );
+}
+
+NtStatus NtReadFile(
+    Handle fileHandle,
+    Handle /*event*/,
+    void* /*apcRoutine*/,
+    void* /*apcContext*/,
+    IoStatusBlock* ioStatusBlock,
+    void* buffer,
+    uint32_t length,
+    LargeInteger* byteOffset,
+    uint32_t* /*key*/
+) {
+    auto it = g_KernelFiles.find(fileHandle);
+    if (it == g_KernelFiles.end()) {
+        return NtStatus::InvalidHandle;
+    }
+
+    uint32_t bytesRead = 0;
+    NtStatus status = fs::VirtualFileSystem::get().readFile(
+        it->second.get(),
+        buffer,
+        length,
+        byteOffset,
+        bytesRead
+    );
+
+    if (ioStatusBlock) {
+        ioStatusBlock->status = status;
+        ioStatusBlock->information = bytesRead;
+    }
+    return status;
+}
+
+NtStatus NtWriteFile(
+    Handle fileHandle,
+    Handle /*event*/,
+    void* /*apcRoutine*/,
+    void* /*apcContext*/,
+    IoStatusBlock* ioStatusBlock,
+    const void* buffer,
+    uint32_t length,
+    LargeInteger* byteOffset,
+    uint32_t* /*key*/
+) {
+    auto it = g_KernelFiles.find(fileHandle);
+    if (it == g_KernelFiles.end()) {
+        return NtStatus::InvalidHandle;
+    }
+
+    uint32_t bytesWritten = 0;
+    NtStatus status = fs::VirtualFileSystem::get().writeFile(
+        it->second.get(),
+        buffer,
+        length,
+        byteOffset,
+        bytesWritten
+    );
+
+    if (ioStatusBlock) {
+        ioStatusBlock->status = status;
+        ioStatusBlock->information = bytesWritten;
+    }
+    return status;
+}
+
 NtStatus NtClose(Handle handle) {
     if (handle == 0 || handle == InvalidHandleValue) {
         return NtStatus::InvalidHandle;
+    }
+    auto it = g_KernelFiles.find(handle);
+    if (it != g_KernelFiles.end()) {
+        fs::VirtualFileSystem::get().closeFile(it->second.get());
+        g_KernelFiles.erase(it);
+        return NtStatus::Success;
     }
     return g_KernelHandleTable.closeHandle(handle);
 }

@@ -19,6 +19,17 @@ struct UnicodeString {
     uint16_t maximumLength{0};  // Total buffer allocation in bytes
     const wchar_t* buffer{nullptr};
 
+    constexpr UnicodeString() = default;
+    constexpr UnicodeString(const wchar_t* str) noexcept
+        : buffer(str) {
+        if (str) {
+            size_t len = 0;
+            while (str[len] != L'\0') ++len;
+            length = static_cast<uint16_t>(len * sizeof(wchar_t));
+            maximumLength = static_cast<uint16_t>((len + 1) * sizeof(wchar_t));
+        }
+    }
+
     [[nodiscard]] constexpr std::wstring_view view() const noexcept {
         if (!buffer || length == 0) return {};
         return std::wstring_view(buffer, length / sizeof(wchar_t));
