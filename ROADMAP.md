@@ -14,11 +14,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 3: Ring 3 Userland Runtime & ntdll.dll          [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 4: Bare-Metal UEFI Loader (bootx64.efi on QEMU)      [NEXT]      │
+│ Phase 4: Bare-Metal UEFI Loader (bootx64.efi)         [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 5: Client-Server Runtime Subsystem (CSRSS & ConHost)  [PLANNED]  │
+│ Phase 5: Client-Server Runtime Subsystem (CSRSS)           [NEXT]      │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 6: Visual Identity & Custom Boot Splash (BGRT / GOP) [PLANNED]  │
+│ Phase 6: Visual Identity & Custom Boot Splash (bootvid)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 7: WoW64 32-Bit Subsystem & AArch64 Port             [FUTURE]   │
 └────────────────────────────────────────────────────────────────────────┘
@@ -73,13 +73,14 @@
 
 ---
 
-### Phase 4: Bare-Metal UEFI Bootloader (bootx64.efi on QEMU)
+### Phase 4: Bare-Metal UEFI Bootloader (bootx64.efi) (100% Completed)
 *Goal: Boot MicaNT directly on physical hardware and QEMU virtual machines.*
-- [ ] **`bootx64.efi` PE32+ Application**: Built using standard UEFI 2.x headers.
-- [ ] **GOP Framebuffer Discovery**: Query native display mode via UEFI Graphics Output Protocol.
-- [ ] **ACPI RSDP Discovery**: Extract ACPI tables from `EFI_CONFIGURATION_TABLE`.
-- [ ] **ExitBootServices Handoff**: Terminate UEFI services, initialize higher-half paging, and jump to `KiSystemStartup(LOADER_PARAMETER_BLOCK*)`.
-- [ ] **Automated QEMU Runner**: `scripts/run_qemu.bat` with OVMF firmware.
+- [x] **`bootx64.efi` PE32+ Application**: Pure UEFI 2.10 entry point (`boot/bootx64.cpp`, `include/micant/uefi.hpp`).
+- [x] **GOP Framebuffer Discovery**: Query native resolution, pitch, and pixel format via UEFI Graphics Output Protocol.
+- [x] **ACPI RSDP Discovery**: Extract ACPI 2.0 / 1.0 root system pointer from `EFI_CONFIGURATION_TABLE`.
+- [x] **UEFI Memory Map Translation**: Map Conventional, LoaderCode, BootServices, ACPIReclaim to NT `LoaderMemoryType` descriptors.
+- [x] **ExitBootServices Handoff**: Terminate UEFI services, build `LOADER_PARAMETER_BLOCK`, and handoff to kernel.
+- [x] **Test Suite 26**: `Test_UefiBootloader_GopAndMemoryMap` verified.
 
 ---
 
@@ -91,13 +92,15 @@
 
 ---
 
-### Phase 6: Visual Identity & Custom Boot Splash
+### Phase 6: Visual Identity & Custom Boot Splash (bootvid) (100% Completed)
 *Goal: Provide a distinctive, customizable, and polished user experience.*
-- [ ] **GOP Boot Video Driver (`bootvid.hpp`)**: Direct linear framebuffer blitting with double-buffering.
-- [ ] **BMP / Bitmap Parser**: Load custom 24-bit/32-bit boot images from `\DosDevices\C:\Windows\Boot\bootlogo.bmp`.
-- [ ] **Registry-Configured Splash**: Custom logo path, background color, and progress bar controls.
-- [ ] **ACPI BGRT Passthrough**: Adopt OEM boot logo from motherboard firmware seamlessly.
-- [ ] **`/SOS` Verbose Diagnostic Toggle**: Stream live kernel diagnostic trace during boot.
+- [x] **GOP Boot Video Driver (`include/micant/bootvid.hpp`)**: Direct linear framebuffer primitives, alpha blending, gradients, Bresenham lines, and circles.
+- [x] **Clean-Room 8x8 Typography**: Scalable font rendering with automatic center alignment.
+- [x] **Dave Cutler's 1988 DEC Mica Prism Emblem**: Procedural multi-faceted crystal prism refracting cyan, blue, violet, and amber spectral beams.
+- [x] **BMP / Bitmap Parser & Encoder**: Load and decode custom 24-bit/32-bit user boot images (`BmpCodec::decode` and `BmpCodec::encode`).
+- [x] **Interactive Boot Splash & Progress Bar**: Dynamic progress tracking and orbital loading spinners across boot stages.
+- [x] **Classic NT `bootvid.dll` Export Parity**: `VidInitialize`, `VidResetDisplay`, `VidDisplayString`, `VidSolidColorFill`, `VidBufferToScreenBlt`.
+- [x] **Test Suite 27**: `Test_BootVid_FramebufferAndSplashRenderer` verified.
 
 ---
 

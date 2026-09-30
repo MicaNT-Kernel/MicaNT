@@ -55,6 +55,18 @@ struct BootModuleDescriptor {
 };
 
 /**
+ * @brief Linear Framebuffer Video Descriptor (from UEFI GOP).
+ */
+struct FramebufferDescriptor {
+    uint64_t physicalBase{0};
+    uint64_t size{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t pixelsPerScanLine{0};
+    uint32_t pixelFormat{1}; // 1 = Blue-Green-Red-Reserved 32-bit color
+};
+
+/**
  * @brief NT Loader Parameter Block (LOADER_PARAMETER_BLOCK)
  * Clean-room modern C++23 firmware boot handover specification.
  */
@@ -68,6 +80,7 @@ struct LoaderParameterBlock {
     std::vector<MemoryAllocationDescriptor> memoryDescriptors;
     std::vector<BootModuleDescriptor> bootModules;
 
+    FramebufferDescriptor framebuffer{};
     uint64_t acpiTablePhysicalAddress{0};
     uint32_t osMajorVersion{10};
     uint32_t osMinorVersion{0};
@@ -153,6 +166,16 @@ inline LoaderParameterBlock createDefaultUefiBootBlock() {
     });
 
     lpb.acpiTablePhysicalAddress = 0x000000007FEF0000ULL;
+
+    lpb.framebuffer = {
+        .physicalBase = 0x00000000E0000000ULL,
+        .size = 1920 * 1080 * 4,
+        .width = 1920,
+        .height = 1080,
+        .pixelsPerScanLine = 1920,
+        .pixelFormat = 1 // PixelBlueGreenRedReserved8BitPerColor
+    };
+
     return lpb;
 }
 

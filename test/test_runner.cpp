@@ -34,6 +34,8 @@
 #include "micant/heap.hpp"
 #include "micant/ldr.hpp"
 #include "micant/ntdll.hpp"
+#include "micant/uefi.hpp"
+#include "micant/bootvid.hpp"
 
 using namespace micant;
 
@@ -1742,6 +1744,202 @@ void Test_UserlandHeap_RtlAllocateAndCoalescing() {
     TEST_ASSERT(destroyed == nullptr, "RtlDestroyHeap must return nullptr and tear down heap");
 }
 
+void Test_UefiBootloader_GopAndMemoryMap() {
+    // 1. Test EfiGuid equality
+    uefi::EfiGuid g1 = uefi::EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+    uefi::EfiGuid g2 = uefi::EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+    uefi::EfiGuid g3 = uefi::ACPI_20_TABLE_GUID;
+    TEST_ASSERT(g1 == g2, "Identical EFI GUIDs must evaluate equal");
+    TEST_ASSERT(!(g1 == g3), "Distinct EFI GUIDs must not evaluate equal");
+
+    // 2. Test EfiMemoryType to NT LoaderMemoryType mapping
+    TEST_ASSERT(uefi::EfiMemoryTypeToNt(uefi::EfiMemoryType::EfiConventionalMemory) == boot::LoaderMemoryType::LoaderFree,
+                "Conventional memory must map to LoaderFree");
+    TEST_ASSERT(uefi::EfiMemoryTypeToNt(uefi::EfiMemoryType::EfiLoaderCode) == boot::LoaderMemoryType::LoaderSystemCode,
+                "LoaderCode must map to LoaderSystemCode");
+    TEST_ASSERT(uefi::EfiMemoryTypeToNt(uefi::EfiMemoryType::EfiBootServicesCode) == boot::LoaderMemoryType::LoaderFirmwareTemporary,
+                "BootServicesCode must map to LoaderFirmwareTemporary");
+    TEST_ASSERT(uefi::EfiMemoryTypeToNt(uefi::EfiMemoryType::EfiACPIReclaimMemory) == boot::LoaderMemoryType::LoaderSpecialMemory,
+                "ACPIReclaim must map to LoaderSpecialMemory");
+
+    // 3. Setup mock GOP Protocol
+    uefi::EfiGraphicsOutputModeInformation modeInfo{
+        .version = 0,
+        .horizontalResolution = 1920,
+        .verticalResolution = 1080,
+        .pixelFormat = uefi::EfiGraphicsPixelFormat::PixelBlueGreenRedReserved8BitPerColor,
+        .pixelInformation = {},
+        .pixelsPerScanLine = 1920
+    };
+
+    uefi::EfiGraphicsOutputProtocolMode gopMode{
+        .maxMode = 1,
+        .mode = 0,
+        .info = &modeInfo,
+        .sizeOfInfo = sizeof(uefi::EfiGraphicsOutputModeInformation),
+        .frameBufferBase = 0x00000000E0000000ULL,
+        .frameBufferSize = 1920 * 1080 * 4
+    };
+
+    uefi::EfiGraphicsOutputProtocol gop{
+        .queryMode = nullptr,
+        .setMode = nullptr,
+        .blt = nullptr,
+        .mode = &gopMode
+    };
+
+    // 4. Setup mock ACPI 2.0 System Table
+    uint64_t fakeRsdpAddress = 0x000000007FEF0000ULL;
+    uefi::EfiConfigurationTable configTables[1] = {
+        {
+            .vendorGuid = uefi::ACPI_20_TABLE_GUID,
+            .vendorTable = reinterpret_cast<void*>(fakeRsdpAddress)
+        }
+    };
+
+    uefi::EfiSystemTable sysTable{};
+    sysTable.numberOfTableEntries = 1;
+    sysTable.configurationTable = configTables;
+
+    // 5. Setup mock UEFI memory descriptors
+    std::vector<uefi::EfiMemoryDescriptor> uefiMap = {
+        {
+            .type = static_cast<uint32_t>(uefi::EfiMemoryType::EfiConventionalMemory),
+            .pad = 0,
+            .physicalStart = 0x1000000, // 16 MB
+            .virtualStart = 0,
+            .numberOfPages = 65536,     // 256 MB
+            .attribute = 0
+        },
+        {
+            .type = static_cast<uint32_t>(uefi::EfiMemoryType::EfiBootServicesCode),
+            .pad = 0,
+            .physicalStart = 0x11000000,
+            .virtualStart = 0,
+            .numberOfPages = 1024,      // 4 MB
+            .attribute = 0
+        }
+    };
+
+    // 6. Execute BuildLpbFromUefi
+    boot::LoaderParameterBlock lpb = uefi::BuildLpbFromUefi(&sysTable, &gop, uefiMap);
+
+    TEST_ASSERT(lpb.framebuffer.physicalBase == 0x00000000E0000000ULL,
+                "LPB must inherit GOP physical framebuffer base");
+    TEST_ASSERT(lpb.framebuffer.width == 1920 && lpb.framebuffer.height == 1080,
+                "LPB must inherit GOP resolution");
+    TEST_ASSERT(lpb.framebuffer.pixelFormat == 1,
+                "LPB must reflect BGRA pixel format");
+    TEST_ASSERT(lpb.acpiTablePhysicalAddress == fakeRsdpAddress,
+                "LPB must discover ACPI 2.0 RSDP in EFI configuration table");
+    TEST_ASSERT(lpb.memoryDescriptors.size() == 2,
+                "LPB must translate all UEFI memory descriptors");
+    TEST_ASSERT(lpb.memoryDescriptors[0].memoryType == boot::LoaderMemoryType::LoaderFree,
+                "First descriptor must be translated to LoaderFree");
+    TEST_ASSERT(lpb.memoryDescriptors[1].memoryType == boot::LoaderMemoryType::LoaderFirmwareTemporary,
+                "Second descriptor must be translated to LoaderFirmwareTemporary");
+}
+
+void Test_BootVid_FramebufferAndSplashRenderer() {
+    // 1. Initialize Virtual Framebuffer Driver
+    bootvid::BootVideoDriver driver;
+    bool initOk = driver.initializeVirtual(640, 480);
+    TEST_ASSERT(initOk, "Virtual framebuffer initialization must succeed");
+    TEST_ASSERT(driver.getWidth() == 640 && driver.getHeight() == 480, "Driver width and height must match 640x480");
+    TEST_ASSERT(driver.getPitch() == 640, "Default pitch must match width");
+
+    // 2. Clear Screen and Put/Get Pixel
+    driver.clear(bootvid::Color::micaDark());
+    TEST_ASSERT(driver.getPixel(0, 0) == bootvid::Color::micaDark(), "Origin pixel must match clear color");
+    TEST_ASSERT(driver.getPixel(639, 479) == bootvid::Color::micaDark(), "Corner pixel must match clear color");
+
+    driver.putPixel(120, 80, bootvid::Color::micaCyan());
+    TEST_ASSERT(driver.getPixel(120, 80) == bootvid::Color::micaCyan(), "PutPixel at (120,80) must match micaCyan");
+
+    // 3. Fill and Draw Rectangle
+    driver.fillRectangle(10, 10, 40, 30, bootvid::Color::micaBlue());
+    TEST_ASSERT(driver.getPixel(20, 20) == bootvid::Color::micaBlue(), "Inside filled rectangle must match micaBlue");
+    TEST_ASSERT(driver.getPixel(5, 5) == bootvid::Color::micaDark(), "Outside filled rectangle must remain micaDark");
+
+    driver.drawRectangle(100, 100, 50, 50, bootvid::Color::white(), 2);
+    TEST_ASSERT(driver.getPixel(100, 100) == bootvid::Color::white(), "Border pixel must be white");
+    TEST_ASSERT(driver.getPixel(125, 125) == bootvid::Color::micaDark(), "Interior of hollow rectangle must remain unchanged");
+
+    // 4. Gradients, Lines, and Circles
+    driver.drawVerticalGradient(200, 200, 40, 40, bootvid::Color::white(), bootvid::Color::black());
+    TEST_ASSERT(driver.getPixel(200, 200) == bootvid::Color::white(), "Gradient top must be white");
+    TEST_ASSERT(driver.getPixel(200, 239) != bootvid::Color::white(), "Gradient bottom must interpolate towards black");
+
+    driver.drawLine(0, 0, 20, 20, bootvid::Color::micaAmber());
+    TEST_ASSERT(driver.getPixel(10, 10) == bootvid::Color::micaAmber(), "Diagonal line pixel must match micaAmber");
+
+    driver.drawCircle(300, 150, 25, bootvid::Color::micaViolet(), true);
+    TEST_ASSERT(driver.getPixel(300, 150) == bootvid::Color::micaViolet(), "Filled circle center must match micaViolet");
+
+    // 5. Typography (8x8 font rendering)
+    driver.drawString(10, 300, "MicaNT", bootvid::Color::white(), bootvid::Color::black(), 2);
+    bool foundFg = false;
+    for (uint32_t py = 300; py < 316; ++py) {
+        for (uint32_t px = 10; px < 26; ++px) {
+            if (driver.getPixel(px, py) == bootvid::Color::white()) {
+                foundFg = true;
+                break;
+            }
+        }
+        if (foundFg) break;
+    }
+    TEST_ASSERT(foundFg, "Rendered font glyph must produce white foreground pixels");
+
+    // 6. Dave Cutler's 1988 DEC Mica Prism Procedural Emblem
+    driver.drawMicaPrism(320, 240, 32);
+    TEST_ASSERT(driver.getPixel(320, 240) == bootvid::Color::white(),
+                "Center ridge of Mica Prism must contain white quartz highlight");
+
+    // 7. BMP Codec (User-Custom Boot Logo)
+    bootvid::BmpImage customLogo;
+    customLogo.width = 16;
+    customLogo.height = 16;
+    customLogo.bpp = 32;
+    customLogo.pixels.resize(16 * 16, bootvid::Color::micaSurface());
+    for (uint32_t i = 0; i < 16; ++i) {
+        customLogo.setPixel(i, 8, bootvid::Color::micaCyan());
+        customLogo.setPixel(8, i, bootvid::Color::micaAmber());
+    }
+
+    // Encode to BMP byte buffer
+    std::vector<uint8_t> encodedBmp = bootvid::BmpCodec::encode(customLogo);
+    TEST_ASSERT(!encodedBmp.empty(), "BMP encoder must produce non-empty byte vector");
+    TEST_ASSERT(encodedBmp[0] == 'B' && encodedBmp[1] == 'M', "BMP magic must be 'BM' (0x4D42)");
+
+    // Decode back from BMP byte buffer
+    bootvid::BmpImage decodedLogo;
+    bool decodeOk = bootvid::BmpCodec::decode(encodedBmp, decodedLogo);
+    TEST_ASSERT(decodeOk, "BMP decoder must successfully parse generated 32-bit BMP");
+    TEST_ASSERT(decodedLogo.width == 16 && decodedLogo.height == 16, "Decoded dimensions must match 16x16");
+    TEST_ASSERT(decodedLogo.getPixel(8, 8) == bootvid::Color::micaAmber(), "Decoded pixel must match original cross-point");
+
+    // Blit custom logo to framebuffer
+    driver.drawBitmap(50, 50, decodedLogo);
+    TEST_ASSERT(driver.getPixel(58, 58) == bootvid::Color::micaAmber(),
+                "Framebuffer must reflect blitted custom BMP image");
+
+    // 8. Render Full Boot Splash Screen with Custom Logo
+    driver.renderBootSplash("Testing MicaNT Bootvid...", 0.85f, &decodedLogo);
+    TEST_ASSERT(driver.getPixel(320, 10) != bootvid::Color::black(),
+                "Boot splash background gradient must be rendered");
+
+    // 9. Classic NT bootvid.dll Export API Compatibility
+    auto& subsys = bootvid::BootVideoSubsystem::get();
+    bool subsysInit = subsys.initializeVirtual(320, 240);
+    TEST_ASSERT(subsysInit, "BootVideoSubsystem virtual initialization must succeed");
+    subsys.vidSolidColorFill(10, 10, 30, 30, bootvid::Color::micaGreen());
+    TEST_ASSERT(subsys.getDriver().getPixel(20, 20) == bootvid::Color::micaGreen(),
+                "vidSolidColorFill must plot pixels correctly");
+    subsys.vidResetDisplay(true);
+    TEST_ASSERT(subsys.getDriver().getPixel(20, 20) == bootvid::Color::black(),
+                "vidResetDisplay must clear screen to black");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -1772,6 +1970,8 @@ int main() {
     RUN_TEST(Test_PowerManagement_IrpAndShutdown);
     RUN_TEST(Test_Ntdll_SyscallStubsAndPebTeb);
     RUN_TEST(Test_UserlandHeap_RtlAllocateAndCoalescing);
+    RUN_TEST(Test_UefiBootloader_GopAndMemoryMap);
+    RUN_TEST(Test_BootVid_FramebufferAndSplashRenderer);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

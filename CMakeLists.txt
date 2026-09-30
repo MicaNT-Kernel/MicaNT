@@ -42,14 +42,21 @@ add_executable(userland_app
     test/userland_app.cpp
 )
 
+# Bare-Metal UEFI Bootloader (bootx64)
+add_library(bootx64 OBJECT
+    boot/bootx64.cpp
+)
+
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(micant_kernel PRIVATE -Wall -Wextra -Wpedantic -O2)
     target_compile_options(micant_tests PRIVATE -Wall -Wextra -Wpedantic -O2)
     target_compile_options(userland_app PRIVATE -Wall -Wextra -O2)
+    target_compile_options(bootx64 PRIVATE -Wall -Wextra -Wpedantic -O2)
 elseif (MSVC)
     target_compile_options(micant_kernel PRIVATE /W4 /permissive- /O2)
     target_compile_options(micant_tests PRIVATE /W4 /permissive- /O2)
     target_compile_options(userland_app PRIVATE /W4 /permissive- /O2)
+    target_compile_options(bootx64 PRIVATE /W4 /permissive- /O2)
 endif()
 
 set_target_properties(micant_kernel PROPERTIES

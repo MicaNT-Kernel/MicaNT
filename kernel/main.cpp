@@ -29,6 +29,8 @@
 #include "micant/lookaside.hpp"
 #include "micant/po.hpp"
 #include "micant/ntdll.hpp"
+#include "micant/uefi.hpp"
+#include "micant/bootvid.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -60,6 +62,17 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Firmware] Physical RAM: " << (lpb.getTotalMemoryBytes() / (1024 * 1024)) 
               << " MB Total (" << (lpb.getFreeMemoryBytes() / (1024 * 1024)) << " MB Free)\n";
     std::cout << "[MicaNT Boot] [Firmware] Pre-loaded Boot Modules: " << lpb.bootModules.size() << " images\n";
+
+    // 0b. Boot Video Driver (bootvid) & Custom Boot Splash
+    std::cout << "[MicaNT Boot] [Bootvid] Initializing Boot Video Driver (GOP Framebuffer)...\n";
+    auto& bootvid = bootvid::BootVideoSubsystem::get();
+    bootvid.initializeVirtual(lpb.framebuffer.width > 0 ? lpb.framebuffer.width : 1024,
+                              lpb.framebuffer.height > 0 ? lpb.framebuffer.height : 768);
+    std::cout << "[MicaNT Boot] [Bootvid] Initialized " << bootvid.getDriver().getWidth() << "x"
+              << bootvid.getDriver().getHeight() << " @ 32bpp linear framebuffer\n";
+    std::cout << "[MicaNT Boot] [Bootvid] Rendering Dave Cutler 1988 DEC Mica Prism Emblem...\n";
+    bootvid.getDriver().renderBootSplash("Initializing Executive Subsystems...", 0.15f);
+    std::cout << "[MicaNT Boot] [Bootvid] Custom boot logo engine active (24/32-bit BMP decoder ready)\n";
 
     std::cout << "\n[MicaNT Boot] Initializing Executive subsystems...\n";
 
@@ -439,9 +452,11 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [ntdll] RtlAllocateHeap (128 bytes) allocated at 0x" << bootUserBuf << "\n";
     ntdll::RtlFreeHeap(reinterpret_cast<void*>(bootUserPeb.processHeap), 0, bootUserBuf);
     std::cout << "[MicaNT Boot] [ntdll] Userland heap allocation & free verified successfully.\n";
+    bootvid.getDriver().renderBootSplash("Starting smss.exe & Session Manager...", 0.95f);
 
     // 22. Power Management & Clean System Shutdown (Po & NtShutdownSystem - SSN 0x0118)
     std::cout << "\n[MicaNT Boot] [Po] Demonstrating System Shutdown Handover (NtShutdownSystem)...\n";
+    bootvid.getDriver().renderBootSplash("Initiating System Shutdown...", 1.0f);
     sys::SyscallFrame shutdownFrame{};
     shutdownFrame.ssn = sys::SSN_NtShutdownSystem;
     shutdownFrame.arg1 = static_cast<uint64_t>(po::ShutdownAction::ShutdownPowerOff);
@@ -450,6 +465,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Po] Final System Power State: S" 
               << (static_cast<uint32_t>(po::PowerManager::get().getSystemPowerState()) - 1) 
               << " (PowerSystemShutdown / Soft Off)\n";
+    bootvid.vidResetDisplay(true);
 
     std::cout << "\n[MicaNT Executive] Subsystem self-test PASSED. Ready for Ring 3 binaries.\n\n";
 
