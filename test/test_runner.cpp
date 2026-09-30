@@ -36,6 +36,9 @@
 #include "micant/ntdll.hpp"
 #include "micant/uefi.hpp"
 #include "micant/bootvid.hpp"
+#include "micant/csrss.hpp"
+#include "micant/conhost.hpp"
+#include "micant/kernel32.hpp"
 
 using namespace micant;
 
@@ -1940,6 +1943,205 @@ void Test_BootVid_FramebufferAndSplashRenderer() {
                 "vidResetDisplay must clear screen to black");
 }
 
+void Test_Csrss_ProcessRegistrationAndAlpc() {
+    auto& server = csrss::CsrSubsystemServer::get();
+    bool started = server.start();
+    TEST_ASSERT(started, "CSRSS server must start and bind \\RPC Control\\WindowsSubsystem");
+    TEST_ASSERT(server.isRunning(), "CSRSS server isRunning must return true");
+
+    // 1. Register Process
+    NtStatus regStatus = server.registerProcess(2001, 1000, L"C:\\Windows\\System32\\cmd.exe", 0x14);
+    TEST_ASSERT(NT_SUCCESS(regStatus), "CSRSS registerProcess must succeed");
+    TEST_ASSERT(server.getActiveProcessCount() == 1, "Active process count must equal 1");
+
+    auto procOpt = server.getProcess(2001);
+    TEST_ASSERT(procOpt.has_value(), "Registered process must be retrievable by PID");
+    TEST_ASSERT(procOpt->processId == 2001, "Retrieved process ID must match");
+    TEST_ASSERT(procOpt->parentProcessId == 1000, "Parent process ID must match");
+    TEST_ASSERT(procOpt->consoleHandle == 0x14, "Console handle must match");
+
+    // 2. Register Thread
+    NtStatus thStatus = server.registerThread(2001, 10, 0x100);
+    TEST_ASSERT(NT_SUCCESS(thStatus), "CSRSS registerThread must succeed");
+    auto procWithThread = server.getProcess(2001);
+    TEST_ASSERT(procWithThread->threads.size() == 1, "Thread list must reflect registered thread");
+
+    // 3. Dispatch CSR API Message
+    csrss::CsrApiMessage apiMsg{};
+    apiMsg.apiNumber = csrss::CsrApiNumber::ProcessCreate;
+    apiMsg.data.processCreate.processId = 2002;
+    apiMsg.data.processCreate.parentProcessId = 2001;
+    apiMsg.data.processCreate.flags = 0;
+    apiMsg.data.processCreate.consoleHandle = 0x20;
+    apiMsg.stringPayload = L"C:\\Windows\\System32\\notepad.exe";
+
+    NtStatus dispStatus = server.dispatchApi(apiMsg);
+    TEST_ASSERT(NT_SUCCESS(dispStatus), "CSRSS dispatchApi(ProcessCreate) must succeed");
+    TEST_ASSERT(server.getActiveProcessCount() == 2, "Active process count must equal 2 after message dispatch");
+
+    // 4. Terminate Process
+    NtStatus termStatus = server.terminateProcess(2002, 0);
+    TEST_ASSERT(NT_SUCCESS(termStatus), "CSRSS terminateProcess must succeed");
+    TEST_ASSERT(server.getActiveProcessCount() == 1, "Active process count must return to 1 after termination");
+
+    // 5. Telemetry & Stop
+    auto telemetry = server.getTelemetry();
+    TEST_ASSERT(telemetry.totalProcessesCreated >= 2, "Telemetry must record at least 2 processes created");
+    TEST_ASSERT(telemetry.totalProcessesTerminated >= 1, "Telemetry must record at least 1 process terminated");
+
+    server.stop();
+    TEST_ASSERT(!server.isRunning(), "CSRSS server isRunning must return false after stop");
+}
+
+void Test_Conhost_ScreenBufferAndFramebufferBlit() {
+    // 1. Test ConsoleScreenBuffer dimensions & coordinates
+    conhost::ConsoleScreenBuffer buffer(40, 10);
+    TEST_ASSERT(buffer.getWidth() == 40 && buffer.getHeight() == 10, "Buffer dimensions must match 40x10");
+    TEST_ASSERT(buffer.getCursorPosition().x == 0 && buffer.getCursorPosition().y == 0,
+                "Initial cursor must be at (0, 0)");
+
+    // 2. Character Output & Formatting
+    buffer.writeString(L"Hello, MicaNT!\n");
+    TEST_ASSERT(buffer.getCursorPosition().x == 0, "Newline must reset cursor X to 0");
+    TEST_ASSERT(buffer.getCursorPosition().y == 1, "Newline must increment cursor Y to 1");
+
+    // Test cell contents
+    TEST_ASSERT(buffer.getCell(0, 0).character == L'H', "Cell (0,0) must contain 'H'");
+    TEST_ASSERT(buffer.getCell(1, 0).character == L'e', "Cell (1,0) must contain 'e'");
+
+    // 3. Tab and Backspace
+    buffer.writeChar(L'A');
+    buffer.writeChar(L'\b');
+    TEST_ASSERT(buffer.getCell(0, 1).character == L' ', "Backspace must clear cell to space");
+    TEST_ASSERT(buffer.getCursorPosition().x == 0, "Backspace must decrement cursor X");
+
+    buffer.writeChar(L'\t');
+    TEST_ASSERT(buffer.getCursorPosition().x == 8, "Tab must advance cursor to column 8");
+
+    // 4. Scrolling
+    for (int i = 0; i < 15; ++i) {
+        buffer.writeString(L"Scroll Line\n");
+    }
+    TEST_ASSERT(buffer.getCursorPosition().y == 9, "Cursor Y must be clamped to bottom row (height - 1)");
+
+    // 5. ConhostManager Session Allocation
+    auto& mgr = conhost::ConhostManager::get();
+    auto session = mgr.allocateConsole(3001, L"Mica Shell");
+    TEST_ASSERT(session != nullptr, "ConhostManager allocateConsole must return non-null session");
+    TEST_ASSERT(session->getTitle() == L"Mica Shell", "Console title must match");
+    TEST_ASSERT(session->getInputHandle() == 0x10, "Default input handle must be 0x10");
+    TEST_ASSERT(session->getOutputHandle() == 0x14, "Default output handle must be 0x14");
+
+    session->writeOutput(L"Terminal Active\n");
+    TEST_ASSERT(session->getScreenBuffer().getCell(0, 0).character == L'T', "ConsoleSession output must write to screen buffer");
+
+    // Input queueing & reading
+    session->queueInput(L"dir\r\n");
+    wchar_t readBuf[16]{};
+    size_t readCount = session->readInput(readBuf, 5);
+    TEST_ASSERT(readCount == 5, "readInput must return requested character count");
+    TEST_ASSERT(readBuf[0] == L'd' && readBuf[1] == L'i' && readBuf[2] == L'r', "readInput must match queued text");
+
+    // 6. Framebuffer Terminal Blitting
+    bootvid::BootVideoDriver vdriver;
+    bool vInit = vdriver.initializeVirtual(640, 480);
+    TEST_ASSERT(vInit, "Virtual framebuffer initialization must succeed");
+    vdriver.clear(bootvid::Color::black());
+
+    session->getScreenBuffer().renderToFramebuffer(vdriver, 20, 20, 1);
+    // Character cell (0,0) had 'T'. Verify foreground pixels were plotted
+    bool hasFg = false;
+    for (uint32_t py = 20; py < 28; ++py) {
+        for (uint32_t px = 20; px < 28; ++px) {
+            if (vdriver.getPixel(px, py) != bootvid::Color::black()) {
+                hasFg = true;
+                break;
+            }
+        }
+        if (hasFg) break;
+    }
+    TEST_ASSERT(hasFg, "Console terminal renderToFramebuffer must blit characters to framebuffer");
+
+    mgr.freeConsole(3001);
+}
+
+void Test_Kernel32_Win32ApiParity() {
+    // 1. Process & Thread Identity
+    win32::DWORD pid = win32::GetCurrentProcessId();
+    win32::DWORD tid = win32::GetCurrentThreadId();
+    TEST_ASSERT(pid > 0 && tid > 0, "GetCurrentProcessId and GetCurrentThreadId must return non-zero IDs");
+
+    // 2. Default Process Heap
+    win32::HANDLE hHeap = win32::GetProcessHeap();
+    TEST_ASSERT(hHeap != nullptr, "GetProcessHeap must return non-null default heap");
+
+    win32::LPVOID pBlock = win32::HeapAlloc(hHeap, 0, 128);
+    TEST_ASSERT(pBlock != nullptr, "HeapAlloc 128 bytes must succeed");
+    win32::SIZE_T blockSize = win32::HeapSize(hHeap, 0, pBlock);
+    TEST_ASSERT(blockSize >= 128, "HeapSize must report at least 128 bytes");
+
+    win32::LPVOID pRealloc = win32::HeapReAlloc(hHeap, 0, pBlock, 256);
+    TEST_ASSERT(pRealloc != nullptr, "HeapReAlloc 256 bytes must succeed");
+    win32::BOOL freeOk = win32::HeapFree(hHeap, 0, pRealloc);
+    TEST_ASSERT(freeOk == win32::TRUE, "HeapFree must succeed");
+
+    // 3. VirtualAlloc & VirtualFree
+    win32::LPVOID pPages = win32::VirtualAlloc(nullptr, 65536, win32::MEM_COMMIT | win32::MEM_RESERVE, win32::PAGE_READWRITE);
+    TEST_ASSERT(pPages != nullptr, "VirtualAlloc 64KB must succeed");
+    win32::BOOL virtFree = win32::VirtualFree(pPages, 0, win32::MEM_RELEASE);
+    TEST_ASSERT(virtFree == win32::TRUE, "VirtualFree must succeed");
+
+    // 4. Console Management
+    win32::BOOL allocCon = win32::AllocConsole();
+    TEST_ASSERT(allocCon == win32::TRUE, "AllocConsole must succeed");
+
+    win32::BOOL setTitle = win32::SetConsoleTitleW(L"MicaNT Test Console");
+    TEST_ASSERT(setTitle == win32::TRUE, "SetConsoleTitleW must succeed");
+
+    wchar_t titleBuf[32]{};
+    win32::DWORD titleLen = win32::GetConsoleTitleW(titleBuf, 32);
+    TEST_ASSERT(titleLen > 0, "GetConsoleTitleW must return non-zero length");
+    TEST_ASSERT(std::wstring_view(titleBuf) == L"MicaNT Test Console", "GetConsoleTitleW must match set title");
+
+    win32::HANDLE hOut = win32::GetStdHandle(win32::STD_OUTPUT_HANDLE);
+    TEST_ASSERT(hOut != win32::INVALID_HANDLE_VALUE, "GetStdHandle(STD_OUTPUT_HANDLE) must be valid");
+
+    const wchar_t* helloMsg = L"Test message\n";
+    win32::DWORD written = 0;
+    win32::BOOL writeOk = win32::WriteConsoleW(hOut, helloMsg, static_cast<win32::DWORD>(wcslen(helloMsg)), &written, nullptr);
+    TEST_ASSERT(writeOk == win32::TRUE, "WriteConsoleW must succeed");
+    TEST_ASSERT(written == static_cast<win32::DWORD>(wcslen(helloMsg)), "Chars written must match requested count");
+
+    win32::BOOL freeCon = win32::FreeConsole();
+    TEST_ASSERT(freeCon == win32::TRUE, "FreeConsole must succeed");
+
+    // 5. Event Synchronization
+    win32::HANDLE hEv = win32::CreateEventW(nullptr, win32::FALSE, win32::FALSE, L"TestWin32Event");
+    TEST_ASSERT(hEv != nullptr, "CreateEventW must succeed");
+
+    win32::DWORD wait1 = win32::WaitForSingleObject(hEv, 0);
+    TEST_ASSERT(wait1 == win32::WAIT_TIMEOUT, "WaitForSingleObject on unsignaled event must return WAIT_TIMEOUT");
+
+    win32::BOOL setOk = win32::SetEvent(hEv);
+    TEST_ASSERT(setOk == win32::TRUE, "SetEvent must succeed");
+
+    win32::DWORD wait2 = win32::WaitForSingleObject(hEv, 50);
+    TEST_ASSERT(wait2 == win32::WAIT_OBJECT_0, "WaitForSingleObject on signaled event must return WAIT_OBJECT_0");
+
+    win32::CloseHandle(hEv);
+
+    // 6. System Info and Time
+    win32::SYSTEM_INFO sysInfo{};
+    win32::GetSystemInfo(&sysInfo);
+    TEST_ASSERT(sysInfo.dwNumberOfProcessors == 4, "GetSystemInfo must report 4 processors");
+    TEST_ASSERT(sysInfo.dwPageSize == 4096, "GetSystemInfo page size must be 4096");
+
+    uint64_t tick1 = win32::GetTickCount64();
+    win32::Sleep(5);
+    uint64_t tick2 = win32::GetTickCount64();
+    TEST_ASSERT(tick2 >= tick1, "GetTickCount64 must be monotonic non-decreasing");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -1972,6 +2174,9 @@ int main() {
     RUN_TEST(Test_UserlandHeap_RtlAllocateAndCoalescing);
     RUN_TEST(Test_UefiBootloader_GopAndMemoryMap);
     RUN_TEST(Test_BootVid_FramebufferAndSplashRenderer);
+    RUN_TEST(Test_Csrss_ProcessRegistrationAndAlpc);
+    RUN_TEST(Test_Conhost_ScreenBufferAndFramebufferBlit);
+    RUN_TEST(Test_Kernel32_Win32ApiParity);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

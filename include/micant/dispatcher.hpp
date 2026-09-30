@@ -69,7 +69,9 @@ public:
     void initializeStandardTable();
 
 private:
-    SyscallDispatcher() = default;
+    SyscallDispatcher() {
+        initializeStandardTable();
+    }
     std::unordered_map<uint32_t, SyscallDescriptor> table_;
 };
 

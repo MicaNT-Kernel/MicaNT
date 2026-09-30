@@ -60,6 +60,8 @@ enum class NtStatus : uint32_t {
     ObjectPathSyntaxBad              = 0xC000003B,
     SectionTooBig                    = 0xC0000040,
     PortConnectionRefused            = 0xC0000041,
+    ServerNotRunning                 = 0xC0000042,
+    NoSuchProcess                    = 0xC0000043,
     ProcessIsTerminating             = 0xC000010A,
     PrivilegeNotHeld                 = 0xC0000061,
     ProcedureNotFound                = 0xC000007A,

@@ -42,6 +42,13 @@ add_executable(userland_app
     test/userland_app.cpp
 )
 
+# Standalone Win32 Userland Test Application
+add_executable(win32_app
+    test/win32_app.cpp
+    kernel/syscalls.cpp
+    kernel/dispatcher.cpp
+)
+
 # Bare-Metal UEFI Bootloader (bootx64)
 add_library(bootx64 OBJECT
     boot/bootx64.cpp
@@ -51,11 +58,13 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(micant_kernel PRIVATE -Wall -Wextra -Wpedantic -O2)
     target_compile_options(micant_tests PRIVATE -Wall -Wextra -Wpedantic -O2)
     target_compile_options(userland_app PRIVATE -Wall -Wextra -O2)
+    target_compile_options(win32_app PRIVATE -Wall -Wextra -O2)
     target_compile_options(bootx64 PRIVATE -Wall -Wextra -Wpedantic -O2)
 elseif (MSVC)
     target_compile_options(micant_kernel PRIVATE /W4 /permissive- /O2)
     target_compile_options(micant_tests PRIVATE /W4 /permissive- /O2)
     target_compile_options(userland_app PRIVATE /W4 /permissive- /O2)
+    target_compile_options(win32_app PRIVATE /W4 /permissive- /O2)
     target_compile_options(bootx64 PRIVATE /W4 /permissive- /O2)
 endif()
 
@@ -68,3 +77,7 @@ set_target_properties(micant_tests PROPERTIES
 set_target_properties(userland_app PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+set_target_properties(win32_app PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+

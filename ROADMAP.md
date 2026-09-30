@@ -16,11 +16,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 4: Bare-Metal UEFI Loader (bootx64.efi)         [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 5: Client-Server Runtime Subsystem (CSRSS)           [NEXT]      │
+│ Phase 5: Client-Server Runtime Subsystem (CSRSS)      [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 6: Visual Identity & Custom Boot Splash (bootvid)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 7: WoW64 32-Bit Subsystem & AArch64 Port             [FUTURE]   │
+│ Phase 7: WoW64 32-Bit Subsystem & AArch64 Port             [NEXT]     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -84,11 +84,19 @@
 
 ---
 
-### Phase 5: Client-Server Runtime Subsystem (CSRSS & ConHost)
-*Goal: Implement the core Win32 subsystem daemons.*
-- [ ] **`csrss.exe` Daemon**: High-speed ALPC message processor maintaining Win32 process table.
-- [ ] **Console Host (`conhost.exe`)**: Standard Win32 text console rendering to the screen buffer.
-- [ ] **`kernel32.dll` / `kernelbase.dll` Implementation**: Standard Win32 API layer wrapping `ntdll` syscalls.
+### Phase 5: Client-Server Runtime Subsystem (CSRSS & ConHost) (100% Completed)
+*Goal: Implement the core Win32 subsystem daemons and standard Win32 base API parity.*
+- [x] **`csrss.exe` Subsystem Server (`include/micant/csrss.hpp`)**: High-speed ALPC message processor maintaining Win32 process/thread tracking tables, process registration, termination broadcast, and `\RPC Control\WindowsSubsystem` rendezvous.
+- [x] **Console Host Engine (`conhost.hpp`)**: Standard Win32 text console with 2D character matrix, scrolling, automatic line wrapping, cursor tracking, and GOP linear framebuffer terminal blitting.
+- [x] **`kernel32.dll` / `kernelbase.dll` API Bridge (`include/micant/kernel32.hpp`)**: Clean-room implementation of standard Win32 Base APIs wrapping `ntdll` syscalls and CSRSS:
+  - Memory: `GetProcessHeap`, `HeapAlloc`, `HeapFree`, `HeapReAlloc`, `HeapSize`, `VirtualAlloc`, `VirtualFree`.
+  - Process/Thread: `GetCurrentProcess`, `GetCurrentProcessId`, `GetCurrentThread`, `GetCurrentThreadId`, `ExitProcess`.
+  - Console: `AllocConsole`, `FreeConsole`, `SetConsoleTitleW`, `GetConsoleTitleW`, `GetStdHandle`, `SetStdHandle`, `WriteConsoleW`.
+  - File I/O: `CreateFileW`, `ReadFile`, `WriteFile`, `CloseHandle`.
+  - Synchronization: `CreateEventW`, `SetEvent`, `ResetEvent`, `WaitForSingleObject`, `WaitForMultipleObjects`, `Sleep`.
+  - System Info & Time: `GetSystemInfo`, `GetTickCount64`, `LoadLibraryW`, `GetProcAddress`, `FreeLibrary`.
+- [x] **Native Win32 App Harness (`test/win32_app.cpp`)**: Standalone binary exercising end-to-end Win32 APIs without host CRT dependencies.
+- [x] **Test Suites 28, 29, 30 (`test/test_runner.cpp`)**: Complete verification of CSRSS process tracking/ALPC, ConHost framebuffer blitting, and Kernel32 Win32 API parity (30/30 suites passing).
 
 ---
 
