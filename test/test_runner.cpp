@@ -31,6 +31,9 @@
 #include "micant/timer.hpp"
 #include "micant/lookaside.hpp"
 #include "micant/po.hpp"
+#include "micant/heap.hpp"
+#include "micant/ldr.hpp"
+#include "micant/ntdll.hpp"
 
 using namespace micant;
 
@@ -1566,6 +1569,179 @@ void Test_PowerManagement_IrpAndShutdown() {
     po::PowerManager::get().resetForTesting();
 }
 
+// ============================================================================
+// Suite 24: Ring 3 Userland Bridge, TEB/PEB Context, and Dynamic Loader (ntdll)
+// ============================================================================
+void Test_Ntdll_SyscallStubsAndPebTeb() {
+    auto& dispatcher = sys::SyscallDispatcher::get();
+    dispatcher.initializeStandardTable();
+
+    // 1. Verify TEB and PEB userland context linkage
+    ps::Peb testPeb{};
+    ps::Teb testTeb{};
+    testPeb.imageBaseAddress = 0x0000000140000000ULL;
+
+    ntdll::RtlSetCurrentTeb(&testTeb);
+    TEST_ASSERT(ntdll::RtlGetCurrentTeb() == &testTeb, "RtlGetCurrentTeb must return set TEB context");
+
+    NtStatus ldrStatus = ntdll::LdrInitializeThunk(&testPeb, &testTeb, 0x0000000140001000ULL);
+    TEST_ASSERT(NT_SUCCESS(ldrStatus), "LdrInitializeThunk must succeed");
+    TEST_ASSERT(testTeb.processEnvironmentBlock == reinterpret_cast<uint64_t>(&testPeb),
+                "TEB must link directly to PEB");
+    TEST_ASSERT(testTeb.ntTib.self == reinterpret_cast<uint64_t>(&testTeb),
+                "TEB self pointer must point to TEB structure");
+    TEST_ASSERT(ntdll::RtlGetCurrentPeb() == &testPeb,
+                "RtlGetCurrentPeb must resolve to current process PEB");
+    TEST_ASSERT(testPeb.processHeap != 0, "LdrInitializeThunk must allocate default process heap");
+    TEST_ASSERT(testPeb.ldr != 0, "LdrInitializeThunk must initialize PEB_LDR_DATA");
+    TEST_ASSERT(testPeb.processParameters != 0, "LdrInitializeThunk must initialize RTL_USER_PROCESS_PARAMETERS");
+
+    auto* ldrData = reinterpret_cast<ldr::PebLdrData*>(testPeb.ldr);
+    TEST_ASSERT(ldrData->initialized == 1, "PebLdrData must be flagged as initialized");
+    TEST_ASSERT(!ldrData->inLoadOrderModuleList.isEmpty(), "Load order module list must contain entries");
+    TEST_ASSERT(ldr::DynamicLoader::get().getLoadedModuleCount() >= 2,
+                "DynamicLoader must register ntdll.dll and host application modules");
+
+    // 2. Test Dynamic Module Loading and Symbol Resolution
+    uintptr_t kernel32Base = 0;
+    UnicodeString k32Name(L"kernel32.dll");
+    NtStatus loadStatus = ntdll::LdrLoadDll(nullptr, nullptr, &k32Name, &kernel32Base);
+    TEST_ASSERT(NT_SUCCESS(loadStatus), "LdrLoadDll for kernel32.dll must succeed");
+    TEST_ASSERT(kernel32Base != 0, "Loaded module base must be non-zero");
+
+    ldr::DynamicLoader::get().registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));
+    void* procAddr = nullptr;
+    NtStatus getProcStatus = ntdll::LdrGetProcedureAddress(0x00007FF800000000ULL, "RtlAllocateHeap", 0, &procAddr);
+    TEST_ASSERT(NT_SUCCESS(getProcStatus), "LdrGetProcedureAddress must find registered export");
+    TEST_ASSERT(procAddr == reinterpret_cast<void*>(ntdll::RtlAllocateHeap), "Resolved procedure address must match");
+
+    // 3. Test Userland Syscall Stubs (Nt* and Zw* Parity)
+    Handle evHandle = 0;
+    NtStatus createEvStatus = ntdll::NtCreateEvent(&evHandle, 0x1F0003, nullptr, 0, false);
+    TEST_ASSERT(NT_SUCCESS(createEvStatus) && evHandle != 0, "NtCreateEvent userland stub must succeed");
+
+    NtStatus setStatus = ntdll::NtSetEvent(evHandle);
+    TEST_ASSERT(NT_SUCCESS(setStatus), "NtSetEvent userland stub must succeed");
+
+    NtStatus waitStatus = ntdll::NtWaitForSingleObject(evHandle, false, nullptr);
+    TEST_ASSERT(NT_SUCCESS(waitStatus), "NtWaitForSingleObject userland stub must succeed on signaled event");
+
+    NtStatus resetStatus = ntdll::NtResetEvent(evHandle);
+    TEST_ASSERT(NT_SUCCESS(resetStatus), "NtResetEvent userland stub must succeed");
+
+    // Test Zw* alias equivalence
+    NtStatus zwSetStatus = ntdll::ZwSetEvent(evHandle);
+    TEST_ASSERT(NT_SUCCESS(zwSetStatus), "ZwSetEvent alias must function identically to NtSetEvent");
+
+    ntdll::NtClose(evHandle);
+
+    // 4. Test Virtual Memory Syscall Stubs
+    uintptr_t testVmBase = 0;
+    size_t testVmSize = 4096;
+    NtStatus vmAllocStatus = ntdll::NtAllocateVirtualMemory(
+        0, &testVmBase, 0, &testVmSize, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE
+    );
+    TEST_ASSERT(NT_SUCCESS(vmAllocStatus), "NtAllocateVirtualMemory userland stub must succeed");
+    TEST_ASSERT(testVmBase != 0, "Allocated base address must be non-zero");
+
+    NtStatus vmFreeStatus = ntdll::NtFreeVirtualMemory(0, &testVmBase, &testVmSize, mm::MEM_RELEASE);
+    TEST_ASSERT(NT_SUCCESS(vmFreeStatus), "NtFreeVirtualMemory userland stub must succeed");
+
+    // 5. Test Delay Execution Syscall Stub
+    LargeInteger zeroDelay{};
+    zeroDelay.quadPart = 0;
+    NtStatus delayStatus = ntdll::NtDelayExecution(false, &zeroDelay);
+    TEST_ASSERT(NT_SUCCESS(delayStatus), "NtDelayExecution with zero interval must cooperatively yield");
+
+    // 6. Test Console Output Syscall Stub
+    const char banner[] = "MicaNT NTDLL Syscall Output Test\n";
+    IoStatusBlock iosb{};
+    NtStatus writeStatus = ntdll::NtWriteFile(0x14, 0, nullptr, nullptr, &iosb, banner, static_cast<uint32_t>(sizeof(banner) - 1));
+    TEST_ASSERT(NT_SUCCESS(writeStatus) && iosb.information == sizeof(banner) - 1,
+                "NtWriteFile to standard output console handle must succeed");
+}
+
+// ============================================================================
+// Suite 25: Userland Heap Manager (RtlAllocateHeap & Coalescing)
+// ============================================================================
+void Test_UserlandHeap_RtlAllocateAndCoalescing() {
+    // 1. Create growable userland heap
+    void* heap = ntdll::RtlCreateHeap(
+        ntdll::HEAP_GROWABLE,
+        nullptr,
+        1024 * 1024, // 1 MB reserve
+        64 * 1024,   // 64 KB initial commit
+        nullptr,
+        nullptr
+    );
+    TEST_ASSERT(heap != nullptr, "RtlCreateHeap must return valid heap handle");
+
+    auto* userHeap = reinterpret_cast<heap::UserHeap*>(heap);
+
+    // 2. Test Zero-Memory Allocation
+    void* pZero = ntdll::RtlAllocateHeap(heap, ntdll::HEAP_ZERO_MEMORY, 128);
+    TEST_ASSERT(pZero != nullptr, "RtlAllocateHeap with HEAP_ZERO_MEMORY must succeed");
+    const auto* bytePtr = static_cast<const uint8_t*>(pZero);
+    bool isZeroed = true;
+    for (size_t i = 0; i < 128; ++i) {
+        if (bytePtr[i] != 0) { isZeroed = false; break; }
+    }
+    TEST_ASSERT(isZeroed, "HEAP_ZERO_MEMORY must guarantee all allocated bytes are 0");
+
+    size_t zeroSize = ntdll::RtlSizeHeap(heap, 0, pZero);
+    TEST_ASSERT(zeroSize >= 128, "RtlSizeHeap must report at least requested allocation size");
+    bool freeZeroOk = ntdll::RtlFreeHeap(heap, 0, pZero);
+    TEST_ASSERT(freeZeroOk, "RtlFreeHeap must release pZero cleanly");
+
+    // 3. Test Sequential Allocations and Bidirectional Coalescing
+    void* pA = ntdll::RtlAllocateHeap(heap, 0, 64);
+    void* pB = ntdll::RtlAllocateHeap(heap, 0, 128);
+    void* pC = ntdll::RtlAllocateHeap(heap, 0, 256);
+    void* pD = ntdll::RtlAllocateHeap(heap, 0, 512);
+
+    TEST_ASSERT(pA && pB && pC && pD, "All 4 sequential heap allocations must succeed");
+    TEST_ASSERT(userHeap->getTelemetry().activeAllocates >= 4, "Active allocation count must track 4 blocks");
+
+    // Free pB and then pC: should trigger forward and backward coalescing
+    uint64_t initialCoalesce = userHeap->getTelemetry().coalesceCount;
+    bool freeBOk = ntdll::RtlFreeHeap(heap, 0, pB);
+    TEST_ASSERT(freeBOk, "RtlFreeHeap(pB) must succeed");
+
+    bool freeCOk = ntdll::RtlFreeHeap(heap, 0, pC);
+    TEST_ASSERT(freeCOk, "RtlFreeHeap(pC) must succeed and trigger coalescing with adjacent free block");
+    TEST_ASSERT(userHeap->getTelemetry().coalesceCount > initialCoalesce,
+                "Freeing adjacent blocks must increment heap coalesce count");
+
+    // Allocate 350 bytes: exceeds pB (128) and pC (256) individually, but fits in coalesced pB+pC!
+    void* pMerged = ntdll::RtlAllocateHeap(heap, 0, 350);
+    TEST_ASSERT(pMerged != nullptr, "Allocation fitting into coalesced space must succeed");
+    TEST_ASSERT(pMerged == pB, "Allocation must reuse the coalesced address of the merged blocks");
+
+    // 4. Test RtlReAllocateHeap
+    void* pRealloc = ntdll::RtlReAllocateHeap(heap, 0, pMerged, 700);
+    TEST_ASSERT(pRealloc != nullptr, "RtlReAllocateHeap to larger size must succeed");
+    TEST_ASSERT(ntdll::RtlSizeHeap(heap, 0, pRealloc) >= 700, "RtlSizeHeap must report at least 700 bytes");
+
+    // Clean up allocated blocks
+    ntdll::RtlFreeHeap(heap, 0, pA);
+    ntdll::RtlFreeHeap(heap, 0, pRealloc);
+    ntdll::RtlFreeHeap(heap, 0, pD);
+    TEST_ASSERT(userHeap->getTelemetry().activeAllocates == 0,
+                "Active allocation count must return to 0 after all blocks freed");
+
+    // 5. Test Dynamic Heap Growth
+    size_t initialSegments = userHeap->getTelemetry().segmentCount;
+    void* pHuge = ntdll::RtlAllocateHeap(heap, 0, 128 * 1024); // 128 KB allocation exceeds 64 KB initial segment
+    TEST_ASSERT(pHuge != nullptr, "Growable heap must expand to satisfy large allocation");
+    TEST_ASSERT(userHeap->getTelemetry().segmentCount > initialSegments,
+                "Dynamic segment count must increase after heap expansion");
+    ntdll::RtlFreeHeap(heap, 0, pHuge);
+
+    // 6. Test Destroy Heap
+    void* destroyed = ntdll::RtlDestroyHeap(heap);
+    TEST_ASSERT(destroyed == nullptr, "RtlDestroyHeap must return nullptr and tear down heap");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -1594,6 +1770,8 @@ int main() {
     RUN_TEST(Test_WaitMultipleObjects_MultiHandleSync);
     RUN_TEST(Test_LookasideLists_FastAllocAndTelemetry);
     RUN_TEST(Test_PowerManagement_IrpAndShutdown);
+    RUN_TEST(Test_Ntdll_SyscallStubsAndPebTeb);
+    RUN_TEST(Test_UserlandHeap_RtlAllocateAndCoalescing);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

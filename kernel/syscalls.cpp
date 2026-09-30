@@ -179,6 +179,18 @@ NtStatus NtWriteFile(
     LargeInteger* byteOffset,
     uint32_t* /*key*/
 ) {
+    if (fileHandle == 0x14 || fileHandle == 0x18 || fileHandle == static_cast<Handle>(-11) || fileHandle == static_cast<Handle>(-12)) {
+        if (buffer && length > 0) {
+            std::cout.write(reinterpret_cast<const char*>(buffer), length);
+            std::cout.flush();
+        }
+        if (ioStatusBlock) {
+            ioStatusBlock->status = NtStatus::Success;
+            ioStatusBlock->information = length;
+        }
+        return NtStatus::Success;
+    }
+
     auto it = g_KernelFiles.find(fileHandle);
     if (it == g_KernelFiles.end()) {
         return NtStatus::InvalidHandle;

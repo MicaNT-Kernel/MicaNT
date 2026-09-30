@@ -62,6 +62,7 @@ enum class NtStatus : uint32_t {
     PortConnectionRefused            = 0xC0000041,
     ProcessIsTerminating             = 0xC000010A,
     PrivilegeNotHeld                 = 0xC0000061,
+    ProcedureNotFound                = 0xC000007A,
     InvalidParameter1                = 0xC00000EF,
     InvalidParameter2                = 0xC00000F0,
     InvalidParameter3                = 0xC00000F1
@@ -108,6 +109,7 @@ enum class NtStatus : uint32_t {
         case NtStatus::ObjectNameNotFound: return "STATUS_OBJECT_NAME_NOT_FOUND";
         case NtStatus::ObjectNameCollision: return "STATUS_OBJECT_NAME_COLLISION";
         case NtStatus::ObjectPathNotFound: return "STATUS_OBJECT_PATH_NOT_FOUND";
+        case NtStatus::ProcedureNotFound: return "STATUS_PROCEDURE_NOT_FOUND";
         case NtStatus::ProcessIsTerminating: return "STATUS_PROCESS_IS_TERMINATING";
         default: return "STATUS_UNKNOWN";
     }

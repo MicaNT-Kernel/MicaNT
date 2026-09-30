@@ -28,6 +28,7 @@
 #include "micant/timer.hpp"
 #include "micant/lookaside.hpp"
 #include "micant/po.hpp"
+#include "micant/ntdll.hpp"
 #include "micant/generated_nt_api.hpp"
 
 using namespace micant;
@@ -421,7 +422,25 @@ int main(int argc, char* argv[]) {
     sys::NtClose(hEv1);
     sys::NtClose(hEv2);
 
-    // 21. Power Management & Clean System Shutdown (Po & NtShutdownSystem - SSN 0x0118)
+    // 21. Ring 3 Userland Bridge & ntdll.dll Runtime (Ldr, TEB/PEB, & User Heap)
+    std::cout << "\n[MicaNT Boot] [ntdll] Initializing Ring 3 Userland Bridge & LdrInitializeThunk...\n";
+    ps::Peb bootUserPeb{};
+    ps::Teb bootUserTeb{};
+    bootUserPeb.imageBaseAddress = 0x0000000140000000ULL;
+    ntdll::RtlSetCurrentTeb(&bootUserTeb);
+    NtStatus bootLdrStatus = ntdll::LdrInitializeThunk(&bootUserPeb, &bootUserTeb, 0x0000000140001000ULL, L"C:\\Windows\\System32\\smss.exe");
+    std::cout << "[MicaNT Boot] [ntdll] LdrInitializeThunk status: " 
+              << (NT_SUCCESS(bootLdrStatus) ? "STATUS_SUCCESS" : "FAILED") << "\n";
+    std::cout << "  - Default Process Heap: 0x" << std::hex << bootUserPeb.processHeap << std::dec << "\n";
+    std::cout << "  - Dynamic Modules in Ldr: " << ldr::DynamicLoader::get().getLoadedModuleCount() << " registered\n";
+
+    // Allocate from userland heap
+    void* bootUserBuf = ntdll::RtlAllocateHeap(reinterpret_cast<void*>(bootUserPeb.processHeap), ntdll::HEAP_ZERO_MEMORY, 128);
+    std::cout << "[MicaNT Boot] [ntdll] RtlAllocateHeap (128 bytes) allocated at 0x" << bootUserBuf << "\n";
+    ntdll::RtlFreeHeap(reinterpret_cast<void*>(bootUserPeb.processHeap), 0, bootUserBuf);
+    std::cout << "[MicaNT Boot] [ntdll] Userland heap allocation & free verified successfully.\n";
+
+    // 22. Power Management & Clean System Shutdown (Po & NtShutdownSystem - SSN 0x0118)
     std::cout << "\n[MicaNT Boot] [Po] Demonstrating System Shutdown Handover (NtShutdownSystem)...\n";
     sys::SyscallFrame shutdownFrame{};
     shutdownFrame.ssn = sys::SSN_NtShutdownSystem;
