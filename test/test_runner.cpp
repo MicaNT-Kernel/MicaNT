@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <iostream>
 #include <cassert>
 #include <cstring>
@@ -43,6 +44,11 @@
 #include "micant/kernel32.hpp"
 #include "micant/wow64.hpp"
 #include "micant/cpu.hpp"
+#include "micant/msvcrt.hpp"
+#include "micant/advapi32.hpp"
+#include "micant/user32.hpp"
+#include "micant/ws2_32.hpp"
+#include "micant/shell.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -2889,6 +2895,145 @@ void Test_ExpandedWin32AndNtSystemCalls() {
     TEST_ASSERT(win32::SwitchToThread() == win32::TRUE, "SwitchToThread must return TRUE");
 }
 
+void Test_MsvcrtBridge_And_CommandShell() {
+    using namespace micant;
+
+    // 1. Initialize Subsystems and verify dynamic export registration
+    win32::InitializeWin32SubsystemExports();
+    msvcrt::InitializeMsvcrtSubsystemExports();
+    advapi32::InitializeAdvapi32SubsystemExports();
+    user32::InitializeUser32SubsystemExports();
+    ws2_32::InitializeWs2_32SubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+
+    // Verify MSVCRT exports
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "printf") != nullptr, "msvcrt.dll!printf must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "malloc") != nullptr, "msvcrt.dll!malloc must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "free") != nullptr, "msvcrt.dll!free must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "calloc") != nullptr, "msvcrt.dll!calloc must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "realloc") != nullptr, "msvcrt.dll!realloc must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "strlen") != nullptr, "msvcrt.dll!strlen must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "strcmp") != nullptr, "msvcrt.dll!strcmp must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "strcpy") != nullptr, "msvcrt.dll!strcpy must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "sprintf") != nullptr, "msvcrt.dll!sprintf must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "__getmainargs") != nullptr, "msvcrt.dll!__getmainargs must be exported");
+    TEST_ASSERT(ldr.getExport("msvcrt.dll", "_initterm") != nullptr, "msvcrt.dll!_initterm must be exported");
+
+    // Verify ADVAPI32 exports
+    TEST_ASSERT(ldr.getExport("advapi32.dll", "CryptAcquireContextA") != nullptr, "advapi32.dll!CryptAcquireContextA must be exported");
+    TEST_ASSERT(ldr.getExport("advapi32.dll", "CryptGenRandom") != nullptr, "advapi32.dll!CryptGenRandom must be exported");
+    TEST_ASSERT(ldr.getExport("advapi32.dll", "CryptReleaseContext") != nullptr, "advapi32.dll!CryptReleaseContext must be exported");
+
+    // Verify USER32 exports
+    TEST_ASSERT(ldr.getExport("user32.dll", "ShowWindow") != nullptr, "user32.dll!ShowWindow must be exported");
+    TEST_ASSERT(ldr.getExport("user32.dll", "IsWindowVisible") != nullptr, "user32.dll!IsWindowVisible must be exported");
+    TEST_ASSERT(ldr.getExport("user32.dll", "PeekMessageA") != nullptr, "user32.dll!PeekMessageA must be exported");
+
+    // Verify WS2_32 exports
+    TEST_ASSERT(ldr.getExport("ws2_32.dll", "WSAStartup") != nullptr, "ws2_32.dll!WSAStartup must be exported");
+    TEST_ASSERT(ldr.getExport("ws2_32.dll", "WSACleanup") != nullptr, "ws2_32.dll!WSACleanup must be exported");
+    TEST_ASSERT(ldr.getExport("ws2_32.dll", "inet_addr") != nullptr, "ws2_32.dll!inet_addr must be exported");
+
+    // 2. Functional Test: Clean-Room CRT memory & string manipulation
+    void* mem = msvcrt::malloc(64);
+    TEST_ASSERT(mem != nullptr, "msvcrt::malloc must allocate valid memory");
+    std::memset(mem, 0x5A, 64);
+    void* reallocMem = msvcrt::realloc(mem, 128);
+    TEST_ASSERT(reallocMem != nullptr, "msvcrt::realloc must reallocate memory block");
+    msvcrt::free(reallocMem);
+
+    void* zeroMem = msvcrt::calloc(4, 16);
+    TEST_ASSERT(zeroMem != nullptr, "msvcrt::calloc must allocate zeroed memory");
+    uint8_t zeroBuf[64]{};
+    TEST_ASSERT(std::memcmp(zeroMem, zeroBuf, 64) == 0, "msvcrt::calloc buffer must be zeroed");
+    msvcrt::free(zeroMem);
+
+    char testStr[64]{};
+    msvcrt::strcpy(testStr, "MicaNT Clean-Room CRT");
+    TEST_ASSERT(msvcrt::strlen(testStr) == 21, "msvcrt::strlen must report correct length");
+    TEST_ASSERT(msvcrt::strcmp(testStr, "MicaNT Clean-Room CRT") == 0, "msvcrt::strcmp must match exact string");
+
+    char formatted[128]{};
+    int numChars = msvcrt::sprintf(formatted, "Status: %s (code %d)", "Active", 200);
+    TEST_ASSERT(numChars > 0, "msvcrt::sprintf must format string successfully");
+    TEST_ASSERT(std::string(formatted) == "Status: Active (code 200)", "msvcrt::sprintf must format correctly");
+
+    // 3. Functional Test: Crypto, UI & Network Stubs
+    uintptr_t hCrypt = 0;
+    TEST_ASSERT(advapi32::CryptAcquireContextA(&hCrypt, nullptr, nullptr, 0, 0) == win32::TRUE, "CryptAcquireContextA must return TRUE");
+    uint8_t randBytes[16]{};
+    TEST_ASSERT(advapi32::CryptGenRandom(hCrypt, 16, randBytes) == win32::TRUE, "CryptGenRandom must generate random bytes");
+    bool hasNonZero = false;
+    for (int i = 0; i < 16; ++i) {
+        if (randBytes[i] != 0) hasNonZero = true;
+    }
+    TEST_ASSERT(hasNonZero, "CryptGenRandom must generate non-zero random entropy");
+    TEST_ASSERT(advapi32::CryptReleaseContext(hCrypt, 0) == win32::TRUE, "CryptReleaseContext must return TRUE");
+
+    ws2_32::WSADATA wsaData{};
+    TEST_ASSERT(ws2_32::WSAStartup(0x0202, &wsaData) == 0, "WSAStartup must succeed with 0");
+    TEST_ASSERT(ws2_32::inet_addr("127.0.0.1") == 0x0100007F, "inet_addr must resolve 127.0.0.1 to 0x0100007F");
+    TEST_ASSERT(ws2_32::WSACleanup() == 0, "WSACleanup must succeed");
+
+    // 4. MicaNT Interactive Command Prompt Shell Built-in Commands
+    shell::CommandShell cmdShell;
+    std::ostringstream oss;
+
+    // Test ver
+    oss.str("");
+    int rc = cmdShell.execute("ver", oss);
+    TEST_ASSERT(rc == 0, "Shell ver command must succeed");
+    TEST_ASSERT(oss.str().find("MicaNT") != std::string::npos, "Shell ver must output MicaNT");
+
+    // Test echo with variable expansion
+    oss.str("");
+    rc = cmdShell.execute("echo Operating System: %OS%", oss);
+    TEST_ASSERT(rc == 0, "Shell echo command must succeed");
+    TEST_ASSERT(oss.str().find("Operating System: MicaNT") != std::string::npos, "Shell must expand %OS% to MicaNT");
+
+    // Test set command
+    oss.str("");
+    rc = cmdShell.execute("set SHELL_TEST=Passed", oss);
+    TEST_ASSERT(rc == 0, "Shell set command must succeed");
+    oss.str("");
+    rc = cmdShell.execute("echo Result: %SHELL_TEST%", oss);
+    TEST_ASSERT(oss.str().find("Result: Passed") != std::string::npos, "Shell must expand user-defined variable %SHELL_TEST%");
+
+    // Test time / mem / systeminfo
+    oss.str("");
+    rc = cmdShell.execute("time", oss);
+    TEST_ASSERT(rc == 0, "Shell time command must succeed");
+    TEST_ASSERT(oss.str().find("System Time") != std::string::npos, "Shell time output must show System Time");
+
+    oss.str("");
+    rc = cmdShell.execute("mem", oss);
+    TEST_ASSERT(rc == 0, "Shell mem command must succeed");
+    TEST_ASSERT(oss.str().find("Kernel NonPaged Pool") != std::string::npos, "Shell mem output must show pool statistics");
+
+    oss.str("");
+    rc = cmdShell.execute("systeminfo", oss);
+    TEST_ASSERT(rc == 0, "Shell systeminfo command must succeed");
+    TEST_ASSERT(oss.str().find("x86_64") != std::string::npos, "Shell systeminfo must show x86_64 architecture");
+
+    // Test dir
+    oss.str("");
+    rc = cmdShell.execute("dir", oss);
+    TEST_ASSERT(rc == 0, "Shell dir command must succeed");
+    TEST_ASSERT(oss.str().find("Directory of") != std::string::npos, "Shell dir must output directory header");
+
+    // 5. Unmodified Third-Party PE Execution via Shell Engine
+    oss.str("");
+    std::cout << "\n[Shell Test] Executing unmodified CRT binary 'bin/unmodified_crt_sample.exe' via CommandShell...\n";
+    int execRc = cmdShell.execute("exec bin/unmodified_crt_sample.exe", oss);
+    std::string execOutput = oss.str();
+    std::cout << execOutput << std::flush;
+
+    TEST_ASSERT(execRc == 0, "Shell execution of unmodified_crt_sample.exe must return exit code 0");
+    TEST_ASSERT(execOutput.find("Process finished with exit code 0") != std::string::npos,
+                "Process must finish with exit code 0");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -2930,6 +3075,7 @@ int main() {
     RUN_TEST(Test_Cpu_GdtTssAndRing3HardwareTransitions);
     RUN_TEST(Test_Execution_UnmodifiedThirdPartyBinary);
     RUN_TEST(Test_ExpandedWin32AndNtSystemCalls);
+    RUN_TEST(Test_MsvcrtBridge_And_CommandShell);
 
 
     std::cout << "\n------------------------------------------------------------------------\n";

@@ -34,6 +34,7 @@
 #include "micant/uefi.hpp"
 #include "micant/bootvid.hpp"
 #include "micant/generated_nt_api.hpp"
+#include "micant/shell.hpp"
 
 using namespace micant;
 
@@ -472,6 +473,22 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [WoW64] Heaven's Gate Far Call Switcher (CS 0x23 <-> 0x33) ACTIVE\n";
     std::cout << "[MicaNT Boot] [WoW64] Virtual Filesystem Redirection: \\Windows\\System32 -> \\Windows\\SysWOW64 ACTIVE\n";
     std::cout << "[MicaNT Boot] [WoW64] Registry Virtualization: \\Registry\\Machine\\Software -> WOW6432Node ACTIVE\n";
+
+    // 21c. MicaNT Interactive Shell Launch Check
+    bool launchShell = false;
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg(argv[i]);
+        if (arg == "--shell" || arg == "-i" || arg == "--cmd" || arg == "/shell") {
+            launchShell = true;
+            break;
+        }
+    }
+
+    if (launchShell) {
+        std::cout << "\n[MicaNT Executive] Boot complete. Launching MicaNT Command Prompt Shell (cmd.exe / msh.exe)...\n";
+        shell::CommandShell cmdShell;
+        cmdShell.runRepl();
+    }
 
     // 22. Power Management & Clean System Shutdown (Po & NtShutdownSystem - SSN 0x0118)
     std::cout << "\n[MicaNT Boot] [Po] Demonstrating System Shutdown Handover (NtShutdownSystem)...\n";

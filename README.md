@@ -71,6 +71,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 11. **x86-64 GDT, TSS64 & Ring 3 Hardware Transitions**: Standard NT segment selectors (`0x10`, `0x18`, `0x23`, `0x2B`, `0x33`), 64-bit Task State Segment (`RSP0`, `IST`), fast system call MSR configuration (`STAR`, `LSTAR`, `SFMASK`, `EFER.SCE`), and hardware `iretq` entry frames.
 12. **Unmodified Windows PE Execution**: Direct, verified execution of standard 64-bit Windows console executables compiled strictly against `<windows.h>` without any MicaNT-specific headers, shims, or wrappers.
 13. **Bare-Metal UEFI Bootloader (`bootx64.efi`)**: Pure UEFI 2.10 entry point with GOP linear framebuffer discovery, ACPI 2.0 table resolution, and seamless kernel handoff.
+14. **Clean-Room MSVCRT, Subsystem Bridges & Command Shell**: High-fidelity clean-room C runtime (`msvcrt.dll`), security/crypto (`advapi32.dll`), windowing (`user32.dll`), and network (`ws2_32.dll`) bridges, Fiber Local Storage (FLS) architecture, and native MicaNT Command Prompt Shell (`cmd.exe` / `msh.exe`) with built-in commands and unmodified binary execution.
 
 ---
 
@@ -175,12 +176,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (36 Suites, 100% Passing)
+### Build & Run Unit Test Suite (37 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 36 Test Suites:
+# Run all 37 Test Suites:
 .\bin\micant_tests.exe
 ```
 
@@ -191,6 +192,9 @@ cl /std:c++latest /EHsc /W4 /Iinclude kernel\main.cpp kernel\dispatcher.cpp kern
 
 # Run the Executive:
 .\bin\micant_kernel.exe
+
+# Or boot directly into the interactive MicaNT Command Prompt Shell:
+.\bin\micant_kernel.exe --shell
 ```
 
 ---
