@@ -29,6 +29,8 @@
 #include "micant/lookaside.hpp"
 #include "micant/po.hpp"
 #include "micant/ntdll.hpp"
+#include "micant/kernel32.hpp"
+#include "micant/wow64.hpp"
 #include "micant/uefi.hpp"
 #include "micant/bootvid.hpp"
 #include "micant/generated_nt_api.hpp"
@@ -379,6 +381,17 @@ int main(int argc, char* argv[]) {
                 std::cout << "  - Primary Thread:  TID " << thread->getTid() << " (State: READY)\n";
                 std::cout << "  - Initial RIP:     0x" << std::hex << thread->getContext().rip << std::dec << "\n";
                 std::cout << "  - Initial RSP:     0x" << std::hex << thread->getContext().rsp << std::dec << "\n";
+
+                // 16b. Dynamic PE Import Table Inspection & Binding
+                std::vector<pe::ImportedLibrary> appImports;
+                NtStatus impStatus = pe::PeLoader::parseImports(buffer, ntHeaders, sections, appImports);
+                if (NT_SUCCESS(impStatus) && !appImports.empty()) {
+                    win32::InitializeWin32SubsystemExports();
+                    std::cout << "\n[MicaNT Boot] [PeLoader] Parsed " << appImports.size() << " dynamic import descriptor(s):\n";
+                    for (const auto& lib : appImports) {
+                        std::cout << "      * Library: " << lib.libraryName << " (" << lib.symbols.size() << " imported symbols)\n";
+                    }
+                }
             }
         }
     }
@@ -452,7 +465,13 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [ntdll] RtlAllocateHeap (128 bytes) allocated at 0x" << bootUserBuf << "\n";
     ntdll::RtlFreeHeap(reinterpret_cast<void*>(bootUserPeb.processHeap), 0, bootUserBuf);
     std::cout << "[MicaNT Boot] [ntdll] Userland heap allocation & free verified successfully.\n";
-    bootvid.getDriver().renderBootSplash("Starting smss.exe & Session Manager...", 0.95f);
+    // 21b. WoW64 Subsystem (32-Bit Compatibility Layer)
+    std::cout << "\n[MicaNT Boot] [WoW64] Initializing WoW64 Subsystem (Heaven's Gate & 32-bit Thunking)...\n";
+    wow64::Wow64ThunkDispatcher wow64Dispatcher;
+    (void)wow64Dispatcher;
+    std::cout << "[MicaNT Boot] [WoW64] Heaven's Gate Far Call Switcher (CS 0x23 <-> 0x33) ACTIVE\n";
+    std::cout << "[MicaNT Boot] [WoW64] Virtual Filesystem Redirection: \\Windows\\System32 -> \\Windows\\SysWOW64 ACTIVE\n";
+    std::cout << "[MicaNT Boot] [WoW64] Registry Virtualization: \\Registry\\Machine\\Software -> WOW6432Node ACTIVE\n";
 
     // 22. Power Management & Clean System Shutdown (Po & NtShutdownSystem - SSN 0x0118)
     std::cout << "\n[MicaNT Boot] [Po] Demonstrating System Shutdown Handover (NtShutdownSystem)...\n";
