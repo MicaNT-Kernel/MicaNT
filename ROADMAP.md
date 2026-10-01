@@ -327,11 +327,39 @@
 
 ---
 
-### Phase 14: Named Pipes & Mailslots IPC Subsystem (NPFS / MSFS) (Next)
+### Phase 14: Named Pipes & Mailslots IPC Subsystem (NPFS / MSFS) (100% Completed)
 *Goal: Implement the core Windows IPC file systems (\Device\NamedPipe and \Device\Mailslot) enabling Win32 RPC, Service Control Manager (services.exe), and LSASS authentication.*
-- [ ] **Named Pipe File System (NPFS)**: `\Device\NamedPipe` root driver and device node.
-- [ ] **Pipe Instance State Machine**: Listening, Connected, Disconnected, Closing, and Broken states.
-- [ ] **Duplex & Buffer Modes**: Byte stream (`PIPE_TYPE_BYTE`) and Message stream (`PIPE_TYPE_MESSAGE`) modes with atomic packet reads.
-- [ ] **Win32 Named Pipe API Surface**: `CreateNamedPipeW`, `ConnectNamedPipe`, `DisconnectNamedPipe`, `WaitNamedPipeW`, `PeekNamedPipe`, `TransactNamedPipe`.
-- [ ] **Mailslot File System (MSFS)**: `\Device\Mailslot` broadcast datagram IPC (`CreateMailslotW`, `GetMailslotInfo`).
-- [ ] **Unit Test Suite 41**: Comprehensive multi-client concurrent transactional IPC verification.
+- [x] **Named Pipe File System (NPFS) (`include/micant/npfs.hpp`)**:
+  - Registered `\Driver\Npfs` and `\Device\NamedPipe` root file system device node.
+  - Multi-instance pipe multiplexer (`NamedPipe`) tracking instances, quotas, and state transitions.
+- [x] **Pipe Instance State Machine & Buffer Engine**:
+  - 5-State lifecycle: `Listening`, `Connected`, `Closing`, `Disconnected`, and `Broken` states with atomic condition variable synchronization.
+  - Duplex buffering (`PipeBuffer`) supporting Byte Stream (`PIPE_TYPE_BYTE` / `PIPE_READMODE_BYTE`) and Message Stream (`PIPE_TYPE_MESSAGE` / `PIPE_READMODE_MESSAGE`) modes.
+  - Partial reads, atomic message boundary preservation, and `ERROR_MORE_DATA` (`STATUS_BUFFER_OVERFLOW`) warning signaling.
+- [x] **Win32 Named Pipe Base API Surface (`include/micant/kernel32.hpp`)**:
+  - `CreateNamedPipeW`: Configurable open modes (`PIPE_ACCESS_DUPLEX`, `PIPE_ACCESS_INBOUND`, `PIPE_ACCESS_OUTBOUND`, `FILE_FLAG_FIRST_PIPE_INSTANCE`) and pipe modes.
+  - `ConnectNamedPipe`, `DisconnectNamedPipe`, `WaitNamedPipeW`.
+  - Non-destructive queue inspection via `PeekNamedPipe` (bytes read, total bytes available, bytes left in current message).
+  - Synchronous atomic request-response exchange via `TransactNamedPipe`.
+  - Handle state introspection via `GetNamedPipeInfo`, `GetNamedPipeHandleStateW`, and `SetNamedPipeHandleState`.
+- [x] **Mailslot File System Subsystem (MSFS)**:
+  - Registered `\Driver\Msfs` and `\Device\Mailslot` datagram queue device node.
+  - Multi-writer FIFO datagram queue with configurable maximum message sizes and read timeout expirations.
+  - `CreateMailslotW`, `GetMailslotInfo`, `SetMailslotInfo` with `MAILSLOT_WAIT_FOREVER` and millisecond timeouts (`ERROR_SEM_TIMEOUT` on timeout).
+- [x] **NT System Call Dispatcher & VFS Integration**:
+  - Added `NtCreateNamedPipeFile` (SSN `0x0091`) and `NtCreateMailslotFile` (SSN `0x0092`) syscall implementations and dispatch wiring.
+  - Unified `fs::VirtualFileSystem` automatic namespace resolution for `\\.\pipe\*` and `\\.\mailslot\*` file objects.
+- [x] **Unit Test Suite 41 (`Test_NamedPipesAndMailslotsIpc`)**:
+  - 7-part automated verification covering duplex byte streams, message boundary enforcement, `PeekNamedPipe`, `TransactNamedPipe`, multi-instance load balancing, mailslot datagram queuing, and timeout handling.
+  - All 41 unit test suites passing with 100% success rate (41 Passed, 0 Failed).
+
+---
+
+### Phase 15: NTFS Subsystem & MFT Engine (Next)
+*Goal: Implement a clean-room New Technology File System (NTFS) driver featuring Master File Table ($MFT) record parsing, resident and non-resident attribute streams, $LogFile transaction replay, and B-Tree index directory traversal.*
+- [ ] **Master File Table ($MFT) Record Engine**: 1024-byte record header, update sequence array (USA) fixups, and record flags (`IN_USE`, `DIRECTORY`).
+- [ ] **NTFS Attribute Architecture**: Standard Information (`$STANDARD_INFORMATION` 0x10), File Name (`$FILE_NAME` 0x30), and Data (`$DATA` 0x80) streams.
+- [ ] **Resident vs. Non-Resident Data Streams**: Compressed run-length cluster allocation runs (`LCN` / `VCN` mapping pairs).
+- [ ] **B-Tree Directory Indexing**: Index Root (`$INDEX_ROOT` 0x90) and Index Allocation (`$INDEX_ALLOCATION` 0xA0) nodes.
+- [ ] **$LogFile & Journal Consistency**: Journal entry parsing and metadata integrity validation.
+- [ ] **Unit Test Suite 42**: Verification of NTFS formatting, MFT records, resident/non-resident stream reading, and directory b-tree resolution.

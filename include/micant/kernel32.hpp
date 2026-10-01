@@ -27,6 +27,8 @@
 #include "csrss.hpp"
 #include "conhost.hpp"
 #include "hal.hpp"
+#include "npfs.hpp"
+#include "fs.hpp"
 
 namespace micant::win32 {
 
@@ -53,6 +55,20 @@ using SIZE_T  = size_t;
 inline constexpr BOOL TRUE  = 1;
 inline constexpr BOOL FALSE = 0;
 inline const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1));
+
+/**
+ * @brief Retrieves the calling thread's last-error code value.
+ */
+inline DWORD GetLastError() noexcept {
+    return ntdll::RtlGetLastWin32Error();
+}
+
+/**
+ * @brief Sets the last-error code for the calling thread.
+ */
+inline void SetLastError(DWORD dwErrCode) noexcept {
+    ntdll::RtlSetLastWin32Error(dwErrCode);
+}
 
 // Heap Flags
 inline constexpr DWORD HEAP_NO_SERIALIZE        = 0x00000001;
@@ -532,7 +548,11 @@ inline BOOL ReadFile(
     if (lpNumberOfBytesRead) {
         *lpNumberOfBytesRead = static_cast<DWORD>(iosb.information);
     }
-    return NT_SUCCESS(status) ? TRUE : FALSE;
+    if (!NT_SUCCESS(status) || status == NtStatus::Timeout) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return FALSE;
+    }
+    return TRUE;
 }
 
 /**
@@ -561,7 +581,11 @@ inline BOOL WriteFile(
     if (lpNumberOfBytesWritten) {
         *lpNumberOfBytesWritten = static_cast<DWORD>(iosb.information);
     }
-    return NT_SUCCESS(status) ? TRUE : FALSE;
+    if (!NT_SUCCESS(status) || status == NtStatus::Timeout) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return FALSE;
+    }
+    return TRUE;
 }
 
 /**
@@ -574,8 +598,419 @@ inline BOOL CloseHandle(HANDLE hObject) noexcept {
 }
 
 // ============================================================================
-// 6. Synchronization (Events, Single/Multiple Waits)
+// 5.1 Named Pipes & Mailslots Inter-Process Communication (IPC)
 // ============================================================================
+
+inline constexpr DWORD PIPE_ACCESS_INBOUND         = 0x00000001;
+inline constexpr DWORD PIPE_ACCESS_OUTBOUND        = 0x00000002;
+inline constexpr DWORD PIPE_ACCESS_DUPLEX          = 0x00000003;
+
+inline constexpr DWORD PIPE_WAIT                   = 0x00000000;
+inline constexpr DWORD PIPE_NOWAIT                 = 0x00000001;
+inline constexpr DWORD PIPE_READMODE_BYTE          = 0x00000000;
+inline constexpr DWORD PIPE_READMODE_MESSAGE       = 0x00000002;
+inline constexpr DWORD PIPE_TYPE_BYTE              = 0x00000000;
+inline constexpr DWORD PIPE_TYPE_MESSAGE           = 0x00000004;
+
+inline constexpr DWORD PIPE_CLIENT_END             = 0x00000000;
+inline constexpr DWORD PIPE_SERVER_END             = 0x00000001;
+inline constexpr DWORD PIPE_UNLIMITED_INSTANCES    = 255;
+
+inline constexpr DWORD NMPWAIT_WAIT_FOREVER        = 0xFFFFFFFF;
+inline constexpr DWORD NMPWAIT_NOWAIT              = 0x00000001;
+inline constexpr DWORD NMPWAIT_USE_DEFAULT_WAIT    = 0x00000000;
+
+inline constexpr DWORD MAILSLOT_NO_MESSAGE         = static_cast<DWORD>(-1);
+inline constexpr DWORD MAILSLOT_WAIT_FOREVER       = static_cast<DWORD>(-1);
+
+inline constexpr DWORD ERROR_PIPE_BUSY             = 231;
+inline constexpr DWORD ERROR_NO_DATA               = 232;
+inline constexpr DWORD ERROR_PIPE_NOT_CONNECTED    = 233;
+inline constexpr DWORD ERROR_MORE_DATA             = 234;
+inline constexpr DWORD ERROR_PIPE_CONNECTED        = 535;
+inline constexpr DWORD ERROR_PIPE_LISTENING        = 536;
+inline constexpr DWORD ERROR_BROKEN_PIPE           = 109;
+
+inline HANDLE CreateNamedPipeW(
+    LPCWSTR lpName,
+    DWORD dwOpenMode,
+    DWORD dwPipeMode,
+    DWORD nMaxInstances,
+    DWORD nOutBufferSize,
+    DWORD nInBufferSize,
+    DWORD nDefaultTimeOut,
+    void* lpSecurityAttributes = nullptr
+) noexcept {
+    (void)lpSecurityAttributes;
+    if (!lpName) {
+        SetLastError(87); // ERROR_INVALID_PARAMETER
+        return INVALID_HANDLE_VALUE;
+    }
+
+    UnicodeString uniName(lpName);
+    ObjectAttributes objAttr{};
+    objAttr.objectName = &uniName;
+
+    Handle hPipe = 0;
+    IoStatusBlock iosb{};
+
+    uint32_t type = (dwPipeMode & PIPE_TYPE_MESSAGE) ? 1 : 0;
+    uint32_t readMode = (dwPipeMode & PIPE_READMODE_MESSAGE) ? 1 : 0;
+    uint32_t nonBlocking = (dwPipeMode & PIPE_NOWAIT) ? 1 : 0;
+
+    LargeInteger timeout{};
+    timeout.quadPart = -static_cast<int64_t>(nDefaultTimeOut) * 10000;
+
+    NtStatus status = ntdll::NtCreateNamedPipeFile(
+        &hPipe,
+        dwOpenMode,
+        &objAttr,
+        &iosb,
+        0,
+        2,
+        0,
+        type,
+        readMode,
+        nonBlocking,
+        nMaxInstances,
+        nInBufferSize,
+        nOutBufferSize,
+        &timeout
+    );
+
+    if (!NT_SUCCESS(status)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return INVALID_HANDLE_VALUE;
+    }
+
+    return reinterpret_cast<HANDLE>(hPipe);
+}
+
+inline BOOL ConnectNamedPipe(
+    HANDLE hNamedPipe,
+    void* lpOverlapped = nullptr
+) noexcept {
+    (void)lpOverlapped;
+    if (hNamedPipe == nullptr || hNamedPipe == INVALID_HANDLE_VALUE) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hNamedPipe));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+
+    auto* pipeInst = static_cast<npfs::NamedPipeInstance*>(fileObj->getFsContext());
+    NtStatus status = pipeInst->connectServer(npfs::NMPWAIT_WAIT_FOREVER);
+    if (status == NtStatus::PipeConnected) {
+        SetLastError(ERROR_PIPE_CONNECTED);
+        return FALSE;
+    }
+
+    if (!NT_SUCCESS(status)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+inline BOOL DisconnectNamedPipe(
+    HANDLE hNamedPipe
+) noexcept {
+    if (hNamedPipe == nullptr || hNamedPipe == INVALID_HANDLE_VALUE) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hNamedPipe));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+
+    auto* pipeInst = static_cast<npfs::NamedPipeInstance*>(fileObj->getFsContext());
+    NtStatus status = pipeInst->disconnectServer();
+    if (!NT_SUCCESS(status)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+inline BOOL WaitNamedPipeW(
+    LPCWSTR lpNamedPipeName,
+    DWORD nTimeOut
+) noexcept {
+    if (!lpNamedPipeName) {
+        SetLastError(87);
+        return FALSE;
+    }
+
+    NtStatus status = npfs::NamedPipeFileSystem::get().waitNamedPipe(lpNamedPipeName, nTimeOut);
+    if (!NT_SUCCESS(status)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline BOOL PeekNamedPipe(
+    HANDLE hNamedPipe,
+    LPVOID lpBuffer,
+    DWORD nBufferSize,
+    DWORD* lpBytesRead,
+    DWORD* lpTotalBytesAvail,
+    DWORD* lpBytesLeftThisMessage
+) noexcept {
+    if (hNamedPipe == nullptr || hNamedPipe == INVALID_HANDLE_VALUE) {
+        SetLastError(6); // ERROR_INVALID_HANDLE
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hNamedPipe));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    auto* pipeInst = static_cast<npfs::NamedPipeInstance*>(fileObj->getFsContext());
+    bool isServer = (reinterpret_cast<uintptr_t>(fileObj->getFsContext2()) == 1);
+
+    uint32_t bytesRead = 0;
+    uint32_t totalAvail = 0;
+    uint32_t leftMsg = 0;
+
+    NtStatus status = pipeInst->peek(
+        isServer, lpBuffer, nBufferSize,
+        &bytesRead, &totalAvail, &leftMsg
+    );
+
+    if (lpBytesRead) *lpBytesRead = bytesRead;
+    if (lpTotalBytesAvail) *lpTotalBytesAvail = totalAvail;
+    if (lpBytesLeftThisMessage) *lpBytesLeftThisMessage = leftMsg;
+
+    if (!NT_SUCCESS(status)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline BOOL TransactNamedPipe(
+    HANDLE hNamedPipe,
+    LPVOID lpInBuffer,
+    DWORD nInBufferSize,
+    LPVOID lpOutBuffer,
+    DWORD nOutBufferSize,
+    DWORD* lpBytesRead,
+    void* lpOverlapped = nullptr
+) noexcept {
+    (void)lpOverlapped;
+    if (hNamedPipe == nullptr || hNamedPipe == INVALID_HANDLE_VALUE || !lpInBuffer || !lpOutBuffer) {
+        SetLastError(87);
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hNamedPipe));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    auto* pipeInst = static_cast<npfs::NamedPipeInstance*>(fileObj->getFsContext());
+    bool isServer = (reinterpret_cast<uintptr_t>(fileObj->getFsContext2()) == 1);
+
+    uint32_t bytesRead = 0;
+    NtStatus status = pipeInst->transact(
+        isServer, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, bytesRead
+    );
+
+    if (lpBytesRead) *lpBytesRead = bytesRead;
+
+    if (!NT_SUCCESS(status)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline BOOL GetNamedPipeInfo(
+    HANDLE hNamedPipe,
+    DWORD* lpFlags,
+    DWORD* lpOutBufferSize,
+    DWORD* lpInBufferSize,
+    DWORD* lpMaxInstances
+) noexcept {
+    if (hNamedPipe == nullptr || hNamedPipe == INVALID_HANDLE_VALUE) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hNamedPipe));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    auto* pipeInst = static_cast<npfs::NamedPipeInstance*>(fileObj->getFsContext());
+    bool isServer = (reinterpret_cast<uintptr_t>(fileObj->getFsContext2()) == 1);
+
+    if (lpFlags) {
+        *lpFlags = (isServer ? PIPE_SERVER_END : PIPE_CLIENT_END) |
+                   (pipeInst->getPipeMode() & PIPE_TYPE_MESSAGE);
+    }
+    if (lpOutBufferSize) *lpOutBufferSize = pipeInst->getOutBufferSize();
+    if (lpInBufferSize) *lpInBufferSize = pipeInst->getInBufferSize();
+    if (lpMaxInstances) *lpMaxInstances = pipeInst->getMaxInstances();
+
+    return TRUE;
+}
+
+inline BOOL GetNamedPipeHandleStateW(
+    HANDLE hNamedPipe,
+    DWORD* lpState,
+    DWORD* lpCurInstances,
+    DWORD* lpMaxCollectionCount,
+    DWORD* lpCollectDataTimeout,
+    LPWSTR lpUserName,
+    DWORD nMaxUserNameSize
+) noexcept {
+    (void)lpMaxCollectionCount;
+    (void)lpCollectDataTimeout;
+    (void)lpUserName;
+    (void)nMaxUserNameSize;
+    if (hNamedPipe == nullptr || hNamedPipe == INVALID_HANDLE_VALUE) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hNamedPipe));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    auto* pipeInst = static_cast<npfs::NamedPipeInstance*>(fileObj->getFsContext());
+    if (lpState) *lpState = pipeInst->getPipeMode();
+    if (lpCurInstances) *lpCurInstances = 1;
+
+    return TRUE;
+}
+
+inline BOOL SetNamedPipeHandleState(
+    HANDLE hNamedPipe,
+    DWORD* lpMode,
+    DWORD* lpMaxCollectionCount,
+    DWORD* lpCollectDataTimeout
+) noexcept {
+    (void)lpMaxCollectionCount;
+    (void)lpCollectDataTimeout;
+    if (hNamedPipe == nullptr || hNamedPipe == INVALID_HANDLE_VALUE) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hNamedPipe));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    if (lpMode) {
+        auto* pipeInst = static_cast<npfs::NamedPipeInstance*>(fileObj->getFsContext());
+        pipeInst->setMode(*lpMode);
+    }
+
+    return TRUE;
+}
+
+inline HANDLE CreateMailslotW(
+    LPCWSTR lpName,
+    DWORD nMaxMessageSize,
+    DWORD lReadTimeout,
+    void* lpSecurityAttributes = nullptr
+) noexcept {
+    (void)lpSecurityAttributes;
+    if (!lpName) {
+        SetLastError(87);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    UnicodeString uniName(lpName);
+    ObjectAttributes objAttr{};
+    objAttr.objectName = &uniName;
+
+    Handle hSlot = 0;
+    IoStatusBlock iosb{};
+
+    LargeInteger timeout{};
+    timeout.quadPart = (lReadTimeout == MAILSLOT_WAIT_FOREVER) ? -1 : -static_cast<int64_t>(lReadTimeout) * 10000;
+
+    NtStatus status = ntdll::NtCreateMailslotFile(
+        &hSlot,
+        GENERIC_READ | FILE_SHARE_READ,
+        &objAttr,
+        &iosb,
+        0,
+        0,
+        nMaxMessageSize,
+        &timeout
+    );
+
+    if (!NT_SUCCESS(status)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(status));
+        return INVALID_HANDLE_VALUE;
+    }
+
+    return reinterpret_cast<HANDLE>(hSlot);
+}
+
+inline BOOL GetMailslotInfo(
+    HANDLE hMailslot,
+    DWORD* lpMaxMessageSize,
+    DWORD* lpNextSize,
+    DWORD* lpMessageCount,
+    DWORD* lpReadTimeout
+) noexcept {
+    if (hMailslot == nullptr || hMailslot == INVALID_HANDLE_VALUE) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hMailslot));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    auto* slot = static_cast<npfs::Mailslot*>(fileObj->getFsContext());
+    slot->getInfo(lpMaxMessageSize, lpNextSize, lpMessageCount, lpReadTimeout);
+    return TRUE;
+}
+
+inline BOOL SetMailslotInfo(
+    HANDLE hMailslot,
+    DWORD lReadTimeout
+) noexcept {
+    if (hMailslot == nullptr || hMailslot == INVALID_HANDLE_VALUE) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    fs::FileObject* fileObj = sys::LookupKernelFileObject(reinterpret_cast<Handle>(hMailslot));
+    if (!fileObj || !fileObj->getFsContext()) {
+        SetLastError(6);
+        return FALSE;
+    }
+
+    auto* slot = static_cast<npfs::Mailslot*>(fileObj->getFsContext());
+    slot->setReadTimeout(lReadTimeout);
+    return TRUE;
+}
 
 /**
  * @brief Creates or opens a named or unnamed event object.
@@ -756,22 +1191,8 @@ inline BOOL FreeLibrary(HMODULE hLibModule) noexcept {
 }
 
 // ============================================================================
-// 9. Error Handling & Thread-Local Status
+// 9. Error Handling & Thread-Local Status (Defined in Section 1)
 // ============================================================================
-
-/**
- * @brief Retrieves the calling thread's last-error code value.
- */
-inline DWORD GetLastError() noexcept {
-    return ntdll::RtlGetLastWin32Error();
-}
-
-/**
- * @brief Sets the last-error code for the calling thread.
- */
-inline void SetLastError(DWORD dwErrCode) noexcept {
-    ntdll::RtlSetLastWin32Error(dwErrCode);
-}
 
 // ============================================================================
 // 10. Environment, Command Line & Working Directory
@@ -1789,6 +2210,20 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetModuleHandleExW", reinterpret_cast<void*>(GetModuleHandleExW));
     ldr.registerExport("kernel32.dll", "GetConsoleOutputCP", reinterpret_cast<void*>(GetConsoleOutputCP));
 
+    // Named Pipes & Mailslots IPC exports
+    ldr.registerExport("kernel32.dll", "CreateNamedPipeW", reinterpret_cast<void*>(CreateNamedPipeW));
+    ldr.registerExport("kernel32.dll", "ConnectNamedPipe", reinterpret_cast<void*>(ConnectNamedPipe));
+    ldr.registerExport("kernel32.dll", "DisconnectNamedPipe", reinterpret_cast<void*>(DisconnectNamedPipe));
+    ldr.registerExport("kernel32.dll", "WaitNamedPipeW", reinterpret_cast<void*>(WaitNamedPipeW));
+    ldr.registerExport("kernel32.dll", "PeekNamedPipe", reinterpret_cast<void*>(PeekNamedPipe));
+    ldr.registerExport("kernel32.dll", "TransactNamedPipe", reinterpret_cast<void*>(TransactNamedPipe));
+    ldr.registerExport("kernel32.dll", "GetNamedPipeInfo", reinterpret_cast<void*>(GetNamedPipeInfo));
+    ldr.registerExport("kernel32.dll", "GetNamedPipeHandleStateW", reinterpret_cast<void*>(GetNamedPipeHandleStateW));
+    ldr.registerExport("kernel32.dll", "SetNamedPipeHandleState", reinterpret_cast<void*>(SetNamedPipeHandleState));
+    ldr.registerExport("kernel32.dll", "CreateMailslotW", reinterpret_cast<void*>(CreateMailslotW));
+    ldr.registerExport("kernel32.dll", "GetMailslotInfo", reinterpret_cast<void*>(GetMailslotInfo));
+    ldr.registerExport("kernel32.dll", "SetMailslotInfo", reinterpret_cast<void*>(SetMailslotInfo));
+
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));
     ldr.registerExport("ntdll.dll", "RtlFreeHeap", reinterpret_cast<void*>(ntdll::RtlFreeHeap));
@@ -1813,6 +2248,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("ntdll.dll", "NtQueryPerformanceCounter", reinterpret_cast<void*>(ntdll::NtQueryPerformanceCounter));
     ldr.registerExport("ntdll.dll", "NtYieldExecution", reinterpret_cast<void*>(ntdll::NtYieldExecution));
     ldr.registerExport("ntdll.dll", "NtQueryInformationProcess", reinterpret_cast<void*>(ntdll::NtQueryInformationProcess));
+    ldr.registerExport("ntdll.dll", "NtCreateNamedPipeFile", reinterpret_cast<void*>(ntdll::NtCreateNamedPipeFile));
+    ldr.registerExport("ntdll.dll", "NtCreateMailslotFile", reinterpret_cast<void*>(ntdll::NtCreateMailslotFile));
 }
 
 

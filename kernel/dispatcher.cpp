@@ -642,6 +642,56 @@ void SyscallDispatcher::initializeStandardTable() {
         if (f.stackArgs && f.stackArgCount >= 1) retLen = reinterpret_cast<uint32_t*>(f.stackArgs[0]);
         return NtQueryInformationProcess(proc, pClass, info, len, retLen);
     });
+
+    // 43. NtCreateNamedPipeFile (SSN: 0x0091)
+    registerSyscall(SSN_NtCreateNamedPipeFile, "NtCreateNamedPipeFile", 14, [](const SyscallFrame& f) -> NtStatus {
+        auto* fileHandle = reinterpret_cast<Handle*>(f.arg1);
+        uint32_t desiredAccess = static_cast<uint32_t>(f.arg2);
+        auto* objAttr = reinterpret_cast<ObjectAttributes*>(f.arg3);
+        auto* iosb = reinterpret_cast<IoStatusBlock*>(f.arg4);
+        uint32_t shareAccess = 0, createDisposition = 0, createOptions = 0;
+        uint32_t namedPipeType = 0, readMode = 0, completionMode = 0, maxInstances = 0;
+        uint32_t inQuota = 0, outQuota = 0;
+        LargeInteger* defTimeout = nullptr;
+
+        if (f.stackArgs && f.stackArgCount >= 1) shareAccess = static_cast<uint32_t>(f.stackArgs[0]);
+        if (f.stackArgs && f.stackArgCount >= 2) createDisposition = static_cast<uint32_t>(f.stackArgs[1]);
+        if (f.stackArgs && f.stackArgCount >= 3) createOptions = static_cast<uint32_t>(f.stackArgs[2]);
+        if (f.stackArgs && f.stackArgCount >= 4) namedPipeType = static_cast<uint32_t>(f.stackArgs[3]);
+        if (f.stackArgs && f.stackArgCount >= 5) readMode = static_cast<uint32_t>(f.stackArgs[4]);
+        if (f.stackArgs && f.stackArgCount >= 6) completionMode = static_cast<uint32_t>(f.stackArgs[5]);
+        if (f.stackArgs && f.stackArgCount >= 7) maxInstances = static_cast<uint32_t>(f.stackArgs[6]);
+        if (f.stackArgs && f.stackArgCount >= 8) inQuota = static_cast<uint32_t>(f.stackArgs[7]);
+        if (f.stackArgs && f.stackArgCount >= 9) outQuota = static_cast<uint32_t>(f.stackArgs[8]);
+        if (f.stackArgs && f.stackArgCount >= 10) defTimeout = reinterpret_cast<LargeInteger*>(f.stackArgs[9]);
+
+        return NtCreateNamedPipeFile(
+            fileHandle, desiredAccess, objAttr, iosb,
+            shareAccess, createDisposition, createOptions,
+            namedPipeType, readMode, completionMode,
+            maxInstances, inQuota, outQuota, defTimeout
+        );
+    });
+
+    // 44. NtCreateMailslotFile (SSN: 0x0092)
+    registerSyscall(SSN_NtCreateMailslotFile, "NtCreateMailslotFile", 8, [](const SyscallFrame& f) -> NtStatus {
+        auto* fileHandle = reinterpret_cast<Handle*>(f.arg1);
+        uint32_t desiredAccess = static_cast<uint32_t>(f.arg2);
+        auto* objAttr = reinterpret_cast<ObjectAttributes*>(f.arg3);
+        auto* iosb = reinterpret_cast<IoStatusBlock*>(f.arg4);
+        uint32_t createOptions = 0, mailslotQuota = 0, maxMessageSize = 0;
+        LargeInteger* readTimeout = nullptr;
+
+        if (f.stackArgs && f.stackArgCount >= 1) createOptions = static_cast<uint32_t>(f.stackArgs[0]);
+        if (f.stackArgs && f.stackArgCount >= 2) mailslotQuota = static_cast<uint32_t>(f.stackArgs[1]);
+        if (f.stackArgs && f.stackArgCount >= 3) maxMessageSize = static_cast<uint32_t>(f.stackArgs[2]);
+        if (f.stackArgs && f.stackArgCount >= 4) readTimeout = reinterpret_cast<LargeInteger*>(f.stackArgs[3]);
+
+        return NtCreateMailslotFile(
+            fileHandle, desiredAccess, objAttr, iosb,
+            createOptions, mailslotQuota, maxMessageSize, readTimeout
+        );
+    });
 }
 
 

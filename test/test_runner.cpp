@@ -55,6 +55,7 @@
 #include "micant/tcpip.hpp"
 #include "micant/iphlpapi.hpp"
 #include "micant/arm64.hpp"
+#include "micant/npfs.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -3589,6 +3590,282 @@ void Test_Arm64HardwareArchitectureAndSyscall() {
     TEST_ASSERT(hal.getProcessorCount() == 4, "HAL reset to 4 cores verified");
 }
 
+// ============================================================================
+// Suite 41: Named Pipes & Mailslots IPC Subsystem (NPFS / MSFS)
+// ============================================================================
+void Test_NamedPipesAndMailslotsIpc() {
+    using namespace win32;
+
+    // Initialize Win32 exports and VFS
+    InitializeWin32SubsystemExports();
+    fs::VirtualFileSystem::get().initialize();
+
+    // ------------------------------------------------------------------------
+    // 1. Named Pipe Creation & Server Configuration
+    // ------------------------------------------------------------------------
+    HANDLE hServerPipe = CreateNamedPipeW(
+        L"\\\\.\\pipe\\MicaTestPipe",
+        PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+        2,    // max 2 instances
+        1024, // out buffer
+        1024, // in buffer
+        100   // 100ms default timeout
+    );
+    TEST_ASSERT(hServerPipe != INVALID_HANDLE_VALUE, "CreateNamedPipeW must create valid pipe handle");
+
+    DWORD flags = 0, outBuf = 0, inBuf = 0, maxInst = 0;
+    BOOL infoOk = GetNamedPipeInfo(hServerPipe, &flags, &outBuf, &inBuf, &maxInst);
+    TEST_ASSERT(infoOk == TRUE, "GetNamedPipeInfo must succeed on valid pipe handle");
+    TEST_ASSERT((flags & PIPE_SERVER_END) != 0, "Pipe flags must contain PIPE_SERVER_END");
+    TEST_ASSERT((flags & PIPE_TYPE_MESSAGE) != 0, "Pipe flags must contain PIPE_TYPE_MESSAGE");
+    TEST_ASSERT(outBuf == 1024 && inBuf == 1024, "Buffer sizes must match creation parameters");
+    TEST_ASSERT(maxInst == 2, "Max instances must report 2");
+
+    // ------------------------------------------------------------------------
+    // 2. Client Connection & Handshake (CreateFileW & ConnectNamedPipe)
+    // ------------------------------------------------------------------------
+    std::atomic<bool> clientConnected{false};
+    HANDLE hClientPipe = INVALID_HANDLE_VALUE;
+
+    std::thread clientThread([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        hClientPipe = CreateFileW(
+            L"\\\\.\\pipe\\MicaTestPipe",
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_EXISTING,
+            0
+        );
+        clientConnected = (hClientPipe != INVALID_HANDLE_VALUE);
+    });
+
+    BOOL connOk = ConnectNamedPipe(hServerPipe);
+    TEST_ASSERT(connOk == TRUE, "ConnectNamedPipe must return TRUE on successful client rendezvous");
+
+    if (clientThread.joinable()) {
+        clientThread.join();
+    }
+    TEST_ASSERT(clientConnected.load(), "Client CreateFileW to \\\\.\\pipe\\MicaTestPipe must succeed");
+    TEST_ASSERT(hClientPipe != INVALID_HANDLE_VALUE, "Client pipe handle must be valid");
+
+    // ConnectNamedPipe on already connected pipe returns FALSE with ERROR_PIPE_CONNECTED
+    BOOL secondConn = ConnectNamedPipe(hServerPipe);
+    TEST_ASSERT(secondConn == FALSE, "ConnectNamedPipe on connected pipe must return FALSE");
+    TEST_ASSERT(GetLastError() == ERROR_PIPE_CONNECTED, "GetLastError must return ERROR_PIPE_CONNECTED");
+
+    // ------------------------------------------------------------------------
+    // 3. Bidirectional Duplex I/O (Client -> Server and Server -> Client)
+    // ------------------------------------------------------------------------
+    const char clientMsg[] = "MicaNT RPC Request: QueryHostVitals";
+    DWORD bytesWritten = 0;
+    BOOL writeOk = WriteFile(hClientPipe, clientMsg, static_cast<DWORD>(strlen(clientMsg)), &bytesWritten);
+    TEST_ASSERT(writeOk == TRUE, "Client WriteFile must succeed");
+    TEST_ASSERT(bytesWritten == strlen(clientMsg), "Bytes written must match request length");
+
+    char serverRecvBuf[128]{};
+    DWORD bytesRead = 0;
+    BOOL readOk = ReadFile(hServerPipe, serverRecvBuf, sizeof(serverRecvBuf), &bytesRead);
+    TEST_ASSERT(readOk == TRUE, "Server ReadFile must succeed");
+    TEST_ASSERT(bytesRead == strlen(clientMsg), "Server bytes read must match request length");
+    TEST_ASSERT(std::string_view(serverRecvBuf, bytesRead) == clientMsg, "Server received text must match client payload");
+
+    const char serverReply[] = "MicaNT RPC Response: CPU0=4.0GHz STATUS=NOMINAL";
+    writeOk = WriteFile(hServerPipe, serverReply, static_cast<DWORD>(strlen(serverReply)), &bytesWritten);
+    TEST_ASSERT(writeOk == TRUE, "Server WriteFile must succeed");
+
+    char clientRecvBuf[128]{};
+    readOk = ReadFile(hClientPipe, clientRecvBuf, sizeof(clientRecvBuf), &bytesRead);
+    TEST_ASSERT(readOk == TRUE, "Client ReadFile must succeed");
+    TEST_ASSERT(bytesRead == strlen(serverReply), "Client bytes read must match server reply length");
+    TEST_ASSERT(std::string_view(clientRecvBuf, bytesRead) == serverReply, "Client received text must match server reply");
+
+    // ------------------------------------------------------------------------
+    // 4. Message-Mode Framing, Partial Reads & PeekNamedPipe
+    // ------------------------------------------------------------------------
+    const char packetMsg[] = "PACKET_HEADER_AND_PAYLOAD_BODY_0123456789";
+    const DWORD packetLen = static_cast<DWORD>(strlen(packetMsg));
+    writeOk = WriteFile(hServerPipe, packetMsg, packetLen, &bytesWritten);
+    TEST_ASSERT(writeOk == TRUE && bytesWritten == packetLen, "Server packet write must succeed");
+
+    // Peek 13 bytes from the pipe without consuming
+    char peekBuf[14]{};
+    DWORD peekBytesRead = 0, totalAvail = 0, leftMsg = 0;
+    BOOL peekOk = PeekNamedPipe(hClientPipe, peekBuf, 13, &peekBytesRead, &totalAvail, &leftMsg);
+    TEST_ASSERT(peekOk == TRUE, "PeekNamedPipe must succeed");
+    TEST_ASSERT(peekBytesRead == 13, "Peeked bytes read must be 13");
+    TEST_ASSERT(totalAvail == packetLen, "Total available bytes must match packetLen");
+    TEST_ASSERT(leftMsg == packetLen, "Bytes left this message must match packetLen");
+    TEST_ASSERT(std::string_view(peekBuf, 13) == "PACKET_HEADER", "Peeked data must match prefix");
+
+    // Partial ReadFile (buffer smaller than message -> returns FALSE + ERROR_MORE_DATA)
+    char partialBuf[13]{};
+    readOk = ReadFile(hClientPipe, partialBuf, 13, &bytesRead);
+    TEST_ASSERT(readOk == FALSE, "Partial ReadFile in message mode must return FALSE");
+    TEST_ASSERT(GetLastError() == ERROR_MORE_DATA, "GetLastError must return ERROR_MORE_DATA (234)");
+    TEST_ASSERT(bytesRead == 13, "Bytes read must match partial buffer length");
+    TEST_ASSERT(std::string_view(partialBuf, 13) == "PACKET_HEADER", "Partial read content must match prefix");
+
+    // Read the remainder of the message
+    char remainBuf[64]{};
+    readOk = ReadFile(hClientPipe, remainBuf, sizeof(remainBuf), &bytesRead);
+    TEST_ASSERT(readOk == TRUE, "Second ReadFile for remaining message must return TRUE");
+    TEST_ASSERT(bytesRead == (packetLen - 13), "Remaining bytes read must complete the message");
+    TEST_ASSERT(std::string_view(remainBuf, bytesRead) == "_AND_PAYLOAD_BODY_0123456789", "Remaining payload must match remainder");
+
+    // ------------------------------------------------------------------------
+    // 5. Transactional RPC (TransactNamedPipe)
+    // ------------------------------------------------------------------------
+    std::thread rpcServerThread([&]() {
+        char req[64]{};
+        DWORD reqRead = 0;
+        if (ReadFile(hServerPipe, req, sizeof(req), &reqRead)) {
+            if (std::string_view(req, reqRead) == "TRANSACT_ECHO_TEST") {
+                const char resp[] = "TRANSACT_ECHO_ACK";
+                DWORD rWritten = 0;
+                WriteFile(hServerPipe, resp, static_cast<DWORD>(strlen(resp)), &rWritten);
+            }
+        }
+    });
+
+    const char transactReq[] = "TRANSACT_ECHO_TEST";
+    char transactResp[64]{};
+    DWORD transactRead = 0;
+    BOOL transactOk = TransactNamedPipe(
+        hClientPipe,
+        const_cast<char*>(transactReq),
+        static_cast<DWORD>(strlen(transactReq)),
+        transactResp,
+        sizeof(transactResp),
+        &transactRead
+    );
+    TEST_ASSERT(transactOk == TRUE, "TransactNamedPipe must complete atomic write-and-read transaction");
+    TEST_ASSERT(std::string_view(transactResp, transactRead) == "TRANSACT_ECHO_ACK", "Transact response must match ACK");
+
+    if (rpcServerThread.joinable()) {
+        rpcServerThread.join();
+    }
+
+    // ------------------------------------------------------------------------
+    // 6. Multi-Instance Pipes & WaitNamedPipeW
+    // ------------------------------------------------------------------------
+    HANDLE hServerPipe2 = CreateNamedPipeW(
+        L"\\\\.\\pipe\\MicaTestPipe",
+        PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+        2, 1024, 1024, 100
+    );
+    TEST_ASSERT(hServerPipe2 != INVALID_HANDLE_VALUE, "Second instance creation must succeed");
+
+    HANDLE hServerPipe3 = CreateNamedPipeW(
+        L"\\\\.\\pipe\\MicaTestPipe",
+        PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+        2, 1024, 1024, 100
+    );
+    TEST_ASSERT(hServerPipe3 == INVALID_HANDLE_VALUE, "Third instance creation must fail (PIPE_BUSY)");
+    TEST_ASSERT(GetLastError() == ERROR_PIPE_BUSY, "GetLastError must report ERROR_PIPE_BUSY (231)");
+
+    BOOL waitOk = WaitNamedPipeW(L"\\\\.\\pipe\\MicaTestPipe", 50);
+    TEST_ASSERT(waitOk == TRUE, "WaitNamedPipeW must succeed while instance 2 is listening");
+
+    CloseHandle(hServerPipe2);
+
+    // ------------------------------------------------------------------------
+    // 7. Server Disconnection & Broken Pipe Handling
+    // ------------------------------------------------------------------------
+    BOOL discOk = DisconnectNamedPipe(hServerPipe);
+    TEST_ASSERT(discOk == TRUE, "DisconnectNamedPipe must succeed");
+
+    const char failMsg[] = "DeadWrite";
+    DWORD deadWritten = 0;
+    BOOL failWrite = WriteFile(hClientPipe, failMsg, static_cast<DWORD>(strlen(failMsg)), &deadWritten);
+    TEST_ASSERT(failWrite == FALSE, "WriteFile to disconnected pipe must fail");
+    TEST_ASSERT(GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_PIPE_NOT_CONNECTED,
+                "GetLastError must return ERROR_BROKEN_PIPE or ERROR_PIPE_NOT_CONNECTED");
+
+    CloseHandle(hClientPipe);
+    CloseHandle(hServerPipe);
+
+    // ------------------------------------------------------------------------
+    // 8. Mailslot Subsystem (MSFS): Create, Broadcast Datagrams, Info, Timeouts
+    // ------------------------------------------------------------------------
+    HANDLE hMailslot = CreateMailslotW(
+        L"\\\\.\\mailslot\\MicaAlertChannel",
+        256,  // max message size
+        50    // 50ms read timeout
+    );
+    TEST_ASSERT(hMailslot != INVALID_HANDLE_VALUE, "CreateMailslotW must return valid mailslot handle");
+
+    DWORD slotMaxSize = 0, slotNextSize = 0, slotCount = 0, slotTimeout = 0;
+    BOOL slotInfoOk = GetMailslotInfo(hMailslot, &slotMaxSize, &slotNextSize, &slotCount, &slotTimeout);
+    TEST_ASSERT(slotInfoOk == TRUE, "GetMailslotInfo must succeed on newly created mailslot");
+    TEST_ASSERT(slotMaxSize == 256, "Max message size must match 256");
+    TEST_ASSERT(slotCount == 0, "Initial message count must be 0");
+    TEST_ASSERT(slotNextSize == MAILSLOT_NO_MESSAGE, "Initial next size must report MAILSLOT_NO_MESSAGE");
+    TEST_ASSERT(slotTimeout == 50, "Read timeout must report 50ms");
+
+    HANDLE hClientWriter1 = CreateFileW(
+        L"\\\\.\\mailslot\\MicaAlertChannel",
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        0
+    );
+    TEST_ASSERT(hClientWriter1 != INVALID_HANDLE_VALUE, "Client 1 CreateFileW to mailslot must succeed");
+
+    const char alert1[] = "ALERT_1: SECURE_BOOT_VERIFIED";
+    DWORD alert1Written = 0;
+    writeOk = WriteFile(hClientWriter1, alert1, static_cast<DWORD>(strlen(alert1)), &alert1Written);
+    TEST_ASSERT(writeOk == TRUE && alert1Written == strlen(alert1), "Client 1 datagram write must succeed");
+
+    HANDLE hClientWriter2 = CreateFileW(
+        L"\\\\.\\mailslot\\MicaAlertChannel",
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        0
+    );
+    TEST_ASSERT(hClientWriter2 != INVALID_HANDLE_VALUE, "Client 2 CreateFileW to mailslot must succeed");
+
+    const char alert2[] = "ALERT_2: KERNEL_INTEGRITY_PASSED";
+    DWORD alert2Written = 0;
+    writeOk = WriteFile(hClientWriter2, alert2, static_cast<DWORD>(strlen(alert2)), &alert2Written);
+    TEST_ASSERT(writeOk == TRUE && alert2Written == strlen(alert2), "Client 2 datagram write must succeed");
+
+    slotInfoOk = GetMailslotInfo(hMailslot, nullptr, &slotNextSize, &slotCount, nullptr);
+    TEST_ASSERT(slotInfoOk == TRUE, "GetMailslotInfo must succeed with pending datagrams");
+    TEST_ASSERT(slotCount == 2, "Mailslot message count must report 2");
+    TEST_ASSERT(slotNextSize == strlen(alert1), "Next message size must match alert1 length");
+
+    char dgramBuf[128]{};
+    DWORD dgramRead = 0;
+    readOk = ReadFile(hMailslot, dgramBuf, sizeof(dgramBuf), &dgramRead);
+    TEST_ASSERT(readOk == TRUE, "Mailslot server ReadFile must retrieve datagram 1");
+    TEST_ASSERT(dgramRead == strlen(alert1), "Datagram 1 read length must match written size");
+    TEST_ASSERT(std::string_view(dgramBuf, dgramRead) == alert1, "Datagram 1 payload must match alert1");
+
+    readOk = ReadFile(hMailslot, dgramBuf, sizeof(dgramBuf), &dgramRead);
+    TEST_ASSERT(readOk == TRUE, "Mailslot server ReadFile must retrieve datagram 2");
+    TEST_ASSERT(dgramRead == strlen(alert2), "Datagram 2 read length must match written size");
+    TEST_ASSERT(std::string_view(dgramBuf, dgramRead) == alert2, "Datagram 2 payload must match alert2");
+
+    GetMailslotInfo(hMailslot, nullptr, &slotNextSize, &slotCount, nullptr);
+    TEST_ASSERT(slotCount == 0, "Queue must be empty after reading both messages");
+    TEST_ASSERT(slotNextSize == MAILSLOT_NO_MESSAGE, "Next size must be MAILSLOT_NO_MESSAGE");
+
+    SetMailslotInfo(hMailslot, 10); // set 10ms timeout
+    readOk = ReadFile(hMailslot, dgramBuf, sizeof(dgramBuf), &dgramRead);
+    TEST_ASSERT(readOk == FALSE, "ReadFile on empty mailslot must time out");
+
+    CloseHandle(hClientWriter1);
+    CloseHandle(hClientWriter2);
+    CloseHandle(hMailslot);
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -3634,6 +3911,7 @@ int main() {
     RUN_TEST(Test_StorageAndFat32FileSystem);
     RUN_TEST(Test_NdisAndTcpIpNetworkStack);
     RUN_TEST(Test_Arm64HardwareArchitectureAndSyscall);
+    RUN_TEST(Test_NamedPipesAndMailslotsIpc);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

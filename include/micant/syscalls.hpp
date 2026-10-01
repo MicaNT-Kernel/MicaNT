@@ -6,6 +6,10 @@
 #include "ntstatus.hpp"
 #include "ntdef.hpp"
 
+namespace micant::fs {
+class FileObject;
+}
+
 namespace micant::sys {
 
 // Standard x86-64 NT System Service Numbers (SSNs)
@@ -48,6 +52,10 @@ inline constexpr uint32_t SSN_NtCancelTimer              = 0x0077;
 
 // Power Management & Shutdown SSN
 inline constexpr uint32_t SSN_NtShutdownSystem           = 0x0118;
+
+// Named Pipes & Mailslots SSNs
+inline constexpr uint32_t SSN_NtCreateNamedPipeFile       = 0x0091;
+inline constexpr uint32_t SSN_NtCreateMailslotFile        = 0x0092;
 
 // Configuration Manager (Registry) SSNs
 inline constexpr uint32_t SSN_NtCreateKey                = 0x0029;
@@ -170,7 +178,37 @@ NtStatus NtDeviceIoControlFile(
     uint32_t outputBufferLength
 );
 
+NtStatus NtCreateNamedPipeFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t shareAccess,
+    uint32_t createDisposition,
+    uint32_t createOptions,
+    uint32_t namedPipeType,
+    uint32_t readMode,
+    uint32_t completionMode,
+    uint32_t maximumInstances,
+    uint32_t inboundQuota,
+    uint32_t outboundQuota,
+    LargeInteger* defaultTimeout
+);
+
+NtStatus NtCreateMailslotFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t createOptions,
+    uint32_t mailslotQuota,
+    uint32_t maxMessageSize,
+    LargeInteger* readTimeout
+);
+
 NtStatus NtClose(Handle handle);
+
+fs::FileObject* LookupKernelFileObject(Handle handle);
 
 // Process & Thread
 NtStatus NtTerminateProcess(

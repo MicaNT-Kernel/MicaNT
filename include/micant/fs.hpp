@@ -16,6 +16,7 @@
 #include "ob.hpp"
 #include "storage.hpp"
 #include "fat32.hpp"
+#include "npfs.hpp"
 
 namespace micant::fs {
 
@@ -88,6 +89,12 @@ public:
         std::memcpy(data_.data() + offset, bytes.data(), bytes.size());
     }
 
+    [[nodiscard]] void* getFsContext() const noexcept { return fsContext_; }
+    void setFsContext(void* ctx) noexcept { fsContext_ = ctx; }
+
+    [[nodiscard]] void* getFsContext2() const noexcept { return fsContext2_; }
+    void setFsContext2(void* ctx) noexcept { fsContext2_ = ctx; }
+
 private:
     io::DeviceObject* deviceObject_{nullptr};
     std::wstring fileName_;
@@ -96,6 +103,8 @@ private:
     int64_t currentByteOffset_{0};
     bool isDirectory_{false};
     std::vector<uint8_t> data_;
+    void* fsContext_{nullptr};
+    void* fsContext2_{nullptr};
 };
 
 /**
@@ -151,6 +160,10 @@ public:
             L"\\Device\\Harddisk0\\Partition1",
             io::DeviceType::FileSystem
         );
+
+        // Initialize IPC File Systems
+        npfs::NamedPipeFileSystem::get().initialize();
+        npfs::MailslotFileSystem::get().initialize();
 
         // Initialize root directory hierarchy
         rootEntry_ = std::make_shared<VfsEntry>();
@@ -217,6 +230,51 @@ public:
     ) {
         std::lock_guard<std::mutex> lock(mutex_);
 
+        // 0. Check for Named Pipe path
+        if (path.starts_with(L"\\\\.\\pipe\\") ||
+            path.starts_with(L"\\??\\pipe\\") ||
+            path.starts_with(L"\\DosDevices\\pipe\\") ||
+            path.starts_with(L"\\Device\\NamedPipe\\") ||
+            path.starts_with(L"pipe\\")) {
+            
+            std::shared_ptr<npfs::NamedPipeInstance> pipeInst;
+            NtStatus st = npfs::NamedPipeFileSystem::get().openClientPipe(
+                path, desiredAccess, 0, pipeInst
+            );
+            if (!NT_SUCCESS(st)) return st;
+
+            outFileObj = std::make_shared<FileObject>(
+                npfs::NamedPipeFileSystem::get().getDevice(),
+                path, desiredAccess
+            );
+            outFileObj->setFsContext(pipeInst.get());
+            outFileObj->setFsContext2(reinterpret_cast<void*>(static_cast<uintptr_t>(0))); // Client end
+            openFiles_[outFileObj.get()] = nullptr;
+            openPipeInstances_[outFileObj.get()] = pipeInst;
+            return NtStatus::Success;
+        }
+
+        // 0.1 Check for Mailslot path
+        if (path.starts_with(L"\\\\.\\mailslot\\") ||
+            path.starts_with(L"\\??\\mailslot\\") ||
+            path.starts_with(L"\\DosDevices\\mailslot\\") ||
+            path.starts_with(L"\\Device\\Mailslot\\") ||
+            path.starts_with(L"mailslot\\")) {
+
+            auto slot = npfs::MailslotFileSystem::get().lookupMailslot(path);
+            if (!slot) return NtStatus::MailslotNotFound;
+
+            outFileObj = std::make_shared<FileObject>(
+                npfs::MailslotFileSystem::get().getDevice(),
+                path, desiredAccess
+            );
+            outFileObj->setFsContext(slot.get());
+            outFileObj->setFsContext2(reinterpret_cast<void*>(static_cast<uintptr_t>(0))); // Client writer
+            openFiles_[outFileObj.get()] = nullptr;
+            openMailslots_[outFileObj.get()] = slot;
+            return NtStatus::Success;
+        }
+
         // 1. Check if path targets a registered device node in \Device
         auto directDevice = io::IoManager::get().lookupDevice(path);
         if (directDevice) {
@@ -274,6 +332,18 @@ public:
         if (!fileObj || !buffer) return NtStatus::InvalidParameter;
         std::lock_guard<std::mutex> lock(mutex_);
 
+        if (fileObj->getFsContext()) {
+            auto itP = openPipeInstances_.find(fileObj);
+            if (itP != openPipeInstances_.end() && itP->second) {
+                bool isServer = (reinterpret_cast<uintptr_t>(fileObj->getFsContext2()) == 1);
+                return itP->second->read(isServer, buffer, length, bytesRead);
+            }
+            auto itM = openMailslots_.find(fileObj);
+            if (itM != openMailslots_.end() && itM->second) {
+                return itM->second->read(buffer, length, bytesRead, itM->second->getReadTimeout());
+            }
+        }
+
         auto it = openFiles_.find(fileObj);
         if (it == openFiles_.end() || !it->second) return NtStatus::InvalidHandle;
 
@@ -306,6 +376,19 @@ public:
         if (!fileObj || !buffer) return NtStatus::InvalidParameter;
         std::lock_guard<std::mutex> lock(mutex_);
 
+        if (fileObj->getFsContext()) {
+            auto itP = openPipeInstances_.find(fileObj);
+            if (itP != openPipeInstances_.end() && itP->second) {
+                bool isServer = (reinterpret_cast<uintptr_t>(fileObj->getFsContext2()) == 1);
+                return itP->second->write(isServer, buffer, length, bytesWritten);
+            }
+            auto itM = openMailslots_.find(fileObj);
+            if (itM != openMailslots_.end() && itM->second) {
+                bytesWritten = length;
+                return itM->second->write(buffer, length);
+            }
+        }
+
         auto it = openFiles_.find(fileObj);
         if (it == openFiles_.end() || !it->second) return NtStatus::InvalidHandle;
 
@@ -333,7 +416,65 @@ public:
     void closeFile(FileObject* fileObj) {
         if (!fileObj) return;
         std::lock_guard<std::mutex> lock(mutex_);
+        auto itP = openPipeInstances_.find(fileObj);
+        if (itP != openPipeInstances_.end()) {
+            if (itP->second) {
+                bool isServer = (reinterpret_cast<uintptr_t>(fileObj->getFsContext2()) == 1);
+                if (isServer) {
+                    itP->second->disconnectServer();
+                } else {
+                    itP->second->clientClose();
+                }
+            }
+            openPipeInstances_.erase(itP);
+        }
+        openMailslots_.erase(fileObj);
         openFiles_.erase(fileObj);
+    }
+
+    std::shared_ptr<FileObject> registerServerPipe(
+        std::shared_ptr<npfs::NamedPipeInstance> pipeInst,
+        uint32_t desiredAccess
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto fileObj = std::make_shared<FileObject>(
+            npfs::NamedPipeFileSystem::get().getDevice(),
+            pipeInst->getName(), desiredAccess
+        );
+        fileObj->setFsContext(pipeInst.get());
+        fileObj->setFsContext2(reinterpret_cast<void*>(static_cast<uintptr_t>(1))); // Server end
+        openFiles_[fileObj.get()] = nullptr;
+        openPipeInstances_[fileObj.get()] = pipeInst;
+        return fileObj;
+    }
+
+    std::shared_ptr<FileObject> registerServerMailslot(
+        std::shared_ptr<npfs::Mailslot> slot
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto fileObj = std::make_shared<FileObject>(
+            npfs::MailslotFileSystem::get().getDevice(),
+            slot->getName(), FILE_GENERIC_READ
+        );
+        fileObj->setFsContext(slot.get());
+        fileObj->setFsContext2(reinterpret_cast<void*>(static_cast<uintptr_t>(1))); // Server reader
+        openFiles_[fileObj.get()] = nullptr;
+        openMailslots_[fileObj.get()] = slot;
+        return fileObj;
+    }
+
+    std::shared_ptr<npfs::NamedPipeInstance> getPipeInstance(FileObject* fileObj) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = openPipeInstances_.find(fileObj);
+        if (it != openPipeInstances_.end()) return it->second;
+        return nullptr;
+    }
+
+    std::shared_ptr<npfs::Mailslot> getMailslot(FileObject* fileObj) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = openMailslots_.find(fileObj);
+        if (it != openMailslots_.end()) return it->second;
+        return nullptr;
     }
 
     struct DirectoryEntry {
@@ -539,6 +680,8 @@ private:
     std::shared_ptr<io::DeviceObject> partitionDevice_;
     std::shared_ptr<VfsEntry> rootEntry_;
     std::unordered_map<FileObject*, std::shared_ptr<VfsEntry>> openFiles_;
+    std::unordered_map<FileObject*, std::shared_ptr<npfs::NamedPipeInstance>> openPipeInstances_;
+    std::unordered_map<FileObject*, std::shared_ptr<npfs::Mailslot>> openMailslots_;
     std::shared_ptr<storage::IBlockDevice> mountedDevice_;
     std::shared_ptr<fat32::Fat32FileSystem> fat32Fs_;
 };

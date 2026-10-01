@@ -75,7 +75,15 @@ enum class NtStatus : uint32_t {
     UnrecognizedVolume               = 0xC00000DB,
     InvalidParameter1                = 0xC00000EF,
     InvalidParameter2                = 0xC00000F0,
-    InvalidParameter3                = 0xC00000F1
+    InvalidParameter3                = 0xC00000F1,
+    MailslotNotFound                 = 0xC0000055,
+    PipeNotAvailable                 = 0xC00000AC,
+    PipeBusy                         = 0xC00000AD,
+    PipeDisconnected                 = 0xC00000B0,
+    PipeClosing                      = 0xC00000B1,
+    PipeConnected                    = 0xC00000B2,
+    PipeListening                    = 0xC00000B3,
+    PipeBroken                       = 0xC000014B
 };
 
 
@@ -126,6 +134,14 @@ enum class NtStatus : uint32_t {
         case NtStatus::DeviceNotReady: return "STATUS_DEVICE_NOT_READY";
         case NtStatus::DiskFull: return "STATUS_DISK_FULL";
         case NtStatus::UnrecognizedVolume: return "STATUS_UNRECOGNIZED_VOLUME";
+        case NtStatus::MailslotNotFound: return "STATUS_MAILSLOT_NOT_FOUND";
+        case NtStatus::PipeNotAvailable: return "STATUS_PIPE_NOT_AVAILABLE";
+        case NtStatus::PipeBusy: return "STATUS_PIPE_BUSY";
+        case NtStatus::PipeDisconnected: return "STATUS_PIPE_DISCONNECTED";
+        case NtStatus::PipeClosing: return "STATUS_PIPE_CLOSING";
+        case NtStatus::PipeConnected: return "STATUS_PIPE_CONNECTED";
+        case NtStatus::PipeListening: return "STATUS_PIPE_LISTENING";
+        case NtStatus::PipeBroken: return "STATUS_PIPE_BROKEN";
         default: return "STATUS_UNKNOWN";
     }
 }

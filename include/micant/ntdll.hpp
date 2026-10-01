@@ -841,6 +841,76 @@ inline NtStatus NtQueryInformationProcess(
     return sys::SyscallDispatcher::get().dispatch(frame);
 }
 
+// 43. NtCreateNamedPipeFile (SSN: 0x0091)
+inline NtStatus NtCreateNamedPipeFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t shareAccess = 0,
+    uint32_t createDisposition = 1,
+    uint32_t createOptions = 0,
+    uint32_t namedPipeType = 0,
+    uint32_t readMode = 0,
+    uint32_t completionMode = 0,
+    uint32_t maximumInstances = 0,
+    uint32_t inboundQuota = 0,
+    uint32_t outboundQuota = 0,
+    LargeInteger* defaultTimeout = nullptr
+) {
+    uint64_t stack[10] = {
+        shareAccess,
+        createDisposition,
+        createOptions,
+        namedPipeType,
+        readMode,
+        completionMode,
+        maximumInstances,
+        inboundQuota,
+        outboundQuota,
+        reinterpret_cast<uint64_t>(defaultTimeout)
+    };
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtCreateNamedPipeFile,
+        .arg1 = reinterpret_cast<uint64_t>(fileHandle),
+        .arg2 = desiredAccess,
+        .arg3 = reinterpret_cast<uint64_t>(objectAttributes),
+        .arg4 = reinterpret_cast<uint64_t>(ioStatusBlock),
+        .stackArgs = stack,
+        .stackArgCount = 10
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 44. NtCreateMailslotFile (SSN: 0x0092)
+inline NtStatus NtCreateMailslotFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t createOptions = 0,
+    uint32_t mailslotQuota = 0,
+    uint32_t maxMessageSize = 0,
+    LargeInteger* readTimeout = nullptr
+) {
+    uint64_t stack[4] = {
+        createOptions,
+        mailslotQuota,
+        maxMessageSize,
+        reinterpret_cast<uint64_t>(readTimeout)
+    };
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtCreateMailslotFile,
+        .arg1 = reinterpret_cast<uint64_t>(fileHandle),
+        .arg2 = desiredAccess,
+        .arg3 = reinterpret_cast<uint64_t>(objectAttributes),
+        .arg4 = reinterpret_cast<uint64_t>(ioStatusBlock),
+        .stackArgs = stack,
+        .stackArgCount = 4
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
 // ============================================================================
 // NTDLL Runtime Library (Rtl) Helpers
 // ============================================================================
@@ -863,7 +933,7 @@ inline uint32_t RtlGetLastWin32Error() noexcept {
 }
 
 inline uint32_t RtlNtStatusToDosError(NtStatus status) noexcept {
-    if (NT_SUCCESS(status)) return 0; // ERROR_SUCCESS
+    if (status == NtStatus::Success) return 0; // ERROR_SUCCESS
     switch (status) {
         case NtStatus::NoSuchFile:              return 2;   // ERROR_FILE_NOT_FOUND
         case NtStatus::ObjectPathNotFound:      return 3;   // ERROR_PATH_NOT_FOUND
@@ -880,7 +950,17 @@ inline uint32_t RtlNtStatusToDosError(NtStatus status) noexcept {
         case NtStatus::DirectoryNotEmpty:       return 145; // ERROR_DIR_NOT_EMPTY
         case NtStatus::FileIsADirectory:        return 5;   // ERROR_ACCESS_DENIED
         case NtStatus::NoMoreFiles:             return 18;  // ERROR_NO_MORE_FILES
-        default:                                return 31;  // ERROR_GEN_FAILURE
+        case NtStatus::BufferOverflow:          return 234; // ERROR_MORE_DATA
+        case NtStatus::PipeBroken:              return 109; // ERROR_BROKEN_PIPE
+        case NtStatus::PipeBusy:                return 231; // ERROR_PIPE_BUSY
+        case NtStatus::PipeClosing:             return 232; // ERROR_NO_DATA
+        case NtStatus::PipeDisconnected:        return 233; // ERROR_PIPE_NOT_CONNECTED
+        case NtStatus::PipeNotAvailable:        return 233; // ERROR_PIPE_NOT_CONNECTED
+        case NtStatus::PipeConnected:           return 535; // ERROR_PIPE_CONNECTED
+        case NtStatus::PipeListening:           return 536; // ERROR_PIPE_LISTENING
+        case NtStatus::MailslotNotFound:        return 2;   // ERROR_FILE_NOT_FOUND
+        case NtStatus::Timeout:                 return 121; // ERROR_SEM_TIMEOUT
+        default:                                return NT_SUCCESS(status) ? 0 : 31;  // ERROR_GEN_FAILURE
     }
 }
 

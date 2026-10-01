@@ -141,6 +141,113 @@ NtStatus NtOpenFile(
     );
 }
 
+NtStatus NtCreateNamedPipeFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t /*shareAccess*/,
+    uint32_t /*createDisposition*/,
+    uint32_t /*createOptions*/,
+    uint32_t namedPipeType,
+    uint32_t readMode,
+    uint32_t completionMode,
+    uint32_t maximumInstances,
+    uint32_t inboundQuota,
+    uint32_t outboundQuota,
+    LargeInteger* defaultTimeout
+) {
+    if (!fileHandle || !objectAttributes || !objectAttributes->objectName) {
+        return NtStatus::InvalidParameter;
+    }
+
+    uint32_t pipeMode = (namedPipeType ? npfs::PIPE_TYPE_MESSAGE : npfs::PIPE_TYPE_BYTE) |
+                        (readMode ? npfs::PIPE_READMODE_MESSAGE : npfs::PIPE_READMODE_BYTE) |
+                        (completionMode ? npfs::PIPE_NOWAIT : npfs::PIPE_WAIT);
+
+    uint32_t timeoutMs = defaultTimeout ? static_cast<uint32_t>(-(defaultTimeout->quadPart / 10000)) : 50;
+
+    std::shared_ptr<npfs::NamedPipeInstance> pipeInst;
+    NtStatus status = npfs::NamedPipeFileSystem::get().createNamedPipe(
+        objectAttributes->objectName->view(),
+        desiredAccess,
+        pipeMode,
+        maximumInstances ? maximumInstances : npfs::PIPE_UNLIMITED_INSTANCES,
+        outboundQuota,
+        inboundQuota,
+        timeoutMs,
+        pipeInst
+    );
+
+    if (!NT_SUCCESS(status)) {
+        if (ioStatusBlock) {
+            ioStatusBlock->status = status;
+            ioStatusBlock->information = 0;
+        }
+        return status;
+    }
+
+    auto fileObj = fs::VirtualFileSystem::get().registerServerPipe(pipeInst, desiredAccess);
+    Handle h = g_NextFileHandle;
+    g_NextFileHandle += 4;
+    g_KernelFiles[h] = fileObj;
+    *fileHandle = h;
+
+    if (ioStatusBlock) {
+        ioStatusBlock->status = NtStatus::Success;
+        ioStatusBlock->information = 2; // FILE_CREATED
+    }
+    return NtStatus::Success;
+}
+
+NtStatus NtCreateMailslotFile(
+    Handle* fileHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    IoStatusBlock* ioStatusBlock,
+    uint32_t /*createOptions*/,
+    uint32_t /*mailslotQuota*/,
+    uint32_t maxMessageSize,
+    LargeInteger* readTimeout
+) {
+    if (!fileHandle || !objectAttributes || !objectAttributes->objectName) {
+        return NtStatus::InvalidParameter;
+    }
+
+    uint32_t timeoutMs = npfs::MAILSLOT_WAIT_FOREVER;
+    if (readTimeout) {
+        timeoutMs = (readTimeout->quadPart == -1) ? npfs::MAILSLOT_WAIT_FOREVER : static_cast<uint32_t>(-(readTimeout->quadPart / 10000));
+    }
+
+    std::shared_ptr<npfs::Mailslot> slot;
+    NtStatus status = npfs::MailslotFileSystem::get().createMailslot(
+        objectAttributes->objectName->view(),
+        maxMessageSize,
+        timeoutMs,
+        slot
+    );
+
+    if (!NT_SUCCESS(status)) {
+        if (ioStatusBlock) {
+            ioStatusBlock->status = status;
+            ioStatusBlock->information = 0;
+        }
+        return status;
+    }
+
+    auto fileObj = fs::VirtualFileSystem::get().registerServerMailslot(slot);
+    Handle h = g_NextFileHandle;
+    g_NextFileHandle += 4;
+    g_KernelFiles[h] = fileObj;
+    *fileHandle = h;
+
+    if (ioStatusBlock) {
+        ioStatusBlock->status = NtStatus::Success;
+        ioStatusBlock->information = 2; // FILE_CREATED
+    }
+    return NtStatus::Success;
+}
+
 NtStatus NtReadFile(
     Handle fileHandle,
     Handle /*event*/,
@@ -278,6 +385,14 @@ NtStatus NtClose(Handle handle) {
         return NtStatus::Success;
     }
     return g_KernelHandleTable.closeHandle(handle);
+}
+
+fs::FileObject* LookupKernelFileObject(Handle handle) {
+    auto it = g_KernelFiles.find(handle);
+    if (it != g_KernelFiles.end()) {
+        return it->second.get();
+    }
+    return nullptr;
 }
 
 NtStatus NtTerminateProcess(Handle processHandle, NtStatus exitStatus) {

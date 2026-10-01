@@ -38,6 +38,7 @@
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
 #include "micant/tcpip.hpp"
+#include "micant/npfs.hpp"
 #include "micant/iphlpapi.hpp"
 #include "micant/shell.hpp"
 
@@ -177,6 +178,14 @@ int main(int argc, char* argv[]) {
               << netStack.getLocalIp().toString() << "/24, IPv6: "
               << netStack.getLocalIpv6().toString() << "%1, 10 Gbps Virtual Bus)\n";
     iphlpapi::InitializeIpHelperApi();
+
+    // 5.4 Initialize Named Pipes (NPFS) & Mailslots (MSFS) IPC Subsystems
+    std::cout << "[MicaNT Boot] [Npfs & Msfs] Initializing Named Pipe & Mailslot IPC File Systems...\n";
+    auto& npfsMgr = npfs::NamedPipeFileSystem::get();
+    npfsMgr.initialize();
+    auto& msfsMgr = npfs::MailslotFileSystem::get();
+    msfsMgr.initialize();
+    std::cout << "[MicaNT Boot] [Npfs & Msfs] Mounted \\Device\\NamedPipe and \\Device\\Mailslot (Transactional RPC & Datagram IPC Ready)\n";
 
     // 6. Initialize I/O Completion Port (IOCP) Subsystem
     std::cout << "[MicaNT Boot] [Io & IOCP] Initializing I/O Completion Port Subsystem...\n";
