@@ -14,6 +14,8 @@
 #include "ntstatus.hpp"
 #include "io.hpp"
 #include "ob.hpp"
+#include "storage.hpp"
+#include "fat32.hpp"
 
 namespace micant::fs {
 
@@ -183,6 +185,28 @@ public:
 
     [[nodiscard]] io::DeviceObject* getPartitionDevice() const noexcept {
         return partitionDevice_.get();
+    }
+
+    NtStatus mountBlockDevice(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        mountedDevice_ = device;
+        fat32Fs_ = std::make_shared<fat32::Fat32FileSystem>();
+        NtStatus st = fat32Fs_->mount(mountedDevice_);
+        if (!NT_SUCCESS(st)) {
+            fat32Fs_.reset();
+            mountedDevice_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] std::shared_ptr<fat32::Fat32FileSystem> getMountedFat32() const noexcept {
+        return fat32Fs_;
+    }
+
+    [[nodiscard]] std::shared_ptr<storage::IBlockDevice> getMountedBlockDevice() const noexcept {
+        return mountedDevice_;
     }
 
     NtStatus createOrOpenFile(
@@ -515,6 +539,8 @@ private:
     std::shared_ptr<io::DeviceObject> partitionDevice_;
     std::shared_ptr<VfsEntry> rootEntry_;
     std::unordered_map<FileObject*, std::shared_ptr<VfsEntry>> openFiles_;
+    std::shared_ptr<storage::IBlockDevice> mountedDevice_;
+    std::shared_ptr<fat32::Fat32FileSystem> fat32Fs_;
 };
 
 } // namespace micant::fs

@@ -49,6 +49,8 @@
 #include "micant/user32.hpp"
 #include "micant/ws2_32.hpp"
 #include "micant/shell.hpp"
+#include "micant/storage.hpp"
+#include "micant/fat32.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -3034,6 +3036,194 @@ void Test_MsvcrtBridge_And_CommandShell() {
                 "Process must finish with exit code 0");
 }
 
+// ============================================================================
+// Suite 38: Storage Stack & FAT32 Filesystem Engine Tests
+// ============================================================================
+void Test_StorageAndFat32FileSystem() {
+    // 1. In-Memory RamDisk Block Device
+    constexpr uint32_t SECTOR_SIZE = 512;
+    constexpr uint64_t TOTAL_DISK_BYTES = 64 * 1024 * 1024; // 64 MB
+    auto ramDisk = std::make_shared<storage::RamDiskDevice>(
+        L"\\Device\\Harddisk0\\Partition0",
+        TOTAL_DISK_BYTES,
+        SECTOR_SIZE
+    );
+    TEST_ASSERT(ramDisk->getBlockSize() == SECTOR_SIZE, "RAM disk sector size must be 512");
+    TEST_ASSERT(ramDisk->getTotalBlocks() == (TOTAL_DISK_BYTES / SECTOR_SIZE), "RAM disk total blocks must match 131072");
+    TEST_ASSERT(ramDisk->getTotalBytes() == TOTAL_DISK_BYTES, "RAM disk total bytes must match 64 MB");
+
+    // Test raw sector write and read
+    std::vector<uint8_t> testSec(SECTOR_SIZE, 0xA5);
+    NtStatus st = ramDisk->writeBlocks(100, 1, testSec.data());
+    TEST_ASSERT(NT_SUCCESS(st), "RamDisk writeBlocks to sector 100 must succeed");
+
+    std::vector<uint8_t> readSec(SECTOR_SIZE, 0);
+    st = ramDisk->readBlocks(100, 1, readSec.data());
+    TEST_ASSERT(NT_SUCCESS(st), "RamDisk readBlocks from sector 100 must succeed");
+    TEST_ASSERT(std::memcmp(testSec.data(), readSec.data(), SECTOR_SIZE) == 0, "RamDisk sector 100 data must match exactly");
+
+    // 2. MBR Partition Table Creation & Parsing
+    std::vector<storage::MbrPartitionEntry> writePartitions(1);
+    writePartitions[0].bootIndicator = 0x80; // Bootable
+    writePartitions[0].partitionType = storage::MBR_TYPE_FAT32_LBA; // 0x0C
+    writePartitions[0].startLba = 2048; // 1 MB boundary alignment
+    writePartitions[0].sectorCount = static_cast<uint32_t>(ramDisk->getTotalBlocks() - 2048); // 129024 sectors (~63 MB)
+
+    st = storage::PartitionManager::writeMbr(*ramDisk, writePartitions);
+    TEST_ASSERT(NT_SUCCESS(st), "PartitionManager::writeMbr must succeed");
+
+    std::vector<storage::MbrPartitionEntry> readPartitions;
+    st = storage::PartitionManager::parseMbr(*ramDisk, readPartitions);
+    TEST_ASSERT(NT_SUCCESS(st), "PartitionManager::parseMbr must succeed");
+    TEST_ASSERT(readPartitions.size() == 1, "MBR must contain 1 active partition");
+    TEST_ASSERT(readPartitions[0].bootIndicator == 0x80, "MBR partition must have boot indicator 0x80");
+    TEST_ASSERT(readPartitions[0].partitionType == storage::MBR_TYPE_FAT32_LBA, "Partition type must be FAT32 LBA");
+    TEST_ASSERT(readPartitions[0].startLba == 2048, "Partition start LBA must be 2048");
+    TEST_ASSERT(readPartitions[0].sectorCount == (ramDisk->getTotalBlocks() - 2048), "Partition sector count must match");
+
+    // 3. Partition Device Slicing
+    auto partition1 = std::make_shared<storage::PartitionDevice>(
+        L"\\Device\\Harddisk0\\Partition1",
+        ramDisk,
+        readPartitions[0].startLba,
+        readPartitions[0].sectorCount
+    );
+    TEST_ASSERT(partition1->getBlockSize() == SECTOR_SIZE, "Partition device block size must be 512");
+    TEST_ASSERT(partition1->getTotalBlocks() == readPartitions[0].sectorCount, "Partition device total blocks must match");
+    TEST_ASSERT(partition1->getStartLba() == 2048, "Partition device start LBA must be 2048");
+
+    // 4. FAT32 Filesystem Formatting
+    // Format partition1 with 8 sectors per cluster (4 KB clusters)
+    st = fat32::Fat32FileSystem::format(*partition1, "MICANT_SYS", 8);
+    TEST_ASSERT(NT_SUCCESS(st), "Fat32FileSystem::format must succeed");
+
+    // 5. FAT32 Mounting & BPB Geometry
+    fat32::Fat32FileSystem fs;
+    st = fs.mount(partition1);
+    TEST_ASSERT(NT_SUCCESS(st), "Fat32FileSystem::mount must succeed");
+    TEST_ASSERT(fs.isMounted(), "Filesystem must report mounted status");
+    TEST_ASSERT(fs.getBytesPerCluster() == 4096, "Cluster size must be 4096 bytes (4 KB)");
+    TEST_ASSERT(fs.getRootCluster() == 2, "FAT32 root cluster must be cluster 2");
+    TEST_ASSERT(fs.getTotalClusters() > 15000, "Volume must have > 15000 total clusters");
+
+    // 6. Directory Tree Creation
+    st = fs.createDirectory(L"Windows");
+    TEST_ASSERT(NT_SUCCESS(st), "createDirectory 'Windows' must succeed");
+
+    st = fs.createDirectory(L"Windows\\System32");
+    TEST_ASSERT(NT_SUCCESS(st), "createDirectory 'Windows\\System32' must succeed");
+
+    st = fs.createDirectory(L"Windows\\System32\\drivers");
+    TEST_ASSERT(NT_SUCCESS(st), "createDirectory 'Windows\\System32\\drivers' must succeed");
+
+    st = fs.createDirectory(L"Users");
+    TEST_ASSERT(NT_SUCCESS(st), "createDirectory 'Users' must succeed");
+
+    st = fs.createDirectory(L"Users\\Administrator");
+    TEST_ASSERT(NT_SUCCESS(st), "createDirectory 'Users\\Administrator' must succeed");
+
+    // 7. Short Filename (8.3) Creation & Verification
+    std::string ntdllStub = "MZ-MICANT-CLEANROOM-NTDLL-CORE-PAYLOAD";
+    std::vector<uint8_t> ntdllBytes(ntdllStub.begin(), ntdllStub.end());
+    st = fs.createFile(L"Windows\\System32\\ntdll.dll", ntdllBytes);
+    TEST_ASSERT(NT_SUCCESS(st), "createFile 'Windows\\System32\\ntdll.dll' must succeed");
+
+    std::vector<uint8_t> readNtdll;
+    st = fs.readFile(L"Windows\\System32\\ntdll.dll", 0, ntdllBytes.size(), readNtdll);
+    TEST_ASSERT(NT_SUCCESS(st), "readFile 'Windows\\System32\\ntdll.dll' must succeed");
+    TEST_ASSERT(readNtdll == ntdllBytes, "Read ntdll content must match written content");
+
+    // 8. Long File Name (LFN) Unicode Reconstruction
+    std::wstring lfnName = L"MicaNT Executive Advanced Architecture Specification Document.json";
+    std::wstring lfnFullPath = L"Windows\\System32\\" + lfnName;
+    std::string lfnPayload = "{\"Architecture\":\"Dave Cutler Clean-Room\",\"Subsystems\":[\"ob\",\"mm\",\"ps\",\"fat32\"]}";
+    std::vector<uint8_t> lfnBytes(lfnPayload.begin(), lfnPayload.end());
+
+    st = fs.createFile(lfnFullPath, lfnBytes);
+    TEST_ASSERT(NT_SUCCESS(st), "createFile with Long File Name (LFN) must succeed");
+
+    std::vector<uint8_t> readLfn;
+    st = fs.readFile(lfnFullPath, 0, lfnBytes.size(), readLfn);
+    TEST_ASSERT(NT_SUCCESS(st), "readFile via Long File Name must succeed");
+    TEST_ASSERT(readLfn == lfnBytes, "Read LFN file content must match written content");
+
+    // 9. Multi-Cluster File Integrity Across Cluster Chain Boundaries
+    // Cluster size is 4096 bytes. We write 14,336 bytes (spanning 3.5 clusters = 4 clusters allocated)
+    constexpr size_t MULTI_CLUSTER_SIZE = 14336;
+    std::vector<uint8_t> multiData(MULTI_CLUSTER_SIZE);
+    for (size_t i = 0; i < MULTI_CLUSTER_SIZE; ++i) {
+        multiData[i] = static_cast<uint8_t>((i * 13 + 0x47) & 0xFF);
+    }
+
+    std::wstring driverPath = L"Windows\\System32\\drivers\\fastfat_test.sys";
+    st = fs.createFile(driverPath, multiData);
+    TEST_ASSERT(NT_SUCCESS(st), "createFile multi-cluster driver must succeed");
+
+    // Read full file
+    std::vector<uint8_t> readMultiFull;
+    st = fs.readFile(driverPath, 0, MULTI_CLUSTER_SIZE, readMultiFull);
+    TEST_ASSERT(NT_SUCCESS(st), "readFile full multi-cluster must succeed");
+    TEST_ASSERT(readMultiFull.size() == MULTI_CLUSTER_SIZE, "Multi-cluster read length must match");
+    TEST_ASSERT(std::memcmp(readMultiFull.data(), multiData.data(), MULTI_CLUSTER_SIZE) == 0,
+                "Multi-cluster payload must match 100% across all cluster boundaries");
+
+    // Boundary read: 128 bytes spanning cluster boundary at 4096 (offset 4032 to 4160)
+    std::vector<uint8_t> boundaryRead1;
+    st = fs.readFile(driverPath, 4032, 128, boundaryRead1);
+    TEST_ASSERT(NT_SUCCESS(st), "readFile across cluster 0->1 boundary must succeed");
+    TEST_ASSERT(boundaryRead1.size() == 128, "Boundary 1 read size must be 128");
+    TEST_ASSERT(std::memcmp(boundaryRead1.data(), multiData.data() + 4032, 128) == 0,
+                "Boundary 1 data across cluster 0->1 boundary must match exactly");
+
+    // Boundary read: 256 bytes spanning cluster boundary at 8192 (offset 8100 to 8356)
+    std::vector<uint8_t> boundaryRead2;
+    st = fs.readFile(driverPath, 8100, 256, boundaryRead2);
+    TEST_ASSERT(NT_SUCCESS(st), "readFile across cluster 1->2 boundary must succeed");
+    TEST_ASSERT(boundaryRead2.size() == 256, "Boundary 2 read size must be 256");
+    TEST_ASSERT(std::memcmp(boundaryRead2.data(), multiData.data() + 8100, 256) == 0,
+                "Boundary 2 data across cluster 1->2 boundary must match exactly");
+
+    // 10. Directory Enumeration & Path Traversal Verification
+    fat32::FatFileInfo sys32Info{};
+    st = fs.findPath(L"Windows\\System32", sys32Info);
+    TEST_ASSERT(NT_SUCCESS(st), "findPath 'Windows\\System32' must succeed");
+    TEST_ASSERT(sys32Info.isDirectory, "'Windows\\System32' must be a directory");
+
+    std::vector<fat32::FatFileInfo> sys32Entries;
+    st = fs.readDirectory(sys32Info.firstCluster, sys32Entries);
+    TEST_ASSERT(NT_SUCCESS(st), "readDirectory for 'Windows\\System32' must succeed");
+    TEST_ASSERT(sys32Entries.size() >= 3, "Directory must contain at least 3 entries");
+
+    bool foundNtdll = false;
+    bool foundLfnDoc = false;
+    bool foundDriversDir = false;
+    for (const auto& entry : sys32Entries) {
+        if (entry.name == L"ntdll.dll") foundNtdll = true;
+        if (entry.name == lfnName) foundLfnDoc = true;
+        if (entry.name == L"drivers" && entry.isDirectory) foundDriversDir = true;
+    }
+    TEST_ASSERT(foundNtdll, "Directory enumeration must find 'ntdll.dll'");
+    TEST_ASSERT(foundLfnDoc, "Directory enumeration must reconstruct full LFN name");
+    TEST_ASSERT(foundDriversDir, "Directory enumeration must find 'drivers' subdirectory");
+
+    // 11. VirtualFileSystem Integration Test
+    // Mount the partition block device into VirtualFileSystem
+    st = fs::VirtualFileSystem::get().mountBlockDevice(partition1);
+    TEST_ASSERT(NT_SUCCESS(st), "VirtualFileSystem::mountBlockDevice must succeed");
+    TEST_ASSERT(fs::VirtualFileSystem::get().getMountedFat32() != nullptr, "VFS mounted FAT32 pointer must be valid");
+    TEST_ASSERT(fs::VirtualFileSystem::get().getMountedBlockDevice() == partition1, "VFS mounted block device must match partition1");
+
+    // 12. GPT Partition Parsing Guardrail Check
+    auto blankDisk = std::make_shared<storage::RamDiskDevice>(
+        L"\\Device\\Harddisk1\\Partition0",
+        16 * 1024 * 1024,
+        SECTOR_SIZE
+    );
+    std::vector<storage::GptPartitionEntry> gptEntries;
+    st = storage::PartitionManager::parseGpt(*blankDisk, gptEntries);
+    TEST_ASSERT(st == NtStatus::UnrecognizedVolume, "Blank disk must return UnrecognizedVolume for GPT");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -3076,7 +3266,7 @@ int main() {
     RUN_TEST(Test_Execution_UnmodifiedThirdPartyBinary);
     RUN_TEST(Test_ExpandedWin32AndNtSystemCalls);
     RUN_TEST(Test_MsvcrtBridge_And_CommandShell);
-
+    RUN_TEST(Test_StorageAndFat32FileSystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

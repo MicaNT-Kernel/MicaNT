@@ -69,6 +69,9 @@ enum class NtStatus : uint32_t {
     FileIsADirectory                 = 0xC00000BA,
     DirectoryNotEmpty                = 0xC0000101,
     NotADirectory                    = 0xC0000103,
+    DeviceNotReady                   = 0xC00000A3,
+    DiskFull                         = 0xC000007F,
+    UnrecognizedVolume               = 0xC00000DB,
     InvalidParameter1                = 0xC00000EF,
     InvalidParameter2                = 0xC00000F0,
     InvalidParameter3                = 0xC00000F1
@@ -118,6 +121,9 @@ enum class NtStatus : uint32_t {
         case NtStatus::ObjectPathNotFound: return "STATUS_OBJECT_PATH_NOT_FOUND";
         case NtStatus::ProcedureNotFound: return "STATUS_PROCEDURE_NOT_FOUND";
         case NtStatus::ProcessIsTerminating: return "STATUS_PROCESS_IS_TERMINATING";
+        case NtStatus::DeviceNotReady: return "STATUS_DEVICE_NOT_READY";
+        case NtStatus::DiskFull: return "STATUS_DISK_FULL";
+        case NtStatus::UnrecognizedVolume: return "STATUS_UNRECOGNIZED_VOLUME";
         default: return "STATUS_UNKNOWN";
     }
 }

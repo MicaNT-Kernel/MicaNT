@@ -34,6 +34,8 @@
 #include "micant/uefi.hpp"
 #include "micant/bootvid.hpp"
 #include "micant/generated_nt_api.hpp"
+#include "micant/storage.hpp"
+#include "micant/fat32.hpp"
 #include "micant/shell.hpp"
 
 using namespace micant;
@@ -114,11 +116,31 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Io] Created system device nodes: \\Device\\Null, \\Device\\Harddisk0 (Registered: " 
               << ioMgr.getDeviceCount() << " devices)\n";
 
-    // 5.1 Initialize FastFAT File System Driver & Mount \DosDevices\C:
+    // 5.1 Initialize Real Block Storage Subsystem, RamDisk, MBR, and FastFAT Driver
+    std::cout << "[MicaNT Boot] [Storage] Initializing \\Device\\Harddisk0 (64 MB Physical Sector Emulation)...\n";
+    auto bootDisk = std::make_shared<storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition0", 64 * 1024 * 1024, 512);
+
+    std::vector<storage::MbrPartitionEntry> bootPartitions(1);
+    bootPartitions[0].bootIndicator = 0x80;
+    bootPartitions[0].partitionType = storage::MBR_TYPE_FAT32_LBA;
+    bootPartitions[0].startLba = 2048;
+    bootPartitions[0].sectorCount = static_cast<uint32_t>(bootDisk->getTotalBlocks() - 2048);
+    (void)storage::PartitionManager::writeMbr(*bootDisk, bootPartitions);
+
+    auto bootPartition = std::make_shared<storage::PartitionDevice>(
+        L"\\Device\\Harddisk0\\Partition1",
+        bootDisk,
+        bootPartitions[0].startLba,
+        bootPartitions[0].sectorCount
+    );
+
+    (void)fat32::Fat32FileSystem::format(*bootPartition, "MICANT_SYS", 8);
+
     std::cout << "[MicaNT Boot] [Fastfat & VFS] Mounting System Volume on \\Device\\Harddisk0\\Partition1...\n";
     auto& vfs = fs::VirtualFileSystem::get();
     vfs.initialize();
-    std::cout << "[MicaNT Boot] [Fastfat & VFS] Mounted \\DosDevices\\C: -> \\Device\\Harddisk0\\Partition1 (Status: MOUNTED)\n";
+    vfs.mountBlockDevice(bootPartition);
+    std::cout << "[MicaNT Boot] [Fastfat & VFS] Mounted \\DosDevices\\C: -> \\Device\\Harddisk0\\Partition1 (Status: MOUNTED, FAT32 4KB Clusters)\n";
 
     // 5.2 Initialize Kernel Hardware Telemetry Driver via DriverEntry
     std::cout << "[MicaNT Boot] [Driver] Loading Kernel Telemetry Driver via DriverEntry...\n";
