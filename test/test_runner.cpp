@@ -39,6 +39,7 @@
 #include "micant/csrss.hpp"
 #include "micant/conhost.hpp"
 #include "micant/kernel32.hpp"
+#include "micant/wow64.hpp"
 
 using namespace micant;
 
@@ -2142,6 +2143,190 @@ void Test_Kernel32_Win32ApiParity() {
     TEST_ASSERT(tick2 >= tick1, "GetTickCount64 must be monotonic non-decreasing");
 }
 
+// ============================================================================
+// Suite 31: WoW64 Subsystem, PEB32/TEB32, and Heaven's Gate Mode Transition
+// ============================================================================
+void Test_Wow64_PebTebAndHeavensGate() {
+    // 1. Test 32-Bit PE Header Parsing (PeLoader::inspect32)
+    std::vector<uint8_t> pe32Buffer(sizeof(pe::ImageDosHeader) + sizeof(pe::ImageNtHeaders32) + sizeof(pe::ImageSectionHeader), 0);
+    auto* dos = reinterpret_cast<pe::ImageDosHeader*>(pe32Buffer.data());
+    dos->e_magic = pe::DOS_MAGIC;
+    dos->e_lfanew = sizeof(pe::ImageDosHeader);
+
+    auto* nt32 = reinterpret_cast<pe::ImageNtHeaders32*>(pe32Buffer.data() + dos->e_lfanew);
+    nt32->signature = pe::NT_SIGNATURE;
+    nt32->fileHeader.machine = pe::MACHINE_I386;
+    nt32->fileHeader.numberOfSections = 1;
+    nt32->fileHeader.sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader32);
+    nt32->optionalHeader.magic = pe::PE32_MAGIC;
+    nt32->optionalHeader.addressOfEntryPoint = 0x1200;
+    nt32->optionalHeader.imageBase = 0x00400000;
+
+    auto* sec = reinterpret_cast<pe::ImageSectionHeader*>(
+        pe32Buffer.data() + dos->e_lfanew + sizeof(uint32_t) + sizeof(pe::ImageFileHeader) + nt32->fileHeader.sizeOfOptionalHeader
+    );
+    std::memcpy(sec->name, ".text\0\0\0", 8);
+    sec->virtualAddress = 0x1000;
+    sec->misc.virtualSize = 0x1500;
+    sec->characteristics = pe::IMAGE_SCN_MEM_EXECUTE | pe::IMAGE_SCN_MEM_READ;
+
+    pe::ImageNtHeaders32 parsedHeaders{};
+    std::vector<pe::ImageSectionHeader> parsedSections;
+    NtStatus stInspect = pe::PeLoader::inspect32(pe32Buffer, parsedHeaders, parsedSections);
+    TEST_ASSERT(NT_SUCCESS(stInspect), "PeLoader::inspect32 must successfully parse valid 32-bit PE");
+    TEST_ASSERT(parsedHeaders.fileHeader.machine == pe::MACHINE_I386, "Machine must be IMAGE_FILE_MACHINE_I386 (0x014C)");
+    TEST_ASSERT(parsedHeaders.optionalHeader.magic == pe::PE32_MAGIC, "Optional header magic must be PE32 (0x010B)");
+    TEST_ASSERT(parsedHeaders.optionalHeader.imageBase == 0x00400000, "Image base must be 0x00400000");
+    TEST_ASSERT(parsedSections.size() == 1, "Must contain exactly 1 section");
+    TEST_ASSERT(parsedSections[0].getName() == ".text", "Section name must match .text");
+
+    // 2. Test PEB32 and TEB32 Layout & Linkage
+    wow64::ProcessEnvironmentBlock32 peb32{};
+    peb32.imageBaseAddress = 0x00400000;
+    peb32.osBuildNumber = 26100;
+    peb32.numberOfProcessors = 4;
+
+    wow64::ThreadEnvironmentBlock32 teb32{};
+    teb32.self = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&teb32) & 0xFFFFFFFF);
+    teb32.processEnvironmentBlock = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&peb32) & 0xFFFFFFFF);
+    teb32.clientId.uniqueProcess = 1001;
+    teb32.clientId.uniqueThread = 10;
+    teb32.currentLocale = 0x0409;
+
+    wow64::RtlSetCurrentTeb32(&teb32, &peb32);
+    TEST_ASSERT(wow64::RtlGetCurrentTeb32() == &teb32, "RtlGetCurrentTeb32 must return registered TEB32");
+    TEST_ASSERT(wow64::RtlGetCurrentPeb32() == &peb32, "RtlGetCurrentPeb32 must resolve through TEB32 to PEB32");
+    TEST_ASSERT(wow64::RtlGetCurrentTeb32()->clientId.uniqueProcess == 1001, "UniqueProcess must match 1001");
+    TEST_ASSERT(wow64::RtlGetCurrentTeb32()->clientId.uniqueThread == 10, "UniqueThread must match 10");
+    TEST_ASSERT(wow64::RtlGetCurrentPeb32()->osBuildNumber == 26100, "PEB32 OS build number must match 26100");
+
+    // 3. Test Heaven's Gate Mode Switcher (HeavensGate)
+    wow64::Wow64Context32 ctx32{};
+    ctx32.segCs = wow64::WOW64_CS_32BIT;
+    ctx32.segSs = wow64::WOW64_SS_32BIT;
+    ctx32.eip = 0x00401020;
+    ctx32.eax = 0x00000018; // SSN for NtAllocateVirtualMemory
+    ctx32.ebx = 0x12345678;
+
+    uint64_t rip64 = 0;
+    uint64_t targetRip64 = 0x00007FF800050000ULL; // 64-bit wow64cpu thunk entry
+    bool entered = wow64::HeavensGate::enter64BitMode(ctx32, rip64, targetRip64);
+    TEST_ASSERT(entered, "HeavensGate::enter64BitMode must succeed from 32-bit compatibility mode");
+    TEST_ASSERT(ctx32.segCs == wow64::WOW64_CS_64BIT, "Code segment selector must switch to 0x33 (64-bit long mode)");
+    TEST_ASSERT(rip64 == targetRip64, "RIP must be configured to target 64-bit entry point");
+
+    // Re-entering when already in 64-bit mode must fail
+    bool reenter = wow64::HeavensGate::enter64BitMode(ctx32, rip64, targetRip64);
+    TEST_ASSERT(!reenter, "HeavensGate::enter64BitMode must reject re-entry when already in 64-bit mode");
+
+    // Exit back to 32-bit compatibility mode
+    uint32_t returnEip = 0x00401025;
+    bool exited = wow64::HeavensGate::exitTo32BitMode(rip64, ctx32, returnEip);
+    TEST_ASSERT(exited, "HeavensGate::exitTo32BitMode must succeed from 64-bit mode");
+    TEST_ASSERT(ctx32.segCs == wow64::WOW64_CS_32BIT, "Code segment selector must return to 0x23 (32-bit compatibility mode)");
+    TEST_ASSERT(ctx32.eip == returnEip, "EIP must be restored to return address");
+    TEST_ASSERT(ctx32.ebx == 0x12345678, "General-purpose register state must be preserved across Heaven's Gate");
+}
+
+// ============================================================================
+// Suite 32: WoW64 System Call Thunking & FS/Registry Redirection
+// ============================================================================
+void Test_Wow64_SyscallThunkingAndFsRedirection() {
+    // 1. Test File System Redirection (Wow64FsRedirection)
+    std::wstring p1 = wow64::Wow64FsRedirection::translatePath(L"C:\\Windows\\System32\\notepad.exe");
+    TEST_ASSERT(p1 == L"C:\\Windows\\SysWOW64\\notepad.exe", "System32 path must redirect to SysWOW64");
+
+    // Exemption paths: drivers\etc, spool, catroot
+    std::wstring pEtc = wow64::Wow64FsRedirection::translatePath(L"C:\\Windows\\System32\\drivers\\etc\\hosts");
+    TEST_ASSERT(pEtc == L"C:\\Windows\\System32\\drivers\\etc\\hosts", "drivers\\etc path must be exempted from redirection");
+
+    std::wstring pSpool = wow64::Wow64FsRedirection::translatePath(L"C:\\Windows\\System32\\spool\\printers");
+    TEST_ASSERT(pSpool == L"C:\\Windows\\System32\\spool\\printers", "spool path must be exempted from redirection");
+
+    std::wstring pCat = wow64::Wow64FsRedirection::translatePath(L"C:\\Windows\\System32\\catroot\\catalog.cat");
+    TEST_ASSERT(pCat == L"C:\\Windows\\System32\\catroot\\catalog.cat", "catroot path must be exempted from redirection");
+
+    // Non-System32 path remains unchanged
+    std::wstring pProg = wow64::Wow64FsRedirection::translatePath(L"C:\\Program Files\\App\\app.exe");
+    TEST_ASSERT(pProg == L"C:\\Program Files\\App\\app.exe", "Non-System32 paths must not be modified");
+
+    // Thread-local Disable & Revert
+    wow64::PVOID32 oldState = 0;
+    wow64::Wow64FsRedirection::disable(&oldState);
+    TEST_ASSERT(wow64::Wow64FsRedirection::isRedirectionDisabled(), "Redirection must be reported as disabled");
+    std::wstring pDisabled = wow64::Wow64FsRedirection::translatePath(L"C:\\Windows\\System32\\notepad.exe");
+    TEST_ASSERT(pDisabled == L"C:\\Windows\\System32\\notepad.exe", "Redirection must not occur when disabled");
+
+    wow64::Wow64FsRedirection::revert(oldState);
+    TEST_ASSERT(!wow64::Wow64FsRedirection::isRedirectionDisabled(), "Redirection must be active after revert");
+    std::wstring pReverted = wow64::Wow64FsRedirection::translatePath(L"C:\\Windows\\System32\\notepad.exe");
+    TEST_ASSERT(pReverted == L"C:\\Windows\\SysWOW64\\notepad.exe", "Redirection must resume after revert");
+
+    // 2. Test Registry Redirection (translateRegistryKey)
+    std::wstring r1 = wow64::Wow64FsRedirection::translateRegistryKey(L"\\Registry\\Machine\\Software\\Microsoft\\Windows NT\\CurrentVersion");
+    TEST_ASSERT(r1 == L"\\Registry\\Machine\\Software\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion",
+                "HKLM\\Software must redirect to HKLM\\Software\\WOW6432Node");
+
+    std::wstring r2 = wow64::Wow64FsRedirection::translateRegistryKey(L"\\Registry\\Machine\\Software\\WOW6432Node\\TestApp");
+    TEST_ASSERT(r2 == L"\\Registry\\Machine\\Software\\WOW6432Node\\TestApp",
+                "Already redirected key must not be double redirected");
+
+    // 3. Test 32-to-64 Bit System Call Thunk Engine (Wow64ThunkDispatcher)
+    auto& thunk = wow64::Wow64ThunkDispatcher::get();
+
+    // VirtualAlloc Thunk: 32-bit allocation
+    wow64::PVOID32 base32 = 0;
+    wow64::SIZE_T32 size32 = 64 * 1024;
+    NtStatus stAlloc = thunk.thunkNtAllocateVirtualMemory(
+        0, &base32, 0, &size32, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE
+    );
+    TEST_ASSERT(NT_SUCCESS(stAlloc), "thunkNtAllocateVirtualMemory must succeed");
+    TEST_ASSERT(base32 != 0, "Allocated 32-bit base address must be non-zero");
+    TEST_ASSERT(base32 <= 0xFFFFFFFFULL, "Allocated address must reside within 32-bit address space");
+    TEST_ASSERT(size32 >= 64 * 1024, "Allocated 32-bit size must be at least requested size");
+
+    // VirtualFree Thunk
+    NtStatus stFree = thunk.thunkNtFreeVirtualMemory(0, &base32, &size32, mm::MEM_RELEASE);
+    TEST_ASSERT(NT_SUCCESS(stFree), "thunkNtFreeVirtualMemory must succeed");
+
+    // File I/O Thunk: Write to standard output handle 0x14 with IoStatusBlock32
+    const char wowBanner[] = "MicaNT WoW64 Subsystem Syscall Thunk Test\n";
+    wow64::IoStatusBlock32 iosb32{};
+    NtStatus stWrite = thunk.thunkNtWriteFile(
+        0x14, 0, 0, 0, &iosb32, wowBanner, static_cast<uint32_t>(sizeof(wowBanner) - 1), nullptr, 0
+    );
+    TEST_ASSERT(NT_SUCCESS(stWrite), "thunkNtWriteFile must succeed");
+    TEST_ASSERT(iosb32.information == sizeof(wowBanner) - 1, "IoStatusBlock32 information must match written byte count");
+
+    // Wait Thunk: Create an event and wait with timeout
+    Handle evHandle = 0;
+    sys::SyscallFrame frameEv{};
+    frameEv.ssn = sys::SSN_NtCreateEvent;
+    frameEv.arg1 = reinterpret_cast<uint64_t>(&evHandle);
+    frameEv.arg3 = 0;
+    frameEv.arg4 = 0;
+    (void)sys::SyscallDispatcher::get().dispatch(frameEv);
+    TEST_ASSERT(evHandle != 0, "CreateEvent for WoW64 wait test must succeed");
+
+    wow64::LargeInteger32 timeout32 = wow64::LargeInteger32::fromInt64(-10000); // 1ms
+    NtStatus stWait = thunk.thunkNtWaitForSingleObject(static_cast<wow64::HANDLE32>(evHandle), false, &timeout32);
+    TEST_ASSERT(stWait == NtStatus::Timeout, "thunkNtWaitForSingleObject on unsignaled event must return Timeout");
+
+    // Signal event and wait again with 0 timeout
+    frameEv = sys::SyscallFrame{};
+    frameEv.ssn = sys::SSN_NtSetEvent;
+    frameEv.arg1 = static_cast<uint64_t>(evHandle);
+    (void)sys::SyscallDispatcher::get().dispatch(frameEv);
+
+    timeout32 = wow64::LargeInteger32::fromInt64(0);
+    stWait = thunk.thunkNtWaitForSingleObject(static_cast<wow64::HANDLE32>(evHandle), false, &timeout32);
+    TEST_ASSERT(stWait == NtStatus::Success, "thunkNtWaitForSingleObject on signaled event must succeed");
+
+    // Close Handle Thunk
+    NtStatus stClose = thunk.thunkNtClose(static_cast<wow64::HANDLE32>(evHandle));
+    TEST_ASSERT(NT_SUCCESS(stClose), "thunkNtClose must succeed");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -2177,6 +2362,8 @@ int main() {
     RUN_TEST(Test_Csrss_ProcessRegistrationAndAlpc);
     RUN_TEST(Test_Conhost_ScreenBufferAndFramebufferBlit);
     RUN_TEST(Test_Kernel32_Win32ApiParity);
+    RUN_TEST(Test_Wow64_PebTebAndHeavensGate);
+    RUN_TEST(Test_Wow64_SyscallThunkingAndFsRedirection);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

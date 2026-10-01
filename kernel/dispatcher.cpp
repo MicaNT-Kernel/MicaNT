@@ -48,12 +48,15 @@ void SyscallDispatcher::initializeStandardTable() {
     // 3. NtClose (SSN: 0x000F)
     registerSyscall(SSN_NtClose, "NtClose", 1, [](const SyscallFrame& f) -> NtStatus {
         Handle h = static_cast<Handle>(f.arg1);
-        sync::DispatcherRegistry::get().unregister(h);
-        g_KernelIocpPorts.erase(h);
-        g_KernelKeys.erase(h);
-        g_KernelTokens.erase(h);
-        g_KernelPorts.erase(h);
-        return NtClose(h);
+        bool hadIocp = g_KernelIocpPorts.erase(h) > 0;
+        bool hadKey = g_KernelKeys.erase(h) > 0;
+        bool hadToken = g_KernelTokens.erase(h) > 0;
+        bool hadPort = g_KernelPorts.erase(h) > 0;
+        NtStatus status = NtClose(h);
+        if (hadIocp || hadKey || hadToken || hadPort) {
+            return NtStatus::Success;
+        }
+        return status;
     });
 
     // 4. NtTerminateProcess (SSN: 0x002C)

@@ -256,11 +256,15 @@ NtStatus NtClose(Handle handle) {
     if (handle == 0 || handle == InvalidHandleValue) {
         return NtStatus::InvalidHandle;
     }
+    bool wasSync = sync::DispatcherRegistry::get().lookup(handle) != nullptr;
     sync::DispatcherRegistry::get().unregister(handle);
     auto it = g_KernelFiles.find(handle);
     if (it != g_KernelFiles.end()) {
         fs::VirtualFileSystem::get().closeFile(it->second.get());
         g_KernelFiles.erase(it);
+        return NtStatus::Success;
+    }
+    if (wasSync) {
         return NtStatus::Success;
     }
     return g_KernelHandleTable.closeHandle(handle);

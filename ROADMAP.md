@@ -20,7 +20,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 6: Visual Identity & Custom Boot Splash (bootvid)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 7: WoW64 32-Bit Subsystem & AArch64 Port             [NEXT]     │
+│ Phase 7: WoW64 32-Bit Subsystem                       [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 8: AArch64 (ARM64) Architecture Port                [NEXT]       │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -112,12 +114,33 @@
 
 ---
 
-### Phase 7: WoW64 32-Bit Subsystem & AArch64 Architecture Expansion
-*Goal: Expand binary compatibility and hardware reach.*
-- [ ] **WoW64 Subsystem (Windows 32-bit on Windows 64-bit)**:
-  - 32-bit address space layout with 32-bit PEB and TEB32.
-  - `wow64cpu.dll` instruction thunking between 32-bit and 64-bit modes (`heaven's gate` / `sysenter`).
-- [ ] **AArch64 (ARM64) Port**:
-  - Exception levels (EL1 kernel, EL0 user).
-  - ARM64 translation tables (TTBR0/TTBR1).
-  - SVC instruction syscall trap dispatcher.
+### Phase 7: WoW64 32-Bit Subsystem (100% Completed)
+*Goal: Enable transparent execution of 32-bit x86 Windows applications on 64-bit MicaNT.*
+- [x] **32-Bit PE Format Support (`include/micant/pe.hpp`)**:
+  - `ImageOptionalHeader32` and `ImageNtHeaders32` structures.
+  - `MACHINE_I386` (0x014C) and `PE32_MAGIC` (0x010B) recognition.
+  - `PeLoader::inspect32`: Clean-room 32-bit PE header inspection and section table parsing.
+- [x] **WoW64 Subsystem Architecture (`include/micant/wow64.hpp`)**:
+  - 32-bit types: `PVOID32`, `HANDLE32`, `SIZE_T32`, `BOOL32`, `ClientId32`, `UnicodeString32`, `IoStatusBlock32`, `LargeInteger32`.
+  - 32-bit PEB (`ProcessEnvironmentBlock32`) and TEB (`ThreadEnvironmentBlock32`) within 4GB virtual address space.
+  - `RtlGetCurrentTeb32`, `RtlGetCurrentPeb32`, `RtlSetCurrentTeb32`, `RtlSetCurrentPeb32`.
+  - **Heaven's Gate Mode Transition Engine (`HeavensGate`)**: Segment selector transitions (`0x23` compatibility mode <-> `0x33` long mode) with full x86 register state preservation (`Wow64Context32`).
+  - **File System Redirection (`Wow64FsRedirection`)**: Transparent `\Windows\System32` -> `\Windows\SysWOW64` redirection with exemption paths (`drivers\etc`, `spool`, `catroot`) and thread-local disable/revert controls (`Wow64DisableFsRedirection`, `Wow64RevertFsRedirection`).
+  - **Registry Redirection (`Wow64FsRedirection::translateRegistryKey`)**: Transparent `\Registry\Machine\Software` -> `\Registry\Machine\Software\WOW6432Node` virtualization.
+  - **System Call Thunking Engine (`Wow64ThunkDispatcher`)**: 32-to-64 bit pointer widening, 32-bit address space constraint, and system call marshaling:
+    - `thunkNtAllocateVirtualMemory` & `thunkNtFreeVirtualMemory`
+    - `thunkNtWriteFile` & `thunkNtReadFile` (with `IoStatusBlock32` marshaling)
+    - `thunkNtClose` & `thunkNtWaitForSingleObject`
+- [x] **Test Suites 31 & 32 (`test/test_runner.cpp`)**:
+  - Suite 31: `Test_Wow64_PebTebAndHeavensGate` (PEB32/TEB32 layout, 32-bit PE parsing, Heaven's Gate transitions).
+  - Suite 32: `Test_Wow64_SyscallThunkingAndFsRedirection` (FS/Registry virtualization, 32-to-64 bit syscall thunking).
+  - All 32 unit test suites passing with 100% success rate.
+
+---
+
+### Phase 8: AArch64 (ARM64) Architecture Port (Next)
+*Goal: Expand MicaNT hardware reach to 64-bit ARM architectures (Apple Silicon, Snapdragon X Elite, Raspberry Pi 5).*
+- [ ] **ARM64 Exception Levels**: EL1 (Kernel / Executive) and EL0 (Ring 3 Userland).
+- [ ] **ARM64 Translation Tables**: TTBR0 (Userland) / TTBR1 (Kernel Executive) page table walks.
+- [ ] **ARM64 System Registers & Trap Dispatcher**: `ESR_EL1`, `FAR_EL1`, and `SVC` instruction trap dispatcher.
+- [ ] **ARM64 Calling Convention Bridge**: AAPCS64 parameter register passing (X0-X7) for `KiSystemCall64`.
