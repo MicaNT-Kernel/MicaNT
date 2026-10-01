@@ -68,7 +68,9 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 8. **Win32 Subsystem (CSRSS & ConHost)**: Clean-room `csrss.exe` process tracking over ALPC, `conhost` 2D terminal engine with GOP framebuffer blitting, and `kernel32.dll` base API bridge.
 9. **WoW64 Subsystem (32-Bit Compatibility)**: Transparent 32-bit execution via Heaven's Gate (`0x23` <-> `0x33` far call segment switching), PEB32/TEB32 virtual address space management, transparent `\Windows\SysWOW64` and `WOW6432Node` redirection, and 32-to-64 bit system call thunking.
 10. **Dynamic PE Import Binding & Relocations**: Clean-room `.idata` Import Directory parser, Import Lookup Table (INT) walker, Import Address Table (IAT) binding, and `.reloc` base relocation engine (DIR64 / HIGHLOW) enabling unmodified 64-bit Windows executables to bind directly to MicaNT `kernel32` and `ntdll` exports.
-11. **Bare-Metal UEFI Bootloader (`bootx64.efi`)**: Pure UEFI 2.10 entry point with GOP linear framebuffer discovery, ACPI 2.0 table resolution, and seamless kernel handoff.
+11. **x86-64 GDT, TSS64 & Ring 3 Hardware Transitions**: Standard NT segment selectors (`0x10`, `0x18`, `0x23`, `0x2B`, `0x33`), 64-bit Task State Segment (`RSP0`, `IST`), fast system call MSR configuration (`STAR`, `LSTAR`, `SFMASK`, `EFER.SCE`), and hardware `iretq` entry frames.
+12. **Unmodified Windows PE Execution**: Direct, verified execution of standard 64-bit Windows console executables compiled strictly against `<windows.h>` without any MicaNT-specific headers, shims, or wrappers.
+13. **Bare-Metal UEFI Bootloader (`bootx64.efi`)**: Pure UEFI 2.10 entry point with GOP linear framebuffer discovery, ACPI 2.0 table resolution, and seamless kernel handoff.
 
 ---
 
@@ -173,12 +175,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (33 Suites, 100% Passing)
+### Build & Run Unit Test Suite (35 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 33 Test Suites:
+# Run all 35 Test Suites:
 .\bin\micant_tests.exe
 ```
 

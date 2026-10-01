@@ -318,6 +318,44 @@ public:
         return std::nullopt;
     }
 
+    static NtStatus mapImage(
+        std::span<const uint8_t> fileBytes,
+        const ImageNtHeaders64& headers,
+        const std::vector<ImageSectionHeader>& sections,
+        uint8_t* destinationBuffer,
+        size_t destinationSize
+    ) {
+        if (!destinationBuffer || destinationSize < headers.optionalHeader.sizeOfImage) {
+            return NtStatus::InvalidParameter;
+        }
+
+        std::memset(destinationBuffer, 0, destinationSize);
+
+        // Copy Headers
+        if (headers.optionalHeader.sizeOfHeaders > fileBytes.size() ||
+            headers.optionalHeader.sizeOfHeaders > destinationSize) {
+            return NtStatus::InvalidParameter;
+        }
+        std::memcpy(destinationBuffer, fileBytes.data(), headers.optionalHeader.sizeOfHeaders);
+
+        // Copy Sections
+        for (const auto& sec : sections) {
+            if (sec.virtualAddress + sec.sizeOfRawData > destinationSize) {
+                return NtStatus::InvalidParameter;
+            }
+            if (sec.pointerToRawData + sec.sizeOfRawData > fileBytes.size()) {
+                return NtStatus::InvalidParameter;
+            }
+            if (sec.sizeOfRawData > 0) {
+                std::memcpy(destinationBuffer + sec.virtualAddress,
+                            fileBytes.data() + sec.pointerToRawData,
+                            sec.sizeOfRawData);
+            }
+        }
+
+        return NtStatus::Success;
+    }
+
     static NtStatus parseImports(
         std::span<const uint8_t> bytes,
         const ImageNtHeaders64& headers,

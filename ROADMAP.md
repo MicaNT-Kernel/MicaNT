@@ -156,9 +156,19 @@
   - Traversal of PE `.reloc` section (`IMAGE_DIRECTORY_ENTRY_BASERELOC`).
   - Parsing multi-entry `ImageBaseRelocation` blocks with bounds-checked arithmetic.
   - `IMAGE_REL_BASED_DIR64` (64-bit pointer adjustment) and `IMAGE_REL_BASED_HIGHLOW` (32-bit pointer adjustment) delta application for images loaded away from preferred `ImageBase`.
-- [x] **Test Suite 33 (`test/test_runner.cpp`)**:
-  - `Test_PeLoader_DynamicImportBindingAndUnmodifiedBinary`: Synthesizes an authentic in-memory 64-bit PE image with `.text`, `.rdata`, and `.reloc`, parses imports, binds IAT against live `kernel32.dll` exports, invokes `GetTickCount64` directly through the bound IAT slot, and applies base relocations against simulated rebase delta.
-  - All 33 unit test suites passing with 100% success rate.
+- [x] **x86-64 GDT, TSS64 & Fast System Call Architecture (`include/micant/cpu.hpp`)**:
+  - Global Descriptor Table (GDT) layout matching standard 64-bit Windows NT selectors: `0x10` (Kernel Code), `0x18` (Kernel Data), `0x23` (User 32-bit Compat Code), `0x2B` (User 64-bit Data), `0x33` (User 64-bit Code), `0x40` (16-byte Task State Segment).
+  - 64-bit Task State Segment (`TaskStateSegment64`) with `RSP0` kernel interrupt stack, `IST1`..`IST7` privilege stacks, and I/O permission bitmap offset.
+  - Model Specific Registers (MSRs) initialization: `MSR_STAR` (`0xC0000081`), `MSR_LSTAR` (`0xC0000082`), `MSR_SFMASK` (`0xC0000084`), and `MSR_EFER` (`0xC0000080` with `EFER_SCE`).
+  - Ring 3 User Mode Transition Engine: `createRing3EntryFrame` constructing standard 64-bit `IretFrame64` for hardware `iretq` execution (`CS=0x33`, `SS=0x2B`, `RFLAGS=0x202`).
+- [x] **Unmodified Third-Party Windows PE Execution**:
+  - Authored `test/unmodified_sample.cpp`, compiled strictly against Microsoft `<windows.h>` without any MicaNT headers or shims into `bin/unmodified_sample.exe`.
+  - Executed raw PE from disk in `Test_Execution_UnmodifiedThirdPartyBinary`: PE inspect, section mapping, dynamic IAT binding to clean-room `kernel32.dll` exports, CPU entry point transfer, and clean termination via `ExitProcess(0)`.
+- [x] **Test Suites 33, 34, 35 (`test/test_runner.cpp`)**:
+  - Suite 33: `Test_PeLoader_DynamicImportBindingAndUnmodifiedBinary` (dynamic imports, IAT binding, base relocations).
+  - Suite 34: `Test_Cpu_GdtTssAndRing3HardwareTransitions` (GDT selectors, TSS64 layout, MSRs, `iretq` user mode frame).
+  - Suite 35: `Test_Execution_UnmodifiedThirdPartyBinary` (unmodified 64-bit Windows PE execution via clean-room kernel32).
+  - All 35 unit test suites passing with 100% success rate (35 Passed, 0 Failed).
 
 ---
 

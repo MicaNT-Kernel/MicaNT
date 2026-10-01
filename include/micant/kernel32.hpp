@@ -203,7 +203,7 @@ inline HANDLE GetCurrentProcess() noexcept {
  */
 inline DWORD GetCurrentProcessId() noexcept {
     auto* teb = ntdll::RtlGetCurrentTeb();
-    if (!teb) return 1000;
+    if (!teb || teb->clientId.uniqueProcess == 0) return 1000;
     return static_cast<DWORD>(teb->clientId.uniqueProcess);
 }
 
@@ -219,7 +219,7 @@ inline HANDLE GetCurrentThread() noexcept {
  */
 inline DWORD GetCurrentThreadId() noexcept {
     auto* teb = ntdll::RtlGetCurrentTeb();
-    if (!teb) return 1;
+    if (!teb || teb->clientId.uniqueThread == 0) return 1;
     return static_cast<DWORD>(teb->clientId.uniqueThread);
 }
 

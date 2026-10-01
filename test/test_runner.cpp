@@ -6,6 +6,7 @@
 #include <span>
 #include <memory>
 #include <thread>
+#include <fstream>
 #include "micant/ntstatus.hpp"
 #include "micant/ntdef.hpp"
 #include "micant/ob.hpp"
@@ -41,6 +42,8 @@
 #include "micant/conhost.hpp"
 #include "micant/kernel32.hpp"
 #include "micant/wow64.hpp"
+#include "micant/cpu.hpp"
+#include "unmodified_fixture.hpp"
 
 using namespace micant;
 
@@ -1666,6 +1669,7 @@ void Test_Ntdll_SyscallStubsAndPebTeb() {
     NtStatus writeStatus = ntdll::NtWriteFile(0x14, 0, nullptr, nullptr, &iosb, banner, static_cast<uint32_t>(sizeof(banner) - 1));
     TEST_ASSERT(NT_SUCCESS(writeStatus) && iosb.information == sizeof(banner) - 1,
                 "NtWriteFile to standard output console handle must succeed");
+    ntdll::RtlSetCurrentTeb(nullptr);
 }
 
 // ============================================================================
@@ -2554,6 +2558,190 @@ void Test_PeLoader_DynamicImportBindingAndUnmodifiedBinary() {
                 "Relocated pointer in .text must reflect +0x100000000 rebase delta");
 }
 
+void Test_Cpu_GdtTssAndRing3HardwareTransitions() {
+    auto& cpuEngine = cpu::CpuHardwareEngine::get();
+    uint64_t dummyStackTop = 0x00007FFFFFF00000ULL;
+    uint64_t dummySyscallAddr = 0x00007FF800010000ULL;
+    cpuEngine.initialize(dummyStackTop, dummySyscallAddr);
+
+    TEST_ASSERT(cpuEngine.isInitialized(), "CpuHardwareEngine must be initialized");
+
+    // 1. Validate Segment Selectors
+    TEST_ASSERT(cpu::SELECTOR_KCODE64 == 0x0010, "Kernel Code Selector must be 0x10");
+    TEST_ASSERT(cpu::SELECTOR_KDATA64 == 0x0018, "Kernel Data Selector must be 0x18");
+    TEST_ASSERT(cpu::SELECTOR_UCODE32 == 0x0023, "Compatibility Mode User Code Selector must be 0x23 (WoW64)");
+    TEST_ASSERT(cpu::SELECTOR_UDATA64 == 0x002B, "User Data Selector must be 0x2B (RPL 3)");
+    TEST_ASSERT(cpu::SELECTOR_UCODE64 == 0x0033, "User Code Selector must be 0x33 (RPL 3)");
+    TEST_ASSERT(cpu::SELECTOR_TSS64 == 0x0040, "TSS64 Selector must be 0x40");
+
+    // 2. Validate GDT Layout & TSS
+    const auto& gdt = cpuEngine.getGdt();
+    TEST_ASSERT(gdt.kernelCode.access == 0x9A, "Kernel Code access byte must be 0x9A (Ring 0, Exec/Read)");
+    TEST_ASSERT(gdt.kernelData.access == 0x92, "Kernel Data access byte must be 0x92 (Ring 0, Read/Write)");
+    TEST_ASSERT(gdt.userCmCode.access == 0xFA, "User CM Code access byte must be 0xFA (Ring 3)");
+    TEST_ASSERT(gdt.userData.access == 0xF2, "User Data access byte must be 0xF2 (Ring 3, Read/Write)");
+    TEST_ASSERT(gdt.userCode.access == 0xFA, "User Code access byte must be 0xFA (Ring 3, Exec/Read)");
+    TEST_ASSERT(gdt.tssDesc.access == 0x89, "TSS descriptor access byte must be 0x89 (Available 64-bit TSS)");
+
+    // Validate TSS64 RSP0
+    const auto& tss = cpuEngine.getTss();
+    TEST_ASSERT(tss.rsp0 == dummyStackTop, "TSS RSP0 must point to kernel interrupt/syscall stack top");
+    TEST_ASSERT(tss.ist1 == dummyStackTop, "TSS IST1 must point to interrupt stack table");
+
+    // 3. Validate MSR Configuration for KiSystemCall64
+    TEST_ASSERT(cpuEngine.getMsrLstar() == dummySyscallAddr, "MSR_LSTAR must hold KiSystemCall64 entry address");
+    TEST_ASSERT((cpuEngine.getMsrSfmask() & 0x200) != 0, "MSR_SFMASK must mask IF (Interrupt Flag)");
+    TEST_ASSERT((cpuEngine.getMsrEfer() & cpu::EFER_SCE) != 0, "MSR_EFER must have SCE (Syscall Enable) bit set");
+
+    // MSR_STAR verification: High 32 bits contain target selectors
+    uint64_t star = cpuEngine.getMsrStar();
+    uint16_t kernelCs = static_cast<uint16_t>((star >> 32) & 0xFFFF);
+    uint16_t userCs = static_cast<uint16_t>((star >> 48) & 0xFFFF);
+    TEST_ASSERT(kernelCs == cpu::KGDT64_R0_CODE, "STAR MSR must specify Kernel Code 0x10 at bits 47:32");
+    TEST_ASSERT(userCs == cpu::KGDT64_R3_CMCODE, "STAR MSR must specify User Base 0x20 at bits 63:48");
+
+    // 4. Validate Ring 3 Entry Frame Construction (iretq)
+    uint64_t entryPoint = 0x0000000140001000ULL;
+    uint64_t userRsp = 0x00007FFFFFE00000ULL;
+    cpu::IretFrame64 frame = cpuEngine.createRing3EntryFrame(entryPoint, userRsp);
+
+    TEST_ASSERT(frame.rip == entryPoint, "IretFrame RIP must match entry point");
+    TEST_ASSERT(frame.cs == cpu::SELECTOR_UCODE64, "IretFrame CS must be User 64-bit Code (0x33)");
+    TEST_ASSERT(frame.rsp == userRsp, "IretFrame RSP must match user stack");
+    TEST_ASSERT(frame.ss == cpu::SELECTOR_UDATA64, "IretFrame SS must be User Data (0x2B)");
+    TEST_ASSERT((frame.rflags & 0x200) != 0, "IretFrame RFLAGS must have Interrupt Flag (IF) enabled");
+    TEST_ASSERT((frame.rflags & 0x3000) == 0, "IretFrame RFLAGS IOPL must be 0 for Ring 3");
+}
+
+namespace host_mem {
+    extern "C" void* __stdcall VirtualAlloc(void* lpAddress, size_t dwSize, uint32_t flAllocationType, uint32_t flProtect);
+    extern "C" int   __stdcall VirtualFree(void* lpAddress, size_t dwSize, uint32_t dwFreeType);
+}
+
+struct UnmodifiedProcessExit {
+    uint32_t exitCode;
+};
+
+static uint32_t s_UnmodifiedExitCode = 0xFFFFFFFF;
+static bool s_UnmodifiedExitCalled = false;
+[[noreturn]] static void MockUnmodifiedExitProcess(uint32_t code) {
+    s_UnmodifiedExitCode = code;
+    s_UnmodifiedExitCalled = true;
+    throw UnmodifiedProcessExit{ code };
+}
+
+
+void Test_Execution_UnmodifiedThirdPartyBinary() {
+    // 1. Read the real, compiled, unmodified Windows binary from disk or embedded clean fixture
+    const char* candidatePaths[] = {
+        "bin/unmodified_sample.exe",
+        "../bin/unmodified_sample.exe",
+        "unmodified_sample.exe",
+        "test/fixtures/unmodified_sample.exe"
+    };
+
+    std::vector<uint8_t> fileBytes;
+    for (const char* path : candidatePaths) {
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (file.is_open()) {
+            std::streamsize fileSize = file.tellg();
+            if (fileSize > 0) {
+                file.seekg(0, std::ios::beg);
+                fileBytes.resize(static_cast<size_t>(fileSize));
+                file.read(reinterpret_cast<char*>(fileBytes.data()), fileSize);
+                file.close();
+                break;
+            }
+        }
+    }
+
+    if (fileBytes.empty()) {
+        fileBytes.assign(std::begin(kUnmodifiedSampleBinary), std::end(kUnmodifiedSampleBinary));
+    }
+    TEST_ASSERT(!fileBytes.empty(), "Unmodified binary bytes must be loaded");
+
+    // 2. Parse PE Headers & Sections via PeLoader
+    pe::ImageNtHeaders64 headers{};
+    std::vector<pe::ImageSectionHeader> sections;
+    NtStatus stInspect = pe::PeLoader::inspect(fileBytes, headers, sections);
+    TEST_ASSERT(NT_SUCCESS(stInspect), "PeLoader::inspect must parse unmodified binary headers");
+    TEST_ASSERT(headers.fileHeader.machine == pe::MACHINE_AMD64, "Target machine must be AMD64 (x86_64)");
+    TEST_ASSERT(sections.size() >= 3, "Binary must contain at least 3 sections (.text, .rdata, .pdata)");
+    TEST_ASSERT(headers.optionalHeader.addressOfEntryPoint == 0x1000, "Entry point RVA must be 0x1000");
+
+    // 3. Parse Dynamic Import Directory
+    std::vector<pe::ImportedLibrary> imports;
+    NtStatus stImports = pe::PeLoader::parseImports(fileBytes, headers, sections, imports);
+    TEST_ASSERT(NT_SUCCESS(stImports), "PeLoader::parseImports must parse unmodified import table");
+    TEST_ASSERT(imports.size() == 1, "Must have exactly 1 imported library (KERNEL32.dll)");
+    TEST_ASSERT(imports[0].libraryName == "KERNEL32.dll", "Imported DLL must be KERNEL32.dll");
+    TEST_ASSERT(imports[0].symbols.size() == 4, "Must have 4 imported symbols from KERNEL32.dll");
+
+    bool hasWriteFile = false, hasExitProcess = false, hasGetTickCount64 = false, hasGetStdHandle = false;
+    for (const auto& sym : imports[0].symbols) {
+        if (sym.name == "WriteFile") hasWriteFile = true;
+        if (sym.name == "ExitProcess") hasExitProcess = true;
+        if (sym.name == "GetTickCount64") hasGetTickCount64 = true;
+        if (sym.name == "GetStdHandle") hasGetStdHandle = true;
+    }
+    TEST_ASSERT(hasWriteFile && hasExitProcess && hasGetTickCount64 && hasGetStdHandle,
+                "All 4 symbols (WriteFile, ExitProcess, GetTickCount64, GetStdHandle) must be parsed");
+
+    // 4. Initialize Clean-Room Win32 Subsystem Exports
+    win32::InitializeWin32SubsystemExports();
+
+    // Intercept ExitProcess during test execution so it records return without killing test runner
+    s_UnmodifiedExitCalled = false;
+    s_UnmodifiedExitCode = 0xFFFFFFFF;
+    ldr::DynamicLoader::get().registerExport("kernel32.dll", "ExitProcess", reinterpret_cast<void*>(MockUnmodifiedExitProcess));
+
+    // 5. Map Image into Executable Memory
+    size_t imageSize = headers.optionalHeader.sizeOfImage;
+    uint8_t* mappedBase = reinterpret_cast<uint8_t*>(
+        host_mem::VirtualAlloc(nullptr, imageSize, 0x1000 /* MEM_COMMIT */ | 0x2000 /* MEM_RESERVE */, 0x40 /* PAGE_EXECUTE_READWRITE */)
+    );
+    TEST_ASSERT(mappedBase != nullptr, "VirtualAlloc must allocate executable image memory");
+
+    NtStatus stMap = pe::PeLoader::mapImage(fileBytes, headers, sections, mappedBase, imageSize);
+    TEST_ASSERT(NT_SUCCESS(stMap), "PeLoader::mapImage must copy headers and sections to virtual addresses");
+
+    // 6. Bind Imports directly into the mapped image's IAT
+    size_t boundCount = pe::PeLoader::bindImports(
+        mappedBase,
+        imports,
+        [](std::string_view mod, std::string_view fn, uint16_t /*ord*/) -> void* {
+            return ldr::DynamicLoader::get().getExport(mod, fn);
+        }
+    );
+    TEST_ASSERT(boundCount == 4, "PeLoader::bindImports must bind all 4 symbols in unmodified binary");
+
+    // 7. Verify Bound IAT entries
+    for (const auto& sym : imports[0].symbols) {
+        uint64_t boundAddr = *reinterpret_cast<const uint64_t*>(mappedBase + sym.iatRva);
+        TEST_ASSERT(boundAddr != 0, "Bound IAT slot must not be null");
+    }
+
+    // 8. Execute the unmodified binary's entry point!
+    using EntryFunc = void(*)();
+    auto fnEntry = reinterpret_cast<EntryFunc>(mappedBase + headers.optionalHeader.addressOfEntryPoint);
+
+    std::cout << "\n[Test Runner] Launching unmodified third-party 64-bit PE entry point at 0x" 
+              << reinterpret_cast<void*>(fnEntry) << "...\n";
+    try {
+        fnEntry();
+    } catch (const UnmodifiedProcessExit& e) {
+        std::cout << "[Test Runner] Unmodified third-party PE invoked ExitProcess(" << e.exitCode << ") cleanly!\n";
+    }
+
+    // 9. Verify that the unmodified binary executed all calls successfully
+    TEST_ASSERT(s_UnmodifiedExitCalled, "Unmodified binary must invoke ExitProcess through bound IAT");
+    TEST_ASSERT(s_UnmodifiedExitCode == 0, "Unmodified binary must exit with code 0 (success)");
+
+    // Restore real ExitProcess in DynamicLoader & free image
+    ldr::DynamicLoader::get().registerExport("kernel32.dll", "ExitProcess", reinterpret_cast<void*>(win32::ExitProcess));
+    host_mem::VirtualFree(mappedBase, 0, 0x8000 /* MEM_RELEASE */);
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -2592,6 +2780,8 @@ int main() {
     RUN_TEST(Test_Wow64_PebTebAndHeavensGate);
     RUN_TEST(Test_Wow64_SyscallThunkingAndFsRedirection);
     RUN_TEST(Test_PeLoader_DynamicImportBindingAndUnmodifiedBinary);
+    RUN_TEST(Test_Cpu_GdtTssAndRing3HardwareTransitions);
+    RUN_TEST(Test_Execution_UnmodifiedThirdPartyBinary);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

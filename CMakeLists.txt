@@ -49,6 +49,19 @@ add_executable(win32_app
     kernel/dispatcher.cpp
 )
 
+# Standalone Unmodified Third-Party Windows Test Application (Zero MicaNT headers)
+if (MSVC)
+    add_executable(unmodified_sample
+        test/unmodified_sample.cpp
+    )
+    target_compile_options(unmodified_sample PRIVATE /O2 /GS-)
+    target_link_options(unmodified_sample PRIVATE /SUBSYSTEM:CONSOLE /NODEFAULTLIB /ENTRY:entry)
+    target_link_libraries(unmodified_sample PRIVATE kernel32)
+    set_target_properties(unmodified_sample PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+endif()
+
 # Bare-Metal UEFI Bootloader (bootx64)
 add_library(bootx64 OBJECT
     boot/bootx64.cpp
