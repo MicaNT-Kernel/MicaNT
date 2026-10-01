@@ -73,6 +73,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 13. **Bare-Metal UEFI Bootloader (`bootx64.efi`)**: Pure UEFI 2.10 entry point with GOP linear framebuffer discovery, ACPI 2.0 table resolution, and seamless kernel handoff.
 14. **Clean-Room MSVCRT, Subsystem Bridges & Command Shell**: High-fidelity clean-room C runtime (`msvcrt.dll`), security/crypto (`advapi32.dll`), windowing (`user32.dll`), and network (`ws2_32.dll`) bridges, Fiber Local Storage (FLS) architecture, and native MicaNT Command Prompt Shell (`cmd.exe` / `msh.exe`) with built-in commands and unmodified binary execution.
 15. **Real Block Storage & FAT32/Partition Engine (`storage.hpp`, `fat32.hpp`)**: Modular block device layer (`IBlockDevice`), MBR and GPT partition management, RAM disk sector emulation, dual FAT32 table traversal, LFN reverse-sequence unicode filename decoding, cluster chain allocation, and VFS integration.
+16. **Advanced Networking Stack & QUIC Protocol Engine (`ndis.hpp`, `tcpip.hpp`, `ws2_32.hpp`, `iphlpapi.hpp`)**: NDIS 6.x driver miniport interface, 10 Gbps virtual network adapter, ARP resolution, IPv4/IPv6 RFC 8200 dual-stack addressing with link-local generation, ICMPv4/v6 echo ping, UDP datagrams, full RFC 793 / RFC 9293 11-state TCP state machine with 3-way handshake and bidirectional streaming, Next-Gen QUIC RFC 9000 protocol header framing, Winsock 2 (`ws2_32.dll`), IP Helper API (`iphlpapi.dll`), and native shell network commands (`ipconfig`, `ping`, `netstat`).
 
 ---
 
@@ -177,12 +178,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (38 Suites, 100% Passing)
+### Build & Run Unit Test Suite (39 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 38 Test Suites:
+# Run all 39 Test Suites:
 .\bin\micant_tests.exe
 ```
 

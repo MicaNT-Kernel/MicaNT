@@ -33,6 +33,9 @@
 #include "advapi32.hpp"
 #include "user32.hpp"
 #include "ws2_32.hpp"
+#include "ndis.hpp"
+#include "tcpip.hpp"
+#include "iphlpapi.hpp"
 
 namespace micant::shell {
 
@@ -74,6 +77,8 @@ public:
         advapi32::InitializeAdvapi32SubsystemExports();
         user32::InitializeUser32SubsystemExports();
         ws2_32::InitializeWs2_32SubsystemExports();
+        iphlpapi::InitializeIpHlpApiSubsystemExports();
+        tcpip::NetworkStack::get().initialize();
     }
 
     void printBanner(std::ostream& out = std::cout) {
@@ -133,6 +138,12 @@ public:
             cmdSystemInfo(out);
         } else if (cmd == "ps" || cmd == "tasklist") {
             cmdPs(out);
+        } else if (cmd == "ping") {
+            cmdPing(tokens, out);
+        } else if (cmd == "ipconfig") {
+            cmdIpConfig(tokens, out);
+        } else if (cmd == "netstat") {
+            cmdNetstat(tokens, out);
         } else if (cmd == "exec" || cmd == "run") {
             if (tokens.size() < 2) {
                 out << "Usage: exec <pe_file_path>\n";
@@ -340,6 +351,9 @@ private:
             << "  SYSTEMINFO        Displays system architecture, HAL, and processor specs\n"
             << "  PS / TASKLIST     Lists active CSRSS registered processes and threads\n"
             << "  TIME / DATE       Displays system chronometry and timestamp\n"
+            << "  IPCONFIG [/all]   Displays network adapter configuration and IP addresses\n"
+            << "  PING <host>       Sends ICMP Echo Requests to verify network connectivity\n"
+            << "  NETSTAT           Displays active TCP/UDP network connections and ports\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
             << "  EXIT / QUIT       Quits the MicaNT command shell\n";
     }
@@ -570,6 +584,121 @@ private:
             << "wininit.exe                    360 Services                   0       512 K\n"
             << "conhost.exe                    420 Console                    1       896 K\n"
             << "cmd.exe (msh)                  512 Console                    1       768 K\n\n";
+    }
+
+    void cmdPing(const std::vector<std::string>& tokens, std::ostream& out) {
+        std::string target = (tokens.size() > 1) ? tokens[1] : "127.0.0.1";
+        auto ip = tcpip::Ipv4Address::fromString(target);
+        if (ip.isZero() && target != "0.0.0.0") {
+            if (target == "localhost") {
+                ip = tcpip::Ipv4Address::loopback();
+            } else {
+                out << "Ping request could not find host " << target << ". Please check the name and try again.\n";
+                return;
+            }
+        }
+
+        out << "\nPinging " << ip.toString() << " with 32 bytes of data:\n";
+        int sent = 0;
+        int received = 0;
+        uint32_t minRtt = 999999;
+        uint32_t maxRtt = 0;
+        uint64_t totalRtt = 0;
+
+        for (int i = 0; i < 4; ++i) {
+            sent++;
+            auto res = tcpip::NetworkStack::get().ping(ip);
+            if (res.success) {
+                received++;
+                if (res.rttMs < minRtt) minRtt = res.rttMs;
+                if (res.rttMs > maxRtt) maxRtt = res.rttMs;
+                totalRtt += res.rttMs;
+                out << "Reply from " << ip.toString() << ": bytes=" << res.bytesReceived 
+                    << " time=" << res.rttMs << "ms TTL=" << static_cast<int>(res.ttl) << "\n";
+            } else {
+                out << "Request timed out.\n";
+            }
+        }
+
+        out << "\nPing statistics for " << ip.toString() << ":\n"
+            << "    Packets: Sent = " << sent << ", Received = " << received << ", Lost = " << (sent - received)
+            << " (" << ((sent - received) * 100 / sent) << "% loss),\n";
+        if (received > 0) {
+            out << "Approximate round trip times in milli-seconds:\n"
+                << "    Minimum = " << minRtt << "ms, Maximum = " << maxRtt 
+                << "ms, Average = " << (totalRtt / received) << "ms\n\n";
+        }
+    }
+
+    void cmdIpConfig(const std::vector<std::string>& tokens, std::ostream& out) {
+        bool showAll = false;
+        if (tokens.size() > 1 && (tokens[1] == "/all" || tokens[1] == "-a")) {
+            showAll = true;
+        }
+
+        auto& net = tcpip::NetworkStack::get();
+        auto adapter = net.getAdapter();
+
+        out << "\nWindows IP Configuration\n\n";
+        if (showAll) {
+            out << "   Host Name . . . . . . . . . . . . : MicaNT-Workstation\n"
+                << "   Primary Dns Suffix  . . . . . . . : localdomain\n"
+                << "   Node Type . . . . . . . . . . . . : Broadcast\n"
+                << "   IP Routing Enabled. . . . . . . . : No\n"
+                << "   WINS Proxy Enabled. . . . . . . . : No\n\n";
+        }
+
+        out << "Ethernet adapter Ethernet0:\n\n"
+            << "   Connection-specific DNS Suffix  . : localdomain\n";
+        if (showAll && adapter) {
+            std::string desc;
+            for (wchar_t wc : adapter->getFriendlyName()) {
+                desc += (wc < 128) ? static_cast<char>(wc) : '?';
+            }
+            out << "   Description . . . . . . . . . . . : " << desc << "\n"
+                << "   Physical Address. . . . . . . . . : " << adapter->getMacAddress().toString() << "\n"
+                << "   DHCP Enabled. . . . . . . . . . . : No\n"
+                << "   Autoconfiguration Enabled . . . . : Yes\n";
+        }
+        out << "   Link-local IPv6 Address . . . . . : " << net.getLocalIpv6().toString() << "%1\n"
+            << "   IPv4 Address. . . . . . . . . . . : " << net.getLocalIp().toString() << "\n"
+            << "   Subnet Mask . . . . . . . . . . . : " << net.getSubnetMask().toString() << "\n"
+            << "   Default Gateway . . . . . . . . . : " << net.getGateway().toString() << "\n";
+        if (showAll) {
+            out << "   DNS Servers . . . . . . . . . . . : " << net.getDnsServer().toString() << "\n"
+                << "   NetBIOS over Tcpip. . . . . . . . : Enabled\n";
+        }
+        out << "\n";
+    }
+
+    void cmdNetstat(const std::vector<std::string>& /*tokens*/, std::ostream& out) {
+        auto endpoints = tcpip::NetworkStack::get().getActiveEndpoints();
+        out << "\nActive Connections\n\n"
+            << "  Proto  Local Address          Foreign Address        State\n";
+        for (const auto& ep : endpoints) {
+            std::string proto = (ep.type == tcpip::SOCK_STREAM) ? "TCP" : "UDP";
+            std::string local = ep.localIp.toString() + ":" + std::to_string(ep.localPort);
+            std::string remote = (ep.type == tcpip::SOCK_STREAM && ep.tcpState == tcpip::TcpState::Listen)
+                ? "0.0.0.0:0"
+                : ep.remoteIp.toString() + ":" + std::to_string(ep.remotePort);
+            std::string stateStr;
+            switch (ep.tcpState) {
+                case tcpip::TcpState::Listen: stateStr = "LISTENING"; break;
+                case tcpip::TcpState::SynSent: stateStr = "SYN_SENT"; break;
+                case tcpip::TcpState::SynReceived: stateStr = "SYN_RECEIVED"; break;
+                case tcpip::TcpState::Established: stateStr = "ESTABLISHED"; break;
+                case tcpip::TcpState::FinWait1:
+                case tcpip::TcpState::FinWait2: stateStr = "FIN_WAIT"; break;
+                case tcpip::TcpState::CloseWait: stateStr = "CLOSE_WAIT"; break;
+                case tcpip::TcpState::TimeWait: stateStr = "TIME_WAIT"; break;
+                default: stateStr = (ep.type == tcpip::SOCK_DGRAM) ? "*:*" : "CLOSED"; break;
+            }
+            out << "  " << std::left << std::setw(7) << proto
+                << std::setw(23) << local
+                << std::setw(23) << remote
+                << stateStr << "\n";
+        }
+        out << "\n";
     }
 
     static std::string trim(std::string_view s) {

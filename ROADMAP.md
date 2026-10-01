@@ -30,7 +30,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 11: Real Block Storage & FAT32/Partition Engine [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 12: AArch64 (ARM64) Architecture Port               [NEXT]       │
+│ Phase 12: Advanced Networking Stack & QUIC Engine     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 13: AArch64 (ARM64) Architecture Port               [NEXT]       │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -261,7 +263,40 @@
 
 ---
 
-### Phase 12: AArch64 (ARM64) Architecture Port (Next)
+### Phase 12: Advanced Networking Stack & QUIC Protocol Engine (100% Completed)
+*Goal: Provide a full, clean-room NT networking stack featuring NDIS 6.x driver interfaces, ARP, IPv4/IPv6, ICMPv4/v6 echo ping, UDP, TCP state machine, Next-Gen QUIC (RFC 9000), Winsock 2 (`ws2_32.dll`), IP Helper API (`iphlpapi.dll`), and interactive network shell utilities (`ipconfig`, `ping`, `netstat`).*
+- [x] **NDIS 6.x Network Driver Subsystem (`include/micant/ndis.hpp`)**:
+  - `MacAddress`: 48-bit IEEE 802.3 MAC address abstraction with broadcast (`FF-FF-FF-FF-FF-FF`) and string formatting.
+  - `EthernetHeader`: Standard 14-byte IEEE 802.3 frame header supporting IPv4 (`0x0800`), ARP (`0x0806`), and IPv6 (`0x86DD`).
+  - `INdisAdapter`: Polymorphic NDIS 6.x miniport interface (`sendPacket`, `registerReceiveHandler`, link state, speed, MTU, packet statistics).
+  - `VirtualNetworkAdapter`: High-performance 10-Gigabit virtual bus adapter supporting software loopback, peer cable interconnectivity, and RX/TX hardware statistics.
+- [x] **Clean-Room TCP/IP & Network Protocol Stack Engine (`include/micant/tcpip.hpp`)**:
+  - **Byte Order Utilities**: `htons`, `ntohs`, `htonl`, `ntohl` host-to-network endianness converters.
+  - **RFC 1071 16-Bit Checksum**: One's complement Internet checksum calculation and verification with end-around carry.
+  - **IPv4 Protocol Engine**: `Ipv4Address` class, subnet mask calculations, gateway routing, and packet encapsulation.
+  - **IPv6 Protocol Engine**: RFC 8200 IPv6 address architecture, loopback (`::1`), link-local address generation (`fe80::...`) via modified EUI-64 MAC expansion.
+  - **Address Resolution Protocol (ARP)**: RFC 826 packet framing, thread-safe `ArpCache` with cache lookups and auto-reply packet synthesis.
+  - **ICMPv4/v6 Echo Ping Subsystem**: Automated Echo Request/Echo Reply processing, round-trip latency (`rttMs`) measurement, and TTL verification.
+  - **UDP Transport Protocol**: `SOCK_DGRAM` connectionless datagram dispatching, port demultiplexing, and UDP checksum generation.
+  - **TCP Connection State Machine**: RFC 793 / RFC 9293 11-state transition model (`CLOSED`, `LISTEN`, `SYN_SENT`, `SYN_RECEIVED`, `ESTABLISHED`, `FIN_WAIT_1`, `FIN_WAIT_2`, `CLOSE_WAIT`, `CLOSING`, `LAST_ACK`, `TIME_WAIT`), 3-way handshake SYN/ACK synchronization, and bidirectional byte-stream delivery.
+  - **Next-Gen Protocol - QUIC (RFC 9000)**: Clean-room framing for QUIC Long Headers (Initial / 0-RTT / Handshake / Retry with Version 1 `0x00000001`) and Short Headers (1-RTT, Spin Bit for RTT measurement, and variable-length Packet Numbers).
+- [x] **Winsock 2 Live Socket Engine (`include/micant/ws2_32.hpp`)**:
+  - Live clean-room implementation of `WSAStartup`, `WSACleanup`, `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv`, `sendto`, `recvfrom`, `closesocket`, `gethostname`, `inet_addr`, `inet_ntoa`, `htons`, `ntohs`, `htonl`, and `ntohl`.
+- [x] **IP Helper API (`include/micant/iphlpapi.hpp`)**:
+  - Clean-room Win32 networking information APIs (`GetAdaptersInfo`, `GetNetworkParams`) registered in `ldr::DynamicLoader` for unmodified application consumption.
+- [x] **Network Shell Utilities (`include/micant/shell.hpp`)**:
+  - `ipconfig` & `ipconfig /all`: Detailed adapter enumeration, IPv4, IPv6 link-local, MAC address, gateway, and DNS servers.
+  - `ping`: Full ICMP ping utility sending 4 echo probes with packet loss statistics and RTT min/max/average metrics.
+  - `netstat`: Connection viewer listing active TCP and UDP endpoints, local/foreign addresses, and TCP state machine states.
+- [x] **Kernel Boot Networking Handover (`kernel/main.cpp`)**:
+  - Executive boot initialization of `tcpip::NetworkStack`, activating `\Device\NdisMicaNic0` with 10 Gbps virtual bus and `iphlpapi` export bindings.
+- [x] **Unit Test Suite 39 (`Test_NdisAndTcpIpNetworkStack`)**:
+  - Comprehensive 11-part automated verification covering NDIS frame transmission, ARP resolution, IPv4 checksums, IPv6 link-local, ICMP ping, UDP transport, TCP 3-way handshake & HTTP stream exchange, QUIC RFC 9000 framing, Winsock 2 API, IP Helper API, and shell network commands.
+  - All 39 unit test suites passing with 100% success rate (39 Passed, 0 Failed).
+
+---
+
+### Phase 13: AArch64 (ARM64) Architecture Port (Next)
 *Goal: Expand MicaNT hardware reach to 64-bit ARM architectures (Apple Silicon, Snapdragon X Elite, Raspberry Pi 5).*
 - [ ] **ARM64 Exception Levels**: EL1 (Kernel / Executive) and EL0 (Ring 3 Userland).
 - [ ] **ARM64 Translation Tables**: TTBR0 (Userland) / TTBR1 (Kernel Executive) page table walks.

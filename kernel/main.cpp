@@ -36,6 +36,9 @@
 #include "micant/generated_nt_api.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
+#include "micant/ndis.hpp"
+#include "micant/tcpip.hpp"
+#include "micant/iphlpapi.hpp"
 #include "micant/shell.hpp"
 
 using namespace micant;
@@ -164,6 +167,15 @@ int main(int argc, char* argv[]) {
         L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\MicaTelemetry"
     );
     std::cout << "[MicaNT Boot] [Driver] Loaded \\Driver\\MicaTelemetry on \\Device\\MicaTelemetry (Status: ACTIVE)\n";
+
+    // 5.3 Initialize NDIS 6.x and TCP/IP Network Stack
+    std::cout << "[MicaNT Boot] [Ndis & Tcpip] Initializing NDIS 6.x and TCP/IP Network Stack...\n";
+    auto& netStack = tcpip::NetworkStack::get();
+    netStack.initialize();
+    std::cout << "[MicaNT Boot] [Ndis & Tcpip] Network adapter \\Device\\NdisMicaNic0 active (IPv4: "
+              << netStack.getLocalIp().toString() << "/24, IPv6: "
+              << netStack.getLocalIpv6().toString() << "%1, 10 Gbps Virtual Bus)\n";
+    iphlpapi::InitializeIpHelperApi();
 
     // 6. Initialize I/O Completion Port (IOCP) Subsystem
     std::cout << "[MicaNT Boot] [Io & IOCP] Initializing I/O Completion Port Subsystem...\n";

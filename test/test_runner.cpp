@@ -51,6 +51,9 @@
 #include "micant/shell.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
+#include "micant/ndis.hpp"
+#include "micant/tcpip.hpp"
+#include "micant/iphlpapi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -3224,6 +3227,243 @@ void Test_StorageAndFat32FileSystem() {
     TEST_ASSERT(st == NtStatus::UnrecognizedVolume, "Blank disk must return UnrecognizedVolume for GPT");
 }
 
+// ============================================================================
+// Suite 39: NDIS 6.x, TCP/IP, Next-Gen QUIC, and Winsock Subsystem Tests
+// ============================================================================
+void Test_NdisAndTcpIpNetworkStack() {
+    // 1. NDIS 6.x Virtual Ethernet Adapter Verification
+    auto vNic = std::make_shared<ndis::VirtualNetworkAdapter>(
+        L"\\Device\\NdisTestNic",
+        L"MicaNT Test Ethernet",
+        ndis::MacAddress(0x02, 0x00, 0x4D, 0x49, 0x43, 0x41), // "MICA"
+        1500,
+        10'000'000'000ULL
+    );
+    TEST_ASSERT(vNic->getMacAddress().toString() == "02-00-4D-49-43-41", "MAC address string format must match");
+    TEST_ASSERT(vNic->getMtu() == 1500, "MTU must be 1500");
+    TEST_ASSERT(vNic->getSpeedBps() == 10'000'000'000ULL, "Speed must be 10 Gbps");
+    TEST_ASSERT(vNic->getLinkState() == ndis::MediaConnectState::Connected, "Link state must be Connected");
+
+    // Frame transmission
+    std::string testPayload = "MicaNT NDIS 6.x Frame Transmission Test Payload";
+    auto frame = ndis::buildEthernetFrame(
+        ndis::MacAddress::broadcast(),
+        vNic->getMacAddress(),
+        ndis::ETHERTYPE_IPV4,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(testPayload.data()), testPayload.size())
+    );
+    TEST_ASSERT(frame.size() == ndis::ETH_HLEN + testPayload.size(), "Frame size must match header + payload");
+
+    const auto* ethHdr = reinterpret_cast<const ndis::EthernetHeader*>(frame.data());
+    TEST_ASSERT(ethHdr->getEtherType() == ndis::ETHERTYPE_IPV4, "EtherType must be IPv4 (0x0800)");
+    TEST_ASSERT(ethHdr->destMac.isBroadcast(), "Destination MAC must be broadcast");
+
+    NtStatus st = vNic->sendPacket(frame);
+    TEST_ASSERT(NT_SUCCESS(st), "vNic->sendPacket must succeed");
+    auto stats = vNic->getStatistics();
+    TEST_ASSERT(stats.txPackets == 1, "Tx packet count must be 1");
+    TEST_ASSERT(stats.txBytes == frame.size(), "Tx bytes must match frame length");
+
+    // 2. TCP/IP Stack & ARP Resolution
+    auto& net = tcpip::NetworkStack::get();
+    net.initialize(vNic);
+
+    TEST_ASSERT(net.getLocalIp().toString() == "192.168.1.100", "Local IP must be 192.168.1.100");
+    TEST_ASSERT(net.getSubnetMask().toString() == "255.255.255.0", "Subnet mask must be 255.255.255.0");
+    TEST_ASSERT(net.getGateway().toString() == "192.168.1.1", "Gateway IP must be 192.168.1.1");
+    TEST_ASSERT(net.getDnsServer().toString() == "8.8.8.8", "DNS server must be 8.8.8.8");
+
+    ndis::MacAddress resolvedMac;
+    bool resolved = net.resolveArp(tcpip::Ipv4Address::loopback(), resolvedMac);
+    TEST_ASSERT(resolved, "Loopback ARP resolution must succeed");
+    TEST_ASSERT(resolvedMac == vNic->getMacAddress(), "Loopback MAC must match adapter MAC");
+
+    resolved = net.resolveArp(net.getGateway(), resolvedMac);
+    TEST_ASSERT(resolved, "Gateway ARP resolution must succeed from cache");
+
+    // 3. IPv4 Internet Checksum Algorithm (RFC 1071)
+    uint8_t sampleIpHeader[] = {
+        0x45, 0x00, 0x00, 0x3c, 0x1c, 0x46, 0x40, 0x00,
+        0x40, 0x06, 0x00, 0x00, // zero checksum for calculation
+        0xc0, 0xa8, 0x01, 0x64, // 192.168.1.100
+        0xc0, 0xa8, 0x01, 0x01  // 192.168.1.1
+    };
+    uint16_t calcCsum = tcpip::calculateInternetChecksum(sampleIpHeader, sizeof(sampleIpHeader));
+    TEST_ASSERT(calcCsum != 0, "Checksum must be calculated");
+    *reinterpret_cast<uint16_t*>(sampleIpHeader + 10) = calcCsum;
+    uint16_t verifyCsum = tcpip::calculateInternetChecksum(sampleIpHeader, sizeof(sampleIpHeader));
+    TEST_ASSERT(verifyCsum == 0, "Checksum verification must yield 0 (100% valid)");
+
+    // 4. IPv6 Addressing & Loopback (RFC 8200)
+    auto v6Loopback = tcpip::Ipv6Address::loopback();
+    TEST_ASSERT(v6Loopback.isLoopback(), "IPv6 address must report isLoopback");
+    TEST_ASSERT(v6Loopback.toString() == "::1", "IPv6 loopback string must be '::1'");
+
+    auto v6LinkLocal = tcpip::Ipv6Address::linkLocalMica();
+    TEST_ASSERT(!v6LinkLocal.isZero(), "IPv6 link local must not be zero");
+    TEST_ASSERT(v6LinkLocal.toString().find("fe80:") == 0, "IPv6 link local must begin with fe80:");
+
+    // 5. ICMPv4 Echo Request & Reply (Ping Engine)
+    auto pingResult = net.ping(tcpip::Ipv4Address::loopback());
+    TEST_ASSERT(pingResult.success, "Ping 127.0.0.1 must succeed");
+    TEST_ASSERT(pingResult.bytesReceived == 32, "Ping bytes received must be 32");
+    TEST_ASSERT(pingResult.ttl == 64, "Ping TTL must be 64");
+    TEST_ASSERT(pingResult.rttMs <= 10, "Ping round trip time must be <= 10ms for in-memory stack");
+
+    // 6. UDP Transport Layer Datagram Transmission
+    int udpServer = net.createSocket(tcpip::AF_INET, tcpip::SOCK_DGRAM, tcpip::IPPROTO_UDP);
+    TEST_ASSERT(udpServer > 0, "createSocket UDP server must succeed");
+    bool bound = net.bindSocket(udpServer, tcpip::Ipv4Address::loopback(), 9876);
+    TEST_ASSERT(bound, "bindSocket UDP server to port 9876 must succeed");
+
+    int udpClient = net.createSocket(tcpip::AF_INET, tcpip::SOCK_DGRAM, tcpip::IPPROTO_UDP);
+    TEST_ASSERT(udpClient > 0, "createSocket UDP client must succeed");
+
+    std::string udpMsg = "MicaNT-UDP-FastPath-Datagram";
+    int sentUdp = net.sendToSocket(udpClient, udpMsg.data(), udpMsg.size(), tcpip::Ipv4Address::loopback(), 9876);
+    TEST_ASSERT(sentUdp == static_cast<int>(udpMsg.size()), "sendToSocket must transmit all bytes");
+
+    char udpRecvBuf[128]{};
+    int recvdUdp = net.recvSocket(udpServer, udpRecvBuf, sizeof(udpRecvBuf));
+    TEST_ASSERT(recvdUdp == static_cast<int>(udpMsg.size()), "recvSocket must receive all UDP bytes");
+    TEST_ASSERT(std::string(udpRecvBuf, recvdUdp) == udpMsg, "Received UDP payload must match transmitted string");
+
+    net.closeSocket(udpServer);
+    net.closeSocket(udpClient);
+
+    // 7. TCP Connection 3-Way Handshake & Bidirectional Stream
+    int tcpServer = net.createSocket(tcpip::AF_INET, tcpip::SOCK_STREAM, tcpip::IPPROTO_TCP);
+    TEST_ASSERT(tcpServer > 0, "createSocket TCP server must succeed");
+    bound = net.bindSocket(tcpServer, tcpip::Ipv4Address::loopback(), 8080);
+    TEST_ASSERT(bound, "bindSocket TCP server port 8080 must succeed");
+    bool listening = net.listenSocket(tcpServer, 5);
+    TEST_ASSERT(listening, "listenSocket TCP server must succeed");
+
+    int tcpClient = net.createSocket(tcpip::AF_INET, tcpip::SOCK_STREAM, tcpip::IPPROTO_TCP);
+    TEST_ASSERT(tcpClient > 0, "createSocket TCP client must succeed");
+    bool connected = net.connectSocket(tcpClient, tcpip::Ipv4Address::loopback(), 8080);
+    TEST_ASSERT(connected, "connectSocket TCP client to 127.0.0.1:8080 must succeed");
+
+    tcpip::Ipv4Address acceptedClientIp;
+    uint16_t acceptedClientPort = 0;
+    int acceptedSock = net.acceptSocket(tcpServer, acceptedClientIp, acceptedClientPort);
+    TEST_ASSERT(acceptedSock > 0, "acceptSocket on TCP server must return valid connected socket");
+
+    // Client -> Server Stream Transfer (HTTP Request)
+    std::string httpRequest = "GET /index.html HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n";
+    int sentTcp = net.sendSocket(tcpClient, httpRequest.data(), httpRequest.size());
+    TEST_ASSERT(sentTcp == static_cast<int>(httpRequest.size()), "Client sendSocket must transmit all bytes");
+
+    char serverRecvBuf[256]{};
+    int recvdTcp = net.recvSocket(acceptedSock, serverRecvBuf, sizeof(serverRecvBuf));
+    TEST_ASSERT(recvdTcp == static_cast<int>(httpRequest.size()), "Server recvSocket must receive all bytes");
+    TEST_ASSERT(std::string(serverRecvBuf, recvdTcp) == httpRequest, "Server received payload must match HTTP request");
+
+    // Server -> Client Stream Transfer (HTTP Response)
+    std::string httpResponse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\nHello from MicaNT";
+    sentTcp = net.sendSocket(acceptedSock, httpResponse.data(), httpResponse.size());
+    TEST_ASSERT(sentTcp == static_cast<int>(httpResponse.size()), "Server sendSocket must transmit all bytes");
+
+    char clientRecvBuf[256]{};
+    recvdTcp = net.recvSocket(tcpClient, clientRecvBuf, sizeof(clientRecvBuf));
+    TEST_ASSERT(recvdTcp == static_cast<int>(httpResponse.size()), "Client recvSocket must receive all bytes");
+    TEST_ASSERT(std::string(clientRecvBuf, recvdTcp) == httpResponse, "Client received payload must match HTTP response");
+
+    net.closeSocket(tcpClient);
+    net.closeSocket(acceptedSock);
+    net.closeSocket(tcpServer);
+
+    // 8. Next-Gen QUIC Protocol Header Framing (RFC 9000)
+    // Long Header: Initial packet (Packet Type 0x00, Version 1)
+    tcpip::QuicLongHeader qlh{};
+    qlh.flags = 0xC0; // Long Header (0x80) | Fixed Bit (0x40) | Initial (0x00)
+    qlh.version = tcpip::htonl(0x00000001); // QUIC v1
+    qlh.dcil = 8;
+    qlh.scil = 8;
+
+    TEST_ASSERT(qlh.isLongHeader(), "QUIC packet must be recognized as Long Header");
+    TEST_ASSERT(qlh.getPacketType() == 0, "QUIC packet type must be 0 (Initial)");
+    TEST_ASSERT(qlh.getVersion() == 1, "QUIC version must be 1 (RFC 9000)");
+
+    // Short Header: 1-RTT packet (Spin bit 1, Key Phase 0, Packet Number Length 2)
+    tcpip::QuicShortHeader qsh{};
+    qsh.flags = 0x61; // Short Header (0x00) | Fixed Bit (0x40) | Spin Bit (0x20) | PN Len (0x01 = 2 bytes)
+    TEST_ASSERT(qsh.isShortHeader(), "QUIC packet must be recognized as Short Header");
+    TEST_ASSERT(qsh.getSpinBit(), "QUIC spin bit must be true");
+    TEST_ASSERT(qsh.getPacketNumberLength() == 2, "QUIC packet number length must be 2 bytes");
+
+    // 9. Winsock 2 (ws2_32.dll) High-Level API Verification
+    ws2_32::WSADATA wsaData{};
+    int wsaRc = ws2_32::WSAStartup(0x0202, &wsaData);
+    TEST_ASSERT(wsaRc == 0, "WSAStartup must succeed");
+    TEST_ASSERT(wsaData.wVersion == 0x0202, "Winsock version must be 2.2");
+
+    ws2_32::SOCKET wsaSock = ws2_32::socket(ws2_32::AF_INET, ws2_32::SOCK_STREAM, ws2_32::IPPROTO_TCP);
+    TEST_ASSERT(wsaSock != ws2_32::INVALID_SOCKET, "Winsock socket() must return valid descriptor");
+
+    ws2_32::sockaddr_in saddr{};
+    saddr.sin_family = ws2_32::AF_INET;
+    saddr.sin_port = ws2_32::htons(12345);
+    saddr.sin_addr.S_un.S_addr = ws2_32::inet_addr("127.0.0.1");
+    int bindRc = ws2_32::bind(wsaSock, reinterpret_cast<const ws2_32::sockaddr*>(&saddr), sizeof(saddr));
+    TEST_ASSERT(bindRc == 0, "Winsock bind() must succeed");
+
+    int closeRc = ws2_32::closesocket(wsaSock);
+    TEST_ASSERT(closeRc == 0, "Winsock closesocket() must succeed");
+
+    char hostBuf[64]{};
+    int hostRc = ws2_32::gethostname(hostBuf, sizeof(hostBuf));
+    TEST_ASSERT(hostRc == 0, "Winsock gethostname() must succeed");
+    TEST_ASSERT(std::string(hostBuf) == "MicaNT-Workstation", "Hostname must be MicaNT-Workstation");
+
+    // 10. IP Helper API (iphlpapi.dll) Verification
+    iphlpapi::IP_ADAPTER_INFO adaptInfo{};
+    uint32_t adaptBufLen = sizeof(adaptInfo);
+    uint32_t iphlpRc = iphlpapi::GetAdaptersInfo(&adaptInfo, &adaptBufLen);
+    TEST_ASSERT(iphlpRc == iphlpapi::ERROR_SUCCESS, "GetAdaptersInfo must return ERROR_SUCCESS");
+    TEST_ASSERT(std::string(adaptInfo.ipAddressList.ipAddress.str) == "192.168.1.100", "Adapter IP must be 192.168.1.100");
+    TEST_ASSERT(std::string(adaptInfo.gatewayList.ipAddress.str) == "192.168.1.1", "Gateway must be 192.168.1.1");
+    TEST_ASSERT(adaptInfo.address[0] == 0x02 && adaptInfo.address[1] == 0x00, "Adapter MAC prefix must be 02-00");
+
+    iphlpapi::FIXED_INFO fixedInfo{};
+    uint32_t fixedBufLen = sizeof(fixedInfo);
+    iphlpRc = iphlpapi::GetNetworkParams(&fixedInfo, &fixedBufLen);
+    TEST_ASSERT(iphlpRc == iphlpapi::ERROR_SUCCESS, "GetNetworkParams must return ERROR_SUCCESS");
+    TEST_ASSERT(std::string(fixedInfo.hostName) == "MicaNT-Workstation", "HostName must be MicaNT-Workstation");
+    TEST_ASSERT(std::string(fixedInfo.dnsServerList.ipAddress.str) == "8.8.8.8", "DNS Server must be 8.8.8.8");
+
+    // 11. Shell Built-in Network Commands (ipconfig, ping, netstat)
+    shell::CommandShell cmdShell;
+    std::ostringstream oss;
+
+    // ipconfig
+    oss.str("");
+    int shRc = cmdShell.execute("ipconfig", oss);
+    TEST_ASSERT(shRc == 0, "Shell ipconfig command must succeed");
+    TEST_ASSERT(oss.str().find("192.168.1.100") != std::string::npos, "ipconfig output must include 192.168.1.100");
+    TEST_ASSERT(oss.str().find("255.255.255.0") != std::string::npos, "ipconfig output must include 255.255.255.0");
+
+    // ipconfig /all
+    oss.str("");
+    shRc = cmdShell.execute("ipconfig /all", oss);
+    TEST_ASSERT(shRc == 0, "Shell ipconfig /all command must succeed");
+    TEST_ASSERT(oss.str().find("Physical Address") != std::string::npos, "ipconfig /all must output MAC address");
+    TEST_ASSERT(oss.str().find("DNS Servers") != std::string::npos, "ipconfig /all must output DNS servers");
+
+    // ping
+    oss.str("");
+    shRc = cmdShell.execute("ping 127.0.0.1", oss);
+    TEST_ASSERT(shRc == 0, "Shell ping 127.0.0.1 command must succeed");
+    TEST_ASSERT(oss.str().find("Reply from 127.0.0.1") != std::string::npos, "ping output must show Echo Reply");
+    TEST_ASSERT(oss.str().find("Packets: Sent = 4, Received = 4") != std::string::npos, "ping output must show 4 packets received (0% loss)");
+
+    // netstat
+    oss.str("");
+    shRc = cmdShell.execute("netstat", oss);
+    TEST_ASSERT(shRc == 0, "Shell netstat command must succeed");
+    TEST_ASSERT(oss.str().find("Active Connections") != std::string::npos, "netstat output must show Active Connections table");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -3267,6 +3507,7 @@ int main() {
     RUN_TEST(Test_ExpandedWin32AndNtSystemCalls);
     RUN_TEST(Test_MsvcrtBridge_And_CommandShell);
     RUN_TEST(Test_StorageAndFat32FileSystem);
+    RUN_TEST(Test_NdisAndTcpIpNetworkStack);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
