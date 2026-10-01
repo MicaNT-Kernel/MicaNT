@@ -22,7 +22,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 7: WoW64 32-Bit Subsystem                       [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 8: AArch64 (ARM64) Architecture Port                [NEXT]       │
+│ Phase 8: Dynamic PE Import Binding & Base Relocations [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 9: AArch64 (ARM64) Architecture Port                [NEXT]       │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -134,11 +136,33 @@
 - [x] **Test Suites 31 & 32 (`test/test_runner.cpp`)**:
   - Suite 31: `Test_Wow64_PebTebAndHeavensGate` (PEB32/TEB32 layout, 32-bit PE parsing, Heaven's Gate transitions).
   - Suite 32: `Test_Wow64_SyscallThunkingAndFsRedirection` (FS/Registry virtualization, 32-to-64 bit syscall thunking).
-  - All 32 unit test suites passing with 100% success rate.
 
 ---
 
-### Phase 8: AArch64 (ARM64) Architecture Port (Next)
+### Phase 8: Dynamic PE Import Binding & Base Relocations (100% Completed)
+*Goal: Enable unmodified, third-party compiled 64-bit Windows PE binaries to execute against MicaNT through dynamic Import Address Table (IAT) binding and base relocations.*
+- [x] **PE `.idata` Import Directory Parser (`include/micant/pe.hpp`)**:
+  - `ImageImportDescriptor` directory table traversal with null-descriptor termination.
+  - RVA-to-file-offset translation (`PeLoader::rvaToOffset`) across multi-section PE images.
+  - Import Lookup Table (INT / `OriginalFirstThunk`) walking with dual resolution modes:
+    - Named symbol resolution (`ImageImportByName`, hint + ASCII function name).
+    - Ordinal symbol resolution (`IMAGE_ORDINAL_FLAG64` / `IMAGE_ORDINAL_FLAG32`).
+- [x] **Import Address Table (IAT) Binding Engine (`PeLoader::bindImports`)**:
+  - Direct userland IAT slot binding writing 64-bit function pointers directly into mapped image memory.
+  - Seamless integration with clean-room `ldr::DynamicLoader` export registry.
+  - Standard Win32 export table pre-registration (`win32::InitializeWin32SubsystemExports()` in `include/micant/kernel32.hpp`) providing 34+ core `kernel32.dll` and `ntdll.dll` functions.
+  - Case-insensitive DLL module name normalization matching Windows OS behavior (`KERNEL32.DLL` == `kernel32.dll`).
+- [x] **Base Relocation Engine (`PeLoader::applyRelocations`)**:
+  - Traversal of PE `.reloc` section (`IMAGE_DIRECTORY_ENTRY_BASERELOC`).
+  - Parsing multi-entry `ImageBaseRelocation` blocks with bounds-checked arithmetic.
+  - `IMAGE_REL_BASED_DIR64` (64-bit pointer adjustment) and `IMAGE_REL_BASED_HIGHLOW` (32-bit pointer adjustment) delta application for images loaded away from preferred `ImageBase`.
+- [x] **Test Suite 33 (`test/test_runner.cpp`)**:
+  - `Test_PeLoader_DynamicImportBindingAndUnmodifiedBinary`: Synthesizes an authentic in-memory 64-bit PE image with `.text`, `.rdata`, and `.reloc`, parses imports, binds IAT against live `kernel32.dll` exports, invokes `GetTickCount64` directly through the bound IAT slot, and applies base relocations against simulated rebase delta.
+  - All 33 unit test suites passing with 100% success rate.
+
+---
+
+### Phase 9: AArch64 (ARM64) Architecture Port (Next)
 *Goal: Expand MicaNT hardware reach to 64-bit ARM architectures (Apple Silicon, Snapdragon X Elite, Raspberry Pi 5).*
 - [ ] **ARM64 Exception Levels**: EL1 (Kernel / Executive) and EL0 (Ring 3 Userland).
 - [ ] **ARM64 Translation Tables**: TTBR0 (Userland) / TTBR1 (Kernel Executive) page table walks.

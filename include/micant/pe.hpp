@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <string>
 #include <span>
 #include <vector>
 #include <optional>
@@ -16,6 +17,41 @@ inline constexpr uint16_t MACHINE_AMD64 = 0x8664;
 inline constexpr uint16_t MACHINE_I386  = 0x014C;
 inline constexpr uint16_t PE32PLUS_MAGIC = 0x020B; // 64-bit Optional Header
 inline constexpr uint16_t PE32_MAGIC     = 0x010B; // 32-bit Optional Header
+
+// Standard PE Signatures & File Header Characteristics
+inline constexpr uint16_t IMAGE_DOS_SIGNATURE           = DOS_MAGIC;
+inline constexpr uint32_t IMAGE_NT_SIGNATURE            = NT_SIGNATURE;
+inline constexpr uint16_t IMAGE_FILE_MACHINE_AMD64      = MACHINE_AMD64;
+inline constexpr uint16_t IMAGE_FILE_MACHINE_I386       = MACHINE_I386;
+inline constexpr uint16_t IMAGE_NT_OPTIONAL_HDR64_MAGIC = PE32PLUS_MAGIC;
+inline constexpr uint16_t IMAGE_NT_OPTIONAL_HDR32_MAGIC = PE32_MAGIC;
+inline constexpr uint16_t IMAGE_FILE_EXECUTABLE_IMAGE   = 0x0002;
+inline constexpr uint16_t IMAGE_FILE_LARGE_ADDRESS_AWARE = 0x0020;
+inline constexpr uint16_t IMAGE_SUBSYSTEM_WINDOWS_GUI   = 2;
+inline constexpr uint16_t IMAGE_SUBSYSTEM_WINDOWS_CUI   = 3;
+inline constexpr uint32_t IMAGE_NUMBEROF_DIRECTORY_ENTRIES = 16;
+
+// Standard Data Directory Indices
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_EXPORT    = 0;
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_IMPORT    = 1;
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_RESOURCE  = 2;
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_EXCEPTION = 3;
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_SECURITY  = 4;
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_BASERELOC = 5;
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_DEBUG     = 6;
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_IAT       = 12;
+
+// Import Ordinal Flags
+inline constexpr uint64_t IMAGE_ORDINAL_FLAG64 = 0x8000000000000000ULL;
+inline constexpr uint32_t IMAGE_ORDINAL_FLAG32 = 0x80000000U;
+
+// Base Relocation Types
+inline constexpr uint16_t IMAGE_REL_BASED_ABSOLUTE = 0;
+inline constexpr uint16_t IMAGE_REL_BASED_HIGH     = 1;
+inline constexpr uint16_t IMAGE_REL_BASED_LOW      = 2;
+inline constexpr uint16_t IMAGE_REL_BASED_HIGHLOW  = 3;
+inline constexpr uint16_t IMAGE_REL_BASED_HIGHADJ  = 4;
+inline constexpr uint16_t IMAGE_REL_BASED_DIR64    = 10;
 
 #pragma pack(push, 1)
 
@@ -157,12 +193,46 @@ struct ImageSectionHeader {
     }
 };
 
+struct ImageImportDescriptor {
+    union {
+        uint32_t characteristics;
+        uint32_t originalFirstThunk; // RVA to Import Lookup Table (INT)
+    };
+    uint32_t timeDateStamp;
+    uint32_t forwarderChain;
+    uint32_t name; // RVA to null-terminated DLL name
+    uint32_t firstThunk; // RVA to Import Address Table (IAT)
+};
+
+struct ImageImportByName {
+    uint16_t hint;
+    char name[1]; // Null-terminated ASCII symbol name
+};
+
+struct ImageBaseRelocation {
+    uint32_t virtualAddress;
+    uint32_t sizeOfBlock;
+};
+
 #pragma pack(pop)
 
+struct ImportedSymbol {
+    std::string name;
+    uint16_t ordinal{0};
+    bool isOrdinal{false};
+    uint32_t iatRva{0}; // RVA in loaded image where function pointer is written
+};
+
+struct ImportedLibrary {
+    std::string libraryName;
+    std::vector<ImportedSymbol> symbols;
+};
+
 // Section Characteristics
-inline constexpr uint32_t IMAGE_SCN_MEM_EXECUTE = 0x20000000;
-inline constexpr uint32_t IMAGE_SCN_MEM_READ    = 0x40000000;
-inline constexpr uint32_t IMAGE_SCN_MEM_WRITE   = 0x80000000;
+inline constexpr uint32_t IMAGE_SCN_MEM_EXECUTE   = 0x20000000;
+inline constexpr uint32_t IMAGE_SCN_MEM_READ      = 0x40000000;
+inline constexpr uint32_t IMAGE_SCN_MEM_WRITE     = 0x80000000;
+inline constexpr uint32_t IMAGE_SCN_MEM_DISCARDABLE = 0x02000000;
 
 /**
  * @brief Clean-room 64-bit PE Image Parser & Loader.
@@ -230,6 +300,170 @@ public:
         outSections.clear();
         for (uint16_t i = 0; i < nt->fileHeader.numberOfSections; ++i) {
             outSections.push_back(section[i]);
+        }
+
+        return NtStatus::Success;
+    }
+
+    [[nodiscard]] static std::optional<size_t> rvaToOffset(
+        uint32_t rva,
+        const std::vector<ImageSectionHeader>& sections
+    ) noexcept {
+        for (const auto& sec : sections) {
+            uint32_t secSize = sec.misc.virtualSize ? sec.misc.virtualSize : sec.sizeOfRawData;
+            if (rva >= sec.virtualAddress && rva < sec.virtualAddress + secSize) {
+                return sec.pointerToRawData + (rva - sec.virtualAddress);
+            }
+        }
+        return std::nullopt;
+    }
+
+    static NtStatus parseImports(
+        std::span<const uint8_t> bytes,
+        const ImageNtHeaders64& headers,
+        const std::vector<ImageSectionHeader>& sections,
+        std::vector<ImportedLibrary>& outImports
+    ) {
+        outImports.clear();
+        if (headers.optionalHeader.numberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_IMPORT) {
+            return NtStatus::Success;
+        }
+
+        const auto& dir = headers.optionalHeader.dataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (dir.virtualAddress == 0 || dir.size == 0) {
+            return NtStatus::Success; // No imports
+        }
+
+        auto offsetOpt = rvaToOffset(dir.virtualAddress, sections);
+        if (!offsetOpt || *offsetOpt + sizeof(ImageImportDescriptor) > bytes.size()) {
+            return NtStatus::InvalidParameter;
+        }
+
+        const auto* desc = reinterpret_cast<const ImageImportDescriptor*>(bytes.data() + *offsetOpt);
+        while (desc->name != 0 && desc->firstThunk != 0) {
+            auto nameOffset = rvaToOffset(desc->name, sections);
+            if (!nameOffset || *nameOffset >= bytes.size()) {
+                break;
+            }
+
+            const char* dllNameStr = reinterpret_cast<const char*>(bytes.data() + *nameOffset);
+            ImportedLibrary lib;
+            lib.libraryName = dllNameStr;
+
+            // Use originalFirstThunk (INT) if present, else fallback to firstThunk (IAT)
+            uint32_t thunkRva = desc->originalFirstThunk ? desc->originalFirstThunk : desc->firstThunk;
+            auto thunkOffset = rvaToOffset(thunkRva, sections);
+            if (thunkOffset) {
+                const auto* thunkArray = reinterpret_cast<const uint64_t*>(bytes.data() + *thunkOffset);
+                size_t idx = 0;
+                while (thunkArray[idx] != 0) {
+                    uint64_t val = thunkArray[idx];
+                    ImportedSymbol sym;
+                    sym.iatRva = desc->firstThunk + static_cast<uint32_t>(idx * sizeof(uint64_t));
+
+                    if (val & IMAGE_ORDINAL_FLAG64) {
+                        sym.isOrdinal = true;
+                        sym.ordinal = static_cast<uint16_t>(val & 0xFFFF);
+                    } else {
+                        auto byNameOffset = rvaToOffset(static_cast<uint32_t>(val & 0xFFFFFFFF), sections);
+                        if (byNameOffset && *byNameOffset + 2 < bytes.size()) {
+                            const auto* ibn = reinterpret_cast<const ImageImportByName*>(bytes.data() + *byNameOffset);
+                            sym.isOrdinal = false;
+                            sym.name = ibn->name;
+                        }
+                    }
+                    lib.symbols.push_back(sym);
+                    idx++;
+                }
+            }
+
+            outImports.push_back(lib);
+            desc++;
+        }
+
+        return NtStatus::Success;
+    }
+
+    template <typename ResolverFunc>
+    static size_t bindImports(
+        uint8_t* loadedImageBase,
+        const std::vector<ImportedLibrary>& imports,
+        ResolverFunc&& resolver,
+        bool is64Bit = true
+    ) {
+        if (!loadedImageBase) return 0;
+        size_t resolvedCount = 0;
+
+        for (const auto& lib : imports) {
+            for (const auto& sym : lib.symbols) {
+                void* fnPtr = nullptr;
+                if (sym.isOrdinal) {
+                    fnPtr = resolver(lib.libraryName, "", sym.ordinal);
+                } else {
+                    fnPtr = resolver(lib.libraryName, sym.name, 0);
+                }
+
+                if (fnPtr) {
+                    if (is64Bit) {
+                        *reinterpret_cast<uint64_t*>(loadedImageBase + sym.iatRva) = reinterpret_cast<uint64_t>(fnPtr);
+                    } else {
+                        *reinterpret_cast<uint32_t*>(loadedImageBase + sym.iatRva) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(fnPtr));
+                    }
+                    resolvedCount++;
+                }
+            }
+        }
+
+        return resolvedCount;
+    }
+
+    static NtStatus applyRelocations(
+        uint8_t* loadedImageBase,
+        size_t imageSize,
+        const ImageNtHeaders64& headers,
+        uintptr_t actualBaseAddress
+    ) {
+        if (!loadedImageBase) return NtStatus::InvalidParameter;
+
+        int64_t delta = static_cast<int64_t>(actualBaseAddress) - static_cast<int64_t>(headers.optionalHeader.imageBase);
+        if (delta == 0) return NtStatus::Success; // Loaded at preferred base, no relocations needed
+
+        if (headers.optionalHeader.numberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_BASERELOC) {
+            return NtStatus::Success;
+        }
+
+        const auto& dir = headers.optionalHeader.dataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+        if (dir.virtualAddress == 0 || dir.size == 0) {
+            return NtStatus::Success;
+        }
+
+        if (dir.virtualAddress + dir.size > imageSize) {
+            return NtStatus::InvalidParameter;
+        }
+
+        uint32_t currentOffset = dir.virtualAddress;
+        uint32_t endOffset = dir.virtualAddress + dir.size;
+
+        while (currentOffset < endOffset) {
+            const auto* block = reinterpret_cast<const ImageBaseRelocation*>(loadedImageBase + currentOffset);
+            if (block->sizeOfBlock < sizeof(ImageBaseRelocation)) break;
+
+            uint32_t entryCount = (block->sizeOfBlock - sizeof(ImageBaseRelocation)) / sizeof(uint16_t);
+            const auto* entries = reinterpret_cast<const uint16_t*>(block + 1);
+
+            for (uint32_t i = 0; i < entryCount; ++i) {
+                uint16_t type = entries[i] >> 12;
+                uint16_t offset = entries[i] & 0x0FFF;
+                uint32_t targetRva = block->virtualAddress + offset;
+
+                if (type == IMAGE_REL_BASED_DIR64 && targetRva + sizeof(uint64_t) <= imageSize) {
+                    *reinterpret_cast<uint64_t*>(loadedImageBase + targetRva) += delta;
+                } else if (type == IMAGE_REL_BASED_HIGHLOW && targetRva + sizeof(uint32_t) <= imageSize) {
+                    *reinterpret_cast<uint32_t*>(loadedImageBase + targetRva) += static_cast<uint32_t>(delta);
+                }
+            }
+
+            currentOffset += block->sizeOfBlock;
         }
 
         return NtStatus::Success;

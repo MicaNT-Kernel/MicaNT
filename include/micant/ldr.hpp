@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cctype>
 #include <string_view>
 #include <vector>
 #include <memory>
@@ -108,14 +109,23 @@ public:
         return instance;
     }
 
+    static std::string normalizeKey(std::string_view moduleName, std::string_view functionName) {
+        std::string key;
+        key.reserve(moduleName.size() + 1 + functionName.size());
+        for (char c : moduleName) {
+            key.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        key.push_back('!');
+        key.append(functionName);
+        return key;
+    }
+
     void registerExport(std::string_view moduleName, std::string_view functionName, void* address) {
-        std::string key = std::string(moduleName) + "!" + std::string(functionName);
-        exportRegistry_[key] = address;
+        exportRegistry_[normalizeKey(moduleName, functionName)] = address;
     }
 
     [[nodiscard]] void* getExport(std::string_view moduleName, std::string_view functionName) const {
-        std::string key = std::string(moduleName) + "!" + std::string(functionName);
-        auto it = exportRegistry_.find(key);
+        auto it = exportRegistry_.find(normalizeKey(moduleName, functionName));
         if (it != exportRegistry_.end()) {
             return it->second;
         }

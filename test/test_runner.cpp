@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cassert>
+#include <cstring>
 #include <vector>
 #include <string>
 #include <span>
@@ -2327,6 +2328,232 @@ void Test_Wow64_SyscallThunkingAndFsRedirection() {
     TEST_ASSERT(NT_SUCCESS(stClose), "thunkNtClose must succeed");
 }
 
+void Test_PeLoader_DynamicImportBindingAndUnmodifiedBinary() {
+    // 1. Synthesize an authentic, valid 64-bit PE executable binary in memory
+    // Layout:
+    // Header size: 0x400 (DOS Header, Stub, NT Headers, Section Headers)
+    // Section 1 (.text):   RVA 0x1000, Size 0x200, Raw 0x400, Size 0x200
+    // Section 2 (.rdata):  RVA 0x2000, Size 0x400, Raw 0x600, Size 0x400 (contains .idata)
+    // Section 3 (.reloc):  RVA 0x3000, Size 0x200, Raw 0xA00, Size 0x200 (contains base relocations)
+    // Total raw file size: 0xC00 (3072 bytes)
+
+    std::vector<uint8_t> fileBytes(0xC00, 0);
+
+    // DOS Header
+    auto* dos = reinterpret_cast<pe::ImageDosHeader*>(fileBytes.data());
+    dos->e_magic = pe::IMAGE_DOS_SIGNATURE; // "MZ"
+    dos->e_lfanew = 0x80; // Offset to NT Headers
+
+    // NT Headers 64
+    auto* nt = reinterpret_cast<pe::ImageNtHeaders64*>(fileBytes.data() + 0x80);
+    nt->signature = pe::IMAGE_NT_SIGNATURE; // "PE\0\0"
+    nt->fileHeader.machine = pe::IMAGE_FILE_MACHINE_AMD64; // 0x8664
+    nt->fileHeader.numberOfSections = 3;
+    nt->fileHeader.sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+    nt->fileHeader.characteristics = pe::IMAGE_FILE_EXECUTABLE_IMAGE | pe::IMAGE_FILE_LARGE_ADDRESS_AWARE;
+
+    nt->optionalHeader.magic = pe::IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    nt->optionalHeader.addressOfEntryPoint = 0x1000;
+    nt->optionalHeader.imageBase = 0x0000000140000000ULL;
+    nt->optionalHeader.sectionAlignment = 0x1000;
+    nt->optionalHeader.fileAlignment = 0x200;
+    nt->optionalHeader.sizeOfImage = 0x4000;
+    nt->optionalHeader.sizeOfHeaders = 0x400;
+    nt->optionalHeader.subsystem = pe::IMAGE_SUBSYSTEM_WINDOWS_CUI;
+    nt->optionalHeader.numberOfRvaAndSizes = pe::IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+
+    // Data Directory entries
+    nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IMPORT].virtualAddress = 0x2000; // .rdata
+    nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IMPORT].size = sizeof(pe::ImageImportDescriptor) * 2;
+
+    nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_BASERELOC].virtualAddress = 0x3000; // .reloc
+    nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_BASERELOC].size = sizeof(pe::ImageBaseRelocation) + 2 * sizeof(uint16_t);
+
+    // Section Headers (immediately following optional header)
+    auto* secHeaders = reinterpret_cast<pe::ImageSectionHeader*>(
+        fileBytes.data() + 0x80 + sizeof(uint32_t) + sizeof(pe::ImageFileHeader) + sizeof(pe::ImageOptionalHeader64)
+    );
+
+    // Section 1: .text
+    std::memcpy(secHeaders[0].name, ".text\0\0\0", 8);
+    secHeaders[0].misc.virtualSize = 0x200;
+    secHeaders[0].virtualAddress = 0x1000;
+    secHeaders[0].sizeOfRawData = 0x200;
+    secHeaders[0].pointerToRawData = 0x400;
+    secHeaders[0].characteristics = pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_MEM_EXECUTE;
+
+    // Section 2: .rdata
+    std::memcpy(secHeaders[1].name, ".rdata\0\0", 8);
+    secHeaders[1].misc.virtualSize = 0x400;
+    secHeaders[1].virtualAddress = 0x2000;
+    secHeaders[1].sizeOfRawData = 0x400;
+    secHeaders[1].pointerToRawData = 0x600;
+    secHeaders[1].characteristics = pe::IMAGE_SCN_MEM_READ;
+
+    // Section 3: .reloc
+    std::memcpy(secHeaders[2].name, ".reloc\0\0", 8);
+    secHeaders[2].misc.virtualSize = 0x200;
+    secHeaders[2].virtualAddress = 0x3000;
+    secHeaders[2].sizeOfRawData = 0x200;
+    secHeaders[2].pointerToRawData = 0xA00;
+    secHeaders[2].characteristics = pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_MEM_DISCARDABLE;
+
+    // Populate .rdata (raw offset 0x600, virtual RVA 0x2000):
+    // Layout in .rdata:
+    // 0x2000 (raw 0x600): ImageImportDescriptor for kernel32.dll
+    //   - originalFirstThunk = 0x2050 (INT)
+    //   - name = 0x2030 (points to "kernel32.dll\0")
+    //   - firstThunk = 0x2080 (IAT)
+    // 0x2014 (raw 0x614): Null terminating ImageImportDescriptor (zeros)
+    // 0x2030 (raw 0x630): DLL Name: "kernel32.dll\0"
+    // 0x2050 (raw 0x650): Import Lookup Table (INT) - 5 entries:
+    //   - INT[0]: 0x2100 (ImageImportByName for "GetTickCount64")
+    //   - INT[1]: 0x2120 (ImageImportByName for "ExitProcess")
+    //   - INT[2]: 0x2140 (ImageImportByName for "WriteConsoleW")
+    //   - INT[3]: pe::IMAGE_ORDINAL_FLAG64 | 42 (Ordinal 42)
+    //   - INT[4]: 0 (terminator)
+    // 0x2080 (raw 0x680): Initial IAT (same RVAs as INT)
+    //   - IAT[0]: 0x2100
+    //   - IAT[1]: 0x2120
+    //   - IAT[2]: 0x2140
+    //   - IAT[3]: pe::IMAGE_ORDINAL_FLAG64 | 42
+    //   - IAT[4]: 0
+    // 0x2100 (raw 0x700): ImageImportByName: hint=0, name="GetTickCount64\0"
+    // 0x2120 (raw 0x720): ImageImportByName: hint=1, name="ExitProcess\0"
+    // 0x2140 (raw 0x740): ImageImportByName: hint=2, name="WriteConsoleW\0"
+
+    auto* importDesc = reinterpret_cast<pe::ImageImportDescriptor*>(fileBytes.data() + 0x600);
+    importDesc->originalFirstThunk = 0x2050;
+    importDesc->name = 0x2030;
+    importDesc->firstThunk = 0x2080;
+
+    // DLL name string
+    const char dllName[] = "kernel32.dll";
+    std::memcpy(fileBytes.data() + 0x630, dllName, sizeof(dllName));
+
+    // INT table
+    auto* intTable = reinterpret_cast<uint64_t*>(fileBytes.data() + 0x650);
+    intTable[0] = 0x2100;
+    intTable[1] = 0x2120;
+    intTable[2] = 0x2140;
+    intTable[3] = pe::IMAGE_ORDINAL_FLAG64 | 42;
+    intTable[4] = 0;
+
+    // IAT table
+    auto* iatTable = reinterpret_cast<uint64_t*>(fileBytes.data() + 0x680);
+    iatTable[0] = 0x2100;
+    iatTable[1] = 0x2120;
+    iatTable[2] = 0x2140;
+    iatTable[3] = pe::IMAGE_ORDINAL_FLAG64 | 42;
+    iatTable[4] = 0;
+
+    // Symbols
+    auto* ibn1 = reinterpret_cast<pe::ImageImportByName*>(fileBytes.data() + 0x700);
+    ibn1->hint = 0;
+    std::memcpy(ibn1->name, "GetTickCount64\0", sizeof("GetTickCount64\0"));
+
+    auto* ibn2 = reinterpret_cast<pe::ImageImportByName*>(fileBytes.data() + 0x720);
+    ibn2->hint = 1;
+    std::memcpy(ibn2->name, "ExitProcess\0", sizeof("ExitProcess\0"));
+
+    auto* ibn3 = reinterpret_cast<pe::ImageImportByName*>(fileBytes.data() + 0x740);
+    ibn3->hint = 2;
+    std::memcpy(ibn3->name, "WriteConsoleW\0", sizeof("WriteConsoleW\0"));
+
+    // Populate .reloc (raw offset 0xA00, virtual RVA 0x3000):
+    // ImageBaseRelocation pointing to .text (RVA 0x1000) at offset 0x20
+    auto* relocBlock = reinterpret_cast<pe::ImageBaseRelocation*>(fileBytes.data() + 0xA00);
+    relocBlock->virtualAddress = 0x1000;
+    relocBlock->sizeOfBlock = sizeof(pe::ImageBaseRelocation) + 2 * sizeof(uint16_t);
+
+    auto* relocEntries = reinterpret_cast<uint16_t*>(fileBytes.data() + 0xA00 + sizeof(pe::ImageBaseRelocation));
+    relocEntries[0] = static_cast<uint16_t>((pe::IMAGE_REL_BASED_DIR64 << 12) | 0x0020);
+    relocEntries[1] = 0; // Padding (IMAGE_REL_BASED_ABSOLUTE)
+
+    // In .text at raw offset 0x420 (RVA 0x1020), put a 64-bit absolute address pointing to preferred base:
+    *reinterpret_cast<uint64_t*>(fileBytes.data() + 0x420) = 0x0000000140001000ULL;
+
+    // 2. Validate PE Header Inspection via PeLoader
+    pe::ImageNtHeaders64 parsedHeaders{};
+    std::vector<pe::ImageSectionHeader> parsedSections;
+    NtStatus stInspect = pe::PeLoader::inspect(fileBytes, parsedHeaders, parsedSections);
+    TEST_ASSERT(NT_SUCCESS(stInspect), "pe::PeLoader::inspect must successfully parse the 64-bit PE binary");
+    TEST_ASSERT(parsedSections.size() == 3, "Parsed sections count must equal 3 (.text, .rdata, .reloc)");
+    TEST_ASSERT(parsedHeaders.optionalHeader.imageBase == 0x0000000140000000ULL, "Preferred ImageBase must match 0x140000000");
+
+    // 3. Test Import Directory Parsing (INT -> Symbols & IAT RVAs)
+    std::vector<pe::ImportedLibrary> imports;
+    NtStatus stImports = pe::PeLoader::parseImports(fileBytes, parsedHeaders, parsedSections, imports);
+    TEST_ASSERT(NT_SUCCESS(stImports), "pe::PeLoader::parseImports must succeed on valid .idata directory");
+    TEST_ASSERT(imports.size() == 1, "Must parse exactly 1 imported DLL (kernel32.dll)");
+    TEST_ASSERT(imports[0].libraryName == "kernel32.dll", "Imported library name must match kernel32.dll");
+    TEST_ASSERT(imports[0].symbols.size() == 4, "Must parse 4 imported symbols");
+    TEST_ASSERT(imports[0].symbols[0].name == "GetTickCount64", "Symbol 0 must be GetTickCount64");
+    TEST_ASSERT(imports[0].symbols[0].iatRva == 0x2080, "GetTickCount64 IAT RVA must be 0x2080");
+    TEST_ASSERT(imports[0].symbols[1].name == "ExitProcess", "Symbol 1 must be ExitProcess");
+    TEST_ASSERT(imports[0].symbols[1].iatRva == 0x2088, "ExitProcess IAT RVA must be 0x2088");
+    TEST_ASSERT(imports[0].symbols[2].name == "WriteConsoleW", "Symbol 2 must be WriteConsoleW");
+    TEST_ASSERT(imports[0].symbols[2].iatRva == 0x2090, "WriteConsoleW IAT RVA must be 0x2090");
+    TEST_ASSERT(imports[0].symbols[3].isOrdinal, "Symbol 3 must be imported by ordinal");
+    TEST_ASSERT(imports[0].symbols[3].ordinal == 42, "Symbol 3 ordinal must be 42");
+    TEST_ASSERT(imports[0].symbols[3].iatRva == 0x2098, "Symbol 3 IAT RVA must be 0x2098");
+
+    // 4. Initialize Win32 Subsystem Exports
+    win32::InitializeWin32SubsystemExports();
+
+    // 5. Simulate Memory-Mapped Executable Image
+    // A PE loader maps sections from file raw offsets to virtual memory RVAs
+    std::vector<uint8_t> mappedImage(parsedHeaders.optionalHeader.sizeOfImage, 0);
+    // Copy headers
+    std::memcpy(mappedImage.data(), fileBytes.data(), parsedHeaders.optionalHeader.sizeOfHeaders);
+    // Copy sections to virtual addresses
+    for (const auto& sec : parsedSections) {
+        std::memcpy(mappedImage.data() + sec.virtualAddress, fileBytes.data() + sec.pointerToRawData, sec.sizeOfRawData);
+    }
+
+    // 6. Bind Imports into Mapped Image IAT
+    size_t boundCount = pe::PeLoader::bindImports(
+        mappedImage.data(),
+        imports,
+        [](std::string_view mod, std::string_view fn, uint16_t ord) -> void* {
+            if (ord == 42) {
+                return reinterpret_cast<void*>(0xDEADBEEFCAFEBABEULL);
+            }
+            return ldr::DynamicLoader::get().getExport(mod, fn);
+        }
+    );
+    TEST_ASSERT(boundCount == 4, "PeLoader::bindImports must bind all 4 symbols successfully");
+
+    // Verify IAT entries in mapped memory
+    const auto* mappedIat = reinterpret_cast<const uint64_t*>(mappedImage.data() + 0x2080);
+    TEST_ASSERT(mappedIat[0] == reinterpret_cast<uint64_t>(win32::GetTickCount64), "IAT[0] must contain GetTickCount64 pointer");
+    TEST_ASSERT(mappedIat[1] == reinterpret_cast<uint64_t>(win32::ExitProcess), "IAT[1] must contain ExitProcess pointer");
+    TEST_ASSERT(mappedIat[2] == reinterpret_cast<uint64_t>(win32::WriteConsoleW), "IAT[2] must contain WriteConsoleW pointer");
+    TEST_ASSERT(mappedIat[3] == 0xDEADBEEFCAFEBABEULL, "IAT[3] must contain ordinal resolved pointer");
+
+    // 7. Invoke Bound Win32 Function Directly Through Mapped IAT
+    using FnGetTickCount64 = uint64_t(*)();
+    auto fnGetTickCount64 = reinterpret_cast<FnGetTickCount64>(mappedIat[0]);
+    uint64_t tick = fnGetTickCount64();
+    TEST_ASSERT(tick > 0, "Invoking GetTickCount64 directly through mapped PE IAT slot must return valid timestamp");
+
+    // 8. Apply Base Relocations (Simulate loading at different base address)
+    // Original base = 0x0000000140000000, New base = 0x0000000240000000 (delta = +0x0000000100000000)
+    uintptr_t rebasedAddress = 0x0000000240000000ULL;
+    NtStatus stReloc = pe::PeLoader::applyRelocations(
+        mappedImage.data(),
+        mappedImage.size(),
+        parsedHeaders,
+        rebasedAddress
+    );
+    TEST_ASSERT(NT_SUCCESS(stReloc), "pe::PeLoader::applyRelocations must succeed");
+
+    // The address at RVA 0x1020 in .text was originally 0x0000000140001000; after relocation it must be 0x0000000240001000
+    uint64_t relocatedPointer = *reinterpret_cast<const uint64_t*>(mappedImage.data() + 0x1020);
+    TEST_ASSERT(relocatedPointer == 0x0000000240001000ULL,
+                "Relocated pointer in .text must reflect +0x100000000 rebase delta");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -2364,6 +2591,7 @@ int main() {
     RUN_TEST(Test_Kernel32_Win32ApiParity);
     RUN_TEST(Test_Wow64_PebTebAndHeavensGate);
     RUN_TEST(Test_Wow64_SyscallThunkingAndFsRedirection);
+    RUN_TEST(Test_PeLoader_DynamicImportBindingAndUnmodifiedBinary);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
