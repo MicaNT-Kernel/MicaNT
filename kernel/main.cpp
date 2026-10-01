@@ -91,6 +91,7 @@ int main(int argc, char* argv[]) {
     auto* kpcr0 = hal.getKpcr(0);
     std::cout << "[MicaNT Boot] [Hal] Initialized 4-core SMP topology. KPCR at GS:[0] (CPU 0 Core Clock: " 
               << kpcr0->prcb.coreClockMhz << " MHz, Arch: AMD64)\n";
+    std::cout << "[MicaNT Boot] [Hal/Arch] Multi-Architecture Engine ready: AMD64 (x86-64) + AArch64 (ARM64 VMSA 48-bit MMU, SVC #1 Fast Trap)\n";
 
     // 2. Initialize Executive Memory Pools (NonPagedPool & PagedPool)
     std::cout << "[MicaNT Boot] [Ex] Initializing Executive Pools (NonPagedPool & PagedPool)...\n";

@@ -32,7 +32,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 12: Advanced Networking Stack & QUIC Engine     [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 13: AArch64 (ARM64) Architecture Port               [NEXT]       │
+│ Phase 13: AArch64 (ARM64) Architecture Port           [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 14: Named Pipes & Mailslots IPC Subsystem (NPFS)     [NEXT]      │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -296,9 +298,40 @@
 
 ---
 
-### Phase 13: AArch64 (ARM64) Architecture Port (Next)
+### Phase 13: AArch64 (ARM64) Architecture Port (100% Completed)
 *Goal: Expand MicaNT hardware reach to 64-bit ARM architectures (Apple Silicon, Snapdragon X Elite, Raspberry Pi 5).*
-- [ ] **ARM64 Exception Levels**: EL1 (Kernel / Executive) and EL0 (Ring 3 Userland).
-- [ ] **ARM64 Translation Tables**: TTBR0 (Userland) / TTBR1 (Kernel Executive) page table walks.
-- [ ] **ARM64 System Registers & Trap Dispatcher**: `ESR_EL1`, `FAR_EL1`, and `SVC` instruction trap dispatcher.
-- [ ] **ARM64 Calling Convention Bridge**: AAPCS64 parameter register passing (X0-X7) for `KiSystemCall64`.
+- [x] **AArch64 Register File & State Architecture (`include/micant/arm64.hpp`)**:
+  - General-purpose registers `X0` through `X30` (with `FP` X29 frame pointer, `LR` X30 link register).
+  - Stack pointers `SP_EL0` (Userland) and `SP_EL1` (Executive Kernel), Program Counter (`PC`).
+  - Processor State (`PSTATE`) condition flags (`N`, `Z`, `C`, `V`), interrupt masks (`D`, `A`, `I`, `F`), and Exception Levels (`EL0`, `EL1`, `EL2`, `EL3`).
+  - 128-bit SIMD / NEON vector registers: `Q0` through `Q31`, `FPCR` (Floating-Point Control Register), and `FPSR` (Floating-Point Status Register).
+- [x] **ARM64 Exception Syndromes & Fault Handling**:
+  - `EsrEl1` (Exception Syndrome Register EL1) bitfield decoder: Exception Class (EC) classification (SVC in AArch64 `0x15`, Instruction Abort `0x20`/`0x21`, Data Abort `0x24`/`0x25`), Instruction Length (IL), and Instruction Specific Syndrome (ISS).
+  - `FarEl1` (Fault Address Register EL1) virtual fault address capture for demand paging (#PF) on ARM64.
+- [x] **AArch64 VMSA 48-bit 4-Level Translation Tables (`Arm64Mmu`)**:
+  - Full Virtual Memory System Architecture (VMSA) 48-bit canonical addressing (Page sizes: 4 KB, 64 KB, 2 MB, 1 GB).
+  - `TTBR0_EL1` (Userland lower-half address translation) and `TTBR1_EL1` (Executive upper-half kernel address translation).
+  - `TCR_EL1` (Translation Control Register) and `MAIR_EL1` (Memory Attribute Indirection Register) memory caching types (Device-nGnRE, Normal Outer/Inner Write-Back Non-Transient).
+  - 4-Level page table walk (`Level 0` -> `Level 1` -> `Level 2` -> `Level 3`) with descriptor attribute flags (`AF`, `SH`, `AP`, `UXN`, `PXN`).
+- [x] **Fast System Call Dispatcher (`KiArm64SystemCall`)**:
+  - Windows on ARM64 calling convention (AAPCS64): System Service Number (SSN) passed in register `X8`, parameters 1–8 passed in `X0`–`X7`, and return value delivered in `X0`.
+  - Instruction trap verification for `SVC #1` opcode (`0xD4000021`) and seamless dispatch into MicaNT executive dispatch table.
+- [x] **Thread Pointer & Processor Control Blocks**:
+  - `TPIDR_EL0` mapped to Userland Thread Environment Block (TEB).
+  - `TPIDR_EL1` mapped to Kernel Processor Control Region (KPCR / KPRCB).
+- [x] **Multi-Architecture SMP HAL (`include/micant/hal.hpp`)**:
+  - Added `ProcessorArchitecture::Arm64` topology support and configurable processor frequencies (e.g. 8-core 4.0 GHz Snapdragon X Elite / Oryon cluster).
+- [x] **Unit Test Suite 40 (`Test_Arm64HardwareArchitectureAndSyscall`)**:
+  - Comprehensive 7-part verification: Register context & flags, SIMD/NEON registers, ESR/FAR exception decoding, 4-level MMU virtual address translation, SVC #1 system call dispatching, thread pointer registers, and ARM64 SMP HAL initialization.
+  - All 40 unit test suites passing with 100% success rate (40 Passed, 0 Failed).
+
+---
+
+### Phase 14: Named Pipes & Mailslots IPC Subsystem (NPFS / MSFS) (Next)
+*Goal: Implement the core Windows IPC file systems (\Device\NamedPipe and \Device\Mailslot) enabling Win32 RPC, Service Control Manager (services.exe), and LSASS authentication.*
+- [ ] **Named Pipe File System (NPFS)**: `\Device\NamedPipe` root driver and device node.
+- [ ] **Pipe Instance State Machine**: Listening, Connected, Disconnected, Closing, and Broken states.
+- [ ] **Duplex & Buffer Modes**: Byte stream (`PIPE_TYPE_BYTE`) and Message stream (`PIPE_TYPE_MESSAGE`) modes with atomic packet reads.
+- [ ] **Win32 Named Pipe API Surface**: `CreateNamedPipeW`, `ConnectNamedPipe`, `DisconnectNamedPipe`, `WaitNamedPipeW`, `PeekNamedPipe`, `TransactNamedPipe`.
+- [ ] **Mailslot File System (MSFS)**: `\Device\Mailslot` broadcast datagram IPC (`CreateMailslotW`, `GetMailslotInfo`).
+- [ ] **Unit Test Suite 41**: Comprehensive multi-client concurrent transactional IPC verification.

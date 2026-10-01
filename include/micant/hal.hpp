@@ -60,13 +60,13 @@ public:
         return instance;
     }
 
-    void initialize(uint32_t processorCount = 4) {
+    void initialize(uint32_t processorCount = 4, ProcessorArchitecture arch = ProcessorArchitecture::Amd64, uint32_t clockMhz = 3600) {
         processors_.clear();
         for (uint32_t i = 0; i < processorCount; ++i) {
             auto pc = std::make_unique<KernelProcessorControlRegion>();
             pc->prcb.cpuId = i;
-            pc->prcb.architecture = ProcessorArchitecture::Amd64;
-            pc->prcb.coreClockMhz = 3600;
+            pc->prcb.architecture = arch;
+            pc->prcb.coreClockMhz = clockMhz;
             processors_.push_back(std::move(pc));
         }
         bootTimestamp_ = std::chrono::steady_clock::now();

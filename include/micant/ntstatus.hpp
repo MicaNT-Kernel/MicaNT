@@ -52,6 +52,7 @@ enum class NtStatus : uint32_t {
     EndOfFile                        = 0xC0000011,
     NoMemory                         = 0xC0000017,
     Conflict                         = 0xC0000018,
+    IllegalInstruction               = 0xC000001D,
     AccessDenied                     = 0xC0000022,
     BufferTooSmall                   = 0xC0000023,
     ObjectNameNotFound               = 0xC0000034,
@@ -110,6 +111,7 @@ enum class NtStatus : uint32_t {
         case NtStatus::Unsuccessful: return "STATUS_UNSUCCESSFUL";
         case NtStatus::NotImplemented: return "STATUS_NOT_IMPLEMENTED";
         case NtStatus::AccessViolation: return "STATUS_ACCESS_VIOLATION";
+        case NtStatus::IllegalInstruction: return "STATUS_ILLEGAL_INSTRUCTION";
         case NtStatus::InvalidHandle: return "STATUS_INVALID_HANDLE";
         case NtStatus::InvalidParameter: return "STATUS_INVALID_PARAMETER";
         case NtStatus::NoSuchFile: return "STATUS_NO_SUCH_FILE";

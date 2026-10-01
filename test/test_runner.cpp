@@ -54,6 +54,7 @@
 #include "micant/ndis.hpp"
 #include "micant/tcpip.hpp"
 #include "micant/iphlpapi.hpp"
+#include "micant/arm64.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -3464,6 +3465,130 @@ void Test_NdisAndTcpIpNetworkStack() {
     TEST_ASSERT(oss.str().find("Active Connections") != std::string::npos, "netstat output must show Active Connections table");
 }
 
+// ============================================================================
+// Suite 40: AArch64 (ARM64) Hardware Architecture & Fast Syscall Engine
+// ============================================================================
+void Test_Arm64HardwareArchitectureAndSyscall() {
+    // 1. General-Purpose Register File & Condition Flags (PSTATE)
+    arm64::Arm64Context ctx{};
+    ctx.x0 = 0x1111222233334444ULL;
+    ctx.x8 = sys::SSN_NtAllocateVirtualMemory; // SSN in X8
+    ctx.fp = 0x00007FFFFFFFE000ULL;           // X29
+    ctx.lr = 0x0000000140001050ULL;           // X30
+    ctx.sp_el0 = 0x00007FFFFFFFDFF0ULL;       // User stack
+    ctx.sp_el1 = 0xFFFF800000100000ULL;       // Kernel stack
+    ctx.pc = 0x0000000140001000ULL;
+    ctx.pstate = arm64::pstate::MODE_EL0t;
+
+    TEST_ASSERT(ctx.x0 == 0x1111222233334444ULL, "ARM64 X0 register must match initialized value");
+    TEST_ASSERT(ctx.x[8] == sys::SSN_NtAllocateVirtualMemory, "ARM64 X8 register array access must match");
+    TEST_ASSERT(ctx.fp == ctx.x[29], "ARM64 FP must alias X29");
+    TEST_ASSERT(ctx.lr == ctx.x[30], "ARM64 LR must alias X30");
+    TEST_ASSERT(ctx.getCurrentEl() == arm64::ExceptionLevel::EL0, "Initial mode must be EL0 (Userland)");
+
+    ctx.pstate = arm64::pstate::MODE_EL1h;
+    TEST_ASSERT(ctx.getCurrentEl() == arm64::ExceptionLevel::EL1, "Mode EL1h must report EL1 (Kernel Executive)");
+
+    ctx.setConditionFlags(true, true, false, false);
+    TEST_ASSERT(ctx.isNegativeFlag(), "PSTATE N flag must be set");
+    TEST_ASSERT(ctx.isZeroFlag(), "PSTATE Z flag must be set");
+
+    // 2. 128-bit SIMD / NEON Vector Register File (Q0 - Q31)
+    ctx.v[0].d[0] = 0xAAAAAAAAAAAAAAAAULL;
+    ctx.v[0].d[1] = 0xBBBBBBBBBBBBBBBBULL;
+    TEST_ASSERT(!ctx.v[0].isZero(), "Vector register Q0 must not be zero");
+    TEST_ASSERT(ctx.v[0].low64 == 0xAAAAAAAAAAAAAAAAULL, "Vector register Q0 low 64-bit must match D0");
+    ctx.fpcr = 0x03C00000; // Default FPCR
+    TEST_ASSERT(ctx.fpcr == 0x03C00000, "FPCR register must match value");
+
+    // 3. Exception Syndrome Register (ESR_EL1) & Fault Handling
+    arm64::Arm64ExceptionSyndrome svcSyndrome{};
+    // Construct ESR for SVC in AArch64 (EC = 0x15, IL = 1, imm16 = 1)
+    svcSyndrome.rawEsr = (arm64::esr::EC_SVC64 << 26) | (1U << 25) | 1U;
+    TEST_ASSERT(svcSyndrome.isSupervisorCall(), "Syndrome must identify as Supervisor Call (SVC)");
+    TEST_ASSERT(svcSyndrome.getExceptionClass() == arm64::esr::EC_SVC64, "Exception class must be EC_SVC64 (0x15)");
+    TEST_ASSERT(svcSyndrome.getSvcImmediate() == 1, "SVC immediate must be #1 for NT system calls");
+
+    arm64::Arm64ExceptionSyndrome dabtSyndrome{};
+    // Construct ESR for Data Abort from lower EL (EC = 0x24, IL = 1, WnR = 1 (bit 6), DFSC = 0x07 (L3 translation fault))
+    dabtSyndrome.rawEsr = (arm64::esr::EC_DABT_LOW << 26) | (1U << 25) | (1U << 6) | arm64::esr::DFSC_TRANS_L3;
+    dabtSyndrome.faultAddress = 0x00007FFDF0001000ULL;
+    TEST_ASSERT(dabtSyndrome.isDataAbort(), "Syndrome must identify as Data Abort");
+    TEST_ASSERT(dabtSyndrome.isWriteNotRead(), "WnR bit must report Write operation");
+    TEST_ASSERT(dabtSyndrome.getDataFaultStatusCode() == arm64::esr::DFSC_TRANS_L3, "DFSC must match L3 translation fault");
+    TEST_ASSERT(dabtSyndrome.faultAddress == 0x00007FFDF0001000ULL, "FAR_EL1 fault address must match");
+
+    // 4. AArch64 VMSA 48-bit 4-Level Translation Tables (MMU)
+    arm64::Arm64Mmu mmu;
+    TEST_ASSERT(mmu.getTtbr0() == 0x10000000ULL, "Default TTBR0_EL1 must be initialized");
+    TEST_ASSERT(mmu.getTtbr1() == 0x20000000ULL, "Default TTBR1_EL1 must be initialized");
+    TEST_ASSERT((mmu.getMair() & 0xFF) == 0xFF, "MAIR_EL1 Attr0 must be Normal WBWA (0xFF)");
+
+    // Test 4-level index extraction
+    uint64_t sampleVa = 0x0000'1234'5678'9ABCULL;
+    auto indices = arm64::Arm64Mmu::extractIndices(sampleVa);
+    TEST_ASSERT(indices.offset == 0xABC, "Offset bits [11:0] must match 0xABC");
+
+    // Map a 4KB page and translate
+    uint64_t testVa = 0x0000'0000'4000'0000ULL; // 1 GB boundary
+    uint64_t testPa = 0x0000'0001'8000'0000ULL; // Physical RAM
+    mmu.mapPage(testVa, testPa, arm64::mmu::AP_RW_ALL, arm64::mmu::ATTR_IDX_NORMAL_WBWA, false, false);
+
+    uint64_t resolvedPa = 0;
+    arm64::Arm64Pte resolvedPte{};
+    NtStatus trStatus = mmu.translateVirtualAddress(testVa + 0x120, resolvedPa, resolvedPte);
+    TEST_ASSERT(NT_SUCCESS(trStatus), "Virtual address translation must succeed for mapped page");
+    TEST_ASSERT(resolvedPa == (testPa + 0x120), "Resolved physical address must match mapped base + offset");
+    TEST_ASSERT(resolvedPte.isValid(), "Resolved PTE must be valid");
+
+    // Unmapped page must return AccessViolation
+    trStatus = mmu.translateVirtualAddress(0x0000'0000'5000'0000ULL, resolvedPa, resolvedPte);
+    TEST_ASSERT(trStatus == NtStatus::AccessViolation, "Unmapped virtual address must return STATUS_ACCESS_VIOLATION");
+
+    // 5. Fast System Call Dispatcher via SVC #1 (Windows on ARM64 ABI)
+    // Dispatch NtAllocateVirtualMemory using ARM64 register frame
+    uintptr_t allocBase = 0;
+    size_t allocSize = 64 * 1024; // 64 KB
+
+    arm64::Arm64Context svcCtx{};
+    svcCtx.x8 = sys::SSN_NtAllocateVirtualMemory; // SSN in X8
+    svcCtx.x0 = 0; // CurrentProcess
+    svcCtx.x1 = reinterpret_cast<uint64_t>(&allocBase);
+    svcCtx.x2 = 0;
+    svcCtx.x3 = reinterpret_cast<uint64_t>(&allocSize);
+    svcCtx.x4 = mm::MEM_COMMIT | mm::MEM_RESERVE;
+    svcCtx.x5 = mm::PAGE_READWRITE;
+    svcCtx.pc = 0x0000000140002000ULL;
+
+    NtStatus svcResult = arm64::Arm64SyscallBridge::get().dispatchSvc(svcCtx, svcSyndrome);
+    TEST_ASSERT(NT_SUCCESS(svcResult), "ARM64 SVC #1 dispatch for NtAllocateVirtualMemory must succeed");
+    TEST_ASSERT(svcCtx.x0 == static_cast<uint64_t>(NtStatus::Success), "ARM64 X0 return register must hold STATUS_SUCCESS");
+    TEST_ASSERT(allocBase != 0, "Allocated base address must be non-zero");
+    TEST_ASSERT(svcCtx.pc == 0x0000000140002004ULL, "ARM64 PC must advance by 4 bytes past SVC instruction");
+
+    // Free the allocated memory
+    sys::NtFreeVirtualMemory(0, &allocBase, &allocSize, mm::MEM_RELEASE);
+
+    // 6. Thread Pointer Register Binding (TPIDR_EL0 for TEB, TPIDR_EL1 for KPCR)
+    ctx.tpidr_el0 = 0x00007FFDF0000000ULL; // TEB
+    ctx.tpidr_el1 = 0xFFFF800000000000ULL; // KPCR
+    TEST_ASSERT(ctx.tpidr_el0 == 0x00007FFDF0000000ULL, "TPIDR_EL0 must hold TEB address");
+    TEST_ASSERT(ctx.tpidr_el1 == 0xFFFF800000000000ULL, "TPIDR_EL1 must hold KPCR address");
+
+    // 7. Multi-Architecture HAL SMP Initialization (ARM64 8-Core Topology)
+    auto& hal = hal::HardwareAbstractionLayer::get();
+    hal.initialize(8, hal::ProcessorArchitecture::Arm64, 4000); // 8-core ARM64 @ 4.0 GHz
+    TEST_ASSERT(hal.getProcessorCount() == 8, "HAL processor count must report 8 cores");
+    auto* armKpcr = hal.getKpcr(0);
+    TEST_ASSERT(armKpcr != nullptr, "HAL KPCR 0 must be non-null");
+    TEST_ASSERT(armKpcr->prcb.architecture == hal::ProcessorArchitecture::Arm64, "PRCB architecture must be Arm64");
+    TEST_ASSERT(armKpcr->prcb.coreClockMhz == 4000, "PRCB core clock must be 4000 MHz");
+
+    // Revert HAL back to 4-core AMD64 for standard baseline
+    hal.initialize(4, hal::ProcessorArchitecture::Amd64, 3600);
+    TEST_ASSERT(hal.getProcessorCount() == 4, "HAL reset to 4 cores verified");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -3508,6 +3633,7 @@ int main() {
     RUN_TEST(Test_MsvcrtBridge_And_CommandShell);
     RUN_TEST(Test_StorageAndFat32FileSystem);
     RUN_TEST(Test_NdisAndTcpIpNetworkStack);
+    RUN_TEST(Test_Arm64HardwareArchitectureAndSyscall);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

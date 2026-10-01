@@ -7,7 +7,7 @@
 [![Clean Room: Certified](https://img.shields.io/badge/Clean%20Room-Certified-success.svg)](docs/CLEAN_ROOM.md)
 [![Standard: C++23](https://img.shields.io/badge/Language-C%2B%2B23-blue.svg)](https://en.cppreference.com/w/cpp/23)
 [![Reference: win32metadata](https://img.shields.io/badge/Reference-microsoft%2Fwin32metadata-purple.svg)](https://github.com/microsoft/win32metadata)
-[![Arch: x86__64](https://img.shields.io/badge/Arch-x86__64-orange.svg)]()
+[![Arch: x86__64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-orange.svg)]()
 [![Build: CMake](https://img.shields.io/badge/Build-CMake%203.25%2B-green.svg)]()
 
 ---
@@ -74,6 +74,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 14. **Clean-Room MSVCRT, Subsystem Bridges & Command Shell**: High-fidelity clean-room C runtime (`msvcrt.dll`), security/crypto (`advapi32.dll`), windowing (`user32.dll`), and network (`ws2_32.dll`) bridges, Fiber Local Storage (FLS) architecture, and native MicaNT Command Prompt Shell (`cmd.exe` / `msh.exe`) with built-in commands and unmodified binary execution.
 15. **Real Block Storage & FAT32/Partition Engine (`storage.hpp`, `fat32.hpp`)**: Modular block device layer (`IBlockDevice`), MBR and GPT partition management, RAM disk sector emulation, dual FAT32 table traversal, LFN reverse-sequence unicode filename decoding, cluster chain allocation, and VFS integration.
 16. **Advanced Networking Stack & QUIC Protocol Engine (`ndis.hpp`, `tcpip.hpp`, `ws2_32.hpp`, `iphlpapi.hpp`)**: NDIS 6.x driver miniport interface, 10 Gbps virtual network adapter, ARP resolution, IPv4/IPv6 RFC 8200 dual-stack addressing with link-local generation, ICMPv4/v6 echo ping, UDP datagrams, full RFC 793 / RFC 9293 11-state TCP state machine with 3-way handshake and bidirectional streaming, Next-Gen QUIC RFC 9000 protocol header framing, Winsock 2 (`ws2_32.dll`), IP Helper API (`iphlpapi.dll`), and native shell network commands (`ipconfig`, `ping`, `netstat`).
+17. **AArch64 (ARM64) Multi-Architecture Subsystem (`arm64.hpp`)**: Full 64-bit ARM hardware state architecture (`X0`–`X30`, `SP_EL0`/`SP_EL1`, `PSTATE`, 128-bit NEON/SIMD `Q0`–`Q31`), `ESR_EL1` / `FAR_EL1` exception syndrome decoders, VMSA 48-bit 4-level MMU translation tables (`TTBR0_EL1` / `TTBR1_EL1`), fast `KiArm64SystemCall` `SVC #1` dispatcher adhering to standard Windows on ARM64 AAPCS64 register conventions, and 8-core SMP HAL topology support (Snapdragon X Elite / Oryon).
 
 ---
 
