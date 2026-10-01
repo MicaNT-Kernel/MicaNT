@@ -5,10 +5,13 @@
 #include "micant/sync.hpp"
 #include "micant/timer.hpp"
 #include "micant/po.hpp"
+#include "micant/section.hpp"
+#include "micant/hal.hpp"
 #include <iostream>
 #include <unordered_map>
 #include <thread>
 #include <chrono>
+#include <cwchar>
 
 namespace micant::sys {
 
@@ -16,7 +19,9 @@ namespace micant::sys {
 static ob::HandleTable g_KernelHandleTable;
 static mm::ProcessAddressSpace g_KernelAddressSpace;
 static std::unordered_map<Handle, std::shared_ptr<fs::FileObject>> g_KernelFiles;
+static std::unordered_map<Handle, std::shared_ptr<section::SectionObject>> g_KernelSections;
 static Handle g_NextFileHandle = 0x200;
+static Handle g_NextSectionHandle = 0x300;
 
 NtStatus NtAllocateVirtualMemory(
     Handle processHandle,
@@ -262,6 +267,11 @@ NtStatus NtClose(Handle handle) {
     if (it != g_KernelFiles.end()) {
         fs::VirtualFileSystem::get().closeFile(it->second.get());
         g_KernelFiles.erase(it);
+        return NtStatus::Success;
+    }
+    auto secIt = g_KernelSections.find(handle);
+    if (secIt != g_KernelSections.end()) {
+        g_KernelSections.erase(secIt);
         return NtStatus::Success;
     }
     if (wasSync) {
@@ -580,4 +590,250 @@ NtStatus NtQuerySystemInformation(
     return NtStatus::Success;
 }
 
+NtStatus NtCreateSection(
+    Handle* sectionHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* /*objectAttributes*/,
+    LargeInteger* maximumSize,
+    uint32_t sectionPageProtection,
+    uint32_t allocationAttributes,
+    Handle fileHandle
+) {
+    if (!sectionHandle) return NtStatus::InvalidParameter;
+    size_t size = maximumSize ? static_cast<size_t>(maximumSize->quadPart) : 4096;
+
+    std::shared_ptr<fs::FileObject> fileObj;
+    if (fileHandle != 0) {
+        auto it = g_KernelFiles.find(fileHandle);
+        if (it != g_KernelFiles.end()) {
+            fileObj = it->second;
+            if (size == 0 || (maximumSize && maximumSize->quadPart == 0)) {
+                size = fileObj->getFileSize();
+            }
+        }
+    }
+    if (size == 0) size = 4096;
+
+    auto sec = std::make_shared<section::SectionObject>(size, allocationAttributes, sectionPageProtection);
+    if (fileObj && fileObj->getFileSize() > 0) {
+        sec->loadData(fileObj->getData().data(), fileObj->getFileSize());
+    }
+
+    Handle h = g_NextSectionHandle++;
+    g_KernelSections[h] = sec;
+    *sectionHandle = h;
+    return NtStatus::Success;
+}
+
+NtStatus NtMapViewOfSection(
+    Handle sectionHandle,
+    Handle /*processHandle*/,
+    uintptr_t* baseAddress,
+    uintptr_t /*zeroBits*/,
+    size_t /*commitSize*/,
+    LargeInteger* /*sectionOffset*/,
+    size_t* viewSize,
+    uint32_t /*inheritDisposition*/,
+    uint32_t allocationType,
+    uint32_t win32Protect
+) {
+    if (!baseAddress || !viewSize) return NtStatus::InvalidParameter;
+    auto it = g_KernelSections.find(sectionHandle);
+    if (it == g_KernelSections.end() || !it->second) return NtStatus::InvalidHandle;
+
+    auto sec = it->second;
+    size_t sz = (*viewSize == 0 || *viewSize > sec->getSize()) ? sec->getSize() : *viewSize;
+
+    uintptr_t addr = *baseAddress;
+    if (addr == 0) {
+        addr = reinterpret_cast<uintptr_t>(sec->getData());
+    }
+
+    // Register in address space tracker
+    g_KernelAddressSpace.allocate(
+        addr,
+        sz,
+        allocationType ? allocationType : (mm::MEM_COMMIT | mm::MEM_RESERVE),
+        win32Protect ? win32Protect : sec->getPageProtection()
+    );
+
+    *baseAddress = addr;
+    *viewSize = sz;
+    return NtStatus::Success;
+}
+
+NtStatus NtUnmapViewOfSection(Handle /*processHandle*/, uintptr_t baseAddress) {
+    return g_KernelAddressSpace.free(baseAddress, 0, mm::MEM_RELEASE);
+}
+
+NtStatus NtQueryInformationFile(
+    Handle fileHandle,
+    IoStatusBlock* ioStatusBlock,
+    void* fileInformation,
+    uint32_t length,
+    FileInformationClass fileInformationClass
+) {
+    if (!fileInformation) return NtStatus::InvalidParameter;
+    auto it = g_KernelFiles.find(fileHandle);
+    if (it == g_KernelFiles.end() || !it->second) return NtStatus::InvalidHandle;
+    auto fileObj = it->second;
+
+    switch (fileInformationClass) {
+        case FileInformationClass::FileStandardInformation: {
+            if (length < sizeof(FileStandardInformation)) return NtStatus::InfoLengthMismatch;
+            auto* info = reinterpret_cast<FileStandardInformation*>(fileInformation);
+            info->allocationSize.quadPart = static_cast<int64_t>(fileObj->getFileSize());
+            info->endOfFile.quadPart = static_cast<int64_t>(fileObj->getFileSize());
+            info->numberOfLinks = 1;
+            info->deletePending = false;
+            info->directory = fileObj->isDirectory();
+            if (ioStatusBlock) {
+                ioStatusBlock->status = NtStatus::Success;
+                ioStatusBlock->information = sizeof(FileStandardInformation);
+            }
+            return NtStatus::Success;
+        }
+        case FileInformationClass::FilePositionInformation: {
+            if (length < sizeof(FilePositionInformation)) return NtStatus::InfoLengthMismatch;
+            auto* info = reinterpret_cast<FilePositionInformation*>(fileInformation);
+            info->currentByteOffset.quadPart = fileObj->getCurrentByteOffset();
+            if (ioStatusBlock) {
+                ioStatusBlock->status = NtStatus::Success;
+                ioStatusBlock->information = sizeof(FilePositionInformation);
+            }
+            return NtStatus::Success;
+        }
+        case FileInformationClass::FileBasicInformation: {
+            if (length < sizeof(FileBasicInformation)) return NtStatus::InfoLengthMismatch;
+            auto* info = reinterpret_cast<FileBasicInformation*>(fileInformation);
+            info->fileAttributes = fileObj->isDirectory() ? fs::FILE_ATTRIBUTE_DIRECTORY : fs::FILE_ATTRIBUTE_NORMAL;
+            if (ioStatusBlock) {
+                ioStatusBlock->status = NtStatus::Success;
+                ioStatusBlock->information = sizeof(FileBasicInformation);
+            }
+            return NtStatus::Success;
+        }
+        default:
+            return NtStatus::NotImplemented;
+    }
+}
+
+NtStatus NtSetInformationFile(
+    Handle fileHandle,
+    IoStatusBlock* ioStatusBlock,
+    const void* fileInformation,
+    uint32_t length,
+    FileInformationClass fileInformationClass
+) {
+    if (!fileInformation) return NtStatus::InvalidParameter;
+    auto it = g_KernelFiles.find(fileHandle);
+    if (it == g_KernelFiles.end() || !it->second) return NtStatus::InvalidHandle;
+    auto fileObj = it->second;
+
+    switch (fileInformationClass) {
+        case FileInformationClass::FilePositionInformation: {
+            if (length < sizeof(FilePositionInformation)) return NtStatus::InfoLengthMismatch;
+            auto* info = reinterpret_cast<const FilePositionInformation*>(fileInformation);
+            fileObj->setCurrentByteOffset(info->currentByteOffset.quadPart);
+            if (ioStatusBlock) {
+                ioStatusBlock->status = NtStatus::Success;
+                ioStatusBlock->information = sizeof(FilePositionInformation);
+            }
+            return NtStatus::Success;
+        }
+        case FileInformationClass::FileEndOfFileInformation: {
+            if (length < sizeof(FileEndOfFileInformation)) return NtStatus::InfoLengthMismatch;
+            auto* info = reinterpret_cast<const FileEndOfFileInformation*>(fileInformation);
+            fileObj->getData().resize(static_cast<size_t>(info->endOfFile.quadPart));
+            if (ioStatusBlock) {
+                ioStatusBlock->status = NtStatus::Success;
+                ioStatusBlock->information = sizeof(FileEndOfFileInformation);
+            }
+            return NtStatus::Success;
+        }
+        default:
+            return NtStatus::NotImplemented;
+    }
+}
+
+NtStatus NtQueryDirectoryFile(
+    Handle fileHandle,
+    Handle /*event*/,
+    void* /*apcRoutine*/,
+    void* /*apcContext*/,
+    IoStatusBlock* ioStatusBlock,
+    void* fileInformation,
+    uint32_t length,
+    FileInformationClass /*fileInformationClass*/,
+    bool /*returnSingleEntry*/,
+    UnicodeString* /*fileName*/,
+    bool /*restartScan*/
+) {
+    if (!fileInformation || length < sizeof(FileBothDirInformation)) return NtStatus::InvalidParameter;
+    auto it = g_KernelFiles.find(fileHandle);
+    if (it == g_KernelFiles.end() || !it->second) return NtStatus::InvalidHandle;
+    auto fileObj = it->second;
+
+    std::vector<fs::VirtualFileSystem::DirectoryEntry> entries;
+    NtStatus status = fs::VirtualFileSystem::get().queryDirectory(fileObj->getFileName(), entries);
+    if (!NT_SUCCESS(status)) return status;
+
+    if (entries.empty()) {
+        return NtStatus::NoMoreFiles;
+    }
+
+    auto* dirInfo = reinterpret_cast<FileBothDirInformation*>(fileInformation);
+    const auto& entry = entries[0];
+    dirInfo->nextEntryOffset = 0;
+    dirInfo->fileAttributes = entry.attributes;
+    dirInfo->endOfFile.quadPart = static_cast<int64_t>(entry.size);
+    dirInfo->allocationSize.quadPart = static_cast<int64_t>(entry.size);
+    dirInfo->fileNameLength = static_cast<uint32_t>(entry.name.size() * sizeof(wchar_t));
+    std::wcsncpy(dirInfo->fileName, entry.name.c_str(), 259);
+
+    if (ioStatusBlock) {
+        ioStatusBlock->status = NtStatus::Success;
+        ioStatusBlock->information = sizeof(FileBothDirInformation);
+    }
+    return NtStatus::Success;
+}
+
+NtStatus NtQueryPerformanceCounter(
+    LargeInteger* performanceCounter,
+    LargeInteger* performanceFrequency
+) {
+    if (!performanceCounter) return NtStatus::InvalidParameter;
+    hal::KeQueryPerformanceCounter(*performanceCounter, performanceFrequency);
+    return NtStatus::Success;
+}
+
+NtStatus NtYieldExecution() {
+    std::this_thread::yield();
+    return NtStatus::Success;
+}
+
+NtStatus NtQueryInformationProcess(
+    Handle /*processHandle*/,
+    ProcessInformationClass processInformationClass,
+    void* processInformation,
+    uint32_t processInformationLength,
+    uint32_t* returnLength
+) {
+    if (!processInformation) return NtStatus::InvalidParameter;
+    if (processInformationClass == ProcessInformationClass::ProcessBasicInformation) {
+        if (processInformationLength < sizeof(ProcessBasicInformation)) return NtStatus::InfoLengthMismatch;
+        auto* pbi = reinterpret_cast<ProcessBasicInformation*>(processInformation);
+        pbi->exitStatus = NtStatus::Success;
+        pbi->pebBaseAddress = 0x00007FFDF0000000ULL;
+        pbi->affinityMask = 0x0F;
+        pbi->basePriority = 8;
+        pbi->uniqueProcessId = 1000;
+        pbi->inheritedFromUniqueProcessId = 0;
+        if (returnLength) *returnLength = sizeof(ProcessBasicInformation);
+        return NtStatus::Success;
+    }
+    return NtStatus::NotImplemented;
+}
+
 } // namespace micant::sys
+

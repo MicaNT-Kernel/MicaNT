@@ -651,6 +651,239 @@ inline NtStatus NtShutdownSystem(uint32_t action) {
     return sys::SyscallDispatcher::get().dispatch(frame);
 }
 
+// 34. NtCreateSection (SSN: 0x004A)
+inline NtStatus NtCreateSection(
+    Handle* sectionHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    LargeInteger* maximumSize,
+    uint32_t sectionPageProtection,
+    uint32_t allocationAttributes,
+    Handle fileHandle
+) {
+    uint64_t stack[3] = {
+        sectionPageProtection,
+        allocationAttributes,
+        static_cast<uint64_t>(fileHandle)
+    };
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtCreateSection,
+        .arg1 = reinterpret_cast<uint64_t>(sectionHandle),
+        .arg2 = desiredAccess,
+        .arg3 = reinterpret_cast<uint64_t>(objectAttributes),
+        .arg4 = reinterpret_cast<uint64_t>(maximumSize),
+        .stackArgs = stack,
+        .stackArgCount = 3
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 35. NtMapViewOfSection (SSN: 0x0028)
+inline NtStatus NtMapViewOfSection(
+    Handle sectionHandle,
+    Handle processHandle,
+    uintptr_t* baseAddress,
+    uintptr_t zeroBits,
+    size_t commitSize,
+    LargeInteger* sectionOffset,
+    size_t* viewSize,
+    uint32_t inheritDisposition,
+    uint32_t allocationType,
+    uint32_t win32Protect
+) {
+    uint64_t stack[6] = {
+        commitSize,
+        reinterpret_cast<uint64_t>(sectionOffset),
+        reinterpret_cast<uint64_t>(viewSize),
+        inheritDisposition,
+        allocationType,
+        win32Protect
+    };
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtMapViewOfSection,
+        .arg1 = static_cast<uint64_t>(sectionHandle),
+        .arg2 = static_cast<uint64_t>(processHandle),
+        .arg3 = reinterpret_cast<uint64_t>(baseAddress),
+        .arg4 = zeroBits,
+        .stackArgs = stack,
+        .stackArgCount = 6
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 36. NtUnmapViewOfSection (SSN: 0x002A)
+inline NtStatus NtUnmapViewOfSection(Handle processHandle, uintptr_t baseAddress) {
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtUnmapViewOfSection,
+        .arg1 = static_cast<uint64_t>(processHandle),
+        .arg2 = baseAddress
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 37. NtQueryInformationFile (SSN: 0x0011)
+inline NtStatus NtQueryInformationFile(
+    Handle fileHandle,
+    IoStatusBlock* ioStatusBlock,
+    void* fileInformation,
+    uint32_t length,
+    FileInformationClass fileInformationClass
+) {
+    uint64_t stack[1] = { static_cast<uint64_t>(fileInformationClass) };
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtQueryInformationFile,
+        .arg1 = static_cast<uint64_t>(fileHandle),
+        .arg2 = reinterpret_cast<uint64_t>(ioStatusBlock),
+        .arg3 = reinterpret_cast<uint64_t>(fileInformation),
+        .arg4 = length,
+        .stackArgs = stack,
+        .stackArgCount = 1
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 38. NtSetInformationFile (SSN: 0x0027)
+inline NtStatus NtSetInformationFile(
+    Handle fileHandle,
+    IoStatusBlock* ioStatusBlock,
+    const void* fileInformation,
+    uint32_t length,
+    FileInformationClass fileInformationClass
+) {
+    uint64_t stack[1] = { static_cast<uint64_t>(fileInformationClass) };
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtSetInformationFile,
+        .arg1 = static_cast<uint64_t>(fileHandle),
+        .arg2 = reinterpret_cast<uint64_t>(ioStatusBlock),
+        .arg3 = reinterpret_cast<uint64_t>(fileInformation),
+        .arg4 = length,
+        .stackArgs = stack,
+        .stackArgCount = 1
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 39. NtQueryDirectoryFile (SSN: 0x0035)
+inline NtStatus NtQueryDirectoryFile(
+    Handle fileHandle,
+    Handle event,
+    void* apcRoutine,
+    void* apcContext,
+    IoStatusBlock* ioStatusBlock,
+    void* fileInformation,
+    uint32_t length,
+    FileInformationClass fileInformationClass,
+    bool returnSingleEntry,
+    UnicodeString* fileName = nullptr,
+    bool restartScan = false
+) {
+    uint64_t stack[7] = {
+        reinterpret_cast<uint64_t>(ioStatusBlock),
+        reinterpret_cast<uint64_t>(fileInformation),
+        length,
+        static_cast<uint64_t>(fileInformationClass),
+        returnSingleEntry ? 1ULL : 0ULL,
+        reinterpret_cast<uint64_t>(fileName),
+        restartScan ? 1ULL : 0ULL
+    };
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtQueryDirectoryFile,
+        .arg1 = static_cast<uint64_t>(fileHandle),
+        .arg2 = static_cast<uint64_t>(event),
+        .arg3 = reinterpret_cast<uint64_t>(apcRoutine),
+        .arg4 = reinterpret_cast<uint64_t>(apcContext),
+        .stackArgs = stack,
+        .stackArgCount = 7
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 40. NtQueryPerformanceCounter (SSN: 0x0031)
+inline NtStatus NtQueryPerformanceCounter(
+    LargeInteger* performanceCounter,
+    LargeInteger* performanceFrequency = nullptr
+) {
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtQueryPerformanceCounter,
+        .arg1 = reinterpret_cast<uint64_t>(performanceCounter),
+        .arg2 = reinterpret_cast<uint64_t>(performanceFrequency)
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 41. NtYieldExecution (SSN: 0x0046)
+inline NtStatus NtYieldExecution() {
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtYieldExecution,
+        .arg1 = 0
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// 42. NtQueryInformationProcess (SSN: 0x0019)
+inline NtStatus NtQueryInformationProcess(
+    Handle processHandle,
+    ProcessInformationClass processInformationClass,
+    void* processInformation,
+    uint32_t processInformationLength,
+    uint32_t* returnLength = nullptr
+) {
+    uint64_t stack[1] = { reinterpret_cast<uint64_t>(returnLength) };
+    sys::SyscallFrame frame{
+        .ssn = sys::SSN_NtQueryInformationProcess,
+        .arg1 = static_cast<uint64_t>(processHandle),
+        .arg2 = static_cast<uint64_t>(processInformationClass),
+        .arg3 = reinterpret_cast<uint64_t>(processInformation),
+        .arg4 = processInformationLength,
+        .stackArgs = stack,
+        .stackArgCount = 1
+    };
+    return sys::SyscallDispatcher::get().dispatch(frame);
+}
+
+// ============================================================================
+// NTDLL Runtime Library (Rtl) Helpers
+// ============================================================================
+
+inline thread_local uint32_t g_FallbackLastError = 0;
+
+inline void RtlSetLastWin32Error(uint32_t errCode) noexcept {
+    if (g_CurrentTeb) {
+        g_CurrentTeb->lastErrorValue = errCode;
+    } else {
+        g_FallbackLastError = errCode;
+    }
+}
+
+inline uint32_t RtlGetLastWin32Error() noexcept {
+    if (g_CurrentTeb) {
+        return g_CurrentTeb->lastErrorValue;
+    }
+    return g_FallbackLastError;
+}
+
+inline uint32_t RtlNtStatusToDosError(NtStatus status) noexcept {
+    if (NT_SUCCESS(status)) return 0; // ERROR_SUCCESS
+    switch (status) {
+        case NtStatus::NoSuchFile:              return 2;   // ERROR_FILE_NOT_FOUND
+        case NtStatus::ObjectPathNotFound:      return 3;   // ERROR_PATH_NOT_FOUND
+        case NtStatus::AccessDenied:            return 5;   // ERROR_ACCESS_DENIED
+        case NtStatus::InvalidHandle:           return 6;   // ERROR_INVALID_HANDLE
+        case NtStatus::NoMemory:                return 14;  // ERROR_OUTOFMEMORY
+        case NtStatus::SharingViolation:        return 32;  // ERROR_SHARING_VIOLATION
+        case NtStatus::ObjectNameCollision:     return 80;  // ERROR_FILE_EXISTS
+        case NtStatus::InvalidParameter:        return 87;  // ERROR_INVALID_PARAMETER
+        case NtStatus::EndOfFile:               return 38;  // ERROR_HANDLE_EOF
+        case NtStatus::NotImplemented:          return 120; // ERROR_CALL_NOT_IMPLEMENTED
+        case NtStatus::InfoLengthMismatch:      return 24;  // ERROR_BAD_LENGTH
+        case NtStatus::NotADirectory:           return 267; // ERROR_DIRECTORY
+        case NtStatus::DirectoryNotEmpty:       return 145; // ERROR_DIR_NOT_EMPTY
+        case NtStatus::FileIsADirectory:        return 5;   // ERROR_ACCESS_DENIED
+        case NtStatus::NoMoreFiles:             return 18;  // ERROR_NO_MORE_FILES
+        default:                                return 31;  // ERROR_GEN_FAILURE
+    }
+}
+
 // ============================================================================
 // NTDLL Zw* Aliases (Identical Entry Points to Nt* Stubs in Userland)
 // ============================================================================
@@ -706,4 +939,27 @@ inline NtStatus ZwSetTimer(Handle h, LargeInteger* d, void* a = nullptr, void* c
 inline NtStatus ZwCancelTimer(Handle h, bool* c = nullptr) { return NtCancelTimer(h, c); }
 inline NtStatus ZwShutdownSystem(uint32_t a) { return NtShutdownSystem(a); }
 
+inline NtStatus ZwCreateSection(Handle* s, uint32_t a, ObjectAttributes* o, LargeInteger* m, uint32_t p, uint32_t al, Handle f) {
+    return NtCreateSection(s, a, o, m, p, al, f);
+}
+inline NtStatus ZwMapViewOfSection(Handle s, Handle p, uintptr_t* b, uintptr_t z, size_t c, LargeInteger* so, size_t* v, uint32_t i, uint32_t at, uint32_t wp) {
+    return NtMapViewOfSection(s, p, b, z, c, so, v, i, at, wp);
+}
+inline NtStatus ZwUnmapViewOfSection(Handle p, uintptr_t b) { return NtUnmapViewOfSection(p, b); }
+inline NtStatus ZwQueryInformationFile(Handle f, IoStatusBlock* i, void* fi, uint32_t l, FileInformationClass c) {
+    return NtQueryInformationFile(f, i, fi, l, c);
+}
+inline NtStatus ZwSetInformationFile(Handle f, IoStatusBlock* i, const void* fi, uint32_t l, FileInformationClass c) {
+    return NtSetInformationFile(f, i, fi, l, c);
+}
+inline NtStatus ZwQueryDirectoryFile(Handle f, Handle e, void* a, void* c, IoStatusBlock* i, void* fi, uint32_t l, FileInformationClass fc, bool s, UnicodeString* fn = nullptr, bool r = false) {
+    return NtQueryDirectoryFile(f, e, a, c, i, fi, l, fc, s, fn, r);
+}
+inline NtStatus ZwQueryPerformanceCounter(LargeInteger* c, LargeInteger* f = nullptr) { return NtQueryPerformanceCounter(c, f); }
+inline NtStatus ZwYieldExecution() { return NtYieldExecution(); }
+inline NtStatus ZwQueryInformationProcess(Handle p, ProcessInformationClass c, void* i, uint32_t l, uint32_t* r = nullptr) {
+    return NtQueryInformationProcess(p, c, i, l, r);
+}
+
 } // namespace micant::ntdll
+

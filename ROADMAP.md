@@ -24,7 +24,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 8: Dynamic PE Import Binding & Base Relocations [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 9: AArch64 (ARM64) Architecture Port                [NEXT]       │
+│ Phase 9: Expanded Win32 & NT System Call Architecture [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 10: AArch64 (ARM64) Architecture Port               [NEXT]       │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -172,7 +174,36 @@
 
 ---
 
-### Phase 9: AArch64 (ARM64) Architecture Port (Next)
+### Phase 9: Expanded Win32 & NT System Call Architecture (100% Completed)
+*Goal: Expand clean-room Win32 Base and NT kernel system call surface to enable real shells, utilities, file searchers, memory mapping, and CLI applications.*
+- [x] **NT System Call Surface Expansion (9 New System Calls)**:
+  - `NtCreateSection` (SSN `0x004A`): Named & anonymous sections, page protections, allocation attributes.
+  - `NtMapViewOfSection` (SSN `0x0028`): Backing storage view mapping, commit sizes, user mode address space integration.
+  - `NtUnmapViewOfSection` (SSN `0x002A`): View unmapping and memory release.
+  - `NtQueryInformationFile` (SSN `0x0011`): `FileStandardInformation`, `FileBasicInformation`.
+  - `NtSetInformationFile` (SSN `0x0027`): `FilePositionInformation`, file pointer repositioning.
+  - `NtQueryDirectoryFile` (SSN `0x0035`): Directory enumeration (`FileDirectoryInformation`), wildcard matching.
+  - `NtQueryPerformanceCounter` (SSN `0x0031`): 1 GHz high-resolution monotonic chronometry.
+  - `NtYieldExecution` (SSN `0x0046`): Cooperative quantum surrender.
+  - `NtQueryInformationProcess` (SSN `0x0019`): `ProcessBasicInformation`, exit status querying.
+- [x] **Clean-Room Win32 Base API Parity (35+ New APIs in `kernel32.dll` / `kernelbase.dll`)**:
+  - **Error Handling**: `GetLastError`, `SetLastError`, `RtlNtStatusToDosError`, TEB `LastErrorValue` synchronization.
+  - **Environment & Command Line**: `GetCommandLineA/W`, `GetEnvironmentVariableA/W`, `SetEnvironmentVariableA/W`.
+  - **Directory & Path Management**: `GetCurrentDirectoryA/W`, `SetCurrentDirectoryA/W`, `GetFullPathNameA/W`.
+  - **Module & Image Introspection**: `GetModuleFileNameA/W`, `GetModuleHandleA/W`.
+  - **File Operations, Sizing & Seeking**: `GetFileAttributesA/W`, `SetFileAttributesW`, `GetFileSizeEx`, `SetFilePointerEx`, `DeleteFileW`.
+  - **Directory Operations & File Enumeration**: `CreateDirectoryW`, `RemoveDirectoryW`, `FindFirstFileW`, `FindNextFileW`, `FindClose`.
+  - **Memory Mapping & Shared Memory**: `CreateFileMappingW`, `MapViewOfFile`, `UnmapViewOfFile`.
+  - **High-Precision Timing & System Clock**: `QueryPerformanceCounter`, `QueryPerformanceFrequency`, `GetSystemTime`, `GetLocalTime`.
+  - **Console Terminal Controls**: `GetConsoleScreenBufferInfo`, `SetConsoleTextAttribute`, `SetConsoleCursorPosition`.
+  - **Process & Thread Management**: `GetExitCodeProcess`, `TerminateProcess`, `SwitchToThread`.
+- [x] **Test Suite 36 (`Test_ExpandedWin32AndNtSystemCalls`)**:
+  - Full automated coverage of sections, file seeks, directory searches, environment variables, QPC, and console screen buffers.
+  - All 36 unit test suites passing with 100% success rate (36 Passed, 0 Failed).
+
+---
+
+### Phase 10: AArch64 (ARM64) Architecture Port (Next)
 *Goal: Expand MicaNT hardware reach to 64-bit ARM architectures (Apple Silicon, Snapdragon X Elite, Raspberry Pi 5).*
 - [ ] **ARM64 Exception Levels**: EL1 (Kernel / Executive) and EL0 (Ring 3 Userland).
 - [ ] **ARM64 Translation Tables**: TTBR0 (Userland) / TTBR1 (Kernel Executive) page table walks.

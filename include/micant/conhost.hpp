@@ -108,6 +108,16 @@ public:
     [[nodiscard]] Coord getCursorPosition() const noexcept { return m_cursorPosition; }
     [[nodiscard]] uint16_t getAttributes() const noexcept { return m_currentAttributes; }
 
+    [[nodiscard]] ConsoleScreenBufferInfo getScreenBufferInfo() const noexcept {
+        return ConsoleScreenBufferInfo{
+            .dwSize = { m_width, m_height },
+            .dwCursorPosition = m_cursorPosition,
+            .wAttributes = m_currentAttributes,
+            .srWindow = { 0, 0, static_cast<int16_t>(m_width - 1), static_cast<int16_t>(m_height - 1) },
+            .dwMaximumWindowSize = { m_width, m_height }
+        };
+    }
+
     void setAttributes(uint16_t attr) noexcept {
         m_currentAttributes = attr;
     }

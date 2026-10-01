@@ -61,14 +61,19 @@ enum class NtStatus : uint32_t {
     SectionTooBig                    = 0xC0000040,
     PortConnectionRefused            = 0xC0000041,
     ServerNotRunning                 = 0xC0000042,
+    SharingViolation                 = 0xC0000043,
     NoSuchProcess                    = 0xC0000043,
     ProcessIsTerminating             = 0xC000010A,
     PrivilegeNotHeld                 = 0xC0000061,
     ProcedureNotFound                = 0xC000007A,
+    FileIsADirectory                 = 0xC00000BA,
+    DirectoryNotEmpty                = 0xC0000101,
+    NotADirectory                    = 0xC0000103,
     InvalidParameter1                = 0xC00000EF,
     InvalidParameter2                = 0xC00000F0,
     InvalidParameter3                = 0xC00000F1
 };
+
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
     return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);

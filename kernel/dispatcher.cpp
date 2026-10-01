@@ -535,6 +535,114 @@ void SyscallDispatcher::initializeStandardTable() {
         uint32_t action = static_cast<uint32_t>(f.arg1);
         return NtShutdownSystem(action);
     });
+
+    // 34. NtCreateSection (SSN: 0x004A)
+    registerSyscall(SSN_NtCreateSection, "NtCreateSection", 7, [](const SyscallFrame& f) -> NtStatus {
+        auto* sectionHandle = reinterpret_cast<Handle*>(f.arg1);
+        uint32_t desiredAccess = static_cast<uint32_t>(f.arg2);
+        auto* objAttr = reinterpret_cast<ObjectAttributes*>(f.arg3);
+        auto* maximumSize = reinterpret_cast<LargeInteger*>(f.arg4);
+        uint32_t prot = 0, allocAttr = 0;
+        Handle fileHandle = 0;
+        if (f.stackArgs && f.stackArgCount >= 1) prot = static_cast<uint32_t>(f.stackArgs[0]);
+        if (f.stackArgs && f.stackArgCount >= 2) allocAttr = static_cast<uint32_t>(f.stackArgs[1]);
+        if (f.stackArgs && f.stackArgCount >= 3) fileHandle = static_cast<Handle>(f.stackArgs[2]);
+        return NtCreateSection(sectionHandle, desiredAccess, objAttr, maximumSize, prot, allocAttr, fileHandle);
+    });
+
+    // 35. NtMapViewOfSection (SSN: 0x0028)
+    registerSyscall(SSN_NtMapViewOfSection, "NtMapViewOfSection", 10, [](const SyscallFrame& f) -> NtStatus {
+        Handle sec = static_cast<Handle>(f.arg1);
+        Handle proc = static_cast<Handle>(f.arg2);
+        auto* baseAddr = reinterpret_cast<uintptr_t*>(f.arg3);
+        uintptr_t zeroBits = f.arg4;
+        size_t commitSize = 0;
+        LargeInteger* secOffset = nullptr;
+        size_t* viewSize = nullptr;
+        uint32_t inheritDisp = 0, allocType = 0, win32Protect = 0;
+        if (f.stackArgs && f.stackArgCount >= 1) commitSize = static_cast<size_t>(f.stackArgs[0]);
+        if (f.stackArgs && f.stackArgCount >= 2) secOffset = reinterpret_cast<LargeInteger*>(f.stackArgs[1]);
+        if (f.stackArgs && f.stackArgCount >= 3) viewSize = reinterpret_cast<size_t*>(f.stackArgs[2]);
+        if (f.stackArgs && f.stackArgCount >= 4) inheritDisp = static_cast<uint32_t>(f.stackArgs[3]);
+        if (f.stackArgs && f.stackArgCount >= 5) allocType = static_cast<uint32_t>(f.stackArgs[4]);
+        if (f.stackArgs && f.stackArgCount >= 6) win32Protect = static_cast<uint32_t>(f.stackArgs[5]);
+        return NtMapViewOfSection(sec, proc, baseAddr, zeroBits, commitSize, secOffset, viewSize, inheritDisp, allocType, win32Protect);
+    });
+
+    // 36. NtUnmapViewOfSection (SSN: 0x002A)
+    registerSyscall(SSN_NtUnmapViewOfSection, "NtUnmapViewOfSection", 2, [](const SyscallFrame& f) -> NtStatus {
+        Handle proc = static_cast<Handle>(f.arg1);
+        uintptr_t baseAddr = f.arg2;
+        return NtUnmapViewOfSection(proc, baseAddr);
+    });
+
+    // 37. NtQueryInformationFile (SSN: 0x0011)
+    registerSyscall(SSN_NtQueryInformationFile, "NtQueryInformationFile", 5, [](const SyscallFrame& f) -> NtStatus {
+        Handle h = static_cast<Handle>(f.arg1);
+        auto* iosb = reinterpret_cast<IoStatusBlock*>(f.arg2);
+        void* info = reinterpret_cast<void*>(f.arg3);
+        uint32_t len = static_cast<uint32_t>(f.arg4);
+        FileInformationClass infoClass = FileInformationClass::FileStandardInformation;
+        if (f.stackArgs && f.stackArgCount >= 1) infoClass = static_cast<FileInformationClass>(f.stackArgs[0]);
+        return NtQueryInformationFile(h, iosb, info, len, infoClass);
+    });
+
+    // 38. NtSetInformationFile (SSN: 0x0027)
+    registerSyscall(SSN_NtSetInformationFile, "NtSetInformationFile", 5, [](const SyscallFrame& f) -> NtStatus {
+        Handle h = static_cast<Handle>(f.arg1);
+        auto* iosb = reinterpret_cast<IoStatusBlock*>(f.arg2);
+        const void* info = reinterpret_cast<const void*>(f.arg3);
+        uint32_t len = static_cast<uint32_t>(f.arg4);
+        FileInformationClass infoClass = FileInformationClass::FilePositionInformation;
+        if (f.stackArgs && f.stackArgCount >= 1) infoClass = static_cast<FileInformationClass>(f.stackArgs[0]);
+        return NtSetInformationFile(h, iosb, info, len, infoClass);
+    });
+
+    // 39. NtQueryDirectoryFile (SSN: 0x0035)
+    registerSyscall(SSN_NtQueryDirectoryFile, "NtQueryDirectoryFile", 11, [](const SyscallFrame& f) -> NtStatus {
+        Handle h = static_cast<Handle>(f.arg1);
+        Handle ev = static_cast<Handle>(f.arg2);
+        void* apc = reinterpret_cast<void*>(f.arg3);
+        void* apcCtxt = reinterpret_cast<void*>(f.arg4);
+        IoStatusBlock* iosb = nullptr;
+        void* info = nullptr;
+        uint32_t len = 0;
+        FileInformationClass infoClass = FileInformationClass::FileBothDirectoryInformation;
+        bool single = false, restart = false;
+        UnicodeString* fn = nullptr;
+        if (f.stackArgs && f.stackArgCount >= 1) iosb = reinterpret_cast<IoStatusBlock*>(f.stackArgs[0]);
+        if (f.stackArgs && f.stackArgCount >= 2) info = reinterpret_cast<void*>(f.stackArgs[1]);
+        if (f.stackArgs && f.stackArgCount >= 3) len = static_cast<uint32_t>(f.stackArgs[2]);
+        if (f.stackArgs && f.stackArgCount >= 4) infoClass = static_cast<FileInformationClass>(f.stackArgs[3]);
+        if (f.stackArgs && f.stackArgCount >= 5) single = f.stackArgs[4] != 0;
+        if (f.stackArgs && f.stackArgCount >= 6) fn = reinterpret_cast<UnicodeString*>(f.stackArgs[5]);
+        if (f.stackArgs && f.stackArgCount >= 7) restart = f.stackArgs[6] != 0;
+        return NtQueryDirectoryFile(h, ev, apc, apcCtxt, iosb, info, len, infoClass, single, fn, restart);
+    });
+
+    // 40. NtQueryPerformanceCounter (SSN: 0x0031)
+    registerSyscall(SSN_NtQueryPerformanceCounter, "NtQueryPerformanceCounter", 2, [](const SyscallFrame& f) -> NtStatus {
+        auto* counter = reinterpret_cast<LargeInteger*>(f.arg1);
+        auto* freq = reinterpret_cast<LargeInteger*>(f.arg2);
+        return NtQueryPerformanceCounter(counter, freq);
+    });
+
+    // 41. NtYieldExecution (SSN: 0x0046)
+    registerSyscall(SSN_NtYieldExecution, "NtYieldExecution", 0, [](const SyscallFrame& /*f*/) -> NtStatus {
+        return NtYieldExecution();
+    });
+
+    // 42. NtQueryInformationProcess (SSN: 0x0019)
+    registerSyscall(SSN_NtQueryInformationProcess, "NtQueryInformationProcess", 5, [](const SyscallFrame& f) -> NtStatus {
+        Handle proc = static_cast<Handle>(f.arg1);
+        ProcessInformationClass pClass = static_cast<ProcessInformationClass>(f.arg2);
+        void* info = reinterpret_cast<void*>(f.arg3);
+        uint32_t len = static_cast<uint32_t>(f.arg4);
+        uint32_t* retLen = nullptr;
+        if (f.stackArgs && f.stackArgCount >= 1) retLen = reinterpret_cast<uint32_t*>(f.stackArgs[0]);
+        return NtQueryInformationProcess(proc, pClass, info, len, retLen);
+    });
 }
+
 
 } // namespace micant::sys

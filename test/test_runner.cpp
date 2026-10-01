@@ -61,11 +61,11 @@ static int g_FailedTests = 0;
 
 #define RUN_TEST(fn) \
     do { \
-        std::cout << "[RUNNING] " << #fn << "...\n"; \
+        std::cout << "[RUNNING] " << #fn << "...\n" << std::flush; \
         int before = g_FailedTests; \
         fn(); \
         if (g_FailedTests == before) { \
-            std::cout << "  [PASS] " << #fn << "\n"; \
+            std::cout << "  [PASS] " << #fn << "\n" << std::flush; \
             g_PassedTests++; \
         } \
     } while (0)
@@ -2618,16 +2618,21 @@ namespace host_mem {
     extern "C" int   __stdcall VirtualFree(void* lpAddress, size_t dwSize, uint32_t dwFreeType);
 }
 
-struct UnmodifiedProcessExit {
-    uint32_t exitCode;
-};
+namespace host_thread {
+    extern "C" void*    __stdcall CreateThread(void* lpThreadAttributes, size_t dwStackSize, uint32_t (__stdcall *lpStartAddress)(void*), void* lpParameter, uint32_t dwCreationFlags, uint32_t* lpThreadId);
+    extern "C" uint32_t __stdcall WaitForSingleObject(void* hHandle, uint32_t dwMilliseconds);
+    extern "C" int      __stdcall CloseHandle(void* hObject);
+    extern "C" void     __stdcall ExitThread(uint32_t dwExitCode);
+}
 
 static uint32_t s_UnmodifiedExitCode = 0xFFFFFFFF;
 static bool s_UnmodifiedExitCalled = false;
+
 [[noreturn]] static void MockUnmodifiedExitProcess(uint32_t code) {
     s_UnmodifiedExitCode = code;
     s_UnmodifiedExitCalled = true;
-    throw UnmodifiedProcessExit{ code };
+    host_thread::ExitThread(code);
+    for (;;) {}
 }
 
 
@@ -2718,20 +2723,34 @@ void Test_Execution_UnmodifiedThirdPartyBinary() {
     // 7. Verify Bound IAT entries
     for (const auto& sym : imports[0].symbols) {
         uint64_t boundAddr = *reinterpret_cast<const uint64_t*>(mappedBase + sym.iatRva);
+        std::cout << "  [IAT] " << sym.name << " => 0x" << std::hex << boundAddr << std::dec << "\n" << std::flush;
         TEST_ASSERT(boundAddr != 0, "Bound IAT slot must not be null");
     }
 
-    // 8. Execute the unmodified binary's entry point!
+    // 8. Execute the unmodified binary's entry point in an isolated execution thread!
     using EntryFunc = void(*)();
     auto fnEntry = reinterpret_cast<EntryFunc>(mappedBase + headers.optionalHeader.addressOfEntryPoint);
 
     std::cout << "\n[Test Runner] Launching unmodified third-party 64-bit PE entry point at 0x" 
               << reinterpret_cast<void*>(fnEntry) << "...\n";
-    try {
-        fnEntry();
-    } catch (const UnmodifiedProcessExit& e) {
-        std::cout << "[Test Runner] Unmodified third-party PE invoked ExitProcess(" << e.exitCode << ") cleanly!\n";
+
+    auto threadProc = [](void* param) -> unsigned long {
+        auto entry = reinterpret_cast<EntryFunc>(param);
+        entry();
+        return 0;
+    };
+    void* hThread = host_thread::CreateThread(
+        nullptr, 0,
+        reinterpret_cast<uint32_t(__stdcall*)(void*)>(+threadProc),
+        reinterpret_cast<void*>(fnEntry),
+        0, nullptr
+    );
+    if (hThread) {
+        host_thread::WaitForSingleObject(hThread, 0xFFFFFFFF);
+        host_thread::CloseHandle(hThread);
     }
+
+    std::cout << "[Test Runner] Unmodified third-party PE invoked ExitProcess(" << s_UnmodifiedExitCode << ") cleanly!\n";
 
     // 9. Verify that the unmodified binary executed all calls successfully
     TEST_ASSERT(s_UnmodifiedExitCalled, "Unmodified binary must invoke ExitProcess through bound IAT");
@@ -2740,6 +2759,134 @@ void Test_Execution_UnmodifiedThirdPartyBinary() {
     // Restore real ExitProcess in DynamicLoader & free image
     ldr::DynamicLoader::get().registerExport("kernel32.dll", "ExitProcess", reinterpret_cast<void*>(win32::ExitProcess));
     host_mem::VirtualFree(mappedBase, 0, 0x8000 /* MEM_RELEASE */);
+}
+
+void Test_ExpandedWin32AndNtSystemCalls() {
+    using namespace micant::win32;
+
+    // 1. Initialize and verify expanded Win32 Subsystem Exports
+    win32::InitializeWin32SubsystemExports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    TEST_ASSERT(ldr.getExport("kernel32.dll", "GetLastError") != nullptr, "GetLastError must be exported");
+    TEST_ASSERT(ldr.getExport("kernel32.dll", "CreateFileMappingW") != nullptr, "CreateFileMappingW must be exported");
+    TEST_ASSERT(ldr.getExport("kernel32.dll", "FindFirstFileW") != nullptr, "FindFirstFileW must be exported");
+    TEST_ASSERT(ldr.getExport("kernel32.dll", "QueryPerformanceCounter") != nullptr, "QueryPerformanceCounter must be exported");
+    TEST_ASSERT(ldr.getExport("ntdll.dll", "NtCreateSection") != nullptr, "NtCreateSection must be exported from ntdll");
+    TEST_ASSERT(ldr.getExport("ntdll.dll", "NtQueryInformationFile") != nullptr, "NtQueryInformationFile must be exported from ntdll");
+    TEST_ASSERT(ldr.getExport("ntdll.dll", "NtQueryDirectoryFile") != nullptr, "NtQueryDirectoryFile must be exported from ntdll");
+    TEST_ASSERT(ldr.getExport("ntdll.dll", "RtlNtStatusToDosError") != nullptr, "RtlNtStatusToDosError must be exported from ntdll");
+
+    // 2. Error Handling & TEB last error synchronization
+    win32::SetLastError(12345);
+    TEST_ASSERT(win32::GetLastError() == 12345, "GetLastError must return code set by SetLastError");
+    TEST_ASSERT(ntdll::RtlNtStatusToDosError(NtStatus::NoSuchFile) == 2, "RtlNtStatusToDosError must return ERROR_FILE_NOT_FOUND (2)");
+    TEST_ASSERT(ntdll::RtlNtStatusToDosError(NtStatus::AccessDenied) == 5, "RtlNtStatusToDosError must return ERROR_ACCESS_DENIED (5)");
+    TEST_ASSERT(ntdll::RtlNtStatusToDosError(NtStatus::NoMemory) == 14, "RtlNtStatusToDosError must return ERROR_OUTOFMEMORY (14)");
+
+    // 3. Environment & Current Directory Management
+    wchar_t envBuf[256]{};
+    DWORD len = win32::GetEnvironmentVariableW(L"OS", envBuf, 256);
+    TEST_ASSERT(len > 0 && std::wstring(envBuf) == L"MicaNT", "Environment variable OS must be MicaNT");
+
+    win32::SetEnvironmentVariableW(L"MICANT_TEST_VAR", L"Active");
+    len = win32::GetEnvironmentVariableW(L"MICANT_TEST_VAR", envBuf, 256);
+    TEST_ASSERT(len > 0 && std::wstring(envBuf) == L"Active", "SetEnvironmentVariableW must set custom variable");
+
+    wchar_t dirBuf[256]{};
+    win32::GetCurrentDirectoryW(256, dirBuf);
+    TEST_ASSERT(std::wstring(dirBuf) == L"C:\\Windows\\System32", "Initial working directory must be C:\\Windows\\System32");
+
+    win32::SetCurrentDirectoryW(L"C:\\Users\\Default");
+    win32::GetCurrentDirectoryW(256, dirBuf);
+    TEST_ASSERT(std::wstring(dirBuf) == L"C:\\Users\\Default", "SetCurrentDirectoryW must change directory");
+    win32::SetCurrentDirectoryW(L"C:\\Windows\\System32"); // restore
+
+    wchar_t fullPath[256]{};
+    wchar_t* filePart = nullptr;
+    win32::GetFullPathNameW(L"cmd.exe", 256, fullPath, &filePart);
+    TEST_ASSERT(std::wstring(fullPath) == L"C:\\Windows\\System32\\cmd.exe", "GetFullPathNameW must resolve relative file");
+
+    // 4. Module & Image Introspection
+    HMODULE hKernel32 = win32::GetModuleHandleW(L"KERNEL32.DLL");
+    TEST_ASSERT(hKernel32 != nullptr, "GetModuleHandleW for kernel32 must return valid HMODULE");
+    win32::GetModuleFileNameW(nullptr, dirBuf, 256);
+    TEST_ASSERT(std::wstring(dirBuf).find(L"micant.exe") != std::wstring::npos, "GetModuleFileNameW for main module must return micant.exe");
+
+    // 5. Directory Operations & FindFirstFile / FindNextFile
+    win32::CreateDirectoryW(L"C:\\ApiTestDir", nullptr);
+    DWORD attrs = win32::GetFileAttributesW(L"C:\\ApiTestDir");
+    TEST_ASSERT((attrs & win32::FILE_ATTRIBUTE_DIRECTORY) != 0, "ApiTestDir must have FILE_ATTRIBUTE_DIRECTORY attribute");
+
+    win32::WIN32_FIND_DATAW findData{};
+    win32::HANDLE hFind = win32::FindFirstFileW(L"C:\\Windows\\System32\\*", &findData);
+    TEST_ASSERT(hFind != win32::INVALID_HANDLE_VALUE, "FindFirstFileW must succeed on C:\\Windows\\System32\\*");
+    std::vector<std::wstring> foundNames;
+    foundNames.push_back(findData.cFileName);
+    while (win32::FindNextFileW(hFind, &findData)) {
+        foundNames.push_back(findData.cFileName);
+    }
+    win32::FindClose(hFind);
+    TEST_ASSERT(foundNames.size() >= 2, "Must find at least 2 entries in System32 (e.g. ntdll.dll, kernel32.dll)");
+
+    // 6. File Operations, Sizing & Seeking
+    win32::HANDLE hFile = win32::CreateFileW(L"C:\\api_seek_test.txt", win32::GENERIC_READ | win32::GENERIC_WRITE, 0, nullptr, win32::CREATE_ALWAYS, 0, nullptr);
+    TEST_ASSERT(hFile != nullptr, "CreateFileW must create C:\\api_seek_test.txt");
+
+    const char testText[] = "MicaNT Clean-Room Kernel System Calls Test Buffer";
+    DWORD written = 0;
+    win32::WriteFile(hFile, testText, sizeof(testText), &written, nullptr);
+    TEST_ASSERT(written == sizeof(testText), "WriteFile must write all bytes");
+
+    LargeInteger fileSize{};
+    win32::GetFileSizeEx(hFile, &fileSize);
+    TEST_ASSERT(fileSize.quadPart == sizeof(testText), "GetFileSizeEx must match written size");
+
+    LargeInteger newPos{}, move{};
+    move.quadPart = 7;
+    win32::SetFilePointerEx(hFile, move, &newPos, win32::FILE_BEGIN);
+    TEST_ASSERT(newPos.quadPart == 7, "SetFilePointerEx must move offset to 7");
+
+    char readBuf[16]{};
+    DWORD readBytes = 0;
+    win32::ReadFile(hFile, readBuf, 10, &readBytes, nullptr);
+    TEST_ASSERT(readBytes == 10, "ReadFile must read 10 bytes from offset 7");
+    win32::CloseHandle(hFile);
+    win32::DeleteFileW(L"C:\\api_seek_test.txt");
+    win32::RemoveDirectoryW(L"C:\\ApiTestDir");
+
+    // 7. Memory Mapping & Section Objects
+    win32::HANDLE hMap = win32::CreateFileMappingW(win32::INVALID_HANDLE_VALUE, nullptr, win32::PAGE_READWRITE, 0, 8192, L"TestSection");
+    TEST_ASSERT(hMap != nullptr, "CreateFileMappingW must create 8KB section");
+    win32::LPVOID pView = win32::MapViewOfFile(hMap, win32::FILE_MAP_ALL_ACCESS, 0, 0, 8192);
+    TEST_ASSERT(pView != nullptr, "MapViewOfFile must map section view");
+    std::memset(pView, 0x5A, 4096);
+    TEST_ASSERT(*reinterpret_cast<uint8_t*>(pView) == 0x5A, "Mapped view memory must be writable and readable");
+    win32::UnmapViewOfFile(pView);
+    win32::CloseHandle(hMap);
+
+    // 8. High-Precision Performance Counter
+    LargeInteger qpc1{}, qpc2{}, freq{};
+    win32::QueryPerformanceFrequency(&freq);
+    TEST_ASSERT(freq.quadPart == 1000000000LL, "Performance frequency must be 1 GHz (1,000,000,000 Hz)");
+    win32::QueryPerformanceCounter(&qpc1);
+    win32::Sleep(1);
+    win32::QueryPerformanceCounter(&qpc2);
+    TEST_ASSERT(qpc2.quadPart >= qpc1.quadPart, "QPC counter must monotonically advance");
+
+    // 9. Console Controls & Screen Buffer
+    conhost::ConsoleScreenBufferInfo csbi{};
+    win32::GetConsoleScreenBufferInfo(win32::GetStdHandle(win32::STD_OUTPUT_HANDLE), &csbi);
+    TEST_ASSERT(csbi.dwSize.x == 80 && csbi.dwSize.y == 25, "Default console buffer size must be 80x25");
+    DWORD consoleMode = 0;
+    win32::GetConsoleMode(win32::GetStdHandle(win32::STD_OUTPUT_HANDLE), &consoleMode);
+    TEST_ASSERT((consoleMode & win32::ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0, "VT100 processing must be enabled in console mode");
+
+    // 10. Process Query & Thread Yield
+    DWORD exitCode = 0xFFFFFFFF;
+    win32::GetExitCodeProcess(win32::GetCurrentProcess(), &exitCode);
+    TEST_ASSERT(exitCode == 0, "GetExitCodeProcess must return 0 for running process");
+    TEST_ASSERT(win32::SwitchToThread() == win32::TRUE, "SwitchToThread must return TRUE");
 }
 
 int main() {
@@ -2782,6 +2929,8 @@ int main() {
     RUN_TEST(Test_PeLoader_DynamicImportBindingAndUnmodifiedBinary);
     RUN_TEST(Test_Cpu_GdtTssAndRing3HardwareTransitions);
     RUN_TEST(Test_Execution_UnmodifiedThirdPartyBinary);
+    RUN_TEST(Test_ExpandedWin32AndNtSystemCalls);
+
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

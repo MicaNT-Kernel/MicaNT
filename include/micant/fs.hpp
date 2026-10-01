@@ -312,6 +312,96 @@ public:
         openFiles_.erase(fileObj);
     }
 
+    struct DirectoryEntry {
+        std::wstring name;
+        uint32_t attributes{0};
+        size_t size{0};
+        bool isDirectory{false};
+    };
+
+    NtStatus createDirectory(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring norm = normalizePath(path);
+        if (findEntry(norm)) return NtStatus::ObjectNameCollision;
+        auto entry = createPathEntries(norm, true);
+        return entry ? NtStatus::Success : NtStatus::ObjectPathNotFound;
+    }
+
+    NtStatus deleteFile(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring norm = normalizePath(path);
+        size_t lastSlash = norm.find_last_of(L'\\');
+        std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
+        std::wstring fileName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
+
+        auto parent = findEntry(parentPath);
+        if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
+
+        auto it = parent->children.find(fileName);
+        if (it == parent->children.end()) return NtStatus::NoSuchFile;
+        if (it->second->isDirectory) return NtStatus::FileIsADirectory;
+
+        parent->children.erase(it);
+        return NtStatus::Success;
+    }
+
+    NtStatus removeDirectory(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring norm = normalizePath(path);
+        size_t lastSlash = norm.find_last_of(L'\\');
+        std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
+        std::wstring dirName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
+
+        auto parent = findEntry(parentPath);
+        if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
+
+        auto it = parent->children.find(dirName);
+        if (it == parent->children.end()) return NtStatus::NoSuchFile;
+        if (!it->second->isDirectory) return NtStatus::NotADirectory;
+        if (!it->second->children.empty()) return NtStatus::DirectoryNotEmpty;
+
+        parent->children.erase(it);
+        return NtStatus::Success;
+    }
+
+    NtStatus queryFileAttributes(std::wstring_view path, uint32_t& attributes) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring norm = normalizePath(path);
+        auto entry = findEntry(norm);
+        if (!entry) return NtStatus::NoSuchFile;
+        attributes = entry->attributes;
+        return NtStatus::Success;
+    }
+
+    NtStatus setFileAttributes(std::wstring_view path, uint32_t attributes) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring norm = normalizePath(path);
+        auto entry = findEntry(norm);
+        if (!entry) return NtStatus::NoSuchFile;
+        entry->attributes = attributes;
+        return NtStatus::Success;
+    }
+
+    NtStatus queryDirectory(std::wstring_view path, std::vector<DirectoryEntry>& entries) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring norm = normalizePath(path);
+        auto entry = findEntry(norm);
+        if (!entry) return NtStatus::NoSuchFile;
+        if (!entry->isDirectory) return NtStatus::NotADirectory;
+
+        entries.clear();
+        for (const auto& [name, child] : entry->children) {
+            entries.push_back(DirectoryEntry{
+                .name = name,
+                .attributes = child->attributes,
+                .size = child->content.size(),
+                .isDirectory = child->isDirectory
+            });
+        }
+        return NtStatus::Success;
+    }
+
+
 private:
     VirtualFileSystem() = default;
 

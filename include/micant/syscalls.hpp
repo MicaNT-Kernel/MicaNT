@@ -64,6 +64,22 @@ inline constexpr uint32_t SSN_NtCreatePort               = 0x0093;
 inline constexpr uint32_t SSN_NtConnectPort              = 0x0096;
 inline constexpr uint32_t SSN_NtRequestWaitReplyPort     = 0x0022;
 
+// Section & Memory Mapping SSNs
+inline constexpr uint32_t SSN_NtCreateSection            = 0x004A;
+inline constexpr uint32_t SSN_NtOpenSection              = 0x0037;
+inline constexpr uint32_t SSN_NtMapViewOfSection         = 0x0028;
+inline constexpr uint32_t SSN_NtUnmapViewOfSection       = 0x002A;
+
+// File Information & Directory Query SSNs
+inline constexpr uint32_t SSN_NtQueryInformationFile     = 0x0011;
+inline constexpr uint32_t SSN_NtSetInformationFile       = 0x0027;
+inline constexpr uint32_t SSN_NtQueryDirectoryFile       = 0x0035;
+
+// Performance & Execution SSNs
+inline constexpr uint32_t SSN_NtQueryPerformanceCounter  = 0x0031;
+inline constexpr uint32_t SSN_NtYieldExecution           = 0x0046;
+inline constexpr uint32_t SSN_NtQueryInformationProcess  = 0x0019;
+
 /**
  * @brief Native NT Syscall Signatures in Modern C++23
  */
@@ -214,4 +230,81 @@ NtStatus NtQuerySystemInformation(
     uint32_t* returnLength
 );
 
+// Section Management
+NtStatus NtCreateSection(
+    Handle* sectionHandle,
+    uint32_t desiredAccess,
+    ObjectAttributes* objectAttributes,
+    LargeInteger* maximumSize,
+    uint32_t sectionPageProtection,
+    uint32_t allocationAttributes,
+    Handle fileHandle
+);
+
+NtStatus NtMapViewOfSection(
+    Handle sectionHandle,
+    Handle processHandle,
+    uintptr_t* baseAddress,
+    uintptr_t zeroBits,
+    size_t commitSize,
+    LargeInteger* sectionOffset,
+    size_t* viewSize,
+    uint32_t inheritDisposition,
+    uint32_t allocationType,
+    uint32_t win32Protect
+);
+
+NtStatus NtUnmapViewOfSection(
+    Handle processHandle,
+    uintptr_t baseAddress
+);
+
+// File Information & Directory Queries
+NtStatus NtQueryInformationFile(
+    Handle fileHandle,
+    IoStatusBlock* ioStatusBlock,
+    void* fileInformation,
+    uint32_t length,
+    FileInformationClass fileInformationClass
+);
+
+NtStatus NtSetInformationFile(
+    Handle fileHandle,
+    IoStatusBlock* ioStatusBlock,
+    const void* fileInformation,
+    uint32_t length,
+    FileInformationClass fileInformationClass
+);
+
+NtStatus NtQueryDirectoryFile(
+    Handle fileHandle,
+    Handle event,
+    void* apcRoutine,
+    void* apcContext,
+    IoStatusBlock* ioStatusBlock,
+    void* fileInformation,
+    uint32_t length,
+    FileInformationClass fileInformationClass,
+    bool returnSingleEntry,
+    UnicodeString* fileName,
+    bool restartScan
+);
+
+// Performance & Process Information
+NtStatus NtQueryPerformanceCounter(
+    LargeInteger* performanceCounter,
+    LargeInteger* performanceFrequency
+);
+
+NtStatus NtYieldExecution();
+
+NtStatus NtQueryInformationProcess(
+    Handle processHandle,
+    ProcessInformationClass processInformationClass,
+    void* processInformation,
+    uint32_t processInformationLength,
+    uint32_t* returnLength
+);
+
 } // namespace micant::sys
+

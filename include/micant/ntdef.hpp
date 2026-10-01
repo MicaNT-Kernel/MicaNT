@@ -139,4 +139,98 @@ struct KUserSharedData {
 
 inline constexpr uintptr_t UserSharedDataAddress = 0x7FFE0000ULL;
 
+// ============================================================================
+// File Information Classes & Structures
+// ============================================================================
+
+enum class FileInformationClass : uint32_t {
+    FileDirectoryInformation = 1,
+    FileFullDirectoryInformation = 2,
+    FileBothDirectoryInformation = 3,
+    FileBasicInformation = 4,
+    FileStandardInformation = 5,
+    FileInternalInformation = 6,
+    FileEaInformation = 7,
+    FileAccessInformation = 8,
+    FileNameInformation = 9,
+    FileRenameInformation = 10,
+    FileLinkInformation = 11,
+    FileNamesInformation = 12,
+    FileDispositionInformation = 13,
+    FilePositionInformation = 14,
+    FileFullEaInformation = 15,
+    FileModeInformation = 16,
+    FileAlignmentInformation = 17,
+    FileAllInformation = 18,
+    FileAllocationInformation = 19,
+    FileEndOfFileInformation = 20
+};
+
+struct FileBasicInformation {
+    LargeInteger creationTime{};
+    LargeInteger lastAccessTime{};
+    LargeInteger lastWriteTime{};
+    LargeInteger changeTime{};
+    uint32_t fileAttributes{0};
+};
+
+struct FileStandardInformation {
+    LargeInteger allocationSize{};
+    LargeInteger endOfFile{};
+    uint32_t numberOfLinks{1};
+    bool deletePending{false};
+    bool directory{false};
+};
+
+struct FilePositionInformation {
+    LargeInteger currentByteOffset{};
+};
+
+struct FileEndOfFileInformation {
+    LargeInteger endOfFile{};
+};
+
+struct FileBothDirInformation {
+    uint32_t nextEntryOffset{0};
+    uint32_t fileIndex{0};
+    LargeInteger creationTime{};
+    LargeInteger lastAccessTime{};
+    LargeInteger lastWriteTime{};
+    LargeInteger changeTime{};
+    LargeInteger endOfFile{};
+    LargeInteger allocationSize{};
+    uint32_t fileAttributes{0};
+    uint32_t fileNameLength{0};
+    uint32_t eaSize{0};
+    int8_t shortNameLength{0};
+    wchar_t shortName[12]{};
+    wchar_t fileName[260]{};
+};
+
+// ============================================================================
+// Process Information Classes & Structures
+// ============================================================================
+
+enum class ProcessInformationClass : uint32_t {
+    ProcessBasicInformation = 0,
+    ProcessQuotaLimits = 1,
+    ProcessIoCounters = 2,
+    ProcessVmCounters = 3,
+    ProcessTimes = 4,
+    ProcessBasePriority = 5,
+    ProcessRaisePriority = 6,
+    ProcessDebugPort = 7,
+    ProcessExceptionPort = 8,
+    ProcessAccessToken = 9
+};
+
+struct ProcessBasicInformation {
+    NtStatus exitStatus{NtStatus::Success};
+    uintptr_t pebBaseAddress{0};
+    uintptr_t affinityMask{0x0F};
+    int32_t basePriority{8};
+    Handle uniqueProcessId{0};
+    Handle inheritedFromUniqueProcessId{0};
+};
+
 } // namespace micant
