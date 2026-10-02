@@ -60,6 +60,7 @@
 #include "micant/prismx.hpp"
 #include "micant/prism3d.hpp"
 #include "micant/dxgkrnl.hpp"
+#include "micant/vulkan.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -4945,6 +4946,198 @@ void Test_PrismX_And_Prism3D_GraphicsSubsystem() {
     factory->Release();
 }
 
+void Test_VulkanLoader_And_PrismVK_Subsystem() {
+    using namespace micant::vulkan;
+
+    // 1. Initialize Vulkan Loader Subsystem Exports
+    InitializeVulkanSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("vulkan-1.dll", "vkCreateInstance") != nullptr, "vulkan-1.dll vkCreateInstance must be exported");
+    TEST_ASSERT(ldr.getExport("vulkan-1.dll", "vkEnumeratePhysicalDevices") != nullptr, "vulkan-1.dll vkEnumeratePhysicalDevices must be exported");
+    TEST_ASSERT(ldr.getExport("vulkan-1.dll", "vkCreateDevice") != nullptr, "vulkan-1.dll vkCreateDevice must be exported");
+    TEST_ASSERT(ldr.getExport("vulkan-1.dll", "vkCreateWin32SurfaceKHR") != nullptr, "vulkan-1.dll vkCreateWin32SurfaceKHR must be exported");
+    TEST_ASSERT(ldr.getExport("vulkan-1.dll", "vkCreateSwapchainKHR") != nullptr, "vulkan-1.dll vkCreateSwapchainKHR must be exported");
+    TEST_ASSERT(ldr.getExport("vulkan-1.dll", "vkQueueSubmit") != nullptr, "vulkan-1.dll vkQueueSubmit must be exported");
+
+    // 2. Registry Driver Discovery Check
+    TEST_ASSERT(VulkanLoader::get().isIcdRegistered(), "Khronos Vulkan Driver registry hive must be initialized");
+
+    // 3. Create Vulkan Instance
+    VkApplicationInfo appInfo{};
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName = "MicaNT Vulkan Test App";
+    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pEngineName = "PrismVK";
+    appInfo.engineVersion = VK_MAKE_VERSION(1, 3, 0);
+    appInfo.apiVersion = VK_API_VERSION_1_3;
+
+    VkInstanceCreateInfo instInfo{};
+    instInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    instInfo.pApplicationInfo = &appInfo;
+
+    VkInstance instance = nullptr;
+    VkResult res = vkCreateInstance(&instInfo, nullptr, &instance);
+    TEST_ASSERT(res == VK_SUCCESS && instance != nullptr, "vkCreateInstance must succeed");
+
+    // 4. Enumerate Physical Devices & Properties
+    uint32_t physCount = 0;
+    res = vkEnumeratePhysicalDevices(instance, &physCount, nullptr);
+    TEST_ASSERT(res == VK_SUCCESS && physCount >= 1, "vkEnumeratePhysicalDevices count must be at least 1");
+
+    std::vector<VkPhysicalDevice> physDevices(physCount);
+    res = vkEnumeratePhysicalDevices(instance, &physCount, physDevices.data());
+    TEST_ASSERT(res == VK_SUCCESS && physDevices[0] != nullptr, "vkEnumeratePhysicalDevices must return physical device handle");
+
+    VkPhysicalDevice phys = physDevices[0];
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(phys, &props);
+    TEST_ASSERT(props.apiVersion == VK_API_VERSION_1_3, "Vulkan API version must be 1.3");
+    TEST_ASSERT(props.vendorID == 0x1414, "Vendor ID must match 0x1414");
+    TEST_ASSERT(props.deviceID == 0x008C, "Device ID must match 0x008C");
+    TEST_ASSERT(props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, "Device must be Discrete GPU");
+
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(phys, &memProps);
+    TEST_ASSERT(memProps.memoryHeapCount >= 2, "Must have at least 2 memory heaps");
+    TEST_ASSERT(memProps.memoryHeaps[0].size == 8192ULL * 1024 * 1024, "Heap 0 must have 8192 MB VRAM");
+
+    // 5. Create Logical Device & Queues
+    float queuePriority = 1.0f;
+    VkDeviceQueueCreateInfo qci{};
+    qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    qci.queueFamilyIndex = 0;
+    qci.queueCount = 1;
+    qci.pQueuePriorities = &queuePriority;
+
+    VkDeviceCreateInfo devInfo{};
+    devInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    devInfo.queueCreateInfoCount = 1;
+    devInfo.pQueueCreateInfos = &qci;
+
+    VkDevice device = nullptr;
+    res = vkCreateDevice(phys, &devInfo, nullptr, &device);
+    TEST_ASSERT(res == VK_SUCCESS && device != nullptr, "vkCreateDevice must succeed");
+
+    VkQueue queue = nullptr;
+    vkGetDeviceQueue(device, 0, 0, &queue);
+    TEST_ASSERT(queue != nullptr, "vkGetDeviceQueue must return valid queue");
+
+    // 6. Win32 Surface & Swapchain
+    VkWin32SurfaceCreateInfoKHR surfInfo{};
+    surfInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+    surfInfo.hwnd = reinterpret_cast<void*>(0x20002);
+    surfInfo.hinstance = reinterpret_cast<void*>(0x400000);
+
+    VkSurfaceKHR surface = 0;
+    res = vkCreateWin32SurfaceKHR(instance, &surfInfo, nullptr, &surface);
+    TEST_ASSERT(res == VK_SUCCESS && surface != 0, "vkCreateWin32SurfaceKHR must succeed");
+
+    VkSurfaceCapabilitiesKHR caps{};
+    res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface, &caps);
+    TEST_ASSERT(res == VK_SUCCESS && caps.minImageCount == 2, "Surface caps minImageCount must be 2");
+
+    VkSwapchainCreateInfoKHR scInfo{};
+    scInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    scInfo.surface = surface;
+    scInfo.minImageCount = 2;
+    scInfo.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
+    scInfo.imageExtent = { 1280, 720 };
+    scInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    scInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+    VkSwapchainKHR swapchain = 0;
+    res = vkCreateSwapchainKHR(device, &scInfo, nullptr, &swapchain);
+    TEST_ASSERT(res == VK_SUCCESS && swapchain != 0, "vkCreateSwapchainKHR must succeed");
+
+    uint32_t imageCount = 0;
+    vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr);
+    TEST_ASSERT(imageCount == 2, "Swapchain image count must be 2");
+
+    // 7. Command Buffer Recording & Queue Submission
+    VkCommandPool commandPool = 0;
+    VkCommandPoolCreateInfo cpInfo{};
+    cpInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    cpInfo.queueFamilyIndex = 0;
+    res = vkCreateCommandPool(device, &cpInfo, nullptr, &commandPool);
+    TEST_ASSERT(res == VK_SUCCESS && commandPool != 0, "vkCreateCommandPool must succeed");
+
+    VkCommandBufferAllocateInfo cbAlloc{};
+    cbAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbAlloc.commandPool = commandPool;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmdBuf = nullptr;
+    res = vkAllocateCommandBuffers(device, &cbAlloc, &cmdBuf);
+    TEST_ASSERT(res == VK_SUCCESS && cmdBuf != nullptr, "vkAllocateCommandBuffers must succeed");
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    res = vkBeginCommandBuffer(cmdBuf, &beginInfo);
+    TEST_ASSERT(res == VK_SUCCESS, "vkBeginCommandBuffer must succeed");
+
+    VkClearValue clearColor{};
+    clearColor.color.float32[0] = 0.05f;
+    clearColor.color.float32[1] = 0.1f;
+    clearColor.color.float32[2] = 0.25f;
+    clearColor.color.float32[3] = 1.0f;
+
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderArea.extent = { 1280, 720 };
+    rpBegin.clearValueCount = 1;
+    rpBegin.pClearValues = &clearColor;
+    vkCmdBeginRenderPass(cmdBuf, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport vp{ 0.0f, 0.0f, 1280.0f, 720.0f, 0.0f, 1.0f };
+    vkCmdSetViewport(cmdBuf, 0, 1, &vp);
+    vkCmdDraw(cmdBuf, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmdBuf);
+
+    res = vkEndCommandBuffer(cmdBuf);
+    TEST_ASSERT(res == VK_SUCCESS, "vkEndCommandBuffer must succeed");
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmdBuf;
+    res = vkQueueSubmit(queue, 1, &submitInfo, 0);
+    TEST_ASSERT(res == VK_SUCCESS, "vkQueueSubmit must succeed");
+
+    uint32_t imageIndex = 0;
+    res = vkAcquireNextImageKHR(device, swapchain, 0, 0, 0, &imageIndex);
+    TEST_ASSERT(res == VK_SUCCESS && imageIndex == 0, "vkAcquireNextImageKHR must acquire image 0");
+
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &swapchain;
+    presentInfo.pImageIndices = &imageIndex;
+    res = vkQueuePresentKHR(queue, &presentInfo);
+    TEST_ASSERT(res == VK_SUCCESS, "vkQueuePresentKHR must succeed");
+
+    // 8. Shell Command Verification ('vulkan' and 'vulkan test')
+    shell::CommandShell testShell;
+    std::ostringstream ssVk;
+    testShell.execute("vulkan", ssVk);
+    std::string outVk = ssVk.str();
+    TEST_ASSERT(outVk.find("MicaNT PrismVK & Vulkan 1.3 ICD Subsystem") != std::string::npos, "vulkan command must display header");
+    TEST_ASSERT(outVk.find("vulkan-1.dll (Khronos Vulkan 1.3.0 Specification)") != std::string::npos, "vulkan command must list 1.3 spec");
+    TEST_ASSERT(outVk.find("8192 MB") != std::string::npos, "vulkan command must list 8192 MB VRAM");
+
+    std::ostringstream ssVkTest;
+    testShell.execute("vulkan test", ssVkTest);
+    std::string outVkTest = ssVkTest.str();
+    TEST_ASSERT(outVkTest.find("Vulkan 1.3 pipeline verified successfully") != std::string::npos, "vulkan test must verify pipeline");
+
+    // 9. Cleanup
+    vkFreeCommandBuffers(device, commandPool, 1, &cmdBuf);
+    vkDestroyCommandPool(device, commandPool, nullptr);
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
+    vkDestroySurfaceKHR(instance, surface, nullptr);
+    vkDestroyDevice(device, nullptr);
+    vkDestroyInstance(instance, nullptr);
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -4995,6 +5188,7 @@ int main() {
     RUN_TEST(Test_ServiceControlManager_And_SvcHost);
     RUN_TEST(Test_Lsass_Winlogon_And_SamDatabase);
     RUN_TEST(Test_PrismX_And_Prism3D_GraphicsSubsystem);
+    RUN_TEST(Test_VulkanLoader_And_PrismVK_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -143,7 +143,7 @@
         <p>Named in tribute to Dave Cutler's 1988 DEC PRISM project. Complete clean-room graphics compatible with Microsoft's MIT-licensed DirectX-Headers and DirectXTK.</p>
       </div>
 
-      <div class="pillars-grid" style="grid-template-columns: 1fr 1fr;">
+      <div class="pillars-grid" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
         <div class="pillar-card">
           <div class="pillar-icon">🖥️</div>
           <h3>PrismX Presentation Pipeline</h3>
@@ -154,6 +154,12 @@
           <div class="pillar-icon">📐</div>
           <h3>Prism3D Barycentric Rasterizer</h3>
           <p>Direct3D 11/12 runtime engine with vertex/index buffers, viewports, render target views, and depth-stencil views. Built-in high-precision software reference rasterizer scan-converts 3D geometry with sub-pixel Gouraud RGB color shading and Z-buffer testing.</p>
+        </div>
+
+        <div class="pillar-card">
+          <div class="pillar-icon">🔺</div>
+          <h3>PrismVK &amp; Khronos Vulkan 1.3</h3>
+          <p>Standard Khronos Vulkan ICD Loader (<code>vulkan-1.dll</code>) with registry driver discovery, discrete GPU device enumeration (1.3.0, 8GB VRAM), <code>VK_KHR_win32_surface</code> windowing, and <code>VK_KHR_swapchain</code> frame presentation.</p>
         </div>
       </div>
     </div>
