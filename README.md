@@ -76,6 +76,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 16. **Advanced Networking Stack & QUIC Protocol Engine (`ndis.hpp`, `tcpip.hpp`, `ws2_32.hpp`, `iphlpapi.hpp`)**: NDIS 6.x driver miniport interface, 10 Gbps virtual network adapter, ARP resolution, IPv4/IPv6 RFC 8200 dual-stack addressing with link-local generation, ICMPv4/v6 echo ping, UDP datagrams, full RFC 793 / RFC 9293 11-state TCP state machine with 3-way handshake and bidirectional streaming, Next-Gen QUIC RFC 9000 protocol header framing, Winsock 2 (`ws2_32.dll`), IP Helper API (`iphlpapi.dll`), and native shell network commands (`ipconfig`, `ping`, `netstat`).
 17. **AArch64 (ARM64) Multi-Architecture Subsystem (`arm64.hpp`)**: Full 64-bit ARM hardware state architecture (`X0`–`X30`, `SP_EL0`/`SP_EL1`, `PSTATE`, 128-bit NEON/SIMD `Q0`–`Q31`), `ESR_EL1` / `FAR_EL1` exception syndrome decoders, VMSA 48-bit 4-level MMU translation tables (`TTBR0_EL1` / `TTBR1_EL1`), fast `KiArm64SystemCall` `SVC #1` dispatcher adhering to standard Windows on ARM64 AAPCS64 register conventions, and 8-core SMP HAL topology support (Snapdragon X Elite / Oryon).
 18. **Named Pipes & Mailslots IPC Subsystem (`npfs.hpp`, `fs.hpp`, `kernel32.hpp`)**: Full-duplex named pipe file system (`\Device\NamedPipe`), multi-instance client/server load distribution, 5-state lifecycle (`Listening` to `Broken`), byte stream and message stream modes with atomic message boundaries and `ERROR_MORE_DATA` signaling, non-destructive queue inspection (`PeekNamedPipe`), transactional IPC (`TransactNamedPipe`), and broadcast datagram mailslot file system (`\Device\Mailslot`) with configurable message timeouts.
+19. **NTFS Subsystem & MFT Engine (`ntfs.hpp`, `fs.hpp`)**: Full clean-room New Technology File System (NTFS) driver featuring 1024-byte Master File Table ($MFT) record parsing, Update Sequence Array (USA) fixup generation and torn-write validation, Standard Information (`$STANDARD_INFORMATION`), File Name (`$FILE_NAME`), and Data (`$DATA`) attributes, variable-length compressed LCN/VCN runlist mapping pairs (`DataRunCodec`), Alternate Data Streams (ADS, e.g. `file.txt:Zone.Identifier`), `$LogFile` Write-Ahead Logging (WAL) and checkpoint replay engine (`LogFileJournal`), and seamless VFS mounting and drive routing.
 
 ---
 
@@ -180,12 +181,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (41 Suites, 100% Passing)
+### Build & Run Unit Test Suite (42 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 41 Test Suites:
+# Run all 42 Test Suites:
 .\bin\micant_tests.exe
 ```
 

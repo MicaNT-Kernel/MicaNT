@@ -83,7 +83,11 @@ enum class NtStatus : uint32_t {
     PipeClosing                      = 0xC00000B1,
     PipeConnected                    = 0xC00000B2,
     PipeListening                    = 0xC00000B3,
-    PipeBroken                       = 0xC000014B
+    PipeBroken                       = 0xC000014B,
+    VolumeNotMounted                 = 0xC0000078,
+    VolumeTooSmall                   = 0xC0000287,
+    DeviceError                      = 0xC00000E0,
+    FileCorrupted                    = 0xC0000102
 };
 
 
@@ -142,6 +146,10 @@ enum class NtStatus : uint32_t {
         case NtStatus::PipeConnected: return "STATUS_PIPE_CONNECTED";
         case NtStatus::PipeListening: return "STATUS_PIPE_LISTENING";
         case NtStatus::PipeBroken: return "STATUS_PIPE_BROKEN";
+        case NtStatus::VolumeNotMounted: return "STATUS_VOLUME_NOT_MOUNTED";
+        case NtStatus::VolumeTooSmall: return "STATUS_VOLUME_TOO_SMALL";
+        case NtStatus::DeviceError: return "STATUS_DEVICE_DATA_ERROR";
+        case NtStatus::FileCorrupted: return "STATUS_FILE_CORRUPT_ERROR";
         default: return "STATUS_UNKNOWN";
     }
 }

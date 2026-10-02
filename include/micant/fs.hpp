@@ -17,6 +17,7 @@
 #include "storage.hpp"
 #include "fat32.hpp"
 #include "npfs.hpp"
+#include "ntfs.hpp"
 
 namespace micant::fs {
 
@@ -222,6 +223,27 @@ public:
         return mountedDevice_;
     }
 
+    NtStatus mountNtfs(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        ntfsFs_ = std::make_shared<ntfs::NtfsFileSystem>();
+        NtStatus st = ntfsFs_->mount(device);
+        if (!NT_SUCCESS(st)) {
+            ntfsFs_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    void setMountedNtfs(std::shared_ptr<ntfs::NtfsFileSystem> ntfs) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ntfsFs_ = ntfs;
+    }
+
+    [[nodiscard]] std::shared_ptr<ntfs::NtfsFileSystem> getMountedNtfs() const noexcept {
+        return ntfsFs_;
+    }
+
     NtStatus createOrOpenFile(
         std::wstring_view path,
         uint32_t desiredAccess,
@@ -272,6 +294,38 @@ public:
             outFileObj->setFsContext2(reinterpret_cast<void*>(static_cast<uintptr_t>(0))); // Client writer
             openFiles_[outFileObj.get()] = nullptr;
             openMailslots_[outFileObj.get()] = slot;
+            return NtStatus::Success;
+        }
+
+        // 0.2 Check for NTFS Volume or Alternate Data Stream (ADS)
+        std::wstring sPath(path);
+        std::wstring streamName;
+        size_t colonPos = sPath.find(L':', 3); // Skip drive letter e.g. C: or D:
+        if (colonPos != std::wstring::npos) {
+            streamName = sPath.substr(colonPos + 1);
+            sPath = sPath.substr(0, colonPos);
+        }
+
+        if (ntfsFs_ && (path.starts_with(L"D:") || path.starts_with(L"d:") ||
+                        path.starts_with(L"\\DosDevices\\D:") || path.starts_with(L"\\??\\D:") ||
+                        path.starts_with(L"\\Device\\Harddisk0\\Partition2") || !streamName.empty())) {
+            std::wstring normNtfs = normalizePath(sPath);
+            if (normNtfs.starts_with(L"D:\\") || normNtfs.starts_with(L"d:\\")) {
+                normNtfs = normNtfs.substr(3);
+            }
+            uint64_t recNum = 0;
+            NtStatus lookupSt = ntfsFs_->lookupPath(normNtfs, recNum);
+            if (!NT_SUCCESS(lookupSt)) {
+                if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF) {
+                    NtStatus crSt = ntfsFs_->createFile(normNtfs, FILE_ATTRIBUTE_NORMAL, recNum);
+                    if (!NT_SUCCESS(crSt)) return crSt;
+                } else {
+                    return NtStatus::NoSuchFile;
+                }
+            }
+
+            outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+            openNtfsFiles_[outFileObj.get()] = { recNum, streamName };
             return NtStatus::Success;
         }
 
@@ -344,6 +398,19 @@ public:
             }
         }
 
+        auto itNtfs = openNtfsFiles_.find(fileObj);
+        if (itNtfs != openNtfsFiles_.end() && ntfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t ntfsBytes = 0;
+            NtStatus st = ntfsFs_->readFile(itNtfs->second.first, itNtfs->second.second, buffer, length, static_cast<uint64_t>(offset), ntfsBytes);
+            bytesRead = static_cast<uint32_t>(ntfsBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
         auto it = openFiles_.find(fileObj);
         if (it == openFiles_.end() || !it->second) return NtStatus::InvalidHandle;
 
@@ -389,6 +456,19 @@ public:
             }
         }
 
+        auto itNtfs = openNtfsFiles_.find(fileObj);
+        if (itNtfs != openNtfsFiles_.end() && ntfsFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t ntfsBytes = 0;
+            NtStatus st = ntfsFs_->writeFile(itNtfs->second.first, itNtfs->second.second, buffer, length, static_cast<uint64_t>(offset), ntfsBytes);
+            bytesWritten = static_cast<uint32_t>(ntfsBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
         auto it = openFiles_.find(fileObj);
         if (it == openFiles_.end() || !it->second) return NtStatus::InvalidHandle;
 
@@ -429,6 +509,7 @@ public:
             openPipeInstances_.erase(itP);
         }
         openMailslots_.erase(fileObj);
+        openNtfsFiles_.erase(fileObj);
         openFiles_.erase(fileObj);
     }
 
@@ -684,6 +765,8 @@ private:
     std::unordered_map<FileObject*, std::shared_ptr<npfs::Mailslot>> openMailslots_;
     std::shared_ptr<storage::IBlockDevice> mountedDevice_;
     std::shared_ptr<fat32::Fat32FileSystem> fat32Fs_;
+    std::shared_ptr<ntfs::NtfsFileSystem> ntfsFs_;
+    std::unordered_map<FileObject*, std::pair<uint64_t, std::wstring>> openNtfsFiles_;
 };
 
 } // namespace micant::fs

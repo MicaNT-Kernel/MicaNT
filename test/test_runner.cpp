@@ -3866,6 +3866,175 @@ void Test_NamedPipesAndMailslotsIpc() {
     CloseHandle(hMailslot);
 }
 
+// ============================================================================
+// Test Suite 42: NTFS Filesystem, Master File Table ($MFT) & Alternate Streams
+// ============================================================================
+
+void Test_NtfsFileSystemAndMasterFileTable() {
+    using namespace micant;
+    using namespace micant::ntfs;
+
+    // 1. Format and Mount NTFS on Block Device (8 MB RAM disk)
+    auto ramDisk = std::make_shared<storage::RamDiskDevice>(L"\\Device\\HarddiskNtfs", 8 * 1024 * 1024ULL, storage::SECTOR_SIZE_512); // 8 MB
+    auto ntfs = std::make_shared<NtfsFileSystem>();
+
+    NtStatus stFormat = ntfs->format(*ramDisk, DEFAULT_CLUSTER_SIZE, L"MicaNT_System");
+    TEST_ASSERT(NT_SUCCESS(stFormat), "NTFS format must succeed on 8MB block device");
+
+    NtStatus stMount = ntfs->mount(ramDisk);
+    TEST_ASSERT(NT_SUCCESS(stMount), "NTFS volume mount must succeed");
+    TEST_ASSERT(ntfs->getClusterSize() == 4096, "NTFS cluster size must be 4096 bytes");
+    TEST_ASSERT(ntfs->getVolumeSerialNumber() != 0, "NTFS volume serial number must be non-zero");
+
+    // 2. MFT Record Engine & USA Fixup Validation
+    std::vector<uint8_t> rootRecord = ntfs->serializeRecord(MFT_REC_ROOT);
+    TEST_ASSERT(rootRecord.size() == MFT_RECORD_SIZE, "Serialized MFT record must be 1024 bytes");
+    const auto* rootHdr = reinterpret_cast<const MftRecordHeader*>(rootRecord.data());
+    TEST_ASSERT(rootHdr->magic == NTFS_FILE_SIGNATURE, "MFT record magic must be 'FILE' (0x454C4946)");
+    TEST_ASSERT((rootHdr->flags & MFT_RECORD_IN_USE) != 0, "Root MFT record must be marked IN_USE");
+    TEST_ASSERT((rootHdr->flags & MFT_RECORD_DIRECTORY) != 0, "Root MFT record must be marked DIRECTORY");
+
+    // Test USA fixup integrity & corruption detection
+    std::vector<uint8_t> corruptedRecord = rootRecord;
+    corruptedRecord[510] ^= 0xFF; // Tamper with sector 0 USA sequence number
+    bool fixupBad = UsaEngine::applyFixups(corruptedRecord.data(), corruptedRecord.size());
+    TEST_ASSERT(fixupBad == false, "USA engine must detect torn write / corrupted sector boundary");
+
+    bool fixupOk = UsaEngine::applyFixups(rootRecord.data(), rootRecord.size());
+    TEST_ASSERT(fixupOk == true, "USA engine must cleanly apply fixups to valid MFT record");
+
+    // 3. Data Run Encoding and Decoding (LCN/VCN Runs)
+    std::vector<DataRun> inputRuns = {
+        DataRun{ .vcnStart = 0,   .lcnStart = 100, .clusterCount = 16 },
+        DataRun{ .vcnStart = 16,  .lcnStart = 250, .clusterCount = 32 },
+        DataRun{ .vcnStart = 48,  .lcnStart = -1,  .clusterCount = 8  }, // Sparse run
+        DataRun{ .vcnStart = 56,  .lcnStart = 300, .clusterCount = 64 }
+    };
+    std::vector<uint8_t> encodedRuns = DataRunCodec::encode(inputRuns);
+    TEST_ASSERT(!encodedRuns.empty(), "Encoded data runs must not be empty");
+    TEST_ASSERT(encodedRuns.back() == 0, "Data run list must terminate with zero byte");
+
+    std::vector<DataRun> decodedRuns;
+    bool decOk = DataRunCodec::decode(encodedRuns.data(), encodedRuns.size(), 0, decodedRuns);
+    TEST_ASSERT(decOk == true, "Data run decoding must succeed");
+    TEST_ASSERT(decodedRuns.size() == inputRuns.size(), "Decoded run count must match input");
+    for (size_t i = 0; i < inputRuns.size(); ++i) {
+        TEST_ASSERT(decodedRuns[i].vcnStart == inputRuns[i].vcnStart, "VCN start must match");
+        TEST_ASSERT(decodedRuns[i].lcnStart == inputRuns[i].lcnStart, "LCN start must match");
+        TEST_ASSERT(decodedRuns[i].clusterCount == inputRuns[i].clusterCount, "Cluster count must match");
+    }
+
+    // 4. File Creation, Streaming & Offset Reading
+    uint64_t recHosts = 0;
+    NtStatus stCr = ntfs->createFile(L"drivers\\etc\\hosts", fs::FILE_ATTRIBUTE_NORMAL, recHosts);
+    TEST_ASSERT(NT_SUCCESS(stCr), "createFile for hosts must succeed");
+    TEST_ASSERT(recHosts >= MFT_REC_USER_START, "User file record must be >= 16");
+
+    const std::string hostsData = "127.0.0.1 localhost\n::1 localhost\n192.168.1.1 router\n";
+    uint64_t bytesWritten = 0;
+    NtStatus stWr = ntfs->writeFile(recHosts, L"", hostsData.data(), hostsData.size(), 0, bytesWritten);
+    TEST_ASSERT(NT_SUCCESS(stWr), "writeFile to primary stream must succeed");
+    TEST_ASSERT(bytesWritten == hostsData.size(), "Bytes written must match hosts data length");
+
+    std::vector<char> readBuf(hostsData.size() + 1, 0);
+    uint64_t bytesRead = 0;
+    NtStatus stRd = ntfs->readFile(recHosts, L"", readBuf.data(), hostsData.size(), 0, bytesRead);
+    TEST_ASSERT(NT_SUCCESS(stRd), "readFile from primary stream must succeed");
+    TEST_ASSERT(bytesRead == hostsData.size(), "Bytes read must match hosts data length");
+    TEST_ASSERT(std::string_view(readBuf.data(), bytesRead) == hostsData, "Primary stream content must match");
+
+    // Partial / Offset Read
+    char partialBuf[16]{};
+    uint64_t partialRead = 0;
+    NtStatus stPart = ntfs->readFile(recHosts, L"", partialBuf, 9, 10, partialRead);
+    TEST_ASSERT(NT_SUCCESS(stPart), "Offset read from primary stream must succeed");
+    TEST_ASSERT(partialRead == 9, "Partial read bytes must be 9");
+    TEST_ASSERT(std::string_view(partialBuf, 9) == "localhost", "Offset read payload must match 'localhost'");
+
+    // 5. Alternate Data Streams (ADS)
+    const std::string zoneData = "[ZoneTransfer]\nZoneId=3\nReferrerUrl=https://micant.org\n";
+    uint64_t zoneWritten = 0;
+    NtStatus stZoneWr = ntfs->writeFile(recHosts, L"Zone.Identifier", zoneData.data(), zoneData.size(), 0, zoneWritten);
+    TEST_ASSERT(NT_SUCCESS(stZoneWr), "writeFile to Alternate Data Stream must succeed");
+    TEST_ASSERT(zoneWritten == zoneData.size(), "Zone bytes written must match");
+
+    // Verify Primary stream is still intact and unaffected
+    std::vector<char> verifyPrimBuf(hostsData.size(), 0);
+    uint64_t verifyPrimRead = 0;
+    ntfs->readFile(recHosts, L"", verifyPrimBuf.data(), hostsData.size(), 0, verifyPrimRead);
+    TEST_ASSERT(std::string_view(verifyPrimBuf.data(), verifyPrimRead) == hostsData, "Primary stream must remain intact after ADS write");
+
+    // Verify Alternate Data Stream reading
+    std::vector<char> zoneReadBuf(zoneData.size() + 1, 0);
+    uint64_t zoneRead = 0;
+    NtStatus stZoneRd = ntfs->readFile(recHosts, L"Zone.Identifier", zoneReadBuf.data(), zoneData.size(), 0, zoneRead);
+    TEST_ASSERT(NT_SUCCESS(stZoneRd), "readFile from Alternate Data Stream must succeed");
+    TEST_ASSERT(zoneRead == zoneData.size(), "Zone bytes read must match");
+    TEST_ASSERT(std::string_view(zoneReadBuf.data(), zoneRead) == zoneData, "ADS stream content must match zoneData");
+
+    // Reading non-existent stream must fail
+    uint64_t badRead = 0;
+    char dummy[8]{};
+    NtStatus stBadStream = ntfs->readFile(recHosts, L"NonExistentStream", dummy, sizeof(dummy), 0, badRead);
+    TEST_ASSERT(stBadStream == NtStatus::NoSuchFile, "Reading non-existent stream must return NoSuchFile");
+
+    // 6. $LogFile Transaction Journal & WAL Verification
+    auto* journal = ntfs->getJournal();
+    TEST_ASSERT(journal != nullptr, "NTFS journal must be initialized");
+    TEST_ASSERT(journal->getEntryCount() >= 3, "Journal must have logged file creation and writes");
+    uint64_t lsnBeforeCheckpoint = journal->getLastLsn();
+
+    journal->checkpoint();
+    TEST_ASSERT(journal->getLastCheckpointLsn() > lsnBeforeCheckpoint, "Checkpoint LSN must advance");
+
+    const std::string appendData = "10.0.0.1 db.server\n";
+    uint64_t appendWritten = 0;
+    ntfs->writeFile(recHosts, L"", appendData.data(), appendData.size(), hostsData.size(), appendWritten);
+
+    auto recentEntries = journal->getEntriesSinceCheckpoint();
+    TEST_ASSERT(!recentEntries.empty(), "Journal must contain log entries since last checkpoint");
+    bool foundWriteOp = false;
+    for (const auto& entry : recentEntries) {
+        if (entry.op == LogOperation::WriteResidentData && entry.recordNumber == recHosts) {
+            foundWriteOp = true;
+            break;
+        }
+    }
+    TEST_ASSERT(foundWriteOp == true, "Journal must record WriteResidentData operation in WAL");
+
+    // 7. Virtual File System (VFS) Seamless Routing & ADS Integration
+    auto& vfs = fs::VirtualFileSystem::get();
+    vfs.setMountedNtfs(ntfs);
+
+    std::shared_ptr<fs::FileObject> vfsFile;
+    NtStatus stVfsCr = vfs.createOrOpenFile(
+        L"D:\\SecurityReport.log:Summary",
+        fs::FILE_GENERIC_READ | fs::FILE_GENERIC_WRITE,
+        fs::FILE_CREATE,
+        vfsFile
+    );
+    TEST_ASSERT(NT_SUCCESS(stVfsCr), "VFS createOrOpenFile on NTFS ADS must succeed");
+    TEST_ASSERT(vfsFile != nullptr, "VFS FileObject must be non-null");
+
+    const std::string repSummary = "AUDIT_RESULT: ZERO_CORRUPTION_DETECTED";
+    uint32_t vfsWritten = 0;
+    NtStatus stVfsWr = vfs.writeFile(vfsFile.get(), repSummary.data(), static_cast<uint32_t>(repSummary.size()), nullptr, vfsWritten);
+    TEST_ASSERT(NT_SUCCESS(stVfsWr), "VFS writeFile to NTFS ADS must succeed");
+    TEST_ASSERT(vfsWritten == repSummary.size(), "VFS bytes written must match summary length");
+
+    // Read back via VFS
+    char vfsReadBuf[64]{};
+    uint32_t vfsBytesRead = 0;
+    LargeInteger readOffset{};
+    readOffset.quadPart = 0;
+    NtStatus stVfsRd = vfs.readFile(vfsFile.get(), vfsReadBuf, sizeof(vfsReadBuf), &readOffset, vfsBytesRead);
+    TEST_ASSERT(NT_SUCCESS(stVfsRd), "VFS readFile from NTFS ADS must succeed");
+    TEST_ASSERT(vfsBytesRead == repSummary.size(), "VFS bytes read must match summary length");
+    TEST_ASSERT(std::string_view(vfsReadBuf, vfsBytesRead) == repSummary, "VFS payload must match repSummary");
+
+    vfs.closeFile(vfsFile.get());
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -3912,6 +4081,7 @@ int main() {
     RUN_TEST(Test_NdisAndTcpIpNetworkStack);
     RUN_TEST(Test_Arm64HardwareArchitectureAndSyscall);
     RUN_TEST(Test_NamedPipesAndMailslotsIpc);
+    RUN_TEST(Test_NtfsFileSystemAndMasterFileTable);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
