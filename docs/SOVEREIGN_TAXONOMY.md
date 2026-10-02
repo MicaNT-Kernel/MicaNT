@@ -28,7 +28,13 @@ These names:
 | **Security & Authentication** | **SentinelSec** | `micant::sentinel`<br/>`micant::se`<br/>`micant::sam` | `se.hpp`<br/>`lsass.hpp`<br/>`sam.hpp` | Sovereign Local Security Authority (LSA), SAM user/group database, token impersonation, and PBKDF2/SHA-256 credentials. |
 | **Hardware Abstraction Layer** | **TitanHAL** | `micant::titan`<br/>`micant::hal` | `hal.hpp`<br/>`arm64.hpp`<br/>`trap.hpp`<br/>`uefi.hpp` | Unified x86_64 / ARM64 UEFI platform abstraction, interrupt controller, PIT/APIC timers, and CPU exception routing. |
 | **Networking & Sockets** | **RazzleNet** | `micant::razzle`<br/>`micant::tcpip` | `tcpip.hpp`<br/>`ndis.hpp`<br/>`ws2_32.hpp`<br/>`iphlpapi.hpp` | **Razzle:** Legendary internal build environment for Windows NT. Represents clean-room NDIS, ARP, IPv4, TCP, UDP, and Winsock2. |
-| **Audio Architecture** | **PrismAudio** | `micant::audio`<br/>`micant::sound` | `conhost.hpp` (audio mixer) | Direct audio sibling to PrismX, handling multi-channel PCM software mixing, wave out synthesis, and session volume ducking. |
+| **Audio Architecture** | **PrismAudio** | `micant::audio`<br/>`micant::sound` | `prismaudio.hpp`<br/>`xaudio2.hpp` | Direct audio sibling to PrismX, handling multi-channel PCM software mixing, wave out synthesis, and session volume ducking. |
+| **Gaming & Controller Input** | **VectorHID** | `micant::hid`<br/>`micant::input` | `xinput.hpp` | High-frequency game controller input polling, force feedback vibration, and DirectInput/XInput parity. |
+| **Driver & Device Subsystem** | **VanguardDriver** | `micant::driver`<br/>`micant::pnp` | `driver.hpp`<br/>`io.hpp`<br/>`po.hpp` | I/O Request Packet (IRP) dispatching, Plug-and-Play (PnP) hardware enumeration, and device stack orchestration. |
+| **Dynamic Executable Loader** | **JanusLDR** | `micant::ldr` | `ldr.hpp`<br/>`pe.hpp` | Clean-room PE/COFF dynamic linker, export table resolver, IAT thunk binder, and side-by-side (SxS) manifest parser. |
+| **Crash Diagnostics & Reliability** | **PolarisDiag** | `micant::diag`<br/>`micant::crash` | `trap.hpp`<br/>`po.hpp` | Clean-room kernel bugcheck (`KeBugCheckEx`), crashdump capture, and telemetry-free error reporting. |
+| **Process Sandbox & Isolation** | **AegisSandbox** | `micant::sandbox`<br/>`micant::job` | `ps.hpp`<br/>`section.hpp` | Win32 Job Object containment, process isolation boundaries, CPU rate limits, and memory quota fences. |
+| **Cryptographic Services** | **CipherKSP** | `micant::crypto`<br/>`micant::ksp` | `se.hpp`<br/>`sam.hpp` | Clean-room Cryptography Next Generation (CNG / BCrypt), PBKDF2 key derivation, SHA-256, and AES symmetric encryption. |
 
 ---
 
@@ -109,9 +115,57 @@ These names:
   - NDIS miniport driver abstraction and Winsock2 (`ws2_32.dll`) socket descriptor tables.
 
 ### 3.12 PrismAudio (Audio Engine)
+- **Role:** Independent sovereign audio presentation engine, multi-channel software mixer, and Microsoft XAudio2 / WinMM parity.
 - **Capabilities:**
-  - Multi-stream PCM software mixer with 16-bit 44.1kHz / 48kHz audio pipelines.
-  - Low-latency session management and synthesized frequency tone generation.
+  - Multi-stream PCM and IEEE 32-bit floating point software mixer supporting 44.1kHz and 48kHz audio pipelines.
+  - Low-latency voice session management, volume ducking, and frequency tone synthesis (sine, square, triangle, saw, noise).
+  - Sovereign XAudio2 interface (`IXAudio2`, `IXAudio2SourceVoice`, `IXAudio2MasteringVoice`, `XAUDIO2_BUFFER`).
+  - 3D spatial audio positional calculation (inverse-distance falloff and stereo listener orientation).
+
+### 3.13 VectorHID (Gaming & Controller Input Subsystem)
+- **Role:** Low-latency human interface device input pipeline with Xbox gamepad and joystick parity.
+- **Capabilities:**
+  - Standard `xinput1_4.dll` polling interface (`XInputGetState`, `XInputSetState`, `XInputGetCapabilities`).
+  - Dual-motor force feedback vibration emulation.
+  - Digital thumbstick deadzone normalization and analog trigger axis scaling.
+  - Multi-controller slot assignment (controllers 0 through 3).
+
+### 3.14 VanguardDriver (Driver Framework & Device Subsystem)
+- **Heritage:** Named in honor of the vanguard kernel engineering principles established during the DEC Alpha and Windows NT driver architecture evolutions.
+- **Capabilities:**
+  - I/O Request Packet (IRP) dispatching, completion routines, and cancel-safe queues.
+  - Layered device stack orchestration (Functional Device Object - FDO, Physical Device Object - PDO, Filter Drivers).
+  - Plug and Play (PnP) hardware enumeration and dynamic device interface registration.
+  - System power state transitions (S0 Working, S3 Sleep, S4 Hibernate, S5 Soft-Off).
+
+### 3.15 JanusLDR (Dynamic Executable Loader)
+- **Heritage:** Named after Janus, the Roman deity of transitions, beginnings, and doorways, representing the gateway from disk PE binaries into running process memory.
+- **Capabilities:**
+  - Clean-room Portable Executable (PE32+) image parsing and section mapping.
+  - Import Address Table (IAT) binding, export ordinal resolution, and forwarder chain resolution.
+  - Delay-load helper thunks and Side-by-Side (SxS) manifest activation contexts.
+  - Dynamic module registration (`LoadLibraryExW`, `GetProcAddress`).
+
+### 3.16 PolarisDiag (Crash Diagnostics & Reliability Engine)
+- **Role:** Deterministic crash capture, kernel bugcheck routing, and telemetry-free incident forensics.
+- **Capabilities:**
+  - Kernel bugcheck routing (`KeBugCheck`, `KeBugCheckEx`) with architecture-specific trap context dump.
+  - Clean-room Windows Error Reporting (WER) minidump generation without remote cloud transmissions.
+  - Sovereign panic screen rendering (BootVid crash screen / Blue Screen).
+
+### 3.17 AegisSandbox (Process Containment & Job Objects)
+- **Role:** Security sandboxing, hardware quota enforcement, and process tree isolation.
+- **Capabilities:**
+  - Win32 Job Object abstraction (`CreateJobObjectW`, `AssignProcessToJobObject`).
+  - Per-job CPU time limits, working set memory caps, and process count restrictions.
+  - Isolated object namespaces and restricted token containment for untrusted binaries.
+
+### 3.18 CipherKSP (Cryptographic Services Engine)
+- **Role:** High-assurance clean-room cryptographic primitives and key storage provider.
+- **Capabilities:**
+  - Cryptography Next Generation (CNG / `bcrypt.dll`) parity.
+  - Deterministic random number generation (CSPRNG).
+  - SHA-256 / HMAC hashing, PBKDF2 key derivation, and AES symmetric encryption.
 
 ---
 

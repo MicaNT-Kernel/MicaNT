@@ -66,6 +66,8 @@
 #include "micant/emeraldfs.hpp"
 #include "micant/daytonamm.hpp"
 #include "micant/d3dcompiler.hpp"
+#include "micant/prismaudio.hpp"
+#include "micant/xinput.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -5856,6 +5858,204 @@ void Test_DirectX_DynamicLoader_And_DXBC_Container() {
     factory->Release();
 }
 
+// ============================================================================
+// Suite 50: DirectX PrismAudio & VectorHID (XAudio2 & XInput) Subsystems
+// ============================================================================
+void Test_DirectX_PrismAudio_And_XInput_Subsystems() {
+    using namespace micant::audio;
+    using namespace micant::hid;
+
+    // 1. Initialize subsystem exports
+    prism_compiler::InitializeDirectXSubsystemExports();
+
+    // 2. Validate DynamicLoader exports for xaudio2 and xinput
+    void* fnXAudio2Create = ldr::DynamicLoader::get().getExport("xaudio2_9.dll", "XAudio2Create");
+    TEST_ASSERT(fnXAudio2Create != nullptr, "xaudio2_9.dll must export XAudio2Create");
+
+    void* fnXAudio2Create8 = ldr::DynamicLoader::get().getExport("xaudio2_8.dll", "XAudio2Create");
+    TEST_ASSERT(fnXAudio2Create8 != nullptr, "xaudio2_8.dll must export XAudio2Create");
+
+    void* fnXInputGetState = ldr::DynamicLoader::get().getExport("xinput1_4.dll", "XInputGetState");
+    TEST_ASSERT(fnXInputGetState != nullptr, "xinput1_4.dll must export XInputGetState");
+
+    void* fnXInputSetState = ldr::DynamicLoader::get().getExport("xinput1_4.dll", "XInputSetState");
+    TEST_ASSERT(fnXInputSetState != nullptr, "xinput1_4.dll must export XInputSetState");
+
+    void* fnXInputGetCaps = ldr::DynamicLoader::get().getExport("xinput1_4.dll", "XInputGetCapabilities");
+    TEST_ASSERT(fnXInputGetCaps != nullptr, "xinput1_4.dll must export XInputGetCapabilities");
+
+    // 3. Test XAudio2 Engine Creation
+    using PFN_XAudio2Create = int32_t(*)(IXAudio2**, uint32_t, uint32_t);
+    auto pfnXAudio2Create = reinterpret_cast<PFN_XAudio2Create>(fnXAudio2Create);
+
+    IXAudio2* audioEngine = nullptr;
+    int32_t hrAudio = pfnXAudio2Create(&audioEngine, 0, 0);
+    TEST_ASSERT(hrAudio == 0 && audioEngine != nullptr, "XAudio2Create must succeed");
+
+    // 4. Test Mastering Voice Creation
+    IXAudio2MasteringVoice* masteringVoice = nullptr;
+    int32_t hrMaster = audioEngine->CreateMasteringVoice(&masteringVoice, 2, 48000, 0);
+    TEST_ASSERT(hrMaster == 0 && masteringVoice != nullptr, "CreateMasteringVoice must succeed");
+
+    uint32_t channelMask = 0;
+    masteringVoice->GetChannelMask(&channelMask);
+    TEST_ASSERT(channelMask == 0x3, "Mastering voice channel mask must be 0x3 (Stereo)");
+
+    // 5. Test Source Voice Creation & Procedural Audio Synthesis
+    WAVEFORMATEX fmt{};
+    fmt.wFormatTag = WAVE_FORMAT_PCM;
+    fmt.nChannels = 2;
+    fmt.nSamplesPerSec = 48000;
+    fmt.wBitsPerSample = 16;
+    fmt.nBlockAlign = 4;
+    fmt.nAvgBytesPerSec = 48000 * 4;
+
+    IXAudio2SourceVoice* sourceVoice = nullptr;
+    int32_t hrSource = audioEngine->CreateSourceVoice(&sourceVoice, &fmt);
+    TEST_ASSERT(hrSource == 0 && sourceVoice != nullptr, "CreateSourceVoice must succeed");
+
+    // Synthesize a 440 Hz (Concert A) sine tone for 0.05 seconds (2400 samples)
+    std::vector<uint8_t> tonePcmMono = PrismAudioEngineImpl::SynthesizeTone(
+        PrismAudioEngineImpl::ToneType::Sine, 440.0f, 0.05f, 48000, 0.8f
+    );
+    TEST_ASSERT(!tonePcmMono.empty(), "SynthesizeTone must generate non-empty PCM buffer");
+
+    // Duplicate mono samples to stereo
+    size_t monoSamples = tonePcmMono.size() / sizeof(int16_t);
+    std::vector<int16_t> stereoPcm(monoSamples * 2);
+    const int16_t* pMono = reinterpret_cast<const int16_t*>(tonePcmMono.data());
+    for (size_t i = 0; i < monoSamples; ++i) {
+        stereoPcm[i * 2 + 0] = pMono[i];
+        stereoPcm[i * 2 + 1] = pMono[i];
+    }
+
+    // Submit buffer to source voice
+    XAUDIO2_BUFFER audioBuf{};
+    audioBuf.AudioBytes = static_cast<uint32_t>(stereoPcm.size() * sizeof(int16_t));
+    audioBuf.pAudioData = reinterpret_cast<const uint8_t*>(stereoPcm.data());
+    audioBuf.LoopCount = 0;
+
+    int32_t hrSubmit = sourceVoice->SubmitSourceBuffer(&audioBuf);
+    TEST_ASSERT(hrSubmit == 0, "SubmitSourceBuffer must return 0");
+
+    int32_t hrStart = sourceVoice->Start(0);
+    TEST_ASSERT(hrStart == 0, "SourceVoice::Start must return 0");
+
+    // 6. Test Software Audio Mixing Cycle
+    auto* rawEngine = static_cast<PrismAudioEngineImpl*>(audioEngine);
+    std::vector<float> mixedOutput;
+    rawEngine->ProcessMixingCycle(480, mixedOutput); // 10ms of 48000Hz stereo = 480 frames = 960 floats
+
+    TEST_ASSERT(mixedOutput.size() == 960, "ProcessMixingCycle must output exactly 960 stereo float samples");
+
+    // Verify non-zero mixed audio energy
+    float maxAmp = 0.0f;
+    for (float sample : mixedOutput) {
+        maxAmp = std::max(maxAmp, std::abs(sample));
+    }
+    TEST_ASSERT(maxAmp > 0.1f, "Mixed audio must contain valid waveform energy from synthesized 440Hz tone");
+
+    // Check voice state
+    XAUDIO2_VOICE_STATE state{};
+    sourceVoice->GetState(&state);
+    TEST_ASSERT(state.SamplesPlayed >= 480, "Voice state must report at least 480 samples played");
+
+    // 7. Test 3D Positional Spatial Audio Attenuation
+    AudioListener listener{};
+    listener.position = { 0.0f, 0.0f, 0.0f };
+
+    AudioEmitter emitterNear{};
+    emitterNear.position = { 0.0f, 0.0f, 5.0f };
+    emitterNear.innerRadius = 1.0f;
+    emitterNear.outerRadius = 50.0f;
+
+    AudioEmitter emitterFar{};
+    emitterFar.position = { 0.0f, 0.0f, 40.0f };
+    emitterFar.innerRadius = 1.0f;
+    emitterFar.outerRadius = 50.0f;
+
+    float volNear = 0.0f, panLNear = 0.0f, panRNear = 0.0f;
+    PrismAudioEngineImpl::Calculate3DSpatial(listener, emitterNear, volNear, panLNear, panRNear);
+
+    float volFar = 0.0f, panLFar = 0.0f, panRFar = 0.0f;
+    PrismAudioEngineImpl::Calculate3DSpatial(listener, emitterFar, volFar, panLFar, panRFar);
+
+    TEST_ASSERT(volNear > volFar, "Near audio emitter must have higher volume factor than far emitter");
+    TEST_ASSERT(volFar > 0.0f && volNear <= 1.0f, "Volume factor must be within valid attenuation range");
+
+    // Test lateral panning: emitter on the right
+    AudioEmitter emitterRight{};
+    emitterRight.position = { 10.0f, 0.0f, 0.0f };
+    float volR = 0.0f, panLR = 0.0f, panRR = 0.0f;
+    PrismAudioEngineImpl::Calculate3DSpatial(listener, emitterRight, volR, panLR, panRR);
+    TEST_ASSERT(panRR > panLR, "Right lateral emitter must pan louder to right channel than left channel");
+
+    // 8. Test VectorHID XInput Gamepad Subsystem
+    using PFN_XInputGetState = uint32_t(*)(uint32_t, XINPUT_STATE*);
+    using PFN_XInputSetState = uint32_t(*)(uint32_t, const XINPUT_VIBRATION*);
+    using PFN_XInputGetCaps  = uint32_t(*)(uint32_t, uint32_t, XINPUT_CAPABILITIES*);
+
+    auto pfnXInputGetState = reinterpret_cast<PFN_XInputGetState>(fnXInputGetState);
+    auto pfnXInputSetState = reinterpret_cast<PFN_XInputSetState>(fnXInputSetState);
+    auto pfnXInputGetCaps  = reinterpret_cast<PFN_XInputGetCaps>(fnXInputGetCaps);
+
+    // Query capabilities for controller 0
+    XINPUT_CAPABILITIES caps{};
+    uint32_t errCaps = pfnXInputGetCaps(0, 0, &caps);
+    TEST_ASSERT(errCaps == ERROR_SUCCESS, "XInputGetCapabilities must succeed for connected slot 0");
+    TEST_ASSERT(caps.Type == XINPUT_DEVTYPE_GAMEPAD, "Device type must be XINPUT_DEVTYPE_GAMEPAD");
+
+    // Configure slot 1 with simulated game input
+    VectorControllerManager::get().SetSlotConnected(1, true);
+
+    XINPUT_GAMEPAD simPad{};
+    simPad.wButtons = XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_START;
+    simPad.bLeftTrigger = 120;
+    simPad.bRightTrigger = 240;
+    simPad.sThumbLX = 15000;
+    simPad.sThumbLY = -12000;
+    simPad.sThumbRX = -25000;
+    simPad.sThumbRY = 20000;
+    VectorControllerManager::get().SetSlotState(1, simPad);
+
+    XINPUT_STATE queryState{};
+    uint32_t errState = pfnXInputGetState(1, &queryState);
+    TEST_ASSERT(errState == ERROR_SUCCESS, "XInputGetState must succeed on slot 1");
+    TEST_ASSERT(queryState.Gamepad.wButtons == (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_START),
+                "Gamepad buttons must match simulated state");
+    TEST_ASSERT(queryState.Gamepad.bLeftTrigger == 120 && queryState.Gamepad.bRightTrigger == 240,
+                "Gamepad triggers must match simulated state");
+    TEST_ASSERT(queryState.Gamepad.sThumbLX == 15000 && queryState.Gamepad.sThumbRX == -25000,
+                "Gamepad thumbsticks must match simulated state");
+
+    // Test Deadzone Normalization
+    float normX = 0.0f, normY = 0.0f;
+    VectorControllerManager::NormalizeThumbstick(5000, 5000, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, normX, normY);
+    TEST_ASSERT(normX == 0.0f && normY == 0.0f, "Thumbstick inside deadzone must normalize to (0, 0)");
+
+    VectorControllerManager::NormalizeThumbstick(32767, 0, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, normX, normY);
+    TEST_ASSERT(normX > 0.99f && normY == 0.0f, "Thumbstick at max X must normalize to (1.0, 0.0)");
+
+    // Test Force Feedback Vibration
+    XINPUT_VIBRATION vib{ 32768, 65535 };
+    uint32_t errVib = pfnXInputSetState(1, &vib);
+    TEST_ASSERT(errVib == ERROR_SUCCESS, "XInputSetState must succeed");
+
+    XINPUT_VIBRATION recordedVib = VectorControllerManager::get().GetSlotVibration(1);
+    TEST_ASSERT(recordedVib.wLeftMotorSpeed == 32768 && recordedVib.wRightMotorSpeed == 65535,
+                "Vibration speeds must match submitted values");
+
+    // Test Disconnected Controller Slot
+    VectorControllerManager::get().SetSlotConnected(3, false);
+    uint32_t errDisc = pfnXInputGetState(3, &queryState);
+    TEST_ASSERT(errDisc == ERROR_DEVICE_NOT_CONNECTED, "Disconnected slot must return ERROR_DEVICE_NOT_CONNECTED");
+
+    // Cleanup Audio COM references
+    sourceVoice->DestroyVoice();
+    masteringVoice->DestroyVoice();
+    audioEngine->Release();
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -5910,6 +6110,7 @@ int main() {
     RUN_TEST(Test_Prism3D12_And_ProgrammableShaderVM);
     RUN_TEST(Test_EmeraldFS_And_DaytonaMM_Subsystems);
     RUN_TEST(Test_DirectX_DynamicLoader_And_DXBC_Container);
+    RUN_TEST(Test_DirectX_PrismAudio_And_XInput_Subsystems);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

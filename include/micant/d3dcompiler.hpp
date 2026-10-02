@@ -11,6 +11,8 @@
 #include "prism3d.hpp"
 #include "prism3d12.hpp"
 #include "prism_shader_vm.hpp"
+#include "prismaudio.hpp"
+#include "xinput.hpp"
 #include "ldr.hpp"
 #include <cstdint>
 #include <vector>
@@ -202,10 +204,11 @@ inline void InitializeDirectXSubsystemExports() {
     ldr.registerExport("d3dcompiler_47.dll", "D3DGetInputAndOutputSignatureBlob", reinterpret_cast<void*>(D3DGetInputAndOutputSignatureBlob));
     ldr.registerExport("d3dcompiler_47.dll", "D3DCompile", reinterpret_cast<void*>(D3DCompile));
 
-    // Alias for d3dcompiler.dll
-    ldr.registerExport("d3dcompiler.dll", "D3DCreateBlob", reinterpret_cast<void*>(D3DCreateBlob));
-    ldr.registerExport("d3dcompiler.dll", "D3DDisassemble", reinterpret_cast<void*>(D3DDisassemble));
-    ldr.registerExport("d3dcompiler.dll", "D3DCompile", reinterpret_cast<void*>(D3DCompile));
+    // 5. xaudio2_9.dll & xaudio2_8.dll
+    audio::InitializeAudioSubsystemExports();
+
+    // 6. xinput1_4.dll, xinput1_3.dll, xinput9_1_0.dll
+    hid::InitializeInputSubsystemExports();
 }
 
 } // namespace micant::prism_compiler

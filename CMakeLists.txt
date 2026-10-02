@@ -40,6 +40,8 @@ target_compile_definitions(micant_tests PRIVATE
 # Standalone Ring 3 Userland Test Application
 add_executable(userland_app
     test/userland_app.cpp
+    kernel/syscalls.cpp
+    kernel/dispatcher.cpp
 )
 
 # Standalone Win32 Userland Test Application
