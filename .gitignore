@@ -15,3 +15,12 @@ build/
 
 # Codegen cache
 node_modules/
+
+# Local deployment scripts & secrets
+scripts/deploy_*.py
+scripts/deploy_*.sh
+*.env
+*.pem
+*.key
+credentials*
+secrets*

@@ -59,6 +59,8 @@
 #include "micant/scm.hpp"
 #include "micant/prismx.hpp"
 #include "micant/prism3d.hpp"
+#include "micant/prism3d12.hpp"
+#include "micant/prism_shader_vm.hpp"
 #include "micant/dxgkrnl.hpp"
 #include "micant/vulkan.hpp"
 #include "unmodified_fixture.hpp"
@@ -5355,6 +5357,229 @@ void Test_VulkanLoader_And_PrismVK_Subsystem() {
     vkDestroyInstance(instance, nullptr);
 }
 
+// ============================================================================
+// Suite 47: Prism3D12 Low-Level Subsystem & Programmable Shader Bytecode VM
+// ============================================================================
+void Test_Prism3D12_And_ProgrammableShaderVM() {
+    using namespace micant::prismx;
+    using namespace micant::prism3d12;
+    using namespace micant::prism_vm;
+
+    // ------------------------------------------------------------------------
+    // 1. Direct3D 12 Device, Command Queue, and Allocator Creation
+    // ------------------------------------------------------------------------
+    ID3D12Device* device = nullptr;
+    int32_t hrDev = D3D12CreateDevice(nullptr, prism3d::D3D_FEATURE_LEVEL_12_0, IID_ID3D12Device, reinterpret_cast<void**>(&device));
+    TEST_ASSERT(hrDev == 0 && device != nullptr, "D3D12CreateDevice must succeed");
+
+    D3D12_COMMAND_QUEUE_DESC qDesc{};
+    qDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    qDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+    ID3D12CommandQueue* queue = nullptr;
+    int32_t hrQ = device->CreateCommandQueue(&qDesc, IID_ID3D12CommandQueue, reinterpret_cast<void**>(&queue));
+    TEST_ASSERT(hrQ == 0 && queue != nullptr, "CreateCommandQueue must succeed");
+
+    ID3D12CommandAllocator* allocator = nullptr;
+    int32_t hrAlloc = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&allocator));
+    TEST_ASSERT(hrAlloc == 0 && allocator != nullptr, "CreateCommandAllocator must succeed");
+
+    // ------------------------------------------------------------------------
+    // 2. Direct3D 12 Fence Synchronization
+    // ------------------------------------------------------------------------
+    ID3D12Fence* fence = nullptr;
+    int32_t hrFence = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_ID3D12Fence, reinterpret_cast<void**>(&fence));
+    TEST_ASSERT(hrFence == 0 && fence != nullptr, "CreateFence must succeed");
+    TEST_ASSERT(fence->GetCompletedValue() == 0, "Initial fence value must be 0");
+
+    fence->Signal(42);
+    TEST_ASSERT(fence->GetCompletedValue() == 42, "Signaled fence value must be 42");
+
+    // ------------------------------------------------------------------------
+    // 3. Direct3D 12 Resources, Barriers, and Descriptor Heaps
+    // ------------------------------------------------------------------------
+    D3D12_RESOURCE_DESC bufDesc{};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = 1024;
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    ID3D12Resource* buffer = nullptr;
+    int32_t hrRes = device->CreateCommittedResource(nullptr, 0, &bufDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_ID3D12Resource, reinterpret_cast<void**>(&buffer));
+    TEST_ASSERT(hrRes == 0 && buffer != nullptr, "CreateCommittedResource for buffer must succeed");
+
+    void* mappedPtr = nullptr;
+    int32_t hrMap = buffer->Map(0, nullptr, &mappedPtr);
+    TEST_ASSERT(hrMap == 0 && mappedPtr != nullptr, "Buffer Map() must return non-null pointer");
+    std::memset(mappedPtr, 0xAA, 1024);
+    buffer->Unmap(0, nullptr);
+
+    // Texture Resource & RTV Descriptor Heap
+    D3D12_RESOURCE_DESC texDesc{};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = 640;
+    texDesc.Height = 480;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = 1;
+    texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    ID3D12Resource* renderTarget = nullptr;
+    device->CreateCommittedResource(nullptr, 0, &texDesc, D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_ID3D12Resource, reinterpret_cast<void**>(&renderTarget));
+    TEST_ASSERT(renderTarget != nullptr, "CreateCommittedResource for render target must succeed");
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.NumDescriptors = 4;
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    ID3D12DescriptorHeap* rtvHeap = nullptr;
+    int32_t hrHeap = device->CreateDescriptorHeap(&heapDesc, IID_ID3D12DescriptorHeap, reinterpret_cast<void**>(&rtvHeap));
+    TEST_ASSERT(hrHeap == 0 && rtvHeap != nullptr, "CreateDescriptorHeap for RTV must succeed");
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    TEST_ASSERT(rtvHandle.ptr != 0, "Descriptor heap start handle must be non-zero");
+    device->CreateRenderTargetView(renderTarget, nullptr, rtvHandle);
+
+    // ------------------------------------------------------------------------
+    // 4. Command List Recording, Execution, and Pipeline State
+    // ------------------------------------------------------------------------
+    ID3D12GraphicsCommandList* cmdList = nullptr;
+    int32_t hrCmd = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr, IID_ID3D12GraphicsCommandList, reinterpret_cast<void**>(&cmdList));
+    TEST_ASSERT(hrCmd == 0 && cmdList != nullptr, "CreateCommandList must succeed");
+    TEST_ASSERT(cmdList->GetType() == D3D12_COMMAND_LIST_TYPE_DIRECT, "Command list type must be DIRECT");
+
+    // Barrier 1: Transition PRESENT -> RENDER_TARGET
+    D3D12_RESOURCE_BARRIER b1{};
+    b1.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b1.Transition.pResource = renderTarget;
+    b1.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    b1.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    cmdList->ResourceBarrier(1, &b1);
+
+    // Viewport & Scissor
+    D3D12_VIEWPORT vp{ 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f };
+    D3D12_RECT scissor{ 0, 0, 640, 480 };
+    cmdList->RSSetViewports(1, &vp);
+    cmdList->RSSetScissorRects(1, &scissor);
+
+    // Render Targets & Clear
+    cmdList->OMSetRenderTargets(1, &rtvHandle, 0, nullptr);
+    const float clearColor[4] = { 0.2f, 0.4f, 0.8f, 1.0f };
+    cmdList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+
+    // Draw
+    cmdList->IASetPrimitiveTopology(prism3d::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmdList->DrawInstanced(3, 1, 0, 0);
+
+    // Barrier 2: Transition RENDER_TARGET -> PRESENT
+    D3D12_RESOURCE_BARRIER b2{};
+    b2.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b2.Transition.pResource = renderTarget;
+    b2.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    b2.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    cmdList->ResourceBarrier(1, &b2);
+
+    int32_t hrClose = cmdList->Close();
+    TEST_ASSERT(hrClose == 0, "CommandList Close() must succeed");
+
+    auto* cmdListImpl = static_cast<Prism3D12GraphicsCommandListImpl*>(cmdList);
+    TEST_ASSERT(cmdListImpl->GetRecordedCommands().size() == 8, "Command list must have recorded 8 commands");
+
+    // Execute on Command Queue
+    ID3D12CommandList* ppLists[] = { cmdList };
+    queue->ExecuteCommandLists(1, ppLists);
+
+    auto* resImpl = static_cast<Prism3D12ResourceImpl*>(renderTarget);
+    TEST_ASSERT(resImpl->GetCurrentState() == D3D12_RESOURCE_STATE_PRESENT, "Resource state after command execution must be PRESENT");
+
+    // Fence signal from Queue
+    queue->Signal(fence, 100);
+    TEST_ASSERT(fence->GetCompletedValue() == 100, "Fence must reach signaled value 100 after Queue execution");
+
+    // Reset allocator and command list
+    int32_t hrResetAlloc = allocator->Reset();
+    TEST_ASSERT(hrResetAlloc == 0, "CommandAllocator Reset() must succeed");
+    int32_t hrResetList = cmdList->Reset(allocator, nullptr);
+    TEST_ASSERT(hrResetList == 0, "CommandList Reset() must succeed");
+    cmdList->Close();
+
+    // ------------------------------------------------------------------------
+    // 5. Programmable Shader Bytecode Virtual Machine (PrismShaderVM)
+    // ------------------------------------------------------------------------
+    // Test Vertex Shader MVP Transform
+    auto vsProg = PrismShaderVM::BuildMVPTransformVS();
+    TEST_ASSERT(vsProg.InstructionCount() >= 5, "MVP Vertex Shader must contain at least 5 bytecode instructions");
+
+    VectorRegister inPos(2.0f, 3.0f, 4.0f, 1.0f);
+    VectorRegister inCol(0.9f, 0.7f, 0.5f, 1.0f);
+    VectorRegister inUV(0.25f, 0.75f, 0.0f, 0.0f);
+    VectorRegister inNorm(0.0f, 1.0f, 0.0f, 0.0f);
+
+    std::array<VectorRegister, 16> consts{};
+    // Scaling matrix: scale X by 2, Y by 3, Z by 4
+    consts[0] = VectorRegister(2.0f, 0.0f, 0.0f, 0.0f);
+    consts[1] = VectorRegister(0.0f, 3.0f, 0.0f, 0.0f);
+    consts[2] = VectorRegister(0.0f, 0.0f, 4.0f, 0.0f);
+    consts[3] = VectorRegister(0.0f, 0.0f, 0.0f, 1.0f);
+
+    VectorRegister outPos, outCol;
+    PrismShaderVM::ExecuteVertexShader(vsProg, inPos, inCol, inUV, inNorm, consts, outPos, outCol);
+
+    TEST_ASSERT(outPos.x() == 4.0f, "VS output X must be 2.0 * 2.0 = 4.0");
+    TEST_ASSERT(outPos.y() == 9.0f, "VS output Y must be 3.0 * 3.0 = 9.0");
+    TEST_ASSERT(outPos.z() == 16.0f, "VS output Z must be 4.0 * 4.0 = 16.0");
+    TEST_ASSERT(outPos.w() == 1.0f, "VS output W must be 1.0");
+    TEST_ASSERT(outCol.x() == 0.9f && outCol.y() == 0.7f, "VS color pass-through must match input color");
+
+    // Test Pixel Shader Texture Modulation
+    auto psProg = PrismShaderVM::BuildTexturedModulatePS();
+    auto samplerFn = [](uint8_t, float u, float v) -> VectorRegister {
+        return VectorRegister(u, v, 0.5f, 1.0f);
+    };
+
+    VectorRegister psOutCol;
+    PrismShaderVM::ExecutePixelShader(psProg, outPos, inCol, inUV, inNorm, consts, samplerFn, psOutCol);
+    // psOutCol = inCol * texel(0.25, 0.75, 0.5, 1.0)
+    TEST_ASSERT(std::abs(psOutCol.x() - (0.9f * 0.25f)) < 1e-4f, "PS output R must be modulated by texture U coordinate");
+    TEST_ASSERT(std::abs(psOutCol.y() - (0.7f * 0.75f)) < 1e-4f, "PS output G must be modulated by texture V coordinate");
+
+    // Test Directional Lighting Pixel Shader
+    auto lightProg = PrismShaderVM::BuildDirectionalLightingPS();
+    consts[0] = VectorRegister(0.0f, 1.0f, 0.0f, 0.0f); // Light Dir: +Y
+    consts[1] = VectorRegister(0.1f, 0.1f, 0.1f, 1.0f); // Ambient: 0.1
+    consts[2] = VectorRegister(0.8f, 0.8f, 0.8f, 1.0f); // Diffuse: 0.8
+    consts[4] = VectorRegister(0.0f, 0.0f, 0.0f, 0.0f); // Zero vector for max(N.L, 0)
+
+    VectorRegister litCol;
+    PrismShaderVM::ExecutePixelShader(lightProg, outPos, VectorRegister(1.0f, 1.0f, 1.0f, 1.0f), inUV, inNorm, consts, nullptr, litCol);
+    // N = (0, 1, 0), L = (0, 1, 0) => dot = 1.0 => Ambient (0.1) + Diffuse (0.8) = 0.9
+    TEST_ASSERT(std::abs(litCol.x() - 0.9f) < 1e-4f, "Fully lit diffuse pixel must equal ambient + diffuse (0.9)");
+
+    // ------------------------------------------------------------------------
+    // 6. Shell Command Integration ('prismx d3d12' and 'prismx vm')
+    // ------------------------------------------------------------------------
+    shell::CommandShell testShell;
+
+    std::ostringstream ssD3D12;
+    testShell.execute("prismx d3d12", ssD3D12);
+    std::string outD3D12 = ssD3D12.str();
+    TEST_ASSERT(outD3D12.find("Direct3D 12 Command Pipeline Executed Successfully!") != std::string::npos, "prismx d3d12 command must succeed");
+    TEST_ASSERT(outD3D12.find("PRESENT -> RENDER_TARGET -> PRESENT") != std::string::npos, "prismx d3d12 must report barrier transitions");
+    TEST_ASSERT(outD3D12.find("GPU Fence signaled successfully") != std::string::npos, "prismx d3d12 must report fence synchronization");
+
+    std::ostringstream ssVm;
+    testShell.execute("prismx vm", ssVm);
+    std::string outVm = ssVm.str();
+    TEST_ASSERT(outVm.find("Launching Sovereign Programmable Shader Bytecode Virtual Machine") != std::string::npos, "prismx vm command must start VM");
+    TEST_ASSERT(outVm.find("Bytecode execution verified with 100% precision") != std::string::npos, "prismx vm must report precision verification");
+
+    // Cleanup resources
+    cmdList->Release();
+    rtvHeap->Release();
+    renderTarget->Release();
+    buffer->Release();
+    fence->Release();
+    allocator->Release();
+    queue->Release();
+    device->Release();
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -5406,6 +5631,7 @@ int main() {
     RUN_TEST(Test_Lsass_Winlogon_And_SamDatabase);
     RUN_TEST(Test_PrismX_And_Prism3D_GraphicsSubsystem);
     RUN_TEST(Test_VulkanLoader_And_PrismVK_Subsystem);
+    RUN_TEST(Test_Prism3D12_And_ProgrammableShaderVM);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
