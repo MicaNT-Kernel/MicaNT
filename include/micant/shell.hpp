@@ -323,10 +323,17 @@ public:
 
         auto threadProc = [](void* param) -> unsigned long {
             auto entry = reinterpret_cast<EntryFunc>(param);
+#if defined(_MSC_VER)
             __try {
                 entry();
             } __except (1) {
             }
+#else
+            try {
+                entry();
+            } catch (...) {
+            }
+#endif
             return 0;
         };
 

@@ -63,6 +63,8 @@
 #include "micant/prism_shader_vm.hpp"
 #include "micant/dxgkrnl.hpp"
 #include "micant/vulkan.hpp"
+#include "micant/emeraldfs.hpp"
+#include "micant/daytonamm.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -5580,6 +5582,132 @@ void Test_Prism3D12_And_ProgrammableShaderVM() {
     device->Release();
 }
 
+// ============================================================================
+// Suite 48: EmeraldFS Sovereign Storage Engine & DaytonaMM PFN/WSL Paging Tests
+// ============================================================================
+void Test_EmeraldFS_And_DaytonaMM_Subsystems() {
+    // ------------------------------------------------------------------------
+    // Part 1: EmeraldFS Unified Volume & Storage Engine
+    // ------------------------------------------------------------------------
+    auto ramDisk = std::make_shared<storage::RamDiskDevice>(L"\\Device\\Harddisk0\\Partition1", 16 * 1024 * 1024); // 16MB RamDisk
+    auto& volMgr = emeraldfs::EmeraldVolumeManager::get();
+
+    // 1. Format RamDisk with EmeraldFS
+    NtStatus stFormat = volMgr.formatEmeraldFS(*ramDisk, 4096, L"MicaNT_System");
+    TEST_ASSERT(NT_SUCCESS(stFormat), "EmeraldFS volume formatting must succeed");
+
+    // 2. Mount Volume & Verify Signature
+    NtStatus stMount = volMgr.mountVolume(ramDisk);
+    TEST_ASSERT(NT_SUCCESS(stMount), "EmeraldFS volume mounting must succeed");
+    TEST_ASSERT(volMgr.getMountedType() == emeraldfs::FileSystemType::EmeraldNTFS, "Mounted type must be EmeraldNTFS");
+
+    // 3. Create Hierarchical Directories & Files
+    uint64_t dirRec = 0;
+    NtStatus stDir = volMgr.createDirectory(L"\\Windows\\System32", dirRec);
+    TEST_ASSERT(NT_SUCCESS(stDir) && dirRec > 0, "Directory creation in EmeraldFS must succeed");
+
+    uint64_t fileRec = 0;
+    NtStatus stFile = volMgr.createFile(L"\\Windows\\System32\\ntoskrnl.exe", 0x20 /* Archive */, fileRec);
+    TEST_ASSERT(NT_SUCCESS(stFile) && fileRec > 0, "File creation in EmeraldFS must succeed");
+
+    // 4. Primary $DATA Stream Read/Write
+    const std::string kernelCode = "MicaNT Sovereign Microkernel Binary Payload (Clean-Room ISO C++23)";
+    uint64_t bytesWritten = 0;
+    NtStatus stWritePrim = volMgr.writePrimaryStream(fileRec, kernelCode.data(), kernelCode.size(), 0, bytesWritten);
+    TEST_ASSERT(NT_SUCCESS(stWritePrim) && bytesWritten == kernelCode.size(), "Writing primary $DATA stream must succeed");
+
+    std::vector<char> readBuffer(kernelCode.size() + 1, 0);
+    uint64_t bytesRead = 0;
+    NtStatus stReadPrim = volMgr.readPrimaryStream(fileRec, readBuffer.data(), kernelCode.size(), 0, bytesRead);
+    TEST_ASSERT(NT_SUCCESS(stReadPrim) && bytesRead == kernelCode.size(), "Reading primary $DATA stream must succeed");
+    TEST_ASSERT(std::string_view(readBuffer.data(), bytesRead) == kernelCode, "Read primary data must match written content");
+
+    // 5. Alternate Data Streams (ADS): Read/Write multiple streams per file
+    const std::string zoneIdentifier = "[ZoneTransfer]\nZoneId=3";
+    const std::string sha256Digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    uint64_t ads1Written = 0;
+    NtStatus stAds1 = volMgr.writeAlternateStream(fileRec, L"Zone.Identifier", zoneIdentifier.data(), zoneIdentifier.size(), 0, ads1Written);
+    TEST_ASSERT(NT_SUCCESS(stAds1) && ads1Written == zoneIdentifier.size(), "Writing Zone.Identifier Alternate Data Stream must succeed");
+
+    uint64_t ads2Written = 0;
+    NtStatus stAds2 = volMgr.writeAlternateStream(fileRec, L"SHA256", sha256Digest.data(), sha256Digest.size(), 0, ads2Written);
+    TEST_ASSERT(NT_SUCCESS(stAds2) && ads2Written == sha256Digest.size(), "Writing SHA256 Alternate Data Stream must succeed");
+
+    // Verify Reading ADS independently
+    std::vector<char> ads1Buffer(zoneIdentifier.size() + 1, 0);
+    uint64_t ads1Read = 0;
+    NtStatus stAds1Read = volMgr.readAlternateStream(fileRec, L"Zone.Identifier", ads1Buffer.data(), zoneIdentifier.size(), 0, ads1Read);
+    TEST_ASSERT(NT_SUCCESS(stAds1Read) && ads1Read == zoneIdentifier.size(), "Reading Zone.Identifier ADS must succeed");
+    TEST_ASSERT(std::string_view(ads1Buffer.data(), ads1Read) == zoneIdentifier, "Zone.Identifier content must match");
+
+    std::vector<char> ads2Buffer(sha256Digest.size() + 1, 0);
+    uint64_t ads2Read = 0;
+    NtStatus stAds2Read = volMgr.readAlternateStream(fileRec, L"SHA256", ads2Buffer.data(), sha256Digest.size(), 0, ads2Read);
+    TEST_ASSERT(NT_SUCCESS(stAds2Read) && ads2Read == sha256Digest.size(), "Reading SHA256 ADS must succeed");
+    TEST_ASSERT(std::string_view(ads2Buffer.data(), ads2Read) == sha256Digest, "SHA256 content must match");
+
+    // 6. Metadata inspection
+    emeraldfs::FileMetadata meta{};
+    NtStatus stMeta = volMgr.getFileMetadata(fileRec, meta);
+    TEST_ASSERT(NT_SUCCESS(stMeta), "Retrieving file metadata must succeed");
+    TEST_ASSERT(meta.primarySize == kernelCode.size(), "Metadata primary size must match");
+    TEST_ASSERT(meta.alternateStreams.size() == 2, "File must possess exactly 2 Alternate Data Streams");
+
+    // 7. Write-Ahead Logging (WAL) verification in EmeraldJournal
+    auto* journal = volMgr.getJournal();
+    TEST_ASSERT(journal != nullptr, "EmeraldFS volume must have active journal");
+    TEST_ASSERT(journal->getEntryCount() >= 4, "Journal must record creation and stream write operations");
+
+    // ------------------------------------------------------------------------
+    // Part 2: DaytonaMM Virtual Memory Manager, PFN Database, and Working Set
+    // ------------------------------------------------------------------------
+    auto& daytona = daytonamm::DaytonaMemoryExecutive::get();
+    daytona.initialize(4096); // 4096 pages = 16MB physical space
+
+    auto telemInitial = daytona.getTelemetry();
+    TEST_ASSERT(telemInitial.totalPhysicalPages == 4096, "Daytona total physical pages must equal 4096");
+    TEST_ASSERT(telemInitial.zeroedPages > 0, "Daytona must have initialized zeroed pages");
+
+    // Allocate virtual memory (VAD reservation + commit)
+    mm::ProcessAddressSpace vas;
+    daytonamm::ProcessWorkingSet ws(64); // Max 64 resident pages in working set
+
+    uintptr_t baseAddr = 0;
+    size_t allocSize = 64 * 1024; // 64KB = 16 pages
+    NtStatus stAlloc = daytona.allocateVirtualMemory(vas, baseAddr, allocSize, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE);
+    TEST_ASSERT(NT_SUCCESS(stAlloc) && baseAddr != 0, "Daytona allocateVirtualMemory must succeed");
+
+    // Trigger Demand-Zero Page Faults
+    for (size_t p = 0; p < 8; ++p) {
+        uintptr_t faultAddr = baseAddr + (p * mm::PageSize4KB) + 128;
+        NtStatus stFault = daytona.handlePageFault(vas, ws, faultAddr, 0);
+        TEST_ASSERT(NT_SUCCESS(stFault), "Demand-zero page fault must resolve successfully");
+    }
+
+    TEST_ASSERT(ws.getResidentPageCount() == 8, "Working set must now contain 8 resident active pages");
+    auto telemAfterFaults = daytona.getTelemetry();
+    TEST_ASSERT(telemAfterFaults.demandZeroFaults >= 8, "Telemetry must record at least 8 demand-zero page faults");
+    TEST_ASSERT(telemAfterFaults.activePages >= 8, "Active PFN count must reflect resident pages");
+
+    // Working Set Trimming: Evict 4 oldest pages to Standby list
+    size_t evicted = daytona.trimWorkingSet(ws, 4);
+    TEST_ASSERT(evicted == 4, "Daytona working set trimming must evict exactly 4 pages");
+    TEST_ASSERT(ws.getResidentPageCount() == 4, "Working set must now contain 4 resident pages");
+
+    auto telemAfterTrim = daytona.getTelemetry();
+    TEST_ASSERT(telemAfterTrim.standbyPages >= 4, "Standby page list must receive evicted clean pages");
+
+    // Trigger Transition Fault on an evicted page: resolves from Standby -> Active without zeroing
+    uintptr_t standbyAddr = baseAddr + 128; // Page 0 was oldest
+    NtStatus stTransFault = daytona.handlePageFault(vas, ws, standbyAddr, 0);
+    TEST_ASSERT(NT_SUCCESS(stTransFault), "Transition fault on standby page must succeed");
+
+    auto telemFinal = daytona.getTelemetry();
+    TEST_ASSERT(telemFinal.transitionFaults >= 1, "Telemetry must record transition fault");
+    TEST_ASSERT(ws.getResidentPageCount() == 5, "Working set must now have 5 resident pages after soft fault");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -5632,6 +5760,7 @@ int main() {
     RUN_TEST(Test_PrismX_And_Prism3D_GraphicsSubsystem);
     RUN_TEST(Test_VulkanLoader_And_PrismVK_Subsystem);
     RUN_TEST(Test_Prism3D12_And_ProgrammableShaderVM);
+    RUN_TEST(Test_EmeraldFS_And_DaytonaMM_Subsystems);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

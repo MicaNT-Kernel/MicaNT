@@ -641,6 +641,21 @@ public:
         clusterSize_ = boot->sectorsPerCluster * boot->bytesPerSector;
         mftStartLcn_ = boot->mftStartLcn;
 
+        if (!journal_) {
+            journal_ = std::make_unique<LogFileJournal>();
+        }
+        if (records_.empty()) {
+            auto recMft = createRecordInternal(MFT_REC_MFT, L"$MFT", 0);
+            recMft->flags = MFT_RECORD_IN_USE;
+            createRecordInternal(MFT_REC_MFTMIRR, L"$MFTMirr", 0);
+            createRecordInternal(MFT_REC_LOGFILE, L"$LogFile", 0);
+            createRecordInternal(MFT_REC_VOLUME, L"MicaNT_System", 0);
+            auto recRoot = createRecordInternal(MFT_REC_ROOT, L".", MFT_RECORD_DIRECTORY);
+            recRoot->parentRecord = MFT_REC_ROOT;
+            journal_->logAction(LogOperation::CreateFileRecord, MFT_REC_ROOT);
+            journal_->checkpoint();
+        }
+
         mounted_ = true;
         return NtStatus::Success;
     }
@@ -895,6 +910,15 @@ public:
     [[nodiscard]] size_t getRecordCount() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return records_.size();
+    }
+
+    [[nodiscard]] const NtfsFileRecord* getRecord(uint64_t num) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = records_.find(num);
+        if (it != records_.end()) {
+            return &it->second;
+        }
+        return nullptr;
     }
 
 private:

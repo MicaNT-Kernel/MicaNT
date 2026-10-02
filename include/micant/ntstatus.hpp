@@ -52,6 +52,7 @@ enum class NtStatus : uint32_t {
     EndOfFile                        = 0xC0000011,
     NoMemory                         = 0xC0000017,
     Conflict                         = 0xC0000018,
+    InsufficientResources            = 0xC000009A,
     IllegalInstruction               = 0xC000001D,
     AccessDenied                     = 0xC0000022,
     BufferTooSmall                   = 0xC0000023,
@@ -126,6 +127,7 @@ inline constexpr NTSTATUS STATUS_MEMBER_IN_ALIAS        = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_MEMBER_NOT_IN_ALIAS    = static_cast<NTSTATUS>(0xC0000076);
 inline constexpr NTSTATUS STATUS_NO_SUCH_LOGON_SESSION  = static_cast<NTSTATUS>(0xC00000EE);
 inline constexpr NTSTATUS STATUS_LOGON_TYPE_NOT_GRANTED = static_cast<NTSTATUS>(0xC000015B);
+inline constexpr NTSTATUS STATUS_INSUFFICIENT_RESOURCES = static_cast<NTSTATUS>(0xC000009A);
 inline constexpr NTSTATUS STATUS_ACCOUNT_LOCKED_OUT     = static_cast<NTSTATUS>(0xC0000234);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
@@ -164,7 +166,8 @@ inline constexpr NTSTATUS STATUS_ACCOUNT_LOCKED_OUT     = static_cast<NTSTATUS>(
         case NtStatus::InvalidHandle: return "STATUS_INVALID_HANDLE";
         case NtStatus::InvalidParameter: return "STATUS_INVALID_PARAMETER";
         case NtStatus::NoSuchFile: return "STATUS_NO_SUCH_FILE";
-        case NtStatus::NoMemory: return "STATUS_INSUFFICIENT_RESOURCES";
+        case NtStatus::NoMemory: return "STATUS_NO_MEMORY";
+        case NtStatus::InsufficientResources: return "STATUS_INSUFFICIENT_RESOURCES";
         case NtStatus::AccessDenied: return "STATUS_ACCESS_DENIED";
         case NtStatus::BufferTooSmall: return "STATUS_BUFFER_TOO_SMALL";
         case NtStatus::ObjectNameNotFound: return "STATUS_OBJECT_NAME_NOT_FOUND";
