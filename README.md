@@ -10,6 +10,7 @@
 [![Reference: win32metadata](https://img.shields.io/badge/Reference-microsoft%2Fwin32metadata-purple.svg)](https://github.com/microsoft/win32metadata)
 [![Arch: x86__64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-orange.svg)]()
 [![Build: CMake](https://img.shields.io/badge/Build-CMake%203.25%2B-green.svg)]()
+[![Taxonomy: Sovereign Names](https://img.shields.io/badge/Taxonomy-Sovereign%20Subsystems-9C27B0.svg)](docs/SOVEREIGN_TAXONOMY.md)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Project-FF5E5B.svg?logo=kofi&logoColor=white)](https://ko-fi.com/ssfdre38)
 
 ---
@@ -162,6 +163,27 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
                              |  - 1 GHz Performance Counter  |
                              +-------------------------------+
 ```
+
+---
+
+### Sovereign Subsystem Taxonomy
+
+To guarantee total clean-room independence and prevent name collisions with closed-source Windows binaries, every core subsystem is designated with a sovereign title honoring Dave Cutler's historic DEC/NT engineering lineage:
+
+- **[PrismX / Prism3D / PrismVK](https://github.com/MicaNT-Kernel/PrismX)**: Sovereign DirectX (DXGI, D3D11, D3D12) and Vulkan 1.3 presentation & rasterization architecture.
+- **EmeraldFS**: Clean-room file system engine with Master File Table (MFT) parser, Alternate Data Streams (ADS), and journaling (named after Cairo's *Emerald* OFS).
+- **DaytonaMM**: Sub-32MB virtual memory manager with 4KB paging, lookaside pools, and demand paging (named after NT 3.5 *Daytona*).
+- **NexusOB**: Unified kernel object manager, hierarchical namespace (`\Device`, `\DosDevices`, `\Registry`), and handle security.
+- **AegisSched**: Preemptive multi-core SMP thread scheduler with quantum replenishment and dynamic priority boosting.
+- **CourierLPC**: Fast port-based Local Procedure Call (LPC) and Named Pipe transport engine.
+- **AmberCM**: Configuration Manager handling on-disk and in-memory registry hive cell allocation.
+- **SurWin**: Window Station, Desktop, Conhost terminal, and Win32 message server (named after NT 4.0 *SUR*).
+- **SentinelSec**: Local Security Authority (LSASS), Security Account Manager (SAM), and PBKDF2/SHA-256 authentication.
+- **TitanHAL**: Unified x86_64 / ARM64 UEFI platform hardware abstraction layer.
+- **RazzleNet**: Sovereign TCP/IP, NDIS miniport driver abstraction, and Winsock2 sockets (named after *Razzle*).
+- **PrismAudio**: Multi-stream PCM software audio mixer and low-latency frequency synthesizer.
+
+👉 For complete architectural specifications and namespace conventions, see **[docs/SOVEREIGN_TAXONOMY.md](docs/SOVEREIGN_TAXONOMY.md)**.
 
 ---
 
