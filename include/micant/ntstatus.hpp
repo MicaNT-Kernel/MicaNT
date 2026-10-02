@@ -89,6 +89,7 @@ enum class NtStatus : uint32_t {
     VolumeTooSmall                   = 0xC0000287,
     DeviceError                      = 0xC00000E0,
     FileCorrupted                    = 0xC0000102,
+    Cancelled                        = 0xC0000120,
 
     // Security, Authentication & SAM Subsystem Codes
     UserExists                       = 0xC0000063,
@@ -190,6 +191,7 @@ inline constexpr NTSTATUS STATUS_ACCOUNT_LOCKED_OUT     = static_cast<NTSTATUS>(
         case NtStatus::VolumeTooSmall: return "STATUS_VOLUME_TOO_SMALL";
         case NtStatus::DeviceError: return "STATUS_DEVICE_DATA_ERROR";
         case NtStatus::FileCorrupted: return "STATUS_FILE_CORRUPT_ERROR";
+        case NtStatus::Cancelled: return "STATUS_CANCELLED";
         default: return "STATUS_UNKNOWN";
     }
 }

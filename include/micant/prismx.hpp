@@ -187,19 +187,8 @@ struct DXGI_FRAME_STATISTICS {
 // 2. COM Interface GUIDs
 // ============================================================================
 
-struct IID {
-    uint32_t Data1;
-    uint16_t Data2;
-    uint16_t Data3;
-    uint8_t  Data4[8];
-
-    bool operator==(const IID& other) const {
-        return Data1 == other.Data1 &&
-               Data2 == other.Data2 &&
-               Data3 == other.Data3 &&
-               std::memcmp(Data4, other.Data4, 8) == 0;
-    }
-};
+using IID = micant::GUID;
+using GUID = micant::GUID;
 
 static constexpr IID IID_IUnknown = 
     { 0x00000000, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };

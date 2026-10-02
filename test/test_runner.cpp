@@ -68,6 +68,7 @@
 #include "micant/d3dcompiler.hpp"
 #include "micant/prismaudio.hpp"
 #include "micant/xinput.hpp"
+#include "micant/vanguarddriver.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -6056,6 +6057,170 @@ void Test_DirectX_PrismAudio_And_XInput_Subsystems() {
     audioEngine->Release();
 }
 
+// ============================================================================
+// Suite 51: VanguardDriver Device Stack & PnP Engine Subsystem
+// ============================================================================
+void Test_VanguardDriver_DeviceStack_And_PnP_Subsystem() {
+    using namespace micant::vanguarddriver;
+
+    // 1. Layered Device Stack Tests
+    // Create Driver Objects for Bus, Function, and Filter
+    io::DriverObject busDriver{};
+    busDriver.driverName = L"pci.sys";
+
+    io::DriverObject funcDriver{};
+    funcDriver.driverName = L"nvme.sys";
+
+    io::DriverObject filterDriver{};
+    filterDriver.driverName = L"diskperf.sys";
+
+    // Track dispatch call order
+    std::vector<std::wstring> callStack;
+
+    busDriver.setDispatch(io::IRP_MJ_READ, [](io::DeviceObject* dev, io::Irp* irp) -> NtStatus {
+        (void)dev;
+        if (irp && irp->userBuffer) {
+            auto* pStack = reinterpret_cast<std::vector<std::wstring>*>(irp->userBuffer);
+            pStack->push_back(L"bus");
+        }
+        return NtStatus::Success;
+    });
+
+    funcDriver.setDispatch(io::IRP_MJ_READ, [](io::DeviceObject* dev, io::Irp* irp) -> NtStatus {
+        (void)dev;
+        if (irp && irp->userBuffer) {
+            auto* pStack = reinterpret_cast<std::vector<std::wstring>*>(irp->userBuffer);
+            pStack->push_back(L"function");
+        }
+        return NtStatus::Success;
+    });
+
+    filterDriver.setDispatch(io::IRP_MJ_READ, [](io::DeviceObject* dev, io::Irp* irp) -> NtStatus {
+        (void)dev;
+        if (irp && irp->userBuffer) {
+            auto* pStack = reinterpret_cast<std::vector<std::wstring>*>(irp->userBuffer);
+            pStack->push_back(L"filter");
+        }
+        return NtStatus::Success;
+    });
+
+    // Create Device Objects
+    io::DeviceObject pdo{ .driverObject = &busDriver, .deviceName = L"NVMEDevice0" };
+    io::DeviceObject fdo{ .driverObject = &funcDriver, .deviceName = L"NVMEFunctional0" };
+    io::DeviceObject upperFilter{ .driverObject = &filterDriver, .deviceName = L"NVMEFilter0" };
+
+    // Attach FDO on top of PDO
+    io::DeviceObject* attached1 = IoAttachDeviceToDeviceStack(&fdo, &pdo);
+    TEST_ASSERT(attached1 == &pdo, "IoAttachDeviceToDeviceStack must return lower device");
+    TEST_ASSERT(pdo.attachedDevice == &fdo, "PDO attachedDevice must point to FDO");
+
+    // Attach Upper Filter on top of FDO
+    io::DeviceObject* attached2 = IoAttachDeviceToDeviceStack(&upperFilter, &pdo);
+    TEST_ASSERT(attached2 == &fdo, "IoAttachDeviceToDeviceStack must attach to previous top device");
+    TEST_ASSERT(fdo.attachedDevice == &upperFilter, "FDO attachedDevice must point to UpperFilter");
+
+    // Verify IoGetAttachedDevice returns the top device
+    io::DeviceObject* topDevice = IoGetAttachedDevice(&pdo);
+    TEST_ASSERT(topDevice == &upperFilter, "IoGetAttachedDevice on PDO must return upper filter");
+
+    // Forward an IRP to top of stack
+    io::Irp readIrp{};
+    readIrp.majorFunction = io::IRP_MJ_READ;
+    readIrp.userBuffer = &callStack;
+
+    NtStatus stCall = IoCallDriver(topDevice, &readIrp);
+    TEST_ASSERT(NT_SUCCESS(stCall), "IoCallDriver to top of stack must succeed");
+    TEST_ASSERT(!callStack.empty() && callStack[0] == L"filter", "Top of stack filter driver must be called first");
+
+    // 2. Vanguard PnP Device Node & State Machine
+    filterDriver.setDispatch(io::IRP_MJ_PNP, [](io::DeviceObject* dev, io::Irp* irp) -> NtStatus {
+        (void)dev;
+        if (irp) irp->ioStatus.status = NtStatus::Success;
+        return NtStatus::Success;
+    });
+    filterDriver.setDispatch(io::IRP_MJ_POWER, [](io::DeviceObject* dev, io::Irp* irp) -> NtStatus {
+        (void)dev;
+        if (irp) irp->ioStatus.status = NtStatus::Success;
+        return NtStatus::Success;
+    });
+
+    auto& pnpEngine = VanguardDriverEngine::get();
+    auto devNode = pnpEngine.CreateDeviceNode(L"PCI\\VEN_10EC&DEV_8168&SUBSYS_0123\\0001", &pdo);
+    TEST_ASSERT(devNode != nullptr, "CreateDeviceNode must return valid node");
+    TEST_ASSERT(devNode->GetState() == PnpDeviceState::Initialized, "Initial PnP state must be Initialized");
+
+    // Start Device sequence
+    NtStatus stStart = pnpEngine.StartDevice(*devNode);
+    TEST_ASSERT(NT_SUCCESS(stStart), "pnpEngine.StartDevice must return Success");
+    TEST_ASSERT(devNode->GetState() == PnpDeviceState::Started, "Device state must be Started");
+
+    // Stop Device sequence
+    NtStatus stStop = pnpEngine.StopDevice(*devNode);
+    TEST_ASSERT(NT_SUCCESS(stStop), "pnpEngine.StopDevice must return Success");
+    TEST_ASSERT(devNode->GetState() == PnpDeviceState::Stopped, "Device state must be Stopped");
+
+    // Remove Device sequence
+    NtStatus stRemove = pnpEngine.RemoveDevice(*devNode);
+    TEST_ASSERT(NT_SUCCESS(stRemove), "pnpEngine.RemoveDevice must return Success");
+    TEST_ASSERT(devNode->GetState() == PnpDeviceState::Removed, "Device state must be Removed");
+
+    // 3. Device Interface Registration (Disk & Audio)
+    std::wstring diskInterfaceLink;
+    NtStatus stRegDisk = pnpEngine.RegisterDeviceInterface(&pdo, GUID_DEVINTERFACE_DISK, L"", diskInterfaceLink);
+    TEST_ASSERT(NT_SUCCESS(stRegDisk), "RegisterDeviceInterface for Disk must succeed");
+    TEST_ASSERT(diskInterfaceLink.find(L"\\\\?\\") == 0, "Symbolic link must start with \\\\?\\ prefix");
+    TEST_ASSERT(diskInterfaceLink.find(L"53f56307") != std::wstring::npos, "Symbolic link must contain Disk GUID");
+
+    // Before enabling, enumeration should be empty
+    auto interfacesBefore = pnpEngine.EnumerateDeviceInterfaces(GUID_DEVINTERFACE_DISK);
+    TEST_ASSERT(interfacesBefore.empty(), "Disabled device interfaces must not be returned in enumeration");
+
+    // Enable device interface
+    NtStatus stEnable = pnpEngine.SetDeviceInterfaceState(diskInterfaceLink, true);
+    TEST_ASSERT(NT_SUCCESS(stEnable), "SetDeviceInterfaceState(true) must succeed");
+
+    // After enabling, enumeration must find it
+    auto interfacesAfter = pnpEngine.EnumerateDeviceInterfaces(GUID_DEVINTERFACE_DISK);
+    TEST_ASSERT(interfacesAfter.size() == 1, "EnumerateDeviceInterfaces must return 1 active interface");
+    TEST_ASSERT(interfacesAfter[0] == diskInterfaceLink, "Enumerated interface must match registered symbolic link");
+
+    // Disable device interface
+    pnpEngine.SetDeviceInterfaceState(diskInterfaceLink, false);
+    auto interfacesDisabled = pnpEngine.EnumerateDeviceInterfaces(GUID_DEVINTERFACE_DISK);
+    TEST_ASSERT(interfacesDisabled.empty(), "Disabled device interface must no longer be returned");
+
+    // 4. Power State Transition Management
+    devNode->SetState(PnpDeviceState::Started);
+    NtStatus stPowerD3 = devNode->DispatchSetPower(DevicePowerState::PowerDeviceD3);
+    TEST_ASSERT(NT_SUCCESS(stPowerD3), "DispatchSetPower(D3) must return Success");
+    TEST_ASSERT(devNode->GetPowerState() == DevicePowerState::PowerDeviceD3, "Power state must be PowerDeviceD3 (Sleep)");
+
+    NtStatus stPowerD0 = devNode->DispatchSetPower(DevicePowerState::PowerDeviceD0);
+    TEST_ASSERT(NT_SUCCESS(stPowerD0), "DispatchSetPower(D0) must return Success");
+    TEST_ASSERT(devNode->GetPowerState() == DevicePowerState::PowerDeviceD0, "Power state must be PowerDeviceD0 (Full On)");
+
+    // 5. Cancel-Safe IRP Queue
+    CancelSafeIrpQueue safeQueue;
+    io::Irp irpA{}, irpB{};
+    irpA.majorFunction = io::IRP_MJ_READ;
+    irpB.majorFunction = io::IRP_MJ_WRITE;
+
+    safeQueue.InsertTail(&irpA);
+    safeQueue.InsertTail(&irpB);
+    TEST_ASSERT(safeQueue.Count() == 2, "CancelSafeIrpQueue must contain 2 IRPs");
+
+    // Cancel irpA
+    bool bCancelled = safeQueue.CancelIrp(&irpA);
+    TEST_ASSERT(bCancelled, "CancelIrp on queued IRP must return true");
+    TEST_ASSERT(irpA.ioStatus.status == NtStatus::Cancelled, "Cancelled IRP status must be NtStatus::Cancelled");
+    TEST_ASSERT(safeQueue.Count() == 1, "Queue count after cancellation must be 1");
+
+    // Remove remaining IRP
+    io::Irp* nextIrp = safeQueue.RemoveNext();
+    TEST_ASSERT(nextIrp == &irpB, "Next IRP in queue must be irpB");
+    TEST_ASSERT(safeQueue.Count() == 0, "Queue must now be empty");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -6111,6 +6276,7 @@ int main() {
     RUN_TEST(Test_EmeraldFS_And_DaytonaMM_Subsystems);
     RUN_TEST(Test_DirectX_DynamicLoader_And_DXBC_Container);
     RUN_TEST(Test_DirectX_PrismAudio_And_XInput_Subsystems);
+    RUN_TEST(Test_VanguardDriver_DeviceStack_And_PnP_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

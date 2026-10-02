@@ -83,6 +83,24 @@ struct LuidAndAttributes {
 
 using LUID = Luid;
 
+struct Guid {
+    uint32_t Data1{0};
+    uint16_t Data2{0};
+    uint16_t Data3{0};
+    uint8_t  Data4[8]{0};
+
+    constexpr bool operator==(const Guid& other) const noexcept {
+        if (Data1 != other.Data1 || Data2 != other.Data2 || Data3 != other.Data3) return false;
+        for (int i = 0; i < 8; ++i) {
+            if (Data4[i] != other.Data4[i]) return false;
+        }
+        return true;
+    }
+};
+
+using GUID = Guid;
+using UUID = Guid;
+
 /**
  * @brief Client identifier (Unique Process ID and Thread ID).
  */
