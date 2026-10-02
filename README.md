@@ -9,6 +9,7 @@
 [![Reference: win32metadata](https://img.shields.io/badge/Reference-microsoft%2Fwin32metadata-purple.svg)](https://github.com/microsoft/win32metadata)
 [![Arch: x86__64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-orange.svg)]()
 [![Build: CMake](https://img.shields.io/badge/Build-CMake%203.25%2B-green.svg)]()
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Project-FF5E5B.svg?logo=kofi&logoColor=white)](https://ko-fi.com/ssfdre38)
 
 ---
 
@@ -182,12 +183,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (43 Suites, 100% Passing)
+### Build & Run Unit Test Suite (44 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 43 Test Suites:
+# Run all 44 Test Suites:
 .\bin\micant_tests.exe
 ```
 
@@ -207,3 +208,14 @@ cl /std:c++latest /EHsc /W4 /Iinclude kernel\main.cpp kernel\dispatcher.cpp kern
 
 ## 6. Tribute
 Dedicated to Dave Cutler, Dave Plummer (*Dave's Garage*), and the legendary systems architects of the DEC PRISM/MICA and original Windows NT teams who proved that elegance, speed, and safety belong at the core of the OS.
+
+---
+
+## 7. Support & Donations
+
+If you appreciate the clean-room preservation of the MICA architecture, the sub-32MB memory footprint, and the open-source engineering behind MicaNT, consider supporting development:
+
+[![Buy Me a Coffee at Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20ssfdre38-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/ssfdre38)
+
+- **Ko-fi:** [https://ko-fi.com/ssfdre38](https://ko-fi.com/ssfdre38)
+
