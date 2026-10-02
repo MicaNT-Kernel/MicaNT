@@ -52,6 +52,36 @@ union LargeInteger {
 };
 
 /**
+ * @brief Locally Unique Identifier (LUID).
+ * 64-bit value guaranteed to be unique only on the local system.
+ */
+struct Luid {
+    uint32_t lowPart{0};
+    int32_t highPart{0};
+
+    constexpr Luid() = default;
+    constexpr Luid(uint32_t low, int32_t high) noexcept : lowPart(low), highPart(high) {}
+
+    constexpr bool operator==(const Luid& other) const noexcept {
+        return lowPart == other.lowPart && highPart == other.highPart;
+    }
+    constexpr bool operator!=(const Luid& other) const noexcept {
+        return !(*this == other);
+    }
+    [[nodiscard]] constexpr uint64_t toUint64() const noexcept {
+        return (static_cast<uint64_t>(static_cast<uint32_t>(highPart)) << 32) | lowPart;
+    }
+    [[nodiscard]] static constexpr Luid fromUint64(uint64_t val) noexcept {
+        return Luid(static_cast<uint32_t>(val & 0xFFFFFFFF), static_cast<int32_t>((val >> 32) & 0xFFFFFFFF));
+    }
+};
+
+struct LuidAndAttributes {
+    Luid luid{};
+    uint32_t attributes{0};
+};
+
+/**
  * @brief Client identifier (Unique Process ID and Thread ID).
  */
 struct ClientId {

@@ -19,6 +19,8 @@
 #include "kernel32.hpp"
 #include "ldr.hpp"
 #include "scm.hpp"
+#include "sam.hpp"
+#include "lsass.hpp"
 
 namespace micant::advapi32 {
 
@@ -66,6 +68,206 @@ inline win32::BOOL GetTokenInformation(
 ) noexcept {
     if (ReturnLength) *ReturnLength = 64;
     return win32::TRUE;
+}
+
+// ============================================================================
+// Security, Logon & LSA Win32 APIs
+// ============================================================================
+
+inline win32::BOOL LogonUserW(
+    const wchar_t* lpszUsername,
+    const wchar_t* lpszDomain,
+    const wchar_t* lpszPassword,
+    uint32_t dwLogonType,
+    uint32_t /*dwLogonProvider*/,
+    win32::HANDLE* phToken
+) noexcept {
+    if (!lpszUsername || !phToken) {
+        win32::SetLastError(87); // ERROR_INVALID_PARAMETER
+        return win32::FALSE;
+    }
+
+    std::wstring user(lpszUsername);
+    std::wstring dom = lpszDomain ? lpszDomain : L"";
+    std::wstring pass = lpszPassword ? lpszPassword : L"";
+
+    std::shared_ptr<se::TokenObject> token;
+    Luid logonId{0, 0};
+    NTSTATUS st = lsass::LocalSecurityAuthority::get().logonUser(
+        dom, user, pass, static_cast<lsass::SecurityLogonType>(dwLogonType), L"MSV1_0", token, logonId
+    );
+
+    if (st != STATUS_SUCCESS) {
+        win32::SetLastError(1326); // ERROR_LOGON_FAILURE
+        return win32::FALSE;
+    }
+
+    *phToken = reinterpret_cast<win32::HANDLE>(static_cast<uintptr_t>(logonId.toUint64()));
+    return win32::TRUE;
+}
+
+inline win32::BOOL LookupAccountSidW(
+    const wchar_t* /*lpSystemName*/,
+    const se::Sid* lpSid,
+    wchar_t* lpName,
+    uint32_t* cchName,
+    wchar_t* lpReferencedDomainName,
+    uint32_t* cchReferencedDomainName,
+    uint32_t* peUse
+) noexcept {
+    if (!lpSid || !cchName || !cchReferencedDomainName) {
+        win32::SetLastError(87);
+        return win32::FALSE;
+    }
+
+    std::wstring name, domain;
+    if (!lsass::LocalSecurityAuthority::get().lookupAccountSid(*lpSid, name, domain)) {
+        win32::SetLastError(1332); // ERROR_NONE_MAPPED
+        return win32::FALSE;
+    }
+
+    if (lpName && *cchName > name.size()) {
+        wcscpy_s(lpName, *cchName, name.c_str());
+    }
+    *cchName = static_cast<uint32_t>(name.size());
+
+    if (lpReferencedDomainName && *cchReferencedDomainName > domain.size()) {
+        wcscpy_s(lpReferencedDomainName, *cchReferencedDomainName, domain.c_str());
+    }
+    *cchReferencedDomainName = static_cast<uint32_t>(domain.size());
+
+    if (peUse) *peUse = 1; // SidTypeUser
+    return win32::TRUE;
+}
+
+inline win32::BOOL LookupAccountNameW(
+    const wchar_t* /*lpSystemName*/,
+    const wchar_t* lpAccountName,
+    se::Sid* Sid,
+    uint32_t* cbSid,
+    wchar_t* ReferencedDomainName,
+    uint32_t* cchReferencedDomainName,
+    uint32_t* peUse
+) noexcept {
+    if (!lpAccountName || !cbSid || !cchReferencedDomainName) {
+        win32::SetLastError(87);
+        return win32::FALSE;
+    }
+
+    se::Sid resolvedSid;
+    std::wstring domain;
+    if (!lsass::LocalSecurityAuthority::get().lookupAccountName(lpAccountName, resolvedSid, domain)) {
+        win32::SetLastError(1332);
+        return win32::FALSE;
+    }
+
+    if (Sid) *Sid = resolvedSid;
+    *cbSid = sizeof(se::Sid);
+
+    if (ReferencedDomainName && *cchReferencedDomainName > domain.size()) {
+        wcscpy_s(ReferencedDomainName, *cchReferencedDomainName, domain.c_str());
+    }
+    *cchReferencedDomainName = static_cast<uint32_t>(domain.size());
+
+    if (peUse) *peUse = 1;
+    return win32::TRUE;
+}
+
+inline win32::BOOL LookupPrivilegeValueW(
+    const wchar_t* /*lpSystemName*/,
+    const wchar_t* lpName,
+    Luid* lpLuid
+) noexcept {
+    if (!lpName || !lpLuid) {
+        win32::SetLastError(87);
+        return win32::FALSE;
+    }
+
+    static const std::unordered_map<std::wstring, uint32_t> privMap = {
+        {L"SeCreateTokenPrivilege", 2},
+        {L"SeAssignPrimaryTokenPrivilege", 3},
+        {L"SeLockMemoryPrivilege", 4},
+        {L"SeIncreaseQuotaPrivilege", 5},
+        {L"SeTcbPrivilege", 7},
+        {L"SeSecurityPrivilege", 8},
+        {L"SeTakeOwnershipPrivilege", 9},
+        {L"SeLoadDriverPrivilege", 10},
+        {L"SeSystemtimePrivilege", 12},
+        {L"SeBackupPrivilege", 17},
+        {L"SeRestorePrivilege", 18},
+        {L"SeShutdownPrivilege", 19},
+        {L"SeDebugPrivilege", 20},
+        {L"SeSystemEnvironmentPrivilege", 22},
+        {L"SeChangeNotifyPrivilege", 23},
+        {L"SeImpersonatePrivilege", 29}
+    };
+
+    auto it = privMap.find(lpName);
+    if (it != privMap.end()) {
+        lpLuid->lowPart = it->second;
+        lpLuid->highPart = 0;
+        return win32::TRUE;
+    }
+
+    win32::SetLastError(1313); // ERROR_NO_SUCH_PRIVILEGE
+    return win32::FALSE;
+}
+
+inline win32::BOOL LookupPrivilegeNameW(
+    const wchar_t* /*lpSystemName*/,
+    const Luid* lpLuid,
+    wchar_t* lpName,
+    uint32_t* cchName
+) noexcept {
+    if (!lpLuid || !cchName) {
+        win32::SetLastError(87);
+        return win32::FALSE;
+    }
+
+    static const std::unordered_map<uint32_t, std::wstring> luidMap = {
+        {2, L"SeCreateTokenPrivilege"},
+        {3, L"SeAssignPrimaryTokenPrivilege"},
+        {4, L"SeLockMemoryPrivilege"},
+        {5, L"SeIncreaseQuotaPrivilege"},
+        {7, L"SeTcbPrivilege"},
+        {8, L"SeSecurityPrivilege"},
+        {9, L"SeTakeOwnershipPrivilege"},
+        {10, L"SeLoadDriverPrivilege"},
+        {12, L"SeSystemtimePrivilege"},
+        {17, L"SeBackupPrivilege"},
+        {18, L"SeRestorePrivilege"},
+        {19, L"SeShutdownPrivilege"},
+        {20, L"SeDebugPrivilege"},
+        {22, L"SeSystemEnvironmentPrivilege"},
+        {23, L"SeChangeNotifyPrivilege"},
+        {29, L"SeImpersonatePrivilege"}
+    };
+
+    auto it = luidMap.find(lpLuid->lowPart);
+    if (it != luidMap.end()) {
+        if (lpName && *cchName > it->second.size()) {
+            wcscpy_s(lpName, *cchName, it->second.c_str());
+        }
+        *cchName = static_cast<uint32_t>(it->second.size());
+        return win32::TRUE;
+    }
+
+    win32::SetLastError(1313);
+    return win32::FALSE;
+}
+
+inline NTSTATUS LsaOpenPolicy(
+    const void* /*SystemName*/,
+    const void* /*ObjectAttributes*/,
+    uint32_t /*DesiredAccess*/,
+    uintptr_t* PolicyHandle
+) noexcept {
+    if (PolicyHandle) *PolicyHandle = 0xCAFE0002;
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS LsaClose(uintptr_t /*ObjectHandle*/) noexcept {
+    return STATUS_SUCCESS;
 }
 
 // ============================================================================
@@ -274,6 +476,15 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "QueryServiceStatus", reinterpret_cast<void*>(QueryServiceStatus));
     ldr.registerExport("advapi32.dll", "QueryServiceStatusEx", reinterpret_cast<void*>(QueryServiceStatusEx));
     ldr.registerExport("advapi32.dll", "CloseServiceHandle", reinterpret_cast<void*>(CloseServiceHandle));
+
+    // Security & Logon Exports
+    ldr.registerExport("advapi32.dll", "LogonUserW", reinterpret_cast<void*>(LogonUserW));
+    ldr.registerExport("advapi32.dll", "LookupAccountSidW", reinterpret_cast<void*>(LookupAccountSidW));
+    ldr.registerExport("advapi32.dll", "LookupAccountNameW", reinterpret_cast<void*>(LookupAccountNameW));
+    ldr.registerExport("advapi32.dll", "LookupPrivilegeValueW", reinterpret_cast<void*>(LookupPrivilegeValueW));
+    ldr.registerExport("advapi32.dll", "LookupPrivilegeNameW", reinterpret_cast<void*>(LookupPrivilegeNameW));
+    ldr.registerExport("advapi32.dll", "LsaOpenPolicy", reinterpret_cast<void*>(LsaOpenPolicy));
+    ldr.registerExport("advapi32.dll", "LsaClose", reinterpret_cast<void*>(LsaClose));
 
     // Initialize SCM daemon
     scm::ServiceControlManager::get().initialize();

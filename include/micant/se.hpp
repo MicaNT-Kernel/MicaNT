@@ -54,6 +54,13 @@ inline constexpr std::wstring_view SE_TAKE_OWNERSHIP_NAME    = L"SeTakeOwnership
 inline constexpr std::wstring_view SE_TCB_NAME               = L"SeTcbPrivilege";
 inline constexpr std::wstring_view SE_IMPERSONATE_NAME       = L"SeImpersonatePrivilege";
 inline constexpr std::wstring_view SE_CHANGE_NOTIFY_NAME     = L"SeChangeNotifyPrivilege";
+inline constexpr std::wstring_view SE_SYSTEMTIME_NAME        = L"SeSystemtimePrivilege";
+inline constexpr std::wstring_view SE_SYSTEM_ENVIRONMENT_NAME= L"SeSystemEnvironmentPrivilege";
+inline constexpr std::wstring_view SE_ASSIGNPRIMARYTOKEN_NAME= L"SeAssignPrimaryTokenPrivilege";
+inline constexpr std::wstring_view SE_INCREASE_QUOTA_NAME    = L"SeIncreaseQuotaPrivilege";
+inline constexpr std::wstring_view SE_LOAD_DRIVER_NAME       = L"SeLoadDriverPrivilege";
+inline constexpr std::wstring_view SE_CREATE_TOKEN_NAME      = L"SeCreateTokenPrivilege";
+inline constexpr std::wstring_view SE_LOCK_MEMORY_NAME       = L"SeLockMemoryPrivilege";
 
 /**
  * @brief Security Identifier (SID).
@@ -251,6 +258,16 @@ public:
         return true;
     }
 
+    [[nodiscard]] const std::unordered_map<std::wstring, uint32_t>& getPrivileges() const noexcept {
+        return privileges_;
+    }
+
+    [[nodiscard]] Luid getAuthenticationId() const noexcept { return authId_; }
+    void setAuthenticationId(Luid id) noexcept { authId_ = id; }
+
+    [[nodiscard]] uint32_t getSessionId() const noexcept { return sessionId_; }
+    void setSessionId(uint32_t id) noexcept { sessionId_ = id; }
+
     // Factory Helpers
     [[nodiscard]] static std::shared_ptr<TokenObject> createSystemToken() {
         auto token = std::make_shared<TokenObject>(Sid::localSystem());
@@ -290,6 +307,8 @@ private:
     std::unordered_map<std::wstring, uint32_t> privileges_;
     TokenType tokenType_{TokenType::Primary};
     SecurityImpersonationLevel impersonationLevel_{SecurityImpersonationLevel::Impersonation};
+    Luid authId_{0, 0};
+    uint32_t sessionId_{0};
 };
 
 /**

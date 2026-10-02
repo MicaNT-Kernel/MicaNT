@@ -11,6 +11,7 @@
 #include "ntdef.hpp"
 #include "kernel32.hpp"
 #include "ldr.hpp"
+#include "winlogon.hpp"
 
 namespace micant::user32 {
 
@@ -54,6 +55,42 @@ inline uint32_t MsgWaitForMultipleObjects(
     return win32::WaitForMultipleObjects(nCount, pHandles, fWaitAll, dwMilliseconds);
 }
 
+inline win32::BOOL LockWorkStation() noexcept {
+    return winlogon::WinlogonManager::get().lockWorkstation() ? win32::TRUE : win32::FALSE;
+}
+
+inline win32::HANDLE OpenDesktopW(
+    const wchar_t* lpszDesktop,
+    uint32_t /*dwFlags*/,
+    win32::BOOL /*fInherit*/,
+    uint32_t /*dwDesiredAccess*/
+) noexcept {
+    if (!lpszDesktop) return nullptr;
+    if (_wcsicmp(lpszDesktop, L"Winlogon") == 0) {
+        return reinterpret_cast<win32::HANDLE>(0x0000000000000010ULL);
+    }
+    if (_wcsicmp(lpszDesktop, L"Default") == 0) {
+        return reinterpret_cast<win32::HANDLE>(0x0000000000000020ULL);
+    }
+    return nullptr;
+}
+
+inline win32::BOOL SwitchDesktop(win32::HANDLE hDesktop) noexcept {
+    if (hDesktop == reinterpret_cast<win32::HANDLE>(0x0000000000000010ULL)) {
+        winlogon::WinlogonManager::get().switchDesktop(winlogon::DesktopType::Winlogon);
+        return win32::TRUE;
+    }
+    if (hDesktop == reinterpret_cast<win32::HANDLE>(0x0000000000000020ULL)) {
+        winlogon::WinlogonManager::get().switchDesktop(winlogon::DesktopType::Default);
+        return win32::TRUE;
+    }
+    return win32::FALSE;
+}
+
+inline win32::BOOL CloseDesktop(win32::HANDLE /*hDesktop*/) noexcept {
+    return win32::TRUE;
+}
+
 inline void InitializeUser32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("user32.dll", "ShowWindow", reinterpret_cast<void*>(ShowWindow));
@@ -63,6 +100,10 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "TranslateMessage", reinterpret_cast<void*>(TranslateMessage));
     ldr.registerExport("user32.dll", "DispatchMessageA", reinterpret_cast<void*>(DispatchMessageA));
     ldr.registerExport("user32.dll", "MsgWaitForMultipleObjects", reinterpret_cast<void*>(MsgWaitForMultipleObjects));
+    ldr.registerExport("user32.dll", "LockWorkStation", reinterpret_cast<void*>(LockWorkStation));
+    ldr.registerExport("user32.dll", "OpenDesktopW", reinterpret_cast<void*>(OpenDesktopW));
+    ldr.registerExport("user32.dll", "SwitchDesktop", reinterpret_cast<void*>(SwitchDesktop));
+    ldr.registerExport("user32.dll", "CloseDesktop", reinterpret_cast<void*>(CloseDesktop));
 }
 
 } // namespace micant::user32

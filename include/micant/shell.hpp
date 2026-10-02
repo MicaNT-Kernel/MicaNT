@@ -79,6 +79,11 @@ public:
         ws2_32::InitializeWs2_32SubsystemExports();
         iphlpapi::InitializeIpHlpApiSubsystemExports();
         tcpip::NetworkStack::get().initialize();
+
+        // Establish default interactive logon session (admin) if not already active
+        if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
+            winlogon::WinlogonManager::get().initiateLogon(L"admin", L"mica");
+        }
     }
 
     void printBanner(std::ostream& out = std::cout) {
@@ -148,6 +153,12 @@ public:
             cmdNet(tokens, out);
         } else if (cmd == "sc") {
             cmdSc(tokens, out);
+        } else if (cmd == "whoami") {
+            cmdWhoami(tokens, out);
+        } else if (cmd == "lock") {
+            cmdLock(out);
+        } else if (cmd == "logoff") {
+            cmdLogoff(out);
         } else if (cmd == "exec" || cmd == "run") {
             if (tokens.size() < 2) {
                 out << "Usage: exec <pe_file_path>\n";
@@ -359,7 +370,11 @@ private:
             << "  PING <host>       Sends ICMP Echo Requests to verify network connectivity\n"
             << "  NETSTAT           Displays active TCP/UDP network connections and ports\n"
             << "  NET START/STOP    Controls and lists running Windows services\n"
+            << "  NET USER [name]   Enumerates or modifies local user accounts in SAM\n"
             << "  SC QUERY/START    Interrogates and controls Service Control Manager\n"
+            << "  WHOAMI [/priv]    Displays user identity, group SIDs, and token privileges\n"
+            << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
+            << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
             << "  EXIT / QUIT       Quits the MicaNT command shell\n";
     }
@@ -725,7 +740,10 @@ private:
         std::string sub = tokens[1];
         std::transform(sub.begin(), sub.end(), sub.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-        if (sub == "start") {
+        if (sub == "user") {
+            cmdNetUser(tokens, out);
+            return;
+        } else if (sub == "start") {
             if (tokens.size() == 2) {
                 out << "\nThese Windows services are started:\n\n";
                 std::vector<scm::ENUM_SERVICE_STATUS_PROCESSW> list;
@@ -886,6 +904,225 @@ private:
         } else {
             out << "[SC] Unknown command: " << tokens[1] << "\n";
         }
+    }
+
+    void cmdNetUser(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() == 2) {
+            out << "\nUser accounts for \\\\MICANT-DESKTOP\n\n"
+                << "-------------------------------------------------------------------------------\n";
+            auto users = sam::SamDatabase::get().enumerateUsers();
+            std::sort(users.begin(), users.end(), [](const auto& a, const auto& b) { return a.rid < b.rid; });
+            for (size_t i = 0; i < users.size(); ++i) {
+                std::string name = wideToAscii(users[i].accountName);
+                out << std::left << std::setw(25) << name;
+                if ((i + 1) % 3 == 0) out << "\n";
+            }
+            if (users.size() % 3 != 0) out << "\n";
+            out << "The command completed successfully.\n\n";
+            return;
+        }
+
+        std::string targetUser = tokens[2];
+        std::wstring wTargetUser(targetUser.begin(), targetUser.end());
+
+        bool isAdd = false;
+        bool isDelete = false;
+        std::string password;
+        for (size_t i = 3; i < tokens.size(); ++i) {
+            std::string t = tokens[i];
+            std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (t == "/add") {
+                isAdd = true;
+            } else if (t == "/delete") {
+                isDelete = true;
+            } else if (!t.starts_with("/")) {
+                password = tokens[i];
+            }
+        }
+
+        if (isAdd) {
+            std::wstring wPass(password.begin(), password.end());
+            NTSTATUS st = sam::SamDatabase::get().createUser(wTargetUser, wPass);
+            if (st == STATUS_SUCCESS) {
+                out << "The command completed successfully.\n\n";
+            } else if (st == STATUS_USER_EXISTS) {
+                out << "The account already exists.\n\n";
+            } else {
+                out << "System error 5 has occurred.\nAccess is denied.\n\n";
+            }
+            return;
+        }
+
+        if (isDelete) {
+            NTSTATUS st = sam::SamDatabase::get().deleteUser(wTargetUser);
+            if (st == STATUS_SUCCESS) {
+                out << "The command completed successfully.\n\n";
+            } else if (st == STATUS_ACCESS_DENIED) {
+                out << "System error 5 has occurred.\nAccess is denied.\n\n";
+            } else {
+                out << "The user name could not be found.\n\n";
+            }
+            return;
+        }
+
+        auto userOpt = sam::SamDatabase::get().getUser(wTargetUser);
+        if (!userOpt) {
+            out << "The user name could not be found.\n\n";
+            return;
+        }
+
+        const auto& u = *userOpt;
+        std::string sAccount = wideToAscii(u.accountName);
+        std::string sFull = wideToAscii(u.fullName);
+        std::string sComment = wideToAscii(u.comment);
+        bool active = (u.userFlags & sam::USER_ACCOUNT_DISABLED) == 0;
+
+        out << "\nUser name                    " << sAccount << "\n"
+            << "Full Name                    " << sFull << "\n"
+            << "Comment                      " << sComment << "\n"
+            << "User's comment\n"
+            << "Country/region code          000 (System Default)\n"
+            << "Account active               " << (active ? "Yes" : "No") << "\n"
+            << "Account expires              Never\n\n"
+            << "Password last set            10/01/2026 12:00:00 PM\n"
+            << "Password expires             Never\n"
+            << "Password changeable          10/01/2026 12:00:00 PM\n"
+            << "Password required            Yes\n"
+            << "User may change password     Yes\n\n"
+            << "Workstations allowed         All\n"
+            << "Logon script\n"
+            << "User profile\n"
+            << "Home directory\n"
+            << "Last logon                   10/02/2026 11:45:00 AM\n\n"
+            << "Local Group Memberships      ";
+
+        auto groupSids = sam::SamDatabase::get().getGroupSidsForUser(u.rid);
+        for (const auto& gSid : groupSids) {
+            std::wstring gName, gDom;
+            (void)lsass::LocalSecurityAuthority::get().lookupAccountSid(gSid, gName, gDom);
+            if (gDom == L"BUILTIN" || gDom == L"MICANT") {
+                std::string sG = wideToAscii(gName);
+                out << "*" << sG << "  ";
+            }
+        }
+        out << "\nGlobal Group memberships     *None\n"
+            << "The command completed successfully.\n\n";
+    }
+
+    void cmdWhoami(const std::vector<std::string>& tokens, std::ostream& out) {
+        std::string flag = (tokens.size() > 1) ? tokens[1] : "";
+        std::transform(flag.begin(), flag.end(), flag.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        std::wstring curUser = winlogon::WinlogonManager::get().getLoggedOnUser();
+        std::wstring curDomain = winlogon::WinlogonManager::get().getLoggedOnDomain();
+        if (curUser.empty()) {
+            curUser = L"admin";
+            curDomain = L"MICANT";
+        }
+
+        std::string sUser = wideToAscii(curUser);
+        std::string sDomain = wideToAscii(curDomain);
+        auto token = winlogon::WinlogonManager::get().getActiveToken();
+        if (!token) {
+            auto userOpt = sam::SamDatabase::get().getUser(curUser);
+            if (userOpt) {
+                token = std::make_shared<se::TokenObject>(userOpt->userSid);
+                for (const auto& g : sam::SamDatabase::get().getGroupSidsForUser(userOpt->rid)) {
+                    token->addGroup(g);
+                }
+            } else {
+                token = se::TokenObject::createUserToken(se::Sid(5, {21, 1988, 1993, 2026, 1000}));
+            }
+        }
+
+        if (flag == "/?" || flag == "-?") {
+            out << "\nWHOAMI [/UPN | /USER | /GROUPS | /PRIV] [/FO format]\n"
+                << "Description:\n"
+                << "    Displays current user identity, group memberships, and assigned privileges.\n\n";
+            return;
+        }
+
+        if (flag == "/user" || flag == "/all") {
+            out << "\nUSER INFORMATION\n"
+                << "----------------\n\n"
+                << "User Name                SID\n"
+                << "======================== ============================================\n"
+                << std::left << std::setw(24) << (sDomain + "\\" + sUser) << " "
+                << wideToAscii(token->getUserSid().toString()) << "\n\n";
+        }
+
+        if (flag == "/groups" || flag == "/all") {
+            out << "\nGROUP INFORMATION\n"
+                << "-----------------\n\n"
+                << "Group Name                                  Type             SID          Attributes\n"
+                << "=========================================== ================ ============ ==================================================\n";
+            for (const auto& gSid : token->getGroupSids()) {
+                std::wstring gName, gDom;
+                (void)lsass::LocalSecurityAuthority::get().lookupAccountSid(gSid, gName, gDom);
+                std::string sGName = wideToAscii(gName);
+                std::string sGDom = wideToAscii(gDom);
+                std::string fullName = sGDom.empty() ? sGName : (sGDom + "\\" + sGName);
+                std::string type = (sGDom == "BUILTIN" || sGDom == "MICANT") ? "Alias" : "Well-known group";
+                out << std::left << std::setw(43) << fullName << " "
+                    << std::setw(16) << type << " "
+                    << std::setw(12) << wideToAscii(gSid.toString()) << " "
+                    << "Mandatory group, Enabled by default, Enabled group\n";
+            }
+            out << "\n";
+        }
+
+        if (flag == "/priv" || flag == "/all") {
+            out << "\nPRIVILEGES INFORMATION\n"
+                << "----------------------\n\n"
+                << "Privilege Name                Description                          State\n"
+                << "============================= ==================================== ========\n";
+            const auto& privs = token->getPrivileges();
+            static const std::unordered_map<std::wstring, std::string> privDesc = {
+                {L"SeDebugPrivilege", "Debug programs"},
+                {L"SeShutdownPrivilege", "Shut down the system"},
+                {L"SeBackupPrivilege", "Back up files and directories"},
+                {L"SeRestorePrivilege", "Restore files and directories"},
+                {L"SeSecurityPrivilege", "Manage auditing and security log"},
+                {L"SeTakeOwnershipPrivilege", "Take ownership of files or other objects"},
+                {L"SeTcbPrivilege", "Act as part of the operating system"},
+                {L"SeSystemEnvironmentPrivilege", "Modify firmware environment values"},
+                {L"SeChangeNotifyPrivilege", "Bypass traverse checking"},
+                {L"SeImpersonatePrivilege", "Impersonate a client after authentication"},
+                {L"SeCreateTokenPrivilege", "Create a token object"},
+                {L"SeAssignPrimaryTokenPrivilege", "Replace a process level token"},
+                {L"SeIncreaseQuotaPrivilege", "Adjust memory quotas for a process"},
+                {L"SeLoadDriverPrivilege", "Load and unload device drivers"}
+            };
+
+            for (const auto& [pName, attr] : privs) {
+                std::string sName = wideToAscii(pName);
+                std::string desc = "Administrative User Privilege";
+                auto dit = privDesc.find(pName);
+                if (dit != privDesc.end()) desc = dit->second;
+                std::string state = (attr & se::SE_PRIVILEGE_ENABLED) ? "Enabled" : "Disabled";
+                out << std::left << std::setw(29) << sName << " "
+                    << std::setw(36) << desc << " "
+                    << state << "\n";
+            }
+            out << "\n";
+        }
+
+        if (flag.empty()) {
+            out << sDomain << "\\" << sUser << "\n";
+        }
+    }
+
+    void cmdLock(std::ostream& out) {
+        if (winlogon::WinlogonManager::get().lockWorkstation()) {
+            out << "The workstation is now locked. Switched to secure Winlogon desktop.\n";
+        } else {
+            out << "Failed to lock workstation. Session is not in logged-on state.\n";
+        }
+    }
+
+    void cmdLogoff(std::ostream& out) {
+        winlogon::WinlogonManager::get().logoff();
+        out << "Session terminated. User logged off. Switched to secure Winlogon desktop.\n";
     }
 
     static std::string trim(std::string_view s) {
