@@ -69,6 +69,7 @@
 #include "micant/prismaudio.hpp"
 #include "micant/xinput.hpp"
 #include "micant/vanguarddriver.hpp"
+#include "micant/aegissandbox.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -6221,6 +6222,115 @@ void Test_VanguardDriver_DeviceStack_And_PnP_Subsystem() {
     TEST_ASSERT(safeQueue.Count() == 0, "Queue must now be empty");
 }
 
+// ============================================================================
+// Suite 52: AegisSandbox Sovereign Process Containment & Job Objects Tests
+// ============================================================================
+void Test_AegisSandbox_JobObjects_And_ProcessContainment() {
+    using namespace micant::aegis;
+
+    auto& sandboxMgr = AegisSandboxManager::get();
+    sandboxMgr.reset();
+
+    // 1. Creation and Named Registry Lookup
+    auto job = sandboxMgr.createJobObject(L"\\BaseNamedObjects\\AegisSandboxJob");
+    TEST_ASSERT(job != nullptr, "AegisJobObject creation must succeed");
+    TEST_ASSERT(job->getName() == L"\\BaseNamedObjects\\AegisSandboxJob", "Job name must match initialization");
+
+    auto openedJob = sandboxMgr.openJobObject(L"\\BaseNamedObjects\\AegisSandboxJob");
+    TEST_ASSERT(openedJob == job, "openJobObject must return same instance as created");
+
+    // 2. Active Process Quota Limit
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
+                                              JOB_OBJECT_LIMIT_PROCESS_MEMORY |
+                                              JOB_OBJECT_LIMIT_JOB_MEMORY |
+                                              JOB_OBJECT_LIMIT_PROCESS_TIME;
+    limits.BasicLimitInformation.ActiveProcessLimit = 2;
+    limits.ProcessMemoryLimit = 16 * 1024 * 1024; // 16MB per process
+    limits.JobMemoryLimit = 24 * 1024 * 1024;     // 24MB aggregate job memory
+    limits.BasicLimitInformation.PerProcessUserTimeLimit = 1000; // 1000 units
+    job->setExtendedLimits(limits);
+
+    auto& procMgr = ps::ProcessManager::get();
+    auto proc1 = procMgr.createProcess(L"sandbox_app1.exe");
+    auto proc2 = procMgr.createProcess(L"sandbox_app2.exe");
+    auto proc3 = procMgr.createProcess(L"sandbox_app3.exe");
+
+    NtStatus stAssign1 = job->assignProcess(proc1);
+    NtStatus stAssign2 = job->assignProcess(proc2);
+    TEST_ASSERT(NT_SUCCESS(stAssign1), "Assigning proc1 to job must succeed");
+    TEST_ASSERT(NT_SUCCESS(stAssign2), "Assigning proc2 to job must succeed");
+    TEST_ASSERT(job->getActiveProcessCount() == 2, "Job active process count must be 2");
+
+    // Exceed Active Process Limit (attempting to add 3rd process when limit is 2)
+    NtStatus stAssign3 = job->assignProcess(proc3);
+    TEST_ASSERT(stAssign3 == NtStatus::QuotaExceeded, "Adding 3rd process must fail with QuotaExceeded");
+    TEST_ASSERT(job->getActiveProcessCount() == 2, "Active process count must remain 2");
+
+    // Verify reverse process lookup
+    auto locatedJob = sandboxMgr.getJobForProcess(proc1->getPid());
+    TEST_ASSERT(locatedJob == job, "getJobForProcess must find parent job");
+
+    // 3. Per-Process and Job-Wide Memory Limits
+    // Allocate 10MB for proc1 (under 16MB limit)
+    NtStatus stMem1 = job->checkAndRecordMemoryAlloc(proc1->getPid(), 10 * 1024 * 1024);
+    TEST_ASSERT(NT_SUCCESS(stMem1), "Allocating 10MB for proc1 must succeed");
+
+    // Allocate 8MB more for proc1 -> 10 + 8 = 18MB > 16MB limit -> QuotaExceeded
+    NtStatus stMemExceedProc = job->checkAndRecordMemoryAlloc(proc1->getPid(), 8 * 1024 * 1024);
+    TEST_ASSERT(stMemExceedProc == NtStatus::QuotaExceeded, "Exceeding per-process memory limit must return QuotaExceeded");
+
+    // Allocate 12MB for proc2 -> Job memory = 10 + 12 = 22MB <= 24MB job limit -> Success
+    NtStatus stMem2 = job->checkAndRecordMemoryAlloc(proc2->getPid(), 12 * 1024 * 1024);
+    TEST_ASSERT(NT_SUCCESS(stMem2), "Allocating 12MB for proc2 must succeed");
+
+    // Allocate 3MB more for proc2 -> Job memory = 22 + 3 = 25MB > 24MB job limit -> QuotaExceeded
+    NtStatus stMemExceedJob = job->checkAndRecordMemoryAlloc(proc2->getPid(), 3 * 1024 * 1024);
+    TEST_ASSERT(stMemExceedJob == NtStatus::QuotaExceeded, "Exceeding job aggregate memory limit must return QuotaExceeded");
+
+    auto extLimits = job->getExtendedLimits();
+    TEST_ASSERT(extLimits.PeakProcessMemoryUsed == 12 * 1024 * 1024, "Peak process memory must be 12MB");
+    TEST_ASSERT(extLimits.PeakJobMemoryUsed == 22 * 1024 * 1024, "Peak job memory must be 22MB");
+
+    // Free memory
+    job->recordMemoryFree(proc1->getPid(), 4 * 1024 * 1024);
+
+    // 4. Per-Process User Time Quota & Termination
+    NtStatus stCpu1 = job->recordCpuExecution(proc1->getPid(), 400, 50);
+    TEST_ASSERT(NT_SUCCESS(stCpu1), "Recording 400 user cycles must succeed");
+
+    // Exceed user time limit: 400 + 700 = 1100 > 1000 limit -> terminates proc1
+    NtStatus stCpuExceed = job->recordCpuExecution(proc1->getPid(), 700, 50);
+    TEST_ASSERT(stCpuExceed == NtStatus::QuotaExceeded, "Exceeding user time quota must return QuotaExceeded");
+    TEST_ASSERT(proc1->isTerminated(), "Process exceeding user time quota must be terminated");
+    TEST_ASSERT(job->getActiveProcessCount() == 1, "Active process count must decrement after termination");
+
+    // 5. Security Token Sandbox Confinement
+    se::Sid sandboxSid(5, {21, 9999, 1});
+    auto sandboxToken = std::make_shared<se::TokenObject>(sandboxSid, se::TokenType::Primary);
+    job->setSandboxToken(sandboxToken);
+
+    auto proc4 = procMgr.createProcess(L"sandbox_isolated.exe");
+    NtStatus stAssign4 = job->assignProcess(proc4);
+    TEST_ASSERT(NT_SUCCESS(stAssign4), "Assigning proc4 to job must succeed");
+    TEST_ASSERT(proc4->getToken() == sandboxToken, "Proc4 must inherit restricted sandbox token");
+
+    // 6. Kill On Job Close Enforcement
+    auto limitsKill = job->getExtendedLimits();
+    limitsKill.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    job->setExtendedLimits(limitsKill);
+
+    TEST_ASSERT(!proc2->isTerminated(), "Proc2 must be active before handle close");
+    job->onHandleClosed();
+    TEST_ASSERT(proc2->isTerminated(), "Proc2 must be terminated on job handle close");
+    TEST_ASSERT(proc4->isTerminated(), "Proc4 must be terminated on job handle close");
+    TEST_ASSERT(job->getActiveProcessCount() == 0, "All processes must be terminated");
+
+    auto accounting = job->getAccountingInfo();
+    TEST_ASSERT(accounting.TotalProcesses >= 3, "Accounting TotalProcesses must reflect members");
+    TEST_ASSERT(accounting.TotalTerminatedProcesses >= 3, "Accounting TotalTerminatedProcesses must reflect killed processes");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -6277,6 +6387,7 @@ int main() {
     RUN_TEST(Test_DirectX_DynamicLoader_And_DXBC_Container);
     RUN_TEST(Test_DirectX_PrismAudio_And_XInput_Subsystems);
     RUN_TEST(Test_VanguardDriver_DeviceStack_And_PnP_Subsystem);
+    RUN_TEST(Test_AegisSandbox_JobObjects_And_ProcessContainment);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

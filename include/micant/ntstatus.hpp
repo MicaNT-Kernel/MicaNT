@@ -65,6 +65,7 @@ enum class NtStatus : uint32_t {
     ServerNotRunning                 = 0xC0000042,
     SharingViolation                 = 0xC0000043,
     NoSuchProcess                    = 0xC0000043,
+    QuotaExceeded                    = 0xC0000044,
     ProcessIsTerminating             = 0xC000010A,
     PrivilegeNotHeld                 = 0xC0000061,
     ProcedureNotFound                = 0xC000007A,

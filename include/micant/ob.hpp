@@ -25,7 +25,8 @@ enum class ObjectTypeId : uint32_t {
     Mutant,
     Semaphore,
     Key,
-    IoCompletion
+    IoCompletion,
+    Job
 };
 
 struct ObjectHeader;
