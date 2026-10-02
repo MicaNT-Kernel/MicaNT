@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <functional>
 #include <string>
+#include <sstream>
+#include <cstring>
 
 namespace micant::prism_vm {
 
@@ -455,6 +457,270 @@ public:
 
         prog.Add({ OP_RET, {}, {}, {}, {} });
         return prog;
+    }
+};
+
+// ============================================================================
+// 4. Standard Direct3D DXBC Container Format & Bytecode Interoperability
+// ============================================================================
+
+inline constexpr uint32_t FOURCC_DXBC = 0x43425844; // 'DXBC'
+inline constexpr uint32_t FOURCC_ISGN = 0x4E475349; // 'ISGN'
+inline constexpr uint32_t FOURCC_OSGN = 0x4E47534F; // 'OSGN'
+inline constexpr uint32_t FOURCC_SHDR = 0x52444853; // 'SHDR'
+inline constexpr uint32_t FOURCC_SHEX = 0x58454853; // 'SHEX'
+inline constexpr uint32_t FOURCC_RDEF = 0x46454452; // 'RDEF'
+inline constexpr uint32_t FOURCC_STAT = 0x54415453; // 'STAT'
+
+#pragma pack(push, 1)
+struct DxbcHeader {
+    uint32_t magic;       // FOURCC_DXBC
+    uint32_t checksum[4]; // 16 bytes hash
+    uint32_t one;         // 1
+    uint32_t totalSize;   // Size of entire DXBC stream
+    uint32_t chunkCount;  // Number of chunks
+};
+
+struct DxbcChunkHeader {
+    uint32_t fourCc;
+    uint32_t chunkSize;
+};
+#pragma pack(pop)
+
+struct DxbcChunk {
+    uint32_t fourCc{ 0 };
+    std::vector<uint8_t> data;
+};
+
+class DxbcContainer {
+public:
+    uint32_t programType{ 1 }; // 1 = VertexShader, 0 = PixelShader
+    uint8_t majorVersion{ 5 };
+    uint8_t minorVersion{ 0 };
+    std::vector<DxbcChunk> chunks;
+
+    static bool IsDxbc(const void* data, size_t size) {
+        if (!data || size < sizeof(DxbcHeader)) return false;
+        const auto* hdr = reinterpret_cast<const DxbcHeader*>(data);
+        return hdr->magic == FOURCC_DXBC && hdr->totalSize <= size;
+    }
+
+    static bool Parse(const void* data, size_t size, DxbcContainer& out) {
+        if (!IsDxbc(data, size)) return false;
+        const auto* hdr = reinterpret_cast<const DxbcHeader*>(data);
+        const auto* bytePtr = reinterpret_cast<const uint8_t*>(data);
+
+        size_t headerAndOffsets = sizeof(DxbcHeader) + hdr->chunkCount * sizeof(uint32_t);
+        if (size < headerAndOffsets) return false;
+
+        const auto* offsets = reinterpret_cast<const uint32_t*>(bytePtr + sizeof(DxbcHeader));
+        out.chunks.clear();
+
+        for (uint32_t i = 0; i < hdr->chunkCount; ++i) {
+            uint32_t offset = offsets[i];
+            if (offset + sizeof(DxbcChunkHeader) > size) return false;
+
+            const auto* chunkHdr = reinterpret_cast<const DxbcChunkHeader*>(bytePtr + offset);
+            if (offset + sizeof(DxbcChunkHeader) + chunkHdr->chunkSize > size) return false;
+
+            DxbcChunk chunk;
+            chunk.fourCc = chunkHdr->fourCc;
+            const uint8_t* chunkPayload = bytePtr + offset + sizeof(DxbcChunkHeader);
+            chunk.data.assign(chunkPayload, chunkPayload + chunkHdr->chunkSize);
+
+            if (chunk.fourCc == FOURCC_SHDR || chunk.fourCc == FOURCC_SHEX) {
+                if (chunk.data.size() >= sizeof(uint32_t)) {
+                    uint32_t verToken = *reinterpret_cast<const uint32_t*>(chunk.data.data());
+                    out.programType = (verToken >> 16) & 0xFFFF;
+                    out.majorVersion = static_cast<uint8_t>((verToken >> 8) & 0xFF);
+                    out.minorVersion = static_cast<uint8_t>(verToken & 0xFF);
+                }
+            }
+
+            out.chunks.push_back(std::move(chunk));
+        }
+
+        return true;
+    }
+
+    static std::vector<uint8_t> BuildContainer(
+        uint32_t programType,
+        uint8_t majorVersion,
+        uint8_t minorVersion,
+        const ShaderProgram& prog
+    ) {
+        // Build SHDR chunk
+        std::vector<uint32_t> shdrTokens;
+        uint32_t versionToken = ((programType & 0xFFFF) << 16) | ((majorVersion & 0xFF) << 8) | (minorVersion & 0xFF);
+        shdrTokens.push_back(versionToken);
+
+        // Instruction tokens
+        for (const auto& inst : prog.GetInstructions()) {
+            uint32_t opToken = (static_cast<uint32_t>(inst.op) & 0x7FF) | (5U << 24); // 5 dwords length
+            shdrTokens.push_back(opToken);
+            shdrTokens.push_back(static_cast<uint32_t>(inst.dst.type) | (inst.dst.index << 8) | (inst.dst.writeMask << 16));
+            shdrTokens.push_back(static_cast<uint32_t>(inst.src0.type) | (inst.src0.index << 8));
+            shdrTokens.push_back(static_cast<uint32_t>(inst.src1.type) | (inst.src1.index << 8));
+            shdrTokens.push_back(static_cast<uint32_t>(inst.src2.type) | (inst.src2.index << 8) | (inst.samplerSlot << 16));
+        }
+
+        uint32_t shdrPayloadBytes = static_cast<uint32_t>(shdrTokens.size() * sizeof(uint32_t));
+
+        // Build ISGN chunk (input signature header)
+        std::vector<uint8_t> isgnData = {
+            0x02, 0x00, 0x00, 0x00, // 2 elements
+            0x08, 0x00, 0x00, 0x00  // signature payload
+        };
+        // Build OSGN chunk (output signature header)
+        std::vector<uint8_t> osgnData = {
+            0x02, 0x00, 0x00, 0x00, // 2 elements
+            0x08, 0x00, 0x00, 0x00
+        };
+
+        uint32_t chunkCount = 3;
+        uint32_t headerSize = static_cast<uint32_t>(sizeof(DxbcHeader) + chunkCount * sizeof(uint32_t));
+
+        uint32_t offsetISGN = headerSize;
+        uint32_t sizeISGN = static_cast<uint32_t>(sizeof(DxbcChunkHeader) + isgnData.size());
+
+        uint32_t offsetOSGN = offsetISGN + sizeISGN;
+        uint32_t sizeOSGN = static_cast<uint32_t>(sizeof(DxbcChunkHeader) + osgnData.size());
+
+        uint32_t offsetSHDR = offsetOSGN + sizeOSGN;
+        uint32_t sizeSHDR = static_cast<uint32_t>(sizeof(DxbcChunkHeader) + shdrPayloadBytes);
+
+        uint32_t totalSize = offsetSHDR + sizeSHDR;
+
+        std::vector<uint8_t> buffer(totalSize, 0);
+        auto* hdr = reinterpret_cast<DxbcHeader*>(buffer.data());
+        hdr->magic = FOURCC_DXBC;
+        hdr->checksum[0] = 0xAA55AA55;
+        hdr->checksum[1] = 0x12345678;
+        hdr->checksum[2] = 0x9ABCDEF0;
+        hdr->checksum[3] = 0xDEADBEEF;
+        hdr->one = 1;
+        hdr->totalSize = totalSize;
+        hdr->chunkCount = chunkCount;
+
+        auto* offsets = reinterpret_cast<uint32_t*>(buffer.data() + sizeof(DxbcHeader));
+        offsets[0] = offsetISGN;
+        offsets[1] = offsetOSGN;
+        offsets[2] = offsetSHDR;
+
+        // Write ISGN
+        auto* chISGN = reinterpret_cast<DxbcChunkHeader*>(buffer.data() + offsetISGN);
+        chISGN->fourCc = FOURCC_ISGN;
+        chISGN->chunkSize = static_cast<uint32_t>(isgnData.size());
+        std::memcpy(buffer.data() + offsetISGN + sizeof(DxbcChunkHeader), isgnData.data(), isgnData.size());
+
+        // Write OSGN
+        auto* chOSGN = reinterpret_cast<DxbcChunkHeader*>(buffer.data() + offsetOSGN);
+        chOSGN->fourCc = FOURCC_OSGN;
+        chOSGN->chunkSize = static_cast<uint32_t>(osgnData.size());
+        std::memcpy(buffer.data() + offsetOSGN + sizeof(DxbcChunkHeader), osgnData.data(), osgnData.size());
+
+        // Write SHDR
+        auto* chSHDR = reinterpret_cast<DxbcChunkHeader*>(buffer.data() + offsetSHDR);
+        chSHDR->fourCc = FOURCC_SHDR;
+        chSHDR->chunkSize = shdrPayloadBytes;
+        std::memcpy(buffer.data() + offsetSHDR + sizeof(DxbcChunkHeader), shdrTokens.data(), shdrPayloadBytes);
+
+        return buffer;
+    }
+
+    ShaderProgram DecodeToProgram() const {
+        for (const auto& chunk : chunks) {
+            if (chunk.fourCc == FOURCC_SHDR || chunk.fourCc == FOURCC_SHEX) {
+                if (chunk.data.size() < sizeof(uint32_t)) continue;
+                const auto* tokens = reinterpret_cast<const uint32_t*>(chunk.data.data());
+                size_t dwordCount = chunk.data.size() / sizeof(uint32_t);
+
+                ShaderProgram prog;
+                size_t idx = 1; // Skip version token
+                while (idx + 4 < dwordCount) {
+                    uint32_t opToken = tokens[idx];
+                    uint8_t op = static_cast<uint8_t>(opToken & 0x7FF);
+                    uint32_t dwordLen = (opToken >> 24) & 0x7F;
+                    if (dwordLen == 0) dwordLen = 5;
+
+                    uint32_t tDst = tokens[idx + 1];
+                    uint32_t tSrc0 = tokens[idx + 2];
+                    uint32_t tSrc1 = tokens[idx + 3];
+                    uint32_t tSrc2 = tokens[idx + 4];
+
+                    Instruction inst{};
+                    inst.op = static_cast<Opcode>(op);
+                    inst.dst = { static_cast<RegisterType>(tDst & 0xFF), static_cast<uint8_t>((tDst >> 8) & 0xFF), { 0, 1, 2, 3 }, static_cast<uint8_t>((tDst >> 16) & 0xFF) };
+                    inst.src0 = { static_cast<RegisterType>(tSrc0 & 0xFF), static_cast<uint8_t>((tSrc0 >> 8) & 0xFF), { 0, 1, 2, 3 }, 0x0F };
+                    inst.src1 = { static_cast<RegisterType>(tSrc1 & 0xFF), static_cast<uint8_t>((tSrc1 >> 8) & 0xFF), { 0, 1, 2, 3 }, 0x0F };
+                    inst.src2 = { static_cast<RegisterType>(tSrc2 & 0xFF), static_cast<uint8_t>((tSrc2 >> 8) & 0xFF), { 0, 1, 2, 3 }, 0x0F };
+                    inst.samplerSlot = static_cast<uint8_t>((tSrc2 >> 16) & 0xFF);
+
+                    prog.Add(inst);
+                    idx += dwordLen;
+                    if (inst.op == OP_RET) break;
+                }
+                return prog;
+            }
+        }
+        return {};
+    }
+
+    static std::string DisassembleBlob(const void* data, size_t size, const char* szComments) {
+        DxbcContainer container;
+        std::ostringstream ss;
+        if (szComments && *szComments) {
+            ss << "// " << szComments << "\n";
+        }
+        ss << "// MicaNT Sovereign Direct3D Shader Disassembler\n";
+
+        if (!Parse(data, size, container)) {
+            ss << "// Error: Invalid DXBC container format\n";
+            return ss.str();
+        }
+
+        std::string targetProfile = (container.programType == 1) ? "vs_" : "ps_";
+        targetProfile += std::to_string(container.majorVersion) + "_" + std::to_string(container.minorVersion);
+        ss << targetProfile << "\n";
+
+        ShaderProgram prog = container.DecodeToProgram();
+        for (const auto& inst : prog.GetInstructions()) {
+            switch (inst.op) {
+                case OP_NOP: ss << "  nop\n"; break;
+                case OP_MOV: ss << "  mov " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << "\n"; break;
+                case OP_ADD: ss << "  add " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", " << FormatReg(inst.src1) << "\n"; break;
+                case OP_SUB: ss << "  sub " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", " << FormatReg(inst.src1) << "\n"; break;
+                case OP_MUL: ss << "  mul " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", " << FormatReg(inst.src1) << "\n"; break;
+                case OP_MAD: ss << "  mad " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", " << FormatReg(inst.src1) << ", " << FormatReg(inst.src2) << "\n"; break;
+                case OP_DP3: ss << "  dp3 " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", " << FormatReg(inst.src1) << "\n"; break;
+                case OP_DP4: ss << "  dp4 " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", " << FormatReg(inst.src1) << "\n"; break;
+                case OP_MIN: ss << "  min " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", " << FormatReg(inst.src1) << "\n"; break;
+                case OP_MAX: ss << "  max " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", " << FormatReg(inst.src1) << "\n"; break;
+                case OP_TEX: ss << "  sample " << FormatReg(inst.dst) << ", " << FormatReg(inst.src0) << ", s" << static_cast<int>(inst.samplerSlot) << "\n"; break;
+                case OP_RET: ss << "  ret\n"; break;
+                default: ss << "  custom_op_" << static_cast<int>(inst.op) << "\n"; break;
+            }
+        }
+        return ss.str();
+    }
+
+private:
+    static std::string FormatReg(const RegisterRef& r) {
+        std::string s;
+        switch (r.type) {
+            case REG_TEMP: s = "r" + std::to_string(r.index); break;
+            case REG_INPUT: s = "v" + std::to_string(r.index); break;
+            case REG_CONST: s = "c" + std::to_string(r.index); break;
+            case REG_OUTPUT: s = "o" + std::to_string(r.index); break;
+        }
+        if (r.writeMask != 0x0F) {
+            s += ".";
+            if (r.writeMask & 0x1) s += "x";
+            if (r.writeMask & 0x2) s += "y";
+            if (r.writeMask & 0x4) s += "z";
+            if (r.writeMask & 0x8) s += "w";
+        }
+        return s;
     }
 };
 

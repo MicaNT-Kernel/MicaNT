@@ -65,6 +65,7 @@
 #include "micant/vulkan.hpp"
 #include "micant/emeraldfs.hpp"
 #include "micant/daytonamm.hpp"
+#include "micant/d3dcompiler.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -5708,6 +5709,153 @@ void Test_EmeraldFS_And_DaytonaMM_Subsystems() {
     TEST_ASSERT(ws.getResidentPageCount() == 5, "Working set must now have 5 resident pages after soft fault");
 }
 
+// ============================================================================
+// Suite 49: DirectX Dynamic Loader Exports & DXBC Bytecode Container Tests
+// ============================================================================
+void Test_DirectX_DynamicLoader_And_DXBC_Container() {
+    using namespace micant::prismx;
+    using namespace micant::prism3d;
+    using namespace micant::prism3d12;
+    using namespace micant::prism_vm;
+    using namespace micant::prism_compiler;
+
+    // 1. Initialize and register all DirectX DLL exports in DynamicLoader
+    InitializeDirectXSubsystemExports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    // Verify dxgi.dll exports
+    void* fnCreateDXGIFactory1 = ldr.getExport("dxgi.dll", "CreateDXGIFactory1");
+    TEST_ASSERT(fnCreateDXGIFactory1 != nullptr, "dxgi.dll!CreateDXGIFactory1 must be registered in DynamicLoader");
+
+    // Verify d3d11.dll exports
+    void* fnD3D11CreateDevice = ldr.getExport("d3d11.dll", "D3D11CreateDevice");
+    TEST_ASSERT(fnD3D11CreateDevice != nullptr, "d3d11.dll!D3D11CreateDevice must be registered in DynamicLoader");
+
+    // Verify d3d12.dll exports
+    void* fnD3D12CreateDevice = ldr.getExport("d3d12.dll", "D3D12CreateDevice");
+    TEST_ASSERT(fnD3D12CreateDevice != nullptr, "d3d12.dll!D3D12CreateDevice must be registered in DynamicLoader");
+
+    // Verify d3dcompiler_47.dll exports
+    void* fnD3DCreateBlob = ldr.getExport("d3dcompiler_47.dll", "D3DCreateBlob");
+    void* fnD3DDisassemble = ldr.getExport("d3dcompiler_47.dll", "D3DDisassemble");
+    void* fnD3DCompile = ldr.getExport("d3dcompiler_47.dll", "D3DCompile");
+    TEST_ASSERT(fnD3DCreateBlob != nullptr, "d3dcompiler_47.dll!D3DCreateBlob must be registered in DynamicLoader");
+    TEST_ASSERT(fnD3DDisassemble != nullptr, "d3dcompiler_47.dll!D3DDisassemble must be registered in DynamicLoader");
+    TEST_ASSERT(fnD3DCompile != nullptr, "d3dcompiler_47.dll!D3DCompile must be registered in DynamicLoader");
+
+    // 2. Test invoking DXGI via dynamic loader export pointer
+    using PFN_CreateDXGIFactory1 = int32_t(*)(const IID&, void**);
+    auto pfnCreateDXGIFactory1 = reinterpret_cast<PFN_CreateDXGIFactory1>(fnCreateDXGIFactory1);
+    IDXGIFactory1* factory = nullptr;
+    int32_t hrDxgi = pfnCreateDXGIFactory1(IID_IDXGIFactory1, reinterpret_cast<void**>(&factory));
+    TEST_ASSERT(hrDxgi == 0 && factory != nullptr, "CreateDXGIFactory1 via dynamic loader export must succeed");
+
+    IDXGIAdapter1* adapter = nullptr;
+    int32_t hrAdapter = factory->EnumAdapters1(0, &adapter);
+    TEST_ASSERT(hrAdapter == 0 && adapter != nullptr, "EnumAdapters1 on factory must succeed");
+
+    DXGI_ADAPTER_DESC1 adDesc{};
+    adapter->GetDesc1(&adDesc);
+    TEST_ASSERT(adDesc.DedicatedVideoMemory > 0, "Adapter must report non-zero dedicated video memory");
+
+    // 3. Test invoking D3D12 via dynamic loader export pointer
+    using PFN_D3D12CreateDevice = int32_t(*)(IUnknown*, D3D_FEATURE_LEVEL, const IID&, void**);
+    auto pfnD3D12CreateDevice = reinterpret_cast<PFN_D3D12CreateDevice>(fnD3D12CreateDevice);
+    ID3D12Device* device12 = nullptr;
+    int32_t hrDev12 = pfnD3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_12_0, IID_ID3D12Device, reinterpret_cast<void**>(&device12));
+    TEST_ASSERT(hrDev12 == 0 && device12 != nullptr, "D3D12CreateDevice via dynamic loader export must succeed");
+
+    D3D12_COMMAND_QUEUE_DESC qDesc{ D3D12_COMMAND_LIST_TYPE_DIRECT, 0, D3D12_COMMAND_QUEUE_FLAG_NONE, 0 };
+    ID3D12CommandQueue* queue = nullptr;
+    int32_t hrQueue = device12->CreateCommandQueue(&qDesc, IID_ID3D12CommandQueue, reinterpret_cast<void**>(&queue));
+    TEST_ASSERT(hrQueue == 0 && queue != nullptr, "CreateCommandQueue must succeed");
+
+    ID3D12CommandAllocator* allocator = nullptr;
+    int32_t hrAlloc = device12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&allocator));
+    TEST_ASSERT(hrAlloc == 0 && allocator != nullptr, "CreateCommandAllocator must succeed");
+
+    ID3D12GraphicsCommandList* cmdList = nullptr;
+    int32_t hrList = device12->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr, IID_ID3D12GraphicsCommandList, reinterpret_cast<void**>(&cmdList));
+    TEST_ASSERT(hrList == 0 && cmdList != nullptr, "CreateCommandList must succeed");
+
+    cmdList->Close();
+    ID3D12CommandList* ppLists[] = { cmdList };
+    queue->ExecuteCommandLists(1, ppLists);
+
+    // 4. Test ID3DBlob creation via dynamic loader export pointer
+    using PFN_D3DCreateBlob = int32_t(*)(size_t, ID3DBlob**);
+    auto pfnD3DCreateBlob = reinterpret_cast<PFN_D3DCreateBlob>(fnD3DCreateBlob);
+    ID3DBlob* testBlob = nullptr;
+    int32_t hrBlob = pfnD3DCreateBlob(512, &testBlob);
+    TEST_ASSERT(hrBlob == 0 && testBlob != nullptr, "D3DCreateBlob via dynamic loader export must succeed");
+    TEST_ASSERT(testBlob->GetBufferSize() == 512, "Blob size must equal 512 bytes");
+    TEST_ASSERT(testBlob->GetBufferPointer() != nullptr, "Blob buffer pointer must be non-null");
+
+    // 5. Test Standard DXBC Binary Container Generation & RIFF Chunks
+    ShaderProgram vsProg = PrismShaderVM::BuildMVPTransformVS();
+    std::vector<uint8_t> dxbcContainer = DxbcContainer::BuildContainer(1, 5, 0, vsProg);
+    TEST_ASSERT(dxbcContainer.size() > sizeof(DxbcHeader), "DXBC binary container size must be greater than header size");
+    TEST_ASSERT(DxbcContainer::IsDxbc(dxbcContainer.data(), dxbcContainer.size()), "Binary stream must be recognized as valid DXBC");
+
+    // 6. Test Parsing DXBC Container and Signature / Bytecode Chunks
+    DxbcContainer parsedContainer;
+    bool bParsed = DxbcContainer::Parse(dxbcContainer.data(), dxbcContainer.size(), parsedContainer);
+    TEST_ASSERT(bParsed, "DxbcContainer::Parse must succeed on valid DXBC container");
+    TEST_ASSERT(parsedContainer.chunks.size() >= 3, "Parsed container must contain at least 3 chunks (ISGN, OSGN, SHDR)");
+    TEST_ASSERT(parsedContainer.programType == 1, "Parsed program type must be 1 (Vertex Shader)");
+    TEST_ASSERT(parsedContainer.majorVersion == 5 && parsedContainer.minorVersion == 0, "Parsed version must be 5.0 (vs_5_0)");
+
+    // 7. Test D3DDisassemble on DXBC Binary
+    using PFN_D3DDisassemble = int32_t(*)(const void*, size_t, uint32_t, const char*, ID3DBlob**);
+    auto pfnD3DDisassemble = reinterpret_cast<PFN_D3DDisassemble>(fnD3DDisassemble);
+    ID3DBlob* disasmBlob = nullptr;
+    int32_t hrDisasm = pfnD3DDisassemble(dxbcContainer.data(), dxbcContainer.size(), 0, "MicaNT Test Shader", &disasmBlob);
+    TEST_ASSERT(hrDisasm == 0 && disasmBlob != nullptr, "D3DDisassemble on DXBC binary must succeed");
+
+    std::string_view disasmText(reinterpret_cast<const char*>(disasmBlob->GetBufferPointer()));
+    TEST_ASSERT(disasmText.find("vs_5_0") != std::string_view::npos, "Disassembly must contain target profile vs_5_0");
+    TEST_ASSERT(disasmText.find("dp4") != std::string_view::npos, "Disassembly must contain dp4 instruction");
+    TEST_ASSERT(disasmText.find("ret") != std::string_view::npos, "Disassembly must contain ret instruction");
+
+    // 8. Test Decoding and Executing the parsed DXBC Program in PrismShaderVM
+    ShaderProgram decodedProg = parsedContainer.DecodeToProgram();
+    TEST_ASSERT(decodedProg.InstructionCount() > 0, "Decoded program must contain instructions");
+
+    VectorRegister inPos(1.0f, 2.0f, 3.0f, 1.0f);
+    VectorRegister inCol(1.0f, 0.5f, 0.25f, 1.0f);
+    VectorRegister inUV(0.0f, 0.0f, 0.0f, 0.0f);
+    VectorRegister inNorm(0.0f, 0.0f, 1.0f, 0.0f);
+
+    std::array<VectorRegister, 16> consts{};
+    // Identity matrix in c0..c3
+    consts[0] = VectorRegister(1.0f, 0.0f, 0.0f, 0.0f);
+    consts[1] = VectorRegister(0.0f, 1.0f, 0.0f, 0.0f);
+    consts[2] = VectorRegister(0.0f, 0.0f, 1.0f, 0.0f);
+    consts[3] = VectorRegister(0.0f, 0.0f, 0.0f, 1.0f);
+
+    VectorRegister outPos{}, outCol{};
+    PrismShaderVM::ExecuteVertexShader(decodedProg, inPos, inCol, inUV, inNorm, consts, outPos, outCol);
+
+    // Verify outPos (transformed position) is (1.0, 2.0, 3.0, 1.0)
+    TEST_ASSERT(outPos.x() == 1.0f && outPos.y() == 2.0f &&
+                outPos.z() == 3.0f && outPos.w() == 1.0f,
+                "DXBC decoded program execution must produce exact transformed position");
+    // Verify outCol (passed-through color)
+    TEST_ASSERT(outCol.x() == 1.0f && outCol.y() == 0.5f &&
+                outCol.z() == 0.25f && outCol.w() == 1.0f,
+                "DXBC decoded program execution must produce exact passed-through color");
+
+    // Cleanup COM objects
+    disasmBlob->Release();
+    testBlob->Release();
+    cmdList->Release();
+    allocator->Release();
+    queue->Release();
+    device12->Release();
+    adapter->Release();
+    factory->Release();
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -5761,6 +5909,7 @@ int main() {
     RUN_TEST(Test_VulkanLoader_And_PrismVK_Subsystem);
     RUN_TEST(Test_Prism3D12_And_ProgrammableShaderVM);
     RUN_TEST(Test_EmeraldFS_And_DaytonaMM_Subsystems);
+    RUN_TEST(Test_DirectX_DynamicLoader_And_DXBC_Container);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
