@@ -1228,6 +1228,155 @@ private:
             return;
         }
 
+        if (tokens.size() > 1 && (tokens[1] == "cube" || tokens[1] == "wireframe")) {
+            bool wireframe = (tokens[1] == "wireframe");
+            out << "[Prism3D] Launching 3D " << (wireframe ? "Wireframe" : "Indexed Shaded") << " Cube Pipeline...\n";
+
+            prismx::DXGI_SWAP_CHAIN_DESC scDesc{};
+            scDesc.BufferDesc.Width = 800;
+            scDesc.BufferDesc.Height = 600;
+            scDesc.BufferDesc.Format = prismx::DXGI_FORMAT_B8G8R8A8_UNORM;
+            scDesc.BufferCount = 2;
+            scDesc.SwapEffect = prismx::DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+            prism3d::ID3D11Device* device = nullptr;
+            prism3d::ID3D11DeviceContext* context = nullptr;
+            prismx::IDXGISwapChain* swapChain = nullptr;
+
+            int32_t hr = prism3d::D3D11CreateDeviceAndSwapChain(
+                nullptr, prism3d::D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+                nullptr, 0, 7, &scDesc, &swapChain, &device, nullptr, &context
+            );
+
+            if (hr != 0 || !device || !context || !swapChain) {
+                out << "[Prism3D] Failed to initialize Direct3D 11 device and swapchain.\n";
+                return;
+            }
+
+            // Create Render Target View from BackBuffer
+            prismx::IDXGISurface* surface = nullptr;
+            swapChain->GetBuffer(0, prismx::IID_IDXGISurface, reinterpret_cast<void**>(&surface));
+            prism3d::ID3D11RenderTargetView* rtv = nullptr;
+            device->CreateRenderTargetView(reinterpret_cast<prism3d::ID3D11Resource*>(surface), nullptr, &rtv);
+
+            // Create Depth Stencil View
+            prism3d::ID3D11DepthStencilView* dsv = nullptr;
+            device->CreateDepthStencilView(nullptr, nullptr, &dsv);
+
+            // Create Rasterizer State (Solid or Wireframe)
+            prism3d::D3D11_RASTERIZER_DESC rsDesc{};
+            rsDesc.FillMode = wireframe ? prism3d::D3D11_FILL_WIREFRAME : prism3d::D3D11_FILL_SOLID;
+            rsDesc.CullMode = wireframe ? prism3d::D3D11_CULL_NONE : prism3d::D3D11_CULL_BACK;
+            prism3d::ID3D11RasterizerState* rsState = nullptr;
+            device->CreateRasterizerState(&rsDesc, &rsState);
+            context->RSSetState(rsState);
+
+            // Cube 8 Vertices with distinct face colors
+            prism3d::VertexPositionColor cubeVerts[8] = {
+                { -1.0f, -1.0f, -1.0f,  1.0f, 0.0f, 0.0f, 1.0f }, // 0: Red
+                { -1.0f,  1.0f, -1.0f,  0.0f, 1.0f, 0.0f, 1.0f }, // 1: Green
+                {  1.0f,  1.0f, -1.0f,  0.0f, 0.0f, 1.0f, 1.0f }, // 2: Blue
+                {  1.0f, -1.0f, -1.0f,  1.0f, 1.0f, 0.0f, 1.0f }, // 3: Yellow
+                { -1.0f, -1.0f,  1.0f,  1.0f, 0.0f, 1.0f, 1.0f }, // 4: Magenta
+                { -1.0f,  1.0f,  1.0f,  0.0f, 1.0f, 1.0f, 1.0f }, // 5: Cyan
+                {  1.0f,  1.0f,  1.0f,  1.0f, 1.0f, 1.0f, 1.0f }, // 6: White
+                {  1.0f, -1.0f,  1.0f,  0.5f, 0.5f, 0.5f, 1.0f }  // 7: Grey
+            };
+
+            prism3d::D3D11_BUFFER_DESC vbDesc{};
+            vbDesc.ByteWidth = sizeof(cubeVerts);
+            vbDesc.BindFlags = prism3d::D3D11_BIND_VERTEX_BUFFER;
+            vbDesc.StructureByteStride = sizeof(prism3d::VertexPositionColor);
+            prism3d::D3D11_SUBRESOURCE_DATA vbInit{};
+            vbInit.pSysMem = cubeVerts;
+            prism3d::ID3D11Buffer* vb = nullptr;
+            device->CreateBuffer(&vbDesc, &vbInit, &vb);
+
+            // Cube 36 Indices (12 triangles)
+            uint16_t cubeIndices[36] = {
+                0, 1, 2,  0, 2, 3,  // Front
+                4, 6, 5,  4, 7, 6,  // Back
+                4, 5, 1,  4, 1, 0,  // Left
+                3, 2, 6,  3, 6, 7,  // Right
+                1, 5, 6,  1, 6, 2,  // Top
+                4, 0, 3,  4, 3, 7   // Bottom
+            };
+
+            prism3d::D3D11_BUFFER_DESC ibDesc{};
+            ibDesc.ByteWidth = sizeof(cubeIndices);
+            ibDesc.BindFlags = prism3d::D3D11_BIND_INDEX_BUFFER;
+            prism3d::D3D11_SUBRESOURCE_DATA ibInit{};
+            ibInit.pSysMem = cubeIndices;
+            prism3d::ID3D11Buffer* ib = nullptr;
+            device->CreateBuffer(&ibDesc, &ibInit, &ib);
+
+            // Model-View-Projection Matrix (Yaw 45deg, Pitch 35deg, Eye at z = -3.5f)
+            prism3d::Matrix4x4 world = prism3d::Matrix4x4::Multiply(
+                prism3d::Matrix4x4::RotationX(0.61f),
+                prism3d::Matrix4x4::RotationY(0.78f)
+            );
+            prism3d::Matrix4x4 view = prism3d::Matrix4x4::LookAtLH(
+                prism3d::Vector3{ 0.0f, 0.0f, -3.5f },
+                prism3d::Vector3{ 0.0f, 0.0f, 0.0f },
+                prism3d::Vector3{ 0.0f, 1.0f, 0.0f }
+            );
+            prism3d::Matrix4x4 proj = prism3d::Matrix4x4::PerspectiveFovLH(
+                1.047f, // 60 degrees FOV
+                800.0f / 600.0f,
+                0.1f,
+                100.0f
+            );
+            prism3d::Matrix4x4 mvp = prism3d::Matrix4x4::Multiply(world, prism3d::Matrix4x4::Multiply(view, proj));
+
+            prism3d::D3D11_BUFFER_DESC cbDesc{};
+            cbDesc.ByteWidth = sizeof(prism3d::Matrix4x4);
+            cbDesc.BindFlags = prism3d::D3D11_BIND_CONSTANT_BUFFER;
+            prism3d::D3D11_SUBRESOURCE_DATA cbInit{};
+            cbInit.pSysMem = &mvp;
+            prism3d::ID3D11Buffer* cb = nullptr;
+            device->CreateBuffer(&cbDesc, &cbInit, &cb);
+
+            // Setup Pipeline
+            prism3d::D3D11_VIEWPORT vp{ 0.0f, 0.0f, 800.0f, 600.0f, 0.0f, 1.0f };
+            context->RSSetViewports(1, &vp);
+            context->OMSetRenderTargets(1, &rtv, dsv);
+
+            const float clearBg[4] = { 0.03f, 0.05f, 0.12f, 1.0f };
+            context->ClearRenderTargetView(rtv, clearBg);
+            context->ClearDepthStencilView(dsv, prism3d::D3D11_CLEAR_DEPTH, 1.0f, 0);
+
+            uint32_t stride = sizeof(prism3d::VertexPositionColor);
+            uint32_t offset = 0;
+            context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+            context->IASetIndexBuffer(ib, prismx::DXGI_FORMAT_R16_UINT, 0);
+            context->IASetPrimitiveTopology(prism3d::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context->VSSetConstantBuffers(0, 1, &cb);
+
+            // Draw Indexed Cube
+            context->DrawIndexed(36, 0, 0);
+            swapChain->Present(1, 0);
+
+            out << "[Prism3D] 3D Cube rendered successfully via DrawIndexed!\n"
+                << "  Mesh: 8 Vertices, 36 Indices (12 Triangles), Indexed Drawing\n"
+                << "  Transforms: World (Pitch 35deg / Yaw 45deg) x View x Perspective (60deg FOV)\n"
+                << "  Rasterizer State: " << (wireframe ? "WIREFRAME (Bresenham line)" : "SOLID (Barycentric Gouraud)") << "\n"
+                << "  Culling: " << (wireframe ? "NONE" : "D3D11_CULL_BACK (Backface culling active)") << "\n"
+                << "  Depth Test: Floating-point Z-Buffer (D32_FLOAT)\n"
+                << "  Status: Frame presented to display compositor.\n";
+
+            cb->Release();
+            ib->Release();
+            vb->Release();
+            rsState->Release();
+            dsv->Release();
+            rtv->Release();
+            surface->Release();
+            swapChain->Release();
+            context->Release();
+            device->Release();
+            return;
+        }
+
         // Display GPU Info
         out << "========================================================================\n"
             << "               MicaNT PrismX & Prism3D Graphics Subsystem               \n"
@@ -1242,7 +1391,9 @@ private:
                 adapter->GetDesc1(&desc);
 
                 std::wstring wDesc(desc.Description);
-                std::string sDesc(wDesc.begin(), wDesc.end());
+                std::string sDesc;
+                sDesc.reserve(wDesc.size());
+                for (wchar_t wc : wDesc) sDesc.push_back(static_cast<char>(wc));
 
                 out << "Adapter " << i << ": " << sDesc << "\n"
                     << "  Vendor ID:               0x" << std::hex << std::uppercase << desc.VendorId << std::dec << "\n"
@@ -1256,7 +1407,9 @@ private:
                     prismx::DXGI_OUTPUT_DESC oDesc{};
                     output->GetDesc(&oDesc);
                     std::wstring wDev(oDesc.DeviceName);
-                    std::string sDev(wDev.begin(), wDev.end());
+                    std::string sDev;
+                    sDev.reserve(wDev.size());
+                    for (wchar_t wc : wDev) sDev.push_back(static_cast<char>(wc));
                     out << "  Connected Display:       " << sDev
                         << " (" << (oDesc.DesktopCoordinates.right - oDesc.DesktopCoordinates.left)
                         << "x" << (oDesc.DesktopCoordinates.bottom - oDesc.DesktopCoordinates.top) << " @ 60Hz)\n";
@@ -1275,7 +1428,7 @@ private:
             << "  GPU Command Submissions:  " << dxg.GetTotalSubmissions() << "\n"
             << "  Compositor Presents:      " << dxg.GetTotalPresents() << "\n"
             << "  VBlank Sync Events:       " << dxg.GetTotalVBlankWaits() << "\n\n"
-            << "Type 'prismx test' to execute real-time 3D triangle rasterization test.\n";
+            << "Type 'prismx test', 'prismx cube', or 'prismx wireframe' to execute 3D rasterization tests.\n";
     }
 
     void cmdVulkan(const std::vector<std::string>& tokens, std::ostream& out) {

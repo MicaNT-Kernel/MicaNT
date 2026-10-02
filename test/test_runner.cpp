@@ -4865,7 +4865,211 @@ void Test_PrismX_And_Prism3D_GraphicsSubsystem() {
     TEST_ASSERT(lastPresentCount == 1, "Swapchain present count must be 1");
 
     // ------------------------------------------------------------------------
-    // 5. WDDM Kernel Subsystem Syscall Validation (dxgkrnl / D3DKMT)
+    // 5. 3D Mathematics, Matrix Pipeline & Vector Operations
+    // ------------------------------------------------------------------------
+    Matrix4x4 id = Matrix4x4::Identity();
+    Vector4 v0{ 1.0f, 2.0f, 3.0f, 1.0f };
+    Vector4 v0T = id.Transform(v0);
+    TEST_ASSERT(v0T.x == 1.0f && v0T.y == 2.0f && v0T.z == 3.0f && v0T.w == 1.0f, "Identity matrix transform must preserve vector");
+
+    Matrix4x4 trans = Matrix4x4::Translation(10.0f, -5.0f, 20.0f);
+    Vector4 vOrigin{ 0.0f, 0.0f, 0.0f, 1.0f };
+    Vector4 vTrans = trans.Transform(vOrigin);
+    TEST_ASSERT(vTrans.x == 10.0f && vTrans.y == -5.0f && vTrans.z == 20.0f && vTrans.w == 1.0f, "Translation matrix must translate origin");
+
+    Matrix4x4 rotX = Matrix4x4::RotationX(3.14159265f / 2.0f);
+    Vector4 vUp{ 0.0f, 1.0f, 0.0f, 1.0f };
+    Vector4 vRotX = rotX.Transform(vUp);
+    TEST_ASSERT(std::abs(vRotX.x) < 1e-4f && std::abs(vRotX.y) < 1e-4f && std::abs(vRotX.z - 1.0f) < 1e-4f, "RotationX by 90deg must rotate +Y to +Z");
+
+    Matrix4x4 rotY = Matrix4x4::RotationY(3.14159265f / 2.0f);
+    Vector4 vForward{ 0.0f, 0.0f, 1.0f, 1.0f };
+    Vector4 vRotY = rotY.Transform(vForward);
+    TEST_ASSERT(std::abs(vRotY.x - 1.0f) < 1e-4f && std::abs(vRotY.y) < 1e-4f, "RotationY by 90deg must rotate +Z to +X in LH coordinates");
+
+    Matrix4x4 proj = Matrix4x4::PerspectiveFovLH(1.047f, 640.0f / 480.0f, 0.1f, 100.0f);
+    TEST_ASSERT(proj.m[2][3] == 1.0f, "LH perspective projection m[2][3] must be 1.0f for w-buffering");
+    TEST_ASSERT(proj.m[0][0] > 0.0f && proj.m[1][1] > 0.0f, "Focal lengths must be positive");
+
+    Matrix4x4 view = Matrix4x4::LookAtLH(Vector3{ 0.0f, 0.0f, -5.0f }, Vector3{ 0.0f, 0.0f, 0.0f }, Vector3{ 0.0f, 1.0f, 0.0f });
+    TEST_ASSERT(std::abs(view.m[3][2] - 5.0f) < 1e-4f, "LookAtLH eye at -5z must translate z by +5");
+
+    // ------------------------------------------------------------------------
+    // 6. Direct3D 11 Pipeline State Objects & Resource Views
+    // ------------------------------------------------------------------------
+    // Rasterizer States (Solid & Wireframe)
+    D3D11_RASTERIZER_DESC rsSolidDesc{};
+    rsSolidDesc.FillMode = D3D11_FILL_SOLID;
+    rsSolidDesc.CullMode = D3D11_CULL_BACK;
+    ID3D11RasterizerState* rsSolid = nullptr;
+    int32_t hrRsSolid = device->CreateRasterizerState(&rsSolidDesc, &rsSolid);
+    TEST_ASSERT(hrRsSolid == 0 && rsSolid != nullptr, "CreateRasterizerState (Solid) must succeed");
+
+    D3D11_RASTERIZER_DESC rsWireDesc{};
+    rsWireDesc.FillMode = D3D11_FILL_WIREFRAME;
+    rsWireDesc.CullMode = D3D11_CULL_NONE;
+    ID3D11RasterizerState* rsWire = nullptr;
+    int32_t hrRsWire = device->CreateRasterizerState(&rsWireDesc, &rsWire);
+    TEST_ASSERT(hrRsWire == 0 && rsWire != nullptr, "CreateRasterizerState (Wireframe) must succeed");
+
+    context->RSSetState(rsSolid);
+
+    // Depth Stencil View & State
+    ID3D11DepthStencilView* dsv = nullptr;
+    int32_t hrDsv = device->CreateDepthStencilView(nullptr, nullptr, &dsv);
+    TEST_ASSERT(hrDsv == 0 && dsv != nullptr, "CreateDepthStencilView must succeed");
+
+    D3D11_DEPTH_STENCIL_DESC dsDesc{};
+    dsDesc.DepthEnable = 1;
+    dsDesc.DepthWriteMask = 1;
+    dsDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    ID3D11DepthStencilState* dsState = nullptr;
+    int32_t hrDsState = device->CreateDepthStencilState(&dsDesc, &dsState);
+    TEST_ASSERT(hrDsState == 0 && dsState != nullptr, "CreateDepthStencilState must succeed");
+    context->OMSetDepthStencilState(dsState, 0);
+
+    // Blend State
+    D3D11_BLEND_DESC blendDesc{};
+    blendDesc.RenderTarget[0].BlendEnable = 1;
+    blendDesc.RenderTarget[0].RenderTargetWriteMask = 0x0F;
+    ID3D11BlendState* blendState = nullptr;
+    int32_t hrBlend = device->CreateBlendState(&blendDesc, &blendState);
+    TEST_ASSERT(hrBlend == 0 && blendState != nullptr, "CreateBlendState must succeed");
+    float blendFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    context->OMSetBlendState(blendState, blendFactor, 0xFFFFFFFF);
+
+    // Texture 2D, SRV & Sampler State
+    D3D11_TEXTURE2D_DESC texDesc{};
+    texDesc.Width = 4;
+    texDesc.Height = 4;
+    texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    uint32_t checkerPixels[16];
+    for (int i = 0; i < 16; ++i) checkerPixels[i] = ((i % 2) == 0) ? 0xFFFFFFFF : 0xFF000000;
+    D3D11_SUBRESOURCE_DATA texInit{};
+    texInit.pSysMem = checkerPixels;
+    texInit.SysMemPitch = 4 * sizeof(uint32_t);
+    ID3D11Texture2D* texture2D = nullptr;
+    int32_t hrTex = device->CreateTexture2D(&texDesc, &texInit, &texture2D);
+    TEST_ASSERT(hrTex == 0 && texture2D != nullptr, "CreateTexture2D must succeed");
+
+    ID3D11ShaderResourceView* srv = nullptr;
+    int32_t hrSrv = device->CreateShaderResourceView(texture2D, nullptr, &srv);
+    TEST_ASSERT(hrSrv == 0 && srv != nullptr, "CreateShaderResourceView must succeed");
+    context->PSSetShaderResources(0, 1, &srv);
+
+    D3D11_SAMPLER_DESC sampDesc{};
+    ID3D11SamplerState* samplerState = nullptr;
+    int32_t hrSamp = device->CreateSamplerState(&sampDesc, &samplerState);
+    TEST_ASSERT(hrSamp == 0 && samplerState != nullptr, "CreateSamplerState must succeed");
+    context->PSSetSamplers(0, 1, &samplerState);
+
+    // ------------------------------------------------------------------------
+    // 7. Indexed Drawing (DrawIndexed), Constant Buffers, and 3D Cube Test
+    // ------------------------------------------------------------------------
+    VertexPositionColor cubeVerts[8] = {
+        { -1.0f, -1.0f, -1.0f,  1.0f, 0.0f, 0.0f, 1.0f }, // 0: Red
+        { -1.0f,  1.0f, -1.0f,  0.0f, 1.0f, 0.0f, 1.0f }, // 1: Green
+        {  1.0f,  1.0f, -1.0f,  0.0f, 0.0f, 1.0f, 1.0f }, // 2: Blue
+        {  1.0f, -1.0f, -1.0f,  1.0f, 1.0f, 0.0f, 1.0f }, // 3: Yellow
+        { -1.0f, -1.0f,  1.0f,  1.0f, 0.0f, 1.0f, 1.0f }, // 4: Magenta
+        { -1.0f,  1.0f,  1.0f,  0.0f, 1.0f, 1.0f, 1.0f }, // 5: Cyan
+        {  1.0f,  1.0f,  1.0f,  1.0f, 1.0f, 1.0f, 1.0f }, // 6: White
+        {  1.0f, -1.0f,  1.0f,  0.5f, 0.5f, 0.5f, 1.0f }  // 7: Grey
+    };
+    D3D11_BUFFER_DESC cubeVbDesc{};
+    cubeVbDesc.ByteWidth = sizeof(cubeVerts);
+    cubeVbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    cubeVbDesc.StructureByteStride = sizeof(VertexPositionColor);
+    D3D11_SUBRESOURCE_DATA cubeVbInit{};
+    cubeVbInit.pSysMem = cubeVerts;
+    ID3D11Buffer* cubeVb = nullptr;
+    device->CreateBuffer(&cubeVbDesc, &cubeVbInit, &cubeVb);
+    TEST_ASSERT(cubeVb != nullptr, "CreateBuffer for 3D cube vertex buffer must succeed");
+
+    uint16_t cubeIndices[36] = {
+        0, 1, 2,  0, 2, 3,  // Front
+        4, 6, 5,  4, 7, 6,  // Back
+        4, 5, 1,  4, 1, 0,  // Left
+        3, 2, 6,  3, 6, 7,  // Right
+        1, 5, 6,  1, 6, 2,  // Top
+        4, 0, 3,  4, 3, 7   // Bottom
+    };
+    D3D11_BUFFER_DESC cubeIbDesc{};
+    cubeIbDesc.ByteWidth = sizeof(cubeIndices);
+    cubeIbDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA cubeIbInit{};
+    cubeIbInit.pSysMem = cubeIndices;
+    ID3D11Buffer* cubeIb = nullptr;
+    device->CreateBuffer(&cubeIbDesc, &cubeIbInit, &cubeIb);
+    TEST_ASSERT(cubeIb != nullptr, "CreateBuffer for 3D cube index buffer must succeed");
+
+    // Model-View-Projection Matrix
+    Matrix4x4 world = Matrix4x4::Multiply(Matrix4x4::RotationX(0.5f), Matrix4x4::RotationY(0.7f));
+    Matrix4x4 camView = Matrix4x4::LookAtLH(Vector3{ 0.0f, 0.0f, -3.5f }, Vector3{ 0.0f, 0.0f, 0.0f }, Vector3{ 0.0f, 1.0f, 0.0f });
+    Matrix4x4 camProj = Matrix4x4::PerspectiveFovLH(1.047f, 640.0f / 480.0f, 0.1f, 100.0f);
+    Matrix4x4 mvp = Matrix4x4::Multiply(world, Matrix4x4::Multiply(camView, camProj));
+
+    D3D11_BUFFER_DESC cbDesc{};
+    cbDesc.ByteWidth = sizeof(Matrix4x4);
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_SUBRESOURCE_DATA cbInit{};
+    cbInit.pSysMem = &mvp;
+    ID3D11Buffer* cb = nullptr;
+    device->CreateBuffer(&cbDesc, &cbInit, &cb);
+    TEST_ASSERT(cb != nullptr, "CreateBuffer for MVP constant buffer must succeed");
+
+    // Bind Render Target & Depth Stencil
+    context->OMSetRenderTargets(1, &rtv, dsv);
+    context->ClearRenderTargetView(rtv, clearColor);
+    context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH, 1.0f, 0);
+
+    uint32_t cubeStride = sizeof(VertexPositionColor);
+    uint32_t cubeOffset = 0;
+    context->IASetVertexBuffers(0, 1, &cubeVb, &cubeStride, &cubeOffset);
+    context->IASetIndexBuffer(cubeIb, DXGI_FORMAT_R16_UINT, 0);
+    context->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetConstantBuffers(0, 1, &cb);
+    context->RSSetState(rsSolid);
+
+    // Render 3D Cube with DrawIndexed
+    context->DrawIndexed(36, 0, 0);
+
+    // Verify center pixel or screen area was shaded by cube
+    bool shadedPixelFound = false;
+    for (size_t y = 200; y < 280; ++y) {
+        for (size_t x = 280; x < 360; ++x) {
+            if (rawPixels[y * 640 + x] != expectedPixel) {
+                shadedPixelFound = true;
+                break;
+            }
+        }
+        if (shadedPixelFound) break;
+    }
+    TEST_ASSERT(shadedPixelFound, "3D Cube DrawIndexed must rasterize and shade back-buffer pixels");
+
+    // Also test wireframe DrawIndexed
+    context->RSSetState(rsWire);
+    context->DrawIndexed(36, 0, 0);
+
+    swapChain->Present(1, 0);
+    swapChain->GetLastPresentCount(&lastPresentCount);
+    TEST_ASSERT(lastPresentCount == 2, "Swapchain present count must be 2 after cube render");
+
+    // Cleanup resources
+    cb->Release();
+    cubeIb->Release();
+    cubeVb->Release();
+    samplerState->Release();
+    srv->Release();
+    texture2D->Release();
+    blendState->Release();
+    dsState->Release();
+    dsv->Release();
+    rsWire->Release();
+    rsSolid->Release();
+
+    // ------------------------------------------------------------------------
+    // 8. WDDM Kernel Subsystem Syscall Validation (dxgkrnl / D3DKMT)
     // ------------------------------------------------------------------------
     D3DKMT_OPENADAPTERFROMHDC openHdc{};
     openHdc.hDc = reinterpret_cast<void*>(0x2001);
@@ -4918,7 +5122,7 @@ void Test_PrismX_And_Prism3D_GraphicsSubsystem() {
     TEST_ASSERT(NT_SUCCESS(stDestrDev), "D3DKMTDestroyDevice must succeed");
 
     // ------------------------------------------------------------------------
-    // 6. Shell Integration Test ('prismx' and 'prismx test')
+    // 9. Shell Integration Test ('prismx', 'prismx test', 'prismx cube', 'prismx wireframe')
     // ------------------------------------------------------------------------
     shell::CommandShell testShell;
     std::ostringstream ssGpu;
@@ -4933,6 +5137,19 @@ void Test_PrismX_And_Prism3D_GraphicsSubsystem() {
     std::string outTest = ssTest.str();
     TEST_ASSERT(outTest.find("3D Barycentric Shaded Triangle rendered successfully") != std::string::npos, "prismx test must render 3D triangle");
     TEST_ASSERT(outTest.find("Swapchain: 800x600") != std::string::npos, "prismx test must output swapchain size");
+
+    std::ostringstream ssCube;
+    testShell.execute("prismx cube", ssCube);
+    std::string outCube = ssCube.str();
+    TEST_ASSERT(outCube.find("3D Cube rendered successfully via DrawIndexed!") != std::string::npos, "prismx cube must render 3D cube");
+    TEST_ASSERT(outCube.find("Mesh: 8 Vertices, 36 Indices (12 Triangles)") != std::string::npos, "prismx cube must verify mesh topology");
+    TEST_ASSERT(outCube.find("SOLID (Barycentric Gouraud)") != std::string::npos, "prismx cube must report solid rasterizer");
+
+    std::ostringstream ssWire;
+    testShell.execute("prismx wireframe", ssWire);
+    std::string outWire = ssWire.str();
+    TEST_ASSERT(outWire.find("3D Cube rendered successfully via DrawIndexed!") != std::string::npos, "prismx wireframe must render wireframe cube");
+    TEST_ASSERT(outWire.find("WIREFRAME (Bresenham line)") != std::string::npos, "prismx wireframe must report wireframe rasterizer");
 
     // Clean up COM resources
     vertexBuffer->Release();
