@@ -77,6 +77,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 17. **AArch64 (ARM64) Multi-Architecture Subsystem (`arm64.hpp`)**: Full 64-bit ARM hardware state architecture (`X0`–`X30`, `SP_EL0`/`SP_EL1`, `PSTATE`, 128-bit NEON/SIMD `Q0`–`Q31`), `ESR_EL1` / `FAR_EL1` exception syndrome decoders, VMSA 48-bit 4-level MMU translation tables (`TTBR0_EL1` / `TTBR1_EL1`), fast `KiArm64SystemCall` `SVC #1` dispatcher adhering to standard Windows on ARM64 AAPCS64 register conventions, and 8-core SMP HAL topology support (Snapdragon X Elite / Oryon).
 18. **Named Pipes & Mailslots IPC Subsystem (`npfs.hpp`, `fs.hpp`, `kernel32.hpp`)**: Full-duplex named pipe file system (`\Device\NamedPipe`), multi-instance client/server load distribution, 5-state lifecycle (`Listening` to `Broken`), byte stream and message stream modes with atomic message boundaries and `ERROR_MORE_DATA` signaling, non-destructive queue inspection (`PeekNamedPipe`), transactional IPC (`TransactNamedPipe`), and broadcast datagram mailslot file system (`\Device\Mailslot`) with configurable message timeouts.
 19. **NTFS Subsystem & MFT Engine (`ntfs.hpp`, `fs.hpp`)**: Full clean-room New Technology File System (NTFS) driver featuring 1024-byte Master File Table ($MFT) record parsing, Update Sequence Array (USA) fixup generation and torn-write validation, Standard Information (`$STANDARD_INFORMATION`), File Name (`$FILE_NAME`), and Data (`$DATA`) attributes, variable-length compressed LCN/VCN runlist mapping pairs (`DataRunCodec`), Alternate Data Streams (ADS, e.g. `file.txt:Zone.Identifier`), `$LogFile` Write-Ahead Logging (WAL) and checkpoint replay engine (`LogFileJournal`), and seamless VFS mounting and drive routing.
+20. **Windows Service Control Manager (SCM) & Service Host (`scm.hpp`, `advapi32.hpp`)**: Complete clean-room `services.exe` daemon and `svchost.exe` process hosting engine. Features service database with kernel driver (`SERVICE_KERNEL_DRIVER`) and userland service types, start types (`BOOT`, `SYSTEM`, `AUTO`, `DEMAND`, `DISABLED`), topological dependency resolution with cycle detection, service status state machine (`STOPPED`, `START_PENDING`, `RUNNING`, `PAUSED`), dependent service stop protection (`ERROR_DEPENDENT_SERVICES_RUNNING`), shared process grouping (`svchost.exe -k <group>` e.g. `netsvcs`, `LocalService`, `DcomLaunch`), transactional RPC protocol over `\\.\pipe\ntsvcs`, Win32 `advapi32.dll` APIs (`OpenSCManagerW`, `CreateServiceW`, `OpenServiceW`, `StartServiceW`, `ControlService`, `DeleteService`, `QueryServiceStatusEx`), and command shell utilities (`net start`, `net stop`, `sc query`, `sc start`, `sc stop`).
 
 ---
 
@@ -181,12 +182,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (42 Suites, 100% Passing)
+### Build & Run Unit Test Suite (43 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 42 Test Suites:
+# Run all 43 Test Suites:
 .\bin\micant_tests.exe
 ```
 

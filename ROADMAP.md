@@ -382,17 +382,47 @@
 
 ---
 
-### Phase 16: Windows Service Control Manager (services.exe / SCM) & Service Host (svchost.exe) (Next)
+### Phase 16: Windows Service Control Manager (services.exe / SCM) & Service Host (svchost.exe) (100% Completed)
 *Goal: Implement the core Windows Service subsystem daemon, Service Control Manager (SCM), service database, and Service Host (svchost.exe) running service groups over RPC and Named Pipes (\Device\NamedPipe\ntsvcs).*
-- [ ] **Service Control Manager (SCM) Engine (`include/micant/scm.hpp`)**:
-  - Service Database tracking installed services, service types (`SERVICE_WIN32_OWN_PROCESS`, `SERVICE_WIN32_SHARE_PROCESS`, `SERVICE_KERNEL_DRIVER`), start types (`SERVICE_AUTO_START`, `SERVICE_DEMAND_START`, `SERVICE_DISABLED`), and service dependencies.
-  - Service Status State Machine: `SERVICE_STOPPED`, `SERVICE_START_PENDING`, `SERVICE_RUNNING`, `SERVICE_STOP_PENDING`, `SERVICE_PAUSED`, and control accept flags (`SERVICE_ACCEPT_STOP`, `SERVICE_ACCEPT_PAUSE_CONTINUE`, `SERVICE_ACCEPT_SHUTDOWN`).
-- [ ] **Win32 SCM Base APIs (`include/micant/advapi32.hpp` / `kernel32.hpp`)**:
-  - `OpenSCManagerW`, `CreateServiceW`, `OpenServiceW`, `StartServiceW`, `ControlService`, `DeleteService`, `QueryServiceStatusEx`, `CloseServiceHandle`.
-- [ ] **Service Host (`svchost.exe`) Grouping Engine**:
-  - Shared process hosting architecture multiplexing multiple DLL-based services within a single process host (`svchost.exe -k <group>`).
-- [ ] **SCM IPC & RPC Interface**:
-  - Transactional service control requests dispatched over `\Device\NamedPipe\ntsvcs` using the Phase 14 Named Pipe engine.
-- [ ] **Kernel Driver Service Integration**:
-  - Dynamic loading, initialization, and unloading of NT kernel-mode drivers via standard SCM lifecycle requests.
-- [ ] **Unit Test Suite 43**: Verification of SCM database, service creation, dependency resolution, state transitions, control dispatch, and svchost service grouping.
+- [x] **Service Control Manager (SCM) Engine (`include/micant/scm.hpp`)**:
+  - Thread-safe Service Database maintaining service records, service types (`SERVICE_KERNEL_DRIVER`, `SERVICE_WIN32_OWN_PROCESS`, `SERVICE_WIN32_SHARE_PROCESS`), start types (`BOOT_START`, `SYSTEM_START`, `AUTO_START`, `DEMAND_START`, `DISABLED`), error control, and load order groups.
+  - Pre-populated core Windows NT system services: `RpcSs`, `EventLog`, `Tcpip`, `Dhcp`, `Dnscache`, `LanmanWorkstation`, and `MicaSec`.
+  - Service Status State Machine: `SERVICE_STOPPED`, `SERVICE_START_PENDING`, `SERVICE_RUNNING`, `SERVICE_STOP_PENDING`, `SERVICE_PAUSE_PENDING`, `SERVICE_PAUSED`, and `SERVICE_CONTINUE_PENDING`.
+  - Controls accepted bitmask enforcement (`SERVICE_ACCEPT_STOP`, `SERVICE_ACCEPT_PAUSE_CONTINUE`, `SERVICE_ACCEPT_SHUTDOWN`).
+- [x] **Topological Dependency Resolution & Auto-Start**:
+  - Directed Acyclic Graph (DAG) dependency resolver using depth-first search with circular dependency detection (`ERROR_CIRCULAR_DEPENDENCY`).
+  - Automatic prerequisite start ordering: Starting a high-level service automatically starts all unstarted prerequisite services in topological order.
+  - Dependent service stop protection: Attempting to stop a service while dependent services are active fails with `ERROR_DEPENDENT_SERVICES_RUNNING`.
+- [x] **Service Host (`svchost.exe`) Grouping Engine**:
+  - Shared process architecture multiplexing multiple services inside named host containers (`svchost.exe -k <group>`), including `netsvcs`, `LocalService`, and `DcomLaunch`.
+  - Deterministic shared PID allocation: Services in the same group share the exact same host `dwProcessId`.
+- [x] **Kernel Driver Service Integration**:
+  - Seamless bridge between SCM and Ring 0 `driver::DriverManager`: Starting a `SERVICE_KERNEL_DRIVER` service invokes the driver's `DriverEntry` routine and registers it with the executive I/O manager with PID 4 (`System`).
+- [x] **SCM Named Pipe RPC Server (`\\.\pipe\ntsvcs`)**:
+  - Clean-room transactional RPC protocol over `\Device\NamedPipe\ntsvcs` (from Phase 14 NPFS) with standard binary framing (`SCM1` request / `SCM2` response) and status interrogation.
+- [x] **Win32 SCM API Surface (`include/micant/advapi32.hpp`)**:
+  - Full clean-room export parity registered in `ldr::DynamicLoader`: `OpenSCManagerW`, `CreateServiceW`, `OpenServiceW`, `StartServiceW`, `ControlService`, `DeleteService`, `QueryServiceStatus`, `QueryServiceStatusEx`, and `CloseServiceHandle`.
+- [x] **Command Shell Service Utilities (`include/micant/shell.hpp`)**:
+  - Built-in `net start` (list running services or start service), `net stop` (stop service).
+  - Built-in `sc query <service>` (detailed status, state, exit code, checkpoint, PID), `sc start`, and `sc stop`.
+- [x] **Unit Test Suite 43 (`Test_ServiceControlManager_And_SvcHost`)**:
+  - Comprehensive 10-part automated verification covering SCM database initialization, Win32 API parity, topological auto-start, circular dependency rejection, stop guards, handler control dispatching, svchost PID grouping, driver loading, named pipe RPC, and shell CLI commands.
+  - All 43 unit test suites passing with 100% success rate (43 Passed, 0 Failed).
+
+---
+
+### Phase 17: Local Security Authority Subsystem (LSASS / lsass.exe) & Security Packages (SSPI / NTLM / Kerberos) (Next)
+*Goal: Implement the core Windows security daemon (lsass.exe), Security Support Provider Interface (SSPI / secur32.dll / sspicli.dll), Security Account Manager (SAM) database, and credential authentication packages.*
+- [ ] **Local Security Authority (LSA) Subsystem (`include/micant/lsass.hpp`)**:
+  - LSA Server daemon maintaining security policies, trusted domains, logon sessions, and token privilege management.
+  - LSA RPC Interface over `\Device\NamedPipe\lsass`.
+- [ ] **Security Account Manager (SAM) Database**:
+  - Local user and group account database (`Administrator`, `Guest`, `DefaultAccount`, `Administrators`, `Users`).
+  - Password hash verification (clean-room NT hash / PBKDF2).
+- [ ] **Security Support Provider Interface (SSPI - `sspicli.dll` / `secur32.dll`)**:
+  - `AcquireCredentialsHandleW`, `InitializeSecurityContextW`, `AcceptSecurityContext`, `CompleteAuthToken`, `DeleteSecurityContext`, `FreeCredentialsHandle`.
+- [ ] **NTLM Authentication Package (`MSV1_0`)**:
+  - Type 1 (Negotiate), Type 2 (Challenge with 8-byte server challenge), and Type 3 (Authenticate with response) message synthesis.
+- [ ] **User Logon & Access Token Synthesis**:
+  - `LsaLogonUser` and `advapi32::LogonUserW` validating credentials and synthesizing full `ACCESS_TOKEN` with user SID, primary group, and granted privileges (`SeDebugPrivilege`, `SeShutdownPrivilege`).
+- [ ] **Unit Test Suite 44**: Verification of LSA daemon, SAM database, SSPI context negotiation, NTLM 3-way challenge-response, and token generation.

@@ -144,6 +144,10 @@ public:
             cmdIpConfig(tokens, out);
         } else if (cmd == "netstat") {
             cmdNetstat(tokens, out);
+        } else if (cmd == "net") {
+            cmdNet(tokens, out);
+        } else if (cmd == "sc") {
+            cmdSc(tokens, out);
         } else if (cmd == "exec" || cmd == "run") {
             if (tokens.size() < 2) {
                 out << "Usage: exec <pe_file_path>\n";
@@ -354,6 +358,8 @@ private:
             << "  IPCONFIG [/all]   Displays network adapter configuration and IP addresses\n"
             << "  PING <host>       Sends ICMP Echo Requests to verify network connectivity\n"
             << "  NETSTAT           Displays active TCP/UDP network connections and ports\n"
+            << "  NET START/STOP    Controls and lists running Windows services\n"
+            << "  SC QUERY/START    Interrogates and controls Service Control Manager\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
             << "  EXIT / QUIT       Quits the MicaNT command shell\n";
     }
@@ -699,6 +705,187 @@ private:
                 << stateStr << "\n";
         }
         out << "\n";
+    }
+
+    static std::string wideToAscii(std::wstring_view wstr) {
+        std::string s;
+        s.reserve(wstr.size());
+        for (wchar_t wc : wstr) {
+            s.push_back(static_cast<char>(wc & 0x7F));
+        }
+        return s;
+    }
+
+    void cmdNet(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() < 2) {
+            out << "The syntax of this command is:\n\nNET [ START | STOP ]\n\n";
+            return;
+        }
+
+        std::string sub = tokens[1];
+        std::transform(sub.begin(), sub.end(), sub.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (sub == "start") {
+            if (tokens.size() == 2) {
+                out << "\nThese Windows services are started:\n\n";
+                std::vector<scm::ENUM_SERVICE_STATUS_PROCESSW> list;
+                scm::ServiceControlManager::get().enumServicesStatus(scm::SERVICE_TYPE_ALL, 1, list);
+                for (const auto& s : list) {
+                    std::string disp = wideToAscii(s.lpDisplayName);
+                    out << "   " << disp << "\n";
+                }
+                out << "\nThe command completed successfully.\n\n";
+                return;
+            }
+
+            std::string svcName = tokens[2];
+            std::wstring wSvcName(svcName.begin(), svcName.end());
+            out << "The " << svcName << " service is starting.\n";
+            advapi32::SC_HANDLE hScm = advapi32::OpenSCManagerW(nullptr, nullptr, scm::SC_MANAGER_ALL_ACCESS);
+            if (!hScm) {
+                out << "System error 5 has occurred.\nAccess is denied.\n";
+                return;
+            }
+            advapi32::SC_HANDLE hSvc = advapi32::OpenServiceW(hScm, wSvcName.c_str(), scm::SERVICE_START | scm::SERVICE_QUERY_STATUS);
+            if (!hSvc) {
+                out << "System error 1060 has occurred.\nThe specified service does not exist as an installed service.\n";
+                advapi32::CloseServiceHandle(hScm);
+                return;
+            }
+            if (advapi32::StartServiceW(hSvc, 0, nullptr)) {
+                out << "The " << svcName << " service was started successfully.\n\n";
+            } else {
+                out << "The " << svcName << " service could not be started.\n\n";
+            }
+            advapi32::CloseServiceHandle(hSvc);
+            advapi32::CloseServiceHandle(hScm);
+        } else if (sub == "stop") {
+            if (tokens.size() < 3) {
+                out << "Usage: NET STOP <service_name>\n";
+                return;
+            }
+            std::string svcName = tokens[2];
+            std::wstring wSvcName(svcName.begin(), svcName.end());
+            out << "The " << svcName << " service is stopping.\n";
+            advapi32::SC_HANDLE hScm = advapi32::OpenSCManagerW(nullptr, nullptr, scm::SC_MANAGER_ALL_ACCESS);
+            if (!hScm) {
+                out << "System error 5 has occurred.\nAccess is denied.\n";
+                return;
+            }
+            advapi32::SC_HANDLE hSvc = advapi32::OpenServiceW(hScm, wSvcName.c_str(), scm::SERVICE_STOP | scm::SERVICE_QUERY_STATUS);
+            if (!hSvc) {
+                out << "System error 1060 has occurred.\nThe specified service does not exist as an installed service.\n";
+                advapi32::CloseServiceHandle(hScm);
+                return;
+            }
+            scm::SERVICE_STATUS st{};
+            if (advapi32::ControlService(hSvc, scm::SERVICE_CONTROL_STOP, &st)) {
+                out << "The " << svcName << " service was stopped successfully.\n\n";
+            } else {
+                out << "The " << svcName << " service could not be stopped.\n\n";
+            }
+            advapi32::CloseServiceHandle(hSvc);
+            advapi32::CloseServiceHandle(hScm);
+        } else {
+            out << "The option " << tokens[1] << " is unknown.\n\n";
+        }
+    }
+
+    void cmdSc(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() < 2) {
+            out << "DESCRIPTION:\n        SC is a command line program used for communicating with the\n        Service Control Manager and services.\nUSAGE:\n        sc <server> [command] [service name] <option1> <option2>...\n";
+            return;
+        }
+
+        std::string sub = tokens[1];
+        std::transform(sub.begin(), sub.end(), sub.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (sub == "query") {
+            if (tokens.size() == 2) {
+                std::vector<scm::ENUM_SERVICE_STATUS_PROCESSW> list;
+                scm::ServiceControlManager::get().enumServicesStatus(scm::SERVICE_TYPE_ALL, 0, list);
+                for (const auto& s : list) {
+                    std::string name = wideToAscii(s.lpServiceName);
+                    std::string disp = wideToAscii(s.lpDisplayName);
+                    out << "SERVICE_NAME: " << name << "\n"
+                        << "DISPLAY_NAME: " << disp << "\n"
+                        << "        TYPE               : 20  WIN32_SHARE_PROCESS\n"
+                        << "        STATE              : " << s.ServiceStatusProcess.dwCurrentState << "  "
+                        << (s.ServiceStatusProcess.dwCurrentState == scm::SERVICE_RUNNING ? "RUNNING" : "STOPPED") << "\n"
+                        << "        WIN32_EXIT_CODE    : 0  (0x0)\n"
+                        << "        SERVICE_EXIT_CODE  : 0  (0x0)\n"
+                        << "        CHECKPOINT         : 0x0\n"
+                        << "        WAIT_HINT          : 0x0\n\n";
+                }
+                return;
+            }
+
+            std::string svcName = tokens[2];
+            std::wstring wSvcName(svcName.begin(), svcName.end());
+            auto rec = scm::ServiceControlManager::get().getServiceRecord(wSvcName);
+            if (!rec) {
+                out << "[SC] EnumQueryServicesStatus:OpenService FAILED 1060:\n\nThe specified service does not exist as an installed service.\n\n";
+                return;
+            }
+
+            std::string disp = wideToAscii(rec->displayName);
+            std::string stateStr = (rec->status.dwCurrentState == scm::SERVICE_RUNNING) ? "RUNNING" :
+                                   (rec->status.dwCurrentState == scm::SERVICE_STOPPED) ? "STOPPED" :
+                                   (rec->status.dwCurrentState == scm::SERVICE_PAUSED) ? "PAUSED" : "PENDING";
+            out << "[SC] QueryServiceStatus\n\n"
+                << "SERVICE_NAME: " << svcName << "\n"
+                << "DISPLAY_NAME: " << disp << "\n"
+                << "        TYPE               : " << rec->status.dwServiceType << "\n"
+                << "        STATE              : " << rec->status.dwCurrentState << "  " << stateStr << "\n"
+                << "        WIN32_EXIT_CODE    : " << rec->status.dwWin32ExitCode << "  (0x0)\n"
+                << "        SERVICE_EXIT_CODE  : " << rec->status.dwServiceSpecificExitCode << "  (0x0)\n"
+                << "        CHECKPOINT         : 0x" << std::hex << rec->status.dwCheckPoint << std::dec << "\n"
+                << "        WAIT_HINT          : 0x" << std::hex << rec->status.dwWaitHint << std::dec << "\n"
+                << "        PID                : " << rec->status.dwProcessId << "\n\n";
+        } else if (sub == "start") {
+            if (tokens.size() < 3) {
+                out << "Usage: sc start <service_name>\n";
+                return;
+            }
+            std::string svcName = tokens[2];
+            std::wstring wSvcName(svcName.begin(), svcName.end());
+            advapi32::SC_HANDLE hScm = advapi32::OpenSCManagerW(nullptr, nullptr, scm::SC_MANAGER_ALL_ACCESS);
+            advapi32::SC_HANDLE hSvc = advapi32::OpenServiceW(hScm, wSvcName.c_str(), scm::SERVICE_START);
+            if (!hSvc) {
+                out << "[SC] OpenService FAILED 1060: The specified service does not exist.\n";
+            } else {
+                if (advapi32::StartServiceW(hSvc, 0, nullptr)) {
+                    out << "[SC] StartService SUCCESS\n";
+                } else {
+                    out << "[SC] StartService FAILED\n";
+                }
+                advapi32::CloseServiceHandle(hSvc);
+            }
+            advapi32::CloseServiceHandle(hScm);
+        } else if (sub == "stop") {
+            if (tokens.size() < 3) {
+                out << "Usage: sc stop <service_name>\n";
+                return;
+            }
+            std::string svcName = tokens[2];
+            std::wstring wSvcName(svcName.begin(), svcName.end());
+            advapi32::SC_HANDLE hScm = advapi32::OpenSCManagerW(nullptr, nullptr, scm::SC_MANAGER_ALL_ACCESS);
+            advapi32::SC_HANDLE hSvc = advapi32::OpenServiceW(hScm, wSvcName.c_str(), scm::SERVICE_STOP);
+            if (!hSvc) {
+                out << "[SC] OpenService FAILED 1060: The specified service does not exist.\n";
+            } else {
+                scm::SERVICE_STATUS st{};
+                if (advapi32::ControlService(hSvc, scm::SERVICE_CONTROL_STOP, &st)) {
+                    out << "[SC] ControlService SUCCESS\n";
+                } else {
+                    out << "[SC] ControlService FAILED\n";
+                }
+                advapi32::CloseServiceHandle(hSvc);
+            }
+            advapi32::CloseServiceHandle(hScm);
+        } else {
+            out << "[SC] Unknown command: " << tokens[1] << "\n";
+        }
     }
 
     static std::string trim(std::string_view s) {

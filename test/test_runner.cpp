@@ -56,6 +56,7 @@
 #include "micant/iphlpapi.hpp"
 #include "micant/arm64.hpp"
 #include "micant/npfs.hpp"
+#include "micant/scm.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -4035,6 +4036,328 @@ void Test_NtfsFileSystemAndMasterFileTable() {
     vfs.closeFile(vfsFile.get());
 }
 
+void Test_ServiceControlManager_And_SvcHost() {
+    using namespace scm;
+
+    // 1. SCM Initialization & Built-in System Services
+    auto& scm = ServiceControlManager::get();
+    scm.initialize();
+
+    TEST_ASSERT(scm.getServiceCount() >= 7, "SCM must have at least 7 default system services");
+
+    auto rpcSs = scm.getServiceRecord(L"RpcSs");
+    TEST_ASSERT(rpcSs != nullptr, "RpcSs service must exist");
+    TEST_ASSERT(rpcSs->serviceType == SERVICE_WIN32_SHARE_PROCESS, "RpcSs must be share process");
+    TEST_ASSERT(rpcSs->status.dwCurrentState == SERVICE_RUNNING, "RpcSs must be running");
+    TEST_ASSERT(rpcSs->svchostGroup == "DcomLaunch", "RpcSs group must be DcomLaunch");
+    TEST_ASSERT(rpcSs->status.dwProcessId > 0, "RpcSs must have non-zero PID");
+
+    auto tcpip = scm.getServiceRecord(L"Tcpip");
+    TEST_ASSERT(tcpip != nullptr, "Tcpip service must exist");
+    TEST_ASSERT(tcpip->serviceType == SERVICE_KERNEL_DRIVER, "Tcpip must be a kernel driver");
+    TEST_ASSERT(tcpip->status.dwCurrentState == SERVICE_RUNNING, "Tcpip must be running");
+    TEST_ASSERT(tcpip->status.dwProcessId == 4, "Tcpip driver PID must be 4 (System)");
+
+    auto dhcp = scm.getServiceRecord(L"Dhcp");
+    TEST_ASSERT(dhcp != nullptr, "Dhcp service must exist");
+    TEST_ASSERT(dhcp->status.dwCurrentState == SERVICE_RUNNING, "Dhcp must be running");
+    TEST_ASSERT(dhcp->svchostGroup == "netsvcs", "Dhcp group must be netsvcs");
+    TEST_ASSERT(!dhcp->dependencies.empty() && dhcp->dependencies[0] == L"Tcpip", "Dhcp must depend on Tcpip");
+
+    // 2. Win32 SCM API Parity (advapi32.dll)
+    advapi32::SC_HANDLE hScm = advapi32::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+    TEST_ASSERT(hScm != nullptr, "OpenSCManagerW must succeed with SC_MANAGER_ALL_ACCESS");
+
+    advapi32::SC_HANDLE hSpooler = advapi32::CreateServiceW(
+        hScm,
+        L"Spooler",
+        L"Print Spooler",
+        SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS,
+        SERVICE_DEMAND_START,
+        SERVICE_ERROR_NORMAL,
+        L"C:\\Windows\\System32\\spoolsv.exe",
+        L"",
+        nullptr,
+        L"RpcSs\0",
+        L"LocalSystem",
+        nullptr
+    );
+    TEST_ASSERT(hSpooler != nullptr, "CreateServiceW for Spooler must succeed");
+
+    SERVICE_STATUS spoolerStatus{};
+    win32::BOOL bQuery = advapi32::QueryServiceStatus(hSpooler, &spoolerStatus);
+    TEST_ASSERT(bQuery == win32::TRUE, "QueryServiceStatus for Spooler must succeed");
+    TEST_ASSERT(spoolerStatus.dwCurrentState == SERVICE_STOPPED, "Newly created Spooler must be in SERVICE_STOPPED state");
+    TEST_ASSERT((spoolerStatus.dwControlsAccepted & SERVICE_ACCEPT_STOP) != 0, "Spooler must accept STOP control");
+
+    // Attempting to create duplicate service must fail with ERROR_SERVICE_EXISTS
+    advapi32::SC_HANDLE hDup = advapi32::CreateServiceW(
+        hScm,
+        L"Spooler",
+        L"Duplicate",
+        SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS,
+        SERVICE_DEMAND_START,
+        SERVICE_ERROR_NORMAL,
+        L"C:\\Windows\\System32\\spoolsv.exe",
+        nullptr, nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hDup == nullptr, "Create duplicate service must fail");
+    TEST_ASSERT(win32::GetLastError() == ERROR_SERVICE_EXISTS, "Error must be ERROR_SERVICE_EXISTS");
+
+    // 3. Topological Dependency Resolution & Auto-Start
+    advapi32::SC_HANDLE hSvcA = advapi32::CreateServiceW(
+        hScm, L"TestSvcA", L"Base Service A", SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+        L"svca.exe", nullptr, nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hSvcA != nullptr, "CreateServiceW for TestSvcA must succeed");
+
+    advapi32::SC_HANDLE hSvcB = advapi32::CreateServiceW(
+        hScm, L"TestSvcB", L"Intermediate Service B", SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+        L"svcb.exe", nullptr, nullptr, L"TestSvcA\0", nullptr, nullptr
+    );
+    TEST_ASSERT(hSvcB != nullptr, "CreateServiceW for TestSvcB must succeed");
+
+    advapi32::SC_HANDLE hSvcC = advapi32::CreateServiceW(
+        hScm, L"TestSvcC", L"Top-Level Service C", SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+        L"svcc.exe", nullptr, nullptr, L"TestSvcB\0", nullptr, nullptr
+    );
+    TEST_ASSERT(hSvcC != nullptr, "CreateServiceW for TestSvcC must succeed");
+
+    std::vector<std::wstring> depOrder;
+    uint32_t depRes = scm.resolveDependencies(L"TestSvcC", depOrder);
+    TEST_ASSERT(depRes == ERROR_SUCCESS, "resolveDependencies on TestSvcC must succeed");
+    TEST_ASSERT(depOrder.size() == 3, "Dependency order must include exactly 3 services");
+    TEST_ASSERT(depOrder[0] == L"TestSvcA", "First start prerequisite must be TestSvcA");
+    TEST_ASSERT(depOrder[1] == L"TestSvcB", "Second start prerequisite must be TestSvcB");
+    TEST_ASSERT(depOrder[2] == L"TestSvcC", "Third target must be TestSvcC");
+
+    // Starting TestSvcC must automatically start TestSvcA and TestSvcB
+    win32::BOOL bStartC = advapi32::StartServiceW(hSvcC, 0, nullptr);
+    TEST_ASSERT(bStartC == win32::TRUE, "StartServiceW on TestSvcC must succeed");
+
+    SERVICE_STATUS stA{}, stB{}, stC{};
+    advapi32::QueryServiceStatus(hSvcA, &stA);
+    advapi32::QueryServiceStatus(hSvcB, &stB);
+    advapi32::QueryServiceStatus(hSvcC, &stC);
+    TEST_ASSERT(stA.dwCurrentState == SERVICE_RUNNING, "TestSvcA must be auto-started and RUNNING");
+    TEST_ASSERT(stB.dwCurrentState == SERVICE_RUNNING, "TestSvcB must be auto-started and RUNNING");
+    TEST_ASSERT(stC.dwCurrentState == SERVICE_RUNNING, "TestSvcC must be RUNNING");
+
+    // 4. Circular Dependency Detection
+    advapi32::CreateServiceW(
+        hScm, L"CycleAlpha", L"Cycle Alpha", SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+        L"cycle1.exe", nullptr, nullptr, L"CycleBeta\0", nullptr, nullptr
+    );
+    advapi32::SC_HANDLE hCycleBeta = advapi32::CreateServiceW(
+        hScm, L"CycleBeta", L"Cycle Beta", SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+        L"cycle2.exe", nullptr, nullptr, L"CycleAlpha\0", nullptr, nullptr
+    );
+    TEST_ASSERT(hCycleBeta != nullptr, "CreateServiceW for CycleBeta must succeed");
+
+    std::vector<std::wstring> cycleOrder;
+    uint32_t cycleRes = scm.resolveDependencies(L"CycleBeta", cycleOrder);
+    TEST_ASSERT(cycleRes == ERROR_CIRCULAR_DEPENDENCY, "Circular dependency must be detected");
+
+    win32::BOOL bCycleStart = advapi32::StartServiceW(hCycleBeta, 0, nullptr);
+    TEST_ASSERT(bCycleStart == win32::FALSE, "Starting cyclic service must fail");
+    TEST_ASSERT(win32::GetLastError() == ERROR_CIRCULAR_DEPENDENCY, "Error must be ERROR_CIRCULAR_DEPENDENCY");
+
+    // 5. Dependent Service Running Guard
+    // TestSvcC depends on TestSvcB, which depends on TestSvcA.
+    // Attempting to stop TestSvcA while TestSvcB / TestSvcC are running must fail!
+    SERVICE_STATUS stopStatus{};
+    win32::BOOL bStopA = advapi32::ControlService(hSvcA, SERVICE_CONTROL_STOP, &stopStatus);
+    TEST_ASSERT(bStopA == win32::FALSE, "Stopping TestSvcA while dependent services run must fail");
+    TEST_ASSERT(win32::GetLastError() == ERROR_DEPENDENT_SERVICES_RUNNING, "Error must be ERROR_DEPENDENT_SERVICES_RUNNING");
+
+    // Stop TestSvcC first
+    win32::BOOL bStopC = advapi32::ControlService(hSvcC, SERVICE_CONTROL_STOP, &stopStatus);
+    TEST_ASSERT(bStopC == win32::TRUE, "Stopping TestSvcC must succeed");
+    TEST_ASSERT(stopStatus.dwCurrentState == SERVICE_STOPPED, "TestSvcC must be stopped");
+
+    // Stop TestSvcB next
+    win32::BOOL bStopB = advapi32::ControlService(hSvcB, SERVICE_CONTROL_STOP, &stopStatus);
+    TEST_ASSERT(bStopB == win32::TRUE, "Stopping TestSvcB must succeed");
+    TEST_ASSERT(stopStatus.dwCurrentState == SERVICE_STOPPED, "TestSvcB must be stopped");
+
+    // Now stopping TestSvcA must succeed
+    bStopA = advapi32::ControlService(hSvcA, SERVICE_CONTROL_STOP, &stopStatus);
+    TEST_ASSERT(bStopA == win32::TRUE, "Stopping TestSvcA must now succeed");
+    TEST_ASSERT(stopStatus.dwCurrentState == SERVICE_STOPPED, "TestSvcA must be stopped");
+
+    // 6. Service Handler Callbacks & State Transitions (Pause / Continue / Interrogate)
+    static std::vector<uint32_t> s_ReceivedControls;
+    auto testDaemon = scm.getServiceRecord(L"Spooler");
+    TEST_ASSERT(testDaemon != nullptr, "Spooler record must exist");
+    testDaemon->handler = [](uint32_t ctrl) {
+        s_ReceivedControls.push_back(ctrl);
+    };
+
+    win32::BOOL bStartSpooler = advapi32::StartServiceW(hSpooler, 0, nullptr);
+    TEST_ASSERT(bStartSpooler == win32::TRUE, "StartServiceW on Spooler must succeed");
+    advapi32::QueryServiceStatus(hSpooler, &spoolerStatus);
+    TEST_ASSERT(spoolerStatus.dwCurrentState == SERVICE_RUNNING, "Spooler must be RUNNING");
+
+    // Pause
+    advapi32::ControlService(hSpooler, SERVICE_CONTROL_PAUSE, &spoolerStatus);
+    TEST_ASSERT(spoolerStatus.dwCurrentState == SERVICE_PAUSED, "Spooler must be PAUSED");
+
+    // Continue
+    advapi32::ControlService(hSpooler, SERVICE_CONTROL_CONTINUE, &spoolerStatus);
+    TEST_ASSERT(spoolerStatus.dwCurrentState == SERVICE_RUNNING, "Spooler must be RUNNING after CONTINUE");
+
+    // Interrogate
+    advapi32::ControlService(hSpooler, SERVICE_CONTROL_INTERROGATE, &spoolerStatus);
+
+    // Stop
+    advapi32::ControlService(hSpooler, SERVICE_CONTROL_STOP, &spoolerStatus);
+    TEST_ASSERT(spoolerStatus.dwCurrentState == SERVICE_STOPPED, "Spooler must be STOPPED");
+
+    TEST_ASSERT(s_ReceivedControls.size() >= 4, "Handler must receive pause, continue, interrogate, and stop");
+    TEST_ASSERT(s_ReceivedControls[0] == SERVICE_CONTROL_PAUSE, "First control must be PAUSE");
+    TEST_ASSERT(s_ReceivedControls[1] == SERVICE_CONTROL_CONTINUE, "Second control must be CONTINUE");
+    TEST_ASSERT(s_ReceivedControls[2] == SERVICE_CONTROL_INTERROGATE, "Third control must be INTERROGATE");
+    TEST_ASSERT(s_ReceivedControls[3] == SERVICE_CONTROL_STOP, "Fourth control must be STOP");
+
+    // 7. Shared Process Service Host (svchost.exe) Grouping
+    auto dhcpRec = scm.getServiceRecord(L"Dhcp");
+    auto dnsRec = scm.getServiceRecord(L"Dnscache");
+    auto wrkRec = scm.getServiceRecord(L"LanmanWorkstation");
+    TEST_ASSERT(dhcpRec != nullptr && dnsRec != nullptr && wrkRec != nullptr, "netsvcs services must exist");
+
+    uint32_t netsvcsPid = SvcHostManager::get().getGroupPid("netsvcs");
+    TEST_ASSERT(netsvcsPid > 0, "netsvcs host PID must be non-zero");
+    TEST_ASSERT(dhcpRec->status.dwProcessId == netsvcsPid, "Dhcp PID must match netsvcs host PID");
+    TEST_ASSERT(dnsRec->status.dwProcessId == netsvcsPid, "Dnscache PID must match netsvcs host PID");
+    TEST_ASSERT(wrkRec->status.dwProcessId == netsvcsPid, "LanmanWorkstation PID must match netsvcs host PID");
+
+    auto hostedInNetsvcs = SvcHostManager::get().getServicesInGroup("netsvcs");
+    TEST_ASSERT(hostedInNetsvcs.size() >= 3, "netsvcs group must have at least 3 services");
+
+    // Distinct groups must have distinct PIDs
+    uint32_t dcomPid = SvcHostManager::get().getGroupPid("DcomLaunch");
+    uint32_t localSvcPid = SvcHostManager::get().getGroupPid("LocalService");
+    TEST_ASSERT(dcomPid != 0 && localSvcPid != 0, "DcomLaunch and LocalService must have valid PIDs");
+    TEST_ASSERT(dcomPid != netsvcsPid, "DcomLaunch PID must be distinct from netsvcs");
+    TEST_ASSERT(localSvcPid != netsvcsPid, "LocalService PID must be distinct from netsvcs");
+    TEST_ASSERT(localSvcPid != dcomPid, "LocalService PID must be distinct from DcomLaunch");
+
+    // 8. Kernel Driver Service Integration (SERVICE_KERNEL_DRIVER)
+    static bool s_TestDriverLoaded = false;
+    advapi32::SC_HANDLE hDrv = advapi32::CreateServiceW(
+        hScm,
+        L"MicaVirtStorageDriver",
+        L"MicaNT Virtual Storage Miniport Driver",
+        SERVICE_ALL_ACCESS,
+        SERVICE_KERNEL_DRIVER,
+        SERVICE_DEMAND_START,
+        SERVICE_ERROR_NORMAL,
+        L"System32\\drivers\\micavstore.sys",
+        L"SCSI miniport",
+        nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hDrv != nullptr, "CreateServiceW for kernel driver must succeed");
+
+    auto drvRec = scm.getServiceRecord(L"MicaVirtStorageDriver");
+    TEST_ASSERT(drvRec != nullptr, "Driver record must exist");
+    drvRec->driverEntry = [](io::DriverObject* drv, const UnicodeString* reg) -> NtStatus {
+        (void)drv;
+        (void)reg;
+        s_TestDriverLoaded = true;
+        return NtStatus::Success;
+    };
+
+    win32::BOOL bStartDrv = advapi32::StartServiceW(hDrv, 0, nullptr);
+    TEST_ASSERT(bStartDrv == win32::TRUE, "StartServiceW on kernel driver must succeed");
+    TEST_ASSERT(s_TestDriverLoaded == true, "Kernel driver DriverEntry must have been invoked");
+    TEST_ASSERT(drvRec->status.dwCurrentState == SERVICE_RUNNING, "Driver service state must be RUNNING");
+    TEST_ASSERT(drvRec->status.dwProcessId == 4, "Driver service PID must be 4 (System)");
+    TEST_ASSERT(driver::DriverManager::get().lookupDriver(L"MicaVirtStorageDriver") != nullptr,
+                "Driver must be registered in Ring 0 DriverManager");
+
+    // 9. Named Pipe RPC Protocol over \\.\pipe\ntsvcs
+    ScmRpcHeader reqHdr{
+        .magic = SCM_RPC_REQ_MAGIC,
+        .opCode = SCM_RPC_QUERY_STATUS,
+        .dataLength = sizeof(ScmRpcRequestPayload)
+    };
+    ScmRpcRequestPayload reqPayload{};
+    wcscpy_s(reqPayload.serviceName, L"Dhcp");
+
+    // Open handle to Dhcp to pass to RPC
+    advapi32::SC_HANDLE hDhcp = advapi32::OpenServiceW(hScm, L"Dhcp", SERVICE_QUERY_STATUS);
+    TEST_ASSERT(hDhcp != nullptr, "OpenServiceW for Dhcp must succeed");
+    reqPayload.param1 = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(hDhcp));
+
+    std::vector<uint8_t> reqBuf(sizeof(ScmRpcHeader) + sizeof(ScmRpcRequestPayload));
+    std::memcpy(reqBuf.data(), &reqHdr, sizeof(ScmRpcHeader));
+    std::memcpy(reqBuf.data() + sizeof(ScmRpcHeader), &reqPayload, sizeof(ScmRpcRequestPayload));
+
+    auto respBytes = scm.processRpcRequest(reqBuf.data(), reqBuf.size());
+    TEST_ASSERT(respBytes.size() >= sizeof(ScmRpcHeader) + sizeof(ScmRpcResponsePayload),
+                "RPC response size must be valid");
+
+    const auto* respHdr = reinterpret_cast<const ScmRpcHeader*>(respBytes.data());
+    const auto* respPl = reinterpret_cast<const ScmRpcResponsePayload*>(respBytes.data() + sizeof(ScmRpcHeader));
+    TEST_ASSERT(respHdr->magic == SCM_RPC_RESP_MAGIC, "RPC response magic must be 'SCM2'");
+    TEST_ASSERT(respPl->win32Error == ERROR_SUCCESS, "RPC query status must return ERROR_SUCCESS");
+    TEST_ASSERT(respPl->currentState == SERVICE_RUNNING, "RPC returned state must be RUNNING");
+    TEST_ASSERT(respPl->processId == netsvcsPid, "RPC returned PID must match netsvcs PID");
+
+    advapi32::CloseServiceHandle(hDhcp);
+
+    // 10. Command Shell net and sc Built-in Commands Verification
+    shell::CommandShell testShell;
+    std::ostringstream out;
+
+    // Test 'net start' lists running services
+    testShell.execute("net start", out);
+    std::string netOut = out.str();
+    TEST_ASSERT(netOut.find("These Windows services are started:") != std::string::npos, "'net start' header found");
+    TEST_ASSERT(netOut.find("DHCP Client") != std::string::npos, "'net start' lists DHCP Client");
+    TEST_ASSERT(netOut.find("Workstation") != std::string::npos, "'net start' lists Workstation");
+
+    // Test 'sc query Dhcp'
+    out.str("");
+    out.clear();
+    testShell.execute("sc query Dhcp", out);
+    std::string scOut = out.str();
+    TEST_ASSERT(scOut.find("SERVICE_NAME: Dhcp") != std::string::npos, "'sc query Dhcp' returns service name");
+    TEST_ASSERT(scOut.find("STATE              : 4  RUNNING") != std::string::npos, "'sc query Dhcp' returns RUNNING");
+
+    // Test 'sc stop MicaSec' and 'sc start MicaSec'
+    out.str("");
+    out.clear();
+    testShell.execute("sc stop MicaSec", out);
+    TEST_ASSERT(out.str().find("[SC] ControlService SUCCESS") != std::string::npos, "'sc stop MicaSec' succeeds");
+
+    auto micaSecRec = scm.getServiceRecord(L"MicaSec");
+    TEST_ASSERT(micaSecRec != nullptr && micaSecRec->status.dwCurrentState == SERVICE_STOPPED,
+                "MicaSec state must be STOPPED");
+
+    out.str("");
+    out.clear();
+    testShell.execute("sc start MicaSec", out);
+    TEST_ASSERT(out.str().find("[SC] StartService SUCCESS") != std::string::npos, "'sc start MicaSec' succeeds");
+    TEST_ASSERT(micaSecRec->status.dwCurrentState == SERVICE_RUNNING, "MicaSec state must be RUNNING");
+
+    // Cleanup handles
+    advapi32::CloseServiceHandle(hSpooler);
+    advapi32::CloseServiceHandle(hSvcA);
+    advapi32::CloseServiceHandle(hSvcB);
+    advapi32::CloseServiceHandle(hSvcC);
+    advapi32::CloseServiceHandle(hCycleBeta);
+    advapi32::CloseServiceHandle(hDrv);
+    advapi32::CloseServiceHandle(hScm);
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -4082,6 +4405,7 @@ int main() {
     RUN_TEST(Test_Arm64HardwareArchitectureAndSyscall);
     RUN_TEST(Test_NamedPipesAndMailslotsIpc);
     RUN_TEST(Test_NtfsFileSystemAndMasterFileTable);
+    RUN_TEST(Test_ServiceControlManager_And_SvcHost);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
