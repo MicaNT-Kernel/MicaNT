@@ -79,6 +79,8 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 18. **Named Pipes & Mailslots IPC Subsystem (`npfs.hpp`, `fs.hpp`, `kernel32.hpp`)**: Full-duplex named pipe file system (`\Device\NamedPipe`), multi-instance client/server load distribution, 5-state lifecycle (`Listening` to `Broken`), byte stream and message stream modes with atomic message boundaries and `ERROR_MORE_DATA` signaling, non-destructive queue inspection (`PeekNamedPipe`), transactional IPC (`TransactNamedPipe`), and broadcast datagram mailslot file system (`\Device\Mailslot`) with configurable message timeouts.
 19. **NTFS Subsystem & MFT Engine (`ntfs.hpp`, `fs.hpp`)**: Full clean-room New Technology File System (NTFS) driver featuring 1024-byte Master File Table ($MFT) record parsing, Update Sequence Array (USA) fixup generation and torn-write validation, Standard Information (`$STANDARD_INFORMATION`), File Name (`$FILE_NAME`), and Data (`$DATA`) attributes, variable-length compressed LCN/VCN runlist mapping pairs (`DataRunCodec`), Alternate Data Streams (ADS, e.g. `file.txt:Zone.Identifier`), `$LogFile` Write-Ahead Logging (WAL) and checkpoint replay engine (`LogFileJournal`), and seamless VFS mounting and drive routing.
 20. **Windows Service Control Manager (SCM) & Service Host (`scm.hpp`, `advapi32.hpp`)**: Complete clean-room `services.exe` daemon and `svchost.exe` process hosting engine. Features service database with kernel driver (`SERVICE_KERNEL_DRIVER`) and userland service types, start types (`BOOT`, `SYSTEM`, `AUTO`, `DEMAND`, `DISABLED`), topological dependency resolution with cycle detection, service status state machine (`STOPPED`, `START_PENDING`, `RUNNING`, `PAUSED`), dependent service stop protection (`ERROR_DEPENDENT_SERVICES_RUNNING`), shared process grouping (`svchost.exe -k <group>` e.g. `netsvcs`, `LocalService`, `DcomLaunch`), transactional RPC protocol over `\\.\pipe\ntsvcs`, Win32 `advapi32.dll` APIs (`OpenSCManagerW`, `CreateServiceW`, `OpenServiceW`, `StartServiceW`, `ControlService`, `DeleteService`, `QueryServiceStatusEx`), and command shell utilities (`net start`, `net stop`, `sc query`, `sc start`, `sc stop`).
+21. **Security & Authentication Subsystem (SAM, LSASS, Winlogon) (`sam.hpp`, `lsass.hpp`, `winlogon.hpp`)**: Complete NT authentication trinity. RFC 1320 MD4 NT-Hash generation, Security Accounts Manager (SAM) database, built-in Administrator (RID 500) and Guest (RID 501), account lockout threshold and observation window policy. Local Security Authority Subsystem Service (LSASS) with MSV1_0 authentication package, NTLM challenge-response nonce generation, executive access token synthesis (`TOKEN_USER`, `TOKEN_GROUPS`, `TOKEN_PRIVILEGES`), SID translation (`LookupAccountSidW`), and IPC endpoints (`\\.\pipe\lsass`, `\LsaAuthenticationPort`). Winlogon interactive logon manager with desktop isolation (secure `Winlogon` vs `Default` interactive desktop), SAS `Ctrl+Alt+Del` event interception, workstation lock/unlock state machine, and shell utilities (`whoami /priv /groups /all`, `net user`, `lock`, `logoff`).
+22. **PrismX & Prism3D Graphics Architecture (`prismx.hpp`, `prism3d.hpp`, `dxgkrnl.hpp`)**: Sovereign clean-room 2D/3D graphics engine named in tribute to Dave Cutler's 1988 DEC PRISM RISC project. Implements DXGI presentation pipeline (`IDXGIFactory1`, `IDXGIAdapter1`, `IDXGIOutput`, `IDXGISwapChain`) with 32-bpp BGRA double/triple buffering, flip models (`FLIP_DISCARD`), dirty-rect tracking, and VSync pacing. Prism3D acceleration engine (`ID3D11Device`, `ID3D11DeviceContext`, `ID3D12Device`) featuring a high-precision barycentric software reference rasterizer with Gouraud color interpolation, depth testing (Z-buffer), and viewport clipping. WDDM DirectX Graphics Kernel (`dxgkrnl.sys`) implementing Ring 0 `D3DKMT*` syscall thunks (`D3DKMTOpenAdapter`, `D3DKMTCreateAllocation`, `D3DKMTCreateDevice`, `D3DKMTSubmitCommand`, `D3DKMTPresent`) for GPU memory virtual addressing and page flip scheduling. Fully compatible with Microsoft's MIT-licensed `DirectX-Headers` and `DirectXTK`. Integrated shell commands (`prismx`, `prismx test`).
 
 ---
 
@@ -183,12 +185,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (44 Suites, 100% Passing)
+### Build & Run Unit Test Suite (45 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 44 Test Suites:
+# Run all 45 Test Suites:
 .\bin\micant_tests.exe
 ```
 

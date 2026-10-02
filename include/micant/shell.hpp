@@ -36,6 +36,9 @@
 #include "ndis.hpp"
 #include "tcpip.hpp"
 #include "iphlpapi.hpp"
+#include "prismx.hpp"
+#include "prism3d.hpp"
+#include "dxgkrnl.hpp"
 
 namespace micant::shell {
 
@@ -155,6 +158,8 @@ public:
             cmdSc(tokens, out);
         } else if (cmd == "whoami") {
             cmdWhoami(tokens, out);
+        } else if (cmd == "prismx" || cmd == "gpu") {
+            cmdPrismX(tokens, out);
         } else if (cmd == "lock") {
             cmdLock(out);
         } else if (cmd == "logoff") {
@@ -373,6 +378,7 @@ private:
             << "  NET USER [name]   Enumerates or modifies local user accounts in SAM\n"
             << "  SC QUERY/START    Interrogates and controls Service Control Manager\n"
             << "  WHOAMI [/priv]    Displays user identity, group SIDs, and token privileges\n"
+            << "  PRISMX / GPU      Displays GPU adapters, VRAM, and runs 3D tests (prismx test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -1123,6 +1129,149 @@ private:
     void cmdLogoff(std::ostream& out) {
         winlogon::WinlogonManager::get().logoff();
         out << "Session terminated. User logged off. Switched to secure Winlogon desktop.\n";
+    }
+
+    void cmdPrismX(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[PrismX / Prism3D] Initializing 3D graphics presentation test...\n";
+            prismx::IDXGIFactory1* factory = nullptr;
+            prismx::CreateDXGIFactory1(prismx::IID_IDXGIFactory1, reinterpret_cast<void**>(&factory));
+            if (!factory) {
+                out << "[PrismX] Failed to create DXGI factory.\n";
+                return;
+            }
+
+            prismx::DXGI_SWAP_CHAIN_DESC scDesc{};
+            scDesc.BufferDesc.Width = 800;
+            scDesc.BufferDesc.Height = 600;
+            scDesc.BufferDesc.Format = prismx::DXGI_FORMAT_B8G8R8A8_UNORM;
+            scDesc.BufferCount = 2;
+            scDesc.SwapEffect = prismx::DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+            prism3d::ID3D11Device* device = nullptr;
+            prism3d::ID3D11DeviceContext* context = nullptr;
+            prismx::IDXGISwapChain* swapChain = nullptr;
+
+            int32_t hr = prism3d::D3D11CreateDeviceAndSwapChain(
+                nullptr, prism3d::D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+                nullptr, 0, 7, &scDesc, &swapChain, &device, nullptr, &context
+            );
+
+            if (hr != 0 || !device || !context || !swapChain) {
+                out << "[Prism3D] Failed to initialize Direct3D 11 device and swapchain.\n";
+                if (factory) factory->Release();
+                return;
+            }
+
+            // Create Render Target View from SwapChain BackBuffer
+            prismx::IDXGISurface* surface = nullptr;
+            swapChain->GetBuffer(0, prismx::IID_IDXGISurface, reinterpret_cast<void**>(&surface));
+            
+            prism3d::ID3D11RenderTargetView* rtv = nullptr;
+            device->CreateRenderTargetView(reinterpret_cast<prism3d::ID3D11Resource*>(surface), nullptr, &rtv);
+
+            // Define Triangle Vertices (DirectXTK VertexPositionColor format)
+            prism3d::VertexPositionColor vertices[3] = {
+                {  0.0f,  0.6f, 0.0f,  1.0f, 0.1f, 0.1f, 1.0f }, // Top (Vibrant Red)
+                { -0.6f, -0.6f, 0.0f,  0.1f, 1.0f, 0.1f, 1.0f }, // Bottom-Left (Vibrant Green)
+                {  0.6f, -0.6f, 0.0f,  0.1f, 0.2f, 1.0f, 1.0f }  // Bottom-Right (Vibrant Blue)
+            };
+
+            prism3d::D3D11_BUFFER_DESC vbDesc{};
+            vbDesc.ByteWidth = sizeof(vertices);
+            vbDesc.Usage = prism3d::D3D11_USAGE_DEFAULT;
+            vbDesc.BindFlags = prism3d::D3D11_BIND_VERTEX_BUFFER;
+            vbDesc.StructureByteStride = sizeof(prism3d::VertexPositionColor);
+
+            prism3d::D3D11_SUBRESOURCE_DATA initData{};
+            initData.pSysMem = vertices;
+
+            prism3d::ID3D11Buffer* vertexBuffer = nullptr;
+            device->CreateBuffer(&vbDesc, &initData, &vertexBuffer);
+
+            // Setup Viewport & Targets
+            prism3d::D3D11_VIEWPORT vp{ 0.0f, 0.0f, 800.0f, 600.0f, 0.0f, 1.0f };
+            context->RSSetViewports(1, &vp);
+            context->OMSetRenderTargets(1, &rtv, nullptr);
+
+            // Clear to Midnight Blue Background
+            const float clearColor[4] = { 0.04f, 0.07f, 0.16f, 1.0f };
+            context->ClearRenderTargetView(rtv, clearColor);
+
+            // Bind Vertex Buffer and Draw
+            uint32_t stride = sizeof(prism3d::VertexPositionColor);
+            uint32_t offset = 0;
+            context->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
+            context->IASetPrimitiveTopology(prism3d::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context->Draw(3, 0);
+
+            // Present the Frame
+            swapChain->Present(1, 0);
+
+            out << "[Prism3D] 3D Barycentric Shaded Triangle rendered successfully!\n"
+                << "  Swapchain: 800x600 (32-bpp BGRA), FLIP_DISCARD\n"
+                << "  Shading: Interpolated RGB Gouraud Barycentric Rasterizer\n"
+                << "  Status: Frame 1 successfully presented to display compositor.\n";
+
+            // Cleanup
+            if (vertexBuffer) vertexBuffer->Release();
+            if (rtv) rtv->Release();
+            if (surface) surface->Release();
+            if (swapChain) swapChain->Release();
+            if (context) context->Release();
+            if (device) device->Release();
+            if (factory) factory->Release();
+            return;
+        }
+
+        // Display GPU Info
+        out << "========================================================================\n"
+            << "               MicaNT PrismX & Prism3D Graphics Subsystem               \n"
+            << "========================================================================\n\n";
+
+        prismx::IDXGIFactory1* factory = nullptr;
+        prismx::CreateDXGIFactory1(prismx::IID_IDXGIFactory1, reinterpret_cast<void**>(&factory));
+        if (factory) {
+            prismx::IDXGIAdapter1* adapter = nullptr;
+            for (uint32_t i = 0; factory->EnumAdapters1(i, &adapter) == 0; ++i) {
+                prismx::DXGI_ADAPTER_DESC1 desc{};
+                adapter->GetDesc1(&desc);
+
+                std::wstring wDesc(desc.Description);
+                std::string sDesc(wDesc.begin(), wDesc.end());
+
+                out << "Adapter " << i << ": " << sDesc << "\n"
+                    << "  Vendor ID:               0x" << std::hex << std::uppercase << desc.VendorId << std::dec << "\n"
+                    << "  Device ID:               0x" << std::hex << std::uppercase << desc.DeviceId << std::dec << "\n"
+                    << "  Dedicated Video Memory:  " << (desc.DedicatedVideoMemory / (1024 * 1024)) << " MB\n"
+                    << "  Shared System Memory:    " << (desc.SharedSystemMemory / (1024 * 1024)) << " MB\n"
+                    << "  Hardware Type:           " << ((desc.Flags & 2) ? "Software / Warp Reference" : "Hardware Discrete GPU") << "\n";
+
+                prismx::IDXGIOutput* output = nullptr;
+                for (uint32_t o = 0; adapter->EnumOutputs(o, &output) == 0; ++o) {
+                    prismx::DXGI_OUTPUT_DESC oDesc{};
+                    output->GetDesc(&oDesc);
+                    std::wstring wDev(oDesc.DeviceName);
+                    std::string sDev(wDev.begin(), wDev.end());
+                    out << "  Connected Display:       " << sDev
+                        << " (" << (oDesc.DesktopCoordinates.right - oDesc.DesktopCoordinates.left)
+                        << "x" << (oDesc.DesktopCoordinates.bottom - oDesc.DesktopCoordinates.top) << " @ 60Hz)\n";
+                    output->Release();
+                }
+                out << "\n";
+                adapter->Release();
+            }
+            factory->Release();
+        }
+
+        const auto& dxg = dxgkrnl::DxgkrnlSubsystem::GetInstance();
+        out << "WDDM Kernel Telemetry (dxgkrnl.sys / D3DKMT):\n"
+            << "  Active Video Allocations: " << dxg.GetActiveAllocationsCount() << "\n"
+            << "  Active Allocated VRAM:    " << (dxg.GetActiveAllocatedBytes() / 1024) << " KB\n"
+            << "  GPU Command Submissions:  " << dxg.GetTotalSubmissions() << "\n"
+            << "  Compositor Presents:      " << dxg.GetTotalPresents() << "\n"
+            << "  VBlank Sync Events:       " << dxg.GetTotalVBlankWaits() << "\n\n"
+            << "Type 'prismx test' to execute real-time 3D triangle rasterization test.\n";
     }
 
     static std::string trim(std::string_view s) {

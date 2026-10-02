@@ -81,6 +81,8 @@ struct LuidAndAttributes {
     uint32_t attributes{0};
 };
 
+using LUID = Luid;
+
 /**
  * @brief Client identifier (Unique Process ID and Thread ID).
  */

@@ -57,6 +57,9 @@
 #include "micant/arm64.hpp"
 #include "micant/npfs.hpp"
 #include "micant/scm.hpp"
+#include "micant/prismx.hpp"
+#include "micant/prism3d.hpp"
+#include "micant/dxgkrnl.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -4706,6 +4709,242 @@ void Test_Lsass_Winlogon_And_SamDatabase() {
     TEST_ASSERT(winlogon.getState() == winlogon::LogonState::LoggedOff, "State must be LoggedOff after 'logoff'");
 }
 
+// ============================================================================
+// Suite 45: PrismX & Prism3D Graphics Subsystem (DXGI, Direct3D, WDDM D3DKMT)
+// ============================================================================
+void Test_PrismX_And_Prism3D_GraphicsSubsystem() {
+    using namespace micant::prismx;
+    using namespace micant::prism3d;
+    using namespace micant::dxgkrnl;
+
+    // ------------------------------------------------------------------------
+    // 1. DXGI Factory, Adapter, and Display Output Enumeration
+    // ------------------------------------------------------------------------
+    IDXGIFactory1* factory = nullptr;
+    int32_t hrFactory = CreateDXGIFactory1(IID_IDXGIFactory1, reinterpret_cast<void**>(&factory));
+    TEST_ASSERT(hrFactory == 0 && factory != nullptr, "CreateDXGIFactory1 must succeed and return factory");
+
+    IDXGIAdapter1* adapter0 = nullptr;
+    int32_t hrAdapter = factory->EnumAdapters1(0, &adapter0);
+    TEST_ASSERT(hrAdapter == 0 && adapter0 != nullptr, "EnumAdapters1 for Adapter 0 must succeed");
+
+    DXGI_ADAPTER_DESC1 desc0{};
+    adapter0->GetDesc1(&desc0);
+    std::wstring wDesc0(desc0.Description);
+    TEST_ASSERT(wDesc0.find(L"PRISM") != std::wstring::npos, "Adapter 0 description must indicate Prism hardware");
+    TEST_ASSERT(desc0.VendorId == 0x1414, "VendorId must match 0x1414");
+    TEST_ASSERT(desc0.DedicatedVideoMemory == 4ULL * 1024 * 1024 * 1024, "Adapter 0 must have 4GB Dedicated VRAM");
+
+    IDXGIOutput* output0 = nullptr;
+    int32_t hrOutput = adapter0->EnumOutputs(0, &output0);
+    TEST_ASSERT(hrOutput == 0 && output0 != nullptr, "Adapter 0 must have at least one connected display output");
+
+    DXGI_OUTPUT_DESC oDesc0{};
+    output0->GetDesc(&oDesc0);
+    TEST_ASSERT((oDesc0.DesktopCoordinates.right - oDesc0.DesktopCoordinates.left) == 1920, "Output desktop width must be 1920");
+    TEST_ASSERT((oDesc0.DesktopCoordinates.bottom - oDesc0.DesktopCoordinates.top) == 1080, "Output desktop height must be 1080");
+
+    uint32_t numModes = 0;
+    output0->GetDisplayModeList(DXGI_FORMAT_B8G8R8A8_UNORM, 0, &numModes, nullptr);
+    TEST_ASSERT(numModes == 3, "Display mode list must contain 3 standard modes");
+
+    // ------------------------------------------------------------------------
+    // 2. Direct3D 11 Device & Presentation SwapChain Creation
+    // ------------------------------------------------------------------------
+    DXGI_SWAP_CHAIN_DESC scDesc{};
+    scDesc.BufferDesc.Width = 640;
+    scDesc.BufferDesc.Height = 480;
+    scDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    scDesc.BufferCount = 2;
+    scDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+    ID3D11Device* device = nullptr;
+    ID3D11DeviceContext* context = nullptr;
+    IDXGISwapChain* swapChain = nullptr;
+    D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_9_1;
+
+    int32_t hrDev = D3D11CreateDeviceAndSwapChain(
+        adapter0,
+        D3D_DRIVER_TYPE_HARDWARE,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        7,
+        &scDesc,
+        &swapChain,
+        &device,
+        &featureLevel,
+        &context
+    );
+    TEST_ASSERT(hrDev == 0, "D3D11CreateDeviceAndSwapChain must succeed");
+    TEST_ASSERT(device != nullptr && context != nullptr && swapChain != nullptr, "Device, Context, and SwapChain must be valid");
+    TEST_ASSERT(featureLevel == D3D_FEATURE_LEVEL_11_0, "Feature level must default to D3D_FEATURE_LEVEL_11_0");
+
+    // Test back-buffer surface access
+    IDXGISurface* backBuffer = nullptr;
+    int32_t hrBuf = swapChain->GetBuffer(0, IID_IDXGISurface, reinterpret_cast<void**>(&backBuffer));
+    TEST_ASSERT(hrBuf == 0 && backBuffer != nullptr, "GetBuffer(0) must return valid IDXGISurface");
+
+    DXGI_MODE_DESC surfDesc{};
+    backBuffer->GetDesc(&surfDesc);
+    TEST_ASSERT(surfDesc.Width == 640 && surfDesc.Height == 480, "Surface dimensions must match 640x480");
+
+    // ------------------------------------------------------------------------
+    // 3. Render Target View, Viewport, and Clear Operations
+    // ------------------------------------------------------------------------
+    ID3D11RenderTargetView* rtv = nullptr;
+    int32_t hrRtv = device->CreateRenderTargetView(reinterpret_cast<ID3D11Resource*>(backBuffer), nullptr, &rtv);
+    TEST_ASSERT(hrRtv == 0 && rtv != nullptr, "CreateRenderTargetView must succeed");
+
+    D3D11_VIEWPORT vp{ 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f };
+    context->RSSetViewports(1, &vp);
+    context->OMSetRenderTargets(1, &rtv, nullptr);
+
+    // Clear render target to solid dark blue: R=0.1, G=0.2, B=0.8, A=1.0
+    const float clearColor[4] = { 0.1f, 0.2f, 0.8f, 1.0f };
+    context->ClearRenderTargetView(rtv, clearColor);
+
+    auto* surfImpl = static_cast<PrismXSurfaceImpl*>(backBuffer);
+    const uint32_t* rawPixels = reinterpret_cast<const uint32_t*>(surfImpl->GetRawData());
+    TEST_ASSERT(rawPixels[0] != 0, "First pixel of back-buffer must not be 0 after clear");
+
+    // Check BGRA clear values
+    uint8_t expectedB = static_cast<uint8_t>(0.8f * 255.0f);
+    uint8_t expectedG = static_cast<uint8_t>(0.2f * 255.0f);
+    uint8_t expectedR = static_cast<uint8_t>(0.1f * 255.0f);
+    uint8_t expectedA = 255;
+    uint32_t expectedPixel = (expectedA << 24) | (expectedR << 16) | (expectedG << 8) | expectedB;
+    TEST_ASSERT(rawPixels[0] == expectedPixel, "Pixel value after clear must match expected packed 32-bpp BGRA");
+
+    // ------------------------------------------------------------------------
+    // 4. Prism3D Vertex Buffer Creation & Barycentric Triangle Rasterization
+    // ------------------------------------------------------------------------
+    VertexPositionColor triVertices[3] = {
+        {  0.0f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f }, // Top (Pure Red)
+        { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f }, // Bottom-Left (Pure Green)
+        {  0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f, 1.0f }  // Bottom-Right (Pure Blue)
+    };
+
+    D3D11_BUFFER_DESC vbDesc{};
+    vbDesc.ByteWidth = sizeof(triVertices);
+    vbDesc.Usage = D3D11_USAGE_DEFAULT;
+    vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    vbDesc.StructureByteStride = sizeof(VertexPositionColor);
+
+    D3D11_SUBRESOURCE_DATA vbData{};
+    vbData.pSysMem = triVertices;
+
+    ID3D11Buffer* vertexBuffer = nullptr;
+    int32_t hrVb = device->CreateBuffer(&vbDesc, &vbData, &vertexBuffer);
+    TEST_ASSERT(hrVb == 0 && vertexBuffer != nullptr, "CreateBuffer for vertex data must succeed");
+
+    uint32_t stride = sizeof(VertexPositionColor);
+    uint32_t offset = 0;
+    context->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
+    context->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    // Rasterize triangle to back-buffer surface
+    context->Draw(3, 0);
+
+    // The center of the triangle in screen coords is (320, 240)
+    // In NDC: (0, 0) -> Screen: (320, 240).
+    // The center should be shaded with interpolated colors (approx R=0.33, G=0.33, B=0.33)
+    // and definitely different from clearColor!
+    size_t centerPixelIdx = 240ULL * 640 + 320;
+    uint32_t centerPixel = rawPixels[centerPixelIdx];
+    TEST_ASSERT(centerPixel != expectedPixel, "Center pixel inside triangle must have been shaded by rasterizer");
+
+    // Present the frame
+    int32_t hrPresent = swapChain->Present(1, 0);
+    TEST_ASSERT(hrPresent == 0, "Present must succeed");
+
+    uint32_t lastPresentCount = 0;
+    swapChain->GetLastPresentCount(&lastPresentCount);
+    TEST_ASSERT(lastPresentCount == 1, "Swapchain present count must be 1");
+
+    // ------------------------------------------------------------------------
+    // 5. WDDM Kernel Subsystem Syscall Validation (dxgkrnl / D3DKMT)
+    // ------------------------------------------------------------------------
+    D3DKMT_OPENADAPTERFROMHDC openHdc{};
+    openHdc.hDc = reinterpret_cast<void*>(0x2001);
+    NtStatus stOpen = NtGdiDdD3DKMTOpenAdapterFromHdc(&openHdc);
+    TEST_ASSERT(NT_SUCCESS(stOpen) && openHdc.hAdapter != 0, "D3DKMTOpenAdapterFromHdc must return valid adapter handle");
+
+    D3DKMT_CREATEDEVICE createDev{};
+    createDev.hAdapter = openHdc.hAdapter;
+    NtStatus stDev = NtGdiDdD3DKMTCreateDevice(&createDev);
+    TEST_ASSERT(NT_SUCCESS(stDev) && createDev.hDevice != 0, "D3DKMTCreateDevice must return valid device handle");
+
+    D3DKMT_CREATEALLOCATIONINFO allocInfo[2]{};
+    D3DKMT_CREATEALLOCATION createAlloc{};
+    createAlloc.hDevice = createDev.hDevice;
+    createAlloc.NumAllocations = 2;
+    createAlloc.pAllocationInfo = allocInfo;
+    NtStatus stAlloc = NtGdiDdD3DKMTCreateAllocation(&createAlloc);
+    TEST_ASSERT(NT_SUCCESS(stAlloc), "D3DKMTCreateAllocation must succeed");
+    TEST_ASSERT(allocInfo[0].hAllocation != 0 && allocInfo[1].hAllocation != 0, "Allocations must have non-zero handles");
+
+    auto& dxg = DxgkrnlSubsystem::GetInstance();
+    TEST_ASSERT(dxg.GetActiveAllocationsCount() >= 2, "Active allocations count must be at least 2");
+
+    // Test SubmitCommand and Present syscalls
+    D3DKMT_SUBMITCOMMAND submitCmd{};
+    submitCmd.Commands = 0x7FF000000000ULL;
+    submitCmd.CommandLength = 512;
+    NtStatus stSubmit = NtGdiDdD3DKMTSubmitCommand(&submitCmd);
+    TEST_ASSERT(NT_SUCCESS(stSubmit), "D3DKMTSubmitCommand must succeed");
+    TEST_ASSERT(dxg.GetTotalSubmissions() >= 1, "Total GPU command submissions must increment");
+
+    D3DKMT_PRESENT presentKmt{};
+    presentKmt.hDevice = createDev.hDevice;
+    NtStatus stKmtPres = NtGdiDdD3DKMTPresent(&presentKmt);
+    TEST_ASSERT(NT_SUCCESS(stKmtPres), "D3DKMTPresent must succeed");
+    TEST_ASSERT(dxg.GetTotalPresents() >= 1, "Total compositor presents must increment");
+
+    // Cleanup Allocations and Device
+    D3DKMT_HANDLE allocList[2] = { allocInfo[0].hAllocation, allocInfo[1].hAllocation };
+    D3DKMT_DESTROYALLOCATION destroyAlloc{};
+    destroyAlloc.hDevice = createDev.hDevice;
+    destroyAlloc.phAllocationList = allocList;
+    destroyAlloc.AllocationCount = 2;
+    NtStatus stDestrAlloc = NtGdiDdD3DKMTDestroyAllocation(&destroyAlloc);
+    TEST_ASSERT(NT_SUCCESS(stDestrAlloc), "D3DKMTDestroyAllocation must succeed");
+
+    D3DKMT_DESTROYDEVICE destroyDev{};
+    destroyDev.hDevice = createDev.hDevice;
+    NtStatus stDestrDev = NtGdiDdD3DKMTDestroyDevice(&destroyDev);
+    TEST_ASSERT(NT_SUCCESS(stDestrDev), "D3DKMTDestroyDevice must succeed");
+
+    // ------------------------------------------------------------------------
+    // 6. Shell Integration Test ('prismx' and 'prismx test')
+    // ------------------------------------------------------------------------
+    shell::CommandShell testShell;
+    std::ostringstream ssGpu;
+    testShell.execute("prismx", ssGpu);
+    std::string outGpu = ssGpu.str();
+    TEST_ASSERT(outGpu.find("PrismX & Prism3D Graphics Subsystem") != std::string::npos, "prismx command must display header");
+    TEST_ASSERT(outGpu.find("Dedicated Video Memory:  4096 MB") != std::string::npos, "prismx command must display 4096 MB VRAM");
+    TEST_ASSERT(outGpu.find("WDDM Kernel Telemetry") != std::string::npos, "prismx command must display WDDM telemetry");
+
+    std::ostringstream ssTest;
+    testShell.execute("prismx test", ssTest);
+    std::string outTest = ssTest.str();
+    TEST_ASSERT(outTest.find("3D Barycentric Shaded Triangle rendered successfully") != std::string::npos, "prismx test must render 3D triangle");
+    TEST_ASSERT(outTest.find("Swapchain: 800x600") != std::string::npos, "prismx test must output swapchain size");
+
+    // Clean up COM resources
+    vertexBuffer->Release();
+    rtv->Release();
+    backBuffer->Release();
+    swapChain->Release();
+    context->Release();
+    device->Release();
+    output0->Release();
+    adapter0->Release();
+    factory->Release();
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -4755,6 +4994,7 @@ int main() {
     RUN_TEST(Test_NtfsFileSystemAndMasterFileTable);
     RUN_TEST(Test_ServiceControlManager_And_SvcHost);
     RUN_TEST(Test_Lsass_Winlogon_And_SamDatabase);
+    RUN_TEST(Test_PrismX_And_Prism3D_GraphicsSubsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
