@@ -613,18 +613,41 @@ public:
     int32_t GetPrivateData(const IID&, uint32_t*, void*) override { return 0; }
     int32_t GetParent(const IID&, void**) override { return 0; }
 
+    using WindowPresenterFn = void(*)(void* hwnd, const uint8_t* pData, uint32_t width, uint32_t height, uint32_t pitch);
+
+    static WindowPresenterFn& GetGlobalWindowPresenter() noexcept {
+        static WindowPresenterFn s_presenter = nullptr;
+        return s_presenter;
+    }
+
+    static void SetGlobalWindowPresenter(WindowPresenterFn fn) noexcept {
+        GetGlobalWindowPresenter() = fn;
+    }
+
     int32_t Present(uint32_t /*SyncInterval*/, uint32_t /*Flags*/) override {
         if (m_backBuffers.empty()) return -1;
 
         auto* currentBuffer = m_backBuffers[m_currentBackBuffer];
         m_presentCount++;
 
-        // Dispatch frame to presenter callback (e.g. UEFI GOP blitter or Conhost)
+        // 1. Dispatch frame to presenter callback (e.g. UEFI GOP blitter or Conhost)
         if (m_presentCallback && currentBuffer) {
             m_presentCallback(currentBuffer->GetRawData(),
                               currentBuffer->GetWidth(),
                               currentBuffer->GetHeight(),
                               currentBuffer->GetPitch());
+        }
+
+        // 2. Dispatch to registered Window Manager if OutputWindow (HWND) is bound
+        if (m_desc.OutputWindow && currentBuffer) {
+            auto wp = GetGlobalWindowPresenter();
+            if (wp) {
+                wp(m_desc.OutputWindow,
+                   currentBuffer->GetRawData(),
+                   currentBuffer->GetWidth(),
+                   currentBuffer->GetHeight(),
+                   currentBuffer->GetPitch());
+            }
         }
 
         // Advance swapchain buffer index for flip models

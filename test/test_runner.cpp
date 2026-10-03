@@ -73,6 +73,7 @@
 #include "micant/polarisdiag.hpp"
 #include "micant/cipherksp.hpp"
 #include "micant/janusldr.hpp"
+#include "micant/dinput.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -6854,6 +6855,246 @@ void Test_JanusLDR_DelayLoadThunks_And_SxSManifest() {
     }
 }
 
+void Test_User32_WindowManager_SwapchainPresentation_And_DirectInput() {
+    using namespace micant::user32;
+    using namespace micant::dinput;
+    using namespace micant::prismx;
+
+    // 0. Initialize User32 and DirectInput exports
+    InitializeUser32SubsystemExports();
+    InitializeDirectInputSubsystemExports();
+
+    // Tracking state for custom WindowProc
+    static std::vector<uint32_t> receivedMessages;
+    static uint32_t lastChar = 0;
+    static uint32_t lastKey = 0;
+    receivedMessages.clear();
+    lastChar = 0;
+    lastKey = 0;
+
+    auto testWndProc = [](win32::HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) -> LRESULT {
+        receivedMessages.push_back(uMsg);
+        if (uMsg == WM_CHAR) {
+            lastChar = static_cast<uint32_t>(wParam);
+        } else if (uMsg == WM_KEYDOWN) {
+            lastKey = static_cast<uint32_t>(wParam);
+        }
+        return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    };
+
+    // 1. Register Window Class
+    WNDCLASSEXW wcex{};
+    wcex.cbSize = sizeof(WNDCLASSEXW);
+    wcex.lpfnWndProc = testWndProc;
+    wcex.lpszClassName = L"MicaNT_GameEngineWindow";
+    uint16_t atom = RegisterClassExW(&wcex);
+    TEST_ASSERT(atom != 0, "RegisterClassExW must return valid non-zero class atom");
+
+    WNDCLASSEXW queryWcex{};
+    bool clsFound = GetClassInfoExW(nullptr, L"MicaNT_GameEngineWindow", &queryWcex);
+    TEST_ASSERT(clsFound && queryWcex.lpfnWndProc == testWndProc, "GetClassInfoExW must retrieve registered window class");
+
+    // 2. Window Creation and Hierarchy
+    win32::HWND hwnd = CreateWindowExW(
+        WS_EX_APPWINDOW,
+        L"MicaNT_GameEngineWindow",
+        L"MicaNT Sovereign 3D Game Engine",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        50, 50, 640, 480,
+        nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hwnd != nullptr, "CreateWindowExW must return valid HWND");
+    TEST_ASSERT(IsWindow(hwnd), "IsWindow must verify allocated HWND");
+    TEST_ASSERT(IsWindowVisible(hwnd), "Window created with WS_VISIBLE must report visible");
+
+    // Verify WM_CREATE was dispatched
+    TEST_ASSERT(std::find(receivedMessages.begin(), receivedMessages.end(), WM_CREATE) != receivedMessages.end(), "WM_CREATE must be dispatched on window creation");
+
+    // Test Geometry & Client Rect
+    RECT clientRc{};
+    GetClientRect(hwnd, &clientRc);
+    TEST_ASSERT((clientRc.right - clientRc.left) == 640 && (clientRc.bottom - clientRc.top) == 480, "GetClientRect must reflect 640x480 client surface");
+
+    RECT windowRc{};
+    GetWindowRect(hwnd, &windowRc);
+    TEST_ASSERT(windowRc.left == 50 && windowRc.top == 50 && windowRc.right == 690 && windowRc.bottom == 530, "GetWindowRect must reflect window coordinates");
+
+    // Test Window Long Pointers (GWLP_USERDATA)
+    uintptr_t magicUserData = 0xCAFEBABE1337BEEFULL;
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, magicUserData);
+    TEST_ASSERT(GetWindowLongPtrW(hwnd, GWLP_USERDATA) == magicUserData, "GWLP_USERDATA must persist and round-trip through GetWindowLongPtrW");
+
+    // Drain initial window initialization messages (WM_SIZE, WM_PAINT)
+    MSG initMsg{};
+    while (PeekMessageW(&initMsg, hwnd, 0, 0, PM_REMOVE)) {
+        DispatchMessageW(&initMsg);
+    }
+    TEST_ASSERT(std::find(receivedMessages.begin(), receivedMessages.end(), WM_SIZE) != receivedMessages.end(), "WM_SIZE must be dispatched on window layout");
+    TEST_ASSERT(std::find(receivedMessages.begin(), receivedMessages.end(), WM_PAINT) != receivedMessages.end(), "WM_PAINT must be dispatched on initial presentation");
+
+    // 3. Message Queue & Message Pump (Peek, Translate, Dispatch)
+    PostMessageW(hwnd, WM_KEYDOWN, 0x41 /* 'A' */, 0);
+
+    MSG msg{};
+    bool hasMsg = PeekMessageW(&msg, hwnd, 0, 0, PM_REMOVE);
+    TEST_ASSERT(hasMsg && msg.message == WM_KEYDOWN && msg.wParam == 0x41, "PeekMessageW must pull posted WM_KEYDOWN from queue");
+
+    // TranslateMessage must synthesize WM_CHAR for printable character
+    bool translated = TranslateMessage(&msg);
+    TEST_ASSERT(translated, "TranslateMessage must synthesize WM_CHAR for key 0x41 ('A')");
+
+    // Dispatch WM_KEYDOWN
+    DispatchMessageW(&msg);
+    TEST_ASSERT(lastKey == 0x41, "DispatchMessageW must execute window procedure for WM_KEYDOWN");
+
+    // Peek and dispatch the translated WM_CHAR
+    bool hasCharMsg = PeekMessageW(&msg, hwnd, 0, 0, PM_REMOVE);
+    TEST_ASSERT(hasCharMsg && msg.message == WM_CHAR && msg.wParam == 0x41, "PeekMessageW must retrieve synthesized WM_CHAR");
+    DispatchMessageW(&msg);
+    TEST_ASSERT(lastChar == 0x41, "DispatchMessageW must execute window procedure for WM_CHAR");
+
+    // Test PostQuitMessage and GetMessage termination
+    PostQuitMessage(42);
+    bool getRes = GetMessageW(&msg, nullptr, 0, 0);
+    TEST_ASSERT(!getRes && msg.message == WM_QUIT && msg.wParam == 42, "GetMessageW must return FALSE upon retrieving WM_QUIT");
+
+    // 4. DXGI SwapChain Backbuffer Presentation Bridge to HWND
+    {
+        DXGI_SWAP_CHAIN_DESC scDesc{};
+        scDesc.BufferDesc.Width = 640;
+        scDesc.BufferDesc.Height = 480;
+        scDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        scDesc.BufferCount = 2;
+        scDesc.OutputWindow = hwnd;
+        scDesc.Windowed = 1;
+        scDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+        PrismXSwapChainImpl swapChain(scDesc);
+
+        // Fetch backbuffer 0
+        void* pBuf = nullptr;
+        int32_t hr = swapChain.GetBuffer(0, IID_IDXGISurface, &pBuf);
+        TEST_ASSERT(hr == 0 && pBuf != nullptr, "swapChain.GetBuffer must retrieve surface pointer");
+
+        auto* surface = static_cast<PrismXSurfaceImpl*>(pBuf);
+
+        // Write distinct pixel pattern to swapchain backbuffer
+        uint32_t* pPixels = reinterpret_cast<uint32_t*>(surface->GetRawData());
+        uint32_t testColor = 0xFF55AAEE; // ABGR test color
+        std::fill(pPixels, pPixels + (640 * 480), testColor);
+
+        // Present frame
+        int32_t presentHr = swapChain.Present(1, 0);
+        TEST_ASSERT(presentHr == 0, "swapChain.Present must return 0 (S_OK)");
+
+        // Verify window's surface pixels now contain the presented backbuffer
+        uint32_t surfW = 0, surfH = 0;
+        const uint32_t* windowPixels = WindowManager::get().getWindowPixelBuffer(hwnd, &surfW, &surfH);
+        TEST_ASSERT(windowPixels != nullptr && surfW == 640 && surfH == 480, "Window surface buffer must match backbuffer dimensions");
+        TEST_ASSERT(windowPixels[0] == testColor && windowPixels[640 * 240 + 320] == testColor, "Window surface must contain exact presented backbuffer pixel data");
+
+        surface->Release();
+    }
+
+    // 5. Win32 Raw Input API
+    {
+        RAWINPUTDEVICE rid{};
+        rid.usUsagePage = 0x01; // Generic Desktop Controls
+        rid.usUsage = 0x02;     // Mouse
+        rid.dwFlags = RIDEV_INPUTSINK;
+        rid.hwndTarget = hwnd;
+
+        bool regOk = RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
+        TEST_ASSERT(regOk, "RegisterRawInputDevices must succeed");
+
+        // Inject raw mouse motion & left button down
+        HRAWINPUT hRaw = WindowManager::get().injectRawMouse(hwnd, 25, -12, RI_MOUSE_LEFT_BUTTON_DOWN);
+        TEST_ASSERT(hRaw != nullptr, "injectRawMouse must generate non-null HRAWINPUT");
+
+        // Peek WM_INPUT message
+        MSG rawMsg{};
+        bool gotRaw = PeekMessageW(&rawMsg, hwnd, WM_INPUT, WM_INPUT, PM_REMOVE);
+        TEST_ASSERT(gotRaw && rawMsg.message == WM_INPUT, "PeekMessageW must retrieve WM_INPUT");
+
+        // Query raw input header
+        RAWINPUTHEADER hdr{};
+        UINT hdrSize = sizeof(RAWINPUTHEADER);
+        UINT getHdr = GetRawInputData(reinterpret_cast<HRAWINPUT>(rawMsg.lParam), RID_HEADER, &hdr, &hdrSize, sizeof(RAWINPUTHEADER));
+        TEST_ASSERT(getHdr == sizeof(RAWINPUTHEADER) && hdr.dwType == RIM_TYPEMOUSE, "GetRawInputData RID_HEADER must return RIM_TYPEMOUSE");
+
+        // Query raw input full packet
+        RAWINPUT fullInput{};
+        UINT fullSize = sizeof(RAWINPUT);
+        UINT getFull = GetRawInputData(reinterpret_cast<HRAWINPUT>(rawMsg.lParam), RID_INPUT, &fullInput, &fullSize, sizeof(RAWINPUTHEADER));
+        TEST_ASSERT(getFull == sizeof(RAWINPUT), "GetRawInputData RID_INPUT must return full RAWINPUT size");
+        TEST_ASSERT(fullInput.data.mouse.lLastX == 25 && fullInput.data.mouse.lLastY == -12, "Raw mouse delta coordinates must match injected motion");
+        TEST_ASSERT((fullInput.data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN) != 0, "Raw mouse button down flag must be set");
+    }
+
+    // 6. DirectInput 8 Subsystem (IDirectInput8W & IDirectInputDevice8W)
+    {
+        void* pDIObj = nullptr;
+        int32_t diHr = DirectInput8Create(nullptr, DIRECTINPUT_VERSION, IID_IDirectInput8W, &pDIObj, nullptr);
+        TEST_ASSERT(diHr == DI_OK && pDIObj != nullptr, "DirectInput8Create must return DI_OK with valid interface");
+
+        auto* pDI = static_cast<IDirectInput8W*>(pDIObj);
+
+        // Create DirectInput Mouse Device
+        IDirectInputDevice8W* pMouseDev = nullptr;
+        int32_t devHr = pDI->CreateDevice(GUID_SysMouse, &pMouseDev, nullptr);
+        TEST_ASSERT(devHr == DI_OK && pMouseDev != nullptr, "CreateDevice for GUID_SysMouse must succeed");
+
+        DIDATAFORMAT mouseDf{};
+        mouseDf.dwDataSize = sizeof(DIMOUSESTATE);
+        TEST_ASSERT(pMouseDev->SetDataFormat(&mouseDf) == DI_OK, "SetDataFormat on mouse device must succeed");
+        TEST_ASSERT(pMouseDev->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE) == DI_OK, "SetCooperativeLevel must succeed");
+        TEST_ASSERT(pMouseDev->Acquire() == DI_OK, "Acquire on mouse device must succeed");
+
+        // Inject mouse delta & button 0 (left click)
+        auto* concreteMouse = static_cast<DirectInputMouseDevice*>(pMouseDev);
+        concreteMouse->injectMotion(14, -7, 120);
+        concreteMouse->injectButton(0, true);
+
+        DIMOUSESTATE mouseState{};
+        int32_t stateHr = pMouseDev->GetDeviceState(sizeof(DIMOUSESTATE), &mouseState);
+        TEST_ASSERT(stateHr == DI_OK, "GetDeviceState for mouse must succeed");
+        TEST_ASSERT(mouseState.lX == 14 && mouseState.lY == -7 && mouseState.lZ == 120, "DirectInput mouse deltas must match injected input");
+        TEST_ASSERT((mouseState.rgbButtons[0] & 0x80) != 0, "DirectInput mouse button 0 must report down");
+
+        // Second poll should clear relative deltas
+        DIMOUSESTATE secondState{};
+        pMouseDev->GetDeviceState(sizeof(DIMOUSESTATE), &secondState);
+        TEST_ASSERT(secondState.lX == 0 && secondState.lY == 0 && secondState.lZ == 0, "DirectInput mouse deltas must reset after polling");
+
+        pMouseDev->Unacquire();
+        pMouseDev->Release();
+
+        // Create DirectInput Keyboard Device
+        IDirectInputDevice8W* pKbdDev = nullptr;
+        int32_t kbdHr = pDI->CreateDevice(GUID_SysKeyboard, &pKbdDev, nullptr);
+        TEST_ASSERT(kbdHr == DI_OK && pKbdDev != nullptr, "CreateDevice for GUID_SysKeyboard must succeed");
+        TEST_ASSERT(pKbdDev->Acquire() == DI_OK, "Acquire on keyboard device must succeed");
+
+        auto* concreteKbd = static_cast<DirectInputKeyboardDevice*>(pKbdDev);
+        concreteKbd->injectKey(0x39 /* DIK_SPACE */, true);
+
+        std::array<uint8_t, 256> kbdState{};
+        int32_t kbdStateHr = pKbdDev->GetDeviceState(256, kbdState.data());
+        TEST_ASSERT(kbdStateHr == DI_OK, "GetDeviceState for keyboard must succeed");
+        TEST_ASSERT((kbdState[0x39] & 0x80) != 0, "DirectInput keyboard state for DIK_SPACE must report pressed");
+
+        pKbdDev->Unacquire();
+        pKbdDev->Release();
+
+        pDI->Release();
+    }
+
+    // Destroy Window and clean up
+    DestroyWindow(hwnd);
+    TEST_ASSERT(!IsWindow(hwnd), "DestroyWindow must remove window from active map");
+    TEST_ASSERT(std::find(receivedMessages.begin(), receivedMessages.end(), WM_DESTROY) != receivedMessages.end(), "WM_DESTROY must be received upon destruction");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -6914,6 +7155,7 @@ int main() {
     RUN_TEST(Test_PolarisDiag_CrashDump_And_MinidumpWriter);
     RUN_TEST(Test_CipherKSP_CryptographicServices_And_AES);
     RUN_TEST(Test_JanusLDR_DelayLoadThunks_And_SxSManifest);
+    RUN_TEST(Test_User32_WindowManager_SwapchainPresentation_And_DirectInput);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
