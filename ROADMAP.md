@@ -106,7 +106,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 49: Windows Volume Shadow Copy Service (VSS)         [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 50: Windows Error Reporting (WER) Subsystem          [IN PROGRESS]    │
+│ Phase 50: Windows Error Reporting (WER) Subsystem          [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 51: Windows Desktop Window Manager (DWM) Composition [IN PROGRESS]    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1134,21 +1136,48 @@
 
 ---
 
-### Phase 50: Windows Error Reporting (WER) & Crash Diagnostics Subsystem (`wer.dll`, `faultrep.dll` & `werfault.exe`) (IN PROGRESS)
-- [ ] **WER APIs & Architecture (`include/micant/wer.hpp`)**:
-  - `WerReportCreate`, `WerReportSetParameter`, `WerReportAddFile`, `WerReportAddDump`, `WerReportSubmit`, `WerReportCloseHandle`.
-  - `WerRegisterFile`, `WerUnregisterFile`, `WerRegisterMemoryBlock`, `WerUnregisterMemoryBlock`, `WerRegisterRuntimeExceptionModule`.
-  - `ReportFault` in `faultrep.dll` legacy crash reporter.
-- [ ] **Dump Collection & PolarisDiag Integration**:
-  - Integration with `polarisdiag.hpp` minidump generator (`MiniDumpWithDataSegs`, `MiniDumpWithHandleData`).
-  - Report manifest generation (`Report.wer` XML / key-value format), crash bucket IDs (`APPCRASH`, `KERNEL_SECURITY_CHECK_FAILURE`).
+### Phase 50: Windows Error Reporting (WER) & Crash Diagnostics Subsystem (`wer.dll`, `faultrep.dll` & `werfault.exe`) (100% Completed)
+- [x] **WER APIs & Architecture (`include/micant/wer.hpp`)**:
+  - `WerReportCreate`, `WerReportSetParameter` (P0 through P9), `WerReportAddFile`, `WerReportAddDump`, `WerReportSetUIOption`, `WerReportSubmit`, `WerReportCloseHandle`.
+  - Process diagnostics registration: `WerRegisterFile`, `WerUnregisterFile`, `WerRegisterMemoryBlock`, `WerUnregisterMemoryBlock`, `WerRegisterRuntimeExceptionModule`, `WerUnregisterRuntimeExceptionModule`, `WerSetFlags`, `WerGetFlags`.
+  - Exclusion list management: `WerAddExcludedApplication`, `WerRemoveExcludedApplication`, `WerIsApplicationExcluded`.
+  - Legacy crash reporter bridge: `ReportFault`, `AddERExcludedApplicationA`, `AddERExcludedApplicationW` in `faultrep.dll`.
+- [x] **Dump Collection & PolarisDiag Integration**:
+  - Direct integration with `polarisdiag.hpp` minidump generator creating 100% WinDbg-compliant 64-bit minidumps with 6 streams (`SystemInfo`, `Exception`, `ModuleList`, `ThreadList`, `MiscInfo`, `CommentStreamA`).
+  - Report manifest generation (`Report.wer` key-value format and XML format) with crash bucket signatures (`APPCRASH`, `LiveKernelEvent`).
+  - Sovereign zero-telemetry enforcement: all submissions queued or archived locally in `C:\ProgramData\Microsoft\Windows\WER\...` with zero cloud network leakage.
+- [x] **Dynamic Loader & Versioning**:
+  - Registered exports for `wer.dll` (18 functions) and `faultrep.dll` (3 functions) in `ldr::DynamicLoader`.
+  - Module version metadata registered in `version.hpp` for `wer.dll`, `faultrep.dll`, and `werfault.exe` (`10.0.22621.1`).
+- [x] **Interactive CLI Utility (`include/micant/shell.hpp` - `werfault`)**:
+  - `werfault /list`: Lists active, queued, and archived crash reports.
+  - `werfault /report <index|guid>`: Detailed inspection of report metadata, bucket signatures, attached files, and minidump streams.
+  - `werfault /clear`: Clears queued and archived reports.
+  - `werfault /trigger <appName>`: Triggers test APPCRASH report generation.
+  - `werfault /exclude <list|add|remove> [appName]`: Manages excluded applications.
+  - `werfault test`: Runs subsystem self-test.
+- [x] **Unit Test Suite 77 (`Test_WindowsWER_ErrorReporting_Subsystem`)**:
+  - 13 comprehensive verification stages covering dynamic exports, version database, report creation, parameter assignment, file attachments, PolarisDiag minidump generation/parsing, UI options, submission queueing, manifest formatting, process file/memory registration, runtime modules, application exclusion suppression, legacy bridge, and interactive CLI integration.
+  - All 77 unit test suites passing with 100% success rate (77 Passed, 0 Failed).
+
+---
+
+### Phase 51: Windows Desktop Window Manager (DWM) & Desktop Composition Subsystem (`dwmapi.dll` & `dwm.exe`) (IN PROGRESS)
+- [ ] **DWM APIs & Composition Architecture (`include/micant/dwmapi.hpp`)**:
+  - `DwmIsCompositionEnabled`, `DwmEnableComposition`, `DwmExtendFrameIntoClientArea`, `DwmEnableBlurBehindWindow`.
+  - `DwmSetWindowAttribute`, `DwmGetWindowAttribute` (supporting `DWMWA_NCRENDERING_ENABLED`, `DWMWA_CAPTION_BUTTON_BOUNDS`, `DWMWA_EXTENDED_FRAME_BOUNDS`, `DWMWA_USE_IMMERSIVE_DARK_MODE`, `DWMWA_WINDOW_CORNER_PREFERENCE`, `DWMWA_MICA_EFFECT`, `DWMWA_SYSTEMBACKDROP_TYPE`).
+  - `DwmGetColorizationColor`, `DwmFlush`, `DwmGetCompositionTimingInfo`.
+  - `DwmRegisterThumbnail`, `DwmUnregisterThumbnail`, `DwmUpdateThumbnailProperties`, `DwmQueryThumbnailSourceSize`.
+- [ ] **Desktop Composition & Glass / Mica Effects**:
+  - Integration with `user32.hpp`, `prismx.hpp`, and framebuffer presentation pipeline.
+  - Immersive Dark Mode, Mica material and Acrylic backdrop rendering models.
 - [ ] **Dynamic Loader & Versioning**:
-  - DLL exports for `wer.dll` and `faultrep.dll`.
+  - DLL exports for `dwmapi.dll`.
   - Module version metadata registered in `version.hpp`.
-- [ ] **Interactive CLI (`werfault.exe`)**:
-  - `werfault /report <path>`, `werfault /list`, `werfault /clear`, `werfault test`.
-- [ ] **Unit Test Suite 77 (`Test_WindowsWER_ErrorReporting_Subsystem`)**:
-  - End-to-end testing of report creation, dump attachment, submission, exclusion lists, and CLI parity.
+- [ ] **Interactive CLI Utility (`dwm.exe`)**:
+  - `dwm status`, `dwm enable`, `dwm disable`, `dwm attributes`, `dwm test`.
+- [ ] **Unit Test Suite 78 (`Test_WindowsDWM_DesktopWindowManager_Subsystem`)**:
+  - End-to-end testing of DWM composition state, window attributes, margins, timing info, and CLI commands.
 
 
 

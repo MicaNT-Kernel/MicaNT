@@ -66,6 +66,7 @@
 #include "taskschd.hpp"
 #include "bits.hpp"
 #include "vss.hpp"
+#include "wer.hpp"
 
 namespace micant::shell {
 
@@ -209,6 +210,7 @@ public:
             if (cmd == "schtasks" || cmd == "taskschd") { cmdSchtasks(tokens, out); return 0; }
             if (cmd == "bitsadmin" || cmd == "bits") { cmdBitsAdmin(tokens, out); return 0; }
             if (cmd == "vssadmin" || cmd == "vss") { cmdVssAdmin(tokens, out); return 0; }
+            if (cmd == "werfault" || cmd == "wer") { cmdWerFault(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -5733,6 +5735,272 @@ private:
             << "  vssadmin delete shadows [/shadow=<guid> | /all] [/quiet]\n"
             << "  vssadmin resize shadowstorage /for=<volume> /on=<volume> /maxsize=<size>\n"
             << "  vssadmin test\n";
+    }
+
+    void cmdWerFault(const std::vector<std::string>& tokens, std::ostream& out) {
+        wer::InitializeWERSubsystemExports();
+        auto& werCoord = wer::WerCoordinator::Instance();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            // 1. werfault test
+            if (sub == "test") {
+                out << "[WER] Executing Windows Error Reporting Subsystem Self-Test...\n";
+                
+                wer::WER_REPORT_INFORMATION info{};
+                info.dwSize = sizeof(info);
+                wcscpy_s(info.wzApplicationName, L"test_app.exe");
+                wcscpy_s(info.wzFriendlyEventName, L"Test Crash Verification");
+                wcscpy_s(info.wzDescription, L"Self-test synthesized crash event");
+
+                wer::HREPORT hReport = nullptr;
+                ole32::HRESULT hr = wer::WerReportCreate(L"APPCRASH", wer::WerReportCritical, &info, &hReport);
+                out << "  WerReportCreate:            " << (hr == ole32::S_OK && hReport ? "PASS" : "FAIL") << "\n";
+
+                hr = wer::WerReportSetParameter(hReport, wer::WER_P0, L"AppName", L"test_app.exe");
+                out << "  WerReportSetParameter (P0): " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                hr = wer::WerReportSetParameter(hReport, wer::WER_P6, L"ExceptionCode", L"c0000005");
+                out << "  WerReportSetParameter (P6): " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                hr = wer::WerReportAddFile(hReport, L"C:\\test_diagnostic.log", wer::WerFileTypeUserDocument, 0);
+                out << "  WerReportAddFile:           " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                hr = wer::WerReportAddDump(hReport, nullptr, nullptr, wer::WerDumpTypeMiniDump, nullptr, nullptr, 0);
+                out << "  WerReportAddDump:           " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                wer::WER_SUBMIT_RESULT subResult = wer::WerReportFailed;
+                hr = wer::WerReportSubmit(hReport, wer::WerConsentApproved, wer::WER_SUBMIT_QUEUE, &subResult);
+                bool subOk = (hr == ole32::S_OK && subResult == wer::WerReportQueued);
+                out << "  WerReportSubmit (Queued):   " << (subOk ? "PASS (Zero-Telemetry Sovereign)" : "FAIL") << "\n";
+
+                hr = wer::WerReportCloseHandle(hReport);
+                out << "  WerReportCloseHandle:       " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                // Exclusion test
+                hr = wer::WerAddExcludedApplication(L"test_excluded.exe", 1);
+                int32_t isEx = 0;
+                wer::WerIsApplicationExcluded(L"test_excluded.exe", 1, &isEx);
+                out << "  WerAddExcludedApplication:  " << (hr == ole32::S_OK && isEx == 1 ? "PASS" : "FAIL") << "\n";
+                wer::WerRemoveExcludedApplication(L"test_excluded.exe", 1);
+
+                // Memory registration test
+                uint8_t dummyMem[128]{0x55, 0xAA};
+                hr = wer::WerRegisterMemoryBlock(dummyMem, sizeof(dummyMem));
+                out << "  WerRegisterMemoryBlock:     " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+                wer::WerUnregisterMemoryBlock(dummyMem);
+
+                // Legacy bridge test
+                wer::EFaultRepRet frRet = wer::ReportFault(nullptr, 0);
+                out << "  faultrep.dll!ReportFault:   " << (frRet == wer::EFaultRepRet::frok ? "PASS" : "FAIL") << "\n";
+
+                out << "[WER] Windows Error Reporting Subsystem Self-Test Finished.\n";
+                return;
+            }
+
+            // 2. werfault /list
+            if (sub == "/list" || sub == "-list" || sub == "list") {
+                auto reports = werCoord.GetAllReports();
+                out << "\nWindows Error Reporting (WER) Sovereign Crash Archive\n";
+                out << "Total Reports: " << reports.size() << " | Sovereign Zero-Telemetry Enforced\n\n";
+                out << std::left << std::setw(6) << "Index"
+                    << std::setw(40) << "Report ID"
+                    << std::setw(18) << "Event Type"
+                    << std::setw(18) << "Application"
+                    << "Status\n";
+                out << std::string(90, '-') << "\n";
+
+                for (size_t i = 0; i < reports.size(); ++i) {
+                    const auto& r = reports[i];
+                    std::string idStr = wer::FormatGuid(r->m_reportId);
+                    std::string evType(r->m_eventType.begin(), r->m_eventType.end());
+                    std::wstring wApp = r->m_info.wzApplicationName;
+                    if (wApp.empty()) {
+                        auto pit = r->m_parameters.find(wer::WER_P0);
+                        if (pit != r->m_parameters.end()) wApp = pit->second.second;
+                    }
+                    std::string appStr(wApp.begin(), wApp.end());
+                    std::string statStr = r->m_submitted ? "Archived/Queued" : "Active";
+
+                    out << std::left << std::setw(6) << i
+                        << std::setw(40) << idStr
+                        << std::setw(18) << evType
+                        << std::setw(18) << (appStr.empty() ? "(unknown)" : appStr)
+                        << statStr << "\n";
+                }
+                out << "\n";
+                return;
+            }
+
+            // 3. werfault /report <index|guid>
+            if ((sub == "/report" || sub == "-report" || sub == "report") && tokens.size() > 2) {
+                std::string target = tokens[2];
+                std::shared_ptr<wer::WerReportInternal> foundReport = nullptr;
+                auto reports = werCoord.GetAllReports();
+
+                if (target.find('{') != std::string::npos || target.find('-') != std::string::npos) {
+                    micant::GUID g{};
+                    if (wer::ParseGuid(target, g)) {
+                        foundReport = werCoord.FindReportByGuid(g);
+                    }
+                } else {
+                    try {
+                        size_t idx = std::stoul(target);
+                        if (idx < reports.size()) {
+                            foundReport = reports[idx];
+                        }
+                    } catch (...) {}
+                }
+
+                if (!foundReport) {
+                    out << "ERROR: Report '" << target << "' not found in WER archive.\n";
+                    return;
+                }
+
+                out << "\n========================================================================\n";
+                out << "                     WER Crash Report Inspection                        \n";
+                out << "========================================================================\n\n";
+                out << "Report ID:       " << wer::FormatGuid(foundReport->m_reportId) << "\n";
+                std::string evType(foundReport->m_eventType.begin(), foundReport->m_eventType.end());
+                out << "Event Type:      " << evType << "\n";
+                std::wstring wApp = foundReport->m_info.wzApplicationName;
+                if (wApp.empty()) {
+                    auto pit = foundReport->m_parameters.find(wer::WER_P0);
+                    if (pit != foundReport->m_parameters.end()) wApp = pit->second.second;
+                }
+                std::string appStr(wApp.begin(), wApp.end());
+                out << "Application:     " << appStr << "\n";
+                std::wstring wDesc = foundReport->m_info.wzDescription;
+                std::string descStr(wDesc.begin(), wDesc.end());
+                out << "Description:     " << descStr << "\n";
+                out << "Telemetry:       SOVEREIGN (Zero Telemetry Enforced)\n\n";
+
+                out << "Parameters (Crash Bucket Signatures):\n";
+                for (const auto& [id, param] : foundReport->m_parameters) {
+                    std::string n(param.first.begin(), param.first.end());
+                    std::string v(param.second.begin(), param.second.end());
+                    out << "  P" << id << " [" << n << "]: " << v << "\n";
+                }
+
+                out << "\nAttached Diagnostics Files (" << foundReport->m_files.size() << "):\n";
+                for (const auto& f : foundReport->m_files) {
+                    std::string p(f.path.begin(), f.path.end());
+                    out << "  - " << p << " (Type: " << static_cast<uint32_t>(f.type) << ")\n";
+                }
+
+                if (!foundReport->m_dumps.empty()) {
+                    out << "\nPolarisDiag Minidump Analysis:\n";
+                    for (size_t d = 0; d < foundReport->m_dumps.size(); ++d) {
+                        const auto& dump = foundReport->m_dumps[d];
+                        out << "  Dump #" << d << " (Size: " << dump.dumpData.size() << " bytes)\n";
+                        out << "    Faulting Module:  " << dump.faultingModule << "\n";
+                        out << "    Exception Code:   0x" << std::hex << dump.exceptionCode << std::dec << "\n";
+                        out << "    Exception Addr:   0x" << std::hex << dump.exceptionAddress << std::dec << "\n";
+                        
+                        auto summary = polaris::PolarisDiagnosticEngine::get().parseMinidump(dump.dumpData);
+                        if (summary.isValid) {
+                            out << "    WinDbg Streams:   " << summary.streamCount << " (SystemInfo, Exception, Modules, Threads, Misc, SovereignComment)\n";
+                            out << "    Minidump Version: 0x" << std::hex << summary.version << std::dec << " (WinDbg Parity Validated)\n";
+                            out << "    Loaded Modules:   " << summary.moduleNames.size() << " images\n";
+                        }
+                    }
+                }
+                out << "\n";
+                return;
+            }
+
+            // 4. werfault /clear
+            if (sub == "/clear" || sub == "-clear" || sub == "clear") {
+                werCoord.ClearReports();
+                out << "Successfully cleared all queued and archived error reports.\n";
+                return;
+            }
+
+            // 5. werfault /trigger <appName>
+            if ((sub == "/trigger" || sub == "-trigger" || sub == "trigger") && tokens.size() > 2) {
+                std::string appName = tokens[2];
+                std::wstring wApp(appName.begin(), appName.end());
+
+                wer::WER_REPORT_INFORMATION info{};
+                info.dwSize = sizeof(info);
+                wcscpy_s(info.wzApplicationName, wApp.c_str());
+                wcscpy_s(info.wzFriendlyEventName, L"Simulated Application Crash");
+                wcscpy_s(info.wzDescription, L"Manually triggered crash diagnostic report");
+
+                wer::HREPORT hReport = nullptr;
+                ole32::HRESULT hr = wer::WerReportCreate(L"APPCRASH", wer::WerReportCritical, &info, &hReport);
+                if (hr != ole32::S_OK || !hReport) {
+                    out << "ERROR: Failed to create WER report.\n";
+                    return;
+                }
+
+                wer::WerReportSetParameter(hReport, wer::WER_P0, L"AppName", wApp.c_str());
+                wer::WerReportSetParameter(hReport, wer::WER_P1, L"AppVer", L"1.0.0.1");
+                wer::WerReportSetParameter(hReport, wer::WER_P3, L"ModName", L"ntdll.dll");
+                wer::WerReportSetParameter(hReport, wer::WER_P6, L"ExceptionCode", L"c0000005");
+                wer::WerReportSetParameter(hReport, wer::WER_P7, L"ExceptionOffset", L"0000000000012340");
+                wer::WerReportAddDump(hReport, nullptr, nullptr, wer::WerDumpTypeMiniDump, nullptr, nullptr, 0);
+
+                wer::WER_SUBMIT_RESULT res = wer::WerReportFailed;
+                wer::WerReportSubmit(hReport, wer::WerConsentApproved, wer::WER_SUBMIT_QUEUE, &res);
+                wer::WerReportCloseHandle(hReport);
+
+                out << "Successfully triggered and queued APPCRASH report for '" << appName << "' (Zero-Telemetry Sovereign Archive).\n";
+                return;
+            }
+
+            // 6. werfault /exclude <list|add|remove> [appName]
+            if (sub == "/exclude" || sub == "-exclude" || sub == "exclude") {
+                if (tokens.size() > 2) {
+                    std::string act = tokens[2];
+                    std::transform(act.begin(), act.end(), act.begin(), ::tolower);
+                    if (act == "list") {
+                        auto exList = werCoord.GetExcludedApps();
+                        out << "Windows Error Reporting Excluded Applications (" << exList.size() << "):\n";
+                        for (const auto& a : exList) {
+                            std::string s(a.begin(), a.end());
+                            out << "  - " << s << "\n";
+                        }
+                        return;
+                    }
+                    if (act == "add" && tokens.size() > 3) {
+                        std::string target = tokens[3];
+                        std::wstring wTarget(target.begin(), target.end());
+                        werCoord.AddExcludedApp(wTarget.c_str(), 1);
+                        out << "Added '" << target << "' to WER exclusion list.\n";
+                        return;
+                    }
+                    if (act == "remove" && tokens.size() > 3) {
+                        std::string target = tokens[3];
+                        std::wstring wTarget(target.begin(), target.end());
+                        werCoord.RemoveExcludedApp(wTarget.c_str(), 1);
+                        out << "Removed '" << target << "' from WER exclusion list.\n";
+                        return;
+                    }
+                }
+                out << "Usage: werfault /exclude <list | add <app.exe> | remove <app.exe>>\n";
+                return;
+            }
+        }
+
+        // Default banner & usage
+        out << "========================================================================\n"
+            << "     MicaNT Windows Error Reporting Diagnostic Agent (werfault)         \n"
+            << "========================================================================\n\n"
+            << "Subsystem Library:    wer.dll & faultrep.dll\n"
+            << "Zero-Telemetry:       ENFORCED (Sovereign Local Archiving Only)\n"
+            << "Crash Dump Engine:    PolarisDiag (WinDbg-Compatible Minidumps)\n\n"
+            << "Usage:\n"
+            << "  werfault /list                     List queued and archived crash reports\n"
+            << "  werfault /report <index|guid>      Inspect specific report details & minidump\n"
+            << "  werfault /clear                    Clear queued and archived reports\n"
+            << "  werfault /trigger <appName>        Trigger an APPCRASH report for testing\n"
+            << "  werfault /exclude list             List excluded applications\n"
+            << "  werfault /exclude add <app.exe>    Add application to exclusion list\n"
+            << "  werfault /exclude remove <app.exe> Remove application from exclusion list\n"
+            << "  werfault test                      Execute subsystem self-test\n";
     }
 
     static std::string trim(std::string_view s) {

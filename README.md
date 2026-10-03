@@ -97,6 +97,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 34. **Windows Task Scheduler 2.0 Subsystem (`taskschd.hpp`, `taskschd.dll`, `mstask.dll`, `schtasks.exe`)**: Complete clean-room implementation of Task Scheduler 2.0 COM object hierarchy (`ITaskService`, `ITaskFolder`, `ITaskFolderCollection`, `ITaskDefinition`, `ITriggerCollection`, `ITrigger`, `ITimeTrigger`, `IDailyTrigger`, `IBootTrigger`, `ILogonTrigger`, `IActionCollection`, `IAction`, `IExecAction`, `IRegisteredTask`, `IRegisteredTaskCollection`, `IRunningTask`, `IRunningTaskCollection`). Features full XML task definition import/export conforming to standard Windows schema, pre-seeded system tasks, background execution dispatch, and complete `schtasks.exe` command-line utility. Interactive shell command (`schtasks`).
 35. **Windows Background Intelligent Transfer Service (BITS) Subsystem (`bits.hpp`, `qmgr.dll`, `bitsprx.dll`, `bitsadmin.exe`)**: Complete clean-room implementation of BITS 2.5/3.0 asynchronous queue manager authored from `win32metadata`. Implements COM interfaces `IBackgroundCopyManager`, `IBackgroundCopyJob`, `IBackgroundCopyJob2`, `IBackgroundCopyFile`, `IBackgroundCopyError`, `IEnumBackgroundCopyJobs`, and `IEnumBackgroundCopyFiles`. Features full priority queue scheduling (`FOREGROUND`, `HIGH`, `NORMAL`, `LOW`), 7-stage state machine (`SUSPENDED` -> `QUEUED` -> `CONNECTING` -> `TRANSFERRING` -> `TRANSFERRED` -> `ACKNOWLEDGED`), multi-file downloads, asynchronous HTTP/HTTPS transfer simulation with `wininet.hpp`, pre-seeded update jobs, and complete `bitsadmin.exe` administration utility. Interactive shell command (`bitsadmin`).
 36. **Windows Volume Shadow Copy Service (VSS) Subsystem (`vss.hpp`, `vssapi.dll`, `vss_ps.dll`, `vssadmin.exe`)**: Complete clean-room implementation of Volume Shadow Copy Service coordinator and client architecture authored from `win32metadata`. Implements COM interfaces `IVssBackupComponents`, `IVssAsync`, `IVssEnumObject`, `IVssWMFiledesc`, and `IVssComponent`. Features copy-on-write volume snapshot set lifecycle (`StartSnapshotSet` -> `AddToSnapshotSet` -> `DoSnapshotSet` -> `DeleteSnapshots`), differential shadow storage allocation and live resizing, pre-seeded system writers (`System Writer`, `Registry Writer`, `WMI Writer`, `Shadow Copy Optimization Writer`) and default software provider (`Microsoft Software Shadow Copy provider 1.0`), and complete `vssadmin.exe` administration command-line utility. Interactive shell command (`vssadmin`).
+37. **Windows Error Reporting (WER) Subsystem (`wer.hpp`, `wer.dll`, `faultrep.dll`, `werfault.exe`)**: Complete clean-room implementation of Windows Error Reporting and sovereign crash diagnostics architecture authored from `win32metadata`. Implements core reporting APIs (`WerReportCreate`, `WerReportSetParameter`, `WerReportAddFile`, `WerReportAddDump`, `WerReportSetUIOption`, `WerReportSubmit`, `WerReportCloseHandle`), process diagnostic registrations (`WerRegisterFile`, `WerUnregisterFile`, `WerRegisterMemoryBlock`, `WerUnregisterMemoryBlock`, `WerRegisterRuntimeExceptionModule`), application exclusion management, legacy `faultrep.dll!ReportFault` bridge, integration with `polarisdiag.hpp` generating 100% WinDbg-parseable minidump streams (`MINIDUMP_HEADER`, `SystemInfo`, `Exception`, `ModuleList`, `ThreadList`, `MiscInfo`, `CommentStreamA`), standard `.wer` manifest generation, zero-telemetry sovereign local archiving, and complete `werfault.exe` diagnostic CLI utility. Interactive shell command (`werfault`).
 
 ---
 
@@ -222,12 +223,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (76 Suites, 100% Passing)
+### Build & Run Unit Test Suite (77 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 76 Test Suites:
+# Run all 77 Test Suites:
 .\bin\micant_tests.exe
 ```
 

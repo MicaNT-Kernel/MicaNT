@@ -98,6 +98,7 @@
 #include "micant/taskschd.hpp"
 #include "micant/bits.hpp"
 #include "micant/vss.hpp"
+#include "micant/wer.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -14541,6 +14542,282 @@ void Test_WindowsVSS_VolumeShadowCopy_Subsystem() {
     std::cout << "[TEST] Suite 76: Windows Volume Shadow Copy Service (VSS) Subsystem PASSED.\n";
 }
 
+void Test_WindowsWER_ErrorReporting_Subsystem() {
+    using namespace micant::wer;
+
+    InitializeWERSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader & Versioning Database Verification
+    // ------------------------------------------------------------------------
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerReportCreate") != nullptr, "wer.dll!WerReportCreate must be exported");
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerReportSetParameter") != nullptr, "wer.dll!WerReportSetParameter must be exported");
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerReportAddFile") != nullptr, "wer.dll!WerReportAddFile must be exported");
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerReportAddDump") != nullptr, "wer.dll!WerReportAddDump must be exported");
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerReportSubmit") != nullptr, "wer.dll!WerReportSubmit must be exported");
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerReportCloseHandle") != nullptr, "wer.dll!WerReportCloseHandle must be exported");
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerRegisterFile") != nullptr, "wer.dll!WerRegisterFile must be exported");
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerRegisterMemoryBlock") != nullptr, "wer.dll!WerRegisterMemoryBlock must be exported");
+    TEST_ASSERT(ldr.getExport("wer.dll", "WerAddExcludedApplication") != nullptr, "wer.dll!WerAddExcludedApplication must be exported");
+    TEST_ASSERT(ldr.getExport("faultrep.dll", "ReportFault") != nullptr, "faultrep.dll!ReportFault must be exported");
+    TEST_ASSERT(ldr.getExport("faultrep.dll", "AddERExcludedApplicationA") != nullptr, "faultrep.dll!AddERExcludedApplicationA must be exported");
+
+    const auto* modWer = version::VersionDatabase::Instance().FindModule("wer.dll");
+    TEST_ASSERT(modWer != nullptr, "wer.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modWer->stringTable.at("FileVersion") == "10.0.22621.1", "wer.dll version must match 10.0.22621.1");
+
+    const auto* modFaultrep = version::VersionDatabase::Instance().FindModule("faultrep.dll");
+    TEST_ASSERT(modFaultrep != nullptr, "faultrep.dll must be registered in VersionDatabase");
+
+    const auto* modWerfault = version::VersionDatabase::Instance().FindModule("werfault.exe");
+    TEST_ASSERT(modWerfault != nullptr, "werfault.exe must be registered in VersionDatabase");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: WerReportCreate & Handle Validation
+    // ------------------------------------------------------------------------
+    WER_REPORT_INFORMATION info{};
+    info.dwSize = sizeof(info);
+    wcscpy_s(info.wzApplicationName, L"calculator.exe");
+    wcscpy_s(info.wzFriendlyEventName, L"Modern Calculator Fault");
+    wcscpy_s(info.wzApplicationPath, L"C:\\Program Files\\Calculator\\calculator.exe");
+    wcscpy_s(info.wzDescription, L"Arithmetic floating point division by zero");
+
+    HREPORT hReport = nullptr;
+    ole32::HRESULT hr = WerReportCreate(L"APPCRASH", WerReportCritical, &info, &hReport);
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportCreate must return S_OK");
+    TEST_ASSERT(hReport != nullptr, "WerReportCreate must return valid HREPORT handle");
+
+    // Null check verification
+    HREPORT hNull = nullptr;
+    TEST_ASSERT(WerReportCreate(nullptr, WerReportCritical, &info, &hNull) != ole32::S_OK, "WerReportCreate with null event type must fail");
+    TEST_ASSERT(WerReportCreate(L"APPCRASH", WerReportCritical, &info, nullptr) != ole32::S_OK, "WerReportCreate with null handle ptr must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 3: WerReportSetParameter (Parameters P0 through P7)
+    // ------------------------------------------------------------------------
+    hr = WerReportSetParameter(hReport, WER_P0, L"AppName", L"calculator.exe");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetParameter for P0 (AppName) must succeed");
+    hr = WerReportSetParameter(hReport, WER_P1, L"AppVer", L"1.0.4.0");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetParameter for P1 (AppVer) must succeed");
+    hr = WerReportSetParameter(hReport, WER_P2, L"AppStamp", L"65432100");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetParameter for P2 (AppStamp) must succeed");
+    hr = WerReportSetParameter(hReport, WER_P3, L"ModName", L"calc_core.dll");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetParameter for P3 (ModName) must succeed");
+    hr = WerReportSetParameter(hReport, WER_P4, L"ModVer", L"1.0.2.1");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetParameter for P4 (ModVer) must succeed");
+    hr = WerReportSetParameter(hReport, WER_P5, L"ModStamp", L"65432200");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetParameter for P5 (ModStamp) must succeed");
+    hr = WerReportSetParameter(hReport, WER_P6, L"ExceptionCode", L"c0000094"); // STATUS_INTEGER_DIVIDE_BY_ZERO
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetParameter for P6 (ExceptionCode) must succeed");
+    hr = WerReportSetParameter(hReport, WER_P7, L"ExceptionOffset", L"00000000000248a0");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetParameter for P7 (ExceptionOffset) must succeed");
+
+    // Out of range parameter ID check
+    TEST_ASSERT(WerReportSetParameter(hReport, 15, L"BadParam", L"Val") != ole32::S_OK, "WerReportSetParameter with invalid parameter ID must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 4: WerReportAddFile (Attachment Specifications)
+    // ------------------------------------------------------------------------
+    hr = WerReportAddFile(hReport, L"C:\\Logs\\calc_session.log", WerFileTypeUserDocument, WER_FILE_ANONYMOUS_DATA);
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportAddFile for session log must return S_OK");
+    hr = WerReportAddFile(hReport, L"C:\\Config\\calc_state.xml", WerFileTypeOther, 0);
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportAddFile for config xml must return S_OK");
+    TEST_ASSERT(WerReportAddFile(hReport, nullptr, WerFileTypeOther, 0) != ole32::S_OK, "WerReportAddFile with null path must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: WerReportAddDump & PolarisDiag WinDbg Parity Validation
+    // ------------------------------------------------------------------------
+    EXCEPTION_RECORD excRec{};
+    excRec.ExceptionCode = 0xC0000094; // STATUS_INTEGER_DIVIDE_BY_ZERO
+    excRec.ExceptionAddress = reinterpret_cast<void*>(0x00007FF6140248A0ULL);
+
+    polaris::MINIDUMP_X64_CONTEXT ctxRec{};
+    ctxRec.Rip = 0x00007FF6140248A0ULL;
+    ctxRec.Rsp = 0x00007FFFFFFFDB00ULL;
+    ctxRec.Rax = 0x100;
+    ctxRec.Rcx = 0; // divisor = 0
+
+    EXCEPTION_POINTERS excPtrs{};
+    excPtrs.ExceptionRecord = &excRec;
+    excPtrs.ContextRecord = &ctxRec;
+
+    WER_EXCEPTION_INFORMATION excInfo{};
+    excInfo.pExceptionPointers = &excPtrs;
+    excInfo.bClientPointers = 0;
+
+    WER_DUMP_CUSTOM_OPTIONS dumpOpts{};
+    dumpOpts.dwDumpFlags = 0x00000002; // MiniDumpWithFullMemoryInfo
+
+    hr = WerReportAddDump(hReport, nullptr, nullptr, WerDumpTypeMiniDump, &excInfo, &dumpOpts, 0);
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportAddDump must return S_OK");
+
+    auto activeRep = WerCoordinator::Instance().GetActiveReport(hReport);
+    TEST_ASSERT(activeRep != nullptr, "Active report must be resolvable from coordinator");
+    TEST_ASSERT(!activeRep->m_dumps.empty(), "Active report must contain generated minidump attachment");
+    TEST_ASSERT(!activeRep->m_dumps[0].dumpData.empty(), "Dump data buffer must be non-empty");
+
+    // WinDbg parser validation via PolarisDiagnosticEngine
+    auto dumpSummary = polaris::PolarisDiagnosticEngine::get().parseMinidump(activeRep->m_dumps[0].dumpData);
+    TEST_ASSERT(dumpSummary.isValid, "Minidump generated by WER must validate WinDbg compliance");
+    TEST_ASSERT(dumpSummary.streamCount == 6, "Minidump must contain 6 distinct stream directories");
+    TEST_ASSERT(dumpSummary.exceptionCode == 0xC0000094, "Minidump exception code must match divide-by-zero");
+    TEST_ASSERT(dumpSummary.exceptionAddress == 0x00007FF6140248A0ULL, "Minidump exception address must match faulting instruction");
+    TEST_ASSERT(dumpSummary.rip == 0x00007FF6140248A0ULL, "Minidump RIP register must match context record");
+    TEST_ASSERT(dumpSummary.comment.find("Telemetry-Free") != std::string::npos, "Minidump must confirm zero-telemetry sovereign provenance");
+
+    // ------------------------------------------------------------------------
+    // Stage 6: WerReportSetUIOption Configuration
+    // ------------------------------------------------------------------------
+    hr = WerReportSetUIOption(hReport, WerUIConsentDlgHeader, L"Application Failure Notice");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetUIOption must succeed");
+    hr = WerReportSetUIOption(hReport, WerUICloseText, L"Close Application");
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSetUIOption must succeed");
+
+    // ------------------------------------------------------------------------
+    // Stage 7: WerReportSubmit (Zero-Telemetry Sovereign Archiving)
+    // ------------------------------------------------------------------------
+    WER_SUBMIT_RESULT submitResult = WerReportFailed;
+    hr = WerReportSubmit(hReport, WerConsentApproved, WER_SUBMIT_QUEUE, &submitResult);
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportSubmit must succeed");
+    TEST_ASSERT(submitResult == WerReportQueued, "WerReportSubmit must queue report in sovereign local archive");
+    TEST_ASSERT(activeRep->m_submitted, "Report must be marked submitted");
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Manifest Formats (.wer format and XML)
+    // ------------------------------------------------------------------------
+    std::string werManifest = activeRep->GenerateReportWerManifest();
+    TEST_ASSERT(werManifest.find("EventType=APPCRASH") != std::string::npos, "Manifest must declare EventType=APPCRASH");
+    TEST_ASSERT(werManifest.find("Sig[0].Value=calculator.exe") != std::string::npos, "Manifest must contain calculator.exe as P0");
+    TEST_ASSERT(werManifest.find("Sig[6].Value=c0000094") != std::string::npos, "Manifest must contain exception code c0000094");
+    TEST_ASSERT(werManifest.find("State.ZeroTelemetry=SOVEREIGN_ENFORCED") != std::string::npos, "Manifest must declare sovereign telemetry policy");
+
+    std::string xmlManifest = activeRep->GenerateXmlManifest();
+    TEST_ASSERT(xmlManifest.find("<WERReport Version=\"1\"") != std::string::npos, "XML manifest must start with WERReport tag");
+    TEST_ASSERT(xmlManifest.find("calculator.exe") != std::string::npos, "XML manifest must contain calculator.exe");
+
+    // Close Report Handle
+    hr = WerReportCloseHandle(hReport);
+    TEST_ASSERT(hr == ole32::S_OK, "WerReportCloseHandle must succeed");
+    TEST_ASSERT(WerReportSetParameter(hReport, WER_P0, L"Key", L"Val") != ole32::S_OK, "Using closed handle must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Process Diagnostics Registration (Files & Memory Blocks)
+    // ------------------------------------------------------------------------
+    hr = WerRegisterFile(L"C:\\CrashDiagnostics\\app_state.dmp", WerRegFileTypeUserDocument, 0);
+    TEST_ASSERT(hr == ole32::S_OK, "WerRegisterFile must return S_OK");
+    TEST_ASSERT(WerCoordinator::Instance().GetRegisteredFileCount() >= 1, "Registered file count must be at least 1");
+
+    hr = WerUnregisterFile(L"C:\\CrashDiagnostics\\app_state.dmp");
+    TEST_ASSERT(hr == ole32::S_OK, "WerUnregisterFile must return S_OK");
+
+    uint8_t heapBlock[256]{0};
+    memset(heapBlock, 0xAA, sizeof(heapBlock));
+    hr = WerRegisterMemoryBlock(heapBlock, sizeof(heapBlock));
+    TEST_ASSERT(hr == ole32::S_OK, "WerRegisterMemoryBlock must return S_OK");
+    TEST_ASSERT(WerCoordinator::Instance().GetRegisteredMemoryCount() >= 1, "Registered memory count must be at least 1");
+
+    hr = WerUnregisterMemoryBlock(heapBlock);
+    TEST_ASSERT(hr == ole32::S_OK, "WerUnregisterMemoryBlock must return S_OK");
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Runtime Exception Modules Registration
+    // ------------------------------------------------------------------------
+    hr = WerRegisterRuntimeExceptionModule(L"mscorwks_diag.dll", reinterpret_cast<void*>(0x1234));
+    TEST_ASSERT(hr == ole32::S_OK, "WerRegisterRuntimeExceptionModule must succeed");
+    TEST_ASSERT(WerCoordinator::Instance().GetRuntimeModuleCount() >= 1, "Runtime module count must be at least 1");
+
+    hr = WerUnregisterRuntimeExceptionModule(L"mscorwks_diag.dll", reinterpret_cast<void*>(0x1234));
+    TEST_ASSERT(hr == ole32::S_OK, "WerUnregisterRuntimeExceptionModule must succeed");
+
+    // Flags test
+    WerSetFlags(WER_FAULT_REPORTING_FLAG_NOHEAP | WER_FAULT_REPORTING_FLAG_QUEUE);
+    uint32_t flags = 0;
+    WerGetFlags(nullptr, &flags);
+    TEST_ASSERT((flags & WER_FAULT_REPORTING_FLAG_NOHEAP) != 0, "WerGetFlags must reflect NOHEAP flag");
+    TEST_ASSERT((flags & WER_FAULT_REPORTING_FLAG_QUEUE) != 0, "WerGetFlags must reflect QUEUE flag");
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Exclusion List Management & Suppression Verification
+    // ------------------------------------------------------------------------
+    hr = WerAddExcludedApplication(L"suppressed_tool.exe", 1);
+    TEST_ASSERT(hr == ole32::S_OK, "WerAddExcludedApplication must return S_OK");
+
+    int32_t isExcluded = 0;
+    hr = WerIsApplicationExcluded(L"suppressed_tool.exe", 1, &isExcluded);
+    TEST_ASSERT(hr == ole32::S_OK && isExcluded == 1, "WerIsApplicationExcluded must report excluded app as 1");
+
+    // Create report for excluded application
+    WER_REPORT_INFORMATION exInfo{};
+    exInfo.dwSize = sizeof(exInfo);
+    wcscpy_s(exInfo.wzApplicationName, L"suppressed_tool.exe");
+    HREPORT hExReport = nullptr;
+    WerReportCreate(L"APPCRASH", WerReportCritical, &exInfo, &hExReport);
+    WER_SUBMIT_RESULT exResult = WerReportFailed;
+    WerReportSubmit(hExReport, WerConsentApproved, 0, &exResult);
+    TEST_ASSERT(exResult == WerDisabled, "Submitting report for excluded app must return WerDisabled");
+    WerReportCloseHandle(hExReport);
+
+    hr = WerRemoveExcludedApplication(L"suppressed_tool.exe", 1);
+    TEST_ASSERT(hr == ole32::S_OK, "WerRemoveExcludedApplication must return S_OK");
+    WerIsApplicationExcluded(L"suppressed_tool.exe", 1, &isExcluded);
+    TEST_ASSERT(isExcluded == 0, "Excluded app must no longer be excluded after removal");
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Legacy Crash Reporter (faultrep.dll!ReportFault)
+    // ------------------------------------------------------------------------
+    EFaultRepRet repRet = ReportFault(&excPtrs, 0);
+    TEST_ASSERT(repRet == EFaultRepRet::frok, "ReportFault must return frok (1)");
+
+    int32_t addRet = AddERExcludedApplicationA("legacy_app.exe");
+    TEST_ASSERT(addRet == 1, "AddERExcludedApplicationA must return 1");
+    int32_t isLegacyEx = 0;
+    WerIsApplicationExcluded(L"legacy_app.exe", 1, &isLegacyEx);
+    TEST_ASSERT(isLegacyEx == 1, "Legacy excluded application must be registered");
+    WerRemoveExcludedApplication(L"legacy_app.exe", 1);
+
+    // ------------------------------------------------------------------------
+    // Stage 13: Interactive Command Shell (werfault.exe)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. werfault (banner)
+        shell.execute("werfault", out);
+        TEST_ASSERT(out.str().find("Windows Error Reporting Diagnostic Agent") != std::string::npos, "werfault without args must display banner");
+
+        // 2. werfault /list
+        out.str("");
+        shell.execute("werfault /list", out);
+        TEST_ASSERT(out.str().find("notepad.exe") != std::string::npos, "werfault /list must display pre-seeded notepad.exe crash");
+        TEST_ASSERT(out.str().find("vanguard.sys") != std::string::npos, "werfault /list must display pre-seeded vanguard.sys crash");
+
+        // 3. werfault /report 0
+        out.str("");
+        shell.execute("werfault /report 0", out);
+        TEST_ASSERT(out.str().find("WER Crash Report Inspection") != std::string::npos, "werfault /report 0 must show inspection banner");
+        TEST_ASSERT(out.str().find("PolarisDiag Minidump Analysis") != std::string::npos, "werfault /report 0 must display minidump analysis");
+
+        // 4. werfault /trigger test_proc.exe
+        out.str("");
+        shell.execute("werfault /trigger test_proc.exe", out);
+        TEST_ASSERT(out.str().find("Successfully triggered and queued APPCRASH report") != std::string::npos, "werfault /trigger must report success");
+
+        // 5. werfault /exclude list
+        out.str("");
+        shell.execute("werfault /exclude list", out);
+        TEST_ASSERT(out.str().find("wermgr.exe") != std::string::npos, "werfault /exclude list must display wermgr.exe");
+
+        // 6. werfault test
+        out.str("");
+        shell.execute("werfault test", out);
+        TEST_ASSERT(out.str().find("Windows Error Reporting Subsystem Self-Test Finished") != std::string::npos, "werfault test must finish successfully");
+    }
+
+    std::cout << "[TEST] Suite 77: Windows Error Reporting (WER) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -14622,6 +14899,7 @@ int main() {
     RUN_TEST(Test_WindowsTaskScheduler_Subsystem);
     RUN_TEST(Test_WindowsBITS_Subsystem);
     RUN_TEST(Test_WindowsVSS_VolumeShadowCopy_Subsystem);
+    RUN_TEST(Test_WindowsWER_ErrorReporting_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
