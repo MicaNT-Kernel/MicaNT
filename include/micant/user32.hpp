@@ -1090,13 +1090,56 @@ inline LRESULT DefWindowProcW(win32::HWND hWnd, UINT Msg, WPARAM wParam, LPARAM 
     return WindowManager::get().defWindowProc(hWnd, Msg, wParam, lParam);
 }
 
+using GetDCHookFn = HDC (*)(win32::HWND);
+inline GetDCHookFn g_pfnGetDCHook = nullptr;
+
+inline void SetGetDCHook(GetDCHookFn fn) noexcept {
+    g_pfnGetDCHook = fn;
+}
+
+using ReleaseDCHookFn = int (*)(win32::HWND, HDC);
+inline ReleaseDCHookFn g_pfnReleaseDCHook = nullptr;
+
+inline void SetReleaseDCHook(ReleaseDCHookFn fn) noexcept {
+    g_pfnReleaseDCHook = fn;
+}
+
 inline HDC GetDC(win32::HWND hWnd) noexcept {
+    if (g_pfnGetDCHook) return g_pfnGetDCHook(hWnd);
     return reinterpret_cast<HDC>(reinterpret_cast<uintptr_t>(hWnd) | 0x1);
 }
 
-inline int ReleaseDC(win32::HWND hWnd, HDC /*hDC*/) noexcept {
+inline int ReleaseDC(win32::HWND hWnd, HDC hDC) noexcept {
+    if (g_pfnReleaseDCHook) return g_pfnReleaseDCHook(hWnd, hDC);
     WindowManager::get().invalidateRect(hWnd, nullptr, win32::FALSE);
     return 1;
+}
+
+inline constexpr UINT MB_OK = 0x00000000;
+inline constexpr UINT MB_OKCANCEL = 0x00000001;
+inline constexpr UINT MB_ABORTRETRYIGNORE = 0x00000002;
+inline constexpr UINT MB_YESNOCANCEL = 0x00000003;
+inline constexpr UINT MB_YESNO = 0x00000004;
+inline constexpr UINT MB_RETRYCANCEL = 0x00000005;
+
+inline constexpr int IDOK = 1;
+inline constexpr int IDCANCEL = 2;
+inline constexpr int IDABORT = 3;
+inline constexpr int IDRETRY = 4;
+inline constexpr int IDIGNORE = 5;
+inline constexpr int IDYES = 6;
+inline constexpr int IDNO = 7;
+
+inline int MessageBoxW(win32::HWND hWnd, const wchar_t* lpText, const wchar_t* lpCaption, UINT uType) noexcept {
+    (void)hWnd; (void)uType;
+    (void)lpText; (void)lpCaption;
+    return IDOK;
+}
+
+inline int MessageBoxA(win32::HWND hWnd, const char* lpText, const char* lpCaption, UINT uType) noexcept {
+    (void)hWnd; (void)uType;
+    (void)lpText; (void)lpCaption;
+    return IDOK;
 }
 
 inline HDC BeginPaint(win32::HWND hWnd, PAINTSTRUCT* lpPaint) noexcept {
@@ -1217,6 +1260,8 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "OpenDesktopW", reinterpret_cast<void*>(OpenDesktopW));
     ldr.registerExport("user32.dll", "SwitchDesktop", reinterpret_cast<void*>(SwitchDesktop));
     ldr.registerExport("user32.dll", "CloseDesktop", reinterpret_cast<void*>(CloseDesktop));
+    ldr.registerExport("user32.dll", "MessageBoxW", reinterpret_cast<void*>(MessageBoxW));
+    ldr.registerExport("user32.dll", "MessageBoxA", reinterpret_cast<void*>(MessageBoxA));
 }
 
 } // namespace micant::user32

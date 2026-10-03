@@ -77,6 +77,8 @@
 #include "micant/dinput.hpp"
 #include "micant/prism_viewer.hpp"
 #include "micant/d3d9.hpp"
+#include "micant/gdi32.hpp"
+#include "micant/ole32.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -7456,6 +7458,467 @@ void Test_Direct3D9_Runtime_And_FixedFunctionPipeline() {
     user32::DestroyWindow(hwnd);
 }
 
+// ============================================================================
+// Suite 59: Win32 Foundation (GDI32 & OLE32 / OLEAUT32 COM Subsystems)
+// ============================================================================
+
+inline const ole32::IID IID_ITestCalculator = {
+    0x12345678, 0x1234, 0x1234, { 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0 }
+};
+
+inline const ole32::CLSID CLSID_TestCalculator = {
+    0x87654321, 0x4321, 0x4321, { 0x21, 0x43, 0x65, 0x87, 0x0F, 0xED, 0xCB, 0xA9 }
+};
+
+class ITestCalculator : public ole32::IUnknown {
+public:
+    virtual ole32::HRESULT Add(int a, int b, int* result) = 0;
+};
+
+class TestCalculatorImpl : public ITestCalculator {
+private:
+    std::atomic<uint32_t> m_refCount{1};
+
+public:
+    virtual ole32::HRESULT QueryInterface(ole32::REFIID riid, void** ppvObject) override {
+        if (!ppvObject) return ole32::E_POINTER;
+        if (std::memcmp(&riid, &ole32::IID_IUnknown, sizeof(ole32::IID)) == 0 ||
+            std::memcmp(&riid, &IID_ITestCalculator, sizeof(ole32::IID)) == 0) {
+            *ppvObject = static_cast<ITestCalculator*>(this);
+            AddRef();
+            return ole32::S_OK;
+        }
+        *ppvObject = nullptr;
+        return ole32::E_NOINTERFACE;
+    }
+
+    virtual uint32_t AddRef() override {
+        return m_refCount.fetch_add(1) + 1;
+    }
+
+    virtual uint32_t Release() override {
+        uint32_t count = m_refCount.fetch_sub(1) - 1;
+        if (count == 0) {
+            delete this;
+        }
+        return count;
+    }
+
+    virtual ole32::HRESULT Add(int a, int b, int* result) override {
+        if (!result) return ole32::E_POINTER;
+        *result = a + b;
+        return ole32::S_OK;
+    }
+};
+
+class TestCalculatorFactory : public ole32::IClassFactory {
+private:
+    std::atomic<uint32_t> m_refCount{1};
+
+public:
+    virtual ole32::HRESULT QueryInterface(ole32::REFIID riid, void** ppvObject) override {
+        if (!ppvObject) return ole32::E_POINTER;
+        if (std::memcmp(&riid, &ole32::IID_IUnknown, sizeof(ole32::IID)) == 0 ||
+            std::memcmp(&riid, &ole32::IID_IClassFactory, sizeof(ole32::IID)) == 0) {
+            *ppvObject = static_cast<ole32::IClassFactory*>(this);
+            AddRef();
+            return ole32::S_OK;
+        }
+        *ppvObject = nullptr;
+        return ole32::E_NOINTERFACE;
+    }
+
+    virtual uint32_t AddRef() override {
+        return m_refCount.fetch_add(1) + 1;
+    }
+
+    virtual uint32_t Release() override {
+        uint32_t count = m_refCount.fetch_sub(1) - 1;
+        if (count == 0) {
+            delete this;
+        }
+        return count;
+    }
+
+    virtual ole32::HRESULT CreateInstance(ole32::IUnknown* pUnkOuter, ole32::REFIID riid, void** ppvObject) override {
+        if (pUnkOuter) return ole32::E_NOTIMPL;
+        auto* calc = new TestCalculatorImpl();
+        ole32::HRESULT hr = calc->QueryInterface(riid, ppvObject);
+        calc->Release();
+        return hr;
+    }
+
+    virtual ole32::HRESULT LockServer(win32::BOOL) override {
+        return ole32::S_OK;
+    }
+};
+
+void Test_Gdi32_And_Ole32_Win32Foundation() {
+    std::cout << "[TEST] Running Suite 59: Gdi32 & Ole32 Win32 Foundation Subsystems...\n";
+
+    // ------------------------------------------------------------------------
+    // 1. Dynamic Loader Subsystem Registration
+    // ------------------------------------------------------------------------
+    gdi32::InitializeGdi32SubsystemExports();
+    ole32::InitializeOle32SubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("gdi32.dll", "CreateCompatibleDC") != nullptr, "gdi32.dll CreateCompatibleDC must be registered");
+    TEST_ASSERT(ldr.getExport("gdi32.dll", "BitBlt") != nullptr, "gdi32.dll BitBlt must be registered");
+    TEST_ASSERT(ldr.getExport("gdi32.dll", "ChoosePixelFormat") != nullptr, "gdi32.dll ChoosePixelFormat must be registered");
+    TEST_ASSERT(ldr.getExport("ole32.dll", "CoInitializeEx") != nullptr, "ole32.dll CoInitializeEx must be registered");
+    TEST_ASSERT(ldr.getExport("ole32.dll", "CoCreateInstance") != nullptr, "ole32.dll CoCreateInstance must be registered");
+    TEST_ASSERT(ldr.getExport("ole32.dll", "CoTaskMemAlloc") != nullptr, "ole32.dll CoTaskMemAlloc must be registered");
+    TEST_ASSERT(ldr.getExport("oleaut32.dll", "SysAllocString") != nullptr, "oleaut32.dll SysAllocString must be registered");
+    TEST_ASSERT(ldr.getExport("oleaut32.dll", "VariantCopy") != nullptr, "oleaut32.dll VariantCopy must be registered");
+
+    // ------------------------------------------------------------------------
+    // 2. COM Runtime Lifecycle & Apartment Initialization
+    // ------------------------------------------------------------------------
+    ole32::HRESULT hrCo = ole32::CoInitializeEx(nullptr, ole32::COINIT_APARTMENTTHREADED);
+    TEST_ASSERT(hrCo == ole32::S_OK, "First CoInitializeEx must return S_OK");
+    TEST_ASSERT(ole32::ComRuntime::get().IsInitialized(), "COM Runtime must be initialized");
+
+    ole32::HRESULT hrCo2 = ole32::CoInitializeEx(nullptr, ole32::COINIT_APARTMENTTHREADED);
+    TEST_ASSERT(hrCo2 == ole32::S_FALSE, "Nested CoInitializeEx must return S_FALSE");
+    TEST_ASSERT(ole32::ComRuntime::get().GetInitCount() == 2, "Init count must be 2");
+
+    ole32::CoUninitialize();
+    TEST_ASSERT(ole32::ComRuntime::get().GetInitCount() == 1, "Init count must be 1 after one uninit");
+    ole32::CoUninitialize();
+    TEST_ASSERT(ole32::ComRuntime::get().GetInitCount() == 0, "Init count must be 0 after second uninit");
+    TEST_ASSERT(!ole32::ComRuntime::get().IsInitialized(), "COM Runtime must be uninitialized");
+
+    // Re-initialize for subsequent tests
+    ole32::CoInitialize(nullptr);
+
+    // ------------------------------------------------------------------------
+    // 3. CoTaskMem Memory Allocator
+    // ------------------------------------------------------------------------
+    void* pMem = ole32::CoTaskMemAlloc(128);
+    TEST_ASSERT(pMem != nullptr, "CoTaskMemAlloc(128) must return valid buffer");
+    std::memset(pMem, 0xAA, 128);
+
+    void* pMemRealloc = ole32::CoTaskMemRealloc(pMem, 256);
+    TEST_ASSERT(pMemRealloc != nullptr, "CoTaskMemRealloc(256) must return valid expanded buffer");
+    uint8_t* pBytes = static_cast<uint8_t*>(pMemRealloc);
+    bool contentPreserved = true;
+    for (size_t i = 0; i < 128; ++i) {
+        if (pBytes[i] != 0xAA) { contentPreserved = false; break; }
+    }
+    TEST_ASSERT(contentPreserved, "Reallocated buffer must preserve existing bytes");
+    ole32::CoTaskMemFree(pMemRealloc);
+
+    // ------------------------------------------------------------------------
+    // 4. GUID Generation & String Conversion
+    // ------------------------------------------------------------------------
+    micant::GUID g1{}, g2{};
+    ole32::HRESULT hrGuid = ole32::CoCreateGuid(&g1);
+    TEST_ASSERT(hrGuid == ole32::S_OK, "CoCreateGuid must succeed");
+    TEST_ASSERT((g1.Data3 & 0xF000) == 0x4000, "GUID must have version 4 flag");
+    TEST_ASSERT((g1.Data4[0] & 0xC0) == 0x80, "GUID must have variant 1 flag");
+
+    wchar_t szGuid[64]{};
+    int cch = ole32::StringFromGUID2(g1, szGuid, 64);
+    TEST_ASSERT(cch == 39, "StringFromGUID2 must return 39 chars (including null terminator / braces)");
+    TEST_ASSERT(szGuid[0] == L'{' && szGuid[37] == L'}', "GUID string must be enclosed in braces");
+
+    ole32::HRESULT hrParse = ole32::IIDFromString(szGuid, &g2);
+    TEST_ASSERT(hrParse == ole32::S_OK, "IIDFromString must parse valid GUID string");
+    TEST_ASSERT(std::memcmp(&g1, &g2, sizeof(micant::GUID)) == 0, "Parsed GUID must match original GUID");
+
+    micant::GUID gBogus{};
+    TEST_ASSERT(ole32::IIDFromString(L"not-a-guid", &gBogus) == ole32::E_INVALIDARG, "IIDFromString must reject invalid format");
+
+    // ------------------------------------------------------------------------
+    // 5. BSTR Length-Prefixed String Manipulation
+    // ------------------------------------------------------------------------
+    const wchar_t* helloMsg = L"MicaNT Clean-Room Kernel";
+    ole32::BSTR bstr = ole32::SysAllocString(helloMsg);
+    TEST_ASSERT(bstr != nullptr, "SysAllocString must allocate valid BSTR");
+    TEST_ASSERT(ole32::SysStringLen(bstr) == 24, "SysStringLen must return character count (24)");
+    TEST_ASSERT(ole32::SysStringByteLen(bstr) == 48, "SysStringByteLen must return byte count (48)");
+    TEST_ASSERT(std::wcscmp(bstr, helloMsg) == 0, "BSTR content must match source string");
+
+    uint32_t storedByteLen = *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(bstr) - sizeof(uint32_t));
+    TEST_ASSERT(storedByteLen == 48, "Length prefix stored before BSTR pointer must be 48");
+
+    ole32::BSTR bstrSub = ole32::SysAllocStringLen(helloMsg, 6);
+    TEST_ASSERT(bstrSub != nullptr, "SysAllocStringLen must succeed");
+    TEST_ASSERT(ole32::SysStringLen(bstrSub) == 6, "Substr BSTR len must be 6");
+    TEST_ASSERT(std::wcsncmp(bstrSub, L"MicaNT", 6) == 0, "Substr content must match");
+
+    ole32::SysFreeString(bstr);
+    ole32::SysFreeString(bstrSub);
+    ole32::SysFreeString(nullptr);
+
+    // ------------------------------------------------------------------------
+    // 6. VARIANT Engine & Polymorphism
+    // ------------------------------------------------------------------------
+    ole32::VARIANT var1{}, var2{};
+    ole32::VariantInit(&var1);
+    ole32::VariantInit(&var2);
+    TEST_ASSERT(var1.vt == ole32::VT_EMPTY, "VariantInit must set VT_EMPTY");
+
+    var1.vt = ole32::VT_I4;
+    var1.lVal = 0x12345678;
+    ole32::VariantCopy(&var2, &var1);
+    TEST_ASSERT(var2.vt == ole32::VT_I4 && var2.lVal == 0x12345678, "VariantCopy must copy integer payload");
+
+    ole32::VariantClear(&var1);
+    TEST_ASSERT(var1.vt == ole32::VT_EMPTY, "VariantClear must reset to VT_EMPTY");
+
+    var1.vt = ole32::VT_BSTR;
+    var1.bstrVal = ole32::SysAllocString(L"DynamicVariantString");
+    ole32::VariantCopy(&var2, &var1);
+    TEST_ASSERT(var2.vt == ole32::VT_BSTR, "Destination variant must have VT_BSTR");
+    TEST_ASSERT(var2.bstrVal != var1.bstrVal, "VariantCopy must perform deep copy of BSTR");
+    TEST_ASSERT(std::wcscmp(var2.bstrVal, var1.bstrVal) == 0, "Copied BSTR content must match");
+
+    ole32::VariantClear(&var1);
+    ole32::VariantClear(&var2);
+
+    // ------------------------------------------------------------------------
+    // 7. Class Factory & CoCreateInstance
+    // ------------------------------------------------------------------------
+    auto* pFactory = new TestCalculatorFactory();
+    uint32_t dwCookie = 0;
+    ole32::HRESULT hrReg = ole32::CoRegisterClassObject(
+        CLSID_TestCalculator, pFactory, ole32::CLSCTX_INPROC_SERVER, ole32::REGCLS_MULTIPLEUSE, &dwCookie
+    );
+    TEST_ASSERT(hrReg == ole32::S_OK, "CoRegisterClassObject must succeed");
+    TEST_ASSERT(dwCookie != 0, "Registration cookie must be nonzero");
+
+    ITestCalculator* pCalc = nullptr;
+    ole32::HRESULT hrInst = ole32::CoCreateInstance(
+        CLSID_TestCalculator, nullptr, ole32::CLSCTX_INPROC_SERVER, IID_ITestCalculator, reinterpret_cast<void**>(&pCalc)
+    );
+    TEST_ASSERT(hrInst == ole32::S_OK && pCalc != nullptr, "CoCreateInstance must create ITestCalculator instance");
+
+    int sum = 0;
+    ole32::HRESULT hrAdd = pCalc->Add(18, 24, &sum);
+    TEST_ASSERT(hrAdd == ole32::S_OK && sum == 42, "ITestCalculator::Add must return sum = 42");
+
+    ole32::IUnknown* pUnk = nullptr;
+    ole32::HRESULT hrQi = pCalc->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+    TEST_ASSERT(hrQi == ole32::S_OK && pUnk != nullptr, "QueryInterface for IID_IUnknown must succeed");
+    pUnk->Release();
+    pCalc->Release();
+
+    ole32::HRESULT hrRevoke = ole32::CoRevokeClassObject(dwCookie);
+    TEST_ASSERT(hrRevoke == ole32::S_OK, "CoRevokeClassObject must succeed");
+    pFactory->Release();
+
+    ITestCalculator* pCalcFail = nullptr;
+    ole32::HRESULT hrFail = ole32::CoCreateInstance(
+        CLSID_TestCalculator, nullptr, ole32::CLSCTX_INPROC_SERVER, IID_ITestCalculator, reinterpret_cast<void**>(&pCalcFail)
+    );
+    TEST_ASSERT(hrFail == ole32::REGDB_E_CLASSNOTREG, "CoCreateInstance after revoke must return REGDB_E_CLASSNOTREG");
+
+    // ------------------------------------------------------------------------
+    // 8. GDI Device Contexts & Stock Objects
+    // ------------------------------------------------------------------------
+    gdi32::HDC hdcMem = gdi32::CreateCompatibleDC(nullptr);
+    TEST_ASSERT(hdcMem != nullptr, "CreateCompatibleDC(nullptr) must return valid memory DC");
+
+    gdi32::HGDIOBJ hWhiteBr = gdi32::GetStockObject(gdi32::WHITE_BRUSH);
+    gdi32::HGDIOBJ hBlackBr = gdi32::GetStockObject(gdi32::BLACK_BRUSH);
+    gdi32::HGDIOBJ hNullBr  = gdi32::GetStockObject(gdi32::NULL_BRUSH);
+    gdi32::HGDIOBJ hWhitePen= gdi32::GetStockObject(gdi32::WHITE_PEN);
+    gdi32::HGDIOBJ hSysFont = gdi32::GetStockObject(gdi32::SYSTEM_FONT);
+
+    TEST_ASSERT(hWhiteBr != nullptr && hBlackBr != nullptr && hNullBr != nullptr, "Stock brushes must not be null");
+    TEST_ASSERT(hWhitePen != nullptr && hSysFont != nullptr, "Stock pen and font must not be null");
+
+    gdi32::HGDIOBJ hOldBr = gdi32::SelectObject(hdcMem, hWhiteBr);
+    TEST_ASSERT(hOldBr != nullptr, "SelectObject must return previously selected brush");
+
+    // ------------------------------------------------------------------------
+    // 9. GDI Bitmaps & DIB Sections
+    // ------------------------------------------------------------------------
+    gdi32::HBITMAP hbmpCompat = gdi32::CreateCompatibleBitmap(hdcMem, 120, 80);
+    TEST_ASSERT(hbmpCompat != nullptr, "CreateCompatibleBitmap must create 120x80 bitmap");
+
+    gdi32::BITMAP bmInfo{};
+    int nBytesBm = gdi32::GetObjectW(hbmpCompat, sizeof(bmInfo), &bmInfo);
+    TEST_ASSERT(nBytesBm == sizeof(bmInfo), "GetObjectW on bitmap must return sizeof(BITMAP)");
+    TEST_ASSERT(bmInfo.bmWidth == 120 && bmInfo.bmHeight == 80, "Bitmap dimensions must match 120x80");
+    TEST_ASSERT(bmInfo.bmBitsPixel == 32, "Bitmap must be 32 bpp");
+
+    gdi32::HGDIOBJ hOldBmp = gdi32::SelectObject(hdcMem, hbmpCompat);
+    TEST_ASSERT(hOldBmp != nullptr, "SelectObject(hbmpCompat) must succeed");
+
+    gdi32::BITMAPINFO bmi{};
+    bmi.bmiHeader.biWidth = 64;
+    bmi.bmiHeader.biHeight = 64;
+    bmi.bmiHeader.biBitCount = 32;
+    void* pDibBits = nullptr;
+    gdi32::HBITMAP hDib = gdi32::CreateDIBSection(hdcMem, &bmi, gdi32::DIB_RGB_COLORS, &pDibBits, nullptr, 0);
+    TEST_ASSERT(hDib != nullptr && pDibBits != nullptr, "CreateDIBSection must return bitmap and non-null pixel buffer pointer");
+
+    uint32_t* pPixels = static_cast<uint32_t*>(pDibBits);
+    pPixels[0] = 0xFF00FFFF;
+    TEST_ASSERT(pPixels[0] == 0xFF00FFFF, "Direct pixel access to DIB section memory must succeed");
+
+    // ------------------------------------------------------------------------
+    // 10. 2D Drawing Primitives & ROP Engine
+    // ------------------------------------------------------------------------
+    gdi32::HBRUSH hRedBrush = gdi32::CreateSolidBrush(gdi32::RGB(255, 0, 0));
+    gdi32::HPEN hGreenPen = gdi32::CreatePen(gdi32::PS_SOLID, 1, gdi32::RGB(0, 255, 0));
+    gdi32::SelectObject(hdcMem, hRedBrush);
+    gdi32::SelectObject(hdcMem, hGreenPen);
+
+    gdi32::RECT fillRc{0, 0, 120, 80};
+    int frOk = gdi32::FillRect(hdcMem, &fillRc, hRedBrush);
+    TEST_ASSERT(frOk == 1, "FillRect must succeed");
+
+    gdi32::COLORREF c1 = gdi32::GetPixel(hdcMem, 60, 40);
+    TEST_ASSERT(gdi32::GetRValue(c1) == 255 && gdi32::GetGValue(c1) == 0 && gdi32::GetBValue(c1) == 0,
+        "Center pixel of filled rect must be Red");
+
+    gdi32::Rectangle(hdcMem, 10, 10, 40, 40);
+    gdi32::COLORREF cBorder = gdi32::GetPixel(hdcMem, 10, 10);
+    TEST_ASSERT(gdi32::GetGValue(cBorder) == 255, "Rectangle border must have green component");
+
+    win32::BOOL ellOk = gdi32::Ellipse(hdcMem, 50, 10, 90, 40);
+    TEST_ASSERT(ellOk == win32::TRUE, "Ellipse drawing must succeed");
+
+    gdi32::POINT ptPrev{};
+    gdi32::MoveToEx(hdcMem, 0, 0, &ptPrev);
+    win32::BOOL lineOk = gdi32::LineTo(hdcMem, 20, 20);
+    TEST_ASSERT(lineOk == win32::TRUE, "LineTo must succeed");
+
+    gdi32::SetPixel(hdcMem, 5, 5, gdi32::RGB(0, 0, 255));
+    gdi32::COLORREF cPixel = gdi32::GetPixel(hdcMem, 5, 5);
+    TEST_ASSERT(gdi32::GetBValue(cPixel) == 255, "SetPixel/GetPixel must read back Blue");
+
+    // ------------------------------------------------------------------------
+    // 11. BitBlt ROP Operations (SRCCOPY & SRCINVERT)
+    // ------------------------------------------------------------------------
+    gdi32::HDC hdcSrc = gdi32::CreateCompatibleDC(nullptr);
+    gdi32::HBITMAP hbmpSrc = gdi32::CreateCompatibleBitmap(hdcSrc, 30, 30);
+    gdi32::SelectObject(hdcSrc, hbmpSrc);
+
+    gdi32::HBRUSH hBlueBrush = gdi32::CreateSolidBrush(gdi32::RGB(0, 0, 255));
+    gdi32::RECT rcSrc{0, 0, 30, 30};
+    gdi32::FillRect(hdcSrc, &rcSrc, hBlueBrush);
+
+    win32::BOOL bltOk = gdi32::BitBlt(hdcMem, 70, 40, 30, 30, hdcSrc, 0, 0, gdi32::SRCCOPY);
+    TEST_ASSERT(bltOk == win32::TRUE, "BitBlt with SRCCOPY must succeed");
+    gdi32::COLORREF cBlitted = gdi32::GetPixel(hdcMem, 75, 45);
+    TEST_ASSERT(gdi32::GetBValue(cBlitted) == 255, "Blitted region must have Blue pixel color");
+
+    bltOk = gdi32::BitBlt(hdcMem, 70, 40, 30, 30, hdcSrc, 0, 0, gdi32::SRCINVERT);
+    TEST_ASSERT(bltOk == win32::TRUE, "BitBlt with SRCINVERT must succeed");
+
+    // ------------------------------------------------------------------------
+    // 12. Typography & Font TextOut
+    // ------------------------------------------------------------------------
+    gdi32::SetTextColor(hdcMem, gdi32::RGB(255, 255, 255));
+    gdi32::SetBkColor(hdcMem, gdi32::RGB(0, 0, 0));
+    gdi32::SetBkMode(hdcMem, gdi32::OPAQUE);
+
+    TEST_ASSERT(gdi32::GetTextColor(hdcMem) == gdi32::RGB(255, 255, 255), "GetTextColor must match White");
+    TEST_ASSERT(gdi32::GetBkColor(hdcMem) == gdi32::RGB(0, 0, 0), "GetBkColor must match Black");
+    TEST_ASSERT(gdi32::GetBkMode(hdcMem) == gdi32::OPAQUE, "GetBkMode must match OPAQUE");
+
+    gdi32::SIZE textSize{};
+    gdi32::GetTextExtentPoint32W(hdcMem, L"MicaNT", 6, &textSize);
+    TEST_ASSERT(textSize.cx == 48 && textSize.cy == 8, "Text extent for 6-char string in 8x8 font must be 48x8");
+
+    win32::BOOL textOk = gdi32::TextOutW(hdcMem, 0, 70, L"MICA", 4);
+    TEST_ASSERT(textOk == win32::TRUE, "TextOutW must succeed");
+
+    // ------------------------------------------------------------------------
+    // 13. OpenGL Pixel Format & Double-Buffering Bridge
+    // ------------------------------------------------------------------------
+    gdi32::PIXELFORMATDESCRIPTOR pfdReq{};
+    pfdReq.nSize = sizeof(gdi32::PIXELFORMATDESCRIPTOR);
+    pfdReq.nVersion = 1;
+    pfdReq.dwFlags = gdi32::PFD_DRAW_TO_WINDOW | gdi32::PFD_SUPPORT_OPENGL | gdi32::PFD_DOUBLEBUFFER;
+    pfdReq.iPixelType = gdi32::PFD_TYPE_RGBA;
+    pfdReq.cColorBits = 32;
+
+    int pixelFormatIdx = gdi32::ChoosePixelFormat(hdcMem, &pfdReq);
+    TEST_ASSERT(pixelFormatIdx == 1, "ChoosePixelFormat must return index 1");
+
+    win32::BOOL setPfdOk = gdi32::SetPixelFormat(hdcMem, pixelFormatIdx, &pfdReq);
+    TEST_ASSERT(setPfdOk == win32::TRUE, "SetPixelFormat must return TRUE");
+
+    gdi32::PIXELFORMATDESCRIPTOR pfdDesc{};
+    int descOk = gdi32::DescribePixelFormat(hdcMem, 1, sizeof(pfdDesc), &pfdDesc);
+    TEST_ASSERT(descOk == 1, "DescribePixelFormat must return 1");
+
+    win32::BOOL swapOk = gdi32::SwapBuffers(hdcMem);
+    TEST_ASSERT(swapOk == win32::TRUE, "SwapBuffers must succeed");
+
+    // ------------------------------------------------------------------------
+    // 14. User32 Window Integration & MessageBox
+    // ------------------------------------------------------------------------
+    win32::HWND hwnd = user32::CreateWindowExW(
+        0, L"MicaNT_GdiWindow", L"GDI Test Window",
+        0, 50, 50, 200, 150, nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hwnd != nullptr, "CreateWindowExW must create native window for GDI");
+
+    user32::HDC hdcWin = user32::GetDC(hwnd);
+    TEST_ASSERT(hdcWin != nullptr, "user32::GetDC must return valid HDC via interop hook");
+
+    gdi32::HBRUSH hWinBrush = gdi32::CreateSolidBrush(gdi32::RGB(120, 80, 200));
+    gdi32::RECT winRc{0, 0, 200, 150};
+    gdi32::FillRect(reinterpret_cast<gdi32::HDC>(hdcWin), &winRc, hWinBrush);
+    gdi32::TextOutW(reinterpret_cast<gdi32::HDC>(hdcWin), 10, 10, L"WINDOW DC", 9);
+
+    int relDc = user32::ReleaseDC(hwnd, hdcWin);
+    TEST_ASSERT(relDc == 1, "user32::ReleaseDC must succeed");
+
+    uint32_t winW = 0, winH = 0;
+    const uint32_t* pWinBuf = user32::WindowManager::get().getWindowPixelBuffer(hwnd, &winW, &winH);
+    TEST_ASSERT(pWinBuf != nullptr && winW == 200 && winH == 150, "Window pixel buffer must exist with 200x150 dimensions");
+
+    int msgRes = user32::MessageBoxW(hwnd, L"GDI & COM Foundation Initialized", L"MicaNT Notice", user32::MB_OK);
+    TEST_ASSERT(msgRes == user32::IDOK, "MessageBoxW must return IDOK");
+
+    int msgResA = user32::MessageBoxA(hwnd, "GDI & COM Foundation ASCII", "MicaNT Notice", user32::MB_OK);
+    TEST_ASSERT(msgResA == user32::IDOK, "MessageBoxA must return IDOK");
+
+    user32::DestroyWindow(hwnd);
+
+    // ------------------------------------------------------------------------
+    // 15. Shell Commands: gdi and com
+    // ------------------------------------------------------------------------
+    shell::CommandShell shell;
+    std::ostringstream outGdi;
+    shell.execute("gdi", outGdi);
+    std::string strGdi = outGdi.str();
+    TEST_ASSERT(strGdi.find("Graphics Device Interface (GDI32)") != std::string::npos, "Shell 'gdi' must display GDI32 header");
+    TEST_ASSERT(strGdi.find("Test DC rendering verified") != std::string::npos, "Shell 'gdi' must verify test rendering");
+
+    std::ostringstream outCom;
+    shell.execute("com", outCom);
+    std::string strCom = outCom.str();
+    TEST_ASSERT(strCom.find("Component Object Model (COM)") != std::string::npos, "Shell 'com' must display COM header");
+    TEST_ASSERT(strCom.find("CoInitializeEx initialized") != std::string::npos, "Shell 'com' must verify CoInitializeEx");
+    TEST_ASSERT(strCom.find("Allocated BSTR") != std::string::npos, "Shell 'com' must verify BSTR allocation");
+
+    // ------------------------------------------------------------------------
+    // 16. Cleanup GDI Objects
+    // ------------------------------------------------------------------------
+    gdi32::DeleteObject(hWinBrush);
+    gdi32::DeleteObject(hBlueBrush);
+    gdi32::DeleteObject(hRedBrush);
+    gdi32::DeleteObject(hGreenPen);
+    gdi32::DeleteObject(hbmpSrc);
+    gdi32::DeleteDC(hdcSrc);
+    gdi32::DeleteObject(hbmpCompat);
+    gdi32::DeleteObject(hDib);
+    gdi32::DeleteDC(hdcMem);
+
+    ole32::CoUninitialize();
+
+    std::cout << "[TEST] Suite 59: Gdi32 & Ole32 Win32 Foundation PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -7519,6 +7982,7 @@ int main() {
     RUN_TEST(Test_User32_WindowManager_SwapchainPresentation_And_DirectInput);
     RUN_TEST(Test_PrismX_Interactive3DViewer_And_CameraPipeline);
     RUN_TEST(Test_Direct3D9_Runtime_And_FixedFunctionPipeline);
+    RUN_TEST(Test_Gdi32_And_Ole32_Win32Foundation);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

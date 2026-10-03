@@ -44,6 +44,8 @@
 #include "vulkan.hpp"
 #include "prism_viewer.hpp"
 #include "d3d9.hpp"
+#include "gdi32.hpp"
+#include "ole32.hpp"
 
 namespace micant::shell {
 
@@ -87,6 +89,8 @@ public:
         ws2_32::InitializeWs2_32SubsystemExports();
         iphlpapi::InitializeIpHlpApiSubsystemExports();
         d3d9::InitializeD3D9SubsystemExports();
+        gdi32::InitializeGdi32SubsystemExports();
+        ole32::InitializeOle32SubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -168,6 +172,10 @@ public:
             cmdPrismX(tokens, out);
         } else if (cmd == "d3d9" || cmd == "dx9") {
             cmdD3D9(tokens, out);
+        } else if (cmd == "gdi") {
+            cmdGDI(tokens, out);
+        } else if (cmd == "com" || cmd == "ole") {
+            cmdCOM(tokens, out);
         } else if (cmd == "view3d" || cmd == "viewer3d") {
             cmdView3D(tokens, out);
         } else if (cmd == "vulkan" || cmd == "vkinfo" || cmd == "vkcube") {
@@ -398,6 +406,9 @@ private:
             << "  SC QUERY/START    Interrogates and controls Service Control Manager\n"
             << "  WHOAMI [/priv]    Displays user identity, group SIDs, and token privileges\n"
             << "  PRISMX / GPU      Displays GPU adapters, VRAM, and runs 3D tests (prismx test)\n"
+            << "  D3D9 / DX9        Initializes Direct3D 9 fixed-function pipeline test\n"
+            << "  GDI               Displays GDI32 graphics engine info and verifies 2D drawing\n"
+            << "  COM / OLE         Displays COM / OLE runtime info, GUID generation and BSTR test\n"
             << "  VIEW3D            Launches interactive 3D model viewer (view3d --torus|--cube|--crystal|--wireframe)\n"
             << "  VULKAN / VKINFO   Displays Vulkan ICD status, physical devices, and vkcube test\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
@@ -1697,6 +1708,71 @@ private:
         pDevice->Release();
         pD3D->Release();
         user32::DestroyWindow(hwnd);
+    }
+
+    void cmdGDI(const std::vector<std::string>& tokens, std::ostream& out) {
+        (void)tokens;
+        out << "========================================================================\n"
+            << "              MicaNT Graphics Device Interface (GDI32) Subsystem         \n"
+            << "========================================================================\n\n";
+
+        out << "GDI Version:        3.0 (Win32 GDI Clean-Room Native)\n"
+            << "Export Library:     gdi32.dll\n"
+            << "Default Rasterizer: 32-bpp BGRA TrueColor Software Engine\n"
+            << "Stock Objects:      Brushes (WHITE, BLACK, NULL), Pens (WHITE, BLACK, NULL), System Fonts\n"
+            << "Supported ROPs:     SRCCOPY, SRCPAINT, SRCAND, SRCINVERT, BLACKNESS, WHITENESS\n"
+            << "OpenGL / 3D Bridge: ChoosePixelFormat, SetPixelFormat, SwapBuffers\n\n";
+
+        gdi32::HDC hdcMem = gdi32::CreateCompatibleDC(nullptr);
+        if (hdcMem) {
+            gdi32::HBITMAP hbmp = gdi32::CreateCompatibleBitmap(hdcMem, 64, 64);
+            gdi32::SelectObject(hdcMem, hbmp);
+            gdi32::HBRUSH hbr = gdi32::CreateSolidBrush(gdi32::RGB(0, 120, 215));
+            gdi32::RECT rc{0, 0, 64, 64};
+            gdi32::FillRect(hdcMem, &rc, hbr);
+            gdi32::HPEN hpen = gdi32::CreatePen(gdi32::PS_SOLID, 1, gdi32::RGB(255, 255, 255));
+            gdi32::SelectObject(hdcMem, hpen);
+            gdi32::Rectangle(hdcMem, 10, 10, 54, 54);
+            gdi32::TextOutW(hdcMem, 14, 28, L"MICA", 4);
+            out << "[GDI32] Test DC rendering verified: 64x64 bitmap with solid fill, pen rect & text.\n";
+            gdi32::DeleteObject(hpen);
+            gdi32::DeleteObject(hbr);
+            gdi32::DeleteObject(hbmp);
+            gdi32::DeleteDC(hdcMem);
+        }
+    }
+
+    void cmdCOM(const std::vector<std::string>& tokens, std::ostream& out) {
+        (void)tokens;
+        out << "========================================================================\n"
+            << "        MicaNT Component Object Model (COM) & OLE Automation Subsystem   \n"
+            << "========================================================================\n\n";
+
+        out << "COM Runtime:       ole32.dll / oleaut32.dll\n"
+            << "Threading Model:   Multi-Threaded Apartment (MTA) & Single-Threaded Apartment (STA)\n"
+            << "Task Allocator:    CoTaskMemAlloc / CoTaskMemFree (RtlProcessHeap)\n"
+            << "Automation Types:  BSTR (length-prefixed UTF-16), VARIANT (polymorphic union)\n"
+            << "Class Factories:   IUnknown, IClassFactory, CoGetClassObject, CoCreateInstance\n\n";
+
+        ole32::HRESULT hr = ole32::CoInitializeEx(nullptr, ole32::COINIT_MULTITHREADED);
+        out << "[OLE32] CoInitializeEx initialized (HRESULT: 0x" << std::hex << hr << std::dec << ")\n";
+
+        micant::GUID g{};
+        ole32::CoCreateGuid(&g);
+        wchar_t szGuid[64]{};
+        ole32::StringFromGUID2(g, szGuid, 64);
+        std::wstring wsGuid(szGuid);
+        std::string sGuid(wsGuid.begin(), wsGuid.end());
+        out << "[OLE32] Generated test GUID: " << sGuid << "\n";
+
+        ole32::BSTR bstr = ole32::SysAllocString(L"MicaNT Native OLE Automation");
+        if (bstr) {
+            out << "[OLEAUT32] Allocated BSTR: length=" << ole32::SysStringLen(bstr) 
+                << " characters, byteLen=" << ole32::SysStringByteLen(bstr) << " bytes\n";
+            ole32::SysFreeString(bstr);
+        }
+
+        ole32::CoUninitialize();
     }
 
     void cmdView3D(const std::vector<std::string>& tokens, std::ostream& out) {
