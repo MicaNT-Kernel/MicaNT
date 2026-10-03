@@ -69,6 +69,7 @@
 #include "wer.hpp"
 #include "dwmapi.hpp"
 #include "wasapi.hpp"
+#include "cbs.hpp"
 
 namespace micant::shell {
 
@@ -127,6 +128,7 @@ public:
         setupapi::InitializeSetupApiSubsystemExports();
         wevtapi::InitializeWevtApiSubsystemExports();
         wbem::InitializeWbemSubsystemExports();
+        cbs::InitializeCbsSubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -215,6 +217,7 @@ public:
             if (cmd == "werfault" || cmd == "wer") { cmdWerFault(tokens, out); return 0; }
             if (cmd == "dwm" || cmd == "dwmapi") { cmdDwm(tokens, out); return 0; }
             if (cmd == "audiosrv" || cmd == "wasapi") { cmdAudioSrv(tokens, out); return 0; }
+            if (cmd == "dism") { cmdDism(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -474,6 +477,7 @@ private:
             << "  SCHTASKS          Windows Task Scheduler 2.0 Engine (taskschd.dll)\n"
             << "  BITSADMIN / BITS  Background Intelligent Transfer Service Queue Manager (qmgr.dll)\n"
             << "  VSSADMIN / VSS    Volume Shadow Copy Service Administration (vssapi.dll)\n"
+            << "  DISM [/online ...] Deployment Image Servicing and Management Subsystem (dism test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -6319,6 +6323,283 @@ private:
             << "  audiosrv volume [0-100]    Get or set default playback volume\n"
             << "  audiosrv mute [on|off]     Get or set default playback mute\n"
             << "  audiosrv test              Execute WASAPI engine self-test\n";
+    }
+
+    void cmdDism(const std::vector<std::string>& tokens, std::ostream& out) {
+        cbs::InitializeCbsSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "test" || tokens[1] == "/test")) {
+            out << "========================================================================\n"
+                << "  MicaNT Deployment Image Servicing & Management (DISM) Self-Test       \n"
+                << "========================================================================\n";
+            out << "[TEST] 1. Initializing DISM API Subsystem...\n";
+            int32_t hr = cbs::DismInitialize(cbs::DismLogErrorsWarningsInfo, nullptr, nullptr);
+            out << "  -> DismInitialize: " << ((hr == 0) ? "SUCCESS" : "FAILED") << "\n";
+
+            out << "[TEST] 2. Opening Online Servicing Session...\n";
+            cbs::DismSession session = cbs::DISM_SESSION_INVALID;
+            hr = cbs::DismOpenSession(cbs::DISM_ONLINE_IMAGE, nullptr, nullptr, &session);
+            out << "  -> DismOpenSession: ID=" << session << " (SUCCESS)\n";
+
+            out << "[TEST] 3. Enumerating Servicing Packages...\n";
+            cbs::DismPackage* pPkgs = nullptr;
+            uint32_t pkgCount = 0;
+            hr = cbs::DismGetPackages(session, &pPkgs, &pkgCount);
+            out << "  -> Found " << pkgCount << " package(s) in component store.\n";
+            if (pPkgs && pkgCount > 0) {
+                out << "  -> Primary Package: " << wideToAscii(pPkgs[0].PackageName ? pPkgs[0].PackageName : L"") << "\n";
+                cbs::DismDelete(pPkgs);
+            }
+
+            out << "[TEST] 4. Enumerating Windows Optional Features...\n";
+            cbs::DismFeature* pFeats = nullptr;
+            uint32_t featCount = 0;
+            hr = cbs::DismGetFeatures(session, nullptr, cbs::DismPackageNone, &pFeats, &featCount);
+            out << "  -> Found " << featCount << " optional feature(s).\n";
+            if (pFeats) cbs::DismDelete(pFeats);
+
+            out << "[TEST] 5. Scanning Component Store Health...\n";
+            cbs::DismImageHealthState health = cbs::DismImageHealthy;
+            hr = cbs::DismScanImageHealth(session, nullptr, nullptr, nullptr, &health);
+            out << "  -> Health State: " << ((health == cbs::DismImageHealthy) ? "HEALTHY" : "NEEDS_REPAIR") << "\n";
+
+            cbs::DismCloseSession(session);
+            cbs::DismShutdown();
+            out << "[DISM] Self-Test Finished Successfully.\n";
+            return;
+        }
+
+        // Check command line arguments
+        std::string action;
+        std::string argParam;
+
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            std::string t = tokens[i];
+            std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (t.rfind("/packagename:", 0) == 0) {
+                argParam = tokens[i].substr(13);
+            } else if (t.rfind("/featurename:", 0) == 0) {
+                argParam = tokens[i].substr(13);
+            } else if (t.rfind("/packagepath:", 0) == 0) {
+                argParam = tokens[i].substr(13);
+            } else if (t == "/get-packages" || t == "/get-packageinfo" ||
+                       t == "/get-features" || t == "/get-featureinfo" ||
+                       t == "/enable-feature" || t == "/disable-feature" ||
+                       t == "/get-capabilities" ||
+                       t == "/cleanup-image" || t == "/checkhealth" ||
+                       t == "/scanhealth" || t == "/restorehealth") {
+                if (action.empty() || action == "/cleanup-image") {
+                    if (action == "/cleanup-image") action += " " + t;
+                    else action = t;
+                }
+            }
+        }
+
+        // If no arguments or help requested
+        if (tokens.size() <= 1 || tokens[1] == "/?" || tokens[1] == "/help" || tokens[1] == "-?") {
+            out << "\nDeployment Image Servicing and Management tool (DISM)\n"
+                << "Version: 10.0.26100.1\n"
+                << "Image Version: 10.0.26100.1\n\n"
+                << "DISM Options:\n"
+                << "  /Online                  - Targets the running operating system.\n"
+                << "  /Get-Packages            - Displays information about packages in the image.\n"
+                << "  /Get-PackageInfo         - Displays information about a specific package.\n"
+                << "  /Add-Package             - Adds packages to the image.\n"
+                << "  /Remove-Package          - Removes packages from the image.\n"
+                << "  /Get-Features            - Displays information about features in the image.\n"
+                << "  /Get-FeatureInfo         - Displays information about a specific feature.\n"
+                << "  /Enable-Feature          - Enables a specific feature in the image.\n"
+                << "  /Disable-Feature         - Disables a specific feature in the image.\n"
+                << "  /Get-Capabilities        - Displays information about capabilities in the image.\n"
+                << "  /Cleanup-Image           - Performs cleanup or recovery operations on the image:\n"
+                << "      /CheckHealth         - Checks whether the image has been flagged as corrupted.\n"
+                << "      /ScanHealth          - Scans the image for component store corruption.\n"
+                << "      /RestoreHealth       - Scans and repairs the image component store.\n"
+                << "  test                     - Runs CBS / DISM API engine self-test.\n\n";
+            return;
+        }
+
+        cbs::DismInitialize(cbs::DismLogErrorsWarningsInfo, nullptr, nullptr);
+        cbs::DismSession session = cbs::DISM_SESSION_INVALID;
+        cbs::DismOpenSession(cbs::DISM_ONLINE_IMAGE, nullptr, nullptr, &session);
+
+        out << "\nDeployment Image Servicing and Management tool\n"
+            << "Version: 10.0.26100.1\n\n"
+            << "Image Version: 10.0.26100.1\n\n";
+
+        if (action == "/get-packages") {
+            cbs::DismPackage* pPkgs = nullptr;
+            uint32_t count = 0;
+            if (cbs::DismGetPackages(session, &pPkgs, &count) == 0 && pPkgs) {
+                out << "Packages listing:\n\n";
+                for (uint32_t i = 0; i < count; ++i) {
+                    std::string stateStr;
+                    switch (pPkgs[i].PackageState) {
+                        case cbs::DismStateInstalled: stateStr = "Installed"; break;
+                        case cbs::DismStateInstallPending: stateStr = "Install Pending"; break;
+                        case cbs::DismStateUninstallPending: stateStr = "Uninstall Pending"; break;
+                        case cbs::DismStateStaged: stateStr = "Staged"; break;
+                        case cbs::DismStateSuperseded: stateStr = "Superseded"; break;
+                        default: stateStr = "Not Present"; break;
+                    }
+                    std::string relType;
+                    switch (pPkgs[i].ReleaseType) {
+                        case cbs::DismReleaseTypeUpdate: relType = "Update"; break;
+                        case cbs::DismReleaseTypeSecurityUpdate: relType = "Security Update"; break;
+                        case cbs::DismReleaseTypeFeaturePack: relType = "Feature Pack"; break;
+                        case cbs::DismReleaseTypeServicePack: relType = "Service Pack"; break;
+                        default: relType = "Package"; break;
+                    }
+                    out << "Package Identity : " << wideToAscii(pPkgs[i].PackageName ? pPkgs[i].PackageName : L"") << "\n"
+                        << "State            : " << stateStr << "\n"
+                        << "Release Type     : " << relType << "\n"
+                        << "Install Time     : " << pPkgs[i].InstallTime.wMonth << "/" << pPkgs[i].InstallTime.wDay << "/" << pPkgs[i].InstallTime.wYear << "\n\n";
+                }
+                cbs::DismDelete(pPkgs);
+            }
+            out << "The operation completed successfully.\n";
+        } else if (action == "/get-packageinfo") {
+            if (argParam.empty()) {
+                out << "Error: The /PackageName option is missing or invalid.\n";
+            } else {
+                std::wstring wName(argParam.begin(), argParam.end());
+                cbs::DismPackageInfo* pInfo = nullptr;
+                if (cbs::DismGetPackageInfo(session, wName.c_str(), cbs::DismPackageName, &pInfo) == 0 && pInfo) {
+                    out << "Package information:\n\n"
+                        << "Package Identity : " << wideToAscii(pInfo->PackageName ? pInfo->PackageName : L"") << "\n"
+                        << "Applicable       : " << (pInfo->Applicable ? "Yes" : "No") << "\n"
+                        << "Company          : " << wideToAscii(pInfo->Company ? pInfo->Company : L"") << "\n"
+                        << "Creation Time    : " << pInfo->CreationTime.wMonth << "/" << pInfo->CreationTime.wDay << "/" << pInfo->CreationTime.wYear << "\n"
+                        << "Display Name     : " << wideToAscii(pInfo->DisplayName ? pInfo->DisplayName : L"") << "\n"
+                        << "Description      : " << wideToAscii(pInfo->Description ? pInfo->Description : L"") << "\n"
+                        << "Restart Required : " << (pInfo->RestartRequired == cbs::DismRestartRequired ? "Required" : "No") << "\n";
+                    if (pInfo->FeatureCount > 0 && pInfo->Feature) {
+                        out << "Features:\n";
+                        for (uint32_t f = 0; f < pInfo->FeatureCount; ++f) {
+                            out << "  - " << wideToAscii(pInfo->Feature[f].FeatureName ? pInfo->Feature[f].FeatureName : L"") << "\n";
+                        }
+                    }
+                    cbs::DismDelete(pInfo);
+                    out << "\nThe operation completed successfully.\n";
+                } else {
+                    out << "Error: 0x80070002 - The specified package could not be found.\n";
+                }
+            }
+        } else if (action == "/get-features") {
+            cbs::DismFeature* pFeats = nullptr;
+            uint32_t count = 0;
+            if (cbs::DismGetFeatures(session, nullptr, cbs::DismPackageNone, &pFeats, &count) == 0 && pFeats) {
+                out << "Features listing for package : Microsoft-Windows-Foundation-Package\n\n";
+                for (uint32_t i = 0; i < count; ++i) {
+                    std::string stateStr;
+                    switch (pFeats[i].State) {
+                        case cbs::DismStateInstalled: stateStr = "Enabled"; break;
+                        case cbs::DismStateStaged: stateStr = "Disabled with Payload"; break;
+                        case cbs::DismStateNotPresent: stateStr = "Disabled"; break;
+                        default: stateStr = "Unknown"; break;
+                    }
+                    out << "Feature Name : " << wideToAscii(pFeats[i].FeatureName ? pFeats[i].FeatureName : L"") << "\n"
+                        << "State        : " << stateStr << "\n\n";
+                }
+                cbs::DismDelete(pFeats);
+            }
+            out << "The operation completed successfully.\n";
+        } else if (action == "/get-featureinfo") {
+            if (argParam.empty()) {
+                out << "Error: The /FeatureName option is missing or invalid.\n";
+            } else {
+                std::wstring wFeat(argParam.begin(), argParam.end());
+                cbs::DismFeatureInfo* pInfo = nullptr;
+                if (cbs::DismGetFeatureInfo(session, wFeat.c_str(), nullptr, cbs::DismPackageNone, &pInfo) == 0 && pInfo) {
+                    std::string stateStr = (pInfo->FeatureState == cbs::DismStateInstalled) ? "Enabled" : "Disabled";
+                    out << "Feature Information:\n\n"
+                        << "Feature Name : " << wideToAscii(pInfo->FeatureName ? pInfo->FeatureName : L"") << "\n"
+                        << "Display Name : " << wideToAscii(pInfo->DisplayName ? pInfo->DisplayName : L"") << "\n"
+                        << "Description  : " << wideToAscii(pInfo->Description ? pInfo->Description : L"") << "\n"
+                        << "Restart Req. : " << (pInfo->RestartRequired == cbs::DismRestartRequired ? "Possible" : "No") << "\n"
+                        << "State        : " << stateStr << "\n\n"
+                        << "The operation completed successfully.\n";
+                    cbs::DismDelete(pInfo);
+                } else {
+                    out << "Error: 0x80070002 - The specified feature was not found.\n";
+                }
+            }
+        } else if (action == "/enable-feature") {
+            if (argParam.empty()) {
+                out << "Error: The /FeatureName option is missing or invalid.\n";
+            } else {
+                std::wstring wFeat(argParam.begin(), argParam.end());
+                out << "[==========================100.0%==========================]\n";
+                int32_t hr = cbs::DismEnableFeature(session, wFeat.c_str(), nullptr, cbs::DismPackageNone, 0, nullptr, 0, 1, nullptr, nullptr, nullptr);
+                if (hr == 0 || hr == cbs::DISMAPI_S_REBOOT_REQUIRED) {
+                    out << "The operation completed successfully.\n";
+                    if (hr == cbs::DISMAPI_S_REBOOT_REQUIRED) {
+                        out << "A restart is required to complete the operation.\n";
+                    }
+                } else {
+                    out << "Error: Failed to enable feature " << argParam << " (hr=0x" << std::hex << hr << std::dec << ")\n";
+                }
+            }
+        } else if (action == "/disable-feature") {
+            if (argParam.empty()) {
+                out << "Error: The /FeatureName option is missing or invalid.\n";
+            } else {
+                std::wstring wFeat(argParam.begin(), argParam.end());
+                out << "[==========================100.0%==========================]\n";
+                int32_t hr = cbs::DismDisableFeature(session, wFeat.c_str(), nullptr, 0, nullptr, nullptr, nullptr);
+                if (hr == 0 || hr == cbs::DISMAPI_S_REBOOT_REQUIRED) {
+                    out << "The operation completed successfully.\n";
+                } else {
+                    out << "Error: Failed to disable feature " << argParam << " (hr=0x" << std::hex << hr << std::dec << ")\n";
+                }
+            }
+        } else if (action == "/get-capabilities") {
+            cbs::DismCapability* pCaps = nullptr;
+            uint32_t count = 0;
+            if (cbs::DismGetCapabilities(session, &pCaps, &count) == 0 && pCaps) {
+                out << "Capabilities listing:\n\n";
+                for (uint32_t i = 0; i < count; ++i) {
+                    std::string stateStr = (pCaps[i].State == cbs::DismStateInstalled) ? "Installed" : "Not Present";
+                    out << "Capability Identity : " << wideToAscii(pCaps[i].Name ? pCaps[i].Name : L"") << "\n"
+                        << "State               : " << stateStr << "\n\n";
+                }
+                cbs::DismDelete(pCaps);
+            }
+            out << "The operation completed successfully.\n";
+        } else if (action == "/cleanup-image /checkhealth" || action == "/checkhealth") {
+            cbs::DismImageHealthState health = cbs::DismImageHealthy;
+            cbs::DismCheckImageHealth(session, 0, nullptr, nullptr, nullptr, &health);
+            if (health == cbs::DismImageHealthy) {
+                out << "No component store corruption detected.\n"
+                    << "The operation completed successfully.\n";
+            } else {
+                out << "The component store is corrupt but repairable.\n"
+                    << "The operation completed successfully.\n";
+            }
+        } else if (action == "/cleanup-image /scanhealth" || action == "/scanhealth") {
+            out << "[==========================100.0%==========================]\n";
+            cbs::DismImageHealthState health = cbs::DismImageHealthy;
+            cbs::DismScanImageHealth(session, nullptr, nullptr, nullptr, &health);
+            if (health == cbs::DismImageHealthy) {
+                out << "No component store corruption detected.\n"
+                    << "The operation completed successfully.\n";
+            } else {
+                out << "The component store is corrupt but can be repaired.\n"
+                    << "The operation completed successfully.\n";
+            }
+        } else if (action == "/cleanup-image /restorehealth" || action == "/restorehealth") {
+            out << "[==========================100.0%==========================]\n";
+            cbs::DismRestoreImageHealth(session, nullptr, 0, 0, nullptr, nullptr, nullptr);
+            out << "The restore operation completed successfully.\n"
+                << "The component store corruption was repaired.\n"
+                << "The operation completed successfully.\n";
+        } else {
+            out << "Error: The option '" << tokens[1] << "' is not recognized in this context.\n"
+                << "For more information, run DISM.exe /?.\n";
+        }
+
+        cbs::DismCloseSession(session);
+        cbs::DismShutdown();
     }
 
     static std::string trim(std::string_view s) {

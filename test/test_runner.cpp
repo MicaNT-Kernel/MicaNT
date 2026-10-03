@@ -101,6 +101,7 @@
 #include "micant/wer.hpp"
 #include "micant/dwmapi.hpp"
 #include "micant/wasapi.hpp"
+#include "micant/cbs.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -15415,6 +15416,307 @@ void Test_WindowsWASAPI_CoreAudioEngine_Subsystem() {
     std::cout << "[TEST] Suite 79: Windows Audio Session API (WASAPI) & Core Audio Engine Subsystem PASSED.\n";
 }
 
+void Test_WindowsCBS_DISM_Servicing_Subsystem() {
+    std::cout << "[TEST] Running Suite 80: Windows Component-Based Servicing (CBS) & DISM Subsystem...\n";
+
+    // 1. Dynamic Exports in dismapi.dll and cbsapi.dll
+    {
+        cbs::InitializeCbsSubsystemExports();
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismInitialize") != nullptr, "dismapi.dll!DismInitialize export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismShutdown") != nullptr, "dismapi.dll!DismShutdown export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismOpenSession") != nullptr, "dismapi.dll!DismOpenSession export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismCloseSession") != nullptr, "dismapi.dll!DismCloseSession export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismDelete") != nullptr, "dismapi.dll!DismDelete export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismGetPackages") != nullptr, "dismapi.dll!DismGetPackages export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismGetPackageInfo") != nullptr, "dismapi.dll!DismGetPackageInfo export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismAddPackage") != nullptr, "dismapi.dll!DismAddPackage export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismRemovePackage") != nullptr, "dismapi.dll!DismRemovePackage export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismGetFeatures") != nullptr, "dismapi.dll!DismGetFeatures export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismGetFeatureInfo") != nullptr, "dismapi.dll!DismGetFeatureInfo export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismEnableFeature") != nullptr, "dismapi.dll!DismEnableFeature export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismDisableFeature") != nullptr, "dismapi.dll!DismDisableFeature export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismCheckImageHealth") != nullptr, "dismapi.dll!DismCheckImageHealth export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismScanImageHealth") != nullptr, "dismapi.dll!DismScanImageHealth export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismRestoreImageHealth") != nullptr, "dismapi.dll!DismRestoreImageHealth export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismGetCapabilities") != nullptr, "dismapi.dll!DismGetCapabilities export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismGetCapabilityInfo") != nullptr, "dismapi.dll!DismGetCapabilityInfo export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismAddCapability") != nullptr, "dismapi.dll!DismAddCapability export must exist");
+        TEST_ASSERT(ldr.getExport("dismapi.dll", "DismRemoveCapability") != nullptr, "dismapi.dll!DismRemoveCapability export must exist");
+
+        TEST_ASSERT(ldr.getExport("cbsapi.dll", "CbsInitialize") != nullptr, "cbsapi.dll!CbsInitialize export must exist");
+        TEST_ASSERT(ldr.getExport("cbsapi.dll", "CbsShutdown") != nullptr, "cbsapi.dll!CbsShutdown export must exist");
+        TEST_ASSERT(ldr.getExport("cbsapi.dll", "CbsCreateSession") != nullptr, "cbsapi.dll!CbsCreateSession export must exist");
+    }
+
+    // 2. Module Version Database Metadata
+    {
+        uint32_t handle = 0;
+        uint32_t sizeDism = version::GetFileVersionInfoSizeA("dismapi.dll", &handle);
+        TEST_ASSERT(sizeDism > 0, "GetFileVersionInfoSizeA for dismapi.dll must succeed");
+        std::vector<uint8_t> buf(sizeDism);
+        TEST_ASSERT(version::GetFileVersionInfoA("dismapi.dll", 0, sizeDism, buf.data()) != 0, "GetFileVersionInfoA for dismapi.dll must succeed");
+
+        char* desc = nullptr;
+        uint32_t descLen = 0;
+        int32_t res = version::VerQueryValueA(buf.data(), "\\StringFileInfo\\040904B0\\FileDescription", reinterpret_cast<void**>(&desc), &descLen);
+        TEST_ASSERT(res != 0 && desc != nullptr, "VerQueryValueA for FileDescription in dismapi.dll must succeed");
+        TEST_ASSERT(std::string(desc).find("Deployment Image Servicing") != std::string::npos, "FileDescription must match DISM");
+
+        uint32_t sizeTi = version::GetFileVersionInfoSizeA("trustedinstaller.exe", &handle);
+        TEST_ASSERT(sizeTi > 0, "GetFileVersionInfoSizeA for trustedinstaller.exe must succeed");
+    }
+
+    // 3. Service Control Manager: TrustedInstaller Service
+    {
+        auto rec = scm::ServiceControlManager::get().getServiceRecord(L"TrustedInstaller");
+        TEST_ASSERT(rec != nullptr, "TrustedInstaller service record must be registered in SCM");
+        TEST_ASSERT(rec->displayName == L"Windows Modules Installer", "TrustedInstaller display name must match");
+        TEST_ASSERT(rec->status.dwCurrentState == scm::SERVICE_RUNNING, "TrustedInstaller state must be SERVICE_RUNNING");
+        TEST_ASSERT(rec->startType == scm::SERVICE_DEMAND_START, "TrustedInstaller startType must be SERVICE_DEMAND_START");
+    }
+
+    // 4. DISM API Lifecycle: DismInitialize, DismOpenSession, DismCloseSession, DismShutdown
+    cbs::DismSession session = cbs::DISM_SESSION_INVALID;
+    {
+        int32_t hr = cbs::DismInitialize(cbs::DismLogErrorsWarningsInfo, nullptr, nullptr);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismInitialize must return S_OK");
+
+        hr = cbs::DismOpenSession(cbs::DISM_ONLINE_IMAGE, nullptr, nullptr, &session);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismOpenSession on DISM_ONLINE_IMAGE must return S_OK");
+        TEST_ASSERT(session != cbs::DISM_SESSION_INVALID, "Valid DismSession ID must be returned");
+    }
+
+    // 5. Package Enumeration and Detailed Package Info
+    {
+        cbs::DismPackage* packages = nullptr;
+        uint32_t count = 0;
+        int32_t hr = cbs::DismGetPackages(session, &packages, &count);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismGetPackages must return S_OK");
+        TEST_ASSERT(packages != nullptr && count >= 3, "At least 3 pre-seeded packages must be enumerated");
+
+        bool foundRollup = false;
+        std::wstring targetName;
+        for (uint32_t i = 0; i < count; ++i) {
+            std::wstring name = packages[i].PackageName ? packages[i].PackageName : L"";
+            if (name.find(L"Package_for_RollupFix") != std::wstring::npos) {
+                foundRollup = true;
+                targetName = name;
+                TEST_ASSERT(packages[i].PackageState == cbs::DismStateInstalled, "RollupFix package must be DismStateInstalled");
+                TEST_ASSERT(packages[i].ReleaseType == cbs::DismReleaseTypeUpdate, "RollupFix package must be DismReleaseTypeUpdate");
+            }
+        }
+        TEST_ASSERT(foundRollup, "Package_for_RollupFix must be present in enumerated packages");
+
+        // Detailed Package Info
+        cbs::DismPackageInfo* info = nullptr;
+        hr = cbs::DismGetPackageInfo(session, targetName.c_str(), cbs::DismPackageName, &info);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && info != nullptr, "DismGetPackageInfo must return S_OK");
+        TEST_ASSERT(info->Applicable == 1, "Package Applicable flag must be 1");
+        TEST_ASSERT(info->PackageState == cbs::DismStateInstalled, "Package state must be installed");
+        TEST_ASSERT(info->CustomPropertyCount >= 2, "CustomPropertyCount must be >= 2");
+        TEST_ASSERT(info->FeatureCount >= 2, "FeatureCount must be >= 2");
+
+        // Clean up memory via DismDelete
+        hr = cbs::DismDelete(info);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismDelete for package info must return S_OK");
+        hr = cbs::DismDelete(packages);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismDelete for package array must return S_OK");
+    }
+
+    // 6. Dynamic Package Addition and Removal Lifecycle
+    {
+        uint32_t progressCalls = 0;
+        auto progressCb = [](uint32_t /*current*/, uint32_t /*total*/, void* userData) {
+            auto* pCount = static_cast<uint32_t*>(userData);
+            if (pCount) (*pCount)++;
+        };
+
+        int32_t hr = cbs::DismAddPackage(session, L"C:\\Updates\\Windows11-KB5049999-x64.cab", 0, 1, nullptr, progressCb, &progressCalls);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismAddPackage with preventPending=1 must return S_OK");
+        TEST_ASSERT(progressCalls > 0, "Progress callback must be invoked during DismAddPackage");
+
+        cbs::DismPackageInfo* info = nullptr;
+        hr = cbs::DismGetPackageInfo(session, L"Windows11-KB5049999-x64", cbs::DismPackageName, &info);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && info != nullptr, "Newly added package must be retrievable");
+        TEST_ASSERT(info->PackageState == cbs::DismStateInstalled, "Newly added package state must be Installed");
+        cbs::DismDelete(info);
+
+        // Remove package
+        hr = cbs::DismRemovePackage(session, L"Windows11-KB5049999-x64", cbs::DismPackageName, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_REBOOT_REQUIRED, "DismRemovePackage must return DISMAPI_S_REBOOT_REQUIRED");
+
+        hr = cbs::DismGetPackageInfo(session, L"Windows11-KB5049999-x64", cbs::DismPackageName, &info);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && info != nullptr, "Package must still exist in uninstall pending state");
+        TEST_ASSERT(info->PackageState == cbs::DismStateUninstallPending, "Package state must be UninstallPending");
+        cbs::DismDelete(info);
+    }
+
+    // 7. Feature Enumeration & Feature Info
+    {
+        cbs::DismFeature* features = nullptr;
+        uint32_t count = 0;
+        int32_t hr = cbs::DismGetFeatures(session, nullptr, cbs::DismPackageNone, &features, &count);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && features != nullptr, "DismGetFeatures must return S_OK");
+        TEST_ASSERT(count >= 7, "At least 7 pre-seeded features must be present");
+
+        bool foundNetFx3 = false;
+        for (uint32_t i = 0; i < count; ++i) {
+            std::wstring fName = features[i].FeatureName ? features[i].FeatureName : L"";
+            if (fName == L"NetFx3") {
+                foundNetFx3 = true;
+                TEST_ASSERT(features[i].State == cbs::DismStateInstalled, "NetFx3 must be DismStateInstalled");
+            }
+        }
+        TEST_ASSERT(foundNetFx3, "NetFx3 feature must be found");
+        cbs::DismDelete(features);
+
+        // Detailed Feature Info
+        cbs::DismFeatureInfo* fInfo = nullptr;
+        hr = cbs::DismGetFeatureInfo(session, L"NetFx3", nullptr, cbs::DismPackageNone, &fInfo);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && fInfo != nullptr, "DismGetFeatureInfo for NetFx3 must succeed");
+        TEST_ASSERT(std::wstring(fInfo->DisplayName).find(L".NET Framework 3.5") != std::wstring::npos, "NetFx3 display name must match");
+        TEST_ASSERT(fInfo->FeatureState == cbs::DismStateInstalled, "FeatureState must be DismStateInstalled");
+        cbs::DismDelete(fInfo);
+    }
+
+    // 8. Feature Enablement & Disablement State Transitions
+    {
+        cbs::DismFeatureInfo* fInfo = nullptr;
+        int32_t hr = cbs::DismGetFeatureInfo(session, L"Containers", nullptr, cbs::DismPackageNone, &fInfo);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && fInfo != nullptr, "Containers feature must exist");
+        TEST_ASSERT(fInfo->FeatureState == cbs::DismStateStaged, "Containers must initially be DismStateStaged");
+        cbs::DismDelete(fInfo);
+
+        // Enable feature
+        hr = cbs::DismEnableFeature(session, L"Containers", nullptr, cbs::DismPackageNone, 0, nullptr, 0, 1, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK || hr == cbs::DISMAPI_S_REBOOT_REQUIRED, "DismEnableFeature on Containers must succeed");
+
+        hr = cbs::DismGetFeatureInfo(session, L"Containers", nullptr, cbs::DismPackageNone, &fInfo);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && fInfo != nullptr, "Containers info must be retrievable");
+        TEST_ASSERT(fInfo->FeatureState == cbs::DismStateInstalled, "Containers must now be DismStateInstalled");
+        cbs::DismDelete(fInfo);
+
+        // Disable feature
+        hr = cbs::DismDisableFeature(session, L"Containers", nullptr, 0, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK || hr == cbs::DISMAPI_S_REBOOT_REQUIRED, "DismDisableFeature must succeed");
+
+        hr = cbs::DismGetFeatureInfo(session, L"Containers", nullptr, cbs::DismPackageNone, &fInfo);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && fInfo != nullptr, "Containers info must be retrievable");
+        TEST_ASSERT(fInfo->FeatureState == cbs::DismStateStaged, "Containers must return to DismStateStaged");
+        cbs::DismDelete(fInfo);
+    }
+
+    // 9. Capabilities Enumeration, Info, Addition and Removal
+    {
+        cbs::DismCapability* caps = nullptr;
+        uint32_t capCount = 0;
+        int32_t hr = cbs::DismGetCapabilities(session, &caps, &capCount);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && caps != nullptr, "DismGetCapabilities must return S_OK");
+        TEST_ASSERT(capCount >= 4, "At least 4 capabilities must be registered");
+
+        bool foundOssh = false;
+        for (uint32_t i = 0; i < capCount; ++i) {
+            std::wstring cName = caps[i].Name ? caps[i].Name : L"";
+            if (cName.find(L"OpenSSH.Client") != std::wstring::npos) {
+                foundOssh = true;
+                TEST_ASSERT(caps[i].State == cbs::DismStateInstalled, "OpenSSH.Client must be DismStateInstalled");
+            }
+        }
+        TEST_ASSERT(foundOssh, "OpenSSH.Client capability must be found");
+        cbs::DismDelete(caps);
+
+        // Capability Info
+        cbs::DismCapabilityInfo* cInfo = nullptr;
+        hr = cbs::DismGetCapabilityInfo(session, L"OpenSSH.Server~~~~0.0.1.0", &cInfo);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && cInfo != nullptr, "DismGetCapabilityInfo for OpenSSH.Server must succeed");
+        TEST_ASSERT(cInfo->State == cbs::DismStateNotPresent, "OpenSSH.Server must initially be DismStateNotPresent");
+        TEST_ASSERT(cInfo->DownloadSize > 0 && cInfo->InstallSize > 0, "Sizes must be non-zero");
+        cbs::DismDelete(cInfo);
+
+        // Add capability
+        hr = cbs::DismAddCapability(session, L"OpenSSH.Server~~~~0.0.1.0", 0, nullptr, 0, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismAddCapability must return S_OK");
+
+        hr = cbs::DismGetCapabilityInfo(session, L"OpenSSH.Server~~~~0.0.1.0", &cInfo);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK && cInfo != nullptr, "DismGetCapabilityInfo must succeed");
+        TEST_ASSERT(cInfo->State == cbs::DismStateInstalled, "OpenSSH.Server must now be DismStateInstalled");
+        cbs::DismDelete(cInfo);
+
+        // Remove capability
+        hr = cbs::DismRemoveCapability(session, L"OpenSSH.Server~~~~0.0.1.0", nullptr, nullptr, nullptr);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismRemoveCapability must return S_OK");
+    }
+
+    // 10. Image Health Scanning and Restoration
+    {
+        cbs::DismImageHealthState health = cbs::DismImageNonRepairable;
+        int32_t hr = cbs::DismCheckImageHealth(session, 0, nullptr, nullptr, nullptr, &health);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismCheckImageHealth must return S_OK");
+        TEST_ASSERT(health == cbs::DismImageHealthy, "Initial component store health must be DismImageHealthy");
+
+        // Simulate store corruption
+        cbs::CbsComponentStore::get().setHealthState(cbs::DismImageRepairable);
+
+        hr = cbs::DismScanImageHealth(session, nullptr, nullptr, nullptr, &health);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismScanImageHealth must return S_OK");
+        TEST_ASSERT(health == cbs::DismImageRepairable, "ScanHealth must detect DismImageRepairable");
+
+        // Restore image health
+        hr = cbs::DismRestoreImageHealth(session, nullptr, 0, 0, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismRestoreImageHealth must return S_OK");
+
+        hr = cbs::DismCheckImageHealth(session, 0, nullptr, nullptr, nullptr, &health);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismCheckImageHealth must return S_OK");
+        TEST_ASSERT(health == cbs::DismImageHealthy, "Component store health must be restored to DismImageHealthy");
+    }
+
+    // 11. Close Session & Shutdown
+    {
+        int32_t hr = cbs::DismCloseSession(session);
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismCloseSession must return S_OK");
+
+        hr = cbs::DismShutdown();
+        TEST_ASSERT(hr == cbs::DISMAPI_S_OK, "DismShutdown must return S_OK");
+    }
+
+    // 12. Interactive CLI Shell Integration
+    {
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // 1. dism (help)
+        shell.execute("dism", out);
+        TEST_ASSERT(out.str().find("Deployment Image Servicing and Management tool (DISM)") != std::string::npos, "dism help must display banner");
+        TEST_ASSERT(out.str().find("/Online") != std::string::npos, "dism help must list /Online option");
+
+        // 2. dism /online /get-packages
+        out.str("");
+        shell.execute("dism /online /get-packages", out);
+        TEST_ASSERT(out.str().find("Package_for_RollupFix") != std::string::npos, "dism /get-packages must list packages");
+        TEST_ASSERT(out.str().find("The operation completed successfully") != std::string::npos, "dism /get-packages must complete successfully");
+
+        // 3. dism /online /get-features
+        out.str("");
+        shell.execute("dism /online /get-features", out);
+        TEST_ASSERT(out.str().find("NetFx3") != std::string::npos, "dism /get-features must list NetFx3");
+        TEST_ASSERT(out.str().find("Microsoft-Windows-Subsystem-Linux") != std::string::npos, "dism /get-features must list WSL");
+
+        // 4. dism /online /cleanup-image /checkhealth
+        out.str("");
+        shell.execute("dism /online /cleanup-image /checkhealth", out);
+        TEST_ASSERT(out.str().find("No component store corruption detected") != std::string::npos, "dism /checkhealth must report no corruption");
+
+        // 5. dism test
+        out.str("");
+        shell.execute("dism test", out);
+        TEST_ASSERT(out.str().find("Finished Successfully") != std::string::npos, "dism test must succeed");
+    }
+
+    std::cout << "[TEST] Suite 80: Windows Component-Based Servicing (CBS) & DISM Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -15499,6 +15801,7 @@ int main() {
     RUN_TEST(Test_WindowsWER_ErrorReporting_Subsystem);
     RUN_TEST(Test_WindowsDWM_DesktopWindowManager_Subsystem);
     RUN_TEST(Test_WindowsWASAPI_CoreAudioEngine_Subsystem);
+    RUN_TEST(Test_WindowsCBS_DISM_Servicing_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
