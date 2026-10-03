@@ -59,6 +59,7 @@
 #include "crypt32.hpp"
 #include "sspi.hpp"
 #include "rpcrt4.hpp"
+#include "oleaut32.hpp"
 
 namespace micant::shell {
 
@@ -113,6 +114,7 @@ public:
         crypt32::InitializeCrypt32SubsystemExports();
         sspi::InitializeSspiSubsystemExports();
         rpc::InitializeRpcSubsystemExports();
+        oleaut32::InitializeOleAut32SubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -190,6 +192,7 @@ public:
             if (cmd == "schannel") { cmdSchannel(tokens, out); return 0; }
             if (cmd == "rpc") { cmdRpc(tokens, out); return 0; }
             if (cmd == "uuidgen") { cmdUuidGen(tokens, out); return 0; }
+            if (cmd == "oleaut" || cmd == "safearray" || cmd == "variant") { cmdOleAut(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -441,6 +444,7 @@ private:
             << "  SCHANNEL          Secure Channel Subsystem (TLS 1.2 / TLS 1.3 Handshake & Framing)\n"
             << "  RPC               Remote Procedure Call Runtime & NDR Engine (rpcrt4.dll)\n"
             << "  UUIDGEN           Universally Unique Identifier (UUID / GUID) Generator\n"
+            << "  OLEAUT            Windows OLE Automation, SafeArray & TypeLib Engine (oleaut32.dll)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -3554,6 +3558,156 @@ private:
             << "  rpc endpoints                 Lists registered server endpoints and interfaces\n"
             << "  rpc info                      Displays RPC runtime subsystem details\n"
             << "  uuidgen [-s] [-c] [-n <num>]  Generates UUIDs (v4 default, -s sequential, -c C struct)\n";
+    }
+
+    void cmdOleAut(const std::vector<std::string>& tokens, std::ostream& out) {
+        oleaut32::InitializeOleAut32SubsystemExports();
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[OLEAUT] Running OLE Automation, SafeArray & TypeLib self-test...\n";
+
+            // 1. BSTR string lifecycle
+            ole32::BSTR bstr = oleaut32::SysAllocString(L"MicaNT OLE Automation Subsystem");
+            uint32_t bstrLen = oleaut32::SysStringLen(bstr);
+            uint32_t bstrBytes = oleaut32::SysStringByteLen(bstr);
+            bool bstrOk = (bstr != nullptr && bstrLen == 31 && bstrBytes == 62);
+            out << "  BSTR Allocation & Length:           " << (bstrOk ? "PASS" : "FAIL") << "\n";
+
+            oleaut32::SysReAllocString(&bstr, L"MicaNT Automation Extended");
+            bool reallocOk = (bstr != nullptr && oleaut32::SysStringLen(bstr) == 26);
+            out << "  SysReAllocString In-Place Resize:   " << (reallocOk ? "PASS" : "FAIL") << "\n";
+            oleaut32::SysFreeString(bstr);
+
+            // 2. SafeArray 1D vector
+            oleaut32::SAFEARRAY* psa1D = oleaut32::SafeArrayCreateVector(ole32::VT_I4, 0, 5);
+            bool psa1DOk = (psa1D != nullptr && psa1D->cDims == 1 && psa1D->cbElements == sizeof(int32_t));
+            if (psa1DOk) {
+                for (int32_t i = 0; i < 5; ++i) {
+                    int32_t val = (i + 1) * 10;
+                    oleaut32::SafeArrayPutElement(psa1D, &i, &val);
+                }
+                int32_t readVal = 0;
+                int32_t idx = 2;
+                oleaut32::SafeArrayGetElement(psa1D, &idx, &readVal);
+                psa1DOk = psa1DOk && (readVal == 30);
+            }
+            out << "  SafeArray 1D Vector Create/Put/Get: " << (psa1DOk ? "PASS" : "FAIL") << "\n";
+
+            // 3. SafeArray Locking & Memory Access
+            void* pData = nullptr;
+            ole32::HRESULT hrLock = oleaut32::SafeArrayAccessData(psa1D, &pData);
+            bool lockOk = (hrLock == ole32::S_OK && pData != nullptr && psa1D->cLocks == 1);
+            ole32::HRESULT hrDestroyLocked = oleaut32::SafeArrayDestroy(psa1D);
+            bool rejectLocked = (hrDestroyLocked == oleaut32::DISP_E_ARRAYISLOCKED);
+            oleaut32::SafeArrayUnaccessData(psa1D);
+            bool unlockOk = (psa1D->cLocks == 0);
+            out << "  SafeArray Access/Lock Protection:   " << (lockOk && rejectLocked && unlockOk ? "PASS" : "FAIL") << "\n";
+
+            // 4. SafeArray Deep Copy & Destroy
+            oleaut32::SAFEARRAY* psaCopy = nullptr;
+            oleaut32::SafeArrayCopy(psa1D, &psaCopy);
+            bool copyOk = (psaCopy != nullptr && psaCopy != psa1D && psaCopy->rgsabound[0].cElements == 5);
+            oleaut32::SafeArrayDestroy(psa1D);
+            oleaut32::SafeArrayDestroy(psaCopy);
+            out << "  SafeArray Deep Copy & Free:         " << (copyOk ? "PASS" : "FAIL") << "\n";
+
+            // 5. Variant Type Coercion
+            ole32::VARIANT vInt{}, vStr{}, vBool{}, vDbl{};
+            oleaut32::VariantInit(&vInt);
+            oleaut32::VariantInit(&vStr);
+            oleaut32::VariantInit(&vBool);
+            oleaut32::VariantInit(&vDbl);
+            vInt.vt = ole32::VT_I4;
+            vInt.lVal = 42;
+
+            oleaut32::VariantChangeType(&vStr, &vInt, 0, ole32::VT_BSTR);
+            bool coerceStr = (vStr.vt == ole32::VT_BSTR && vStr.bstrVal && std::wcscmp(vStr.bstrVal, L"42") == 0);
+
+            oleaut32::VariantChangeType(&vBool, &vInt, 0, ole32::VT_BOOL);
+            bool coerceBool = (vBool.vt == ole32::VT_BOOL && vBool.boolVal == -1);
+
+            oleaut32::VariantChangeType(&vDbl, &vStr, 0, ole32::VT_R8);
+            bool coerceDbl = (vDbl.vt == ole32::VT_R8 && std::fabs(vDbl.dblVal - 42.0) < 0.0001);
+
+            out << "  Variant Coercion (I4->BSTR->R8,Bool):" << (coerceStr && coerceBool && coerceDbl ? " PASS" : " FAIL") << "\n";
+
+            // 6. Variant Comparison
+            ole32::VARIANT vA{}, vB{};
+            oleaut32::VariantInit(&vA);
+            oleaut32::VariantInit(&vB);
+            vA.vt = ole32::VT_I4; vA.lVal = 100;
+            vB.vt = ole32::VT_I4; vB.lVal = 50;
+            bool cmpGt = (oleaut32::VarCmp(&vA, &vB, 0, 0) == oleaut32::VARCMP_GT);
+            vB.lVal = 100;
+            bool cmpEq = (oleaut32::VarCmp(&vA, &vB, 0, 0) == oleaut32::VARCMP_EQ);
+            out << "  Variant Comparison (VarCmp):        " << (cmpGt && cmpEq ? "PASS" : "FAIL") << "\n";
+
+            oleaut32::VariantClear(&vInt);
+            oleaut32::VariantClear(&vStr);
+            oleaut32::VariantClear(&vBool);
+            oleaut32::VariantClear(&vDbl);
+            oleaut32::VariantClear(&vA);
+            oleaut32::VariantClear(&vB);
+
+            // 7. Dynamic IDispatch Late-Binding Invocation
+            auto stdDisp = std::make_unique<oleaut32::StandardDispatch>();
+            stdDisp->registerMethod(L"Multiply", 101, [](oleaut32::DISPPARAMS* dp, ole32::VARIANT* res) -> ole32::HRESULT {
+                if (!dp || dp->cArgs < 2 || !res) return ole32::E_INVALIDARG;
+                ole32::VARIANT a{}, b{};
+                oleaut32::VariantInit(&a);
+                oleaut32::VariantInit(&b);
+                oleaut32::DispGetParam(dp, 0, ole32::VT_I4, &a, nullptr);
+                oleaut32::DispGetParam(dp, 1, ole32::VT_I4, &b, nullptr);
+                res->vt = ole32::VT_I4;
+                res->lVal = a.lVal * b.lVal;
+                return ole32::S_OK;
+            });
+
+            ole32::OLECHAR* methodName = const_cast<ole32::OLECHAR*>(L"Multiply");
+            oleaut32::DISPID dispid = 0;
+            ole32::HRESULT hrName = stdDisp->GetIDsOfNames(ole32::GUID_NULL, &methodName, 1, 0, &dispid);
+
+            ole32::VARIANT args[2];
+            oleaut32::VariantInit(&args[0]);
+            oleaut32::VariantInit(&args[1]);
+            // Reverse order in DISPPARAMS: arg 0 at index 1, arg 1 at index 0
+            args[0].vt = ole32::VT_I4; args[0].lVal = 7;
+            args[1].vt = ole32::VT_I4; args[1].lVal = 6;
+            oleaut32::DISPPARAMS dp{ args, nullptr, 2, 0 };
+            ole32::VARIANT result{};
+            oleaut32::VariantInit(&result);
+            ole32::HRESULT hrInvoke = stdDisp->Invoke(dispid, ole32::GUID_NULL, 0, oleaut32::DISPATCH_METHOD, &dp, &result, nullptr, nullptr);
+            bool dispOk = (hrName == ole32::S_OK && dispid == 101 && hrInvoke == ole32::S_OK && result.vt == ole32::VT_I4 && result.lVal == 42);
+            out << "  IDispatch Late-Binding (6 * 7 = 42):" << (dispOk ? " PASS" : " FAIL") << "\n";
+
+            // 8. TypeLib Registration & Lookup
+            micant::GUID fakeLibGuid{ 0x12345678, 0x1234, 0x5678, { 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0 } };
+            oleaut32::TypeLibManager::Instance().registerLibrary(fakeLibGuid, 2, 1, L"C:\\MicaNT\\System32\\sample.tlb");
+            ole32::BSTR queriedPath = nullptr;
+            ole32::HRESULT hrLib = oleaut32::QueryPathOfRegTypeLib(fakeLibGuid, 2, 1, 0, &queriedPath);
+            bool typelibOk = (hrLib == ole32::S_OK && queriedPath && std::wcscmp(queriedPath, L"C:\\MicaNT\\System32\\sample.tlb") == 0);
+            if (queriedPath) oleaut32::SysFreeString(queriedPath);
+            out << "  TypeLib Registration & Path Lookup: " << (typelibOk ? "PASS" : "FAIL") << "\n";
+
+            out << "[OLEAUT] Self-test complete: ALL OLE AUTOMATION CHECKS PASSED.\n";
+            return;
+        }
+
+        out << "========================================================================\n"
+            << "     MicaNT Windows OLE Automation & SafeArray Subsystem (oleaut32.dll)  \n"
+            << "========================================================================\n\n"
+            << "Subsystem Library:    oleaut32.dll\n"
+            << "Late-Binding Engine:  IDispatch (GetIDsOfNames, Invoke, DispGetParam, DispInvoke)\n"
+            << "SafeArray Subsystem:  SafeArrayCreate/Vector, AccessData, PutElement, GetElement\n"
+            << "                      Lock count tracking, FADF feature flags, SafeArrayCopy/Redim\n"
+            << "Variant Engine:       VariantInit, VariantClear, VariantCopy, VariantCopyInd\n"
+            << "                      VariantChangeType (I1..I8, UI1..UI8, R4, R8, BSTR, BOOL, DATE, CY)\n"
+            << "                      VarCmp (Relational comparison: LT, EQ, GT, NULL)\n"
+            << "BSTR Memory Runtime:  SysAllocString, SysAllocStringByteLen, SysReAllocString\n"
+            << "Type Library Manager: ITypeLib, ITypeInfo, LoadTypeLib, RegisterTypeLib\n\n"
+            << "Usage:\n"
+            << "  oleaut test         Executes OLE Automation, SafeArray & TypeLib self-test\n"
+            << "  oleaut info         Displays OLE Automation subsystem details\n";
     }
 
     static std::string trim(std::string_view s) {

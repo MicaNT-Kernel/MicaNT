@@ -835,6 +835,72 @@
   - 14 comprehensive verification stages covering UUID generation, UUID string formatting/parsing, string binding engine, binding handle lifecycle, authentication info, server protocol sequence/endpoint management, interface registry/listening, NDR buffer allocation, scalar primitive marshalling/unmarshalling, conformant string marshalling/unmarshalling, synchronous client/server dispatch, asynchronous RPC handle lifecycle, dynamic loader exports, version metadata, and interactive shell commands.
   - All 68 unit test suites passing with 100% success rate (68 Passed, 0 Failed).
 
+---
+
+### Phase 42: Windows OLE Automation, SafeArray & Type Library Subsystem (100% Completed)
+*Goal: Implement Windows OLE Automation (`oleaut32.dll`), standard dynamic late-binding dispatch interface (`IDispatch`), multidimensional SAFEARRAY engine with bounds checking and locking protections, polymorphic VARIANT type coercion and relational comparison (`VariantChangeType`, `VarCmp`), BSTR length-prefixed binary string lifecycle, and Type Library registry management (`ITypeLib`, `ITypeInfo`).*
+- [x] **Extended BSTR String Management (`oleaut32.dll`, `include/micant/oleaut32.hpp`)**:
+  - Allocation & Length: `SysAllocString`, `SysAllocStringLen`, and `SysAllocStringByteLen` for raw ANSI and binary octet buffers.
+  - Memory Lifecycle: `SysFreeString` (graceful NULL handling), `SysStringLen` (character count), and `SysStringByteLen` (byte length).
+  - In-Place Resizing: `SysReAllocString` and `SysReAllocStringLen` with automatic byte realloc and null termination.
+- [x] **SafeArray Subsystem (`oleaut32.dll`)**:
+  - Vector & Multidimensional Creation: `SafeArrayCreate` and `SafeArrayCreateVector` supporting arbitrary dimensions (`cDims`) and bounds (`SAFEARRAYBOUND`).
+  - Feature Flags: Automatic management of `FADF_AUTO`, `FADF_STATIC`, `FADF_EMBEDDED`, `FADF_FIXEDSIZE`, `FADF_RECORD`, `FADF_HAVEIID`, `FADF_HAVEVARTYPE`, `FADF_BSTR`, `FADF_UNKNOWN`, `FADF_DISPATCH`, `FADF_VARIANT`.
+  - Dimension & Bound Introspection: `SafeArrayGetDim`, `SafeArrayGetElemsize`, `SafeArrayGetLBound`, and `SafeArrayGetUBound` with 1-based dimension indices.
+  - Element Access & Bounds Checking: `SafeArrayGetElement` and `SafeArrayPutElement` with coordinate linearization, deep-copy semantics for BSTR/VARIANT/IUnknown, and out-of-bounds rejection (`DISP_E_BADPARAMCOUNT`).
+  - Direct Memory Pointers & Locking Protection: `SafeArrayAccessData` and `SafeArrayUnaccessData` tracking `cLocks`, rejecting `SafeArrayDestroy` with `DISP_E_ARRAYISLOCKED` while locked.
+  - Deep Cloning & Resizing: `SafeArrayCopy` with recursive child object duplication, and `SafeArrayRedim` for least-significant dimension expansion/contraction.
+  - Vartype Extraction: `SafeArrayGetVartype`.
+- [x] **Polymorphic VARIANT Engine (`oleaut32.dll`)**:
+  - Memory Management: `VariantInit`, `VariantClear`, and `VariantCopy` with full support for BSTR, IUnknown, IDispatch, and SafeArray embedded elements.
+  - By-Reference Dereferencing: `VariantCopyInd` resolving `VT_BYREF` indirection pointers.
+  - Comprehensive Type Coercion: `VariantChangeType` and `VariantChangeTypeEx` converting seamlessly between numeric primitives (`VT_I1`..`VT_I8`, `VT_UI1`..`VT_UI8`, `VT_R4`, `VT_R8`), text (`VT_BSTR`), dates (`VT_DATE`), currencies (`VT_CY`), and boolean states (`VT_BOOL`, mapping 0 to `VARIANT_FALSE` (0) and non-zero to `VARIANT_TRUE` (-1)).
+  - Relational Comparison: `VarCmp` evaluating equality, greater than, less than, and null handling (`VARCMP_LT`, `VARCMP_EQ`, `VARCMP_GT`, `VARCMP_NULL`).
+- [x] **Dynamic Late-Binding Dispatch Engine (`IDispatch`)**:
+  - Interface Contract: Full declaration and implementation of `IDispatch` (`GetTypeInfoCount`, `GetTypeInfo`, `GetIDsOfNames`, `Invoke`).
+  - Argument Unpacking: `DispGetParam` supporting reverse-order `DISPPARAMS::rgvarg` indexing and target vartype conversion.
+  - Standard Dispatch Harness: `StandardDispatch` class and `CreateStdDispatch` factory for rapid Automation server creation with registered methods and properties.
+  - Helper Thunk: `DispInvoke` routing late-binding method execution.
+- [x] **Type Library Engine (`ITypeLib`, `ITypeInfo`)**:
+  - Registry & Manager: `TypeLibManager` singleton providing in-memory and registry-backed type library cataloging.
+  - Functions: `LoadTypeLib`, `LoadRegTypeLib`, `RegisterTypeLib`, and `QueryPathOfRegTypeLib`.
+- [x] **Dynamic Loader & Version Parity**:
+  - Export registration for `oleaut32.dll` (22+ APIs) in `ldr::DynamicLoader`.
+  - Version resources registered in `version.hpp` for `ole32.dll` and `oleaut32.dll` bumping kernel build to `1.0.69.0`.
+- [x] **Interactive Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
+  - `oleaut info`: Displays OLE Automation subsystem details, architecture, and exported interfaces.
+  - `oleaut test`: Runs end-to-end self-tests exercising BSTR allocation/resizing, SafeArray 1D/2D creation, memory locking, deep copy, VariantChangeType coercion, VarCmp relational comparison, IDispatch late binding, and TypeLib path resolution.
+- [x] **Unit Test Suite 69 (`Test_OLE_Automation_And_SafeArray_Subsystem`)**:
+  - 15 comprehensive verification stages covering BSTR string management, SafeArray 1D vectors, SafeArray 2D matrices, data locking semantics, SafeArray deep copy and redim, complex element types, VARIANT lifecycle, byref indirection, numeric widening/narrowing, string and boolean coercion, VarCmp comparisons, IDispatch late binding, TypeLib manager, dynamic loader exports, and shell command integration.
+  - All 69 unit test suites passing with 100% success rate (69 Passed, 0 Failed).
+
+---
+
+### Phase 43: Windows Setup & Device Installation Subsystem (`setupapi.dll`)
+*Goal: Implement Windows Device Installation & Setup Subsystem (`setupapi.dll`), INF file parser (Sections, Keys, Directives, String replacement tokens), Device Information Sets (`HDEVINFO`, `SP_DEVINFO_DATA`, `SP_DEVICE_INTERFACE_DATA`), Device Class Guids (`GUID_DEVCLASS_*`), Driver Matching & Ranking Engine, Device Property Cache, and Hardware ID Enumeration (`setupapi.dll` exports).*
+- [ ] **INF Configuration & Directive Parser (`setupapi.dll`)**:
+  - File reading: Open and parse INI-style Windows INF files (`[Version]`, `[Manufacturer]`, `[Models]`, `[Strings]`, `[DestinationDirs]`).
+  - String table interpolation: `%StringKey%` expansion from `[Strings]` localized blocks.
+  - Line & Field Traversal: `SetupOpenInfFileW`, `SetupCloseInfFile`, `SetupFindFirstLineW`, `SetupFindNextLine`, `SetupGetStringFieldW`, `SetupGetIntField`.
+- [ ] **Device Information Sets & Handles (`HDEVINFO`)**:
+  - Device info set creation: `SetupDiCreateDeviceInfoList`, `SetupDiDestroyDeviceInfoList`.
+  - Device enumeration: `SetupDiEnumDeviceInfo`, `SetupDiCreateDeviceInfoW`, `SetupDiOpenDeviceInfoW`.
+  - Interface enumeration: `SetupDiEnumDeviceInterfaces`, `SetupDiGetDeviceInterfaceDetailW`.
+- [ ] **Device Property & Registry Engine (`setupapi.dll`)**:
+  - Registry keys: `SetupDiOpenDevRegKey`, `SetupDiCreateDevRegKey`.
+  - Device Registry Properties: `SetupDiGetDeviceRegistryPropertyW` (`SPDRP_DEVICEDESC`, `SPDRP_HARDWAREID`, `SPDRP_COMPATIBLEIDS`, `SPDRP_CLASS`, `SPDRP_CLASSGUID`, `SPDRP_DRIVER`, `SPDRP_MFG`, `SPDRP_FRIENDLYNAME`, `SPDRP_LOCATION_INFORMATION`, `SPDRP_CAPABILITIES`).
+  - Set Device Registry Properties: `SetupDiSetDeviceRegistryPropertyW`.
+- [ ] **Device Class Registry & GUIDs (`setupapi.dll`)**:
+  - Class Guids: Standard device setup classes (`Display`, `Net`, `DiskDrive`, `SCSIAdapter`, `Mouse`, `Keyboard`, `Media`, `USB`, `HIDClass`, `System`).
+  - Class Description & Icon: `SetupDiGetClassDescriptionW`, `SetupDiGetClassDevsW`, `SetupDiBuildClassInfoList`.
+- [ ] **Dynamic Loader & Version Parity**:
+  - Export registration for `setupapi.dll` (25+ APIs) in `ldr::DynamicLoader`.
+  - Version resources in `version.hpp` for `setupapi.dll` bumping build to `1.0.70.0`.
+- [ ] **Interactive Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
+  - `devmgmt` / `setupapi`: Enumerate hardware devices, active device interfaces, driver matches, and inspect INF files.
+- [ ] **Unit Test Suite 70 (`Test_SetupApi_DeviceInstallation_And_INF_Subsystem`)**:
+  - Multi-stage unit test covering INF parsing, string substitution, HDEVINFO device set creation, hardware ID registration, property querying, class enumeration, and shell telemetry.
+
 
 
 

@@ -98,6 +98,14 @@ inline const IID IID_IUnknown = {
     0x00000000, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 }
 };
 
+inline const IID IID_NULL = {
+    0x00000000, 0x0000, 0x0000, { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+};
+
+inline const GUID GUID_NULL = {
+    0x00000000, 0x0000, 0x0000, { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+};
+
 inline const IID IID_IClassFactory = {
     0x00000001, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 }
 };
@@ -358,6 +366,9 @@ enum VARENUM : uint16_t {
 #pragma clang diagnostic ignored "-Wnested-anon-types"
 #endif
 
+struct SAFEARRAY;
+class IDispatch;
+
 struct VARIANT {
     VARTYPE vt{VT_EMPTY};
     uint16_t wReserved1{0};
@@ -374,6 +385,14 @@ struct VARIANT {
         HRESULT      scode;
         BSTR         bstrVal;
         IUnknown*    punkVal;
+        IDispatch*   pdispVal;
+        SAFEARRAY*   parray;
+        uint8_t      cVal;
+        uint16_t     uiVal;
+        uint32_t     ulVal;
+        uint64_t     ullVal;
+        int32_t      intVal;
+        uint32_t     uintVal;
         void*        byref;
     };
 };

@@ -91,6 +91,7 @@
 #include "micant/crypt32.hpp"
 #include "micant/sspi.hpp"
 #include "micant/rpcrt4.hpp"
+#include "micant/oleaut32.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -11601,6 +11602,494 @@ void Test_RPC_Runtime_And_NDR_Subsystem() {
     std::cout << "[TEST] Suite 68: Windows Remote Procedure Call (RPC) & NDR Subsystem PASSED.\n";
 }
 
+void Test_OLE_Automation_And_SafeArray_Subsystem() {
+    std::cout << "[TEST] Running Suite 69: Windows OLE Automation & SafeArray Subsystem (oleaut32.dll)...\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 1: BSTR String Management (SysAllocString, SysAllocStringLen, SysAllocStringByteLen, SysReAllocString, SysFreeString)
+    // ------------------------------------------------------------------------
+    {
+        const wchar_t* helloText = L"Hello, Sovereign Windows World!";
+        ole32::BSTR bstr1 = oleaut32::SysAllocString(helloText);
+        TEST_ASSERT(bstr1 != nullptr, "SysAllocString must return valid pointer");
+        uint32_t len1 = oleaut32::SysStringLen(bstr1);
+        TEST_ASSERT(len1 == std::wcslen(helloText), "SysStringLen must match wcslen");
+        uint32_t byteLen1 = oleaut32::SysStringByteLen(bstr1);
+        TEST_ASSERT(byteLen1 == len1 * sizeof(wchar_t), "SysStringByteLen must match character count * 2");
+
+        // SysAllocStringLen
+        ole32::BSTR bstrSub = oleaut32::SysAllocStringLen(helloText, 5);
+        TEST_ASSERT(bstrSub != nullptr, "SysAllocStringLen must succeed");
+        TEST_ASSERT(oleaut32::SysStringLen(bstrSub) == 5, "SysAllocStringLen length must be 5");
+        TEST_ASSERT(std::wcsncmp(bstrSub, L"Hello", 5) == 0, "SysAllocStringLen content must match prefix");
+        oleaut32::SysFreeString(bstrSub);
+
+        // SysAllocStringByteLen
+        const char* ansiBytes = "MicaNT_Binary_Data\0Hidden";
+        ole32::BSTR bstrBytes = oleaut32::SysAllocStringByteLen(ansiBytes, 25);
+        TEST_ASSERT(bstrBytes != nullptr, "SysAllocStringByteLen must allocate binary string");
+        TEST_ASSERT(oleaut32::SysStringByteLen(bstrBytes) == 25, "SysStringByteLen must record exact 25 bytes");
+        oleaut32::SysFreeString(bstrBytes);
+
+        // SysReAllocString
+        int reallocSuccess = oleaut32::SysReAllocString(&bstr1, L"Extended OLE Automation String");
+        TEST_ASSERT(reallocSuccess == 1, "SysReAllocString must return 1 on success");
+        TEST_ASSERT(oleaut32::SysStringLen(bstr1) == std::wcslen(L"Extended OLE Automation String"), "Reallocated string length must match");
+
+        // Null string handling
+        TEST_ASSERT(oleaut32::SysStringLen(nullptr) == 0, "SysStringLen(nullptr) must return 0");
+        TEST_ASSERT(oleaut32::SysStringByteLen(nullptr) == 0, "SysStringByteLen(nullptr) must return 0");
+        oleaut32::SysFreeString(nullptr); // Safe no-op
+
+        oleaut32::SysFreeString(bstr1);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: SafeArray 1D Vector Allocation, Bounds & Element Access
+    // ------------------------------------------------------------------------
+    {
+        // Vector with lLbound = 10, cElements = 6, VT_I4
+        oleaut32::SAFEARRAY* psa = oleaut32::SafeArrayCreateVector(ole32::VT_I4, 10, 6);
+        TEST_ASSERT(psa != nullptr, "SafeArrayCreateVector must allocate SAFEARRAY");
+        TEST_ASSERT(oleaut32::SafeArrayGetDim(psa) == 1, "Dimension count must be 1");
+        TEST_ASSERT(oleaut32::SafeArrayGetElemsize(psa) == sizeof(int32_t), "Element size must be 4");
+
+        int32_t lbound = 0, ubound = 0;
+        ole32::HRESULT hrLb = oleaut32::SafeArrayGetLBound(psa, 1, &lbound);
+        ole32::HRESULT hrUb = oleaut32::SafeArrayGetUBound(psa, 1, &ubound);
+        TEST_ASSERT(hrLb == ole32::S_OK && lbound == 10, "LBound must be 10");
+        TEST_ASSERT(hrUb == ole32::S_OK && ubound == 15, "UBound must be 15 (10 + 6 - 1)");
+
+        // Put and Get elements
+        for (int32_t idx = 10; idx <= 15; ++idx) {
+            int32_t val = idx * 100;
+            ole32::HRESULT hrPut = oleaut32::SafeArrayPutElement(psa, &idx, &val);
+            TEST_ASSERT(hrPut == ole32::S_OK, "SafeArrayPutElement must succeed for in-bounds index");
+        }
+
+        // Out-of-bounds put
+        int32_t badIdx = 9;
+        int32_t dummy = 999;
+        TEST_ASSERT(oleaut32::SafeArrayPutElement(psa, &badIdx, &dummy) == oleaut32::DISP_E_BADPARAMCOUNT, "Put with index < lbound must fail");
+        badIdx = 16;
+        TEST_ASSERT(oleaut32::SafeArrayPutElement(psa, &badIdx, &dummy) == oleaut32::DISP_E_BADPARAMCOUNT, "Put with index > ubound must fail");
+
+        // Verify elements read back
+        for (int32_t idx = 10; idx <= 15; ++idx) {
+            int32_t readVal = 0;
+            ole32::HRESULT hrGet = oleaut32::SafeArrayGetElement(psa, &idx, &readVal);
+            TEST_ASSERT(hrGet == ole32::S_OK, "SafeArrayGetElement must succeed");
+            TEST_ASSERT(readVal == idx * 100, "SafeArrayGetElement must match written value");
+        }
+
+        oleaut32::SafeArrayDestroy(psa);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Multi-Dimensional SafeArray (2D Matrix, 3 x 4)
+    // ------------------------------------------------------------------------
+    {
+        // 2 dimensions: dim 1 has 3 elements [0..2], dim 2 has 4 elements [0..3]
+        oleaut32::SAFEARRAYBOUND bounds[2] = { {3, 0}, {4, 0} };
+        oleaut32::SAFEARRAY* psa2D = oleaut32::SafeArrayCreate(ole32::VT_I4, 2, bounds);
+        TEST_ASSERT(psa2D != nullptr, "SafeArrayCreate 2D must succeed");
+        TEST_ASSERT(oleaut32::SafeArrayGetDim(psa2D) == 2, "Dimension count must be 2");
+
+        int32_t lb1 = 0, ub1 = 0, lb2 = 0, ub2 = 0;
+        oleaut32::SafeArrayGetLBound(psa2D, 1, &lb1);
+        oleaut32::SafeArrayGetUBound(psa2D, 1, &ub1);
+        oleaut32::SafeArrayGetLBound(psa2D, 2, &lb2);
+        oleaut32::SafeArrayGetUBound(psa2D, 2, &ub2);
+        TEST_ASSERT(lb1 == 0 && ub1 == 2, "Dim 1 bounds must be [0..2]");
+        TEST_ASSERT(lb2 == 0 && ub2 == 3, "Dim 2 bounds must be [0..3]");
+
+        // Put and Get across 2D grid
+        for (int32_t d1 = 0; d1 < 3; ++d1) {
+            for (int32_t d2 = 0; d2 < 4; ++d2) {
+                int32_t coords[2] = { d1, d2 };
+                int32_t val = (d1 + 1) * 10 + (d2 + 1);
+                oleaut32::SafeArrayPutElement(psa2D, coords, &val);
+            }
+        }
+
+        for (int32_t d1 = 0; d1 < 3; ++d1) {
+            for (int32_t d2 = 0; d2 < 4; ++d2) {
+                int32_t coords[2] = { d1, d2 };
+                int32_t readVal = 0;
+                oleaut32::SafeArrayGetElement(psa2D, coords, &readVal);
+                int32_t expected = (d1 + 1) * 10 + (d2 + 1);
+                TEST_ASSERT(readVal == expected, "2D matrix element must match");
+            }
+        }
+
+        oleaut32::SafeArrayDestroy(psa2D);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: SafeArray Data Access, Locking Semantics & Destroy Protection
+    // ------------------------------------------------------------------------
+    {
+        oleaut32::SAFEARRAY* psa = oleaut32::SafeArrayCreateVector(ole32::VT_I4, 0, 10);
+        TEST_ASSERT(psa != nullptr, "Vector allocation must succeed");
+        TEST_ASSERT(psa->cLocks == 0, "Initial lock count must be 0");
+
+        void* rawPtr = nullptr;
+        ole32::HRESULT hrAcc = oleaut32::SafeArrayAccessData(psa, &rawPtr);
+        TEST_ASSERT(hrAcc == ole32::S_OK && rawPtr != nullptr, "SafeArrayAccessData must return raw pointer");
+        TEST_ASSERT(psa->cLocks == 1, "Lock count must be incremented to 1");
+
+        // Attempting SafeArrayDestroy while locked must fail with DISP_E_ARRAYISLOCKED
+        ole32::HRESULT hrDestroy = oleaut32::SafeArrayDestroy(psa);
+        TEST_ASSERT(hrDestroy == oleaut32::DISP_E_ARRAYISLOCKED, "SafeArrayDestroy on locked array must return DISP_E_ARRAYISLOCKED");
+
+        // Direct memory write via raw pointer
+        int32_t* intPtr = static_cast<int32_t*>(rawPtr);
+        for (int i = 0; i < 10; ++i) {
+            intPtr[i] = 777 + i;
+        }
+
+        // Unaccess data
+        ole32::HRESULT hrUnacc = oleaut32::SafeArrayUnaccessData(psa);
+        TEST_ASSERT(hrUnacc == ole32::S_OK, "SafeArrayUnaccessData must succeed");
+        TEST_ASSERT(psa->cLocks == 0, "Lock count must return to 0");
+
+        // Verify elements via SafeArrayGetElement
+        int32_t idx = 5;
+        int32_t readVal = 0;
+        oleaut32::SafeArrayGetElement(psa, &idx, &readVal);
+        TEST_ASSERT(readVal == 782, "Element written via raw pointer must be readable via SafeArrayGetElement");
+
+        // SafeArrayDestroy must now succeed
+        hrDestroy = oleaut32::SafeArrayDestroy(psa);
+        TEST_ASSERT(hrDestroy == ole32::S_OK, "SafeArrayDestroy must succeed after unlocking");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: SafeArray Deep Copy & SafeArrayRedim
+    // ------------------------------------------------------------------------
+    {
+        oleaut32::SAFEARRAY* orig = oleaut32::SafeArrayCreateVector(ole32::VT_I4, 0, 4);
+        for (int32_t i = 0; i < 4; ++i) {
+            int32_t val = (i + 1) * 111;
+            oleaut32::SafeArrayPutElement(orig, &i, &val);
+        }
+
+        oleaut32::SAFEARRAY* copy = nullptr;
+        ole32::HRESULT hrCopy = oleaut32::SafeArrayCopy(orig, &copy);
+        TEST_ASSERT(hrCopy == ole32::S_OK && copy != nullptr, "SafeArrayCopy must succeed");
+        TEST_ASSERT(copy != orig, "Copy must be distinct memory block");
+        TEST_ASSERT(copy->pvData != orig->pvData, "Copy pvData must be distinct");
+
+        for (int32_t i = 0; i < 4; ++i) {
+            int32_t readVal = 0;
+            oleaut32::SafeArrayGetElement(copy, &i, &readVal);
+            TEST_ASSERT(readVal == (i + 1) * 111, "Copy elements must match original");
+        }
+
+        // SafeArrayRedim to expand from 4 to 8 elements
+        oleaut32::SAFEARRAYBOUND newBound{ 8, 0 };
+        ole32::HRESULT hrRedim = oleaut32::SafeArrayRedim(orig, &newBound);
+        TEST_ASSERT(hrRedim == ole32::S_OK, "SafeArrayRedim must expand vector");
+        TEST_ASSERT(orig->rgsabound[0].cElements == 8, "Bound must reflect 8 elements");
+
+        // Put element into the new expanded slots
+        int32_t newIdx = 6;
+        int32_t newVal = 9999;
+        oleaut32::SafeArrayPutElement(orig, &newIdx, &newVal);
+        int32_t checkVal = 0;
+        oleaut32::SafeArrayGetElement(orig, &newIdx, &checkVal);
+        TEST_ASSERT(checkVal == 9999, "Newly expanded element must be writable and readable");
+
+        oleaut32::SafeArrayDestroy(orig);
+        oleaut32::SafeArrayDestroy(copy);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: SafeArray Vartype & Complex Element Types (BSTR / VARIANT)
+    // ------------------------------------------------------------------------
+    {
+        oleaut32::SAFEARRAY* psaBstr = oleaut32::SafeArrayCreateVector(ole32::VT_BSTR, 0, 3);
+        TEST_ASSERT(psaBstr != nullptr, "BSTR SafeArray must allocate");
+        TEST_ASSERT((psaBstr->fFeatures & oleaut32::FADF_BSTR) != 0, "FADF_BSTR flag must be set");
+
+        ole32::VARTYPE vt = ole32::VT_EMPTY;
+        oleaut32::SafeArrayGetVartype(psaBstr, &vt);
+        TEST_ASSERT(vt == ole32::VT_BSTR, "SafeArrayGetVartype must return VT_BSTR");
+
+        ole32::BSTR str0 = oleaut32::SysAllocString(L"Item 0");
+        ole32::BSTR str1 = oleaut32::SysAllocString(L"Item 1");
+        int32_t idx0 = 0, idx1 = 1;
+        oleaut32::SafeArrayPutElement(psaBstr, &idx0, &str0);
+        oleaut32::SafeArrayPutElement(psaBstr, &idx1, &str1);
+        oleaut32::SysFreeString(str0);
+        oleaut32::SysFreeString(str1);
+
+        ole32::BSTR readBstr = nullptr;
+        oleaut32::SafeArrayGetElement(psaBstr, &idx0, &readBstr);
+        TEST_ASSERT(readBstr != nullptr && std::wcscmp(readBstr, L"Item 0") == 0, "SafeArrayGetElement must return deep-copied BSTR");
+        oleaut32::SysFreeString(readBstr);
+
+        // SafeArrayDestroy must cleanly free internal BSTRs
+        oleaut32::SafeArrayDestroy(psaBstr);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: VARIANT Lifecycle (VariantInit, VariantClear, VariantCopy)
+    // ------------------------------------------------------------------------
+    {
+        ole32::VARIANT v1{}, v2{};
+        oleaut32::VariantInit(&v1);
+        oleaut32::VariantInit(&v2);
+        TEST_ASSERT(v1.vt == ole32::VT_EMPTY, "VariantInit must set VT_EMPTY");
+
+        v1.vt = ole32::VT_BSTR;
+        v1.bstrVal = oleaut32::SysAllocString(L"MicaNT Variant Test");
+
+        ole32::HRESULT hrCopy = oleaut32::VariantCopy(&v2, &v1);
+        TEST_ASSERT(hrCopy == ole32::S_OK, "VariantCopy must succeed");
+        TEST_ASSERT(v2.vt == ole32::VT_BSTR, "Copy must have VT_BSTR");
+        TEST_ASSERT(v2.bstrVal != v1.bstrVal, "VariantCopy must deep copy BSTR");
+        TEST_ASSERT(std::wcscmp(v2.bstrVal, v1.bstrVal) == 0, "BSTR content must match");
+
+        oleaut32::VariantClear(&v1);
+        TEST_ASSERT(v1.vt == ole32::VT_EMPTY, "VariantClear must reset to VT_EMPTY");
+        TEST_ASSERT(v2.vt == ole32::VT_BSTR && v2.bstrVal != nullptr, "v2 must remain valid after v1 cleared");
+        oleaut32::VariantClear(&v2);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Variant Indirection Dereferencing (VariantCopyInd)
+    // ------------------------------------------------------------------------
+    {
+        int32_t targetVal = 12345;
+        ole32::VARIANT vByRef{};
+        oleaut32::VariantInit(&vByRef);
+        vByRef.vt = ole32::VT_I4 | ole32::VT_BYREF;
+        vByRef.byref = &targetVal;
+
+        ole32::VARIANT vDest{};
+        oleaut32::VariantInit(&vDest);
+        ole32::HRESULT hrInd = oleaut32::VariantCopyInd(&vDest, &vByRef);
+        TEST_ASSERT(hrInd == ole32::S_OK, "VariantCopyInd must succeed");
+        TEST_ASSERT(vDest.vt == ole32::VT_I4, "vDest must have VT_I4 without VT_BYREF");
+        TEST_ASSERT(vDest.lVal == 12345, "vDest must contain dereferenced value 12345");
+
+        oleaut32::VariantClear(&vDest);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Variant Type Coercion: Numeric Widening, Narrowing & Floating Point
+    // ------------------------------------------------------------------------
+    {
+        ole32::VARIANT vI4{}, vI8{}, vR8{}, vR4{}, vUI4{};
+        oleaut32::VariantInit(&vI4);
+        oleaut32::VariantInit(&vI8);
+        oleaut32::VariantInit(&vR8);
+        oleaut32::VariantInit(&vR4);
+        oleaut32::VariantInit(&vUI4);
+
+        vI4.vt = ole32::VT_I4;
+        vI4.lVal = 1000;
+
+        // VT_I4 -> VT_I8
+        oleaut32::VariantChangeType(&vI8, &vI4, 0, ole32::VT_I8);
+        TEST_ASSERT(vI8.vt == ole32::VT_I8 && vI8.llVal == 1000LL, "VariantChangeType to VT_I8 must match 1000");
+
+        // VT_I4 -> VT_R8
+        oleaut32::VariantChangeType(&vR8, &vI4, 0, ole32::VT_R8);
+        TEST_ASSERT(vR8.vt == ole32::VT_R8 && std::fabs(vR8.dblVal - 1000.0) < 0.001, "VariantChangeType to VT_R8 must match 1000.0");
+
+        // VT_R8 -> VT_I4 (truncation/rounding)
+        vR8.dblVal = 42.75;
+        oleaut32::VariantChangeType(&vI4, &vR8, 0, ole32::VT_I4);
+        TEST_ASSERT(vI4.vt == ole32::VT_I4 && (vI4.lVal == 42 || vI4.lVal == 43), "VariantChangeType float to integer must succeed");
+
+        oleaut32::VariantClear(&vI4);
+        oleaut32::VariantClear(&vI8);
+        oleaut32::VariantClear(&vR8);
+        oleaut32::VariantClear(&vR4);
+        oleaut32::VariantClear(&vUI4);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Variant Type Coercion: Strings & Booleans
+    // ------------------------------------------------------------------------
+    {
+        ole32::VARIANT vNum{}, vStr{}, vBool{};
+        oleaut32::VariantInit(&vNum);
+        oleaut32::VariantInit(&vStr);
+        oleaut32::VariantInit(&vBool);
+
+        // Numeric to BSTR
+        vNum.vt = ole32::VT_I4;
+        vNum.lVal = 8080;
+        oleaut32::VariantChangeType(&vStr, &vNum, 0, ole32::VT_BSTR);
+        TEST_ASSERT(vStr.vt == ole32::VT_BSTR && vStr.bstrVal && std::wcscmp(vStr.bstrVal, L"8080") == 0, "Coerce I4 to BSTR must match '8080'");
+
+        // BSTR back to I4
+        ole32::VARIANT vParsed{};
+        oleaut32::VariantInit(&vParsed);
+        oleaut32::VariantChangeType(&vParsed, &vStr, 0, ole32::VT_I4);
+        TEST_ASSERT(vParsed.vt == ole32::VT_I4 && vParsed.lVal == 8080, "Coerce BSTR '8080' to I4 must yield 8080");
+
+        // Boolean true (-1) and false (0)
+        vNum.lVal = 1;
+        oleaut32::VariantChangeType(&vBool, &vNum, 0, ole32::VT_BOOL);
+        TEST_ASSERT(vBool.vt == ole32::VT_BOOL && vBool.boolVal == -1, "Non-zero integer must coerce to VARIANT_TRUE (-1)");
+
+        vNum.lVal = 0;
+        oleaut32::VariantChangeType(&vBool, &vNum, 0, ole32::VT_BOOL);
+        TEST_ASSERT(vBool.vt == ole32::VT_BOOL && vBool.boolVal == 0, "Zero integer must coerce to VARIANT_FALSE (0)");
+
+        oleaut32::VariantClear(&vNum);
+        oleaut32::VariantClear(&vStr);
+        oleaut32::VariantClear(&vBool);
+        oleaut32::VariantClear(&vParsed);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Variant Relational Comparisons (VarCmp)
+    // ------------------------------------------------------------------------
+    {
+        ole32::VARIANT vA{}, vB{};
+        oleaut32::VariantInit(&vA);
+        oleaut32::VariantInit(&vB);
+
+        vA.vt = ole32::VT_I4; vA.lVal = 250;
+        vB.vt = ole32::VT_I4; vB.lVal = 500;
+        TEST_ASSERT(oleaut32::VarCmp(&vA, &vB, 0, 0) == oleaut32::VARCMP_LT, "250 must be less than 500 (VARCMP_LT)");
+
+        vA.lVal = 500;
+        TEST_ASSERT(oleaut32::VarCmp(&vA, &vB, 0, 0) == oleaut32::VARCMP_EQ, "500 must equal 500 (VARCMP_EQ)");
+
+        vA.lVal = 750;
+        TEST_ASSERT(oleaut32::VarCmp(&vA, &vB, 0, 0) == oleaut32::VARCMP_GT, "750 must be greater than 500 (VARCMP_GT)");
+
+        // Null comparison
+        vA.vt = ole32::VT_NULL;
+        TEST_ASSERT(oleaut32::VarCmp(&vA, &vB, 0, 0) == oleaut32::VARCMP_NULL, "VT_NULL comparison must yield VARCMP_NULL");
+
+        oleaut32::VariantClear(&vA);
+        oleaut32::VariantClear(&vB);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Late-Binding Dynamic Dispatch Engine (IDispatch & DispGetParam)
+    // ------------------------------------------------------------------------
+    {
+        auto dispObj = std::make_unique<oleaut32::StandardDispatch>();
+
+        // Register method: Add(a, b) -> a + b
+        dispObj->registerMethod(L"Add", 201, [](oleaut32::DISPPARAMS* dp, ole32::VARIANT* res) -> ole32::HRESULT {
+            if (!dp || dp->cArgs < 2 || !res) return ole32::E_INVALIDARG;
+            ole32::VARIANT a{}, b{};
+            oleaut32::VariantInit(&a);
+            oleaut32::VariantInit(&b);
+            oleaut32::DispGetParam(dp, 0, ole32::VT_I4, &a, nullptr);
+            oleaut32::DispGetParam(dp, 1, ole32::VT_I4, &b, nullptr);
+            res->vt = ole32::VT_I4;
+            res->lVal = a.lVal + b.lVal;
+            return ole32::S_OK;
+        });
+
+        // GetIDsOfNames
+        ole32::OLECHAR* name = const_cast<ole32::OLECHAR*>(L"Add");
+        oleaut32::DISPID dispid = oleaut32::DISPID_UNKNOWN;
+        ole32::HRESULT hrName = dispObj->GetIDsOfNames(ole32::GUID_NULL, &name, 1, 0, &dispid);
+        TEST_ASSERT(hrName == ole32::S_OK && dispid == 201, "GetIDsOfNames for 'Add' must return DISPID 201");
+
+        // Invoke with reversed arguments: arg 0 (15) and arg 1 (27)
+        ole32::VARIANT invokeArgs[2];
+        oleaut32::VariantInit(&invokeArgs[0]);
+        oleaut32::VariantInit(&invokeArgs[1]);
+        invokeArgs[0].vt = ole32::VT_I4; invokeArgs[0].lVal = 27; // arg 1 at index 0
+        invokeArgs[1].vt = ole32::VT_I4; invokeArgs[1].lVal = 15; // arg 0 at index 1
+
+        oleaut32::DISPPARAMS dp{ invokeArgs, nullptr, 2, 0 };
+        ole32::VARIANT invokeRes{};
+        oleaut32::VariantInit(&invokeRes);
+        ole32::HRESULT hrInvoke = dispObj->Invoke(dispid, ole32::GUID_NULL, 0, oleaut32::DISPATCH_METHOD, &dp, &invokeRes, nullptr, nullptr);
+        TEST_ASSERT(hrInvoke == ole32::S_OK, "Invoke on 'Add' must succeed");
+        TEST_ASSERT(invokeRes.vt == ole32::VT_I4 && invokeRes.lVal == 42, "Invoke on 'Add' must yield 15 + 27 = 42");
+
+        // DispInvoke helper verification
+        ole32::VARIANT dispInvokeRes{};
+        oleaut32::VariantInit(&dispInvokeRes);
+        ole32::HRESULT hrHelper = oleaut32::DispInvoke(dispObj.get(), nullptr, dispid, oleaut32::DISPATCH_METHOD, &dp, &dispInvokeRes, nullptr, nullptr);
+        TEST_ASSERT(hrHelper == ole32::S_OK && dispInvokeRes.lVal == 42, "DispInvoke helper must yield 42");
+
+        oleaut32::VariantClear(&invokeRes);
+        oleaut32::VariantClear(&dispInvokeRes);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 13: Type Library Registration & Path Resolution (TypeLibManager)
+    // ------------------------------------------------------------------------
+    {
+        micant::GUID tlibGuid{ 0x98765432, 0x4321, 0x8765, { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11 } };
+        ole32::HRESULT hrReg = oleaut32::TypeLibManager::Instance().registerLibrary(
+            tlibGuid, 3, 2, L"C:\\MicaNT\\System32\\MicaAutomation.tlb"
+        );
+        TEST_ASSERT(hrReg == ole32::S_OK, "TypeLibManager::registerLibrary must return S_OK");
+
+        ole32::BSTR resolvedPath = nullptr;
+        ole32::HRESULT hrQuery = oleaut32::QueryPathOfRegTypeLib(tlibGuid, 3, 2, 0, &resolvedPath);
+        TEST_ASSERT(hrQuery == ole32::S_OK && resolvedPath != nullptr, "QueryPathOfRegTypeLib must resolve registered path");
+        TEST_ASSERT(std::wcscmp(resolvedPath, L"C:\\MicaNT\\System32\\MicaAutomation.tlb") == 0, "Resolved path must match registration");
+        oleaut32::SysFreeString(resolvedPath);
+
+        // Load synthetic typelib
+        oleaut32::ITypeLib* pTLib = nullptr;
+        ole32::HRESULT hrLoad = oleaut32::LoadTypeLib(L"C:\\MicaNT\\System32\\MicaAutomation.tlb", &pTLib);
+        TEST_ASSERT(hrLoad == ole32::S_OK && pTLib != nullptr, "LoadTypeLib must return ITypeLib instance");
+        TEST_ASSERT(pTLib->GetTypeInfoCount() == 0, "Synthetic ITypeLib initial count is 0");
+        ole32::BSTR docName = nullptr;
+        ole32::HRESULT hrDoc = pTLib->GetDocumentation(-1, &docName, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hrDoc == ole32::S_OK && docName != nullptr, "GetDocumentation must succeed");
+        oleaut32::SysFreeString(docName);
+        pTLib->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 14: Dynamic Loader Exports & Version Resource Metadata
+    // ------------------------------------------------------------------------
+    {
+        oleaut32::InitializeOleAut32SubsystemExports();
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("oleaut32.dll", "SysAllocString") != nullptr, "SysAllocString must be exported from oleaut32.dll");
+        TEST_ASSERT(ldr.getExport("oleaut32.dll", "SysFreeString") != nullptr, "SysFreeString must be exported from oleaut32.dll");
+        TEST_ASSERT(ldr.getExport("oleaut32.dll", "SafeArrayCreate") != nullptr, "SafeArrayCreate must be exported from oleaut32.dll");
+        TEST_ASSERT(ldr.getExport("oleaut32.dll", "SafeArrayDestroy") != nullptr, "SafeArrayDestroy must be exported from oleaut32.dll");
+        TEST_ASSERT(ldr.getExport("oleaut32.dll", "VariantChangeType") != nullptr, "VariantChangeType must be exported from oleaut32.dll");
+        TEST_ASSERT(ldr.getExport("oleaut32.dll", "VarCmp") != nullptr, "VarCmp must be exported from oleaut32.dll");
+        TEST_ASSERT(ldr.getExport("oleaut32.dll", "CreateStdDispatch") != nullptr, "CreateStdDispatch must be exported from oleaut32.dll");
+        TEST_ASSERT(ldr.getExport("oleaut32.dll", "LoadTypeLib") != nullptr, "LoadTypeLib must be exported from oleaut32.dll");
+
+        // Version info check
+        const auto* ver = version::VersionDatabase::Instance().FindModule("oleaut32.dll");
+        TEST_ASSERT(ver != nullptr, "VersionDatabase must contain oleaut32.dll metadata");
+        TEST_ASSERT(ver->stringTable.at("OriginalFilename") == "oleaut32.dll", "oleaut32.dll OriginalFilename must match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 15: Command Shell Integration (oleaut test / oleaut info)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        shell.execute("oleaut info", out);
+        TEST_ASSERT(out.str().find("MicaNT Windows OLE Automation & SafeArray Subsystem") != std::string::npos, "Shell oleaut info must succeed");
+
+        out.str("");
+        shell.execute("oleaut test", out);
+        TEST_ASSERT(out.str().find("ALL OLE AUTOMATION CHECKS PASSED") != std::string::npos, "Shell oleaut test must pass all checks");
+    }
+
+    std::cout << "[TEST] Suite 69: Windows OLE Automation & SafeArray Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -11674,6 +12163,7 @@ int main() {
     RUN_TEST(Test_CryptoAPI_And_CNG_Subsystems);
     RUN_TEST(Test_SSPI_And_Schannel_Subsystems);
     RUN_TEST(Test_RPC_Runtime_And_NDR_Subsystem);
+    RUN_TEST(Test_OLE_Automation_And_SafeArray_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
