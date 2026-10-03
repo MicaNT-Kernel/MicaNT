@@ -451,6 +451,72 @@ private:
             mod.stringTable["ProductVersion"] = "10.0.22621.1";
             registerModule(mod);
         }
+
+        // 15. secur32.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "secur32.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Security Support Provider Interface";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "secur32";
+            mod.stringTable["OriginalFilename"] = "secur32.dll";
+            mod.stringTable["ProductName"] = "MicaNT Security Support Provider Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // 16. sspicli.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "sspicli.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Security Support Provider Interface Client DLL";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "sspicli";
+            mod.stringTable["OriginalFilename"] = "sspicli.dll";
+            mod.stringTable["ProductName"] = "MicaNT Security Support Provider Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // 17. schannel.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "schannel.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "TLS / SSL Security Provider";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "schannel";
+            mod.stringTable["OriginalFilename"] = "schannel.dll";
+            mod.stringTable["ProductName"] = "MicaNT Secure Channel Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
     }
 
 public:

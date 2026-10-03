@@ -88,6 +88,7 @@
 #include "micant/wininet.hpp"
 #include "micant/urlmon.hpp"
 #include "micant/crypt32.hpp"
+#include "micant/sspi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -10587,6 +10588,454 @@ void Test_CryptoAPI_And_CNG_Subsystems() {
     std::cout << "[TEST] Suite 66: Windows CryptoAPI, CNG & Crypt32 Subsystems PASSED.\n";
 }
 
+void Test_SSPI_And_Schannel_Subsystems() {
+    std::cout << "[TEST] Running Suite 67: Windows SSPI & Schannel TLS 1.3 Subsystems...\n";
+
+    sspi::InitializeSspiSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // 1. Security Package Enumeration (EnumerateSecurityPackagesA/W)
+    // ------------------------------------------------------------------------
+    {
+        uint32_t pkgCountA = 0;
+        sspi::SecPkgInfoA* pPackagesA = nullptr;
+        sspi::SECURITY_STATUS statusA = sspi::EnumerateSecurityPackagesA(&pkgCountA, &pPackagesA);
+        TEST_ASSERT(statusA == sspi::SEC_E_OK, "EnumerateSecurityPackagesA must return SEC_E_OK");
+        TEST_ASSERT(pkgCountA >= 3, "Must have at least 3 security packages (Schannel, NTLM, Negotiate)");
+        TEST_ASSERT(pPackagesA != nullptr, "pPackagesA must not be null");
+
+        bool foundSchannel = false;
+        bool foundNtlm = false;
+        bool foundNegotiate = false;
+
+        for (uint32_t i = 0; i < pkgCountA; ++i) {
+            std::string name = pPackagesA[i].Name ? pPackagesA[i].Name : "";
+            if (name == sspi::UNISP_NAME_A || name == sspi::SCHANNEL_NAME_A) foundSchannel = true;
+            if (name == sspi::NTLMSP_NAME_A || name == sspi::NTLM_NAME_A) foundNtlm = true;
+            if (name == sspi::NEGOSSP_NAME_A || name == sspi::NEGOTIATE_NAME_A) foundNegotiate = true;
+            TEST_ASSERT(pPackagesA[i].cbMaxToken > 0, "MaxToken must be greater than zero");
+            TEST_ASSERT(pPackagesA[i].wVersion == 1, "Package version must be 1");
+        }
+
+        TEST_ASSERT(foundSchannel, "EnumerateSecurityPackagesA must contain Schannel");
+        TEST_ASSERT(foundNtlm, "EnumerateSecurityPackagesA must contain NTLM");
+        TEST_ASSERT(foundNegotiate, "EnumerateSecurityPackagesA must contain Negotiate");
+
+        sspi::SECURITY_STATUS freeStA = sspi::FreeContextBuffer(pPackagesA);
+        TEST_ASSERT(freeStA == sspi::SEC_E_OK, "FreeContextBuffer on packages must return SEC_E_OK");
+
+        // Wide enumeration
+        uint32_t pkgCountW = 0;
+        sspi::SecPkgInfoW* pPackagesW = nullptr;
+        sspi::SECURITY_STATUS statusW = sspi::EnumerateSecurityPackagesW(&pkgCountW, &pPackagesW);
+        TEST_ASSERT(statusW == sspi::SEC_E_OK, "EnumerateSecurityPackagesW must return SEC_E_OK");
+        TEST_ASSERT(pkgCountW >= 3, "EnumerateSecurityPackagesW must report at least 3 packages");
+        TEST_ASSERT(pPackagesW != nullptr, "pPackagesW must not be null");
+        sspi::FreeContextBuffer(pPackagesW);
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. Package Information Query (QuerySecurityPackageInfoA/W)
+    // ------------------------------------------------------------------------
+    {
+        sspi::SecPkgInfoA* pInfoA = nullptr;
+        sspi::SECURITY_STATUS qStA = sspi::QuerySecurityPackageInfoA(sspi::UNISP_NAME_A, &pInfoA);
+        TEST_ASSERT(qStA == sspi::SEC_E_OK && pInfoA != nullptr, "QuerySecurityPackageInfoA for Schannel must succeed");
+        TEST_ASSERT(std::string(pInfoA->Name) == sspi::SCHANNEL_NAME_A || std::string(pInfoA->Name) == sspi::UNISP_NAME_A, "Package name must match Schannel");
+        TEST_ASSERT(pInfoA->cbMaxToken == 0x4000, "Schannel max token must be 16KB");
+        sspi::FreeContextBuffer(pInfoA);
+
+        sspi::SecPkgInfoW* pInfoW = nullptr;
+        sspi::SECURITY_STATUS qStW = sspi::QuerySecurityPackageInfoW(sspi::UNISP_NAME_W, &pInfoW);
+        TEST_ASSERT(qStW == sspi::SEC_E_OK && pInfoW != nullptr, "QuerySecurityPackageInfoW for Schannel must succeed");
+        TEST_ASSERT(std::wstring(pInfoW->Name) == sspi::SCHANNEL_NAME_W || std::wstring(pInfoW->Name) == sspi::UNISP_NAME_W, "Package name must match Schannel");
+        sspi::FreeContextBuffer(pInfoW);
+
+        pInfoA = nullptr;
+        sspi::SECURITY_STATUS qNtlm = sspi::QuerySecurityPackageInfoA(sspi::NTLMSP_NAME_A, &pInfoA);
+        TEST_ASSERT(qNtlm == sspi::SEC_E_OK && pInfoA != nullptr, "QuerySecurityPackageInfoA for NTLM must succeed");
+        TEST_ASSERT(std::string(pInfoA->Name) == sspi::NTLMSP_NAME_A, "Package name must match NTLM");
+        sspi::FreeContextBuffer(pInfoA);
+
+        sspi::SecPkgInfoA* pBadInfo = nullptr;
+        sspi::SECURITY_STATUS badSt = sspi::QuerySecurityPackageInfoA("NonExistentSecurityPkg", &pBadInfo);
+        TEST_ASSERT(badSt == sspi::SEC_E_SECPKG_NOT_FOUND, "Nonexistent package must return SEC_E_SECPKG_NOT_FOUND");
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. Security Function Tables (InitSecurityInterfaceA/W)
+    // ------------------------------------------------------------------------
+    {
+        auto* tableA = sspi::InitSecurityInterfaceA();
+        TEST_ASSERT(tableA != nullptr, "InitSecurityInterfaceA must return non-null table");
+        TEST_ASSERT(tableA->dwVersion == 1, "SecurityFunctionTableA version must be 1");
+        TEST_ASSERT(tableA->EnumerateSecurityPackagesA != nullptr, "Table must export EnumerateSecurityPackagesA");
+        TEST_ASSERT(tableA->AcquireCredentialsHandleA != nullptr, "Table must export AcquireCredentialsHandleA");
+        TEST_ASSERT(tableA->InitializeSecurityContextA != nullptr, "Table must export InitializeSecurityContextA");
+        TEST_ASSERT(tableA->AcceptSecurityContext != nullptr, "Table must export AcceptSecurityContext");
+        TEST_ASSERT(tableA->EncryptMessage != nullptr, "Table must export EncryptMessage");
+        TEST_ASSERT(tableA->DecryptMessage != nullptr, "Table must export DecryptMessage");
+        TEST_ASSERT(tableA->FreeContextBuffer != nullptr, "Table must export FreeContextBuffer");
+
+        auto* tableW = sspi::InitSecurityInterfaceW();
+        TEST_ASSERT(tableW != nullptr, "InitSecurityInterfaceW must return non-null table");
+        TEST_ASSERT(tableW->dwVersion == 1, "SecurityFunctionTableW version must be 1");
+        TEST_ASSERT(tableW->EnumerateSecurityPackagesW != nullptr, "Table must export EnumerateSecurityPackagesW");
+        TEST_ASSERT(tableW->AcquireCredentialsHandleW != nullptr, "Table must export AcquireCredentialsHandleW");
+        TEST_ASSERT(tableW->InitializeSecurityContextW != nullptr, "Table must export InitializeSecurityContextW");
+    }
+
+    // ------------------------------------------------------------------------
+    // 4. Credential Handle Acquisition & Release Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        sspi::CredHandle hCred{};
+        sspi::SCHANNEL_CRED schCred{};
+        schCred.dwVersion = sspi::SCHANNEL_CRED_VERSION;
+        schCred.grbitEnabledProtocols = sspi::SP_PROT_TLS1_3_CLIENT;
+
+        sspi::SECURITY_STATUS acqSt = sspi::AcquireCredentialsHandleA(
+            nullptr, sspi::UNISP_NAME_A, sspi::SECPKG_CRED_OUTBOUND, nullptr, &schCred, nullptr, nullptr, &hCred, nullptr
+        );
+        TEST_ASSERT(acqSt == sspi::SEC_E_OK, "AcquireCredentialsHandleA for Schannel must return SEC_E_OK");
+        TEST_ASSERT(hCred.isValid(), "Credential handle must be valid");
+        TEST_ASSERT(hCred.dwUpper == 0x53535049, "Credential handle magic must match 'SSPI'");
+
+        sspi::SECURITY_STATUS freeSt = sspi::FreeCredentialsHandle(&hCred);
+        TEST_ASSERT(freeSt == sspi::SEC_E_OK, "FreeCredentialsHandle must return SEC_E_OK");
+        TEST_ASSERT(!hCred.isValid(), "Credential handle must be zeroed after free");
+
+        sspi::CredHandle invalidCred{0x1234, 0x5678};
+        TEST_ASSERT(sspi::FreeCredentialsHandle(&invalidCred) == sspi::SEC_E_INVALID_HANDLE, "Invalid handle must return SEC_E_INVALID_HANDLE");
+    }
+
+    // ------------------------------------------------------------------------
+    // 5. TLS 1.3 ClientHello / ServerHello Handshake State Machine
+    // ------------------------------------------------------------------------
+    {
+        sspi::CredHandle hClientCred{};
+        sspi::SCHANNEL_CRED clientCred{};
+        clientCred.dwVersion = sspi::SCHANNEL_CRED_VERSION;
+        clientCred.grbitEnabledProtocols = sspi::SP_PROT_TLS1_3_CLIENT;
+        sspi::AcquireCredentialsHandleA(nullptr, sspi::UNISP_NAME_A, sspi::SECPKG_CRED_OUTBOUND, nullptr, &clientCred, nullptr, nullptr, &hClientCred, nullptr);
+
+        sspi::CtxtHandle hClientCtxt{};
+        std::vector<uint8_t> clientHelloToken(4096);
+        sspi::SecBuffer outClientBuf{ static_cast<uint32_t>(clientHelloToken.size()), sspi::SECBUFFER_TOKEN, clientHelloToken.data() };
+        sspi::SecBufferDesc outClientDesc{ sspi::SECBUFFER_VERSION, 1, &outClientBuf };
+        uint32_t ctxtAttr = 0;
+
+        sspi::SECURITY_STATUS initSt1 = sspi::InitializeSecurityContextA(
+            &hClientCred, nullptr, "micant.org", sspi::ISC_REQ_STREAM | sspi::ISC_REQ_SEQUENCE_DETECT,
+            0, 0, nullptr, 0, &hClientCtxt, &outClientDesc, &ctxtAttr, nullptr
+        );
+        TEST_ASSERT(initSt1 == sspi::SEC_I_CONTINUE_NEEDED, "1st InitializeSecurityContextA must return SEC_I_CONTINUE_NEEDED");
+        TEST_ASSERT(hClientCtxt.isValid(), "Client context handle must be valid");
+        TEST_ASSERT(outClientBuf.cbBuffer > 0, "ClientHello token must not be empty");
+
+        const auto* ch = reinterpret_cast<const uint8_t*>(outClientBuf.pvBuffer);
+        TEST_ASSERT(ch[0] == 0x16, "TLS Record ContentType must be 0x16 (Handshake)");
+        TEST_ASSERT(ch[1] == 0x03 && ch[2] == 0x01, "TLS Legacy Version must be 0x0301");
+        TEST_ASSERT(ch[5] == 0x01, "Handshake Message Type must be 0x01 (ClientHello)");
+
+        sspi::CtxtHandle hServerCtxt{};
+        std::vector<uint8_t> serverHelloToken(4096);
+        sspi::SecBuffer inServerBuf{ outClientBuf.cbBuffer, sspi::SECBUFFER_TOKEN, clientHelloToken.data() };
+        sspi::SecBufferDesc inServerDesc{ sspi::SECBUFFER_VERSION, 1, &inServerBuf };
+        sspi::SecBuffer outServerBuf{ static_cast<uint32_t>(serverHelloToken.size()), sspi::SECBUFFER_TOKEN, serverHelloToken.data() };
+        sspi::SecBufferDesc outServerDesc{ sspi::SECBUFFER_VERSION, 1, &outServerBuf };
+        uint32_t srvAttr = 0;
+
+        sspi::SECURITY_STATUS acceptSt = sspi::AcceptSecurityContext(
+            nullptr, nullptr, &inServerDesc, sspi::ISC_REQ_STREAM, 0, &hServerCtxt, &outServerDesc, &srvAttr, nullptr
+        );
+        TEST_ASSERT(acceptSt == sspi::SEC_I_CONTINUE_NEEDED, "AcceptSecurityContext must return SEC_I_CONTINUE_NEEDED");
+        TEST_ASSERT(hServerCtxt.isValid(), "Server context handle must be valid");
+        TEST_ASSERT(outServerBuf.cbBuffer > 0, "ServerHello token must not be empty");
+
+        const auto* sh = reinterpret_cast<const uint8_t*>(outServerBuf.pvBuffer);
+        TEST_ASSERT(sh[0] == 0x16, "Server Record ContentType must be 0x16 (Handshake)");
+        TEST_ASSERT(sh[5] == 0x02, "Server Handshake Type must be 0x02 (ServerHello)");
+
+        sspi::SecBuffer inClientBuf{ outServerBuf.cbBuffer, sspi::SECBUFFER_TOKEN, serverHelloToken.data() };
+        sspi::SecBufferDesc inClientDesc{ sspi::SECBUFFER_VERSION, 1, &inClientBuf };
+        sspi::SecBuffer outClientBuf2{ 0, sspi::SECBUFFER_TOKEN, nullptr };
+        sspi::SecBufferDesc outClientDesc2{ sspi::SECBUFFER_VERSION, 1, &outClientBuf2 };
+
+        sspi::SECURITY_STATUS initSt2 = sspi::InitializeSecurityContextA(
+            &hClientCred, &hClientCtxt, "micant.org", sspi::ISC_REQ_STREAM,
+            0, 0, &inClientDesc, 0, &hClientCtxt, &outClientDesc2, &ctxtAttr, nullptr
+        );
+        TEST_ASSERT(initSt2 == sspi::SEC_E_OK, "2nd InitializeSecurityContextA must return SEC_E_OK (Connection Established)");
+
+        // --------------------------------------------------------------------
+        // 6. QueryContextAttributes (Stream Sizes & Connection Info)
+        // --------------------------------------------------------------------
+        sspi::SecPkgContext_StreamSizes sizes{};
+        sspi::SECURITY_STATUS szSt = sspi::QueryContextAttributesA(&hClientCtxt, sspi::SECPKG_ATTR_STREAM_SIZES, &sizes);
+        TEST_ASSERT(szSt == sspi::SEC_E_OK, "QueryContextAttributesA SECPKG_ATTR_STREAM_SIZES must succeed");
+        TEST_ASSERT(sizes.cbHeader == 5, "cbHeader must be 5 bytes for TLS record framing");
+        TEST_ASSERT(sizes.cbTrailer == 32, "cbTrailer must be 32 bytes for HMAC-SHA256 tag");
+        TEST_ASSERT(sizes.cbMaximumMessage == 16384, "cbMaximumMessage must be 16KB");
+
+        sspi::SecPkgContext_ConnectionInfo conn{};
+        sspi::SECURITY_STATUS connSt = sspi::QueryContextAttributesA(&hClientCtxt, sspi::SECPKG_ATTR_CONNECTION_INFO, &conn);
+        TEST_ASSERT(connSt == sspi::SEC_E_OK, "QueryContextAttributesA SECPKG_ATTR_CONNECTION_INFO must succeed");
+        TEST_ASSERT(conn.dwProtocol == sspi::SP_PROT_TLS1_3_CLIENT, "dwProtocol must be TLS 1.3");
+        TEST_ASSERT(conn.dwCipherStrength == 256, "dwCipherStrength must be 256-bit");
+
+        // --------------------------------------------------------------------
+        // 7. TLS Record Protection & Unprotection (EncryptMessage / DecryptMessage)
+        // --------------------------------------------------------------------
+        std::string testMsg = "GET /v1/telemetry HTTP/1.1\r\nHost: micant.org\r\nUser-Agent: MicaNT-Kernel/1.0\r\n\r\n";
+        std::vector<uint8_t> header(sizes.cbHeader);
+        std::vector<uint8_t> payload(testMsg.begin(), testMsg.end());
+        std::vector<uint8_t> trailer(sizes.cbTrailer);
+
+        sspi::SecBuffer encBuffers[3] = {
+            { static_cast<uint32_t>(header.size()), sspi::SECBUFFER_STREAM_HEADER, header.data() },
+            { static_cast<uint32_t>(payload.size()), sspi::SECBUFFER_DATA, payload.data() },
+            { static_cast<uint32_t>(trailer.size()), sspi::SECBUFFER_STREAM_TRAILER, trailer.data() }
+        };
+        sspi::SecBufferDesc encDesc{ sspi::SECBUFFER_VERSION, 3, encBuffers };
+
+        sspi::SECURITY_STATUS encSt = sspi::EncryptMessage(&hClientCtxt, 0, &encDesc, 0);
+        TEST_ASSERT(encSt == sspi::SEC_E_OK, "EncryptMessage must return SEC_E_OK");
+        TEST_ASSERT(header[0] == 0x17, "Header byte 0 must be 0x17 (Application Data)");
+        TEST_ASSERT(encBuffers[2].cbBuffer == 32, "Trailer buffer size must be 32 bytes");
+
+        std::vector<uint8_t> recordStream;
+        recordStream.insert(recordStream.end(), header.begin(), header.end());
+        recordStream.insert(recordStream.end(), payload.begin(), payload.end());
+        recordStream.insert(recordStream.end(), trailer.begin(), trailer.end());
+
+        sspi::SecBuffer decBuffer{ static_cast<uint32_t>(recordStream.size()), sspi::SECBUFFER_DATA, recordStream.data() };
+        sspi::SecBufferDesc decDesc{ sspi::SECBUFFER_VERSION, 1, &decBuffer };
+
+        sspi::SECURITY_STATUS decSt = sspi::DecryptMessage(&hClientCtxt, &decDesc, 0, nullptr);
+        TEST_ASSERT(decSt == sspi::SEC_E_OK, "DecryptMessage must return SEC_E_OK");
+        TEST_ASSERT(decBuffer.cbBuffer == testMsg.size(), "Decrypted message size must match original plaintext");
+        std::string recoveredPlaintext(reinterpret_cast<char*>(decBuffer.pvBuffer), decBuffer.cbBuffer);
+        TEST_ASSERT(recoveredPlaintext == testMsg, "Decrypted message contents must match original plaintext");
+
+        // --------------------------------------------------------------------
+        // 8. Tamper Detection & Truncation Handling
+        // --------------------------------------------------------------------
+        std::string msg2 = "Secure Banking Transfer: $1,000,000 to Account #42";
+        std::vector<uint8_t> h2(sizes.cbHeader);
+        std::vector<uint8_t> p2(msg2.begin(), msg2.end());
+        std::vector<uint8_t> t2(sizes.cbTrailer);
+
+        sspi::SecBuffer encBufs2[3] = {
+            { static_cast<uint32_t>(h2.size()), sspi::SECBUFFER_STREAM_HEADER, h2.data() },
+            { static_cast<uint32_t>(p2.size()), sspi::SECBUFFER_DATA, p2.data() },
+            { static_cast<uint32_t>(t2.size()), sspi::SECBUFFER_STREAM_TRAILER, t2.data() }
+        };
+        sspi::SecBufferDesc encDesc2{ sspi::SECBUFFER_VERSION, 3, encBufs2 };
+        sspi::EncryptMessage(&hClientCtxt, 0, &encDesc2, 0);
+
+        std::vector<uint8_t> tamperedRecord;
+        tamperedRecord.insert(tamperedRecord.end(), h2.begin(), h2.end());
+        tamperedRecord.insert(tamperedRecord.end(), p2.begin(), p2.end());
+        tamperedRecord.insert(tamperedRecord.end(), t2.begin(), t2.end());
+
+        tamperedRecord[5 + 10] ^= 0xFF;
+
+        sspi::SecBuffer tamperBuf{ static_cast<uint32_t>(tamperedRecord.size()), sspi::SECBUFFER_DATA, tamperedRecord.data() };
+        sspi::SecBufferDesc tamperDesc{ sspi::SECBUFFER_VERSION, 1, &tamperBuf };
+        sspi::SECURITY_STATUS tamperSt = sspi::DecryptMessage(&hClientCtxt, &tamperDesc, 0, nullptr);
+        TEST_ASSERT(tamperSt == sspi::SEC_E_MESSAGE_ALTERED, "Tampered ciphertext must return SEC_E_MESSAGE_ALTERED");
+
+        std::vector<uint8_t> truncated(tamperedRecord.begin(), tamperedRecord.begin() + 10);
+        sspi::SecBuffer truncBuf{ static_cast<uint32_t>(truncated.size()), sspi::SECBUFFER_DATA, truncated.data() };
+        sspi::SecBufferDesc truncDesc{ sspi::SECBUFFER_VERSION, 1, &truncBuf };
+        sspi::SECURITY_STATUS truncSt = sspi::DecryptMessage(&hClientCtxt, &truncDesc, 0, nullptr);
+        TEST_ASSERT(truncSt == sspi::SEC_E_INCOMPLETE_MESSAGE, "Truncated buffer must return SEC_E_INCOMPLETE_MESSAGE");
+
+        TEST_ASSERT(sspi::DeleteSecurityContext(&hClientCtxt) == sspi::SEC_E_OK, "DeleteSecurityContext for client must succeed");
+        TEST_ASSERT(sspi::DeleteSecurityContext(&hServerCtxt) == sspi::SEC_E_OK, "DeleteSecurityContext for server must succeed");
+        TEST_ASSERT(sspi::FreeCredentialsHandle(&hClientCred) == sspi::SEC_E_OK, "FreeCredentialsHandle for client must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // 9. NTLM Challenge-Response Authentication Handshake
+    // ------------------------------------------------------------------------
+    {
+        sspi::CredHandle hNtlmCred{};
+        sspi::SECURITY_STATUS nAcq = sspi::AcquireCredentialsHandleA(
+            nullptr, sspi::NTLMSP_NAME_A, sspi::SECPKG_CRED_OUTBOUND, nullptr, nullptr, nullptr, nullptr, &hNtlmCred, nullptr
+        );
+        TEST_ASSERT(nAcq == sspi::SEC_E_OK, "AcquireCredentialsHandleA for NTLM must succeed");
+
+        sspi::CtxtHandle hClientNtlm{};
+        std::vector<uint8_t> t1Buf(1024);
+        sspi::SecBuffer outT1{ static_cast<uint32_t>(t1Buf.size()), sspi::SECBUFFER_TOKEN, t1Buf.data() };
+        sspi::SecBufferDesc descT1{ sspi::SECBUFFER_VERSION, 1, &outT1 };
+        uint32_t clientFlags = 0;
+
+        sspi::SECURITY_STATUS ntlmInit1 = sspi::InitializeSecurityContextA(
+            &hNtlmCred, nullptr, nullptr, 0, 0, 0, nullptr, 0, &hClientNtlm, &descT1, &clientFlags, nullptr
+        );
+        TEST_ASSERT(ntlmInit1 == sspi::SEC_I_CONTINUE_NEEDED, "NTLM Type 1 init must return SEC_I_CONTINUE_NEEDED");
+        TEST_ASSERT(std::memcmp(outT1.pvBuffer, "NTLMSSP\0\1", 9) == 0, "Type 1 message must have NTLMSSP signature and type 1");
+
+        sspi::CtxtHandle hServerNtlm{};
+        std::vector<uint8_t> t2Buf(1024);
+        sspi::SecBuffer inT1{ outT1.cbBuffer, sspi::SECBUFFER_TOKEN, t1Buf.data() };
+        sspi::SecBufferDesc srvInT1{ sspi::SECBUFFER_VERSION, 1, &inT1 };
+        sspi::SecBuffer outT2{ static_cast<uint32_t>(t2Buf.size()), sspi::SECBUFFER_TOKEN, t2Buf.data() };
+        sspi::SecBufferDesc srvOutT2{ sspi::SECBUFFER_VERSION, 1, &outT2 };
+        uint32_t srvFlags = 0;
+
+        sspi::SECURITY_STATUS ntlmAcc1 = sspi::AcceptSecurityContext(
+            nullptr, nullptr, &srvInT1, 0, 0, &hServerNtlm, &srvOutT2, &srvFlags, nullptr
+        );
+        TEST_ASSERT(ntlmAcc1 == sspi::SEC_I_CONTINUE_NEEDED, "NTLM Type 2 accept must return SEC_I_CONTINUE_NEEDED");
+        TEST_ASSERT(std::memcmp(outT2.pvBuffer, "NTLMSSP\0\2", 9) == 0, "Type 2 message must have NTLMSSP signature and type 2");
+
+        std::vector<uint8_t> t3Buf(1024);
+        sspi::SecBuffer inT2{ outT2.cbBuffer, sspi::SECBUFFER_TOKEN, t2Buf.data() };
+        sspi::SecBufferDesc cliInT2{ sspi::SECBUFFER_VERSION, 1, &inT2 };
+        sspi::SecBuffer outT3{ static_cast<uint32_t>(t3Buf.size()), sspi::SECBUFFER_TOKEN, t3Buf.data() };
+        sspi::SecBufferDesc cliOutT3{ sspi::SECBUFFER_VERSION, 1, &outT3 };
+
+        sspi::SECURITY_STATUS ntlmInit2 = sspi::InitializeSecurityContextA(
+            &hNtlmCred, &hClientNtlm, nullptr, 0, 0, 0, &cliInT2, 0, &hClientNtlm, &cliOutT3, &clientFlags, nullptr
+        );
+        TEST_ASSERT(ntlmInit2 == sspi::SEC_E_OK, "NTLM Type 3 client init must return SEC_E_OK");
+        TEST_ASSERT(std::memcmp(outT3.pvBuffer, "NTLMSSP\0\3", 9) == 0, "Type 3 message must have NTLMSSP signature and type 3");
+
+        sspi::DeleteSecurityContext(&hClientNtlm);
+        sspi::DeleteSecurityContext(&hServerNtlm);
+        sspi::FreeCredentialsHandle(&hNtlmCred);
+    }
+
+    // ------------------------------------------------------------------------
+    // 10. WinINet HTTPS Integration Over Schannel TLS
+    // ------------------------------------------------------------------------
+    {
+        wininet::HINTERNET hRoot = wininet::InternetOpenA("MicaNT-HTTPS-Agent/1.0", wininet::INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+        TEST_ASSERT(hRoot != nullptr, "InternetOpenA must return a valid root session handle");
+
+        wininet::HINTERNET hConn = wininet::InternetConnectA(hRoot, "micant.org", 443, nullptr, nullptr, wininet::INTERNET_SERVICE_HTTP, 0, 0);
+        TEST_ASSERT(hConn != nullptr, "InternetConnectA to HTTPS port 443 must succeed");
+
+        const char* acceptTypes[] = { "text/html", nullptr };
+        wininet::HINTERNET hReq = wininet::HttpOpenRequestA(hConn, "GET", "/secure_endpoint.html", "HTTP/1.1", nullptr, acceptTypes, wininet::INTERNET_FLAG_SECURE, 0);
+        TEST_ASSERT(hReq != nullptr, "HttpOpenRequestA with INTERNET_FLAG_SECURE must succeed");
+
+        win32::BOOL sent = wininet::HttpSendRequestA(hReq, nullptr, 0, nullptr, 0);
+        TEST_ASSERT(sent != 0, "HttpSendRequestA over TLS must succeed");
+
+        char srvHeader[128]{};
+        uint32_t srvLen = sizeof(srvHeader);
+        wininet::HttpQueryInfoA(hReq, wininet::HTTP_QUERY_SERVER, srvHeader, &srvLen, nullptr);
+        std::string srvStr(srvHeader);
+        TEST_ASSERT(srvStr.find("Schannel TLS 1.3") != std::string::npos, "Server header must reflect Schannel TLS 1.3 integration");
+
+        std::vector<char> body(256);
+        uint32_t bytesRead = 0;
+        wininet::InternetReadFile(hReq, body.data(), static_cast<uint32_t>(body.size() - 1), &bytesRead);
+        body[bytesRead] = '\0';
+        std::string bodyStr(body.data());
+        TEST_ASSERT(bodyStr.find("MicaNT Secure HTTPS Web Subsystem") != std::string::npos, "Body must contain secure HTTPS welcome page");
+
+        wininet::InternetCloseHandle(hReq);
+        wininet::InternetCloseHandle(hConn);
+        wininet::InternetCloseHandle(hRoot);
+    }
+
+    // ------------------------------------------------------------------------
+    // 11. Dynamic Loader Exports & Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("secur32.dll", "InitSecurityInterfaceA") != nullptr, "secur32.dll!InitSecurityInterfaceA must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "InitSecurityInterfaceW") != nullptr, "secur32.dll!InitSecurityInterfaceW must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "EnumerateSecurityPackagesA") != nullptr, "secur32.dll!EnumerateSecurityPackagesA must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "EnumerateSecurityPackagesW") != nullptr, "secur32.dll!EnumerateSecurityPackagesW must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "QuerySecurityPackageInfoA") != nullptr, "secur32.dll!QuerySecurityPackageInfoA must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "QuerySecurityPackageInfoW") != nullptr, "secur32.dll!QuerySecurityPackageInfoW must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "AcquireCredentialsHandleA") != nullptr, "secur32.dll!AcquireCredentialsHandleA must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "AcquireCredentialsHandleW") != nullptr, "secur32.dll!AcquireCredentialsHandleW must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "FreeCredentialsHandle") != nullptr, "secur32.dll!FreeCredentialsHandle must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "InitializeSecurityContextA") != nullptr, "secur32.dll!InitializeSecurityContextA must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "InitializeSecurityContextW") != nullptr, "secur32.dll!InitializeSecurityContextW must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "AcceptSecurityContext") != nullptr, "secur32.dll!AcceptSecurityContext must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "CompleteAuthToken") != nullptr, "secur32.dll!CompleteAuthToken must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "DeleteSecurityContext") != nullptr, "secur32.dll!DeleteSecurityContext must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "ApplyControlToken") != nullptr, "secur32.dll!ApplyControlToken must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "QueryContextAttributesA") != nullptr, "secur32.dll!QueryContextAttributesA must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "QueryContextAttributesW") != nullptr, "secur32.dll!QueryContextAttributesW must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "EncryptMessage") != nullptr, "secur32.dll!EncryptMessage must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "DecryptMessage") != nullptr, "secur32.dll!DecryptMessage must be exported");
+        TEST_ASSERT(ldr.getExport("secur32.dll", "FreeContextBuffer") != nullptr, "secur32.dll!FreeContextBuffer must be exported");
+
+        TEST_ASSERT(ldr.getExport("sspicli.dll", "InitSecurityInterfaceA") != nullptr, "sspicli.dll!InitSecurityInterfaceA must be exported");
+        TEST_ASSERT(ldr.getExport("sspicli.dll", "AcquireCredentialsHandleA") != nullptr, "sspicli.dll!AcquireCredentialsHandleA must be exported");
+        TEST_ASSERT(ldr.getExport("sspicli.dll", "InitializeSecurityContextA") != nullptr, "sspicli.dll!InitializeSecurityContextA must be exported");
+        TEST_ASSERT(ldr.getExport("sspicli.dll", "EncryptMessage") != nullptr, "sspicli.dll!EncryptMessage must be exported");
+        TEST_ASSERT(ldr.getExport("sspicli.dll", "DecryptMessage") != nullptr, "sspicli.dll!DecryptMessage must be exported");
+
+        TEST_ASSERT(ldr.getExport("schannel.dll", "SslEmptyCacheA") != nullptr, "schannel.dll!SslEmptyCacheA must be exported");
+        TEST_ASSERT(ldr.getExport("schannel.dll", "SslEmptyCacheW") != nullptr, "schannel.dll!SslEmptyCacheW must be exported");
+
+        uint32_t handle = 0;
+        uint32_t sSecur32 = version::GetFileVersionInfoSizeA("secur32.dll", &handle);
+        TEST_ASSERT(sSecur32 > 0, "secur32.dll must have version info resource");
+
+        std::vector<uint8_t> vSecur32(sSecur32);
+        TEST_ASSERT(version::GetFileVersionInfoA("secur32.dll", handle, sSecur32, vSecur32.data()) != 0, "GetFileVersionInfoA for secur32.dll must succeed");
+
+        void* pDesc = nullptr;
+        uint32_t dLen = 0;
+        TEST_ASSERT(version::VerQueryValueA(vSecur32.data(), "\\StringFileInfo\\040904B0\\FileDescription", &pDesc, &dLen) != 0, "VerQueryValueA for secur32.dll must succeed");
+        TEST_ASSERT(std::string(static_cast<const char*>(pDesc)) == "Security Support Provider Interface", "FileDescription must match SSPI description");
+
+        uint32_t sSchannel = version::GetFileVersionInfoSizeA("schannel.dll", &handle);
+        TEST_ASSERT(sSchannel > 0, "schannel.dll must have version info resource");
+
+        std::vector<uint8_t> vSchannel(sSchannel);
+        TEST_ASSERT(version::GetFileVersionInfoA("schannel.dll", handle, sSchannel, vSchannel.data()) != 0, "GetFileVersionInfoA for schannel.dll must succeed");
+
+        pDesc = nullptr;
+        dLen = 0;
+        TEST_ASSERT(version::VerQueryValueA(vSchannel.data(), "\\StringFileInfo\\040904B0\\FileDescription", &pDesc, &dLen) != 0, "VerQueryValueA for schannel.dll must succeed");
+        TEST_ASSERT(std::string(static_cast<const char*>(pDesc)) == "TLS / SSL Security Provider", "FileDescription must match TLS / SSL Security Provider");
+    }
+
+    // ------------------------------------------------------------------------
+    // 12. Shell Built-in Commands Integration (sspi, schannel)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        shell.execute("sspi info", out);
+        TEST_ASSERT(out.str().find("Security Support Provider Interface") != std::string::npos, "Shell sspi info command must succeed");
+
+        out.str("");
+        shell.execute("sspi packages", out);
+        TEST_ASSERT(out.str().find("Schannel") != std::string::npos, "Shell sspi packages must contain Schannel");
+        TEST_ASSERT(out.str().find("NTLM") != std::string::npos, "Shell sspi packages must contain NTLM");
+
+        out.str("");
+        shell.execute("sspi test", out);
+        TEST_ASSERT(out.str().find("Self-test complete") != std::string::npos, "Shell sspi test command must succeed");
+
+        out.str("");
+        shell.execute("schannel test", out);
+        TEST_ASSERT(out.str().find("ALL TLS 1.3 CHECKS PASSED") != std::string::npos, "Shell schannel test command must pass all TLS checks");
+
+        out.str("");
+        shell.execute("schannel info", out);
+        TEST_ASSERT(out.str().find("Secure Channel Subsystem") != std::string::npos, "Shell schannel info command must succeed");
+    }
+
+    std::cout << "[TEST] Suite 67: Windows SSPI & Schannel TLS 1.3 Subsystems PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -10658,6 +11107,7 @@ int main() {
     RUN_TEST(Test_OpenGL_And_WGL_Subsystem);
     RUN_TEST(Test_WinINet_And_URLMon_Subsystems);
     RUN_TEST(Test_CryptoAPI_And_CNG_Subsystems);
+    RUN_TEST(Test_SSPI_And_Schannel_Subsystems);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

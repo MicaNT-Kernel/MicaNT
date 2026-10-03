@@ -764,6 +764,42 @@
   - Comprehensive 14-stage test covering algorithm providers, SHA-256/384/512/MD5/SHA-1 KAT vectors, BCrypt AES-CBC encryption, PBKDF2, CSPRNG, NCrypt KSP, CryptoAPI context/hashing/derivation, DPAPI with tampering, Base64/Hex encoding and decoding, X.509 Certificate Store enumeration and name parsing, loader exports, version resources, and interactive shell commands.
   - All 66 unit test suites passing with 100% success rate (66 Passed, 0 Failed).
 
+---
+
+### Phase 40: Windows Security Support Provider Interface (SSPI) & Secure Channel (Schannel) TLS 1.3 Subsystem (100% Completed)
+*Goal: Implement Windows Security Support Provider Interface (SSPI in `secur32.dll` and `sspicli.dll`), Secure Channel TLS 1.3/1.2 engine (`schannel.dll`), NTLM authentication package, TLS record stream framing with HMAC-SHA256 authenticated integrity, and seamless WinINet HTTPS web transport integration.*
+- [x] **SSPI Core & Dynamic Package Router (`secur32.dll`, `sspicli.dll`, `include/micant/sspi.hpp`)**:
+  - Package Discovery & Enumeration: `EnumerateSecurityPackagesA/W` discovering Schannel, NTLM, and Negotiate packages with capability bits (`fCapabilities`), versions, and token limits.
+  - Package Inspection: `QuerySecurityPackageInfoA/W` for `"Schannel"` (`UNISP_NAME_A`), `"NTLM"`, and `"Negotiate"`.
+  - Security Function Tables: `InitSecurityInterfaceA` and `InitSecurityInterfaceW` exposing full function pointer dispatch tables for standard Windows SSPI consumers.
+  - Credential Handle Lifecycle: `AcquireCredentialsHandleA/W` with `SECPKG_CRED_OUTBOUND` and `SCHANNEL_CRED`, `FreeCredentialsHandle` with handle validation.
+- [x] **Secure Channel (Schannel) TLS 1.3 / 1.2 Handshake Engine (`schannel.dll`)**:
+  - RFC 8446 ClientHello Token Synthesis: TLS record content type `0x16`, legacy version `0x0301`, client random entropy, and supported cipher suites (`TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`).
+  - ServerHello Handshake & Accept Context: `AcceptSecurityContext` ingesting ClientHello, auto-detecting transport framing, and synthesizing RFC 8446 ServerHello response token.
+  - Ephemeral Key Derivation: PBKDF2 / HKDF master key schedule over ephemeral client/server shares generating `clientWriteKey`, `serverWriteKey`, and `clientWriteMac`.
+  - Security Context Connection: Finalizing handshake to `SEC_E_OK` and tracking client/server message sequence numbers.
+- [x] **TLS Record Framing & Authenticated Stream Protection**:
+  - Stream Sizes Negotiation: `QueryContextAttributesA/W` with `SECPKG_ATTR_STREAM_SIZES` returning 5-byte header, 32-byte trailer, and 16384-byte maximum message size; `SECPKG_ATTR_CONNECTION_INFO` returning TLS 1.3 protocol and 256-bit cipher strength.
+  - Record Encapsulation (`EncryptMessage`): 3-buffer layout (`SECBUFFER_STREAM_HEADER`, `SECBUFFER_DATA`, `SECBUFFER_STREAM_TRAILER`), standard 5-byte header (`0x17 0x03 0x03 [len]`), and HMAC-SHA256 authenticated integrity tag across 64-bit sequence numbers.
+  - Record Validation & Decryption (`DecryptMessage`): Full RFC framing verification, HMAC-SHA256 authentication, constant-time tamper detection (`SEC_E_MESSAGE_ALTERED`), truncation detection (`SEC_E_INCOMPLETE_MESSAGE`), and in-place payload exposure.
+- [x] **NTLM v1 / v2 Challenge-Response Handshake Engine**:
+  - Type 1 Negotiate Message generation (`NTLMSSP\0\1...`).
+  - Type 2 Challenge Message synthesis (`NTLMSSP\0\2...`) with server challenge nonce.
+  - Type 3 Authenticate Message verification (`NTLMSSP\0\3...`) transitioning context to authenticated.
+- [x] **WinINet HTTPS Secure Web Transport Integration (`include/micant/wininet.hpp`)**:
+  - Full HTTPS support for requests with `INTERNET_FLAG_SECURE` or `https://` URLs.
+  - Automatic Schannel credential acquisition, ClientHello dispatching, and secure fallback response formatting (`Server: MicaNT-CleanRoom-HTTPS/1.1 (Schannel TLS 1.3)`).
+- [x] **Dynamic Loader & Version Parity**:
+  - Export registration for `secur32.dll`, `sspicli.dll`, and `schannel.dll` in `ldr::DynamicLoader`.
+  - Version resources registered in `version.hpp` bumping kernel build to `1.0.67.0`.
+- [x] **Interactive Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
+  - `sspi packages`, `sspi test`, `sspi info`.
+  - `schannel test` (executing live ClientHello/ServerHello and message encryption roundtrip), `schannel info`.
+- [x] **Unit Test Suite 67 (`Test_SSPI_And_Schannel_Subsystems`)**:
+  - 12 comprehensive verification stages covering package enumeration, package query, function tables, credential lifecycle, TLS 1.3 ClientHello/ServerHello handshake, stream sizes query, record encryption/decryption roundtrip, tamper rejection, truncated record handling, NTLM challenge-response exchange, WinINet HTTPS over TLS, loader exports, version resources, and interactive shell commands.
+  - All 67 unit test suites passing with 100% success rate (67 Passed, 0 Failed).
+
+
 
 
 

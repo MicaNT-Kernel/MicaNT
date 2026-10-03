@@ -1993,6 +1993,8 @@ struct FILETIME {
     DWORD dwLowDateTime{0};
     DWORD dwHighDateTime{0};
 };
+using PFILETIME = FILETIME*;
+using LPFILETIME = FILETIME*;
 
 inline void GetSystemTimeAsFileTime(FILETIME* lpTime) noexcept {
     if (!lpTime) return;
