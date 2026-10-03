@@ -67,6 +67,7 @@
 #include "bits.hpp"
 #include "vss.hpp"
 #include "wer.hpp"
+#include "dwmapi.hpp"
 
 namespace micant::shell {
 
@@ -211,6 +212,7 @@ public:
             if (cmd == "bitsadmin" || cmd == "bits") { cmdBitsAdmin(tokens, out); return 0; }
             if (cmd == "vssadmin" || cmd == "vss") { cmdVssAdmin(tokens, out); return 0; }
             if (cmd == "werfault" || cmd == "wer") { cmdWerFault(tokens, out); return 0; }
+            if (cmd == "dwm" || cmd == "dwmapi") { cmdDwm(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -6001,6 +6003,149 @@ private:
             << "  werfault /exclude add <app.exe>    Add application to exclusion list\n"
             << "  werfault /exclude remove <app.exe> Remove application from exclusion list\n"
             << "  werfault test                      Execute subsystem self-test\n";
+    }
+
+    void cmdDwm(const std::vector<std::string>& tokens, std::ostream& out) {
+        dwm::InitializeDWMSubsystemExports();
+        auto& dwmCoord = dwm::DwmCoordinator::Instance();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            // 1. dwm test
+            if (sub == "test") {
+                out << "[DWM] Executing Desktop Window Manager (DWM) Composition Self-Test...\n";
+                
+                int32_t enabled = 0;
+                ole32::HRESULT hr = dwm::DwmIsCompositionEnabled(&enabled);
+                out << "  DwmIsCompositionEnabled:        " << (hr == ole32::S_OK && enabled == 1 ? "PASS (ENABLED)" : "FAIL") << "\n";
+
+                uint32_t color = 0;
+                int32_t opaque = 0;
+                hr = dwm::DwmGetColorizationColor(&color, &opaque);
+                out << "  DwmGetColorizationColor:        " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                dwm::DWM_TIMING_INFO timing{};
+                hr = dwm::DwmGetCompositionTimingInfo(nullptr, &timing);
+                out << "  DwmGetCompositionTimingInfo:    " << (hr == ole32::S_OK && timing.rateRefresh.uiNumerator == 60000 ? "PASS (60Hz VSync)" : "FAIL") << "\n";
+
+                // Frame margin extension test
+                win32::HWND hDummy = reinterpret_cast<win32::HWND>(0x5000);
+                dwm::MARGINS margins{ 8, 8, 30, 8 };
+                hr = dwm::DwmExtendFrameIntoClientArea(hDummy, &margins);
+                out << "  DwmExtendFrameIntoClientArea:   " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                // Dark mode attribute test
+                int32_t darkMode = 1;
+                hr = dwm::DwmSetWindowAttribute(hDummy, dwm::DWMWA_USE_IMMERSIVE_DARK_MODE, &darkMode, sizeof(darkMode));
+                int32_t readDarkMode = 0;
+                dwm::DwmGetWindowAttribute(hDummy, dwm::DWMWA_USE_IMMERSIVE_DARK_MODE, &readDarkMode, sizeof(readDarkMode));
+                out << "  DWMWA_USE_IMMERSIVE_DARK_MODE:  " << (hr == ole32::S_OK && readDarkMode == 1 ? "PASS (Dark Mode Active)" : "FAIL") << "\n";
+
+                // Mica effect attribute test
+                uint32_t backdrop = dwm::DWMSBT_MAINWINDOW;
+                hr = dwm::DwmSetWindowAttribute(hDummy, dwm::DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+                uint32_t readBackdrop = 0;
+                dwm::DwmGetWindowAttribute(hDummy, dwm::DWMWA_SYSTEMBACKDROP_TYPE, &readBackdrop, sizeof(readBackdrop));
+                out << "  DWMWA_SYSTEMBACKDROP_TYPE:      " << (hr == ole32::S_OK && readBackdrop == dwm::DWMSBT_MAINWINDOW ? "PASS (Mica Backdrop Active)" : "FAIL") << "\n";
+
+                // Corner preference test
+                uint32_t corners = dwm::DWMWCP_ROUND;
+                hr = dwm::DwmSetWindowAttribute(hDummy, dwm::DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof(corners));
+                uint32_t readCorners = 0;
+                dwm::DwmGetWindowAttribute(hDummy, dwm::DWMWA_WINDOW_CORNER_PREFERENCE, &readCorners, sizeof(readCorners));
+                out << "  DWMWA_WINDOW_CORNER_PREFERENCE: " << (hr == ole32::S_OK && readCorners == dwm::DWMWCP_ROUND ? "PASS (Rounded Corners)" : "FAIL") << "\n";
+
+                // Thumbnail test
+                win32::HWND hSrc = reinterpret_cast<win32::HWND>(0x5001);
+                dwm::HTHUMBNAIL hThumb = nullptr;
+                hr = dwm::DwmRegisterThumbnail(hDummy, hSrc, &hThumb);
+                out << "  DwmRegisterThumbnail:           " << (hr == ole32::S_OK && hThumb ? "PASS" : "FAIL") << "\n";
+                if (hThumb) {
+                    dwm::DWM_THUMBNAIL_PROPERTIES tp{};
+                    tp.dwFlags = dwm::DWM_TNP_OPACITY;
+                    tp.opacity = 200;
+                    dwm::DwmUpdateThumbnailProperties(hThumb, &tp);
+                    dwm::DwmUnregisterThumbnail(hThumb);
+                }
+
+                hr = dwm::DwmFlush();
+                out << "  DwmFlush (VSync sync):          " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                out << "[DWM] Desktop Window Manager Self-Test Finished.\n";
+                return;
+            }
+
+            // 2. dwm enable / disable
+            if (sub == "enable") {
+                dwmCoord.SetCompositionEnabled(true);
+                out << "Desktop composition enabled.\n";
+                return;
+            }
+            if (sub == "disable") {
+                dwmCoord.SetCompositionEnabled(false);
+                out << "Desktop composition disabled.\n";
+                return;
+            }
+
+            // 3. dwm list
+            if (sub == "list" || sub == "/list") {
+                auto props = dwmCoord.GetAllWindowProperties();
+                out << "\nDesktop Window Manager Active Window Attributes (" << props.size() << " windows):\n\n";
+                out << std::left << std::setw(18) << "HWND"
+                    << std::setw(12) << "Dark Mode"
+                    << std::setw(14) << "Backdrop"
+                    << std::setw(14) << "Corners"
+                    << "Margins [L, R, T, B]\n";
+                out << std::string(75, '-') << "\n";
+
+                for (const auto& [hwnd, p] : props) {
+                    std::string darkStr = p.useImmersiveDarkMode ? "Enabled" : "Disabled";
+                    std::string backStr = "Auto";
+                    if (p.systemBackdropType == dwm::DWMSBT_MAINWINDOW) backStr = "Mica";
+                    else if (p.systemBackdropType == dwm::DWMSBT_TRANSIENTWINDOW) backStr = "Acrylic";
+                    else if (p.systemBackdropType == dwm::DWMSBT_TABBEDWINDOW) backStr = "Mica Alt";
+
+                    std::string cornerStr = "Default";
+                    if (p.cornerPreference == dwm::DWMWCP_ROUND) cornerStr = "Round";
+                    else if (p.cornerPreference == dwm::DWMWCP_ROUNDSMALL) cornerStr = "RoundSmall";
+                    else if (p.cornerPreference == dwm::DWMWCP_DONOTROUND) cornerStr = "DoNotRound";
+
+                    std::ostringstream mss;
+                    mss << "[" << p.frameMargins.cxLeftWidth << ", "
+                        << p.frameMargins.cxRightWidth << ", "
+                        << p.frameMargins.cyTopHeight << ", "
+                        << p.frameMargins.cyBottomHeight << "]";
+
+                    out << std::left << std::setw(18) << hwnd
+                        << std::setw(12) << darkStr
+                        << std::setw(14) << backStr
+                        << std::setw(14) << cornerStr
+                        << mss.str() << "\n";
+                }
+                out << "\n";
+                return;
+            }
+        }
+
+        // Default banner & status
+        int32_t opaque = 0;
+        uint32_t color = dwmCoord.GetColorizationColor(&opaque);
+        out << "========================================================================\n"
+            << "     MicaNT Desktop Window Manager & Composition Engine (dwm.exe)       \n"
+            << "========================================================================\n\n"
+            << "Subsystem Library:    dwmapi.dll\n"
+            << "Composition State:    " << (dwmCoord.IsCompositionEnabled() ? "ENABLED (Hardware Accelerated)" : "DISABLED") << "\n"
+            << "Colorization Color:   0x" << std::hex << std::uppercase << color << std::dec << " (Windows Blue / Mica)\n"
+            << "Display Refresh:      60 Hz (16.66 ms frame pacing)\n"
+            << "Composed Frames:      " << dwmCoord.GetFrameCount() << " frames\n\n"
+            << "Usage:\n"
+            << "  dwm status                 Display DWM composition status\n"
+            << "  dwm list                   List active windows and DWM attributes\n"
+            << "  dwm enable                 Enable desktop composition\n"
+            << "  dwm disable                Disable desktop composition\n"
+            << "  dwm test                   Execute subsystem self-test\n";
     }
 
     static std::string trim(std::string_view s) {

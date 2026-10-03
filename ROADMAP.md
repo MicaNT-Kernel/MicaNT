@@ -1162,22 +1162,56 @@
 
 ---
 
-### Phase 51: Windows Desktop Window Manager (DWM) & Desktop Composition Subsystem (`dwmapi.dll` & `dwm.exe`) (IN PROGRESS)
-- [ ] **DWM APIs & Composition Architecture (`include/micant/dwmapi.hpp`)**:
-  - `DwmIsCompositionEnabled`, `DwmEnableComposition`, `DwmExtendFrameIntoClientArea`, `DwmEnableBlurBehindWindow`.
-  - `DwmSetWindowAttribute`, `DwmGetWindowAttribute` (supporting `DWMWA_NCRENDERING_ENABLED`, `DWMWA_CAPTION_BUTTON_BOUNDS`, `DWMWA_EXTENDED_FRAME_BOUNDS`, `DWMWA_USE_IMMERSIVE_DARK_MODE`, `DWMWA_WINDOW_CORNER_PREFERENCE`, `DWMWA_MICA_EFFECT`, `DWMWA_SYSTEMBACKDROP_TYPE`).
-  - `DwmGetColorizationColor`, `DwmFlush`, `DwmGetCompositionTimingInfo`.
-  - `DwmRegisterThumbnail`, `DwmUnregisterThumbnail`, `DwmUpdateThumbnailProperties`, `DwmQueryThumbnailSourceSize`.
-- [ ] **Desktop Composition & Glass / Mica Effects**:
-  - Integration with `user32.hpp`, `prismx.hpp`, and framebuffer presentation pipeline.
-  - Immersive Dark Mode, Mica material and Acrylic backdrop rendering models.
+### Phase 51: Windows Desktop Window Manager (DWM) & Desktop Composition Subsystem (`dwmapi.dll` & `dwm.exe`) (100% Completed)
+- [x] **DWM APIs & Composition Architecture (`include/micant/dwmapi.hpp`)**:
+  - Implemented core composition APIs: `DwmIsCompositionEnabled`, `DwmEnableComposition`, `DwmExtendFrameIntoClientArea`, `DwmEnableBlurBehindWindow`.
+  - Implemented window attribute management: `DwmSetWindowAttribute`, `DwmGetWindowAttribute` with full support for `DWMWA_NCRENDERING_ENABLED`, `DWMWA_CAPTION_BUTTON_BOUNDS`, `DWMWA_EXTENDED_FRAME_BOUNDS`, `DWMWA_USE_IMMERSIVE_DARK_MODE`, `DWMWA_WINDOW_CORNER_PREFERENCE`, `DWMWA_MICA_EFFECT`, `DWMWA_SYSTEMBACKDROP_TYPE`, `DWMWA_BORDER_COLOR`, `DWMWA_CAPTION_COLOR`, `DWMWA_TEXT_COLOR`.
+  - Implemented timing and colorization: `DwmGetColorizationColor`, `DwmFlush`, `DwmGetCompositionTimingInfo` (60 Hz VSync pacing, refresh rate calculations, frame counters).
+  - Implemented window thumbnails: `DwmRegisterThumbnail`, `DwmUnregisterThumbnail`, `DwmUpdateThumbnailProperties`, `DwmQueryThumbnailSourceSize`.
+  - Implemented iconic thumbnails and DirectX interop: `DwmSetIconicThumbnail`, `DwmSetIconicLivePreviewBitmap`, `DwmInvalidateIconicBitmaps`, `DwmAttachMilContent`, `DwmDetachMilContent`, `DwmModifyPreviousDxFrameDuration`, `DwmSetPresentParameters`.
+- [x] **Desktop Composition & Glass / Mica Effects**:
+  - Bound extended frame bounds and window geometry directly to `user32::WindowManager`.
+  - Bidirectional coupling between `DWMWA_SYSTEMBACKDROP_TYPE` (Mica, Acrylic, Tabbed) and `DWMWA_MICA_EFFECT` for Windows 11 Build 22000 and Build 22621+ binary compatibility.
+  - Integration with `prismx.hpp` hardware-accelerated presentation pipeline.
+- [x] **Dynamic Loader & Versioning**:
+  - Registered 20+ dynamic exports for `dwmapi.dll` in `ldr::DynamicLoader`.
+  - Module version metadata registered in `version.hpp` for `dwmapi.dll` and `dwm.exe` (`10.0.22621.1`).
+- [x] **Interactive CLI Utility (`include/micant/shell.hpp` - `dwm`)**:
+  - `dwm status`: Composition status, refresh rate, accent colorization, and active window counts.
+  - `dwm list`: Displays tabular list of active windows and their DWM attributes (Mica, Dark Mode, Corners, Borders).
+  - `dwm enable` / `dwm disable`: Toggles desktop composition engine.
+  - `dwm test`: Runs comprehensive DWM self-test.
+- [x] **Unit Test Suite 78 (`Test_WindowsDWM_DesktopWindowManager_Subsystem`)**:
+  - 12 comprehensive verification stages covering dynamic exports, version database, composition state toggle, frame margins, blur behind, window attributes (dark mode, rounded corners, Mica material, backdrop type, border colors), timing info (60 Hz VSync), thumbnail registration/updates, iconic bitmaps, live window binding, and interactive CLI utility.
+  - All 78 unit test suites passing with 100% success rate (78 Passed, 0 Failed).
+
+---
+
+### Phase 52: Windows Audio Session API (WASAPI) & Core Audio Engine Subsystem (`mmdevapi.dll` & `audiosrv.dll`) (PLANNED)
+- [ ] **MMDevice API & Endpoint Enumeration (`include/micant/wasapi.hpp`, `mmdevapi.dll`)**:
+  - `IMMDeviceEnumerator`, `IMMDevice`, `IMMDeviceCollection`, `IMMEndpoint`.
+  - Device roles: `eConsole`, `eMultimedia`, `eCommunications`.
+  - Data flows: `eRender` (Playback) and `eCapture` (Recording).
+  - Device state tracking: `DEVICE_STATE_ACTIVE`, `DEVICE_STATE_DISABLED`, `DEVICE_STATE_NOTPRESENT`, `DEVICE_STATE_UNPLUGGED`.
+  - Property store: `IPropertyStore` supporting `PKEY_Device_FriendlyName`, `PKEY_AudioEndpoint_FormFactor`.
+- [ ] **Audio Client & Session Management (`audioclient.h`, `audiosrv.dll`)**:
+  - `IAudioClient`, `IAudioClient2`, `IAudioClient3`.
+  - Stream initialization modes: `AUDCLNT_SHAREMODE_SHARED`, `AUDCLNT_SHAREMODE_EXCLUSIVE`.
+  - Stream flags: `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`, `AUDCLNT_STREAMFLAGS_NOPERSIST`.
+  - Buffer sizing and latency query (`GetBufferSize`, `GetStreamLatency`, `GetCurrentPadding`).
+  - Rendering and capture services: `IAudioRenderClient` (`GetBuffer`, `ReleaseBuffer`), `IAudioCaptureClient` (`GetBuffer`, `ReleaseBuffer`, `GetNextPacketSize`).
+  - Clock and volume control: `IAudioClock`, `ISimpleAudioVolume`, `IAudioEndpointVolume`.
+- [ ] **Core Audio Pipeline Integration**:
+  - Integration with `prism_audio.hpp` and `winmm.hpp` multi-channel audio mixer.
+  - Shared-mode software mixing with float32/PCM audio frames.
+  - Zero-latency event-driven audio pump.
 - [ ] **Dynamic Loader & Versioning**:
-  - DLL exports for `dwmapi.dll`.
-  - Module version metadata registered in `version.hpp`.
-- [ ] **Interactive CLI Utility (`dwm.exe`)**:
-  - `dwm status`, `dwm enable`, `dwm disable`, `dwm attributes`, `dwm test`.
-- [ ] **Unit Test Suite 78 (`Test_WindowsDWM_DesktopWindowManager_Subsystem`)**:
-  - End-to-end testing of DWM composition state, window attributes, margins, timing info, and CLI commands.
+  - Registered exports for `mmdevapi.dll` (`DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`).
+  - Version metadata registered in `version.hpp`.
+- [ ] **Interactive CLI Utility (`include/micant/shell.hpp` - `audiosrv`)**:
+  - `audiosrv status`, `audiosrv list`, `audiosrv volume`, `audiosrv test`.
+- [ ] **Unit Test Suite 79 (`Test_WindowsWASAPI_CoreAudioEngine_Subsystem`)**:
+  - Full end-to-end verification of endpoint enumeration, COM activation, audio client initialization, render/capture buffers, and volume controls.
 
 
 

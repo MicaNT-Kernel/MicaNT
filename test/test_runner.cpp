@@ -99,6 +99,7 @@
 #include "micant/bits.hpp"
 #include "micant/vss.hpp"
 #include "micant/wer.hpp"
+#include "micant/dwmapi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -14818,6 +14819,276 @@ void Test_WindowsWER_ErrorReporting_Subsystem() {
     std::cout << "[TEST] Suite 77: Windows Error Reporting (WER) Subsystem PASSED.\n";
 }
 
+void Test_WindowsDWM_DesktopWindowManager_Subsystem() {
+    using namespace micant::dwm;
+
+    InitializeDWMSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader & Versioning Database Verification
+    // ------------------------------------------------------------------------
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmIsCompositionEnabled") != nullptr, "dwmapi.dll!DwmIsCompositionEnabled must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmEnableComposition") != nullptr, "dwmapi.dll!DwmEnableComposition must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmExtendFrameIntoClientArea") != nullptr, "dwmapi.dll!DwmExtendFrameIntoClientArea must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmEnableBlurBehindWindow") != nullptr, "dwmapi.dll!DwmEnableBlurBehindWindow must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmSetWindowAttribute") != nullptr, "dwmapi.dll!DwmSetWindowAttribute must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmGetWindowAttribute") != nullptr, "dwmapi.dll!DwmGetWindowAttribute must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmGetColorizationColor") != nullptr, "dwmapi.dll!DwmGetColorizationColor must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmFlush") != nullptr, "dwmapi.dll!DwmFlush must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmGetCompositionTimingInfo") != nullptr, "dwmapi.dll!DwmGetCompositionTimingInfo must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmRegisterThumbnail") != nullptr, "dwmapi.dll!DwmRegisterThumbnail must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmUnregisterThumbnail") != nullptr, "dwmapi.dll!DwmUnregisterThumbnail must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmUpdateThumbnailProperties") != nullptr, "dwmapi.dll!DwmUpdateThumbnailProperties must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmQueryThumbnailSourceSize") != nullptr, "dwmapi.dll!DwmQueryThumbnailSourceSize must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmSetIconicThumbnail") != nullptr, "dwmapi.dll!DwmSetIconicThumbnail must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmSetIconicLivePreviewBitmap") != nullptr, "dwmapi.dll!DwmSetIconicLivePreviewBitmap must be exported");
+    TEST_ASSERT(ldr.getExport("dwmapi.dll", "DwmInvalidateIconicBitmaps") != nullptr, "dwmapi.dll!DwmInvalidateIconicBitmaps must be exported");
+
+    const auto* modDwmApi = version::VersionDatabase::Instance().FindModule("dwmapi.dll");
+    TEST_ASSERT(modDwmApi != nullptr, "dwmapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modDwmApi->stringTable.at("FileVersion") == "10.0.22621.1", "dwmapi.dll version must match 10.0.22621.1");
+
+    const auto* modDwmExe = version::VersionDatabase::Instance().FindModule("dwm.exe");
+    TEST_ASSERT(modDwmExe != nullptr, "dwm.exe must be registered in VersionDatabase");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Composition State Queries & Toggling
+    // ------------------------------------------------------------------------
+    int32_t enabled = 0;
+    ole32::HRESULT hr = DwmIsCompositionEnabled(&enabled);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmIsCompositionEnabled must return S_OK");
+    TEST_ASSERT(enabled == 1, "DWM Composition must default to ENABLED (1)");
+
+    TEST_ASSERT(DwmIsCompositionEnabled(nullptr) != ole32::S_OK, "DwmIsCompositionEnabled with null ptr must fail");
+
+    hr = DwmEnableComposition(DWM_EC_DISABLECOMPOSITION);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmEnableComposition(DISABLE) must return S_OK");
+    DwmIsCompositionEnabled(&enabled);
+    TEST_ASSERT(enabled == 0, "DwmIsCompositionEnabled must reflect disabled state");
+
+    hr = DwmEnableComposition(DWM_EC_ENABLECOMPOSITION);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmEnableComposition(ENABLE) must return S_OK");
+    DwmIsCompositionEnabled(&enabled);
+    TEST_ASSERT(enabled == 1, "DwmIsCompositionEnabled must reflect enabled state");
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Accent Colorization Queries
+    // ------------------------------------------------------------------------
+    uint32_t color = 0;
+    int32_t opaque = -1;
+    hr = DwmGetColorizationColor(&color, &opaque);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmGetColorizationColor must return S_OK");
+    TEST_ASSERT(color != 0, "Colorization color must be non-zero");
+    TEST_ASSERT(opaque == 0, "Opaque blend must default to false");
+    TEST_ASSERT(DwmGetColorizationColor(nullptr, &opaque) != ole32::S_OK, "DwmGetColorizationColor with null ptr must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Composition Timing & VSync Synchronization
+    // ------------------------------------------------------------------------
+    win32::HWND hTestWnd = reinterpret_cast<win32::HWND>(0x7000);
+    DWM_TIMING_INFO timing{};
+    hr = DwmGetCompositionTimingInfo(hTestWnd, &timing);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmGetCompositionTimingInfo must return S_OK");
+    TEST_ASSERT(timing.cbSize == sizeof(DWM_TIMING_INFO), "Timing info size must match sizeof(DWM_TIMING_INFO)");
+    TEST_ASSERT(timing.rateRefresh.uiNumerator == 60000 && timing.rateRefresh.uiDenominator == 1000, "Refresh rate must report 60.000 Hz");
+    TEST_ASSERT(timing.qpcRefreshPeriod == 166666, "QPC refresh period must reflect ~16.66 ms");
+
+    uint64_t initialFrames = timing.cFrame;
+    hr = DwmFlush();
+    TEST_ASSERT(hr == ole32::S_OK, "DwmFlush must return S_OK");
+    DwmGetCompositionTimingInfo(hTestWnd, &timing);
+    TEST_ASSERT(timing.cFrame > initialFrames, "DwmFlush must advance composition frame count");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Frame Margins (Sheet-of-Glass & Custom Insets)
+    // ------------------------------------------------------------------------
+    MARGINS standardMargins{ 10, 10, 32, 10 };
+    hr = DwmExtendFrameIntoClientArea(hTestWnd, &standardMargins);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmExtendFrameIntoClientArea must return S_OK");
+
+    MARGINS sheetOfGlass{ -1, -1, -1, -1 };
+    hr = DwmExtendFrameIntoClientArea(hTestWnd, &sheetOfGlass);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmExtendFrameIntoClientArea for sheet-of-glass must return S_OK");
+    TEST_ASSERT(DwmExtendFrameIntoClientArea(nullptr, &standardMargins) != ole32::S_OK, "Null HWND must fail");
+    TEST_ASSERT(DwmExtendFrameIntoClientArea(hTestWnd, nullptr) != ole32::S_OK, "Null margins must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Acrylic & Blur-Behind Configuration
+    // ------------------------------------------------------------------------
+    DWM_BLURBEHIND bb{};
+    bb.dwFlags = DWM_BB_ENABLE;
+    bb.fEnable = 1;
+    hr = DwmEnableBlurBehindWindow(hTestWnd, &bb);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmEnableBlurBehindWindow must return S_OK");
+    TEST_ASSERT(DwmEnableBlurBehindWindow(hTestWnd, nullptr) != ole32::S_OK, "Null blur-behind ptr must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Window Attributes (Dark Mode, Mica, Corners, Bounds)
+    // ------------------------------------------------------------------------
+    // 7.1 Immersive Dark Mode
+    int32_t setDarkMode = 1;
+    hr = DwmSetWindowAttribute(hTestWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &setDarkMode, sizeof(setDarkMode));
+    TEST_ASSERT(hr == ole32::S_OK, "DwmSetWindowAttribute(USE_IMMERSIVE_DARK_MODE) must return S_OK");
+    int32_t readDarkMode = 0;
+    hr = DwmGetWindowAttribute(hTestWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &readDarkMode, sizeof(readDarkMode));
+    TEST_ASSERT(hr == ole32::S_OK && readDarkMode == 1, "DwmGetWindowAttribute must return active dark mode (1)");
+
+    // 7.2 System Backdrop Type (Mica / Acrylic)
+    uint32_t setBackdrop = DWMSBT_MAINWINDOW; // Mica
+    hr = DwmSetWindowAttribute(hTestWnd, DWMWA_SYSTEMBACKDROP_TYPE, &setBackdrop, sizeof(setBackdrop));
+    TEST_ASSERT(hr == ole32::S_OK, "DwmSetWindowAttribute(SYSTEMBACKDROP_TYPE) must return S_OK");
+    uint32_t readBackdrop = 0;
+    hr = DwmGetWindowAttribute(hTestWnd, DWMWA_SYSTEMBACKDROP_TYPE, &readBackdrop, sizeof(readBackdrop));
+    TEST_ASSERT(hr == ole32::S_OK && readBackdrop == DWMSBT_MAINWINDOW, "DwmGetWindowAttribute must return DWMSBT_MAINWINDOW");
+
+    // Verify Mica effect attribute synchronizes
+    int32_t readMica = 0;
+    hr = DwmGetWindowAttribute(hTestWnd, DWMWA_MICA_EFFECT, &readMica, sizeof(readMica));
+    TEST_ASSERT(hr == ole32::S_OK && readMica == 1, "Mica effect attribute must be active when DWMSBT_MAINWINDOW is set");
+
+    // 7.3 Window Corner Preference (Rounded)
+    uint32_t setCorner = DWMWCP_ROUND;
+    hr = DwmSetWindowAttribute(hTestWnd, DWMWA_WINDOW_CORNER_PREFERENCE, &setCorner, sizeof(setCorner));
+    TEST_ASSERT(hr == ole32::S_OK, "DwmSetWindowAttribute(WINDOW_CORNER_PREFERENCE) must return S_OK");
+    uint32_t readCorner = 0;
+    hr = DwmGetWindowAttribute(hTestWnd, DWMWA_WINDOW_CORNER_PREFERENCE, &readCorner, sizeof(readCorner));
+    TEST_ASSERT(hr == ole32::S_OK && readCorner == DWMWCP_ROUND, "DwmGetWindowAttribute must return DWMWCP_ROUND");
+
+    // 7.4 Border & Caption Colors
+    uint32_t setBorderColor = 0x00FF9933;
+    DwmSetWindowAttribute(hTestWnd, DWMWA_BORDER_COLOR, &setBorderColor, sizeof(setBorderColor));
+    uint32_t readBorderColor = 0;
+    DwmGetWindowAttribute(hTestWnd, DWMWA_BORDER_COLOR, &readBorderColor, sizeof(readBorderColor));
+    TEST_ASSERT(readBorderColor == 0x00FF9933, "DwmGetWindowAttribute must return custom border color");
+
+    // 7.5 Extended Frame Bounds
+    prismx::RECT setBounds{ 50, 50, 850, 650 };
+    DwmSetWindowAttribute(hTestWnd, DWMWA_EXTENDED_FRAME_BOUNDS, &setBounds, sizeof(setBounds));
+    prismx::RECT readBounds{};
+    DwmGetWindowAttribute(hTestWnd, DWMWA_EXTENDED_FRAME_BOUNDS, &readBounds, sizeof(readBounds));
+    TEST_ASSERT(readBounds.left == 50 && readBounds.top == 50 && readBounds.right == 850 && readBounds.bottom == 650, "Extended frame bounds must match");
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Live Thumbnail Composition
+    // ------------------------------------------------------------------------
+    win32::HWND hDestWnd = reinterpret_cast<win32::HWND>(0x7001);
+    win32::HWND hSrcWnd = reinterpret_cast<win32::HWND>(0x7002);
+    HTHUMBNAIL hThumbnail = nullptr;
+
+    hr = DwmRegisterThumbnail(hDestWnd, hSrcWnd, &hThumbnail);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmRegisterThumbnail must return S_OK");
+    TEST_ASSERT(hThumbnail != nullptr, "Thumbnail handle must be valid");
+    TEST_ASSERT(DwmCoordinator::Instance().GetThumbnailCount() >= 1, "Active thumbnail count must be >= 1");
+
+    // Identical destination and source must fail
+    HTHUMBNAIL hBad = nullptr;
+    TEST_ASSERT(DwmRegisterThumbnail(hDestWnd, hDestWnd, &hBad) != ole32::S_OK, "Registering thumbnail with same dest and src must fail");
+
+    SIZE srcSize{};
+    hr = DwmQueryThumbnailSourceSize(hThumbnail, &srcSize);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmQueryThumbnailSourceSize must return S_OK");
+    TEST_ASSERT(srcSize.cx > 0 && srcSize.cy > 0, "Source size dimensions must be positive");
+
+    DWM_THUMBNAIL_PROPERTIES thumbProps{};
+    thumbProps.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE;
+    thumbProps.rcDestination = { 10, 10, 160, 120 };
+    thumbProps.opacity = 220;
+    thumbProps.fVisible = 1;
+    hr = DwmUpdateThumbnailProperties(hThumbnail, &thumbProps);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmUpdateThumbnailProperties must return S_OK");
+
+    hr = DwmUnregisterThumbnail(hThumbnail);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmUnregisterThumbnail must return S_OK");
+    TEST_ASSERT(DwmUnregisterThumbnail(hThumbnail) != ole32::S_OK, "Unregistering already unregistered thumbnail must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Iconic Thumbnails & Preview Bitmaps
+    // ------------------------------------------------------------------------
+    void* hFakeBmp = reinterpret_cast<void*>(0x8888);
+    hr = DwmSetIconicThumbnail(hTestWnd, hFakeBmp, 0);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmSetIconicThumbnail must return S_OK");
+
+    prismx::POINT ptOrigin{ 0, 0 };
+    hr = DwmSetIconicLivePreviewBitmap(hTestWnd, hFakeBmp, &ptOrigin, 0);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmSetIconicLivePreviewBitmap must return S_OK");
+
+    hr = DwmInvalidateIconicBitmaps(hTestWnd);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmInvalidateIconicBitmaps must return S_OK");
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Presentation Hooks & DirectX Frame Duration
+    // ------------------------------------------------------------------------
+    hr = DwmAttachMilContent(hTestWnd);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmAttachMilContent must return S_OK");
+    hr = DwmDetachMilContent(hTestWnd);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmDetachMilContent must return S_OK");
+
+    hr = DwmModifyPreviousDxFrameDuration(hTestWnd, 1, 0);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmModifyPreviousDxFrameDuration must return S_OK");
+
+    DWM_PRESENT_PARAMETERS presentParams{};
+    hr = DwmSetPresentParameters(hTestWnd, &presentParams);
+    TEST_ASSERT(hr == ole32::S_OK, "DwmSetPresentParameters must return S_OK");
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Integration with user32::WindowManager
+    // ------------------------------------------------------------------------
+    win32::HWND hWin32 = user32::WindowManager::get().createWindow(
+        0, L"MicaWindowClass", L"DWM Integration Window", 0,
+        100, 100, 1024, 768, nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hWin32 != nullptr, "user32::WindowManager must create test window");
+
+    // Query extended frame bounds on live WindowObject
+    prismx::RECT winBounds{};
+    hr = DwmGetWindowAttribute(hWin32, DWMWA_EXTENDED_FRAME_BOUNDS, &winBounds, sizeof(winBounds));
+    TEST_ASSERT(hr == ole32::S_OK, "DwmGetWindowAttribute for live WindowObject bounds must succeed");
+    TEST_ASSERT(winBounds.right - winBounds.left == 1024, "Window width in DWM bounds must match 1024");
+    TEST_ASSERT(winBounds.bottom - winBounds.top == 768, "Window height in DWM bounds must match 768");
+
+    // Apply Mica backdrop to user32 window
+    uint32_t micaBackdrop = DWMSBT_MAINWINDOW;
+    DwmSetWindowAttribute(hWin32, DWMWA_SYSTEMBACKDROP_TYPE, &micaBackdrop, sizeof(micaBackdrop));
+    uint32_t queryBackdrop = 0;
+    DwmGetWindowAttribute(hWin32, DWMWA_SYSTEMBACKDROP_TYPE, &queryBackdrop, sizeof(queryBackdrop));
+    TEST_ASSERT(queryBackdrop == DWMSBT_MAINWINDOW, "Live window must retain Mica backdrop attribute");
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Interactive CLI Utility (dwm.exe)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. dwm status
+        shell.execute("dwm status", out);
+        TEST_ASSERT(out.str().find("Desktop Window Manager & Composition Engine") != std::string::npos, "dwm status must display banner");
+        TEST_ASSERT(out.str().find("ENABLED (Hardware Accelerated)") != std::string::npos, "dwm status must report ENABLED");
+
+        // 2. dwm list
+        out.str("");
+        shell.execute("dwm list", out);
+        TEST_ASSERT(out.str().find("Desktop Window Manager Active Window Attributes") != std::string::npos, "dwm list must show window attributes table");
+
+        // 3. dwm disable / enable
+        out.str("");
+        shell.execute("dwm disable", out);
+        TEST_ASSERT(out.str().find("Desktop composition disabled") != std::string::npos, "dwm disable must report disabled");
+
+        out.str("");
+        shell.execute("dwm enable", out);
+        TEST_ASSERT(out.str().find("Desktop composition enabled") != std::string::npos, "dwm enable must report enabled");
+
+        // 4. dwm test
+        out.str("");
+        shell.execute("dwm test", out);
+        TEST_ASSERT(out.str().find("Desktop Window Manager Self-Test Finished") != std::string::npos, "dwm test must finish successfully");
+    }
+
+    std::cout << "[TEST] Suite 78: Windows Desktop Window Manager (DWM) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -14900,6 +15171,7 @@ int main() {
     RUN_TEST(Test_WindowsBITS_Subsystem);
     RUN_TEST(Test_WindowsVSS_VolumeShadowCopy_Subsystem);
     RUN_TEST(Test_WindowsWER_ErrorReporting_Subsystem);
+    RUN_TEST(Test_WindowsDWM_DesktopWindowManager_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

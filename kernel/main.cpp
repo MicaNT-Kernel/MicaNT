@@ -520,15 +520,23 @@ int main(int argc, char* argv[]) {
 
     // 21c. MicaNT Interactive Shell Launch Check
     bool launchShell = false;
+    std::string execCommand;
     for (int i = 1; i < argc; ++i) {
         std::string_view arg(argv[i]);
         if (arg == "--shell" || arg == "-i" || arg == "--cmd" || arg == "/shell") {
             launchShell = true;
             break;
+        } else if ((arg == "--exec" || arg == "-c" || arg == "/c") && i + 1 < argc) {
+            execCommand = argv[++i];
+            break;
         }
     }
 
-    if (launchShell) {
+    if (!execCommand.empty()) {
+        std::cout << "\n[MicaNT Executive] Boot complete. Executing: " << execCommand << "\n";
+        shell::CommandShell cmdShell;
+        cmdShell.execute(execCommand, std::cout);
+    } else if (launchShell) {
         std::cout << "\n[MicaNT Executive] Boot complete. Launching MicaNT Command Prompt Shell (cmd.exe / msh.exe)...\n";
         shell::CommandShell cmdShell;
         cmdShell.runRepl();
