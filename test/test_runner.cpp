@@ -94,6 +94,7 @@
 #include "micant/oleaut32.hpp"
 #include "micant/setupapi.hpp"
 #include "micant/wevtapi.hpp"
+#include "micant/wbem.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -13247,6 +13248,287 @@ void Test_WindowsEventLog_And_WevtApi_Subsystem() {
     std::cout << "[TEST] Suite 72: Windows Event Log & Instrumentation Subsystem PASSED.\n";
 }
 
+void Test_WMI_WindowsManagementInstrumentation_Subsystem() {
+    using namespace micant;
+
+    std::cout << "[TEST] Running Suite 73: Windows Management Instrumentation (WMI / WBEM / wbemprox.dll)...\n";
+
+    wbem::InitializeWbemSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: COM Activation of CLSID_WbemLocator via CoCreateInstance
+    // ------------------------------------------------------------------------
+    wbem::IWbemLocator* pLoc = nullptr;
+    {
+        ole32::HRESULT hr = ole32::CoCreateInstance(
+            wbem::CLSID_WbemLocator,
+            nullptr,
+            1 /* CLSCTX_INPROC_SERVER */,
+            wbem::IID_IWbemLocator,
+            reinterpret_cast<void**>(&pLoc)
+        );
+        TEST_ASSERT(hr == ole32::S_OK, "CoCreateInstance(CLSID_WbemLocator) must succeed with S_OK");
+        TEST_ASSERT(pLoc != nullptr, "IWbemLocator interface pointer must not be null");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: ConnectServer to ROOT\CIMV2 and Negative Namespace Validation
+    // ------------------------------------------------------------------------
+    wbem::IWbemServices* pSvc = nullptr;
+    {
+        // Negative test: invalid namespace
+        wbem::IWbemServices* pBadSvc = nullptr;
+        ole32::BSTR bstrBadNs = ole32::SysAllocString(L"ROOT\\NonExistentNamespace");
+        ole32::HRESULT hrBad = pLoc->ConnectServer(bstrBadNs, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &pBadSvc);
+        ole32::SysFreeString(bstrBadNs);
+        TEST_ASSERT(hrBad == wbem::WBEM_E_INVALID_NAMESPACE, "ConnectServer must fail with WBEM_E_INVALID_NAMESPACE for unknown namespace");
+        TEST_ASSERT(pBadSvc == nullptr, "Bad namespace must return null service pointer");
+
+        // Positive test: ROOT\CIMV2
+        ole32::BSTR bstrNs = ole32::SysAllocString(L"ROOT\\CIMV2");
+        ole32::HRESULT hr = pLoc->ConnectServer(bstrNs, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &pSvc);
+        ole32::SysFreeString(bstrNs);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR, "ConnectServer(ROOT\\CIMV2) must succeed with WBEM_S_NO_ERROR");
+        TEST_ASSERT(pSvc != nullptr, "IWbemServices pointer must not be null");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Class Instance Enumeration (Win32_OperatingSystem)
+    // ------------------------------------------------------------------------
+    {
+        wbem::IEnumWbemClassObject* pEnum = nullptr;
+        ole32::BSTR bstrClass = ole32::SysAllocString(L"Win32_OperatingSystem");
+        ole32::HRESULT hr = pSvc->CreateInstanceEnum(bstrClass, 0, nullptr, &pEnum);
+        ole32::SysFreeString(bstrClass);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && pEnum != nullptr, "CreateInstanceEnum(Win32_OperatingSystem) must succeed");
+
+        wbem::IWbemClassObject* pOs = nullptr;
+        uint32_t uRet = 0;
+        hr = pEnum->Next(wbem::WBEM_INFINITE, 1, &pOs, &uRet);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && uRet == 1 && pOs != nullptr, "Enum Next must retrieve 1 Win32_OperatingSystem instance");
+
+        // ------------------------------------------------------------------------
+        // Stage 4: Win32_OperatingSystem Property Retrieval
+        // ------------------------------------------------------------------------
+        ole32::VARIANT vtCaption{};
+        pOs->Get(L"Caption", 0, &vtCaption, nullptr, nullptr);
+        TEST_ASSERT(vtCaption.vt == ole32::VT_BSTR && vtCaption.bstrVal != nullptr, "Win32_OperatingSystem.Caption must be VT_BSTR");
+        TEST_ASSERT(std::wcsstr(vtCaption.bstrVal, L"MicaNT") != nullptr, "Caption must identify MicaNT Operating System");
+        oleaut32::VariantClear(&vtCaption);
+
+        ole32::VARIANT vtVersion{};
+        pOs->Get(L"Version", 0, &vtVersion, nullptr, nullptr);
+        TEST_ASSERT(vtVersion.vt == ole32::VT_BSTR && vtVersion.bstrVal != nullptr, "Win32_OperatingSystem.Version must be VT_BSTR");
+        TEST_ASSERT(std::wcscmp(vtVersion.bstrVal, L"10.0.26100.1") == 0, "Version must match 10.0.26100.1 build target");
+        oleaut32::VariantClear(&vtVersion);
+
+        ole32::VARIANT vtRam{};
+        pOs->Get(L"TotalVisibleMemorySize", 0, &vtRam, nullptr, nullptr);
+        TEST_ASSERT(vtRam.vt == ole32::VT_UI8 && vtRam.ullVal > 0, "TotalVisibleMemorySize must be non-zero VT_UI8");
+        oleaut32::VariantClear(&vtRam);
+
+        // ------------------------------------------------------------------------
+        // Stage 5: IWbemClassObject::GetObjectText MOF Generation
+        // ------------------------------------------------------------------------
+        ole32::BSTR bstrMof = nullptr;
+        hr = pOs->GetObjectText(0, &bstrMof);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && bstrMof != nullptr, "GetObjectText must generate MOF definition");
+        TEST_ASSERT(std::wcsstr(bstrMof, L"instance of Win32_OperatingSystem") != nullptr, "MOF text must declare instance of Win32_OperatingSystem");
+        TEST_ASSERT(std::wcsstr(bstrMof, L"Caption = \"MicaNT 10.0") != nullptr, "MOF text must format Caption property string");
+        ole32::SysFreeString(bstrMof);
+
+        pOs->Release();
+        pEnum->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Processor Topology Verification (Win32_Processor)
+    // ------------------------------------------------------------------------
+    {
+        wbem::IEnumWbemClassObject* pEnum = nullptr;
+        ole32::BSTR bstrClass = ole32::SysAllocString(L"Win32_Processor");
+        ole32::HRESULT hr = pSvc->CreateInstanceEnum(bstrClass, 0, nullptr, &pEnum);
+        ole32::SysFreeString(bstrClass);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && pEnum != nullptr, "CreateInstanceEnum(Win32_Processor) must succeed");
+
+        wbem::IWbemClassObject* pCpu = nullptr;
+        uint32_t uRet = 0;
+        hr = pEnum->Next(wbem::WBEM_INFINITE, 1, &pCpu, &uRet);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && uRet == 1 && pCpu != nullptr, "Must retrieve Win32_Processor instance");
+
+        ole32::VARIANT vtCores{};
+        pCpu->Get(L"NumberOfCores", 0, &vtCores, nullptr, nullptr);
+        TEST_ASSERT(vtCores.vt == ole32::VT_UI4 && vtCores.ulVal == 4, "Win32_Processor.NumberOfCores must report 4 cores");
+        oleaut32::VariantClear(&vtCores);
+
+        ole32::VARIANT vtArch{};
+        pCpu->Get(L"Architecture", 0, &vtArch, nullptr, nullptr);
+        TEST_ASSERT(vtArch.vt == ole32::VT_UI2 && vtArch.uiVal == 9, "Win32_Processor.Architecture must report x64 (9)");
+        oleaut32::VariantClear(&vtArch);
+
+        ole32::VARIANT vtClock{};
+        pCpu->Get(L"MaxClockSpeed", 0, &vtClock, nullptr, nullptr);
+        TEST_ASSERT(vtClock.vt == ole32::VT_UI4 && vtClock.ulVal == 3600, "Win32_Processor.MaxClockSpeed must report 3600 MHz");
+        oleaut32::VariantClear(&vtClock);
+
+        pCpu->Release();
+        pEnum->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Storage & Volume Introspection (Win32_LogicalDisk)
+    // ------------------------------------------------------------------------
+    {
+        wbem::IEnumWbemClassObject* pEnum = nullptr;
+        ole32::BSTR bstrClass = ole32::SysAllocString(L"Win32_LogicalDisk");
+        ole32::HRESULT hr = pSvc->CreateInstanceEnum(bstrClass, 0, nullptr, &pEnum);
+        ole32::SysFreeString(bstrClass);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && pEnum != nullptr, "CreateInstanceEnum(Win32_LogicalDisk) must succeed");
+
+        wbem::IWbemClassObject* pDisk = nullptr;
+        uint32_t uRet = 0;
+        hr = pEnum->Next(wbem::WBEM_INFINITE, 1, &pDisk, &uRet);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && uRet == 1 && pDisk != nullptr, "Must retrieve Win32_LogicalDisk instance");
+
+        ole32::VARIANT vtDevId{};
+        pDisk->Get(L"DeviceID", 0, &vtDevId, nullptr, nullptr);
+        TEST_ASSERT(vtDevId.vt == ole32::VT_BSTR && std::wcscmp(vtDevId.bstrVal, L"C:") == 0, "Win32_LogicalDisk.DeviceID must be C:");
+        oleaut32::VariantClear(&vtDevId);
+
+        ole32::VARIANT vtFs{};
+        pDisk->Get(L"FileSystem", 0, &vtFs, nullptr, nullptr);
+        TEST_ASSERT(vtFs.vt == ole32::VT_BSTR && std::wcscmp(vtFs.bstrVal, L"NTFS") == 0, "Win32_LogicalDisk.FileSystem must be NTFS");
+        oleaut32::VariantClear(&vtFs);
+
+        pDisk->Release();
+        pEnum->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Network Configuration (Win32_NetworkAdapterConfiguration)
+    // ------------------------------------------------------------------------
+    {
+        wbem::IEnumWbemClassObject* pEnum = nullptr;
+        ole32::BSTR bstrClass = ole32::SysAllocString(L"Win32_NetworkAdapterConfiguration");
+        ole32::HRESULT hr = pSvc->CreateInstanceEnum(bstrClass, 0, nullptr, &pEnum);
+        ole32::SysFreeString(bstrClass);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && pEnum != nullptr, "CreateInstanceEnum(Win32_NetworkAdapterConfiguration) must succeed");
+
+        wbem::IWbemClassObject* pNic = nullptr;
+        uint32_t uRet = 0;
+        hr = pEnum->Next(wbem::WBEM_INFINITE, 1, &pNic, &uRet);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && uRet == 1 && pNic != nullptr, "Must retrieve Win32_NetworkAdapterConfiguration instance");
+
+        ole32::VARIANT vtIp{};
+        pNic->Get(L"IPAddress", 0, &vtIp, nullptr, nullptr);
+        TEST_ASSERT(vtIp.vt == ole32::VT_BSTR && std::wcscmp(vtIp.bstrVal, L"192.168.1.100") == 0, "IPAddress must match configured adapter IP");
+        oleaut32::VariantClear(&vtIp);
+
+        pNic->Release();
+        pEnum->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: WQL Query Execution (SELECT * FROM Win32_Service)
+    // ------------------------------------------------------------------------
+    {
+        wbem::IEnumWbemClassObject* pEnum = nullptr;
+        ole32::BSTR bstrWql = ole32::SysAllocString(L"WQL");
+        ole32::BSTR bstrQuery = ole32::SysAllocString(L"SELECT * FROM Win32_Service");
+        ole32::HRESULT hr = pSvc->ExecQuery(bstrWql, bstrQuery, 0, nullptr, &pEnum);
+        ole32::SysFreeString(bstrWql);
+        ole32::SysFreeString(bstrQuery);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && pEnum != nullptr, "ExecQuery(SELECT * FROM Win32_Service) must succeed");
+
+        wbem::IWbemClassObject* svcs[10]{};
+        uint32_t uRet = 0;
+        hr = pEnum->Next(wbem::WBEM_INFINITE, 10, svcs, &uRet);
+        TEST_ASSERT(uRet >= 5, "Must retrieve at least 5 standard services");
+
+        bool foundWinmgmt = false;
+        for (uint32_t i = 0; i < uRet; ++i) {
+            ole32::VARIANT vtName{};
+            svcs[i]->Get(L"Name", 0, &vtName, nullptr, nullptr);
+            if (vtName.vt == ole32::VT_BSTR && std::wcscmp(vtName.bstrVal, L"Winmgmt") == 0) {
+                foundWinmgmt = true;
+            }
+            oleaut32::VariantClear(&vtName);
+            svcs[i]->Release();
+        }
+        TEST_ASSERT(foundWinmgmt, "WQL query result must contain Winmgmt service");
+
+        pEnum->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: WQL Filtering with WHERE Clause (SELECT * WHERE Name = 'Winmgmt')
+    // ------------------------------------------------------------------------
+    {
+        wbem::IEnumWbemClassObject* pEnum = nullptr;
+        ole32::BSTR bstrWql = ole32::SysAllocString(L"WQL");
+        ole32::BSTR bstrQuery = ole32::SysAllocString(L"SELECT * FROM Win32_Service WHERE Name = 'Winmgmt'");
+        ole32::HRESULT hr = pSvc->ExecQuery(bstrWql, bstrQuery, 0, nullptr, &pEnum);
+        ole32::SysFreeString(bstrWql);
+        ole32::SysFreeString(bstrQuery);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && pEnum != nullptr, "ExecQuery with WHERE clause must succeed");
+
+        wbem::IWbemClassObject* pObj = nullptr;
+        uint32_t uRet = 0;
+        hr = pEnum->Next(wbem::WBEM_INFINITE, 1, &pObj, &uRet);
+        TEST_ASSERT(hr == wbem::WBEM_S_NO_ERROR && uRet == 1 && pObj != nullptr, "Filtered query must return exactly 1 object");
+
+        ole32::VARIANT vtState{};
+        pObj->Get(L"State", 0, &vtState, nullptr, nullptr);
+        TEST_ASSERT(vtState.vt == ole32::VT_BSTR && std::wcscmp(vtState.bstrVal, L"Running") == 0, "Winmgmt service state must be Running");
+        oleaut32::VariantClear(&vtState);
+
+        pObj->Release();
+        pEnum->Release();
+    }
+
+    pSvc->Release();
+    pLoc->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Dynamic Loader Exports Verification (wbemprox.dll & fastprox.dll)
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("wbemprox.dll", "DllGetClassObject") != nullptr, "wbemprox.dll!DllGetClassObject must be exported");
+        TEST_ASSERT(ldr.getExport("wbemprox.dll", "DllCanUnloadNow") != nullptr, "wbemprox.dll!DllCanUnloadNow must be exported");
+        TEST_ASSERT(ldr.getExport("wbemprox.dll", "DllRegisterServer") != nullptr, "wbemprox.dll!DllRegisterServer must be exported");
+        TEST_ASSERT(ldr.getExport("wbemprox.dll", "DllUnregisterServer") != nullptr, "wbemprox.dll!DllUnregisterServer must be exported");
+
+        TEST_ASSERT(ldr.getExport("fastprox.dll", "DllGetClassObject") != nullptr, "fastprox.dll!DllGetClassObject must be exported");
+        TEST_ASSERT(ldr.getExport("fastprox.dll", "DllCanUnloadNow") != nullptr, "fastprox.dll!DllCanUnloadNow must be exported");
+        TEST_ASSERT(ldr.getExport("fastprox.dll", "DllRegisterServer") != nullptr, "fastprox.dll!DllRegisterServer must be exported");
+        TEST_ASSERT(ldr.getExport("fastprox.dll", "DllUnregisterServer") != nullptr, "fastprox.dll!DllUnregisterServer must be exported");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Command Shell Integration (wmic os get, wmic cpu get, wmic test)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        shell.execute("wmic os get Caption,Version", out);
+        TEST_ASSERT(out.str().find("MicaNT") != std::string::npos, "Shell wmic os get must display MicaNT caption");
+        TEST_ASSERT(out.str().find("10.0.26100.1") != std::string::npos, "Shell wmic os get must display version");
+
+        out.str("");
+        shell.execute("wmic cpu get NumberOfCores", out);
+        TEST_ASSERT(out.str().find("4") != std::string::npos, "Shell wmic cpu get must report 4 cores");
+
+        out.str("");
+        shell.execute("wmic test", out);
+        TEST_ASSERT(out.str().find("ALL WMI / WBEM CHECKS PASSED") != std::string::npos, "Shell wmic test must pass all checks");
+    }
+
+    std::cout << "[TEST] Suite 73: Windows Management Instrumentation (WMI / WBEM) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -13324,6 +13606,7 @@ int main() {
     RUN_TEST(Test_SetupApi_DeviceInstallation_And_INF_Subsystem);
     RUN_TEST(Test_StructuredStorage_CompoundFile_And_Persistence_Subsystem);
     RUN_TEST(Test_WindowsEventLog_And_WevtApi_Subsystem);
+    RUN_TEST(Test_WMI_WindowsManagementInstrumentation_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

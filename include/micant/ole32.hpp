@@ -71,6 +71,7 @@ inline constexpr HRESULT E_OUTOFMEMORY            = static_cast<HRESULT>(0x80070
 inline constexpr HRESULT E_INVALIDARG             = static_cast<HRESULT>(0x80070057);
 inline constexpr HRESULT CO_E_NOTINITIALIZED      = static_cast<HRESULT>(0x800401F0);
 inline constexpr HRESULT CO_E_ALREADYINITIALIZED  = static_cast<HRESULT>(0x800401F1);
+inline constexpr HRESULT CLASS_E_NOAGGREGATION    = static_cast<HRESULT>(0x80040110);
 inline constexpr HRESULT CLASS_E_CLASSNOTAVAILABLE= static_cast<HRESULT>(0x80040111);
 inline constexpr HRESULT REGDB_E_CLASSNOTREG      = static_cast<HRESULT>(0x80040154);
 

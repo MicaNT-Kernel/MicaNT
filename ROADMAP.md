@@ -969,6 +969,48 @@
   - Multi-stage unit test covering channel initialization, structured event emission, XPath/query filtering, XML rendering, publisher metadata, legacy advapi32 bridge, and shell command integration.
   - All 72 unit test suites passing with 100% success rate (72 Passed, 0 Failed).
 
+---
+
+### Phase 46: Windows Management Instrumentation (WMI / WBEM) Subsystem (`wbemprox.dll` & `fastprox.dll`) (100% Completed)
+*Goal: Implement Windows Management Instrumentation (WMI / WBEM), Common Information Model (CIM v2) object model, WQL (WMI Query Language) parsing and evaluation engine, standard hardware/OS management classes (`Win32_OperatingSystem`, `Win32_Processor`, `Win32_ComputerSystem`, `Win32_LogicalDisk`, `Win32_NetworkAdapter`, `Win32_NetworkAdapterConfiguration`, `Win32_VideoController`, `Win32_Service`, `Win32_Process`, `Win32_BIOS`), COM interfaces (`IWbemLocator`, `IWbemServices`, `IWbemClassObject`, `IEnumWbemClassObject`, `IWbemContext`), `CLSID_WbemLocator` COM activation, dynamic loader exports (`wbemprox.dll`, `fastprox.dll`), and the `wmic` command-line utility.*
+- [x] **CIM v2 Object Model & Property Engine (`include/micant/wbem.hpp`)**:
+  - `IWbemClassObject` implementation (`WbemClassObject`) managing typed CIM properties (`CimProperty`, `CIMTYPE`), VARIANT values, and qualifiers.
+  - Full interface support: `Get`, `Put`, `Delete`, `GetNames` (generating BSTR SAFEARRAY), `BeginEnumeration`, `Next`, `EndEnumeration`, `Clone`, and `GetObjectText` (generating standard MOF text).
+  - Strongly-typed helper mutators (`SetString`, `SetInt32`, `SetUInt16`, `SetUInt32`, `SetUInt64`, `SetBool`).
+- [x] **CIM Class Enumerator (`EnumWbemClassObject`)**:
+  - Thread-safe enumerator implementing `IEnumWbemClassObject` (`Reset`, `Next`, `Clone`, `Skip`).
+- [x] **WQL (WMI Query Language) Parsing & Evaluator (`CimRepository::ExecuteWql`)**:
+  - Evaluates projections (`SELECT * FROM <Class>`, `SELECT Prop1, Prop2 FROM <Class>`).
+  - Evaluates `WHERE` filtering conditions for strings, integers, and unsigned numbers (`WHERE Name = 'Winmgmt'`, `WHERE ProcessId = 4`).
+- [x] **Standard Win32 Management Providers (`CimRepository::QueryClass`)**:
+  - `Win32_OperatingSystem`: Live kernel version (`10.0.26100.1`), build, architecture, and memory metrics from MM.
+  - `Win32_Processor`: Topology metrics from HAL (4 Cores SMP, 3600 MHz clock, x64 architecture).
+  - `Win32_ComputerSystem`: System model, manufacturer, domain, admin user, total physical RAM.
+  - `Win32_LogicalDisk`: Drive letters (`C:`), filesystem types (`NTFS`), total and free volume capacities.
+  - `Win32_NetworkAdapter` & `Win32_NetworkAdapterConfiguration`: MAC address, IP address (`192.168.1.100`), subnet mask, gateway from TCPIP stack.
+  - `Win32_VideoController`: PrismX GPU accelerator, VRAM, and display resolution.
+  - `Win32_Service`: Live service states from SCM (`EventLog`, `PlugPlay`, `RpcSs`, `Winmgmt`, `AudioSrv`).
+  - `Win32_Process`: Executive process table (`micant_kernel.exe`, `csrss.exe`, `lsass.exe`, `services.exe`).
+  - `Win32_BIOS`: UEFI firmware info and SMBIOS version.
+- [x] **WMI Services & Locator (`IWbemServices`, `IWbemLocator`)**:
+  - `WbemServices`: Namespace handler (`ROOT\CIMV2`, `ROOT\DEFAULT`, `ROOT\WMI`), `CreateInstanceEnum`, `ExecQuery`, `GetObject`.
+  - `WbemLocator`: Namespace connection server with authentication credentials support.
+  - `WbemLocatorClassFactory`: Standard `IClassFactory` activating `CLSID_WbemLocator`.
+- [x] **Dynamic Loader & COM Registration**:
+  - Export registration for `wbemprox.dll` and `fastprox.dll` (`DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`, `DllUnregisterServer`).
+  - `CLSID_WbemLocator` registration in `ole32::ComRuntime`.
+  - Version metadata registered in `version.hpp` for `wbemprox.dll` and `fastprox.dll` bumping build to `1.0.73.0`.
+- [x] **Interactive Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
+  - `wmic os get`: Displays operating system caption, version, and memory statistics.
+  - `wmic cpu get`: Displays processor name, cores, and clock speed.
+  - `wmic computersystem get`: Displays computer model and physical memory.
+  - `wmic logicaldisk get`: Displays disk partition and filesystem information.
+  - `wmic query <WQL>`: Executes arbitrary WQL queries and outputs formatted MOF text.
+  - `wmic test`: Executes automated end-to-end WMI COM self-tests.
+- [x] **Unit Test Suite 73 (`Test_WMI_WindowsManagementInstrumentation_Subsystem`)**:
+  - 12 comprehensive verification stages covering `CoCreateInstance(CLSID_WbemLocator)`, namespace connection and negative error handling, `Win32_OperatingSystem` enumeration, property retrieval, MOF text serialization, `Win32_Processor` SMP topology, `Win32_LogicalDisk` storage, `Win32_NetworkAdapterConfiguration`, WQL execution, WQL `WHERE` filtering, dynamic loader exports, and shell integration.
+  - All 73 unit test suites passing with 100% success rate (73 Passed, 0 Failed).
+
 
 
 

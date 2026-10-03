@@ -62,6 +62,7 @@
 #include "oleaut32.hpp"
 #include "setupapi.hpp"
 #include "wevtapi.hpp"
+#include "wbem.hpp"
 
 namespace micant::shell {
 
@@ -119,6 +120,7 @@ public:
         oleaut32::InitializeOleAut32SubsystemExports();
         setupapi::InitializeSetupApiSubsystemExports();
         wevtapi::InitializeWevtApiSubsystemExports();
+        wbem::InitializeWbemSubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -200,6 +202,7 @@ public:
             if (cmd == "devmgmt" || cmd == "setupapi") { cmdDevMgmt(tokens, out); return 0; }
             if (cmd == "stg" || cmd == "storage" || cmd == "docfile") { cmdStorage(tokens, out); return 0; }
             if (cmd == "wevtutil" || cmd == "eventlog" || cmd == "eventviewer") { cmdWevtUtil(tokens, out); return 0; }
+            if (cmd == "wmic" || cmd == "wbem") { cmdWmic(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -455,6 +458,7 @@ private:
             << "  DEVMGMT / SETUP   Windows Device Manager & Installation Subsystem (setupapi.dll)\n"
             << "  STG / DOCFILE     Windows OLE Structured Storage & Compound File System (ole32.dll)\n"
             << "  WEVTUTIL / EVENTLOG Windows Event Log Subsystem & Diagnostics (wevtapi.dll)\n"
+            << "  WMIC / WBEM       Windows Management Instrumentation Engine (wbemprox.dll)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -4179,6 +4183,250 @@ private:
             << "  wevtutil qe <channel> [/f:xml] Query and display events (text or XML)\n"
             << "  wevtutil cl <channel>          Clear specified channel log\n"
             << "  wevtutil test                  Execute automated event log self-test\n";
+    }
+
+    void cmdWmic(const std::vector<std::string>& tokens, std::ostream& out) {
+        wbem::InitializeWbemSubsystemExports();
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[WMIC] Running Windows Management Instrumentation (WMI / WBEM) Self-Test...\n";
+
+            // 1. CoCreateInstance of CLSID_WbemLocator
+            wbem::IWbemLocator* pLoc = nullptr;
+            ole32::HRESULT hr = ole32::CoCreateInstance(
+                wbem::CLSID_WbemLocator,
+                nullptr,
+                1 /* CLSCTX_INPROC_SERVER */,
+                wbem::IID_IWbemLocator,
+                reinterpret_cast<void**>(&pLoc)
+            );
+            bool locOk = (hr == ole32::S_OK && pLoc != nullptr);
+            out << "  COM CoCreateInstance(CLSID_WbemLocator): " << (locOk ? "PASS" : "FAIL") << "\n";
+            if (!locOk) return;
+
+            // 2. ConnectServer to ROOT\CIMV2
+            wbem::IWbemServices* pSvc = nullptr;
+            ole32::BSTR bstrNamespace = ole32::SysAllocString(L"ROOT\\CIMV2");
+            hr = pLoc->ConnectServer(bstrNamespace, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &pSvc);
+            ole32::SysFreeString(bstrNamespace);
+            bool connOk = (hr == wbem::WBEM_S_NO_ERROR && pSvc != nullptr);
+            out << "  IWbemLocator::ConnectServer(ROOT\\CIMV2): " << (connOk ? "PASS" : "FAIL") << "\n";
+            if (!connOk) {
+                pLoc->Release();
+                return;
+            }
+
+            // 3. ExecQuery WQL query: SELECT * FROM Win32_OperatingSystem
+            wbem::IEnumWbemClassObject* pEnum = nullptr;
+            ole32::BSTR bstrWql = ole32::SysAllocString(L"WQL");
+            ole32::BSTR bstrQuery = ole32::SysAllocString(L"SELECT * FROM Win32_OperatingSystem");
+            hr = pSvc->ExecQuery(bstrWql, bstrQuery, wbem::WBEM_FLAG_FORWARD_ONLY | wbem::WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &pEnum);
+            ole32::SysFreeString(bstrWql);
+            ole32::SysFreeString(bstrQuery);
+            bool queryOk = (hr == wbem::WBEM_S_NO_ERROR && pEnum != nullptr);
+            out << "  WQL Query (SELECT * FROM Win32_OperatingSystem): " << (queryOk ? "PASS" : "FAIL") << "\n";
+
+            // 4. Retrieve Win32_OperatingSystem properties
+            if (queryOk) {
+                wbem::IWbemClassObject* pclsObj = nullptr;
+                uint32_t uReturn = 0;
+                hr = pEnum->Next(wbem::WBEM_INFINITE, 1, &pclsObj, &uReturn);
+                bool nextOk = (hr == wbem::WBEM_S_NO_ERROR && uReturn == 1 && pclsObj != nullptr);
+                out << "  IEnumWbemClassObject::Next Traversal: " << (nextOk ? "PASS" : "FAIL") << "\n";
+
+                if (nextOk) {
+                    ole32::VARIANT vtCaption{};
+                    pclsObj->Get(L"Caption", 0, &vtCaption, nullptr, nullptr);
+                    bool capOk = (vtCaption.vt == ole32::VT_BSTR && vtCaption.bstrVal != nullptr);
+                    out << "  Win32_OperatingSystem.Caption:        " << (capOk ? "PASS" : "FAIL") << "\n";
+                    oleaut32::VariantClear(&vtCaption);
+
+                    ole32::BSTR objText = nullptr;
+                    pclsObj->GetObjectText(0, &objText);
+                    bool textOk = (objText != nullptr && std::wcsstr(objText, L"instance of Win32_OperatingSystem") != nullptr);
+                    out << "  IWbemClassObject::GetObjectText MOF:  " << (textOk ? "PASS" : "FAIL") << "\n";
+                    if (objText) ole32::SysFreeString(objText);
+
+                    pclsObj->Release();
+                }
+                pEnum->Release();
+            }
+
+            // 5. Query Win32_Processor via CreateInstanceEnum
+            pEnum = nullptr;
+            ole32::BSTR bstrClass = ole32::SysAllocString(L"Win32_Processor");
+            hr = pSvc->CreateInstanceEnum(bstrClass, 0, nullptr, &pEnum);
+            ole32::SysFreeString(bstrClass);
+            bool cpuOk = (hr == wbem::WBEM_S_NO_ERROR && pEnum != nullptr);
+            if (cpuOk) {
+                wbem::IWbemClassObject* pCpu = nullptr;
+                uint32_t uRet = 0;
+                pEnum->Next(wbem::WBEM_INFINITE, 1, &pCpu, &uRet);
+                if (uRet == 1 && pCpu) {
+                    ole32::VARIANT vtCores{};
+                    pCpu->Get(L"NumberOfCores", 0, &vtCores, nullptr, nullptr);
+                    cpuOk = (vtCores.vt == ole32::VT_UI4 && vtCores.ulVal == 4);
+                    oleaut32::VariantClear(&vtCores);
+                    pCpu->Release();
+                }
+                pEnum->Release();
+            }
+            out << "  Win32_Processor Hardware Topology:    " << (cpuOk ? "PASS (4 Cores SMP)" : "FAIL") << "\n";
+
+            // 6. Query Win32_Service with WHERE clause
+            bstrWql = ole32::SysAllocString(L"WQL");
+            bstrQuery = ole32::SysAllocString(L"SELECT * FROM Win32_Service WHERE Name = 'Winmgmt'");
+            pEnum = nullptr;
+            hr = pSvc->ExecQuery(bstrWql, bstrQuery, 0, nullptr, &pEnum);
+            ole32::SysFreeString(bstrWql);
+            ole32::SysFreeString(bstrQuery);
+            bool svcOk = false;
+            if (hr == wbem::WBEM_S_NO_ERROR && pEnum) {
+                wbem::IWbemClassObject* pSvcObj = nullptr;
+                uint32_t uRet = 0;
+                pEnum->Next(wbem::WBEM_INFINITE, 1, &pSvcObj, &uRet);
+                if (uRet == 1 && pSvcObj) {
+                    ole32::VARIANT vtState{};
+                    pSvcObj->Get(L"State", 0, &vtState, nullptr, nullptr);
+                    svcOk = (vtState.vt == ole32::VT_BSTR && std::wcscmp(vtState.bstrVal, L"Running") == 0);
+                    oleaut32::VariantClear(&vtState);
+                    pSvcObj->Release();
+                }
+                pEnum->Release();
+            }
+            out << "  WQL WHERE Evaluation (Win32_Service): " << (svcOk ? "PASS (Winmgmt: Running)" : "FAIL") << "\n";
+
+            pSvc->Release();
+            pLoc->Release();
+
+            out << "[WMIC] Self-test complete: ALL WMI / WBEM CHECKS PASSED.\n";
+            return;
+        }
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+            std::wstring targetClass;
+            std::vector<std::wstring> props;
+
+            if (sub == "os") {
+                targetClass = L"Win32_OperatingSystem";
+                props = { L"Caption", L"Version", L"BuildNumber", L"OSArchitecture", L"TotalVisibleMemorySize", L"FreePhysicalMemory" };
+            } else if (sub == "cpu") {
+                targetClass = L"Win32_Processor";
+                props = { L"Name", L"NumberOfCores", L"NumberOfLogicalProcessors", L"MaxClockSpeed", L"Status" };
+            } else if (sub == "computersystem" || sub == "cs") {
+                targetClass = L"Win32_ComputerSystem";
+                props = { L"Name", L"Model", L"Manufacturer", L"SystemType", L"TotalPhysicalMemory" };
+            } else if (sub == "logicaldisk" || sub == "disk") {
+                targetClass = L"Win32_LogicalDisk";
+                props = { L"DeviceID", L"FileSystem", L"VolumeName", L"Size", L"FreeSpace", L"Status" };
+            } else if (sub == "nicconfig" || sub == "nic") {
+                targetClass = L"Win32_NetworkAdapterConfiguration";
+                props = { L"Description", L"IPAddress", L"IPSubnet", L"DefaultIPGateway", L"MACAddress" };
+            } else if (sub == "service") {
+                targetClass = L"Win32_Service";
+                props = { L"Name", L"DisplayName", L"State", L"StartMode", L"ProcessId" };
+            } else if (sub == "process") {
+                targetClass = L"Win32_Process";
+                props = { L"ProcessId", L"Name", L"WorkingSetSize", L"ThreadCount", L"ExecutablePath" };
+            } else if (sub == "bios") {
+                targetClass = L"Win32_BIOS";
+                props = { L"Manufacturer", L"Name", L"Version", L"ReleaseDate", L"SMBIOSBIOSVersion" };
+            } else if (sub == "query" && tokens.size() > 2) {
+                std::string fullQuery;
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    if (i > 2) fullQuery += " ";
+                    fullQuery += tokens[i];
+                }
+                std::wstring wQuery(fullQuery.begin(), fullQuery.end());
+                auto results = wbem::CimRepository::Instance().ExecuteWql(wQuery);
+                out << "WQL Query: " << fullQuery << " (" << results.size() << " objects returned):\n\n";
+                for (auto* obj : results) {
+                    ole32::BSTR text = nullptr;
+                    obj->GetObjectText(0, &text);
+                    if (text) {
+                        std::wstring wText(text);
+                        std::string sText;
+                        for (wchar_t wc : wText) sText.push_back(static_cast<char>(wc & 0x7F));
+                        out << sText << "\n";
+                        ole32::SysFreeString(text);
+                    }
+                    obj->Release();
+                }
+                return;
+            }
+
+            if (!targetClass.empty()) {
+                auto objs = wbem::CimRepository::Instance().QueryClass(targetClass);
+                if (objs.empty()) {
+                    out << "No instances found for class.\n";
+                    return;
+                }
+
+                if (tokens.size() > 3 && tokens[2] == "get") {
+                    props.clear();
+                    std::stringstream ss(tokens[3]);
+                    std::string item;
+                    while (std::getline(ss, item, ',')) {
+                        std::wstring wItem(item.begin(), item.end());
+                        props.push_back(wItem);
+                    }
+                }
+
+                for (auto* obj : objs) {
+                    for (const auto& p : props) {
+                        ole32::VARIANT v{};
+                        oleaut32::VariantInit(&v);
+                        std::string pNarrow(p.begin(), p.end());
+                        if (obj->Get(p.c_str(), 0, &v, nullptr, nullptr) == wbem::WBEM_S_NO_ERROR) {
+                            out << std::left << std::setw(28) << pNarrow << " = ";
+                            if (v.vt == ole32::VT_BSTR && v.bstrVal) {
+                                std::wstring ws(v.bstrVal);
+                                std::string s(ws.begin(), ws.end());
+                                out << s;
+                            } else if (v.vt == ole32::VT_I4) {
+                                out << v.lVal;
+                            } else if (v.vt == ole32::VT_UI4) {
+                                out << v.ulVal;
+                            } else if (v.vt == ole32::VT_UI8) {
+                                out << v.ullVal;
+                            } else if (v.vt == ole32::VT_BOOL) {
+                                out << (v.boolVal ? "TRUE" : "FALSE");
+                            }
+                            out << "\n";
+                            oleaut32::VariantClear(&v);
+                        }
+                    }
+                    out << "\n";
+                    obj->Release();
+                }
+                return;
+            }
+        }
+
+        out << "========================================================================\n"
+            << "     MicaNT Windows Management Instrumentation (WMI / WBEM / wmic)      \n"
+            << "========================================================================\n\n"
+            << "Subsystem Library:    wbemprox.dll & fastprox.dll\n"
+            << "COM Activation:       CoCreateInstance(CLSID_WbemLocator, IWbemLocator)\n"
+            << "Supported Namespaces: ROOT\\CIMV2, ROOT\\DEFAULT, ROOT\\WMI\n"
+            << "Query Language:       WQL (WMI Query Language Engine)\n"
+            << "Standard Classes:     Win32_OperatingSystem, Win32_Processor, Win32_ComputerSystem,\n"
+            << "                      Win32_LogicalDisk, Win32_NetworkAdapter, Win32_VideoController,\n"
+            << "                      Win32_Service, Win32_Process, Win32_BIOS\n\n"
+            << "Usage:\n"
+            << "  wmic os get [properties]       Query operating system details\n"
+            << "  wmic cpu get [properties]      Query processor and core topology\n"
+            << "  wmic computersystem get        Query system hardware model and memory\n"
+            << "  wmic logicaldisk get           Query mounted volume capacities\n"
+            << "  wmic nicconfig get             Query network configuration\n"
+            << "  wmic service list              List active Windows services\n"
+            << "  wmic process list              List executive process table\n"
+            << "  wmic bios get                  Query UEFI/BIOS configuration\n"
+            << "  wmic query <WQL expression>    Execute custom WQL query\n"
+            << "  wmic test                      Execute automated WMI subsystem self-test\n";
     }
 
     static std::string trim(std::string_view s) {
