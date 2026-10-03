@@ -63,6 +63,7 @@
 #include "setupapi.hpp"
 #include "wevtapi.hpp"
 #include "wbem.hpp"
+#include "taskschd.hpp"
 
 namespace micant::shell {
 
@@ -203,6 +204,7 @@ public:
             if (cmd == "stg" || cmd == "storage" || cmd == "docfile") { cmdStorage(tokens, out); return 0; }
             if (cmd == "wevtutil" || cmd == "eventlog" || cmd == "eventviewer") { cmdWevtUtil(tokens, out); return 0; }
             if (cmd == "wmic" || cmd == "wbem") { cmdWmic(tokens, out); return 0; }
+            if (cmd == "schtasks" || cmd == "taskschd") { cmdSchtasks(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -4427,6 +4429,504 @@ private:
             << "  wmic bios get                  Query UEFI/BIOS configuration\n"
             << "  wmic query <WQL expression>    Execute custom WQL query\n"
             << "  wmic test                      Execute automated WMI subsystem self-test\n";
+    }
+
+    void cmdSchtasks(const std::vector<std::string>& tokens, std::ostream& out) {
+        taskschd::InitializeTaskSchedulerSubsystemExports();
+
+        auto& engine = taskschd::TaskSchedulerEngine::Instance();
+        auto svc = engine.GetService();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            // 1. schtasks test
+            if (sub == "test") {
+                out << "[Task Scheduler] Executing Task Scheduler 2.0 COM Subsystem Self-Test...\n";
+                taskschd::ITaskService* pTestSvc = nullptr;
+                ole32::HRESULT hr = ole32::CoCreateInstance(
+                    taskschd::CLSID_TaskScheduler, nullptr, 1 /* CLSCTX_INPROC_SERVER */,
+                    taskschd::IID_ITaskService, reinterpret_cast<void**>(&pTestSvc)
+                );
+                bool coOk = (hr == ole32::S_OK && pTestSvc != nullptr);
+                out << "  CoCreateInstance(CLSID_TaskScheduler): " << (coOk ? "PASS" : "FAIL") << "\n";
+
+                if (coOk) {
+                    pTestSvc->Connect({}, {}, {}, {});
+                    taskschd::ITaskFolder* root = nullptr;
+                    ole32::BSTR bstrRoot = ole32::SysAllocString(L"\\");
+                    hr = pTestSvc->GetFolder(bstrRoot, &root);
+                    ole32::SysFreeString(bstrRoot);
+                    bool rootOk = (hr == ole32::S_OK && root != nullptr);
+                    out << "  ITaskService::GetFolder(\\):            " << (rootOk ? "PASS" : "FAIL") << "\n";
+
+                    if (rootOk) {
+                        taskschd::ITaskDefinition* def = nullptr;
+                        pTestSvc->NewTask(0, &def);
+                        if (def) {
+                            taskschd::IRegistrationInfo* reg = nullptr;
+                            def->get_RegistrationInfo(&reg);
+                            if (reg) {
+                                ole32::BSTR bDesc = ole32::SysAllocString(L"MicaNT Test Task");
+                                reg->put_Description(bDesc);
+                                ole32::SysFreeString(bDesc);
+                                reg->Release();
+                            }
+
+                            taskschd::IActionCollection* acts = nullptr;
+                            def->get_Actions(&acts);
+                            if (acts) {
+                                taskschd::IAction* act = nullptr;
+                                acts->Create(taskschd::TASK_ACTION_EXEC, &act);
+                                if (act) {
+                                    taskschd::IExecAction* exec = nullptr;
+                                    act->QueryInterface(taskschd::IID_IExecAction, reinterpret_cast<void**>(&exec));
+                                    if (exec) {
+                                        ole32::BSTR bPath = ole32::SysAllocString(L"cmd.exe");
+                                        exec->put_Path(bPath);
+                                        ole32::SysFreeString(bPath);
+                                        exec->Release();
+                                    }
+                                    act->Release();
+                                }
+                                acts->Release();
+                            }
+
+                            taskschd::IRegisteredTask* regTask = nullptr;
+                            ole32::BSTR bName = ole32::SysAllocString(L"TestSchTask");
+                            hr = root->RegisterTaskDefinition(bName, def, taskschd::TASK_CREATE_OR_UPDATE, {}, {}, taskschd::TASK_LOGON_INTERACTIVE_TOKEN, {}, &regTask);
+                            bool regOk = (hr == ole32::S_OK && regTask != nullptr);
+                            out << "  ITaskFolder::RegisterTaskDefinition:   " << (regOk ? "PASS" : "FAIL") << "\n";
+
+                            if (regOk) {
+                                taskschd::IRunningTask* running = nullptr;
+                                hr = regTask->Run({}, &running);
+                                bool runOk = (hr == ole32::S_OK && running != nullptr);
+                                out << "  IRegisteredTask::Run:                  " << (runOk ? "PASS" : "FAIL") << "\n";
+                                if (running) running->Release();
+
+                                hr = root->DeleteTask(bName, 0);
+                                bool delOk = (hr == ole32::S_OK);
+                                out << "  ITaskFolder::DeleteTask:               " << (delOk ? "PASS" : "FAIL") << "\n";
+
+                                regTask->Release();
+                            }
+                            ole32::SysFreeString(bName);
+                            def->Release();
+                        }
+                        root->Release();
+                    }
+                    pTestSvc->Release();
+                }
+                out << "[Task Scheduler] Subsystem Self-Test Finished.\n";
+                return;
+            }
+
+            // 2. schtasks /query [/tn <taskname>] [/fo TABLE|LIST|XML] [/v]
+            if (sub == "/query" || sub == "-query" || sub == "query") {
+                std::string tn;
+                std::string fo = "TABLE";
+                bool verbose = false;
+
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    std::string arg = tokens[i];
+                    std::transform(arg.begin(), arg.end(), arg.begin(), ::tolower);
+                    if ((arg == "/tn" || arg == "-tn") && i + 1 < tokens.size()) {
+                        tn = tokens[++i];
+                    } else if ((arg == "/fo" || arg == "-fo") && i + 1 < tokens.size()) {
+                        fo = tokens[++i];
+                        std::transform(fo.begin(), fo.end(), fo.begin(), ::toupper);
+                    } else if (arg == "/v" || arg == "-v") {
+                        verbose = true;
+                    }
+                }
+
+                auto allTasks = engine.GetAllTasks();
+                if (!tn.empty()) {
+                    std::wstring wtn(tn.begin(), tn.end());
+                    std::vector<std::shared_ptr<taskschd::RegisteredTask>> filtered;
+                    for (const auto& t : allTasks) {
+                        if (t->m_name == wtn || t->m_path == wtn || (t->m_path.find(wtn) != std::wstring::npos)) {
+                            filtered.push_back(t);
+                        }
+                    }
+                    allTasks = std::move(filtered);
+                }
+
+                if (allTasks.empty()) {
+                    if (!tn.empty()) {
+                        out << "ERROR: The system cannot find the file specified (Task: " << tn << ").\n";
+                    } else {
+                        out << "INFO: There are no tasks currently scheduled.\n";
+                    }
+                    return;
+                }
+
+                if (fo == "XML") {
+                    for (const auto& t : allTasks) {
+                        ole32::BSTR xml = nullptr;
+                        t->get_Xml(&xml);
+                        if (xml) {
+                            std::wstring wXml(xml);
+                            std::string sXml(wXml.begin(), wXml.end());
+                            out << sXml << "\n\n";
+                            ole32::SysFreeString(xml);
+                        }
+                    }
+                    return;
+                }
+
+                if (fo == "LIST" || verbose) {
+                    for (const auto& t : allTasks) {
+                        std::string path(t->m_path.begin(), t->m_path.end());
+                        taskschd::TASK_STATE st{};
+                        t->get_State(&st);
+                        std::string stStr = (st == taskschd::TASK_STATE_RUNNING) ? "Running" :
+                                            (st == taskschd::TASK_STATE_DISABLED) ? "Disabled" : "Ready";
+                        std::string author = "Microsoft Corporation";
+                        std::string desc = "";
+                        std::string action = "N/A";
+                        if (t->m_definition) {
+                            if (t->m_definition->m_regInfo) {
+                                std::wstring wa = t->m_definition->m_regInfo->m_author;
+                                std::wstring wd = t->m_definition->m_regInfo->m_description;
+                                author = std::string(wa.begin(), wa.end());
+                                desc = std::string(wd.begin(), wd.end());
+                            }
+                            if (t->m_definition->m_actions && !t->m_definition->m_actions->m_items.empty()) {
+                                std::wstring wp = t->m_definition->m_actions->m_items[0]->m_path;
+                                std::wstring wargs = t->m_definition->m_actions->m_items[0]->m_arguments;
+                                action = std::string(wp.begin(), wp.end());
+                                if (!wargs.empty()) {
+                                    action += " " + std::string(wargs.begin(), wargs.end());
+                                }
+                            }
+                        }
+
+                        std::string folder = "\\";
+                        size_t slash = path.find_last_of('\\');
+                        if (slash != std::string::npos && slash > 0) folder = path.substr(0, slash);
+
+                        out << "Folder:                               " << folder << "\n"
+                            << "HostName:                             MICANT-PC\n"
+                            << "TaskName:                             " << path << "\n"
+                            << "Next Run Time:                        N/A\n"
+                            << "Status:                               " << stStr << "\n"
+                            << "Logon Mode:                           Interactive\n"
+                            << "Last Run Time:                        " << (t->m_lastRunTime > 0.0 ? "Today" : "N/A") << "\n"
+                            << "Last Result:                          " << t->m_lastTaskResult << "\n"
+                            << "Author:                               " << author << "\n"
+                            << "Task To Run:                          " << action << "\n"
+                            << "Comment:                              " << desc << "\n"
+                            << "Scheduled Task State:                 " << (t->m_enabled ? "Enabled" : "Disabled") << "\n\n";
+                    }
+                    return;
+                }
+
+                // Default TABLE format
+                out << "Folder: \\\n"
+                    << std::left << std::setw(50) << "TaskName" << " "
+                    << std::left << std::setw(22) << "Next Run Time" << " "
+                    << std::left << std::setw(15) << "Status" << "\n"
+                    << std::string(50, '=') << " " << std::string(22, '=') << " " << std::string(15, '=') << "\n";
+
+                for (const auto& t : allTasks) {
+                    std::string path(t->m_path.begin(), t->m_path.end());
+                    if (path.length() > 49) path = path.substr(0, 46) + "...";
+                    taskschd::TASK_STATE st{};
+                    t->get_State(&st);
+                    std::string stStr = (st == taskschd::TASK_STATE_RUNNING) ? "Running" :
+                                        (st == taskschd::TASK_STATE_DISABLED) ? "Disabled" : "Ready";
+                    out << std::left << std::setw(50) << path << " "
+                        << std::left << std::setw(22) << "N/A" << " "
+                        << std::left << std::setw(15) << stStr << "\n";
+                }
+                return;
+            }
+
+            // 3. schtasks /run /tn <taskname>
+            if (sub == "/run" || sub == "-run" || sub == "run") {
+                std::string tn;
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    if ((tokens[i] == "/tn" || tokens[i] == "-tn") && i + 1 < tokens.size()) {
+                        tn = tokens[++i];
+                    }
+                }
+                if (tn.empty()) {
+                    out << "ERROR: Invalid syntax. Task name must be specified using /tn <taskname>.\n";
+                    return;
+                }
+
+                taskschd::ITaskFolder* root = nullptr;
+                ole32::BSTR bstrRoot = ole32::SysAllocString(L"\\");
+                svc->GetFolder(bstrRoot, &root);
+                ole32::SysFreeString(bstrRoot);
+
+                if (root) {
+                    std::wstring wtn(tn.begin(), tn.end());
+                    ole32::BSTR bstrName = ole32::SysAllocString(wtn.c_str());
+                    taskschd::IRegisteredTask* pTask = nullptr;
+                    ole32::HRESULT hr = root->GetTask(bstrName, &pTask);
+                    ole32::SysFreeString(bstrName);
+
+                    if (hr == ole32::S_OK && pTask) {
+                        taskschd::IRunningTask* pRunning = nullptr;
+                        hr = pTask->Run({}, &pRunning);
+                        if (hr == ole32::S_OK) {
+                            out << "SUCCESS: Attempted to run the scheduled task \"" << tn << "\".\n";
+                        } else {
+                            out << "ERROR: Failed to run scheduled task \"" << tn << "\". HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                        }
+                        if (pRunning) pRunning->Release();
+                        pTask->Release();
+                    } else {
+                        out << "ERROR: The system cannot find the file specified (Task: " << tn << ").\n";
+                    }
+                    root->Release();
+                }
+                return;
+            }
+
+            // 4. schtasks /end /tn <taskname>
+            if (sub == "/end" || sub == "-end" || sub == "end") {
+                std::string tn;
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    if ((tokens[i] == "/tn" || tokens[i] == "-tn") && i + 1 < tokens.size()) {
+                        tn = tokens[++i];
+                    }
+                }
+                if (tn.empty()) {
+                    out << "ERROR: Invalid syntax. Task name must be specified using /tn <taskname>.\n";
+                    return;
+                }
+
+                taskschd::ITaskFolder* root = nullptr;
+                ole32::BSTR bstrRoot = ole32::SysAllocString(L"\\");
+                svc->GetFolder(bstrRoot, &root);
+                ole32::SysFreeString(bstrRoot);
+
+                if (root) {
+                    std::wstring wtn(tn.begin(), tn.end());
+                    ole32::BSTR bstrName = ole32::SysAllocString(wtn.c_str());
+                    taskschd::IRegisteredTask* pTask = nullptr;
+                    ole32::HRESULT hr = root->GetTask(bstrName, &pTask);
+                    ole32::SysFreeString(bstrName);
+
+                    if (hr == ole32::S_OK && pTask) {
+                        hr = pTask->Stop(0);
+                        if (hr == ole32::S_OK) {
+                            out << "SUCCESS: The scheduled task \"" << tn << "\" has been terminated.\n";
+                        } else {
+                            out << "WARNING: Task \"" << tn << "\" is not currently running.\n";
+                        }
+                        pTask->Release();
+                    } else {
+                        out << "ERROR: The system cannot find the file specified.\n";
+                    }
+                    root->Release();
+                }
+                return;
+            }
+
+            // 5. schtasks /create /tn <taskname> /tr <command> /sc DAILY|WEEKLY|ONBOOT [/f]
+            if (sub == "/create" || sub == "-create" || sub == "create") {
+                std::string tn, tr, sc = "DAILY", st = "09:00";
+                bool force = false;
+
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    std::string arg = tokens[i];
+                    std::transform(arg.begin(), arg.end(), arg.begin(), ::tolower);
+                    if ((arg == "/tn" || arg == "-tn") && i + 1 < tokens.size()) {
+                        tn = tokens[++i];
+                    } else if ((arg == "/tr" || arg == "-tr") && i + 1 < tokens.size()) {
+                        tr = tokens[++i];
+                    } else if ((arg == "/sc" || arg == "-sc") && i + 1 < tokens.size()) {
+                        sc = tokens[++i];
+                        std::transform(sc.begin(), sc.end(), sc.begin(), ::toupper);
+                    } else if ((arg == "/st" || arg == "-st") && i + 1 < tokens.size()) {
+                        st = tokens[++i];
+                    } else if (arg == "/f" || arg == "-f") {
+                        force = true;
+                    }
+                }
+
+                if (tn.empty() || tr.empty()) {
+                    out << "ERROR: Invalid syntax. Mandatory options /tn <taskname> and /tr <taskrun> are required.\n";
+                    return;
+                }
+
+                taskschd::ITaskFolder* root = nullptr;
+                ole32::BSTR bstrRoot = ole32::SysAllocString(L"\\");
+                svc->GetFolder(bstrRoot, &root);
+                ole32::SysFreeString(bstrRoot);
+
+                if (root) {
+                    taskschd::ITaskDefinition* def = nullptr;
+                    svc->NewTask(0, &def);
+                    if (def) {
+                        taskschd::ITriggerCollection* trigs = nullptr;
+                        def->get_Triggers(&trigs);
+                        if (trigs) {
+                            taskschd::TASK_TRIGGER_TYPE2 ttype = taskschd::TASK_TRIGGER_TIME;
+                            if (sc == "DAILY") ttype = taskschd::TASK_TRIGGER_DAILY;
+                            else if (sc == "ONBOOT") ttype = taskschd::TASK_TRIGGER_BOOT;
+                            else if (sc == "ONSTART" || sc == "ONLOGON") ttype = taskschd::TASK_TRIGGER_LOGON;
+
+                            taskschd::ITrigger* trig = nullptr;
+                            trigs->Create(ttype, &trig);
+                            if (trig) {
+                                std::wstring wst(st.begin(), st.end());
+                                ole32::BSTR bstrSt = ole32::SysAllocString((L"2026-01-01T" + wst + L":00").c_str());
+                                trig->put_StartBoundary(bstrSt);
+                                ole32::SysFreeString(bstrSt);
+                                trig->Release();
+                            }
+                            trigs->Release();
+                        }
+
+                        taskschd::IActionCollection* acts = nullptr;
+                        def->get_Actions(&acts);
+                        if (acts) {
+                            taskschd::IAction* act = nullptr;
+                            acts->Create(taskschd::TASK_ACTION_EXEC, &act);
+                            if (act) {
+                                taskschd::IExecAction* exec = nullptr;
+                                act->QueryInterface(taskschd::IID_IExecAction, reinterpret_cast<void**>(&exec));
+                                if (exec) {
+                                    std::wstring wtr(tr.begin(), tr.end());
+                                    ole32::BSTR bstrTr = ole32::SysAllocString(wtr.c_str());
+                                    exec->put_Path(bstrTr);
+                                    ole32::SysFreeString(bstrTr);
+                                    exec->Release();
+                                }
+                                act->Release();
+                            }
+                            acts->Release();
+                        }
+
+                        std::wstring wtn(tn.begin(), tn.end());
+                        ole32::BSTR bstrName = ole32::SysAllocString(wtn.c_str());
+                        int32_t flags = force ? taskschd::TASK_CREATE_OR_UPDATE : taskschd::TASK_CREATE;
+                        taskschd::IRegisteredTask* pRegistered = nullptr;
+                        ole32::HRESULT hr = root->RegisterTaskDefinition(bstrName, def, flags, {}, {}, taskschd::TASK_LOGON_INTERACTIVE_TOKEN, {}, &pRegistered);
+                        ole32::SysFreeString(bstrName);
+
+                        if (hr == ole32::S_OK) {
+                            out << "SUCCESS: The scheduled task \"" << tn << "\" has successfully been created.\n";
+                            if (pRegistered) pRegistered->Release();
+                        } else if (hr == taskschd::SCHED_E_ALREADY_EXISTS) {
+                            out << "WARNING: The task \"" << tn << "\" already exists. Use /f to overwrite.\n";
+                        } else {
+                            out << "ERROR: Failed to register task \"" << tn << "\". HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                        }
+                        def->Release();
+                    }
+                    root->Release();
+                }
+                return;
+            }
+
+            // 6. schtasks /delete /tn <taskname> [/f]
+            if (sub == "/delete" || sub == "-delete" || sub == "delete") {
+                std::string tn;
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    if ((tokens[i] == "/tn" || tokens[i] == "-tn") && i + 1 < tokens.size()) {
+                        tn = tokens[++i];
+                    }
+                }
+                if (tn.empty()) {
+                    out << "ERROR: Invalid syntax. Task name must be specified using /tn <taskname>.\n";
+                    return;
+                }
+
+                taskschd::ITaskFolder* root = nullptr;
+                ole32::BSTR bstrRoot = ole32::SysAllocString(L"\\");
+                svc->GetFolder(bstrRoot, &root);
+                ole32::SysFreeString(bstrRoot);
+
+                if (root) {
+                    std::wstring wtn(tn.begin(), tn.end());
+                    ole32::BSTR bstrName = ole32::SysAllocString(wtn.c_str());
+                    ole32::HRESULT hr = root->DeleteTask(bstrName, 0);
+                    ole32::SysFreeString(bstrName);
+
+                    if (hr == ole32::S_OK) {
+                        out << "SUCCESS: The scheduled task \"" << tn << "\" was successfully deleted.\n";
+                    } else {
+                        out << "ERROR: The system cannot find the file specified (Task: " << tn << ").\n";
+                    }
+                    root->Release();
+                }
+                return;
+            }
+
+            // 7. schtasks /change /tn <taskname> [/enable | /disable]
+            if (sub == "/change" || sub == "-change" || sub == "change") {
+                std::string tn;
+                bool setEnabled = true;
+                bool hasStateChange = false;
+
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    std::string arg = tokens[i];
+                    std::transform(arg.begin(), arg.end(), arg.begin(), ::tolower);
+                    if ((arg == "/tn" || arg == "-tn") && i + 1 < tokens.size()) {
+                        tn = tokens[++i];
+                    } else if (arg == "/enable" || arg == "-enable") {
+                        setEnabled = true;
+                        hasStateChange = true;
+                    } else if (arg == "/disable" || arg == "-disable") {
+                        setEnabled = false;
+                        hasStateChange = true;
+                    }
+                }
+
+                if (tn.empty() || !hasStateChange) {
+                    out << "ERROR: Invalid syntax. Specify /tn <taskname> and /enable or /disable.\n";
+                    return;
+                }
+
+                taskschd::ITaskFolder* root = nullptr;
+                ole32::BSTR bstrRoot = ole32::SysAllocString(L"\\");
+                svc->GetFolder(bstrRoot, &root);
+                ole32::SysFreeString(bstrRoot);
+
+                if (root) {
+                    std::wstring wtn(tn.begin(), tn.end());
+                    ole32::BSTR bstrName = ole32::SysAllocString(wtn.c_str());
+                    taskschd::IRegisteredTask* pTask = nullptr;
+                    ole32::HRESULT hr = root->GetTask(bstrName, &pTask);
+                    ole32::SysFreeString(bstrName);
+
+                    if (hr == ole32::S_OK && pTask) {
+                        pTask->put_Enabled(setEnabled ? ole32::VARIANT_TRUE : ole32::VARIANT_FALSE);
+                        out << "SUCCESS: The parameters of scheduled task \"" << tn << "\" have been changed.\n";
+                        pTask->Release();
+                    } else {
+                        out << "ERROR: The system cannot find the file specified.\n";
+                    }
+                    root->Release();
+                }
+                return;
+            }
+        }
+
+        out << "========================================================================\n"
+            << "         MicaNT Windows Task Scheduler 2.0 Subsystem (schtasks)         \n"
+            << "========================================================================\n\n"
+            << "Subsystem Library:    taskschd.dll & mstask.dll\n"
+            << "COM Activation:       CoCreateInstance(CLSID_TaskScheduler, ITaskService)\n"
+            << "API Level:            Task Scheduler 2.0 (Schema Version 1.2)\n"
+            << "Built-in Folders:     \\Microsoft\\Windows\\Defrag, \\DiskCleanup, \\TimeSynchronization\n"
+            << "                      \\Maintenance, \\Registry\n\n"
+            << "Usage:\n"
+            << "  schtasks /query [/tn <taskname>] [/fo TABLE|LIST|XML] [/v]\n"
+            << "  schtasks /run /tn <taskname>\n"
+            << "  schtasks /end /tn <taskname>\n"
+            << "  schtasks /create /tn <taskname> /tr <command> /sc DAILY|WEEKLY|ONBOOT [/f]\n"
+            << "  schtasks /delete /tn <taskname> [/f]\n"
+            << "  schtasks /change /tn <taskname> [/enable | /disable]\n"
+            << "  schtasks test\n";
     }
 
     static std::string trim(std::string_view s) {

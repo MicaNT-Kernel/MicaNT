@@ -95,6 +95,7 @@
 #include "micant/setupapi.hpp"
 #include "micant/wevtapi.hpp"
 #include "micant/wbem.hpp"
+#include "micant/taskschd.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -13529,6 +13530,525 @@ void Test_WMI_WindowsManagementInstrumentation_Subsystem() {
     std::cout << "[TEST] Suite 73: Windows Management Instrumentation (WMI / WBEM) Subsystem PASSED.\n";
 }
 
+void Test_WindowsTaskScheduler_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 74: Windows Task Scheduler 2.0 Subsystem (taskschd.dll)...\n";
+    using namespace ole32;
+    using DWORD = uint32_t;
+    using LONG = int32_t;
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Exports & COM Class Factory (CLSID_TaskScheduler)
+    // ------------------------------------------------------------------------
+    taskschd::InitializeTaskSchedulerSubsystemExports();
+
+    {
+        taskschd::ITaskService* pService = nullptr;
+        HRESULT hr = ole32::CoCreateInstance(
+            taskschd::CLSID_TaskScheduler, nullptr, 1 /* CLSCTX_INPROC_SERVER */,
+            taskschd::IID_ITaskService, reinterpret_cast<void**>(&pService)
+        );
+        TEST_ASSERT(hr == S_OK, "CoCreateInstance(CLSID_TaskScheduler) must return S_OK");
+        TEST_ASSERT(pService != nullptr, "pService must not be null");
+
+        // Verify QueryInterface for IDispatch and IUnknown
+        oleaut32::IDispatch* pDisp = nullptr;
+        hr = pService->QueryInterface(oleaut32::IID_IDispatch, reinterpret_cast<void**>(&pDisp));
+        TEST_ASSERT(hr == S_OK && pDisp != nullptr, "ITaskService must implement IDispatch");
+        pDisp->Release();
+
+        // Null pointer check
+        hr = pService->QueryInterface(taskschd::IID_ITaskService, nullptr);
+        TEST_ASSERT(hr == E_POINTER, "QueryInterface with nullptr must return E_POINTER");
+
+        pService->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Service Connection State & Version Reflection
+    // ------------------------------------------------------------------------
+    taskschd::ITaskService* pSvc = nullptr;
+    HRESULT hr = ole32::CoCreateInstance(
+        taskschd::CLSID_TaskScheduler, nullptr, 1,
+        taskschd::IID_ITaskService, reinterpret_cast<void**>(&pSvc)
+    );
+    TEST_ASSERT(hr == S_OK && pSvc != nullptr, "TaskService creation must succeed");
+
+    {
+        // Prior to Connect, get_Connected must report VARIANT_FALSE
+        ole32::VARIANT_BOOL bConn = ole32::VARIANT_FALSE;
+        pSvc->get_Connected(&bConn);
+        TEST_ASSERT(bConn == ole32::VARIANT_FALSE, "get_Connected prior to Connect must return VARIANT_FALSE");
+
+        // Attempting to GetFolder before Connect must fail with SCHED_E_SERVICE_NOT_RUNNING
+        taskschd::ITaskFolder* pUnconnFolder = nullptr;
+        ole32::BSTR bstrRoot = ole32::SysAllocString(L"\\");
+        hr = pSvc->GetFolder(bstrRoot, &pUnconnFolder);
+        TEST_ASSERT(hr == taskschd::SCHED_E_SERVICE_NOT_RUNNING, "GetFolder without connect must return SCHED_E_SERVICE_NOT_RUNNING");
+        ole32::SysFreeString(bstrRoot);
+
+        // Connect with server and user parameters
+        ole32::VARIANT vServer{}, vUser{}, vDomain{}, vPass{};
+        oleaut32::VariantInit(&vServer);
+        vServer.vt = ole32::VT_BSTR;
+        vServer.bstrVal = ole32::SysAllocString(L"MICANT-NODE0");
+
+        oleaut32::VariantInit(&vUser);
+        vUser.vt = ole32::VT_BSTR;
+        vUser.bstrVal = ole32::SysAllocString(L"Administrator");
+
+        hr = pSvc->Connect(vServer, vUser, vDomain, vPass);
+        TEST_ASSERT(hr == S_OK, "Connect must return S_OK");
+
+        pSvc->get_Connected(&bConn);
+        TEST_ASSERT(bConn == ole32::VARIANT_TRUE, "get_Connected after Connect must return VARIANT_TRUE");
+
+        ole32::BSTR bstrTarget = nullptr;
+        pSvc->get_TargetServer(&bstrTarget);
+        TEST_ASSERT(bstrTarget != nullptr && std::wcscmp(bstrTarget, L"MICANT-NODE0") == 0, "Target server must match connected name");
+        ole32::SysFreeString(bstrTarget);
+
+        ole32::BSTR bstrUser = nullptr;
+        pSvc->get_ConnectedUser(&bstrUser);
+        TEST_ASSERT(bstrUser != nullptr && std::wcscmp(bstrUser, L"Administrator") == 0, "Connected user must match connected credentials");
+        ole32::SysFreeString(bstrUser);
+
+        DWORD dwVersion = 0;
+        pSvc->get_HighestVersion(&dwVersion);
+        TEST_ASSERT(dwVersion == 0x00010002, "HighestVersion must report Task Scheduler 2.0 (1.2)");
+
+        oleaut32::VariantClear(&vServer);
+        oleaut32::VariantClear(&vUser);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Root Folder Navigation & Pre-seeded Windows Tasks
+    // ------------------------------------------------------------------------
+    taskschd::ITaskFolder* pRoot = nullptr;
+    {
+        ole32::BSTR bstrRoot = ole32::SysAllocString(L"\\");
+        hr = pSvc->GetFolder(bstrRoot, &pRoot);
+        ole32::SysFreeString(bstrRoot);
+        TEST_ASSERT(hr == S_OK && pRoot != nullptr, "GetFolder(\\) must succeed");
+
+        ole32::BSTR pPath = nullptr;
+        pRoot->get_Path(&pPath);
+        TEST_ASSERT(pPath != nullptr && std::wcscmp(pPath, L"\\") == 0, "Root folder path must be \\");
+        ole32::SysFreeString(pPath);
+
+        // Verify pre-seeded ScheduledDefrag task in Microsoft\Windows\Defrag
+        taskschd::IRegisteredTask* pDefragTask = nullptr;
+        ole32::BSTR bstrDefragPath = ole32::SysAllocString(L"Microsoft\\Windows\\Defrag\\ScheduledDefrag");
+        hr = pRoot->GetTask(bstrDefragPath, &pDefragTask);
+        ole32::SysFreeString(bstrDefragPath);
+        TEST_ASSERT(hr == S_OK && pDefragTask != nullptr, "Pre-seeded task ScheduledDefrag must exist");
+
+        ole32::BSTR bstrName = nullptr;
+        pDefragTask->get_Name(&bstrName);
+        TEST_ASSERT(bstrName != nullptr && std::wcscmp(bstrName, L"ScheduledDefrag") == 0, "Task name must be ScheduledDefrag");
+        ole32::SysFreeString(bstrName);
+
+        taskschd::TASK_STATE taskState{};
+        pDefragTask->get_State(&taskState);
+        TEST_ASSERT(taskState == taskschd::TASK_STATE_READY, "Initial task state must be TASK_STATE_READY");
+
+        pDefragTask->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Subfolder Creation, Traversal & Lifecycle Management
+    // ------------------------------------------------------------------------
+    taskschd::ITaskFolder* pMicaFolder = nullptr;
+    {
+        ole32::BSTR bstrSub = ole32::SysAllocString(L"MicaExecutive");
+        hr = pRoot->CreateFolder(bstrSub, {}, &pMicaFolder);
+        TEST_ASSERT(hr == S_OK && pMicaFolder != nullptr, "CreateFolder(MicaExecutive) must succeed");
+
+        ole32::BSTR bstrSubPath = nullptr;
+        pMicaFolder->get_Path(&bstrSubPath);
+        TEST_ASSERT(bstrSubPath != nullptr && std::wcscmp(bstrSubPath, L"\\MicaExecutive") == 0, "Folder path must be \\MicaExecutive");
+        ole32::SysFreeString(bstrSubPath);
+
+        // Attempting to recreate identical folder without flag returns SCHED_E_ALREADY_EXISTS
+        taskschd::ITaskFolder* pDupFolder = nullptr;
+        hr = pRoot->CreateFolder(bstrSub, {}, &pDupFolder);
+        TEST_ASSERT(hr == taskschd::SCHED_E_ALREADY_EXISTS, "CreateFolder on existing folder must return SCHED_E_ALREADY_EXISTS");
+
+        // Verify folder traversal via GetFolder
+        taskschd::ITaskFolder* pFoundFolder = nullptr;
+        hr = pRoot->GetFolder(bstrSub, &pFoundFolder);
+        TEST_ASSERT(hr == S_OK && pFoundFolder != nullptr, "GetFolder(MicaExecutive) must locate created folder");
+        pFoundFolder->Release();
+
+        ole32::SysFreeString(bstrSub);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: TaskDefinition Construction & Metadata Configuration
+    // ------------------------------------------------------------------------
+    taskschd::ITaskDefinition* pTaskDef = nullptr;
+    hr = pSvc->NewTask(0, &pTaskDef);
+    TEST_ASSERT(hr == S_OK && pTaskDef != nullptr, "NewTask must create fresh ITaskDefinition");
+
+    {
+        // 1. RegistrationInfo
+        taskschd::IRegistrationInfo* pReg = nullptr;
+        pTaskDef->get_RegistrationInfo(&pReg);
+        TEST_ASSERT(pReg != nullptr, "RegistrationInfo must be valid");
+
+        ole32::BSTR bAuthor = ole32::SysAllocString(L"Dave Cutler 1988 MICA");
+        pReg->put_Author(bAuthor);
+        ole32::SysFreeString(bAuthor);
+
+        ole32::BSTR bDesc = ole32::SysAllocString(L"Zero-telemetry sovereign task scheduler worker");
+        pReg->put_Description(bDesc);
+        ole32::SysFreeString(bDesc);
+
+        ole32::BSTR bUri = ole32::SysAllocString(L"\\MicaExecutive\\SovereignDaemon");
+        pReg->put_URI(bUri);
+        ole32::SysFreeString(bUri);
+
+        ole32::BSTR bCheckAuthor = nullptr;
+        pReg->get_Author(&bCheckAuthor);
+        TEST_ASSERT(bCheckAuthor != nullptr && std::wcscmp(bCheckAuthor, L"Dave Cutler 1988 MICA") == 0, "Author must match configured value");
+        ole32::SysFreeString(bCheckAuthor);
+
+        pReg->Release();
+
+        // 2. Settings
+        taskschd::ITaskSettings* pSettings = nullptr;
+        pTaskDef->get_Settings(&pSettings);
+        TEST_ASSERT(pSettings != nullptr, "TaskSettings must be valid");
+
+        pSettings->put_AllowDemandStart(ole32::VARIANT_TRUE);
+        pSettings->put_Hidden(ole32::VARIANT_FALSE);
+        pSettings->put_MultipleInstances(taskschd::TASK_INSTANCES_PARALLEL);
+
+        ole32::VARIANT_BOOL bDemand = ole32::VARIANT_FALSE;
+        pSettings->get_AllowDemandStart(&bDemand);
+        TEST_ASSERT(bDemand == ole32::VARIANT_TRUE, "AllowDemandStart must be TRUE");
+
+        taskschd::TASK_INSTANCES_POLICY policy{};
+        pSettings->get_MultipleInstances(&policy);
+        TEST_ASSERT(policy == taskschd::TASK_INSTANCES_PARALLEL, "MultipleInstances policy must match PARALLEL");
+
+        pSettings->Release();
+
+        // 3. Principal
+        taskschd::IPrincipal* pPrincipal = nullptr;
+        pTaskDef->get_Principal(&pPrincipal);
+        TEST_ASSERT(pPrincipal != nullptr, "Principal must be valid");
+
+        ole32::BSTR bUser = ole32::SysAllocString(L"NT AUTHORITY\\SYSTEM");
+        pPrincipal->put_UserId(bUser);
+        ole32::SysFreeString(bUser);
+        pPrincipal->put_LogonType(taskschd::TASK_LOGON_INTERACTIVE_TOKEN);
+
+        ole32::BSTR bCheckUser = nullptr;
+        pPrincipal->get_UserId(&bCheckUser);
+        TEST_ASSERT(bCheckUser != nullptr && std::wcscmp(bCheckUser, L"NT AUTHORITY\\SYSTEM") == 0, "UserId must match configured principal");
+        ole32::SysFreeString(bCheckUser);
+
+        pPrincipal->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Triggers & Repetition Pattern Verification
+    // ------------------------------------------------------------------------
+    {
+        taskschd::ITriggerCollection* pTrigs = nullptr;
+        pTaskDef->get_Triggers(&pTrigs);
+        TEST_ASSERT(pTrigs != nullptr, "TriggerCollection must be valid");
+
+        // 1. TimeTrigger
+        taskschd::ITrigger* pTrig1 = nullptr;
+        hr = pTrigs->Create(taskschd::TASK_TRIGGER_TIME, &pTrig1);
+        TEST_ASSERT(hr == S_OK && pTrig1 != nullptr, "Create(TASK_TRIGGER_TIME) must succeed");
+
+        ole32::BSTR bStart = ole32::SysAllocString(L"2026-10-03T12:00:00");
+        pTrig1->put_StartBoundary(bStart);
+        ole32::SysFreeString(bStart);
+
+        taskschd::TASK_TRIGGER_TYPE2 trigType{};
+        pTrig1->get_Type(&trigType);
+        TEST_ASSERT(trigType == taskschd::TASK_TRIGGER_TIME, "Trigger type must be TASK_TRIGGER_TIME");
+
+        // Repetition pattern
+        taskschd::IRepetitionPattern* pRep = nullptr;
+        pTrig1->get_Repetition(&pRep);
+        TEST_ASSERT(pRep != nullptr, "RepetitionPattern must be valid");
+
+        ole32::BSTR bInt = ole32::SysAllocString(L"PT10M");
+        pRep->put_Interval(bInt);
+        ole32::SysFreeString(bInt);
+
+        ole32::BSTR bCheckInt = nullptr;
+        pRep->get_Interval(&bCheckInt);
+        TEST_ASSERT(bCheckInt != nullptr && std::wcscmp(bCheckInt, L"PT10M") == 0, "Repetition interval must match PT10M");
+        ole32::SysFreeString(bCheckInt);
+        pRep->Release();
+        pTrig1->Release();
+
+        // 2. BootTrigger
+        taskschd::ITrigger* pTrig2 = nullptr;
+        hr = pTrigs->Create(taskschd::TASK_TRIGGER_BOOT, &pTrig2);
+        TEST_ASSERT(hr == S_OK && pTrig2 != nullptr, "Create(TASK_TRIGGER_BOOT) must succeed");
+        pTrig2->Release();
+
+        LONG trigCount = 0;
+        pTrigs->get_Count(&trigCount);
+        TEST_ASSERT(trigCount == 2, "Trigger count must be exactly 2");
+
+        pTrigs->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Actions Collection & ExecAction Execution Parameters
+    // ------------------------------------------------------------------------
+    {
+        taskschd::IActionCollection* pActs = nullptr;
+        pTaskDef->get_Actions(&pActs);
+        TEST_ASSERT(pActs != nullptr, "ActionCollection must be valid");
+
+        taskschd::IAction* pAct = nullptr;
+        hr = pActs->Create(taskschd::TASK_ACTION_EXEC, &pAct);
+        TEST_ASSERT(hr == S_OK && pAct != nullptr, "Create(TASK_ACTION_EXEC) must succeed");
+
+        taskschd::IExecAction* pExec = nullptr;
+        hr = pAct->QueryInterface(taskschd::IID_IExecAction, reinterpret_cast<void**>(&pExec));
+        TEST_ASSERT(hr == S_OK && pExec != nullptr, "IAction must support IExecAction interface");
+
+        ole32::BSTR bPath = ole32::SysAllocString(L"C:\\Windows\\System32\\micant_daemon.exe");
+        pExec->put_Path(bPath);
+        ole32::SysFreeString(bPath);
+
+        ole32::BSTR bArgs = ole32::SysAllocString(L"--daemon --threads=4");
+        pExec->put_Arguments(bArgs);
+        ole32::SysFreeString(bArgs);
+
+        ole32::BSTR bWorkDir = ole32::SysAllocString(L"C:\\Windows\\System32");
+        pExec->put_WorkingDirectory(bWorkDir);
+        ole32::SysFreeString(bWorkDir);
+
+        ole32::BSTR bCheckPath = nullptr;
+        pExec->get_Path(&bCheckPath);
+        TEST_ASSERT(bCheckPath != nullptr && std::wcscmp(bCheckPath, L"C:\\Windows\\System32\\micant_daemon.exe") == 0, "ExecAction path must match");
+        ole32::SysFreeString(bCheckPath);
+
+        ole32::BSTR bCheckArgs = nullptr;
+        pExec->get_Arguments(&bCheckArgs);
+        TEST_ASSERT(bCheckArgs != nullptr && std::wcscmp(bCheckArgs, L"--daemon --threads=4") == 0, "ExecAction arguments must match");
+        ole32::SysFreeString(bCheckArgs);
+
+        pExec->Release();
+        pAct->Release();
+
+        LONG actCount = 0;
+        pActs->get_Count(&actCount);
+        TEST_ASSERT(actCount == 1, "Action count must be exactly 1");
+
+        pActs->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Task XML Serialization & Deserialization Engine
+    // ------------------------------------------------------------------------
+    {
+        ole32::BSTR bstrXml = nullptr;
+        hr = pTaskDef->get_XmlText(&bstrXml);
+        TEST_ASSERT(hr == S_OK && bstrXml != nullptr, "get_XmlText must serialize task to standard XML");
+
+        std::wstring xmlStr(bstrXml);
+        TEST_ASSERT(xmlStr.find(L"<Task version=\"1.2\"") != std::wstring::npos, "XML must contain standard Task root element");
+        TEST_ASSERT(xmlStr.find(L"<Author>Dave Cutler 1988 MICA</Author>") != std::wstring::npos, "XML must contain Author metadata");
+        TEST_ASSERT(xmlStr.find(L"<BootTrigger>") != std::wstring::npos, "XML must contain BootTrigger");
+        TEST_ASSERT(xmlStr.find(L"<Command>C:\\Windows\\System32\\micant_daemon.exe</Command>") != std::wstring::npos, "XML must contain Exec Command");
+        TEST_ASSERT(xmlStr.find(L"<Arguments>--daemon --threads=4</Arguments>") != std::wstring::npos, "XML must contain Exec Arguments");
+
+        // Deserialize into new task definition
+        taskschd::ITaskDefinition* pNewDef = nullptr;
+        hr = pSvc->NewTask(0, &pNewDef);
+        TEST_ASSERT(hr == S_OK && pNewDef != nullptr, "NewTask for deserialization must succeed");
+
+        hr = pNewDef->put_XmlText(bstrXml);
+        TEST_ASSERT(hr == S_OK, "put_XmlText must parse XML definition");
+
+        taskschd::IRegistrationInfo* pParsedReg = nullptr;
+        pNewDef->get_RegistrationInfo(&pParsedReg);
+        ole32::BSTR bParsedAuthor = nullptr;
+        pParsedReg->get_Author(&bParsedAuthor);
+        TEST_ASSERT(bParsedAuthor != nullptr && std::wcscmp(bParsedAuthor, L"Dave Cutler 1988 MICA") == 0, "Deserialized Author must match original");
+        ole32::SysFreeString(bParsedAuthor);
+        pParsedReg->Release();
+
+        pNewDef->Release();
+        ole32::SysFreeString(bstrXml);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Task Registration, Enumeration & State Invariants
+    // ------------------------------------------------------------------------
+    taskschd::IRegisteredTask* pRegisteredTask = nullptr;
+    {
+        ole32::BSTR bTaskName = ole32::SysAllocString(L"SovereignDaemon");
+        hr = pMicaFolder->RegisterTaskDefinition(
+            bTaskName, pTaskDef, taskschd::TASK_CREATE_OR_UPDATE,
+            {}, {}, taskschd::TASK_LOGON_INTERACTIVE_TOKEN, {}, &pRegisteredTask
+        );
+        ole32::SysFreeString(bTaskName);
+        TEST_ASSERT(hr == S_OK && pRegisteredTask != nullptr, "RegisterTaskDefinition must succeed");
+
+        ole32::BSTR bName = nullptr;
+        pRegisteredTask->get_Name(&bName);
+        TEST_ASSERT(bName != nullptr && std::wcscmp(bName, L"SovereignDaemon") == 0, "Registered task name must match");
+        ole32::SysFreeString(bName);
+
+        ole32::BSTR bPath = nullptr;
+        pRegisteredTask->get_Path(&bPath);
+        TEST_ASSERT(bPath != nullptr && std::wcscmp(bPath, L"\\MicaExecutive\\SovereignDaemon") == 0, "Registered task path must match hierarchy");
+        ole32::SysFreeString(bPath);
+
+        // State check
+        taskschd::TASK_STATE st{};
+        pRegisteredTask->get_State(&st);
+        TEST_ASSERT(st == taskschd::TASK_STATE_READY, "Initial registered task state must be TASK_STATE_READY");
+
+        // Toggle Enabled state
+        pRegisteredTask->put_Enabled(ole32::VARIANT_FALSE);
+        pRegisteredTask->get_State(&st);
+        TEST_ASSERT(st == taskschd::TASK_STATE_DISABLED, "Disabled task state must be TASK_STATE_DISABLED");
+
+        pRegisteredTask->put_Enabled(ole32::VARIANT_TRUE);
+        pRegisteredTask->get_State(&st);
+        TEST_ASSERT(st == taskschd::TASK_STATE_READY, "Re-enabled task state must return to TASK_STATE_READY");
+
+        // Verify task enumeration within folder
+        taskschd::IRegisteredTaskCollection* pTasks = nullptr;
+        hr = pMicaFolder->GetTasks(0, &pTasks);
+        TEST_ASSERT(hr == S_OK && pTasks != nullptr, "GetTasks must succeed");
+
+        LONG taskCount = 0;
+        pTasks->get_Count(&taskCount);
+        TEST_ASSERT(taskCount == 1, "MicaExecutive folder must contain exactly 1 task");
+
+        // Index 1 (1-based COM indexing)
+        ole32::VARIANT vIdx{};
+        oleaut32::VariantInit(&vIdx);
+        vIdx.vt = ole32::VT_I4;
+        vIdx.lVal = 1;
+        taskschd::IRegisteredTask* pEnumTask = nullptr;
+        hr = pTasks->get_Item(vIdx, &pEnumTask);
+        TEST_ASSERT(hr == S_OK && pEnumTask != nullptr, "get_Item(1) must retrieve registered task");
+        pEnumTask->Release();
+        pTasks->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Task Execution, Running Instance Lifecycle & Process PID
+    // ------------------------------------------------------------------------
+    {
+        taskschd::IRunningTask* pRunning = nullptr;
+        hr = pRegisteredTask->Run({}, &pRunning);
+        TEST_ASSERT(hr == S_OK && pRunning != nullptr, "IRegisteredTask::Run must succeed");
+
+        ole32::BSTR bRunName = nullptr;
+        pRunning->get_Name(&bRunName);
+        TEST_ASSERT(bRunName != nullptr && std::wcscmp(bRunName, L"SovereignDaemon") == 0, "RunningTask name must match");
+        ole32::SysFreeString(bRunName);
+
+        ole32::BSTR bGuid = nullptr;
+        pRunning->get_InstanceGuid(&bGuid);
+        TEST_ASSERT(bGuid != nullptr && bGuid[0] == L'{', "RunningTask must have valid GUID string");
+        ole32::SysFreeString(bGuid);
+
+        DWORD dwPid = 0;
+        pRunning->get_EnginePID(&dwPid);
+        TEST_ASSERT(dwPid >= 1000, "RunningTask must report active engine process PID");
+
+        // Check last run time and last exit code
+        taskschd::DATE dtLast = 0.0;
+        pRegisteredTask->get_LastRunTime(&dtLast);
+        TEST_ASSERT(dtLast > 0.0, "LastRunTime must be recorded");
+
+        LONG lLastResult = -1;
+        pRegisteredTask->get_LastTaskResult(&lLastResult);
+        TEST_ASSERT(lLastResult == 0, "LastTaskResult must be 0 (Success)");
+
+        pRunning->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Dynamic Loader Exports for taskschd.dll and mstask.dll
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("taskschd.dll", "DllGetClassObject") != nullptr, "taskschd.dll!DllGetClassObject must be exported");
+        TEST_ASSERT(ldr.getExport("taskschd.dll", "DllCanUnloadNow") != nullptr, "taskschd.dll!DllCanUnloadNow must be exported");
+        TEST_ASSERT(ldr.getExport("taskschd.dll", "DllRegisterServer") != nullptr, "taskschd.dll!DllRegisterServer must be exported");
+        TEST_ASSERT(ldr.getExport("taskschd.dll", "DllUnregisterServer") != nullptr, "taskschd.dll!DllUnregisterServer must be exported");
+
+        TEST_ASSERT(ldr.getExport("mstask.dll", "DllGetClassObject") != nullptr, "mstask.dll!DllGetClassObject must be exported");
+        TEST_ASSERT(ldr.getExport("mstask.dll", "DllCanUnloadNow") != nullptr, "mstask.dll!DllCanUnloadNow must be exported");
+        TEST_ASSERT(ldr.getExport("mstask.dll", "DllRegisterServer") != nullptr, "mstask.dll!DllRegisterServer must be exported");
+        TEST_ASSERT(ldr.getExport("mstask.dll", "DllUnregisterServer") != nullptr, "mstask.dll!DllUnregisterServer must be exported");
+
+        // Direct invoke via function pointer
+        auto pfnGetClass = reinterpret_cast<HRESULT(__stdcall*)(REFCLSID, REFIID, void**)>(ldr.getExport("taskschd.dll", "DllGetClassObject"));
+        ole32::IClassFactory* pFactory = nullptr;
+        hr = pfnGetClass(taskschd::CLSID_TaskScheduler, ole32::IID_IClassFactory, reinterpret_cast<void**>(&pFactory));
+        TEST_ASSERT(hr == S_OK && pFactory != nullptr, "DllGetClassObject must return working IClassFactory");
+        pFactory->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Interactive Command Shell Integration (schtasks CLI)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. schtasks /query
+        shell.execute("schtasks /query", out);
+        TEST_ASSERT(out.str().find("ScheduledDefrag") != std::string::npos, "schtasks /query must display ScheduledDefrag");
+        TEST_ASSERT(out.str().find("SilentCleanup") != std::string::npos, "schtasks /query must display SilentCleanup");
+
+        // 2. schtasks /query /tn with LIST formatting
+        out.str("");
+        shell.execute("schtasks /query /tn \\Microsoft\\Windows\\Defrag\\ScheduledDefrag /fo LIST /v", out);
+        TEST_ASSERT(out.str().find("Folder:") != std::string::npos, "schtasks LIST format must display Folder field");
+        TEST_ASSERT(out.str().find("defrag.exe") != std::string::npos, "schtasks LIST format must display Task To Run");
+
+        // 3. schtasks /create
+        out.str("");
+        shell.execute("schtasks /create /tn \\CliTestTask /tr notepad.exe /sc DAILY", out);
+        TEST_ASSERT(out.str().find("SUCCESS:") != std::string::npos, "schtasks /create must report success");
+
+        // 4. schtasks /run
+        out.str("");
+        shell.execute("schtasks /run /tn \\CliTestTask", out);
+        TEST_ASSERT(out.str().find("SUCCESS:") != std::string::npos, "schtasks /run must report success");
+
+        // 5. schtasks /delete
+        out.str("");
+        shell.execute("schtasks /delete /tn \\CliTestTask /f", out);
+        TEST_ASSERT(out.str().find("SUCCESS:") != std::string::npos, "schtasks /delete must report success");
+
+        // 6. schtasks test
+        out.str("");
+        shell.execute("schtasks test", out);
+        TEST_ASSERT(out.str().find("Subsystem Self-Test Finished") != std::string::npos, "schtasks test must finish successfully");
+    }
+
+    // Cleanup local test instances
+    if (pRegisteredTask) pRegisteredTask->Release();
+    if (pTaskDef) pTaskDef->Release();
+    if (pMicaFolder) pMicaFolder->Release();
+    if (pRoot) pRoot->Release();
+    if (pSvc) pSvc->Release();
+
+    std::cout << "[TEST] Suite 74: Windows Task Scheduler 2.0 Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -13607,6 +14127,7 @@ int main() {
     RUN_TEST(Test_StructuredStorage_CompoundFile_And_Persistence_Subsystem);
     RUN_TEST(Test_WindowsEventLog_And_WevtApi_Subsystem);
     RUN_TEST(Test_WMI_WindowsManagementInstrumentation_Subsystem);
+    RUN_TEST(Test_WindowsTaskScheduler_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -96,7 +96,13 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 44: Windows Structured Storage & Compound File Subsystem[COMPLETED 100%]│
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 45: Windows Event Log & Instrumentation Subsystem    [IN PROGRESS]    │
+│ Phase 45: Windows Event Log & Instrumentation Subsystem    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 46: Windows Management Instrumentation (WMI/WBEM)    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 47: Windows Task Scheduler 2.0 Subsystem (taskschd)  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 48: Windows Background Intelligent Transfer (BITS)   [IN PROGRESS]    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1010,6 +1016,59 @@
 - [x] **Unit Test Suite 73 (`Test_WMI_WindowsManagementInstrumentation_Subsystem`)**:
   - 12 comprehensive verification stages covering `CoCreateInstance(CLSID_WbemLocator)`, namespace connection and negative error handling, `Win32_OperatingSystem` enumeration, property retrieval, MOF text serialization, `Win32_Processor` SMP topology, `Win32_LogicalDisk` storage, `Win32_NetworkAdapterConfiguration`, WQL execution, WQL `WHERE` filtering, dynamic loader exports, and shell integration.
   - All 73 unit test suites passing with 100% success rate (73 Passed, 0 Failed).
+
+---
+
+### Phase 47: Windows Task Scheduler 2.0 Subsystem (`taskschd.dll`, `mstask.dll` & `schtasks.exe`) (100% Completed)
+- [x] **Task Scheduler 2.0 COM Object Hierarchy & Dual Interfaces**:
+  - `ITaskService`: Dynamic root connecting to local or remote endpoints, user/domain credentials, root folder navigation, task definition creation, and running task enumeration.
+  - `ITaskFolder` & `ITaskFolderCollection`: Hierarchical virtual task folder tree with path canonicalization, recursive task lookup, subfolder creation, deletion, and enumeration.
+  - `ITaskDefinition`: XML serialization container encapsulating registration metadata, triggers, settings, principals, and action collections.
+  - `IRegistrationInfo`: Task author, description, source, URI, documentation, and version tracking.
+  - `ITaskSettings`: Execution limits, priority, restart intervals, battery power constraints, idle wait times, and hidden attributes.
+  - `IPrincipal`: Security context configuration (`UserId`, `LogonType`, `RunLevel`, `DisplayName`).
+  - `ITriggerCollection` & Specialized Triggers: `ITimeTrigger`, `IDailyTrigger`, `IBootTrigger`, `ILogonTrigger`, each supporting `IRepetitionPattern` (Interval, Duration, StopAtDurationEnd).
+  - `IActionCollection` & `IExecAction`: Command-line execution definitions with command executable, argument strings, and working directories.
+  - `IRegisteredTask` & `IRegisteredTaskCollection`: Task state machine (`Ready`, `Running`, `Disabled`), execution controls (`Run`, `RunEx`, `Stop`), last run timestamps, exit codes, and repetition tracking.
+  - `IRunningTask` & `IRunningTaskCollection`: Active task instances with instance GUID, active action description, and dedicated engine process PID.
+- [x] **Pure C++23 Single-Inheritance `DispatchImpl<Interface>` Architecture**:
+  - Eliminated COM multiple-inheritance diamond ambiguities across dual `IDispatch` interfaces.
+  - Specialized concrete trigger classes (`TaskTimeTrigger`, `TaskDailyTrigger`, `TaskBootTrigger`, `TaskLogonTrigger`) for unambiguous `ITrigger` upcasts and query interfaces.
+- [x] **Task Scheduler 2.0 XML Engine (`SerializeToXml` & `DeserializeFromXml`)**:
+  - Standard Windows XML schema (`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">`).
+  - Bidirectional serialization for registration info, triggers, actions, and execution settings.
+- [x] **Pre-Seeded Windows Core System Scheduled Tasks**:
+  - `\Microsoft\Windows\Defrag\ScheduledDefrag`: Weekly disk defragmentation (`defrag.exe -c`).
+  - `\DiskCleanup\SilentCleanup`: Automatic background disk cleanup (`cleanmgr.exe /autoclean`).
+  - `\TimeSynchronization\SynchronizeTime`: Network time sync (`w32tm.exe /resync`).
+  - `\Maintenance\WinSAT`: Windows System Assessment Tool (`winsat.exe formal`).
+  - `\Registry\RegIdleBackup`: Registry idle state hive backup (`reg.exe backup`).
+- [x] **Dynamic Loader & COM Registration**:
+  - Export registration for `taskschd.dll` and `mstask.dll` (`DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`, `DllUnregisterServer`).
+  - `CLSID_TaskScheduler` (`{0f87369f-a4e5-4cfc-bd3e-73e6154572dd}`) registered in COM runtime.
+  - Module version resources registered in `version.hpp` bumping build to `10.0.22621.1` and kernel build to `1.0.74.0`.
+- [x] **Interactive Shell Integration (`include/micant/shell.hpp` - `schtasks`)**:
+  - `schtasks /query [/tn <taskname>] [/fo TABLE|LIST|XML] [/v]`: Full tabular, verbose list, or XML formatted task inspection.
+  - `schtasks /run /tn <taskname>`: Spawns active task instance and reports success.
+  - `schtasks /end /tn <taskname>`: Terminates running task instance.
+  - `schtasks /create /tn <taskname> /tr <command> /sc DAILY|WEEKLY|ONBOOT [/f]`: Creates and registers new scheduled tasks.
+  - `schtasks /delete /tn <taskname> [/f]`: Deletes specified tasks from folder hierarchy.
+  - `schtasks /change /tn <taskname> [/enable | /disable]`: Toggles task state.
+  - `schtasks test`: Automated end-to-end Task Scheduler 2.0 subsystem self-test.
+- [x] **Unit Test Suite 74 (`Test_WindowsTaskScheduler_Subsystem`)**:
+  - 12 comprehensive verification stages covering COM activation, dual `IDispatch` inheritance, connection, pre-seeded tasks, subfolder creation, task definition construction, trigger patterns, XML serialization/deserialization, registration and folder task counts, execution and PID reporting, DLL exports, and CLI shell execution.
+  - All 74 unit test suites passing with 100% success rate (74 Passed, 0 Failed).
+
+---
+
+### Phase 48: Windows Background Intelligent Transfer Service (BITS) Subsystem (`qmgr.dll` & `bitsadmin.exe`) (IN PROGRESS)
+- [ ] **BITS COM Interfaces**: `IBackgroundCopyManager`, `IBackgroundCopyJob`, `IBackgroundCopyFile`, `IBackgroundCopyError`, `IEnumBackgroundCopyJobs`, `IEnumBackgroundCopyFiles`.
+- [ ] **Job States & Priority Queue**: `BG_JOB_STATE` (`QUEUED`, `CONNECTING`, `TRANSFERRING`, `SUSPENDED`, `ERROR`, `TRANSIENT_ERROR`, `TRANSFERRED`, `ACKNOWLEDGED`, `CANCELLED`), `BG_JOB_PRIORITY` (`FOREGROUND`, `HIGH`, `NORMAL`, `LOW`).
+- [ ] **Download / Upload Engine**: Asynchronous file transfer integration with `wininet.hpp` HTTP/HTTPS runtime, byte range resumes, and zero-telemetry bandwidth throttling.
+- [ ] **COM Registration & Versioning**: `CLSID_BackgroundCopyManager` (`{4990ab3b-d0e8-4291-83b1-7a1bf63ee3f6}`), DLL exports for `qmgr.dll`.
+- [ ] **Interactive Shell (`bitsadmin.exe`)**: `/create`, `/addfile`, `/resume`, `/suspend`, `/complete`, `/cancel`, `/info`, `/list`.
+- [ ] **Unit Test Suite 75**: Comprehensive validation of BITS job queues, HTTP transfer simulation, job completion, and CLI parity.
+
 
 
 
