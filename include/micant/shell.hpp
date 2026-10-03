@@ -42,6 +42,7 @@
 #include "prism_shader_vm.hpp"
 #include "dxgkrnl.hpp"
 #include "vulkan.hpp"
+#include "prism_viewer.hpp"
 
 namespace micant::shell {
 
@@ -163,6 +164,8 @@ public:
             cmdWhoami(tokens, out);
         } else if (cmd == "prismx" || cmd == "gpu") {
             cmdPrismX(tokens, out);
+        } else if (cmd == "view3d" || cmd == "viewer3d") {
+            cmdView3D(tokens, out);
         } else if (cmd == "vulkan" || cmd == "vkinfo" || cmd == "vkcube") {
             cmdVulkan(tokens, out);
         } else if (cmd == "lock") {
@@ -391,6 +394,7 @@ private:
             << "  SC QUERY/START    Interrogates and controls Service Control Manager\n"
             << "  WHOAMI [/priv]    Displays user identity, group SIDs, and token privileges\n"
             << "  PRISMX / GPU      Displays GPU adapters, VRAM, and runs 3D tests (prismx test)\n"
+            << "  VIEW3D            Launches interactive 3D model viewer (view3d --torus|--cube|--crystal|--wireframe)\n"
             << "  VULKAN / VKINFO   Displays Vulkan ICD status, physical devices, and vkcube test\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
@@ -1591,6 +1595,54 @@ private:
             << "  Compositor Presents:      " << dxg.GetTotalPresents() << "\n"
             << "  VBlank Sync Events:       " << dxg.GetTotalVBlankWaits() << "\n\n"
             << "Type 'prismx test', 'prismx cube', 'prismx wireframe', 'prismx d3d12', or 'prismx vm' to execute graphics tests.\n";
+    }
+
+    void cmdView3D(const std::vector<std::string>& tokens, std::ostream& out) {
+        viewer::ViewerModelType model = viewer::ViewerModelType::Crystal;
+        bool wireframe = false;
+        uint32_t frames = 20;
+
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            const auto& t = tokens[i];
+            if (t == "--torus" || t == "torus") {
+                model = viewer::ViewerModelType::Torus;
+            } else if (t == "--cube" || t == "cube") {
+                model = viewer::ViewerModelType::Cube;
+            } else if (t == "--crystal" || t == "crystal") {
+                model = viewer::ViewerModelType::Crystal;
+            } else if (t == "--wireframe" || t == "-w" || t == "wireframe") {
+                wireframe = true;
+            } else if (t == "--frames" && i + 1 < tokens.size()) {
+                frames = std::stoul(tokens[++i]);
+            }
+        }
+
+        out << "[PrismX 3D Viewer] Launching interactive Direct3D 11 / User32 window...\n";
+        viewer::ViewerSession session(640, 480);
+        if (!session.initialize(L"MicaNT PrismX 3D Interactive Viewer")) {
+            out << "[PrismX 3D Viewer] Error: Failed to initialize 3D viewer session.\n";
+            return;
+        }
+
+        session.setModel(model);
+        session.setWireframe(wireframe);
+
+        const char* modelName = "DEC PRISM Crystal Core";
+        if (model == viewer::ViewerModelType::Torus) modelName = "Parametric 3D Torus";
+        else if (model == viewer::ViewerModelType::Cube) modelName = "Shaded 3D Box";
+
+        out << "  Active Model:   " << modelName << "\n"
+            << "  Rasterizer:     " << (wireframe ? "Wireframe" : "Solid Fill") << "\n"
+            << "  Window Target:  640x480 HWND\n"
+            << "  Rendering " << frames << " frames...\n";
+
+        auto stats = session.run(frames);
+
+        out << "[PrismX 3D Viewer] Session Completed:\n"
+            << "  Rendered Frames: " << stats.frameCount << "\n"
+            << "  Triangles:       " << stats.triangleCount << " (" << stats.vertexCount << " vertices)\n"
+            << "  Avg Framerate:   " << stats.averageFps << " FPS (" << stats.lastFrameTimeMs << " ms/frame)\n"
+            << "  Camera Orbit:    Distance=" << stats.cameraDistance << ", Yaw=" << stats.cameraYaw << ", Pitch=" << stats.cameraPitch << "\n";
     }
 
     void cmdVulkan(const std::vector<std::string>& tokens, std::ostream& out) {

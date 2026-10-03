@@ -338,7 +338,7 @@ public:
     // ------------------------------------------------------------------------
     uint16_t registerClass(const WNDCLASSEXW* lpwcx) {
         if (!lpwcx || !lpwcx->lpszClassName) return 0;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
 
         std::wstring name = lpwcx->lpszClassName;
         classRegistry_[name] = *lpwcx;
@@ -347,13 +347,13 @@ public:
 
     bool unregisterClass(const wchar_t* lpClassName, HINSTANCE /*hInstance*/) {
         if (!lpClassName) return false;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         return classRegistry_.erase(lpClassName) > 0;
     }
 
     bool getClassInfo(const wchar_t* lpClassName, WNDCLASSEXW* lpwcx) {
         if (!lpClassName || !lpwcx) return false;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = classRegistry_.find(lpClassName);
         if (it != classRegistry_.end()) {
             *lpwcx = it->second;
@@ -376,7 +376,7 @@ public:
         HINSTANCE hInstance,
         void* lpParam
     ) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
 
         std::wstring clsName = lpClassName ? lpClassName : L"";
         std::wstring winName = lpWindowName ? lpWindowName : L"";
@@ -431,7 +431,7 @@ public:
     bool destroyWindow(win32::HWND hWnd) {
         std::shared_ptr<WindowObject> win;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
             auto it = windows_.find(hWnd);
             if (it == windows_.end()) return false;
             win = it->second;
@@ -447,14 +447,14 @@ public:
     }
 
     std::shared_ptr<WindowObject> getWindow(win32::HWND hWnd) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it != windows_.end()) return it->second;
         return nullptr;
     }
 
     bool isWindow(win32::HWND hWnd) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         return windows_.find(hWnd) != windows_.end();
     }
 
@@ -462,14 +462,14 @@ public:
     // Message Pump & Event Routing
     // ------------------------------------------------------------------------
     bool postMessage(win32::HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         return postMessageInternal(hWnd, uMsg, wParam, lParam);
     }
 
     LRESULT sendMessage(win32::HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         std::shared_ptr<WindowObject> win;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
             auto it = windows_.find(hWnd);
             if (it != windows_.end()) win = it->second;
         }
@@ -482,7 +482,7 @@ public:
 
     bool peekMessage(MSG* lpMsg, win32::HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg) {
         if (!lpMsg) return false;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
 
         for (auto it = messageQueue_.begin(); it != messageQueue_.end(); ++it) {
             if (hWnd && it->hwnd != hWnd) continue;
@@ -547,7 +547,7 @@ public:
     }
 
     void postQuitMessage(int nExitCode) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         MSG msg{};
         msg.hwnd = nullptr;
         msg.message = WM_QUIT;
@@ -560,7 +560,7 @@ public:
         if (lpMsg->hwnd) {
             std::shared_ptr<WindowObject> win;
             {
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::lock_guard<std::recursive_mutex> lock(mutex_);
                 auto it = windows_.find(lpMsg->hwnd);
                 if (it != windows_.end()) win = it->second;
             }
@@ -591,7 +591,7 @@ public:
     // ------------------------------------------------------------------------
     bool getClientRect(win32::HWND hWnd, RECT* lpRect) {
         if (!lpRect) return false;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it != windows_.end()) {
             lpRect->left = 0;
@@ -605,7 +605,7 @@ public:
 
     bool getWindowRect(win32::HWND hWnd, RECT* lpRect) {
         if (!lpRect) return false;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it != windows_.end()) {
             lpRect->left = it->second->x;
@@ -618,7 +618,7 @@ public:
     }
 
     bool setWindowPos(win32::HWND hWnd, win32::HWND /*hWndInsertAfter*/, int X, int Y, int cx, int cy, UINT uFlags) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it == windows_.end()) return false;
 
@@ -641,7 +641,7 @@ public:
     }
 
     bool invalidateRect(win32::HWND hWnd, const RECT* lpRect, win32::BOOL /*bErase*/) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it != windows_.end()) {
             it->second->dirty = true;
@@ -653,7 +653,7 @@ public:
     }
 
     bool validateRect(win32::HWND hWnd, const RECT* /*lpRect*/) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it != windows_.end()) {
             it->second->dirty = false;
@@ -664,7 +664,7 @@ public:
 
     HDC beginPaint(win32::HWND hWnd, PAINTSTRUCT* lpPaint) {
         if (!lpPaint) return nullptr;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it != windows_.end()) {
             lpPaint->hdc = reinterpret_cast<HDC>(reinterpret_cast<uintptr_t>(hWnd) | 0x1);
@@ -677,7 +677,7 @@ public:
     }
 
     bool endPaint(win32::HWND hWnd, const PAINTSTRUCT* /*lpPaint*/) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it != windows_.end()) {
             it->second->dirty = false;
@@ -691,7 +691,7 @@ public:
     // ------------------------------------------------------------------------
     void blitToWindow(win32::HWND hWnd, const uint8_t* pData, uint32_t width, uint32_t height, uint32_t pitch) {
         if (!hWnd || !pData) return;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it == windows_.end()) return;
 
@@ -709,7 +709,7 @@ public:
     }
 
     const uint32_t* getWindowPixelBuffer(win32::HWND hWnd, uint32_t* pWidth, uint32_t* pHeight) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it != windows_.end()) {
             if (pWidth) *pWidth = static_cast<uint32_t>(it->second->width);
@@ -724,14 +724,14 @@ public:
     // ------------------------------------------------------------------------
     bool registerRawInputDevices(const RAWINPUTDEVICE* pRawInputDevices, UINT uiNumDevices, UINT cbSize) {
         if (!pRawInputDevices || cbSize < sizeof(RAWINPUTDEVICE)) return false;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         registeredRawDevices_.assign(pRawInputDevices, pRawInputDevices + uiNumDevices);
         return true;
     }
 
     UINT getRawInputData(HRAWINPUT hRawInput, UINT uiCommand, void* pData, UINT* pcbSize, UINT cbSizeHeader) {
         if (!pcbSize || cbSizeHeader < sizeof(RAWINPUTHEADER)) return static_cast<UINT>(-1);
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
 
         auto it = rawInputBuffer_.find(hRawInput);
         if (it == rawInputBuffer_.end()) return static_cast<UINT>(-1);
@@ -762,7 +762,7 @@ public:
     }
 
     HRAWINPUT injectRawMouse(win32::HWND hWnd, int32_t dx, int32_t dy, uint16_t buttonFlags) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         HRAWINPUT handle = reinterpret_cast<HRAWINPUT>(nextRawHandle_++);
 
         RAWINPUT ri{};
@@ -779,7 +779,7 @@ public:
     }
 
     HRAWINPUT injectRawKeyboard(win32::HWND hWnd, uint16_t vkey, uint16_t makeCode, uint16_t flags, uint32_t message) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         HRAWINPUT handle = reinterpret_cast<HRAWINPUT>(nextRawHandle_++);
 
         RAWINPUT ri{};
@@ -814,7 +814,7 @@ public:
     }
 
     uintptr_t setWindowLongPtr(win32::HWND hWnd, int nIndex, uintptr_t dwNewLong) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it == windows_.end()) return 0;
 
@@ -844,7 +844,7 @@ public:
     }
 
     uintptr_t getWindowLongPtr(win32::HWND hWnd, int nIndex) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = windows_.find(hWnd);
         if (it == windows_.end()) return 0;
 
@@ -873,7 +873,7 @@ private:
         return true;
     }
 
-    std::mutex mutex_;
+    std::recursive_mutex mutex_;
     uintptr_t nextHwnd_{0x00010001};
     uintptr_t nextRawHandle_{0x00000001};
     win32::HWND activeHwnd_{nullptr};

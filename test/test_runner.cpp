@@ -8,6 +8,7 @@
 #include <memory>
 #include <thread>
 #include <fstream>
+#include <sstream>
 #include "micant/ntstatus.hpp"
 #include "micant/ntdef.hpp"
 #include "micant/ob.hpp"
@@ -74,6 +75,7 @@
 #include "micant/cipherksp.hpp"
 #include "micant/janusldr.hpp"
 #include "micant/dinput.hpp"
+#include "micant/prism_viewer.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -7095,6 +7097,155 @@ void Test_User32_WindowManager_SwapchainPresentation_And_DirectInput() {
     TEST_ASSERT(std::find(receivedMessages.begin(), receivedMessages.end(), WM_DESTROY) != receivedMessages.end(), "WM_DESTROY must be received upon destruction");
 }
 
+void Test_PrismX_Interactive3DViewer_And_CameraPipeline() {
+    using namespace micant::viewer;
+    using namespace micant::user32;
+
+    // 1. Orbit Camera Mathematics & Transformations
+    {
+        ViewerCamera camera{};
+        TEST_ASSERT(std::abs(camera.radius - 4.0f) < 0.001f, "Camera initial radius must be 4.0");
+        TEST_ASSERT(std::abs(camera.yaw - 0.785f) < 0.001f, "Camera initial yaw must be ~45 deg");
+        TEST_ASSERT(std::abs(camera.pitch - 0.45f) < 0.001f, "Camera initial pitch must be ~26 deg");
+
+        // Rotate camera
+        camera.rotate(0.2f, 0.1f);
+        TEST_ASSERT(std::abs(camera.yaw - 0.985f) < 0.001f, "Camera yaw rotation must update");
+        TEST_ASSERT(std::abs(camera.pitch - 0.55f) < 0.001f, "Camera pitch rotation must update");
+
+        // Test Pitch clamping (avoid gimbal lock)
+        camera.rotate(0.0f, 5.0f);
+        TEST_ASSERT(camera.pitch <= 1.45f, "Camera pitch must be clamped to <= 1.45 rad (~83 deg)");
+        camera.rotate(0.0f, -10.0f);
+        TEST_ASSERT(camera.pitch >= -1.45f, "Camera pitch must be clamped to >= -1.45 rad");
+
+        // Reset camera pitch
+        camera.pitch = 0.45f;
+
+        // Test Zoom clamping
+        camera.zoom(-10.0f);
+        TEST_ASSERT(std::abs(camera.radius - camera.minRadius) < 0.001f, "Camera zoom must clamp to minRadius (1.0)");
+        camera.zoom(100.0f);
+        TEST_ASSERT(std::abs(camera.radius - camera.maxRadius) < 0.001f, "Camera zoom must clamp to maxRadius (25.0)");
+        camera.radius = 4.0f;
+
+        // Test Pan
+        camera.pan(1.0f, -0.5f);
+        TEST_ASSERT(std::abs(camera.target.x - 1.0f) < 0.001f && std::abs(camera.target.y - (-0.5f)) < 0.001f, "Camera pan must shift target point");
+        camera.target = { 0.0f, 0.0f, 0.0f };
+
+        // Eye position vector
+        prism3d::Vector3 eye = camera.getEyePosition();
+        float distFromTarget = std::sqrt(eye.x * eye.x + eye.y * eye.y + eye.z * eye.z);
+        TEST_ASSERT(std::abs(distFromTarget - 4.0f) < 0.01f, "Eye distance from origin must match orbit radius");
+
+        // View and Projection matrices
+        auto viewMat = camera.getViewMatrix();
+        TEST_ASSERT(viewMat.m[3][3] == 1.0f || viewMat.m[0][0] != 0.0f, "View matrix must be valid camera transform");
+        auto projMat = camera.getProjectionMatrix(0.785f, 4.0f / 3.0f, 0.1f, 100.0f);
+        TEST_ASSERT(projMat.m[3][2] != 0.0f || projMat.m[2][3] != 0.0f, "Projection matrix must be valid perspective transform");
+    }
+
+    // 2. Procedural Mesh Generation
+    {
+        // 2a. DEC PRISM Crystal Core
+        auto crystal = MeshGenerator::createCrystal();
+        TEST_ASSERT(crystal.vertices.size() == 18, "Crystal mesh must have 18 vertices (2 apexes + 8 upper + 8 lower)");
+        TEST_ASSERT(crystal.indices.size() == 96, "Crystal mesh must have 96 indices (32 triangles: 8 top + 16 mid + 8 btm)");
+        TEST_ASSERT(crystal.vertices[0].y > 1.5f, "Top apex vertex must have elevated Y coordinate");
+        TEST_ASSERT(crystal.vertices[1].y < -1.5f, "Bottom apex vertex must have negative Y coordinate");
+
+        // 2b. Parametric 3D Torus
+        auto torus = MeshGenerator::createTorus(1.0f, 0.35f, 16, 12);
+        TEST_ASSERT(torus.vertices.size() == 192, "Torus (16x12) must have 192 vertices");
+        TEST_ASSERT(torus.indices.size() == 1152, "Torus (16x12) must have 1152 indices (384 triangles)");
+        TEST_ASSERT(torus.vertices[0].g > 0.1f, "Torus vertices must have shaded lighting intensity");
+
+        // 2c. Shaded Cube
+        auto cube = MeshGenerator::createCube(1.0f);
+        TEST_ASSERT(cube.vertices.size() == 8, "Cube mesh must have 8 vertices");
+        TEST_ASSERT(cube.indices.size() == 36, "Cube mesh must have 36 indices (12 triangles)");
+    }
+
+    // 3. Interactive Viewer Session & Direct3D 11 Presentation
+    {
+        ViewerSession session(640, 480);
+        bool ok = session.initialize(L"MicaNT Test Viewer Window");
+        TEST_ASSERT(ok, "ViewerSession::initialize must succeed");
+        TEST_ASSERT(session.getHwnd() != nullptr, "ViewerSession must create valid native HWND");
+
+        // Test Input Events Injection
+        float origYaw = session.getCamera().yaw;
+        session.onMouseMove(40, -20, true);
+        TEST_ASSERT(session.getCamera().yaw != origYaw, "onMouseMove with leftDrag must rotate camera");
+
+        float origRadius = session.getCamera().radius;
+        session.onMouseWheel(120);
+        TEST_ASSERT(session.getCamera().radius < origRadius, "onMouseWheel with positive delta must zoom in");
+
+        // Keyboard commands
+        session.onKeyDown(0x57); // 'W' toggles wireframe
+        session.onKeyDown(0x4D); // 'M' cycles model
+        session.onKeyDown(0x20); // Space toggles auto-rotate
+
+        // Gamepad injection
+        session.onGamepad(0.6f, -0.4f, 0.5f);
+
+        // Render multi-frame animated sequence
+        ViewerStats stats = session.run(10);
+        TEST_ASSERT(stats.frameCount >= 10, "ViewerSession::run must render requested number of frames");
+        TEST_ASSERT(stats.triangleCount > 0, "ViewerSession must report non-zero triangle count");
+        TEST_ASSERT(stats.vertexCount > 0, "ViewerSession must report non-zero vertex count");
+
+        // Verify window surface buffer is updated with rendered 3D graphics
+        uint32_t surfW = 0, surfH = 0;
+        const uint32_t* winPixels = WindowManager::get().getWindowPixelBuffer(session.getHwnd(), &surfW, &surfH);
+        TEST_ASSERT(winPixels != nullptr && surfW == 640 && surfH == 480, "Window surface buffer must exist at 640x480");
+
+        // Count pixels distinct from top-left background to confirm actual geometry rasterization
+        uint32_t bgPixel = winPixels[0];
+        uint32_t geomPixels = 0;
+        for (size_t i = 0; i < 640 * 480; ++i) {
+            if (winPixels[i] != bgPixel) {
+                geomPixels++;
+            }
+        }
+        TEST_ASSERT(geomPixels > 100, "Window surface must contain rasterized 3D geometry pixels distinct from background");
+
+        // Switch to Torus and Wireframe mode
+        session.setModel(ViewerModelType::Torus);
+        session.setWireframe(true);
+        ViewerStats torusStats = session.run(5);
+        TEST_ASSERT(torusStats.triangleCount == 384, "Torus active model must render 384 triangles");
+        TEST_ASSERT(torusStats.wireframe == true, "Session must report wireframe state active");
+
+        // Switch to Cube
+        session.setModel(ViewerModelType::Cube);
+        session.setWireframe(false);
+        ViewerStats cubeStats = session.run(5);
+        TEST_ASSERT(cubeStats.triangleCount == 12, "Cube active model must render 12 triangles");
+        TEST_ASSERT(cubeStats.wireframe == false, "Session must report solid fill state active");
+    }
+
+    // 4. Shell Integration Command (view3d)
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        shell.execute("view3d --crystal --frames 3", out);
+        std::string res = out.str();
+        TEST_ASSERT(res.find("[PrismX 3D Viewer]") != std::string::npos, "Shell view3d command must execute");
+        TEST_ASSERT(res.find("DEC PRISM Crystal Core") != std::string::npos, "Shell output must list active Crystal model");
+        TEST_ASSERT(res.find("Session Completed") != std::string::npos, "Shell output must confirm session completion");
+
+        std::ostringstream out2;
+        shell.execute("view3d --torus -w --frames 3", out2);
+        std::string res2 = out2.str();
+        TEST_ASSERT(res2.find("Parametric 3D Torus") != std::string::npos, "Shell output must list Torus model");
+        TEST_ASSERT(res2.find("Wireframe") != std::string::npos, "Shell output must list Wireframe rasterizer");
+    }
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -7156,6 +7307,7 @@ int main() {
     RUN_TEST(Test_CipherKSP_CryptographicServices_And_AES);
     RUN_TEST(Test_JanusLDR_DelayLoadThunks_And_SxSManifest);
     RUN_TEST(Test_User32_WindowManager_SwapchainPresentation_And_DirectInput);
+    RUN_TEST(Test_PrismX_Interactive3DViewer_And_CameraPipeline);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
