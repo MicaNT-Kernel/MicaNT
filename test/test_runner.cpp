@@ -12426,6 +12426,505 @@ void Test_SetupApi_DeviceInstallation_And_INF_Subsystem() {
     std::cout << "[TEST] Suite 70: Windows Device Installation & SetupAPI Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 71: Windows OLE Structured Storage & Compound File Subsystem (ole32.dll)
+// ============================================================================
+
+class MockPersistDocObject : public ole32::IPersistStorage, public ole32::IPersistStreamInit {
+private:
+    std::atomic<uint32_t> m_refCount{ 1 };
+    bool m_isDirty{ false };
+    std::string m_textPayload{ "Initial Document Payload" };
+    ole32::CLSID m_clsid{ 0x12345678, 0x1234, 0x5678, { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 } };
+
+public:
+    MockPersistDocObject() = default;
+
+    virtual ole32::HRESULT QueryInterface(ole32::REFIID riid, void** ppv) override {
+        if (!ppv) return ole32::E_POINTER;
+        if (riid == ole32::IID_IUnknown || riid == ole32::IID_IPersist) {
+            *ppv = static_cast<ole32::IPersist*>(static_cast<ole32::IPersistStorage*>(this));
+            AddRef();
+            return ole32::S_OK;
+        }
+        if (riid == ole32::IID_IPersistStorage) {
+            *ppv = static_cast<ole32::IPersistStorage*>(this);
+            AddRef();
+            return ole32::S_OK;
+        }
+        if (riid == ole32::IID_IPersistStream || riid == ole32::IID_IPersistStreamInit) {
+            *ppv = static_cast<ole32::IPersistStreamInit*>(this);
+            AddRef();
+            return ole32::S_OK;
+        }
+        *ppv = nullptr;
+        return ole32::E_NOINTERFACE;
+    }
+
+    virtual uint32_t AddRef() override { return m_refCount.fetch_add(1) + 1; }
+    virtual uint32_t Release() override {
+        uint32_t c = m_refCount.fetch_sub(1) - 1;
+        if (c == 0) delete this;
+        return c;
+    }
+
+    // IPersist
+    virtual ole32::HRESULT GetClassID(ole32::CLSID* pClassID) override {
+        if (!pClassID) return ole32::E_POINTER;
+        *pClassID = m_clsid;
+        return ole32::S_OK;
+    }
+
+    // IPersistStorage
+    virtual ole32::HRESULT IsDirty() override { return m_isDirty ? ole32::S_OK : ole32::S_FALSE; }
+    virtual ole32::HRESULT InitNew(ole32::IStorage*) override {
+        m_textPayload = "New Storage Initialized";
+        m_isDirty = true;
+        return ole32::S_OK;
+    }
+    virtual ole32::HRESULT Load(ole32::IStorage* pStg) override {
+        if (!pStg) return ole32::E_POINTER;
+        ole32::IStream* pStm = nullptr;
+        ole32::HRESULT hr = pStg->OpenStream(L"ContentStream", nullptr, ole32::STGM_READ | ole32::STGM_SHARE_EXCLUSIVE, 0, &pStm);
+        if (FAILED(hr)) return hr;
+        char buf[256]{};
+        uint32_t read = 0;
+        pStm->Read(buf, sizeof(buf) - 1, &read);
+        pStm->Release();
+        m_textPayload = std::string(buf, read);
+        m_isDirty = false;
+        return ole32::S_OK;
+    }
+    virtual ole32::HRESULT Save(ole32::IStorage* pStgSave, win32::BOOL) override {
+        if (!pStgSave) return ole32::E_POINTER;
+        ole32::IStream* pStm = nullptr;
+        ole32::HRESULT hr = pStgSave->CreateStream(L"ContentStream", ole32::STGM_WRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pStm);
+        if (FAILED(hr)) return hr;
+        uint32_t written = 0;
+        pStm->Write(m_textPayload.data(), static_cast<uint32_t>(m_textPayload.size()), &written);
+        pStm->Release();
+        m_isDirty = false;
+        return ole32::S_OK;
+    }
+    virtual ole32::HRESULT SaveCompleted(ole32::IStorage*) override { return ole32::S_OK; }
+    virtual ole32::HRESULT HandsOffStorage() override { return ole32::S_OK; }
+
+    // IPersistStreamInit
+    virtual ole32::HRESULT InitNew() override {
+        m_textPayload = "New Stream Initialized";
+        m_isDirty = true;
+        return ole32::S_OK;
+    }
+    virtual ole32::HRESULT Save(ole32::IStream* pStm, win32::BOOL fClearDirty) override {
+        if (!pStm) return ole32::E_POINTER;
+        uint32_t written = 0;
+        pStm->Write(m_textPayload.data(), static_cast<uint32_t>(m_textPayload.size()), &written);
+        if (fClearDirty) m_isDirty = false;
+        return ole32::S_OK;
+    }
+    virtual ole32::HRESULT Load(ole32::IStream* pStm) override {
+        if (!pStm) return ole32::E_POINTER;
+        char buf[256]{};
+        uint32_t read = 0;
+        pStm->Read(buf, sizeof(buf) - 1, &read);
+        m_textPayload = std::string(buf, read);
+        m_isDirty = false;
+        return ole32::S_OK;
+    }
+    virtual ole32::HRESULT GetSizeMax(uint64_t* pcbSize) override {
+        if (!pcbSize) return ole32::E_POINTER;
+        *pcbSize = m_textPayload.size();
+        return ole32::S_OK;
+    }
+
+    void setPayload(std::string_view p) { m_textPayload = p; m_isDirty = true; }
+    const std::string& getPayload() const { return m_textPayload; }
+};
+
+void Test_StructuredStorage_CompoundFile_And_Persistence_Subsystem() {
+    using namespace micant;
+    std::cout << "\n[TEST] Running Suite 71: Windows OLE Structured Storage & Compound File Subsystem (ole32.dll)...\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 1: In-Memory ILockBytes Creation and Byte I/O
+    // ------------------------------------------------------------------------
+    ole32::ILockBytes* plk = nullptr;
+    ole32::HRESULT hr = ole32::CreateILockBytesOnHGlobal(nullptr, win32::TRUE, &plk);
+    TEST_ASSERT(SUCCEEDED(hr) && plk != nullptr, "CreateILockBytesOnHGlobal must allocate ILockBytes");
+
+    const char rawData[] = "MicaNT ILockBytes Raw Stream Test Block 12345678";
+    uint32_t bytesWritten = 0;
+    hr = plk->WriteAt(100, rawData, sizeof(rawData), &bytesWritten);
+    TEST_ASSERT(SUCCEEDED(hr) && bytesWritten == sizeof(rawData), "ILockBytes::WriteAt must write raw bytes at offset 100");
+
+    char readBuf[128]{};
+    uint32_t bytesRead = 0;
+    hr = plk->ReadAt(100, readBuf, sizeof(rawData), &bytesRead);
+    TEST_ASSERT(SUCCEEDED(hr) && bytesRead == sizeof(rawData), "ILockBytes::ReadAt must read back raw bytes");
+    TEST_ASSERT(std::memcmp(rawData, readBuf, sizeof(rawData)) == 0, "ILockBytes byte content must match exactly");
+
+    ole32::STATSTG lkStat{};
+    hr = plk->Stat(&lkStat, ole32::STATFLAG_NONAME);
+    TEST_ASSERT(SUCCEEDED(hr), "ILockBytes::Stat must succeed");
+    TEST_ASSERT(lkStat.type == ole32::STGTY_LOCKBYTES, "ILockBytes type must be STGTY_LOCKBYTES");
+    TEST_ASSERT(lkStat.cbSize >= 100 + sizeof(rawData), "ILockBytes size must reflect written extent");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: StgCreateDocfileOnILockBytes & Root Storage Properties
+    // ------------------------------------------------------------------------
+    plk->SetSize(0);
+    ole32::IStorage* pRoot = nullptr;
+    hr = ole32::StgCreateDocfileOnILockBytes(plk, ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, &pRoot);
+    TEST_ASSERT(SUCCEEDED(hr) && pRoot != nullptr, "StgCreateDocfileOnILockBytes must create root IStorage");
+
+    ole32::STATSTG rootStat{};
+    hr = pRoot->Stat(&rootStat, ole32::STATFLAG_DEFAULT);
+    TEST_ASSERT(SUCCEEDED(hr), "Root IStorage::Stat must succeed");
+    TEST_ASSERT(rootStat.type == ole32::STGTY_ROOT, "Root storage type must be STGTY_ROOT");
+    if (rootStat.pwcsName) ole32::CoTaskMemFree(rootStat.pwcsName);
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Hierarchical Nested Storages (CreateStorage & OpenStorage)
+    // ------------------------------------------------------------------------
+    ole32::IStorage* pSub1 = nullptr;
+    hr = pRoot->CreateStorage(L"FolderA", ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pSub1);
+    TEST_ASSERT(SUCCEEDED(hr) && pSub1 != nullptr, "CreateStorage must create nested sub-storage FolderA");
+
+    ole32::IStorage* pSub2 = nullptr;
+    hr = pSub1->CreateStorage(L"SubFolderB", ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pSub2);
+    TEST_ASSERT(SUCCEEDED(hr) && pSub2 != nullptr, "CreateStorage must create nested sub-storage SubFolderB");
+
+    ole32::IStorage* pOpenSub1 = nullptr;
+    hr = pRoot->OpenStorage(L"FolderA", nullptr, ole32::STGM_READWRITE | ole32::STGM_SHARE_EXCLUSIVE, nullptr, 0, &pOpenSub1);
+    TEST_ASSERT(SUCCEEDED(hr) && pOpenSub1 != nullptr, "OpenStorage must open existing sub-storage FolderA");
+    pOpenSub1->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Stream Creation, Sequential Write, Seek, and Read (IStream)
+    // ------------------------------------------------------------------------
+    ole32::IStream* pStm = nullptr;
+    hr = pSub2->CreateStream(L"PayloadData", ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pStm);
+    TEST_ASSERT(SUCCEEDED(hr) && pStm != nullptr, "CreateStream must create stream PayloadData");
+
+    const std::string textData = "Dave Cutler 1988 DEC PRISM / MICA Architecture OLE Structured Storage!";
+    uint32_t stmWritten = 0;
+    hr = pStm->Write(textData.data(), static_cast<uint32_t>(textData.size()), &stmWritten);
+    TEST_ASSERT(SUCCEEDED(hr) && stmWritten == textData.size(), "IStream::Write must write full text length");
+
+    uint64_t newPos = 0;
+    hr = pStm->Seek(0, ole32::STREAM_SEEK_SET, &newPos);
+    TEST_ASSERT(SUCCEEDED(hr) && newPos == 0, "IStream::Seek must seek to beginning");
+
+    std::vector<char> stmReadBuf(textData.size() + 1, 0);
+    uint32_t stmRead = 0;
+    hr = pStm->Read(stmReadBuf.data(), static_cast<uint32_t>(textData.size()), &stmRead);
+    TEST_ASSERT(SUCCEEDED(hr) && stmRead == textData.size(), "IStream::Read must read back stream data");
+    TEST_ASSERT(std::string_view(stmReadBuf.data(), stmRead) == textData, "IStream read content must match written payload");
+
+    // Test stream stat
+    ole32::STATSTG stmStat{};
+    hr = pStm->Stat(&stmStat, ole32::STATFLAG_DEFAULT);
+    TEST_ASSERT(SUCCEEDED(hr) && stmStat.type == ole32::STGTY_STREAM, "Stream type must be STGTY_STREAM");
+    TEST_ASSERT(stmStat.cbSize == textData.size(), "Stream cbSize must match payload length");
+    if (stmStat.pwcsName) ole32::CoTaskMemFree(stmStat.pwcsName);
+
+    pStm->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Element Deletion and Renaming (DestroyElement & RenameElement)
+    // ------------------------------------------------------------------------
+    ole32::IStream* pTempStm = nullptr;
+    hr = pRoot->CreateStream(L"TempFile", ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pTempStm);
+    TEST_ASSERT(SUCCEEDED(hr), "CreateStream must create TempFile");
+    pTempStm->Release();
+
+    hr = pRoot->RenameElement(L"TempFile", L"RenamedFile");
+    TEST_ASSERT(SUCCEEDED(hr), "RenameElement must rename TempFile to RenamedFile");
+
+    hr = pRoot->OpenStream(L"TempFile", nullptr, ole32::STGM_READ, 0, &pTempStm);
+    TEST_ASSERT(FAILED(hr), "OpenStream on old name must fail");
+
+    hr = pRoot->OpenStream(L"RenamedFile", nullptr, ole32::STGM_READ, 0, &pTempStm);
+    TEST_ASSERT(SUCCEEDED(hr) && pTempStm != nullptr, "OpenStream on new name must succeed");
+    pTempStm->Release();
+
+    hr = pRoot->DestroyElement(L"RenamedFile");
+    TEST_ASSERT(SUCCEEDED(hr), "DestroyElement must delete RenamedFile");
+
+    hr = pRoot->OpenStream(L"RenamedFile", nullptr, ole32::STGM_READ, 0, &pTempStm);
+    TEST_ASSERT(FAILED(hr), "OpenStream on destroyed element must fail");
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Directory Enumeration with IEnumSTATSTG
+    // ------------------------------------------------------------------------
+    ole32::IEnumSTATSTG* pEnum = nullptr;
+    hr = pRoot->EnumElements(0, nullptr, 0, &pEnum);
+    TEST_ASSERT(SUCCEEDED(hr) && pEnum != nullptr, "EnumElements must return IEnumSTATSTG");
+
+    ole32::STATSTG enumStats[4]{};
+    uint32_t fetched = 0;
+    hr = pEnum->Next(1, enumStats, &fetched);
+    TEST_ASSERT(SUCCEEDED(hr) && fetched == 1, "IEnumSTATSTG::Next must fetch 1 item");
+    TEST_ASSERT(enumStats[0].pwcsName != nullptr, "Enumerated item must have name");
+    TEST_ASSERT(std::wcscmp(enumStats[0].pwcsName, L"FolderA") == 0, "Enumerated item name must be FolderA");
+    ole32::CoTaskMemFree(enumStats[0].pwcsName);
+
+    hr = pEnum->Reset();
+    TEST_ASSERT(SUCCEEDED(hr), "IEnumSTATSTG::Reset must succeed");
+
+    pEnum->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Storage Metadata, Class GUIDs, State Bits, Timestamps
+    // ------------------------------------------------------------------------
+    const ole32::CLSID testClsid = { 0xABCDEF01, 0x1234, 0x5678, { 0x9A, 0xBC, 0xDE, 0xF0, 0x12, 0x34, 0x56, 0x78 } };
+    hr = pSub2->SetClass(testClsid);
+    TEST_ASSERT(SUCCEEDED(hr), "SetClass must succeed");
+
+    ole32::CLSID readClsid{};
+    hr = ole32::ReadClassStg(pSub2, &readClsid);
+    TEST_ASSERT(SUCCEEDED(hr), "ReadClassStg must succeed");
+    TEST_ASSERT(std::memcmp(&testClsid, &readClsid, sizeof(ole32::CLSID)) == 0, "ReadClassStg must match set CLSID");
+
+    hr = pSub2->SetStateBits(0x00000005, 0x0000000F);
+    TEST_ASSERT(SUCCEEDED(hr), "SetStateBits must succeed");
+
+    ole32::STATSTG sub2Stat{};
+    hr = pSub2->Stat(&sub2Stat, ole32::STATFLAG_DEFAULT);
+    TEST_ASSERT(SUCCEEDED(hr), "Sub2 Stat must succeed");
+    TEST_ASSERT((sub2Stat.grfStateBits & 0x0000000F) == 0x00000005, "State bits must match updated mask");
+    if (sub2Stat.pwcsName) ole32::CoTaskMemFree(sub2Stat.pwcsName);
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Recursive Storage Cloning (CopyTo)
+    // ------------------------------------------------------------------------
+    ole32::IStorage* pTargetStg = nullptr;
+    hr = pRoot->CreateStorage(L"TargetBackup", ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pTargetStg);
+    TEST_ASSERT(SUCCEEDED(hr), "CreateStorage TargetBackup must succeed");
+
+    hr = pSub1->CopyTo(0, nullptr, nullptr, pTargetStg);
+    TEST_ASSERT(SUCCEEDED(hr), "CopyTo must clone FolderA tree into TargetBackup");
+
+    // Verify cloned SubFolderB and PayloadData stream exist in TargetBackup
+    ole32::IStorage* pClonedSub = nullptr;
+    hr = pTargetStg->OpenStorage(L"SubFolderB", nullptr, ole32::STGM_READWRITE | ole32::STGM_SHARE_EXCLUSIVE, nullptr, 0, &pClonedSub);
+    TEST_ASSERT(SUCCEEDED(hr) && pClonedSub != nullptr, "TargetBackup must contain cloned SubFolderB");
+
+    ole32::IStream* pClonedStm = nullptr;
+    hr = pClonedSub->OpenStream(L"PayloadData", nullptr, ole32::STGM_READ | ole32::STGM_SHARE_EXCLUSIVE, 0, &pClonedStm);
+    TEST_ASSERT(SUCCEEDED(hr) && pClonedStm != nullptr, "TargetBackup must contain cloned PayloadData stream");
+
+    std::vector<char> cloneBuf(textData.size() + 1, 0);
+    uint32_t cloneRead = 0;
+    pClonedStm->Read(cloneBuf.data(), static_cast<uint32_t>(textData.size()), &cloneRead);
+    TEST_ASSERT(std::string_view(cloneBuf.data(), cloneRead) == textData, "Cloned stream data must match original payload");
+
+    pClonedStm->Release();
+    pClonedSub->Release();
+    pTargetStg->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Element Moving (MoveElementTo)
+    // ------------------------------------------------------------------------
+    ole32::IStorage* pDestFolder = nullptr;
+    hr = pRoot->CreateStorage(L"DestFolder", ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pDestFolder);
+    TEST_ASSERT(SUCCEEDED(hr), "CreateStorage DestFolder must succeed");
+
+    ole32::IStream* pMoveStm = nullptr;
+    hr = pRoot->CreateStream(L"StreamToMove", ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pMoveStm);
+    TEST_ASSERT(SUCCEEDED(hr), "CreateStream StreamToMove must succeed");
+    const char moveMsg[] = "Data being moved";
+    uint32_t moveWritten = 0;
+    pMoveStm->Write(moveMsg, sizeof(moveMsg), &moveWritten);
+    pMoveStm->Release();
+
+    hr = pRoot->MoveElementTo(L"StreamToMove", pDestFolder, L"MovedStream", 0);
+    TEST_ASSERT(SUCCEEDED(hr), "MoveElementTo must move element to destination storage");
+
+    hr = pRoot->OpenStream(L"StreamToMove", nullptr, ole32::STGM_READ, 0, &pMoveStm);
+    TEST_ASSERT(FAILED(hr), "Source element must no longer exist in source storage");
+
+    hr = pDestFolder->OpenStream(L"MovedStream", nullptr, ole32::STGM_READ, 0, &pMoveStm);
+    TEST_ASSERT(SUCCEEDED(hr) && pMoveStm != nullptr, "Moved element must exist in destination storage");
+    pMoveStm->Release();
+    pDestFolder->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Binary CFBF Serialization & Magic Header Verification
+    // ------------------------------------------------------------------------
+    pSub2->Release();
+    pSub1->Release();
+
+    hr = pRoot->Commit(ole32::STGC_DEFAULT);
+    TEST_ASSERT(SUCCEEDED(hr), "Commit must serialize root compound file to ILockBytes");
+
+    hr = ole32::StgIsStorageILockBytes(plk);
+    TEST_ASSERT(hr == ole32::S_OK, "StgIsStorageILockBytes must confirm valid CFBF binary signature");
+
+    // Verify first 8 bytes of ILockBytes are exactly 0xD0CF11E0A1B11AE1
+    uint8_t magicSig[8]{};
+    uint32_t magicRead = 0;
+    plk->ReadAt(0, magicSig, 8, &magicRead);
+    const uint8_t expectedCFBF[8] = { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 };
+    TEST_ASSERT(magicRead == 8 && std::memcmp(magicSig, expectedCFBF, 8) == 0, "First 8 bytes must be standard CFBF OLE DocFile magic");
+
+    pRoot->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Deserialization of CFBF Binary Image from LockBytes
+    // ------------------------------------------------------------------------
+    ole32::IStorage* pReopenedRoot = nullptr;
+    hr = ole32::StgOpenStorageOnILockBytes(plk, nullptr, ole32::STGM_READWRITE | ole32::STGM_SHARE_EXCLUSIVE, nullptr, 0, &pReopenedRoot);
+    TEST_ASSERT(SUCCEEDED(hr) && pReopenedRoot != nullptr, "StgOpenStorageOnILockBytes must deserialize compound docfile");
+
+    // Verify FolderA exists in deserialized docfile
+    ole32::IStorage* pReopenedSub1 = nullptr;
+    hr = pReopenedRoot->OpenStorage(L"FolderA", nullptr, ole32::STGM_READWRITE | ole32::STGM_SHARE_EXCLUSIVE, nullptr, 0, &pReopenedSub1);
+    TEST_ASSERT(SUCCEEDED(hr) && pReopenedSub1 != nullptr, "Reopened docfile must contain FolderA");
+
+    // Verify SubFolderB exists
+    ole32::IStorage* pReopenedSub2 = nullptr;
+    hr = pReopenedSub1->OpenStorage(L"SubFolderB", nullptr, ole32::STGM_READWRITE | ole32::STGM_SHARE_EXCLUSIVE, nullptr, 0, &pReopenedSub2);
+    TEST_ASSERT(SUCCEEDED(hr) && pReopenedSub2 != nullptr, "Reopened docfile must contain SubFolderB");
+
+    // Verify PayloadData stream and content
+    ole32::IStream* pReopenedStm = nullptr;
+    hr = pReopenedSub2->OpenStream(L"PayloadData", nullptr, ole32::STGM_READ | ole32::STGM_SHARE_EXCLUSIVE, 0, &pReopenedStm);
+    TEST_ASSERT(SUCCEEDED(hr) && pReopenedStm != nullptr, "Reopened docfile must contain PayloadData stream");
+
+    std::vector<char> reopenedBuf(textData.size() + 1, 0);
+    uint32_t reopenedRead = 0;
+    pReopenedStm->Read(reopenedBuf.data(), static_cast<uint32_t>(textData.size()), &reopenedRead);
+    TEST_ASSERT(std::string_view(reopenedBuf.data(), reopenedRead) == textData, "Deserialized stream content must match original payload");
+
+    pReopenedStm->Release();
+    pReopenedSub2->Release();
+    pReopenedSub1->Release();
+    pReopenedRoot->Release();
+    plk->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Physical Compound File on Disk (StgCreateDocfile & StgOpenStorage)
+    // ------------------------------------------------------------------------
+    const wchar_t* diskDocPath = L"C:\\test_compound_file.doc";
+    ole32::IStorage* pDiskStg = nullptr;
+    hr = ole32::StgCreateDocfile(diskDocPath, ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, &pDiskStg);
+    TEST_ASSERT(SUCCEEDED(hr) && pDiskStg != nullptr, "StgCreateDocfile must create disk-backed compound document");
+
+    ole32::IStream* pDiskStm = nullptr;
+    hr = pDiskStg->CreateStream(L"WordDocument", ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, 0, &pDiskStm);
+    TEST_ASSERT(SUCCEEDED(hr), "CreateStream WordDocument on disk docfile must succeed");
+
+    const char docContent[] = "MicaNT Sovereign OS - Compound Document Native Binary Storage";
+    uint32_t docWritten = 0;
+    pDiskStm->Write(docContent, sizeof(docContent), &docWritten);
+    pDiskStm->Release();
+
+    hr = pDiskStg->Commit(ole32::STGC_DEFAULT);
+    TEST_ASSERT(SUCCEEDED(hr), "Commit on disk docfile must write binary file to disk");
+    pDiskStg->Release();
+
+    hr = ole32::StgIsStorageFile(diskDocPath);
+    TEST_ASSERT(hr == ole32::S_OK, "StgIsStorageFile must confirm disk file has CFBF binary signature");
+
+    ole32::IStorage* pReopenedDiskStg = nullptr;
+    hr = ole32::StgOpenStorage(diskDocPath, nullptr, ole32::STGM_READ | ole32::STGM_SHARE_EXCLUSIVE, nullptr, 0, &pReopenedDiskStg);
+    TEST_ASSERT(SUCCEEDED(hr) && pReopenedDiskStg != nullptr, "StgOpenStorage must open disk compound file");
+
+    ole32::IStream* pReopenedDiskStm = nullptr;
+    hr = pReopenedDiskStg->OpenStream(L"WordDocument", nullptr, ole32::STGM_READ | ole32::STGM_SHARE_EXCLUSIVE, 0, &pReopenedDiskStm);
+    TEST_ASSERT(SUCCEEDED(hr) && pReopenedDiskStm != nullptr, "OpenStream WordDocument from reopened disk file must succeed");
+
+    char diskReadBuf[128]{};
+    uint32_t diskBytesRead = 0;
+    pReopenedDiskStm->Read(diskReadBuf, sizeof(diskReadBuf), &diskBytesRead);
+    TEST_ASSERT(std::memcmp(docContent, diskReadBuf, sizeof(docContent)) == 0, "Disk read payload must match written data");
+
+    pReopenedDiskStm->Release();
+    pReopenedDiskStg->Release();
+    win32::DeleteFileW(diskDocPath);
+
+    // ------------------------------------------------------------------------
+    // Stage 13: Stream Class Writing and Reading (WriteClassStm & ReadClassStm)
+    // ------------------------------------------------------------------------
+    ole32::IStream* pMemStm = nullptr;
+    hr = ole32::CreateStreamOnHGlobal(nullptr, win32::TRUE, &pMemStm);
+    TEST_ASSERT(SUCCEEDED(hr), "CreateStreamOnHGlobal must create memory stream");
+
+    const ole32::CLSID clsidSample = { 0x55554444, 0x3333, 0x2222, { 0x11, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF } };
+    hr = ole32::WriteClassStm(pMemStm, clsidSample);
+    TEST_ASSERT(SUCCEEDED(hr), "WriteClassStm must write CLSID to stream");
+
+    pMemStm->Seek(0, ole32::STREAM_SEEK_SET, nullptr);
+    ole32::CLSID readClsidStm{};
+    hr = ole32::ReadClassStm(pMemStm, &readClsidStm);
+    TEST_ASSERT(SUCCEEDED(hr), "ReadClassStm must read CLSID from stream");
+    TEST_ASSERT(std::memcmp(&clsidSample, &readClsidStm, sizeof(ole32::CLSID)) == 0, "Stream CLSID must match written value");
+    pMemStm->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 14: COM Persistence Subsystem (IPersistStorage & IPersistStreamInit)
+    // ------------------------------------------------------------------------
+    {
+        MockPersistDocObject mockObj;
+        mockObj.setPayload("Stateful COM Component In-Memory Data");
+
+        // Save into a docfile storage
+        ole32::IStorage* pPersistStg = nullptr;
+        ole32::StgCreateDocfile(nullptr, ole32::STGM_READWRITE | ole32::STGM_CREATE | ole32::STGM_SHARE_EXCLUSIVE, 0, &pPersistStg);
+
+        hr = ole32::OleSave(&mockObj, pPersistStg, win32::TRUE);
+        TEST_ASSERT(SUCCEEDED(hr), "OleSave must save IPersistStorage object and write CLSID header");
+
+        ole32::CLSID savedClsid{};
+        hr = ole32::ReadClassStg(pPersistStg, &savedClsid);
+        TEST_ASSERT(SUCCEEDED(hr), "ReadClassStg must retrieve persisted object CLSID");
+
+        ole32::CLSID expectedClsid{};
+        mockObj.GetClassID(&expectedClsid);
+        TEST_ASSERT(std::memcmp(&savedClsid, &expectedClsid, sizeof(ole32::CLSID)) == 0, "Persisted storage CLSID must match object class");
+
+        // Load into another mock instance
+        MockPersistDocObject loadedObj;
+        hr = loadedObj.Load(pPersistStg);
+        TEST_ASSERT(SUCCEEDED(hr), "IPersistStorage::Load must reload persisted document stream");
+        TEST_ASSERT(loadedObj.getPayload() == "Stateful COM Component In-Memory Data", "Loaded payload must match saved payload");
+
+        pPersistStg->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 15: Dynamic Loader Exports & Shell Integration (stg info & stg test)
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("ole32.dll", "StgCreateDocfile") != nullptr, "StgCreateDocfile must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "StgOpenStorage") != nullptr, "StgOpenStorage must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "StgCreateDocfileOnILockBytes") != nullptr, "StgCreateDocfileOnILockBytes must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "StgOpenStorageOnILockBytes") != nullptr, "StgOpenStorageOnILockBytes must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "StgIsStorageFile") != nullptr, "StgIsStorageFile must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "StgIsStorageILockBytes") != nullptr, "StgIsStorageILockBytes must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "CreateILockBytesOnHGlobal") != nullptr, "CreateILockBytesOnHGlobal must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "WriteClassStg") != nullptr, "WriteClassStg must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "ReadClassStg") != nullptr, "ReadClassStg must be exported");
+        TEST_ASSERT(ldr.getExport("ole32.dll", "OleSave") != nullptr, "OleSave must be exported");
+
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        shell.execute("stg info", out);
+        TEST_ASSERT(out.str().find("Compound File Binary Format Engine") != std::string::npos, "Shell stg info must display engine details");
+        TEST_ASSERT(out.str().find("0xD0CF11E0A1B11AE1") != std::string::npos, "Shell stg info must display CFBF magic");
+
+        out.str("");
+        shell.execute("stg test", out);
+        TEST_ASSERT(out.str().find("ALL STRUCTURED STORAGE & COMPOUND FILE CHECKS PASSED") != std::string::npos, "Shell stg test must pass all checks");
+    }
+
+    std::cout << "[TEST] Suite 71: Windows OLE Structured Storage & Compound File Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -12501,6 +13000,7 @@ int main() {
     RUN_TEST(Test_RPC_Runtime_And_NDR_Subsystem);
     RUN_TEST(Test_OLE_Automation_And_SafeArray_Subsystem);
     RUN_TEST(Test_SetupApi_DeviceInstallation_And_INF_Subsystem);
+    RUN_TEST(Test_StructuredStorage_CompoundFile_And_Persistence_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

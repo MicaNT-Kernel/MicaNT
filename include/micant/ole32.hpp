@@ -37,10 +37,10 @@ namespace micant::ole32 {
 using HRESULT = int32_t;
 
 #ifndef SUCCEEDED
-#define SUCCEEDED(hr) (((micant::ole32::HRESULT)(hr)) >= 0)
+#define SUCCEEDED(hr) (((int32_t)(hr)) >= 0)
 #endif
 #ifndef FAILED
-#define FAILED(hr) (((micant::ole32::HRESULT)(hr)) < 0)
+#define FAILED(hr) (((int32_t)(hr)) < 0)
 #endif
 
 using IID     = micant::GUID;
@@ -705,6 +705,12 @@ inline HRESULT VariantCopy(VARIANTARG* pvargDest, const VARIANTARG* pvargSrc) no
     return S_OK;
 }
 
+} // namespace micant::ole32
+
+#include "structured_storage.hpp"
+
+namespace micant::ole32 {
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -712,7 +718,7 @@ inline HRESULT VariantCopy(VARIANTARG* pvargDest, const VARIANTARG* pvargSrc) no
 inline void InitializeOle32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
-    // ole32.dll
+    // ole32.dll COM Core
     ldr.registerExport("ole32.dll", "CoInitialize", reinterpret_cast<void*>(CoInitialize));
     ldr.registerExport("ole32.dll", "CoInitializeEx", reinterpret_cast<void*>(CoInitializeEx));
     ldr.registerExport("ole32.dll", "CoUninitialize", reinterpret_cast<void*>(CoUninitialize));
@@ -728,6 +734,9 @@ inline void InitializeOle32SubsystemExports() {
     ldr.registerExport("ole32.dll", "CLSIDFromString", reinterpret_cast<void*>(CLSIDFromString));
     ldr.registerExport("ole32.dll", "CoCreateGuid", reinterpret_cast<void*>(CoCreateGuid));
     ldr.registerExport("ole32.dll", "CreateStreamOnHGlobal", reinterpret_cast<void*>(CreateStreamOnHGlobal));
+
+    // ole32.dll Structured Storage
+    InitializeStructuredStorageSubsystemExports();
 
     // oleaut32.dll
     ldr.registerExport("oleaut32.dll", "SysAllocString", reinterpret_cast<void*>(SysAllocString));
