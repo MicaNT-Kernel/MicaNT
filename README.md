@@ -85,6 +85,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 22. **PrismX & Prism3D Graphics Architecture (`prismx.hpp`, `prism3d.hpp`, `dxgkrnl.hpp`)**: Sovereign clean-room 2D/3D graphics engine named in tribute to Dave Cutler's 1988 DEC PRISM RISC project. Implements DXGI presentation pipeline (`IDXGIFactory1`, `IDXGIAdapter1`, `IDXGIOutput`, `IDXGISwapChain`) with 32-bpp BGRA double/triple buffering, flip models (`FLIP_DISCARD`), dirty-rect tracking, and VSync pacing. Prism3D acceleration engine (`ID3D11Device`, `ID3D11DeviceContext`, `ID3D12Device`) featuring a high-precision barycentric software reference rasterizer with Gouraud color interpolation, depth testing (Z-buffer), and viewport clipping. WDDM DirectX Graphics Kernel (`dxgkrnl.sys`) implementing Ring 0 `D3DKMT*` syscall thunks (`D3DKMTOpenAdapter`, `D3DKMTCreateAllocation`, `D3DKMTCreateDevice`, `D3DKMTSubmitCommand`, `D3DKMTPresent`) for GPU memory virtual addressing and page flip scheduling. Fully compatible with Microsoft's MIT-licensed `DirectX-Headers` and `DirectXTK`. Integrated shell commands (`prismx`, `prismx test`).
 23. **Khronos Vulkan 1.3 ICD Loader & PrismVK Graphics Driver (`vulkan.hpp`)**: Sovereign clean-room implementation of the standard Khronos Vulkan Installable Client Driver (ICD) Loader (`vulkan-1.dll`). Features Configuration Manager driver discovery via `\Registry\Machine\SOFTWARE\Khronos\Vulkan\Drivers`, discrete GPU physical device enumeration (1.3.0 compliance, 8192 MB dedicated VRAM, 16384 MB shared GTT, 16 graphics/compute queues), `VK_KHR_win32_surface` HWND window attachment, `VK_KHR_swapchain` presentation, command pool & buffer recording, render passes, and queue submission dispatching directly through the Prism3D rasterizer. Integrated shell commands (`vulkan`, `vkcube`, `vulkan test`).
 24. **Silicon Graphics OpenGL 1.4 API, Windows WGL Subsystem & GLU Library (`opengl.hpp`, `opengl32.dll`, `glu32.dll`)**: Complete sovereign clean-room implementation of the Silicon Graphics OpenGL 1.1–1.4 core rendering pipeline, Windows WGL context lifecycle, and OpenGL Utility Library (`glu32.dll`). Features standard column-major 4x4 matrix stack math (ModelView, Projection, Texture), immediate mode (`glBegin`/`glEnd`) with primitive assembly (points, lines, triangles, quads, polygon fans/strips), vertex array client state (`glVertexPointer`, `glColorPointer`, `glTexCoordPointer`, `glDrawArrays`), 2D texture mapping with bilinear/nearest filtering and wrap modes (`GL_REPEAT`, `GL_CLAMP`), depth buffering (`GL_DEPTH_TEST`), alpha blending, and WGL context creation (`wglCreateContext`, `wglMakeCurrent`, `wglDeleteContext`) with `wglSwapBuffers` presentation bridge to GDI/User32 framebuffers. Full GLU camera utility routines (`gluPerspective`, `gluLookAt`, `gluOrtho2D`, `gluErrorString`). Integrated shell commands (`opengl info`, `opengl test`).
+25. **Windows Internet (WinINet) & URL Moniker (URLMon) Web Client Subsystems (`wininet.hpp`, `urlmon.hpp`, `wininet.dll`, `urlmon.dll`)**: Complete clean-room web client engine. Features hierarchical handle management (`HINTERNET` session -> connection -> request) with handle cascading destruction, RFC 7230 HTTP/1.1 request formatting, Winsock 2 streaming delivery, chunked transfer-encoding decoding, RFC 6265 thread-safe cookie jar, Temporary Internet Files LRU cache management, RFC 3986 URL cracking/creation/canonicalization, `HttpQueryInfoA/W`, `FindMimeFromData` MIME sniffer, `URLDownloadToFileA/W` with live `IBindStatusCallback` progress events, stream monikers (`URLOpenBlockingStreamA/W`, `MemoryStream`), `CreateURLMoniker` (`IMoniker`), and interactive CLI utilities (`curl`, `wget`, `wininet`, `urlmon`).
 
 ---
 
@@ -210,12 +211,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (64 Suites, 100% Passing)
+### Build & Run Unit Test Suite (65 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 64 Test Suites:
+# Run all 65 Test Suites:
 .\bin\micant_tests.exe
 ```
 

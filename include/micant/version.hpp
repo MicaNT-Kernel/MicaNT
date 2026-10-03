@@ -283,18 +283,18 @@ private:
             mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
             mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
             mod.fixedInfo.dwFileVersionMS = (1 << 16) | 0;
-            mod.fixedInfo.dwFileVersionLS = (63 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (65 << 16) | 0;
             mod.fixedInfo.dwProductVersionMS = (1 << 16) | 0;
-            mod.fixedInfo.dwProductVersionLS = (63 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (65 << 16) | 0;
             mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
             mod.fixedInfo.dwFileType = VFT_APP;
             mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
             mod.stringTable["FileDescription"] = "MicaNT Sovereign Operating System Kernel";
-            mod.stringTable["FileVersion"] = "1.0.63.0";
+            mod.stringTable["FileVersion"] = "1.0.65.0";
             mod.stringTable["InternalName"] = "micant";
             mod.stringTable["OriginalFilename"] = "micant_kernel.exe";
             mod.stringTable["ProductName"] = "MicaNT Operating System";
-            mod.stringTable["ProductVersion"] = "1.0.64.0";
+            mod.stringTable["ProductVersion"] = "1.0.65.0";
             registerModule(mod);
         }
 
@@ -339,6 +339,50 @@ private:
             mod.stringTable["OriginalFilename"] = "glu32.dll";
             mod.stringTable["ProductName"] = "OpenGL Utility Library";
             mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // 10. wininet.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "wininet.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (11 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (11 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Internet Extensions for Win32";
+            mod.stringTable["FileVersion"] = "11.00.22621.1";
+            mod.stringTable["InternalName"] = "wininet";
+            mod.stringTable["OriginalFilename"] = "wininet.dll";
+            mod.stringTable["ProductName"] = "MicaNT Windows Internet Subsystem";
+            mod.stringTable["ProductVersion"] = "11.00.22621.1";
+            registerModule(mod);
+        }
+
+        // 11. urlmon.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "urlmon.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (11 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (11 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "OLE32 Extensions for Win32 (URL Monikers)";
+            mod.stringTable["FileVersion"] = "11.00.22621.1";
+            mod.stringTable["InternalName"] = "urlmon";
+            mod.stringTable["OriginalFilename"] = "urlmon.dll";
+            mod.stringTable["ProductName"] = "MicaNT URL Moniker Subsystem";
+            mod.stringTable["ProductVersion"] = "11.00.22621.1";
             registerModule(mod);
         }
     }

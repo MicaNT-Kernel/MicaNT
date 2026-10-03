@@ -35,6 +35,14 @@ namespace micant::ole32 {
 // ============================================================================
 
 using HRESULT = int32_t;
+
+#ifndef SUCCEEDED
+#define SUCCEEDED(hr) (((micant::ole32::HRESULT)(hr)) >= 0)
+#endif
+#ifndef FAILED
+#define FAILED(hr) (((micant::ole32::HRESULT)(hr)) < 0)
+#endif
+
 using IID     = micant::GUID;
 using CLSID   = micant::GUID;
 using REFIID  = const IID&;
@@ -111,6 +119,194 @@ public:
     virtual HRESULT CreateInstance(IUnknown* pUnkOuter, REFIID riid, void** ppvObject) = 0;
     virtual HRESULT LockServer(win32::BOOL fLock) = 0;
 };
+
+inline const IID IID_ISequentialStream = {
+    0x0c733a30, 0x2a1c, 0x11ce, { 0xad, 0xe5, 0x00, 0xaa, 0x00, 0x44, 0x77, 0x3d }
+};
+
+inline const IID IID_IStream = {
+    0x0000000c, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 }
+};
+
+class ISequentialStream : public IUnknown {
+public:
+    virtual HRESULT Read(void* pv, uint32_t cb, uint32_t* pcbRead) = 0;
+    virtual HRESULT Write(const void* pv, uint32_t cb, uint32_t* pcbWritten) = 0;
+};
+
+enum STREAM_SEEK : uint32_t {
+    STREAM_SEEK_SET = 0,
+    STREAM_SEEK_CUR = 1,
+    STREAM_SEEK_END = 2
+};
+
+enum STATFLAG : uint32_t {
+    STATFLAG_DEFAULT   = 0,
+    STATFLAG_NONAME    = 1,
+    STATFLAG_NOOPEN    = 2
+};
+
+struct STATSTG {
+    wchar_t* pwcsName{nullptr};
+    uint32_t type{2}; // STGTY_STREAM
+    uint64_t cbSize{0};
+    uint64_t mtime{0};
+    uint64_t ctime{0};
+    uint64_t atime{0};
+    uint32_t grfMode{0};
+    uint32_t grfLocksSupported{0};
+    micant::GUID clsid{};
+    uint32_t grfStateBits{0};
+    uint32_t reserved{0};
+};
+
+class IStream : public ISequentialStream {
+public:
+    virtual HRESULT Seek(int64_t dlibMove, uint32_t dwOrigin, uint64_t* plibNewPosition) = 0;
+    virtual HRESULT SetSize(uint64_t libNewSize) = 0;
+    virtual HRESULT CopyTo(IStream* pstm, uint64_t cb, uint64_t* pcbRead, uint64_t* pcbWritten) = 0;
+    virtual HRESULT Commit(uint32_t grfCommitFlags) = 0;
+    virtual HRESULT Revert() = 0;
+    virtual HRESULT LockRegion(uint64_t libOffset, uint64_t cb, uint32_t dwLockType) = 0;
+    virtual HRESULT UnlockRegion(uint64_t libOffset, uint64_t cb, uint32_t dwLockType) = 0;
+    virtual HRESULT Stat(STATSTG* pstatstg, uint32_t grfStatFlag) = 0;
+    virtual HRESULT Clone(IStream** ppstm) = 0;
+};
+
+class MemoryStream : public IStream {
+private:
+    std::atomic<uint32_t> m_refCount{1};
+    std::vector<uint8_t> m_buffer;
+    size_t m_pos{0};
+    bool m_deleteOnRelease{false};
+    mutable std::mutex m_mutex;
+
+public:
+    MemoryStream(const void* data = nullptr, size_t size = 0, bool deleteOnRelease = false)
+        : m_deleteOnRelease(deleteOnRelease) {
+        if (data && size > 0) {
+            const auto* p = static_cast<const uint8_t*>(data);
+            m_buffer.assign(p, p + size);
+        }
+    }
+
+    virtual HRESULT QueryInterface(REFIID riid, void** ppvObject) override {
+        if (!ppvObject) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_ISequentialStream || riid == IID_IStream) {
+            *ppvObject = static_cast<IStream*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    virtual uint32_t AddRef() override {
+        return m_refCount.fetch_add(1) + 1;
+    }
+
+    virtual uint32_t Release() override {
+        uint32_t count = m_refCount.fetch_sub(1) - 1;
+        if (count == 0) {
+            delete this;
+        }
+        return count;
+    }
+
+    virtual HRESULT Read(void* pv, uint32_t cb, uint32_t* pcbRead) override {
+        if (!pv) return E_POINTER;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_pos >= m_buffer.size()) {
+            if (pcbRead) *pcbRead = 0;
+            return S_FALSE;
+        }
+        size_t available = m_buffer.size() - m_pos;
+        size_t toRead = std::min(static_cast<size_t>(cb), available);
+        std::memcpy(pv, m_buffer.data() + m_pos, toRead);
+        m_pos += toRead;
+        if (pcbRead) *pcbRead = static_cast<uint32_t>(toRead);
+        return S_OK;
+    }
+
+    virtual HRESULT Write(const void* pv, uint32_t cb, uint32_t* pcbWritten) override {
+        if (!pv && cb > 0) return E_POINTER;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_pos + cb > m_buffer.size()) {
+            m_buffer.resize(m_pos + cb);
+        }
+        if (cb > 0) {
+            std::memcpy(m_buffer.data() + m_pos, pv, cb);
+            m_pos += cb;
+        }
+        if (pcbWritten) *pcbWritten = cb;
+        return S_OK;
+    }
+
+    virtual HRESULT Seek(int64_t dlibMove, uint32_t dwOrigin, uint64_t* plibNewPosition) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        int64_t newPos = 0;
+        switch (dwOrigin) {
+            case STREAM_SEEK_SET: newPos = dlibMove; break;
+            case STREAM_SEEK_CUR: newPos = static_cast<int64_t>(m_pos) + dlibMove; break;
+            case STREAM_SEEK_END: newPos = static_cast<int64_t>(m_buffer.size()) + dlibMove; break;
+            default: return E_INVALIDARG;
+        }
+        if (newPos < 0) return E_INVALIDARG;
+        m_pos = static_cast<size_t>(newPos);
+        if (plibNewPosition) *plibNewPosition = m_pos;
+        return S_OK;
+    }
+
+    virtual HRESULT SetSize(uint64_t libNewSize) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_buffer.resize(static_cast<size_t>(libNewSize));
+        return S_OK;
+    }
+
+    virtual HRESULT CopyTo(IStream* pstm, uint64_t cb, uint64_t* pcbRead, uint64_t* pcbWritten) override {
+        if (!pstm) return E_POINTER;
+        std::vector<uint8_t> tmp(static_cast<size_t>(cb));
+        uint32_t r = 0;
+        HRESULT hr = Read(tmp.data(), static_cast<uint32_t>(cb), &r);
+        if (FAILED(hr)) return hr;
+        uint32_t w = 0;
+        hr = pstm->Write(tmp.data(), r, &w);
+        if (pcbRead) *pcbRead = r;
+        if (pcbWritten) *pcbWritten = w;
+        return hr;
+    }
+
+    virtual HRESULT Commit(uint32_t /*grfCommitFlags*/) override { return S_OK; }
+    virtual HRESULT Revert() override { return S_OK; }
+    virtual HRESULT LockRegion(uint64_t, uint64_t, uint32_t) override { return S_OK; }
+    virtual HRESULT UnlockRegion(uint64_t, uint64_t, uint32_t) override { return S_OK; }
+
+    virtual HRESULT Stat(STATSTG* pstatstg, uint32_t /*grfStatFlag*/) override {
+        if (!pstatstg) return E_POINTER;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::memset(pstatstg, 0, sizeof(STATSTG));
+        pstatstg->type = 2; // STGTY_STREAM
+        pstatstg->cbSize = m_buffer.size();
+        return S_OK;
+    }
+
+    virtual HRESULT Clone(IStream** ppstm) override {
+        if (!ppstm) return E_POINTER;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto* clone = new MemoryStream(m_buffer.data(), m_buffer.size());
+        clone->Seek(static_cast<int64_t>(m_pos), STREAM_SEEK_SET, nullptr);
+        *ppstm = clone;
+        return S_OK;
+    }
+
+    const std::vector<uint8_t>& getBuffer() const { return m_buffer; }
+};
+
+inline HRESULT CreateStreamOnHGlobal(void* hGlobal, win32::BOOL fDeleteOnRelease, IStream** ppstm) {
+    if (!ppstm) return E_POINTER;
+    *ppstm = new MemoryStream(hGlobal, hGlobal ? std::strlen(static_cast<const char*>(hGlobal)) : 0, fDeleteOnRelease != 0);
+    return S_OK;
+}
 
 // ============================================================================
 // 3. OLE Automation Data Types & VARIANT
@@ -512,6 +708,7 @@ inline void InitializeOle32SubsystemExports() {
     ldr.registerExport("ole32.dll", "IIDFromString", reinterpret_cast<void*>(IIDFromString));
     ldr.registerExport("ole32.dll", "CLSIDFromString", reinterpret_cast<void*>(CLSIDFromString));
     ldr.registerExport("ole32.dll", "CoCreateGuid", reinterpret_cast<void*>(CoCreateGuid));
+    ldr.registerExport("ole32.dll", "CreateStreamOnHGlobal", reinterpret_cast<void*>(CreateStreamOnHGlobal));
 
     // oleaut32.dll
     ldr.registerExport("oleaut32.dll", "SysAllocString", reinterpret_cast<void*>(SysAllocString));

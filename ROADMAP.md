@@ -685,4 +685,41 @@
 - [x] **Unit Test Suite 64 (`Test_OpenGL_And_WGL_Subsystem`)**:
   - All 64 unit test suites passing with 100% success rate (64 Passed, 0 Failed).
 
+---
+
+### Phase 38: Windows Internet (WinINet) & URL Moniker (URLMon) Web Client Subsystems (100% Completed)
+*Goal: Implement Windows Internet Client Subsystem (`wininet.dll`) and URL Moniker Architecture (`urlmon.dll`), including RFC 7230 HTTP/1.1 request formatting and chunked decoding, RFC 6265 cookie jar, Temporary Internet Files cache manager, MIME sniffer, stream monikers, and curl/wget CLI utilities.*
+- [x] **WinINet Core Subsystem (`include/micant/wininet.hpp`, `wininet.dll`)**:
+  - Internet Handle Lifecycle: Hierarchical handle management (`HINTERNET` session -> connection -> request) with handle type validation and cascading destruction.
+  - Connection & Session Management: `InternetOpenA/W` with access types (`DIRECT`, `PRECONFIG`), `InternetConnectA/W` supporting HTTP/HTTPS services (`INTERNET_SERVICE_HTTP`), and `InternetCloseHandle`.
+  - HTTP Request Engine: `HttpOpenRequestA/W`, `HttpAddRequestHeadersA/W` (replace/add semantics), and `HttpSendRequestA/W`.
+  - RFC 7230 HTTP/1.1 Protocol Processing: Streamlined request formatting, Winsock 2 live network delivery, and HTTP response header parser.
+  - Chunked Transfer-Encoding Decoder: Hex-encoded chunk size parser and multi-part payload assembly (`DecodeChunkedPayload`).
+  - RFC 6265 Cookie Jar (`CookieJar`): Thread-safe domain, path, and security attribute matching (`InternetSetCookieA/W`, `InternetGetCookieA/W`).
+  - Temporary Internet Files Cache Subsystem (`UrlCacheManager`): LRU cache entry allocation, expiry, header metadata, and file commit (`CreateUrlCacheEntryA/W`, `CommitUrlCacheEntryA/W`, `GetUrlCacheEntryInfoA/W`).
+  - RFC 3986 URL Engine: `InternetCrackUrlA/W` (scheme, host, port, path, extra parsing), `InternetCreateUrlA/W`, and `InternetCanonicalizeUrlA/W` (percent-encoding and path normalization).
+  - Status & Headers Query: `HttpQueryInfoA/W` supporting status codes, content-length, content-type, raw headers, and numeric conversion flags.
+  - Streaming Data Transfer: `InternetReadFile` with simulated network throttled buffer chunking.
+  - Mock HTTP Registry (`HttpMockRegistry`): Deterministic mock response server for hermetic testing and offline CLI execution.
+- [x] **URL Moniker Subsystem (`include/micant/urlmon.hpp`, `urlmon.dll`)**:
+  - `IBindStatusCallback` Interface: Full COM event contract (`OnStartBinding`, `OnProgress`, `OnStopBinding`, `OnDataAvailable`, `GetBindInfo`).
+  - URL Monikers (`UrlMoniker` implementing `ole32::IMoniker`): Full moniker composition, display name formatting (`GetDisplayName`), comparison (`IsEqual`), and hashing (`Hash`).
+  - High-Level Web Download APIs: `URLDownloadToFileA/W` with real-time download progress dispatch and VFS synchronization, `URLDownloadToCacheFileA/W`.
+  - Stream Monikers: `URLOpenBlockingStreamA/W` returning seekable `ole32::IStream` (`MemoryStream`).
+  - MIME Sniffer (`FindMimeFromData`): Magic byte signature detection for PNG, JPEG, GIF, BMP, PDF, ZIP, PE/MZ, HTML, XML, and JSON.
+- [x] **COM Stream Foundations (`include/micant/ole32.hpp`)**:
+  - `ISequentialStream` and `IStream` COM interfaces with `STATSTG` metadata.
+  - `MemoryStream` implementation with seek (`STREAM_SEEK_SET`, `STREAM_SEEK_CUR`, `STREAM_SEEK_END`), clone, and read/write semantics.
+  - `CreateStreamOnHGlobal` API registered in `ldr::DynamicLoader`.
+- [x] **Dynamic Loader & Version Parity**:
+  - Export registration for `wininet.dll` and `urlmon.dll` in `ldr::DynamicLoader`.
+  - `VS_FIXEDFILEINFO` and string table metadata registered in `version.hpp` with version bump to `1.0.65.0`.
+- [x] **Interactive Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
+  - `wininet info`, `wininet test`, `wininet cookies`, `wininet cache`.
+  - `curl <url> [-o <file>]`, `wget <url>`, and `urlmon test`.
+- [x] **Unit Test Suite 65 (`Test_WinINet_And_URLMon_Subsystems`)**:
+  - 16 comprehensive verification stages covering URL cracking/canonicalization, handle lifecycle, HTTP headers, mock server execution, status queries, streaming reads, chunked transfer decoding, RFC 6265 cookies, Temporary Internet Files cache, MIME sniffing, URLDownloadToFileW with callback progress, VFS file verification, URL monikers, version resources, and shell curl integration.
+  - All 65 unit test suites passing with 100% success rate (65 Passed, 0 Failed).
+
+
 

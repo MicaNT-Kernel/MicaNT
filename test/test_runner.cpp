@@ -85,6 +85,8 @@
 #include "micant/dsound.hpp"
 #include "micant/version.hpp"
 #include "micant/opengl.hpp"
+#include "micant/wininet.hpp"
+#include "micant/urlmon.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -9510,6 +9512,460 @@ void Test_OpenGL_And_WGL_Subsystem() {
     std::cout << "[TEST] Suite 64: OpenGL 1.4 & Windows WGL 3D Runtime PASSED.\n";
 }
 
+// ============================================================================
+// Test Suite 65: WinINet & URLMon Web Client Subsystems
+// ============================================================================
+
+void Test_WinINet_And_URLMon_Subsystems() {
+    using namespace micant;
+
+    // ------------------------------------------------------------------------
+    // 1. URL Cracking & Scheme Introspection (InternetCrackUrlW)
+    // ------------------------------------------------------------------------
+    {
+        const wchar_t* testUrl = L"http://admin:secret123@api.micant.org:8080/v1/telemetry?format=json#trace";
+        wininet::URL_COMPONENTSW comp{};
+        comp.dwStructSize = sizeof(comp);
+        wchar_t scheme[16]{};
+        wchar_t host[64]{};
+        wchar_t user[32]{};
+        wchar_t pass[32]{};
+        wchar_t path[64]{};
+        wchar_t extra[64]{};
+
+        comp.lpszScheme = scheme; comp.dwSchemeLength = sizeof(scheme) / sizeof(wchar_t);
+        comp.lpszHostName = host; comp.dwHostNameLength = sizeof(host) / sizeof(wchar_t);
+        comp.lpszUserName = user; comp.dwUserNameLength = sizeof(user) / sizeof(wchar_t);
+        comp.lpszPassword = pass; comp.dwPasswordLength = sizeof(pass) / sizeof(wchar_t);
+        comp.lpszUrlPath = path;  comp.dwUrlPathLength = sizeof(path) / sizeof(wchar_t);
+        comp.lpszExtraInfo = extra; comp.dwExtraInfoLength = sizeof(extra) / sizeof(wchar_t);
+
+        win32::BOOL crackOk = wininet::InternetCrackUrlW(testUrl, 0, 0, &comp);
+        TEST_ASSERT(crackOk == 1, "InternetCrackUrlW must succeed on standard HTTP URL");
+        TEST_ASSERT(comp.nScheme == wininet::INTERNET_SCHEME_HTTP, "nScheme must be INTERNET_SCHEME_HTTP");
+        TEST_ASSERT(comp.nPort == 8080, "nPort must be 8080");
+        TEST_ASSERT(std::wstring(scheme) == L"http", "Scheme string must match http");
+        TEST_ASSERT(std::wstring(host) == L"api.micant.org", "Host string must match api.micant.org");
+        TEST_ASSERT(std::wstring(user) == L"admin", "User string must match admin");
+        TEST_ASSERT(std::wstring(pass) == L"secret123", "Password string must match secret123");
+        TEST_ASSERT(std::wstring(path) == L"/v1/telemetry", "Path string must match /v1/telemetry");
+        TEST_ASSERT(std::wstring(extra) == L"?format=json#trace", "Extra string must match ?format=json#trace");
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. URL Construction (InternetCreateUrlW)
+    // ------------------------------------------------------------------------
+    {
+        wininet::URL_COMPONENTSW comp{};
+        comp.dwStructSize = sizeof(comp);
+        wchar_t scheme[] = L"https";
+        wchar_t host[] = L"download.micant.org";
+        wchar_t path[] = L"/kernel/update.bin";
+        comp.lpszScheme = scheme; comp.dwSchemeLength = static_cast<uint32_t>(wcslen(scheme));
+        comp.lpszHostName = host; comp.dwHostNameLength = static_cast<uint32_t>(wcslen(host));
+        comp.nPort = 443;
+        comp.lpszUrlPath = path; comp.dwUrlPathLength = static_cast<uint32_t>(wcslen(path));
+
+        wchar_t builtUrl[256]{};
+        uint32_t builtLen = sizeof(builtUrl) / sizeof(wchar_t);
+        win32::BOOL createOk = wininet::InternetCreateUrlW(&comp, 0, builtUrl, &builtLen);
+        TEST_ASSERT(createOk == 1, "InternetCreateUrlW must succeed");
+        TEST_ASSERT(std::wstring(builtUrl) == L"https://download.micant.org/kernel/update.bin", "Constructed URL must match expected target");
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. URL Canonicalization (InternetCanonicalizeUrlW)
+    // ------------------------------------------------------------------------
+    {
+        const wchar_t* raw = L"http://micant.org/my document file.pdf";
+        wchar_t canon[256]{};
+        uint32_t canonLen = sizeof(canon) / sizeof(wchar_t);
+        win32::BOOL canOk = wininet::InternetCanonicalizeUrlW(raw, canon, &canonLen, 0);
+        TEST_ASSERT(canOk == 1, "InternetCanonicalizeUrlW must succeed");
+        TEST_ASSERT(std::wstring(canon) == L"http://micant.org/my%20document%20file.pdf", "Canonicalized URL must escape spaces with %20");
+    }
+
+    // ------------------------------------------------------------------------
+    // 4. Handle Lifecycle & Cascading Cleanup
+    // ------------------------------------------------------------------------
+    {
+        wininet::HINTERNET hSess = wininet::InternetOpenW(L"MicaNT Test Agent", wininet::INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+        TEST_ASSERT(hSess != nullptr, "InternetOpenW must return valid HINTERNET");
+
+        wininet::HINTERNET hConn = wininet::InternetConnectW(hSess, L"micant.org", 80, nullptr, nullptr, wininet::INTERNET_SERVICE_HTTP, 0, 101);
+        TEST_ASSERT(hConn != nullptr, "InternetConnectW must return valid HINTERNET");
+
+        wininet::HINTERNET hReq = wininet::HttpOpenRequestW(hConn, L"GET", L"/index.html", nullptr, nullptr, nullptr, 0, 102);
+        TEST_ASSERT(hReq != nullptr, "HttpOpenRequestW must return valid HINTERNET");
+
+        // Verify handle lookup
+        auto reqObj = wininet::InternetHandleTable::Instance().getHandleAs<wininet::HttpRequestHandle>(hReq);
+        TEST_ASSERT(reqObj != nullptr, "HandleTable must resolve valid HttpRequestHandle");
+        TEST_ASSERT(reqObj->verb == L"GET", "Request verb must be GET");
+        TEST_ASSERT(reqObj->objectName == L"/index.html", "Request objectName must be /index.html");
+
+        // Cascading close
+        win32::BOOL closeOk = wininet::InternetCloseHandle(hSess);
+        TEST_ASSERT(closeOk == 1, "InternetCloseHandle for session must succeed");
+        TEST_ASSERT(wininet::InternetHandleTable::Instance().getHandle(hReq) == nullptr, "Child request handle must be cascade-closed");
+        TEST_ASSERT(wininet::InternetHandleTable::Instance().getHandle(hConn) == nullptr, "Child connection handle must be cascade-closed");
+    }
+
+    // ------------------------------------------------------------------------
+    // 5. Request Headers Management (HttpAddRequestHeadersW)
+    // ------------------------------------------------------------------------
+    {
+        wininet::HINTERNET hSess = wininet::InternetOpenW(L"MicaNT", wininet::INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+        wininet::HINTERNET hConn = wininet::InternetConnectW(hSess, L"micant.org", 80, nullptr, nullptr, wininet::INTERNET_SERVICE_HTTP, 0, 0);
+        wininet::HINTERNET hReq = wininet::HttpOpenRequestW(hConn, L"POST", L"/api/v1/echo", nullptr, nullptr, nullptr, 0, 0);
+
+        wininet::HttpAddRequestHeadersW(hReq, L"Content-Type: application/json\r\n", static_cast<uint32_t>(-1), wininet::HTTP_ADDREQ_FLAG_ADD);
+        wininet::HttpAddRequestHeadersW(hReq, L"X-Trace-Id: TRACE_001\r\n", static_cast<uint32_t>(-1), wininet::HTTP_ADDREQ_FLAG_ADD);
+
+        auto reqObj = wininet::InternetHandleTable::Instance().getHandleAs<wininet::HttpRequestHandle>(hReq);
+        TEST_ASSERT(reqObj->getRequestHeader("Content-Type") == "application/json", "Header Content-Type must be present");
+        TEST_ASSERT(reqObj->getRequestHeader("X-Trace-Id") == "TRACE_001", "Header X-Trace-Id must be present");
+
+        // Test replace modifier
+        wininet::HttpAddRequestHeadersW(hReq, L"X-Trace-Id: TRACE_UPDATED\r\n", static_cast<uint32_t>(-1), wininet::HTTP_ADDREQ_FLAG_REPLACE);
+        TEST_ASSERT(reqObj->getRequestHeader("X-Trace-Id") == "TRACE_UPDATED", "Header X-Trace-Id must be updated via REPLACE");
+
+        wininet::InternetCloseHandle(hSess);
+    }
+
+    // ------------------------------------------------------------------------
+    // 6. HTTP Mock Registry & Request Execution (HttpSendRequestW)
+    // ------------------------------------------------------------------------
+    {
+        std::string mockPayload = "{\"os\":\"MicaNT\",\"status\":\"healthy\",\"uptime\":3600}";
+        wininet::HttpMockRegistry::Instance().registerMock(
+            "http://micant.org/api/health",
+            200,
+            "application/json",
+            mockPayload,
+            { { "X-Custom-Server", "MicaNT-Server/1.0" } }
+        );
+
+        wininet::HINTERNET hSess = wininet::InternetOpenW(L"MicaNT Test", wininet::INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+        wininet::HINTERNET hConn = wininet::InternetConnectW(hSess, L"micant.org", 80, nullptr, nullptr, wininet::INTERNET_SERVICE_HTTP, 0, 0);
+        wininet::HINTERNET hReq = wininet::HttpOpenRequestW(hConn, L"GET", L"/api/health", nullptr, nullptr, nullptr, 0, 0);
+
+        win32::BOOL sendOk = wininet::HttpSendRequestW(hReq, nullptr, 0, nullptr, 0);
+        TEST_ASSERT(sendOk == 1, "HttpSendRequestW must succeed against registered mock endpoint");
+
+        // --------------------------------------------------------------------
+        // 7. HTTP Query Info Introspection (HttpQueryInfoW)
+        // --------------------------------------------------------------------
+        uint32_t statusCode = 0;
+        uint32_t statusLen = sizeof(statusCode);
+        win32::BOOL qStatus = wininet::HttpQueryInfoW(hReq, wininet::HTTP_QUERY_STATUS_CODE | wininet::HTTP_QUERY_FLAG_NUMBER, &statusCode, &statusLen, nullptr);
+        TEST_ASSERT(qStatus == 1, "HttpQueryInfoW for STATUS_CODE must succeed");
+        TEST_ASSERT(statusCode == 200, "Response status code must be 200");
+
+        wchar_t contentType[64]{};
+        uint32_t ctLen = sizeof(contentType);
+        win32::BOOL qType = wininet::HttpQueryInfoW(hReq, wininet::HTTP_QUERY_CONTENT_TYPE, contentType, &ctLen, nullptr);
+        TEST_ASSERT(qType == 1, "HttpQueryInfoW for CONTENT_TYPE must succeed");
+        TEST_ASSERT(std::wstring(contentType).find(L"application/json") != std::wstring::npos, "Content-Type must contain application/json");
+
+        uint32_t contentLen = 0;
+        uint32_t clSize = sizeof(contentLen);
+        win32::BOOL qLen = wininet::HttpQueryInfoW(hReq, wininet::HTTP_QUERY_CONTENT_LENGTH | wininet::HTTP_QUERY_FLAG_NUMBER, &contentLen, &clSize, nullptr);
+        TEST_ASSERT(qLen == 1, "HttpQueryInfoW for CONTENT_LENGTH must succeed");
+        TEST_ASSERT(contentLen == mockPayload.size(), "Content-Length must match payload length");
+
+        // --------------------------------------------------------------------
+        // 8. Stream Reading (InternetReadFile & InternetQueryDataAvailable)
+        // --------------------------------------------------------------------
+        uint32_t avail = 0;
+        win32::BOOL qAvail = wininet::InternetQueryDataAvailable(hReq, &avail, 0, 0);
+        TEST_ASSERT(qAvail == 1, "InternetQueryDataAvailable must succeed");
+        TEST_ASSERT(avail == mockPayload.size(), "Available bytes must match mock payload size");
+
+        std::string accumulated;
+        char chunk[16]{};
+        uint32_t bytesRead = 0;
+        while (wininet::InternetReadFile(hReq, chunk, sizeof(chunk), &bytesRead) && bytesRead > 0) {
+            accumulated.append(chunk, bytesRead);
+        }
+        TEST_ASSERT(accumulated == mockPayload, "Accumulated body must exactly match mock response body");
+
+        // Subsequent read should return 0 bytes (EOF)
+        uint32_t eofBytes = 999;
+        win32::BOOL eofOk = wininet::InternetReadFile(hReq, chunk, sizeof(chunk), &eofBytes);
+        TEST_ASSERT(eofOk == 1 && eofBytes == 0, "Reading at EOF must report 0 bytes read");
+
+        wininet::InternetCloseHandle(hSess);
+    }
+
+    // ------------------------------------------------------------------------
+    // 9. Chunked Transfer Encoding (RFC 7230 §4.1)
+    // ------------------------------------------------------------------------
+    {
+        const char chunkedSample[] = "7\r\nMozilla\r\n9\r\nDeveloper\r\n7\r\nNetwork\r\n0\r\n\r\n";
+        std::vector<uint8_t> decoded;
+        bool decOk = wininet::DecodeChunkedPayload(
+            reinterpret_cast<const uint8_t*>(chunkedSample),
+            strlen(chunkedSample),
+            decoded
+        );
+        TEST_ASSERT(decOk == true, "DecodeChunkedPayload must succeed on valid RFC 7230 chunked stream");
+        std::string decodedStr(decoded.begin(), decoded.end());
+        TEST_ASSERT(decodedStr == "MozillaDeveloperNetwork", "Decoded chunked payload must match combined chunks");
+    }
+
+    // ------------------------------------------------------------------------
+    // 10. Cookie Jar Management (RFC 6265)
+    // ------------------------------------------------------------------------
+    {
+        wininet::CookieJar::Instance().clear();
+        win32::BOOL setOk = wininet::InternetSetCookieW(
+            L"http://micant.org/dashboard",
+            nullptr,
+            L"auth_session=MicaSecure9988; path=/dashboard; domain=micant.org"
+        );
+        TEST_ASSERT(setOk == 1, "InternetSetCookieW must succeed");
+
+        wchar_t cookieBuf[256]{};
+        uint32_t cookieSize = sizeof(cookieBuf);
+        win32::BOOL getOk = wininet::InternetGetCookieW(
+            L"http://micant.org/dashboard/settings",
+            nullptr,
+            cookieBuf,
+            &cookieSize
+        );
+        TEST_ASSERT(getOk == 1, "InternetGetCookieW must match valid domain and path");
+        TEST_ASSERT(std::wstring(cookieBuf).find(L"auth_session=MicaSecure9988") != std::wstring::npos, "Cookie value must match stored auth_session");
+
+        // Different domain should not match
+        wchar_t emptyBuf[256]{};
+        uint32_t emptySize = sizeof(emptyBuf);
+        wininet::InternetGetCookieW(L"http://external-site.com/dashboard", nullptr, emptyBuf, &emptySize);
+        TEST_ASSERT(emptySize == 0 || wcslen(emptyBuf) == 0, "Cookie must not leak to unrelated domain");
+    }
+
+    // ------------------------------------------------------------------------
+    // 11. URL Cache Subsystem (Temporary Internet Files)
+    // ------------------------------------------------------------------------
+    {
+        wininet::UrlCacheManager::Instance().clear();
+        wchar_t cachePath[wininet::MAX_PATH]{};
+        win32::BOOL crOk = wininet::CreateUrlCacheEntryW(L"http://micant.org/logo.png", 2048, L"png", cachePath, 0);
+        TEST_ASSERT(crOk == 1, "CreateUrlCacheEntryW must allocate valid cache file path");
+        TEST_ASSERT(std::wstring(cachePath).find(L".png") != std::wstring::npos, "Allocated cache file must have .png extension");
+
+        win32::BOOL cmOk = wininet::CommitUrlCacheEntryW(
+            L"http://micant.org/logo.png",
+            cachePath,
+            9999999ULL,
+            1111111ULL,
+            0,
+            L"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n",
+            0,
+            L"png",
+            nullptr
+        );
+        TEST_ASSERT(cmOk == 1, "CommitUrlCacheEntryW must succeed");
+
+        wininet::CacheEntry retrieved;
+        bool found = wininet::UrlCacheManager::Instance().retrieveEntry("http://micant.org/logo.png", retrieved);
+        TEST_ASSERT(found == true, "UrlCacheManager must retrieve committed cache entry");
+        TEST_ASSERT(retrieved.fileSize == 1024, "Retrieved cache entry size must match default");
+    }
+
+    // ------------------------------------------------------------------------
+    // 12. MIME Sniffer (FindMimeFromData)
+    // ------------------------------------------------------------------------
+    {
+        wchar_t* mimeOut = nullptr;
+
+        // PNG Magic
+        const uint8_t pngMagic[] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00 };
+        ole32::HRESULT hr = urlmon::FindMimeFromData(nullptr, nullptr, pngMagic, sizeof(pngMagic), nullptr, 0, &mimeOut, 0);
+        TEST_ASSERT(SUCCEEDED(hr) && mimeOut != nullptr, "FindMimeFromData must succeed for PNG magic");
+        TEST_ASSERT(std::wstring(mimeOut) == L"image/png", "Detected MIME must be image/png");
+        ole32::CoTaskMemFree(mimeOut);
+
+        // JPEG Magic
+        const uint8_t jpegMagic[] = { 0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10 };
+        hr = urlmon::FindMimeFromData(nullptr, nullptr, jpegMagic, sizeof(jpegMagic), nullptr, 0, &mimeOut, 0);
+        TEST_ASSERT(SUCCEEDED(hr) && mimeOut != nullptr, "FindMimeFromData must succeed for JPEG magic");
+        TEST_ASSERT(std::wstring(mimeOut) == L"image/jpeg", "Detected MIME must be image/jpeg");
+        ole32::CoTaskMemFree(mimeOut);
+
+        // PDF Magic
+        const uint8_t pdfMagic[] = { '%', 'P', 'D', 'F', '-', '1', '.', '7' };
+        hr = urlmon::FindMimeFromData(nullptr, nullptr, pdfMagic, sizeof(pdfMagic), nullptr, 0, &mimeOut, 0);
+        TEST_ASSERT(SUCCEEDED(hr) && mimeOut != nullptr, "FindMimeFromData must succeed for PDF magic");
+        TEST_ASSERT(std::wstring(mimeOut) == L"application/pdf", "Detected MIME must be application/pdf");
+        ole32::CoTaskMemFree(mimeOut);
+
+        // ZIP Magic
+        const uint8_t zipMagic[] = { 'P', 'K', 0x03, 0x04, 0x14, 0x00 };
+        hr = urlmon::FindMimeFromData(nullptr, nullptr, zipMagic, sizeof(zipMagic), nullptr, 0, &mimeOut, 0);
+        TEST_ASSERT(SUCCEEDED(hr) && mimeOut != nullptr, "FindMimeFromData must succeed for ZIP magic");
+        TEST_ASSERT(std::wstring(mimeOut) == L"application/zip", "Detected MIME must be application/zip");
+        ole32::CoTaskMemFree(mimeOut);
+
+        // HTML Detection
+        const char htmlData[] = "<!DOCTYPE html><html><body><h1>MicaNT</h1></body></html>";
+        hr = urlmon::FindMimeFromData(nullptr, nullptr, htmlData, sizeof(htmlData), nullptr, 0, &mimeOut, 0);
+        TEST_ASSERT(SUCCEEDED(hr) && mimeOut != nullptr, "FindMimeFromData must succeed for HTML");
+        TEST_ASSERT(std::wstring(mimeOut) == L"text/html", "Detected MIME must be text/html");
+        ole32::CoTaskMemFree(mimeOut);
+    }
+
+    // ------------------------------------------------------------------------
+    // 13. URLDownloadToFileW & IBindStatusCallback
+    // ------------------------------------------------------------------------
+    {
+        std::string fileContent = "MicaNT Sovereign OS - Web Download Subsystem Verified!";
+        wininet::HttpMockRegistry::Instance().registerMock(
+            "http://micant.org/downloads/readme.txt",
+            200,
+            "text/plain",
+            fileContent
+        );
+
+        class TestProgressCallback : public urlmon::IBindStatusCallback {
+        public:
+            bool startCalled{false};
+            bool progressCalled{false};
+            bool stopCalled{false};
+            uint32_t finalBytes{0};
+
+            virtual ole32::HRESULT QueryInterface(ole32::REFIID riid, void** ppv) override {
+                if (!ppv) return ole32::E_POINTER;
+                if (riid == ole32::IID_IUnknown || riid == urlmon::IID_IBindStatusCallback) {
+                    *ppv = this;
+                    return ole32::S_OK;
+                }
+                *ppv = nullptr;
+                return ole32::E_NOINTERFACE;
+            }
+            virtual uint32_t AddRef() override { return 1; }
+            virtual uint32_t Release() override { return 1; }
+            virtual ole32::HRESULT OnStartBinding(uint32_t, void*) override { startCalled = true; return ole32::S_OK; }
+            virtual ole32::HRESULT GetPriority(int32_t*) override { return ole32::S_OK; }
+            virtual ole32::HRESULT OnLowResource(uint32_t) override { return ole32::S_OK; }
+            virtual ole32::HRESULT OnProgress(uint32_t cur, uint32_t, uint32_t, const wchar_t*) override {
+                progressCalled = true;
+                finalBytes = cur;
+                return ole32::S_OK;
+            }
+            virtual ole32::HRESULT OnStopBinding(ole32::HRESULT, const wchar_t*) override { stopCalled = true; return ole32::S_OK; }
+            virtual ole32::HRESULT GetBindInfo(uint32_t*, void*) override { return ole32::S_OK; }
+            virtual ole32::HRESULT OnDataAvailable(uint32_t, uint32_t, void*, void*) override { return ole32::S_OK; }
+            virtual ole32::HRESULT OnObjectAvailable(ole32::REFIID, ole32::IUnknown*) override { return ole32::S_OK; }
+        };
+
+        TestProgressCallback cb;
+        const wchar_t* destPath = L"C:\\Windows\\Temp\\downloaded_readme.txt";
+        ole32::HRESULT hr = urlmon::URLDownloadToFileW(
+            nullptr,
+            L"http://micant.org/downloads/readme.txt",
+            destPath,
+            0,
+            &cb
+        );
+        TEST_ASSERT(SUCCEEDED(hr), "URLDownloadToFileW must return S_OK");
+        TEST_ASSERT(cb.startCalled == true, "IBindStatusCallback::OnStartBinding must be called");
+        TEST_ASSERT(cb.progressCalled == true, "IBindStatusCallback::OnProgress must be called");
+        TEST_ASSERT(cb.stopCalled == true, "IBindStatusCallback::OnStopBinding must be called");
+        TEST_ASSERT(cb.finalBytes == fileContent.size(), "Final downloaded byte count must match fileContent size");
+
+        // Verify content written to VFS
+        std::shared_ptr<fs::FileObject> fObj;
+        NtStatus st = fs::VirtualFileSystem::get().createOrOpenFile(destPath, fs::FILE_GENERIC_READ, fs::FILE_OPEN, fObj);
+        TEST_ASSERT(NT_SUCCESS(st) && fObj != nullptr, "Downloaded file must exist in VFS");
+        std::string diskContent(fObj->getData().begin(), fObj->getData().end());
+        TEST_ASSERT(diskContent == fileContent, "VFS file content must match downloaded mock payload");
+    }
+
+    // ------------------------------------------------------------------------
+    // 14. URL Moniker (CreateURLMoniker & Display Name)
+    // ------------------------------------------------------------------------
+    {
+        urlmon::IMoniker* pmk = nullptr;
+        ole32::HRESULT hr = urlmon::CreateURLMoniker(nullptr, L"https://micant.org/subsystem/index.html", &pmk);
+        TEST_ASSERT(SUCCEEDED(hr) && pmk != nullptr, "CreateURLMoniker must succeed");
+
+        wchar_t* dispName = nullptr;
+        hr = pmk->GetDisplayName(nullptr, nullptr, &dispName);
+        TEST_ASSERT(SUCCEEDED(hr) && dispName != nullptr, "IMoniker::GetDisplayName must return display name");
+        TEST_ASSERT(std::wstring(dispName) == L"https://micant.org/subsystem/index.html", "Display name must match URL");
+        ole32::CoTaskMemFree(dispName);
+
+        uint32_t hashVal = 0;
+        pmk->Hash(&hashVal);
+        TEST_ASSERT(hashVal != 0, "Moniker hash must be non-zero");
+
+        pmk->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // 15. Dynamic Loader & Version Database Exports Verification
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        // wininet.dll exports
+        TEST_ASSERT(ldr.getExport("wininet.dll", "InternetOpenW") != nullptr, "wininet.dll!InternetOpenW must be exported");
+        TEST_ASSERT(ldr.getExport("wininet.dll", "InternetConnectW") != nullptr, "wininet.dll!InternetConnectW must be exported");
+        TEST_ASSERT(ldr.getExport("wininet.dll", "HttpOpenRequestW") != nullptr, "wininet.dll!HttpOpenRequestW must be exported");
+        TEST_ASSERT(ldr.getExport("wininet.dll", "HttpSendRequestW") != nullptr, "wininet.dll!HttpSendRequestW must be exported");
+        TEST_ASSERT(ldr.getExport("wininet.dll", "HttpQueryInfoW") != nullptr, "wininet.dll!HttpQueryInfoW must be exported");
+        TEST_ASSERT(ldr.getExport("wininet.dll", "InternetReadFile") != nullptr, "wininet.dll!InternetReadFile must be exported");
+        TEST_ASSERT(ldr.getExport("wininet.dll", "InternetCrackUrlW") != nullptr, "wininet.dll!InternetCrackUrlW must be exported");
+
+        // urlmon.dll exports
+        TEST_ASSERT(ldr.getExport("urlmon.dll", "URLDownloadToFileW") != nullptr, "urlmon.dll!URLDownloadToFileW must be exported");
+        TEST_ASSERT(ldr.getExport("urlmon.dll", "URLDownloadToCacheFileW") != nullptr, "urlmon.dll!URLDownloadToCacheFileW must be exported");
+        TEST_ASSERT(ldr.getExport("urlmon.dll", "FindMimeFromData") != nullptr, "urlmon.dll!FindMimeFromData must be exported");
+        TEST_ASSERT(ldr.getExport("urlmon.dll", "CreateURLMoniker") != nullptr, "urlmon.dll!CreateURLMoniker must be exported");
+
+        // version info verification
+        uint32_t h = 0;
+        uint32_t sWininet = version::GetFileVersionInfoSizeA("wininet.dll", &h);
+        TEST_ASSERT(sWininet > 0, "wininet.dll must have version info resource");
+
+        std::vector<uint8_t> vWininet(sWininet);
+        TEST_ASSERT(version::GetFileVersionInfoA("wininet.dll", h, sWininet, vWininet.data()) != 0, "GetFileVersionInfoA for wininet.dll must succeed");
+
+        void* pDesc = nullptr;
+        uint32_t dLen = 0;
+        TEST_ASSERT(version::VerQueryValueA(vWininet.data(), "\\StringFileInfo\\040904B0\\FileDescription", &pDesc, &dLen) != 0, "VerQueryValueA for wininet.dll must succeed");
+        TEST_ASSERT(std::string(static_cast<const char*>(pDesc)) == "Internet Extensions for Win32", "FileDescription must match Internet Extensions for Win32");
+
+        uint32_t sUrlmon = version::GetFileVersionInfoSizeA("urlmon.dll", &h);
+        TEST_ASSERT(sUrlmon > 0, "urlmon.dll must have version info resource");
+    }
+
+    // ------------------------------------------------------------------------
+    // 16. Shell Command Integration (wininet & curl)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("wininet info", out);
+        TEST_ASSERT(out.str().find("MicaNT Windows Internet Subsystem") != std::string::npos, "Shell wininet info command must succeed");
+    }
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("wininet test", out);
+        TEST_ASSERT(out.str().find("SUCCESS - RFC 7230 request executed cleanly.") != std::string::npos, "Shell wininet test command must succeed");
+    }
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("curl http://micant.org/sample.txt -o C:\\Windows\\Temp\\curl_test.txt", out);
+        TEST_ASSERT(out.str().find("Download completed successfully") != std::string::npos, "Shell curl command must succeed");
+    }
+
+    std::cout << "[TEST] Suite 65: WinINet & URLMon Web Client Subsystems PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -9579,6 +10035,7 @@ int main() {
     RUN_TEST(Test_Direct3D9_ProgrammableShaders_And_D3DX9Math);
     RUN_TEST(Test_WinMM_DirectSound_And_VersionInfo);
     RUN_TEST(Test_OpenGL_And_WGL_Subsystem);
+    RUN_TEST(Test_WinINet_And_URLMon_Subsystems);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
