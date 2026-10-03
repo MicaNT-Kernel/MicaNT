@@ -81,6 +81,9 @@
 #include "micant/ole32.hpp"
 #include "micant/shell32.hpp"
 #include "micant/comctl32.hpp"
+#include "micant/winmm.hpp"
+#include "micant/dsound.hpp"
+#include "micant/version.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -8854,6 +8857,349 @@ void Test_Direct3D9_ProgrammableShaders_And_D3DX9Math() {
     std::cout << "[TEST] Suite 62: Direct3D 9 Programmable Shaders & D3DX9 Runtime PASSED.\n";
 }
 
+void Test_WinMM_DirectSound_And_VersionInfo() {
+    std::cout << "[TEST] Running Suite 63: WinMM Multimedia Engine, DirectSound 8 Audio & Version API...\n";
+
+    // ------------------------------------------------------------------------
+    // 1. WinMM Multimedia Timers
+    // ------------------------------------------------------------------------
+    winmm::InitializeWinMMExports();
+
+    winmm::TIMECAPS tc{};
+    uint32_t mmr = winmm::timeGetDevCaps(&tc, sizeof(tc));
+    TEST_ASSERT(mmr == winmm::TIMERR_NOERROR, "timeGetDevCaps must succeed");
+    TEST_ASSERT(tc.wPeriodMin == 1 && tc.wPeriodMax == 1000000, "timeGetDevCaps must report 1ms min timer resolution");
+
+    mmr = winmm::timeBeginPeriod(1);
+    TEST_ASSERT(mmr == winmm::TIMERR_NOERROR, "timeBeginPeriod(1) must succeed");
+    TEST_ASSERT(winmm::MultimediaTimerService::Instance().GetCurrentPeriod() == 1, "Active timer resolution must be 1ms");
+
+    uint32_t tStart = winmm::timeGetTime();
+    uint32_t tEnd = tStart;
+    while (tEnd == tStart) {
+        tEnd = winmm::timeGetTime();
+    }
+    TEST_ASSERT(tEnd >= tStart, "timeGetTime must advance monotonically");
+
+    mmr = winmm::timeEndPeriod(1);
+    TEST_ASSERT(mmr == winmm::TIMERR_NOERROR, "timeEndPeriod(1) must succeed");
+
+    uint32_t timerId = 0;
+    mmr = winmm::timeSetEvent(50, 1, nullptr, nullptr, winmm::TIME_ONESHOT, &timerId);
+    TEST_ASSERT(mmr == winmm::TIMERR_NOERROR && timerId != 0, "timeSetEvent must create timer event");
+    mmr = winmm::timeKillEvent(timerId);
+    TEST_ASSERT(mmr == winmm::TIMERR_NOERROR, "timeKillEvent must cancel active timer event");
+
+    // ------------------------------------------------------------------------
+    // 2. WinMM Waveform Audio (waveOut)
+    // ------------------------------------------------------------------------
+    uint32_t numDevs = winmm::waveOutGetNumDevs();
+    TEST_ASSERT(numDevs >= 1, "waveOutGetNumDevs must report at least 1 audio device");
+
+    winmm::WAVEOUTCAPSA woc{};
+    mmr = winmm::waveOutGetDevCapsA(0, &woc, sizeof(woc));
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutGetDevCapsA must succeed");
+    TEST_ASSERT(std::string(woc.szPname).find("MicaNT") != std::string::npos, "WaveOut device name must identify MicaNT");
+
+    audio::WAVEFORMATEX wfx{};
+    wfx.wFormatTag = audio::WAVE_FORMAT_PCM;
+    wfx.nChannels = 2;
+    wfx.nSamplesPerSec = 44100;
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = 4;
+    wfx.nAvgBytesPerSec = 44100 * 4;
+
+    winmm::HWAVEOUT hwo = nullptr;
+    mmr = winmm::waveOutOpen(&hwo, 0, &wfx, nullptr, nullptr, 0);
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR && hwo != nullptr, "waveOutOpen must succeed with 44.1kHz 16-bit stereo PCM");
+
+    // Test volume
+    mmr = winmm::waveOutSetVolume(hwo, 0x80008000);
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutSetVolume must succeed");
+    uint32_t vol = 0;
+    mmr = winmm::waveOutGetVolume(hwo, &vol);
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR && vol == 0x80008000, "waveOutGetVolume must return set volume");
+
+    // Allocate & Prepare Header
+    std::vector<int16_t> pcmSamples(1024 * 2, 0);
+    for (size_t i = 0; i < pcmSamples.size(); ++i) {
+        pcmSamples[i] = static_cast<int16_t>(std::sin(i * 0.1) * 16000.0);
+    }
+
+    winmm::WAVEHDR whdr{};
+    whdr.lpData = reinterpret_cast<char*>(pcmSamples.data());
+    whdr.dwBufferLength = static_cast<uint32_t>(pcmSamples.size() * sizeof(int16_t));
+    mmr = winmm::waveOutPrepareHeader(hwo, &whdr, sizeof(whdr));
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutPrepareHeader must succeed");
+    TEST_ASSERT(whdr.dwFlags & winmm::WHDR_PREPARED, "WHDR_PREPARED flag must be set");
+
+    mmr = winmm::waveOutWrite(hwo, &whdr, sizeof(whdr));
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutWrite must succeed");
+    TEST_ASSERT(whdr.dwFlags & winmm::WHDR_DONE, "WHDR_DONE flag must be set after write completes");
+
+    winmm::MMTIME mmtime{};
+    mmtime.wType = winmm::TIME_MS;
+    mmr = winmm::waveOutGetPosition(hwo, &mmtime, sizeof(mmtime));
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutGetPosition must succeed");
+
+    mmr = winmm::waveOutPause(hwo);
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutPause must succeed");
+    mmr = winmm::waveOutRestart(hwo);
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutRestart must succeed");
+    mmr = winmm::waveOutReset(hwo);
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutReset must succeed");
+
+    mmr = winmm::waveOutUnprepareHeader(hwo, &whdr, sizeof(whdr));
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutUnprepareHeader must succeed");
+
+    mmr = winmm::waveOutClose(hwo);
+    TEST_ASSERT(mmr == winmm::MMSYSERR_NOERROR, "waveOutClose must succeed");
+
+    // ------------------------------------------------------------------------
+    // 3. Sound Playback (PlaySound & RIFF WAVE Parser)
+    // ------------------------------------------------------------------------
+    auto sineRiff = winmm::SoundPlaybackService::Instance().GenerateSineWaveRiff(440, 200, 44100);
+    TEST_ASSERT(sineRiff.size() > 44, "GenerateSineWaveRiff must produce RIFF container");
+
+    auto parsed = winmm::ParseRiffWave(sineRiff.data(), sineRiff.size());
+    TEST_ASSERT(parsed.isValid, "ParseRiffWave must identify valid RIFF WAVE headers");
+    TEST_ASSERT(parsed.format.nSamplesPerSec == 44100, "Sample rate must match 44100 Hz");
+    TEST_ASSERT(parsed.format.nChannels == 1, "Channels must match 1 (mono)");
+
+    int psRes = winmm::PlaySoundA(reinterpret_cast<const char*>(sineRiff.data()), nullptr, winmm::SND_MEMORY | winmm::SND_SYNC);
+    TEST_ASSERT(psRes == 1, "PlaySoundA with SND_MEMORY must succeed");
+    TEST_ASSERT(winmm::SoundPlaybackService::Instance().IsPlaying(), "SoundPlaybackService must be in active state");
+
+    winmm::PlaySoundA(nullptr, nullptr, winmm::SND_PURGE);
+    TEST_ASSERT(!winmm::SoundPlaybackService::Instance().IsPlaying(), "PlaySoundA with null/purge must stop playback");
+
+    // ------------------------------------------------------------------------
+    // 4. Media Control Interface (MCI) Command Engine
+    // ------------------------------------------------------------------------
+    char mciRet[128]{};
+    uint32_t mciErr = winmm::mciSendStringA("open bgm.wav type waveaudio alias track1", mciRet, sizeof(mciRet), nullptr);
+    TEST_ASSERT(mciErr == winmm::MCIERR_NO_ERROR, "MCI open command must succeed");
+
+    mciErr = winmm::mciSendStringA("status track1 mode", mciRet, sizeof(mciRet), nullptr);
+    TEST_ASSERT(mciErr == winmm::MCIERR_NO_ERROR && std::string(mciRet) == "stopped", "MCI status mode must report 'stopped'");
+
+    mciErr = winmm::mciSendStringA("play track1 from 0 to 5000", mciRet, sizeof(mciRet), nullptr);
+    TEST_ASSERT(mciErr == winmm::MCIERR_NO_ERROR, "MCI play command must succeed");
+
+    mciErr = winmm::mciSendStringA("status track1 mode", mciRet, sizeof(mciRet), nullptr);
+    TEST_ASSERT(mciErr == winmm::MCIERR_NO_ERROR && std::string(mciRet) == "playing", "MCI status mode must report 'playing'");
+
+    mciErr = winmm::mciSendStringA("pause track1", mciRet, sizeof(mciRet), nullptr);
+    TEST_ASSERT(mciErr == winmm::MCIERR_NO_ERROR, "MCI pause command must succeed");
+    winmm::mciSendStringA("status track1 mode", mciRet, sizeof(mciRet), nullptr);
+    TEST_ASSERT(std::string(mciRet) == "paused", "MCI status mode must report 'paused'");
+
+    mciErr = winmm::mciSendStringA("resume track1", mciRet, sizeof(mciRet), nullptr);
+    TEST_ASSERT(mciErr == winmm::MCIERR_NO_ERROR, "MCI resume command must succeed");
+
+    mciErr = winmm::mciSendStringA("close track1", mciRet, sizeof(mciRet), nullptr);
+    TEST_ASSERT(mciErr == winmm::MCIERR_NO_ERROR, "MCI close command must succeed");
+
+    // ------------------------------------------------------------------------
+    // 5. WinMM Joystick API
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(winmm::joyGetNumDevs() >= 1, "joyGetNumDevs must report at least 1 joystick device");
+    winmm::JOYCAPSA jc{};
+    TEST_ASSERT(winmm::joyGetDevCapsA(0, &jc, sizeof(jc)) == winmm::JOYERR_NOERROR, "joyGetDevCapsA must succeed");
+    winmm::JOYINFO ji{};
+    TEST_ASSERT(winmm::joyGetPos(0, &ji) == winmm::JOYERR_NOERROR && ji.wXpos == 32768, "joyGetPos must report centered axis");
+
+    // ------------------------------------------------------------------------
+    // 6. DirectSound 8 Creation, Caps & Buffers
+    // ------------------------------------------------------------------------
+    dsound::InitializeDirectSoundExports();
+
+    dsound::IDirectSound8* pDS8 = nullptr;
+    int32_t hr = dsound::DirectSoundCreate8(nullptr, &pDS8, nullptr);
+    TEST_ASSERT(hr == dsound::DS_OK && pDS8 != nullptr, "DirectSoundCreate8 must succeed");
+
+    dsound::DSCAPS dscaps{};
+    dscaps.dwSize = sizeof(dscaps);
+    hr = pDS8->GetCaps(&dscaps);
+    TEST_ASSERT(hr == dsound::DS_OK && dscaps.dwMaxHwMixingAllBuffers > 0, "DirectSound8 GetCaps must report hardware mixing");
+
+    uint32_t certified = 0;
+    pDS8->VerifyCertification(&certified);
+    TEST_ASSERT(certified == 1, "DirectSound8 driver must be WHQL certified");
+
+    hr = pDS8->SetCooperativeLevel(nullptr, dsound::DSSCL_PRIORITY);
+    TEST_ASSERT(hr == dsound::DS_OK, "SetCooperativeLevel must succeed");
+
+    // Create 3D secondary sound buffer
+    dsound::DSBUFFERDESC dsDesc{};
+    dsDesc.dwSize = sizeof(dsDesc);
+    dsDesc.dwFlags = dsound::DSBCAPS_CTRL3D | dsound::DSBCAPS_CTRLVOLUME | dsound::DSBCAPS_CTRLPAN | dsound::DSBCAPS_CTRLFREQUENCY;
+    dsDesc.dwBufferBytes = 44100 * 4; // 1 second buffer
+    dsDesc.lpwfxFormat = &wfx;
+
+    dsound::IDirectSoundBuffer* pDSBuffer = nullptr;
+    hr = pDS8->CreateSoundBuffer(&dsDesc, &pDSBuffer, nullptr);
+    TEST_ASSERT(hr == dsound::DS_OK && pDSBuffer != nullptr, "CreateSoundBuffer must succeed");
+
+    // ------------------------------------------------------------------------
+    // 7. DirectSound Circular Buffer Lock / Wrap-Around
+    // ------------------------------------------------------------------------
+    void *pv1 = nullptr, *pv2 = nullptr;
+    uint32_t cb1 = 0, cb2 = 0;
+    uint32_t lockOffset = (44100 * 4) - 256;
+    hr = pDSBuffer->Lock(lockOffset, 1024, &pv1, &cb1, &pv2, &cb2, 0);
+    TEST_ASSERT(hr == dsound::DS_OK, "Lock across circular boundary must succeed");
+    TEST_ASSERT(pv1 != nullptr && cb1 == 256, "First locked block must have 256 bytes");
+    TEST_ASSERT(pv2 != nullptr && cb2 == 768, "Second wrap-around block must have 768 bytes");
+    TEST_ASSERT(cb1 + cb2 == 1024, "Total locked bytes must equal 1024");
+
+    hr = pDSBuffer->Unlock(pv1, cb1, pv2, cb2);
+    TEST_ASSERT(hr == dsound::DS_OK, "Unlock must succeed");
+
+    // Test Volume, Pan, Frequency
+    pDSBuffer->SetVolume(-1200); // -12 dB
+    int32_t readVol = 0;
+    pDSBuffer->GetVolume(&readVol);
+    TEST_ASSERT(readVol == -1200, "GetVolume must retrieve configured volume");
+
+    pDSBuffer->SetPan(-2500); // Left bias
+    int32_t readPan = 0;
+    pDSBuffer->GetPan(&readPan);
+    TEST_ASSERT(readPan == -2500, "GetPan must retrieve configured pan");
+
+    pDSBuffer->SetFrequency(22050);
+    uint32_t readFreq = 0;
+    pDSBuffer->GetFrequency(&readFreq);
+    TEST_ASSERT(readFreq == 22050, "GetFrequency must retrieve configured frequency");
+
+    // ------------------------------------------------------------------------
+    // 8. DirectSound 3D Positional Audio
+    // ------------------------------------------------------------------------
+    dsound::IDirectSound3DBuffer* p3DBuffer = nullptr;
+    hr = pDSBuffer->QueryInterface(dsound::IID_IDirectSound3DBuffer, reinterpret_cast<void**>(&p3DBuffer));
+    TEST_ASSERT(hr == dsound::DS_OK && p3DBuffer != nullptr, "QueryInterface for IDirectSound3DBuffer must succeed");
+
+    p3DBuffer->SetPosition(12.0f, 0.0f, 8.0f, 0);
+    p3DBuffer->SetMinDistance(1.0f, 0);
+    p3DBuffer->SetMaxDistance(50.0f, 0);
+
+    dsound::D3DVECTOR pos{};
+    p3DBuffer->GetPosition(&pos);
+    TEST_ASSERT(pos.x == 12.0f && pos.z == 8.0f, "GetPosition must return 3D emitter coordinates");
+    p3DBuffer->Release();
+
+    // ------------------------------------------------------------------------
+    // 9. Real-Time Multi-Voice Software PCM Mixer
+    // ------------------------------------------------------------------------
+    pDSBuffer->Lock(0, 44100 * 4, &pv1, &cb1, nullptr, nullptr, 0);
+    int16_t* pcm16 = static_cast<int16_t*>(pv1);
+    for (size_t i = 0; i < (44100 * 4) / 2; ++i) {
+        pcm16[i] = static_cast<int16_t>(std::sin(i * 0.05) * 12000.0);
+    }
+    pDSBuffer->Unlock(pv1, cb1, nullptr, 0);
+
+    pDSBuffer->Play(0, 0, dsound::DSBPLAY_LOOPING);
+    uint32_t status = 0;
+    pDSBuffer->GetStatus(&status);
+    TEST_ASSERT((status & dsound::DSBSTATUS_PLAYING) && (status & dsound::DSBSTATUS_LOOPING), "Sound buffer must report playing and looping");
+
+    int16_t outMix[512 * 2]{};
+    auto* pImpl = static_cast<dsound::DirectSound8Impl*>(pDS8);
+    size_t mixedVoices = pImpl->MixActiveVoices(outMix, 512);
+    TEST_ASSERT(mixedVoices >= 1, "MixActiveVoices must mix active secondary buffer");
+
+    bool hasMixedSound = false;
+    for (size_t i = 0; i < 512 * 2; ++i) {
+        if (outMix[i] != 0) {
+            hasMixedSound = true;
+            break;
+        }
+    }
+    TEST_ASSERT(hasMixedSound, "Output mix buffer must contain non-zero mixed audio waveform");
+
+    pDSBuffer->Stop();
+    pDSBuffer->Release();
+    pDS8->Release();
+
+    // ------------------------------------------------------------------------
+    // 10. Version Information API (version.dll)
+    // ------------------------------------------------------------------------
+    version::InitializeVersionExports();
+
+    uint32_t vHandle = 0;
+    uint32_t vSize = version::GetFileVersionInfoSizeA("kernel32.dll", &vHandle);
+    TEST_ASSERT(vSize > sizeof(version::VS_FIXEDFILEINFO), "GetFileVersionInfoSizeA for kernel32.dll must be non-zero");
+
+    std::vector<uint8_t> verData(vSize);
+    int32_t gfvRes = version::GetFileVersionInfoA("kernel32.dll", vHandle, vSize, verData.data());
+    TEST_ASSERT(gfvRes == 1, "GetFileVersionInfoA must succeed");
+
+    void* pFixedInfo = nullptr;
+    uint32_t fixedInfoLen = 0;
+    int32_t qvRes = version::VerQueryValueA(verData.data(), "\\", &pFixedInfo, &fixedInfoLen);
+    TEST_ASSERT(qvRes == 1 && pFixedInfo != nullptr, "VerQueryValueA for root '\\' must retrieve VS_FIXEDFILEINFO");
+
+    auto* ffi = static_cast<const version::VS_FIXEDFILEINFO*>(pFixedInfo);
+    TEST_ASSERT(ffi->dwSignature == version::VS_FFI_SIGNATURE, "VS_FIXEDFILEINFO signature must be 0xFEEF04BD");
+    TEST_ASSERT(ffi->dwFileOS == version::VOS_NT_WINDOWS32, "File OS must be VOS_NT_WINDOWS32");
+    TEST_ASSERT(ffi->dwFileType == version::VFT_DLL, "kernel32.dll file type must be VFT_DLL");
+
+    void* pStrVal = nullptr;
+    uint32_t strValLen = 0;
+    qvRes = version::VerQueryValueA(verData.data(), "\\StringFileInfo\\040904B0\\FileDescription", &pStrVal, &strValLen);
+    TEST_ASSERT(qvRes == 1 && pStrVal != nullptr, "VerQueryValueA for FileDescription must succeed");
+    TEST_ASSERT(std::string(static_cast<const char*>(pStrVal)).find("Windows NT BASE API") != std::string::npos, "FileDescription must match Windows NT BASE API");
+
+    qvRes = version::VerQueryValueA(verData.data(), "\\StringFileInfo\\040904B0\\CompanyName", &pStrVal, &strValLen);
+    TEST_ASSERT(qvRes == 1 && std::string(static_cast<const char*>(pStrVal)) == "MicaNT Sovereign Project", "CompanyName must match MicaNT Sovereign Project");
+
+    char langStr[64]{};
+    uint32_t langLen = version::VerLanguageNameA(0x0409, langStr, sizeof(langStr));
+    TEST_ASSERT(langLen > 0 && std::string(langStr) == "English (United States)", "VerLanguageNameA for 0x0409 must report English (United States)");
+
+    // ------------------------------------------------------------------------
+    // 11. Dynamic Loader Resolution Verification
+    // ------------------------------------------------------------------------
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("winmm.dll", "timeGetTime") != nullptr, "winmm.dll!timeGetTime must be registered in DynamicLoader");
+    TEST_ASSERT(ldr.getExport("winmm.dll", "PlaySoundA") != nullptr, "winmm.dll!PlaySoundA must be registered in DynamicLoader");
+    TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutOpen") != nullptr, "winmm.dll!waveOutOpen must be registered in DynamicLoader");
+    TEST_ASSERT(ldr.getExport("winmm.dll", "mciSendStringA") != nullptr, "winmm.dll!mciSendStringA must be registered in DynamicLoader");
+    TEST_ASSERT(ldr.getExport("dsound.dll", "DirectSoundCreate8") != nullptr, "dsound.dll!DirectSoundCreate8 must be registered in DynamicLoader");
+    TEST_ASSERT(ldr.getExport("dsound.dll", "DirectSoundEnumerateA") != nullptr, "dsound.dll!DirectSoundEnumerateA must be registered in DynamicLoader");
+    TEST_ASSERT(ldr.getExport("version.dll", "GetFileVersionInfoA") != nullptr, "version.dll!GetFileVersionInfoA must be registered in DynamicLoader");
+    TEST_ASSERT(ldr.getExport("version.dll", "VerQueryValueA") != nullptr, "version.dll!VerQueryValueA must be registered in DynamicLoader");
+
+    // ------------------------------------------------------------------------
+    // 12. Shell Command Integration
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("winmm beep", out);
+        TEST_ASSERT(out.str().find("PlaySound Result:   SUCCESS") != std::string::npos, "Shell winmm beep command must succeed");
+    }
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("winmm timer", out);
+        TEST_ASSERT(out.str().find("timeBeginPeriod(1): Active target resolution = 1 ms") != std::string::npos, "Shell winmm timer command must succeed");
+    }
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("dsound", out);
+        TEST_ASSERT(out.str().find("DirectSound Interface: IDirectSound8") != std::string::npos, "Shell dsound command must succeed");
+    }
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("version kernel32.dll", out);
+        TEST_ASSERT(out.str().find("Windows NT BASE API Client") != std::string::npos, "Shell version command must succeed");
+    }
+
+    std::cout << "[TEST] Suite 63: WinMM Multimedia Engine, DirectSound 8 Audio & Version API PASSED.\n";
+}
 
 int main() {
     std::cout << "========================================================================\n";
@@ -8922,6 +9268,7 @@ int main() {
     RUN_TEST(Test_Shell32_And_ComCtl32_Win32Controls);
     RUN_TEST(Test_Windows_CMD_And_BatchExecutionEngine);
     RUN_TEST(Test_Direct3D9_ProgrammableShaders_And_D3DX9Math);
+    RUN_TEST(Test_WinMM_DirectSound_And_VersionInfo);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

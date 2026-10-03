@@ -49,6 +49,9 @@
 #include "shell32.hpp"
 #include "comctl32.hpp"
 #include "cmd.hpp"
+#include "winmm.hpp"
+#include "dsound.hpp"
+#include "version.hpp"
 
 namespace micant::shell {
 
@@ -160,6 +163,9 @@ public:
             if (cmd == "comctl" || cmd == "commoncontrols") { cmdComCtl(tokens, out); return 0; }
             if (cmd == "view3d" || cmd == "viewer3d") { cmdView3D(tokens, out); return 0; }
             if (cmd == "vulkan" || cmd == "vkinfo" || cmd == "vkcube") { cmdVulkan(tokens, out); return 0; }
+            if (cmd == "winmm" || cmd == "mmsys") { cmdWinMM(tokens, out); return 0; }
+            if (cmd == "dsound" || cmd == "directsound") { cmdDirectSound(tokens, out); return 0; }
+            if (cmd == "version" || cmd == "verinfo") { cmdVersion(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -398,6 +404,9 @@ private:
             << "  COMCTL            Displays common controls info and tests Progress/Status bars\n"
             << "  VIEW3D            Launches interactive 3D model viewer (view3d --torus|--cube|--crystal|--wireframe)\n"
             << "  VULKAN / VKINFO   Displays Vulkan ICD status, physical devices, and vkcube test\n"
+            << "  WINMM             WinMM Multimedia API (audio devices, high-res timer, MCI, playback)\n"
+            << "  DSOUND            DirectSound 8 3D Audio Subsystem & Real-Time Voice Mixer\n"
+            << "  VERSION / VERINFO Queries Windows Version Information resource metadata for PE files\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -2203,6 +2212,225 @@ private:
         }
 
         out << "Type 'vulkan test' or 'vkcube' to execute real-time Vulkan render test.\n";
+    }
+
+    void cmdWinMM(const std::vector<std::string>& tokens, std::ostream& out) {
+        winmm::InitializeWinMMExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "beep" || tokens[1] == "play")) {
+            out << "[WinMM] Generating procedural 440 Hz (A4) 16-bit PCM RIFF WAVE...\n";
+            auto waveBuf = winmm::SoundPlaybackService::Instance().GenerateSineWaveRiff(440, 500, 44100);
+            int res = winmm::PlaySoundA(reinterpret_cast<const char*>(waveBuf.data()), nullptr, winmm::SND_MEMORY | winmm::SND_SYNC);
+            out << "  RIFF WAVE Buffer:   " << waveBuf.size() << " bytes\n"
+                << "  PlaySound Result:   " << (res ? "SUCCESS" : "FAILED") << "\n"
+                << "  Playback State:     " << (winmm::SoundPlaybackService::Instance().IsPlaying() ? "Active" : "Completed") << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "timer") {
+            out << "[WinMM] High-Resolution Multimedia Timer Test:\n";
+            winmm::TIMECAPS tc{};
+            winmm::timeGetDevCaps(&tc, sizeof(tc));
+            out << "  Timer Min Period:   " << tc.wPeriodMin << " ms\n"
+                << "  Timer Max Period:   " << tc.wPeriodMax << " ms\n";
+
+            winmm::timeBeginPeriod(1);
+            uint32_t t0 = winmm::timeGetTime();
+            uint32_t currentPeriod = winmm::MultimediaTimerService::Instance().GetCurrentPeriod();
+            out << "  timeBeginPeriod(1): Active target resolution = " << currentPeriod << " ms\n";
+            
+            uint32_t t1 = t0;
+            while (t1 == t0) {
+                t1 = winmm::timeGetTime();
+            }
+            out << "  timeGetTime Delta:  " << (t1 - t0) << " ms\n";
+            winmm::timeEndPeriod(1);
+            out << "  timeEndPeriod(1):   Restored timer resolution.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "mci") {
+            out << "[WinMM] Media Control Interface (MCI) Command Engine:\n";
+            char retBuf[128]{};
+            winmm::mciSendStringA("open bgm.wav type waveaudio alias bgm", retBuf, sizeof(retBuf), nullptr);
+            out << "  MCI: open bgm.wav type waveaudio alias bgm\n";
+
+            winmm::mciSendStringA("status bgm mode", retBuf, sizeof(retBuf), nullptr);
+            out << "  MCI status mode:    " << retBuf << "\n";
+
+            winmm::mciSendStringA("play bgm", retBuf, sizeof(retBuf), nullptr);
+            winmm::mciSendStringA("status bgm mode", retBuf, sizeof(retBuf), nullptr);
+            out << "  MCI play -> mode:   " << retBuf << "\n";
+
+            winmm::mciSendStringA("close bgm", retBuf, sizeof(retBuf), nullptr);
+            out << "  MCI: close bgm completed.\n";
+            return;
+        }
+
+        out << "========================================================================\n"
+            << "              MicaNT Windows Multimedia Engine (winmm.dll)               \n"
+            << "========================================================================\n\n";
+
+        winmm::WAVEOUTCAPSA woc{};
+        winmm::waveOutGetDevCapsA(0, &woc, sizeof(woc));
+        winmm::TIMECAPS tc{};
+        winmm::timeGetDevCaps(&tc, sizeof(tc));
+        winmm::JOYCAPSA jc{};
+        winmm::joyGetDevCapsA(0, &jc, sizeof(jc));
+
+        out << "WaveOut Device:       " << woc.szPname << " (Channels: " << woc.wChannels << ")\n"
+            << "WaveOut Formats:      11kHz - 192kHz Standard PCM / IEEE Float\n"
+            << "Multimedia Timers:    Min " << tc.wPeriodMin << " ms, Max " << tc.wPeriodMax << " ms (timeGetTime: " << winmm::timeGetTime() << " ms)\n"
+            << "Joystick / Gamepad:   " << jc.szPname << " (Buttons: " << jc.wNumButtons << ", Axes: " << jc.wNumAxes << ")\n"
+            << "MCI String Parser:    Ready (open, play, pause, resume, stop, status, close)\n\n"
+            << "Usage:\n"
+            << "  winmm beep          Plays procedural 440 Hz sine wave beep via PlaySound\n"
+            << "  winmm timer         Tests high-resolution 1ms multimedia timer\n"
+            << "  winmm mci           Executes Media Control Interface batch commands\n";
+    }
+
+    void cmdDirectSound(const std::vector<std::string>& tokens, std::ostream& out) {
+        dsound::InitializeDirectSoundExports();
+
+        out << "========================================================================\n"
+            << "            MicaNT DirectSound 8 Runtime Subsystem (dsound.dll)          \n"
+            << "========================================================================\n\n";
+
+        dsound::IDirectSound8* pDS8 = nullptr;
+        int32_t hr = dsound::DirectSoundCreate8(nullptr, &pDS8, nullptr);
+        if (hr != dsound::DS_OK || !pDS8) {
+            out << "Error: Failed to create DirectSound8 device (hr=" << hr << ")\n";
+            return;
+        }
+
+        dsound::DSCAPS caps{};
+        caps.dwSize = sizeof(caps);
+        pDS8->GetCaps(&caps);
+
+        out << "DirectSound Interface: IDirectSound8 (Version 8.0 Parity)\n"
+            << "Max Hardware Mixing:   " << caps.dwMaxHwMixingAllBuffers << " 2D Buffers, " << caps.dwMaxHw3DAllBuffers << " 3D Buffers\n"
+            << "Hardware Audio VRAM:   " << (caps.dwTotalHwMemBytes / (1024 * 1024)) << " MB Free\n"
+            << "Sample Rate Range:     " << caps.dwMinSecondarySampleRate << " Hz - " << caps.dwMaxSecondarySampleRate << " Hz\n\n";
+
+        audio::WAVEFORMATEX wfx{};
+        wfx.wFormatTag = audio::WAVE_FORMAT_PCM;
+        wfx.nChannels = 2;
+        wfx.nSamplesPerSec = 44100;
+        wfx.wBitsPerSample = 16;
+        wfx.nBlockAlign = 4;
+        wfx.nAvgBytesPerSec = 44100 * 4;
+
+        dsound::DSBUFFERDESC desc{};
+        desc.dwSize = sizeof(desc);
+        desc.dwFlags = dsound::DSBCAPS_CTRL3D | dsound::DSBCAPS_CTRLVOLUME | dsound::DSBCAPS_CTRLPAN | dsound::DSBCAPS_CTRLFREQUENCY;
+        desc.dwBufferBytes = 44100 * 4; // 1 second buffer
+        desc.lpwfxFormat = &wfx;
+
+        dsound::IDirectSoundBuffer* pBuffer = nullptr;
+        pDS8->CreateSoundBuffer(&desc, &pBuffer, nullptr);
+
+        if (pBuffer) {
+            void *p1 = nullptr, *p2 = nullptr;
+            uint32_t b1 = 0, b2 = 0;
+            pBuffer->Lock(44100 * 4 - 512, 1024, &p1, &b1, &p2, &b2, 0);
+            out << "Circular Buffer Lock:\n"
+                << "  Requested Offset:   " << (44100 * 4 - 512) << " bytes, Size: 1024 bytes\n"
+                << "  Ptr1: " << p1 << " (" << b1 << " bytes), Ptr2: " << p2 << " (" << b2 << " bytes wrap-around)\n";
+            pBuffer->Unlock(p1, b1, p2, b2);
+
+            pBuffer->SetVolume(-600); // -6.00 dB
+            pBuffer->SetPan(1500);    // +15.00 dB right bias
+            int32_t curVol = 0, curPan = 0;
+            pBuffer->GetVolume(&curVol);
+            pBuffer->GetPan(&curPan);
+            out << "Attenuation & Pan:    Volume: " << curVol << " mB (" << (curVol / 100.0f) << " dB), Pan: " << curPan << " mB\n";
+
+            dsound::IDirectSound3DBuffer* p3DBuf = nullptr;
+            if (pBuffer->QueryInterface(dsound::IID_IDirectSound3DBuffer, reinterpret_cast<void**>(&p3DBuf)) == dsound::DS_OK && p3DBuf) {
+                p3DBuf->SetPosition(5.0f, 0.0f, 10.0f, 0);
+                p3DBuf->SetMinDistance(1.0f, 0);
+                p3DBuf->SetMaxDistance(50.0f, 0);
+                dsound::D3DVECTOR pos{};
+                p3DBuf->GetPosition(&pos);
+                out << "3D Emitter Position:  X=" << pos.x << ", Y=" << pos.y << ", Z=" << pos.z << "\n";
+                p3DBuf->Release();
+            }
+
+            pBuffer->Play(0, 0, dsound::DSBPLAY_LOOPING);
+            uint32_t status = 0;
+            pBuffer->GetStatus(&status);
+            out << "Playback Status:      " << ((status & dsound::DSBSTATUS_PLAYING) ? "PLAYING" : "STOPPED")
+                << " (Looping: " << ((status & dsound::DSBSTATUS_LOOPING) ? "YES" : "NO") << ")\n";
+
+            int16_t mixBuffer[256 * 2]{};
+            auto* pImpl = static_cast<dsound::DirectSound8Impl*>(pDS8);
+            size_t activeVoices = pImpl->MixActiveVoices(mixBuffer, 256);
+            out << "Real-Time PCM Mixer:  Mixed " << activeVoices << " active voice(s) into 256 stereo frames.\n";
+
+            pBuffer->Stop();
+            pBuffer->Release();
+        }
+
+        pDS8->Release();
+    }
+
+    void cmdVersion(const std::vector<std::string>& tokens, std::ostream& out) {
+        version::InitializeVersionExports();
+
+        std::string targetMod = "kernel32.dll";
+        if (tokens.size() > 1) {
+            targetMod = tokens[1];
+        }
+
+        out << "========================================================================\n"
+            << "         MicaNT Windows Version Information Subsystem (version.dll)      \n"
+            << "========================================================================\n\n";
+
+        uint32_t handle = 0;
+        uint32_t size = version::GetFileVersionInfoSizeA(targetMod.c_str(), &handle);
+        if (size == 0) {
+            out << "Error: No version resource found for module: " << targetMod << "\n";
+            return;
+        }
+
+        std::vector<uint8_t> data(size);
+        if (!version::GetFileVersionInfoA(targetMod.c_str(), handle, size, data.data())) {
+            out << "Error: Failed to retrieve version info block for: " << targetMod << "\n";
+            return;
+        }
+
+        void* pFixed = nullptr;
+        uint32_t fixedLen = 0;
+        if (version::VerQueryValueA(data.data(), "\\", &pFixed, &fixedLen) && pFixed) {
+            auto* ffi = static_cast<const version::VS_FIXEDFILEINFO*>(pFixed);
+            uint32_t fvMS = ffi->dwFileVersionMS;
+            uint32_t fvLS = ffi->dwFileVersionLS;
+            uint32_t pvMS = ffi->dwProductVersionMS;
+            uint32_t pvLS = ffi->dwProductVersionLS;
+
+            out << "Module Name:          " << targetMod << "\n"
+                << "File Version (MS.LS): " << (fvMS >> 16) << "." << (fvMS & 0xFFFF) << "."
+                                            << (fvLS >> 16) << "." << (fvLS & 0xFFFF) << "\n"
+                << "Product Version:      " << (pvMS >> 16) << "." << (pvMS & 0xFFFF) << "."
+                                            << (pvLS >> 16) << "." << (pvLS & 0xFFFF) << "\n"
+                << "File Type:            " << (ffi->dwFileType == version::VFT_DLL ? "VFT_DLL (Dynamic Link Library)" : "VFT_APP (Executable Application)") << "\n"
+                << "File OS:              VOS_NT_WINDOWS32 (0x00040004)\n\n";
+        }
+
+        const char* props[] = { "FileDescription", "CompanyName", "ProductName", "FileVersion", "LegalCopyright", "OriginalFilename" };
+        out << "String Table Metadata:\n";
+        for (const char* prop : props) {
+            void* pVal = nullptr;
+            uint32_t valLen = 0;
+            std::string subBlock = "\\StringFileInfo\\040904B0\\" + std::string(prop);
+            if (version::VerQueryValueA(data.data(), subBlock.c_str(), &pVal, &valLen) && pVal) {
+                out << "  " << std::left << std::setw(20) << prop << ": " << static_cast<const char*>(pVal) << "\n";
+            }
+        }
+
+        char langName[64]{};
+        version::VerLanguageNameA(0x0409, langName, sizeof(langName));
+        out << "\nLanguage:             0x0409 (" << langName << ")\n";
     }
 
     static std::string trim(std::string_view s) {
