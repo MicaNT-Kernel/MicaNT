@@ -87,6 +87,7 @@
 #include "micant/opengl.hpp"
 #include "micant/wininet.hpp"
 #include "micant/urlmon.hpp"
+#include "micant/crypt32.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -9966,6 +9967,626 @@ void Test_WinINet_And_URLMon_Subsystems() {
     std::cout << "[TEST] Suite 65: WinINet & URLMon Web Client Subsystems PASSED.\n";
 }
 
+// ============================================================================
+// Suite 66: Windows Cryptography API (CryptoAPI) & Cryptography Next Generation (CNG)
+// ============================================================================
+void Test_CryptoAPI_And_CNG_Subsystems() {
+    std::cout << "\n[TEST] Running Suite 66: Windows CryptoAPI, CNG (BCrypt/NCrypt) & Crypt32 Subsystems...\n";
+
+    // ------------------------------------------------------------------------
+    // 1. Subsystem Initialization
+    // ------------------------------------------------------------------------
+    crypto::InitializeBCryptSubsystemExports();
+    crypt32::InitializeCrypt32SubsystemExports();
+    advapi32::InitializeAdvapi32SubsystemExports();
+
+    // Helper lambda to format binary to hex string
+    auto toHex = [](const uint8_t* data, size_t len) -> std::string {
+        std::ostringstream oss;
+        for (size_t i = 0; i < len; ++i) {
+            oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data[i]);
+        }
+        return oss.str();
+    };
+
+    // ------------------------------------------------------------------------
+    // 2. BCrypt Algorithm Provider & Property Queries
+    // ------------------------------------------------------------------------
+    {
+        crypto::BCRYPT_ALG_HANDLE hSha256 = nullptr;
+        int32_t st = crypto::BCryptOpenAlgorithmProvider(&hSha256, crypto::BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hSha256 != nullptr, "BCryptOpenAlgorithmProvider for SHA256 must succeed");
+
+        uint32_t hashLen = 0;
+        uint32_t cbRes = 0;
+        st = crypto::BCryptGetProperty(hSha256, crypto::BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbRes, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hashLen == 32, "SHA-256 hash length property must be 32");
+
+        uint32_t objLen = 0;
+        st = crypto::BCryptGetProperty(hSha256, crypto::BCRYPT_OBJECT_LENGTH, reinterpret_cast<uint8_t*>(&objLen), sizeof(objLen), &cbRes, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && objLen > 0, "SHA-256 object length property must be > 0");
+
+        crypto::BCryptCloseAlgorithmProvider(hSha256, 0);
+
+        crypto::BCRYPT_ALG_HANDLE hSha512 = nullptr;
+        st = crypto::BCryptOpenAlgorithmProvider(&hSha512, crypto::BCRYPT_SHA512_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hSha512 != nullptr, "BCryptOpenAlgorithmProvider for SHA512 must succeed");
+
+        hashLen = 0;
+        st = crypto::BCryptGetProperty(hSha512, crypto::BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbRes, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hashLen == 64, "SHA-512 hash length property must be 64");
+        crypto::BCryptCloseAlgorithmProvider(hSha512, 0);
+
+        crypto::BCRYPT_ALG_HANDLE hSha384 = nullptr;
+        st = crypto::BCryptOpenAlgorithmProvider(&hSha384, crypto::BCRYPT_SHA384_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hSha384 != nullptr, "BCryptOpenAlgorithmProvider for SHA384 must succeed");
+
+        hashLen = 0;
+        st = crypto::BCryptGetProperty(hSha384, crypto::BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbRes, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hashLen == 48, "SHA-384 hash length property must be 48");
+        crypto::BCryptCloseAlgorithmProvider(hSha384, 0);
+
+        crypto::BCRYPT_ALG_HANDLE hMd5 = nullptr;
+        st = crypto::BCryptOpenAlgorithmProvider(&hMd5, crypto::BCRYPT_MD5_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hMd5 != nullptr, "BCryptOpenAlgorithmProvider for MD5 must succeed");
+
+        hashLen = 0;
+        st = crypto::BCryptGetProperty(hMd5, crypto::BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&hashLen), sizeof(hashLen), &cbRes, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hashLen == 16, "MD5 hash length property must be 16");
+        crypto::BCryptCloseAlgorithmProvider(hMd5, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. BCrypt Known-Answer-Test (KAT) Verification (SHA-256, SHA-384, SHA-512, MD5, SHA-1)
+    // ------------------------------------------------------------------------
+    {
+        const char* msg = "abc";
+        const uint32_t msgLen = 3;
+
+        // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+        {
+            crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+            crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+            crypto::BCRYPT_HASH_HANDLE hHash = nullptr;
+            crypto::BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+            crypto::BCryptHashData(hHash, reinterpret_cast<const uint8_t*>(msg), msgLen, 0);
+            uint8_t digest[32]{};
+            crypto::BCryptFinishHash(hHash, digest, 32, 0);
+            crypto::BCryptDestroyHash(hHash);
+            crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            TEST_ASSERT(toHex(digest, 32) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                        "BCrypt SHA-256('abc') KAT verification failed");
+        }
+
+        // SHA-384("abc") = cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7
+        {
+            crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+            crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_SHA384_ALGORITHM, nullptr, 0);
+            crypto::BCRYPT_HASH_HANDLE hHash = nullptr;
+            crypto::BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+            crypto::BCryptHashData(hHash, reinterpret_cast<const uint8_t*>(msg), msgLen, 0);
+            uint8_t digest[48]{};
+            crypto::BCryptFinishHash(hHash, digest, 48, 0);
+            crypto::BCryptDestroyHash(hHash);
+            crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            TEST_ASSERT(toHex(digest, 48) == "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7",
+                        "BCrypt SHA-384('abc') KAT verification failed");
+        }
+
+        // SHA-512("abc") = ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+        {
+            crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+            crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_SHA512_ALGORITHM, nullptr, 0);
+            crypto::BCRYPT_HASH_HANDLE hHash = nullptr;
+            crypto::BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+            crypto::BCryptHashData(hHash, reinterpret_cast<const uint8_t*>(msg), msgLen, 0);
+            uint8_t digest[64]{};
+            crypto::BCryptFinishHash(hHash, digest, 64, 0);
+            crypto::BCryptDestroyHash(hHash);
+            crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            TEST_ASSERT(toHex(digest, 64) == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+                        "BCrypt SHA-512('abc') KAT verification failed");
+        }
+
+        // MD5("abc") = 900150983cd24fb0d6963f7d28e17f72
+        {
+            crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+            crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_MD5_ALGORITHM, nullptr, 0);
+            crypto::BCRYPT_HASH_HANDLE hHash = nullptr;
+            crypto::BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+            crypto::BCryptHashData(hHash, reinterpret_cast<const uint8_t*>(msg), msgLen, 0);
+            uint8_t digest[16]{};
+            crypto::BCryptFinishHash(hHash, digest, 16, 0);
+            crypto::BCryptDestroyHash(hHash);
+            crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            TEST_ASSERT(toHex(digest, 16) == "900150983cd24fb0d6963f7d28e17f72",
+                        "BCrypt MD5('abc') KAT verification failed");
+        }
+
+        // SHA-1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d
+        {
+            crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+            crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_SHA1_ALGORITHM, nullptr, 0);
+            crypto::BCRYPT_HASH_HANDLE hHash = nullptr;
+            crypto::BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+            crypto::BCryptHashData(hHash, reinterpret_cast<const uint8_t*>(msg), msgLen, 0);
+            uint8_t digest[20]{};
+            crypto::BCryptFinishHash(hHash, digest, 20, 0);
+            crypto::BCryptDestroyHash(hHash);
+            crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            TEST_ASSERT(toHex(digest, 20) == "a9993e364706816aba3e25717850c26c9cd0d89d",
+                        "BCrypt SHA-1('abc') KAT verification failed");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 4. BCrypt Hash Duplication (BCryptDuplicateHash)
+    // ------------------------------------------------------------------------
+    {
+        crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+        crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+
+        crypto::BCRYPT_HASH_HANDLE hHash1 = nullptr;
+        crypto::BCryptCreateHash(hAlg, &hHash1, nullptr, 0, nullptr, 0, 0);
+
+        std::string part1 = "MicaNT Clean-Room ";
+        std::string part2 = "Operating System 2026";
+        crypto::BCryptHashData(hHash1, reinterpret_cast<const uint8_t*>(part1.data()), static_cast<uint32_t>(part1.size()), 0);
+
+        crypto::BCRYPT_HASH_HANDLE hHash2 = nullptr;
+        int32_t st = crypto::BCryptDuplicateHash(hHash1, &hHash2, nullptr, 0, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hHash2 != nullptr, "BCryptDuplicateHash must succeed");
+
+        crypto::BCryptHashData(hHash1, reinterpret_cast<const uint8_t*>(part2.data()), static_cast<uint32_t>(part2.size()), 0);
+        crypto::BCryptHashData(hHash2, reinterpret_cast<const uint8_t*>(part2.data()), static_cast<uint32_t>(part2.size()), 0);
+
+        uint8_t d1[32]{};
+        uint8_t d2[32]{};
+        crypto::BCryptFinishHash(hHash1, d1, 32, 0);
+        crypto::BCryptFinishHash(hHash2, d2, 32, 0);
+
+        TEST_ASSERT(std::memcmp(d1, d2, 32) == 0, "Duplicated hash must produce identical digest to original hash");
+
+        crypto::BCryptDestroyHash(hHash1);
+        crypto::BCryptDestroyHash(hHash2);
+        crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // 5. BCrypt CSPRNG Random Generation
+    // ------------------------------------------------------------------------
+    {
+        uint8_t buf1[32]{};
+        uint8_t buf2[32]{};
+
+        int32_t st1 = crypto::BCryptGenRandom(nullptr, buf1, sizeof(buf1), crypto::BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        int32_t st2 = crypto::BCryptGenRandom(nullptr, buf2, sizeof(buf2), crypto::BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+
+        TEST_ASSERT(BCRYPT_SUCCESS(st1) && BCRYPT_SUCCESS(st2), "BCryptGenRandom with SYSTEM_PREFERRED_RNG must succeed");
+        TEST_ASSERT(std::memcmp(buf1, buf2, sizeof(buf1)) != 0, "Consecutive random buffers must not be identical");
+
+        bool nonZero = false;
+        for (uint8_t b : buf1) if (b != 0) nonZero = true;
+        TEST_ASSERT(nonZero, "Random buffer must contain non-zero hardware entropy");
+    }
+
+    // ------------------------------------------------------------------------
+    // 6. BCrypt Symmetric AES Key Encryption / Decryption
+    // ------------------------------------------------------------------------
+    {
+        crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+        int32_t st = crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_AES_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hAlg != nullptr, "BCryptOpenAlgorithmProvider for AES must succeed");
+
+        uint8_t keyBytes[32] = {
+            0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
+            0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F,
+            0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,
+            0x18,0x19,0x1A,0x1B,0x1C,0x1D,0x1E,0x1F
+        };
+
+        crypto::BCRYPT_KEY_HANDLE hKey = nullptr;
+        st = crypto::BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, keyBytes, sizeof(keyBytes), 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hKey != nullptr, "BCryptGenerateSymmetricKey for AES-256 must succeed");
+
+        std::string plain = "MicaNT Next Generation Sovereign Executive";
+        std::vector<uint8_t> pt(plain.begin(), plain.end());
+
+        uint8_t iv[16] = {0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99};
+        uint8_t ivEnc[16]; std::memcpy(ivEnc, iv, 16);
+
+        uint32_t ctLen = 0;
+        st = crypto::BCryptEncrypt(hKey, pt.data(), static_cast<uint32_t>(pt.size()), nullptr, ivEnc, 16, nullptr, 0, &ctLen, crypto::BCRYPT_BLOCK_PADDING);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && ctLen >= pt.size(), "BCryptEncrypt length query must succeed");
+
+        std::vector<uint8_t> ct(ctLen);
+        std::memcpy(ivEnc, iv, 16);
+        st = crypto::BCryptEncrypt(hKey, pt.data(), static_cast<uint32_t>(pt.size()), nullptr, ivEnc, 16, ct.data(), ctLen, &ctLen, crypto::BCRYPT_BLOCK_PADDING);
+        TEST_ASSERT(BCRYPT_SUCCESS(st), "BCryptEncrypt execution must succeed");
+
+        // Decryption
+        uint8_t ivDec[16]; std::memcpy(ivDec, iv, 16);
+        uint32_t dtLen = 0;
+        st = crypto::BCryptDecrypt(hKey, ct.data(), ctLen, nullptr, ivDec, 16, nullptr, 0, &dtLen, crypto::BCRYPT_BLOCK_PADDING);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && dtLen == pt.size(), "BCryptDecrypt length query must match plaintext size");
+
+        std::vector<uint8_t> dt(dtLen);
+        std::memcpy(ivDec, iv, 16);
+        st = crypto::BCryptDecrypt(hKey, ct.data(), ctLen, nullptr, ivDec, 16, dt.data(), dtLen, &dtLen, crypto::BCRYPT_BLOCK_PADDING);
+        TEST_ASSERT(BCRYPT_SUCCESS(st), "BCryptDecrypt execution must succeed");
+        TEST_ASSERT(std::string(dt.begin(), dt.end()) == plain, "Decrypted AES plaintext must match original plain message");
+
+        crypto::BCryptDestroyKey(hKey);
+        crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // 7. BCrypt PBKDF2 Key Derivation (BCryptDeriveKeyPBKDF2)
+    // ------------------------------------------------------------------------
+    {
+        crypto::BCRYPT_ALG_HANDLE hPrf = nullptr;
+        crypto::BCryptOpenAlgorithmProvider(&hPrf, crypto::BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+
+        std::string password = "SecretMasterPassword";
+        std::string salt = "MicaNTSaltValue";
+        uint8_t derived[32]{};
+
+        int32_t st = crypto::BCryptDeriveKeyPBKDF2(
+            hPrf,
+            reinterpret_cast<const uint8_t*>(password.data()),
+            static_cast<uint32_t>(password.size()),
+            reinterpret_cast<const uint8_t*>(salt.data()),
+            static_cast<uint32_t>(salt.size()),
+            1000,
+            derived,
+            sizeof(derived),
+            0
+        );
+
+        TEST_ASSERT(BCRYPT_SUCCESS(st), "BCryptDeriveKeyPBKDF2 must succeed");
+        bool nonZero = false;
+        for (uint8_t b : derived) if (b != 0) nonZero = true;
+        TEST_ASSERT(nonZero, "PBKDF2 derived key must have non-zero entropy");
+
+        crypto::BCryptCloseAlgorithmProvider(hPrf, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // 8. NCrypt Key Storage Provider (KSP) Subsystem (ncrypt.dll)
+    // ------------------------------------------------------------------------
+    {
+        crypto::NCRYPT_PROV_HANDLE hProv = 0;
+        int32_t st = crypto::NCryptOpenStorageProvider(&hProv, crypto::MS_KEY_STORAGE_PROVIDER, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hProv != 0, "NCryptOpenStorageProvider must return valid provider handle");
+
+        crypto::NCRYPT_KEY_HANDLE hKey = 0;
+        st = crypto::NCryptCreatePersistedKey(hProv, &hKey, crypto::BCRYPT_RSA_ALGORITHM, L"MicaNT_Suite66_Key", 0, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st) && hKey != 0, "NCryptCreatePersistedKey must return valid key handle");
+
+        st = crypto::NCryptFinalizeKey(hKey, 0);
+        TEST_ASSERT(BCRYPT_SUCCESS(st), "NCryptFinalizeKey must succeed");
+
+        crypto::NCryptFreeObject(hKey);
+        crypto::NCryptFreeObject(hProv);
+    }
+
+    // ------------------------------------------------------------------------
+    // 9. Legacy CryptoAPI in advapi32.dll (HCRYPTPROV, HCRYPTHASH, HCRYPTKEY)
+    // ------------------------------------------------------------------------
+    {
+        uintptr_t hProv = 0;
+        int32_t ok = advapi32::CryptAcquireContextW(&hProv, L"MicaKeyContainer", nullptr, advapi32::PROV_RSA_FULL, advapi32::CRYPT_NEWKEYSET);
+        TEST_ASSERT(ok == win32::TRUE && hProv != 0, "CryptAcquireContextW must return TRUE and valid HCRYPTPROV");
+
+        // Random generation
+        uint8_t rnd[16]{};
+        ok = advapi32::CryptGenRandom(hProv, 16, rnd);
+        TEST_ASSERT(ok == win32::TRUE, "advapi32::CryptGenRandom must return TRUE");
+
+        // Hashing via CryptoAPI
+        uintptr_t hHash = 0;
+        ok = advapi32::CryptCreateHash(hProv, advapi32::CALG_SHA_256, 0, 0, &hHash);
+        TEST_ASSERT(ok == win32::TRUE && hHash != 0, "CryptCreateHash with CALG_SHA_256 must succeed");
+
+        const char* text = "abc";
+        ok = advapi32::CryptHashData(hHash, reinterpret_cast<const uint8_t*>(text), 3, 0);
+        TEST_ASSERT(ok == win32::TRUE, "CryptHashData must succeed");
+
+        uint32_t hashSize = 0;
+        uint32_t paramLen = sizeof(hashSize);
+        ok = advapi32::CryptGetHashParam(hHash, advapi32::HP_HASHSIZE, reinterpret_cast<uint8_t*>(&hashSize), &paramLen, 0);
+        TEST_ASSERT(ok == win32::TRUE && hashSize == 32, "CryptGetHashParam HP_HASHSIZE must be 32 bytes");
+
+        uint8_t hashVal[32]{};
+        paramLen = sizeof(hashVal);
+        ok = advapi32::CryptGetHashParam(hHash, advapi32::HP_HASHVAL, hashVal, &paramLen, 0);
+        TEST_ASSERT(ok == win32::TRUE, "CryptGetHashParam HP_HASHVAL must succeed");
+        TEST_ASSERT(toHex(hashVal, 32) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                    "advapi32 CryptGetHashParam SHA-256 result must match KAT");
+
+        // Key derivation and encryption
+        uintptr_t hKey = 0;
+        ok = advapi32::CryptDeriveKey(hProv, advapi32::CALG_AES_256, hHash, 0, &hKey);
+        TEST_ASSERT(ok == win32::TRUE && hKey != 0, "CryptDeriveKey with CALG_AES_256 must succeed");
+
+        advapi32::CryptDestroyHash(hHash);
+
+        uint8_t cipherBuf[64] = "MicaNT Confidential Executive Payload";
+        uint32_t dataLen = static_cast<uint32_t>(std::strlen(reinterpret_cast<char*>(cipherBuf)));
+        uint32_t origLen = dataLen;
+
+        ok = advapi32::CryptEncrypt(hKey, 0, win32::TRUE, 0, cipherBuf, &dataLen, sizeof(cipherBuf));
+        TEST_ASSERT(ok == win32::TRUE && dataLen >= origLen, "CryptEncrypt must succeed and pad data");
+
+        ok = advapi32::CryptDecrypt(hKey, 0, win32::TRUE, 0, cipherBuf, &dataLen);
+        TEST_ASSERT(ok == win32::TRUE && dataLen == origLen, "CryptDecrypt must succeed and recover length");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(cipherBuf), dataLen) == "MicaNT Confidential Executive Payload",
+                    "CryptDecrypt must recover original payload string");
+
+        advapi32::CryptDestroyKey(hKey);
+        advapi32::CryptReleaseContext(hProv, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // 10. DPAPI in crypt32.dll (CryptProtectData / CryptUnprotectData)
+    // ------------------------------------------------------------------------
+    {
+        std::string plain = "MicaNT Sovereign Secret Credentials";
+        crypt32::DATA_BLOB inBlob;
+        inBlob.cbData = static_cast<uint32_t>(plain.size());
+        inBlob.pbData = reinterpret_cast<uint8_t*>(plain.data());
+
+        crypt32::DATA_BLOB outBlob{};
+        int32_t ok = crypt32::CryptProtectData(&inBlob, L"TestDescription", nullptr, nullptr, nullptr, 0, &outBlob);
+        TEST_ASSERT(ok == win32::TRUE && outBlob.pbData != nullptr && outBlob.cbData > inBlob.cbData,
+                    "CryptProtectData must succeed and produce authenticated ciphertext");
+
+        wchar_t* pDesc = nullptr;
+        crypt32::DATA_BLOB unprotectBlob{};
+        ok = crypt32::CryptUnprotectData(&outBlob, &pDesc, nullptr, nullptr, nullptr, 0, &unprotectBlob);
+        TEST_ASSERT(ok == win32::TRUE && unprotectBlob.pbData != nullptr, "CryptUnprotectData must succeed");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(unprotectBlob.pbData), unprotectBlob.cbData) == plain,
+                    "Unprotected plaintext must match original plaintext");
+        TEST_ASSERT(pDesc != nullptr && std::wstring(pDesc) == L"TestDescription",
+                    "Unprotected description must match original description");
+
+        win32::LocalFree(pDesc);
+        win32::LocalFree(unprotectBlob.pbData);
+
+        // Tamper test: Corrupt authentication tag / ciphertext
+        outBlob.pbData[outBlob.cbData - 5] ^= 0x55;
+        ok = crypt32::CryptUnprotectData(&outBlob, nullptr, nullptr, nullptr, nullptr, 0, &unprotectBlob);
+        TEST_ASSERT(ok == win32::FALSE, "CryptUnprotectData must reject tampered ciphertext with NTE_BAD_DATA");
+
+        win32::LocalFree(outBlob.pbData);
+    }
+
+    // ------------------------------------------------------------------------
+    // 11. Base64 & Hex Conversion Engine in crypt32.dll
+    // ------------------------------------------------------------------------
+    {
+        const uint8_t binary[8] = { 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0 };
+
+        // Test CryptBinaryToStringA with Base64
+        uint32_t cch = 0;
+        int32_t ok = crypt32::CryptBinaryToStringA(binary, sizeof(binary), crypt32::CRYPT_STRING_BASE64 | crypt32::CRYPT_STRING_NOCRLF, nullptr, &cch);
+        TEST_ASSERT(ok == win32::TRUE && cch > 0, "CryptBinaryToStringA size query must succeed");
+
+        std::string b64Str(cch, '\0');
+        ok = crypt32::CryptBinaryToStringA(binary, sizeof(binary), crypt32::CRYPT_STRING_BASE64 | crypt32::CRYPT_STRING_NOCRLF, b64Str.data(), &cch);
+        TEST_ASSERT(ok == win32::TRUE, "CryptBinaryToStringA encoding must succeed");
+        if (!b64Str.empty() && b64Str.back() == '\0') b64Str.pop_back();
+
+        // Test CryptStringToBinaryA with Base64
+        uint32_t cbBin = 0;
+        ok = crypt32::CryptStringToBinaryA(b64Str.c_str(), static_cast<uint32_t>(b64Str.size()), crypt32::CRYPT_STRING_BASE64, nullptr, &cbBin, nullptr, nullptr);
+        TEST_ASSERT(ok == win32::TRUE && cbBin == sizeof(binary), "CryptStringToBinaryA length query must match original binary size");
+
+        std::vector<uint8_t> recovered(cbBin);
+        ok = crypt32::CryptStringToBinaryA(b64Str.c_str(), static_cast<uint32_t>(b64Str.size()), crypt32::CRYPT_STRING_BASE64, recovered.data(), &cbBin, nullptr, nullptr);
+        TEST_ASSERT(ok == win32::TRUE, "CryptStringToBinaryA decoding must succeed");
+        TEST_ASSERT(std::memcmp(recovered.data(), binary, sizeof(binary)) == 0, "Decoded Base64 bytes must match original binary bytes");
+
+        // Test CryptBinaryToStringA with Hex
+        cch = 0;
+        ok = crypt32::CryptBinaryToStringA(binary, sizeof(binary), crypt32::CRYPT_STRING_HEX | crypt32::CRYPT_STRING_NOCRLF, nullptr, &cch);
+        TEST_ASSERT(ok == win32::TRUE && cch > 0, "CryptBinaryToStringA HEX size query must succeed");
+
+        std::string hexStr(cch, '\0');
+        ok = crypt32::CryptBinaryToStringA(binary, sizeof(binary), crypt32::CRYPT_STRING_HEX | crypt32::CRYPT_STRING_NOCRLF, hexStr.data(), &cch);
+        TEST_ASSERT(ok == win32::TRUE, "CryptBinaryToStringA HEX encoding must succeed");
+        if (!hexStr.empty() && hexStr.back() == '\0') hexStr.pop_back();
+
+        cbBin = 0;
+        ok = crypt32::CryptStringToBinaryA(hexStr.c_str(), static_cast<uint32_t>(hexStr.size()), crypt32::CRYPT_STRING_HEX, nullptr, &cbBin, nullptr, nullptr);
+        TEST_ASSERT(ok == win32::TRUE && cbBin == sizeof(binary), "CryptStringToBinaryA HEX decoding length query must succeed");
+
+        recovered.resize(cbBin);
+        ok = crypt32::CryptStringToBinaryA(hexStr.c_str(), static_cast<uint32_t>(hexStr.size()), crypt32::CRYPT_STRING_HEX, recovered.data(), &cbBin, nullptr, nullptr);
+        TEST_ASSERT(ok == win32::TRUE && std::memcmp(recovered.data(), binary, sizeof(binary)) == 0,
+                    "Decoded Hex bytes must match original binary bytes");
+    }
+
+    // ------------------------------------------------------------------------
+    // 12. X.509 Certificate Stores & Contexts in crypt32.dll
+    // ------------------------------------------------------------------------
+    {
+        crypt32::HCERTSTORE hStore = crypt32::CertOpenSystemStoreW(0, L"ROOT");
+        TEST_ASSERT(hStore != nullptr, "CertOpenSystemStoreW for 'ROOT' must succeed");
+
+        // Enumerate root CA
+        const crypt32::CERT_CONTEXT* pCert = crypt32::CertEnumCertificatesInStore(hStore, nullptr);
+        TEST_ASSERT(pCert != nullptr, "CertEnumCertificatesInStore must find root CA certificate");
+
+        wchar_t subjName[256]{};
+        uint32_t cchSubj = crypt32::CertGetNameStringW(pCert, crypt32::CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, subjName, 256);
+        TEST_ASSERT(cchSubj > 1, "CertGetNameStringW for subject must return non-empty name");
+        TEST_ASSERT(std::wstring(subjName).find(L"MicaNT Sovereign Root") != std::wstring::npos,
+                    "Root certificate subject must contain 'MicaNT Sovereign Root'");
+
+        wchar_t issuerName[256]{};
+        uint32_t cchIss = crypt32::CertGetNameStringW(pCert, crypt32::CERT_NAME_SIMPLE_DISPLAY_TYPE, crypt32::CERT_NAME_ISSUER_FLAG, nullptr, issuerName, 256);
+        TEST_ASSERT(cchIss > 1, "CertGetNameStringW for issuer must return non-empty name");
+        TEST_ASSERT(std::wstring(issuerName) == std::wstring(subjName), "Self-signed root certificate issuer must equal subject");
+
+        // Get SHA-1 thumbprint property
+        uint8_t thumb[20]{};
+        uint32_t cbThumb = sizeof(thumb);
+        int32_t ok = crypt32::CertGetCertificateContextProperty(pCert, crypt32::CERT_SHA1_HASH_PROP_ID, thumb, &cbThumb);
+        TEST_ASSERT(ok == win32::TRUE && cbThumb == 20, "CertGetCertificateContextProperty for CERT_SHA1_HASH_PROP_ID must succeed");
+
+        // Duplicate and free context
+        const crypt32::CERT_CONTEXT* pDup = crypt32::CertDuplicateCertificateContext(pCert);
+        TEST_ASSERT(pDup == pCert, "CertDuplicateCertificateContext must return same pointer");
+        ok = crypt32::CertFreeCertificateContext(pDup);
+        TEST_ASSERT(ok == win32::TRUE, "CertFreeCertificateContext must succeed");
+
+        // Find certificate by subject substring
+        const crypt32::CERT_CONTEXT* pFound = crypt32::CertFindCertificateInStore(
+            hStore,
+            0x00010001,
+            0,
+            crypt32::CERT_FIND_SUBJECT_STR_W,
+            L"Sovereign",
+            nullptr
+        );
+        TEST_ASSERT(pFound != nullptr, "CertFindCertificateInStore with CERT_FIND_SUBJECT_STR_W must find matching certificate");
+        crypt32::CertFreeCertificateContext(pFound);
+
+        // Find certificate by SHA-1 thumbprint
+        crypt32::DATA_BLOB thumbBlob{ 20, thumb };
+        const crypt32::CERT_CONTEXT* pThumbFound = crypt32::CertFindCertificateInStore(
+            hStore,
+            0x00010001,
+            0,
+            crypt32::CERT_FIND_SHA1_HASH,
+            &thumbBlob,
+            nullptr
+        );
+        TEST_ASSERT(pThumbFound != nullptr, "CertFindCertificateInStore with CERT_FIND_SHA1_HASH must locate certificate by thumbprint");
+        crypt32::CertFreeCertificateContext(pThumbFound);
+
+        crypt32::CertCloseStore(hStore, 0);
+    }
+
+    // ------------------------------------------------------------------------
+    // 13. Dynamic Loader & Version Metadata Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        // bcrypt.dll exports
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptOpenAlgorithmProvider") != nullptr, "bcrypt.dll!BCryptOpenAlgorithmProvider must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptCloseAlgorithmProvider") != nullptr, "bcrypt.dll!BCryptCloseAlgorithmProvider must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptCreateHash") != nullptr, "bcrypt.dll!BCryptCreateHash must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptHashData") != nullptr, "bcrypt.dll!BCryptHashData must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptFinishHash") != nullptr, "bcrypt.dll!BCryptFinishHash must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDuplicateHash") != nullptr, "bcrypt.dll!BCryptDuplicateHash must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDestroyHash") != nullptr, "bcrypt.dll!BCryptDestroyHash must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptGenRandom") != nullptr, "bcrypt.dll!BCryptGenRandom must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptGenerateSymmetricKey") != nullptr, "bcrypt.dll!BCryptGenerateSymmetricKey must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptEncrypt") != nullptr, "bcrypt.dll!BCryptEncrypt must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDecrypt") != nullptr, "bcrypt.dll!BCryptDecrypt must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDestroyKey") != nullptr, "bcrypt.dll!BCryptDestroyKey must be exported");
+        TEST_ASSERT(ldr.getExport("bcrypt.dll", "BCryptDeriveKeyPBKDF2") != nullptr, "bcrypt.dll!BCryptDeriveKeyPBKDF2 must be exported");
+
+        // ncrypt.dll exports
+        TEST_ASSERT(ldr.getExport("ncrypt.dll", "NCryptOpenStorageProvider") != nullptr, "ncrypt.dll!NCryptOpenStorageProvider must be exported");
+        TEST_ASSERT(ldr.getExport("ncrypt.dll", "NCryptCreatePersistedKey") != nullptr, "ncrypt.dll!NCryptCreatePersistedKey must be exported");
+        TEST_ASSERT(ldr.getExport("ncrypt.dll", "NCryptFinalizeKey") != nullptr, "ncrypt.dll!NCryptFinalizeKey must be exported");
+        TEST_ASSERT(ldr.getExport("ncrypt.dll", "NCryptFreeObject") != nullptr, "ncrypt.dll!NCryptFreeObject must be exported");
+
+        // crypt32.dll exports
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CryptProtectData") != nullptr, "crypt32.dll!CryptProtectData must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CryptUnprotectData") != nullptr, "crypt32.dll!CryptUnprotectData must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CryptBinaryToStringA") != nullptr, "crypt32.dll!CryptBinaryToStringA must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CryptBinaryToStringW") != nullptr, "crypt32.dll!CryptBinaryToStringW must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CryptStringToBinaryA") != nullptr, "crypt32.dll!CryptStringToBinaryA must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CryptStringToBinaryW") != nullptr, "crypt32.dll!CryptStringToBinaryW must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CertOpenSystemStoreA") != nullptr, "crypt32.dll!CertOpenSystemStoreA must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CertOpenSystemStoreW") != nullptr, "crypt32.dll!CertOpenSystemStoreW must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CertCloseStore") != nullptr, "crypt32.dll!CertCloseStore must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CertEnumCertificatesInStore") != nullptr, "crypt32.dll!CertEnumCertificatesInStore must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CertFindCertificateInStore") != nullptr, "crypt32.dll!CertFindCertificateInStore must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CertGetNameStringA") != nullptr, "crypt32.dll!CertGetNameStringA must be exported");
+        TEST_ASSERT(ldr.getExport("crypt32.dll", "CertGetNameStringW") != nullptr, "crypt32.dll!CertGetNameStringW must be exported");
+
+        // Version info verification
+        uint32_t handle = 0;
+        uint32_t sBcrypt = version::GetFileVersionInfoSizeA("bcrypt.dll", &handle);
+        TEST_ASSERT(sBcrypt > 0, "bcrypt.dll must have version info resource");
+
+        std::vector<uint8_t> vBcrypt(sBcrypt);
+        TEST_ASSERT(version::GetFileVersionInfoA("bcrypt.dll", handle, sBcrypt, vBcrypt.data()) != 0, "GetFileVersionInfoA for bcrypt.dll must succeed");
+
+        void* pDesc = nullptr;
+        uint32_t dLen = 0;
+        TEST_ASSERT(version::VerQueryValueA(vBcrypt.data(), "\\StringFileInfo\\040904B0\\FileDescription", &pDesc, &dLen) != 0, "VerQueryValueA for bcrypt.dll must succeed");
+        TEST_ASSERT(std::string(static_cast<const char*>(pDesc)) == "Windows Cryptographic Primitives Library", "FileDescription must match Windows Cryptographic Primitives Library");
+
+        uint32_t sCrypt32 = version::GetFileVersionInfoSizeA("crypt32.dll", &handle);
+        TEST_ASSERT(sCrypt32 > 0, "crypt32.dll must have version info resource");
+
+        std::vector<uint8_t> vCrypt32(sCrypt32);
+        TEST_ASSERT(version::GetFileVersionInfoA("crypt32.dll", handle, sCrypt32, vCrypt32.data()) != 0, "GetFileVersionInfoA for crypt32.dll must succeed");
+
+        pDesc = nullptr;
+        dLen = 0;
+        TEST_ASSERT(version::VerQueryValueA(vCrypt32.data(), "\\StringFileInfo\\040904B0\\FileDescription", &pDesc, &dLen) != 0, "VerQueryValueA for crypt32.dll must succeed");
+        TEST_ASSERT(std::string(static_cast<const char*>(pDesc)) == "Crypto API32", "FileDescription must match Crypto API32");
+    }
+
+    // ------------------------------------------------------------------------
+    // 14. Shell Built-in Commands Integration (bcrypt, certmgr, dpapi)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        // bcrypt info
+        shell.execute("bcrypt info", out);
+        TEST_ASSERT(out.str().find("MicaNT Cryptography Next Generation") != std::string::npos, "Shell bcrypt info command must succeed");
+
+        // bcrypt hash sha256
+        out.str("");
+        shell.execute("bcrypt hash sha256 abc", out);
+        TEST_ASSERT(out.str().find("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") != std::string::npos,
+                    "Shell bcrypt hash sha256 command must match KAT digest");
+
+        // bcrypt rand
+        out.str("");
+        shell.execute("bcrypt rand 16", out);
+        TEST_ASSERT(out.str().find("Cryptographically Secure Random Bytes") != std::string::npos, "Shell bcrypt rand command must succeed");
+
+        // bcrypt test
+        out.str("");
+        shell.execute("bcrypt test", out);
+        TEST_ASSERT(out.str().find("[PASS]") != std::string::npos, "Shell bcrypt test command must pass");
+
+        // certmgr -list ROOT
+        out.str("");
+        shell.execute("certmgr -list ROOT", out);
+        TEST_ASSERT(out.str().find("MicaNT Sovereign Root") != std::string::npos, "Shell certmgr -list ROOT must list root CA");
+
+        // certmgr -find Sovereign
+        out.str("");
+        shell.execute("certmgr -find Sovereign", out);
+        TEST_ASSERT(out.str().find("Certificate Match Found") != std::string::npos, "Shell certmgr -find Sovereign must find certificate");
+
+        // dpapi test
+        out.str("");
+        shell.execute("dpapi test", out);
+        TEST_ASSERT(out.str().find("CryptUnprotectData: PASS") != std::string::npos, "Shell dpapi test command must succeed");
+    }
+
+    std::cout << "[TEST] Suite 66: Windows CryptoAPI, CNG & Crypt32 Subsystems PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -10036,6 +10657,7 @@ int main() {
     RUN_TEST(Test_WinMM_DirectSound_And_VersionInfo);
     RUN_TEST(Test_OpenGL_And_WGL_Subsystem);
     RUN_TEST(Test_WinINet_And_URLMon_Subsystems);
+    RUN_TEST(Test_CryptoAPI_And_CNG_Subsystems);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

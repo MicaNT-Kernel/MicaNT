@@ -81,6 +81,10 @@
 │ Phase 36: WinMM Multimedia Engine, DirectSound 8 & Version[COMPLETED 100%]│
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 37: OpenGL 1.4 & Windows WGL Subsystem (opengl32.dll)[COMPLETED 100%]│
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 38: Windows Internet (WinINet) & URLMon Subsystems   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 39: Windows CryptoAPI, CNG & Crypt32 Subsystems      [COMPLETED 100%] │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -720,6 +724,46 @@
 - [x] **Unit Test Suite 65 (`Test_WinINet_And_URLMon_Subsystems`)**:
   - 16 comprehensive verification stages covering URL cracking/canonicalization, handle lifecycle, HTTP headers, mock server execution, status queries, streaming reads, chunked transfer decoding, RFC 6265 cookies, Temporary Internet Files cache, MIME sniffing, URLDownloadToFileW with callback progress, VFS file verification, URL monikers, version resources, and shell curl integration.
   - All 65 unit test suites passing with 100% success rate (65 Passed, 0 Failed).
+
+---
+
+### Phase 39: Windows Cryptography API (CryptoAPI) & Cryptography Next Generation (CNG) Subsystems (100% Completed)
+*Goal: Implement Windows Cryptography API (CryptoAPI in `advapi32.dll`), Cryptography Next Generation primitives (`bcrypt.dll`), Key Storage Provider (`ncrypt.dll`), Data Protection API (DPAPI in `crypt32.dll`), Base64/Hex formatters, and X.509 Certificate Stores.*
+- [x] **CNG Primitive Router (`bcrypt.dll`, `include/micant/cipherksp.hpp`)**:
+  - Algorithm Providers: `BCryptOpenAlgorithmProvider`, `BCryptCloseAlgorithmProvider`, `BCryptGetProperty`, `BCryptSetProperty`.
+  - Hashing Algorithms: FIPS 180-4 SHA-256, SHA-384, SHA-512, RFC 1321 MD5, and FIPS 180-1 SHA-1 with exact KAT verification.
+  - Hash Lifecycle: `BCryptCreateHash`, `BCryptHashData`, `BCryptFinishHash`, `BCryptDuplicateHash`, `BCryptDestroyHash`.
+  - Symmetric Encryption: Clean-room AES-128, AES-192, and AES-256 with ECB and CBC modes (`BCryptGenerateSymmetricKey`, `BCryptEncrypt`, `BCryptDecrypt`, `BCryptDestroyKey`).
+  - Key Derivation: RFC 2898 / SP 800-132 PBKDF2 (`BCryptDeriveKeyPBKDF2`).
+  - Random Number Generation: Cryptographically Secure PRNG using ChaCha20/AES-CTR entropy (`BCryptGenRandom`).
+- [x] **CNG Key Storage Provider Subsystem (`ncrypt.dll`, `include/micant/cipherksp.hpp`)**:
+  - Storage Providers: `NCryptOpenStorageProvider` ("Microsoft Software Key Storage Provider"), `NCryptFreeObject`.
+  - Key Lifecycle: `NCryptCreatePersistedKey`, `NCryptSetProperty`, `NCryptFinalizeKey`, `NCryptExportKey`, `NCryptImportKey`, `NCryptDeleteKey`.
+- [x] **Legacy Windows CryptoAPI Subsystem (`advapi32.dll`, `include/micant/advapi32.hpp`)**:
+  - Context Management: `CryptAcquireContextA/W` ("Microsoft Enhanced RSA and AES Cryptographic Provider", `PROV_RSA_AES`, `PROV_RSA_FULL`), `CryptReleaseContext`.
+  - Hash Operations: `CryptCreateHash` (`CALG_SHA`, `CALG_SHA_256`, `CALG_SHA_384`, `CALG_SHA_512`, `CALG_MD5`), `CryptHashData`, `CryptGetHashParam` (`HP_HASHVAL`, `HP_HASHSIZE`), `CryptDestroyHash`.
+  - Key Operations & Symmetric Encryption: `CryptGenKey`, `CryptDeriveKey` (`CALG_AES_256`, `CALG_AES_128`), `CryptDestroyKey`, `CryptEncrypt`, `CryptDecrypt`, `CryptGenRandom`.
+- [x] **Data Protection API (DPAPI) Subsystem (`crypt32.dll`, `include/micant/crypt32.hpp`)**:
+  - Authenticated Encryption: `CryptProtectData` combining PBKDF2 per-user key derivation, AES-256-CBC payload encryption, and HMAC-SHA256 authentication tag across metadata and ciphertext.
+  - Verification & Decryption: `CryptUnprotectData` with constant-time HMAC tag authentication, description restoration (`szDataDescr`), and tamper detection.
+- [x] **Base64 & Hex Conversion Engine (`crypt32.dll`)**:
+  - `CryptBinaryToStringA/W`: Base64 (`CRYPT_STRING_BASE64`), Base64 with Certificate Header (`CRYPT_STRING_BASE64HEADER`), Spaced Hex (`CRYPT_STRING_HEX`), Raw Hex (`CRYPT_STRING_HEXRAW`), and `CRYPT_STRING_NOCRLF`.
+  - `CryptStringToBinaryA/W`: Base64 and Hex decoding with automatic header/footer stripping and separator skip.
+- [x] **X.509 Certificate Store & Context Management (`crypt32.dll`)**:
+  - System Stores: `CertOpenSystemStoreA/W` mounting system stores (`ROOT`, `MY`, `CA`, `ADDRESSBOOK`).
+  - Pre-seeded Root CA: "MicaNT Sovereign Root Certification Authority, O=MicaNT Project, C=US".
+  - Store Operations: `CertCloseStore`, `CertEnumCertificatesInStore`, `CertFindCertificateInStore` (`CERT_FIND_ANY`, `CERT_FIND_SUBJECT_STR_W`, `CERT_FIND_ISSUER_STR_W`, `CERT_FIND_SHA1_HASH`), `CertAddCertificateContextToStore`.
+  - Context & Name APIs: `CertCreateCertificateContext`, `CertDuplicateCertificateContext`, `CertFreeCertificateContext`, `CertGetNameStringA/W` with `CERT_NAME_ISSUER_FLAG`, `CertGetCertificateContextProperty`.
+- [x] **Dynamic Loader & Version Parity**:
+  - Export registration for `bcrypt.dll`, `ncrypt.dll`, and `crypt32.dll` in `ldr::DynamicLoader`.
+  - Version resources registered in `version.hpp` bumping kernel build to `1.0.66.0`.
+- [x] **Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
+  - `bcrypt info`, `bcrypt hash <algo> <text>`, `bcrypt rand [count]`, `bcrypt test`.
+  - `certmgr -list <store>`, `certmgr -find <query>`, `dpapi test`.
+- [x] **Unit Test Suite 66 (`Test_CryptoAPI_And_CNG_Subsystems`)**:
+  - Comprehensive 14-stage test covering algorithm providers, SHA-256/384/512/MD5/SHA-1 KAT vectors, BCrypt AES-CBC encryption, PBKDF2, CSPRNG, NCrypt KSP, CryptoAPI context/hashing/derivation, DPAPI with tampering, Base64/Hex encoding and decoding, X.509 Certificate Store enumeration and name parsing, loader exports, version resources, and interactive shell commands.
+  - All 66 unit test suites passing with 100% success rate (66 Passed, 0 Failed).
+
 
 
 

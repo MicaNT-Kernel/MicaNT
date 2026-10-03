@@ -15,6 +15,7 @@
 #include <algorithm>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
+#include "ldr.hpp"
 
 namespace micant::crypto {
 
@@ -33,11 +34,14 @@ using NCRYPT_KEY_HANDLE  = void*;
 
 // Standard CNG Algorithm Identifiers
 inline constexpr const wchar_t* BCRYPT_SHA256_ALGORITHM        = L"SHA256";
+inline constexpr const wchar_t* BCRYPT_SHA384_ALGORITHM        = L"SHA384";
+inline constexpr const wchar_t* BCRYPT_SHA512_ALGORITHM        = L"SHA512";
 inline constexpr const wchar_t* BCRYPT_SHA1_ALGORITHM          = L"SHA1";
 inline constexpr const wchar_t* BCRYPT_MD5_ALGORITHM           = L"MD5";
 inline constexpr const wchar_t* BCRYPT_AES_ALGORITHM           = L"AES";
 inline constexpr const wchar_t* BCRYPT_RNG_ALGORITHM           = L"RNG";
 inline constexpr const wchar_t* BCRYPT_HMAC_SHA256_ALGORITHM   = L"HMAC-SHA256";
+inline constexpr const wchar_t* BCRYPT_RSA_ALGORITHM           = L"RSA";
 
 // Standard CNG Chaining Modes & Properties
 inline constexpr const wchar_t* BCRYPT_CHAIN_MODE_ECB          = L"ChainingModeECB";
@@ -67,6 +71,10 @@ inline constexpr uint32_t NCRYPT_OVERWRITE_KEY_FLAG           = 0x00000050;
 inline constexpr NTSTATUS STATUS_AUTH_TAG_NEEDS_VERIFY         = static_cast<NTSTATUS>(0xC000A002);
 inline constexpr NTSTATUS STATUS_NOT_SUPPORTED                 = static_cast<NTSTATUS>(0xC00000BB);
 inline constexpr NTSTATUS STATUS_INVALID_BUFFER_SIZE           = static_cast<NTSTATUS>(0xC0000206);
+
+#ifndef BCRYPT_SUCCESS
+#define BCRYPT_SUCCESS(Status) (((int32_t)(Status)) >= 0)
+#endif
 
 // ============================================================================
 // 1. Clean-Room SHA-256 (FIPS 180-4) Implementation
@@ -342,6 +350,411 @@ private:
         state[2] += c;
         state[3] += d;
         state[4] += e;
+    }
+};
+
+// ============================================================================
+// 2b. Clean-Room MD5 (RFC 1321) Implementation
+// ============================================================================
+class Md5 {
+public:
+    static constexpr size_t DIGEST_SIZE = 16;
+    static constexpr size_t BLOCK_SIZE  = 64;
+
+    struct Context {
+        uint32_t state[4];
+        uint64_t count;
+        uint8_t  buffer[64];
+    };
+
+    static void init(Context& ctx) noexcept {
+        ctx.state[0] = 0x67452301;
+        ctx.state[1] = 0xefcdab89;
+        ctx.state[2] = 0x98badcfe;
+        ctx.state[3] = 0x10325476;
+        ctx.count    = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        size_t index = static_cast<size_t>(ctx.count & 63);
+        ctx.count += data.size();
+
+        size_t partLen = 64 - index;
+        size_t i = 0;
+
+        if (data.size() >= partLen) {
+            std::memcpy(&ctx.buffer[index], data.data(), partLen);
+            transform(ctx.state, ctx.buffer);
+
+            for (i = partLen; i + 63 < data.size(); i += 64) {
+                transform(ctx.state, data.data() + i);
+            }
+            index = 0;
+        }
+
+        if (i < data.size()) {
+            std::memcpy(&ctx.buffer[index], data.data() + i, data.size() - i);
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, DIGEST_SIZE> digest) noexcept {
+        uint8_t bits[8];
+        uint64_t bitCount = ctx.count * 8;
+        for (int i = 0; i < 8; ++i) {
+            bits[i] = static_cast<uint8_t>((bitCount >> (i * 8)) & 0xFF);
+        }
+
+        size_t index = static_cast<size_t>(ctx.count & 63);
+        size_t padLen = (index < 56) ? (56 - index) : (120 - index);
+
+        static const uint8_t padding[64] = { 0x80 };
+        update(ctx, std::span<const uint8_t>(padding, padLen));
+        update(ctx, std::span<const uint8_t>(bits, 8));
+
+        for (size_t i = 0; i < 4; ++i) {
+            digest[i * 4 + 0] = static_cast<uint8_t>((ctx.state[i] >> 0) & 0xFF);
+            digest[i * 4 + 1] = static_cast<uint8_t>((ctx.state[i] >> 8) & 0xFF);
+            digest[i * 4 + 2] = static_cast<uint8_t>((ctx.state[i] >> 16) & 0xFF);
+            digest[i * 4 + 3] = static_cast<uint8_t>((ctx.state[i] >> 24) & 0xFF);
+        }
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, DIGEST_SIZE>(out.data(), DIGEST_SIZE));
+        return out;
+    }
+
+private:
+    static constexpr uint32_t rotl(uint32_t x, uint32_t n) noexcept {
+        return (x << n) | (x >> (32 - n));
+    }
+
+    static void transform(uint32_t state[4], const uint8_t block[64]) noexcept {
+        uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
+        uint32_t x[16];
+
+        for (size_t i = 0; i < 16; ++i) {
+            x[i] = static_cast<uint32_t>(block[i * 4 + 0]) |
+                  (static_cast<uint32_t>(block[i * 4 + 1]) << 8) |
+                  (static_cast<uint32_t>(block[i * 4 + 2]) << 16) |
+                  (static_cast<uint32_t>(block[i * 4 + 3]) << 24);
+        }
+
+        #define MICANT_MD5_F(x, y, z) (((x) & (y)) | ((~x) & (z)))
+        #define MICANT_MD5_G(x, y, z) (((x) & (z)) | ((y) & (~z)))
+        #define MICANT_MD5_H(x, y, z) ((x) ^ (y) ^ (z))
+        #define MICANT_MD5_I(x, y, z) ((y) ^ ((x) | (~z)))
+
+        #define MICANT_MD5_STEP(f, a, b, c, d, x, s, ac) { \
+            (a) += f((b), (c), (d)) + (x) + (uint32_t)(ac); \
+            (a) = rotl((a), (s)); \
+            (a) += (b); \
+        }
+
+        // Round 1
+        MICANT_MD5_STEP(MICANT_MD5_F, a, b, c, d, x[ 0],  7, 0xd76aa478);
+        MICANT_MD5_STEP(MICANT_MD5_F, d, a, b, c, x[ 1], 12, 0xe8c7b756);
+        MICANT_MD5_STEP(MICANT_MD5_F, c, d, a, b, x[ 2], 17, 0x242070db);
+        MICANT_MD5_STEP(MICANT_MD5_F, b, c, d, a, x[ 3], 22, 0xc1bdceee);
+        MICANT_MD5_STEP(MICANT_MD5_F, a, b, c, d, x[ 4],  7, 0xf57c0faf);
+        MICANT_MD5_STEP(MICANT_MD5_F, d, a, b, c, x[ 5], 12, 0x4787c62a);
+        MICANT_MD5_STEP(MICANT_MD5_F, c, d, a, b, x[ 6], 17, 0xa8304613);
+        MICANT_MD5_STEP(MICANT_MD5_F, b, c, d, a, x[ 7], 22, 0xfd469501);
+        MICANT_MD5_STEP(MICANT_MD5_F, a, b, c, d, x[ 8],  7, 0x698098d8);
+        MICANT_MD5_STEP(MICANT_MD5_F, d, a, b, c, x[ 9], 12, 0x8b44f7af);
+        MICANT_MD5_STEP(MICANT_MD5_F, c, d, a, b, x[10], 17, 0xffff5bb1);
+        MICANT_MD5_STEP(MICANT_MD5_F, b, c, d, a, x[11], 22, 0x895cd7be);
+        MICANT_MD5_STEP(MICANT_MD5_F, a, b, c, d, x[12],  7, 0x6b901122);
+        MICANT_MD5_STEP(MICANT_MD5_F, d, a, b, c, x[13], 12, 0xfd987193);
+        MICANT_MD5_STEP(MICANT_MD5_F, c, d, a, b, x[14], 17, 0xa679438e);
+        MICANT_MD5_STEP(MICANT_MD5_F, b, c, d, a, x[15], 22, 0x49b40821);
+
+        // Round 2
+        MICANT_MD5_STEP(MICANT_MD5_G, a, b, c, d, x[ 1],  5, 0xf61e2562);
+        MICANT_MD5_STEP(MICANT_MD5_G, d, a, b, c, x[ 6],  9, 0xc040b340);
+        MICANT_MD5_STEP(MICANT_MD5_G, c, d, a, b, x[11], 14, 0x265e5a51);
+        MICANT_MD5_STEP(MICANT_MD5_G, b, c, d, a, x[ 0], 20, 0xe9b6c7aa);
+        MICANT_MD5_STEP(MICANT_MD5_G, a, b, c, d, x[ 5],  5, 0xd62f105d);
+        MICANT_MD5_STEP(MICANT_MD5_G, d, a, b, c, x[10],  9, 0x02441453);
+        MICANT_MD5_STEP(MICANT_MD5_G, c, d, a, b, x[15], 14, 0xd8a1e681);
+        MICANT_MD5_STEP(MICANT_MD5_G, b, c, d, a, x[ 4], 20, 0xe7d3fbc8);
+        MICANT_MD5_STEP(MICANT_MD5_G, a, b, c, d, x[ 9],  5, 0x21e1cde6);
+        MICANT_MD5_STEP(MICANT_MD5_G, d, a, b, c, x[14],  9, 0xc33707d6);
+        MICANT_MD5_STEP(MICANT_MD5_G, c, d, a, b, x[ 3], 14, 0xf4d50d87);
+        MICANT_MD5_STEP(MICANT_MD5_G, b, c, d, a, x[ 8], 20, 0x455a14ed);
+        MICANT_MD5_STEP(MICANT_MD5_G, a, b, c, d, x[13],  5, 0xa9e3e905);
+        MICANT_MD5_STEP(MICANT_MD5_G, d, a, b, c, x[ 2],  9, 0xfcefa3f8);
+        MICANT_MD5_STEP(MICANT_MD5_G, c, d, a, b, x[ 7], 14, 0x676f02d9);
+        MICANT_MD5_STEP(MICANT_MD5_G, b, c, d, a, x[12], 20, 0x8d2a4c8a);
+
+        // Round 3
+        MICANT_MD5_STEP(MICANT_MD5_H, a, b, c, d, x[ 5],  4, 0xfffa3942);
+        MICANT_MD5_STEP(MICANT_MD5_H, d, a, b, c, x[ 8], 11, 0x8771f681);
+        MICANT_MD5_STEP(MICANT_MD5_H, c, d, a, b, x[11], 16, 0x6d9d6122);
+        MICANT_MD5_STEP(MICANT_MD5_H, b, c, d, a, x[14], 23, 0xfde5380c);
+        MICANT_MD5_STEP(MICANT_MD5_H, a, b, c, d, x[ 1],  4, 0xa4beea44);
+        MICANT_MD5_STEP(MICANT_MD5_H, d, a, b, c, x[ 4], 11, 0x4bdecfa9);
+        MICANT_MD5_STEP(MICANT_MD5_H, c, d, a, b, x[ 7], 16, 0xf6bb4b60);
+        MICANT_MD5_STEP(MICANT_MD5_H, b, c, d, a, x[10], 23, 0xbebfbc70);
+        MICANT_MD5_STEP(MICANT_MD5_H, a, b, c, d, x[13],  4, 0x289b7ec6);
+        MICANT_MD5_STEP(MICANT_MD5_H, d, a, b, c, x[ 0], 11, 0xeaa127fa);
+        MICANT_MD5_STEP(MICANT_MD5_H, c, d, a, b, x[ 3], 16, 0xd4ef3085);
+        MICANT_MD5_STEP(MICANT_MD5_H, b, c, d, a, x[ 6], 23, 0x04881d05);
+        MICANT_MD5_STEP(MICANT_MD5_H, a, b, c, d, x[ 9],  4, 0xd9d4d039);
+        MICANT_MD5_STEP(MICANT_MD5_H, d, a, b, c, x[12], 11, 0xe6db99e5);
+        MICANT_MD5_STEP(MICANT_MD5_H, c, d, a, b, x[15], 16, 0x1fa27cf8);
+        MICANT_MD5_STEP(MICANT_MD5_H, b, c, d, a, x[ 2], 23, 0xc4ac5665);
+
+        // Round 4
+        MICANT_MD5_STEP(MICANT_MD5_I, a, b, c, d, x[ 0],  6, 0xf4292244);
+        MICANT_MD5_STEP(MICANT_MD5_I, d, a, b, c, x[ 7], 10, 0x432aff97);
+        MICANT_MD5_STEP(MICANT_MD5_I, c, d, a, b, x[14], 15, 0xab9423a7);
+        MICANT_MD5_STEP(MICANT_MD5_I, b, c, d, a, x[ 5], 21, 0xfc93a039);
+        MICANT_MD5_STEP(MICANT_MD5_I, a, b, c, d, x[12],  6, 0x655b59c3);
+        MICANT_MD5_STEP(MICANT_MD5_I, d, a, b, c, x[ 3], 10, 0x8f0ccc92);
+        MICANT_MD5_STEP(MICANT_MD5_I, c, d, a, b, x[10], 15, 0xffeff47d);
+        MICANT_MD5_STEP(MICANT_MD5_I, b, c, d, a, x[ 1], 21, 0x85845dd1);
+        MICANT_MD5_STEP(MICANT_MD5_I, a, b, c, d, x[ 8],  6, 0x6fa87e4f);
+        MICANT_MD5_STEP(MICANT_MD5_I, d, a, b, c, x[15], 10, 0xfe2ce6e0);
+        MICANT_MD5_STEP(MICANT_MD5_I, c, d, a, b, x[ 6], 15, 0xa3014314);
+        MICANT_MD5_STEP(MICANT_MD5_I, b, c, d, a, x[13], 21, 0x4e0811a1);
+        MICANT_MD5_STEP(MICANT_MD5_I, a, b, c, d, x[ 4],  6, 0xf7537e82);
+        MICANT_MD5_STEP(MICANT_MD5_I, d, a, b, c, x[11], 10, 0xbd3af235);
+        MICANT_MD5_STEP(MICANT_MD5_I, c, d, a, b, x[ 2], 15, 0x2ad7d2bb);
+        MICANT_MD5_STEP(MICANT_MD5_I, b, c, d, a, x[ 9], 21, 0xeb86d391);
+
+        #undef MICANT_MD5_STEP
+        #undef MICANT_MD5_F
+        #undef MICANT_MD5_G
+        #undef MICANT_MD5_H
+        #undef MICANT_MD5_I
+
+        state[0] += a;
+        state[1] += b;
+        state[2] += c;
+        state[3] += d;
+    }
+};
+
+// ============================================================================
+// 2c. Clean-Room SHA-512 & SHA-384 (FIPS 180-4) Implementation
+// ============================================================================
+class Sha512 {
+public:
+    static constexpr size_t DIGEST_SIZE = 64;
+    static constexpr size_t BLOCK_SIZE  = 128;
+
+    struct Context {
+        uint64_t state[8];
+        uint64_t count[2]; // 128-bit bit counter
+        uint8_t  buffer[128];
+    };
+
+    static void init(Context& ctx) noexcept {
+        ctx.state[0] = 0x6a09e667f3bcc908ULL;
+        ctx.state[1] = 0xbb67ae8584caa73bULL;
+        ctx.state[2] = 0x3c6ef372fe94f82bULL;
+        ctx.state[3] = 0xa54ff53a5f1d36f1ULL;
+        ctx.state[4] = 0x510e527fade682d1ULL;
+        ctx.state[5] = 0x9b05688c2b3e6c1fULL;
+        ctx.state[6] = 0x1f83d9abfb41bd6bULL;
+        ctx.state[7] = 0x5be0cd19137e2179ULL;
+        ctx.count[0] = 0;
+        ctx.count[1] = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        size_t index = static_cast<size_t>((ctx.count[0] >> 3) & 127);
+        uint64_t bitAdd = static_cast<uint64_t>(data.size()) << 3;
+        ctx.count[0] += bitAdd;
+        if (ctx.count[0] < bitAdd) {
+            ctx.count[1]++;
+        }
+        ctx.count[1] += static_cast<uint64_t>(data.size()) >> 61;
+
+        size_t partLen = 128 - index;
+        size_t i = 0;
+
+        if (data.size() >= partLen) {
+            std::memcpy(&ctx.buffer[index], data.data(), partLen);
+            transform(ctx.state, ctx.buffer);
+
+            for (i = partLen; i + 127 < data.size(); i += 128) {
+                transform(ctx.state, data.data() + i);
+            }
+            index = 0;
+        }
+
+        if (i < data.size()) {
+            std::memcpy(&ctx.buffer[index], data.data() + i, data.size() - i);
+        }
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, DIGEST_SIZE> digest) noexcept {
+        uint8_t bits[16];
+        for (int i = 0; i < 8; ++i) {
+            bits[i]     = static_cast<uint8_t>((ctx.count[1] >> ((7 - i) * 8)) & 0xFF);
+            bits[i + 8] = static_cast<uint8_t>((ctx.count[0] >> ((7 - i) * 8)) & 0xFF);
+        }
+
+        size_t index = static_cast<size_t>((ctx.count[0] >> 3) & 127);
+        size_t padLen = (index < 112) ? (112 - index) : (240 - index);
+
+        static const uint8_t padding[128] = { 0x80 };
+        update(ctx, std::span<const uint8_t>(padding, padLen));
+        update(ctx, std::span<const uint8_t>(bits, 16));
+
+        for (size_t i = 0; i < 8; ++i) {
+            for (int j = 0; j < 8; ++j) {
+                digest[i * 8 + j] = static_cast<uint8_t>((ctx.state[i] >> ((7 - j) * 8)) & 0xFF);
+            }
+        }
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, DIGEST_SIZE>(out.data(), DIGEST_SIZE));
+        return out;
+    }
+
+    static void transform(uint64_t state[8], const uint8_t block[128]) noexcept {
+        static constexpr uint64_t K[80] = {
+            0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
+            0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL, 0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
+            0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
+            0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
+            0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL, 0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
+            0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
+            0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
+            0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL, 0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
+            0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
+            0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
+            0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL, 0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
+            0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
+            0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL, 0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
+            0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL, 0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
+            0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
+            0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL, 0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
+            0xca273eceea26619cULL, 0xd186b8c721c0c207ULL, 0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
+            0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
+            0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
+            0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL, 0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL
+        };
+
+        auto rotr = [](uint64_t x, uint32_t n) noexcept -> uint64_t {
+            return (x >> n) | (x << (64 - n));
+        };
+
+        auto ch = [](uint64_t x, uint64_t y, uint64_t z) noexcept -> uint64_t {
+            return (x & y) ^ (~x & z);
+        };
+
+        auto maj = [](uint64_t x, uint64_t y, uint64_t z) noexcept -> uint64_t {
+            return (x & y) ^ (x & z) ^ (y & z);
+        };
+
+        auto s0 = [&](uint64_t x) noexcept -> uint64_t {
+            return rotr(x, 28) ^ rotr(x, 34) ^ rotr(x, 39);
+        };
+
+        auto s1 = [&](uint64_t x) noexcept -> uint64_t {
+            return rotr(x, 14) ^ rotr(x, 18) ^ rotr(x, 41);
+        };
+
+        auto g0 = [&](uint64_t x) noexcept -> uint64_t {
+            return rotr(x, 1) ^ rotr(x, 8) ^ (x >> 7);
+        };
+
+        auto g1 = [&](uint64_t x) noexcept -> uint64_t {
+            return rotr(x, 19) ^ rotr(x, 61) ^ (x >> 6);
+        };
+
+        uint64_t w[80];
+        for (size_t t = 0; t < 16; ++t) {
+            w[t] = (static_cast<uint64_t>(block[t * 8 + 0]) << 56) |
+                   (static_cast<uint64_t>(block[t * 8 + 1]) << 48) |
+                   (static_cast<uint64_t>(block[t * 8 + 2]) << 40) |
+                   (static_cast<uint64_t>(block[t * 8 + 3]) << 32) |
+                   (static_cast<uint64_t>(block[t * 8 + 4]) << 24) |
+                   (static_cast<uint64_t>(block[t * 8 + 5]) << 16) |
+                   (static_cast<uint64_t>(block[t * 8 + 6]) << 8)  |
+                   (static_cast<uint64_t>(block[t * 8 + 7]));
+        }
+        for (size_t t = 16; t < 80; ++t) {
+            w[t] = g1(w[t - 2]) + w[t - 7] + g0(w[t - 15]) + w[t - 16];
+        }
+
+        uint64_t a = state[0], b = state[1], c = state[2], d = state[3];
+        uint64_t e = state[4], f = state[5], g = state[6], h = state[7];
+
+        for (size_t t = 0; t < 80; ++t) {
+            uint64_t T1 = h + s1(e) + ch(e, f, g) + K[t] + w[t];
+            uint64_t T2 = s0(a) + maj(a, b, c);
+            h = g;
+            g = f;
+            f = e;
+            e = d + T1;
+            d = c;
+            c = b;
+            b = a;
+            a = T1 + T2;
+        }
+
+        state[0] += a;
+        state[1] += b;
+        state[2] += c;
+        state[3] += d;
+        state[4] += e;
+        state[5] += f;
+        state[6] += g;
+        state[7] += h;
+    }
+};
+
+class Sha384 {
+public:
+    static constexpr size_t DIGEST_SIZE = 48;
+    static constexpr size_t BLOCK_SIZE  = 128;
+
+    using Context = Sha512::Context;
+
+    static void init(Context& ctx) noexcept {
+        ctx.state[0] = 0xcbbb9d5dc1059ed8ULL;
+        ctx.state[1] = 0x629a292a367cd507ULL;
+        ctx.state[2] = 0x9159015a3070dd17ULL;
+        ctx.state[3] = 0x152fecd8f70e5939ULL;
+        ctx.state[4] = 0x67332667ffc00b31ULL;
+        ctx.state[5] = 0x8eb44a8768581511ULL;
+        ctx.state[6] = 0xdb0c2e0d64f98fa7ULL;
+        ctx.state[7] = 0x47b5481dbefa4fa4ULL;
+        ctx.count[0] = 0;
+        ctx.count[1] = 0;
+    }
+
+    static void update(Context& ctx, std::span<const uint8_t> data) noexcept {
+        Sha512::update(ctx, data);
+    }
+
+    static void final(Context& ctx, std::span<uint8_t, DIGEST_SIZE> digest) noexcept {
+        uint8_t fullDigest[64];
+        Sha512::final(ctx, std::span<uint8_t, 64>(fullDigest, 64));
+        std::memcpy(digest.data(), fullDigest, DIGEST_SIZE);
+    }
+
+    static std::vector<uint8_t> hash(std::span<const uint8_t> data) {
+        Context ctx;
+        init(ctx);
+        update(ctx, data);
+        std::vector<uint8_t> out(DIGEST_SIZE);
+        final(ctx, std::span<uint8_t, DIGEST_SIZE>(out.data(), DIGEST_SIZE));
+        return out;
     }
 };
 
@@ -906,7 +1319,10 @@ private:
 
 enum class CryptoAlgorithm {
     Sha256,
+    Sha384,
+    Sha512,
     Sha1,
+    Md5,
     Aes,
     Rng,
     HmacSha256,
@@ -914,11 +1330,14 @@ enum class CryptoAlgorithm {
 };
 
 inline CryptoAlgorithm parseAlgorithm(std::wstring_view algId) {
-    if (algId == BCRYPT_SHA256_ALGORITHM) return CryptoAlgorithm::Sha256;
-    if (algId == BCRYPT_SHA1_ALGORITHM)   return CryptoAlgorithm::Sha1;
-    if (algId == BCRYPT_AES_ALGORITHM)    return CryptoAlgorithm::Aes;
-    if (algId == BCRYPT_RNG_ALGORITHM)    return CryptoAlgorithm::Rng;
-    if (algId == BCRYPT_HMAC_SHA256_ALGORITHM) return CryptoAlgorithm::HmacSha256;
+    if (algId == BCRYPT_SHA256_ALGORITHM || algId == L"SHA-256") return CryptoAlgorithm::Sha256;
+    if (algId == BCRYPT_SHA384_ALGORITHM || algId == L"SHA-384") return CryptoAlgorithm::Sha384;
+    if (algId == BCRYPT_SHA512_ALGORITHM || algId == L"SHA-512") return CryptoAlgorithm::Sha512;
+    if (algId == BCRYPT_SHA1_ALGORITHM   || algId == L"SHA-1")   return CryptoAlgorithm::Sha1;
+    if (algId == BCRYPT_MD5_ALGORITHM    || algId == L"md5")     return CryptoAlgorithm::Md5;
+    if (algId == BCRYPT_AES_ALGORITHM)                           return CryptoAlgorithm::Aes;
+    if (algId == BCRYPT_RNG_ALGORITHM)                           return CryptoAlgorithm::Rng;
+    if (algId == BCRYPT_HMAC_SHA256_ALGORITHM)                  return CryptoAlgorithm::HmacSha256;
     return CryptoAlgorithm::Unknown;
 }
 
@@ -960,7 +1379,10 @@ class CngHashObject {
 public:
     CryptoAlgorithm algorithm{CryptoAlgorithm::Sha256};
     Sha256::Context sha256Ctx{};
+    Sha384::Context sha384Ctx{};
+    Sha512::Context sha512Ctx{};
     Sha1::Context sha1Ctx{};
+    Md5::Context md5Ctx{};
     HmacSha256::Context hmacSha256Ctx{};
     bool isFinished{false};
 
@@ -968,8 +1390,14 @@ public:
         : algorithm(alg) {
         if (algorithm == CryptoAlgorithm::Sha256) {
             Sha256::init(sha256Ctx);
+        } else if (algorithm == CryptoAlgorithm::Sha384) {
+            Sha384::init(sha384Ctx);
+        } else if (algorithm == CryptoAlgorithm::Sha512) {
+            Sha512::init(sha512Ctx);
         } else if (algorithm == CryptoAlgorithm::Sha1) {
             Sha1::init(sha1Ctx);
+        } else if (algorithm == CryptoAlgorithm::Md5) {
+            Md5::init(md5Ctx);
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             HmacSha256::init(hmacSha256Ctx, key);
         }
@@ -979,8 +1407,14 @@ public:
         if (isFinished) return;
         if (algorithm == CryptoAlgorithm::Sha256) {
             Sha256::update(sha256Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Sha384) {
+            Sha384::update(sha384Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Sha512) {
+            Sha512::update(sha512Ctx, data);
         } else if (algorithm == CryptoAlgorithm::Sha1) {
             Sha1::update(sha1Ctx, data);
+        } else if (algorithm == CryptoAlgorithm::Md5) {
+            Md5::update(md5Ctx, data);
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             HmacSha256::update(hmacSha256Ctx, data);
         }
@@ -993,9 +1427,21 @@ public:
             std::vector<uint8_t> out(32);
             Sha256::final(sha256Ctx, std::span<uint8_t, 32>(out.data(), 32));
             return out;
+        } else if (algorithm == CryptoAlgorithm::Sha384) {
+            std::vector<uint8_t> out(48);
+            Sha384::final(sha384Ctx, std::span<uint8_t, 48>(out.data(), 48));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Sha512) {
+            std::vector<uint8_t> out(64);
+            Sha512::final(sha512Ctx, std::span<uint8_t, 64>(out.data(), 64));
+            return out;
         } else if (algorithm == CryptoAlgorithm::Sha1) {
             std::vector<uint8_t> out(20);
             Sha1::final(sha1Ctx, std::span<uint8_t, 20>(out.data(), 20));
+            return out;
+        } else if (algorithm == CryptoAlgorithm::Md5) {
+            std::vector<uint8_t> out(16);
+            Md5::final(md5Ctx, std::span<uint8_t, 16>(out.data(), 16));
             return out;
         } else if (algorithm == CryptoAlgorithm::HmacSha256) {
             std::vector<uint8_t> out(32);
@@ -1195,7 +1641,12 @@ inline NTSTATUS BCryptGetProperty(
             *pcbResult = sizeof(uint32_t);
             if (!pbOutput) return STATUS_SUCCESS;
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
-            uint32_t len = (prov->algorithm == CryptoAlgorithm::Sha1) ? 20 : 32;
+            uint32_t len = 32;
+            if (prov->algorithm == CryptoAlgorithm::Md5) len = 16;
+            else if (prov->algorithm == CryptoAlgorithm::Sha1) len = 20;
+            else if (prov->algorithm == CryptoAlgorithm::Sha256 || prov->algorithm == CryptoAlgorithm::HmacSha256) len = 32;
+            else if (prov->algorithm == CryptoAlgorithm::Sha384) len = 48;
+            else if (prov->algorithm == CryptoAlgorithm::Sha512) len = 64;
             std::memcpy(pbOutput, &len, sizeof(len));
             return STATUS_SUCCESS;
         }
@@ -1203,8 +1654,17 @@ inline NTSTATUS BCryptGetProperty(
             *pcbResult = sizeof(uint32_t);
             if (!pbOutput) return STATUS_SUCCESS;
             if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
-            uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes) ? 16 : 64;
+            uint32_t len = (prov->algorithm == CryptoAlgorithm::Aes) ? 16 :
+                           ((prov->algorithm == CryptoAlgorithm::Sha384 || prov->algorithm == CryptoAlgorithm::Sha512) ? 128 : 64);
             std::memcpy(pbOutput, &len, sizeof(len));
+            return STATUS_SUCCESS;
+        }
+        if (std::wstring_view(pszProperty) == BCRYPT_OBJECT_LENGTH) {
+            *pcbResult = sizeof(uint32_t);
+            if (!pbOutput) return STATUS_SUCCESS;
+            if (cbOutput < sizeof(uint32_t)) return STATUS_BUFFER_TOO_SMALL;
+            uint32_t objLen = 512;
+            std::memcpy(pbOutput, &objLen, sizeof(objLen));
             return STATUS_SUCCESS;
         }
     }
@@ -1239,7 +1699,7 @@ inline NTSTATUS BCryptGenerateSymmetricKey(
     BCRYPT_KEY_HANDLE* phKey,
     [[maybe_unused]] uint8_t* pbKeyObject,
     [[maybe_unused]] uint32_t cbKeyObject,
-    uint8_t* pbSecret,
+    const uint8_t* pbSecret,
     uint32_t cbSecret,
     [[maybe_unused]] uint32_t dwFlags
 ) {
@@ -1266,14 +1726,11 @@ inline NTSTATUS BCryptGenerateSymmetricKey(
     return STATUS_SUCCESS;
 }
 
-inline NTSTATUS BCryptDestroyKey(BCRYPT_KEY_HANDLE hKey) {
-    if (!hKey) return STATUS_INVALID_HANDLE;
-    return CipherKspEngine::get().releaseKey(hKey) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
-}
+inline NTSTATUS BCryptDestroyKey(BCRYPT_KEY_HANDLE hKey);
 
 inline NTSTATUS BCryptEncrypt(
     BCRYPT_KEY_HANDLE hKey,
-    uint8_t* pbInput,
+    const uint8_t* pbInput,
     uint32_t cbInput,
     [[maybe_unused]] void* pPaddingInfo,
     uint8_t* pbIV,
@@ -1327,7 +1784,7 @@ inline NTSTATUS BCryptEncrypt(
 
 inline NTSTATUS BCryptDecrypt(
     BCRYPT_KEY_HANDLE hKey,
-    uint8_t* pbInput,
+    const uint8_t* pbInput,
     uint32_t cbInput,
     [[maybe_unused]] void* pPaddingInfo,
     uint8_t* pbIV,
@@ -1413,7 +1870,7 @@ inline NTSTATUS BCryptCreateHash(
 
 inline NTSTATUS BCryptHashData(
     BCRYPT_HASH_HANDLE hHash,
-    uint8_t* pbInput,
+    const uint8_t* pbInput,
     uint32_t cbInput,
     [[maybe_unused]] uint32_t dwFlags
 ) {
@@ -1462,9 +1919,9 @@ inline NTSTATUS BCryptGenRandom(
 
 inline NTSTATUS BCryptDeriveKeyPBKDF2(
     [[maybe_unused]] BCRYPT_ALG_HANDLE hPrf,
-    uint8_t* pbPassword,
+    const uint8_t* pbPassword,
     uint32_t cbPassword,
-    uint8_t* pbSalt,
+    const uint8_t* pbSalt,
     uint32_t cbSalt,
     uint64_t cIterations,
     uint8_t* pbDerivedKey,
@@ -1514,11 +1971,32 @@ inline NTSTATUS BCryptImportKey(
     BCRYPT_KEY_HANDLE* phKey,
     uint8_t* pbKeyObject,
     uint32_t cbKeyObject,
-    uint8_t* pbInput,
+    const uint8_t* pbInput,
     uint32_t cbInput,
     uint32_t dwFlags
 ) {
     return BCryptGenerateSymmetricKey(hAlgorithm, phKey, pbKeyObject, cbKeyObject, pbInput, cbInput, dwFlags);
+}
+
+inline NTSTATUS BCryptDestroyKey(BCRYPT_KEY_HANDLE hKey) {
+    if (!hKey) return STATUS_INVALID_HANDLE;
+    return CipherKspEngine::get().releaseKey(hKey) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
+}
+
+inline NTSTATUS BCryptDuplicateHash(
+    BCRYPT_HASH_HANDLE hHash,
+    BCRYPT_HASH_HANDLE* phNewHash,
+    [[maybe_unused]] uint8_t* pbHashObject,
+    [[maybe_unused]] uint32_t cbHashObject,
+    [[maybe_unused]] uint32_t dwFlags
+) {
+    if (!hHash || !phNewHash) return STATUS_INVALID_PARAMETER;
+    auto orig = CipherKspEngine::get().getHash(hHash);
+    if (!orig) return STATUS_INVALID_HANDLE;
+
+    auto copy = std::make_shared<CngHashObject>(*orig);
+    *phNewHash = CipherKspEngine::get().registerHash(copy);
+    return STATUS_SUCCESS;
 }
 
 // ============================================================================
@@ -1653,6 +2131,43 @@ inline NTSTATUS NCryptImportKey(
 
     *phKey = CipherKspEngine::get().registerPersistedKey(key);
     return STATUS_SUCCESS;
+}
+
+// ============================================================================
+// 11. Subsystem Export Registration
+// ============================================================================
+
+inline void InitializeBCryptSubsystemExports() {
+    auto& ldr = ldr::DynamicLoader::get();
+
+    // bcrypt.dll exports
+    ldr.registerExport("bcrypt.dll", "BCryptOpenAlgorithmProvider", reinterpret_cast<void*>(BCryptOpenAlgorithmProvider));
+    ldr.registerExport("bcrypt.dll", "BCryptCloseAlgorithmProvider", reinterpret_cast<void*>(BCryptCloseAlgorithmProvider));
+    ldr.registerExport("bcrypt.dll", "BCryptGetProperty", reinterpret_cast<void*>(BCryptGetProperty));
+    ldr.registerExport("bcrypt.dll", "BCryptSetProperty", reinterpret_cast<void*>(BCryptSetProperty));
+    ldr.registerExport("bcrypt.dll", "BCryptGenerateSymmetricKey", reinterpret_cast<void*>(BCryptGenerateSymmetricKey));
+    ldr.registerExport("bcrypt.dll", "BCryptDestroyKey", reinterpret_cast<void*>(BCryptDestroyKey));
+    ldr.registerExport("bcrypt.dll", "BCryptEncrypt", reinterpret_cast<void*>(BCryptEncrypt));
+    ldr.registerExport("bcrypt.dll", "BCryptDecrypt", reinterpret_cast<void*>(BCryptDecrypt));
+    ldr.registerExport("bcrypt.dll", "BCryptCreateHash", reinterpret_cast<void*>(BCryptCreateHash));
+    ldr.registerExport("bcrypt.dll", "BCryptHashData", reinterpret_cast<void*>(BCryptHashData));
+    ldr.registerExport("bcrypt.dll", "BCryptFinishHash", reinterpret_cast<void*>(BCryptFinishHash));
+    ldr.registerExport("bcrypt.dll", "BCryptDestroyHash", reinterpret_cast<void*>(BCryptDestroyHash));
+    ldr.registerExport("bcrypt.dll", "BCryptDuplicateHash", reinterpret_cast<void*>(BCryptDuplicateHash));
+    ldr.registerExport("bcrypt.dll", "BCryptGenRandom", reinterpret_cast<void*>(BCryptGenRandom));
+    ldr.registerExport("bcrypt.dll", "BCryptDeriveKeyPBKDF2", reinterpret_cast<void*>(BCryptDeriveKeyPBKDF2));
+    ldr.registerExport("bcrypt.dll", "BCryptExportKey", reinterpret_cast<void*>(BCryptExportKey));
+    ldr.registerExport("bcrypt.dll", "BCryptImportKey", reinterpret_cast<void*>(BCryptImportKey));
+
+    // ncrypt.dll exports
+    ldr.registerExport("ncrypt.dll", "NCryptOpenStorageProvider", reinterpret_cast<void*>(NCryptOpenStorageProvider));
+    ldr.registerExport("ncrypt.dll", "NCryptFreeObject", reinterpret_cast<void*>(NCryptFreeObject));
+    ldr.registerExport("ncrypt.dll", "NCryptCreatePersistedKey", reinterpret_cast<void*>(NCryptCreatePersistedKey));
+    ldr.registerExport("ncrypt.dll", "NCryptFinalizeKey", reinterpret_cast<void*>(NCryptFinalizeKey));
+    ldr.registerExport("ncrypt.dll", "NCryptOpenKey", reinterpret_cast<void*>(NCryptOpenKey));
+    ldr.registerExport("ncrypt.dll", "NCryptDeleteKey", reinterpret_cast<void*>(NCryptDeleteKey));
+    ldr.registerExport("ncrypt.dll", "NCryptExportKey", reinterpret_cast<void*>(NCryptExportKey));
+    ldr.registerExport("ncrypt.dll", "NCryptImportKey", reinterpret_cast<void*>(NCryptImportKey));
 }
 
 } // namespace micant::crypto

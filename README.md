@@ -86,6 +86,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 23. **Khronos Vulkan 1.3 ICD Loader & PrismVK Graphics Driver (`vulkan.hpp`)**: Sovereign clean-room implementation of the standard Khronos Vulkan Installable Client Driver (ICD) Loader (`vulkan-1.dll`). Features Configuration Manager driver discovery via `\Registry\Machine\SOFTWARE\Khronos\Vulkan\Drivers`, discrete GPU physical device enumeration (1.3.0 compliance, 8192 MB dedicated VRAM, 16384 MB shared GTT, 16 graphics/compute queues), `VK_KHR_win32_surface` HWND window attachment, `VK_KHR_swapchain` presentation, command pool & buffer recording, render passes, and queue submission dispatching directly through the Prism3D rasterizer. Integrated shell commands (`vulkan`, `vkcube`, `vulkan test`).
 24. **Silicon Graphics OpenGL 1.4 API, Windows WGL Subsystem & GLU Library (`opengl.hpp`, `opengl32.dll`, `glu32.dll`)**: Complete sovereign clean-room implementation of the Silicon Graphics OpenGL 1.1–1.4 core rendering pipeline, Windows WGL context lifecycle, and OpenGL Utility Library (`glu32.dll`). Features standard column-major 4x4 matrix stack math (ModelView, Projection, Texture), immediate mode (`glBegin`/`glEnd`) with primitive assembly (points, lines, triangles, quads, polygon fans/strips), vertex array client state (`glVertexPointer`, `glColorPointer`, `glTexCoordPointer`, `glDrawArrays`), 2D texture mapping with bilinear/nearest filtering and wrap modes (`GL_REPEAT`, `GL_CLAMP`), depth buffering (`GL_DEPTH_TEST`), alpha blending, and WGL context creation (`wglCreateContext`, `wglMakeCurrent`, `wglDeleteContext`) with `wglSwapBuffers` presentation bridge to GDI/User32 framebuffers. Full GLU camera utility routines (`gluPerspective`, `gluLookAt`, `gluOrtho2D`, `gluErrorString`). Integrated shell commands (`opengl info`, `opengl test`).
 25. **Windows Internet (WinINet) & URL Moniker (URLMon) Web Client Subsystems (`wininet.hpp`, `urlmon.hpp`, `wininet.dll`, `urlmon.dll`)**: Complete clean-room web client engine. Features hierarchical handle management (`HINTERNET` session -> connection -> request) with handle cascading destruction, RFC 7230 HTTP/1.1 request formatting, Winsock 2 streaming delivery, chunked transfer-encoding decoding, RFC 6265 thread-safe cookie jar, Temporary Internet Files LRU cache management, RFC 3986 URL cracking/creation/canonicalization, `HttpQueryInfoA/W`, `FindMimeFromData` MIME sniffer, `URLDownloadToFileA/W` with live `IBindStatusCallback` progress events, stream monikers (`URLOpenBlockingStreamA/W`, `MemoryStream`), `CreateURLMoniker` (`IMoniker`), and interactive CLI utilities (`curl`, `wget`, `wininet`, `urlmon`).
+26. **Windows Cryptography API (CryptoAPI) & Cryptography Next Generation (CNG) Subsystems (`cipherksp.hpp`, `crypt32.hpp`, `advapi32.hpp`, `bcrypt.dll`, `ncrypt.dll`, `crypt32.dll`)**: Complete sovereign clean-room cryptographic architecture. Implements CNG primitive router (`bcrypt.dll`) with FIPS 180-4 SHA-256, SHA-384, SHA-512, RFC 1321 MD5, SHA-1, clean-room AES-128/192/256 with CBC/ECB modes, RFC 2898 / SP 800-132 PBKDF2, and CSPRNG. CNG Key Storage Provider (`ncrypt.dll`) for persistent key storage. Legacy Windows CryptoAPI in `advapi32.dll` (`CryptAcquireContext`, `CryptCreateHash`, `CryptDeriveKey`, `CryptEncrypt`, `CryptDecrypt`). Data Protection API (DPAPI) in `crypt32.dll` (`CryptProtectData`/`CryptUnprotectData`) with PBKDF2 per-user derivation, AES-256-CBC encryption, and HMAC-SHA256 authenticated integrity. Base64 and Hex encoding/decoding engines (`CryptBinaryToStringA/W`, `CryptStringToBinaryA/W`), and X.509 Certificate Store management (`CertOpenSystemStore`, `CertEnumCertificatesInStore`, `CertFindCertificateInStore`, `CertGetNameString`). Interactive shell commands (`bcrypt`, `certmgr`, `dpapi`).
 
 ---
 
@@ -211,12 +212,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (65 Suites, 100% Passing)
+### Build & Run Unit Test Suite (66 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 65 Test Suites:
+# Run all 66 Test Suites:
 .\bin\micant_tests.exe
 ```
 

@@ -55,6 +55,8 @@
 #include "opengl.hpp"
 #include "wininet.hpp"
 #include "urlmon.hpp"
+#include "cipherksp.hpp"
+#include "crypt32.hpp"
 
 namespace micant::shell {
 
@@ -105,6 +107,8 @@ public:
         opengl::InitializeOpenglSubsystemExports();
         wininet::InitializeWinINetSubsystemExports();
         urlmon::InitializeUrlMonSubsystemExports();
+        crypto::InitializeBCryptSubsystemExports();
+        crypt32::InitializeCrypt32SubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -175,6 +179,9 @@ public:
             if (cmd == "opengl" || cmd == "gl" || cmd == "wgl") { cmdOpenGL(tokens, out); return 0; }
             if (cmd == "wininet" || cmd == "internet") { cmdWinINet(tokens, out); return 0; }
             if (cmd == "urlmon" || cmd == "curl" || cmd == "wget" || cmd == "download") { cmdUrlMon(tokens, out); return 0; }
+            if (cmd == "bcrypt" || cmd == "cng") { cmdBCrypt(tokens, out); return 0; }
+            if (cmd == "certmgr" || cmd == "cert") { cmdCertMgr(tokens, out); return 0; }
+            if (cmd == "dpapi") { cmdDpapi(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -417,6 +424,11 @@ private:
             << "  DSOUND            DirectSound 8 3D Audio Subsystem & Real-Time Voice Mixer\n"
             << "  VERSION / VERINFO Queries Windows Version Information resource metadata for PE files\n"
             << "  OPENGL / GL / WGL Silicon Graphics OpenGL 1.4 API & Windows WGL 3D Runtime\n"
+            << "  WININET           Windows Internet Subsystem (HTTP/1.1, cookies, URL cache)\n"
+            << "  URLMON / CURL     Downloads web resources using URLDownloadToFile & MIME sniffer\n"
+            << "  BCRYPT / CNG      Cryptography Next Generation (SHA256/384/512, MD5, AES, PBKDF2)\n"
+            << "  CERTMGR           Windows Certificate Manager & X.509 Digital Certificate Store\n"
+            << "  DPAPI             Data Protection API (CryptProtectData / CryptUnprotectData)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -2733,6 +2745,407 @@ private:
             << "  curl <url> [-o <file>]     Downloads web resource using URLDownloadToFile\n"
             << "  wget <url>                 Downloads web resource to current directory\n"
             << "  urlmon test                Runs simulated download test\n";
+    }
+
+    void cmdBCrypt(const std::vector<std::string>& tokens, std::ostream& out) {
+        crypto::InitializeBCryptSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "hash" || tokens[1] == "digest")) {
+            if (tokens.size() < 4) {
+                out << "Usage: bcrypt hash <algorithm> <data_string>\n"
+                    << "Algorithms: sha256, sha384, sha512, md5, sha1\n";
+                return;
+            }
+            std::string algo = tokens[2];
+            std::transform(algo.begin(), algo.end(), algo.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+            const wchar_t* wAlgo = nullptr;
+            if (algo == "sha256" || algo == "sha-256") wAlgo = crypto::BCRYPT_SHA256_ALGORITHM;
+            else if (algo == "sha384" || algo == "sha-384") wAlgo = crypto::BCRYPT_SHA384_ALGORITHM;
+            else if (algo == "sha512" || algo == "sha-512") wAlgo = crypto::BCRYPT_SHA512_ALGORITHM;
+            else if (algo == "md5") wAlgo = crypto::BCRYPT_MD5_ALGORITHM;
+            else if (algo == "sha1" || algo == "sha-1") wAlgo = crypto::BCRYPT_SHA1_ALGORITHM;
+            else {
+                out << "Error: Unknown algorithm '" << tokens[2] << "'. Supported: sha256, sha384, sha512, md5, sha1\n";
+                return;
+            }
+
+            std::string payload;
+            for (size_t i = 3; i < tokens.size(); ++i) {
+                if (i > 3) payload += " ";
+                payload += tokens[i];
+            }
+
+            crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+            int32_t status = crypto::BCryptOpenAlgorithmProvider(&hAlg, wAlgo, nullptr, 0);
+            if (!BCRYPT_SUCCESS(status)) {
+                out << "Error: BCryptOpenAlgorithmProvider failed with status 0x" << std::hex << status << std::dec << "\n";
+                return;
+            }
+
+            crypto::BCRYPT_HASH_HANDLE hHash = nullptr;
+            status = crypto::BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+            if (!BCRYPT_SUCCESS(status)) {
+                crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+                out << "Error: BCryptCreateHash failed with status 0x" << std::hex << status << std::dec << "\n";
+                return;
+            }
+
+            status = crypto::BCryptHashData(hHash, reinterpret_cast<const uint8_t*>(payload.data()), static_cast<uint32_t>(payload.size()), 0);
+            if (!BCRYPT_SUCCESS(status)) {
+                crypto::BCryptDestroyHash(hHash);
+                crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+                out << "Error: BCryptHashData failed with status 0x" << std::hex << status << std::dec << "\n";
+                return;
+            }
+
+            uint32_t digestLen = 0;
+            uint32_t cbResult = 0;
+            crypto::BCryptGetProperty(hAlg, crypto::BCRYPT_HASH_LENGTH, reinterpret_cast<uint8_t*>(&digestLen), sizeof(digestLen), &cbResult, 0);
+            if (digestLen == 0) digestLen = 32;
+
+            std::vector<uint8_t> digest(digestLen);
+            status = crypto::BCryptFinishHash(hHash, digest.data(), digestLen, 0);
+            crypto::BCryptDestroyHash(hHash);
+            crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            if (!BCRYPT_SUCCESS(status)) {
+                out << "Error: BCryptFinishHash failed with status 0x" << std::hex << status << std::dec << "\n";
+                return;
+            }
+
+            out << "[BCrypt " << tokens[2] << "] Digest (" << digestLen << " bytes):\n  ";
+            for (uint8_t b : digest) {
+                out << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
+            }
+            out << std::dec << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (tokens[1] == "rand" || tokens[1] == "random")) {
+            uint32_t count = 32;
+            if (tokens.size() > 2) {
+                try {
+                    count = static_cast<uint32_t>(std::stoul(tokens[2]));
+                } catch (...) {
+                    count = 32;
+                }
+            }
+            if (count > 256) count = 256;
+            std::vector<uint8_t> buf(count);
+            int32_t status = crypto::BCryptGenRandom(nullptr, buf.data(), count, crypto::BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+            if (!BCRYPT_SUCCESS(status)) {
+                out << "Error: BCryptGenRandom failed with status 0x" << std::hex << status << std::dec << "\n";
+                return;
+            }
+            out << "[BCrypt CSPRNG] " << count << " Cryptographically Secure Random Bytes:\n  ";
+            for (uint8_t b : buf) {
+                out << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
+            }
+            out << std::dec << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[BCrypt] Running Known-Answer-Test (KAT) self-check...\n";
+            crypto::BCRYPT_ALG_HANDLE hAlg = nullptr;
+            crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+            crypto::BCRYPT_HASH_HANDLE hHash = nullptr;
+            crypto::BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+            const char* msg = "abc";
+            crypto::BCryptHashData(hHash, reinterpret_cast<const uint8_t*>(msg), 3, 0);
+            uint8_t d[32]{};
+            crypto::BCryptFinishHash(hHash, d, 32, 0);
+            crypto::BCryptDestroyHash(hHash);
+            crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            std::ostringstream ss;
+            for (int i = 0; i < 32; ++i) ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(d[i]);
+            bool match = (ss.str() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+            out << "  SHA-256(\"abc\"): " << ss.str() << " [" << (match ? "PASS" : "FAIL") << "]\n";
+
+            uint8_t key[32] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32};
+            uint8_t iv[16] = {0};
+            crypto::BCryptOpenAlgorithmProvider(&hAlg, crypto::BCRYPT_AES_ALGORITHM, nullptr, 0);
+            crypto::BCRYPT_KEY_HANDLE hKey = nullptr;
+            crypto::BCryptGenerateSymmetricKey(hAlg, &hKey, nullptr, 0, key, 32, 0);
+            std::string sample = "MicaNT Sovereign Cryptography Engine";
+            std::vector<uint8_t> pt(sample.begin(), sample.end());
+            uint32_t ctLen = 0;
+            uint8_t ivEnc[16]; std::memcpy(ivEnc, iv, 16);
+            crypto::BCryptEncrypt(hKey, pt.data(), static_cast<uint32_t>(pt.size()), nullptr, ivEnc, 16, nullptr, 0, &ctLen, crypto::BCRYPT_BLOCK_PADDING);
+            std::vector<uint8_t> ct(ctLen);
+            std::memcpy(ivEnc, iv, 16);
+            crypto::BCryptEncrypt(hKey, pt.data(), static_cast<uint32_t>(pt.size()), nullptr, ivEnc, 16, ct.data(), ctLen, &ctLen, crypto::BCRYPT_BLOCK_PADDING);
+
+            uint32_t dtLen = 0;
+            uint8_t ivDec[16]; std::memcpy(ivDec, iv, 16);
+            crypto::BCryptDecrypt(hKey, ct.data(), ctLen, nullptr, ivDec, 16, nullptr, 0, &dtLen, crypto::BCRYPT_BLOCK_PADDING);
+            std::vector<uint8_t> dt(dtLen);
+            std::memcpy(ivDec, iv, 16);
+            crypto::BCryptDecrypt(hKey, ct.data(), ctLen, nullptr, ivDec, 16, dt.data(), dtLen, &dtLen, crypto::BCRYPT_BLOCK_PADDING);
+            crypto::BCryptDestroyKey(hKey);
+            crypto::BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            std::string recovered(dt.begin(), dt.end());
+            out << "  AES-256-CBC:   \"" << recovered << "\" [" << (recovered == sample ? "PASS" : "FAIL") << "]\n";
+            out << "[BCrypt] Self-check complete.\n";
+            return;
+        }
+
+        out << "========================================================================\n"
+            << "          MicaNT Cryptography Next Generation (bcrypt.dll / ncrypt.dll) \n"
+            << "========================================================================\n\n"
+            << "Primitive Router:  Clean-Room Windows CNG Dispatch Engine\n"
+            << "Digest Algorithms: SHA-256, SHA-384, SHA-512, MD5, SHA-1\n"
+            << "Symmetric Ciphers: AES-128, AES-192, AES-256 (CBC, ECB, PKCS#7)\n"
+            << "Key Derivation:    PBKDF2 (HMAC-SHA256)\n"
+            << "Random Generator:  Cryptographically Secure Hardware-Entropy CSPRNG\n"
+            << "Key Storage (KSP): Microsoft Software Key Storage Provider (ncrypt.dll)\n\n"
+            << "Usage:\n"
+            << "  bcrypt hash <algo> <data>   Computes cryptographic digest of text\n"
+            << "  bcrypt rand [count]         Generates CSPRNG random bytes (hex)\n"
+            << "  bcrypt test                 Executes cryptographic KAT self-test\n"
+            << "  bcrypt info                 Displays CNG subsystem information\n";
+    }
+
+    void cmdCertMgr(const std::vector<std::string>& tokens, std::ostream& out) {
+        crypt32::InitializeCrypt32SubsystemExports();
+
+        std::string storeName = "ROOT";
+        bool listMode = false;
+        bool findMode = false;
+        std::string findQuery;
+
+        if (tokens.size() > 1) {
+            if (tokens[1] == "-list" || tokens[1] == "list") {
+                listMode = true;
+                if (tokens.size() > 2) storeName = tokens[2];
+            } else if (tokens[1] == "-find" || tokens[1] == "find") {
+                findMode = true;
+                if (tokens.size() > 2) findQuery = tokens[2];
+            }
+        }
+
+        if (listMode) {
+            std::transform(storeName.begin(), storeName.end(), storeName.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+            crypt32::HCERTSTORE hStore = crypt32::CertOpenSystemStoreA(0, storeName.c_str());
+            if (!hStore) {
+                out << "Error: Failed to open system certificate store '" << storeName << "'.\n";
+                return;
+            }
+
+            out << "Certificates in System Store [" << storeName << "]:\n";
+            out << "------------------------------------------------------------------------\n";
+            uint32_t count = 0;
+            const crypt32::CERT_CONTEXT* pCert = nullptr;
+            while ((pCert = crypt32::CertEnumCertificatesInStore(hStore, pCert)) != nullptr) {
+                count++;
+                char subject[256]{};
+                crypt32::CertGetNameStringA(pCert, crypt32::CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, subject, sizeof(subject));
+
+                char issuer[256]{};
+                crypt32::CertGetNameStringA(pCert, crypt32::CERT_NAME_SIMPLE_DISPLAY_TYPE, crypt32::CERT_NAME_ISSUER_FLAG, nullptr, issuer, sizeof(issuer));
+
+                out << "  [" << count << "] Subject:    " << subject << "\n"
+                    << "      Issuer:     " << issuer << "\n";
+
+                uint8_t thumbprint[20]{};
+                uint32_t cbThumb = sizeof(thumbprint);
+                if (crypt32::CertGetCertificateContextProperty(pCert, crypt32::CERT_SHA1_HASH_PROP_ID, thumbprint, &cbThumb)) {
+                    out << "      Thumbprint: ";
+                    for (uint32_t i = 0; i < cbThumb; ++i) {
+                        out << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(thumbprint[i]);
+                    }
+                    out << std::dec << "\n";
+                }
+            }
+            if (count == 0) {
+                out << "  (No certificates found in store)\n";
+            }
+            out << "------------------------------------------------------------------------\n"
+                << "Total Certificates: " << count << "\n";
+
+            crypt32::CertCloseStore(hStore, 0);
+            return;
+        }
+
+        if (findMode) {
+            if (findQuery.empty()) {
+                out << "Usage: certmgr -find <subject_substring>\n";
+                return;
+            }
+            crypt32::HCERTSTORE hStore = crypt32::CertOpenSystemStoreA(0, "ROOT");
+            if (!hStore) {
+                out << "Error: Failed to open ROOT certificate store.\n";
+                return;
+            }
+            std::wstring wQuery(findQuery.begin(), findQuery.end());
+            const crypt32::CERT_CONTEXT* pFound = crypt32::CertFindCertificateInStore(
+                hStore,
+                0x00010001,
+                0,
+                crypt32::CERT_FIND_SUBJECT_STR_W,
+                wQuery.c_str(),
+                nullptr
+            );
+
+            if (pFound) {
+                char subject[256]{};
+                crypt32::CertGetNameStringA(pFound, crypt32::CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, subject, sizeof(subject));
+                out << "[CertMgr] Certificate Match Found:\n"
+                    << "  Subject: " << subject << "\n";
+                crypt32::CertFreeCertificateContext(pFound);
+            } else {
+                out << "[CertMgr] No certificates found matching: '" << findQuery << "'\n";
+            }
+            crypt32::CertCloseStore(hStore, 0);
+            return;
+        }
+
+        out << "========================================================================\n"
+            << "          MicaNT Certificate Management Subsystem (crypt32.dll)         \n"
+            << "========================================================================\n\n"
+            << "Certificate Stores: System Stores (ROOT, MY, CA, AddressBook), Memory Stores\n"
+            << "X.509 Operations:   Context Creation, Duplicate, Enumeration, Property Query\n"
+            << "Search Criteria:    CERT_FIND_ANY, CERT_FIND_SUBJECT_STR, CERT_FIND_SHA1_HASH\n"
+            << "Format Parsing:     ASN.1 DER Parser, PEM Decoder\n\n"
+            << "Usage:\n"
+            << "  certmgr -list [store]     Lists certificates in specified store (default: ROOT)\n"
+            << "  certmgr -find <query>     Searches ROOT store for matching subject\n"
+            << "  certmgr info              Displays Certificate Subsystem info\n";
+    }
+
+    void cmdDpapi(const std::vector<std::string>& tokens, std::ostream& out) {
+        crypt32::InitializeCrypt32SubsystemExports();
+
+        if (tokens.size() > 1 && tokens[1] == "protect") {
+            if (tokens.size() < 3) {
+                out << "Usage: dpapi protect <plaintext_string> [description]\n";
+                return;
+            }
+            std::string text = tokens[2];
+            std::string desc = (tokens.size() > 3) ? tokens[3] : "MicaNT Shell DPAPI Secret";
+            std::wstring wDesc(desc.begin(), desc.end());
+
+            crypt32::DATA_BLOB inBlob;
+            inBlob.cbData = static_cast<uint32_t>(text.size());
+            inBlob.pbData = reinterpret_cast<uint8_t*>(text.data());
+
+            crypt32::DATA_BLOB outBlob{};
+            int32_t ok = crypt32::CryptProtectData(
+                &inBlob,
+                wDesc.c_str(),
+                nullptr,
+                nullptr,
+                nullptr,
+                0,
+                &outBlob
+            );
+
+            if (!ok || !outBlob.pbData) {
+                out << "Error: CryptProtectData failed with error 0x" << std::hex << win32::GetLastError() << std::dec << "\n";
+                return;
+            }
+
+            uint32_t b64Len = 0;
+            crypt32::CryptBinaryToStringA(outBlob.pbData, outBlob.cbData, crypt32::CRYPT_STRING_BASE64 | crypt32::CRYPT_STRING_NOCRLF, nullptr, &b64Len);
+            std::string b64(b64Len, '\0');
+            crypt32::CryptBinaryToStringA(outBlob.pbData, outBlob.cbData, crypt32::CRYPT_STRING_BASE64 | crypt32::CRYPT_STRING_NOCRLF, b64.data(), &b64Len);
+            if (!b64.empty() && b64.back() == '\0') b64.pop_back();
+
+            win32::LocalFree(outBlob.pbData);
+
+            out << "[DPAPI] Protected Data (Base64 Encoded):\n  " << b64 << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "unprotect") {
+            if (tokens.size() < 3) {
+                out << "Usage: dpapi unprotect <base64_ciphertext>\n";
+                return;
+            }
+            std::string b64 = tokens[2];
+            uint32_t binLen = 0;
+            crypt32::CryptStringToBinaryA(b64.c_str(), static_cast<uint32_t>(b64.size()), crypt32::CRYPT_STRING_BASE64, nullptr, &binLen, nullptr, nullptr);
+            if (binLen == 0) {
+                out << "Error: Invalid Base64 input string.\n";
+                return;
+            }
+            std::vector<uint8_t> bin(binLen);
+            crypt32::CryptStringToBinaryA(b64.c_str(), static_cast<uint32_t>(b64.size()), crypt32::CRYPT_STRING_BASE64, bin.data(), &binLen, nullptr, nullptr);
+
+            crypt32::DATA_BLOB inBlob;
+            inBlob.cbData = binLen;
+            inBlob.pbData = bin.data();
+
+            crypt32::DATA_BLOB outBlob{};
+            wchar_t* pDesc = nullptr;
+            int32_t ok = crypt32::CryptUnprotectData(
+                &inBlob,
+                &pDesc,
+                nullptr,
+                nullptr,
+                nullptr,
+                0,
+                &outBlob
+            );
+
+            if (!ok || !outBlob.pbData) {
+                out << "Error: CryptUnprotectData failed with error 0x" << std::hex << win32::GetLastError() << std::dec << "\n";
+                return;
+            }
+
+            std::string recovered(reinterpret_cast<char*>(outBlob.pbData), outBlob.cbData);
+            std::wstring desc = pDesc ? pDesc : L"";
+            if (pDesc) win32::LocalFree(pDesc);
+            win32::LocalFree(outBlob.pbData);
+
+            out << "[DPAPI] Unprotected Plaintext:\n  \"" << recovered << "\"\n";
+            if (!desc.empty()) {
+                std::string sDesc(desc.begin(), desc.end());
+                out << "  Description: " << sDesc << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[DPAPI] Running Data Protection API self-check...\n";
+            std::string secret = "MicaNT_SuperSecret_MasterKey_2026";
+            crypt32::DATA_BLOB inBlob{ static_cast<uint32_t>(secret.size()), reinterpret_cast<uint8_t*>(secret.data()) };
+            crypt32::DATA_BLOB protectedBlob{};
+
+            int32_t pOk = crypt32::CryptProtectData(&inBlob, L"SelfTest", nullptr, nullptr, nullptr, 0, &protectedBlob);
+            out << "  CryptProtectData:   " << (pOk ? "SUCCESS" : "FAILED") << " (Ciphertext: " << protectedBlob.cbData << " bytes)\n";
+
+            crypt32::DATA_BLOB unprotectBlob{};
+            wchar_t* pDesc = nullptr;
+            int32_t uOk = crypt32::CryptUnprotectData(&protectedBlob, &pDesc, nullptr, nullptr, nullptr, 0, &unprotectBlob);
+            std::string recovered = (uOk && unprotectBlob.pbData) ? std::string(reinterpret_cast<char*>(unprotectBlob.pbData), unprotectBlob.cbData) : "";
+            bool match = (recovered == secret);
+            out << "  CryptUnprotectData: " << (uOk && match ? "PASS" : "FAIL") << " (\"" << recovered << "\")\n";
+
+            if (pDesc) win32::LocalFree(pDesc);
+            if (unprotectBlob.pbData) win32::LocalFree(unprotectBlob.pbData);
+            if (protectedBlob.pbData) win32::LocalFree(protectedBlob.pbData);
+
+            out << "[DPAPI] Self-check complete.\n";
+            return;
+        }
+
+        out << "========================================================================\n"
+            << "          MicaNT Data Protection API Subsystem (DPAPI)                  \n"
+            << "========================================================================\n\n"
+            << "API Surface:       CryptProtectData, CryptUnprotectData (crypt32.dll)\n"
+            << "Master Key Model:  Per-User PBKDF2 Derived Keying (HMAC-SHA256)\n"
+            << "Encryption Engine: AES-256-CBC with Secure Random IV\n"
+            << "Authentication:    HMAC-SHA256 Integrity Verification Tag\n"
+            << "Memory Handling:   LocalAlloc / LocalFree Compatible Heap Buffers\n\n"
+            << "Usage:\n"
+            << "  dpapi protect <data> [desc]   Protects string, outputs Base64 ciphertext\n"
+            << "  dpapi unprotect <base64>      Decrypts Base64 ciphertext back to plaintext\n"
+            << "  dpapi test                    Executes DPAPI roundtrip self-test\n"
+            << "  dpapi info                    Displays DPAPI architecture details\n";
     }
 
     static std::string trim(std::string_view s) {

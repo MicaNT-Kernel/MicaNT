@@ -283,18 +283,18 @@ private:
             mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
             mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
             mod.fixedInfo.dwFileVersionMS = (1 << 16) | 0;
-            mod.fixedInfo.dwFileVersionLS = (65 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (66 << 16) | 0;
             mod.fixedInfo.dwProductVersionMS = (1 << 16) | 0;
-            mod.fixedInfo.dwProductVersionLS = (65 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (66 << 16) | 0;
             mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
             mod.fixedInfo.dwFileType = VFT_APP;
             mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
             mod.stringTable["FileDescription"] = "MicaNT Sovereign Operating System Kernel";
-            mod.stringTable["FileVersion"] = "1.0.65.0";
+            mod.stringTable["FileVersion"] = "1.0.66.0";
             mod.stringTable["InternalName"] = "micant";
             mod.stringTable["OriginalFilename"] = "micant_kernel.exe";
             mod.stringTable["ProductName"] = "MicaNT Operating System";
-            mod.stringTable["ProductVersion"] = "1.0.65.0";
+            mod.stringTable["ProductVersion"] = "1.0.66.0";
             registerModule(mod);
         }
 
@@ -383,6 +383,72 @@ private:
             mod.stringTable["OriginalFilename"] = "urlmon.dll";
             mod.stringTable["ProductName"] = "MicaNT URL Moniker Subsystem";
             mod.stringTable["ProductVersion"] = "11.00.22621.1";
+            registerModule(mod);
+        }
+
+        // 12. bcrypt.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "bcrypt.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Cryptographic Primitives Library";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "bcrypt";
+            mod.stringTable["OriginalFilename"] = "bcrypt.dll";
+            mod.stringTable["ProductName"] = "MicaNT CNG Cryptographic Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // 13. ncrypt.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "ncrypt.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Key Storage Provider Router";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "ncrypt";
+            mod.stringTable["OriginalFilename"] = "ncrypt.dll";
+            mod.stringTable["ProductName"] = "MicaNT Key Storage Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // 14. crypt32.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "crypt32.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Crypto API32";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "crypt32";
+            mod.stringTable["OriginalFilename"] = "crypt32.dll";
+            mod.stringTable["ProductName"] = "MicaNT Certificate and Data Protection Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
             registerModule(mod);
         }
     }
