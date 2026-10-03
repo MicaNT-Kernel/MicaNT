@@ -92,6 +92,7 @@
 #include "micant/sspi.hpp"
 #include "micant/rpcrt4.hpp"
 #include "micant/oleaut32.hpp"
+#include "micant/setupapi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -12090,6 +12091,341 @@ void Test_OLE_Automation_And_SafeArray_Subsystem() {
     std::cout << "[TEST] Suite 69: Windows OLE Automation & SafeArray Subsystem PASSED.\n";
 }
 
+void Test_SetupApi_DeviceInstallation_And_INF_Subsystem() {
+    std::cout << "[TEST] Running Suite 70: Windows Device Installation & SetupAPI Subsystem (setupapi.dll)...\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 1: INF File Parsing & Line Counting (SetupOpenInfFileW, SetupGetLineCountW, SetupCloseInfFile)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HINF hInf = setupapi::SetupOpenInfFileW(L"sample_display.inf", nullptr, 0, nullptr);
+        TEST_ASSERT(hInf != nullptr && hInf != reinterpret_cast<setupapi::HINF>(static_cast<uintptr_t>(-1)), "SetupOpenInfFileW must succeed");
+
+        int32_t verLines = setupapi::SetupGetLineCountW(hInf, L"Version");
+        TEST_ASSERT(verLines >= 4, "Version section must contain at least 4 directives");
+
+        int32_t strLines = setupapi::SetupGetLineCountW(hInf, L"Strings");
+        TEST_ASSERT(strLines >= 2, "Strings section must contain at least 2 definitions");
+
+        int32_t badLines = setupapi::SetupGetLineCountW(hInf, L"NonExistentSection");
+        TEST_ASSERT(badLines == -1, "SetupGetLineCountW on non-existent section must return -1");
+
+        setupapi::SetupCloseInfFile(hInf);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: INF Context Navigation & Field Counting (SetupFindFirstLineW, SetupFindNextLine, SetupGetFieldCount)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HINF hInf = setupapi::SetupOpenInfFileW(L"sample_display.inf", nullptr, 0, nullptr);
+        TEST_ASSERT(hInf != nullptr, "INF handle must be valid");
+
+        setupapi::INFCONTEXT ctx{};
+        win32::BOOL bFind = setupapi::SetupFindFirstLineW(hInf, L"Version", nullptr, &ctx);
+        TEST_ASSERT(bFind != 0, "SetupFindFirstLineW on Version section must succeed");
+
+        uint32_t fieldCount = setupapi::SetupGetFieldCount(&ctx);
+        TEST_ASSERT(fieldCount >= 1, "First line of Version must have at least 1 field");
+
+        // Traverse all lines in section
+        uint32_t linesTraversed = 1;
+        setupapi::INFCONTEXT nextCtx{};
+        while (setupapi::SetupFindNextLine(&ctx, &nextCtx)) {
+            linesTraversed++;
+            ctx = nextCtx;
+        }
+        TEST_ASSERT(linesTraversed >= 4, "Line traversal must visit all lines in section");
+
+        setupapi::SetupCloseInfFile(hInf);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: INF String Field Extraction & Token Replacement (SetupGetStringFieldW)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HINF hInf = setupapi::SetupOpenInfFileW(L"sample_display.inf", nullptr, 0, nullptr);
+        setupapi::INFCONTEXT ctx{};
+
+        // Find ClassGuid key in [Version]
+        win32::BOOL bKey = setupapi::SetupFindFirstLineW(hInf, L"Version", L"ClassGuid", &ctx);
+        TEST_ASSERT(bKey != 0, "SetupFindFirstLineW for 'ClassGuid' key must succeed");
+
+        wchar_t guidBuf[64]{};
+        uint32_t reqSize = 0;
+        win32::BOOL bGet = setupapi::SetupGetStringFieldW(&ctx, 1, guidBuf, 64, &reqSize);
+        TEST_ASSERT(bGet != 0 && reqSize > 0, "SetupGetStringFieldW for ClassGuid must succeed");
+        TEST_ASSERT(std::wcscmp(guidBuf, L"{4d36e968-e325-11ce-bfc1-08002be10318}") == 0, "ClassGuid must match Display GUID");
+
+        // Key index 0 returns key name
+        wchar_t keyName[64]{};
+        setupapi::SetupGetStringFieldW(&ctx, 0, keyName, 64, nullptr);
+        TEST_ASSERT(std::wcscmp(keyName, L"ClassGuid") == 0, "Field 0 must return key name");
+
+        // Verify %ManufacturerName% expanded in Provider key
+        win32::BOOL bProv = setupapi::SetupFindFirstLineW(hInf, L"Version", L"Provider", &ctx);
+        TEST_ASSERT(bProv != 0, "Provider line must exist");
+        wchar_t provBuf[128]{};
+        setupapi::SetupGetStringFieldW(&ctx, 1, provBuf, 128, nullptr);
+        TEST_ASSERT(std::wcscmp(provBuf, L"MicaNT Sovereign Project") == 0, "Provider must be expanded from %ManufacturerName%");
+
+        setupapi::SetupCloseInfFile(hInf);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Device Information Set Lifecycle (SetupDiCreateDeviceInfoList, SetupDiDestroyDeviceInfoList)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HDEVINFO hSet = setupapi::SetupDiCreateDeviceInfoList(&setupapi::GUID_DEVCLASS_NET, nullptr);
+        TEST_ASSERT(hSet != nullptr, "SetupDiCreateDeviceInfoList must create handle");
+
+        win32::BOOL bDestroy = setupapi::SetupDiDestroyDeviceInfoList(hSet);
+        TEST_ASSERT(bDestroy != 0, "SetupDiDestroyDeviceInfoList must return success");
+
+        // Handle without class filter
+        setupapi::HDEVINFO hAll = setupapi::SetupDiCreateDeviceInfoList(nullptr, nullptr);
+        TEST_ASSERT(hAll != nullptr, "SetupDiCreateDeviceInfoList without class must succeed");
+        setupapi::SetupDiDestroyDeviceInfoList(hAll);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Device Creation & Enumeration (SetupDiCreateDeviceInfoW, SetupDiEnumDeviceInfo)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HDEVINFO hSet = setupapi::SetupDiCreateDeviceInfoList(&setupapi::GUID_DEVCLASS_DISPLAY, nullptr);
+        setupapi::SP_DEVINFO_DATA devData1{};
+        devData1.cbSize = sizeof(devData1);
+
+        win32::BOOL bDev1 = setupapi::SetupDiCreateDeviceInfoW(
+            hSet,
+            L"PCI\\VEN_8086&DEV_9BC5&SUBSYS_12348086",
+            &setupapi::GUID_DEVCLASS_DISPLAY,
+            L"Intel UHD Graphics 630",
+            nullptr,
+            0,
+            &devData1
+        );
+        TEST_ASSERT(bDev1 != 0, "SetupDiCreateDeviceInfoW dev 1 must succeed");
+        TEST_ASSERT(devData1.ClassGuid == setupapi::GUID_DEVCLASS_DISPLAY, "ClassGuid must match");
+
+        setupapi::SP_DEVINFO_DATA devData2{};
+        devData2.cbSize = sizeof(devData2);
+        win32::BOOL bDev2 = setupapi::SetupDiCreateDeviceInfoW(
+            hSet,
+            L"PCI\\VEN_10DE&DEV_2684&SUBSYS_567810DE",
+            &setupapi::GUID_DEVCLASS_DISPLAY,
+            L"NVIDIA RTX 4090",
+            nullptr,
+            0,
+            &devData2
+        );
+        TEST_ASSERT(bDev2 != 0, "SetupDiCreateDeviceInfoW dev 2 must succeed");
+
+        // Enumerate devices in set
+        setupapi::SP_DEVINFO_DATA enumData{};
+        enumData.cbSize = sizeof(enumData);
+        win32::BOOL bEnum0 = setupapi::SetupDiEnumDeviceInfo(hSet, 0, &enumData);
+        TEST_ASSERT(bEnum0 != 0 && enumData.DevInst == devData1.DevInst, "Enum index 0 must return dev 1");
+
+        win32::BOOL bEnum1 = setupapi::SetupDiEnumDeviceInfo(hSet, 1, &enumData);
+        TEST_ASSERT(bEnum1 != 0 && enumData.DevInst == devData2.DevInst, "Enum index 1 must return dev 2");
+
+        win32::BOOL bEnum2 = setupapi::SetupDiEnumDeviceInfo(hSet, 2, &enumData);
+        TEST_ASSERT(bEnum2 == 0, "Enum index 2 must return false (no more items)");
+
+        setupapi::SetupDiDestroyDeviceInfoList(hSet);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Device Instance ID Query (SetupDiGetDeviceInstanceIdW)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HDEVINFO hSet = setupapi::SetupDiCreateDeviceInfoList(&setupapi::GUID_DEVCLASS_NET, nullptr);
+        setupapi::SP_DEVINFO_DATA devData{};
+        devData.cbSize = sizeof(devData);
+        const wchar_t* instId = L"PCI\\VEN_10EC&DEV_8168&SUBSYS_012310EC";
+
+        setupapi::SetupDiCreateDeviceInfoW(hSet, instId, &setupapi::GUID_DEVCLASS_NET, L"Realtek PCIe GbE Controller", nullptr, 0, &devData);
+
+        wchar_t readInst[128]{};
+        uint32_t req = 0;
+        win32::BOOL bGet = setupapi::SetupDiGetDeviceInstanceIdW(hSet, &devData, readInst, 128, &req);
+        TEST_ASSERT(bGet != 0 && req > 0, "SetupDiGetDeviceInstanceIdW must succeed");
+        TEST_ASSERT(std::wcscmp(readInst, instId) == 0, "Device Instance ID must match creation argument");
+
+        setupapi::SetupDiDestroyDeviceInfoList(hSet);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Device Registry Properties Read & Write (SetupDiGetDeviceRegistryPropertyW, SetupDiSetDeviceRegistryPropertyW)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HDEVINFO hSet = setupapi::SetupDiCreateDeviceInfoList(&setupapi::GUID_DEVCLASS_MEDIA, nullptr);
+        setupapi::SP_DEVINFO_DATA devData{};
+        devData.cbSize = sizeof(devData);
+        setupapi::SetupDiCreateDeviceInfoW(hSet, L"HDAUDIO\\FUNC_01", &setupapi::GUID_DEVCLASS_MEDIA, nullptr, nullptr, 0, &devData);
+
+        // Write FriendlyName
+        const wchar_t* friendly = L"Studio Sound Card (MicaNT)";
+        setupapi::SetupDiSetDeviceRegistryPropertyW(
+            hSet, &devData, setupapi::SPDRP_FRIENDLYNAME,
+            reinterpret_cast<const uint8_t*>(friendly),
+            static_cast<uint32_t>((std::wcslen(friendly) + 1) * sizeof(wchar_t))
+        );
+
+        // Read FriendlyName
+        wchar_t readFriendly[128]{};
+        uint32_t regType = 0;
+        win32::BOOL bGetProp = setupapi::SetupDiGetDeviceRegistryPropertyW(
+            hSet, &devData, setupapi::SPDRP_FRIENDLYNAME, &regType,
+            reinterpret_cast<uint8_t*>(readFriendly), sizeof(readFriendly), nullptr
+        );
+        TEST_ASSERT(bGetProp != 0 && regType == 1, "SetupDiGetDeviceRegistryPropertyW must succeed with REG_SZ");
+        TEST_ASSERT(std::wcscmp(readFriendly, friendly) == 0, "Friendly name property must match written string");
+
+        // Write Hardware ID
+        const wchar_t* hwid = L"HDAUDIO\\FUNC_01&VEN_10EC";
+        setupapi::SetupDiSetDeviceRegistryPropertyW(
+            hSet, &devData, setupapi::SPDRP_HARDWAREID,
+            reinterpret_cast<const uint8_t*>(hwid),
+            static_cast<uint32_t>((std::wcslen(hwid) + 1) * sizeof(wchar_t))
+        );
+
+        wchar_t readHwid[128]{};
+        setupapi::SetupDiGetDeviceRegistryPropertyW(
+            hSet, &devData, setupapi::SPDRP_HARDWAREID, nullptr,
+            reinterpret_cast<uint8_t*>(readHwid), sizeof(readHwid), nullptr
+        );
+        TEST_ASSERT(std::wcscmp(readHwid, hwid) == 0, "Hardware ID property must match");
+
+        setupapi::SetupDiDestroyDeviceInfoList(hSet);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Device Interface Detail Path (SetupDiCreateDeviceInterfaceW, SetupDiGetDeviceInterfaceDetailW)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HDEVINFO hSet = setupapi::SetupDiCreateDeviceInfoList(&setupapi::GUID_DEVCLASS_DISPLAY, nullptr);
+        setupapi::SP_DEVINFO_DATA devData{};
+        devData.cbSize = sizeof(devData);
+        setupapi::SetupDiCreateDeviceInfoW(hSet, L"PCI\\VEN_10DE&DEV_2684", &setupapi::GUID_DEVCLASS_DISPLAY, nullptr, nullptr, 0, &devData);
+
+        setupapi::SP_DEVICE_INTERFACE_DATA ifData{};
+        win32::BOOL bCreateIf = setupapi::SetupDiCreateDeviceInterfaceW(hSet, &devData, &setupapi::GUID_DEVCLASS_DISPLAY, nullptr, 0, &ifData);
+        TEST_ASSERT(bCreateIf != 0, "SetupDiCreateDeviceInterfaceW must succeed");
+        TEST_ASSERT(ifData.Flags == setupapi::SPINT_ACTIVE, "Created interface must have SPINT_ACTIVE flag");
+
+        // Query Detail Path
+        uint8_t buffer[512]{};
+        auto* detail = reinterpret_cast<setupapi::SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(buffer);
+        detail->cbSize = sizeof(setupapi::SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+        uint32_t req = 0;
+        win32::BOOL bGetDetail = setupapi::SetupDiGetDeviceInterfaceDetailW(hSet, &ifData, detail, sizeof(buffer), &req, nullptr);
+        TEST_ASSERT(bGetDetail != 0 && req > 0, "SetupDiGetDeviceInterfaceDetailW must succeed");
+        TEST_ASSERT(std::wcsstr(detail->DevicePath, L"PCI\\VEN_10DE") != nullptr, "Device path must contain PCI hardware identifier");
+
+        setupapi::SetupDiDestroyDeviceInfoList(hSet);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Device Class Description & Class Name Resolution
+    // ------------------------------------------------------------------------
+    {
+        wchar_t descBuf[128]{};
+        win32::BOOL bDesc = setupapi::SetupDiGetClassDescriptionW(&setupapi::GUID_DEVCLASS_DISPLAY, descBuf, 128, nullptr);
+        TEST_ASSERT(bDesc != 0, "SetupDiGetClassDescriptionW for Display class must succeed");
+        TEST_ASSERT(std::wcscmp(descBuf, L"Display adapters") == 0, "Display class description must be 'Display adapters'");
+
+        wchar_t nameBuf[64]{};
+        win32::BOOL bName = setupapi::SetupDiClassNameFromGuidW(&setupapi::GUID_DEVCLASS_NET, nameBuf, 64, nullptr);
+        TEST_ASSERT(bName != 0, "SetupDiClassNameFromGuidW for Net class must succeed");
+        TEST_ASSERT(std::wcscmp(nameBuf, L"Net") == 0, "Net class name must be 'Net'");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Driver Information List & Selection (SetupDiBuildDriverInfoList)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::HDEVINFO hSet = setupapi::SetupDiCreateDeviceInfoList(&setupapi::GUID_DEVCLASS_DISKDRIVE, nullptr);
+        setupapi::SP_DEVINFO_DATA devData{};
+        devData.cbSize = sizeof(devData);
+        setupapi::SetupDiCreateDeviceInfoW(hSet, L"SCSI\\DiskNVMe", &setupapi::GUID_DEVCLASS_DISKDRIVE, L"NVMe Solid State Disk", nullptr, 0, &devData);
+
+        win32::BOOL bDrv = setupapi::SetupDiBuildDriverInfoList(hSet, &devData, setupapi::SPDIT_COMPATDRIVER);
+        TEST_ASSERT(bDrv != 0, "SetupDiBuildDriverInfoList must succeed");
+
+        setupapi::SetupDiDestroyDeviceInfoList(hSet);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Global Hardware Device Snapshot (SetupDiGetClassDevsW)
+    // ------------------------------------------------------------------------
+    {
+        // Query all present devices
+        setupapi::HDEVINFO hDevs = setupapi::SetupDiGetClassDevsW(nullptr, nullptr, nullptr, setupapi::DIGCF_ALLCLASSES | setupapi::DIGCF_PRESENT);
+        TEST_ASSERT(hDevs != nullptr, "SetupDiGetClassDevsW all classes must succeed");
+
+        uint32_t count = 0;
+        setupapi::SP_DEVINFO_DATA d{};
+        d.cbSize = sizeof(d);
+        while (setupapi::SetupDiEnumDeviceInfo(hDevs, count, &d)) {
+            count++;
+        }
+        TEST_ASSERT(count >= 5, "Pre-seeded system hardware devices must be at least 5 (GPU, Net, Disk, Audio, System)");
+        setupapi::SetupDiDestroyDeviceInfoList(hDevs);
+
+        // Query only Display class
+        setupapi::HDEVINFO hGpu = setupapi::SetupDiGetClassDevsW(&setupapi::GUID_DEVCLASS_DISPLAY, nullptr, nullptr, setupapi::DIGCF_PRESENT);
+        TEST_ASSERT(hGpu != nullptr, "SetupDiGetClassDevsW Display class must succeed");
+        count = 0;
+        while (setupapi::SetupDiEnumDeviceInfo(hGpu, count, &d)) {
+            count++;
+        }
+        TEST_ASSERT(count >= 1, "Must contain at least 1 Display adapter");
+        setupapi::SetupDiDestroyDeviceInfoList(hGpu);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Dynamic Loader Exports & Version Metadata (setupapi.dll)
+    // ------------------------------------------------------------------------
+    {
+        setupapi::InitializeSetupApiSubsystemExports();
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupOpenInfFileW") != nullptr, "SetupOpenInfFileW must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupCloseInfFile") != nullptr, "SetupCloseInfFile must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupFindFirstLineW") != nullptr, "SetupFindFirstLineW must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupGetStringFieldW") != nullptr, "SetupGetStringFieldW must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupDiCreateDeviceInfoList") != nullptr, "SetupDiCreateDeviceInfoList must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupDiDestroyDeviceInfoList") != nullptr, "SetupDiDestroyDeviceInfoList must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupDiCreateDeviceInfoW") != nullptr, "SetupDiCreateDeviceInfoW must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupDiEnumDeviceInfo") != nullptr, "SetupDiEnumDeviceInfo must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupDiGetDeviceRegistryPropertyW") != nullptr, "SetupDiGetDeviceRegistryPropertyW must be exported");
+        TEST_ASSERT(ldr.getExport("setupapi.dll", "SetupDiGetClassDevsW") != nullptr, "SetupDiGetClassDevsW must be exported");
+
+        const auto* ver = version::VersionDatabase::Instance().FindModule("setupapi.dll");
+        TEST_ASSERT(ver != nullptr, "VersionDatabase must contain setupapi.dll");
+        TEST_ASSERT(ver->stringTable.at("OriginalFilename") == "setupapi.dll", "setupapi.dll OriginalFilename must match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 13: Command Shell Integration (devmgmt & setupapi test)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        shell.execute("devmgmt", out);
+        TEST_ASSERT(out.str().find("MicaNT Device Manager") != std::string::npos, "Shell devmgmt must display Device Manager header");
+        TEST_ASSERT(out.str().find("Total Active Devices:") != std::string::npos, "Shell devmgmt must list active devices");
+
+        out.str("");
+        shell.execute("setupapi test", out);
+        TEST_ASSERT(out.str().find("ALL DEVICE INSTALLATION CHECKS PASSED") != std::string::npos, "Shell setupapi test must pass all checks");
+    }
+
+    std::cout << "[TEST] Suite 70: Windows Device Installation & SetupAPI Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -12164,6 +12500,7 @@ int main() {
     RUN_TEST(Test_SSPI_And_Schannel_Subsystems);
     RUN_TEST(Test_RPC_Runtime_And_NDR_Subsystem);
     RUN_TEST(Test_OLE_Automation_And_SafeArray_Subsystem);
+    RUN_TEST(Test_SetupApi_DeviceInstallation_And_INF_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

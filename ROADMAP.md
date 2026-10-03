@@ -85,6 +85,16 @@
 │ Phase 38: Windows Internet (WinINet) & URLMon Subsystems   [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 39: Windows CryptoAPI, CNG & Crypt32 Subsystems      [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 40: Windows SSPI & Schannel TLS 1.3 Subsystems       [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 41: Windows RPC Runtime & NDR Marshaling Subsystem   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 42: Windows OLE Automation & SafeArray Subsystem     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 43: Windows Device Installation & Setup Subsystem    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 44: Windows Structured Storage & Compound File Subsystem[IN PROGRESS]│
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -876,30 +886,59 @@
 
 ---
 
-### Phase 43: Windows Setup & Device Installation Subsystem (`setupapi.dll`)
+### Phase 43: Windows Setup & Device Installation Subsystem (`setupapi.dll`) (100% Completed)
 *Goal: Implement Windows Device Installation & Setup Subsystem (`setupapi.dll`), INF file parser (Sections, Keys, Directives, String replacement tokens), Device Information Sets (`HDEVINFO`, `SP_DEVINFO_DATA`, `SP_DEVICE_INTERFACE_DATA`), Device Class Guids (`GUID_DEVCLASS_*`), Driver Matching & Ranking Engine, Device Property Cache, and Hardware ID Enumeration (`setupapi.dll` exports).*
-- [ ] **INF Configuration & Directive Parser (`setupapi.dll`)**:
+- [x] **INF Configuration & Directive Parser (`setupapi.dll`, `include/micant/setupapi.hpp`)**:
   - File reading: Open and parse INI-style Windows INF files (`[Version]`, `[Manufacturer]`, `[Models]`, `[Strings]`, `[DestinationDirs]`).
   - String table interpolation: `%StringKey%` expansion from `[Strings]` localized blocks.
   - Line & Field Traversal: `SetupOpenInfFileW`, `SetupCloseInfFile`, `SetupFindFirstLineW`, `SetupFindNextLine`, `SetupGetStringFieldW`, `SetupGetIntField`.
-- [ ] **Device Information Sets & Handles (`HDEVINFO`)**:
+- [x] **Device Information Sets & Handles (`HDEVINFO`)**:
   - Device info set creation: `SetupDiCreateDeviceInfoList`, `SetupDiDestroyDeviceInfoList`.
   - Device enumeration: `SetupDiEnumDeviceInfo`, `SetupDiCreateDeviceInfoW`, `SetupDiOpenDeviceInfoW`.
   - Interface enumeration: `SetupDiEnumDeviceInterfaces`, `SetupDiGetDeviceInterfaceDetailW`.
-- [ ] **Device Property & Registry Engine (`setupapi.dll`)**:
+- [x] **Device Property & Registry Engine (`setupapi.dll`)**:
   - Registry keys: `SetupDiOpenDevRegKey`, `SetupDiCreateDevRegKey`.
-  - Device Registry Properties: `SetupDiGetDeviceRegistryPropertyW` (`SPDRP_DEVICEDESC`, `SPDRP_HARDWAREID`, `SPDRP_COMPATIBLEIDS`, `SPDRP_CLASS`, `SPDRP_CLASSGUID`, `SPDRP_DRIVER`, `SPDRP_MFG`, `SPDRP_FRIENDLYNAME`, `SPDRP_LOCATION_INFORMATION`, `SPDRP_CAPABILITIES`).
+  - Device Registry Properties: `SetupDiGetDeviceRegistryPropertyW` (`SPDRP_DEVICEDESC`, `SPDRP_HARDWAREID`, `SPDRP_COMPATIBLEIDS`, `SPDRP_CLASS`, `SPDRP_CLASSGUID`, `SPDRP_DRIVER`, `SPDRP_MFG`, `SPDRP_FRIENDLYNAME`, `SPDRP_PHYSICAL_DEVICE_OBJECT_NAME`, `SPDRP_LOCATION_INFORMATION`, `SPDRP_CAPABILITIES`).
   - Set Device Registry Properties: `SetupDiSetDeviceRegistryPropertyW`.
-- [ ] **Device Class Registry & GUIDs (`setupapi.dll`)**:
+- [x] **Device Class Registry & GUIDs (`setupapi.dll`)**:
   - Class Guids: Standard device setup classes (`Display`, `Net`, `DiskDrive`, `SCSIAdapter`, `Mouse`, `Keyboard`, `Media`, `USB`, `HIDClass`, `System`).
-  - Class Description & Icon: `SetupDiGetClassDescriptionW`, `SetupDiGetClassDevsW`, `SetupDiBuildClassInfoList`.
-- [ ] **Dynamic Loader & Version Parity**:
+  - Class Description & Icon: `SetupDiGetClassDescriptionW`, `SetupDiGetClassDevsW`, `SetupDiBuildClassInfoList`, `SetupDiClassNameFromGuidW`.
+- [x] **Dynamic Loader & Version Parity**:
   - Export registration for `setupapi.dll` (25+ APIs) in `ldr::DynamicLoader`.
   - Version resources in `version.hpp` for `setupapi.dll` bumping build to `1.0.70.0`.
+- [x] **Interactive Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
+  - `devmgmt`: Interactive hierarchical Windows Device Manager displaying device tree, class GUIDs, hardware IDs, and active drivers.
+  - `setupapi test`: Executes comprehensive end-to-end self-tests verifying INF parsing, device creation, interface query, and driver ranking.
+- [x] **Unit Test Suite 70 (`Test_SetupApi_DeviceInstallation_And_INF_Subsystem`)**:
+  - 13 comprehensive verification stages covering INF parsing, string substitution, HDEVINFO device set creation, hardware ID registration, property querying, class enumeration, driver matching, and shell telemetry.
+  - All 70 unit test suites passing with 100% success rate (70 Passed, 0 Failed).
+
+---
+
+### Phase 44: Windows Structured Storage & Compound File Subsystem (`ole32.dll`) (In Progress)
+*Goal: Implement Windows OLE Structured Storage and Compound File Binary Format (CFBF v3/v4), nested storage hierarchies (`IStorage`), stream containers (`IStream`), byte array abstractions (`ILockBytes`), storage creation and opening (`StgCreateDocfile`, `StgOpenStorage`, `StgCreateStorageEx`, `StgOpenStorageEx`, `StgIsStorageFile`), directory enumeration (`IEnumSTATSTG`), and COM persistence contracts (`IPersistStorage`, `IPersistStream`, `IPersistStreamInit`, `IPersistFile`).*
+- [ ] **Compound File Binary Format Engine (CFBF v3 / v4)**:
+  - Header validation: 8-byte magic (`0xD0CF11E0A1B11AE1`), sector size (512 or 4096 bytes), mini sector size (64 bytes), FAT/MiniFAT sector allocations.
+  - Directory Entry tree: Root storage (`\Root Entry`), nested storages (`STGTY_STORAGE`), and streams (`STGTY_STREAM`) with red-black child/left/right sibling links.
+- [ ] **IStorage & IStream Interfaces (`ole32.dll`)**:
+  - Storage operations: `CreateStorage`, `OpenStorage`, `CreateStream`, `OpenStream`, `DestroyElement`, `RenameElement`, `MoveElementTo`, `CopyTo`, `Commit`, `Revert`, `EnumElements`, `Stat`.
+  - Stream operations: `Read`, `Write`, `Seek`, `SetSize`, `CopyTo`, `Commit`, `Revert`, `Stat`, `Clone`.
+  - Directory enumeration: `IEnumSTATSTG` (`Next`, `Skip`, `Reset`, `Clone`).
+- [ ] **Standard Structured Storage API Surface**:
+  - `StgCreateDocfile`, `StgCreateDocfileOnILockBytes`, `StgOpenStorage`, `StgOpenStorageOnILockBytes`, `StgIsStorageFile`, `StgIsStorageILockBytes`.
+  - `StgCreateStorageEx`, `StgOpenStorageEx` with `STGFMT_STORAGE` and `STGFMT_FILE`.
+  - In-memory / Byte Array backend: `CreateILockBytesOnHGlobal`.
+- [ ] **COM Persistence Subsystem (`ole32.dll`)**:
+  - `IPersist`, `IPersistStorage`, `IPersistStream`, `IPersistStreamInit`, `IPersistFile`.
+  - `OleSave`, `OleLoad`, `ReadClassStg`, `WriteClassStg`.
+- [ ] **Dynamic Loader & Version Parity**:
+  - Register new Structured Storage exports (`Stg*`, `CreateILockBytesOnHGlobal`, `WriteClassStg`, `ReadClassStg`) in `ole32.dll`.
+  - Version database updated to `1.0.71.0`.
 - [ ] **Interactive Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
-  - `devmgmt` / `setupapi`: Enumerate hardware devices, active device interfaces, driver matches, and inspect INF files.
-- [ ] **Unit Test Suite 70 (`Test_SetupApi_DeviceInstallation_And_INF_Subsystem`)**:
-  - Multi-stage unit test covering INF parsing, string substitution, HDEVINFO device set creation, hardware ID registration, property querying, class enumeration, and shell telemetry.
+  - `stg info` and `stg test`: Create nested compound documents, write streams, inspect binary headers, and verify persistence.
+- [ ] **Unit Test Suite 71 (`Test_StructuredStorage_CompoundFile_And_Persistence_Subsystem`)**:
+  - Verify CFBF file creation, multi-level nested storages and streams, stream read/write/seek, directory enumeration via `IEnumSTATSTG`, `StgIsStorageFile` validation, and persistence interfaces.
+
 
 
 
