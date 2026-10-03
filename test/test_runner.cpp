@@ -96,6 +96,7 @@
 #include "micant/wevtapi.hpp"
 #include "micant/wbem.hpp"
 #include "micant/taskschd.hpp"
+#include "micant/bits.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -14049,6 +14050,269 @@ void Test_WindowsTaskScheduler_Subsystem() {
     std::cout << "[TEST] Suite 74: Windows Task Scheduler 2.0 Subsystem PASSED.\n";
 }
 
+void Test_WindowsBITS_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 75: Windows Background Intelligent Transfer Service (BITS) Subsystem (qmgr.dll)...\n";
+    using namespace ole32;
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports & Class Factory Registration
+    // ------------------------------------------------------------------------
+    bits::InitializeBITSSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("qmgr.dll", "DllGetClassObject") != nullptr, "qmgr.dll!DllGetClassObject must be exported");
+    TEST_ASSERT(ldr.getExport("qmgr.dll", "DllCanUnloadNow") != nullptr, "qmgr.dll!DllCanUnloadNow must be exported");
+    TEST_ASSERT(ldr.getExport("qmgr.dll", "DllRegisterServer") != nullptr, "qmgr.dll!DllRegisterServer must be exported");
+    TEST_ASSERT(ldr.getExport("qmgr.dll", "DllUnregisterServer") != nullptr, "qmgr.dll!DllUnregisterServer must be exported");
+
+    TEST_ASSERT(ldr.getExport("bitsprx.dll", "DllGetClassObject") != nullptr, "bitsprx.dll!DllGetClassObject must be exported");
+    TEST_ASSERT(ldr.getExport("bitsprx.dll", "DllCanUnloadNow") != nullptr, "bitsprx.dll!DllCanUnloadNow must be exported");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: COM Activation (CLSID_BackgroundCopyManager)
+    // ------------------------------------------------------------------------
+    bits::IBackgroundCopyManager* pMgr = nullptr;
+    ole32::HRESULT hr = ole32::CoCreateInstance(
+        bits::CLSID_BackgroundCopyManager, nullptr, 1 /* CLSCTX_INPROC_SERVER */,
+        bits::IID_IBackgroundCopyManager, reinterpret_cast<void**>(&pMgr)
+    );
+    TEST_ASSERT(hr == ole32::S_OK && pMgr != nullptr, "CoCreateInstance(CLSID_BackgroundCopyManager) must succeed");
+
+    // QueryInterface for IUnknown
+    ole32::IUnknown* pUnk = nullptr;
+    hr = pMgr->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+    TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "IBackgroundCopyManager must support IUnknown");
+    pUnk->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Pre-Seeded System BITS Jobs Verification
+    // ------------------------------------------------------------------------
+    {
+        bits::IEnumBackgroundCopyJobs* pEnum = nullptr;
+        hr = pMgr->EnumJobs(0, &pEnum);
+        TEST_ASSERT(hr == ole32::S_OK && pEnum != nullptr, "EnumJobs must succeed");
+
+        uint32_t count = 0;
+        pEnum->GetCount(&count);
+        TEST_ASSERT(count >= 2, "BITS queue must contain pre-seeded system jobs");
+
+        bool foundDefender = false;
+        bool foundKernelPatch = false;
+
+        bits::IBackgroundCopyJob* pJob = nullptr;
+        uint32_t fetched = 0;
+        while (pEnum->Next(1, &pJob, &fetched) == ole32::S_OK && fetched == 1) {
+            wchar_t* wName = nullptr;
+            pJob->GetName(&wName);
+            if (wName) {
+                if (std::wcscmp(wName, L"Windows Defender Signature Update") == 0) foundDefender = true;
+                if (std::wcscmp(wName, L"MicaNT Kernel Security Update KB5034441") == 0) foundKernelPatch = true;
+                ole32::CoTaskMemFree(wName);
+            }
+            pJob->Release();
+        }
+        TEST_ASSERT(foundDefender, "Pre-seeded Windows Defender signature update job must exist");
+        TEST_ASSERT(foundKernelPatch, "Pre-seeded MicaNT kernel security update job must exist");
+        pEnum->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Job Creation (CreateJob)
+    // ------------------------------------------------------------------------
+    bits::IBackgroundCopyJob* pNewJob = nullptr;
+    GUID newJobId{};
+    hr = pMgr->CreateJob(L"MicaNT Deployment Service", bits::BG_JOB_TYPE_DOWNLOAD, &newJobId, &pNewJob);
+    TEST_ASSERT(hr == ole32::S_OK && pNewJob != nullptr, "CreateJob must return S_OK and valid job interface");
+
+    // Verify initial state is SUSPENDED
+    bits::BG_JOB_STATE initState{};
+    pNewJob->GetState(&initState);
+    TEST_ASSERT(initState == bits::BG_JOB_STATE_SUSPENDED, "Newly created job must be in BG_JOB_STATE_SUSPENDED");
+
+    // Verify Job Id matches
+    GUID verifyId{};
+    pNewJob->GetId(&verifyId);
+    TEST_ASSERT(memcmp(&newJobId, &verifyId, sizeof(GUID)) == 0, "Job GetId must match returned GUID");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Adding Files to Job (AddFile & AddFileSet)
+    // ------------------------------------------------------------------------
+    hr = pNewJob->AddFile(L"https://releases.micant.internal/v1.0.75/sdk.zip", L"C:\\MicaNT\\sdk.zip");
+    TEST_ASSERT(hr == ole32::S_OK, "AddFile must succeed");
+
+    bits::BG_FILE_INFO fileSet[2] = {
+        { L"https://releases.micant.internal/v1.0.75/symbols.pdb", L"C:\\MicaNT\\symbols.pdb" },
+        { L"https://releases.micant.internal/v1.0.75/docs.chm", L"C:\\MicaNT\\docs.chm" }
+    };
+    hr = pNewJob->AddFileSet(2, fileSet);
+    TEST_ASSERT(hr == ole32::S_OK, "AddFileSet must succeed");
+
+    // ------------------------------------------------------------------------
+    // Stage 6: File Enumeration (EnumFiles)
+    // ------------------------------------------------------------------------
+    {
+        bits::IEnumBackgroundCopyFiles* pFileEnum = nullptr;
+        hr = pNewJob->EnumFiles(&pFileEnum);
+        TEST_ASSERT(hr == ole32::S_OK && pFileEnum != nullptr, "EnumFiles must succeed");
+
+        uint32_t fileCount = 0;
+        pFileEnum->GetCount(&fileCount);
+        TEST_ASSERT(fileCount == 3, "Job must contain exactly 3 added files");
+
+        bits::IBackgroundCopyFile* pFileItem = nullptr;
+        uint32_t fFetched = 0;
+        hr = pFileEnum->Next(1, &pFileItem, &fFetched);
+        TEST_ASSERT(hr == ole32::S_OK && fFetched == 1 && pFileItem != nullptr, "Next must retrieve first file");
+
+        wchar_t* wRemote = nullptr;
+        pFileItem->GetRemoteName(&wRemote);
+        TEST_ASSERT(wRemote != nullptr && std::wcscmp(wRemote, L"https://releases.micant.internal/v1.0.75/sdk.zip") == 0, "First file remote URL must match");
+        ole32::CoTaskMemFree(wRemote);
+
+        wchar_t* wLocal = nullptr;
+        pFileItem->GetLocalName(&wLocal);
+        TEST_ASSERT(wLocal != nullptr && std::wcscmp(wLocal, L"C:\\MicaNT\\sdk.zip") == 0, "First file local name must match");
+        ole32::CoTaskMemFree(wLocal);
+
+        pFileItem->Release();
+        pFileEnum->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Job Priority & Description Configuration
+    // ------------------------------------------------------------------------
+    {
+        pNewJob->SetPriority(bits::BG_JOB_PRIORITY_HIGH);
+        bits::BG_JOB_PRIORITY prio{};
+        pNewJob->GetPriority(&prio);
+        TEST_ASSERT(prio == bits::BG_JOB_PRIORITY_HIGH, "GetPriority must report BG_JOB_PRIORITY_HIGH");
+
+        pNewJob->SetDescription(L"MicaNT 1.0.75 SDK and Documentation Bundle");
+        wchar_t* wDesc = nullptr;
+        pNewJob->GetDescription(&wDesc);
+        TEST_ASSERT(wDesc != nullptr && std::wcscmp(wDesc, L"MicaNT 1.0.75 SDK and Documentation Bundle") == 0, "Job description must match");
+        ole32::CoTaskMemFree(wDesc);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Transfer Execution & Lifecycle (Resume -> TRANSFERRED)
+    // ------------------------------------------------------------------------
+    {
+        hr = pNewJob->Resume();
+        TEST_ASSERT(hr == ole32::S_OK, "Resume must trigger transfer");
+
+        bits::BG_JOB_STATE transState{};
+        pNewJob->GetState(&transState);
+        TEST_ASSERT(transState == bits::BG_JOB_STATE_TRANSFERRED, "Transferred job must transition to BG_JOB_STATE_TRANSFERRED");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Progress & Timing Telemetry
+    // ------------------------------------------------------------------------
+    {
+        bits::BG_JOB_PROGRESS prog{};
+        pNewJob->GetProgress(&prog);
+        TEST_ASSERT(prog.FilesTotal == 3, "FilesTotal must be 3");
+        TEST_ASSERT(prog.FilesTransferred == 3, "FilesTransferred must be 3");
+        TEST_ASSERT(prog.BytesTotal > 0 && prog.BytesTransferred == prog.BytesTotal, "All bytes must be transferred");
+
+        bits::BG_JOB_TIMES times{};
+        pNewJob->GetTimes(&times);
+        TEST_ASSERT(times.CreationTime.dwLowDateTime > 0, "CreationTime must be set");
+        TEST_ASSERT(times.TransferCompletionTime.dwLowDateTime > 0, "TransferCompletionTime must be recorded");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Job Acknowledgment / Completion (Complete)
+    // ------------------------------------------------------------------------
+    {
+        hr = pNewJob->Complete();
+        TEST_ASSERT(hr == ole32::S_OK, "Complete must succeed on transferred job");
+
+        bits::BG_JOB_STATE ackState{};
+        pNewJob->GetState(&ackState);
+        TEST_ASSERT(ackState == bits::BG_JOB_STATE_ACKNOWLEDGED, "Completed job must transition to BG_JOB_STATE_ACKNOWLEDGED");
+
+        // Attempting to resume completed job must return BG_E_INVALID_STATE
+        hr = pNewJob->Resume();
+        TEST_ASSERT(hr == bits::BG_E_INVALID_STATE, "Resume on acknowledged job must return BG_E_INVALID_STATE");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Job Cancellation & Error Reporting
+    // ------------------------------------------------------------------------
+    {
+        bits::IBackgroundCopyJob* pCancelJob = nullptr;
+        GUID cancelId{};
+        hr = pMgr->CreateJob(L"Cancelled Job Test", bits::BG_JOB_TYPE_DOWNLOAD, &cancelId, &pCancelJob);
+        TEST_ASSERT(hr == ole32::S_OK && pCancelJob != nullptr, "CreateJob for cancellation test must succeed");
+
+        hr = pCancelJob->Cancel();
+        TEST_ASSERT(hr == ole32::S_OK, "Cancel must succeed on active job");
+
+        bits::BG_JOB_STATE cState{};
+        pCancelJob->GetState(&cState);
+        TEST_ASSERT(cState == bits::BG_JOB_STATE_CANCELLED, "Cancelled job state must be BG_JOB_STATE_CANCELLED");
+
+        // Error description retrieval
+        wchar_t* pErrDesc = nullptr;
+        hr = pMgr->GetErrorDescription(bits::BG_E_FILE_NOT_AVAILABLE, 0, &pErrDesc);
+        TEST_ASSERT(hr == ole32::S_OK && pErrDesc != nullptr, "GetErrorDescription must succeed");
+        ole32::CoTaskMemFree(pErrDesc);
+
+        pCancelJob->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Interactive Command Shell Integration (bitsadmin CLI)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. bitsadmin /list
+        shell.execute("bitsadmin /list", out);
+        TEST_ASSERT(out.str().find("Windows Defender") != std::string::npos, "bitsadmin /list must show Windows Defender job");
+        TEST_ASSERT(out.str().find("KB5034441") != std::string::npos, "bitsadmin /list must show KB5034441 job");
+
+        // 2. bitsadmin /create
+        out.str("");
+        shell.execute("bitsadmin /create CliBitsJob", out);
+        TEST_ASSERT(out.str().find("Created job") != std::string::npos, "bitsadmin /create must report job creation");
+
+        // 3. bitsadmin /addfile
+        out.str("");
+        shell.execute("bitsadmin /addfile CliBitsJob https://example.com/file.bin C:\\Temp\\file.bin", out);
+        TEST_ASSERT(out.str().find("SUCCESS:") != std::string::npos, "bitsadmin /addfile must report success");
+
+        // 4. bitsadmin /info
+        out.str("");
+        shell.execute("bitsadmin /info CliBitsJob", out);
+        TEST_ASSERT(out.str().find("DISPLAY: 'CliBitsJob'") != std::string::npos, "bitsadmin /info must display job name");
+        TEST_ASSERT(out.str().find("C:\\Temp\\file.bin") != std::string::npos, "bitsadmin /info must display file target");
+
+        // 5. bitsadmin /resume
+        out.str("");
+        shell.execute("bitsadmin /resume CliBitsJob", out);
+        TEST_ASSERT(out.str().find("Job resumed.") != std::string::npos, "bitsadmin /resume must report success");
+
+        // 6. bitsadmin /complete
+        out.str("");
+        shell.execute("bitsadmin /complete CliBitsJob", out);
+        TEST_ASSERT(out.str().find("Job completed.") != std::string::npos, "bitsadmin /complete must report success");
+
+        // 7. bitsadmin test
+        out.str("");
+        shell.execute("bitsadmin test", out);
+        TEST_ASSERT(out.str().find("Subsystem Self-Test Finished") != std::string::npos, "bitsadmin test must finish successfully");
+    }
+
+    if (pNewJob) pNewJob->Release();
+    if (pMgr) pMgr->Release();
+
+    std::cout << "[TEST] Suite 75: Windows Background Intelligent Transfer Service (BITS) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -14128,6 +14392,7 @@ int main() {
     RUN_TEST(Test_WindowsEventLog_And_WevtApi_Subsystem);
     RUN_TEST(Test_WMI_WindowsManagementInstrumentation_Subsystem);
     RUN_TEST(Test_WindowsTaskScheduler_Subsystem);
+    RUN_TEST(Test_WindowsBITS_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

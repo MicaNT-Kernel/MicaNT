@@ -64,6 +64,7 @@
 #include "wevtapi.hpp"
 #include "wbem.hpp"
 #include "taskschd.hpp"
+#include "bits.hpp"
 
 namespace micant::shell {
 
@@ -205,6 +206,7 @@ public:
             if (cmd == "wevtutil" || cmd == "eventlog" || cmd == "eventviewer") { cmdWevtUtil(tokens, out); return 0; }
             if (cmd == "wmic" || cmd == "wbem") { cmdWmic(tokens, out); return 0; }
             if (cmd == "schtasks" || cmd == "taskschd") { cmdSchtasks(tokens, out); return 0; }
+            if (cmd == "bitsadmin" || cmd == "bits") { cmdBitsAdmin(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -4927,6 +4929,459 @@ private:
             << "  schtasks /delete /tn <taskname> [/f]\n"
             << "  schtasks /change /tn <taskname> [/enable | /disable]\n"
             << "  schtasks test\n";
+    }
+
+    void cmdBitsAdmin(const std::vector<std::string>& tokens, std::ostream& out) {
+        bits::InitializeBITSSubsystemExports();
+
+        bits::IBackgroundCopyManager* pMgr = nullptr;
+        ole32::HRESULT hrCo = ole32::CoCreateInstance(
+            bits::CLSID_BackgroundCopyManager, nullptr, 1 /* CLSCTX_INPROC_SERVER */,
+            bits::IID_IBackgroundCopyManager, reinterpret_cast<void**>(&pMgr)
+        );
+
+        if (hrCo != ole32::S_OK || !pMgr) {
+            out << "ERROR: Failed to initialize BITS Queue Manager. HRESULT: 0x" << std::hex << hrCo << std::dec << "\n";
+            return;
+        }
+
+        auto helperFindJobByNameOrGuid = [&](const std::string& query, bits::IBackgroundCopyJob** ppJob) -> bool {
+            if (!ppJob) return false;
+            *ppJob = nullptr;
+
+            GUID g{};
+            std::wstring wQuery(query.begin(), query.end());
+            if (ole32::IIDFromString(wQuery.c_str(), &g) == ole32::S_OK) {
+                if (pMgr->GetJob(g, ppJob) == ole32::S_OK && *ppJob) return true;
+            }
+
+            bits::IEnumBackgroundCopyJobs* pEnum = nullptr;
+            if (pMgr->EnumJobs(0, &pEnum) == ole32::S_OK && pEnum) {
+                bits::IBackgroundCopyJob* pJobItem = nullptr;
+                uint32_t fetched = 0;
+                while (pEnum->Next(1, &pJobItem, &fetched) == ole32::S_OK && fetched == 1) {
+                    wchar_t* pName = nullptr;
+                    pJobItem->GetName(&pName);
+                    if (pName) {
+                        std::wstring wn(pName);
+                        std::string sn(wn.begin(), wn.end());
+                        ole32::CoTaskMemFree(pName);
+                        if (sn == query || sn.find(query) != std::string::npos) {
+                            *ppJob = pJobItem;
+                            pEnum->Release();
+                            return true;
+                        }
+                    }
+                    pJobItem->Release();
+                }
+                pEnum->Release();
+            }
+            return false;
+        };
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            // 1. bitsadmin test
+            if (sub == "test") {
+                out << "[BITS] Executing BITS 2.5 Queue Manager COM Subsystem Self-Test...\n";
+                bits::IBackgroundCopyJob* testJob = nullptr;
+                GUID testId{};
+                ole32::HRESULT hr = pMgr->CreateJob(L"BitsSelfTestJob", bits::BG_JOB_TYPE_DOWNLOAD, &testId, &testJob);
+                bool crOk = (hr == ole32::S_OK && testJob != nullptr);
+                out << "  IBackgroundCopyManager::CreateJob: " << (crOk ? "PASS" : "FAIL") << "\n";
+
+                if (crOk) {
+                    hr = testJob->AddFile(L"https://example.com/test.bin", L"C:\\Temp\\test.bin");
+                    out << "  IBackgroundCopyJob::AddFile:       " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                    hr = testJob->Resume();
+                    out << "  IBackgroundCopyJob::Resume:        " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                    bits::BG_JOB_STATE st{};
+                    testJob->GetState(&st);
+                    out << "  IBackgroundCopyJob::GetState:      " << (st == bits::BG_JOB_STATE_TRANSFERRED ? "PASS (TRANSFERRED)" : "PASS") << "\n";
+
+                    hr = testJob->Complete();
+                    out << "  IBackgroundCopyJob::Complete:      " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                    testJob->GetState(&st);
+                    out << "  IBackgroundCopyJob::State(ACK):    " << (st == bits::BG_JOB_STATE_ACKNOWLEDGED ? "PASS" : "FAIL") << "\n";
+                    testJob->Release();
+                }
+
+                pMgr->Release();
+                out << "[BITS] Subsystem Self-Test Finished.\n";
+                return;
+            }
+
+            // 2. bitsadmin /list [/allusers] [/verbose]
+            if (sub == "/list" || sub == "-list" || sub == "list") {
+                bool verbose = false;
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    std::string a = tokens[i];
+                    std::transform(a.begin(), a.end(), a.begin(), ::tolower);
+                    if (a == "/verbose" || a == "-verbose" || a == "/v") verbose = true;
+                }
+
+                out << "\nBITSADMIN version 3.0 [ 10.0.22621.1 ]\n"
+                    << "BITS administration utility.\n"
+                    << "(C) Copyright Microsoft Corp.\n\n";
+
+                bits::IEnumBackgroundCopyJobs* pEnum = nullptr;
+                pMgr->EnumJobs(0, &pEnum);
+                if (!pEnum) {
+                    out << "Unable to query BITS job queue.\n";
+                    pMgr->Release();
+                    return;
+                }
+
+                uint32_t total = 0;
+                pEnum->GetCount(&total);
+                out << "Listed " << total << " job(s).\n\n";
+
+                bits::IBackgroundCopyJob* pJob = nullptr;
+                uint32_t fetched = 0;
+                while (pEnum->Next(1, &pJob, &fetched) == ole32::S_OK && fetched == 1) {
+                    GUID gid{};
+                    pJob->GetId(&gid);
+                    wchar_t wGuid[64]{};
+                    swprintf_s(wGuid, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                        gid.Data1, gid.Data2, gid.Data3,
+                        gid.Data4[0], gid.Data4[1], gid.Data4[2], gid.Data4[3],
+                        gid.Data4[4], gid.Data4[5], gid.Data4[6], gid.Data4[7]);
+                    std::wstring wg(wGuid);
+                    std::string sGuid(wg.begin(), wg.end());
+
+                    wchar_t* wName = nullptr;
+                    pJob->GetName(&wName);
+                    std::string sName = "Unknown";
+                    if (wName) {
+                        std::wstring wn(wName);
+                        sName = std::string(wn.begin(), wn.end());
+                        ole32::CoTaskMemFree(wName);
+                    }
+
+                    bits::BG_JOB_STATE st{};
+                    pJob->GetState(&st);
+                    std::string sState = (st == bits::BG_JOB_STATE_QUEUED) ? "QUEUED" :
+                                         (st == bits::BG_JOB_STATE_CONNECTING) ? "CONNECTING" :
+                                         (st == bits::BG_JOB_STATE_TRANSFERRING) ? "TRANSFERRING" :
+                                         (st == bits::BG_JOB_STATE_SUSPENDED) ? "SUSPENDED" :
+                                         (st == bits::BG_JOB_STATE_ERROR) ? "ERROR" :
+                                         (st == bits::BG_JOB_STATE_TRANSIENT_ERROR) ? "TRANSIENT_ERROR" :
+                                         (st == bits::BG_JOB_STATE_TRANSFERRED) ? "TRANSFERRED" :
+                                         (st == bits::BG_JOB_STATE_ACKNOWLEDGED) ? "ACKNOWLEDGED" : "CANCELLED";
+
+                    bits::BG_JOB_PROGRESS prog{};
+                    pJob->GetProgress(&prog);
+
+                    if (verbose) {
+                        wchar_t* wDesc = nullptr;
+                        pJob->GetDescription(&wDesc);
+                        std::string sDesc = "";
+                        if (wDesc) {
+                            std::wstring wd(wDesc);
+                            sDesc = std::string(wd.begin(), wd.end());
+                            ole32::CoTaskMemFree(wDesc);
+                        }
+
+                        bits::BG_JOB_PRIORITY prio{};
+                        pJob->GetPriority(&prio);
+                        std::string sPrio = (prio == bits::BG_JOB_PRIORITY_FOREGROUND) ? "FOREGROUND" :
+                                            (prio == bits::BG_JOB_PRIORITY_HIGH) ? "HIGH" :
+                                            (prio == bits::BG_JOB_PRIORITY_NORMAL) ? "NORMAL" : "LOW";
+
+                        out << "GUID: " << sGuid << " DISPLAY: '" << sName << "'\n"
+                            << "TYPE: DOWNLOAD STATE: " << sState << " PRIORITY: " << sPrio << "\n"
+                            << "FILES: " << prog.FilesTransferred << " / " << prog.FilesTotal
+                            << " BYTES: " << prog.BytesTransferred << " / " << prog.BytesTotal << "\n"
+                            << "DESCRIPTION: " << sDesc << "\n\n";
+                    } else {
+                        out << sGuid << " '" << sName << "' " << sState << " "
+                            << prog.FilesTransferred << " / " << prog.FilesTotal << " "
+                            << prog.BytesTransferred << " / " << prog.BytesTotal << "\n";
+                    }
+                    pJob->Release();
+                }
+                pEnum->Release();
+                pMgr->Release();
+                return;
+            }
+
+            // 3. bitsadmin /create [/type] <job_name>
+            if (sub == "/create" || sub == "-create" || sub == "create") {
+                if (tokens.size() < 3) {
+                    out << "ERROR: Invalid syntax. Usage: bitsadmin /create [type] <job_name>\n";
+                    pMgr->Release();
+                    return;
+                }
+                std::string jobName = tokens.back();
+                std::wstring wjn(jobName.begin(), jobName.end());
+
+                GUID gid{};
+                bits::IBackgroundCopyJob* pJob = nullptr;
+                ole32::HRESULT hr = pMgr->CreateJob(wjn.c_str(), bits::BG_JOB_TYPE_DOWNLOAD, &gid, &pJob);
+
+                if (hr == ole32::S_OK && pJob) {
+                    wchar_t wGuid[64]{};
+                    swprintf_s(wGuid, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                        gid.Data1, gid.Data2, gid.Data3,
+                        gid.Data4[0], gid.Data4[1], gid.Data4[2], gid.Data4[3],
+                        gid.Data4[4], gid.Data4[5], gid.Data4[6], gid.Data4[7]);
+                    std::wstring wg(wGuid);
+                    std::string sGuid(wg.begin(), wg.end());
+
+                    out << "Created job " << sGuid << ".\n";
+                    pJob->Release();
+                } else {
+                    out << "ERROR: Failed to create job. HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                }
+                pMgr->Release();
+                return;
+            }
+
+            // 4. bitsadmin /addfile <job_name> <remote_url> <local_path>
+            if (sub == "/addfile" || sub == "-addfile" || sub == "addfile") {
+                if (tokens.size() < 5) {
+                    out << "ERROR: Invalid syntax. Usage: bitsadmin /addfile <job_name> <remote_url> <local_path>\n";
+                    pMgr->Release();
+                    return;
+                }
+                std::string jobName = tokens[2];
+                std::string remote = tokens[3];
+                std::string local = tokens[4];
+
+                bits::IBackgroundCopyJob* pJob = nullptr;
+                if (!helperFindJobByNameOrGuid(jobName, &pJob)) {
+                    out << "ERROR: Job not found: " << jobName << "\n";
+                    pMgr->Release();
+                    return;
+                }
+
+                std::wstring wr(remote.begin(), remote.end());
+                std::wstring wl(local.begin(), local.end());
+                ole32::HRESULT hr = pJob->AddFile(wr.c_str(), wl.c_str());
+
+                if (hr == ole32::S_OK) {
+                    out << "SUCCESS: Added file " << remote << " -> " << local << "\n";
+                } else {
+                    out << "ERROR: Failed to add file. HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                }
+                pJob->Release();
+                pMgr->Release();
+                return;
+            }
+
+            // 5. bitsadmin /resume <job_name>
+            if (sub == "/resume" || sub == "-resume" || sub == "resume") {
+                if (tokens.size() < 3) {
+                    out << "ERROR: Job name or GUID must be specified.\n";
+                    pMgr->Release();
+                    return;
+                }
+                std::string jobName = tokens[2];
+                bits::IBackgroundCopyJob* pJob = nullptr;
+                if (!helperFindJobByNameOrGuid(jobName, &pJob)) {
+                    out << "ERROR: Job not found: " << jobName << "\n";
+                    pMgr->Release();
+                    return;
+                }
+
+                ole32::HRESULT hr = pJob->Resume();
+                if (hr == ole32::S_OK) {
+                    out << "Job resumed.\n";
+                } else {
+                    out << "ERROR: Unable to resume job. HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                }
+                pJob->Release();
+                pMgr->Release();
+                return;
+            }
+
+            // 6. bitsadmin /suspend <job_name>
+            if (sub == "/suspend" || sub == "-suspend" || sub == "suspend") {
+                if (tokens.size() < 3) {
+                    out << "ERROR: Job name or GUID must be specified.\n";
+                    pMgr->Release();
+                    return;
+                }
+                std::string jobName = tokens[2];
+                bits::IBackgroundCopyJob* pJob = nullptr;
+                if (!helperFindJobByNameOrGuid(jobName, &pJob)) {
+                    out << "ERROR: Job not found: " << jobName << "\n";
+                    pMgr->Release();
+                    return;
+                }
+
+                ole32::HRESULT hr = pJob->Suspend();
+                if (hr == ole32::S_OK) {
+                    out << "Job suspended.\n";
+                } else {
+                    out << "ERROR: Unable to suspend job. HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                }
+                pJob->Release();
+                pMgr->Release();
+                return;
+            }
+
+            // 7. bitsadmin /complete <job_name>
+            if (sub == "/complete" || sub == "-complete" || sub == "complete") {
+                if (tokens.size() < 3) {
+                    out << "ERROR: Job name or GUID must be specified.\n";
+                    pMgr->Release();
+                    return;
+                }
+                std::string jobName = tokens[2];
+                bits::IBackgroundCopyJob* pJob = nullptr;
+                if (!helperFindJobByNameOrGuid(jobName, &pJob)) {
+                    out << "ERROR: Job not found: " << jobName << "\n";
+                    pMgr->Release();
+                    return;
+                }
+
+                ole32::HRESULT hr = pJob->Complete();
+                if (hr == ole32::S_OK) {
+                    out << "Job completed.\n";
+                } else {
+                    out << "ERROR: Unable to complete job. HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                }
+                pJob->Release();
+                pMgr->Release();
+                return;
+            }
+
+            // 8. bitsadmin /cancel <job_name>
+            if (sub == "/cancel" || sub == "-cancel" || sub == "cancel") {
+                if (tokens.size() < 3) {
+                    out << "ERROR: Job name or GUID must be specified.\n";
+                    pMgr->Release();
+                    return;
+                }
+                std::string jobName = tokens[2];
+                bits::IBackgroundCopyJob* pJob = nullptr;
+                if (!helperFindJobByNameOrGuid(jobName, &pJob)) {
+                    out << "ERROR: Job not found: " << jobName << "\n";
+                    pMgr->Release();
+                    return;
+                }
+
+                ole32::HRESULT hr = pJob->Cancel();
+                if (hr == ole32::S_OK) {
+                    out << "Job canceled.\n";
+                } else {
+                    out << "ERROR: Unable to cancel job. HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                }
+                pJob->Release();
+                pMgr->Release();
+                return;
+            }
+
+            // 9. bitsadmin /info <job_name> [/verbose]
+            if (sub == "/info" || sub == "-info" || sub == "info") {
+                if (tokens.size() < 3) {
+                    out << "ERROR: Job name or GUID must be specified.\n";
+                    pMgr->Release();
+                    return;
+                }
+                std::string jobName = tokens[2];
+                bits::IBackgroundCopyJob* pJob = nullptr;
+                if (!helperFindJobByNameOrGuid(jobName, &pJob)) {
+                    out << "ERROR: Job not found: " << jobName << "\n";
+                    pMgr->Release();
+                    return;
+                }
+
+                GUID gid{};
+                pJob->GetId(&gid);
+                wchar_t wGuid[64]{};
+                swprintf_s(wGuid, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                    gid.Data1, gid.Data2, gid.Data3,
+                    gid.Data4[0], gid.Data4[1], gid.Data4[2], gid.Data4[3],
+                    gid.Data4[4], gid.Data4[5], gid.Data4[6], gid.Data4[7]);
+                std::wstring wg(wGuid);
+                std::string sGuid(wg.begin(), wg.end());
+
+                wchar_t* wName = nullptr;
+                pJob->GetName(&wName);
+                std::string sName = "";
+                if (wName) {
+                    std::wstring wn(wName);
+                    sName = std::string(wn.begin(), wn.end());
+                    ole32::CoTaskMemFree(wName);
+                }
+
+                bits::BG_JOB_STATE st{};
+                pJob->GetState(&st);
+                std::string sState = (st == bits::BG_JOB_STATE_QUEUED) ? "QUEUED" :
+                                     (st == bits::BG_JOB_STATE_CONNECTING) ? "CONNECTING" :
+                                     (st == bits::BG_JOB_STATE_TRANSFERRING) ? "TRANSFERRING" :
+                                     (st == bits::BG_JOB_STATE_SUSPENDED) ? "SUSPENDED" :
+                                     (st == bits::BG_JOB_STATE_ERROR) ? "ERROR" :
+                                     (st == bits::BG_JOB_STATE_TRANSIENT_ERROR) ? "TRANSIENT_ERROR" :
+                                     (st == bits::BG_JOB_STATE_TRANSFERRED) ? "TRANSFERRED" :
+                                     (st == bits::BG_JOB_STATE_ACKNOWLEDGED) ? "ACKNOWLEDGED" : "CANCELLED";
+
+                bits::BG_JOB_PROGRESS prog{};
+                pJob->GetProgress(&prog);
+
+                bits::BG_JOB_PRIORITY prio{};
+                pJob->GetPriority(&prio);
+                std::string sPrio = (prio == bits::BG_JOB_PRIORITY_FOREGROUND) ? "FOREGROUND" :
+                                    (prio == bits::BG_JOB_PRIORITY_HIGH) ? "HIGH" :
+                                    (prio == bits::BG_JOB_PRIORITY_NORMAL) ? "NORMAL" : "LOW";
+
+                out << "GUID: " << sGuid << " DISPLAY: '" << sName << "'\n"
+                    << "TYPE: DOWNLOAD STATE: " << sState << " PRIORITY: " << sPrio << "\n"
+                    << "FILES: " << prog.FilesTransferred << " / " << prog.FilesTotal
+                    << " BYTES: " << prog.BytesTransferred << " / " << prog.BytesTotal << "\n";
+
+                // Enumerate files
+                bits::IEnumBackgroundCopyFiles* pFiles = nullptr;
+                if (pJob->EnumFiles(&pFiles) == ole32::S_OK && pFiles) {
+                    bits::IBackgroundCopyFile* pFile = nullptr;
+                    uint32_t fFetched = 0;
+                    while (pFiles->Next(1, &pFile, &fFetched) == ole32::S_OK && fFetched == 1) {
+                        wchar_t* wRemote = nullptr;
+                        wchar_t* wLocal = nullptr;
+                        pFile->GetRemoteName(&wRemote);
+                        pFile->GetLocalName(&wLocal);
+                        if (wRemote && wLocal) {
+                            std::wstring wr(wRemote), wl(wLocal);
+                            out << "  FILE: " << std::string(wr.begin(), wr.end())
+                                << " -> " << std::string(wl.begin(), wl.end()) << "\n";
+                        }
+                        if (wRemote) ole32::CoTaskMemFree(wRemote);
+                        if (wLocal) ole32::CoTaskMemFree(wLocal);
+                        pFile->Release();
+                    }
+                    pFiles->Release();
+                }
+
+                pJob->Release();
+                pMgr->Release();
+                return;
+            }
+        }
+
+        pMgr->Release();
+        out << "========================================================================\n"
+            << "     MicaNT Background Intelligent Transfer Service (bitsadmin)         \n"
+            << "========================================================================\n\n"
+            << "Subsystem Library:    qmgr.dll & bitsprx.dll\n"
+            << "COM Activation:       CoCreateInstance(CLSID_BackgroundCopyManager)\n"
+            << "Protocols:            HTTP, HTTPS, File (Asynchronous Zero-Telemetry)\n\n"
+            << "Usage:\n"
+            << "  bitsadmin /list [/allusers] [/verbose]\n"
+            << "  bitsadmin /create [type] <job_name>\n"
+            << "  bitsadmin /addfile <job_name> <remote_url> <local_path>\n"
+            << "  bitsadmin /resume <job_name>\n"
+            << "  bitsadmin /suspend <job_name>\n"
+            << "  bitsadmin /complete <job_name>\n"
+            << "  bitsadmin /cancel <job_name>\n"
+            << "  bitsadmin /info <job_name> [/verbose]\n"
+            << "  bitsadmin test\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -102,7 +102,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 47: Windows Task Scheduler 2.0 Subsystem (taskschd)  [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 48: Windows Background Intelligent Transfer (BITS)   [IN PROGRESS]    │
+│ Phase 48: Windows Background Intelligent Transfer (BITS)   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 49: Windows Volume Shadow Copy Service (VSS)         [IN PROGRESS]    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1061,13 +1063,57 @@
 
 ---
 
-### Phase 48: Windows Background Intelligent Transfer Service (BITS) Subsystem (`qmgr.dll` & `bitsadmin.exe`) (IN PROGRESS)
-- [ ] **BITS COM Interfaces**: `IBackgroundCopyManager`, `IBackgroundCopyJob`, `IBackgroundCopyFile`, `IBackgroundCopyError`, `IEnumBackgroundCopyJobs`, `IEnumBackgroundCopyFiles`.
-- [ ] **Job States & Priority Queue**: `BG_JOB_STATE` (`QUEUED`, `CONNECTING`, `TRANSFERRING`, `SUSPENDED`, `ERROR`, `TRANSIENT_ERROR`, `TRANSFERRED`, `ACKNOWLEDGED`, `CANCELLED`), `BG_JOB_PRIORITY` (`FOREGROUND`, `HIGH`, `NORMAL`, `LOW`).
-- [ ] **Download / Upload Engine**: Asynchronous file transfer integration with `wininet.hpp` HTTP/HTTPS runtime, byte range resumes, and zero-telemetry bandwidth throttling.
-- [ ] **COM Registration & Versioning**: `CLSID_BackgroundCopyManager` (`{4990ab3b-d0e8-4291-83b1-7a1bf63ee3f6}`), DLL exports for `qmgr.dll`.
-- [ ] **Interactive Shell (`bitsadmin.exe`)**: `/create`, `/addfile`, `/resume`, `/suspend`, `/complete`, `/cancel`, `/info`, `/list`.
-- [ ] **Unit Test Suite 75**: Comprehensive validation of BITS job queues, HTTP transfer simulation, job completion, and CLI parity.
+### Phase 48: Windows Background Intelligent Transfer Service (BITS) Subsystem (`qmgr.dll` & `bitsadmin.exe`) (100% Completed)
+- [x] **BITS COM Interfaces & Architecture (`include/micant/bits.hpp`)**:
+  - `IBackgroundCopyManager` (`CLSID_BackgroundCopyManager` `{4990ab3b-d0e8-4291-83b1-7a1bf63ee3f6}`, `IID_IBackgroundCopyManager` `{5ce466fd-d495-4529-878b-4e92251925ab}`): Central queue manager with `CreateJob`, `GetJob`, `EnumJobs`, and `GetErrorDescription`.
+  - `IBackgroundCopyJob` & `IBackgroundCopyJob2`: Complete job lifecycle management (`AddFile`, `AddFileSet`, `EnumFiles`, `Suspend`, `Resume`, `Cancel`, `Complete`, `GetId`, `GetType`, `GetName`, `GetDescription`, `SetDescription`, `GetPriority`, `SetPriority`, `GetState`, `GetProgress`, `GetTimes`, `GetError`, `SetNotifyFlags`, `GetNotifyFlags`, `SetNotifyInterface`, `GetNotifyInterface`, `SetMinimumRetryDelay`, `GetMinimumRetryDelay`, `SetNoProgressTimeout`, `GetNoProgressTimeout`, `TakeOwnership`, `SetNotifyCmdLine`, `GetNotifyCmdLine`).
+  - `IBackgroundCopyFile`: File transfer descriptor with `GetRemoteName`, `GetLocalName`, and `GetProgress` (`BytesTotal`, `BytesTransferred`, `Completed`).
+  - `IBackgroundCopyError`: Granular error reporting with `GetError`, `GetFile`, `GetErrorDescription`, `GetErrorContextDescription`, and `GetProtocolErrorDescription`.
+  - `IEnumBackgroundCopyJobs` & `IEnumBackgroundCopyFiles`: Standard COM forward enumerators with `Next`, `Skip`, `Reset`, `Clone`, and `GetCount`.
+- [x] **Job State Machine & Priority Queuing**:
+  - Full state transitions across `BG_JOB_STATE_SUSPENDED`, `BG_JOB_STATE_QUEUED`, `BG_JOB_STATE_CONNECTING`, `BG_JOB_STATE_TRANSFERRING`, `BG_JOB_STATE_TRANSFERRED`, `BG_JOB_STATE_ACKNOWLEDGED`, and `BG_JOB_STATE_CANCELLED`.
+  - Priorities: `BG_JOB_PRIORITY_FOREGROUND`, `BG_JOB_PRIORITY_HIGH`, `BG_JOB_PRIORITY_NORMAL`, `BG_JOB_PRIORITY_LOW`.
+- [x] **Zero-Telemetry HTTP/HTTPS Asynchronous Transfer Simulator**:
+  - Seamless bridge with `wininet.hpp` HTTP/HTTPS client runtime.
+  - Multi-file chunking, simulated byte progress tracking, and atomic destination commit on `Complete()`.
+- [x] **Pre-Seeded Windows Core BITS Jobs**:
+  - `{A1B2C3D4-0001-0001-0001-000000000001}`: `Windows Defender Signature Update` (`mpam-fe.exe`).
+  - `{A1B2C3D4-0002-0002-0002-000000000002}`: `MicaNT Kernel Security Update KB5034441` (`kb5034441.msu`).
+- [x] **Dynamic Loader & COM Registration**:
+  - Dynamic DLL export registration for `qmgr.dll` (Queue Manager) and `bitsprx.dll` (Proxy/Stub) with `DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`, `DllUnregisterServer`.
+  - Class factory registered with `ole32::CoRegisterClassObject`.
+  - Version metadata registered in `version.hpp` (`10.0.22621.1`).
+- [x] **Interactive CLI Utility (`include/micant/shell.hpp` - `bitsadmin`)**:
+  - `bitsadmin /list [/allusers] [/verbose]`: Enumerates active and queued transfer jobs.
+  - `bitsadmin /create [type] <job_name>`: Creates a new background copy job.
+  - `bitsadmin /addfile <job_name> <remote_url> <local_path>`: Adds files to specified job.
+  - `bitsadmin /resume <job_name>`: Starts/resumes job transfer.
+  - `bitsadmin /suspend <job_name>`: Pauses job transfer.
+  - `bitsadmin /complete <job_name>`: Acknowledges and finalizes job, committing downloaded files.
+  - `bitsadmin /cancel <job_name>`: Cancels and removes job from queue.
+  - `bitsadmin /info <job_name> [/verbose]`: Displays detailed job properties, files, and progress.
+  - `bitsadmin test`: Subsystem self-test.
+- [x] **Unit Test Suite 75 (`Test_WindowsBITS_Subsystem`)**:
+  - 12 comprehensive validation stages covering COM activation, dynamic DLL exports, pre-seeded jobs, job creation, file addition, job attributes, execution lifecycle (`Resume` -> `TRANSFERRED` -> `Complete` -> `ACKNOWLEDGED`), multi-file enumeration, priority modification, retry delays, cancellation, error descriptions, and CLI shell integration.
+  - All 75 unit test suites passing with 100% success rate (75 Passed, 0 Failed).
+
+---
+
+### Phase 49: Windows Volume Shadow Copy Service (VSS) Subsystem (`vssapi.dll`, `vss_ps.dll` & `vssadmin.exe`) (IN PROGRESS)
+- [ ] **VSS COM Interfaces & Architecture (`include/micant/vss.hpp`)**:
+  - `IVssBackupComponents`, `IVssAsync`, `IVssWriterCallback`, `IVssEnumObject`, `IVssWMFiledesc`, `IVssComponent`.
+  - `VSS_OBJECT_PROP`, `VSS_SNAPSHOT_PROP`, `VSS_VOLUME_PROP`, `VSS_WRITER_PROP`.
+- [ ] **Volume Snapshot Lifecycle & Copy-on-Write Provider**:
+  - Snapshot state machine: `VSS_SS_PREPARING`, `VSS_SS_PROCESSING_PREPARE`, `VSS_SS_PREPARED`, `VSS_SS_PROCESSING_PRECOMMIT`, `VSS_SS_PRECOMMITTED`, `VSS_SS_PROCESSING_COMMIT`, `VSS_SS_COMMITTED`.
+  - Differencing storage area (`VSS_DIFF_VOLUME_PROP`), differential copy-on-write mapping on VFS/FAT32/NTFS volumes.
+- [ ] **VSS System Writers**:
+  - System Writer, Registry Writer, WMI Writer, Shadow Copy Optimization Writer.
+- [ ] **Dynamic Loader & COM Registration**:
+  - Dynamic DLL export registration for `vssapi.dll` and `vss_ps.dll` (`CreateVssBackupComponents`, `VssFreeSnapshotProperties`, `DllGetClassObject`).
+- [ ] **Interactive CLI Utility (`vssadmin.exe`)**:
+  - `vssadmin list shadows`, `vssadmin list writers`, `vssadmin list providers`, `vssadmin list shadowstorage`, `vssadmin create shadow /for=C:`, `vssadmin delete shadows`.
+- [ ] **Unit Test Suite 76 (`Test_WindowsVSS_VolumeShadowCopy_Subsystem`)**:
+  - End-to-end testing of VSS COM activation, snapshot creation, writer coordination, differential storage, and `vssadmin` CLI parity.
 
 
 
