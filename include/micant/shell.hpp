@@ -46,6 +46,8 @@
 #include "d3d9.hpp"
 #include "gdi32.hpp"
 #include "ole32.hpp"
+#include "shell32.hpp"
+#include "comctl32.hpp"
 
 namespace micant::shell {
 
@@ -91,6 +93,8 @@ public:
         d3d9::InitializeD3D9SubsystemExports();
         gdi32::InitializeGdi32SubsystemExports();
         ole32::InitializeOle32SubsystemExports();
+        shell32::InitializeShell32SubsystemExports();
+        comctl32::InitializeComCtl32SubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -176,6 +180,10 @@ public:
             cmdGDI(tokens, out);
         } else if (cmd == "com" || cmd == "ole") {
             cmdCOM(tokens, out);
+        } else if (cmd == "shell32") {
+            cmdShell32(tokens, out);
+        } else if (cmd == "comctl" || cmd == "commoncontrols") {
+            cmdComCtl(tokens, out);
         } else if (cmd == "view3d" || cmd == "viewer3d") {
             cmdView3D(tokens, out);
         } else if (cmd == "vulkan" || cmd == "vkinfo" || cmd == "vkcube") {
@@ -409,6 +417,8 @@ private:
             << "  D3D9 / DX9        Initializes Direct3D 9 fixed-function pipeline test\n"
             << "  GDI               Displays GDI32 graphics engine info and verifies 2D drawing\n"
             << "  COM / OLE         Displays COM / OLE runtime info, GUID generation and BSTR test\n"
+            << "  SHELL32           Displays known shell folders, tray manager, and parses args\n"
+            << "  COMCTL            Displays common controls info and tests Progress/Status bars\n"
             << "  VIEW3D            Launches interactive 3D model viewer (view3d --torus|--cube|--crystal|--wireframe)\n"
             << "  VULKAN / VKINFO   Displays Vulkan ICD status, physical devices, and vkcube test\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
@@ -1773,6 +1783,77 @@ private:
         }
 
         ole32::CoUninitialize();
+    }
+
+    void cmdShell32(const std::vector<std::string>& tokens, std::ostream& out) {
+        (void)tokens;
+        out << "========================================================================\n"
+            << "          MicaNT Shell API & Lightweight Shlwapi Subsystem              \n"
+            << "========================================================================\n\n";
+
+        out << "Shell32 Version:   6.0 (Clean-Room Win32 Native)\n"
+            << "Export Libraries:  shell32.dll & shlwapi.dll\n"
+            << "Folder Mapping:    CSIDL & KNOWNFOLDERID Canonical Userland Trees\n"
+            << "Execution Bridge:  ShellExecuteW / ShellExecuteExW -> CreateProcessW\n"
+            << "Notification Tray: Shell_NotifyIconW (Active Icons: "
+            << shell32::TrayNotificationManager::get().getIconCount() << ")\n\n";
+
+        wchar_t bufWin[260]{}, bufProg[260]{}, bufDoc[260]{};
+        shell32::SHGetFolderPathW(nullptr, shell32::CSIDL_WINDOWS, nullptr, 0, bufWin);
+        shell32::SHGetFolderPathW(nullptr, shell32::CSIDL_PROGRAM_FILES, nullptr, 0, bufProg);
+        shell32::SHGetFolderPathW(nullptr, shell32::CSIDL_PERSONAL, nullptr, 0, bufDoc);
+
+        std::wstring wsWin(bufWin), wsProg(bufProg), wsDoc(bufDoc);
+        out << "Canonical Shell Paths:\n"
+            << "  CSIDL_WINDOWS:       " << std::string(wsWin.begin(), wsWin.end()) << "\n"
+            << "  CSIDL_PROGRAM_FILES: " << std::string(wsProg.begin(), wsProg.end()) << "\n"
+            << "  CSIDL_PERSONAL:      " << std::string(wsDoc.begin(), wsDoc.end()) << "\n\n";
+
+        int numArgs = 0;
+        const wchar_t* cmdTest = L"notepad.exe \"C:\\Program Files\\sample document.txt\" --verbose";
+        wchar_t** argv = shell32::CommandLineToArgvW(cmdTest, &numArgs);
+        if (argv) {
+            out << "[CommandLineToArgvW] Parsed " << numArgs << " argument(s):\n";
+            for (int i = 0; i < numArgs; ++i) {
+                std::wstring argW(argv[i]);
+                out << "  Arg[" << i << "]: " << std::string(argW.begin(), argW.end()) << "\n";
+            }
+            kernel32::LocalFree(argv);
+        }
+    }
+
+    void cmdComCtl(const std::vector<std::string>& tokens, std::ostream& out) {
+        (void)tokens;
+        out << "========================================================================\n"
+            << "          MicaNT Common Controls (ComCtl32) Subsystem                   \n"
+            << "========================================================================\n\n";
+
+        out << "ComCtl32 Version:  6.0 (Clean-Room Modern Controls)\n"
+            << "Export Library:    comctl32.dll\n"
+            << "Registered Classes: msctls_progress32, msctls_statusbar32, msctls_updown32,\n"
+            << "                    msctls_trackbar32, SysListView32, SysTreeView32\n\n";
+
+        comctl32::HIMAGELIST himl = comctl32::ImageList_Create(16, 16, comctl32::ILC_COLOR32, 4, 4);
+        if (himl) {
+            comctl32::ImageList_AddIcon(himl, nullptr);
+            comctl32::ImageList_AddIcon(himl, nullptr);
+            out << "[ImageList] Created HIMAGELIST (16x16, 32-bpp) with "
+                << comctl32::ImageList_GetImageCount(himl) << " icon frame(s).\n";
+            comctl32::ImageList_Destroy(himl);
+        }
+
+        win32::HWND hProg = user32::CreateWindowExW(
+            0, comctl32::PROGRESS_CLASSW, L"", 0,
+            10, 10, 200, 24, nullptr, nullptr, nullptr, nullptr
+        );
+        if (hProg) {
+            user32::SendMessageW(hProg, comctl32::PBM_SETRANGE32, 0, 100);
+            user32::SendMessageW(hProg, comctl32::PBM_SETPOS, 65, 0);
+            int curPos = static_cast<int>(user32::SendMessageW(hProg, comctl32::PBM_GETPOS, 0, 0));
+            out << "[ProgressBar] Created msctls_progress32 window, Range [0..100], Current Pos: "
+                << curPos << "%\n";
+            user32::DestroyWindow(hProg);
+        }
     }
 
     void cmdView3D(const std::vector<std::string>& tokens, std::ostream& out) {

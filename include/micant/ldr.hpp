@@ -132,6 +132,18 @@ public:
         return nullptr;
     }
 
+    [[nodiscard]] void* findExport(std::string_view functionName) const {
+        std::string suffix = "!";
+        suffix.append(functionName);
+        for (const auto& [key, addr] : exportRegistry_) {
+            if (key.size() >= suffix.size() &&
+                key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                return addr;
+            }
+        }
+        return nullptr;
+    }
+
     void clear() {
         exportRegistry_.clear();
         loadedModules_.clear();
@@ -307,6 +319,9 @@ inline NtStatus LdrGetProcedureAddress(
     if (!addr) {
         // Fallback search across all modules
         addr = DynamicLoader::get().getExport("ntdll.dll", procedureName);
+    }
+    if (!addr) {
+        addr = DynamicLoader::get().findExport(procedureName);
     }
 
     if (addr) {

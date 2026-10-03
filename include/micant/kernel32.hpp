@@ -39,10 +39,14 @@ inline uintptr_t g_CurrentExecutableBase = 0;
 // ============================================================================
 
 using DWORD   = uint32_t;
+using UINT    = uint32_t;
 using BOOL    = int32_t;
 using HANDLE  = void*;
 using HMODULE = void*;
 using HWND    = void*;
+using HINSTANCE = void*;
+using HICON   = void*;
+using HKEY    = void*;
 using LPVOID  = void*;
 using LPCVOID = const void*;
 using LPCWSTR = const wchar_t*;
@@ -50,7 +54,10 @@ using LPWSTR  = wchar_t*;
 using LPWCH   = wchar_t*;
 using LPCSTR  = const char*;
 using LPSTR   = char*;
-using SIZE_T  = size_t;
+using SIZE_T    = size_t;
+using DWORD_PTR = uintptr_t;
+using ULONG_PTR = uintptr_t;
+using LONG_PTR  = intptr_t;
 
 inline constexpr BOOL TRUE  = 1;
 inline constexpr BOOL FALSE = 0;
@@ -244,6 +251,24 @@ inline LPVOID HeapReAlloc(HANDLE hHeap, DWORD dwFlags, LPVOID lpMem, SIZE_T dwBy
  */
 inline SIZE_T HeapSize(HANDLE hHeap, DWORD dwFlags, LPCVOID lpMem) noexcept {
     return ntdll::RtlSizeHeap(hHeap, dwFlags, const_cast<LPVOID>(lpMem));
+}
+
+using HLOCAL = void*;
+inline constexpr UINT LMEM_FIXED    = 0x0000;
+inline constexpr UINT LMEM_MOVEABLE = 0x0002;
+inline constexpr UINT LMEM_ZEROINIT = 0x0040;
+inline constexpr UINT LPTR          = 0x0040;
+
+inline HLOCAL LocalAlloc(UINT uFlags, SIZE_T uBytes) noexcept {
+    DWORD flags = (uFlags & LMEM_ZEROINIT) ? heap::HEAP_ZERO_MEMORY : 0;
+    return reinterpret_cast<HLOCAL>(HeapAlloc(GetProcessHeap(), flags, uBytes));
+}
+
+inline HLOCAL LocalFree(HLOCAL hMem) noexcept {
+    if (hMem) {
+        HeapFree(GetProcessHeap(), 0, reinterpret_cast<LPVOID>(hMem));
+    }
+    return nullptr;
 }
 
 /**
@@ -1402,12 +1427,33 @@ inline HMODULE GetModuleHandleW(LPCWSTR lpModuleName) noexcept {
     }
     std::wstring name(lpModuleName);
     for (auto& c : name) c = static_cast<wchar_t>(std::towlower(c));
-    if (name == L"kernel32" || name == L"kernel32.dll") {
+    if (name.find(L'.') == std::wstring::npos) {
+        name += L".dll";
+    }
+
+    // Check already loaded modules in DynamicLoader
+    for (const auto& mod : ldr::DynamicLoader::get().getLoadedModules()) {
+        std::wstring modBase(mod->storedBaseName);
+        for (auto& c : modBase) c = static_cast<wchar_t>(std::towlower(c));
+        if (modBase == name || mod->storedFullName == name) {
+            return reinterpret_cast<HMODULE>(mod->dllBase);
+        }
+    }
+
+    if (name == L"kernel32.dll") {
         return reinterpret_cast<HMODULE>(0x7FF800000000ULL);
     }
-    if (name == L"ntdll" || name == L"ntdll.dll") {
+    if (name == L"ntdll.dll") {
         return reinterpret_cast<HMODULE>(0x7FF810000000ULL);
     }
+
+    // Register/load module in DynamicLoader table
+    UnicodeString uniName(name.c_str());
+    uintptr_t modBase = 0;
+    if (NT_SUCCESS(ntdll::LdrLoadDll(nullptr, 0, &uniName, &modBase))) {
+        return reinterpret_cast<HMODULE>(modBase);
+    }
+
     if (g_CurrentExecutableBase != 0) return reinterpret_cast<HMODULE>(g_CurrentExecutableBase);
     return reinterpret_cast<HMODULE>(0x140000000ULL);
 }
@@ -1930,6 +1976,112 @@ inline void GetStartupInfoW(STARTUPINFOW* si) noexcept {
     if (si) *si = STARTUPINFOW{};
 }
 
+struct STARTUPINFOA {
+    DWORD   cb{sizeof(STARTUPINFOA)};
+    LPSTR   lpReserved{nullptr};
+    LPSTR   lpDesktop{nullptr};
+    LPSTR   lpTitle{nullptr};
+    DWORD   dwX{0};
+    DWORD   dwY{0};
+    DWORD   dwXSize{0};
+    DWORD   dwYSize{0};
+    DWORD   dwXCountChars{0};
+    DWORD   dwYCountChars{0};
+    DWORD   dwFillAttribute{0};
+    DWORD   dwFlags{0};
+    uint16_t wShowWindow{0};
+    uint16_t cbReserved2{0};
+    uint8_t* lpReserved2{nullptr};
+    HANDLE  hStdInput{nullptr};
+    HANDLE  hStdOutput{nullptr};
+    HANDLE  hStdError{nullptr};
+};
+
+struct PROCESS_INFORMATION {
+    HANDLE hProcess{nullptr};
+    HANDLE hThread{nullptr};
+    DWORD  dwProcessId{0};
+    DWORD  dwThreadId{0};
+};
+
+struct SECURITY_ATTRIBUTES {
+    DWORD  nLength{sizeof(SECURITY_ATTRIBUTES)};
+    LPVOID lpSecurityDescriptor{nullptr};
+    BOOL   bInheritHandle{0};
+};
+
+inline BOOL CreateProcessW(
+    LPCWSTR lpApplicationName,
+    LPWSTR lpCommandLine,
+    SECURITY_ATTRIBUTES* /*lpProcessAttributes*/,
+    SECURITY_ATTRIBUTES* /*lpThreadAttributes*/,
+    BOOL /*bInheritHandles*/,
+    DWORD /*dwCreationFlags*/,
+    LPVOID /*lpEnvironment*/,
+    LPCWSTR /*lpCurrentDirectory*/,
+    STARTUPINFOW* /*lpStartupInfo*/,
+    PROCESS_INFORMATION* lpProcessInformation
+) noexcept {
+    std::wstring imgName;
+    if (lpApplicationName && *lpApplicationName) {
+        imgName = lpApplicationName;
+    } else if (lpCommandLine && *lpCommandLine) {
+        imgName = lpCommandLine;
+    } else {
+        return FALSE;
+    }
+
+    auto proc = ps::ProcessManager::get().createProcess(imgName);
+    if (!proc) return FALSE;
+
+    if (lpProcessInformation) {
+        lpProcessInformation->hProcess = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(proc->getPid()));
+        lpProcessInformation->hThread  = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(0x80000000ULL | proc->getPid()));
+        lpProcessInformation->dwProcessId = static_cast<DWORD>(proc->getPid());
+        lpProcessInformation->dwThreadId  = static_cast<DWORD>(1);
+    }
+    return TRUE;
+}
+
+inline BOOL CreateProcessA(
+    LPCSTR lpApplicationName,
+    LPSTR lpCommandLine,
+    SECURITY_ATTRIBUTES* lpProcessAttributes,
+    SECURITY_ATTRIBUTES* lpThreadAttributes,
+    BOOL bInheritHandles,
+    DWORD dwCreationFlags,
+    LPVOID lpEnvironment,
+    LPCSTR lpCurrentDirectory,
+    STARTUPINFOA* lpStartupInfo,
+    PROCESS_INFORMATION* lpProcessInformation
+) noexcept {
+    std::wstring wApp, wCmd, wDir;
+    if (lpApplicationName) wApp.assign(lpApplicationName, lpApplicationName + std::strlen(lpApplicationName));
+    if (lpCommandLine) wCmd.assign(lpCommandLine, lpCommandLine + std::strlen(lpCommandLine));
+    if (lpCurrentDirectory) wDir.assign(lpCurrentDirectory, lpCurrentDirectory + std::strlen(lpCurrentDirectory));
+
+    STARTUPINFOW siW{};
+    if (lpStartupInfo) {
+        siW.cb = sizeof(siW);
+        siW.dwFlags = lpStartupInfo->dwFlags;
+        siW.wShowWindow = lpStartupInfo->wShowWindow;
+    }
+
+    return CreateProcessW(
+        wApp.empty() ? nullptr : wApp.c_str(),
+        wCmd.empty() ? nullptr : wCmd.data(),
+        lpProcessAttributes,
+        lpThreadAttributes,
+        bInheritHandles,
+        dwCreationFlags,
+        lpEnvironment,
+        wDir.empty() ? nullptr : wDir.c_str(),
+        &siW,
+        lpProcessInformation
+    );
+}
+
+
 inline DWORD GetFileType(HANDLE hFile) noexcept {
     if (hFile == GetStdHandle(STD_OUTPUT_HANDLE) || 
         hFile == GetStdHandle(STD_INPUT_HANDLE) || 
@@ -2089,6 +2241,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "HeapFree", reinterpret_cast<void*>(HeapFree));
     ldr.registerExport("kernel32.dll", "HeapReAlloc", reinterpret_cast<void*>(HeapReAlloc));
     ldr.registerExport("kernel32.dll", "HeapSize", reinterpret_cast<void*>(HeapSize));
+    ldr.registerExport("kernel32.dll", "LocalAlloc", reinterpret_cast<void*>(LocalAlloc));
+    ldr.registerExport("kernel32.dll", "LocalFree", reinterpret_cast<void*>(LocalFree));
     ldr.registerExport("kernel32.dll", "VirtualAlloc", reinterpret_cast<void*>(VirtualAlloc));
     ldr.registerExport("kernel32.dll", "VirtualFree", reinterpret_cast<void*>(VirtualFree));
     ldr.registerExport("kernel32.dll", "GetCurrentProcess", reinterpret_cast<void*>(GetCurrentProcess));
@@ -2096,6 +2250,8 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetCurrentThread", reinterpret_cast<void*>(GetCurrentThread));
     ldr.registerExport("kernel32.dll", "GetCurrentThreadId", reinterpret_cast<void*>(GetCurrentThreadId));
     ldr.registerExport("kernel32.dll", "ExitProcess", reinterpret_cast<void*>(ExitProcess));
+    ldr.registerExport("kernel32.dll", "CreateProcessW", reinterpret_cast<void*>(CreateProcessW));
+    ldr.registerExport("kernel32.dll", "CreateProcessA", reinterpret_cast<void*>(CreateProcessA));
     ldr.registerExport("kernel32.dll", "AllocConsole", reinterpret_cast<void*>(AllocConsole));
     ldr.registerExport("kernel32.dll", "FreeConsole", reinterpret_cast<void*>(FreeConsole));
     ldr.registerExport("kernel32.dll", "SetConsoleTitleW", reinterpret_cast<void*>(SetConsoleTitleW));
@@ -2254,3 +2410,7 @@ inline void InitializeWin32SubsystemExports() {
 
 
 } // namespace micant::win32
+
+namespace micant {
+namespace kernel32 = win32;
+}

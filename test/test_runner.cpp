@@ -79,6 +79,8 @@
 #include "micant/d3d9.hpp"
 #include "micant/gdi32.hpp"
 #include "micant/ole32.hpp"
+#include "micant/shell32.hpp"
+#include "micant/comctl32.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -7919,6 +7921,323 @@ void Test_Gdi32_And_Ole32_Win32Foundation() {
     std::cout << "[TEST] Suite 59: Gdi32 & Ole32 Win32 Foundation PASSED.\n";
 }
 
+void Test_Shell32_And_ComCtl32_Win32Controls() {
+    std::cout << "[TEST] Running Suite 60: Shell32, Shlwapi & ComCtl32 Win32 Controls...\n";
+
+    // ------------------------------------------------------------------------
+    // 1. Subsystem Export Registrations & Dynamic Loader Binding
+    // ------------------------------------------------------------------------
+    shell32::InitializeShell32SubsystemExports();
+    comctl32::InitializeComCtl32SubsystemExports();
+
+    win32::HMODULE hShell = kernel32::GetModuleHandleW(L"shell32.dll");
+    TEST_ASSERT(hShell != nullptr, "shell32.dll must be registered in DynamicLoader");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "SHGetFolderPathW") != nullptr, "SHGetFolderPathW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "SHGetFolderPathA") != nullptr, "SHGetFolderPathA must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "SHGetSpecialFolderPathW") != nullptr, "SHGetSpecialFolderPathW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "SHGetKnownFolderPath") != nullptr, "SHGetKnownFolderPath must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "CommandLineToArgvW") != nullptr, "CommandLineToArgvW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "ShellExecuteW") != nullptr, "ShellExecuteW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "ShellExecuteExW") != nullptr, "ShellExecuteExW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "Shell_NotifyIconW") != nullptr, "Shell_NotifyIconW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "SHGetFileInfoW") != nullptr, "SHGetFileInfoW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShell, "ExtractIconW") != nullptr, "ExtractIconW must be exported");
+
+    win32::HMODULE hShlwapi = kernel32::GetModuleHandleW(L"shlwapi.dll");
+    TEST_ASSERT(hShlwapi != nullptr, "shlwapi.dll must be registered in DynamicLoader");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "PathFileExistsW") != nullptr, "PathFileExistsW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "PathCombineW") != nullptr, "PathCombineW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "PathFindFileNameW") != nullptr, "PathFindFileNameW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "PathFindExtensionW") != nullptr, "PathFindExtensionW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "PathRemoveFileSpecW") != nullptr, "PathRemoveFileSpecW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "PathAddBackslashW") != nullptr, "PathAddBackslashW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "PathIsRelativeW") != nullptr, "PathIsRelativeW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "PathIsDirectoryW") != nullptr, "PathIsDirectoryW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "StrStrIW") != nullptr, "StrStrIW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hShlwapi, "StrCmpIW") != nullptr, "StrCmpIW must be exported");
+
+    win32::HMODULE hComCtl = kernel32::GetModuleHandleW(L"comctl32.dll");
+    TEST_ASSERT(hComCtl != nullptr, "comctl32.dll must be registered in DynamicLoader");
+    TEST_ASSERT(kernel32::GetProcAddress(hComCtl, "InitCommonControls") != nullptr, "InitCommonControls must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hComCtl, "InitCommonControlsEx") != nullptr, "InitCommonControlsEx must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hComCtl, "ImageList_Create") != nullptr, "ImageList_Create must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hComCtl, "ImageList_Destroy") != nullptr, "ImageList_Destroy must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hComCtl, "ImageList_AddIcon") != nullptr, "ImageList_AddIcon must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hComCtl, "ImageList_Draw") != nullptr, "ImageList_Draw must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hComCtl, "CreateStatusWindowW") != nullptr, "CreateStatusWindowW must be exported");
+    TEST_ASSERT(kernel32::GetProcAddress(hComCtl, "CreateUpDownControl") != nullptr, "CreateUpDownControl must be exported");
+
+    // ------------------------------------------------------------------------
+    // 2. CSIDL and KNOWNFOLDERID Folder Resolution
+    // ------------------------------------------------------------------------
+    wchar_t pathBuf[260]{};
+    shell32::HRESULT hr = shell32::SHGetFolderPathW(nullptr, shell32::CSIDL_WINDOWS, nullptr, 0, pathBuf);
+    TEST_ASSERT(hr == shell32::S_OK, "SHGetFolderPathW(CSIDL_WINDOWS) must return S_OK");
+    TEST_ASSERT(std::wstring(pathBuf) == L"C:\\Windows", "CSIDL_WINDOWS must map to C:\\Windows");
+
+    shell32::SHGetFolderPathW(nullptr, shell32::CSIDL_SYSTEM, nullptr, 0, pathBuf);
+    TEST_ASSERT(std::wstring(pathBuf) == L"C:\\Windows\\System32", "CSIDL_SYSTEM must map to C:\\Windows\\System32");
+
+    shell32::SHGetFolderPathW(nullptr, shell32::CSIDL_PROGRAM_FILES, nullptr, 0, pathBuf);
+    TEST_ASSERT(std::wstring(pathBuf) == L"C:\\Program Files", "CSIDL_PROGRAM_FILES must map to C:\\Program Files");
+
+    shell32::SHGetFolderPathW(nullptr, shell32::CSIDL_PERSONAL, nullptr, 0, pathBuf);
+    TEST_ASSERT(std::wstring(pathBuf) == L"C:\\Users\\admin\\Documents", "CSIDL_PERSONAL must map to C:\\Users\\admin\\Documents");
+
+    char pathBufA[260]{};
+    hr = shell32::SHGetFolderPathA(nullptr, shell32::CSIDL_DESKTOP, nullptr, 0, pathBufA);
+    TEST_ASSERT(hr == shell32::S_OK, "SHGetFolderPathA(CSIDL_DESKTOP) must return S_OK");
+    TEST_ASSERT(std::string(pathBufA) == "C:\\Users\\admin\\Desktop", "CSIDL_DESKTOP must map to C:\\Users\\admin\\Desktop");
+
+    win32::BOOL spRes = shell32::SHGetSpecialFolderPathW(nullptr, pathBuf, shell32::CSIDL_FONTS, win32::FALSE);
+    TEST_ASSERT(spRes == win32::TRUE, "SHGetSpecialFolderPathW must return TRUE");
+    TEST_ASSERT(std::wstring(pathBuf) == L"C:\\Windows\\Fonts", "CSIDL_FONTS must map to C:\\Windows\\Fonts");
+
+    shell32::PWSTR pKnownPath = nullptr;
+    hr = shell32::SHGetKnownFolderPath(shell32::FOLDERID_System, 0, nullptr, &pKnownPath);
+    TEST_ASSERT(hr == shell32::S_OK && pKnownPath != nullptr, "SHGetKnownFolderPath(FOLDERID_System) must succeed");
+    TEST_ASSERT(std::wstring(pKnownPath) == L"C:\\Windows\\System32", "FOLDERID_System must resolve to C:\\Windows\\System32");
+    kernel32::LocalFree(pKnownPath);
+
+    pKnownPath = nullptr;
+    hr = shell32::SHGetKnownFolderPath(shell32::FOLDERID_ProgramFiles, 0, nullptr, &pKnownPath);
+    TEST_ASSERT(hr == shell32::S_OK && pKnownPath != nullptr, "SHGetKnownFolderPath(FOLDERID_ProgramFiles) must succeed");
+    TEST_ASSERT(std::wstring(pKnownPath) == L"C:\\Program Files", "FOLDERID_ProgramFiles must resolve to C:\\Program Files");
+    kernel32::LocalFree(pKnownPath);
+
+    // ------------------------------------------------------------------------
+    // 3. Shlwapi Path & String Utilities
+    // ------------------------------------------------------------------------
+    wchar_t combined[260]{};
+    shell32::PathCombineW(combined, L"C:\\Windows", L"System32\\notepad.exe");
+    TEST_ASSERT(std::wstring(combined) == L"C:\\Windows\\System32\\notepad.exe", "PathCombineW must join path segments");
+
+    const wchar_t* pName = shell32::PathFindFileNameW(L"C:\\Windows\\System32\\notepad.exe");
+    TEST_ASSERT(std::wstring(pName) == L"notepad.exe", "PathFindFileNameW must extract file name");
+
+    const wchar_t* pExt = shell32::PathFindExtensionW(L"C:\\Windows\\System32\\notepad.exe");
+    TEST_ASSERT(std::wstring(pExt) == L".exe", "PathFindExtensionW must extract extension");
+
+    wchar_t toStrip[260] = L"C:\\Windows\\System32\\notepad.exe";
+    shell32::PathRemoveFileSpecW(toStrip);
+    TEST_ASSERT(std::wstring(toStrip) == L"C:\\Windows\\System32", "PathRemoveFileSpecW must remove file part");
+
+    shell32::PathAddBackslashW(toStrip);
+    TEST_ASSERT(std::wstring(toStrip) == L"C:\\Windows\\System32\\", "PathAddBackslashW must append trailing backslash");
+
+    TEST_ASSERT(shell32::PathIsRelativeW(L"MicaNT\\SubDir") == win32::TRUE, "Relative path must return TRUE");
+    TEST_ASSERT(shell32::PathIsRelativeW(L"C:\\Windows") == win32::FALSE, "Absolute path must return FALSE");
+
+    const wchar_t* pMatch = shell32::StrStrIW(L"MicaNT Sovereign Microkernel", L"SOVEREIGN");
+    TEST_ASSERT(pMatch != nullptr && std::wstring(pMatch).rfind(L"Sovereign", 0) == 0, "StrStrIW must find case-insensitive substring");
+    TEST_ASSERT(shell32::StrCmpIW(L"MiCaNt", L"micant") == 0, "StrCmpIW must return 0 for equal case-insensitive strings");
+
+    // ------------------------------------------------------------------------
+    // 4. CommandLineToArgvW Tokenizer & LocalFree
+    // ------------------------------------------------------------------------
+    int numArgs = 0;
+    wchar_t** pArgs = shell32::CommandLineToArgvW(L"micant_app.exe \"long path argument\" simple --flag=\"nested \\\"quote\\\" val\"", &numArgs);
+    TEST_ASSERT(pArgs != nullptr, "CommandLineToArgvW must return non-null argv");
+    TEST_ASSERT(numArgs == 4, "CommandLineToArgvW must parse exactly 4 arguments");
+    TEST_ASSERT(std::wstring(pArgs[0]) == L"micant_app.exe", "Arg[0] must match binary name");
+    TEST_ASSERT(std::wstring(pArgs[1]) == L"long path argument", "Arg[1] must match quoted string");
+    TEST_ASSERT(std::wstring(pArgs[2]) == L"simple", "Arg[2] must match bare argument");
+    kernel32::LocalFree(pArgs);
+
+    // ------------------------------------------------------------------------
+    // 5. System Tray Notification Icons (Shell_NotifyIconW)
+    // ------------------------------------------------------------------------
+    shell32::NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = reinterpret_cast<win32::HWND>(0x2001);
+    nid.uID = 42;
+    nid.uFlags = shell32::NIF_MESSAGE | shell32::NIF_TIP;
+    nid.uCallbackMessage = 0x8050;
+    std::wcsncpy(nid.szTip, L"MicaNT Kernel Active", 128);
+
+    TEST_ASSERT(shell32::Shell_NotifyIconW(shell32::NIM_ADD, &nid) == win32::TRUE, "Shell_NotifyIconW(NIM_ADD) must succeed");
+    TEST_ASSERT(shell32::TrayNotificationManager::get().getIconCount() >= 1, "Tray icon count must be >= 1");
+
+    std::wcsncpy(nid.szTip, L"MicaNT Subsystem Ready", 128);
+    TEST_ASSERT(shell32::Shell_NotifyIconW(shell32::NIM_MODIFY, &nid) == win32::TRUE, "Shell_NotifyIconW(NIM_MODIFY) must succeed");
+    TEST_ASSERT(shell32::Shell_NotifyIconW(shell32::NIM_DELETE, &nid) == win32::TRUE, "Shell_NotifyIconW(NIM_DELETE) must succeed");
+
+    // ------------------------------------------------------------------------
+    // 6. Shell File Info & ShellExecute
+    // ------------------------------------------------------------------------
+    shell32::SHFILEINFOW sfi{};
+    shell32::DWORD_PTR dwFi = shell32::SHGetFileInfoW(L"C:\\Windows\\notepad.exe", 0, &sfi, sizeof(sfi),
+                                             shell32::SHGFI_DISPLAYNAME | shell32::SHGFI_TYPENAME | shell32::SHGFI_ICON);
+    TEST_ASSERT(dwFi != 0, "SHGetFileInfoW must return non-zero");
+    TEST_ASSERT(std::wstring(sfi.szDisplayName) == L"notepad.exe", "SHGetFileInfoW must populate szDisplayName");
+    TEST_ASSERT(std::wstring(sfi.szTypeName) == L"Application", "SHGetFileInfoW must identify Application extension");
+    TEST_ASSERT(sfi.hIcon != nullptr, "SHGetFileInfoW must return valid icon handle");
+
+    shell32::HICON hExtracted = shell32::ExtractIconW(nullptr, L"C:\\Windows\\explorer.exe", 0);
+    TEST_ASSERT(hExtracted != nullptr, "ExtractIconW must return valid icon handle");
+
+    win32::HINSTANCE hInstExec = shell32::ShellExecuteW(nullptr, L"open", L"cmd.exe", L"/c echo MicaNT", nullptr, 1);
+    TEST_ASSERT(reinterpret_cast<uintptr_t>(hInstExec) > 32, "ShellExecuteW must return instance handle > 32");
+
+    // ------------------------------------------------------------------------
+    // 7. ComCtl32 Image List Subsystem (HIMAGELIST)
+    // ------------------------------------------------------------------------
+    comctl32::HIMAGELIST himl = comctl32::ImageList_Create(24, 24, comctl32::ILC_COLOR32, 2, 2);
+    TEST_ASSERT(himl != nullptr, "ImageList_Create must return valid HIMAGELIST");
+    int i0 = comctl32::ImageList_AddIcon(himl, reinterpret_cast<win32::HICON>(0x101));
+    int i1 = comctl32::ImageList_AddIcon(himl, reinterpret_cast<win32::HICON>(0x102));
+    TEST_ASSERT(i0 == 0 && i1 == 1, "ImageList_AddIcon must return sequential indices");
+    TEST_ASSERT(comctl32::ImageList_GetImageCount(himl) == 2, "ImageList_GetImageCount must return 2");
+
+    int icx = 0, icy = 0;
+    TEST_ASSERT(comctl32::ImageList_GetIconSize(himl, &icx, &icy) == win32::TRUE, "ImageList_GetIconSize must succeed");
+    TEST_ASSERT(icx == 24 && icy == 24, "ImageList_GetIconSize must match creation dimensions");
+
+    user32::HDC hdcTest = gdi32::CreateCompatibleDC(nullptr);
+    gdi32::HBITMAP hbmpTest = gdi32::CreateCompatibleBitmap(nullptr, 48, 48);
+    gdi32::SelectObject(hdcTest, hbmpTest);
+    TEST_ASSERT(comctl32::ImageList_Draw(himl, 0, hdcTest, 0, 0, comctl32::ILD_NORMAL) == win32::TRUE, "ImageList_Draw must succeed");
+    gdi32::DeleteObject(hbmpTest);
+    gdi32::DeleteDC(hdcTest);
+
+    TEST_ASSERT(comctl32::ImageList_Destroy(himl) == win32::TRUE, "ImageList_Destroy must destroy HIMAGELIST");
+
+    // ------------------------------------------------------------------------
+    // 8. Progress Bar Common Control (msctls_progress32)
+    // ------------------------------------------------------------------------
+    win32::HWND hProg = user32::CreateWindowExW(0, comctl32::PROGRESS_CLASSW, L"", 0, 0, 0, 200, 24, nullptr, nullptr, nullptr, nullptr);
+    TEST_ASSERT(hProg != nullptr, "CreateWindowExW must create msctls_progress32");
+    user32::SendMessageW(hProg, comctl32::PBM_SETRANGE32, 0, 100);
+    user32::SendMessageW(hProg, comctl32::PBM_SETPOS, 35, 0);
+    TEST_ASSERT(user32::SendMessageW(hProg, comctl32::PBM_GETPOS, 0, 0) == 35, "Progress bar position must be 35");
+    user32::SendMessageW(hProg, comctl32::PBM_DELTAPOS, 15, 0);
+    TEST_ASSERT(user32::SendMessageW(hProg, comctl32::PBM_GETPOS, 0, 0) == 50, "Progress bar delta position must be 50");
+    user32::SendMessageW(hProg, comctl32::PBM_SETSTEP, 10, 0);
+    user32::SendMessageW(hProg, comctl32::PBM_STEPIT, 0, 0);
+    TEST_ASSERT(user32::SendMessageW(hProg, comctl32::PBM_GETPOS, 0, 0) == 60, "Progress bar stepped position must be 60");
+    user32::SendMessageW(hProg, user32::WM_PAINT, 0, 0);
+    user32::DestroyWindow(hProg);
+
+    // ------------------------------------------------------------------------
+    // 9. Status Bar Common Control (msctls_statusbar32)
+    // ------------------------------------------------------------------------
+    win32::HWND hStatus = comctl32::CreateStatusWindowW(0, L"Ready", nullptr, 101);
+    TEST_ASSERT(hStatus != nullptr, "CreateStatusWindowW must create msctls_statusbar32");
+    int sbParts[3] = { 80, 180, -1 };
+    user32::SendMessageW(hStatus, comctl32::SB_SETPARTS, 3, reinterpret_cast<user32::LPARAM>(sbParts));
+    TEST_ASSERT(user32::SendMessageW(hStatus, comctl32::SB_GETPARTS, 0, 0) == 3, "Status bar parts count must be 3");
+    user32::SendMessageW(hStatus, comctl32::SB_SETTEXTW, 0, reinterpret_cast<user32::LPARAM>(L"Status: OK"));
+    user32::SendMessageW(hStatus, comctl32::SB_SETTEXTW, 1, reinterpret_cast<user32::LPARAM>(L"Ln 12, Col 4"));
+    wchar_t sbText[64]{};
+    user32::SendMessageW(hStatus, comctl32::SB_GETTEXTW, 0, reinterpret_cast<user32::LPARAM>(sbText));
+    TEST_ASSERT(std::wstring(sbText) == L"Status: OK", "Status bar part text must match");
+    user32::SendMessageW(hStatus, user32::WM_PAINT, 0, 0);
+    user32::DestroyWindow(hStatus);
+
+    // ------------------------------------------------------------------------
+    // 10. UpDown / Spin Common Control (msctls_updown32)
+    // ------------------------------------------------------------------------
+    win32::HWND hUpDn = comctl32::CreateUpDownControl(0, 0, 0, 20, 20, nullptr, 102, nullptr, nullptr, 100, 0, 25);
+    TEST_ASSERT(hUpDn != nullptr, "CreateUpDownControl must create msctls_updown32");
+    TEST_ASSERT(user32::SendMessageW(hUpDn, comctl32::UDM_GETPOS, 0, 0) == 25, "UpDown initial position must be 25");
+    user32::SendMessageW(hUpDn, comctl32::UDM_SETPOS, 0, 75);
+    TEST_ASSERT(user32::SendMessageW(hUpDn, comctl32::UDM_GETPOS, 0, 0) == 75, "UpDown set position must be 75");
+    user32::SendMessageW(hUpDn, comctl32::UDM_SETRANGE32, 5, 200);
+    int udMin = 0, udMax = 0;
+    user32::SendMessageW(hUpDn, comctl32::UDM_GETRANGE32, reinterpret_cast<user32::WPARAM>(&udMin), reinterpret_cast<user32::LPARAM>(&udMax));
+    TEST_ASSERT(udMin == 5 && udMax == 200, "UpDown 32-bit range must be [5..200]");
+    user32::DestroyWindow(hUpDn);
+
+    // ------------------------------------------------------------------------
+    // 11. TrackBar / Slider Common Control (msctls_trackbar32)
+    // ------------------------------------------------------------------------
+    win32::HWND hTrack = user32::CreateWindowExW(0, comctl32::TRACKBAR_CLASSW, L"", 0, 0, 0, 150, 30, nullptr, nullptr, nullptr, nullptr);
+    TEST_ASSERT(hTrack != nullptr, "CreateWindowExW must create msctls_trackbar32");
+    user32::SendMessageW(hTrack, comctl32::TBM_SETRANGE, win32::TRUE, (10 | (100 << 16)));
+    TEST_ASSERT(user32::SendMessageW(hTrack, comctl32::TBM_GETRANGEMIN, 0, 0) == 10, "TrackBar min range must be 10");
+    TEST_ASSERT(user32::SendMessageW(hTrack, comctl32::TBM_GETRANGEMAX, 0, 0) == 100, "TrackBar max range must be 100");
+    user32::SendMessageW(hTrack, comctl32::TBM_SETPOS, win32::TRUE, 55);
+    TEST_ASSERT(user32::SendMessageW(hTrack, comctl32::TBM_GETPOS, 0, 0) == 55, "TrackBar pos must be 55");
+    user32::DestroyWindow(hTrack);
+
+    // ------------------------------------------------------------------------
+    // 12. ListView Common Control (SysListView32)
+    // ------------------------------------------------------------------------
+    win32::HWND hList = user32::CreateWindowExW(0, comctl32::WC_LISTVIEWW, L"", 0, 0, 0, 300, 200, nullptr, nullptr, nullptr, nullptr);
+    TEST_ASSERT(hList != nullptr, "CreateWindowExW must create SysListView32");
+    comctl32::LVITEMW lvi{};
+    lvi.mask = comctl32::LVIF_TEXT | comctl32::LVIF_IMAGE;
+    lvi.iItem = 0;
+    lvi.pszText = const_cast<wchar_t*>(L"Documents");
+    lvi.iImage = 2;
+    int idxIns = static_cast<int>(user32::SendMessageW(hList, comctl32::LVM_INSERTITEMW, 0, reinterpret_cast<user32::LPARAM>(&lvi)));
+    TEST_ASSERT(idxIns == 0, "LVM_INSERTITEMW must insert item at index 0");
+    TEST_ASSERT(user32::SendMessageW(hList, comctl32::LVM_GETITEMCOUNT, 0, 0) == 1, "ListView count must be 1");
+
+    comctl32::LVITEMW lviOut{};
+    lviOut.mask = comctl32::LVIF_TEXT | comctl32::LVIF_IMAGE;
+    lviOut.iItem = 0;
+    wchar_t lvTxt[64]{};
+    lviOut.pszText = lvTxt;
+    lviOut.cchTextMax = 64;
+    TEST_ASSERT(user32::SendMessageW(hList, comctl32::LVM_GETITEMW, 0, reinterpret_cast<user32::LPARAM>(&lviOut)) == win32::TRUE, "LVM_GETITEMW must succeed");
+    TEST_ASSERT(std::wstring(lvTxt) == L"Documents", "ListView item text must match");
+    TEST_ASSERT(lviOut.iImage == 2, "ListView item image index must match");
+
+    user32::SendMessageW(hList, comctl32::LVM_DELETEALLITEMS, 0, 0);
+    TEST_ASSERT(user32::SendMessageW(hList, comctl32::LVM_GETITEMCOUNT, 0, 0) == 0, "ListView count must be 0 after delete all");
+    user32::DestroyWindow(hList);
+
+    // ------------------------------------------------------------------------
+    // 13. TreeView Common Control (SysTreeView32)
+    // ------------------------------------------------------------------------
+    win32::HWND hTree = user32::CreateWindowExW(0, comctl32::WC_TREEVIEWW, L"", 0, 0, 0, 300, 200, nullptr, nullptr, nullptr, nullptr);
+    TEST_ASSERT(hTree != nullptr, "CreateWindowExW must create SysTreeView32");
+    comctl32::TVINSERTSTRUCTW tvisRoot{};
+    tvisRoot.hParent = comctl32::TVI_ROOT;
+    tvisRoot.item.mask = comctl32::TVIF_TEXT;
+    tvisRoot.item.pszText = const_cast<wchar_t*>(L"Computer");
+    comctl32::HTREEITEM hRoot = reinterpret_cast<comctl32::HTREEITEM>(user32::SendMessageW(hTree, comctl32::TVM_INSERTITEMW, 0, reinterpret_cast<user32::LPARAM>(&tvisRoot)));
+    TEST_ASSERT(hRoot != nullptr, "TVM_INSERTITEMW must create root item");
+
+    comctl32::TVINSERTSTRUCTW tvisChild{};
+    tvisChild.hParent = hRoot;
+    tvisChild.item.mask = comctl32::TVIF_TEXT;
+    tvisChild.item.pszText = const_cast<wchar_t*>(L"Local Disk (C:)");
+    comctl32::HTREEITEM hChild = reinterpret_cast<comctl32::HTREEITEM>(user32::SendMessageW(hTree, comctl32::TVM_INSERTITEMW, 0, reinterpret_cast<user32::LPARAM>(&tvisChild)));
+    TEST_ASSERT(hChild != nullptr, "TVM_INSERTITEMW must create child item");
+    TEST_ASSERT(user32::SendMessageW(hTree, comctl32::TVM_GETCOUNT, 0, 0) == 2, "TreeView node count must be 2");
+
+    comctl32::TVITEMW tviOut{};
+    tviOut.mask = comctl32::TVIF_TEXT;
+    tviOut.hItem = hRoot;
+    wchar_t tvTxt[64]{};
+    tviOut.pszText = tvTxt;
+    tviOut.cchTextMax = 64;
+    TEST_ASSERT(user32::SendMessageW(hTree, comctl32::TVM_GETITEMW, 0, reinterpret_cast<user32::LPARAM>(&tviOut)) == win32::TRUE, "TVM_GETITEMW must succeed");
+    TEST_ASSERT(std::wstring(tvTxt) == L"Computer", "TreeView root item text must match");
+
+    user32::SendMessageW(hTree, comctl32::TVM_DELETEITEM, 0, reinterpret_cast<user32::LPARAM>(hChild));
+    TEST_ASSERT(user32::SendMessageW(hTree, comctl32::TVM_GETCOUNT, 0, 0) == 1, "TreeView count must be 1 after child deletion");
+    user32::DestroyWindow(hTree);
+
+    // ------------------------------------------------------------------------
+    // 14. Command Shell Integration Verification
+    // ------------------------------------------------------------------------
+    shell::CommandShell cmdShell;
+    std::ostringstream oss;
+    cmdShell.execute("shell32", oss);
+    TEST_ASSERT(oss.str().find("MicaNT Shell API") != std::string::npos, "Shell 'shell32' command must display header");
+
+    oss.str("");
+    oss.clear();
+    cmdShell.execute("comctl", oss);
+    TEST_ASSERT(oss.str().find("MicaNT Common Controls") != std::string::npos, "Shell 'comctl' command must display header");
+
+    std::cout << "[TEST] Suite 60: Shell32, Shlwapi & ComCtl32 Win32 Controls PASSED.\n";
+}
+
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -7983,6 +8302,7 @@ int main() {
     RUN_TEST(Test_PrismX_Interactive3DViewer_And_CameraPipeline);
     RUN_TEST(Test_Direct3D9_Runtime_And_FixedFunctionPipeline);
     RUN_TEST(Test_Gdi32_And_Ole32_Win32Foundation);
+    RUN_TEST(Test_Shell32_And_ComCtl32_Win32Controls);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

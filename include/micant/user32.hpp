@@ -998,6 +998,15 @@ inline win32::BOOL UpdateWindow(win32::HWND hWnd) noexcept {
     return win32::TRUE;
 }
 
+inline win32::BOOL InvalidateRect(win32::HWND hWnd, const RECT* lpRect, win32::BOOL bErase) noexcept {
+    return WindowManager::get().invalidateRect(hWnd, lpRect, bErase) ? win32::TRUE : win32::FALSE;
+}
+
+inline win32::BOOL ValidateRect(win32::HWND hWnd, const RECT* lpRect) noexcept {
+    return WindowManager::get().validateRect(hWnd, lpRect) ? win32::TRUE : win32::FALSE;
+}
+
+
 inline win32::BOOL GetClientRect(win32::HWND hWnd, RECT* lpRect) noexcept {
     return WindowManager::get().getClientRect(hWnd, lpRect) ? win32::TRUE : win32::FALSE;
 }
@@ -1230,6 +1239,8 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "IsWindowVisible", reinterpret_cast<void*>(IsWindowVisible));
     ldr.registerExport("user32.dll", "IsIconic", reinterpret_cast<void*>(IsIconic));
     ldr.registerExport("user32.dll", "UpdateWindow", reinterpret_cast<void*>(UpdateWindow));
+    ldr.registerExport("user32.dll", "InvalidateRect", reinterpret_cast<void*>(InvalidateRect));
+    ldr.registerExport("user32.dll", "ValidateRect", reinterpret_cast<void*>(ValidateRect));
     ldr.registerExport("user32.dll", "GetClientRect", reinterpret_cast<void*>(GetClientRect));
     ldr.registerExport("user32.dll", "GetWindowRect", reinterpret_cast<void*>(GetWindowRect));
     ldr.registerExport("user32.dll", "AdjustWindowRectEx", reinterpret_cast<void*>(AdjustWindowRectEx));
