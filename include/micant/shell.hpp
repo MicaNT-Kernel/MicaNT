@@ -65,6 +65,7 @@
 #include "wbem.hpp"
 #include "taskschd.hpp"
 #include "bits.hpp"
+#include "vss.hpp"
 
 namespace micant::shell {
 
@@ -207,6 +208,7 @@ public:
             if (cmd == "wmic" || cmd == "wbem") { cmdWmic(tokens, out); return 0; }
             if (cmd == "schtasks" || cmd == "taskschd") { cmdSchtasks(tokens, out); return 0; }
             if (cmd == "bitsadmin" || cmd == "bits") { cmdBitsAdmin(tokens, out); return 0; }
+            if (cmd == "vssadmin" || cmd == "vss") { cmdVssAdmin(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -463,6 +465,9 @@ private:
             << "  STG / DOCFILE     Windows OLE Structured Storage & Compound File System (ole32.dll)\n"
             << "  WEVTUTIL / EVENTLOG Windows Event Log Subsystem & Diagnostics (wevtapi.dll)\n"
             << "  WMIC / WBEM       Windows Management Instrumentation Engine (wbemprox.dll)\n"
+            << "  SCHTASKS          Windows Task Scheduler 2.0 Engine (taskschd.dll)\n"
+            << "  BITSADMIN / BITS  Background Intelligent Transfer Service Queue Manager (qmgr.dll)\n"
+            << "  VSSADMIN / VSS    Volume Shadow Copy Service Administration (vssapi.dll)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -5382,6 +5387,352 @@ private:
             << "  bitsadmin /cancel <job_name>\n"
             << "  bitsadmin /info <job_name> [/verbose]\n"
             << "  bitsadmin test\n";
+    }
+
+    void cmdVssAdmin(const std::vector<std::string>& tokens, std::ostream& out) {
+        vss::InitializeVSSSubsystemExports();
+
+        vss::IVssBackupComponents* pBackup = nullptr;
+        ole32::HRESULT hr = vss::CreateVssBackupComponents(&pBackup);
+        if (hr != ole32::S_OK || !pBackup) {
+            out << "ERROR: Failed to initialize Volume Shadow Copy Service subsystem.\n";
+            return;
+        }
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            // 1. vssadmin test
+            if (sub == "test") {
+                out << "[VSS] Executing Volume Shadow Copy Service (VSS) COM Subsystem Self-Test...\n";
+                hr = pBackup->InitializeForBackup(nullptr);
+                out << "  IVssBackupComponents::InitializeForBackup: " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                hr = pBackup->SetBackupState(true, true, vss::VSS_BT_FULL, false);
+                out << "  IVssBackupComponents::SetBackupState:      " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                GUID setId{};
+                hr = pBackup->StartSnapshotSet(&setId);
+                out << "  IVssBackupComponents::StartSnapshotSet:    " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                GUID snapId{};
+                wchar_t volPath[] = L"C:\\";
+                hr = pBackup->AddToSnapshotSet(volPath, vss::VSS_SW_PROVIDER_ID, &snapId);
+                out << "  IVssBackupComponents::AddToSnapshotSet:    " << (hr == ole32::S_OK ? "PASS" : "FAIL") << "\n";
+
+                vss::IVssAsync* pAsync = nullptr;
+                hr = pBackup->DoSnapshotSet(&pAsync);
+                bool asyncOk = (hr == ole32::S_OK && pAsync != nullptr);
+                out << "  IVssBackupComponents::DoSnapshotSet:       " << (asyncOk ? "PASS" : "FAIL") << "\n";
+
+                if (asyncOk) {
+                    ole32::HRESULT hrAsync = 0;
+                    pAsync->QueryStatus(&hrAsync, nullptr);
+                    out << "  IVssAsync::QueryStatus:                    " << (hrAsync == vss::VSS_S_ASYNC_FINISHED ? "PASS (FINISHED)" : "PASS") << "\n";
+                    pAsync->Release();
+                }
+
+                vss::VSS_SNAPSHOT_PROP prop{};
+                hr = pBackup->GetSnapshotProperties(snapId, &prop);
+                bool propOk = (hr == ole32::S_OK && prop.m_pwszSnapshotDeviceObject != nullptr);
+                out << "  IVssBackupComponents::GetSnapshotProps:    " << (propOk ? "PASS" : "FAIL") << "\n";
+                if (propOk) {
+                    std::wstring wDev(prop.m_pwszSnapshotDeviceObject);
+                    out << "    -> Created Device: " << std::string(wDev.begin(), wDev.end()) << "\n";
+                }
+                vss::VssFreeSnapshotProperties(&prop);
+
+                int32_t deleted = 0;
+                hr = pBackup->DeleteSnapshots(snapId, vss::VSS_OBJECT_SNAPSHOT, true, &deleted, nullptr);
+                out << "  IVssBackupComponents::DeleteSnapshots:     " << (hr == ole32::S_OK && deleted == 1 ? "PASS" : "FAIL") << "\n";
+
+                pBackup->Release();
+                out << "[VSS] Subsystem Self-Test Finished.\n";
+                return;
+            }
+
+            // 2. vssadmin list shadows / writers / providers / shadowstorage
+            if (sub == "list" && tokens.size() > 2) {
+                std::string target = tokens[2];
+                std::transform(target.begin(), target.end(), target.begin(), ::tolower);
+
+                // list shadows
+                if (target == "shadows" || target == "shadow") {
+                    out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
+                        << "(C) Copyright 2001-2013 Microsoft Corp.\n\n";
+
+                    std::wstring volFilter;
+                    for (size_t i = 3; i < tokens.size(); ++i) {
+                        std::string a = tokens[i];
+                        if (a.rfind("/for=", 0) == 0 || a.rfind("-for=", 0) == 0) {
+                            std::string vf = a.substr(5);
+                            volFilter = std::wstring(vf.begin(), vf.end());
+                            if (volFilter.back() != L'\\') volFilter.push_back(L'\\');
+                        }
+                    }
+
+                    auto snaps = vss::VssCoordinator::Instance().GetAllSnapshots(volFilter);
+                    if (snaps.empty()) {
+                        out << "No items found that satisfy the query.\n\n";
+                    } else {
+                        for (const auto& s : snaps) {
+                            wchar_t wSet[64]{}, wSnap[64]{};
+                            swprintf_s(wSet, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                                s.SnapshotSetId.Data1, s.SnapshotSetId.Data2, s.SnapshotSetId.Data3,
+                                s.SnapshotSetId.Data4[0], s.SnapshotSetId.Data4[1], s.SnapshotSetId.Data4[2], s.SnapshotSetId.Data4[3],
+                                s.SnapshotSetId.Data4[4], s.SnapshotSetId.Data4[5], s.SnapshotSetId.Data4[6], s.SnapshotSetId.Data4[7]);
+                            swprintf_s(wSnap, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                                s.SnapshotId.Data1, s.SnapshotId.Data2, s.SnapshotId.Data3,
+                                s.SnapshotId.Data4[0], s.SnapshotId.Data4[1], s.SnapshotId.Data4[2], s.SnapshotId.Data4[3],
+                                s.SnapshotId.Data4[4], s.SnapshotId.Data4[5], s.SnapshotId.Data4[6], s.SnapshotId.Data4[7]);
+
+                            std::wstring wsSet(wSet), wsSnap(wSnap);
+                            std::string sVol(s.VolumeName.begin(), s.VolumeName.end());
+                            std::string sDev(s.DeviceObject.begin(), s.DeviceObject.end());
+                            std::string sOrig(s.OriginatingMachine.begin(), s.OriginatingMachine.end());
+                            std::string sServ(s.ServiceMachine.begin(), s.ServiceMachine.end());
+
+                            out << "Contents of shadow copy set ID: " << std::string(wsSet.begin(), wsSet.end()) << "\n"
+                                << "   Contained 1 shadow copies at creation time: 10/1/2026 12:00:00 PM\n"
+                                << "      Shadow Copy ID: " << std::string(wsSnap.begin(), wsSnap.end()) << "\n"
+                                << "         Original Volume: " << sVol << "\n"
+                                << "         Shadow Copy Volume: " << sDev << "\n"
+                                << "         Originating Machine: " << sOrig << "\n"
+                                << "         Service Machine: " << sServ << "\n"
+                                << "         Provider: 'Microsoft Software Shadow Copy provider 1.0'\n"
+                                << "         Type: ClientAccessible, Differential\n"
+                                << "         Attributes: Persistent, NoAutoRelease, Differential\n\n";
+                        }
+                    }
+                    pBackup->Release();
+                    return;
+                }
+
+                // list writers
+                if (target == "writers" || target == "writer") {
+                    out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
+                        << "(C) Copyright 2001-2013 Microsoft Corp.\n\n";
+
+                    auto writers = vss::VssCoordinator::Instance().GetWriters();
+                    for (const auto& w : writers) {
+                        wchar_t wWid[64]{}, wIid[64]{};
+                        swprintf_s(wWid, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                            w.WriterId.Data1, w.WriterId.Data2, w.WriterId.Data3,
+                            w.WriterId.Data4[0], w.WriterId.Data4[1], w.WriterId.Data4[2], w.WriterId.Data4[3],
+                            w.WriterId.Data4[4], w.WriterId.Data4[5], w.WriterId.Data4[6], w.WriterId.Data4[7]);
+                        swprintf_s(wIid, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                            w.InstanceId.Data1, w.InstanceId.Data2, w.InstanceId.Data3,
+                            w.InstanceId.Data4[0], w.InstanceId.Data4[1], w.InstanceId.Data4[2], w.InstanceId.Data4[3],
+                            w.InstanceId.Data4[4], w.InstanceId.Data4[5], w.InstanceId.Data4[6], w.InstanceId.Data4[7]);
+
+                        std::wstring wsWid(wWid), wsIid(wIid);
+                        std::string sName(w.WriterName.begin(), w.WriterName.end());
+
+                        out << "Writer name: '" << sName << "'\n"
+                            << "   Writer Id: " << std::string(wsWid.begin(), wsWid.end()) << "\n"
+                            << "   Writer Instance Id: " << std::string(wsIid.begin(), wsIid.end()) << "\n"
+                            << "   State: [1] Stable\n"
+                            << "   Last error: No error\n\n";
+                    }
+                    pBackup->Release();
+                    return;
+                }
+
+                // list providers
+                if (target == "providers" || target == "provider") {
+                    out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
+                        << "(C) Copyright 2001-2013 Microsoft Corp.\n\n";
+
+                    auto provs = vss::VssCoordinator::Instance().GetProviders();
+                    for (const auto& p : provs) {
+                        wchar_t wPid[64]{};
+                        swprintf_s(wPid, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                            p.m_ProviderId.Data1, p.m_ProviderId.Data2, p.m_ProviderId.Data3,
+                            p.m_ProviderId.Data4[0], p.m_ProviderId.Data4[1], p.m_ProviderId.Data4[2], p.m_ProviderId.Data4[3],
+                            p.m_ProviderId.Data4[4], p.m_ProviderId.Data4[5], p.m_ProviderId.Data4[6], p.m_ProviderId.Data4[7]);
+
+                        std::wstring wsPid(wPid);
+                        std::wstring wName(p.m_pwszProviderName ? p.m_pwszProviderName : L"");
+                        std::wstring wVer(p.m_pwszProviderVersion ? p.m_pwszProviderVersion : L"");
+
+                        out << "Provider name: '" << std::string(wName.begin(), wName.end()) << "'\n"
+                            << "   Provider type: System\n"
+                            << "   Provider Id: " << std::string(wsPid.begin(), wsPid.end()) << "\n"
+                            << "   Version: " << std::string(wVer.begin(), wVer.end()) << "\n\n";
+                    }
+                    pBackup->Release();
+                    return;
+                }
+
+                // list shadowstorage
+                if (target == "shadowstorage" || target == "storage") {
+                    out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
+                        << "(C) Copyright 2001-2013 Microsoft Corp.\n\n";
+
+                    auto diffs = vss::VssCoordinator::Instance().GetDiffAreas();
+                    for (const auto& d : diffs) {
+                        std::string sVol(d.VolumeName.begin(), d.VolumeName.end());
+                        std::string sDiff(d.DiffVolumeName.begin(), d.DiffVolumeName.end());
+
+                        uint64_t usedMb = d.UsedDiffSpace / (1024 * 1024);
+                        uint64_t allocMb = d.AllocatedDiffSpace / (1024 * 1024);
+                        double maxGb = static_cast<double>(d.MaximumDiffSpace) / (1024.0 * 1024.0 * 1024.0);
+
+                        out << "Shadow Copy Storage association\n"
+                            << "   For volume: " << sVol << "\n"
+                            << "   Shadow Copy Storage volume: " << sDiff << "\n"
+                            << "   Used Shadow Copy Storage space: " << usedMb << " MB\n"
+                            << "   Allocated Shadow Copy Storage space: " << allocMb << " MB\n"
+                            << "   Maximum Shadow Copy Storage space: " << std::fixed << std::setprecision(2) << maxGb << " GB\n\n";
+                    }
+                    pBackup->Release();
+                    return;
+                }
+            }
+
+            // 3. vssadmin create shadow /for=<volume>
+            if (sub == "create" && tokens.size() > 2) {
+                std::string target = tokens[2];
+                std::transform(target.begin(), target.end(), target.begin(), ::tolower);
+                if (target == "shadow") {
+                    std::string vol = "C:\\";
+                    for (size_t i = 3; i < tokens.size(); ++i) {
+                        std::string a = tokens[i];
+                        if (a.rfind("/for=", 0) == 0 || a.rfind("-for=", 0) == 0) {
+                            vol = a.substr(5);
+                        }
+                    }
+                    std::wstring wVol(vol.begin(), vol.end());
+                    if (wVol.back() != L'\\') wVol.push_back(L'\\');
+
+                    GUID setId{}, snapId{};
+                    pBackup->InitializeForBackup(nullptr);
+                    pBackup->StartSnapshotSet(&setId);
+                    hr = pBackup->AddToSnapshotSet(const_cast<wchar_t*>(wVol.c_str()), vss::VSS_SW_PROVIDER_ID, &snapId);
+                    if (hr == ole32::S_OK) {
+                        vss::IVssAsync* pAsync = nullptr;
+                        pBackup->DoSnapshotSet(&pAsync);
+                        if (pAsync) pAsync->Release();
+
+                        vss::SnapshotRecord rec{};
+                        vss::VssCoordinator::Instance().GetSnapshot(snapId, rec);
+
+                        wchar_t wSnap[64]{}, wSet[64]{};
+                        swprintf_s(wSnap, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                            snapId.Data1, snapId.Data2, snapId.Data3,
+                            snapId.Data4[0], snapId.Data4[1], snapId.Data4[2], snapId.Data4[3],
+                            snapId.Data4[4], snapId.Data4[5], snapId.Data4[6], snapId.Data4[7]);
+                        swprintf_s(wSet, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                            setId.Data1, setId.Data2, setId.Data3,
+                            setId.Data4[0], setId.Data4[1], setId.Data4[2], setId.Data4[3],
+                            setId.Data4[4], setId.Data4[5], setId.Data4[6], setId.Data4[7]);
+
+                        std::wstring wsSnap(wSnap), wsSet(wSet);
+                        std::string sDev(rec.DeviceObject.begin(), rec.DeviceObject.end());
+
+                        out << "\nvssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\n"
+                            << "(C) Copyright 2001-2013 Microsoft Corp.\n\n"
+                            << "Successfully created shadow copy for '" << vol << "'\n"
+                            << "   Shadow Copy ID: " << std::string(wsSnap.begin(), wsSnap.end()) << "\n"
+                            << "   Shadow Copy Volume Name: " << sDev << "\n\n";
+                    } else {
+                        out << "ERROR: Failed to create shadow copy. HRESULT: 0x" << std::hex << hr << std::dec << "\n";
+                    }
+                    pBackup->Release();
+                    return;
+                }
+            }
+
+            // 4. vssadmin delete shadows [/for=<volume>] [/oldest | /all | /shadow=<guid>]
+            if (sub == "delete" && tokens.size() > 2) {
+                std::string target = tokens[2];
+                std::transform(target.begin(), target.end(), target.begin(), ::tolower);
+                if (target == "shadows" || target == "shadow") {
+                    std::string shadowGuidStr;
+                    bool deleteAll = false;
+                    for (size_t i = 3; i < tokens.size(); ++i) {
+                        std::string a = tokens[i];
+                        if (a == "/all" || a == "-all") deleteAll = true;
+                        if (a.rfind("/shadow=", 0) == 0 || a.rfind("-shadow=", 0) == 0) {
+                            shadowGuidStr = a.substr(8);
+                        }
+                    }
+
+                    if (!shadowGuidStr.empty()) {
+                        GUID sId{};
+                        std::wstring ws(shadowGuidStr.begin(), shadowGuidStr.end());
+                        if (ole32::IIDFromString(ws.c_str(), &sId) == ole32::S_OK) {
+                            int32_t del = 0;
+                            hr = pBackup->DeleteSnapshots(sId, vss::VSS_OBJECT_SNAPSHOT, true, &del, nullptr);
+                            if (hr == ole32::S_OK && del > 0) {
+                                out << "Successfully deleted 1 shadow copy.\n";
+                            } else {
+                                out << "ERROR: Shadow copy not found or could not be deleted.\n";
+                            }
+                        } else {
+                            out << "ERROR: Invalid shadow copy GUID.\n";
+                        }
+                    } else if (deleteAll) {
+                        auto snaps = vss::VssCoordinator::Instance().GetAllSnapshots();
+                        int32_t totalDel = 0;
+                        for (const auto& s : snaps) {
+                            int32_t d = 0;
+                            pBackup->DeleteSnapshots(s.SnapshotId, vss::VSS_OBJECT_SNAPSHOT, true, &d, nullptr);
+                            totalDel += d;
+                        }
+                        out << "Successfully deleted " << totalDel << " shadow copies.\n";
+                    } else {
+                        out << "ERROR: Specify /shadow=<guid> or /all to delete shadow copies.\n";
+                    }
+                    pBackup->Release();
+                    return;
+                }
+            }
+
+            // 5. vssadmin resize shadowstorage /for=<volume> /on=<volume> /maxsize=<size>
+            if (sub == "resize" && tokens.size() > 2) {
+                std::string target = tokens[2];
+                std::transform(target.begin(), target.end(), target.begin(), ::tolower);
+                if (target == "shadowstorage") {
+                    std::string vol = "C:\\";
+                    uint64_t maxBytes = 15ULL * 1024 * 1024 * 1024; // 15 GB default resize
+                    for (size_t i = 3; i < tokens.size(); ++i) {
+                        std::string a = tokens[i];
+                        if (a.rfind("/for=", 0) == 0 || a.rfind("-for=", 0) == 0) {
+                            vol = a.substr(5);
+                        }
+                    }
+                    std::wstring wVol(vol.begin(), vol.end());
+                    if (wVol.back() != L'\\') wVol.push_back(L'\\');
+
+                    if (vss::VssCoordinator::Instance().ResizeDiffArea(wVol, maxBytes)) {
+                        out << "Successfully resized the shadow copy storage association.\n";
+                    } else {
+                        out << "ERROR: Shadow copy storage association not found for volume: " << vol << "\n";
+                    }
+                    pBackup->Release();
+                    return;
+                }
+            }
+        }
+
+        pBackup->Release();
+        out << "========================================================================\n"
+            << "     MicaNT Volume Shadow Copy Service Administration (vssadmin)        \n"
+            << "========================================================================\n\n"
+            << "Subsystem Library:    vssapi.dll & vss_ps.dll\n"
+            << "COM Activation:       CreateVssBackupComponents / CLSID_VssCoordinator\n"
+            << "Provider:             Microsoft Software Shadow Copy provider 1.0\n\n"
+            << "Usage:\n"
+            << "  vssadmin list shadows [/for=<volume>]\n"
+            << "  vssadmin list writers\n"
+            << "  vssadmin list providers\n"
+            << "  vssadmin list shadowstorage [/for=<volume>]\n"
+            << "  vssadmin create shadow /for=<volume>\n"
+            << "  vssadmin delete shadows [/shadow=<guid> | /all] [/quiet]\n"
+            << "  vssadmin resize shadowstorage /for=<volume> /on=<volume> /maxsize=<size>\n"
+            << "  vssadmin test\n";
     }
 
     static std::string trim(std::string_view s) {

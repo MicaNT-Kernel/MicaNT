@@ -96,6 +96,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 33. **Windows Management Instrumentation (WMI / WBEM) Subsystem (`wbem.hpp`, `wbemprox.dll`, `fastprox.dll`, `wbemcomn.dll`, `wmic.exe`)**: Complete clean-room WMI/WBEM architecture authored from `win32metadata`. Implements COM interfaces `IWbemLocator`, `IWbemServices`, `IEnumWbemClassObject`, and `IWbemClassObject`. Features WQL (WMI Query Language) parser (`SELECT ... FROM ... WHERE ...`), dynamic CIM repository supporting `root\cimv2` and `root\default`, pre-seeded CIM classes (`Win32_OperatingSystem`, `Win32_Processor`, `Win32_LogicalDisk`, `Win32_Process`, `Win32_Service`, `Win32_ComputerSystem`), CIM property variants, method execution (`ExecMethod`), and full `wmic` command utility. Interactive shell command (`wmic`).
 34. **Windows Task Scheduler 2.0 Subsystem (`taskschd.hpp`, `taskschd.dll`, `mstask.dll`, `schtasks.exe`)**: Complete clean-room implementation of Task Scheduler 2.0 COM object hierarchy (`ITaskService`, `ITaskFolder`, `ITaskFolderCollection`, `ITaskDefinition`, `ITriggerCollection`, `ITrigger`, `ITimeTrigger`, `IDailyTrigger`, `IBootTrigger`, `ILogonTrigger`, `IActionCollection`, `IAction`, `IExecAction`, `IRegisteredTask`, `IRegisteredTaskCollection`, `IRunningTask`, `IRunningTaskCollection`). Features full XML task definition import/export conforming to standard Windows schema, pre-seeded system tasks, background execution dispatch, and complete `schtasks.exe` command-line utility. Interactive shell command (`schtasks`).
 35. **Windows Background Intelligent Transfer Service (BITS) Subsystem (`bits.hpp`, `qmgr.dll`, `bitsprx.dll`, `bitsadmin.exe`)**: Complete clean-room implementation of BITS 2.5/3.0 asynchronous queue manager authored from `win32metadata`. Implements COM interfaces `IBackgroundCopyManager`, `IBackgroundCopyJob`, `IBackgroundCopyJob2`, `IBackgroundCopyFile`, `IBackgroundCopyError`, `IEnumBackgroundCopyJobs`, and `IEnumBackgroundCopyFiles`. Features full priority queue scheduling (`FOREGROUND`, `HIGH`, `NORMAL`, `LOW`), 7-stage state machine (`SUSPENDED` -> `QUEUED` -> `CONNECTING` -> `TRANSFERRING` -> `TRANSFERRED` -> `ACKNOWLEDGED`), multi-file downloads, asynchronous HTTP/HTTPS transfer simulation with `wininet.hpp`, pre-seeded update jobs, and complete `bitsadmin.exe` administration utility. Interactive shell command (`bitsadmin`).
+36. **Windows Volume Shadow Copy Service (VSS) Subsystem (`vss.hpp`, `vssapi.dll`, `vss_ps.dll`, `vssadmin.exe`)**: Complete clean-room implementation of Volume Shadow Copy Service coordinator and client architecture authored from `win32metadata`. Implements COM interfaces `IVssBackupComponents`, `IVssAsync`, `IVssEnumObject`, `IVssWMFiledesc`, and `IVssComponent`. Features copy-on-write volume snapshot set lifecycle (`StartSnapshotSet` -> `AddToSnapshotSet` -> `DoSnapshotSet` -> `DeleteSnapshots`), differential shadow storage allocation and live resizing, pre-seeded system writers (`System Writer`, `Registry Writer`, `WMI Writer`, `Shadow Copy Optimization Writer`) and default software provider (`Microsoft Software Shadow Copy provider 1.0`), and complete `vssadmin.exe` administration command-line utility. Interactive shell command (`vssadmin`).
 
 ---
 
@@ -221,12 +222,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (75 Suites, 100% Passing)
+### Build & Run Unit Test Suite (76 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 75 Test Suites:
+# Run all 76 Test Suites:
 .\bin\micant_tests.exe
 ```
 

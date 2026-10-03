@@ -104,7 +104,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 48: Windows Background Intelligent Transfer (BITS)   [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 49: Windows Volume Shadow Copy Service (VSS)         [IN PROGRESS]    │
+│ Phase 49: Windows Volume Shadow Copy Service (VSS)         [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 50: Windows Error Reporting (WER) Subsystem          [IN PROGRESS]    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1099,21 +1101,54 @@
 
 ---
 
-### Phase 49: Windows Volume Shadow Copy Service (VSS) Subsystem (`vssapi.dll`, `vss_ps.dll` & `vssadmin.exe`) (IN PROGRESS)
-- [ ] **VSS COM Interfaces & Architecture (`include/micant/vss.hpp`)**:
-  - `IVssBackupComponents`, `IVssAsync`, `IVssWriterCallback`, `IVssEnumObject`, `IVssWMFiledesc`, `IVssComponent`.
-  - `VSS_OBJECT_PROP`, `VSS_SNAPSHOT_PROP`, `VSS_VOLUME_PROP`, `VSS_WRITER_PROP`.
-- [ ] **Volume Snapshot Lifecycle & Copy-on-Write Provider**:
-  - Snapshot state machine: `VSS_SS_PREPARING`, `VSS_SS_PROCESSING_PREPARE`, `VSS_SS_PREPARED`, `VSS_SS_PROCESSING_PRECOMMIT`, `VSS_SS_PRECOMMITTED`, `VSS_SS_PROCESSING_COMMIT`, `VSS_SS_COMMITTED`.
-  - Differencing storage area (`VSS_DIFF_VOLUME_PROP`), differential copy-on-write mapping on VFS/FAT32/NTFS volumes.
-- [ ] **VSS System Writers**:
-  - System Writer, Registry Writer, WMI Writer, Shadow Copy Optimization Writer.
-- [ ] **Dynamic Loader & COM Registration**:
-  - Dynamic DLL export registration for `vssapi.dll` and `vss_ps.dll` (`CreateVssBackupComponents`, `VssFreeSnapshotProperties`, `DllGetClassObject`).
-- [ ] **Interactive CLI Utility (`vssadmin.exe`)**:
-  - `vssadmin list shadows`, `vssadmin list writers`, `vssadmin list providers`, `vssadmin list shadowstorage`, `vssadmin create shadow /for=C:`, `vssadmin delete shadows`.
-- [ ] **Unit Test Suite 76 (`Test_WindowsVSS_VolumeShadowCopy_Subsystem`)**:
-  - End-to-end testing of VSS COM activation, snapshot creation, writer coordination, differential storage, and `vssadmin` CLI parity.
+### Phase 49: Windows Volume Shadow Copy Service (VSS) Subsystem (`vssapi.dll`, `vss_ps.dll` & `vssadmin.exe`) (100% Completed)
+- [x] **VSS COM Interfaces & Architecture (`include/micant/vss.hpp`)**:
+  - `IVssBackupComponents` (`CreateVssBackupComponents`, `CLSID_VssCoordinator` `{507c37b9-1116-4518-9c30-e9da7c4156e5}`, `IID_IVssBackupComponents` `{665c1d5f-c218-414d-a05d-7fef5f9d5c86}`): Complete client backup components interface supporting `InitializeForBackup`, `SetBackupState`, `GatherWriterMetadata`, `GetWriterMetadataCount`, `FreeWriterMetadata`, `GatherWriterStatus`, `GetWriterStatusCount`, `GetWriterStatus`, `StartSnapshotSet`, `AddToSnapshotSet`, `DoSnapshotSet`, `GetSnapshotProperties`, `Query`, and `DeleteSnapshots`.
+  - `IVssAsync`: Asynchronous task completion handle supporting `Wait`, `QueryStatus`, and `Cancel`.
+  - `IVssEnumObject`: Forward COM enumerator for snapshot and provider object properties (`Next`, `Skip`, `Reset`, `Clone`).
+  - `IVssWMFiledesc` & `IVssComponent`: File descriptors and backup component specification.
+  - Structs: `VSS_SNAPSHOT_PROP`, `VSS_PROVIDER_PROP`, `VSS_OBJECT_PROP`, `VSS_DIFF_AREA_PROP`, `VSS_WRITER_INFO`.
+- [x] **Volume Snapshot Lifecycle & Copy-on-Write Provider**:
+  - Snapshot state machine: `VSS_SS_PREPARING` -> `VSS_SS_PREPARED` -> `VSS_SS_COMMITTED`.
+  - Differencing storage area (`VSS_DIFF_AREA_PROP`) with volume associations, allocated diff space, and live maximum capacity resizing (`ResizeDiffArea`).
+  - Pre-seeded system restore point snapshot on `C:\` (`{38a12345-6789-4abc-def0-1234567890ab}`) with device `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1`.
+- [x] **VSS System Writers & Software Provider**:
+  - 4 core pre-seeded system writers: `System Writer` (`{e81062d3-1809-446b-8016-e736095921e0}`), `Registry Writer` (`{afbab4a2-367d-4d15-a586-71dbb18f8485}`), `WMI Writer` (`{a6ad56c2-b509-4e6c-bb19-49d8f43532f0}`), `Shadow Copy Optimization Writer` (`{4dc3e18e-5da5-430c-ac53-2ee219c08833}`).
+  - Pre-seeded default provider: `Microsoft Software Shadow Copy provider 1.0` (`{b5946137-7b9f-4925-af80-51abd60b20d5}`, Version `1.0.0.7`).
+- [x] **Dynamic Loader & COM Registration**:
+  - Export registration for `vssapi.dll` and `vss_ps.dll` (`CreateVssBackupComponents`, `VssFreeSnapshotProperties`, `DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`, `DllUnregisterServer`).
+  - Class factory registered in COM runtime via `ole32::CoRegisterClassObject`.
+  - Module version metadata registered in `version.hpp` (`10.0.22621.1`).
+- [x] **Interactive CLI Utility (`include/micant/shell.hpp` - `vssadmin`)**:
+  - `vssadmin list shadows [/for=<volume>]`: Lists volume shadow copies with set IDs, creation times, and device paths.
+  - `vssadmin list writers`: Lists registered writers with writer ID, instance ID, state, and error condition.
+  - `vssadmin list providers`: Lists registered shadow copy providers.
+  - `vssadmin list shadowstorage [/for=<volume>]`: Lists storage associations, used, allocated, and maximum diff space.
+  - `vssadmin create shadow /for=<volume>`: Creates a new point-in-time volume shadow copy.
+  - `vssadmin delete shadows [/shadow=<guid> | /all] [/quiet]`: Deletes specified or all shadow copies.
+  - `vssadmin resize shadowstorage /for=<volume> /on=<volume> /maxsize=<size>`: Adjusts maximum diff storage quota.
+  - `vssadmin test`: Subsystem self-test.
+- [x] **Unit Test Suite 76 (`Test_WindowsVSS_VolumeShadowCopy_Subsystem`)**:
+  - 12 comprehensive verification stages covering dynamic exports, version database, COM activation, backup initialization, writer metadata/status queries, provider/storage queries, snapshot set creation, snapshot properties, object enumeration, snapshot deletion, storage resizing, and shell CLI integration.
+  - All 76 unit test suites passing with 100% success rate (76 Passed, 0 Failed).
+
+---
+
+### Phase 50: Windows Error Reporting (WER) & Crash Diagnostics Subsystem (`wer.dll`, `faultrep.dll` & `werfault.exe`) (IN PROGRESS)
+- [ ] **WER APIs & Architecture (`include/micant/wer.hpp`)**:
+  - `WerReportCreate`, `WerReportSetParameter`, `WerReportAddFile`, `WerReportAddDump`, `WerReportSubmit`, `WerReportCloseHandle`.
+  - `WerRegisterFile`, `WerUnregisterFile`, `WerRegisterMemoryBlock`, `WerUnregisterMemoryBlock`, `WerRegisterRuntimeExceptionModule`.
+  - `ReportFault` in `faultrep.dll` legacy crash reporter.
+- [ ] **Dump Collection & PolarisDiag Integration**:
+  - Integration with `polarisdiag.hpp` minidump generator (`MiniDumpWithDataSegs`, `MiniDumpWithHandleData`).
+  - Report manifest generation (`Report.wer` XML / key-value format), crash bucket IDs (`APPCRASH`, `KERNEL_SECURITY_CHECK_FAILURE`).
+- [ ] **Dynamic Loader & Versioning**:
+  - DLL exports for `wer.dll` and `faultrep.dll`.
+  - Module version metadata registered in `version.hpp`.
+- [ ] **Interactive CLI (`werfault.exe`)**:
+  - `werfault /report <path>`, `werfault /list`, `werfault /clear`, `werfault test`.
+- [ ] **Unit Test Suite 77 (`Test_WindowsWER_ErrorReporting_Subsystem`)**:
+  - End-to-end testing of report creation, dump attachment, submission, exclusion lists, and CLI parity.
 
 
 

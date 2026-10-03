@@ -97,6 +97,7 @@
 #include "micant/wbem.hpp"
 #include "micant/taskschd.hpp"
 #include "micant/bits.hpp"
+#include "micant/vss.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -14313,6 +14314,233 @@ void Test_WindowsBITS_Subsystem() {
     std::cout << "[TEST] Suite 75: Windows Background Intelligent Transfer Service (BITS) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Test Suite 76: Windows Volume Shadow Copy Service (VSS) Subsystem (vssapi.dll)
+// ============================================================================
+
+void Test_WindowsVSS_VolumeShadowCopy_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 76: Windows Volume Shadow Copy Service (VSS) Subsystem (vssapi.dll)...\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader & Library Export Registration (vssapi.dll, vss_ps.dll)
+    // ------------------------------------------------------------------------
+    vss::InitializeVSSSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    void* pfnCreate = ldr.getExport("vssapi.dll", "CreateVssBackupComponents");
+    TEST_ASSERT(pfnCreate != nullptr, "vssapi.dll must export CreateVssBackupComponents");
+
+    void* pfnFree = ldr.getExport("vssapi.dll", "VssFreeSnapshotProperties");
+    TEST_ASSERT(pfnFree != nullptr, "vssapi.dll must export VssFreeSnapshotProperties");
+
+    void* pfnDllGet = ldr.getExport("vssapi.dll", "DllGetClassObject");
+    TEST_ASSERT(pfnDllGet != nullptr, "vssapi.dll must export DllGetClassObject");
+
+    void* pfnPsGet = ldr.getExport("vss_ps.dll", "DllGetClassObject");
+    TEST_ASSERT(pfnPsGet != nullptr, "vss_ps.dll must export DllGetClassObject");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Metadata Validation
+    // ------------------------------------------------------------------------
+    auto* vssVer = version::VersionDatabase::Instance().FindModule("vssapi.dll");
+    TEST_ASSERT(vssVer != nullptr, "vssapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vssVer->stringTable.at("FileVersion") == "10.0.22621.1", "vssapi.dll FileVersion must match 10.0.22621.1");
+
+    auto* vssPsVer = version::VersionDatabase::Instance().FindModule("vss_ps.dll");
+    TEST_ASSERT(vssPsVer != nullptr, "vss_ps.dll must be registered in VersionDatabase");
+
+    // ------------------------------------------------------------------------
+    // Stage 3: COM Activation & Interface Initialization
+    // ------------------------------------------------------------------------
+    vss::IVssBackupComponents* pBackup = nullptr;
+    ole32::HRESULT hr = vss::CreateVssBackupComponents(&pBackup);
+    TEST_ASSERT(hr == ole32::S_OK && pBackup != nullptr, "CreateVssBackupComponents must succeed");
+
+    // Verify QueryInterface for IUnknown and IVssBackupComponents
+    ole32::IUnknown* pUnk = nullptr;
+    hr = pBackup->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+    TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "QueryInterface for IUnknown must succeed");
+    pUnk->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Backup State & Initialization Lifecycle
+    // ------------------------------------------------------------------------
+    hr = pBackup->InitializeForBackup(nullptr);
+    TEST_ASSERT(hr == ole32::S_OK, "InitializeForBackup must succeed");
+
+    hr = pBackup->SetBackupState(true, true, vss::VSS_BT_FULL, false);
+    TEST_ASSERT(hr == ole32::S_OK, "SetBackupState must succeed");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Writer Metadata & Status Coordination
+    // ------------------------------------------------------------------------
+    vss::IVssAsync* pAsyncMeta = nullptr;
+    hr = pBackup->GatherWriterMetadata(&pAsyncMeta);
+    TEST_ASSERT(hr == ole32::S_OK && pAsyncMeta != nullptr, "GatherWriterMetadata must succeed");
+    ole32::HRESULT hrMeta = 0;
+    pAsyncMeta->QueryStatus(&hrMeta, nullptr);
+    TEST_ASSERT(hrMeta == vss::VSS_S_ASYNC_FINISHED, "GatherWriterMetadata async must be finished");
+    pAsyncMeta->Release();
+
+    uint32_t writerCount = 0;
+    hr = pBackup->GetWriterMetadataCount(&writerCount);
+    TEST_ASSERT(hr == ole32::S_OK && writerCount >= 4, "Writer metadata count must be at least 4");
+
+    vss::IVssAsync* pAsyncStatus = nullptr;
+    hr = pBackup->GatherWriterStatus(&pAsyncStatus);
+    TEST_ASSERT(hr == ole32::S_OK && pAsyncStatus != nullptr, "GatherWriterStatus must succeed");
+    pAsyncStatus->Release();
+
+    uint32_t statusCount = 0;
+    hr = pBackup->GetWriterStatusCount(&statusCount);
+    TEST_ASSERT(hr == ole32::S_OK && statusCount >= 4, "Writer status count must match metadata count");
+
+    GUID instId{}, wrId{};
+    wchar_t* bstrName = nullptr;
+    vss::VSS_WRITER_STATE wState{};
+    ole32::HRESULT failReason = 0;
+    hr = pBackup->GetWriterStatus(0, &instId, &wrId, &bstrName, &wState, &failReason);
+    TEST_ASSERT(hr == ole32::S_OK && bstrName != nullptr, "GetWriterStatus for writer 0 must succeed");
+    TEST_ASSERT(wState == vss::VSS_WS_STABLE, "Pre-seeded writer state must be VSS_WS_STABLE");
+    std::wstring wNameStr(bstrName);
+    TEST_ASSERT(wNameStr == L"System Writer", "First writer must be 'System Writer'");
+    ole32::CoTaskMemFree(bstrName);
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Pre-Seeded Providers & Shadow Storage Verification
+    // ------------------------------------------------------------------------
+    auto provs = vss::VssCoordinator::Instance().GetProviders();
+    TEST_ASSERT(!provs.empty(), "Pre-seeded VSS providers must exist");
+    TEST_ASSERT(provs[0].m_eProviderType == vss::VSS_PROV_SYSTEM, "First provider must be System provider");
+    std::wstring pName(provs[0].m_pwszProviderName ? provs[0].m_pwszProviderName : L"");
+    TEST_ASSERT(pName.find(L"Microsoft Software Shadow Copy provider") != std::wstring::npos, "Provider name must match Microsoft Software Shadow Copy provider");
+
+    auto diffs = vss::VssCoordinator::Instance().GetDiffAreas();
+    TEST_ASSERT(!diffs.empty(), "Pre-seeded shadow storage diff areas must exist");
+    TEST_ASSERT(diffs[0].VolumeName == L"C:\\", "Volume must be C:\\");
+    TEST_ASSERT(diffs[0].MaximumDiffSpace >= 10ULL * 1024 * 1024 * 1024, "Maximum diff space must be >= 10GB");
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Snapshot Set Creation Lifecycle
+    // ------------------------------------------------------------------------
+    GUID setId{};
+    hr = pBackup->StartSnapshotSet(&setId);
+    TEST_ASSERT(hr == ole32::S_OK, "StartSnapshotSet must return S_OK");
+    TEST_ASSERT(memcmp(&setId, &ole32::GUID_NULL, sizeof(GUID)) != 0, "Snapshot set ID must not be GUID_NULL");
+
+    GUID snapId{};
+    wchar_t volPath[] = L"C:\\";
+    hr = pBackup->AddToSnapshotSet(volPath, vss::VSS_SW_PROVIDER_ID, &snapId);
+    TEST_ASSERT(hr == ole32::S_OK, "AddToSnapshotSet must succeed");
+
+    vss::IVssAsync* pAsyncSnap = nullptr;
+    hr = pBackup->DoSnapshotSet(&pAsyncSnap);
+    TEST_ASSERT(hr == ole32::S_OK && pAsyncSnap != nullptr, "DoSnapshotSet must return S_OK and valid async object");
+
+    ole32::HRESULT snapStatus = 0;
+    pAsyncSnap->QueryStatus(&snapStatus, nullptr);
+    TEST_ASSERT(snapStatus == vss::VSS_S_ASYNC_FINISHED, "DoSnapshotSet async must complete with VSS_S_ASYNC_FINISHED");
+    pAsyncSnap->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Snapshot Properties Retrieval & Verification
+    // ------------------------------------------------------------------------
+    vss::VSS_SNAPSHOT_PROP snapProp{};
+    hr = pBackup->GetSnapshotProperties(snapId, &snapProp);
+    TEST_ASSERT(hr == ole32::S_OK, "GetSnapshotProperties must succeed");
+    TEST_ASSERT(memcmp(&snapProp.m_SnapshotId, &snapId, sizeof(GUID)) == 0, "Snapshot ID in properties must match");
+    TEST_ASSERT(memcmp(&snapProp.m_SnapshotSetId, &setId, sizeof(GUID)) == 0, "Snapshot Set ID in properties must match");
+    TEST_ASSERT(snapProp.m_eStatus == vss::VSS_SS_COMMITTED, "Snapshot state must be VSS_SS_COMMITTED");
+    TEST_ASSERT(snapProp.m_pwszSnapshotDeviceObject != nullptr, "Device object name must be valid");
+    std::wstring devName(snapProp.m_pwszSnapshotDeviceObject);
+    TEST_ASSERT(devName.find(L"\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy") != std::wstring::npos, "Device object name must match HarddiskVolumeShadowCopy device prefix");
+    vss::VssFreeSnapshotProperties(&snapProp);
+
+    // ------------------------------------------------------------------------
+    // Stage 9: COM Object Enumeration (IVssEnumObject)
+    // ------------------------------------------------------------------------
+    vss::IVssEnumObject* pEnumSnap = nullptr;
+    hr = pBackup->Query(ole32::GUID_NULL, vss::VSS_OBJECT_NONE, vss::VSS_OBJECT_SNAPSHOT, &pEnumSnap);
+    TEST_ASSERT(hr == ole32::S_OK && pEnumSnap != nullptr, "Query for snapshots must succeed");
+
+    vss::VSS_OBJECT_PROP objProps[4]{};
+    uint32_t fetched = 0;
+    hr = pEnumSnap->Next(4, objProps, &fetched);
+    TEST_ASSERT(fetched >= 2, "Must enumerate at least 2 snapshots (pre-seeded + newly created)");
+    for (uint32_t i = 0; i < fetched; ++i) {
+        TEST_ASSERT(objProps[i].Type == vss::VSS_OBJECT_SNAPSHOT, "Enumerated object must be of type VSS_OBJECT_SNAPSHOT");
+        vss::VssFreeSnapshotProperties(&objProps[i].Obj.Snap);
+    }
+    pEnumSnap->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Snapshot Deletion
+    // ------------------------------------------------------------------------
+    int32_t deletedCount = 0;
+    GUID nonDeleted{};
+    hr = pBackup->DeleteSnapshots(snapId, vss::VSS_OBJECT_SNAPSHOT, true, &deletedCount, &nonDeleted);
+    TEST_ASSERT(hr == ole32::S_OK && deletedCount == 1, "DeleteSnapshots must delete exactly 1 snapshot");
+
+    vss::VSS_SNAPSHOT_PROP deadProp{};
+    hr = pBackup->GetSnapshotProperties(snapId, &deadProp);
+    TEST_ASSERT(hr == vss::VSS_E_OBJECT_NOT_FOUND, "GetSnapshotProperties must return VSS_E_OBJECT_NOT_FOUND after deletion");
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Shadow Storage Resize Verification
+    // ------------------------------------------------------------------------
+    bool resized = vss::VssCoordinator::Instance().ResizeDiffArea(L"C:\\", 25ULL * 1024 * 1024 * 1024);
+    TEST_ASSERT(resized, "ResizeDiffArea on volume C:\\ must succeed");
+    auto updatedDiffs = vss::VssCoordinator::Instance().GetDiffAreas();
+    TEST_ASSERT(updatedDiffs[0].MaximumDiffSpace == 25ULL * 1024 * 1024 * 1024, "Updated maximum diff space must be 25 GB");
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Interactive Command Shell Integration (vssadmin)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. vssadmin (Usage banner)
+        shell.execute("vssadmin", out);
+        TEST_ASSERT(out.str().find("Volume Shadow Copy Service Administration") != std::string::npos, "vssadmin without args must print banner");
+
+        // 2. vssadmin list writers
+        out.str("");
+        shell.execute("vssadmin list writers", out);
+        TEST_ASSERT(out.str().find("System Writer") != std::string::npos, "vssadmin list writers must display System Writer");
+        TEST_ASSERT(out.str().find("State: [1] Stable") != std::string::npos, "vssadmin list writers must display Stable state");
+
+        // 3. vssadmin list providers
+        out.str("");
+        shell.execute("vssadmin list providers", out);
+        TEST_ASSERT(out.str().find("Microsoft Software Shadow Copy provider 1.0") != std::string::npos, "vssadmin list providers must display software provider");
+
+        // 4. vssadmin list shadowstorage
+        out.str("");
+        shell.execute("vssadmin list shadowstorage", out);
+        TEST_ASSERT(out.str().find("Shadow Copy Storage association") != std::string::npos, "vssadmin list shadowstorage must display association");
+
+        // 5. vssadmin list shadows
+        out.str("");
+        shell.execute("vssadmin list shadows", out);
+        TEST_ASSERT(out.str().find("Contents of shadow copy set ID:") != std::string::npos, "vssadmin list shadows must display pre-seeded shadow copy");
+
+        // 6. vssadmin create shadow
+        out.str("");
+        shell.execute("vssadmin create shadow /for=C:", out);
+        TEST_ASSERT(out.str().find("Successfully created shadow copy") != std::string::npos, "vssadmin create shadow must report success");
+
+        // 7. vssadmin test
+        out.str("");
+        shell.execute("vssadmin test", out);
+        TEST_ASSERT(out.str().find("Subsystem Self-Test Finished") != std::string::npos, "vssadmin test must finish successfully");
+    }
+
+    pBackup->Release();
+
+    std::cout << "[TEST] Suite 76: Windows Volume Shadow Copy Service (VSS) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -14393,6 +14621,7 @@ int main() {
     RUN_TEST(Test_WMI_WindowsManagementInstrumentation_Subsystem);
     RUN_TEST(Test_WindowsTaskScheduler_Subsystem);
     RUN_TEST(Test_WindowsBITS_Subsystem);
+    RUN_TEST(Test_WindowsVSS_VolumeShadowCopy_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
