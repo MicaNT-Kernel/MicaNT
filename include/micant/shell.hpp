@@ -43,6 +43,7 @@
 #include "dxgkrnl.hpp"
 #include "vulkan.hpp"
 #include "prism_viewer.hpp"
+#include "d3d9.hpp"
 
 namespace micant::shell {
 
@@ -85,6 +86,7 @@ public:
         user32::InitializeUser32SubsystemExports();
         ws2_32::InitializeWs2_32SubsystemExports();
         iphlpapi::InitializeIpHlpApiSubsystemExports();
+        d3d9::InitializeD3D9SubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -164,6 +166,8 @@ public:
             cmdWhoami(tokens, out);
         } else if (cmd == "prismx" || cmd == "gpu") {
             cmdPrismX(tokens, out);
+        } else if (cmd == "d3d9" || cmd == "dx9") {
+            cmdD3D9(tokens, out);
         } else if (cmd == "view3d" || cmd == "viewer3d") {
             cmdView3D(tokens, out);
         } else if (cmd == "vulkan" || cmd == "vkinfo" || cmd == "vkcube") {
@@ -1498,6 +1502,11 @@ private:
             return;
         }
 
+        if (tokens.size() > 1 && (tokens[1] == "d3d9" || tokens[1] == "dx9")) {
+            cmdD3D9(tokens, out);
+            return;
+        }
+
         if (tokens.size() > 1 && (tokens[1] == "vm" || tokens[1] == "shader")) {
             out << "[PrismVM] Launching Sovereign Programmable Shader Bytecode Virtual Machine...\n";
 
@@ -1594,7 +1603,100 @@ private:
             << "  GPU Command Submissions:  " << dxg.GetTotalSubmissions() << "\n"
             << "  Compositor Presents:      " << dxg.GetTotalPresents() << "\n"
             << "  VBlank Sync Events:       " << dxg.GetTotalVBlankWaits() << "\n\n"
-            << "Type 'prismx test', 'prismx cube', 'prismx wireframe', 'prismx d3d12', or 'prismx vm' to execute graphics tests.\n";
+            << "Type 'prismx test', 'prismx cube', 'prismx wireframe', 'prismx d3d9', 'prismx d3d12', or 'prismx vm' to execute graphics tests.\n";
+    }
+
+    void cmdD3D9(const std::vector<std::string>& tokens, std::ostream& out) {
+        (void)tokens;
+        out << "[Direct3D 9] Initializing D3D9 Sovereign Fixed-Function Pipeline & Runtime...\n";
+
+        d3d9::IDirect3D9* pD3D = d3d9::Direct3DCreate9(d3d9::D3D_SDK_VERSION);
+        if (!pD3D) {
+            out << "[Direct3D 9] Failed to initialize Direct3D 9 runtime.\n";
+            return;
+        }
+
+        uint32_t adapterCount = pD3D->GetAdapterCount();
+        d3d9::D3DADAPTER_IDENTIFIER9 ident{};
+        pD3D->GetAdapterIdentifier(0, 0, &ident);
+
+        out << "  Active Adapter: " << ident.Description << "\n"
+            << "  Driver:         " << ident.Driver << " (Version " << ident.DriverVersionHigh << "." << ident.DriverVersionLow << ")\n"
+            << "  Hardware ID:    Vendor=0x" << std::hex << std::uppercase << ident.VendorId 
+            << " Device=0x" << ident.DeviceId << std::dec << " (Total Adapters: " << adapterCount << ")\n";
+
+        // Create Native User32 Presentation Target Window
+        win32::HWND hwnd = user32::CreateWindowExW(
+            0, L"MicaNT_Window", L"MicaNT PrismX Direct3D 9 Fixed-Function Viewport",
+            0, 0, 0, 640, 480, nullptr, nullptr, nullptr, nullptr
+        );
+
+        if (!hwnd) {
+            out << "[Direct3D 9] Error: Failed to create User32 presentation window.\n";
+            pD3D->Release();
+            return;
+        }
+
+        d3d9::D3DPRESENT_PARAMETERS pp{};
+        pp.BackBufferWidth = 640;
+        pp.BackBufferHeight = 480;
+        pp.BackBufferFormat = d3d9::D3DFMT_X8R8G8B8;
+        pp.BackBufferCount = 1;
+        pp.SwapEffect = d3d9::D3DSWAPEFFECT_DISCARD;
+        pp.hDeviceWindow = hwnd;
+        pp.Windowed = win32::TRUE;
+
+        d3d9::IDirect3DDevice9* pDevice = nullptr;
+        int32_t hr = pD3D->CreateDevice(0, d3d9::D3DDEVTYPE_HAL, hwnd, d3d9::D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &pDevice);
+        if (hr != d3d9::D3D_OK || !pDevice) {
+            out << "[Direct3D 9] Error: Failed to create D3D9 Device (hr=" << hr << ").\n";
+            user32::DestroyWindow(hwnd);
+            pD3D->Release();
+            return;
+        }
+
+        // Setup Render States
+        pDevice->SetRenderState(d3d9::D3DRS_ZENABLE, 1);
+        pDevice->SetRenderState(d3d9::D3DRS_FILLMODE, d3d9::D3DFILL_SOLID);
+        pDevice->SetRenderState(d3d9::D3DRS_CULLMODE, d3d9::D3DCULL_CCW);
+        pDevice->SetRenderState(d3d9::D3DRS_LIGHTING, 0);
+
+        // Clear Viewport (Midnight Blue)
+        pDevice->Clear(0, nullptr, d3d9::D3DCLEAR_TARGET | d3d9::D3DCLEAR_ZBUFFER, d3d9::D3DCOLOR_XRGB(10, 20, 50), 1.0f, 0);
+
+        pDevice->BeginScene();
+
+        // 3D Gouraud-Shaded Triangle (D3DFVF_XYZ | D3DFVF_DIFFUSE)
+        struct D3DVertex {
+            float x, y, z;
+            uint32_t color;
+        };
+
+        D3DVertex triangle[3] = {
+            {  0.0f,  0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(255, 30, 30) },   // Top Red
+            {  0.7f, -0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(30, 255, 30) },   // Bottom-Right Green (CW)
+            { -0.7f, -0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(30, 30, 255) }    // Bottom-Left Blue
+        };
+
+        pDevice->SetFVF(d3d9::D3DFVF_XYZ | d3d9::D3DFVF_DIFFUSE);
+        pDevice->DrawPrimitiveUP(d3d9::D3DPT_TRIANGLELIST, 1, triangle, sizeof(D3DVertex));
+
+        pDevice->EndScene();
+
+        // Present to HWND
+        pDevice->Present(nullptr, nullptr, hwnd, nullptr);
+
+        out << "[Direct3D 9] Fixed-Function Barycentric Shaded Triangle Rendered Successfully!\n"
+            << "  Target Window:  640x480 (HWND " << hwnd << ")\n"
+            << "  Pixel Format:   D3DFMT_X8R8G8B8 (32-bpp BGRA)\n"
+            << "  Primitive:      D3DPT_TRIANGLELIST (1 Triangle, 3 Vertices)\n"
+            << "  FVF Formats:    D3DFVF_XYZ | D3DFVF_DIFFUSE\n"
+            << "  Interpolation:  Gouraud Shading across Barycentric Rasterizer\n"
+            << "  Presents:       " << static_cast<d3d9::Direct3DDevice9Impl*>(pDevice)->GetPresentCount() << " frame(s) blitted to User32 Window.\n";
+
+        pDevice->Release();
+        pD3D->Release();
+        user32::DestroyWindow(hwnd);
     }
 
     void cmdView3D(const std::vector<std::string>& tokens, std::ostream& out) {

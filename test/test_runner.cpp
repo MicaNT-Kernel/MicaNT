@@ -76,6 +76,7 @@
 #include "micant/janusldr.hpp"
 #include "micant/dinput.hpp"
 #include "micant/prism_viewer.hpp"
+#include "micant/d3d9.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -7246,6 +7247,215 @@ void Test_PrismX_Interactive3DViewer_And_CameraPipeline() {
     }
 }
 
+void Test_Direct3D9_Runtime_And_FixedFunctionPipeline() {
+    using namespace micant::d3d9;
+
+    // 1. Direct3DCreate9 and Interface Query
+    IDirect3D9* pD3D = Direct3DCreate9(D3D_SDK_VERSION);
+    TEST_ASSERT(pD3D != nullptr, "Direct3DCreate9 must return non-null IDirect3D9 pointer");
+
+    IDirect3D9* queriedD3D = nullptr;
+    int32_t hr = pD3D->QueryInterface(IID_IDirect3D9, reinterpret_cast<void**>(&queriedD3D));
+    TEST_ASSERT(hr == D3D_OK && queriedD3D == pD3D, "QueryInterface for IID_IDirect3D9 must succeed");
+    queriedD3D->Release();
+
+    // 2. Adapter Enumeration & Caps
+    uint32_t adapterCount = pD3D->GetAdapterCount();
+    TEST_ASSERT(adapterCount == 1, "Direct3D9 must report at least 1 adapter");
+
+    D3DADAPTER_IDENTIFIER9 ident{};
+    hr = pD3D->GetAdapterIdentifier(0, 0, &ident);
+    TEST_ASSERT(hr == D3D_OK, "GetAdapterIdentifier must succeed");
+    TEST_ASSERT(std::string(ident.Driver) == "micant_d3d9.dll", "Driver identifier must match sovereign runtime");
+
+    D3DDISPLAYMODE mode{};
+    hr = pD3D->GetAdapterDisplayMode(0, &mode);
+    TEST_ASSERT(hr == D3D_OK && mode.Width == 1920 && mode.Height == 1080, "Adapter display mode must report 1920x1080");
+
+    D3DCAPS9 caps{};
+    hr = pD3D->GetDeviceCaps(0, D3DDEVTYPE_HAL, &caps);
+    TEST_ASSERT(hr == D3D_OK, "GetDeviceCaps must succeed");
+    TEST_ASSERT(caps.VertexShaderVersion == 0xFFFE0300, "Device caps must report Vertex Shader Model 3.0 support");
+
+    // 3. Native User32 Window & Device Creation
+    win32::HWND hwnd = user32::CreateWindowExW(
+        0, L"MicaNT_Window", L"Test D3D9 Viewport",
+        0, 0, 0, 640, 480, nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hwnd != nullptr, "User32 CreateWindowExW must create window handle for D3D9 device");
+
+    D3DPRESENT_PARAMETERS pp{};
+    pp.BackBufferWidth = 640;
+    pp.BackBufferHeight = 480;
+    pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+    pp.BackBufferCount = 1;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.hDeviceWindow = hwnd;
+    pp.Windowed = win32::TRUE;
+
+    IDirect3DDevice9* pDevice = nullptr;
+    hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, hwnd, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &pDevice);
+    TEST_ASSERT(hr == D3D_OK && pDevice != nullptr, "CreateDevice must succeed and yield non-null IDirect3DDevice9");
+
+    IDirect3D9* parentD3D = nullptr;
+    pDevice->GetDirect3D(&parentD3D);
+    TEST_ASSERT(parentD3D == pD3D, "GetDirect3D must retrieve parent IDirect3D9 pointer");
+    parentD3D->Release();
+
+    // 4. Vertex Buffer Allocation, Lock & Unlock
+    struct VertexXYZColor {
+        float x, y, z;
+        uint32_t diffuse;
+    };
+
+    IDirect3DVertexBuffer9* pVB = nullptr;
+    hr = pDevice->CreateVertexBuffer(
+        sizeof(VertexXYZColor) * 3,
+        0,
+        D3DFVF_XYZ | D3DFVF_DIFFUSE,
+        D3DPOOL_DEFAULT,
+        &pVB,
+        nullptr
+    );
+    TEST_ASSERT(hr == D3D_OK && pVB != nullptr, "CreateVertexBuffer must succeed");
+    TEST_ASSERT(pVB->GetLength() == sizeof(VertexXYZColor) * 3, "Vertex buffer size must match requested byte length");
+
+    void* pVbData = nullptr;
+    hr = pVB->Lock(0, 0, &pVbData, 0);
+    TEST_ASSERT(hr == D3D_OK && pVbData != nullptr, "VertexBuffer Lock must succeed");
+
+    VertexXYZColor triVerts[3] = {
+        {  0.0f,  0.7f, 0.0f, D3DCOLOR_XRGB(255, 0, 0) },    // Top Red
+        {  0.7f, -0.7f, 0.0f, D3DCOLOR_XRGB(0, 255, 0) },    // Bottom-Right Green (CW)
+        { -0.7f, -0.7f, 0.0f, D3DCOLOR_XRGB(0, 0, 255) }     // Bottom-Left Blue
+    };
+    std::memcpy(pVbData, triVerts, sizeof(triVerts));
+    hr = pVB->Unlock();
+    TEST_ASSERT(hr == D3D_OK, "VertexBuffer Unlock must succeed");
+
+    // 5. Index Buffer Allocation, Lock & Unlock
+    IDirect3DIndexBuffer9* pIB = nullptr;
+    hr = pDevice->CreateIndexBuffer(
+        sizeof(uint16_t) * 3,
+        0,
+        D3DFMT_INDEX16,
+        D3DPOOL_DEFAULT,
+        &pIB,
+        nullptr
+    );
+    TEST_ASSERT(hr == D3D_OK && pIB != nullptr, "CreateIndexBuffer must succeed");
+    TEST_ASSERT(pIB->GetFormat() == D3DFMT_INDEX16, "Index buffer format must be D3DFMT_INDEX16");
+
+    void* pIbData = nullptr;
+    hr = pIB->Lock(0, 0, &pIbData, 0);
+    TEST_ASSERT(hr == D3D_OK && pIbData != nullptr, "IndexBuffer Lock must succeed");
+
+    uint16_t indices[3] = { 0, 1, 2 };
+    std::memcpy(pIbData, indices, sizeof(indices));
+    hr = pIB->Unlock();
+    TEST_ASSERT(hr == D3D_OK, "IndexBuffer Unlock must succeed");
+
+    // 6. Fixed-Function Matrix Transformations & Viewport
+    D3DMATRIX matIdent = D3DMATRIX::Identity();
+    hr = pDevice->SetTransform(D3DTS_WORLD, &matIdent);
+    TEST_ASSERT(hr == D3D_OK, "SetTransform D3DTS_WORLD must succeed");
+    hr = pDevice->SetTransform(D3DTS_VIEW, &matIdent);
+    TEST_ASSERT(hr == D3D_OK, "SetTransform D3DTS_VIEW must succeed");
+    hr = pDevice->SetTransform(D3DTS_PROJECTION, &matIdent);
+    TEST_ASSERT(hr == D3D_OK, "SetTransform D3DTS_PROJECTION must succeed");
+
+    D3DMATRIX readbackWorld{};
+    hr = pDevice->GetTransform(D3DTS_WORLD, &readbackWorld);
+    TEST_ASSERT(hr == D3D_OK && readbackWorld._11 == 1.0f && readbackWorld._44 == 1.0f, "GetTransform D3DTS_WORLD must return identity");
+
+    D3DVIEWPORT9 vp{ 0, 0, 640, 480, 0.0f, 1.0f };
+    hr = pDevice->SetViewport(&vp);
+    TEST_ASSERT(hr == D3D_OK, "SetViewport must succeed");
+
+    D3DVIEWPORT9 readbackVp{};
+    hr = pDevice->GetViewport(&readbackVp);
+    TEST_ASSERT(hr == D3D_OK && readbackVp.Width == 640 && readbackVp.Height == 480, "GetViewport must return 640x480");
+
+    // 7. Render States
+    pDevice->SetRenderState(D3DRS_ZENABLE, 1);
+    pDevice->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
+    pDevice->SetRenderState(D3DRS_CULLMODE, D3DCULL_CCW);
+    pDevice->SetRenderState(D3DRS_LIGHTING, 0);
+
+    uint32_t valZ = 0, valFill = 0;
+    pDevice->GetRenderState(D3DRS_ZENABLE, &valZ);
+    pDevice->GetRenderState(D3DRS_FILLMODE, &valFill);
+    TEST_ASSERT(valZ == 1 && valFill == D3DFILL_SOLID, "Render states must be recorded and retrievable");
+
+    // 8. Pipeline Execution: Clear, BeginScene, DrawIndexedPrimitive, EndScene, Present
+    const D3DCOLOR clearColor = D3DCOLOR_XRGB(10, 20, 50); // Midnight Blue
+    hr = pDevice->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, clearColor, 1.0f, 0);
+    TEST_ASSERT(hr == D3D_OK, "Clear must succeed");
+
+    hr = pDevice->BeginScene();
+    TEST_ASSERT(hr == D3D_OK, "BeginScene must succeed");
+
+    hr = pDevice->SetStreamSource(0, pVB, 0, sizeof(VertexXYZColor));
+    TEST_ASSERT(hr == D3D_OK, "SetStreamSource must succeed");
+
+    hr = pDevice->SetIndices(pIB);
+    TEST_ASSERT(hr == D3D_OK, "SetIndices must succeed");
+
+    hr = pDevice->SetFVF(D3DFVF_XYZ | D3DFVF_DIFFUSE);
+    TEST_ASSERT(hr == D3D_OK, "SetFVF must succeed");
+
+    hr = pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, 3, 0, 1);
+    TEST_ASSERT(hr == D3D_OK, "DrawIndexedPrimitive must execute without errors");
+
+    hr = pDevice->EndScene();
+    TEST_ASSERT(hr == D3D_OK, "EndScene must succeed");
+
+    hr = pDevice->Present(nullptr, nullptr, hwnd, nullptr);
+    TEST_ASSERT(hr == D3D_OK, "Present to HWND must succeed");
+
+    // 9. Verify Presentation Surface in User32 Window
+    uint32_t surfW = 0, surfH = 0;
+    const uint32_t* winPixels = user32::WindowManager::get().getWindowPixelBuffer(hwnd, &surfW, &surfH);
+    TEST_ASSERT(winPixels != nullptr && surfW == 640 && surfH == 480, "User32 window surface must be populated with 640x480 pixels");
+
+    // Check that rasterized triangle pixels are present and distinct from clear color
+    uint32_t nonClearPixels = 0;
+    for (size_t i = 0; i < 640 * 480; ++i) {
+        if (winPixels[i] != clearColor) {
+            nonClearPixels++;
+        }
+    }
+    TEST_ASSERT(nonClearPixels > 500, "Window surface must contain rasterized triangle pixels from D3D9 pipeline");
+
+    // 10. Dynamic Loader Export Resolution (d3d9.dll)
+    InitializeD3D9SubsystemExports();
+    auto& loader = ldr::DynamicLoader::get();
+    void* pfnCreate9 = loader.getExport("d3d9.dll", "Direct3DCreate9");
+    TEST_ASSERT(pfnCreate9 != nullptr, "ldr::DynamicLoader must resolve Direct3DCreate9 from d3d9.dll");
+
+    // 11. Shell Integration
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("prismx d3d9", out);
+        std::string res = out.str();
+        TEST_ASSERT(res.find("[Direct3D 9]") != std::string::npos, "Shell prismx d3d9 must execute");
+        TEST_ASSERT(res.find("Barycentric Shaded Triangle Rendered Successfully") != std::string::npos, "Shell must report triangle render success");
+
+        std::ostringstream out2;
+        shell.execute("d3d9", out2);
+        std::string res2 = out2.str();
+        TEST_ASSERT(res2.find("[Direct3D 9]") != std::string::npos, "Shell direct d3d9 command must execute");
+    }
+
+    // 12. Cleanup
+    pVB->Release();
+    pIB->Release();
+    pDevice->Release();
+    pD3D->Release();
+    user32::DestroyWindow(hwnd);
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -7308,6 +7518,7 @@ int main() {
     RUN_TEST(Test_JanusLDR_DelayLoadThunks_And_SxSManifest);
     RUN_TEST(Test_User32_WindowManager_SwapchainPresentation_And_DirectInput);
     RUN_TEST(Test_PrismX_Interactive3DViewer_And_CameraPipeline);
+    RUN_TEST(Test_Direct3D9_Runtime_And_FixedFunctionPipeline);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
