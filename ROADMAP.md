@@ -799,6 +799,43 @@
   - 12 comprehensive verification stages covering package enumeration, package query, function tables, credential lifecycle, TLS 1.3 ClientHello/ServerHello handshake, stream sizes query, record encryption/decryption roundtrip, tamper rejection, truncated record handling, NTLM challenge-response exchange, WinINet HTTPS over TLS, loader exports, version resources, and interactive shell commands.
   - All 67 unit test suites passing with 100% success rate (67 Passed, 0 Failed).
 
+---
+
+### Phase 41: Windows Remote Procedure Call (RPC) Runtime & NDR Engine (100% Completed)
+*Goal: Implement Windows Remote Procedure Call (RPC) Runtime (`rpcrt4.dll`), Network Data Representation (NDR) marshalling and unmarshalling engine, RFC 4122 v4/v1 UUID generator, string binding composer/parser, server interface registry across `ncalrpc`, `ncacn_np`, and `ncacn_ip_tcp`, Asynchronous RPC, and client/server dispatch tables.*
+- [x] **Universal UUID / GUID Engine (`rpcrt4.dll`, `include/micant/rpcrt4.hpp`)**:
+  - Generation: RFC 4122 v4 (cryptographically secure pseudo-random entropy) via `UuidCreate`, and RFC 4122 v1 (sequential 60-bit 100ns timestamp and MAC node address) via `UuidCreateSequential`.
+  - Format & Parse: `UuidToStringA/W` outputting 36-byte canonical lowercase hyphenated notation (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), and `UuidFromStringA/W` bidirectional parser with hex validation.
+  - Relational Operators: `UuidCompare`, `UuidEqual`, `UuidIsNil`, and `UuidHash` deterministic 16-bit folded hash calculation.
+  - Memory Management: `RpcStringFreeA` and `RpcStringFreeW`.
+- [x] **String Binding & Handle Management (`rpcrt4.dll`)**:
+  - Composition & Decomposition: `RpcStringBindingComposeA/W` formatting `[uuid@]protseq:[network_addr][endpoint,options]`, and `RpcStringBindingParseA/W` extracting constituent dynamic string fields.
+  - Binding Handles: `RpcBindingFromStringBindingA/W`, `RpcBindingToStringBindingA`, `RpcBindingCopy`, and `RpcBindingFree` with heap handle validation.
+  - Authentication Configuration: `RpcBindingSetAuthInfoA` supporting `RPC_C_AUTHN_WINNT`, `RPC_C_AUTHN_GSS_SCHANNEL`, `RPC_C_AUTHN_LEVEL_PKT_PRIVACY`, and server principal names.
+- [x] **Server Interface Registry & Lifecycle Management (`rpcrt4.dll`)**:
+  - Protocol Sequences & Endpoints: `RpcServerUseProtseqA/W` and `RpcServerUseProtseqEpA/W` registering local ALPC (`ncalrpc`), Named Pipe (`ncacn_np`), and TCP/IP (`ncacn_ip_tcp`) endpoints.
+  - Interface Registration: `RpcServerRegisterIf`, `RpcServerRegisterIfEx`, `RpcServerRegisterIf2`, and `RpcServerUnregisterIf` with `RPC_SERVER_INTERFACE` structures and `RPC_DISPATCH_TABLE`.
+  - Listening Control: `RpcServerListen`, `RpcMgmtStopServerListening`, and `RpcMgmtWaitServerListen`.
+- [x] **Network Data Representation (NDR) Marshalling Engine (`rpcrt4.dll`)**:
+  - Buffer Management: `NdrGetBuffer` and `NdrFreeBuffer` managing `MIDL_STUB_MESSAGE` and `RPC_MESSAGE` buffers.
+  - Scalar Primitive Types: `NdrSimpleTypeMarshall` and `NdrSimpleTypeUnmarshall` handling `FC_BYTE`, `FC_CHAR`, `FC_SHORT`, `FC_USHORT`, `FC_LONG`, `FC_ULONG`, `FC_FLOAT`, `FC_HYPER`, `FC_DOUBLE`, with natural alignment boundaries (2, 4, 8 bytes).
+  - Conformant String Types: `NdrConformantStringMarshall` and `NdrConformantStringUnmarshall` handling ANSI 8-bit strings (`FC_CSTRING`) and UTF-16 wide strings (`FC_WSTRING`) with max count, offset, and actual count triplets.
+  - Transport Dispatch: `NdrSendReceive` coordinating in-process server interface table execution, named pipe loopback, and local ALPC rendezvous.
+  - Stub Helpers: `NdrClientCall2` and `NdrServerCall2`.
+- [x] **Asynchronous RPC Subsystem (`rpcrt4.dll`)**:
+  - Handle Initialization: `RpcAsyncInitializeHandle` validating structure size and setting `'ASYN'` signature.
+  - State Management: `RpcAsyncRegisterInfo`, `RpcAsyncCompleteCall`, and `RpcAsyncAbortCall`.
+- [x] **Dynamic Loader & Version Parity**:
+  - Export registration for `rpcrt4.dll` (29+ APIs) in `ldr::DynamicLoader`.
+  - Version resources registered in `version.hpp` for `rpcrt4.dll` bumping kernel build to `1.0.68.0`.
+- [x] **Interactive Shell Commands & Telemetry (`include/micant/shell.hpp`)**:
+  - `rpc info`, `rpc endpoints`, `rpc test`.
+  - `uuidgen [-s] [-c] [-n count]` generating canonical UUIDs, sequential UUIDs, or C-style GUID struct declarations.
+- [x] **Unit Test Suite 68 (`Test_RPC_Runtime_And_NDR_Subsystem`)**:
+  - 14 comprehensive verification stages covering UUID generation, UUID string formatting/parsing, string binding engine, binding handle lifecycle, authentication info, server protocol sequence/endpoint management, interface registry/listening, NDR buffer allocation, scalar primitive marshalling/unmarshalling, conformant string marshalling/unmarshalling, synchronous client/server dispatch, asynchronous RPC handle lifecycle, dynamic loader exports, version metadata, and interactive shell commands.
+  - All 68 unit test suites passing with 100% success rate (68 Passed, 0 Failed).
+
+
 
 
 

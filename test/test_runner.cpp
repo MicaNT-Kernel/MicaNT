@@ -9,6 +9,7 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <cmath>
 #include "micant/ntstatus.hpp"
 #include "micant/ntdef.hpp"
 #include "micant/ob.hpp"
@@ -89,6 +90,7 @@
 #include "micant/urlmon.hpp"
 #include "micant/crypt32.hpp"
 #include "micant/sspi.hpp"
+#include "micant/rpcrt4.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -11036,6 +11038,569 @@ void Test_SSPI_And_Schannel_Subsystems() {
     std::cout << "[TEST] Suite 67: Windows SSPI & Schannel TLS 1.3 Subsystems PASSED.\n";
 }
 
+// ============================================================================
+// Test Suite 68: Windows Remote Procedure Call (RPC) Runtime & NDR Engine
+// ============================================================================
+
+void Test_RPC_Runtime_And_NDR_Subsystem() {
+    std::cout << "[TEST] Running Suite 68: Windows Remote Procedure Call (RPC) Runtime & NDR Subsystem...\n";
+
+    // ------------------------------------------------------------------------
+    // 1. UUID Generation & Arithmetic Properties
+    // ------------------------------------------------------------------------
+    {
+        micant::UUID uV4{};
+        rpc::RPC_STATUS stV4 = rpc::UuidCreate(&uV4);
+        TEST_ASSERT(stV4 == rpc::RPC_S_OK, "UuidCreate (RFC 4122 v4) must succeed");
+        TEST_ASSERT(((uV4.Data3 >> 12) & 0x0F) == 4, "UuidCreate must set version 4 in Data3 high nibble");
+        TEST_ASSERT((uV4.Data4[0] & 0xC0) == 0x80, "UuidCreate must set RFC 4122 variant (0b10) in Data4[0]");
+
+        micant::UUID uV1{};
+        rpc::RPC_STATUS stV1 = rpc::UuidCreateSequential(&uV1);
+        TEST_ASSERT(stV1 == rpc::RPC_S_OK, "UuidCreateSequential (RFC 4122 v1) must succeed");
+        TEST_ASSERT(((uV1.Data3 >> 12) & 0x0F) == 1, "UuidCreateSequential must set version 1 in Data3 high nibble");
+
+        micant::UUID nilUuid{};
+        rpc::RPC_STATUS stNil = 0;
+        TEST_ASSERT(rpc::UuidIsNil(&nilUuid, &stNil) == 1, "UuidIsNil must return 1 for zeroed UUID");
+        TEST_ASSERT(stNil == rpc::RPC_S_OK, "UuidIsNil status must be RPC_S_OK");
+        TEST_ASSERT(rpc::UuidIsNil(&uV4, nullptr) == 0, "UuidIsNil must return 0 for active UUID");
+
+        rpc::RPC_STATUS stEq = 0;
+        TEST_ASSERT(rpc::UuidEqual(&uV4, &uV4, &stEq) == 1, "UuidEqual must return 1 for identical UUIDs");
+        TEST_ASSERT(rpc::UuidEqual(&uV4, &uV1, &stEq) == 0, "UuidEqual must return 0 for distinct UUIDs");
+
+        rpc::RPC_STATUS stCmp = 0;
+        TEST_ASSERT(rpc::UuidCompare(&uV4, &uV4, &stCmp) == 0, "UuidCompare must return 0 for equal UUIDs");
+
+        rpc::RPC_STATUS stHash = 0;
+        uint16_t hashVal = rpc::UuidHash(&uV4, &stHash);
+        TEST_ASSERT(stHash == rpc::RPC_S_OK, "UuidHash status must be RPC_S_OK");
+        TEST_ASSERT(hashVal != 0, "UuidHash for valid UUID should produce non-zero hash value");
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. UUID String Formatting & Parsing (ANSI & Wide)
+    // ------------------------------------------------------------------------
+    {
+        micant::UUID origUuid{ 0x12345678, 0xABCD, 0x4EF0, { 0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67 } };
+        unsigned char* szUuidA = nullptr;
+        rpc::RPC_STATUS stStrA = rpc::UuidToStringA(&origUuid, &szUuidA);
+        TEST_ASSERT(stStrA == rpc::RPC_S_OK, "UuidToStringA must succeed");
+        TEST_ASSERT(szUuidA != nullptr, "UuidToStringA must return non-null string");
+
+        std::string strVal(reinterpret_cast<char*>(szUuidA));
+        TEST_ASSERT(strVal.length() == 36, "Canonical UUID string must have length 36");
+        TEST_ASSERT(strVal[8] == '-' && strVal[13] == '-' && strVal[18] == '-' && strVal[23] == '-', "UUID string must have standard hyphen delimiters");
+        TEST_ASSERT(strVal == "12345678-abcd-4ef0-89ab-cdef01234567", "Canonical UUID string must match expected format");
+
+        micant::UUID parsedUuidA{};
+        rpc::RPC_STATUS stParseA = rpc::UuidFromStringA(szUuidA, &parsedUuidA);
+        TEST_ASSERT(stParseA == rpc::RPC_S_OK, "UuidFromStringA must succeed");
+        TEST_ASSERT(rpc::UuidEqual(&origUuid, &parsedUuidA, nullptr) == 1, "Parsed UUID must equal original UUID");
+
+        rpc::RpcStringFreeA(&szUuidA);
+        TEST_ASSERT(szUuidA == nullptr, "RpcStringFreeA must zero pointer");
+
+        wchar_t* szUuidW = nullptr;
+        rpc::RPC_STATUS stStrW = rpc::UuidToStringW(&origUuid, &szUuidW);
+        TEST_ASSERT(stStrW == rpc::RPC_S_OK, "UuidToStringW must succeed");
+        TEST_ASSERT(szUuidW != nullptr, "UuidToStringW must return non-null string");
+
+        micant::UUID parsedUuidW{};
+        rpc::RPC_STATUS stParseW = rpc::UuidFromStringW(szUuidW, &parsedUuidW);
+        TEST_ASSERT(stParseW == rpc::RPC_S_OK, "UuidFromStringW must succeed");
+        TEST_ASSERT(rpc::UuidEqual(&origUuid, &parsedUuidW, nullptr) == 1, "Parsed wide UUID must equal original UUID");
+
+        rpc::RpcStringFreeW(&szUuidW);
+        TEST_ASSERT(szUuidW == nullptr, "RpcStringFreeW must zero pointer");
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. String Binding Engine Compose & Parse
+    // ------------------------------------------------------------------------
+    {
+        unsigned char* strBindingA = nullptr;
+        rpc::RPC_STATUS stComp = rpc::RpcStringBindingComposeA(
+            (unsigned char*)"11112222-3333-4444-5555-666677778888",
+            (unsigned char*)"ncacn_ip_tcp",
+            (unsigned char*)"192.168.1.50",
+            (unsigned char*)"135",
+            (unsigned char*)"Security=True",
+            &strBindingA
+        );
+        TEST_ASSERT(stComp == rpc::RPC_S_OK, "RpcStringBindingComposeA must succeed");
+        TEST_ASSERT(strBindingA != nullptr, "Composed string binding must not be null");
+
+        std::string composed(reinterpret_cast<char*>(strBindingA));
+        TEST_ASSERT(composed == "11112222-3333-4444-5555-666677778888@ncacn_ip_tcp:192.168.1.50[135,Security=True]",
+                    "Composed string binding must match standard NT format");
+
+        unsigned char *obj = nullptr, *prot = nullptr, *net = nullptr, *ep = nullptr, *opt = nullptr;
+        rpc::RPC_STATUS stParse = rpc::RpcStringBindingParseA(strBindingA, &obj, &prot, &net, &ep, &opt);
+        TEST_ASSERT(stParse == rpc::RPC_S_OK, "RpcStringBindingParseA must succeed");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(obj)) == "11112222-3333-4444-5555-666677778888", "Parsed ObjUuid must match");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(prot)) == "ncacn_ip_tcp", "Parsed Protseq must match");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(net)) == "192.168.1.50", "Parsed NetworkAddr must match");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(ep)) == "135", "Parsed Endpoint must match");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(opt)) == "Security=True", "Parsed Options must match");
+
+        rpc::RpcStringFreeA(&obj);
+        rpc::RpcStringFreeA(&prot);
+        rpc::RpcStringFreeA(&net);
+        rpc::RpcStringFreeA(&ep);
+        rpc::RpcStringFreeA(&opt);
+        rpc::RpcStringFreeA(&strBindingA);
+    }
+
+    // ------------------------------------------------------------------------
+    // 4. Binding Handle Lifecycle (Create, Query, Copy, Free)
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_BINDING_HANDLE hBinding = nullptr;
+        unsigned char strSource[] = "ncalrpc:[ep_test_alpc]";
+        rpc::RPC_STATUS stBind = rpc::RpcBindingFromStringBindingA(strSource, &hBinding);
+        TEST_ASSERT(stBind == rpc::RPC_S_OK, "RpcBindingFromStringBindingA must succeed");
+        TEST_ASSERT(hBinding != nullptr, "Binding handle must be non-null");
+
+        unsigned char* strRoundtrip = nullptr;
+        rpc::RPC_STATUS stToStr = rpc::RpcBindingToStringBindingA(hBinding, &strRoundtrip);
+        TEST_ASSERT(stToStr == rpc::RPC_S_OK, "RpcBindingToStringBindingA must succeed");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(strRoundtrip)) == "ncalrpc:[ep_test_alpc]", "Roundtrip string binding must match original");
+        rpc::RpcStringFreeA(&strRoundtrip);
+
+        rpc::RPC_BINDING_HANDLE hCopy = nullptr;
+        rpc::RPC_STATUS stCopy = rpc::RpcBindingCopy(hBinding, &hCopy);
+        TEST_ASSERT(stCopy == rpc::RPC_S_OK, "RpcBindingCopy must succeed");
+        TEST_ASSERT(hCopy != nullptr && hCopy != hBinding, "Copied binding handle must be distinct valid handle");
+
+        rpc::RPC_STATUS stFreeCopy = rpc::RpcBindingFree(&hCopy);
+        TEST_ASSERT(stFreeCopy == rpc::RPC_S_OK, "RpcBindingFree on copied handle must succeed");
+        TEST_ASSERT(hCopy == nullptr, "Handle pointer must be zeroed after free");
+
+        rpc::RPC_STATUS stFreeOrig = rpc::RpcBindingFree(&hBinding);
+        TEST_ASSERT(stFreeOrig == rpc::RPC_S_OK, "RpcBindingFree on original handle must succeed");
+        TEST_ASSERT(hBinding == nullptr, "Handle pointer must be zeroed after free");
+
+        rpc::RPC_BINDING_HANDLE nullHandle = nullptr;
+        TEST_ASSERT(rpc::RpcBindingFree(&nullHandle) == rpc::RPC_S_INVALID_BINDING, "Freeing null handle must return RPC_S_INVALID_BINDING");
+    }
+
+    // ------------------------------------------------------------------------
+    // 5. Authentication Configuration on Binding Handle
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_BINDING_HANDLE hBinding = nullptr;
+        unsigned char strSource[] = "ncacn_ip_tcp:10.0.0.1[8080]";
+        rpc::RpcBindingFromStringBindingA(strSource, &hBinding);
+
+        rpc::RPC_STATUS stAuth = rpc::RpcBindingSetAuthInfoA(
+            hBinding,
+            (unsigned char*)"host/domain-controller.micant.local",
+            rpc::RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
+            rpc::RPC_C_AUTHN_WINNT,
+            nullptr,
+            0
+        );
+        TEST_ASSERT(stAuth == rpc::RPC_S_OK, "RpcBindingSetAuthInfoA must succeed");
+
+        auto* b = reinterpret_cast<rpc::RpcBinding*>(hBinding);
+        TEST_ASSERT(b->authnLevel == rpc::RPC_C_AUTHN_LEVEL_PKT_PRIVACY, "AuthnLevel must be preserved");
+        TEST_ASSERT(b->authnSvc == rpc::RPC_C_AUTHN_WINNT, "AuthnSvc must be preserved");
+        TEST_ASSERT(b->serverPrincName == "host/domain-controller.micant.local", "ServerPrincName must be preserved");
+
+        rpc::RpcBindingFree(&hBinding);
+    }
+
+    // ------------------------------------------------------------------------
+    // 6. Server Protocol Sequence & Endpoint Management
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_STATUS stProt = rpc::RpcServerUseProtseqA((unsigned char*)"ncalrpc", 20, nullptr);
+        TEST_ASSERT(stProt == rpc::RPC_S_OK, "RpcServerUseProtseqA for ncalrpc must succeed");
+
+        rpc::RPC_STATUS stEp1 = rpc::RpcServerUseProtseqEpA((unsigned char*)"ncalrpc", 20, (unsigned char*)"ep_micant_lpc", nullptr);
+        TEST_ASSERT(stEp1 == rpc::RPC_S_OK, "RpcServerUseProtseqEpA for ncalrpc must succeed");
+
+        rpc::RPC_STATUS stEp2 = rpc::RpcServerUseProtseqEpA((unsigned char*)"ncacn_np", 20, (unsigned char*)"pipe_micant_rpc", nullptr);
+        TEST_ASSERT(stEp2 == rpc::RPC_S_OK, "RpcServerUseProtseqEpA for ncacn_np must succeed");
+
+        rpc::RPC_STATUS stEp3 = rpc::RpcServerUseProtseqEpA((unsigned char*)"ncacn_ip_tcp", 20, (unsigned char*)"13500", nullptr);
+        TEST_ASSERT(stEp3 == rpc::RPC_S_OK, "RpcServerUseProtseqEpA for ncacn_ip_tcp must succeed");
+
+        rpc::RPC_STATUS stBad = rpc::RpcServerUseProtseqA((unsigned char*)"invalid_protseq_xyz", 10, nullptr);
+        TEST_ASSERT(stBad == rpc::RPC_S_PROTSEQ_NOT_SUPPORTED, "Unsupported protocol sequence must return RPC_S_PROTSEQ_NOT_SUPPORTED");
+
+        auto eps = rpc::RpcServerManager::Instance().getEndpoints();
+        TEST_ASSERT(!eps.empty(), "Server endpoints list must contain registered endpoints");
+    }
+
+    // ------------------------------------------------------------------------
+    // 7. Server Interface Registration & Listening State
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_SYNTAX_IDENTIFIER ifId{};
+        rpc::UuidCreate(&ifId.SyntaxGUID);
+        ifId.SyntaxVersion.MajorVersion = 1;
+        ifId.SyntaxVersion.MinorVersion = 0;
+
+        rpc::RPC_SERVER_INTERFACE testIf{};
+        testIf.Length = sizeof(testIf);
+        testIf.InterfaceId = ifId;
+        testIf.TransferSyntax = rpc::NDR_TRANSFER_SYNTAX;
+
+        size_t countBefore = rpc::RpcServerManager::Instance().getInterfaceCount();
+        rpc::RPC_STATUS stReg = rpc::RpcServerRegisterIf(&testIf, nullptr, nullptr);
+        TEST_ASSERT(stReg == rpc::RPC_S_OK, "RpcServerRegisterIf must succeed");
+        TEST_ASSERT(rpc::RpcServerManager::Instance().getInterfaceCount() == countBefore + 1, "Interface count must increase");
+
+        TEST_ASSERT(rpc::RpcServerManager::Instance().findInterface(ifId) == &testIf, "findInterface must locate registered interface");
+
+        rpc::RPC_STATUS stListen = rpc::RpcServerListen(1, 10, 1);
+        TEST_ASSERT(stListen == rpc::RPC_S_OK, "RpcServerListen must succeed");
+        TEST_ASSERT(rpc::RpcServerManager::Instance().isListening() == true, "Server must report listening state");
+
+        rpc::RPC_STATUS stStop = rpc::RpcMgmtStopServerListening(nullptr);
+        TEST_ASSERT(stStop == rpc::RPC_S_OK, "RpcMgmtStopServerListening must succeed");
+        TEST_ASSERT(rpc::RpcServerManager::Instance().isListening() == false, "Server must report idle state after stop");
+
+        rpc::RPC_STATUS stUnreg = rpc::RpcServerUnregisterIf(&testIf, nullptr, 0);
+        TEST_ASSERT(stUnreg == rpc::RPC_S_OK, "RpcServerUnregisterIf must succeed");
+        TEST_ASSERT(rpc::RpcServerManager::Instance().getInterfaceCount() == countBefore, "Interface count must return to baseline");
+    }
+
+    // ------------------------------------------------------------------------
+    // 8. NDR Buffer Allocation & Deallocation
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_MESSAGE msg{};
+        rpc::MIDL_STUB_MESSAGE stubMsg{};
+        stubMsg.RpcMsg = &msg;
+
+        rpc::NdrGetBuffer(&stubMsg, 2048, nullptr);
+        TEST_ASSERT(stubMsg.Buffer != nullptr, "NdrGetBuffer must allocate non-null buffer");
+        TEST_ASSERT(stubMsg.BufferStart == stubMsg.Buffer, "BufferStart must match Buffer");
+        TEST_ASSERT(stubMsg.BufferLength == 2048, "BufferLength must match requested size");
+        TEST_ASSERT(msg.Buffer == stubMsg.Buffer, "RpcMsg->Buffer must mirror stubMsg.Buffer");
+
+        rpc::NdrFreeBuffer(&stubMsg);
+        TEST_ASSERT(msg.Buffer == nullptr, "NdrFreeBuffer must release and nullify buffer pointer");
+    }
+
+    // ------------------------------------------------------------------------
+    // 9. NDR Simple Scalar Type Marshalling & Unmarshalling
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_MESSAGE msg{};
+        rpc::MIDL_STUB_MESSAGE stubMsg{};
+        stubMsg.RpcMsg = &msg;
+        rpc::NdrGetBuffer(&stubMsg, 1024, nullptr);
+
+        uint8_t   valByte  = 0x42;
+        int16_t   valShort = -12345;
+        int32_t   valLong  = 987654;
+        uint32_t  valULong = 0xCAFEBABE;
+        uint64_t  valHyper = 0xFEDCBA9876543210ULL;
+        float     valFloat = 3.1415926f;
+        double    valDbl   = 2.718281828459;
+
+        rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&valByte),  rpc::FC_BYTE);
+        rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&valShort), rpc::FC_SHORT);
+        rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&valLong),  rpc::FC_LONG);
+        rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&valULong), rpc::FC_ULONG);
+        rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&valHyper), rpc::FC_HYPER);
+        rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&valFloat), rpc::FC_FLOAT);
+        rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&valDbl),   rpc::FC_DOUBLE);
+
+        // Reset buffer pointer for unmarshalling
+        stubMsg.Buffer = stubMsg.BufferStart;
+
+        uint8_t   outByte  = 0;
+        int16_t   outShort = 0;
+        int32_t   outLong  = 0;
+        uint32_t  outULong = 0;
+        uint64_t  outHyper = 0;
+        float     outFloat = 0.0f;
+        double    outDbl   = 0.0;
+
+        rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&outByte),  rpc::FC_BYTE);
+        rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&outShort), rpc::FC_SHORT);
+        rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&outLong),  rpc::FC_LONG);
+        rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&outULong), rpc::FC_ULONG);
+        rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&outHyper), rpc::FC_HYPER);
+        rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&outFloat), rpc::FC_FLOAT);
+        rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&outDbl),   rpc::FC_DOUBLE);
+
+        TEST_ASSERT(outByte == valByte, "Unmarshalled FC_BYTE must match original");
+        TEST_ASSERT(outShort == valShort, "Unmarshalled FC_SHORT must match original");
+        TEST_ASSERT(outLong == valLong, "Unmarshalled FC_LONG must match original");
+        TEST_ASSERT(outULong == valULong, "Unmarshalled FC_ULONG must match original");
+        TEST_ASSERT(outHyper == valHyper, "Unmarshalled FC_HYPER must match original");
+        TEST_ASSERT(std::abs(outFloat - valFloat) < 0.0001f, "Unmarshalled FC_FLOAT must match original");
+        TEST_ASSERT(std::abs(outDbl - valDbl) < 0.0000001, "Unmarshalled FC_DOUBLE must match original");
+
+        rpc::NdrFreeBuffer(&stubMsg);
+    }
+
+    // ------------------------------------------------------------------------
+    // 10. NDR Conformant String Marshalling & Unmarshalling
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_MESSAGE msg{};
+        rpc::MIDL_STUB_MESSAGE stubMsg{};
+        stubMsg.RpcMsg = &msg;
+        rpc::NdrGetBuffer(&stubMsg, 2048, nullptr);
+
+        const char*    origStrA = "MicaNT Clean-Room RPC Runtime NDR Engine (ANSI)";
+        const wchar_t* origStrW = L"MicaNT Native Unicode RPC Endpoint (UTF-16)";
+
+        rpc::NdrConformantStringMarshall(&stubMsg, reinterpret_cast<unsigned char*>(const_cast<char*>(origStrA)), rpc::FC_CSTRING);
+        rpc::NdrConformantStringMarshall(&stubMsg, reinterpret_cast<unsigned char*>(const_cast<wchar_t*>(origStrW)), rpc::FC_WSTRING);
+
+        stubMsg.Buffer = stubMsg.BufferStart;
+
+        unsigned char* outStrA = nullptr;
+        unsigned char* outStrW = nullptr;
+
+        rpc::NdrConformantStringUnmarshall(&stubMsg, &outStrA, rpc::FC_CSTRING);
+        rpc::NdrConformantStringUnmarshall(&stubMsg, &outStrW, rpc::FC_WSTRING);
+
+        TEST_ASSERT(outStrA != nullptr, "Unmarshalled ANSI string must be non-null");
+        TEST_ASSERT(std::string(reinterpret_cast<char*>(outStrA)) == origStrA, "Unmarshalled ANSI string must match original");
+
+        TEST_ASSERT(outStrW != nullptr, "Unmarshalled Unicode string must be non-null");
+        TEST_ASSERT(std::wstring(reinterpret_cast<wchar_t*>(outStrW)) == origStrW, "Unmarshalled Unicode string must match original");
+
+        win32::LocalFree(outStrA);
+        win32::LocalFree(outStrW);
+        rpc::NdrFreeBuffer(&stubMsg);
+    }
+
+    // ------------------------------------------------------------------------
+    // 11. End-to-End Client/Server Synchronous Interface Dispatch (NdrSendReceive)
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_SYNTAX_IDENTIFIER ifId{};
+        rpc::UuidCreate(&ifId.SyntaxGUID);
+        ifId.SyntaxVersion.MajorVersion = 2;
+        ifId.SyntaxVersion.MinorVersion = 0;
+
+        // Stub Proc 0: Sum of two uint32_t numbers: (a, b) -> (a + b)
+        // Stub Proc 1: String doubler / repeater
+        static std::atomic<uint32_t> s_proc0Count{0};
+        static std::atomic<uint32_t> s_proc1Count{0};
+
+        auto proc0Stub = +[](rpc::RPC_MESSAGE* pMsg) {
+            s_proc0Count++;
+            rpc::MIDL_STUB_MESSAGE srvStub{};
+            srvStub.RpcMsg = pMsg;
+            srvStub.Buffer = static_cast<unsigned char*>(pMsg->Buffer);
+            srvStub.BufferStart = srvStub.Buffer;
+            srvStub.BufferEnd = srvStub.Buffer + pMsg->BufferLength;
+
+            uint32_t a = 0, b = 0;
+            rpc::NdrSimpleTypeUnmarshall(&srvStub, reinterpret_cast<unsigned char*>(&a), rpc::FC_ULONG);
+            rpc::NdrSimpleTypeUnmarshall(&srvStub, reinterpret_cast<unsigned char*>(&b), rpc::FC_ULONG);
+
+            uint32_t sum = a + b;
+            srvStub.Buffer = srvStub.BufferStart;
+            rpc::NdrSimpleTypeMarshall(&srvStub, reinterpret_cast<unsigned char*>(&sum), rpc::FC_ULONG);
+            pMsg->BufferLength = static_cast<uint32_t>(srvStub.Buffer - srvStub.BufferStart);
+        };
+
+        auto proc1Stub = +[](rpc::RPC_MESSAGE* pMsg) {
+            s_proc1Count++;
+            rpc::MIDL_STUB_MESSAGE srvStub{};
+            srvStub.RpcMsg = pMsg;
+            srvStub.Buffer = static_cast<unsigned char*>(pMsg->Buffer);
+            srvStub.BufferStart = srvStub.Buffer;
+            srvStub.BufferEnd = srvStub.Buffer + pMsg->BufferLength;
+
+            unsigned char* inputStr = nullptr;
+            rpc::NdrConformantStringUnmarshall(&srvStub, &inputStr, rpc::FC_CSTRING);
+
+            std::string echoed = "Echo: " + std::string(reinterpret_cast<char*>(inputStr));
+            win32::LocalFree(inputStr);
+
+            srvStub.Buffer = srvStub.BufferStart;
+            rpc::NdrConformantStringMarshall(&srvStub, reinterpret_cast<unsigned char*>(echoed.data()), rpc::FC_CSTRING);
+            pMsg->BufferLength = static_cast<uint32_t>(srvStub.Buffer - srvStub.BufferStart);
+        };
+
+        rpc::RPC_DISPATCH_FUNCTION dispatchFns[2] = { proc0Stub, proc1Stub };
+        rpc::RPC_DISPATCH_TABLE dispatchTable{ 2, dispatchFns };
+
+        rpc::RPC_SERVER_INTERFACE srvIf{};
+        srvIf.Length = sizeof(srvIf);
+        srvIf.InterfaceId = ifId;
+        srvIf.TransferSyntax = rpc::NDR_TRANSFER_SYNTAX;
+        srvIf.DispatchTable = &dispatchTable;
+
+        rpc::RpcServerRegisterIf(&srvIf, nullptr, nullptr);
+        rpc::RpcServerUseProtseqEpA((unsigned char*)"ncalrpc", 10, (unsigned char*)"ep_test_dispatch", nullptr);
+        rpc::RpcServerListen(1, 10, 1);
+
+        // Client Binding & Call
+        rpc::RPC_BINDING_HANDLE hClientBinding = nullptr;
+        unsigned char strClientBinding[] = "ncalrpc:[ep_test_dispatch]";
+        rpc::RpcBindingFromStringBindingA(strClientBinding, &hClientBinding);
+        TEST_ASSERT(hClientBinding != nullptr, "Client binding handle must be valid");
+
+        rpc::RPC_CLIENT_INTERFACE clntIf{};
+        clntIf.Length = sizeof(clntIf);
+        clntIf.InterfaceId = ifId;
+        clntIf.TransferSyntax = rpc::NDR_TRANSFER_SYNTAX;
+
+        // Test Call 1: Proc 0 (123 + 456)
+        {
+            rpc::RPC_MESSAGE callMsg{};
+            callMsg.RpcInterfaceInformation = &clntIf;
+            callMsg.ProcNum = 0;
+            rpc::MIDL_STUB_MESSAGE clntStub{};
+            clntStub.RpcMsg = &callMsg;
+            rpc::NdrGetBuffer(&clntStub, 512, hClientBinding);
+
+            uint32_t a = 123, b = 456;
+            rpc::NdrSimpleTypeMarshall(&clntStub, reinterpret_cast<unsigned char*>(&a), rpc::FC_ULONG);
+            rpc::NdrSimpleTypeMarshall(&clntStub, reinterpret_cast<unsigned char*>(&b), rpc::FC_ULONG);
+
+            rpc::NdrSendReceive(&clntStub, clntStub.Buffer);
+
+            clntStub.Buffer = clntStub.BufferStart;
+            uint32_t resultSum = 0;
+            rpc::NdrSimpleTypeUnmarshall(&clntStub, reinterpret_cast<unsigned char*>(&resultSum), rpc::FC_ULONG);
+
+            TEST_ASSERT(s_proc0Count.load() == 1, "Server Proc 0 must have been invoked exactly once");
+            TEST_ASSERT(resultSum == 579, "Proc 0 result must be 123 + 456 = 579");
+            rpc::NdrFreeBuffer(&clntStub);
+        }
+
+        // Test Call 2: Proc 1 ("MicaNT")
+        {
+            rpc::RPC_MESSAGE callMsg{};
+            callMsg.RpcInterfaceInformation = &clntIf;
+            callMsg.ProcNum = 1;
+            rpc::MIDL_STUB_MESSAGE clntStub{};
+            clntStub.RpcMsg = &callMsg;
+            rpc::NdrGetBuffer(&clntStub, 512, hClientBinding);
+
+            const char* sendGreeting = "Hello MicaNT Kernel!";
+            rpc::NdrConformantStringMarshall(&clntStub, reinterpret_cast<unsigned char*>(const_cast<char*>(sendGreeting)), rpc::FC_CSTRING);
+
+            rpc::NdrSendReceive(&clntStub, clntStub.Buffer);
+
+            clntStub.Buffer = clntStub.BufferStart;
+            unsigned char* recvReply = nullptr;
+            rpc::NdrConformantStringUnmarshall(&clntStub, &recvReply, rpc::FC_CSTRING);
+
+            TEST_ASSERT(s_proc1Count.load() == 1, "Server Proc 1 must have been invoked exactly once");
+            TEST_ASSERT(recvReply != nullptr, "Proc 1 reply string must be non-null");
+            TEST_ASSERT(std::string(reinterpret_cast<char*>(recvReply)) == "Echo: Hello MicaNT Kernel!", "Proc 1 reply string must match expected format");
+
+            win32::LocalFree(recvReply);
+            rpc::NdrFreeBuffer(&clntStub);
+        }
+
+        // Cleanup
+        rpc::RpcMgmtStopServerListening(nullptr);
+        rpc::RpcServerUnregisterIf(&srvIf, nullptr, 0);
+        rpc::RpcBindingFree(&hClientBinding);
+    }
+
+    // ------------------------------------------------------------------------
+    // 12. Asynchronous RPC Call Lifecycle (RPC_ASYNC_STATE)
+    // ------------------------------------------------------------------------
+    {
+        rpc::RPC_ASYNC_STATE asyncState{};
+        rpc::RPC_STATUS stInit = rpc::RpcAsyncInitializeHandle(&asyncState, sizeof(asyncState));
+        TEST_ASSERT(stInit == rpc::RPC_S_OK, "RpcAsyncInitializeHandle must succeed");
+        TEST_ASSERT(asyncState.Signature == 0x4153594E, "RpcAsyncInitializeHandle must set 'ASYN' signature");
+
+        rpc::RPC_STATUS stReg = rpc::RpcAsyncRegisterInfo(&asyncState);
+        TEST_ASSERT(stReg == rpc::RPC_S_OK, "RpcAsyncRegisterInfo must succeed");
+
+        rpc::RPC_STATUS stComp = rpc::RpcAsyncCompleteCall(&asyncState, nullptr);
+        TEST_ASSERT(stComp == rpc::RPC_S_OK, "RpcAsyncCompleteCall must succeed");
+
+        rpc::RPC_ASYNC_STATE asyncAbortState{};
+        rpc::RpcAsyncInitializeHandle(&asyncAbortState, sizeof(asyncAbortState));
+        rpc::RPC_STATUS stAbort = rpc::RpcAsyncAbortCall(&asyncAbortState, 0xC0000001);
+        TEST_ASSERT(stAbort == rpc::RPC_S_OK, "RpcAsyncAbortCall must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // 13. Dynamic Loader Export Verification & Version Metadata
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "UuidCreate") != nullptr, "rpcrt4.dll!UuidCreate must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "UuidCreateSequential") != nullptr, "rpcrt4.dll!UuidCreateSequential must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "UuidToStringA") != nullptr, "rpcrt4.dll!UuidToStringA must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "UuidToStringW") != nullptr, "rpcrt4.dll!UuidToStringW must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "UuidFromStringA") != nullptr, "rpcrt4.dll!UuidFromStringA must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "UuidFromStringW") != nullptr, "rpcrt4.dll!UuidFromStringW must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "RpcStringBindingComposeA") != nullptr, "rpcrt4.dll!RpcStringBindingComposeA must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "RpcBindingFromStringBindingA") != nullptr, "rpcrt4.dll!RpcBindingFromStringBindingA must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "RpcServerRegisterIf") != nullptr, "rpcrt4.dll!RpcServerRegisterIf must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "RpcServerListen") != nullptr, "rpcrt4.dll!RpcServerListen must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "NdrGetBuffer") != nullptr, "rpcrt4.dll!NdrGetBuffer must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "NdrSendReceive") != nullptr, "rpcrt4.dll!NdrSendReceive must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "NdrSimpleTypeMarshall") != nullptr, "rpcrt4.dll!NdrSimpleTypeMarshall must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "NdrSimpleTypeUnmarshall") != nullptr, "rpcrt4.dll!NdrSimpleTypeUnmarshall must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "NdrConformantStringMarshall") != nullptr, "rpcrt4.dll!NdrConformantStringMarshall must be exported");
+        TEST_ASSERT(ldr.getExport("rpcrt4.dll", "NdrConformantStringUnmarshall") != nullptr, "rpcrt4.dll!NdrConformantStringUnmarshall must be exported");
+
+        uint32_t handle = 0;
+        uint32_t sRpcrt4 = version::GetFileVersionInfoSizeA("rpcrt4.dll", &handle);
+        TEST_ASSERT(sRpcrt4 > 0, "rpcrt4.dll must have version info resource");
+
+        std::vector<uint8_t> vRpcrt4(sRpcrt4);
+        TEST_ASSERT(version::GetFileVersionInfoA("rpcrt4.dll", handle, sRpcrt4, vRpcrt4.data()) != 0, "GetFileVersionInfoA for rpcrt4.dll must succeed");
+
+        void* pDesc = nullptr;
+        uint32_t dLen = 0;
+        TEST_ASSERT(version::VerQueryValueA(vRpcrt4.data(), "\\StringFileInfo\\040904B0\\FileDescription", &pDesc, &dLen) != 0, "VerQueryValueA for rpcrt4.dll must succeed");
+        TEST_ASSERT(std::string(static_cast<const char*>(pDesc)) == "Remote Procedure Call Runtime", "FileDescription must match RPC Runtime description");
+    }
+
+    // ------------------------------------------------------------------------
+    // 14. Shell Built-in Commands Integration (rpc, uuidgen)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        shell.execute("rpc info", out);
+        TEST_ASSERT(out.str().find("Remote Procedure Call Runtime") != std::string::npos, "Shell rpc info command must succeed");
+
+        out.str("");
+        shell.execute("rpc endpoints", out);
+        TEST_ASSERT(out.str().find("Registered RPC Server Endpoints") != std::string::npos, "Shell rpc endpoints command must list endpoints");
+
+        out.str("");
+        shell.execute("rpc test", out);
+        TEST_ASSERT(out.str().find("ALL RPC & NDR CHECKS PASSED") != std::string::npos, "Shell rpc test command must pass all checks");
+
+        out.str("");
+        shell.execute("uuidgen", out);
+        std::string genUuid = out.str();
+        TEST_ASSERT(genUuid.find("-") != std::string::npos && genUuid.length() >= 36, "Shell uuidgen must output a valid UUID");
+
+        out.str("");
+        shell.execute("uuidgen -s", out);
+        std::string seqUuid = out.str();
+        TEST_ASSERT(seqUuid.find("-") != std::string::npos && seqUuid.length() >= 36, "Shell uuidgen -s must output sequential UUID");
+
+        out.str("");
+        shell.execute("uuidgen -c", out);
+        std::string cGuid = out.str();
+        TEST_ASSERT(cGuid.find("GUID_Generated") != std::string::npos, "Shell uuidgen -c must output C-style GUID struct");
+    }
+
+    std::cout << "[TEST] Suite 68: Windows Remote Procedure Call (RPC) & NDR Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -11108,6 +11673,7 @@ int main() {
     RUN_TEST(Test_WinINet_And_URLMon_Subsystems);
     RUN_TEST(Test_CryptoAPI_And_CNG_Subsystems);
     RUN_TEST(Test_SSPI_And_Schannel_Subsystems);
+    RUN_TEST(Test_RPC_Runtime_And_NDR_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

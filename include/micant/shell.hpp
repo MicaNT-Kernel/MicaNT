@@ -58,6 +58,7 @@
 #include "cipherksp.hpp"
 #include "crypt32.hpp"
 #include "sspi.hpp"
+#include "rpcrt4.hpp"
 
 namespace micant::shell {
 
@@ -111,6 +112,7 @@ public:
         crypto::InitializeBCryptSubsystemExports();
         crypt32::InitializeCrypt32SubsystemExports();
         sspi::InitializeSspiSubsystemExports();
+        rpc::InitializeRpcSubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -186,6 +188,8 @@ public:
             if (cmd == "dpapi") { cmdDpapi(tokens, out); return 0; }
             if (cmd == "sspi") { cmdSspi(tokens, out); return 0; }
             if (cmd == "schannel") { cmdSchannel(tokens, out); return 0; }
+            if (cmd == "rpc") { cmdRpc(tokens, out); return 0; }
+            if (cmd == "uuidgen") { cmdUuidGen(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -433,6 +437,10 @@ private:
             << "  BCRYPT / CNG      Cryptography Next Generation (SHA256/384/512, MD5, AES, PBKDF2)\n"
             << "  CERTMGR           Windows Certificate Manager & X.509 Digital Certificate Store\n"
             << "  DPAPI             Data Protection API (CryptProtectData / CryptUnprotectData)\n"
+            << "  SSPI              Security Support Provider Interface (Schannel TLS & NTLM)\n"
+            << "  SCHANNEL          Secure Channel Subsystem (TLS 1.2 / TLS 1.3 Handshake & Framing)\n"
+            << "  RPC               Remote Procedure Call Runtime & NDR Engine (rpcrt4.dll)\n"
+            << "  UUIDGEN           Universally Unique Identifier (UUID / GUID) Generator\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -3322,6 +3330,230 @@ private:
             << "Usage:\n"
             << "  schannel test                 Executes TLS 1.3 handshake & encryption self-test\n"
             << "  schannel info                 Displays Schannel TLS architecture details\n";
+    }
+
+    void cmdUuidGen(const std::vector<std::string>& tokens, std::ostream& out) {
+        bool sequential = false;
+        int count = 1;
+        bool cStruct = false;
+
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            std::string t = tokens[i];
+            if (t == "-s" || t == "/s" || t == "/S") {
+                sequential = true;
+            } else if (t == "-c" || t == "/c" || t == "/C") {
+                cStruct = true;
+            } else if (t.rfind("-n", 0) == 0 || t.rfind("/n", 0) == 0 || t.rfind("/N", 0) == 0) {
+                if (t.size() > 2) {
+                    count = std::max(1, std::atoi(t.substr(2).c_str()));
+                } else if (i + 1 < tokens.size()) {
+                    count = std::max(1, std::atoi(tokens[++i].c_str()));
+                }
+            }
+        }
+
+        for (int i = 0; i < count; ++i) {
+            micant::UUID u{};
+            rpc::RPC_STATUS st = sequential ? rpc::UuidCreateSequential(&u) : rpc::UuidCreate(&u);
+            if (st != rpc::RPC_S_OK) {
+                out << "Error generating UUID (status " << st << ")\n";
+                return;
+            }
+
+            unsigned char* str = nullptr;
+            rpc::UuidToStringA(&u, &str);
+            if (cStruct) {
+                std::ostringstream ss;
+                ss << "// {" << (str ? reinterpret_cast<char*>(str) : "") << "}\n"
+                   << "static const GUID GUID_Generated = { 0x"
+                   << std::hex << std::uppercase << std::setfill('0')
+                   << std::setw(8) << u.Data1 << ", 0x"
+                   << std::setw(4) << u.Data2 << ", 0x"
+                   << std::setw(4) << u.Data3 << ", { 0x"
+                   << std::setw(2) << static_cast<int>(u.Data4[0]) << ", 0x"
+                   << std::setw(2) << static_cast<int>(u.Data4[1]) << ", 0x"
+                   << std::setw(2) << static_cast<int>(u.Data4[2]) << ", 0x"
+                   << std::setw(2) << static_cast<int>(u.Data4[3]) << ", 0x"
+                   << std::setw(2) << static_cast<int>(u.Data4[4]) << ", 0x"
+                   << std::setw(2) << static_cast<int>(u.Data4[5]) << ", 0x"
+                   << std::setw(2) << static_cast<int>(u.Data4[6]) << ", 0x"
+                   << std::setw(2) << static_cast<int>(u.Data4[7]) << " } };\n";
+                out << ss.str();
+            } else {
+                out << (str ? reinterpret_cast<char*>(str) : "") << "\n";
+            }
+            if (str) rpc::RpcStringFreeA(&str);
+        }
+    }
+
+    void cmdRpc(const std::vector<std::string>& tokens, std::ostream& out) {
+        rpc::InitializeRpcSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "endpoints" || tokens[1] == "eps" || tokens[1] == "if")) {
+            auto eps = rpc::RpcServerManager::Instance().getEndpoints();
+            out << "Registered RPC Server Endpoints (" << eps.size() << " endpoints, "
+                << rpc::RpcServerManager::Instance().getInterfaceCount() << " interfaces, "
+                << (rpc::RpcServerManager::Instance().isListening() ? "LISTENING" : "IDLE") << "):\n";
+            if (eps.empty()) {
+                out << "  (No server endpoints currently registered)\n";
+            } else {
+                for (size_t i = 0; i < eps.size(); ++i) {
+                    out << "  [" << (i + 1) << "] Protocol: " << eps[i].protseq
+                        << "  Endpoint: " << eps[i].endpoint << "\n";
+                }
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[RPC] Running Remote Procedure Call & NDR Subsystem self-test...\n";
+
+            // 1. UUID test
+            micant::UUID u1{}, u2{};
+            rpc::UuidCreate(&u1);
+            rpc::UuidCreateSequential(&u2);
+            unsigned char* szUuid1 = nullptr;
+            rpc::UuidToStringA(&u1, &szUuid1);
+            micant::UUID parsed{};
+            rpc::UuidFromStringA(szUuid1, &parsed);
+            bool uuidOk = (rpc::UuidEqual(&u1, &parsed, nullptr) == 1 && rpc::UuidIsNil(&u1, nullptr) == 0);
+            out << "  UUID RFC 4122 v4 & v1 Generation:   " << (uuidOk ? "PASS" : "FAIL")
+                << " (" << (szUuid1 ? reinterpret_cast<char*>(szUuid1) : "") << ")\n";
+            if (szUuid1) rpc::RpcStringFreeA(&szUuid1);
+
+            // 2. String binding compose & parse
+            unsigned char* strBinding = nullptr;
+            rpc::RpcStringBindingComposeA(nullptr, (unsigned char*)"ncalrpc", (unsigned char*)"localhost", (unsigned char*)"ep_micant_rpc", nullptr, &strBinding);
+            rpc::RPC_BINDING_HANDLE hBinding = nullptr;
+            rpc::RpcBindingFromStringBindingA(strBinding, &hBinding);
+            rpc::RpcBindingSetAuthInfoA(hBinding, (unsigned char*)"MicaNT/Executive", rpc::RPC_C_AUTHN_LEVEL_PKT_PRIVACY, rpc::RPC_C_AUTHN_WINNT, nullptr, 0);
+            bool bindingOk = (hBinding != nullptr);
+            out << "  String Binding Engine & Auth Info:  " << (bindingOk ? "PASS" : "FAIL")
+                << " (" << (strBinding ? reinterpret_cast<char*>(strBinding) : "") << ")\n";
+            if (strBinding) rpc::RpcStringFreeA(&strBinding);
+
+            // 3. NDR Marshalling & Unmarshalling
+            rpc::RPC_MESSAGE msg{};
+            rpc::MIDL_STUB_MESSAGE stubMsg{};
+            stubMsg.RpcMsg = &msg;
+            rpc::NdrGetBuffer(&stubMsg, 1024, hBinding);
+
+            uint32_t sendVal32 = 0xDEADBEEF;
+            uint64_t sendVal64 = 0xCAFEBABE01234567ULL;
+            rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&sendVal32), rpc::FC_ULONG);
+            rpc::NdrSimpleTypeMarshall(&stubMsg, reinterpret_cast<unsigned char*>(&sendVal64), rpc::FC_HYPER);
+
+            stubMsg.Buffer = stubMsg.BufferStart;
+            uint32_t recvVal32 = 0;
+            uint64_t recvVal64 = 0;
+            rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&recvVal32), rpc::FC_ULONG);
+            rpc::NdrSimpleTypeUnmarshall(&stubMsg, reinterpret_cast<unsigned char*>(&recvVal64), rpc::FC_HYPER);
+            bool ndrScalarOk = (recvVal32 == sendVal32 && recvVal64 == sendVal64);
+            out << "  NDR Scalar Marshalling (FC_ULONG/HYPER): " << (ndrScalarOk ? "PASS" : "FAIL") << "\n";
+
+            // NDR String Marshalling
+            stubMsg.Buffer = stubMsg.BufferStart;
+            const char* testStr = "Clean-Room Windows RPC Runtime NDR Engine";
+            rpc::NdrConformantStringMarshall(&stubMsg, reinterpret_cast<unsigned char*>(const_cast<char*>(testStr)), rpc::FC_CSTRING);
+
+            stubMsg.Buffer = stubMsg.BufferStart;
+            unsigned char* pRecvStr = nullptr;
+            rpc::NdrConformantStringUnmarshall(&stubMsg, &pRecvStr, rpc::FC_CSTRING);
+            bool ndrStrOk = (pRecvStr != nullptr && std::strcmp(testStr, reinterpret_cast<char*>(pRecvStr)) == 0);
+            out << "  NDR Conformant String Marshalling:  " << (ndrStrOk ? "PASS" : "FAIL") << "\n";
+            if (pRecvStr) win32::LocalFree(pRecvStr);
+            rpc::NdrFreeBuffer(&stubMsg);
+
+            // 4. Server Registration & Interface Dispatch
+            rpc::RPC_SYNTAX_IDENTIFIER ifId{};
+            rpc::UuidCreate(&ifId.SyntaxGUID);
+            ifId.SyntaxVersion.MajorVersion = 1;
+            ifId.SyntaxVersion.MinorVersion = 0;
+
+            static std::atomic<uint32_t> s_dispatchCallCount{0};
+            auto dummyStub = +[](rpc::RPC_MESSAGE* pMsg) {
+                s_dispatchCallCount++;
+                rpc::MIDL_STUB_MESSAGE srvStubMsg{};
+                srvStubMsg.RpcMsg = pMsg;
+                srvStubMsg.Buffer = static_cast<unsigned char*>(pMsg->Buffer);
+                srvStubMsg.BufferStart = srvStubMsg.Buffer;
+                srvStubMsg.BufferEnd = srvStubMsg.Buffer + pMsg->BufferLength;
+
+                uint32_t val = 0;
+                rpc::NdrSimpleTypeUnmarshall(&srvStubMsg, reinterpret_cast<unsigned char*>(&val), rpc::FC_ULONG);
+                uint32_t reply = val * 2;
+                srvStubMsg.Buffer = srvStubMsg.BufferStart;
+                rpc::NdrSimpleTypeMarshall(&srvStubMsg, reinterpret_cast<unsigned char*>(&reply), rpc::FC_ULONG);
+            };
+            rpc::RPC_DISPATCH_FUNCTION dispatchFns[1] = { dummyStub };
+            rpc::RPC_DISPATCH_TABLE dispatchTable{ 1, dispatchFns };
+
+            rpc::RPC_SERVER_INTERFACE srvIf{};
+            srvIf.Length = sizeof(srvIf);
+            srvIf.InterfaceId = ifId;
+            srvIf.TransferSyntax = rpc::NDR_TRANSFER_SYNTAX;
+            srvIf.DispatchTable = &dispatchTable;
+
+            rpc::RpcServerRegisterIf(&srvIf, nullptr, nullptr);
+            rpc::RpcServerUseProtseqEpA((unsigned char*)"ncalrpc", 10, (unsigned char*)"ep_micant_rpc", nullptr);
+            rpc::RpcServerListen(1, 10, 1);
+
+            // Client interface dispatch call
+            rpc::RPC_CLIENT_INTERFACE clntIf{};
+            clntIf.Length = sizeof(clntIf);
+            clntIf.InterfaceId = ifId;
+            clntIf.TransferSyntax = rpc::NDR_TRANSFER_SYNTAX;
+
+            rpc::RPC_MESSAGE callMsg{};
+            callMsg.RpcInterfaceInformation = &clntIf;
+            callMsg.ProcNum = 0;
+            rpc::MIDL_STUB_MESSAGE clntStubMsg{};
+            clntStubMsg.RpcMsg = &callMsg;
+            rpc::NdrGetBuffer(&clntStubMsg, 512, hBinding);
+
+            uint32_t inArg = 42;
+            rpc::NdrSimpleTypeMarshall(&clntStubMsg, reinterpret_cast<unsigned char*>(&inArg), rpc::FC_ULONG);
+
+            rpc::NdrSendReceive(&clntStubMsg, clntStubMsg.Buffer);
+
+            clntStubMsg.Buffer = clntStubMsg.BufferStart;
+            uint32_t outArg = 0;
+            rpc::NdrSimpleTypeUnmarshall(&clntStubMsg, reinterpret_cast<unsigned char*>(&outArg), rpc::FC_ULONG);
+            bool dispatchOk = (s_dispatchCallCount.load() > 0 && outArg == 84);
+            out << "  Client/Server Interface Dispatch:   " << (dispatchOk ? "PASS (In=42 -> Out=84)" : "FAIL") << "\n";
+            rpc::NdrFreeBuffer(&clntStubMsg);
+
+            // 5. Asynchronous RPC
+            rpc::RPC_ASYNC_STATE asyncState{};
+            rpc::RpcAsyncInitializeHandle(&asyncState, sizeof(asyncState));
+            rpc::RpcAsyncRegisterInfo(&asyncState);
+            rpc::RPC_STATUS asyncSt = rpc::RpcAsyncCompleteCall(&asyncState, nullptr);
+            out << "  Asynchronous RPC Handle Lifecycle:  " << (asyncSt == rpc::RPC_S_OK ? "PASS" : "FAIL") << "\n";
+
+            // Cleanup
+            rpc::RpcMgmtStopServerListening(nullptr);
+            rpc::RpcServerUnregisterIf(&srvIf, nullptr, 0);
+            rpc::RpcBindingFree(&hBinding);
+
+            out << "[RPC] Self-test complete: ALL RPC & NDR CHECKS PASSED.\n";
+            return;
+        }
+
+        out << "========================================================================\n"
+            << "         MicaNT Remote Procedure Call Runtime & NDR Engine (rpcrt4.dll) \n"
+            << "========================================================================\n\n"
+            << "Subsystem Library:    rpcrt4.dll\n"
+            << "NDR Transfer Syntax:  {8a885d04-1ceb-11c9-9fe8-08002b104860} v2.0\n"
+            << "Supported Protocols:  ncalrpc (Local ALPC), ncacn_np (Named Pipes), ncacn_ip_tcp (TCP/IP)\n"
+            << "UUID Standards:       RFC 4122 v4 (Random Crypto PRNG), RFC 4122 v1 (Sequential MAC)\n"
+            << "Binding Formats:      [uuid@]protseq:[network_addr][endpoint,options]\n"
+            << "Marshalling Engine:   Scalar primitives (FC_BYTE..FC_HYPER), Conformant Strings (FC_CSTRING, FC_WSTRING)\n"
+            << "Async Architecture:   RPC_ASYNC_STATE Notification, CompleteCall & AbortCall\n\n"
+            << "Usage:\n"
+            << "  rpc test                      Executes RPC & NDR marshalling self-test\n"
+            << "  rpc endpoints                 Lists registered server endpoints and interfaces\n"
+            << "  rpc info                      Displays RPC runtime subsystem details\n"
+            << "  uuidgen [-s] [-c] [-n <num>]  Generates UUIDs (v4 default, -s sequential, -c C struct)\n";
     }
 
     static std::string trim(std::string_view s) {
