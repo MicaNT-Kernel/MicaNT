@@ -8511,6 +8511,349 @@ void Test_Windows_CMD_And_BatchExecutionEngine() {
     std::cout << "[TEST] Suite 61: Windows CMD & Batch Scripting Engine PASSED.\n";
 }
 
+void Test_Direct3D9_ProgrammableShaders_And_D3DX9Math() {
+    using namespace micant::d3d9;
+    std::cout << "[TEST] Running Suite 62: Direct3D 9 Programmable Shaders & D3DX9 Runtime...\n";
+
+    // ------------------------------------------------------------------------
+    // 1. D3DX9 Matrix Mathematics
+    // ------------------------------------------------------------------------
+    D3DXMATRIX matIdent{};
+    D3DXMatrixIdentity(&matIdent);
+    TEST_ASSERT(matIdent._11 == 1.0f && matIdent._22 == 1.0f && matIdent._33 == 1.0f && matIdent._44 == 1.0f, "D3DXMatrixIdentity must set diagonal elements to 1.0f");
+    TEST_ASSERT(matIdent._12 == 0.0f && matIdent._41 == 0.0f, "D3DXMatrixIdentity must set off-diagonal elements to 0.0f");
+
+    D3DXMATRIX matTrans{};
+    D3DXMatrixTranslation(&matTrans, 10.0f, 20.0f, 30.0f);
+    TEST_ASSERT(matTrans._41 == 10.0f && matTrans._42 == 20.0f && matTrans._43 == 30.0f, "D3DXMatrixTranslation must populate row 4 translation elements");
+
+    D3DXMATRIX matScale{};
+    D3DXMatrixScaling(&matScale, 2.0f, 3.0f, 4.0f);
+    TEST_ASSERT(matScale._11 == 2.0f && matScale._22 == 3.0f && matScale._33 == 4.0f, "D3DXMatrixScaling must populate scale factors");
+
+    D3DXMATRIX matRotY{};
+    float angle = 3.14159265f * 0.5f; // 90 degrees
+    D3DXMatrixRotationY(&matRotY, angle);
+    TEST_ASSERT(std::abs(matRotY._11) < 1e-4f, "cos(90 deg) must be ~0");
+    TEST_ASSERT(std::abs(matRotY._13 - (-1.0f)) < 1e-4f, "-sin(90 deg) must be ~ -1");
+    TEST_ASSERT(std::abs(matRotY._31 - 1.0f) < 1e-4f, "sin(90 deg) must be ~ 1");
+
+    D3DXMATRIX matCombined{};
+    D3DXMatrixMultiply(&matCombined, &matScale, &matTrans);
+    TEST_ASSERT(matCombined._11 == 2.0f && matCombined._22 == 3.0f && matCombined._33 == 4.0f, "Combined scale-translation matrix diagonal elements");
+    TEST_ASSERT(matCombined._41 == 10.0f && matCombined._42 == 20.0f && matCombined._43 == 30.0f, "Combined scale-translation matrix translation elements");
+
+    D3DXVECTOR3 eye{ 0.0f, 5.0f, -10.0f }, at{ 0.0f, 0.0f, 0.0f }, up{ 0.0f, 1.0f, 0.0f };
+    D3DXMATRIX matView{};
+    D3DXMatrixLookAtLH(&matView, &eye, &at, &up);
+    TEST_ASSERT(matView._44 == 1.0f, "D3DXMatrixLookAtLH must generate valid view matrix with _44 == 1");
+
+    D3DXMATRIX matProj{};
+    D3DXMatrixPerspectiveFovLH(&matProj, 3.14159f / 4.0f, 1.33333f, 1.0f, 1000.0f);
+    TEST_ASSERT(matProj._34 == 1.0f && matProj._11 > 0.0f && matProj._22 > 0.0f, "D3DXMatrixPerspectiveFovLH must calculate valid focal scales");
+
+    float det = 0.0f;
+    D3DXMATRIX matInv{};
+    D3DMATRIX* pInvRes = D3DXMatrixInverse(&matInv, &det, &matTrans);
+    TEST_ASSERT(pInvRes != nullptr, "D3DXMatrixInverse must invert translation matrix");
+    TEST_ASSERT(std::abs(det - 1.0f) < 1e-4f, "Translation matrix determinant must be 1.0");
+    TEST_ASSERT(matInv._41 == -10.0f && matInv._42 == -20.0f && matInv._43 == -30.0f, "Inverted translation matrix must have negated translation");
+
+    D3DXMATRIX matTransposed{};
+    D3DXMatrixTranspose(&matTransposed, &matTrans);
+    TEST_ASSERT(matTransposed._14 == 10.0f && matTransposed._24 == 20.0f && matTransposed._34 == 30.0f, "D3DXMatrixTranspose must swap rows and columns");
+
+    // ------------------------------------------------------------------------
+    // 2. D3DX9 Vector Mathematics
+    // ------------------------------------------------------------------------
+    D3DXVECTOR3 v1{ 3.0f, 4.0f, 0.0f };
+    float len = D3DXVec3Length(&v1);
+    TEST_ASSERT(std::abs(len - 5.0f) < 1e-5f, "D3DXVec3Length of (3,4,0) must equal 5.0f");
+
+    D3DXVECTOR3 vNorm{};
+    D3DXVec3Normalize(&vNorm, &v1);
+    TEST_ASSERT(std::abs(vNorm.x - 0.6f) < 1e-4f && std::abs(vNorm.y - 0.8f) < 1e-4f, "D3DXVec3Normalize must compute unit vector");
+    TEST_ASSERT(std::abs(D3DXVec3Length(&vNorm) - 1.0f) < 1e-4f, "Normalized vector length must be 1.0f");
+
+    D3DXVECTOR3 vX{ 1.0f, 0.0f, 0.0f }, vY{ 0.0f, 1.0f, 0.0f }, vZ{};
+    D3DXVec3Cross(&vZ, &vX, &vY);
+    TEST_ASSERT(std::abs(vZ.x) < 1e-5f && std::abs(vZ.y) < 1e-5f && std::abs(vZ.z - 1.0f) < 1e-5f, "Cross product of X and Y axes must yield Z axis");
+
+    float dot = D3DXVec3Dot(&vX, &vY);
+    TEST_ASSERT(std::abs(dot) < 1e-5f, "Dot product of orthogonal vectors must be 0");
+
+    D3DXVECTOR3 vOrigin{ 0.0f, 0.0f, 0.0f }, vTransformed{};
+    D3DXVec3TransformCoord(&vTransformed, &vOrigin, &matTrans);
+    TEST_ASSERT(vTransformed.x == 10.0f && vTransformed.y == 20.0f && vTransformed.z == 30.0f, "D3DXVec3TransformCoord must translate point");
+
+    // ------------------------------------------------------------------------
+    // 3. D3DX Buffer & Shader Assembly / Disassembly
+    // ------------------------------------------------------------------------
+    ID3DXBuffer* pTestBuffer = nullptr;
+    int32_t hr = D3DXCreateBuffer(256, &pTestBuffer);
+    TEST_ASSERT(hr == D3D_OK && pTestBuffer != nullptr, "D3DXCreateBuffer must succeed");
+    TEST_ASSERT(pTestBuffer->GetBufferSize() == 256, "D3DXBuffer size must match requested 256 bytes");
+    pTestBuffer->Release();
+
+    const char sampleVsAsm[] =
+        "vs_3_0\n"
+        "dp4 r0.x, v0, c0\n"
+        "dp4 r0.y, v0, c1\n"
+        "dp4 r0.z, v0, c2\n"
+        "dp4 r0.w, v0, c3\n"
+        "mov o0, r0\n"
+        "mov o1, v1\n"
+        "ret\n";
+
+    ID3DXBuffer* pVsBytecode = nullptr;
+    ID3DXBuffer* pErrorMsgs = nullptr;
+    hr = D3DXAssembleShader(sampleVsAsm, sizeof(sampleVsAsm), nullptr, nullptr, 0, &pVsBytecode, &pErrorMsgs);
+    TEST_ASSERT(hr == D3D_OK && pVsBytecode != nullptr, "D3DXAssembleShader must compile vertex shader assembly to bytecode");
+
+    ID3DXBuffer* pDisasmBuf = nullptr;
+    hr = D3DXDisassembleShader(static_cast<const uint32_t*>(pVsBytecode->GetBufferPointer()), win32::FALSE, "Test Disassembly", &pDisasmBuf);
+    TEST_ASSERT(hr == D3D_OK && pDisasmBuf != nullptr, "D3DXDisassembleShader must disassemble DXBC bytecode to ASM string");
+    std::string disasmStr(static_cast<const char*>(pDisasmBuf->GetBufferPointer()));
+    TEST_ASSERT(disasmStr.find("vs_3_0") != std::string::npos, "Disassembly must contain target profile vs_3_0");
+    TEST_ASSERT(disasmStr.find("dp4") != std::string::npos, "Disassembly must contain instruction mnemonic dp4");
+    pDisasmBuf->Release();
+
+    const char samplePsAsm[] =
+        "ps_3_0\n"
+        "tex r0, v2, s0\n"
+        "mul r1, r0, v1\n"
+        "mul o1, r1, c0\n"
+        "ret\n";
+
+    ID3DXBuffer* pPsBytecode = nullptr;
+    hr = D3DXAssembleShader(samplePsAsm, sizeof(samplePsAsm), nullptr, nullptr, 0, &pPsBytecode, &pErrorMsgs);
+    TEST_ASSERT(hr == D3D_OK && pPsBytecode != nullptr, "D3DXAssembleShader must compile pixel shader assembly to bytecode");
+
+    // ------------------------------------------------------------------------
+    // 4. Programmable Shader Device Setup & Vertex Declarations
+    // ------------------------------------------------------------------------
+    IDirect3D9* pD3D = Direct3DCreate9(D3D_SDK_VERSION);
+    TEST_ASSERT(pD3D != nullptr, "Direct3DCreate9 must return non-null IDirect3D9");
+
+    win32::HWND hwnd = user32::CreateWindowExW(
+        0, L"MicaNT_Window", L"D3D9 Programmable Shaders & D3DX9 Test",
+        0, 0, 0, 640, 480, nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hwnd != nullptr, "User32 CreateWindowExW must create window handle");
+
+    D3DPRESENT_PARAMETERS pp{};
+    pp.BackBufferWidth = 640;
+    pp.BackBufferHeight = 480;
+    pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+    pp.BackBufferCount = 1;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.hDeviceWindow = hwnd;
+    pp.Windowed = win32::TRUE;
+
+    IDirect3DDevice9* pDevice = nullptr;
+    hr = pD3D->CreateDevice(0, D3DDEVTYPE_HAL, hwnd, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &pDevice);
+    TEST_ASSERT(hr == D3D_OK && pDevice != nullptr, "CreateDevice must succeed");
+
+    D3DVERTEXELEMENT9 declElems[] = {
+        { 0, 0,  D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0 },
+        { 0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0 },
+        { 0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 },
+        D3DDECL_END()
+    };
+
+    IDirect3DVertexDeclaration9* pDecl = nullptr;
+    hr = pDevice->CreateVertexDeclaration(declElems, &pDecl);
+    TEST_ASSERT(hr == D3D_OK && pDecl != nullptr, "CreateVertexDeclaration must succeed");
+
+    hr = pDevice->SetVertexDeclaration(pDecl);
+    TEST_ASSERT(hr == D3D_OK, "SetVertexDeclaration must succeed");
+
+    IDirect3DVertexDeclaration9* pReadbackDecl = nullptr;
+    pDevice->GetVertexDeclaration(&pReadbackDecl);
+    TEST_ASSERT(pReadbackDecl == pDecl, "GetVertexDeclaration must return currently bound vertex declaration");
+    pReadbackDecl->Release();
+
+    // ------------------------------------------------------------------------
+    // 5. Shader Creation, Binding & Constant Buffers
+    // ------------------------------------------------------------------------
+    IDirect3DVertexShader9* pVS = nullptr;
+    hr = pDevice->CreateVertexShader(static_cast<const uint32_t*>(pVsBytecode->GetBufferPointer()), &pVS);
+    TEST_ASSERT(hr == D3D_OK && pVS != nullptr, "CreateVertexShader from bytecode must succeed");
+
+    hr = pDevice->SetVertexShader(pVS);
+    TEST_ASSERT(hr == D3D_OK, "SetVertexShader must bind vertex shader to device");
+
+    IDirect3DVertexShader9* pReadbackVS = nullptr;
+    pDevice->GetVertexShader(&pReadbackVS);
+    TEST_ASSERT(pReadbackVS == pVS, "GetVertexShader must return active vertex shader");
+    pReadbackVS->Release();
+
+    IDirect3DPixelShader9* pPS = nullptr;
+    hr = pDevice->CreatePixelShader(static_cast<const uint32_t*>(pPsBytecode->GetBufferPointer()), &pPS);
+    TEST_ASSERT(hr == D3D_OK && pPS != nullptr, "CreatePixelShader from bytecode must succeed");
+
+    hr = pDevice->SetPixelShader(pPS);
+    TEST_ASSERT(hr == D3D_OK, "SetPixelShader must bind pixel shader to device");
+
+    IDirect3DPixelShader9* pReadbackPS = nullptr;
+    pDevice->GetPixelShader(&pReadbackPS);
+    TEST_ASSERT(pReadbackPS == pPS, "GetPixelShader must return active pixel shader");
+    pReadbackPS->Release();
+
+    // Set VS Constant registers c0..c3 (Transposed WVP matrix)
+    D3DXMATRIX matWVP;
+    D3DXMatrixIdentity(&matWVP);
+    D3DXMATRIX matTransposedWVP;
+    D3DXMatrixTranspose(&matTransposedWVP, &matWVP);
+    hr = pDevice->SetVertexShaderConstantF(0, reinterpret_cast<const float*>(&matTransposedWVP), 4);
+    TEST_ASSERT(hr == D3D_OK, "SetVertexShaderConstantF for c0..c3 must succeed");
+
+    float vsReadback[16]{};
+    hr = pDevice->GetVertexShaderConstantF(0, vsReadback, 4);
+    TEST_ASSERT(hr == D3D_OK && vsReadback[0] == 1.0f && vsReadback[5] == 1.0f, "GetVertexShaderConstantF must retrieve constant buffer registers");
+
+    // Set PS Constant register c0 (Tint RGBA: 1.0, 1.0, 1.0, 1.0)
+    float psConstantTint[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    hr = pDevice->SetPixelShaderConstantF(0, psConstantTint, 1);
+    TEST_ASSERT(hr == D3D_OK, "SetPixelShaderConstantF for c0 must succeed");
+
+    float psReadback[4]{};
+    hr = pDevice->GetPixelShaderConstantF(0, psReadback, 1);
+    TEST_ASSERT(hr == D3D_OK && psReadback[0] == 1.0f && psReadback[3] == 1.0f, "GetPixelShaderConstantF must retrieve constant registers");
+
+    // ------------------------------------------------------------------------
+    // 6. Texture Creation, Locking & Sampler States
+    // ------------------------------------------------------------------------
+    IDirect3DTexture9* pTexture = nullptr;
+    hr = D3DXCreateTexture(pDevice, 32, 32, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &pTexture);
+    TEST_ASSERT(hr == D3D_OK && pTexture != nullptr, "D3DXCreateTexture must allocate 2D texture");
+    TEST_ASSERT(pTexture->GetWidth() == 32 && pTexture->GetHeight() == 32, "Texture dimensions must be 32x32");
+
+    D3DLOCKED_RECT lr{};
+    hr = pTexture->LockRect(0, &lr, nullptr, 0);
+    TEST_ASSERT(hr == D3D_OK && lr.pBits != nullptr, "Texture LockRect must yield writable memory");
+    uint32_t* pTexBits = static_cast<uint32_t*>(lr.pBits);
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            bool tile = ((x / 4) + (y / 4)) % 2 == 0;
+            pTexBits[y * 32 + x] = tile ? D3DCOLOR_ARGB(255, 255, 200, 50) : D3DCOLOR_ARGB(255, 50, 150, 255);
+        }
+    }
+    hr = pTexture->UnlockRect(0);
+    TEST_ASSERT(hr == D3D_OK, "Texture UnlockRect must succeed");
+
+    hr = pDevice->SetTexture(0, pTexture);
+    TEST_ASSERT(hr == D3D_OK, "SetTexture must bind texture to sampler slot 0");
+
+    IDirect3DBaseTexture9* pReadbackTex = nullptr;
+    pDevice->GetTexture(0, &pReadbackTex);
+    TEST_ASSERT(pReadbackTex == pTexture, "GetTexture must return bound texture on sampler 0");
+    pReadbackTex->Release();
+
+    pDevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+    pDevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+    pDevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+    pDevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+
+    uint32_t magFilterVal = 0;
+    pDevice->GetSamplerState(0, D3DSAMP_MAGFILTER, &magFilterVal);
+    TEST_ASSERT(magFilterVal == D3DTEXF_LINEAR, "GetSamplerState must retrieve configured filter mode");
+
+    // ------------------------------------------------------------------------
+    // 7. Programmable Pipeline Drawing & Presentation
+    // ------------------------------------------------------------------------
+    struct ShadedVertex {
+        float x, y, z;
+        uint32_t color;
+        float u, v;
+    };
+
+    ShadedVertex quad[6] = {
+        { -0.6f,  0.6f, 0.0f, D3DCOLOR_ARGB(255, 255, 255, 255), 0.0f, 0.0f },
+        {  0.6f,  0.6f, 0.0f, D3DCOLOR_ARGB(255, 255, 255, 255), 1.0f, 0.0f },
+        { -0.6f, -0.6f, 0.0f, D3DCOLOR_ARGB(255, 255, 255, 255), 0.0f, 1.0f },
+        { -0.6f, -0.6f, 0.0f, D3DCOLOR_ARGB(255, 255, 255, 255), 0.0f, 1.0f },
+        {  0.6f,  0.6f, 0.0f, D3DCOLOR_ARGB(255, 255, 255, 255), 1.0f, 0.0f },
+        {  0.6f, -0.6f, 0.0f, D3DCOLOR_ARGB(255, 255, 255, 255), 1.0f, 1.0f }
+    };
+
+    const D3DCOLOR bgClearColor = D3DCOLOR_XRGB(10, 15, 30);
+    pDevice->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, bgClearColor, 1.0f, 0);
+
+    hr = pDevice->BeginScene();
+    TEST_ASSERT(hr == D3D_OK, "BeginScene must succeed");
+
+    hr = pDevice->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 2, quad, sizeof(ShadedVertex));
+    TEST_ASSERT(hr == D3D_OK, "DrawPrimitiveUP with programmable shaders must succeed");
+
+    hr = pDevice->EndScene();
+    TEST_ASSERT(hr == D3D_OK, "EndScene must succeed");
+
+    hr = pDevice->Present(nullptr, nullptr, hwnd, nullptr);
+    TEST_ASSERT(hr == D3D_OK, "Present must succeed");
+
+    // Verify User32 Presentation Surface contains shaded pixels
+    uint32_t surfW = 0, surfH = 0;
+    const uint32_t* winPixels = user32::WindowManager::get().getWindowPixelBuffer(hwnd, &surfW, &surfH);
+    TEST_ASSERT(winPixels != nullptr && surfW == 640 && surfH == 480, "User32 window surface must be valid 640x480 buffer");
+
+    uint32_t nonClearPixels = 0;
+    for (size_t i = 0; i < 640 * 480; ++i) {
+        if (winPixels[i] != bgClearColor) {
+            nonClearPixels++;
+        }
+    }
+    TEST_ASSERT(nonClearPixels > 1000, "Window surface must contain programmable-shaded pixels");
+
+    // ------------------------------------------------------------------------
+    // 8. DynamicLoader Export Resolution (d3dx9_43.dll)
+    // ------------------------------------------------------------------------
+    InitializeD3D9SubsystemExports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    void* pfnD3DXMatFov = ldr.getExport("d3dx9_43.dll", "D3DXMatrixPerspectiveFovLH");
+    TEST_ASSERT(pfnD3DXMatFov != nullptr, "d3dx9_43.dll!D3DXMatrixPerspectiveFovLH must be resolved");
+
+    void* pfnD3DXMatLookAt = ldr.getExport("d3dx9_43.dll", "D3DXMatrixLookAtLH");
+    TEST_ASSERT(pfnD3DXMatLookAt != nullptr, "d3dx9_43.dll!D3DXMatrixLookAtLH must be resolved");
+
+    void* pfnD3DXVecCross = ldr.getExport("d3dx9_43.dll", "D3DXVec3Cross");
+    TEST_ASSERT(pfnD3DXVecCross != nullptr, "d3dx9_43.dll!D3DXVec3Cross must be resolved");
+
+    void* pfnD3DXAsm = ldr.getExport("d3dx9_43.dll", "D3DXAssembleShader");
+    TEST_ASSERT(pfnD3DXAsm != nullptr, "d3dx9_43.dll!D3DXAssembleShader must be resolved");
+
+    void* pfnD3DXDisasm = ldr.getExport("d3dx9_43.dll", "D3DXDisassembleShader");
+    TEST_ASSERT(pfnD3DXDisasm != nullptr, "d3dx9_43.dll!D3DXDisassembleShader must be resolved");
+
+    void* pfnD3DXTex = ldr.getExport("d3dx9_43.dll", "D3DXCreateTexture");
+    TEST_ASSERT(pfnD3DXTex != nullptr, "d3dx9_43.dll!D3DXCreateTexture must be resolved");
+
+    // ------------------------------------------------------------------------
+    // 9. Shell Command Integration
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("prismx d3d9 shaders", out);
+        std::string res = out.str();
+        TEST_ASSERT(res.find("[Direct3D 9] Programmable Vertex & Pixel Shader Pipeline Rendered Successfully!") != std::string::npos, "Shell must report programmable shader pipeline success");
+    }
+
+    // Cleanup COM objects
+    pTexture->Release();
+    pVS->Release();
+    pPS->Release();
+    pDecl->Release();
+    pVsBytecode->Release();
+    pPsBytecode->Release();
+    pDevice->Release();
+    pD3D->Release();
+    user32::DestroyWindow(hwnd);
+
+    std::cout << "[TEST] Suite 62: Direct3D 9 Programmable Shaders & D3DX9 Runtime PASSED.\n";
+}
+
 
 int main() {
     std::cout << "========================================================================\n";
@@ -8578,6 +8921,7 @@ int main() {
     RUN_TEST(Test_Gdi32_And_Ole32_Win32Foundation);
     RUN_TEST(Test_Shell32_And_ComCtl32_Win32Controls);
     RUN_TEST(Test_Windows_CMD_And_BatchExecutionEngine);
+    RUN_TEST(Test_Direct3D9_ProgrammableShaders_And_D3DX9Math);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

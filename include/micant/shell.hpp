@@ -1605,8 +1605,19 @@ private:
     }
 
     void cmdD3D9(const std::vector<std::string>& tokens, std::ostream& out) {
-        (void)tokens;
-        out << "[Direct3D 9] Initializing D3D9 Sovereign Fixed-Function Pipeline & Runtime...\n";
+        bool useShaders = false;
+        for (const auto& tok : tokens) {
+            if (tok == "shader" || tok == "shaders") {
+                useShaders = true;
+                break;
+            }
+        }
+
+        if (useShaders) {
+            out << "[Direct3D 9] Initializing D3D9 Programmable Shader Pipeline (VS 3.0 & PS 3.0)...\n";
+        } else {
+            out << "[Direct3D 9] Initializing D3D9 Sovereign Fixed-Function Pipeline & Runtime...\n";
+        }
 
         d3d9::IDirect3D9* pD3D = d3d9::Direct3DCreate9(d3d9::D3D_SDK_VERSION);
         if (!pD3D) {
@@ -1625,7 +1636,7 @@ private:
 
         // Create Native User32 Presentation Target Window
         win32::HWND hwnd = user32::CreateWindowExW(
-            0, L"MicaNT_Window", L"MicaNT PrismX Direct3D 9 Fixed-Function Viewport",
+            0, L"MicaNT_Window", useShaders ? L"MicaNT PrismX Direct3D 9 Programmable Viewport" : L"MicaNT PrismX Direct3D 9 Fixed-Function Viewport",
             0, 0, 0, 640, 480, nullptr, nullptr, nullptr, nullptr
         );
 
@@ -1659,38 +1670,157 @@ private:
         pDevice->SetRenderState(d3d9::D3DRS_CULLMODE, d3d9::D3DCULL_CCW);
         pDevice->SetRenderState(d3d9::D3DRS_LIGHTING, 0);
 
-        // Clear Viewport (Midnight Blue)
-        pDevice->Clear(0, nullptr, d3d9::D3DCLEAR_TARGET | d3d9::D3DCLEAR_ZBUFFER, d3d9::D3DCOLOR_XRGB(10, 20, 50), 1.0f, 0);
+        if (useShaders) {
+            // Vertex Declaration
+            d3d9::D3DVERTEXELEMENT9 declElems[] = {
+                { 0, 0, d3d9::D3DDECLTYPE_FLOAT3, d3d9::D3DDECLMETHOD_DEFAULT, d3d9::D3DDECLUSAGE_POSITION, 0 },
+                { 0, 12, d3d9::D3DDECLTYPE_D3DCOLOR, d3d9::D3DDECLMETHOD_DEFAULT, d3d9::D3DDECLUSAGE_COLOR, 0 },
+                { 0, 16, d3d9::D3DDECLTYPE_FLOAT2, d3d9::D3DDECLMETHOD_DEFAULT, d3d9::D3DDECLUSAGE_TEXCOORD, 0 },
+                D3DDECL_END()
+            };
+            d3d9::IDirect3DVertexDeclaration9* pDecl = nullptr;
+            pDevice->CreateVertexDeclaration(declElems, &pDecl);
+            pDevice->SetVertexDeclaration(pDecl);
 
-        pDevice->BeginScene();
+            // Vertex Shader
+            const char vsSrc[] =
+                "vs_3_0\n"
+                "dp4 r0.x, v0, c0\n"
+                "dp4 r0.y, v0, c1\n"
+                "dp4 r0.z, v0, c2\n"
+                "dp4 r0.w, v0, c3\n"
+                "mov o0, r0\n"
+                "mov o1, v1\n"
+                "ret\n";
+            d3d9::ID3DXBuffer* pVsBuf = nullptr;
+            d3d9::D3DXAssembleShader(vsSrc, sizeof(vsSrc), nullptr, nullptr, 0, &pVsBuf, nullptr);
+            d3d9::IDirect3DVertexShader9* pVS = nullptr;
+            if (pVsBuf) {
+                pDevice->CreateVertexShader(static_cast<const uint32_t*>(pVsBuf->GetBufferPointer()), &pVS);
+                pVsBuf->Release();
+            } else {
+                pDevice->CreateVertexShader(nullptr, &pVS);
+            }
+            pDevice->SetVertexShader(pVS);
 
-        // 3D Gouraud-Shaded Triangle (D3DFVF_XYZ | D3DFVF_DIFFUSE)
-        struct D3DVertex {
-            float x, y, z;
-            uint32_t color;
-        };
+            // Pixel Shader
+            const char psSrc[] =
+                "ps_3_0\n"
+                "tex r0, v2, s0\n"
+                "mul r1, r0, v1\n"
+                "mul o1, r1, c0\n"
+                "ret\n";
+            d3d9::ID3DXBuffer* pPsBuf = nullptr;
+            d3d9::D3DXAssembleShader(psSrc, sizeof(psSrc), nullptr, nullptr, 0, &pPsBuf, nullptr);
+            d3d9::IDirect3DPixelShader9* pPS = nullptr;
+            if (pPsBuf) {
+                pDevice->CreatePixelShader(static_cast<const uint32_t*>(pPsBuf->GetBufferPointer()), &pPS);
+                pPsBuf->Release();
+            } else {
+                pDevice->CreatePixelShader(nullptr, &pPS);
+            }
+            pDevice->SetPixelShader(pPS);
 
-        D3DVertex triangle[3] = {
-            {  0.0f,  0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(255, 30, 30) },   // Top Red
-            {  0.7f, -0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(30, 255, 30) },   // Bottom-Right Green (CW)
-            { -0.7f, -0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(30, 30, 255) }    // Bottom-Left Blue
-        };
+            // Create Procedural Texture
+            d3d9::IDirect3DTexture9* pTex = nullptr;
+            pDevice->CreateTexture(64, 64, 1, 0, d3d9::D3DFMT_A8R8G8B8, d3d9::D3DPOOL_MANAGED, &pTex, nullptr);
+            if (pTex) {
+                d3d9::D3DLOCKED_RECT lr{};
+                if (pTex->LockRect(0, &lr, nullptr, 0) == d3d9::D3D_OK) {
+                    uint32_t* texPix = static_cast<uint32_t*>(lr.pBits);
+                    for (int y = 0; y < 64; ++y) {
+                        for (int x = 0; x < 64; ++x) {
+                            bool check = ((x / 8) + (y / 8)) % 2 == 0;
+                            texPix[y * 64 + x] = check ? 0xFFFFFFFF : 0xFF204060;
+                        }
+                    }
+                    pTex->UnlockRect(0);
+                }
+                pDevice->SetTexture(0, pTex);
+                pDevice->SetSamplerState(0, d3d9::D3DSAMP_MAGFILTER, d3d9::D3DTEXF_LINEAR);
+            }
 
-        pDevice->SetFVF(d3d9::D3DFVF_XYZ | d3d9::D3DFVF_DIFFUSE);
-        pDevice->DrawPrimitiveUP(d3d9::D3DPT_TRIANGLELIST, 1, triangle, sizeof(D3DVertex));
+            // Set Shader Constants
+            d3d9::D3DXMATRIX matWorld, matView, matProj, matWVP;
+            d3d9::D3DXMatrixIdentity(&matWorld);
+            d3d9::D3DXVECTOR3 eye{ 0.0f, 0.0f, -3.0f }, at{ 0.0f, 0.0f, 0.0f }, up{ 0.0f, 1.0f, 0.0f };
+            d3d9::D3DXMatrixLookAtLH(&matView, &eye, &at, &up);
+            d3d9::D3DXMatrixPerspectiveFovLH(&matProj, 3.14159f / 4.0f, 640.0f / 480.0f, 0.1f, 100.0f);
+            d3d9::D3DXMatrixMultiply(&matWVP, &matWorld, &matView);
+            d3d9::D3DXMatrixMultiply(&matWVP, &matWVP, &matProj);
 
-        pDevice->EndScene();
+            d3d9::D3DXMATRIX matTransposed;
+            d3d9::D3DXMatrixTranspose(&matTransposed, &matWVP);
+            pDevice->SetVertexShaderConstantF(0, reinterpret_cast<const float*>(&matTransposed), 4);
 
-        // Present to HWND
-        pDevice->Present(nullptr, nullptr, hwnd, nullptr);
+            float psTint[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+            pDevice->SetPixelShaderConstantF(0, psTint, 1);
 
-        out << "[Direct3D 9] Fixed-Function Barycentric Shaded Triangle Rendered Successfully!\n"
-            << "  Target Window:  640x480 (HWND " << hwnd << ")\n"
-            << "  Pixel Format:   D3DFMT_X8R8G8B8 (32-bpp BGRA)\n"
-            << "  Primitive:      D3DPT_TRIANGLELIST (1 Triangle, 3 Vertices)\n"
-            << "  FVF Formats:    D3DFVF_XYZ | D3DFVF_DIFFUSE\n"
-            << "  Interpolation:  Gouraud Shading across Barycentric Rasterizer\n"
-            << "  Presents:       " << static_cast<d3d9::Direct3DDevice9Impl*>(pDevice)->GetPresentCount() << " frame(s) blitted to User32 Window.\n";
+            struct ShadedVertex {
+                float x, y, z;
+                uint32_t color;
+                float u, v;
+            };
+            ShadedVertex quadVerts[6] = {
+                { -1.0f,  1.0f, 0.0f, 0xFFFF0000, 0.0f, 0.0f },
+                {  1.0f,  1.0f, 0.0f, 0xFF00FF00, 1.0f, 0.0f },
+                { -1.0f, -1.0f, 0.0f, 0xFF0000FF, 0.0f, 1.0f },
+                { -1.0f, -1.0f, 0.0f, 0xFF0000FF, 0.0f, 1.0f },
+                {  1.0f,  1.0f, 0.0f, 0xFF00FF00, 1.0f, 0.0f },
+                {  1.0f, -1.0f, 0.0f, 0xFFFFFFFF, 1.0f, 1.0f }
+            };
+
+            pDevice->Clear(0, nullptr, d3d9::D3DCLEAR_TARGET | d3d9::D3DCLEAR_ZBUFFER, d3d9::D3DCOLOR_XRGB(15, 25, 45), 1.0f, 0);
+            pDevice->BeginScene();
+            pDevice->DrawPrimitiveUP(d3d9::D3DPT_TRIANGLELIST, 2, quadVerts, sizeof(ShadedVertex));
+            pDevice->EndScene();
+            pDevice->Present(nullptr, nullptr, hwnd, nullptr);
+
+            out << "[Direct3D 9] Programmable Vertex & Pixel Shader Pipeline Rendered Successfully!\n"
+                << "  Target Window:  640x480 (HWND " << hwnd << ")\n"
+                << "  Vertex Shader:  Shader Model 3.0 MVP Matrix Transformation\n"
+                << "  Pixel Shader:   Shader Model 3.0 Procedural Texture Modulate\n"
+                << "  Samplers:       64x64 Checkered Texture Bound to Sampler 0\n"
+                << "  Presents:       " << static_cast<d3d9::Direct3DDevice9Impl*>(pDevice)->GetPresentCount() << " frame(s) blitted to User32 Window.\n";
+
+            if (pTex) pTex->Release();
+            if (pVS) pVS->Release();
+            if (pPS) pPS->Release();
+            if (pDecl) pDecl->Release();
+        } else {
+            // Clear Viewport (Midnight Blue)
+            pDevice->Clear(0, nullptr, d3d9::D3DCLEAR_TARGET | d3d9::D3DCLEAR_ZBUFFER, d3d9::D3DCOLOR_XRGB(10, 20, 50), 1.0f, 0);
+
+            pDevice->BeginScene();
+
+            // 3D Gouraud-Shaded Triangle (D3DFVF_XYZ | D3DFVF_DIFFUSE)
+            struct D3DVertex {
+                float x, y, z;
+                uint32_t color;
+            };
+
+            D3DVertex triangle[3] = {
+                {  0.0f,  0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(255, 30, 30) },   // Top Red
+                {  0.7f, -0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(30, 255, 30) },   // Bottom-Right Green (CW)
+                { -0.7f, -0.7f, 0.0f, d3d9::D3DCOLOR_XRGB(30, 30, 255) }    // Bottom-Left Blue
+            };
+
+            pDevice->SetFVF(d3d9::D3DFVF_XYZ | d3d9::D3DFVF_DIFFUSE);
+            pDevice->DrawPrimitiveUP(d3d9::D3DPT_TRIANGLELIST, 1, triangle, sizeof(D3DVertex));
+
+            pDevice->EndScene();
+
+            // Present to HWND
+            pDevice->Present(nullptr, nullptr, hwnd, nullptr);
+
+            out << "[Direct3D 9] Fixed-Function Barycentric Shaded Triangle Rendered Successfully!\n"
+                << "  Target Window:  640x480 (HWND " << hwnd << ")\n"
+                << "  Pixel Format:   D3DFMT_X8R8G8B8 (32-bpp BGRA)\n"
+                << "  Primitive:      D3DPT_TRIANGLELIST (1 Triangle, 3 Vertices)\n"
+                << "  FVF Formats:    D3DFVF_XYZ | D3DFVF_DIFFUSE\n"
+                << "  Interpolation:  Gouraud Shading across Barycentric Rasterizer\n"
+                << "  Presents:       " << static_cast<d3d9::Direct3DDevice9Impl*>(pDevice)->GetPresentCount() << " frame(s) blitted to User32 Window.\n";
+        }
 
         pDevice->Release();
         pD3D->Release();
