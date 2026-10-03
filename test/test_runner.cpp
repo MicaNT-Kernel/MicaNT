@@ -72,6 +72,7 @@
 #include "micant/aegissandbox.hpp"
 #include "micant/polarisdiag.hpp"
 #include "micant/cipherksp.hpp"
+#include "micant/janusldr.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -6698,6 +6699,161 @@ void Test_CipherKSP_CryptographicServices_And_AES() {
     }
 }
 
+// ============================================================================
+// Suite 55: JanusLDR Sovereign Dynamic Linker & Delay-Load Gateway Tests
+// ============================================================================
+void Test_JanusLDR_DelayLoadThunks_And_SxSManifest() {
+    using namespace micant::janus;
+    using namespace micant::ldr;
+
+    auto& linker = JanusDynamicLinker::get();
+
+    // 1. Delay-Load Helper Thunk Resolution (__delayLoadHelper2)
+    {
+        // Setup mock target function in dxgi.dll
+        void* pfnCreateDXGIFactory1 = reinterpret_cast<void*>(0x00007FF8B0001234ULL);
+        DynamicLoader::get().registerExport("dxgi.dll", "CreateDXGIFactory1", pfnCreateDXGIFactory1);
+
+        // Prepare simulated image memory buffer containing delay descriptor & tables
+        std::vector<uint8_t> mockImage(4096, 0);
+        uintptr_t imageBase = reinterpret_cast<uintptr_t>(mockImage.data());
+
+        // Offset 0x100: DLL Name "dxgi.dll"
+        const char dllNameStr[] = "dxgi.dll";
+        uint32_t rvaDLLName = 0x100;
+        std::memcpy(&mockImage[rvaDLLName], dllNameStr, sizeof(dllNameStr));
+
+        // Offset 0x200: HMODULE storage (uintptr_t)
+        uint32_t rvaHmod = 0x200;
+
+        // Offset 0x300: IAT entry table
+        uint32_t rvaIAT = 0x300;
+        void** pIAT = reinterpret_cast<void**>(&mockImage[rvaIAT]);
+        pIAT[0] = reinterpret_cast<void*>(0xDEADBEEF); // Initial unthunked placeholder
+
+        // Offset 0x400: Import Name Table (INT) pointing to Hint/Name at 0x500
+        uint32_t rvaINT = 0x400;
+        uintptr_t* pINT = reinterpret_cast<uintptr_t*>(&mockImage[rvaINT]);
+        pINT[0] = 0x500; // RVA to Hint/Name
+
+        // Offset 0x500: Hint (2 bytes) + "CreateDXGIFactory1\0"
+        uint32_t rvaHintName = 0x500;
+        mockImage[rvaHintName] = 0x01; // Hint low
+        mockImage[rvaHintName + 1] = 0x00; // Hint high
+        const char procNameStr[] = "CreateDXGIFactory1";
+        std::memcpy(&mockImage[rvaHintName + 2], procNameStr, sizeof(procNameStr));
+
+        // Build Delay Descriptor
+        ImgDelayDescr desc{};
+        desc.grAttrs = DLATTR_RVA;
+        desc.rvaDLLName = rvaDLLName;
+        desc.rvaHmod = rvaHmod;
+        desc.rvaIAT = rvaIAT;
+        desc.rvaINT = rvaINT;
+
+        // Hook tracking
+        std::vector<uint32_t> notifications;
+        auto testHook = [](uint32_t dliNotify, DelayLoadInfo* pdli) -> void* {
+            static std::vector<uint32_t>* pNotifs = nullptr;
+            if (pdli && pdli->dwLastError == 0x1337) {
+                pNotifs = reinterpret_cast<std::vector<uint32_t>*>(pdli->pfnCur);
+            }
+            if (pNotifs) {
+                pNotifs->push_back(dliNotify);
+            }
+            return nullptr;
+        };
+
+        // Pass hook tracker
+        DelayLoadInfo dummy{};
+        dummy.dwLastError = 0x1337;
+        dummy.pfnCur = &notifications;
+        testHook(0, &dummy);
+
+        void** targetIATEntry = &pIAT[0];
+        void* resolved = linker.resolveDelayLoad(imageBase, &desc, targetIATEntry, testHook);
+
+        TEST_ASSERT(resolved == pfnCreateDXGIFactory1, "Delay-load helper must resolve exact target function address");
+        TEST_ASSERT(*targetIATEntry == pfnCreateDXGIFactory1, "IAT entry must be patched directly to target address");
+        TEST_ASSERT(*reinterpret_cast<uintptr_t*>(&mockImage[rvaHmod]) != 0, "Descriptor HMODULE slot must be populated with loaded base");
+
+        // Verify hook notifications fired in correct order
+        TEST_ASSERT(std::find(notifications.begin(), notifications.end(), dliStartProcessing) != notifications.end(), "dliStartProcessing must fire");
+        TEST_ASSERT(std::find(notifications.begin(), notifications.end(), dliNoteEndProcessing) != notifications.end(), "dliNoteEndProcessing must fire");
+    }
+
+    // 2. Export Forwarder Chain Resolution
+    {
+        void* pfnRtlEnterCritSec = reinterpret_cast<void*>(0x00007FF800054321ULL);
+        DynamicLoader::get().registerExport("ntdll.dll", "RtlEnterCriticalSection", pfnRtlEnterCritSec);
+
+        // Forward kernel32!EnterCriticalSection -> NTDLL.RtlEnterCriticalSection
+        linker.registerForwarder("kernel32.dll", "EnterCriticalSection", "ntdll.dll.RtlEnterCriticalSection");
+
+        // Multi-hop: api-ms-win-core-synch-l1-1-0.dll!EnterCriticalSection -> kernel32.dll.EnterCriticalSection
+        linker.registerForwarder("api-ms-win-core-synch-l1-1-0.dll", "EnterCriticalSection", "kernel32.dll.EnterCriticalSection");
+
+        // Test single-hop resolution
+        void* resolvedSingle = linker.resolveExport("kernel32.dll", "EnterCriticalSection");
+        TEST_ASSERT(resolvedSingle == pfnRtlEnterCritSec, "Single-hop forwarder must resolve to target NTDLL export");
+
+        // Test multi-hop forwarder chain resolution
+        void* resolvedMulti = linker.resolveExport("api-ms-win-core-synch-l1-1-0.dll", "EnterCriticalSection");
+        TEST_ASSERT(resolvedMulti == pfnRtlEnterCritSec, "Multi-hop forwarder chain must resolve seamlessly to leaf implementation");
+
+        // Test forwarder parser on ordinal forward
+        auto ordTarget = ForwarderResolver::parseForwarderString("user32.dll.#42");
+        TEST_ASSERT(ordTarget.has_value(), "Forwarder resolver must parse ordinal forward target");
+        TEST_ASSERT(ordTarget->isOrdinal && ordTarget->ordinal == 42, "Parsed ordinal forward must extract #42");
+        TEST_ASSERT(ordTarget->moduleName == "user32.dll", "Parsed ordinal forward must identify user32.dll");
+    }
+
+    // 3. Side-by-Side (SxS) Manifest Parsing
+    {
+        std::string manifestXml = R"(
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="MicaNT.SovereignApp" version="1.2.3.4" processorArchitecture="amd64" publicKeyToken="12345678abcdef00" />
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" publicKeyToken="6595b64144ccf1df" />
+    </dependentAssembly>
+  </dependency>
+  <file name="comctl32.dll" />
+</assembly>
+)";
+
+        auto actCtx = ActivationContext::parseFromXml(manifestXml, L"C:\\Apps\\SovereignApp.exe.manifest");
+        TEST_ASSERT(actCtx != nullptr, "ActivationContext::parseFromXml must return valid context");
+        TEST_ASSERT(actCtx->identity.name == L"MicaNT.SovereignApp", "Parsed assembly identity name must match manifest");
+        TEST_ASSERT(actCtx->identity.version == L"1.2.3.4", "Parsed assembly identity version must match manifest");
+        TEST_ASSERT(actCtx->dependencies.size() == 1, "Parsed dependencies count must be 1");
+        TEST_ASSERT(actCtx->dependencies[0].name == L"Microsoft.Windows.Common-Controls", "Dependent assembly name must match Common-Controls");
+        TEST_ASSERT(actCtx->dependencies[0].version == L"6.0.0.0", "Dependent assembly version must match 6.0.0.0");
+        TEST_ASSERT(actCtx->fileRedirections.find(L"comctl32.dll") != actCtx->fileRedirections.end(), "File redirection for comctl32.dll must be registered");
+
+        // 4. Win32 Activation Context Stack Lifecycle
+        uintptr_t hActCtx = linker.registerParsedContext(actCtx);
+        TEST_ASSERT(hActCtx != 0, "Context registration must yield non-zero handle");
+
+        uintptr_t cookie = 0;
+        bool activated = ActivateActCtx(hActCtx, &cookie);
+        TEST_ASSERT(activated && cookie != 0, "ActivateActCtx must successfully push context onto stack");
+
+        auto active = linker.getActiveContext();
+        TEST_ASSERT(active != nullptr && active->identity.name == L"MicaNT.SovereignApp", "getActiveContext must retrieve current top of stack");
+
+        auto redir = linker.resolveAssemblyRedirection(L"comctl32.dll");
+        TEST_ASSERT(redir.has_value() && *redir == L"comctl32.dll", "Assembly redirection must resolve active manifest files");
+
+        bool deactivated = DeactivateActCtx(0, cookie);
+        TEST_ASSERT(deactivated, "DeactivateActCtx with matching cookie must succeed");
+        TEST_ASSERT(linker.getActiveContext() == nullptr, "Context stack must be empty after popping cookie");
+
+        ReleaseActCtx(hActCtx);
+    }
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -6757,6 +6913,7 @@ int main() {
     RUN_TEST(Test_AegisSandbox_JobObjects_And_ProcessContainment);
     RUN_TEST(Test_PolarisDiag_CrashDump_And_MinidumpWriter);
     RUN_TEST(Test_CipherKSP_CryptographicServices_And_AES);
+    RUN_TEST(Test_JanusLDR_DelayLoadThunks_And_SxSManifest);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
