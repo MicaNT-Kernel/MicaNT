@@ -684,6 +684,12 @@ public:
 
     // --- Direct Introspection Helpers ---
 
+    void registerServiceRecord(std::shared_ptr<ServiceRecord> rec) {
+        if (!rec) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        services_[rec->serviceName] = rec;
+    }
+
     std::shared_ptr<ServiceRecord> getServiceRecord(const std::wstring& name) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = services_.find(name);

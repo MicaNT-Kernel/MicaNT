@@ -100,6 +100,7 @@
 #include "micant/vss.hpp"
 #include "micant/wer.hpp"
 #include "micant/dwmapi.hpp"
+#include "micant/wasapi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -15089,6 +15090,331 @@ void Test_WindowsDWM_DesktopWindowManager_Subsystem() {
     std::cout << "[TEST] Suite 78: Windows Desktop Window Manager (DWM) Subsystem PASSED.\n";
 }
 
+void Test_WindowsWASAPI_CoreAudioEngine_Subsystem() {
+    std::cout << "[TEST] Running Suite 79: Windows Audio Session API (WASAPI) & Core Audio Engine Subsystem (mmdevapi.dll / audiosrv.dll)...\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (mmdevapi.dll & audiosrv.dll)
+    // ------------------------------------------------------------------------
+    wasapi::InitializeWASAPISubsystem();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    TEST_ASSERT(ldr.getExport("mmdevapi.dll", "DllGetClassObject") != nullptr, "mmdevapi.dll must export DllGetClassObject");
+    TEST_ASSERT(ldr.getExport("mmdevapi.dll", "DllCanUnloadNow") != nullptr, "mmdevapi.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("mmdevapi.dll", "DllRegisterServer") != nullptr, "mmdevapi.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("mmdevapi.dll", "DllUnregisterServer") != nullptr, "mmdevapi.dll must export DllUnregisterServer");
+    TEST_ASSERT(ldr.getExport("audiosrv.dll", "ServiceMain") != nullptr, "audiosrv.dll must export ServiceMain");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Module Version Metadata Verification
+    // ------------------------------------------------------------------------
+    auto& verDb = version::VersionDatabase::Instance();
+    const auto* modMmdev = verDb.FindModule("mmdevapi.dll");
+    TEST_ASSERT(modMmdev != nullptr, "mmdevapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modMmdev->stringTable.at("FileDescription") == "MMDevice API", "mmdevapi.dll FileDescription mismatch");
+    TEST_ASSERT(modMmdev->stringTable.at("FileVersion") == "10.0.22621.1", "mmdevapi.dll FileVersion mismatch");
+
+    const auto* modAudioSrv = verDb.FindModule("audiosrv.dll");
+    TEST_ASSERT(modAudioSrv != nullptr, "audiosrv.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modAudioSrv->stringTable.at("FileDescription") == "Windows Audio Service", "audiosrv.dll FileDescription mismatch");
+
+    // ------------------------------------------------------------------------
+    // Stage 3: SCM Service Registration (AudioSrv)
+    // ------------------------------------------------------------------------
+    auto& scm = scm::ServiceControlManager::get();
+    auto pSvc = scm.getServiceRecord(L"AudioSrv");
+    TEST_ASSERT(pSvc != nullptr, "AudioSrv service must be registered in SCM");
+    TEST_ASSERT(pSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "AudioSrv service must be in running state");
+    TEST_ASSERT(pSvc->displayName == L"Windows Audio", "AudioSrv display name mismatch");
+
+    // ------------------------------------------------------------------------
+    // Stage 4: COM Class Factory & CoCreateInstance
+    // ------------------------------------------------------------------------
+    wasapi::IMMDeviceEnumerator* pEnumerator = nullptr;
+    ole32::HRESULT hr = ole32::CoCreateInstance(
+        wasapi::CLSID_MMDeviceEnumerator,
+        nullptr,
+        ole32::CLSCTX_INPROC_SERVER,
+        wasapi::IID_IMMDeviceEnumerator,
+        reinterpret_cast<void**>(&pEnumerator)
+    );
+    TEST_ASSERT(SUCCEEDED(hr), "CoCreateInstance(CLSID_MMDeviceEnumerator) must succeed");
+    TEST_ASSERT(pEnumerator != nullptr, "Device enumerator pointer must not be null");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Audio Endpoint Enumeration (eRender & eCapture)
+    // ------------------------------------------------------------------------
+    wasapi::IMMDeviceCollection* pRenderCol = nullptr;
+    hr = pEnumerator->EnumAudioEndpoints(wasapi::eRender, wasapi::DEVICE_STATE_ACTIVE, &pRenderCol);
+    TEST_ASSERT(SUCCEEDED(hr) && pRenderCol != nullptr, "EnumAudioEndpoints(eRender) must succeed");
+
+    uint32_t renderCount = 0;
+    pRenderCol->GetCount(&renderCount);
+    TEST_ASSERT(renderCount >= 2, "Must enumerate at least 2 active render endpoints (Speakers & Headphones)");
+
+    for (uint32_t i = 0; i < renderCount; ++i) {
+        wasapi::IMMDevice* pDev = nullptr;
+        hr = pRenderCol->Item(i, &pDev);
+        TEST_ASSERT(SUCCEEDED(hr) && pDev != nullptr, "Item() must retrieve valid IMMDevice");
+
+        wasapi::IMMEndpoint* pEndpoint = nullptr;
+        hr = pDev->QueryInterface(wasapi::IID_IMMEndpoint, reinterpret_cast<void**>(&pEndpoint));
+        TEST_ASSERT(SUCCEEDED(hr) && pEndpoint != nullptr, "Device must support IMMEndpoint interface");
+
+        wasapi::EDataFlow flow;
+        pEndpoint->GetDataFlow(&flow);
+        TEST_ASSERT(flow == wasapi::eRender, "Endpoint flow must be eRender");
+
+        uint32_t state = 0;
+        pDev->GetState(&state);
+        TEST_ASSERT(state == wasapi::DEVICE_STATE_ACTIVE, "Endpoint state must be DEVICE_STATE_ACTIVE");
+
+        pEndpoint->Release();
+        pDev->Release();
+    }
+    pRenderCol->Release();
+
+    // Capture endpoints
+    wasapi::IMMDeviceCollection* pCaptureCol = nullptr;
+    hr = pEnumerator->EnumAudioEndpoints(wasapi::eCapture, wasapi::DEVICE_STATE_ACTIVE, &pCaptureCol);
+    TEST_ASSERT(SUCCEEDED(hr) && pCaptureCol != nullptr, "EnumAudioEndpoints(eCapture) must succeed");
+    uint32_t captureCount = 0;
+    pCaptureCol->GetCount(&captureCount);
+    TEST_ASSERT(captureCount >= 1, "Must enumerate at least 1 active capture endpoint (Microphone)");
+    pCaptureCol->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Endpoint Property Store (IPropertyStore)
+    // ------------------------------------------------------------------------
+    wasapi::IMMDevice* pDefaultRender = nullptr;
+    hr = pEnumerator->GetDefaultAudioEndpoint(wasapi::eRender, wasapi::eConsole, &pDefaultRender);
+    TEST_ASSERT(SUCCEEDED(hr) && pDefaultRender != nullptr, "GetDefaultAudioEndpoint(eRender, eConsole) must succeed");
+
+    wasapi::IPropertyStore* pStore = nullptr;
+    hr = pDefaultRender->OpenPropertyStore(wasapi::STGM_READ, &pStore);
+    TEST_ASSERT(SUCCEEDED(hr) && pStore != nullptr, "OpenPropertyStore must return valid IPropertyStore");
+
+    wasapi::PROPVARIANT pvFriendly{};
+    hr = pStore->GetValue(wasapi::PKEY_Device_FriendlyName, &pvFriendly);
+    TEST_ASSERT(SUCCEEDED(hr), "GetValue(PKEY_Device_FriendlyName) must succeed");
+    TEST_ASSERT(pvFriendly.vt == ole32::VT_LPWSTR && pvFriendly.pwszVal != nullptr, "FriendlyName must be VT_LPWSTR");
+    std::wstring friendlyName(pvFriendly.pwszVal);
+    TEST_ASSERT(friendlyName.find(L"Speakers") != std::wstring::npos, "Default console render device must be Speakers");
+    wasapi::PropVariantClear(&pvFriendly);
+
+    wasapi::PROPVARIANT pvForm{};
+    hr = pStore->GetValue(wasapi::PKEY_AudioEndpoint_FormFactor, &pvForm);
+    TEST_ASSERT(SUCCEEDED(hr), "GetValue(PKEY_AudioEndpoint_FormFactor) must succeed");
+    TEST_ASSERT(pvForm.vt == ole32::VT_UI4 && pvForm.ulVal == wasapi::Speakers, "Form factor must be Speakers");
+
+    // Set and commit custom property
+    wasapi::PROPVARIANT pvCustom{};
+    pvCustom.vt = ole32::VT_UI4;
+    pvCustom.ulVal = 42;
+    pStore->SetValue(wasapi::PKEY_AudioEndpoint_ControlPanelGrouping, pvCustom);
+    pStore->Commit();
+
+    wasapi::PROPVARIANT pvCheck{};
+    pStore->GetValue(wasapi::PKEY_AudioEndpoint_ControlPanelGrouping, &pvCheck);
+    TEST_ASSERT(pvCheck.ulVal == 42, "Custom property must be retained after Commit");
+    pStore->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Default Endpoint Query by Role
+    // ------------------------------------------------------------------------
+    wasapi::IMMDevice* pDefComm = nullptr;
+    hr = pEnumerator->GetDefaultAudioEndpoint(wasapi::eRender, wasapi::eCommunications, &pDefComm);
+    TEST_ASSERT(SUCCEEDED(hr) && pDefComm != nullptr, "GetDefaultAudioEndpoint(eCommunications) must succeed");
+
+    wchar_t* commId = nullptr;
+    pDefComm->GetId(&commId);
+    TEST_ASSERT(commId != nullptr && std::wcslen(commId) > 0, "Communications endpoint ID must be valid");
+    ole32::CoTaskMemFree(commId);
+    pDefComm->Release();
+
+    wasapi::IMMDevice* pDefMic = nullptr;
+    hr = pEnumerator->GetDefaultAudioEndpoint(wasapi::eCapture, wasapi::eConsole, &pDefMic);
+    TEST_ASSERT(SUCCEEDED(hr) && pDefMic != nullptr, "GetDefaultAudioEndpoint(eCapture) must succeed");
+
+    wchar_t* micId = nullptr;
+    pDefMic->GetId(&micId);
+    TEST_ASSERT(micId != nullptr && std::wcslen(micId) > 0, "Capture endpoint ID must be valid");
+    ole32::CoTaskMemFree(micId);
+    pDefMic->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Audio Client Activation & Format Negotiation
+    // ------------------------------------------------------------------------
+    wasapi::IAudioClient* pAudioClient = nullptr;
+    hr = pDefaultRender->Activate(wasapi::IID_IAudioClient, 0, nullptr, reinterpret_cast<void**>(&pAudioClient));
+    TEST_ASSERT(SUCCEEDED(hr) && pAudioClient != nullptr, "Activate(IID_IAudioClient) must succeed");
+
+    audio::WAVEFORMATEX* pMixFormat = nullptr;
+    hr = pAudioClient->GetMixFormat(&pMixFormat);
+    TEST_ASSERT(SUCCEEDED(hr) && pMixFormat != nullptr, "GetMixFormat must return default device format");
+    TEST_ASSERT(pMixFormat->nSamplesPerSec == 48000, "Device mix format must be 48,000 Hz");
+    TEST_ASSERT(pMixFormat->nChannels == 2, "Device mix format must be 2 channels (stereo)");
+    TEST_ASSERT(pMixFormat->wBitsPerSample == 16, "Device mix format must be 16-bit");
+
+    hr = pAudioClient->IsFormatSupported(wasapi::AUDCLNT_SHAREMODE_SHARED, pMixFormat, nullptr);
+    TEST_ASSERT(SUCCEEDED(hr), "Mix format must be supported in shared mode");
+
+    wasapi::REFERENCE_TIME defPeriod = 0;
+    wasapi::REFERENCE_TIME minPeriod = 0;
+    hr = pAudioClient->GetDevicePeriod(&defPeriod, &minPeriod);
+    TEST_ASSERT(SUCCEEDED(hr), "GetDevicePeriod must succeed");
+    TEST_ASSERT(defPeriod == 100000, "Default device period must be 10ms (100,000 hns)");
+    TEST_ASSERT(minPeriod == 30000, "Minimum device period must be 3ms (30,000 hns)");
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Audio Client Initialization & Buffer Pacing
+    // ------------------------------------------------------------------------
+    // Request 100ms buffer (1,000,000 hns)
+    hr = pAudioClient->Initialize(wasapi::AUDCLNT_SHAREMODE_SHARED, 0, 1000000, 0, pMixFormat, nullptr);
+    TEST_ASSERT(SUCCEEDED(hr), "Initialize shared audio stream must succeed");
+
+    // Second initialize must fail with AUDCLNT_E_ALREADY_INITIALIZED
+    hr = pAudioClient->Initialize(wasapi::AUDCLNT_SHAREMODE_SHARED, 0, 1000000, 0, pMixFormat, nullptr);
+    TEST_ASSERT(hr == wasapi::AUDCLNT_E_ALREADY_INITIALIZED, "Duplicate Initialize must return AUDCLNT_E_ALREADY_INITIALIZED");
+
+    uint32_t bufFrameCount = 0;
+    hr = pAudioClient->GetBufferSize(&bufFrameCount);
+    TEST_ASSERT(SUCCEEDED(hr), "GetBufferSize must succeed");
+    TEST_ASSERT(bufFrameCount >= 4800, "100ms buffer at 48kHz must contain at least 4800 frames");
+
+    uint32_t currentPadding = 0;
+    pAudioClient->GetCurrentPadding(&currentPadding);
+    TEST_ASSERT(currentPadding == 0, "Initial padding must be 0 frames");
+
+    hr = pAudioClient->Start();
+    TEST_ASSERT(SUCCEEDED(hr), "Start() must transition client to playing state");
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Audio Render Client (IAudioRenderClient)
+    // ------------------------------------------------------------------------
+    wasapi::IAudioRenderClient* pRenderClient = nullptr;
+    hr = pAudioClient->GetService(wasapi::IID_IAudioRenderClient, reinterpret_cast<void**>(&pRenderClient));
+    TEST_ASSERT(SUCCEEDED(hr) && pRenderClient != nullptr, "GetService(IID_IAudioRenderClient) must succeed");
+
+    uint8_t* pRenderBuf = nullptr;
+    hr = pRenderClient->GetBuffer(480, &pRenderBuf);
+    TEST_ASSERT(SUCCEEDED(hr) && pRenderBuf != nullptr, "GetBuffer(480) must succeed");
+
+    // Fill buffer with 16-bit PCM test sine wave
+    auto* samples = reinterpret_cast<int16_t*>(pRenderBuf);
+    for (uint32_t f = 0; f < 480; ++f) {
+        int16_t sampleVal = static_cast<int16_t>(16000.0 * std::sin(2.0 * std::numbers::pi * 440.0 * f / 48000.0));
+        samples[f * 2] = sampleVal;     // Left
+        samples[f * 2 + 1] = sampleVal; // Right
+    }
+
+    hr = pRenderClient->ReleaseBuffer(480, 0);
+    TEST_ASSERT(SUCCEEDED(hr), "ReleaseBuffer(480) must succeed");
+
+    pAudioClient->GetCurrentPadding(&currentPadding);
+    TEST_ASSERT(currentPadding == 480, "Padding must now be 480 frames");
+
+    // Second write with SILENT flag
+    hr = pRenderClient->GetBuffer(480, &pRenderBuf);
+    TEST_ASSERT(SUCCEEDED(hr) && pRenderBuf != nullptr, "Second GetBuffer(480) must succeed");
+    hr = pRenderClient->ReleaseBuffer(480, wasapi::AUDCLNT_BUFFERFLAGS_SILENT);
+    TEST_ASSERT(SUCCEEDED(hr), "ReleaseBuffer with SILENT flag must succeed");
+
+    pAudioClient->GetCurrentPadding(&currentPadding);
+    TEST_ASSERT(currentPadding == 960, "Padding must now be 960 frames");
+
+    pRenderClient->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Audio Clock & Volume Control Interfaces
+    // ------------------------------------------------------------------------
+    wasapi::IAudioClock* pClock = nullptr;
+    hr = pAudioClient->GetService(wasapi::IID_IAudioClock, reinterpret_cast<void**>(&pClock));
+    TEST_ASSERT(SUCCEEDED(hr) && pClock != nullptr, "GetService(IID_IAudioClock) must succeed");
+
+    uint64_t clockFreq = 0;
+    pClock->GetFrequency(&clockFreq);
+    TEST_ASSERT(clockFreq == 48000, "AudioClock frequency must match sample rate (48000 Hz)");
+
+    uint64_t clockPos = 0;
+    pClock->GetPosition(&clockPos, nullptr);
+    TEST_ASSERT(clockPos == 960, "AudioClock position must match total frames rendered (960)");
+    pClock->Release();
+
+    // Test IAudioEndpointVolume
+    wasapi::IAudioEndpointVolume* pEndpointVol = nullptr;
+    hr = pDefaultRender->Activate(wasapi::IID_IAudioEndpointVolume, 0, nullptr, reinterpret_cast<void**>(&pEndpointVol));
+    TEST_ASSERT(SUCCEEDED(hr) && pEndpointVol != nullptr, "Activate(IID_IAudioEndpointVolume) must succeed");
+
+    uint32_t channelCount = 0;
+    pEndpointVol->GetChannelCount(&channelCount);
+    TEST_ASSERT(channelCount == 2, "Channel count must be 2");
+
+    pEndpointVol->SetMasterVolumeLevelScalar(0.85f, nullptr);
+    float scalarVol = 0.0f;
+    pEndpointVol->GetMasterVolumeLevelScalar(&scalarVol);
+    TEST_ASSERT(std::abs(scalarVol - 0.85f) < 0.01f, "Master volume scalar must be 0.85");
+
+    float dbVol = 0.0f;
+    pEndpointVol->GetMasterVolumeLevel(&dbVol);
+    TEST_ASSERT(dbVol < 0.0f, "Volume in dB must be negative (< 0 dB)");
+
+    pEndpointVol->SetMute(1, nullptr);
+    win32::BOOL isMuted = 0;
+    pEndpointVol->GetMute(&isMuted);
+    TEST_ASSERT(isMuted == 1, "Endpoint must report muted");
+
+    pEndpointVol->SetMute(0, nullptr);
+    pEndpointVol->GetMute(&isMuted);
+    TEST_ASSERT(isMuted == 0, "Endpoint must report unmuted");
+
+    pEndpointVol->VolumeStepDown(nullptr);
+    pEndpointVol->VolumeStepUp(nullptr);
+    pEndpointVol->Release();
+
+    pAudioClient->Stop();
+    pAudioClient->Release();
+    ole32::CoTaskMemFree(pMixFormat);
+    pDefaultRender->Release();
+    pEnumerator->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Interactive CLI Utility Integration (audiosrv)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. audiosrv status
+        shell.execute("audiosrv status", out);
+        TEST_ASSERT(out.str().find("Windows Audio Service & WASAPI") != std::string::npos, "audiosrv status must display banner");
+        TEST_ASSERT(out.str().find("RUNNING (Auto-Start)") != std::string::npos, "audiosrv status must report RUNNING");
+
+        // 2. audiosrv list
+        out.str("");
+        shell.execute("audiosrv list", out);
+        TEST_ASSERT(out.str().find("Speakers (Mica High Definition Audio)") != std::string::npos, "audiosrv list must list Speakers");
+        TEST_ASSERT(out.str().find("Microphone (Mica HD Audio Array)") != std::string::npos, "audiosrv list must list Microphone");
+
+        // 3. audiosrv volume
+        out.str("");
+        shell.execute("audiosrv volume 75", out);
+        TEST_ASSERT(out.str().find("Master volume set to 75%") != std::string::npos, "audiosrv volume must set volume");
+
+        // 4. audiosrv mute
+        out.str("");
+        shell.execute("audiosrv mute on", out);
+        TEST_ASSERT(out.str().find("Mute set to: MUTED") != std::string::npos, "audiosrv mute on must report MUTED");
+
+        // 5. audiosrv test
+        out.str("");
+        shell.execute("audiosrv test", out);
+        TEST_ASSERT(out.str().find("WASAPI Self-Test Finished Successfully") != std::string::npos, "audiosrv test must finish successfully");
+    }
+
+    std::cout << "[TEST] Suite 79: Windows Audio Session API (WASAPI) & Core Audio Engine Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -15172,6 +15498,7 @@ int main() {
     RUN_TEST(Test_WindowsVSS_VolumeShadowCopy_Subsystem);
     RUN_TEST(Test_WindowsWER_ErrorReporting_Subsystem);
     RUN_TEST(Test_WindowsDWM_DesktopWindowManager_Subsystem);
+    RUN_TEST(Test_WindowsWASAPI_CoreAudioEngine_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -68,6 +68,7 @@
 #include "vss.hpp"
 #include "wer.hpp"
 #include "dwmapi.hpp"
+#include "wasapi.hpp"
 
 namespace micant::shell {
 
@@ -213,6 +214,7 @@ public:
             if (cmd == "vssadmin" || cmd == "vss") { cmdVssAdmin(tokens, out); return 0; }
             if (cmd == "werfault" || cmd == "wer") { cmdWerFault(tokens, out); return 0; }
             if (cmd == "dwm" || cmd == "dwmapi") { cmdDwm(tokens, out); return 0; }
+            if (cmd == "audiosrv" || cmd == "wasapi") { cmdAudioSrv(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -6146,6 +6148,177 @@ private:
             << "  dwm enable                 Enable desktop composition\n"
             << "  dwm disable                Disable desktop composition\n"
             << "  dwm test                   Execute subsystem self-test\n";
+    }
+
+    void cmdAudioSrv(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& svc = wasapi::WindowsAudioService::get();
+
+        if (tokens.size() >= 2) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            if (sub == "list" || sub == "endpoints") {
+                out << "========================================================================\n"
+                    << "      MicaNT Windows Audio Service (AudioSrv) Endpoints                 \n"
+                    << "========================================================================\n";
+                auto eps = svc.getEndpoints();
+                for (size_t i = 0; i < eps.size(); ++i) {
+                    const auto& ep = eps[i];
+                    std::string idA(ep->getId().begin(), ep->getId().end());
+                    std::string nameA(ep->getFriendlyName().begin(), ep->getFriendlyName().end());
+                    const char* flowStr = (ep->getDataFlow() == wasapi::eRender) ? "Playback (eRender)" : "Recording (eCapture)";
+                    const char* formStr = "Generic";
+                    switch (ep->getFormFactor()) {
+                        case wasapi::Speakers: formStr = "Speakers"; break;
+                        case wasapi::Headphones: formStr = "Headphones"; break;
+                        case wasapi::Microphone: formStr = "Microphone"; break;
+                        default: formStr = "Other"; break;
+                    }
+
+                    out << "[" << i << "] " << nameA << "\n"
+                        << "    Flow:        " << flowStr << "\n"
+                        << "    Form Factor: " << formStr << "\n"
+                        << "    Device ID:   " << idA << "\n\n";
+                }
+                return;
+            }
+
+            if (sub == "volume" || sub == "vol") {
+                wasapi::IMMDevice* pDev = nullptr;
+                ole32::HRESULT hr = svc.getDefaultAudioEndpoint(wasapi::eRender, wasapi::eConsole, &pDev);
+                if (SUCCEEDED(hr) && pDev) {
+                    wasapi::IAudioEndpointVolume* pVol = nullptr;
+                    pDev->Activate(wasapi::IID_IAudioEndpointVolume, 0, nullptr, reinterpret_cast<void**>(&pVol));
+                    if (pVol) {
+                        if (tokens.size() >= 3) {
+                            float val = std::stof(tokens[2]);
+                            if (val > 1.0f) val /= 100.0f; // accept 0-100 or 0.0-1.0
+                            val = std::clamp(val, 0.0f, 1.0f);
+                            pVol->SetMasterVolumeLevelScalar(val, nullptr);
+                            out << "[AudioSrv] Master volume set to " << static_cast<int>(val * 100.0f) << "%\n";
+                        } else {
+                            float current = 0.0f;
+                            float currentDb = 0.0f;
+                            pVol->GetMasterVolumeLevelScalar(&current);
+                            pVol->GetMasterVolumeLevel(&currentDb);
+                            win32::BOOL muted = 0;
+                            pVol->GetMute(&muted);
+                            out << "[AudioSrv] Default Endpoint Volume: " << static_cast<int>(current * 100.0f) << "% (" << currentDb << " dB)"
+                                << (muted ? " [MUTED]" : "") << "\n";
+                        }
+                        pVol->Release();
+                    }
+                    pDev->Release();
+                }
+                return;
+            }
+
+            if (sub == "mute") {
+                wasapi::IMMDevice* pDev = nullptr;
+                ole32::HRESULT hr = svc.getDefaultAudioEndpoint(wasapi::eRender, wasapi::eConsole, &pDev);
+                if (SUCCEEDED(hr) && pDev) {
+                    wasapi::IAudioEndpointVolume* pVol = nullptr;
+                    pDev->Activate(wasapi::IID_IAudioEndpointVolume, 0, nullptr, reinterpret_cast<void**>(&pVol));
+                    if (pVol) {
+                        if (tokens.size() >= 3) {
+                            std::string state = tokens[2];
+                            std::transform(state.begin(), state.end(), state.begin(), ::tolower);
+                            bool mute = (state == "on" || state == "1" || state == "true");
+                            pVol->SetMute(mute ? 1 : 0, nullptr);
+                            out << "[AudioSrv] Mute set to: " << (mute ? "MUTED" : "UNMUTED") << "\n";
+                        } else {
+                            win32::BOOL muted = 0;
+                            pVol->GetMute(&muted);
+                            out << "[AudioSrv] Current Mute Status: " << (muted ? "MUTED" : "UNMUTED") << "\n";
+                        }
+                        pVol->Release();
+                    }
+                    pDev->Release();
+                }
+                return;
+            }
+
+            if (sub == "test") {
+                out << "========================================================================\n"
+                    << "      MicaNT Windows Audio Session API (WASAPI) Self-Test               \n"
+                    << "========================================================================\n";
+                out << "[TEST] 1. Initializing WASAPI Subsystem & Endpoints...\n";
+                wasapi::InitializeWASAPISubsystem();
+
+                out << "[TEST] 2. Enumerating Active Audio Endpoints...\n";
+                wasapi::IMMDeviceEnumerator* pEnum = nullptr;
+                ole32::HRESULT hr = ole32::CoCreateInstance(
+                    wasapi::CLSID_MMDeviceEnumerator,
+                    nullptr,
+                    ole32::CLSCTX_INPROC_SERVER,
+                    wasapi::IID_IMMDeviceEnumerator,
+                    reinterpret_cast<void**>(&pEnum)
+                );
+                if (!SUCCEEDED(hr) || !pEnum) {
+                    out << "[ERROR] CoCreateInstance failed for CLSID_MMDeviceEnumerator: hr=0x" << std::hex << hr << std::dec << "\n";
+                    return;
+                }
+                out << "  -> IMMDeviceEnumerator instantiated successfully.\n";
+
+                wasapi::IMMDeviceCollection* pCol = nullptr;
+                pEnum->EnumAudioEndpoints(wasapi::eRender, wasapi::DEVICE_STATE_ACTIVE, &pCol);
+                uint32_t count = 0;
+                if (pCol) pCol->GetCount(&count);
+                out << "  -> Found " << count << " active render endpoint(s).\n";
+
+                out << "[TEST] 3. Activating IAudioClient on Default Endpoint...\n";
+                wasapi::IMMDevice* pDefDev = nullptr;
+                pEnum->GetDefaultAudioEndpoint(wasapi::eRender, wasapi::eConsole, &pDefDev);
+                if (pDefDev) {
+                    wasapi::IAudioClient* pClient = nullptr;
+                    pDefDev->Activate(wasapi::IID_IAudioClient, 0, nullptr, reinterpret_cast<void**>(&pClient));
+                    if (pClient) {
+                        audio::WAVEFORMATEX* pMix = nullptr;
+                        pClient->GetMixFormat(&pMix);
+                        if (pMix) {
+                            out << "  -> Device Mix Format: " << pMix->nSamplesPerSec << " Hz, " << pMix->nChannels << " ch, " << pMix->wBitsPerSample << " bit.\n";
+                            pClient->Initialize(wasapi::AUDCLNT_SHAREMODE_SHARED, 0, 1000000, 0, pMix, nullptr);
+                            uint32_t bufFrames = 0;
+                            pClient->GetBufferSize(&bufFrames);
+                            out << "  -> Initialized Audio Client: Buffer Size = " << bufFrames << " frames.\n";
+
+                            wasapi::IAudioRenderClient* pRender = nullptr;
+                            pClient->GetService(wasapi::IID_IAudioRenderClient, reinterpret_cast<void**>(&pRender));
+                            if (pRender) {
+                                uint8_t* pData = nullptr;
+                                pRender->GetBuffer(480, &pData);
+                                pRender->ReleaseBuffer(480, wasapi::AUDCLNT_BUFFERFLAGS_SILENT);
+                                out << "  -> Render Client: Written 480 silent frames.\n";
+                                pRender->Release();
+                            }
+                            ole32::CoTaskMemFree(pMix);
+                        }
+                        pClient->Release();
+                    }
+                    pDefDev->Release();
+                }
+                if (pCol) pCol->Release();
+                pEnum->Release();
+
+                out << "[AudioSrv] WASAPI Self-Test Finished Successfully.\n";
+                return;
+            }
+        }
+
+        // Status banner
+        out << "========================================================================\n"
+            << "         MicaNT Windows Audio Service & WASAPI (audiosrv.dll)           \n"
+            << "========================================================================\n\n"
+            << "Service Status:       " << (svc.isRunning() ? "RUNNING (Auto-Start)" : "STOPPED") << "\n"
+            << "Active Endpoints:     " << svc.getEndpointCount() << " devices\n"
+            << "Mix Engine Standard:  48,000 Hz, 16/32-bit Float, Multi-Channel\n"
+            << "SCM Service Name:     AudioSrv\n\n"
+            << "Usage:\n"
+            << "  audiosrv status            Display Audio Service status\n"
+            << "  audiosrv list              List all audio endpoints\n"
+            << "  audiosrv volume [0-100]    Get or set default playback volume\n"
+            << "  audiosrv mute [on|off]     Get or set default playback mute\n"
+            << "  audiosrv test              Execute WASAPI engine self-test\n";
     }
 
     static std::string trim(std::string_view s) {
