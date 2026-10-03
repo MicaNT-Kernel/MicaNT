@@ -93,6 +93,7 @@
 #include "micant/rpcrt4.hpp"
 #include "micant/oleaut32.hpp"
 #include "micant/setupapi.hpp"
+#include "micant/wevtapi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -12925,6 +12926,327 @@ void Test_StructuredStorage_CompoundFile_And_Persistence_Subsystem() {
     std::cout << "[TEST] Suite 71: Windows OLE Structured Storage & Compound File Subsystem PASSED.\n";
 }
 
+void Test_WindowsEventLog_And_WevtApi_Subsystem() {
+    using namespace micant;
+
+    std::cout << "[TEST] Running Suite 72: Windows Event Log & Instrumentation Subsystem (wevtapi.dll / advapi32.dll)...\n";
+
+    wevtapi::InitializeWevtApiSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Channel Enumeration (EvtOpenChannelEnum & EvtNextChannelPath)
+    // ------------------------------------------------------------------------
+    {
+        wevtapi::EVT_HANDLE hChanEnum = wevtapi::EvtOpenChannelEnum(nullptr, 0);
+        TEST_ASSERT(hChanEnum != nullptr, "EvtOpenChannelEnum must return valid channel enum handle");
+
+        std::vector<std::wstring> channels;
+        wchar_t chanBuf[256]{};
+        uint32_t bufUsed = 0;
+        while (wevtapi::EvtNextChannelPath(hChanEnum, 256, chanBuf, &bufUsed)) {
+            channels.push_back(chanBuf);
+        }
+        wevtapi::EvtClose(hChanEnum);
+
+        TEST_ASSERT(channels.size() >= 4, "Must enumerate at least 4 default channels");
+        TEST_ASSERT(std::find(channels.begin(), channels.end(), L"System") != channels.end(), "System channel must be present");
+        TEST_ASSERT(std::find(channels.begin(), channels.end(), L"Application") != channels.end(), "Application channel must be present");
+        TEST_ASSERT(std::find(channels.begin(), channels.end(), L"Security") != channels.end(), "Security channel must be present");
+        TEST_ASSERT(std::find(channels.begin(), channels.end(), L"Setup") != channels.end(), "Setup channel must be present");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Publisher Enumeration & Metadata (EvtOpenPublisherEnum & EvtGetPublisherMetadataProperty)
+    // ------------------------------------------------------------------------
+    {
+        wevtapi::EVT_HANDLE hPubEnum = wevtapi::EvtOpenPublisherEnum(nullptr, 0);
+        TEST_ASSERT(hPubEnum != nullptr, "EvtOpenPublisherEnum must return valid publisher enum handle");
+
+        std::vector<std::wstring> publishers;
+        wchar_t pubBuf[256]{};
+        uint32_t bufUsed = 0;
+        while (wevtapi::EvtNextPublisherId(hPubEnum, 256, pubBuf, &bufUsed)) {
+            publishers.push_back(pubBuf);
+        }
+        wevtapi::EvtClose(hPubEnum);
+
+        TEST_ASSERT(!publishers.empty(), "Publisher enumeration must find registered publishers");
+        TEST_ASSERT(std::find(publishers.begin(), publishers.end(), L"MicaNT-Kernel") != publishers.end(), "MicaNT-Kernel publisher must be registered");
+
+        wevtapi::EVT_HANDLE hMeta = wevtapi::EvtOpenPublisherMetadata(nullptr, L"MicaNT-Kernel", nullptr, 0, 0);
+        TEST_ASSERT(hMeta != nullptr, "EvtOpenPublisherMetadata must open metadata for MicaNT-Kernel");
+
+        GUID pubGuid{};
+        win32::BOOL bGuid = wevtapi::EvtGetPublisherMetadataProperty(hMeta, wevtapi::EvtPublisherMetadataPublisherGuid, 0, sizeof(pubGuid), &pubGuid, &bufUsed);
+        TEST_ASSERT(bGuid == win32::TRUE && bufUsed == sizeof(GUID), "EvtGetPublisherMetadataProperty must return publisher GUID");
+        TEST_ASSERT(pubGuid.Data1 == 0x11112222, "Publisher GUID Data1 must match registered kernel GUID");
+
+        wchar_t resPath[256]{};
+        win32::BOOL bPath = wevtapi::EvtGetPublisherMetadataProperty(hMeta, wevtapi::EvtPublisherMetadataMessageFilePath, 0, sizeof(resPath), resPath, &bufUsed);
+        TEST_ASSERT(bPath == win32::TRUE && std::wcslen(resPath) > 0, "EvtGetPublisherMetadataProperty must return message file path");
+
+        wevtapi::EvtClose(hMeta);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Modern Event Emission & Monotonic Record ID Progression
+    // ------------------------------------------------------------------------
+    uint64_t emittedId1 = 0;
+    uint64_t emittedId2 = 0;
+    {
+        wevtapi::EventRecord rec1{};
+        rec1.channel = L"Application";
+        rec1.providerName = L"MicaNT-Diagnostics";
+        rec1.eventId = 2001;
+        rec1.level = wevtapi::WINEVENT_LEVEL_INFO;
+        rec1.stringInserts.push_back(L"Diagnostics runtime initialized");
+        rec1.namedData[L"SessionID"] = L"101";
+
+        emittedId1 = wevtapi::EventLogManager::Instance().WriteEvent(rec1);
+        TEST_ASSERT(emittedId1 > 0, "Emitted event must have positive record ID");
+
+        wevtapi::EventRecord rec2{};
+        rec2.channel = L"Application";
+        rec2.providerName = L"MicaNT-Diagnostics";
+        rec2.eventId = 2002;
+        rec2.level = wevtapi::WINEVENT_LEVEL_WARNING;
+        rec2.stringInserts.push_back(L"Diagnostics memory warning threshold reached");
+        rec2.namedData[L"UsagePercent"] = L"85";
+
+        emittedId2 = wevtapi::EventLogManager::Instance().WriteEvent(rec2);
+        TEST_ASSERT(emittedId2 > emittedId1, "Subsequent event record ID must monotonically advance");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Event Query Traversal (EvtQuery, EvtNext & EvtSeek)
+    // ------------------------------------------------------------------------
+    {
+        wevtapi::EVT_HANDLE hQuery = wevtapi::EvtQuery(nullptr, L"Application", L"*", wevtapi::EvtQueryChannelPath | wevtapi::EvtQueryForwardDirection);
+        TEST_ASSERT(hQuery != nullptr, "EvtQuery must return valid query handle");
+
+        wevtapi::EVT_HANDLE events[10]{};
+        uint32_t returned = 0;
+        win32::BOOL bNext = wevtapi::EvtNext(hQuery, 10, events, 1000, 0, &returned);
+        TEST_ASSERT(bNext == win32::TRUE && returned >= 2, "EvtNext must retrieve emitted application events");
+
+        // Verify seeking
+        win32::BOOL bSeek = wevtapi::EvtSeek(hQuery, 0, nullptr, 0, 0);
+        TEST_ASSERT(bSeek == win32::TRUE, "EvtSeek must reset cursor to beginning");
+
+        for (uint32_t i = 0; i < returned; ++i) {
+            wevtapi::EvtClose(events[i]);
+        }
+        wevtapi::EvtClose(hQuery);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Structured XML Event Rendering (EvtCreateRenderContext & EvtRender)
+    // ------------------------------------------------------------------------
+    {
+        wevtapi::EVT_HANDLE hQuery = wevtapi::EvtQuery(nullptr, L"Application", L"*", wevtapi::EvtQueryChannelPath | wevtapi::EvtQueryForwardDirection);
+        wevtapi::EVT_HANDLE hEvent = nullptr;
+        uint32_t returned = 0;
+        wevtapi::EvtNext(hQuery, 1, &hEvent, 1000, 0, &returned);
+        TEST_ASSERT(returned == 1 && hEvent != nullptr, "Must retrieve at least 1 event for rendering");
+
+        wevtapi::EVT_HANDLE hContext = wevtapi::EvtCreateRenderContext(0, nullptr, wevtapi::EvtRenderContextValues);
+        TEST_ASSERT(hContext != nullptr, "EvtCreateRenderContext must succeed");
+
+        wchar_t xmlBuffer[4096]{};
+        uint32_t bufUsed = 0;
+        uint32_t propCount = 0;
+        win32::BOOL bRender = wevtapi::EvtRender(hContext, hEvent, wevtapi::EvtRenderEventXml, sizeof(xmlBuffer), xmlBuffer, &bufUsed, &propCount);
+        TEST_ASSERT(bRender == win32::TRUE, "EvtRender with EvtRenderEventXml must succeed");
+        TEST_ASSERT(std::wcsstr(xmlBuffer, L"<Event xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">") != nullptr, "Rendered XML must have standard Event root xmlns");
+        TEST_ASSERT(std::wcsstr(xmlBuffer, L"<System>") != nullptr, "Rendered XML must include <System> element");
+        TEST_ASSERT(std::wcsstr(xmlBuffer, L"<Provider Name=") != nullptr, "Rendered XML must include <Provider Name=> attribute");
+        TEST_ASSERT(std::wcsstr(xmlBuffer, L"<EventID>") != nullptr, "Rendered XML must include <EventID>");
+        TEST_ASSERT(std::wcsstr(xmlBuffer, L"<EventRecordID>") != nullptr, "Rendered XML must include <EventRecordID>");
+        TEST_ASSERT(std::wcsstr(xmlBuffer, L"<Channel>Application</Channel>") != nullptr, "Rendered XML must include correct Channel");
+        TEST_ASSERT(std::wcsstr(xmlBuffer, L"<EventData>") != nullptr, "Rendered XML must include <EventData>");
+
+        wevtapi::EvtClose(hContext);
+        wevtapi::EvtClose(hEvent);
+        wevtapi::EvtClose(hQuery);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Channel Configuration Properties (EvtOpenChannelConfig & EvtGetChannelConfigProperty)
+    // ------------------------------------------------------------------------
+    {
+        wevtapi::EVT_HANDLE hCfg = wevtapi::EvtOpenChannelConfig(nullptr, L"System", 0);
+        TEST_ASSERT(hCfg != nullptr, "EvtOpenChannelConfig must open System channel config");
+
+        win32::BOOL enabled = win32::FALSE;
+        uint32_t bufUsed = 0;
+        win32::BOOL bProp = wevtapi::EvtGetChannelConfigProperty(hCfg, wevtapi::EvtChannelConfigEnabled, 0, sizeof(enabled), &enabled, &bufUsed);
+        TEST_ASSERT(bProp == win32::TRUE && enabled == win32::TRUE, "System channel must be enabled");
+
+        uint64_t maxSize = 0;
+        bProp = wevtapi::EvtGetChannelConfigProperty(hCfg, wevtapi::EvtChannelLoggingConfigMaxSize, 0, sizeof(maxSize), &maxSize, &bufUsed);
+        TEST_ASSERT(bProp == win32::TRUE && maxSize > 0, "System channel must have positive max buffer size");
+
+        wevtapi::EvtClose(hCfg);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Channel Clearing (EvtClearLog)
+    // ------------------------------------------------------------------------
+    {
+        // Emit event to Setup channel, verify it exists, clear, verify empty
+        wevtapi::EventRecord setupRec{};
+        setupRec.channel = L"Setup";
+        setupRec.providerName = L"MicaNT-SetupTest";
+        setupRec.eventId = 5001;
+        wevtapi::EventLogManager::Instance().WriteEvent(setupRec);
+        TEST_ASSERT(wevtapi::EventLogManager::Instance().GetRecordCount(L"Setup") > 0, "Setup channel must have records before clearing");
+
+        win32::BOOL bClear = wevtapi::EvtClearLog(nullptr, L"Setup", nullptr, 0);
+        TEST_ASSERT(bClear == win32::TRUE, "EvtClearLog must succeed on Setup channel");
+        TEST_ASSERT(wevtapi::EventLogManager::Instance().GetRecordCount(L"Setup") == 0, "Setup channel record count must be 0 after clear");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Legacy advapi32 EventLog API Bridge (RegisterEventSourceW & ReportEventW)
+    // ------------------------------------------------------------------------
+    {
+        void* hSource = wevtapi::RegisterEventSourceW(nullptr, L"MicaNT-ServiceTest");
+        TEST_ASSERT(hSource != nullptr, "RegisterEventSourceW must return valid handle");
+
+        const wchar_t* stringInserts[] = { L"Subsystem started successfully", L"Worker thread count: 4" };
+        win32::BOOL bReport = wevtapi::ReportEventW(
+            hSource,
+            wevtapi::EVENTLOG_INFORMATION_TYPE,
+            1, // category
+            1005, // event ID
+            nullptr,
+            2, // num strings
+            0,
+            stringInserts,
+            nullptr
+        );
+        TEST_ASSERT(bReport == win32::TRUE, "ReportEventW must log event successfully");
+
+        // Verify event appears in Application channel query
+        auto events = wevtapi::EventLogManager::Instance().Query(L"Application", L"EventID=1005");
+        TEST_ASSERT(!events.empty(), "Query must locate event reported via ReportEventW");
+        TEST_ASSERT(events.back().providerName == L"MicaNT-ServiceTest", "Provider name must match registered legacy source");
+        TEST_ASSERT(events.back().stringInserts.size() >= 2, "String inserts must be preserved in event record");
+
+        wevtapi::DeregisterEventSource(hSource);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Legacy Record Counting & Oldest Record ID (GetNumberOfEventLogRecords & GetOldestEventLogRecord)
+    // ------------------------------------------------------------------------
+    {
+        void* hLog = wevtapi::OpenEventLogW(nullptr, L"Application");
+        TEST_ASSERT(hLog != nullptr, "OpenEventLogW must open Application log");
+
+        uint32_t numRecs = 0;
+        win32::BOOL bNum = wevtapi::GetNumberOfEventLogRecords(hLog, &numRecs);
+        TEST_ASSERT(bNum == win32::TRUE && numRecs > 0, "GetNumberOfEventLogRecords must return non-zero record count");
+
+        uint32_t oldestRec = 0;
+        win32::BOOL bOldest = wevtapi::GetOldestEventLogRecord(hLog, &oldestRec);
+        TEST_ASSERT(bOldest == win32::TRUE && oldestRec > 0, "GetOldestEventLogRecord must return non-zero oldest record ID");
+
+        wevtapi::CloseEventLog(hLog);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Legacy ANSI Event Reporting Bridge (RegisterEventSourceA & ReportEventA)
+    // ------------------------------------------------------------------------
+    {
+        void* hSourceA = wevtapi::RegisterEventSourceA(nullptr, "MicaNT-AnsiLogger");
+        TEST_ASSERT(hSourceA != nullptr, "RegisterEventSourceA must return valid handle");
+
+        const char* ansiStrings[] = { "Ansi string insert 1", "Ansi string insert 2" };
+        win32::BOOL bReportA = wevtapi::ReportEventA(
+            hSourceA,
+            wevtapi::EVENTLOG_WARNING_TYPE,
+            2,
+            8800,
+            nullptr,
+            2,
+            0,
+            ansiStrings,
+            nullptr
+        );
+        TEST_ASSERT(bReportA == win32::TRUE, "ReportEventA must log ANSI event");
+
+        auto events = wevtapi::EventLogManager::Instance().Query(L"Application", L"EventID=8800");
+        TEST_ASSERT(!events.empty(), "Query must locate ANSI-reported event");
+        TEST_ASSERT(events.back().level == wevtapi::WINEVENT_LEVEL_WARNING, "Event level must match warning level");
+
+        wevtapi::DeregisterEventSource(hSourceA);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Dynamic Loader Exports Verification (wevtapi.dll & advapi32.dll)
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        // wevtapi.dll exports
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtOpenSession") != nullptr, "EvtOpenSession must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtClose") != nullptr, "EvtClose must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtQuery") != nullptr, "EvtQuery must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtNext") != nullptr, "EvtNext must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtSeek") != nullptr, "EvtSeek must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtCreateRenderContext") != nullptr, "EvtCreateRenderContext must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtRender") != nullptr, "EvtRender must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtOpenPublisherMetadata") != nullptr, "EvtOpenPublisherMetadata must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtGetPublisherMetadataProperty") != nullptr, "EvtGetPublisherMetadataProperty must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtOpenChannelEnum") != nullptr, "EvtOpenChannelEnum must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtNextChannelPath") != nullptr, "EvtNextChannelPath must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtOpenPublisherEnum") != nullptr, "EvtOpenPublisherEnum must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtNextPublisherId") != nullptr, "EvtNextPublisherId must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtOpenChannelConfig") != nullptr, "EvtOpenChannelConfig must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtGetChannelConfigProperty") != nullptr, "EvtGetChannelConfigProperty must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtSaveChannelConfig") != nullptr, "EvtSaveChannelConfig must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtClearLog") != nullptr, "EvtClearLog must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtExportLog") != nullptr, "EvtExportLog must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtCreateBookmark") != nullptr, "EvtCreateBookmark must be exported");
+        TEST_ASSERT(ldr.getExport("wevtapi.dll", "EvtUpdateBookmark") != nullptr, "EvtUpdateBookmark must be exported");
+
+        // advapi32.dll EventLog exports
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "RegisterEventSourceW") != nullptr, "advapi32.dll!RegisterEventSourceW must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "RegisterEventSourceA") != nullptr, "advapi32.dll!RegisterEventSourceA must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "ReportEventW") != nullptr, "advapi32.dll!ReportEventW must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "ReportEventA") != nullptr, "advapi32.dll!ReportEventA must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "DeregisterEventSource") != nullptr, "advapi32.dll!DeregisterEventSource must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "OpenEventLogW") != nullptr, "advapi32.dll!OpenEventLogW must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "OpenEventLogA") != nullptr, "advapi32.dll!OpenEventLogA must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "CloseEventLog") != nullptr, "advapi32.dll!CloseEventLog must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "ClearEventLogW") != nullptr, "advapi32.dll!ClearEventLogW must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "GetNumberOfEventLogRecords") != nullptr, "advapi32.dll!GetNumberOfEventLogRecords must be exported");
+        TEST_ASSERT(ldr.getExport("advapi32.dll", "GetOldestEventLogRecord") != nullptr, "advapi32.dll!GetOldestEventLogRecord must be exported");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Command Shell Integration (wevtutil el, wevtutil qe, wevtutil test)
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+
+        shell.execute("wevtutil el", out);
+        TEST_ASSERT(out.str().find("System") != std::string::npos, "Shell wevtutil el must list System channel");
+        TEST_ASSERT(out.str().find("Security") != std::string::npos, "Shell wevtutil el must list Security channel");
+
+        out.str("");
+        shell.execute("wevtutil qe System", out);
+        TEST_ASSERT(out.str().find("MicaNT-Kernel") != std::string::npos, "Shell wevtutil qe System must display kernel events");
+
+        out.str("");
+        shell.execute("wevtutil test", out);
+        TEST_ASSERT(out.str().find("ALL EVENT LOG & INSTRUMENTATION CHECKS PASSED") != std::string::npos, "Shell wevtutil test must pass all checks");
+    }
+
+    std::cout << "[TEST] Suite 72: Windows Event Log & Instrumentation Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -13001,6 +13323,7 @@ int main() {
     RUN_TEST(Test_OLE_Automation_And_SafeArray_Subsystem);
     RUN_TEST(Test_SetupApi_DeviceInstallation_And_INF_Subsystem);
     RUN_TEST(Test_StructuredStorage_CompoundFile_And_Persistence_Subsystem);
+    RUN_TEST(Test_WindowsEventLog_And_WevtApi_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
