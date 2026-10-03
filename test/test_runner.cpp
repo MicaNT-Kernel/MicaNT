@@ -70,6 +70,7 @@
 #include "micant/xinput.hpp"
 #include "micant/vanguarddriver.hpp"
 #include "micant/aegissandbox.hpp"
+#include "micant/polarisdiag.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -6331,6 +6332,94 @@ void Test_AegisSandbox_JobObjects_And_ProcessContainment() {
     TEST_ASSERT(accounting.TotalTerminatedProcesses >= 3, "Accounting TotalTerminatedProcesses must reflect killed processes");
 }
 
+// ============================================================================
+// Suite 53: PolarisDiag Sovereign Crash Diagnostics & Minidump Engine Tests
+// ============================================================================
+void Test_PolarisDiag_CrashDump_And_MinidumpWriter() {
+    using namespace micant::polaris;
+
+    auto& diagEngine = PolarisDiagnosticEngine::get();
+
+    // 1. Prepare Crash Report
+    CrashReport report{};
+    report.bugCheckCode = ke::PAGE_FAULT_IN_NONPAGED_AREA;
+    report.bugCheckName = std::string(PolarisDiagnosticEngine::getBugCheckName(report.bugCheckCode));
+    report.param1 = 0x00007FFDF0001000ULL; // Faulting virtual address
+    report.param2 = 0x0;                   // Read operation
+    report.param3 = 0x00007FF614002340ULL; // Instruction pointer (RIP)
+    report.param4 = 0x0;
+    report.faultingModule = L"vanguard.sys";
+
+    report.context.rip = 0x00007FF614002340ULL;
+    report.context.rsp = 0x00007FFFFFFFDE00ULL;
+    report.context.rbp = 0x00007FFFFFFFDE80ULL;
+    report.context.rax = 0x0000000000000042ULL;
+    report.context.rcx = 0x00007FFDF0001000ULL;
+    report.context.rdx = 0x0000000000000100ULL;
+    report.context.rflags = 0x202;
+
+    // Loaded Kernel Modules
+    std::vector<LoadedModuleDesc> modules = {
+        { L"micant_kernel.exe", 0x00007FF614000000ULL, 0x180000 },
+        { L"vanguard.sys",      0x00007FFF80000000ULL, 0x040000 },
+        { L"emeraldfs.sys",     0x00007FFF80050000ULL, 0x060000 },
+        { L"hal.dll",           0x00007FFF80100000ULL, 0x030000 }
+    };
+
+    // 2. Generate 64-bit Minidump (.dmp) Binary Stream
+    std::vector<uint8_t> dump = diagEngine.generateMinidump(report, modules);
+    TEST_ASSERT(!dump.empty(), "Minidump generator must return non-empty byte buffer");
+    TEST_ASSERT(dump.size() >= sizeof(MINIDUMP_HEADER), "Minidump must exceed header size");
+
+    // 3. Self-Parse & Validate Minidump Structs (WinDbg Parity)
+    MinidumpSummary summary = diagEngine.parseMinidump(dump);
+    TEST_ASSERT(summary.isValid, "Minidump validation must succeed");
+    TEST_ASSERT(summary.version == MINIDUMP_VERSION, "Minidump version must match MINIDUMP_VERSION");
+    TEST_ASSERT(summary.streamCount == 6, "Minidump must contain 6 distinct stream directories");
+
+    // Verify stream types present
+    auto hasStream = [&](uint32_t type) {
+        return std::find(summary.streamTypes.begin(), summary.streamTypes.end(), type) != summary.streamTypes.end();
+    };
+    TEST_ASSERT(hasStream(SystemInfoStream), "Minidump must contain SystemInfoStream");
+    TEST_ASSERT(hasStream(ExceptionStream), "Minidump must contain ExceptionStream");
+    TEST_ASSERT(hasStream(ModuleListStream), "Minidump must contain ModuleListStream");
+    TEST_ASSERT(hasStream(ThreadListStream), "Minidump must contain ThreadListStream");
+    TEST_ASSERT(hasStream(MiscInfoStream), "Minidump must contain MiscInfoStream");
+    TEST_ASSERT(hasStream(CommentStreamA), "Minidump must contain CommentStreamA");
+
+    // Verify exception and register context accuracy
+    TEST_ASSERT(summary.exceptionCode == ke::PAGE_FAULT_IN_NONPAGED_AREA, "Exception code in dump must match bug check");
+    TEST_ASSERT(summary.exceptionAddress == 0x00007FF614002340ULL, "Exception address must match faulting RIP");
+    TEST_ASSERT(summary.parameters[0] == 0x00007FFDF0001000ULL, "Parameter 1 must match faulting address");
+    TEST_ASSERT(summary.rip == 0x00007FF614002340ULL, "Context RIP in dump must match report");
+    TEST_ASSERT(summary.rsp == 0x00007FFFFFFFDE00ULL, "Context RSP in dump must match report");
+
+    // Verify module list parsing
+    TEST_ASSERT(summary.moduleNames.size() == 4, "Dump module list must parse all 4 modules");
+    TEST_ASSERT(summary.moduleNames[0] == L"micant_kernel.exe", "Module 0 must be micant_kernel.exe");
+    TEST_ASSERT(summary.moduleNames[1] == L"vanguard.sys", "Module 1 must be vanguard.sys");
+
+    // Verify zero-telemetry sovereign comment
+    TEST_ASSERT(summary.comment.find("Telemetry-Free") != std::string::npos, "Minidump must contain sovereign zero-telemetry notice");
+
+    // 4. Panic Screen Rendering Verification
+    std::string panicText = diagEngine.renderPanicScreenText(report);
+    TEST_ASSERT(panicText.find("PAGE_FAULT_IN_NONPAGED_AREA") != std::string::npos, "Panic screen must display stop code name");
+    TEST_ASSERT(panicText.find("vanguard.sys") != std::string::npos, "Panic screen must display faulting module");
+    TEST_ASSERT(panicText.find("Telemetry:    DISABLED") != std::string::npos, "Panic screen must confirm zero telemetry");
+
+    // Framebuffer rendering
+    std::vector<uint32_t> fb(800 * 600, 0);
+    diagEngine.renderPanicScreenFramebuffer(fb.data(), 800, 600, report);
+    TEST_ASSERT(fb[0] == 0xFF0078D7, "Framebuffer must be cleared to Sovereign Azure #0078D7");
+
+    // 5. Canonical BugCheck Stop Code Mappings
+    TEST_ASSERT(PolarisDiagnosticEngine::getBugCheckName(ke::IRQL_NOT_LESS_OR_EQUAL) == "IRQL_NOT_LESS_OR_EQUAL", "IRQL stop code mapping");
+    TEST_ASSERT(PolarisDiagnosticEngine::getBugCheckName(ke::CRITICAL_PROCESS_DIED) == "CRITICAL_PROCESS_DIED", "CRITICAL_PROCESS_DIED mapping");
+    TEST_ASSERT(PolarisDiagnosticEngine::getBugCheckName(0x0000007B) == "INACCESSIBLE_BOOT_DEVICE", "INACCESSIBLE_BOOT_DEVICE mapping");
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -6388,6 +6477,7 @@ int main() {
     RUN_TEST(Test_DirectX_PrismAudio_And_XInput_Subsystems);
     RUN_TEST(Test_VanguardDriver_DeviceStack_And_PnP_Subsystem);
     RUN_TEST(Test_AegisSandbox_JobObjects_And_ProcessContainment);
+    RUN_TEST(Test_PolarisDiag_CrashDump_And_MinidumpWriter);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
