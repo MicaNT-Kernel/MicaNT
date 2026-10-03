@@ -610,6 +610,24 @@ public:
         return NtStatus::Success;
     }
 
+    NtStatus removeDirectoryRecursive(std::wstring_view path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring norm = normalizePath(path);
+        size_t lastSlash = norm.find_last_of(L'\\');
+        std::wstring parentPath = (lastSlash == std::wstring::npos) ? L"" : norm.substr(0, lastSlash);
+        std::wstring dirName = (lastSlash == std::wstring::npos) ? norm : norm.substr(lastSlash + 1);
+
+        auto parent = findEntry(parentPath);
+        if (!parent || !parent->isDirectory) return NtStatus::ObjectPathNotFound;
+
+        auto it = parent->children.find(dirName);
+        if (it == parent->children.end()) return NtStatus::NoSuchFile;
+        if (!it->second->isDirectory) return NtStatus::NotADirectory;
+
+        parent->children.erase(it);
+        return NtStatus::Success;
+    }
+
     NtStatus queryFileAttributes(std::wstring_view path, uint32_t& attributes) {
         std::lock_guard<std::mutex> lock(mutex_);
         std::wstring norm = normalizePath(path);

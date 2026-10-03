@@ -48,6 +48,7 @@
 #include "ole32.hpp"
 #include "shell32.hpp"
 #include "comctl32.hpp"
+#include "cmd.hpp"
 
 namespace micant::shell {
 
@@ -119,12 +120,17 @@ public:
     }
 
     std::string promptString() {
-        return getCurrentDirectory() + "> ";
+        return micant::cmd::CmdProcessor::get().getPromptString();
     }
 
     int execute(std::string_view commandLine, std::ostream& out = std::cout) {
         std::string line = trim(commandLine);
         if (line.empty()) return 0;
+
+        bool hasCompound = (line.find('&') != std::string::npos ||
+                            line.find('|') != std::string::npos ||
+                            line.find('>') != std::string::npos ||
+                            line.find('<') != std::string::npos);
 
         auto tokens = tokenize(line);
         if (tokens.empty()) return 0;
@@ -134,82 +140,53 @@ public:
 
         if (cmd == "exit" || cmd == "quit") {
             return -1; // Request shell exit
-        } else if (cmd == "help" || cmd == "?") {
-            cmdHelp(out);
-        } else if (cmd == "ver") {
-            cmdVer(out);
-        } else if (cmd == "cls" || cmd == "clear") {
-            cmdCls(out);
-        } else if (cmd == "dir" || cmd == "ls") {
-            cmdDir(tokens, out);
-        } else if (cmd == "cd" || cmd == "chdir") {
-            cmdCd(tokens, out);
-        } else if (cmd == "type" || cmd == "cat") {
-            cmdType(tokens, out);
-        } else if (cmd == "echo") {
-            cmdEcho(tokens, line, out);
-        } else if (cmd == "set") {
-            cmdSet(tokens, out);
-        } else if (cmd == "color") {
-            cmdColor(tokens, out);
-        } else if (cmd == "time" || cmd == "date") {
-            cmdTime(out);
-        } else if (cmd == "mem") {
-            cmdMem(out);
-        } else if (cmd == "systeminfo") {
-            cmdSystemInfo(out);
-        } else if (cmd == "ps" || cmd == "tasklist") {
-            cmdPs(out);
-        } else if (cmd == "ping") {
-            cmdPing(tokens, out);
-        } else if (cmd == "ipconfig") {
-            cmdIpConfig(tokens, out);
-        } else if (cmd == "netstat") {
-            cmdNetstat(tokens, out);
-        } else if (cmd == "net") {
-            cmdNet(tokens, out);
-        } else if (cmd == "sc") {
-            cmdSc(tokens, out);
-        } else if (cmd == "whoami") {
-            cmdWhoami(tokens, out);
-        } else if (cmd == "prismx" || cmd == "gpu") {
-            cmdPrismX(tokens, out);
-        } else if (cmd == "d3d9" || cmd == "dx9") {
-            cmdD3D9(tokens, out);
-        } else if (cmd == "gdi") {
-            cmdGDI(tokens, out);
-        } else if (cmd == "com" || cmd == "ole") {
-            cmdCOM(tokens, out);
-        } else if (cmd == "shell32") {
-            cmdShell32(tokens, out);
-        } else if (cmd == "comctl" || cmd == "commoncontrols") {
-            cmdComCtl(tokens, out);
-        } else if (cmd == "view3d" || cmd == "viewer3d") {
-            cmdView3D(tokens, out);
-        } else if (cmd == "vulkan" || cmd == "vkinfo" || cmd == "vkcube") {
-            cmdVulkan(tokens, out);
-        } else if (cmd == "lock") {
-            cmdLock(out);
-        } else if (cmd == "logoff") {
-            cmdLogoff(out);
-        } else if (cmd == "exec" || cmd == "run") {
-            if (tokens.size() < 2) {
-                out << "Usage: exec <pe_file_path>\n";
-                return 1;
-            }
-            return executeBinary(tokens[1], out);
-        } else {
-            // Check if user typed an executable path directly (e.g. unmodified_sample.exe)
-            std::string possibleExe = tokens[0];
-            if (possibleExe.ends_with(".exe") || canLoadBinary(possibleExe)) {
-                return executeBinary(possibleExe, out);
-            } else {
-                out << "'" << tokens[0] << "' is not recognized as an internal or external command,\n"
-                    << "operable program or batch file. Type 'help' for commands.\n";
-                return 1;
+        }
+
+        // Check MicaNT executive test & diagnostic commands
+        if (!hasCompound) {
+            if (cmd == "mem") { cmdMem(out); return 0; }
+            if (cmd == "systeminfo") { cmdSystemInfo(out); return 0; }
+            if (cmd == "ping") { cmdPing(tokens, out); return 0; }
+            if (cmd == "ipconfig") { cmdIpConfig(tokens, out); return 0; }
+            if (cmd == "netstat") { cmdNetstat(tokens, out); return 0; }
+            if (cmd == "net") { cmdNet(tokens, out); return 0; }
+            if (cmd == "sc") { cmdSc(tokens, out); return 0; }
+            if (cmd == "whoami") { cmdWhoami(tokens, out); return 0; }
+            if (cmd == "prismx" || cmd == "gpu") { cmdPrismX(tokens, out); return 0; }
+            if (cmd == "d3d9" || cmd == "dx9") { cmdD3D9(tokens, out); return 0; }
+            if (cmd == "gdi") { cmdGDI(tokens, out); return 0; }
+            if (cmd == "com" || cmd == "ole") { cmdCOM(tokens, out); return 0; }
+            if (cmd == "shell32") { cmdShell32(tokens, out); return 0; }
+            if (cmd == "comctl" || cmd == "commoncontrols") { cmdComCtl(tokens, out); return 0; }
+            if (cmd == "view3d" || cmd == "viewer3d") { cmdView3D(tokens, out); return 0; }
+            if (cmd == "vulkan" || cmd == "vkinfo" || cmd == "vkcube") { cmdVulkan(tokens, out); return 0; }
+            if (cmd == "lock") { cmdLock(out); return 0; }
+            if (cmd == "logoff") { cmdLogoff(out); return 0; }
+            if (cmd == "exec" || cmd == "run") {
+                if (tokens.size() < 2) {
+                    out << "Usage: exec <pe_file_path>\n";
+                    return 1;
+                }
+                return executeBinary(tokens[1], out);
             }
         }
-        return 0;
+
+        // Delegate to CmdProcessor for full Windows CMD command & compound operator execution
+        int rc = micant::cmd::CmdProcessor::get().executeCompound(line, std::cin, out, out);
+        if (rc == -1) return -1;
+        if (rc != 9009) {
+            return rc;
+        }
+
+        // Check if user typed an executable path directly (e.g. unmodified_sample.exe)
+        std::string possibleExe = tokens[0];
+        if (possibleExe.ends_with(".exe") || canLoadBinary(possibleExe)) {
+            return executeBinary(possibleExe, out);
+        } else {
+            out << "'" << tokens[0] << "' is not recognized as an internal or external command,\n"
+                << "operable program or batch file. Type 'help' for commands.\n";
+            return 1;
+        }
     }
 
     void runRepl(std::istream& in = std::cin, std::ostream& out = std::cout) {

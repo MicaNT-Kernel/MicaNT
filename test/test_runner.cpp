@@ -8237,6 +8237,280 @@ void Test_Shell32_And_ComCtl32_Win32Controls() {
     std::cout << "[TEST] Suite 60: Shell32, Shlwapi & ComCtl32 Win32 Controls PASSED.\n";
 }
 
+void Test_Windows_CMD_And_BatchExecutionEngine() {
+    std::cout << "[TEST] Running Suite 61: Windows CMD & Batch Scripting Engine...\n";
+
+    shell::CommandShell cmdShell;
+    std::ostringstream oss;
+
+    // ------------------------------------------------------------------------
+    // 1. CMD Command Switches & Process Execution
+    // ------------------------------------------------------------------------
+    oss.str(""); oss.clear();
+    int rc = cmdShell.execute("cmd /c echo HelloFromCmd", oss);
+    TEST_ASSERT(rc == 0, "cmd /c echo must return 0");
+    TEST_ASSERT(oss.str().find("HelloFromCmd") != std::string::npos, "cmd /c output must contain HelloFromCmd");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("cmd /c exit /b 42", oss);
+    TEST_ASSERT(rc == 42, "cmd /c exit /b 42 must return exit code 42");
+
+    // ------------------------------------------------------------------------
+    // 2. Compound & Conditional Operators (&, &&, ||)
+    // ------------------------------------------------------------------------
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("echo Alpha & echo Beta", oss);
+    TEST_ASSERT(rc == 0, "Sequential execution '&' must succeed");
+    TEST_ASSERT(oss.str().find("Alpha") != std::string::npos && oss.str().find("Beta") != std::string::npos, "Sequential '&' must output both commands");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("echo FirstSuccess && echo SecondRan", oss);
+    TEST_ASSERT(rc == 0, "Conditional AND '&&' must succeed");
+    TEST_ASSERT(oss.str().find("SecondRan") != std::string::npos, "'&&' must execute right command on success");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("del C:\\NonExistent_FakeFile.xyz && echo ShouldNotRun", oss);
+    TEST_ASSERT(oss.str().find("ShouldNotRun") == std::string::npos, "'&&' must not execute right command on failure");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("del C:\\NonExistent_FakeFile.xyz || echo HandledFailure", oss);
+    TEST_ASSERT(oss.str().find("HandledFailure") != std::string::npos, "'||' must execute right command on error");
+
+    // ------------------------------------------------------------------------
+    // 3. Pipeline & Redirection Operators (>, >>, |, find, sort)
+    // ------------------------------------------------------------------------
+    oss.str(""); oss.clear();
+    cmdShell.execute("echo Line1 > C:\\CmdTest\\output.txt", oss);
+    std::string content1 = micant::cmd::CmdProcessor::get().readVfsTextFile("C:\\CmdTest\\output.txt");
+    TEST_ASSERT(content1.find("Line1") != std::string::npos, "Redirection '>' must write file to VFS");
+
+    oss.str(""); oss.clear();
+    cmdShell.execute("echo Line2 >> C:\\CmdTest\\output.txt", oss);
+    std::string content2 = micant::cmd::CmdProcessor::get().readVfsTextFile("C:\\CmdTest\\output.txt");
+    TEST_ASSERT(content2.find("Line1") != std::string::npos && content2.find("Line2") != std::string::npos, "Redirection '>>' must append to file in VFS");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("type C:\\CmdTest\\output.txt | find \"Line2\"", oss);
+    TEST_ASSERT(rc == 0, "Pipeline '| find' must succeed");
+    TEST_ASSERT(oss.str().find("Line2") != std::string::npos, "Pipeline '| find' must find matching line");
+    TEST_ASSERT(oss.str().find("Line1") == std::string::npos, "Pipeline '| find' must filter out non-matching line");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("type C:\\CmdTest\\output.txt | sort /r", oss);
+    TEST_ASSERT(rc == 0, "Pipeline '| sort /r' must succeed");
+    size_t posLine2 = oss.str().find("Line2");
+    size_t posLine1 = oss.str().find("Line1");
+    TEST_ASSERT(posLine2 != std::string::npos && posLine1 != std::string::npos && posLine2 < posLine1, "Pipeline '| sort /r' must reverse sort lines");
+
+    // ------------------------------------------------------------------------
+    // 4. File & Directory Management Builtins (MD, COPY, REN, MOVE, ATTRIB, DEL, RD, WHERE, TREE)
+    // ------------------------------------------------------------------------
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("md C:\\CmdTest\\FolderA\\SubFolderB", oss);
+    TEST_ASSERT(rc == 0, "md must create nested directories");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("copy C:\\CmdTest\\output.txt C:\\CmdTest\\FolderA\\SubFolderB\\copied.txt", oss);
+    TEST_ASSERT(rc == 0, "copy must succeed");
+    TEST_ASSERT(micant::cmd::CmdProcessor::get().vfsFileExists("C:\\CmdTest\\FolderA\\SubFolderB\\copied.txt"), "copied.txt must exist on VFS");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("ren C:\\CmdTest\\FolderA\\SubFolderB\\copied.txt renamed.txt", oss);
+    TEST_ASSERT(rc == 0, "ren must succeed");
+    TEST_ASSERT(micant::cmd::CmdProcessor::get().vfsFileExists("C:\\CmdTest\\FolderA\\SubFolderB\\renamed.txt"), "renamed.txt must exist");
+    TEST_ASSERT(!micant::cmd::CmdProcessor::get().vfsFileExists("C:\\CmdTest\\FolderA\\SubFolderB\\copied.txt"), "original copied.txt must not exist after rename");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("move C:\\CmdTest\\FolderA\\SubFolderB\\renamed.txt C:\\CmdTest\\FolderA\\moved.txt", oss);
+    TEST_ASSERT(rc == 0, "move must succeed");
+    TEST_ASSERT(micant::cmd::CmdProcessor::get().vfsFileExists("C:\\CmdTest\\FolderA\\moved.txt"), "moved.txt must exist in target folder");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("attrib +R +H C:\\CmdTest\\FolderA\\moved.txt", oss);
+    TEST_ASSERT(rc == 0, "attrib +R +H must succeed");
+    uint32_t fAttrs = 0;
+    fs::VirtualFileSystem::get().queryFileAttributes(L"C:\\CmdTest\\FolderA\\moved.txt", fAttrs);
+    TEST_ASSERT((fAttrs & fs::FILE_ATTRIBUTE_READONLY) && (fAttrs & fs::FILE_ATTRIBUTE_HIDDEN), "Attributes +R and +H must be set");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("del C:\\CmdTest\\FolderA\\moved.txt", oss);
+    TEST_ASSERT(rc == 0, "del must succeed");
+    TEST_ASSERT(!micant::cmd::CmdProcessor::get().vfsFileExists("C:\\CmdTest\\FolderA\\moved.txt"), "moved.txt must be deleted");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("tree C:\\CmdTest", oss);
+    TEST_ASSERT(rc == 0, "tree command must succeed");
+    TEST_ASSERT(oss.str().find("FolderA") != std::string::npos, "tree output must display directory hierarchy");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("rd /s /q C:\\CmdTest", oss);
+    TEST_ASSERT(rc == 0, "rd /s /q must remove entire directory tree");
+    TEST_ASSERT(!micant::cmd::CmdProcessor::get().vfsFileExists("C:\\CmdTest\\FolderA"), "FolderA must be removed");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("where cmd.exe", oss);
+    TEST_ASSERT(rc == 0, "where cmd.exe must succeed");
+    TEST_ASSERT(oss.str().find("cmd.exe") != std::string::npos, "where must locate cmd.exe in system PATH");
+
+    // ------------------------------------------------------------------------
+    // 5. Environment Arithmetic & Scoping (SET /A, Substrings, Pseudo-Variables, SETLOCAL/ENDLOCAL)
+    // ------------------------------------------------------------------------
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("set /a x = 10 + 20 * 3", oss);
+    TEST_ASSERT(rc == 0, "set /a arithmetic must succeed");
+    std::string valX;
+    micant::cmd::CmdProcessor::get().getEnvironment().getVar("x", valX);
+    TEST_ASSERT(valX == "70", "set /a precedence: 10 + 20 * 3 must equal 70");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("set /a y = (x - 10) / 2", oss);
+    TEST_ASSERT(rc == 0, "set /a parentheses must succeed");
+    std::string valY;
+    micant::cmd::CmdProcessor::get().getEnvironment().getVar("y", valY);
+    TEST_ASSERT(valY == "30", "set /a: (70 - 10) / 2 must equal 30");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("set /a z = y % 7", oss);
+    std::string valZ;
+    micant::cmd::CmdProcessor::get().getEnvironment().getVar("z", valZ);
+    TEST_ASSERT(valZ == "2", "set /a modulo: 30 % 7 must equal 2");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("set /a bit = z ^ 3", oss);
+    std::string valBit;
+    micant::cmd::CmdProcessor::get().getEnvironment().getVar("bit", valBit);
+    TEST_ASSERT(valBit == "1", "set /a bitwise xor: 2 ^ 3 must equal 1");
+
+    // Substring & Replacement syntax
+    oss.str(""); oss.clear();
+    cmdShell.execute("set FULLNAME=MicaNTOperatingSystem", oss);
+    oss.str(""); oss.clear();
+    cmdShell.execute("echo %FULLNAME:~0,6%", oss);
+    TEST_ASSERT(oss.str().find("MicaNT") != std::string::npos, "Substring %VAR:~0,6% must expand to MicaNT");
+
+    oss.str(""); oss.clear();
+    cmdShell.execute("echo %FULLNAME:OperatingSystem=Kernel%", oss);
+    TEST_ASSERT(oss.str().find("MicaNTKernel") != std::string::npos, "Substitution %VAR:old=new% must expand correctly");
+
+    // Dynamic pseudo-variables
+    oss.str(""); oss.clear();
+    cmdShell.execute("echo Level:%ERRORLEVEL%", oss);
+    TEST_ASSERT(oss.str().find("Level:0") != std::string::npos, "%ERRORLEVEL% must expand to exit code");
+
+    oss.str(""); oss.clear();
+    cmdShell.execute("echo SystemDate:%DATE%", oss);
+    TEST_ASSERT(oss.str().find("SystemDate:") != std::string::npos, "%DATE% must expand");
+
+    // SETLOCAL and ENDLOCAL
+    oss.str(""); oss.clear();
+    cmdShell.execute("set SCOPE_VAR=OuterScope", oss);
+    cmdShell.execute("setlocal", oss);
+    cmdShell.execute("set SCOPE_VAR=InnerScope", oss);
+    std::string inVal;
+    micant::cmd::CmdProcessor::get().getEnvironment().getVar("SCOPE_VAR", inVal);
+    TEST_ASSERT(inVal == "InnerScope", "Inside setlocal, variable must reflect modified value");
+    cmdShell.execute("endlocal", oss);
+    std::string outVal;
+    micant::cmd::CmdProcessor::get().getEnvironment().getVar("SCOPE_VAR", outVal);
+    TEST_ASSERT(outVal == "OuterScope", "After endlocal, variable must revert to outer scope");
+
+    // ------------------------------------------------------------------------
+    // 6. Control Flow (IF & FOR statements)
+    // ------------------------------------------------------------------------
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("if exist C:\\Windows\\System32\\cmd.exe ( echo ExistsYes ) else ( echo ExistsNo )", oss);
+    TEST_ASSERT(oss.str().find("ExistsYes") != std::string::npos, "if exist must execute then-block when file exists");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("if not exist C:\\NonExistent_Dir ( echo MissingYes )", oss);
+    TEST_ASSERT(oss.str().find("MissingYes") != std::string::npos, "if not exist must succeed when file absent");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("if defined OS echo DefinedYes", oss);
+    TEST_ASSERT(oss.str().find("DefinedYes") != std::string::npos, "if defined must succeed for OS");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("if /i \"MicaNT\"==\"micant\" echo CaseMatch", oss);
+    TEST_ASSERT(oss.str().find("CaseMatch") != std::string::npos, "if /i must perform case-insensitive comparison");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("for %i in (one two three) do echo Item:%i", oss);
+    TEST_ASSERT(oss.str().find("Item:one") != std::string::npos &&
+                oss.str().find("Item:two") != std::string::npos &&
+                oss.str().find("Item:three") != std::string::npos, "for %i in (list) do must iterate all items");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("for /l %i in (1,2,5) do echo Step:%i", oss);
+    TEST_ASSERT(oss.str().find("Step:1") != std::string::npos &&
+                oss.str().find("Step:3") != std::string::npos &&
+                oss.str().find("Step:5") != std::string::npos, "for /l numeric loop must step correctly");
+
+    // ------------------------------------------------------------------------
+    // 7. Full Batch Script Execution Engine (.bat)
+    // ------------------------------------------------------------------------
+    std::string batchScript = 
+        "@echo off\n"
+        "set SCRIPT_NAME=%~nx0\n"
+        "set SCRIPT_DIR=%~dp0\n"
+        "echo Script: %SCRIPT_NAME%\n"
+        "echo Dir: %SCRIPT_DIR%\n"
+        "echo Param1: %1\n"
+        "echo Param2: %2\n"
+        "echo AllParams: %*\n"
+        "set /a ACCUM=0\n"
+        "for /l %%i in (1,1,4) do (\n"
+        "    set /a ACCUM+=%%i\n"
+        ")\n"
+        "call :DoubleAccum %ACCUM%\n"
+        "if %RESULT%==20 (\n"
+        "    echo Subroutine Verification Succeeded\n"
+        ") else (\n"
+        "    echo Subroutine Verification Failed\n"
+        "    exit /b 1\n"
+        ")\n"
+        "goto :ScriptEnd\n"
+        "\n"
+        ":DoubleAccum\n"
+        "set /a RESULT=%1 * 2\n"
+        "goto :EOF\n"
+        "\n"
+        ":ScriptEnd\n"
+        "echo Batch Execution Complete\n"
+        "exit /b 0\n";
+
+    micant::cmd::CmdProcessor::get().writeVfsTextFile("C:\\Scripts\\engine_test.bat", batchScript, false);
+    TEST_ASSERT(micant::cmd::CmdProcessor::get().vfsFileExists("C:\\Scripts\\engine_test.bat"), "engine_test.bat must be written to VFS");
+
+    oss.str(""); oss.clear();
+    rc = cmdShell.execute("cmd /c C:\\Scripts\\engine_test.bat Alpha Beta", oss);
+    TEST_ASSERT(rc == 0, "Batch script execution must succeed with exit code 0");
+    std::string scriptOutput = oss.str();
+    TEST_ASSERT(scriptOutput.find("Script: engine_test.bat") != std::string::npos, "Batch parameter %~nx0 must expand to filename");
+    TEST_ASSERT(scriptOutput.find("Param1: Alpha") != std::string::npos, "Batch parameter %1 must expand to first argument");
+    TEST_ASSERT(scriptOutput.find("Param2: Beta") != std::string::npos, "Batch parameter %2 must expand to second argument");
+    TEST_ASSERT(scriptOutput.find("AllParams: Alpha Beta") != std::string::npos, "Batch parameter %* must expand to all arguments");
+    TEST_ASSERT(scriptOutput.find("Subroutine Verification Succeeded") != std::string::npos, "Subroutine call 'call :label' and 'goto :EOF' must calculate RESULT=20");
+    TEST_ASSERT(scriptOutput.find("Batch Execution Complete") != std::string::npos, "Batch script must reach completion label");
+
+    // Clean up script
+    fs::VirtualFileSystem::get().deleteFile(L"C:\\Scripts\\engine_test.bat");
+
+    // ------------------------------------------------------------------------
+    // 8. Dynamic Loader Subsystem & CreateProcess Parity
+    // ------------------------------------------------------------------------
+    void* cmdMain = ldr::DynamicLoader::get().getExport("cmd.exe", "main");
+    TEST_ASSERT(cmdMain != nullptr, "cmd.exe!main export must be registered in DynamicLoader");
+
+    win32::PROCESS_INFORMATION pi{};
+    win32::STARTUPINFOW si{}; si.cb = sizeof(si);
+    wchar_t cmdLine[] = L"cmd.exe /c echo SubsystemProcessCreated";
+    win32::BOOL bProc = win32::CreateProcessW(L"cmd.exe", cmdLine, nullptr, nullptr, win32::FALSE, 0, nullptr, nullptr, &si, &pi);
+    TEST_ASSERT(bProc == win32::TRUE, "CreateProcessW for cmd.exe must succeed");
+    TEST_ASSERT(pi.hProcess != nullptr && pi.dwProcessId > 0, "CreateProcessW must return valid process handles and PID");
+
+    std::cout << "[TEST] Suite 61: Windows CMD & Batch Scripting Engine PASSED.\n";
+}
+
 
 int main() {
     std::cout << "========================================================================\n";
@@ -8303,6 +8577,7 @@ int main() {
     RUN_TEST(Test_Direct3D9_Runtime_And_FixedFunctionPipeline);
     RUN_TEST(Test_Gdi32_And_Ole32_Win32Foundation);
     RUN_TEST(Test_Shell32_And_ComCtl32_Win32Controls);
+    RUN_TEST(Test_Windows_CMD_And_BatchExecutionEngine);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

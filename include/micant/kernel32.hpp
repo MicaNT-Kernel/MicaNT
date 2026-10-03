@@ -1598,6 +1598,81 @@ inline BOOL DeleteFileW(LPCWSTR lpFileName) noexcept {
     return TRUE;
 }
 
+inline BOOL DeleteFileA(LPCSTR lpFileName) noexcept {
+    if (!lpFileName) return FALSE;
+    std::string s(lpFileName);
+    std::wstring w(s.begin(), s.end());
+    return DeleteFileW(w.c_str());
+}
+
+inline BOOL CopyFileW(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, BOOL bFailIfExists) noexcept {
+    if (!lpExistingFileName || !lpNewFileName) {
+        SetLastError(87);
+        return FALSE;
+    }
+    if (bFailIfExists) {
+        uint32_t attrs = 0;
+        if (NT_SUCCESS(fs::VirtualFileSystem::get().queryFileAttributes(lpNewFileName, attrs))) {
+            SetLastError(80); // ERROR_FILE_EXISTS
+            return FALSE;
+        }
+    }
+    std::shared_ptr<fs::FileObject> srcObj;
+    NtStatus st = fs::VirtualFileSystem::get().createOrOpenFile(lpExistingFileName, fs::FILE_GENERIC_READ, fs::FILE_OPEN, srcObj);
+    if (!NT_SUCCESS(st) || !srcObj) {
+        SetLastError(ntdll::RtlNtStatusToDosError(st));
+        return FALSE;
+    }
+    std::shared_ptr<fs::FileObject> dstObj;
+    st = fs::VirtualFileSystem::get().createOrOpenFile(lpNewFileName, fs::FILE_GENERIC_WRITE, fs::FILE_OVERWRITE_IF, dstObj);
+    if (!NT_SUCCESS(st) || !dstObj) {
+        SetLastError(ntdll::RtlNtStatusToDosError(st));
+        return FALSE;
+    }
+    uint32_t written = 0;
+    st = fs::VirtualFileSystem::get().writeFile(dstObj.get(), srcObj->getData().data(), static_cast<uint32_t>(srcObj->getData().size()), nullptr, written);
+    fs::VirtualFileSystem::get().closeFile(srcObj.get());
+    fs::VirtualFileSystem::get().closeFile(dstObj.get());
+    if (!NT_SUCCESS(st)) {
+        SetLastError(ntdll::RtlNtStatusToDosError(st));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+inline BOOL CopyFileA(LPCSTR lpExistingFileName, LPCSTR lpNewFileName, BOOL bFailIfExists) noexcept {
+    if (!lpExistingFileName || !lpNewFileName) return FALSE;
+    std::string sSrc(lpExistingFileName);
+    std::string sDst(lpNewFileName);
+    std::wstring wSrc(sSrc.begin(), sSrc.end());
+    std::wstring wDst(sDst.begin(), sDst.end());
+    return CopyFileW(wSrc.c_str(), wDst.c_str(), bFailIfExists);
+}
+
+inline BOOL MoveFileW(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName) noexcept {
+    if (!lpExistingFileName || !lpNewFileName) {
+        SetLastError(87);
+        return FALSE;
+    }
+    if (!CopyFileW(lpExistingFileName, lpNewFileName, FALSE)) {
+        return FALSE;
+    }
+    return DeleteFileW(lpExistingFileName);
+}
+
+inline BOOL MoveFileA(LPCSTR lpExistingFileName, LPCSTR lpNewFileName) noexcept {
+    if (!lpExistingFileName || !lpNewFileName) return FALSE;
+    std::string sSrc(lpExistingFileName);
+    std::string sDst(lpNewFileName);
+    std::wstring wSrc(sSrc.begin(), sSrc.end());
+    std::wstring wDst(sDst.begin(), sDst.end());
+    return MoveFileW(wSrc.c_str(), wDst.c_str());
+}
+
+inline BOOL MoveFileExW(LPCWSTR lpExistingFileName, LPCWSTR lpNewFileName, DWORD /*dwFlags*/) noexcept {
+    return MoveFileW(lpExistingFileName, lpNewFileName);
+}
+
 inline BOOL CreateDirectoryW(LPCWSTR lpPathName, void* /*lpSecurityAttributes*/) noexcept {
     if (!lpPathName) return FALSE;
     NtStatus status = fs::VirtualFileSystem::get().createDirectory(lpPathName);
@@ -1608,6 +1683,13 @@ inline BOOL CreateDirectoryW(LPCWSTR lpPathName, void* /*lpSecurityAttributes*/)
     return TRUE;
 }
 
+inline BOOL CreateDirectoryA(LPCSTR lpPathName, void* lpSecurityAttributes) noexcept {
+    if (!lpPathName) return FALSE;
+    std::string s(lpPathName);
+    std::wstring w(s.begin(), s.end());
+    return CreateDirectoryW(w.c_str(), lpSecurityAttributes);
+}
+
 inline BOOL RemoveDirectoryW(LPCWSTR lpPathName) noexcept {
     if (!lpPathName) return FALSE;
     NtStatus status = fs::VirtualFileSystem::get().removeDirectory(lpPathName);
@@ -1616,6 +1698,13 @@ inline BOOL RemoveDirectoryW(LPCWSTR lpPathName) noexcept {
         return FALSE;
     }
     return TRUE;
+}
+
+inline BOOL RemoveDirectoryA(LPCSTR lpPathName) noexcept {
+    if (!lpPathName) return FALSE;
+    std::string s(lpPathName);
+    std::wstring w(s.begin(), s.end());
+    return RemoveDirectoryW(w.c_str());
 }
 
 // FindFile Context Registry
@@ -2277,8 +2366,16 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetFileAttributesA", reinterpret_cast<void*>(GetFileAttributesA));
     ldr.registerExport("kernel32.dll", "SetFileAttributesW", reinterpret_cast<void*>(SetFileAttributesW));
     ldr.registerExport("kernel32.dll", "DeleteFileW", reinterpret_cast<void*>(DeleteFileW));
+    ldr.registerExport("kernel32.dll", "DeleteFileA", reinterpret_cast<void*>(DeleteFileA));
+    ldr.registerExport("kernel32.dll", "CopyFileW", reinterpret_cast<void*>(CopyFileW));
+    ldr.registerExport("kernel32.dll", "CopyFileA", reinterpret_cast<void*>(CopyFileA));
+    ldr.registerExport("kernel32.dll", "MoveFileW", reinterpret_cast<void*>(MoveFileW));
+    ldr.registerExport("kernel32.dll", "MoveFileA", reinterpret_cast<void*>(MoveFileA));
+    ldr.registerExport("kernel32.dll", "MoveFileExW", reinterpret_cast<void*>(MoveFileExW));
     ldr.registerExport("kernel32.dll", "CreateDirectoryW", reinterpret_cast<void*>(CreateDirectoryW));
+    ldr.registerExport("kernel32.dll", "CreateDirectoryA", reinterpret_cast<void*>(CreateDirectoryA));
     ldr.registerExport("kernel32.dll", "RemoveDirectoryW", reinterpret_cast<void*>(RemoveDirectoryW));
+    ldr.registerExport("kernel32.dll", "RemoveDirectoryA", reinterpret_cast<void*>(RemoveDirectoryA));
     ldr.registerExport("kernel32.dll", "FindFirstFileW", reinterpret_cast<void*>(FindFirstFileW));
     ldr.registerExport("kernel32.dll", "FindNextFileW", reinterpret_cast<void*>(FindNextFileW));
     ldr.registerExport("kernel32.dll", "FindClose", reinterpret_cast<void*>(FindClose));
