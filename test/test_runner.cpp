@@ -71,6 +71,7 @@
 #include "micant/vanguarddriver.hpp"
 #include "micant/aegissandbox.hpp"
 #include "micant/polarisdiag.hpp"
+#include "micant/cipherksp.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -6420,6 +6421,283 @@ void Test_PolarisDiag_CrashDump_And_MinidumpWriter() {
     TEST_ASSERT(PolarisDiagnosticEngine::getBugCheckName(0x0000007B) == "INACCESSIBLE_BOOT_DEVICE", "INACCESSIBLE_BOOT_DEVICE mapping");
 }
 
+// ============================================================================
+// Suite 54: CipherKSP Sovereign Cryptographic Services & CNG Engine Tests
+// ============================================================================
+void Test_CipherKSP_CryptographicServices_And_AES() {
+    using namespace micant::crypto;
+
+    auto toHex = [](std::span<const uint8_t> bytes) -> std::string {
+        std::ostringstream oss;
+        for (uint8_t b : bytes) {
+            oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
+        }
+        return oss.str();
+    };
+
+    // 1. FIPS 180-4 SHA-256 Official NIST Test Vectors
+    {
+        // Vector 1: Empty string ""
+        auto hashEmpty = Sha256::hash(std::span<const uint8_t>{});
+        TEST_ASSERT(toHex(hashEmpty) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    "NIST SHA-256 Empty Vector Verification");
+
+        // Vector 2: "abc"
+        std::string abc = "abc";
+        auto hashAbc = Sha256::hash(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(abc.data()), abc.size()));
+        TEST_ASSERT(toHex(hashAbc) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                    "NIST SHA-256 'abc' Vector Verification");
+
+        // Vector 3: 56-byte string
+        std::string str56 = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+        auto hash56 = Sha256::hash(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(str56.data()), str56.size()));
+        TEST_ASSERT(toHex(hash56) == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+                    "NIST SHA-256 56-byte Vector Verification");
+    }
+
+    // 2. RFC 4231 HMAC-SHA256 Test Vectors
+    {
+        // RFC 4231 Case 1: Key = 20x 0x0b, Data = "Hi There"
+        std::vector<uint8_t> key1(20, 0x0b);
+        std::string data1 = "Hi There";
+        auto hmac1 = HmacSha256::compute(
+            key1,
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data1.data()), data1.size())
+        );
+        TEST_ASSERT(toHex(hmac1) == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+                    "RFC 4231 HMAC-SHA256 Case 1 Verification");
+
+        // RFC 4231 Case 2: Key = "Jefe", Data = "what do ya want for nothing?"
+        std::string key2 = "Jefe";
+        std::string data2 = "what do ya want for nothing?";
+        auto hmac2 = HmacSha256::compute(
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(key2.data()), key2.size()),
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data2.data()), data2.size())
+        );
+        TEST_ASSERT(toHex(hmac2) == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+                    "RFC 4231 HMAC-SHA256 Case 2 Verification");
+    }
+
+    // 3. FIPS 197 AES-128 Electronic Codebook (ECB) NIST Test Vector
+    {
+        // FIPS 197 Appendix C.1: AES-128
+        // Key: 2b 7e 15 16 28 ae d2 a6 ab f7 15 88 09 cf 4f 3c
+        // In:  6b c1 be e2 2e 40 9f 96 e9 3d 7e 11 73 93 17 2a
+        // Out: 3a d7 7b b4 0d 7a 36 60 a8 9e ca f3 24 66 ef 97
+        const uint8_t keyBytes[16] = {
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+            0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c
+        };
+        const uint8_t plainBytes[16] = {
+            0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96,
+            0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a
+        };
+
+        Aes aes(keyBytes);
+        uint8_t cipherBlock[16] = {0};
+        aes.encryptBlock(plainBytes, cipherBlock);
+
+        TEST_ASSERT(toHex(cipherBlock) == "3ad77bb40d7a3660a89ecaf32466ef97",
+                    "FIPS 197 AES-128 ECB Block Encryption Verification");
+
+        uint8_t decryptedBlock[16] = {0};
+        aes.decryptBlock(cipherBlock, decryptedBlock);
+        TEST_ASSERT(std::memcmp(plainBytes, decryptedBlock, 16) == 0,
+                    "FIPS 197 AES-128 ECB Block Decryption Verification");
+    }
+
+    // 4. AES-256 CBC Mode with IV Chaining and PKCS#7 Padding
+    {
+        const uint8_t key256[32] = {
+            0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe,
+            0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+            0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7,
+            0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4
+        };
+        const uint8_t iv[16] = {
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+        };
+
+        std::string secretMessage = "Project MicaNT Sovereign Cryptography Next Generation Engine";
+        Aes aes256(key256);
+
+        auto ciphertext = aes256.encrypt(
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(secretMessage.data()), secretMessage.size()),
+            Aes::Mode::CBC,
+            iv,
+            true // PKCS#7 padding
+        );
+
+        TEST_ASSERT(ciphertext.size() > secretMessage.size(), "Ciphertext size must include PKCS#7 padding");
+        TEST_ASSERT(ciphertext.size() % 16 == 0, "Ciphertext size must be a multiple of 16");
+
+        bool ok = false;
+        auto decrypted = aes256.decrypt(
+            ciphertext,
+            Aes::Mode::CBC,
+            iv,
+            true,
+            &ok
+        );
+
+        TEST_ASSERT(ok, "AES-256 CBC decryption must report success");
+        std::string decryptedMessage(decrypted.begin(), decrypted.end());
+        TEST_ASSERT(decryptedMessage == secretMessage, "AES-256 CBC roundtrip must match original plaintext");
+
+        // Verify tampering detection with PKCS#7
+        ciphertext.back() ^= 0xFF; // Corrupt padding byte
+        bool tamperOk = false;
+        aes256.decrypt(ciphertext, Aes::Mode::CBC, iv, true, &tamperOk);
+        TEST_ASSERT(!tamperOk, "Tampered ciphertext must fail PKCS#7 padding validation");
+    }
+
+    // 5. RFC 6070 PBKDF2-HMAC-SHA256 Test Vectors
+    {
+        std::string pass = "password";
+        std::string salt = "salt";
+
+        // Iterations = 1
+        auto dk1 = Pbkdf2::derive(
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(pass.data()), pass.size()),
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(salt.data()), salt.size()),
+            1, 32
+        );
+        TEST_ASSERT(toHex(dk1) == "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b",
+                    "RFC 6070 PBKDF2 Iteration 1 Verification");
+
+        // Iterations = 2
+        auto dk2 = Pbkdf2::derive(
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(pass.data()), pass.size()),
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(salt.data()), salt.size()),
+            2, 32
+        );
+        TEST_ASSERT(toHex(dk2) == "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43",
+                    "RFC 6070 PBKDF2 Iteration 2 Verification");
+    }
+
+    // 6. CSPRNG Randomness & Entropy Verification
+    {
+        std::array<uint8_t, 32> randomBuf1{};
+        std::array<uint8_t, 32> randomBuf2{};
+
+        NTSTATUS status1 = BCryptGenRandom(nullptr, randomBuf1.data(), static_cast<uint32_t>(randomBuf1.size()), 0);
+        NTSTATUS status2 = BCryptGenRandom(nullptr, randomBuf2.data(), static_cast<uint32_t>(randomBuf2.size()), 0);
+
+        TEST_ASSERT(status1 == STATUS_SUCCESS, "BCryptGenRandom must succeed");
+        TEST_ASSERT(status2 == STATUS_SUCCESS, "BCryptGenRandom must succeed on successive calls");
+        TEST_ASSERT(randomBuf1 != randomBuf2, "CSPRNG must generate non-repeating entropy streams");
+
+        bool nonZero = false;
+        for (uint8_t b : randomBuf1) {
+            if (b != 0) { nonZero = true; break; }
+        }
+        TEST_ASSERT(nonZero, "CSPRNG output buffer must contain non-zero entropy");
+    }
+
+    // 7. Windows CNG (BCrypt) High-Level API Lifecycle
+    {
+        BCRYPT_ALG_HANDLE hAesAlg = nullptr;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&hAesAlg, BCRYPT_AES_ALGORITHM, nullptr, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hAesAlg != nullptr, "BCryptOpenAlgorithmProvider for AES must succeed");
+
+        // Verify property retrieval
+        uint32_t blockLen = 0;
+        uint32_t resultLen = 0;
+        status = BCryptGetProperty(hAesAlg, BCRYPT_BLOCK_LENGTH, reinterpret_cast<uint8_t*>(&blockLen), sizeof(blockLen), &resultLen, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && blockLen == 16, "BCryptGetProperty for BlockLength must return 16");
+
+        // Generate Symmetric Key Handle
+        uint8_t aesKeySecret[16] = {
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+        };
+        BCRYPT_KEY_HANDLE hKey = nullptr;
+        status = BCryptGenerateSymmetricKey(hAesAlg, &hKey, nullptr, 0, aesKeySecret, sizeof(aesKeySecret), 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hKey != nullptr, "BCryptGenerateSymmetricKey must return valid key handle");
+
+        // Encrypt & Decrypt via CNG API
+        std::string plain = "CNG-Sovereign-Message";
+        uint8_t iv[16] = { 0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xEE, 0xFF };
+        uint8_t ivDec[16];
+        std::memcpy(ivDec, iv, 16);
+
+        uint32_t cipherLen = 0;
+        status = BCryptEncrypt(hKey, reinterpret_cast<uint8_t*>(plain.data()), static_cast<uint32_t>(plain.size()), nullptr, iv, sizeof(iv), nullptr, 0, &cipherLen, BCRYPT_BLOCK_PADDING);
+        TEST_ASSERT(status == STATUS_SUCCESS && cipherLen >= plain.size(), "BCryptEncrypt sizing probe must succeed");
+
+        std::vector<uint8_t> cipherBuf(cipherLen);
+        status = BCryptEncrypt(hKey, reinterpret_cast<uint8_t*>(plain.data()), static_cast<uint32_t>(plain.size()), nullptr, iv, sizeof(iv), cipherBuf.data(), cipherLen, &cipherLen, BCRYPT_BLOCK_PADDING);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptEncrypt payload execution must succeed");
+
+        uint32_t decLen = 0;
+        status = BCryptDecrypt(hKey, cipherBuf.data(), cipherLen, nullptr, ivDec, sizeof(ivDec), nullptr, 0, &decLen, BCRYPT_BLOCK_PADDING);
+        TEST_ASSERT(status == STATUS_SUCCESS && decLen == plain.size(), "BCryptDecrypt sizing probe must match plaintext length");
+
+        std::vector<uint8_t> decBuf(decLen);
+        status = BCryptDecrypt(hKey, cipherBuf.data(), cipherLen, nullptr, ivDec, sizeof(ivDec), decBuf.data(), decLen, &decLen, BCRYPT_BLOCK_PADDING);
+        TEST_ASSERT(status == STATUS_SUCCESS, "BCryptDecrypt payload execution must succeed");
+
+        std::string recovered(decBuf.begin(), decBuf.end());
+        TEST_ASSERT(recovered == plain, "BCrypt roundtrip plaintext must match original message");
+
+        // Clean up key and algorithm
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAesAlg, 0);
+
+        // Test CNG Hash API
+        BCRYPT_ALG_HANDLE hShaAlg = nullptr;
+        BCryptOpenAlgorithmProvider(&hShaAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+        BCRYPT_HASH_HANDLE hHash = nullptr;
+        BCryptCreateHash(hShaAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+
+        std::string hashInput = "MicaNT-CNG-Hash";
+        BCryptHashData(hHash, reinterpret_cast<uint8_t*>(hashInput.data()), static_cast<uint32_t>(hashInput.size()), 0);
+
+        uint8_t digest[32];
+        BCryptFinishHash(hHash, digest, sizeof(digest), 0);
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hShaAlg, 0);
+
+        auto directHash = Sha256::hash(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(hashInput.data()), hashInput.size()));
+        TEST_ASSERT(std::memcmp(digest, directHash.data(), 32) == 0, "CNG Hash API digest must match direct Sha256 digest");
+    }
+
+    // 8. Key Storage Provider (NCrypt) Lifecycle
+    {
+        NCRYPT_PROV_HANDLE hStorage = nullptr;
+        NTSTATUS status = NCryptOpenStorageProvider(&hStorage, MS_KEY_STORAGE_PROVIDER, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hStorage != nullptr, "NCryptOpenStorageProvider must succeed");
+
+        NCRYPT_KEY_HANDLE hPersisted = nullptr;
+        status = NCryptCreatePersistedKey(hStorage, &hPersisted, BCRYPT_AES_ALGORITHM, L"SovereignAdminMasterKey", 0, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hPersisted != nullptr, "NCryptCreatePersistedKey must succeed");
+
+        status = NCryptFinalizeKey(hPersisted, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "NCryptFinalizeKey must succeed and populate random master key");
+
+        // Re-open persisted key by name
+        NCRYPT_KEY_HANDLE hOpened = nullptr;
+        status = NCryptOpenKey(hStorage, &hOpened, L"SovereignAdminMasterKey", 0, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && hOpened != nullptr, "NCryptOpenKey must find persisted key by name");
+
+        // Export key secret
+        uint32_t exportSize = 0;
+        status = NCryptExportKey(hOpened, nullptr, BCRYPT_OPAQUE_KEY_BLOB, nullptr, nullptr, 0, &exportSize, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS && exportSize == 32, "NCryptExportKey sizing probe must report 32 bytes");
+
+        std::vector<uint8_t> exportedSecret(exportSize);
+        status = NCryptExportKey(hOpened, nullptr, BCRYPT_OPAQUE_KEY_BLOB, nullptr, exportedSecret.data(), exportSize, &exportSize, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "NCryptExportKey must successfully export raw key data");
+
+        // Delete key
+        status = NCryptDeleteKey(hOpened, 0);
+        TEST_ASSERT(status == STATUS_SUCCESS, "NCryptDeleteKey must succeed");
+
+        NCryptFreeObject(hStorage);
+    }
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -6478,6 +6756,7 @@ int main() {
     RUN_TEST(Test_VanguardDriver_DeviceStack_And_PnP_Subsystem);
     RUN_TEST(Test_AegisSandbox_JobObjects_And_ProcessContainment);
     RUN_TEST(Test_PolarisDiag_CrashDump_And_MinidumpWriter);
+    RUN_TEST(Test_CipherKSP_CryptographicServices_And_AES);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
