@@ -52,6 +52,7 @@
 #include "winmm.hpp"
 #include "dsound.hpp"
 #include "version.hpp"
+#include "opengl.hpp"
 
 namespace micant::shell {
 
@@ -99,6 +100,7 @@ public:
         ole32::InitializeOle32SubsystemExports();
         shell32::InitializeShell32SubsystemExports();
         comctl32::InitializeComCtl32SubsystemExports();
+        opengl::InitializeOpenglSubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -166,6 +168,7 @@ public:
             if (cmd == "winmm" || cmd == "mmsys") { cmdWinMM(tokens, out); return 0; }
             if (cmd == "dsound" || cmd == "directsound") { cmdDirectSound(tokens, out); return 0; }
             if (cmd == "version" || cmd == "verinfo") { cmdVersion(tokens, out); return 0; }
+            if (cmd == "opengl" || cmd == "gl" || cmd == "wgl") { cmdOpenGL(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -407,6 +410,7 @@ private:
             << "  WINMM             WinMM Multimedia API (audio devices, high-res timer, MCI, playback)\n"
             << "  DSOUND            DirectSound 8 3D Audio Subsystem & Real-Time Voice Mixer\n"
             << "  VERSION / VERINFO Queries Windows Version Information resource metadata for PE files\n"
+            << "  OPENGL / GL / WGL Silicon Graphics OpenGL 1.4 API & Windows WGL 3D Runtime\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -2431,6 +2435,123 @@ private:
         char langName[64]{};
         version::VerLanguageNameA(0x0409, langName, sizeof(langName));
         out << "\nLanguage:             0x0409 (" << langName << ")\n";
+    }
+
+    void cmdOpenGL(const std::vector<std::string>& tokens, std::ostream& out) {
+        opengl::InitializeOpenglSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "test" || tokens[1] == "gears" || tokens[1] == "cube")) {
+            out << "[OpenGL] Launching 3D OpenGL & WGL Presentation Pipeline...\n";
+
+            // 1. Create User32 presentation window & DC
+            win32::HWND hwnd = user32::CreateWindowExW(
+                0, L"MicaNT_Window", L"MicaNT OpenGL / WGL 3D Test",
+                0, 0, 0, 640, 480, nullptr, nullptr, nullptr, nullptr
+            );
+            if (!hwnd) {
+                out << "[OpenGL] Error: Failed to create presentation window.\n";
+                return;
+            }
+
+            gdi32::HDC hdc = reinterpret_cast<gdi32::HDC>(user32::GetDC(hwnd));
+            gdi32::PIXELFORMATDESCRIPTOR pfd{};
+            pfd.dwFlags = gdi32::PFD_DRAW_TO_WINDOW | gdi32::PFD_SUPPORT_OPENGL | gdi32::PFD_DOUBLEBUFFER;
+            int pixelFmt = gdi32::ChoosePixelFormat(hdc, &pfd);
+            gdi32::SetPixelFormat(hdc, pixelFmt, &pfd);
+
+            // 2. Create and bind WGL Context
+            opengl::HGLRC hglrc = opengl::wglCreateContext(hdc);
+            if (!hglrc) {
+                out << "[OpenGL] Error: Failed to create WGL rendering context.\n";
+                user32::ReleaseDC(hwnd, reinterpret_cast<user32::HDC>(hdc));
+                user32::DestroyWindow(hwnd);
+                return;
+            }
+            opengl::wglMakeCurrent(hdc, hglrc);
+
+            // 3. Configure State & Pipeline
+            opengl::glViewport(0, 0, 640, 480);
+            opengl::glClearColor(0.06f, 0.10f, 0.22f, 1.0f);
+            opengl::glClearDepth(1.0);
+            opengl::glEnable(opengl::GL_DEPTH_TEST);
+            opengl::glDepthFunc(opengl::GL_LEQUAL);
+            opengl::glShadeModel(opengl::GL_SMOOTH);
+
+            opengl::glClear(opengl::GL_COLOR_BUFFER_BIT | opengl::GL_DEPTH_BUFFER_BIT);
+
+            // 4. Matrix Setup
+            opengl::glMatrixMode(opengl::GL_PROJECTION);
+            opengl::glLoadIdentity();
+            opengl::gluPerspective(45.0, 640.0 / 480.0, 0.1, 100.0);
+
+            opengl::glMatrixMode(opengl::GL_MODELVIEW);
+            opengl::glLoadIdentity();
+            opengl::gluLookAt(0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+
+            // Rotate Prism
+            opengl::glRotatef(30.0f, 1.0f, 0.0f, 0.0f);
+            opengl::glRotatef(45.0f, 0.0f, 1.0f, 0.0f);
+
+            // 5. Draw 3D Shaded DEC Prism / Crystal Geometry
+            opengl::glBegin(opengl::GL_TRIANGLES);
+
+            // Front face (Red to Green to Blue)
+            opengl::glColor3f(1.0f, 0.1f, 0.1f); opengl::glVertex3f( 0.0f,  0.8f,  0.0f);
+            opengl::glColor3f(0.1f, 1.0f, 0.1f); opengl::glVertex3f(-0.7f, -0.6f,  0.5f);
+            opengl::glColor3f(0.1f, 0.3f, 1.0f); opengl::glVertex3f( 0.7f, -0.6f,  0.5f);
+
+            // Right face (Red to Blue to Magenta)
+            opengl::glColor3f(1.0f, 0.1f, 0.1f); opengl::glVertex3f( 0.0f,  0.8f,  0.0f);
+            opengl::glColor3f(0.1f, 0.3f, 1.0f); opengl::glVertex3f( 0.7f, -0.6f,  0.5f);
+            opengl::glColor3f(1.0f, 0.1f, 1.0f); opengl::glVertex3f( 0.0f, -0.6f, -0.7f);
+
+            // Left face (Red to Magenta to Green)
+            opengl::glColor3f(1.0f, 0.1f, 0.1f); opengl::glVertex3f( 0.0f,  0.8f,  0.0f);
+            opengl::glColor3f(1.0f, 0.1f, 1.0f); opengl::glVertex3f( 0.0f, -0.6f, -0.7f);
+            opengl::glColor3f(0.1f, 1.0f, 0.1f); opengl::glVertex3f(-0.7f, -0.6f,  0.5f);
+
+            // Bottom base (Cyan / Yellow / White)
+            opengl::glColor3f(0.1f, 0.9f, 0.9f); opengl::glVertex3f(-0.7f, -0.6f,  0.5f);
+            opengl::glColor3f(1.0f, 1.0f, 0.1f); opengl::glVertex3f( 0.7f, -0.6f,  0.5f);
+            opengl::glColor3f(1.0f, 1.0f, 1.0f); opengl::glVertex3f( 0.0f, -0.6f, -0.7f);
+
+            opengl::glEnd();
+
+            // 6. Swap Buffers to Window DC
+            opengl::wglSwapBuffers(hdc);
+
+            out << "[OpenGL] 3D Shaded Prism rendered and presented successfully!\n"
+                << "  API Level:       OpenGL 1.4 / WGL 1.0 (Clean-Room Native)\n"
+                << "  Window Target:   640x480 HWND\n"
+                << "  Projection:      gluPerspective(45.0, aspect=1.33, zNear=0.1, zFar=100.0)\n"
+                << "  Camera Matrix:   gluLookAt(eye=(0,0,4), target=(0,0,0), up=(0,1,0))\n"
+                << "  Geometry:        4 Triangles, 12 Vertices, Perspective-Correct Barycentric Interpolation\n"
+                << "  Depth Test:      32-Bit Floating Point Z-Buffer (GL_LEQUAL)\n"
+                << "  Status:          Frame 1 blitted to User32 Window via wglSwapBuffers.\n";
+
+            // Cleanup
+            opengl::wglMakeCurrent(nullptr, nullptr);
+            opengl::wglDeleteContext(hglrc);
+            user32::ReleaseDC(hwnd, reinterpret_cast<user32::HDC>(hdc));
+            user32::DestroyWindow(hwnd);
+            return;
+        }
+
+        out << "========================================================================\n"
+            << "         MicaNT OpenGL & Windows WGL Subsystem (opengl32.dll / glu32.dll)\n"
+            << "========================================================================\n\n";
+
+        out << "Vendor:            " << opengl::glGetString(opengl::GL_VENDOR) << "\n"
+            << "Renderer:          " << opengl::glGetString(opengl::GL_RENDERER) << "\n"
+            << "Version:           " << opengl::glGetString(opengl::GL_VERSION) << "\n"
+            << "GLU Version:       1.3 MicaNT\n"
+            << "WGL Extensions:    wglGetProcAddress, wglCreateContext, wglMakeCurrent, wglSwapBuffers\n"
+            << "OpenGL Extensions: " << opengl::glGetString(opengl::GL_EXTENSIONS) << "\n"
+            << "Current HGLRC:     " << opengl::wglGetCurrentContext() << "\n"
+            << "Current HDC:       " << opengl::wglGetCurrentDC() << "\n\n"
+            << "Usage:\n"
+            << "  opengl info      Displays OpenGL runtime and driver metadata\n"
+            << "  opengl test      Renders perspective-correct 3D crystal prism via WGL\n";
     }
 
     static std::string trim(std::string_view s) {

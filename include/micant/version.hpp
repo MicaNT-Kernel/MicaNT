@@ -294,7 +294,51 @@ private:
             mod.stringTable["InternalName"] = "micant";
             mod.stringTable["OriginalFilename"] = "micant_kernel.exe";
             mod.stringTable["ProductName"] = "MicaNT Operating System";
-            mod.stringTable["ProductVersion"] = "1.0.63.0";
+            mod.stringTable["ProductVersion"] = "1.0.64.0";
+            registerModule(mod);
+        }
+
+        // 8. opengl32.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "opengl32.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "Silicon Graphics / MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "OpenGL Client DLL (PrismGL Accelerated)";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "opengl32";
+            mod.stringTable["OriginalFilename"] = "opengl32.dll";
+            mod.stringTable["ProductName"] = "OpenGL 1.4 / PrismGL";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // 9. glu32.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "glu32.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "OpenGL Utility Library DLL";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "glu32";
+            mod.stringTable["OriginalFilename"] = "glu32.dll";
+            mod.stringTable["ProductName"] = "OpenGL Utility Library";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
             registerModule(mod);
         }
     }

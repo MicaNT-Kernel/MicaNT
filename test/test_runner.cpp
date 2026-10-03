@@ -84,6 +84,7 @@
 #include "micant/winmm.hpp"
 #include "micant/dsound.hpp"
 #include "micant/version.hpp"
+#include "micant/opengl.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -9201,6 +9202,314 @@ void Test_WinMM_DirectSound_And_VersionInfo() {
     std::cout << "[TEST] Suite 63: WinMM Multimedia Engine, DirectSound 8 Audio & Version API PASSED.\n";
 }
 
+// ============================================================================
+// Suite 64: OpenGL & Windows WGL Subsystem Tests
+// ============================================================================
+void Test_OpenGL_And_WGL_Subsystem() {
+    std::cout << "[TEST] Running Suite 64: OpenGL 1.4 & Windows WGL 3D Runtime...\n";
+
+    // ------------------------------------------------------------------------
+    // 1. Pixel Format Negotiation (GDI / WGL Bridge)
+    // ------------------------------------------------------------------------
+    win32::HWND hwnd = user32::CreateWindowExW(
+        0, L"MicaNT_Window", L"OpenGL Unit Test Target",
+        0, 0, 0, 400, 300, nullptr, nullptr, nullptr, nullptr
+    );
+    TEST_ASSERT(hwnd != nullptr, "CreateWindowExW for OpenGL test target must succeed");
+
+    gdi32::HDC hdc = reinterpret_cast<gdi32::HDC>(user32::GetDC(hwnd));
+    TEST_ASSERT(hdc != nullptr, "GetDC for OpenGL window must succeed");
+
+    gdi32::PIXELFORMATDESCRIPTOR pfdReq{};
+    pfdReq.nSize = sizeof(pfdReq);
+    pfdReq.nVersion = 1;
+    pfdReq.dwFlags = gdi32::PFD_DRAW_TO_WINDOW | gdi32::PFD_SUPPORT_OPENGL | gdi32::PFD_DOUBLEBUFFER;
+    pfdReq.iPixelType = gdi32::PFD_TYPE_RGBA;
+    pfdReq.cColorBits = 32;
+    pfdReq.cDepthBits = 24;
+
+    int chosenFmt = gdi32::ChoosePixelFormat(hdc, &pfdReq);
+    TEST_ASSERT(chosenFmt == 1, "ChoosePixelFormat must select format 1 (32-bpp BGRA)");
+
+    win32::BOOL setOk = gdi32::SetPixelFormat(hdc, chosenFmt, &pfdReq);
+    TEST_ASSERT(setOk == win32::TRUE, "SetPixelFormat must succeed");
+
+    gdi32::PIXELFORMATDESCRIPTOR pfdDesc{};
+    int descOk = gdi32::DescribePixelFormat(hdc, chosenFmt, sizeof(pfdDesc), &pfdDesc);
+    TEST_ASSERT(descOk == 1, "DescribePixelFormat must succeed for format 1");
+
+    // ------------------------------------------------------------------------
+    // 2. WGL Context Lifecycle & Thread-Local Binding
+    // ------------------------------------------------------------------------
+    opengl::HGLRC hglrc = opengl::wglCreateContext(hdc);
+    TEST_ASSERT(hglrc != nullptr, "wglCreateContext must return a valid HGLRC");
+
+    TEST_ASSERT(opengl::wglGetCurrentContext() == nullptr, "Current context before wglMakeCurrent must be null");
+    TEST_ASSERT(opengl::wglGetCurrentDC() == nullptr, "Current DC before wglMakeCurrent must be null");
+
+    win32::BOOL makeOk = opengl::wglMakeCurrent(hdc, hglrc);
+    TEST_ASSERT(makeOk == win32::TRUE, "wglMakeCurrent must succeed");
+    TEST_ASSERT(opengl::wglGetCurrentContext() == hglrc, "wglGetCurrentContext must report active HGLRC");
+    TEST_ASSERT(opengl::wglGetCurrentDC() == hdc, "wglGetCurrentDC must report active HDC");
+
+    // ------------------------------------------------------------------------
+    // 3. String & Extension Queries
+    // ------------------------------------------------------------------------
+    const char* vendor = reinterpret_cast<const char*>(opengl::glGetString(opengl::GL_VENDOR));
+    const char* renderer = reinterpret_cast<const char*>(opengl::glGetString(opengl::GL_RENDERER));
+    const char* version = reinterpret_cast<const char*>(opengl::glGetString(opengl::GL_VERSION));
+    const char* extensions = reinterpret_cast<const char*>(opengl::glGetString(opengl::GL_EXTENSIONS));
+
+    TEST_ASSERT(vendor && std::string(vendor).find("MicaNT") != std::string::npos, "glGetString(GL_VENDOR) must report MicaNT");
+    TEST_ASSERT(renderer && std::string(renderer).find("PrismGL") != std::string::npos, "glGetString(GL_RENDERER) must report PrismGL");
+    TEST_ASSERT(version && std::string(version).find("1.4") != std::string::npos, "glGetString(GL_VERSION) must report 1.4");
+    TEST_ASSERT(extensions && std::string(extensions).find("GL_ARB_multitexture") != std::string::npos, "glGetString(GL_EXTENSIONS) must contain standard extensions");
+
+    // ------------------------------------------------------------------------
+    // 4. Matrix Engine & Stacks
+    // ------------------------------------------------------------------------
+    opengl::glMatrixMode(opengl::GL_MODELVIEW);
+    opengl::glLoadIdentity();
+
+    float mIdent[16]{};
+    opengl::glGetFloatv(0x0BA6 /* GL_MODELVIEW_MATRIX */, mIdent);
+    TEST_ASSERT(std::abs(mIdent[0] - 1.0f) < 1e-4f && std::abs(mIdent[5] - 1.0f) < 1e-4f &&
+                std::abs(mIdent[10] - 1.0f) < 1e-4f && std::abs(mIdent[15] - 1.0f) < 1e-4f,
+                "Modelview matrix identity diagonal must be 1.0");
+
+    opengl::glTranslatef(10.0f, 20.0f, 30.0f);
+    float mTrans[16]{};
+    opengl::glGetFloatv(0x0BA6, mTrans);
+    TEST_ASSERT(std::abs(mTrans[12] - 10.0f) < 1e-4f && std::abs(mTrans[13] - 20.0f) < 1e-4f &&
+                std::abs(mTrans[14] - 30.0f) < 1e-4f, "Translation matrix must have offsets in column 3");
+
+    opengl::glPushMatrix();
+    opengl::glScalef(2.0f, 3.0f, 4.0f);
+    float mScaled[16]{};
+    opengl::glGetFloatv(0x0BA6, mScaled);
+    TEST_ASSERT(std::abs(mScaled[0] - 2.0f) < 1e-4f && std::abs(mScaled[5] - 3.0f) < 1e-4f &&
+                std::abs(mScaled[10] - 4.0f) < 1e-4f, "Scaling matrix must scale axes");
+
+    opengl::glPopMatrix();
+    float mRestored[16]{};
+    opengl::glGetFloatv(0x0BA6, mRestored);
+    TEST_ASSERT(std::abs(mRestored[0] - 1.0f) < 1e-4f && std::abs(mRestored[12] - 10.0f) < 1e-4f,
+                "glPopMatrix must restore previous matrix");
+
+    // Underflow check
+    opengl::glPopMatrix();
+    TEST_ASSERT(opengl::glGetError() == opengl::GL_STACK_UNDERFLOW, "glPopMatrix beyond bottom must set GL_STACK_UNDERFLOW");
+
+    // ------------------------------------------------------------------------
+    // 5. GLU Utility Library
+    // ------------------------------------------------------------------------
+    opengl::glMatrixMode(opengl::GL_PROJECTION);
+    opengl::glLoadIdentity();
+    opengl::gluPerspective(60.0, 4.0 / 3.0, 0.1, 100.0);
+    float mProj[16]{};
+    opengl::glGetFloatv(0x0BA7 /* GL_PROJECTION_MATRIX */, mProj);
+    TEST_ASSERT(mProj[0] > 0.0f && mProj[5] > 0.0f && std::abs(mProj[11] - (-1.0f)) < 1e-4f,
+                "gluPerspective must compute perspective projection matrix");
+
+    const char* errStr = reinterpret_cast<const char*>(opengl::gluErrorString(opengl::GL_INVALID_ENUM));
+    TEST_ASSERT(errStr && std::string(errStr).find("invalid enumerant") != std::string::npos, "gluErrorString must describe error");
+
+    // ------------------------------------------------------------------------
+    // 6. Viewport, State & Clear
+    // ------------------------------------------------------------------------
+    opengl::glViewport(0, 0, 400, 300);
+    opengl::GLint vp[4]{};
+    opengl::glGetIntegerv(0x0BA2 /* GL_VIEWPORT */, vp);
+    TEST_ASSERT(vp[0] == 0 && vp[1] == 0 && vp[2] == 400 && vp[3] == 300, "glViewport dimensions must match");
+
+    opengl::glEnable(opengl::GL_DEPTH_TEST);
+    TEST_ASSERT(opengl::glIsEnabled(opengl::GL_DEPTH_TEST) == opengl::GL_TRUE, "GL_DEPTH_TEST must be enabled");
+    opengl::glDepthFunc(opengl::GL_LEQUAL);
+
+    opengl::glClearColor(0.2f, 0.3f, 0.4f, 1.0f);
+    opengl::glClearDepth(1.0);
+    opengl::glClear(opengl::GL_COLOR_BUFFER_BIT | opengl::GL_DEPTH_BUFFER_BIT);
+
+    // ------------------------------------------------------------------------
+    // 7. Immediate Mode Geometry & Depth Testing
+    // ------------------------------------------------------------------------
+    opengl::glMatrixMode(opengl::GL_MODELVIEW);
+    opengl::glLoadIdentity();
+
+    // Draw background triangle at Z = 0.5 (Solid Red)
+    opengl::glBegin(opengl::GL_TRIANGLES);
+    opengl::glColor3f(1.0f, 0.0f, 0.0f);
+    opengl::glVertex3f(-0.5f, -0.5f, 0.5f);
+    opengl::glVertex3f( 0.5f, -0.5f, 0.5f);
+    opengl::glVertex3f( 0.0f,  0.5f, 0.5f);
+    opengl::glEnd();
+
+    // Draw foreground triangle at Z = -0.5 (Solid Green) overlapping the center
+    opengl::glBegin(opengl::GL_TRIANGLES);
+    opengl::glColor3f(0.0f, 1.0f, 0.0f);
+    opengl::glVertex3f(-0.5f, -0.5f, -0.5f);
+    opengl::glVertex3f( 0.5f, -0.5f, -0.5f);
+    opengl::glVertex3f( 0.0f,  0.5f, -0.5f);
+    opengl::glEnd();
+
+    // Attempt to draw occluded triangle at Z = 0.8 (Solid Blue) behind both - must be depth rejected!
+    opengl::glBegin(opengl::GL_TRIANGLES);
+    opengl::glColor3f(0.0f, 0.0f, 1.0f);
+    opengl::glVertex3f(-0.5f, -0.5f, 0.8f);
+    opengl::glVertex3f( 0.5f, -0.5f, 0.8f);
+    opengl::glVertex3f( 0.0f,  0.5f, 0.8f);
+    opengl::glEnd();
+
+    // ------------------------------------------------------------------------
+    // 8. Quads, Strips & Line Rendering
+    // ------------------------------------------------------------------------
+    opengl::glBegin(opengl::GL_QUADS);
+    opengl::glColor4f(1.0f, 1.0f, 0.0f, 1.0f); // Yellow
+    opengl::glVertex3f(-0.8f, 0.6f, 0.0f);
+    opengl::glVertex3f(-0.6f, 0.6f, 0.0f);
+    opengl::glVertex3f(-0.6f, 0.8f, 0.0f);
+    opengl::glVertex3f(-0.8f, 0.8f, 0.0f);
+    opengl::glEnd();
+
+    opengl::glBegin(opengl::GL_LINES);
+    opengl::glColor3f(1.0f, 1.0f, 1.0f);
+    opengl::glVertex3f(-1.0f, 0.0f, 0.0f);
+    opengl::glVertex3f( 1.0f, 0.0f, 0.0f);
+    opengl::glEnd();
+
+    // ------------------------------------------------------------------------
+    // 9. 2D Texture Creation & Sampling
+    // ------------------------------------------------------------------------
+    opengl::GLuint texId = 0;
+    opengl::glGenTextures(1, &texId);
+    TEST_ASSERT(texId > 0, "glGenTextures must return valid texture ID");
+
+    opengl::glBindTexture(opengl::GL_TEXTURE_2D, texId);
+    opengl::glTexParameteri(opengl::GL_TEXTURE_2D, opengl::GL_TEXTURE_MIN_FILTER, opengl::GL_NEAREST);
+    opengl::glTexParameteri(opengl::GL_TEXTURE_2D, opengl::GL_TEXTURE_MAG_FILTER, opengl::GL_LINEAR);
+    opengl::glTexParameteri(opengl::GL_TEXTURE_2D, opengl::GL_TEXTURE_WRAP_S, opengl::GL_REPEAT);
+    opengl::glTexParameteri(opengl::GL_TEXTURE_2D, opengl::GL_TEXTURE_WRAP_T, opengl::GL_REPEAT);
+
+    uint8_t texData[4 * 4 * 4]; // 4x4 checkered texture
+    for (int i = 0; i < 16; ++i) {
+        bool on = ((i / 4) + (i % 4)) % 2 == 0;
+        texData[i * 4 + 0] = on ? 255 : 32;  // R
+        texData[i * 4 + 1] = on ? 255 : 64;  // G
+        texData[i * 4 + 2] = on ? 255 : 128; // B
+        texData[i * 4 + 3] = 255;            // A
+    }
+    opengl::glTexImage2D(opengl::GL_TEXTURE_2D, 0, 4, 4, 4, 0, opengl::GL_RGBA, opengl::GL_UNSIGNED_BYTE, texData);
+
+    opengl::glEnable(opengl::GL_TEXTURE_2D);
+    TEST_ASSERT(opengl::glIsEnabled(opengl::GL_TEXTURE_2D) == opengl::GL_TRUE, "GL_TEXTURE_2D must be enabled");
+
+    // Draw textured quad
+    opengl::glBegin(opengl::GL_QUADS);
+    opengl::glColor3f(1.0f, 1.0f, 1.0f);
+    opengl::glTexCoord2f(0.0f, 0.0f); opengl::glVertex3f(0.5f, 0.5f, 0.0f);
+    opengl::glTexCoord2f(1.0f, 0.0f); opengl::glVertex3f(0.8f, 0.5f, 0.0f);
+    opengl::glTexCoord2f(1.0f, 1.0f); opengl::glVertex3f(0.8f, 0.8f, 0.0f);
+    opengl::glTexCoord2f(0.0f, 1.0f); opengl::glVertex3f(0.5f, 0.8f, 0.0f);
+    opengl::glEnd();
+    opengl::glDisable(opengl::GL_TEXTURE_2D);
+
+    // ------------------------------------------------------------------------
+    // 10. Vertex Arrays (glDrawArrays)
+    // ------------------------------------------------------------------------
+    float vaPos[3 * 3] = {
+        -0.3f, -0.8f, 0.0f,
+         0.3f, -0.8f, 0.0f,
+         0.0f, -0.5f, 0.0f
+    };
+    float vaColor[3 * 3] = {
+        1.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 1.0f
+    };
+
+    opengl::glEnableClientState(opengl::GL_VERTEX_ARRAY);
+    opengl::glEnableClientState(opengl::GL_COLOR_ARRAY);
+    opengl::glVertexPointer(3, opengl::GL_FLOAT, 0, vaPos);
+    opengl::glColorPointer(3, opengl::GL_FLOAT, 0, vaColor);
+
+    opengl::glDrawArrays(opengl::GL_TRIANGLES, 0, 3);
+
+    opengl::glDisableClientState(opengl::GL_VERTEX_ARRAY);
+    opengl::glDisableClientState(opengl::GL_COLOR_ARRAY);
+
+    // ------------------------------------------------------------------------
+    // 11. Presentation & SwapBuffers
+    // ------------------------------------------------------------------------
+    win32::BOOL swapOk = opengl::wglSwapBuffers(hdc);
+    TEST_ASSERT(swapOk == win32::TRUE, "wglSwapBuffers must succeed");
+
+    auto dc = gdi32::GdiEngine::get().getDc(hdc);
+    TEST_ASSERT(dc != nullptr && dc->GetBitmap() != nullptr, "DC must hold active bitmap");
+    uint32_t centerPixel = dc->GetBitmap()->GetPixel(200, 150); // Center of 400x300 target
+    TEST_ASSERT(centerPixel != 0, "Center pixel must have been rendered and blitted");
+
+    // ------------------------------------------------------------------------
+    // 12. Extensions via wglGetProcAddress
+    // ------------------------------------------------------------------------
+    void* pfnGenBuffers = opengl::wglGetProcAddress("glGenBuffersARB");
+    TEST_ASSERT(pfnGenBuffers != nullptr, "wglGetProcAddress('glGenBuffersARB') must resolve function pointer");
+    void* pfnBindBuffer = opengl::wglGetProcAddress("glBindBufferARB");
+    TEST_ASSERT(pfnBindBuffer != nullptr, "wglGetProcAddress('glBindBufferARB') must resolve function pointer");
+
+    // ------------------------------------------------------------------------
+    // 13. DynamicLoader Subsystem Export Verification
+    // ------------------------------------------------------------------------
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("opengl32.dll", "wglCreateContext") != nullptr, "opengl32.dll!wglCreateContext must be registered");
+    TEST_ASSERT(ldr.getExport("opengl32.dll", "glBegin") != nullptr, "opengl32.dll!glBegin must be registered");
+    TEST_ASSERT(ldr.getExport("opengl32.dll", "glEnd") != nullptr, "opengl32.dll!glEnd must be registered");
+    TEST_ASSERT(ldr.getExport("opengl32.dll", "glDrawArrays") != nullptr, "opengl32.dll!glDrawArrays must be registered");
+    TEST_ASSERT(ldr.getExport("glu32.dll", "gluPerspective") != nullptr, "glu32.dll!gluPerspective must be registered");
+    TEST_ASSERT(ldr.getExport("glu32.dll", "gluLookAt") != nullptr, "glu32.dll!gluLookAt must be registered");
+
+    // ------------------------------------------------------------------------
+    // 14. Version Information Subsystem Verification
+    // ------------------------------------------------------------------------
+    uint32_t verHandle = 0;
+    uint32_t verSizeGl = version::GetFileVersionInfoSizeA("opengl32.dll", &verHandle);
+    TEST_ASSERT(verSizeGl > 0, "GetFileVersionInfoSizeA for opengl32.dll must report size > 0");
+
+    std::vector<uint8_t> verDataGl(verSizeGl);
+    TEST_ASSERT(version::GetFileVersionInfoA("opengl32.dll", verHandle, verSizeGl, verDataGl.data()), "GetFileVersionInfoA for opengl32.dll must succeed");
+
+    void* pDesc = nullptr;
+    uint32_t descLen = 0;
+    TEST_ASSERT(version::VerQueryValueA(verDataGl.data(), "\\StringFileInfo\\040904B0\\FileDescription", &pDesc, &descLen), "VerQueryValueA for opengl32.dll must succeed");
+    TEST_ASSERT(std::string(static_cast<const char*>(pDesc)).find("OpenGL Client DLL") != std::string::npos, "FileDescription must match OpenGL Client DLL");
+
+    uint32_t verSizeGlu = version::GetFileVersionInfoSizeA("glu32.dll", &verHandle);
+    TEST_ASSERT(verSizeGlu > 0, "GetFileVersionInfoSizeA for glu32.dll must report size > 0");
+
+    // ------------------------------------------------------------------------
+    // 15. Shell Command Integration
+    // ------------------------------------------------------------------------
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("opengl info", out);
+        TEST_ASSERT(out.str().find("Vendor:            MicaNT Sovereign Project") != std::string::npos, "Shell opengl info command must succeed");
+    }
+    {
+        micant::shell::CommandShell shell;
+        std::ostringstream out;
+        shell.execute("opengl test", out);
+        TEST_ASSERT(out.str().find("3D Shaded Prism rendered and presented successfully!") != std::string::npos, "Shell opengl test command must succeed");
+    }
+
+    // Context Cleanup
+    opengl::wglMakeCurrent(nullptr, nullptr);
+    opengl::wglDeleteContext(hglrc);
+    user32::ReleaseDC(hwnd, reinterpret_cast<user32::HDC>(hdc));
+    user32::DestroyWindow(hwnd);
+
+    std::cout << "[TEST] Suite 64: OpenGL 1.4 & Windows WGL 3D Runtime PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -9269,6 +9578,7 @@ int main() {
     RUN_TEST(Test_Windows_CMD_And_BatchExecutionEngine);
     RUN_TEST(Test_Direct3D9_ProgrammableShaders_And_D3DX9Math);
     RUN_TEST(Test_WinMM_DirectSound_And_VersionInfo);
+    RUN_TEST(Test_OpenGL_And_WGL_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

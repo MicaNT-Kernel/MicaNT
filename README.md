@@ -84,6 +84,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 21. **Security & Authentication Subsystem (SAM, LSASS, Winlogon) (`sam.hpp`, `lsass.hpp`, `winlogon.hpp`)**: Complete NT authentication trinity. RFC 1320 MD4 NT-Hash generation, Security Accounts Manager (SAM) database, built-in Administrator (RID 500) and Guest (RID 501), account lockout threshold and observation window policy. Local Security Authority Subsystem Service (LSASS) with MSV1_0 authentication package, NTLM challenge-response nonce generation, executive access token synthesis (`TOKEN_USER`, `TOKEN_GROUPS`, `TOKEN_PRIVILEGES`), SID translation (`LookupAccountSidW`), and IPC endpoints (`\\.\pipe\lsass`, `\LsaAuthenticationPort`). Winlogon interactive logon manager with desktop isolation (secure `Winlogon` vs `Default` interactive desktop), SAS `Ctrl+Alt+Del` event interception, workstation lock/unlock state machine, and shell utilities (`whoami /priv /groups /all`, `net user`, `lock`, `logoff`).
 22. **PrismX & Prism3D Graphics Architecture (`prismx.hpp`, `prism3d.hpp`, `dxgkrnl.hpp`)**: Sovereign clean-room 2D/3D graphics engine named in tribute to Dave Cutler's 1988 DEC PRISM RISC project. Implements DXGI presentation pipeline (`IDXGIFactory1`, `IDXGIAdapter1`, `IDXGIOutput`, `IDXGISwapChain`) with 32-bpp BGRA double/triple buffering, flip models (`FLIP_DISCARD`), dirty-rect tracking, and VSync pacing. Prism3D acceleration engine (`ID3D11Device`, `ID3D11DeviceContext`, `ID3D12Device`) featuring a high-precision barycentric software reference rasterizer with Gouraud color interpolation, depth testing (Z-buffer), and viewport clipping. WDDM DirectX Graphics Kernel (`dxgkrnl.sys`) implementing Ring 0 `D3DKMT*` syscall thunks (`D3DKMTOpenAdapter`, `D3DKMTCreateAllocation`, `D3DKMTCreateDevice`, `D3DKMTSubmitCommand`, `D3DKMTPresent`) for GPU memory virtual addressing and page flip scheduling. Fully compatible with Microsoft's MIT-licensed `DirectX-Headers` and `DirectXTK`. Integrated shell commands (`prismx`, `prismx test`).
 23. **Khronos Vulkan 1.3 ICD Loader & PrismVK Graphics Driver (`vulkan.hpp`)**: Sovereign clean-room implementation of the standard Khronos Vulkan Installable Client Driver (ICD) Loader (`vulkan-1.dll`). Features Configuration Manager driver discovery via `\Registry\Machine\SOFTWARE\Khronos\Vulkan\Drivers`, discrete GPU physical device enumeration (1.3.0 compliance, 8192 MB dedicated VRAM, 16384 MB shared GTT, 16 graphics/compute queues), `VK_KHR_win32_surface` HWND window attachment, `VK_KHR_swapchain` presentation, command pool & buffer recording, render passes, and queue submission dispatching directly through the Prism3D rasterizer. Integrated shell commands (`vulkan`, `vkcube`, `vulkan test`).
+24. **Silicon Graphics OpenGL 1.4 API, Windows WGL Subsystem & GLU Library (`opengl.hpp`, `opengl32.dll`, `glu32.dll`)**: Complete sovereign clean-room implementation of the Silicon Graphics OpenGL 1.1–1.4 core rendering pipeline, Windows WGL context lifecycle, and OpenGL Utility Library (`glu32.dll`). Features standard column-major 4x4 matrix stack math (ModelView, Projection, Texture), immediate mode (`glBegin`/`glEnd`) with primitive assembly (points, lines, triangles, quads, polygon fans/strips), vertex array client state (`glVertexPointer`, `glColorPointer`, `glTexCoordPointer`, `glDrawArrays`), 2D texture mapping with bilinear/nearest filtering and wrap modes (`GL_REPEAT`, `GL_CLAMP`), depth buffering (`GL_DEPTH_TEST`), alpha blending, and WGL context creation (`wglCreateContext`, `wglMakeCurrent`, `wglDeleteContext`) with `wglSwapBuffers` presentation bridge to GDI/User32 framebuffers. Full GLU camera utility routines (`gluPerspective`, `gluLookAt`, `gluOrtho2D`, `gluErrorString`). Integrated shell commands (`opengl info`, `opengl test`).
 
 ---
 
@@ -170,7 +171,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 
 To guarantee total clean-room independence and prevent name collisions with closed-source Windows binaries, every core subsystem is designated with a sovereign title honoring Dave Cutler's historic DEC/NT engineering lineage:
 
-- **[PrismX / Prism3D / PrismVK](https://github.com/MicaNT-Kernel/PrismX)**: Sovereign DirectX (DXGI, D3D11, D3D12) and Vulkan 1.3 presentation & rasterization architecture.
+- **[PrismX / Prism3D / PrismVK / PrismGL](https://github.com/MicaNT-Kernel/PrismX)**: Sovereign DirectX (DXGI, D3D11, D3D12), Vulkan 1.3, and OpenGL 1.4 presentation, rasterization & WGL architecture.
 - **EmeraldFS**: Clean-room file system engine with Master File Table (MFT) parser, Alternate Data Streams (ADS), and journaling (named after Cairo's *Emerald* OFS).
 - **DaytonaMM**: Sub-32MB virtual memory manager with 4KB paging, lookaside pools, and demand paging (named after NT 3.5 *Daytona*).
 - **NexusOB**: Unified kernel object manager, hierarchical namespace (`\Device`, `\DosDevices`, `\Registry`), and handle security.
@@ -209,12 +210,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (63 Suites, 100% Passing)
+### Build & Run Unit Test Suite (64 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 63 Test Suites:
+# Run all 64 Test Suites:
 .\bin\micant_tests.exe
 ```
 
