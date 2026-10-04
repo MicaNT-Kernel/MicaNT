@@ -109,6 +109,7 @@
 #include "micant/netapi32.hpp"
 #include "micant/ldap.hpp"
 #include "micant/termsrv.hpp"
+#include "micant/winspool.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -17615,6 +17616,270 @@ void Test_WindowsRDP_TerminalServices_Subsystem() {
     std::cout << "[TEST] Suite 87: Windows Remote Desktop Protocol (RDP) & Terminal Services Subsystem PASSED.\n";
 }
 
+void Test_WindowsPrinting_Spooler_Subsystem() {
+    std::cout << "[TEST] Running Suite 88: Windows Printing & Print Spooler Subsystem...\n";
+
+    // 1. Initialize Subsystem & Register Dynamic Exports
+    winspool::InitializePrintSpoolerSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("winspool.drv", "OpenPrinterW") != nullptr, "OpenPrinterW must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "OpenPrinterA") != nullptr, "OpenPrinterA must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "ClosePrinter") != nullptr, "ClosePrinter must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "EnumPrintersW") != nullptr, "EnumPrintersW must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "EnumPrintersA") != nullptr, "EnumPrintersA must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "GetPrinterW") != nullptr, "GetPrinterW must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "GetDefaultPrinterW") != nullptr, "GetDefaultPrinterW must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "GetDefaultPrinterA") != nullptr, "GetDefaultPrinterA must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "SetDefaultPrinterW") != nullptr, "SetDefaultPrinterW must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "StartDocPrinterW") != nullptr, "StartDocPrinterW must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "StartPagePrinter") != nullptr, "StartPagePrinter must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "WritePrinter") != nullptr, "WritePrinter must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "EndPagePrinter") != nullptr, "EndPagePrinter must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "EndDocPrinter") != nullptr, "EndDocPrinter must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "AbortPrinter") != nullptr, "AbortPrinter must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "EnumJobsW") != nullptr, "EnumJobsW must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "SetJobW") != nullptr, "SetJobW must be exported by winspool.drv");
+    TEST_ASSERT(ldr.getExport("spoolsv.dll", "ServiceMain") != nullptr, "ServiceMain must be exported by spoolsv.dll");
+
+    // 2. Version Information Introspection
+    auto& ver = version::VersionDatabase::Instance();
+    const auto* spoolDrv = ver.FindModule("winspool.drv");
+    TEST_ASSERT(spoolDrv != nullptr, "winspool.drv must be registered in version manager");
+    TEST_ASSERT(spoolDrv->stringTable.at("InternalName") == "winspool", "winspool InternalName must match");
+
+    const auto* spoolExe = ver.FindModule("spoolsv.exe");
+    TEST_ASSERT(spoolExe != nullptr, "spoolsv.exe must be registered in version manager");
+    TEST_ASSERT(spoolExe->stringTable.at("InternalName") == "spoolsv", "spoolsv InternalName must match");
+
+    const auto* prnMngr = ver.FindModule("prnmngr.exe");
+    TEST_ASSERT(prnMngr != nullptr, "prnmngr.exe must be registered in version manager");
+    TEST_ASSERT(prnMngr->stringTable.at("InternalName") == "prnmngr", "prnmngr InternalName must match");
+
+    const auto* printExe = ver.FindModule("print.exe");
+    TEST_ASSERT(printExe != nullptr, "print.exe must be registered in version manager");
+    TEST_ASSERT(printExe->stringTable.at("InternalName") == "print", "print InternalName must match");
+
+    // 3. SCM Spooler Service Integration
+    auto& scmInst = scm::ServiceControlManager::get();
+    auto spoolerSvc = scmInst.getServiceRecord(L"Spooler");
+    TEST_ASSERT(spoolerSvc != nullptr, "Spooler service must be registered in SCM");
+    TEST_ASSERT(spoolerSvc->displayName == L"Print Spooler", "Spooler display name must match");
+    TEST_ASSERT(spoolerSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "Spooler service must be RUNNING");
+    TEST_ASSERT(spoolerSvc->serviceType == scm::SERVICE_WIN32_OWN_PROCESS, "Spooler must be own process");
+
+    // 4. Default Printer Management (GetDefaultPrinterW/A, SetDefaultPrinterW)
+    winspool::PrintSpoolerManager::get().resetToDefault();
+
+    wchar_t defBufW[256]{};
+    uint32_t cchW = 256;
+    int32_t okDefW = winspool::GetDefaultPrinterW(defBufW, &cchW);
+    TEST_ASSERT(okDefW == 1, "GetDefaultPrinterW must succeed");
+    TEST_ASSERT(std::wstring(defBufW) == L"Microsoft Print to PDF", "Initial default printer must be Microsoft Print to PDF");
+
+    char defBufA[256]{};
+    uint32_t cchA = 256;
+    int32_t okDefA = winspool::GetDefaultPrinterA(defBufA, &cchA);
+    TEST_ASSERT(okDefA == 1, "GetDefaultPrinterA must succeed");
+    TEST_ASSERT(std::string(defBufA) == "Microsoft Print to PDF", "Initial default printer ANSI must match");
+
+    int32_t setRes = winspool::SetDefaultPrinterW(L"Microsoft XPS Document Writer");
+    TEST_ASSERT(setRes == 1, "SetDefaultPrinterW to XPS writer must succeed");
+    cchW = 256;
+    winspool::GetDefaultPrinterW(defBufW, &cchW);
+    TEST_ASSERT(std::wstring(defBufW) == L"Microsoft XPS Document Writer", "Default printer must now be Microsoft XPS Document Writer");
+
+    winspool::SetDefaultPrinterW(L"Microsoft Print to PDF");
+
+    // 5. Printer Enumeration (EnumPrintersW / A)
+    uint32_t cbNeeded = 0;
+    uint32_t cReturned = 0;
+
+    // Level 1 Enumeration (PRINTER_INFO_1W)
+    winspool::EnumPrintersW(winspool::PRINTER_ENUM_LOCAL, nullptr, 1, nullptr, 0, &cbNeeded, &cReturned);
+    TEST_ASSERT(cbNeeded > 0 && cReturned >= 3, "EnumPrintersW Level 1 must calculate buffer needed and return >= 3");
+
+    std::vector<uint8_t> buf1W(cbNeeded);
+    int32_t enumRes1 = winspool::EnumPrintersW(winspool::PRINTER_ENUM_LOCAL, nullptr, 1, buf1W.data(), cbNeeded, &cbNeeded, &cReturned);
+    TEST_ASSERT(enumRes1 == 1, "EnumPrintersW Level 1 must succeed");
+    auto* pInfo1 = reinterpret_cast<winspool::PRINTER_INFO_1W*>(buf1W.data());
+    bool foundPdf = false;
+    bool foundXps = false;
+    bool foundPs = false;
+    for (uint32_t i = 0; i < cReturned; ++i) {
+        if (pInfo1[i].pName) {
+            std::wstring n(pInfo1[i].pName);
+            if (n == L"Microsoft Print to PDF") foundPdf = true;
+            if (n == L"Microsoft XPS Document Writer") foundXps = true;
+            if (n == L"MicaNT Virtual PostScript Color Printer") foundPs = true;
+            ::free(pInfo1[i].pName);
+            ::free(pInfo1[i].pDescription);
+            ::free(pInfo1[i].pComment);
+        }
+    }
+    TEST_ASSERT(foundPdf && foundXps && foundPs, "All pre-seeded printers must be enumerated in Level 1");
+
+    // Level 2 Enumeration (PRINTER_INFO_2W)
+    cbNeeded = 0;
+    cReturned = 0;
+    winspool::EnumPrintersW(winspool::PRINTER_ENUM_LOCAL, nullptr, 2, nullptr, 0, &cbNeeded, &cReturned);
+    std::vector<uint8_t> buf2W(cbNeeded);
+    int32_t enumRes2 = winspool::EnumPrintersW(winspool::PRINTER_ENUM_LOCAL, nullptr, 2, buf2W.data(), cbNeeded, &cbNeeded, &cReturned);
+    TEST_ASSERT(enumRes2 == 1, "EnumPrintersW Level 2 must succeed");
+    auto* pInfo2 = reinterpret_cast<winspool::PRINTER_INFO_2W*>(buf2W.data());
+    for (uint32_t i = 0; i < cReturned; ++i) {
+        ::free(pInfo2[i].pServerName);
+        ::free(pInfo2[i].pPrinterName);
+        ::free(pInfo2[i].pShareName);
+        ::free(pInfo2[i].pPortName);
+        ::free(pInfo2[i].pDriverName);
+        ::free(pInfo2[i].pComment);
+        ::free(pInfo2[i].pLocation);
+        ::free(pInfo2[i].pPrintProcessor);
+        ::free(pInfo2[i].pDatatype);
+    }
+
+    // Level 4 Enumeration (PRINTER_INFO_4W)
+    cbNeeded = 0;
+    cReturned = 0;
+    winspool::EnumPrintersW(winspool::PRINTER_ENUM_LOCAL, nullptr, 4, nullptr, 0, &cbNeeded, &cReturned);
+    std::vector<uint8_t> buf4W(cbNeeded);
+    int32_t enumRes4 = winspool::EnumPrintersW(winspool::PRINTER_ENUM_LOCAL, nullptr, 4, buf4W.data(), cbNeeded, &cbNeeded, &cReturned);
+    TEST_ASSERT(enumRes4 == 1, "EnumPrintersW Level 4 must succeed");
+    auto* pInfo4 = reinterpret_cast<winspool::PRINTER_INFO_4W*>(buf4W.data());
+    for (uint32_t i = 0; i < cReturned; ++i) {
+        ::free(pInfo4[i].pPrinterName);
+        ::free(pInfo4[i].pServerName);
+    }
+
+    // 6. Printer Inspection & Spooling Workflow (OpenPrinterW -> StartDoc -> Write -> EndDoc)
+    uintptr_t hPrinter = 0;
+    int32_t opRes = winspool::OpenPrinterW(const_cast<wchar_t*>(L"Microsoft Print to PDF"), &hPrinter, nullptr);
+    TEST_ASSERT(opRes == 1 && hPrinter != 0, "OpenPrinterW must succeed and return handle");
+
+    // GetPrinterW Level 2
+    cbNeeded = 0;
+    winspool::GetPrinterW(hPrinter, 2, nullptr, 0, &cbNeeded);
+    std::vector<uint8_t> getBuf(cbNeeded);
+    int32_t gpRes = winspool::GetPrinterW(hPrinter, 2, getBuf.data(), cbNeeded, &cbNeeded);
+    TEST_ASSERT(gpRes == 1, "GetPrinterW Level 2 must succeed");
+    auto* pDetail = reinterpret_cast<winspool::PRINTER_INFO_2W*>(getBuf.data());
+    TEST_ASSERT(std::wstring(pDetail->pPortName) == L"PORTPROMPT:", "PDF printer port must be PORTPROMPT:");
+    TEST_ASSERT(std::wstring(pDetail->pDriverName) == L"Microsoft Print To PDF", "PDF printer driver must match");
+    ::free(pDetail->pServerName);
+    ::free(pDetail->pPrinterName);
+    ::free(pDetail->pShareName);
+    ::free(pDetail->pPortName);
+    ::free(pDetail->pDriverName);
+    ::free(pDetail->pComment);
+    ::free(pDetail->pLocation);
+    ::free(pDetail->pPrintProcessor);
+    ::free(pDetail->pDatatype);
+
+    // Spooling: StartDocPrinterW
+    winspool::DOC_INFO_1W di{};
+    di.pDocName = const_cast<wchar_t*>(L"Quarterly_Report.docx");
+    di.pDatatype = const_cast<wchar_t*>(L"RAW");
+
+    uint32_t jobId = winspool::StartDocPrinterW(hPrinter, 1, reinterpret_cast<uint8_t*>(&di));
+    TEST_ASSERT(jobId >= 1, "StartDocPrinterW must assign valid JobId >= 1");
+
+    // Page 1
+    int32_t page1Res = winspool::StartPagePrinter(hPrinter);
+    TEST_ASSERT(page1Res == 1, "StartPagePrinter must succeed");
+
+    const char page1Data[] = "%PDF-1.7 Executive Financial Statement Page 1\r\n";
+    uint32_t written1 = 0;
+    int32_t wr1Res = winspool::WritePrinter(hPrinter, const_cast<char*>(page1Data), sizeof(page1Data) - 1, &written1);
+    TEST_ASSERT(wr1Res == 1 && written1 == sizeof(page1Data) - 1, "WritePrinter Page 1 must write all bytes");
+
+    int32_t ep1Res = winspool::EndPagePrinter(hPrinter);
+    TEST_ASSERT(ep1Res == 1, "EndPagePrinter Page 1 must succeed");
+
+    // Page 2
+    winspool::StartPagePrinter(hPrinter);
+    const char page2Data[] = "Executive Financial Statement Page 2 - Balance Sheet\r\n";
+    uint32_t written2 = 0;
+    winspool::WritePrinter(hPrinter, const_cast<char*>(page2Data), sizeof(page2Data) - 1, &written2);
+    winspool::EndPagePrinter(hPrinter);
+
+    // EnumJobsW: Inspect job while in progress
+    cbNeeded = 0;
+    cReturned = 0;
+    winspool::EnumJobsW(hPrinter, 0, 10, 1, nullptr, 0, &cbNeeded, &cReturned);
+    std::vector<uint8_t> jobBuf(cbNeeded);
+    winspool::EnumJobsW(hPrinter, 0, 10, 1, jobBuf.data(), cbNeeded, &cbNeeded, &cReturned);
+    TEST_ASSERT(cReturned == 1, "EnumJobsW must return 1 active job");
+    auto* pJob = reinterpret_cast<winspool::JOB_INFO_1W*>(jobBuf.data());
+    TEST_ASSERT(pJob->JobId == jobId, "Job ID must match");
+    TEST_ASSERT(std::wstring(pJob->pDocument) == L"Quarterly_Report.docx", "Job document name must match");
+    TEST_ASSERT(pJob->PagesPrinted == 2, "Job must have 2 pages printed");
+    ::free(pJob->pPrinterName);
+    ::free(pJob->pMachineName);
+    ::free(pJob->pUserName);
+    ::free(pJob->pDocument);
+    ::free(pJob->pDatatype);
+    ::free(pJob->pStatus);
+
+    // Job Control: Pause & Resume
+    int32_t pauseRes = winspool::SetJobW(hPrinter, jobId, 1, nullptr, winspool::JOB_CONTROL_PAUSE);
+    TEST_ASSERT(pauseRes == 1, "SetJobW JOB_CONTROL_PAUSE must succeed");
+    int32_t resumeRes = winspool::SetJobW(hPrinter, jobId, 1, nullptr, winspool::JOB_CONTROL_RESUME);
+    TEST_ASSERT(resumeRes == 1, "SetJobW JOB_CONTROL_RESUME must succeed");
+
+    // EndDocPrinter: Complete print job
+    int32_t edRes = winspool::EndDocPrinter(hPrinter);
+    TEST_ASSERT(edRes == 1, "EndDocPrinter must succeed");
+
+    // ClosePrinter
+    int32_t cpRes = winspool::ClosePrinter(hPrinter);
+    TEST_ASSERT(cpRes == 1, "ClosePrinter must succeed");
+
+    // 7. Interactive Command Shell (prnmngr & print)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // prnmngr /?
+        shell.execute("prnmngr /?", out);
+        TEST_ASSERT(out.str().find("Windows Printer Management Utility") != std::string::npos, "prnmngr /? must display help");
+
+        // prnmngr test
+        out.str("");
+        shell.execute("prnmngr test", out);
+        TEST_ASSERT(out.str().find("Self-Test Completed Successfully") != std::string::npos, "prnmngr test must succeed");
+
+        // prnmngr -d
+        out.str("");
+        shell.execute("prnmngr -d", out);
+        TEST_ASSERT(out.str().find("The default printer is \"Microsoft Print to PDF\"") != std::string::npos, "prnmngr -d must output default printer");
+
+        // prnmngr -l
+        out.str("");
+        shell.execute("prnmngr -l", out);
+        TEST_ASSERT(out.str().find("Microsoft XPS Document Writer") != std::string::npos, "prnmngr -l must list XPS writer");
+        TEST_ASSERT(out.str().find("MicaNT Virtual PostScript Color Printer") != std::string::npos, "prnmngr -l must list PostScript printer");
+
+        // print /?
+        out.str("");
+        shell.execute("print /?", out);
+        TEST_ASSERT(out.str().find("Prints a text file or test document") != std::string::npos, "print /? must display help");
+
+        // print test
+        out.str("");
+        shell.execute("print test", out);
+        TEST_ASSERT(out.str().find("Self-Test Completed Successfully") != std::string::npos, "print test must succeed");
+
+        // print document.txt
+        out.str("");
+        shell.execute("print document.txt", out);
+        TEST_ASSERT(out.str().find("Spooling \"document.txt\" to Microsoft Print to PDF") != std::string::npos, "print must spool document");
+        TEST_ASSERT(out.str().find("successfully sent to spooler") != std::string::npos, "print must report success");
+    }
+
+    std::cout << "[TEST] Suite 88: Windows Printing & Print Spooler Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -17707,6 +17972,7 @@ int main() {
     RUN_TEST(Test_WindowsNetAPI32_NetworkManagement_Subsystem);
     RUN_TEST(Test_WindowsLDAP_ActiveDirectory_Subsystem);
     RUN_TEST(Test_WindowsRDP_TerminalServices_Subsystem);
+    RUN_TEST(Test_WindowsPrinting_Spooler_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

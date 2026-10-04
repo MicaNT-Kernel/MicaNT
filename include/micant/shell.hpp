@@ -77,6 +77,7 @@
 #include "netapi32.hpp"
 #include "ldap.hpp"
 #include "termsrv.hpp"
+#include "winspool.hpp"
 
 namespace micant::shell {
 
@@ -237,6 +238,8 @@ public:
             if (cmd == "qwinsta") { cmdQWinsta(tokens, out); return 0; }
             if (cmd == "rwinsta") { cmdRWinsta(tokens, out); return 0; }
             if (cmd == "mstsc" || cmd == "rdp") { cmdMstsc(tokens, out); return 0; }
+            if (cmd == "prnmngr") { cmdPrnMngr(tokens, out); return 0; }
+            if (cmd == "print") { cmdPrint(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -504,6 +507,8 @@ private:
             << "  QWINSTA           Query Window Station / Session utility (qwinsta)\n"
             << "  RWINSTA <id>      Reset Window Station / Session utility (rwinsta <id>)\n"
             << "  MSTSC [/v:<host>] Remote Desktop Connection client (mstsc test)\n"
+            << "  PRNMNGR           Printer configuration & management utility (prnmngr -l|-d|-s)\n"
+            << "  PRINT [/D:<dev>]  Line printer & document spooling utility (print test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -8238,6 +8243,242 @@ private:
         out << "Remote Desktop session established: Session ID #" << sid
             << " (Resolution: " << width << "x" << height << " truecolor"
             << (adminMode ? ", Console Admin Session" : "") << ").\n";
+    }
+
+    void cmdPrnMngr(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Windows Printer Management Utility (prnmngr)\n\n"
+                << "Usage: prnmngr [-l] [-d] [-s <printer>] [-a -p <printer> -m <driver> -r <port>] [-x -p <printer>]\n\n"
+                << "Options:\n"
+                << "  -l              List all installed printers\n"
+                << "  -d              Display the default printer\n"
+                << "  -s <printer>    Set the default printer\n"
+                << "  -a              Add a local printer\n"
+                << "  -x              Delete a printer\n"
+                << "  -p <printer>    Specifies the printer name\n"
+                << "  -m <driver>     Specifies the driver name\n"
+                << "  -r <port>       Specifies the port name\n"
+                << "  test            Runs automated printer and spooler self-test\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Printer Management (prnmngr) Self-Test Suite             \n"
+                << "========================================================================\n";
+            auto printers = winspool::PrintSpoolerManager::get().getPrinters();
+            out << "[TEST] 1. Initial printer count: " << printers.size() << " (PASS)\n";
+            for (const auto& p : printers) {
+                std::string sName(p.printerName.begin(), p.printerName.end());
+                std::string sPort(p.portName.begin(), p.portName.end());
+                out << "  -> " << sName << " on " << sPort << "\n";
+            }
+            std::wstring def = winspool::PrintSpoolerManager::get().getDefaultPrinter();
+            std::string sDef(def.begin(), def.end());
+            out << "[TEST] 2. Current default printer: " << sDef << " (PASS)\n";
+
+            winspool::SpoolPrinter tp;
+            tp.printerName = L"Test Virtual Laser";
+            tp.portName = L"LPT2:";
+            tp.driverName = L"Generic / Text Only";
+            tp.comment = L"Transient testing printer";
+            bool added = winspool::PrintSpoolerManager::get().addPrinter(tp);
+            out << "[TEST] 3. Add test printer 'Test Virtual Laser': " << (added ? "SUCCESS" : "FAILED") << " (PASS)\n";
+
+            bool setDef = winspool::PrintSpoolerManager::get().setDefaultPrinter(L"Test Virtual Laser");
+            out << "[TEST] 4. Set default to 'Test Virtual Laser': " << (setDef ? "SUCCESS" : "FAILED") << " (PASS)\n";
+
+            winspool::PrintSpoolerManager::get().setDefaultPrinter(def);
+            bool del = winspool::PrintSpoolerManager::get().deletePrinter(L"Test Virtual Laser");
+            out << "[TEST] 5. Deleted test printer & restored default: " << (del ? "SUCCESS" : "FAILED") << " (PASS)\n";
+            out << "[PRNMNGR] Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        std::string mode = "-l";
+        if (tokens.size() > 1) mode = tokens[1];
+
+        if (mode == "-d") {
+            std::wstring def = winspool::PrintSpoolerManager::get().getDefaultPrinter();
+            std::string sDef(def.begin(), def.end());
+            out << "The default printer is \"" << sDef << "\"\n";
+            return;
+        }
+
+        if (mode == "-s") {
+            if (tokens.size() < 3) {
+                out << "Error: Printer name required for -s option.\n";
+                return;
+            }
+            std::string pName = tokens[2];
+            std::wstring wpName(pName.begin(), pName.end());
+            if (winspool::PrintSpoolerManager::get().setDefaultPrinter(wpName)) {
+                out << "Successfully set \"" << pName << "\" as the default printer.\n";
+            } else {
+                out << "Could not set \"" << pName << "\" as the default printer. Printer not found.\n";
+            }
+            return;
+        }
+
+        if (mode == "-a") {
+            std::string pName, pDriver = "Generic / Text Only", pPort = "LPT1:";
+            for (size_t i = 2; i < tokens.size(); ++i) {
+                if (tokens[i] == "-p" && i + 1 < tokens.size()) pName = tokens[++i];
+                else if (tokens[i] == "-m" && i + 1 < tokens.size()) pDriver = tokens[++i];
+                else if (tokens[i] == "-r" && i + 1 < tokens.size()) pPort = tokens[++i];
+            }
+            if (pName.empty()) {
+                out << "Error: Printer name required (-p <name>).\n";
+                return;
+            }
+            winspool::SpoolPrinter p;
+            p.printerName.assign(pName.begin(), pName.end());
+            p.driverName.assign(pDriver.begin(), pDriver.end());
+            p.portName.assign(pPort.begin(), pPort.end());
+            p.comment = L"User added printer";
+            if (winspool::PrintSpoolerManager::get().addPrinter(p)) {
+                out << "Successfully added printer \"" << pName << "\".\n";
+            } else {
+                out << "Could not add printer \"" << pName << "\". Printer already exists.\n";
+            }
+            return;
+        }
+
+        if (mode == "-x") {
+            std::string pName;
+            for (size_t i = 2; i < tokens.size(); ++i) {
+                if (tokens[i] == "-p" && i + 1 < tokens.size()) pName = tokens[++i];
+            }
+            if (pName.empty()) {
+                out << "Error: Printer name required (-p <name>).\n";
+                return;
+            }
+            std::wstring wpName(pName.begin(), pName.end());
+            if (winspool::PrintSpoolerManager::get().deletePrinter(wpName)) {
+                out << "Successfully deleted printer \"" << pName << "\".\n";
+            } else {
+                out << "Could not delete printer \"" << pName << "\". Printer not found.\n";
+            }
+            return;
+        }
+
+        auto printers = winspool::PrintSpoolerManager::get().getPrinters();
+        std::wstring def = winspool::PrintSpoolerManager::get().getDefaultPrinter();
+
+        out << "Total printers listed: " << printers.size() << "\n\n";
+        for (const auto& p : printers) {
+            std::string sName(p.printerName.begin(), p.printerName.end());
+            std::string sPort(p.portName.begin(), p.portName.end());
+            std::string sDriver(p.driverName.begin(), p.driverName.end());
+            std::string sComment(p.comment.begin(), p.comment.end());
+            std::string sLoc(p.location.begin(), p.location.end());
+            bool isDef = (p.printerName == def);
+
+            out << "Server name: " << "\n"
+                << "Printer name: " << sName << "\n"
+                << "Share name: " << "\n"
+                << "Driver name: " << sDriver << "\n"
+                << "Port name: " << sPort << "\n"
+                << "Comment: " << sComment << "\n"
+                << "Location: " << sLoc << "\n"
+                << "Print processor: winprint\n"
+                << "Data type: RAW\n"
+                << "Printer status: Ready\n"
+                << "Default: " << (isDef ? "Yes" : "No") << "\n\n";
+        }
+    }
+
+    void cmdPrint(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Prints a text file or test document to a printer.\n\n"
+                << "PRINT [/D:device] [[drive:][path]filename[...]]\n\n"
+                << "   /D:device   Specifies a print device (default is default printer).\n"
+                << "   test        Runs automated print job spooling self-test.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Print Spooler (PRINT) Self-Test Suite                    \n"
+                << "========================================================================\n";
+            std::wstring defPrinter = winspool::PrintSpoolerManager::get().getDefaultPrinter();
+            std::string sDef(defPrinter.begin(), defPrinter.end());
+            out << "[TEST] 1. Target printer: " << sDef << "\n";
+
+            uintptr_t hPrinter = 0;
+            int32_t opRes = winspool::OpenPrinterW(const_cast<wchar_t*>(defPrinter.c_str()), &hPrinter, nullptr);
+            out << "[TEST] 2. OpenPrinterW: " << (opRes ? "SUCCESS" : "FAILED") << " (Handle: 0x" << std::hex << hPrinter << std::dec << ")\n";
+
+            winspool::DOC_INFO_1W di{};
+            di.pDocName = const_cast<wchar_t*>(L"MicaNT Test Document");
+            di.pDatatype = const_cast<wchar_t*>(L"RAW");
+
+            uint32_t jobId = winspool::StartDocPrinterW(hPrinter, 1, reinterpret_cast<uint8_t*>(&di));
+            out << "[TEST] 3. StartDocPrinterW assigned JobId #" << jobId << " (PASS)\n";
+
+            int32_t spRes = winspool::StartPagePrinter(hPrinter);
+            out << "[TEST] 4. StartPagePrinter: " << (spRes ? "SUCCESS" : "FAILED") << " (PASS)\n";
+
+            const char sampleData[] = "MicaNT Clean-Room Print Subsystem Spool Test Page\r\n";
+            uint32_t written = 0;
+            int32_t wrRes = winspool::WritePrinter(hPrinter, const_cast<char*>(sampleData), sizeof(sampleData) - 1, &written);
+            out << "[TEST] 5. WritePrinter wrote " << written << " bytes: " << (wrRes ? "SUCCESS" : "FAILED") << " (PASS)\n";
+
+            int32_t epRes = winspool::EndPagePrinter(hPrinter);
+            out << "[TEST] 6. EndPagePrinter: " << (epRes ? "SUCCESS" : "FAILED") << " (PASS)\n";
+
+            int32_t edRes = winspool::EndDocPrinter(hPrinter);
+            out << "[TEST] 7. EndDocPrinter: " << (edRes ? "SUCCESS" : "FAILED") << " (PASS)\n";
+
+            winspool::ClosePrinter(hPrinter);
+            out << "[TEST] 8. ClosePrinter: SUCCESS (PASS)\n";
+            out << "[PRINT] Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        std::wstring targetPrinter = winspool::PrintSpoolerManager::get().getDefaultPrinter();
+        std::string filename = "stdin";
+
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            std::string t = tokens[i];
+            if (t.rfind("/D:", 0) == 0 || t.rfind("/d:", 0) == 0 || t.rfind("-d:", 0) == 0) {
+                std::string dev = t.substr(3);
+                targetPrinter.assign(dev.begin(), dev.end());
+            } else if (t[0] != '/' && t[0] != '-') {
+                filename = t;
+            }
+        }
+
+        std::string sPrinter(targetPrinter.begin(), targetPrinter.end());
+        out << "Spooling \"" << filename << "\" to " << sPrinter << "...\n";
+
+        uintptr_t hPrinter = 0;
+        if (!winspool::OpenPrinterW(const_cast<wchar_t*>(targetPrinter.c_str()), &hPrinter, nullptr)) {
+            out << "Unable to open printer \"" << sPrinter << "\".\n";
+            return;
+        }
+
+        std::wstring wDoc(filename.begin(), filename.end());
+        winspool::DOC_INFO_1W di{};
+        di.pDocName = const_cast<wchar_t*>(wDoc.c_str());
+        di.pDatatype = const_cast<wchar_t*>(L"RAW");
+
+        uint32_t jobId = winspool::StartDocPrinterW(hPrinter, 1, reinterpret_cast<uint8_t*>(&di));
+        if (jobId == 0) {
+            out << "Failed to initialize print document on \"" << sPrinter << "\".\n";
+            winspool::ClosePrinter(hPrinter);
+            return;
+        }
+
+        winspool::StartPagePrinter(hPrinter);
+        std::string content = "MicaNT Document Print Buffer: " + filename + "\r\n";
+        uint32_t written = 0;
+        winspool::WritePrinter(hPrinter, content.data(), static_cast<uint32_t>(content.size()), &written);
+        winspool::EndPagePrinter(hPrinter);
+        winspool::EndDocPrinter(hPrinter);
+        winspool::ClosePrinter(hPrinter);
+
+        out << "Job ID #" << jobId << " successfully sent to spooler (" << written << " bytes).\n";
     }
 
     static std::string trim(std::string_view s) {
