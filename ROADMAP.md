@@ -1489,23 +1489,45 @@
 
 ---
 
-### Phase 64: Windows Network Location Awareness (NLA) & Network List Service (`nlasvc.dll`, `netprofm.dll`, `NLASvc`, `netprofm`) (PLANNED)
-- [ ] **Clean-Room NLA & Network List Architecture (`include/micant/nla.hpp`, `nlasvc.dll`, `netprofm.dll`)**:
+### Phase 64: Windows Network Location Awareness (NLA) & Network List Service (`nlasvc.dll`, `netprofm.dll`, `NLASvc`, `netprofm`, `NcbService`, `nlaapi.dll`) (100% Completed)
+- [x] **Clean-Room NLA & Network List Architecture (`include/micant/nla.hpp`, `nlasvc.dll`, `netprofm.dll`, `nlaapi.dll`)**:
   - COM interfaces: `INetworkListManager`, `INetwork`, `INetworkConnection`, `INetworkCostManager`, `IEnumNetworks`, `IEnumNetworkConnections`, `INetworkEvents`, `INetworkConnectionEvents`.
   - NLA Winsock Name Space Provider APIs: `WSALookupServiceBeginW/A`, `WSALookupServiceNextW/A`, `WSALookupServiceEnd`, `NLA_BLOB` structures for network identification, active connectivity profiles, and DNS domain suffix.
   - Network categories: `NLM_NETWORK_CATEGORY_PUBLIC` (0), `NLM_NETWORK_CATEGORY_PRIVATE` (1), `NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED` (2).
   - Network connectivity bitmasks: `NLM_CONNECTIVITY_DISCONNECTED` (0), `NLM_CONNECTIVITY_IPV4_INTERNET` (0x40), `NLM_CONNECTIVITY_IPV6_INTERNET` (0x400), `NLM_CONNECTIVITY_IPV4_LOCALNETWORK` (0x20).
-  - Sovereign Network Profile Manager (`NetworkLocationManager`): synthetic profiles for Ethernet (`MicaNT Domain Network`, Domain Authenticated, Internet access), Wi-Fi (`MicaNT Corporate Secure`, Private, Local/Internet access), and captive portal / disconnected states.
-- [ ] **SCM Network Awareness Daemons**:
+  - Metered connection cost management (`NLM_CONNECTION_COST_UNRESTRICTED`, `NLM_CONNECTION_COST_FIXED`, `NLM_CONNECTION_COST_VARIABLE`) and data plan metrics (`NLM_DATAPLAN_STATUS`).
+  - Sovereign Network Profile Manager (`NetworkLocationManager`): synthetic profiles for Ethernet (`MicaNT Corporate Domain Network`, Domain Authenticated, Internet access), Wi-Fi (`MicaNT Secure Wireless`, Private, Local/Internet access), and sandbox lab (`MicaNT Isolated Lab Network`, Public).
+- [x] **SCM Network Awareness Daemons**:
   - `NLASvc` ("Network Location Awareness", svchost `NetworkService`).
   - `netprofm` ("Network List Service", svchost `LocalService`).
   - `NcbService` ("Network Connection Broker", svchost `LocalSystemNetworkRestricted`).
-- [ ] **Interactive CLI Utilities (`nla` / `netprof`)**:
+- [x] **Interactive CLI Utilities (`nla` / `netprof`)**:
   - `nla list` (Lists identified networks and connectivity states).
   - `nla status` (Displays active network profile, category, domain authentication, and gateway reachability).
-  - `nla test` (Validates `INetworkListManager` COM interface methods and event notifications).
-- [ ] **Unit Test Suite 91 (`Test_WindowsNLA_NetworkListService_Subsystem`)**:
-  - Full automated validation of NLA COM interfaces, network enumeration, connectivity flags, SCM service integration, and CLI commands.
+  - `nla test` (Validates `INetworkListManager` COM interface methods, cost management, and connection enumeration).
+- [x] **Unit Test Suite 91 (`Test_WindowsNLA_NetworkListService_Subsystem`)**:
+  - Full automated validation of NLA COM interfaces, network enumeration, connectivity flags, SCM service integration, version database records, and CLI commands.
+  - All 91 unit test suites passing with 100% success rate (91 Passed, 0 Failed).
+
+---
+
+### Phase 65: Windows Push Notification Service (WNS) & Core Notification Subsystem (`wpncore.dll`, `wpnapps.dll`, `wpnclient.dll`, `WpnService`, `WpnUserService`) (PLANNED)
+- [ ] **Clean-Room WNS & Push Notification Architecture (`include/micant/wns.hpp`, `wpncore.dll`, `wpnapps.dll`, `wpnclient.dll`)**:
+  - Windows Push Notification Platform (WPN) COM interfaces: `IPushNotificationChannel`, `IPushNotificationChannelManager`, `IPushNotificationReceivedEventArgs`, `IToastNotification`, `IToastNotificationManager`, `IBadgeNotification`.
+  - Push notification channels: channel URI synthesis, exponential backoff expiry renewal, authenticated channel tokens, and payload decryption (AES-GCM-128 / AES-GCM-256).
+  - Toast and Badge XML payload parser conforming to MS-WNS and Windows 10/11 Toast schema (Visual elements, Text nodes, Action buttons, Inline reply inputs, Audio cues).
+  - Sovereign Push Notification Manager (`PushNotificationManager`): registration of application notification channels, in-memory notification queue, historical notification center store, and client callback dispatch.
+- [ ] **SCM Windows Push Notification Daemons**:
+  - `WpnService` ("Windows Push Notifications System Service", `SERVICE_WIN32_SHARE_PROCESS` in svchost group `System`).
+  - `WpnUserService` ("Windows Push Notifications User Service", per-user template service in svchost `UnistoreSvcGroup`).
+- [ ] **Interactive CLI Utilities (`notify` / `toast`)**:
+  - `notify channel [appId]` (Displays or creates an active WNS push notification channel URI).
+  - `notify toast <title> <message>` (Simulates reception and rendering of an incoming interactive Toast notification).
+  - `notify list` (Lists pending and active notifications in the Action Center).
+  - `notify test` (Executes end-to-end self-test of channel acquisition, toast serialization, and push event dispatch).
+- [ ] **Unit Test Suite 92 (`Test_WindowsWNS_PushNotification_Subsystem`)**:
+  - Full automated validation of WNS channel manager, toast payload parser, per-user notification brokers, SCM service daemons, and CLI commands.
+
 
 
 

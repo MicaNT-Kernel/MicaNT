@@ -112,6 +112,7 @@
 #include "micant/winspool.hpp"
 #include "micant/mci.hpp"
 #include "micant/winscard.hpp"
+#include "micant/nla.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -18491,6 +18492,383 @@ void Test_WindowsSmartCard_PCSC_Subsystem() {
     std::cout << "[TEST] Suite 90: Windows Smart Card & PC/SC Subsystem PASSED.\n";
 }
 
+void Test_WindowsNLA_NetworkListService_Subsystem() {
+    using namespace micant;
+
+    std::cout << "[TEST] Running Suite 91: Windows Network Location Awareness & Network List Service Subsystem (nlasvc.dll / netprofm.dll)...\n";
+
+    nla::InitializeNlaSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports & Module Registration
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+
+        // netprofm.dll
+        TEST_ASSERT(ldr.getExport("netprofm.dll", "DllGetClassObject") != nullptr, "netprofm.dll DllGetClassObject must be exported");
+        TEST_ASSERT(ldr.getExport("netprofm.dll", "DllCanUnloadNow") != nullptr, "netprofm.dll DllCanUnloadNow must be exported");
+        TEST_ASSERT(ldr.getExport("netprofm.dll", "DllRegisterServer") != nullptr, "netprofm.dll DllRegisterServer must be exported");
+        TEST_ASSERT(ldr.getExport("netprofm.dll", "DllUnregisterServer") != nullptr, "netprofm.dll DllUnregisterServer must be exported");
+
+        // nlasvc.dll
+        TEST_ASSERT(ldr.getExport("nlasvc.dll", "ServiceMain") != nullptr, "nlasvc.dll ServiceMain must be exported");
+        TEST_ASSERT(ldr.getExport("nlasvc.dll", "SvchostPushServiceGlobals") != nullptr, "nlasvc.dll SvchostPushServiceGlobals must be exported");
+
+        // ncbservice.dll
+        TEST_ASSERT(ldr.getExport("ncbservice.dll", "ServiceMain") != nullptr, "ncbservice.dll ServiceMain must be exported");
+        TEST_ASSERT(ldr.getExport("ncbservice.dll", "SvchostPushServiceGlobals") != nullptr, "ncbservice.dll SvchostPushServiceGlobals must be exported");
+
+        // nlaapi.dll
+        TEST_ASSERT(ldr.getExport("nlaapi.dll", "NlsGetInterfaceGuidFromInterfaceIndex") != nullptr, "nlaapi.dll NlsGetInterfaceGuidFromInterfaceIndex must be exported");
+        TEST_ASSERT(ldr.getExport("nlaapi.dll", "NlsFreeInterfaceGuid") != nullptr, "nlaapi.dll NlsFreeInterfaceGuid must be exported");
+        TEST_ASSERT(ldr.getExport("nlaapi.dll", "NlsUpdateInterfaceCostCache") != nullptr, "nlaapi.dll NlsUpdateInterfaceCostCache must be exported");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Information Records
+    // ------------------------------------------------------------------------
+    {
+        const auto* verNla = version::VersionDatabase::Instance().FindModule("nlasvc.dll");
+        TEST_ASSERT(verNla != nullptr, "nlasvc.dll version record must exist");
+        TEST_ASSERT(verNla->stringTable.at("FileDescription") == "Network Location Awareness Service", "nlasvc.dll description match");
+        TEST_ASSERT(verNla->stringTable.at("OriginalFilename") == "nlasvc.dll", "nlasvc.dll original filename match");
+
+        const auto* verNetprof = version::VersionDatabase::Instance().FindModule("netprofm.dll");
+        TEST_ASSERT(verNetprof != nullptr, "netprofm.dll version record must exist");
+        TEST_ASSERT(verNetprof->stringTable.at("FileDescription") == "Network List Manager", "netprofm.dll description match");
+        TEST_ASSERT(verNetprof->stringTable.at("OriginalFilename") == "netprofm.dll", "netprofm.dll original filename match");
+
+        const auto* verNcb = version::VersionDatabase::Instance().FindModule("ncbservice.dll");
+        TEST_ASSERT(verNcb != nullptr, "ncbservice.dll version record must exist");
+        TEST_ASSERT(verNcb->stringTable.at("FileDescription") == "Network Connection Broker", "ncbservice.dll description match");
+        TEST_ASSERT(verNcb->stringTable.at("OriginalFilename") == "ncbservice.dll", "ncbservice.dll original filename match");
+
+        const auto* verNlaApi = version::VersionDatabase::Instance().FindModule("nlaapi.dll");
+        TEST_ASSERT(verNlaApi != nullptr, "nlaapi.dll version record must exist");
+        TEST_ASSERT(verNlaApi->stringTable.at("FileDescription") == "Network Location Awareness API", "nlaapi.dll description match");
+        TEST_ASSERT(verNlaApi->stringTable.at("OriginalFilename") == "nlaapi.dll", "nlaapi.dll original filename match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Service Control Manager Services
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+
+        auto nlaSvc = scm.getServiceRecord(L"NLASvc");
+        TEST_ASSERT(nlaSvc != nullptr, "NLASvc service must be registered in SCM");
+        TEST_ASSERT(nlaSvc->displayName == L"Network Location Awareness", "NLASvc display name match");
+        TEST_ASSERT(nlaSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "NLASvc must be in running state");
+
+        auto netprofmSvc = scm.getServiceRecord(L"netprofm");
+        TEST_ASSERT(netprofmSvc != nullptr, "netprofm service must be registered in SCM");
+        TEST_ASSERT(netprofmSvc->displayName == L"Network List Service", "netprofm display name match");
+        TEST_ASSERT(netprofmSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "netprofm must be in running state");
+
+        auto ncbSvc = scm.getServiceRecord(L"NcbService");
+        TEST_ASSERT(ncbSvc != nullptr, "NcbService service must be registered in SCM");
+        TEST_ASSERT(ncbSvc->displayName == L"Network Connection Broker", "NcbService display name match");
+        TEST_ASSERT(ncbSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "NcbService must be in running state");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: COM Class Factory & CoCreateInstance
+    // ------------------------------------------------------------------------
+    nla::INetworkListManager* pNLM = nullptr;
+    {
+        ole32::HRESULT hr = ole32::CoCreateInstance(
+            nla::CLSID_NetworkListManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+            nla::IID_INetworkListManager, reinterpret_cast<void**>(&pNLM)
+        );
+        TEST_ASSERT(hr == ole32::S_OK, "CoCreateInstance(CLSID_NetworkListManager) must return S_OK");
+        TEST_ASSERT(pNLM != nullptr, "INetworkListManager interface pointer must be valid");
+
+        // Verify QueryInterface on pNLM
+        ole32::IUnknown* pUnk = nullptr;
+        hr = pNLM->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+        TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "QueryInterface for IUnknown must succeed");
+        pUnk->Release();
+
+        ole32::IDispatch* pDisp = nullptr;
+        hr = pNLM->QueryInterface(ole32::IID_IDispatch, reinterpret_cast<void**>(&pDisp));
+        TEST_ASSERT(hr == ole32::S_OK && pDisp != nullptr, "QueryInterface for IDispatch must succeed");
+        pDisp->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: INetworkListManager Connectivity Inquiries
+    // ------------------------------------------------------------------------
+    {
+        int16_t isInternet = 0;
+        ole32::HRESULT hr = pNLM->get_IsConnectedToInternet(&isInternet);
+        TEST_ASSERT(hr == ole32::S_OK, "get_IsConnectedToInternet must return S_OK");
+        TEST_ASSERT(isInternet == -1, "get_IsConnectedToInternet must report VARIANT_TRUE (-1)");
+
+        int16_t isConnected = 0;
+        hr = pNLM->get_IsConnected(&isConnected);
+        TEST_ASSERT(hr == ole32::S_OK, "get_IsConnected must return S_OK");
+        TEST_ASSERT(isConnected == -1, "get_IsConnected must report VARIANT_TRUE (-1)");
+
+        nla::NLM_CONNECTIVITY conn = nla::NLM_CONNECTIVITY_DISCONNECTED;
+        hr = pNLM->GetConnectivity(&conn);
+        TEST_ASSERT(hr == ole32::S_OK, "GetConnectivity must return S_OK");
+        TEST_ASSERT((conn & nla::NLM_CONNECTIVITY_IPV4_INTERNET) != 0, "Connectivity must have IPv4 Internet");
+        TEST_ASSERT((conn & nla::NLM_CONNECTIVITY_IPV6_INTERNET) != 0, "Connectivity must have IPv6 Internet");
+        TEST_ASSERT((conn & nla::NLM_CONNECTIVITY_IPV4_LOCALNETWORK) != 0, "Connectivity must have IPv4 LocalNetwork");
+        TEST_ASSERT((conn & nla::NLM_CONNECTIVITY_IPV4_SUBNET) != 0, "Connectivity must have IPv4 Subnet");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Network Enumeration via IEnumNetworks
+    // ------------------------------------------------------------------------
+    GUID netId1{};
+    {
+        nla::IEnumNetworks* pEnum = nullptr;
+        ole32::HRESULT hr = pNLM->GetNetworks(nla::NLM_ENUM_NETWORK_ALL, &pEnum);
+        TEST_ASSERT(hr == ole32::S_OK && pEnum != nullptr, "GetNetworks must return valid IEnumNetworks");
+
+        nla::INetwork* pNet = nullptr;
+        uint32_t fetched = 0;
+        hr = pEnum->Next(1, &pNet, &fetched);
+        TEST_ASSERT(hr == ole32::S_OK && fetched == 1 && pNet != nullptr, "IEnumNetworks::Next must fetch 1st network");
+
+        // Inspect 1st Network: Corporate Domain Network
+        ole32::BSTR bstrName = nullptr;
+        hr = pNet->GetName(&bstrName);
+        TEST_ASSERT(hr == ole32::S_OK && bstrName != nullptr, "GetName must succeed");
+        TEST_ASSERT(std::wstring(bstrName) == L"MicaNT Corporate Domain Network", "Network 1 name match");
+        ole32::SysFreeString(bstrName);
+
+        ole32::BSTR bstrDesc = nullptr;
+        hr = pNet->GetDescription(&bstrDesc);
+        TEST_ASSERT(hr == ole32::S_OK && bstrDesc != nullptr, "GetDescription must succeed");
+        TEST_ASSERT(std::wstring(bstrDesc).find(L"Sovereign Ethernet Network") != std::wstring::npos, "Network 1 description match");
+        ole32::SysFreeString(bstrDesc);
+
+        nla::NLM_NETWORK_CATEGORY cat = nla::NLM_NETWORK_CATEGORY_PUBLIC;
+        hr = pNet->GetCategory(&cat);
+        TEST_ASSERT(hr == ole32::S_OK, "GetCategory must succeed");
+        TEST_ASSERT(cat == nla::NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED, "Network 1 must be DOMAIN_AUTHENTICATED");
+
+        nla::NLM_DOMAIN_TYPE dt = nla::NLM_DOMAIN_TYPE_NON_DOMAIN_NETWORK;
+        hr = pNet->GetDomainType(&dt);
+        TEST_ASSERT(hr == ole32::S_OK, "GetDomainType must succeed");
+        TEST_ASSERT(dt == nla::NLM_DOMAIN_TYPE_DOMAIN_AUTHENTICATED, "Network 1 domain type must be DOMAIN_AUTHENTICATED");
+
+        hr = pNet->GetNetworkId(&netId1);
+        TEST_ASSERT(hr == ole32::S_OK, "GetNetworkId must succeed");
+        TEST_ASSERT(netId1.Data1 == 0xA1B2C3D4, "Network 1 GUID Data1 match");
+
+        uint32_t crLow = 0, crHigh = 0, cnLow = 0, cnHigh = 0;
+        hr = pNet->GetTimeCreatedAndConnected(&crLow, &crHigh, &cnLow, &cnHigh);
+        TEST_ASSERT(hr == ole32::S_OK && crLow != 0 && cnLow != 0, "GetTimeCreatedAndConnected must return timestamps");
+
+        int16_t netInternet = 0;
+        hr = pNet->get_IsConnectedToInternet(&netInternet);
+        TEST_ASSERT(hr == ole32::S_OK && netInternet == -1, "Network 1 must be connected to Internet");
+
+        // Mutability testing on Network 1
+        ole32::BSTR newName = ole32::SysAllocString(L"MicaNT Enterprise HQ");
+        pNet->SetName(newName);
+        ole32::SysFreeString(newName);
+
+        ole32::BSTR readBackName = nullptr;
+        pNet->GetName(&readBackName);
+        TEST_ASSERT(std::wstring(readBackName) == L"MicaNT Enterprise HQ", "SetName must update profile name");
+        ole32::SysFreeString(readBackName);
+
+        // Restore original name
+        ole32::BSTR origName = ole32::SysAllocString(L"MicaNT Corporate Domain Network");
+        pNet->SetName(origName);
+        ole32::SysFreeString(origName);
+
+        // Category mutation
+        pNet->SetCategory(nla::NLM_NETWORK_CATEGORY_PRIVATE);
+        pNet->GetCategory(&cat);
+        TEST_ASSERT(cat == nla::NLM_NETWORK_CATEGORY_PRIVATE, "SetCategory must update category to PRIVATE");
+        pNet->SetCategory(nla::NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED);
+
+        pNet->Release();
+
+        // Test Skip and Next
+        hr = pEnum->Reset();
+        TEST_ASSERT(hr == ole32::S_OK, "IEnumNetworks::Reset must succeed");
+
+        hr = pEnum->Skip(1);
+        TEST_ASSERT(hr == ole32::S_OK, "IEnumNetworks::Skip(1) must succeed");
+
+        nla::INetwork* pNet2 = nullptr;
+        hr = pEnum->Next(1, &pNet2, &fetched);
+        TEST_ASSERT(hr == ole32::S_OK && fetched == 1 && pNet2 != nullptr, "Next after Skip must return 2nd network");
+
+        ole32::BSTR bstrName2 = nullptr;
+        pNet2->GetName(&bstrName2);
+        TEST_ASSERT(std::wstring(bstrName2) == L"MicaNT Secure Wireless", "Network 2 name match");
+        ole32::SysFreeString(bstrName2);
+
+        pNet2->GetCategory(&cat);
+        TEST_ASSERT(cat == nla::NLM_NETWORK_CATEGORY_PRIVATE, "Network 2 category match");
+
+        pNet2->Release();
+
+        // Test Clone
+        nla::IEnumNetworks* pCloned = nullptr;
+        hr = pEnum->Clone(&pCloned);
+        TEST_ASSERT(hr == ole32::S_OK && pCloned != nullptr, "IEnumNetworks::Clone must succeed");
+        pCloned->Release();
+
+        pEnum->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Direct GetNetwork Resolution by GUID
+    // ------------------------------------------------------------------------
+    {
+        nla::INetwork* pFoundNet = nullptr;
+        ole32::HRESULT hr = pNLM->GetNetwork(netId1, &pFoundNet);
+        TEST_ASSERT(hr == ole32::S_OK && pFoundNet != nullptr, "GetNetwork by GUID must find profile");
+
+        ole32::BSTR foundName = nullptr;
+        pFoundNet->GetName(&foundName);
+        TEST_ASSERT(std::wstring(foundName) == L"MicaNT Corporate Domain Network", "Found network name match");
+        ole32::SysFreeString(foundName);
+        pFoundNet->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Connection Enumeration via IEnumNetworkConnections & INetworkConnection
+    // ------------------------------------------------------------------------
+    GUID connId1{};
+    {
+        nla::INetwork* pNet = nullptr;
+        pNLM->GetNetwork(netId1, &pNet);
+        TEST_ASSERT(pNet != nullptr, "GetNetwork must succeed");
+
+        nla::IEnumNetworkConnections* pEnumConn = nullptr;
+        ole32::HRESULT hr = pNet->GetNetworkConnections(&pEnumConn);
+        TEST_ASSERT(hr == ole32::S_OK && pEnumConn != nullptr, "GetNetworkConnections must return IEnumNetworkConnections");
+
+        nla::INetworkConnection* pConn = nullptr;
+        uint32_t fetched = 0;
+        hr = pEnumConn->Next(1, &pConn, &fetched);
+        TEST_ASSERT(hr == ole32::S_OK && fetched == 1 && pConn != nullptr, "IEnumNetworkConnections::Next must succeed");
+
+        hr = pConn->GetConnectionId(&connId1);
+        TEST_ASSERT(hr == ole32::S_OK, "GetConnectionId must succeed");
+        TEST_ASSERT(connId1.Data1 == 0x99998888, "Connection GUID Data1 match");
+
+        GUID adapterId{};
+        hr = pConn->GetAdapterId(&adapterId);
+        TEST_ASSERT(hr == ole32::S_OK, "GetAdapterId must succeed");
+        TEST_ASSERT(adapterId.Data1 == 0x11112222, "Adapter GUID Data1 match");
+
+        nla::NLM_DOMAIN_TYPE dt{};
+        hr = pConn->GetDomainType(&dt);
+        TEST_ASSERT(hr == ole32::S_OK && dt == nla::NLM_DOMAIN_TYPE_DOMAIN_AUTHENTICATED, "Connection domain type match");
+
+        int16_t cInternet = 0;
+        hr = pConn->get_IsConnectedToInternet(&cInternet);
+        TEST_ASSERT(hr == ole32::S_OK && cInternet == -1, "Connection must be connected to Internet");
+
+        nla::INetwork* pBackNet = nullptr;
+        hr = pConn->GetNetwork(&pBackNet);
+        TEST_ASSERT(hr == ole32::S_OK && pBackNet != nullptr, "GetNetwork on connection must return parent network");
+        pBackNet->Release();
+
+        pConn->Release();
+        pEnumConn->Release();
+        pNet->Release();
+
+        // Test GetNetworkConnections directly from Manager
+        nla::IEnumNetworkConnections* pAllConn = nullptr;
+        hr = pNLM->GetNetworkConnections(&pAllConn);
+        TEST_ASSERT(hr == ole32::S_OK && pAllConn != nullptr, "pNLM->GetNetworkConnections must succeed");
+        pAllConn->Release();
+
+        // Test GetNetworkConnection directly from Manager
+        nla::INetworkConnection* pDirectConn = nullptr;
+        hr = pNLM->GetNetworkConnection(connId1, &pDirectConn);
+        TEST_ASSERT(hr == ole32::S_OK && pDirectConn != nullptr, "pNLM->GetNetworkConnection by GUID must succeed");
+        pDirectConn->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Cost Manager & Metered Network Profiles (INetworkCostManager)
+    // ------------------------------------------------------------------------
+    {
+        nla::INetworkCostManager* pCostMgr = nullptr;
+        ole32::HRESULT hr = pNLM->QueryInterface(nla::IID_INetworkCostManager, reinterpret_cast<void**>(&pCostMgr));
+        TEST_ASSERT(hr == ole32::S_OK && pCostMgr != nullptr, "QueryInterface for INetworkCostManager must succeed");
+
+        uint32_t cost = 0;
+        nla::NLM_CONNECTION_COST_DATA costData{};
+        hr = pCostMgr->GetCost(&cost, &costData);
+        TEST_ASSERT(hr == ole32::S_OK, "GetCost must return S_OK");
+        TEST_ASSERT(cost == nla::NLM_CONNECTION_COST_UNRESTRICTED, "Cost must be UNRESTRICTED");
+        TEST_ASSERT(costData.ConnectionCost == nla::NLM_CONNECTION_COST_UNRESTRICTED, "ConnectionCost must match");
+
+        nla::NLM_DATAPLAN_STATUS planStatus{};
+        hr = pCostMgr->GetDataPlanStatus(&planStatus, nullptr);
+        TEST_ASSERT(hr == ole32::S_OK, "GetDataPlanStatus must return S_OK");
+        TEST_ASSERT(planStatus.DataLimitInMegabytes == 51200, "DataLimitInMegabytes must be 50 GB (51200 MB)");
+        TEST_ASSERT(planStatus.UsageData.UsageInMegabytes == 1240, "UsageData must report 1240 MB");
+        TEST_ASSERT(planStatus.InboundBandwidthInKbps == 1000000, "InboundBandwidth must report 1 Gbps");
+
+        hr = pCostMgr->SetDestinationAddresses(0, nullptr, -1);
+        TEST_ASSERT(hr == ole32::S_OK, "SetDestinationAddresses must return S_OK");
+
+        pCostMgr->Release();
+    }
+
+    // Release NLM instance
+    pNLM->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 10: NLA API Functional Interface
+    // ------------------------------------------------------------------------
+    {
+        GUID ifGuid{};
+        ole32::HRESULT hr = nla::NlsGetInterfaceGuidFromInterfaceIndex(1, &ifGuid);
+        TEST_ASSERT(hr == ole32::S_OK, "NlsGetInterfaceGuidFromInterfaceIndex must return S_OK");
+        TEST_ASSERT(ifGuid.Data1 != 0, "Interface GUID must be populated");
+
+        hr = nla::NlsUpdateInterfaceCostCache(&ifGuid, nla::NLM_CONNECTION_COST_FIXED);
+        TEST_ASSERT(hr == ole32::S_OK, "NlsUpdateInterfaceCostCache must return S_OK");
+
+        hr = nla::NlsFreeInterfaceGuid(&ifGuid);
+        TEST_ASSERT(hr == ole32::S_OK, "NlsFreeInterfaceGuid must return S_OK");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Interactive Shell Command Integration (nla test, nla list, nla status)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // nla test
+        out.str("");
+        shell.execute("nla test", out);
+        TEST_ASSERT(out.str().find("[NLA] Self-Test Completed Successfully") != std::string::npos, "nla test must succeed");
+
+        // nla list
+        out.str("");
+        shell.execute("nla list", out);
+        TEST_ASSERT(out.str().find("MicaNT Corporate Domain Network") != std::string::npos, "nla list must display Corporate network");
+        TEST_ASSERT(out.str().find("MicaNT Secure Wireless") != std::string::npos, "nla list must display Wireless network");
+        TEST_ASSERT(out.str().find("MicaNT Isolated Lab Network") != std::string::npos, "nla list must display Lab network");
+
+        // nla status
+        out.str("");
+        shell.execute("nla status", out);
+        TEST_ASSERT(out.str().find("Network Connected:    YES") != std::string::npos, "nla status must show Network Connected");
+        TEST_ASSERT(out.str().find("Internet Connected:   YES") != std::string::npos, "nla status must show Internet Connected");
+    }
+
+    std::cout << "[TEST] Suite 91: Windows Network Location Awareness & Network List Service Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -18586,6 +18964,7 @@ int main() {
     RUN_TEST(Test_WindowsPrinting_Spooler_Subsystem);
     RUN_TEST(Test_WindowsMCI_AudioWave_Subsystem);
     RUN_TEST(Test_WindowsSmartCard_PCSC_Subsystem);
+    RUN_TEST(Test_WindowsNLA_NetworkListService_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

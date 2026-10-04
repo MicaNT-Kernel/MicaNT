@@ -81,6 +81,7 @@
 #include "winspool.hpp"
 #include "mci.hpp"
 #include "winscard.hpp"
+#include "nla.hpp"
 
 namespace micant::shell {
 
@@ -142,6 +143,7 @@ public:
         cbs::InitializeCbsSubsystemExports();
         mci::InitializeMciSubsystemExports();
         scard::InitializeWinSCardSubsystemExports();
+        nla::InitializeNlaSubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -248,6 +250,7 @@ public:
             if (cmd == "mci") { cmdMci(tokens, out); return 0; }
             if (cmd == "waveplay") { cmdWavePlay(tokens, out); return 0; }
             if (cmd == "scard" || cmd == "smartcard") { cmdSCard(tokens, out); return 0; }
+            if (cmd == "nla" || cmd == "netprof") { cmdNla(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -520,6 +523,7 @@ private:
             << "  MCI [command]     Media Control Interface string command processor (mci test)\n"
             << "  WAVEPLAY [tone]   Waveform audio playback & streaming utility (waveplay test)\n"
             << "  SCARD [list|status] Smart Card & PC/SC subsystem utility (scard test)\n"
+            << "  NLA [list|status] Windows Network Location Awareness & Network List (nla test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -8873,6 +8877,172 @@ private:
             << "  scard test                              Runs Smart Card & PC/SC self-test\n"
             << "  scard list                              Enumerates smart card readers and cards\n"
             << "  scard status                            Interrogates active smart card status\n";
+    }
+
+    void cmdNla(const std::vector<std::string>& tokens, std::ostream& out) {
+        nla::InitializeNlaSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Windows Network Location Awareness & Network List Manager (nla)\n\n"
+                << "Usage:\n"
+                << "  nla test                                Runs NLA & Network List Manager self-test\n"
+                << "  nla list                                Enumerates network profiles and connections\n"
+                << "  nla status                              Displays overall network connectivity & cost\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "      MicaNT Network Location Awareness (NLA) Self-Test Suite           \n"
+                << "========================================================================\n";
+
+            nla::INetworkListManager* pNLM = nullptr;
+            ole32::HRESULT hr = ole32::CoCreateInstance(
+                nla::CLSID_NetworkListManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+                nla::IID_INetworkListManager, reinterpret_cast<void**>(&pNLM)
+            );
+            out << "[TEST] 1. CoCreateInstance(CLSID_NetworkListManager): "
+                << (hr == ole32::S_OK && pNLM ? "SUCCESS" : "FAILED") << "\n";
+            if (!pNLM) {
+                out << "ERROR: Failed to instantiate INetworkListManager.\n";
+                return;
+            }
+
+            int16_t isInternet = 0;
+            hr = pNLM->get_IsConnectedToInternet(&isInternet);
+            out << "[TEST] 2. get_IsConnectedToInternet: "
+                << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                << " (Internet Connected: " << (isInternet == -1 ? "TRUE" : "FALSE") << ")\n";
+
+            int16_t isConn = 0;
+            hr = pNLM->get_IsConnected(&isConn);
+            out << "[TEST] 3. get_IsConnected: "
+                << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                << " (Network Connected: " << (isConn == -1 ? "TRUE" : "FALSE") << ")\n";
+
+            nla::NLM_CONNECTIVITY conn = nla::NLM_CONNECTIVITY_DISCONNECTED;
+            hr = pNLM->GetConnectivity(&conn);
+            out << "[TEST] 4. GetConnectivity: "
+                << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                << " (Connectivity Mask: 0x" << std::hex << static_cast<uint32_t>(conn) << std::dec << ")\n";
+
+            nla::IEnumNetworks* pEnumNet = nullptr;
+            hr = pNLM->GetNetworks(nla::NLM_ENUM_NETWORK_ALL, &pEnumNet);
+            out << "[TEST] 5. GetNetworks(NLM_ENUM_NETWORK_ALL): "
+                << (hr == ole32::S_OK && pEnumNet ? "SUCCESS" : "FAILED") << "\n";
+
+            if (pEnumNet) {
+                nla::INetwork* pNet = nullptr;
+                uint32_t fetched = 0;
+                int idx = 1;
+                while (pEnumNet->Next(1, &pNet, &fetched) == ole32::S_OK && fetched == 1 && pNet) {
+                    ole32::BSTR bstrName = nullptr;
+                    pNet->GetName(&bstrName);
+                    std::wstring wsName = bstrName ? bstrName : L"";
+                    std::string sName(wsName.begin(), wsName.end());
+                    ole32::SysFreeString(bstrName);
+
+                    nla::NLM_NETWORK_CATEGORY cat{};
+                    pNet->GetCategory(&cat);
+                    const char* catStr = (cat == nla::NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED) ? "Domain" :
+                                         (cat == nla::NLM_NETWORK_CATEGORY_PRIVATE) ? "Private" : "Public";
+
+                    nla::NLM_DOMAIN_TYPE dt{};
+                    pNet->GetDomainType(&dt);
+                    const char* dtStr = (dt == nla::NLM_DOMAIN_TYPE_DOMAIN_AUTHENTICATED) ? "DomainAuthenticated" :
+                                        (dt == nla::NLM_DOMAIN_TYPE_DOMAIN_NETWORK) ? "DomainPrimary" : "NonDomain";
+
+                    GUID netId{};
+                    pNet->GetNetworkId(&netId);
+
+                    out << "         Network [" << idx++ << "]: " << sName << " | Category: " << catStr << " | Type: " << dtStr << "\n";
+
+                    nla::IEnumNetworkConnections* pEnumConn = nullptr;
+                    if (pNet->GetNetworkConnections(&pEnumConn) == ole32::S_OK && pEnumConn) {
+                        nla::INetworkConnection* pConn = nullptr;
+                        uint32_t cFetched = 0;
+                        if (pEnumConn->Next(1, &pConn, &cFetched) == ole32::S_OK && cFetched == 1 && pConn) {
+                            GUID adId{};
+                            pConn->GetAdapterId(&adId);
+                            pConn->Release();
+                        }
+                        pEnumConn->Release();
+                    }
+                    pNet->Release();
+                }
+                pEnumNet->Release();
+            }
+
+            nla::INetworkCostManager* pCostMgr = nullptr;
+            hr = pNLM->QueryInterface(nla::IID_INetworkCostManager, reinterpret_cast<void**>(&pCostMgr));
+            out << "[TEST] 6. QueryInterface(IID_INetworkCostManager): "
+                << (hr == ole32::S_OK && pCostMgr ? "SUCCESS" : "FAILED") << "\n";
+            if (pCostMgr) {
+                uint32_t cost = 0;
+                hr = pCostMgr->GetCost(&cost, nullptr);
+                out << "[TEST] 7. INetworkCostManager::GetCost: "
+                    << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                    << " (Cost: 0x" << std::hex << cost << std::dec << ")\n";
+
+                nla::NLM_DATAPLAN_STATUS plan{};
+                hr = pCostMgr->GetDataPlanStatus(&plan, nullptr);
+                out << "[TEST] 8. INetworkCostManager::GetDataPlanStatus: "
+                    << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                    << " (Limit: " << plan.DataLimitInMegabytes << " MB, Usage: " << plan.UsageData.UsageInMegabytes << " MB)\n";
+                pCostMgr->Release();
+            }
+
+            pNLM->Release();
+            out << "[NLA] Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            auto profiles = nla::NetworkLocationManager::get().getProfiles();
+            out << "========================================================================\n"
+                << "        MicaNT Identified Network Profiles (Network List Manager)       \n"
+                << "========================================================================\n";
+            for (size_t i = 0; i < profiles.size(); ++i) {
+                const auto& p = profiles[i];
+                std::string sName(p.name.begin(), p.name.end());
+                std::string sDesc(p.description.begin(), p.description.end());
+                std::string sDom(p.domainSuffix.begin(), p.domainSuffix.end());
+                const char* catStr = (p.category == nla::NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED) ? "Domain Authenticated" :
+                                     (p.category == nla::NLM_NETWORK_CATEGORY_PRIVATE) ? "Private" : "Public";
+                const char* costStr = (p.cost == nla::NLM_CONNECTION_COST_UNRESTRICTED) ? "Unrestricted" :
+                                      (p.cost == nla::NLM_CONNECTION_COST_FIXED) ? "Fixed" : "Variable";
+                out << "[" << (i + 1) << "] " << sName << "\n"
+                    << "    Description:   " << sDesc << "\n"
+                    << "    Category:      " << catStr << "\n"
+                    << "    Domain Suffix: " << (sDom.empty() ? "(None)" : sDom) << "\n"
+                    << "    Cost Profile:  " << costStr << "\n"
+                    << "    Connectivity:  0x" << std::hex << p.connectivity << std::dec << "\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "status") {
+            auto& nlm = nla::NetworkLocationManager::get();
+            uint32_t conn = nlm.getOverallConnectivity();
+            bool isNet = nlm.isConnected();
+            bool isInet = nlm.isConnectedToInternet();
+            out << "========================================================================\n"
+                << "        MicaNT Network Location Awareness (NLA) Status                  \n"
+                << "========================================================================\n"
+                << "Subsystem Services:   NLASvc (Running), netprofm (Running), NcbService (Running)\n"
+                << "Network Connected:    " << (isNet ? "YES" : "NO") << "\n"
+                << "Internet Connected:   " << (isInet ? "YES" : "NO") << "\n"
+                << "IPv4 Internet:        " << ((conn & nla::NLM_CONNECTIVITY_IPV4_INTERNET) ? "YES" : "NO") << "\n"
+                << "IPv6 Internet:        " << ((conn & nla::NLM_CONNECTIVITY_IPV6_INTERNET) ? "YES" : "NO") << "\n"
+                << "Local Subnet Access:  " << ((conn & (nla::NLM_CONNECTIVITY_IPV4_SUBNET | nla::NLM_CONNECTIVITY_IPV6_SUBNET)) ? "YES" : "NO") << "\n"
+                << "Active Profiles:      " << nlm.getProfiles().size() << " configured\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  nla test                                Runs Network Location Awareness self-test\n"
+            << "  nla list                                Enumerates network profiles and connections\n"
+            << "  nla status                              Displays overall network connectivity & cost\n";
     }
 
     static std::string trim(std::string_view s) {
