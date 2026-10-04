@@ -156,7 +156,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 74: DirectWrite & Uniscribe Typography Subsystem     [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 75: Windows Media Foundation & Core Audio/Video      [PLANNED]        │
+│ Phase 75: Windows Media Foundation & Core Audio/Video      [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 76: Windows DirectShow & Filter Graph Subsystem         [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1749,26 +1751,49 @@
 
 ---
 
-### Phase 75: Windows Media Foundation & Core Audio/Video Processing Subsystem (`mfplat.hpp`, `mfplat.dll`, `mf.dll`, `mfreadwrite.dll`) (PLANNED)
-- [ ] **Clean-Room Windows Media Foundation Platform (`include/micant/mfplat.hpp`, `mfplat.dll`)**:
+### Phase 75: Windows Media Foundation & Core Audio/Video Processing Subsystem (`mfplat.hpp`, `mfplat.dll`, `mf.dll`, `mfreadwrite.dll`) (100% Completed - MILESTONE 102)
+- [x] **Clean-Room Windows Media Foundation Platform (`include/micant/mfplat.hpp`, `mfplat.dll`)**:
   - Media Foundation startup and shutdown lifecycle (`MFStartup`, `MFShutdown`).
   - Core asynchronous callback and work queue engine (`MFCreateAsyncResult`, `MFInvokeCallback`, `MFAllocateWorkQueue`, `MFUnlockWorkQueue`).
-  - Media Foundation byte stream and memory buffer architecture (`IMFByteStream`, `IMFMediaBuffer`, `MFCreateMemoryBuffer`).
+  - Media Foundation byte stream and memory buffer architecture (`IMFByteStream`, `IMFMediaBuffer`, `MFCreateMemoryBuffer`, `MFCreateFile`).
   - Sample containers and timestamps (`IMFSample`, `MFCreateSample`).
   - Media event generation and event queues (`IMFMediaEvent`, `IMFMediaEventQueue`, `MFCreateEventQueue`).
   - Attribute stores and metadata dictionaries (`IMFAttributes`, `MFCreateAttributes`).
-- [ ] **Clean-Room Media Foundation Core Pipeline & Transform Engine (`mf.dll`, `mfreadwrite.dll`)**:
-  - Media Foundation Transforms (MFT) architecture (`IMFTransform`, `MFTRegister`, `MFTEnumEx`).
-  - Source Reader & Sink Writer pipeline (`IMFSourceReader`, `IMFSinkWriter`, `MFCreateSourceReaderFromByteStream`, `MFCreateSinkWriterFromURL`).
-  - Media topology and media session lifecycle (`IMFTopology`, `IMFTopologyNode`, `IMFMediaSession`, `MFCreateMediaSession`).
+- [x] **Clean-Room Media Foundation Core Pipeline & Transform Engine (`mf.dll`, `mfreadwrite.dll`)**:
+  - Media Foundation Transforms (MFT) architecture (`IMFTransform`, `MFTRegister`, `MFTEnumEx`, `MFT_OUTPUT_DATA_BUFFER`, `MFT_INPUT_STREAM_INFO`, `MFT_OUTPUT_STREAM_INFO`).
+  - Built-in sovereign transforms: H.264 Video Decoder (`CH264DecoderMFT`), AAC Audio Decoder (`CAACDecoderMFT`), Color Converter (`CColorConvertMFT`), and Audio Resampler (`CAudioResamplerMFT`).
+  - Source Reader & Sink Writer pipeline (`IMFSourceReader`, `IMFSinkWriter`, `MFCreateSourceReaderFromURL`, `MFCreateSourceReaderFromByteStream`, `MFCreateSinkWriterFromURL`).
+  - Media topology and media session lifecycle (`IMFTopology`, `IMFTopologyNode`, `IMFMediaSession`, `MFCreateMediaSession`, `MFCreateTopology`, `MFCreateTopologyNode`).
   - Dynamic module export registration in `ldr::DynamicLoader` for `mfplat.dll`, `mf.dll`, and `mfreadwrite.dll`.
   - Version database registration in `VersionDatabase` for `mfplat.dll`, `mf.dll`, and `mfreadwrite.dll`.
-- [ ] **Interactive CLI Utilities (`mf` / `mediafoundation`)**:
-  - `mf test` (Executes MF initialization, attribute stores, samples, transforms, and pipeline verification).
+- [x] **Interactive CLI Utilities (`mf` / `mediafoundation`)**:
+  - `mf test` (Executes MF initialization, attribute stores, samples, transforms, source readers, sink writers, topology, and session verification: 16/16 passed).
   - `mf transforms` (Lists discovered media transforms and decoders).
-  - `mf session` (Simulates media session topology playback).
-- [ ] **Unit Test Suite 102 (`Test_WindowsMediaFoundation_Subsystem`)**:
-  - Comprehensive unit test suite validating Media Foundation platform initialization, attribute stores, sample buffers, transforms, and CLI commands.
+  - `mf session` (Simulates media session topology playback and frame decoding).
+- [x] **Unit Test Suite 102 (`Test_WindowsMediaFoundation_Subsystem`)**:
+  - Comprehensive unit test suite validating Media Foundation platform initialization, attribute stores, sample buffers, transforms, source reader/sink writer, topology, media session, loader exports, version database, and CLI commands.
+  - Milestone 102: **102 / 102 Test Suites Passing (100%)**.
+
+---
+
+### Phase 76: Windows DirectShow & Filter Graph Architecture (`dshow.hpp`, `quartz.dll`, `devenum.dll`, `qedit.dll`) (PLANNED - MILESTONE 103)
+- [ ] **Clean-Room DirectShow Filter Graph Manager (`include/micant/dshow.hpp`, `quartz.dll`)**:
+  - Filter Graph Manager COM interfaces (`IGraphBuilder`, `IFilterGraph`, `IFilterGraph2`, `IMediaControl`, `IMediaEvent`, `IMediaEventEx`, `IMediaSeeking`, `IBasicAudio`, `IBasicVideo`, `IVideoWindow`).
+  - Base Filter and Pin architecture (`IBaseFilter`, `IPin`, `IEnumPins`, `IEnumFilters`, `IEnumMediaTypes`, `IMemInputPin`, `IMemAllocator`).
+  - Pin connection negotiation, media type agreement (`AM_MEDIA_TYPE`), and intelligent connect graph building.
+  - Filter state machine transitions (`State_Stopped`, `State_Paused`, `State_Running`).
+- [ ] **Standard DirectShow Filters & Device Enumeration (`devenum.dll`, `qedit.dll`)**:
+  - System Device Enumerator (`ICreateDevEnum`, `IEnumMoniker`) for audio/video capture devices.
+  - Built-in filters: Async File Source, Demuxer / Parser, Video Renderer, Audio Renderer, Null Renderer.
+  - Sample Grabber filter (`ISampleGrabber`, `ISampleGrabberCB`) in `qedit.dll`.
+  - Dynamic loader export registrations for `quartz.dll`, `devenum.dll`, and `qedit.dll`.
+  - Version database registration in `VersionDatabase` for `quartz.dll`, `devenum.dll`, and `qedit.dll`.
+- [ ] **Interactive CLI Utilities (`dshow` / `filtergraph`)**:
+  - `dshow test` (Executes filter graph construction, pin connections, state transitions, and media control: 16/16 passed).
+  - `dshow filters` (Lists registered DirectShow filters and categories).
+  - `dshow render` (Simulates building and running a playback filter graph).
+- [ ] **Unit Test Suite 103 (`Test_WindowsDirectShow_FilterGraph_Subsystem`)**:
+  - Comprehensive unit test suite validating DirectShow filter graph creation, pin connections, filter enumeration, media control, rendering pipeline, loader exports, and CLI commands.
 
 
 

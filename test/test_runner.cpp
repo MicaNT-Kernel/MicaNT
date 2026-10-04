@@ -123,6 +123,7 @@
 #include "micant/posix.hpp"
 #include "micant/whp.hpp"
 #include "micant/dwrite.hpp"
+#include "micant/mfplat.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -22006,6 +22007,473 @@ void Test_WindowsDirectWrite_Uniscribe_Subsystem() {
     std::cout << "[TEST] Suite 101: Windows DirectWrite & Uniscribe Typography Architecture PASSED.\n";
 }
 
+// ============================================================================
+// Suite 102: Windows Media Foundation Platform & Pipeline Architecture
+// ============================================================================
+void Test_WindowsMediaFoundation_Subsystem() {
+    std::cout << "[TEST] Suite 102: Running Windows Media Foundation Subsystem Tests...\n";
+    using namespace micant::mf;
+
+    // 1. MFStartup & Platform Lifecycle
+    int32_t hr = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
+    TEST_ASSERT(hr == ole32::S_OK, "MFStartup must return S_OK");
+    TEST_ASSERT(MediaFoundationPlatform::get().isInitialized(), "Platform must be initialized after MFStartup");
+
+    // 2. Attribute Store (IMFAttributes)
+    IMFAttributes* pAttrs = nullptr;
+    hr = MFCreateAttributes(&pAttrs, 16);
+    TEST_ASSERT(hr == ole32::S_OK && pAttrs != nullptr, "MFCreateAttributes must succeed");
+
+    pAttrs->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
+    pAttrs->SetUINT64(MF_MT_FRAME_SIZE, (static_cast<uint64_t>(1920) << 32) | 1080);
+    pAttrs->SetDouble(MF_MT_FRAME_RATE, 60.0);
+    pAttrs->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    pAttrs->SetString(MF_MT_SUBTYPE, L"AudioSubTypeMica");
+
+    const uint8_t rawBlob[] = { 0x01, 0x02, 0x03, 0x04, 0x05 };
+    pAttrs->SetBlob(MF_MT_AUDIO_BLOCK_ALIGNMENT, rawBlob, sizeof(rawBlob));
+
+    uint32_t channels = 0;
+    pAttrs->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels);
+    TEST_ASSERT(channels == 2, "GetUINT32 must return stored channels");
+
+    uint64_t frameSize = 0;
+    pAttrs->GetUINT64(MF_MT_FRAME_SIZE, &frameSize);
+    TEST_ASSERT(frameSize == ((static_cast<uint64_t>(1920) << 32) | 1080), "GetUINT64 must return frame size");
+
+    double fps = 0.0;
+    pAttrs->GetDouble(MF_MT_FRAME_RATE, &fps);
+    TEST_ASSERT(fps == 60.0, "GetDouble must return frame rate");
+
+    GUID major{};
+    pAttrs->GetGUID(MF_MT_MAJOR_TYPE, &major);
+    TEST_ASSERT(major == MFMediaType_Audio, "GetGUID must return MFMediaType_Audio");
+
+    uint32_t strLen = 0;
+    pAttrs->GetStringLength(MF_MT_SUBTYPE, &strLen);
+    TEST_ASSERT(strLen == 16, "GetStringLength must return correct string length");
+    wchar_t strBuf[32]{};
+    pAttrs->GetString(MF_MT_SUBTYPE, strBuf, 32, nullptr);
+    TEST_ASSERT(std::wstring(strBuf) == L"AudioSubTypeMica", "GetString must match stored string");
+
+    uint32_t blobSz = 0;
+    pAttrs->GetBlobSize(MF_MT_AUDIO_BLOCK_ALIGNMENT, &blobSz);
+    TEST_ASSERT(blobSz == sizeof(rawBlob), "GetBlobSize must match raw blob size");
+    uint8_t readBlob[8]{};
+    pAttrs->GetBlob(MF_MT_AUDIO_BLOCK_ALIGNMENT, readBlob, sizeof(readBlob), nullptr);
+    TEST_ASSERT(std::memcmp(rawBlob, readBlob, sizeof(rawBlob)) == 0, "GetBlob must retrieve identical binary bytes");
+
+    uint32_t itemCount = 0;
+    pAttrs->GetCount(&itemCount);
+    TEST_ASSERT(itemCount == 6, "Attribute store count must be 6");
+
+    IMFAttributes* pDestAttrs = nullptr;
+    MFCreateAttributes(&pDestAttrs, 16);
+    pAttrs->CopyAllItems(pDestAttrs);
+    uint32_t destCount = 0;
+    pDestAttrs->GetCount(&destCount);
+    TEST_ASSERT(destCount == 6, "CopyAllItems must copy all items to destination");
+    pDestAttrs->Release();
+
+    pAttrs->DeleteItem(MF_MT_AUDIO_NUM_CHANNELS);
+    pAttrs->GetCount(&itemCount);
+    TEST_ASSERT(itemCount == 5, "Count must decrement after DeleteItem");
+    pAttrs->DeleteAllItems();
+    pAttrs->GetCount(&itemCount);
+    TEST_ASSERT(itemCount == 0, "Count must be 0 after DeleteAllItems");
+    pAttrs->Release();
+
+    // 3. Media Buffer (IMFMediaBuffer)
+    IMFMediaBuffer* pBuf = nullptr;
+    hr = MFCreateMemoryBuffer(2048, &pBuf);
+    TEST_ASSERT(hr == ole32::S_OK && pBuf != nullptr, "MFCreateMemoryBuffer must succeed");
+    uint32_t maxLen = 0, curLen = 0;
+    pBuf->GetMaxLength(&maxLen);
+    TEST_ASSERT(maxLen == 2048, "Buffer max length must be 2048");
+    pBuf->GetCurrentLength(&curLen);
+    TEST_ASSERT(curLen == 0, "Initial current length must be 0");
+
+    uint8_t* pData = nullptr;
+    hr = pBuf->Lock(&pData, &maxLen, &curLen);
+    TEST_ASSERT(hr == ole32::S_OK && pData != nullptr, "Buffer Lock must succeed and return pointer");
+    std::memset(pData, 0x7E, 512);
+    pBuf->Unlock();
+    pBuf->SetCurrentLength(512);
+    pBuf->GetCurrentLength(&curLen);
+    TEST_ASSERT(curLen == 512, "Current length must be 512 after SetCurrentLength");
+    pBuf->Release();
+
+    // 4. Media Sample (IMFSample)
+    IMFSample* pSample = nullptr;
+    hr = MFCreateSample(&pSample);
+    TEST_ASSERT(hr == ole32::S_OK && pSample != nullptr, "MFCreateSample must succeed");
+
+    pSample->SetSampleTime(50000000); // 5 seconds
+    pSample->SetSampleDuration(166666); // 16.6ms (60fps)
+    pSample->SetSampleFlags(0x00000001);
+
+    LONGLONG sTime = 0, sDur = 0;
+    uint32_t sFlags = 0;
+    pSample->GetSampleTime(&sTime);
+    pSample->GetSampleDuration(&sDur);
+    pSample->GetSampleFlags(&sFlags);
+    TEST_ASSERT(sTime == 50000000, "GetSampleTime must match 50000000");
+    TEST_ASSERT(sDur == 166666, "GetSampleDuration must match 166666");
+    TEST_ASSERT(sFlags == 1, "GetSampleFlags must match 1");
+
+    IMFMediaBuffer* b1 = nullptr;
+    IMFMediaBuffer* b2 = nullptr;
+    MFCreateMemoryBuffer(256, &b1);
+    MFCreateMemoryBuffer(256, &b2);
+    b1->SetCurrentLength(256);
+    b2->SetCurrentLength(256);
+    pSample->AddBuffer(b1);
+    pSample->AddBuffer(b2);
+
+    uint32_t bufCount = 0;
+    pSample->GetBufferCount(&bufCount);
+    TEST_ASSERT(bufCount == 2, "Sample must contain 2 buffers");
+    uint32_t totSampleLen = 0;
+    pSample->GetTotalLength(&totSampleLen);
+    TEST_ASSERT(totSampleLen == 512, "Total sample length must be 512");
+
+    IMFMediaBuffer* contigBuf = nullptr;
+    hr = pSample->ConvertToContiguousBuffer(&contigBuf);
+    TEST_ASSERT(hr == ole32::S_OK && contigBuf != nullptr, "ConvertToContiguousBuffer must succeed");
+    uint32_t cLen = 0;
+    contigBuf->GetCurrentLength(&cLen);
+    TEST_ASSERT(cLen == 512, "Contiguous buffer length must equal sum of buffer lengths");
+    contigBuf->Release();
+
+    pSample->RemoveBufferByIndex(1);
+    pSample->GetBufferCount(&bufCount);
+    TEST_ASSERT(bufCount == 1, "Buffer count must be 1 after RemoveBufferByIndex");
+    pSample->RemoveAllBuffers();
+    pSample->GetBufferCount(&bufCount);
+    TEST_ASSERT(bufCount == 0, "Buffer count must be 0 after RemoveAllBuffers");
+
+    b1->Release();
+    b2->Release();
+    pSample->Release();
+
+    // 5. Media Types (IMFMediaType)
+    IMFMediaType* pAudioType = nullptr;
+    MFCreateMediaType(&pAudioType);
+    pAudioType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    pAudioType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+    pAudioType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
+    pAudioType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, 48000);
+    pAudioType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+
+    GUID checkMajor{};
+    pAudioType->GetMajorType(&checkMajor);
+    TEST_ASSERT(checkMajor == MFMediaType_Audio, "Major type must be MFMediaType_Audio");
+
+    int32_t isCompressed = 1;
+    pAudioType->IsCompressedFormat(&isCompressed);
+    TEST_ASSERT(isCompressed == 0, "PCM audio must not be compressed format");
+
+    IMFMediaType* pVideoType = nullptr;
+    MFCreateMediaType(&pVideoType);
+    pVideoType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    pVideoType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+    pVideoType->IsCompressedFormat(&isCompressed);
+    TEST_ASSERT(isCompressed == 1, "H.264 video must be compressed format");
+
+    uint32_t eqFlags = 0;
+    hr = pAudioType->IsEqual(pVideoType, &eqFlags);
+    TEST_ASSERT(hr == ole32::S_FALSE, "Audio and Video media types must not be equal");
+
+    pAudioType->Release();
+    pVideoType->Release();
+
+    // 6. Byte Stream (IMFByteStream)
+    IMFByteStream* pByteStream = nullptr;
+    hr = MFCreateFile(MF_ACCESSMODE_READWRITE, MF_OPENMODE_FAIL_IF_NOT_EXIST, MF_FILEFLAGS_NONE, L"virtual.dat", &pByteStream);
+    TEST_ASSERT(hr == ole32::S_OK && pByteStream != nullptr, "MFCreateFile must succeed");
+
+    uint32_t caps = 0;
+    pByteStream->GetCapabilities(&caps);
+    TEST_ASSERT((caps & 0x07) == 0x07, "Capabilities must support Read, Write, and Seek");
+
+    const uint8_t msg[] = "MicaNT Stream Engine";
+    uint32_t written = 0, readBytes = 0;
+    pByteStream->Write(msg, sizeof(msg), &written);
+    TEST_ASSERT(written == sizeof(msg), "Written bytes must match buffer size");
+
+    uint64_t streamLen = 0;
+    pByteStream->GetLength(&streamLen);
+    TEST_ASSERT(streamLen == sizeof(msg), "Stream length must equal written bytes");
+
+    uint64_t curPos = 0;
+    pByteStream->Seek(0, 0, 0, &curPos); // Seek to 0
+    TEST_ASSERT(curPos == 0, "Seek to start must set position to 0");
+
+    uint8_t readBuf[32]{};
+    pByteStream->Read(readBuf, sizeof(readBuf), &readBytes);
+    TEST_ASSERT(readBytes == sizeof(msg), "Read bytes must match stream size");
+    TEST_ASSERT(std::memcmp(msg, readBuf, sizeof(msg)) == 0, "Read data must match written payload");
+
+    int32_t isEos = 0;
+    pByteStream->IsEndOfStream(&isEos);
+    TEST_ASSERT(isEos == 1, "IsEndOfStream must be 1 after reading entire stream");
+
+    pByteStream->Release();
+
+    // 7. Async Callback & Work Queue
+    uint32_t wq = 0;
+    hr = MFAllocateWorkQueue(&wq);
+    TEST_ASSERT(hr == ole32::S_OK && wq > 0, "MFAllocateWorkQueue must succeed");
+    hr = MFUnlockWorkQueue(wq);
+    TEST_ASSERT(hr == ole32::S_OK, "MFUnlockWorkQueue must succeed");
+
+    class MockAsyncCb : public IMFAsyncCallback {
+    public:
+        int callCount{ 0 };
+        int32_t __stdcall QueryInterface(const ole32::IID&, void** ppv) override {
+            *ppv = static_cast<IMFAsyncCallback*>(this);
+            return ole32::S_OK;
+        }
+        uint32_t __stdcall AddRef() override { return 1; }
+        uint32_t __stdcall Release() override { return 1; }
+        int32_t __stdcall GetParameters(uint32_t*, uint32_t*) override { return ole32::S_OK; }
+        int32_t __stdcall Invoke(IMFAsyncResult*) override {
+            callCount++;
+            return ole32::S_OK;
+        }
+    } asyncCb;
+
+    IMFAsyncResult* pAr = nullptr;
+    hr = MFCreateAsyncResult(nullptr, &asyncCb, nullptr, &pAr);
+    TEST_ASSERT(hr == ole32::S_OK && pAr != nullptr, "MFCreateAsyncResult must succeed");
+    MFInvokeCallback(pAr);
+    TEST_ASSERT(asyncCb.callCount == 1, "MFInvokeCallback must call IMFAsyncCallback::Invoke");
+    pAr->Release();
+
+    // 8. Media Event Queue (IMFMediaEventQueue)
+    IMFMediaEventQueue* pEvQueue = nullptr;
+    hr = MFCreateEventQueue(&pEvQueue);
+    TEST_ASSERT(hr == ole32::S_OK && pEvQueue != nullptr, "MFCreateEventQueue must succeed");
+
+    pEvQueue->QueueEventParamVar(MESessionStarted, GUID{}, ole32::S_OK, nullptr);
+    pEvQueue->QueueEventParamVar(MESessionStopped, GUID{}, ole32::S_OK, nullptr);
+
+    IMFMediaEvent* ev1 = nullptr;
+    pEvQueue->GetEvent(0, &ev1);
+    TEST_ASSERT(ev1 != nullptr, "GetEvent must retrieve queued event");
+    MediaEventType met1 = MEUnknown;
+    ev1->GetType(&met1);
+    TEST_ASSERT(met1 == MESessionStarted, "Event 1 type must be MESessionStarted");
+    ev1->Release();
+
+    IMFMediaEvent* ev2 = nullptr;
+    pEvQueue->GetEvent(0, &ev2);
+    TEST_ASSERT(ev2 != nullptr, "GetEvent must retrieve second event");
+    MediaEventType met2 = MEUnknown;
+    ev2->GetType(&met2);
+    TEST_ASSERT(met2 == MESessionStopped, "Event 2 type must be MESessionStopped");
+    ev2->Release();
+
+    pEvQueue->Shutdown();
+    pEvQueue->Release();
+
+    // 9. Media Foundation Transforms (MFT)
+    IMFTransform** ppTransforms = nullptr;
+    uint32_t tfmCount = 0;
+    hr = MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, 0, nullptr, nullptr, &ppTransforms, &tfmCount);
+    TEST_ASSERT(hr == ole32::S_OK && tfmCount >= 1, "MFTEnumEx must find at least 1 video decoder");
+    if (ppTransforms) {
+        for (uint32_t i = 0; i < tfmCount; ++i) ppTransforms[i]->Release();
+        delete[] ppTransforms;
+    }
+
+    auto h264Dec = std::make_shared<CH264DecoderMFT>();
+    IMFMediaType* hIn = nullptr;
+    h264Dec->GetInputAvailableType(0, 0, &hIn);
+    TEST_ASSERT(hIn != nullptr, "H.264 MFT must provide input media type");
+    h264Dec->SetInputType(0, hIn, 0);
+
+    IMFMediaType* hOut = nullptr;
+    h264Dec->GetOutputAvailableType(0, 0, &hOut);
+    TEST_ASSERT(hOut != nullptr, "H.264 MFT must provide output media type");
+    h264Dec->SetOutputType(0, hOut, 0);
+
+    IMFSample* inSample = nullptr;
+    MFCreateSample(&inSample);
+    inSample->SetSampleTime(333333);
+    h264Dec->ProcessInput(0, inSample, 0);
+
+    uint32_t outStatus = 0;
+    h264Dec->GetOutputStatus(&outStatus);
+    TEST_ASSERT(outStatus == 1, "MFT must indicate output ready after input");
+
+    MFT_OUTPUT_DATA_BUFFER outBuf{};
+    outBuf.dwStreamID = 0;
+    uint32_t pStatus = 0;
+    hr = h264Dec->ProcessOutput(0, 1, &outBuf, &pStatus);
+    TEST_ASSERT(hr == ole32::S_OK && outBuf.pSample != nullptr, "ProcessOutput must produce sample");
+    if (outBuf.pSample) outBuf.pSample->Release();
+    inSample->Release();
+    hIn->Release();
+    hOut->Release();
+
+    // 10. Source Reader & Sink Writer
+    IMFSourceReader* pReader = nullptr;
+    hr = MFCreateSourceReaderFromURL(L"media_clip.mp4", nullptr, &pReader);
+    TEST_ASSERT(hr == ole32::S_OK && pReader != nullptr, "MFCreateSourceReaderFromURL must succeed");
+
+    int32_t s0Selected = 0;
+    pReader->GetStreamSelection(0, &s0Selected);
+    TEST_ASSERT(s0Selected == 1, "Stream 0 must be selected");
+
+    IMFMediaType* nativeType = nullptr;
+    pReader->GetNativeMediaType(0, 0, &nativeType);
+    TEST_ASSERT(nativeType != nullptr, "GetNativeMediaType for Stream 0 must succeed");
+    nativeType->Release();
+
+    uint32_t actStream = 0, flags = 0;
+    LONGLONG ts = 0;
+    IMFSample* rSample = nullptr;
+    hr = pReader->ReadSample(0, 0, &actStream, &flags, &ts, &rSample);
+    TEST_ASSERT(hr == ole32::S_OK && rSample != nullptr, "ReadSample must produce sample");
+    TEST_ASSERT(actStream == 0, "Actual stream index must be 0");
+    rSample->Release();
+    pReader->Release();
+
+    IMFSinkWriter* pWriter = nullptr;
+    hr = MFCreateSinkWriterFromURL(L"recorded.mp4", nullptr, nullptr, &pWriter);
+    TEST_ASSERT(hr == ole32::S_OK && pWriter != nullptr, "MFCreateSinkWriterFromURL must succeed");
+
+    IMFMediaType* outMt = nullptr;
+    MFCreateMediaType(&outMt);
+    outMt->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    outMt->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+    uint32_t wrStreamIdx = 0;
+    pWriter->AddStream(outMt, &wrStreamIdx);
+    pWriter->BeginWriting();
+
+    IMFSample* wrSample = nullptr;
+    MFCreateSample(&wrSample);
+    IMFMediaBuffer* wrBuf = nullptr;
+    MFCreateMemoryBuffer(512, &wrBuf);
+    wrBuf->SetCurrentLength(512);
+    wrSample->AddBuffer(wrBuf);
+    wrBuf->Release();
+
+    hr = pWriter->WriteSample(wrStreamIdx, wrSample);
+    TEST_ASSERT(hr == ole32::S_OK, "WriteSample must return S_OK");
+    pWriter->Finalize();
+    wrSample->Release();
+    outMt->Release();
+    pWriter->Release();
+
+    // 11. Topology & Nodes
+    IMFTopology* pTopo = nullptr;
+    MFCreateTopology(&pTopo);
+    TEST_ASSERT(pTopo != nullptr, "MFCreateTopology must succeed");
+
+    IMFTopologyNode* nSrc = nullptr;
+    IMFTopologyNode* nTfm = nullptr;
+    IMFTopologyNode* nOut = nullptr;
+    MFCreateTopologyNode(MF_TOPOLOGY_SOURCESTREAM_NODE, &nSrc);
+    MFCreateTopologyNode(MF_TOPOLOGY_TRANSFORM_NODE, &nTfm);
+    MFCreateTopologyNode(MF_TOPOLOGY_OUTPUT_NODE, &nOut);
+
+    nSrc->ConnectOutput(0, nTfm, 0);
+    nTfm->ConnectOutput(0, nOut, 0);
+    pTopo->AddNode(nSrc);
+    pTopo->AddNode(nTfm);
+    pTopo->AddNode(nOut);
+
+    uint16_t nNodes = 0;
+    pTopo->GetNodeCount(&nNodes);
+    TEST_ASSERT(nNodes == 3, "Topology node count must be 3");
+
+    IMFTopologyNode* downstream = nullptr;
+    uint32_t downInput = 0;
+    nSrc->GetOutput(0, &downstream, &downInput);
+    TEST_ASSERT(downstream == nTfm, "Source node output 0 must connect to Transform node");
+    downstream->Release();
+
+    nSrc->Release();
+    nTfm->Release();
+    nOut->Release();
+
+    // 12. Media Session
+    IMFMediaSession* pSession = nullptr;
+    hr = MFCreateMediaSession(nullptr, &pSession);
+    TEST_ASSERT(hr == ole32::S_OK && pSession != nullptr, "MFCreateMediaSession must succeed");
+
+    pSession->SetTopology(0, pTopo);
+    pSession->Start(nullptr, nullptr);
+    pSession->Pause();
+    pSession->Stop();
+    pSession->Close();
+
+    IMFMediaEvent* sessEv = nullptr;
+    pSession->GetEvent(0, &sessEv);
+    TEST_ASSERT(sessEv != nullptr, "Session must have generated an event");
+    sessEv->Release();
+
+    pSession->Release();
+    pTopo->Release();
+
+    // 13. Dynamic Module Export Registration
+    InitializeMediaFoundationExports();
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("mfplat.dll", "MFStartup") != nullptr, "mfplat.dll!MFStartup must be exported");
+    TEST_ASSERT(loader.getExport("mfplat.dll", "MFShutdown") != nullptr, "mfplat.dll!MFShutdown must be exported");
+    TEST_ASSERT(loader.getExport("mfplat.dll", "MFCreateAttributes") != nullptr, "mfplat.dll!MFCreateAttributes must be exported");
+    TEST_ASSERT(loader.getExport("mfplat.dll", "MFCreateMemoryBuffer") != nullptr, "mfplat.dll!MFCreateMemoryBuffer must be exported");
+    TEST_ASSERT(loader.getExport("mfplat.dll", "MFCreateSample") != nullptr, "mfplat.dll!MFCreateSample must be exported");
+    TEST_ASSERT(loader.getExport("mfplat.dll", "MFCreateMediaType") != nullptr, "mfplat.dll!MFCreateMediaType must be exported");
+    TEST_ASSERT(loader.getExport("mfplat.dll", "MFTEnumEx") != nullptr, "mfplat.dll!MFTEnumEx must be exported");
+    TEST_ASSERT(loader.getExport("mfreadwrite.dll", "MFCreateSourceReaderFromURL") != nullptr, "mfreadwrite.dll!MFCreateSourceReaderFromURL must be exported");
+    TEST_ASSERT(loader.getExport("mfreadwrite.dll", "MFCreateSinkWriterFromURL") != nullptr, "mfreadwrite.dll!MFCreateSinkWriterFromURL must be exported");
+    TEST_ASSERT(loader.getExport("mf.dll", "MFCreateTopology") != nullptr, "mf.dll!MFCreateTopology must be exported");
+    TEST_ASSERT(loader.getExport("mf.dll", "MFCreateMediaSession") != nullptr, "mf.dll!MFCreateMediaSession must be exported");
+
+    // 14. Version Database Records
+    auto& verDb = version::VersionDatabase::Instance();
+    const auto* vMfplat = verDb.FindModule("mfplat.dll");
+    TEST_ASSERT(vMfplat != nullptr, "mfplat.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vMfplat->stringTable.at("ProductName") == "MicaNT Media Foundation Subsystem", "mfplat.dll ProductName check");
+
+    const auto* vMf = verDb.FindModule("mf.dll");
+    TEST_ASSERT(vMf != nullptr, "mf.dll must be registered in VersionDatabase");
+
+    const auto* vMfreadwrite = verDb.FindModule("mfreadwrite.dll");
+    TEST_ASSERT(vMfreadwrite != nullptr, "mfreadwrite.dll must be registered in VersionDatabase");
+
+    // 15. Command Shell Integration
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // mf test
+        shell.execute("mf test", out);
+        TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "mf test must pass 100%");
+
+        // mf transforms
+        out.str("");
+        shell.execute("mf transforms", out);
+        TEST_ASSERT(out.str().find("Microsoft H.264 Video Decoder MFT") != std::string::npos, "mf transforms must show H.264 decoder");
+        TEST_ASSERT(out.str().find("Microsoft AAC Audio Decoder MFT") != std::string::npos, "mf transforms must show AAC decoder");
+
+        // mf session
+        out.str("");
+        shell.execute("mf session", out);
+        TEST_ASSERT(out.str().find("Decoded 5 frames") != std::string::npos, "mf session must decode 5 frames");
+    }
+
+    // 16. Platform Shutdown
+    hr = MFShutdown();
+    TEST_ASSERT(hr == ole32::S_OK, "MFShutdown must return S_OK");
+    TEST_ASSERT(!MediaFoundationPlatform::get().isInitialized(), "Platform must not be initialized after MFShutdown");
+
+    std::cout << "[TEST] Suite 102: Windows Media Foundation Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -22112,6 +22580,7 @@ int main() {
     RUN_TEST(Test_WindowsPOSIX_Subsystem);
     RUN_TEST(Test_WindowsHypervisor_Platform_Subsystem);
     RUN_TEST(Test_WindowsDirectWrite_Uniscribe_Subsystem);
+    RUN_TEST(Test_WindowsMediaFoundation_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
