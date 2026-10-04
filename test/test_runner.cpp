@@ -127,6 +127,7 @@
 #include "micant/dshow.hpp"
 #include "micant/wmp.hpp"
 #include "micant/gdiplus.hpp"
+#include "micant/d2d1.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -23816,9 +23817,489 @@ void Test_WindowsGdiPlus_Imaging_Subsystem() {
     std::cout << "[TEST] Suite 105: Windows GDI+ & Advanced Imaging Architecture PASSED.\n";
 }
 
+void Test_WindowsDirect2D_Hardware_Rendering_Subsystem() {
+    using namespace micant::d2d1;
+
+    // 1. Direct2D Factory Creation (Single-threaded & Multi-threaded)
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1_FACTORY_OPTIONS options{ D2D1_DEBUG_LEVEL_INFORMATION };
+        int32_t hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, &options, reinterpret_cast<void**>(&pFactory));
+        TEST_ASSERT(hr == ole32::S_OK && pFactory != nullptr, "D2D1CreateFactory single-threaded must succeed");
+
+        ID2D1Factory* pMultiFactory = nullptr;
+        hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pMultiFactory));
+        TEST_ASSERT(hr == ole32::S_OK && pMultiFactory != nullptr, "D2D1CreateFactory multi-threaded must succeed");
+        pMultiFactory->Release();
+        pFactory->Release();
+    }
+
+    // 2. Desktop DPI Query & Metrics Reload
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+        TEST_ASSERT(pFactory != nullptr, "Factory instance valid for DPI test");
+
+        float dpiX = 0.0f, dpiY = 0.0f;
+        pFactory->GetDesktopDpi(&dpiX, &dpiY);
+        TEST_ASSERT(dpiX == 96.0f && dpiY == 96.0f, "GetDesktopDpi returns standard 96 DPI");
+
+        int32_t hr = pFactory->ReloadSystemMetrics();
+        TEST_ASSERT(hr == ole32::S_OK, "ReloadSystemMetrics must succeed");
+        pFactory->Release();
+    }
+
+    // 3. HWND Render Target Instantiation & Window Operations
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+
+        D2D1_RENDER_TARGET_PROPERTIES rtProps{};
+        rtProps.type = D2D1_RENDER_TARGET_TYPE_HARDWARE;
+        rtProps.pixelFormat = { 87, D2D1_ALPHA_MODE_PREMULTIPLIED }; // DXGI_FORMAT_B8G8R8A8_UNORM
+        rtProps.dpiX = 96.0f;
+        rtProps.dpiY = 96.0f;
+
+        D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps{};
+        hwndProps.hwnd = reinterpret_cast<void*>(0x12345678);
+        hwndProps.pixelSize = { 1024, 768 };
+        hwndProps.presentOptions = D2D1_PRESENT_OPTIONS_RETAIN_CONTENTS;
+
+        ID2D1HwndRenderTarget* pHwndRt = nullptr;
+        int32_t hr = pFactory->CreateHwndRenderTarget(&rtProps, &hwndProps, &pHwndRt);
+        TEST_ASSERT(hr == ole32::S_OK && pHwndRt != nullptr, "CreateHwndRenderTarget must succeed");
+        TEST_ASSERT(pHwndRt->GetHwnd() == reinterpret_cast<void*>(0x12345678), "GetHwnd returns matching HWND");
+
+        D2D1_SIZE_U pxSize = pHwndRt->GetPixelSize();
+        TEST_ASSERT(pxSize.width == 1024 && pxSize.height == 768, "GetPixelSize matches 1024x768");
+        TEST_ASSERT(pHwndRt->CheckWindowState() == 0, "CheckWindowState indicates healthy state");
+
+        D2D1_SIZE_U newSize{ 1280, 720 };
+        hr = pHwndRt->Resize(&newSize);
+        TEST_ASSERT(hr == ole32::S_OK, "Resize must succeed");
+        pxSize = pHwndRt->GetPixelSize();
+        TEST_ASSERT(pxSize.width == 1280 && pxSize.height == 720, "Pixel size updated after resize");
+
+        pHwndRt->Release();
+        pFactory->Release();
+    }
+
+    // 4. Compatible Bitmap Render Target Instantiation
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+
+        D2D1_RENDER_TARGET_PROPERTIES rtProps{};
+        D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps{};
+        hwndProps.hwnd = reinterpret_cast<void*>(0x1000);
+        hwndProps.pixelSize = { 640, 480 };
+
+        ID2D1HwndRenderTarget* pParentRt = nullptr;
+        pFactory->CreateHwndRenderTarget(&rtProps, &hwndProps, &pParentRt);
+
+        D2D1_SIZE_F compSize{ 320.0f, 240.0f };
+        ID2D1BitmapRenderTarget* pCompRt = nullptr;
+        int32_t hr = pParentRt->CreateCompatibleRenderTarget(&compSize, nullptr, nullptr, 0, &pCompRt);
+        TEST_ASSERT(hr == ole32::S_OK && pCompRt != nullptr, "CreateCompatibleRenderTarget must succeed");
+
+        D2D1_SIZE_F sz = pCompRt->GetSize();
+        TEST_ASSERT(sz.width == 320.0f && sz.height == 240.0f, "Compatible RT dimensions match 320x240");
+
+        ID2D1Bitmap* pBitmap = nullptr;
+        hr = pCompRt->GetBitmap(&pBitmap);
+        TEST_ASSERT(hr == ole32::S_OK && pBitmap != nullptr, "Compatible RT GetBitmap must succeed");
+        TEST_ASSERT(pBitmap->GetPixelSize().width == 320, "Target bitmap pixel width matches 320");
+
+        pBitmap->Release();
+        pCompRt->Release();
+        pParentRt->Release();
+        pFactory->Release();
+    }
+
+    // 5. Solid Color Brush Creation & Opacity Manipulation
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+        D2D1_RENDER_TARGET_PROPERTIES rtProps{};
+        D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps{};
+        hwndProps.hwnd = reinterpret_cast<void*>(0x1000);
+        hwndProps.pixelSize = { 100, 100 };
+        ID2D1HwndRenderTarget* pRt = nullptr;
+        pFactory->CreateHwndRenderTarget(&rtProps, &hwndProps, &pRt);
+
+        D2D1_COLOR_F redColor = ColorF::Red();
+        ID2D1SolidColorBrush* pSolidBrush = nullptr;
+        int32_t hr = pRt->CreateSolidColorBrush(&redColor, nullptr, &pSolidBrush);
+        TEST_ASSERT(hr == ole32::S_OK && pSolidBrush != nullptr, "CreateSolidColorBrush must succeed");
+
+        D2D1_COLOR_F c = pSolidBrush->GetColor();
+        TEST_ASSERT(c.r == 1.0f && c.g == 0.0f && c.b == 0.0f && c.a == 1.0f, "GetColor matches red");
+
+        pSolidBrush->SetOpacity(0.5f);
+        TEST_ASSERT(std::abs(pSolidBrush->GetOpacity() - 0.5f) < 0.001f, "Opacity modified to 0.5");
+
+        D2D1_COLOR_F blueColor = ColorF::Blue();
+        pSolidBrush->SetColor(&blueColor);
+        c = pSolidBrush->GetColor();
+        TEST_ASSERT(c.b == 1.0f && c.r == 0.0f, "SetColor updated brush to blue");
+
+        pSolidBrush->Release();
+        pRt->Release();
+        pFactory->Release();
+    }
+
+    // 6. Linear Gradient Brush & Stop Collection
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+        D2D1_RENDER_TARGET_PROPERTIES rtProps{};
+        D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps{};
+        hwndProps.hwnd = reinterpret_cast<void*>(0x1000);
+        hwndProps.pixelSize = { 100, 100 };
+        ID2D1HwndRenderTarget* pRt = nullptr;
+        pFactory->CreateHwndRenderTarget(&rtProps, &hwndProps, &pRt);
+
+        D2D1_GRADIENT_STOP stops[2];
+        stops[0].position = 0.0f;
+        stops[0].color = ColorF::Red();
+        stops[1].position = 1.0f;
+        stops[1].color = ColorF::Blue();
+
+        ID2D1GradientStopCollection* pStops = nullptr;
+        int32_t hr = pRt->CreateGradientStopCollection(stops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pStops);
+        TEST_ASSERT(hr == ole32::S_OK && pStops != nullptr, "CreateGradientStopCollection must succeed");
+        TEST_ASSERT(pStops->GetGradientStopCount() == 2, "Stop count matches 2");
+
+        D2D1_GRADIENT_STOP retrievedStops[2];
+        pStops->GetGradientStops(retrievedStops, 2);
+        TEST_ASSERT(retrievedStops[0].position == 0.0f && retrievedStops[1].position == 1.0f, "Stop positions verified");
+
+        D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES linProps{};
+        linProps.startPoint = { 0.0f, 0.0f };
+        linProps.endPoint = { 100.0f, 0.0f };
+
+        ID2D1LinearGradientBrush* pLinBrush = nullptr;
+        hr = pRt->CreateLinearGradientBrush(&linProps, nullptr, pStops, &pLinBrush);
+        TEST_ASSERT(hr == ole32::S_OK && pLinBrush != nullptr, "CreateLinearGradientBrush must succeed");
+        TEST_ASSERT(pLinBrush->GetStartPoint().x == 0.0f && pLinBrush->GetEndPoint().x == 100.0f, "Linear brush endpoints verified");
+
+        pLinBrush->Release();
+        pStops->Release();
+        pRt->Release();
+        pFactory->Release();
+    }
+
+    // 7. Radial Gradient Brush Configuration
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+        D2D1_RENDER_TARGET_PROPERTIES rtProps{};
+        D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps{};
+        hwndProps.hwnd = reinterpret_cast<void*>(0x1000);
+        hwndProps.pixelSize = { 100, 100 };
+        ID2D1HwndRenderTarget* pRt = nullptr;
+        pFactory->CreateHwndRenderTarget(&rtProps, &hwndProps, &pRt);
+
+        D2D1_GRADIENT_STOP stops[2];
+        stops[0].position = 0.0f;
+        stops[0].color = ColorF::White();
+        stops[1].position = 1.0f;
+        stops[1].color = ColorF::Black();
+
+        ID2D1GradientStopCollection* pStops = nullptr;
+        pRt->CreateGradientStopCollection(stops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP, &pStops);
+
+        D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES radProps{};
+        radProps.center = { 50.0f, 50.0f };
+        radProps.gradientOriginOffset = { 0.0f, 0.0f };
+        radProps.radiusX = 40.0f;
+        radProps.radiusY = 30.0f;
+
+        ID2D1RadialGradientBrush* pRadBrush = nullptr;
+        int32_t hr = pRt->CreateRadialGradientBrush(&radProps, nullptr, pStops, &pRadBrush);
+        TEST_ASSERT(hr == ole32::S_OK && pRadBrush != nullptr, "CreateRadialGradientBrush must succeed");
+        TEST_ASSERT(pRadBrush->GetCenter().x == 50.0f && pRadBrush->GetRadiusX() == 40.0f && pRadBrush->GetRadiusY() == 30.0f, "Radial brush center and radii verified");
+
+        pRadBrush->Release();
+        pStops->Release();
+        pRt->Release();
+        pFactory->Release();
+    }
+
+    // 8. Stroke Style Attributes & Dashes
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+
+        D2D1_STROKE_STYLE_PROPERTIES strokeProps{};
+        strokeProps.startCap = D2D1_CAP_STYLE_ROUND;
+        strokeProps.endCap = D2D1_CAP_STYLE_ROUND;
+        strokeProps.dashCap = D2D1_CAP_STYLE_ROUND;
+        strokeProps.lineJoin = D2D1_LINE_JOIN_ROUND;
+        strokeProps.miterLimit = 10.0f;
+        strokeProps.dashStyle = D2D1_DASH_STYLE_DASH_DOT;
+
+        ID2D1StrokeStyle* pStroke = nullptr;
+        int32_t hr = pFactory->CreateStrokeStyle(&strokeProps, nullptr, 0, &pStroke);
+        TEST_ASSERT(hr == ole32::S_OK && pStroke != nullptr, "CreateStrokeStyle must succeed");
+        TEST_ASSERT(pStroke->GetStartCap() == D2D1_CAP_STYLE_ROUND, "Stroke start cap is round");
+        TEST_ASSERT(pStroke->GetDashStyle() == D2D1_DASH_STYLE_DASH_DOT, "Stroke dash style is DashDot");
+        TEST_ASSERT(pStroke->GetDashesCount() == 4, "DashDot pattern has 4 elements");
+
+        pStroke->Release();
+        pFactory->Release();
+    }
+
+    // 9. Parametric Geometries (Rectangle & Ellipse)
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+
+        D2D1_RECT_F r{ 10.0f, 20.0f, 110.0f, 70.0f };
+        ID2D1RectangleGeometry* pRectGeo = nullptr;
+        int32_t hr = pFactory->CreateRectangleGeometry(&r, &pRectGeo);
+        TEST_ASSERT(hr == ole32::S_OK && pRectGeo != nullptr, "CreateRectangleGeometry must succeed");
+
+        float area = 0.0f;
+        pRectGeo->ComputeArea(nullptr, &area);
+        TEST_ASSERT(std::abs(area - 5000.0f) < 0.1f, "Rectangle area is 100 * 50 = 5000");
+
+        int32_t contains = 0;
+        pRectGeo->FillContainsPoint({ 50.0f, 30.0f }, nullptr, &contains);
+        TEST_ASSERT(contains == 1, "Point (50, 30) is inside rectangle");
+        pRectGeo->FillContainsPoint({ 5.0f, 5.0f }, nullptr, &contains);
+        TEST_ASSERT(contains == 0, "Point (5, 5) is outside rectangle");
+
+        D2D1_ELLIPSE ell{ { 50.0f, 50.0f }, 20.0f, 20.0f };
+        ID2D1EllipseGeometry* pEllGeo = nullptr;
+        hr = pFactory->CreateEllipseGeometry(&ell, &pEllGeo);
+        TEST_ASSERT(hr == ole32::S_OK && pEllGeo != nullptr, "CreateEllipseGeometry must succeed");
+
+        pEllGeo->ComputeArea(nullptr, &area);
+        TEST_ASSERT(std::abs(area - (3.14159265f * 400.0f)) < 1.0f, "Ellipse area matches pi * r^2");
+
+        pEllGeo->FillContainsPoint({ 50.0f, 50.0f }, nullptr, &contains);
+        TEST_ASSERT(contains == 1, "Center point is inside ellipse");
+        pEllGeo->FillContainsPoint({ 80.0f, 80.0f }, nullptr, &contains);
+        TEST_ASSERT(contains == 0, "Distant point is outside ellipse");
+
+        pRectGeo->Release();
+        pEllGeo->Release();
+        pFactory->Release();
+    }
+
+    // 10. Path Geometry & Geometry Sink Assembly
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+
+        ID2D1PathGeometry* pPath = nullptr;
+        int32_t hr = pFactory->CreatePathGeometry(&pPath);
+        TEST_ASSERT(hr == ole32::S_OK && pPath != nullptr, "CreatePathGeometry must succeed");
+
+        ID2D1GeometrySink* pSink = nullptr;
+        hr = pPath->Open(&pSink);
+        TEST_ASSERT(hr == ole32::S_OK && pSink != nullptr, "Open geometry sink must succeed");
+
+        pSink->BeginFigure({ 0.0f, 0.0f }, D2D1_FIGURE_BEGIN_FILLED);
+        pSink->AddLine({ 100.0f, 0.0f });
+        pSink->AddLine({ 100.0f, 100.0f });
+        pSink->AddLine({ 0.0f, 100.0f });
+        pSink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        hr = pSink->Close();
+        TEST_ASSERT(hr == ole32::S_OK, "Geometry sink close must succeed");
+        pSink->Release();
+
+        uint32_t figCount = 0, segCount = 0;
+        pPath->GetFigureCount(&figCount);
+        pPath->GetSegmentCount(&segCount);
+        TEST_ASSERT(figCount == 1, "Figure count matches 1");
+        TEST_ASSERT(segCount == 3, "Segment count matches 3");
+
+        D2D1_RECT_F bounds{};
+        pPath->GetBounds(nullptr, &bounds);
+        TEST_ASSERT(bounds.left == 0.0f && bounds.top == 0.0f && bounds.right == 100.0f && bounds.bottom == 100.0f, "Path geometry bounds match 100x100 box");
+
+        pPath->Release();
+        pFactory->Release();
+    }
+
+    // 11. Render Target Drawing Primitives (Clear, DrawLine, FillRectangle, DrawGeometry, EndDraw)
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+        D2D1_RENDER_TARGET_PROPERTIES rtProps{};
+        D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps{};
+        hwndProps.hwnd = reinterpret_cast<void*>(0x1000);
+        hwndProps.pixelSize = { 100, 100 };
+        ID2D1HwndRenderTarget* pRt = nullptr;
+        pFactory->CreateHwndRenderTarget(&rtProps, &hwndProps, &pRt);
+
+        D2D1_COLOR_F green = ColorF::Green();
+        ID2D1SolidColorBrush* pGreenBrush = nullptr;
+        pRt->CreateSolidColorBrush(&green, nullptr, &pGreenBrush);
+
+        pRt->BeginDraw();
+        D2D1_COLOR_F white = ColorF::White();
+        pRt->Clear(&white);
+
+        pRt->DrawLine({ 0.0f, 0.0f }, { 99.0f, 99.0f }, pGreenBrush, 2.0f);
+
+        D2D1_RECT_F box{ 10.0f, 10.0f, 30.0f, 30.0f };
+        pRt->FillRectangle(&box, pGreenBrush);
+
+        D2D1_ROUNDED_RECT roundBox{ { 40.0f, 10.0f, 60.0f, 30.0f }, 4.0f, 4.0f };
+        pRt->DrawRoundedRectangle(&roundBox, pGreenBrush, 1.0f);
+        pRt->FillRoundedRectangle(&roundBox, pGreenBrush);
+
+        D2D1_ELLIPSE ell{ { 50.0f, 50.0f }, 20.0f, 20.0f };
+        pRt->DrawEllipse(&ell, pGreenBrush, 1.0f);
+        pRt->FillEllipse(&ell, pGreenBrush);
+
+        int32_t hr = pRt->EndDraw();
+        TEST_ASSERT(hr == ole32::S_OK, "EndDraw on render target must succeed");
+
+        pGreenBrush->Release();
+        pRt->Release();
+        pFactory->Release();
+    }
+
+    // 12. DirectWrite Typography Interop
+    {
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+        D2D1_RENDER_TARGET_PROPERTIES rtProps{};
+        D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps{};
+        hwndProps.hwnd = reinterpret_cast<void*>(0x1000);
+        hwndProps.pixelSize = { 200, 100 };
+        ID2D1HwndRenderTarget* pRt = nullptr;
+        pFactory->CreateHwndRenderTarget(&rtProps, &hwndProps, &pRt);
+
+        dwrite::IDWriteFactory* pDWriteFactory = nullptr;
+        int32_t hr = dwrite::DWriteCreateFactory(dwrite::DWRITE_FACTORY_TYPE_SHARED, dwrite::IID_IDWriteFactory, reinterpret_cast<ole32::IUnknown**>(&pDWriteFactory));
+        TEST_ASSERT(hr == ole32::S_OK && pDWriteFactory != nullptr, "DWriteCreateFactory must succeed");
+
+        dwrite::IDWriteTextFormat* pFormat = nullptr;
+        hr = pDWriteFactory->CreateTextFormat(L"Segoe UI", nullptr, dwrite::DWRITE_FONT_WEIGHT_NORMAL, dwrite::DWRITE_FONT_STYLE_NORMAL, dwrite::DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"en-us", &pFormat);
+        TEST_ASSERT(hr == ole32::S_OK && pFormat != nullptr, "CreateTextFormat must succeed");
+
+        ID2D1SolidColorBrush* pTextBrush = nullptr;
+        D2D1_COLOR_F black = ColorF::Black();
+        pRt->CreateSolidColorBrush(&black, nullptr, &pTextBrush);
+
+        pRt->BeginDraw();
+        D2D1_RECT_F layoutRect{ 10.0f, 10.0f, 190.0f, 90.0f };
+        pRt->DrawText(L"Direct2D Text", 13, pFormat, &layoutRect, pTextBrush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        hr = pRt->EndDraw();
+        TEST_ASSERT(hr == ole32::S_OK, "DrawText and EndDraw must succeed");
+
+        pTextBrush->Release();
+        pFormat->Release();
+        pDWriteFactory->Release();
+        pRt->Release();
+        pFactory->Release();
+    }
+
+    // 13. WIC Bitmap Interop
+    {
+        gdiplus::InitializeGdiPlusExports();
+        gdiplus::IWICImagingFactory* pWicFactory = nullptr;
+        gdiplus::WICCreateImagingFactory_Proxy(0, &pWicFactory);
+        TEST_ASSERT(pWicFactory != nullptr, "WIC factory must be valid");
+
+        gdiplus::IWICBitmap* pWicBmp = nullptr;
+        std::vector<uint32_t> testPixels(16 * 16, 0xFF00AA55);
+        int32_t hr = pWicFactory->CreateBitmapFromMemory(16, 16, gdiplus::GUID_WICPixelFormat32bppPBGRA, 16 * 4, 16 * 16 * 4, reinterpret_cast<uint8_t*>(testPixels.data()), &pWicBmp);
+        TEST_ASSERT(hr == ole32::S_OK && pWicBmp != nullptr, "WIC CreateBitmapFromMemory must succeed");
+
+        ID2D1Factory* pFactory = nullptr;
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_ID2D1Factory, nullptr, reinterpret_cast<void**>(&pFactory));
+        D2D1_RENDER_TARGET_PROPERTIES rtProps{};
+        D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps{};
+        hwndProps.hwnd = reinterpret_cast<void*>(0x1000);
+        hwndProps.pixelSize = { 100, 100 };
+        ID2D1HwndRenderTarget* pRt = nullptr;
+        pFactory->CreateHwndRenderTarget(&rtProps, &hwndProps, &pRt);
+
+        ID2D1Bitmap* pD2DBmp = nullptr;
+        hr = pRt->CreateBitmapFromWicBitmap(pWicBmp, nullptr, &pD2DBmp);
+        TEST_ASSERT(hr == ole32::S_OK && pD2DBmp != nullptr, "CreateBitmapFromWicBitmap must succeed");
+        TEST_ASSERT(pD2DBmp->GetPixelSize().width == 16 && pD2DBmp->GetPixelSize().height == 16, "D2D Bitmap dimensions match WIC source");
+
+        pD2DBmp->Release();
+        pRt->Release();
+        pFactory->Release();
+        pWicBmp->Release();
+        pWicFactory->Release();
+    }
+
+    // 14. Matrix Mathematics & Affine Inversion
+    {
+        Matrix3x2F ident = Matrix3x2F::Identity();
+        TEST_ASSERT(ident.IsIdentity(), "Identity matrix verification");
+
+        Matrix3x2F rot{};
+        D2D1MakeRotateMatrix(90.0f, { 0.0f, 0.0f }, &rot);
+        D2D1_POINT_2F p = rot.TransformPoint({ 1.0f, 0.0f });
+        TEST_ASSERT(std::abs(p.x) < 0.001f && std::abs(p.y - 1.0f) < 0.001f, "90-degree rotation maps (1, 0) to (0, 1)");
+
+        Matrix3x2F skew{};
+        D2D1MakeSkewMatrix(10.0f, 0.0f, { 0.0f, 0.0f }, &skew);
+        TEST_ASSERT(D2D1IsMatrixInvertible(&skew), "Skew matrix is invertible");
+
+        Matrix3x2F inv = rot;
+        bool invOk = D2D1InvertMatrix(&inv);
+        TEST_ASSERT(invOk, "Rotation matrix inversion must succeed");
+        D2D1_POINT_2F pBack = inv.TransformPoint(p);
+        TEST_ASSERT(std::abs(pBack.x - 1.0f) < 0.001f && std::abs(pBack.y) < 0.001f, "Inverted matrix transforms back to (1, 0)");
+    }
+
+    // 15. Dynamic Loader Module Exports & COM Class Factory
+    {
+        InitializeDirect2DExports();
+
+        auto& loader = ldr::DynamicLoader::get();
+        auto* pfnCreate = loader.getExport("d2d1.dll", "D2D1CreateFactory");
+        TEST_ASSERT(pfnCreate != nullptr, "d2d1.dll!D2D1CreateFactory resolved dynamically");
+
+        auto* pfnCanUnload = loader.getExport("d2d1.dll", "DllCanUnloadNow");
+        TEST_ASSERT(pfnCanUnload != nullptr, "d2d1.dll!DllCanUnloadNow resolved dynamically");
+
+        ID2D1Factory* pCoFactory = nullptr;
+        int32_t hr = ole32::CoCreateInstance(CLSID_D2D1Factory, nullptr, 1, IID_ID2D1Factory, reinterpret_cast<void**>(&pCoFactory));
+        TEST_ASSERT(hr == ole32::S_OK && pCoFactory != nullptr, "CoCreateInstance CLSID_D2D1Factory must succeed");
+        pCoFactory->Release();
+    }
+
+    // 16. Version Database & CommandShell Integration (d2d test, render, info)
+    {
+        // Version database verification
+        auto& verDb = version::VersionDatabase::Instance();
+        const auto* vD2d = verDb.FindModule("d2d1.dll");
+        TEST_ASSERT(vD2d != nullptr && vD2d->stringTable.at("ProductName") == "MicaNT Direct2D Subsystem", "d2d1.dll version info match");
+
+        // CommandShell Integration (d2d test, render, info)
+        shell::CommandShell testShell;
+        std::ostringstream out;
+
+        testShell.execute("d2d test", out);
+        TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "d2d test must pass 100%");
+
+        out.str("");
+        testShell.execute("d2d render test_scene.bmp", out);
+        TEST_ASSERT(out.str().find("Successfully rendered hardware-accelerated scene to target: 'test_scene.bmp'") != std::string::npos, "d2d render must save bitmap");
+
+        out.str("");
+        testShell.execute("d2d info", out);
+        TEST_ASSERT(out.str().find("22621") != std::string::npos, "d2d info must display version");
+    }
+
+    std::cout << "[TEST] Suite 106: Windows Direct2D & DirectWrite Hardware Rendering Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite105")) {
-        RUN_TEST(Test_WindowsGdiPlus_Imaging_Subsystem);
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite106")) {
+        RUN_TEST(Test_WindowsDirect2D_Hardware_Rendering_Subsystem);
         return g_FailedTests;
     }
 
@@ -23931,6 +24412,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirectShow_FilterGraph_Subsystem);
     RUN_TEST(Test_WindowsMediaPlayer_ActiveMovie_Subsystem);
     RUN_TEST(Test_WindowsGdiPlus_Imaging_Subsystem);
+    RUN_TEST(Test_WindowsDirect2D_Hardware_Rendering_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -160,7 +160,13 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 76: Windows DirectShow & Filter Graph Subsystem      [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 77: Windows Media Player & ActiveMovie Architecture     [PLANNED]        │
+│ Phase 77: Windows Media Player & ActiveMovie Architecture  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 78: Windows GDI+ & Advanced Imaging Architecture     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 79: Windows Direct2D & DirectWrite Hardware Rendering [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 80: Windows Media Foundation Topology & Media Session  [PLANNED]      │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1845,26 +1851,50 @@
 
 ---
 
-### Phase 79: Windows Direct2D & DirectWrite Hardware-Accelerated Rendering (`d2d1.hpp`, `d2d1.dll`, `dwrite.dll`) (PLANNED - MILESTONE 106)
-- [ ] **Direct2D Factory & Render Target Architecture (`include/micant/d2d1.hpp`, `d2d1.dll`)**:
+### Phase 79: Windows Direct2D & DirectWrite Hardware-Accelerated Rendering (`d2d1.hpp`, `d2d1.dll`, `dwrite.dll`) (COMPLETED 100% - MILESTONE 106)
+- [x] **Direct2D Factory & Render Target Architecture (`include/micant/d2d1.hpp`, `d2d1.dll`)**:
   - Direct2D factory creation and resource tracking (`D2D1CreateFactory`, `ID2D1Factory`).
-  - Render target hierarchy: Window HWND render target (`ID2D1HwndRenderTarget`), Bitmap render target (`ID2D1BitmapRenderTarget`), and DXGI surface target.
-  - Rendering lifecycle: `BeginDraw`, `EndDraw`, `Flush`, target clearing and antialiasing modes.
-- [ ] **Direct2D Drawing Primitives, Brushes & Geometries**:
+  - Render target hierarchy: Window HWND render target (`ID2D1HwndRenderTarget`), Bitmap render target (`ID2D1BitmapRenderTarget`), GDI DC render target (`ID2D1DCRenderTarget`), and DXGI surface target.
+  - Rendering lifecycle: `BeginDraw`, `EndDraw`, target clearing, and antialiasing modes.
+- [x] **Direct2D Drawing Primitives, Brushes & Geometries**:
   - Brush architecture: `ID2D1Brush`, `ID2D1SolidColorBrush`, `ID2D1LinearGradientBrush`, `ID2D1RadialGradientBrush`, `ID2D1BitmapBrush`.
-  - Geometric paths and tessellation: `ID2D1Geometry`, `ID2D1PathGeometry`, `ID2D1GeometrySink`, `ID2D1RectangleGeometry`, `ID2D1EllipseGeometry`.
-  - Drawing primitives: `DrawLine`, `DrawRectangle`, `FillRectangle`, `DrawRoundedRectangle`, `FillRoundedRectangle`, `DrawEllipse`, `FillEllipse`, `DrawGeometry`, `FillGeometry`.
-- [ ] **DirectWrite Text Layout & Typography Integration**:
-  - DirectWrite integration: `DrawText`, `DrawTextLayout` over `IDWriteTextLayout`.
+  - Geometric paths and tessellation: `ID2D1Geometry`, `ID2D1PathGeometry`, `ID2D1GeometrySink`, `ID2D1RectangleGeometry`, `ID2D1RoundedRectangleGeometry`, `ID2D1EllipseGeometry`.
+  - Drawing primitives: `DrawLine`, `DrawRectangle`, `FillRectangle`, `DrawRoundedRectangle`, `FillRoundedRectangle`, `DrawEllipse`, `FillEllipse`, `DrawGeometry`, `FillGeometry`, `DrawBitmap`.
+- [x] **DirectWrite Text Layout & Typography Integration**:
+  - DirectWrite integration: `DrawText`, `DrawTextLayout` over `IDWriteTextFormat` and `IDWriteTextLayout`.
   - Direct2D / WIC image rendering interop: `CreateBitmapFromWicBitmap`, `DrawBitmap`.
-  - Dynamic module export registrations for `d2d1.dll`.
+  - Dynamic module export registrations for `d2d1.dll` (`D2D1CreateFactory`, `D2D1MakeRotateMatrix`, `D2D1MakeSkewMatrix`, `D2D1IsMatrixInvertible`, `D2D1InvertMatrix`, `DllCanUnloadNow`).
   - Version database registration in `VersionDatabase` for `d2d1.dll`.
-- [ ] **Interactive CLI Utilities (`d2d` / `direct2d`)**:
-  - `d2d test` (Runs Direct2D hardware rendering self-test).
+  - COM class factory registration for `CLSID_D2D1Factory`.
+- [x] **Interactive CLI Utilities (`d2d` / `direct2d`)**:
+  - `d2d test` (Runs Direct2D hardware rendering self-test: 16/16 passed).
   - `d2d render <file>` (Renders hardware-accelerated scene to bitmap target).
   - `d2d info` (Displays Direct2D engine specifications).
-- [ ] **Unit Test Suite 106 (`Test_WindowsDirect2D_Hardware_Rendering_Subsystem`)**:
+- [x] **Unit Test Suite 106 (`Test_WindowsDirect2D_Hardware_Rendering_Subsystem`)**:
   - Comprehensive unit test suite validating Direct2D factory creation, render targets, brushes, geometric sinks, DirectWrite integration, and CLI commands.
+  - Milestone 106: **106 / 106 Test Suites Passing (100%)**.
+
+---
+
+### Phase 80: Windows Media Foundation Topology & Advanced Media Session Pipeline (`mfsession.hpp`, `mfplat.dll`, `mf.dll`, `wmvdecod.dll`) (PLANNED - MILESTONE 107)
+- [ ] **Media Foundation Topology Loader & Node Routing Engine (`include/micant/mfsession.hpp`, `mf.dll`)**:
+  - Topology loader interface (`IMFTopoLoader`, `MFCreateTopoLoader`) resolving source, transform, and sink nodes into complete playback pipeline graphs.
+  - Partial-to-full topology resolution with automatic decoder MFT and color-space converter insertion.
+  - Node connection validation and media type negotiation across upstream and downstream pins.
+- [ ] **Advanced Media Session Pipeline & Sequencer (`mf.dll`)**:
+  - Media session clock (`IMFClock`, `IMFPresentationClock`, `MFCreatePresentationClock`) with drift compensation and rate control (`IMFRateControl`, `IMFRateSupport`).
+  - Media sequencer source (`IMFSequencerSource`, `MFCreateSequencerSource`) supporting playlist sequencing and gapless cross-segment playback.
+  - Stream sink rendering synchronization with hardware video/audio clocks.
+- [ ] **Standard Windows Media Video (WMV) / WMA Codec MFT Registration (`wmvdecod.dll`)**:
+  - Direct Show / Media Foundation transform bridge for VC-1, WMV9 (`CLSID_CWMVDecMediaObject`), and WMA9 decoder objects.
+  - Dynamic module export registrations for `mf.dll` and `wmvdecod.dll`.
+  - Version database registration in `VersionDatabase` for `wmvdecod.dll`.
+- [ ] **Interactive CLI Utilities (`mfsession` / `topology`)**:
+  - `mfsession test` (Runs Media Foundation topology resolution and playback sequencer self-tests).
+  - `mfsession topology <source>` (Displays topology node graph).
+  - `mfsession info` (Displays media session engine capabilities).
+- [ ] **Unit Test Suite 107 (`Test_WindowsMediaFoundation_Topology_And_Session_Subsystem`)**:
+  - Comprehensive unit test suite validating topology resolution, presentation clocks, sequencer sources, codec MFTs, and CLI commands.
 
 
 
