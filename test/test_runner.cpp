@@ -121,6 +121,7 @@
 #include "micant/bluetooth.hpp"
 #include "micant/cardmod.hpp"
 #include "micant/posix.hpp"
+#include "micant/whp.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -21340,6 +21341,376 @@ void Test_WindowsPOSIX_Subsystem() {
     std::cout << "[TEST] Suite 99: Windows POSIX Subsystem & UNIX Compatibility PASSED.\n";
 }
 
+void Test_WindowsHypervisor_Platform_Subsystem() {
+    std::cout << "[TEST] Suite 100: Running Windows Hypervisor Platform (WHP) & Virtualization Tests...\n";
+
+    auto& ldr = ldr::DynamicLoader::get();
+    whp::InitializeWhpSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (WinHvPlatform / WinHvEmulation / vmcompute)
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvGetCapability") != nullptr, "WinHvPlatform.dll must export WHvGetCapability");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvCreatePartition") != nullptr, "WinHvPlatform.dll must export WHvCreatePartition");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvSetupPartition") != nullptr, "WinHvPlatform.dll must export WHvSetupPartition");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvResetPartition") != nullptr, "WinHvPlatform.dll must export WHvResetPartition");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvDeletePartition") != nullptr, "WinHvPlatform.dll must export WHvDeletePartition");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvGetPartitionProperty") != nullptr, "WinHvPlatform.dll must export WHvGetPartitionProperty");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvSetPartitionProperty") != nullptr, "WinHvPlatform.dll must export WHvSetPartitionProperty");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvMapGpaRange") != nullptr, "WinHvPlatform.dll must export WHvMapGpaRange");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvUnmapGpaRange") != nullptr, "WinHvPlatform.dll must export WHvUnmapGpaRange");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvTranslateGva") != nullptr, "WinHvPlatform.dll must export WHvTranslateGva");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvCreateVirtualProcessor") != nullptr, "WinHvPlatform.dll must export WHvCreateVirtualProcessor");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvDeleteVirtualProcessor") != nullptr, "WinHvPlatform.dll must export WHvDeleteVirtualProcessor");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvRunVirtualProcessor") != nullptr, "WinHvPlatform.dll must export WHvRunVirtualProcessor");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvCancelRunVirtualProcessor") != nullptr, "WinHvPlatform.dll must export WHvCancelRunVirtualProcessor");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvGetVirtualProcessorRegisters") != nullptr, "WinHvPlatform.dll must export WHvGetVirtualProcessorRegisters");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvSetVirtualProcessorRegisters") != nullptr, "WinHvPlatform.dll must export WHvSetVirtualProcessorRegisters");
+
+    TEST_ASSERT(ldr.getExport("WinHvEmulation.dll", "WHvEmulatorCreateEmulator") != nullptr, "WinHvEmulation.dll must export WHvEmulatorCreateEmulator");
+    TEST_ASSERT(ldr.getExport("WinHvEmulation.dll", "WHvEmulatorDestroyEmulator") != nullptr, "WinHvEmulation.dll must export WHvEmulatorDestroyEmulator");
+    TEST_ASSERT(ldr.getExport("WinHvEmulation.dll", "WHvEmulatorTryMmioEmulation") != nullptr, "WinHvEmulation.dll must export WHvEmulatorTryMmioEmulation");
+    TEST_ASSERT(ldr.getExport("WinHvEmulation.dll", "WHvEmulatorTryIoEmulation") != nullptr, "WinHvEmulation.dll must export WHvEmulatorTryIoEmulation");
+
+    TEST_ASSERT(ldr.getExport("vmcompute.exe", "HcsMain") != nullptr, "vmcompute.exe must export HcsMain");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verPlat = version::VersionDatabase::Instance().FindModule("WinHvPlatform.dll");
+        TEST_ASSERT(verPlat != nullptr, "VersionDatabase must contain WinHvPlatform.dll");
+        TEST_ASSERT(verPlat->stringTable.at("FileDescription") == "Windows Hypervisor Platform Client DLL", "WinHvPlatform.dll description match");
+        TEST_ASSERT(verPlat->stringTable.at("OriginalFilename") == "WinHvPlatform.dll", "WinHvPlatform.dll original filename match");
+        TEST_ASSERT(verPlat->stringTable.at("ProductName") == "MicaNT Hypervisor Platform", "WinHvPlatform.dll product name match");
+
+        const auto* verEmu = version::VersionDatabase::Instance().FindModule("WinHvEmulation.dll");
+        TEST_ASSERT(verEmu != nullptr, "VersionDatabase must contain WinHvEmulation.dll");
+        TEST_ASSERT(verEmu->stringTable.at("FileDescription") == "Windows Hypervisor Instruction Emulation DLL", "WinHvEmulation.dll description match");
+        TEST_ASSERT(verEmu->stringTable.at("OriginalFilename") == "WinHvEmulation.dll", "WinHvEmulation.dll original filename match");
+        TEST_ASSERT(verEmu->stringTable.at("ProductName") == "MicaNT Hypervisor Platform", "WinHvEmulation.dll product name match");
+
+        const auto* verHcs = version::VersionDatabase::Instance().FindModule("vmcompute.exe");
+        TEST_ASSERT(verHcs != nullptr, "VersionDatabase must contain vmcompute.exe");
+        TEST_ASSERT(verHcs->stringTable.at("FileDescription") == "Hyper-V Host Compute Service", "vmcompute.exe description match");
+        TEST_ASSERT(verHcs->stringTable.at("OriginalFilename") == "vmcompute.exe", "vmcompute.exe original filename match");
+        TEST_ASSERT(verHcs->stringTable.at("ProductName") == "MicaNT Hypervisor Platform", "vmcompute.exe product name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: SCM Service Registration (vmcompute / Hyper-V Host Compute Service)
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        auto svc = scm.getServiceRecord(L"vmcompute");
+        TEST_ASSERT(svc != nullptr, "vmcompute service must be registered in SCM");
+        TEST_ASSERT(svc->displayName == L"Hyper-V Host Compute Service", "vmcompute display name match");
+        TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "vmcompute must be running");
+        TEST_ASSERT(svc->status.dwProcessId == 1184, "vmcompute PID match (1184)");
+        TEST_ASSERT(svc->binaryPath == L"C:\\Windows\\System32\\vmcompute.exe", "vmcompute binary path match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: WHP Capabilities Query
+    // ------------------------------------------------------------------------
+    {
+        uint32_t hypPresent = 0;
+        uint32_t written = 0;
+        int32_t hr = whp::WHvGetCapability(whp::WHV_CAPABILITY_CODE::HypervisorPresent, &hypPresent, sizeof(hypPresent), &written);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvGetCapability HypervisorPresent must succeed");
+        TEST_ASSERT(hypPresent == 1, "HypervisorPresent must return 1");
+        TEST_ASSERT(written == sizeof(uint32_t), "Written size must be 4 bytes");
+
+        uint64_t features = 0;
+        hr = whp::WHvGetCapability(whp::WHV_CAPABILITY_CODE::Features, &features, sizeof(features), &written);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvGetCapability Features must succeed");
+        TEST_ASSERT(features == 0x0F, "Features must return 0x0F (PartialUnmap | LocalApic | Xsave | DirtyTrack)");
+
+        uint64_t exits = 0;
+        hr = whp::WHvGetCapability(whp::WHV_CAPABILITY_CODE::ExtendedVmExits, &exits, sizeof(exits), &written);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvGetCapability ExtendedVmExits must succeed");
+        TEST_ASSERT(exits == 0x07, "ExtendedVmExits must return 0x07 (Cpuid | Msr | Exception)");
+
+        uint32_t clflush = 0;
+        hr = whp::WHvGetCapability(whp::WHV_CAPABILITY_CODE::ProcessorClFlushSize, &clflush, sizeof(clflush), &written);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvGetCapability ProcessorClFlushSize must succeed");
+        TEST_ASSERT(clflush == 64, "CLFLUSH size must be 64 bytes");
+
+        // Boundary checks
+        uint8_t tinyBuf[1]{};
+        hr = whp::WHvGetCapability(whp::WHV_CAPABILITY_CODE::HypervisorPresent, tinyBuf, sizeof(tinyBuf), nullptr);
+        TEST_ASSERT(hr == whp::WHV_E_INSUFFICIENT_BUFFER, "Insufficient buffer must return WHV_E_INSUFFICIENT_BUFFER");
+
+        hr = whp::WHvGetCapability(whp::WHV_CAPABILITY_CODE::HypervisorPresent, nullptr, 0, nullptr);
+        TEST_ASSERT(hr == whp::WHV_E_INVALIDARG, "Null buffer must return WHV_E_INVALIDARG");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Partition Lifecycle & Property Configuration
+    // ------------------------------------------------------------------------
+    whp::WhpManager::get().reset();
+    whp::WHV_PARTITION_HANDLE hPartition = nullptr;
+    {
+        int32_t hr = whp::WHvCreatePartition(&hPartition);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvCreatePartition must succeed");
+        TEST_ASSERT(hPartition != nullptr, "Partition handle must be non-null");
+
+        // Set ProcessorCount property
+        uint32_t vCpuCount = 4;
+        hr = whp::WHvSetPartitionProperty(hPartition, whp::WHV_PARTITION_PROPERTY_CODE::ProcessorCount, &vCpuCount, sizeof(vCpuCount));
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvSetPartitionProperty ProcessorCount must succeed");
+
+        // Set ExtendedVmExits property
+        uint64_t exitsConfig = 0x07;
+        hr = whp::WHvSetPartitionProperty(hPartition, whp::WHV_PARTITION_PROPERTY_CODE::ExtendedVmExits, &exitsConfig, sizeof(exitsConfig));
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvSetPartitionProperty ExtendedVmExits must succeed");
+
+        // Query back properties
+        uint32_t readVpCount = 0;
+        uint32_t written = 0;
+        hr = whp::WHvGetPartitionProperty(hPartition, whp::WHV_PARTITION_PROPERTY_CODE::ProcessorCount, &readVpCount, sizeof(readVpCount), &written);
+        TEST_ASSERT(hr == whp::WHV_S_OK && readVpCount == 4, "WHvGetPartitionProperty ProcessorCount must be 4");
+
+        uint64_t readExits = 0;
+        hr = whp::WHvGetPartitionProperty(hPartition, whp::WHV_PARTITION_PROPERTY_CODE::ExtendedVmExits, &readExits, sizeof(readExits), &written);
+        TEST_ASSERT(hr == whp::WHV_S_OK && readExits == 0x07, "WHvGetPartitionProperty ExtendedVmExits must be 0x07");
+
+        // Finalize partition setup
+        hr = whp::WHvSetupPartition(hPartition);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvSetupPartition must succeed");
+
+        // Idempotent setup
+        hr = whp::WHvSetupPartition(hPartition);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "Second WHvSetupPartition must succeed idempotently");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Virtual Processor Management
+    // ------------------------------------------------------------------------
+    {
+        int32_t hr = whp::WHvCreateVirtualProcessor(hPartition, 0, 0);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvCreateVirtualProcessor VP 0 must succeed");
+
+        hr = whp::WHvCreateVirtualProcessor(hPartition, 0, 0);
+        TEST_ASSERT(hr == whp::WHV_E_INVALIDARG, "Duplicate VP creation must fail with WHV_E_INVALIDARG");
+
+        hr = whp::WHvCreateVirtualProcessor(hPartition, 1, 0);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvCreateVirtualProcessor VP 1 must succeed");
+
+        hr = whp::WHvCreateVirtualProcessor(hPartition, 2, 0);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvCreateVirtualProcessor VP 2 must succeed");
+
+        hr = whp::WHvDeleteVirtualProcessor(hPartition, 2);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvDeleteVirtualProcessor VP 2 must succeed");
+
+        hr = whp::WHvDeleteVirtualProcessor(hPartition, 99);
+        TEST_ASSERT(hr == whp::WHV_E_VP_NOT_FOUND, "Deleting nonexistent VP must return WHV_E_VP_NOT_FOUND");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: GPA Memory Mapping & Virtual Address Translation
+    // ------------------------------------------------------------------------
+    alignas(4096) static uint8_t s_testGuestRam[65536];
+    std::memset(s_testGuestRam, 0xCC, sizeof(s_testGuestRam));
+    {
+        whp::WHV_MAP_GPA_RANGE_FLAGS flags = static_cast<whp::WHV_MAP_GPA_RANGE_FLAGS>(
+            whp::WHvMapGpaRangeFlagRead | whp::WHvMapGpaRangeFlagWrite | whp::WHvMapGpaRangeFlagExecute);
+
+        int32_t hr = whp::WHvMapGpaRange(hPartition, s_testGuestRam, 0x00100000, sizeof(s_testGuestRam), flags);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvMapGpaRange must succeed");
+
+        // Overlapping range should fail
+        hr = whp::WHvMapGpaRange(hPartition, s_testGuestRam, 0x00100000, 4096, flags);
+        TEST_ASSERT(hr == whp::WHV_E_INVALIDARG, "Overlapping GPA mapping must fail with WHV_E_INVALIDARG");
+
+        // Virtual Address translation test
+        whp::WHV_TRANSLATE_GVA_RESULT transRes{};
+        whp::WHV_GUEST_PHYSICAL_ADDRESS outGpa = 0;
+        hr = whp::WHvTranslateGva(hPartition, 0, 0xFFFF800000102000ULL, whp::WHvTranslateGvaFlagValidateRead, &transRes, &outGpa);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvTranslateGva must succeed");
+        TEST_ASSERT(transRes.ResultCode == whp::WHV_TRANSLATE_GVA_RESULT_CODE::Success, "Translation result code must be Success");
+        TEST_ASSERT(outGpa == 0x00102000ULL, "Translated GPA must match guest physical offset");
+
+        // Unmap GPA
+        hr = whp::WHvUnmapGpaRange(hPartition, 0x00100000, sizeof(s_testGuestRam));
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvUnmapGpaRange must succeed");
+
+        // Unmap nonexistent
+        hr = whp::WHvUnmapGpaRange(hPartition, 0x00900000, 4096);
+        TEST_ASSERT(hr == whp::WHV_E_GPA_RANGE_NOT_FOUND, "Unmapping nonexistent GPA must return WHV_E_GPA_RANGE_NOT_FOUND");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Register Access & Modification
+    // ------------------------------------------------------------------------
+    {
+        whp::WHV_REGISTER_NAME regNames[] = {
+            whp::WHV_REGISTER_NAME::Rip,
+            whp::WHV_REGISTER_NAME::Rflags,
+            whp::WHV_REGISTER_NAME::Rax,
+            whp::WHV_REGISTER_NAME::Cr0
+        };
+
+        whp::WHV_REGISTER_VALUE setVals[4]{};
+        setVals[0].Reg64 = 0x00007FF800001000ULL;
+        setVals[1].Reg64 = 0x0000000000000202ULL;
+        setVals[2].Reg64 = 0x1234567890ABCDEFULL;
+        setVals[3].Reg64 = 0x0000000080050033ULL;
+
+        int32_t hr = whp::WHvSetVirtualProcessorRegisters(hPartition, 0, regNames, 4, setVals);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvSetVirtualProcessorRegisters must succeed");
+
+        whp::WHV_REGISTER_VALUE getVals[4]{};
+        hr = whp::WHvGetVirtualProcessorRegisters(hPartition, 0, regNames, 4, getVals);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvGetVirtualProcessorRegisters must succeed");
+        TEST_ASSERT(getVals[0].Reg64 == 0x00007FF800001000ULL, "Queried RIP must match written value");
+        TEST_ASSERT(getVals[1].Reg64 == 0x0000000000000202ULL, "Queried RFLAGS must match written value");
+        TEST_ASSERT(getVals[2].Reg64 == 0x1234567890ABCDEFULL, "Queried RAX must match written value");
+        TEST_ASSERT(getVals[3].Reg64 == 0x0000000080050033ULL, "Queried CR0 must match written value");
+
+        // Reset partition registers to reset vector
+        hr = whp::WHvResetPartition(hPartition);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvResetPartition must succeed");
+
+        whp::WHV_REGISTER_NAME ripName = whp::WHV_REGISTER_NAME::Rip;
+        whp::WHV_REGISTER_VALUE resetRip{};
+        hr = whp::WHvGetVirtualProcessorRegisters(hPartition, 0, &ripName, 1, &resetRip);
+        TEST_ASSERT(hr == whp::WHV_S_OK && resetRip.Reg64 == 0xFFF0, "Reset VP RIP must be at x86 reset vector 0xFFF0");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Hypervisor Execution & Exit Handling (CPUID, MMIO, I/O, Cancel)
+    // ------------------------------------------------------------------------
+    {
+        whp::WHV_RUN_VP_EXIT_CONTEXT exitCtx{};
+
+        // 1. Initial run: RIP is 0xFFF0 -> Trigger CPUID exit
+        int32_t hr = whp::WHvRunVirtualProcessor(hPartition, 0, &exitCtx, sizeof(exitCtx));
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvRunVirtualProcessor (CPUID) must succeed");
+        TEST_ASSERT(exitCtx.ExitReason == whp::WHV_RUN_VP_EXIT_REASON::X64Cpuid, "Exit reason must be X64Cpuid");
+        TEST_ASSERT(exitCtx.CpuidAccess.DefaultResultRax == 0x000806EA, "CPUID default result RAX match (Kaby/Coffee Lake)");
+        TEST_ASSERT(exitCtx.CpuidAccess.DefaultResultRdx == 0xBFEBFBFF, "CPUID default result RDX match");
+
+        // 2. Next run: RIP is 0xFFF2 -> Trigger MMIO exit
+        hr = whp::WHvRunVirtualProcessor(hPartition, 0, &exitCtx, sizeof(exitCtx));
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvRunVirtualProcessor (MMIO) must succeed");
+        TEST_ASSERT(exitCtx.ExitReason == whp::WHV_RUN_VP_EXIT_REASON::MemoryAccess, "Exit reason must be MemoryAccess");
+        TEST_ASSERT(exitCtx.MemoryAccess.Gpa == 0xFED00000, "MMIO GPA match (HPET base)");
+        TEST_ASSERT(exitCtx.MemoryAccess.AccessInfo.GpaUnmapped == 1, "MMIO unmapped flag set");
+        TEST_ASSERT(exitCtx.MemoryAccess.InstructionByteCount == 3, "MMIO instruction length 3 bytes");
+
+        // 3. Next run: RIP is 0xFFF5 -> Trigger I/O Port exit
+        hr = whp::WHvRunVirtualProcessor(hPartition, 0, &exitCtx, sizeof(exitCtx));
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvRunVirtualProcessor (I/O) must succeed");
+        TEST_ASSERT(exitCtx.ExitReason == whp::WHV_RUN_VP_EXIT_REASON::IoPortAccess, "Exit reason must be IoPortAccess");
+        TEST_ASSERT(exitCtx.IoPortAccess.PortNumber == 0x3F8, "I/O port number match (COM1 0x3F8)");
+        TEST_ASSERT(exitCtx.IoPortAccess.AccessInfo.IsWrite == 1, "I/O operation is write");
+        TEST_ASSERT(exitCtx.IoPortAccess.Rax == 'M', "I/O written value is 'M'");
+
+        // 4. Cancellation test
+        hr = whp::WHvCancelRunVirtualProcessor(hPartition, 0, 0);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvCancelRunVirtualProcessor must succeed");
+
+        hr = whp::WHvRunVirtualProcessor(hPartition, 0, &exitCtx, sizeof(exitCtx));
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvRunVirtualProcessor on canceled VP must succeed");
+        TEST_ASSERT(exitCtx.ExitReason == whp::WHV_RUN_VP_EXIT_REASON::Canceled, "Exit reason must be Canceled");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Instruction Emulation Engine (WinHvEmulation.dll)
+    // ------------------------------------------------------------------------
+    {
+        static uint8_t s_capturedIoVal = 0;
+        static uint64_t s_capturedMmioGpa = 0;
+
+        whp::WHV_EMULATOR_CALLBACKS callbacks{};
+        callbacks.Size = sizeof(callbacks);
+        callbacks.IoPortCallback = [](void* /*Context*/, whp::WHV_IO_PORT_ACCESS_CONTEXT* ioCtx) -> int32_t {
+            if (ioCtx) {
+                s_capturedIoVal = static_cast<uint8_t>(ioCtx->Rax);
+            }
+            return whp::WHV_S_OK;
+        };
+        callbacks.MemoryCallback = [](void* /*Context*/, whp::WHV_MEMORY_ACCESS_CONTEXT* memCtx) -> int32_t {
+            if (memCtx) {
+                s_capturedMmioGpa = memCtx->Gpa;
+            }
+            return whp::WHV_S_OK;
+        };
+
+        whp::WHV_EMULATOR_HANDLE hEmulator = nullptr;
+        int32_t hr = whp::WHvEmulatorCreateEmulator(&callbacks, &hEmulator);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvEmulatorCreateEmulator must succeed");
+        TEST_ASSERT(hEmulator != nullptr, "Emulator handle must be valid");
+
+        // Test I/O Emulation
+        whp::WHV_IO_PORT_ACCESS_CONTEXT ioCtx{};
+        ioCtx.PortNumber = 0x3F8;
+        ioCtx.AccessInfo.IsWrite = 1;
+        ioCtx.AccessInfo.AccessSize = 1;
+        ioCtx.Rax = 'V';
+
+        whp::WHV_EMULATOR_STATUS emuStatus{};
+        hr = whp::WHvEmulatorTryIoEmulation(hEmulator, nullptr, &ioCtx, &emuStatus);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvEmulatorTryIoEmulation must return WHV_S_OK");
+        TEST_ASSERT(emuStatus.EmulationSuccessful == 1, "Emulation status indicates success");
+        TEST_ASSERT(s_capturedIoVal == 'V', "Callback received expected I/O payload 'V'");
+
+        // Test MMIO Emulation
+        whp::WHV_MEMORY_ACCESS_CONTEXT memCtx{};
+        memCtx.Gpa = 0xFED00000;
+        memCtx.AccessInfo.AccessType = 0;
+        memCtx.InstructionByteCount = 3;
+
+        hr = whp::WHvEmulatorTryMmioEmulation(hEmulator, nullptr, &memCtx, &emuStatus);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvEmulatorTryMmioEmulation must return WHV_S_OK");
+        TEST_ASSERT(emuStatus.EmulationSuccessful == 1, "Emulation status indicates success");
+        TEST_ASSERT(s_capturedMmioGpa == 0xFED00000, "Callback received expected GPA 0xFED00000");
+
+        hr = whp::WHvEmulatorDestroyEmulator(hEmulator);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvEmulatorDestroyEmulator must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Partition Cleanup & Teardown
+    // ------------------------------------------------------------------------
+    {
+        int32_t hr = whp::WHvDeletePartition(hPartition);
+        TEST_ASSERT(hr == whp::WHV_S_OK, "WHvDeletePartition must succeed");
+
+        hr = whp::WHvDeletePartition(hPartition);
+        TEST_ASSERT(hr == whp::WHV_E_PARTITION_NOT_FOUND, "Deleting deleted partition must return WHV_E_PARTITION_NOT_FOUND");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Interactive Shell Integration (cmdWhp)
+    // ------------------------------------------------------------------------
+    {
+        whp::WhpManager::get().reset();
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // whp test
+        shell.execute("whp test", out);
+        TEST_ASSERT(out.str().find("[WHP] Self-Test Completed: ALL 16 TESTS PASSED (100%).") != std::string::npos, "whp test must pass all 16 tests");
+
+        // whp capabilities
+        out.str("");
+        shell.execute("whp capabilities", out);
+        TEST_ASSERT(out.str().find("Hypervisor Present:          YES") != std::string::npos, "whp capabilities shows Hypervisor Present");
+        TEST_ASSERT(out.str().find("Extended VM Exits:") != std::string::npos, "whp capabilities shows Extended VM Exits");
+        TEST_ASSERT(out.str().find("CLFLUSH Cache Line Size:     64 bytes") != std::string::npos, "whp capabilities shows CLFLUSH size");
+
+        // whp vms
+        out.str("");
+        shell.execute("whp vms", out);
+        TEST_ASSERT(out.str().find("DefaultSovereignContainer") != std::string::npos, "whp vms shows DefaultSovereignContainer");
+        TEST_ASSERT(out.str().find("READY / RUNNING") != std::string::npos, "whp vms shows running state");
+    }
+
+    std::cout << "[TEST] Suite 100: Windows Hypervisor Platform (WHP) & Virtualization Architecture PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -21444,6 +21815,7 @@ int main() {
     RUN_TEST(Test_WindowsBluetooth_Subsystem);
     RUN_TEST(Test_WindowsSmartCardMinidriver_Subsystem);
     RUN_TEST(Test_WindowsPOSIX_Subsystem);
+    RUN_TEST(Test_WindowsHypervisor_Platform_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
