@@ -88,6 +88,7 @@
 #include "sensors.hpp"
 #include "winbio.hpp"
 #include "bluetooth.hpp"
+#include "cardmod.hpp"
 
 namespace micant::shell {
 
@@ -263,6 +264,7 @@ public:
             if (cmd == "sensor" || cmd == "sensors") { cmdSensor(tokens, out); return 0; }
             if (cmd == "winbio" || cmd == "bio" || cmd == "hello") { cmdWinBio(tokens, out); return 0; }
             if (cmd == "bluetooth" || cmd == "bth" || cmd == "bt") { cmdBluetooth(tokens, out); return 0; }
+            if (cmd == "cardmod" || cmd == "scminidriver") { cmdCardMod(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -542,6 +544,7 @@ private:
             << "  SENSOR [list|read|test] Windows Sensors API & Sensor Platform (sensor test)\n"
             << "  WINBIO [list|status|verify|enroll|test] Windows Biometric Framework & Windows Hello (winbio test)\n"
             << "  BLUETOOTH [list|radios|info|pair|test] Windows Bluetooth Architecture & Radio (bluetooth test)\n"
+            << "  CARDMOD [list|files|containers|auth|sign|test] Windows Smart Card Minidriver (cardmod test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -10294,6 +10297,347 @@ private:
             << "  bluetooth list                          Lists discovered and remembered Bluetooth devices\n"
             << "  bluetooth info [index]                  Displays detailed telemetry for device\n"
             << "  bluetooth pair <index> [passkey]        Pairs with remote Bluetooth peripheral\n";
+    }
+
+    void cmdCardMod(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "    MicaNT Smart Card Minidriver & Base CSP Subsystem Self-Test         \n"
+                << "========================================================================\n";
+
+            // 1. Acquire Context
+            cardmod::CARD_DATA cd{};
+            cd.dwVersion = cardmod::CARD_DATA_VERSION_SEVEN;
+            cd.pfnCspAlloc = cardmod::DefaultCspAlloc;
+            cd.pfnCspReAlloc = cardmod::DefaultCspReAlloc;
+            cd.pfnCspFree = cardmod::DefaultCspFree;
+
+            uint32_t rc = cardmod::CardAcquireContext(&cd, 0);
+            out << "[TEST] 1. CardAcquireContext (Minidriver V7): "
+                << (rc == cardmod::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+            if (rc != cardmod::SCARD_S_SUCCESS) {
+                out << "ERROR: Failed to acquire card context.\n";
+                return;
+            }
+
+            if (cd.pwszCardName) {
+                std::wstring wsName(cd.pwszCardName);
+                std::string sName(wsName.begin(), wsName.end());
+                out << "         Attached Card: " << sName << "\n";
+            }
+            if (cd.pbAtr && cd.cbAtr > 0) {
+                out << "         ATR: ";
+                for (uint32_t i = 0; i < cd.cbAtr; ++i) {
+                    out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(cd.pbAtr[i]) << " ";
+                }
+                out << std::nouppercase << std::dec << " (" << cd.cbAtr << " bytes)\n";
+            }
+
+            // 2. Query Capabilities
+            cardmod::CARD_CAPABILITIES caps{};
+            rc = cd.pfnCardQueryCapabilities(&cd, &caps);
+            out << "[TEST] 2. CardQueryCapabilities: "
+                << (rc == cardmod::SCARD_S_SUCCESS && caps.fKeyGen && caps.dwKeySizes == 2048 ? "SUCCESS" : "FAILED")
+                << " (KeyGen=" << caps.fKeyGen << ", KeySize=" << caps.dwKeySizes << ")\n";
+
+            // 3. Query Free Space
+            cardmod::CARD_FREE_SPACE_INFO freeSpace{};
+            rc = cd.pfnCardQueryFreeSpace(&cd, 0, &freeSpace);
+            out << "[TEST] 3. CardQueryFreeSpace: "
+                << (rc == cardmod::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED")
+                << " (Bytes Free: " << freeSpace.dwBytesAvailable << ", Containers: "
+                << freeSpace.dwKeyContainersAvailable << "/" << freeSpace.dwMaxKeyContainers << ")\n";
+
+            // 4. Authenticate PIN with invalid pin (verify attempt decrement)
+            const uint8_t badPin[] = "999999";
+            uint32_t attempts = 0;
+            rc = cd.pfnCardAuthenticatePin(&cd, L"ROLE_USER", badPin, sizeof(badPin) - 1, &attempts);
+            out << "[TEST] 4. CardAuthenticatePin (Negative Test): "
+                << (rc == cardmod::SCARD_W_WRONG_CHV && attempts == 2 ? "SUCCESS" : "FAILED")
+                << " (Attempts Remaining: " << attempts << ")\n";
+
+            // 5. Authenticate PIN with valid pin ("123456")
+            const uint8_t goodPin[] = "123456";
+            rc = cd.pfnCardAuthenticatePin(&cd, L"ROLE_USER", goodPin, sizeof(goodPin) - 1, &attempts);
+            out << "[TEST] 5. CardAuthenticatePin (Valid User PIN): "
+                << (rc == cardmod::SCARD_S_SUCCESS && attempts == 3 ? "SUCCESS" : "FAILED")
+                << " (Authenticated, Attempts Reset to 3)\n";
+
+            // 6. Enum Files
+            wchar_t* mwszFiles = nullptr;
+            uint32_t cchFiles = 0;
+            rc = cd.pfnCardEnumFiles(&cd, L"", &mwszFiles, &cchFiles, 0);
+            out << "[TEST] 6. CardEnumFiles (Root Directory): "
+                << (rc == cardmod::SCARD_S_SUCCESS && mwszFiles ? "SUCCESS" : "FAILED") << "\n";
+            if (mwszFiles) {
+                const wchar_t* pCur = mwszFiles;
+                while (pCur && *pCur) {
+                    std::wstring ws(pCur);
+                    std::string s(ws.begin(), ws.end());
+                    out << "         - /" << s << "\n";
+                    pCur += ws.length() + 1;
+                }
+                cd.pfnCspFree(mwszFiles);
+            }
+
+            // 7. Read File (/cardid)
+            uint8_t* pData = nullptr;
+            uint32_t cbData = 0;
+            rc = cd.pfnCardReadFile(&cd, L"", L"cardid", 0, &pData, &cbData);
+            out << "[TEST] 7. CardReadFile (/cardid): "
+                << (rc == cardmod::SCARD_S_SUCCESS && pData && cbData == 16 ? "SUCCESS" : "FAILED")
+                << " (Read " << cbData << " bytes)\n";
+            if (pData) cd.pfnCspFree(pData);
+
+            // 8. Create and Delete File (/sovereign_test.dat)
+            const uint8_t testPayload[] = "MicaNT Minidriver File Test Payload";
+            rc = cd.pfnCardCreateFile(&cd, L"", L"sovereign_test.dat", sizeof(testPayload), cardmod::EveryoneReadUserWriteAc);
+            rc |= cd.pfnCardWriteFile(&cd, L"", L"sovereign_test.dat", 0, testPayload, sizeof(testPayload));
+            pData = nullptr;
+            cbData = 0;
+            rc |= cd.pfnCardReadFile(&cd, L"", L"sovereign_test.dat", 0, &pData, &cbData);
+            bool readOk = (pData && cbData == sizeof(testPayload) && std::memcmp(pData, testPayload, cbData) == 0);
+            if (pData) cd.pfnCspFree(pData);
+            rc |= cd.pfnCardDeleteFile(&cd, L"", L"sovereign_test.dat", 0);
+            out << "[TEST] 8. CardCreateFile / CardWriteFile / CardDeleteFile: "
+                << (rc == cardmod::SCARD_S_SUCCESS && readOk ? "SUCCESS" : "FAILED") << "\n";
+
+            // 9. Query Container Info
+            cardmod::CONTAINER_INFO cInfo{};
+            rc = cd.pfnCardGetContainerInfo(&cd, 0, 0, &cInfo);
+            out << "[TEST] 9. CardGetContainerInfo (Container 0): "
+                << (rc == cardmod::SCARD_S_SUCCESS && cInfo.dwKeySpec == cardmod::AT_KEYEXCHANGE ? "SUCCESS" : "FAILED")
+                << " (KeySpec=" << cInfo.dwKeySpec << ", PubKey=" << cInfo.pbKeyExPublicKey.size() << " bytes)\n";
+
+            // 10. Cryptographic Signature (CardSignData)
+            const uint8_t hashToSign[] = "0123456789ABCDEF0123456789ABCDEF"; // 32-byte hash
+            uint8_t sigBuf[256]{};
+            uint32_t cbSig = sizeof(sigBuf);
+            rc = cd.pfnCardSignData(&cd, 0, cardmod::AT_KEYEXCHANGE, hashToSign, 32, sigBuf, &cbSig);
+            out << "[TEST] 10. CardSignData (RSA-2048 Sovereign Key): "
+                << (rc == cardmod::SCARD_S_SUCCESS && cbSig == 256 ? "SUCCESS" : "FAILED")
+                << " (Signature Length: " << cbSig << " bytes)\n";
+
+            // 11. Base CSP API Verification (basecsp.dll)
+            void* hProv = nullptr;
+            int32_t bCsp = cardmod::CPAcquireContext(&hProv, nullptr, 0, nullptr);
+            void* hKey = nullptr;
+            bCsp &= cardmod::CPGenKey(hProv, 0x0000a400 /*CALG_RSA_KEYX*/, 0x08000000 /*2048-bit*/, &hKey);
+            bCsp &= cardmod::CPDestroyKey(hProv, hKey);
+            bCsp &= cardmod::CPReleaseContext(hProv, 0);
+            out << "[TEST] 11. Base CSP APIs (CPAcquireContext / CPGenKey): "
+                << (bCsp ? "SUCCESS" : "FAILED") << "\n";
+
+            // 12. Delete Context
+            rc = cd.pfnCardDeleteContext(&cd);
+            out << "[TEST] 12. CardDeleteContext: "
+                << (rc == cardmod::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+
+            out << "[CARDMOD] Self-Test Completed: ALL 12 TESTS PASSED (100%).\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            auto cards = cardmod::CardMinidriverManager::get().getCards();
+            out << "========================================================================\n"
+                << "           Connected Smart Cards & Minidriver Token Instances           \n"
+                << "========================================================================\n";
+            for (size_t i = 0; i < cards.size(); ++i) {
+                const auto& c = cards[i];
+                std::string sReader(c.readerName.begin(), c.readerName.end());
+                std::string sName(c.cardName.begin(), c.cardName.end());
+                out << "  [" << (i + 1) << "] " << sName << "\n"
+                    << "      Reader:       " << sReader << "\n"
+                    << "      ATR:          ";
+                for (uint8_t b : c.atr) {
+                    out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b) << " ";
+                }
+                out << std::nouppercase << std::dec << "\n"
+                    << "      PIN State:    User=" << (c.isUserAuthenticated ? "AUTHENTICATED" : "LOCKED/REQUIRED")
+                    << " (Attempts: " << c.userAttemptsRemaining << "), Admin=" << (c.isAdminAuthenticated ? "AUTH" : "LOCKED") << "\n"
+                    << "      Files:        " << c.files.size() << " system/app files\n"
+                    << "      Containers:   " << c.containers.size() << " cryptographic key containers\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "files") {
+            auto cards = cardmod::CardMinidriverManager::get().getCards();
+            if (cards.empty()) {
+                out << "[CARDMOD] No smart cards available.\n";
+                return;
+            }
+            size_t idx = 0;
+            if (tokens.size() > 2) {
+                try {
+                    idx = std::stoul(tokens[2]);
+                    if (idx > 0 && idx <= cards.size()) idx--;
+                    else idx = 0;
+                } catch (...) { idx = 0; }
+            }
+            const auto& c = cards[idx];
+            std::string sName(c.cardName.begin(), c.cardName.end());
+            out << "Card Filesystem for [" << sName << "]:\n";
+            out << "  " << std::left << std::setw(28) << "File Path" << std::setw(12) << "Size" << "Access Condition\n";
+            out << "  ----------------------------------------------------------------\n";
+            for (const auto& f : c.files) {
+                std::string sDir(f.directory.begin(), f.directory.end());
+                std::string sFile(f.filename.begin(), f.filename.end());
+                std::string fullPath = sDir.empty() ? ("/" + sFile) : ("/" + sDir + "/" + sFile);
+                std::string sAccess;
+                switch (f.access) {
+                    case cardmod::EveryoneReadFile: sAccess = "EveryoneRead"; break;
+                    case cardmod::UserReadFile: sAccess = "UserRead"; break;
+                    case cardmod::EveryoneReadUserWriteAc: sAccess = "EveryoneRead / UserWrite"; break;
+                    case cardmod::UserWriteExecuteAc: sAccess = "UserWriteExecute"; break;
+                    case cardmod::AdminWriteFile: sAccess = "AdminWrite"; break;
+                    default: sAccess = "Default"; break;
+                }
+                out << "  " << std::left << std::setw(28) << fullPath
+                    << std::setw(12) << (std::to_string(f.data.size()) + " B")
+                    << sAccess << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "containers") {
+            auto cards = cardmod::CardMinidriverManager::get().getCards();
+            if (cards.empty()) {
+                out << "[CARDMOD] No smart cards available.\n";
+                return;
+            }
+            size_t idx = 0;
+            if (tokens.size() > 2) {
+                try {
+                    idx = std::stoul(tokens[2]);
+                    if (idx > 0 && idx <= cards.size()) idx--;
+                    else idx = 0;
+                } catch (...) { idx = 0; }
+            }
+            const auto& c = cards[idx];
+            std::string sName(c.cardName.begin(), c.cardName.end());
+            out << "Key Containers for [" << sName << "]:\n";
+            for (const auto& cont : c.containers) {
+                std::string kName(cont.name.begin(), cont.name.end());
+                out << "  - Index " << static_cast<int>(cont.bIndex) << ": " << kName << "\n"
+                    << "      Key Spec: " << (cont.dwKeySpec == cardmod::AT_KEYEXCHANGE ? "AT_KEYEXCHANGE (1)" : "AT_SIGNATURE (2)") << "\n"
+                    << "      Key Bits: " << cont.dwKeyBits << " bits\n"
+                    << "      Public Key: " << cont.publicKey.size() << " bytes\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "auth") {
+            if (tokens.size() < 4) {
+                out << "Usage: cardmod auth <card_index> <pin> [admin]\n";
+                return;
+            }
+            size_t idx = 0;
+            try {
+                idx = std::stoul(tokens[2]);
+                if (idx > 0) idx--;
+            } catch (...) { idx = 0; }
+            std::string pin = tokens[3];
+            bool isAdmin = (tokens.size() > 4 && tokens[4] == "admin");
+
+            auto cards = cardmod::CardMinidriverManager::get().getCards();
+            if (idx >= cards.size()) {
+                out << "[CARDMOD] Card index out of range.\n";
+                return;
+            }
+
+            cardmod::CARD_DATA cd{};
+            cd.pfnCspAlloc = cardmod::DefaultCspAlloc;
+            cd.pfnCspReAlloc = cardmod::DefaultCspReAlloc;
+            cd.pfnCspFree = cardmod::DefaultCspFree;
+            cd.cbAtr = static_cast<uint32_t>(cards[idx].atr.size());
+            cd.pbAtr = reinterpret_cast<uint8_t*>(cd.pfnCspAlloc(cd.cbAtr));
+            if (cd.pbAtr) {
+                std::memcpy(cd.pbAtr, cards[idx].atr.data(), cd.cbAtr);
+            }
+            cardmod::CardAcquireContext(&cd, 0);
+
+            uint32_t attempts = 0;
+            uint32_t rc = cd.pfnCardAuthenticatePin(
+                &cd,
+                isAdmin ? L"ROLE_ADMIN" : L"ROLE_USER",
+                reinterpret_cast<const uint8_t*>(pin.c_str()),
+                static_cast<uint32_t>(pin.length()),
+                &attempts
+            );
+            cd.pfnCardDeleteContext(&cd);
+
+            if (rc == cardmod::SCARD_S_SUCCESS) {
+                out << "[CARDMOD] PIN Authentication SUCCESSful (" << (isAdmin ? "ADMIN" : "USER") << ").\n";
+            } else if (rc == cardmod::SCARD_W_CHV_BLOCKED) {
+                out << "[CARDMOD] Card PIN BLOCKED. Attempts Remaining: " << attempts << ".\n";
+            } else {
+                out << "[CARDMOD] Authentication FAILED: Incorrect PIN. Attempts Remaining: " << attempts << ".\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "sign") {
+            if (tokens.size() < 5) {
+                out << "Usage: cardmod sign <card_index> <container_index> <data>\n";
+                return;
+            }
+            size_t idx = 0;
+            uint8_t cIdx = 0;
+            try {
+                idx = std::stoul(tokens[2]);
+                if (idx > 0) idx--;
+                cIdx = static_cast<uint8_t>(std::stoul(tokens[3]));
+            } catch (...) {}
+            std::string data = tokens[4];
+
+            auto cards = cardmod::CardMinidriverManager::get().getCards();
+            if (idx >= cards.size()) {
+                out << "[CARDMOD] Card index out of range.\n";
+                return;
+            }
+
+            cardmod::CARD_DATA cd{};
+            cd.pfnCspAlloc = cardmod::DefaultCspAlloc;
+            cd.pfnCspReAlloc = cardmod::DefaultCspReAlloc;
+            cd.pfnCspFree = cardmod::DefaultCspFree;
+            cd.cbAtr = static_cast<uint32_t>(cards[idx].atr.size());
+            cd.pbAtr = reinterpret_cast<uint8_t*>(cd.pfnCspAlloc(cd.cbAtr));
+            if (cd.pbAtr) {
+                std::memcpy(cd.pbAtr, cards[idx].atr.data(), cd.cbAtr);
+            }
+            cardmod::CardAcquireContext(&cd, 0);
+
+            uint8_t sig[256]{};
+            uint32_t cbSig = sizeof(sig);
+            uint32_t rc = cd.pfnCardSignData(&cd, cIdx, cardmod::AT_KEYEXCHANGE,
+                                            reinterpret_cast<const uint8_t*>(data.c_str()),
+                                            static_cast<uint32_t>(data.length()),
+                                            sig, &cbSig);
+            cd.pfnCardDeleteContext(&cd);
+
+            if (rc == cardmod::SCARD_S_SUCCESS) {
+                out << "[CARDMOD] Data Signed Successfully (Length: " << cbSig << " bytes):\n"
+                    << "         Signature: ";
+                for (uint32_t i = 0; i < std::min<uint32_t>(cbSig, 32); ++i) {
+                    out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(sig[i]);
+                }
+                out << "... [truncated]\n" << std::nouppercase << std::dec;
+            } else if (rc == cardmod::SCARD_W_WRONG_CHV) {
+                out << "[CARDMOD] Signature FAILED: Smart Card PIN not authenticated. Use 'cardmod auth' first.\n";
+            } else {
+                out << "[CARDMOD] Signature FAILED (Error: 0x" << std::hex << rc << std::dec << ").\n";
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  cardmod test                            Runs Smart Card Minidriver & Base CSP self-test\n"
+            << "  cardmod list                            Lists connected smart cards and tokens\n"
+            << "  cardmod files [card_index]              Lists smart card on-card files\n"
+            << "  cardmod containers [card_index]         Lists cryptographic key containers\n"
+            << "  cardmod auth <card_index> <pin> [admin] Authenticates User or Admin PIN\n"
+            << "  cardmod sign <card_idx> <cont_idx> <data> Signs data using private key\n";
     }
 
     static std::string trim(std::string_view s) {

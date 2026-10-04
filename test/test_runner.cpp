@@ -119,6 +119,7 @@
 #include "micant/sensors.hpp"
 #include "micant/winbio.hpp"
 #include "micant/bluetooth.hpp"
+#include "micant/cardmod.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -20700,6 +20701,324 @@ void Test_WindowsBluetooth_Subsystem() {
     std::cout << "[TEST] Suite 97: Windows Bluetooth Core Architecture & Radio Subsystem PASSED.\n";
 }
 
+void Test_WindowsSmartCardMinidriver_Subsystem() {
+    std::cout << "[TEST] Suite 98: Running Windows Smart Card Minidriver & Base CSP Subsystem Tests...\n";
+
+    auto& ldr = ldr::DynamicLoader::get();
+    cardmod::InitializeCardMinidriverSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (msclmd.dll / basecsp.dll)
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(ldr.getExport("msclmd.dll", "CardAcquireContext") != nullptr, "msclmd.dll must export CardAcquireContext");
+    TEST_ASSERT(ldr.getExport("msclmd.dll", "CardDeleteContext") != nullptr, "msclmd.dll must export CardDeleteContext");
+    TEST_ASSERT(ldr.getExport("msclmd.dll", "DllCanUnloadNow") != nullptr, "msclmd.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("msclmd.dll", "DllRegisterServer") != nullptr, "msclmd.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("msclmd.dll", "DllUnregisterServer") != nullptr, "msclmd.dll must export DllUnregisterServer");
+
+    TEST_ASSERT(ldr.getExport("basecsp.dll", "CPAcquireContext") != nullptr, "basecsp.dll must export CPAcquireContext");
+    TEST_ASSERT(ldr.getExport("basecsp.dll", "CPReleaseContext") != nullptr, "basecsp.dll must export CPReleaseContext");
+    TEST_ASSERT(ldr.getExport("basecsp.dll", "CPGenKey") != nullptr, "basecsp.dll must export CPGenKey");
+    TEST_ASSERT(ldr.getExport("basecsp.dll", "CPDeriveKey") != nullptr, "basecsp.dll must export CPDeriveKey");
+    TEST_ASSERT(ldr.getExport("basecsp.dll", "CPDestroyKey") != nullptr, "basecsp.dll must export CPDestroyKey");
+    TEST_ASSERT(ldr.getExport("basecsp.dll", "CPEncrypt") != nullptr, "basecsp.dll must export CPEncrypt");
+    TEST_ASSERT(ldr.getExport("basecsp.dll", "CPDecrypt") != nullptr, "basecsp.dll must export CPDecrypt");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verMsclmd = version::VersionDatabase::Instance().FindModule("msclmd.dll");
+        TEST_ASSERT(verMsclmd != nullptr, "VersionDatabase must contain msclmd.dll");
+        TEST_ASSERT(verMsclmd->stringTable.at("FileDescription") == "Microsoft Smart Card Minidriver", "msclmd.dll description match");
+        TEST_ASSERT(verMsclmd->stringTable.at("OriginalFilename") == "msclmd.dll", "msclmd.dll original filename match");
+        TEST_ASSERT(verMsclmd->stringTable.at("ProductName") == "MicaNT Smart Card Subsystem", "msclmd.dll product name match");
+
+        const auto* verBasecsp = version::VersionDatabase::Instance().FindModule("basecsp.dll");
+        TEST_ASSERT(verBasecsp != nullptr, "VersionDatabase must contain basecsp.dll");
+        TEST_ASSERT(verBasecsp->stringTable.at("FileDescription") == "Base Smart Card Cryptographic Service Provider", "basecsp.dll description match");
+        TEST_ASSERT(verBasecsp->stringTable.at("OriginalFilename") == "basecsp.dll", "basecsp.dll original filename match");
+        TEST_ASSERT(verBasecsp->stringTable.at("ProductName") == "MicaNT Smart Card Subsystem", "basecsp.dll product name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: CardAcquireContext & ATR / Card Name Allocation
+    // ------------------------------------------------------------------------
+    cardmod::CardMinidriverManager::get().reset();
+    cardmod::CARD_DATA cd{};
+    cd.dwVersion = cardmod::CARD_DATA_VERSION_SEVEN;
+    cd.pfnCspAlloc = cardmod::DefaultCspAlloc;
+    cd.pfnCspReAlloc = cardmod::DefaultCspReAlloc;
+    cd.pfnCspFree = cardmod::DefaultCspFree;
+
+    uint32_t rc = cardmod::CardAcquireContext(&cd, 0);
+    TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardAcquireContext must succeed");
+    TEST_ASSERT(cd.pwszCardName != nullptr, "pwszCardName must be allocated");
+    TEST_ASSERT(std::wstring(cd.pwszCardName) == L"MicaNT Titan Sovereign PIV Token", "CardName match");
+    TEST_ASSERT(cd.pbAtr != nullptr && cd.cbAtr == 18, "ATR must be allocated and 18 bytes");
+    TEST_ASSERT(cd.pbAtr[0] == 0x3B && cd.pbAtr[1] == 0x7D, "ATR header match");
+    TEST_ASSERT(cd.pfnCardQueryCapabilities != nullptr, "pfnCardQueryCapabilities populated");
+    TEST_ASSERT(cd.pfnCardAuthenticatePin != nullptr, "pfnCardAuthenticatePin populated");
+    TEST_ASSERT(cd.pfnCardReadFile != nullptr, "pfnCardReadFile populated");
+    TEST_ASSERT(cd.pfnCardWriteFile != nullptr, "pfnCardWriteFile populated");
+    TEST_ASSERT(cd.pfnCardSignData != nullptr, "pfnCardSignData populated");
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Card Capabilities & Free Space Inspection
+    // ------------------------------------------------------------------------
+    {
+        cardmod::CARD_CAPABILITIES caps{};
+        rc = cd.pfnCardQueryCapabilities(&cd, &caps);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardQueryCapabilities must succeed");
+        TEST_ASSERT(caps.fKeyGen == 1, "fKeyGen capability must be 1");
+        TEST_ASSERT(caps.dwKeySizes == 2048, "dwKeySizes must be 2048");
+
+        cardmod::CARD_FREE_SPACE_INFO freeSpace{};
+        rc = cd.pfnCardQueryFreeSpace(&cd, 0, &freeSpace);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardQueryFreeSpace must succeed");
+        TEST_ASSERT(freeSpace.dwBytesAvailable == 61440, "dwBytesAvailable must be 60KB");
+        TEST_ASSERT(freeSpace.dwKeyContainersAvailable == 14, "dwKeyContainersAvailable match");
+        TEST_ASSERT(freeSpace.dwMaxKeyContainers == 16, "dwMaxKeyContainers match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: PIN Authentication & Attempt Counter Verification
+    // ------------------------------------------------------------------------
+    {
+        uint32_t attempts = 0;
+        const uint8_t badPin1[] = "000000";
+        rc = cd.pfnCardAuthenticatePin(&cd, L"ROLE_USER", badPin1, sizeof(badPin1) - 1, &attempts);
+        TEST_ASSERT(rc == cardmod::SCARD_W_WRONG_CHV, "Wrong PIN must return SCARD_W_WRONG_CHV");
+        TEST_ASSERT(attempts == 2, "Attempts remaining should decrement to 2");
+
+        const uint8_t badPin2[] = "111111";
+        rc = cd.pfnCardAuthenticatePin(&cd, L"ROLE_USER", badPin2, sizeof(badPin2) - 1, &attempts);
+        TEST_ASSERT(rc == cardmod::SCARD_W_WRONG_CHV, "Wrong PIN second attempt returns SCARD_W_WRONG_CHV");
+        TEST_ASSERT(attempts == 1, "Attempts remaining should decrement to 1");
+
+        const uint8_t goodPin[] = "123456";
+        rc = cd.pfnCardAuthenticatePin(&cd, L"ROLE_USER", goodPin, sizeof(goodPin) - 1, &attempts);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "Valid PIN must authenticate successfully");
+        TEST_ASSERT(attempts == 3, "Attempts remaining should reset to 3 upon success");
+
+        // Admin PIN
+        const uint8_t adminPin[] = "12345678";
+        rc = cd.pfnCardAuthenticatePin(&cd, L"ROLE_ADMIN", adminPin, sizeof(adminPin) - 1, &attempts);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "Admin PIN must authenticate");
+
+        // Deauthenticate
+        rc = cd.pfnCardDeauthenticate(&cd, L"ROLE_USER", 0);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "User deauthenticate must succeed");
+        rc = cd.pfnCardDeauthenticate(&cd, L"ROLE_ADMIN", 0);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "Admin deauthenticate must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: On-Card File System Hierarchy
+    // ------------------------------------------------------------------------
+    {
+        wchar_t* mwszFiles = nullptr;
+        uint32_t cchFiles = 0;
+        rc = cd.pfnCardEnumFiles(&cd, L"", &mwszFiles, &cchFiles, 0);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS && mwszFiles != nullptr, "CardEnumFiles must succeed");
+        std::vector<std::wstring> enumList;
+        const wchar_t* p = mwszFiles;
+        while (p && *p) {
+            enumList.push_back(p);
+            p += wcslen(p) + 1;
+        }
+        cd.pfnCspFree(mwszFiles);
+        TEST_ASSERT(std::find(enumList.begin(), enumList.end(), L"cardid") != enumList.end(), "cardid file found");
+        TEST_ASSERT(std::find(enumList.begin(), enumList.end(), L"cardcf") != enumList.end(), "cardcf file found");
+        TEST_ASSERT(std::find(enumList.begin(), enumList.end(), L"cardapps") != enumList.end(), "cardapps file found");
+
+        cardmod::CARD_FILE_INFO fInfo{};
+        rc = cd.pfnCardGetFileInfo(&cd, L"", L"cardid", &fInfo);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardGetFileInfo on cardid must succeed");
+        TEST_ASSERT(fInfo.cbFileSize == 16, "cardid size must be 16 bytes");
+        TEST_ASSERT(fInfo.AccessCondition == cardmod::EveryoneReadFile, "cardid access condition match");
+
+        uint8_t* pData = nullptr;
+        uint32_t cbData = 0;
+        rc = cd.pfnCardReadFile(&cd, L"", L"cardid", 0, &pData, &cbData);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS && pData != nullptr, "CardReadFile on cardid must succeed");
+        TEST_ASSERT(cbData == 16, "Read 16 bytes for cardid");
+        TEST_ASSERT(pData[0] == 0x11 && pData[15] == 0x01, "cardid payload match");
+        cd.pfnCspFree(pData);
+
+        // Read cmapfile
+        pData = nullptr;
+        cbData = 0;
+        rc = cd.pfnCardReadFile(&cd, L"mscp", L"cmapfile", 0, &pData, &cbData);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS && pData != nullptr && cbData == 8, "cmapfile must read 8 bytes");
+        cd.pfnCspFree(pData);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: On-Card Dynamic File Creation, Write, Read, and Deletion
+    // ------------------------------------------------------------------------
+    {
+        const uint8_t dynamicData[] = "MicaNT Sovereign Minidriver Dynamic File Payload 2026";
+        uint32_t payloadLen = sizeof(dynamicData);
+        rc = cd.pfnCardCreateFile(&cd, L"", L"dynamic_test.bin", payloadLen, cardmod::EveryoneReadUserWriteAc);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardCreateFile must succeed");
+
+        rc = cd.pfnCardWriteFile(&cd, L"", L"dynamic_test.bin", 0, dynamicData, payloadLen);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardWriteFile must succeed");
+
+        uint8_t* pRead = nullptr;
+        uint32_t cbRead = 0;
+        rc = cd.pfnCardReadFile(&cd, L"", L"dynamic_test.bin", 0, &pRead, &cbRead);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS && pRead != nullptr, "CardReadFile on dynamic_test.bin must succeed");
+        TEST_ASSERT(cbRead == payloadLen && std::memcmp(pRead, dynamicData, payloadLen) == 0, "Payload match");
+        cd.pfnCspFree(pRead);
+
+        rc = cd.pfnCardDeleteFile(&cd, L"", L"dynamic_test.bin", 0);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardDeleteFile must succeed");
+
+        pRead = nullptr;
+        rc = cd.pfnCardReadFile(&cd, L"", L"dynamic_test.bin", 0, &pRead, &cbRead);
+        TEST_ASSERT(rc == cardmod::SCARD_E_FILE_NOT_FOUND, "Deleted file must return SCARD_E_FILE_NOT_FOUND");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Key Container Management (Query & Create Container)
+    // ------------------------------------------------------------------------
+    {
+        cardmod::CONTAINER_INFO ci0{};
+        rc = cd.pfnCardGetContainerInfo(&cd, 0, 0, &ci0);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardGetContainerInfo index 0 must succeed");
+        TEST_ASSERT(ci0.dwKeySpec == cardmod::AT_KEYEXCHANGE, "Container 0 key spec must be AT_KEYEXCHANGE");
+        TEST_ASSERT(ci0.pbKeyExPublicKey.size() == 256, "Container 0 RSA-2048 modulus size must be 256 bytes");
+
+        cardmod::CONTAINER_INFO ci1{};
+        rc = cd.pfnCardGetContainerInfo(&cd, 1, 0, &ci1);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardGetContainerInfo index 1 must succeed");
+        TEST_ASSERT(ci1.dwKeySpec == cardmod::AT_SIGNATURE, "Container 1 key spec must be AT_SIGNATURE");
+        TEST_ASSERT(ci1.pbSigPublicKey.size() == 256, "Container 1 RSA-2048 modulus size must be 256 bytes");
+
+        // Create Container 2
+        rc = cd.pfnCardCreateContainer(&cd, 2, 0, cardmod::AT_KEYEXCHANGE, 1024, nullptr);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardCreateContainer index 2 must succeed");
+
+        cardmod::CONTAINER_INFO ci2{};
+        rc = cd.pfnCardGetContainerInfo(&cd, 2, 0, &ci2);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS && ci2.pbKeyExPublicKey.size() == 128, "Container 2 is 1024-bit (128 bytes)");
+
+        rc = cd.pfnCardDeleteContainer(&cd, 2, 0);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardDeleteContainer index 2 must succeed");
+
+        rc = cd.pfnCardGetContainerInfo(&cd, 2, 0, &ci2);
+        TEST_ASSERT(rc == cardmod::SCARD_E_FILE_NOT_FOUND, "Deleted container must not be found");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Cryptographic Operations (CardSignData & Base CSP)
+    // ------------------------------------------------------------------------
+    {
+        // Unauthenticated signing should fail with wrong CHV
+        uint8_t hash[32] = { 0xDE, 0xAD, 0xBE, 0xEF };
+        uint8_t signature[256]{};
+        uint32_t cbSig = sizeof(signature);
+        rc = cd.pfnCardSignData(&cd, 0, cardmod::AT_KEYEXCHANGE, hash, sizeof(hash), signature, &cbSig);
+        TEST_ASSERT(rc == cardmod::SCARD_W_WRONG_CHV, "Unauthenticated CardSignData must fail with SCARD_W_WRONG_CHV");
+
+        // Authenticate User PIN
+        const uint8_t pin[] = "123456";
+        uint32_t attempts = 0;
+        rc = cd.pfnCardAuthenticatePin(&cd, L"ROLE_USER", pin, sizeof(pin) - 1, &attempts);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardAuthenticatePin must succeed");
+
+        // Query size only
+        cbSig = 0;
+        rc = cd.pfnCardSignData(&cd, 0, cardmod::AT_KEYEXCHANGE, hash, sizeof(hash), nullptr, &cbSig);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS && cbSig == 256, "Query signature size returns 256");
+
+        // Perform signature
+        rc = cd.pfnCardSignData(&cd, 0, cardmod::AT_KEYEXCHANGE, hash, sizeof(hash), signature, &cbSig);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS && cbSig == 256, "CardSignData succeeds with 256-byte signature");
+
+        // Base CSP API verification
+        void* hProv = nullptr;
+        int32_t bCsp = cardmod::CPAcquireContext(&hProv, nullptr, 0, nullptr);
+        TEST_ASSERT(bCsp == 1 && hProv != nullptr, "CPAcquireContext must succeed");
+
+        void* hGenKey = nullptr;
+        bCsp = cardmod::CPGenKey(hProv, 0x0000a400, 0x08000000, &hGenKey);
+        TEST_ASSERT(bCsp == 1 && hGenKey != nullptr, "CPGenKey must succeed");
+
+        void* hDerivedKey = nullptr;
+        bCsp = cardmod::CPDeriveKey(hProv, 0x00006801, nullptr, 0, &hDerivedKey);
+        TEST_ASSERT(bCsp == 1 && hDerivedKey != nullptr, "CPDeriveKey must succeed");
+
+        uint32_t encLen = 16;
+        bCsp = cardmod::CPEncrypt(hProv, hGenKey, nullptr, 1, 0, nullptr, &encLen, 16);
+        TEST_ASSERT(bCsp == 1, "CPEncrypt must succeed");
+
+        bCsp = cardmod::CPDecrypt(hProv, hGenKey, nullptr, 1, 0, nullptr, &encLen);
+        TEST_ASSERT(bCsp == 1, "CPDecrypt must succeed");
+
+        bCsp = cardmod::CPDestroyKey(hProv, hGenKey);
+        TEST_ASSERT(bCsp == 1, "CPDestroyKey must succeed");
+
+        bCsp = cardmod::CPDestroyKey(hProv, hDerivedKey);
+        TEST_ASSERT(bCsp == 1, "CPDestroyKey derived key must succeed");
+
+        bCsp = cardmod::CPReleaseContext(hProv, 0);
+        TEST_ASSERT(bCsp == 1, "CPReleaseContext must succeed");
+
+        // Cleanup card context
+        rc = cd.pfnCardDeleteContext(&cd);
+        TEST_ASSERT(rc == cardmod::SCARD_S_SUCCESS, "CardDeleteContext must succeed");
+        TEST_ASSERT(cd.pbAtr == nullptr && cd.pwszCardName == nullptr, "Context resources freed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Interactive Shell Integration (cmdCardMod)
+    // ------------------------------------------------------------------------
+    {
+        cardmod::CardMinidriverManager::get().reset();
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // cardmod test
+        shell.execute("cardmod test", out);
+        TEST_ASSERT(out.str().find("[CARDMOD] Self-Test Completed: ALL 12 TESTS PASSED (100%).") != std::string::npos, "cardmod test must pass all 12 tests");
+
+        // cardmod list
+        out.str("");
+        shell.execute("cardmod list", out);
+        TEST_ASSERT(out.str().find("MicaNT Titan Sovereign PIV Token") != std::string::npos, "cardmod list shows PIV token");
+        TEST_ASSERT(out.str().find("MicaNT FIDO2 Hardware Token") != std::string::npos, "cardmod list shows FIDO2 token");
+
+        // cardmod files 1
+        out.str("");
+        shell.execute("cardmod files 1", out);
+        TEST_ASSERT(out.str().find("/cardid") != std::string::npos, "cardmod files shows /cardid");
+        TEST_ASSERT(out.str().find("/cardcf") != std::string::npos, "cardmod files shows /cardcf");
+        TEST_ASSERT(out.str().find("/cardapps") != std::string::npos, "cardmod files shows /cardapps");
+        TEST_ASSERT(out.str().find("/mscp/cmapfile") != std::string::npos, "cardmod files shows /mscp/cmapfile");
+
+        // cardmod containers 1
+        out.str("");
+        shell.execute("cardmod containers 1", out);
+        TEST_ASSERT(out.str().find("Titan_PIV_Auth") != std::string::npos, "cardmod containers shows Titan_PIV_Auth");
+        TEST_ASSERT(out.str().find("Titan_PIV_DigitalSig") != std::string::npos, "cardmod containers shows Titan_PIV_DigitalSig");
+
+        // cardmod auth 1 123456
+        out.str("");
+        shell.execute("cardmod auth 1 123456", out);
+        TEST_ASSERT(out.str().find("PIN Authentication SUCCESSful (USER)") != std::string::npos, "cardmod auth must succeed");
+
+        // cardmod sign 1 0 TestSignatureData
+        out.str("");
+        shell.execute("cardmod sign 1 0 TestSignatureData", out);
+        TEST_ASSERT(out.str().find("Data Signed Successfully (Length: 256 bytes)") != std::string::npos, "cardmod sign must succeed");
+    }
+
+    std::cout << "[TEST] Suite 98: Windows Smart Card Minidriver & Base CSP Architecture PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -20802,6 +21121,7 @@ int main() {
     RUN_TEST(Test_WindowsSensors_Subsystem);
     RUN_TEST(Test_WindowsBiometrics_Subsystem);
     RUN_TEST(Test_WindowsBluetooth_Subsystem);
+    RUN_TEST(Test_WindowsSmartCardMinidriver_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

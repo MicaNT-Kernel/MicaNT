@@ -148,7 +148,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 70: Windows Bluetooth Core Architecture & Radio      [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 71: Windows Smart Card Minidriver & Base CSP         [PLANNED]        │
+│ Phase 71: Windows Smart Card Minidriver & Base CSP         [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 72: Windows POSIX Subsystem & UNIX Compatibility     [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1655,21 +1657,44 @@
 
 ---
 
-### Phase 71: Windows Smart Card Minidriver & Base CSP Architecture (`cardmod.h`, `basecsp.dll`, `msclmd.dll`, `ScardSvr`) (PLANNED)
-- [ ] **Clean-Room Windows Smart Card Minidriver Architecture (`include/micant/cardmod.hpp`, `cardmod.h`, `basecsp.dll`, `msclmd.dll`)**:
-  - Smart Card Minidriver Specification (v7.0/v8.0) Core C Interface (`CARD_DATA`): `CardAcquireContext`, `CardDeleteContext`, `CardAuthenticatePin`, `CardGetChallenge`, `CardAuthenticateChallenge`, `CardDeauthenticate`, `CardCreateFile`, `CardReadFile`, `CardWriteFile`, `CardDeleteFile`, `CardEnumFiles`, `CardGetFileInfo`, `CardCreateContainer`, `CardDeleteContainer`, `CardGetContainerInfo`, `CardPrivateKeyDecrypt`, `CardSignData`, `CardConstructDHAgreement`, `CardDeriveKey`.
-  - Cryptographic Container Architecture: Key exchange (`AT_KEYEXCHANGE`) and signature (`AT_SIGNATURE`) containers, PIN caching and verification policy, physical/virtual file system layout (`/mscp`, `/cardapps`, `/cardid`), card cache lookup (`CardGetProperty`, `CardSetProperty`).
-  - Sovereign Card Minidriver Manager (`CardMinidriverManager`): pre-seeded PIV / CAC card profiles (Titan Sovereign PIV Card, CAC Security Identity, FIDO2 / CTAP2 Token), cryptographic container generation, RSA-2048 and ECC P-256 / P-384 hardware signing and decryption simulation.
-  - Dynamic export registration in `ldr::DynamicLoader` for `basecsp.dll` and `msclmd.dll`.
+### Phase 71: Windows Smart Card Minidriver & Base CSP Architecture (`cardmod.h`, `basecsp.dll`, `msclmd.dll`, `ScardSvr`) (100% Completed)
+- [x] **Clean-Room Windows Smart Card Minidriver Architecture (`include/micant/cardmod.hpp`, `cardmod.h`, `basecsp.dll`, `msclmd.dll`)**:
+  - Smart Card Minidriver Specification (v7.0/v8.0) Core C Interface (`CARD_DATA`): `CardAcquireContext`, `CardDeleteContext`, `CardAuthenticatePin`, `CardDeauthenticate`, `CardCreateFile`, `CardReadFile`, `CardWriteFile`, `CardDeleteFile`, `CardEnumFiles`, `CardGetFileInfo`, `CardCreateContainer`, `CardDeleteContainer`, `CardGetContainerInfo`, `CardSignData`, `CardQueryCapabilities`, `CardQueryFreeSpace`.
+  - Memory allocator function callbacks (`DefaultCspAlloc`, `DefaultCspReAlloc`, `DefaultCspFree`) matching CSP memory management contract.
+  - Cryptographic Container Architecture: Key exchange (`AT_KEYEXCHANGE`) and signature (`AT_SIGNATURE`) containers, PIN caching and verification policy, physical/virtual file system layout (`/mscp`, `/cardapps`, `/cardid`, `/cardcf`), on-card access conditions (`EveryoneReadFile`, `EveryoneReadUserWriteAc`, `AdminWriteFile`).
+  - Sovereign Card Minidriver Manager (`CardMinidriverManager`): pre-seeded PIV / CAC card profiles (`MicaNT Titan Sovereign PIV Token` with NIST SP 800-73 ATR, `MicaNT FIDO2 Hardware Token` with CTAP2 ATR), cryptographic container generation, RSA-2048 and ECC P-256 hardware signing simulation.
+  - Base CSP APIs (`CPAcquireContext`, `CPReleaseContext`, `CPGenKey`, `CPDeriveKey`, `CPDestroyKey`, `CPEncrypt`, `CPDecrypt`).
+  - Dynamic export registration in `ldr::DynamicLoader` for `basecsp.dll` and `msclmd.dll` (including `DllCanUnloadNow`, `DllRegisterServer`, `DllUnregisterServer`).
   - Version database records in `VersionDatabase` for `basecsp.dll` and `msclmd.dll`.
-- [ ] **Interactive CLI Utilities (`cardmod` / `scminidriver`)**:
-  - `cardmod list` (Lists smart card readers and inserted smart card ATRs).
-  - `cardmod files [reader]` (Browses the smart card file system directory structure).
-  - `cardmod containers [reader]` (Enumerates cryptographic key containers and public keys).
-  - `cardmod auth <reader> <pin>` (Authenticates user PIN against on-card security manager).
-  - `cardmod test` (Executes end-to-end self-test of `CARD_DATA` lifecycle, PIN verification, file I/O, and signature generation).
-- [ ] **Unit Test Suite 98 (`Test_WindowsSmartCardMinidriver_Subsystem`)**:
-  - Automated validation of `CARD_DATA` minidriver function tables, file system operations, cryptographic signing, container management, and CLI commands.
+- [x] **Interactive CLI Utilities (`cardmod` / `scminidriver`)**:
+  - `cardmod list` (Lists connected smart cards, readers, ATR, PIN state, file and container counts).
+  - `cardmod files [card_index]` (Browses on-card file system hierarchy and access conditions).
+  - `cardmod containers [card_index]` (Enumerates cryptographic key containers and public key specifications).
+  - `cardmod auth <card_index> <pin> [admin]` (Authenticates user or admin PIN against on-card security manager).
+  - `cardmod sign <card_idx> <cont_idx> <data>` (Performs on-card private key cryptographic signing).
+  - `cardmod test` (Executes end-to-end 12-stage self-test of minidriver context, capabilities, free space, PIN authentication, file I/O, signing, Base CSP, and teardown).
+- [x] **Unit Test Suite 98 (`Test_WindowsSmartCardMinidriver_Subsystem`)**:
+  - Automated validation of `CARD_DATA` minidriver function tables, memory allocators, capabilities, PIN authentication with attempt decrement and lockout, file system operations, key container lifecycle, cryptographic signing with RSA-2048, Base CSP APIs, and CLI commands.
+  - All 98 unit test suites passing with 100% success rate (98 Passed, 0 Failed).
+
+---
+
+### Phase 72: Windows POSIX Subsystem & UNIX Compatibility (`posix.hpp`, `psxss.exe`, `psxdll.dll`, `posix.exe`) (PLANNED)
+- [ ] **Clean-Room Windows POSIX.1 Subsystem Architecture (`include/micant/posix.hpp`, `psxss.exe`, `psxdll.dll`, `posix.exe`)**:
+  - Dave Cutler's historic Windows NT POSIX.1 / Subsystem for UNIX-based Applications (SUA / Interix) architecture.
+  - ALPC-based Subsystem Server (`psxss.exe` / `PosixSubsystemServer`) communicating via `\RPC Control\PosixPort`.
+  - POSIX API client library (`psxdll.dll`): `fork`, `execve`, `waitpid`, `getpid`, `getppid`, `getuid`, `geteuid`, `getgid`, `kill`, `sigaction`, `pipe`, `dup2`, `open`, `read`, `write`, `close`, `lseek`, `stat`, `chmod`, `chown`, `mkdir`, `rmdir`, `unlink`.
+  - Sovereign POSIX process table, UID/GID credentials, and signal handling (`SIGINT`, `SIGTERM`, `SIGKILL`, `SIGCHLD`, `SIGHUP`).
+  - Virtual UNIX filesystem mapping (`/bin`, `/etc`, `/dev`, `/tmp`, `/usr/bin`, `/home`).
+  - Dynamic export registration in `ldr::DynamicLoader` for `psxdll.dll`.
+  - Version database records in `VersionDatabase` for `psxdll.dll` and `psxss.exe`.
+  - SCM service registration for `PosixSubsystem` (`psxss.exe`).
+- [ ] **Interactive CLI Utilities (`posix`)**:
+  - `posix test` (Executes end-to-end self-test of POSIX process creation, file I/O, pipes, signals, and ALPC LPC bridge).
+  - `posix ps` (Lists active POSIX processes with PID, PPID, UID, and state).
+  - `posix sh [command]` (Interactive POSIX command shell interpreter).
+- [ ] **Unit Test Suite 99 (`Test_WindowsPOSIX_Subsystem`)**:
+  - Automated validation of POSIX process model, signals, pipes, file descriptors, `psxdll.dll` exports, SCM service, and CLI commands.
 
 
 
