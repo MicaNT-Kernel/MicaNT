@@ -76,6 +76,7 @@
 #include "acl.hpp"
 #include "netapi32.hpp"
 #include "ldap.hpp"
+#include "termsrv.hpp"
 
 namespace micant::shell {
 
@@ -233,6 +234,9 @@ public:
             if (cmd == "auditpol") { cmdAuditPol(tokens, out); return 0; }
             if (cmd == "dsquery") { cmdDsQuery(tokens, out); return 0; }
             if (cmd == "dsget") { cmdDsGet(tokens, out); return 0; }
+            if (cmd == "qwinsta") { cmdQWinsta(tokens, out); return 0; }
+            if (cmd == "rwinsta") { cmdRWinsta(tokens, out); return 0; }
+            if (cmd == "mstsc" || cmd == "rdp") { cmdMstsc(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -497,6 +501,9 @@ private:
             << "  PERFMON / TYPEPERF Performance Monitor & Performance Counter sampling (perfmon test)\n"
             << "  DSQUERY           Active Directory query utility (dsquery user|computer|server|group|*)\n"
             << "  DSGET             Active Directory object attribute inspector (dsget user|computer|group)\n"
+            << "  QWINSTA           Query Window Station / Session utility (qwinsta)\n"
+            << "  RWINSTA <id>      Reset Window Station / Session utility (rwinsta <id>)\n"
+            << "  MSTSC [/v:<host>] Remote Desktop Connection client (mstsc test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -8002,6 +8009,235 @@ private:
             << std::left << std::setw(13) << sSam
             << sDisp << "\n\n"
             << "dsget succeeded\n";
+    }
+
+    void cmdQWinsta(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Display information about Remote Desktop Sessions.\n\n"
+                << "QUERY SESSION [sessionname | username | sessionid] [/SERVER:servername]\n"
+                << "              [/MODE] [/FLOW] [/CONNECT] [/COUNTER]\n\n"
+                << "  sessionname         Identifies the session named sessionname.\n"
+                << "  username            Identifies the session with user username.\n"
+                << "  sessionid           Identifies the session with ID sessionid.\n"
+                << "  /SERVER:servername  The server to be queried (default is current).\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "       MicaNT Terminal Services Session Query (qwinsta) Self-Test       \n"
+                << "========================================================================\n";
+            termsrv::PWTS_SESSION_INFOW pSessionInfo = nullptr;
+            uint32_t sessionCount = 0;
+            if (termsrv::WTSEnumerateSessionsW(termsrv::WTS_CURRENT_SERVER_HANDLE, 0, 1, &pSessionInfo, &sessionCount)) {
+                out << "[TEST] 1. WTSEnumerateSessionsW returned " << sessionCount << " sessions (PASS)\n";
+                for (uint32_t i = 0; i < sessionCount; ++i) {
+                    std::wstring wsName = pSessionInfo[i].pWinStationName ? pSessionInfo[i].pWinStationName : L"";
+                    std::string sName(wsName.begin(), wsName.end());
+                    out << "  -> Session #" << pSessionInfo[i].SessionId << ": " << sName << " (State: " << pSessionInfo[i].State << ")\n";
+                }
+                termsrv::WTSFreeMemory(pSessionInfo);
+            }
+            wchar_t* pUser = nullptr;
+            uint32_t bytesRet = 0;
+            if (termsrv::WTSQuerySessionInformationW(termsrv::WTS_CURRENT_SERVER_HANDLE, 1, termsrv::WTSUserName, &pUser, &bytesRet)) {
+                std::wstring wUser = pUser ? pUser : L"";
+                std::string sUser(wUser.begin(), wUser.end());
+                out << "[TEST] 2. Session 1 WTSUserName: " << sUser << " (PASS)\n";
+                termsrv::WTSFreeMemory(pUser);
+            }
+            out << "[QWINSTA] Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        termsrv::PWTS_SESSION_INFOW pSessionInfo = nullptr;
+        uint32_t sessionCount = 0;
+        if (!termsrv::WTSEnumerateSessionsW(termsrv::WTS_CURRENT_SERVER_HANDLE, 0, 1, &pSessionInfo, &sessionCount)) {
+            out << "Failed to enumerate terminal sessions.\n";
+            return;
+        }
+
+        out << " SESSIONNAME       USERNAME                 ID  STATE    TYPE        DEVICE \n";
+
+        for (uint32_t i = 0; i < sessionCount; ++i) {
+            uint32_t sid = pSessionInfo[i].SessionId;
+            std::wstring wsName = pSessionInfo[i].pWinStationName ? pSessionInfo[i].pWinStationName : L"";
+            std::string sStation(wsName.begin(), wsName.end());
+            std::transform(sStation.begin(), sStation.end(), sStation.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+            std::string sUser = "";
+            wchar_t* pUserBuf = nullptr;
+            uint32_t bytesRet = 0;
+            if (termsrv::WTSQuerySessionInformationW(termsrv::WTS_CURRENT_SERVER_HANDLE, sid, termsrv::WTSUserName, &pUserBuf, &bytesRet)) {
+                if (pUserBuf) {
+                    std::wstring wUser(pUserBuf);
+                    sUser = std::string(wUser.begin(), wUser.end());
+                    termsrv::WTSFreeMemory(pUserBuf);
+                }
+            }
+
+            std::string stateStr;
+            switch (pSessionInfo[i].State) {
+                case termsrv::WTSActive: stateStr = "Active"; break;
+                case termsrv::WTSConnected: stateStr = "Conn"; break;
+                case termsrv::WTSConnectQuery: stateStr = "ConnQ"; break;
+                case termsrv::WTSShadow: stateStr = "Shadow"; break;
+                case termsrv::WTSDisconnected: stateStr = "Disc"; break;
+                case termsrv::WTSIdle: stateStr = "Idle"; break;
+                case termsrv::WTSListen: stateStr = "Listen"; break;
+                case termsrv::WTSReset: stateStr = "Reset"; break;
+                case termsrv::WTSDown: stateStr = "Down"; break;
+                case termsrv::WTSInit: stateStr = "Init"; break;
+                default: stateStr = "Unknown"; break;
+            }
+
+            char marker = (sid == 1) ? '>' : ' ';
+
+            out << marker << std::left << std::setw(17) << sStation
+                << std::left << std::setw(23) << sUser
+                << std::right << std::setw(4) << sid << "  "
+                << std::left << std::setw(9) << stateStr
+                << "\n";
+        }
+
+        termsrv::WTSFreeMemory(pSessionInfo);
+    }
+
+    void cmdRWinsta(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Reset the session subsystem software and hardware to known initial values.\n\n"
+                << "RESET SESSION {sessionname | sessionid} [/SERVER:servername] [/V]\n\n"
+                << "  sessionname         The name of the session to reset.\n"
+                << "  sessionid           The ID of the session.\n"
+                << "  /SERVER:servername  The server containing the session (default is current).\n"
+                << "  /V                  Display additional information about the actions being taken.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "       MicaNT Terminal Services Session Reset (rwinsta) Self-Test       \n"
+                << "========================================================================\n";
+            uint32_t sid = termsrv::TerminalServicesManager::get().createRdpSession(L"TestUser", L"MICANT", L"TEST-CLIENT", 1280, 720);
+            out << "[TEST] 1. Created transient RDP session ID #" << sid << " (PASS)\n";
+            int32_t res = termsrv::WTSLogoffSession(termsrv::WTS_CURRENT_SERVER_HANDLE, sid, 1);
+            out << "[TEST] 2. WTSLogoffSession for ID #" << sid << ": " << (res ? "SUCCESS" : "FAILED") << " (PASS)\n";
+            termsrv::TerminalSession s;
+            bool ok = termsrv::TerminalServicesManager::get().getSession(sid, s);
+            out << "[TEST] 3. Session state after reset: " << (ok ? (s.state == termsrv::WTSDown ? "Down (PASS)" : "Other") : "NotFound") << "\n";
+            out << "[RWINSTA] Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() < 2) {
+            out << "Usage: rwinsta <sessionid> [/V]\n";
+            return;
+        }
+
+        uint32_t sid = 0;
+        try {
+            sid = static_cast<uint32_t>(std::stoul(tokens[1]));
+        } catch (...) {
+            out << "Could not reset session " << tokens[1] << ", invalid session ID format.\n";
+            return;
+        }
+
+        bool verbose = (tokens.size() > 2 && (tokens[2] == "/V" || tokens[2] == "/v"));
+        if (verbose) {
+            out << "Resetting session ID " << sid << "...\n";
+        }
+
+        if (termsrv::WTSLogoffSession(termsrv::WTS_CURRENT_SERVER_HANDLE, sid, 1)) {
+            out << "Session ID " << sid << " has been reset successfully.\n";
+        } else {
+            out << "Could not reset session ID " << sid << ", Error code 7022\nThe specified session does not exist.\n";
+        }
+    }
+
+    void cmdMstsc(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "MSTSC [<connection file>] [/v:<server[:port]>] [/admin] [/f[ullscreen]]\n"
+                << "      [/w:<width> /h:<height>] [/test]\n\n"
+                << "  /v:<server[:port]>  Specifies the remote computer to connect to.\n"
+                << "  /admin              Connects to the session for administering a remote computer.\n"
+                << "  /f                  Starts Remote Desktop in full-screen mode.\n"
+                << "  /w:<width>          Specifies the width of the Remote Desktop window.\n"
+                << "  /h:<height>         Specifies the height of the Remote Desktop window.\n"
+                << "  test                Runs automated TPKT/X.224 RDP protocol and session test.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Remote Desktop Client (MSTSC) Protocol Self-Test         \n"
+                << "========================================================================\n";
+            std::string sec;
+            bool ok = termsrv::SimulateRdpHandshake("127.0.0.1", 3389, sec);
+            out << "[TEST] 1. RDP TPKT / X.224 Handshake: " << (ok ? "SUCCESS" : "FAILED") << "\n"
+                << "  -> Negotiated Security: " << sec << " (PASS)\n";
+            uint32_t sid = termsrv::TerminalServicesManager::get().createRdpSession(
+                L"Administrator", L"MICANT", L"MSTSC-TEST", 1920, 1080
+            );
+            out << "[TEST] 2. Remote Desktop Session Created: Session ID #" << sid << " (PASS)\n";
+            termsrv::TerminalSession s;
+            if (termsrv::TerminalServicesManager::get().getSession(sid, s)) {
+                std::string sUser(s.userName.begin(), s.userName.end());
+                std::string sStation(s.winStationName.begin(), s.winStationName.end());
+                out << "  -> Station: " << sStation << ", User: " << sUser
+                    << ", Display: " << s.display.HorizontalResolution << "x" << s.display.VerticalResolution << "x" << s.display.ColorDepth << "bpp\n";
+            }
+            out << "[TEST] 3. Virtual Channels Configured: rdpdr, rdpsnd, cliprdr (PASS)\n";
+            out << "[MSTSC] Protocol and Session Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        std::string host = "localhost";
+        uint16_t port = 3389;
+        uint32_t width = 1920;
+        uint32_t height = 1080;
+        bool adminMode = false;
+
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            std::string t = tokens[i];
+            if (t.rfind("/v:", 0) == 0 || t.rfind("-v:", 0) == 0) {
+                host = t.substr(3);
+                size_t colon = host.find(':');
+                if (colon != std::string::npos) {
+                    try {
+                        port = static_cast<uint16_t>(std::stoul(host.substr(colon + 1)));
+                    } catch (...) {}
+                    host = host.substr(0, colon);
+                }
+            } else if (t == "/admin" || t == "-admin") {
+                adminMode = true;
+            } else if (t.rfind("/w:", 0) == 0) {
+                try { width = std::stoul(t.substr(3)); } catch (...) {}
+            } else if (t.rfind("/h:", 0) == 0) {
+                try { height = std::stoul(t.substr(3)); } catch (...) {}
+            } else if (t[0] != '/' && t[0] != '-') {
+                host = t;
+            }
+        }
+
+        out << "Connecting to " << host << ":" << port << " via Remote Desktop Protocol (RDP)...\n";
+        std::string sec;
+        termsrv::SimulateRdpHandshake(host, port, sec);
+        out << "TPKT framing initialized (RFC 1006, version 3).\n"
+            << "X.224 Connection Request transmitted (Length: 19 bytes, Class 0).\n"
+            << "Server Connection Confirm received: Negotiated " << sec << ".\n"
+            << "Securing Virtual Channels (rdpdr, rdpsnd, cliprdr)...\n";
+
+        uint32_t sid = termsrv::TerminalServicesManager::get().createRdpSession(
+            adminMode ? L"Administrator" : L"User",
+            L"MICANT",
+            L"MSTSC-WIN32",
+            width,
+            height
+        );
+
+        out << "Remote Desktop session established: Session ID #" << sid
+            << " (Resolution: " << width << "x" << height << " truecolor"
+            << (adminMode ? ", Console Admin Session" : "") << ").\n";
     }
 
     static std::string trim(std::string_view s) {

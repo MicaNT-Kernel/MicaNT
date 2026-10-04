@@ -108,6 +108,7 @@
 #include "micant/acl.hpp"
 #include "micant/netapi32.hpp"
 #include "micant/ldap.hpp"
+#include "micant/termsrv.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -17366,6 +17367,254 @@ void Test_WindowsLDAP_ActiveDirectory_Subsystem() {
     std::cout << "[TEST] Suite 86: Windows Active Directory & LDAP Subsystem PASSED.\n";
 }
 
+void Test_WindowsRDP_TerminalServices_Subsystem() {
+    std::cout << "[TEST] Running Suite 87: Windows Remote Desktop Protocol (RDP) & Terminal Services Subsystem...\n";
+
+    // 1. Initialize Subsystem & Register Dynamic Exports
+    termsrv::InitializeTerminalServicesSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSEnumerateSessionsW") != nullptr, "WTSEnumerateSessionsW must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSEnumerateSessionsA") != nullptr, "WTSEnumerateSessionsA must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSQuerySessionInformationW") != nullptr, "WTSQuerySessionInformationW must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSFreeMemory") != nullptr, "WTSFreeMemory must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSOpenServerW") != nullptr, "WTSOpenServerW must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSCloseServer") != nullptr, "WTSCloseServer must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSDisconnectSession") != nullptr, "WTSDisconnectSession must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSLogoffSession") != nullptr, "WTSLogoffSession must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSSendMessageW") != nullptr, "WTSSendMessageW must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSRegisterSessionNotification") != nullptr, "WTSRegisterSessionNotification must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("wtsapi32.dll", "WTSUnRegisterSessionNotification") != nullptr, "WTSUnRegisterSessionNotification must be exported by wtsapi32.dll");
+    TEST_ASSERT(ldr.getExport("termsrv.dll", "ServiceMain") != nullptr, "ServiceMain must be exported by termsrv.dll");
+
+    // 2. Version Information Introspection
+    auto& ver = version::VersionDatabase::Instance();
+    const auto* wtsMod = ver.FindModule("wtsapi32.dll");
+    TEST_ASSERT(wtsMod != nullptr, "wtsapi32.dll must be registered in version manager");
+    TEST_ASSERT(wtsMod->stringTable.at("InternalName") == "wtsapi32", "wtsapi32 InternalName must match");
+
+    const auto* termMod = ver.FindModule("termsrv.dll");
+    TEST_ASSERT(termMod != nullptr, "termsrv.dll must be registered in version manager");
+    TEST_ASSERT(termMod->stringTable.at("InternalName") == "termsrv", "termsrv InternalName must match");
+
+    const auto* mstscMod = ver.FindModule("mstsc.exe");
+    TEST_ASSERT(mstscMod != nullptr, "mstsc.exe must be registered in version manager");
+    TEST_ASSERT(mstscMod->stringTable.at("InternalName") == "mstsc", "mstsc InternalName must match");
+
+    const auto* qwinstaMod = ver.FindModule("qwinsta.exe");
+    TEST_ASSERT(qwinstaMod != nullptr, "qwinsta.exe must be registered in version manager");
+    TEST_ASSERT(qwinstaMod->stringTable.at("InternalName") == "qwinsta", "qwinsta InternalName must match");
+
+    const auto* rwinstaMod = ver.FindModule("rwinsta.exe");
+    TEST_ASSERT(rwinstaMod != nullptr, "rwinsta.exe must be registered in version manager");
+    TEST_ASSERT(rwinstaMod->stringTable.at("InternalName") == "rwinsta", "rwinsta InternalName must match");
+
+    // 3. Service Control Manager (SCM) Integration
+    auto& scmInst = scm::ServiceControlManager::get();
+    auto termSvc = scmInst.getServiceRecord(L"TermService");
+    TEST_ASSERT(termSvc != nullptr, "TermService record must be registered in SCM");
+    TEST_ASSERT(termSvc->displayName == L"Remote Desktop Services", "TermService display name must match");
+    TEST_ASSERT(termSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "TermService must be RUNNING");
+    TEST_ASSERT(termSvc->svchostGroup == "NetworkService", "TermService must be hosted in NetworkService svchost group");
+
+    auto envSvc = scmInst.getServiceRecord(L"SessionEnv");
+    TEST_ASSERT(envSvc != nullptr, "SessionEnv record must be registered in SCM");
+    TEST_ASSERT(envSvc->displayName == L"Remote Desktop Configuration", "SessionEnv display name must match");
+    TEST_ASSERT(envSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "SessionEnv must be RUNNING");
+    TEST_ASSERT(envSvc->svchostGroup == "netsvcs", "SessionEnv must be hosted in netsvcs svchost group");
+
+    // 4. Session Enumeration (WTSEnumerateSessionsW / A)
+    termsrv::TerminalServicesManager::get().resetToDefault();
+
+    termsrv::PWTS_SESSION_INFOW pSessionsW = nullptr;
+    uint32_t countW = 0;
+    int32_t okEnumW = termsrv::WTSEnumerateSessionsW(termsrv::WTS_CURRENT_SERVER_HANDLE, 0, 1, &pSessionsW, &countW);
+    TEST_ASSERT(okEnumW == 1 && pSessionsW != nullptr, "WTSEnumerateSessionsW must return TRUE and valid pointer");
+    TEST_ASSERT(countW >= 3, "WTSEnumerateSessionsW must return at least Session 0, Session 1, and Session 65536");
+
+    bool hasSession0 = false;
+    bool hasSession1 = false;
+    bool hasSession65536 = false;
+    for (uint32_t i = 0; i < countW; ++i) {
+        if (pSessionsW[i].SessionId == 0) {
+            hasSession0 = true;
+            TEST_ASSERT(std::wstring(pSessionsW[i].pWinStationName) == L"Services", "Session 0 station name must be Services");
+        } else if (pSessionsW[i].SessionId == 1) {
+            hasSession1 = true;
+            TEST_ASSERT(std::wstring(pSessionsW[i].pWinStationName) == L"Console", "Session 1 station name must be Console");
+            TEST_ASSERT(pSessionsW[i].State == termsrv::WTSActive, "Session 1 must be active");
+        } else if (pSessionsW[i].SessionId == 65536) {
+            hasSession65536 = true;
+            TEST_ASSERT(std::wstring(pSessionsW[i].pWinStationName) == L"RDP-Tcp", "Session 65536 station name must be RDP-Tcp");
+            TEST_ASSERT(pSessionsW[i].State == termsrv::WTSListen, "Session 65536 must be listening");
+        }
+        termsrv::WTSFreeMemory(pSessionsW[i].pWinStationName);
+    }
+    termsrv::WTSFreeMemory(pSessionsW);
+    TEST_ASSERT(hasSession0 && hasSession1 && hasSession65536, "All default sessions must be present");
+
+    termsrv::PWTS_SESSION_INFOA pSessionsA = nullptr;
+    uint32_t countA = 0;
+    int32_t okEnumA = termsrv::WTSEnumerateSessionsA(termsrv::WTS_CURRENT_SERVER_HANDLE, 0, 1, &pSessionsA, &countA);
+    TEST_ASSERT(okEnumA == 1 && pSessionsA != nullptr, "WTSEnumerateSessionsA must return TRUE and valid pointer");
+    TEST_ASSERT(countA >= 3, "WTSEnumerateSessionsA count must match countW");
+    for (uint32_t i = 0; i < countA; ++i) {
+        termsrv::WTSFreeMemory(pSessionsA[i].pWinStationName);
+    }
+    termsrv::WTSFreeMemory(pSessionsA);
+
+    // 5. Query Session Information (WTSQuerySessionInformationW)
+    wchar_t* pBuf = nullptr;
+    uint32_t bytesRet = 0;
+
+    // UserName for Session 1
+    int32_t qRes = termsrv::WTSQuerySessionInformationW(termsrv::WTS_CURRENT_SERVER_HANDLE, 1, termsrv::WTSUserName, &pBuf, &bytesRet);
+    TEST_ASSERT(qRes == 1 && pBuf != nullptr, "WTSQuerySessionInformationW WTSUserName must succeed");
+    TEST_ASSERT(std::wstring(pBuf) == L"Administrator", "Session 1 user must be Administrator");
+    termsrv::WTSFreeMemory(pBuf);
+
+    // DomainName for Session 1
+    pBuf = nullptr;
+    qRes = termsrv::WTSQuerySessionInformationW(termsrv::WTS_CURRENT_SERVER_HANDLE, 1, termsrv::WTSDomainName, &pBuf, &bytesRet);
+    TEST_ASSERT(qRes == 1 && pBuf != nullptr, "WTSQuerySessionInformationW WTSDomainName must succeed");
+    TEST_ASSERT(std::wstring(pBuf) == L"MICANT", "Session 1 domain must be MICANT");
+    termsrv::WTSFreeMemory(pBuf);
+
+    // ConnectState for Session 1
+    pBuf = nullptr;
+    qRes = termsrv::WTSQuerySessionInformationW(termsrv::WTS_CURRENT_SERVER_HANDLE, 1, termsrv::WTSConnectState, &pBuf, &bytesRet);
+    TEST_ASSERT(qRes == 1 && pBuf != nullptr, "WTSQuerySessionInformationW WTSConnectState must succeed");
+    auto stateVal = *reinterpret_cast<termsrv::WTS_CONNECTSTATE_CLASS*>(pBuf);
+    TEST_ASSERT(stateVal == termsrv::WTSActive, "Session 1 state must be WTSActive");
+    termsrv::WTSFreeMemory(pBuf);
+
+    // Display for Session 1
+    pBuf = nullptr;
+    qRes = termsrv::WTSQuerySessionInformationW(termsrv::WTS_CURRENT_SERVER_HANDLE, 1, termsrv::WTSClientDisplay, &pBuf, &bytesRet);
+    TEST_ASSERT(qRes == 1 && pBuf != nullptr, "WTSQuerySessionInformationW WTSClientDisplay must succeed");
+    auto* pDisp = reinterpret_cast<termsrv::WTS_CLIENT_DISPLAY*>(pBuf);
+    TEST_ASSERT(pDisp->HorizontalResolution == 1920 && pDisp->VerticalResolution == 1080, "Session 1 display resolution must be 1920x1080");
+    termsrv::WTSFreeMemory(pBuf);
+
+    // ClientAddress for Session 1
+    pBuf = nullptr;
+    qRes = termsrv::WTSQuerySessionInformationW(termsrv::WTS_CURRENT_SERVER_HANDLE, 1, termsrv::WTSClientAddress, &pBuf, &bytesRet);
+    TEST_ASSERT(qRes == 1 && pBuf != nullptr, "WTSQuerySessionInformationW WTSClientAddress must succeed");
+    auto* pAddr = reinterpret_cast<termsrv::WTS_CLIENT_ADDRESS*>(pBuf);
+    TEST_ASSERT(pAddr->AddressFamily == 2, "AddressFamily must be AF_INET (2)");
+    TEST_ASSERT(std::string(reinterpret_cast<char*>(pAddr->Address + 2)).find("127.0.0.1") != std::string::npos, "Address must be loopback");
+    termsrv::WTSFreeMemory(pBuf);
+
+    // Query Invalid Session
+    pBuf = nullptr;
+    qRes = termsrv::WTSQuerySessionInformationW(termsrv::WTS_CURRENT_SERVER_HANDLE, 99999, termsrv::WTSUserName, &pBuf, &bytesRet);
+    TEST_ASSERT(qRes == 0, "Querying invalid session must return FALSE (0)");
+
+    // 6. Dynamic RDP Session Creation & Lifecycle Management
+    uint32_t newSid = termsrv::TerminalServicesManager::get().createRdpSession(
+        L"Alice", L"MICANT", L"MSTSC-ALICE", 2560, 1440
+    );
+    TEST_ASSERT(newSid >= 2, "Created RDP session ID must be >= 2");
+
+    termsrv::TerminalSession aliceSession;
+    bool foundAlice = termsrv::TerminalServicesManager::get().getSession(newSid, aliceSession);
+    TEST_ASSERT(foundAlice, "Alice's session must exist in session manager");
+    TEST_ASSERT(aliceSession.userName == L"Alice", "Session username must match Alice");
+    TEST_ASSERT(aliceSession.display.HorizontalResolution == 2560 && aliceSession.display.VerticalResolution == 1440, "Display resolution must match 2560x1440");
+    TEST_ASSERT(aliceSession.protocolType == termsrv::WTS_PROTOCOL_TYPE_RDP, "Protocol type must be RDP");
+
+    // WTSSendMessageW
+    uint32_t response = 0;
+    int32_t msgRes = termsrv::WTSSendMessageW(
+        termsrv::WTS_CURRENT_SERVER_HANDLE, newSid,
+        const_cast<wchar_t*>(L"Notice"), 6,
+        const_cast<wchar_t*>(L"Hello Alice"), 11,
+        0, 0, &response, 1
+    );
+    TEST_ASSERT(msgRes == 1 && response == 1, "WTSSendMessageW must return 1 and IDOK");
+
+    // WTSDisconnectSession
+    int32_t discRes = termsrv::WTSDisconnectSession(termsrv::WTS_CURRENT_SERVER_HANDLE, newSid, 1);
+    TEST_ASSERT(discRes == 1, "WTSDisconnectSession must succeed");
+    termsrv::TerminalServicesManager::get().getSession(newSid, aliceSession);
+    TEST_ASSERT(aliceSession.state == termsrv::WTSDisconnected, "Session state must be WTSDisconnected");
+
+    // WTSLogoffSession
+    int32_t logoffRes = termsrv::WTSLogoffSession(termsrv::WTS_CURRENT_SERVER_HANDLE, newSid, 1);
+    TEST_ASSERT(logoffRes == 1, "WTSLogoffSession must succeed");
+    termsrv::TerminalServicesManager::get().getSession(newSid, aliceSession);
+    TEST_ASSERT(aliceSession.state == termsrv::WTSDown, "Session state must be WTSDown");
+
+    // 7. RDP Protocol (TPKT / X.224) Handshake Simulation
+    std::string negotiatedSec;
+    bool hsOk = termsrv::SimulateRdpHandshake("192.168.1.100", 3389, negotiatedSec);
+    TEST_ASSERT(hsOk, "SimulateRdpHandshake must succeed");
+    TEST_ASSERT(negotiatedSec.find("CredSSP") != std::string::npos, "Security must negotiate CredSSP / TLS 1.3");
+
+    // Verify TPKT Framing structures
+    termsrv::X224_CR_PACKET cr{};
+    TEST_ASSERT(cr.tpkt.version == 3, "TPKT header version must be 3 (RFC 1006)");
+    TEST_ASSERT(cr.connectionRequestCode == 0xE0, "X.224 CR code must be 0xE0");
+    TEST_ASSERT(cr.type == 0x01, "RDP_NEG_REQ type must be 0x01");
+
+    termsrv::X224_CC_PACKET cc{};
+    TEST_ASSERT(cc.tpkt.version == 3, "TPKT header version must be 3");
+    TEST_ASSERT(cc.connectionConfirmCode == 0xD0, "X.224 CC code must be 0xD0");
+    TEST_ASSERT(cc.type == 0x02, "RDP_NEG_RSP type must be 0x02");
+
+    // 8. Command Shell Integration (qwinsta, rwinsta, mstsc)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // qwinsta /?
+        shell.execute("qwinsta /?", out);
+        TEST_ASSERT(out.str().find("Display information about Remote Desktop Sessions") != std::string::npos, "qwinsta /? must display help");
+
+        // qwinsta test
+        out.str("");
+        shell.execute("qwinsta test", out);
+        TEST_ASSERT(out.str().find("Self-Test Completed Successfully") != std::string::npos, "qwinsta test must succeed");
+
+        // qwinsta (normal)
+        out.str("");
+        shell.execute("qwinsta", out);
+        TEST_ASSERT(out.str().find("SESSIONNAME") != std::string::npos, "qwinsta must print table header");
+        TEST_ASSERT(out.str().find("services") != std::string::npos, "qwinsta must list services session");
+        TEST_ASSERT(out.str().find("console") != std::string::npos, "qwinsta must list console session");
+        TEST_ASSERT(out.str().find("Active") != std::string::npos, "qwinsta must show Active state");
+
+        // rwinsta /?
+        out.str("");
+        shell.execute("rwinsta /?", out);
+        TEST_ASSERT(out.str().find("Reset the session subsystem") != std::string::npos, "rwinsta /? must display help");
+
+        // rwinsta test
+        out.str("");
+        shell.execute("rwinsta test", out);
+        TEST_ASSERT(out.str().find("Self-Test Completed Successfully") != std::string::npos, "rwinsta test must succeed");
+
+        // mstsc /?
+        out.str("");
+        shell.execute("mstsc /?", out);
+        TEST_ASSERT(out.str().find("Remote Desktop window") != std::string::npos, "mstsc /? must display help");
+
+        // mstsc test
+        out.str("");
+        shell.execute("mstsc test", out);
+        TEST_ASSERT(out.str().find("Protocol and Session Self-Test Completed Successfully") != std::string::npos, "mstsc test must succeed");
+
+        // mstsc /v:192.168.1.100 /admin
+        out.str("");
+        shell.execute("mstsc /v:192.168.1.100 /admin", out);
+        TEST_ASSERT(out.str().find("Connecting to 192.168.1.100:3389") != std::string::npos, "mstsc must connect to target host");
+        TEST_ASSERT(out.str().find("Remote Desktop session established") != std::string::npos, "mstsc must establish session");
+        TEST_ASSERT(out.str().find("Console Admin Session") != std::string::npos, "mstsc must indicate admin session");
+    }
+
+    std::cout << "[TEST] Suite 87: Windows Remote Desktop Protocol (RDP) & Terminal Services Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -17457,6 +17706,7 @@ int main() {
     RUN_TEST(Test_WindowsACL_SecurityAuditing_Subsystem);
     RUN_TEST(Test_WindowsNetAPI32_NetworkManagement_Subsystem);
     RUN_TEST(Test_WindowsLDAP_ActiveDirectory_Subsystem);
+    RUN_TEST(Test_WindowsRDP_TerminalServices_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
