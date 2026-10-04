@@ -140,7 +140,13 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 66: Windows Geolocation & Location Framework (LF)    [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 67: Windows Portable Devices & Device Info (WPD)     [PLANNED]        │
+│ Phase 67: Windows Portable Devices & Device Info (WPD)     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 68: Windows Sensors API & Sensor Class Extension     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 69: Windows Biometric Framework & Windows Hello      [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 70: Windows Bluetooth Core Architecture & Radio      [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1604,23 +1610,45 @@
 
 ---
 
-### Phase 69: Windows Biometric Framework (WBF) & Windows Hello Subsystem (`winbio.dll`, `winbiosrvc.dll`, `WbioSrvc`, `winbio.exe`) (PLANNED)
-- [ ] **Clean-Room Windows Biometric Architecture (`include/micant/winbio.hpp`, `winbio.dll`, `winbiosrvc.dll`)**:
-  - WBF Core C Client APIs: `WinBioOpenSession`, `WinBioCloseSession`, `WinBioEnumBiometricUnits`, `WinBioEnumDatabases`, `WinBioEnumEnrollments`, `WinBioLocateSensor`, `WinBioEnrollBegin`, `WinBioEnrollCapture`, `WinBioEnrollCommit`, `WinBioEnrollDiscard`, `WinBioIdentify`, `WinBioVerify`, `WinBioCancel`, `WinBioWait`.
-  - Biometric Unit Types: Fingerprint sensor (`WINBIO_TYPE_FINGERPRINT`), Facial recognition camera (`WINBIO_TYPE_FACIAL_FEATURES`), Iris scanner (`WINBIO_TYPE_IRIS`), Voice print (`WINBIO_TYPE_VOICE`).
-  - Sovereign Biometric Manager (`BiometricManager`): pre-seeded biometric sensors (Sovereign Secure Fingerprint Reader, MicaNT Infrared Facial Recognition Sensor), enrollment database template storage, anti-spoofing liveness verification, match score evaluation.
-  - Dynamic export registration in `ldr::DynamicLoader` for `winbio.dll` and `winbiosrvc.dll`.
+### Phase 69: Windows Biometric Framework (WBF) & Windows Hello Subsystem (`winbio.dll`, `winbiosrvc.dll`, `WbioSrvc`, `winbio.exe`) (100% Completed)
+- [x] **Clean-Room Windows Biometric Architecture (`include/micant/winbio.hpp`, `winbio.dll`, `winbiosrvc.dll`)**:
+  - WBF Core C Client APIs: `WinBioOpenSession`, `WinBioCloseSession`, `WinBioEnumBiometricUnits`, `WinBioEnumDatabases`, `WinBioEnumEnrollments`, `WinBioLocateSensor`, `WinBioEnrollBegin`, `WinBioEnrollCapture`, `WinBioEnrollCommit`, `WinBioEnrollDiscard`, `WinBioIdentify`, `WinBioVerify`, `WinBioCancel`, `WinBioWait`, `WinBioAcquireFocus`, `WinBioReleaseFocus`, `WinBioFree`.
+  - Biometric Unit Types: Fingerprint sensor (`WINBIO_TYPE_FINGERPRINT`), Facial recognition IR camera (`WINBIO_TYPE_FACIAL_FEATURES`), Iris scanner (`WINBIO_TYPE_IRIS`), Voice print (`WINBIO_TYPE_VOICE`).
+  - Sovereign Biometric Manager (`BiometricManager`): pre-seeded biometric sensors (Sovereign Optical Fingerprint Sensor `MICA-BIO-FP500`, TrueDepth Infrared Facial Sensor `MICA-BIO-FACE-IR`), biometric database storage (`system.db`), progressive 3-stage enrollment with `WINBIO_I_MORE_DATA` intermediate sample accumulation, template commit/discard, verification, and identification matching.
+  - Dynamic export registration in `ldr::DynamicLoader` for `winbio.dll` (`WinBioOpenSession`, `WinBioCloseSession`, `WinBioEnumBiometricUnits`, `WinBioEnumDatabases`, `WinBioEnumEnrollments`, `WinBioLocateSensor`, `WinBioEnrollBegin`, `WinBioEnrollCapture`, `WinBioEnrollCommit`, `WinBioEnrollDiscard`, `WinBioVerify`, `WinBioIdentify`, `WinBioFree`, `WinBioCancel`, `WinBioWait`, `WinBioAcquireFocus`, `WinBioReleaseFocus`) and `winbiosrvc.dll` (`DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`, `DllUnregisterServer`, `WbioSrvcMain`).
   - Version database records in `VersionDatabase` for `winbio.dll` and `winbiosrvc.dll`.
-- [ ] **SCM Windows Biometric Service**:
-  - `WbioSrvc` ("Windows Biometric Service", svchost `LocalSystemNetworkRestricted`, PID 1166, demand start).
-- [ ] **Interactive CLI Utilities (`winbio` / `bio` / `hello`)**:
-  - `winbio list` (Lists detected biometric units, sensor capabilities, and operational states).
+- [x] **SCM Windows Biometric Service**:
+  - `WbioSrvc` ("Windows Biometric Service", svchost `LocalSystemNetworkRestricted`, PID 1166, running).
+- [x] **Interactive CLI Utilities (`winbio` / `bio` / `hello`)**:
+  - `winbio list` (Lists detected biometric units, sensor capabilities, model, serial, and operational states).
   - `winbio status` (Displays biometric database status, active sessions, and enrollment count).
-  - `winbio enroll [unitId] [subFactor]` (Simulates biometric template enrollment workflow).
-  - `winbio verify [unitId]` (Performs biometric verification against enrolled identity).
-  - `winbio test` (Executes self-test of session lifecycle, biometric unit enumeration, and matching engine).
-- [ ] **Unit Test Suite 96 (`Test_WindowsBiometrics_Subsystem`)**:
-  - Automated validation of WBF client APIs, biometric unit enumeration, enrollment/verification state machines, SCM service records, and CLI commands.
+  - `winbio enroll [unitId] [subFactor]` (Simulates 3-pass biometric template enrollment workflow).
+  - `winbio verify [unitId] [subFactor]` (Performs biometric verification against enrolled identity).
+  - `winbio test` (Executes end-to-end self-test of session lifecycle, biometric unit enumeration, and matching engine).
+- [x] **Unit Test Suite 96 (`Test_WindowsBiometrics_Subsystem`)**:
+  - Automated validation of WBF client APIs, biometric unit enumeration, multi-sample enrollment/verification state machines, SCM service records, and CLI commands.
+  - All 96 unit test suites passing with 100% success rate (96 Passed, 0 Failed).
+
+---
+
+### Phase 70: Windows Bluetooth Core Architecture & Radio Subsystem (`bthprops.cpl`, `bluetoothapis.dll`, `bthserv`, `bthci.dll`, `bthport.sys`) (PLANNED)
+- [ ] **Clean-Room Windows Bluetooth Architecture (`include/micant/bluetooth.hpp`, `bluetoothapis.dll`, `bthprops.cpl`)**:
+  - Bluetooth Core C Client APIs: `BluetoothFindFirstRadio`, `BluetoothFindNextRadio`, `BluetoothFindRadioClose`, `BluetoothGetRadioInfo`, `BluetoothGetDeviceInfo`, `BluetoothSetServiceState`, `BluetoothEnumerateInstalledServices`, `BluetoothRegisterForAuthentication`, `BluetoothUnregisterAuthentication`, `BluetoothSendAuthenticationResponse`, `BluetoothAuthenticateDevice`, `BluetoothRemoveDevice`, `BluetoothEnableDiscovery`, `BluetoothIsDiscoverable`, `BluetoothEnableIncomingConnections`, `BluetoothIsConnectable`.
+  - Radio & Device Types: Standard Bluetooth Basic Rate / Enhanced Data Rate (BR/EDR) and Bluetooth Low Energy (BLE 5.x) radio architectures, HCI (Host Controller Interface) packet models, device class masks (`COD_MAJOR_COMPUTER`, `COD_MAJOR_PHONE`, `COD_MAJOR_AUDIO`, `COD_MAJOR_PERIPHERAL`), pairing authentication state machine (`SSP` Secure Simple Pairing, Numeric Comparison, Passkey Entry, Just Works).
+  - Sovereign Bluetooth Manager (`BluetoothManager`): pre-seeded local Bluetooth 5.4 LE radio (`MicaNT Sovereign Dual-Mode Bluetooth 5.4 Radio`, HCI 13.0 / LMP 13.0, 100mW Class 1), remote paired/discovered peripheral emulation (Titan Elite Wireless ANC Headset, MicaPad Low Energy Gamepad, Precision Wireless Keyboard/Mouse combo), SDP (Service Discovery Protocol) records and UUID service registration (A2DP, HFP, HID, GATT, RFCOMM).
+  - Dynamic export registration in `ldr::DynamicLoader` for `bluetoothapis.dll` and `bthprops.cpl`.
+  - Version database records in `VersionDatabase` for `bluetoothapis.dll` and `bthprops.cpl`.
+- [ ] **SCM Bluetooth Services**:
+  - `bthserv` ("Bluetooth Support Service", svchost `LocalService`, PID 1170, demand/auto start).
+  - `BthHFSrv` ("Bluetooth Audio Gateway Service", svchost `LocalService`, PID 1174).
+- [ ] **Interactive CLI Utilities (`bluetooth` / `bth` / `bt`)**:
+  - `bluetooth list` (Lists detected local radios and paired/discovered remote Bluetooth devices).
+  - `bluetooth scan` (Initiates device inquiry discovery scan for nearby discoverable peripherals).
+  - `bluetooth info [mac/index]` (Inspects device class, RSSI signal strength, battery level, and active service UUIDs).
+  - `bluetooth pair <mac>` (Executes Secure Simple Pairing or Passkey handshake).
+  - `bluetooth test` (Executes end-to-end self-test of Bluetooth radio enumeration, device discovery, and SDP query).
+- [ ] **Unit Test Suite 97 (`Test_WindowsBluetooth_Subsystem`)**:
+  - Automated validation of Bluetooth C client APIs, radio enumeration, SDP parsing, pairing authentication, SCM service records, and CLI commands.
 
 
 

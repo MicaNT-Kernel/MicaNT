@@ -117,6 +117,7 @@
 #include "micant/location.hpp"
 #include "micant/wpd.hpp"
 #include "micant/sensors.hpp"
+#include "micant/winbio.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -20166,6 +20167,258 @@ void Test_WindowsSensors_Subsystem() {
     std::cout << "[TEST] Suite 95: Windows Sensors API & Sensor Class Extension Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 96: Windows Biometric Framework (WBF) & Windows Hello Subsystem Tests
+// ============================================================================
+void Test_WindowsBiometrics_Subsystem() {
+    using winbio::HRESULT;
+    using ole32::S_OK;
+
+    winbio::InitializeBiometricsSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (winbio.dll / winbiosrvc.dll)
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioOpenSession") != nullptr, "winbio.dll must export WinBioOpenSession");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioCloseSession") != nullptr, "winbio.dll must export WinBioCloseSession");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioEnumBiometricUnits") != nullptr, "winbio.dll must export WinBioEnumBiometricUnits");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioEnumDatabases") != nullptr, "winbio.dll must export WinBioEnumDatabases");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioEnumEnrollments") != nullptr, "winbio.dll must export WinBioEnumEnrollments");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioLocateSensor") != nullptr, "winbio.dll must export WinBioLocateSensor");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioEnrollBegin") != nullptr, "winbio.dll must export WinBioEnrollBegin");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioEnrollCapture") != nullptr, "winbio.dll must export WinBioEnrollCapture");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioEnrollCommit") != nullptr, "winbio.dll must export WinBioEnrollCommit");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioEnrollDiscard") != nullptr, "winbio.dll must export WinBioEnrollDiscard");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioVerify") != nullptr, "winbio.dll must export WinBioVerify");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioIdentify") != nullptr, "winbio.dll must export WinBioIdentify");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioFree") != nullptr, "winbio.dll must export WinBioFree");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioCancel") != nullptr, "winbio.dll must export WinBioCancel");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioWait") != nullptr, "winbio.dll must export WinBioWait");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioAcquireFocus") != nullptr, "winbio.dll must export WinBioAcquireFocus");
+    TEST_ASSERT(ldr.getExport("winbio.dll", "WinBioReleaseFocus") != nullptr, "winbio.dll must export WinBioReleaseFocus");
+
+    TEST_ASSERT(ldr.getExport("winbiosrvc.dll", "DllGetClassObject") != nullptr, "winbiosrvc.dll must export DllGetClassObject");
+    TEST_ASSERT(ldr.getExport("winbiosrvc.dll", "DllCanUnloadNow") != nullptr, "winbiosrvc.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("winbiosrvc.dll", "DllRegisterServer") != nullptr, "winbiosrvc.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("winbiosrvc.dll", "DllUnregisterServer") != nullptr, "winbiosrvc.dll must export DllUnregisterServer");
+    TEST_ASSERT(ldr.getExport("winbiosrvc.dll", "WbioSrvcMain") != nullptr, "winbiosrvc.dll must export WbioSrvcMain");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verBio = version::VersionDatabase::Instance().FindModule("winbio.dll");
+        TEST_ASSERT(verBio != nullptr, "VersionDatabase must contain winbio.dll");
+        TEST_ASSERT(verBio->stringTable.at("FileDescription") == "Windows Biometric Framework Client API", "winbio.dll description match");
+        TEST_ASSERT(verBio->stringTable.at("OriginalFilename") == "winbio.dll", "winbio.dll original filename match");
+        TEST_ASSERT(verBio->stringTable.at("ProductName") == "MicaNT Biometrics Subsystem", "winbio.dll product name match");
+
+        const auto* verSrvc = version::VersionDatabase::Instance().FindModule("winbiosrvc.dll");
+        TEST_ASSERT(verSrvc != nullptr, "VersionDatabase must contain winbiosrvc.dll");
+        TEST_ASSERT(verSrvc->stringTable.at("FileDescription") == "Windows Biometric Service", "winbiosrvc.dll description match");
+        TEST_ASSERT(verSrvc->stringTable.at("OriginalFilename") == "winbiosrvc.dll", "winbiosrvc.dll original filename match");
+        TEST_ASSERT(verSrvc->stringTable.at("ProductName") == "MicaNT Biometrics Subsystem", "winbiosrvc.dll product name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: SCM Service Registration (WbioSrvc)
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        auto bioSvc = scm.getServiceRecord(L"WbioSrvc");
+        TEST_ASSERT(bioSvc != nullptr, "WbioSrvc service must be registered in SCM");
+        TEST_ASSERT(bioSvc->displayName == L"Windows Biometric Service", "WbioSrvc display name match");
+        TEST_ASSERT(bioSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "WbioSrvc must be running");
+        TEST_ASSERT(bioSvc->status.dwProcessId == 1166, "WbioSrvc PID match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Biometric Unit Enumeration & Sensor Inspection
+    // ------------------------------------------------------------------------
+    {
+        winbio::WINBIO_UNIT_SCHEMA* units = nullptr;
+        size_t unitCount = 0;
+        HRESULT hr = winbio::WinBioEnumBiometricUnits(winbio::WINBIO_TYPE_ANY, &units, &unitCount);
+        TEST_ASSERT(hr == S_OK && units != nullptr, "WinBioEnumBiometricUnits must succeed");
+        TEST_ASSERT(unitCount == 2, "Must enumerate exactly 2 biometric units");
+
+        TEST_ASSERT(units[0].UnitId == 1, "Unit 1 must be first");
+        TEST_ASSERT(units[0].BiometricFactor == winbio::WINBIO_TYPE_FINGERPRINT, "Unit 1 is fingerprint");
+        TEST_ASSERT(std::wstring(units[0].Manufacturer) == L"MicaNT Security Systems", "Unit 1 manufacturer match");
+        TEST_ASSERT(std::wstring(units[0].Model) == L"MICA-BIO-FP500", "Unit 1 model match");
+        TEST_ASSERT((units[0].Capabilities & winbio::WINBIO_CAPABILITY_SECURE_SENSOR) != 0, "Unit 1 has secure sensor capability");
+
+        TEST_ASSERT(units[1].UnitId == 2, "Unit 2 must be second");
+        TEST_ASSERT(units[1].BiometricFactor == winbio::WINBIO_TYPE_FACIAL_FEATURES, "Unit 2 is facial features");
+        TEST_ASSERT(std::wstring(units[1].Model) == L"MICA-BIO-FACE-IR", "Unit 2 model match");
+
+        winbio::WinBioFree(units);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Biometric Database Storage Enumeration
+    // ------------------------------------------------------------------------
+    {
+        winbio::WINBIO_STORAGE_SCHEMA* dbs = nullptr;
+        size_t dbCount = 0;
+        HRESULT hr = winbio::WinBioEnumDatabases(winbio::WINBIO_TYPE_ANY, &dbs, &dbCount);
+        TEST_ASSERT(hr == S_OK && dbs != nullptr, "WinBioEnumDatabases must succeed");
+        TEST_ASSERT(dbCount == 1, "Must enumerate 1 system biometric database");
+        TEST_ASSERT(std::wstring(dbs[0].FilePath) == L"C:\\Windows\\System32\\WinBioDatabase\\system.db", "Database path match");
+        TEST_ASSERT(dbs[0].InitialSize == 1048576, "Initial size 1MB match");
+        winbio::WinBioFree(dbs);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Biometric Session Lifecycle
+    // ------------------------------------------------------------------------
+    winbio::WINBIO_SESSION_HANDLE hSession = 0;
+    HRESULT hr = winbio::WinBioOpenSession(
+        winbio::WINBIO_TYPE_FINGERPRINT | winbio::WINBIO_TYPE_FACIAL_FEATURES,
+        0, winbio::WINBIO_FLAG_DEFAULT, nullptr, 0, nullptr, &hSession
+    );
+    TEST_ASSERT(hr == S_OK && hSession != 0, "WinBioOpenSession must succeed");
+    TEST_ASSERT(winbio::BiometricManager::get().getSessionCount() >= 1, "Session count must be >= 1");
+
+    winbio::WINBIO_UNIT_ID locatedUnit = 0;
+    hr = winbio::WinBioLocateSensor(hSession, &locatedUnit);
+    TEST_ASSERT(hr == S_OK && locatedUnit == 1, "WinBioLocateSensor must return Unit 1");
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Biometric Verification & Identification
+    // ------------------------------------------------------------------------
+    {
+        winbio::WINBIO_IDENTITY id{};
+        win32::BOOL bMatch = 0;
+        winbio::WINBIO_REJECT_DETAIL reject = 0;
+
+        // Verify valid enrolled Administrator right index finger
+        hr = winbio::WinBioVerify(
+            hSession, 1, winbio::WINBIO_SUBTYPE_RH_INDEX_FINGER,
+            &id, &bMatch, &reject
+        );
+        TEST_ASSERT(hr == S_OK && bMatch == 1, "WinBioVerify for enrolled RH index must match");
+        TEST_ASSERT(id.Type == winbio::WINBIO_ID_TYPE_SID, "Matched identity type must be SID");
+        TEST_ASSERT(std::string(reinterpret_cast<const char*>(id.Value.AccountSid.Data), id.Value.AccountSid.Size) == "S-1-5-18", "SID match");
+
+        // Verify unmatched subFactor
+        bMatch = 1;
+        hr = winbio::WinBioVerify(
+            hSession, 1, winbio::WINBIO_SUBTYPE_LH_LITTLE_FINGER,
+            &id, &bMatch, &reject
+        );
+        TEST_ASSERT(hr == winbio::WINBIO_E_NO_MATCH && bMatch == 0, "WinBioVerify for unenrolled finger must not match");
+
+        // Identify enrolled user on Unit 1
+        winbio::WINBIO_IDENTITY idIdent{};
+        winbio::WINBIO_BIOMETRIC_SUBTYPE identifiedSubFactor = 0;
+        hr = winbio::WinBioIdentify(hSession, 1, &idIdent, &identifiedSubFactor, &reject);
+        TEST_ASSERT(hr == S_OK, "WinBioIdentify must succeed");
+        TEST_ASSERT(identifiedSubFactor == winbio::WINBIO_SUBTYPE_RH_INDEX_FINGER, "Identified subFactor match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Biometric Enrollment Workflow (Begin -> Capture x 3 -> Commit)
+    // ------------------------------------------------------------------------
+    {
+        hr = winbio::WinBioEnrollBegin(hSession, winbio::WINBIO_SUBTYPE_RH_THUMB, 1);
+        TEST_ASSERT(hr == S_OK, "WinBioEnrollBegin must succeed");
+
+        winbio::WINBIO_REJECT_DETAIL reject = 0;
+        hr = winbio::WinBioEnrollCapture(hSession, &reject);
+        TEST_ASSERT(hr == winbio::WINBIO_I_MORE_DATA, "Sample 1 must return WINBIO_I_MORE_DATA");
+
+        hr = winbio::WinBioEnrollCapture(hSession, &reject);
+        TEST_ASSERT(hr == winbio::WINBIO_I_MORE_DATA, "Sample 2 must return WINBIO_I_MORE_DATA");
+
+        hr = winbio::WinBioEnrollCapture(hSession, &reject);
+        TEST_ASSERT(hr == S_OK, "Sample 3 must complete enrollment with S_OK");
+
+        winbio::WINBIO_IDENTITY newId{};
+        newId.Type = winbio::WINBIO_ID_TYPE_SID;
+        const char* sidAdmin = "S-1-5-18";
+        newId.Value.AccountSid.Size = static_cast<uint32_t>(strlen(sidAdmin));
+        std::memcpy(newId.Value.AccountSid.Data, sidAdmin, strlen(sidAdmin));
+
+        win32::BOOL isNewTemplate = 0;
+        hr = winbio::WinBioEnrollCommit(hSession, &newId, &isNewTemplate);
+        TEST_ASSERT(hr == S_OK && isNewTemplate == 1, "WinBioEnrollCommit must succeed");
+
+        // Verify newly enrolled RH Thumb
+        win32::BOOL matchNew = 0;
+        hr = winbio::WinBioVerify(hSession, 1, winbio::WINBIO_SUBTYPE_RH_THUMB, &newId, &matchNew, &reject);
+        TEST_ASSERT(hr == S_OK && matchNew == 1, "Verification of newly enrolled RH thumb must match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Enrollment Discard & Cancellation
+    // ------------------------------------------------------------------------
+    {
+        hr = winbio::WinBioEnrollBegin(hSession, winbio::WINBIO_SUBTYPE_LH_RING_FINGER, 1);
+        TEST_ASSERT(hr == S_OK, "WinBioEnrollBegin must succeed");
+
+        winbio::WINBIO_REJECT_DETAIL reject = 0;
+        hr = winbio::WinBioEnrollCapture(hSession, &reject);
+        TEST_ASSERT(hr == winbio::WINBIO_I_MORE_DATA, "Sample 1 accepted");
+
+        hr = winbio::WinBioEnrollDiscard(hSession);
+        TEST_ASSERT(hr == S_OK, "WinBioEnrollDiscard must succeed");
+
+        // Capturing after discard must fail
+        hr = winbio::WinBioEnrollCapture(hSession, &reject);
+        TEST_ASSERT(hr == winbio::WINBIO_E_NO_MATCH, "Capture after discard must fail");
+
+        // Focus & Cancel APIs
+        TEST_ASSERT(winbio::WinBioAcquireFocus() == S_OK, "WinBioAcquireFocus must succeed");
+        TEST_ASSERT(winbio::WinBioReleaseFocus() == S_OK, "WinBioReleaseFocus must succeed");
+        TEST_ASSERT(winbio::WinBioCancel(hSession) == S_OK, "WinBioCancel must succeed");
+        TEST_ASSERT(winbio::WinBioWait(hSession) == S_OK, "WinBioWait must succeed");
+    }
+
+    // Close session
+    hr = winbio::WinBioCloseSession(hSession);
+    TEST_ASSERT(hr == S_OK, "WinBioCloseSession must succeed");
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Interactive Shell Integration (cmdWinBio)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // winbio test
+        shell.execute("winbio test", out);
+        TEST_ASSERT(out.str().find("[WINBIO] Self-Test Completed: ALL BIOMETRIC TESTS PASSED.") != std::string::npos, "winbio test must pass");
+
+        // winbio list
+        out.str("");
+        shell.execute("winbio list", out);
+        TEST_ASSERT(out.str().find("MicaNT Sovereign Optical Fingerprint Sensor") != std::string::npos, "winbio list must show fingerprint sensor");
+        TEST_ASSERT(out.str().find("MicaNT Sovereign TrueDepth Infrared Facial Sensor") != std::string::npos, "winbio list must show facial sensor");
+        TEST_ASSERT(out.str().find("READY / CALIBRATED") != std::string::npos, "winbio list must show sensor status");
+
+        // winbio status
+        out.str("");
+        shell.execute("winbio status", out);
+        TEST_ASSERT(out.str().find("WbioSrvc (PID 1166, RUNNING, svchost)") != std::string::npos, "winbio status must show WbioSrvc");
+        TEST_ASSERT(out.str().find("Right Index Finger") != std::string::npos, "winbio status must show right index enrollment");
+
+        // winbio verify 1 2 (RH_INDEX_FINGER = 2)
+        out.str("");
+        shell.execute("winbio verify 1 2", out);
+        TEST_ASSERT(out.str().find("Biometric Verification SUCCESS: Identity MATCHED on Unit 1") != std::string::npos, "winbio verify must succeed");
+
+        // winbio enroll 1 3 (RH_MIDDLE_FINGER = 3)
+        out.str("");
+        shell.execute("winbio enroll 1 3", out);
+        TEST_ASSERT(out.str().find("Biometric Enrollment SUCCESS: New template committed for SubFactor 3 on Unit 1") != std::string::npos, "winbio enroll must succeed");
+    }
+
+    std::cout << "[TEST] Suite 96: Windows Biometric Framework (WBF) & Windows Hello Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -20266,6 +20519,7 @@ int main() {
     RUN_TEST(Test_WindowsLocation_Geolocation_Subsystem);
     RUN_TEST(Test_WindowsWPD_PortableDevices_Subsystem);
     RUN_TEST(Test_WindowsSensors_Subsystem);
+    RUN_TEST(Test_WindowsBiometrics_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

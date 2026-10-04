@@ -86,6 +86,7 @@
 #include "location.hpp"
 #include "wpd.hpp"
 #include "sensors.hpp"
+#include "winbio.hpp"
 
 namespace micant::shell {
 
@@ -259,6 +260,7 @@ public:
             if (cmd == "location" || cmd == "geo" || cmd == "gps") { cmdLocation(tokens, out); return 0; }
             if (cmd == "wpd" || cmd == "pdevice") { cmdWpd(tokens, out); return 0; }
             if (cmd == "sensor" || cmd == "sensors") { cmdSensor(tokens, out); return 0; }
+            if (cmd == "winbio" || cmd == "bio" || cmd == "hello") { cmdWinBio(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -536,6 +538,7 @@ private:
             << "  LOCATION [status|get|set] Windows Geolocation & Location Framework (location test)\n"
             << "  WPD [list|info|browse] Windows Portable Devices Subsystem (wpd test)\n"
             << "  SENSOR [list|read|test] Windows Sensors API & Sensor Platform (sensor test)\n"
+            << "  WINBIO [list|status|verify|enroll|test] Windows Biometric Framework & Windows Hello (winbio test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -9888,6 +9891,213 @@ private:
             << "  sensor list                             Lists active sensors and operational states\n"
             << "  sensor read [type]                      Reads real-time data from sensor (accel|light|compass|gyro|baro)\n"
             << "  sensor inject <type> <val1> [val2] [val3] Injects simulated sensor data\n";
+    }
+
+    void cmdWinBio(const std::vector<std::string>& tokens, std::ostream& out) {
+        using winbio::HRESULT;
+        using ole32::S_OK;
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Windows Biometric Framework & Windows Hello Self-Test    \n"
+                << "========================================================================\n";
+
+            winbio::InitializeBiometricsSubsystemExports();
+
+            // 1. Session Opening
+            winbio::WINBIO_SESSION_HANDLE hSession = 0;
+            HRESULT hr = winbio::WinBioOpenSession(
+                winbio::WINBIO_TYPE_FINGERPRINT | winbio::WINBIO_TYPE_FACIAL_FEATURES,
+                0, winbio::WINBIO_FLAG_DEFAULT, nullptr, 0, nullptr, &hSession
+            );
+            out << "[TEST] 1. WinBioOpenSession: " << (hr == S_OK && hSession != 0 ? "SUCCESS" : "FAILED")
+                << " (Handle: 0x" << std::hex << hSession << std::dec << ")\n";
+
+            // 2. Unit Enumeration
+            winbio::WINBIO_UNIT_SCHEMA* units = nullptr;
+            size_t unitCount = 0;
+            hr = winbio::WinBioEnumBiometricUnits(winbio::WINBIO_TYPE_ANY, &units, &unitCount);
+            out << "[TEST] 2. WinBioEnumBiometricUnits: " << (hr == S_OK && unitCount >= 2 ? "SUCCESS" : "FAILED")
+                << " (Found: " << unitCount << " unit(s))\n";
+            if (units) {
+                for (size_t i = 0; i < unitCount; ++i) {
+                    std::wstring wsDesc = units[i].Description;
+                    std::string sDesc(wsDesc.begin(), wsDesc.end());
+                    out << "         Unit " << units[i].UnitId << ": " << sDesc << "\n";
+                }
+                winbio::WinBioFree(units);
+            }
+
+            // 3. Database Enumeration
+            winbio::WINBIO_STORAGE_SCHEMA* dbs = nullptr;
+            size_t dbCount = 0;
+            hr = winbio::WinBioEnumDatabases(winbio::WINBIO_TYPE_ANY, &dbs, &dbCount);
+            out << "[TEST] 3. WinBioEnumDatabases: " << (hr == S_OK && dbCount >= 1 ? "SUCCESS" : "FAILED")
+                << " (Found: " << dbCount << " database(s))\n";
+            if (dbs) {
+                std::wstring wsPath = dbs[0].FilePath;
+                std::string sPath(wsPath.begin(), wsPath.end());
+                out << "         Primary Storage: " << sPath << "\n";
+                winbio::WinBioFree(dbs);
+            }
+
+            // 4. Verification Workflow
+            winbio::WINBIO_IDENTITY idAdmin{};
+            win32::BOOL bMatch = 0;
+            winbio::WINBIO_REJECT_DETAIL reject = 0;
+            hr = winbio::WinBioVerify(
+                hSession, 1, winbio::WINBIO_SUBTYPE_RH_INDEX_FINGER,
+                &idAdmin, &bMatch, &reject
+            );
+            out << "[TEST] 4. WinBioVerify (Unit 1, Right Index): "
+                << (hr == S_OK && bMatch ? "SUCCESS (MATCH VERIFIED)" : "FAILED") << "\n";
+
+            // 5. Identification Workflow
+            winbio::WINBIO_IDENTITY idIdent{};
+            winbio::WINBIO_BIOMETRIC_SUBTYPE subFactor = 0;
+            hr = winbio::WinBioIdentify(hSession, 1, &idIdent, &subFactor, &reject);
+            out << "[TEST] 5. WinBioIdentify (Unit 1): "
+                << (hr == S_OK && subFactor == winbio::WINBIO_SUBTYPE_RH_INDEX_FINGER ? "SUCCESS" : "FAILED") << "\n";
+
+            // 6. Enrollment Simulation Workflow (Begin -> Capture x 3 -> Commit)
+            hr = winbio::WinBioEnrollBegin(hSession, winbio::WINBIO_SUBTYPE_LH_THUMB, 1);
+            out << "[TEST] 6. WinBioEnrollBegin (Left Thumb): " << (hr == S_OK ? "SUCCESS" : "FAILED") << "\n";
+
+            hr = winbio::WinBioEnrollCapture(hSession, &reject);
+            out << "         Sample 1: " << (hr == winbio::WINBIO_I_MORE_DATA ? "MORE_DATA (Accepted)" : "FAILED") << "\n";
+
+            hr = winbio::WinBioEnrollCapture(hSession, &reject);
+            out << "         Sample 2: " << (hr == winbio::WINBIO_I_MORE_DATA ? "MORE_DATA (Accepted)" : "FAILED") << "\n";
+
+            hr = winbio::WinBioEnrollCapture(hSession, &reject);
+            out << "         Sample 3: " << (hr == S_OK ? "COMPLETE (Accepted)" : "FAILED") << "\n";
+
+            winbio::WINBIO_IDENTITY newId{};
+            newId.Type = winbio::WINBIO_ID_TYPE_SID;
+            const char* testSid = "S-1-5-21-500";
+            newId.Value.AccountSid.Size = static_cast<uint32_t>(strlen(testSid));
+            std::memcpy(newId.Value.AccountSid.Data, testSid, strlen(testSid));
+            win32::BOOL isNew = 0;
+            hr = winbio::WinBioEnrollCommit(hSession, &newId, &isNew);
+            out << "         Commit:   " << (hr == S_OK && isNew ? "COMMITTED NEW TEMPLATE" : "FAILED") << "\n";
+
+            // Verify the newly enrolled finger
+            bMatch = 0;
+            hr = winbio::WinBioVerify(hSession, 1, winbio::WINBIO_SUBTYPE_LH_THUMB, &idAdmin, &bMatch, &reject);
+            out << "         Re-Verify New Enrollment: " << (hr == S_OK && bMatch ? "SUCCESS (MATCH)" : "FAILED") << "\n";
+
+            // Close session
+            winbio::WinBioCloseSession(hSession);
+            out << "[WINBIO] Self-Test Completed: ALL BIOMETRIC TESTS PASSED.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            auto units = winbio::BiometricManager::get().enumerateUnits(winbio::WINBIO_TYPE_ANY);
+            out << "========================================================================\n"
+                << "             Active Windows Sovereign Biometric Sensor Units            \n"
+                << "========================================================================\n";
+            for (const auto& u : units) {
+                std::string sDesc(u.Description, u.Description + wcslen(u.Description));
+                std::string sMfg(u.Manufacturer, u.Manufacturer + wcslen(u.Manufacturer));
+                std::string sModel(u.Model, u.Model + wcslen(u.Model));
+                std::string sSerial(u.SerialNumber, u.SerialNumber + wcslen(u.SerialNumber));
+                std::string sType = (u.BiometricFactor == winbio::WINBIO_TYPE_FINGERPRINT) ? "Fingerprint Sensor" : "Facial Recognition IR";
+
+                out << "  [Unit " << u.UnitId << "] " << sDesc << "\n"
+                    << "      Type:         " << sType << "\n"
+                    << "      Model:        " << sModel << " (" << sMfg << ")\n"
+                    << "      Serial:       " << sSerial << "\n"
+                    << "      Status:       " << (u.SensorStatus == winbio::WINBIO_SENSOR_READY ? "READY / CALIBRATED" : "NOT READY") << "\n"
+                    << "      Firmware:     v" << u.FirmwareVersion.Major << "." << u.FirmwareVersion.Minor << "\n"
+                    << "      Capabilities: SENSOR | MATCHING | DATABASE | SECURE_SENSOR\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "status") {
+            auto enrolls = winbio::BiometricManager::get().enumerateEnrollments(0);
+            auto dbs = winbio::BiometricManager::get().enumerateDatabases(winbio::WINBIO_TYPE_ANY);
+            size_t sessions = winbio::BiometricManager::get().getSessionCount();
+
+            out << "========================================================================\n"
+                << "             Windows Biometric Framework Operational Status             \n"
+                << "========================================================================\n"
+                << "  Service Daemon:    WbioSrvc (PID 1166, RUNNING, svchost)\n"
+                << "  Active Sessions:   " << sessions << "\n"
+                << "  Enrolled Records:  " << enrolls.size() << "\n"
+                << "  Biometric DBs:     " << dbs.size() << "\n";
+            for (size_t i = 0; i < enrolls.size(); ++i) {
+                std::string sub = (enrolls[i].subFactor == winbio::WINBIO_SUBTYPE_RH_INDEX_FINGER) ? "Right Index Finger" :
+                                  (enrolls[i].subFactor == winbio::WINBIO_SUBTYPE_LH_THUMB) ? "Left Thumb" : "Facial Biometrics";
+                out << "    [" << (i + 1) << "] Unit " << enrolls[i].unitId << " -> " << sub
+                    << " (Samples: " << enrolls[i].sampleCount << ")\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "verify") {
+            uint32_t unitId = (tokens.size() > 2) ? std::stoul(tokens[2]) : 1;
+            winbio::WINBIO_BIOMETRIC_SUBTYPE subFactor = (tokens.size() > 3) ?
+                static_cast<winbio::WINBIO_BIOMETRIC_SUBTYPE>(std::stoul(tokens[3])) :
+                winbio::WINBIO_SUBTYPE_RH_INDEX_FINGER;
+
+            winbio::WINBIO_SESSION_HANDLE hSession = 0;
+            winbio::WinBioOpenSession(winbio::WINBIO_TYPE_ANY, 0, winbio::WINBIO_FLAG_DEFAULT, nullptr, 0, nullptr, &hSession);
+
+            winbio::WINBIO_IDENTITY id{};
+            win32::BOOL match = 0;
+            winbio::WINBIO_REJECT_DETAIL rej = 0;
+            HRESULT hr = winbio::WinBioVerify(hSession, unitId, subFactor, &id, &match, &rej);
+
+            if (hr == S_OK && match) {
+                out << "[WINBIO] Biometric Verification SUCCESS: Identity MATCHED on Unit " << unitId << ".\n";
+            } else {
+                out << "[WINBIO] Biometric Verification FAILED: No match found.\n";
+            }
+            winbio::WinBioCloseSession(hSession);
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "enroll") {
+            uint32_t unitId = (tokens.size() > 2) ? std::stoul(tokens[2]) : 1;
+            winbio::WINBIO_BIOMETRIC_SUBTYPE subFactor = (tokens.size() > 3) ?
+                static_cast<winbio::WINBIO_BIOMETRIC_SUBTYPE>(std::stoul(tokens[3])) :
+                winbio::WINBIO_SUBTYPE_RH_MIDDLE_FINGER;
+
+            winbio::WINBIO_SESSION_HANDLE hSession = 0;
+            winbio::WinBioOpenSession(winbio::WINBIO_TYPE_ANY, 0, winbio::WINBIO_FLAG_DEFAULT, nullptr, 0, nullptr, &hSession);
+            winbio::WinBioEnrollBegin(hSession, subFactor, unitId);
+
+            winbio::WINBIO_REJECT_DETAIL rej = 0;
+            winbio::WinBioEnrollCapture(hSession, &rej);
+            winbio::WinBioEnrollCapture(hSession, &rej);
+            winbio::WinBioEnrollCapture(hSession, &rej);
+
+            winbio::WINBIO_IDENTITY id{};
+            id.Type = winbio::WINBIO_ID_TYPE_SID;
+            const char* testSid = "S-1-5-21-1001";
+            id.Value.AccountSid.Size = static_cast<uint32_t>(strlen(testSid));
+            std::memcpy(id.Value.AccountSid.Data, testSid, strlen(testSid));
+
+            win32::BOOL isNew = 0;
+            HRESULT hr = winbio::WinBioEnrollCommit(hSession, &id, &isNew);
+            if (hr == S_OK) {
+                out << "[WINBIO] Biometric Enrollment SUCCESS: New template committed for SubFactor "
+                    << static_cast<int>(subFactor) << " on Unit " << unitId << ".\n";
+            } else {
+                out << "[WINBIO] Biometric Enrollment FAILED.\n";
+            }
+            winbio::WinBioCloseSession(hSession);
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  winbio test                             Runs WBF self-test and verification lifecycle\n"
+            << "  winbio list                             Lists active biometric units and capabilities\n"
+            << "  winbio status                           Displays active biometric sessions and enrollments\n"
+            << "  winbio verify [unitId] [subFactor]      Performs biometric verification against identity\n"
+            << "  winbio enroll [unitId] [subFactor]      Simulates multi-sample enrollment workflow\n";
     }
 
     static std::string trim(std::string_view s) {

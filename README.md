@@ -116,6 +116,7 @@ However, over 35+ years of corporate development, the NT kernel became encumbere
 53. **Windows Geolocation & Location Framework Subsystem (`location.hpp`, `locationapi.dll`, `lfsvc`, `SensorService`)**: Complete clean-room implementation of the Windows Location API architecture derived from `win32metadata`. Implements position reports (`ILocation`, `ILocationReport`, `ILatLongReport`, `ICivicAddressReport`, `ILocationEvents`), coordinates, altitude, accuracy radius, heading, speed, civic address parsing, sovereign `LocationManager`, SCM services `lfsvc` and `SensorService`, and interactive command-line utility (`location status`, `location get`, `location set`, `location test`). Interactive shell command (`location`, `geo`, `gps`).
 54. **Windows Portable Devices (WPD) Subsystem (`wpd.hpp`, `portabledeviceapi.dll`, `wpd_ci.dll`, `WpdBusEnum`)**: Complete clean-room implementation of the Windows Portable Devices COM architecture derived from `win32metadata`. Implements device management and content inspection (`IPortableDeviceManager`, `IPortableDevice`, `IPortableDeviceContent`, `IPortableDeviceProperties`, `IPortableDeviceCapabilities`, `IEnumPortableDeviceObjectIDs`, `IPortableDeviceValues`, `IPortableDeviceKeyCollection`), sovereign companion smartphone emulation (Titan 100 / MicaPhone M1), hierarchical storage browsing (DCIM, Documents, Music), SCM service `WpdBusEnum`, and interactive command-line utility (`wpd list`, `wpd info`, `wpd browse`, `wpd test`). Interactive shell command (`wpd`, `pdevice`).
 55. **Windows Sensors API & Sensor Class Extension Subsystem (`sensors.hpp`, `sensorsapi.dll`, `sensorsclassextension.dll`, `SensorDataService`)**: Complete clean-room implementation of the Windows Sensor Platform COM architecture derived from `win32metadata`. Implements sensor discovery and telemetry reporting (`ISensorManager`, `ISensorCollection`, `ISensor`, `ISensorDataReport`, `ISensorEvents`, `ISensorClassExtension`), standard sensor categories (Motion, Orientation, Light, Environmental), pre-seeded sovereign hardware sensors (3-Axis Accelerometer, Ambient Light Sensor, 3D Compass, Gyroscope, Barometer), real-time PROPERTYKEY data field reporting, simulated sensor data injection, SCM service `SensorDataService`, and interactive command-line utility (`sensor test`, `sensor list`, `sensor read`, `sensor inject`). Interactive shell command (`sensor`, `sensors`).
+56. **Windows Biometric Framework (WBF) & Windows Hello Subsystem (`winbio.hpp`, `winbio.dll`, `winbiosrvc.dll`, `WbioSrvc`)**: Complete clean-room implementation of the Windows Biometric Framework and Windows Hello architecture derived from `win32metadata`. Implements biometric session management (`WinBioOpenSession`, `WinBioCloseSession`), biometric unit enumeration (`WinBioEnumBiometricUnits`), database schema inspection (`WinBioEnumDatabases`), multi-sample progressive biometric enrollment (`WinBioEnrollBegin`, `WinBioEnrollCapture` with `WINBIO_I_MORE_DATA`, `WinBioEnrollCommit`, `WinBioEnrollDiscard`), biometric verification (`WinBioVerify`), biometric identification (`WinBioIdentify`), session cancellation and focus control (`WinBioCancel`, `WinBioAcquireFocus`, `WinBioReleaseFocus`), pre-seeded sovereign biometric hardware sensors (Sovereign Optical Fingerprint Sensor `MICA-BIO-FP500`, TrueDepth Infrared Facial Sensor `MICA-BIO-FACE-IR`), biometric database storage (`system.db`), SCM service `WbioSrvc` ("Windows Biometric Service", PID 1166, svchost `LocalSystemNetworkRestricted`), and interactive command-line utility (`winbio test`, `winbio list`, `winbio status`, `winbio verify`, `winbio enroll`). Interactive shell command (`winbio`, `bio`, `hello`).
 
 ---
 
@@ -241,12 +242,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (95 Suites, 100% Passing)
+### Build & Run Unit Test Suite (96 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 95 Test Suites:
+# Run all 96 Test Suites:
 .\bin\micant_tests.exe
 ```
 
