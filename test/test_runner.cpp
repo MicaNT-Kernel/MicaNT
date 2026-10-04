@@ -120,6 +120,7 @@
 #include "micant/winbio.hpp"
 #include "micant/bluetooth.hpp"
 #include "micant/cardmod.hpp"
+#include "micant/posix.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -21019,6 +21020,326 @@ void Test_WindowsSmartCardMinidriver_Subsystem() {
     std::cout << "[TEST] Suite 98: Windows Smart Card Minidriver & Base CSP Architecture PASSED.\n";
 }
 
+void Test_WindowsPOSIX_Subsystem() {
+    std::cout << "[TEST] Suite 99: Running Windows POSIX.1 Subsystem & UNIX Compatibility Tests...\n";
+
+    auto& ldr = ldr::DynamicLoader::get();
+    posix::InitializePosixSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (psxdll.dll / psxss.exe)
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "fork") != nullptr, "psxdll.dll must export fork");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "execve") != nullptr, "psxdll.dll must export execve");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "waitpid") != nullptr, "psxdll.dll must export waitpid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "getpid") != nullptr, "psxdll.dll must export getpid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "getppid") != nullptr, "psxdll.dll must export getppid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "getuid") != nullptr, "psxdll.dll must export getuid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "geteuid") != nullptr, "psxdll.dll must export geteuid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "getgid") != nullptr, "psxdll.dll must export getgid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "getegid") != nullptr, "psxdll.dll must export getegid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "setuid") != nullptr, "psxdll.dll must export setuid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "setgid") != nullptr, "psxdll.dll must export setgid");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "kill") != nullptr, "psxdll.dll must export kill");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "sigaction") != nullptr, "psxdll.dll must export sigaction");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "pipe") != nullptr, "psxdll.dll must export pipe");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "open") != nullptr, "psxdll.dll must export open");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "close") != nullptr, "psxdll.dll must export close");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "read") != nullptr, "psxdll.dll must export read");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "write") != nullptr, "psxdll.dll must export write");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "dup2") != nullptr, "psxdll.dll must export dup2");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "stat") != nullptr, "psxdll.dll must export stat");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "unlink") != nullptr, "psxdll.dll must export unlink");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "getcwd") != nullptr, "psxdll.dll must export getcwd");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "chdir") != nullptr, "psxdll.dll must export chdir");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "isatty") != nullptr, "psxdll.dll must export isatty");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "DllCanUnloadNow") != nullptr, "psxdll.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "DllRegisterServer") != nullptr, "psxdll.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("psxdll.dll", "DllUnregisterServer") != nullptr, "psxdll.dll must export DllUnregisterServer");
+
+    TEST_ASSERT(ldr.getExport("psxss.exe", "PosixServerMain") != nullptr, "psxss.exe must export PosixServerMain");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verDll = version::VersionDatabase::Instance().FindModule("psxdll.dll");
+        TEST_ASSERT(verDll != nullptr, "VersionDatabase must contain psxdll.dll");
+        TEST_ASSERT(verDll->stringTable.at("FileDescription") == "POSIX.1 Subsystem Client Library", "psxdll.dll description match");
+        TEST_ASSERT(verDll->stringTable.at("OriginalFilename") == "psxdll.dll", "psxdll.dll original filename match");
+        TEST_ASSERT(verDll->stringTable.at("ProductName") == "MicaNT POSIX Subsystem", "psxdll.dll product name match");
+
+        const auto* verSs = version::VersionDatabase::Instance().FindModule("psxss.exe");
+        TEST_ASSERT(verSs != nullptr, "VersionDatabase must contain psxss.exe");
+        TEST_ASSERT(verSs->stringTable.at("FileDescription") == "POSIX.1 Subsystem Server", "psxss.exe description match");
+        TEST_ASSERT(verSs->stringTable.at("OriginalFilename") == "psxss.exe", "psxss.exe original filename match");
+        TEST_ASSERT(verSs->stringTable.at("ProductName") == "MicaNT POSIX Subsystem", "psxss.exe product name match");
+
+        const auto* verApp = version::VersionDatabase::Instance().FindModule("posix.exe");
+        TEST_ASSERT(verApp != nullptr, "VersionDatabase must contain posix.exe");
+        TEST_ASSERT(verApp->stringTable.at("FileDescription") == "POSIX Subsystem Application Launcher", "posix.exe description match");
+        TEST_ASSERT(verApp->stringTable.at("OriginalFilename") == "posix.exe", "posix.exe original filename match");
+        TEST_ASSERT(verApp->stringTable.at("ProductName") == "MicaNT POSIX Subsystem", "posix.exe product name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: SCM Service Registration (PosixSubsystem)
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        auto svc = scm.getServiceRecord(L"PosixSubsystem");
+        TEST_ASSERT(svc != nullptr, "PosixSubsystem service must be registered in SCM");
+        TEST_ASSERT(svc->displayName == L"POSIX.1 Subsystem Server", "PosixSubsystem display name match");
+        TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "PosixSubsystem must be running");
+        TEST_ASSERT(svc->status.dwProcessId == 1180, "PosixSubsystem PID match (1180)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Process Hierarchy Lifecycle (Init, Fork, Execve)
+    // ------------------------------------------------------------------------
+    posix::PosixSubsystemServer::get().reset();
+    posix::pid_t childPid = 0;
+    {
+        auto* pInit = posix::PosixSubsystemServer::get().getProcess(1);
+        TEST_ASSERT(pInit != nullptr, "Init process must exist at PID 1");
+        TEST_ASSERT(pInit->command == "/bin/init", "Init command match");
+        TEST_ASSERT(pInit->uid == 0 && pInit->gid == 0, "Init running as root");
+
+        childPid = posix::psx_fork();
+        TEST_ASSERT(childPid > 1, "psx_fork must return child PID > 1");
+
+        auto* pChild = posix::PosixSubsystemServer::get().getProcess(childPid);
+        TEST_ASSERT(pChild != nullptr, "Child process must exist in process table");
+        TEST_ASSERT(pChild->ppid == 1, "Child parent must be PID 1");
+
+        char* const argv[] = { const_cast<char*>("/bin/ls"), const_cast<char*>("-la"), nullptr };
+        char* const envp[] = { const_cast<char*>("TERM=xterm"), nullptr };
+        int rc = posix::psx_execve("/bin/ls", argv, envp);
+        TEST_ASSERT(rc == 0, "psx_execve must succeed for /bin/ls");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Process Credentials & Identity
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(posix::psx_getuid() == 0, "Initial UID is 0 (root)");
+        TEST_ASSERT(posix::psx_getgid() == 0, "Initial GID is 0 (root)");
+
+        int rc = posix::psx_setuid(1000);
+        TEST_ASSERT(rc == 0, "psx_setuid(1000) must succeed");
+        TEST_ASSERT(posix::psx_getuid() == 1000, "Updated UID is 1000");
+
+        rc = posix::psx_setgid(1000);
+        TEST_ASSERT(rc == 0, "psx_setgid(1000) must succeed");
+        TEST_ASSERT(posix::psx_getgid() == 1000, "Updated GID is 1000");
+
+        // Restore root
+        posix::psx_setuid(0);
+        posix::psx_setgid(0);
+        TEST_ASSERT(posix::psx_getuid() == 0, "Restored UID to root");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Signal Action & Delivery Architecture
+    // ------------------------------------------------------------------------
+    {
+        posix::sigaction_t act{};
+        act.sa_handler = posix::PSX_SIG_IGN;
+        act.sa_flags = 0;
+        int rc = posix::psx_sigaction(posix::PSX_SIGUSR1, &act, nullptr);
+        TEST_ASSERT(rc == 0, "sigaction(SIGUSR1, SIG_IGN) must succeed");
+
+        posix::sigaction_t oldact{};
+        rc = posix::psx_sigaction(posix::PSX_SIGUSR1, nullptr, &oldact);
+        TEST_ASSERT(rc == 0 && oldact.sa_handler == posix::PSX_SIG_IGN, "Queried oldact matches SIG_IGN");
+
+        // Send SIGTERM to child
+        rc = posix::psx_kill(childPid, posix::PSX_SIGTERM);
+        TEST_ASSERT(rc == 0, "kill(childPid, SIGTERM) must succeed");
+
+        auto* pChild = posix::PosixSubsystemServer::get().getProcess(childPid);
+        TEST_ASSERT(pChild != nullptr && pChild->state == posix::PosixProcessState::Zombie, "Target child transitioned to Zombie state");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Process Reaping & Exit Handling (waitpid)
+    // ------------------------------------------------------------------------
+    {
+        int status = 0;
+        posix::pid_t reaped = posix::psx_waitpid(childPid, &status, 0);
+        TEST_ASSERT(reaped == childPid, "waitpid must reap target child PID");
+        TEST_ASSERT((status >> 8) == (128 + posix::PSX_SIGTERM), "Exit status reflects SIGTERM termination");
+
+        auto* pChildAfter = posix::PosixSubsystemServer::get().getProcess(childPid);
+        TEST_ASSERT(pChildAfter == nullptr, "Reaped child no longer in process table");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: File Descriptors, VFS I/O & Creation
+    // ------------------------------------------------------------------------
+    {
+        int fd = posix::psx_open("/tmp/suite99_test.dat", posix::PSX_O_RDWR | posix::PSX_O_CREAT, 0644);
+        TEST_ASSERT(fd >= 3, "open with O_CREAT must return valid FD >= 3");
+
+        const char testMsg[] = "Clean-Room POSIX Subsystem Suite 99";
+        posix::ssize_t written = posix::psx_write(fd, testMsg, sizeof(testMsg) - 1);
+        TEST_ASSERT(written == sizeof(testMsg) - 1, "write must write full payload length");
+
+        int rc = posix::psx_close(fd);
+        TEST_ASSERT(rc == 0, "close must succeed");
+
+        // Reopen for reading
+        fd = posix::psx_open("/tmp/suite99_test.dat", posix::PSX_O_RDONLY, 0);
+        TEST_ASSERT(fd >= 3, "open for read returns valid FD");
+
+        char buf[64]{};
+        posix::ssize_t nRead = posix::psx_read(fd, buf, sizeof(buf) - 1);
+        TEST_ASSERT(nRead == sizeof(testMsg) - 1, "read returned expected byte count");
+        TEST_ASSERT(std::strcmp(buf, testMsg) == 0, "read payload matched written payload");
+
+        posix::psx_close(fd);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Anonymous Pipe IPC Architecture
+    // ------------------------------------------------------------------------
+    {
+        int pipefds[2]{ -1, -1 };
+        int rc = posix::psx_pipe(pipefds);
+        TEST_ASSERT(rc == 0, "pipe must succeed");
+        TEST_ASSERT(pipefds[0] >= 3 && pipefds[1] >= 3, "Valid read and write FDs allocated");
+
+        const char pipeData[] = "Pipe IPC Verification Token 0xFEED";
+        posix::ssize_t w = posix::psx_write(pipefds[1], pipeData, sizeof(pipeData) - 1);
+        TEST_ASSERT(w == sizeof(pipeData) - 1, "Pipe write must write entire message");
+
+        char readPipe[64]{};
+        posix::ssize_t r = posix::psx_read(pipefds[0], readPipe, sizeof(readPipe) - 1);
+        TEST_ASSERT(r == sizeof(pipeData) - 1, "Pipe read must read full message");
+        TEST_ASSERT(std::strcmp(readPipe, pipeData) == 0, "Pipe payload verified");
+
+        posix::psx_close(pipefds[0]);
+        posix::psx_close(pipefds[1]);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Special UNIX Character Devices (/dev/null, /dev/zero, /dev/tty)
+    // ------------------------------------------------------------------------
+    {
+        // /dev/null
+        int fdNull = posix::psx_open("/dev/null", posix::PSX_O_RDWR, 0);
+        TEST_ASSERT(fdNull >= 3, "open /dev/null must succeed");
+        posix::ssize_t w = posix::psx_write(fdNull, "DiscardThis", 11);
+        TEST_ASSERT(w == 11, "write to /dev/null succeeds");
+        char nullRead[16]{};
+        posix::ssize_t r = posix::psx_read(fdNull, nullRead, sizeof(nullRead));
+        TEST_ASSERT(r == 0, "read from /dev/null returns EOF (0)");
+        posix::psx_close(fdNull);
+
+        // /dev/zero
+        int fdZero = posix::psx_open("/dev/zero", posix::PSX_O_RDONLY, 0);
+        TEST_ASSERT(fdZero >= 3, "open /dev/zero must succeed");
+        uint8_t zeroBuf[16]{ 0xFF, 0xFF, 0xFF };
+        r = posix::psx_read(fdZero, zeroBuf, 16);
+        TEST_ASSERT(r == 16, "read from /dev/zero returns requested count");
+        bool allZeros = true;
+        for (int i = 0; i < 16; ++i) if (zeroBuf[i] != 0) allZeros = false;
+        TEST_ASSERT(allZeros, "Buffer from /dev/zero is completely zeroed");
+        posix::psx_close(fdZero);
+
+        // /dev/tty & isatty
+        int fdTty = posix::psx_open("/dev/tty", posix::PSX_O_RDWR, 0);
+        TEST_ASSERT(fdTty >= 3, "open /dev/tty must succeed");
+        TEST_ASSERT(posix::psx_isatty(fdTty) == 1, "/dev/tty is a TTY");
+        posix::psx_close(fdTty);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 11: File Metadata & Unlink
+    // ------------------------------------------------------------------------
+    {
+        posix::stat_t st{};
+        int rc = posix::psx_stat("/etc/os-release", &st);
+        TEST_ASSERT(rc == 0, "stat /etc/os-release must succeed");
+        TEST_ASSERT((st.st_mode & posix::PSX_S_IFREG) != 0, "/etc/os-release is a regular file");
+        TEST_ASSERT(st.st_size > 0, "File has non-zero size");
+
+        rc = posix::psx_stat("/bin", &st);
+        TEST_ASSERT(rc == 0, "stat /bin must succeed");
+        TEST_ASSERT((st.st_mode & posix::PSX_S_IFDIR) != 0, "/bin is a directory");
+
+        rc = posix::psx_unlink("/tmp/suite99_test.dat");
+        TEST_ASSERT(rc == 0, "unlink must succeed");
+
+        rc = posix::psx_stat("/tmp/suite99_test.dat", &st);
+        TEST_ASSERT(rc == -posix::PSX_ENOENT, "stat on unlinked file must return -ENOENT");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Working Directory Navigation (getcwd, chdir)
+    // ------------------------------------------------------------------------
+    {
+        char cwdBuf[256]{};
+        TEST_ASSERT(posix::psx_getcwd(cwdBuf, sizeof(cwdBuf)) != nullptr, "getcwd must succeed");
+
+        int rc = posix::psx_chdir("/etc");
+        TEST_ASSERT(rc == 0, "chdir(/etc) must succeed");
+        std::memset(cwdBuf, 0, sizeof(cwdBuf));
+        posix::psx_getcwd(cwdBuf, sizeof(cwdBuf));
+        TEST_ASSERT(std::string(cwdBuf) == "/etc", "Current directory updated to /etc");
+
+        rc = posix::psx_chdir("/nonexistent_path");
+        TEST_ASSERT(rc != 0, "chdir to non-existent path must fail");
+
+        // Restore root
+        posix::psx_chdir("/");
+        posix::psx_getcwd(cwdBuf, sizeof(cwdBuf));
+        TEST_ASSERT(std::string(cwdBuf) == "/", "Current directory restored to /");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 13: Interactive Shell Integration (cmdPosix)
+    // ------------------------------------------------------------------------
+    {
+        posix::PosixSubsystemServer::get().reset();
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // posix test
+        shell.execute("posix test", out);
+        TEST_ASSERT(out.str().find("[POSIX] Self-Test Completed: ALL 14 TESTS PASSED (100%).") != std::string::npos, "posix test must pass all 14 tests");
+
+        // posix ps
+        out.str("");
+        shell.execute("posix ps", out);
+        TEST_ASSERT(out.str().find("/bin/init") != std::string::npos, "posix ps shows /bin/init");
+        TEST_ASSERT(out.str().find("/usr/sbin/crond") != std::string::npos, "posix ps shows /usr/sbin/crond");
+
+        // posix env
+        out.str("");
+        shell.execute("posix env", out);
+        TEST_ASSERT(out.str().find("SHELL=/bin/sh") != std::string::npos, "posix env shows SHELL");
+        TEST_ASSERT(out.str().find("USER=root") != std::string::npos, "posix env shows USER");
+
+        // posix sh uname
+        out.str("");
+        shell.execute("posix sh uname", out);
+        TEST_ASSERT(out.str().find("MicaNT 10.0.26100.1 POSIX.1/Interix") != std::string::npos, "posix sh uname output match");
+
+        // posix sh id
+        out.str("");
+        shell.execute("posix sh id", out);
+        TEST_ASSERT(out.str().find("uid=0(root)") != std::string::npos, "posix sh id output match");
+
+        // posix sh cat /etc/hostname
+        out.str("");
+        shell.execute("posix sh cat /etc/hostname", out);
+        TEST_ASSERT(out.str().find("micant-workstation") != std::string::npos, "posix sh cat shows hostname");
+    }
+
+    std::cout << "[TEST] Suite 99: Windows POSIX Subsystem & UNIX Compatibility PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -21122,6 +21443,7 @@ int main() {
     RUN_TEST(Test_WindowsBiometrics_Subsystem);
     RUN_TEST(Test_WindowsBluetooth_Subsystem);
     RUN_TEST(Test_WindowsSmartCardMinidriver_Subsystem);
+    RUN_TEST(Test_WindowsPOSIX_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
