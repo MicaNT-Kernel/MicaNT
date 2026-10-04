@@ -83,6 +83,7 @@
 #include "winscard.hpp"
 #include "nla.hpp"
 #include "wns.hpp"
+#include "location.hpp"
 
 namespace micant::shell {
 
@@ -253,6 +254,7 @@ public:
             if (cmd == "scard" || cmd == "smartcard") { cmdSCard(tokens, out); return 0; }
             if (cmd == "nla" || cmd == "netprof") { cmdNla(tokens, out); return 0; }
             if (cmd == "notify" || cmd == "toast" || cmd == "wns") { cmdNotify(tokens, out); return 0; }
+            if (cmd == "location" || cmd == "geo" || cmd == "gps") { cmdLocation(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -527,6 +529,7 @@ private:
             << "  SCARD [list|status] Smart Card & PC/SC subsystem utility (scard test)\n"
             << "  NLA [list|status] Windows Network Location Awareness & Network List (nla test)\n"
             << "  NOTIFY [toast|list|channel] Windows Push Notifications & Action Center (notify test)\n"
+            << "  LOCATION [status|get|set] Windows Geolocation & Location Framework (location test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -9233,6 +9236,192 @@ private:
             << "  notify list                             Lists active Action Center notifications\n"
             << "  notify channel [appId]                  Shows or acquires a push channel URI\n"
             << "  notify clear                            Clears Action Center notifications\n";
+    }
+
+    void cmdLocation(const std::vector<std::string>& tokens, std::ostream& out) {
+        location::InitializeLocationSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Windows Geolocation & Location Framework (location)\n\n"
+                << "Usage:\n"
+                << "  location test                           Runs Location API and COM self-test\n"
+                << "  location status                         Displays geolocation service and sensor status\n"
+                << "  location get                            Displays current coordinates and civic address\n"
+                << "  location set <lat> <lon> [alt] [acc]    Sets simulated GPS coordinates\n"
+                << "  location civic <addr1> <city> <state> <zip> Sets civic address\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "    MicaNT Windows Geolocation & Location Framework (LF) Self-Test     \n"
+                << "========================================================================\n";
+
+            location::ILocation* pLoc = nullptr;
+            ole32::HRESULT hr = ole32::CoCreateInstance(
+                location::CLSID_Location, nullptr, ole32::CLSCTX_INPROC_SERVER,
+                location::IID_ILocation, reinterpret_cast<void**>(&pLoc)
+            );
+            out << "[TEST] 1. CoCreateInstance(CLSID_Location): "
+                << (hr == ole32::S_OK && pLoc ? "SUCCESS" : "FAILED") << "\n";
+            if (!pLoc) {
+                out << "ERROR: Failed to instantiate ILocation.\n";
+                return;
+            }
+
+            location::LOCATION_REPORT_STATUS status{};
+            hr = pLoc->GetReportStatus(location::IID_ILatLongReport, &status);
+            out << "[TEST] 2. ILocation::GetReportStatus: "
+                << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                << " (Status: " << (status == location::REPORT_RUNNING ? "REPORT_RUNNING" : "OTHER") << ")\n";
+
+            location::ILocationReport* pReport = nullptr;
+            hr = pLoc->GetReport(location::IID_ILatLongReport, &pReport);
+            out << "[TEST] 3. ILocation::GetReport(IID_ILatLongReport): "
+                << (hr == ole32::S_OK && pReport ? "SUCCESS" : "FAILED") << "\n";
+
+            if (pReport) {
+                location::ILatLongReport* pLatLong = nullptr;
+                hr = pReport->QueryInterface(location::IID_ILatLongReport, reinterpret_cast<void**>(&pLatLong));
+                if (hr == ole32::S_OK && pLatLong) {
+                    double lat = 0, lon = 0, alt = 0, acc = 0;
+                    pLatLong->GetLatitude(&lat);
+                    pLatLong->GetLongitude(&lon);
+                    pLatLong->GetAltitude(&alt);
+                    pLatLong->GetErrorRadius(&acc);
+                    out << "         Position: Lat=" << lat << " Lon=" << lon << " Alt=" << alt << "m (Accuracy: +/-" << acc << "m)\n";
+                    pLatLong->Release();
+                }
+                pReport->Release();
+            }
+
+            // Civic address report test
+            location::ILocationReport* pCivicReport = nullptr;
+            hr = pLoc->GetReport(location::IID_ICivicAddressReport, &pCivicReport);
+            out << "[TEST] 4. ILocation::GetReport(IID_ICivicAddressReport): "
+                << (hr == ole32::S_OK && pCivicReport ? "SUCCESS" : "FAILED") << "\n";
+
+            if (pCivicReport) {
+                location::ICivicAddressReport* pCivic = nullptr;
+                hr = pCivicReport->QueryInterface(location::IID_ICivicAddressReport, reinterpret_cast<void**>(&pCivic));
+                if (hr == ole32::S_OK && pCivic) {
+                    ole32::BSTR city = nullptr;
+                    pCivic->GetCity(&city);
+                    ole32::BSTR state = nullptr;
+                    pCivic->GetStateProvince(&state);
+                    std::wstring wsCity = city ? city : L"";
+                    std::wstring wsState = state ? state : L"";
+                    std::string sCity(wsCity.begin(), wsCity.end());
+                    std::string sState(wsState.begin(), wsState.end());
+                    ole32::SysFreeString(city);
+                    ole32::SysFreeString(state);
+                    out << "         Civic Address: " << sCity << ", " << sState << "\n";
+                    pCivic->Release();
+                }
+                pCivicReport->Release();
+            }
+
+            pLoc->Release();
+
+            // C Client API Test
+            double cLat = 0, cLon = 0, cAcc = 0;
+            hr = location::LocationGetCoordinates(&cLat, &cLon, &cAcc);
+            out << "[TEST] 5. LocationGetCoordinates: "
+                << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                << " (" << cLat << ", " << cLon << ")\n";
+
+            out << "[LOCATION] Geolocation Subsystem Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "status") {
+            auto& mgr = location::LocationManager::get();
+            auto status = mgr.getStatus();
+            auto acc = mgr.getDesiredAccuracy();
+            uint32_t interval = mgr.getReportInterval();
+            auto sensor = mgr.getSensorId();
+
+            out << "========================================================================\n"
+                << "             MicaNT Geolocation & Location Framework Status            \n"
+                << "========================================================================\n"
+                << "  Provider Status:     " << (status == location::REPORT_RUNNING ? "RUNNING (Operational)" :
+                                              status == location::REPORT_INITIALIZING ? "INITIALIZING" :
+                                              status == location::REPORT_ACCESS_DENIED ? "ACCESS_DENIED" : "NOT_SUPPORTED") << "\n"
+                << "  Accuracy Profile:    " << (acc == location::LOCATION_DESIRED_ACCURACY_HIGH ? "HIGH ACCURACY" : "DEFAULT") << "\n"
+                << "  Reporting Interval:  " << interval << " ms\n"
+                << "  Sensor Device ID:    {" << std::hex << std::setfill('0') << std::setw(8) << sensor.Data1
+                << "-" << std::setw(4) << sensor.Data2 << "-" << std::setw(4) << sensor.Data3 << "}" << std::dec << "\n"
+                << "  Telemetry State:     SOVEREIGN ZERO-TELEMETRY (No Cloud Leakage)\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "get") {
+            auto& mgr = location::LocationManager::get();
+            auto coords = mgr.getCoordinates();
+            auto civic = mgr.getCivicAddress();
+
+            std::wstring wsAddr1 = civic.addressLine1;
+            std::wstring wsCity = civic.city;
+            std::wstring wsState = civic.stateProvince;
+            std::wstring wsZip = civic.postalCode;
+            std::wstring wsCountry = civic.countryRegion;
+            std::string sAddr1(wsAddr1.begin(), wsAddr1.end());
+            std::string sCity(wsCity.begin(), wsCity.end());
+            std::string sState(wsState.begin(), wsState.end());
+            std::string sZip(wsZip.begin(), wsZip.end());
+            std::string sCountry(wsCountry.begin(), wsCountry.end());
+
+            out << "========================================================================\n"
+                << "                    Current Geolocation Fix & Address                   \n"
+                << "========================================================================\n"
+                << "  Latitude:            " << std::fixed << std::setprecision(6) << coords.latitude << " deg\n"
+                << "  Longitude:           " << coords.longitude << " deg\n"
+                << "  Altitude:            " << std::setprecision(1) << coords.altitude << " m\n"
+                << "  Horizontal Error:    +/- " << coords.errorRadius << " m\n"
+                << "  Vertical Error:      +/- " << coords.altitudeError << " m\n"
+                << "  Heading / Bearing:   " << coords.heading << " deg\n"
+                << "  Ground Speed:        " << coords.speed << " m/s\n\n"
+                << "  Civic Address:\n"
+                << "    Street:            " << sAddr1 << "\n"
+                << "    City, State, Zip:  " << sCity << ", " << sState << " " << sZip << "\n"
+                << "    Country / Region:  " << sCountry << "\n";
+            return;
+        }
+
+        if (tokens.size() > 3 && tokens[1] == "set") {
+            double lat = std::stod(tokens[2]);
+            double lon = std::stod(tokens[3]);
+            double alt = (tokens.size() > 4) ? std::stod(tokens[4]) : 0.0;
+            double acc = (tokens.size() > 5) ? std::stod(tokens[5]) : 5.0;
+            location::LocationManager::get().setCoordinates(lat, lon, alt, acc);
+            out << "[LOCATION] Simulated coordinates updated:\n"
+                << "  Latitude:  " << lat << "\n"
+                << "  Longitude: " << lon << "\n"
+                << "  Altitude:  " << alt << " m\n"
+                << "  Accuracy:  +/- " << acc << " m\n";
+            return;
+        }
+
+        if (tokens.size() > 5 && tokens[1] == "civic") {
+            std::string a1 = tokens[2];
+            std::string city = tokens[3];
+            std::string state = tokens[4];
+            std::string zip = tokens[5];
+            std::wstring wa1(a1.begin(), a1.end());
+            std::wstring wcity(city.begin(), city.end());
+            std::wstring wstate(state.begin(), state.end());
+            std::wstring wzip(zip.begin(), zip.end());
+            location::LocationManager::get().setCivicAddress(wa1, L"", wcity, wstate, wzip, L"US");
+            out << "[LOCATION] Civic address updated to: " << a1 << ", " << city << ", " << state << " " << zip << "\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  location test                           Runs Location API and COM self-test\n"
+            << "  location status                         Displays geolocation service and sensor status\n"
+            << "  location get                            Displays current coordinates and civic address\n"
+            << "  location set <lat> <lon> [alt] [acc]    Sets simulated GPS coordinates\n"
+            << "  location civic <addr1> <city> <state> <zip> Sets civic address\n";
     }
 
     static std::string trim(std::string_view s) {

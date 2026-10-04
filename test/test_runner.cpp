@@ -114,6 +114,7 @@
 #include "micant/winscard.hpp"
 #include "micant/nla.hpp"
 #include "micant/wns.hpp"
+#include "micant/location.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -19197,6 +19198,343 @@ void Test_WindowsWNS_PushNotification_Subsystem() {
     std::cout << "[TEST] Suite 92: Windows Push Notification Service (WNS) & Push Notification Subsystem PASSED.\n";
 }
 
+class MockLocationEvents : public location::ILocationEvents {
+private:
+    uint32_t m_refCount{1};
+
+public:
+    uint32_t statusChangedCount{0};
+    location::LOCATION_REPORT_STATUS lastStatus{location::REPORT_NOT_SUPPORTED};
+    uint32_t locationChangedCount{0};
+
+    virtual ole32::HRESULT __stdcall QueryInterface(ole32::REFIID riid, void** ppvObject) override {
+        if (!ppvObject) return ole32::E_POINTER;
+        if (riid == ole32::IID_IUnknown || riid == location::IID_ILocationEvents) {
+            *ppvObject = static_cast<location::ILocationEvents*>(this);
+            AddRef();
+            return ole32::S_OK;
+        }
+        *ppvObject = nullptr;
+        return ole32::E_NOINTERFACE;
+    }
+
+    virtual uint32_t __stdcall AddRef() override {
+        return ++m_refCount;
+    }
+
+    virtual uint32_t __stdcall Release() override {
+        uint32_t count = --m_refCount;
+        if (count == 0) {
+            delete this;
+        }
+        return count;
+    }
+
+    virtual ole32::HRESULT __stdcall OnLocationChanged(ole32::REFIID /*reportType*/, location::ILocationReport* /*pLocationReport*/) override {
+        locationChangedCount++;
+        return ole32::S_OK;
+    }
+
+    virtual ole32::HRESULT __stdcall OnStatusChanged(ole32::REFIID /*reportType*/, location::LOCATION_REPORT_STATUS status) override {
+        statusChangedCount++;
+        lastStatus = status;
+        return ole32::S_OK;
+    }
+};
+
+void Test_WindowsLocation_Geolocation_Subsystem() {
+    std::cout << "[TEST] Running Suite 93: Windows Geolocation & Location Framework (LF) Subsystem (locationapi.dll)...\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Initialization (locationapi.dll)
+    // ------------------------------------------------------------------------
+    location::InitializeLocationSubsystemExports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "DllGetClassObject") != nullptr, "locationapi.dll must export DllGetClassObject");
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "DllCanUnloadNow") != nullptr, "locationapi.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "DllRegisterServer") != nullptr, "locationapi.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "DllUnregisterServer") != nullptr, "locationapi.dll must export DllUnregisterServer");
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "LocationInitialize") != nullptr, "locationapi.dll must export LocationInitialize");
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "LocationUninitialize") != nullptr, "locationapi.dll must export LocationUninitialize");
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "LocationGetCoordinates") != nullptr, "locationapi.dll must export LocationGetCoordinates");
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "LocationSetCoordinates") != nullptr, "locationapi.dll must export LocationSetCoordinates");
+    TEST_ASSERT(ldr.getExport("locationapi.dll", "LocationGetStatus") != nullptr, "locationapi.dll must export LocationGetStatus");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* ver = version::VersionDatabase::Instance().FindModule("locationapi.dll");
+        TEST_ASSERT(ver != nullptr, "VersionDatabase must contain locationapi.dll");
+        TEST_ASSERT(ver->stringTable.at("FileDescription") == "Windows Location API", "locationapi.dll description match");
+        TEST_ASSERT(ver->stringTable.at("OriginalFilename") == "locationapi.dll", "locationapi.dll original filename match");
+        TEST_ASSERT(ver->stringTable.at("ProductName") == "MicaNT Location Framework", "locationapi.dll product name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Service Control Manager Services (lfsvc, SensorService)
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+
+        auto lfSvc = scm.getServiceRecord(L"lfsvc");
+        TEST_ASSERT(lfSvc != nullptr, "lfsvc service must be registered in SCM");
+        TEST_ASSERT(lfSvc->displayName == L"Geolocation Service", "lfsvc display name match");
+        TEST_ASSERT(lfSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "lfsvc must be in running state");
+        TEST_ASSERT(lfSvc->status.dwProcessId == 1150, "lfsvc PID match");
+
+        auto sensorSvc = scm.getServiceRecord(L"SensorService");
+        TEST_ASSERT(sensorSvc != nullptr, "SensorService service must be registered in SCM");
+        TEST_ASSERT(sensorSvc->displayName == L"Sensor Service", "SensorService display name match");
+        TEST_ASSERT(sensorSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "SensorService must be in running state");
+        TEST_ASSERT(sensorSvc->status.dwProcessId == 1154, "SensorService PID match");
+    }
+
+    // Reset LocationManager to default
+    location::LocationManager::get().resetToDefault();
+
+    // ------------------------------------------------------------------------
+    // Stage 4: COM Activation & Class Factory via CoCreateInstance
+    // ------------------------------------------------------------------------
+    location::ILocation* pLoc = nullptr;
+    {
+        ole32::HRESULT hr = ole32::CoCreateInstance(
+            location::CLSID_Location, nullptr, ole32::CLSCTX_INPROC_SERVER,
+            location::IID_ILocation, reinterpret_cast<void**>(&pLoc)
+        );
+        TEST_ASSERT(hr == ole32::S_OK && pLoc != nullptr, "CoCreateInstance(CLSID_Location) must succeed");
+
+        ole32::IUnknown* pUnk = nullptr;
+        hr = pLoc->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+        TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "QueryInterface for IUnknown must succeed");
+        pUnk->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Geolocation Position Reporting (ILatLongReport)
+    // ------------------------------------------------------------------------
+    {
+        location::ILocationReport* pReport = nullptr;
+        ole32::HRESULT hr = pLoc->GetReport(location::IID_ILatLongReport, &pReport);
+        TEST_ASSERT(hr == ole32::S_OK && pReport != nullptr, "GetReport(IID_ILatLongReport) must succeed");
+
+        location::SENSOR_ID sid{};
+        hr = pReport->GetSensorID(&sid);
+        TEST_ASSERT(hr == ole32::S_OK, "GetSensorID must succeed");
+        TEST_ASSERT(sid.Data1 == 0x53454E53, "Sensor ID Data1 signature match");
+
+        win32::SYSTEMTIME st{};
+        hr = pReport->GetTimestamp(&st);
+        TEST_ASSERT(hr == ole32::S_OK, "GetTimestamp must succeed");
+        TEST_ASSERT(st.wYear == 2026, "Timestamp year match");
+
+        location::ILatLongReport* pLatLong = nullptr;
+        hr = pReport->QueryInterface(location::IID_ILatLongReport, reinterpret_cast<void**>(&pLatLong));
+        TEST_ASSERT(hr == ole32::S_OK && pLatLong != nullptr, "QueryInterface for ILatLongReport must succeed");
+
+        double lat = 0, lon = 0, alt = 0, err = 0, altErr = 0, head = 0, spd = 0;
+        hr = pLatLong->GetLatitude(&lat);
+        TEST_ASSERT(hr == ole32::S_OK && std::abs(lat - 47.6062) < 0.0001, "Latitude match");
+
+        hr = pLatLong->GetLongitude(&lon);
+        TEST_ASSERT(hr == ole32::S_OK && std::abs(lon - (-122.3321)) < 0.0001, "Longitude match");
+
+        hr = pLatLong->GetAltitude(&alt);
+        TEST_ASSERT(hr == ole32::S_OK && alt == 54.0, "Altitude match");
+
+        hr = pLatLong->GetErrorRadius(&err);
+        TEST_ASSERT(hr == ole32::S_OK && err == 5.0, "Error radius match");
+
+        hr = pLatLong->GetAltitudeError(&altErr);
+        TEST_ASSERT(hr == ole32::S_OK && altErr == 2.0, "Altitude error match");
+
+        hr = pLatLong->GetHeading(&head);
+        TEST_ASSERT(hr == ole32::S_OK && head == 180.0, "Heading match");
+
+        hr = pLatLong->GetSpeed(&spd);
+        TEST_ASSERT(hr == ole32::S_OK && spd == 0.0, "Speed match");
+
+        pLatLong->Release();
+        pReport->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Civic Address Reporting (ICivicAddressReport)
+    // ------------------------------------------------------------------------
+    {
+        location::ILocationReport* pReport = nullptr;
+        ole32::HRESULT hr = pLoc->GetReport(location::IID_ICivicAddressReport, &pReport);
+        TEST_ASSERT(hr == ole32::S_OK && pReport != nullptr, "GetReport(IID_ICivicAddressReport) must succeed");
+
+        location::ICivicAddressReport* pCivic = nullptr;
+        hr = pReport->QueryInterface(location::IID_ICivicAddressReport, reinterpret_cast<void**>(&pCivic));
+        TEST_ASSERT(hr == ole32::S_OK && pCivic != nullptr, "QueryInterface for ICivicAddressReport must succeed");
+
+        ole32::BSTR addr1 = nullptr;
+        hr = pCivic->GetAddressLine1(&addr1);
+        TEST_ASSERT(hr == ole32::S_OK && addr1 != nullptr, "GetAddressLine1 must succeed");
+        TEST_ASSERT(std::wstring(addr1) == L"One Sovereign Way", "AddressLine1 match");
+        ole32::SysFreeString(addr1);
+
+        ole32::BSTR city = nullptr;
+        hr = pCivic->GetCity(&city);
+        TEST_ASSERT(hr == ole32::S_OK && city != nullptr, "GetCity must succeed");
+        TEST_ASSERT(std::wstring(city) == L"Redmond", "City match");
+        ole32::SysFreeString(city);
+
+        ole32::BSTR state = nullptr;
+        hr = pCivic->GetStateProvince(&state);
+        TEST_ASSERT(hr == ole32::S_OK && state != nullptr, "GetStateProvince must succeed");
+        TEST_ASSERT(std::wstring(state) == L"WA", "StateProvince match");
+        ole32::SysFreeString(state);
+
+        ole32::BSTR zip = nullptr;
+        hr = pCivic->GetPostalCode(&zip);
+        TEST_ASSERT(hr == ole32::S_OK && zip != nullptr, "GetPostalCode must succeed");
+        TEST_ASSERT(std::wstring(zip) == L"98052", "PostalCode match");
+        ole32::SysFreeString(zip);
+
+        ole32::BSTR country = nullptr;
+        hr = pCivic->GetCountryRegion(&country);
+        TEST_ASSERT(hr == ole32::S_OK && country != nullptr, "GetCountryRegion must succeed");
+        TEST_ASSERT(std::wstring(country) == L"US", "CountryRegion match");
+        ole32::SysFreeString(country);
+
+        uint32_t detail = 0;
+        hr = pCivic->GetDetailLevel(&detail);
+        TEST_ASSERT(hr == ole32::S_OK && detail == 1, "DetailLevel must be 1");
+
+        pCivic->Release();
+        pReport->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Location Events and Status Changes (ILocationEvents)
+    // ------------------------------------------------------------------------
+    {
+        auto* pMockEvents = new MockLocationEvents();
+
+        ole32::HRESULT hr = pLoc->RegisterForReport(pMockEvents, location::IID_ILatLongReport, 500);
+        TEST_ASSERT(hr == ole32::S_OK, "RegisterForReport must succeed");
+        TEST_ASSERT(location::LocationManager::get().getListenerCount() == 1, "Listener count must be 1");
+
+        location::LocationManager::get().setStatus(location::REPORT_INITIALIZING);
+        TEST_ASSERT(pMockEvents->statusChangedCount == 1, "Mock must have received status change event");
+        TEST_ASSERT(pMockEvents->lastStatus == location::REPORT_INITIALIZING, "Status reported to mock must be REPORT_INITIALIZING");
+
+        location::LocationManager::get().setStatus(location::REPORT_RUNNING);
+        TEST_ASSERT(pMockEvents->statusChangedCount == 2, "Mock must have received 2nd status change event");
+        TEST_ASSERT(pMockEvents->lastStatus == location::REPORT_RUNNING, "Status reported to mock must be REPORT_RUNNING");
+
+        hr = pLoc->UnregisterForReport(location::IID_ILatLongReport);
+        TEST_ASSERT(hr == ole32::S_OK, "UnregisterForReport must succeed");
+        TEST_ASSERT(location::LocationManager::get().getListenerCount() == 0, "Listener count must be 0 after unregister");
+
+        pMockEvents->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Accuracy & Reporting Interval Configuration
+    // ------------------------------------------------------------------------
+    {
+        location::LOCATION_DESIRED_ACCURACY acc = location::LOCATION_DESIRED_ACCURACY_DEFAULT;
+        ole32::HRESULT hr = pLoc->GetDesiredAccuracy(location::IID_ILatLongReport, &acc);
+        TEST_ASSERT(hr == ole32::S_OK && acc == location::LOCATION_DESIRED_ACCURACY_DEFAULT, "Default accuracy match");
+
+        hr = pLoc->SetDesiredAccuracy(location::IID_ILatLongReport, location::LOCATION_DESIRED_ACCURACY_HIGH);
+        TEST_ASSERT(hr == ole32::S_OK, "SetDesiredAccuracy must succeed");
+
+        hr = pLoc->GetDesiredAccuracy(location::IID_ILatLongReport, &acc);
+        TEST_ASSERT(hr == ole32::S_OK && acc == location::LOCATION_DESIRED_ACCURACY_HIGH, "Accuracy must now be HIGH");
+
+        uint32_t interval = 0;
+        hr = pLoc->GetReportInterval(location::IID_ILatLongReport, &interval);
+        TEST_ASSERT(hr == ole32::S_OK && interval == 1000, "Default interval match");
+
+        hr = pLoc->SetReportInterval(location::IID_ILatLongReport, 250);
+        TEST_ASSERT(hr == ole32::S_OK, "SetReportInterval must succeed");
+
+        hr = pLoc->GetReportInterval(location::IID_ILatLongReport, &interval);
+        TEST_ASSERT(hr == ole32::S_OK && interval == 250, "Updated interval match");
+
+        hr = pLoc->RequestPermissions(nullptr, nullptr, 0, 0);
+        TEST_ASSERT(hr == ole32::S_OK, "RequestPermissions must succeed");
+    }
+
+    pLoc->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Win32 C Client APIs
+    // ------------------------------------------------------------------------
+    {
+        ole32::HRESULT hr = location::LocationInitialize();
+        TEST_ASSERT(hr == ole32::S_OK, "LocationInitialize must succeed");
+
+        hr = location::LocationSetCoordinates(37.7749, -122.4194, 16.0);
+        TEST_ASSERT(hr == ole32::S_OK, "LocationSetCoordinates must succeed");
+
+        double lat = 0, lon = 0, acc = 0;
+        hr = location::LocationGetCoordinates(&lat, &lon, &acc);
+        TEST_ASSERT(hr == ole32::S_OK, "LocationGetCoordinates must succeed");
+        TEST_ASSERT(std::abs(lat - 37.7749) < 0.0001, "Latitude SF match");
+        TEST_ASSERT(std::abs(lon - (-122.4194)) < 0.0001, "Longitude SF match");
+
+        uint32_t status = 0xFF;
+        hr = location::LocationGetStatus(&status);
+        TEST_ASSERT(hr == ole32::S_OK && status == location::REPORT_RUNNING, "LocationGetStatus must return REPORT_RUNNING");
+
+        hr = location::LocationUninitialize();
+        TEST_ASSERT(hr == ole32::S_OK, "LocationUninitialize must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Interactive Shell Integration (location test, status, get, set, civic)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // location test
+        out.str("");
+        shell.execute("location test", out);
+        TEST_ASSERT(out.str().find("[LOCATION] Geolocation Subsystem Self-Test Completed Successfully.") != std::string::npos, "location test must succeed");
+
+        // location status
+        out.str("");
+        shell.execute("location status", out);
+        TEST_ASSERT(out.str().find("Provider Status:     RUNNING (Operational)") != std::string::npos, "location status must show RUNNING");
+        TEST_ASSERT(out.str().find("SOVEREIGN ZERO-TELEMETRY") != std::string::npos, "location status must show zero-telemetry");
+
+        // location get
+        out.str("");
+        shell.execute("location get", out);
+        TEST_ASSERT(out.str().find("Current Geolocation Fix & Address") != std::string::npos, "location get header match");
+
+        // location set
+        out.str("");
+        shell.execute("location set 40.7128 -74.0060 10.0 3.0", out);
+        TEST_ASSERT(out.str().find("[LOCATION] Simulated coordinates updated:") != std::string::npos, "location set match");
+
+        // verify location get reflects update
+        out.str("");
+        shell.execute("location get", out);
+        TEST_ASSERT(out.str().find("40.712800") != std::string::npos, "location get must reflect updated lat");
+        TEST_ASSERT(out.str().find("-74.006000") != std::string::npos, "location get must reflect updated lon");
+
+        // location civic
+        out.str("");
+        shell.execute("location civic \"350 Fifth Ave\" \"New York\" \"NY\" \"10118\"", out);
+        TEST_ASSERT(out.str().find("Civic address updated to:") != std::string::npos, "location civic match");
+
+        out.str("");
+        shell.execute("location get", out);
+        TEST_ASSERT(out.str().find("New York") != std::string::npos, "location get must reflect New York");
+    }
+
+    std::cout << "[TEST] Suite 93: Windows Geolocation & Location Framework (LF) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -19294,6 +19632,7 @@ int main() {
     RUN_TEST(Test_WindowsSmartCard_PCSC_Subsystem);
     RUN_TEST(Test_WindowsNLA_NetworkListService_Subsystem);
     RUN_TEST(Test_WindowsWNS_PushNotification_Subsystem);
+    RUN_TEST(Test_WindowsLocation_Geolocation_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

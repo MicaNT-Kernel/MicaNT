@@ -138,7 +138,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 65: Windows Push Notification Service (WNS)          [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 66: Windows Geolocation & Location Framework (LF)    [PLANNED]        │
+│ Phase 66: Windows Geolocation & Location Framework (LF)    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 67: Windows Portable Devices & Device Info (WPD)     [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1538,24 +1540,45 @@
 
 ---
 
-### Phase 66: Windows Geolocation & Location Framework (LF) Subsystem (`locationapi.dll`, `sensrsvc`, `lfsvc`) (PLANNED)
-- [ ] **Clean-Room Windows Location Architecture (`include/micant/location.hpp`, `locationapi.dll`)**:
-  - Windows Location API COM interfaces: `ILocation`, `ILocationReport`, `ILatLongReport`, `ICivicAddressReport`, `ILocationEvents`, `IDispLatLongReport`, `IDispCivicAddressReport`.
+### Phase 66: Windows Geolocation & Location Framework (LF) Subsystem (`locationapi.dll`, `sensrsvc`, `lfsvc`) (100% Completed)
+- [x] **Clean-Room Windows Location Architecture (`include/micant/location.hpp`, `locationapi.dll`)**:
+  - Windows Location API COM interfaces: `ILocation`, `ILocationReport`, `ILatLongReport`, `ICivicAddressReport`, `ILocationEvents`.
   - Position reports: Latitude, Longitude, Altitude, ErrorRadius (horizontal accuracy), AltitudeError, Heading, Speed, and timestamping.
-  - Civic address reports: Address1, Address2, City, State/Province, PostalCode, Country/Region.
-  - Sovereign Location Manager (`LocationManager`): provider states (`LOCATION_REPORT_INITIALIZING`, `LOCATION_REPORT_RUNNING`, `LOCATION_REPORT_NOT_SUPPORTED`), report caching, report subscription and callback dispatch.
-  - Dynamic export registration in `ldr::DynamicLoader` for `locationapi.dll`.
+  - Civic address reports: AddressLine1, AddressLine2, City, StateProvince, PostalCode, CountryRegion, DetailLevel.
+  - Sovereign Location Manager (`LocationManager`): provider states (`REPORT_RUNNING`, `REPORT_INITIALIZING`, `REPORT_ACCESS_DENIED`, `REPORT_NOT_SUPPORTED`), report caching, listener dispatch.
+  - Dynamic export registration in `ldr::DynamicLoader` for `locationapi.dll` (`DllGetClassObject`, `LocationInitialize`, `LocationGetCoordinates`, etc.).
   - Version database records in `VersionDatabase` for `locationapi.dll`.
-- [ ] **SCM Location & Sensor Services**:
-  - `lfsvc` ("Geolocation Service", svchost `LocalSystemNetworkRestricted`).
-  - `SensorService` / `sensrsvc` ("Sensor Service", svchost `LocalService`).
-- [ ] **Interactive CLI Utilities (`location` / `geo`)**:
+- [x] **SCM Location & Sensor Services**:
+  - `lfsvc` ("Geolocation Service", svchost `LocalSystemNetworkRestricted`, PID 1150).
+  - `SensorService` ("Sensor Service", svchost `LocalService`, PID 1154).
+- [x] **Interactive CLI Utilities (`location` / `geo` / `gps`)**:
   - `location status` (Queries current location provider state, sensor readiness, and permissions).
   - `location get` (Displays current coordinates, accuracy radius, and simulated civic address).
-  - `location set <lat> <lon> [alt]` (Simulates GPS/GNSS sensor report injection for development).
+  - `location set <lat> <lon> [alt] [acc]` (Simulates GPS/GNSS sensor report injection for development).
+  - `location civic <addr1> <city> <state> <zip>` (Updates civic address parameters).
   - `location test` (Executes end-to-end self-test of `ILocation`, `ILatLongReport`, and `ICivicAddressReport`).
-- [ ] **Unit Test Suite 93 (`Test_WindowsLocation_Geolocation_Subsystem`)**:
-  - Automated validation of Location COM interfaces, lat/long reports, civic reports, sensor callbacks, SCM service records, and CLI commands.
+- [x] **Unit Test Suite 93 (`Test_WindowsLocation_Geolocation_Subsystem`)**:
+  - Automated validation of Location COM interfaces, lat/long reports, civic reports, sensor callbacks, SCM service records, C client APIs, and CLI commands.
+  - All 93 unit test suites passing with 100% success rate (93 Passed, 0 Failed).
+
+---
+
+### Phase 67: Windows Portable Devices (WPD) & Device Information Subsystem (`portabledeviceapi.dll`, `wpd_ci.dll`, `wpdmtp.dll`) (PLANNED)
+- [ ] **Clean-Room Windows Portable Devices Architecture (`include/micant/wpd.hpp`, `portabledeviceapi.dll`, `wpd_ci.dll`)**:
+  - WPD COM interfaces: `IPortableDeviceManager`, `IPortableDevice`, `IPortableDeviceContent`, `IPortableDeviceProperties`, `IPortableDeviceResources`, `IPortableDeviceCapabilities`, `IEnumPortableDeviceObjectIDs`.
+  - MTP / PTP object model: functional categories (Storage, Audio, Video, StillImage), object hierarchy, metadata properties (Object Name, Size, MIME Type, Creation Time).
+  - Sovereign Portable Device Manager (`PortableDeviceManager`): connected device enumeration (e.g. simulated sovereign storage phone / camera), device capability querying, content browsing and property inspection.
+  - Dynamic export registration in `ldr::DynamicLoader` for `portabledeviceapi.dll` and `wpd_ci.dll`.
+  - Version database records in `VersionDatabase` for `portabledeviceapi.dll` and `wpd_ci.dll`.
+- [ ] **SCM Portable Device Services**:
+  - `WpdUpFltr` / `WpdBusEnum` ("Windows Portable Device Enumerator Service", svchost `LocalSystemNetworkRestricted`).
+- [ ] **Interactive CLI Utilities (`wpd` / `pdevice`)**:
+  - `wpd list` (Lists connected Windows Portable Devices and functional categories).
+  - `wpd browse [deviceId]` (Browses root and child storage objects on a portable device).
+  - `wpd info <deviceId>` (Queries device manufacturer, model, serial number, and battery level).
+  - `wpd test` (Executes self-test of `IPortableDeviceManager` and `IPortableDevice` COM interfaces).
+- [ ] **Unit Test Suite 94 (`Test_WindowsWPD_PortableDevices_Subsystem`)**:
+  - Automated validation of WPD COM interfaces, device enumeration, object hierarchy traversal, SCM service records, and CLI commands.
 
 
 
