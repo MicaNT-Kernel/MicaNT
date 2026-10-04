@@ -146,7 +146,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 69: Windows Biometric Framework & Windows Hello      [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 70: Windows Bluetooth Core Architecture & Radio      [PLANNED]        │
+│ Phase 70: Windows Bluetooth Core Architecture & Radio      [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 71: Windows Smart Card Minidriver & Base CSP         [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1631,24 +1633,43 @@
 
 ---
 
-### Phase 70: Windows Bluetooth Core Architecture & Radio Subsystem (`bthprops.cpl`, `bluetoothapis.dll`, `bthserv`, `bthci.dll`, `bthport.sys`) (PLANNED)
-- [ ] **Clean-Room Windows Bluetooth Architecture (`include/micant/bluetooth.hpp`, `bluetoothapis.dll`, `bthprops.cpl`)**:
-  - Bluetooth Core C Client APIs: `BluetoothFindFirstRadio`, `BluetoothFindNextRadio`, `BluetoothFindRadioClose`, `BluetoothGetRadioInfo`, `BluetoothGetDeviceInfo`, `BluetoothSetServiceState`, `BluetoothEnumerateInstalledServices`, `BluetoothRegisterForAuthentication`, `BluetoothUnregisterAuthentication`, `BluetoothSendAuthenticationResponse`, `BluetoothAuthenticateDevice`, `BluetoothRemoveDevice`, `BluetoothEnableDiscovery`, `BluetoothIsDiscoverable`, `BluetoothEnableIncomingConnections`, `BluetoothIsConnectable`.
-  - Radio & Device Types: Standard Bluetooth Basic Rate / Enhanced Data Rate (BR/EDR) and Bluetooth Low Energy (BLE 5.x) radio architectures, HCI (Host Controller Interface) packet models, device class masks (`COD_MAJOR_COMPUTER`, `COD_MAJOR_PHONE`, `COD_MAJOR_AUDIO`, `COD_MAJOR_PERIPHERAL`), pairing authentication state machine (`SSP` Secure Simple Pairing, Numeric Comparison, Passkey Entry, Just Works).
-  - Sovereign Bluetooth Manager (`BluetoothManager`): pre-seeded local Bluetooth 5.4 LE radio (`MicaNT Sovereign Dual-Mode Bluetooth 5.4 Radio`, HCI 13.0 / LMP 13.0, 100mW Class 1), remote paired/discovered peripheral emulation (Titan Elite Wireless ANC Headset, MicaPad Low Energy Gamepad, Precision Wireless Keyboard/Mouse combo), SDP (Service Discovery Protocol) records and UUID service registration (A2DP, HFP, HID, GATT, RFCOMM).
-  - Dynamic export registration in `ldr::DynamicLoader` for `bluetoothapis.dll` and `bthprops.cpl`.
+### Phase 70: Windows Bluetooth Core Architecture & Radio Subsystem (`bthprops.cpl`, `bluetoothapis.dll`, `bthserv`, `BthHFSrv`) (100% Completed)
+- [x] **Clean-Room Windows Bluetooth Architecture (`include/micant/bluetooth.hpp`, `bluetoothapis.dll`, `bthprops.cpl`)**:
+  - Bluetooth Core C Client APIs: `BluetoothFindFirstRadio`, `BluetoothFindNextRadio`, `BluetoothFindRadioClose`, `BluetoothGetRadioInfo`, `BluetoothGetDeviceInfo`, `BluetoothUpdateDeviceRecord`, `BluetoothRemoveDevice`, `BluetoothSetServiceState`, `BluetoothEnumerateInstalledServices`, `BluetoothRegisterForAuthentication`, `BluetoothUnregisterAuthentication`, `BluetoothSendAuthenticationResponse`, `BluetoothAuthenticateDevice`, `BluetoothEnableDiscovery`, `BluetoothIsDiscoverable`, `BluetoothEnableIncomingConnections`, `BluetoothIsConnectable`.
+  - Radio & Device Types: Dual-Mode Bluetooth Basic Rate / Enhanced Data Rate (BR/EDR) and Bluetooth Low Energy (BLE 5.4), 48-bit address representation (`BLUETOOTH_ADDRESS`), device class masks (`COD_MAJOR_COMPUTER`, `COD_MAJOR_AUDIO`, `COD_MAJOR_PERIPHERAL`), pairing state machine.
+  - Sovereign Bluetooth Manager (`BluetoothManager`): pre-seeded local Bluetooth 5.4 LE host controller radio (`MicaNT Sovereign Dual-Mode Bluetooth 5.4 Radio` `00:1A:7D:DA:71:01`, LMP 13.0, 100mW Class 1), remote paired and discovered peripheral emulation (Titan Elite Wireless ANC Headset, MicaPad Low Energy Gamepad, Sovereign Precision Keyboard & Mouse), SDP/GATT service UUID registration (A2DP, AVRCP, HFP, HID, GATT, Battery Service).
+  - Dynamic export registration in `ldr::DynamicLoader` for `bluetoothapis.dll` and `bthprops.cpl` (`CPlApplet`, `BluetoothSelectDevices`, `BluetoothSelectDevicesFree`).
   - Version database records in `VersionDatabase` for `bluetoothapis.dll` and `bthprops.cpl`.
-- [ ] **SCM Bluetooth Services**:
-  - `bthserv` ("Bluetooth Support Service", svchost `LocalService`, PID 1170, demand/auto start).
-  - `BthHFSrv` ("Bluetooth Audio Gateway Service", svchost `LocalService`, PID 1174).
-- [ ] **Interactive CLI Utilities (`bluetooth` / `bth` / `bt`)**:
-  - `bluetooth list` (Lists detected local radios and paired/discovered remote Bluetooth devices).
-  - `bluetooth scan` (Initiates device inquiry discovery scan for nearby discoverable peripherals).
-  - `bluetooth info [mac/index]` (Inspects device class, RSSI signal strength, battery level, and active service UUIDs).
-  - `bluetooth pair <mac>` (Executes Secure Simple Pairing or Passkey handshake).
-  - `bluetooth test` (Executes end-to-end self-test of Bluetooth radio enumeration, device discovery, and SDP query).
-- [ ] **Unit Test Suite 97 (`Test_WindowsBluetooth_Subsystem`)**:
-  - Automated validation of Bluetooth C client APIs, radio enumeration, SDP parsing, pairing authentication, SCM service records, and CLI commands.
+- [x] **SCM Bluetooth Services**:
+  - `bthserv` ("Bluetooth Support Service", svchost `LocalService`, PID 1170, running).
+  - `BthHFSrv` ("Bluetooth Audio Gateway Service", svchost `LocalService`, PID 1174, running).
+- [x] **Interactive CLI Utilities (`bluetooth` / `bth` / `bt`)**:
+  - `bluetooth radios` (Lists active local host controller radios, LMP versions, MAC, and discoverable/connectable states).
+  - `bluetooth list` (Lists discovered and remembered Bluetooth devices, connection status, RSSI, and battery levels).
+  - `bluetooth info [index]` (Inspects device class, MAC address, signal strength, and installed SDP/GATT services).
+  - `bluetooth pair <index> [passkey]` (Performs Secure Simple Pairing or passkey authentication).
+  - `bluetooth test` (Executes end-to-end self-test of Bluetooth radio enumeration, device discovery, service query, and pairing).
+- [x] **Unit Test Suite 97 (`Test_WindowsBluetooth_Subsystem`)**:
+  - Automated validation of Bluetooth C client APIs, radio discovery, SDP profile manipulation, pairing authentication callbacks, SCM service records, and CLI commands.
+  - All 97 unit test suites passing with 100% success rate (97 Passed, 0 Failed).
+
+---
+
+### Phase 71: Windows Smart Card Minidriver & Base CSP Architecture (`cardmod.h`, `basecsp.dll`, `msclmd.dll`, `ScardSvr`) (PLANNED)
+- [ ] **Clean-Room Windows Smart Card Minidriver Architecture (`include/micant/cardmod.hpp`, `cardmod.h`, `basecsp.dll`, `msclmd.dll`)**:
+  - Smart Card Minidriver Specification (v7.0/v8.0) Core C Interface (`CARD_DATA`): `CardAcquireContext`, `CardDeleteContext`, `CardAuthenticatePin`, `CardGetChallenge`, `CardAuthenticateChallenge`, `CardDeauthenticate`, `CardCreateFile`, `CardReadFile`, `CardWriteFile`, `CardDeleteFile`, `CardEnumFiles`, `CardGetFileInfo`, `CardCreateContainer`, `CardDeleteContainer`, `CardGetContainerInfo`, `CardPrivateKeyDecrypt`, `CardSignData`, `CardConstructDHAgreement`, `CardDeriveKey`.
+  - Cryptographic Container Architecture: Key exchange (`AT_KEYEXCHANGE`) and signature (`AT_SIGNATURE`) containers, PIN caching and verification policy, physical/virtual file system layout (`/mscp`, `/cardapps`, `/cardid`), card cache lookup (`CardGetProperty`, `CardSetProperty`).
+  - Sovereign Card Minidriver Manager (`CardMinidriverManager`): pre-seeded PIV / CAC card profiles (Titan Sovereign PIV Card, CAC Security Identity, FIDO2 / CTAP2 Token), cryptographic container generation, RSA-2048 and ECC P-256 / P-384 hardware signing and decryption simulation.
+  - Dynamic export registration in `ldr::DynamicLoader` for `basecsp.dll` and `msclmd.dll`.
+  - Version database records in `VersionDatabase` for `basecsp.dll` and `msclmd.dll`.
+- [ ] **Interactive CLI Utilities (`cardmod` / `scminidriver`)**:
+  - `cardmod list` (Lists smart card readers and inserted smart card ATRs).
+  - `cardmod files [reader]` (Browses the smart card file system directory structure).
+  - `cardmod containers [reader]` (Enumerates cryptographic key containers and public keys).
+  - `cardmod auth <reader> <pin>` (Authenticates user PIN against on-card security manager).
+  - `cardmod test` (Executes end-to-end self-test of `CARD_DATA` lifecycle, PIN verification, file I/O, and signature generation).
+- [ ] **Unit Test Suite 98 (`Test_WindowsSmartCardMinidriver_Subsystem`)**:
+  - Automated validation of `CARD_DATA` minidriver function tables, file system operations, cryptographic signing, container management, and CLI commands.
 
 
 

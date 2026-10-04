@@ -2145,6 +2145,50 @@ private:
             mod.stringTable["ProductVersion"] = "10.0.22621.1";
             registerModule(mod);
         }
+
+        // bluetoothapis.dll (Bluetooth API Library)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "bluetoothapis.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Bluetooth API Library";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "bluetoothapis";
+            mod.stringTable["OriginalFilename"] = "bluetoothapis.dll";
+            mod.stringTable["ProductName"] = "MicaNT Bluetooth Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // bthprops.cpl (Bluetooth Control Panel Applet)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "bthprops.cpl";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Bluetooth Control Panel Applet & Property Sheets";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "bthprops";
+            mod.stringTable["OriginalFilename"] = "bthprops.cpl";
+            mod.stringTable["ProductName"] = "MicaNT Bluetooth Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
     }
 
 public:

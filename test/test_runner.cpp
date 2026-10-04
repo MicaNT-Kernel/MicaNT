@@ -118,6 +118,7 @@
 #include "micant/wpd.hpp"
 #include "micant/sensors.hpp"
 #include "micant/winbio.hpp"
+#include "micant/bluetooth.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -20419,6 +20420,286 @@ void Test_WindowsBiometrics_Subsystem() {
     std::cout << "[TEST] Suite 96: Windows Biometric Framework (WBF) & Windows Hello Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 97: Windows Bluetooth Core Architecture & Radio Subsystem Tests
+// ============================================================================
+void Test_WindowsBluetooth_Subsystem() {
+    bluetooth::InitializeBluetoothSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (bluetoothapis.dll / bthprops.cpl)
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothFindFirstRadio") != nullptr, "bluetoothapis.dll must export BluetoothFindFirstRadio");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothFindNextRadio") != nullptr, "bluetoothapis.dll must export BluetoothFindNextRadio");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothFindRadioClose") != nullptr, "bluetoothapis.dll must export BluetoothFindRadioClose");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothGetRadioInfo") != nullptr, "bluetoothapis.dll must export BluetoothGetRadioInfo");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothFindFirstDevice") != nullptr, "bluetoothapis.dll must export BluetoothFindFirstDevice");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothFindNextDevice") != nullptr, "bluetoothapis.dll must export BluetoothFindNextDevice");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothFindDeviceClose") != nullptr, "bluetoothapis.dll must export BluetoothFindDeviceClose");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothGetDeviceInfo") != nullptr, "bluetoothapis.dll must export BluetoothGetDeviceInfo");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothUpdateDeviceRecord") != nullptr, "bluetoothapis.dll must export BluetoothUpdateDeviceRecord");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothRemoveDevice") != nullptr, "bluetoothapis.dll must export BluetoothRemoveDevice");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothSetServiceState") != nullptr, "bluetoothapis.dll must export BluetoothSetServiceState");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothEnumerateInstalledServices") != nullptr, "bluetoothapis.dll must export BluetoothEnumerateInstalledServices");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothEnableDiscovery") != nullptr, "bluetoothapis.dll must export BluetoothEnableDiscovery");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothIsDiscoverable") != nullptr, "bluetoothapis.dll must export BluetoothIsDiscoverable");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothEnableIncomingConnections") != nullptr, "bluetoothapis.dll must export BluetoothEnableIncomingConnections");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothIsConnectable") != nullptr, "bluetoothapis.dll must export BluetoothIsConnectable");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothRegisterForAuthentication") != nullptr, "bluetoothapis.dll must export BluetoothRegisterForAuthentication");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothUnregisterAuthentication") != nullptr, "bluetoothapis.dll must export BluetoothUnregisterAuthentication");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothSendAuthenticationResponse") != nullptr, "bluetoothapis.dll must export BluetoothSendAuthenticationResponse");
+    TEST_ASSERT(ldr.getExport("bluetoothapis.dll", "BluetoothAuthenticateDevice") != nullptr, "bluetoothapis.dll must export BluetoothAuthenticateDevice");
+
+    TEST_ASSERT(ldr.getExport("bthprops.cpl", "CPlApplet") != nullptr, "bthprops.cpl must export CPlApplet");
+    TEST_ASSERT(ldr.getExport("bthprops.cpl", "BluetoothSelectDevices") != nullptr, "bthprops.cpl must export BluetoothSelectDevices");
+    TEST_ASSERT(ldr.getExport("bthprops.cpl", "BluetoothSelectDevicesFree") != nullptr, "bthprops.cpl must export BluetoothSelectDevicesFree");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verBth = version::VersionDatabase::Instance().FindModule("bluetoothapis.dll");
+        TEST_ASSERT(verBth != nullptr, "VersionDatabase must contain bluetoothapis.dll");
+        TEST_ASSERT(verBth->stringTable.at("FileDescription") == "Bluetooth API Library", "bluetoothapis.dll description match");
+        TEST_ASSERT(verBth->stringTable.at("OriginalFilename") == "bluetoothapis.dll", "bluetoothapis.dll original filename match");
+        TEST_ASSERT(verBth->stringTable.at("ProductName") == "MicaNT Bluetooth Subsystem", "bluetoothapis.dll product name match");
+
+        const auto* verProps = version::VersionDatabase::Instance().FindModule("bthprops.cpl");
+        TEST_ASSERT(verProps != nullptr, "VersionDatabase must contain bthprops.cpl");
+        TEST_ASSERT(verProps->stringTable.at("FileDescription") == "Bluetooth Control Panel Applet & Property Sheets", "bthprops.cpl description match");
+        TEST_ASSERT(verProps->stringTable.at("OriginalFilename") == "bthprops.cpl", "bthprops.cpl original filename match");
+        TEST_ASSERT(verProps->stringTable.at("ProductName") == "MicaNT Bluetooth Subsystem", "bthprops.cpl product name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: SCM Service Registration (bthserv / BthHFSrv)
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        auto bthSvc = scm.getServiceRecord(L"bthserv");
+        TEST_ASSERT(bthSvc != nullptr, "bthserv service must be registered in SCM");
+        TEST_ASSERT(bthSvc->displayName == L"Bluetooth Support Service", "bthserv display name match");
+        TEST_ASSERT(bthSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "bthserv must be running");
+        TEST_ASSERT(bthSvc->status.dwProcessId == 1170, "bthserv PID match");
+
+        auto hfSvc = scm.getServiceRecord(L"BthHFSrv");
+        TEST_ASSERT(hfSvc != nullptr, "BthHFSrv service must be registered in SCM");
+        TEST_ASSERT(hfSvc->displayName == L"Bluetooth Audio Gateway Service", "BthHFSrv display name match");
+        TEST_ASSERT(hfSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "BthHFSrv must be running");
+        TEST_ASSERT(hfSvc->status.dwProcessId == 1174, "BthHFSrv PID match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Radio Enumeration & Telemetry
+    // ------------------------------------------------------------------------
+    void* hRadio = nullptr;
+    {
+        bluetooth::BLUETOOTH_FIND_RADIO_PARAMS frp{ sizeof(bluetooth::BLUETOOTH_FIND_RADIO_PARAMS) };
+        bluetooth::HBLUETOOTH_RADIO_FIND hFind = bluetooth::BluetoothFindFirstRadio(&frp, &hRadio);
+        TEST_ASSERT(hFind != nullptr && hRadio != nullptr, "BluetoothFindFirstRadio must succeed");
+
+        bluetooth::BLUETOOTH_RADIO_INFO info{ sizeof(bluetooth::BLUETOOTH_RADIO_INFO) };
+        uint32_t ret = bluetooth::BluetoothGetRadioInfo(hRadio, &info);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "BluetoothGetRadioInfo must return SUCCESS");
+        TEST_ASSERT(std::wstring(info.szName) == L"MicaNT Sovereign Dual-Mode Bluetooth 5.4 Radio", "Radio name match");
+        TEST_ASSERT(info.lmpSubversion == 13, "LMP version 13.0 (Bluetooth 5.4)");
+        TEST_ASSERT(info.manufacturer == 0x05D6, "MicaNT Silicon Systems (0x05D6)");
+        TEST_ASSERT(info.ulClassofDevice == (bluetooth::BTH_COD_MAJOR_COMPUTER | 0x04), "Computer / Desktop CoD match");
+        TEST_ASSERT(bluetooth::FormatBluetoothAddress(info.address) == "00:1A:7D:DA:71:01", "Radio MAC address match");
+
+        void* hNextRadio = nullptr;
+        TEST_ASSERT(!bluetooth::BluetoothFindNextRadio(hFind, &hNextRadio), "Should only find 1 primary radio");
+        TEST_ASSERT(bluetooth::BluetoothFindRadioClose(hFind) != 0, "BluetoothFindRadioClose must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Radio Capabilities & Discovery States
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(bluetooth::BluetoothIsDiscoverable(hRadio) == 1, "Radio must be discoverable by default");
+        TEST_ASSERT(bluetooth::BluetoothEnableDiscovery(hRadio, 0) == 1, "Disable discovery must succeed");
+        TEST_ASSERT(bluetooth::BluetoothIsDiscoverable(hRadio) == 0, "Radio must not be discoverable");
+        TEST_ASSERT(bluetooth::BluetoothEnableDiscovery(hRadio, 1) == 1, "Enable discovery must succeed");
+        TEST_ASSERT(bluetooth::BluetoothIsDiscoverable(hRadio) == 1, "Radio must be discoverable again");
+
+        TEST_ASSERT(bluetooth::BluetoothIsConnectable(hRadio) == 1, "Radio must be connectable by default");
+        TEST_ASSERT(bluetooth::BluetoothEnableIncomingConnections(hRadio, 0) == 1, "Disable incoming must succeed");
+        TEST_ASSERT(bluetooth::BluetoothIsConnectable(hRadio) == 0, "Radio must not be connectable");
+        TEST_ASSERT(bluetooth::BluetoothEnableIncomingConnections(hRadio, 1) == 1, "Enable incoming must succeed");
+        TEST_ASSERT(bluetooth::BluetoothIsConnectable(hRadio) == 1, "Radio must be connectable again");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Remote Device Enumeration & Information Inspection
+    // ------------------------------------------------------------------------
+    {
+        bluetooth::BLUETOOTH_DEVICE_SEARCH_PARAMS sp{ sizeof(bluetooth::BLUETOOTH_DEVICE_SEARCH_PARAMS) };
+        sp.fReturnAuthenticated = 1;
+        sp.fReturnRemembered = 1;
+        sp.fReturnUnknown = 1;
+        sp.fReturnConnected = 1;
+
+        bluetooth::BLUETOOTH_DEVICE_INFO dev1{ sizeof(bluetooth::BLUETOOTH_DEVICE_INFO) };
+        bluetooth::HBLUETOOTH_DEVICE_FIND hFindDev = bluetooth::BluetoothFindFirstDevice(&sp, &dev1);
+        TEST_ASSERT(hFindDev != nullptr, "BluetoothFindFirstDevice must succeed");
+        TEST_ASSERT(std::wstring(dev1.szName) == L"Titan Elite Wireless ANC Headset", "Device 1 name match");
+        TEST_ASSERT(bluetooth::FormatBluetoothAddress(dev1.Address) == "E4:5F:01:23:45:67", "Device 1 MAC address match");
+        TEST_ASSERT(dev1.fConnected == 1 && dev1.fAuthenticated == 1, "Device 1 is connected and authenticated");
+
+        bluetooth::BLUETOOTH_DEVICE_INFO dev2{ sizeof(bluetooth::BLUETOOTH_DEVICE_INFO) };
+        TEST_ASSERT(bluetooth::BluetoothFindNextDevice(hFindDev, &dev2) == 1, "FindNextDevice must find Device 2");
+        TEST_ASSERT(std::wstring(dev2.szName) == L"MicaPad Low Energy Wireless Controller", "Device 2 name match");
+        TEST_ASSERT(bluetooth::FormatBluetoothAddress(dev2.Address) == "DC:A6:32:89:AB:CD", "Device 2 MAC address match");
+
+        bluetooth::BLUETOOTH_DEVICE_INFO dev3{ sizeof(bluetooth::BLUETOOTH_DEVICE_INFO) };
+        TEST_ASSERT(bluetooth::BluetoothFindNextDevice(hFindDev, &dev3) == 1, "FindNextDevice must find Device 3");
+        TEST_ASSERT(std::wstring(dev3.szName) == L"Sovereign Precision Keyboard & Mouse", "Device 3 name match");
+        TEST_ASSERT(dev3.fConnected == 0 && dev3.fAuthenticated == 0, "Device 3 is unauthenticated");
+
+        TEST_ASSERT(!bluetooth::BluetoothFindNextDevice(hFindDev, &dev3), "No more devices");
+        TEST_ASSERT(bluetooth::BluetoothFindDeviceClose(hFindDev) == 1, "BluetoothFindDeviceClose must succeed");
+
+        // BluetoothGetDeviceInfo direct lookup
+        bluetooth::BLUETOOTH_DEVICE_INFO lookupDev{ sizeof(bluetooth::BLUETOOTH_DEVICE_INFO) };
+        lookupDev.Address = dev1.Address;
+        uint32_t ret = bluetooth::BluetoothGetDeviceInfo(hRadio, &lookupDev);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "BluetoothGetDeviceInfo must succeed");
+        TEST_ASSERT(std::wstring(lookupDev.szName) == L"Titan Elite Wireless ANC Headset", "Lookup name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: SDP Service Enumeration & Management
+    // ------------------------------------------------------------------------
+    {
+        auto dev = bluetooth::BluetoothManager::get().getDevices()[0];
+        uint32_t svcCount = 0;
+        uint32_t ret = bluetooth::BluetoothEnumerateInstalledServices(hRadio, &dev.info, &svcCount, nullptr);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "Get service count must succeed");
+        TEST_ASSERT(svcCount == 4, "Headset must have 4 installed services");
+
+        std::vector<GUID> svcs(svcCount);
+        ret = bluetooth::BluetoothEnumerateInstalledServices(hRadio, &dev.info, &svcCount, svcs.data());
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "Enumerate services must succeed");
+        TEST_ASSERT(svcCount == 4, "Returned 4 services");
+
+        // Add a new service (SerialPort)
+        ret = bluetooth::BluetoothSetServiceState(hRadio, &dev.info, &bluetooth::SerialPortServiceClass_UUID, bluetooth::BLUETOOTH_SERVICE_ENABLE);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "BluetoothSetServiceState enable must succeed");
+
+        ret = bluetooth::BluetoothEnumerateInstalledServices(hRadio, &dev.info, &svcCount, nullptr);
+        TEST_ASSERT(svcCount == 5, "Installed services count should increase to 5");
+
+        // Disable service
+        ret = bluetooth::BluetoothSetServiceState(hRadio, &dev.info, &bluetooth::SerialPortServiceClass_UUID, bluetooth::BLUETOOTH_SERVICE_DISABLE);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "BluetoothSetServiceState disable must succeed");
+
+        ret = bluetooth::BluetoothEnumerateInstalledServices(hRadio, &dev.info, &svcCount, nullptr);
+        TEST_ASSERT(svcCount == 4, "Installed services count should return to 4");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Authentication Callback & Pairing Workflow
+    // ------------------------------------------------------------------------
+    {
+        bool authCallbackTriggered = false;
+        bluetooth::HBLUETOOTH_AUTHENTICATION_REGISTRATION hReg = nullptr;
+        uint32_t ret = bluetooth::BluetoothRegisterForAuthentication(
+            nullptr,
+            &hReg,
+            [](void* pv, bluetooth::BLUETOOTH_DEVICE_INFO* pDev) -> int32_t {
+                if (pv && pDev) {
+                    *reinterpret_cast<bool*>(pv) = true;
+                }
+                return 1;
+            },
+            &authCallbackTriggered
+        );
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS && hReg != nullptr, "BluetoothRegisterForAuthentication must succeed");
+
+        // Authenticate Device 3 (Sovereign Precision Keyboard & Mouse)
+        auto dev3 = bluetooth::BluetoothManager::get().getDevices()[2];
+        TEST_ASSERT(dev3.info.fAuthenticated == 0, "Device 3 initially unauthenticated");
+
+        ret = bluetooth::BluetoothAuthenticateDevice(nullptr, hRadio, &dev3.info, L"987654", 6);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "BluetoothAuthenticateDevice must succeed");
+        TEST_ASSERT(authCallbackTriggered, "Authentication callback must have been invoked");
+
+        // Verify updated state
+        bluetooth::BLUETOOTH_DEVICE_INFO checkDev{ sizeof(bluetooth::BLUETOOTH_DEVICE_INFO) };
+        checkDev.Address = dev3.info.Address;
+        bluetooth::BluetoothGetDeviceInfo(hRadio, &checkDev);
+        TEST_ASSERT(checkDev.fAuthenticated == 1, "Device 3 is now authenticated");
+        TEST_ASSERT(checkDev.fConnected == 1, "Device 3 is now connected");
+
+        TEST_ASSERT(bluetooth::BluetoothUnregisterAuthentication(hReg) == 1, "BluetoothUnregisterAuthentication must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Device Record Update & Removal
+    // ------------------------------------------------------------------------
+    {
+        auto dev2 = bluetooth::BluetoothManager::get().getDevices()[1];
+        wcsncpy(dev2.info.szName, L"MicaPad Wireless Pro Controller", bluetooth::BLUETOOTH_MAX_NAME_SIZE - 1);
+        uint32_t ret = bluetooth::BluetoothUpdateDeviceRecord(&dev2.info);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "BluetoothUpdateDeviceRecord must succeed");
+
+        bluetooth::BLUETOOTH_DEVICE_INFO checkDev{ sizeof(bluetooth::BLUETOOTH_DEVICE_INFO) };
+        checkDev.Address = dev2.info.Address;
+        bluetooth::BluetoothGetDeviceInfo(hRadio, &checkDev);
+        TEST_ASSERT(std::wstring(checkDev.szName) == L"MicaPad Wireless Pro Controller", "Updated name confirmed");
+
+        // Remove device 3
+        auto dev3 = bluetooth::BluetoothManager::get().getDevices()[2];
+        ret = bluetooth::BluetoothRemoveDevice(&dev3.info.Address);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_SUCCESS, "BluetoothRemoveDevice must succeed");
+
+        ret = bluetooth::BluetoothGetDeviceInfo(hRadio, &dev3.info);
+        TEST_ASSERT(ret == bluetooth::BT_ERROR_NOT_FOUND, "Removed device must no longer be found");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Interactive Shell Integration (cmdBluetooth)
+    // ------------------------------------------------------------------------
+    {
+        // Reset manager to fresh state
+        bluetooth::BluetoothManager::get().reset();
+
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // bluetooth test
+        shell.execute("bluetooth test", out);
+        TEST_ASSERT(out.str().find("[BLUETOOTH] Self-Test Completed: ALL BLUETOOTH TESTS PASSED.") != std::string::npos, "bluetooth test must pass");
+
+        // bluetooth radios
+        out.str("");
+        shell.execute("bluetooth radios", out);
+        TEST_ASSERT(out.str().find("MicaNT Sovereign Dual-Mode Bluetooth 5.4 Radio") != std::string::npos, "bluetooth radios must show radio");
+        TEST_ASSERT(out.str().find("00:1A:7D:DA:71:01") != std::string::npos, "bluetooth radios must show MAC");
+
+        // bluetooth list
+        out.str("");
+        shell.execute("bluetooth list", out);
+        TEST_ASSERT(out.str().find("Titan Elite Wireless ANC Headset") != std::string::npos, "bluetooth list must show headset");
+        TEST_ASSERT(out.str().find("MicaPad Low Energy Wireless Controller") != std::string::npos, "bluetooth list must show gamepad");
+
+        // bluetooth info 1
+        out.str("");
+        shell.execute("bluetooth info 1", out);
+        TEST_ASSERT(out.str().find("Device Information: Titan Elite Wireless ANC Headset") != std::string::npos, "bluetooth info must show headset info");
+        TEST_ASSERT(out.str().find("E4:5F:01:23:45:67") != std::string::npos, "bluetooth info must show MAC");
+
+        // bluetooth pair 3 123456
+        out.str("");
+        shell.execute("bluetooth pair 3 123456", out);
+        TEST_ASSERT(out.str().find("Pairing SUCCESS: Authenticated with device 70:B3:D5:FE:10:99") != std::string::npos, "bluetooth pair must succeed");
+    }
+
+    std::cout << "[TEST] Suite 97: Windows Bluetooth Core Architecture & Radio Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -20520,6 +20801,7 @@ int main() {
     RUN_TEST(Test_WindowsWPD_PortableDevices_Subsystem);
     RUN_TEST(Test_WindowsSensors_Subsystem);
     RUN_TEST(Test_WindowsBiometrics_Subsystem);
+    RUN_TEST(Test_WindowsBluetooth_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

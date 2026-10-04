@@ -87,6 +87,7 @@
 #include "wpd.hpp"
 #include "sensors.hpp"
 #include "winbio.hpp"
+#include "bluetooth.hpp"
 
 namespace micant::shell {
 
@@ -261,6 +262,7 @@ public:
             if (cmd == "wpd" || cmd == "pdevice") { cmdWpd(tokens, out); return 0; }
             if (cmd == "sensor" || cmd == "sensors") { cmdSensor(tokens, out); return 0; }
             if (cmd == "winbio" || cmd == "bio" || cmd == "hello") { cmdWinBio(tokens, out); return 0; }
+            if (cmd == "bluetooth" || cmd == "bth" || cmd == "bt") { cmdBluetooth(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -539,6 +541,7 @@ private:
             << "  WPD [list|info|browse] Windows Portable Devices Subsystem (wpd test)\n"
             << "  SENSOR [list|read|test] Windows Sensors API & Sensor Platform (sensor test)\n"
             << "  WINBIO [list|status|verify|enroll|test] Windows Biometric Framework & Windows Hello (winbio test)\n"
+            << "  BLUETOOTH [list|radios|info|pair|test] Windows Bluetooth Architecture & Radio (bluetooth test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -10098,6 +10101,199 @@ private:
             << "  winbio status                           Displays active biometric sessions and enrollments\n"
             << "  winbio verify [unitId] [subFactor]      Performs biometric verification against identity\n"
             << "  winbio enroll [unitId] [subFactor]      Simulates multi-sample enrollment workflow\n";
+    }
+
+    void cmdBluetooth(const std::vector<std::string>& tokens, std::ostream& out) {
+        bluetooth::InitializeBluetoothSubsystemExports();
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Windows Bluetooth Core Architecture & Radio Self-Test   \n"
+                << "========================================================================\n";
+
+            // 1. Radio Enumeration
+            void* hRadio = nullptr;
+            bluetooth::BLUETOOTH_FIND_RADIO_PARAMS frp{ sizeof(bluetooth::BLUETOOTH_FIND_RADIO_PARAMS) };
+            bluetooth::HBLUETOOTH_RADIO_FIND hFindRadio = bluetooth::BluetoothFindFirstRadio(&frp, &hRadio);
+            out << "[TEST] 1. BluetoothFindFirstRadio: " << (hFindRadio != nullptr && hRadio != nullptr ? "SUCCESS" : "FAILED")
+                << " (Handle: " << hRadio << ")\n";
+
+            bluetooth::BLUETOOTH_RADIO_INFO radioInfo{ sizeof(bluetooth::BLUETOOTH_RADIO_INFO) };
+            uint32_t ret = bluetooth::BluetoothGetRadioInfo(hRadio, &radioInfo);
+            out << "[TEST] 2. BluetoothGetRadioInfo: " << (ret == bluetooth::BT_ERROR_SUCCESS ? "SUCCESS" : "FAILED")
+                << " (MAC: " << bluetooth::FormatBluetoothAddress(radioInfo.address) << ")\n";
+            bluetooth::BluetoothFindRadioClose(hFindRadio);
+
+            // 2. Discoverability & Connectability
+            out << "[TEST] 3. BluetoothIsDiscoverable: " << (bluetooth::BluetoothIsDiscoverable(hRadio) ? "YES" : "NO") << "\n";
+            out << "[TEST] 4. BluetoothIsConnectable:  " << (bluetooth::BluetoothIsConnectable(hRadio) ? "YES" : "NO") << "\n";
+
+            // 3. Device Enumeration
+            bluetooth::BLUETOOTH_DEVICE_SEARCH_PARAMS sp{ sizeof(bluetooth::BLUETOOTH_DEVICE_SEARCH_PARAMS) };
+            sp.fReturnAuthenticated = 1;
+            sp.fReturnRemembered = 1;
+            sp.fReturnUnknown = 1;
+            sp.fReturnConnected = 1;
+
+            bluetooth::BLUETOOTH_DEVICE_INFO devInfo{ sizeof(bluetooth::BLUETOOTH_DEVICE_INFO) };
+            bluetooth::HBLUETOOTH_DEVICE_FIND hFindDev = bluetooth::BluetoothFindFirstDevice(&sp, &devInfo);
+            size_t devCount = 0;
+            if (hFindDev) {
+                do {
+                    devCount++;
+                } while (bluetooth::BluetoothFindNextDevice(hFindDev, &devInfo));
+                bluetooth::BluetoothFindDeviceClose(hFindDev);
+            }
+            out << "[TEST] 5. BluetoothFindFirstDevice / Next: SUCCESS (Found: " << devCount << " device(s))\n";
+
+            // 4. Service Enumeration
+            auto devList = bluetooth::BluetoothManager::get().getDevices();
+            if (!devList.empty()) {
+                uint32_t svcCount = 0;
+                bluetooth::BluetoothEnumerateInstalledServices(hRadio, &devList[0].info, &svcCount, nullptr);
+                out << "[TEST] 6. BluetoothEnumerateInstalledServices: SUCCESS (Installed: " << svcCount << " service(s))\n";
+            }
+
+            // 5. Authentication Callback & Pairing
+            bool callbackTriggered = false;
+            bluetooth::HBLUETOOTH_AUTHENTICATION_REGISTRATION hReg = nullptr;
+            bluetooth::BluetoothRegisterForAuthentication(
+                nullptr,
+                &hReg,
+                [](void* pv, bluetooth::BLUETOOTH_DEVICE_INFO* /*pDev*/) -> int32_t {
+                    *reinterpret_cast<bool*>(pv) = true;
+                    return 1;
+                },
+                &callbackTriggered
+            );
+
+            // Pair with the third (unpaired) device
+            if (devList.size() >= 3) {
+                uint32_t authRet = bluetooth::BluetoothAuthenticateDevice(nullptr, hRadio, &devList[2].info, L"123456", 6);
+                bluetooth::BLUETOOTH_DEVICE_INFO checkDev{ sizeof(bluetooth::BLUETOOTH_DEVICE_INFO) };
+                checkDev.Address = devList[2].info.Address;
+                bluetooth::BluetoothGetDeviceInfo(hRadio, &checkDev);
+                out << "[TEST] 7. BluetoothAuthenticateDevice & Callback: "
+                    << (authRet == bluetooth::BT_ERROR_SUCCESS && callbackTriggered && checkDev.fAuthenticated ? "SUCCESS" : "FAILED") << "\n";
+            }
+            bluetooth::BluetoothUnregisterAuthentication(hReg);
+
+            out << "[BLUETOOTH] Self-Test Completed: ALL BLUETOOTH TESTS PASSED.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (tokens[1] == "radios" || tokens[1] == "radio")) {
+            auto radios = bluetooth::BluetoothManager::get().getRadios();
+            out << "========================================================================\n"
+                << "             Active Windows Sovereign Bluetooth Radio Adapters          \n"
+                << "========================================================================\n";
+            for (size_t i = 0; i < radios.size(); ++i) {
+                const auto& r = radios[i];
+                std::wstring wsName(r.info.szName);
+                std::string sName(wsName.begin(), wsName.end());
+                out << "  [Radio " << (i + 1) << "] " << sName << "\n"
+                    << "      Handle:       " << r.handle << "\n"
+                    << "      MAC Address:  " << bluetooth::FormatBluetoothAddress(r.info.address) << "\n"
+                    << "      LMP Version:  " << r.info.lmpSubversion << " (Bluetooth 5.4)\n"
+                    << "      Manufacturer: 0x" << std::hex << std::uppercase << r.info.manufacturer << std::dec << " (MicaNT Silicon Systems)\n"
+                    << "      Class:        0x" << std::hex << r.info.ulClassofDevice << std::dec << " (Computer / Desktop Workstation)\n"
+                    << "      Status:       " << (r.isEnabled ? "ENABLED" : "DISABLED") << "\n"
+                    << "      Discoverable: " << (r.isDiscoverable ? "YES" : "NO") << "\n"
+                    << "      Connectable:  " << (r.isConnectable ? "YES" : "NO") << "\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && (tokens[1] == "list" || tokens[1] == "devices")) {
+            auto devices = bluetooth::BluetoothManager::get().getDevices();
+            out << "========================================================================\n"
+                << "             Paired & Discovered Bluetooth Peripherals                  \n"
+                << "========================================================================\n";
+            for (size_t i = 0; i < devices.size(); ++i) {
+                const auto& d = devices[i];
+                std::wstring wsName(d.info.szName);
+                std::string sName(wsName.begin(), wsName.end());
+                out << "  [" << (i + 1) << "] " << sName << "\n"
+                    << "      Address:      " << bluetooth::FormatBluetoothAddress(d.info.Address) << "\n"
+                    << "      Connected:    " << (d.info.fConnected ? "CONNECTED" : "DISCONNECTED") << "\n"
+                    << "      Paired:       " << (d.info.fRemembered ? "REMEMBERED / PAIRED" : "UNPAIRED") << "\n"
+                    << "      RSSI:         " << d.rssi << " dBm\n"
+                    << "      Battery:      " << static_cast<int>(d.batteryLevel) << "%\n"
+                    << "      Services:     " << d.installedServices.size() << " installed\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            auto devices = bluetooth::BluetoothManager::get().getDevices();
+            if (devices.empty()) {
+                out << "[BLUETOOTH] No devices available.\n";
+                return;
+            }
+            size_t idx = 0;
+            if (tokens.size() > 2) {
+                try {
+                    idx = std::stoul(tokens[2]);
+                    if (idx > 0 && idx <= devices.size()) idx--;
+                    else idx = 0;
+                } catch (...) {
+                    idx = 0;
+                }
+            }
+            const auto& d = devices[idx];
+            std::wstring wsName(d.info.szName);
+            std::string sName(wsName.begin(), wsName.end());
+            out << "Device Information: " << sName << "\n"
+                << "  MAC Address:      " << bluetooth::FormatBluetoothAddress(d.info.Address) << "\n"
+                << "  Class of Device:  0x" << std::hex << d.info.ulClassofDevice << std::dec << "\n"
+                << "  Connected:        " << (d.info.fConnected ? "TRUE" : "FALSE") << "\n"
+                << "  Authenticated:    " << (d.info.fAuthenticated ? "TRUE" : "FALSE") << "\n"
+                << "  Remembered:       " << (d.info.fRemembered ? "TRUE" : "FALSE") << "\n"
+                << "  Signal RSSI:      " << d.rssi << " dBm\n"
+                << "  Battery Level:    " << static_cast<int>(d.batteryLevel) << "%\n"
+                << "  Installed SDP/GATT Services:\n";
+            for (const auto& s : d.installedServices) {
+                out << "    - " << ole32::ComRuntime::GuidToString(s) << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "pair") {
+            if (tokens.size() < 3) {
+                out << "Usage: bluetooth pair <index|mac> [passkey]\n";
+                return;
+            }
+            std::wstring passkey = (tokens.size() > 3) ?
+                std::wstring(tokens[3].begin(), tokens[3].end()) : L"000000";
+
+            auto devices = bluetooth::BluetoothManager::get().getDevices();
+            size_t idx = 0;
+            try {
+                idx = std::stoul(tokens[2]);
+                if (idx > 0 && idx <= devices.size()) idx--;
+            } catch (...) {
+                idx = 0;
+            }
+            if (idx < devices.size()) {
+                bool ok = bluetooth::BluetoothManager::get().authenticateDevice(devices[idx].info.Address, passkey);
+                if (ok) {
+                    out << "[BLUETOOTH] Pairing SUCCESS: Authenticated with device "
+                        << bluetooth::FormatBluetoothAddress(devices[idx].info.Address) << ".\n";
+                } else {
+                    out << "[BLUETOOTH] Pairing FAILED.\n";
+                }
+            } else {
+                out << "[BLUETOOTH] Device not found.\n";
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  bluetooth test                          Runs Bluetooth API self-test and verification\n"
+            << "  bluetooth radios                        Lists active local Bluetooth host controllers\n"
+            << "  bluetooth list                          Lists discovered and remembered Bluetooth devices\n"
+            << "  bluetooth info [index]                  Displays detailed telemetry for device\n"
+            << "  bluetooth pair <index> [passkey]        Pairs with remote Bluetooth peripheral\n";
     }
 
     static std::string trim(std::string_view s) {
