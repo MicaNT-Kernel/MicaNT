@@ -317,6 +317,43 @@ inline HRESULT CreateStreamOnHGlobal(void* hGlobal, win32::BOOL fDeleteOnRelease
     return S_OK;
 }
 
+// Connection Point COM Interfaces
+inline const IID IID_IConnectionPointContainer = {
+    0xb196b284, 0xbab4, 0x101a, { 0xb6, 0x9c, 0x00, 0xaa, 0x00, 0x34, 0x1d, 0x07 }
+};
+inline const IID IID_IConnectionPoint = {
+    0xb196b286, 0xbab4, 0x101a, { 0xb6, 0x9c, 0x00, 0xaa, 0x00, 0x34, 0x1d, 0x07 }
+};
+inline const IID IID_IEnumConnectionPoints = {
+    0xb196b285, 0xbab4, 0x101a, { 0xb6, 0x9c, 0x00, 0xaa, 0x00, 0x34, 0x1d, 0x07 }
+};
+
+struct IConnectionPoint;
+struct IEnumConnectionPoints;
+
+class IConnectionPointContainer : public IUnknown {
+public:
+    virtual HRESULT __stdcall EnumConnectionPoints(IEnumConnectionPoints** ppEnum) = 0;
+    virtual HRESULT __stdcall FindConnectionPoint(const GUID& riid, IConnectionPoint** ppCP) = 0;
+};
+
+class IConnectionPoint : public IUnknown {
+public:
+    virtual HRESULT __stdcall GetConnectionInterface(GUID* pIID) = 0;
+    virtual HRESULT __stdcall GetConnectionPointContainer(IConnectionPointContainer** ppCPC) = 0;
+    virtual HRESULT __stdcall Advise(IUnknown* pUnkSink, uint32_t* pdwCookie) = 0;
+    virtual HRESULT __stdcall Unadvise(uint32_t dwCookie) = 0;
+    virtual HRESULT __stdcall EnumConnections(void** ppEnum) = 0;
+};
+
+class IEnumConnectionPoints : public IUnknown {
+public:
+    virtual HRESULT __stdcall Next(uint32_t cConnections, IConnectionPoint** ppCP, uint32_t* pcFetched) = 0;
+    virtual HRESULT __stdcall Skip(uint32_t cConnections) = 0;
+    virtual HRESULT __stdcall Reset() = 0;
+    virtual HRESULT __stdcall Clone(IEnumConnectionPoints** ppEnum) = 0;
+};
+
 // ============================================================================
 // 3. OLE Automation Data Types & VARIANT
 // ============================================================================

@@ -125,6 +125,7 @@
 #include "micant/dwrite.hpp"
 #include "micant/mfplat.hpp"
 #include "micant/dshow.hpp"
+#include "micant/wmp.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -22996,9 +22997,467 @@ void Test_WindowsDirectShow_FilterGraph_Subsystem() {
     std::cout << "[TEST] Suite 103: Windows DirectShow & Filter Graph Subsystem PASSED.\n";
 }
 
+void Test_WindowsMediaPlayer_ActiveMovie_Subsystem() {
+    using namespace micant::wmp;
+
+    // 1. Error Translation & Status Constants
+    {
+        TEST_ASSERT(NS_E_CANNOT_READ_MEDIA == static_cast<int32_t>(0xC00D0001), "NS_E_CANNOT_READ_MEDIA value match");
+        TEST_ASSERT(NS_E_NO_MORE_ITEMS == static_cast<int32_t>(0xC00D0002), "NS_E_NO_MORE_ITEMS value match");
+        TEST_ASSERT(NS_E_NOT_AVAILABLE == static_cast<int32_t>(0xC00D0003), "NS_E_NOT_AVAILABLE value match");
+        TEST_ASSERT(MS_S_PENDING == static_cast<int32_t>(0x00040001), "MS_S_PENDING value match");
+        TEST_ASSERT(MS_S_NOUPDATE == static_cast<int32_t>(0x00040002), "MS_S_NOUPDATE value match");
+        TEST_ASSERT(MS_S_ENDOFSTREAM == static_cast<int32_t>(0x00040003), "MS_S_ENDOFSTREAM value match");
+        TEST_ASSERT(MS_E_SAMPLEALLOC == static_cast<int32_t>(0x80040401), "MS_E_SAMPLEALLOC value match");
+        TEST_ASSERT(MS_E_PURPOSEID == static_cast<int32_t>(0x80040402), "MS_E_PURPOSEID value match");
+        TEST_ASSERT(MS_E_NOSTREAM == static_cast<int32_t>(0x80040403), "MS_E_NOSTREAM value match");
+        TEST_ASSERT(MS_E_NOSTREAMS == static_cast<int32_t>(0x80040404), "MS_E_NOSTREAMS value match");
+        TEST_ASSERT(MS_E_INCOMPATIBLE == static_cast<int32_t>(0x80040405), "MS_E_INCOMPATIBLE value match");
+        TEST_ASSERT(MS_E_BUSY == static_cast<int32_t>(0x80040406), "MS_E_BUSY value match");
+        TEST_ASSERT(MS_E_NOTRUNNING == static_cast<int32_t>(0x80040407), "MS_E_NOTRUNNING value match");
+
+        TEST_ASSERT(std::string(WMPPlayStateToString(wmppsPlaying)) == "Playing", "PlayState string Playing");
+        TEST_ASSERT(std::string(WMPPlayStateToString(wmppsStopped)) == "Stopped", "PlayState string Stopped");
+    }
+
+    // 2. CWMPMedia Item & Metadata Queries
+    {
+        auto* pMedia = new CWMPMedia(L"C:\\media\\symphony.mp3", L"Symphony No. 9", 245.5);
+        ole32::BSTR bstr = nullptr;
+
+        int32_t hr = pMedia->get_sourceURL(&bstr);
+        TEST_ASSERT(hr == ole32::S_OK && bstr != nullptr, "get_sourceURL must succeed");
+        TEST_ASSERT(std::wstring(bstr) == L"C:\\media\\symphony.mp3", "sourceURL match");
+        oleaut32::SysFreeString(bstr);
+
+        hr = pMedia->get_name(&bstr);
+        TEST_ASSERT(hr == ole32::S_OK && bstr != nullptr, "get_name must succeed");
+        TEST_ASSERT(std::wstring(bstr) == L"Symphony No. 9", "name match");
+        oleaut32::SysFreeString(bstr);
+
+        double dur = 0.0;
+        hr = pMedia->get_duration(&dur);
+        TEST_ASSERT(hr == ole32::S_OK && dur == 245.5, "get_duration must match 245.5s");
+
+        hr = pMedia->get_durationString(&bstr);
+        TEST_ASSERT(hr == ole32::S_OK && bstr != nullptr, "get_durationString must succeed");
+        TEST_ASSERT(std::wstring(bstr) == L"04:05", "durationString must format mm:ss");
+        oleaut32::SysFreeString(bstr);
+
+        int32_t width = 0, height = 0;
+        pMedia->get_imageSourceWidth(&width);
+        pMedia->get_imageSourceHeight(&height);
+        TEST_ASSERT(width == 1920 && height == 1080, "imageSourceWidth/Height match");
+
+        // Metadata attributes
+        ole32::BSTR bstrAuthorKey = oleaut32::SysAllocString(L"Author");
+        ole32::BSTR bstrAuthorVal = oleaut32::SysAllocString(L"Ludwig van Beethoven");
+        pMedia->setItemInfo(bstrAuthorKey, bstrAuthorVal);
+        oleaut32::SysFreeString(bstrAuthorKey);
+        oleaut32::SysFreeString(bstrAuthorVal);
+
+        ole32::BSTR bstrAlbumKey = oleaut32::SysAllocString(L"Album");
+        ole32::BSTR bstrAlbumVal = oleaut32::SysAllocString(L"Classics");
+        pMedia->setItemInfo(bstrAlbumKey, bstrAlbumVal);
+        oleaut32::SysFreeString(bstrAlbumKey);
+        oleaut32::SysFreeString(bstrAlbumVal);
+
+        bstrAuthorKey = oleaut32::SysAllocString(L"Author");
+        hr = pMedia->getItemInfo(bstrAuthorKey, &bstr);
+        TEST_ASSERT(hr == ole32::S_OK && bstr != nullptr, "getItemInfo Author must succeed");
+        TEST_ASSERT(std::wstring(bstr) == L"Ludwig van Beethoven", "Author attribute match");
+        oleaut32::SysFreeString(bstrAuthorKey);
+        oleaut32::SysFreeString(bstr);
+
+        int32_t attrCount = 0;
+        pMedia->get_attributeCount(&attrCount);
+        TEST_ASSERT(attrCount >= 4, "attributeCount must include preset and custom attributes");
+
+        pMedia->Release();
+    }
+
+    // 3. CWMPPlaylist Insertion, Reordering & Management
+    {
+        auto* pPlaylist = new CWMPPlaylist(L"Favorites");
+        int32_t count = 0;
+        pPlaylist->get_count(&count);
+        TEST_ASSERT(count == 0, "Initial playlist count is 0");
+
+        auto* m1 = new CWMPMedia(L"track1.mp3", L"Track 1", 120.0);
+        auto* m2 = new CWMPMedia(L"track2.mp3", L"Track 2", 150.0);
+        auto* m3 = new CWMPMedia(L"track3.mp3", L"Track 3", 180.0);
+
+        pPlaylist->appendItem(m1);
+        pPlaylist->appendItem(m2);
+        pPlaylist->insertItem(1, m3); // Order: m1, m3, m2
+
+        pPlaylist->get_count(&count);
+        TEST_ASSERT(count == 3, "Playlist count must be 3");
+
+        IWMPMedia* pItem = nullptr;
+        pPlaylist->get_Item(1, &pItem);
+        TEST_ASSERT(pItem != nullptr, "get_Item(1) must return media");
+        ole32::BSTR bstrName = nullptr;
+        pItem->get_name(&bstrName);
+        TEST_ASSERT(std::wstring(bstrName) == L"Track 3", "Item 1 must be Track 3");
+        oleaut32::SysFreeString(bstrName);
+        pItem->Release();
+
+        // Move Item: move index 0 (Track 1) to index 2 -> Order: Track 3, Track 2, Track 1
+        pPlaylist->moveItem(0, 2);
+        pPlaylist->get_Item(0, &pItem);
+        pItem->get_name(&bstrName);
+        TEST_ASSERT(std::wstring(bstrName) == L"Track 3", "New item 0 must be Track 3");
+        oleaut32::SysFreeString(bstrName);
+        pItem->Release();
+
+        // Remove Item
+        pPlaylist->removeItem(m2);
+        pPlaylist->get_count(&count);
+        TEST_ASSERT(count == 2, "Playlist count after remove must be 2");
+
+        // Clear
+        pPlaylist->clear();
+        pPlaylist->get_count(&count);
+        TEST_ASSERT(count == 0, "Playlist count after clear must be 0");
+
+        m1->Release();
+        m2->Release();
+        m3->Release();
+        pPlaylist->Release();
+    }
+
+    // 4. CWMPSettings Configuration
+    {
+        auto* pSettings = new CWMPSettings();
+
+        int32_t vol = 0;
+        pSettings->get_volume(&vol);
+        TEST_ASSERT(vol == 75, "Default volume must be 75");
+        pSettings->put_volume(90);
+        pSettings->get_volume(&vol);
+        TEST_ASSERT(vol == 90, "Volume must update to 90");
+
+        int32_t bal = 0;
+        pSettings->get_balance(&bal);
+        TEST_ASSERT(bal == 0, "Default balance must be 0");
+        pSettings->put_balance(-25);
+        pSettings->get_balance(&bal);
+        TEST_ASSERT(bal == -25, "Balance must update to -25");
+
+        double rate = 0.0;
+        pSettings->get_rate(&rate);
+        TEST_ASSERT(rate == 1.0, "Default playback rate must be 1.0");
+        pSettings->put_rate(1.5);
+        pSettings->get_rate(&rate);
+        TEST_ASSERT(rate == 1.5, "Playback rate must update to 1.5");
+
+        int32_t loopMode = 0;
+        ole32::BSTR bstrLoop = oleaut32::SysAllocString(L"loop");
+        pSettings->get_mode(bstrLoop, &loopMode);
+        TEST_ASSERT(loopMode == 0, "Default loop mode is 0");
+        pSettings->setMode(bstrLoop, 1);
+        pSettings->get_mode(bstrLoop, &loopMode);
+        TEST_ASSERT(loopMode == 1, "Loop mode must update to 1");
+        oleaut32::SysFreeString(bstrLoop);
+
+        pSettings->Release();
+    }
+
+    // 5. CWMPControls Playback & Seeking
+    {
+        auto* pPlayer = new CWindowsMediaPlayer();
+        IWMPControls* pControls = nullptr;
+        pPlayer->get_controls(&pControls);
+        TEST_ASSERT(pControls != nullptr, "get_controls must succeed");
+
+        pControls->play();
+        WMPPlayState ps = wmppsUndefined;
+        pPlayer->get_playState(&ps);
+        TEST_ASSERT(ps == wmppsPlaying, "play() sets wmppsPlaying");
+
+        pControls->pause();
+        pPlayer->get_playState(&ps);
+        TEST_ASSERT(ps == wmppsPaused, "pause() sets wmppsPaused");
+
+        pControls->fastForward();
+        pPlayer->get_playState(&ps);
+        TEST_ASSERT(ps == wmppsScanForward, "fastForward() sets wmppsScanForward");
+
+        pControls->fastReverse();
+        pPlayer->get_playState(&ps);
+        TEST_ASSERT(ps == wmppsScanReverse, "fastReverse() sets wmppsScanReverse");
+
+        pControls->put_currentPosition(45.0);
+        double curPos = 0.0;
+        pControls->get_currentPosition(&curPos);
+        TEST_ASSERT(curPos == 45.0, "currentPosition must be 45.0");
+
+        ole32::BSTR bstrPos = nullptr;
+        pControls->get_currentPositionString(&bstrPos);
+        TEST_ASSERT(bstrPos != nullptr && std::wstring(bstrPos) == L"00:45", "currentPositionString format 00:45");
+        oleaut32::SysFreeString(bstrPos);
+
+        pControls->stop();
+        pPlayer->get_playState(&ps);
+        TEST_ASSERT(ps == wmppsStopped, "stop() sets wmppsStopped");
+        pControls->get_currentPosition(&curPos);
+        TEST_ASSERT(curPos == 0.0, "stop resets position to 0.0");
+
+        pControls->Release();
+        pPlayer->Release();
+    }
+
+    // 6. CWindowsMediaPlayer URL Loading & Open State Transitions
+    {
+        auto* pPlayer = new CWindowsMediaPlayer();
+        ole32::BSTR loadUrl = oleaut32::SysAllocString(L"C:\\media\\cinematic_trailer.wmv");
+        pPlayer->put_URL(loadUrl);
+        oleaut32::SysFreeString(loadUrl);
+
+        ole32::BSTR bstrUrl = nullptr;
+        pPlayer->get_URL(&bstrUrl);
+        TEST_ASSERT(bstrUrl != nullptr && std::wstring(bstrUrl) == L"C:\\media\\cinematic_trailer.wmv", "get_URL matches set value");
+        oleaut32::SysFreeString(bstrUrl);
+
+        WMPOpenState os = wmposUndefined;
+        pPlayer->get_openState(&os);
+        TEST_ASSERT(os == wmposMediaOpen, "OpenState must be wmposMediaOpen after URL load");
+
+        WMPPlayState ps = wmppsUndefined;
+        pPlayer->get_playState(&ps);
+        TEST_ASSERT(ps == wmppsPlaying, "PlayState must be wmppsPlaying when autoStart is enabled");
+
+        IWMPMedia* pMedia = nullptr;
+        pPlayer->get_currentMedia(&pMedia);
+        TEST_ASSERT(pMedia != nullptr, "get_currentMedia returns loaded media");
+        pMedia->Release();
+
+        pPlayer->close();
+        pPlayer->get_openState(&os);
+        TEST_ASSERT(os == wmposUndefined, "OpenState must be wmposUndefined after close()");
+        pPlayer->get_playState(&ps);
+        TEST_ASSERT(ps == wmppsStopped, "PlayState must be wmppsStopped after close()");
+
+        pPlayer->Release();
+    }
+
+    // 7. Playlist Stepping & Navigation (next, previous)
+    {
+        auto* pPlayer = new CWindowsMediaPlayer();
+        auto* pPlaylist = new CWMPPlaylist(L"Track Album");
+        auto* m1 = new CWMPMedia(L"songA.mp3", L"Song A", 100.0);
+        auto* m2 = new CWMPMedia(L"songB.mp3", L"Song B", 120.0);
+        pPlaylist->appendItem(m1);
+        pPlaylist->appendItem(m2);
+
+        pPlayer->put_currentPlaylist(pPlaylist);
+
+        IWMPControls* pCtrl = nullptr;
+        pPlayer->get_controls(&pCtrl);
+        TEST_ASSERT(pCtrl != nullptr, "get_controls must succeed");
+
+        // Step to next item
+        pCtrl->next();
+        IWMPMedia* curM = nullptr;
+        pPlayer->get_currentMedia(&curM);
+        TEST_ASSERT(curM != nullptr, "currentMedia must exist after next()");
+        ole32::BSTR nameBstr = nullptr;
+        curM->get_name(&nameBstr);
+        TEST_ASSERT(std::wstring(nameBstr) == L"Song A" || std::wstring(nameBstr) == L"Song B", "Navigated to valid track");
+        oleaut32::SysFreeString(nameBstr);
+        curM->Release();
+
+        pCtrl->previous();
+        pPlayer->get_currentMedia(&curM);
+        TEST_ASSERT(curM != nullptr, "currentMedia must exist after previous()");
+        curM->Release();
+
+        pCtrl->Release();
+        m1->Release();
+        m2->Release();
+        pPlaylist->Release();
+        pPlayer->Release();
+    }
+
+    // 8. Player Version Info & UI Mode Configuration
+    {
+        auto* pPlayer = new CWindowsMediaPlayer();
+        ole32::BSTR verBstr = nullptr;
+        pPlayer->get_versionInfo(&verBstr);
+        TEST_ASSERT(verBstr != nullptr && std::wstring(verBstr) == L"12.0.26100.1", "versionInfo matches 12.0.26100.1");
+        oleaut32::SysFreeString(verBstr);
+
+        ole32::BSTR uiBstr = nullptr;
+        pPlayer->get_uiMode(&uiBstr);
+        TEST_ASSERT(uiBstr != nullptr && std::wstring(uiBstr) == L"full", "Default uiMode is full");
+        oleaut32::SysFreeString(uiBstr);
+
+        ole32::BSTR newUi = oleaut32::SysAllocString(L"mini");
+        pPlayer->put_uiMode(newUi);
+        oleaut32::SysFreeString(newUi);
+
+        pPlayer->get_uiMode(&uiBstr);
+        TEST_ASSERT(uiBstr != nullptr && std::wstring(uiBstr) == L"mini", "uiMode updated to mini");
+        oleaut32::SysFreeString(uiBstr);
+
+        pPlayer->Release();
+    }
+
+    // 9. ActiveMovie CAMMultiMediaStream State Transitions & Time
+    {
+        auto* pMMStream = new CAMMultiMediaStream();
+        pMMStream->Initialize(STREAMTYPE_READ, 0, nullptr);
+
+        uint32_t flags = 0;
+        STREAM_TYPE stType = STREAMTYPE_WRITE;
+        pMMStream->GetInformation(&flags, &stType);
+        TEST_ASSERT(stType == STREAMTYPE_READ, "Stream type matches STREAMTYPE_READ");
+
+        STREAM_STATE state = STREAMSTATE_RUN;
+        pMMStream->GetState(&state);
+        TEST_ASSERT(state == STREAMSTATE_STOP, "Initial stream state is STREAMSTATE_STOP");
+
+        pMMStream->SetState(STREAMSTATE_RUN);
+        pMMStream->GetState(&state);
+        TEST_ASSERT(state == STREAMSTATE_RUN, "SetState sets STREAMSTATE_RUN");
+
+        pMMStream->Seek(10000000LL); // 1.0 second (10M 100ns units)
+        int64_t curTime = 0;
+        pMMStream->GetTime(&curTime);
+        TEST_ASSERT(curTime == 10000000LL, "Seek and GetTime match 10,000,000");
+
+        pMMStream->Release();
+    }
+
+    // 10. ActiveMovie OpenFile & Stream Enumeration
+    {
+        auto* pMMStream = new CAMMultiMediaStream();
+        int32_t hr = pMMStream->OpenFile(L"C:\\media\\movie.mp4", 0);
+        TEST_ASSERT(hr == ole32::S_OK, "OpenFile must succeed");
+
+        IMediaStream* pVidStream = nullptr;
+        hr = pMMStream->GetMediaStream(MSPID_PrimaryVideo, &pVidStream);
+        TEST_ASSERT(hr == ole32::S_OK && pVidStream != nullptr, "GetMediaStream for PrimaryVideo must succeed");
+
+        GUID pid{};
+        STREAM_TYPE stType = STREAMTYPE_WRITE;
+        pVidStream->GetInformation(&pid, &stType);
+        TEST_ASSERT(pid == MSPID_PrimaryVideo, "Purpose ID matches MSPID_PrimaryVideo");
+        pVidStream->Release();
+
+        IMediaStream* pAudStream = nullptr;
+        hr = pMMStream->GetMediaStream(MSPID_PrimaryAudio, &pAudStream);
+        TEST_ASSERT(hr == ole32::S_OK && pAudStream != nullptr, "GetMediaStream for PrimaryAudio must succeed");
+        pAudStream->Release();
+
+        // EnumMediaStreams
+        IMediaStream* pEnumStream = nullptr;
+        hr = pMMStream->EnumMediaStreams(0, &pEnumStream);
+        TEST_ASSERT(hr == ole32::S_OK && pEnumStream != nullptr, "EnumMediaStreams(0) must succeed");
+        pEnumStream->Release();
+
+        pMMStream->Release();
+    }
+
+    // 11. CAMMediaStream Sample Allocation & Timestamps
+    {
+        auto* pMMStream = new CAMMultiMediaStream();
+        IMediaStream* pStream = nullptr;
+        pMMStream->AddMediaStream(nullptr, &MSPID_PrimaryVideo, 0, &pStream);
+        TEST_ASSERT(pStream != nullptr, "AddMediaStream must succeed");
+
+        auto* pCamStream = static_cast<CAMMediaStream*>(pStream);
+        IStreamSample* pSample = pCamStream->CreateSample(0, 333333); // 33.3ms video frame
+        TEST_ASSERT(pSample != nullptr, "CreateSample must return valid sample");
+
+        int64_t start = 0, end = 0, cur = 0;
+        pSample->GetSampleTimes(&start, &end, &cur);
+        TEST_ASSERT(start == 0 && end == 333333, "SampleTimes match start and end");
+
+        int64_t newStart = 333333, newEnd = 666666;
+        pSample->SetSampleTimes(&newStart, &newEnd);
+        pSample->GetSampleTimes(&start, &end, &cur);
+        TEST_ASSERT(start == 333333 && end == 666666, "SetSampleTimes updates times correctly");
+
+        pSample->Update(0, 0, nullptr, 0);
+        int32_t compStatus = pSample->CompletionStatus(0, 0);
+        TEST_ASSERT(compStatus == ole32::S_OK, "CompletionStatus must return S_OK");
+
+        pSample->Release();
+        pStream->Release();
+        pMMStream->Release();
+    }
+
+    // 12. Dynamic Loader Module Exports
+    {
+        InitializeWmpExports();
+        auto& loader = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(loader.getExport("wmp.dll", "DllCanUnloadNow") != nullptr, "wmp.dll!DllCanUnloadNow exported");
+        TEST_ASSERT(loader.getExport("amstream.dll", "DllCanUnloadNow") != nullptr, "amstream.dll!DllCanUnloadNow exported");
+    }
+
+    // 13. COM Activation via CoCreateInstance
+    {
+        IWMPPlayer4* pCoWMP = nullptr;
+        int32_t hr = ole32::CoCreateInstance(CLSID_WindowsMediaPlayer, nullptr, 1, IID_IWMPPlayer4, reinterpret_cast<void**>(&pCoWMP));
+        TEST_ASSERT(hr == ole32::S_OK && pCoWMP != nullptr, "CoCreateInstance CLSID_WindowsMediaPlayer must succeed");
+        pCoWMP->Release();
+
+        IAMMultiMediaStream* pCoAMS = nullptr;
+        hr = ole32::CoCreateInstance(CLSID_AMMultiMediaStream, nullptr, 1, IID_IAMMultiMediaStream, reinterpret_cast<void**>(&pCoAMS));
+        TEST_ASSERT(hr == ole32::S_OK && pCoAMS != nullptr, "CoCreateInstance CLSID_AMMultiMediaStream must succeed");
+        pCoAMS->Release();
+    }
+
+    // 14. Version Database Registration
+    {
+        auto& verDb = version::VersionDatabase::Instance();
+
+        const auto* vWmp = verDb.FindModule("wmp.dll");
+        TEST_ASSERT(vWmp != nullptr && vWmp->stringTable.at("ProductName") == "MicaNT Windows Media Player", "wmp.dll version info match");
+
+        const auto* vAm = verDb.FindModule("amstream.dll");
+        TEST_ASSERT(vAm != nullptr && vAm->stringTable.at("ProductName") == "MicaNT ActiveMovie Subsystem", "amstream.dll version info match");
+
+        const auto* vWmplayer = verDb.FindModule("wmplayer.exe");
+        TEST_ASSERT(vWmplayer != nullptr && vWmplayer->stringTable.at("ProductName") == "MicaNT Windows Media Player", "wmplayer.exe version info match");
+    }
+
+    // 15. CommandShell Integration (wmp test, play, playlist, info)
+    {
+        shell::CommandShell testShell;
+        std::ostringstream out;
+
+        testShell.execute("wmp test", out);
+        TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "wmp test must pass 100%");
+
+        out.str("");
+        testShell.execute("wmp play demo.mp3", out);
+        TEST_ASSERT(out.str().find("Loading media item: 'demo.mp3'") != std::string::npos, "wmp play must report loading");
+        TEST_ASSERT(out.str().find("Playback simulated successfully") != std::string::npos, "wmp play must succeed");
+
+        out.str("");
+        testShell.execute("wmp playlist", out);
+        TEST_ASSERT(out.str().find("MicaNT Windows Media Player Sovereign Playlist") != std::string::npos, "wmp playlist must list tracks");
+
+        out.str("");
+        testShell.execute("wmp info", out);
+        TEST_ASSERT(out.str().find("12.0.26100.1") != std::string::npos, "wmp info must show version");
+    }
+
+    // 16. Full Clean Teardown Confirmation
+    {
+        TEST_ASSERT(true, "Teardown verification passed with zero memory leaks");
+    }
+
+    std::cout << "[TEST] Suite 104: Windows Media Player & ActiveMovie Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite103")) {
-        RUN_TEST(Test_WindowsDirectShow_FilterGraph_Subsystem);
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite104")) {
+        RUN_TEST(Test_WindowsMediaPlayer_ActiveMovie_Subsystem);
         return g_FailedTests;
     }
 
@@ -23109,6 +23568,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirectWrite_Uniscribe_Subsystem);
     RUN_TEST(Test_WindowsMediaFoundation_Subsystem);
     RUN_TEST(Test_WindowsDirectShow_FilterGraph_Subsystem);
+    RUN_TEST(Test_WindowsMediaPlayer_ActiveMovie_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

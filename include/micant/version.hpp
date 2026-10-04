@@ -2541,6 +2541,72 @@ private:
             mod.stringTable["ProductVersion"] = "10.0.22621.1";
             registerModule(mod);
         }
+
+        // wmp.dll (Windows Media Player Core Engine)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "wmp.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (12 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (26100 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (12 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (26100 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Media Player Core Engine";
+            mod.stringTable["FileVersion"] = "12.0.26100.1";
+            mod.stringTable["InternalName"] = "wmp";
+            mod.stringTable["OriginalFilename"] = "wmp.dll";
+            mod.stringTable["ProductName"] = "MicaNT Windows Media Player";
+            mod.stringTable["ProductVersion"] = "12.0.26100.1";
+            registerModule(mod);
+        }
+
+        // amstream.dll (ActiveMovie Multimedia Streaming)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "amstream.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "ActiveMovie Multimedia Streaming";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "amstream";
+            mod.stringTable["OriginalFilename"] = "amstream.dll";
+            mod.stringTable["ProductName"] = "MicaNT ActiveMovie Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // wmplayer.exe (Windows Media Player Application)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "wmplayer.exe";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (12 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (26100 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (12 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (26100 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_APP;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Media Player";
+            mod.stringTable["FileVersion"] = "12.0.26100.1";
+            mod.stringTable["InternalName"] = "wmplayer";
+            mod.stringTable["OriginalFilename"] = "wmplayer.exe";
+            mod.stringTable["ProductName"] = "MicaNT Windows Media Player";
+            mod.stringTable["ProductVersion"] = "12.0.26100.1";
+            registerModule(mod);
+        }
     }
 
 public:

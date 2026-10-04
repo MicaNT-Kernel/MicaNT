@@ -1801,21 +1801,47 @@
 
 ---
 
-### Phase 77: Windows Media Player & ActiveMovie Architecture (`wmp.hpp`, `wmp.dll`, `amstream.dll`, `wmplayer.exe`) (PLANNED - MILESTONE 104)
-- [ ] **Windows Media Player Core Automation Architecture (`include/micant/wmp.hpp`, `wmp.dll`)**:
-  - Windows Media Player Core COM interfaces (`IWMPPlayer`, `IWMPPlayer4`, `IWMPControls`, `IWMPSettings`, `IWMPMedia`, `IWMPPlaylist`, `IWMPCore`, `IWMPCdromCollection`, `IWMPClosedCaption`).
-  - Media item metadata management and playlist manipulation.
-  - Playback transport controls (`play`, `pause`, `stop`, `fastForward`, `fastReverse`, `currentPosition`).
-- [ ] **ActiveMovie Streaming Engine (`amstream.dll`)**:
-  - MultiMedia Stream architecture (`IAMMultiMediaStream`, `IMediaStream`, `IDirectDrawMediaStream`, `IAudioMediaStream`).
-  - Stream sample synchronization and asynchronous stream updates.
-  - Dynamic module export registrations for `wmp.dll` and `amstream.dll`.
+### Phase 77: Windows Media Player & ActiveMovie Architecture (`wmp.hpp`, `wmp.dll`, `amstream.dll`, `wmplayer.exe`) (100% Completed)
+- [x] **Windows Media Player Core Automation Architecture (`include/micant/wmp.hpp`, `wmp.dll`)**:
+  - Windows Media Player Core COM interfaces (`IWMPPlayer`, `IWMPPlayer4`, `IWMPControls`, `IWMPSettings`, `IWMPMedia`, `IWMPPlaylist`, `IWMPCore`, `IWMPCdromCollection`, `IWMPClosedCaption`, `IConnectionPointContainer`).
+  - Media item metadata management and playlist manipulation (append, insert, move, remove, clear).
+  - Playback transport controls (`play`, `pause`, `stop`, `fastForward`, `fastReverse`, `next`, `previous`, `currentPosition`, `currentPositionString`).
+- [x] **ActiveMovie Streaming Engine (`amstream.dll`)**:
+  - MultiMedia Stream architecture (`IAMMultiMediaStream`, `IMediaStream`, `IStreamSample`).
+  - Stream sample synchronization, sample timestamping, and asynchronous stream updates.
+  - Dynamic module export registrations for `wmp.dll` and `amstream.dll` (`DllCanUnloadNow`).
   - Version database registration in `VersionDatabase` for `wmp.dll`, `amstream.dll`, and `wmplayer.exe`.
-- [ ] **Interactive CLI Utilities (`wmp` / `mediaplayer`)**:
-  - `wmp test` (Executes WMP Core player creation, controls, metadata, and playlist tests).
+- [x] **Interactive CLI Utilities (`wmp` / `mediaplayer`)**:
+  - `wmp test` (Executes WMP Core player creation, controls, metadata, and playlist tests: 16/16 passed).
   - `wmp play <file>` (Simulates playback automation).
-- [ ] **Unit Test Suite 104 (`Test_WindowsMediaPlayer_ActiveMovie_Subsystem`)**:
+  - `wmp playlist` (Displays current playlist items).
+  - `wmp info` (Displays WMP engine telemetry & specs).
+- [x] **Unit Test Suite 104 (`Test_WindowsMediaPlayer_ActiveMovie_Subsystem`)**:
   - Verification of WMP interfaces, media controls, playlists, ActiveMovie streams, loader exports, and shell commands.
+  - Milestone 104: **104 / 104 Test Suites Passing (100%)**.
+
+---
+
+### Phase 78: Windows GDI+ & Advanced Imaging Architecture (`gdiplus.hpp`, `gdiplus.dll`, `windowscodecs.dll`, `mspaint.exe`) (PLANNED - MILESTONE 105)
+- [ ] **Windows GDI+ Flat C API & C++ Class Wrapper Architecture (`include/micant/gdiplus.hpp`, `gdiplus.dll`)**:
+  - GDI+ startup and shutdown lifecycle (`GdiplusStartup`, `GdiplusShutdown`, `GdiplusStartupInput`, `GdiplusStartupOutput`).
+  - Core drawing primitives (`Graphics`, `Pen`, `Brush`, `SolidBrush`, `LinearGradientBrush`, `PathGradientBrush`, `TextureBrush`).
+  - Geometric paths and matrix transformations (`GraphicsPath`, `Matrix`, `Region`).
+  - Imaging and bitmap operations (`Image`, `Bitmap`, `Metafile`, pixel format conversions, palette indexing).
+- [ ] **Windows Imaging Component (WIC) Foundation (`windowscodecs.dll`)**:
+  - WIC Imaging Factory (`IWICImagingFactory`, `IWICBitmap`, `IWICBitmapSource`, `IWICBitmapDecoder`, `IWICBitmapEncoder`).
+  - Native pixel formats (`GUID_WICPixelFormat32bppPBGRA`, `GUID_WICPixelFormat24bppBGR`, etc.).
+  - Codec registration and image format decoding/encoding (BMP, PNG, JPEG, TIFF, GIF, ICO).
+  - Dynamic module export registrations for `gdiplus.dll` and `windowscodecs.dll`.
+  - Version database registration in `VersionDatabase` for `gdiplus.dll`, `windowscodecs.dll`, and `mspaint.exe`.
+- [ ] **Interactive CLI Utilities (`gdiplus` / `wic`)**:
+  - `gdiplus test` (Runs GDI+ and WIC self-test).
+  - `gdiplus draw <file>` (Simulates vector graphics and path rasterization).
+  - `gdiplus codecs` (Lists registered image decoders and encoders).
+  - `gdiplus info` (Displays GDI+ subsystem version and capabilities).
+- [ ] **Unit Test Suite 105 (`Test_WindowsGdiPlus_Imaging_Subsystem`)**:
+  - Comprehensive unit test suite validating GDI+ initialization, graphics primitives, brushes, paths, WIC imaging factory, codec decoding, and CLI commands.
+
 
 
 
