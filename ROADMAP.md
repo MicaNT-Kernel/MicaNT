@@ -126,7 +126,15 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 59: Windows Active Directory & LDAP Subsystem        [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 60: Windows Remote Desktop (RDP) & Terminal Services [PLANNED]        │
+│ Phase 60: Windows Remote Desktop (RDP) & Terminal Services [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 61: Windows Printing & Print Spooler Subsystem       [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 62: Windows Media Control Interface (MCI) Subsystem  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 63: Windows Smart Card & PC/SC Subsystem             [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 64: Windows Network Location Awareness (NLA)         [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1465,18 +1473,39 @@
 
 ---
 
-### Phase 63: Windows Smart Card & PC/SC Subsystem (`winscard.dll`, `scredir.dll`, `certprop.dll`, `ScardSvr`, `CertPropSvr`) (PLANNED)
-- [ ] **Clean-Room Smart Card PC/SC Architecture (`include/micant/winscard.hpp`, `winscard.dll`, `scredir.dll`)**:
+### Phase 63: Windows Smart Card & PC/SC Subsystem (`winscard.dll`, `scredir.dll`, `certprop.dll`, `ScardSvr`, `CertPropSvr`) (100% Completed)
+- [x] **Clean-Room Smart Card PC/SC Architecture (`include/micant/winscard.hpp`, `winscard.dll`, `scredir.dll`)**:
   - WinSCard core APIs: `SCardEstablishContext`, `SCardReleaseContext`, `SCardIsValidContext`, `SCardListReaderGroupsW/A`, `SCardListReadersW/A`, `SCardConnectW/A`, `SCardReconnect`, `SCardDisconnect`, `SCardStatusW/A`, `SCardGetStatusChangeW/A`, `SCardTransmit`, `SCardControl`, `SCardGetAttrib`, `SCardSetAttrib`, `SCardCancel`, `SCardFreeMemory`.
   - Smart Card structures & protocols: `SCARDCONTEXT`, `SCARDHANDLE`, `SCARD_IO_REQUEST`, `SCARD_READERSTATEW/A`, `SCARD_PROTOCOL_T0`, `SCARD_PROTOCOL_T1`, `SCARD_PROTOCOL_RAW`, `SCARD_SHARE_SHARED`, `SCARD_SHARE_EXCLUSIVE`, `SCARD_SHARE_DIRECT`.
-  - Sovereign Smart Card Resource Manager (`SmartCardManager`): virtual PC/SC smart card readers (e.g. `MicaNT Virtual PIV/CAC SmartCard Reader 0`, `MicaNT FIDO2 Security Key 0`), card insertion/removal state tracking, ATR (Answer to Reset) byte synthesis, ISO 7816-4 APDU command/response framing (SELECT AID, GET DATA, VERIFY PIN).
-- [ ] **SCM Smart Card Service Daemons**:
+  - Sovereign Smart Card Resource Manager (`SmartCardManager`): virtual PC/SC smart card readers (`MicaNT Virtual PIV/CAC SmartCard Reader 0`, `MicaNT FIDO2 NFC Security Key 0`, `MicaNT Empty SmartCard Reader 1`), card insertion/removal state tracking, ATR (Answer to Reset) byte synthesis, ISO 7816-4 APDU command/response framing (SELECT AID for NIST PIV and FIDO2, VERIFY PIN with retry counter and authentication state, GET DATA for CHUID and X.509 Authentication Certificates).
+- [x] **SCM Smart Card Service Daemons**:
   - `ScardSvr` ("Smart Card", `SERVICE_WIN32_SHARE_PROCESS` in svchost group `LocalServiceAndNoImpersonation`).
   - `CertPropSvr` ("Certificate Propagation", `SERVICE_WIN32_SHARE_PROCESS` in svchost group `netsvcs`).
-- [ ] **Interactive CLI Utilities (`certutil -scinfo` / `scard`)**:
+- [x] **Interactive CLI Utilities (`include/micant/shell.hpp` - `scard`)**:
   - `scard list` (Lists active smart card readers and cards), `scard status` (Inspects ATR and protocol state), `scard test` (Transmits synthetic ISO 7816 APDUs).
-- [ ] **Unit Test Suite 90 (`Test_WindowsSmartCard_PCSC_Subsystem`)**:
+- [x] **Unit Test Suite 90 (`Test_WindowsSmartCard_PCSC_Subsystem`)**:
   - Full automated validation of WinSCard context management, reader enumeration, card connection/disconnection, APDU transmit/receive, SCM services, and CLI commands.
+  - All 90 unit test suites passing with 100% success rate (90 Passed, 0 Failed).
+
+---
+
+### Phase 64: Windows Network Location Awareness (NLA) & Network List Service (`nlasvc.dll`, `netprofm.dll`, `NLASvc`, `netprofm`) (PLANNED)
+- [ ] **Clean-Room NLA & Network List Architecture (`include/micant/nla.hpp`, `nlasvc.dll`, `netprofm.dll`)**:
+  - COM interfaces: `INetworkListManager`, `INetwork`, `INetworkConnection`, `INetworkCostManager`, `IEnumNetworks`, `IEnumNetworkConnections`, `INetworkEvents`, `INetworkConnectionEvents`.
+  - NLA Winsock Name Space Provider APIs: `WSALookupServiceBeginW/A`, `WSALookupServiceNextW/A`, `WSALookupServiceEnd`, `NLA_BLOB` structures for network identification, active connectivity profiles, and DNS domain suffix.
+  - Network categories: `NLM_NETWORK_CATEGORY_PUBLIC` (0), `NLM_NETWORK_CATEGORY_PRIVATE` (1), `NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED` (2).
+  - Network connectivity bitmasks: `NLM_CONNECTIVITY_DISCONNECTED` (0), `NLM_CONNECTIVITY_IPV4_INTERNET` (0x40), `NLM_CONNECTIVITY_IPV6_INTERNET` (0x400), `NLM_CONNECTIVITY_IPV4_LOCALNETWORK` (0x20).
+  - Sovereign Network Profile Manager (`NetworkLocationManager`): synthetic profiles for Ethernet (`MicaNT Domain Network`, Domain Authenticated, Internet access), Wi-Fi (`MicaNT Corporate Secure`, Private, Local/Internet access), and captive portal / disconnected states.
+- [ ] **SCM Network Awareness Daemons**:
+  - `NLASvc` ("Network Location Awareness", svchost `NetworkService`).
+  - `netprofm` ("Network List Service", svchost `LocalService`).
+  - `NcbService` ("Network Connection Broker", svchost `LocalSystemNetworkRestricted`).
+- [ ] **Interactive CLI Utilities (`nla` / `netprof`)**:
+  - `nla list` (Lists identified networks and connectivity states).
+  - `nla status` (Displays active network profile, category, domain authentication, and gateway reachability).
+  - `nla test` (Validates `INetworkListManager` COM interface methods and event notifications).
+- [ ] **Unit Test Suite 91 (`Test_WindowsNLA_NetworkListService_Subsystem`)**:
+  - Full automated validation of NLA COM interfaces, network enumeration, connectivity flags, SCM service integration, and CLI commands.
 
 
 

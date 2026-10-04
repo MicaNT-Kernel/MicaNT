@@ -111,6 +111,7 @@
 #include "micant/termsrv.hpp"
 #include "micant/winspool.hpp"
 #include "micant/mci.hpp"
+#include "micant/winscard.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -18166,6 +18167,330 @@ void Test_WindowsMCI_AudioWave_Subsystem() {
     std::cout << "[TEST] Suite 89: Windows Media Control Interface (MCI) & Audio Wave Subsystem PASSED.\n";
 }
 
+void Test_WindowsSmartCard_PCSC_Subsystem() {
+    std::cout << "[TEST] Running Suite 90: Windows Smart Card & PC/SC Subsystem...\n";
+
+    // 1. Dynamic Loader Exports Verification
+    {
+        scard::InitializeWinSCardSubsystemExports();
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardEstablishContext") != nullptr, "winscard.dll must export SCardEstablishContext");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardReleaseContext") != nullptr, "winscard.dll must export SCardReleaseContext");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardIsValidContext") != nullptr, "winscard.dll must export SCardIsValidContext");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardListReaderGroupsW") != nullptr, "winscard.dll must export SCardListReaderGroupsW");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardListReaderGroupsA") != nullptr, "winscard.dll must export SCardListReaderGroupsA");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardListReadersW") != nullptr, "winscard.dll must export SCardListReadersW");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardListReadersA") != nullptr, "winscard.dll must export SCardListReadersA");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardConnectW") != nullptr, "winscard.dll must export SCardConnectW");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardConnectA") != nullptr, "winscard.dll must export SCardConnectA");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardReconnect") != nullptr, "winscard.dll must export SCardReconnect");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardDisconnect") != nullptr, "winscard.dll must export SCardDisconnect");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardStatusW") != nullptr, "winscard.dll must export SCardStatusW");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardStatusA") != nullptr, "winscard.dll must export SCardStatusA");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardGetStatusChangeW") != nullptr, "winscard.dll must export SCardGetStatusChangeW");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardGetStatusChangeA") != nullptr, "winscard.dll must export SCardGetStatusChangeA");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardTransmit") != nullptr, "winscard.dll must export SCardTransmit");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardControl") != nullptr, "winscard.dll must export SCardControl");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardGetAttrib") != nullptr, "winscard.dll must export SCardGetAttrib");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardSetAttrib") != nullptr, "winscard.dll must export SCardSetAttrib");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardCancel") != nullptr, "winscard.dll must export SCardCancel");
+        TEST_ASSERT(ldr.getExport("winscard.dll", "SCardFreeMemory") != nullptr, "winscard.dll must export SCardFreeMemory");
+
+        TEST_ASSERT(ldr.getExport("scredir.dll", "SCardEstablishContext") != nullptr, "scredir.dll must export SCardEstablishContext");
+        TEST_ASSERT(ldr.getExport("certprop.dll", "DllRegisterServer") != nullptr, "certprop.dll must export DllRegisterServer");
+    }
+
+    // 2. Version Database Verification
+    {
+        const auto* modWinSCard = version::VersionDatabase::Instance().FindModule("winscard.dll");
+        TEST_ASSERT(modWinSCard != nullptr, "winscard.dll must exist in Version Database");
+        TEST_ASSERT(modWinSCard->stringTable.at("InternalName") == "winscard", "winscard.dll InternalName");
+        TEST_ASSERT(modWinSCard->stringTable.at("FileDescription") == "Microsoft Smart Card API", "winscard.dll FileDescription");
+
+        const auto* modScRedir = version::VersionDatabase::Instance().FindModule("scredir.dll");
+        TEST_ASSERT(modScRedir != nullptr, "scredir.dll must exist in Version Database");
+        TEST_ASSERT(modScRedir->stringTable.at("InternalName") == "scredir", "scredir.dll InternalName");
+
+        const auto* modCertProp = version::VersionDatabase::Instance().FindModule("certprop.dll");
+        TEST_ASSERT(modCertProp != nullptr, "certprop.dll must exist in Version Database");
+        TEST_ASSERT(modCertProp->stringTable.at("InternalName") == "certprop", "certprop.dll InternalName");
+
+        const auto* modCertUtil = version::VersionDatabase::Instance().FindModule("certutil.exe");
+        TEST_ASSERT(modCertUtil != nullptr, "certutil.exe must exist in Version Database");
+        TEST_ASSERT(modCertUtil->stringTable.at("InternalName") == "certutil", "certutil.exe InternalName");
+    }
+
+    // 3. SCM Service Registration (ScardSvr, CertPropSvr)
+    {
+        auto scardSvr = scm::ServiceControlManager::get().getServiceRecord(L"ScardSvr");
+        TEST_ASSERT(scardSvr != nullptr, "ScardSvr must be registered in SCM");
+        TEST_ASSERT(scardSvr->displayName == L"Smart Card", "ScardSvr display name");
+        TEST_ASSERT(scardSvr->status.dwCurrentState == scm::SERVICE_RUNNING, "ScardSvr must be RUNNING");
+
+        auto certPropSvr = scm::ServiceControlManager::get().getServiceRecord(L"CertPropSvr");
+        TEST_ASSERT(certPropSvr != nullptr, "CertPropSvr must be registered in SCM");
+        TEST_ASSERT(certPropSvr->displayName == L"Certificate Propagation", "CertPropSvr display name");
+        TEST_ASSERT(certPropSvr->status.dwCurrentState == scm::SERVICE_RUNNING, "CertPropSvr must be RUNNING");
+    }
+
+    // 4. Context Lifecycle (Establish, Validate, Cancel, Release)
+    {
+        scard::SCARDCONTEXT hCtx = 0;
+        int32_t rc = scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, &hCtx);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardEstablishContext(USER) must succeed");
+        TEST_ASSERT(hCtx != 0, "hCtx must be valid non-zero");
+
+        rc = scard::SCardIsValidContext(hCtx);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardIsValidContext on valid context must return SUCCESS");
+
+        rc = scard::SCardCancel(hCtx);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardCancel on active context must succeed");
+
+        rc = scard::SCardReleaseContext(hCtx);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardReleaseContext must succeed");
+
+        rc = scard::SCardIsValidContext(hCtx);
+        TEST_ASSERT(rc == scard::SCARD_E_INVALID_HANDLE, "SCardIsValidContext on released context must fail");
+
+        // Invalid parameter check
+        rc = scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, nullptr);
+        TEST_ASSERT(rc == scard::SCARD_E_INVALID_PARAMETER, "SCardEstablishContext with null output pointer must fail");
+    }
+
+    // 5. Reader and Reader Group Enumeration (SCardListReaderGroupsW/A, SCardListReadersW/A)
+    {
+        scard::SCARDCONTEXT hCtx = 0;
+        int32_t rc = scard::SCardEstablishContext(scard::SCARD_SCOPE_SYSTEM, nullptr, nullptr, &hCtx);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "Establish context for reader enumeration");
+
+        // Reader Groups W
+        uint32_t cchGroups = 0;
+        rc = scard::SCardListReaderGroupsW(hCtx, nullptr, &cchGroups);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardListReaderGroupsW size query must succeed");
+        TEST_ASSERT(cchGroups > 0, "Reader groups length must be > 0");
+
+        std::vector<wchar_t> wGroups(cchGroups, 0);
+        rc = scard::SCardListReaderGroupsW(hCtx, wGroups.data(), &cchGroups);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardListReaderGroupsW buffer retrieval must succeed");
+        TEST_ASSERT(std::wstring(wGroups.data(), cchGroups).find(L"SCard$DefaultReaders") != std::wstring::npos, "SCard$DefaultReaders in group list");
+
+        // Readers W
+        uint32_t cchReaders = 0;
+        rc = scard::SCardListReadersW(hCtx, nullptr, nullptr, &cchReaders);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardListReadersW size query must succeed");
+        TEST_ASSERT(cchReaders > 0, "Readers buffer size must be > 0");
+
+        std::vector<wchar_t> wReaders(cchReaders, 0);
+        rc = scard::SCardListReadersW(hCtx, nullptr, wReaders.data(), &cchReaders);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardListReadersW data retrieval must succeed");
+        TEST_ASSERT(std::wstring(wReaders.data(), cchReaders).find(L"MicaNT Virtual PIV/CAC SmartCard Reader 0") != std::wstring::npos, "PIV reader present in wide list");
+
+        // Readers A
+        char aReaders[512]{};
+        uint32_t cchAReaders = sizeof(aReaders);
+        rc = scard::SCardListReadersA(hCtx, nullptr, aReaders, &cchAReaders);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardListReadersA retrieval must succeed");
+        TEST_ASSERT(std::string(aReaders, cchAReaders).find("MicaNT Virtual PIV/CAC SmartCard Reader 0") != std::string::npos, "PIV reader present in list");
+
+        scard::SCARDCONTEXT hCtxGroup = 0;
+        rc = scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, &hCtxGroup);
+        char aGroups[256]{};
+        uint32_t cchAGroups = sizeof(aGroups);
+        rc = scard::SCardListReaderGroupsA(hCtxGroup, aGroups, &cchAGroups);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardListReaderGroupsA must succeed");
+        TEST_ASSERT(std::string(aGroups, cchAGroups).find("SCard$DefaultReaders") != std::string::npos, "SCard$DefaultReaders in ANSI list");
+        scard::SCardReleaseContext(hCtxGroup);
+
+        scard::SCardReleaseContext(hCtx);
+    }
+
+    // 6. Status Change Polling (SCardGetStatusChangeW/A)
+    {
+        scard::SCARDCONTEXT hCtx = 0;
+        scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, &hCtx);
+
+        scard::SCARD_READERSTATEW rs[2]{};
+        rs[0].szReader = L"MicaNT Virtual PIV/CAC SmartCard Reader 0";
+        rs[0].dwCurrentState = scard::SCARD_STATE_UNAWARE;
+
+        rs[1].szReader = L"MicaNT Empty SmartCard Reader 1";
+        rs[1].dwCurrentState = scard::SCARD_STATE_UNAWARE;
+
+        int32_t rc = scard::SCardGetStatusChangeW(hCtx, 0, rs, 2);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardGetStatusChangeW must succeed");
+        TEST_ASSERT((rs[0].dwEventState & scard::SCARD_STATE_PRESENT) != 0, "Slot 0 must report SCARD_STATE_PRESENT");
+        TEST_ASSERT((rs[0].dwEventState & scard::SCARD_STATE_ATRMATCH) != 0, "Slot 0 must report SCARD_STATE_ATRMATCH");
+        TEST_ASSERT(rs[0].cbAtr == 18, "PIV ATR length must be 18 bytes");
+        TEST_ASSERT(rs[0].rgbAtr[0] == 0x3B, "ATR initial TS byte must be 0x3B");
+
+        TEST_ASSERT((rs[1].dwEventState & scard::SCARD_STATE_EMPTY) != 0, "Slot 1 must report SCARD_STATE_EMPTY");
+        TEST_ASSERT(rs[1].cbAtr == 0, "Slot 1 ATR length must be 0");
+
+        scard::SCARD_READERSTATEA rsa[1]{};
+        rsa[0].szReader = "MicaNT Virtual PIV/CAC SmartCard Reader 0";
+        rsa[0].dwCurrentState = scard::SCARD_STATE_UNAWARE;
+        rc = scard::SCardGetStatusChangeA(hCtx, 0, rsa, 1);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardGetStatusChangeA must succeed");
+        TEST_ASSERT((rsa[0].dwEventState & scard::SCARD_STATE_PRESENT) != 0, "Slot 0 ANSI must report SCARD_STATE_PRESENT");
+
+        scard::SCardReleaseContext(hCtx);
+    }
+
+    // 7. Card Connection, Status Query, APDU Transmit, Disconnect (SCardConnect, SCardStatus, SCardTransmit, SCardDisconnect)
+    {
+        scard::SCARDCONTEXT hCtx = 0;
+        scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, &hCtx);
+
+        scard::SCARDHANDLE hCard = 0;
+        uint32_t activeProto = 0;
+        int32_t rc = scard::SCardConnectW(
+            hCtx, L"MicaNT Virtual PIV/CAC SmartCard Reader 0",
+            scard::SCARD_SHARE_SHARED,
+            scard::SCARD_PROTOCOL_T0 | scard::SCARD_PROTOCOL_T1,
+            &hCard, &activeProto
+        );
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardConnectW to PIV reader must succeed");
+        TEST_ASSERT(hCard != 0, "hCard must be non-zero");
+        TEST_ASSERT(activeProto == scard::SCARD_PROTOCOL_T1, "Active protocol must negotiate to T=1");
+
+        // Query Status W
+        wchar_t rName[128]{};
+        uint32_t cchRName = 128;
+        uint32_t st = 0, pr = 0;
+        uint8_t atr[36]{};
+        uint32_t cbAtr = sizeof(atr);
+        rc = scard::SCardStatusW(hCard, rName, &cchRName, &st, &pr, atr, &cbAtr);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardStatusW must succeed");
+        TEST_ASSERT(std::wstring(rName) == L"MicaNT Virtual PIV/CAC SmartCard Reader 0", "Reader name match");
+        TEST_ASSERT((st & scard::SCARD_STATE_PRESENT) != 0, "State must have SCARD_STATE_PRESENT");
+        TEST_ASSERT(cbAtr == 18, "ATR length must match 18 bytes");
+
+        // Query Status A
+        char rNameA[128]{};
+        uint32_t cchRNameA = 128;
+        rc = scard::SCardStatusA(hCard, rNameA, &cchRNameA, &st, &pr, atr, &cbAtr);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardStatusA must succeed");
+        TEST_ASSERT(std::string(rNameA) == "MicaNT Virtual PIV/CAC SmartCard Reader 0", "Reader name ANSI match");
+
+        // Reconnect
+        rc = scard::SCardReconnect(hCard, scard::SCARD_SHARE_SHARED, scard::SCARD_PROTOCOL_T1, scard::SCARD_LEAVE_CARD, &activeProto);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardReconnect must succeed");
+
+        // Transmit APDU 1: SELECT NIST PIV Application
+        const uint8_t selectPivApdu[] = {
+            0x00, 0xA4, 0x04, 0x00, 0x09,
+            0xA0, 0x00, 0x00, 0x03, 0x08, 0x00, 0x00, 0x10, 0x00
+        };
+        uint8_t recvBuf[256]{};
+        uint32_t cbRecv = sizeof(recvBuf);
+        scard::SCARD_IO_REQUEST recvPci{};
+        rc = scard::SCardTransmit(hCard, &scard::g_rgSCardT1Pci, selectPivApdu, sizeof(selectPivApdu),
+                                  &recvPci, recvBuf, &cbRecv);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardTransmit(SELECT PIV) must succeed");
+        TEST_ASSERT(cbRecv >= 2, "Recv length >= 2");
+        TEST_ASSERT(recvBuf[cbRecv - 2] == 0x90 && recvBuf[cbRecv - 1] == 0x00, "APDU response SW must be 90 00");
+
+        // Transmit APDU 2: VERIFY PIN ("123456")
+        const uint8_t verifyPinApdu[] = {
+            0x00, 0x20, 0x00, 0x80, 0x06,
+            '1', '2', '3', '4', '5', '6'
+        };
+        cbRecv = sizeof(recvBuf);
+        rc = scard::SCardTransmit(hCard, &scard::g_rgSCardT1Pci, verifyPinApdu, sizeof(verifyPinApdu),
+                                  &recvPci, recvBuf, &cbRecv);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardTransmit(VERIFY PIN) must succeed");
+        TEST_ASSERT(cbRecv >= 2 && recvBuf[cbRecv - 2] == 0x90 && recvBuf[cbRecv - 1] == 0x00, "PIN verified SW 90 00");
+
+        // Transmit APDU 3: GET DATA (CHUID Tag 5FC102)
+        const uint8_t getChuidApdu[] = {
+            0x00, 0xCB, 0x3F, 0xFF, 0x05,
+            0x5C, 0x03, 0x5F, 0xC1, 0x02
+        };
+        cbRecv = sizeof(recvBuf);
+        rc = scard::SCardTransmit(hCard, &scard::g_rgSCardT1Pci, getChuidApdu, sizeof(getChuidApdu),
+                                  &recvPci, recvBuf, &cbRecv);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardTransmit(GET DATA CHUID) must succeed");
+        TEST_ASSERT(cbRecv >= 2 && recvBuf[cbRecv - 2] == 0x90 && recvBuf[cbRecv - 1] == 0x00, "CHUID returned SW 90 00");
+
+        // Disconnect
+        rc = scard::SCardDisconnect(hCard, scard::SCARD_LEAVE_CARD);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SCardDisconnect must succeed");
+
+        scard::SCardReleaseContext(hCtx);
+    }
+
+    // 8. FIDO2 Security Key Test & Empty Reader Failure Check
+    {
+        scard::SCARDCONTEXT hCtx = 0;
+        scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, &hCtx);
+
+        // Connect to FIDO2 token
+        scard::SCARDHANDLE hFido = 0;
+        uint32_t activeProto = 0;
+        int32_t rc = scard::SCardConnectW(
+            hCtx, L"MicaNT FIDO2 NFC Security Key 0",
+            scard::SCARD_SHARE_SHARED, scard::SCARD_PROTOCOL_T1,
+            &hFido, &activeProto
+        );
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "Connect to FIDO2 key must succeed");
+
+        // SELECT FIDO2 Application
+        const uint8_t selectFidoApdu[] = {
+            0x00, 0xA4, 0x04, 0x00, 0x08,
+            0xA0, 0x00, 0x00, 0x06, 0x47, 0x2F, 0x00, 0x01
+        };
+        uint8_t recvBuf[128]{};
+        uint32_t cbRecv = sizeof(recvBuf);
+        rc = scard::SCardTransmit(hFido, &scard::g_rgSCardT1Pci, selectFidoApdu, sizeof(selectFidoApdu),
+                                  nullptr, recvBuf, &cbRecv);
+        TEST_ASSERT(rc == scard::SCARD_S_SUCCESS, "SELECT FIDO2 AID must succeed");
+        TEST_ASSERT(cbRecv >= 2 && recvBuf[cbRecv - 2] == 0x90 && recvBuf[cbRecv - 1] == 0x00, "FIDO2 AID SW 90 00");
+
+        scard::SCardDisconnect(hFido, scard::SCARD_LEAVE_CARD);
+
+        // Attempt connect to Empty Reader
+        scard::SCARDHANDLE hEmpty = 0;
+        rc = scard::SCardConnectW(
+            hCtx, L"MicaNT Empty SmartCard Reader 1",
+            scard::SCARD_SHARE_SHARED, scard::SCARD_PROTOCOL_T1,
+            &hEmpty, &activeProto
+        );
+        TEST_ASSERT(rc == scard::SCARD_E_NO_SMARTCARD, "Connecting to empty slot must return SCARD_E_NO_SMARTCARD");
+
+        scard::SCARDHANDLE hConnectA = 0;
+        rc = scard::SCardConnectA(hCtx, "MicaNT Empty SmartCard Reader 1", scard::SCARD_SHARE_SHARED, scard::SCARD_PROTOCOL_T1, &hConnectA, &activeProto);
+        TEST_ASSERT(rc == scard::SCARD_E_NO_SMARTCARD, "Connecting to empty slot via ANSI must return SCARD_E_NO_SMARTCARD");
+
+        scard::SCardReleaseContext(hCtx);
+    }
+
+    // 9. Interactive Shell Commands (scard test, scard list, scard status)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // scard test
+        out.str("");
+        shell.execute("scard test", out);
+        TEST_ASSERT(out.str().find("[SCARD] Self-Test Completed Successfully") != std::string::npos, "scard test must succeed");
+
+        // scard list
+        out.str("");
+        shell.execute("scard list", out);
+        TEST_ASSERT(out.str().find("MicaNT Virtual PIV/CAC SmartCard Reader 0") != std::string::npos, "scard list must output PIV reader");
+        TEST_ASSERT(out.str().find("CARD PRESENT") != std::string::npos, "scard list must show CARD PRESENT");
+
+        // scard status
+        out.str("");
+        shell.execute("scard status", out);
+        TEST_ASSERT(out.str().find("Smart Card Status") != std::string::npos, "scard status must output header");
+        TEST_ASSERT(out.str().find("ATR Length:") != std::string::npos, "scard status must output ATR length");
+    }
+
+    std::cout << "[TEST] Suite 90: Windows Smart Card & PC/SC Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -18260,6 +18585,7 @@ int main() {
     RUN_TEST(Test_WindowsRDP_TerminalServices_Subsystem);
     RUN_TEST(Test_WindowsPrinting_Spooler_Subsystem);
     RUN_TEST(Test_WindowsMCI_AudioWave_Subsystem);
+    RUN_TEST(Test_WindowsSmartCard_PCSC_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

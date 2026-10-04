@@ -1749,6 +1749,94 @@ private:
             mod.stringTable["ProductVersion"] = "10.0.22621.1";
             registerModule(mod);
         }
+
+        // winscard.dll (Microsoft Smart Card API)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "winscard.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Microsoft Smart Card API";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "winscard";
+            mod.stringTable["OriginalFilename"] = "winscard.dll";
+            mod.stringTable["ProductName"] = "MicaNT Smart Card Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // scredir.dll (Smart Card Remote Desktop Redirection Library)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "scredir.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Smart Card Remote Desktop Redirection Library";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "scredir";
+            mod.stringTable["OriginalFilename"] = "scredir.dll";
+            mod.stringTable["ProductName"] = "MicaNT Smart Card Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // certprop.dll (Smart Card Certificate Propagation Service DLL)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "certprop.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Smart Card Certificate Propagation Service DLL";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "certprop";
+            mod.stringTable["OriginalFilename"] = "certprop.dll";
+            mod.stringTable["ProductName"] = "MicaNT Smart Card Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // certutil.exe (Certificate Utility and Smart Card Tool)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "certutil.exe";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_APP;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Certificate Utility and Smart Card Tool";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "certutil";
+            mod.stringTable["OriginalFilename"] = "certutil.exe";
+            mod.stringTable["ProductName"] = "MicaNT Smart Card Subsystem";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
     }
 
 public:

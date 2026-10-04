@@ -80,6 +80,7 @@
 #include "termsrv.hpp"
 #include "winspool.hpp"
 #include "mci.hpp"
+#include "winscard.hpp"
 
 namespace micant::shell {
 
@@ -140,6 +141,7 @@ public:
         wbem::InitializeWbemSubsystemExports();
         cbs::InitializeCbsSubsystemExports();
         mci::InitializeMciSubsystemExports();
+        scard::InitializeWinSCardSubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -245,6 +247,7 @@ public:
             if (cmd == "print") { cmdPrint(tokens, out); return 0; }
             if (cmd == "mci") { cmdMci(tokens, out); return 0; }
             if (cmd == "waveplay") { cmdWavePlay(tokens, out); return 0; }
+            if (cmd == "scard" || cmd == "smartcard") { cmdSCard(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -516,6 +519,7 @@ private:
             << "  PRINT [/D:<dev>]  Line printer & document spooling utility (print test)\n"
             << "  MCI [command]     Media Control Interface string command processor (mci test)\n"
             << "  WAVEPLAY [tone]   Waveform audio playback & streaming utility (waveplay test)\n"
+            << "  SCARD [list|status] Smart Card & PC/SC subsystem utility (scard test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -8652,6 +8656,223 @@ private:
         out << "Usage:\n"
             << "  waveplay test                            Runs waveform audio self-test suite\n"
             << "  waveplay sine [freq]                     Plays a synthetic audio tone\n";
+    }
+
+    void cmdSCard(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Smart Card & PC/SC Subsystem Self-Test Suite             \n"
+                << "========================================================================\n";
+
+            // 1. Establish Context
+            scard::SCARDCONTEXT hCtx = 0;
+            int32_t rc = scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, &hCtx);
+            out << "[TEST] 1. SCardEstablishContext(SCARD_SCOPE_USER): "
+                << (rc == scard::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED")
+                << " (Context: 0x" << std::hex << hCtx << std::dec << ")\n";
+
+            // 2. Validate Context
+            rc = scard::SCardIsValidContext(hCtx);
+            out << "[TEST] 2. SCardIsValidContext: "
+                << (rc == scard::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+
+            // 3. List Reader Groups
+            char groups[256]{};
+            uint32_t cchGroups = sizeof(groups);
+            rc = scard::SCardListReaderGroupsA(hCtx, groups, &cchGroups);
+            out << "[TEST] 3. SCardListReaderGroupsA: "
+                << (rc == scard::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED")
+                << " (Default: \"" << groups << "\")\n";
+
+            // 4. List Readers
+            char readers[512]{};
+            uint32_t cchReaders = sizeof(readers);
+            rc = scard::SCardListReadersA(hCtx, nullptr, readers, &cchReaders);
+            out << "[TEST] 4. SCardListReadersA: "
+                << (rc == scard::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+            const char* rp = readers;
+            int rCount = 0;
+            std::string firstReader;
+            while (rp && *rp) {
+                out << "         Reader [" << ++rCount << "]: " << rp << "\n";
+                if (std::string(rp).find("PIV") != std::string::npos) {
+                    firstReader = rp;
+                } else if (firstReader.empty()) {
+                    firstReader = rp;
+                }
+                rp += strlen(rp) + 1;
+            }
+
+            // 5. Connect to Smart Card
+            scard::SCARDHANDLE hCard = 0;
+            uint32_t activeProto = 0;
+            rc = scard::SCardConnectA(hCtx, firstReader.c_str(), scard::SCARD_SHARE_SHARED,
+                                      scard::SCARD_PROTOCOL_T0 | scard::SCARD_PROTOCOL_T1,
+                                      &hCard, &activeProto);
+            out << "[TEST] 5. SCardConnectA(\"" << firstReader << "\"): "
+                << (rc == scard::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED")
+                << " (Card Handle: 0x" << std::hex << hCard << ", Proto: " << activeProto << std::dec << ")\n";
+
+            // 6. Query Card Status & ATR
+            char statusReader[128]{};
+            uint32_t cchStatusReader = sizeof(statusReader);
+            uint32_t cardState = 0, cardProto = 0;
+            uint8_t atr[36]{};
+            uint32_t cbAtr = sizeof(atr);
+            rc = scard::SCardStatusA(hCard, statusReader, &cchStatusReader, &cardState, &cardProto, atr, &cbAtr);
+            out << "[TEST] 6. SCardStatusA: "
+                << (rc == scard::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED")
+                << " (State: 0x" << std::hex << cardState << ", ATR Length: " << std::dec << cbAtr << " bytes)\n"
+                << "         ATR: ";
+            for (uint32_t i = 0; i < cbAtr; ++i) {
+                out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(atr[i]) << " ";
+            }
+            out << std::nouppercase << std::dec << "\n";
+
+            // 7. Transmit ISO 7816-4 APDU: SELECT NIST PIV Application
+            const uint8_t selectPivApdu[] = {
+                0x00, 0xA4, 0x04, 0x00, 0x09,
+                0xA0, 0x00, 0x00, 0x03, 0x08, 0x00, 0x00, 0x10, 0x00
+            };
+            uint8_t recvBuf[256]{};
+            uint32_t cbRecv = sizeof(recvBuf);
+            scard::SCARD_IO_REQUEST recvPci{};
+            rc = scard::SCardTransmit(hCard, &scard::g_rgSCardT1Pci, selectPivApdu, sizeof(selectPivApdu),
+                                      &recvPci, recvBuf, &cbRecv);
+            bool swOk = (cbRecv >= 2 && recvBuf[cbRecv - 2] == 0x90 && recvBuf[cbRecv - 1] == 0x00);
+            out << "[TEST] 7. SCardTransmit(SELECT PIV AID): "
+                << (rc == scard::SCARD_S_SUCCESS && swOk ? "SUCCESS" : "FAILED")
+                << " (SW=9000, Recv " << cbRecv << " bytes)\n";
+
+            // 8. Transmit ISO 7816-4 APDU: VERIFY PIN ("123456")
+            const uint8_t verifyPinApdu[] = {
+                0x00, 0x20, 0x00, 0x80, 0x06,
+                '1', '2', '3', '4', '5', '6'
+            };
+            cbRecv = sizeof(recvBuf);
+            rc = scard::SCardTransmit(hCard, &scard::g_rgSCardT1Pci, verifyPinApdu, sizeof(verifyPinApdu),
+                                      &recvPci, recvBuf, &cbRecv);
+            swOk = (cbRecv >= 2 && recvBuf[cbRecv - 2] == 0x90 && recvBuf[cbRecv - 1] == 0x00);
+            out << "[TEST] 8. SCardTransmit(VERIFY PIN): "
+                << (rc == scard::SCARD_S_SUCCESS && swOk ? "SUCCESS" : "FAILED")
+                << " (SW=9000, PIN Authenticated)\n";
+
+            // 9. Transmit ISO 7816-4 APDU: GET DATA (CHUID Tag 5FC102)
+            const uint8_t getChuidApdu[] = {
+                0x00, 0xCB, 0x3F, 0xFF, 0x05,
+                0x5C, 0x03, 0x5F, 0xC1, 0x02
+            };
+            cbRecv = sizeof(recvBuf);
+            rc = scard::SCardTransmit(hCard, &scard::g_rgSCardT1Pci, getChuidApdu, sizeof(getChuidApdu),
+                                      &recvPci, recvBuf, &cbRecv);
+            swOk = (cbRecv >= 2 && recvBuf[cbRecv - 2] == 0x90 && recvBuf[cbRecv - 1] == 0x00);
+            out << "[TEST] 9. SCardTransmit(GET DATA CHUID): "
+                << (rc == scard::SCARD_S_SUCCESS && swOk ? "SUCCESS" : "FAILED")
+                << " (SW=9000, Read " << cbRecv << " bytes payload)\n";
+
+            // 10. Disconnect Card
+            rc = scard::SCardDisconnect(hCard, scard::SCARD_LEAVE_CARD);
+            out << "[TEST] 10. SCardDisconnect: "
+                << (rc == scard::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+
+            // 11. Release Context
+            rc = scard::SCardReleaseContext(hCtx);
+            out << "[TEST] 11. SCardReleaseContext: "
+                << (rc == scard::SCARD_S_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+
+            out << "[SCARD] Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            scard::SCARDCONTEXT hCtx = 0;
+            if (scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, &hCtx) != scard::SCARD_S_SUCCESS) {
+                out << "Error: Unable to establish Smart Card context.\n";
+                return;
+            }
+            char readers[512]{};
+            uint32_t cchReaders = sizeof(readers);
+            if (scard::SCardListReadersA(hCtx, nullptr, readers, &cchReaders) == scard::SCARD_S_SUCCESS) {
+                out << "Configured Smart Card Readers:\n";
+                const char* rp = readers;
+                int idx = 1;
+                while (rp && *rp) {
+                    scard::SmartCardSlot slot;
+                    std::string sName(rp);
+                    std::wstring wsName(sName.begin(), sName.end());
+                    bool found = scard::SmartCardManager::get().getReaderSlot(wsName, slot);
+                    out << "  [" << idx++ << "] " << rp << "\n"
+                        << "      Status:       " << (found && slot.cardPresent ? "CARD PRESENT" : "EMPTY") << "\n";
+                    if (found && slot.cardPresent) {
+                        std::string cName(slot.cardName.begin(), slot.cardName.end());
+                        out << "      Card Type:    " << cName << "\n"
+                            << "      ATR:          ";
+                        for (uint8_t b : slot.atr) {
+                            out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b) << " ";
+                        }
+                        out << std::nouppercase << std::dec << "\n";
+                    }
+                    rp += strlen(rp) + 1;
+                }
+            } else {
+                out << "No smart card readers found.\n";
+            }
+            scard::SCardReleaseContext(hCtx);
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "status") {
+            scard::SCARDCONTEXT hCtx = 0;
+            if (scard::SCardEstablishContext(scard::SCARD_SCOPE_USER, nullptr, nullptr, &hCtx) != scard::SCARD_S_SUCCESS) {
+                out << "Error: Unable to establish Smart Card context.\n";
+                return;
+            }
+            char readers[512]{};
+            uint32_t cchReaders = sizeof(readers);
+            if (scard::SCardListReadersA(hCtx, nullptr, readers, &cchReaders) == scard::SCARD_S_SUCCESS && readers[0] != '\0') {
+                scard::SCARDHANDLE hCard = 0;
+                uint32_t activeProto = 0;
+                const char* targetReader = readers;
+                const char* cur = readers;
+                while (cur && *cur) {
+                    if (std::string(cur).find("PIV") != std::string::npos) {
+                        targetReader = cur;
+                        break;
+                    }
+                    cur += strlen(cur) + 1;
+                }
+                if (scard::SCardConnectA(hCtx, targetReader, scard::SCARD_SHARE_SHARED,
+                                         scard::SCARD_PROTOCOL_Tx, &hCard, &activeProto) == scard::SCARD_S_SUCCESS) {
+                    char rName[128]{};
+                    uint32_t cchRName = sizeof(rName);
+                    uint32_t st = 0, pr = 0;
+                    uint8_t atr[36]{};
+                    uint32_t cbAtr = sizeof(atr);
+                    scard::SCardStatusA(hCard, rName, &cchRName, &st, &pr, atr, &cbAtr);
+                    out << "Smart Card Status (" << rName << "):\n"
+                        << "  Active Protocol: " << (pr == scard::SCARD_PROTOCOL_T1 ? "T=1 (Block Transmission)" : "T=0 (Byte Transmission)") << "\n"
+                        << "  State Flags:     0x" << std::hex << st << std::dec << "\n"
+                        << "  ATR Length:      " << cbAtr << " bytes\n"
+                        << "  ATR Bytes:       ";
+                    for (uint32_t i = 0; i < cbAtr; ++i) {
+                        out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(atr[i]) << " ";
+                    }
+                    out << std::nouppercase << std::dec << "\n";
+                    scard::SCardDisconnect(hCard, scard::SCARD_LEAVE_CARD);
+                } else {
+                    out << "Unable to connect to card in reader: " << readers << "\n";
+                }
+            } else {
+                out << "No smart card readers available.\n";
+            }
+            scard::SCardReleaseContext(hCtx);
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  scard test                              Runs Smart Card & PC/SC self-test\n"
+            << "  scard list                              Enumerates smart card readers and cards\n"
+            << "  scard status                            Interrogates active smart card status\n";
     }
 
     static std::string trim(std::string_view s) {
