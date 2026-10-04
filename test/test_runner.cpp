@@ -124,6 +124,7 @@
 #include "micant/whp.hpp"
 #include "micant/dwrite.hpp"
 #include "micant/mfplat.hpp"
+#include "micant/dshow.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -22474,7 +22475,533 @@ void Test_WindowsMediaFoundation_Subsystem() {
     std::cout << "[TEST] Suite 102: Windows Media Foundation Subsystem PASSED.\n";
 }
 
-int main() {
+void Test_WindowsDirectShow_FilterGraph_Subsystem() {
+    std::cout << "[TEST] Suite 103: Windows DirectShow & Filter Graph Subsystem\n" << std::flush;
+    using namespace micant::dshow;
+
+    // 1. Error Translation Parity (AMGetErrorTextA / AMGetErrorTextW)
+    {
+        char bufA[256] = {};
+        wchar_t bufW[256] = {};
+
+        uint32_t lenA = AMGetErrorTextA(ole32::S_OK, bufA, 256);
+        TEST_ASSERT(lenA > 0 && std::string(bufA).find("succeeded") != std::string::npos, "AMGetErrorTextA S_OK");
+
+        uint32_t lenW = AMGetErrorTextW(ole32::S_OK, bufW, 256);
+        TEST_ASSERT(lenW > 0 && std::wstring(bufW).find(L"succeeded") != std::wstring::npos, "AMGetErrorTextW S_OK");
+
+        lenA = AMGetErrorTextA(VFW_E_NOT_CONNECTED, bufA, 256);
+        TEST_ASSERT(lenA > 0 && std::string(bufA).find("not connected") != std::string::npos, "AMGetErrorTextA VFW_E_NOT_CONNECTED");
+
+        lenA = AMGetErrorTextA(VFW_E_CANNOT_CONNECT, bufA, 256);
+        TEST_ASSERT(lenA > 0 && std::string(bufA).find("No combination") != std::string::npos, "AMGetErrorTextA VFW_E_CANNOT_CONNECT");
+
+        lenA = AMGetErrorTextA(VFW_E_CANNOT_RENDER, bufA, 256);
+        TEST_ASSERT(lenA > 0 && std::string(bufA).find("render") != std::string::npos, "AMGetErrorTextA VFW_E_CANNOT_RENDER");
+    }
+    std::cout << "  [PASS] Step 1: Error Translation\n" << std::flush;
+
+    // 2. Media Sample Lifecycle & Properties (CMediaSample)
+    {
+        auto* sample = new CMediaSample(2048);
+        TEST_ASSERT(sample->GetSize() == 2048, "CMediaSample GetSize must be 2048");
+        TEST_ASSERT(sample->GetActualDataLength() == 2048, "CMediaSample initial ActualLength must be 2048");
+
+        uint8_t* pData = nullptr;
+        int32_t hr = sample->GetPointer(&pData);
+        TEST_ASSERT(hr == ole32::S_OK && pData != nullptr, "CMediaSample GetPointer must succeed");
+        pData[0] = 0xAA;
+        pData[1] = 0x55;
+
+        sample->SetActualDataLength(1024);
+        TEST_ASSERT(sample->GetActualDataLength() == 1024, "CMediaSample ActualLength updated to 1024");
+
+        REFERENCE_TIME tStart = 10000000, tEnd = 20000000;
+        sample->SetTime(&tStart, &tEnd);
+        REFERENCE_TIME oStart = 0, oEnd = 0;
+        hr = sample->GetTime(&oStart, &oEnd);
+        TEST_ASSERT(hr == ole32::S_OK && oStart == 10000000 && oEnd == 20000000, "CMediaSample Time match");
+
+        LONGLONG mStart = 50, mEnd = 100;
+        sample->SetMediaTime(&mStart, &mEnd);
+        LONGLONG omStart = 0, omEnd = 0;
+        hr = sample->GetMediaTime(&omStart, &omEnd);
+        TEST_ASSERT(hr == ole32::S_OK && omStart == 50 && omEnd == 100, "CMediaSample MediaTime match");
+
+        sample->SetSyncPoint(1);
+        TEST_ASSERT(sample->IsSyncPoint() == ole32::S_OK, "CMediaSample SyncPoint must be S_OK");
+        sample->SetSyncPoint(0);
+        TEST_ASSERT(sample->IsSyncPoint() == ole32::S_FALSE, "CMediaSample SyncPoint must be S_FALSE");
+
+        sample->SetPreroll(1);
+        TEST_ASSERT(sample->IsPreroll() == ole32::S_OK, "CMediaSample Preroll must be S_OK");
+
+        sample->SetDiscontinuity(1);
+        TEST_ASSERT(sample->IsDiscontinuity() == ole32::S_OK, "CMediaSample Discontinuity must be S_OK");
+
+        sample->Release();
+    }
+
+    // 3. Pin Negotiation & Connection (CPin)
+    {
+        AM_MEDIA_TYPE mt{};
+        mt.majortype = MEDIATYPE_Video;
+        mt.subtype = MEDIASUBTYPE_RGB24;
+        mt.formattype = FORMAT_VideoInfo;
+
+        auto* pOut = new CPin(L"Output", PINDIR_OUTPUT, nullptr, { mt });
+        auto* pIn = new CPin(L"Input", PINDIR_INPUT, nullptr, { mt });
+
+        PIN_DIRECTION dirOut, dirIn;
+        pOut->QueryDirection(&dirOut);
+        pIn->QueryDirection(&dirIn);
+        TEST_ASSERT(dirOut == PINDIR_OUTPUT && dirIn == PINDIR_INPUT, "Pin directions must match");
+
+        PIN_INFO pinfo{};
+        pOut->QueryPinInfo(&pinfo);
+        TEST_ASSERT(std::wstring(pinfo.achName) == L"Output", "QueryPinInfo name match");
+
+        int32_t hr = pOut->Connect(pIn, &mt);
+        TEST_ASSERT(hr == ole32::S_OK, "Pin Connect must return S_OK");
+
+        IPin* pConnectedPeer = nullptr;
+        hr = pOut->ConnectedTo(&pConnectedPeer);
+        TEST_ASSERT(hr == ole32::S_OK && pConnectedPeer == pIn, "ConnectedTo must point to input pin");
+        if (pConnectedPeer) pConnectedPeer->Release();
+
+        IEnumMediaTypes* pEnumMT = nullptr;
+        hr = pOut->EnumMediaTypes(&pEnumMT);
+        TEST_ASSERT(hr == ole32::S_OK && pEnumMT != nullptr, "EnumMediaTypes must succeed");
+        AM_MEDIA_TYPE* fetchedMT = nullptr;
+        uint32_t cFetched = 0;
+        hr = pEnumMT->Next(1, &fetchedMT, &cFetched);
+        TEST_ASSERT(hr == ole32::S_OK && cFetched == 1 && fetchedMT != nullptr, "Next media type fetched");
+        TEST_ASSERT(fetchedMT->majortype == MEDIATYPE_Video, "MajorType must be Video");
+        delete fetchedMT;
+        pEnumMT->Release();
+
+        hr = pOut->Disconnect();
+        TEST_ASSERT(hr == ole32::S_OK, "Disconnect must succeed");
+        pIn->Disconnect();
+
+        pConnectedPeer = nullptr;
+        hr = pOut->ConnectedTo(&pConnectedPeer);
+        TEST_ASSERT(hr == VFW_E_NOT_CONNECTED, "ConnectedTo after disconnect must return VFW_E_NOT_CONNECTED");
+
+        pOut->Release();
+        pIn->Release();
+    }
+
+    // 4. Asynchronous File Reader Filter (CAsyncFileReaderFilter / CLSID_AsyncReader)
+    {
+        auto* pReader = new CAsyncFileReaderFilter(L"C:\\media\\demo.avi");
+        GUID clsid{};
+        pReader->GetClassID(&clsid);
+        TEST_ASSERT(clsid == CLSID_AsyncReader, "AsyncReader CLSID match");
+
+        IEnumPins* pPins = nullptr;
+        pReader->EnumPins(&pPins);
+        TEST_ASSERT(pPins != nullptr, "AsyncReader EnumPins must succeed");
+        IPin* pin = nullptr;
+        uint32_t fetched = 0;
+        int32_t hr = pPins->Next(1, &pin, &fetched);
+        TEST_ASSERT(hr == ole32::S_OK && fetched == 1 && pin != nullptr, "AsyncReader has 1 output pin");
+        PIN_DIRECTION dir;
+        pin->QueryDirection(&dir);
+        TEST_ASSERT(dir == PINDIR_OUTPUT, "AsyncReader pin direction must be output");
+        pin->Release();
+        pPins->Release();
+
+        FILTER_INFO fInfo{};
+        pReader->QueryFilterInfo(&fInfo);
+        TEST_ASSERT(std::wstring(fInfo.achName) == L"Async File Reader", "Filter info name match");
+        pReader->Release();
+    }
+
+    // 5. AVI Decompressor Transform Filter (CAVIDecoderFilter / CLSID_AVIDec)
+    {
+        auto* pDec = new CAVIDecoderFilter();
+        GUID clsid{};
+        pDec->GetClassID(&clsid);
+        TEST_ASSERT(clsid == CLSID_AVIDec, "AVIDec CLSID match");
+
+        IEnumPins* pPins = nullptr;
+        pDec->EnumPins(&pPins);
+        TEST_ASSERT(pPins != nullptr, "AVIDec EnumPins must succeed");
+
+        IPin* pIn = nullptr;
+        IPin* pOut = nullptr;
+        uint32_t fetched = 0;
+        pPins->Next(1, &pIn, &fetched);
+        pPins->Next(1, &pOut, &fetched);
+        TEST_ASSERT(pIn != nullptr && pOut != nullptr, "AVIDec has input and output pins");
+
+        PIN_DIRECTION dirIn, dirOut;
+        pIn->QueryDirection(&dirIn);
+        pOut->QueryDirection(&dirOut);
+        TEST_ASSERT(dirIn == PINDIR_INPUT && dirOut == PINDIR_OUTPUT, "AVIDec pin directions correct");
+
+        pIn->Release();
+        pOut->Release();
+        pPins->Release();
+        pDec->Release();
+    }
+
+    // 6. Color Space Converter Filter (CColorConverterFilter / CLSID_Colour)
+    {
+        auto* pColor = new CColorConverterFilter();
+        GUID clsid{};
+        pColor->GetClassID(&clsid);
+        TEST_ASSERT(clsid == CLSID_Colour, "Color converter CLSID match");
+
+        IPin* pPin = nullptr;
+        int32_t hr = pColor->FindPin(L"XForm In", &pPin);
+        TEST_ASSERT(hr == ole32::S_OK && pPin != nullptr, "FindPin 'XForm In' must succeed");
+        pPin->Release();
+
+        hr = pColor->FindPin(L"XForm Out", &pPin);
+        TEST_ASSERT(hr == ole32::S_OK && pPin != nullptr, "FindPin 'XForm Out' must succeed");
+        pPin->Release();
+
+        pColor->Release();
+    }
+
+    // 7. DirectSound Audio Renderer Filter (CDefaultDirectSoundRenderer / CLSID_DSoundRender)
+    {
+        auto* pDSound = new CDefaultDirectSoundRenderer();
+        GUID clsid{};
+        pDSound->GetClassID(&clsid);
+        TEST_ASSERT(clsid == CLSID_DSoundRender, "DSoundRender CLSID match");
+
+        IPin* pPin = nullptr;
+        int32_t hr = pDSound->FindPin(L"Audio Input pin (rendered)", &pPin);
+        TEST_ASSERT(hr == ole32::S_OK && pPin != nullptr, "FindPin 'Audio Input pin (rendered)' must succeed");
+        PIN_DIRECTION dir;
+        pPin->QueryDirection(&dir);
+        TEST_ASSERT(dir == PINDIR_INPUT, "Audio renderer pin must be INPUT");
+        pPin->Release();
+
+        pDSound->Release();
+    }
+
+    // 8. Video Renderer Filter (CVideoRendererFilter / CLSID_VideoRenderer)
+    {
+        auto* pVR = new CVideoRendererFilter();
+        GUID clsid{};
+        pVR->GetClassID(&clsid);
+        TEST_ASSERT(clsid == CLSID_VideoRenderer, "VideoRenderer CLSID match");
+
+        IPin* pPin = nullptr;
+        int32_t hr = pVR->FindPin(L"Input", &pPin);
+        TEST_ASSERT(hr == ole32::S_OK && pPin != nullptr, "FindPin 'Input' must succeed");
+        PIN_DIRECTION dir;
+        pPin->QueryDirection(&dir);
+        TEST_ASSERT(dir == PINDIR_INPUT, "Video renderer pin must be INPUT");
+        pPin->Release();
+
+        pVR->Release();
+    }
+
+    // 9. Null Renderer Filter (CNullRendererFilter / CLSID_NullRenderer)
+    {
+        auto* pNull = new CNullRendererFilter();
+        GUID clsid{};
+        pNull->GetClassID(&clsid);
+        TEST_ASSERT(clsid == CLSID_NullRenderer, "NullRenderer CLSID match");
+
+        IPin* pPin = nullptr;
+        int32_t hr = pNull->FindPin(L"In", &pPin);
+        TEST_ASSERT(hr == ole32::S_OK && pPin != nullptr, "NullRenderer FindPin 'In' must succeed");
+        pPin->Release();
+
+        pNull->Release();
+    }
+
+    // 10. Sample Grabber Filter & Interface (CSampleGrabberFilter / ISampleGrabber)
+    {
+        auto* pGrabber = new CSampleGrabberFilter();
+        GUID clsid{};
+        pGrabber->GetClassID(&clsid);
+        TEST_ASSERT(clsid == CLSID_SampleGrabber, "SampleGrabber CLSID match");
+
+        ISampleGrabber* pISG = nullptr;
+        int32_t hr = pGrabber->QueryInterface(IID_ISampleGrabber, reinterpret_cast<void**>(&pISG));
+        TEST_ASSERT(hr == ole32::S_OK && pISG != nullptr, "QueryInterface ISampleGrabber must succeed");
+
+        hr = pISG->SetOneShot(1);
+        TEST_ASSERT(hr == ole32::S_OK, "SetOneShot must succeed");
+
+        hr = pISG->SetBufferSamples(1);
+        TEST_ASSERT(hr == ole32::S_OK, "SetBufferSamples must succeed");
+
+        int32_t bufSize = 0;
+        hr = pISG->GetCurrentBuffer(&bufSize, nullptr);
+        TEST_ASSERT(hr == ole32::S_OK && bufSize > 0, "GetCurrentBuffer query size must succeed");
+
+        pISG->Release();
+        pGrabber->Release();
+    }
+
+    // 11. Filter Graph Manager Composition & Intelligent Connect (CFilterGraphManager)
+    {
+        auto* pGraph = new CFilterGraphManager();
+        auto* pSrc = new CAsyncFileReaderFilter(L"C:\\media\\movie.avi");
+        auto* pNull = new CNullRendererFilter();
+
+        int32_t hr = pGraph->AddFilter(pSrc, L"Source Filter");
+        TEST_ASSERT(hr == ole32::S_OK, "AddFilter Source Filter must succeed");
+
+        hr = pGraph->AddFilter(pNull, L"Null Sink");
+        TEST_ASSERT(hr == ole32::S_OK, "AddFilter Null Sink must succeed");
+
+        IBaseFilter* pFound = nullptr;
+        hr = pGraph->FindFilterByName(L"Source Filter", &pFound);
+        TEST_ASSERT(hr == ole32::S_OK && pFound != nullptr, "FindFilterByName must find Source Filter");
+        if (pFound) pFound->Release();
+
+        IEnumFilters* pEnumF = nullptr;
+        hr = pGraph->EnumFilters(&pEnumF);
+        TEST_ASSERT(hr == ole32::S_OK && pEnumF != nullptr, "EnumFilters must succeed");
+        IBaseFilter* filtArr[4] = {};
+        uint32_t fFetched = 0;
+        hr = pEnumF->Next(4, filtArr, &fFetched);
+        TEST_ASSERT(fFetched == 2, "FilterGraph must have 2 filters");
+        for (uint32_t i = 0; i < fFetched; ++i) filtArr[i]->Release();
+        pEnumF->Release();
+
+        hr = pGraph->RemoveFilter(pNull);
+        TEST_ASSERT(hr == ole32::S_OK, "RemoveFilter must succeed");
+
+        pNull->Release();
+        pSrc->Release();
+        pGraph->Release();
+    }
+
+    // 12. Graph Rendering & Filter State Control (IMediaControl, IMediaEventEx)
+    {
+        auto* pGraph = new CFilterGraphManager();
+        int32_t hr = pGraph->RenderFile(L"C:\\media\\sample_video.avi");
+        TEST_ASSERT(hr == ole32::S_OK, "RenderFile must succeed");
+
+        IMediaControl* pMC = nullptr;
+        hr = pGraph->QueryInterface(IID_IMediaControl, reinterpret_cast<void**>(&pMC));
+        TEST_ASSERT(hr == ole32::S_OK && pMC != nullptr, "QueryInterface IMediaControl must succeed");
+
+        FILTER_STATE state = State_Stopped;
+        pMC->GetState(0, &state);
+        TEST_ASSERT(state == State_Stopped, "Initial state must be State_Stopped");
+
+        pMC->Pause();
+        pMC->GetState(0, &state);
+        TEST_ASSERT(state == State_Paused, "State must be State_Paused");
+
+        pMC->Run();
+        pMC->GetState(0, &state);
+        TEST_ASSERT(state == State_Running, "State must be State_Running");
+
+        pMC->Stop();
+        pMC->GetState(0, &state);
+        TEST_ASSERT(state == State_Stopped, "State must be State_Stopped");
+
+        IMediaEventEx* pME = nullptr;
+        hr = pGraph->QueryInterface(IID_IMediaEventEx, reinterpret_cast<void**>(&pME));
+        TEST_ASSERT(hr == ole32::S_OK && pME != nullptr, "QueryInterface IMediaEventEx must succeed");
+
+        int32_t evCode = 0;
+        intptr_t p1 = 0, p2 = 0;
+        hr = pME->GetEvent(&evCode, &p1, &p2, 0);
+        TEST_ASSERT(hr == ole32::S_OK, "GetEvent must retrieve queued event");
+
+        hr = pME->WaitForCompletion(100, &evCode);
+        TEST_ASSERT(hr == ole32::S_OK && evCode == EC_COMPLETE, "WaitForCompletion must return EC_COMPLETE");
+
+        pME->Release();
+        pMC->Release();
+        pGraph->Release();
+    }
+
+    // 13. Media Seeking Operations (IMediaSeeking)
+    {
+        auto* pGraph = new CFilterGraphManager();
+        IMediaSeeking* pMS = nullptr;
+        int32_t hr = pGraph->QueryInterface(IID_IMediaSeeking, reinterpret_cast<void**>(&pMS));
+        TEST_ASSERT(hr == ole32::S_OK && pMS != nullptr, "QueryInterface IMediaSeeking must succeed");
+
+        uint32_t caps = 0;
+        pMS->GetCapabilities(&caps);
+        TEST_ASSERT((caps & 0x01) != 0, "Seeking must report CanSeekAbsolute");
+
+        LONGLONG dur = 0;
+        pMS->GetDuration(&dur);
+        TEST_ASSERT(dur > 0, "Duration must be greater than zero");
+
+        LONGLONG pos = 25 * 10000000LL;
+        pMS->SetPositions(&pos, 1, nullptr, 0);
+        LONGLONG curPos = 0;
+        pMS->GetCurrentPosition(&curPos);
+        TEST_ASSERT(curPos == pos, "Current position must match seek target");
+
+        pMS->SetRate(1.75);
+        double rate = 0.0;
+        pMS->GetRate(&rate);
+        TEST_ASSERT(std::abs(rate - 1.75) < 0.001, "Playback rate must be 1.75");
+
+        pMS->Release();
+        pGraph->Release();
+    }
+
+    // 14. Basic Audio, Basic Video & Video Window (IBasicAudio, IBasicVideo, IVideoWindow)
+    {
+        auto* pGraph = new CFilterGraphManager();
+
+        IBasicAudio* pBA = nullptr;
+        int32_t hr = pGraph->QueryInterface(IID_IBasicAudio, reinterpret_cast<void**>(&pBA));
+        TEST_ASSERT(hr == ole32::S_OK && pBA != nullptr, "QueryInterface IBasicAudio must succeed");
+        pBA->put_Volume(-600);
+        int32_t vol = 0;
+        pBA->get_Volume(&vol);
+        TEST_ASSERT(vol == -600, "Volume must match -600");
+        pBA->put_Balance(250);
+        int32_t bal = 0;
+        pBA->get_Balance(&bal);
+        TEST_ASSERT(bal == 250, "Balance must match 250");
+        pBA->Release();
+
+        IBasicVideo* pBV = nullptr;
+        hr = pGraph->QueryInterface(IID_IBasicVideo, reinterpret_cast<void**>(&pBV));
+        TEST_ASSERT(hr == ole32::S_OK && pBV != nullptr, "QueryInterface IBasicVideo must succeed");
+        int32_t vw = 0, vh = 0;
+        pBV->get_VideoWidth(&vw);
+        pBV->get_VideoHeight(&vh);
+        TEST_ASSERT(vw == 1920 && vh == 1080, "Default video resolution must be 1920x1080");
+        pBV->Release();
+
+        IVideoWindow* pVW = nullptr;
+        hr = pGraph->QueryInterface(IID_IVideoWindow, reinterpret_cast<void**>(&pVW));
+        TEST_ASSERT(hr == ole32::S_OK && pVW != nullptr, "QueryInterface IVideoWindow must succeed");
+        pVW->put_Caption(L"MicaNT DirectShow Playback");
+        wchar_t* cap = nullptr;
+        pVW->get_Caption(&cap);
+        TEST_ASSERT(cap != nullptr && std::wstring(cap) == L"MicaNT DirectShow Playback", "Caption must match");
+        ole32::CoTaskMemFree(cap);
+        pVW->put_Visible(1);
+        int32_t vis = 0;
+        pVW->get_Visible(&vis);
+        TEST_ASSERT(vis == 1, "Window visibility must be 1");
+        pVW->Release();
+
+        pGraph->Release();
+    }
+
+    // 15. Device Enumeration & Monikers (CDeviceEnumerator / ICreateDevEnum)
+    {
+        auto* pDevEnum = new CDeviceEnumerator();
+        IEnumMoniker* pEnumMon = nullptr;
+
+        // Video input devices
+        int32_t hr = pDevEnum->CreateClassEnumerator(CLSID_VideoInputDeviceCategory, &pEnumMon, 0);
+        TEST_ASSERT(hr == ole32::S_OK && pEnumMon != nullptr, "CreateClassEnumerator for VideoInput must succeed");
+
+        IMoniker* pMon = nullptr;
+        uint32_t fetched = 0;
+        hr = pEnumMon->Next(1, &pMon, &fetched);
+        TEST_ASSERT(hr == ole32::S_OK && fetched == 1 && pMon != nullptr, "Next video moniker must succeed");
+
+        IBaseFilter* pCamFilter = nullptr;
+        hr = pMon->BindToObject(nullptr, nullptr, IID_IBaseFilter, reinterpret_cast<void**>(&pCamFilter));
+        TEST_ASSERT(hr == ole32::S_OK && pCamFilter != nullptr, "BindToObject on device moniker must return IBaseFilter");
+
+        FILTER_INFO camInfo{};
+        pCamFilter->QueryFilterInfo(&camInfo);
+        TEST_ASSERT(std::wstring(camInfo.achName) == L"MicaNT Titan HD Camera", "Moniker friendly name match");
+
+        pCamFilter->Release();
+        pMon->Release();
+        pEnumMon->Release();
+
+        // Audio input devices
+        pEnumMon = nullptr;
+        hr = pDevEnum->CreateClassEnumerator(CLSID_AudioInputDeviceCategory, &pEnumMon, 0);
+        TEST_ASSERT(hr == ole32::S_OK && pEnumMon != nullptr, "CreateClassEnumerator for AudioInput must succeed");
+        pEnumMon->Release();
+
+        // Audio renderers
+        pEnumMon = nullptr;
+        hr = pDevEnum->CreateClassEnumerator(CLSID_AudioRendererCategory, &pEnumMon, 0);
+        TEST_ASSERT(hr == ole32::S_OK && pEnumMon != nullptr, "CreateClassEnumerator for AudioRenderer must succeed");
+        pEnumMon->Release();
+
+        pDevEnum->Release();
+    }
+
+    // 16. Dynamic Module Exports, COM Class Activation & Shell Integration
+    {
+        InitializeDirectShowExports();
+        auto& loader = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(loader.getExport("quartz.dll", "AMGetErrorTextA") != nullptr, "quartz.dll!AMGetErrorTextA exported");
+        TEST_ASSERT(loader.getExport("quartz.dll", "AMGetErrorTextW") != nullptr, "quartz.dll!AMGetErrorTextW exported");
+        TEST_ASSERT(loader.getExport("quartz.dll", "DllCanUnloadNow") != nullptr, "quartz.dll!DllCanUnloadNow exported");
+        TEST_ASSERT(loader.getExport("devenum.dll", "DllCanUnloadNow") != nullptr, "devenum.dll!DllCanUnloadNow exported");
+        TEST_ASSERT(loader.getExport("qedit.dll", "DllCanUnloadNow") != nullptr, "qedit.dll!DllCanUnloadNow exported");
+
+        // COM activation via CoCreateInstance
+        IGraphBuilder* pCoGraph = nullptr;
+        int32_t hr = ole32::CoCreateInstance(CLSID_FilterGraph, nullptr, 1, IID_IGraphBuilder, reinterpret_cast<void**>(&pCoGraph));
+        TEST_ASSERT(hr == ole32::S_OK && pCoGraph != nullptr, "CoCreateInstance CLSID_FilterGraph must succeed");
+        pCoGraph->Release();
+
+        ICreateDevEnum* pCoDev = nullptr;
+        hr = ole32::CoCreateInstance(CLSID_SystemDeviceEnum, nullptr, 1, IID_ICreateDevEnum, reinterpret_cast<void**>(&pCoDev));
+        TEST_ASSERT(hr == ole32::S_OK && pCoDev != nullptr, "CoCreateInstance CLSID_SystemDeviceEnum must succeed");
+        pCoDev->Release();
+
+        IBaseFilter* pCoGrabber = nullptr;
+        hr = ole32::CoCreateInstance(CLSID_SampleGrabber, nullptr, 1, IID_IBaseFilter, reinterpret_cast<void**>(&pCoGrabber));
+        TEST_ASSERT(hr == ole32::S_OK && pCoGrabber != nullptr, "CoCreateInstance CLSID_SampleGrabber must succeed");
+        pCoGrabber->Release();
+
+        // Version Database
+        auto& verDb = version::VersionDatabase::Instance();
+        const auto* vQuartz = verDb.FindModule("quartz.dll");
+        TEST_ASSERT(vQuartz != nullptr && vQuartz->stringTable.at("ProductName") == "MicaNT DirectShow Runtime", "quartz.dll version info match");
+
+        const auto* vDevenum = verDb.FindModule("devenum.dll");
+        TEST_ASSERT(vDevenum != nullptr && vDevenum->stringTable.at("ProductName") == "MicaNT Device Enumerator", "devenum.dll version info match");
+
+        const auto* vQedit = verDb.FindModule("qedit.dll");
+        TEST_ASSERT(vQedit != nullptr && vQedit->stringTable.at("ProductName") == "MicaNT DirectShow Editing Services", "qedit.dll version info match");
+
+        // Shell Integration Commands
+        shell::CommandShell testShell;
+        std::ostringstream out;
+
+        testShell.execute("dshow test", out);
+        TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "dshow test must pass 100%");
+
+        out.str("");
+        testShell.execute("dshow filters", out);
+        TEST_ASSERT(out.str().find("Async Reader") != std::string::npos, "dshow filters must list Async Reader");
+        TEST_ASSERT(out.str().find("Video Renderer") != std::string::npos, "dshow filters must list Video Renderer");
+
+        out.str("");
+        testShell.execute("dshow devices", out);
+        TEST_ASSERT(out.str().find("MicaNT Titan HD Camera") != std::string::npos, "dshow devices must list Titan HD Camera");
+
+        out.str("");
+        testShell.execute("dshow render trailer.avi", out);
+        TEST_ASSERT(out.str().find("Playback simulated successfully") != std::string::npos, "dshow render must succeed");
+    }
+
+    std::cout << "[TEST] Suite 103: Windows DirectShow & Filter Graph Subsystem PASSED.\n";
+}
+
+int main(int argc, char* argv[]) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite103")) {
+        RUN_TEST(Test_WindowsDirectShow_FilterGraph_Subsystem);
+        return g_FailedTests;
+    }
+
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
     std::cout << "========================================================================\n\n";
@@ -22581,6 +23108,7 @@ int main() {
     RUN_TEST(Test_WindowsHypervisor_Platform_Subsystem);
     RUN_TEST(Test_WindowsDirectWrite_Uniscribe_Subsystem);
     RUN_TEST(Test_WindowsMediaFoundation_Subsystem);
+    RUN_TEST(Test_WindowsDirectShow_FilterGraph_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

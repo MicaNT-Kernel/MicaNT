@@ -158,7 +158,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 75: Windows Media Foundation & Core Audio/Video      [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 76: Windows DirectShow & Filter Graph Subsystem         [PLANNED]        │
+│ Phase 76: Windows DirectShow & Filter Graph Subsystem      [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 77: Windows Media Player & ActiveMovie Architecture     [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1776,24 +1778,44 @@
 
 ---
 
-### Phase 76: Windows DirectShow & Filter Graph Architecture (`dshow.hpp`, `quartz.dll`, `devenum.dll`, `qedit.dll`) (PLANNED - MILESTONE 103)
-- [ ] **Clean-Room DirectShow Filter Graph Manager (`include/micant/dshow.hpp`, `quartz.dll`)**:
+### Phase 76: Windows DirectShow & Filter Graph Architecture (`dshow.hpp`, `quartz.dll`, `devenum.dll`, `qedit.dll`) (COMPLETED 100% - MILESTONE 103)
+- [x] **Clean-Room DirectShow Filter Graph Manager (`include/micant/dshow.hpp`, `quartz.dll`)**:
   - Filter Graph Manager COM interfaces (`IGraphBuilder`, `IFilterGraph`, `IFilterGraph2`, `IMediaControl`, `IMediaEvent`, `IMediaEventEx`, `IMediaSeeking`, `IBasicAudio`, `IBasicVideo`, `IVideoWindow`).
   - Base Filter and Pin architecture (`IBaseFilter`, `IPin`, `IEnumPins`, `IEnumFilters`, `IEnumMediaTypes`, `IMemInputPin`, `IMemAllocator`).
   - Pin connection negotiation, media type agreement (`AM_MEDIA_TYPE`), and intelligent connect graph building.
   - Filter state machine transitions (`State_Stopped`, `State_Paused`, `State_Running`).
-- [ ] **Standard DirectShow Filters & Device Enumeration (`devenum.dll`, `qedit.dll`)**:
+- [x] **Standard DirectShow Filters & Device Enumeration (`devenum.dll`, `qedit.dll`)**:
   - System Device Enumerator (`ICreateDevEnum`, `IEnumMoniker`) for audio/video capture devices.
   - Built-in filters: Async File Source, Demuxer / Parser, Video Renderer, Audio Renderer, Null Renderer.
   - Sample Grabber filter (`ISampleGrabber`, `ISampleGrabberCB`) in `qedit.dll`.
   - Dynamic loader export registrations for `quartz.dll`, `devenum.dll`, and `qedit.dll`.
   - Version database registration in `VersionDatabase` for `quartz.dll`, `devenum.dll`, and `qedit.dll`.
-- [ ] **Interactive CLI Utilities (`dshow` / `filtergraph`)**:
+- [x] **Interactive CLI Utilities (`dshow` / `filtergraph`)**:
   - `dshow test` (Executes filter graph construction, pin connections, state transitions, and media control: 16/16 passed).
   - `dshow filters` (Lists registered DirectShow filters and categories).
+  - `dshow devices` (Lists audio/video capture devices).
   - `dshow render` (Simulates building and running a playback filter graph).
-- [ ] **Unit Test Suite 103 (`Test_WindowsDirectShow_FilterGraph_Subsystem`)**:
+- [x] **Unit Test Suite 103 (`Test_WindowsDirectShow_FilterGraph_Subsystem`)**:
   - Comprehensive unit test suite validating DirectShow filter graph creation, pin connections, filter enumeration, media control, rendering pipeline, loader exports, and CLI commands.
+  - Milestone 103: **103 / 103 Test Suites Passing (100%)**.
+
+---
+
+### Phase 77: Windows Media Player & ActiveMovie Architecture (`wmp.hpp`, `wmp.dll`, `amstream.dll`, `wmplayer.exe`) (PLANNED - MILESTONE 104)
+- [ ] **Windows Media Player Core Automation Architecture (`include/micant/wmp.hpp`, `wmp.dll`)**:
+  - Windows Media Player Core COM interfaces (`IWMPPlayer`, `IWMPPlayer4`, `IWMPControls`, `IWMPSettings`, `IWMPMedia`, `IWMPPlaylist`, `IWMPCore`, `IWMPCdromCollection`, `IWMPClosedCaption`).
+  - Media item metadata management and playlist manipulation.
+  - Playback transport controls (`play`, `pause`, `stop`, `fastForward`, `fastReverse`, `currentPosition`).
+- [ ] **ActiveMovie Streaming Engine (`amstream.dll`)**:
+  - MultiMedia Stream architecture (`IAMMultiMediaStream`, `IMediaStream`, `IDirectDrawMediaStream`, `IAudioMediaStream`).
+  - Stream sample synchronization and asynchronous stream updates.
+  - Dynamic module export registrations for `wmp.dll` and `amstream.dll`.
+  - Version database registration in `VersionDatabase` for `wmp.dll`, `amstream.dll`, and `wmplayer.exe`.
+- [ ] **Interactive CLI Utilities (`wmp` / `mediaplayer`)**:
+  - `wmp test` (Executes WMP Core player creation, controls, metadata, and playlist tests).
+  - `wmp play <file>` (Simulates playback automation).
+- [ ] **Unit Test Suite 104 (`Test_WindowsMediaPlayer_ActiveMovie_Subsystem`)**:
+  - Verification of WMP interfaces, media controls, playlists, ActiveMovie streams, loader exports, and shell commands.
 
 
 
