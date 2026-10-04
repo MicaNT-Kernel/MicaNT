@@ -166,7 +166,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 79: Windows Direct2D & DirectWrite Hardware Rendering [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 80: Windows Media Foundation Topology & Media Session  [PLANNED]      │
+│ Phase 80: Windows Media Foundation Topology & Media Session  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 81: Windows Enhanced Video Renderer (EVR) Subsystem  [PLANNED]      │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1876,25 +1878,47 @@
 
 ---
 
-### Phase 80: Windows Media Foundation Topology & Advanced Media Session Pipeline (`mfsession.hpp`, `mfplat.dll`, `mf.dll`, `wmvdecod.dll`) (PLANNED - MILESTONE 107)
-- [ ] **Media Foundation Topology Loader & Node Routing Engine (`include/micant/mfsession.hpp`, `mf.dll`)**:
+### Phase 80: Windows Media Foundation Topology & Advanced Media Session Pipeline (`mfsession.hpp`, `mfplat.dll`, `mf.dll`, `wmvdecod.dll`) (COMPLETED 100% - MILESTONE 107)
+- [x] **Media Foundation Topology Loader & Node Routing Engine (`include/micant/mfsession.hpp`, `mf.dll`)**:
   - Topology loader interface (`IMFTopoLoader`, `MFCreateTopoLoader`) resolving source, transform, and sink nodes into complete playback pipeline graphs.
-  - Partial-to-full topology resolution with automatic decoder MFT and color-space converter insertion.
+  - Partial-to-full topology resolution with automatic decoder MFT (`CWMVDecoderMFT`, `CWMADecoderMFT`, `CH264DecoderMFT`, `CAACDecoderMFT`) and color-space converter insertion (`CColorConvertMFT`).
   - Node connection validation and media type negotiation across upstream and downstream pins.
-- [ ] **Advanced Media Session Pipeline & Sequencer (`mf.dll`)**:
+- [x] **Advanced Media Session Pipeline & Sequencer (`mf.dll`)**:
   - Media session clock (`IMFClock`, `IMFPresentationClock`, `MFCreatePresentationClock`) with drift compensation and rate control (`IMFRateControl`, `IMFRateSupport`).
   - Media sequencer source (`IMFSequencerSource`, `MFCreateSequencerSource`) supporting playlist sequencing and gapless cross-segment playback.
-  - Stream sink rendering synchronization with hardware video/audio clocks.
-- [ ] **Standard Windows Media Video (WMV) / WMA Codec MFT Registration (`wmvdecod.dll`)**:
-  - Direct Show / Media Foundation transform bridge for VC-1, WMV9 (`CLSID_CWMVDecMediaObject`), and WMA9 decoder objects.
-  - Dynamic module export registrations for `mf.dll` and `wmvdecod.dll`.
-  - Version database registration in `VersionDatabase` for `wmvdecod.dll`.
-- [ ] **Interactive CLI Utilities (`mfsession` / `topology`)**:
-  - `mfsession test` (Runs Media Foundation topology resolution and playback sequencer self-tests).
-  - `mfsession topology <source>` (Displays topology node graph).
-  - `mfsession info` (Displays media session engine capabilities).
-- [ ] **Unit Test Suite 107 (`Test_WindowsMediaFoundation_Topology_And_Session_Subsystem`)**:
+  - Stream sink rendering synchronization with hardware video/audio clocks (10MHz / 100ns precision timestamps).
+- [x] **Standard Windows Media Video (WMV) / WMA Codec MFT Registration (`wmvdecod.dll`)**:
+  - Media Foundation transform decoders for VC-1 (WVC1), WMV1, WMV2, WMV3 (`CLSID_CWMVDecMediaObject`), and WMAudio V8, V9, Lossless (`CLSID_CWMADecMediaObject`) decoder objects.
+  - Dynamic module export registrations for `mf.dll` (`MFCreateTopoLoader`, `MFCreatePresentationClock`, `MFCreateSequencerSource`) and `wmvdecod.dll` (`DllCanUnloadNow`, `DllGetClassObject`).
+  - Version database registration in `VersionDatabase` for `wmvdecod.dll` ("MicaNT WMV & WMA Codec Subsystem", `10.0.22621.1`).
+- [x] **Interactive CLI Utilities (`mfsession` / `topology`)**:
+  - `mfsession test` (Runs Media Foundation topology resolution and playback sequencer self-tests: 16/16 passed).
+  - `mfsession topology <source>` (Displays resolved topology node graph with decoder/converter splicing).
+  - `mfsession info` (Displays media session engine capabilities and codec telemetry).
+- [x] **Unit Test Suite 107 (`Test_WindowsMediaFoundation_Topology_And_Session_Subsystem`)**:
   - Comprehensive unit test suite validating topology resolution, presentation clocks, sequencer sources, codec MFTs, and CLI commands.
+  - Milestone 107: **107 / 107 Test Suites Passing (100%)**.
+
+---
+
+### Phase 81: Windows Enhanced Video Renderer (EVR) Subsystem (`evr.hpp`, `evr.dll`, `mf.dll`) (PLANNED - MILESTONE 108)
+- [ ] **Enhanced Video Renderer Core Architecture (`include/micant/evr.hpp`, `evr.dll`)**:
+  - EVR media sink implementation (`IMFMediaSink`, `IMFVideoRenderer`, `IEVRFilterConfig`).
+  - EVR Presenter interface (`IMFVideoPresenter`, `IMFVideoDisplayControl`) for hardware-accelerated video presentation via Direct2D / DXGI.
+  - EVR Mixer engine (`IMFVideoMixerControl`, `IMFVideoMixerBitmap`) for multi-stream alpha blending and subtitle compositing.
+- [ ] **Video Processing & Color Space Conversion Pipeline (`evr.dll`)**:
+  - Hardware color conversion (NV12, YUY2, AYUV to BGRA / RGB32) and aspect ratio correction (`MFVideoAspectRatio`).
+  - Presentation synchronizer with presentation clock (`IMFPresentationClock`) and frame drop detection.
+- [ ] **Dynamic Module Exports & COM Registration (`evr.dll`)**:
+  - `MFCreateVideoRenderer`, `MFCreateVideoPresenter`, `MFCreateVideoMixer`.
+  - COM class factory registration for `CLSID_EnhancedVideoRenderer`.
+  - Version database registration in `VersionDatabase` for `evr.dll`.
+- [ ] **Interactive CLI Utilities (`evr`)**:
+  - `evr test` (Runs EVR mixer, presenter, and display control self-tests).
+  - `evr render <video_stream>` (Presents video frames using Direct2D/DXGI swapchain).
+  - `evr info` (Displays EVR hardware acceleration capabilities).
+- [ ] **Unit Test Suite 108 (`Test_WindowsEnhancedVideoRenderer_Subsystem`)**:
+  - Comprehensive unit test suite validating EVR media sink, video display controls, presenter synchronization, mixer alpha compositing, and CLI commands.
 
 
 

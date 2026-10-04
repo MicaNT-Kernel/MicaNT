@@ -128,6 +128,7 @@
 #include "micant/wmp.hpp"
 #include "micant/gdiplus.hpp"
 #include "micant/d2d1.hpp"
+#include "micant/mfsession.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -24297,8 +24298,485 @@ void Test_WindowsDirect2D_Hardware_Rendering_Subsystem() {
     std::cout << "[TEST] Suite 106: Windows Direct2D & DirectWrite Hardware Rendering Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 107: Windows Media Foundation Topology & Advanced Media Session Pipeline
+// ============================================================================
+void Test_WindowsMediaFoundation_Topology_And_Session_Subsystem() {
+    std::cout << "[RUNNING] Test_WindowsMediaFoundation_Topology_And_Session_Subsystem...\n";
+
+    // 1. Topology Loader Creation & Interface Query
+    {
+        mf::IMFTopoLoader* pLoader = nullptr;
+        int32_t hr = mf::MFCreateTopoLoader(&pLoader);
+        TEST_ASSERT(hr == ole32::S_OK && pLoader != nullptr, "MFCreateTopoLoader must succeed");
+
+        ole32::IUnknown* pUnk = nullptr;
+        hr = pLoader->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+        TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "IMFTopoLoader must implement IUnknown");
+        pUnk->Release();
+
+        pLoader->Release();
+    }
+
+    // 2. Presentation Clock Creation & Multi-Interface Query
+    {
+        mf::IMFPresentationClock* pClock = nullptr;
+        int32_t hr = mf::MFCreatePresentationClock(&pClock);
+        TEST_ASSERT(hr == ole32::S_OK && pClock != nullptr, "MFCreatePresentationClock must succeed");
+
+        mf::IMFClock* pBaseClock = nullptr;
+        hr = pClock->QueryInterface(mf::IID_IMFClock, reinterpret_cast<void**>(&pBaseClock));
+        TEST_ASSERT(hr == ole32::S_OK && pBaseClock != nullptr, "IMFPresentationClock implements IMFClock");
+        pBaseClock->Release();
+
+        mf::IMFRateControl* pRateControl = nullptr;
+        hr = pClock->QueryInterface(mf::IID_IMFRateControl, reinterpret_cast<void**>(&pRateControl));
+        TEST_ASSERT(hr == ole32::S_OK && pRateControl != nullptr, "IMFPresentationClock implements IMFRateControl");
+        pRateControl->Release();
+
+        mf::IMFRateSupport* pRateSupport = nullptr;
+        hr = pClock->QueryInterface(mf::IID_IMFRateSupport, reinterpret_cast<void**>(&pRateSupport));
+        TEST_ASSERT(hr == ole32::S_OK && pRateSupport != nullptr, "IMFPresentationClock implements IMFRateSupport");
+        pRateSupport->Release();
+
+        pClock->Release();
+    }
+
+    // 3. Clock Characteristics & Properties
+    {
+        mf::IMFPresentationClock* pClock = nullptr;
+        mf::MFCreatePresentationClock(&pClock);
+
+        uint32_t characteristics = 0;
+        int32_t hr = pClock->GetClockCharacteristics(&characteristics);
+        TEST_ASSERT(hr == ole32::S_OK, "GetClockCharacteristics must succeed");
+        TEST_ASSERT(characteristics & mf::MFCLOCK_CHARACTERISTICS_FLAG_FREQUENCY_10MHZ, "Clock must report 10MHz frequency");
+        TEST_ASSERT(characteristics & mf::MFCLOCK_CHARACTERISTICS_FLAG_IS_SYSTEM_CLOCK, "Clock must report system clock flag");
+
+        mf::MFCLOCK_PROPERTIES props{};
+        hr = pClock->GetProperties(&props);
+        TEST_ASSERT(hr == ole32::S_OK, "GetProperties must succeed");
+        TEST_ASSERT(props.qwClockFrequency == 10000000, "Clock frequency is 10,000,000 Hz");
+        TEST_ASSERT(props.guidClockId == mf::CLSID_MFPresentationClock, "Clock ID matches CLSID_MFPresentationClock");
+
+        pClock->Release();
+    }
+
+    // 4. Presentation Clock State Transitions
+    {
+        mf::IMFPresentationClock* pClock = nullptr;
+        mf::MFCreatePresentationClock(&pClock);
+
+        mf::MFCLOCK_STATE state{};
+        pClock->GetState(0, &state);
+        TEST_ASSERT(state == mf::MFCLOCK_STATE_STOPPED, "Initial state is STOPPED");
+
+        pClock->Start(0);
+        pClock->GetState(0, &state);
+        TEST_ASSERT(state == mf::MFCLOCK_STATE_RUNNING, "State after Start is RUNNING");
+
+        pClock->Pause();
+        pClock->GetState(0, &state);
+        TEST_ASSERT(state == mf::MFCLOCK_STATE_PAUSED, "State after Pause is PAUSED");
+
+        pClock->Start(1000);
+        pClock->GetState(0, &state);
+        TEST_ASSERT(state == mf::MFCLOCK_STATE_RUNNING, "State after resume is RUNNING");
+
+        pClock->Stop();
+        pClock->GetState(0, &state);
+        TEST_ASSERT(state == mf::MFCLOCK_STATE_STOPPED, "State after Stop is STOPPED");
+
+        pClock->Release();
+    }
+
+    // 5. Clock State Sink Registration & Event Dispatching
+    {
+        class TestClockSink : public mf::IMFClockStateSink {
+        public:
+            uint32_t startCount{ 0 }, stopCount{ 0 }, pauseCount{ 0 }, rateCount{ 0 };
+            uint32_t refCount{ 1 };
+
+            int32_t __stdcall QueryInterface(const GUID& riid, void** ppv) override {
+                if (!ppv) return ole32::E_POINTER;
+                if (riid == ole32::IID_IUnknown || riid == mf::IID_IMFClockStateSink) {
+                    *ppv = this;
+                    AddRef();
+                    return ole32::S_OK;
+                }
+                *ppv = nullptr;
+                return ole32::E_NOINTERFACE;
+            }
+            uint32_t __stdcall AddRef() override { return ++refCount; }
+            uint32_t __stdcall Release() override {
+                uint32_t r = --refCount;
+                if (r == 0) delete this;
+                return r;
+            }
+            int32_t __stdcall OnClockStart(mf::MFTIME, mf::LONGLONG) override { startCount++; return ole32::S_OK; }
+            int32_t __stdcall OnClockStop(mf::MFTIME) override { stopCount++; return ole32::S_OK; }
+            int32_t __stdcall OnClockPause(mf::MFTIME) override { pauseCount++; return ole32::S_OK; }
+            int32_t __stdcall OnClockRestart(mf::MFTIME) override { return ole32::S_OK; }
+            int32_t __stdcall OnClockSetRate(mf::MFTIME, float) override { rateCount++; return ole32::S_OK; }
+        };
+
+        auto* pSink = new TestClockSink();
+        mf::IMFPresentationClock* pClock = nullptr;
+        mf::MFCreatePresentationClock(&pClock);
+
+        int32_t hr = pClock->AddClockStateSink(pSink);
+        TEST_ASSERT(hr == ole32::S_OK, "AddClockStateSink must succeed");
+
+        pClock->Start(500);
+        TEST_ASSERT(pSink->startCount == 1, "OnClockStart called on Start");
+
+        pClock->Pause();
+        TEST_ASSERT(pSink->pauseCount == 1, "OnClockPause called on Pause");
+
+        pClock->Stop();
+        TEST_ASSERT(pSink->stopCount == 1, "OnClockStop called on Stop");
+
+        hr = pClock->RemoveClockStateSink(pSink);
+        TEST_ASSERT(hr == ole32::S_OK, "RemoveClockStateSink must succeed");
+
+        pClock->Start(0);
+        TEST_ASSERT(pSink->startCount == 1, "Removed sink does not receive subsequent events");
+        pClock->Stop();
+
+        pSink->Release();
+        pClock->Release();
+    }
+
+    // 6. Clock Sample-Accurate 100ns Timestamps & Continuity Key
+    {
+        mf::IMFPresentationClock* pClock = nullptr;
+        mf::MFCreatePresentationClock(&pClock);
+
+        uint32_t key1 = 0;
+        pClock->GetContinuityKey(&key1);
+
+        pClock->Start(10000000); // 1.0 second offset (10,000,000 hns)
+        uint32_t key2 = 0;
+        pClock->GetContinuityKey(&key2);
+        TEST_ASSERT(key2 > key1, "Continuity key increments on Start");
+
+        mf::MFTIME t = 0;
+        pClock->GetTime(&t);
+        TEST_ASSERT(t >= 10000000, "Clock time respects initial offset");
+
+        mf::LONGLONG clockTime = 0;
+        mf::MFTIME sysTime = 0;
+        pClock->GetCorrelatedTime(0, &clockTime, &sysTime);
+        TEST_ASSERT(clockTime >= 10000000, "Correlated clock time matches running offset");
+        TEST_ASSERT(sysTime > 0, "Correlated system time is non-zero");
+
+        pClock->Stop();
+        pClock->Release();
+    }
+
+    // 7. Rate Control Interface (IMFRateControl)
+    {
+        mf::IMFPresentationClock* pClock = nullptr;
+        mf::MFCreatePresentationClock(&pClock);
+
+        mf::IMFRateControl* pRateControl = nullptr;
+        pClock->QueryInterface(mf::IID_IMFRateControl, reinterpret_cast<void**>(&pRateControl));
+        TEST_ASSERT(pRateControl != nullptr, "IMFRateControl query must succeed");
+
+        float r = 0.0f;
+        int32_t thin = 0;
+        pRateControl->GetRate(&thin, &r);
+        TEST_ASSERT(std::abs(r - 1.0f) < 0.001f, "Default playback rate is 1.0x");
+
+        pRateControl->SetRate(0, 2.5f);
+        pRateControl->GetRate(&thin, &r);
+        TEST_ASSERT(std::abs(r - 2.5f) < 0.001f, "Playback rate updated to 2.5x");
+
+        pRateControl->SetRate(1, 0.5f);
+        pRateControl->GetRate(&thin, &r);
+        TEST_ASSERT(std::abs(r - 0.5f) < 0.001f && thin == 1, "Thinned playback rate set to 0.5x");
+
+        pRateControl->Release();
+        pClock->Release();
+    }
+
+    // 8. Rate Support Range Validation (IMFRateSupport)
+    {
+        mf::IMFPresentationClock* pClock = nullptr;
+        mf::MFCreatePresentationClock(&pClock);
+
+        mf::IMFRateSupport* pRateSupport = nullptr;
+        pClock->QueryInterface(mf::IID_IMFRateSupport, reinterpret_cast<void**>(&pRateSupport));
+        TEST_ASSERT(pRateSupport != nullptr, "IMFRateSupport query must succeed");
+
+        float slowForward = 0.0f;
+        pRateSupport->GetSlowestRate(mf::MFRATE_FORWARD, 0, &slowForward);
+        TEST_ASSERT(slowForward > 0.0f, "Slowest forward rate is positive");
+
+        float fastForward = 0.0f;
+        pRateSupport->GetFastestRate(mf::MFRATE_FORWARD, 0, &fastForward);
+        TEST_ASSERT(fastForward >= 16.0f, "Fastest forward rate is at least 16.0x");
+
+        float slowReverse = 0.0f;
+        pRateSupport->GetSlowestRate(mf::MFRATE_REVERSE, 0, &slowReverse);
+        TEST_ASSERT(slowReverse < 0.0f, "Slowest reverse rate is negative");
+
+        float nearest = 0.0f;
+        int32_t hr = pRateSupport->IsRateSupported(0, 2.0f, &nearest);
+        TEST_ASSERT(hr == ole32::S_OK && std::abs(nearest - 2.0f) < 0.001f, "2.0x is supported rate");
+
+        hr = pRateSupport->IsRateSupported(0, 64.0f, &nearest);
+        TEST_ASSERT(hr == mf::MF_E_UNSUPPORTED_RATE, "64.0x is beyond supported rate range");
+
+        pRateSupport->Release();
+        pClock->Release();
+    }
+
+    // 9. Media Sequencer Source Creation
+    {
+        mf::IMFSequencerSource* pSeq = nullptr;
+        int32_t hr = mf::MFCreateSequencerSource(nullptr, &pSeq);
+        TEST_ASSERT(hr == ole32::S_OK && pSeq != nullptr, "MFCreateSequencerSource must succeed");
+
+        ole32::IUnknown* pUnk = nullptr;
+        hr = pSeq->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+        TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "IMFSequencerSource implements IUnknown");
+        pUnk->Release();
+
+        pSeq->Release();
+    }
+
+    // 10. Sequencer Source Topology Playlist Management
+    {
+        mf::IMFSequencerSource* pSeq = nullptr;
+        mf::MFCreateSequencerSource(nullptr, &pSeq);
+
+        mf::IMFTopology* pTopo1 = nullptr;
+        mf::MFCreateTopology(&pTopo1);
+        mf::IMFTopology* pTopo2 = nullptr;
+        mf::MFCreateTopology(&pTopo2);
+
+        uint32_t id1 = 0, id2 = 0;
+        int32_t hr1 = pSeq->AppendTopology(pTopo1, mf::MFSequencerFlag_Base, &id1);
+        int32_t hr2 = pSeq->AppendTopology(pTopo2, mf::MFSequencerFlag_Append, &id2);
+        TEST_ASSERT(hr1 == ole32::S_OK && hr2 == ole32::S_OK, "AppendTopology must succeed");
+        TEST_ASSERT(id1 != id2 && id1 >= 1001, "Sequence IDs are unique and sequenced");
+
+        mf::IMFTopology* pContext = nullptr;
+        pSeq->GetPresentationContext(id1, &pContext);
+        TEST_ASSERT(pContext == pTopo1, "GetPresentationContext retrieves matching topology");
+        pContext->Release();
+
+        int32_t hrUpd = pSeq->UpdateTopologyFlags(id2, mf::MFSequencerFlag_PreRoll);
+        TEST_ASSERT(hrUpd == ole32::S_OK, "UpdateTopologyFlags must succeed");
+
+        int32_t hrDel = pSeq->DeleteTopology(id1);
+        TEST_ASSERT(hrDel == ole32::S_OK, "DeleteTopology must succeed");
+
+        int32_t hrGet = pSeq->GetPresentationContext(id1, &pContext);
+        TEST_ASSERT(hrGet == mf::MF_E_NOT_FOUND, "Deleted topology cannot be retrieved");
+
+        pTopo2->Release();
+        pTopo1->Release();
+        pSeq->Release();
+    }
+
+    // 11. Windows Media Video Decoder MFT (CWMVDecoderMFT)
+    {
+        auto* pWmvDec = new mf::CWMVDecoderMFT();
+        TEST_ASSERT(pWmvDec->GetClsid() == mf::CLSID_CWMVDecMediaObject, "CWMVDecoderMFT matches CLSID");
+
+        // Input formats: WMV1, WMV2, WMV3, WVC1
+        const GUID expectedInputs[] = {
+            mf::MFVideoFormat_WMV1,
+            mf::MFVideoFormat_WMV2,
+            mf::MFVideoFormat_WMV3,
+            mf::MFVideoFormat_WVC1
+        };
+        for (uint32_t i = 0; i < 4; ++i) {
+            mf::IMFMediaType* pInType = nullptr;
+            int32_t hr = pWmvDec->GetInputAvailableType(0, i, &pInType);
+            TEST_ASSERT(hr == ole32::S_OK && pInType != nullptr, "Available input type must succeed");
+            GUID sub{};
+            pInType->GetGUID(mf::MF_MT_SUBTYPE, &sub);
+            TEST_ASSERT(sub == expectedInputs[i], "Input subtype matches expected WMV FourCC");
+            pInType->Release();
+        }
+
+        // Output formats: NV12, RGB32
+        mf::IMFMediaType* pOutType = nullptr;
+        pWmvDec->GetOutputAvailableType(0, 0, &pOutType);
+        GUID outSub{};
+        pOutType->GetGUID(mf::MF_MT_SUBTYPE, &outSub);
+        TEST_ASSERT(outSub == mf::MFVideoFormat_NV12, "Default output format is NV12");
+        pOutType->Release();
+
+        pWmvDec->Release();
+    }
+
+    // 12. Windows Media Audio Decoder MFT (CWMADecoderMFT)
+    {
+        auto* pWmaDec = new mf::CWMADecoderMFT();
+        TEST_ASSERT(pWmaDec->GetClsid() == mf::CLSID_CWMADecMediaObject, "CWMADecoderMFT matches CLSID");
+
+        // Input formats: WMAudioV8, WMAudioV9, WMAudio_Lossless
+        const GUID expectedInputs[] = {
+            mf::MFAudioFormat_WMAudioV8,
+            mf::MFAudioFormat_WMAudioV9,
+            mf::MFAudioFormat_WMAudio_Lossless
+        };
+        for (uint32_t i = 0; i < 3; ++i) {
+            mf::IMFMediaType* pInType = nullptr;
+            int32_t hr = pWmaDec->GetInputAvailableType(0, i, &pInType);
+            TEST_ASSERT(hr == ole32::S_OK && pInType != nullptr, "Available input type must succeed");
+            GUID sub{};
+            pInType->GetGUID(mf::MF_MT_SUBTYPE, &sub);
+            TEST_ASSERT(sub == expectedInputs[i], "Input subtype matches expected WMA format tag");
+            pInType->Release();
+        }
+
+        // Output formats: PCM, Float
+        mf::IMFMediaType* pOutType = nullptr;
+        pWmaDec->GetOutputAvailableType(0, 0, &pOutType);
+        GUID outSub{};
+        pOutType->GetGUID(mf::MF_MT_SUBTYPE, &outSub);
+        TEST_ASSERT(outSub == mf::MFAudioFormat_PCM, "Default audio output format is PCM");
+        pOutType->Release();
+
+        pWmaDec->Release();
+    }
+
+    // 13. TopoLoader Partial-to-Full Resolution: WMV3 Video Pipeline
+    {
+        mf::IMFTopoLoader* pLoader = nullptr;
+        mf::MFCreateTopoLoader(&pLoader);
+
+        mf::IMFTopology* pPartialTopo = nullptr;
+        mf::MFCreateTopology(&pPartialTopo);
+
+        mf::IMFTopologyNode* pSrc = nullptr;
+        mf::MFCreateTopologyNode(mf::MF_TOPOLOGY_SOURCESTREAM_NODE, &pSrc);
+        pSrc->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Video);
+        pSrc->SetGUID(mf::MF_MT_SUBTYPE, mf::MFVideoFormat_WMV3);
+
+        mf::IMFTopologyNode* pSink = nullptr;
+        mf::MFCreateTopologyNode(mf::MF_TOPOLOGY_OUTPUT_NODE, &pSink);
+        pSink->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Video);
+        pSink->SetGUID(mf::MF_MT_SUBTYPE, mf::MFVideoFormat_RGB32);
+
+        pPartialTopo->AddNode(pSrc);
+        pPartialTopo->AddNode(pSink);
+        pSrc->ConnectOutput(0, pSink, 0);
+
+        mf::IMFTopology* pFullTopo = nullptr;
+        int32_t hr = pLoader->Load(pPartialTopo, &pFullTopo, nullptr);
+        TEST_ASSERT(hr == ole32::S_OK && pFullTopo != nullptr, "TopoLoader Load must succeed");
+
+        uint16_t nodeCount = 0;
+        pFullTopo->GetNodeCount(&nodeCount);
+        // Resolved graph: Source (WMV3) -> WMV Decoder -> Color Converter -> Sink (RGB32) = 4 nodes
+        TEST_ASSERT(nodeCount == 4, "Resolved video topology contains 4 nodes");
+
+        pFullTopo->Release();
+        pSink->Release();
+        pSrc->Release();
+        pPartialTopo->Release();
+        pLoader->Release();
+    }
+
+    // 14. TopoLoader Partial-to-Full Resolution: WMA Audio Pipeline
+    {
+        mf::IMFTopoLoader* pLoader = nullptr;
+        mf::MFCreateTopoLoader(&pLoader);
+
+        mf::IMFTopology* pPartialTopo = nullptr;
+        mf::MFCreateTopology(&pPartialTopo);
+
+        mf::IMFTopologyNode* pSrc = nullptr;
+        mf::MFCreateTopologyNode(mf::MF_TOPOLOGY_SOURCESTREAM_NODE, &pSrc);
+        pSrc->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Audio);
+        pSrc->SetGUID(mf::MF_MT_SUBTYPE, mf::MFAudioFormat_WMAudioV9);
+
+        mf::IMFTopologyNode* pSink = nullptr;
+        mf::MFCreateTopologyNode(mf::MF_TOPOLOGY_OUTPUT_NODE, &pSink);
+        pSink->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Audio);
+        pSink->SetGUID(mf::MF_MT_SUBTYPE, mf::MFAudioFormat_PCM);
+
+        pPartialTopo->AddNode(pSrc);
+        pPartialTopo->AddNode(pSink);
+        pSrc->ConnectOutput(0, pSink, 0);
+
+        mf::IMFTopology* pFullTopo = nullptr;
+        int32_t hr = pLoader->Load(pPartialTopo, &pFullTopo, nullptr);
+        TEST_ASSERT(hr == ole32::S_OK && pFullTopo != nullptr, "TopoLoader Load must succeed");
+
+        uint16_t nodeCount = 0;
+        pFullTopo->GetNodeCount(&nodeCount);
+        // Resolved graph: Source (WMA9) -> WMA Decoder -> Audio Sink (PCM) = 3 nodes
+        TEST_ASSERT(nodeCount == 3, "Resolved audio topology contains 3 nodes");
+
+        pFullTopo->Release();
+        pSink->Release();
+        pSrc->Release();
+        pPartialTopo->Release();
+        pLoader->Release();
+    }
+
+    // 15. Dynamic Module Exports (mf.dll & wmvdecod.dll)
+    {
+        mf::InitializeMediaFoundationSessionExports();
+
+        auto& loader = ldr::DynamicLoader::get();
+        TEST_ASSERT(loader.getExport("mf.dll", "MFCreateTopoLoader") != nullptr, "mf.dll!MFCreateTopoLoader resolved");
+        TEST_ASSERT(loader.getExport("mf.dll", "MFCreatePresentationClock") != nullptr, "mf.dll!MFCreatePresentationClock resolved");
+        TEST_ASSERT(loader.getExport("mf.dll", "MFCreateSequencerSource") != nullptr, "mf.dll!MFCreateSequencerSource resolved");
+        TEST_ASSERT(loader.getExport("wmvdecod.dll", "DllCanUnloadNow") != nullptr, "wmvdecod.dll!DllCanUnloadNow resolved");
+        TEST_ASSERT(loader.getExport("wmvdecod.dll", "DllGetClassObject") != nullptr, "wmvdecod.dll!DllGetClassObject resolved");
+    }
+
+    // 16. OLE32 COM Class Factory Activation & Version Database Integration
+    {
+        // COM activation via CoCreateInstance
+        mf::IMFTransform* pWmvTransform = nullptr;
+        int32_t hr = ole32::CoCreateInstance(mf::CLSID_CWMVDecMediaObject, nullptr, 1, mf::IID_IMFTransform, reinterpret_cast<void**>(&pWmvTransform));
+        TEST_ASSERT(hr == ole32::S_OK && pWmvTransform != nullptr, "CoCreateInstance CLSID_CWMVDecMediaObject must succeed");
+        pWmvTransform->Release();
+
+        mf::IMFTransform* pWmaTransform = nullptr;
+        hr = ole32::CoCreateInstance(mf::CLSID_CWMADecMediaObject, nullptr, 1, mf::IID_IMFTransform, reinterpret_cast<void**>(&pWmaTransform));
+        TEST_ASSERT(hr == ole32::S_OK && pWmaTransform != nullptr, "CoCreateInstance CLSID_CWMADecMediaObject must succeed");
+        pWmaTransform->Release();
+
+        // Version database verification
+        auto& verDb = version::VersionDatabase::Instance();
+        const auto* vWmv = verDb.FindModule("wmvdecod.dll");
+        TEST_ASSERT(vWmv != nullptr && vWmv->stringTable.at("ProductName") == "MicaNT WMV & WMA Codec Subsystem", "wmvdecod.dll version info match");
+
+        // Shell command integration (mfsession test, topology, info)
+        shell::CommandShell testShell;
+        std::ostringstream out;
+
+        testShell.execute("mfsession test", out);
+        TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "mfsession test must pass 100%");
+
+        out.str("");
+        testShell.execute("mfsession topology test_clip.wmv", out);
+        TEST_ASSERT(out.str().find("Pipeline Status: READY") != std::string::npos, "mfsession topology must resolve pipeline");
+
+        out.str("");
+        testShell.execute("mfsession info", out);
+        TEST_ASSERT(out.str().find("22621") != std::string::npos, "mfsession info must display telemetry");
+    }
+
+    std::cout << "[TEST] Suite 107: Windows Media Foundation Topology & Advanced Media Session Pipeline PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite106")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite107")) {
+        RUN_TEST(Test_WindowsMediaFoundation_Topology_And_Session_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite106") {
         RUN_TEST(Test_WindowsDirect2D_Hardware_Rendering_Subsystem);
         return g_FailedTests;
     }
@@ -24413,6 +24891,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsMediaPlayer_ActiveMovie_Subsystem);
     RUN_TEST(Test_WindowsGdiPlus_Imaging_Subsystem);
     RUN_TEST(Test_WindowsDirect2D_Hardware_Rendering_Subsystem);
+    RUN_TEST(Test_WindowsMediaFoundation_Topology_And_Session_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

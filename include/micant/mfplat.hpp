@@ -2235,12 +2235,27 @@ public:
         if (!pDownstreamNode) return ole32::E_POINTER;
         if (dwOutputIndex >= m_outputs.size()) m_outputs.resize(dwOutputIndex + 1);
         m_outputs[dwOutputIndex] = { pDownstreamNode, dwInputIndexOnDownstreamNode };
+        auto* pDown = dynamic_cast<CTopologyNode*>(pDownstreamNode);
+        if (pDown) {
+            if (dwInputIndexOnDownstreamNode >= pDown->m_inputs.size()) {
+                pDown->m_inputs.resize(dwInputIndexOnDownstreamNode + 1);
+            }
+            pDown->m_inputs[dwInputIndexOnDownstreamNode] = { this, dwOutputIndex };
+        }
         return ole32::S_OK;
     }
 
     int32_t __stdcall DisconnectOutput(uint32_t dwOutputIndex) override {
         if (dwOutputIndex < m_outputs.size()) {
+            auto* pDownstream = m_outputs[dwOutputIndex].first;
+            uint32_t downInput = m_outputs[dwOutputIndex].second;
             m_outputs[dwOutputIndex] = { nullptr, 0 };
+            if (pDownstream) {
+                auto* pDown = dynamic_cast<CTopologyNode*>(pDownstream);
+                if (pDown && downInput < pDown->m_inputs.size() && pDown->m_inputs[downInput].first == this) {
+                    pDown->m_inputs[downInput] = { nullptr, 0 };
+                }
+            }
         }
         return ole32::S_OK;
     }
@@ -2389,7 +2404,60 @@ public:
         return ole32::S_OK;
     }
 
-    int32_t __stdcall CloneFrom(IMFTopology*) override { return ole32::E_NOTIMPL; }
+    int32_t __stdcall CloneFrom(IMFTopology* pTopology) override {
+        if (!pTopology) return ole32::E_POINTER;
+        Clear();
+        pTopology->CopyAllItems(static_cast<IMFTopology*>(this));
+        pTopology->GetTopologyID(&m_topoId);
+        uint16_t nodeCount = 0;
+        pTopology->GetNodeCount(&nodeCount);
+        std::map<IMFTopologyNode*, IMFTopologyNode*> oldToNew;
+        for (uint16_t i = 0; i < nodeCount; ++i) {
+            IMFTopologyNode* pOldNode = nullptr;
+            if (pTopology->GetNode(i, &pOldNode) == ole32::S_OK && pOldNode) {
+                MF_TOPOLOGY_TYPE nType{};
+                pOldNode->GetNodeType(&nType);
+                auto* pNewNode = new CTopologyNode(nType);
+                pOldNode->CopyAllItems(static_cast<IMFTopologyNode*>(pNewNode));
+                uint64_t nId = 0;
+                pOldNode->GetTopoNodeID(&nId);
+                pNewNode->SetTopoNodeID(nId);
+                ole32::IUnknown* pObj = nullptr;
+                if (pOldNode->GetObject(&pObj) == ole32::S_OK && pObj) {
+                    pNewNode->SetObject(pObj);
+                    pObj->Release();
+                }
+                AddNode(pNewNode);
+                oldToNew[pOldNode] = pNewNode;
+                pNewNode->Release(); // AddNode added a ref
+                pOldNode->Release();
+            }
+        }
+        for (uint16_t i = 0; i < nodeCount; ++i) {
+            IMFTopologyNode* pOldNode = nullptr;
+            if (pTopology->GetNode(i, &pOldNode) == ole32::S_OK && pOldNode) {
+                auto itNew = oldToNew.find(pOldNode);
+                if (itNew != oldToNew.end()) {
+                    auto* pNewNode = itNew->second;
+                    uint32_t outCount = 0;
+                    pOldNode->GetOutputCount(&outCount);
+                    for (uint32_t o = 0; o < outCount; ++o) {
+                        IMFTopologyNode* pOldDownstream = nullptr;
+                        uint32_t downInputIdx = 0;
+                        if (pOldNode->GetOutput(o, &pOldDownstream, &downInputIdx) == ole32::S_OK && pOldDownstream) {
+                            auto itDown = oldToNew.find(pOldDownstream);
+                            if (itDown != oldToNew.end()) {
+                                pNewNode->ConnectOutput(o, itDown->second, downInputIdx);
+                            }
+                            pOldDownstream->Release();
+                        }
+                    }
+                }
+                pOldNode->Release();
+            }
+        }
+        return ole32::S_OK;
+    }
 
     int32_t __stdcall GetNodeByID(uint64_t ullTopoNodeID, IMFTopologyNode** ppNode) override {
         if (!ppNode) return ole32::E_POINTER;
