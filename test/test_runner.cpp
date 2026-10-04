@@ -106,6 +106,7 @@
 #include "micant/pdh.hpp"
 #include "micant/etw.hpp"
 #include "micant/acl.hpp"
+#include "micant/netapi32.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -16844,6 +16845,246 @@ void Test_WindowsACL_SecurityAuditing_Subsystem() {
     std::cout << "[TEST] Suite 84: Windows Security Auditing, ACL & Object Security Descriptor Subsystem PASSED.\n";
 }
 
+void Test_WindowsNetAPI32_NetworkManagement_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 85: Windows Networking Management & NetAPI32 Subsystem          \n";
+    std::cout << "========================================================================\n";
+
+    // 1. Initialize NetAPI Subsystem Exports, Dynamic Loader & SCM
+    netapi::InitializeNetApiSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("netapi32.dll", "NetApiBufferAllocate") != nullptr, "netapi32!NetApiBufferAllocate must be exported");
+    TEST_ASSERT(ldr.getExport("netapi32.dll", "NetServerGetInfo") != nullptr, "netapi32!NetServerGetInfo must be exported");
+    TEST_ASSERT(ldr.getExport("netapi32.dll", "NetShareEnum") != nullptr, "netapi32!NetShareEnum must be exported");
+    TEST_ASSERT(ldr.getExport("netapi32.dll", "NetSessionEnum") != nullptr, "netapi32!NetSessionEnum must be exported");
+    TEST_ASSERT(ldr.getExport("netapi32.dll", "NetUserEnum") != nullptr, "netapi32!NetUserEnum must be exported");
+    TEST_ASSERT(ldr.getExport("netapi32.dll", "NetLocalGroupEnum") != nullptr, "netapi32!NetLocalGroupEnum must be exported");
+
+    TEST_ASSERT(ldr.getExport("srvcli.dll", "NetShareEnum") != nullptr, "srvcli!NetShareEnum must be exported");
+    TEST_ASSERT(ldr.getExport("wkscli.dll", "NetWkstaGetInfo") != nullptr, "wkscli!NetWkstaGetInfo must be exported");
+
+    auto& scm = scm::ServiceControlManager::get();
+    auto srvRec = scm.getServiceRecord(L"LanmanServer");
+    TEST_ASSERT(srvRec != nullptr, "LanmanServer service must be registered in SCM");
+    TEST_ASSERT(srvRec->status.dwCurrentState == scm::SERVICE_RUNNING, "LanmanServer must be RUNNING");
+    TEST_ASSERT(srvRec->svchostGroup == "netsvcs", "LanmanServer svchostGroup must be netsvcs");
+
+    auto wkstaRec = scm.getServiceRecord(L"LanmanWorkstation");
+    TEST_ASSERT(wkstaRec != nullptr, "LanmanWorkstation service must be registered in SCM");
+    TEST_ASSERT(wkstaRec->status.dwCurrentState == scm::SERVICE_RUNNING, "LanmanWorkstation must be RUNNING");
+    TEST_ASSERT(wkstaRec->svchostGroup == "NetworkService", "LanmanWorkstation svchostGroup must be NetworkService");
+
+    const auto* modNet = version::VersionDatabase::Instance().FindModule("netapi32.dll");
+    TEST_ASSERT(modNet != nullptr && modNet->moduleName == "netapi32.dll", "Version info for netapi32.dll must exist");
+
+    // 2. NetApiBuffer Memory Allocator
+    void* pBuf = nullptr;
+    netapi::NET_API_STATUS st = netapi::NetApiBufferAllocate(256, &pBuf);
+    TEST_ASSERT(st == netapi::NERR_Success && pBuf != nullptr, "NetApiBufferAllocate must succeed");
+
+    uint32_t bufSize = 0;
+    st = netapi::NetApiBufferSize(pBuf, &bufSize);
+    TEST_ASSERT(st == netapi::NERR_Success && bufSize == 256, "NetApiBufferSize must report 256 bytes");
+
+    st = netapi::NetApiBufferReallocate(pBuf, 1024, &pBuf);
+    TEST_ASSERT(st == netapi::NERR_Success && pBuf != nullptr, "NetApiBufferReallocate must succeed");
+    st = netapi::NetApiBufferSize(pBuf, &bufSize);
+    TEST_ASSERT(st == netapi::NERR_Success && bufSize == 1024, "NetApiBufferSize after realloc must be 1024");
+
+    st = netapi::NetApiBufferFree(pBuf);
+    TEST_ASSERT(st == netapi::NERR_Success, "NetApiBufferFree must succeed");
+
+    // Free with nullptr is a no-op returning success
+    TEST_ASSERT(netapi::NetApiBufferFree(nullptr) == netapi::NERR_Success, "NetApiBufferFree(nullptr) must succeed");
+
+    // 3. Server & Workstation Introspection
+    uint8_t* pServerInfoBuf = nullptr;
+    st = netapi::NetServerGetInfo(nullptr, 101, &pServerInfoBuf);
+    TEST_ASSERT(st == netapi::NERR_Success && pServerInfoBuf != nullptr, "NetServerGetInfo(101) must succeed");
+    const auto* srv101 = reinterpret_cast<const netapi::SERVER_INFO_101*>(pServerInfoBuf);
+    TEST_ASSERT(std::wstring(srv101->sv101_name) == L"MICANT-SRV", "Server name must be MICANT-SRV");
+    TEST_ASSERT((srv101->sv101_type & netapi::SV_TYPE_SERVER) != 0, "Server type must include SV_TYPE_SERVER");
+    TEST_ASSERT(srv101->sv101_version_major == 10, "Server major version must be 10");
+    netapi::NetApiBufferFree(pServerInfoBuf);
+
+    uint8_t* pWkstaInfoBuf = nullptr;
+    st = netapi::NetWkstaGetInfo(nullptr, 100, &pWkstaInfoBuf);
+    TEST_ASSERT(st == netapi::NERR_Success && pWkstaInfoBuf != nullptr, "NetWkstaGetInfo(100) must succeed");
+    const auto* wksta100 = reinterpret_cast<const netapi::WKSTA_INFO_100*>(pWkstaInfoBuf);
+    TEST_ASSERT(std::wstring(wksta100->wki100_computername) == L"MICANT-SRV", "Workstation computer name must match");
+    TEST_ASSERT(std::wstring(wksta100->wki100_langroup) == L"WORKGROUP", "Workstation langroup must be WORKGROUP");
+    netapi::NetApiBufferFree(pWkstaInfoBuf);
+
+    // 4. Share Management (Enum, Add, GetInfo, Del)
+    netapi::NetworkManagementEngine::get().resetDefaults();
+
+    uint8_t* pShareBuf = nullptr;
+    uint32_t entriesRead = 0, totalEntries = 0;
+    st = netapi::NetShareEnum(nullptr, 2, &pShareBuf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+    TEST_ASSERT(st == netapi::NERR_Success && pShareBuf != nullptr, "NetShareEnum(2) must succeed");
+    TEST_ASSERT(entriesRead >= 3, "Default shares count must be at least 3 (ADMIN$, C$, IPC$)");
+
+    const auto* shares = reinterpret_cast<const netapi::SHARE_INFO_2*>(pShareBuf);
+    bool foundC = false;
+    for (uint32_t i = 0; i < entriesRead; ++i) {
+        if (std::wstring(shares[i].shi2_netname) == L"C$") {
+            foundC = true;
+            TEST_ASSERT(shares[i].shi2_type == (netapi::STYPE_DISKTREE | netapi::STYPE_SPECIAL), "C$ must be special disk share");
+        }
+    }
+    TEST_ASSERT(foundC, "C$ share must be present in default shares");
+    netapi::NetApiBufferFree(pShareBuf);
+
+    // Add new share
+    netapi::SHARE_INFO_2 newShare{};
+    newShare.shi2_netname = const_cast<wchar_t*>(L"Development");
+    newShare.shi2_path = const_cast<wchar_t*>(L"C:\\Dev");
+    newShare.shi2_remark = const_cast<wchar_t*>(L"Project Source Code Repository");
+    newShare.shi2_type = netapi::STYPE_DISKTREE;
+    newShare.shi2_permissions = netapi::ACCESS_ALL;
+    newShare.shi2_max_uses = 100;
+
+    st = netapi::NetShareAdd(nullptr, 2, reinterpret_cast<const uint8_t*>(&newShare), nullptr);
+    TEST_ASSERT(st == netapi::NERR_Success, "NetShareAdd must succeed");
+
+    // Duplicate add should fail
+    st = netapi::NetShareAdd(nullptr, 2, reinterpret_cast<const uint8_t*>(&newShare), nullptr);
+    TEST_ASSERT(st == netapi::NERR_DuplicateShare, "NetShareAdd duplicate must fail with NERR_DuplicateShare");
+
+    // Query newly added share
+    uint8_t* pSingleShareBuf = nullptr;
+    st = netapi::NetShareGetInfo(nullptr, L"Development", 2, &pSingleShareBuf);
+    TEST_ASSERT(st == netapi::NERR_Success && pSingleShareBuf != nullptr, "NetShareGetInfo for Development must succeed");
+    const auto* devShare = reinterpret_cast<const netapi::SHARE_INFO_2*>(pSingleShareBuf);
+    TEST_ASSERT(std::wstring(devShare->shi2_path) == L"C:\\Dev", "Share path must be C:\\Dev");
+    TEST_ASSERT(devShare->shi2_max_uses == 100, "Max uses must match 100");
+    netapi::NetApiBufferFree(pSingleShareBuf);
+
+    // Delete share
+    st = netapi::NetShareDel(nullptr, L"Development", 0);
+    TEST_ASSERT(st == netapi::NERR_Success, "NetShareDel must succeed");
+
+    // Query after deletion should fail
+    st = netapi::NetShareGetInfo(nullptr, L"Development", 2, &pSingleShareBuf);
+    TEST_ASSERT(st == netapi::NERR_ShareNotFound, "NetShareGetInfo after deletion must return NERR_ShareNotFound");
+
+    // 5. Session Management
+    uint8_t* pSessBuf = nullptr;
+    st = netapi::NetSessionEnum(nullptr, nullptr, nullptr, 10, &pSessBuf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+    TEST_ASSERT(st == netapi::NERR_Success && pSessBuf != nullptr, "NetSessionEnum(10) must succeed");
+    TEST_ASSERT(entriesRead >= 2, "Default sessions count must be >= 2");
+    netapi::NetApiBufferFree(pSessBuf);
+
+    // Filter by client name
+    st = netapi::NetSessionEnum(nullptr, L"\\\\192.168.1.50", nullptr, 10, &pSessBuf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+    TEST_ASSERT(st == netapi::NERR_Success && entriesRead == 1, "Filtered session enum must return exactly 1");
+    const auto* s10 = reinterpret_cast<const netapi::SESSION_INFO_10*>(pSessBuf);
+    TEST_ASSERT(std::wstring(s10->sesi10_username) == L"Administrator", "Session username must be Administrator");
+    netapi::NetApiBufferFree(pSessBuf);
+
+    // Delete session
+    st = netapi::NetSessionDel(nullptr, L"\\\\192.168.1.50", L"Administrator");
+    TEST_ASSERT(st == netapi::NERR_Success, "NetSessionDel must succeed");
+
+    // 6. User and Local Group Management
+    uint8_t* pUserBuf = nullptr;
+    st = netapi::NetUserEnum(nullptr, 1, 0, &pUserBuf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+    TEST_ASSERT(st == netapi::NERR_Success && pUserBuf != nullptr, "NetUserEnum(1) must succeed");
+    TEST_ASSERT(entriesRead >= 3, "Default users count must be at least 3");
+    netapi::NetApiBufferFree(pUserBuf);
+
+    uint8_t* pAdminUserBuf = nullptr;
+    st = netapi::NetUserGetInfo(nullptr, L"Administrator", 1, &pAdminUserBuf);
+    TEST_ASSERT(st == netapi::NERR_Success && pAdminUserBuf != nullptr, "NetUserGetInfo for Administrator must succeed");
+    const auto* u1 = reinterpret_cast<const netapi::USER_INFO_1*>(pAdminUserBuf);
+    TEST_ASSERT(u1->usri1_priv == netapi::USER_PRIV_ADMIN, "Administrator priv must be USER_PRIV_ADMIN");
+    netapi::NetApiBufferFree(pAdminUserBuf);
+
+    // Add user
+    netapi::USER_INFO_1 newUser{};
+    newUser.usri1_name = const_cast<wchar_t*>(L"TestEngineer");
+    newUser.usri1_priv = netapi::USER_PRIV_USER;
+    newUser.usri1_comment = const_cast<wchar_t*>(L"Clean-Room Systems Tester");
+    st = netapi::NetUserAdd(nullptr, 1, reinterpret_cast<const uint8_t*>(&newUser), nullptr);
+    TEST_ASSERT(st == netapi::NERR_Success, "NetUserAdd must succeed");
+
+    // Delete user
+    st = netapi::NetUserDel(nullptr, L"TestEngineer");
+    TEST_ASSERT(st == netapi::NERR_Success, "NetUserDel must succeed");
+
+    // Local Groups
+    uint8_t* pGrpBuf = nullptr;
+    st = netapi::NetLocalGroupEnum(nullptr, 1, &pGrpBuf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+    TEST_ASSERT(st == netapi::NERR_Success && pGrpBuf != nullptr, "NetLocalGroupEnum(1) must succeed");
+    TEST_ASSERT(entriesRead >= 4, "Default local groups must be >= 4");
+    netapi::NetApiBufferFree(pGrpBuf);
+
+    uint8_t* pGrpMemBuf = nullptr;
+    st = netapi::NetLocalGroupGetMembers(nullptr, L"Administrators", 3, &pGrpMemBuf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+    TEST_ASSERT(st == netapi::NERR_Success && pGrpMemBuf != nullptr, "NetLocalGroupGetMembers for Administrators must succeed");
+    TEST_ASSERT(entriesRead >= 1, "Administrators members count must be >= 1");
+    netapi::NetApiBufferFree(pGrpMemBuf);
+
+    // 7. Shell CLI Integration (net commands)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // net test
+        shell.execute("net test", out);
+        TEST_ASSERT(out.str().find("Self-Test Finished Successfully") != std::string::npos, "net test must succeed");
+
+        // net /?
+        out.str("");
+        shell.execute("net /?", out);
+        TEST_ASSERT(out.str().find("The syntax of this command is") != std::string::npos, "net /? must display banner");
+
+        // net share
+        out.str("");
+        shell.execute("net share", out);
+        TEST_ASSERT(out.str().find("ADMIN$") != std::string::npos, "net share must list ADMIN$");
+        TEST_ASSERT(out.str().find("C$") != std::string::npos, "net share must list C$");
+
+        // net share C$
+        out.str("");
+        shell.execute("net share C$", out);
+        TEST_ASSERT(out.str().find("Share name        C$") != std::string::npos, "net share C$ must display details");
+
+        // net session
+        out.str("");
+        shell.execute("net session", out);
+        TEST_ASSERT(out.str().find("Computer             User name") != std::string::npos, "net session must list sessions");
+
+        // net view
+        out.str("");
+        shell.execute("net view", out);
+        TEST_ASSERT(out.str().find("MICANT-SRV") != std::string::npos, "net view must display MICANT-SRV");
+
+        // net config server
+        out.str("");
+        shell.execute("net config server", out);
+        TEST_ASSERT(out.str().find("Server name                   \\\\MICANT-SRV") != std::string::npos, "net config server must output server name");
+
+        // net config workstation
+        out.str("");
+        shell.execute("net config workstation", out);
+        TEST_ASSERT(out.str().find("Full Computer name            MICANT-SRV.WORKGROUP") != std::string::npos, "net config workstation must output full computer name");
+
+        // net localgroup
+        out.str("");
+        shell.execute("net localgroup", out);
+        TEST_ASSERT(out.str().find("*Administrators") != std::string::npos, "net localgroup must list Administrators");
+
+        // net localgroup Administrators
+        out.str("");
+        shell.execute("net localgroup Administrators", out);
+        TEST_ASSERT(out.str().find("Administrator") != std::string::npos, "net localgroup Administrators must display Administrator");
+    }
+
+    std::cout << "[TEST] Suite 85: Windows Networking Management & NetAPI32 Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -16933,6 +17174,7 @@ int main() {
     RUN_TEST(Test_WindowsPDH_PerformanceMonitor_Subsystem);
     RUN_TEST(Test_WindowsETW_EventTracing_Subsystem);
     RUN_TEST(Test_WindowsACL_SecurityAuditing_Subsystem);
+    RUN_TEST(Test_WindowsNetAPI32_NetworkManagement_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

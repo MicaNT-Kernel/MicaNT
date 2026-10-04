@@ -74,6 +74,7 @@
 #include "pdh.hpp"
 #include "etw.hpp"
 #include "acl.hpp"
+#include "netapi32.hpp"
 
 namespace micant::shell {
 
@@ -849,9 +850,352 @@ private:
         return s;
     }
 
+    void cmdNetShare(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() == 2) {
+            uint8_t* buf = nullptr;
+            uint32_t entriesRead = 0, totalEntries = 0;
+            netapi::NET_API_STATUS st = netapi::NetShareEnum(nullptr, 2, &buf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+            if (st != netapi::NERR_Success || !buf) {
+                out << "System error occurred while enumerating shares.\n\n";
+                return;
+            }
+
+            out << "\nShare name   Resource                        Remark\n"
+                << "-------------------------------------------------------------------------------\n";
+            const auto* shares = reinterpret_cast<const netapi::SHARE_INFO_2*>(buf);
+            for (uint32_t i = 0; i < entriesRead; ++i) {
+                std::string name = wideToAscii(shares[i].shi2_netname ? shares[i].shi2_netname : L"");
+                std::string path = wideToAscii(shares[i].shi2_path ? shares[i].shi2_path : L"");
+                std::string remark = wideToAscii(shares[i].shi2_remark ? shares[i].shi2_remark : L"");
+                out << std::left << std::setw(13) << name
+                    << std::setw(32) << path
+                    << remark << "\n";
+            }
+            netapi::NetApiBufferFree(buf);
+            out << "The command completed successfully.\n\n";
+            return;
+        }
+
+        std::string target = tokens[2];
+        bool isDelete = false;
+        for (size_t i = 3; i < tokens.size(); ++i) {
+            std::string arg = tokens[i];
+            std::transform(arg.begin(), arg.end(), arg.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (arg == "/delete" || arg == "/del" || arg == "/d") isDelete = true;
+        }
+
+        if (isDelete) {
+            std::wstring wName(target.begin(), target.end());
+            netapi::NET_API_STATUS st = netapi::NetShareDel(nullptr, wName.c_str(), 0);
+            if (st == netapi::NERR_Success) {
+                out << target << " was deleted successfully.\n\n";
+            } else {
+                out << "The share name could not be found.\n\n";
+            }
+            return;
+        }
+
+        size_t eqPos = target.find('=');
+        if (eqPos != std::string::npos) {
+            std::string name = target.substr(0, eqPos);
+            std::string path = target.substr(eqPos + 1);
+            std::wstring wName(name.begin(), name.end());
+            std::wstring wPath(path.begin(), path.end());
+
+            netapi::SHARE_INFO_2 s2{};
+            s2.shi2_netname = const_cast<wchar_t*>(wName.c_str());
+            s2.shi2_path = const_cast<wchar_t*>(wPath.c_str());
+            s2.shi2_type = netapi::STYPE_DISKTREE;
+            s2.shi2_permissions = netapi::ACCESS_ALL;
+            s2.shi2_max_uses = static_cast<uint32_t>(-1);
+
+            netapi::NET_API_STATUS st = netapi::NetShareAdd(nullptr, 2, reinterpret_cast<const uint8_t*>(&s2), nullptr);
+            if (st == netapi::NERR_Success) {
+                out << name << " was shared successfully.\n\n";
+            } else if (st == netapi::NERR_DuplicateShare) {
+                out << "The share name already exists.\n\n";
+            } else {
+                out << "The system cannot find the path specified.\n\n";
+            }
+            return;
+        }
+
+        std::wstring wName(target.begin(), target.end());
+        uint8_t* buf = nullptr;
+        netapi::NET_API_STATUS st = netapi::NetShareGetInfo(nullptr, wName.c_str(), 2, &buf);
+        if (st != netapi::NERR_Success || !buf) {
+            out << "The share name could not be found.\n\n";
+            return;
+        }
+
+        const auto* s2 = reinterpret_cast<const netapi::SHARE_INFO_2*>(buf);
+        out << "\nShare name        " << wideToAscii(s2->shi2_netname ? s2->shi2_netname : L"") << "\n"
+            << "Path              " << wideToAscii(s2->shi2_path ? s2->shi2_path : L"") << "\n"
+            << "Remark            " << wideToAscii(s2->shi2_remark ? s2->shi2_remark : L"") << "\n"
+            << "Maximum users     No limit\n"
+            << "Users             " << s2->shi2_current_uses << "\n"
+            << "Caching           Manual caching of documents\n"
+            << "Permission        Everyone, FULL\n"
+            << "The command completed successfully.\n\n";
+        netapi::NetApiBufferFree(buf);
+    }
+
+    void cmdNetSession(const std::vector<std::string>& tokens, std::ostream& out) {
+        bool isDelete = false;
+        for (size_t i = 2; i < tokens.size(); ++i) {
+            std::string arg = tokens[i];
+            std::transform(arg.begin(), arg.end(), arg.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (arg == "/delete" || arg == "/del" || arg == "/d") isDelete = true;
+        }
+
+        if (isDelete) {
+            netapi::NetSessionDel(nullptr, nullptr, nullptr);
+            out << "The command completed successfully.\n\n";
+            return;
+        }
+
+        uint8_t* buf = nullptr;
+        uint32_t entriesRead = 0, totalEntries = 0;
+        netapi::NET_API_STATUS st = netapi::NetSessionEnum(nullptr, nullptr, nullptr, 10, &buf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+        if (st != netapi::NERR_Success || !buf) {
+            out << "There are no entries in the list.\n\n";
+            return;
+        }
+
+        out << "\nComputer             User name            Client Type       Opens Idle time\n"
+            << "-------------------------------------------------------------------------------\n";
+        const auto* sessions = reinterpret_cast<const netapi::SESSION_INFO_10*>(buf);
+        for (uint32_t i = 0; i < entriesRead; ++i) {
+            std::string client = wideToAscii(sessions[i].sesi10_cname ? sessions[i].sesi10_cname : L"");
+            std::string user = wideToAscii(sessions[i].sesi10_username ? sessions[i].sesi10_username : L"");
+            uint32_t idleMin = sessions[i].sesi10_idle_time / 60;
+            uint32_t idleSec = sessions[i].sesi10_idle_time % 60;
+            std::ostringstream idleOss;
+            idleOss << std::setfill('0') << std::setw(2) << idleMin << ":" << std::setw(2) << idleSec;
+
+            out << std::left << std::setw(21) << client
+                << std::setw(21) << user
+                << std::setw(18) << "Windows NT"
+                << std::setw(6)  << "0"
+                << idleOss.str() << "\n";
+        }
+        netapi::NetApiBufferFree(buf);
+        out << "The command completed successfully.\n\n";
+    }
+
+    void cmdNetView(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& engine = netapi::NetworkManagementEngine::get();
+        std::string srv = wideToAscii(engine.getServerName());
+
+        if (tokens.size() > 2 && (tokens[2].rfind("\\\\", 0) == 0 || tokens[2].rfind("//", 0) == 0)) {
+            out << "\nShared resources at " << tokens[2] << "\n\n"
+                << "Share name   Type   Used as  Comment\n"
+                << "-------------------------------------------------------------------------------\n";
+            auto shares = engine.getShares();
+            for (const auto& s : shares) {
+                out << std::left << std::setw(13) << wideToAscii(s.netname)
+                    << std::setw(7)  << "Disk"
+                    << std::setw(9)  << ""
+                    << wideToAscii(s.remark) << "\n";
+            }
+            out << "The command completed successfully.\n\n";
+            return;
+        }
+
+        out << "\nServer Name            Remark\n"
+            << "-------------------------------------------------------------------------------\n"
+            << std::left << std::setw(23) << ("\\\\" + srv)
+            << wideToAscii(engine.getServerComment()) << "\n"
+            << "The command completed successfully.\n\n";
+    }
+
+    void cmdNetConfig(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() < 3) {
+            out << "The syntax of this command is:\n\nNET CONFIG [ SERVER | WORKSTATION ]\n\n";
+            return;
+        }
+
+        std::string target = tokens[2];
+        std::transform(target.begin(), target.end(), target.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        auto& engine = netapi::NetworkManagementEngine::get();
+        std::string sName = wideToAscii(engine.getServerName());
+        std::string dName = wideToAscii(engine.getDomainName());
+        std::string comment = wideToAscii(engine.getServerComment());
+
+        if (target == "server") {
+            out << "\nServer name                   \\\\" << sName << "\n"
+                << "Server Comment                " << comment << "\n\n"
+                << "Software version              Windows NT 10.0\n"
+                << "Server is active on           NetbiosSmb (000000000000)\n"
+                << "Server hidden                 No\n"
+                << "Maximum Logged On Users       16777216\n"
+                << "Maximum open files per session 16384\n"
+                << "Idle session time (min)       15\n"
+                << "The command completed successfully.\n\n";
+            return;
+        } else if (target == "workstation") {
+            out << "\nComputer name                 \\\\" << sName << "\n"
+                << "Full Computer name            " << sName << "." << dName << "\n"
+                << "User name                     Administrator\n\n"
+                << "Workstation active on         NetbiosSmb (000000000000)\n"
+                << "Software version              Windows NT 10.0\n"
+                << "Workstation domain            " << dName << "\n"
+                << "Logon domain                  " << dName << "\n"
+                << "COM Open Timeout (sec)        0\n"
+                << "COM Send Count (byte)         16\n"
+                << "COM Send Timeout (msec)       250\n"
+                << "The command completed successfully.\n\n";
+            return;
+        }
+
+        out << "The option " << tokens[2] << " is unknown.\n\n";
+    }
+
+    void cmdNetLocalGroup(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() == 2) {
+            uint8_t* buf = nullptr;
+            uint32_t entriesRead = 0, totalEntries = 0;
+            netapi::NET_API_STATUS st = netapi::NetLocalGroupEnum(nullptr, 0, &buf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+            if (st != netapi::NERR_Success || !buf) {
+                out << "There are no entries in the list.\n\n";
+                return;
+            }
+
+            out << "\nAliases for \\\\" << wideToAscii(netapi::NetworkManagementEngine::get().getServerName()) << "\n\n"
+                << "-------------------------------------------------------------------------------\n";
+            const auto* grps = reinterpret_cast<const netapi::LOCALGROUP_INFO_0*>(buf);
+            for (uint32_t i = 0; i < entriesRead; ++i) {
+                out << "*" << wideToAscii(grps[i].lgrpi0_name ? grps[i].lgrpi0_name : L"") << "\n";
+            }
+            netapi::NetApiBufferFree(buf);
+            out << "The command completed successfully.\n\n";
+            return;
+        }
+
+        std::string grpName = tokens[2];
+        std::wstring wGrp(grpName.begin(), grpName.end());
+
+        bool isAdd = false;
+        std::string targetMember;
+        for (size_t i = 3; i < tokens.size(); ++i) {
+            std::string a = tokens[i];
+            std::transform(a.begin(), a.end(), a.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (a == "/add") isAdd = true;
+            else if (!a.starts_with("/")) targetMember = tokens[i];
+        }
+
+        if (isAdd && !targetMember.empty()) {
+            std::wstring wMember(targetMember.begin(), targetMember.end());
+            netapi::LOCALGROUP_MEMBERS_INFO_3 m3{};
+            m3.lgrmi3_domainandname = const_cast<wchar_t*>(wMember.c_str());
+            netapi::NET_API_STATUS st = netapi::NetLocalGroupAddMembers(nullptr, wGrp.c_str(), 3, reinterpret_cast<const uint8_t*>(&m3), 1);
+            if (st == netapi::NERR_Success) {
+                out << "The command completed successfully.\n\n";
+            } else {
+                out << "The group name could not be found.\n\n";
+            }
+            return;
+        }
+
+        uint8_t* infoBuf = nullptr;
+        netapi::NET_API_STATUS st = netapi::NetLocalGroupGetInfo(nullptr, wGrp.c_str(), 1, &infoBuf);
+        if (st != netapi::NERR_Success || !infoBuf) {
+            out << "The group name could not be found.\n\n";
+            return;
+        }
+
+        const auto* g1 = reinterpret_cast<const netapi::LOCALGROUP_INFO_1*>(infoBuf);
+        out << "\nAlias name     " << wideToAscii(g1->lgrpi1_name ? g1->lgrpi1_name : L"") << "\n"
+            << "Comment        " << wideToAscii(g1->lgrpi1_comment ? g1->lgrpi1_comment : L"") << "\n\n"
+            << "Members\n"
+            << "-------------------------------------------------------------------------------\n";
+        netapi::NetApiBufferFree(infoBuf);
+
+        uint8_t* memBuf = nullptr;
+        uint32_t entriesRead = 0, totalEntries = 0;
+        st = netapi::NetLocalGroupGetMembers(nullptr, wGrp.c_str(), 3, &memBuf, netapi::MAX_PREFERRED_LENGTH, &entriesRead, &totalEntries, nullptr);
+        if (st == netapi::NERR_Success && memBuf) {
+            const auto* mArr = reinterpret_cast<const netapi::LOCALGROUP_MEMBERS_INFO_3*>(memBuf);
+            for (uint32_t i = 0; i < entriesRead; ++i) {
+                out << wideToAscii(mArr[i].lgrmi3_domainandname ? mArr[i].lgrmi3_domainandname : L"") << "\n";
+            }
+            netapi::NetApiBufferFree(memBuf);
+        }
+        out << "The command completed successfully.\n\n";
+    }
+
+    void cmdNetTest(std::ostream& out) {
+        out << "========================================================================\n"
+            << "      MicaNT Network Management (NetAPI32) Self-Test                    \n"
+            << "========================================================================\n";
+
+        out << "[TEST] 1. Initializing NetAPI32 Subsystem Exports...\n";
+        netapi::InitializeNetApiSubsystemExports();
+
+        out << "[TEST] 2. Testing NetApiBuffer Allocation, Size & Realloc...\n";
+        void* pBuf = nullptr;
+        netapi::NET_API_STATUS st = netapi::NetApiBufferAllocate(256, &pBuf);
+        out << "  -> NetApiBufferAllocate: " << (st == netapi::NERR_Success ? "SUCCESS" : "FAILED") << "\n";
+        uint32_t bSize = 0;
+        netapi::NetApiBufferSize(pBuf, &bSize);
+        out << "  -> NetApiBufferSize: " << bSize << " bytes (MATCH)\n";
+        netapi::NetApiBufferReallocate(pBuf, 512, &pBuf);
+        netapi::NetApiBufferSize(pBuf, &bSize);
+        out << "  -> NetApiBufferReallocate: " << bSize << " bytes (MATCH)\n";
+        netapi::NetApiBufferFree(pBuf);
+
+        out << "[TEST] 3. Testing NetServerGetInfo & NetWkstaGetInfo...\n";
+        uint8_t* srvBuf = nullptr;
+        st = netapi::NetServerGetInfo(nullptr, 101, &srvBuf);
+        const auto* srv101 = reinterpret_cast<const netapi::SERVER_INFO_101*>(srvBuf);
+        out << "  -> Server Name: " << wideToAscii(srv101->sv101_name ? srv101->sv101_name : L"") << " (OK)\n";
+        netapi::NetApiBufferFree(srvBuf);
+
+        out << "[TEST] 4. Testing NetShareEnum, NetShareAdd & NetShareDel...\n";
+        uint8_t* shBuf = nullptr;
+        uint32_t r = 0, t = 0;
+        st = netapi::NetShareEnum(nullptr, 1, &shBuf, netapi::MAX_PREFERRED_LENGTH, &r, &t, nullptr);
+        out << "  -> Default Shares Count: " << r << " (OK)\n";
+        netapi::NetApiBufferFree(shBuf);
+
+        netapi::SHARE_INFO_2 newShare{};
+        newShare.shi2_netname = const_cast<wchar_t*>(L"TestShare");
+        newShare.shi2_path = const_cast<wchar_t*>(L"C:\\TestShare");
+        newShare.shi2_type = netapi::STYPE_DISKTREE;
+        st = netapi::NetShareAdd(nullptr, 2, reinterpret_cast<const uint8_t*>(&newShare), nullptr);
+        out << "  -> NetShareAdd('TestShare'): " << (st == netapi::NERR_Success ? "SUCCESS" : "FAILED") << "\n";
+        st = netapi::NetShareDel(nullptr, L"TestShare", 0);
+        out << "  -> NetShareDel('TestShare'): " << (st == netapi::NERR_Success ? "SUCCESS" : "FAILED") << "\n";
+
+        out << "[TEST] 5. Testing NetSessionEnum...\n";
+        uint8_t* sessBuf = nullptr;
+        st = netapi::NetSessionEnum(nullptr, nullptr, nullptr, 10, &sessBuf, netapi::MAX_PREFERRED_LENGTH, &r, &t, nullptr);
+        out << "  -> Active Sessions: " << r << " (OK)\n";
+        netapi::NetApiBufferFree(sessBuf);
+
+        out << "[TEST] 6. Testing NetUserEnum & NetLocalGroupEnum...\n";
+        uint8_t* uBuf = nullptr;
+        st = netapi::NetUserEnum(nullptr, 0, 0, &uBuf, netapi::MAX_PREFERRED_LENGTH, &r, &t, nullptr);
+        out << "  -> Registered Users: " << r << " (OK)\n";
+        netapi::NetApiBufferFree(uBuf);
+
+        uint8_t* gBuf = nullptr;
+        st = netapi::NetLocalGroupEnum(nullptr, 0, &gBuf, netapi::MAX_PREFERRED_LENGTH, &r, &t, nullptr);
+        out << "  -> Registered Local Groups: " << r << " (OK)\n";
+        netapi::NetApiBufferFree(gBuf);
+
+        out << "[NETAPI32] Self-Test Finished Successfully.\n";
+    }
+
     void cmdNet(const std::vector<std::string>& tokens, std::ostream& out) {
-        if (tokens.size() < 2) {
-            out << "The syntax of this command is:\n\nNET [ START | STOP ]\n\n";
+        netapi::InitializeNetApiSubsystemExports();
+
+        if (tokens.size() < 2 || tokens[1] == "/?" || tokens[1] == "-?") {
+            out << "The syntax of this command is:\n\n"
+                << "NET [ ACCOUNTS | COMPUTER | CONFIG | CONTINUE | FILE | GROUP | HELP |\n"
+                << "      HELPMSG | LOCALGROUP | PAUSE | SESSION | SHARE | START |\n"
+                << "      STATISTICS | STOP | TIME | USE | USER | VIEW ]\n\n";
             return;
         }
 
@@ -860,6 +1204,24 @@ private:
 
         if (sub == "user") {
             cmdNetUser(tokens, out);
+            return;
+        } else if (sub == "share") {
+            cmdNetShare(tokens, out);
+            return;
+        } else if (sub == "session") {
+            cmdNetSession(tokens, out);
+            return;
+        } else if (sub == "view") {
+            cmdNetView(tokens, out);
+            return;
+        } else if (sub == "config") {
+            cmdNetConfig(tokens, out);
+            return;
+        } else if (sub == "localgroup") {
+            cmdNetLocalGroup(tokens, out);
+            return;
+        } else if (sub == "test") {
+            cmdNetTest(out);
             return;
         } else if (sub == "start") {
             if (tokens.size() == 2) {

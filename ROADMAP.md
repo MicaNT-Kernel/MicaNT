@@ -116,7 +116,15 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 54: Windows Diagnostics Infrastructure (WDI & MSDT)  [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 55: Windows Performance Monitor & Counters (PerfMon) [PLANNED]        │
+│ Phase 55: Windows Performance Monitor & Counters (PerfMon) [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 56: Windows Event Tracing for Windows (ETW) Subsystem[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 57: Windows Security Auditing & ACL Subsystem        [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 58: Windows Networking Management & NetAPI32         [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 59: Windows Active Directory & LDAP Subsystem        [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1369,20 +1377,36 @@
 
 ---
 
-### Phase 58: Windows Networking Management & NetAPI32 Subsystem (`netapi32.dll`, `srvcli.dll`, `wkscli.dll`, `net.exe`, `LanmanServer`, `LanmanWorkstation`) (PLANNED)
-- [ ] **NetAPI32 Core Architecture (`include/micant/netapi32.hpp`, `netapi32.dll`, `srvcli.dll`, `wkscli.dll`)**:
-  - Network share management: `NetShareEnum`, `NetShareAdd`, `NetShareDel`, `NetShareGetInfo`, `NetShareSetInfo` (`SHARE_INFO_0`, `SHARE_INFO_1`, `SHARE_INFO_2`).
-  - Server and Workstation introspection: `NetServerGetInfo`, `NetWkstaGetInfo` (`SERVER_INFO_100`, `SERVER_INFO_101`, `WKSTA_INFO_100`).
-  - Session & Connection management: `NetSessionEnum`, `NetSessionDel`, `NetSessionGetInfo` (`SESSION_INFO_0`, `SESSION_INFO_10`, `SESSION_INFO_502`).
-  - User & Local Group management: `NetUserEnum`, `NetUserGetInfo`, `NetUserAdd`, `NetUserDel`, `NetLocalGroupEnum`, `NetLocalGroupGetInfo`, `NetLocalGroupAddMembers`.
-  - Memory management: `NetApiBufferAllocate`, `NetApiBufferFree`, `NetApiBufferSize`.
-- [ ] **SCM Lanman Services Integration**:
+### Phase 58: Windows Networking Management & NetAPI32 Subsystem (`netapi32.dll`, `srvcli.dll`, `wkscli.dll`, `net.exe`, `LanmanServer`, `LanmanWorkstation`) (100% Completed)
+- [x] **NetAPI32 Core Architecture (`include/micant/netapi32.hpp`, `netapi32.dll`, `srvcli.dll`, `wkscli.dll`)**:
+  - Memory management: `NetApiBufferAllocate`, `NetApiBufferFree`, `NetApiBufferSize`, `NetApiBufferReallocate` with 32-bit magic header validation.
+  - Server and Workstation introspection: `NetServerGetInfo` (levels 100, 101), `NetWkstaGetInfo` (level 100).
+  - Network share management: `NetShareEnum`, `NetShareAdd`, `NetShareDel`, `NetShareGetInfo` (levels 0, 1, 2) supporting administrative shares `ADMIN$`, `C$`, `IPC$`.
+  - Session & Connection management: `NetSessionEnum`, `NetSessionDel` (levels 0, 10) with UNC client/username filtering.
+  - User & Local Group management: `NetUserEnum`, `NetUserGetInfo`, `NetUserAdd`, `NetUserDel`, `NetLocalGroupEnum`, `NetLocalGroupGetInfo`, `NetLocalGroupGetMembers`, `NetLocalGroupAddMembers`.
+- [x] **SCM Lanman Services Integration**:
   - `LanmanServer` ("Server" SMB file & print sharing daemon, `SERVICE_WIN32_SHARE_PROCESS`) in svchost group `netsvcs`.
   - `LanmanWorkstation` ("Workstation" network client redirector, `SERVICE_WIN32_SHARE_PROCESS`) in svchost group `NetworkService`.
-- [ ] **Interactive CLI Expansions (`net share`, `net session`, `net view`, `net config server`, `net config workstation`)**:
-  - Full interoperable output formatting matching Windows `net.exe`.
-- [ ] **Unit Test Suite 85 (`Test_WindowsNetAPI32_NetworkManagement_Subsystem`)**:
+- [x] **Interactive CLI Expansions (`include/micant/shell.hpp` - `net`)**:
+  - Full interoperable output formatting matching Windows `net.exe` (`net share`, `net session`, `net view`, `net config server`, `net config workstation`, `net localgroup`, `net test`).
+- [x] **Unit Test Suite 85 (`Test_WindowsNetAPI32_NetworkManagement_Subsystem`)**:
   - Full automated validation of NetAPI buffers, share enumeration/creation, server/workstation info, session tracking, SCM Lanman services, and shell commands.
+  - All 85 unit test suites passing with 100% success rate (85 Passed, 0 Failed).
+
+---
+
+### Phase 59: Windows Active Directory & Lightweight Directory Access Protocol (LDAP) Subsystem (`wldap32.dll`, `adsldp.dll`, `dsquery.exe`, `dsget.exe`) (PLANNED)
+- [ ] **Clean-Room Win32 LDAP & ADSI Architecture (`include/micant/ldap.hpp`, `wldap32.dll`, `adsldp.dll`)**:
+  - Clean-room Win32 metadata structures: `LDAP`, `LDAPMessage`, `LDAPModW`, `BerElement`, `ADS_SEARCHPREF_INFO`, `ADS_SEARCH_COLUMN`.
+  - Core LDAP client APIs: `ldap_initW`, `ldap_sslinitW`, `ldap_connect`, `ldap_bind_sW`, `ldap_simple_bind_sW`, `ldap_unbind_s`, `ldap_search_sW`, `ldap_first_entry`, `ldap_next_entry`, `ldap_first_attributeW`, `ldap_next_attributeW`, `ldap_get_values_lenW`, `ldap_value_free_len`, `ldap_msgfree`, `ldap_count_entries`, `ldap_get_dnW`, `ldap_memfreeW`.
+  - Directory Service cache / sovereign Active Directory Domain Services hierarchy (`DC=micant,DC=local`, `CN=Users`, `CN=Computers`, `CN=Domain Controllers`, `CN=Administrator`, `CN=Guest`, `CN=Krbtgt`).
+- [ ] **SCM Directory Services Integration**:
+  - `NTDS` ("Active Directory Domain Services", `SERVICE_WIN32_OWN_PROCESS`) and `KDC` ("Kerberos Key Distribution Center", `SERVICE_WIN32_SHARE_PROCESS` in `LocalService`).
+- [ ] **Interactive CLI Utilities (`dsquery` & `dsget`)**:
+  - `dsquery user`, `dsquery computer`, `dsquery server`, `dsquery *`, `dsget user <dn>`, `dsquery test`.
+- [ ] **Unit Test Suite 86 (`Test_WindowsLDAP_ActiveDirectory_Subsystem`)**:
+  - Full automated validation of LDAP connection lifecycle, simple and Kerberos binding, search filters (`(objectClass=user)`, `(sAMAccountName=Administrator)`), attribute extraction, BerElement handling, and SCM services.
+
 
 
 
