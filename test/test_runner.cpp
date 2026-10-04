@@ -104,6 +104,7 @@
 #include "micant/cbs.hpp"
 #include "micant/wdi.hpp"
 #include "micant/pdh.hpp"
+#include "micant/etw.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -16271,6 +16272,291 @@ void Test_WindowsPDH_PerformanceMonitor_Subsystem() {
     std::cout << "[TEST] Suite 82: Windows Performance Monitor & PDH Subsystem PASSED.\n";
 }
 
+void Test_WindowsETW_EventTracing_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 83: Windows Event Tracing for Windows (ETW) Subsystem (advapi32.dll / ntdll.dll)...\n";
+
+    // 1. Dynamic Exports Verification
+    {
+        etw::InitializeEtwSubsystemExports();
+        auto& ldr = ldr::DynamicLoader::get();
+
+        const char* advapiExports[] = {
+            "StartTraceW", "StartTraceA", "StopTraceW", "StopTraceA",
+            "QueryTraceW", "QueryTraceA", "UpdateTraceW", "UpdateTraceA",
+            "FlushTraceW", "FlushTraceA", "ControlTraceW", "ControlTraceA",
+            "EnableTraceEx2", "EventRegister", "EventUnregister",
+            "EventEnabled", "EventProviderEnabled", "EventWrite",
+            "EventWriteString", "EventWriteTransfer",
+            "OpenTraceW", "ProcessTrace", "CloseTrace"
+        };
+        for (const auto* exp : advapiExports) {
+            TEST_ASSERT(ldr.getExport("advapi32.dll", exp) != nullptr,
+                        std::string("advapi32.dll must export ") + exp);
+        }
+
+        const char* ntdllExports[] = {
+            "EtwEventRegister", "EtwEventUnregister", "EtwEventEnabled",
+            "EtwEventWrite", "EtwEventWriteString", "EtwEventWriteTransfer"
+        };
+        for (const auto* exp : ntdllExports) {
+            TEST_ASSERT(ldr.getExport("ntdll.dll", exp) != nullptr,
+                        std::string("ntdll.dll must export ") + exp);
+        }
+    }
+
+    // 2. Module Version Database Verification
+    {
+        const auto* modLogman = version::VersionDatabase::Instance().FindModule("logman.exe");
+        TEST_ASSERT(modLogman != nullptr, "logman.exe must be present in VersionDatabase");
+        TEST_ASSERT(modLogman->stringTable.at("OriginalFilename") == "logman.exe", "logman.exe original filename match");
+
+        const auto* modTraceRpt = version::VersionDatabase::Instance().FindModule("tracerpt.exe");
+        TEST_ASSERT(modTraceRpt != nullptr, "tracerpt.exe must be present in VersionDatabase");
+
+        const auto* modTraceLog = version::VersionDatabase::Instance().FindModule("tracelog.exe");
+        TEST_ASSERT(modTraceLog != nullptr, "tracelog.exe must be present in VersionDatabase");
+    }
+
+    // 3. SCM DiagTrack Service Verification
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        auto diagTrack = scm.getServiceRecord(L"DiagTrack");
+        TEST_ASSERT(diagTrack != nullptr, "DiagTrack service must be registered in SCM");
+        TEST_ASSERT(diagTrack->serviceType == scm::SERVICE_WIN32_SHARE_PROCESS, "DiagTrack must be shared service process");
+        TEST_ASSERT(diagTrack->svchostGroup == "utcsvc", "DiagTrack must belong to utcsvc group");
+        TEST_ASSERT(diagTrack->status.dwCurrentState == scm::SERVICE_RUNNING, "DiagTrack service must be running");
+    }
+
+    // 4. Default NT Kernel Logger Session
+    {
+        auto session = etw::TraceManager::get().getSessionByName(L"NT Kernel Logger");
+        TEST_ASSERT(session != nullptr, "NT Kernel Logger default session must exist");
+        TEST_ASSERT(session->isProviderEnabled(etw::SystemTraceControlGuid, etw::TRACE_LEVEL_VERBOSE, 0),
+                    "NT Kernel Logger must enable SystemTraceControlGuid by default");
+    }
+
+    // 5. Trace Session Lifecycle (Start, Query, Update, Flush)
+    etw::TRACEHANDLE hSession = 0;
+    {
+        etw::EVENT_TRACE_PROPERTIES props{};
+        props.Wnode.BufferSize = sizeof(etw::EVENT_TRACE_PROPERTIES);
+        props.BufferSize = 64;
+        props.MinimumBuffers = 2;
+        props.MaximumBuffers = 32;
+        props.LogFileMode = etw::EVENT_TRACE_REAL_TIME_MODE;
+        props.FlushTimer = 5;
+
+        uint32_t status = etw::StartTraceW(&hSession, L"Suite83TraceSession", &props);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS && hSession != 0, "StartTraceW must succeed");
+
+        // Attempt duplicate start must return ERROR_ALREADY_EXISTS
+        etw::TRACEHANDLE hDup = 0;
+        status = etw::StartTraceW(&hDup, L"Suite83TraceSession", &props);
+        TEST_ASSERT(status == etw::ERROR_ALREADY_EXISTS, "StartTraceW duplicate must return ERROR_ALREADY_EXISTS");
+
+        // QueryTraceW
+        etw::EVENT_TRACE_PROPERTIES qProps{};
+        status = etw::QueryTraceW(hSession, nullptr, &qProps);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "QueryTraceW must succeed");
+        TEST_ASSERT(qProps.BufferSize == 64, "QueryTraceW BufferSize must match");
+        TEST_ASSERT(qProps.FlushTimer == 5, "QueryTraceW FlushTimer must match");
+
+        // UpdateTraceW
+        qProps.FlushTimer = 10;
+        status = etw::UpdateTraceW(hSession, nullptr, &qProps);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "UpdateTraceW must succeed");
+        TEST_ASSERT(qProps.FlushTimer == 10, "Updated FlushTimer must reflect");
+
+        // FlushTraceW
+        status = etw::FlushTraceW(hSession, nullptr, &qProps);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "FlushTraceW must succeed");
+    }
+
+    // 6. Provider Registration & Callbacks
+    etw::REGHANDLE hProvider = 0;
+    GUID testProvGuid = { 0x11223344, 0x5566, 0x7788, { 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00 } };
+    static bool s_provCallbackFired = false;
+    static uint32_t s_provEnabledCode = 0;
+    static uint8_t s_provLevel = 0;
+
+    {
+        s_provCallbackFired = false;
+        s_provEnabledCode = 0;
+        s_provLevel = 0;
+
+        auto pfnCallback = [](const GUID* srcId, uint32_t isEnabled, uint8_t level, uint64_t anyKw, uint64_t allKw, void* filter, void* ctx) {
+            (void)srcId; (void)anyKw; (void)allKw; (void)filter; (void)ctx;
+            s_provCallbackFired = true;
+            s_provEnabledCode = isEnabled;
+            s_provLevel = level;
+        };
+
+        uint32_t status = etw::EventRegister(&testProvGuid, pfnCallback, nullptr, &hProvider);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS && hProvider != 0, "EventRegister must succeed");
+
+        // Provider is registered, but not yet enabled on Suite83TraceSession
+        TEST_ASSERT(etw::EventProviderEnabled(hProvider, etw::TRACE_LEVEL_INFORMATION, 0) == 0,
+                    "Provider must not be enabled yet");
+
+        // Enable provider via EnableTraceEx2
+        status = etw::EnableTraceEx2(hSession, &testProvGuid, etw::EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+                                     etw::TRACE_LEVEL_VERBOSE, 0xFFFFFFFFFFFFFFFFULL, 0, 0, nullptr);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "EnableTraceEx2 must succeed");
+        TEST_ASSERT(s_provCallbackFired, "Provider EnableCallback must have fired");
+        TEST_ASSERT(s_provEnabledCode == etw::EVENT_CONTROL_CODE_ENABLE_PROVIDER, "Callback code must be ENABLE");
+        TEST_ASSERT(s_provLevel == etw::TRACE_LEVEL_VERBOSE, "Callback level must be VERBOSE");
+
+        // Verify EventProviderEnabled and EventEnabled
+        TEST_ASSERT(etw::EventProviderEnabled(hProvider, etw::TRACE_LEVEL_INFORMATION, 0) == 1,
+                    "EventProviderEnabled must return 1");
+        etw::EVENT_DESCRIPTOR edDesc{};
+        edDesc.Id = 200;
+        edDesc.Level = etw::TRACE_LEVEL_INFORMATION;
+        TEST_ASSERT(etw::EventEnabled(hProvider, &edDesc) == 1, "EventEnabled must return 1");
+    }
+
+    // 7. Event Writing (Binary, String, Transfer)
+    {
+        auto session = etw::TraceManager::get().getSessionByName(L"Suite83TraceSession");
+        TEST_ASSERT(session != nullptr, "Session must exist");
+        size_t initialCount = session->getEventCount();
+
+        // 7a. EventWrite (binary payload)
+        etw::EVENT_DESCRIPTOR ed1{};
+        ed1.Id = 201;
+        ed1.Level = etw::TRACE_LEVEL_INFORMATION;
+        uint32_t payloadData = 0x12345678;
+        etw::EVENT_DATA_DESCRIPTOR dataDesc{};
+        dataDesc.Ptr = reinterpret_cast<uint64_t>(&payloadData);
+        dataDesc.Size = sizeof(payloadData);
+
+        uint32_t status = etw::EventWrite(hProvider, &ed1, 1, &dataDesc);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "EventWrite must succeed");
+        TEST_ASSERT(session->getEventCount() == initialCount + 1, "Event count must increase by 1");
+
+        // 7b. EventWriteString (unicode message)
+        status = etw::EventWriteString(hProvider, etw::TRACE_LEVEL_INFORMATION, 0x1, L"ETW Diagnostic Message Test");
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "EventWriteString must succeed");
+        TEST_ASSERT(session->getEventCount() == initialCount + 2, "Event count must increase by 2");
+
+        // 7c. EventWriteTransfer
+        GUID actId = { 0xAAAA, 0xBBBB, 0xCCCC, { 1, 2, 3, 4, 5, 6, 7, 8 } };
+        status = etw::EventWriteTransfer(hProvider, &ed1, &actId, nullptr, 1, &dataDesc);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "EventWriteTransfer must succeed");
+        TEST_ASSERT(session->getEventCount() == initialCount + 3, "Event count must increase by 3");
+    }
+
+    // 8. Event Consumer (OpenTraceW, ProcessTrace, CloseTrace)
+    {
+        static uint32_t s_consumerReceivedCount = 0;
+        s_consumerReceivedCount = 0;
+
+        etw::EVENT_TRACE_LOGFILEW logfile{};
+        wchar_t nameBuf[] = L"Suite83TraceSession";
+        logfile.LoggerName = nameBuf;
+        logfile.EventRecordCallback = [](etw::EVENT_RECORD* pRec) {
+            if (pRec) {
+                s_consumerReceivedCount++;
+            }
+        };
+
+        etw::TRACEHANDLE hConsumer = etw::OpenTraceW(&logfile);
+        TEST_ASSERT(hConsumer != etw::INVALID_PROCESSTRACE_HANDLE, "OpenTraceW must succeed");
+
+        uint32_t status = etw::ProcessTrace(&hConsumer, 1, nullptr, nullptr);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "ProcessTrace must succeed");
+        TEST_ASSERT(s_consumerReceivedCount >= 3, "ProcessTrace must process at least 3 events");
+
+        status = etw::CloseTrace(hConsumer);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "CloseTrace must succeed");
+    }
+
+    // 9. Provider Disable & Unregister
+    {
+        s_provCallbackFired = false;
+        uint32_t status = etw::EnableTraceEx2(hSession, &testProvGuid, etw::EVENT_CONTROL_CODE_DISABLE_PROVIDER,
+                                             0, 0, 0, 0, nullptr);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "EnableTraceEx2 disable must succeed");
+        TEST_ASSERT(s_provCallbackFired, "Provider disable callback must have fired");
+        TEST_ASSERT(s_provEnabledCode == etw::EVENT_CONTROL_CODE_DISABLE_PROVIDER, "Callback code must be DISABLE");
+
+        status = etw::EventUnregister(hProvider);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "EventUnregister must succeed");
+    }
+
+    // 10. Native NTDLL ETW Stubs
+    {
+        etw::REGHANDLE hNtdllProv = 0;
+        GUID ntdllGuid = { 0x55556666, 0x7777, 0x8888, { 1, 1, 2, 2, 3, 3, 4, 4 } };
+
+        int32_t ntStatus = etw::EtwEventRegister(&ntdllGuid, nullptr, nullptr, &hNtdllProv);
+        TEST_ASSERT(ntStatus == STATUS_SUCCESS && hNtdllProv != 0, "EtwEventRegister must return STATUS_SUCCESS");
+
+        etw::EVENT_DESCRIPTOR ntdllDesc{};
+        ntdllDesc.Id = 301;
+        ntdllDesc.Level = etw::TRACE_LEVEL_INFORMATION;
+        TEST_ASSERT(etw::EtwEventEnabled(hNtdllProv, &ntdllDesc) == 0, "EtwEventEnabled initially 0");
+
+        ntStatus = etw::EtwEventWriteString(hNtdllProv, etw::TRACE_LEVEL_INFORMATION, 0, L"Native ntdll etw event");
+        TEST_ASSERT(ntStatus == STATUS_SUCCESS, "EtwEventWriteString must return STATUS_SUCCESS");
+
+        ntStatus = etw::EtwEventUnregister(hNtdllProv);
+        TEST_ASSERT(ntStatus == STATUS_SUCCESS, "EtwEventUnregister must return STATUS_SUCCESS");
+    }
+
+    // 11. Stop Trace Session
+    {
+        etw::EVENT_TRACE_PROPERTIES finalProps{};
+        uint32_t status = etw::StopTraceW(hSession, nullptr, &finalProps);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "StopTraceW must succeed");
+
+        // Subsequent query must fail with ERROR_WMI_INSTANCE_NOT_FOUND
+        etw::EVENT_TRACE_PROPERTIES qProps{};
+        status = etw::QueryTraceW(hSession, nullptr, &qProps);
+        TEST_ASSERT(status == etw::ERROR_WMI_INSTANCE_NOT_FOUND, "QueryTraceW on stopped session must fail");
+    }
+
+    // 12. Interactive CLI Integration (logman & tracerpt)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. logman /?
+        shell.execute("logman /?", out);
+        TEST_ASSERT(out.str().find("Microsoft Logman") != std::string::npos, "logman /? must display banner");
+
+        // 2. logman query
+        out.str("");
+        shell.execute("logman query", out);
+        TEST_ASSERT(out.str().find("NT Kernel Logger") != std::string::npos, "logman query must list NT Kernel Logger");
+
+        // 3. logman test
+        out.str("");
+        shell.execute("logman test", out);
+        TEST_ASSERT(out.str().find("Finished Successfully") != std::string::npos, "logman test must succeed");
+
+        // 4. logman start / query / tracerpt / stop
+        out.str("");
+        shell.execute("logman start MyCliSession -p Kernel", out);
+        TEST_ASSERT(out.str().find("is running") != std::string::npos, "logman start must report running");
+
+        out.str("");
+        shell.execute("logman query MyCliSession", out);
+        TEST_ASSERT(out.str().find("Name:                    MyCliSession") != std::string::npos, "logman query must find MyCliSession");
+        TEST_ASSERT(out.str().find("Status:                  Running") != std::string::npos, "MyCliSession must be running");
+
+        out.str("");
+        shell.execute("tracerpt MyCliSession", out);
+        TEST_ASSERT(out.str().find("Event Trace Report - MyCliSession") != std::string::npos, "tracerpt must dump report header");
+
+        out.str("");
+        shell.execute("logman stop MyCliSession", out);
+        TEST_ASSERT(out.str().find("stopped") != std::string::npos, "logman stop must succeed");
+    }
+
+    std::cout << "[TEST] Suite 83: Windows Event Tracing for Windows (ETW) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -16358,6 +16644,7 @@ int main() {
     RUN_TEST(Test_WindowsCBS_DISM_Servicing_Subsystem);
     RUN_TEST(Test_WindowsWDI_DiagnosticsInfrastructure_Subsystem);
     RUN_TEST(Test_WindowsPDH_PerformanceMonitor_Subsystem);
+    RUN_TEST(Test_WindowsETW_EventTracing_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

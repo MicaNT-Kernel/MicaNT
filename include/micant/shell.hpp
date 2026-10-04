@@ -72,6 +72,7 @@
 #include "cbs.hpp"
 #include "wdi.hpp"
 #include "pdh.hpp"
+#include "etw.hpp"
 
 namespace micant::shell {
 
@@ -223,6 +224,8 @@ public:
             if (cmd == "msdt" || cmd == "wdi") { cmdMsdt(tokens, out); return 0; }
             if (cmd == "perfmon") { cmdPerfMon(tokens, out); return 0; }
             if (cmd == "typeperf") { cmdTypePerf(tokens, out); return 0; }
+            if (cmd == "logman") { cmdLogman(tokens, out); return 0; }
+            if (cmd == "tracerpt") { cmdTraceRpt(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -6938,6 +6941,300 @@ private:
         }
 
         pdh::PdhCloseQuery(hQuery);
+    }
+
+    void cmdLogman(const std::vector<std::string>& tokens, std::ostream& out) {
+        etw::InitializeEtwSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "\nMicrosoft Logman (MicaNT Event Trace Session Manager)\n\n"
+                << "Usage:\n"
+                << "  logman query [session_name]              List all active trace sessions or query specific session\n"
+                << "  logman start <session_name> -p <guid>    Create and start a real-time event trace session\n"
+                << "  logman stop <session_name> [-ets]        Stop an active event trace session\n"
+                << "  logman test                              Execute ETW engine and event dispatch self-test\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "      MicaNT Event Tracing for Windows (ETW) Self-Test                  \n"
+                << "========================================================================\n";
+
+            // 1. Initialize Subsystem
+            out << "[TEST] 1. Initializing ETW Subsystem Exports...\n";
+            etw::InitializeEtwSubsystemExports();
+
+            // 2. Start a trace session
+            out << "[TEST] 2. Starting Trace Session 'MicaKernelTrace'...\n";
+            etw::TRACEHANDLE hSession = 0;
+            etw::EVENT_TRACE_PROPERTIES props{};
+            props.Wnode.BufferSize = sizeof(etw::EVENT_TRACE_PROPERTIES);
+            props.BufferSize = 64;
+            props.MinimumBuffers = 2;
+            props.MaximumBuffers = 16;
+            props.LogFileMode = etw::EVENT_TRACE_REAL_TIME_MODE;
+            props.FlushTimer = 1;
+
+            uint32_t status = etw::StartTraceW(&hSession, L"MicaKernelTrace", &props);
+            out << "  -> StartTraceW('MicaKernelTrace'): " << (status == 0 ? "SUCCESS" : "FAILED")
+                << " (Handle: 0x" << std::hex << hSession << std::dec << ")\n";
+
+            // 3. Register a test provider
+            out << "[TEST] 3. Registering Test Event Provider...\n";
+            static bool s_callbackInvoked = false;
+            static uint32_t s_callbackCode = 0;
+            etw::REGHANDLE hProvider = 0;
+            GUID testGuid = { 0x12345678, 0xABCD, 0xEF01, { 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01 } };
+
+            auto callback = [](const GUID* srcId, uint32_t isEnabled, uint8_t level, uint64_t anyKw, uint64_t allKw, void* filter, void* ctx) {
+                (void)srcId; (void)level; (void)anyKw; (void)allKw; (void)filter; (void)ctx;
+                s_callbackInvoked = true;
+                s_callbackCode = isEnabled;
+            };
+
+            status = etw::EventRegister(&testGuid, callback, nullptr, &hProvider);
+            out << "  -> EventRegister: " << (status == 0 ? "SUCCESS" : "FAILED")
+                << " (RegHandle: 0x" << std::hex << hProvider << std::dec << ")\n";
+
+            // 4. Enable provider on session
+            out << "[TEST] 4. Enabling Provider on 'MicaKernelTrace' Session...\n";
+            status = etw::EnableTraceEx2(hSession, &testGuid, etw::EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+                                         etw::TRACE_LEVEL_VERBOSE, 0xFFFFFFFFFFFFFFFFULL, 0, 0, nullptr);
+            out << "  -> EnableTraceEx2: " << (status == 0 ? "SUCCESS" : "FAILED") << "\n";
+            out << "  -> Provider Callback Received: " << (s_callbackInvoked ? "YES" : "NO")
+                << " (Code: " << s_callbackCode << ")\n";
+
+            // 5. Check if event is enabled
+            etw::EVENT_DESCRIPTOR desc{};
+            desc.Id = 101;
+            desc.Level = etw::TRACE_LEVEL_INFORMATION;
+            desc.Keyword = 0x1;
+            bool enabled = (etw::EventEnabled(hProvider, &desc) != 0);
+            out << "  -> EventEnabled(Id: 101): " << (enabled ? "TRUE" : "FALSE") << "\n";
+
+            // 6. Write binary event and string event
+            out << "[TEST] 5. Writing ETW Events...\n";
+            uint32_t eventData = 0xCAFEBABE;
+            etw::EVENT_DATA_DESCRIPTOR dataDesc{};
+            dataDesc.Ptr = reinterpret_cast<uint64_t>(&eventData);
+            dataDesc.Size = sizeof(eventData);
+
+            status = etw::EventWrite(hProvider, &desc, 1, &dataDesc);
+            out << "  -> EventWrite(Payload: 0xCAFEBABE): " << (status == 0 ? "SUCCESS" : "FAILED") << "\n";
+
+            status = etw::EventWriteString(hProvider, etw::TRACE_LEVEL_INFORMATION, 0x1, L"MicaNT Executive ETW Diagnostic Event Verified");
+            out << "  -> EventWriteString(Unicode Message): " << (status == 0 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 7. Consume events via OpenTrace & ProcessTrace
+            out << "[TEST] 6. Consuming Trace Events with ProcessTrace...\n";
+            static uint32_t s_processedEvents = 0;
+            s_processedEvents = 0;
+
+            etw::EVENT_TRACE_LOGFILEW logfile{};
+            wchar_t loggerName[] = L"MicaKernelTrace";
+            logfile.LoggerName = loggerName;
+            logfile.EventRecordCallback = [](etw::EVENT_RECORD* rec) {
+                if (rec) s_processedEvents++;
+            };
+
+            etw::TRACEHANDLE hConsumer = etw::OpenTraceW(&logfile);
+            out << "  -> OpenTraceW: " << (hConsumer != etw::INVALID_PROCESSTRACE_HANDLE ? "SUCCESS" : "FAILED") << "\n";
+
+            status = etw::ProcessTrace(&hConsumer, 1, nullptr, nullptr);
+            out << "  -> ProcessTrace: " << (status == 0 ? "SUCCESS" : "FAILED")
+                << " (Processed Events: " << s_processedEvents << ")\n";
+            etw::CloseTrace(hConsumer);
+
+            // 8. Stop and Cleanup
+            out << "[TEST] 7. Stopping Session & Unregistering Provider...\n";
+            status = etw::StopTraceW(hSession, L"MicaKernelTrace", &props);
+            out << "  -> StopTraceW: " << (status == 0 ? "SUCCESS" : "FAILED")
+                << " (Buffers Written: " << props.BuffersWritten << ")\n";
+
+            status = etw::EventUnregister(hProvider);
+            out << "  -> EventUnregister: " << (status == 0 ? "SUCCESS" : "FAILED") << "\n";
+
+            out << "[LOGMAN] Self-Test Finished Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "start") {
+            if (tokens.size() < 3) {
+                out << "Error: Missing session name. Usage: logman start <session_name> -p <guid|name>\n";
+                return;
+            }
+            std::string sessionName = tokens[2];
+            std::wstring wSessionName(sessionName.begin(), sessionName.end());
+
+            std::string providerArg;
+            for (size_t i = 3; i < tokens.size(); ++i) {
+                if (tokens[i] == "-p" && i + 1 < tokens.size()) {
+                    providerArg = tokens[++i];
+                }
+            }
+
+            etw::TRACEHANDLE hSession = 0;
+            etw::EVENT_TRACE_PROPERTIES props{};
+            props.Wnode.BufferSize = sizeof(etw::EVENT_TRACE_PROPERTIES);
+            props.BufferSize = 64;
+            props.MinimumBuffers = 2;
+            props.MaximumBuffers = 32;
+            props.LogFileMode = etw::EVENT_TRACE_REAL_TIME_MODE;
+
+            uint32_t hr = etw::StartTraceW(&hSession, wSessionName.c_str(), &props);
+            if (hr != 0) {
+                out << "Error: Failed to start session '" << sessionName << "' (Status: " << hr << ").\n";
+                return;
+            }
+
+            if (!providerArg.empty()) {
+                GUID provGuid{};
+                if (providerArg.front() == '{') {
+                    etw::stringToGuid(providerArg, provGuid);
+                } else if (providerArg == "Kernel" || providerArg == "kernel") {
+                    provGuid = etw::MicaKernelProviderGuid;
+                } else if (providerArg == "Security" || providerArg == "security") {
+                    provGuid = etw::SecurityAuditProviderGuid;
+                } else if (providerArg == "Network" || providerArg == "network") {
+                    provGuid = etw::NetworkDiagProviderGuid;
+                } else if (providerArg == "Storage" || providerArg == "storage") {
+                    provGuid = etw::StorageProviderGuid;
+                } else {
+                    provGuid = etw::MicaKernelProviderGuid;
+                }
+
+                etw::EnableTraceEx2(hSession, &provGuid, etw::EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+                                    etw::TRACE_LEVEL_VERBOSE, 0xFFFFFFFFFFFFFFFFULL, 0, 0, nullptr);
+            }
+
+            out << "The command completed successfully. Session '" << sessionName << "' is running.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "stop") {
+            if (tokens.size() < 3) {
+                out << "Error: Missing session name. Usage: logman stop <session_name>\n";
+                return;
+            }
+            std::string sessionName = tokens[2];
+            std::wstring wSessionName(sessionName.begin(), sessionName.end());
+
+            etw::EVENT_TRACE_PROPERTIES props{};
+            props.Wnode.BufferSize = sizeof(etw::EVENT_TRACE_PROPERTIES);
+
+            uint32_t hr = etw::StopTraceW(0, wSessionName.c_str(), &props);
+            if (hr != 0) {
+                out << "Error: Failed to stop session '" << sessionName << "' (Status: " << hr << ").\n";
+                return;
+            }
+
+            out << "The command completed successfully. Session '" << sessionName << "' stopped.\n";
+            return;
+        }
+
+        // Default or "logman query"
+        std::string queryTarget;
+        if (tokens.size() > 1 && tokens[1] == "query" && tokens.size() > 2) {
+            queryTarget = tokens[2];
+        } else if (tokens.size() == 2 && tokens[1] != "query") {
+            queryTarget = tokens[1];
+        }
+
+        if (!queryTarget.empty()) {
+            std::wstring wTarget(queryTarget.begin(), queryTarget.end());
+            auto session = etw::TraceManager::get().getSessionByName(wTarget);
+            if (!session) {
+                out << "Error: Trace session '" << queryTarget << "' was not found.\n";
+                return;
+            }
+
+            const auto& props = session->getProperties();
+            out << "\nName:                    " << queryTarget << "\n"
+                << "Status:                  Running\n"
+                << "Root Cause / Buffer:     " << props.BufferSize << " KB\n"
+                << "Minimum Buffers:         " << props.MinimumBuffers << "\n"
+                << "Maximum Buffers:         " << props.MaximumBuffers << "\n"
+                << "Buffers Written:         " << props.BuffersWritten << "\n"
+                << "Events Recorded:         " << session->getEventCount() << "\n"
+                << "Flush Timer:             " << props.FlushTimer << " sec\n"
+                << "Log Mode:                Real-Time\n";
+
+            auto guids = session->getEnabledGuids();
+            out << "Enabled Providers (" << guids.size() << "):\n";
+            for (const auto& g : guids) {
+                out << "  * " << etw::guidToString(g) << "\n";
+            }
+            out << "\n";
+            return;
+        }
+
+        // List all active sessions
+        auto sessions = etw::TraceManager::get().getActiveSessions();
+        out << "\nData Collector Set / Trace Sessions              Type          Status\n"
+            << "------------------------------------------------------------------------\n";
+        for (const auto& s : sessions) {
+            std::string name(s->getName().begin(), s->getName().end());
+            out << std::left << std::setw(48) << name
+                << std::setw(14) << "Trace"
+                << "Running (" << s->getEventCount() << " events)\n";
+        }
+        out << "\nThe command completed successfully.\n\n";
+    }
+
+    void cmdTraceRpt(const std::vector<std::string>& tokens, std::ostream& out) {
+        etw::InitializeEtwSubsystemExports();
+
+        std::string target = "NT Kernel Logger";
+        if (tokens.size() > 1 && tokens[1] != "/?" && tokens[1] != "-?" && tokens[1] != "/help") {
+            target = tokens[1];
+        }
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "\nMicrosoft TraceRpt (MicaNT Event Trace Report Generator)\n\n"
+                << "Usage: tracerpt [session_name | logfile.etl] [-o <report.txt>]\n"
+                << "Example: tracerpt \"NT Kernel Logger\"\n\n";
+            return;
+        }
+
+        std::wstring wTarget(target.begin(), target.end());
+        auto session = etw::TraceManager::get().getSessionByName(wTarget);
+        if (!session) {
+            out << "Error: Trace source '" << target << "' not found or no active events.\n";
+            return;
+        }
+
+        auto events = session->getEvents();
+        out << "========================================================================\n"
+            << "      Event Trace Report - " << target << "\n"
+            << "========================================================================\n"
+            << "Total Events Captured:   " << events.size() << "\n"
+            << "Buffers Written:         " << session->getProperties().BuffersWritten << "\n"
+            << "------------------------------------------------------------------------\n";
+
+        if (events.empty()) {
+            out << "No events recorded in session.\n\n";
+            return;
+        }
+
+        size_t limit = std::min(events.size(), size_t(10));
+        for (size_t i = 0; i < limit; ++i) {
+            const auto& ev = events[i];
+            out << "[" << std::setw(3) << i + 1 << "] Provider: " << etw::guidToString(ev.header.ProviderId)
+                << " | Event ID: " << ev.header.EventDescriptor.Id
+                << " | Level: " << static_cast<int>(ev.header.EventDescriptor.Level);
+            if (!ev.message.empty()) {
+                std::string msg(ev.message.begin(), ev.message.end());
+                out << " | Msg: \"" << msg << "\"";
+            } else if (!ev.data.empty()) {
+                out << " | Bytes: " << ev.data.size();
+            }
+            out << "\n";
+        }
+        if (events.size() > limit) {
+            out << "... (" << (events.size() - limit) << " more events recorded in buffer)\n";
+        }
+        out << "\nReport generated successfully.\n";
     }
 
     static std::string trim(std::string_view s) {
