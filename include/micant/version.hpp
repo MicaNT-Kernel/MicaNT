@@ -2057,6 +2057,50 @@ private:
             mod.stringTable["ProductVersion"] = "10.0.22621.1";
             registerModule(mod);
         }
+
+        // sensorsapi.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "sensorsapi.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Sensors API";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "sensorsapi";
+            mod.stringTable["OriginalFilename"] = "sensorsapi.dll";
+            mod.stringTable["ProductName"] = "MicaNT Sensor Platform";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // sensorsclassextension.dll
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "sensorsclassextension.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Sensor Class Extension";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "sensorsclassextension";
+            mod.stringTable["OriginalFilename"] = "sensorsclassextension.dll";
+            mod.stringTable["ProductName"] = "MicaNT Sensor Platform";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
     }
 
 public:

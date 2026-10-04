@@ -116,6 +116,7 @@
 #include "micant/wns.hpp"
 #include "micant/location.hpp"
 #include "micant/wpd.hpp"
+#include "micant/sensors.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -19847,6 +19848,324 @@ void Test_WindowsWPD_PortableDevices_Subsystem() {
     std::cout << "[TEST] Suite 94: Windows Portable Devices (WPD) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 95: Windows Sensors API & Sensor Class Extension Subsystem Tests
+// ============================================================================
+void Test_WindowsSensors_Subsystem() {
+    sensors::InitializeSensorsSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (sensorsapi.dll / sensorsclassextension.dll)
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(ldr.getExport("sensorsapi.dll", "DllGetClassObject") != nullptr, "sensorsapi.dll must export DllGetClassObject");
+    TEST_ASSERT(ldr.getExport("sensorsapi.dll", "DllCanUnloadNow") != nullptr, "sensorsapi.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("sensorsapi.dll", "DllRegisterServer") != nullptr, "sensorsapi.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("sensorsapi.dll", "DllUnregisterServer") != nullptr, "sensorsapi.dll must export DllUnregisterServer");
+    TEST_ASSERT(ldr.getExport("sensorsapi.dll", "SensorsCreateSensorManager") != nullptr, "sensorsapi.dll must export SensorsCreateSensorManager");
+    TEST_ASSERT(ldr.getExport("sensorsapi.dll", "SensorsGetSensorCount") != nullptr, "sensorsapi.dll must export SensorsGetSensorCount");
+
+    TEST_ASSERT(ldr.getExport("sensorsclassextension.dll", "DllGetClassObject") != nullptr, "sensorsclassextension.dll must export DllGetClassObject");
+    TEST_ASSERT(ldr.getExport("sensorsclassextension.dll", "DllCanUnloadNow") != nullptr, "sensorsclassextension.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("sensorsclassextension.dll", "DllRegisterServer") != nullptr, "sensorsclassextension.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("sensorsclassextension.dll", "DllUnregisterServer") != nullptr, "sensorsclassextension.dll must export DllUnregisterServer");
+    TEST_ASSERT(ldr.getExport("sensorsclassextension.dll", "SensorsClassExtensionCreate") != nullptr, "sensorsclassextension.dll must export SensorsClassExtensionCreate");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verApi = version::VersionDatabase::Instance().FindModule("sensorsapi.dll");
+        TEST_ASSERT(verApi != nullptr, "VersionDatabase must contain sensorsapi.dll");
+        TEST_ASSERT(verApi->stringTable.at("FileDescription") == "Windows Sensors API", "sensorsapi.dll description match");
+        TEST_ASSERT(verApi->stringTable.at("OriginalFilename") == "sensorsapi.dll", "sensorsapi.dll original filename match");
+        TEST_ASSERT(verApi->stringTable.at("ProductName") == "MicaNT Sensor Platform", "sensorsapi.dll product name match");
+
+        const auto* verExt = version::VersionDatabase::Instance().FindModule("sensorsclassextension.dll");
+        TEST_ASSERT(verExt != nullptr, "VersionDatabase must contain sensorsclassextension.dll");
+        TEST_ASSERT(verExt->stringTable.at("FileDescription") == "Windows Sensor Class Extension", "sensorsclassextension.dll description match");
+        TEST_ASSERT(verExt->stringTable.at("OriginalFilename") == "sensorsclassextension.dll", "sensorsclassextension.dll original filename match");
+        TEST_ASSERT(verExt->stringTable.at("ProductName") == "MicaNT Sensor Platform", "sensorsclassextension.dll product name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Service Control Manager Services (SensorDataService)
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        auto sensorSvc = scm.getServiceRecord(L"SensorDataService");
+        TEST_ASSERT(sensorSvc != nullptr, "SensorDataService service must be registered in SCM");
+        TEST_ASSERT(sensorSvc->displayName == L"Sensor Data Service", "SensorDataService display name match");
+        TEST_ASSERT(sensorSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "SensorDataService must be running");
+        TEST_ASSERT(sensorSvc->status.dwProcessId == 1162, "SensorDataService PID match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: COM Activation & Class Factory via CoCreateInstance
+    // ------------------------------------------------------------------------
+    sensors::ISensorManager* pMgr = nullptr;
+    ole32::HRESULT hr = ole32::CoCreateInstance(
+        sensors::CLSID_SensorManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+        sensors::IID_ISensorManager, reinterpret_cast<void**>(&pMgr)
+    );
+    TEST_ASSERT(hr == ole32::S_OK && pMgr != nullptr, "CoCreateInstance(CLSID_SensorManager) must succeed");
+
+    sensors::ISensorCollection* pEmptyCol = nullptr;
+    hr = ole32::CoCreateInstance(
+        sensors::CLSID_SensorCollection, nullptr, ole32::CLSCTX_INPROC_SERVER,
+        sensors::IID_ISensorCollection, reinterpret_cast<void**>(&pEmptyCol)
+    );
+    TEST_ASSERT(hr == ole32::S_OK && pEmptyCol != nullptr, "CoCreateInstance(CLSID_SensorCollection) must succeed");
+    pEmptyCol->Release();
+
+    sensors::ISensorClassExtension* pExt = nullptr;
+    hr = ole32::CoCreateInstance(
+        sensors::CLSID_SensorClassExtension, nullptr, ole32::CLSCTX_INPROC_SERVER,
+        sensors::IID_ISensorClassExtension, reinterpret_cast<void**>(&pExt)
+    );
+    TEST_ASSERT(hr == ole32::S_OK && pExt != nullptr, "CoCreateInstance(CLSID_SensorClassExtension) must succeed");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Sensor Manager Category Enumeration & Querying
+    // ------------------------------------------------------------------------
+    sensors::ISensorCollection* pAllSensors = nullptr;
+    hr = pMgr->GetSensorsByCategory(sensors::SENSOR_CATEGORY_ALL, &pAllSensors);
+    TEST_ASSERT(hr == ole32::S_OK && pAllSensors != nullptr, "GetSensorsByCategory(SENSOR_CATEGORY_ALL) must succeed");
+
+    uint32_t totalSensors = 0;
+    pAllSensors->GetCount(&totalSensors);
+    TEST_ASSERT(totalSensors >= 5, "Total sensors count must be at least 5");
+    pAllSensors->Release();
+
+    // Verify Motion sensors category
+    sensors::ISensorCollection* pMotionSensors = nullptr;
+    hr = pMgr->GetSensorsByCategory(sensors::SENSOR_CATEGORY_MOTION, &pMotionSensors);
+    TEST_ASSERT(hr == ole32::S_OK && pMotionSensors != nullptr, "GetSensorsByCategory(SENSOR_CATEGORY_MOTION) must succeed");
+    uint32_t motionCount = 0;
+    pMotionSensors->GetCount(&motionCount);
+    TEST_ASSERT(motionCount == 2, "Motion category should have 2 sensors (accel + gyro)");
+    pMotionSensors->Release();
+
+    // Verify Environmental sensors category
+    sensors::ISensorCollection* pEnvSensors = nullptr;
+    hr = pMgr->GetSensorsByCategory(sensors::SENSOR_CATEGORY_ENVIRONMENTAL, &pEnvSensors);
+    TEST_ASSERT(hr == ole32::S_OK && pEnvSensors != nullptr, "GetSensorsByCategory(SENSOR_CATEGORY_ENVIRONMENTAL) must succeed");
+    uint32_t envCount = 0;
+    pEnvSensors->GetCount(&envCount);
+    TEST_ASSERT(envCount == 1, "Environmental category should have 1 sensor (barometer)");
+    pEnvSensors->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Sensor Type Filtering, Metadata & Property Inspection
+    // ------------------------------------------------------------------------
+    sensors::ISensorCollection* pAccelCol = nullptr;
+    hr = pMgr->GetSensorsByType(sensors::SENSOR_TYPE_ACCELEROMETER_3D, &pAccelCol);
+    TEST_ASSERT(hr == ole32::S_OK && pAccelCol != nullptr, "GetSensorsByType(SENSOR_TYPE_ACCELEROMETER_3D) must succeed");
+
+    uint32_t accelCount = 0;
+    pAccelCol->GetCount(&accelCount);
+    TEST_ASSERT(accelCount == 1, "Accelerometer collection must contain 1 sensor");
+
+    sensors::ISensor* pAccel = nullptr;
+    hr = pAccelCol->GetAt(0, &pAccel);
+    TEST_ASSERT(hr == ole32::S_OK && pAccel != nullptr, "GetAt(0) for accelerometer must succeed");
+    pAccelCol->Release();
+
+    ole32::BSTR bstrName = nullptr;
+    hr = pAccel->GetFriendlyName(&bstrName);
+    TEST_ASSERT(hr == ole32::S_OK && bstrName != nullptr, "GetFriendlyName must succeed");
+    TEST_ASSERT(std::wstring(bstrName) == L"MicaNT Sovereign 3-Axis Accelerometer", "Friendly name match");
+    ole32::SysFreeString(bstrName);
+
+    sensors::SensorState state{};
+    hr = pAccel->GetState(&state);
+    TEST_ASSERT(hr == ole32::S_OK && state == sensors::SENSOR_STATE_READY, "Sensor state must be READY");
+
+    sensors::SENSOR_ID accelId{};
+    hr = pAccel->GetID(&accelId);
+    TEST_ASSERT(hr == ole32::S_OK, "GetID must succeed");
+
+    sensors::SENSOR_CATEGORY_ID catId{};
+    hr = pAccel->GetCategory(&catId);
+    TEST_ASSERT(hr == ole32::S_OK && catId == sensors::SENSOR_CATEGORY_MOTION, "Category must match SENSOR_CATEGORY_MOTION");
+
+    sensors::SENSOR_TYPE_ID typeId{};
+    hr = pAccel->GetType(&typeId);
+    TEST_ASSERT(hr == ole32::S_OK && typeId == sensors::SENSOR_TYPE_ACCELEROMETER_3D, "Type must match SENSOR_TYPE_ACCELEROMETER_3D");
+
+    int16_t isSupported = 0;
+    hr = pAccel->SupportsDataField(sensors::SENSOR_DATA_TYPE_ACCELERATION_X_G, &isSupported);
+    TEST_ASSERT(hr == ole32::S_OK && isSupported != 0, "SupportsDataField for ACCELERATION_X_G must return VARIANT_TRUE");
+
+    wasapi::PROPVARIANT propMfg{};
+    hr = pAccel->GetProperty(sensors::SENSOR_PROPERTY_MANUFACTURER, &propMfg);
+    TEST_ASSERT(hr == ole32::S_OK && propMfg.pwszVal != nullptr, "GetProperty(SENSOR_PROPERTY_MANUFACTURER) must succeed");
+    TEST_ASSERT(std::wstring(propMfg.pwszVal) == L"MicaNT Hardware Systems", "Manufacturer string match");
+    wasapi::PropVariantClear(&propMfg);
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Real-Time Synchronous Data Reporting (GetData)
+    // ------------------------------------------------------------------------
+    {
+        sensors::ISensorDataReport* pReport = nullptr;
+        hr = pAccel->GetData(&pReport);
+        TEST_ASSERT(hr == ole32::S_OK && pReport != nullptr, "ISensor::GetData must succeed");
+
+        wasapi::PROPVARIANT valX{};
+        hr = pReport->GetSensorValue(sensors::SENSOR_DATA_TYPE_ACCELERATION_X_G, &valX);
+        TEST_ASSERT(hr == ole32::S_OK && valX.vt == 5, "GetSensorValue(ACCELERATION_X_G) must return VT_R8");
+        TEST_ASSERT(std::abs(valX.dblVal - 0.02) < 1e-4, "X-acceleration value match");
+
+        wasapi::PROPVARIANT valZ{};
+        hr = pReport->GetSensorValue(sensors::SENSOR_DATA_TYPE_ACCELERATION_Z_G, &valZ);
+        TEST_ASSERT(hr == ole32::S_OK && valZ.vt == 5, "GetSensorValue(ACCELERATION_Z_G) must return VT_R8");
+        TEST_ASSERT(std::abs(valZ.dblVal - 0.98) < 1e-4, "Z-acceleration value match");
+
+        pReport->Release();
+    }
+
+    // Inspect Ambient Light Sensor reading
+    {
+        sensors::ISensorCollection* pAlsCol = nullptr;
+        hr = pMgr->GetSensorsByType(sensors::SENSOR_TYPE_AMBIENT_LIGHT, &pAlsCol);
+        TEST_ASSERT(hr == ole32::S_OK && pAlsCol != nullptr, "GetSensorsByType(AMBIENT_LIGHT) must succeed");
+
+        sensors::ISensor* pAls = nullptr;
+        pAlsCol->GetAt(0, &pAls);
+        TEST_ASSERT(pAls != nullptr, "ALS sensor must be found");
+        pAlsCol->Release();
+
+        sensors::ISensorDataReport* pAlsReport = nullptr;
+        hr = pAls->GetData(&pAlsReport);
+        TEST_ASSERT(hr == ole32::S_OK && pAlsReport != nullptr, "ALS GetData must succeed");
+
+        wasapi::PROPVARIANT luxVal{};
+        hr = pAlsReport->GetSensorValue(sensors::SENSOR_DATA_TYPE_LIGHT_LUX, &luxVal);
+        TEST_ASSERT(hr == ole32::S_OK && luxVal.dblVal == 350.0, "ALS reading must match 350.0 Lux");
+
+        pAlsReport->Release();
+        pAls->Release();
+    }
+
+    // Inspect Barometer reading
+    {
+        sensors::ISensorCollection* pBaroCol = nullptr;
+        hr = pMgr->GetSensorsByType(sensors::SENSOR_TYPE_BAROMETER, &pBaroCol);
+        TEST_ASSERT(hr == ole32::S_OK && pBaroCol != nullptr, "GetSensorsByType(BAROMETER) must succeed");
+
+        sensors::ISensor* pBaro = nullptr;
+        pBaroCol->GetAt(0, &pBaro);
+        TEST_ASSERT(pBaro != nullptr, "Barometer sensor must be found");
+        pBaroCol->Release();
+
+        sensors::ISensorDataReport* pBaroReport = nullptr;
+        hr = pBaro->GetData(&pBaroReport);
+        TEST_ASSERT(hr == ole32::S_OK && pBaroReport != nullptr, "Barometer GetData must succeed");
+
+        wasapi::PROPVARIANT barVal{};
+        hr = pBaroReport->GetSensorValue(sensors::SENSOR_DATA_TYPE_ATMOSPHERIC_PRESSURE_BAR, &barVal);
+        TEST_ASSERT(hr == ole32::S_OK && std::abs(barVal.dblVal - 1.01325) < 1e-4, "Barometer reading must match 1.01325 Bar");
+
+        pBaroReport->Release();
+        pBaro->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Sensor Class Extension & State Updates
+    // ------------------------------------------------------------------------
+    {
+        hr = pExt->Initialize(nullptr, nullptr);
+        TEST_ASSERT(hr == ole32::S_OK, "SensorClassExtension::Initialize must succeed");
+
+        hr = pExt->PostStateChange(accelId, sensors::SENSOR_STATE_INITIALIZING);
+        TEST_ASSERT(hr == ole32::S_OK, "PostStateChange to INITIALIZING must succeed");
+
+        sensors::SensorState testState{};
+        pAccel->GetState(&testState);
+        TEST_ASSERT(testState == sensors::SENSOR_STATE_INITIALIZING, "Sensor state must reflect INITIALIZING");
+
+        // Restore state
+        pExt->PostStateChange(accelId, sensors::SENSOR_STATE_READY);
+        pAccel->GetState(&testState);
+        TEST_ASSERT(testState == sensors::SENSOR_STATE_READY, "Sensor state must be restored to READY");
+
+        hr = pExt->Uninitialize();
+        TEST_ASSERT(hr == ole32::S_OK, "SensorClassExtension::Uninitialize must succeed");
+    }
+
+    pAccel->Release();
+    pExt->Release();
+    pMgr->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 9: C Client APIs Verification
+    // ------------------------------------------------------------------------
+    {
+        sensors::ISensorManager* pCMgr = nullptr;
+        hr = sensors::SensorsCreateSensorManager(&pCMgr);
+        TEST_ASSERT(hr == ole32::S_OK && pCMgr != nullptr, "SensorsCreateSensorManager must succeed");
+        pCMgr->Release();
+
+        uint32_t sensorCount = 0;
+        hr = sensors::SensorsGetSensorCount(&sensorCount);
+        TEST_ASSERT(hr == ole32::S_OK && sensorCount >= 5, "SensorsGetSensorCount must return at least 5");
+
+        sensors::ISensorClassExtension* pCExt = nullptr;
+        hr = sensors::SensorsClassExtensionCreate(&pCExt);
+        TEST_ASSERT(hr == ole32::S_OK && pCExt != nullptr, "SensorsClassExtensionCreate must succeed");
+        pCExt->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Interactive Shell Integration (cmdSensor)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // sensor test
+        shell.execute("sensor test", out);
+        TEST_ASSERT(out.str().find("[SENSOR] Self-Test Completed: ALL SENSOR TESTS PASSED.") != std::string::npos, "sensor test must pass");
+
+        // sensor list
+        out.str("");
+        shell.execute("sensor list", out);
+        TEST_ASSERT(out.str().find("MicaNT Sovereign 3-Axis Accelerometer") != std::string::npos, "sensor list must show Accelerometer");
+        TEST_ASSERT(out.str().find("MicaNT Sovereign Ambient Light Sensor") != std::string::npos, "sensor list must show Light Sensor");
+        TEST_ASSERT(out.str().find("READY / ONLINE") != std::string::npos, "sensor list must show ready status");
+
+        // sensor read accel
+        out.str("");
+        shell.execute("sensor read accel", out);
+        TEST_ASSERT(out.str().find("X:") != std::string::npos && out.str().find("Z:") != std::string::npos, "sensor read accel must report axes");
+
+        // sensor read light
+        out.str("");
+        shell.execute("sensor read light", out);
+        TEST_ASSERT(out.str().find("Illuminance: 350.0 Lux") != std::string::npos, "sensor read light must report 350.0 Lux");
+
+        // sensor read baro
+        out.str("");
+        shell.execute("sensor read baro", out);
+        TEST_ASSERT(out.str().find("Pressure: 1.01325 Bar") != std::string::npos, "sensor read baro must report 1.01325 Bar");
+
+        // sensor inject light 650.5
+        out.str("");
+        shell.execute("sensor inject light 650.5", out);
+        TEST_ASSERT(out.str().find("Injected Light Lux: 650.5 Lux") != std::string::npos, "sensor inject light must succeed");
+
+        out.str("");
+        shell.execute("sensor read light", out);
+        TEST_ASSERT(out.str().find("Illuminance: 650.5 Lux") != std::string::npos, "sensor read light must show updated 650.5 Lux");
+
+        // restore default light
+        shell.execute("sensor inject light 350.0", out);
+    }
+
+    std::cout << "[TEST] Suite 95: Windows Sensors API & Sensor Class Extension Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -19946,6 +20265,7 @@ int main() {
     RUN_TEST(Test_WindowsWNS_PushNotification_Subsystem);
     RUN_TEST(Test_WindowsLocation_Geolocation_Subsystem);
     RUN_TEST(Test_WindowsWPD_PortableDevices_Subsystem);
+    RUN_TEST(Test_WindowsSensors_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

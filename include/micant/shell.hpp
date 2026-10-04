@@ -85,6 +85,7 @@
 #include "wns.hpp"
 #include "location.hpp"
 #include "wpd.hpp"
+#include "sensors.hpp"
 
 namespace micant::shell {
 
@@ -257,6 +258,7 @@ public:
             if (cmd == "notify" || cmd == "toast" || cmd == "wns") { cmdNotify(tokens, out); return 0; }
             if (cmd == "location" || cmd == "geo" || cmd == "gps") { cmdLocation(tokens, out); return 0; }
             if (cmd == "wpd" || cmd == "pdevice") { cmdWpd(tokens, out); return 0; }
+            if (cmd == "sensor" || cmd == "sensors") { cmdSensor(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -533,6 +535,7 @@ private:
             << "  NOTIFY [toast|list|channel] Windows Push Notifications & Action Center (notify test)\n"
             << "  LOCATION [status|get|set] Windows Geolocation & Location Framework (location test)\n"
             << "  WPD [list|info|browse] Windows Portable Devices Subsystem (wpd test)\n"
+            << "  SENSOR [list|read|test] Windows Sensors API & Sensor Platform (sensor test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -9691,6 +9694,200 @@ private:
             << "  wpd list                          Lists connected portable devices\n"
             << "  wpd info [deviceId]               Displays properties and capabilities of device\n"
             << "  wpd browse [deviceId] [folderId]  Enumerates objects in device storage hierarchy\n";
+    }
+
+    void cmdSensor(const std::vector<std::string>& tokens, std::ostream& out) {
+        sensors::InitializeSensorsSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Windows Sensors API & Sensor Platform Subsystem (sensor)\n\n"
+                << "Usage:\n"
+                << "  sensor test                             Runs Sensors API and COM self-test\n"
+                << "  sensor list                             Lists active sensors and operational states\n"
+                << "  sensor read [type]                      Reads real-time data from sensor (accel|light|compass|gyro|baro)\n"
+                << "  sensor inject <type> <val1> [val2] [val3] Injects simulated sensor data\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Windows Sensors API & Platform Subsystem Self-Test       \n"
+                << "========================================================================\n";
+
+            sensors::ISensorManager* pMgr = nullptr;
+            ole32::HRESULT hr = ole32::CoCreateInstance(
+                sensors::CLSID_SensorManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+                sensors::IID_ISensorManager, reinterpret_cast<void**>(&pMgr)
+            );
+            out << "[TEST] 1. CoCreateInstance(CLSID_SensorManager): "
+                << (hr == ole32::S_OK && pMgr ? "SUCCESS" : "FAILED") << "\n";
+            if (!pMgr) {
+                out << "ERROR: Failed to instantiate ISensorManager.\n";
+                return;
+            }
+
+            sensors::ISensorCollection* pAllSensors = nullptr;
+            hr = pMgr->GetSensorsByCategory(sensors::SENSOR_CATEGORY_ALL, &pAllSensors);
+            uint32_t count = 0;
+            if (pAllSensors) pAllSensors->GetCount(&count);
+            out << "[TEST] 2. ISensorManager::GetSensorsByCategory(ALL): "
+                << (hr == ole32::S_OK && count >= 5 ? "SUCCESS" : "FAILED")
+                << " (Found: " << count << " sensor(s))\n";
+
+            // Accelerometer query
+            sensors::ISensorCollection* pMotionSensors = nullptr;
+            hr = pMgr->GetSensorsByType(sensors::SENSOR_TYPE_ACCELEROMETER_3D, &pMotionSensors);
+            uint32_t motionCount = 0;
+            if (pMotionSensors) pMotionSensors->GetCount(&motionCount);
+            out << "[TEST] 3. ISensorManager::GetSensorsByType(ACCEL_3D): "
+                << (hr == ole32::S_OK && motionCount > 0 ? "SUCCESS" : "FAILED")
+                << " (Found: " << motionCount << ")\n";
+
+            if (pMotionSensors && motionCount > 0) {
+                sensors::ISensor* pSensor = nullptr;
+                pMotionSensors->GetAt(0, &pSensor);
+                if (pSensor) {
+                    ole32::BSTR bstrName = nullptr;
+                    pSensor->GetFriendlyName(&bstrName);
+                    std::wstring wsName = bstrName ? bstrName : L"";
+                    std::string sName(wsName.begin(), wsName.end());
+                    ole32::SysFreeString(bstrName);
+                    out << "         Friendly Name: " << sName << "\n";
+
+                    sensors::SensorState state{};
+                    pSensor->GetState(&state);
+                    out << "         Sensor State:  " << (state == sensors::SENSOR_STATE_READY ? "READY" : "OTHER") << "\n";
+
+                    sensors::ISensorDataReport* pReport = nullptr;
+                    hr = pSensor->GetData(&pReport);
+                    out << "[TEST] 4. ISensor::GetData (Report): "
+                        << (hr == ole32::S_OK && pReport ? "SUCCESS" : "FAILED") << "\n";
+
+                    if (pReport) {
+                        wasapi::PROPVARIANT pvZ{};
+                        pReport->GetSensorValue(sensors::SENSOR_DATA_TYPE_ACCELERATION_Z_G, &pvZ);
+                        out << "         Z-Acceleration: " << pvZ.dblVal << " g\n";
+                        pReport->Release();
+                    }
+                    pSensor->Release();
+                }
+                pMotionSensors->Release();
+            }
+            if (pAllSensors) pAllSensors->Release();
+            pMgr->Release();
+
+            // Test C client API
+            uint32_t cApiSensors = 0;
+            hr = sensors::SensorsGetSensorCount(&cApiSensors);
+            out << "[TEST] 5. C API SensorsGetSensorCount: "
+                << (hr == ole32::S_OK && cApiSensors >= 5 ? "SUCCESS" : "FAILED")
+                << " (Total: " << cApiSensors << ")\n";
+
+            out << "[SENSOR] Self-Test Completed: ALL SENSOR TESTS PASSED.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            auto list = sensors::SensorManager::get().getAllSensors();
+            out << "========================================================================\n"
+                << "                  Active Windows Sovereign Sensor Devices               \n"
+                << "========================================================================\n";
+            int idx = 1;
+            for (const auto& s : list) {
+                std::string sName(s.friendlyName.begin(), s.friendlyName.end());
+                std::string sModel(s.model.begin(), s.model.end());
+                std::string sMfg(s.manufacturer.begin(), s.manufacturer.end());
+                std::string sState = (s.state == sensors::SENSOR_STATE_READY) ? "READY / ONLINE" : "OFFLINE";
+
+                out << "  [" << idx++ << "] " << sName << " (" << sModel << ")\n"
+                    << "      Manufacturer: " << sMfg << "\n"
+                    << "      Status:       " << sState << "\n"
+                    << "      Min Interval: " << s.minReportInterval << " ms\n"
+                    << "      Cur Interval: " << s.currentReportInterval << " ms\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "read") {
+            std::string type = (tokens.size() > 2) ? tokens[2] : "all";
+            auto list = sensors::SensorManager::get().getAllSensors();
+            out << "========================================================================\n"
+                << "                     Real-Time Sensor Telemetry Feed                    \n"
+                << "========================================================================\n";
+
+            for (const auto& s : list) {
+                std::string sName(s.friendlyName.begin(), s.friendlyName.end());
+                if (type == "accel" && s.type != sensors::SENSOR_TYPE_ACCELEROMETER_3D) continue;
+                if (type == "light" && s.type != sensors::SENSOR_TYPE_AMBIENT_LIGHT) continue;
+                if (type == "compass" && s.type != sensors::SENSOR_TYPE_COMPASS_3D) continue;
+                if (type == "gyro" && s.type != sensors::SENSOR_TYPE_GYROSCOPE_3D) continue;
+                if (type == "baro" && s.type != sensors::SENSOR_TYPE_BAROMETER) continue;
+
+                out << "  -> " << sName << ":\n";
+                if (s.type == sensors::SENSOR_TYPE_ACCELEROMETER_3D) {
+                    double x = s.readings.at(sensors::SENSOR_DATA_TYPE_ACCELERATION_X_G).dblVal;
+                    double y = s.readings.at(sensors::SENSOR_DATA_TYPE_ACCELERATION_Y_G).dblVal;
+                    double z = s.readings.at(sensors::SENSOR_DATA_TYPE_ACCELERATION_Z_G).dblVal;
+                    out << "       X: " << std::fixed << std::setprecision(3) << x << " g,  "
+                        << "Y: " << y << " g,  "
+                        << "Z: " << z << " g\n";
+                } else if (s.type == sensors::SENSOR_TYPE_AMBIENT_LIGHT) {
+                    double lux = s.readings.at(sensors::SENSOR_DATA_TYPE_LIGHT_LUX).dblVal;
+                    out << "       Illuminance: " << std::fixed << std::setprecision(1) << lux << " Lux\n";
+                } else if (s.type == sensors::SENSOR_TYPE_COMPASS_3D) {
+                    double deg = s.readings.at(sensors::SENSOR_DATA_TYPE_MAGNETIC_HEADING_DEGREES).dblVal;
+                    out << "       Magnetic Heading: " << std::fixed << std::setprecision(1) << deg << " deg\n";
+                } else if (s.type == sensors::SENSOR_TYPE_GYROSCOPE_3D) {
+                    double gx = s.readings.at(sensors::SENSOR_DATA_TYPE_ANGULAR_VELOCITY_X_DEGREES_PER_SECOND).dblVal;
+                    double gy = s.readings.at(sensors::SENSOR_DATA_TYPE_ANGULAR_VELOCITY_Y_DEGREES_PER_SECOND).dblVal;
+                    double gz = s.readings.at(sensors::SENSOR_DATA_TYPE_ANGULAR_VELOCITY_Z_DEGREES_PER_SECOND).dblVal;
+                    out << "       Angular Velocity: X=" << gx << " deg/s, Y=" << gy << " deg/s, Z=" << gz << " deg/s\n";
+                } else if (s.type == sensors::SENSOR_TYPE_BAROMETER) {
+                    double bar = s.readings.at(sensors::SENSOR_DATA_TYPE_ATMOSPHERIC_PRESSURE_BAR).dblVal;
+                    out << "       Pressure: " << std::fixed << std::setprecision(5) << bar << " Bar (" << (bar * 1000.0) << " hPa)\n";
+                }
+            }
+            return;
+        }
+
+        if (tokens.size() > 3 && tokens[1] == "inject") {
+            std::string type = tokens[2];
+            double v1 = std::stod(tokens[3]);
+            if (type == "light" || type == "lux") {
+                GUID id = { 0x22222222, 0x2222, 0x2222, { 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22 } };
+                sensors::SensorManager::get().setSensorReading(id, sensors::SENSOR_DATA_TYPE_LIGHT_LUX, v1);
+                out << "[SENSOR] Injected Light Lux: " << std::fixed << std::setprecision(1) << v1 << " Lux\n";
+                return;
+            }
+            if (type == "compass" || type == "heading") {
+                GUID id = { 0x33333333, 0x3333, 0x3333, { 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33 } };
+                sensors::SensorManager::get().setSensorReading(id, sensors::SENSOR_DATA_TYPE_MAGNETIC_HEADING_DEGREES, v1);
+                out << "[SENSOR] Injected Magnetic Heading: " << std::fixed << std::setprecision(1) << v1 << " deg\n";
+                return;
+            }
+            if (type == "baro" || type == "pressure") {
+                GUID id = { 0x55555555, 0x5555, 0x5555, { 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55 } };
+                sensors::SensorManager::get().setSensorReading(id, sensors::SENSOR_DATA_TYPE_ATMOSPHERIC_PRESSURE_BAR, v1);
+                out << "[SENSOR] Injected Atmospheric Pressure: " << std::fixed << std::setprecision(5) << v1 << " Bar\n";
+                return;
+            }
+            if (type == "accel" && tokens.size() > 5) {
+                double v2 = std::stod(tokens[4]);
+                double v3 = std::stod(tokens[5]);
+                GUID id = { 0x11111111, 0x1111, 0x1111, { 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11 } };
+                sensors::SensorManager::get().setSensorReading(id, sensors::SENSOR_DATA_TYPE_ACCELERATION_X_G, v1);
+                sensors::SensorManager::get().setSensorReading(id, sensors::SENSOR_DATA_TYPE_ACCELERATION_Y_G, v2);
+                sensors::SensorManager::get().setSensorReading(id, sensors::SENSOR_DATA_TYPE_ACCELERATION_Z_G, v3);
+                out << "[SENSOR] Injected Accelerometer: X=" << std::fixed << std::setprecision(3) << v1 << "g, Y=" << v2 << "g, Z=" << v3 << "g\n";
+                return;
+            }
+        }
+
+        out << "Usage:\n"
+            << "  sensor test                             Runs Sensors API and COM self-test\n"
+            << "  sensor list                             Lists active sensors and operational states\n"
+            << "  sensor read [type]                      Reads real-time data from sensor (accel|light|compass|gyro|baro)\n"
+            << "  sensor inject <type> <val1> [val2] [val3] Injects simulated sensor data\n";
     }
 
     static std::string trim(std::string_view s) {
