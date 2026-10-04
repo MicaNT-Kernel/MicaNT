@@ -102,6 +102,7 @@
 #include "micant/dwmapi.hpp"
 #include "micant/wasapi.hpp"
 #include "micant/cbs.hpp"
+#include "micant/wdi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -15717,6 +15718,336 @@ void Test_WindowsCBS_DISM_Servicing_Subsystem() {
     std::cout << "[TEST] Suite 80: Windows Component-Based Servicing (CBS) & DISM Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 81: Windows Diagnostics Infrastructure (WDI) Subsystem
+// ============================================================================
+void Test_WindowsWDI_DiagnosticsInfrastructure_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 81: Windows Diagnostics Infrastructure (WDI) Subsystem (wdi.dll / diagperf.dll)...\n";
+
+    // Initialize WDI Subsystem
+    wdi::InitializeWdiSubsystemExports();
+
+    // Stage 1: Dynamic Loader Export Verification
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiOpenScenario") != nullptr, "wdi.dll!WdiOpenScenario must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiCloseScenario") != nullptr, "wdi.dll!WdiCloseScenario must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiSetScenarioProperty") != nullptr, "wdi.dll!WdiSetScenarioProperty must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiGetScenarioProperty") != nullptr, "wdi.dll!WdiGetScenarioProperty must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiAddParameter") != nullptr, "wdi.dll!WdiAddParameter must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiExecuteScenario") != nullptr, "wdi.dll!WdiExecuteScenario must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiApplyResolution") != nullptr, "wdi.dll!WdiApplyResolution must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiFreeResult") != nullptr, "wdi.dll!WdiFreeResult must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiGetScenarioCount") != nullptr, "wdi.dll!WdiGetScenarioCount must be exported");
+        TEST_ASSERT(ldr.getExport("wdi.dll", "WdiGetScenarioDescriptor") != nullptr, "wdi.dll!WdiGetScenarioDescriptor must be exported");
+
+        TEST_ASSERT(ldr.getExport("diagperf.dll", "DiagPerfInitialize") != nullptr, "diagperf.dll!DiagPerfInitialize must be exported");
+        TEST_ASSERT(ldr.getExport("diagperf.dll", "DiagPerfShutdown") != nullptr, "diagperf.dll!DiagPerfShutdown must be exported");
+        TEST_ASSERT(ldr.getExport("diagperf.dll", "DiagPerfCollectVitals") != nullptr, "diagperf.dll!DiagPerfCollectVitals must be exported");
+        TEST_ASSERT(ldr.getExport("diagperf.dll", "DiagPerfAnalyzeBottlenecks") != nullptr, "diagperf.dll!DiagPerfAnalyzeBottlenecks must be exported");
+    }
+
+    // Stage 2: Version Database Metadata Verification
+    {
+        const auto* wdiMod = version::VersionDatabase::Instance().FindModule("wdi.dll");
+        TEST_ASSERT(wdiMod != nullptr, "wdi.dll must be registered in VersionDatabase");
+        TEST_ASSERT(wdiMod->stringTable.at("FileDescription").find("Diagnostic Infrastructure") != std::string::npos, "wdi.dll description must match");
+
+        const auto* diagMod = version::VersionDatabase::Instance().FindModule("diagperf.dll");
+        TEST_ASSERT(diagMod != nullptr, "diagperf.dll must be registered in VersionDatabase");
+        TEST_ASSERT(diagMod->stringTable.at("FileDescription").find("Performance Collector") != std::string::npos, "diagperf.dll description must match");
+
+        const auto* msdtMod = version::VersionDatabase::Instance().FindModule("msdt.exe");
+        TEST_ASSERT(msdtMod != nullptr, "msdt.exe must be registered in VersionDatabase");
+        TEST_ASSERT(msdtMod->stringTable.at("FileDescription").find("Support Diagnostic Tool") != std::string::npos, "msdt.exe description must match");
+    }
+
+    // Stage 3: SCM Service Registration Verification
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        uintptr_t hMgr = 0, hSys = 0, hSvc = 0;
+        uint32_t err = scm.openSCManager(L"", L"", scm::SC_MANAGER_CONNECT, hMgr);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS && hMgr != 0, "SCM openSCManager must succeed");
+
+        err = scm.openService(hMgr, L"WdiSystemHost", scm::SERVICE_QUERY_STATUS, hSys);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS && hSys != 0, "WdiSystemHost must be registered in SCM");
+        scm::SERVICE_STATUS_PROCESS stSys{};
+        err = scm.queryServiceStatus(hSys, stSys);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS, "WdiSystemHost query status must succeed");
+        TEST_ASSERT(stSys.dwCurrentState == scm::SERVICE_RUNNING, "WdiSystemHost must be RUNNING");
+        scm.closeServiceHandle(hSys);
+
+        err = scm.openService(hMgr, L"WdiServiceHost", scm::SERVICE_QUERY_STATUS, hSvc);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS && hSvc != 0, "WdiServiceHost must be registered in SCM");
+        scm::SERVICE_STATUS_PROCESS stSvc{};
+        err = scm.queryServiceStatus(hSvc, stSvc);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS, "WdiServiceHost query status must succeed");
+        TEST_ASSERT(stSvc.dwCurrentState == scm::SERVICE_RUNNING, "WdiServiceHost must be RUNNING");
+        scm.closeServiceHandle(hSvc);
+
+        scm.closeServiceHandle(hMgr);
+    }
+
+    // Stage 4: WDI Scenario Enumeration and Metadata Querying
+    {
+        uint32_t count = 0;
+        int32_t hr = wdi::WdiGetScenarioCount(&count);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiGetScenarioCount must return WDI_S_OK");
+        TEST_ASSERT(count >= 5, "Must have at least 5 registered diagnostic scenarios");
+
+        bool foundNet = false, foundStorage = false, foundMemory = false, foundAudio = false, foundPerf = false;
+        for (uint32_t i = 0; i < count; ++i) {
+            wdi::WDI_SCENARIO_DESCRIPTOR desc{};
+            hr = wdi::WdiGetScenarioDescriptor(i, &desc);
+            TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiGetScenarioDescriptor must succeed");
+            std::wstring id = desc.ScenarioId ? desc.ScenarioId : L"";
+            if (id == L"NetworkDiagnostics") foundNet = true;
+            if (id == L"StorageDiagnostics") foundStorage = true;
+            if (id == L"MemoryDiagnostics") foundMemory = true;
+            if (id == L"AudioDiagnostics") foundAudio = true;
+            if (id == L"PerformanceDiagnostics") foundPerf = true;
+        }
+        TEST_ASSERT(foundNet && foundStorage && foundMemory && foundAudio && foundPerf, "All 5 core scenarios must be enumerated");
+    }
+
+    // Stage 5: Scenario Lifecycle (Open / Close & Invalid IDs)
+    {
+        wdi::WDI_SCENARIO_HANDLE hScn = 0;
+        int32_t hr = wdi::WdiOpenScenario(L"InvalidScenarioName123", &hScn);
+        TEST_ASSERT(hr == wdi::WDI_E_NOT_FOUND, "Opening invalid scenario must return WDI_E_NOT_FOUND");
+        TEST_ASSERT(hScn == 0, "Invalid handle must remain 0");
+
+        hr = wdi::WdiOpenScenario(L"NetworkDiagnostics", &hScn);
+        TEST_ASSERT(hr == wdi::WDI_S_OK && hScn != 0, "WdiOpenScenario(NetworkDiagnostics) must succeed");
+
+        hr = wdi::WdiCloseScenario(hScn);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiCloseScenario must return WDI_S_OK");
+
+        hr = wdi::WdiCloseScenario(hScn);
+        TEST_ASSERT(hr == wdi::WDI_E_INVALID_HANDLE, "Closing closed scenario must return WDI_E_INVALID_HANDLE");
+    }
+
+    // Stage 6: Scenario Properties & Parameters
+    {
+        wdi::WDI_SCENARIO_HANDLE hScn = 0;
+        int32_t hr = wdi::WdiOpenScenario(L"NetworkDiagnostics", &hScn);
+        TEST_ASSERT(hr == wdi::WDI_S_OK && hScn != 0, "WdiOpenScenario must succeed");
+
+        wchar_t buf[128]{};
+        hr = wdi::WdiGetScenarioProperty(hScn, L"TargetHost", buf, 128);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiGetScenarioProperty(TargetHost) must succeed");
+        TEST_ASSERT(std::wstring(buf) == L"dns.micant.sovereign", "TargetHost default must match");
+
+        hr = wdi::WdiSetScenarioProperty(hScn, L"TargetHost", L"custom.gateway.local");
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiSetScenarioProperty must succeed");
+
+        hr = wdi::WdiGetScenarioProperty(hScn, L"TargetHost", buf, 128);
+        TEST_ASSERT(hr == wdi::WDI_S_OK && std::wstring(buf) == L"custom.gateway.local", "Updated TargetHost must match");
+
+        hr = wdi::WdiAddParameter(hScn, L"ParamTestKey", L"ParamTestVal");
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiAddParameter must succeed");
+
+        wdi::WdiCloseScenario(hScn);
+    }
+
+    // Stage 7: NetworkDiagnostics Scenario Execution & Root Cause Detection
+    {
+        wdi::WDI_SCENARIO_HANDLE hScn = 0;
+        int32_t hr = wdi::WdiOpenScenario(L"NetworkDiagnostics", &hScn);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiOpenScenario must succeed");
+
+        // 7a. Clean run without issues
+        wdi::WDI_DIAGNOSTIC_RESULT res{};
+        hr = wdi::WdiExecuteScenario(hScn, &res);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiExecuteScenario must succeed");
+        TEST_ASSERT(res.Status == wdi::WDI_S_NO_ISSUES_FOUND, "Clean run must report WDI_S_NO_ISSUES_FOUND");
+        TEST_ASSERT(res.RootCauseCount == 0, "Clean run must have 0 root causes");
+        TEST_ASSERT(res.RootCauses == nullptr, "RootCauses pointer must be null when count=0");
+        TEST_ASSERT(res.SummaryText != nullptr, "SummaryText must not be null");
+        wdi::WdiFreeResult(&res);
+
+        // 7b. Simulated DNS and Gateway failure
+        wdi::WdiAddParameter(hScn, L"SimulateDnsFailure", L"1");
+        wdi::WdiAddParameter(hScn, L"SimulateGatewayFailure", L"1");
+
+        wdi::WDI_DIAGNOSTIC_RESULT resFailed{};
+        hr = wdi::WdiExecuteScenario(hScn, &resFailed);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiExecuteScenario with issues must succeed");
+        TEST_ASSERT(resFailed.Status == wdi::WDI_S_ISSUES_FOUND, "Execution must return WDI_S_ISSUES_FOUND");
+        TEST_ASSERT(resFailed.RootCauseCount == 2, "Must identify 2 root causes");
+        TEST_ASSERT(resFailed.RootCauses != nullptr, "RootCauses pointer must be allocated");
+
+        // Verify root causes
+        bool foundGw = false, foundDns = false;
+        for (uint32_t i = 0; i < resFailed.RootCauseCount; ++i) {
+            std::wstring pName = resFailed.RootCauses[i].ProblemName ? resFailed.RootCauses[i].ProblemName : L"";
+            if (pName == L"DefaultGatewayUnreachable") foundGw = true;
+            if (pName == L"DnsCacheCorrupted") foundDns = true;
+            TEST_ASSERT(resFailed.RootCauses[i].AutoFixAvailable == true, "AutoFix must be available");
+        }
+        TEST_ASSERT(foundGw && foundDns, "Both gateway and DNS issues must be diagnosed");
+
+        // Auto-repair gateway
+        bool resolved = false;
+        hr = wdi::WdiApplyResolution(hScn, 0, &resolved);
+        TEST_ASSERT(hr == wdi::WDI_S_REPAIR_SUCCESSFUL && resolved, "Applying resolution must succeed");
+
+        wdi::WdiFreeResult(&resFailed);
+        wdi::WdiCloseScenario(hScn);
+    }
+
+    // Stage 8: StorageDiagnostics Volume Inspection & Dirty Bit
+    {
+        wdi::WDI_SCENARIO_HANDLE hScn = 0;
+        int32_t hr = wdi::WdiOpenScenario(L"StorageDiagnostics", &hScn);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiOpenScenario(StorageDiagnostics) must succeed");
+
+        auto session = wdi::WdiScenarioManager::get().findSession(hScn);
+        TEST_ASSERT(session != nullptr, "Session must exist");
+        auto stgScn = std::dynamic_pointer_cast<wdi::StorageDiagnosticsScenario>(session->scenario);
+        TEST_ASSERT(stgScn != nullptr, "Dynamic cast to StorageDiagnosticsScenario must succeed");
+        stgScn->induceDirtyBit();
+
+        wdi::WDI_DIAGNOSTIC_RESULT res{};
+        hr = wdi::WdiExecuteScenario(hScn, &res);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "Execute must succeed");
+        TEST_ASSERT(res.Status == wdi::WDI_S_ISSUES_FOUND, "Status must report issues");
+        TEST_ASSERT(res.RootCauseCount == 1, "Must find 1 root cause (Dirty Bit)");
+        TEST_ASSERT(std::wstring(res.RootCauses[0].ProblemName) == L"FilesystemIntegrityFlagDirty", "Problem must be FilesystemIntegrityFlagDirty");
+
+        // Apply resolution
+        bool resolved = false;
+        hr = wdi::WdiApplyResolution(hScn, 0, &resolved);
+        TEST_ASSERT(hr == wdi::WDI_S_REPAIR_SUCCESSFUL && resolved, "Repair must succeed");
+
+        // Re-execute: now healthy
+        wdi::WDI_DIAGNOSTIC_RESULT resClean{};
+        hr = wdi::WdiExecuteScenario(hScn, &resClean);
+        TEST_ASSERT(resClean.Status == wdi::WDI_S_NO_ISSUES_FOUND, "Re-execution must report healthy volume");
+
+        wdi::WdiFreeResult(&res);
+        wdi::WdiFreeResult(&resClean);
+        wdi::WdiCloseScenario(hScn);
+    }
+
+    // Stage 9: AudioDiagnostics Issue Detection & Auto-Repair
+    {
+        wdi::WDI_SCENARIO_HANDLE hScn = 0;
+        int32_t hr = wdi::WdiOpenScenario(L"AudioDiagnostics", &hScn);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiOpenScenario(AudioDiagnostics) must succeed");
+
+        auto session = wdi::WdiScenarioManager::get().findSession(hScn);
+        auto audioScn = std::dynamic_pointer_cast<wdi::AudioDiagnosticsScenario>(session->scenario);
+        TEST_ASSERT(audioScn != nullptr, "Audio scenario instance valid");
+        audioScn->induceMute();
+        audioScn->induceServiceStopped();
+
+        wdi::WDI_DIAGNOSTIC_RESULT res{};
+        hr = wdi::WdiExecuteScenario(hScn, &res);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "Execution must succeed");
+        TEST_ASSERT(res.Status == wdi::WDI_S_ISSUES_FOUND, "Audio issues must be found");
+        TEST_ASSERT(res.RootCauseCount == 2, "Must detect 2 root causes: stopped service and muted endpoint");
+
+        // Repair both
+        for (uint32_t i = 0; i < res.RootCauseCount; ++i) {
+            bool resolved = false;
+            hr = wdi::WdiApplyResolution(hScn, i, &resolved);
+            TEST_ASSERT(hr == wdi::WDI_S_REPAIR_SUCCESSFUL && resolved, "Auto-repair must succeed");
+        }
+
+        wdi::WDI_DIAGNOSTIC_RESULT resRepaired{};
+        hr = wdi::WdiExecuteScenario(hScn, &resRepaired);
+        TEST_ASSERT(resRepaired.Status == wdi::WDI_S_NO_ISSUES_FOUND, "Audio scenario must now report no issues");
+
+        wdi::WdiFreeResult(&res);
+        wdi::WdiFreeResult(&resRepaired);
+        wdi::WdiCloseScenario(hScn);
+    }
+
+    // Stage 10: MemoryDiagnostics & PerformanceDiagnostics Execution
+    {
+        // 10a: MemoryDiagnostics
+        wdi::WDI_SCENARIO_HANDLE hMem = 0;
+        int32_t hr = wdi::WdiOpenScenario(L"MemoryDiagnostics", &hMem);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiOpenScenario(MemoryDiagnostics) must succeed");
+        wdi::WDI_DIAGNOSTIC_RESULT resMem{};
+        hr = wdi::WdiExecuteScenario(hMem, &resMem);
+        TEST_ASSERT(hr == wdi::WDI_S_OK && resMem.Status == wdi::WDI_S_NO_ISSUES_FOUND, "MemoryDiagnostics clean run");
+        wdi::WdiFreeResult(&resMem);
+        wdi::WdiCloseScenario(hMem);
+
+        // 10b: PerformanceDiagnostics
+        wdi::WDI_SCENARIO_HANDLE hPerf = 0;
+        hr = wdi::WdiOpenScenario(L"PerformanceDiagnostics", &hPerf);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "WdiOpenScenario(PerformanceDiagnostics) must succeed");
+        wdi::WDI_DIAGNOSTIC_RESULT resPerf{};
+        hr = wdi::WdiExecuteScenario(hPerf, &resPerf);
+        TEST_ASSERT(hr == wdi::WDI_S_OK && resPerf.Status == wdi::WDI_S_NO_ISSUES_FOUND, "PerformanceDiagnostics clean run");
+        wdi::WdiFreeResult(&resPerf);
+        wdi::WdiCloseScenario(hPerf);
+    }
+
+    // Stage 11: DiagPerf Subsystem Vitals & Bottleneck Collector
+    {
+        int32_t hr = wdi::DiagPerfInitialize();
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "DiagPerfInitialize must return WDI_S_OK");
+
+        wdi::DIAGPERF_VITALS vitals{};
+        hr = wdi::DiagPerfCollectVitals(&vitals);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "DiagPerfCollectVitals must succeed");
+        TEST_ASSERT(vitals.CpuUtilizationPercent > 0 && vitals.CpuUtilizationPercent <= 100, "CPU percent in valid range");
+        TEST_ASSERT(vitals.TotalPhysicalMemoryMB > 0, "Total RAM > 0");
+        TEST_ASSERT(vitals.AvailableMemoryMB > 0, "Available RAM > 0");
+        TEST_ASSERT(vitals.DpcQueueDepth < 100, "DPC queue depth within safety bounds");
+
+        uint32_t bCount = 0;
+        wdi::DIAGPERF_BOTTLENECK* pBottlenecks = nullptr;
+        hr = wdi::DiagPerfAnalyzeBottlenecks(&bCount, &pBottlenecks);
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "DiagPerfAnalyzeBottlenecks must succeed");
+        TEST_ASSERT(bCount == 0, "Zero sovereign bottlenecks under nominal operation");
+
+        hr = wdi::DiagPerfShutdown();
+        TEST_ASSERT(hr == wdi::WDI_S_OK, "DiagPerfShutdown must succeed");
+    }
+
+    // Stage 12: Interactive Shell CLI Integration (msdt commands)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. msdt /?
+        shell.execute("msdt /?", out);
+        TEST_ASSERT(out.str().find("Microsoft Support Diagnostic Tool") != std::string::npos, "msdt /? must display title");
+        TEST_ASSERT(out.str().find("NetworkDiagnostics") != std::string::npos, "msdt /? must list scenarios");
+
+        // 2. msdt /list
+        out.str("");
+        shell.execute("msdt /list", out);
+        TEST_ASSERT(out.str().find("NetworkDiagnostics") != std::string::npos, "msdt /list must include NetworkDiagnostics");
+        TEST_ASSERT(out.str().find("StorageDiagnostics") != std::string::npos, "msdt /list must include StorageDiagnostics");
+        TEST_ASSERT(out.str().find("AudioDiagnostics") != std::string::npos, "msdt /list must include AudioDiagnostics");
+
+        // 3. msdt /id NetworkDiagnostics
+        out.str("");
+        shell.execute("msdt /id NetworkDiagnostics", out);
+        TEST_ASSERT(out.str().find("Diagnosing system scenario: NetworkDiagnostics") != std::string::npos, "msdt /id must diagnose scenario");
+        TEST_ASSERT(out.str().find("completed successfully") != std::string::npos, "msdt execution must succeed");
+
+        // 4. msdt /id AudioDiagnostics /repair
+        out.str("");
+        shell.execute("msdt /id AudioDiagnostics /repair", out);
+        TEST_ASSERT(out.str().find("Diagnosing system scenario: AudioDiagnostics") != std::string::npos, "msdt /id AudioDiagnostics must run");
+        TEST_ASSERT(out.str().find("completed successfully") != std::string::npos, "msdt execution must succeed");
+
+        // 5. msdt test
+        out.str("");
+        shell.execute("msdt test", out);
+        TEST_ASSERT(out.str().find("Finished Successfully") != std::string::npos, "msdt test must complete successfully");
+    }
+
+    std::cout << "[TEST] Suite 81: Windows Diagnostics Infrastructure (WDI) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -15802,6 +16133,7 @@ int main() {
     RUN_TEST(Test_WindowsDWM_DesktopWindowManager_Subsystem);
     RUN_TEST(Test_WindowsWASAPI_CoreAudioEngine_Subsystem);
     RUN_TEST(Test_WindowsCBS_DISM_Servicing_Subsystem);
+    RUN_TEST(Test_WindowsWDI_DiagnosticsInfrastructure_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

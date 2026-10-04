@@ -70,6 +70,7 @@
 #include "dwmapi.hpp"
 #include "wasapi.hpp"
 #include "cbs.hpp"
+#include "wdi.hpp"
 
 namespace micant::shell {
 
@@ -218,6 +219,7 @@ public:
             if (cmd == "dwm" || cmd == "dwmapi") { cmdDwm(tokens, out); return 0; }
             if (cmd == "audiosrv" || cmd == "wasapi") { cmdAudioSrv(tokens, out); return 0; }
             if (cmd == "dism") { cmdDism(tokens, out); return 0; }
+            if (cmd == "msdt" || cmd == "wdi") { cmdMsdt(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -478,6 +480,7 @@ private:
             << "  BITSADMIN / BITS  Background Intelligent Transfer Service Queue Manager (qmgr.dll)\n"
             << "  VSSADMIN / VSS    Volume Shadow Copy Service Administration (vssapi.dll)\n"
             << "  DISM [/online ...] Deployment Image Servicing and Management Subsystem (dism test)\n"
+            << "  MSDT [/id <name>] Microsoft Support Diagnostic Tool & WDI engine (msdt test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -6600,6 +6603,175 @@ private:
 
         cbs::DismCloseSession(session);
         cbs::DismShutdown();
+    }
+
+    void cmdMsdt(const std::vector<std::string>& tokens, std::ostream& out) {
+        wdi::InitializeWdiSubsystemExports();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            // 1. msdt test / msdt /test
+            if (sub == "test" || sub == "/test") {
+                out << "========================================================================\n"
+                    << "       MicaNT Microsoft Support Diagnostic Tool (MSDT / WDI) Self-Test  \n"
+                    << "========================================================================\n";
+                out << "[TEST] 1. Initializing WDI and DiagPerf Subsystems...\n";
+                int32_t hrDiag = wdi::DiagPerfInitialize();
+                out << "  -> DiagPerfInitialize: " << ((hrDiag == 0) ? "SUCCESS" : "FAILED") << "\n";
+
+                out << "[TEST] 2. Enumerating Registered Diagnostic Scenarios...\n";
+                uint32_t scnCount = 0;
+                wdi::WdiGetScenarioCount(&scnCount);
+                out << "  -> Found " << scnCount << " registered diagnostic scenario(s).\n";
+
+                out << "[TEST] 3. Executing Network Diagnostics Scenario...\n";
+                wdi::WDI_SCENARIO_HANDLE hNet = 0;
+                int32_t hr = wdi::WdiOpenScenario(L"NetworkDiagnostics", &hNet);
+                out << "  -> WdiOpenScenario(NetworkDiagnostics): " << ((hr == 0) ? "SUCCESS" : "FAILED") << "\n";
+                if (hr == 0 && hNet) {
+                    wdi::WDI_DIAGNOSTIC_RESULT res{};
+                    wdi::WdiExecuteScenario(hNet, &res);
+                    out << "  -> Execution Status: " << ((res.Status == wdi::WDI_S_NO_ISSUES_FOUND) ? "NO ISSUES FOUND (PASS)" : "ISSUES FOUND") << "\n";
+                    wdi::WdiFreeResult(&res);
+                    wdi::WdiCloseScenario(hNet);
+                }
+
+                out << "[TEST] 4. Testing Audio Diagnostics Issue Detection & Auto-Repair...\n";
+                wdi::WDI_SCENARIO_HANDLE hAudio = 0;
+                hr = wdi::WdiOpenScenario(L"AudioDiagnostics", &hAudio);
+                if (hr == 0 && hAudio) {
+                    auto session = wdi::WdiScenarioManager::get().findSession(hAudio);
+                    if (session && session->scenario) {
+                        auto audioScn = std::dynamic_pointer_cast<wdi::AudioDiagnosticsScenario>(session->scenario);
+                        if (audioScn) audioScn->induceMute();
+                    }
+
+                    wdi::WDI_DIAGNOSTIC_RESULT res{};
+                    wdi::WdiExecuteScenario(hAudio, &res);
+                    out << "  -> Detected Root Causes: " << res.RootCauseCount << "\n";
+                    if (res.RootCauseCount > 0) {
+                        out << "  -> Root Cause 0: " << wideToAscii(res.RootCauses[0].ProblemName ? res.RootCauses[0].ProblemName : L"") << "\n";
+                        bool resolved = false;
+                        int32_t hrRep = wdi::WdiApplyResolution(hAudio, 0, &resolved);
+                        out << "  -> WdiApplyResolution: " << ((hrRep == wdi::WDI_S_REPAIR_SUCCESSFUL && resolved) ? "REPAIRED (SUCCESS)" : "FAILED") << "\n";
+                    }
+                    wdi::WdiFreeResult(&res);
+                    wdi::WdiCloseScenario(hAudio);
+                }
+
+                out << "[TEST] 5. Querying DiagPerf Vitals & Bottleneck Collector...\n";
+                wdi::DIAGPERF_VITALS vitals{};
+                hrDiag = wdi::DiagPerfCollectVitals(&vitals);
+                out << "  -> DiagPerfCollectVitals: CPU=" << vitals.CpuUtilizationPercent << "% | RAM Available=" << vitals.AvailableMemoryMB << " MB\n";
+                uint32_t bCount = 0;
+                wdi::DiagPerfAnalyzeBottlenecks(&bCount, nullptr);
+                out << "  -> Bottlenecks Detected: " << bCount << "\n";
+
+                wdi::DiagPerfShutdown();
+                out << "[MSDT] Self-Test Finished Successfully.\n";
+                return;
+            }
+
+            // 2. msdt /list
+            if (sub == "/list" || sub == "-list" || sub == "list") {
+                uint32_t count = 0;
+                wdi::WdiGetScenarioCount(&count);
+                out << "\nMicrosoft Support Diagnostic Tool (MSDT)\n"
+                    << "Registered Diagnostic Scenarios: " << count << "\n\n"
+                    << std::left << std::setw(26) << "Scenario ID"
+                    << std::setw(16) << "Category"
+                    << "Friendly Name\n"
+                    << std::string(75, '-') << "\n";
+                for (uint32_t i = 0; i < count; ++i) {
+                    wdi::WDI_SCENARIO_DESCRIPTOR desc{};
+                    if (wdi::WdiGetScenarioDescriptor(i, &desc) == 0) {
+                        out << std::left << std::setw(26) << wideToAscii(desc.ScenarioId ? desc.ScenarioId : L"")
+                            << std::setw(16) << wideToAscii(desc.Category ? desc.Category : L"")
+                            << wideToAscii(desc.FriendlyName ? desc.FriendlyName : L"") << "\n";
+                    }
+                }
+                out << "\n";
+                return;
+            }
+        }
+
+        // Parse arguments: /id <scenario>, /repair
+        std::string scnId;
+        bool doRepair = false;
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            std::string t = tokens[i];
+            std::string lowerT = t;
+            std::transform(lowerT.begin(), lowerT.end(), lowerT.begin(), ::tolower);
+            if (lowerT.rfind("/id:", 0) == 0) {
+                scnId = t.substr(4);
+            } else if (lowerT == "/id" && i + 1 < tokens.size()) {
+                scnId = tokens[++i];
+            } else if (lowerT == "/repair" || lowerT == "/autofix") {
+                doRepair = true;
+            }
+        }
+
+        if (scnId.empty()) {
+            out << "\nMicrosoft Support Diagnostic Tool (MSDT)\n"
+                << "Version: 10.0.26100.1\n\n"
+                << "Usage:\n"
+                << "  msdt /id <ScenarioId> [/repair]    Run diagnostics on specified scenario\n"
+                << "  msdt /list                         List all registered diagnostic scenarios\n"
+                << "  msdt test                          Run WDI diagnostic subsystem self-test\n\n"
+                << "Available Scenarios:\n"
+                << "  NetworkDiagnostics, StorageDiagnostics, MemoryDiagnostics, AudioDiagnostics, PerformanceDiagnostics\n";
+            return;
+        }
+
+        std::wstring wScnId(scnId.begin(), scnId.end());
+        wdi::WDI_SCENARIO_HANDLE hScn = 0;
+        int32_t hr = wdi::WdiOpenScenario(wScnId.c_str(), &hScn);
+        if (hr != 0 || !hScn) {
+            out << "Error: Diagnostic scenario '" << scnId << "' was not found (0x" << std::hex << hr << std::dec << ").\n";
+            return;
+        }
+
+        out << "\n[MSDT] Diagnosing system scenario: " << scnId << "...\n";
+        wdi::WDI_DIAGNOSTIC_RESULT res{};
+        hr = wdi::WdiExecuteScenario(hScn, &res);
+        if (hr != 0) {
+            out << "Error: Diagnostic execution failed (0x" << std::hex << hr << std::dec << ").\n";
+            wdi::WdiCloseScenario(hScn);
+            return;
+        }
+
+        out << "Status: " << ((res.Status == wdi::WDI_S_NO_ISSUES_FOUND) ? "Healthy - No Issues Detected" : "Issues Identified")
+            << " (Execution Time: " << res.ExecutionTimeMs << " ms)\n"
+            << "Summary: " << (res.SummaryText ? wideToAscii(res.SummaryText) : "") << "\n\n";
+
+        if (res.RootCauseCount > 0) {
+            out << "Root Causes Identified (" << res.RootCauseCount << "):\n";
+            for (uint32_t i = 0; i < res.RootCauseCount; ++i) {
+                const auto& rc = res.RootCauses[i];
+                out << "  [" << (i + 1) << "] " << (rc.ProblemName ? wideToAscii(rc.ProblemName) : "") << "\n"
+                    << "      Description: " << (rc.Description ? wideToAscii(rc.Description) : "") << "\n"
+                    << "      Symptom:     " << (rc.Symptom ? wideToAscii(rc.Symptom) : "") << "\n"
+                    << "      Confidence:  " << rc.ConfidenceLevel << "%\n"
+                    << "      Resolution:  " << (rc.ResolutionDescription ? wideToAscii(rc.ResolutionDescription) : "") << "\n";
+
+                if (doRepair && rc.AutoFixAvailable) {
+                    bool resolved = false;
+                    int32_t repHr = wdi::WdiApplyResolution(hScn, i, &resolved);
+                    if (repHr == wdi::WDI_S_REPAIR_SUCCESSFUL && resolved) {
+                        out << "      Auto-Repair: SUCCESS - Applied resolution successfully.\n";
+                    } else {
+                        out << "      Auto-Repair: FAILED to apply resolution.\n";
+                    }
+                }
+                out << "\n";
+            }
+        }
+
+        wdi::WdiFreeResult(&res);
+        wdi::WdiCloseScenario(hScn);
+        out << "The diagnostic operation completed successfully.\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -108,7 +108,15 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 50: Windows Error Reporting (WER) Subsystem          [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 51: Windows Desktop Window Manager (DWM) Composition [IN PROGRESS]    │
+│ Phase 51: Windows Desktop Window Manager (DWM) Composition [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 52: Windows Audio Session API (WASAPI) & Core Audio  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 53: Windows Component-Based Servicing (CBS) & DISM   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 54: Windows Diagnostics Infrastructure (WDI & MSDT)  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 55: Windows Performance Monitor & Counters (PerfMon) [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1255,21 +1263,44 @@
 
 ---
 
-### Phase 54: Windows Diagnostics Infrastructure (WDI) & Scenario-Based Diagnostics Subsystem (`wdi.dll`, `diagperf.dll` & `msdt.exe`) (PLANNED)
-- [ ] **WDI Core APIs & Scenario Architecture (`include/micant/wdi.hpp`, `wdi.dll`)**:
-  - `WdiOpenScenario`, `WdiCloseScenario`, `WdiGetScenarioProperty`, `WdiSetScenarioProperty`, `WdiAddParameter`, `WdiExecuteScenario`, `WdiGetResult`.
-  - Scenario resolution: `NetworkDiagnosticsScenario`, `StorageDiagnosticsScenario`, `MemoryDiagnosticsScenario`, `AudioDiagnosticsScenario`.
-- [ ] **Diagnostic Data Collection & Root Cause Analysis (RCA)**:
-  - Integration with `wevtapi.hpp`, `polarisdiag.hpp`, `iphlpapi.hpp`, and `storage.hpp`.
-  - Automated diagnostic heuristics, symptom detection, and resolution suggestion engine.
-- [ ] **Dynamic Loader & SCM Integration**:
-  - Dynamic exports registered for `wdi.dll` and `diagperf.dll`.
-  - SCM service registration for `WdiSystemHost` and `WdiServiceHost` ("Diagnostic System Host").
-  - Version metadata registered in `version.hpp`.
-- [ ] **Interactive CLI Utility (`include/micant/shell.hpp` - `msdt`)**:
-  - `msdt /id NetworkDiagnostics`, `msdt /id StorageDiagnostics`, `msdt test`.
-- [ ] **Unit Test Suite 81 (`Test_WindowsWDI_DiagnosticsInfrastructure_Subsystem`)**:
-  - Comprehensive verification of diagnostic scenario execution, property queries, RCA results, SCM service, dynamic exports, and interactive CLI integration.
+### Phase 54: Windows Diagnostics Infrastructure (WDI) & Scenario-Based Diagnostics Subsystem (`wdi.dll`, `diagperf.dll` & `msdt.exe`) (100% Completed)
+- [x] **WDI Core APIs & Scenario Architecture (`include/micant/wdi.hpp`, `wdi.dll`)**:
+  - Implemented core WDI lifecycle APIs: `WdiOpenScenario`, `WdiCloseScenario`, `WdiSetScenarioProperty`, `WdiGetScenarioProperty`, `WdiAddParameter`, `WdiExecuteScenario`, `WdiApplyResolution`, `WdiFreeResult`, `WdiGetScenarioCount`, `WdiGetScenarioDescriptor`.
+  - Robust memory tracking hierarchy (`WdiMemoryTracker`) guaranteeing leak-free reclamation of dynamic root causes, symptoms, and log strings via `WdiFreeResult`.
+  - Implemented 5 built-in diagnostic scenarios: `NetworkDiagnostics`, `StorageDiagnostics`, `MemoryDiagnostics`, `AudioDiagnostics`, `PerformanceDiagnostics`.
+- [x] **Diagnostic Heuristics & Root Cause Analysis (RCA)**:
+  - Integrated diagnostic heuristics across TCP/IP stack, storage dirty flags/free space, DaytonaMM pool pressure, and WASAPI audio endpoint state.
+  - Automated self-healing repair execution (`WdiApplyResolution`) resolving network route anomalies, flushing corrupted DNS cache, repairing volume dirty bits, unmuting audio render endpoints, and starting dormant `AudioSrv` service daemons.
+- [x] **Performance Vitals & Collector Engine (`diagperf.dll`)**:
+  - Implemented `DiagPerfInitialize`, `DiagPerfShutdown`, `DiagPerfCollectVitals`, and `DiagPerfAnalyzeBottlenecks`.
+  - Real-time sampling of CPU utilization, physical/available RAM, executive paged/non-paged pool commits, disk I/O throughput, network throughput, and DPC dispatch latency.
+- [x] **Dynamic Loader & SCM Integration**:
+  - Registered 10 dynamic exports in `wdi.dll` and 4 dynamic exports in `diagperf.dll` in `ldr::DynamicLoader`.
+  - Registered SCM services `WdiSystemHost` and `WdiServiceHost` in `LocalSystemNetworkRestricted` and `LocalServiceNetworkRestricted` svchost groups.
+  - Module version metadata registered in `version.hpp` for `wdi.dll`, `diagperf.dll`, `msdt.exe`, and `wdisystemhost.exe` (`10.0.22621.1`).
+- [x] **Interactive CLI Utility (`include/micant/shell.hpp` - `msdt`)**:
+  - `msdt /?` / `msdt /help`: Full diagnostic command usage and scenario listing banner.
+  - `msdt /list`: Tabulates all registered diagnostic scenarios and category identities.
+  - `msdt /id <ScenarioId> [/repair]`: Executes specified diagnostic scenario with root-cause identification and automated self-healing fix application.
+  - `msdt test`: Executes comprehensive MSDT, WDI, and DiagPerf subsystem self-test.
+- [x] **Unit Test Suite 81 (`Test_WindowsWDI_DiagnosticsInfrastructure_Subsystem`)**:
+  - 12 comprehensive validation stages covering dynamic exports, version database, SCM service registration, scenario enumeration, scenario lifecycle, properties & parameters, NetworkDiagnostics execution, StorageDiagnostics dirty bit detection & repair, AudioDiagnostics auto-fix, Memory/Performance execution, DiagPerf vitals collector, and interactive shell CLI commands.
+  - All 81 unit test suites passing with 100% success rate (81 Passed, 0 Failed).
+
+---
+
+### Phase 55: Windows Performance Monitor & Performance Counter Architecture (PerfMon / PDH) (`pdh.dll`, `perflib.dll`, `perfmon.exe` & `pla.dll`) (PLANNED)
+- [ ] **Performance Data Helper (PDH) APIs (`include/micant/pdh.hpp`, `pdh.dll`)**:
+  - `PdhOpenQuery`, `PdhCloseQuery`, `PdhAddCounter`, `PdhAddEnglishCounter`, `PdhRemoveCounter`, `PdhCollectQueryData`, `PdhGetFormattedCounterValue`, `PdhEnumObjects`, `PdhEnumObjectItems`, `PdhValidatePath`.
+  - Standard performance object queries (`\Processor(_Total)\% Processor Time`, `\Memory\Available MBytes`, `\System\Threads`, `\PhysicalDisk(_Total)\Disk Read Bytes/sec`, etc.).
+- [ ] **Perflib & Performance Counter Provider Engine (`perflib.dll`)**:
+  - Counter registry / schema definitions, raw counter reading, counter formatting (double, int64, percent).
+- [ ] **SCM Service Integration**:
+  - Performance Counter DLL Host (`PerfHost`) and Performance Logs and Alerts (`pla`).
+- [ ] **Interactive CLI Utility (`include/micant/shell.hpp` - `perfmon` / `typeperf`)**:
+  - `typeperf "\Processor(_Total)\% Processor Time" -sc 1`, `perfmon /counters`, `perfmon test`.
+- [ ] **Unit Test Suite 82 (`Test_WindowsPDH_PerformanceMonitor_Subsystem`)**:
+  - Comprehensive verification of PDH queries, counters, formatting, SCM service, dynamic exports, and interactive CLI integration.
 
 
 
