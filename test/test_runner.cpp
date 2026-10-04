@@ -122,6 +122,7 @@
 #include "micant/cardmod.hpp"
 #include "micant/posix.hpp"
 #include "micant/whp.hpp"
+#include "micant/dwrite.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -21711,6 +21712,300 @@ void Test_WindowsHypervisor_Platform_Subsystem() {
     std::cout << "[TEST] Suite 100: Windows Hypervisor Platform (WHP) & Virtualization Architecture PASSED.\n";
 }
 
+void Test_WindowsDirectWrite_Uniscribe_Subsystem() {
+    std::cout << "[TEST] Suite 101: Running Windows DirectWrite & Uniscribe Typography Tests...\n";
+
+    auto& ldr = ldr::DynamicLoader::get();
+    dwrite::InitializeDirectWriteExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (DWrite.dll / usp10.dll)
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(ldr.getExport("DWrite.dll", "DWriteCreateFactory") != nullptr, "DWrite.dll must export DWriteCreateFactory");
+    TEST_ASSERT(ldr.getExport("usp10.dll", "ScriptItemize") != nullptr, "usp10.dll must export ScriptItemize");
+    TEST_ASSERT(ldr.getExport("usp10.dll", "ScriptShape") != nullptr, "usp10.dll must export ScriptShape");
+    TEST_ASSERT(ldr.getExport("usp10.dll", "ScriptPlace") != nullptr, "usp10.dll must export ScriptPlace");
+    TEST_ASSERT(ldr.getExport("usp10.dll", "ScriptTextOut") != nullptr, "usp10.dll must export ScriptTextOut");
+    TEST_ASSERT(ldr.getExport("usp10.dll", "ScriptBreak") != nullptr, "usp10.dll must export ScriptBreak");
+    TEST_ASSERT(ldr.getExport("usp10.dll", "ScriptGetProperties") != nullptr, "usp10.dll must export ScriptGetProperties");
+    TEST_ASSERT(ldr.getExport("usp10.dll", "ScriptFreeCache") != nullptr, "usp10.dll must export ScriptFreeCache");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verDw = version::VersionDatabase::Instance().FindModule("DWrite.dll");
+        TEST_ASSERT(verDw != nullptr, "VersionDatabase must contain DWrite.dll");
+        TEST_ASSERT(verDw->stringTable.at("FileDescription") == "Microsoft DirectWrite", "DWrite.dll description match");
+        TEST_ASSERT(verDw->stringTable.at("OriginalFilename") == "DWrite.dll", "DWrite.dll original filename match");
+        TEST_ASSERT(verDw->stringTable.at("ProductName") == "MicaNT DirectWrite Typography Subsystem", "DWrite.dll product name match");
+
+        const auto* verUsp = version::VersionDatabase::Instance().FindModule("usp10.dll");
+        TEST_ASSERT(verUsp != nullptr, "VersionDatabase must contain usp10.dll");
+        TEST_ASSERT(verUsp->stringTable.at("FileDescription") == "Uniscribe Unicode Script Processor", "usp10.dll description match");
+        TEST_ASSERT(verUsp->stringTable.at("OriginalFilename") == "usp10.dll", "usp10.dll original filename match");
+        TEST_ASSERT(verUsp->stringTable.at("ProductName") == "MicaNT Uniscribe Subsystem", "usp10.dll product name match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: DirectWrite Factory Lifecycle
+    // ------------------------------------------------------------------------
+    ole32::IUnknown* pUnk = nullptr;
+    int32_t hr = dwrite::DWriteCreateFactory(
+        dwrite::DWRITE_FACTORY_TYPE_SHARED,
+        dwrite::IID_IDWriteFactory,
+        &pUnk
+    );
+    TEST_ASSERT(hr == ole32::S_OK, "DWriteCreateFactory must succeed");
+    TEST_ASSERT(pUnk != nullptr, "Factory pointer must be non-null");
+
+    auto* factory = static_cast<dwrite::IDWriteFactory*>(pUnk);
+
+    // ------------------------------------------------------------------------
+    // Stage 4: System Font Collection Discovery
+    // ------------------------------------------------------------------------
+    dwrite::IDWriteFontCollection* fontColl = nullptr;
+    hr = factory->GetSystemFontCollection(&fontColl);
+    TEST_ASSERT(hr == ole32::S_OK, "GetSystemFontCollection must succeed");
+    TEST_ASSERT(fontColl != nullptr, "Font collection pointer must be non-null");
+
+    uint32_t familyCount = fontColl->GetFontFamilyCount();
+    TEST_ASSERT(familyCount >= 5, "Font collection must contain at least 5 standard families");
+
+    uint32_t segoeIdx = 0;
+    int32_t exists = 0;
+    hr = fontColl->FindFamilyName(L"Segoe UI", &segoeIdx, &exists);
+    TEST_ASSERT(hr == ole32::S_OK && exists == 1, "Segoe UI font family must exist");
+
+    uint32_t consolasIdx = 0;
+    hr = fontColl->FindFamilyName(L"Consolas", &consolasIdx, &exists);
+    TEST_ASSERT(hr == ole32::S_OK && exists == 1, "Consolas font family must exist");
+
+    uint32_t nonExistentIdx = 0;
+    hr = fontColl->FindFamilyName(L"NonExistentFontXYZ", &nonExistentIdx, &exists);
+    TEST_ASSERT(hr == ole32::S_OK && exists == 0, "Non-existent font query must report exists == 0");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Font Family & Font Face Enumeration
+    // ------------------------------------------------------------------------
+    dwrite::IDWriteFontFamily* family = nullptr;
+    hr = fontColl->GetFontFamily(segoeIdx, &family);
+    TEST_ASSERT(hr == ole32::S_OK && family != nullptr, "GetFontFamily must return valid family");
+
+    uint32_t fontCount = family->GetFontCount();
+    TEST_ASSERT(fontCount >= 3, "Segoe UI family must contain at least 3 faces (Regular, Bold, Italic)");
+
+    dwrite::IDWriteLocalizedStrings* famNames = nullptr;
+    hr = family->GetFamilyNames(&famNames);
+    TEST_ASSERT(hr == ole32::S_OK && famNames != nullptr, "GetFamilyNames must succeed");
+    wchar_t nameBuf[64]{};
+    hr = famNames->GetString(0, nameBuf, 64);
+    TEST_ASSERT(hr == ole32::S_OK && std::wcscmp(nameBuf, L"Segoe UI") == 0, "Family name must match 'Segoe UI'");
+    famNames->Release();
+
+    dwrite::IDWriteFont* font = nullptr;
+    hr = family->GetFont(0, &font);
+    TEST_ASSERT(hr == ole32::S_OK && font != nullptr, "GetFont(0) must return valid font");
+    TEST_ASSERT(font->GetWeight() == dwrite::DWRITE_FONT_WEIGHT_NORMAL, "Face 0 weight must be NORMAL (400)");
+    TEST_ASSERT(font->GetStyle() == dwrite::DWRITE_FONT_STYLE_NORMAL, "Face 0 style must be NORMAL");
+
+    dwrite::IDWriteFont* boldFont = nullptr;
+    hr = family->GetFont(1, &boldFont);
+    TEST_ASSERT(hr == ole32::S_OK && boldFont != nullptr, "GetFont(1) must return valid bold font");
+    TEST_ASSERT(boldFont->GetWeight() == dwrite::DWRITE_FONT_WEIGHT_BOLD, "Face 1 weight must be BOLD (700)");
+    boldFont->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Font Face Creation & Metrics Query
+    // ------------------------------------------------------------------------
+    dwrite::IDWriteFontFace* fontFace = nullptr;
+    hr = font->CreateFontFace(&fontFace);
+    TEST_ASSERT(hr == ole32::S_OK && fontFace != nullptr, "CreateFontFace must succeed");
+
+    dwrite::DWRITE_FONT_METRICS fm{};
+    fontFace->GetMetrics(&fm);
+    TEST_ASSERT(fm.designUnitsPerEm == 2048, "designUnitsPerEm must be 2048");
+    TEST_ASSERT(fm.ascent == 1854, "ascent must be 1854");
+    TEST_ASSERT(fm.descent == 434, "descent must be 434");
+
+    uint32_t codepoints[4] = { 'M', 'i', 'c', 'a' };
+    uint16_t glyphIndices[4]{};
+    hr = fontFace->GetGlyphIndices(codepoints, 4, glyphIndices);
+    TEST_ASSERT(hr == ole32::S_OK, "GetGlyphIndices must succeed");
+    TEST_ASSERT(glyphIndices[0] == 'M' && glyphIndices[1] == 'i', "Mapped glyph indices match codepoints");
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Text Format Configuration
+    // ------------------------------------------------------------------------
+    dwrite::IDWriteTextFormat* format = nullptr;
+    hr = factory->CreateTextFormat(
+        L"Segoe UI", nullptr,
+        dwrite::DWRITE_FONT_WEIGHT_NORMAL,
+        dwrite::DWRITE_FONT_STYLE_NORMAL,
+        dwrite::DWRITE_FONT_STRETCH_NORMAL,
+        14.0f, L"en-us", &format
+    );
+    TEST_ASSERT(hr == ole32::S_OK && format != nullptr, "CreateTextFormat must succeed");
+    TEST_ASSERT(format->GetFontSize() == 14.0f, "GetFontSize must return 14.0f");
+    TEST_ASSERT(format->GetFontWeight() == dwrite::DWRITE_FONT_WEIGHT_NORMAL, "GetFontWeight must return NORMAL");
+
+    hr = format->SetTextAlignment(dwrite::DWRITE_TEXT_ALIGNMENT_CENTER);
+    TEST_ASSERT(hr == ole32::S_OK && format->GetTextAlignment() == dwrite::DWRITE_TEXT_ALIGNMENT_CENTER, "SetTextAlignment to CENTER");
+
+    hr = format->SetWordWrapping(dwrite::DWRITE_WORD_WRAPPING_WHOLE_WORD);
+    TEST_ASSERT(hr == ole32::S_OK && format->GetWordWrapping() == dwrite::DWRITE_WORD_WRAPPING_WHOLE_WORD, "SetWordWrapping to WHOLE_WORD");
+
+    // ------------------------------------------------------------------------
+    // Stage 8: OpenType Typography Features
+    // ------------------------------------------------------------------------
+    dwrite::IDWriteTypography* typography = nullptr;
+    hr = factory->CreateTypography(&typography);
+    TEST_ASSERT(hr == ole32::S_OK && typography != nullptr, "CreateTypography must succeed");
+
+    hr = typography->AddFontFeature(0x6C696761, 1); // 'liga'
+    TEST_ASSERT(hr == ole32::S_OK, "AddFontFeature 'liga' must succeed");
+    hr = typography->AddFontFeature(0x6B65726E, 1); // 'kern'
+    TEST_ASSERT(hr == ole32::S_OK, "AddFontFeature 'kern' must succeed");
+    TEST_ASSERT(typography->GetFontFeatureCount() == 2, "GetFontFeatureCount must return 2");
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Subpixel ClearType Rendering Parameters
+    // ------------------------------------------------------------------------
+    dwrite::IDWriteRenderingParams* defaultParams = nullptr;
+    hr = factory->CreateRenderingParams(&defaultParams);
+    TEST_ASSERT(hr == ole32::S_OK && defaultParams != nullptr, "CreateRenderingParams must succeed");
+    TEST_ASSERT(defaultParams->GetGamma() == 2.2f, "Default gamma must be 2.2f");
+    TEST_ASSERT(defaultParams->GetPixelGeometry() == dwrite::DWRITE_PIXEL_GEOMETRY_RGB, "Default pixel geometry must be RGB");
+
+    dwrite::IDWriteRenderingParams* customParams = nullptr;
+    hr = factory->CreateCustomRenderingParams(
+        1.8f, 1.2f, 0.9f,
+        dwrite::DWRITE_PIXEL_GEOMETRY_BGR,
+        dwrite::DWRITE_RENDERING_MODE_CLEARTYPE_GDI_CLASSIC,
+        &customParams
+    );
+    TEST_ASSERT(hr == ole32::S_OK && customParams != nullptr, "CreateCustomRenderingParams must succeed");
+    TEST_ASSERT(customParams->GetGamma() == 1.8f, "Custom gamma match");
+    TEST_ASSERT(customParams->GetEnhancedContrast() == 1.2f, "Custom contrast match");
+    TEST_ASSERT(customParams->GetClearTypeLevel() == 0.9f, "Custom ClearType level match");
+    TEST_ASSERT(customParams->GetPixelGeometry() == dwrite::DWRITE_PIXEL_GEOMETRY_BGR, "Custom pixel geometry match");
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Text Layout Engine & Metrics Analysis
+    // ------------------------------------------------------------------------
+    const wchar_t sampleText[] = L"MicaNT Modern C++23 Clean-Room Sovereign OS Executive";
+    dwrite::IDWriteTextLayout* layout = nullptr;
+    hr = factory->CreateTextLayout(
+        sampleText, static_cast<uint32_t>(std::wcslen(sampleText)),
+        format, 300.0f, 200.0f, &layout
+    );
+    TEST_ASSERT(hr == ole32::S_OK && layout != nullptr, "CreateTextLayout must succeed");
+    TEST_ASSERT(layout->GetMaxWidth() == 300.0f, "Layout MaxWidth must be 300.0f");
+    TEST_ASSERT(layout->GetMaxHeight() == 200.0f, "Layout MaxHeight must be 200.0f");
+
+    dwrite::DWRITE_TEXT_METRICS tm{};
+    hr = layout->GetMetrics(&tm);
+    TEST_ASSERT(hr == ole32::S_OK, "GetMetrics must succeed");
+    TEST_ASSERT(tm.width > 0.0f && tm.height > 0.0f, "Calculated text dimensions are positive");
+    TEST_ASSERT(tm.lineCount >= 1, "Layout must contain at least 1 line");
+
+    dwrite::DWRITE_LINE_METRICS lm[4]{};
+    uint32_t actualLines = 0;
+    hr = layout->GetLineMetrics(lm, 4, &actualLines);
+    TEST_ASSERT(hr == ole32::S_OK && actualLines >= 1, "GetLineMetrics must succeed");
+
+    dwrite::DWRITE_CLUSTER_METRICS cm[64]{};
+    uint32_t actualClusters = 0;
+    hr = layout->GetClusterMetrics(cm, 64, &actualClusters);
+    TEST_ASSERT(hr == ole32::S_OK && actualClusters == std::wcslen(sampleText), "GetClusterMetrics must return cluster per character");
+
+    // Range-based formatting updates
+    dwrite::DWRITE_TEXT_RANGE range{ 0, 6 }; // "MicaNT"
+    hr = layout->SetFontWeight(dwrite::DWRITE_FONT_WEIGHT_BOLD, range);
+    TEST_ASSERT(hr == ole32::S_OK, "SetFontWeight on range must succeed");
+    hr = layout->SetUnderline(1, range);
+    TEST_ASSERT(hr == ole32::S_OK, "SetUnderline on range must succeed");
+    hr = layout->SetStrikethrough(1, range);
+    TEST_ASSERT(hr == ole32::S_OK, "SetStrikethrough on range must succeed");
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Uniscribe Complex Script Processing (usp10.dll)
+    // ------------------------------------------------------------------------
+    {
+        dwrite::SCRIPT_ITEM items[4]{};
+        int32_t cItems = 0;
+        hr = dwrite::ScriptItemize(sampleText, 6, 4, nullptr, nullptr, items, &cItems);
+        TEST_ASSERT(hr == ole32::S_OK && cItems == 1, "ScriptItemize must return 1 item run for Latin text");
+        TEST_ASSERT(items[0].iCharPos == 0 && items[0].a.eScript == 1, "Run 0 starts at pos 0 with Latin script ID");
+
+        uint16_t glyphs[16]{};
+        uint16_t logClust[16]{};
+        dwrite::SCRIPT_VISATTR visAttrs[16]{};
+        int32_t cGlyphs = 0;
+        hr = dwrite::ScriptShape(nullptr, nullptr, sampleText, 6, 16, &items[0].a, glyphs, logClust, visAttrs, &cGlyphs);
+        TEST_ASSERT(hr == ole32::S_OK && cGlyphs == 6, "ScriptShape must shape 6 glyphs");
+
+        int32_t advances[16]{};
+        hr = dwrite::ScriptPlace(nullptr, nullptr, glyphs, cGlyphs, visAttrs, &items[0].a, advances, nullptr, nullptr);
+        TEST_ASSERT(hr == ole32::S_OK, "ScriptPlace must calculate advance widths");
+        TEST_ASSERT(advances[0] == 10 && advances[5] == 10, "Advance width per glyph verified");
+
+        dwrite::SCRIPT_LOGATTR logAttrs[16]{};
+        hr = dwrite::ScriptBreak(sampleText, 6, &items[0].a, logAttrs);
+        TEST_ASSERT(hr == ole32::S_OK, "ScriptBreak must return logical break attributes");
+        TEST_ASSERT(logAttrs[0].fCharStop == 1, "Character stop at pos 0");
+
+        const dwrite::SCRIPT_PROPERTIES** ppProps = nullptr;
+        int32_t numScripts = 0;
+        hr = dwrite::ScriptGetProperties(&ppProps, &numScripts);
+        TEST_ASSERT(hr == ole32::S_OK && numScripts >= 1, "ScriptGetProperties must return at least 1 script property table");
+        TEST_ASSERT(ppProps[0]->langid == 0x0409, "Script 0 language ID is 0x0409 (en-US)");
+
+        dwrite::SCRIPT_CACHE cache = reinterpret_cast<dwrite::SCRIPT_CACHE>(0x1234);
+        hr = dwrite::ScriptFreeCache(&cache);
+        TEST_ASSERT(hr == ole32::S_OK && cache == nullptr, "ScriptFreeCache clears cache pointer");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Interactive Shell Integration (cmdDWrite)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // dwrite test
+        shell.execute("dwrite test", out);
+        TEST_ASSERT(out.str().find("[DWRITE] Self-Test Completed: ALL 16 TESTS PASSED (100%).") != std::string::npos, "dwrite test must pass all 16 tests");
+
+        // dwrite fonts
+        out.str("");
+        shell.execute("dwrite fonts", out);
+        TEST_ASSERT(out.str().find("Segoe UI") != std::string::npos, "dwrite fonts shows Segoe UI");
+        TEST_ASSERT(out.str().find("Consolas") != std::string::npos, "dwrite fonts shows Consolas");
+        TEST_ASSERT(out.str().find("Cascadia Code") != std::string::npos, "dwrite fonts shows Cascadia Code");
+
+        // dwrite layout
+        out.str("");
+        shell.execute("dwrite layout TestTypography", out);
+        TEST_ASSERT(out.str().find("DirectWrite Typography Layout Inspection") != std::string::npos, "dwrite layout shows inspection header");
+        TEST_ASSERT(out.str().find("Text Width:") != std::string::npos, "dwrite layout shows text width");
+    }
+
+    // Cleanup COM instances
+    layout->Release();
+    customParams->Release();
+    defaultParams->Release();
+    typography->Release();
+    format->Release();
+    fontFace->Release();
+    font->Release();
+    family->Release();
+    fontColl->Release();
+    factory->Release();
+
+    std::cout << "[TEST] Suite 101: Windows DirectWrite & Uniscribe Typography Architecture PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -21816,6 +22111,7 @@ int main() {
     RUN_TEST(Test_WindowsSmartCardMinidriver_Subsystem);
     RUN_TEST(Test_WindowsPOSIX_Subsystem);
     RUN_TEST(Test_WindowsHypervisor_Platform_Subsystem);
+    RUN_TEST(Test_WindowsDirectWrite_Uniscribe_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

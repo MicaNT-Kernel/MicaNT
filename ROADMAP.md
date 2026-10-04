@@ -154,7 +154,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 73: Windows Hypervisor & Virtualization Architecture [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 74: DirectWrite & Uniscribe Typography Subsystem     [PLANNED]        │
+│ Phase 74: DirectWrite & Uniscribe Typography Subsystem     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 75: Windows Media Foundation & Core Audio/Video      [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1725,24 +1727,49 @@
 
 ---
 
-### Phase 74: Windows DirectWrite & Uniscribe Advanced Typography Architecture (`dwrite.hpp`, `DWrite.dll`, `usp10.dll`) (PLANNED)
-- [ ] **Clean-Room Windows DirectWrite Subsystem (`include/micant/dwrite.hpp`, `DWrite.dll`)**:
+### Phase 74: Windows DirectWrite & Uniscribe Advanced Typography Architecture (`dwrite.hpp`, `DWrite.dll`, `usp10.dll`) (100% Completed - MILESTONE 101)
+- [x] **Clean-Room Windows DirectWrite Subsystem (`include/micant/dwrite.hpp`, `DWrite.dll`)**:
   - DirectWrite Factory creation and interfaces (`DWriteCreateFactory`, `IDWriteFactory`, `IDWriteFactory1`, `IDWriteFactory2`).
   - Text format and layout modeling (`IDWriteTextFormat`, `IDWriteTextLayout`, `IDWriteTypography`, `IDWriteInlineObject`).
   - System font collection and discovery (`IDWriteFontCollection`, `IDWriteFontFamily`, `IDWriteFont`, `IDWriteFontFace`, `IDWriteFontList`).
   - Font file loading and parsing (`IDWriteFontFile`, `IDWriteFontFileLoader`, `IDWriteFontFileStream`).
   - Subpixel ClearType rendering parameter configuration (`IDWriteRenderingParams`).
-- [ ] **Clean-Room Uniscribe Complex Script Processor (`usp10.dll`)**:
-  - Uniscribe script shaping and glyph layout APIs (`ScriptItemize`, `ScriptShape`, `ScriptPlace`, `ScriptTextOut`, `ScriptBreak`, `ScriptGetProperties`).
+- [x] **Clean-Room Uniscribe Complex Script Processor (`usp10.dll`)**:
+  - Uniscribe script shaping and glyph layout APIs (`ScriptItemize`, `ScriptShape`, `ScriptPlace`, `ScriptTextOut`, `ScriptBreak`, `ScriptGetProperties`, `ScriptFreeCache`).
   - Bi-directional text ordering, complex Arabic/Hebrew/Devanagari ligature substitution, and font metric metrics cache (`SCRIPT_CACHE`).
   - Dynamic module export registration in `ldr::DynamicLoader` for `DWrite.dll` and `usp10.dll`.
   - Version database registration in `VersionDatabase` for `DWrite.dll` and `usp10.dll`.
-- [ ] **Interactive CLI Utilities (`dwrite` / `uniscribe`)**:
-  - `dwrite test` (Executes typography formatting, layout shaping, font enumeration, and ClearType rendering verification).
+- [x] **Interactive CLI Utilities (`dwrite` / `uniscribe`)**:
+  - `dwrite test` (Executes typography formatting, layout shaping, font enumeration, and ClearType rendering verification: 16/16 passed).
   - `dwrite fonts` (Lists discovered and system font families).
-  - `dwrite render` (Simulates glyph run formatting and layout metrics).
-- [ ] **Unit Test Suite 101 (`Test_WindowsDirectWrite_Uniscribe_Subsystem`)**:
+  - `dwrite layout` (Simulates glyph run formatting and layout metrics).
+- [x] **Unit Test Suite 101 (`Test_WindowsDirectWrite_Uniscribe_Subsystem`)**:
   - Comprehensive unit test suite validating DirectWrite interfaces, font collection query, text formatting, Uniscribe shaping, and CLI commands.
+  - Milestone 101: **101 / 101 Test Suites Passing (100%)**.
+
+---
+
+### Phase 75: Windows Media Foundation & Core Audio/Video Processing Subsystem (`mfplat.hpp`, `mfplat.dll`, `mf.dll`, `mfreadwrite.dll`) (PLANNED)
+- [ ] **Clean-Room Windows Media Foundation Platform (`include/micant/mfplat.hpp`, `mfplat.dll`)**:
+  - Media Foundation startup and shutdown lifecycle (`MFStartup`, `MFShutdown`).
+  - Core asynchronous callback and work queue engine (`MFCreateAsyncResult`, `MFInvokeCallback`, `MFAllocateWorkQueue`, `MFUnlockWorkQueue`).
+  - Media Foundation byte stream and memory buffer architecture (`IMFByteStream`, `IMFMediaBuffer`, `MFCreateMemoryBuffer`).
+  - Sample containers and timestamps (`IMFSample`, `MFCreateSample`).
+  - Media event generation and event queues (`IMFMediaEvent`, `IMFMediaEventQueue`, `MFCreateEventQueue`).
+  - Attribute stores and metadata dictionaries (`IMFAttributes`, `MFCreateAttributes`).
+- [ ] **Clean-Room Media Foundation Core Pipeline & Transform Engine (`mf.dll`, `mfreadwrite.dll`)**:
+  - Media Foundation Transforms (MFT) architecture (`IMFTransform`, `MFTRegister`, `MFTEnumEx`).
+  - Source Reader & Sink Writer pipeline (`IMFSourceReader`, `IMFSinkWriter`, `MFCreateSourceReaderFromByteStream`, `MFCreateSinkWriterFromURL`).
+  - Media topology and media session lifecycle (`IMFTopology`, `IMFTopologyNode`, `IMFMediaSession`, `MFCreateMediaSession`).
+  - Dynamic module export registration in `ldr::DynamicLoader` for `mfplat.dll`, `mf.dll`, and `mfreadwrite.dll`.
+  - Version database registration in `VersionDatabase` for `mfplat.dll`, `mf.dll`, and `mfreadwrite.dll`.
+- [ ] **Interactive CLI Utilities (`mf` / `mediafoundation`)**:
+  - `mf test` (Executes MF initialization, attribute stores, samples, transforms, and pipeline verification).
+  - `mf transforms` (Lists discovered media transforms and decoders).
+  - `mf session` (Simulates media session topology playback).
+- [ ] **Unit Test Suite 102 (`Test_WindowsMediaFoundation_Subsystem`)**:
+  - Comprehensive unit test suite validating Media Foundation platform initialization, attribute stores, sample buffers, transforms, and CLI commands.
+
 
 
 
