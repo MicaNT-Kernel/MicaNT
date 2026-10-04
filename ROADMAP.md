@@ -1563,22 +1563,42 @@
 
 ---
 
-### Phase 67: Windows Portable Devices (WPD) & Device Information Subsystem (`portabledeviceapi.dll`, `wpd_ci.dll`, `wpdmtp.dll`) (PLANNED)
-- [ ] **Clean-Room Windows Portable Devices Architecture (`include/micant/wpd.hpp`, `portabledeviceapi.dll`, `wpd_ci.dll`)**:
-  - WPD COM interfaces: `IPortableDeviceManager`, `IPortableDevice`, `IPortableDeviceContent`, `IPortableDeviceProperties`, `IPortableDeviceResources`, `IPortableDeviceCapabilities`, `IEnumPortableDeviceObjectIDs`.
-  - MTP / PTP object model: functional categories (Storage, Audio, Video, StillImage), object hierarchy, metadata properties (Object Name, Size, MIME Type, Creation Time).
-  - Sovereign Portable Device Manager (`PortableDeviceManager`): connected device enumeration (e.g. simulated sovereign storage phone / camera), device capability querying, content browsing and property inspection.
-  - Dynamic export registration in `ldr::DynamicLoader` for `portabledeviceapi.dll` and `wpd_ci.dll`.
+### Phase 67: Windows Portable Devices (WPD) & Device Information Subsystem (`portabledeviceapi.dll`, `wpd_ci.dll`, `WpdBusEnum`) (100% Completed)
+- [x] **Clean-Room Windows Portable Devices Architecture (`include/micant/wpd.hpp`, `portabledeviceapi.dll`, `wpd_ci.dll`)**:
+  - WPD COM interfaces: `IPortableDeviceManager`, `IPortableDevice`, `IPortableDeviceContent`, `IPortableDeviceProperties`, `IPortableDeviceResources`, `IPortableDeviceCapabilities`, `IEnumPortableDeviceObjectIDs`, `IPortableDeviceValues`, `IPortableDeviceKeyCollection`, `IPortableDevicePropVariantCollection`.
+  - MTP / PTP object model: functional categories (`WPD_FUNCTIONAL_CATEGORY_STORAGE`, `DEVICE`, `STILL_IMAGE_CAPTURE`, `AUDIO_CAPTURE`), object hierarchy, metadata properties (`WPD_OBJECT_NAME`, `SIZE`, `CONTENT_TYPE`, `DEVICE_FRIENDLY_NAME`, `MANUFACTURER`, `MODEL`, `POWER_LEVEL`).
+  - Sovereign Portable Device Manager (`PortableDeviceManager`): connected device enumeration (pre-seeded sovereign companion smartphone MicaPhone M1 / Titan 100 with internal storage, DCIM, Documents, and Music folders), device capability querying, content browsing, and property inspection.
+  - Dynamic export registration in `ldr::DynamicLoader` for `portabledeviceapi.dll` (`DllGetClassObject`, `DllCanUnloadNow`, `DllRegisterServer`, `DllUnregisterServer`, `WpdCreateDeviceManager`, `WpdGetDeviceCount`) and `wpd_ci.dll` (`WpdClassInstaller`).
   - Version database records in `VersionDatabase` for `portabledeviceapi.dll` and `wpd_ci.dll`.
-- [ ] **SCM Portable Device Services**:
-  - `WpdUpFltr` / `WpdBusEnum` ("Windows Portable Device Enumerator Service", svchost `LocalSystemNetworkRestricted`).
-- [ ] **Interactive CLI Utilities (`wpd` / `pdevice`)**:
-  - `wpd list` (Lists connected Windows Portable Devices and functional categories).
-  - `wpd browse [deviceId]` (Browses root and child storage objects on a portable device).
-  - `wpd info <deviceId>` (Queries device manufacturer, model, serial number, and battery level).
-  - `wpd test` (Executes self-test of `IPortableDeviceManager` and `IPortableDevice` COM interfaces).
-- [ ] **Unit Test Suite 94 (`Test_WindowsWPD_PortableDevices_Subsystem`)**:
-  - Automated validation of WPD COM interfaces, device enumeration, object hierarchy traversal, SCM service records, and CLI commands.
+- [x] **SCM Portable Device Services**:
+  - `WpdBusEnum` ("Windows Portable Device Enumerator Service", svchost `LocalSystemNetworkRestricted`, PID 1158).
+- [x] **Interactive CLI Utilities (`wpd` / `pdevice`)**:
+  - `wpd list` (Lists connected Windows Portable Devices and operational status).
+  - `wpd browse [folderId]` (Browses root and child storage objects on a portable device, including DCIM and media assets).
+  - `wpd info [deviceId]` (Queries device manufacturer, model, serial number, active objects, and battery level).
+  - `wpd test` (Executes end-to-end self-test of `IPortableDeviceManager`, `IPortableDevice`, `IPortableDeviceContent`, and capabilities).
+- [x] **Unit Test Suite 94 (`Test_WindowsWPD_PortableDevices_Subsystem`)**:
+  - Automated validation of WPD COM interfaces, device enumeration, object hierarchy traversal, SCM service records, C client APIs, and CLI commands.
+  - All 94 unit test suites passing with 100% success rate (94 Passed, 0 Failed).
+
+---
+
+### Phase 68: Windows Sensors API & Sensor Class Extension Subsystem (`sensorsapi.dll`, `sensorsclassextension.dll`, `SensorDataService`) (PLANNED)
+- [ ] **Clean-Room Windows Sensors Architecture (`include/micant/sensors.hpp`, `sensorsapi.dll`, `sensorsclassextension.dll`)**:
+  - Sensors COM interfaces: `ISensorManager`, `ISensorCollection`, `ISensor`, `ISensorDataReport`, `ISensorEvents`, `ISensorClassExtension`.
+  - Sensor Categories & Types: Accelerometer 3D, Ambient Light Sensor (ALS), Compass / Magnetometer, Gyroscope, Orientation / Inclinometer, Barometer, Proximity.
+  - Sensor Data Fields: Acceleration X/Y/Z, Lux illumination, Heading / Magnetic flux, Angular velocity, Pitch / Roll / Yaw, Atmospheric pressure.
+  - Sovereign Sensor Manager (`SensorManager`): hardware / virtual sensor discovery, permission state management, threshold and interval configuration, asynchronous event dispatch.
+  - Dynamic export registration in `ldr::DynamicLoader` for `sensorsapi.dll` and `sensorsclassextension.dll`.
+  - Version database records in `VersionDatabase` for `sensorsapi.dll` and `sensorsclassextension.dll`.
+- [ ] **SCM Sensor Daemons**:
+  - `SensorDataService` ("Sensor Data Service", svchost `LocalService`, demand start).
+- [ ] **Interactive CLI Utilities (`sensor` / `sensors`)**:
+  - `sensor list` (Lists detected sensors, categories, operational states, and connection types).
+  - `sensor read [sensorId]` (Reads real-time data report from accelerometer, light sensor, compass, etc.).
+  - `sensor test` (Executes self-test of `ISensorManager` and `ISensorDataReport` COM interfaces).
+- [ ] **Unit Test Suite 95 (`Test_WindowsSensors_Subsystem`)**:
+  - Automated validation of Sensors COM interfaces, data reports, event listeners, SCM service records, and CLI commands.
 
 
 

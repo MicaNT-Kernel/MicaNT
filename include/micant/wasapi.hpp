@@ -165,6 +165,7 @@ struct PROPERTYKEY {
 };
 
 inline constexpr uint16_t VT_BLOB = 65;
+inline constexpr uint16_t VT_CLSID = 72;
 
 struct PROPVARIANT {
     uint16_t vt{0};
@@ -186,6 +187,7 @@ struct PROPVARIANT {
         wchar_t* pwszVal;
         char*    pszVal;
         void*    punkVal;
+        GUID*    puuid;
         struct {
             uint32_t cbSize;
             uint8_t* pBlobData;
@@ -205,6 +207,8 @@ inline ole32::HRESULT PropVariantClear(PROPVARIANT* pvar) noexcept {
         ole32::CoTaskMemFree(pvar->pszVal);
     } else if (pvar->vt == VT_BLOB && pvar->blob.pBlobData) {
         ole32::CoTaskMemFree(pvar->blob.pBlobData);
+    } else if (pvar->vt == VT_CLSID && pvar->puuid) {
+        ole32::CoTaskMemFree(pvar->puuid);
     }
     std::memset(pvar, 0, sizeof(PROPVARIANT));
     return ole32::S_OK;
@@ -231,6 +235,11 @@ inline ole32::HRESULT PropVariantCopy(PROPVARIANT* pvarDest, const PROPVARIANT* 
         pvarDest->blob.pBlobData = static_cast<uint8_t*>(ole32::CoTaskMemAlloc(pvarSrc->blob.cbSize));
         if (pvarDest->blob.pBlobData) {
             std::memcpy(pvarDest->blob.pBlobData, pvarSrc->blob.pBlobData, pvarSrc->blob.cbSize);
+        }
+    } else if (pvarSrc->vt == VT_CLSID && pvarSrc->puuid) {
+        pvarDest->puuid = static_cast<GUID*>(ole32::CoTaskMemAlloc(sizeof(GUID)));
+        if (pvarDest->puuid) {
+            *pvarDest->puuid = *pvarSrc->puuid;
         }
     } else {
         std::memcpy(pvarDest, pvarSrc, sizeof(PROPVARIANT));

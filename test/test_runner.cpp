@@ -115,6 +115,7 @@
 #include "micant/nla.hpp"
 #include "micant/wns.hpp"
 #include "micant/location.hpp"
+#include "micant/wpd.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -19535,6 +19536,317 @@ void Test_WindowsLocation_Geolocation_Subsystem() {
     std::cout << "[TEST] Suite 93: Windows Geolocation & Location Framework (LF) Subsystem PASSED.\n";
 }
 
+void Test_WindowsWPD_PortableDevices_Subsystem() {
+    std::cout << "[TEST] Running Suite 94: Windows Portable Devices (WPD) Subsystem...\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Verification (portabledeviceapi.dll, wpd_ci.dll)
+    // ------------------------------------------------------------------------
+    wpd::InitializeWpdSubsystemExports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    TEST_ASSERT(ldr.getExport("portabledeviceapi.dll", "DllGetClassObject") != nullptr, "portabledeviceapi.dll must export DllGetClassObject");
+    TEST_ASSERT(ldr.getExport("portabledeviceapi.dll", "DllCanUnloadNow") != nullptr, "portabledeviceapi.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("portabledeviceapi.dll", "DllRegisterServer") != nullptr, "portabledeviceapi.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("portabledeviceapi.dll", "DllUnregisterServer") != nullptr, "portabledeviceapi.dll must export DllUnregisterServer");
+    TEST_ASSERT(ldr.getExport("portabledeviceapi.dll", "WpdCreateDeviceManager") != nullptr, "portabledeviceapi.dll must export WpdCreateDeviceManager");
+    TEST_ASSERT(ldr.getExport("portabledeviceapi.dll", "WpdGetDeviceCount") != nullptr, "portabledeviceapi.dll must export WpdGetDeviceCount");
+
+    TEST_ASSERT(ldr.getExport("wpd_ci.dll", "WpdClassInstaller") != nullptr, "wpd_ci.dll must export WpdClassInstaller");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verApi = version::VersionDatabase::Instance().FindModule("portabledeviceapi.dll");
+        TEST_ASSERT(verApi != nullptr, "VersionDatabase must contain portabledeviceapi.dll");
+        TEST_ASSERT(verApi->stringTable.at("FileDescription") == "Windows Portable Device API", "portabledeviceapi.dll description match");
+        TEST_ASSERT(verApi->stringTable.at("OriginalFilename") == "portabledeviceapi.dll", "portabledeviceapi.dll original filename match");
+        TEST_ASSERT(verApi->stringTable.at("ProductName") == "MicaNT Portable Devices Subsystem", "portabledeviceapi.dll product name match");
+
+        const auto* verCi = version::VersionDatabase::Instance().FindModule("wpd_ci.dll");
+        TEST_ASSERT(verCi != nullptr, "VersionDatabase must contain wpd_ci.dll");
+        TEST_ASSERT(verCi->stringTable.at("FileDescription") == "Windows Portable Device Class Installer", "wpd_ci.dll description match");
+        TEST_ASSERT(verCi->stringTable.at("OriginalFilename") == "wpd_ci.dll", "wpd_ci.dll original filename match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Service Control Manager Services (WpdBusEnum)
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        auto wpdSvc = scm.getServiceRecord(L"WpdBusEnum");
+        TEST_ASSERT(wpdSvc != nullptr, "WpdBusEnum service must be registered in SCM");
+        TEST_ASSERT(wpdSvc->displayName == L"Windows Portable Device Enumerator Service", "WpdBusEnum display name match");
+        TEST_ASSERT(wpdSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "WpdBusEnum must be running");
+        TEST_ASSERT(wpdSvc->status.dwProcessId == 1158, "WpdBusEnum PID match");
+    }
+
+    // Reset PortableDeviceManager to default
+    wpd::PortableDeviceManager::get().resetToDefault();
+
+    // ------------------------------------------------------------------------
+    // Stage 4: COM Activation & Class Factory via CoCreateInstance
+    // ------------------------------------------------------------------------
+    wpd::IPortableDeviceManager* pMgr = nullptr;
+    {
+        ole32::HRESULT hr = ole32::CoCreateInstance(
+            wpd::CLSID_PortableDeviceManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+            wpd::IID_IPortableDeviceManager, reinterpret_cast<void**>(&pMgr)
+        );
+        TEST_ASSERT(hr == ole32::S_OK && pMgr != nullptr, "CoCreateInstance(CLSID_PortableDeviceManager) must succeed");
+
+        ole32::IUnknown* pUnk = nullptr;
+        hr = pMgr->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+        TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "QueryInterface for IUnknown must succeed");
+        pUnk->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Device Manager Enumeration & Identification
+    // ------------------------------------------------------------------------
+    std::wstring deviceId;
+    {
+        uint32_t count = 0;
+        ole32::HRESULT hr = pMgr->GetDevices(nullptr, &count);
+        TEST_ASSERT(hr == ole32::S_OK && count == 1, "GetDevices count must return 1 device");
+
+        std::vector<wchar_t*> ids(count, nullptr);
+        hr = pMgr->GetDevices(ids.data(), &count);
+        TEST_ASSERT(hr == ole32::S_OK && ids[0] != nullptr, "GetDevices must retrieve device ID");
+        deviceId = ids[0];
+
+        wchar_t friendly[256]{};
+        uint32_t cch = 256;
+        hr = pMgr->GetDeviceFriendlyName(deviceId.c_str(), friendly, &cch);
+        TEST_ASSERT(hr == ole32::S_OK, "GetDeviceFriendlyName must succeed");
+        TEST_ASSERT(std::wstring(friendly) == L"MicaNT Sovereign Mobile Companion", "Friendly name match");
+
+        wchar_t mfg[256]{};
+        cch = 256;
+        hr = pMgr->GetDeviceManufacturer(deviceId.c_str(), mfg, &cch);
+        TEST_ASSERT(hr == ole32::S_OK, "GetDeviceManufacturer must succeed");
+        TEST_ASSERT(std::wstring(mfg) == L"MicaNT Sovereign Project", "Manufacturer match");
+
+        wchar_t desc[256]{};
+        cch = 256;
+        hr = pMgr->GetDeviceDescription(deviceId.c_str(), desc, &cch);
+        TEST_ASSERT(hr == ole32::S_OK, "GetDeviceDescription must succeed");
+        TEST_ASSERT(std::wstring(desc) == L"MicaPhone M1 Sovereign Storage & Media Device", "Description match");
+
+        for (auto* p : ids) {
+            if (p) ole32::CoTaskMemFree(p);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Device Content & Property Inspection
+    // ------------------------------------------------------------------------
+    wpd::IPortableDevice* pDev = nullptr;
+    ole32::HRESULT hr = ole32::CoCreateInstance(
+        wpd::CLSID_PortableDevice, nullptr, ole32::CLSCTX_INPROC_SERVER,
+        wpd::IID_IPortableDevice, reinterpret_cast<void**>(&pDev)
+    );
+    TEST_ASSERT(hr == ole32::S_OK && pDev != nullptr, "CoCreateInstance(CLSID_PortableDevice) must succeed");
+
+    hr = pDev->Open(deviceId.c_str(), nullptr);
+    TEST_ASSERT(hr == ole32::S_OK, "IPortableDevice::Open must succeed");
+
+    wpd::IPortableDeviceContent* pContent = nullptr;
+    hr = pDev->Content(&pContent);
+    TEST_ASSERT(hr == ole32::S_OK && pContent != nullptr, "IPortableDevice::Content must succeed");
+
+    wpd::IPortableDeviceProperties* pProps = nullptr;
+    hr = pContent->Properties(&pProps);
+    TEST_ASSERT(hr == ole32::S_OK && pProps != nullptr, "IPortableDeviceContent::Properties must succeed");
+
+    // Inspect storage properties
+    {
+        wpd::IPortableDeviceValues* pVals = nullptr;
+        hr = pProps->GetValues(L"s10001", nullptr, &pVals);
+        TEST_ASSERT(hr == ole32::S_OK && pVals != nullptr, "GetValues(s10001) must succeed");
+
+        wchar_t* name = nullptr;
+        hr = pVals->GetStringValue(wpd::WPD_OBJECT_NAME, &name);
+        TEST_ASSERT(hr == ole32::S_OK && name != nullptr, "GetStringValue(WPD_OBJECT_NAME) must succeed");
+        TEST_ASSERT(std::wstring(name) == L"Internal Shared Storage", "Storage object name match");
+        ole32::CoTaskMemFree(name);
+
+        uint64_t size = 0;
+        hr = pVals->GetUnsignedLargeIntegerValue(wpd::WPD_OBJECT_SIZE, &size);
+        TEST_ASSERT(hr == ole32::S_OK && size == 256000000000ULL, "Storage size must be 256GB");
+
+        GUID ctype{};
+        hr = pVals->GetGuidValue(wpd::WPD_OBJECT_CONTENT_TYPE, &ctype);
+        TEST_ASSERT(hr == ole32::S_OK && ctype == wpd::WPD_CONTENT_TYPE_FOLDER, "Content type must be folder");
+
+        pVals->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Storage Object & Folder Hierarchy Enumeration
+    // ------------------------------------------------------------------------
+    {
+        wpd::IEnumPortableDeviceObjectIDs* pEnum = nullptr;
+        hr = pContent->EnumObjects(0, L"DEVICE", nullptr, &pEnum);
+        TEST_ASSERT(hr == ole32::S_OK && pEnum != nullptr, "EnumObjects(DEVICE) must succeed");
+
+        wchar_t* objIds[10]{};
+        uint32_t fetched = 0;
+        hr = pEnum->Next(10, objIds, &fetched);
+        TEST_ASSERT(SUCCEEDED(hr) && fetched == 1, "DEVICE should contain 1 root child (s10001)");
+        TEST_ASSERT(std::wstring(objIds[0]) == L"s10001", "Child must be s10001");
+        ole32::CoTaskMemFree(objIds[0]);
+        pEnum->Release();
+
+        // Enumerate s10001 children (DCIM, Documents, Music)
+        hr = pContent->EnumObjects(0, L"s10001", nullptr, &pEnum);
+        TEST_ASSERT(hr == ole32::S_OK && pEnum != nullptr, "EnumObjects(s10001) must succeed");
+
+        fetched = 0;
+        hr = pEnum->Next(10, objIds, &fetched);
+        TEST_ASSERT(SUCCEEDED(hr) && fetched == 3, "s10001 should contain 3 children");
+        std::vector<std::wstring> childIds;
+        for (uint32_t i = 0; i < fetched; ++i) {
+            childIds.push_back(objIds[i]);
+            ole32::CoTaskMemFree(objIds[i]);
+        }
+        pEnum->Release();
+
+        TEST_ASSERT(childIds[0] == L"o1001", "First child is DCIM (o1001)");
+        TEST_ASSERT(childIds[1] == L"o1003", "Second child is Documents (o1003)");
+        TEST_ASSERT(childIds[2] == L"o1005", "Third child is Music (o1005)");
+
+        // Enumerate DCIM children (IMG_0001.JPG)
+        hr = pContent->EnumObjects(0, L"o1001", nullptr, &pEnum);
+        TEST_ASSERT(hr == ole32::S_OK && pEnum != nullptr, "EnumObjects(o1001) must succeed");
+
+        fetched = 0;
+        hr = pEnum->Next(10, objIds, &fetched);
+        TEST_ASSERT(SUCCEEDED(hr) && fetched == 1, "DCIM should contain 1 child (o1002)");
+        TEST_ASSERT(std::wstring(objIds[0]) == L"o1002", "Child must be o1002");
+        ole32::CoTaskMemFree(objIds[0]);
+        pEnum->Release();
+
+        // Check image file properties
+        wpd::IPortableDeviceValues* pImgVals = nullptr;
+        hr = pProps->GetValues(L"o1002", nullptr, &pImgVals);
+        TEST_ASSERT(hr == ole32::S_OK && pImgVals != nullptr, "GetValues(o1002) must succeed");
+
+        wchar_t* imgName = nullptr;
+        pImgVals->GetStringValue(wpd::WPD_OBJECT_NAME, &imgName);
+        TEST_ASSERT(std::wstring(imgName) == L"IMG_0001.JPG", "Image name match");
+        ole32::CoTaskMemFree(imgName);
+
+        uint64_t imgSize = 0;
+        pImgVals->GetUnsignedLargeIntegerValue(wpd::WPD_OBJECT_SIZE, &imgSize);
+        TEST_ASSERT(imgSize == 3145728, "Image size match (3MB)");
+
+        pImgVals->Release();
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Device Capabilities & Collections
+    // ------------------------------------------------------------------------
+    {
+        wpd::IPortableDeviceCapabilities* pCaps = nullptr;
+        hr = pDev->Capabilities(&pCaps);
+        TEST_ASSERT(hr == ole32::S_OK && pCaps != nullptr, "IPortableDevice::Capabilities must succeed");
+
+        wpd::IPortableDevicePropVariantCollection* pCats = nullptr;
+        hr = pCaps->GetFunctionalCategories(&pCats);
+        TEST_ASSERT(hr == ole32::S_OK && pCats != nullptr, "GetFunctionalCategories must succeed");
+
+        uint32_t numCats = 0;
+        pCats->GetCount(&numCats);
+        TEST_ASSERT(numCats == 4, "Device must have 4 functional categories");
+        pCats->Release();
+        pCaps->Release();
+
+        // Key Collection tests
+        wpd::IPortableDeviceKeyCollection* pKeyCol = nullptr;
+        hr = ole32::CoCreateInstance(
+            wpd::CLSID_PortableDeviceKeyCollection, nullptr, ole32::CLSCTX_INPROC_SERVER,
+            wpd::IID_IPortableDeviceKeyCollection, reinterpret_cast<void**>(&pKeyCol)
+        );
+        TEST_ASSERT(hr == ole32::S_OK && pKeyCol != nullptr, "CoCreateInstance(CLSID_PortableDeviceKeyCollection) must succeed");
+
+        pKeyCol->Add(wpd::WPD_OBJECT_NAME);
+        pKeyCol->Add(wpd::WPD_OBJECT_SIZE);
+        uint32_t keyCount = 0;
+        pKeyCol->GetCount(&keyCount);
+        TEST_ASSERT(keyCount == 2, "Key collection count must be 2");
+
+        wasapi::PROPERTYKEY key{};
+        pKeyCol->GetAt(0, &key);
+        TEST_ASSERT(key == wpd::WPD_OBJECT_NAME, "Key 0 must be WPD_OBJECT_NAME");
+        pKeyCol->Clear();
+        pKeyCol->GetCount(&keyCount);
+        TEST_ASSERT(keyCount == 0, "Key collection clear must reset count to 0");
+        pKeyCol->Release();
+    }
+
+    pProps->Release();
+    pContent->Release();
+    pDev->Release();
+    pMgr->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 9: C Client APIs Verification
+    // ------------------------------------------------------------------------
+    {
+        wpd::IPortableDeviceManager* pCMgr = nullptr;
+        hr = wpd::WpdCreateDeviceManager(&pCMgr);
+        TEST_ASSERT(hr == ole32::S_OK && pCMgr != nullptr, "WpdCreateDeviceManager must succeed");
+        pCMgr->Release();
+
+        uint32_t devCnt = 0;
+        hr = wpd::WpdGetDeviceCount(&devCnt);
+        TEST_ASSERT(hr == ole32::S_OK && devCnt == 1, "WpdGetDeviceCount must return 1");
+
+        uint32_t installerRc = wpd::WpdClassInstaller(0, nullptr, nullptr);
+        TEST_ASSERT(installerRc == 0, "WpdClassInstaller must return NO_ERROR (0)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Interactive Shell Integration
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::stringstream out;
+
+        // wpd test
+        shell.execute("wpd test", out);
+        TEST_ASSERT(out.str().find("[WPD] Self-Test Completed: ALL WPD TESTS PASSED.") != std::string::npos, "wpd test must succeed");
+
+        // wpd list
+        out.str("");
+        shell.execute("wpd list", out);
+        TEST_ASSERT(out.str().find("MicaNT Sovereign Mobile Companion") != std::string::npos, "wpd list must show device friendly name");
+        TEST_ASSERT(out.str().find("CONNECTED / ONLINE") != std::string::npos, "wpd list must show connected status");
+
+        // wpd info
+        out.str("");
+        shell.execute("wpd info", out);
+        TEST_ASSERT(out.str().find("WpdBusEnum (PID 1158, RUNNING)") != std::string::npos, "wpd info must show WpdBusEnum service");
+        TEST_ASSERT(out.str().find("MicaPhone M1 Sovereign Storage & Media Device") != std::string::npos, "wpd info must show description");
+
+        // wpd browse s10001
+        out.str("");
+        shell.execute("wpd browse s10001", out);
+        TEST_ASSERT(out.str().find("DCIM") != std::string::npos, "wpd browse must show DCIM");
+        TEST_ASSERT(out.str().find("Documents") != std::string::npos, "wpd browse must show Documents");
+        TEST_ASSERT(out.str().find("Music") != std::string::npos, "wpd browse must show Music");
+
+        // wpd browse o1001 (DCIM)
+        out.str("");
+        shell.execute("wpd browse o1001", out);
+        TEST_ASSERT(out.str().find("IMG_0001.JPG") != std::string::npos, "wpd browse DCIM must show IMG_0001.JPG");
+    }
+
+    std::cout << "[TEST] Suite 94: Windows Portable Devices (WPD) Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -19633,6 +19945,7 @@ int main() {
     RUN_TEST(Test_WindowsNLA_NetworkListService_Subsystem);
     RUN_TEST(Test_WindowsWNS_PushNotification_Subsystem);
     RUN_TEST(Test_WindowsLocation_Geolocation_Subsystem);
+    RUN_TEST(Test_WindowsWPD_PortableDevices_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

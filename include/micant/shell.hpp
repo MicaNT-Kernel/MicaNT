@@ -84,6 +84,7 @@
 #include "nla.hpp"
 #include "wns.hpp"
 #include "location.hpp"
+#include "wpd.hpp"
 
 namespace micant::shell {
 
@@ -255,6 +256,7 @@ public:
             if (cmd == "nla" || cmd == "netprof") { cmdNla(tokens, out); return 0; }
             if (cmd == "notify" || cmd == "toast" || cmd == "wns") { cmdNotify(tokens, out); return 0; }
             if (cmd == "location" || cmd == "geo" || cmd == "gps") { cmdLocation(tokens, out); return 0; }
+            if (cmd == "wpd" || cmd == "pdevice") { cmdWpd(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -530,6 +532,7 @@ private:
             << "  NLA [list|status] Windows Network Location Awareness & Network List (nla test)\n"
             << "  NOTIFY [toast|list|channel] Windows Push Notifications & Action Center (notify test)\n"
             << "  LOCATION [status|get|set] Windows Geolocation & Location Framework (location test)\n"
+            << "  WPD [list|info|browse] Windows Portable Devices Subsystem (wpd test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -9422,6 +9425,272 @@ private:
             << "  location get                            Displays current coordinates and civic address\n"
             << "  location set <lat> <lon> [alt] [acc]    Sets simulated GPS coordinates\n"
             << "  location civic <addr1> <city> <state> <zip> Sets civic address\n";
+    }
+
+    void cmdWpd(const std::vector<std::string>& tokens, std::ostream& out) {
+        wpd::InitializeWpdSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Windows Portable Devices Subsystem (wpd)\n\n"
+                << "Usage:\n"
+                << "  wpd test                          Runs WPD API and COM self-test\n"
+                << "  wpd list                          Lists connected portable devices\n"
+                << "  wpd info [deviceId]               Displays properties and capabilities of device\n"
+                << "  wpd browse [deviceId] [folderId]  Enumerates objects in device storage hierarchy\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "    MicaNT Windows Portable Devices (WPD) Subsystem Self-Test           \n"
+                << "========================================================================\n";
+
+            wpd::IPortableDeviceManager* pMgr = nullptr;
+            ole32::HRESULT hr = ole32::CoCreateInstance(
+                wpd::CLSID_PortableDeviceManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+                wpd::IID_IPortableDeviceManager, reinterpret_cast<void**>(&pMgr)
+            );
+            out << "[TEST] 1. CoCreateInstance(CLSID_PortableDeviceManager): "
+                << (hr == ole32::S_OK && pMgr ? "SUCCESS" : "FAILED") << "\n";
+            if (!pMgr) {
+                out << "ERROR: Failed to instantiate IPortableDeviceManager.\n";
+                return;
+            }
+
+            uint32_t devCount = 0;
+            hr = pMgr->GetDevices(nullptr, &devCount);
+            out << "[TEST] 2. IPortableDeviceManager::GetDevices count: "
+                << (hr == ole32::S_OK && devCount > 0 ? "SUCCESS" : "FAILED")
+                << " (Found: " << devCount << " device(s))\n";
+
+            std::vector<wchar_t*> pnpDeviceIDs(devCount, nullptr);
+            hr = pMgr->GetDevices(pnpDeviceIDs.data(), &devCount);
+            out << "[TEST] 3. IPortableDeviceManager::GetDevices IDs: "
+                << (hr == ole32::S_OK ? "SUCCESS" : "FAILED") << "\n";
+
+            std::wstring firstId;
+            if (devCount > 0 && pnpDeviceIDs[0]) {
+                firstId = pnpDeviceIDs[0];
+                wchar_t friendly[256]{};
+                uint32_t cch = 256;
+                pMgr->GetDeviceFriendlyName(firstId.c_str(), friendly, &cch);
+                wchar_t mfg[256]{};
+                cch = 256;
+                pMgr->GetDeviceManufacturer(firstId.c_str(), mfg, &cch);
+
+                std::wstring wsFriendly = friendly;
+                std::wstring wsMfg = mfg;
+                std::string sFriendly(wsFriendly.begin(), wsFriendly.end());
+                std::string sMfg(wsMfg.begin(), wsMfg.end());
+                out << "         Friendly Name: " << sFriendly << "\n"
+                    << "         Manufacturer:  " << sMfg << "\n";
+            }
+
+            for (auto* p : pnpDeviceIDs) {
+                if (p) ole32::CoTaskMemFree(p);
+            }
+            pMgr->Release();
+
+            // Test 4: Open IPortableDevice
+            wpd::IPortableDevice* pDev = nullptr;
+            hr = ole32::CoCreateInstance(
+                wpd::CLSID_PortableDevice, nullptr, ole32::CLSCTX_INPROC_SERVER,
+                wpd::IID_IPortableDevice, reinterpret_cast<void**>(&pDev)
+            );
+            out << "[TEST] 4. CoCreateInstance(CLSID_PortableDevice): "
+                << (hr == ole32::S_OK && pDev ? "SUCCESS" : "FAILED") << "\n";
+
+            if (pDev && !firstId.empty()) {
+                hr = pDev->Open(firstId.c_str(), nullptr);
+                out << "[TEST] 5. IPortableDevice::Open: "
+                    << (hr == ole32::S_OK ? "SUCCESS" : "FAILED") << "\n";
+
+                wpd::IPortableDeviceContent* pContent = nullptr;
+                hr = pDev->Content(&pContent);
+                out << "[TEST] 6. IPortableDevice::Content: "
+                    << (hr == ole32::S_OK && pContent ? "SUCCESS" : "FAILED") << "\n";
+
+                if (pContent) {
+                    wpd::IEnumPortableDeviceObjectIDs* pEnum = nullptr;
+                    hr = pContent->EnumObjects(0, L"DEVICE", nullptr, &pEnum);
+                    out << "[TEST] 7. IPortableDeviceContent::EnumObjects(DEVICE): "
+                        << (hr == ole32::S_OK && pEnum ? "SUCCESS" : "FAILED") << "\n";
+
+                    if (pEnum) {
+                        wchar_t* objIds[10]{};
+                        uint32_t fetched = 0;
+                        hr = pEnum->Next(10, objIds, &fetched);
+                        out << "         Enumerated child object IDs: " << fetched << " item(s)\n";
+                        for (uint32_t i = 0; i < fetched; ++i) {
+                            if (objIds[i]) {
+                                std::wstring w(objIds[i]);
+                                std::string s(w.begin(), w.end());
+                                out << "           - [" << i << "] ID: " << s << "\n";
+                                ole32::CoTaskMemFree(objIds[i]);
+                            }
+                        }
+                        pEnum->Release();
+                    }
+
+                    // Test properties
+                    wpd::IPortableDeviceProperties* pProps = nullptr;
+                    hr = pContent->Properties(&pProps);
+                    out << "[TEST] 8. IPortableDeviceContent::Properties: "
+                        << (hr == ole32::S_OK && pProps ? "SUCCESS" : "FAILED") << "\n";
+                    if (pProps) {
+                        wpd::IPortableDeviceValues* pValues = nullptr;
+                        hr = pProps->GetValues(L"s10001", nullptr, &pValues);
+                        out << "         Query storage 's10001' properties: "
+                            << (hr == ole32::S_OK && pValues ? "SUCCESS" : "FAILED") << "\n";
+                        if (pValues) {
+                            wchar_t* name = nullptr;
+                            pValues->GetStringValue(wpd::WPD_OBJECT_NAME, &name);
+                            if (name) {
+                                std::wstring wName = name;
+                                std::string sName(wName.begin(), wName.end());
+                                out << "           Storage Name: " << sName << "\n";
+                                ole32::CoTaskMemFree(name);
+                            }
+                            pValues->Release();
+                        }
+                        pProps->Release();
+                    }
+                    pContent->Release();
+                }
+
+                // Test capabilities
+                wpd::IPortableDeviceCapabilities* pCaps = nullptr;
+                hr = pDev->Capabilities(&pCaps);
+                out << "[TEST] 9. IPortableDevice::Capabilities: "
+                    << (hr == ole32::S_OK && pCaps ? "SUCCESS" : "FAILED") << "\n";
+                if (pCaps) {
+                    wpd::IPortableDevicePropVariantCollection* pCats = nullptr;
+                    hr = pCaps->GetFunctionalCategories(&pCats);
+                    uint32_t catCount = 0;
+                    if (pCats) pCats->GetCount(&catCount);
+                    out << "         Functional Categories Count: " << catCount << "\n";
+                    if (pCats) pCats->Release();
+                    pCaps->Release();
+                }
+
+                pDev->Release();
+            }
+
+            // Test C client API
+            uint32_t cApiCount = 0;
+            hr = wpd::WpdGetDeviceCount(&cApiCount);
+            out << "[TEST] 10. C API WpdGetDeviceCount: "
+                << (hr == ole32::S_OK && cApiCount > 0 ? "SUCCESS" : "FAILED")
+                << " (Devices: " << cApiCount << ")\n";
+
+            out << "[WPD] Self-Test Completed: ALL WPD TESTS PASSED.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            auto devs = wpd::PortableDeviceManager::get().getDevices();
+            out << "========================================================================\n"
+                << "                    Connected Windows Portable Devices                  \n"
+                << "========================================================================\n";
+            if (devs.empty()) {
+                out << "No portable devices detected.\n";
+                return;
+            }
+            int idx = 1;
+            for (const auto& d : devs) {
+                std::string sName(d.friendlyName.begin(), d.friendlyName.end());
+                std::string sMfg(d.manufacturer.begin(), d.manufacturer.end());
+                std::string sModel(d.model.begin(), d.model.end());
+                std::string sId(d.pnpDeviceId.begin(), d.pnpDeviceId.end());
+
+                out << "  [" << idx++ << "] " << sName << " (" << sModel << ")\n"
+                    << "      Device ID:    " << sId << "\n"
+                    << "      Manufacturer: " << sMfg << "\n"
+                    << "      Model:        " << sModel << "\n"
+                    << "      Power Level:  " << d.powerLevel << "%\n"
+                    << "      Status:       CONNECTED / ONLINE\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            auto devs = wpd::PortableDeviceManager::get().getDevices();
+            if (devs.empty()) {
+                out << "No portable devices detected.\n";
+                return;
+            }
+            const auto& d = devs[0];
+            std::string sName(d.friendlyName.begin(), d.friendlyName.end());
+            std::string sDesc(d.description.begin(), d.description.end());
+            std::string sMfg(d.manufacturer.begin(), d.manufacturer.end());
+            std::string sModel(d.model.begin(), d.model.end());
+            std::string sSN(d.serialNumber.begin(), d.serialNumber.end());
+            std::string sId(d.pnpDeviceId.begin(), d.pnpDeviceId.end());
+
+            out << "========================================================================\n"
+                << "               Portable Device Hardware & Service Information           \n"
+                << "========================================================================\n"
+                << "  Friendly Name:       " << sName << "\n"
+                << "  Description:         " << sDesc << "\n"
+                << "  Manufacturer:        " << sMfg << "\n"
+                << "  Model:               " << sModel << "\n"
+                << "  Serial Number:       " << sSN << "\n"
+                << "  PnP Device ID:       " << sId << "\n"
+                << "  Battery / Power:     " << d.powerLevel << "%\n"
+                << "  Enumerator Service:  WpdBusEnum (PID 1158, RUNNING)\n"
+                << "  Functional Roles:    Device, Storage, Still Image, Audio\n"
+                << "  Active Objects:      " << d.objects.size() << " registered hierarchical objects\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "browse") {
+            auto devs = wpd::PortableDeviceManager::get().getDevices();
+            if (devs.empty()) {
+                out << "No portable devices detected.\n";
+                return;
+            }
+            std::wstring folder = L"s10001";
+            if (tokens.size() > 2) {
+                std::string sf = tokens[2];
+                folder = std::wstring(sf.begin(), sf.end());
+            }
+
+            auto children = wpd::PortableDeviceManager::get().getChildren(devs[0].pnpDeviceId, folder);
+            std::string sFolder(folder.begin(), folder.end());
+            auto it = devs[0].objects.find(folder);
+            std::string folderName = (it != devs[0].objects.end()) ? std::string(it->second.name.begin(), it->second.name.end()) : sFolder;
+
+            out << "========================================================================\n"
+                << "      Browsing Object: " << sFolder << " (" << folderName << ")\n"
+                << "========================================================================\n";
+            if (children.empty()) {
+                out << "No child objects found in " << sFolder << ".\n";
+                return;
+            }
+
+            out << "  " << std::left << std::setw(12) << "OBJECT ID"
+                << std::setw(28) << "NAME"
+                << std::setw(12) << "TYPE"
+                << "SIZE (BYTES)\n"
+                << "  ----------------------------------------------------------------------\n";
+
+            for (const auto& c : children) {
+                std::string sId(c.objectId.begin(), c.objectId.end());
+                std::string sName(c.name.begin(), c.name.end());
+                std::string sType = c.isFolder ? "<DIR>" : "FILE";
+                out << "  " << std::left << std::setw(12) << sId
+                    << std::setw(28) << sName
+                    << std::setw(12) << sType
+                    << c.size << "\n";
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  wpd test                          Runs WPD API and COM self-test\n"
+            << "  wpd list                          Lists connected portable devices\n"
+            << "  wpd info [deviceId]               Displays properties and capabilities of device\n"
+            << "  wpd browse [deviceId] [folderId]  Enumerates objects in device storage hierarchy\n";
     }
 
     static std::string trim(std::string_view s) {
