@@ -107,6 +107,7 @@
 #include "micant/etw.hpp"
 #include "micant/acl.hpp"
 #include "micant/netapi32.hpp"
+#include "micant/ldap.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -17085,6 +17086,286 @@ void Test_WindowsNetAPI32_NetworkManagement_Subsystem() {
     std::cout << "[TEST] Suite 85: Windows Networking Management & NetAPI32 Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 86: Windows Active Directory & LDAP Subsystem
+// ============================================================================
+void Test_WindowsLDAP_ActiveDirectory_Subsystem() {
+    using namespace micant::ldap;
+
+    // 1. Initialize subsystem exports
+    InitializeLdapSubsystemExports();
+
+    // 2. Validate DynamicLoader exports in wldap32.dll and adsldp.dll
+    auto& ldr = ldr::DynamicLoader::get();
+
+    void* fnInit = ldr.getExport("wldap32.dll", "ldap_initW");
+    TEST_ASSERT(fnInit != nullptr, "wldap32.dll must export ldap_initW");
+
+    void* fnSslInit = ldr.getExport("wldap32.dll", "ldap_sslinitW");
+    TEST_ASSERT(fnSslInit != nullptr, "wldap32.dll must export ldap_sslinitW");
+
+    void* fnConnect = ldr.getExport("wldap32.dll", "ldap_connect");
+    TEST_ASSERT(fnConnect != nullptr, "wldap32.dll must export ldap_connect");
+
+    void* fnBind = ldr.getExport("wldap32.dll", "ldap_bind_sW");
+    TEST_ASSERT(fnBind != nullptr, "wldap32.dll must export ldap_bind_sW");
+
+    void* fnSimpleBind = ldr.getExport("wldap32.dll", "ldap_simple_bind_sW");
+    TEST_ASSERT(fnSimpleBind != nullptr, "wldap32.dll must export ldap_simple_bind_sW");
+
+    void* fnUnbindS = ldr.getExport("wldap32.dll", "ldap_unbind_s");
+    TEST_ASSERT(fnUnbindS != nullptr, "wldap32.dll must export ldap_unbind_s");
+
+    void* fnSearch = ldr.getExport("wldap32.dll", "ldap_search_sW");
+    TEST_ASSERT(fnSearch != nullptr, "wldap32.dll must export ldap_search_sW");
+
+    void* fnCount = ldr.getExport("wldap32.dll", "ldap_count_entries");
+    TEST_ASSERT(fnCount != nullptr, "wldap32.dll must export ldap_count_entries");
+
+    void* fnFirstEntry = ldr.getExport("wldap32.dll", "ldap_first_entry");
+    TEST_ASSERT(fnFirstEntry != nullptr, "wldap32.dll must export ldap_first_entry");
+
+    void* fnNextEntry = ldr.getExport("wldap32.dll", "ldap_next_entry");
+    TEST_ASSERT(fnNextEntry != nullptr, "wldap32.dll must export ldap_next_entry");
+
+    void* fnGetDn = ldr.getExport("wldap32.dll", "ldap_get_dnW");
+    TEST_ASSERT(fnGetDn != nullptr, "wldap32.dll must export ldap_get_dnW");
+
+    void* fnMemFree = ldr.getExport("wldap32.dll", "ldap_memfreeW");
+    TEST_ASSERT(fnMemFree != nullptr, "wldap32.dll must export ldap_memfreeW");
+
+    void* fnFirstAttr = ldr.getExport("wldap32.dll", "ldap_first_attributeW");
+    TEST_ASSERT(fnFirstAttr != nullptr, "wldap32.dll must export ldap_first_attributeW");
+
+    void* fnNextAttr = ldr.getExport("wldap32.dll", "ldap_next_attributeW");
+    TEST_ASSERT(fnNextAttr != nullptr, "wldap32.dll must export ldap_next_attributeW");
+
+    void* fnGetValuesLen = ldr.getExport("wldap32.dll", "ldap_get_values_lenW");
+    TEST_ASSERT(fnGetValuesLen != nullptr, "wldap32.dll must export ldap_get_values_lenW");
+
+    void* fnFreeValuesLen = ldr.getExport("wldap32.dll", "ldap_value_free_len");
+    TEST_ASSERT(fnFreeValuesLen != nullptr, "wldap32.dll must export ldap_value_free_len");
+
+    void* fnMsgFree = ldr.getExport("wldap32.dll", "ldap_msgfree");
+    TEST_ASSERT(fnMsgFree != nullptr, "wldap32.dll must export ldap_msgfree");
+
+    void* fnADsOpen = ldr.getExport("adsldp.dll", "ADsOpenObject");
+    TEST_ASSERT(fnADsOpen != nullptr, "adsldp.dll must export ADsOpenObject");
+
+    void* fnDllGetClass = ldr.getExport("adsldp.dll", "DllGetClassObject");
+    TEST_ASSERT(fnDllGetClass != nullptr, "adsldp.dll must export DllGetClassObject");
+
+    // 3. Validate Version Database
+    auto& verDb = version::VersionDatabase::Instance();
+    const auto* pWldap = verDb.FindModule("wldap32.dll");
+    TEST_ASSERT(pWldap != nullptr, "VersionDatabase must contain wldap32.dll");
+    TEST_ASSERT(pWldap->stringTable.at("ProductName") == "MicaNT Active Directory Subsystem", "wldap32 ProductName must match");
+
+    const auto* pAdsldp = verDb.FindModule("adsldp.dll");
+    TEST_ASSERT(pAdsldp != nullptr, "VersionDatabase must contain adsldp.dll");
+
+    const auto* pDsquery = verDb.FindModule("dsquery.exe");
+    TEST_ASSERT(pDsquery != nullptr, "VersionDatabase must contain dsquery.exe");
+
+    const auto* pDsget = verDb.FindModule("dsget.exe");
+    TEST_ASSERT(pDsget != nullptr, "VersionDatabase must contain dsget.exe");
+
+    // 4. Validate SCM Services (NTDS & KDC)
+    auto& scm = scm::ServiceControlManager::get();
+    auto ntds = scm.getServiceRecord(L"NTDS");
+    TEST_ASSERT(ntds != nullptr, "SCM must register NTDS service");
+    TEST_ASSERT(ntds->displayName == L"Active Directory Domain Services", "NTDS display name must match");
+    TEST_ASSERT(ntds->status.dwCurrentState == scm::SERVICE_RUNNING, "NTDS must be in RUNNING state");
+
+    auto kdc = scm.getServiceRecord(L"KDC");
+    TEST_ASSERT(kdc != nullptr, "SCM must register KDC service");
+    TEST_ASSERT(kdc->displayName == L"Kerberos Key Distribution Center", "KDC display name must match");
+    TEST_ASSERT(kdc->svchostGroup == "LocalService", "KDC must belong to LocalService group");
+
+    // 5. LDAP Session Lifecycle & Options
+    auto* ld = ldap_initW(L"dc01.micant.local", LDAP_PORT);
+    TEST_ASSERT(ld != nullptr, "ldap_initW must return valid handle");
+    TEST_ASSERT(ld->port == LDAP_PORT, "Default port must be 389");
+
+    int ver = 3;
+    uint32_t optSt = ldap_set_optionW(ld, LDAP_OPT_PROTOCOL_VERSION, &ver);
+    TEST_ASSERT(optSt == LDAP_SUCCESS, "ldap_set_optionW for version must succeed");
+
+    int readVer = 0;
+    optSt = ldap_get_optionW(ld, LDAP_OPT_PROTOCOL_VERSION, &readVer);
+    TEST_ASSERT(optSt == LDAP_SUCCESS && readVer == 3, "ldap_get_optionW must return protocol version 3");
+
+    int sizeLimit = 500;
+    ldap_set_optionW(ld, LDAP_OPT_SIZELIMIT, &sizeLimit);
+    int readSize = 0;
+    ldap_get_optionW(ld, LDAP_OPT_SIZELIMIT, &readSize);
+    TEST_ASSERT(readSize == 500, "Size limit must be 500");
+
+    // Connect & Simple Bind
+    uint32_t cSt = ldap_connect(ld, nullptr);
+    TEST_ASSERT(cSt == LDAP_SUCCESS, "ldap_connect must succeed");
+
+    uint32_t bSt = ldap_simple_bind_sW(ld, L"CN=Administrator,CN=Users,DC=micant,DC=local", L"SecretPass123!");
+    TEST_ASSERT(bSt == LDAP_SUCCESS, "ldap_simple_bind_sW must succeed");
+
+    // Error strings and mapping
+    const wchar_t* errStr = ldap_err2stringW(LDAP_SUCCESS);
+    TEST_ASSERT(wcscmp(errStr, L"Success") == 0, "ldap_err2stringW(LDAP_SUCCESS) must return Success");
+    TEST_ASSERT(LdapMapErrorToWin32(LDAP_SUCCESS) == 0, "LdapMapErrorToWin32(0) must return 0");
+    TEST_ASSERT(LdapMapErrorToWin32(LDAP_NO_SUCH_OBJECT) == 0x2030, "LdapMapErrorToWin32(LDAP_NO_SUCH_OBJECT) must return ERROR_DS_NO_SUCH_OBJECT");
+
+    // 6. Query RootDSE
+    LDAPMessage* pRootDseMsg = nullptr;
+    uint32_t sSt = ldap_search_sW(ld, L"", LDAP_SCOPE_BASE, L"(objectClass=*)", nullptr, 0, &pRootDseMsg);
+    TEST_ASSERT(sSt == LDAP_SUCCESS && pRootDseMsg != nullptr, "ldap_search_sW on RootDSE must succeed");
+    TEST_ASSERT(ldap_count_entries(ld, pRootDseMsg) == 1, "RootDSE search must return 1 entry");
+
+    auto* rootEntry = ldap_first_entry(ld, pRootDseMsg);
+    TEST_ASSERT(rootEntry != nullptr, "RootDSE must have first entry");
+    auto dncVals = ldap_get_valuesW(ld, rootEntry, L"defaultNamingContext");
+    TEST_ASSERT(dncVals != nullptr && dncVals[0] != nullptr, "RootDSE must have defaultNamingContext");
+    TEST_ASSERT(wcscmp(dncVals[0], L"DC=micant,DC=local") == 0, "defaultNamingContext must be DC=micant,DC=local");
+    ldap_value_freeW(dncVals);
+    ldap_msgfree(pRootDseMsg);
+
+    // 7. Search Users Subtree & Inspect Attributes
+    LDAPMessage* pUserMsg = nullptr;
+    sSt = ldap_search_sW(ld, L"DC=micant,DC=local", LDAP_SCOPE_SUBTREE, L"(objectClass=user)", nullptr, 0, &pUserMsg);
+    TEST_ASSERT(sSt == LDAP_SUCCESS && pUserMsg != nullptr, "Subtree user search must succeed");
+    uint32_t userCount = ldap_count_entries(ld, pUserMsg);
+    TEST_ASSERT(userCount >= 3, "Subtree search must return at least 3 user objects");
+
+    bool foundAdmin = false;
+    for (auto* e = ldap_first_entry(ld, pUserMsg); e != nullptr; e = ldap_next_entry(ld, e)) {
+        wchar_t* dn = ldap_get_dnW(ld, e);
+        if (dn) {
+            if (wcsstr(dn, L"CN=Administrator") != nullptr) {
+                foundAdmin = true;
+
+                // Inspect attributes via BerElement
+                BerElement* ber = nullptr;
+                wchar_t* attr = ldap_first_attributeW(ld, e, &ber);
+                TEST_ASSERT(attr != nullptr && ber != nullptr, "ldap_first_attributeW must return valid attribute");
+                int attrCount = 0;
+                while (attr) {
+                    attrCount++;
+                    ldap_memfreeW(attr);
+                    attr = ldap_next_attributeW(ld, e, ber);
+                }
+                ber_free(ber, 1);
+                TEST_ASSERT(attrCount >= 5, "Administrator must have >= 5 attributes");
+
+                // Test binary values (berval)
+                berval** bvals = ldap_get_values_lenW(ld, e, L"sAMAccountName");
+                TEST_ASSERT(bvals != nullptr && bvals[0] != nullptr, "ldap_get_values_lenW must return sAMAccountName");
+                TEST_ASSERT(std::string(bvals[0]->bv_val) == "Administrator", "sAMAccountName must equal Administrator");
+                ldap_value_free_len(bvals);
+
+                // Test string values
+                wchar_t** svals = ldap_get_valuesW(ld, e, L"mail");
+                TEST_ASSERT(svals != nullptr && svals[0] != nullptr, "ldap_get_valuesW must return mail");
+                TEST_ASSERT(wcscmp(svals[0], L"admin@micant.local") == 0, "mail must be admin@micant.local");
+                ldap_value_freeW(svals);
+            }
+            ldap_memfreeW(dn);
+        }
+    }
+    TEST_ASSERT(foundAdmin, "Search must locate Administrator account");
+    ldap_msgfree(pUserMsg);
+
+    // 8. Search with Composite AND filter
+    LDAPMessage* pCompMsg = nullptr;
+    sSt = ldap_search_sW(ld, L"DC=micant,DC=local", LDAP_SCOPE_SUBTREE,
+                        L"(&(objectClass=user)(sAMAccountName=Administrator))", nullptr, 0, &pCompMsg);
+    TEST_ASSERT(sSt == LDAP_SUCCESS && pCompMsg != nullptr, "Composite filter search must succeed");
+    TEST_ASSERT(ldap_count_entries(ld, pCompMsg) == 1, "Composite filter must match exactly 1 entry");
+    ldap_msgfree(pCompMsg);
+
+    // 9. Search Computers
+    LDAPMessage* pComputerMsg = nullptr;
+    sSt = ldap_search_sW(ld, L"DC=micant,DC=local", LDAP_SCOPE_SUBTREE, L"(objectClass=computer)", nullptr, 0, &pComputerMsg);
+    TEST_ASSERT(sSt == LDAP_SUCCESS && pComputerMsg != nullptr, "Search for computers must succeed");
+    TEST_ASSERT(ldap_count_entries(ld, pComputerMsg) >= 2, "Computers search must return >= 2 accounts");
+    ldap_msgfree(pComputerMsg);
+
+    // 10. Unbind session
+    uint32_t ubSt = ldap_unbind_s(ld);
+    TEST_ASSERT(ubSt == LDAP_SUCCESS, "ldap_unbind_s must succeed");
+
+    // 11. ADSI Provider (adsldp.dll)
+    void* pAdsiObj = nullptr;
+    int32_t hr = ADsOpenObject(L"LDAP://CN=Administrator,CN=Users,DC=micant,DC=local", nullptr, nullptr, 0, nullptr, &pAdsiObj);
+    TEST_ASSERT(hr == 0 && pAdsiObj != nullptr, "ADsOpenObject on Administrator must succeed");
+
+    void* pMissingObj = nullptr;
+    int32_t hrMissing = ADsOpenObject(L"LDAP://CN=NoSuchObject,DC=micant,DC=local", nullptr, nullptr, 0, nullptr, &pMissingObj);
+    TEST_ASSERT(hrMissing != 0, "ADsOpenObject on missing object must fail");
+
+    void* pFactory = nullptr;
+    int32_t hrClass = DllGetClassObject(nullptr, nullptr, &pFactory);
+    TEST_ASSERT(hrClass == 0 && pFactory != nullptr, "DllGetClassObject must succeed");
+
+    // 12. Shell CLI Integration (dsquery & dsget)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // dsquery test
+        shell.execute("dsquery test", out);
+        TEST_ASSERT(out.str().find("Self-Test Finished Successfully") != std::string::npos, "dsquery test must succeed");
+
+        // dsquery /?
+        out.str("");
+        shell.execute("dsquery /?", out);
+        TEST_ASSERT(out.str().find("Microsoft DSQUERY") != std::string::npos, "dsquery /? must display help banner");
+
+        // dsquery user
+        out.str("");
+        shell.execute("dsquery user", out);
+        TEST_ASSERT(out.str().find("CN=Administrator,CN=Users,DC=micant,DC=local") != std::string::npos, "dsquery user must list Administrator");
+        TEST_ASSERT(out.str().find("CN=Guest,CN=Users,DC=micant,DC=local") != std::string::npos, "dsquery user must list Guest");
+
+        // dsquery computer
+        out.str("");
+        shell.execute("dsquery computer", out);
+        TEST_ASSERT(out.str().find("CN=MICANT-WS01,CN=Computers,DC=micant,DC=local") != std::string::npos, "dsquery computer must list WS01");
+
+        // dsquery server
+        out.str("");
+        shell.execute("dsquery server", out);
+        TEST_ASSERT(out.str().find("CN=MICANT-DC01,OU=Domain Controllers,DC=micant,DC=local") != std::string::npos, "dsquery server must list DC01");
+
+        // dsquery group
+        out.str("");
+        shell.execute("dsquery group", out);
+        TEST_ASSERT(out.str().find("CN=Domain Admins,CN=Users,DC=micant,DC=local") != std::string::npos, "dsquery group must list Domain Admins");
+
+        // dsquery * -filter
+        out.str("");
+        shell.execute("dsquery * -filter (sAMAccountName=Administrator)", out);
+        TEST_ASSERT(out.str().find("CN=Administrator,CN=Users,DC=micant,DC=local") != std::string::npos, "dsquery * with filter must match Administrator");
+
+        // dsget test
+        out.str("");
+        shell.execute("dsget test", out);
+        TEST_ASSERT(out.str().find("Self-Test Finished Successfully") != std::string::npos, "dsget test must succeed");
+
+        // dsget /?
+        out.str("");
+        shell.execute("dsget /?", out);
+        TEST_ASSERT(out.str().find("Microsoft DSGET") != std::string::npos, "dsget /? must display help banner");
+
+        // dsget user
+        out.str("");
+        shell.execute("dsget user \"CN=Administrator,CN=Users,DC=micant,DC=local\"", out);
+        TEST_ASSERT(out.str().find("Administrator") != std::string::npos, "dsget user must output Administrator");
+        TEST_ASSERT(out.str().find("MicaNT Administrator") != std::string::npos, "dsget user must output displayName");
+        TEST_ASSERT(out.str().find("dsget succeeded") != std::string::npos, "dsget user must succeed");
+    }
+
+    std::cout << "[TEST] Suite 86: Windows Active Directory & LDAP Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -17175,6 +17456,7 @@ int main() {
     RUN_TEST(Test_WindowsETW_EventTracing_Subsystem);
     RUN_TEST(Test_WindowsACL_SecurityAuditing_Subsystem);
     RUN_TEST(Test_WindowsNetAPI32_NetworkManagement_Subsystem);
+    RUN_TEST(Test_WindowsLDAP_ActiveDirectory_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

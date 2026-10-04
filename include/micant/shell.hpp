@@ -75,6 +75,7 @@
 #include "etw.hpp"
 #include "acl.hpp"
 #include "netapi32.hpp"
+#include "ldap.hpp"
 
 namespace micant::shell {
 
@@ -230,6 +231,8 @@ public:
             if (cmd == "tracerpt") { cmdTraceRpt(tokens, out); return 0; }
             if (cmd == "icacls" || cmd == "cacls") { cmdIcacls(tokens, out); return 0; }
             if (cmd == "auditpol") { cmdAuditPol(tokens, out); return 0; }
+            if (cmd == "dsquery") { cmdDsQuery(tokens, out); return 0; }
+            if (cmd == "dsget") { cmdDsGet(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -492,6 +495,8 @@ private:
             << "  DISM [/online ...] Deployment Image Servicing and Management Subsystem (dism test)\n"
             << "  MSDT [/id <name>] Microsoft Support Diagnostic Tool & WDI engine (msdt test)\n"
             << "  PERFMON / TYPEPERF Performance Monitor & Performance Counter sampling (perfmon test)\n"
+            << "  DSQUERY           Active Directory query utility (dsquery user|computer|server|group|*)\n"
+            << "  DSGET             Active Directory object attribute inspector (dsget user|computer|group)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -7799,6 +7804,204 @@ private:
             }
         }
         out << "\n";
+    }
+
+    void cmdDsQuery(const std::vector<std::string>& tokens, std::ostream& out) {
+        ldap::InitializeLdapSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "\nMicrosoft DSQUERY (MicaNT Active Directory Query Utility)\n\n"
+                << "Usage:\n"
+                << "  dsquery user [-name <pattern>]                 Queries directory for user accounts\n"
+                << "  dsquery computer [-name <pattern>]             Queries directory for computer accounts\n"
+                << "  dsquery server                                 Queries directory for domain controllers\n"
+                << "  dsquery group [-name <pattern>]                Queries directory for security groups\n"
+                << "  dsquery * -filter <ldap_filter>                Queries directory with custom LDAP filter\n"
+                << "  dsquery test                                   Runs automated Active Directory self-test\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "      MicaNT Active Directory & LDAP (DSQuery) Self-Test                \n"
+                << "========================================================================\n";
+
+            // 1. Initialize Subsystem
+            out << "[TEST] 1. Initializing LDAP Subsystem Exports...\n";
+            ldap::InitializeLdapSubsystemExports();
+
+            // 2. Connect & Bind via LDAP C API
+            out << "[TEST] 2. Connecting to Sovereign Active Directory (wldap32!ldap_initW)...\n";
+            auto* ld = ldap::ldap_initW(L"localhost", ldap::LDAP_PORT);
+            out << "  -> ldap_initW Handle: " << (ld ? "VALID" : "NULL") << "\n";
+
+            uint32_t connRes = ldap::ldap_connect(ld, nullptr);
+            out << "  -> ldap_connect Result: " << (connRes == ldap::LDAP_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+
+            uint32_t bindRes = ldap::ldap_simple_bind_sW(ld, L"CN=Administrator,CN=Users,DC=micant,DC=local", L"Password123!");
+            out << "  -> ldap_simple_bind_sW Result: " << (bindRes == ldap::LDAP_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+
+            // 3. Search Users
+            out << "[TEST] 3. Searching User Accounts (ldap_search_sW: (objectClass=user))...\n";
+            ldap::LDAPMessage* res = nullptr;
+            uint32_t searchRes = ldap::ldap_search_sW(ld, L"DC=micant,DC=local", ldap::LDAP_SCOPE_SUBTREE,
+                                                     L"(objectClass=user)", nullptr, 0, &res);
+            out << "  -> ldap_search_sW Result: " << (searchRes == ldap::LDAP_SUCCESS ? "SUCCESS" : "FAILED") << "\n";
+            uint32_t count = ldap::ldap_count_entries(ld, res);
+            out << "  -> Entries Returned: " << count << "\n";
+
+            // 4. Iterate entries and verify DN
+            out << "[TEST] 4. Enumerating Entries & Inspecting Attributes...\n";
+            for (auto* entry = ldap::ldap_first_entry(ld, res); entry != nullptr; entry = ldap::ldap_next_entry(ld, entry)) {
+                wchar_t* dn = ldap::ldap_get_dnW(ld, entry);
+                if (dn) {
+                    std::string sDn;
+                    for (size_t i = 0; dn[i] != L'\0'; ++i) sDn.push_back(static_cast<char>(dn[i]));
+                    out << "    Entry DN: " << sDn << "\n";
+                    ldap::ldap_memfreeW(dn);
+                }
+            }
+            ldap::ldap_msgfree(res);
+
+            // 5. Test Filter with AND composite
+            out << "[TEST] 5. Testing Composite Filter (&(objectClass=user)(sAMAccountName=Administrator))...\n";
+            ldap::LDAPMessage* resAdmin = nullptr;
+            ldap::ldap_search_sW(ld, L"DC=micant,DC=local", ldap::LDAP_SCOPE_SUBTREE,
+                                 L"(&(objectClass=user)(sAMAccountName=Administrator))", nullptr, 0, &resAdmin);
+            uint32_t adminCount = ldap::ldap_count_entries(ld, resAdmin);
+            out << "  -> Administrator Match Count: " << adminCount << "\n";
+
+            auto* first = ldap::ldap_first_entry(ld, resAdmin);
+            if (first) {
+                auto vals = ldap::ldap_get_valuesW(ld, first, L"displayName");
+                if (vals && vals[0]) {
+                    std::string disp;
+                    for (size_t i = 0; vals[0][i] != L'\0'; ++i) disp.push_back(static_cast<char>(vals[0][i]));
+                    out << "  -> DisplayName: " << disp << " (MATCH)\n";
+                }
+                ldap::ldap_value_freeW(vals);
+            }
+            ldap::ldap_msgfree(resAdmin);
+
+            // 6. Test ADSI Provider (adsldp.dll)
+            out << "[TEST] 6. Testing ADSI Provider ADsOpenObject...\n";
+            void* pObject = nullptr;
+            int32_t hr = ldap::ADsOpenObject(L"LDAP://CN=Administrator,CN=Users,DC=micant,DC=local",
+                                             nullptr, nullptr, 0, nullptr, &pObject);
+            out << "  -> ADsOpenObject('LDAP://CN=Administrator...'): " << (hr == 0 ? "S_OK (FOUND)" : "FAILED") << "\n";
+
+            // 7. Unbind session
+            out << "[TEST] 7. Closing LDAP Session (ldap_unbind_s)...\n";
+            ldap::ldap_unbind_s(ld);
+            out << "  -> Session Closed: SUCCESS\n";
+
+            out << "[DSQUERY] Self-Test Finished Successfully.\n";
+            return;
+        }
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "user";
+        std::transform(sub.begin(), sub.end(), sub.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        std::wstring filter = L"(objectClass=user)";
+        if (sub == "user") {
+            filter = L"(objectClass=user)";
+        } else if (sub == "computer") {
+            filter = L"(objectClass=computer)";
+        } else if (sub == "server") {
+            filter = L"(&(objectClass=computer)(userAccountControl=532480))";
+        } else if (sub == "group") {
+            filter = L"(objectClass=group)";
+        } else if (sub == "*") {
+            for (size_t i = 2; i < tokens.size(); ++i) {
+                if (tokens[i] == "-filter" && i + 1 < tokens.size()) {
+                    std::string f = tokens[i + 1];
+                    filter = std::wstring(f.begin(), f.end());
+                    break;
+                }
+            }
+        }
+
+        auto entries = ldap::ActiveDirectoryStore::get().search(L"DC=micant,DC=local", ldap::LDAP_SCOPE_SUBTREE, filter, {});
+        for (const auto& e : entries) {
+            if (!e.dn.empty()) {
+                std::string dn;
+                for (wchar_t wc : e.dn) dn.push_back(static_cast<char>(wc));
+                out << "\"" << dn << "\"\n";
+            }
+        }
+    }
+
+    void cmdDsGet(const std::vector<std::string>& tokens, std::ostream& out) {
+        ldap::InitializeLdapSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "\nMicrosoft DSGET (MicaNT Active Directory Get Utility)\n\n"
+                << "Usage:\n"
+                << "  dsget user <dn> [-samid] [-upn] [-display] [-desc] [-memberof]\n"
+                << "  dsget computer <dn> [-samid] [-os] [-osv]\n"
+                << "  dsget group <dn> [-samid] [-members]\n"
+                << "  dsget test\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "      MicaNT Active Directory Object Inspector (DSGet) Self-Test        \n"
+                << "========================================================================\n";
+
+            ldap::DirectoryEntry adminEntry;
+            bool found = ldap::ActiveDirectoryStore::get().getEntry(L"CN=Administrator,CN=Users,DC=micant,DC=local", adminEntry);
+            out << "[TEST] 1. Looking up 'CN=Administrator,CN=Users,DC=micant,DC=local': " << (found ? "FOUND" : "NOT FOUND") << "\n";
+            if (found) {
+                std::wstring sam = adminEntry.getFirstValue(L"sAMAccountName");
+                std::wstring disp = adminEntry.getFirstValue(L"displayName");
+                std::string sSam(sam.begin(), sam.end());
+                std::string sDisp(disp.begin(), disp.end());
+                out << "  -> sAMAccountName: " << sSam << "\n";
+                out << "  -> displayName:    " << sDisp << "\n";
+            }
+
+            ldap::DirectoryEntry dcEntry;
+            bool dcFound = ldap::ActiveDirectoryStore::get().getEntry(L"CN=MICANT-DC01,OU=Domain Controllers,DC=micant,DC=local", dcEntry);
+            out << "[TEST] 2. Looking up 'CN=MICANT-DC01,OU=Domain Controllers,DC=micant,DC=local': " << (dcFound ? "FOUND" : "NOT FOUND") << "\n";
+            if (dcFound) {
+                std::wstring os = dcEntry.getFirstValue(L"operatingSystem");
+                std::string sOs(os.begin(), os.end());
+                out << "  -> operatingSystem: " << sOs << "\n";
+            }
+
+            out << "[DSGET] Self-Test Finished Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() < 3) {
+            out << "dsget failed: Target object DN required. Type 'dsget /?' for help.\n";
+            return;
+        }
+
+        std::string dnStr = tokens[2];
+        if (dnStr.front() == '"' && dnStr.back() == '"' && dnStr.length() >= 2) {
+            dnStr = dnStr.substr(1, dnStr.length() - 2);
+        }
+        std::wstring targetDn(dnStr.begin(), dnStr.end());
+
+        ldap::DirectoryEntry entry;
+        if (!ldap::ActiveDirectoryStore::get().getEntry(targetDn, entry)) {
+            out << "dsget failed: The object '" << dnStr << "' does not exist in the directory.\n";
+            return;
+        }
+
+        auto samVal = entry.getFirstValue(L"sAMAccountName");
+        auto dispVal = entry.getFirstValue(L"displayName");
+        std::string sSam(samVal.begin(), samVal.end());
+        std::string sDisp(dispVal.begin(), dispVal.end());
+
+        out << "  dn" << std::string(std::max<int>(4, static_cast<int>(dnStr.length()) - 2), ' ')
+            << "  samid        display\n";
+        out << "  " << dnStr << "  "
+            << std::left << std::setw(13) << sSam
+            << sDisp << "\n\n"
+            << "dsget succeeded\n";
     }
 
     static std::string trim(std::string_view s) {

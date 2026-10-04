@@ -124,7 +124,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 58: Windows Networking Management & NetAPI32         [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 59: Windows Active Directory & LDAP Subsystem        [PLANNED]        │
+│ Phase 59: Windows Active Directory & LDAP Subsystem        [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 60: Windows Remote Desktop (RDP) & Terminal Services [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1395,17 +1397,38 @@
 
 ---
 
-### Phase 59: Windows Active Directory & Lightweight Directory Access Protocol (LDAP) Subsystem (`wldap32.dll`, `adsldp.dll`, `dsquery.exe`, `dsget.exe`) (PLANNED)
-- [ ] **Clean-Room Win32 LDAP & ADSI Architecture (`include/micant/ldap.hpp`, `wldap32.dll`, `adsldp.dll`)**:
-  - Clean-room Win32 metadata structures: `LDAP`, `LDAPMessage`, `LDAPModW`, `BerElement`, `ADS_SEARCHPREF_INFO`, `ADS_SEARCH_COLUMN`.
-  - Core LDAP client APIs: `ldap_initW`, `ldap_sslinitW`, `ldap_connect`, `ldap_bind_sW`, `ldap_simple_bind_sW`, `ldap_unbind_s`, `ldap_search_sW`, `ldap_first_entry`, `ldap_next_entry`, `ldap_first_attributeW`, `ldap_next_attributeW`, `ldap_get_values_lenW`, `ldap_value_free_len`, `ldap_msgfree`, `ldap_count_entries`, `ldap_get_dnW`, `ldap_memfreeW`.
-  - Directory Service cache / sovereign Active Directory Domain Services hierarchy (`DC=micant,DC=local`, `CN=Users`, `CN=Computers`, `CN=Domain Controllers`, `CN=Administrator`, `CN=Guest`, `CN=Krbtgt`).
-- [ ] **SCM Directory Services Integration**:
-  - `NTDS` ("Active Directory Domain Services", `SERVICE_WIN32_OWN_PROCESS`) and `KDC` ("Kerberos Key Distribution Center", `SERVICE_WIN32_SHARE_PROCESS` in `LocalService`).
-- [ ] **Interactive CLI Utilities (`dsquery` & `dsget`)**:
-  - `dsquery user`, `dsquery computer`, `dsquery server`, `dsquery *`, `dsget user <dn>`, `dsquery test`.
-- [ ] **Unit Test Suite 86 (`Test_WindowsLDAP_ActiveDirectory_Subsystem`)**:
-  - Full automated validation of LDAP connection lifecycle, simple and Kerberos binding, search filters (`(objectClass=user)`, `(sAMAccountName=Administrator)`), attribute extraction, BerElement handling, and SCM services.
+### Phase 59: Windows Active Directory & Lightweight Directory Access Protocol (LDAP) Subsystem (`wldap32.dll`, `adsldp.dll`, `dsquery.exe`, `dsget.exe`) (100% Completed)
+- [x] **Clean-Room Win32 LDAP & ADSI Architecture (`include/micant/ldap.hpp`, `wldap32.dll`, `adsldp.dll`)**:
+  - Clean-room Win32 metadata structures: `LDAP`, `LDAPMessage`, `LDAPModW`, `BerElement`, `berval`, `l_timeval`.
+  - Core LDAP client APIs: `ldap_initW`, `ldap_sslinitW`, `ldap_openW`, `ldap_connect`, `ldap_bind_sW`, `ldap_simple_bind_sW`, `ldap_unbind_s`, `ldap_unbind`, `ldap_search_sW`, `ldap_search_ext_sW`, `ldap_count_entries`, `ldap_first_entry`, `ldap_next_entry`, `ldap_first_attributeW`, `ldap_next_attributeW`, `ldap_get_values_lenW`, `ldap_value_free_len`, `ldap_get_valuesW`, `ldap_value_freeW`, `ldap_msgfree`, `ldap_err2stringW`, `ldap_set_optionW`, `ldap_get_optionW`, `ber_free`, `LdapGetLastError`, `LdapMapErrorToWin32`.
+  - Directory Service cache / sovereign Active Directory Domain Services hierarchy (`ActiveDirectoryStore` with `DC=micant,DC=local`, `CN=Users`, `CN=Computers`, `OU=Domain Controllers`, users `Administrator`, `Guest`, `krbtgt`, groups `Domain Admins`, `Domain Users`, `Domain Computers`, workstations `MICANT-WS01$`, domain controllers `MICANT-DC01$`, RootDSE query endpoint).
+  - RFC 4515 LDAP filter evaluation engine supporting simple, wildcard, NOT, composite AND, and composite OR filters.
+  - ADSI LDAP provider stubs (`ADsOpenObject`, `DllGetClassObject`).
+- [x] **SCM Directory Services Integration**:
+  - `NTDS` ("Active Directory Domain Services", `SERVICE_WIN32_OWN_PROCESS`, binary path `C:\Windows\System32\ntds.exe`).
+  - `KDC` ("Kerberos Key Distribution Center", `SERVICE_WIN32_SHARE_PROCESS` in `LocalService`, binary path `C:\Windows\System32\lsass.exe`).
+- [x] **Interactive CLI Utilities (`include/micant/shell.hpp` - `dsquery` & `dsget`)**:
+  - `dsquery user`, `dsquery computer`, `dsquery server`, `dsquery group`, `dsquery * -filter`, `dsquery test`.
+  - `dsget user <dn>`, `dsget computer <dn>`, `dsget group <dn>`, `dsget test`.
+- [x] **Unit Test Suite 86 (`Test_WindowsLDAP_ActiveDirectory_Subsystem`)**:
+  - Full automated validation of LDAP connection lifecycle, simple and Kerberos binding, search filters (`(objectClass=user)`, `(sAMAccountName=Administrator)`), attribute extraction, BerElement handling, ADSI object lookup, and SCM services.
+  - All 86 unit test suites passing with 100% success rate (86 Passed, 0 Failed).
+
+---
+
+### Phase 60: Windows Remote Desktop Protocol (RDP) & Terminal Services Subsystem (`termsrv.dll`, `wtsapi32.dll`, `mstsc.exe`, `TermService`) (PLANNED)
+- [ ] **Windows Terminal Services Architecture (`include/micant/termsrv.hpp`, `termsrv.dll`, `wtsapi32.dll`)**:
+  - Win32 Terminal Services APIs: `WTSEnumerateSessionsW/A`, `WTSQuerySessionInformationW/A`, `WTSLogoffSession`, `WTSDisconnectSession`, `WTSSendMessageW/A`, `WTSFreeMemory`, `WTSOpenServerW`, `WTSCloseServer`, `WTSRegisterSessionNotification`, `WTSUnRegisterSessionNotification`.
+  - Session state tracking: `WTS_CONNECTSTATE_CLASS` (`WTSActive`, `WTSConnected`, `WTSConnectQuery`, `WTSShadow`, `WTSDisconnected`, `WTSIdle`, `WTSListen`, `WTSReset`, `WTSDown`, `WTSInit`).
+  - Multi-session workstation manager with session IDs, client workstation names, protocols, and display capabilities.
+- [ ] **SCM Remote Desktop Services Integration**:
+  - `TermService` ("Remote Desktop Services", `SERVICE_WIN32_SHARE_PROCESS` in svchost group `NetworkService`).
+  - `SessionEnv` ("Remote Desktop Configuration", `SERVICE_WIN32_SHARE_PROCESS` in svchost group `netsvcs`).
+- [ ] **Interactive CLI Utilities (`mstsc` & `qwinsta` / `rwinsta`)**:
+  - `qwinsta` (Query Window Station / Session), `rwinsta` (Reset Window Station), `mstsc /v:<host>`.
+- [ ] **Unit Test Suite 87 (`Test_WindowsRDP_TerminalServices_Subsystem`)**:
+  - Full automated validation of session enumeration, session queries, message dispatch, SCM TermService, and shell commands.
+
 
 
 
