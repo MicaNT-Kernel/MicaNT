@@ -103,6 +103,7 @@
 #include "micant/wasapi.hpp"
 #include "micant/cbs.hpp"
 #include "micant/wdi.hpp"
+#include "micant/pdh.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -16048,6 +16049,228 @@ void Test_WindowsWDI_DiagnosticsInfrastructure_Subsystem() {
     std::cout << "[TEST] Suite 81: Windows Diagnostics Infrastructure (WDI) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 82: Windows Performance Monitor & Performance Counter Subsystem (PDH)
+// ============================================================================
+void Test_WindowsPDH_PerformanceMonitor_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 82: Windows Performance Monitor & PDH Subsystem (pdh.dll / perflib.dll)...\n";
+
+    // Initialize PDH Subsystem
+    pdh::InitializePdhSubsystemExports();
+
+    // Stage 1: Dynamic Loader Export Verification
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhOpenQueryW") != nullptr, "pdh.dll!PdhOpenQueryW must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhOpenQueryA") != nullptr, "pdh.dll!PdhOpenQueryA must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhCloseQuery") != nullptr, "pdh.dll!PdhCloseQuery must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhAddCounterW") != nullptr, "pdh.dll!PdhAddCounterW must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhAddCounterA") != nullptr, "pdh.dll!PdhAddCounterA must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhAddEnglishCounterW") != nullptr, "pdh.dll!PdhAddEnglishCounterW must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhAddEnglishCounterA") != nullptr, "pdh.dll!PdhAddEnglishCounterA must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhRemoveCounter") != nullptr, "pdh.dll!PdhRemoveCounter must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhCollectQueryData") != nullptr, "pdh.dll!PdhCollectQueryData must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhGetFormattedCounterValue") != nullptr, "pdh.dll!PdhGetFormattedCounterValue must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhGetRawCounterValue") != nullptr, "pdh.dll!PdhGetRawCounterValue must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhValidatePathW") != nullptr, "pdh.dll!PdhValidatePathW must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhValidatePathA") != nullptr, "pdh.dll!PdhValidatePathA must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhEnumObjectsW") != nullptr, "pdh.dll!PdhEnumObjectsW must be exported");
+        TEST_ASSERT(ldr.getExport("pdh.dll", "PdhEnumObjectItemsW") != nullptr, "pdh.dll!PdhEnumObjectItemsW must be exported");
+
+        TEST_ASSERT(ldr.getExport("perflib.dll", "PerfCreateInstance") != nullptr, "perflib.dll!PerfCreateInstance must be exported");
+        TEST_ASSERT(ldr.getExport("perflib.dll", "PerfDeleteInstance") != nullptr, "perflib.dll!PerfDeleteInstance must be exported");
+        TEST_ASSERT(ldr.getExport("perflib.dll", "PerfSetCounterSetInfo") != nullptr, "perflib.dll!PerfSetCounterSetInfo must be exported");
+        TEST_ASSERT(ldr.getExport("perflib.dll", "PerfSetULongCounterValue") != nullptr, "perflib.dll!PerfSetULongCounterValue must be exported");
+        TEST_ASSERT(ldr.getExport("perflib.dll", "PerfSetULongLongCounterValue") != nullptr, "perflib.dll!PerfSetULongLongCounterValue must be exported");
+    }
+
+    // Stage 2: Version Database Metadata Verification
+    {
+        const auto* pdhMod = version::VersionDatabase::Instance().FindModule("pdh.dll");
+        TEST_ASSERT(pdhMod != nullptr, "pdh.dll must be registered in VersionDatabase");
+        TEST_ASSERT(pdhMod->stringTable.at("FileDescription").find("Performance Data Helper") != std::string::npos, "pdh.dll description must match");
+
+        const auto* perflibMod = version::VersionDatabase::Instance().FindModule("perflib.dll");
+        TEST_ASSERT(perflibMod != nullptr, "perflib.dll must be registered in VersionDatabase");
+
+        const auto* perfmonMod = version::VersionDatabase::Instance().FindModule("perfmon.exe");
+        TEST_ASSERT(perfmonMod != nullptr, "perfmon.exe must be registered in VersionDatabase");
+
+        const auto* typeperfMod = version::VersionDatabase::Instance().FindModule("typeperf.exe");
+        TEST_ASSERT(typeperfMod != nullptr, "typeperf.exe must be registered in VersionDatabase");
+    }
+
+    // Stage 3: SCM Service Registration Verification
+    {
+        auto& scm = scm::ServiceControlManager::get();
+        uintptr_t hMgr = 0, hPla = 0, hHost = 0;
+        uint32_t err = scm.openSCManager(L"", L"", scm::SC_MANAGER_CONNECT, hMgr);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS && hMgr != 0, "SCM openSCManager must succeed");
+
+        err = scm.openService(hMgr, L"pla", scm::SERVICE_QUERY_STATUS, hPla);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS && hPla != 0, "pla service must be registered in SCM");
+        scm::SERVICE_STATUS_PROCESS stPla{};
+        err = scm.queryServiceStatus(hPla, stPla);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS && stPla.dwCurrentState == scm::SERVICE_RUNNING, "pla must be RUNNING");
+        scm.closeServiceHandle(hPla);
+
+        err = scm.openService(hMgr, L"PerfHost", scm::SERVICE_QUERY_STATUS, hHost);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS && hHost != 0, "PerfHost service must be registered in SCM");
+        scm::SERVICE_STATUS_PROCESS stHost{};
+        err = scm.queryServiceStatus(hHost, stHost);
+        TEST_ASSERT(err == scm::ERROR_SUCCESS && stHost.dwCurrentState == scm::SERVICE_RUNNING, "PerfHost must be RUNNING");
+        scm.closeServiceHandle(hHost);
+
+        scm.closeServiceHandle(hMgr);
+    }
+
+    // Stage 4: Object and Counter Registry Enumeration
+    {
+        uint32_t bufferSize = 0;
+        int32_t hr = pdh::PdhEnumObjectsW(nullptr, nullptr, nullptr, &bufferSize, pdh::PERF_DETAIL_NOVICE, 0);
+        TEST_ASSERT(hr == pdh::PDH_MORE_DATA, "PdhEnumObjectsW with null buffer must return PDH_MORE_DATA");
+        TEST_ASSERT(bufferSize > 0, "Buffer size required must be > 0");
+
+        std::vector<wchar_t> objBuf(bufferSize, 0);
+        hr = pdh::PdhEnumObjectsW(nullptr, nullptr, objBuf.data(), &bufferSize, pdh::PERF_DETAIL_NOVICE, 0);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhEnumObjectsW must return ERROR_SUCCESS");
+
+        // Verify Processor object items
+        uint32_t cchCounters = 0, cchInstances = 0;
+        hr = pdh::PdhEnumObjectItemsW(nullptr, nullptr, L"Processor", nullptr, &cchCounters, nullptr, &cchInstances, pdh::PERF_DETAIL_NOVICE, 0);
+        TEST_ASSERT(hr == pdh::PDH_MORE_DATA, "PdhEnumObjectItemsW must return PDH_MORE_DATA for buffer sizing");
+        TEST_ASSERT(cchCounters > 0 && cchInstances > 0, "Processor object must have counters and instances");
+
+        std::vector<wchar_t> counterBuf(cchCounters, 0);
+        std::vector<wchar_t> instanceBuf(cchInstances, 0);
+        hr = pdh::PdhEnumObjectItemsW(nullptr, nullptr, L"Processor", counterBuf.data(), &cchCounters, instanceBuf.data(), &cchInstances, pdh::PERF_DETAIL_NOVICE, 0);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhEnumObjectItemsW must succeed");
+    }
+
+    // Stage 5: Query Session Lifecycle
+    {
+        pdh::PDH_HQUERY hQuery = 0;
+        int32_t hr = pdh::PdhOpenQueryW(nullptr, 0x1234, &hQuery);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS && hQuery != 0, "PdhOpenQueryW must succeed");
+
+        hr = pdh::PdhCloseQuery(hQuery);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhCloseQuery must return ERROR_SUCCESS");
+
+        hr = pdh::PdhCloseQuery(hQuery);
+        TEST_ASSERT(hr == pdh::PDH_INVALID_HANDLE, "Closing invalid query handle must return PDH_INVALID_HANDLE");
+    }
+
+    // Stage 6: Counter Path Parsing and Validation
+    {
+        int32_t hrOk = pdh::PdhValidatePathW(L"\\Processor(_Total)\\% Processor Time");
+        TEST_ASSERT(hrOk == pdh::ERROR_SUCCESS, "Valid path \\Processor(_Total)\\% Processor Time must validate");
+
+        int32_t hrMem = pdh::PdhValidatePathW(L"\\Memory\\Available MBytes");
+        TEST_ASSERT(hrMem == pdh::ERROR_SUCCESS, "Valid path \\Memory\\Available MBytes must validate");
+
+        int32_t hrBadObj = pdh::PdhValidatePathW(L"\\NonExistentObject\\BadCounter");
+        TEST_ASSERT(hrBadObj != pdh::ERROR_SUCCESS, "Non-existent object path must fail validation");
+
+        int32_t hrBadSyntax = pdh::PdhValidatePathW(L"InvalidSyntaxWithoutSlash");
+        TEST_ASSERT(hrBadSyntax != pdh::ERROR_SUCCESS, "Invalid syntax path must fail validation");
+    }
+
+    // Stage 7: Adding Performance Counters
+    {
+        pdh::PDH_HQUERY hQuery = 0;
+        pdh::PdhOpenQueryW(nullptr, 0, &hQuery);
+
+        pdh::PDH_HCOUNTER hCpu = 0, hMem = 0, hThreads = 0, hDisk = 0;
+        int32_t hr = pdh::PdhAddCounterW(hQuery, L"\\Processor(_Total)\\% Processor Time", 101, &hCpu);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS && hCpu != 0, "Adding Processor counter must succeed");
+
+        hr = pdh::PdhAddCounterW(hQuery, L"\\Memory\\Available MBytes", 102, &hMem);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS && hMem != 0, "Adding Memory counter must succeed");
+
+        hr = pdh::PdhAddCounterW(hQuery, L"\\System\\Threads", 103, &hThreads);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS && hThreads != 0, "Adding System counter must succeed");
+
+        hr = pdh::PdhAddCounterW(hQuery, L"\\PhysicalDisk(_Total)\\Disk Read Bytes/sec", 104, &hDisk);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS && hDisk != 0, "Adding PhysicalDisk counter must succeed");
+
+        // Stage 8: Query Data Collection
+        hr = pdh::PdhCollectQueryData(hQuery);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhCollectQueryData must succeed");
+
+        // Stage 9: Formatted Counter Value Verification
+        pdh::PDH_FMT_COUNTERVALUE valCpu{}, valMem{}, valThr{}, valDsk{};
+        uint32_t type = 0;
+
+        hr = pdh::PdhGetFormattedCounterValue(hCpu, pdh::PDH_FMT_DOUBLE, &type, &valCpu);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhGetFormattedCounterValue(CPU DOUBLE) must succeed");
+        TEST_ASSERT(valCpu.CStatus == pdh::PDH_CSTATUS_VALID_DATA, "CPU counter status must be valid");
+        TEST_ASSERT(valCpu.doubleValue >= 0.0 && valCpu.doubleValue <= 100.0, "CPU percentage must be between 0 and 100");
+
+        hr = pdh::PdhGetFormattedCounterValue(hMem, pdh::PDH_FMT_LONG, &type, &valMem);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhGetFormattedCounterValue(Memory LONG) must succeed");
+        TEST_ASSERT(valMem.longValue > 1000, "Available memory must be > 1000 MB");
+
+        hr = pdh::PdhGetFormattedCounterValue(hThreads, pdh::PDH_FMT_LONG, &type, &valThr);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhGetFormattedCounterValue(Threads LONG) must succeed");
+        TEST_ASSERT(valThr.longValue > 0, "Thread count must be > 0");
+
+        hr = pdh::PdhGetFormattedCounterValue(hDisk, pdh::PDH_FMT_LARGE, &type, &valDsk);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhGetFormattedCounterValue(Disk LARGE) must succeed");
+        TEST_ASSERT(valDsk.largeValue > 0, "Disk read bytes must be > 0");
+
+        // Stage 10: Raw Counter Value Retrieval
+        pdh::PDH_RAW_COUNTER rawVal{};
+        hr = pdh::PdhGetRawCounterValue(hCpu, &type, &rawVal);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhGetRawCounterValue must succeed");
+        TEST_ASSERT(rawVal.CStatus == pdh::PDH_CSTATUS_VALID_DATA, "Raw counter status must be valid");
+
+        // Stage 11: Counter Removal
+        hr = pdh::PdhRemoveCounter(hCpu);
+        TEST_ASSERT(hr == pdh::ERROR_SUCCESS, "PdhRemoveCounter must succeed");
+
+        hr = pdh::PdhGetFormattedCounterValue(hCpu, pdh::PDH_FMT_DOUBLE, nullptr, &valCpu);
+        TEST_ASSERT(hr == pdh::PDH_INVALID_HANDLE, "Querying removed counter must return PDH_INVALID_HANDLE");
+
+        pdh::PdhCloseQuery(hQuery);
+    }
+
+    // Stage 12: Interactive Shell CLI Integration (perfmon & typeperf)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // 1. perfmon /?
+        shell.execute("perfmon /?", out);
+        TEST_ASSERT(out.str().find("Windows Performance Monitor") != std::string::npos, "perfmon /? must display title");
+        TEST_ASSERT(out.str().find("typeperf") != std::string::npos, "perfmon /? must mention typeperf");
+
+        // 2. perfmon /objects
+        out.str("");
+        shell.execute("perfmon /objects", out);
+        TEST_ASSERT(out.str().find("\\Processor") != std::string::npos, "perfmon /objects must include Processor");
+        TEST_ASSERT(out.str().find("\\Memory") != std::string::npos, "perfmon /objects must include Memory");
+        TEST_ASSERT(out.str().find("\\PhysicalDisk") != std::string::npos, "perfmon /objects must include PhysicalDisk");
+
+        // 3. perfmon /counters Processor
+        out.str("");
+        shell.execute("perfmon /counters Processor", out);
+        TEST_ASSERT(out.str().find("% Processor Time") != std::string::npos, "perfmon /counters must list % Processor Time");
+
+        // 4. perfmon test
+        out.str("");
+        shell.execute("perfmon test", out);
+        TEST_ASSERT(out.str().find("Finished Successfully") != std::string::npos, "perfmon test must succeed");
+
+        // 5. typeperf "\Processor(_Total)\% Processor Time" -sc 2
+        out.str("");
+        shell.execute("typeperf \"\\Processor(_Total)\\% Processor Time\" -sc 2", out);
+        TEST_ASSERT(out.str().find("(PDH-CSV 4.0)") != std::string::npos, "typeperf must produce standard PDH-CSV 4.0 header");
+        TEST_ASSERT(out.str().find("23:45:00.000") != std::string::npos, "typeperf must sample values with timestamp");
+    }
+
+    std::cout << "[TEST] Suite 82: Windows Performance Monitor & PDH Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -16134,6 +16357,7 @@ int main() {
     RUN_TEST(Test_WindowsWASAPI_CoreAudioEngine_Subsystem);
     RUN_TEST(Test_WindowsCBS_DISM_Servicing_Subsystem);
     RUN_TEST(Test_WindowsWDI_DiagnosticsInfrastructure_Subsystem);
+    RUN_TEST(Test_WindowsPDH_PerformanceMonitor_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

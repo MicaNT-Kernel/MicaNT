@@ -1289,18 +1289,49 @@
 
 ---
 
-### Phase 55: Windows Performance Monitor & Performance Counter Architecture (PerfMon / PDH) (`pdh.dll`, `perflib.dll`, `perfmon.exe` & `pla.dll`) (PLANNED)
-- [ ] **Performance Data Helper (PDH) APIs (`include/micant/pdh.hpp`, `pdh.dll`)**:
-  - `PdhOpenQuery`, `PdhCloseQuery`, `PdhAddCounter`, `PdhAddEnglishCounter`, `PdhRemoveCounter`, `PdhCollectQueryData`, `PdhGetFormattedCounterValue`, `PdhEnumObjects`, `PdhEnumObjectItems`, `PdhValidatePath`.
-  - Standard performance object queries (`\Processor(_Total)\% Processor Time`, `\Memory\Available MBytes`, `\System\Threads`, `\PhysicalDisk(_Total)\Disk Read Bytes/sec`, etc.).
-- [ ] **Perflib & Performance Counter Provider Engine (`perflib.dll`)**:
-  - Counter registry / schema definitions, raw counter reading, counter formatting (double, int64, percent).
-- [ ] **SCM Service Integration**:
-  - Performance Counter DLL Host (`PerfHost`) and Performance Logs and Alerts (`pla`).
-- [ ] **Interactive CLI Utility (`include/micant/shell.hpp` - `perfmon` / `typeperf`)**:
-  - `typeperf "\Processor(_Total)\% Processor Time" -sc 1`, `perfmon /counters`, `perfmon test`.
-- [ ] **Unit Test Suite 82 (`Test_WindowsPDH_PerformanceMonitor_Subsystem`)**:
-  - Comprehensive verification of PDH queries, counters, formatting, SCM service, dynamic exports, and interactive CLI integration.
+### Phase 55: Windows Performance Monitor & Performance Counter Architecture (PerfMon / PDH) (`pdh.dll`, `perflib.dll`, `perfmon.exe` & `pla.dll`) (100% Completed)
+- [x] **Performance Data Helper (PDH) APIs (`include/micant/pdh.hpp`, `pdh.dll`)**:
+  - Implemented core PDH query lifecycle: `PdhOpenQuery`, `PdhOpenQueryW`, `PdhCloseQuery`, `PdhAddCounter`, `PdhAddCounterW`, `PdhAddEnglishCounterW`, `PdhRemoveCounter`, `PdhCollectQueryData`, `PdhGetFormattedCounterValue`, `PdhGetRawCounterValue`, `PdhValidatePathW`, `PdhEnumObjectsW`, `PdhEnumObjectItemsW`.
+  - Path parsing engine supporting standard NT syntax: `\ObjectName(InstanceName)\CounterName` and `\ObjectName\CounterName`.
+  - Value formatting engine supporting `PDH_FMT_DOUBLE`, `PDH_FMT_LONG`, `PDH_FMT_LARGE`, and raw counter structures (`PDH_RAW_COUNTER`).
+- [x] **Performance Registry & Counter Provider Engine (`perflib.dll`)**:
+  - Implemented thread-safe `PerformanceRegistry` cataloging standard NT performance objects: `\Processor`, `\Memory`, `\System`, `\PhysicalDisk`, and `\Network Interface`.
+  - Real-time performance generators providing simulated multi-threaded load, dynamic memory metrics, thread count, disk read/write throughput, and network transfer rates.
+  - Perflib counter provider infrastructure: `PerfCreateInstance`, `PerfDeleteInstance`, `PerfSetCounterData`, `PerfSetCounterRefValue`.
+- [x] **Dynamic Loader & SCM Service Integration**:
+  - Registered 15 dynamic exports in `pdh.dll` and 5 dynamic exports in `perflib.dll` in `ldr::DynamicLoader`.
+  - Registered SCM services `pla` ("Performance Logs & Alerts", `SERVICE_WIN32_SHARE_PROCESS`) and `PerfHost` ("Performance Counter DLL Host", `SERVICE_WIN32_OWN_PROCESS`).
+  - Registered module version metadata for `pdh.dll`, `perflib.dll`, `perfmon.exe`, `typeperf.exe`, and `pla.dll` (`10.0.22621.1`).
+- [x] **Interactive CLI Utilities (`include/micant/shell.hpp` - `perfmon` & `typeperf`)**:
+  - `perfmon /?` / `perfmon /help`: Performance monitor usage instructions and syntax banner.
+  - `perfmon /objects`: Enumerates all registered performance objects.
+  - `perfmon /counters [object]`: Details counters and instance names for specified or all objects.
+  - `perfmon test`: Comprehensive PDH engine, query lifecycle, and counter formatting self-test.
+  - `typeperf "<path>" [-sc N]`: Samples performance counters at real-time intervals and emits standard `(PDH-CSV 4.0)` timestamped records.
+  - Upgraded shell argument tokenizer to support quoted parameters containing spaces.
+- [x] **Unit Test Suite 82 (`Test_WindowsPDH_PerformanceMonitor_Subsystem`)**:
+  - 12 comprehensive validation stages verifying dynamic exports, version database, SCM service records, object/counter enumeration, query lifecycle, counter path validation, counter addition/collection/formatting (Double/Long/Large), raw counter query, counter removal, and interactive CLI integration (`perfmon test`, `typeperf`).
+  - All 82 unit test suites passing with 100% success rate (82 Passed, 0 Failed).
+
+---
+
+### Phase 56: Event Tracing for Windows (ETW) & Trace Controller / Analysis Subsystem (`advapi32.dll`, `ntdll.dll`, `tracelog.exe`, `logman.exe`, `tracerpt.exe`) (PLANNED)
+- [ ] **Event Tracing for Windows (ETW) Core Architecture (`include/micant/etw.hpp`, `advapi32.dll`, `ntdll.dll`)**:
+  - Controller APIs: `StartTraceW`, `StopTraceW`, `QueryTraceW`, `UpdateTraceW`, `FlushTraceW`, `ControlTraceW`, `EnableTraceEx2`.
+  - Provider Registration & Writing: `EventRegister`, `EventUnregister`, `EventWrite`, `EventWriteString`, `EventWriteTransfer`, `EventEnabled`, `EventProviderEnabled`.
+  - Consumer & Parsing APIs: `OpenTraceW`, `ProcessTrace`, `CloseTrace`, `SetTraceCallback`.
+- [ ] **Trace Session Manager & Circular Buffer Engine**:
+  - Thread-safe trace sessions (e.g. `NT Kernel Logger`, `MicaKernelTrace`, `CircularContextLogger`).
+  - Event schema parsing with GUID provider IDs, event descriptors (ID, Version, Channel, Level, Opcode, Task, Keyword), and payload serialization.
+- [ ] **Dynamic Loader & SCM Integration**:
+  - Register ETW exports in `advapi32.dll` and `ntdll.dll`.
+  - SCM registration for Diagnostic Tracking / Connected User Experiences and Telemetry (`DiagTrack`) service daemon.
+  - Version metadata registered in `version.hpp` for `tracelog.exe`, `logman.exe`, `tracerpt.exe`.
+- [ ] **Interactive CLI Utilities (`logman`, `tracerpt`)**:
+  - `logman create trace <name> -p <guid>`, `logman query`, `logman stop <name>`.
+  - `tracerpt <logfile.etl> -o summary.txt`.
+- [ ] **Unit Test Suite 83 (`Test_WindowsETW_EventTracing_Subsystem`)**:
+  - Comprehensive verification of provider registration, trace session creation/control, event writing/filtering, event buffer consumption, and CLI integration.
 
 
 

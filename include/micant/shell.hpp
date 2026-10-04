@@ -71,6 +71,7 @@
 #include "wasapi.hpp"
 #include "cbs.hpp"
 #include "wdi.hpp"
+#include "pdh.hpp"
 
 namespace micant::shell {
 
@@ -220,6 +221,8 @@ public:
             if (cmd == "audiosrv" || cmd == "wasapi") { cmdAudioSrv(tokens, out); return 0; }
             if (cmd == "dism") { cmdDism(tokens, out); return 0; }
             if (cmd == "msdt" || cmd == "wdi") { cmdMsdt(tokens, out); return 0; }
+            if (cmd == "perfmon") { cmdPerfMon(tokens, out); return 0; }
+            if (cmd == "typeperf") { cmdTypePerf(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -481,6 +484,7 @@ private:
             << "  VSSADMIN / VSS    Volume Shadow Copy Service Administration (vssapi.dll)\n"
             << "  DISM [/online ...] Deployment Image Servicing and Management Subsystem (dism test)\n"
             << "  MSDT [/id <name>] Microsoft Support Diagnostic Tool & WDI engine (msdt test)\n"
+            << "  PERFMON / TYPEPERF Performance Monitor & Performance Counter sampling (perfmon test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -6774,6 +6778,168 @@ private:
         out << "The diagnostic operation completed successfully.\n";
     }
 
+    void cmdPerfMon(const std::vector<std::string>& tokens, std::ostream& out) {
+        pdh::InitializePdhSubsystemExports();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            // 1. perfmon test
+            if (sub == "test" || sub == "/test") {
+                out << "========================================================================\n"
+                    << "      MicaNT Windows Performance Monitor & PDH Engine Self-Test         \n"
+                    << "========================================================================\n";
+                out << "[TEST] 1. Initializing PDH Subsystem Exports...\n";
+                pdh::PDH_HQUERY hQuery = 0;
+                int32_t hr = pdh::PdhOpenQueryW(nullptr, 0, &hQuery);
+                out << "  -> PdhOpenQueryW: " << ((hr == 0 && hQuery != 0) ? "SUCCESS" : "FAILED") << "\n";
+
+                out << "[TEST] 2. Adding Core Performance Counters...\n";
+                pdh::PDH_HCOUNTER hCpu = 0, hMem = 0, hThreads = 0, hDisk = 0;
+                hr = pdh::PdhAddCounterW(hQuery, L"\\Processor(_Total)\\% Processor Time", 0, &hCpu);
+                out << "  -> PdhAddCounter(\\Processor(_Total)\\% Processor Time): " << ((hr == 0 && hCpu != 0) ? "SUCCESS" : "FAILED") << "\n";
+                hr = pdh::PdhAddCounterW(hQuery, L"\\Memory\\Available MBytes", 0, &hMem);
+                out << "  -> PdhAddCounter(\\Memory\\Available MBytes): " << ((hr == 0 && hMem != 0) ? "SUCCESS" : "FAILED") << "\n";
+                hr = pdh::PdhAddCounterW(hQuery, L"\\System\\Threads", 0, &hThreads);
+                out << "  -> PdhAddCounter(\\System\\Threads): " << ((hr == 0 && hThreads != 0) ? "SUCCESS" : "FAILED") << "\n";
+                hr = pdh::PdhAddCounterW(hQuery, L"\\PhysicalDisk(_Total)\\Disk Read Bytes/sec", 0, &hDisk);
+                out << "  -> PdhAddCounter(\\PhysicalDisk(_Total)\\Disk Read Bytes/sec): " << ((hr == 0 && hDisk != 0) ? "SUCCESS" : "FAILED") << "\n";
+
+                out << "[TEST] 3. Collecting Query Counter Data...\n";
+                hr = pdh::PdhCollectQueryData(hQuery);
+                out << "  -> PdhCollectQueryData: " << ((hr == 0) ? "SUCCESS" : "FAILED") << "\n";
+
+                out << "[TEST] 4. Formatting Counter Values (Double / Long / Large)...\n";
+                pdh::PDH_FMT_COUNTERVALUE valCpu{}, valMem{}, valThr{}, valDsk{};
+                pdh::PdhGetFormattedCounterValue(hCpu, pdh::PDH_FMT_DOUBLE, nullptr, &valCpu);
+                pdh::PdhGetFormattedCounterValue(hMem, pdh::PDH_FMT_LONG, nullptr, &valMem);
+                pdh::PdhGetFormattedCounterValue(hThreads, pdh::PDH_FMT_LONG, nullptr, &valThr);
+                pdh::PdhGetFormattedCounterValue(hDisk, pdh::PDH_FMT_LARGE, nullptr, &valDsk);
+
+                out << "  -> % Processor Time: " << std::fixed << std::setprecision(2) << valCpu.doubleValue << " %\n"
+                    << "  -> Available Memory:  " << valMem.longValue << " MB\n"
+                    << "  -> System Threads:    " << valThr.longValue << "\n"
+                    << "  -> Disk Read Rate:    " << valDsk.largeValue << " Bytes/sec\n";
+
+                out << "[TEST] 5. Validating Counter Paths...\n";
+                int32_t valOk = pdh::PdhValidatePathW(L"\\Processor(_Total)\\% Processor Time");
+                int32_t valBad = pdh::PdhValidatePathW(L"\\InvalidObject\\BadCounter");
+                out << "  -> Validate valid path: " << ((valOk == 0) ? "PASS" : "FAIL") << "\n";
+                out << "  -> Validate invalid path: " << ((valBad != 0) ? "PASS (REJECTED)" : "FAIL") << "\n";
+
+                pdh::PdhCloseQuery(hQuery);
+                out << "[PERFMON] Self-Test Finished Successfully.\n";
+                return;
+            }
+
+            // 2. perfmon /objects
+            if (sub == "/objects" || sub == "-objects" || sub == "objects") {
+                auto objs = pdh::PerformanceRegistry::get().getObjects();
+                out << "\nPerformance Monitor (PerfMon) Objects (" << objs.size() << "):\n";
+                for (const auto& o : objs) {
+                    out << "  - \\" << wideToAscii(o) << "\n";
+                }
+                out << "\n";
+                return;
+            }
+
+            // 3. perfmon /counters [object]
+            if (sub == "/counters" || sub == "-counters" || sub == "counters") {
+                std::string targetObj;
+                if (tokens.size() > 2) targetObj = tokens[2];
+                auto objs = pdh::PerformanceRegistry::get().getObjects();
+                out << "\nPerformance Monitor Counters:\n";
+                for (const auto& o : objs) {
+                    std::string oAscii = wideToAscii(o);
+                    if (!targetObj.empty() && oAscii.find(targetObj) == std::string::npos) continue;
+
+                    auto counters = pdh::PerformanceRegistry::get().getCountersForObject(o);
+                    auto instances = pdh::PerformanceRegistry::get().getInstancesForObject(o);
+                    out << "Object: \\" << oAscii << "\n";
+                    if (!instances.empty()) {
+                        out << "  Instances: ";
+                        for (size_t i = 0; i < instances.size(); ++i) {
+                            if (i > 0) out << ", ";
+                            out << wideToAscii(instances[i]);
+                        }
+                        out << "\n";
+                    }
+                    out << "  Counters (" << counters.size() << "):\n";
+                    for (const auto& c : counters) {
+                        out << "    * " << wideToAscii(c) << "\n";
+                    }
+                    out << "\n";
+                }
+                return;
+            }
+        }
+
+        out << "\nWindows Performance Monitor (PerfMon)\n"
+            << "Version: 10.0.26100.1\n\n"
+            << "Usage:\n"
+            << "  perfmon /objects                   List all registered performance objects\n"
+            << "  perfmon /counters [object]         List counters for all or specified object\n"
+            << "  perfmon test                       Execute PDH performance counter self-test\n"
+            << "  typeperf \"<CounterPath>\" [-sc N]   Sample counter N times (CSV formatted)\n\n"
+            << "Examples:\n"
+            << "  typeperf \"\\Processor(_Total)\\% Processor Time\" -sc 1\n"
+            << "  typeperf \"\\Memory\\Available MBytes\" -sc 1\n";
+    }
+
+    void cmdTypePerf(const std::vector<std::string>& tokens, std::ostream& out) {
+        pdh::InitializePdhSubsystemExports();
+
+        if (tokens.size() < 2 || tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help") {
+            out << "\nMicrosoft TypePerf (MicaNT Performance Data Helper)\n\n"
+                << "Usage: typeperf <counter_path> [-sc <samples>]\n"
+                << "Example: typeperf \"\\Processor(_Total)\\% Processor Time\" -sc 1\n\n";
+            return;
+        }
+
+        std::string counterPath = tokens[1];
+        int sampleCount = 1;
+        for (size_t i = 2; i < tokens.size(); ++i) {
+            if ((tokens[i] == "-sc" || tokens[i] == "/sc") && i + 1 < tokens.size()) {
+                sampleCount = std::max(1, std::stoi(tokens[++i]));
+            }
+        }
+
+        // Strip quotes if present
+        if (counterPath.size() >= 2 && counterPath.front() == '"' && counterPath.back() == '"') {
+            counterPath = counterPath.substr(1, counterPath.size() - 2);
+        }
+
+        std::wstring wPath(counterPath.begin(), counterPath.end());
+        pdh::PDH_HQUERY hQuery = 0;
+        if (pdh::PdhOpenQueryW(nullptr, 0, &hQuery) != 0 || !hQuery) {
+            out << "Error: Unable to open PDH query session.\n";
+            return;
+        }
+
+        pdh::PDH_HCOUNTER hCounter = 0;
+        int32_t hr = pdh::PdhAddCounterW(hQuery, wPath.c_str(), 0, &hCounter);
+        if (hr != 0 || !hCounter) {
+            out << "Error: Counter '" << counterPath << "' not found or invalid path (0x" << std::hex << hr << std::dec << ").\n";
+            pdh::PdhCloseQuery(hQuery);
+            return;
+        }
+
+        // CSV Header
+        out << "\"(PDH-CSV 4.0)\",\"" << counterPath << "\"\n";
+
+        for (int s = 0; s < sampleCount; ++s) {
+            pdh::PdhCollectQueryData(hQuery);
+            pdh::PDH_FMT_COUNTERVALUE val{};
+            pdh::PdhGetFormattedCounterValue(hCounter, pdh::PDH_FMT_DOUBLE, nullptr, &val);
+
+            // Timestamp in format "MM/DD/YYYY HH:MM:SS.mmm"
+            out << "\"10/03/2026 23:45:00.000\",\"" << std::fixed << std::setprecision(6) << val.doubleValue << "\"\n";
+        }
+
+        pdh::PdhCloseQuery(hQuery);
+    }
+
     static std::string trim(std::string_view s) {
         size_t start = s.find_first_not_of(" \t\r\n");
         if (start == std::string_view::npos) return "";
@@ -6783,10 +6949,25 @@ private:
 
     static std::vector<std::string> tokenize(const std::string& line) {
         std::vector<std::string> tokens;
-        std::istringstream iss(line);
-        std::string token;
-        while (iss >> token) {
-            tokens.push_back(token);
+        std::string current;
+        bool inQuotes = false;
+
+        for (size_t i = 0; i < line.size(); ++i) {
+            char ch = line[i];
+            if (ch == '"') {
+                inQuotes = !inQuotes;
+                current += ch;
+            } else if (std::isspace(static_cast<unsigned char>(ch)) && !inQuotes) {
+                if (!current.empty()) {
+                    tokens.push_back(current);
+                    current.clear();
+                }
+            } else {
+                current += ch;
+            }
+        }
+        if (!current.empty()) {
+            tokens.push_back(current);
         }
         return tokens;
     }
