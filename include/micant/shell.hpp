@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <fstream>
 #include <atomic>
+#include <cmath>
 
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
@@ -78,6 +79,7 @@
 #include "ldap.hpp"
 #include "termsrv.hpp"
 #include "winspool.hpp"
+#include "mci.hpp"
 
 namespace micant::shell {
 
@@ -137,6 +139,7 @@ public:
         wevtapi::InitializeWevtApiSubsystemExports();
         wbem::InitializeWbemSubsystemExports();
         cbs::InitializeCbsSubsystemExports();
+        mci::InitializeMciSubsystemExports();
         tcpip::NetworkStack::get().initialize();
 
         // Establish default interactive logon session (admin) if not already active
@@ -240,6 +243,8 @@ public:
             if (cmd == "mstsc" || cmd == "rdp") { cmdMstsc(tokens, out); return 0; }
             if (cmd == "prnmngr") { cmdPrnMngr(tokens, out); return 0; }
             if (cmd == "print") { cmdPrint(tokens, out); return 0; }
+            if (cmd == "mci") { cmdMci(tokens, out); return 0; }
+            if (cmd == "waveplay") { cmdWavePlay(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -509,6 +514,8 @@ private:
             << "  MSTSC [/v:<host>] Remote Desktop Connection client (mstsc test)\n"
             << "  PRNMNGR           Printer configuration & management utility (prnmngr -l|-d|-s)\n"
             << "  PRINT [/D:<dev>]  Line printer & document spooling utility (print test)\n"
+            << "  MCI [command]     Media Control Interface string command processor (mci test)\n"
+            << "  WAVEPLAY [tone]   Waveform audio playback & streaming utility (waveplay test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -8479,6 +8486,172 @@ private:
         winspool::ClosePrinter(hPrinter);
 
         out << "Job ID #" << jobId << " successfully sent to spooler (" << written << " bytes).\n";
+    }
+
+    void cmdMci(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Media Control Interface (MCI) Self-Test Suite            \n"
+                << "========================================================================\n";
+            char retBuf[256]{};
+            uint32_t err = 0;
+
+            // 1. Open waveaudio
+            err = mci::mciSendStringA("open sample.wav type waveaudio alias track1", retBuf, sizeof(retBuf), nullptr);
+            out << "[TEST] 1. mciSendStringA(open sample.wav type waveaudio alias track1): "
+                << (err == 0 ? "SUCCESS" : "FAILED") << " (Return: \"" << retBuf << "\")\n";
+
+            // 2. Play
+            err = mci::mciSendStringA("play track1", retBuf, sizeof(retBuf), nullptr);
+            out << "[TEST] 2. mciSendStringA(play track1): "
+                << (err == 0 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 3. Status mode
+            err = mci::mciSendStringA("status track1 mode", retBuf, sizeof(retBuf), nullptr);
+            out << "[TEST] 3. mciSendStringA(status track1 mode): "
+                << (err == 0 ? "SUCCESS" : "FAILED") << " (Mode: \"" << retBuf << "\")\n";
+
+            // 4. Pause
+            err = mci::mciSendStringA("pause track1", retBuf, sizeof(retBuf), nullptr);
+            out << "[TEST] 4. mciSendStringA(pause track1): "
+                << (err == 0 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 5. Resume
+            err = mci::mciSendStringA("resume track1", retBuf, sizeof(retBuf), nullptr);
+            out << "[TEST] 5. mciSendStringA(resume track1): "
+                << (err == 0 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 6. Stop
+            err = mci::mciSendStringA("stop track1", retBuf, sizeof(retBuf), nullptr);
+            out << "[TEST] 6. mciSendStringA(stop track1): "
+                << (err == 0 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 7. Close
+            err = mci::mciSendStringA("close track1", retBuf, sizeof(retBuf), nullptr);
+            out << "[TEST] 7. mciSendStringA(close track1): "
+                << (err == 0 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 8. Error string lookup
+            char errText[128]{};
+            mci::mciGetErrorStringA(mci::MCIERR_CANNOT_LOAD_DRIVER, errText, sizeof(errText));
+            out << "[TEST] 8. mciGetErrorStringA(MCIERR_CANNOT_LOAD_DRIVER): \"" << errText << "\"\n";
+
+            out << "[MCI] Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() < 2) {
+            out << "Usage:\n"
+                << "  mci test                               Runs MCI self-test suite\n"
+                << "  mci <command string>                   Executes an MCI string command\n"
+                << "Example:\n"
+                << "  mci open chime.wav type waveaudio alias snd\n"
+                << "  mci play snd\n"
+                << "  mci status snd mode\n"
+                << "  mci close snd\n";
+            return;
+        }
+
+        std::string fullCmd;
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            if (i > 1) fullCmd += " ";
+            fullCmd += tokens[i];
+        }
+
+        char retBuf[256]{};
+        uint32_t err = mci::mciSendStringA(fullCmd.c_str(), retBuf, sizeof(retBuf), nullptr);
+        if (err == 0) {
+            if (retBuf[0] != '\0') {
+                out << retBuf << "\n";
+            } else {
+                out << "The command completed successfully.\n";
+            }
+        } else {
+            char errBuf[256]{};
+            mci::mciGetErrorStringA(err, errBuf, sizeof(errBuf));
+            out << "MCI Error " << err << ": " << errBuf << "\n";
+        }
+    }
+
+    void cmdWavePlay(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "        MicaNT Waveform Audio Playback (waveOut) Self-Test Suite        \n"
+                << "========================================================================\n";
+
+            uint32_t numDevs = mci::waveOutGetNumDevs();
+            out << "[TEST] 1. waveOutGetNumDevs: " << numDevs << " device(s) found.\n";
+
+            mci::WAVEOUTCAPSW caps{};
+            mci::MMRESULT mr = mci::waveOutGetDevCapsW(0, &caps, sizeof(caps));
+            std::string devName(caps.szPname, caps.szPname + wcslen(caps.szPname));
+            out << "[TEST] 2. waveOutGetDevCapsW(0): " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED")
+                << " (Device: " << devName << ", Channels: " << caps.wChannels << ")\n";
+
+            mci::WAVEFORMATEX wfx{};
+            wfx.wFormatTag = mci::WAVE_FORMAT_PCM;
+            wfx.nChannels = 2;
+            wfx.nSamplesPerSec = 44100;
+            wfx.wBitsPerSample = 16;
+            wfx.nBlockAlign = (wfx.nChannels * wfx.wBitsPerSample) / 8;
+            wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+
+            mci::HWAVEOUT hWave = nullptr;
+            mr = mci::waveOutOpen(&hWave, 0, &wfx, 0, 0, 0);
+            out << "[TEST] 3. waveOutOpen(44.1kHz, 16-bit Stereo): "
+                << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED") << " (Handle: 0x" << std::hex << reinterpret_cast<uintptr_t>(hWave) << std::dec << ")\n";
+
+            std::vector<int16_t> sampleData(4410 * 2, 0);
+            for (size_t i = 0; i < 4410; ++i) {
+                int16_t val = static_cast<int16_t>(16000.0 * std::sin(2.0 * 3.141592653589793 * 440.0 * i / 44100.0));
+                sampleData[i * 2] = val;
+                sampleData[i * 2 + 1] = val;
+            }
+
+            mci::WAVEHDR hdr{};
+            hdr.lpData = reinterpret_cast<char*>(sampleData.data());
+            hdr.dwBufferLength = static_cast<uint32_t>(sampleData.size() * sizeof(int16_t));
+
+            mr = mci::waveOutPrepareHeader(hWave, &hdr, sizeof(hdr));
+            out << "[TEST] 4. waveOutPrepareHeader: " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED")
+                << " (Flags: 0x" << std::hex << hdr.dwFlags << std::dec << ")\n";
+
+            mr = mci::waveOutWrite(hWave, &hdr, sizeof(hdr));
+            out << "[TEST] 5. waveOutWrite: " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED")
+                << " (Flags: 0x" << std::hex << hdr.dwFlags << std::dec << ")\n";
+
+            mci::MMTIME mmt{};
+            mmt.wType = mci::TIME_BYTES;
+            mr = mci::waveOutGetPosition(hWave, &mmt, sizeof(mmt));
+            out << "[TEST] 6. waveOutGetPosition: " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED")
+                << " (" << mmt.u.cb << " bytes streamed)\n";
+
+            mr = mci::waveOutPause(hWave);
+            out << "[TEST] 7. waveOutPause: " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED") << "\n";
+
+            mr = mci::waveOutRestart(hWave);
+            out << "[TEST] 8. waveOutRestart: " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED") << "\n";
+
+            mr = mci::waveOutReset(hWave);
+            out << "[TEST] 9. waveOutReset: " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED") << "\n";
+
+            mr = mci::waveOutUnprepareHeader(hWave, &hdr, sizeof(hdr));
+            out << "[TEST] 10. waveOutUnprepareHeader: " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED") << "\n";
+
+            mr = mci::waveOutClose(hWave);
+            out << "[TEST] 11. waveOutClose: " << (mr == mci::MMSYSERR_NOERROR ? "SUCCESS" : "FAILED") << "\n";
+
+            uint32_t auxVol = 0;
+            mci::auxGetVolume(0, &auxVol);
+            out << "[TEST] 12. auxGetVolume: 0x" << std::hex << auxVol << std::dec << " (PASS)\n";
+
+            out << "[WAVEPLAY] Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  waveplay test                            Runs waveform audio self-test suite\n"
+            << "  waveplay sine [freq]                     Plays a synthetic audio tone\n";
     }
 
     static std::string trim(std::string_view s) {

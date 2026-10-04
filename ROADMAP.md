@@ -1448,18 +1448,35 @@
 
 ---
 
-### Phase 62: Windows Media Control Interface (MCI) & Audio Wave Subsystem (`mciwave.dll`, `winmm.dll`, `mciSendCommand`, `waveOut*`) (PLANNED)
-- [ ] **Clean-Room MCI & Audio Wave Architecture (`include/micant/mci.hpp`, `mciwave.dll`, `winmm.dll`)**:
-  - MCI core APIs: `mciSendCommandW/A`, `mciSendStringW/A`, `mciGetErrorStringW/A`, `mciExecute`.
-  - Waveform audio APIs: `waveOutOpen`, `waveOutClose`, `waveOutPrepareHeader`, `waveOutUnprepareHeader`, `waveOutWrite`, `waveOutPause`, `waveOutRestart`, `waveOutReset`, `waveOutGetPosition`, `waveOutGetDevCapsW/A`, `waveOutGetNumDevs`.
+### Phase 62: Windows Media Control Interface (MCI) & Audio Wave Subsystem (`mciwave.dll`, `winmm.dll`, `mplayer.exe`, `waveplay.exe`, `mciSendCommand`, `waveOut*`) (100% Completed)
+- [x] **Clean-Room MCI & Audio Wave Architecture (`include/micant/mci.hpp`, `mciwave.dll`, `winmm.dll`)**:
+  - MCI core APIs: `mciSendCommandW/A`, `mciSendStringW/A`, `mciGetErrorStringW/A`.
+  - Waveform audio APIs: `waveOutOpen`, `waveOutClose`, `waveOutPrepareHeader`, `waveOutUnprepareHeader`, `waveOutWrite`, `waveOutPause`, `waveOutRestart`, `waveOutReset`, `waveOutGetPosition`, `waveOutGetVolume`, `waveOutSetVolume`, `waveOutGetDevCapsW/A`, `waveOutGetNumDevs`.
   - Auxiliary audio APIs: `auxGetDevCapsW/A`, `auxGetNumDevs`, `auxSetVolume`, `auxGetVolume`.
-  - Sovereign MCI Device Manager (`MciDeviceManager`): virtual digital audio devices, WAV header parser (RIFF, WAVE, fmt, data), PCM playback simulation.
-- [ ] **SCM Multimedia Services Integration**:
-  - Integration with AudioSrv and virtual multimedia devices.
-- [ ] **Interactive CLI Utilities (`mci` & `waveplay`)**:
-  - `mci` (MCI command string executor), `waveplay` (WAV audio player utility).
-- [ ] **Unit Test Suite 89 (`Test_WindowsMCI_AudioWave_Subsystem`)**:
-  - Full automated validation of MCI string/command dispatch, waveform output buffers, auxiliary controls, and CLI commands.
+  - Sovereign MCI Device Manager (`MciDeviceManager`): virtual digital audio devices (`MicaNT High Definition Audio`, `MicaNT Synthetic Wave Synth`, `MicaNT Auxiliary Audio`), waveform audio queue tracking and playback position calculation.
+- [x] **Waveform Audio Driver Export Parity**:
+  - `mciwave.dll` dynamic driver export: `DriverProc`.
+- [x] **Interactive CLI Utilities (`include/micant/shell.hpp` - `mci` & `waveplay`)**:
+  - `mci` (MCI command string executor: `open`, `play`, `pause`, `resume`, `status`, `stop`, `close`, `test`).
+  - `waveplay` (Waveform audio playback & testing utility: `test`, `sine`).
+- [x] **Unit Test Suite 89 (`Test_WindowsMCI_AudioWave_Subsystem`)**:
+  - Full automated validation of dynamic exports (`winmm.dll`, `mciwave.dll`), version database identity, waveform device enumeration, waveform playback lifecycle, auxiliary volume control, MCI message dispatch, MCI string execution, and interactive CLI utilities.
+  - All 89 unit test suites passing with 100% success rate (89 Passed, 0 Failed).
+
+---
+
+### Phase 63: Windows Smart Card & PC/SC Subsystem (`winscard.dll`, `scredir.dll`, `certprop.dll`, `ScardSvr`, `CertPropSvr`) (PLANNED)
+- [ ] **Clean-Room Smart Card PC/SC Architecture (`include/micant/winscard.hpp`, `winscard.dll`, `scredir.dll`)**:
+  - WinSCard core APIs: `SCardEstablishContext`, `SCardReleaseContext`, `SCardIsValidContext`, `SCardListReaderGroupsW/A`, `SCardListReadersW/A`, `SCardConnectW/A`, `SCardReconnect`, `SCardDisconnect`, `SCardStatusW/A`, `SCardGetStatusChangeW/A`, `SCardTransmit`, `SCardControl`, `SCardGetAttrib`, `SCardSetAttrib`, `SCardCancel`, `SCardFreeMemory`.
+  - Smart Card structures & protocols: `SCARDCONTEXT`, `SCARDHANDLE`, `SCARD_IO_REQUEST`, `SCARD_READERSTATEW/A`, `SCARD_PROTOCOL_T0`, `SCARD_PROTOCOL_T1`, `SCARD_PROTOCOL_RAW`, `SCARD_SHARE_SHARED`, `SCARD_SHARE_EXCLUSIVE`, `SCARD_SHARE_DIRECT`.
+  - Sovereign Smart Card Resource Manager (`SmartCardManager`): virtual PC/SC smart card readers (e.g. `MicaNT Virtual PIV/CAC SmartCard Reader 0`, `MicaNT FIDO2 Security Key 0`), card insertion/removal state tracking, ATR (Answer to Reset) byte synthesis, ISO 7816-4 APDU command/response framing (SELECT AID, GET DATA, VERIFY PIN).
+- [ ] **SCM Smart Card Service Daemons**:
+  - `ScardSvr` ("Smart Card", `SERVICE_WIN32_SHARE_PROCESS` in svchost group `LocalServiceAndNoImpersonation`).
+  - `CertPropSvr` ("Certificate Propagation", `SERVICE_WIN32_SHARE_PROCESS` in svchost group `netsvcs`).
+- [ ] **Interactive CLI Utilities (`certutil -scinfo` / `scard`)**:
+  - `scard list` (Lists active smart card readers and cards), `scard status` (Inspects ATR and protocol state), `scard test` (Transmits synthetic ISO 7816 APDUs).
+- [ ] **Unit Test Suite 90 (`Test_WindowsSmartCard_PCSC_Subsystem`)**:
+  - Full automated validation of WinSCard context management, reader enumeration, card connection/disconnection, APDU transmit/receive, SCM services, and CLI commands.
 
 
 

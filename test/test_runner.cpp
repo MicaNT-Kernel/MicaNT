@@ -110,6 +110,7 @@
 #include "micant/ldap.hpp"
 #include "micant/termsrv.hpp"
 #include "micant/winspool.hpp"
+#include "micant/mci.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -17880,6 +17881,291 @@ void Test_WindowsPrinting_Spooler_Subsystem() {
     std::cout << "[TEST] Suite 88: Windows Printing & Print Spooler Subsystem PASSED.\n";
 }
 
+void Test_WindowsMCI_AudioWave_Subsystem() {
+    std::cout << "[TEST] Running Suite 89: Windows Media Control Interface (MCI) & Audio Wave Subsystem...\n";
+
+    // 1. Dynamic Loader Exports Verification
+    {
+        mci::InitializeMciSubsystemExports();
+        auto& ldr = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutGetNumDevs") != nullptr, "winmm.dll must export waveOutGetNumDevs");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutGetDevCapsW") != nullptr, "winmm.dll must export waveOutGetDevCapsW");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutGetDevCapsA") != nullptr, "winmm.dll must export waveOutGetDevCapsA");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutOpen") != nullptr, "winmm.dll must export waveOutOpen");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutClose") != nullptr, "winmm.dll must export waveOutClose");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutPrepareHeader") != nullptr, "winmm.dll must export waveOutPrepareHeader");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutUnprepareHeader") != nullptr, "winmm.dll must export waveOutUnprepareHeader");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutWrite") != nullptr, "winmm.dll must export waveOutWrite");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutPause") != nullptr, "winmm.dll must export waveOutPause");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutRestart") != nullptr, "winmm.dll must export waveOutRestart");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutReset") != nullptr, "winmm.dll must export waveOutReset");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutGetPosition") != nullptr, "winmm.dll must export waveOutGetPosition");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutGetVolume") != nullptr, "winmm.dll must export waveOutGetVolume");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "waveOutSetVolume") != nullptr, "winmm.dll must export waveOutSetVolume");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "auxGetNumDevs") != nullptr, "winmm.dll must export auxGetNumDevs");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "auxGetDevCapsW") != nullptr, "winmm.dll must export auxGetDevCapsW");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "auxGetDevCapsA") != nullptr, "winmm.dll must export auxGetDevCapsA");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "auxGetVolume") != nullptr, "winmm.dll must export auxGetVolume");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "auxSetVolume") != nullptr, "winmm.dll must export auxSetVolume");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "mciSendCommandW") != nullptr, "winmm.dll must export mciSendCommandW");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "mciSendCommandA") != nullptr, "winmm.dll must export mciSendCommandA");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "mciSendStringW") != nullptr, "winmm.dll must export mciSendStringW");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "mciSendStringA") != nullptr, "winmm.dll must export mciSendStringA");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "mciGetErrorStringW") != nullptr, "winmm.dll must export mciGetErrorStringW");
+        TEST_ASSERT(ldr.getExport("winmm.dll", "mciGetErrorStringA") != nullptr, "winmm.dll must export mciGetErrorStringA");
+
+        TEST_ASSERT(ldr.getExport("mciwave.dll", "DriverProc") != nullptr, "mciwave.dll must export DriverProc");
+    }
+
+    // 2. Version Database Validation
+    {
+        const auto* modMciWave = version::VersionDatabase::Instance().FindModule("mciwave.dll");
+        TEST_ASSERT(modMciWave != nullptr, "mciwave.dll must be in version database");
+        TEST_ASSERT(modMciWave->stringTable.at("InternalName") == "mciwave", "mciwave.dll InternalName mismatch");
+        TEST_ASSERT(modMciWave->stringTable.at("FileDescription") == "MCI Waveform Audio Device Driver", "mciwave.dll FileDescription mismatch");
+
+        const auto* modMPlayer = version::VersionDatabase::Instance().FindModule("mplayer.exe");
+        TEST_ASSERT(modMPlayer != nullptr, "mplayer.exe must be in version database");
+        TEST_ASSERT(modMPlayer->stringTable.at("InternalName") == "mplayer", "mplayer.exe InternalName mismatch");
+
+        const auto* modWavePlay = version::VersionDatabase::Instance().FindModule("waveplay.exe");
+        TEST_ASSERT(modWavePlay != nullptr, "waveplay.exe must be in version database");
+        TEST_ASSERT(modWavePlay->stringTable.at("InternalName") == "waveplay", "waveplay.exe InternalName mismatch");
+    }
+
+    // 3. Waveform Output Device Enumeration & DevCaps
+    {
+        uint32_t numDevs = mci::waveOutGetNumDevs();
+        TEST_ASSERT(numDevs >= 2, "waveOutGetNumDevs must report at least 2 output devices");
+
+        mci::WAVEOUTCAPSW capsW{};
+        mci::MMRESULT mrW = mci::waveOutGetDevCapsW(0, &capsW, sizeof(capsW));
+        TEST_ASSERT(mrW == mci::MMSYSERR_NOERROR, "waveOutGetDevCapsW(0) must succeed");
+        TEST_ASSERT(capsW.wChannels >= 2, "Default output device must support at least 2 channels");
+        TEST_ASSERT(std::wstring(capsW.szPname).find(L"MicaNT High Definition Audio") != std::wstring::npos, "Device 0 must match MicaNT HDA");
+
+        mci::WAVEOUTCAPSA capsA{};
+        mci::MMRESULT mrA = mci::waveOutGetDevCapsA(1, &capsA, sizeof(capsA));
+        TEST_ASSERT(mrA == mci::MMSYSERR_NOERROR, "waveOutGetDevCapsA(1) must succeed");
+        TEST_ASSERT(std::string(capsA.szPname).find("MicaNT Synthetic Wave Synth") != std::string::npos, "Device 1 must match Wave Synth");
+
+        mci::WAVEOUTCAPSW badCaps{};
+        mci::MMRESULT mrBad = mci::waveOutGetDevCapsW(999, &badCaps, sizeof(badCaps));
+        TEST_ASSERT(mrBad == mci::MMSYSERR_BADDEVICEID, "waveOutGetDevCapsW with bad ID must return MMSYSERR_BADDEVICEID");
+    }
+
+    // 4. Waveform Audio Stream Playback Lifecycle
+    {
+        mci::WAVEFORMATEX wfx{};
+        wfx.wFormatTag = mci::WAVE_FORMAT_PCM;
+        wfx.nChannels = 2;
+        wfx.nSamplesPerSec = 44100;
+        wfx.wBitsPerSample = 16;
+        wfx.nBlockAlign = (wfx.nChannels * wfx.wBitsPerSample) / 8;
+        wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+
+        mci::HWAVEOUT hWave = nullptr;
+        mci::MMRESULT mrOpen = mci::waveOutOpen(&hWave, 0, &wfx, 0, 0, 0);
+        TEST_ASSERT(mrOpen == mci::MMSYSERR_NOERROR && hWave != nullptr, "waveOutOpen must succeed and return valid handle");
+
+        // Volume controls
+        uint32_t vol = 0;
+        mci::MMRESULT mrVolGet = mci::waveOutGetVolume(hWave, &vol);
+        TEST_ASSERT(mrVolGet == mci::MMSYSERR_NOERROR, "waveOutGetVolume must succeed");
+
+        mci::MMRESULT mrVolSet = mci::waveOutSetVolume(hWave, 0x80008000);
+        TEST_ASSERT(mrVolSet == mci::MMSYSERR_NOERROR, "waveOutSetVolume must succeed");
+
+        uint32_t verifyVol = 0;
+        mci::waveOutGetVolume(hWave, &verifyVol);
+        TEST_ASSERT(verifyVol == 0x80008000, "waveOutGetVolume must return updated volume");
+
+        // Prepare synthetic audio buffer (50ms stereo 44.1kHz = 2205 frames * 4 bytes = 8820 bytes)
+        std::vector<int16_t> pcmData(2205 * 2, 0);
+        for (size_t i = 0; i < 2205; ++i) {
+            int16_t sample = static_cast<int16_t>(10000.0 * std::sin(2.0 * 3.141592653589793 * 440.0 * i / 44100.0));
+            pcmData[i * 2 + 0] = sample;
+            pcmData[i * 2 + 1] = sample;
+        }
+
+        mci::WAVEHDR hdr{};
+        hdr.lpData = reinterpret_cast<char*>(pcmData.data());
+        hdr.dwBufferLength = static_cast<uint32_t>(pcmData.size() * sizeof(int16_t));
+
+        mci::MMRESULT mrPrep = mci::waveOutPrepareHeader(hWave, &hdr, sizeof(hdr));
+        TEST_ASSERT(mrPrep == mci::MMSYSERR_NOERROR, "waveOutPrepareHeader must succeed");
+        TEST_ASSERT((hdr.dwFlags & mci::WHDR_PREPARED) != 0, "WHDR_PREPARED must be set after prepare");
+
+        mci::MMRESULT mrWrite = mci::waveOutWrite(hWave, &hdr, sizeof(hdr));
+        TEST_ASSERT(mrWrite == mci::MMSYSERR_NOERROR, "waveOutWrite must succeed");
+
+        mci::MMTIME mmt{};
+        mmt.wType = mci::TIME_BYTES;
+        mci::MMRESULT mrPos = mci::waveOutGetPosition(hWave, &mmt, sizeof(mmt));
+        TEST_ASSERT(mrPos == mci::MMSYSERR_NOERROR, "waveOutGetPosition must succeed");
+        TEST_ASSERT(mmt.u.cb == hdr.dwBufferLength, "waveOutGetPosition must reflect queued bytes");
+
+        mci::MMRESULT mrPause = mci::waveOutPause(hWave);
+        TEST_ASSERT(mrPause == mci::MMSYSERR_NOERROR, "waveOutPause must succeed");
+
+        mci::MMRESULT mrRestart = mci::waveOutRestart(hWave);
+        TEST_ASSERT(mrRestart == mci::MMSYSERR_NOERROR, "waveOutRestart must succeed");
+
+        mci::MMRESULT mrReset = mci::waveOutReset(hWave);
+        TEST_ASSERT(mrReset == mci::MMSYSERR_NOERROR, "waveOutReset must succeed");
+
+        mci::MMRESULT mrUnprep = mci::waveOutUnprepareHeader(hWave, &hdr, sizeof(hdr));
+        TEST_ASSERT(mrUnprep == mci::MMSYSERR_NOERROR, "waveOutUnprepareHeader must succeed");
+        TEST_ASSERT((hdr.dwFlags & mci::WHDR_PREPARED) == 0, "WHDR_PREPARED must be cleared after unprepare");
+
+        mci::MMRESULT mrClose = mci::waveOutClose(hWave);
+        TEST_ASSERT(mrClose == mci::MMSYSERR_NOERROR, "waveOutClose must succeed");
+    }
+
+    // 5. Auxiliary Audio Controls
+    {
+        uint32_t auxCount = mci::auxGetNumDevs();
+        TEST_ASSERT(auxCount >= 1, "auxGetNumDevs must report at least 1 auxiliary device");
+
+        mci::AUXCAPSW auxCaps{};
+        mci::MMRESULT mrAuxCaps = mci::auxGetDevCapsW(0, &auxCaps, sizeof(auxCaps));
+        TEST_ASSERT(mrAuxCaps == mci::MMSYSERR_NOERROR, "auxGetDevCapsW must succeed");
+        TEST_ASSERT(std::wstring(auxCaps.szPname).find(L"Auxiliary") != std::wstring::npos, "Auxiliary device name check");
+
+        uint32_t origAuxVol = 0;
+        mci::MMRESULT mrAuxGet = mci::auxGetVolume(0, &origAuxVol);
+        TEST_ASSERT(mrAuxGet == mci::MMSYSERR_NOERROR, "auxGetVolume must succeed");
+
+        mci::MMRESULT mrAuxSet = mci::auxSetVolume(0, 0xAAAA5555);
+        TEST_ASSERT(mrAuxSet == mci::MMSYSERR_NOERROR, "auxSetVolume must succeed");
+
+        uint32_t newAuxVol = 0;
+        mci::auxGetVolume(0, &newAuxVol);
+        TEST_ASSERT(newAuxVol == 0xAAAA5555, "auxGetVolume must reflect set volume");
+    }
+
+    // 6. MCI Command Message Dispatch (mciSendCommandW/A)
+    {
+        mci::MCI_OPEN_PARMSW openParms{};
+        openParms.lpstrDeviceType = const_cast<wchar_t*>(L"waveaudio");
+        openParms.lpstrElementName = const_cast<wchar_t*>(L"theme.wav");
+        openParms.lpstrAlias = const_cast<wchar_t*>(L"soundtrack");
+
+        mci::MCIERROR errOpen = mci::mciSendCommandW(
+            0, mci::MCI_OPEN,
+            mci::MCI_OPEN_TYPE | mci::MCI_OPEN_ELEMENT | mci::MCI_OPEN_ALIAS,
+            reinterpret_cast<uintptr_t>(&openParms)
+        );
+        TEST_ASSERT(errOpen == mci::MCIERR_SUCCESS, "mciSendCommandW(MCI_OPEN) must succeed");
+        TEST_ASSERT(openParms.wDeviceID != 0, "MCI device ID must be non-zero");
+
+        mci::MCI_PLAY_PARMS playParms{};
+        mci::MCIERROR errPlay = mci::mciSendCommandW(openParms.wDeviceID, mci::MCI_PLAY, 0, reinterpret_cast<uintptr_t>(&playParms));
+        TEST_ASSERT(errPlay == mci::MCIERR_SUCCESS, "mciSendCommandW(MCI_PLAY) must succeed");
+
+        mci::MCI_STATUS_PARMS statusParms{};
+        statusParms.dwItem = mci::MCI_STATUS_MODE;
+        mci::MCIERROR errStatus = mci::mciSendCommandW(openParms.wDeviceID, mci::MCI_STATUS, mci::MCI_STATUS_ITEM, reinterpret_cast<uintptr_t>(&statusParms));
+        TEST_ASSERT(errStatus == mci::MCIERR_SUCCESS, "mciSendCommandW(MCI_STATUS) must succeed");
+        TEST_ASSERT(statusParms.dwReturn == mci::MCI_MODE_PLAY, "Status mode must be MCI_MODE_PLAY");
+
+        mci::MCI_GENERIC_PARMS genParms{};
+        mci::MCIERROR errPause = mci::mciSendCommandW(openParms.wDeviceID, mci::MCI_PAUSE, 0, reinterpret_cast<uintptr_t>(&genParms));
+        TEST_ASSERT(errPause == mci::MCIERR_SUCCESS, "mciSendCommandW(MCI_PAUSE) must succeed");
+
+        mci::MCIERROR errResume = mci::mciSendCommandW(openParms.wDeviceID, mci::MCI_RESUME, 0, reinterpret_cast<uintptr_t>(&genParms));
+        TEST_ASSERT(errResume == mci::MCIERR_SUCCESS, "mciSendCommandW(MCI_RESUME) must succeed");
+
+        mci::MCIERROR errStop = mci::mciSendCommandW(openParms.wDeviceID, mci::MCI_STOP, 0, reinterpret_cast<uintptr_t>(&genParms));
+        TEST_ASSERT(errStop == mci::MCIERR_SUCCESS, "mciSendCommandW(MCI_STOP) must succeed");
+
+        mci::MCIERROR errClose = mci::mciSendCommandW(openParms.wDeviceID, mci::MCI_CLOSE, 0, reinterpret_cast<uintptr_t>(&genParms));
+        TEST_ASSERT(errClose == mci::MCIERR_SUCCESS, "mciSendCommandW(MCI_CLOSE) must succeed");
+    }
+
+    // 7. MCI String Command Parsing & Execution (mciSendStringW/A)
+    {
+        char retBuf[128]{};
+        mci::MCIERROR errOpen = mci::mciSendStringA("open fanfare.wav type waveaudio alias fanfare", retBuf, sizeof(retBuf), nullptr);
+        TEST_ASSERT(errOpen == mci::MCIERR_SUCCESS, "mciSendStringA(open) must succeed");
+
+        mci::MCIERROR errPlay = mci::mciSendStringA("play fanfare", nullptr, 0, nullptr);
+        TEST_ASSERT(errPlay == mci::MCIERR_SUCCESS, "mciSendStringA(play) must succeed");
+
+        std::memset(retBuf, 0, sizeof(retBuf));
+        mci::MCIERROR errMode = mci::mciSendStringA("status fanfare mode", retBuf, sizeof(retBuf), nullptr);
+        TEST_ASSERT(errMode == mci::MCIERR_SUCCESS, "mciSendStringA(status mode) must succeed");
+        TEST_ASSERT(std::string(retBuf) == "playing", "Status mode string must be 'playing'");
+
+        mci::MCIERROR errPause = mci::mciSendStringA("pause fanfare", nullptr, 0, nullptr);
+        TEST_ASSERT(errPause == mci::MCIERR_SUCCESS, "mciSendStringA(pause) must succeed");
+
+        std::memset(retBuf, 0, sizeof(retBuf));
+        mci::mciSendStringA("status fanfare mode", retBuf, sizeof(retBuf), nullptr);
+        TEST_ASSERT(std::string(retBuf) == "paused", "Status mode string must be 'paused'");
+
+        mci::MCIERROR errResume = mci::mciSendStringA("resume fanfare", nullptr, 0, nullptr);
+        TEST_ASSERT(errResume == mci::MCIERR_SUCCESS, "mciSendStringA(resume) must succeed");
+
+        mci::MCIERROR errStop = mci::mciSendStringA("stop fanfare", nullptr, 0, nullptr);
+        TEST_ASSERT(errStop == mci::MCIERR_SUCCESS, "mciSendStringA(stop) must succeed");
+
+        mci::MCIERROR errClose = mci::mciSendStringA("close fanfare", nullptr, 0, nullptr);
+        TEST_ASSERT(errClose == mci::MCIERR_SUCCESS, "mciSendStringA(close) must succeed");
+
+        // Invalid command error check
+        mci::MCIERROR errBad = mci::mciSendStringA("invalid_verb_unknown fanfare", nullptr, 0, nullptr);
+        TEST_ASSERT(errBad == mci::MCIERR_UNRECOGNIZED_COMMAND, "Unknown verb must return MCIERR_UNRECOGNIZED_COMMAND");
+    }
+
+    // 8. MCI Error String Formatting
+    {
+        char errA[128]{};
+        int32_t resA = mci::mciGetErrorStringA(mci::MCIERR_SUCCESS, errA, sizeof(errA));
+        TEST_ASSERT(resA == 1 && std::string(errA) == "No error", "mciGetErrorStringA for MCIERR_SUCCESS");
+
+        wchar_t errW[128]{};
+        int32_t resW = mci::mciGetErrorStringW(mci::MCIERR_INVALID_DEVICE_NAME, errW, 128);
+        TEST_ASSERT(resW == 1 && std::wstring(errW) == L"Specified device alias is not open", "mciGetErrorStringW for MCIERR_INVALID_DEVICE_NAME");
+    }
+
+    // 9. Interactive Shell Commands (mci, waveplay)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // mci test
+        out.str("");
+        shell.execute("mci test", out);
+        TEST_ASSERT(out.str().find("[MCI] Self-Test Completed Successfully") != std::string::npos, "mci test must succeed");
+
+        // waveplay test
+        out.str("");
+        shell.execute("waveplay test", out);
+        TEST_ASSERT(out.str().find("[WAVEPLAY] Self-Test Completed Successfully") != std::string::npos, "waveplay test must succeed");
+
+        // mci command execution through shell
+        out.str("");
+        shell.execute("mci open beep.wav type waveaudio alias mybeep", out);
+        TEST_ASSERT(out.str().find("completed successfully") != std::string::npos, "mci open via shell must succeed");
+
+        out.str("");
+        shell.execute("mci play mybeep", out);
+        TEST_ASSERT(out.str().find("completed successfully") != std::string::npos, "mci play via shell must succeed");
+
+        out.str("");
+        shell.execute("mci status mybeep mode", out);
+        TEST_ASSERT(out.str().find("playing") != std::string::npos, "mci status via shell must return playing");
+
+        out.str("");
+        shell.execute("mci close mybeep", out);
+        TEST_ASSERT(out.str().find("completed successfully") != std::string::npos, "mci close via shell must succeed");
+    }
+
+    std::cout << "[TEST] Suite 89: Windows Media Control Interface (MCI) & Audio Wave Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -17973,6 +18259,7 @@ int main() {
     RUN_TEST(Test_WindowsLDAP_ActiveDirectory_Subsystem);
     RUN_TEST(Test_WindowsRDP_TerminalServices_Subsystem);
     RUN_TEST(Test_WindowsPrinting_Spooler_Subsystem);
+    RUN_TEST(Test_WindowsMCI_AudioWave_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
