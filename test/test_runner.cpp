@@ -113,6 +113,7 @@
 #include "micant/mci.hpp"
 #include "micant/winscard.hpp"
 #include "micant/nla.hpp"
+#include "micant/wns.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -18869,6 +18870,333 @@ void Test_WindowsNLA_NetworkListService_Subsystem() {
     std::cout << "[TEST] Suite 91: Windows Network Location Awareness & Network List Service Subsystem PASSED.\n";
 }
 
+void Test_WindowsWNS_PushNotification_Subsystem() {
+    std::cout << "[TEST] Running Suite 92: Windows Push Notification Service (WNS) & Push Notification Subsystem...\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Dynamic Loader Exports Initialization (wpncore.dll, wpnclient.dll, wpnapps.dll)
+    // ------------------------------------------------------------------------
+    wns::InitializeWnsSubsystemExports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    // wpncore.dll
+    TEST_ASSERT(ldr.getExport("wpncore.dll", "DllGetClassObject") != nullptr, "wpncore.dll must export DllGetClassObject");
+    TEST_ASSERT(ldr.getExport("wpncore.dll", "DllCanUnloadNow") != nullptr, "wpncore.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("wpncore.dll", "DllRegisterServer") != nullptr, "wpncore.dll must export DllRegisterServer");
+    TEST_ASSERT(ldr.getExport("wpncore.dll", "DllUnregisterServer") != nullptr, "wpncore.dll must export DllUnregisterServer");
+    TEST_ASSERT(ldr.getExport("wpncore.dll", "WpnInitialize") != nullptr, "wpncore.dll must export WpnInitialize");
+    TEST_ASSERT(ldr.getExport("wpncore.dll", "WpnUninitialize") != nullptr, "wpncore.dll must export WpnUninitialize");
+    TEST_ASSERT(ldr.getExport("wpncore.dll", "WpnQueryPendingNotifications") != nullptr, "wpncore.dll must export WpnQueryPendingNotifications");
+
+    // wpnclient.dll
+    TEST_ASSERT(ldr.getExport("wpnclient.dll", "DllGetClassObject") != nullptr, "wpnclient.dll must export DllGetClassObject");
+    TEST_ASSERT(ldr.getExport("wpnclient.dll", "DllCanUnloadNow") != nullptr, "wpnclient.dll must export DllCanUnloadNow");
+    TEST_ASSERT(ldr.getExport("wpnclient.dll", "WpnCreateChannelForApp") != nullptr, "wpnclient.dll must export WpnCreateChannelForApp");
+    TEST_ASSERT(ldr.getExport("wpnclient.dll", "WpnCloseChannel") != nullptr, "wpnclient.dll must export WpnCloseChannel");
+    TEST_ASSERT(ldr.getExport("wpnclient.dll", "WpnShowToast") != nullptr, "wpnclient.dll must export WpnShowToast");
+
+    // wpnapps.dll
+    TEST_ASSERT(ldr.getExport("wpnapps.dll", "ServiceMain") != nullptr, "wpnapps.dll must export ServiceMain");
+    TEST_ASSERT(ldr.getExport("wpnapps.dll", "SvchostPushServiceGlobals") != nullptr, "wpnapps.dll must export SvchostPushServiceGlobals");
+    TEST_ASSERT(ldr.getExport("wpnapps.dll", "DllGetClassObject") != nullptr, "wpnapps.dll must export DllGetClassObject");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    {
+        const auto* verWpnCore = version::VersionDatabase::Instance().FindModule("wpncore.dll");
+        TEST_ASSERT(verWpnCore != nullptr, "VersionDatabase must contain wpncore.dll");
+        TEST_ASSERT(verWpnCore->stringTable.at("FileDescription") == "Windows Push Notifications Platform Core", "wpncore.dll description match");
+        TEST_ASSERT(verWpnCore->stringTable.at("OriginalFilename") == "wpncore.dll", "wpncore.dll original filename match");
+
+        const auto* verWpnApps = version::VersionDatabase::Instance().FindModule("wpnapps.dll");
+        TEST_ASSERT(verWpnApps != nullptr, "VersionDatabase must contain wpnapps.dll");
+        TEST_ASSERT(verWpnApps->stringTable.at("FileDescription") == "Windows Push Notifications App Service", "wpnapps.dll description match");
+        TEST_ASSERT(verWpnApps->stringTable.at("OriginalFilename") == "wpnapps.dll", "wpnapps.dll original filename match");
+
+        const auto* verWpnClient = version::VersionDatabase::Instance().FindModule("wpnclient.dll");
+        TEST_ASSERT(verWpnClient != nullptr, "VersionDatabase must contain wpnclient.dll");
+        TEST_ASSERT(verWpnClient->stringTable.at("FileDescription") == "Windows Push Notifications Client API", "wpnclient.dll description match");
+        TEST_ASSERT(verWpnClient->stringTable.at("OriginalFilename") == "wpnclient.dll", "wpnclient.dll original filename match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Service Control Manager Services (WpnService, WpnUserService)
+    // ------------------------------------------------------------------------
+    {
+        auto& scm = scm::ServiceControlManager::get();
+
+        auto wpnSvc = scm.getServiceRecord(L"WpnService");
+        TEST_ASSERT(wpnSvc != nullptr, "WpnService service must be registered in SCM");
+        TEST_ASSERT(wpnSvc->displayName == L"Windows Push Notifications System Service", "WpnService display name match");
+        TEST_ASSERT(wpnSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "WpnService must be running");
+        TEST_ASSERT(wpnSvc->status.dwProcessId == 1142, "WpnService PID match");
+
+        auto wpnUserSvc = scm.getServiceRecord(L"WpnUserService");
+        TEST_ASSERT(wpnUserSvc != nullptr, "WpnUserService service must be registered in SCM");
+        TEST_ASSERT(wpnUserSvc->displayName == L"Windows Push Notifications User Service", "WpnUserService display name match");
+        TEST_ASSERT(wpnUserSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "WpnUserService must be running");
+        TEST_ASSERT(wpnUserSvc->status.dwProcessId == 1146, "WpnUserService PID match");
+    }
+
+    // Reset state to cleanly test manager
+    wns::PushNotificationManager::get().resetToDefault();
+
+    // ------------------------------------------------------------------------
+    // Stage 4: COM Activation & Class Factories
+    // ------------------------------------------------------------------------
+    wns::IToastNotificationManager* pToastMgr = nullptr;
+    {
+        ole32::HRESULT hr = ole32::CoCreateInstance(
+            wns::CLSID_ToastNotificationManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+            wns::IID_IToastNotificationManager, reinterpret_cast<void**>(&pToastMgr)
+        );
+        TEST_ASSERT(hr == ole32::S_OK && pToastMgr != nullptr, "CoCreateInstance(CLSID_ToastNotificationManager) must succeed");
+
+        ole32::IUnknown* pUnk = nullptr;
+        hr = pToastMgr->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+        TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "QueryInterface for IUnknown on ToastNotificationManager must succeed");
+        pUnk->Release();
+    }
+
+    wns::IPushNotificationChannelManager* pChanMgr = nullptr;
+    {
+        ole32::HRESULT hr = ole32::CoCreateInstance(
+            wns::CLSID_PushNotificationChannelManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+            wns::IID_IPushNotificationChannelManager, reinterpret_cast<void**>(&pChanMgr)
+        );
+        TEST_ASSERT(hr == ole32::S_OK && pChanMgr != nullptr, "CoCreateInstance(CLSID_PushNotificationChannelManager) must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Push Notification Channel Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        wns::IPushNotificationChannel* pChan = nullptr;
+        ole32::BSTR appName = ole32::SysAllocString(L"Microsoft.WindowsTerminal");
+        ole32::HRESULT hr = pChanMgr->CreatePushNotificationChannelForApplication(appName, &pChan);
+        ole32::SysFreeString(appName);
+        TEST_ASSERT(hr == ole32::S_OK && pChan != nullptr, "CreatePushNotificationChannelForApplication must succeed");
+
+        ole32::BSTR uri = nullptr;
+        hr = pChan->GetUri(&uri);
+        TEST_ASSERT(hr == ole32::S_OK && uri != nullptr, "GetUri must return channel URI");
+        std::wstring sUri = uri;
+        ole32::SysFreeString(uri);
+        TEST_ASSERT(sUri.find(L"https://wns.micant.local/push/v1/channel-") != std::wstring::npos, "URI must follow MicaNT sovereign WNS scheme");
+
+        win32::FILETIME exp{};
+        hr = pChan->GetExpirationTime(&exp);
+        TEST_ASSERT(hr == ole32::S_OK && exp.dwHighDateTime != 0, "GetExpirationTime must succeed");
+
+        uint32_t status = 0xFF;
+        hr = pChan->GetStatus(&status);
+        TEST_ASSERT(hr == ole32::S_OK && status == wns::WNS_CHANNEL_ACTIVE, "Channel status must be ACTIVE");
+
+        hr = pChan->Close();
+        TEST_ASSERT(hr == ole32::S_OK, "Channel Close must succeed");
+
+        hr = pChan->GetStatus(&status);
+        TEST_ASSERT(hr == ole32::S_OK && status == wns::WNS_CHANNEL_CLOSED, "Channel status must now be CLOSED");
+
+        pChan->Release();
+    }
+    pChanMgr->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Toast Notification Templates & XML Generation
+    // ------------------------------------------------------------------------
+    {
+        ole32::BSTR tmplXml = nullptr;
+        ole32::HRESULT hr = pToastMgr->GetTemplateContent(wns::TOAST_TEMPLATE_IMAGE_AND_TEXT02, &tmplXml);
+        TEST_ASSERT(hr == ole32::S_OK && tmplXml != nullptr, "GetTemplateContent(TOAST_TEMPLATE_IMAGE_AND_TEXT02) must succeed");
+        std::wstring sTmpl = tmplXml;
+        ole32::SysFreeString(tmplXml);
+        TEST_ASSERT(sTmpl.find(L"<toast>") != std::wstring::npos, "XML must contain <toast>");
+        TEST_ASSERT(sTmpl.find(L"ToastImageAndText02") != std::wstring::npos, "XML must specify ToastImageAndText02 binding");
+
+        hr = pToastMgr->GetTemplateContent(wns::TOAST_TEMPLATE_GENERIC, &tmplXml);
+        TEST_ASSERT(hr == ole32::S_OK && tmplXml != nullptr, "GetTemplateContent(TOAST_TEMPLATE_GENERIC) must succeed");
+        sTmpl = tmplXml;
+        ole32::SysFreeString(tmplXml);
+        TEST_ASSERT(sTmpl.find(L"ToastGeneric") != std::wstring::npos, "XML must specify ToastGeneric template");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Toast Notifier Delivery & Action Center Store
+    // ------------------------------------------------------------------------
+    {
+        wns::IToastNotifier* pNotifier = nullptr;
+        ole32::BSTR app = ole32::SysAllocString(L"Microsoft.WindowsTerminal");
+        ole32::HRESULT hr = pToastMgr->CreateToastNotifier(app, &pNotifier);
+        ole32::SysFreeString(app);
+        TEST_ASSERT(hr == ole32::S_OK && pNotifier != nullptr, "CreateToastNotifier must succeed");
+
+        wns::NOTIFICATION_SETTING setting{};
+        hr = pNotifier->GetSetting(&setting);
+        TEST_ASSERT(hr == ole32::S_OK && setting == wns::NOTIFICATION_SETTING_ENABLED, "Notification setting must be ENABLED");
+
+        std::wstring toastContent = L"<toast launch=\"action=view\"><visual><binding template=\"ToastGeneric\">"
+                                    L"<text id=\"1\">Build Completed</text>"
+                                    L"<text id=\"2\">Ninja build finished with 0 errors.</text>"
+                                    L"</binding></visual></toast>";
+        auto* pToast = new wns::ToastNotificationImpl(toastContent);
+        ole32::BSTR tag = ole32::SysAllocString(L"BuildAlert");
+        ole32::BSTR group = ole32::SysAllocString(L"DevTools");
+        pToast->SetTag(tag);
+        pToast->SetGroup(group);
+        pToast->SetSuppressPopup(0);
+        ole32::SysFreeString(tag);
+        ole32::SysFreeString(group);
+
+        ole32::BSTR getTag = nullptr;
+        pToast->GetTag(&getTag);
+        TEST_ASSERT(std::wstring(getTag) == L"BuildAlert", "GetTag must return BuildAlert");
+        ole32::SysFreeString(getTag);
+
+        ole32::BSTR getGroup = nullptr;
+        pToast->GetGroup(&getGroup);
+        TEST_ASSERT(std::wstring(getGroup) == L"DevTools", "GetGroup must return DevTools");
+        ole32::SysFreeString(getGroup);
+
+        int16_t suppress = 1;
+        pToast->GetSuppressPopup(&suppress);
+        TEST_ASSERT(suppress == 0, "Suppress popup must be 0");
+
+        // Show Toast
+        hr = pNotifier->Show(pToast);
+        TEST_ASSERT(hr == ole32::S_OK, "IToastNotifier::Show must succeed");
+
+        auto activeToasts = wns::PushNotificationManager::get().getActiveToasts();
+        bool found = false;
+        for (const auto& t : activeToasts) {
+            if (t.tag == L"BuildAlert" && t.group == L"DevTools") {
+                found = true;
+                TEST_ASSERT(t.title == L"Build Completed", "Title extracted from XML match");
+                TEST_ASSERT(t.message == L"Ninja build finished with 0 errors.", "Message extracted from XML match");
+                break;
+            }
+        }
+        TEST_ASSERT(found, "Active toasts must contain newly posted toast");
+
+        // Hide Toast
+        hr = pNotifier->Hide(pToast);
+        TEST_ASSERT(hr == ole32::S_OK, "IToastNotifier::Hide must succeed");
+
+        activeToasts = wns::PushNotificationManager::get().getActiveToasts();
+        bool stillActive = false;
+        for (const auto& t : activeToasts) {
+            if (t.tag == L"BuildAlert") stillActive = true;
+        }
+        TEST_ASSERT(!stillActive, "Toast must be marked dismissed after Hide");
+
+        pToast->Release();
+        pNotifier->Release();
+    }
+    pToastMgr->Release();
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Badge Management & Updates
+    // ------------------------------------------------------------------------
+    {
+        auto& mgr = wns::PushNotificationManager::get();
+        mgr.setBadgeNumber(L"Microsoft.WindowsTerminal", 7);
+        wns::BadgeRecord b{};
+        bool ok = mgr.getBadge(L"Microsoft.WindowsTerminal", b);
+        TEST_ASSERT(ok && b.hasNumber && b.number == 7, "Badge number must be 7");
+
+        mgr.setBadgeGlyph(L"Microsoft.WindowsTerminal", L"attention");
+        ok = mgr.getBadge(L"Microsoft.WindowsTerminal", b);
+        TEST_ASSERT(ok && !b.hasNumber && b.glyph == L"attention", "Badge glyph must be attention");
+
+        mgr.clearBadge(L"Microsoft.WindowsTerminal");
+        ok = mgr.getBadge(L"Microsoft.WindowsTerminal", b);
+        TEST_ASSERT(!ok, "Badge must be removed after clearBadge");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Win32 C Client APIs
+    // ------------------------------------------------------------------------
+    {
+        ole32::HRESULT hr = wns::WpnInitialize();
+        TEST_ASSERT(hr == ole32::S_OK, "WpnInitialize must succeed");
+
+        wns::WNS_CHANNEL_INFO chInfo{};
+        hr = wns::WpnCreateChannelForApp(L"MicaNT.StoreApp", &chInfo);
+        TEST_ASSERT(hr == ole32::S_OK, "WpnCreateChannelForApp must succeed");
+        TEST_ASSERT(std::wstring(chInfo.appId) == L"MicaNT.StoreApp", "Channel info appId match");
+        TEST_ASSERT(std::wstring(chInfo.channelUri).find(L"https://wns.micant.local/") != std::wstring::npos, "Channel URI prefix match");
+
+        uint32_t notifId = 0;
+        hr = wns::WpnShowToast(L"MicaNT.StoreApp", L"App Installed", L"Calculator has been installed.", L"InstallSuccess", &notifId);
+        TEST_ASSERT(hr == ole32::S_OK && notifId != 0, "WpnShowToast must return valid notification ID");
+
+        uint32_t count = 0;
+        wns::WNS_TOAST_DESCRIPTOR descs[5]{};
+        hr = wns::WpnQueryPendingNotifications(&count, descs, 5);
+        TEST_ASSERT(hr == ole32::S_OK && count >= 1, "WpnQueryPendingNotifications must return pending toasts");
+
+        bool foundPending = false;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (descs[i].notificationId == notifId) {
+                foundPending = true;
+                TEST_ASSERT(std::wstring(descs[i].title) == L"App Installed", "Descriptor title match");
+                TEST_ASSERT(std::wstring(descs[i].message) == L"Calculator has been installed.", "Descriptor message match");
+                break;
+            }
+        }
+        TEST_ASSERT(foundPending, "Pending descriptors must contain created toast");
+
+        hr = wns::WpnCloseChannel(L"MicaNT.StoreApp");
+        TEST_ASSERT(hr == ole32::S_OK, "WpnCloseChannel must succeed");
+
+        hr = wns::WpnUninitialize();
+        TEST_ASSERT(hr == ole32::S_OK, "WpnUninitialize must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Interactive Shell Command Integration (notify test, toast, list, channel, clear)
+    // ------------------------------------------------------------------------
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // notify test
+        out.str("");
+        shell.execute("notify test", out);
+        TEST_ASSERT(out.str().find("[NOTIFY] Push Notification Platform Self-Test Completed Successfully.") != std::string::npos, "notify test must succeed");
+
+        // notify toast
+        out.str("");
+        shell.execute("notify toast \"Security Alert\" \"New sovereign firewall rule activated\"", out);
+        TEST_ASSERT(out.str().find("Toast notification posted (Notification ID #") != std::string::npos, "notify toast must post");
+
+        // notify list
+        out.str("");
+        shell.execute("notify list", out);
+        TEST_ASSERT(out.str().find("MicaNT Action Center Notifications") != std::string::npos, "notify list header match");
+        TEST_ASSERT(out.str().find("Security Alert") != std::string::npos, "notify list must list posted toast");
+
+        // notify channel
+        out.str("");
+        shell.execute("notify channel MicaNT.TestApp", out);
+        TEST_ASSERT(out.str().find("WNS Push Notification Channel (MicaNT.TestApp):") != std::string::npos, "notify channel header match");
+        TEST_ASSERT(out.str().find("https://wns.micant.local/") != std::string::npos, "notify channel URI match");
+
+        // notify clear
+        out.str("");
+        shell.execute("notify clear", out);
+        TEST_ASSERT(out.str().find("All notifications cleared from Action Center.") != std::string::npos, "notify clear message match");
+
+        // notify list again to ensure empty
+        out.str("");
+        shell.execute("notify list", out);
+        TEST_ASSERT(out.str().find("0 active") != std::string::npos, "Action Center must show 0 active after clear");
+    }
+
+    std::cout << "[TEST] Suite 92: Windows Push Notification Service (WNS) & Push Notification Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -18965,6 +19293,7 @@ int main() {
     RUN_TEST(Test_WindowsMCI_AudioWave_Subsystem);
     RUN_TEST(Test_WindowsSmartCard_PCSC_Subsystem);
     RUN_TEST(Test_WindowsNLA_NetworkListService_Subsystem);
+    RUN_TEST(Test_WindowsWNS_PushNotification_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

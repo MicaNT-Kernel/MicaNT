@@ -1925,6 +1925,72 @@ private:
             mod.stringTable["ProductVersion"] = "10.0.22621.1";
             registerModule(mod);
         }
+
+        // wpncore.dll (Windows Push Notifications Platform Core)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "wpncore.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Push Notifications Platform Core";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "wpncore";
+            mod.stringTable["OriginalFilename"] = "wpncore.dll";
+            mod.stringTable["ProductName"] = "MicaNT Push Notification Platform";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // wpnapps.dll (Windows Push Notifications App Service)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "wpnapps.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Push Notifications App Service";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "wpnapps";
+            mod.stringTable["OriginalFilename"] = "wpnapps.dll";
+            mod.stringTable["ProductName"] = "MicaNT Push Notification Platform";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
+
+        // wpnclient.dll (Windows Push Notifications Client API)
+        {
+            ModuleVersionInfo mod{};
+            mod.moduleName = "wpnclient.dll";
+            mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+            mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+            mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+            mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+            mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+            mod.fixedInfo.dwFileType = VFT_DLL;
+            mod.stringTable["CompanyName"] = "MicaNT Sovereign Project";
+            mod.stringTable["FileDescription"] = "Windows Push Notifications Client API";
+            mod.stringTable["FileVersion"] = "10.0.22621.1";
+            mod.stringTable["InternalName"] = "wpnclient";
+            mod.stringTable["OriginalFilename"] = "wpnclient.dll";
+            mod.stringTable["ProductName"] = "MicaNT Push Notification Platform";
+            mod.stringTable["ProductVersion"] = "10.0.22621.1";
+            registerModule(mod);
+        }
     }
 
 public:

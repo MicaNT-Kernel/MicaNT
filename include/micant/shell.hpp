@@ -82,6 +82,7 @@
 #include "mci.hpp"
 #include "winscard.hpp"
 #include "nla.hpp"
+#include "wns.hpp"
 
 namespace micant::shell {
 
@@ -251,6 +252,7 @@ public:
             if (cmd == "waveplay") { cmdWavePlay(tokens, out); return 0; }
             if (cmd == "scard" || cmd == "smartcard") { cmdSCard(tokens, out); return 0; }
             if (cmd == "nla" || cmd == "netprof") { cmdNla(tokens, out); return 0; }
+            if (cmd == "notify" || cmd == "toast" || cmd == "wns") { cmdNotify(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -524,6 +526,7 @@ private:
             << "  WAVEPLAY [tone]   Waveform audio playback & streaming utility (waveplay test)\n"
             << "  SCARD [list|status] Smart Card & PC/SC subsystem utility (scard test)\n"
             << "  NLA [list|status] Windows Network Location Awareness & Network List (nla test)\n"
+            << "  NOTIFY [toast|list|channel] Windows Push Notifications & Action Center (notify test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -9043,6 +9046,193 @@ private:
             << "  nla test                                Runs Network Location Awareness self-test\n"
             << "  nla list                                Enumerates network profiles and connections\n"
             << "  nla status                              Displays overall network connectivity & cost\n";
+    }
+
+    void cmdNotify(const std::vector<std::string>& tokens, std::ostream& out) {
+        wns::InitializeWnsSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "Windows Push Notifications & Action Center (notify)\n\n"
+                << "Usage:\n"
+                << "  notify test                             Runs Push Notification Platform self-test\n"
+                << "  notify toast <title> <message>          Posts a toast notification to Action Center\n"
+                << "  notify list                             Lists active Action Center notifications\n"
+                << "  notify channel [appId]                  Shows or acquires a push channel URI\n"
+                << "  notify clear                            Clears Action Center notifications\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "      MicaNT Windows Push Notification Service (WNS) Self-Test          \n"
+                << "========================================================================\n";
+
+            wns::IToastNotificationManager* pMgr = nullptr;
+            ole32::HRESULT hr = ole32::CoCreateInstance(
+                wns::CLSID_ToastNotificationManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+                wns::IID_IToastNotificationManager, reinterpret_cast<void**>(&pMgr)
+            );
+            out << "[TEST] 1. CoCreateInstance(CLSID_ToastNotificationManager): "
+                << (hr == ole32::S_OK && pMgr ? "SUCCESS" : "FAILED") << "\n";
+            if (!pMgr) {
+                out << "ERROR: Failed to instantiate IToastNotificationManager.\n";
+                return;
+            }
+
+            ole32::BSTR xmlTemplate = nullptr;
+            hr = pMgr->GetTemplateContent(wns::TOAST_TEMPLATE_GENERIC, &xmlTemplate);
+            std::wstring wsTmpl = xmlTemplate ? xmlTemplate : L"";
+            std::string sTmpl(wsTmpl.begin(), wsTmpl.end());
+            ole32::SysFreeString(xmlTemplate);
+            out << "[TEST] 2. GetTemplateContent(TOAST_TEMPLATE_GENERIC): "
+                << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                << " (Length: " << sTmpl.size() << " chars)\n";
+
+            wns::IToastNotifier* pNotifier = nullptr;
+            ole32::BSTR appId = ole32::SysAllocString(L"MicaNT.Diagnostics.TestRunner");
+            hr = pMgr->CreateToastNotifier(appId, &pNotifier);
+            ole32::SysFreeString(appId);
+            out << "[TEST] 3. CreateToastNotifier: "
+                << (hr == ole32::S_OK && pNotifier ? "SUCCESS" : "FAILED") << "\n";
+
+            if (pNotifier) {
+                std::wstring toastXml = L"<toast launch=\"action=view\"><visual><binding template=\"ToastGeneric\">"
+                                        L"<text id=\"1\">MicaNT Self-Test Alert</text>"
+                                        L"<text id=\"2\">Autonomous executive self-test verification active.</text>"
+                                        L"</binding></visual></toast>";
+                auto* pToast = new wns::ToastNotificationImpl(toastXml);
+                ole32::BSTR tag = ole32::SysAllocString(L"SelfTestTag");
+                ole32::BSTR group = ole32::SysAllocString(L"SelfTestGroup");
+                pToast->SetTag(tag);
+                pToast->SetGroup(group);
+                ole32::SysFreeString(tag);
+                ole32::SysFreeString(group);
+
+                hr = pNotifier->Show(pToast);
+                out << "[TEST] 4. IToastNotifier::Show: "
+                    << (hr == ole32::S_OK ? "SUCCESS" : "FAILED") << " (Queued in Action Center)\n";
+
+                wns::NOTIFICATION_SETTING setting{};
+                hr = pNotifier->GetSetting(&setting);
+                out << "[TEST] 5. IToastNotifier::GetSetting: "
+                    << (hr == ole32::S_OK && setting == wns::NOTIFICATION_SETTING_ENABLED ? "SUCCESS (ENABLED)" : "FAILED") << "\n";
+
+                pToast->Release();
+                pNotifier->Release();
+            }
+            pMgr->Release();
+
+            // Push Notification Channel Manager Test
+            wns::IPushNotificationChannelManager* pChanMgr = nullptr;
+            hr = ole32::CoCreateInstance(
+                wns::CLSID_PushNotificationChannelManager, nullptr, ole32::CLSCTX_INPROC_SERVER,
+                wns::IID_IPushNotificationChannelManager, reinterpret_cast<void**>(&pChanMgr)
+            );
+            out << "[TEST] 6. CoCreateInstance(CLSID_PushNotificationChannelManager): "
+                << (hr == ole32::S_OK && pChanMgr ? "SUCCESS" : "FAILED") << "\n";
+
+            if (pChanMgr) {
+                wns::IPushNotificationChannel* pChannel = nullptr;
+                ole32::BSTR cApp = ole32::SysAllocString(L"MicaNT.Store.SampleApp");
+                hr = pChanMgr->CreatePushNotificationChannelForApplication(cApp, &pChannel);
+                ole32::SysFreeString(cApp);
+                out << "[TEST] 7. CreatePushNotificationChannelForApplication: "
+                    << (hr == ole32::S_OK && pChannel ? "SUCCESS" : "FAILED") << "\n";
+
+                if (pChannel) {
+                    ole32::BSTR uri = nullptr;
+                    pChannel->GetUri(&uri);
+                    std::wstring wsUri = uri ? uri : L"";
+                    std::string sUri(wsUri.begin(), wsUri.end());
+                    ole32::SysFreeString(uri);
+                    out << "         Channel URI: " << sUri << "\n";
+
+                    win32::FILETIME exp{};
+                    pChannel->GetExpirationTime(&exp);
+                    out << "         Channel Expiration: High=0x" << std::hex << exp.dwHighDateTime
+                        << " Low=0x" << exp.dwLowDateTime << std::dec << "\n";
+
+                    hr = pChannel->Close();
+                    out << "[TEST] 8. IPushNotificationChannel::Close: "
+                        << (hr == ole32::S_OK ? "SUCCESS" : "FAILED") << "\n";
+                    pChannel->Release();
+                }
+                pChanMgr->Release();
+            }
+
+            // C Client API Test
+            uint32_t notifCount = 0;
+            wns::WNS_TOAST_DESCRIPTOR desc[4]{};
+            hr = wns::WpnQueryPendingNotifications(&notifCount, desc, 4);
+            out << "[TEST] 9. WpnQueryPendingNotifications: "
+                << (hr == ole32::S_OK ? "SUCCESS" : "FAILED")
+                << " (Pending Count: " << notifCount << ")\n";
+
+            out << "[NOTIFY] Push Notification Platform Self-Test Completed Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "toast") {
+            std::string title = (tokens.size() > 2) ? tokens[2] : "MicaNT Toast";
+            std::string message = (tokens.size() > 3) ? tokens[3] : "Notification message delivered.";
+            for (size_t i = 4; i < tokens.size(); ++i) {
+                message += " " + tokens[i];
+            }
+
+            std::wstring wTitle(title.begin(), title.end());
+            std::wstring wMessage(message.begin(), message.end());
+
+            uint32_t notifId = 0;
+            wns::WpnShowToast(L"MicaNT.Shell", wTitle.c_str(), wMessage.c_str(), L"UserToast", &notifId);
+            out << "Toast notification posted (Notification ID #" << notifId << "):\n"
+                << "  Title:   " << title << "\n"
+                << "  Message: " << message << "\n"
+                << "  Target:  Action Center\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            auto toasts = wns::PushNotificationManager::get().getActiveToasts();
+            out << "========================================================================\n"
+                << "        MicaNT Action Center Notifications (" << toasts.size() << " active)              \n"
+                << "========================================================================\n";
+            for (size_t i = 0; i < toasts.size(); ++i) {
+                const auto& t = toasts[i];
+                std::string sApp(t.appId.begin(), t.appId.end());
+                std::string sTitle(t.title.begin(), t.title.end());
+                std::string sMsg(t.message.begin(), t.message.end());
+                std::string sTag(t.tag.begin(), t.tag.end());
+                out << "[" << (i + 1) << "] ID: " << t.id << " | App: " << sApp << "\n"
+                    << "    Title:   " << sTitle << "\n"
+                    << "    Message: " << sMsg << "\n"
+                    << "    Tag:     " << (sTag.empty() ? "(None)" : sTag) << "\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "channel") {
+            std::string app = (tokens.size() > 2) ? tokens[2] : "MicaNT.ShellExperienceHost";
+            std::wstring wApp(app.begin(), app.end());
+            auto ch = wns::PushNotificationManager::get().createChannel(wApp);
+            std::string sUri(ch.channelUri.begin(), ch.channelUri.end());
+            out << "WNS Push Notification Channel (" << app << "):\n"
+                << "  URI:    " << sUri << "\n"
+                << "  Status: " << (ch.status == wns::WNS_CHANNEL_ACTIVE ? "ACTIVE" : "CLOSED") << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "clear") {
+            wns::PushNotificationManager::get().clearAllToasts();
+            out << "All notifications cleared from Action Center.\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  notify test                             Runs Push Notification Platform self-test\n"
+            << "  notify toast <title> <message>          Posts a toast notification to Action Center\n"
+            << "  notify list                             Lists active Action Center notifications\n"
+            << "  notify channel [appId]                  Shows or acquires a push channel URI\n"
+            << "  notify clear                            Clears Action Center notifications\n";
     }
 
     static std::string trim(std::string_view s) {

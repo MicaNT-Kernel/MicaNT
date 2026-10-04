@@ -134,7 +134,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 63: Windows Smart Card & PC/SC Subsystem             [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 64: Windows Network Location Awareness (NLA)         [PLANNED]        │
+│ Phase 64: Windows Network Location Awareness (NLA)         [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 65: Windows Push Notification Service (WNS)          [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 66: Windows Geolocation & Location Framework (LF)    [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1511,22 +1515,47 @@
 
 ---
 
-### Phase 65: Windows Push Notification Service (WNS) & Core Notification Subsystem (`wpncore.dll`, `wpnapps.dll`, `wpnclient.dll`, `WpnService`, `WpnUserService`) (PLANNED)
-- [ ] **Clean-Room WNS & Push Notification Architecture (`include/micant/wns.hpp`, `wpncore.dll`, `wpnapps.dll`, `wpnclient.dll`)**:
-  - Windows Push Notification Platform (WPN) COM interfaces: `IPushNotificationChannel`, `IPushNotificationChannelManager`, `IPushNotificationReceivedEventArgs`, `IToastNotification`, `IToastNotificationManager`, `IBadgeNotification`.
-  - Push notification channels: channel URI synthesis, exponential backoff expiry renewal, authenticated channel tokens, and payload decryption (AES-GCM-128 / AES-GCM-256).
-  - Toast and Badge XML payload parser conforming to MS-WNS and Windows 10/11 Toast schema (Visual elements, Text nodes, Action buttons, Inline reply inputs, Audio cues).
-  - Sovereign Push Notification Manager (`PushNotificationManager`): registration of application notification channels, in-memory notification queue, historical notification center store, and client callback dispatch.
-- [ ] **SCM Windows Push Notification Daemons**:
-  - `WpnService` ("Windows Push Notifications System Service", `SERVICE_WIN32_SHARE_PROCESS` in svchost group `System`).
-  - `WpnUserService` ("Windows Push Notifications User Service", per-user template service in svchost `UnistoreSvcGroup`).
-- [ ] **Interactive CLI Utilities (`notify` / `toast`)**:
+### Phase 65: Windows Push Notification Service (WNS) & Core Notification Subsystem (`wpncore.dll`, `wpnapps.dll`, `wpnclient.dll`, `WpnService`, `WpnUserService`) (100% Completed)
+- [x] **Clean-Room WNS & Push Notification Architecture (`include/micant/wns.hpp`, `wpncore.dll`, `wpnapps.dll`, `wpnclient.dll`)**:
+  - Windows Push Notification Platform (WPN) COM interfaces: `IToastNotification`, `IToastNotifier`, `IToastNotificationManager`, `IPushNotificationChannel`, `IPushNotificationChannelManager`, `IBadgeNotification`, `IBadgeUpdater`, `IBadgeUpdateManager`.
+  - Push notification channels: sovereign URI generation (`https://wns.micant.local/push/v1/...`), 30-day expiration, channel revocation and closure.
+  - Interactive Toast and Badge templates conforming to Windows Toast XML schemas (`ToastGeneric`, `ToastImageAndText01` - `04`).
+  - Sovereign Push Notification Manager (`PushNotificationManager`): registration of application notification channels, Action Center in-memory notification queue, tag/group deduplication, dismiss/clear, active toast querying.
+  - Dynamic export registration in `ldr::DynamicLoader` for `wpncore.dll`, `wpnclient.dll`, and `wpnapps.dll`.
+  - Version database records in `VersionDatabase` for `wpncore.dll`, `wpnapps.dll`, and `wpnclient.dll`.
+- [x] **SCM Windows Push Notification Daemons**:
+  - `WpnService` ("Windows Push Notifications System Service", svchost `System`, PID 1142, auto start).
+  - `WpnUserService` ("Windows Push Notifications User Service", svchost `UnistoreSvcGroup`, PID 1146, demand start).
+- [x] **Interactive CLI Utilities (`notify` / `toast` / `wns`)**:
   - `notify channel [appId]` (Displays or creates an active WNS push notification channel URI).
   - `notify toast <title> <message>` (Simulates reception and rendering of an incoming interactive Toast notification).
   - `notify list` (Lists pending and active notifications in the Action Center).
+  - `notify clear` (Clears notifications from Action Center).
   - `notify test` (Executes end-to-end self-test of channel acquisition, toast serialization, and push event dispatch).
-- [ ] **Unit Test Suite 92 (`Test_WindowsWNS_PushNotification_Subsystem`)**:
-  - Full automated validation of WNS channel manager, toast payload parser, per-user notification brokers, SCM service daemons, and CLI commands.
+- [x] **Unit Test Suite 92 (`Test_WindowsWNS_PushNotification_Subsystem`)**:
+  - Full automated validation of WNS COM interfaces, channel acquisition, toast lifecycle, Action Center store, badge updates, C client APIs, SCM daemons, and shell commands.
+  - All 92 unit test suites passing with 100% success rate (92 Passed, 0 Failed).
+
+---
+
+### Phase 66: Windows Geolocation & Location Framework (LF) Subsystem (`locationapi.dll`, `sensrsvc`, `lfsvc`) (PLANNED)
+- [ ] **Clean-Room Windows Location Architecture (`include/micant/location.hpp`, `locationapi.dll`)**:
+  - Windows Location API COM interfaces: `ILocation`, `ILocationReport`, `ILatLongReport`, `ICivicAddressReport`, `ILocationEvents`, `IDispLatLongReport`, `IDispCivicAddressReport`.
+  - Position reports: Latitude, Longitude, Altitude, ErrorRadius (horizontal accuracy), AltitudeError, Heading, Speed, and timestamping.
+  - Civic address reports: Address1, Address2, City, State/Province, PostalCode, Country/Region.
+  - Sovereign Location Manager (`LocationManager`): provider states (`LOCATION_REPORT_INITIALIZING`, `LOCATION_REPORT_RUNNING`, `LOCATION_REPORT_NOT_SUPPORTED`), report caching, report subscription and callback dispatch.
+  - Dynamic export registration in `ldr::DynamicLoader` for `locationapi.dll`.
+  - Version database records in `VersionDatabase` for `locationapi.dll`.
+- [ ] **SCM Location & Sensor Services**:
+  - `lfsvc` ("Geolocation Service", svchost `LocalSystemNetworkRestricted`).
+  - `SensorService` / `sensrsvc` ("Sensor Service", svchost `LocalService`).
+- [ ] **Interactive CLI Utilities (`location` / `geo`)**:
+  - `location status` (Queries current location provider state, sensor readiness, and permissions).
+  - `location get` (Displays current coordinates, accuracy radius, and simulated civic address).
+  - `location set <lat> <lon> [alt]` (Simulates GPS/GNSS sensor report injection for development).
+  - `location test` (Executes end-to-end self-test of `ILocation`, `ILatLongReport`, and `ICivicAddressReport`).
+- [ ] **Unit Test Suite 93 (`Test_WindowsLocation_Geolocation_Subsystem`)**:
+  - Automated validation of Location COM interfaces, lat/long reports, civic reports, sensor callbacks, SCM service records, and CLI commands.
 
 
 
