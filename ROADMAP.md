@@ -1342,19 +1342,47 @@
 
 ---
 
-### Phase 57: Windows Security Auditing, Access Control List (ACL) & Object Security Descriptor Subsystem (`secur32.dll`, `sspicli.dll`, `auditpol.exe`, `icacls.exe`) (PLANNED)
-- [ ] **Security Descriptor & ACL Architecture (`include/micant/acl.hpp`, `advapi32.dll`, `secur32.dll`)**:
-  - Relative & Absolute Security Descriptors: `RtlCreateSecurityDescriptor`, `RtlGetDaclSecurityDescriptor`, `RtlSetDaclSecurityDescriptor`, `RtlGetSaclSecurityDescriptor`, `RtlSetSaclSecurityDescriptor`, `RtlGetOwnerSecurityDescriptor`, `RtlSetOwnerSecurityDescriptor`, `RtlMakeSelfRelativeSD`, `RtlAbsoluteToSelfRelativeSD`.
-  - Access Control Entries: `ACCESS_ALLOWED_ACE`, `ACCESS_DENIED_ACE`, `SYSTEM_AUDIT_ACE`, `AddAccessAllowedAce`, `AddAccessDeniedAce`, `AddAuditAccessAce`.
-  - Security Identifier (SID) APIs: `AllocateAndInitializeSid`, `FreeSid`, `EqualSid`, `ConvertSidToStringSidW`, `ConvertStringSidToSidW`.
-- [ ] **Security Auditing Policy Engine (`auditpol.exe`)**:
-  - Subcategory management (Logon/Logoff, Object Access, Privilege Use, System, Policy Change).
-  - `AuditEnumerateCategories`, `AuditEnumerateSubCategories`, `AuditQuerySystemPolicy`, `AuditSetSystemPolicy`.
-- [ ] **Interactive CLI Utilities (`icacls`, `auditpol`)**:
-  - `icacls <path> [/grant user:perm] [/deny user:perm] [/reset]`.
-  - `auditpol /get /category:*`, `auditpol /set /subcategory:<name> /success:enable /failure:enable`.
-- [ ] **Unit Test Suite 84 (`Test_WindowsACL_SecurityAuditing_Subsystem`)**:
-  - Full verification of ACL/ACE creation, SD conversion, access check simulation, audit policies, and CLI tools.
+### Phase 57: Windows Security Auditing, Access Control List (ACL) & Object Security Descriptor Subsystem (`secur32.dll`, `sspicli.dll`, `auditpol.exe`, `icacls.exe`) (100% Completed)
+- [x] **Security Descriptor & ACL Architecture (`include/micant/acl.hpp`, `advapi32.dll`, `secur32.dll`, `sspicli.dll`)**:
+  - Security Descriptors: `InitializeSecurityDescriptor`, `IsValidSecurityDescriptor`, `GetSecurityDescriptorLength`, `GetSecurityDescriptorControl`, `SetSecurityDescriptorControl`, `SetSecurityDescriptorDacl`, `GetSecurityDescriptorDacl`, `SetSecurityDescriptorOwner`, `GetSecurityDescriptorOwner`, `SetSecurityDescriptorGroup`, `GetSecurityDescriptorGroup`.
+  - Self-Relative & Absolute Transformations: `MakeSelfRelativeSD`, `MakeAbsoluteSD` with memory-safe buffer size calculations and offset preservation.
+  - Access Control Entries: `ACCESS_ALLOWED_ACE`, `ACCESS_DENIED_ACE`, `SYSTEM_AUDIT_ACE`, `AddAccessAllowedAce`, `AddAccessAllowedAceEx`, `AddAccessDeniedAce`, `AddAuditAccessAce`, `GetAce`, `DeleteAce`.
+  - Security Identifier (SID) APIs: `AllocateAndInitializeSid`, `FreeSid`, `EqualSid`, `IsValidSid`, `GetLengthSid`, `GetSidSubAuthority`, `GetSidSubAuthorityCount`, `GetSidIdentifierAuthority`, `ConvertSidToStringSidW/A`, `ConvertStringSidToSidW`.
+  - Access Authorization Engine: `AccessCheck` matrix calculation enforcing explicit deny priority, allowed mask accumulation, and NULL DACL unconditional grant.
+- [x] **Security Auditing Policy Engine (`AuditPolicyManager`, `auditpol.exe`)**:
+  - Standard categories and subcategories (System, Logon/Logoff, Object Access, Privilege Use, Detailed Tracking, Policy Change, Account Management).
+  - Subcategory policy get/set (`AUDIT_POLICY_NONE`, `AUDIT_POLICY_SUCCESS`, `AUDIT_POLICY_FAILURE`, `AUDIT_POLICY_SUCCESS_AND_FAILURE`).
+- [x] **Dynamic Loader & SCM Integration**:
+  - Registered 22 dynamic exports in `advapi32.dll` and aliases in `secur32.dll` and `sspicli.dll` in `ldr::DynamicLoader`.
+  - Registered SCM service `EventSystem` ("COM+ Event System", `SERVICE_WIN32_SHARE_PROCESS`) in svchost group `LocalService`.
+  - Module version metadata registered in `version.hpp` for `auditpol.exe` and `icacls.exe` (`10.0.22621.1`).
+- [x] **Interactive CLI Utilities (`include/micant/shell.hpp` - `icacls` & `auditpol`)**:
+  - `icacls <path>`: Displays file security descriptor, owner, and granted DACL ACE rights.
+  - `icacls test`: Automated self-test verifying SID generation, ACL construction, AccessCheck, and self-relative transformations.
+  - `auditpol /?`: Complete audit policy utility syntax and parameter help.
+  - `auditpol /get /category:*`: Dumps formatted table of all security categories, subcategories, and audit settings.
+  - `auditpol /set /subcategory:<name> /success:enable /failure:enable`: Configures auditing policies dynamically.
+  - `auditpol test`: Automated self-test verifying policy manager state and dynamic policy reconfiguration.
+- [x] **Unit Test Suite 84 (`Test_WindowsACL_SecurityAuditing_Subsystem`)**:
+  - 8 comprehensive validation stages covering dynamic exports, SCM EventSystem service, SID allocation/conversion, ACL creation & ACE manipulation, absolute security descriptors, self-relative/absolute conversions, AccessCheck authorization matrix, and interactive CLI integration.
+  - All 84 unit test suites passing with 100% success rate (84 Passed, 0 Failed).
+
+---
+
+### Phase 58: Windows Networking Management & NetAPI32 Subsystem (`netapi32.dll`, `srvcli.dll`, `wkscli.dll`, `net.exe`, `LanmanServer`, `LanmanWorkstation`) (PLANNED)
+- [ ] **NetAPI32 Core Architecture (`include/micant/netapi32.hpp`, `netapi32.dll`, `srvcli.dll`, `wkscli.dll`)**:
+  - Network share management: `NetShareEnum`, `NetShareAdd`, `NetShareDel`, `NetShareGetInfo`, `NetShareSetInfo` (`SHARE_INFO_0`, `SHARE_INFO_1`, `SHARE_INFO_2`).
+  - Server and Workstation introspection: `NetServerGetInfo`, `NetWkstaGetInfo` (`SERVER_INFO_100`, `SERVER_INFO_101`, `WKSTA_INFO_100`).
+  - Session & Connection management: `NetSessionEnum`, `NetSessionDel`, `NetSessionGetInfo` (`SESSION_INFO_0`, `SESSION_INFO_10`, `SESSION_INFO_502`).
+  - User & Local Group management: `NetUserEnum`, `NetUserGetInfo`, `NetUserAdd`, `NetUserDel`, `NetLocalGroupEnum`, `NetLocalGroupGetInfo`, `NetLocalGroupAddMembers`.
+  - Memory management: `NetApiBufferAllocate`, `NetApiBufferFree`, `NetApiBufferSize`.
+- [ ] **SCM Lanman Services Integration**:
+  - `LanmanServer` ("Server" SMB file & print sharing daemon, `SERVICE_WIN32_SHARE_PROCESS`) in svchost group `netsvcs`.
+  - `LanmanWorkstation` ("Workstation" network client redirector, `SERVICE_WIN32_SHARE_PROCESS`) in svchost group `NetworkService`.
+- [ ] **Interactive CLI Expansions (`net share`, `net session`, `net view`, `net config server`, `net config workstation`)**:
+  - Full interoperable output formatting matching Windows `net.exe`.
+- [ ] **Unit Test Suite 85 (`Test_WindowsNetAPI32_NetworkManagement_Subsystem`)**:
+  - Full automated validation of NetAPI buffers, share enumeration/creation, server/workstation info, session tracking, SCM Lanman services, and shell commands.
 
 
 

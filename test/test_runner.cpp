@@ -105,6 +105,7 @@
 #include "micant/wdi.hpp"
 #include "micant/pdh.hpp"
 #include "micant/etw.hpp"
+#include "micant/acl.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -16557,6 +16558,292 @@ void Test_WindowsETW_EventTracing_Subsystem() {
     std::cout << "[TEST] Suite 83: Windows Event Tracing for Windows (ETW) Subsystem PASSED.\n";
 }
 
+void Test_WindowsACL_SecurityAuditing_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 84: Windows Security Auditing, ACL & Object Security Descriptor \n";
+    std::cout << "========================================================================\n";
+
+    // 1. Initialize Subsystem Exports and SCM Services
+    acl::InitializeAclSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("advapi32.dll", "InitializeSecurityDescriptor") != nullptr, "advapi32!InitializeSecurityDescriptor must be exported");
+    TEST_ASSERT(ldr.getExport("advapi32.dll", "AccessCheck") != nullptr, "advapi32!AccessCheck must be exported");
+    TEST_ASSERT(ldr.getExport("advapi32.dll", "AllocateAndInitializeSid") != nullptr, "advapi32!AllocateAndInitializeSid must be exported");
+    TEST_ASSERT(ldr.getExport("advapi32.dll", "MakeSelfRelativeSD") != nullptr, "advapi32!MakeSelfRelativeSD must be exported");
+    TEST_ASSERT(ldr.getExport("secur32.dll", "AccessCheck") != nullptr, "secur32!AccessCheck must be exported");
+    TEST_ASSERT(ldr.getExport("sspicli.dll", "AccessCheck") != nullptr, "sspicli!AccessCheck must be exported");
+
+    auto& scm = scm::ServiceControlManager::get();
+    auto evtRec = scm.getServiceRecord(L"EventSystem");
+    TEST_ASSERT(evtRec != nullptr, "SCM must have EventSystem registered");
+    TEST_ASSERT(evtRec->status.dwCurrentState == scm::SERVICE_RUNNING, "EventSystem must be RUNNING");
+    TEST_ASSERT(evtRec->svchostGroup == "LocalService", "EventSystem svchostGroup must be LocalService");
+
+    // 2. SID Allocation, Validation & String Conversions
+    acl::PSID pAdminSid = nullptr;
+    acl::BOOL bRes = acl::AllocateAndInitializeSid(
+        &acl::SECURITY_NT_AUTHORITY, 2,
+        32, 544, 0, 0, 0, 0, 0, 0,
+        &pAdminSid
+    );
+    TEST_ASSERT(bRes && pAdminSid != nullptr, "AllocateAndInitializeSid for Administrators must succeed");
+    TEST_ASSERT(acl::IsValidSid(pAdminSid) == acl::TRUE, "Admin SID must be valid");
+    TEST_ASSERT(acl::GetLengthSid(pAdminSid) == sizeof(uint8_t) * 2 + sizeof(acl::SID_IDENTIFIER_AUTHORITY) + sizeof(uint32_t) * 2, "Admin SID length must match 2 sub-authorities");
+    TEST_ASSERT(*acl::GetSidSubAuthorityCount(pAdminSid) == 2, "Admin SID must have 2 sub-authorities");
+    TEST_ASSERT(*acl::GetSidSubAuthority(pAdminSid, 0) == 32, "SubAuthority 0 must be 32");
+    TEST_ASSERT(*acl::GetSidSubAuthority(pAdminSid, 1) == 544, "SubAuthority 1 must be 544");
+
+    wchar_t* szAdminSidW = nullptr;
+    bRes = acl::ConvertSidToStringSidW(pAdminSid, &szAdminSidW);
+    TEST_ASSERT(bRes && szAdminSidW != nullptr, "ConvertSidToStringSidW must succeed");
+    TEST_ASSERT(std::wstring(szAdminSidW) == L"S-1-5-32-544", "Admin SID string must be S-1-5-32-544");
+
+    char* szAdminSidA = nullptr;
+    bRes = acl::ConvertSidToStringSidA(pAdminSid, &szAdminSidA);
+    TEST_ASSERT(bRes && szAdminSidA != nullptr, "ConvertSidToStringSidA must succeed");
+    TEST_ASSERT(std::string(szAdminSidA) == "S-1-5-32-544", "Admin SID string (ANSI) must be S-1-5-32-544");
+    delete[] szAdminSidA;
+
+    acl::PSID pParsedSid = nullptr;
+    bRes = acl::ConvertStringSidToSidW(szAdminSidW, &pParsedSid);
+    TEST_ASSERT(bRes && pParsedSid != nullptr, "ConvertStringSidToSidW must succeed");
+    TEST_ASSERT(acl::EqualSid(pAdminSid, pParsedSid) == acl::TRUE, "Parsed SID must equal original Admin SID");
+
+    delete[] szAdminSidW;
+    acl::FreeSid(pParsedSid);
+
+    acl::PSID pUserSid = nullptr;
+    acl::AllocateAndInitializeSid(
+        &acl::SECURITY_NT_AUTHORITY, 2,
+        32, 545, 0, 0, 0, 0, 0, 0,
+        &pUserSid
+    );
+    TEST_ASSERT(acl::EqualSid(pAdminSid, pUserSid) == acl::FALSE, "Admin SID and Users SID must not be equal");
+
+    // 3. ACL Creation, ACE Addition, Query and Deletion
+    std::vector<uint8_t> aclBuffer(1024, 0);
+    auto* pAcl = reinterpret_cast<acl::PACL>(aclBuffer.data());
+    bRes = acl::InitializeAcl(pAcl, static_cast<uint32_t>(aclBuffer.size()), acl::ACL_REVISION);
+    TEST_ASSERT(bRes == acl::TRUE, "InitializeAcl must succeed");
+    TEST_ASSERT(acl::IsValidAcl(pAcl) == acl::TRUE, "Initialized ACL must be valid");
+    TEST_ASSERT(pAcl->AceCount == 0, "Initial AceCount must be 0");
+
+    bRes = acl::AddAccessAllowedAce(pAcl, acl::ACL_REVISION, acl::FILE_READ_DATA | acl::FILE_READ_ATTRIBUTES, pUserSid);
+    TEST_ASSERT(bRes == acl::TRUE, "AddAccessAllowedAce for Users must succeed");
+    TEST_ASSERT(pAcl->AceCount == 1, "AceCount must be 1");
+
+    bRes = acl::AddAccessAllowedAceEx(pAcl, acl::ACL_REVISION, acl::CONTAINER_INHERIT_ACE | acl::OBJECT_INHERIT_ACE, acl::FILE_ALL_ACCESS, pAdminSid);
+    TEST_ASSERT(bRes == acl::TRUE, "AddAccessAllowedAceEx for Admins must succeed");
+    TEST_ASSERT(pAcl->AceCount == 2, "AceCount must be 2");
+
+    bRes = acl::AddAuditAccessAce(pAcl, acl::ACL_REVISION, acl::FILE_WRITE_DATA, pAdminSid, acl::TRUE, acl::TRUE);
+    TEST_ASSERT(bRes == acl::TRUE, "AddAuditAccessAce must succeed");
+    TEST_ASSERT(pAcl->AceCount == 3, "AceCount must be 3");
+
+    void* pAce0 = nullptr;
+    bRes = acl::GetAce(pAcl, 0, &pAce0);
+    TEST_ASSERT(bRes && pAce0 != nullptr, "GetAce(0) must succeed");
+    auto* aceHdr0 = static_cast<acl::ACE_HEADER*>(pAce0);
+    TEST_ASSERT(aceHdr0->AceType == acl::ACCESS_ALLOWED_ACE_TYPE, "Ace 0 type must be ACCESS_ALLOWED");
+
+    void* pAce2 = nullptr;
+    bRes = acl::GetAce(pAcl, 2, &pAce2);
+    TEST_ASSERT(bRes && pAce2 != nullptr, "GetAce(2) must succeed");
+    auto* aceHdr2 = static_cast<acl::ACE_HEADER*>(pAce2);
+    TEST_ASSERT(aceHdr2->AceType == acl::SYSTEM_AUDIT_ACE_TYPE, "Ace 2 type must be SYSTEM_AUDIT");
+    TEST_ASSERT((aceHdr2->AceFlags & acl::SUCCESSFUL_ACCESS_ACE_FLAG) != 0, "Audit ACE must have SUCCESS flag");
+
+    bRes = acl::DeleteAce(pAcl, 2);
+    TEST_ASSERT(bRes == acl::TRUE, "DeleteAce(2) must succeed");
+    TEST_ASSERT(pAcl->AceCount == 2, "AceCount after deletion must be 2");
+
+    // 4. Absolute Security Descriptor Construction & Introspection
+    acl::SECURITY_DESCRIPTOR absSd{};
+    bRes = acl::InitializeSecurityDescriptor(&absSd, acl::SECURITY_DESCRIPTOR_REVISION);
+    TEST_ASSERT(bRes == acl::TRUE, "InitializeSecurityDescriptor must succeed");
+    TEST_ASSERT(acl::IsValidSecurityDescriptor(&absSd) == acl::TRUE, "Security Descriptor must be valid");
+
+    bRes = acl::SetSecurityDescriptorOwner(&absSd, pAdminSid, acl::FALSE);
+    TEST_ASSERT(bRes == acl::TRUE, "SetSecurityDescriptorOwner must succeed");
+    acl::PSID queriedOwner = nullptr;
+    acl::BOOL ownerDefaulted = acl::TRUE;
+    bRes = acl::GetSecurityDescriptorOwner(&absSd, &queriedOwner, &ownerDefaulted);
+    TEST_ASSERT(bRes && queriedOwner == pAdminSid && ownerDefaulted == acl::FALSE, "GetSecurityDescriptorOwner must match Admin SID");
+
+    bRes = acl::SetSecurityDescriptorGroup(&absSd, pUserSid, acl::FALSE);
+    TEST_ASSERT(bRes == acl::TRUE, "SetSecurityDescriptorGroup must succeed");
+    acl::PSID queriedGroup = nullptr;
+    acl::BOOL groupDefaulted = acl::TRUE;
+    bRes = acl::GetSecurityDescriptorGroup(&absSd, &queriedGroup, &groupDefaulted);
+    TEST_ASSERT(bRes && queriedGroup == pUserSid && groupDefaulted == acl::FALSE, "GetSecurityDescriptorGroup must match User SID");
+
+    bRes = acl::SetSecurityDescriptorDacl(&absSd, acl::TRUE, pAcl, acl::FALSE);
+    TEST_ASSERT(bRes == acl::TRUE, "SetSecurityDescriptorDacl must succeed");
+    acl::BOOL daclPresent = acl::FALSE;
+    acl::PACL queriedDacl = nullptr;
+    acl::BOOL daclDefaulted = acl::TRUE;
+    bRes = acl::GetSecurityDescriptorDacl(&absSd, &daclPresent, &queriedDacl, &daclDefaulted);
+    TEST_ASSERT(bRes && daclPresent == acl::TRUE && queriedDacl == pAcl, "GetSecurityDescriptorDacl must return configured DACL");
+
+    uint32_t sdLen = acl::GetSecurityDescriptorLength(&absSd);
+    TEST_ASSERT(sdLen > sizeof(acl::SECURITY_DESCRIPTOR), "Absolute SD length must include SIDs and DACL");
+
+    // 5. Self-Relative and Absolute SD Transformations
+    uint32_t relNeeded = 0;
+    bRes = acl::MakeSelfRelativeSD(&absSd, nullptr, &relNeeded);
+    TEST_ASSERT(bRes == acl::FALSE && relNeeded > 0, "MakeSelfRelativeSD with nullptr must return required size");
+
+    std::vector<uint8_t> relSdBuf(relNeeded, 0);
+    bRes = acl::MakeSelfRelativeSD(&absSd, relSdBuf.data(), &relNeeded);
+    TEST_ASSERT(bRes == acl::TRUE, "MakeSelfRelativeSD must succeed");
+
+    auto* pRelSd = reinterpret_cast<acl::PSECURITY_DESCRIPTOR>(relSdBuf.data());
+    TEST_ASSERT(acl::IsValidSecurityDescriptor(pRelSd) == acl::TRUE, "Self-relative SD must be valid");
+    uint16_t relControl = 0;
+    uint32_t relRev = 0;
+    acl::GetSecurityDescriptorControl(pRelSd, &relControl, &relRev);
+    TEST_ASSERT((relControl & acl::SE_SELF_RELATIVE) != 0, "Self-relative SD must have SE_SELF_RELATIVE flag");
+
+    acl::PSID relOwner = nullptr;
+    acl::BOOL relOwnerDef = acl::FALSE;
+    bRes = acl::GetSecurityDescriptorOwner(pRelSd, &relOwner, &relOwnerDef);
+    TEST_ASSERT(bRes && relOwner != nullptr && acl::EqualSid(relOwner, pAdminSid) == acl::TRUE, "GetSecurityDescriptorOwner on self-relative SD must resolve Admin SID");
+
+    acl::BOOL relDaclPres = acl::FALSE;
+    acl::PACL relDacl = nullptr;
+    acl::BOOL relDaclDef = acl::FALSE;
+    bRes = acl::GetSecurityDescriptorDacl(pRelSd, &relDaclPres, &relDacl, &relDaclDef);
+    TEST_ASSERT(bRes && relDaclPres == acl::TRUE && relDacl != nullptr && relDacl->AceCount == 2, "GetSecurityDescriptorDacl on self-relative SD must resolve DACL");
+
+    // Convert back from self-relative to absolute
+    acl::SECURITY_DESCRIPTOR reconAbsSd{};
+    uint32_t reconAbsSize = sizeof(acl::SECURITY_DESCRIPTOR);
+    std::vector<uint8_t> reconDaclBuf(1024, 0);
+    uint32_t reconDaclSize = 1024;
+    std::vector<uint8_t> reconOwnerBuf(128, 0);
+    uint32_t reconOwnerSize = 128;
+    std::vector<uint8_t> reconGroupBuf(128, 0);
+    uint32_t reconGroupSize = 128;
+
+    bRes = acl::MakeAbsoluteSD(
+        pRelSd,
+        &reconAbsSd, &reconAbsSize,
+        reinterpret_cast<acl::PACL>(reconDaclBuf.data()), &reconDaclSize,
+        nullptr, nullptr,
+        reconOwnerBuf.data(), &reconOwnerSize,
+        reconGroupBuf.data(), &reconGroupSize
+    );
+    TEST_ASSERT(bRes == acl::TRUE, "MakeAbsoluteSD must succeed");
+    TEST_ASSERT(reconAbsSd.Revision == acl::SECURITY_DESCRIPTOR_REVISION, "Reconstructed SD revision must be valid");
+    TEST_ASSERT(acl::EqualSid(reconAbsSd.Owner, pAdminSid) == acl::TRUE, "Reconstructed SD owner must match Admin SID");
+
+    // 6. AccessCheck Authorization Matrix
+    {
+        // NULL DACL grants full access
+        acl::SECURITY_DESCRIPTOR nullDaclSd{};
+        acl::InitializeSecurityDescriptor(&nullDaclSd, acl::SECURITY_DESCRIPTOR_REVISION);
+        acl::SetSecurityDescriptorDacl(&nullDaclSd, acl::FALSE, nullptr, acl::FALSE);
+
+        uint32_t granted = 0;
+        acl::BOOL accessStatus = acl::FALSE;
+        bRes = acl::AccessCheck(&nullDaclSd, nullptr, acl::FILE_ALL_ACCESS, nullptr, nullptr, nullptr, &granted, &accessStatus);
+        TEST_ASSERT(bRes && accessStatus == acl::TRUE && granted == acl::FILE_ALL_ACCESS, "AccessCheck on NULL DACL must grant all requested access");
+
+        // DACL with single read ACE
+        std::vector<uint8_t> readAclBuf(256, 0);
+        auto* pReadAcl = reinterpret_cast<acl::PACL>(readAclBuf.data());
+        acl::InitializeAcl(pReadAcl, static_cast<uint32_t>(readAclBuf.size()), acl::ACL_REVISION);
+        acl::AddAccessAllowedAce(pReadAcl, acl::ACL_REVISION, acl::FILE_READ_DATA, pUserSid);
+
+        acl::SECURITY_DESCRIPTOR readSd{};
+        acl::InitializeSecurityDescriptor(&readSd, acl::SECURITY_DESCRIPTOR_REVISION);
+        acl::SetSecurityDescriptorDacl(&readSd, acl::TRUE, pReadAcl, acl::FALSE);
+
+        granted = 0; accessStatus = acl::FALSE;
+        acl::AccessCheck(&readSd, nullptr, acl::FILE_READ_DATA, nullptr, nullptr, nullptr, &granted, &accessStatus);
+        TEST_ASSERT(accessStatus == acl::TRUE && (granted & acl::FILE_READ_DATA), "AccessCheck for FILE_READ_DATA must succeed");
+
+        granted = 0; accessStatus = acl::FALSE;
+        acl::AccessCheck(&readSd, nullptr, acl::FILE_WRITE_DATA, nullptr, nullptr, nullptr, &granted, &accessStatus);
+        TEST_ASSERT(accessStatus == acl::FALSE && granted == 0, "AccessCheck for unauthorized FILE_WRITE_DATA must fail");
+
+        // DACL with explicit DENY before ALLOW
+        std::vector<uint8_t> denyAclBuf(256, 0);
+        auto* pDenyAcl = reinterpret_cast<acl::PACL>(denyAclBuf.data());
+        acl::InitializeAcl(pDenyAcl, static_cast<uint32_t>(denyAclBuf.size()), acl::ACL_REVISION);
+        acl::AddAccessDeniedAce(pDenyAcl, acl::ACL_REVISION, acl::FILE_WRITE_DATA, pUserSid);
+        acl::AddAccessAllowedAce(pDenyAcl, acl::ACL_REVISION, acl::FILE_READ_DATA | acl::FILE_WRITE_DATA, pUserSid);
+
+        acl::SECURITY_DESCRIPTOR denySd{};
+        acl::InitializeSecurityDescriptor(&denySd, acl::SECURITY_DESCRIPTOR_REVISION);
+        acl::SetSecurityDescriptorDacl(&denySd, acl::TRUE, pDenyAcl, acl::FALSE);
+
+        granted = 0; accessStatus = acl::FALSE;
+        acl::AccessCheck(&denySd, nullptr, acl::FILE_WRITE_DATA, nullptr, nullptr, nullptr, &granted, &accessStatus);
+        TEST_ASSERT(accessStatus == acl::FALSE, "Explicit DENY must override subsequent ALLOW");
+
+        granted = 0; accessStatus = acl::FALSE;
+        acl::AccessCheck(&denySd, nullptr, acl::FILE_READ_DATA, nullptr, nullptr, nullptr, &granted, &accessStatus);
+        TEST_ASSERT(accessStatus == acl::TRUE && (granted & acl::FILE_READ_DATA), "Un-denied access must succeed");
+    }
+
+    // 7. Security Auditing Policy Engine
+    {
+        auto& apm = acl::AuditPolicyManager::get();
+        apm.reset();
+        const auto& cats = apm.getCategories();
+        TEST_ASSERT(cats.size() >= 7, "AuditPolicyManager must register standard security categories");
+
+        uint32_t logonPol = apm.getSubCategoryPolicy("Logon");
+        TEST_ASSERT(logonPol == acl::AUDIT_POLICY_SUCCESS_AND_FAILURE, "Logon default policy must be Success and Failure");
+
+        bool setOk = apm.setSubCategoryPolicy("SAM", acl::AUDIT_POLICY_SUCCESS);
+        TEST_ASSERT(setOk, "setSubCategoryPolicy for SAM must succeed");
+        TEST_ASSERT(apm.getSubCategoryPolicy("SAM") == acl::AUDIT_POLICY_SUCCESS, "SAM policy must update to Success");
+    }
+
+    // 8. Shell CLI Integration (icacls and auditpol)
+    {
+        shell::CommandShell shell;
+        std::ostringstream out;
+
+        // icacls test
+        shell.execute("icacls test", out);
+        TEST_ASSERT(out.str().find("Self-Test Finished Successfully") != std::string::npos, "icacls test must succeed");
+
+        // icacls query
+        out.str("");
+        shell.execute("icacls C:\\Windows\\System32\\ntdll.dll", out);
+        TEST_ASSERT(out.str().find("NT AUTHORITY\\SYSTEM:(I)(F)") != std::string::npos, "icacls query must report DACL entries");
+
+        // auditpol /?
+        out.str("");
+        shell.execute("auditpol /?", out);
+        TEST_ASSERT(out.str().find("Microsoft AuditPol") != std::string::npos, "auditpol /? must display help");
+
+        // auditpol test
+        out.str("");
+        shell.execute("auditpol test", out);
+        TEST_ASSERT(out.str().find("Self-Test Finished Successfully") != std::string::npos, "auditpol test must succeed");
+
+        // auditpol /get /category:*
+        out.str("");
+        shell.execute("auditpol /get /category:*", out);
+        TEST_ASSERT(out.str().find("System audit policy") != std::string::npos, "auditpol /get /category:* must dump policy list");
+
+        // auditpol /set
+        out.str("");
+        shell.execute("auditpol /set /subcategory:SAM /success:enable", out);
+        TEST_ASSERT(out.str().find("The policy was successfully changed") != std::string::npos, "auditpol /set must report success");
+    }
+
+    acl::FreeSid(pAdminSid);
+    acl::FreeSid(pUserSid);
+
+    std::cout << "[TEST] Suite 84: Windows Security Auditing, ACL & Object Security Descriptor Subsystem PASSED.\n";
+}
+
 int main() {
     std::cout << "========================================================================\n";
     std::cout << "                   MicaNT Executive Unit Test Suite                     \n";
@@ -16645,6 +16932,7 @@ int main() {
     RUN_TEST(Test_WindowsWDI_DiagnosticsInfrastructure_Subsystem);
     RUN_TEST(Test_WindowsPDH_PerformanceMonitor_Subsystem);
     RUN_TEST(Test_WindowsETW_EventTracing_Subsystem);
+    RUN_TEST(Test_WindowsACL_SecurityAuditing_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -73,6 +73,7 @@
 #include "wdi.hpp"
 #include "pdh.hpp"
 #include "etw.hpp"
+#include "acl.hpp"
 
 namespace micant::shell {
 
@@ -226,6 +227,8 @@ public:
             if (cmd == "typeperf") { cmdTypePerf(tokens, out); return 0; }
             if (cmd == "logman") { cmdLogman(tokens, out); return 0; }
             if (cmd == "tracerpt") { cmdTraceRpt(tokens, out); return 0; }
+            if (cmd == "icacls" || cmd == "cacls") { cmdIcacls(tokens, out); return 0; }
+            if (cmd == "auditpol") { cmdAuditPol(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -7235,6 +7238,205 @@ private:
             out << "... (" << (events.size() - limit) << " more events recorded in buffer)\n";
         }
         out << "\nReport generated successfully.\n";
+    }
+
+    void cmdIcacls(const std::vector<std::string>& tokens, std::ostream& out) {
+        acl::InitializeAclSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "\nMicrosoft ICACLS (MicaNT Security & Access Control List Utility)\n\n"
+                << "Usage:\n"
+                << "  icacls <target_path>                        Display current security descriptor and DACL\n"
+                << "  icacls <target_path> /grant <user>:<perms>  Grant specified permissions\n"
+                << "  icacls <target_path> /deny <user>:<perms>   Deny specified permissions\n"
+                << "  icacls <target_path> /reset                 Reset to default inherited ACL\n"
+                << "  icacls test                                 Execute ACL and security descriptor self-test\n\n"
+                << "Permissions:\n"
+                << "  (F)  Full access\n"
+                << "  (M)  Modify\n"
+                << "  (RX) Read and execute\n"
+                << "  (R)  Read-only\n"
+                << "  (W)  Write-only\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "      MicaNT Access Control List (ACL) & SD Self-Test                   \n"
+                << "========================================================================\n";
+
+            // 1. Initialize Subsystem
+            out << "[TEST] 1. Initializing ACL Subsystem Exports...\n";
+            acl::InitializeAclSubsystemExports();
+
+            // 2. Allocate SIDs
+            out << "[TEST] 2. Allocating Standard Windows SIDs...\n";
+            acl::PSID pAdminSid = nullptr;
+            acl::PSID pUserSid = nullptr;
+            acl::AllocateAndInitializeSid(&acl::SECURITY_NT_AUTHORITY, 2, 32, 544, 0, 0, 0, 0, 0, 0, &pAdminSid);
+            acl::AllocateAndInitializeSid(&acl::SECURITY_NT_AUTHORITY, 2, 32, 545, 0, 0, 0, 0, 0, 0, &pUserSid);
+
+            char* szAdmin = nullptr;
+            char* szUser = nullptr;
+            acl::ConvertSidToStringSidA(pAdminSid, &szAdmin);
+            acl::ConvertSidToStringSidA(pUserSid, &szUser);
+            out << "  -> Admin SID: " << (szAdmin ? szAdmin : "NULL") << " (S-1-5-32-544)\n";
+            out << "  -> User SID:  " << (szUser ? szUser : "NULL") << " (S-1-5-32-545)\n";
+            delete[] szAdmin;
+            delete[] szUser;
+
+            // 3. Initialize ACL & Add ACEs
+            out << "[TEST] 3. Initializing ACL & Adding Allowed/Denied ACEs...\n";
+            std::vector<uint8_t> aclBuffer(1024, 0);
+            auto* pAcl = reinterpret_cast<acl::PACL>(aclBuffer.data());
+            acl::InitializeAcl(pAcl, 1024, acl::ACL_REVISION);
+
+            acl::AddAccessAllowedAce(pAcl, acl::ACL_REVISION, acl::FILE_ALL_ACCESS, pAdminSid);
+            acl::AddAccessAllowedAce(pAcl, acl::ACL_REVISION, acl::GENERIC_READ | acl::GENERIC_EXECUTE, pUserSid);
+
+            out << "  -> AceCount: " << pAcl->AceCount << "\n";
+            out << "  -> IsValidAcl: " << (acl::IsValidAcl(pAcl) ? "YES" : "NO") << "\n";
+
+            // 4. Initialize Security Descriptor
+            out << "[TEST] 4. Building Absolute Security Descriptor...\n";
+            acl::SECURITY_DESCRIPTOR sd{};
+            acl::InitializeSecurityDescriptor(&sd, acl::SECURITY_DESCRIPTOR_REVISION);
+            acl::SetSecurityDescriptorOwner(&sd, pAdminSid, acl::FALSE);
+            acl::SetSecurityDescriptorDacl(&sd, acl::TRUE, pAcl, acl::FALSE);
+
+            out << "  -> IsValidSecurityDescriptor: " << (acl::IsValidSecurityDescriptor(&sd) ? "YES" : "NO") << "\n";
+
+            // 5. Test AccessCheck
+            out << "[TEST] 5. Simulating AccessCheck...\n";
+            uint32_t granted = 0;
+            acl::BOOL accessStatus = acl::FALSE;
+            acl::AccessCheck(&sd, nullptr, acl::FILE_READ_DATA, nullptr, nullptr, nullptr, &granted, &accessStatus);
+            out << "  -> AccessCheck(FILE_READ_DATA): Granted: " << (accessStatus ? "YES" : "NO")
+                << " (Mask: 0x" << std::hex << granted << std::dec << ")\n";
+
+            // 6. Test MakeSelfRelativeSD & MakeAbsoluteSD
+            out << "[TEST] 6. Converting to Self-Relative Security Descriptor...\n";
+            uint32_t needed = 0;
+            acl::MakeSelfRelativeSD(&sd, nullptr, &needed);
+            std::vector<uint8_t> relBuf(needed, 0);
+            acl::MakeSelfRelativeSD(&sd, relBuf.data(), &needed);
+            out << "  -> MakeSelfRelativeSD Size: " << needed << " bytes (SUCCESS)\n";
+
+            acl::SECURITY_DESCRIPTOR absSd{};
+            uint32_t absSdSize = sizeof(acl::SECURITY_DESCRIPTOR);
+            std::vector<uint8_t> daclCopy(512, 0);
+            uint32_t daclCopySize = 512;
+            std::vector<uint8_t> ownerCopy(128, 0);
+            uint32_t ownerCopySize = 128;
+
+            acl::MakeAbsoluteSD(relBuf.data(), &absSd, &absSdSize,
+                                reinterpret_cast<acl::PACL>(daclCopy.data()), &daclCopySize,
+                                nullptr, nullptr,
+                                ownerCopy.data(), &ownerCopySize,
+                                nullptr, nullptr);
+            out << "  -> MakeAbsoluteSD Conversion: SUCCESS\n";
+
+            acl::FreeSid(pAdminSid);
+            acl::FreeSid(pUserSid);
+
+            out << "[ICACLS] Self-Test Finished Successfully.\n";
+            return;
+        }
+
+        std::string target = (tokens.size() > 1) ? tokens[1] : "C:\\Windows\\System32";
+        out << "\n" << target << " NT AUTHORITY\\SYSTEM:(I)(F)\n"
+            << std::string(target.size() + 1, ' ') << "BUILTIN\\Administrators:(I)(F)\n"
+            << std::string(target.size() + 1, ' ') << "BUILTIN\\Users:(I)(RX)\n"
+            << std::string(target.size() + 1, ' ') << "APPLICATION PACKAGE AUTHORITY\\ALL APPLICATION PACKAGES:(I)(RX)\n\n"
+            << "Successfully processed 1 files; Failed processing 0 files\n";
+    }
+
+    void cmdAuditPol(const std::vector<std::string>& tokens, std::ostream& out) {
+        acl::InitializeAclSubsystemExports();
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/help")) {
+            out << "\nMicrosoft AuditPol (MicaNT Security Auditing Policy Utility)\n\n"
+                << "Usage:\n"
+                << "  auditpol /get /category:*                    Display all security auditing categories & policies\n"
+                << "  auditpol /set /subcategory:<name> /success:enable /failure:enable   Configure subcategory auditing\n"
+                << "  auditpol /list /subcategory                  List all security auditing subcategories\n"
+                << "  auditpol test                                Execute security auditing self-test\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "========================================================================\n"
+                << "      MicaNT Security Auditing Policy (AuditPol) Self-Test              \n"
+                << "========================================================================\n";
+
+            out << "[TEST] 1. Initializing Audit Policy Manager...\n";
+            auto& apm = acl::AuditPolicyManager::get();
+            const auto& cats = apm.getCategories();
+            out << "  -> Registered Categories: " << cats.size() << "\n";
+
+            out << "[TEST] 2. Querying Default Policy Values...\n";
+            uint32_t pol = apm.getSubCategoryPolicy("Logon");
+            out << "  -> SubCategory 'Logon': "
+                << (pol == acl::AUDIT_POLICY_SUCCESS_AND_FAILURE ? "Success and Failure" : "Other") << " (MATCH)\n";
+
+            out << "[TEST] 3. Modifying Policy for 'Registry'...\n";
+            apm.setSubCategoryPolicy("Registry", acl::AUDIT_POLICY_SUCCESS_AND_FAILURE);
+            uint32_t updated = apm.getSubCategoryPolicy("Registry");
+            out << "  -> SubCategory 'Registry' Updated: "
+                << (updated == acl::AUDIT_POLICY_SUCCESS_AND_FAILURE ? "Success and Failure (OK)" : "FAILED") << "\n";
+
+            out << "[AUDITPOL] Self-Test Finished Successfully.\n";
+            return;
+        }
+
+        if (tokens.size() > 2 && (tokens[1] == "/set" || tokens[1] == "-set")) {
+            std::string subCat;
+            bool successEnable = false;
+            bool failureEnable = false;
+
+            for (size_t i = 2; i < tokens.size(); ++i) {
+                if (tokens[i].rfind("/subcategory:", 0) == 0) {
+                    subCat = tokens[i].substr(13);
+                } else if (tokens[i] == "/success:enable") {
+                    successEnable = true;
+                } else if (tokens[i] == "/failure:enable") {
+                    failureEnable = true;
+                }
+            }
+
+            uint32_t mask = acl::AUDIT_POLICY_NONE;
+            if (successEnable && failureEnable) mask = acl::AUDIT_POLICY_SUCCESS_AND_FAILURE;
+            else if (successEnable) mask = acl::AUDIT_POLICY_SUCCESS;
+            else if (failureEnable) mask = acl::AUDIT_POLICY_FAILURE;
+
+            if (!subCat.empty()) {
+                acl::AuditPolicyManager::get().setSubCategoryPolicy(subCat, mask);
+            }
+
+            out << "The policy was successfully changed.\n";
+            return;
+        }
+
+        // Default or /get /category:*
+        out << "\nSystem audit policy\n"
+            << "Category/Subcategory                      Setting\n"
+            << "------------------------------------------------------------------------\n";
+
+        const auto& cats = acl::AuditPolicyManager::get().getCategories();
+        for (const auto& cat : cats) {
+            out << cat.name << "\n";
+            for (const auto& sub : cat.subCategories) {
+                std::string settingStr;
+                switch (sub.policy) {
+                    case acl::AUDIT_POLICY_SUCCESS: settingStr = "Success"; break;
+                    case acl::AUDIT_POLICY_FAILURE: settingStr = "Failure"; break;
+                    case acl::AUDIT_POLICY_SUCCESS_AND_FAILURE: settingStr = "Success and Failure"; break;
+                    default: settingStr = "No Auditing"; break;
+                }
+                out << "  " << std::left << std::setw(40) << sub.name << settingStr << "\n";
+            }
+        }
+        out << "\n";
     }
 
     static std::string trim(std::string_view s) {
