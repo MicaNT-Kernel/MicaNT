@@ -126,6 +126,7 @@
 #include "micant/mfplat.hpp"
 #include "micant/dshow.hpp"
 #include "micant/wmp.hpp"
+#include "micant/gdiplus.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -23455,9 +23456,369 @@ void Test_WindowsMediaPlayer_ActiveMovie_Subsystem() {
     std::cout << "[TEST] Suite 104: Windows Media Player & ActiveMovie Subsystem PASSED.\n";
 }
 
+void Test_WindowsGdiPlus_Imaging_Subsystem() {
+    std::cout << "\n[TEST] Suite 105: Windows GDI+ & Advanced Imaging Architecture...\n";
+    using namespace micant::gdiplus;
+
+    // 1. GdiplusStartup & GdiplusShutdown Lifecycle
+    {
+        uintptr_t token = 0;
+        GdiplusStartupInput input;
+        GdiplusStartupOutput output;
+        Status st = GdiplusStartup(&token, &input, &output);
+        TEST_ASSERT(st == Ok, "GdiplusStartup must succeed");
+        TEST_ASSERT(token != 0, "GdiplusStartup must return non-zero token");
+        TEST_ASSERT(g_gdiplusInitialized.load() == true, "g_gdiplusInitialized must be true");
+
+        GdiplusShutdown(token);
+        TEST_ASSERT(g_gdiplusInitialized.load() == false, "g_gdiplusInitialized must be false after shutdown");
+
+        // Re-initialize for subsequent test sections
+        st = GdiplusStartup(&token, nullptr, nullptr);
+        TEST_ASSERT(st == Ok, "Re-initialization of GDI+ must succeed");
+    }
+
+    // 2. Color ARGB Decomposition & ToCOLORREF
+    {
+        Color c(255, 128, 64, 32);
+        TEST_ASSERT(c.GetA() == 255, "Alpha channel must be 255");
+        TEST_ASSERT(c.GetR() == 128, "Red channel must be 128");
+        TEST_ASSERT(c.GetG() == 64, "Green channel must be 64");
+        TEST_ASSERT(c.GetB() == 32, "Blue channel must be 32");
+
+        uint32_t cref = c.ToCOLORREF();
+        TEST_ASSERT(cref == (128 | (64 << 8) | (32 << 16)), "ToCOLORREF must match Windows COLORREF RGB layout");
+
+        Color red = Color::Red();
+        TEST_ASSERT(red.GetR() == 255 && red.GetG() == 0 && red.GetB() == 0, "Color::Red must be pure red");
+
+        Color trans = Color::Transparent();
+        TEST_ASSERT(trans.GetA() == 0, "Color::Transparent alpha must be 0");
+    }
+
+    // 3. Geometric Primitives (Point, PointF, Rect, RectF, Size, SizeF)
+    {
+        Point pt(10, 20);
+        TEST_ASSERT(pt.X == 10 && pt.Y == 20, "Point coordinates match");
+
+        PointF ptf(15.5f, 25.5f);
+        TEST_ASSERT(ptf.X == 15.5f && ptf.Y == 25.5f, "PointF coordinates match");
+
+        Size sz(100, 200);
+        TEST_ASSERT(sz.Width == 100 && sz.Height == 200, "Size dimensions match");
+
+        SizeF szf(100.5f, 200.5f);
+        TEST_ASSERT(szf.Width == 100.5f && szf.Height == 200.5f, "SizeF dimensions match");
+
+        Rect rc(10, 20, 100, 50);
+        TEST_ASSERT(rc.GetLeft() == 10 && rc.GetTop() == 20, "Rect left/top match");
+        TEST_ASSERT(rc.GetRight() == 110 && rc.GetBottom() == 70, "Rect right/bottom match");
+        TEST_ASSERT(!rc.IsEmptyArea(), "Rect with positive dimension is not empty");
+
+        RectF rcf(5.0f, 10.0f, 50.0f, 25.0f);
+        TEST_ASSERT(rcf.GetRight() == 55.0f && rcf.GetBottom() == 35.0f, "RectF right/bottom match");
+    }
+
+    // 4. Matrix Affine Transformations (Translate, Scale, TransformPoints, Reset)
+    {
+        Matrix m;
+        TEST_ASSERT(m.IsIdentity(), "New Matrix must be identity");
+
+        m.Translate(10.0f, 20.0f);
+        m.Scale(2.0f, 3.0f);
+
+        PointF pts[2] = { { 0.0f, 0.0f }, { 5.0f, 5.0f } };
+        m.TransformPoints(pts, 2);
+        TEST_ASSERT(pts[0].X == 10.0f && pts[0].Y == 20.0f, "Matrix transformed point 0 matches");
+        TEST_ASSERT(pts[1].X == 20.0f && pts[1].Y == 35.0f, "Matrix transformed point 1 matches");
+
+        m.Reset();
+        TEST_ASSERT(m.IsIdentity(), "Matrix::Reset must restore identity");
+    }
+
+    // 5. SolidBrush Color Setting, Querying, and Cloning
+    {
+        SolidBrush brush(Color::Green());
+        TEST_ASSERT(brush.GetType() == BrushTypeSolidColor, "BrushType must be BrushTypeSolidColor");
+
+        Color c;
+        brush.GetColor(&c);
+        TEST_ASSERT(c.GetG() == 255 && c.GetR() == 0, "SolidBrush initial color is green");
+
+        brush.SetColor(Color::Blue());
+        brush.GetColor(&c);
+        TEST_ASSERT(c.GetB() == 255 && c.GetG() == 0, "SolidBrush updated color is blue");
+
+        std::unique_ptr<Brush> clone(brush.Clone());
+        TEST_ASSERT(clone != nullptr && clone->GetType() == BrushTypeSolidColor, "Cloned brush is valid");
+        auto* solidClone = static_cast<SolidBrush*>(clone.get());
+        solidClone->GetColor(&c);
+        TEST_ASSERT(c.GetB() == 255, "Cloned brush maintains color");
+    }
+
+    // 6. LinearGradientBrush Initialization, Colors, and Mode
+    {
+        RectF gradRect(0.0f, 0.0f, 100.0f, 100.0f);
+        LinearGradientBrush grad(gradRect, Color::White(), Color::Black(), LinearGradientModeForwardDiagonal);
+        TEST_ASSERT(grad.GetType() == BrushTypeLinearGradient, "Brush type is BrushTypeLinearGradient");
+        TEST_ASSERT(grad.GetMode() == LinearGradientModeForwardDiagonal, "Mode matches LinearGradientModeForwardDiagonal");
+
+        Color colors[2];
+        grad.GetLinearColors(colors);
+        TEST_ASSERT(colors[0].GetR() == 255 && colors[1].GetR() == 0, "Start color white, end color black");
+
+        grad.SetLinearColors(Color::Red(), Color::Yellow());
+        grad.GetLinearColors(colors);
+        TEST_ASSERT(colors[0].GetR() == 255 && colors[0].GetG() == 0, "Updated start color red");
+        TEST_ASSERT(colors[1].GetR() == 255 && colors[1].GetG() == 255, "Updated end color yellow");
+    }
+
+    // 7. Pen Width, Color, DashStyle, and LineCaps
+    {
+        Pen pen(Color::Red(), 2.5f);
+        TEST_ASSERT(pen.GetWidth() == 2.5f, "Pen width matches 2.5f");
+
+        Color c;
+        pen.GetColor(&c);
+        TEST_ASSERT(c.GetR() == 255, "Pen color matches red");
+
+        pen.SetWidth(4.0f);
+        TEST_ASSERT(pen.GetWidth() == 4.0f, "Updated pen width matches 4.0f");
+
+        pen.SetDashStyle(DashStyleDashDot);
+        TEST_ASSERT(pen.GetDashStyle() == DashStyleDashDot, "DashStyle matches DashStyleDashDot");
+
+        pen.SetLineCap(LineCapRound, LineCapRound, LineCapRound);
+        TEST_ASSERT(pen.GetStartCap() == LineCapRound && pen.GetEndCap() == LineCapRound, "LineCaps match LineCapRound");
+
+        pen.SetLineJoin(LineJoinRound);
+        TEST_ASSERT(pen.GetLineJoin() == LineJoinRound, "LineJoin matches LineJoinRound");
+    }
+
+    // 8. GraphicsPath Line, Rectangle, Ellipse Composition, and Matrix Transform
+    {
+        GraphicsPath path(FillModeWinding);
+        TEST_ASSERT(path.GetFillMode() == FillModeWinding, "Path fill mode matches FillModeWinding");
+
+        path.AddLine(0.0f, 0.0f, 50.0f, 0.0f);
+        TEST_ASSERT(path.GetPointCount() >= 2, "Path contains line points");
+
+        path.AddRectangle(RectF(10.0f, 10.0f, 20.0f, 30.0f));
+        path.AddEllipse(5.0f, 5.0f, 40.0f, 40.0f);
+        TEST_ASSERT(path.GetPointCount() > 10, "Path composite point count increased");
+
+        Matrix m;
+        m.Translate(100.0f, 50.0f);
+        Status st = path.Transform(&m);
+        TEST_ASSERT(st == Ok, "Path Transform must succeed");
+
+        std::vector<PointF> pts(path.GetPointCount());
+        path.GetPathPoints(pts.data(), static_cast<int32_t>(pts.size()));
+        TEST_ASSERT(pts[0].X == 100.0f && pts[0].Y == 50.0f, "Origin point transformed by (100, 50)");
+
+        path.Reset();
+        TEST_ASSERT(path.GetPointCount() == 0, "Path::Reset clears all points");
+    }
+
+    // 9. Region Bounds, Intersection, Union, and Empty State
+    {
+        Region rgn(RectF(0.0f, 0.0f, 100.0f, 100.0f));
+        TEST_ASSERT(!rgn.IsInfinite(nullptr), "Bounded region is not infinite");
+        TEST_ASSERT(!rgn.IsEmpty(nullptr), "Bounded region is not empty");
+
+        RectF bounds;
+        rgn.GetBounds(&bounds, nullptr);
+        TEST_ASSERT(bounds.Width == 100.0f && bounds.Height == 100.0f, "Region bounds match (100, 100)");
+
+        // Intersection
+        rgn.Intersect(RectF(50.0f, 50.0f, 100.0f, 100.0f));
+        rgn.GetBounds(&bounds, nullptr);
+        TEST_ASSERT(bounds.X == 50.0f && bounds.Y == 50.0f && bounds.Width == 50.0f && bounds.Height == 50.0f, "Intersect rect matches (50, 50, 50, 50)");
+
+        // Union
+        rgn.Union(RectF(0.0f, 0.0f, 20.0f, 20.0f));
+        rgn.GetBounds(&bounds, nullptr);
+        TEST_ASSERT(bounds.X == 0.0f && bounds.Y == 0.0f && bounds.Width == 100.0f && bounds.Height == 100.0f, "Union expands bounds to cover union rect");
+
+        rgn.MakeEmpty();
+        TEST_ASSERT(rgn.IsEmpty(nullptr), "Region::MakeEmpty marks region empty");
+    }
+
+    // 10. Bitmap 32-bpp ARGB Allocation, SetPixel, and GetPixel
+    {
+        Bitmap bmp(64, 64, PixelFormat32bppARGB);
+        TEST_ASSERT(bmp.GetWidth() == 64 && bmp.GetHeight() == 64, "Bitmap dimensions match (64, 64)");
+        TEST_ASSERT(bmp.GetPixelFormat() == PixelFormat32bppARGB, "Bitmap pixel format matches PixelFormat32bppARGB");
+
+        Color clr;
+        bmp.GetPixel(10, 10, &clr);
+        TEST_ASSERT(clr.GetValue() == 0x00000000, "Initial pixel value is clear/zero");
+
+        bmp.SetPixel(10, 10, Color(255, 12, 34, 56));
+        bmp.GetPixel(10, 10, &clr);
+        TEST_ASSERT(clr.GetR() == 12 && clr.GetG() == 34 && clr.GetB() == 56 && clr.GetA() == 255, "SetPixel/GetPixel round-trip matches ARGB");
+    }
+
+    // 11. Bitmap LockBits and UnlockBits Direct Scan0 Memory Manipulation
+    {
+        Bitmap bmp(32, 32, PixelFormat32bppARGB);
+        BitmapData bData{};
+        Rect rc(0, 0, 32, 32);
+        Status st = bmp.LockBits(&rc, ImageLockModeRead | ImageLockModeWrite, PixelFormat32bppARGB, &bData);
+        TEST_ASSERT(st == Ok, "LockBits must succeed");
+        TEST_ASSERT(bData.Scan0 != nullptr, "Locked Scan0 pointer is non-null");
+        TEST_ASSERT(bData.Stride == 32 * 4, "Stride matches 32 * 4 bytes");
+
+        uint32_t* pRaw = static_cast<uint32_t*>(bData.Scan0);
+        pRaw[0] = 0xFFFF00FF; // Magenta
+
+        st = bmp.UnlockBits(&bData);
+        TEST_ASSERT(st == Ok, "UnlockBits must succeed");
+
+        Color c;
+        bmp.GetPixel(0, 0, &c);
+        TEST_ASSERT(c.GetValue() == 0xFFFF00FF, "Direct Scan0 write verified via GetPixel");
+    }
+
+    // 12. Graphics Rasterization Primitives (Clear, DrawLine, FillRectangle, DrawEllipse)
+    {
+        Bitmap bmp(64, 64, PixelFormat32bppARGB);
+        Graphics g(&bmp);
+
+        g.Clear(Color::White());
+        Color c;
+        bmp.GetPixel(0, 0, &c);
+        TEST_ASSERT(c.GetValue() == 0xFFFFFFFF, "Clear fills surface with white");
+
+        Pen bluePen(Color::Blue(), 1.0f);
+        g.DrawLine(&bluePen, 0.0f, 0.0f, 63.0f, 63.0f);
+        bmp.GetPixel(0, 0, &c);
+        TEST_ASSERT(c.GetB() == 255 && c.GetR() == 0, "Diagonal line pixel rendered blue at (0, 0)");
+
+        SolidBrush redBrush(Color::Red());
+        g.FillRectangle(&redBrush, 10.0f, 10.0f, 20.0f, 20.0f);
+        bmp.GetPixel(15, 15, &c);
+        TEST_ASSERT(c.GetR() == 255 && c.GetG() == 0 && c.GetB() == 0, "FillRectangle renders solid red at (15, 15)");
+
+        SolidBrush greenBrush(Color::Green());
+        g.FillEllipse(&greenBrush, 40.0f, 40.0f, 10.0f, 10.0f);
+        bmp.GetPixel(45, 45, &c);
+        TEST_ASSERT(c.GetG() == 255, "FillEllipse renders green at center (45, 45)");
+    }
+
+    // 13. Image Format GUID Resolution
+    {
+        Bitmap bmp(16, 16);
+        GUID fmt{};
+        Status st = bmp.GetRawFormat(&fmt);
+        TEST_ASSERT(st == Ok, "GetRawFormat must succeed");
+        TEST_ASSERT(fmt == ImageFormatBMP, "Raw format matches ImageFormatBMP");
+        TEST_ASSERT(ImageFormatPNG.Data1 == 0xb96b3caf, "ImageFormatPNG GUID matches specification");
+        TEST_ASSERT(ImageFormatJPEG.Data1 == 0xb96b3cae, "ImageFormatJPEG GUID matches specification");
+    }
+
+    // 14. Flat C API Function Exports
+    {
+        GpPen* pPen = nullptr;
+        Status st = GdipCreatePen1(0xFFFF0000, 2.0f, UnitPixel, &pPen);
+        TEST_ASSERT(st == Ok && pPen != nullptr, "GdipCreatePen1 must succeed");
+        TEST_ASSERT(pPen->GetWidth() == 2.0f, "GdipCreatePen1 width matches");
+        st = GdipDeletePen(pPen);
+        TEST_ASSERT(st == Ok, "GdipDeletePen must succeed");
+
+        GpSolidFill* pBrush = nullptr;
+        st = GdipCreateSolidFill(0xFF00FF00, &pBrush);
+        TEST_ASSERT(st == Ok && pBrush != nullptr, "GdipCreateSolidFill must succeed");
+        st = GdipDeleteBrush(pBrush);
+        TEST_ASSERT(st == Ok, "GdipDeleteBrush must succeed");
+
+        std::vector<uint32_t> buf(16 * 16, 0xFF123456);
+        GpBitmap* pBmp = nullptr;
+        st = GdipCreateBitmapFromScan0(16, 16, 16 * 4, PixelFormat32bppARGB, reinterpret_cast<uint8_t*>(buf.data()), &pBmp);
+        TEST_ASSERT(st == Ok && pBmp != nullptr, "GdipCreateBitmapFromScan0 must succeed");
+        TEST_ASSERT(pBmp->GetWidth() == 16 && pBmp->GetHeight() == 16, "Scan0 bitmap dimensions match");
+        st = GdipDisposeImage(pBmp);
+        TEST_ASSERT(st == Ok, "GdipDisposeImage must succeed");
+    }
+
+    // 15. WIC Imaging Factory via Direct Export & CoCreateInstance
+    {
+        InitializeGdiPlusExports();
+
+        IWICImagingFactory* pWicFactory = nullptr;
+        int32_t hr = WICCreateImagingFactory_Proxy(0, &pWicFactory);
+        TEST_ASSERT(hr == ole32::S_OK && pWicFactory != nullptr, "WICCreateImagingFactory_Proxy must succeed");
+        pWicFactory->Release();
+
+        IWICImagingFactory* pCoFactory = nullptr;
+        hr = ole32::CoCreateInstance(CLSID_WICImagingFactory, nullptr, 1, IID_IWICImagingFactory, reinterpret_cast<void**>(&pCoFactory));
+        TEST_ASSERT(hr == ole32::S_OK && pCoFactory != nullptr, "CoCreateInstance CLSID_WICImagingFactory must succeed");
+        pCoFactory->Release();
+    }
+
+    // 16. WIC Bitmap Memory Allocation, CopyPixels, Version DB & Shell
+    {
+        IWICImagingFactory* pFactory = nullptr;
+        WICCreateImagingFactory_Proxy(0, &pFactory);
+        TEST_ASSERT(pFactory != nullptr, "WIC factory instance must be valid");
+
+        IWICBitmap* pWicBmp = nullptr;
+        std::vector<uint8_t> rawPixels(32 * 32 * 4, 0xAA);
+        int32_t hr = pFactory->CreateBitmapFromMemory(32, 32, GUID_WICPixelFormat32bppPBGRA, 32 * 4, static_cast<uint32_t>(rawPixels.size()), rawPixels.data(), &pWicBmp);
+        TEST_ASSERT(hr == ole32::S_OK && pWicBmp != nullptr, "CreateBitmapFromMemory must succeed");
+
+        uint32_t w = 0, h = 0;
+        pWicBmp->GetSize(&w, &h);
+        TEST_ASSERT(w == 32 && h == 32, "WIC Bitmap size matches (32, 32)");
+
+        GUID fmt{};
+        pWicBmp->GetPixelFormat(&fmt);
+        TEST_ASSERT(fmt == GUID_WICPixelFormat32bppPBGRA, "WIC Pixel format matches GUID_WICPixelFormat32bppPBGRA");
+
+        std::vector<uint8_t> copied(32 * 32 * 4, 0);
+        pWicBmp->CopyPixels(nullptr, 32 * 4, static_cast<uint32_t>(copied.size()), copied.data());
+        TEST_ASSERT(copied[0] == 0xAA && copied[100] == 0xAA, "CopyPixels retrieved bitmap data accurately");
+
+        pWicBmp->Release();
+        pFactory->Release();
+
+        // Version database verification
+        auto& verDb = version::VersionDatabase::Instance();
+        const auto* vGdiplus = verDb.FindModule("gdiplus.dll");
+        TEST_ASSERT(vGdiplus != nullptr && vGdiplus->stringTable.at("ProductName") == "MicaNT GDI+ Subsystem", "gdiplus.dll version info match");
+
+        const auto* vWic = verDb.FindModule("windowscodecs.dll");
+        TEST_ASSERT(vWic != nullptr && vWic->stringTable.at("ProductName") == "MicaNT Windows Imaging Component", "windowscodecs.dll version info match");
+
+        const auto* vPaint = verDb.FindModule("mspaint.exe");
+        TEST_ASSERT(vPaint != nullptr && vPaint->stringTable.at("ProductName") == "MicaNT Paint", "mspaint.exe version info match");
+
+        // CommandShell Integration (gdiplus test, draw, codecs, info)
+        shell::CommandShell testShell;
+        std::ostringstream out;
+
+        testShell.execute("gdiplus test", out);
+        TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "gdiplus test must pass 100%");
+
+        out.str("");
+        testShell.execute("gdiplus draw test_canvas.bmp", out);
+        TEST_ASSERT(out.str().find("Successfully rasterized canvas to target: 'test_canvas.bmp'") != std::string::npos, "gdiplus draw must save canvas");
+
+        out.str("");
+        testShell.execute("gdiplus codecs", out);
+        TEST_ASSERT(out.str().find("MicaNT GDI+ & WIC Registered Image Codecs") != std::string::npos, "gdiplus codecs must list supported codecs");
+
+        out.str("");
+        testShell.execute("gdiplus info", out);
+        TEST_ASSERT(out.str().find("22621") != std::string::npos, "gdiplus info must display version");
+    }
+
+    std::cout << "[TEST] Suite 105: Windows GDI+ & Advanced Imaging Architecture PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite104")) {
-        RUN_TEST(Test_WindowsMediaPlayer_ActiveMovie_Subsystem);
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite105")) {
+        RUN_TEST(Test_WindowsGdiPlus_Imaging_Subsystem);
         return g_FailedTests;
     }
 
@@ -23569,6 +23930,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsMediaFoundation_Subsystem);
     RUN_TEST(Test_WindowsDirectShow_FilterGraph_Subsystem);
     RUN_TEST(Test_WindowsMediaPlayer_ActiveMovie_Subsystem);
+    RUN_TEST(Test_WindowsGdiPlus_Imaging_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
@@ -23576,4 +23938,5 @@ int main(int argc, char* argv[]) {
 
     return (g_FailedTests == 0) ? 0 : 1;
 }
+
 
