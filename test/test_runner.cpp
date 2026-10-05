@@ -27033,8 +27033,240 @@ void Test_WindowsDirectStorage_Subsystem() {
     std::cout << "[TEST] Suite 115: Windows DirectStorage & High-Performance GPU I/O Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 116: Windows DirectML & DXCore Subsystem
+// ============================================================================
+void Test_WindowsDirectML_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 116: Windows DirectML Machine Learning & DXCore Subsystem        \n";
+    std::cout << "========================================================================\n";
+
+    dxcore::InitializeDXCoreExports();
+    directml::InitializeDirectMLExports();
+
+    // 1. Dynamic Module Export Verification
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("dxcore.dll", "DXCoreCreateAdapterFactory") != nullptr, "DXCoreCreateAdapterFactory must be exported from dxcore.dll");
+    TEST_ASSERT(ldr.getExport("directml.dll", "DMLCreateDevice") != nullptr, "DMLCreateDevice must be exported from directml.dll");
+    TEST_ASSERT(ldr.getExport("directml.dll", "DMLCreateDevice1") != nullptr, "DMLCreateDevice1 must be exported from directml.dll");
+
+    // 2. Version Database Verification
+    const auto* modDXCore = version::VersionDatabase::Instance().GetModuleInfo("dxcore.dll");
+    TEST_ASSERT(modDXCore != nullptr, "VersionDatabase must contain dxcore.dll");
+    TEST_ASSERT(modDXCore->stringTable.at("FileVersion") == "10.0.22621.1", "dxcore.dll FileVersion must be 10.0.22621.1");
+
+    const auto* modDML = version::VersionDatabase::Instance().GetModuleInfo("directml.dll");
+    TEST_ASSERT(modDML != nullptr, "VersionDatabase must contain directml.dll");
+    TEST_ASSERT(modDML->stringTable.at("FileVersion") == "1.15.2.0", "directml.dll FileVersion must be 1.15.2.0");
+
+    // 3. DXCore Adapter Factory & List Enumeration
+    dxcore::IDXCoreAdapterFactory* pFactory = nullptr;
+    int32_t hr = dxcore::DXCoreCreateAdapterFactory(dxcore::IID_IDXCoreAdapterFactory_Const, reinterpret_cast<void**>(&pFactory));
+    TEST_ASSERT(hr == 0 && pFactory != nullptr, "DXCoreCreateAdapterFactory must succeed");
+
+    dxcore::IDXCoreAdapterList* pList = nullptr;
+    hr = pFactory->CreateAdapterList(0, nullptr, dxcore::IID_IDXCoreAdapterList_Const, reinterpret_cast<void**>(&pList));
+    TEST_ASSERT(hr == 0 && pList != nullptr, "CreateAdapterList must succeed");
+    TEST_ASSERT(pList->GetAdapterCount() >= 2, "Adapter count must be at least 2");
+
+    // 4. Primary Adapter Telemetry
+    dxcore::IDXCoreAdapter* pAdapter = nullptr;
+    hr = pList->GetAdapter(0, dxcore::IID_IDXCoreAdapter_Const, reinterpret_cast<void**>(&pAdapter));
+    TEST_ASSERT(hr == 0 && pAdapter != nullptr, "GetAdapter(0) must succeed");
+    TEST_ASSERT(pAdapter->IsValid(), "Primary adapter must be valid");
+    TEST_ASSERT(pAdapter->IsAttributeSupported(dxcore::DXCORE_ADAPTER_ATTRIBUTE_D3D12_GRAPHICS_CONST), "D3D12 graphics must be supported");
+    TEST_ASSERT(pAdapter->IsAttributeSupported(dxcore::DXCORE_ADAPTER_ATTRIBUTE_D3D12_CORE_COMPUTE_CONST), "D3D12 core compute must be supported");
+
+    uint64_t vram = 0;
+    pAdapter->GetProperty(dxcore::DXCoreAdapterProperty::DedicatedAdapterMemory, sizeof(vram), &vram);
+    TEST_ASSERT(vram == 16ULL * 1024 * 1024 * 1024, "Primary dedicated adapter memory must be 16 GB");
+
+    char desc[128]{};
+    pAdapter->GetProperty(dxcore::DXCoreAdapterProperty::DriverDescription, sizeof(desc), desc);
+    TEST_ASSERT(std::string(desc).find("PrismX") != std::string::npos, "Driver description must contain PrismX");
+
+    dxcore::DXCoreHardwareID hwId{};
+    pAdapter->GetProperty(dxcore::DXCoreAdapterProperty::HardwareID, sizeof(hwId), &hwId);
+    TEST_ASSERT(hwId.vendorID == 0x13B5, "Vendor ID must match PrismX Sovereign 0x13B5");
+
+    dxcore::DXCoreAdapterMemoryBudget budget{};
+    hr = pAdapter->QueryState(dxcore::DXCoreAdapterState::AdapterMemoryBudget, 0, nullptr, sizeof(budget), &budget);
+    TEST_ASSERT(hr == 0 && budget.budget == vram, "AdapterMemoryBudget query must match dedicated VRAM");
+
+    // 5. Adapter Sorting
+    dxcore::DXCoreAdapterPreference prefs[1] = { dxcore::DXCoreAdapterPreference::MinimumPower };
+    hr = pList->Sort(1, prefs);
+    TEST_ASSERT(hr == 0, "Sort by MinimumPower must succeed");
+
+    dxcore::IDXCoreAdapter* pMinPower = nullptr;
+    pList->GetAdapter(0, dxcore::IID_IDXCoreAdapter_Const, reinterpret_cast<void**>(&pMinPower));
+    bool isIntegrated = false;
+    pMinPower->GetProperty(dxcore::DXCoreAdapterProperty::IsIntegrated, sizeof(isIntegrated), &isIntegrated);
+    TEST_ASSERT(isIntegrated == true, "MinimumPower sorted first adapter must be integrated");
+    pMinPower->Release();
+
+    // 6. Direct3D 12 Device & DirectML Device Creation
+    prism3d12::ID3D12Device* pD3D12Dev = nullptr;
+    hr = prism3d12::D3D12CreateDevice(nullptr, prism3d::D3D_FEATURE_LEVEL_12_2, prism3d12::IID_ID3D12Device, reinterpret_cast<void**>(&pD3D12Dev));
+    TEST_ASSERT(hr == 0 && pD3D12Dev != nullptr, "D3D12CreateDevice must succeed");
+
+    directml::IDMLDevice* pDmlDev = nullptr;
+    hr = directml::DMLCreateDevice(pD3D12Dev, directml::DML_CREATE_DEVICE_FLAGS::NONE, directml::IID_IDMLDevice_Const, reinterpret_cast<void**>(&pDmlDev));
+    TEST_ASSERT(hr == 0 && pDmlDev != nullptr, "DMLCreateDevice must succeed");
+
+    directml::DML_FEATURE_DATA_FEATURE_LEVELS featLevels{};
+    hr = pDmlDev->CheckFeatureSupport(directml::DML_FEATURE::FEATURE_LEVELS, 0, nullptr, sizeof(featLevels), &featLevels);
+    TEST_ASSERT(hr == 0 && featLevels.MaxSupportedFeatureLevel == directml::DML_FEATURE_LEVEL::LEVEL_6_4, "DirectML max feature level must be LEVEL_6_4");
+
+    auto CreateCommittedBuffer = [&](size_t bytes) -> prism3d12::ID3D12Resource* {
+        prism3d12::D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = prism3d12::D3D12_HEAP_TYPE_DEFAULT;
+        prism3d12::D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = prism3d12::D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = bytes;
+        rd.Height = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        prism3d12::ID3D12Resource* res = nullptr;
+        pD3D12Dev->CreateCommittedResource(&hp, prism3d12::D3D12_HEAP_FLAG_NONE, &rd, prism3d12::D3D12_RESOURCE_STATE_COMMON, nullptr, prism3d12::IID_ID3D12Resource, reinterpret_cast<void**>(&res));
+        return res;
+    };
+
+    // 7. GEMM Tensor Kernel: Y = A * B + C
+    // A: [2, 3] = [[1, 2, 3], [4, 5, 6]]
+    // B: [3, 2] = [[7, 8], [9, 1], [2, 3]]
+    // C: [2, 2] = [[1, 1], [1, 1]]
+    // Expected Y = [[32, 20], [86, 56]]
+    auto* bufA = CreateCommittedBuffer(6 * sizeof(float));
+    auto* bufB = CreateCommittedBuffer(6 * sizeof(float));
+    auto* bufC = CreateCommittedBuffer(4 * sizeof(float));
+    auto* bufY = CreateCommittedBuffer(4 * sizeof(float));
+
+    void* pMap = nullptr;
+    bufA->Map(0, nullptr, &pMap);
+    float aVals[6] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+    std::memcpy(pMap, aVals, sizeof(aVals));
+    bufA->Unmap(0, nullptr);
+
+    bufB->Map(0, nullptr, &pMap);
+    float bVals[6] = { 7.0f, 8.0f, 9.0f, 1.0f, 2.0f, 3.0f };
+    std::memcpy(pMap, bVals, sizeof(bVals));
+    bufB->Unmap(0, nullptr);
+
+    bufC->Map(0, nullptr, &pMap);
+    float cVals[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    std::memcpy(pMap, cVals, sizeof(cVals));
+    bufC->Unmap(0, nullptr);
+
+    uint32_t aSizes[2] = { 2, 3 };
+    directml::DML_BUFFER_TENSOR_DESC aBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, aSizes, nullptr, sizeof(aVals), 0 };
+    directml::DML_TENSOR_DESC aDesc{ directml::DML_TENSOR_TYPE::BUFFER, &aBufDesc };
+
+    uint32_t bSizes[2] = { 3, 2 };
+    directml::DML_BUFFER_TENSOR_DESC bBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, bSizes, nullptr, sizeof(bVals), 0 };
+    directml::DML_TENSOR_DESC bDesc{ directml::DML_TENSOR_TYPE::BUFFER, &bBufDesc };
+
+    uint32_t cSizes[2] = { 2, 2 };
+    directml::DML_BUFFER_TENSOR_DESC cBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, cSizes, nullptr, sizeof(cVals), 0 };
+    directml::DML_TENSOR_DESC cDesc{ directml::DML_TENSOR_TYPE::BUFFER, &cBufDesc };
+
+    uint32_t ySizes[2] = { 2, 2 };
+    directml::DML_BUFFER_TENSOR_DESC yBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, ySizes, nullptr, 4 * sizeof(float), 0 };
+    directml::DML_TENSOR_DESC yDesc{ directml::DML_TENSOR_TYPE::BUFFER, &yBufDesc };
+
+    directml::DML_GEMM_OPERATOR_DESC gemmDesc{};
+    gemmDesc.ATensor = &aDesc;
+    gemmDesc.BTensor = &bDesc;
+    gemmDesc.CTensor = &cDesc;
+    gemmDesc.OutputTensor = &yDesc;
+    gemmDesc.Alpha = 1.0f;
+    gemmDesc.Beta = 1.0f;
+
+    directml::DML_OPERATOR_DESC opDesc{ directml::DML_OPERATOR_TYPE::GEMM, &gemmDesc };
+    directml::IDMLOperator* pGemmOp = nullptr;
+    hr = pDmlDev->CreateOperator(&opDesc, directml::IID_IDMLOperator_Const, reinterpret_cast<void**>(&pGemmOp));
+    TEST_ASSERT(hr == 0 && pGemmOp != nullptr, "CreateOperator (GEMM) must succeed");
+
+    directml::IDMLCompiledOperator* pCompiledGemm = nullptr;
+    hr = pDmlDev->CompileOperator(pGemmOp, directml::DML_EXECUTION_FLAGS::NONE, directml::IID_IDMLCompiledOperator_Const, reinterpret_cast<void**>(&pCompiledGemm));
+    TEST_ASSERT(hr == 0 && pCompiledGemm != nullptr, "CompileOperator (GEMM) must succeed");
+
+    directml::DML_BINDING_TABLE_DESC btableDesc{};
+    btableDesc.Dispatchable = pCompiledGemm;
+    btableDesc.SizeInDescriptors = 1;
+
+    directml::IDMLBindingTable* pBindingTable = nullptr;
+    hr = pDmlDev->CreateBindingTable(&btableDesc, directml::IID_IDMLBindingTable_Const, reinterpret_cast<void**>(&pBindingTable));
+    TEST_ASSERT(hr == 0 && pBindingTable != nullptr, "CreateBindingTable must succeed");
+
+    directml::DML_BUFFER_BINDING inBindings[3] = {
+        { bufA, 0, 6 * sizeof(float) },
+        { bufB, 0, 6 * sizeof(float) },
+        { bufC, 0, 4 * sizeof(float) }
+    };
+    directml::DML_BINDING_DESC inBDesc[3] = {
+        { directml::DML_BINDING_TYPE::BUFFER, &inBindings[0] },
+        { directml::DML_BINDING_TYPE::BUFFER, &inBindings[1] },
+        { directml::DML_BINDING_TYPE::BUFFER, &inBindings[2] }
+    };
+    pBindingTable->BindInputs(3, inBDesc);
+
+    directml::DML_BUFFER_BINDING outBinding = { bufY, 0, 4 * sizeof(float) };
+    directml::DML_BINDING_DESC outBDesc = { directml::DML_BINDING_TYPE::BUFFER, &outBinding };
+    pBindingTable->BindOutputs(1, &outBDesc);
+
+    directml::IDMLCommandRecorder* pRecorder = nullptr;
+    hr = pDmlDev->CreateCommandRecorder(directml::IID_IDMLCommandRecorder_Const, reinterpret_cast<void**>(&pRecorder));
+    TEST_ASSERT(hr == 0 && pRecorder != nullptr, "CreateCommandRecorder must succeed");
+
+    pRecorder->RecordDispatch(nullptr, pCompiledGemm, pBindingTable);
+
+    bufY->Map(0, nullptr, &pMap);
+    float* res = static_cast<float*>(pMap);
+    TEST_ASSERT(std::abs(res[0] - 32.0f) < 1e-4f, "GEMM element [0,0] must equal 32");
+    TEST_ASSERT(std::abs(res[1] - 20.0f) < 1e-4f, "GEMM element [0,1] must equal 20");
+    TEST_ASSERT(std::abs(res[2] - 86.0f) < 1e-4f, "GEMM element [1,0] must equal 86");
+    TEST_ASSERT(std::abs(res[3] - 56.0f) < 1e-4f, "GEMM element [1,1] must equal 56");
+    bufY->Unmap(0, nullptr);
+
+    // 8. Interactive CLI Tool Verification
+    micant::shell::CommandShell shellEngine;
+    std::ostringstream testOut;
+    int rc = shellEngine.execute("dml test", testOut);
+    TEST_ASSERT(rc == 0, "dml test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("10 / 10 Subsystem Invariants Verified") != std::string::npos, "dml test must verify all 10 invariants");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("dml info", infoOut);
+    TEST_ASSERT(rc == 0, "dml info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("DirectML 1.15 Sovereign Execution Engine") != std::string::npos, "dml info must display DirectML telemetry");
+
+    std::ostringstream inferOut;
+    rc = shellEngine.execute("dml infer", inferOut);
+    TEST_ASSERT(rc == 0, "dml infer CLI command must return 0");
+    TEST_ASSERT(inferOut.str().find("GFLOPS") != std::string::npos, "dml infer must display inference performance in GFLOPS");
+
+    // Cleanup
+    pRecorder->Release();
+    pBindingTable->Release();
+    pCompiledGemm->Release();
+    pGemmOp->Release();
+    bufA->Release(); bufB->Release(); bufC->Release(); bufY->Release();
+    pDmlDev->Release();
+    pD3D12Dev->Release();
+    pAdapter->Release();
+    pList->Release();
+    pFactory->Release();
+
+    std::cout << "[TEST] Suite 116: Windows DirectML & DXCore Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite115")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite116")) {
+        RUN_TEST(Test_WindowsDirectML_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite115") {
         RUN_TEST(Test_WindowsDirectStorage_Subsystem);
         return g_FailedTests;
     }
@@ -27194,6 +27426,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsMediaFoundation_CaptureEngine_Subsystem);
     RUN_TEST(Test_WindowsDirectX_Raytracing_Subsystem);
     RUN_TEST(Test_WindowsDirectStorage_Subsystem);
+    RUN_TEST(Test_WindowsDirectML_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

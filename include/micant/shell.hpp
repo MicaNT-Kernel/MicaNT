@@ -106,6 +106,8 @@
 #include "mfcaptureengine.hpp"
 #include "d3d12raytracing.hpp"
 #include "directstorage.hpp"
+#include "dxcore.hpp"
+#include "directml.hpp"
 
 namespace micant::shell {
 
@@ -303,6 +305,7 @@ public:
             if (cmd == "mfcapture" || cmd == "captureengine" || cmd == "camera") { cmdMFCapture(tokens, out); return 0; }
             if (cmd == "dxr" || cmd == "raytracing" || cmd == "meshshader") { cmdDXR(tokens, out); return 0; }
             if (cmd == "dstorage" || cmd == "directstorage") { cmdDirectStorage(tokens, out); return 0; }
+            if (cmd == "dml" || cmd == "directml" || cmd == "dxcore") { cmdDirectML(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -15258,6 +15261,483 @@ private:
             << "  dstorage test                           Runs DirectStorage self-test suite\n"
             << "  dstorage info                           Displays DirectStorage hardware telemetry\n"
             << "  dstorage bench [sizeMB]                 Benchmarks direct-to-GPU bandwidth\n";
+    }
+
+    void cmdDirectML(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[DirectML] Executing DirectML & DXCore Subsystem Self-Tests...\n";
+            uint32_t passed = 0;
+
+            // 1. DXCore Factory & Adapter Enumeration
+            dxcore::IDXCoreAdapterFactory* pFactory = nullptr;
+            if (dxcore::DXCoreCreateAdapterFactory(dxcore::IID_IDXCoreAdapterFactory_Const, reinterpret_cast<void**>(&pFactory)) == 0 && pFactory) {
+                passed++;
+                out << "  [PASS] 1. DXCore Adapter Factory acquisition\n";
+
+                dxcore::IDXCoreAdapterList* pList = nullptr;
+                if (pFactory->CreateAdapterList(0, nullptr, dxcore::IID_IDXCoreAdapterList_Const, reinterpret_cast<void**>(&pList)) == 0 && pList) {
+                    passed++;
+                    out << "  [PASS] 2. Modern Adapter List enumeration (Adapters: " << pList->GetAdapterCount() << ")\n";
+
+                    dxcore::IDXCoreAdapter* pAdapter = nullptr;
+                    if (pList->GetAdapter(0, dxcore::IID_IDXCoreAdapter_Const, reinterpret_cast<void**>(&pAdapter)) == 0 && pAdapter) {
+                        passed++;
+                        char desc[128]{};
+                        pAdapter->GetProperty(dxcore::DXCoreAdapterProperty::DriverDescription, sizeof(desc), desc);
+                        uint64_t vram = 0;
+                        pAdapter->GetProperty(dxcore::DXCoreAdapterProperty::DedicatedAdapterMemory, sizeof(vram), &vram);
+                        out << "  [PASS] 3. Primary GPU Telemetry: " << desc << " (VRAM: " << (vram / (1024 * 1024 * 1024)) << " GB)\n";
+
+                        dxcore::DXCoreAdapterMemoryBudget budget{};
+                        if (pAdapter->QueryState(dxcore::DXCoreAdapterState::AdapterMemoryBudget, 0, nullptr, sizeof(budget), &budget) == 0) {
+                            passed++;
+                            out << "  [PASS] 4. GPU Memory Budget Query (" << (budget.availableForReservation / (1024 * 1024)) << " MB free)\n";
+                        }
+                        pAdapter->Release();
+                    }
+                    pList->Release();
+                }
+                pFactory->Release();
+            }
+
+            // 2. Direct3D 12 & DirectML Device Creation
+            prism3d12::ID3D12Device* pD3D12Dev = nullptr;
+            if (prism3d12::D3D12CreateDevice(nullptr, prism3d::D3D_FEATURE_LEVEL_12_2, prism3d12::IID_ID3D12Device, reinterpret_cast<void**>(&pD3D12Dev)) == 0 && pD3D12Dev) {
+                directml::IDMLDevice* pDmlDev = nullptr;
+                if (directml::DMLCreateDevice(pD3D12Dev, directml::DML_CREATE_DEVICE_FLAGS::NONE, directml::IID_IDMLDevice_Const, reinterpret_cast<void**>(&pDmlDev)) == 0 && pDmlDev) {
+                    passed++;
+                    out << "  [PASS] 5. DirectML Device creation & D3D12 compute binding\n";
+
+                    directml::DML_FEATURE_DATA_FEATURE_LEVELS featLevels{};
+                    if (pDmlDev->CheckFeatureSupport(directml::DML_FEATURE::FEATURE_LEVELS, 0, nullptr, sizeof(featLevels), &featLevels) == 0) {
+                        passed++;
+                        out << "  [PASS] 6. Feature level query (Level: DML_FEATURE_LEVEL_6_4)\n";
+                    }
+
+                    // Helper to create committed buffer
+                    auto CreateCommittedBuffer = [&](size_t bytes) -> prism3d12::ID3D12Resource* {
+                        prism3d12::D3D12_HEAP_PROPERTIES hp{};
+                        hp.Type = prism3d12::D3D12_HEAP_TYPE_DEFAULT;
+                        prism3d12::D3D12_RESOURCE_DESC rd{};
+                        rd.Dimension = prism3d12::D3D12_RESOURCE_DIMENSION_BUFFER;
+                        rd.Width = bytes;
+                        rd.Height = 1;
+                        rd.DepthOrArraySize = 1;
+                        rd.MipLevels = 1;
+                        prism3d12::ID3D12Resource* res = nullptr;
+                        pD3D12Dev->CreateCommittedResource(&hp, prism3d12::D3D12_HEAP_FLAG_NONE, &rd, prism3d12::D3D12_RESOURCE_STATE_COMMON, nullptr, prism3d12::IID_ID3D12Resource, reinterpret_cast<void**>(&res));
+                        return res;
+                    };
+
+                    // 3. GEMM Operator Execution: Y = A * B + C
+                    auto* bufA = CreateCommittedBuffer(6 * sizeof(float));
+                    auto* bufB = CreateCommittedBuffer(6 * sizeof(float));
+                    auto* bufC = CreateCommittedBuffer(4 * sizeof(float));
+                    auto* bufY = CreateCommittedBuffer(4 * sizeof(float));
+
+                    void* pMap = nullptr;
+                    bufA->Map(0, nullptr, &pMap);
+                    float aVals[6] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+                    std::memcpy(pMap, aVals, sizeof(aVals));
+                    bufA->Unmap(0, nullptr);
+
+                    bufB->Map(0, nullptr, &pMap);
+                    float bVals[6] = { 7.0f, 8.0f, 9.0f, 1.0f, 2.0f, 3.0f };
+                    std::memcpy(pMap, bVals, sizeof(bVals));
+                    bufB->Unmap(0, nullptr);
+
+                    bufC->Map(0, nullptr, &pMap);
+                    float cVals[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+                    std::memcpy(pMap, cVals, sizeof(cVals));
+                    bufC->Unmap(0, nullptr);
+
+                    uint32_t aSizes[2] = { 2, 3 };
+                    directml::DML_BUFFER_TENSOR_DESC aBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, aSizes, nullptr, sizeof(aVals), 0 };
+                    directml::DML_TENSOR_DESC aDesc{ directml::DML_TENSOR_TYPE::BUFFER, &aBufDesc };
+
+                    uint32_t bSizes[2] = { 3, 2 };
+                    directml::DML_BUFFER_TENSOR_DESC bBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, bSizes, nullptr, sizeof(bVals), 0 };
+                    directml::DML_TENSOR_DESC bDesc{ directml::DML_TENSOR_TYPE::BUFFER, &bBufDesc };
+
+                    uint32_t cSizes[2] = { 2, 2 };
+                    directml::DML_BUFFER_TENSOR_DESC cBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, cSizes, nullptr, sizeof(cVals), 0 };
+                    directml::DML_TENSOR_DESC cDesc{ directml::DML_TENSOR_TYPE::BUFFER, &cBufDesc };
+
+                    uint32_t ySizes[2] = { 2, 2 };
+                    directml::DML_BUFFER_TENSOR_DESC yBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, ySizes, nullptr, 4 * sizeof(float), 0 };
+                    directml::DML_TENSOR_DESC yDesc{ directml::DML_TENSOR_TYPE::BUFFER, &yBufDesc };
+
+                    directml::DML_GEMM_OPERATOR_DESC gemmDesc{};
+                    gemmDesc.ATensor = &aDesc;
+                    gemmDesc.BTensor = &bDesc;
+                    gemmDesc.CTensor = &cDesc;
+                    gemmDesc.OutputTensor = &yDesc;
+                    gemmDesc.Alpha = 1.0f;
+                    gemmDesc.Beta = 1.0f;
+
+                    directml::DML_OPERATOR_DESC opDesc{ directml::DML_OPERATOR_TYPE::GEMM, &gemmDesc };
+                    directml::IDMLOperator* pGemmOp = nullptr;
+                    if (pDmlDev->CreateOperator(&opDesc, directml::IID_IDMLOperator_Const, reinterpret_cast<void**>(&pGemmOp)) == 0 && pGemmOp) {
+                        directml::IDMLCompiledOperator* pCompiledGemm = nullptr;
+                        if (pDmlDev->CompileOperator(pGemmOp, directml::DML_EXECUTION_FLAGS::NONE, directml::IID_IDMLCompiledOperator_Const, reinterpret_cast<void**>(&pCompiledGemm)) == 0 && pCompiledGemm) {
+                            directml::DML_BINDING_TABLE_DESC btableDesc{};
+                            btableDesc.Dispatchable = pCompiledGemm;
+                            btableDesc.SizeInDescriptors = 1;
+
+                            directml::IDMLBindingTable* pBindingTable = nullptr;
+                            if (pDmlDev->CreateBindingTable(&btableDesc, directml::IID_IDMLBindingTable_Const, reinterpret_cast<void**>(&pBindingTable)) == 0 && pBindingTable) {
+                                directml::DML_BUFFER_BINDING inBindings[3] = {
+                                    { bufA, 0, 6 * sizeof(float) },
+                                    { bufB, 0, 6 * sizeof(float) },
+                                    { bufC, 0, 4 * sizeof(float) }
+                                };
+                                directml::DML_BINDING_DESC inBDesc[3] = {
+                                    { directml::DML_BINDING_TYPE::BUFFER, &inBindings[0] },
+                                    { directml::DML_BINDING_TYPE::BUFFER, &inBindings[1] },
+                                    { directml::DML_BINDING_TYPE::BUFFER, &inBindings[2] }
+                                };
+                                pBindingTable->BindInputs(3, inBDesc);
+
+                                directml::DML_BUFFER_BINDING outBinding = { bufY, 0, 4 * sizeof(float) };
+                                directml::DML_BINDING_DESC outBDesc = { directml::DML_BINDING_TYPE::BUFFER, &outBinding };
+                                pBindingTable->BindOutputs(1, &outBDesc);
+
+                                directml::IDMLCommandRecorder* pRecorder = nullptr;
+                                if (pDmlDev->CreateCommandRecorder(directml::IID_IDMLCommandRecorder_Const, reinterpret_cast<void**>(&pRecorder)) == 0 && pRecorder) {
+                                    pRecorder->RecordDispatch(nullptr, pCompiledGemm, pBindingTable);
+
+                                    void* pOut = nullptr;
+                                    bufY->Map(0, nullptr, &pOut);
+                                    float* res = static_cast<float*>(pOut);
+                                    if (std::abs(res[0] - 32.0f) < 1e-4f && std::abs(res[1] - 20.0f) < 1e-4f &&
+                                        std::abs(res[2] - 86.0f) < 1e-4f && std::abs(res[3] - 56.0f) < 1e-4f) {
+                                        passed++;
+                                        out << "  [PASS] 7. GEMM Tensor Kernel Execution (Results: [[32, 20], [86, 56]])\n";
+                                    }
+                                    bufY->Unmap(0, nullptr);
+                                    pRecorder->Release();
+                                }
+                                pBindingTable->Release();
+                            }
+                            pCompiledGemm->Release();
+                        }
+                        pGemmOp->Release();
+                    }
+
+                    // 4. ReLU Activation
+                    auto* rIn = CreateCommittedBuffer(5 * sizeof(float));
+                    auto* rOut = CreateCommittedBuffer(5 * sizeof(float));
+                    rIn->Map(0, nullptr, &pMap);
+                    float rVals[5] = { -4.0f, 0.0f, 7.5f, -2.0f, 1.0f };
+                    std::memcpy(pMap, rVals, sizeof(rVals));
+                    rIn->Unmap(0, nullptr);
+
+                    uint32_t rSizes[1] = { 5 };
+                    directml::DML_BUFFER_TENSOR_DESC rInBDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 1, rSizes, nullptr, sizeof(rVals), 0 };
+                    directml::DML_TENSOR_DESC rInTensor{ directml::DML_TENSOR_TYPE::BUFFER, &rInBDesc };
+                    directml::DML_ELEMENT_WISE_RELU_OPERATOR_DESC reluDesc{ &rInTensor, &rInTensor };
+                    directml::DML_OPERATOR_DESC rOpDesc{ directml::DML_OPERATOR_TYPE::ELEMENT_WISE_RELU, &reluDesc };
+
+                    directml::IDMLOperator* pReluOp = nullptr;
+                    if (pDmlDev->CreateOperator(&rOpDesc, directml::IID_IDMLOperator_Const, reinterpret_cast<void**>(&pReluOp)) == 0 && pReluOp) {
+                        directml::IDMLCompiledOperator* pCompRelu = nullptr;
+                        pDmlDev->CompileOperator(pReluOp, directml::DML_EXECUTION_FLAGS::NONE, directml::IID_IDMLCompiledOperator_Const, reinterpret_cast<void**>(&pCompRelu));
+                        directml::IDMLBindingTable* pBTable = nullptr;
+                        directml::DML_BINDING_TABLE_DESC btDesc{ pCompRelu, {}, {}, 1 };
+                        pDmlDev->CreateBindingTable(&btDesc, directml::IID_IDMLBindingTable_Const, reinterpret_cast<void**>(&pBTable));
+
+                        directml::DML_BUFFER_BINDING inB = { rIn, 0, 5 * sizeof(float) };
+                        directml::DML_BINDING_DESC inBD = { directml::DML_BINDING_TYPE::BUFFER, &inB };
+                        pBTable->BindInputs(1, &inBD);
+                        directml::DML_BUFFER_BINDING outB = { rOut, 0, 5 * sizeof(float) };
+                        directml::DML_BINDING_DESC outBD = { directml::DML_BINDING_TYPE::BUFFER, &outB };
+                        pBTable->BindOutputs(1, &outBD);
+
+                        directml::IDMLCommandRecorder* pRec = nullptr;
+                        pDmlDev->CreateCommandRecorder(directml::IID_IDMLCommandRecorder_Const, reinterpret_cast<void**>(&pRec));
+                        pRec->RecordDispatch(nullptr, pCompRelu, pBTable);
+
+                        rOut->Map(0, nullptr, &pMap);
+                        float* rRes = static_cast<float*>(pMap);
+                        if (rRes[0] == 0.0f && rRes[1] == 0.0f && rRes[2] == 7.5f && rRes[3] == 0.0f && rRes[4] == 1.0f) {
+                            passed++;
+                            out << "  [PASS] 8. ReLU Activation Tensor Kernel (Max(0, X) verified)\n";
+                        }
+                        rOut->Unmap(0, nullptr);
+                        pRec->Release();
+                        pBTable->Release();
+                        pCompRelu->Release();
+                        pReluOp->Release();
+                    }
+
+                    // 5. Softmax Activation
+                    auto* smIn = CreateCommittedBuffer(3 * sizeof(float));
+                    auto* smOut = CreateCommittedBuffer(3 * sizeof(float));
+                    smIn->Map(0, nullptr, &pMap);
+                    float sVals[3] = { 1.0f, 2.0f, 3.0f };
+                    std::memcpy(pMap, sVals, sizeof(sVals));
+                    smIn->Unmap(0, nullptr);
+
+                    uint32_t sSizes[1] = { 3 };
+                    directml::DML_BUFFER_TENSOR_DESC sInBDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 1, sSizes, nullptr, sizeof(sVals), 0 };
+                    directml::DML_TENSOR_DESC sInTensor{ directml::DML_TENSOR_TYPE::BUFFER, &sInBDesc };
+                    directml::DML_ACTIVATION_SOFTMAX_OPERATOR_DESC smDesc{ &sInTensor, &sInTensor };
+                    directml::DML_OPERATOR_DESC smOpDesc{ directml::DML_OPERATOR_TYPE::ACTIVATION_SOFTMAX, &smDesc };
+
+                    directml::IDMLOperator* pSmOp = nullptr;
+                    if (pDmlDev->CreateOperator(&smOpDesc, directml::IID_IDMLOperator_Const, reinterpret_cast<void**>(&pSmOp)) == 0 && pSmOp) {
+                        directml::IDMLCompiledOperator* pCompSm = nullptr;
+                        pDmlDev->CompileOperator(pSmOp, directml::DML_EXECUTION_FLAGS::NONE, directml::IID_IDMLCompiledOperator_Const, reinterpret_cast<void**>(&pCompSm));
+                        directml::IDMLBindingTable* pBTable = nullptr;
+                        directml::DML_BINDING_TABLE_DESC btDesc{ pCompSm, {}, {}, 1 };
+                        pDmlDev->CreateBindingTable(&btDesc, directml::IID_IDMLBindingTable_Const, reinterpret_cast<void**>(&pBTable));
+
+                        directml::DML_BUFFER_BINDING inB = { smIn, 0, 3 * sizeof(float) };
+                        directml::DML_BINDING_DESC inBD = { directml::DML_BINDING_TYPE::BUFFER, &inB };
+                        pBTable->BindInputs(1, &inBD);
+                        directml::DML_BUFFER_BINDING outB = { smOut, 0, 3 * sizeof(float) };
+                        directml::DML_BINDING_DESC outBD = { directml::DML_BINDING_TYPE::BUFFER, &outB };
+                        pBTable->BindOutputs(1, &outBD);
+
+                        directml::IDMLCommandRecorder* pRec = nullptr;
+                        pDmlDev->CreateCommandRecorder(directml::IID_IDMLCommandRecorder_Const, reinterpret_cast<void**>(&pRec));
+                        pRec->RecordDispatch(nullptr, pCompSm, pBTable);
+
+                        smOut->Map(0, nullptr, &pMap);
+                        float* smRes = static_cast<float*>(pMap);
+                        float sum = smRes[0] + smRes[1] + smRes[2];
+                        if (std::abs(sum - 1.0f) < 1e-4f && smRes[0] < smRes[1] && smRes[1] < smRes[2]) {
+                            passed++;
+                            out << "  [PASS] 9. Softmax Probability Distribution (Sum = 1.0000)\n";
+                        }
+                        smOut->Unmap(0, nullptr);
+                        pRec->Release();
+                        pBTable->Release();
+                        pCompSm->Release();
+                        pSmOp->Release();
+                    }
+
+                    // 6. Element-Wise Addition
+                    auto* addA = CreateCommittedBuffer(2 * sizeof(float));
+                    auto* addB = CreateCommittedBuffer(2 * sizeof(float));
+                    auto* addY = CreateCommittedBuffer(2 * sizeof(float));
+                    addA->Map(0, nullptr, &pMap);
+                    float aV[2] = { 10.0f, 20.0f };
+                    std::memcpy(pMap, aV, sizeof(aV));
+                    addA->Unmap(0, nullptr);
+
+                    addB->Map(0, nullptr, &pMap);
+                    float bV[2] = { 5.0f, 15.0f };
+                    std::memcpy(pMap, bV, sizeof(bV));
+                    addB->Unmap(0, nullptr);
+
+                    uint32_t addSizes[1] = { 2 };
+                    directml::DML_BUFFER_TENSOR_DESC addInBDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 1, addSizes, nullptr, sizeof(aV), 0 };
+                    directml::DML_TENSOR_DESC addInTensor{ directml::DML_TENSOR_TYPE::BUFFER, &addInBDesc };
+                    directml::DML_ELEMENT_WISE_ADD_OPERATOR_DESC addDesc{ &addInTensor, &addInTensor, &addInTensor };
+                    directml::DML_OPERATOR_DESC addOpDesc{ directml::DML_OPERATOR_TYPE::ELEMENT_WISE_ADD, &addDesc };
+
+                    directml::IDMLOperator* pAddOp = nullptr;
+                    if (pDmlDev->CreateOperator(&addOpDesc, directml::IID_IDMLOperator_Const, reinterpret_cast<void**>(&pAddOp)) == 0 && pAddOp) {
+                        directml::IDMLCompiledOperator* pCompAdd = nullptr;
+                        pDmlDev->CompileOperator(pAddOp, directml::DML_EXECUTION_FLAGS::NONE, directml::IID_IDMLCompiledOperator_Const, reinterpret_cast<void**>(&pCompAdd));
+                        directml::IDMLBindingTable* pBTable = nullptr;
+                        directml::DML_BINDING_TABLE_DESC btDesc{ pCompAdd, {}, {}, 1 };
+                        pDmlDev->CreateBindingTable(&btDesc, directml::IID_IDMLBindingTable_Const, reinterpret_cast<void**>(&pBTable));
+
+                        directml::DML_BUFFER_BINDING inB[2] = {
+                            { addA, 0, 2 * sizeof(float) },
+                            { addB, 0, 2 * sizeof(float) }
+                        };
+                        directml::DML_BINDING_DESC inBD[2] = {
+                            { directml::DML_BINDING_TYPE::BUFFER, &inB[0] },
+                            { directml::DML_BINDING_TYPE::BUFFER, &inB[1] }
+                        };
+                        pBTable->BindInputs(2, inBD);
+                        directml::DML_BUFFER_BINDING outB = { addY, 0, 2 * sizeof(float) };
+                        directml::DML_BINDING_DESC outBD = { directml::DML_BINDING_TYPE::BUFFER, &outB };
+                        pBTable->BindOutputs(1, &outBD);
+
+                        directml::IDMLCommandRecorder* pRec = nullptr;
+                        pDmlDev->CreateCommandRecorder(directml::IID_IDMLCommandRecorder_Const, reinterpret_cast<void**>(&pRec));
+                        pRec->RecordDispatch(nullptr, pCompAdd, pBTable);
+
+                        addY->Map(0, nullptr, &pMap);
+                        float* addRes = static_cast<float*>(pMap);
+                        if (addRes[0] == 15.0f && addRes[1] == 35.0f) {
+                            passed++;
+                            out << "  [PASS] 10. Element-Wise Tensor Addition ([10, 20] + [5, 15] = [15, 35])\n";
+                        }
+                        addY->Unmap(0, nullptr);
+                        pRec->Release();
+                        pBTable->Release();
+                        pCompAdd->Release();
+                        pAddOp->Release();
+                    }
+
+                    // Cleanup resources
+                    bufA->Release(); bufB->Release(); bufC->Release(); bufY->Release();
+                    rIn->Release(); rOut->Release();
+                    smIn->Release(); smOut->Release();
+                    addA->Release(); addB->Release(); addY->Release();
+                    pDmlDev->Release();
+                }
+                pD3D12Dev->Release();
+            }
+
+            out << "[DirectML] Tests Finished: " << passed << " / 10 Subsystem Invariants Verified.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "       MicaNT DirectML Machine Learning & DXCore Telemetry             \n"
+                << "========================================================================\n\n"
+                << "  Architecture:           DirectML 1.15 Sovereign Execution Engine\n"
+                << "  Feature Level:          DML_FEATURE_LEVEL_6_4 (Modern High Performance)\n"
+                << "  Supported Types:        FLOAT32, FLOAT16, UINT32, INT32\n"
+                << "  Underlying Graphics:    Direct3D 12 Low-Level Compute Pipeline\n"
+                << "  Export Libraries:       directml.dll, dxcore.dll\n\n";
+
+            dxcore::IDXCoreAdapterFactory* pFactory = nullptr;
+            if (dxcore::DXCoreCreateAdapterFactory(dxcore::IID_IDXCoreAdapterFactory_Const, reinterpret_cast<void**>(&pFactory)) == 0 && pFactory) {
+                dxcore::IDXCoreAdapterList* pList = nullptr;
+                if (pFactory->CreateAdapterList(0, nullptr, dxcore::IID_IDXCoreAdapterList_Const, reinterpret_cast<void**>(&pList)) == 0 && pList) {
+                    uint32_t count = pList->GetAdapterCount();
+                    out << "  Modern DXCore Adapters (" << count << " detected):\n";
+                    for (uint32_t i = 0; i < count; ++i) {
+                        dxcore::IDXCoreAdapter* pAdapter = nullptr;
+                        if (pList->GetAdapter(i, dxcore::IID_IDXCoreAdapter_Const, reinterpret_cast<void**>(&pAdapter)) == 0 && pAdapter) {
+                            char desc[128]{};
+                            pAdapter->GetProperty(dxcore::DXCoreAdapterProperty::DriverDescription, sizeof(desc), desc);
+                            uint64_t vram = 0;
+                            pAdapter->GetProperty(dxcore::DXCoreAdapterProperty::DedicatedAdapterMemory, sizeof(vram), &vram);
+                            bool isIntegrated = false;
+                            pAdapter->GetProperty(dxcore::DXCoreAdapterProperty::IsIntegrated, sizeof(isIntegrated), &isIntegrated);
+                            out << "    [" << i << "] " << desc << "\n"
+                                << "        Dedicated VRAM:   " << (vram / (1024 * 1024)) << " MB\n"
+                                << "        Type:             " << (isIntegrated ? "Integrated Compute" : "Discrete Sovereign Accelerator") << "\n"
+                                << "        Preemption:       Instruction-Level Granularity\n";
+                            pAdapter->Release();
+                        }
+                    }
+                    pList->Release();
+                }
+                pFactory->Release();
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "infer") {
+            out << "[DirectML] Running High-Throughput GEMM Tensor Inference Benchmark...\n";
+            prism3d12::ID3D12Device* pDev = nullptr;
+            prism3d12::D3D12CreateDevice(nullptr, prism3d::D3D_FEATURE_LEVEL_12_2, prism3d12::IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+            directml::IDMLDevice* pDml = nullptr;
+            directml::DMLCreateDevice(pDev, directml::DML_CREATE_DEVICE_FLAGS::NONE, directml::IID_IDMLDevice_Const, reinterpret_cast<void**>(&pDml));
+
+            if (pDev && pDml) {
+                // Setup 64x64 Matrix Multiplication
+                constexpr uint32_t M = 64, K = 64, N = 64;
+                size_t numElements = M * K;
+                size_t byteSize = numElements * sizeof(float);
+
+                prism3d12::D3D12_HEAP_PROPERTIES hp{};
+                hp.Type = prism3d12::D3D12_HEAP_TYPE_DEFAULT;
+                prism3d12::D3D12_RESOURCE_DESC rd{};
+                rd.Dimension = prism3d12::D3D12_RESOURCE_DIMENSION_BUFFER;
+                rd.Width = byteSize;
+                rd.Height = 1;
+                rd.DepthOrArraySize = 1;
+                rd.MipLevels = 1;
+
+                prism3d12::ID3D12Resource* bufA = nullptr;
+                prism3d12::ID3D12Resource* bufB = nullptr;
+                prism3d12::ID3D12Resource* bufY = nullptr;
+                pDev->CreateCommittedResource(&hp, prism3d12::D3D12_HEAP_FLAG_NONE, &rd, prism3d12::D3D12_RESOURCE_STATE_COMMON, nullptr, prism3d12::IID_ID3D12Resource, reinterpret_cast<void**>(&bufA));
+                pDev->CreateCommittedResource(&hp, prism3d12::D3D12_HEAP_FLAG_NONE, &rd, prism3d12::D3D12_RESOURCE_STATE_COMMON, nullptr, prism3d12::IID_ID3D12Resource, reinterpret_cast<void**>(&bufB));
+                pDev->CreateCommittedResource(&hp, prism3d12::D3D12_HEAP_FLAG_NONE, &rd, prism3d12::D3D12_RESOURCE_STATE_COMMON, nullptr, prism3d12::IID_ID3D12Resource, reinterpret_cast<void**>(&bufY));
+
+                void* pMap = nullptr;
+                bufA->Map(0, nullptr, &pMap);
+                std::vector<float> aMat(numElements, 0.5f);
+                std::memcpy(pMap, aMat.data(), byteSize);
+                bufA->Unmap(0, nullptr);
+
+                bufB->Map(0, nullptr, &pMap);
+                std::vector<float> bMat(numElements, 0.25f);
+                std::memcpy(pMap, bMat.data(), byteSize);
+                bufB->Unmap(0, nullptr);
+
+                uint32_t aSizes[2] = { M, K };
+                directml::DML_BUFFER_TENSOR_DESC aBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, aSizes, nullptr, byteSize, 0 };
+                directml::DML_TENSOR_DESC aDesc{ directml::DML_TENSOR_TYPE::BUFFER, &aBufDesc };
+
+                uint32_t bSizes[2] = { K, N };
+                directml::DML_BUFFER_TENSOR_DESC bBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, bSizes, nullptr, byteSize, 0 };
+                directml::DML_TENSOR_DESC bDesc{ directml::DML_TENSOR_TYPE::BUFFER, &bBufDesc };
+
+                uint32_t ySizes[2] = { M, N };
+                directml::DML_BUFFER_TENSOR_DESC yBufDesc{ directml::DML_TENSOR_DATA_TYPE::FLOAT32, directml::DML_TENSOR_FLAGS::NONE, 2, ySizes, nullptr, byteSize, 0 };
+                directml::DML_TENSOR_DESC yDesc{ directml::DML_TENSOR_TYPE::BUFFER, &yBufDesc };
+
+                directml::DML_GEMM_OPERATOR_DESC gemmDesc{};
+                gemmDesc.ATensor = &aDesc;
+                gemmDesc.BTensor = &bDesc;
+                gemmDesc.OutputTensor = &yDesc;
+                gemmDesc.Alpha = 1.0f;
+                gemmDesc.Beta = 0.0f;
+
+                directml::DML_OPERATOR_DESC opDesc{ directml::DML_OPERATOR_TYPE::GEMM, &gemmDesc };
+                directml::IDMLOperator* pOp = nullptr;
+                pDml->CreateOperator(&opDesc, directml::IID_IDMLOperator_Const, reinterpret_cast<void**>(&pOp));
+                directml::IDMLCompiledOperator* pComp = nullptr;
+                pDml->CompileOperator(pOp, directml::DML_EXECUTION_FLAGS::NONE, directml::IID_IDMLCompiledOperator_Const, reinterpret_cast<void**>(&pComp));
+
+                directml::DML_BINDING_TABLE_DESC btDesc{ pComp, {}, {}, 1 };
+                directml::IDMLBindingTable* pBT = nullptr;
+                pDml->CreateBindingTable(&btDesc, directml::IID_IDMLBindingTable_Const, reinterpret_cast<void**>(&pBT));
+
+                directml::DML_BUFFER_BINDING inB[2] = { { bufA, 0, byteSize }, { bufB, 0, byteSize } };
+                directml::DML_BINDING_DESC inBD[2] = { { directml::DML_BINDING_TYPE::BUFFER, &inB[0] }, { directml::DML_BINDING_TYPE::BUFFER, &inB[1] } };
+                pBT->BindInputs(2, inBD);
+
+                directml::DML_BUFFER_BINDING outB = { bufY, 0, byteSize };
+                directml::DML_BINDING_DESC outBD = { directml::DML_BINDING_TYPE::BUFFER, &outB };
+                pBT->BindOutputs(1, &outBD);
+
+                directml::IDMLCommandRecorder* pRec = nullptr;
+                pDml->CreateCommandRecorder(directml::IID_IDMLCommandRecorder_Const, reinterpret_cast<void**>(&pRec));
+
+                auto start = std::chrono::high_resolution_clock::now();
+                constexpr uint32_t numPasses = 50;
+                for (uint32_t i = 0; i < numPasses; ++i) {
+                    pRec->RecordDispatch(nullptr, pComp, pBT);
+                }
+                auto finish = std::chrono::high_resolution_clock::now();
+                double elapsedSec = std::chrono::duration<double>(finish - start).count();
+                double gflops = (2.0 * M * K * N * numPasses) / (elapsedSec * 1e9);
+
+                bufY->Map(0, nullptr, &pMap);
+                float firstElem = static_cast<float*>(pMap)[0];
+                bufY->Unmap(0, nullptr);
+
+                out << "  Inference Matrix Shape:  [" << M << "x" << K << "] * [" << K << "x" << N << "]\n";
+                out << "  Passes Dispatched:       " << numPasses << " passes\n";
+                out << "  Elapsed Time:            " << (elapsedSec * 1000.0) << " ms\n";
+                out << "  Compute Throughput:      " << gflops << " GFLOPS\n";
+                out << "  Output Sample Y[0][0]:   " << firstElem << " (Expected: " << (0.5f * 0.25f * K) << ")\n";
+
+                pRec->Release(); pBT->Release(); pComp->Release(); pOp->Release();
+                bufA->Release(); bufB->Release(); bufY->Release();
+                pDml->Release(); pDev->Release();
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  dml test                                Runs DirectML & DXCore self-test suite\n"
+            << "  dml info                                Displays DirectML & GPU adapter telemetry\n"
+            << "  dml infer                               Executes tensor GEMM inference benchmark\n";
     }
 
     static std::string trim(std::string_view s) {

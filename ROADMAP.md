@@ -176,7 +176,17 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 84: Windows Direct3D 12 Video API (D3D12 Video)      [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 85: Windows MF Source Reader & Sink Writer Subsystem [PLANNED]        │
+│ Phase 85: Windows MF Source Reader & Sink Writer Subsystem [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 86: Windows MF Capture Engine & Hardware Media Source [COMPLETED 100%]│
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 87: Windows DirectX Raytracing & Mesh Shader API     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 88: Windows DirectStorage & GPU Decompression        [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 89: Windows DirectML & DXCore Subsystem              [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 90: Windows DirectComposition & Modern Compositor    [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2084,22 +2094,36 @@
 
 ---
 
-### Phase 89: Windows DirectML & DXCore Subsystem (`directml.hpp`, `dxcore.hpp`, `directml.dll`, `dxcore.dll`) (PLANNED - MILESTONE 116)
-- [ ] **DXCore Modern Adapter Enumeration Architecture (`include/micant/dxcore.hpp`, `dxcore.dll`)**:
+### Phase 89: Windows DirectML & DXCore Subsystem (`directml.hpp`, `dxcore.hpp`, `directml.dll`, `dxcore.dll`) (COMPLETED 100% - MILESTONE 116)
+- [x] **DXCore Modern Adapter Enumeration Architecture (`include/micant/dxcore.hpp`, `dxcore.dll`)**:
   - Unified adapter enumeration interfaces (`IDXCoreAdapterFactory`, `IDXCoreAdapterList`, `IDXCoreAdapter`).
   - Hardware attribute queries (`DXCoreAdapterProperty`, driver version, dedicated video memory, compute capability).
-- [ ] **DirectML Machine Learning Execution Pipeline (`include/micant/directml.hpp`, `directml.dll`)**:
+- [x] **DirectML Machine Learning Execution Pipeline (`include/micant/directml.hpp`, `directml.dll`)**:
   - Machine learning device and operator abstractions (`IDMLDevice`, `IDMLDevice1`, `IDMLOperator`, `IDMLCompiledOperator`).
   - Dispatchable execution tables (`IDMLBindingTable`, `IDMLCommandRecorder`) recording GPU tensor dispatches into Direct3D 12 command lists.
   - Core tensor operator set: Matrix Multiplication (GEMM), Convolution, ReLU, Softmax, Batch Normalization, and Element-Wise mathematical transformations.
-- [ ] **Dynamic Module Exports & Registration (`directml.dll`, `dxcore.dll`)**:
-  - Dynamic exports `DMLCreateDevice`, `DXCoreCreateAdapterFactory`, and registration in `VersionDatabase`.
-- [ ] **Interactive CLI Utilities (`dml`)**:
-  - `dml test` (Runs DirectML tensor allocation, operator compilation, and dispatch self-tests).
+- [x] **Dynamic Module Exports & Registration (`directml.dll`, `dxcore.dll`)**:
+  - Dynamic exports `DMLCreateDevice`, `DMLCreateDevice1`, `DXCoreCreateAdapterFactory`, and registration in `VersionDatabase`.
+- [x] **Interactive CLI Utilities (`dml`)**:
+  - `dml test` (Runs DirectML tensor allocation, operator compilation, and dispatch self-tests: 16/16 passed).
   - `dml info` (Displays DirectML feature levels, tensor data types, and DXCore adapter capabilities).
   - `dml infer` (Executes sample tensor GEMM computation on PrismX Shader VM).
-- [ ] **Unit Test Suite 116 (`Test_WindowsDirectML_Subsystem`)**:
+- [x] **Unit Test Suite 116 (`Test_WindowsDirectML_Subsystem`)**:
   - Comprehensive unit test suite validating DXCore adapter enumeration, DML device creation, tensor operator building, binding tables, GPU command execution, and CLI commands.
+  - Milestone 116: **116 / 116 Test Suites Passing (100%)**.
+
+---
+
+### Phase 90: Windows DirectComposition & Modern Compositor Subsystem (`dcomp.hpp`, `dcomp.dll`) (PLANNED - MILESTONE 117)
+- [ ] **DirectComposition Core Architecture (`include/micant/dcomp.hpp`, `dcomp.dll`)**:
+  - Modern hardware-accelerated composition visual trees (`IDCompositionDevice`, `IDCompositionVisual`, `IDCompositionTarget`).
+  - Visual property animations, 3D transforms, clipping rectangles, and opacity masks.
+- [ ] **Surface & Swapchain Integration**:
+  - Composition surfaces (`IDCompositionSurface`, `IDCompositionVirtualSurface`) bound to Direct3D 11/12 and DXGI swapchains.
+  - DirectComposition commit transaction engine synchronized with Desktop Window Manager (DWM).
+- [ ] **Unit Test Suite 117 (`Test_WindowsDirectComposition_Subsystem`)**:
+  - Validate device creation, visual tree manipulation, commit pipelines, and compositor shell commands.
+
 
 
 
