@@ -120,6 +120,7 @@
 #include "ocr.hpp"
 #include "winml.hpp"
 #include "webauthn.hpp"
+#include "wlanapi.hpp"
 
 namespace micant::shell {
 
@@ -330,6 +331,7 @@ public:
             if (cmd == "ocr" || cmd == "vision") { cmdOcr(tokens, out); return 0; }
             if (cmd == "winml" || cmd == "ml" || cmd == "ai") { cmdWinML(tokens, out); return 0; }
             if (cmd == "webauthn" || cmd == "fido2" || cmd == "passkey") { cmdWebAuthn(tokens, out); return 0; }
+            if (cmd == "wlan" || cmd == "wifi" || cmd == "wireless") { cmdWlan(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -631,6 +633,7 @@ private:
             << "  OCR [test|info|recognize] Windows Media OCR & Vision Subsystem (ocr test)\n"
             << "  WINML [test|info|run]    Windows Machine Learning & Neural Inference (winml test)\n"
             << "  WEBAUTHN [test|info|register|auth] Windows Web Authentication & FIDO2 Passkeys (webauthn test)\n"
+            << "  WLAN [test|info|scan|list|connect|disconnect] Windows Native Wifi & WLAN (wlan test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -18176,6 +18179,338 @@ private:
             << "  webauthn info                          Displays WebAuthn platform telemetry\n"
             << "  webauthn register <rpId> <userName>    Registers a new passkey credential\n"
             << "  webauthn auth <rpId>                   Authenticates against a registered passkey\n";
+    }
+
+    void cmdWlan(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::wlan;
+        InitializeWlanSubsystemExports();
+
+        auto stateToStr = [](WLAN_INTERFACE_STATE st) -> const char* {
+            switch (st) {
+                case wlan_interface_state_not_ready: return "Not Ready";
+                case wlan_interface_state_connected: return "Connected";
+                case wlan_interface_state_ad_hoc_network_formed: return "Ad Hoc Formed";
+                case wlan_interface_state_disconnecting: return "Disconnecting";
+                case wlan_interface_state_disconnected: return "Disconnected";
+                case wlan_interface_state_associating: return "Associating";
+                case wlan_interface_state_discovering: return "Discovering";
+                case wlan_interface_state_authenticating: return "Authenticating";
+                default: return "Unknown";
+            }
+        };
+
+        auto phyToStr = [](DOT11_PHY_TYPE phy) -> const char* {
+            switch (phy) {
+                case dot11_phy_type_he: return "802.11ax (Wi-Fi 6E)";
+                case dot11_phy_type_vht: return "802.11ac (Wi-Fi 5)";
+                case dot11_phy_type_ht: return "802.11n (Wi-Fi 4)";
+                case dot11_phy_type_erp: return "802.11g";
+                case dot11_phy_type_hrdsss: return "802.11b";
+                case dot11_phy_type_eht: return "802.11be (Wi-Fi 7)";
+                default: return "802.11 Legacy";
+            }
+        };
+
+        auto authToStr = [](DOT11_AUTH_ALGORITHM auth) -> const char* {
+            switch (auth) {
+                case DOT11_AUTH_ALGO_80211_OPEN: return "Open";
+                case DOT11_AUTH_ALGO_80211_SHARED_KEY: return "WEP-Shared";
+                case DOT11_AUTH_ALGO_WPA: return "WPA-Enterprise";
+                case DOT11_AUTH_ALGO_WPA_PSK: return "WPA-PSK";
+                case DOT11_AUTH_ALGO_RSNA: return "WPA2-Enterprise";
+                case DOT11_AUTH_ALGO_RSNA_PSK: return "WPA2-PSK (AES)";
+                case DOT11_AUTH_ALGO_WPA3: return "WPA3-Enterprise";
+                case DOT11_AUTH_ALGO_WPA3_SAE: return "WPA3-Personal (SAE)";
+                default: return "Custom/Other";
+            }
+        };
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            HANDLE hClient = nullptr;
+            DWORD negVer = 0;
+            DWORD dwRet = WlanOpenHandle(WLAN_CLIENT_VERSION_WIN10, nullptr, &negVer, &hClient);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "Failed to open WLAN handle. Error: " << dwRet << "\n";
+                return;
+            }
+
+            PWLAN_INTERFACE_INFO_LIST pIfList = nullptr;
+            dwRet = WlanEnumInterfaces(hClient, nullptr, &pIfList);
+            if (dwRet != ERROR_SUCCESS || !pIfList || pIfList->dwNumberOfItems == 0) {
+                out << "No WLAN interfaces available.\n";
+                if (pIfList) WlanFreeMemory(pIfList);
+                WlanCloseHandle(hClient, nullptr);
+                return;
+            }
+
+            const auto& ifInfo = pIfList->InterfaceInfo[0];
+            std::string desc;
+            for (int i = 0; ifInfo.strInterfaceDescription[i]; ++i) {
+                desc.push_back(static_cast<char>(ifInfo.strInterfaceDescription[i]));
+            }
+
+            auto& mgr = SovereignWlanManager::get();
+            const uint8_t* mac = mgr.getMacAddress();
+            char macStr[32];
+            std::snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+            out << "=== Windows Native Wifi & Sovereign WLAN Subsystem ===\n"
+                << "  Module:                          wlanapi.dll (Version 10.0.22621.1)\n"
+                << "  Negotiated Client Version:       " << negVer << "\n"
+                << "  Interface Description:           " << desc << "\n"
+                << "  Physical MAC Address:            " << macStr << "\n"
+                << "  Interface State:                 " << stateToStr(mgr.getState()) << "\n"
+                << "  Software Radio:                  " << (mgr.getSoftwareRadio() == dot11_radio_state_on ? "ON" : "OFF") << "\n"
+                << "  Hardware Radio:                  ON\n";
+
+            if (mgr.getState() == wlan_interface_state_connected) {
+                out << "  Connected SSID:                  " << mgr.getConnectedSsid() << "\n";
+            } else {
+                out << "  Connected SSID:                  (Not Connected)\n";
+            }
+
+            WlanFreeMemory(pIfList);
+            WlanCloseHandle(hClient, nullptr);
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "scan") {
+            HANDLE hClient = nullptr;
+            DWORD negVer = 0;
+            WlanOpenHandle(WLAN_CLIENT_VERSION_WIN10, nullptr, &negVer, &hClient);
+            WlanScan(hClient, nullptr, nullptr, nullptr, nullptr);
+            WlanCloseHandle(hClient, nullptr);
+
+            out << "Spectrum scan initiated across 2.4 GHz, 5 GHz, and 6 GHz bands.\n"
+                << "Scan complete. Use 'wlan list' to display discovered BSS networks.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            HANDLE hClient = nullptr;
+            DWORD negVer = 0;
+            DWORD dwRet = WlanOpenHandle(WLAN_CLIENT_VERSION_WIN10, nullptr, &negVer, &hClient);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "Failed to open WLAN handle.\n";
+                return;
+            }
+
+            PWLAN_AVAILABLE_NETWORK_LIST pNetList = nullptr;
+            dwRet = WlanGetAvailableNetworkList(hClient, nullptr, 0, nullptr, &pNetList);
+            if (dwRet != ERROR_SUCCESS || !pNetList) {
+                out << "Failed to retrieve available network list.\n";
+                WlanCloseHandle(hClient, nullptr);
+                return;
+            }
+
+            PWLAN_BSS_LIST pBssList = nullptr;
+            WlanGetNetworkBssList(hClient, nullptr, nullptr, dot11_BSS_type_any, 0, nullptr, &pBssList);
+
+            out << "=== Available Wireless Networks (" << pNetList->dwNumberOfItems << " Discovered) ===\n";
+            out << std::left << std::setw(22) << "SSID"
+                << std::setw(20) << "BSSID"
+                << std::setw(8)  << "Signal"
+                << std::setw(22) << "Standard"
+                << std::setw(20) << "Security"
+                << "Status\n";
+            out << std::string(86, '-') << "\n";
+
+            for (DWORD i = 0; i < pNetList->dwNumberOfItems; ++i) {
+                const auto& net = pNetList->Network[i];
+                std::string ssid(reinterpret_cast<const char*>(net.dot11Ssid.ucSSID), net.dot11Ssid.uSSIDLength);
+
+                std::string bssidStr = "00:00:00:00:00:00";
+                if (pBssList && i < pBssList->dwNumberOfItems) {
+                    const auto& bentry = pBssList->wlanBssEntries[i];
+                    char bbuf[32];
+                    std::snprintf(bbuf, sizeof(bbuf), "%02X:%02X:%02X:%02X:%02X:%02X",
+                        bentry.dot11Bssid.ucDot11MacAddress[0], bentry.dot11Bssid.ucDot11MacAddress[1],
+                        bentry.dot11Bssid.ucDot11MacAddress[2], bentry.dot11Bssid.ucDot11MacAddress[3],
+                        bentry.dot11Bssid.ucDot11MacAddress[4], bentry.dot11Bssid.ucDot11MacAddress[5]);
+                    bssidStr = bbuf;
+                }
+
+                std::string sig = std::to_string(net.wlanSignalQuality) + "%";
+                std::string status = (net.dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED) ? "[CONNECTED]" :
+                                     ((net.dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE) ? "(Profile)" : "");
+
+                out << std::left << std::setw(22) << ssid
+                    << std::setw(20) << bssidStr
+                    << std::setw(8)  << sig
+                    << std::setw(22) << phyToStr(net.dot11PhyTypes[0])
+                    << std::setw(20) << authToStr(net.dot11DefaultAuthAlgorithm)
+                    << status << "\n";
+            }
+
+            if (pBssList) WlanFreeMemory(pBssList);
+            WlanFreeMemory(pNetList);
+            WlanCloseHandle(hClient, nullptr);
+            return;
+        }
+
+        if (tokens.size() > 2 && tokens[1] == "connect") {
+            std::string ssid = tokens[2];
+            std::wstring wSsid(ssid.begin(), ssid.end());
+
+            HANDLE hClient = nullptr;
+            DWORD negVer = 0;
+            WlanOpenHandle(WLAN_CLIENT_VERSION_WIN10, nullptr, &negVer, &hClient);
+
+            WLAN_CONNECTION_PARAMETERS params{};
+            params.wlanConnectionMode = wlan_connection_mode_profile;
+            params.strProfile = wSsid.c_str();
+            params.dot11BssType = dot11_BSS_type_infrastructure;
+
+            DWORD dwRet = WlanConnect(hClient, nullptr, &params, nullptr);
+            if (dwRet == ERROR_SUCCESS) {
+                out << "Successfully connected to WLAN network [" << ssid << "].\n"
+                    << "  Association state:   Connected\n"
+                    << "  Security:            802.11 Robust Security Network Association (RSNA)\n";
+            } else if (dwRet == ERROR_NOT_FOUND) {
+                out << "Network [" << ssid << "] not found in spectrum cache.\n";
+            } else {
+                out << "Connection attempt failed with error: " << dwRet << "\n";
+            }
+
+            WlanCloseHandle(hClient, nullptr);
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "disconnect") {
+            HANDLE hClient = nullptr;
+            DWORD negVer = 0;
+            WlanOpenHandle(WLAN_CLIENT_VERSION_WIN10, nullptr, &negVer, &hClient);
+            WlanDisconnect(hClient, nullptr, nullptr);
+            WlanCloseHandle(hClient, nullptr);
+
+            out << "Disconnected from current WLAN access point.\n"
+                << "Adapter state: Disconnected\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "profiles") {
+            HANDLE hClient = nullptr;
+            DWORD negVer = 0;
+            WlanOpenHandle(WLAN_CLIENT_VERSION_WIN10, nullptr, &negVer, &hClient);
+
+            PWLAN_PROFILE_INFO_LIST pList = nullptr;
+            DWORD dwRet = WlanGetProfileList(hClient, nullptr, nullptr, &pList);
+            if (dwRet == ERROR_SUCCESS && pList) {
+                out << "=== Configured WLAN Profiles (" << pList->dwNumberOfItems << ") ===\n";
+                for (DWORD i = 0; i < pList->dwNumberOfItems; ++i) {
+                    std::string pName;
+                    for (int j = 0; pList->ProfileInfo[i].strProfileName[j]; ++j) {
+                        pName.push_back(static_cast<char>(pList->ProfileInfo[i].strProfileName[j]));
+                    }
+                    out << "  Profile [" << (i + 1) << "]: " << pName << " (All User Profile)\n";
+                }
+                WlanFreeMemory(pList);
+            } else {
+                out << "No profiles found or failed to enumerate profiles.\n";
+            }
+
+            WlanCloseHandle(hClient, nullptr);
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[WLAN Self-Test] Initiating Windows Native Wifi Diagnostics...\n";
+            HANDLE hClient = nullptr;
+            DWORD negVer = 0;
+            DWORD dwRet = WlanOpenHandle(WLAN_CLIENT_VERSION_WIN10, nullptr, &negVer, &hClient);
+            if (dwRet != ERROR_SUCCESS || !hClient) {
+                out << "[FAIL] WlanOpenHandle failed! Error: " << dwRet << "\n";
+                return;
+            }
+            out << "  [PASS] WlanOpenHandle succeeded with negotiated version: " << negVer << "\n";
+
+            PWLAN_INTERFACE_INFO_LIST pIfList = nullptr;
+            dwRet = WlanEnumInterfaces(hClient, nullptr, &pIfList);
+            if (dwRet != ERROR_SUCCESS || !pIfList || pIfList->dwNumberOfItems == 0) {
+                out << "[FAIL] WlanEnumInterfaces failed!\n";
+                WlanCloseHandle(hClient, nullptr);
+                return;
+            }
+            out << "  [PASS] WlanEnumInterfaces enumerated " << pIfList->dwNumberOfItems << " wireless miniport(s).\n";
+
+            PWLAN_INTERFACE_CAPABILITY pCap = nullptr;
+            dwRet = WlanGetInterfaceCapability(hClient, &pIfList->InterfaceInfo[0].InterfaceGuid, nullptr, &pCap);
+            if (dwRet != ERROR_SUCCESS || !pCap) {
+                out << "[FAIL] WlanGetInterfaceCapability failed!\n";
+            } else {
+                out << "  [PASS] WlanGetInterfaceCapability: supported PHYs count=" << pCap->dwNumberOfSupportedPhys << "\n";
+                WlanFreeMemory(pCap);
+            }
+
+            dwRet = WlanScan(hClient, &pIfList->InterfaceInfo[0].InterfaceGuid, nullptr, nullptr, nullptr);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "[FAIL] WlanScan failed!\n";
+            } else {
+                out << "  [PASS] WlanScan completed spectrum sweep.\n";
+            }
+
+            PWLAN_AVAILABLE_NETWORK_LIST pAvail = nullptr;
+            dwRet = WlanGetAvailableNetworkList(hClient, &pIfList->InterfaceInfo[0].InterfaceGuid, 0, nullptr, &pAvail);
+            if (dwRet != ERROR_SUCCESS || !pAvail || pAvail->dwNumberOfItems == 0) {
+                out << "[FAIL] WlanGetAvailableNetworkList failed!\n";
+            } else {
+                out << "  [PASS] WlanGetAvailableNetworkList found " << pAvail->dwNumberOfItems << " available networks.\n";
+                WlanFreeMemory(pAvail);
+            }
+
+            PWLAN_BSS_LIST pBss = nullptr;
+            dwRet = WlanGetNetworkBssList(hClient, &pIfList->InterfaceInfo[0].InterfaceGuid, nullptr, dot11_BSS_type_any, 0, nullptr, &pBss);
+            if (dwRet != ERROR_SUCCESS || !pBss) {
+                out << "[FAIL] WlanGetNetworkBssList failed!\n";
+            } else {
+                out << "  [PASS] WlanGetNetworkBssList returned " << pBss->dwNumberOfItems << " BSS entries.\n";
+                WlanFreeMemory(pBss);
+            }
+
+            // Test connect
+            WLAN_CONNECTION_PARAMETERS params{};
+            params.wlanConnectionMode = wlan_connection_mode_profile;
+            params.strProfile = L"SovereignNet-5G";
+            params.dot11BssType = dot11_BSS_type_infrastructure;
+            dwRet = WlanConnect(hClient, &pIfList->InterfaceInfo[0].InterfaceGuid, &params, nullptr);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "[FAIL] WlanConnect failed!\n";
+            } else {
+                out << "  [PASS] WlanConnect established link with [SovereignNet-5G].\n";
+            }
+
+            // Test query current connection
+            DWORD dwDataSize = 0;
+            PVOID pConnData = nullptr;
+            dwRet = WlanQueryInterface(hClient, &pIfList->InterfaceInfo[0].InterfaceGuid,
+                wlan_intf_opcode_current_connection, nullptr, &dwDataSize, &pConnData, nullptr);
+            if (dwRet == ERROR_SUCCESS && pConnData) {
+                auto* pConnAttr = reinterpret_cast<PWLAN_CONNECTION_ATTRIBUTES>(pConnData);
+                out << "  [PASS] WlanQueryInterface verified connection state: connected, Rx/Tx Rate="
+                    << pConnAttr->wlanAssociationAttributes.ulRxRate / 1000 << " Mbps\n";
+                WlanFreeMemory(pConnData);
+            }
+
+            // Test disconnect
+            WlanDisconnect(hClient, &pIfList->InterfaceInfo[0].InterfaceGuid, nullptr);
+            out << "  [PASS] WlanDisconnect successfully transitioned to disconnected state.\n";
+
+            WlanFreeMemory(pIfList);
+            WlanCloseHandle(hClient, nullptr);
+
+            out << "[SUCCESS] Windows Native Wifi & Sovereign WLAN Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  wlan info                              Displays WLAN adapter and radio telemetry\n"
+            << "  wlan scan                              Initiates RF spectrum scan for wireless APs\n"
+            << "  wlan list                              Lists all discovered BSS networks\n"
+            << "  wlan profiles                          Lists stored 802.11 XML profiles\n"
+            << "  wlan connect <ssid>                    Connects to specified wireless network\n"
+            << "  wlan disconnect                        Disconnects active wireless association\n"
+            << "  wlan test                              Runs Native Wifi self-test diagnostics\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -2364,25 +2364,48 @@
 
 ---
 
-### Phase 102: Windows Native Wifi & WLAN Subsystem (`wlanapi.hpp`, `wlanapi.dll`) (PLANNED - MILESTONE 129)
-- [ ] **Windows Native Wifi Architecture (`include/micant/wlanapi.hpp`, `wlanapi.dll`)**:
-  - Native Win32 WLAN C APIs: `WlanOpenHandle`, `WlanCloseHandle`, `WlanEnumInterfaces`, `WlanGetInterfaceCapability`, `WlanScan`, `WlanGetAvailableNetworkList`, `WlanGetNetworkBssList`, `WlanQueryInterface`, `WlanSetInterface`, `WlanConnect`, `WlanDisconnect`, `WlanRegisterNotification`, `WlanSetProfile`, `WlanGetProfile`, `WlanDeleteProfile`, `WlanReasonCodeToString`.
+---
+
+### Phase 102: Windows Native Wifi & WLAN Subsystem (`wlanapi.hpp`, `wlanapi.dll`) (100% Completed - MILESTONE 129)
+- [x] **Windows Native Wifi Architecture (`include/micant/wlanapi.hpp`, `wlanapi.dll`)**:
+  - Native Win32 WLAN C APIs: `WlanOpenHandle`, `WlanCloseHandle`, `WlanEnumInterfaces`, `WlanGetInterfaceCapability`, `WlanScan`, `WlanGetAvailableNetworkList`, `WlanGetNetworkBssList`, `WlanQueryInterface`, `WlanSetInterface`, `WlanConnect`, `WlanDisconnect`, `WlanRegisterNotification`, `WlanSetProfile`, `WlanGetProfile`, `WlanDeleteProfile`, `WlanGetProfileList`, `WlanReasonCodeToString`, `WlanFreeMemory`.
   - 802.11 MAC Frame and Network Profile Management:
     * Infrastructure and Ad-Hoc BSS topologies.
     * DOT11_AUTH_ALGORITHM (Open, SharedKey, WPA, WPA-PSK, WPA2, WPA2-PSK, WPA3-SAE, WPA3-Enterprise).
     * DOT11_CIPHER_ALGORITHM (None, WEP40, TKIP, CCMP / AES, GCMP).
     * XML Profile parsing and generation (`WLANProfile` schema).
-    * RSSI to Link Quality percentage mapping (-100 dBm to -50 dBm -> 0% to 100%).
+    * Realistic RSSI (dBm) to Link Quality percentage mapping.
   - Sovereign Virtual WLAN Miniport & Interface State Machine:
-    * Simulated physical network interface (e.g. `MicaNT Sovereign 802.11ax Wi-Fi 6E Adapter`).
+    * Simulated physical network interface: `MicaNT Sovereign 802.11ax Wi-Fi 6E Wireless Adapter` (MAC `02:53:4F:56:45:52`).
     * Radio state management (`wlan_radio_state_on`, `wlan_radio_state_off`).
-    * Connection state machine (`wlan_interface_state_not_ready`, `wlan_interface_state_connected`, `wlan_interface_state_authenticating`, `wlan_interface_state_disconnected`).
-    * Asynchronous scan cache and BSSID beacon survey.
+    * Connection state machine (`wlan_interface_state_not_ready`, `wlan_interface_state_connected`, `wlan_interface_state_associating`, `wlan_interface_state_authenticating`, `wlan_interface_state_disconnected`).
+    * Asynchronous scan cache, BSSID survey engine, and ACM real-time notification dispatching.
   - VersionDatabase registration (`10.0.22621.1`) for `wlanapi.dll`.
+- [x] **Shell CLI Integration**:
+  - Implemented `wlan info`, `wlan scan`, `wlan list`, `wlan profiles`, `wlan connect <ssid>`, `wlan disconnect`, and `wlan test` in `micant::shell`.
+- [x] **Unit Test Suite 129 (`Test_WindowsNativeWifi_WLAN_Subsystem`)**:
+  - Validates dynamic exports in `wlanapi.dll`, VersionDatabase entry, client handle lifecycle, interface enumeration, PHY capabilities (Wi-Fi 6E), software/hardware radio state toggles and notifications, scan execution, network and BSS discovery lists, XML profile management, connection state machine transitions, reason code mapping, memory cleanup, and shell CLI commands.
+  - Milestone 129: **129 / 129 Test Suites Passing (100%)**.
+
+---
+
+### Phase 103: Windows Virtual Disk & Storage Management Subsystem (`virtdisk.hpp`, `virtdisk.dll` / `vds.exe`) (PLANNED - MILESTONE 130)
+- [ ] **Windows Virtual Disk Architecture (`include/micant/virtdisk.hpp`, `virtdisk.dll`)**:
+  - Native Win32 Virtual Disk C APIs: `CreateVirtualDisk`, `OpenVirtualDisk`, `AttachVirtualDisk`, `DetachVirtualDisk`, `GetVirtualDiskInformation`, `SetVirtualDiskInformation`, `GetVirtualDiskPhysicalPath`, `CompactVirtualDisk`, `ExpandVirtualDisk`, `ResizeVirtualDisk`, `MirrorVirtualDisk`, `BreakMirrorVirtualDisk`.
+  - VHD & VHDX Container Format Specification:
+    * Dynamic, Fixed, and Differencing virtual disks.
+    * Sector sizing (512e / 4Kn) and virtual cylinder-head-sector (CHS) geometry calculation.
+    * Block Allocation Table (BAT) simulation and virtual disk headers/footers.
+    * Attachment flags (`ATTACH_VIRTUAL_DISK_FLAG_READ_ONLY`, `ATTACH_VIRTUAL_DISK_FLAG_NO_DRIVE_LETTER`, `ATTACH_VIRTUAL_DISK_FLAG_PERMANENT_LIFETIME`).
+  - Sovereign Virtual Disk Controller & Device Graph Integration:
+    * Mounting and synthetic SCSI device exposure into VirtualFileSystem (`\Device\HarddiskVolumeVirtual`).
+    * Detach teardown and resource reclamation.
+  - VersionDatabase registration (`10.0.22621.1`) for `virtdisk.dll`.
 - [ ] **Shell CLI Integration**:
-  - Implement `wlan info`, `wlan scan`, `wlan list`, `wlan connect <ssid> [key]`, and `wlan disconnect` in `micant::shell`.
-- [ ] **Unit Test Suite 129 (`Test_WindowsNativeWifi_WLAN_Subsystem`)**:
-  - Validate dynamic exports in `wlanapi.dll`, interface enumeration, scan triggers and results, profile XML parsing, connection state machine transitions, notification callbacks, and shell CLI commands.
+  - Implement `vhd create <path> <size_mb>`, `vhd attach <path>`, `vhd detach <path>`, `vhd info <path>`, and `vhd test` in `micant::shell`.
+- [ ] **Unit Test Suite 130 (`Test_WindowsVirtualDisk_Storage_Subsystem`)**:
+  - Validate dynamic exports in `virtdisk.dll`, VHD/VHDX creation, open/attach/detach lifecycle, disk info queries, resizing/compaction, and shell CLI commands.
+
 
 
 

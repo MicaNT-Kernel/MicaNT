@@ -136,6 +136,7 @@
 #include "micant/mfreadwrite.hpp"
 #include "micant/directstorage.hpp"
 #include "micant/ocr.hpp"
+#include "micant/wlanapi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -29970,8 +29971,288 @@ void Test_WindowsWebAuthn_FIDO2_Subsystem() {
     std::cout << "[TEST] Suite 128: Windows Web Authentication & Sovereign FIDO2 / Passkey Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 129: Windows Native Wifi & Sovereign WLAN Subsystem
+// ============================================================================
+void Test_WindowsNativeWifi_WLAN_Subsystem() {
+    using namespace micant::wlan;
+
+    // 1. Initialize subsystem exports
+    InitializeWlanSubsystemExports();
+
+    // 2. Validate DynamicLoader exports for wlanapi.dll
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanOpenHandle") != nullptr, "wlanapi.dll must export WlanOpenHandle");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanCloseHandle") != nullptr, "wlanapi.dll must export WlanCloseHandle");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanEnumInterfaces") != nullptr, "wlanapi.dll must export WlanEnumInterfaces");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanGetInterfaceCapability") != nullptr, "wlanapi.dll must export WlanGetInterfaceCapability");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanScan") != nullptr, "wlanapi.dll must export WlanScan");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanGetAvailableNetworkList") != nullptr, "wlanapi.dll must export WlanGetAvailableNetworkList");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanGetNetworkBssList") != nullptr, "wlanapi.dll must export WlanGetNetworkBssList");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanQueryInterface") != nullptr, "wlanapi.dll must export WlanQueryInterface");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanSetInterface") != nullptr, "wlanapi.dll must export WlanSetInterface");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanConnect") != nullptr, "wlanapi.dll must export WlanConnect");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanDisconnect") != nullptr, "wlanapi.dll must export WlanDisconnect");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanRegisterNotification") != nullptr, "wlanapi.dll must export WlanRegisterNotification");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanSetProfile") != nullptr, "wlanapi.dll must export WlanSetProfile");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanGetProfile") != nullptr, "wlanapi.dll must export WlanGetProfile");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanDeleteProfile") != nullptr, "wlanapi.dll must export WlanDeleteProfile");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanGetProfileList") != nullptr, "wlanapi.dll must export WlanGetProfileList");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanReasonCodeToString") != nullptr, "wlanapi.dll must export WlanReasonCodeToString");
+    TEST_ASSERT(loader.getExport("wlanapi.dll", "WlanFreeMemory") != nullptr, "wlanapi.dll must export WlanFreeMemory");
+
+    // 3. Verify VersionDatabase registration
+    auto modInfo = version::VersionDatabase::Instance().GetModuleInfo("wlanapi.dll");
+    TEST_ASSERT(modInfo != nullptr, "wlanapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modInfo->stringTable.at("FileVersion") == "10.0.22621.1", "wlanapi.dll version must be 10.0.22621.1");
+
+    // 4. Client Handle Lifecycle
+    HANDLE hClient = nullptr;
+    DWORD negVer = 0;
+    DWORD dwRet = WlanOpenHandle(WLAN_CLIENT_VERSION_WIN10, nullptr, &negVer, &hClient);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanOpenHandle must succeed");
+    TEST_ASSERT(hClient != nullptr, "WlanOpenHandle must return non-null handle");
+    TEST_ASSERT(negVer == WLAN_CLIENT_VERSION_WIN10, "Negotiated version must match requested Win10 client");
+
+    DWORD invalidClose = WlanCloseHandle(reinterpret_cast<HANDLE>(0x99999), nullptr);
+    TEST_ASSERT(invalidClose == ERROR_INVALID_HANDLE, "WlanCloseHandle with bogus handle must fail");
+
+    // 5. Interface Enumeration
+    PWLAN_INTERFACE_INFO_LIST pIfList = nullptr;
+    dwRet = WlanEnumInterfaces(hClient, nullptr, &pIfList);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pIfList != nullptr, "WlanEnumInterfaces must succeed");
+    TEST_ASSERT(pIfList->dwNumberOfItems >= 1, "Must find at least one wireless adapter interface");
+
+    GUID adapterGuid = pIfList->InterfaceInfo[0].InterfaceGuid;
+    std::wstring ifDesc = pIfList->InterfaceInfo[0].strInterfaceDescription;
+    TEST_ASSERT(ifDesc.find(L"MicaNT Sovereign 802.11ax") != std::wstring::npos,
+                "Interface description must identify Sovereign 802.11ax adapter");
+
+    // 6. Interface Capability Inspection
+    PWLAN_INTERFACE_CAPABILITY pCap = nullptr;
+    dwRet = WlanGetInterfaceCapability(hClient, &adapterGuid, nullptr, &pCap);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pCap != nullptr, "WlanGetInterfaceCapability must succeed");
+    TEST_ASSERT(pCap->interfaceType == WLAN_INTERFACE_TYPE_NATIVE_802_11, "Interface type must be Native 802.11");
+    TEST_ASSERT(pCap->dwNumberOfSupportedPhys >= 5, "Must support at least 5 PHY standards");
+    TEST_ASSERT(pCap->dot11PhyTypes[0] == dot11_phy_type_he, "Primary PHY type must be 802.11ax HE (Wi-Fi 6E)");
+    WlanFreeMemory(pCap);
+
+    // 7. Notification Registration
+    static std::atomic<DWORD> s_lastNotifCode{ 0 };
+    static std::atomic<int> s_notifCount{ 0 };
+    auto notifCallback = [](PWLAN_NOTIFICATION_DATA pData, [[maybe_unused]] PVOID pContext) {
+        if (pData) {
+            s_lastNotifCode.store(pData->NotificationCode);
+            s_notifCount.fetch_add(1);
+        }
+    };
+    DWORD prevSource = 0;
+    dwRet = WlanRegisterNotification(hClient, WLAN_NOTIFICATION_SOURCE_ACM, 0, notifCallback, nullptr, nullptr, &prevSource);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanRegisterNotification must succeed");
+
+    // 8. Radio State Query & Control
+    DWORD dwDataSize = 0;
+    PVOID pRadioData = nullptr;
+    dwRet = WlanQueryInterface(hClient, &adapterGuid, wlan_intf_opcode_radio_state, nullptr, &dwDataSize, &pRadioData, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pRadioData != nullptr, "WlanQueryInterface for radio state must succeed");
+    auto* pRadio = reinterpret_cast<PWLAN_RADIO_STATE>(pRadioData);
+    TEST_ASSERT(pRadio->PhyInfo[0].dot11SoftwareRadioState == dot11_radio_state_on, "Software radio must initially be ON");
+    WlanFreeMemory(pRadioData);
+
+    WLAN_PHY_INFO phySet{};
+    phySet.dot11SoftwareRadioState = dot11_radio_state_off;
+    dwRet = WlanSetInterface(hClient, &adapterGuid, wlan_intf_opcode_radio_state, sizeof(WLAN_PHY_INFO), &phySet, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanSetInterface to power off radio must succeed");
+    TEST_ASSERT(s_lastNotifCode.load() == wlan_notification_acm_power_setting_change,
+                "Radio state change must trigger ACM power notification");
+
+    phySet.dot11SoftwareRadioState = dot11_radio_state_on;
+    WlanSetInterface(hClient, &adapterGuid, wlan_intf_opcode_radio_state, sizeof(WLAN_PHY_INFO), &phySet, nullptr);
+
+    // 9. Spectrum Scan & Network Discovery
+    dwRet = WlanScan(hClient, &adapterGuid, nullptr, nullptr, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanScan must trigger spectrum sweep");
+    TEST_ASSERT(s_lastNotifCode.load() == wlan_notification_acm_scan_complete,
+                "WlanScan must dispatch scan complete ACM notification");
+
+    PWLAN_AVAILABLE_NETWORK_LIST pAvailList = nullptr;
+    dwRet = WlanGetAvailableNetworkList(hClient, &adapterGuid, 0, nullptr, &pAvailList);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pAvailList != nullptr, "WlanGetAvailableNetworkList must succeed");
+    TEST_ASSERT(pAvailList->dwNumberOfItems >= 4, "Must discover at least 4 pre-seeded wireless networks");
+
+    bool foundCorp = false, foundSovereign = false, foundGuest = false, foundIoT = false;
+    for (DWORD i = 0; i < pAvailList->dwNumberOfItems; ++i) {
+        const auto& net = pAvailList->Network[i];
+        std::string ssid(reinterpret_cast<const char*>(net.dot11Ssid.ucSSID), net.dot11Ssid.uSSIDLength);
+        if (ssid == "MicaNT-Corp-Secure") {
+            foundCorp = true;
+            TEST_ASSERT(net.bSecurityEnabled == 1, "MicaNT-Corp-Secure must have security enabled");
+            TEST_ASSERT(net.dot11DefaultAuthAlgorithm == DOT11_AUTH_ALGO_WPA3, "MicaNT-Corp-Secure must use WPA3");
+        } else if (ssid == "SovereignNet-5G") {
+            foundSovereign = true;
+            TEST_ASSERT(net.bSecurityEnabled == 1, "SovereignNet-5G must have security enabled");
+            TEST_ASSERT(net.dot11DefaultAuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK, "SovereignNet-5G must use WPA2-PSK");
+        } else if (ssid == "Guest-Open") {
+            foundGuest = true;
+            TEST_ASSERT(net.bSecurityEnabled == 0, "Guest-Open must not have security enabled");
+        } else if (ssid == "Lab-IoT-Mesh") {
+            foundIoT = true;
+        }
+    }
+    TEST_ASSERT(foundCorp && foundSovereign && foundGuest && foundIoT,
+                "All pre-seeded test SSIDs must be present in scan results");
+    WlanFreeMemory(pAvailList);
+
+    // 10. BSS Entry Inspection
+    PWLAN_BSS_LIST pBssList = nullptr;
+    dwRet = WlanGetNetworkBssList(hClient, &adapterGuid, nullptr, dot11_BSS_type_any, 0, nullptr, &pBssList);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pBssList != nullptr, "WlanGetNetworkBssList must succeed");
+    TEST_ASSERT(pBssList->dwNumberOfItems >= 4, "BSS list must contain entries for all APs");
+    TEST_ASSERT(pBssList->wlanBssEntries[0].lRssi < 0, "RSSI must be negative dBm");
+    TEST_ASSERT(pBssList->wlanBssEntries[0].ulChCenterFrequency >= 2400000, "Frequency must be in 2.4/5/6 GHz spectrum");
+    WlanFreeMemory(pBssList);
+
+    // 11. Profile Management
+    PWLAN_PROFILE_INFO_LIST pProfiles = nullptr;
+    dwRet = WlanGetProfileList(hClient, &adapterGuid, nullptr, &pProfiles);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pProfiles != nullptr, "WlanGetProfileList must succeed");
+    TEST_ASSERT(pProfiles->dwNumberOfItems >= 1, "Must contain at least pre-seeded SovereignNet-5G profile");
+    WlanFreeMemory(pProfiles);
+
+    LPWSTR pProfileXml = nullptr;
+    DWORD profileFlags = 0;
+    dwRet = WlanGetProfile(hClient, &adapterGuid, L"SovereignNet-5G", nullptr, &pProfileXml, &profileFlags, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pProfileXml != nullptr, "WlanGetProfile for SovereignNet-5G must succeed");
+    std::wstring xmlStr(pProfileXml);
+    TEST_ASSERT(xmlStr.find(L"<name>SovereignNet-5G</name>") != std::wstring::npos,
+                "Profile XML must contain profile name");
+    WlanFreeMemory(pProfileXml);
+
+    const wchar_t* newTestXml =
+        L"<?xml version=\"1.0\"?>\n"
+        L"<WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\">\n"
+        L"    <name>MicaNT-Lab-AP</name>\n"
+        L"    <SSIDConfig>\n"
+        L"        <SSID><name>MicaNT-Lab-AP</name></SSID>\n"
+        L"    </SSIDConfig>\n"
+        L"    <connectionType>ESS</connectionType>\n"
+        L"    <connectionMode>auto</connectionMode>\n"
+        L"</WLANProfile>\n";
+    DWORD reasonCode = 0;
+    dwRet = WlanSetProfile(hClient, &adapterGuid, 0, newTestXml, nullptr, 1, &reasonCode, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanSetProfile must succeed");
+
+    dwRet = WlanGetProfileList(hClient, &adapterGuid, nullptr, &pProfiles);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pProfiles != nullptr && pProfiles->dwNumberOfItems >= 2,
+                "Profile list must now contain added profile");
+    WlanFreeMemory(pProfiles);
+
+    dwRet = WlanDeleteProfile(hClient, &adapterGuid, L"MicaNT-Lab-AP", nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanDeleteProfile must succeed");
+
+    // 12. Connection & Disconnection State Machine
+    WLAN_CONNECTION_PARAMETERS connParams{};
+    connParams.wlanConnectionMode = wlan_connection_mode_profile;
+    connParams.strProfile = L"SovereignNet-5G";
+    connParams.dot11BssType = dot11_BSS_type_infrastructure;
+
+    dwRet = WlanConnect(hClient, &adapterGuid, &connParams, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanConnect must succeed");
+    TEST_ASSERT(s_lastNotifCode.load() == wlan_notification_acm_connection_complete,
+                "WlanConnect must trigger ACM connection complete notification");
+
+    PVOID pConnAttrs = nullptr;
+    DWORD cbConn = 0;
+    dwRet = WlanQueryInterface(hClient, &adapterGuid, wlan_intf_opcode_current_connection, nullptr, &cbConn, &pConnAttrs, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pConnAttrs != nullptr, "Querying current connection while connected must succeed");
+    auto* pConn = reinterpret_cast<PWLAN_CONNECTION_ATTRIBUTES>(pConnAttrs);
+    TEST_ASSERT(pConn->isState == wlan_interface_state_connected, "State must be connected");
+    std::string connectedSsid(reinterpret_cast<const char*>(pConn->wlanAssociationAttributes.dot11Ssid.ucSSID),
+                              pConn->wlanAssociationAttributes.dot11Ssid.uSSIDLength);
+    TEST_ASSERT(connectedSsid == "SovereignNet-5G", "Connected SSID must be SovereignNet-5G");
+    TEST_ASSERT(pConn->wlanAssociationAttributes.ulRxRate > 0, "Rx rate must be positive");
+    WlanFreeMemory(pConnAttrs);
+
+    dwRet = WlanDisconnect(hClient, &adapterGuid, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanDisconnect must succeed");
+    TEST_ASSERT(s_lastNotifCode.load() == wlan_notification_acm_disconnected,
+                "WlanDisconnect must trigger ACM disconnected notification");
+
+    PVOID pStateData = nullptr;
+    DWORD cbState = 0;
+    dwRet = WlanQueryInterface(hClient, &adapterGuid, wlan_intf_opcode_interface_state, nullptr, &cbState, &pStateData, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pStateData != nullptr, "Querying interface state must succeed");
+    auto* pState = reinterpret_cast<PWLAN_INTERFACE_STATE>(pStateData);
+    TEST_ASSERT(*pState == wlan_interface_state_disconnected, "Interface state must now be disconnected");
+    WlanFreeMemory(pStateData);
+
+    // 13. Reason Codes
+    wchar_t reasonBuf[128]{ 0 };
+    dwRet = WlanReasonCodeToString(WLAN_REASON_CODE_SUCCESS, 128, reasonBuf, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanReasonCodeToString must succeed");
+    TEST_ASSERT(std::wstring(reasonBuf).find(L"succeeded") != std::wstring::npos, "Reason string must describe success");
+
+    dwRet = WlanReasonCodeToString(WLAN_REASON_CODE_NETWORK_NOT_AVAILABLE, 128, reasonBuf, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanReasonCodeToString must succeed for unavailable network");
+    TEST_ASSERT(std::wstring(reasonBuf).find(L"not available") != std::wstring::npos,
+                "Reason string must describe network unavailable");
+
+    // Clean up interface list & handle
+    WlanFreeMemory(pIfList);
+    dwRet = WlanCloseHandle(hClient, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "WlanCloseHandle must succeed");
+
+    // 14. CommandShell CLI Integration Verification
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("wlan test", oss);
+    TEST_ASSERT(shellRet == 0, "wlan test shell command must return 0");
+    TEST_ASSERT(oss.str().find("Windows Native Wifi & Sovereign WLAN Diagnostics passed cleanly") != std::string::npos,
+                "wlan test output must indicate successful self-test");
+
+    oss.str("");
+    shellRet = proc.execute("wlan info", oss);
+    TEST_ASSERT(shellRet == 0, "wlan info shell command must return 0");
+    TEST_ASSERT(oss.str().find("wlanapi.dll") != std::string::npos, "wlan info must reference wlanapi.dll");
+    TEST_ASSERT(oss.str().find("802.11ax") != std::string::npos, "wlan info must display 802.11ax adapter");
+
+    oss.str("");
+    shellRet = proc.execute("wlan scan", oss);
+    TEST_ASSERT(shellRet == 0, "wlan scan shell command must return 0");
+    TEST_ASSERT(oss.str().find("Spectrum scan initiated") != std::string::npos, "wlan scan must report sweep");
+
+    oss.str("");
+    shellRet = proc.execute("wlan list", oss);
+    TEST_ASSERT(shellRet == 0, "wlan list shell command must return 0");
+    TEST_ASSERT(oss.str().find("Available Wireless Networks") != std::string::npos, "wlan list must print table");
+    TEST_ASSERT(oss.str().find("SovereignNet-5G") != std::string::npos, "wlan list must show SovereignNet-5G");
+
+    oss.str("");
+    shellRet = proc.execute("wlan profiles", oss);
+    TEST_ASSERT(shellRet == 0, "wlan profiles shell command must return 0");
+    TEST_ASSERT(oss.str().find("Configured WLAN Profiles") != std::string::npos, "wlan profiles must list profiles");
+
+    oss.str("");
+    shellRet = proc.execute("wlan connect SovereignNet-5G", oss);
+    TEST_ASSERT(shellRet == 0, "wlan connect shell command must return 0");
+    TEST_ASSERT(oss.str().find("Successfully connected") != std::string::npos, "wlan connect must report success");
+
+    oss.str("");
+    shellRet = proc.execute("wlan disconnect", oss);
+    TEST_ASSERT(shellRet == 0, "wlan disconnect shell command must return 0");
+    TEST_ASSERT(oss.str().find("Disconnected from current WLAN access point") != std::string::npos,
+                "wlan disconnect must report disconnect");
+
+    std::cout << "[TEST] Suite 129: Windows Native Wifi & Sovereign WLAN Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite128")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite129")) {
+        RUN_TEST(Test_WindowsNativeWifi_WLAN_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite128") {
         RUN_TEST(Test_WindowsWebAuthn_FIDO2_Subsystem);
         return g_FailedTests;
     }
@@ -30196,6 +30477,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsMedia_OCR_Subsystem);
     RUN_TEST(Test_WindowsMachineLearning_WinML_Subsystem);
     RUN_TEST(Test_WindowsWebAuthn_FIDO2_Subsystem);
+    RUN_TEST(Test_WindowsNativeWifi_WLAN_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
