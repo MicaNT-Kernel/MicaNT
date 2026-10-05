@@ -172,7 +172,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 82: Windows DirectX Video Acceleration 2.0 Subsystem [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 83: Windows Direct3D 11 Video Acceleration (D3D11VA) [PLANNED]        │
+│ Phase 83: Windows Direct3D 11 Video Acceleration (D3D11VA) [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 84: Windows Direct3D 12 Video API (D3D12 Video)      [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 85: Windows MF Source Reader & Sink Writer Subsystem [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1973,7 +1977,25 @@
 
 ---
 
-### Phase 84: Windows Media Foundation Source Reader & Sink Writer Subsystem (`mfreadwrite.hpp`, `mfreadwrite.dll`, `mfplat.dll`) (PLANNED - MILESTONE 111)
+### Phase 84: Windows Direct3D 12 Video Decode & Processing API (`d3d12video.hpp`, `d3d12.dll`) (COMPLETED 100% - MILESTONE 111)
+- [x] **Direct3D 12 Video Acceleration Core Architecture (`include/micant/d3d12video.hpp`, `d3d12.dll`)**:
+  - D3D12 Video Device interfaces (`ID3D12VideoDevice`, `ID3D12VideoDevice1`) with hardware feature query support (`D3D12_FEATURE_VIDEO_*`).
+  - Asynchronous Video Command Lists (`ID3D12VideoDecodeCommandList`, `ID3D12VideoProcessCommandList`) and Command Allocators (`D3D12_COMMAND_LIST_TYPE_VIDEO_DECODE`, `D3D12_COMMAND_LIST_TYPE_VIDEO_PROCESS`).
+  - Hardware Decoder Engine (`ID3D12VideoDecoder`, `ID3D12VideoDecoderHeap`, `D3D12_VIDEO_DECODE_CONFIGURATION`) supporting H.264, HEVC, VP9, and AV1 profiles up to 8K resolution.
+  - Video Processor Engine (`ID3D12VideoProcessor`, `D3D12_VIDEO_PROCESS_INPUT_STREAM_ARGUMENTS`, `D3D12_VIDEO_PROCESS_OUTPUT_STREAM_ARGUMENTS`) with HDR color space conversion (BT.709, BT.2020 PQ/HLG) and format conversions (NV12, P010).
+- [x] **Dynamic Module Exports & COM Registration (`d3d12.dll`)**:
+  - `D3D12CreateVideoDevice`, `DllCanUnloadNow`, `DllGetClassObject`.
+  - Version database registration in `VersionDatabase` for `d3d12.dll` ("MicaNT Direct3D 12 Video Acceleration Subsystem", `10.0.22621.1`).
+- [x] **Interactive CLI Utilities (`d3d12video`)**:
+  - `d3d12video test` (Runs Direct3D 12 Video Decode & Processing self-tests: 16/16 passed).
+  - `d3d12video info` (Displays D3D12 video device capabilities, feature tiers, and decode/process profiles).
+- [x] **Unit Test Suite 111 (`Test_WindowsDirect3D12_Video_Acceleration_Subsystem`)**:
+  - Comprehensive unit test suite validating D3D12 video device creation, query feature support for 4K/8K decoding, decode command lists, video processor stream arguments, resource allocation, dynamic module exports, and CLI commands.
+  - Milestone 111: **111 / 111 Test Suites Passing (100%)**.
+
+---
+
+### Phase 85: Windows Media Foundation Source Reader & Sink Writer Subsystem (`mfreadwrite.hpp`, `mfreadwrite.dll`, `mfplat.dll`) (PLANNED - MILESTONE 112)
 - [ ] **Media Foundation Source Reader & Sink Writer Core Architecture (`include/micant/mfreadwrite.hpp`, `mfreadwrite.dll`)**:
   - Source reader interface (`IMFSourceReader`, `IMFSourceReaderEx`, `MFCreateSourceReaderFromURL`, `MFCreateSourceReaderFromByteStream`) for high-level stream extraction and hardware-accelerated decode piping.
   - Sink writer interface (`IMFSinkWriter`, `IMFSinkWriterEx`, `MFCreateSinkWriterFromURL`) for stream multiplexing, audio/video encoding, and media container export.
@@ -1989,7 +2011,7 @@
   - `mfreadwrite test` (Runs Source Reader and Sink Writer pipeline self-tests).
   - `mfreadwrite read <source>` (Extracts and reports stream samples and metadata).
   - `mfreadwrite info` (Displays Media Foundation Read/Write subsystem capabilities and codec interfaces).
-- [ ] **Unit Test Suite 111 (`Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem`)**:
+- [ ] **Unit Test Suite 112 (`Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem`)**:
   - Comprehensive unit test suite validating Source Reader creation, stream enumeration, format negotiation, Sink Writer multiplexing, sample serialization, dynamic module exports, and CLI commands.
 
 

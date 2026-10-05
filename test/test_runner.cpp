@@ -132,6 +132,7 @@
 #include "micant/evr.hpp"
 #include "micant/dxva2.hpp"
 #include "micant/d3d11va.hpp"
+#include "micant/d3d12video.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -25850,8 +25851,269 @@ void Test_WindowsDirect3D11_Video_Acceleration_Subsystem() {
     std::cout << "[TEST] Suite 110: Windows Direct3D 11 Video Acceleration Subsystem PASSED.\n";
 }
 
+void Test_WindowsDirect3D12_Video_Acceleration_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 111: Windows Direct3D 12 Video Decode & Processing Subsystem    \n";
+    std::cout << "========================================================================\n";
+
+    // 1. Initialize Direct3D 12 Core Device
+    prism3d12::ID3D12Device* pDevice = nullptr;
+    int32_t hr = prism3d12::D3D12CreateDevice(nullptr, prism3d12::D3D_FEATURE_LEVEL_12_1, prism3d12::IID_ID3D12Device, reinterpret_cast<void**>(&pDevice));
+    TEST_ASSERT(hr == 0 && pDevice != nullptr, "D3D12CreateDevice must succeed with Feature Level 12.1");
+
+    // 2. Create Direct3D 12 Video Device & Verify COM Interfaces
+    d3d12video::ID3D12VideoDevice* pVideoDevice = nullptr;
+    hr = d3d12video::D3D12CreateVideoDevice(pDevice, d3d12video::IID_ID3D12VideoDevice, reinterpret_cast<void**>(&pVideoDevice));
+    TEST_ASSERT(hr == 0 && pVideoDevice != nullptr, "D3D12CreateVideoDevice must succeed");
+
+    d3d12video::ID3D12VideoDevice1* pVideoDevice1 = nullptr;
+    hr = pVideoDevice->QueryInterface(d3d12video::IID_ID3D12VideoDevice1, reinterpret_cast<void**>(&pVideoDevice1));
+    TEST_ASSERT(hr == 0 && pVideoDevice1 != nullptr, "QueryInterface for ID3D12VideoDevice1 must succeed");
+
+    // 3. Query Video Decode Profile Count & Supported Codec Profiles
+    d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_PROFILE_COUNT profileCount{};
+    hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_PROFILE_COUNT, &profileCount, sizeof(profileCount));
+    TEST_ASSERT(hr == 0 && profileCount.ProfileCount >= 8, "Video device must report at least 8 hardware decode profiles");
+
+    std::vector<GUID> profiles(profileCount.ProfileCount);
+    d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_PROFILES profileData{};
+    profileData.ProfileCount = profileCount.ProfileCount;
+    profileData.pProfiles = profiles.data();
+    hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_PROFILES, &profileData, sizeof(profileData));
+    TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_VIDEO_DECODE_PROFILES must succeed");
+
+    bool hasH264 = false, hasHEVC = false, hasHEVC10 = false, hasVP9 = false, hasAV1 = false;
+    for (const auto& prof : profiles) {
+        if (prof == d3d12video::D3D12_VIDEO_DECODE_PROFILE_H264) hasH264 = true;
+        if (prof == d3d12video::D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN) hasHEVC = true;
+        if (prof == d3d12video::D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10) hasHEVC10 = true;
+        if (prof == d3d12video::D3D12_VIDEO_DECODE_PROFILE_VP9) hasVP9 = true;
+        if (prof == d3d12video::D3D12_VIDEO_DECODE_PROFILE_AV1_PROFILE0) hasAV1 = true;
+    }
+    TEST_ASSERT(hasH264, "H.264 profile must be supported");
+    TEST_ASSERT(hasHEVC, "HEVC Main profile must be supported");
+    TEST_ASSERT(hasHEVC10, "HEVC Main10 (10-bit HDR) profile must be supported");
+    TEST_ASSERT(hasVP9, "VP9 profile must be supported");
+    TEST_ASSERT(hasAV1, "AV1 Profile 0 must be supported");
+
+    // 4. Query 4K & 8K Video Decode Capabilities & Tiers
+    d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_SUPPORT decode4K{};
+    decode4K.Configuration.DecodeProfile = d3d12video::D3D12_VIDEO_DECODE_PROFILE_H264;
+    decode4K.Width = 3840;
+    decode4K.Height = 2160;
+    decode4K.DecodeFormat = prismx::DXGI_FORMAT_NV12;
+    hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_SUPPORT, &decode4K, sizeof(decode4K));
+    TEST_ASSERT(hr == 0, "CheckFeatureSupport for 4K H.264 decode must succeed");
+    TEST_ASSERT((decode4K.SupportFlags & d3d12video::D3D12_VIDEO_DECODE_SUPPORT_FLAG_SUPPORTED) != 0, "4K H.264 decode must be supported");
+    TEST_ASSERT(decode4K.DecodeTier == d3d12video::D3D12_VIDEO_DECODE_TIER_3, "Hardware decode tier must be Tier 3 (independent queue)");
+
+    d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_SUPPORT decode8K{};
+    decode8K.Configuration.DecodeProfile = d3d12video::D3D12_VIDEO_DECODE_PROFILE_AV1_PROFILE0;
+    decode8K.Width = 7680;
+    decode8K.Height = 4320;
+    decode8K.DecodeFormat = prismx::DXGI_FORMAT_P010;
+    hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_SUPPORT, &decode8K, sizeof(decode8K));
+    TEST_ASSERT(hr == 0, "CheckFeatureSupport for 8K AV1 10-bit decode must succeed");
+    TEST_ASSERT((decode8K.SupportFlags & d3d12video::D3D12_VIDEO_DECODE_SUPPORT_FLAG_SUPPORTED) != 0, "8K AV1 10-bit decode must be supported");
+
+    // 5. Query Decode Formats
+    d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_FORMAT_COUNT formatCount{};
+    formatCount.Configuration.DecodeProfile = d3d12video::D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN;
+    hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_FORMAT_COUNT, &formatCount, sizeof(formatCount));
+    TEST_ASSERT(hr == 0 && formatCount.FormatCount >= 4, "Must report at least 4 decode surface formats");
+
+    std::vector<prismx::DXGI_FORMAT> formats(formatCount.FormatCount);
+    d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_FORMATS formatData{};
+    formatData.Configuration.DecodeProfile = d3d12video::D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN;
+    formatData.FormatCount = formatCount.FormatCount;
+    formatData.pOutputFormats = formats.data();
+    hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_FORMATS, &formatData, sizeof(formatData));
+    TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_VIDEO_DECODE_FORMATS must succeed");
+
+    // 6. Query Video Processor Capabilities & Filter Ranges
+    d3d12video::D3D12_FEATURE_DATA_VIDEO_PROCESS_SUPPORT procSupport{};
+    procSupport.InputDesc.Format = prismx::DXGI_FORMAT_NV12;
+    procSupport.OutputDesc.Format = prismx::DXGI_FORMAT_B8G8R8A8_UNORM;
+    hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_PROCESS_SUPPORT, &procSupport, sizeof(procSupport));
+    TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_FEATURE_VIDEO_PROCESS_SUPPORT must succeed");
+    TEST_ASSERT((procSupport.FeatureFlags & d3d12video::D3D12_VIDEO_PROCESS_FEATURE_FLAG_ALPHA_BLENDING) != 0, "Must support alpha blending");
+    TEST_ASSERT((procSupport.FeatureFlags & d3d12video::D3D12_VIDEO_PROCESS_FEATURE_FLAG_ROTATION) != 0, "Must support hardware orientation rotation");
+    TEST_ASSERT((procSupport.DeinterlaceFlags & d3d12video::D3D12_VIDEO_PROCESS_DEINTERLACE_FLAG_BOB) != 0, "Must support Bob deinterlacing");
+    TEST_ASSERT(procSupport.FilterRanges[d3d12video::D3D12_VIDEO_PROCESS_FILTER_BRIGHTNESS].Minimum == -100, "Brightness filter min must be -100");
+
+    // 7. Create Video Decoder Instance (H.264 1080p)
+    d3d12video::D3D12_VIDEO_DECODER_DESC decDesc{};
+    decDesc.NodeMask = 0;
+    decDesc.Configuration.DecodeProfile = d3d12video::D3D12_VIDEO_DECODE_PROFILE_H264;
+    decDesc.Configuration.BitstreamEncryption = d3d12video::D3D12_BITSTREAM_ENCRYPTION_TYPE_NONE;
+    decDesc.Configuration.InterlaceType = d3d12video::D3D12_VIDEO_FRAME_CODED_INTERLACE_TYPE_NONE;
+
+    d3d12video::ID3D12VideoDecoder* pDecoder = nullptr;
+    hr = pVideoDevice->CreateVideoDecoder(&decDesc, d3d12video::IID_ID3D12VideoDecoder, reinterpret_cast<void**>(&pDecoder));
+    TEST_ASSERT(hr == 0 && pDecoder != nullptr, "CreateVideoDecoder for H.264 must succeed");
+
+    d3d12video::D3D12_VIDEO_DECODER_DESC descOut = pDecoder->GetDesc();
+    TEST_ASSERT(descOut.Configuration.DecodeProfile == d3d12video::D3D12_VIDEO_DECODE_PROFILE_H264, "Decoder must preserve decode profile");
+
+    // 8. Create Video Decoder Heap (1080p NV12, 16 Picture Buffers)
+    d3d12video::D3D12_VIDEO_DECODER_HEAP_DESC heapDesc{};
+    heapDesc.NodeMask = 0;
+    heapDesc.Configuration = decDesc.Configuration;
+    heapDesc.DecodeWidth = 1920;
+    heapDesc.DecodeHeight = 1080;
+    heapDesc.Format = prismx::DXGI_FORMAT_NV12;
+    heapDesc.FrameRate = { 60, 1 };
+    heapDesc.BitRate = 20000000;
+    heapDesc.MaxDecodePictureBufferCount = 16;
+
+    d3d12video::ID3D12VideoDecoderHeap* pDecoderHeap = nullptr;
+    hr = pVideoDevice->CreateVideoDecoderHeap(&heapDesc, d3d12video::IID_ID3D12VideoDecoderHeap, reinterpret_cast<void**>(&pDecoderHeap));
+    TEST_ASSERT(hr == 0 && pDecoderHeap != nullptr, "CreateVideoDecoderHeap must succeed");
+
+    auto* heapImpl = dynamic_cast<d3d12video::CVideoDecoderHeap*>(pDecoderHeap);
+    TEST_ASSERT(heapImpl != nullptr && heapImpl->GetAllocationSizeBytes() > 40 * 1024 * 1024, "Decoder heap must allocate backing VRAM for reference frames");
+
+    // 9. Create Video Processor Instance (NV12 Input -> B8G8R8A8 Output)
+    d3d12video::D3D12_VIDEO_PROCESS_INPUT_STREAM_DESC inStreamDesc{};
+    inStreamDesc.Format = prismx::DXGI_FORMAT_NV12;
+    inStreamDesc.ColorSpace = prismx::DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709;
+    inStreamDesc.SourceAspectRatio = { 16, 9 };
+    inStreamDesc.DestinationAspectRatio = { 16, 9 };
+    inStreamDesc.FrameRate = { 60, 1 };
+    inStreamDesc.SourceRect = { 0, 0, 1920, 1080 };
+    inStreamDesc.DestinationRect = { 0, 0, 1920, 1080 };
+    inStreamDesc.Orientation = d3d12video::D3D12_VIDEO_PROCESS_ORIENTATION_DEFAULT;
+    inStreamDesc.DeinterlaceFlags = d3d12video::D3D12_VIDEO_PROCESS_DEINTERLACE_FLAG_BOB;
+    inStreamDesc.AlphaFillMode = d3d12video::D3D12_VIDEO_PROCESS_ALPHA_FILL_MODE_OPAQUE;
+
+    d3d12video::D3D12_VIDEO_PROCESS_OUTPUT_STREAM_DESC outStreamDesc{};
+    outStreamDesc.Format = prismx::DXGI_FORMAT_B8G8R8A8_UNORM;
+    outStreamDesc.ColorSpace = prismx::DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    outStreamDesc.AlphaFillMode = d3d12video::D3D12_VIDEO_PROCESS_ALPHA_FILL_MODE_OPAQUE;
+    outStreamDesc.BackgroundColor[0] = 0;
+    outStreamDesc.BackgroundColor[1] = 0;
+    outStreamDesc.BackgroundColor[2] = 0;
+    outStreamDesc.BackgroundColor[3] = 255;
+    outStreamDesc.FrameRate = { 60, 1 };
+    outStreamDesc.EnableStereo = 0;
+
+    d3d12video::ID3D12VideoProcessor* pProcessor = nullptr;
+    hr = pVideoDevice->CreateVideoProcessor(0, &outStreamDesc, 1, &inStreamDesc, d3d12video::IID_ID3D12VideoProcessor, reinterpret_cast<void**>(&pProcessor));
+    TEST_ASSERT(hr == 0 && pProcessor != nullptr, "CreateVideoProcessor must succeed");
+    TEST_ASSERT(pProcessor->GetNumInputStreamDescs() == 1, "Video processor must report 1 input stream");
+
+    // 10. Direct3D 12 Video Decode Command Recording
+    prism3d12::ID3D12CommandAllocator* pCmdAlloc = nullptr;
+    hr = pDevice->CreateCommandAllocator(static_cast<prism3d12::D3D12_COMMAND_LIST_TYPE>(4), prism3d12::IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&pCmdAlloc));
+    TEST_ASSERT(hr == 0 && pCmdAlloc != nullptr, "CreateCommandAllocator for Video Decode must succeed");
+
+    d3d12video::ID3D12VideoDecodeCommandList* pDecodeCmdList = nullptr;
+    hr = pVideoDevice1->CreateVideoDecodeCommandList(0, pCmdAlloc, d3d12video::IID_ID3D12VideoDecodeCommandList, reinterpret_cast<void**>(&pDecodeCmdList));
+    TEST_ASSERT(hr == 0 && pDecodeCmdList != nullptr, "CreateVideoDecodeCommandList must succeed");
+    TEST_ASSERT(pDecodeCmdList->GetType() == static_cast<prism3d12::D3D12_COMMAND_LIST_TYPE>(4), "Command list must have VIDEO_DECODE type");
+
+    // Create mock bitstream and output resources
+    prism3d12::D3D12_RESOURCE_DESC bufDesc{};
+    bufDesc.Dimension = prism3d12::D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = 65536; // 64 KB compressed H.264 slice NALU
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.Format = prismx::DXGI_FORMAT_UNKNOWN;
+    bufDesc.Layout = prism3d12::D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    prism3d12::D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = prism3d12::D3D12_HEAP_TYPE_DEFAULT;
+
+    prism3d12::ID3D12Resource* pBitstream = nullptr;
+    hr = pDevice->CreateCommittedResource(&heapProps, prism3d12::D3D12_HEAP_FLAG_NONE, &bufDesc, prism3d12::D3D12_RESOURCE_STATE_COMMON, nullptr, prism3d12::IID_ID3D12Resource, reinterpret_cast<void**>(&pBitstream));
+    TEST_ASSERT(hr == 0 && pBitstream != nullptr, "CreateCommittedResource for bitstream buffer must succeed");
+
+    prism3d12::D3D12_RESOURCE_DESC texDesc{};
+    texDesc.Dimension = prism3d12::D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = 1920;
+    texDesc.Height = 1080;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = 1;
+    texDesc.Format = prismx::DXGI_FORMAT_NV12;
+    texDesc.Layout = prism3d12::D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+    prism3d12::ID3D12Resource* pOutTex = nullptr;
+    hr = pDevice->CreateCommittedResource(&heapProps, prism3d12::D3D12_HEAP_FLAG_NONE, &texDesc, prism3d12::D3D12_RESOURCE_STATE_COMMON, nullptr, prism3d12::IID_ID3D12Resource, reinterpret_cast<void**>(&pOutTex));
+    TEST_ASSERT(hr == 0 && pOutTex != nullptr, "CreateCommittedResource for NV12 decoded output texture must succeed");
+
+    // Record DecodeFrame
+    d3d12video::D3D12_VIDEO_DECODE_INPUT_STREAM_ARGUMENTS inArgs{};
+    inArgs.CompressedBitstream.pBuffer = pBitstream;
+    inArgs.CompressedBitstream.Offset = 0;
+    inArgs.CompressedBitstream.Size = 65536;
+    inArgs.pHeap = pDecoderHeap;
+
+    d3d12video::D3D12_VIDEO_DECODE_OUTPUT_STREAM_ARGUMENTS outArgs{};
+    outArgs.pOutputTexture2D = pOutTex;
+    outArgs.OutputSubresource = 0;
+
+    pDecodeCmdList->DecodeFrame(pDecoder, &outArgs, &inArgs);
+
+    auto* decodeCmdListImpl = dynamic_cast<d3d12video::CVideoDecodeCommandList*>(pDecodeCmdList);
+    TEST_ASSERT(decodeCmdListImpl != nullptr && decodeCmdListImpl->GetRecordedDecodes() == 1, "DecodeCommandList must record 1 frame decode");
+    TEST_ASSERT(decodeCmdListImpl->GetProcessedBitstreamBytes() == 65536, "DecodeCommandList must track 64KB bitstream bytes");
+
+    hr = pDecodeCmdList->Close();
+    TEST_ASSERT(hr == 0 && decodeCmdListImpl->IsClosed(), "Closing DecodeCommandList must succeed");
+
+    hr = pDecodeCmdList->Reset(pCmdAlloc);
+    TEST_ASSERT(hr == 0 && !decodeCmdListImpl->IsClosed() && decodeCmdListImpl->GetRecordedDecodes() == 0, "Resetting DecodeCommandList must clear recorded state");
+
+    // 11. Direct3D 12 Video Process Command Recording
+    d3d12video::ID3D12VideoProcessCommandList* pProcessCmdList = nullptr;
+    hr = pVideoDevice1->CreateVideoProcessCommandList(0, pCmdAlloc, d3d12video::IID_ID3D12VideoProcessCommandList, reinterpret_cast<void**>(&pProcessCmdList));
+    TEST_ASSERT(hr == 0 && pProcessCmdList != nullptr, "CreateVideoProcessCommandList must succeed");
+    TEST_ASSERT(pProcessCmdList->GetType() == static_cast<prism3d12::D3D12_COMMAND_LIST_TYPE>(5), "Command list must have VIDEO_PROCESS type");
+
+    d3d12video::D3D12_VIDEO_PROCESS_INPUT_STREAM_ARGUMENTS procInArgs{};
+    procInArgs.pInputTexture2D = pOutTex;
+    procInArgs.InputSubresource = 0;
+    procInArgs.SourceRect = { 0, 0, 1920, 1080 };
+    procInArgs.DestinationRect = { 0, 0, 1280, 720 };
+    procInArgs.Alpha = 0.95f;
+    procInArgs.FilterLevels[d3d12video::D3D12_VIDEO_PROCESS_FILTER_CONTRAST] = 10;
+
+    d3d12video::D3D12_VIDEO_PROCESS_OUTPUT_STREAM_ARGUMENTS procOutArgs{};
+    procOutArgs.pOutputTexture2D = pOutTex;
+    procOutArgs.OutputSubresource = 0;
+    procOutArgs.TargetRect = { 0, 0, 1280, 720 };
+
+    pProcessCmdList->ProcessFrames(pProcessor, &procOutArgs, 1, &procInArgs);
+
+    auto* procCmdListImpl = dynamic_cast<d3d12video::CVideoProcessCommandList*>(pProcessCmdList);
+    TEST_ASSERT(procCmdListImpl != nullptr && procCmdListImpl->GetRecordedProcesses() == 1, "ProcessCommandList must record 1 frame process operation");
+
+    hr = pProcessCmdList->Close();
+    TEST_ASSERT(hr == 0 && procCmdListImpl->IsClosed(), "Closing ProcessCommandList must succeed");
+
+    // 12. Clean Teardown & Reference Counting
+    pBitstream->Release();
+    pOutTex->Release();
+    pProcessCmdList->Release();
+    pDecodeCmdList->Release();
+    pCmdAlloc->Release();
+    pProcessor->Release();
+    pDecoderHeap->Release();
+    pDecoder->Release();
+    pVideoDevice1->Release();
+    pVideoDevice->Release();
+    pDevice->Release();
+
+    std::cout << "[TEST] Suite 111: Windows Direct3D 12 Video Decode & Processing Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite110")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite111")) {
+        RUN_TEST(Test_WindowsDirect3D12_Video_Acceleration_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite110") {
         RUN_TEST(Test_WindowsDirect3D11_Video_Acceleration_Subsystem);
         return g_FailedTests;
     }
@@ -25986,6 +26248,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsEnhancedVideoRenderer_Subsystem);
     RUN_TEST(Test_WindowsDXVA2_Hardware_Acceleration_Subsystem);
     RUN_TEST(Test_WindowsDirect3D11_Video_Acceleration_Subsystem);
+    RUN_TEST(Test_WindowsDirect3D12_Video_Acceleration_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

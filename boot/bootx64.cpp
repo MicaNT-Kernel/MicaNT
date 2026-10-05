@@ -271,7 +271,13 @@ static size_t s_uefiHeapOffset = 0;
 
 void* operator new(size_t size) {
     size = (size + 15) & ~static_cast<size_t>(15);
-    if (s_uefiHeapOffset + size > sizeof(s_uefiHeap)) return nullptr;
+    if (s_uefiHeapOffset + size > sizeof(s_uefiHeap)) {
+        while (true) {
+#if defined(__x86_64__)
+            __asm__ __volatile__("hlt");
+#endif
+        }
+    }
     void* ptr = &s_uefiHeap[s_uefiHeapOffset];
     s_uefiHeapOffset += size;
     return ptr;
