@@ -1,0 +1,40 @@
+name: Clean-Room Provenance & Compliance Inquiry
+description: Report suspected interface ambiguity, attribution updates, or clean-room audit questions.
+title: "[CLEAN-ROOM]: "
+labels: ["clean-room", "provenance", "compliance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Clean-Room Provenance Audit Inquiry
+
+        MicaNT strictly enforces Section 3 of our **[Clean-Room Policy](https://github.com/MicaNT-Kernel/MicaNT/blob/main/docs/CLEAN_ROOM.md)**.
+        If you are an auditor, researcher, or contributor and believe an interface definition, struct, or implementation requires attribution clarification or compliance review, please provide details below.
+  - type: input
+    id: affected-file
+    attributes:
+      label: File / Subsystem Path
+      placeholder: "e.g., include/micant/ob.hpp"
+    validations:
+      required: true
+  - type: textarea
+    id: concern
+    attributes:
+      label: Provenance Concern or Question
+      description: Describe what you observed and why it warrants compliance review.
+    validations:
+      required: true
+  - type: textarea
+    id: authorized-source
+    attributes:
+      label: Authorized Public Source Reference
+      description: Provide the public citation in `microsoft/win32metadata`, MSDN, or open specifications.
+    validations:
+      required: false
+  - type: textarea
+    id: proposed-resolution
+    attributes:
+      label: Proposed Resolution
+      description: How should this interface or code be refactored, clarified, or documented?
+    validations:
+      required: true

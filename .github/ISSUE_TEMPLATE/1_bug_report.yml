@@ -1,0 +1,101 @@
+name: Kernel / Subsystem Bug Report
+description: Report a kernel bugcheck, crash, compiler error, or Win32 API incompatibility.
+title: "[BUG]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue in **MicaNT**!
+        Please fill out the details below to help us diagnose and reproduce the bug.
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Subsystem Affected
+      description: Select the executive subsystem where the issue occurs.
+      options:
+        - "NexusOB (Kernel Object Manager / Namespace)"
+        - "DaytonaMM (Virtual Memory Manager / Paging)"
+        - "AegisSched (Preemptive Thread Scheduler / Dispatcher)"
+        - "CourierLPC (LPC Ports / Named Pipes / ALPC)"
+        - "AmberCM (Configuration Manager / Registry)"
+        - "SurWin (ConHost / Window Manager / User32 / CSRSS)"
+        - "SentinelSec (LSASS / SAM / Tokens / Security Monitor)"
+        - "TitanHAL (Hardware Abstraction Layer / UEFI Bootloader)"
+        - "RazzleNet (NDIS / TCP/IP / Sockets / Winsock2)"
+        - "PrismX / Prism3D / PrismVK (Graphics & 3D Acceleration)"
+        - "EmeraldFS (NTFS / FAT32 / Storage Engine)"
+        - "EmeraldCrypt / EFS (Encrypting File System / feclient.dll)"
+        - "FVE (BitLocker / Full Volume Encryption)"
+        - "WFP / Firewall (Windows Filtering Platform / fwpuclnt.dll)"
+        - "WinTrust / CI (Authenticode / Code Integrity / WDAC)"
+        - "VanguardDriver (Driver Model / PnP / IRPs)"
+        - "JanusLDR (PE Loader / Import Binding / SxS)"
+        - "Other / General Subsystem"
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Execution Environment
+      description: Where did this bug manifest?
+      options:
+        - "Unit Test Suite (bin/micant_tests.exe)"
+        - "Host Kernel Simulator (bin/micant_kernel.exe)"
+        - "Bare-Metal / QEMU UEFI GOP (bootx64.efi)"
+        - "Build / Compilation Phase"
+    validations:
+      required: true
+  - type: dropdown
+    id: compiler
+    attributes:
+      label: Compiler & Toolchain
+      description: Which C++23 toolchain was used?
+      options:
+        - "LLVM Clang 18 / 19 / 20 / 22+ (-std=c++23)"
+        - "Microsoft Visual C++ 2022/2026 (/std:c++latest)"
+        - "GCC 13 / 14+ (-std=c++23)"
+        - "Pre-built Binary Release"
+    validations:
+      required: true
+  - type: dropdown
+    id: arch
+    attributes:
+      label: CPU Architecture
+      options:
+        - "x86_64 (AMD64)"
+        - "ARM64 (AArch64)"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: Provide a clear and concise description of the issue.
+      placeholder: "e.g., Calling NtCreateFile on a reparse point returns STATUS_ACCESS_VIOLATION instead of STATUS_REPARSE..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Describe the exact steps or provide the minimal code snippet to reproduce.
+      placeholder: |
+        1. Boot into MicaNT command prompt with `bin/micant_kernel.exe --shell`
+        2. Run `cipher /e C:\Test.txt`
+        3. Observe return code...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen according to Win32/NT specifications?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal Output / Crash Logs
+      description: Paste any crash logs, bugcheck codes, or terminal output here.
+      render: shell

@@ -1,0 +1,49 @@
+name: Feature / Subsystem Proposal
+description: Propose a new executive subsystem, Win32 API implementation, driver layer, or architecture port.
+title: "[FEAT]: "
+labels: ["enhancement", "proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for proposing a feature for **MicaNT**!
+        MicaNT is built to resurrect the pure, unencumbered soul of Dave Cutler's 1988 MICA architecture in modern C++23.
+  - type: input
+    id: feature-title
+    attributes:
+      label: Feature / Subsystem Name
+      description: What subsystem or capability are you proposing?
+      placeholder: "e.g., Implement Sovereign DirectInput8 Joystick & Force Feedback"
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Problem & Motivation
+      description: Why should this be part of MicaNT? What software or use case does it unlock?
+    validations:
+      required: true
+  - type: textarea
+    id: target-apis
+    attributes:
+      label: Target Win32 / NT Interfaces
+      description: List the specific APIs, system services, or headers as cataloged in `microsoft/win32metadata` or MSDN.
+      placeholder: "e.g., DirectInputCreate8W, IDirectInputDevice8W::GetDeviceState..."
+    validations:
+      required: true
+  - type: textarea
+    id: clean-room-plan
+    attributes:
+      label: Clean-Room Architecture Plan
+      description: How will this feature be designed from first principles in ISO C++23 with zero telemetry?
+    validations:
+      required: true
+  - type: checkboxes
+    id: compliance
+    attributes:
+      label: Clean-Room & Interoperability Compliance
+      options:
+        - label: I confirm this proposal relies strictly on public specifications or `microsoft/win32metadata`, without referencing leaked or proprietary code.
+          required: true
+        - label: I understand that all code in MicaNT must be memory-safe ISO C++23 with zero telemetry.
+          required: true

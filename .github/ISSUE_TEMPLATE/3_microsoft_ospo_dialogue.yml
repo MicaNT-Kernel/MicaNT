@@ -1,0 +1,64 @@
+name: "🔷 Microsoft OSPO & Legal Dialogue"
+description: "Official coordination channel for Microsoft Open Source Programs Office (OSPO), Legal (LCA), and Microsoft engineers."
+title: "[MS-OSPO]: "
+labels: ["microsoft-ospo", "legal-compliance", "priority"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Welcome to the Microsoft OSPO & Legal Direct Channel
+
+        As stated in **[docs/LEGAL.md § 8](https://github.com/MicaNT-Kernel/MicaNT/blob/main/docs/LEGAL.md#8-an-open-statement--message-to-microsoft-corporation)**, MicaNT is an independent clean-room research project created out of deep admiration for the 1988 DEC MICA architecture designed by Dave Cutler.
+
+        We maintain this dedicated, high-priority issue channel to facilitate open, professional, and cooperative dialogue directly with Microsoft's Open Source Programs Office (OSPO), Legal (LCA), and engineering leadership.
+  - type: input
+    id: contributor-name
+    attributes:
+      label: Microsoft Contact / Representative Name
+      placeholder: "e.g., Jane Doe"
+    validations:
+      required: true
+  - type: input
+    id: corporate-email
+    attributes:
+      label: Microsoft Corporate Email
+      description: Must be an official `@microsoft.com` corporate address for verified OSPO routing.
+      placeholder: "alias@microsoft.com"
+    validations:
+      required: true
+  - type: input
+    id: tracking-ref
+    attributes:
+      label: Internal MS-OSPO or LCA Tracking Ticket / Reference ID
+      description: Internal Microsoft reference ID for tracking this inquiry (e.g. `OSPO-2026-xxxxx` or `LCA-OSS-xxxxx`).
+      placeholder: "OSPO-2026-xxxxx"
+    validations:
+      required: false
+  - type: dropdown
+    id: inquiry-type
+    attributes:
+      label: Nature of Inquiry
+      description: Select the primary category of this communication.
+      options:
+        - "Contribution Clearance / Microsoft Employee Code Contribution"
+        - "Trademark & Nominative Fair Use Taxonomy Alignment"
+        - "Clean-Room Provenance Sentinel Collaborative Review"
+        - "API Metadata & win32metadata Specification Inquiry"
+        - "General Engineering Dialogue & Collaboration"
+    validations:
+      required: true
+  - type: textarea
+    id: inquiry-details
+    attributes:
+      label: Message & Details
+      description: Please share your inquiry, question, recommendation, or contribution clearance details.
+      placeholder: "Provide context, proposed wording adjustments, or clearance documentation..."
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgment
+    attributes:
+      label: Open Source Coordination
+      options:
+        - label: I confirm this communication is submitted in professional coordination with Microsoft open-source or legal policies.
+          required: true

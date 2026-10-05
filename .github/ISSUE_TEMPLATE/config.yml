@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/MicaNT-Kernel/MicaNT/discussions
+    about: Ask questions, share ideas, and discuss the sovereign MICA architecture with the community.
+  - name: Microsoft OSPO & Legal Statement
+    url: https://github.com/MicaNT-Kernel/MicaNT/blob/main/docs/LEGAL.md#8-an-open-statement--message-to-microsoft-corporation
+    about: Read our formal Open Statement & Message to Microsoft Corporation establishing clean-room bona fides.
+  - name: Security Vulnerability Reporting
+    url: https://github.com/MicaNT-Kernel/MicaNT/security/advisories/new
+    about: Report potential vulnerabilities privately through GitHub Private Vulnerability Reporting.

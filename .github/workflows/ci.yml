@@ -1,0 +1,30 @@
+name: MicaNT Continuous Integration
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-windows-clang:
+    name: Build & Run Test Battery (Windows Clang C++23)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Create Output Directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path bin
+
+      - name: Compile Test Runner (Clang C++23)
+        shell: pwsh
+        run: |
+          clang++ -std=c++23 -O2 -Iinclude test/test_runner.cpp kernel/dispatcher.cpp kernel/syscalls.cpp -o bin/micant_tests.exe
+
+      - name: Execute Full 135-Suite Test Battery (100% Pass Rate Required)
+        shell: pwsh
+        run: |
+          .\bin\micant_tests.exe
