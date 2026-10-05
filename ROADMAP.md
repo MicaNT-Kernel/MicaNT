@@ -1951,24 +1951,46 @@
 
 ---
 
-### Phase 83: Windows Direct3D 11 Video Acceleration & Video Processor API (`d3d11va.hpp`, `d3d11.dll`, `mfplat.dll`) (PLANNED - MILESTONE 110)
-- [ ] **Direct3D 11 Video Acceleration Core Architecture (`include/micant/d3d11va.hpp`, `d3d11.dll`)**:
+### Phase 83: Windows Direct3D 11 Video Acceleration & Video Processor API (`d3d11va.hpp`, `d3d11.dll`, `mfplat.dll`) (COMPLETED 100% - MILESTONE 110)
+- [x] **Direct3D 11 Video Acceleration Core Architecture (`include/micant/d3d11va.hpp`, `d3d11.dll`)**:
   - D3D11 Video Device (`ID3D11VideoDevice`, `ID3D11VideoContext`) for hardware decoding and video processing.
-  - Video decoder interface (`ID3D11VideoDecoder`, `D3D11_VIDEO_DECODER_DESC`, `D3D11_VIDEO_DECODER_CONFIG`) with accelerated multi-codec decoding (H.264, HEVC/H.265, VP9, AV1).
+  - Video decoder interface (`ID3D11VideoDecoder`, `D3D11_VIDEO_DECODER_DESC`, `D3D11_VIDEO_DECODER_CONFIG`) with accelerated multi-codec decoding (H.264, HEVC/H.265, VP9, AV1, VC-1, MPEG-2).
   - Video processor interface (`ID3D11VideoProcessor`, `ID3D11VideoProcessorEnumerator`, `D3D11_VIDEO_PROCESSOR_CAPS`).
-- [ ] **Direct3D 11 Video Processing Pipeline (`d3d11.dll`)**:
-  - Video processor streams (`D3D11_VIDEO_PROCESSOR_STREAM`), source/destination rectangles, and planar alpha blending.
+- [x] **Direct3D 11 Video Processing Pipeline (`d3d11.dll`)**:
+  - Video processor streams (`D3D11_VIDEO_PROCESSOR_STREAM`), source/destination rectangles, and planar alpha blending (1..16 concurrent streams).
   - Advanced color space conversions (BT.601, BT.709, BT.2020 HDR) and nominal range management.
-  - Video processor rate conversion and frame rate double-buffering.
-- [ ] **Dynamic Module Exports & COM Registration (`d3d11.dll`)**:
-  - `D3D11CreateDevice` with `D3D11_CREATE_DEVICE_VIDEO_SUPPORT` flag.
-  - Version database registration in `VersionDatabase` for `d3d11va` components.
-- [ ] **Interactive CLI Utilities (`d3d11va`)**:
-  - `d3d11va test` (Runs Direct3D 11 Video Acceleration self-tests).
+  - Video processor rate conversion, filter ranges (Brightness, Contrast, Hue, Saturation), and hardware crypto negotiation (`D3D11_KEY_EXCHANGE_HW_PROTECTION`).
+- [x] **Dynamic Module Exports & COM Registration (`d3d11.dll`)**:
+  - `D3D11CreateVideoDevice`, `D3D11CreateVideoContext`, `D3D11CreateDeviceWithVideo`, `DllCanUnloadNow`, `DllGetClassObject`.
+  - Version database registration in `VersionDatabase` for `d3d11.dll` ("MicaNT Direct3D 11 Video Acceleration Subsystem", `10.0.22621.1`).
+- [x] **Interactive CLI Utilities (`d3d11va`)**:
+  - `d3d11va test` (Runs Direct3D 11 Video Acceleration self-tests: 16/16 passed).
   - `d3d11va proc [file]` (Executes Direct3D 11 video processor conversion).
   - `d3d11va info` (Displays D3D11 video capabilities, codec profiles, and HDR metadata).
-- [ ] **Unit Test Suite 110 (`Test_WindowsDirect3D11_Video_Acceleration_Subsystem`)**:
-  - Comprehensive unit test suite validating D3D11 video device, decoder profile discovery, video processor enumerator, stream composition, and CLI commands.
+- [x] **Unit Test Suite 110 (`Test_WindowsDirect3D11_Video_Acceleration_Subsystem`)**:
+  - Comprehensive unit test suite validating D3D11 video device, decoder profile discovery, video processor enumerator, stream composition, decoder buffer mapping, hardware DRM, dynamic loader exports, and CLI commands.
+  - Milestone 110: **110 / 110 Test Suites Passing (100%)**.
+
+---
+
+### Phase 84: Windows Media Foundation Source Reader & Sink Writer Subsystem (`mfreadwrite.hpp`, `mfreadwrite.dll`, `mfplat.dll`) (PLANNED - MILESTONE 111)
+- [ ] **Media Foundation Source Reader & Sink Writer Core Architecture (`include/micant/mfreadwrite.hpp`, `mfreadwrite.dll`)**:
+  - Source reader interface (`IMFSourceReader`, `IMFSourceReaderEx`, `MFCreateSourceReaderFromURL`, `MFCreateSourceReaderFromByteStream`) for high-level stream extraction and hardware-accelerated decode piping.
+  - Sink writer interface (`IMFSinkWriter`, `IMFSinkWriterEx`, `MFCreateSinkWriterFromURL`) for stream multiplexing, audio/video encoding, and media container export.
+  - Asynchronous read and write engine with callback dispatching (`IMFSourceReaderCallback`).
+- [ ] **Stream Configuration & Sample Processing Pipeline (`mfreadwrite.dll`)**:
+  - Stream selection (`MF_SOURCE_READER_FIRST_VIDEO_STREAM`, `MF_SOURCE_READER_FIRST_AUDIO_STREAM`, `MF_SOURCE_READER_ALL_STREAMS`).
+  - Automatic dynamic format conversion and color space negotiation between input media sources and output presentation surfaces (NV12, RGB32, YUY2).
+  - Media sample buffering, timestamp allocation (`100ns`), and duration tracking.
+- [ ] **Dynamic Module Exports & COM Registration (`mfreadwrite.dll`)**:
+  - `MFCreateSourceReaderFromURL`, `MFCreateSourceReaderFromByteStream`, `MFCreateSinkWriterFromURL`, `MFCreateSinkWriterFromByteStream`, `DllCanUnloadNow`, `DllGetClassObject`.
+  - Version database registration in `VersionDatabase` for `mfreadwrite.dll` ("MicaNT Media Foundation Source Reader & Sink Writer Subsystem", `10.0.22621.1`).
+- [ ] **Interactive CLI Utilities (`mfreadwrite`)**:
+  - `mfreadwrite test` (Runs Source Reader and Sink Writer pipeline self-tests).
+  - `mfreadwrite read <source>` (Extracts and reports stream samples and metadata).
+  - `mfreadwrite info` (Displays Media Foundation Read/Write subsystem capabilities and codec interfaces).
+- [ ] **Unit Test Suite 111 (`Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem`)**:
+  - Comprehensive unit test suite validating Source Reader creation, stream enumeration, format negotiation, Sink Writer multiplexing, sample serialization, dynamic module exports, and CLI commands.
 
 
 

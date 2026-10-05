@@ -131,6 +131,7 @@
 #include "micant/mfsession.hpp"
 #include "micant/evr.hpp"
 #include "micant/dxva2.hpp"
+#include "micant/d3d11va.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -25526,8 +25527,335 @@ void Test_WindowsDXVA2_Hardware_Acceleration_Subsystem() {
     std::cout << "[TEST] Suite 109: Windows DirectX Video Acceleration 2.0 (DXVA2) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 110: Windows Direct3D 11 Video Acceleration Subsystem Tests
+// ============================================================================
+void Test_WindowsDirect3D11_Video_Acceleration_Subsystem() {
+    using namespace micant::prismx;
+    using namespace micant::prism3d;
+    using namespace micant::d3d11va;
+
+    std::cout << "[TEST] Running Suite 110: Windows Direct3D 11 Video Acceleration Subsystem...\n";
+
+    InitializeD3D11VAExports();
+
+    // 1. Direct3D 11 Device & Video Device Creation
+    prism3d::ID3D11Device* pDevice = nullptr;
+    prism3d::ID3D11DeviceContext* pContext = nullptr;
+    d3d11va::ID3D11VideoDevice* pVideoDevice = nullptr;
+    d3d11va::ID3D11VideoContext* pVideoContext = nullptr;
+
+    int32_t hr = d3d11va::D3D11CreateDeviceWithVideo(
+        nullptr, prism3d::D3D_DRIVER_TYPE_HARDWARE, nullptr,
+        d3d11va::D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+        nullptr, 0, 7,
+        &pDevice, nullptr, &pContext,
+        &pVideoDevice, &pVideoContext);
+
+    TEST_ASSERT(hr == 0 && pDevice != nullptr && pVideoDevice != nullptr, "D3D11CreateDeviceWithVideo must create D3D11 device and video device");
+
+    prism3d::ID3D11Device* pDevFromVideo = nullptr;
+    hr = pVideoDevice->QueryInterface(prism3d::IID_ID3D11Device, reinterpret_cast<void**>(&pDevFromVideo));
+    TEST_ASSERT(hr == 0 && pDevFromVideo == pDevice, "QueryInterface from VideoDevice to ID3D11Device must succeed");
+    if (pDevFromVideo) pDevFromVideo->Release();
+
+    // 2. Video Context Creation & Interface Arbitration
+    TEST_ASSERT(pContext != nullptr && pVideoContext != nullptr, "Video context and device context must be valid");
+    prism3d::ID3D11DeviceContext* pCtxFromVideo = nullptr;
+    hr = pVideoContext->QueryInterface(prism3d::IID_ID3D11DeviceContext, reinterpret_cast<void**>(&pCtxFromVideo));
+    TEST_ASSERT(hr == 0 && pCtxFromVideo == pContext, "QueryInterface from VideoContext to ID3D11DeviceContext must succeed");
+    if (pCtxFromVideo) pCtxFromVideo->Release();
+
+    // 3. Video Decoder Profile Enumeration
+    uint32_t profCount = pVideoDevice->GetVideoDecoderProfileCount();
+    TEST_ASSERT(profCount >= 9, "Video device must enumerate at least 9 hardware decoder profiles");
+    bool hasHEVC10 = false, hasH264 = false, hasAV1 = false, hasVP9_10 = false, hasVC1 = false, hasMPEG2 = false;
+    for (uint32_t i = 0; i < profCount; ++i) {
+        GUID g{};
+        pVideoDevice->GetVideoDecoderProfile(i, &g);
+        if (g == d3d11va::D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10) hasHEVC10 = true;
+        if (g == d3d11va::D3D11_DECODER_PROFILE_H264_VLD_NOFGT) hasH264 = true;
+        if (g == d3d11va::D3D11_DECODER_PROFILE_AV1_VLD_PROFILE0) hasAV1 = true;
+        if (g == d3d11va::D3D11_DECODER_PROFILE_VP9_VLD_10BIT) hasVP9_10 = true;
+        if (g == d3d11va::D3D11_DECODER_PROFILE_VC1_VLD) hasVC1 = true;
+        if (g == d3d11va::D3D11_DECODER_PROFILE_MPEG2_VLD) hasMPEG2 = true;
+    }
+    TEST_ASSERT(hasHEVC10 && hasH264 && hasAV1 && hasVP9_10 && hasVC1 && hasMPEG2, "All standard hardware decoder profiles must be enumerated");
+
+    // 4. Video Decoder Format Verification
+    int32_t suppNV12 = 0, suppP010 = 0, suppBGRA = 0, suppD32 = 0;
+    pVideoDevice->CheckVideoDecoderFormat(&d3d11va::D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10, d3d11va::DXGI_FORMAT_NV12, &suppNV12);
+    pVideoDevice->CheckVideoDecoderFormat(&d3d11va::D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10, d3d11va::DXGI_FORMAT_P010, &suppP010);
+    pVideoDevice->CheckVideoDecoderFormat(&d3d11va::D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10, prismx::DXGI_FORMAT_B8G8R8A8_UNORM, &suppBGRA);
+    pVideoDevice->CheckVideoDecoderFormat(&d3d11va::D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10, prismx::DXGI_FORMAT_D32_FLOAT, &suppD32);
+    TEST_ASSERT(suppNV12 == 1 && suppP010 == 1 && suppBGRA == 1 && suppD32 == 0, "Video decoder format verification must correctly identify supported and unsupported surface formats");
+
+    // 5. Video Decoder Config Negotiation
+    d3d11va::D3D11_VIDEO_DECODER_DESC decDesc{};
+    decDesc.Guid = d3d11va::D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10;
+    decDesc.SampleWidth = 3840;
+    decDesc.SampleHeight = 2160;
+    decDesc.OutputFormat = d3d11va::DXGI_FORMAT_P010;
+    uint32_t cfgCount = 0;
+    pVideoDevice->GetVideoDecoderConfigCount(&decDesc, &cfgCount);
+    TEST_ASSERT(cfgCount == 1, "Decoder config count must equal 1");
+    d3d11va::D3D11_VIDEO_DECODER_CONFIG decCfg{};
+    hr = pVideoDevice->GetVideoDecoderConfig(&decDesc, 0, &decCfg);
+    TEST_ASSERT(hr == 0 && decCfg.ConfigBitstreamRaw == 1 && decCfg.ConfigMinRenderTargetBuffCount == 4, "Decoder config must specify raw bitstream and minimum 4 render target buffers");
+
+    // 6. Video Decoder Creation (HEVC Main 10 HDR & H.264 Profiles)
+    d3d11va::ID3D11VideoDecoder* pDecoderHEVC = nullptr;
+    hr = pVideoDevice->CreateVideoDecoder(&decDesc, &decCfg, &pDecoderHEVC);
+    TEST_ASSERT(hr == 0 && pDecoderHEVC != nullptr, "CreateVideoDecoder for HEVC Main 10 must succeed");
+    void* hDriverHEVC = nullptr;
+    pDecoderHEVC->GetDriverHandle(&hDriverHEVC);
+    TEST_ASSERT(hDriverHEVC != nullptr, "Decoder driver handle must be valid");
+
+    d3d11va::D3D11_VIDEO_DECODER_DESC decDescH264{};
+    decDescH264.Guid = d3d11va::D3D11_DECODER_PROFILE_H264_VLD_NOFGT;
+    decDescH264.SampleWidth = 1920;
+    decDescH264.SampleHeight = 1080;
+    decDescH264.OutputFormat = d3d11va::DXGI_FORMAT_NV12;
+    d3d11va::ID3D11VideoDecoder* pDecoderH264 = nullptr;
+    hr = pVideoDevice->CreateVideoDecoder(&decDescH264, &decCfg, &pDecoderH264);
+    TEST_ASSERT(hr == 0 && pDecoderH264 != nullptr, "CreateVideoDecoder for H.264 High Profile must succeed");
+
+    // 7. Video Decoder Buffer Allocation & Access
+    uint32_t bitSize = 0, picSize = 0, iqSize = 0, sliceSize = 0;
+    void* pBitBuf = nullptr;
+    void* pPicBuf = nullptr;
+    void* pIQBuf = nullptr;
+    void* pSliceBuf = nullptr;
+    hr = pVideoContext->GetDecoderBuffer(pDecoderHEVC, d3d11va::D3D11_VIDEO_DECODER_BUFFER_BITSTREAM, &bitSize, &pBitBuf);
+    TEST_ASSERT(hr == 0 && bitSize >= 1024 * 1024 && pBitBuf != nullptr, "GetDecoderBuffer for Bitstream must return >= 1MB scratch space");
+    hr = pVideoContext->GetDecoderBuffer(pDecoderHEVC, d3d11va::D3D11_VIDEO_DECODER_BUFFER_PICTURE_PARAMETERS, &picSize, &pPicBuf);
+    TEST_ASSERT(hr == 0 && picSize >= 4096 && pPicBuf != nullptr, "GetDecoderBuffer for PictureParameters must succeed");
+    hr = pVideoContext->GetDecoderBuffer(pDecoderHEVC, d3d11va::D3D11_VIDEO_DECODER_BUFFER_INVERSE_QUANTIZATION_MATRIX, &iqSize, &pIQBuf);
+    TEST_ASSERT(hr == 0 && iqSize >= 4096 && pIQBuf != nullptr, "GetDecoderBuffer for IQ Matrix must succeed");
+    hr = pVideoContext->GetDecoderBuffer(pDecoderHEVC, d3d11va::D3D11_VIDEO_DECODER_BUFFER_SLICE_CONTROL, &sliceSize, &pSliceBuf);
+    TEST_ASSERT(hr == 0 && sliceSize >= 16384 && pSliceBuf != nullptr, "GetDecoderBuffer for SliceControl must succeed");
+
+    pVideoContext->ReleaseDecoderBuffer(pDecoderHEVC, d3d11va::D3D11_VIDEO_DECODER_BUFFER_BITSTREAM);
+    pVideoContext->ReleaseDecoderBuffer(pDecoderHEVC, d3d11va::D3D11_VIDEO_DECODER_BUFFER_PICTURE_PARAMETERS);
+    pVideoContext->ReleaseDecoderBuffer(pDecoderHEVC, d3d11va::D3D11_VIDEO_DECODER_BUFFER_INVERSE_QUANTIZATION_MATRIX);
+    pVideoContext->ReleaseDecoderBuffer(pDecoderHEVC, d3d11va::D3D11_VIDEO_DECODER_BUFFER_SLICE_CONTROL);
+
+    // 8. Video Decoder Output View Creation & Target Texture Linkage
+    prism3d::D3D11_TEXTURE2D_DESC texDesc{};
+    texDesc.Width = 3840;
+    texDesc.Height = 2160;
+    texDesc.MipLevels = 1;
+    texDesc.ArraySize = 1;
+    texDesc.Format = d3d11va::DXGI_FORMAT_P010;
+    prism3d::ID3D11Texture2D* pDecTex = nullptr;
+    pDevice->CreateTexture2D(&texDesc, nullptr, &pDecTex);
+
+    d3d11va::D3D11_VIDEO_DECODER_OUTPUT_VIEW_DESC vdovDesc{};
+    vdovDesc.DecodeProfile = d3d11va::D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10;
+    vdovDesc.ViewDimension = d3d11va::D3D11_VDOV_DIMENSION_TEXTURE2D;
+    vdovDesc.Texture2D.ArraySlice = 0;
+    d3d11va::ID3D11VideoDecoderOutputView* pVDOV = nullptr;
+    hr = pVideoDevice->CreateVideoDecoderOutputView(pDecTex, &vdovDesc, &pVDOV);
+    TEST_ASSERT(hr == 0 && pVDOV != nullptr, "CreateVideoDecoderOutputView must succeed");
+
+    prism3d::ID3D11Resource* pResLink = nullptr;
+    pVDOV->GetResource(&pResLink);
+    TEST_ASSERT(pResLink == pDecTex, "VDOV resource must match backing texture");
+    if (pResLink) pResLink->Release();
+
+    // 9. Frame Decoding Execution State Machine
+    hr = pVideoContext->DecoderBeginFrame(pDecoderHEVC, pVDOV, 0, nullptr);
+    TEST_ASSERT(hr == 0, "DecoderBeginFrame must initiate active frame decoding");
+    d3d11va::D3D11_VIDEO_DECODER_BUFFER_DESC bufDesc[2]{};
+    bufDesc[0].BufferType = d3d11va::D3D11_VIDEO_DECODER_BUFFER_BITSTREAM;
+    bufDesc[0].DataSize = 131072; // 128 KB compressed slice
+    bufDesc[1].BufferType = d3d11va::D3D11_VIDEO_DECODER_BUFFER_PICTURE_PARAMETERS;
+    bufDesc[1].DataSize = sizeof(decDesc);
+    hr = pVideoContext->SubmitDecoderBuffers(pDecoderHEVC, 2, bufDesc);
+    TEST_ASSERT(hr == 0, "SubmitDecoderBuffers must ingest bitstream and picture params");
+    hr = pVideoContext->DecoderEndFrame(pDecoderHEVC);
+    TEST_ASSERT(hr == 0, "DecoderEndFrame must finalize frame decode");
+
+    auto* decImpl = static_cast<d3d11va::CD3D11VideoDecoder*>(pDecoderHEVC);
+    TEST_ASSERT(decImpl->GetDecodedFrames() == 1, "Decoded frame count must increment to 1");
+    TEST_ASSERT(decImpl->GetTotalBitstreamBytes() == 131072, "Total bitstream byte volume must record submitted buffer size");
+
+    // 10. Video Processor Enumerator Creation & Format Support
+    d3d11va::D3D11_VIDEO_PROCESSOR_CONTENT_DESC vpContent{};
+    vpContent.InputFrameFormat = d3d11va::D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+    vpContent.InputFrameRate = { 60, 1 };
+    vpContent.InputWidth = 1920;
+    vpContent.InputHeight = 1080;
+    vpContent.OutputFrameRate = { 60, 1 };
+    vpContent.OutputWidth = 1920;
+    vpContent.OutputHeight = 1080;
+    vpContent.Usage = d3d11va::D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
+    d3d11va::ID3D11VideoProcessorEnumerator* pEnum = nullptr;
+    hr = pVideoDevice->CreateVideoProcessorEnumerator(&vpContent, &pEnum);
+    TEST_ASSERT(hr == 0 && pEnum != nullptr, "CreateVideoProcessorEnumerator must succeed");
+
+    uint32_t nv12Flags = 0, yuy2Flags = 0, bgraFlags = 0, hdr10Flags = 0;
+    pEnum->CheckVideoProcessorFormat(d3d11va::DXGI_FORMAT_NV12, &nv12Flags);
+    pEnum->CheckVideoProcessorFormat(d3d11va::DXGI_FORMAT_YUY2, &yuy2Flags);
+    pEnum->CheckVideoProcessorFormat(prismx::DXGI_FORMAT_B8G8R8A8_UNORM, &bgraFlags);
+    pEnum->CheckVideoProcessorFormat(d3d11va::DXGI_FORMAT_R10G10B10A2_UNORM, &hdr10Flags);
+    TEST_ASSERT((nv12Flags & d3d11va::D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) != 0, "NV12 must be supported as input format");
+    TEST_ASSERT((bgraFlags & d3d11va::D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT) != 0, "B8G8R8A8 must be supported as output format");
+    TEST_ASSERT((hdr10Flags & d3d11va::D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT) != 0, "R10G10B10A2 must be supported as HDR output format");
+
+    // 11. Video Processor Caps & Rate Conversion Capabilities
+    d3d11va::D3D11_VIDEO_PROCESSOR_CAPS vpCaps{};
+    pEnum->GetVideoProcessorCaps(&vpCaps);
+    TEST_ASSERT(vpCaps.MaxInputStreams >= 16, "Video processor must support at least 16 concurrent input streams");
+    TEST_ASSERT((vpCaps.DeviceCaps & d3d11va::D3D11_VIDEO_PROCESSOR_DEVICE_CAPS_RGB_RANGE_CONVERSION) != 0, "Video processor must support RGB Range Conversion");
+    TEST_ASSERT((vpCaps.FeatureCaps & d3d11va::D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_ALPHA_FILL) != 0, "Video processor must support Alpha Fill modes");
+
+    d3d11va::D3D11_VIDEO_PROCESSOR_RATE_CONVERSION_CAPS rcCaps{};
+    pEnum->GetVideoProcessorRateConversionCaps(0, &rcCaps);
+    TEST_ASSERT(rcCaps.PastFrames == 2 && rcCaps.FutureFrames == 2, "Rate conversion must specify 2 past and 2 future reference frames");
+    TEST_ASSERT((rcCaps.ProcessorCaps & 0x1) != 0, "De-interlacing processor cap must be active");
+
+    // 12. Video Processor Custom Rates & Filter Ranges
+    d3d11va::D3D11_VIDEO_PROCESSOR_CUSTOM_RATE customRate{};
+    hr = pEnum->GetVideoProcessorCustomRate(0, 0, &customRate);
+    TEST_ASSERT(hr == 0 && customRate.CustomRate.Numerator == 24, "Custom rate 0 must represent 24 fps film cadence");
+
+    d3d11va::D3D11_VIDEO_PROCESSOR_FILTER_RANGE rBright{}, rContrast{}, rHue{}, rSat{};
+    pEnum->GetVideoProcessorFilterRange(d3d11va::D3D11_VIDEO_PROCESSOR_FILTER_BRIGHTNESS, &rBright);
+    pEnum->GetVideoProcessorFilterRange(d3d11va::D3D11_VIDEO_PROCESSOR_FILTER_CONTRAST, &rContrast);
+    pEnum->GetVideoProcessorFilterRange(d3d11va::D3D11_VIDEO_PROCESSOR_FILTER_HUE, &rHue);
+    pEnum->GetVideoProcessorFilterRange(d3d11va::D3D11_VIDEO_PROCESSOR_FILTER_SATURATION, &rSat);
+    TEST_ASSERT(rBright.Minimum == -100 && rBright.Maximum == 100, "Brightness range must be [-100, 100]");
+    TEST_ASSERT(rContrast.Minimum == 0 && rContrast.Maximum == 200, "Contrast range must be [0, 200]");
+    TEST_ASSERT(rHue.Minimum == -180 && rHue.Maximum == 180, "Hue range must be [-180, 180]");
+    TEST_ASSERT(rSat.Minimum == 0 && rSat.Maximum == 200, "Saturation range must be [0, 200]");
+
+    // 13. Video Processor Creation & Stream State Configuration
+    d3d11va::ID3D11VideoProcessor* pVP = nullptr;
+    hr = pVideoDevice->CreateVideoProcessor(pEnum, 0, &pVP);
+    TEST_ASSERT(hr == 0 && pVP != nullptr, "CreateVideoProcessor must succeed");
+
+    d3d11va::D3D11_VIDEO_COLOR bgCol{};
+    bgCol.RGBA = { 0.1f, 0.1f, 0.15f, 1.0f };
+    pVideoContext->VideoProcessorSetOutputBackgroundColor(pVP, 0, &bgCol);
+
+    d3d11va::D3D11_VIDEO_PROCESSOR_COLOR_SPACE cs{};
+    cs.Usage = 0;
+    cs.RGB_Range = 0;
+    cs.YCbCr_Matrix = 1; // BT.709
+    cs.Nominal_Range = d3d11va::D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
+    pVideoContext->VideoProcessorSetStreamColorSpace(pVP, 0, &cs);
+    pVideoContext->VideoProcessorSetStreamAlpha(pVP, 0, 1, 1.0f);
+    pVideoContext->VideoProcessorSetStreamAlpha(pVP, 1, 1, 0.5f); // 50% PiP overlay
+
+    // 14. Video Processor Input/Output Views Creation
+    prism3d::D3D11_TEXTURE2D_DESC sDesc{};
+    sDesc.Width = 1920;
+    sDesc.Height = 1080;
+    sDesc.Format = prismx::DXGI_FORMAT_B8G8R8A8_UNORM;
+    prism3d::ID3D11Texture2D* pTexBase = nullptr;
+    prism3d::ID3D11Texture2D* pTexOverlay = nullptr;
+    prism3d::ID3D11Texture2D* pTexOut = nullptr;
+    pDevice->CreateTexture2D(&sDesc, nullptr, &pTexBase);
+    pDevice->CreateTexture2D(&sDesc, nullptr, &pTexOverlay);
+    pDevice->CreateTexture2D(&sDesc, nullptr, &pTexOut);
+
+    auto* pRawBase = static_cast<prism3d::Prism3DTexture2DImpl*>(pTexBase);
+    auto* pRawOverlay = static_cast<prism3d::Prism3DTexture2DImpl*>(pTexOverlay);
+    std::fill_n(pRawBase->GetPixels(), 1920 * 1080, 0xFF0000FF); // Blue
+    std::fill_n(pRawOverlay->GetPixels(), 1920 * 1080, 0xFFFF0000); // Red
+
+    d3d11va::D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inViewDesc{};
+    inViewDesc.ViewDimension = d3d11va::D3D11_VPIV_DIMENSION_TEXTURE2D;
+    d3d11va::ID3D11VideoProcessorInputView* pInputBase = nullptr;
+    d3d11va::ID3D11VideoProcessorInputView* pInputOverlay = nullptr;
+    pVideoDevice->CreateVideoProcessorInputView(pTexBase, pEnum, &inViewDesc, &pInputBase);
+    pVideoDevice->CreateVideoProcessorInputView(pTexOverlay, pEnum, &inViewDesc, &pInputOverlay);
+
+    d3d11va::D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outViewDesc{};
+    outViewDesc.ViewDimension = d3d11va::D3D11_VPOV_DIMENSION_TEXTURE2D;
+    d3d11va::ID3D11VideoProcessorOutputView* pOutputView = nullptr;
+    pVideoDevice->CreateVideoProcessorOutputView(pTexOut, pEnum, &outViewDesc, &pOutputView);
+    TEST_ASSERT(pInputBase != nullptr && pInputOverlay != nullptr && pOutputView != nullptr, "Processor input/output views must be created successfully");
+
+    // 15. Video Processor Blt Multi-Stream Compositing with Planar Alpha & BT.2020 HDR
+    d3d11va::D3D11_VIDEO_PROCESSOR_STREAM streams[2]{};
+    streams[0].Enable = 1;
+    streams[0].pInputSurface = pInputBase;
+    streams[1].Enable = 1;
+    streams[1].pInputSurface = pInputOverlay;
+
+    RECT srcR{ 0, 0, 400, 300 };
+    RECT dstR{ 100, 100, 500, 400 };
+    pVideoContext->VideoProcessorSetStreamSourceRect(pVP, 1, 1, &srcR);
+    pVideoContext->VideoProcessorSetStreamDestRect(pVP, 1, 1, &dstR);
+
+    hr = pVideoContext->VideoProcessorBlt(pVP, pOutputView, 0, 2, streams);
+    TEST_ASSERT(hr == 0, "VideoProcessorBlt multi-stream blit must succeed");
+
+    auto* pRawOut = static_cast<prism3d::Prism3DTexture2DImpl*>(pTexOut);
+    uint32_t blendedPix = pRawOut->GetPixels()[200 * 1920 + 200];
+    uint8_t outR = (blendedPix >> 16) & 0xFF;
+    uint8_t outB = blendedPix & 0xFF;
+    TEST_ASSERT(outR >= 120 && outR <= 135, "Alpha blended Red channel must be approximately 50% (~127)");
+    TEST_ASSERT(outB >= 120 && outB <= 135, "Alpha blended Blue channel must be approximately 50% (~127)");
+
+    auto* ctxImpl = static_cast<d3d11va::CD3D11VideoContext*>(pVideoContext);
+    TEST_ASSERT(ctxImpl->GetBltCount() == 1, "Blt counter must increment to 1");
+    TEST_ASSERT(ctxImpl->GetProcessedFrames() == 1, "Processed frame counter must increment to 1");
+
+    // 16. Dynamic Module Exports, Crypto Key Exchange & Shell Commands
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("d3d11.dll", "D3D11CreateVideoDevice") != nullptr, "d3d11.dll!D3D11CreateVideoDevice must be registered");
+    TEST_ASSERT(ldr.getExport("d3d11.dll", "D3D11CreateVideoContext") != nullptr, "d3d11.dll!D3D11CreateVideoContext must be registered");
+    TEST_ASSERT(ldr.getExport("d3d11.dll", "D3D11CreateDeviceWithVideo") != nullptr, "d3d11.dll!D3D11CreateDeviceWithVideo must be registered");
+
+    GUID keyExType{};
+    hr = pVideoDevice->CheckCryptoKeyExchange(&d3d11va::D3D11_CRYPTO_TYPE_AES128_CTR, &d3d11va::D3D11_DECODER_PROFILE_HEVC_VLD_MAIN10, 0, &keyExType);
+    TEST_ASSERT(hr == 0 && keyExType == d3d11va::D3D11_KEY_EXCHANGE_HW_PROTECTION, "Hardware DRM protection key exchange must match D3D11_KEY_EXCHANGE_HW_PROTECTION");
+
+    // Shell command integration verification
+    shell::CommandShell testShell;
+    std::ostringstream out;
+
+    testShell.execute("d3d11va test", out);
+    TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "d3d11va test self-test succeeds 100%");
+
+    out.str("");
+    testShell.execute("d3d11va proc", out);
+    TEST_ASSERT(out.str().find("COLOR CONVERTED") != std::string::npos, "d3d11va proc converts color gamut to BT.2020 HDR");
+
+    out.str("");
+    testShell.execute("d3d11va info", out);
+    TEST_ASSERT(out.str().find("22621") != std::string::npos, "d3d11va info displays telemetry");
+
+    // Cleanup
+    pOutputView->Release();
+    pInputOverlay->Release();
+    pInputBase->Release();
+    pTexOut->Release();
+    pTexOverlay->Release();
+    pTexBase->Release();
+    pVP->Release();
+    pEnum->Release();
+    pVDOV->Release();
+    pDecTex->Release();
+    pDecoderH264->Release();
+    pDecoderHEVC->Release();
+    pVideoContext->Release();
+    pVideoDevice->Release();
+    pContext->Release();
+    pDevice->Release();
+
+    std::cout << "[TEST] Suite 110: Windows Direct3D 11 Video Acceleration Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite109")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite110")) {
+        RUN_TEST(Test_WindowsDirect3D11_Video_Acceleration_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite109") {
         RUN_TEST(Test_WindowsDXVA2_Hardware_Acceleration_Subsystem);
         return g_FailedTests;
     }
@@ -25657,6 +25985,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsMediaFoundation_Topology_And_Session_Subsystem);
     RUN_TEST(Test_WindowsEnhancedVideoRenderer_Subsystem);
     RUN_TEST(Test_WindowsDXVA2_Hardware_Acceleration_Subsystem);
+    RUN_TEST(Test_WindowsDirect3D11_Video_Acceleration_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
