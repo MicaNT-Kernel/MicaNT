@@ -132,6 +132,29 @@ public:
 };
 
 } // namespace micant::bootloader
+// Freestanding runtime allocator for bare-metal UEFI execution
+alignas(16) static uint8_t s_uefiHeap[1024 * 1024]; // 1MB heap
+static size_t s_uefiHeapOffset = 0;
+
+void* operator new(size_t size) {
+    size = (size + 15) & ~static_cast<size_t>(15);
+    if (s_uefiHeapOffset + size > sizeof(s_uefiHeap)) return nullptr;
+    void* ptr = &s_uefiHeap[s_uefiHeapOffset];
+    s_uefiHeapOffset += size;
+    return ptr;
+}
+
+void* operator new[](size_t size) {
+    return operator new(size);
+}
+
+void operator delete(void*) noexcept {}
+void operator delete[](void*) noexcept {}
+void operator delete(void*, size_t) noexcept {}
+void operator delete[](void*, size_t) noexcept {}
+
+extern "C" void* malloc(size_t size) { return operator new(size); }
+extern "C" void free(void*) {}
 
 /**
  * @brief Standard UEFI PE32+ Application Entry Point (bootx64.efi)
@@ -152,53 +175,83 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     // 2. Locate GOP & initialize linear framebuffer
     bool hasGop = engine.initGopFramebuffer();
     if (hasGop) {
+        if (systemTable->conOut) {
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Located UEFI GOP Linear Framebuffer successfully.\r\n");
+        }
         engine.displaySplash("Initializing MicaNT Core Subsystems...", 0.25f);
+    } else {
+        if (systemTable->conOut) {
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Operating in serial/console mode (no GOP).\r\n");
+        }
     }
 
     // 3. Query physical memory map
-    uint64_t memoryMapSize = 0;
-    uint64_t mapKey = 42;
+    alignas(16) static uint8_t s_memoryMapBuffer[65536];
+    uint64_t memoryMapSize = sizeof(s_memoryMapBuffer);
+    uint64_t mapKey = 0;
     uint64_t descriptorSize = sizeof(micant::uefi::EfiMemoryDescriptor);
     uint32_t descriptorVersion = 1;
 
-    // Standard two-step query
-    systemTable->bootServices->getMemoryMap(
+    micant::uefi::EfiStatus mapStatus = systemTable->bootServices->getMemoryMap(
         &memoryMapSize,
-        nullptr,
+        reinterpret_cast<micant::uefi::EfiMemoryDescriptor*>(s_memoryMapBuffer),
         &mapKey,
         &descriptorSize,
         &descriptorVersion
     );
 
-    std::vector<micant::uefi::EfiMemoryDescriptor> mapBuffer;
-    if (memoryMapSize > 0) {
-        mapBuffer.resize((memoryMapSize / sizeof(micant::uefi::EfiMemoryDescriptor)) + 4);
-        systemTable->bootServices->getMemoryMap(
-            &memoryMapSize,
-            mapBuffer.data(),
-            &mapKey,
-            &descriptorSize,
-            &descriptorVersion
+    if (mapStatus == micant::uefi::EFI_SUCCESS) {
+        size_t descCount = descriptorSize > 0 ? (memoryMapSize / descriptorSize) : 0;
+        std::span<const micant::uefi::EfiMemoryDescriptor> mapSpan(
+            reinterpret_cast<const micant::uefi::EfiMemoryDescriptor*>(s_memoryMapBuffer),
+            descCount
         );
-    }
 
-    // 4. Ingest memory map and build LOADER_PARAMETER_BLOCK
-    if (hasGop) {
-        engine.displaySplash("Building Loader Parameter Block (LPB)...", 0.65f);
+        if (systemTable->conOut) {
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Ingested physical memory map from UEFI firmware.\r\n");
+        }
+
+        // 4. Ingest memory map and build LOADER_PARAMETER_BLOCK
+        if (hasGop) {
+            engine.displaySplash("Building Loader Parameter Block (LPB)...", 0.65f);
+        }
+        engine.buildLoaderParameterBlock(mapSpan);
     }
-    engine.buildLoaderParameterBlock(mapBuffer);
 
     // 5. Exit Boot Services & Transfer Execution
     if (hasGop) {
         engine.displaySplash("Transferring Execution to KiSystemStartup...", 1.0f);
     }
 
+    if (systemTable->conOut) {
+        systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Exiting UEFI Boot Services and entering Long Mode...\r\n");
+    }
+
     micant::uefi::EfiStatus exitStatus = engine.exitBootServices(mapKey);
     if (exitStatus != micant::uefi::EFI_SUCCESS) {
-        return exitStatus;
+        // Retry once in case memory map key changed
+        memoryMapSize = sizeof(s_memoryMapBuffer);
+        systemTable->bootServices->getMemoryMap(
+            &memoryMapSize,
+            reinterpret_cast<micant::uefi::EfiMemoryDescriptor*>(s_memoryMapBuffer),
+            &mapKey,
+            &descriptorSize,
+            &descriptorVersion
+        );
+        exitStatus = engine.exitBootServices(mapKey);
+        if (exitStatus != micant::uefi::EFI_SUCCESS) {
+            return exitStatus;
+        }
     }
 
     // At this stage, firmware runtime terminates and we are in pure 64-bit Long Mode.
-    // Real hardware: jmp KiSystemStartup(&engine.getLpb());
+    // In real hardware / KiSystemStartup:
+    // KiSystemStartup(&engine.getLpb());
+    while (true) {
+#if defined(__x86_64__)
+        __asm__ __volatile__("hlt");
+#endif
+    }
+
     return micant::uefi::EFI_SUCCESS;
 }

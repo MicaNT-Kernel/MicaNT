@@ -240,6 +240,7 @@ struct EfiBootServices {
 
     // Library Services
     void* protocolsPerHandle;
+    void* locateHandleBuffer;
     EfiStatus (*locateProtocol)(const EfiGuid* protocol, void* registration, void** interface);
 };
 
