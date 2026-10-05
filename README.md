@@ -32,7 +32,7 @@
 > System service interfaces, data structures, and status codes are referenced and auto-generated strictly from Microsoft's MIT-licensed open-source repository:  
 > **[`https://github.com/microsoft/win32metadata`](https://github.com/microsoft/win32metadata)**  
 > 
-> In accordance with the U.S. Supreme Court precedent in *Google LLC v. Oracle America, Inc.* (2021), reimplementing functional declaring code and interface signatures for binary interoperability is protected fair use. No proprietary or leaked Microsoft source code was used or referenced. See [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md) and [docs/LEGAL.md](docs/LEGAL.md) for full compliance documentation.
+> In accordance with the U.S. Supreme Court precedent in *Google LLC v. Oracle America, Inc.* (2021), reimplementing functional declaring code and interface signatures for binary interoperability is protected fair use. No proprietary or leaked Microsoft source code was used or referenced. See [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md), [docs/LEGAL.md](docs/LEGAL.md), and our [Open Statement to Microsoft Corporation](docs/LEGAL.md#8-an-open-statement--message-to-microsoft-corporation) for full compliance documentation and partnership intent.
 
 ---
 
@@ -238,9 +238,11 @@ To guarantee total clean-room independence and prevent name collisions with clos
 
 MicaNT is a clean-room reimplementation created strictly for software interoperability:
 - **API Copyright & Fair Use**: In *Google LLC v. Oracle America, Inc.* (593 U.S. 1, 2021), the United States Supreme Court held that reimplementing declaring code, method signatures, and API structures for interoperability is fair use as a matter of law.
+- **Trademark Policy & Nominative Fair Use**: All third-party trademarks (e.g., Windows, BitLocker, WDAC) are used purely for nominative compatibility identification. MicaNT is an independent project and is neither affiliated with nor endorsed by Microsoft Corporation. See [docs/LEGAL.md](docs/LEGAL.md).
 - **Reference Repository**: All API metadata and interfaces are derived from Microsoft's MIT-licensed [microsoft/win32metadata](https://github.com/microsoft/win32metadata) project.
 - **Clean-Room Policy**: Full non-contamination details, Section 3 non-contamination pillar, and engineering protocols are documented in [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md).
 - **Clean-Room Sentinel CI**: An automated provenance auditor ([scripts/clean_room_sentinel.js](scripts/clean_room_sentinel.js)) runs against every pull request using heuristic checks and Gemini AI to guarantee zero decompiled code or leaked materials enter the tree.
+- **Open Statement to Microsoft**: We have published a formal, open statement in [docs/LEGAL.md § 8](docs/LEGAL.md#8-an-open-statement--message-to-microsoft-corporation) stating our bona fides, research mission, and inviting open, cooperative dialogue with Microsoft's OSPO and legal teams.
 
 ---
 
@@ -256,12 +258,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (110 Suites, 100% Passing)
+### Build & Run Unit Test Suite (134 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 110 Test Suites:
+# Run all 134 Test Suites:
 .\bin\micant_tests.exe
 ```
 

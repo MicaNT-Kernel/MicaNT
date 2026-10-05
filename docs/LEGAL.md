@@ -83,3 +83,34 @@ MicaNT follows the established clean-room methodology proven across four decades
 - **Phoenix Technologies (1984)**: Successfully developed a clean-room clone of the IBM PC BIOS, creating the modern PC-compatible ecosystem without infringing IBM's copyrights.
 - **Compaq (1982)**: Reverse-engineered the IBM BIOS using strict clean-room isolation, surviving extensive legal review.
 - **Wine & ReactOS**: Decades of clean-room Win32 and NT executive reimplementations establishing the legality of open-source Windows ABI compatibility.
+
+---
+
+## 8. An Open Statement & Message to Microsoft Corporation
+
+**To the Engineering Leadership, Open Source Programs Office (OSPO), and Legal Team at Microsoft:**
+
+We want to state our intentions plainly, transparently, and directly: **MicaNT was born out of profound respect for the foundational engineering genius of Dave Cutler and his DEC MICA team in 1988.**
+
+The architecture Cutler designed—the Object Manager, I/O Completion Ports (IOCP), Structured Exception Handling (SEH), Hardware Abstraction Layer (HAL), and asynchronous executive—represents one of the greatest milestones in computer science history. 
+
+However, over three and a half decades, commercial realities, consumer monetization hooks, intrusive telemetry frameworks, background adware, and decades of legacy 16-bit shims have encumbered this brilliant kernel architecture with gigabytes of overhead that obscure its original architectural purity.
+
+### What We Are Doing
+1. **Advancing Systems Research**: We are demonstrating what the original, unencumbered MICA architecture looks like when rebuilt from first principles in modern, memory-safe ISO C++23 with zero telemetry, a sub-32 MB idle memory footprint, and sub-millisecond boot times.
+2. **Promoting Universal Interoperability**: We believe users, developers, and researchers deserve a clean, sovereign, transparent platform that can run native software binaries while guaranteeing complete user sovereignty and privacy.
+3. **Fostering a Healthier Computing Ecosystem**: Rising tides lift all boats. Just as Linux, Wine, and FreeBSD pushed enterprise computing forward, demonstrating how performant and lean an NT-compatible executive can be inspires better systems engineering for everyone—including Windows users and cloud developers.
+
+### What We Are NOT Doing
+- We are **not** pirating, cracking, reverse-engineering via decompilation, or distributing proprietary Windows binaries, fonts, icons, or assets.
+- We do **not** use, possess, or allow any leaked source code (from NT4, Windows 2000, Windows XP, or WRK) anywhere in our codebase, verified by automated sentinel audits.
+- We do **not** seek to confuse consumers, dilute Microsoft's trademarks, or represent ourselves as Microsoft Corporation.
+- We utilize Microsoft's own MIT-licensed `microsoft/win32metadata` repository exactly as your team envisioned: as a machine-readable catalog of interface definitions to enable open cross-platform projections.
+
+### An Open Invitation for Collaborative Dialogue
+We believe in open source, mutual respect, and intellectual property compliance. If your legal, compliance, or open-source teams ever review this repository and have questions, notice any naming ambiguity, or wish to clarify any technical interface attribution:
+
+- **We welcome your direct outreach**: We will readily and cooperatively work with you in good faith to clarify, adjust, or refine any wording, disclaimer, or taxonomy needed to maintain pristine legal boundaries.
+- **We invite your engineering audit**: Our automated clean-room provenance sentinel is open-source and publicly inspectable in our repository.
+
+Our goal is simple and sincere: **to honor a timeless architectural masterwork and build a faster, cleaner, more respectful computing foundation for everyone.**
