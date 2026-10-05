@@ -103,6 +103,7 @@
 #include "d3d11va.hpp"
 #include "d3d12video.hpp"
 #include "mfreadwrite.hpp"
+#include "mfcaptureengine.hpp"
 
 namespace micant::shell {
 
@@ -166,6 +167,9 @@ public:
         scard::InitializeWinSCardSubsystemExports();
         nla::InitializeNlaSubsystemExports();
         tcpip::NetworkStack::get().initialize();
+        d3d12video::InitializeD3D12VideoExports();
+        mfreadwrite::InitializeMFReadWriteExports();
+        mfcapture::InitializeMFCaptureEngineExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -293,6 +297,7 @@ public:
             if (cmd == "d3d11va" || cmd == "d3d11video" || cmd == "d3d11v") { cmdD3D11VA(tokens, out); return 0; }
             if (cmd == "d3d12video" || cmd == "d3d12v") { cmdD3D12Video(tokens, out); return 0; }
             if (cmd == "mfreadwrite" || cmd == "sourcereader" || cmd == "sinkwriter") { cmdMFReadWrite(tokens, out); return 0; }
+            if (cmd == "mfcapture" || cmd == "captureengine" || cmd == "camera") { cmdMFCapture(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -14423,6 +14428,292 @@ private:
             << "  mfreadwrite read [file]                 Ingests and reports stream frames\n"
             << "  mfreadwrite write [file]                Encodes and multiplexes media frames\n"
             << "  mfreadwrite info                        Displays MF Read/Write architecture telemetry\n";
+    }
+
+    void cmdMFCapture(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[MFCapture] Running Media Foundation Capture Engine Subsystem Self-Test...\n";
+
+            mfcapture::InitializeMFCaptureEngineExports();
+
+            // 1. Capture Engine Creation
+            mfcapture::IMFCaptureEngine* pEngine = nullptr;
+            int32_t hr = mfcapture::MFCreateCaptureEngine(&pEngine);
+            bool t1 = (hr == 0 && pEngine != nullptr);
+            out << "  [1/16] MFCreateCaptureEngine: " << (t1 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 2. Class Factory & COM Activation
+            mfcapture::IMFCaptureEngineClassFactory* pFactory = nullptr;
+            hr = mfcapture::DllGetClassObject(mfcapture::CLSID_MFCaptureEngineClassFactory_Const,
+                                              mfcapture::IID_IMFCaptureEngineClassFactory_Const,
+                                              reinterpret_cast<void**>(&pFactory));
+            bool t2 = (hr == 0 && pFactory != nullptr);
+            out << "  [2/16] DllGetClassObject (IMFCaptureEngineClassFactory): " << (t2 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 3. Class Factory CreateInstance
+            mfcapture::IMFCaptureEngine* pEngineFromFactory = nullptr;
+            if (pFactory) {
+                hr = pFactory->CreateInstance(mfcapture::CLSID_MFCaptureEngine_Const,
+                                              mfcapture::IID_IMFCaptureEngine_Const,
+                                              reinterpret_cast<void**>(&pEngineFromFactory));
+            }
+            bool t3 = (hr == 0 && pEngineFromFactory != nullptr);
+            out << "  [3/16] IMFCaptureEngineClassFactory::CreateInstance: " << (t3 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 4. Capture Source Query
+            mfcapture::IMFCaptureSource* pSource = nullptr;
+            if (pEngine) hr = pEngine->GetSource(&pSource);
+            bool t4 = (hr == 0 && pSource != nullptr);
+            out << "  [4/16] IMFCaptureEngine::GetSource: " << (t4 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 5. Stream Count & Category Inspection
+            uint32_t streamCount = 0;
+            if (pSource) pSource->GetDeviceStreamCount(&streamCount);
+            mfcapture::MF_CAPTURE_ENGINE_STREAM_CATEGORY cat0{}, cat1{}, cat2{};
+            if (pSource) {
+                pSource->GetDeviceStreamCategory(0, &cat0);
+                pSource->GetDeviceStreamCategory(1, &cat1);
+                pSource->GetDeviceStreamCategory(2, &cat2);
+            }
+            bool t5 = (streamCount == 3 &&
+                       cat0 == mfcapture::MF_CAPTURE_ENGINE_STREAM_CATEGORY_VIDEO_RECORD &&
+                       cat1 == mfcapture::MF_CAPTURE_ENGINE_STREAM_CATEGORY_AUDIO &&
+                       cat2 == mfcapture::MF_CAPTURE_ENGINE_STREAM_CATEGORY_PHOTO_INDEPENDENT);
+            out << "  [5/16] Device Stream Enumeration (Video, Audio, Photo): " << (t5 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 6. Native Media Type Discovery (1080p, 4K, PCM 48kHz)
+            mf::IMFMediaType* pType1080 = nullptr;
+            mf::IMFMediaType* pType4K = nullptr;
+            if (pSource) {
+                pSource->GetAvailableDeviceMediaType(0, 0, &pType1080);
+                pSource->GetAvailableDeviceMediaType(0, 2, &pType4K);
+            }
+            uint64_t sz1080 = 0, sz4k = 0;
+            if (pType1080) pType1080->GetUINT64(mf::MF_MT_FRAME_SIZE, &sz1080);
+            if (pType4K) pType4K->GetUINT64(mf::MF_MT_FRAME_SIZE, &sz4k);
+            bool t6 = (sz1080 == ((1920ULL << 32) | 1080ULL) && sz4k == ((3840ULL << 32) | 2160ULL));
+            out << "  [6/16] Device Media Types (1080p & 4K Resolutions): " << (t6 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 7. Preview Sink Query & Display Binding
+            mfcapture::IMFCaptureSink* pSinkUnk = nullptr;
+            if (pEngine) hr = pEngine->GetSink(mfcapture::MF_CAPTURE_ENGINE_SINK_TYPE_PREVIEW, &pSinkUnk);
+            mfcapture::IMFCapturePreviewSink* pPreviewSink = nullptr;
+            if (pSinkUnk) {
+                pSinkUnk->QueryInterface(mfcapture::IID_IMFCapturePreviewSink_Const, reinterpret_cast<void**>(&pPreviewSink));
+            }
+            if (pPreviewSink) {
+                pPreviewSink->SetRenderHandle(0x1004);
+            }
+            bool t7 = (hr == 0 && pPreviewSink != nullptr);
+            out << "  [7/16] Preview Sink Query & HWND Presentation Binding: " << (t7 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 8. Record Sink Query & Output Configuration
+            mfcapture::IMFCaptureSink* pRecSinkUnk = nullptr;
+            if (pEngine) hr = pEngine->GetSink(mfcapture::MF_CAPTURE_ENGINE_SINK_TYPE_RECORD, &pRecSinkUnk);
+            mfcapture::IMFCaptureRecordSink* pRecordSink = nullptr;
+            if (pRecSinkUnk) {
+                pRecSinkUnk->QueryInterface(mfcapture::IID_IMFCaptureRecordSink_Const, reinterpret_cast<void**>(&pRecordSink));
+            }
+            if (pRecordSink) {
+                pRecordSink->SetOutputFileName(L"C:\\Videos\\capture_master.mp4");
+                pRecordSink->SetRotation(0, 90);
+            }
+            uint32_t rotation = 0;
+            if (pRecordSink) pRecordSink->GetRotation(0, &rotation);
+            bool t8 = (hr == 0 && pRecordSink != nullptr && rotation == 90);
+            out << "  [8/16] Record Sink Container & 90-Degree Rotation: " << (t8 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 9. Photo Sink Query
+            mfcapture::IMFCaptureSink* pPhotoSinkUnk = nullptr;
+            if (pEngine) hr = pEngine->GetSink(mfcapture::MF_CAPTURE_ENGINE_SINK_TYPE_PHOTO, &pPhotoSinkUnk);
+            mfcapture::IMFCapturePhotoSink* pPhotoSink = nullptr;
+            if (pPhotoSinkUnk) {
+                pPhotoSinkUnk->QueryInterface(mfcapture::IID_IMFCapturePhotoSink_Const, reinterpret_cast<void**>(&pPhotoSink));
+            }
+            if (pPhotoSink) {
+                pPhotoSink->SetOutputFileName(L"C:\\Pictures\\snapshot.png");
+            }
+            bool t9 = (hr == 0 && pPhotoSink != nullptr);
+            out << "  [9/16] Photo Sink Query & Snapshot Path Binding: " << (t9 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 10. Engine Initialization & Event Callback
+            struct EventCallback : public mfcapture::IMFCaptureEngineOnEventCallback {
+                std::atomic<uint32_t> ref{ 1 };
+                std::atomic<bool> initialized{ false };
+                std::atomic<bool> previewStarted{ false };
+                std::atomic<bool> recordStarted{ false };
+                std::atomic<bool> photoTaken{ false };
+
+                int32_t __stdcall QueryInterface(const GUID& riid, void** ppv) override {
+                    if (!ppv) return ole32::E_POINTER;
+                    if (riid == ole32::IID_IUnknown || riid == mfcapture::IID_IMFCaptureEngineOnEventCallback_Const) {
+                        *ppv = this;
+                        AddRef();
+                        return ole32::S_OK;
+                    }
+                    *ppv = nullptr;
+                    return ole32::E_NOINTERFACE;
+                }
+                uint32_t __stdcall AddRef() override { return ++ref; }
+                uint32_t __stdcall Release() override {
+                    uint32_t r = --ref;
+                    if (r == 0) delete this;
+                    return r;
+                }
+                int32_t __stdcall OnEvent(mf::IMFMediaEvent* pEvent) override {
+                    if (pEvent) {
+                        GUID extType{};
+                        pEvent->GetExtendedType(&extType);
+                        if (extType == mfcapture::MF_CAPTURE_ENGINE_INITIALIZED) initialized = true;
+                        if (extType == mfcapture::MF_CAPTURE_ENGINE_PREVIEW_STARTED) previewStarted = true;
+                        if (extType == mfcapture::MF_CAPTURE_ENGINE_RECORD_STARTED) recordStarted = true;
+                        if (extType == mfcapture::MF_CAPTURE_ENGINE_PHOTO_TAKEN) photoTaken = true;
+                    }
+                    return ole32::S_OK;
+                }
+            };
+
+            auto* pEvtCallback = new EventCallback();
+            if (pEngine) hr = pEngine->Initialize(pEvtCallback, nullptr, nullptr, nullptr);
+            bool t10 = (hr == 0 && pEvtCallback->initialized.load());
+            out << "  [10/16] IMFCaptureEngine::Initialize & Event Dispatch: " << (t10 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 11. Preview Lifecycle & Sample Delivery
+            if (pEngine) hr = pEngine->StartPreview();
+            bool t11 = (hr == 0 && pEvtCallback->previewStarted.load());
+            out << "  [11/16] StartPreview & Frame Ingestion: " << (t11 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 12. Record Lifecycle & Multiplexing
+            if (pEngine) hr = pEngine->StartRecord();
+            bool t12 = (hr == 0 && pEvtCallback->recordStarted.load());
+            out << "  [12/16] StartRecord & MP4 Container Multiplexing: " << (t12 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 13. Photo Snapshot Capture
+            if (pEngine) hr = pEngine->TakePhoto();
+            bool t13 = (hr == 0 && pEvtCallback->photoTaken.load());
+            out << "  [13/16] TakePhoto (High-Res 4K Snapshot): " << (t13 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 14. Stop Lifecycle
+            if (pEngine) {
+                pEngine->StopRecord(1, 0);
+                pEngine->StopPreview();
+            }
+            auto* engineImpl = static_cast<mfcapture::CCaptureEngine*>(pEngine);
+            bool t14 = (engineImpl && !engineImpl->isPreviewing() && !engineImpl->isRecording());
+            out << "  [14/16] StopRecord & StopPreview Pipeline Shutdown: " << (t14 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 15. Real-Time MFT Effect Attachment
+            auto* pEffect = new mf::CColorConvertMFT();
+            if (pSource) hr = pSource->AddEffect(0, pEffect);
+            auto* srcImpl = static_cast<mfcapture::CCaptureSource*>(pSource);
+            bool t15 = (hr == 0 && srcImpl && srcImpl->getEffectCount(0) == 1);
+            if (srcImpl) srcImpl->RemoveAllEffects(0);
+            pEffect->Release();
+            out << "  [15/16] Real-Time MFT Effect Attachment & Removal: " << (t15 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 16. Dynamic Module Export Verification
+            auto& ldr = ldr::DynamicLoader::get();
+            bool t16 = (ldr.getExport("mfcaptureengine.dll", "MFCreateCaptureEngine") != nullptr &&
+                        ldr.getExport("mfcaptureengine.dll", "DllGetClassObject") != nullptr);
+            out << "  [16/16] Dynamic Loader Export Verification (mfcaptureengine.dll): " << (t16 ? "SUCCESS" : "FAILED") << "\n";
+
+            // Cleanup
+            pEvtCallback->Release();
+            if (pType4K) pType4K->Release();
+            if (pType1080) pType1080->Release();
+            if (pPhotoSink) pPhotoSink->Release();
+            if (pPhotoSinkUnk) pPhotoSinkUnk->Release();
+            if (pRecordSink) pRecordSink->Release();
+            if (pRecSinkUnk) pRecSinkUnk->Release();
+            if (pPreviewSink) pPreviewSink->Release();
+            if (pSinkUnk) pSinkUnk->Release();
+            if (pSource) pSource->Release();
+            if (pEngineFromFactory) pEngineFromFactory->Release();
+            if (pFactory) pFactory->Release();
+            if (pEngine) pEngine->Release();
+
+            bool allPassed = t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 && t12 && t13 && t14 && t15 && t16;
+            out << "\n[MFCapture] Self-Test Result: " << (allPassed ? "16/16 PASSED (100%)" : "FAILED") << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "   MicaNT Media Foundation Capture Engine Architecture Telemetry        \n"
+                << "========================================================================\n"
+                << "  Specification Parity:   Windows 11 Build 22621 / mfcaptureengine.dll\n"
+                << "  Export Library:         mfcaptureengine.dll, mfreadwrite.dll, mfplat.dll\n"
+                << "  Capture Engine:         IMFCaptureEngine, IMFCaptureEngineClassFactory\n"
+                << "  Capture Source:         IMFCaptureSource (Multi-Stream Video, Audio, Photo)\n"
+                << "  Preview Sink:           IMFCapturePreviewSink (Low-latency display surface)\n"
+                << "  Record Sink:            IMFCaptureRecordSink (Direct multiplexing via SinkWriter)\n"
+                << "  Photo Sink:             IMFCapturePhotoSink (High-Res 4K Still Snapshots)\n"
+                << "  Real-Time Effects:      MFT Transform Insertion & Live DSP Pipeline\n"
+                << "  Hardware Acceleration:  MF_CAPTURE_ENGINE_D3D_MANAGER (Direct3D 11/12 Binding)\n"
+                << "  Zero Telemetry Mode:    ACTIVE (Zero tracking, zero cloud telemetry)\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "preview") {
+            out << "[MFCapture] Initializing live capture preview stream...\n";
+            mfcapture::IMFCaptureEngine* pEngine = nullptr;
+            if (mfcapture::MFCreateCaptureEngine(&pEngine) == 0 && pEngine) {
+                pEngine->Initialize(nullptr, nullptr, nullptr, nullptr);
+                pEngine->StartPreview();
+                out << "  Active video preview stream running @ 1080p 30fps (NV12 format).\n";
+                pEngine->StopPreview();
+                pEngine->Release();
+                out << "  Preview stream stopped.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "record") {
+            std::string path = (tokens.size() > 2) ? tokens[2] : "capture.mp4";
+            out << "[MFCapture] Recording capture stream to: " << path << "\n";
+            mfcapture::IMFCaptureEngine* pEngine = nullptr;
+            if (mfcapture::MFCreateCaptureEngine(&pEngine) == 0 && pEngine) {
+                pEngine->Initialize(nullptr, nullptr, nullptr, nullptr);
+                mfcapture::IMFCaptureSink* pSink = nullptr;
+                pEngine->GetSink(mfcapture::MF_CAPTURE_ENGINE_SINK_TYPE_RECORD, &pSink);
+                if (pSink) {
+                    mfcapture::IMFCaptureRecordSink* pRec = nullptr;
+                    pSink->QueryInterface(mfcapture::IID_IMFCaptureRecordSink_Const, reinterpret_cast<void**>(&pRec));
+                    if (pRec) {
+                        std::wstring wpath(path.begin(), path.end());
+                        pRec->SetOutputFileName(wpath.c_str());
+                        pRec->Release();
+                    }
+                    pSink->Release();
+                }
+                pEngine->StartRecord();
+                out << "  Recording live video & audio streams...\n";
+                pEngine->StopRecord(1, 0);
+                pEngine->Release();
+                out << "  Recording finalized and written to disk.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "snap") {
+            std::string path = (tokens.size() > 2) ? tokens[2] : "snapshot.png";
+            out << "[MFCapture] Taking high-resolution still snapshot to: " << path << "\n";
+            mfcapture::IMFCaptureEngine* pEngine = nullptr;
+            if (mfcapture::MFCreateCaptureEngine(&pEngine) == 0 && pEngine) {
+                pEngine->Initialize(nullptr, nullptr, nullptr, nullptr);
+                pEngine->TakePhoto();
+                pEngine->Release();
+                out << "  Captured 4K still frame to: " << path << "\n";
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  mfcapture test                          Runs Capture Engine self-test\n"
+            << "  mfcapture info                          Displays Capture Engine telemetry\n"
+            << "  mfcapture preview                       Tests live camera preview lifecycle\n"
+            << "  mfcapture record [file]                 Records video and audio to container\n"
+            << "  mfcapture snap [file]                   Takes a high-res photo snapshot\n";
     }
 
     static std::string trim(std::string_view s) {

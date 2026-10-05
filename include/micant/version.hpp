@@ -2791,6 +2791,30 @@ public:
         return s_instance;
     }
 
+    void RegisterModule(std::string_view name, std::string_view version, std::string_view desc, std::string_view company = "MicaNT Sovereign Project") {
+        ModuleVersionInfo mod{};
+        mod.moduleName = std::string(name);
+        mod.fixedInfo.dwSignature = VS_FFI_SIGNATURE;
+        mod.fixedInfo.dwStrucVersion = VS_FFI_STRUCVERSION;
+        mod.fixedInfo.dwFileVersionMS = (10 << 16) | 0;
+        mod.fixedInfo.dwFileVersionLS = (22621 << 16) | 1;
+        mod.fixedInfo.dwProductVersionMS = (10 << 16) | 0;
+        mod.fixedInfo.dwProductVersionLS = (22621 << 16) | 1;
+        mod.fixedInfo.dwFileOS = VOS_NT_WINDOWS32;
+        mod.fixedInfo.dwFileType = VFT_DLL;
+        mod.stringTable["CompanyName"] = std::string(company);
+        mod.stringTable["FileDescription"] = std::string(desc);
+        mod.stringTable["FileVersion"] = std::string(version);
+        mod.stringTable["OriginalFilename"] = std::string(name);
+        mod.stringTable["ProductName"] = "MicaNT Operating System";
+        mod.stringTable["ProductVersion"] = std::string(version);
+        registerModule(mod);
+    }
+
+    const ModuleVersionInfo* GetModuleInfo(std::string_view name) const {
+        return FindModule(name);
+    }
+
     const ModuleVersionInfo* FindModule(std::string_view name) const {
         std::string n = normalizeName(name);
         auto it = m_database.find(n);

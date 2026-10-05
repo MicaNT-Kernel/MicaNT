@@ -225,7 +225,6 @@ class CAdvancedSourceReader : public IMFSourceReaderEx {
 
     std::vector<StreamInfo> m_streams;
     std::mutex m_mutex;
-    bool m_draining{ false };
 
 public:
     CAdvancedSourceReader(std::wstring url, IMFByteStream* pByteStream, IMFAttributes* pAttributes)

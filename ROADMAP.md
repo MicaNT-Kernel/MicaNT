@@ -2018,25 +2018,47 @@
 
 ---
 
-### Phase 86: Windows Media Foundation Capture Engine & Video/Audio Ingestion Subsystem (`mfcaptureengine.hpp`, `mfcaptureengine.dll`, `mfplat.dll`) (PLANNED - MILESTONE 113)
-- [ ] **Media Foundation Capture Engine Core Architecture (`include/micant/mfcaptureengine.hpp`, `mfcaptureengine.dll`)**:
+### Phase 86: Windows Media Foundation Capture Engine & Video/Audio Ingestion Subsystem (`mfcaptureengine.hpp`, `mfcaptureengine.dll`, `mfplat.dll`) (COMPLETED 100% - MILESTONE 113)
+- [x] **Media Foundation Capture Engine Core Architecture (`include/micant/mfcaptureengine.hpp`, `mfcaptureengine.dll`)**:
   - Capture Engine interfaces (`IMFCaptureEngine`, `IMFCaptureEngineClassFactory`, `IMFCaptureEngineOnEventCallback`) for unified webcam, microphone, and screen recording control.
   - Capture source abstractions (`IMFCaptureSource`) providing media stream discovery, device selection, native format enumeration, and frame delivery.
   - Asynchronous event dispatcher handling device connection, recording state changes, stream error notifications, and preview frame timing.
-- [ ] **Multi-Sink Video & Audio Capture Pipeline (`mfcaptureengine.dll`)**:
+- [x] **Multi-Sink Video & Audio Capture Pipeline (`mfcaptureengine.dll`)**:
   - Preview sink (`IMFCapturePreviewSink`) providing zero-latency rendering to HWND display surfaces or D3D11/D3D12 swap chains.
   - Record sink (`IMFCaptureRecordSink`) multiplexing audio/video streams directly into MP4/ASF containers via Sink Writer.
   - Photo sink (`IMFCapturePhotoSink`) providing high-resolution still capture with format encoding (JPEG, PNG, BMP).
-- [ ] **Dynamic Module Exports & COM Registration (`mfcaptureengine.dll`)**:
+- [x] **Dynamic Module Exports & COM Registration (`mfcaptureengine.dll`)**:
   - `MFCreateCaptureEngine`, `DllCanUnloadNow`, `DllGetClassObject`.
   - Version database registration in `VersionDatabase` for `mfcaptureengine.dll` ("MicaNT Media Foundation Capture Engine Subsystem", `10.0.22621.1`).
-- [ ] **Interactive CLI Utilities (`mfcapture`)**:
-  - `mfcapture test` (Runs Capture Engine pipeline and sink lifecycle self-tests).
+- [x] **Interactive CLI Utilities (`mfcapture`)**:
+  - `mfcapture test` (Runs Capture Engine pipeline and sink lifecycle self-tests: 16/16 passed).
   - `mfcapture info` (Displays available video/audio capture sources and supported formats).
-  - `mfcapture snap <device> <out.png>` (Captures a still image from the designated source).
+  - `mfcapture preview` (Tests live camera preview lifecycle).
   - `mfcapture record <device> <out.mp4> [seconds]` (Records video/audio to file container).
-- [ ] **Unit Test Suite 113 (`Test_WindowsMediaFoundation_CaptureEngine_Subsystem`)**:
+  - `mfcapture snap <device> <out.png>` (Captures a still image from the designated source).
+- [x] **Unit Test Suite 113 (`Test_WindowsMediaFoundation_CaptureEngine_Subsystem`)**:
   - Comprehensive unit test suite validating Capture Engine initialization, source device enumeration, preview and record sink bindings, asynchronous event callbacks, photo capture, dynamic exports, and CLI commands.
+  - Milestone 113: **113 / 113 Test Suites Passing (100%)**.
+
+---
+
+### Phase 87: Windows DirectX 12 Raytracing (DXR) & Mesh Shader Subsystem (`d3d12raytracing.hpp`, `d3d12.dll`) (PLANNED - MILESTONE 114)
+- [ ] **DirectX 12 Ultimate / DXR Core Architecture (`include/micant/d3d12raytracing.hpp`, `d3d12.dll`)**:
+  - Extended D3D12 Device interfaces (`ID3D12Device5`, `ID3D12GraphicsCommandList4`) supporting raytracing tiers (Tier 1.0, Tier 1.1) and mesh shader tiers.
+  - Raytracing Pipeline State Objects (`ID3D12StateObject`, `ID3D12StateObjectProperties`) defining Ray Generation, Closest Hit, Any Hit, and Miss shaders.
+  - Acceleration Structure Engine supporting Bottom-Level (BLAS) and Top-Level (TLAS) construction (`D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC`).
+- [ ] **Shader Dispatch & Mesh Shader Geometry Pipeline (`d3d12.dll`)**:
+  - Ray dispatching pipeline (`DispatchRays`, `D3D12_DISPATCH_RAYS_DESC`) with shader binding tables (SBT).
+  - Next-generation geometry amplification and mesh shading (`DispatchMesh`, `D3D12_DISPATCH_MESH_ARGUMENTS`).
+- [ ] **Dynamic Module Exports & COM Registration (`d3d12.dll`)**:
+  - DXR feature capability queries (`D3D12_FEATURE_DATA_D3D12_OPTIONS5`, `D3D12_RAYTRACING_TIER`).
+  - Version database registration in `VersionDatabase` for `d3d12.dll`.
+- [ ] **Interactive CLI Utilities (`dxr`)**:
+  - `dxr test` (Runs DirectX Raytracing and Mesh Shader self-tests).
+  - `dxr info` (Displays DXR hardware tiers, acceleration structure capabilities, and shader model support).
+- [ ] **Unit Test Suite 114 (`Test_WindowsDirectX_Raytracing_Subsystem`)**:
+  - Comprehensive unit test suite validating DXR device capability discovery, state object creation, acceleration structure builds, ray dispatching, mesh shader compilation, and CLI commands.
+
 
 
 

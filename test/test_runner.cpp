@@ -312,7 +312,8 @@ void Test_SyscallDispatcher_DispatchFlow() {
     TEST_ASSERT(base != 0, "Allocated base address must be nonzero");
 
     // Test invalid SSN
-    sys::SyscallFrame badFrame{ .ssn = 0xFFFF };
+    sys::SyscallFrame badFrame{};
+    badFrame.ssn = 0xFFFF;
     NtStatus badRes = dispatcher.dispatch(badFrame);
     TEST_ASSERT(badRes == NtStatus::InvalidDeviceRequest, "Unregistered SSN must return InvalidDeviceRequest");
 }
@@ -1228,7 +1229,7 @@ static NtStatus MicaDriverDispatchDeviceControl(io::DeviceObject* dev, io::Irp* 
         irp->ioStatus.information = sizeof(MicaTelemetryData);
         return NtStatus::Success;
     } else if (ioctl == IOCTL_MICA_SET_POWER_MODE) {
-        if (!irp->systemBuffer || irp->byteOffset.highPart < sizeof(uint32_t)) {
+        if (!irp->systemBuffer || irp->byteOffset.highPart < static_cast<int32_t>(sizeof(uint32_t))) {
             irp->ioStatus.status = NtStatus::InvalidParameter;
             return NtStatus::InvalidParameter;
         }
@@ -26378,8 +26379,244 @@ void Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem() {
     std::cout << "[TEST] Suite 112: Windows Media Foundation Source Reader & Sink Writer PASSED.\n";
 }
 
+// ============================================================================
+// Suite 113: Windows Media Foundation Capture Engine Subsystem
+// ============================================================================
+void Test_WindowsMediaFoundation_CaptureEngine_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 113: Windows Media Foundation Capture Engine Subsystem          \n";
+    std::cout << "========================================================================\n";
+
+    mfcapture::InitializeMFCaptureEngineExports();
+
+    // 1. Dynamic Module Export Verification
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("mfcaptureengine.dll", "MFCreateCaptureEngine") != nullptr, "MFCreateCaptureEngine must be exported");
+    TEST_ASSERT(ldr.getExport("mfcaptureengine.dll", "DllCanUnloadNow") != nullptr, "DllCanUnloadNow must be exported");
+    TEST_ASSERT(ldr.getExport("mfcaptureengine.dll", "DllGetClassObject") != nullptr, "DllGetClassObject must be exported");
+
+    // 2. Version Database Verification
+    const auto* mod = version::VersionDatabase::Instance().GetModuleInfo("mfcaptureengine.dll");
+    TEST_ASSERT(mod != nullptr, "VersionDatabase must contain mfcaptureengine.dll");
+    TEST_ASSERT(mod->stringTable.at("ProductVersion") == "10.0.22621.1", "ProductVersion must be 10.0.22621.1");
+
+    // 3. Create Capture Engine via Factory Function
+    mfcapture::IMFCaptureEngine* pEngine = nullptr;
+    int32_t hr = mfcapture::MFCreateCaptureEngine(&pEngine);
+    TEST_ASSERT(hr == 0 && pEngine != nullptr, "MFCreateCaptureEngine must succeed");
+
+    // 4. Query COM Interfaces & Class Factory
+    mfcapture::IMFCaptureEngineClassFactory* pFactory = nullptr;
+    hr = mfcapture::DllGetClassObject(mfcapture::CLSID_MFCaptureEngineClassFactory_Const,
+                                      mfcapture::IID_IMFCaptureEngineClassFactory_Const,
+                                      reinterpret_cast<void**>(&pFactory));
+    TEST_ASSERT(hr == 0 && pFactory != nullptr, "DllGetClassObject for IMFCaptureEngineClassFactory must succeed");
+
+    mfcapture::IMFCaptureEngine* pEngineFromFactory = nullptr;
+    hr = pFactory->CreateInstance(mfcapture::CLSID_MFCaptureEngine_Const,
+                                  mfcapture::IID_IMFCaptureEngine_Const,
+                                  reinterpret_cast<void**>(&pEngineFromFactory));
+    TEST_ASSERT(hr == 0 && pEngineFromFactory != nullptr, "Factory CreateInstance must create IMFCaptureEngine");
+
+    // 5. Query Capture Source & Stream Enumeration
+    mfcapture::IMFCaptureSource* pSource = nullptr;
+    hr = pEngine->GetSource(&pSource);
+    TEST_ASSERT(hr == 0 && pSource != nullptr, "GetSource must retrieve IMFCaptureSource");
+
+    uint32_t streamCount = 0;
+    hr = pSource->GetDeviceStreamCount(&streamCount);
+    TEST_ASSERT(hr == 0 && streamCount == 3, "Capture source must provide 3 streams (Video, Audio, Photo)");
+
+    mfcapture::MF_CAPTURE_ENGINE_STREAM_CATEGORY catVideo{}, catAudio{}, catPhoto{};
+    pSource->GetDeviceStreamCategory(0, &catVideo);
+    pSource->GetDeviceStreamCategory(1, &catAudio);
+    pSource->GetDeviceStreamCategory(2, &catPhoto);
+    TEST_ASSERT(catVideo == mfcapture::MF_CAPTURE_ENGINE_STREAM_CATEGORY_VIDEO_RECORD, "Stream 0 must be Video Record");
+    TEST_ASSERT(catAudio == mfcapture::MF_CAPTURE_ENGINE_STREAM_CATEGORY_AUDIO, "Stream 1 must be Audio");
+    TEST_ASSERT(catPhoto == mfcapture::MF_CAPTURE_ENGINE_STREAM_CATEGORY_PHOTO_INDEPENDENT, "Stream 2 must be Independent Photo");
+
+    // 6. Device Media Type Discovery (1080p, 4K, PCM 48kHz)
+    mf::IMFMediaType* pNv12_1080 = nullptr;
+    mf::IMFMediaType* pRgb_1080 = nullptr;
+    mf::IMFMediaType* pNv12_4k = nullptr;
+    hr = pSource->GetAvailableDeviceMediaType(0, 0, &pNv12_1080);
+    TEST_ASSERT(hr == 0 && pNv12_1080 != nullptr, "Stream 0 Type 0 must be available");
+    hr = pSource->GetAvailableDeviceMediaType(0, 1, &pRgb_1080);
+    TEST_ASSERT(hr == 0 && pRgb_1080 != nullptr, "Stream 0 Type 1 must be available");
+    hr = pSource->GetAvailableDeviceMediaType(0, 2, &pNv12_4k);
+    TEST_ASSERT(hr == 0 && pNv12_4k != nullptr, "Stream 0 Type 2 must be available");
+
+    uint64_t frameSize1080 = 0, frameSize4k = 0;
+    pNv12_1080->GetUINT64(mf::MF_MT_FRAME_SIZE, &frameSize1080);
+    pNv12_4k->GetUINT64(mf::MF_MT_FRAME_SIZE, &frameSize4k);
+    TEST_ASSERT(frameSize1080 == ((1920ULL << 32) | 1080ULL), "1080p frame size must be 1920x1080");
+    TEST_ASSERT(frameSize4k == ((3840ULL << 32) | 2160ULL), "4K frame size must be 3840x2160");
+
+    // 7. Preview Sink Query & Display Configuration
+    mfcapture::IMFCaptureSink* pSinkBase = nullptr;
+    hr = pEngine->GetSink(mfcapture::MF_CAPTURE_ENGINE_SINK_TYPE_PREVIEW, &pSinkBase);
+    TEST_ASSERT(hr == 0 && pSinkBase != nullptr, "GetSink for PREVIEW must succeed");
+
+    mfcapture::IMFCapturePreviewSink* pPreviewSink = nullptr;
+    hr = pSinkBase->QueryInterface(mfcapture::IID_IMFCapturePreviewSink_Const, reinterpret_cast<void**>(&pPreviewSink));
+    TEST_ASSERT(hr == 0 && pPreviewSink != nullptr, "QueryInterface for IMFCapturePreviewSink must succeed");
+
+    pPreviewSink->SetRenderHandle(0xCAFE);
+    pPreviewSink->SetMirrorState(1);
+    pPreviewSink->SetRotation(0, 180);
+    int32_t mirrorState = 0;
+    uint32_t rotationAngle = 0;
+    pPreviewSink->GetMirrorState(&mirrorState);
+    pPreviewSink->GetRotation(0, &rotationAngle);
+    TEST_ASSERT(mirrorState == 1, "Preview mirror state must be enabled");
+    TEST_ASSERT(rotationAngle == 180, "Preview rotation must be 180 degrees");
+
+    // 8. Record Sink Query & Destination Configuration
+    mfcapture::IMFCaptureSink* pRecBase = nullptr;
+    hr = pEngine->GetSink(mfcapture::MF_CAPTURE_ENGINE_SINK_TYPE_RECORD, &pRecBase);
+    TEST_ASSERT(hr == 0 && pRecBase != nullptr, "GetSink for RECORD must succeed");
+
+    mfcapture::IMFCaptureRecordSink* pRecordSink = nullptr;
+    hr = pRecBase->QueryInterface(mfcapture::IID_IMFCaptureRecordSink_Const, reinterpret_cast<void**>(&pRecordSink));
+    TEST_ASSERT(hr == 0 && pRecordSink != nullptr, "QueryInterface for IMFCaptureRecordSink must succeed");
+
+    pRecordSink->SetOutputFileName(L"C:\\Videos\\session.mp4");
+    pRecordSink->SetRotation(0, 0);
+
+    // 9. Photo Sink Query
+    mfcapture::IMFCaptureSink* pPhotoBase = nullptr;
+    hr = pEngine->GetSink(mfcapture::MF_CAPTURE_ENGINE_SINK_TYPE_PHOTO, &pPhotoBase);
+    TEST_ASSERT(hr == 0 && pPhotoBase != nullptr, "GetSink for PHOTO must succeed");
+
+    mfcapture::IMFCapturePhotoSink* pPhotoSink = nullptr;
+    hr = pPhotoBase->QueryInterface(mfcapture::IID_IMFCapturePhotoSink_Const, reinterpret_cast<void**>(&pPhotoSink));
+    TEST_ASSERT(hr == 0 && pPhotoSink != nullptr, "QueryInterface for IMFCapturePhotoSink must succeed");
+
+    pPhotoSink->SetOutputFileName(L"C:\\Photos\\snap_master.png");
+
+    // 10. Asynchronous Event Callback Dispatching
+    struct TestCaptureCallback : public mfcapture::IMFCaptureEngineOnEventCallback {
+        std::atomic<uint32_t> ref{ 1 };
+        std::atomic<bool> evtInit{ false };
+        std::atomic<bool> evtPreviewStart{ false };
+        std::atomic<bool> evtPreviewStop{ false };
+        std::atomic<bool> evtRecordStart{ false };
+        std::atomic<bool> evtRecordStop{ false };
+        std::atomic<bool> evtPhoto{ false };
+
+        int32_t __stdcall QueryInterface(const GUID& riid, void** ppv) override {
+            if (!ppv) return ole32::E_POINTER;
+            if (riid == ole32::IID_IUnknown || riid == mfcapture::IID_IMFCaptureEngineOnEventCallback_Const) {
+                *ppv = this;
+                AddRef();
+                return ole32::S_OK;
+            }
+            *ppv = nullptr;
+            return ole32::E_NOINTERFACE;
+        }
+        uint32_t __stdcall AddRef() override { return ++ref; }
+        uint32_t __stdcall Release() override {
+            uint32_t r = --ref;
+            if (r == 0) delete this;
+            return r;
+        }
+        int32_t __stdcall OnEvent(mf::IMFMediaEvent* pEvent) override {
+            if (pEvent) {
+                GUID extType{};
+                pEvent->GetExtendedType(&extType);
+                if (extType == mfcapture::MF_CAPTURE_ENGINE_INITIALIZED) evtInit = true;
+                if (extType == mfcapture::MF_CAPTURE_ENGINE_PREVIEW_STARTED) evtPreviewStart = true;
+                if (extType == mfcapture::MF_CAPTURE_ENGINE_PREVIEW_STOPPED) evtPreviewStop = true;
+                if (extType == mfcapture::MF_CAPTURE_ENGINE_RECORD_STARTED) evtRecordStart = true;
+                if (extType == mfcapture::MF_CAPTURE_ENGINE_RECORD_STOPPED) evtRecordStop = true;
+                if (extType == mfcapture::MF_CAPTURE_ENGINE_PHOTO_TAKEN) evtPhoto = true;
+            }
+            return ole32::S_OK;
+        }
+    };
+
+    auto* pCb = new TestCaptureCallback();
+    hr = pEngine->Initialize(pCb, nullptr, nullptr, nullptr);
+    TEST_ASSERT(hr == 0, "IMFCaptureEngine::Initialize must return S_OK");
+    TEST_ASSERT(pCb->evtInit.load(), "MF_CAPTURE_ENGINE_INITIALIZED event must be dispatched");
+
+    // 11. Preview Lifecycle & Frame Ingestion
+    hr = pEngine->StartPreview();
+    TEST_ASSERT(hr == 0, "StartPreview must succeed");
+    TEST_ASSERT(pCb->evtPreviewStart.load(), "MF_CAPTURE_ENGINE_PREVIEW_STARTED event must be dispatched");
+    auto* pPreImpl = static_cast<mfcapture::CCapturePreviewSink*>(pPreviewSink);
+    TEST_ASSERT(pPreImpl->getFramesDelivered() == 3, "Preview sink must ingest 3 frames");
+
+    // 12. Record Lifecycle & Sample Multiplexing
+    hr = pEngine->StartRecord();
+    TEST_ASSERT(hr == 0, "StartRecord must succeed");
+    TEST_ASSERT(pCb->evtRecordStart.load(), "MF_CAPTURE_ENGINE_RECORD_STARTED event must be dispatched");
+    auto* pRecImpl = static_cast<mfcapture::CCaptureRecordSink*>(pRecordSink);
+    TEST_ASSERT(pRecImpl->getSamplesRecorded() == 10, "Record sink must multiplex 10 samples (5 video + 5 audio)");
+
+    // 13. Photo Snapshot Capture
+    hr = pEngine->TakePhoto();
+    TEST_ASSERT(hr == 0, "TakePhoto must succeed");
+    TEST_ASSERT(pCb->evtPhoto.load(), "MF_CAPTURE_ENGINE_PHOTO_TAKEN event must be dispatched");
+    auto* pPhotoImpl = static_cast<mfcapture::CCapturePhotoSink*>(pPhotoSink);
+    TEST_ASSERT(pPhotoImpl->getPhotosTaken() == 1, "Photo sink must record 1 photo taken");
+
+    // 14. Stop Lifecycle
+    hr = pEngine->StopRecord(1, 0);
+    TEST_ASSERT(hr == 0, "StopRecord must succeed");
+    TEST_ASSERT(pCb->evtRecordStop.load(), "MF_CAPTURE_ENGINE_RECORD_STOPPED event must be dispatched");
+
+    hr = pEngine->StopPreview();
+    TEST_ASSERT(hr == 0, "StopPreview must succeed");
+    TEST_ASSERT(pCb->evtPreviewStop.load(), "MF_CAPTURE_ENGINE_PREVIEW_STOPPED event must be dispatched");
+
+    // 15. Real-Time MFT Transform Insertion & Live DSP Pipeline
+    auto* pColorMFT = new mf::CColorConvertMFT();
+    hr = pSource->AddEffect(0, pColorMFT);
+    TEST_ASSERT(hr == 0, "AddEffect must attach MFT to stream 0");
+    auto* pSrcImpl = static_cast<mfcapture::CCaptureSource*>(pSource);
+    TEST_ASSERT(pSrcImpl->getEffectCount(0) == 1, "Stream 0 must have exactly 1 active effect");
+    hr = pSource->RemoveAllEffects(0);
+    TEST_ASSERT(hr == 0 && pSrcImpl->getEffectCount(0) == 0, "RemoveAllEffects must clear active effects");
+
+    // 16. Shell CLI Commands Verification
+    std::ostringstream testOut;
+    micant::shell::CommandShell shellEngine;
+    int rc = shellEngine.execute("mfcapture test", testOut);
+    TEST_ASSERT(rc == 0, "mfcapture test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("16/16 PASSED") != std::string::npos, "mfcapture test must pass all 16 tests");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("mfcapture info", infoOut);
+    TEST_ASSERT(rc == 0, "mfcapture info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("IMFCaptureEngine") != std::string::npos, "mfcapture info must display architecture telemetry");
+
+    // Cleanup
+    pColorMFT->Release();
+    pCb->Release();
+    pPhotoSink->Release();
+    pPhotoBase->Release();
+    pRecordSink->Release();
+    pRecBase->Release();
+    pPreviewSink->Release();
+    pSinkBase->Release();
+    pNv12_4k->Release();
+    pRgb_1080->Release();
+    pNv12_1080->Release();
+    pSource->Release();
+    pEngineFromFactory->Release();
+    pFactory->Release();
+    pEngine->Release();
+
+    std::cout << "[TEST] Suite 113: Windows Media Foundation Capture Engine Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite112")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite113")) {
+        RUN_TEST(Test_WindowsMediaFoundation_CaptureEngine_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite112") {
         RUN_TEST(Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem);
         return g_FailedTests;
     }
@@ -26524,6 +26761,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirect3D11_Video_Acceleration_Subsystem);
     RUN_TEST(Test_WindowsDirect3D12_Video_Acceleration_Subsystem);
     RUN_TEST(Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem);
+    RUN_TEST(Test_WindowsMediaFoundation_CaptureEngine_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
