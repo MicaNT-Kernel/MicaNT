@@ -210,7 +210,13 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 101: Windows Web Authentication & Sovereign FIDO2    [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 102: Windows Native Wifi & WLAN Subsystem (wlanapi)  [PLANNED]        │
+│ Phase 102: Windows Native Wifi & WLAN Subsystem (wlanapi)  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 103: Windows Virtual Disk & Storage Management       [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 104: Windows BitLocker & Full Volume Encryption (FVE)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 105: Windows Filtering Platform (WFP) & Firewall     [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2409,22 +2415,51 @@
 
 ---
 
-### Phase 104: Windows BitLocker & Full Volume Encryption (FVE) Subsystem (`fveapi.hpp`, `fveapi.dll` / `manage-bde.exe`) (PLANNED - MILESTONE 131)
-- [ ] **Windows BitLocker & Full Volume Encryption Architecture (`include/micant/fveapi.hpp`, `fveapi.dll`)**:
-  - Native Win32 FVE C APIs: `FveOpenVolume`, `FveCloseVolume`, `FveGetStatus`, `FveTurnOn`, `FveTurnOff`, `FveLockVolume`, `FveUnlockVolumeWithPassphrase`, `FveUnlockVolumeWithRecoveryPassword`, `FveAddAuthMethodPassphrase`, `FveAddAuthMethodRecoveryPassword`, `FveAddAuthMethodTpm`, `FveRemoveAuthMethod`, `FveGetAuthMethodInformation`.
+### Phase 104: Windows BitLocker & Full Volume Encryption (FVE) Subsystem (`fveapi.hpp`, `fveapi.dll` / `manage-bde.exe`) (100% Completed)
+- [x] **Windows BitLocker & Full Volume Encryption Architecture (`include/micant/fveapi.hpp`, `fveapi.dll`)**:
+  - Native Win32 FVE C APIs (18 standard exports):
+    * `FveOpenVolume`, `FveCloseVolume`, `FveGetStatus`, `FveTurnOn`, `FveTurnOff`, `FvePause`, `FveResume`.
+    * `FveLockVolume`, `FveUnlockVolumeWithPassphrase`, `FveUnlockVolumeWithRecoveryPassword`.
+    * `FveAddAuthMethodPassphrase`, `FveAddAuthMethodRecoveryPassword`, `FveAddAuthMethodTpm`.
+    * `FveRemoveAuthMethod`, `FveGetAuthMethodInformation`, `FveGetAuthMethodList`, `FveGetRecoveryPassword`, `FveFreeMemory`.
   - Cryptographic Volume Architecture:
-    * Volume Master Key (VMK) and Full Volume Encryption Key (FVEK).
-    * Cipher suites: XTS-AES-128, XTS-AES-256, and AES-CBC-128/256 with Elephant Diffuser.
-    * 48-digit numerical recovery password generation, checksumming, and validation (RFC 4648 format).
-    * TPM 2.0 PCR sealing and unsealing simulation for boot volumes.
-  - Sovereign FVE Controller & Volume Filter Driver:
-    * Transparent sector decryption and encryption overlay for mounted filesystem volumes.
-    * Conversion progress state machine (`FveStatusEncrypted`, `FveStatusDecrypted`, `FveStatusEncryptionInProgress`).
+    * Volume Master Key (VMK) and Full Volume Encryption Key (FVEK) 256-bit AES management.
+    * Cipher suites: XTS-AES-128, XTS-AES-256, AES-CBC-128, and AES-CBC-256.
+    * BitLocker 48-digit numerical recovery password generator and modulo-11 validator.
+    * TPM 2.0 PCR-7/11 sealing simulation and SHA-256 passphrase key hashing.
+  - Sovereign FVE Controller & Volume State Machine:
+    * Pre-seeded OS volume `C:` (Protected, Encrypted XTS-AES-256, TPM + Recovery Password) and data volume `D:` (Unprotected, Decrypted).
+    * Volume lock/unlock state machine (`Unlocked`, `Locked`) and conversion states (`Fully Encrypted`, `Fully Decrypted`, `Suspended`).
   - VersionDatabase registration (`10.0.22621.1`) for `fveapi.dll`.
+- [x] **Shell CLI Integration**:
+  - Implemented `manage-bde -status [vol]`, `manage-bde -on <vol> [-pw <pass>] [-rp]`, `manage-bde -off <vol>`, `manage-bde -lock <vol>`, `manage-bde -unlock <vol> -pw/-rp <key>`, `manage-bde -protectors -get <vol>`, `manage-bde -protectors -add <vol> -rp`, and `manage-bde test` in `micant::shell`.
+- [x] **Unit Test Suite 131 (`Test_WindowsBitLocker_FVE_Subsystem`)**:
+  - Validates dynamic exports in `fveapi.dll`, VersionDatabase entry, 48-digit numerical recovery password generation and modulo-11 verification, OS volume C: status & key protector queries (TPM + Recovery Password), Data volume D: full lifecycle (unprotected status, short passphrase rejection, passphrase and 48-digit recovery password enrollment, TPM enrollment and removal, turn-on encryption, pause/resume, lock volume, incorrect passphrase rejection, valid passphrase unlock, second lock and 48-digit recovery key unlock, turn-off decryption), and shell CLI commands (`manage-bde test`, `manage-bde -status`, `manage-bde -protectors -get C:`, `bde -status D:`).
+  - Milestone 131: **131 / 131 Test Suites Passing (100%)**.
+
+---
+
+### Phase 105: Windows Filtering Platform (WFP) & Advanced Firewall Subsystem (`fwpuclnt.hpp`, `fwpuclnt.dll` / `netsh advfirewall`) (PLANNED - MILESTONE 132)
+- [ ] **Windows Filtering Platform User-Mode Client Architecture (`include/micant/fwpuclnt.hpp`, `fwpuclnt.dll`)**:
+  - Native Win32 WFP Management C APIs:
+    * `FwpmEngineOpen0`, `FwpmEngineClose0`.
+    * `FwpmSessionCreateEnumHandle0`, `FwpmSessionDestroyEnumHandle0`, `FwpmSessionEnum0`.
+    * `FwpmFilterAdd0`, `FwpmFilterDeleteById0`, `FwpmFilterGetById0`, `FwpmFilterCreateEnumHandle0`, `FwpmFilterEnum0`, `FwpmFilterDestroyEnumHandle0`.
+    * `FwpmLayerCreateEnumHandle0`, `FwpmLayerEnum0`, `FwpmLayerDestroyEnumHandle0`.
+    * `FwpmSubLayerAdd0`, `FwpmSubLayerDeleteById0`, `FwpmSubLayerEnum0`.
+    * `FwpmFreeMemory0`.
+  - WFP Core Engine & Layer Topology:
+    * Standard WFP filtering layers (`FWPM_LAYER_INBOUND_IPPACKET_V4`, `FWPM_LAYER_OUTBOUND_IPPACKET_V4`, `FWPM_LAYER_ALE_AUTH_CONNECT_V4`, `FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4`).
+    * Filter condition evaluation (source/dest IP, port, protocol, application image path).
+    * Action types: `FWP_ACTION_PERMIT`, `FWP_ACTION_BLOCK`, `FWP_ACTION_CALLOUT_TERMINATING`.
+  - Windows Advanced Firewall Profile State:
+    * Domain, Private, and Public profile management (Inbound/Outbound default behaviors).
+    * Rule persistence, stateful TCP inspection, and packet classification.
+  - VersionDatabase registration (`10.0.22621.1`) for `fwpuclnt.dll`.
 - [ ] **Shell CLI Integration**:
-  - Implement `manage-bde -status`, `manage-bde -on <vol>`, `manage-bde -off <vol>`, `manage-bde -lock <vol>`, `manage-bde -unlock <vol>`, and `manage-bde test` in `micant::shell`.
-- [ ] **Unit Test Suite 131 (`Test_WindowsBitLocker_FVE_Subsystem`)**:
-  - Validate dynamic exports in `fveapi.dll`, volume status inspection, passphrase and recovery key enrollment, lock/unlock state transitions, XTS-AES volume crypto, and shell CLI commands.
+  - Implement `netsh advfirewall show allprofiles`, `netsh advfirewall set allprofiles state [on|off]`, `netsh advfirewall firewall add rule ...`, and `advfirewall test` in `micant::shell`.
+- [ ] **Unit Test Suite 132 (`Test_WindowsFilteringPlatform_Firewall_Subsystem`)**:
+  - Validate dynamic exports in `fwpuclnt.dll`, engine open/close sessions, filter layer enumeration, filter rule addition and classification, action evaluation (permit/block), profile state transitions, and shell CLI commands.
 
 
 

@@ -138,6 +138,7 @@
 #include "micant/ocr.hpp"
 #include "micant/wlanapi.hpp"
 #include "micant/virtdisk.hpp"
+#include "micant/fveapi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -30469,8 +30470,247 @@ void Test_WindowsVirtualDisk_Storage_Subsystem() {
     std::cout << "[TEST] Suite 130: Windows Virtual Disk & Storage Management Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 131: Windows BitLocker Drive Encryption & FVE Subsystem
+// ============================================================================
+void Test_WindowsBitLocker_FVE_Subsystem() {
+    using namespace micant::fve;
+
+    // 1. Initialize subsystem exports
+    InitializeFveSubsystemExports();
+
+    // 2. Validate DynamicLoader exports for fveapi.dll
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveOpenVolume") != nullptr, "fveapi.dll must export FveOpenVolume");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveCloseVolume") != nullptr, "fveapi.dll must export FveCloseVolume");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveGetStatus") != nullptr, "fveapi.dll must export FveGetStatus");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveTurnOn") != nullptr, "fveapi.dll must export FveTurnOn");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveTurnOff") != nullptr, "fveapi.dll must export FveTurnOff");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FvePause") != nullptr, "fveapi.dll must export FvePause");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveResume") != nullptr, "fveapi.dll must export FveResume");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveLockVolume") != nullptr, "fveapi.dll must export FveLockVolume");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveUnlockVolumeWithPassphrase") != nullptr, "fveapi.dll must export FveUnlockVolumeWithPassphrase");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveUnlockVolumeWithRecoveryPassword") != nullptr, "fveapi.dll must export FveUnlockVolumeWithRecoveryPassword");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveAddAuthMethodPassphrase") != nullptr, "fveapi.dll must export FveAddAuthMethodPassphrase");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveAddAuthMethodRecoveryPassword") != nullptr, "fveapi.dll must export FveAddAuthMethodRecoveryPassword");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveAddAuthMethodTpm") != nullptr, "fveapi.dll must export FveAddAuthMethodTpm");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveRemoveAuthMethod") != nullptr, "fveapi.dll must export FveRemoveAuthMethod");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveGetAuthMethodInformation") != nullptr, "fveapi.dll must export FveGetAuthMethodInformation");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveGetAuthMethodList") != nullptr, "fveapi.dll must export FveGetAuthMethodList");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveGetRecoveryPassword") != nullptr, "fveapi.dll must export FveGetRecoveryPassword");
+    TEST_ASSERT(loader.getExport("fveapi.dll", "FveFreeMemory") != nullptr, "fveapi.dll must export FveFreeMemory");
+
+    // 3. Verify VersionDatabase registration
+    auto modInfo = version::VersionDatabase::Instance().GetModuleInfo("fveapi.dll");
+    TEST_ASSERT(modInfo != nullptr, "fveapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modInfo->stringTable.at("FileVersion") == "10.0.22621.1", "fveapi.dll version must be 10.0.22621.1");
+    TEST_ASSERT(modInfo->stringTable.at("FileDescription") == "Windows BitLocker & Full Volume Encryption Subsystem",
+                "fveapi.dll description must match Windows FVE");
+
+    // 4. Test BitLocker 48-Digit Numerical Recovery Password Generation and Modulo-11 Validation
+    std::wstring generatedRec = GenerateBitLockerRecoveryPassword();
+    TEST_ASSERT(generatedRec.size() == 55, "BitLocker recovery password must be 55 characters (8 groups of 6 + 7 hyphens)");
+    TEST_ASSERT(ValidateBitLockerRecoveryPassword(generatedRec), "Generated recovery password must pass modulo-11 validation");
+
+    // Test modulo-11 validation edge cases
+    TEST_ASSERT(ValidateBitLockerRecoveryPassword(L"111111-222222-333333-444444-555555-666666-777777-888888"),
+                "Repunit multiples of 11 must validate");
+    TEST_ASSERT(!ValidateBitLockerRecoveryPassword(L"111112-222222-333333-444444-555555-666666-777777-888888"),
+                "Non-multiple of 11 must fail validation");
+    TEST_ASSERT(!ValidateBitLockerRecoveryPassword(L"ABCDEF-222222-333333-444444-555555-666666-777777-888888"),
+                "Non-digit characters must fail validation");
+
+    // 5. Interrogate Pre-Seeded System Volume C:
+    HANDLE hVolC = nullptr;
+    DWORD dwRet = FveOpenVolume(L"C:", 0, &hVolC);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveOpenVolume for C: must succeed");
+    TEST_ASSERT(hVolC != nullptr, "Volume handle for C: must be non-null");
+
+    FVE_STATUS statusC{};
+    dwRet = FveGetStatus(hVolC, &statusC);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveGetStatus for C: must succeed");
+    TEST_ASSERT(statusC.ProtectionStatus == FVE_PROTECTION_STATUS_ON, "C: must have ProtectionStatus ON");
+    TEST_ASSERT(statusC.ConversionStatus == FVE_CONVERSION_STATUS_FULLY_ENCRYPTED, "C: must be Fully Encrypted");
+    TEST_ASSERT(statusC.EncryptionMethod == FVE_ENCRYPTION_METHOD_XTS_AES_256, "C: must use XTS-AES-256");
+    TEST_ASSERT(statusC.LockStatus == FVE_LOCK_STATUS_UNLOCKED, "C: must be Unlocked");
+    TEST_ASSERT(statusC.EncryptionPercentage == 100, "C: must be 100% encrypted");
+    TEST_ASSERT(statusC.VolumeType == FVE_VOLUME_TYPE_OS, "C: must be OS volume type");
+
+    // Enumerate protectors on C:
+    PFVE_AUTH_METHOD_LIST pListC = nullptr;
+    dwRet = FveGetAuthMethodList(hVolC, &pListC);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveGetAuthMethodList for C: must succeed");
+    TEST_ASSERT(pListC != nullptr && pListC->dwNumberOfItems >= 2, "C: must have at least 2 key protectors");
+
+    bool hasTpm = false;
+    bool hasRec = false;
+    for (DWORD i = 0; i < pListC->dwNumberOfItems; ++i) {
+        if (pListC->Items[i].AuthMethodType == FVE_AUTH_METHOD_TPM) hasTpm = true;
+        if (pListC->Items[i].AuthMethodType == FVE_AUTH_METHOD_RECOVERY_PASSWORD) hasRec = true;
+    }
+    TEST_ASSERT(hasTpm, "C: must have TPM key protector");
+    TEST_ASSERT(hasRec, "C: must have Recovery Password key protector");
+
+    wchar_t cRecPwd[64]{ 0 };
+    dwRet = FveGetRecoveryPassword(hVolC, nullptr, cRecPwd, 64);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveGetRecoveryPassword for C: must succeed");
+    TEST_ASSERT(ValidateBitLockerRecoveryPassword(cRecPwd), "C: recovery password must be valid modulo-11");
+
+    FveFreeMemory(pListC);
+    dwRet = FveCloseVolume(hVolC);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveCloseVolume for C: must succeed");
+
+    // 6. Test Data Volume D: Lifecycle, Encryption, Protectors & Lock/Unlock
+    HANDLE hVolD = nullptr;
+    dwRet = FveOpenVolume(L"D:", 0, &hVolD);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveOpenVolume for D: must succeed");
+
+    FVE_STATUS statusD{};
+    dwRet = FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveGetStatus for D: must succeed");
+    TEST_ASSERT(statusD.ProtectionStatus == FVE_PROTECTION_STATUS_OFF, "D: must initially have Protection OFF");
+    TEST_ASSERT(statusD.ConversionStatus == FVE_CONVERSION_STATUS_FULLY_DECRYPTED, "D: must initially be Fully Decrypted");
+
+    // Cannot lock an unencrypted volume
+    dwRet = FveLockVolume(hVolD, 0);
+    TEST_ASSERT(dwRet == FVE_E_NOT_ENCRYPTED, "Locking unencrypted volume must fail with FVE_E_NOT_ENCRYPTED");
+
+    // Add passphrase protector: short passphrase validation
+    GUID passGuid{};
+    dwRet = FveAddAuthMethodPassphrase(hVolD, L"short", &passGuid);
+    TEST_ASSERT(dwRet == FVE_E_PASSPHRASE_TOO_SHORT, "Short passphrase (<8 chars) must fail");
+
+    // Add valid passphrase
+    dwRet = FveAddAuthMethodPassphrase(hVolD, L"SovereignSecureP@ss123!", &passGuid);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveAddAuthMethodPassphrase must succeed");
+
+    // Add 48-digit numerical recovery password
+    GUID recGuid{};
+    dwRet = FveAddAuthMethodRecoveryPassword(hVolD, nullptr, &recGuid);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveAddAuthMethodRecoveryPassword must succeed");
+
+    wchar_t dRecPwd[64]{ 0 };
+    dwRet = FveGetRecoveryPassword(hVolD, &recGuid, dRecPwd, 64);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveGetRecoveryPassword by GUID must succeed");
+    TEST_ASSERT(ValidateBitLockerRecoveryPassword(dRecPwd), "D: recovery password must validate");
+
+    // Add TPM protector
+    GUID tpmGuid{};
+    dwRet = FveAddAuthMethodTpm(hVolD, 0, &tpmGuid);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveAddAuthMethodTpm must succeed");
+
+    // Enumerate protectors: should be 3
+    PFVE_AUTH_METHOD_LIST pListD = nullptr;
+    dwRet = FveGetAuthMethodList(hVolD, &pListD);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveGetAuthMethodList for D: must succeed");
+    TEST_ASSERT(pListD != nullptr && pListD->dwNumberOfItems == 3, "D: must have 3 enrolled key protectors");
+    FveFreeMemory(pListD);
+
+    // Remove TPM protector
+    dwRet = FveRemoveAuthMethod(hVolD, &tpmGuid);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveRemoveAuthMethod must succeed");
+
+    pListD = nullptr;
+    dwRet = FveGetAuthMethodList(hVolD, &pListD);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && pListD != nullptr && pListD->dwNumberOfItems == 2,
+                "D: must have 2 protectors after TPM removal");
+    FveFreeMemory(pListD);
+
+    // Turn on BitLocker encryption
+    dwRet = FveTurnOn(hVolD, FVE_ENCRYPTION_METHOD_XTS_AES_256, 0);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveTurnOn must succeed");
+
+    dwRet = FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(statusD.ProtectionStatus == FVE_PROTECTION_STATUS_ON, "D: ProtectionStatus must be ON");
+    TEST_ASSERT(statusD.ConversionStatus == FVE_CONVERSION_STATUS_FULLY_ENCRYPTED, "D: ConversionStatus must be Fully Encrypted");
+
+    // Test Pause / Resume
+    dwRet = FvePause(hVolD);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FvePause must succeed");
+    FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(statusD.ProtectionStatus == FVE_PROTECTION_STATUS_SUSPENDED, "D: ProtectionStatus must be Suspended after Pause");
+
+    dwRet = FveResume(hVolD);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveResume must succeed");
+    FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(statusD.ProtectionStatus == FVE_PROTECTION_STATUS_ON, "D: ProtectionStatus must be ON after Resume");
+
+    // Lock volume D:
+    dwRet = FveLockVolume(hVolD, 0);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveLockVolume must succeed");
+    FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(statusD.LockStatus == FVE_LOCK_STATUS_LOCKED, "D: LockStatus must be LOCKED");
+
+    // Unlock with invalid passphrase
+    dwRet = FveUnlockVolumeWithPassphrase(hVolD, L"IncorrectPassword", 0);
+    TEST_ASSERT(dwRet == ERROR_ACCESS_DENIED, "FveUnlockVolumeWithPassphrase must reject incorrect password");
+    FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(statusD.LockStatus == FVE_LOCK_STATUS_LOCKED, "D: must remain LOCKED after failed unlock");
+
+    // Unlock with valid passphrase
+    dwRet = FveUnlockVolumeWithPassphrase(hVolD, L"SovereignSecureP@ss123!", 0);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveUnlockVolumeWithPassphrase must succeed with correct password");
+    FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(statusD.LockStatus == FVE_LOCK_STATUS_UNLOCKED, "D: must be UNLOCKED after valid passphrase");
+
+    // Lock again and unlock with 48-digit recovery password
+    dwRet = FveLockVolume(hVolD, 0);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveLockVolume second lock must succeed");
+
+    dwRet = FveUnlockVolumeWithRecoveryPassword(hVolD, dRecPwd, 0);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveUnlockVolumeWithRecoveryPassword must succeed with valid 48-digit key");
+    FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(statusD.LockStatus == FVE_LOCK_STATUS_UNLOCKED, "D: must be UNLOCKED after valid recovery key");
+
+    // Turn off BitLocker (Decrypt)
+    dwRet = FveTurnOff(hVolD, 0);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FveTurnOff must succeed");
+    FveGetStatus(hVolD, &statusD);
+    TEST_ASSERT(statusD.ProtectionStatus == FVE_PROTECTION_STATUS_OFF, "D: ProtectionStatus must be OFF after TurnOff");
+    TEST_ASSERT(statusD.ConversionStatus == FVE_CONVERSION_STATUS_FULLY_DECRYPTED, "D: ConversionStatus must be Fully Decrypted");
+
+    FveCloseVolume(hVolD);
+
+    // 7. Test Shell CLI: manage-bde / bde
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    // Self-test
+    int shellRet = proc.execute("manage-bde test", oss);
+    TEST_ASSERT(shellRet == 0, "manage-bde test must return 0");
+    TEST_ASSERT(oss.str().find("[SUCCESS] Windows BitLocker & FVE Diagnostics passed cleanly.") != std::string::npos,
+                "manage-bde test diagnostics must report clean pass");
+
+    // Status query
+    oss.str("");
+    shellRet = proc.execute("manage-bde -status", oss);
+    TEST_ASSERT(shellRet == 0, "manage-bde -status must return 0");
+    TEST_ASSERT(oss.str().find("Volume C:") != std::string::npos, "manage-bde -status must report Volume C:");
+    TEST_ASSERT(oss.str().find("Fully Encrypted") != std::string::npos, "manage-bde -status must report Fully Encrypted for C:");
+    TEST_ASSERT(oss.str().find("Protection On") != std::string::npos, "manage-bde -status must report Protection On for C:");
+
+    // Enumerate protectors CLI
+    oss.str("");
+    shellRet = proc.execute("manage-bde -protectors -get C:", oss);
+    TEST_ASSERT(shellRet == 0, "manage-bde -protectors -get C: must return 0");
+    TEST_ASSERT(oss.str().find("TPM") != std::string::npos, "protectors list must show TPM");
+    TEST_ASSERT(oss.str().find("Numerical Password") != std::string::npos, "protectors list must show Numerical Password");
+
+    // Single volume status
+    oss.str("");
+    shellRet = proc.execute("bde -status D:", oss);
+    TEST_ASSERT(shellRet == 0, "bde -status D: must return 0");
+    TEST_ASSERT(oss.str().find("Volume D:") != std::string::npos, "bde -status D: must display volume D:");
+
+    std::cout << "[TEST] Suite 131: Windows BitLocker & FVE Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite130")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite131")) {
+        RUN_TEST(Test_WindowsBitLocker_FVE_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite130") {
         RUN_TEST(Test_WindowsVirtualDisk_Storage_Subsystem);
         return g_FailedTests;
     }
@@ -30705,6 +30945,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsWebAuthn_FIDO2_Subsystem);
     RUN_TEST(Test_WindowsNativeWifi_WLAN_Subsystem);
     RUN_TEST(Test_WindowsVirtualDisk_Storage_Subsystem);
+    RUN_TEST(Test_WindowsBitLocker_FVE_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

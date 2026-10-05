@@ -122,6 +122,7 @@
 #include "webauthn.hpp"
 #include "wlanapi.hpp"
 #include "virtdisk.hpp"
+#include "fveapi.hpp"
 
 namespace micant::shell {
 
@@ -334,6 +335,7 @@ public:
             if (cmd == "webauthn" || cmd == "fido2" || cmd == "passkey") { cmdWebAuthn(tokens, out); return 0; }
             if (cmd == "wlan" || cmd == "wifi" || cmd == "wireless") { cmdWlan(tokens, out); return 0; }
             if (cmd == "vhd" || cmd == "virtdisk" || cmd == "vdisk") { cmdVirtDisk(tokens, out); return 0; }
+            if (cmd == "manage-bde" || cmd == "bde" || cmd == "bitlocker") { cmdManageBde(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -637,6 +639,7 @@ private:
             << "  WEBAUTHN [test|info|register|auth] Windows Web Authentication & FIDO2 Passkeys (webauthn test)\n"
             << "  WLAN [test|info|scan|list|connect|disconnect] Windows Native Wifi & WLAN (wlan test)\n"
             << "  VHD [test|info|create|attach|detach|expand|list] Windows Virtual Hard Disk (vhd test)\n"
+            << "  MANAGE-BDE [status|on|off|lock|unlock|protectors|test] BitLocker Drive Encryption (manage-bde test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -18885,6 +18888,448 @@ private:
             << "  vhd detach <path>                      Unmounts virtual disk\n"
             << "  vhd expand <path> <newSizeMB>          Expands virtual disk capacity\n"
             << "  vhd test                               Runs Virtual Disk self-test diagnostics\n";
+    }
+
+    void cmdManageBde(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::fve;
+        InitializeFveSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        };
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "test" || toLower(tokens[1]) == "-test")) {
+            out << "[BitLocker Self-Test] Initiating Sovereign FVE Subsystem Diagnostics...\n";
+
+            // Verify fveapi.dll dynamic exports
+            auto& loader = ldr::DynamicLoader::get();
+            void* pOpen = loader.getExport("fveapi.dll", "FveOpenVolume");
+            void* pGetStatus = loader.getExport("fveapi.dll", "FveGetStatus");
+            void* pTurnOn = loader.getExport("fveapi.dll", "FveTurnOn");
+            void* pLock = loader.getExport("fveapi.dll", "FveLockVolume");
+            void* pUnlock = loader.getExport("fveapi.dll", "FveUnlockVolumeWithPassphrase");
+            if (!pOpen || !pGetStatus || !pTurnOn || !pLock || !pUnlock) {
+                out << "  [FAIL] fveapi.dll dynamic exports missing!\n";
+                return;
+            }
+            out << "  [PASS] fveapi.dll dynamic exports verified in loader table.\n";
+
+            // 1. Inspect OS volume C:
+            HANDLE hVolC = nullptr;
+            DWORD dwRet = FveOpenVolume(L"C:", 0, &hVolC);
+            if (dwRet != ERROR_SUCCESS || !hVolC) {
+                out << "  [FAIL] FveOpenVolume(C:) failed! Error: " << dwRet << "\n";
+                return;
+            }
+            out << "  [PASS] FveOpenVolume(C:) acquired volume handle.\n";
+
+            FVE_STATUS statusC{};
+            dwRet = FveGetStatus(hVolC, &statusC);
+            if (dwRet != ERROR_SUCCESS ||
+                statusC.ProtectionStatus != FVE_PROTECTION_STATUS_ON ||
+                statusC.ConversionStatus != FVE_CONVERSION_STATUS_FULLY_ENCRYPTED ||
+                statusC.EncryptionMethod != FVE_ENCRYPTION_METHOD_XTS_AES_256) {
+                out << "  [FAIL] FveGetStatus(C:) invalid status!\n";
+                FveCloseVolume(hVolC);
+                return;
+            }
+            out << "  [PASS] FveGetStatus(C:) verified Protection=ON, Conversion=FullyEncrypted, Cipher=XTS-AES-256.\n";
+
+            // Enumerate protectors on C:
+            PFVE_AUTH_METHOD_LIST pList = nullptr;
+            dwRet = FveGetAuthMethodList(hVolC, &pList);
+            if (dwRet != ERROR_SUCCESS || !pList || pList->dwNumberOfItems < 2) {
+                out << "  [FAIL] FveGetAuthMethodList(C:) failed or insufficient protectors!\n";
+                if (pList) FveFreeMemory(pList);
+                FveCloseVolume(hVolC);
+                return;
+            }
+            out << "  [PASS] FveGetAuthMethodList(C:) found " << pList->dwNumberOfItems << " key protectors.\n";
+
+            wchar_t recBuf[64]{ 0 };
+            dwRet = FveGetRecoveryPassword(hVolC, nullptr, recBuf, 64);
+            if (dwRet != ERROR_SUCCESS || !ValidateBitLockerRecoveryPassword(recBuf)) {
+                out << "  [FAIL] FveGetRecoveryPassword(C:) invalid recovery key!\n";
+                FveFreeMemory(pList);
+                FveCloseVolume(hVolC);
+                return;
+            }
+            std::string recStr;
+            for (int i = 0; recBuf[i]; ++i) recStr.push_back(static_cast<char>(recBuf[i]));
+            out << "  [PASS] FveGetRecoveryPassword(C:) verified 48-digit modulo-11 key: " << recStr << "\n";
+            FveFreeMemory(pList);
+            FveCloseVolume(hVolC);
+
+            // 2. Test Data Volume D: lifecycle
+            HANDLE hVolD = nullptr;
+            dwRet = FveOpenVolume(L"D:", 0, &hVolD);
+            if (dwRet != ERROR_SUCCESS || !hVolD) {
+                out << "  [FAIL] FveOpenVolume(D:) failed!\n";
+                return;
+            }
+
+            FVE_STATUS statusD{};
+            FveGetStatus(hVolD, &statusD);
+            if (statusD.ProtectionStatus != FVE_PROTECTION_STATUS_OFF) {
+                out << "  [FAIL] Volume D: initially expected Protection=OFF!\n";
+                FveCloseVolume(hVolD);
+                return;
+            }
+
+            GUID passGuid{};
+            dwRet = FveAddAuthMethodPassphrase(hVolD, L"SovereignSecretKey2026!", &passGuid);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "  [FAIL] FveAddAuthMethodPassphrase(D:) failed!\n";
+                FveCloseVolume(hVolD);
+                return;
+            }
+            out << "  [PASS] FveAddAuthMethodPassphrase added passphrase protector.\n";
+
+            GUID recGuid{};
+            dwRet = FveAddAuthMethodRecoveryPassword(hVolD, nullptr, &recGuid);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "  [FAIL] FveAddAuthMethodRecoveryPassword(D:) failed!\n";
+                FveCloseVolume(hVolD);
+                return;
+            }
+            out << "  [PASS] FveAddAuthMethodRecoveryPassword generated authentic 48-digit numerical protector.\n";
+
+            dwRet = FveTurnOn(hVolD, FVE_ENCRYPTION_METHOD_XTS_AES_256, 0);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "  [FAIL] FveTurnOn(D:) failed!\n";
+                FveCloseVolume(hVolD);
+                return;
+            }
+            out << "  [PASS] FveTurnOn activated BitLocker protection on D: (XTS-AES-256).\n";
+
+            dwRet = FveLockVolume(hVolD, 0);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "  [FAIL] FveLockVolume(D:) failed!\n";
+                FveCloseVolume(hVolD);
+                return;
+            }
+            out << "  [PASS] FveLockVolume locked volume D:.\n";
+
+            // Test unlocking with incorrect passphrase
+            dwRet = FveUnlockVolumeWithPassphrase(hVolD, L"WrongPassword", 0);
+            if (dwRet == ERROR_SUCCESS) {
+                out << "  [FAIL] FveUnlockVolumeWithPassphrase accepted wrong password!\n";
+                FveCloseVolume(hVolD);
+                return;
+            }
+            out << "  [PASS] FveUnlockVolumeWithPassphrase rejected invalid credential.\n";
+
+            // Test unlocking with valid passphrase
+            dwRet = FveUnlockVolumeWithPassphrase(hVolD, L"SovereignSecretKey2026!", 0);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "  [FAIL] FveUnlockVolumeWithPassphrase failed with correct credential!\n";
+                FveCloseVolume(hVolD);
+                return;
+            }
+            out << "  [PASS] FveUnlockVolumeWithPassphrase successfully unlocked volume D:.\n";
+
+            // Turn off BitLocker
+            dwRet = FveTurnOff(hVolD, 0);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "  [FAIL] FveTurnOff(D:) failed!\n";
+                FveCloseVolume(hVolD);
+                return;
+            }
+            out << "  [PASS] FveTurnOff fully decrypted and removed protection on D:.\n";
+
+            FveCloseVolume(hVolD);
+            out << "[SUCCESS] Windows BitLocker & FVE Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() == 1 || (tokens.size() > 1 && (toLower(tokens[1]) == "-status" || toLower(tokens[1]) == "status" || toLower(tokens[1]) == "-s"))) {
+            std::string targetVol;
+            if (tokens.size() > 2 && tokens[2][0] != '-') {
+                targetVol = tokens[2];
+            } else if (tokens.size() == 2 && tokens[1] != "-status" && tokens[1] != "status" && tokens[1] != "-s") {
+                targetVol = tokens[1];
+            }
+
+            out << "BitLocker Drive Encryption: Configuration Tool version 10.0.22621\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n";
+
+            auto vols = SovereignFveManager::get().getAllVolumes();
+            for (const auto& v : vols) {
+                std::string mount(v.mountPoint.begin(), v.mountPoint.end());
+                if (!targetVol.empty() && toLower(mount) != toLower(targetVol)) continue;
+
+                std::string devPath(v.volumeDevicePath.begin(), v.volumeDevicePath.end());
+                out << "Volume " << mount << " [" << devPath << "]\n";
+                out << "    [BitLocker Volume Metadata]\n";
+                out << "    Size:                      50.00 GB\n";
+                out << "    BitLocker Version:         2.0\n";
+                
+                std::string convStr = "Fully Decrypted";
+                if (v.conversionStatus == FVE_CONVERSION_STATUS_FULLY_ENCRYPTED) convStr = "Fully Encrypted";
+                else if (v.conversionStatus == FVE_CONVERSION_STATUS_ENCRYPTION_IN_PROGRESS) convStr = "Encryption In Progress";
+                out << "    Conversion Status:         " << convStr << "\n";
+                out << "    Percentage Encrypted:      " << v.encryptionPercentage << ".0%\n";
+
+                std::string encMethod = "None";
+                if (v.encryptionMethod == FVE_ENCRYPTION_METHOD_XTS_AES_256) encMethod = "XTS-AES 256";
+                else if (v.encryptionMethod == FVE_ENCRYPTION_METHOD_XTS_AES_128) encMethod = "XTS-AES 128";
+                else if (v.encryptionMethod == FVE_ENCRYPTION_METHOD_AES_CBC_256) encMethod = "AES-CBC 256";
+                else if (v.encryptionMethod == FVE_ENCRYPTION_METHOD_AES_CBC_128) encMethod = "AES-CBC 128";
+                out << "    Encryption Method:         " << encMethod << "\n";
+
+                std::string protStr = "Protection Off";
+                if (v.protectionStatus == FVE_PROTECTION_STATUS_ON) protStr = "Protection On";
+                else if (v.protectionStatus == FVE_PROTECTION_STATUS_SUSPENDED) protStr = "Protection Suspended";
+                out << "    Protection Status:         " << protStr << "\n";
+
+                std::string lockStr = (v.lockStatus == FVE_LOCK_STATUS_LOCKED) ? "Locked" : "Unlocked";
+                out << "    Lock Status:               " << lockStr << "\n";
+                out << "    Identification Field:      MicaNT Sovereign FVE\n";
+
+                out << "    Key Protectors:\n";
+                if (v.protectors.empty()) {
+                    out << "        None Found\n";
+                } else {
+                    for (const auto& pair : v.protectors) {
+                        std::string fn(pair.second.friendlyName.begin(), pair.second.friendlyName.end());
+                        std::string gid(pair.first.begin(), pair.first.end());
+                        out << "        " << fn << " " << gid << "\n";
+                    }
+                }
+                out << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-on" || toLower(tokens[1]) == "on")) {
+            if (tokens.size() < 3) {
+                out << "Error: Volume parameter is missing for -on command.\n";
+                return;
+            }
+            std::string vol = tokens[2];
+            std::wstring wVol(vol.begin(), vol.end());
+
+            HANDLE hVol = nullptr;
+            DWORD dwRet = FveOpenVolume(wVol.c_str(), 0, &hVol);
+            if (dwRet != ERROR_SUCCESS || !hVol) {
+                out << "ERROR: Failed to open volume " << vol << ". Error: " << dwRet << "\n";
+                return;
+            }
+
+            for (size_t i = 3; i < tokens.size(); ++i) {
+                if (toLower(tokens[i]) == "-pw" || toLower(tokens[i]) == "-password") {
+                    if (i + 1 < tokens.size()) {
+                        std::string pw = tokens[++i];
+                        std::wstring wPw(pw.begin(), pw.end());
+                        FveAddAuthMethodPassphrase(hVol, wPw.c_str(), nullptr);
+                    }
+                } else if (toLower(tokens[i]) == "-rp" || toLower(tokens[i]) == "-recoverypassword") {
+                    FveAddAuthMethodRecoveryPassword(hVol, nullptr, nullptr);
+                }
+            }
+
+            dwRet = FveTurnOn(hVol, FVE_ENCRYPTION_METHOD_XTS_AES_256, 0);
+            if (dwRet == ERROR_SUCCESS) {
+                out << "BitLocker Drive Encryption turned ON successfully for volume " << vol << ".\n"
+                    << "Encryption Method: XTS-AES 256\n"
+                    << "Conversion Status: Fully Encrypted\n";
+            } else if (dwRet == ERROR_ALREADY_EXISTS) {
+                out << "BitLocker Drive Encryption is already turned ON for volume " << vol << ".\n";
+            } else {
+                out << "ERROR: Failed to turn on BitLocker on volume " << vol << ". Error: " << dwRet << "\n";
+            }
+            FveCloseVolume(hVol);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-off" || toLower(tokens[1]) == "off")) {
+            if (tokens.size() < 3) {
+                out << "Error: Volume parameter is missing for -off command.\n";
+                return;
+            }
+            std::string vol = tokens[2];
+            std::wstring wVol(vol.begin(), vol.end());
+
+            HANDLE hVol = nullptr;
+            DWORD dwRet = FveOpenVolume(wVol.c_str(), 0, &hVol);
+            if (dwRet != ERROR_SUCCESS || !hVol) {
+                out << "ERROR: Failed to open volume " << vol << ". Error: " << dwRet << "\n";
+                return;
+            }
+
+            dwRet = FveTurnOff(hVol, 0);
+            if (dwRet == ERROR_SUCCESS) {
+                out << "BitLocker Drive Encryption turned OFF successfully for volume " << vol << ".\n"
+                    << "Decryption Status: Fully Decrypted\n";
+            } else {
+                out << "ERROR: Failed to turn off BitLocker on volume " << vol << ". Error: " << dwRet << "\n";
+            }
+            FveCloseVolume(hVol);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-lock" || toLower(tokens[1]) == "lock")) {
+            if (tokens.size() < 3) {
+                out << "Error: Volume parameter is missing for -lock command.\n";
+                return;
+            }
+            std::string vol = tokens[2];
+            std::wstring wVol(vol.begin(), vol.end());
+
+            HANDLE hVol = nullptr;
+            DWORD dwRet = FveOpenVolume(wVol.c_str(), 0, &hVol);
+            if (dwRet != ERROR_SUCCESS || !hVol) {
+                out << "ERROR: Failed to open volume " << vol << ". Error: " << dwRet << "\n";
+                return;
+            }
+
+            dwRet = FveLockVolume(hVol, 0);
+            if (dwRet == ERROR_SUCCESS) {
+                out << "Volume " << vol << " is now locked.\n";
+            } else {
+                out << "ERROR: Failed to lock volume " << vol << ". Error: " << dwRet << "\n";
+            }
+            FveCloseVolume(hVol);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-unlock" || toLower(tokens[1]) == "unlock")) {
+            if (tokens.size() < 3) {
+                out << "Error: Volume parameter is missing for -unlock command.\n";
+                return;
+            }
+            std::string vol = tokens[2];
+            std::wstring wVol(vol.begin(), vol.end());
+
+            HANDLE hVol = nullptr;
+            DWORD dwRet = FveOpenVolume(wVol.c_str(), 0, &hVol);
+            if (dwRet != ERROR_SUCCESS || !hVol) {
+                out << "ERROR: Failed to open volume " << vol << ". Error: " << dwRet << "\n";
+                return;
+            }
+
+            bool attempted = false;
+            for (size_t i = 3; i < tokens.size(); ++i) {
+                if (toLower(tokens[i]) == "-pw" || toLower(tokens[i]) == "-password") {
+                    if (i + 1 < tokens.size()) {
+                        std::string pw = tokens[++i];
+                        std::wstring wPw(pw.begin(), pw.end());
+                        attempted = true;
+                        dwRet = FveUnlockVolumeWithPassphrase(hVol, wPw.c_str(), 0);
+                        break;
+                    }
+                } else if (toLower(tokens[i]) == "-rp" || toLower(tokens[i]) == "-recoverypassword") {
+                    if (i + 1 < tokens.size()) {
+                        std::string rp = tokens[++i];
+                        std::wstring wRp(rp.begin(), rp.end());
+                        attempted = true;
+                        dwRet = FveUnlockVolumeWithRecoveryPassword(hVol, wRp.c_str(), 0);
+                        break;
+                    }
+                }
+            }
+
+            if (!attempted) {
+                out << "ERROR: -unlock requires either -pw <passphrase> or -rp <recoverypassword>.\n";
+            } else if (dwRet == ERROR_SUCCESS) {
+                out << "Volume " << vol << " unlocked successfully.\n";
+            } else {
+                out << "ERROR: Failed to unlock volume " << vol << ". Invalid credentials or access denied (Error: " << dwRet << ").\n";
+            }
+            FveCloseVolume(hVol);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-protectors" || toLower(tokens[1]) == "protectors")) {
+            if (tokens.size() > 2 && (toLower(tokens[2]) == "-get" || toLower(tokens[2]) == "get")) {
+                std::string vol = (tokens.size() > 3) ? tokens[3] : "C:";
+                std::wstring wVol(vol.begin(), vol.end());
+
+                HANDLE hVol = nullptr;
+                DWORD dwRet = FveOpenVolume(wVol.c_str(), 0, &hVol);
+                if (dwRet != ERROR_SUCCESS || !hVol) {
+                    out << "ERROR: Failed to open volume " << vol << ".\n";
+                    return;
+                }
+
+                PFVE_AUTH_METHOD_LIST pList = nullptr;
+                dwRet = FveGetAuthMethodList(hVol, &pList);
+                if (dwRet == ERROR_SUCCESS && pList) {
+                    out << "Key Protectors for Volume " << vol << ":\n";
+                    for (DWORD i = 0; i < pList->dwNumberOfItems; ++i) {
+                        std::string name;
+                        for (int k = 0; pList->Items[i].FriendlyName[k]; ++k)
+                            name.push_back(static_cast<char>(pList->Items[i].FriendlyName[k]));
+                        out << "  [" << (i + 1) << "] " << name << "\n";
+                        if (pList->Items[i].AuthMethodType == FVE_AUTH_METHOD_RECOVERY_PASSWORD) {
+                            wchar_t rec[64]{ 0 };
+                            if (FveGetRecoveryPassword(hVol, &pList->Items[i].AuthMethodGuid, rec, 64) == ERROR_SUCCESS) {
+                                std::string sRec;
+                                for (int k = 0; rec[k]; ++k) sRec.push_back(static_cast<char>(rec[k]));
+                                out << "      Password: " << sRec << "\n";
+                            }
+                        }
+                    }
+                    FveFreeMemory(pList);
+                } else {
+                    out << "No key protectors found on volume " << vol << ".\n";
+                }
+                FveCloseVolume(hVol);
+                return;
+            }
+
+            if (tokens.size() > 2 && (toLower(tokens[2]) == "-add" || toLower(tokens[2]) == "add")) {
+                if (tokens.size() < 4) {
+                    out << "Usage: manage-bde -protectors -add <vol> [-rp] [-pw <passphrase>]\n";
+                    return;
+                }
+                std::string vol = tokens[3];
+                std::wstring wVol(vol.begin(), vol.end());
+
+                HANDLE hVol = nullptr;
+                DWORD dwRet = FveOpenVolume(wVol.c_str(), 0, &hVol);
+                if (dwRet != ERROR_SUCCESS || !hVol) {
+                    out << "ERROR: Failed to open volume " << vol << ".\n";
+                    return;
+                }
+
+                for (size_t i = 4; i < tokens.size(); ++i) {
+                    if (toLower(tokens[i]) == "-rp") {
+                        GUID g{};
+                        if (FveAddAuthMethodRecoveryPassword(hVol, nullptr, &g) == ERROR_SUCCESS) {
+                            wchar_t rec[64]{ 0 };
+                            FveGetRecoveryPassword(hVol, &g, rec, 64);
+                            std::string sRec;
+                            for (int k = 0; rec[k]; ++k) sRec.push_back(static_cast<char>(rec[k]));
+                            out << "Added Numerical Recovery Password: " << sRec << "\n";
+                        }
+                    } else if (toLower(tokens[i]) == "-pw" && i + 1 < tokens.size()) {
+                        std::string pw = tokens[++i];
+                        std::wstring wPw(pw.begin(), pw.end());
+                        GUID g{};
+                        if (FveAddAuthMethodPassphrase(hVol, wPw.c_str(), &g) == ERROR_SUCCESS) {
+                            out << "Added Passphrase protector successfully.\n";
+                        } else {
+                            out << "ERROR: Passphrase must be at least 8 characters.\n";
+                        }
+                    }
+                }
+                FveCloseVolume(hVol);
+                return;
+            }
+        }
+
+        out << "BitLocker Drive Encryption: Configuration Tool version 10.0.22621\n"
+            << "Usage:\n"
+            << "  manage-bde -status [vol]               Displays BitLocker status for volume(s)\n"
+            << "  manage-bde -on <vol> [-pw <pass>] [-rp] Enables BitLocker encryption on volume\n"
+            << "  manage-bde -off <vol>                  Disables BitLocker encryption on volume\n"
+            << "  manage-bde -lock <vol>                 Locks an unlocked encrypted volume\n"
+            << "  manage-bde -unlock <vol> -pw/-rp <key> Unlocks a locked BitLocker volume\n"
+            << "  manage-bde -protectors -get <vol>      Displays key protectors enrolled on volume\n"
+            << "  manage-bde -protectors -add <vol> -rp  Adds 48-digit numerical recovery password\n"
+            << "  manage-bde test                        Runs Sovereign BitLocker/FVE diagnostics\n";
     }
 
     static std::string trim(std::string_view s) {
