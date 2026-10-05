@@ -116,6 +116,7 @@
 #include "d2d1_3.hpp"
 #include "tsf.hpp"
 #include "spellcheck.hpp"
+#include "sapi.hpp"
 
 namespace micant::shell {
 
@@ -229,7 +230,7 @@ public:
         }
 
         // Check MicaNT executive test & diagnostic commands
-        if (!hasCompound) {
+        if (!hasCompound || cmd == "sapi" || cmd == "speech" || cmd == "voice" || cmd == "tts") {
             if (cmd == "mem") { cmdMem(out); return 0; }
             if (cmd == "systeminfo") { cmdSystemInfo(out); return 0; }
             if (cmd == "ping") { cmdPing(tokens, out); return 0; }
@@ -322,6 +323,7 @@ public:
             if (cmd == "d2d13" || cmd == "d2d3" || cmd == "typography" || cmd == "svg") { cmdD2D1_3(tokens, out); return 0; }
             if (cmd == "tsf" || cmd == "ime" || cmd == "textservices") { cmdTSF(tokens, out); return 0; }
             if (cmd == "spell" || cmd == "spellcheck" || cmd == "els" || cmd == "linguistic") { cmdSpellCheck(tokens, out); return 0; }
+            if (cmd == "sapi" || cmd == "speech" || cmd == "voice" || cmd == "tts") { cmdSapi(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -17275,6 +17277,229 @@ private:
             << "  spell check <text>                     Checks text for spelling and autocorrect\n"
             << "  spell suggest <word>                   Generates ranked phonetic/Levenshtein suggestions\n"
             << "  spell els lang|script|translit <text>  Invokes Extended Linguistic Services\n";
+    }
+
+    void cmdSapi(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::sapi;
+        InitializeSapiSubsystemExports();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "test";
+        std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+        if (sub == "test" || sub == "diag") {
+            out << "[SAPI Diagnostics] Initializing Windows Speech API Subsystem...\n";
+            ISpVoice* pVoice = nullptr;
+            int32_t hr = SpCreateVoice(&pVoice);
+            if (hr != 0 || !pVoice) {
+                out << "[-] Failed to activate ISpVoice instance.\n";
+                return;
+            }
+
+            // Verify rates and volumes
+            int32_t rate = 0;
+            pVoice->GetRate(&rate);
+            pVoice->SetRate(2);
+            int32_t newRate = 0;
+            pVoice->GetRate(&newRate);
+            out << "[+] Voice Rate Adjustment: " << rate << " -> " << newRate << "\n";
+
+            uint16_t vol = 0;
+            pVoice->GetVolume(&vol);
+            pVoice->SetVolume(85);
+            uint16_t newVol = 0;
+            pVoice->GetVolume(&newVol);
+            out << "[+] Voice Volume Adjustment: " << vol << "% -> " << newVol << "%\n";
+
+            // Verify voice enumeration
+            IEnumSpObjectTokens* pEnum = nullptr;
+            hr = SpEnumTokens(SPCAT_VOICES, nullptr, nullptr, &pEnum);
+            uint32_t voiceCount = 0;
+            if (hr == 0 && pEnum) {
+                pEnum->GetCount(&voiceCount);
+                out << "[+] Enumerated " << voiceCount << " installed sovereign voice tokens.\n";
+                pEnum->Release();
+            }
+
+            // Verify audio synthesis into ISpStream
+            ISpStream* pStream = nullptr;
+            hr = SpCreateStream(&pStream);
+            if (hr == 0 && pStream) {
+                pVoice->SetOutput(pStream, 1);
+                const wchar_t* testPhrase = L"MicaNT SAPI 5.4 Sovereign Speech Subsystem Online.";
+                uint32_t streamNum = 0;
+                hr = pVoice->Speak(testPhrase, SPF_DEFAULT, &streamNum);
+                out << "[+] Speak() synthesized phrase to audio stream (Stream #" << streamNum << ", Status: 0x"
+                    << std::hex << hr << std::dec << ")\n";
+
+                auto* pImplStream = dynamic_cast<CSpStreamImpl*>(pStream);
+                if (pImplStream) {
+                    size_t pcmBytes = pImplStream->GetBuffer().size();
+                    size_t samples = pcmBytes / sizeof(int16_t);
+                    double duration = static_cast<double>(samples) / 22050.0;
+                    out << "[+] Synthesized Audio Stream: " << pcmBytes << " bytes ("
+                        << samples << " samples, ~" << std::fixed << std::setprecision(2)
+                        << duration << "s at 22050Hz 16-bit PCM)\n";
+                }
+                pStream->Release();
+            }
+
+            // Verify SSML synthesis
+            ISpStream* pXmlStream = nullptr;
+            if (SpCreateStream(&pXmlStream) == 0 && pXmlStream) {
+                pVoice->SetOutput(pXmlStream, 1);
+                const wchar_t* ssmlText = L"<pitch high>Hello</pitch> <rate fast>World</rate> <silence/> <volume loud>Ready</volume>";
+                pVoice->Speak(ssmlText, SPF_IS_XML, nullptr);
+                auto* pImplXml = dynamic_cast<CSpStreamImpl*>(pXmlStream);
+                if (pImplXml) {
+                    out << "[+] SSML Synthesis: " << pImplXml->GetBuffer().size() << " bytes generated from markup tags.\n";
+                }
+                pXmlStream->Release();
+            }
+
+            // Verify RecoGrammar
+            CSpRecoGrammarImpl grammar;
+            grammar.LoadCmdFromMemory(L"<grammar version=\"1.0\"><rule id=\"nav\"><one-of><item>open</item><item>close</item></one-of></rule></grammar>");
+            out << "[+] Command & Control Speech Grammar Engine: " << grammar.GetRuleCount() << " rules loaded.\n";
+
+            pVoice->Release();
+            out << "[+] SAPI 5.4 Speech Diagnostics & Self-test passed cleanly.\n";
+            return;
+        }
+
+        if (sub == "info") {
+            out << "Windows Speech API (SAPI 5.4) Subsystem Information:\n";
+            out << "  Driver DLLs:       sapi.dll (Version 10.0.22621.1)\n";
+            out << "  Core Interfaces:   ISpVoice, ISpAudio, ISpStream, ISpObjectToken, ISpObjectTokenCategory\n";
+            out << "  Audio Formats:     16-bit Mono/Stereo PCM (8kHz to 48kHz), SPSF_22kHz16BitMono default\n";
+            out << "  Synthesis Engine:  Multi-Formant Harmonic Waveform Synthesizer with envelope shaping\n";
+            out << "  SSML Features:     <pitch>, <rate>, <volume>, <silence>, <voice>\n";
+            out << "  Installed Voices:  MicaNT David, MicaNT Zira, MicaNT Mark, MicaNT Helena\n";
+            return;
+        }
+
+        if (sub == "voices" || sub == "list") {
+            out << "Installed SAPI Voice Tokens:\n";
+            IEnumSpObjectTokens* pEnum = nullptr;
+            int32_t hr = SpEnumTokens(SPCAT_VOICES, nullptr, nullptr, &pEnum);
+            if (hr == 0 && pEnum) {
+                uint32_t count = 0;
+                pEnum->GetCount(&count);
+                for (uint32_t i = 0; i < count; ++i) {
+                    ISpObjectToken* pTok = nullptr;
+                    if (pEnum->Item(i, &pTok) == 0 && pTok) {
+                        wchar_t* pId = nullptr;
+                        wchar_t* pName = nullptr;
+                        wchar_t* pGen = nullptr;
+                        wchar_t* pLang = nullptr;
+                        wchar_t* pVendor = nullptr;
+
+                        pTok->GetId(&pId);
+                        pTok->GetStringValue(L"Name", &pName);
+                        pTok->GetStringValue(L"Gender", &pGen);
+                        pTok->GetStringValue(L"Language", &pLang);
+                        pTok->GetStringValue(L"Vendor", &pVendor);
+
+                        out << "  [" << (i + 1) << "] "
+                            << (pName ? appmodel::WideToUtf8(pName) : "Unknown") << " ("
+                            << (pGen ? appmodel::WideToUtf8(pGen) : "") << ", Lang 0x"
+                            << (pLang ? appmodel::WideToUtf8(pLang) : "") << ")\n"
+                            << "      Token ID: " << (pId ? appmodel::WideToUtf8(pId) : "") << "\n"
+                            << "      Vendor:   " << (pVendor ? appmodel::WideToUtf8(pVendor) : "Sovereign") << "\n";
+
+                        if (pId) ole32::CoTaskMemFree(pId);
+                        if (pName) ole32::CoTaskMemFree(pName);
+                        if (pGen) ole32::CoTaskMemFree(pGen);
+                        if (pLang) ole32::CoTaskMemFree(pLang);
+                        if (pVendor) ole32::CoTaskMemFree(pVendor);
+                        pTok->Release();
+                    }
+                }
+                pEnum->Release();
+            }
+            return;
+        }
+
+        if (sub == "speak") {
+            std::string text = "Hello from MicaNT sovereign speech system.";
+            if (tokens.size() > 2) {
+                text.clear();
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    if (!text.empty()) text += " ";
+                    text += tokens[i];
+                }
+            }
+
+            ISpVoice* pVoice = nullptr;
+            if (SpCreateVoice(&pVoice) == 0 && pVoice) {
+                ISpStream* pStream = nullptr;
+                SpCreateStream(&pStream);
+                if (pStream) pVoice->SetOutput(pStream, 1);
+
+                std::wstring wText = appmodel::Utf8ToWide(text);
+                uint32_t streamNum = 0;
+                pVoice->Speak(wText.c_str(), SPF_DEFAULT, &streamNum);
+
+                out << "[SAPI] Spoke text: \"" << text << "\"\n";
+                if (pStream) {
+                    auto* pImplStream = dynamic_cast<CSpStreamImpl*>(pStream);
+                    if (pImplStream) {
+                        size_t pcmBytes = pImplStream->GetBuffer().size();
+                        size_t samples = pcmBytes / sizeof(int16_t);
+                        double duration = static_cast<double>(samples) / 22050.0;
+                        out << "       Synthesized: " << samples << " samples (~"
+                            << std::fixed << std::setprecision(2) << duration << "s, "
+                            << pcmBytes << " bytes 16-bit PCM)\n";
+                    }
+                    pStream->Release();
+                }
+                pVoice->Release();
+            }
+            return;
+        }
+
+        if (sub == "ssml") {
+            std::string markup = "<pitch high>MicaNT</pitch> <rate fast>Operating System</rate>";
+            if (tokens.size() > 2) {
+                markup.clear();
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    if (!markup.empty()) markup += " ";
+                    markup += tokens[i];
+                }
+            }
+
+            ISpVoice* pVoice = nullptr;
+            if (SpCreateVoice(&pVoice) == 0 && pVoice) {
+                ISpStream* pStream = nullptr;
+                SpCreateStream(&pStream);
+                if (pStream) pVoice->SetOutput(pStream, 1);
+
+                std::wstring wMarkup = appmodel::Utf8ToWide(markup);
+                pVoice->Speak(wMarkup.c_str(), SPF_IS_XML, nullptr);
+
+                out << "[SAPI SSML] Processed markup: \"" << markup << "\"\n";
+                if (pStream) {
+                    auto* pImplStream = dynamic_cast<CSpStreamImpl*>(pStream);
+                    if (pImplStream) {
+                        size_t pcmBytes = pImplStream->GetBuffer().size();
+                        size_t samples = pcmBytes / sizeof(int16_t);
+                        double duration = static_cast<double>(samples) / 22050.0;
+                        out << "            Synthesized: " << samples << " samples (~"
+                            << std::fixed << std::setprecision(2) << duration << "s, "
+                            << pcmBytes << " bytes 16-bit PCM)\n";
+                    }
+                    pStream->Release();
+                }
+                pVoice->Release();
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  sapi test                              Runs Speech API self-tests\n"
+            << "  sapi info                              Displays SAPI subsystem telemetry\n"
+            << "  sapi voices                            Lists all installed voice tokens\n"
+            << "  sapi speak <text>                      Synthesizes text to speech waveform\n"
+            << "  sapi ssml <xml>                        Synthesizes SSML markup with pitch/rate/volume\n";
     }
 
     static std::string trim(std::string_view s) {

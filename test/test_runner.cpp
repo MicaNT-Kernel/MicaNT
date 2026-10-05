@@ -28944,8 +28944,202 @@ void Test_WindowsSpellCheck_Linguistic_Subsystem() {
     std::cout << "[TEST] Suite 124: Windows Spell Checking & Extended Linguistic Services PASSED.\n";
 }
 
+void Test_WindowsSpeech_SAPI_Subsystem() {
+    std::cout << "[TEST] Running Suite 125: Windows Speech API (SAPI 5.4) & Voice Synthesis Subsystem...\n";
+
+    using namespace micant::sapi;
+    InitializeSapiSubsystemExports();
+
+    // 1. Dynamic Exports Verification
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("sapi.dll", "SpEnumTokens") != nullptr,
+                "SpEnumTokens must be exported from sapi.dll");
+    TEST_ASSERT(loader.getExport("sapi.dll", "SpGetCategoryFromId") != nullptr,
+                "SpGetCategoryFromId must be exported from sapi.dll");
+    TEST_ASSERT(loader.getExport("sapi.dll", "SpCreateVoice") != nullptr,
+                "SpCreateVoice must be exported from sapi.dll");
+    TEST_ASSERT(loader.getExport("sapi.dll", "SpCreateStream") != nullptr,
+                "SpCreateStream must be exported from sapi.dll");
+
+    // 2. VersionDatabase Verification
+    const auto* sapiMod = version::VersionDatabase::Instance().GetModuleInfo("sapi.dll");
+    TEST_ASSERT(sapiMod != nullptr && sapiMod->stringTable.at("ProductVersion") == "10.0.22621.1",
+                "sapi.dll must be registered in VersionDatabase at 10.0.22621.1");
+
+    // 3. COM Activation & Interface Queries
+    ISpVoice* pVoice = nullptr;
+    int32_t hr = SpCreateVoice(&pVoice);
+    TEST_ASSERT(hr == ole32::S_OK && pVoice != nullptr, "SpCreateVoice must succeed");
+
+    ole32::IUnknown* pUnk = nullptr;
+    hr = pVoice->QueryInterface(ole32::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+    TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "ISpVoice must support IUnknown");
+    pUnk->Release();
+
+    // 4. Rate and Volume Controls
+    int32_t origRate = 0;
+    pVoice->GetRate(&origRate);
+    TEST_ASSERT(origRate == 0, "Default rate must be 0");
+
+    pVoice->SetRate(5);
+    int32_t newRate = 0;
+    pVoice->GetRate(&newRate);
+    TEST_ASSERT(newRate == 5, "SetRate must update voice rate");
+
+    uint16_t origVol = 0;
+    pVoice->GetVolume(&origVol);
+    TEST_ASSERT(origVol == 100, "Default volume must be 100%");
+
+    pVoice->SetVolume(75);
+    uint16_t newVol = 0;
+    pVoice->GetVolume(&newVol);
+    TEST_ASSERT(newVol == 75, "SetVolume must update voice volume");
+
+    // 5. Voice Token Category & Token Enumeration
+    IEnumSpObjectTokens* pEnum = nullptr;
+    hr = SpEnumTokens(SPCAT_VOICES, nullptr, nullptr, &pEnum);
+    TEST_ASSERT(hr == ole32::S_OK && pEnum != nullptr, "SpEnumTokens must succeed");
+
+    uint32_t tokenCount = 0;
+    hr = pEnum->GetCount(&tokenCount);
+    TEST_ASSERT(hr == ole32::S_OK && tokenCount >= 4, "Must enumerate at least 4 default voices");
+
+    bool hasDavid = false;
+    bool hasZira = false;
+    bool hasMark = false;
+    bool hasHelena = false;
+
+    for (uint32_t i = 0; i < tokenCount; ++i) {
+        ISpObjectToken* pTok = nullptr;
+        if (pEnum->Item(i, &pTok) == ole32::S_OK && pTok) {
+            wchar_t* pName = nullptr;
+            pTok->GetStringValue(L"Name", &pName);
+            if (pName) {
+                if (wcscmp(pName, L"MicaNT David") == 0) hasDavid = true;
+                if (wcscmp(pName, L"MicaNT Zira") == 0) hasZira = true;
+                if (wcscmp(pName, L"MicaNT Mark") == 0) hasMark = true;
+                if (wcscmp(pName, L"MicaNT Helena") == 0) hasHelena = true;
+                ole32::CoTaskMemFree(pName);
+            }
+            pTok->Release();
+        }
+    }
+    pEnum->Release();
+
+    TEST_ASSERT(hasDavid && hasZira && hasMark && hasHelena,
+                "All 4 sovereign voices (David, Zira, Mark, Helena) must be enumerated");
+
+    // 6. Voice Selection
+    ISpObjectTokenCategory* pCat = nullptr;
+    hr = SpGetCategoryFromId(SPCAT_VOICES, &pCat);
+    TEST_ASSERT(hr == ole32::S_OK && pCat != nullptr, "SpGetCategoryFromId must succeed");
+
+    IEnumSpObjectTokens* pCatEnum = nullptr;
+    pCat->EnumTokens(nullptr, nullptr, &pCatEnum);
+    TEST_ASSERT(pCatEnum != nullptr, "EnumTokens from category must succeed");
+
+    ISpObjectToken* pZiraTok = nullptr;
+    pCatEnum->Item(1, &pZiraTok);
+    TEST_ASSERT(pZiraTok != nullptr, "Must fetch Zira token");
+    hr = pVoice->SetVoice(pZiraTok);
+    TEST_ASSERT(hr == ole32::S_OK, "SetVoice to Zira must succeed");
+
+    ISpObjectToken* pActiveTok = nullptr;
+    hr = pVoice->GetVoice(&pActiveTok);
+    TEST_ASSERT(hr == ole32::S_OK && pActiveTok != nullptr, "GetVoice must return active token");
+    wchar_t* pGen = nullptr;
+    pActiveTok->GetStringValue(L"Gender", &pGen);
+    TEST_ASSERT(pGen != nullptr && wcscmp(pGen, L"Female") == 0, "Active voice gender must be Female");
+    ole32::CoTaskMemFree(pGen);
+    pActiveTok->Release();
+    pZiraTok->Release();
+    pCatEnum->Release();
+    pCat->Release();
+
+    // 7. Output Stream Binding & Audio Waveform Synthesis
+    ISpStream* pStream = nullptr;
+    hr = SpCreateStream(&pStream);
+    TEST_ASSERT(hr == ole32::S_OK && pStream != nullptr, "SpCreateStream must succeed");
+
+    hr = pVoice->SetOutput(pStream, 1);
+    TEST_ASSERT(hr == ole32::S_OK, "SetOutput to stream must succeed");
+
+    uint32_t streamNum = 0;
+    const wchar_t* speakPhrase = L"MicaNT sovereign audio synthesis active.";
+    hr = pVoice->Speak(speakPhrase, SPF_DEFAULT, &streamNum);
+    TEST_ASSERT(hr == ole32::S_OK && streamNum == 1, "Speak must synthesize and return stream #1");
+
+    auto* pImplStream = dynamic_cast<CSpStreamImpl*>(pStream);
+    TEST_ASSERT(pImplStream != nullptr, "Stream must cast to CSpStreamImpl");
+    const auto& pcmBuf = pImplStream->GetBuffer();
+    TEST_ASSERT(!pcmBuf.empty(), "Synthesized PCM buffer must not be empty");
+    TEST_ASSERT(pcmBuf.size() > 5000, "Synthesized audio waveform must have substantial sample data");
+
+    // Check status
+    SPVOICESTATUS status{};
+    hr = pVoice->GetStatus(&status, nullptr);
+    TEST_ASSERT(hr == ole32::S_OK, "GetStatus must succeed");
+    TEST_ASSERT(status.ulCurrentStreamNum == 1, "Current stream number must match");
+
+    pStream->Release();
+
+    // 8. SSML / XML Markup Synthesis
+    ISpStream* pXmlStream = nullptr;
+    hr = SpCreateStream(&pXmlStream);
+    TEST_ASSERT(hr == ole32::S_OK && pXmlStream != nullptr, "SpCreateStream for XML must succeed");
+
+    pVoice->SetOutput(pXmlStream, 1);
+    const wchar_t* ssmlText = L"<pitch high>Speed</pitch> <silence/> <rate fast>Fast</rate>";
+    hr = pVoice->Speak(ssmlText, SPF_IS_XML, &streamNum);
+    TEST_ASSERT(hr == ole32::S_OK && streamNum == 2, "Speak with SSML must succeed");
+
+    auto* pImplXml = dynamic_cast<CSpStreamImpl*>(pXmlStream);
+    TEST_ASSERT(pImplXml != nullptr && !pImplXml->GetBuffer().empty(), "SSML buffer must contain synthesized audio");
+    pXmlStream->Release();
+
+    // 9. Command & Control Speech Recognition Grammar
+    CSpRecoGrammarImpl grammar;
+    hr = grammar.LoadCmdFromMemory(L"<grammar><rule id=\"cmd\"><item>start</item></rule></grammar>");
+    TEST_ASSERT(hr == ole32::S_OK, "LoadCmdFromMemory must succeed");
+    TEST_ASSERT(grammar.GetRuleCount() == 1, "Rule count must be 1");
+
+    // 10. Interactive Shell CLI Verification
+    shell::CommandShell shellEngine;
+    std::ostringstream ssTest, ssInfo, ssVoices, ssSpeak, ssSsml;
+
+    int rc = shellEngine.execute("sapi test", ssTest);
+    TEST_ASSERT(rc == 0, "sapi test shell command must return 0");
+    TEST_ASSERT(ssTest.str().find("Self-test passed cleanly") != std::string::npos, "sapi test must pass cleanly");
+
+    rc = shellEngine.execute("sapi info", ssInfo);
+    TEST_ASSERT(rc == 0, "sapi info shell command must return 0");
+    TEST_ASSERT(ssInfo.str().find("sapi.dll") != std::string::npos, "sapi info must output DLL information");
+
+    rc = shellEngine.execute("sapi voices", ssVoices);
+    TEST_ASSERT(rc == 0, "sapi voices shell command must return 0");
+    TEST_ASSERT(ssVoices.str().find("MicaNT David") != std::string::npos, "sapi voices must list David");
+    TEST_ASSERT(ssVoices.str().find("MicaNT Zira") != std::string::npos, "sapi voices must list Zira");
+
+    rc = shellEngine.execute("sapi speak hello world", ssSpeak);
+    TEST_ASSERT(rc == 0, "sapi speak shell command must return 0");
+    TEST_ASSERT(ssSpeak.str().find("Synthesized:") != std::string::npos, "sapi speak must report synthesis stats");
+
+    rc = shellEngine.execute("sapi ssml <pitch high>hello</pitch>", ssSsml);
+    TEST_ASSERT(rc == 0, "sapi ssml shell command must return 0");
+    TEST_ASSERT(ssSsml.str().find("Synthesized:") != std::string::npos, "sapi ssml must report SSML synthesis stats");
+
+    // Cleanup
+    pVoice->Release();
+
+    std::cout << "[TEST] Suite 125: Windows Speech API (SAPI 5.4) & Voice Synthesis Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite124")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite125")) {
+        RUN_TEST(Test_WindowsSpeech_SAPI_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite124") {
         RUN_TEST(Test_WindowsSpellCheck_Linguistic_Subsystem);
         return g_FailedTests;
     }
@@ -29150,6 +29344,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirect2D1_3_Typography_Subsystem);
     RUN_TEST(Test_WindowsTextServices_IME_Subsystem);
     RUN_TEST(Test_WindowsSpellCheck_Linguistic_Subsystem);
+    RUN_TEST(Test_WindowsSpeech_SAPI_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

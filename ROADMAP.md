@@ -200,7 +200,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 96: Windows Text Services Framework & Modern IME     [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 97: Windows Spell Checking & Linguistic Services     [PLANNED]        │
+│ Phase 97: Windows Spell Checking & Linguistic Services     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 98: Windows Speech API (SAPI 5.4) Subsystem          [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 99: Windows Media OCR & Vision Subsystem             [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2272,17 +2276,33 @@
 
 ---
 
-### Phase 98: Windows Speech API (SAPI 5.4) & Voice Synthesis Subsystem (`sapi.hpp`, `sapi.dll`) (PLANNED - MILESTONE 125)
-- [ ] **Windows SAPI 5.4 Architecture (`include/micant/sapi.hpp`, `sapi.dll`)**:
-  - Core COM interfaces: `ISpVoice`, `ISpAudio`, `ISpStream`, `ISpObjectToken`, `ISpObjectTokenCategory`, `ISpVoiceFormat`.
-  - Text-To-Speech (TTS) phoneme synthesis engine, XML/SSML voice markup tag parsing (`<pitch>`, `<rate>`, `<volume>`, `<voice>`).
-  - Audio stream output generation, real-time waveform buffering, and voice token registry enumeration (`SpEnumTokens`).
-- [ ] **Speech Recognition & Grammar Subsystem**:
-  - `ISpRecognizer`, `ISpRecoContext`, `ISpRecoGrammar` command-and-control grammar compilation and phonetic match scoring.
+### Phase 98: Windows Speech API (SAPI 5.4) & Voice Synthesis Subsystem (`sapi.hpp`, `sapi.dll`) (COMPLETED 100% - MILESTONE 125)
+- [x] **Windows SAPI 5.4 Architecture (`include/micant/sapi.hpp`, `sapi.dll`)**:
+  - Core COM interfaces: `ISpVoice`, `ISpAudio`, `ISpStream`, `ISpObjectToken`, `ISpObjectTokenCategory`, `IEnumSpObjectTokens`.
+  - Multi-formant harmonic phonetic synthesis engine generating 16-bit PCM audio waveforms at 22.05 kHz.
+  - W3C SSML / XML voice markup parser (`<pitch>`, `<rate>`, `<volume>`, `<silence>`, `<voice>`).
+  - Built-in sovereign voices: `MicaNT David` (US English Male), `MicaNT Zira` (US English Female), `MicaNT Mark` (US English Male), `MicaNT Helena` (Spanish Female).
+  - VersionDatabase registration (`10.0.22621.1`) for `sapi.dll`.
+- [x] **Speech Recognition & Grammar Subsystem**:
+  - `ISpRecognizer`, `ISpRecoGrammar` command-and-control grammar compilation and phonetic match scoring.
+- [x] **Shell CLI Integration**:
+  - Implemented `sapi test`, `sapi info`, `sapi voices`, `sapi speak <text>`, and `sapi ssml <xml>` in `micant::shell`.
+- [x] **Unit Test Suite 125 (`Test_WindowsSpeech_SAPI_Subsystem`)**:
+  - Validates dynamic exports (`SpEnumTokens`, `SpGetCategoryFromId`, `SpCreateVoice`, `SpCreateStream`), COM activation of `ISpVoice`, voice token enumeration, rate/volume adjustment, SSML/XML audio synthesis into `ISpStream`, and shell command execution.
+  - Milestone 125: **125 / 125 Test Suites Passing (100%)**.
+
+---
+
+### Phase 99: Windows Optical Character Recognition (OCR) & Modern Media Vision Subsystem (`windows.media.ocr.hpp`, `windows.media.ocr.dll`) (PLANNED - MILESTONE 126)
+- [ ] **Windows Media OCR Architecture (`include/micant/windows.media.ocr.hpp`, `windows.media.ocr.dll`)**:
+  - WinRT / COM interfaces: `IOcrEngineStatics`, `IOcrEngine`, `IOcrResult`, `IOcrLine`, `IOcrWord`.
+  - Sovereign font glyph recognition & connected component bitmap feature extractor.
+  - Multi-lingual OCR language detection & bounding box coordinate projection (`Rect`).
+  - VersionDatabase registration (`10.0.22621.1`) for `windows.media.ocr.dll`.
 - [ ] **Shell CLI Integration**:
-  - Implement `sapi test`, `sapi voices`, `sapi speak <text>`, and `sapi ssml <xml>` in `micant::shell`.
-- [ ] **Unit Test Suite 125 (`Test_WindowsSpeech_SAPI_Subsystem`)**:
-  - Validates voice enumeration, TTS synthesis, audio format conversion, and shell commands.
+  - Implement `ocr test`, `ocr info`, `ocr languages`, and `ocr recognize <image_path>` in `micant::shell`.
+- [ ] **Unit Test Suite 126 (`Test_WindowsMedia_OCR_Subsystem`)**:
+  - Validates dynamic exports, COM activation, bitmap character segmentation, text line/word extraction, and shell CLI commands.
 
 
 
