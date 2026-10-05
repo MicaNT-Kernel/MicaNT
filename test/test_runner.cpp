@@ -130,6 +130,7 @@
 #include "micant/d2d1.hpp"
 #include "micant/mfsession.hpp"
 #include "micant/evr.hpp"
+#include "micant/dxva2.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -25235,8 +25236,302 @@ void Test_WindowsEnhancedVideoRenderer_Subsystem() {
     std::cout << "[TEST] Suite 108: Windows Enhanced Video Renderer (EVR) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 109: Windows DirectX Video Acceleration 2.0 (DXVA2) Subsystem Tests
+// ============================================================================
+void Test_WindowsDXVA2_Hardware_Acceleration_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 109: Windows DirectX Video Acceleration 2.0 (DXVA2) Subsystem  \n";
+    std::cout << "========================================================================\n";
+
+    // 1. Device Manager Creation & Reset Token
+    uint32_t resetToken = 0;
+    dxva2::IDirect3DDeviceManager9* pDevMgr = nullptr;
+    int32_t hr = dxva2::DXVA2CreateDirect3DDeviceManager9(&resetToken, &pDevMgr);
+    TEST_ASSERT(hr == ole32::S_OK && pDevMgr != nullptr, "DXVA2CreateDirect3DDeviceManager9 succeeds");
+    TEST_ASSERT(resetToken != 0, "Reset token is non-zero");
+
+    prismx::IUnknown* pUnk = nullptr;
+    hr = pDevMgr->QueryInterface(prismx::IID_IUnknown, reinterpret_cast<void**>(&pUnk));
+    TEST_ASSERT(hr == ole32::S_OK && pUnk != nullptr, "DeviceManager supports IUnknown");
+    pUnk->Release();
+
+    // 2. Direct3D 9 Device Binding & Reset Contract
+    d3d9::IDirect3D9* pD3D = d3d9::Direct3DCreate9(d3d9::D3D_SDK_VERSION);
+    TEST_ASSERT(pD3D != nullptr, "Direct3DCreate9 succeeds");
+    d3d9::D3DPRESENT_PARAMETERS pp{};
+    pp.BackBufferWidth = 1920;
+    pp.BackBufferHeight = 1080;
+    pp.BackBufferFormat = d3d9::D3DFMT_X8R8G8B8;
+    d3d9::IDirect3DDevice9* pDevice = nullptr;
+    hr = pD3D->CreateDevice(0, d3d9::D3DDEVTYPE_HAL, nullptr, 0, &pp, &pDevice);
+    TEST_ASSERT(hr == d3d9::D3D_OK && pDevice != nullptr, "CreateDevice succeeds");
+
+    hr = pDevMgr->ResetDevice(pDevice, resetToken);
+    TEST_ASSERT(hr == ole32::S_OK, "ResetDevice with valid token succeeds");
+    hr = pDevMgr->ResetDevice(pDevice, 0xBADBEEF);
+    TEST_ASSERT(hr == ole32::E_INVALIDARG, "ResetDevice with bad token fails with E_INVALIDARG");
+
+    // 3. Device Handle Allocation & Lifecycle (Open, Test, Close)
+    void* hDev1 = nullptr;
+    void* hDev2 = nullptr;
+    hr = pDevMgr->OpenDeviceHandle(&hDev1);
+    TEST_ASSERT(hr == ole32::S_OK && hDev1 != nullptr, "OpenDeviceHandle succeeds for hDev1");
+    hr = pDevMgr->OpenDeviceHandle(&hDev2);
+    TEST_ASSERT(hr == ole32::S_OK && hDev2 != nullptr && hDev1 != hDev2, "OpenDeviceHandle succeeds for hDev2");
+
+    hr = pDevMgr->TestDevice(hDev1);
+    TEST_ASSERT(hr == ole32::S_OK, "TestDevice on open handle succeeds");
+    hr = pDevMgr->CloseDeviceHandle(hDev1);
+    TEST_ASSERT(hr == ole32::S_OK, "CloseDeviceHandle on hDev1 succeeds");
+    hr = pDevMgr->TestDevice(hDev1);
+    TEST_ASSERT(hr == ole32::E_INVALIDARG, "TestDevice on closed handle fails");
+
+    // 4. Thread-Safe Device Locking & Arbitration
+    d3d9::IDirect3DDevice9* pLockedDev = nullptr;
+    hr = pDevMgr->LockDevice(hDev2, &pLockedDev, win32::FALSE);
+    TEST_ASSERT(hr == ole32::S_OK && pLockedDev == pDevice, "LockDevice succeeds and returns device pointer");
+
+    void* hDev3 = nullptr;
+    pDevMgr->OpenDeviceHandle(&hDev3);
+    d3d9::IDirect3DDevice9* pContendedDev = nullptr;
+    hr = pDevMgr->LockDevice(hDev3, &pContendedDev, win32::FALSE);
+    TEST_ASSERT(hr == dxva2::DXVA2_E_VIDEO_DEVICE_LOCKED, "Non-blocking LockDevice from another handle returns DXVA2_E_VIDEO_DEVICE_LOCKED");
+
+    hr = pDevMgr->UnlockDevice(hDev2, win32::FALSE);
+    TEST_ASSERT(hr == ole32::S_OK, "UnlockDevice succeeds");
+    if (pLockedDev) pLockedDev->Release();
+    pDevMgr->CloseDeviceHandle(hDev3);
+
+    // 5. Video Acceleration Service Factory (DXVA2CreateVideoService)
+    dxva2::IDirectXVideoProcessorService* pProcService = nullptr;
+    hr = dxva2::DXVA2CreateVideoService(pDevice, dxva2::IID_IDirectXVideoProcessorService, reinterpret_cast<void**>(&pProcService));
+    TEST_ASSERT(hr == ole32::S_OK && pProcService != nullptr, "DXVA2CreateVideoService for VideoProcessorService succeeds");
+
+    dxva2::IDirectXVideoDecoderService* pDecService = nullptr;
+    hr = dxva2::DXVA2CreateVideoService(pDevice, dxva2::IID_IDirectXVideoDecoderService, reinterpret_cast<void**>(&pDecService));
+    TEST_ASSERT(hr == ole32::S_OK && pDecService != nullptr, "DXVA2CreateVideoService for VideoDecoderService succeeds");
+
+    // 6. Device Manager Service Dispatch (GetVideoService)
+    dxva2::IDirectXVideoProcessorService* pProcFromMgr = nullptr;
+    hr = pDevMgr->GetVideoService(hDev2, dxva2::IID_IDirectXVideoProcessorService, reinterpret_cast<void**>(&pProcFromMgr));
+    TEST_ASSERT(hr == ole32::S_OK && pProcFromMgr != nullptr, "IDirect3DDeviceManager9::GetVideoService dispatch succeeds");
+    pProcFromMgr->Release();
+
+    // 7. Video Processor Device GUIDs & Render Targets
+    uint32_t guidCount = 0;
+    pProcService->GetVideoProcessorDeviceGuids(nullptr, &guidCount, nullptr);
+    TEST_ASSERT(guidCount >= 3, "At least 3 video processor devices supported");
+    std::vector<GUID> guids(guidCount);
+    GUID* pGuidBuf = guids.data();
+    pProcService->GetVideoProcessorDeviceGuids(nullptr, &guidCount, &pGuidBuf);
+    TEST_ASSERT(guids[0] == dxva2::DXVA2_VideoProcProgressiveDevice, "Primary processor device is DXVA2_VideoProcProgressiveDevice");
+
+    uint32_t rtCount = 0;
+    pProcService->GetVideoProcessorRenderTargets(dxva2::DXVA2_VideoProcProgressiveDevice, nullptr, &rtCount, nullptr);
+    TEST_ASSERT(rtCount >= 2, "Multiple render target formats supported");
+    std::vector<d3d9::D3DFORMAT> rtFormats(rtCount);
+    d3d9::D3DFORMAT* pRtFmts = rtFormats.data();
+    pProcService->GetVideoProcessorRenderTargets(dxva2::DXVA2_VideoProcProgressiveDevice, nullptr, &rtCount, &pRtFmts);
+    TEST_ASSERT(rtFormats[0] == d3d9::D3DFMT_X8R8G8B8, "Default render target format is D3DFMT_X8R8G8B8");
+
+    // 8. Video Processor Capabilities & Deinterlace Flags
+    dxva2::DXVA2_VideoDesc vDesc{};
+    vDesc.SampleWidth = 1920;
+    vDesc.SampleHeight = 1080;
+    vDesc.FormatD3D = d3d9::D3DFMT_X8R8G8B8;
+    dxva2::DXVA2_VideoProcessorCaps caps{};
+    hr = pProcService->GetVideoProcessorCaps(dxva2::DXVA2_VideoProcProgressiveDevice, &vDesc, d3d9::D3DFMT_X8R8G8B8, &caps);
+    TEST_ASSERT(hr == ole32::S_OK, "GetVideoProcessorCaps succeeds");
+    TEST_ASSERT((caps.DeviceCaps & dxva2::DXVA2_VPDev_HardwareDevice) != 0, "Hardware acceleration capability reported");
+    TEST_ASSERT((caps.ProcAmpControlCaps & dxva2::DXVA2_ProcAmp_Brightness) != 0, "ProcAmp Brightness capability reported");
+    TEST_ASSERT((caps.ProcAmpControlCaps & dxva2::DXVA2_ProcAmp_Contrast) != 0, "ProcAmp Contrast capability reported");
+
+    // 9. ProcAmp & Filter Range Discovery
+    dxva2::DXVA2_ValueRange rangeBright{}, rangeContrast{}, rangeHue{}, rangeSat{};
+    pProcService->GetProcAmpRange(dxva2::DXVA2_VideoProcProgressiveDevice, &vDesc, d3d9::D3DFMT_X8R8G8B8, dxva2::DXVA2_ProcAmp_Brightness, &rangeBright);
+    TEST_ASSERT(rangeBright.MinValue.ToFloat() == -100.0f && rangeBright.MaxValue.ToFloat() == 100.0f && rangeBright.DefaultValue.ToFloat() == 0.0f, "Brightness range [-100, +100] def 0");
+    pProcService->GetProcAmpRange(dxva2::DXVA2_VideoProcProgressiveDevice, &vDesc, d3d9::D3DFMT_X8R8G8B8, dxva2::DXVA2_ProcAmp_Contrast, &rangeContrast);
+    TEST_ASSERT(rangeContrast.MinValue.ToFloat() == 0.0f && rangeContrast.MaxValue.ToFloat() == 10.0f && rangeContrast.DefaultValue.ToFloat() == 1.0f, "Contrast range [0, 10] def 1.0");
+    pProcService->GetProcAmpRange(dxva2::DXVA2_VideoProcProgressiveDevice, &vDesc, d3d9::D3DFMT_X8R8G8B8, dxva2::DXVA2_ProcAmp_Hue, &rangeHue);
+    TEST_ASSERT(rangeHue.MinValue.ToFloat() == -180.0f && rangeHue.MaxValue.ToFloat() == 180.0f, "Hue range [-180, +180]");
+    pProcService->GetProcAmpRange(dxva2::DXVA2_VideoProcProgressiveDevice, &vDesc, d3d9::D3DFMT_X8R8G8B8, dxva2::DXVA2_ProcAmp_Saturation, &rangeSat);
+    TEST_ASSERT(rangeSat.MinValue.ToFloat() == 0.0f && rangeSat.MaxValue.ToFloat() == 10.0f && rangeSat.DefaultValue.ToFloat() == 1.0f, "Saturation range [0, 10]");
+
+    // 10. Hardware Accelerated Surface Allocation
+    d3d9::IDirect3DSurface9* pTargetSurface = nullptr;
+    d3d9::IDirect3DSurface9* pSourceSurface = nullptr;
+    hr = pProcService->CreateSurface(1920, 1080, 0, d3d9::D3DFMT_X8R8G8B8, d3d9::D3DPOOL_DEFAULT, 0, dxva2::DXVA2_SurfaceType_ProcessorRenderTarget, &pTargetSurface, nullptr);
+    TEST_ASSERT(hr == ole32::S_OK && pTargetSurface != nullptr, "CreateSurface for target succeeds");
+    TEST_ASSERT(pTargetSurface->GetWidth() == 1920 && pTargetSurface->GetHeight() == 1080, "Surface dimensions 1920x1080");
+    hr = pProcService->CreateSurface(1920, 1080, 0, d3d9::D3DFMT_X8R8G8B8, d3d9::D3DPOOL_DEFAULT, 0, dxva2::DXVA2_SurfaceType_ProcessorRenderTarget, &pSourceSurface, nullptr);
+    TEST_ASSERT(hr == ole32::S_OK && pSourceSurface != nullptr, "CreateSurface for source succeeds");
+
+    // 11. Video Processor Instantiation & Creation Parameters
+    dxva2::IDirectXVideoProcessor* pProcessor = nullptr;
+    hr = pProcService->CreateVideoProcessor(dxva2::DXVA2_VideoProcProgressiveDevice, &vDesc, d3d9::D3DFMT_X8R8G8B8, 4, &pProcessor);
+    TEST_ASSERT(hr == ole32::S_OK && pProcessor != nullptr, "CreateVideoProcessor succeeds");
+    GUID qGuid{};
+    dxva2::DXVA2_VideoDesc qDesc{};
+    d3d9::D3DFORMAT qFmt{};
+    uint32_t qSubStreams = 0;
+    pProcessor->GetCreationParameters(&qGuid, &qDesc, &qFmt, &qSubStreams);
+    TEST_ASSERT(qGuid == dxva2::DXVA2_VideoProcProgressiveDevice, "Creation parameter device GUID matches");
+    TEST_ASSERT(qSubStreams == 4, "Creation parameter max sub-streams is 4");
+
+    // 12. Video Process Blt & ProcAmp Color Adjustment
+    d3d9::D3DLOCKED_RECT srcLock{};
+    pSourceSurface->LockRect(&srcLock, nullptr, 0);
+    uint32_t* pSrcBits = reinterpret_cast<uint32_t*>(srcLock.pBits);
+    std::fill_n(pSrcBits, 1920 * 1080, 0xFF808080); // Mid-gray (128, 128, 128)
+    pSourceSurface->UnlockRect();
+
+    dxva2::DXVA2_VideoProcessBltParams bltParams{};
+    bltParams.TargetRect = { 0, 0, 1920, 1080 };
+    bltParams.ProcAmpValues.Brightness = dxva2::DXVA2_Fixed32::FromFloat(20.0f);
+    bltParams.ProcAmpValues.Contrast = dxva2::DXVA2_Fixed32::FromFloat(1.2f);
+    bltParams.ProcAmpValues.Hue = dxva2::DXVA2_Fixed32::FromFloat(0.0f);
+    bltParams.ProcAmpValues.Saturation = dxva2::DXVA2_Fixed32::FromFloat(1.0f);
+
+    dxva2::DXVA2_VideoSample samples[2]{};
+    samples[0].SrcSurface = pSourceSurface;
+    samples[0].SrcRect = { 0, 0, 1920, 1080 };
+    samples[0].DstRect = { 0, 0, 1920, 1080 };
+    samples[0].PlanarAlpha = dxva2::DXVA2_Fixed32::FromFloat(1.0f);
+
+    hr = pProcessor->VideoProcessBlt(pTargetSurface, &bltParams, samples, 1, nullptr);
+    TEST_ASSERT(hr == ole32::S_OK, "VideoProcessBlt succeeds");
+
+    d3d9::D3DLOCKED_RECT dstLock{};
+    pTargetSurface->LockRect(&dstLock, nullptr, 0);
+    uint32_t* pDstBits = reinterpret_cast<uint32_t*>(dstLock.pBits);
+    uint32_t processedPix = pDstBits[0];
+    pTargetSurface->UnlockRect();
+    uint8_t procR = (processedPix >> 16) & 0xFF;
+    TEST_ASSERT(procR >= 150 && procR <= 154, "ProcAmp adjusted pixel matches theoretical model (128 -> 152)");
+
+    // 13. Sub-Stream Multi-Layer Compositing (PiP / Alpha Overlay)
+    d3d9::IDirect3DSurface9* pSubSurface = nullptr;
+    pProcService->CreateSurface(300, 200, 0, d3d9::D3DFMT_A8R8G8B8, d3d9::D3DPOOL_DEFAULT, 0, dxva2::DXVA2_SurfaceType_ProcessorRenderTarget, &pSubSurface, nullptr);
+    d3d9::D3DLOCKED_RECT subLock{};
+    pSubSurface->LockRect(&subLock, nullptr, 0);
+    uint32_t* pSubBits = reinterpret_cast<uint32_t*>(subLock.pBits);
+    std::fill_n(pSubBits, 300 * 200, 0xFFFF0000); // Opaque Red
+    pSubSurface->UnlockRect();
+
+    samples[1].SrcSurface = pSubSurface;
+    samples[1].SrcRect = { 0, 0, 300, 200 };
+    samples[1].DstRect = { 100, 100, 400, 300 };
+    samples[1].PlanarAlpha = dxva2::DXVA2_Fixed32::FromFloat(0.5f); // 50% blend
+
+    hr = pProcessor->VideoProcessBlt(pTargetSurface, &bltParams, samples, 2, nullptr);
+    TEST_ASSERT(hr == ole32::S_OK, "VideoProcessBlt with 2 streams succeeds");
+
+    pTargetSurface->LockRect(&dstLock, nullptr, 0);
+    pDstBits = reinterpret_cast<uint32_t*>(dstLock.pBits);
+    uint32_t blendedPix = pDstBits[150 * 1920 + 200];
+    pTargetSurface->UnlockRect();
+    uint8_t blendR = (blendedPix >> 16) & 0xFF;
+    TEST_ASSERT(blendR >= 200 && blendR <= 206, "Composited sub-stream pixel blended at 50% alpha (152 & 255 -> 203)");
+
+    // 14. Video Decoder Service Profile Discovery & Configurations
+    uint32_t decCount = 0;
+    pDecService->GetDecoderDeviceGuids(&decCount, nullptr);
+    TEST_ASSERT(decCount >= 4, "Decoder service enumerates at least 4 hardware profiles");
+    std::vector<GUID> decGuids(decCount);
+    GUID* pDecGuids = decGuids.data();
+    pDecService->GetDecoderDeviceGuids(&decCount, &pDecGuids);
+    bool hasH264 = false, hasVC1 = false, hasMPEG2 = false;
+    for (const auto& g : decGuids) {
+        if (g == dxva2::DXVA2_ModeH264_E) hasH264 = true;
+        if (g == dxva2::DXVA2_ModeVC1_D) hasVC1 = true;
+        if (g == dxva2::DXVA2_ModeMPEG2_VLD) hasMPEG2 = true;
+    }
+    TEST_ASSERT(hasH264 && hasVC1 && hasMPEG2, "Supports H.264, VC-1, and MPEG-2 hardware acceleration profiles");
+
+    uint32_t cfgCount = 0;
+    pDecService->GetDecoderConfigurations(dxva2::DXVA2_ModeH264_E, &vDesc, nullptr, &cfgCount, nullptr);
+    TEST_ASSERT(cfgCount > 0, "H.264 decoder configurations returned");
+
+    // 15. Hardware Video Decode Execution Lifecycle
+    dxva2::DXVA2_ConfigPictureDecode decCfg{};
+    decCfg.ConfigBitstreamRaw = 1;
+    dxva2::IDirectXVideoDecoder* pDecoder = nullptr;
+    hr = pDecService->CreateVideoDecoder(dxva2::DXVA2_ModeH264_E, &vDesc, &decCfg, &pTargetSurface, 1, &pDecoder);
+    TEST_ASSERT(hr == ole32::S_OK && pDecoder != nullptr, "CreateVideoDecoder succeeds");
+
+    void* pPicBuf = nullptr;
+    uint32_t szPic = 0;
+    hr = pDecoder->GetBuffer(dxva2::DXVA2_PictureParametersBufferType, &pPicBuf, &szPic);
+    TEST_ASSERT(hr == ole32::S_OK && pPicBuf != nullptr && szPic > 0, "GetBuffer for PictureParameters succeeds");
+    pDecoder->ReleaseBuffer(dxva2::DXVA2_PictureParametersBufferType);
+
+    void* pBitBuf = nullptr;
+    uint32_t szBit = 0;
+    hr = pDecoder->GetBuffer(dxva2::DXVA2_BitStreamDateBufferType, &pBitBuf, &szBit);
+    TEST_ASSERT(hr == ole32::S_OK && pBitBuf != nullptr && szBit > 0, "GetBuffer for BitStream succeeds");
+    pDecoder->ReleaseBuffer(dxva2::DXVA2_BitStreamDateBufferType);
+
+    hr = pDecoder->BeginFrame(pTargetSurface, nullptr);
+    TEST_ASSERT(hr == ole32::S_OK, "BeginFrame succeeds");
+    dxva2::DXVA2_DecodeExecuteParams execParams{};
+    hr = pDecoder->Execute(&execParams);
+    TEST_ASSERT(hr == ole32::S_OK, "Execute decode bitstream succeeds");
+    hr = pDecoder->EndFrame(nullptr);
+    TEST_ASSERT(hr == ole32::S_OK, "EndFrame succeeds");
+
+    auto* pConcreteDec = static_cast<dxva2::CDirectXVideoDecoder*>(pDecoder);
+    TEST_ASSERT(pConcreteDec->GetDecodedFrameCount() == 1, "Decoded frame count is 1");
+
+    // 16. Dynamic Module Exports & Shell Command Integration (dxva2.dll)
+    dxva2::InitializeDXVA2Exports();
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("dxva2.dll", "DXVA2CreateDirect3DDeviceManager9") != nullptr, "dxva2.dll!DXVA2CreateDirect3DDeviceManager9 exported");
+    TEST_ASSERT(loader.getExport("dxva2.dll", "DXVA2CreateVideoService") != nullptr, "dxva2.dll!DXVA2CreateVideoService exported");
+    TEST_ASSERT(loader.getExport("dxva2.dll", "DllCanUnloadNow") != nullptr, "dxva2.dll!DllCanUnloadNow exported");
+    TEST_ASSERT(loader.getExport("dxva2.dll", "DllGetClassObject") != nullptr, "dxva2.dll!DllGetClassObject exported");
+
+    auto& verDb = version::VersionDatabase::Instance();
+    const auto* vDxva = verDb.FindModule("dxva2.dll");
+    TEST_ASSERT(vDxva != nullptr && vDxva->stringTable.at("ProductName") == "MicaNT DirectX Video Acceleration 2.0 Subsystem", "dxva2.dll version product matches");
+    TEST_ASSERT(vDxva->stringTable.at("FileVersion") == "10.0.22621.1", "dxva2.dll FileVersion is 10.0.22621.1");
+
+    shell::CommandShell testShell;
+    std::ostringstream out;
+
+    testShell.execute("dxva2 test", out);
+    TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "dxva2 test self-test succeeds 100%");
+
+    out.str("");
+    testShell.execute("dxva2 procamp 10 120", out);
+    TEST_ASSERT(out.str().find("COLOR ADJUSTED") != std::string::npos, "dxva2 procamp adjusts color");
+
+    out.str("");
+    testShell.execute("dxva2 info", out);
+    TEST_ASSERT(out.str().find("22621") != std::string::npos, "dxva2 info displays telemetry");
+
+    // Cleanup
+    pSubSurface->Release();
+    pSourceSurface->Release();
+    pTargetSurface->Release();
+    pDecoder->Release();
+    pProcessor->Release();
+    pDecService->Release();
+    pProcService->Release();
+    pDevMgr->CloseDeviceHandle(hDev2);
+    pDevMgr->Release();
+    pDevice->Release();
+    pD3D->Release();
+
+    std::cout << "[TEST] Suite 109: Windows DirectX Video Acceleration 2.0 (DXVA2) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite108")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite109")) {
+        RUN_TEST(Test_WindowsDXVA2_Hardware_Acceleration_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite108") {
         RUN_TEST(Test_WindowsEnhancedVideoRenderer_Subsystem);
         return g_FailedTests;
     }
@@ -25361,6 +25656,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirect2D_Hardware_Rendering_Subsystem);
     RUN_TEST(Test_WindowsMediaFoundation_Topology_And_Session_Subsystem);
     RUN_TEST(Test_WindowsEnhancedVideoRenderer_Subsystem);
+    RUN_TEST(Test_WindowsDXVA2_Hardware_Acceleration_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
