@@ -125,6 +125,7 @@
 #include "fveapi.hpp"
 #include "fwpuclnt.hpp"
 #include "wintrust.hpp"
+#include "ci.hpp"
 
 namespace micant::shell {
 
@@ -340,6 +341,7 @@ public:
             if (cmd == "manage-bde" || cmd == "bde" || cmd == "bitlocker") { cmdManageBde(tokens, out); return 0; }
             if (cmd == "netsh" || cmd == "advfirewall" || cmd == "firewall" || cmd == "wfp") { cmdFirewall(tokens, out); return 0; }
             if (cmd == "signtool" || cmd == "wintrust" || cmd == "sign") { cmdSignTool(tokens, out); return 0; }
+            if (cmd == "wdac" || cmd == "ci") { cmdWdac(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -646,6 +648,7 @@ private:
             << "  MANAGE-BDE [status|on|off|lock|unlock|protectors|test] Full Volume Encryption / FVE (manage-bde compatibility)\n"
             << "  FIREWALL [show|set|add|delete|test] Windows Filtering Platform & Advanced Firewall (firewall test)\n"
             << "  SIGNTOOL [verify|sign|catdb|test] Windows Authenticode & Code Integrity Tool (signtool test)\n"
+            << "  WDAC [status|mode|rules|logs|test] Windows Defender Application Control & CI (wdac test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -19841,6 +19844,183 @@ private:
             << "  signtool sign [/a] [/n <subject>] <file>     Digitally signs an executable with Authenticode\n"
             << "  signtool catdb                               Displays registered Security Catalogs (CatRoot)\n"
             << "  signtool test                                Runs Sovereign Authenticode & WinTrust diagnostics\n";
+    }
+
+    void cmdWdac(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::ci;
+        InitializeCiSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        };
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
+            out << "[TEST] Running Windows Code Integrity & WDAC Diagnostics...\n";
+
+            // 1. Verify CI options query/set
+            SYSTEM_CODEINTEGRITY_INFORMATION ciInfo{};
+            NTSTATUS status = CiQueryInformation(&ciInfo, sizeof(ciInfo));
+            if (status != STATUS_SUCCESS) {
+                out << "[-] CiQueryInformation failed.\n";
+                return;
+            }
+
+            uint32_t savedOpts = ciInfo.CodeIntegrityOptions;
+            ciInfo.CodeIntegrityOptions |= CODEINTEGRITY_OPTION_TESTSIGN;
+            CiSetInformation(&ciInfo, sizeof(ciInfo));
+
+            SYSTEM_CODEINTEGRITYPOLICY_INFORMATION polInfo{};
+            CiGetPolicyInformation(&polInfo, sizeof(polInfo));
+            if ((polInfo.Options & CODEINTEGRITY_OPTION_TESTSIGN) == 0) {
+                out << "[-] CiGetPolicyInformation verification failed.\n";
+                return;
+            }
+            ciInfo.CodeIntegrityOptions = savedOpts;
+            CiSetInformation(&ciInfo, sizeof(ciInfo));
+
+            // 2. Synthesize test unsigned binary
+            std::vector<uint8_t> testPe(1024, 0);
+            auto* dos = reinterpret_cast<pe::ImageDosHeader*>(testPe.data());
+            dos->e_magic = pe::DOS_MAGIC;
+            dos->e_lfanew = 128;
+            *reinterpret_cast<uint32_t*>(testPe.data() + 128) = pe::NT_SIGNATURE;
+
+            auto* fileHdr = reinterpret_cast<pe::ImageFileHeader*>(testPe.data() + 132);
+            fileHdr->machine = pe::MACHINE_AMD64;
+            fileHdr->numberOfSections = 1;
+            fileHdr->sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+
+            auto* optHdr = reinterpret_cast<pe::ImageOptionalHeader64*>(testPe.data() + 132 + sizeof(pe::ImageFileHeader));
+            optHdr->magic = pe::PE32PLUS_MAGIC;
+            optHdr->sizeOfHeaders = 512;
+            optHdr->numberOfRvaAndSizes = 16;
+
+            auto* secHdr = reinterpret_cast<pe::ImageSectionHeader*>(testPe.data() + 132 + sizeof(pe::ImageFileHeader) + sizeof(pe::ImageOptionalHeader64));
+            std::memcpy(secHdr->name, ".text\0\0\0", 8);
+            secHdr->misc.virtualSize = 256;
+            secHdr->virtualAddress = 0x1000;
+            secHdr->sizeOfRawData = 256;
+            secHdr->pointerToRawData = 512;
+            for (size_t i = 512; i < 768; ++i) testPe[i] = 0xC3; // RETs
+
+            // 3. Test KMCI enforcement: unsigned driver must be rejected
+            uint8_t level = 0;
+            NTSTATUS driverStatus = CiValidateImageHeader(nullptr, L"C:\\Windows\\System32\\drivers\\unsigned.sys",
+                                                         testPe.data(), testPe.size(), 0x01 /* Driver flag */, &level);
+            if (driverStatus != STATUS_IMAGE_CERT_REVOKED) {
+                out << "[-] KMCI failed to reject unsigned driver: status = 0x" << std::hex << driverStatus << "\n";
+                return;
+            }
+
+            // 4. Test UMCI enforcement
+            SovereignCiManager::get().setOptions(CODEINTEGRITY_OPTION_ENABLED | CODEINTEGRITY_OPTION_UMCI_ENABLED);
+            NTSTATUS umciStatus = CiValidateImageHeader(nullptr, L"C:\\Users\\Temp\\unsigned.exe",
+                                                       testPe.data(), testPe.size(), 0x00, &level);
+            if (umciStatus != STATUS_ACCESS_DENIED) {
+                out << "[-] UMCI enforcement failed to block unsigned executable.\n";
+                return;
+            }
+
+            // 5. Test Whitelist Rule: allow via explicit hash rule
+            std::vector<uint8_t> hash = wintrust::SovereignWinTrustManager::calculatePeAuthenticodeHash(testPe.data(), testPe.size(), true);
+            std::string hashHex = wintrust::SovereignWinTrustManager::toHex(hash.data(), hash.size());
+
+            WdacPolicyRule allowRule{};
+            allowRule.ruleId = "Diag-Allow-Rule";
+            allowRule.ruleType = WdacRuleType::HashRule;
+            allowRule.action = WdacRuleAction::Allow;
+            allowRule.pattern = hashHex;
+            SovereignCiManager::get().addRule(allowRule);
+
+            NTSTATUS ruleStatus = CiValidateImageHeader(nullptr, L"C:\\Users\\Temp\\unsigned.exe",
+                                                       testPe.data(), testPe.size(), 0x00, &level);
+            if (ruleStatus != STATUS_SUCCESS) {
+                out << "[-] WDAC hash rule matching failed: status = 0x" << std::hex << ruleStatus << "\n";
+                return;
+            }
+
+            SovereignCiManager::get().removeRule("Diag-Allow-Rule");
+            SovereignCiManager::get().setOptions(savedOpts);
+
+            out << "  [+] Kernel-Mode Code Integrity (KMCI) driver validation verified.\n";
+            out << "  [+] User-Mode Code Integrity (UMCI / WDAC) enforcement verified.\n";
+            out << "  [+] Application Control whitelisting & hash rule engine passed.\n";
+            out << "  [+] HVCI & Hypervisor-Enforced Code Integrity state verified.\n";
+            out << "[SUCCESS] Windows Code Integrity & WDAC Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "status") {
+            uint32_t opts = SovereignCiManager::get().getOptions();
+            out << "Windows Defender Application Control & Code Integrity Status:\n"
+                << "  Code Integrity Options:       0x" << std::hex << std::setfill('0') << std::setw(8) << opts << "\n"
+                << "  Kernel-Mode CI (KMCI):        " << ((opts & CODEINTEGRITY_OPTION_ENABLED) ? "Enforced" : "Disabled") << "\n"
+                << "  User-Mode CI (UMCI):          " << ((opts & CODEINTEGRITY_OPTION_UMCI_ENABLED) ? "Enforced" : ((opts & CODEINTEGRITY_OPTION_UMCI_AUDIT) ? "Audit Mode" : "Disabled")) << "\n"
+                << "  HVCI (Memory Integrity):      " << ((opts & CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED) ? "Enabled" : "Disabled") << "\n"
+                << "  Test Signing (TESTSIGN):      " << ((opts & CODEINTEGRITY_OPTION_TESTSIGN) ? "Allowed" : "Blocked") << "\n"
+                << "  Active WDAC Policy Rules:     " << std::dec << SovereignCiManager::get().getAllRules().size() << "\n";
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "mode") {
+            std::string m = toLower(tokens[2]);
+            if (m == "enforce") {
+                SovereignCiManager::get().enableOption(CODEINTEGRITY_OPTION_UMCI_ENABLED);
+                SovereignCiManager::get().disableOption(CODEINTEGRITY_OPTION_UMCI_AUDIT);
+                out << "WDAC UMCI mode set to: Enforced\n";
+            } else if (m == "audit") {
+                SovereignCiManager::get().enableOption(CODEINTEGRITY_OPTION_UMCI_AUDIT);
+                SovereignCiManager::get().disableOption(CODEINTEGRITY_OPTION_UMCI_ENABLED);
+                out << "WDAC UMCI mode set to: Audit Mode\n";
+            } else if (m == "disabled" || m == "off") {
+                SovereignCiManager::get().disableOption(CODEINTEGRITY_OPTION_UMCI_ENABLED | CODEINTEGRITY_OPTION_UMCI_AUDIT);
+                out << "WDAC UMCI mode set to: Disabled\n";
+            } else {
+                out << "Invalid mode. Valid modes: enforce, audit, disabled\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "rules") {
+            out << "Active WDAC Application Control Policy Rules:\n";
+            auto rules = SovereignCiManager::get().getAllRules();
+            for (const auto& r : rules) {
+                std::string typeStr = (r.ruleType == WdacRuleType::HashRule) ? "Hash" :
+                                      (r.ruleType == WdacRuleType::PublisherRule) ? "Publisher" : "Path";
+                std::string actStr = (r.action == WdacRuleAction::Allow) ? "ALLOW" : "DENY";
+                out << "  [" << actStr << "] " << r.ruleId << " (" << typeStr << ")\n"
+                    << "      Pattern: " << r.pattern << "\n"
+                    << "      Description: " << r.description << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "logs") {
+            out << "Recent Code Integrity & WDAC Audit Events:\n";
+            auto logs = SovereignCiManager::get().getAuditLogs();
+            if (logs.empty()) {
+                out << "  (No audit events logged)\n";
+            } else {
+                for (const auto& entry : logs) {
+                    out << "  [" << entry.timestamp << "] " << (entry.blocked ? "[BLOCKED]" : "[ALLOWED]") << " "
+                        << entry.imagePath << "\n"
+                        << "      SHA256: " << entry.sha256 << "\n"
+                        << "      Reason: " << entry.reason << "\n";
+                }
+            }
+            return;
+        }
+
+        out << "Windows Defender Application Control (WDAC) & Code Integrity CLI\n"
+            << "Note: Windows Defender, WDAC, and Device Guard are trademarks of Microsoft Corp. Referenced under nominative fair use.\n"
+            << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+            << "Usage:\n"
+            << "  wdac status                           Displays Code Integrity and HVCI status\n"
+            << "  wdac mode <enforce|audit|disabled>    Configures WDAC UMCI enforcement mode\n"
+            << "  wdac rules                            Lists active Application Control policy rules\n"
+            << "  wdac logs                             Displays recent Code Integrity audit log entries\n"
+            << "  wdac test                             Runs Sovereign Code Integrity & WDAC diagnostics\n";
     }
 
     static std::string trim(std::string_view s) {

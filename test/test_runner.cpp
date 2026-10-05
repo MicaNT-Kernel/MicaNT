@@ -31143,8 +31143,194 @@ void Test_WindowsAuthenticode_WinTrust_Subsystem() {
     std::cout << "[TEST] Suite 133: Windows Authenticode & WinTrust Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 134: Windows Code Integrity (CI) & WDAC Subsystem Tests
+// ============================================================================
+void Test_WindowsCodeIntegrity_WDAC_Subsystem() {
+    using namespace micant::ci;
+    std::cout << "[TEST] Running Suite 134: Windows Code Integrity & WDAC Subsystem...\n";
+
+    // 1. DynamicLoader Export Resolution
+    InitializeCiSubsystemExports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    void* pfnCiInit = ldr.getExport("ci.dll", "CiInitialize");
+    TEST_ASSERT(pfnCiInit != nullptr, "ci.dll must export CiInitialize");
+
+    void* pfnValidateHdr = ldr.getExport("ci.dll", "CiValidateImageHeader");
+    TEST_ASSERT(pfnValidateHdr != nullptr, "ci.dll must export CiValidateImageHeader");
+
+    void* pfnValidateData = ldr.getExport("ci.dll", "CiValidateImageData");
+    TEST_ASSERT(pfnValidateData != nullptr, "ci.dll must export CiValidateImageData");
+
+    void* pfnCiQuery = ldr.getExport("ci.dll", "CiQueryInformation");
+    TEST_ASSERT(pfnCiQuery != nullptr, "ci.dll must export CiQueryInformation");
+
+    void* pfnCiSet = ldr.getExport("ci.dll", "CiSetInformation");
+    TEST_ASSERT(pfnCiSet != nullptr, "ci.dll must export CiSetInformation");
+
+    void* pfnCiPolicy = ldr.getExport("ci.dll", "CiGetPolicyInformation");
+    TEST_ASSERT(pfnCiPolicy != nullptr, "ci.dll must export CiGetPolicyInformation");
+
+    // 2. Query and Set CI Options
+    SYSTEM_CODEINTEGRITY_INFORMATION ciInfo{};
+    TEST_ASSERT(CiQueryInformation(&ciInfo, sizeof(ciInfo)) == STATUS_SUCCESS, "CiQueryInformation must succeed");
+    uint32_t defaultOpts = ciInfo.CodeIntegrityOptions;
+    TEST_ASSERT((defaultOpts & CODEINTEGRITY_OPTION_ENABLED) != 0, "KMCI should be enabled by default");
+    TEST_ASSERT((defaultOpts & CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED) != 0, "HVCI should be enabled by default");
+
+    ciInfo.CodeIntegrityOptions |= CODEINTEGRITY_OPTION_TESTSIGN;
+    TEST_ASSERT(CiSetInformation(&ciInfo, sizeof(ciInfo)) == STATUS_SUCCESS, "CiSetInformation must succeed");
+
+    SYSTEM_CODEINTEGRITYPOLICY_INFORMATION polInfo{};
+    TEST_ASSERT(CiGetPolicyInformation(&polInfo, sizeof(polInfo)) == STATUS_SUCCESS, "CiGetPolicyInformation must succeed");
+    TEST_ASSERT((polInfo.Options & CODEINTEGRITY_OPTION_TESTSIGN) != 0, "TESTSIGN flag must be reflected in policy");
+
+    // Reset options
+    ciInfo.CodeIntegrityOptions = defaultOpts;
+    CiSetInformation(&ciInfo, sizeof(ciInfo));
+
+    // 3. Synthesize test PE binaries
+    std::vector<uint8_t> testPe(1024, 0);
+    auto* dos = reinterpret_cast<pe::ImageDosHeader*>(testPe.data());
+    dos->e_magic = pe::DOS_MAGIC;
+    dos->e_lfanew = 128;
+    *reinterpret_cast<uint32_t*>(testPe.data() + 128) = pe::NT_SIGNATURE;
+
+    auto* fileHdr = reinterpret_cast<pe::ImageFileHeader*>(testPe.data() + 132);
+    fileHdr->machine = pe::MACHINE_AMD64;
+    fileHdr->numberOfSections = 1;
+    fileHdr->sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+
+    auto* optHdr = reinterpret_cast<pe::ImageOptionalHeader64*>(testPe.data() + 132 + sizeof(pe::ImageFileHeader));
+    optHdr->magic = pe::PE32PLUS_MAGIC;
+    optHdr->sizeOfHeaders = 512;
+    optHdr->numberOfRvaAndSizes = 16;
+
+    auto* secHdr = reinterpret_cast<pe::ImageSectionHeader*>(testPe.data() + 132 + sizeof(pe::ImageFileHeader) + sizeof(pe::ImageOptionalHeader64));
+    std::memcpy(secHdr->name, ".text\0\0\0", 8);
+    secHdr->misc.virtualSize = 256;
+    secHdr->virtualAddress = 0x1000;
+    secHdr->sizeOfRawData = 256;
+    secHdr->pointerToRawData = 512;
+    for (size_t i = 512; i < 768; ++i) testPe[i] = 0x90; // NOPs
+
+    // 4. Test KMCI (Kernel-Mode Code Integrity) Driver Validation
+    uint8_t signingLevel = 0;
+    NTSTATUS unsignedDriverStatus = CiValidateImageHeader(nullptr, L"C:\\Windows\\System32\\drivers\\bad_driver.sys",
+                                                         testPe.data(), testPe.size(), 0x01 /* Driver */, &signingLevel);
+    TEST_ASSERT(unsignedDriverStatus == STATUS_IMAGE_CERT_REVOKED, "Unsigned driver must be rejected by KMCI");
+    TEST_ASSERT(signingLevel == SE_SIGNING_LEVEL_UNSIGNED, "Unsigned driver signing level must be UNSIGNED (1)");
+
+    // Sign driver with valid KMCS signature
+    wintrust::AuthenticodeSignerInfo kmcsSigner{};
+    kmcsSigner.subject = "CN=Microsoft Windows Driver Component, O=Microsoft Corporation, C=US";
+    kmcsSigner.issuer = "CN=Microsoft Windows Production PCA 2011, O=Microsoft Corporation, C=US";
+    kmcsSigner.serialNumber = "8800000001";
+    kmcsSigner.thumbprintSha1 = "AA11BB22CC33DD44EE55FF660011223344556677";
+    kmcsSigner.thumbprintSha256 = "11223344556677889900AABBCCDDEEFF11223344556677889900AABBCCDDEEFF";
+    kmcsSigner.isTrustedRoot = true;
+    kmcsSigner.isDriverSigned = true;
+    kmcsSigner.notBefore = 1000;
+    kmcsSigner.notAfter = 2000000000ULL;
+
+    std::vector<uint8_t> signedDriver = wintrust::SovereignWinTrustManager::get().signPeBinary(testPe.data(), testPe.size(), kmcsSigner);
+    NTSTATUS signedDriverStatus = CiValidateImageHeader(nullptr, L"C:\\Windows\\System32\\drivers\\good_driver.sys",
+                                                       signedDriver.data(), signedDriver.size(), 0x01 /* Driver */, &signingLevel);
+    TEST_ASSERT(signedDriverStatus == STATUS_SUCCESS, "Signed KMCS driver must be allowed by KMCI");
+    TEST_ASSERT(signingLevel >= SE_SIGNING_LEVEL_MICROSOFT, "KMCS driver signing level must be at least MICROSOFT (8)");
+
+    // 5. Test UMCI (User-Mode Code Integrity) in Audit Mode
+    SovereignCiManager::get().clearAuditLogs();
+    SovereignCiManager::get().setOptions(CODEINTEGRITY_OPTION_ENABLED | CODEINTEGRITY_OPTION_UMCI_AUDIT);
+
+    NTSTATUS auditStatus = CiValidateImageHeader(nullptr, L"C:\\Users\\admin\\app.exe",
+                                                testPe.data(), testPe.size(), 0x00 /* User-mode */, &signingLevel);
+    TEST_ASSERT(auditStatus == STATUS_SUCCESS, "In UMCI Audit Mode, unsigned executable must be permitted to run");
+    auto auditLogs = SovereignCiManager::get().getAuditLogs();
+    TEST_ASSERT(!auditLogs.empty(), "Audit log entry must be recorded in Audit Mode");
+
+    // 6. Test UMCI in Enforced Mode
+    SovereignCiManager::get().setOptions(CODEINTEGRITY_OPTION_ENABLED | CODEINTEGRITY_OPTION_UMCI_ENABLED);
+
+    NTSTATUS enforcedStatus = CiValidateImageHeader(nullptr, L"C:\\Users\\admin\\app.exe",
+                                                   testPe.data(), testPe.size(), 0x00 /* User-mode */, &signingLevel);
+    TEST_ASSERT(enforcedStatus == STATUS_ACCESS_DENIED, "In UMCI Enforced Mode, unsigned binary must be blocked (STATUS_ACCESS_DENIED)");
+
+    // 7. Test WDAC Whitelist Rules (Hash, Publisher, Path)
+    // Hash Rule Allow
+    std::vector<uint8_t> peHash = wintrust::SovereignWinTrustManager::calculatePeAuthenticodeHash(testPe.data(), testPe.size(), true);
+    std::string peHashHex = wintrust::SovereignWinTrustManager::toHex(peHash.data(), peHash.size());
+
+    WdacPolicyRule hashRule{};
+    hashRule.ruleId = "Rule-Allow-TestPe";
+    hashRule.ruleType = WdacRuleType::HashRule;
+    hashRule.action = WdacRuleAction::Allow;
+    hashRule.pattern = peHashHex;
+    SovereignCiManager::get().addRule(hashRule);
+
+    NTSTATUS hashAllowedStatus = CiValidateImageHeader(nullptr, L"C:\\Users\\admin\\app.exe",
+                                                      testPe.data(), testPe.size(), 0x00, &signingLevel);
+    TEST_ASSERT(hashAllowedStatus == STATUS_SUCCESS, "Binary matching allow Hash Rule must pass UMCI enforcement");
+
+    // Deny Rule override
+    WdacPolicyRule denyRule{};
+    denyRule.ruleId = "Rule-Deny-TestPe";
+    denyRule.ruleType = WdacRuleType::HashRule;
+    denyRule.action = WdacRuleAction::Deny;
+    denyRule.pattern = peHashHex;
+    SovereignCiManager::get().addRule(denyRule);
+
+    NTSTATUS hashDeniedStatus = CiValidateImageHeader(nullptr, L"C:\\Users\\admin\\app.exe",
+                                                     testPe.data(), testPe.size(), 0x00, &signingLevel);
+    TEST_ASSERT(hashDeniedStatus == STATUS_ACCESS_DENIED, "Explicit Deny rule must take precedence and block binary");
+
+    SovereignCiManager::get().removeRule("Rule-Deny-TestPe");
+    SovereignCiManager::get().removeRule("Rule-Allow-TestPe");
+    SovereignCiManager::get().setOptions(defaultOpts);
+
+    // 8. Shell CLI Integration: wdac
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("wdac test", oss);
+    TEST_ASSERT(shellRet == 0, "wdac test must return 0");
+    TEST_ASSERT(oss.str().find("[SUCCESS] Windows Code Integrity & WDAC Diagnostics passed cleanly.") != std::string::npos,
+                "wdac test diagnostics must succeed");
+
+    oss.str("");
+    shellRet = proc.execute("wdac status", oss);
+    TEST_ASSERT(shellRet == 0, "wdac status must return 0");
+    TEST_ASSERT(oss.str().find("Kernel-Mode CI (KMCI):") != std::string::npos, "Must show KMCI state");
+    TEST_ASSERT(oss.str().find("HVCI (Memory Integrity):") != std::string::npos, "Must show HVCI state");
+
+    oss.str("");
+    shellRet = proc.execute("wdac mode enforce", oss);
+    TEST_ASSERT(shellRet == 0, "wdac mode enforce must return 0");
+    TEST_ASSERT(oss.str().find("WDAC UMCI mode set to: Enforced") != std::string::npos, "Must report mode set");
+
+    oss.str("");
+    shellRet = proc.execute("wdac mode audit", oss);
+    TEST_ASSERT(shellRet == 0, "wdac mode audit must return 0");
+
+    oss.str("");
+    shellRet = proc.execute("wdac rules", oss);
+    TEST_ASSERT(shellRet == 0, "wdac rules must return 0");
+    TEST_ASSERT(oss.str().find("Rule-System32-Allow") != std::string::npos, "Must list default rules");
+
+    oss.str("");
+    shellRet = proc.execute("wdac logs", oss);
+    TEST_ASSERT(shellRet == 0, "wdac logs must return 0");
+
+    std::cout << "[TEST] Suite 134: Windows Code Integrity & WDAC Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite133")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite134")) {
+        RUN_TEST(Test_WindowsCodeIntegrity_WDAC_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite133") {
         RUN_TEST(Test_WindowsAuthenticode_WinTrust_Subsystem);
         return g_FailedTests;
     }
@@ -31394,6 +31580,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsBitLocker_FVE_Subsystem);
     RUN_TEST(Test_WindowsFilteringPlatform_Firewall_Subsystem);
     RUN_TEST(Test_WindowsAuthenticode_WinTrust_Subsystem);
+    RUN_TEST(Test_WindowsCodeIntegrity_WDAC_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
