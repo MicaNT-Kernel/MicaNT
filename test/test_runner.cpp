@@ -30885,8 +30885,270 @@ void Test_WindowsFilteringPlatform_Firewall_Subsystem() {
     std::cout << "[TEST] Suite 132: Windows Filtering Platform & Firewall Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 133: Windows Authenticode, Code Integrity & WinTrust Subsystem Tests
+// ============================================================================
+void Test_WindowsAuthenticode_WinTrust_Subsystem() {
+    using namespace micant::wintrust;
+    std::cout << "[TEST] Running Suite 133: Windows Authenticode & WinTrust Subsystem...\n";
+
+    // 1. DynamicLoader Export Resolution
+    InitializeWinTrustSubsystemExports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    void* pfnWinVerifyTrust = ldr.getExport("wintrust.dll", "WinVerifyTrust");
+    TEST_ASSERT(pfnWinVerifyTrust != nullptr, "wintrust.dll must export WinVerifyTrust");
+
+    void* pfnGetPolicy = ldr.getExport("wintrust.dll", "WintrustGetRegPolicyFlags");
+    TEST_ASSERT(pfnGetPolicy != nullptr, "wintrust.dll must export WintrustGetRegPolicyFlags");
+
+    void* pfnSetPolicy = ldr.getExport("wintrust.dll", "WintrustSetRegPolicyFlags");
+    TEST_ASSERT(pfnSetPolicy != nullptr, "wintrust.dll must export WintrustSetRegPolicyFlags");
+
+    void* pfnCatAcquire = ldr.getExport("wintrust.dll", "CryptCATAdminAcquireContext");
+    TEST_ASSERT(pfnCatAcquire != nullptr, "wintrust.dll must export CryptCATAdminAcquireContext");
+
+    void* pfnCatEnum = ldr.getExport("wintrust.dll", "CryptCATAdminEnumCatalogFromHash");
+    TEST_ASSERT(pfnCatEnum != nullptr, "wintrust.dll must export CryptCATAdminEnumCatalogFromHash");
+
+    // 2. Registry Policy Flags Configuration
+    uint32_t origPolicy = 0;
+    WintrustGetRegPolicyFlags(&origPolicy);
+    WintrustSetRegPolicyFlags(origPolicy | WTPF_TRUSTTEST | WTPF_IGNOREEXPIRATION);
+    uint32_t modifiedPolicy = 0;
+    WintrustGetRegPolicyFlags(&modifiedPolicy);
+    TEST_ASSERT((modifiedPolicy & WTPF_TRUSTTEST) != 0, "WTPF_TRUSTTEST must be set");
+    TEST_ASSERT((modifiedPolicy & WTPF_IGNOREEXPIRATION) != 0, "WTPF_IGNOREEXPIRATION must be set");
+    WintrustSetRegPolicyFlags(origPolicy); // Reset
+
+    // 3. Synthesize PE binary for Authenticode tests
+    std::vector<uint8_t> peImage(2048, 0);
+    auto* dos = reinterpret_cast<pe::ImageDosHeader*>(peImage.data());
+    dos->e_magic = pe::DOS_MAGIC;
+    dos->e_lfanew = 128;
+    *reinterpret_cast<uint32_t*>(peImage.data() + 128) = pe::NT_SIGNATURE;
+
+    auto* fileHdr = reinterpret_cast<pe::ImageFileHeader*>(peImage.data() + 132);
+    fileHdr->machine = pe::MACHINE_AMD64;
+    fileHdr->numberOfSections = 2;
+    fileHdr->sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+
+    auto* optHdr = reinterpret_cast<pe::ImageOptionalHeader64*>(peImage.data() + 132 + sizeof(pe::ImageFileHeader));
+    optHdr->magic = pe::PE32PLUS_MAGIC;
+    optHdr->sizeOfHeaders = 512;
+    optHdr->numberOfRvaAndSizes = 16;
+    optHdr->checkSum = 0x12345678;
+
+    auto* sec1 = reinterpret_cast<pe::ImageSectionHeader*>(peImage.data() + 132 + sizeof(pe::ImageFileHeader) + sizeof(pe::ImageOptionalHeader64));
+    std::memcpy(sec1->name, ".text\0\0\0", 8);
+    sec1->misc.virtualSize = 512;
+    sec1->virtualAddress = 0x1000;
+    sec1->sizeOfRawData = 512;
+    sec1->pointerToRawData = 512;
+    for (size_t i = 512; i < 1024; ++i) peImage[i] = static_cast<uint8_t>(i & 0xFF);
+
+    auto* sec2 = reinterpret_cast<pe::ImageSectionHeader*>(reinterpret_cast<uint8_t*>(sec1) + sizeof(pe::ImageSectionHeader));
+    std::memcpy(sec2->name, ".rdata\0\0", 8);
+    sec2->misc.virtualSize = 512;
+    sec2->virtualAddress = 0x2000;
+    sec2->sizeOfRawData = 512;
+    sec2->pointerToRawData = 1024;
+    for (size_t i = 1024; i < 1536; ++i) peImage[i] = static_cast<uint8_t>((i * 7) & 0xFF);
+
+    // 4. Test PE Authenticode Hashing Calculation
+    std::vector<uint8_t> hashSha256 = SovereignWinTrustManager::calculatePeAuthenticodeHash(peImage.data(), 1536, true);
+    TEST_ASSERT(hashSha256.size() == 32, "Authenticode SHA-256 digest must be 32 bytes");
+
+    std::vector<uint8_t> hashSha1 = SovereignWinTrustManager::calculatePeAuthenticodeHash(peImage.data(), 1536, false);
+    TEST_ASSERT(hashSha1.size() == 20, "Authenticode SHA-1 digest must be 20 bytes");
+
+    // CheckSum should be skipped: altering checksum in OptionalHeader must NOT alter Authenticode hash
+    optHdr->checkSum = 0xDEADBEEF;
+    std::vector<uint8_t> hashAfterChecksumChange = SovereignWinTrustManager::calculatePeAuthenticodeHash(peImage.data(), 1536, true);
+    TEST_ASSERT(hashSha256 == hashAfterChecksumChange, "Authenticode hash must be invariant under PE checksum modification");
+
+    // 5. Test Signing & Embedding Authenticode Signature
+    AuthenticodeSignerInfo signer{};
+    signer.subject = "CN=MicaNT Sovereign Code Signing CA, O=MicaNT, C=US";
+    signer.issuer = "CN=MicaNT Root Certificate Authority, O=MicaNT, C=US";
+    signer.serialNumber = "100200300400";
+    signer.thumbprintSha1 = "A1B2C3D4E5F60123456789ABCDEF0123456789AB";
+    signer.thumbprintSha256 = "0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20";
+    signer.isTrustedRoot = true;
+    signer.isDriverSigned = true;
+    signer.notBefore = 1000;
+    signer.notAfter = 2000000000ULL;
+
+    std::vector<uint8_t> signedPe = SovereignWinTrustManager::get().signPeBinary(peImage.data(), 1536, signer);
+    TEST_ASSERT(signedPe.size() > 1536, "Signed PE must contain attribute certificate table appended");
+
+    // Verify embedded signature extraction
+    AuthenticodeSignerInfo extractedSigner{};
+    bool hasSig = SovereignWinTrustManager::get().getEmbeddedSignature(signedPe.data(), signedPe.size(), extractedSigner);
+    TEST_ASSERT(hasSig, "Signed PE must yield valid embedded signature");
+    TEST_ASSERT(extractedSigner.subject == signer.subject, "Signer subject must match");
+    TEST_ASSERT(extractedSigner.issuer == signer.issuer, "Signer issuer must match");
+    TEST_ASSERT(extractedSigner.serialNumber == signer.serialNumber, "Serial number must match");
+    TEST_ASSERT(extractedSigner.thumbprintSha1 == signer.thumbprintSha1, "SHA-1 thumbprint must match");
+    TEST_ASSERT(extractedSigner.thumbprintSha256 == signer.thumbprintSha256, "SHA-256 thumbprint must match");
+
+    // 6. Test WinVerifyTrust with Valid Signed Binary
+    SovereignWinTrustManager::get().setVirtualFile("C:\\MicaNT\\ValidSigned.dll", signedPe);
+
+    WINTRUST_FILE_INFO fileInfo{};
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\ValidSigned.dll";
+
+    WINTRUST_DATA wvtData{};
+    wvtData.dwUnionChoice = WTD_CHOICE_FILE;
+    wvtData.pFile = &fileInfo;
+
+    GUID actionVerify = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    int32_t status = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(status == TRUST_E_SUCCESS, "WinVerifyTrust on valid signed binary must return TRUST_E_SUCCESS (0)");
+
+    // 7. Tampering Detection: modify code byte in text section
+    std::vector<uint8_t> tamperedPe = signedPe;
+    tamperedPe[600] ^= 0x55; // Flip bits in .text section
+    SovereignWinTrustManager::get().setVirtualFile("C:\\MicaNT\\Tampered.dll", tamperedPe);
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\Tampered.dll";
+
+    int32_t tamperStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(tamperStatus == TRUST_E_BAD_DIGEST, "WinVerifyTrust on tampered binary must return TRUST_E_BAD_DIGEST (0x80096010)");
+
+    // 8. Unsigned Binary Detection
+    SovereignWinTrustManager::get().setVirtualFile("C:\\MicaNT\\Unsigned.exe", std::vector<uint8_t>(peImage.data(), peImage.data() + 1536));
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\Unsigned.exe";
+    int32_t unsignedStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(unsignedStatus == TRUST_E_NOSIGNATURE, "WinVerifyTrust on unsigned binary without catalog must return TRUST_E_NOSIGNATURE (0x800B0100)");
+
+    // 9. Expired Certificate Handling
+    AuthenticodeSignerInfo expiredSigner = signer;
+    expiredSigner.notBefore = 1000;
+    expiredSigner.notAfter = 5000; // Far in past
+    std::vector<uint8_t> expiredPe = SovereignWinTrustManager::get().signPeBinary(peImage.data(), 1536, expiredSigner);
+    SovereignWinTrustManager::get().setVirtualFile("C:\\MicaNT\\Expired.dll", expiredPe);
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\Expired.dll";
+
+    int32_t expiredStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(expiredStatus == CERT_E_EXPIRED, "WinVerifyTrust on expired cert must return CERT_E_EXPIRED (0x800B0101)");
+
+    // With policy flag WTPF_IGNOREEXPIRATION
+    WintrustSetRegPolicyFlags(origPolicy | WTPF_IGNOREEXPIRATION);
+    int32_t ignoreExpiredStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(ignoreExpiredStatus == TRUST_E_SUCCESS, "Expired cert must succeed when WTPF_IGNOREEXPIRATION policy is set");
+    WintrustSetRegPolicyFlags(origPolicy);
+
+    // 10. Revoked Certificate Handling
+    SovereignWinTrustManager::get().revokeCertificate(signer.thumbprintSha1);
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\ValidSigned.dll";
+    int32_t revokedStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(revokedStatus == CERT_E_REVOKED, "WinVerifyTrust on revoked cert must return CERT_E_REVOKED (0x800B010C)");
+
+    // With policy flag WTPF_IGNOREREVOKATION
+    WintrustSetRegPolicyFlags(origPolicy | WTPF_IGNOREREVOKATION);
+    int32_t ignoreRevokedStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(ignoreRevokedStatus == TRUST_E_SUCCESS, "Revoked cert must succeed when WTPF_IGNOREREVOKATION is set");
+    WintrustSetRegPolicyFlags(origPolicy);
+    SovereignWinTrustManager::get().clearRevocations();
+
+    // 11. Untrusted Root Handling
+    AuthenticodeSignerInfo untrustedSigner = signer;
+    untrustedSigner.isTrustedRoot = false;
+    std::vector<uint8_t> untrustedPe = SovereignWinTrustManager::get().signPeBinary(peImage.data(), 1536, untrustedSigner);
+    SovereignWinTrustManager::get().setVirtualFile("C:\\MicaNT\\Untrusted.dll", untrustedPe);
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\Untrusted.dll";
+
+    int32_t untrustedStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(untrustedStatus == CERT_E_UNTRUSTEDROOT, "WinVerifyTrust with untrusted root must return CERT_E_UNTRUSTEDROOT (0x800B0109)");
+
+    // Test signing override
+    WintrustSetRegPolicyFlags(origPolicy | WTPF_TRUSTTEST);
+    int32_t testRootStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(testRootStatus == TRUST_E_SUCCESS, "Untrusted cert must succeed when WTPF_TRUSTTEST is set");
+    WintrustSetRegPolicyFlags(origPolicy);
+
+    // 12. Driver Code Integrity Policy (DRIVER_ACTION_VERIFY)
+    GUID driverAction = DRIVER_ACTION_VERIFY;
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\ValidSigned.dll";
+    int32_t driverStatus = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+    TEST_ASSERT(driverStatus == TRUST_E_SUCCESS, "Driver with valid KMCS signature must pass DRIVER_ACTION_VERIFY");
+
+    AuthenticodeSignerInfo userSigner = signer;
+    userSigner.isDriverSigned = false; // Ordinary user-mode certificate
+    std::vector<uint8_t> userSignedPe = SovereignWinTrustManager::get().signPeBinary(peImage.data(), 1536, userSigner);
+    SovereignWinTrustManager::get().setVirtualFile("C:\\MicaNT\\UserModeOnly.sys", userSignedPe);
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\UserModeOnly.sys";
+    int32_t driverFailStatus = WinVerifyTrust(nullptr, &driverAction, &wvtData);
+    TEST_ASSERT(driverFailStatus == TRUST_E_SUBJECT_NOT_TRUSTED, "Non-KMCS binary must fail DRIVER_ACTION_VERIFY with TRUST_E_SUBJECT_NOT_TRUSTED");
+
+    // 13. Security Catalog (CatRoot) Subsystem
+    HCATADMIN hCatAdmin = nullptr;
+    TEST_ASSERT(CryptCATAdminAcquireContext(&hCatAdmin, nullptr, 0) == win32::TRUE, "CryptCATAdminAcquireContext must succeed");
+    TEST_ASSERT(hCatAdmin != nullptr, "hCatAdmin must not be null");
+
+    // Register a new catalog with member hash
+    CatalogRecord testCat{};
+    testCat.baseName = L"MicaNT_System_Core.cat";
+    testCat.catalogPath = L"C:\\Windows\\System32\\CatRoot\\{F750E6C3-38EE-11d1-85E5-00C04FC295EE}\\MicaNT_System_Core.cat";
+    testCat.signer.subject = "CN=Microsoft Windows Sovereign Component, O=MicaNT, C=US";
+    testCat.signer.issuer = "CN=Microsoft Root Authority, O=MicaNT, C=US";
+    testCat.signer.isTrustedRoot = true;
+    testCat.signer.isDriverSigned = true;
+
+    CatalogMemberRecord member{};
+    member.memberTag = L"{3B3B1C2E-0001}";
+    member.fileName = L"C:\\MicaNT\\Unsigned.exe";
+    member.hash = SovereignWinTrustManager::calculatePeAuthenticodeHash(peImage.data(), 1536, true);
+    testCat.members.push_back(member);
+
+    SovereignWinTrustManager::get().registerCatalog(testCat);
+
+    // Look up catalog from hash
+    HCATINFO hCatFound = CryptCATAdminEnumCatalogFromHash(hCatAdmin, member.hash.data(), static_cast<uint32_t>(member.hash.size()), 0, nullptr);
+    TEST_ASSERT(hCatFound != nullptr, "CryptCATAdminEnumCatalogFromHash must locate registered catalog by member hash");
+
+    // Now, Unsigned.exe should pass WinVerifyTrust because it is covered by CatRoot!
+    fileInfo.pcwszFilePath = L"C:\\MicaNT\\Unsigned.exe";
+    int32_t catalogVerifyStatus = WinVerifyTrust(nullptr, &actionVerify, &wvtData);
+    TEST_ASSERT(catalogVerifyStatus == TRUST_E_SUCCESS, "Unsigned binary covered by Security Catalog must verify successfully via CatRoot");
+
+    TEST_ASSERT(CryptCATAdminReleaseCatalogContext(hCatAdmin, hCatFound, 0) == win32::TRUE, "Release catalog context must succeed");
+    TEST_ASSERT(CryptCATAdminReleaseContext(hCatAdmin, 0) == win32::TRUE, "CryptCATAdminReleaseContext must succeed");
+
+    // 14. Shell CLI Integration: signtool
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("signtool test", oss);
+    TEST_ASSERT(shellRet == 0, "signtool test must return 0");
+    TEST_ASSERT(oss.str().find("[SUCCESS] Windows Authenticode & WinTrust Diagnostics passed cleanly.") != std::string::npos,
+                "signtool test diagnostics must report success");
+
+    oss.str("");
+    shellRet = proc.execute("signtool verify /v C:\\MicaNT\\ValidSigned.dll", oss);
+    TEST_ASSERT(shellRet == 0, "signtool verify /v on signed binary must return 0");
+    TEST_ASSERT(oss.str().find("Successfully verified: C:\\MicaNT\\ValidSigned.dll") != std::string::npos, "Must report successful verification");
+    TEST_ASSERT(oss.str().find("Number of files successfully Verified: 1") != std::string::npos, "Verified count must be 1");
+    TEST_ASSERT(oss.str().find("SHA256:") != std::string::npos, "Verbose output must show thumbprint");
+
+    oss.str("");
+    shellRet = proc.execute("signtool verify C:\\MicaNT\\Tampered.dll", oss);
+    TEST_ASSERT(oss.str().find("TRUST_E_BAD_DIGEST") != std::string::npos, "signtool verify on tampered binary must report TRUST_E_BAD_DIGEST");
+
+    oss.str("");
+    shellRet = proc.execute("signtool catdb", oss);
+    TEST_ASSERT(shellRet == 0, "signtool catdb must return 0");
+    TEST_ASSERT(oss.str().find("MicaNT_System_Core.cat") != std::string::npos, "catdb must list registered system core catalog");
+
+    std::cout << "[TEST] Suite 133: Windows Authenticode & WinTrust Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite132")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite133")) {
+        RUN_TEST(Test_WindowsAuthenticode_WinTrust_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite132") {
         RUN_TEST(Test_WindowsFilteringPlatform_Firewall_Subsystem);
         return g_FailedTests;
     }
@@ -31131,6 +31393,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsVirtualDisk_Storage_Subsystem);
     RUN_TEST(Test_WindowsBitLocker_FVE_Subsystem);
     RUN_TEST(Test_WindowsFilteringPlatform_Firewall_Subsystem);
+    RUN_TEST(Test_WindowsAuthenticode_WinTrust_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
