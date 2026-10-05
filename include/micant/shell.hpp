@@ -123,6 +123,7 @@
 #include "wlanapi.hpp"
 #include "virtdisk.hpp"
 #include "fveapi.hpp"
+#include "fwpuclnt.hpp"
 
 namespace micant::shell {
 
@@ -336,6 +337,7 @@ public:
             if (cmd == "wlan" || cmd == "wifi" || cmd == "wireless") { cmdWlan(tokens, out); return 0; }
             if (cmd == "vhd" || cmd == "virtdisk" || cmd == "vdisk") { cmdVirtDisk(tokens, out); return 0; }
             if (cmd == "manage-bde" || cmd == "bde" || cmd == "bitlocker") { cmdManageBde(tokens, out); return 0; }
+            if (cmd == "netsh" || cmd == "advfirewall" || cmd == "firewall" || cmd == "wfp") { cmdFirewall(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -640,6 +642,7 @@ private:
             << "  WLAN [test|info|scan|list|connect|disconnect] Windows Native Wifi & WLAN (wlan test)\n"
             << "  VHD [test|info|create|attach|detach|expand|list] Windows Virtual Hard Disk (vhd test)\n"
             << "  MANAGE-BDE [status|on|off|lock|unlock|protectors|test] BitLocker Drive Encryption (manage-bde test)\n"
+            << "  FIREWALL [show|set|add|delete|test] Windows Filtering Platform & Advanced Firewall (firewall test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -19330,6 +19333,282 @@ private:
             << "  manage-bde -protectors -get <vol>      Displays key protectors enrolled on volume\n"
             << "  manage-bde -protectors -add <vol> -rp  Adds 48-digit numerical recovery password\n"
             << "  manage-bde test                        Runs Sovereign BitLocker/FVE diagnostics\n";
+    }
+
+    void cmdFirewall(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::wfp;
+        InitializeWfpSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return s;
+        };
+
+        size_t argOffset = 1;
+        if (tokens.size() > 1 && toLower(tokens[0]) == "netsh") {
+            if (toLower(tokens[1]) == "advfirewall" || toLower(tokens[1]) == "firewall") {
+                argOffset = 2;
+            }
+        }
+        if (argOffset < tokens.size() && toLower(tokens[argOffset]) == "advfirewall") {
+            argOffset++;
+        }
+
+        std::string subCmd = (argOffset < tokens.size()) ? toLower(tokens[argOffset]) : "";
+
+        // Self-test
+        if (subCmd == "test" || subCmd == "-test") {
+            out << "[WFP & Firewall Self-Test] Initiating Sovereign Filtering Engine Diagnostics...\n";
+
+            // 1. Verify dynamic exports in fwpuclnt.dll
+            auto& loader = ldr::DynamicLoader::get();
+            void* pOpen = loader.getExport("fwpuclnt.dll", "FwpmEngineOpen0");
+            void* pClose = loader.getExport("fwpuclnt.dll", "FwpmEngineClose0");
+            void* pAdd = loader.getExport("fwpuclnt.dll", "FwpmFilterAdd0");
+            void* pDel = loader.getExport("fwpuclnt.dll", "FwpmFilterDeleteById0");
+            void* pGet = loader.getExport("fwpuclnt.dll", "FwpmFilterGetById0");
+            if (!pOpen || !pClose || !pAdd || !pDel || !pGet) {
+                out << "  [FAIL] fwpuclnt.dll dynamic exports missing!\n";
+                return;
+            }
+            out << "  [PASS] fwpuclnt.dll dynamic exports verified in loader table.\n";
+
+            // 2. Open Engine Session
+            HANDLE hEngine = nullptr;
+            FWPM_SESSION0 session{};
+            session.displayDataName = L"Diagnostics Session";
+            DWORD dwRet = FwpmEngineOpen0(nullptr, 0, nullptr, &session, &hEngine);
+            if (dwRet != ERROR_SUCCESS || !hEngine) {
+                out << "  [FAIL] FwpmEngineOpen0 failed! Error: " << dwRet << "\n";
+                return;
+            }
+            out << "  [PASS] FwpmEngineOpen0 successfully established WFP management session.\n";
+
+            // 3. Enumerate Filtering Layers & Sublayers
+            std::vector<FWPM_LAYER0> layers;
+            SovereignWfpManager::get().getAllLayers(layers);
+            if (layers.empty()) {
+                out << "  [FAIL] Standard WFP filtering layers missing!\n";
+                FwpmEngineClose0(hEngine);
+                return;
+            }
+            out << "  [PASS] WFP Layer hierarchy validated (" << layers.size() << " layers registered).\n";
+
+            std::vector<FWPM_SUBLAYER0> sublayers;
+            SovereignWfpManager::get().getAllSubLayers(sublayers);
+            if (sublayers.empty()) {
+                out << "  [FAIL] Standard WFP sublayers missing!\n";
+                FwpmEngineClose0(hEngine);
+                return;
+            }
+            out << "  [PASS] WFP SubLayer hierarchy validated (" << sublayers.size() << " sublayers registered).\n";
+
+            // 4. Add, Query & Delete WFP Filter
+            FWPM_FILTER0 filter{};
+            filter.displayDataName = L"Test Filter Rule";
+            filter.layerKey = FWPM_LAYER_INBOUND_TRANSPORT_V4;
+            filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+            filter.action.type = FWP_ACTION_PERMIT;
+
+            UINT64 filterId = 0;
+            dwRet = FwpmFilterAdd0(hEngine, &filter, nullptr, &filterId);
+            if (dwRet != ERROR_SUCCESS || filterId == 0) {
+                out << "  [FAIL] FwpmFilterAdd0 failed! Error: " << dwRet << "\n";
+                FwpmEngineClose0(hEngine);
+                return;
+            }
+            out << "  [PASS] FwpmFilterAdd0 registered filter rule with ID: " << filterId << "\n";
+
+            FWPM_FILTER0* pRetrieved = nullptr;
+            dwRet = FwpmFilterGetById0(hEngine, filterId, &pRetrieved);
+            if (dwRet != ERROR_SUCCESS || !pRetrieved || pRetrieved->filterId != filterId) {
+                out << "  [FAIL] FwpmFilterGetById0 failed!\n";
+                if (pRetrieved) FwpmFreeMemory0(reinterpret_cast<void**>(&pRetrieved));
+                FwpmEngineClose0(hEngine);
+                return;
+            }
+            out << "  [PASS] FwpmFilterGetById0 verified filter metadata.\n";
+            FwpmFreeMemory0(reinterpret_cast<void**>(&pRetrieved));
+
+            dwRet = FwpmFilterDeleteById0(hEngine, filterId);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "  [FAIL] FwpmFilterDeleteById0 failed!\n";
+                FwpmEngineClose0(hEngine);
+                return;
+            }
+            out << "  [PASS] FwpmFilterDeleteById0 cleanly destroyed filter.\n";
+
+            FwpmEngineClose0(hEngine);
+            out << "  [PASS] FwpmEngineClose0 terminated session.\n";
+
+            // 5. Test Packet Classification Engine
+            NetworkPacket pDns{};
+            pDns.direction = FWP_DIRECTION_OUTBOUND;
+            pDns.protocol = FWP_IPPROTO_UDP;
+            pDns.dstPort = 53;
+            UINT32 actDns = SovereignWfpManager::get().classifyPacket(pDns, FW_PROFILE_TYPE_PUBLIC);
+            if (actDns != FWP_ACTION_PERMIT) {
+                out << "  [FAIL] Packet classifier failed on core DNS outbound!\n";
+                return;
+            }
+            out << "  [PASS] Packet classifier allowed outbound DNS packet.\n";
+
+            NetworkPacket pInboundBlocked{};
+            pInboundBlocked.direction = FWP_DIRECTION_INBOUND;
+            pInboundBlocked.protocol = FWP_IPPROTO_TCP;
+            pInboundBlocked.dstPort = 4444;
+            UINT32 actBlock = SovereignWfpManager::get().classifyPacket(pInboundBlocked, FW_PROFILE_TYPE_PUBLIC);
+            if (actBlock != FWP_ACTION_BLOCK) {
+                out << "  [FAIL] Packet classifier permitted unallowed inbound traffic!\n";
+                return;
+            }
+            out << "  [PASS] Packet classifier dropped unsolicited inbound traffic (Default Block policy).\n";
+
+            FirewallRule rTest{};
+            rTest.name = "Test-Allow-4444";
+            rTest.direction = FWP_DIRECTION_INBOUND;
+            rTest.action = FWP_ACTION_PERMIT;
+            rTest.protocol = FWP_IPPROTO_TCP;
+            rTest.localPort = 4444;
+            rTest.enabled = true;
+            UINT64 rId = SovereignWfpManager::get().addFirewallRule(rTest);
+
+            UINT32 actAllowed = SovereignWfpManager::get().classifyPacket(pInboundBlocked, FW_PROFILE_TYPE_PUBLIC);
+            if (actAllowed != FWP_ACTION_PERMIT) {
+                out << "  [FAIL] Dynamic firewall rule was not evaluated correctly!\n";
+                return;
+            }
+            out << "  [PASS] Dynamic firewall rule permitted configured port (Rule ID: " << rId << ").\n";
+
+            SovereignWfpManager::get().deleteFirewallRuleByName("Test-Allow-4444");
+            UINT32 actReblocked = SovereignWfpManager::get().classifyPacket(pInboundBlocked, FW_PROFILE_TYPE_PUBLIC);
+            if (actReblocked != FWP_ACTION_BLOCK) {
+                out << "  [FAIL] Rule deletion did not restore block policy!\n";
+                return;
+            }
+            out << "  [PASS] Rule deletion restored default block policy.\n";
+
+            out << "[SUCCESS] Windows Filtering Platform & Firewall Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        // Show profiles: "show allprofiles" or "show"
+        if (subCmd == "show") {
+            out << "\nDomain Profile Settings:\n"
+                << "----------------------------------------------------------------------\n";
+            auto dom = SovereignWfpManager::get().getProfile(FW_PROFILE_TYPE_DOMAIN);
+            out << "State                                 " << (dom.enabled ? "ON" : "OFF") << "\n"
+                << "Firewall Policy                       BlockInbound,AllowOutbound\n"
+                << "LocalFirewallRules                    N/A (Disabled)\n";
+
+            out << "\nPrivate Profile Settings:\n"
+                << "----------------------------------------------------------------------\n";
+            auto priv = SovereignWfpManager::get().getProfile(FW_PROFILE_TYPE_PRIVATE);
+            out << "State                                 " << (priv.enabled ? "ON" : "OFF") << "\n"
+                << "Firewall Policy                       BlockInbound,AllowOutbound\n"
+                << "LocalFirewallRules                    N/A (Disabled)\n";
+
+            out << "\nPublic Profile Settings:\n"
+                << "----------------------------------------------------------------------\n";
+            auto pub = SovereignWfpManager::get().getProfile(FW_PROFILE_TYPE_PUBLIC);
+            out << "State                                 " << (pub.enabled ? "ON" : "OFF") << "\n"
+                << "Firewall Policy                       BlockInbound,AllowOutbound\n"
+                << "LocalFirewallRules                    N/A (Disabled)\n\n"
+                << "Ok.\n";
+            return;
+        }
+
+        // Set state: "set allprofiles state on/off"
+        if (subCmd == "set") {
+            bool state = true;
+            for (size_t i = argOffset + 1; i < tokens.size(); ++i) {
+                if (toLower(tokens[i]) == "off" || toLower(tokens[i]) == "state=off") state = false;
+                if (toLower(tokens[i]) == "on" || toLower(tokens[i]) == "state=on") state = true;
+            }
+            SovereignWfpManager::get().setProfileState(FW_PROFILE_TYPE_ALL, state);
+            out << "Ok.\n";
+            return;
+        }
+
+        // Firewall rule commands: "firewall add rule ...", "firewall show rule ..."
+        if (subCmd == "firewall" || subCmd == "rule" || subCmd == "rules") {
+            size_t ruleOffset = argOffset + 1;
+            std::string action = (ruleOffset < tokens.size()) ? toLower(tokens[ruleOffset]) : "";
+
+            if (action == "show" || subCmd == "rules") {
+                out << "\nFirewall Rules:\n"
+                    << "----------------------------------------------------------------------\n";
+                auto rules = SovereignWfpManager::get().getFirewallRules();
+                for (const auto& r : rules) {
+                    out << "Rule Name:                            " << r.name << "\n"
+                        << "Enabled:                              " << (r.enabled ? "Yes" : "No") << "\n"
+                        << "Direction:                            " << ((r.direction == FWP_DIRECTION_INBOUND) ? "In" : "Out") << "\n"
+                        << "Action:                               " << ((r.action == FWP_ACTION_PERMIT) ? "Allow" : "Block") << "\n";
+                    if (r.protocol == FWP_IPPROTO_TCP) out << "Protocol:                             TCP\n";
+                    else if (r.protocol == FWP_IPPROTO_UDP) out << "Protocol:                             UDP\n";
+                    else out << "Protocol:                             Any\n";
+                    if (r.localPort != 0) out << "LocalPort:                            " << r.localPort << "\n";
+                    if (r.remotePort != 0) out << "RemotePort:                           " << r.remotePort << "\n";
+                    out << "\n";
+                }
+                out << "Ok.\n";
+                return;
+            }
+
+            if (action == "add") {
+                FirewallRule r{};
+                r.enabled = true;
+                r.name = "Custom Rule";
+                for (size_t i = ruleOffset + 1; i < tokens.size(); ++i) {
+                    std::string token = tokens[i];
+                    std::string lToken = toLower(token);
+                    if (lToken.rfind("name=", 0) == 0) {
+                        r.name = token.substr(5);
+                    } else if (lToken.rfind("dir=", 0) == 0) {
+                        r.direction = (lToken.substr(4) == "out") ? FWP_DIRECTION_OUTBOUND : FWP_DIRECTION_INBOUND;
+                    } else if (lToken.rfind("action=", 0) == 0) {
+                        r.action = (lToken.substr(7) == "block") ? FWP_ACTION_BLOCK : FWP_ACTION_PERMIT;
+                    } else if (lToken.rfind("protocol=", 0) == 0) {
+                        std::string p = lToken.substr(9);
+                        if (p == "tcp") r.protocol = FWP_IPPROTO_TCP;
+                        else if (p == "udp") r.protocol = FWP_IPPROTO_UDP;
+                        else if (p == "icmp") r.protocol = FWP_IPPROTO_ICMP;
+                        else r.protocol = FWP_IPPROTO_ANY;
+                    } else if (lToken.rfind("localport=", 0) == 0) {
+                        r.localPort = static_cast<UINT16>(std::stoul(lToken.substr(10)));
+                    } else if (lToken.rfind("remoteport=", 0) == 0) {
+                        r.remotePort = static_cast<UINT16>(std::stoul(lToken.substr(11)));
+                    }
+                }
+                SovereignWfpManager::get().addFirewallRule(r);
+                out << "Ok.\n";
+                return;
+            }
+
+            if (action == "delete") {
+                std::string targetName;
+                for (size_t i = ruleOffset + 1; i < tokens.size(); ++i) {
+                    std::string token = tokens[i];
+                    std::string lToken = toLower(token);
+                    if (lToken.rfind("name=", 0) == 0) {
+                        targetName = token.substr(5);
+                    }
+                }
+                if (!targetName.empty()) {
+                    SovereignWfpManager::get().deleteFirewallRuleByName(targetName);
+                }
+                out << "Ok.\n";
+                return;
+            }
+        }
+
+        out << "Windows Filtering Platform & Advanced Firewall CLI\n"
+            << "Usage:\n"
+            << "  netsh advfirewall show allprofiles             Displays status for all firewall profiles\n"
+            << "  netsh advfirewall set allprofiles state on|off Enables or disables all profiles\n"
+            << "  netsh advfirewall firewall show rule           Displays active firewall rules\n"
+            << "  netsh advfirewall firewall add rule ...        Adds new inbound or outbound rule\n"
+            << "  firewall test                                  Runs Sovereign WFP & Firewall diagnostics\n";
     }
 
     static std::string trim(std::string_view s) {

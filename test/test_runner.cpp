@@ -139,6 +139,7 @@
 #include "micant/wlanapi.hpp"
 #include "micant/virtdisk.hpp"
 #include "micant/fveapi.hpp"
+#include "micant/fwpuclnt.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -30705,8 +30706,191 @@ void Test_WindowsBitLocker_FVE_Subsystem() {
     std::cout << "[TEST] Suite 131: Windows BitLocker & FVE Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 132: Windows Filtering Platform (WFP) & Advanced Firewall Subsystem
+// ============================================================================
+void Test_WindowsFilteringPlatform_Firewall_Subsystem() {
+    using namespace micant::wfp;
+
+    // 1. Initialize subsystem exports
+    InitializeWfpSubsystemExports();
+
+    // 2. Validate DynamicLoader exports for fwpuclnt.dll
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("fwpuclnt.dll", "FwpmEngineOpen0") != nullptr, "fwpuclnt.dll must export FwpmEngineOpen0");
+    TEST_ASSERT(loader.getExport("fwpuclnt.dll", "FwpmEngineClose0") != nullptr, "fwpuclnt.dll must export FwpmEngineClose0");
+    TEST_ASSERT(loader.getExport("fwpuclnt.dll", "FwpmFilterAdd0") != nullptr, "fwpuclnt.dll must export FwpmFilterAdd0");
+    TEST_ASSERT(loader.getExport("fwpuclnt.dll", "FwpmFilterDeleteById0") != nullptr, "fwpuclnt.dll must export FwpmFilterDeleteById0");
+    TEST_ASSERT(loader.getExport("fwpuclnt.dll", "FwpmFilterGetById0") != nullptr, "fwpuclnt.dll must export FwpmFilterGetById0");
+    TEST_ASSERT(loader.getExport("fwpuclnt.dll", "FwpmSubLayerAdd0") != nullptr, "fwpuclnt.dll must export FwpmSubLayerAdd0");
+    TEST_ASSERT(loader.getExport("fwpuclnt.dll", "FwpmSubLayerDeleteById0") != nullptr, "fwpuclnt.dll must export FwpmSubLayerDeleteById0");
+    TEST_ASSERT(loader.getExport("fwpuclnt.dll", "FwpmFreeMemory0") != nullptr, "fwpuclnt.dll must export FwpmFreeMemory0");
+
+    // 3. Verify VersionDatabase registration
+    auto modInfo = version::VersionDatabase::Instance().GetModuleInfo("fwpuclnt.dll");
+    TEST_ASSERT(modInfo != nullptr, "fwpuclnt.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modInfo->stringTable.at("FileVersion") == "10.0.22621.1", "fwpuclnt.dll version must be 10.0.22621.1");
+    TEST_ASSERT(modInfo->stringTable.at("FileDescription") == "Windows Filtering Platform API Client",
+                "fwpuclnt.dll description must match Windows WFP");
+
+    // 4. Open & Close Engine Session
+    HANDLE hEngine = nullptr;
+    FWPM_SESSION0 session{};
+    session.displayDataName = L"Unit Test Engine Session";
+    DWORD dwRet = FwpmEngineOpen0(nullptr, 0, nullptr, &session, &hEngine);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FwpmEngineOpen0 must succeed");
+    TEST_ASSERT(hEngine != nullptr, "Engine handle must be valid");
+
+    // 5. Layer Hierarchy Inspection
+    std::vector<FWPM_LAYER0> layers;
+    dwRet = SovereignWfpManager::get().getAllLayers(layers);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "getAllLayers must succeed");
+    TEST_ASSERT(layers.size() >= 6, "At least 6 standard filtering layers must be registered");
+
+    // 6. SubLayer Hierarchy Inspection & Dynamic Add/Delete
+    std::vector<FWPM_SUBLAYER0> sublayers;
+    dwRet = SovereignWfpManager::get().getAllSubLayers(sublayers);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "getAllSubLayers must succeed");
+    TEST_ASSERT(sublayers.size() >= 2, "At least 2 sublayers (Universal & Firewall) must be present");
+
+    GUID dynSubLayerGuid = { 0x11223344, 0x5566, 0x7788, { 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01 } };
+    FWPM_SUBLAYER0 dynSubLayer{};
+    dynSubLayer.subLayerKey = dynSubLayerGuid;
+    dynSubLayer.displayDataName = L"Dynamic Anti-Malware SubLayer";
+    dynSubLayer.weight = 0x2000;
+    dwRet = FwpmSubLayerAdd0(hEngine, &dynSubLayer, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FwpmSubLayerAdd0 must succeed");
+
+    dwRet = FwpmSubLayerDeleteById0(hEngine, &dynSubLayerGuid);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FwpmSubLayerDeleteById0 must succeed");
+
+    // 7. Dynamic Filter Rule Creation, Query & Deletion
+    FWPM_FILTER0 filter{};
+    filter.displayDataName = L"Port 8080 Block Rule";
+    filter.layerKey = FWPM_LAYER_INBOUND_TRANSPORT_V4;
+    filter.subLayerKey = FWPM_SUBLAYER_FIREWALL;
+    filter.action.type = FWP_ACTION_BLOCK;
+
+    UINT64 filterId = 0;
+    dwRet = FwpmFilterAdd0(hEngine, &filter, nullptr, &filterId);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FwpmFilterAdd0 must succeed");
+    TEST_ASSERT(filterId != 0, "FwpmFilterAdd0 must generate positive filter ID");
+
+    FWPM_FILTER0* pRetrieved = nullptr;
+    dwRet = FwpmFilterGetById0(hEngine, filterId, &pRetrieved);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FwpmFilterGetById0 must succeed");
+    TEST_ASSERT(pRetrieved != nullptr, "Retrieved filter must be non-null");
+    TEST_ASSERT(pRetrieved->filterId == filterId, "Filter ID must match");
+    TEST_ASSERT(pRetrieved->action.type == FWP_ACTION_BLOCK, "Filter action must match FWP_ACTION_BLOCK");
+    FwpmFreeMemory0(reinterpret_cast<void**>(&pRetrieved));
+
+    dwRet = FwpmFilterDeleteById0(hEngine, filterId);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FwpmFilterDeleteById0 must succeed");
+
+    dwRet = FwpmFilterDeleteById0(hEngine, 999999);
+    TEST_ASSERT(dwRet == FWP_E_FILTER_NOT_FOUND, "Deleting non-existent filter must return FWP_E_FILTER_NOT_FOUND");
+
+    dwRet = FwpmEngineClose0(hEngine);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "FwpmEngineClose0 must succeed");
+
+    // 8. Sovereign Packet Classifier & Firewall Rules
+    NetworkPacket dnsPacket{};
+    dnsPacket.direction = FWP_DIRECTION_OUTBOUND;
+    dnsPacket.protocol = FWP_IPPROTO_UDP;
+    dnsPacket.dstPort = 53;
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(dnsPacket) == FWP_ACTION_PERMIT,
+                "Outbound DNS must be permitted by default rule");
+
+    NetworkPacket dropPacket{};
+    dropPacket.direction = FWP_DIRECTION_INBOUND;
+    dropPacket.protocol = FWP_IPPROTO_TCP;
+    dropPacket.dstPort = 8088;
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(dropPacket) == FWP_ACTION_BLOCK,
+                "Unsolicited inbound TCP port 8088 must be dropped by default inbound block policy");
+
+    NetworkPacket rdpPacket{};
+    rdpPacket.direction = FWP_DIRECTION_INBOUND;
+    rdpPacket.protocol = FWP_IPPROTO_TCP;
+    rdpPacket.dstPort = 3389;
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(rdpPacket) == FWP_ACTION_PERMIT,
+                "Inbound RDP 3389 must be permitted by pre-seeded rule");
+
+    FirewallRule blockIrc{};
+    blockIrc.name = "Block-IRC-Out";
+    blockIrc.direction = FWP_DIRECTION_OUTBOUND;
+    blockIrc.action = FWP_ACTION_BLOCK;
+    blockIrc.protocol = FWP_IPPROTO_TCP;
+    blockIrc.remotePort = 6667;
+    blockIrc.enabled = true;
+    SovereignWfpManager::get().addFirewallRule(blockIrc);
+
+    NetworkPacket ircPacket{};
+    ircPacket.direction = FWP_DIRECTION_OUTBOUND;
+    ircPacket.protocol = FWP_IPPROTO_TCP;
+    ircPacket.dstPort = 6667;
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(ircPacket) == FWP_ACTION_BLOCK,
+                "Outbound IRC port 6667 must be blocked by explicit rule");
+
+    TEST_ASSERT(SovereignWfpManager::get().deleteFirewallRuleByName("Block-IRC-Out"),
+                "Deleting rule by name must succeed");
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(ircPacket) == FWP_ACTION_PERMIT,
+                "Outbound IRC port 6667 must revert to default allow after rule deletion");
+
+    SovereignWfpManager::get().setProfileState(FW_PROFILE_TYPE_ALL, false);
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(dropPacket) == FWP_ACTION_PERMIT,
+                "When firewall is disabled, all inbound packets must be permitted");
+    SovereignWfpManager::get().setProfileState(FW_PROFILE_TYPE_ALL, true);
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(dropPacket) == FWP_ACTION_BLOCK,
+                "When firewall is re-enabled, inbound packet must be dropped");
+
+    // 9. Shell CLI Integration: firewall / advfirewall / netsh
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("firewall test", oss);
+    TEST_ASSERT(shellRet == 0, "firewall test must return 0");
+    TEST_ASSERT(oss.str().find("[SUCCESS] Windows Filtering Platform & Firewall Diagnostics passed cleanly.") != std::string::npos,
+                "firewall test diagnostics must pass cleanly");
+
+    oss.str("");
+    shellRet = proc.execute("netsh advfirewall show allprofiles", oss);
+    TEST_ASSERT(shellRet == 0, "netsh advfirewall show allprofiles must return 0");
+    TEST_ASSERT(oss.str().find("Domain Profile Settings:") != std::string::npos, "Output must contain Domain Profile");
+    TEST_ASSERT(oss.str().find("Private Profile Settings:") != std::string::npos, "Output must contain Private Profile");
+    TEST_ASSERT(oss.str().find("Public Profile Settings:") != std::string::npos, "Output must contain Public Profile");
+
+    oss.str("");
+    shellRet = proc.execute("netsh advfirewall firewall show rule", oss);
+    TEST_ASSERT(shellRet == 0, "firewall show rule must return 0");
+    TEST_ASSERT(oss.str().find("Rule Name:") != std::string::npos, "Must list firewall rule names");
+    TEST_ASSERT(oss.str().find("Remote Desktop") != std::string::npos, "Must list Remote Desktop rule");
+
+    oss.str("");
+    shellRet = proc.execute("netsh advfirewall firewall add rule name=\"Block-SSH\" dir=out action=block protocol=tcp remoteport=22", oss);
+    TEST_ASSERT(shellRet == 0, "firewall add rule must return 0");
+
+    NetworkPacket sshPacket{};
+    sshPacket.direction = FWP_DIRECTION_OUTBOUND;
+    sshPacket.protocol = FWP_IPPROTO_TCP;
+    sshPacket.dstPort = 22;
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(sshPacket) == FWP_ACTION_BLOCK,
+                "SSH outbound must be blocked by CLI added rule");
+
+    oss.str("");
+    shellRet = proc.execute("netsh advfirewall firewall delete rule name=\"Block-SSH\"", oss);
+    TEST_ASSERT(shellRet == 0, "firewall delete rule must return 0");
+    TEST_ASSERT(SovereignWfpManager::get().classifyPacket(sshPacket) == FWP_ACTION_PERMIT,
+                "SSH outbound must revert to permit after CLI deletion");
+
+    std::cout << "[TEST] Suite 132: Windows Filtering Platform & Firewall Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite131")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite132")) {
+        RUN_TEST(Test_WindowsFilteringPlatform_Firewall_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite131") {
         RUN_TEST(Test_WindowsBitLocker_FVE_Subsystem);
         return g_FailedTests;
     }
@@ -30946,6 +31130,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsNativeWifi_WLAN_Subsystem);
     RUN_TEST(Test_WindowsVirtualDisk_Storage_Subsystem);
     RUN_TEST(Test_WindowsBitLocker_FVE_Subsystem);
+    RUN_TEST(Test_WindowsFilteringPlatform_Firewall_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

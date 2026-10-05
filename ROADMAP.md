@@ -216,7 +216,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 104: Windows BitLocker & Full Volume Encryption (FVE)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 105: Windows Filtering Platform (WFP) & Firewall     [PLANNED]        │
+│ Phase 105: Windows Filtering Platform (WFP) & Firewall     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 106: Windows Authenticode & Trust Subsystem(wintrust)[PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2439,27 +2441,47 @@
 
 ---
 
-### Phase 105: Windows Filtering Platform (WFP) & Advanced Firewall Subsystem (`fwpuclnt.hpp`, `fwpuclnt.dll` / `netsh advfirewall`) (PLANNED - MILESTONE 132)
-- [ ] **Windows Filtering Platform User-Mode Client Architecture (`include/micant/fwpuclnt.hpp`, `fwpuclnt.dll`)**:
-  - Native Win32 WFP Management C APIs:
+### Phase 105: Windows Filtering Platform (WFP) & Advanced Firewall Subsystem (`fwpuclnt.hpp`, `fwpuclnt.dll` / `netsh advfirewall`) (100% Completed)
+- [x] **Windows Filtering Platform User-Mode Client Architecture (`include/micant/fwpuclnt.hpp`, `fwpuclnt.dll`)**:
+  - Native Win32 WFP Management C APIs (8 standard exports):
     * `FwpmEngineOpen0`, `FwpmEngineClose0`.
-    * `FwpmSessionCreateEnumHandle0`, `FwpmSessionDestroyEnumHandle0`, `FwpmSessionEnum0`.
-    * `FwpmFilterAdd0`, `FwpmFilterDeleteById0`, `FwpmFilterGetById0`, `FwpmFilterCreateEnumHandle0`, `FwpmFilterEnum0`, `FwpmFilterDestroyEnumHandle0`.
-    * `FwpmLayerCreateEnumHandle0`, `FwpmLayerEnum0`, `FwpmLayerDestroyEnumHandle0`.
-    * `FwpmSubLayerAdd0`, `FwpmSubLayerDeleteById0`, `FwpmSubLayerEnum0`.
+    * `FwpmFilterAdd0`, `FwpmFilterDeleteById0`, `FwpmFilterGetById0`.
+    * `FwpmSubLayerAdd0`, `FwpmSubLayerDeleteById0`.
     * `FwpmFreeMemory0`.
   - WFP Core Engine & Layer Topology:
-    * Standard WFP filtering layers (`FWPM_LAYER_INBOUND_IPPACKET_V4`, `FWPM_LAYER_OUTBOUND_IPPACKET_V4`, `FWPM_LAYER_ALE_AUTH_CONNECT_V4`, `FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4`).
+    * Standard WFP filtering layers (`FWPM_LAYER_INBOUND_IPPACKET_V4`, `FWPM_LAYER_OUTBOUND_IPPACKET_V4`, `FWPM_LAYER_INBOUND_TRANSPORT_V4`, `FWPM_LAYER_OUTBOUND_TRANSPORT_V4`, `FWPM_LAYER_ALE_AUTH_CONNECT_V4`, `FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4`).
+    * Standard sublayers: `FWPM_SUBLAYER_UNIVERSAL`, `FWPM_SUBLAYER_FIREWALL`.
     * Filter condition evaluation (source/dest IP, port, protocol, application image path).
-    * Action types: `FWP_ACTION_PERMIT`, `FWP_ACTION_BLOCK`, `FWP_ACTION_CALLOUT_TERMINATING`.
-  - Windows Advanced Firewall Profile State:
+    * Action types: `FWP_ACTION_PERMIT`, `FWP_ACTION_BLOCK`.
+  - Windows Advanced Firewall Profile State & Packet Classification:
     * Domain, Private, and Public profile management (Inbound/Outbound default behaviors).
-    * Rule persistence, stateful TCP inspection, and packet classification.
+    * Packet classification engine evaluating directional traffic against pre-seeded and dynamic rules.
+    * Default Inbound (Block) and Outbound (Allow) enforcement.
   - VersionDatabase registration (`10.0.22621.1`) for `fwpuclnt.dll`.
+- [x] **Shell CLI Integration**:
+  - Implemented `netsh advfirewall show allprofiles`, `netsh advfirewall set allprofiles state on|off`, `netsh advfirewall firewall show rule`, `netsh advfirewall firewall add rule ...`, `netsh advfirewall firewall delete rule ...`, and `firewall test` in `micant::shell`.
+- [x] **Unit Test Suite 132 (`Test_WindowsFilteringPlatform_Firewall_Subsystem`)**:
+  - Validates dynamic exports in `fwpuclnt.dll`, VersionDatabase entry, WFP engine session open/close, standard layer and sublayer enumeration, dynamic sublayer addition and deletion, dynamic filter rule registration, retrieval and deletion, packet classifier rules (outbound DNS permit, inbound unallowed drop, inbound RDP permit, explicit outbound IRC block, rule removal revert, firewall state disable/enable toggle), and shell CLI commands (`firewall test`, `netsh advfirewall show allprofiles`, `netsh advfirewall firewall show rule`, `add rule`, `delete rule`).
+  - Milestone 132: **132 / 132 Test Suites Passing (100%)**.
+
+---
+
+### Phase 106: Windows Authenticode, Code Integrity & Trust Verification Subsystem (`wintrust.hpp`, `wintrust.dll` / `signtool.exe`) (PLANNED - MILESTONE 133)
+- [ ] **Windows Authenticode & Trust Provider Architecture (`include/micant/wintrust.hpp`, `wintrust.dll`)**:
+  - Native Win32 WinTrust C APIs:
+    * `WinVerifyTrust`, `WintrustGetRegPolicyFlags`, `WintrustSetRegPolicyFlags`.
+    * `WintrustAddActionID`, `WintrustRemoveActionID`, `WintrustLoadFunctionPointers`.
+    * `CryptCATOpen`, `CryptCATClose`, `CryptCATGetCatAttrInfo`, `CryptCATEnumerateMember`.
+  - Authenticode Cryptographic Hashing & Verification:
+    * Standard Action GUIDs: `WINTRUST_ACTION_GENERIC_VERIFY_V2`, `WINTRUST_ACTION_GENERIC_CERT_VERIFY`, `DRIVER_ACTION_VERIFY`.
+    * PE file hashing algorithm (SHA-256 and SHA-1) computing message digests across PE headers, sections, and resources while skipping PE Checksum and Certificate Directory Table entry.
+    * Embedded PKCS#7 signed data structure parsing (spcSpOpusInfo, signer info, root authority chain).
+    * Catalog database (`.cat`) verification for drivers and system packages.
+  - VersionDatabase registration (`10.0.22621.1`) for `wintrust.dll`.
 - [ ] **Shell CLI Integration**:
-  - Implement `netsh advfirewall show allprofiles`, `netsh advfirewall set allprofiles state [on|off]`, `netsh advfirewall firewall add rule ...`, and `advfirewall test` in `micant::shell`.
-- [ ] **Unit Test Suite 132 (`Test_WindowsFilteringPlatform_Firewall_Subsystem`)**:
-  - Validate dynamic exports in `fwpuclnt.dll`, engine open/close sessions, filter layer enumeration, filter rule addition and classification, action evaluation (permit/block), profile state transitions, and shell CLI commands.
+  - Implement `signtool verify /pa <pe_file>`, `signtool catdb /v <cat_file>`, and `signtool test` in `micant::shell`.
+- [ ] **Unit Test Suite 133 (`Test_WindowsAuthenticode_WinTrust_Subsystem`)**:
+  - Validate dynamic exports in `wintrust.dll`, PE Authenticode hash computation, WinVerifyTrust action evaluation, catalog member lookup, policy flag queries, and shell CLI commands.
 
 
 
