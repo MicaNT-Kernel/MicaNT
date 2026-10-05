@@ -9,10 +9,13 @@ In *Google LLC v. Oracle America, Inc.*, 593 U.S. 1 (2021), the Supreme Court of
 
 Key findings applicable to MicaNT:
 - **Interoperability**: Reimplementing an established interface allows computer programs to interoperate and build upon existing developer knowledge and binary standards without copyright impediment.
-- **Declaring Code vs. Implementing Code**: MicaNT contains **zero implementing code** copied from proprietary Microsoft Windows NT sources. All kernel implementation logic is authored clean-room in modern C++23.
+- **Declaring Code vs. Implementing Code**: MicaNT contains **zero implementing code** copied from proprietary Microsoft Windows NT sources. All kernel implementation logic is authored clean-room in modern ISO C++23.
 
 ### B. Sony Computer Entertainment, Inc. v. Connectix Corp. (2000) & Sega Enterprises Ltd. v. Accolade, Inc. (1992)
-The Ninth Circuit established that clean-room reverse engineering and studying interfaces for the sole purpose of enabling functional compatibility with existing software and hardware is legally protected fair use.
+The Ninth Circuit established that clean-room reverse engineering and studying functional interfaces for the sole purpose of enabling compatibility with existing software and hardware is legally protected fair use.
+
+### C. Lotus Development Corp. v. Borland International, Inc. (1995)
+Under 17 U.S.C. § 102(b), copyright protection does not extend to any "idea, procedure, process, system, method of operation, concept, principle, or discovery." The First Circuit held (affirmed by an equally divided Supreme Court, 516 U.S. 233) that functional menu command hierarchies and operational macros are uncopyrightable methods of operation.
 
 ---
 
@@ -25,8 +28,58 @@ Microsoft Corporation officially created and released the [`microsoft/win32metad
 
 ---
 
-## 3. Clean-Room Policy
-To maintain strict compliance:
-1. No contributor may use or reference leaked proprietary Microsoft source code (such as the Windows NT 4.0 / Windows 2000 source leaks).
-2. All interface definitions must be derived from public documentation (MSDN / Microsoft Learn), official SDK headers, or the MIT-licensed `win32metadata` project.
-3. All internal data structures, algorithms, schedulers, and memory managers must be original implementations.
+## 3. Clean-Room Engineering Policy
+
+To maintain strict non-infringement compliance:
+1. **No Leaked Code**: No contributor may use, inspect, or reference leaked proprietary Microsoft source code (such as the Windows NT 4.0, Windows 2000, Windows XP, or Windows Research Kernel / WRK source leaks).
+2. **Public Specifications**: All interface definitions must be derived from public documentation (MSDN / Microsoft Learn), official SDK headers, or the MIT-licensed `win32metadata` project.
+3. **Independent Authorship**: All internal data structures, algorithms, schedulers, memory managers, and file systems are original, independent implementations written in modern ISO C++23.
+4. **Automated Audit**: Every Pull Request and commit is audited by an automated sentinel (`scripts/clean_room_sentinel.js`) to guarantee zero leaked artifacts, decompilation markers, or proprietary macros.
+
+---
+
+## 4. Trademark Policy & Nominative Fair Use
+
+MicaNT is an independent sovereign project and is **not affiliated with, endorsed by, sponsored by, or associated with Microsoft Corporation**.
+
+- **Trademarks**: *Microsoft*, *Windows*, *Windows NT*, *BitLocker*, *DirectX*, *Direct3D*, *Authenticode*, *Windows Defender*, *WDAC*, and related marks are trademarks or registered trademarks of Microsoft Corporation in the United States and other countries.
+- **Nominative Fair Use**: All references to Microsoft trademarks within MicaNT (such as command-line compatibility aliases `manage-bde`, `signtool`, `wdac`, or subsystem names) are made **strictly under the doctrine of nominative fair use** (*New Kids on the Block v. News America Publishing, Inc.*, 971 F.2d 302 (9th Cir. 1992); *Toyota Motor Sales, U.S.A., Inc. v. Tabari*, 610 F.3d 1171 (9th Cir. 2010)).
+- **Nominative Fair Use Criteria Satisfied**:
+  1. The product or service in question cannot be readily identified without reference to the trademark (e.g. indicating compatibility with the Windows NT binary format and BitLocker-encrypted volume metadata).
+  2. Only so much of the mark is used as is reasonably necessary to identify the interoperability target (no Microsoft logos, fonts, or commercial trade dress are used).
+  3. No suggestion of sponsorship, affiliation, or endorsement by Microsoft Corporation is made.
+
+---
+
+## 5. Sovereign Technical Taxonomy vs. Proprietary Brand Names
+
+MicaNT deliberately uses standard architectural, engineering, and RFC designations for its core subsystems rather than commercial product brand names:
+
+| Subsystem Function | Standard / Architectural Name | Proprietary Brand / Nominative Alias |
+|---|---|---|
+| Volume Encryption | **Full Volume Encryption (FVE)** (`fveapi.dll`) | BitLocker (`manage-bde`) |
+| Packet Filtering | **Windows Filtering Platform (WFP)** (`fwpuclnt.dll`) | Windows Firewall (`netsh advfirewall`) |
+| Trust Verification | **WinTrust Subsystem** (`wintrust.dll`) | Authenticode (`signtool`) |
+| Application Control | **Code Integrity Subsystem** (`ci.dll`) | Windows Defender Application Control / WDAC (`wdac`) |
+| Volume Snapshots | **Volume Shadow Copy (VSS)** (`vssapi.dll`) | Volume Shadow Copy Service (`vssadmin`) |
+| Certificate Store | **Crypt32 Subsystem** (`crypt32.dll`) | Microsoft Certificate Store (`certmgr`) |
+
+All CLI commands clearly identify themselves as running in compatibility mode with prominent copyright disclaimers.
+
+---
+
+## 6. Zero Proprietary Binary & Media Asset Guarantee
+
+To avoid copyright infringement in visual, audio, or compiled binary assets:
+- **No Windows Binaries**: MicaNT never redistributes, bundles, or relies upon copyrighted binary DLLs, EXEs, SYS drivers, or firmware from Microsoft Windows installations.
+- **No Proprietary Fonts or Icons**: No proprietary Microsoft fonts (e.g. Segoe UI) or icons are bundled. Visual assets are either dynamically synthesized via vector shaders, procedurally generated, or licensed under open-source licenses.
+- **Synthesized Test Media**: All unit test executables and PE binaries are programmatically synthesized in memory from byte buffers for testing purposes.
+
+---
+
+## 7. Clean-Room Precedent in Operating System History
+
+MicaNT follows the established clean-room methodology proven across four decades of computing history:
+- **Phoenix Technologies (1984)**: Successfully developed a clean-room clone of the IBM PC BIOS, creating the modern PC-compatible ecosystem without infringing IBM's copyrights.
+- **Compaq (1982)**: Reverse-engineered the IBM BIOS using strict clean-room isolation, surviving extensive legal review.
+- **Wine & ReactOS**: Decades of clean-room Win32 and NT executive reimplementations establishing the legality of open-source Windows ABI compatibility.
