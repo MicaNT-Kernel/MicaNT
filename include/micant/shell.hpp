@@ -641,7 +641,7 @@ private:
             << "  WEBAUTHN [test|info|register|auth] Windows Web Authentication & FIDO2 Passkeys (webauthn test)\n"
             << "  WLAN [test|info|scan|list|connect|disconnect] Windows Native Wifi & WLAN (wlan test)\n"
             << "  VHD [test|info|create|attach|detach|expand|list] Windows Virtual Hard Disk (vhd test)\n"
-            << "  MANAGE-BDE [status|on|off|lock|unlock|protectors|test] BitLocker Drive Encryption (manage-bde test)\n"
+            << "  MANAGE-BDE [status|on|off|lock|unlock|protectors|test] Full Volume Encryption / FVE (manage-bde compatibility)\n"
             << "  FIREWALL [show|set|add|delete|test] Windows Filtering Platform & Advanced Firewall (firewall test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
@@ -19054,7 +19054,8 @@ private:
                 targetVol = tokens[1];
             }
 
-            out << "BitLocker Drive Encryption: Configuration Tool version 10.0.22621\n"
+            out << "MicaNT Full Volume Encryption (FVE) Tool [manage-bde compatibility mode]\n"
+                << "Note: BitLocker is a registered trademark of Microsoft Corp. Referenced under nominative fair use.\n"
                 << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n";
 
             auto vols = SovereignFveManager::get().getAllVolumes();
@@ -19323,7 +19324,9 @@ private:
             }
         }
 
-        out << "BitLocker Drive Encryption: Configuration Tool version 10.0.22621\n"
+        out << "MicaNT Full Volume Encryption (FVE) CLI [manage-bde compatibility mode]\n"
+            << "Note: BitLocker is a registered trademark of Microsoft Corp. Referenced under nominative fair use.\n"
+            << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
             << "Usage:\n"
             << "  manage-bde -status [vol]               Displays BitLocker status for volume(s)\n"
             << "  manage-bde -on <vol> [-pw <pass>] [-rp] Enables BitLocker encryption on volume\n"

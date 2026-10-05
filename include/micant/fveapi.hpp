@@ -39,10 +39,14 @@
 // Core Dynamic Module:
 //   - fveapi.dll
 //
-// Trademark & Nominative Fair Use Notice:
-//   Windows and BitLocker are registered trademarks of Microsoft Corp.
-//   MicaNT is an independent sovereign clean-room implementation engineered
-//   for binary interoperability (*Google LLC v. Oracle America, Inc.*).
+// Trademark, Copyright & Nominative Fair Use Notice:
+//   Microsoft, Windows, and BitLocker are trademarks and/or copyrighted property
+//   of Microsoft Corp. MicaNT Full Volume Encryption (FVE) is an independent,
+//   clean-room, sovereign implementation engineered from first principles and
+//   publicly published standards (IEEE 1619, TCG TPM 2.0) solely for binary
+//   interoperability (*Google LLC v. Oracle America, Inc.*, *Sega v. Accolade*).
+//   No proprietary source code, copyrighted binary assets, or trade secrets
+//   of Microsoft Corp. are used or contained within this codebase.
 // ============================================================================
 
 #pragma once
