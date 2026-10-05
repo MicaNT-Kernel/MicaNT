@@ -24,7 +24,7 @@ jobs:
         run: |
           clang++ -std=c++23 -O2 -Iinclude test/test_runner.cpp kernel/dispatcher.cpp kernel/syscalls.cpp -o bin/micant_tests.exe
 
-      - name: Execute Full 136-Suite Test Battery (100% Pass Rate Required)
+      - name: Execute Full 137-Suite Test Battery (100% Pass Rate Required)
         shell: pwsh
         run: |
           .\bin\micant_tests.exe

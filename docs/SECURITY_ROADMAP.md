@@ -109,13 +109,16 @@ flowchart LR
   - CLI: `wsc` (`wsc status`, `wsc health [provider]`, `wsc products`, `wsc test`).
   - Verification: Unit Test Suite 136 (`Test_WindowsSecurityCenter_WSC_Subsystem`) passing at 100%.
 
-### Phase 2: Antimalware Scan Interface (AMSI - `amsi.dll` / `amsi.h`)
+### Phase 2: Antimalware Scan Interface (AMSI - `amsi.dll` / `amsi.h` - SentinelScan) - **COMPLETED (Milestone 137)**
 - **Goal**: Enable applications, scripts, and command shells to submit code buffers to the antimalware engine before execution.
-- **Components**:
-  - `include/micant/amsi.hpp` exporting `amsi.dll`.
-  - APIs: `AmsiInitialize`, `AmsiOpenSession`, `AmsiScanBuffer`, `AmsiScanString`, `AmsiCloseSession`, `AmsiUninitialize`.
-  - Result Codes: `AMSI_RESULT_CLEAN`, `AMSI_RESULT_NOT_DETECTED`, `AMSI_RESULT_DETECTED`, `AMSI_RESULT_BLOCKED_BY_ADMIN`.
-  - Integration with MicaNT command prompt (`cmd.hpp` / `shell.hpp`).
+- **Implemented Components**:
+  - `include/micant/amsi.hpp` exporting `amsi.dll` (SentinelScan).
+  - Win32 C ABI: `AmsiInitialize`, `AmsiOpenSession`, `AmsiScanBuffer`, `AmsiScanString`, `AmsiNotifyOperation`, `AmsiCloseSession`, `AmsiUninitialize`, `AmsiResultIsMalware`, `AmsiResultIsBlockedByAdmin`, `AmsiResultIsValid`.
+  - COM Interfaces: `IAmsiStream` (`{3E47F2E5-81D4-4AE7-897E-585A823CE1F8}`), `IAmsiProvider` (`{B2CABFE3-F61D-4729-A586-64623C669004}`).
+  - Built-in Sovereign Provider: `SovereignSentinelScanProvider` with NOP sled/shellcode detection, malicious download cradle analysis, credential theft pattern matching, AMSI tampering defense, and Shannon block entropy classification.
+  - Interactive Shell Pre-Execution Inspection: Automatic interception and blocking of malicious commands (`0x800700DF` `ERROR_VIRUS_INFECTED`) and admin policy blocks in `include/micant/shell.hpp`.
+  - CLI: `amsi` (`amsi status`, `amsi scan <content>`, `amsi block <pattern>`, `amsi unblock <pattern>`, `amsi clear`, `amsi test`).
+  - Verification: Unit Test Suite 137 (`Test_WindowsAMSI_SentinelScan_Subsystem`) passing at 100%.
 
 ### Phase 3: AegisDefender Antimalware Engine (`mpengine.dll` / `MpCmdRun.exe`)
 - **Goal**: Full clean-room file scanner and threat remediation engine.

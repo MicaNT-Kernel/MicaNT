@@ -128,6 +128,7 @@
 #include "ci.hpp"
 #include "feclient.hpp"
 #include "wscapi.hpp"
+#include "amsi.hpp"
 
 namespace micant::shell {
 
@@ -195,6 +196,8 @@ public:
         mfreadwrite::InitializeMFReadWriteExports();
         mfcapture::InitializeMFCaptureEngineExports();
         dxr::InitializeDXRExports();
+        wsc::InitializeWscSubsystemExports();
+        amsi::InitializeAmsiSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -238,6 +241,34 @@ public:
 
         if (cmd == "exit" || cmd == "quit") {
             return -1; // Request shell exit
+        }
+
+        // SentinelScan (AMSI) In-Memory Script & Command Inspection
+        if (cmd != "amsi" && cmd != "sentinelscan" && cmd != "sentinel" && cmd != "wsc" &&
+            cmd != "security" && cmd != "securitycenter" && cmd != "help" && cmd != "?") {
+            std::wstring wline;
+            wline.reserve(line.size());
+            for (char c : line) wline.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+
+            amsi::HAMSICONTEXT amsiCtx = nullptr;
+            amsi::HAMSISESSION amsiSess = nullptr;
+            if (SUCCEEDED(amsi::AmsiInitialize(L"MicaNTCommandShell", &amsiCtx))) {
+                amsi::AmsiOpenSession(amsiCtx, &amsiSess);
+                amsi::AMSI_RESULT amsiRes = amsi::AMSI_RESULT_CLEAN;
+                amsi::AmsiScanString(amsiCtx, wline.c_str(), L"CommandPrompt.cmd", amsiSess, &amsiRes);
+                amsi::AmsiCloseSession(amsiCtx, amsiSess);
+                amsi::AmsiUninitialize(amsiCtx);
+
+                if (amsi::AmsiResultIsMalware(amsiRes)) {
+                    out << "[-] Blocked by Sentinel Security System (AMSI / SentinelScan): Malicious script pattern or threat detected.\n"
+                        << "[-] Error: 0x800700DF (ERROR_VIRUS_INFECTED: The file contains a virus or potentially unwanted software).\n";
+                    return 1;
+                } else if (amsi::AmsiResultIsBlockedByAdmin(amsiRes)) {
+                    out << "[-] Blocked by Sentinel Security System (AMSI): Execution denied by administrator security policy.\n"
+                        << "[-] Error: 0x800704EC (ERROR_ACCESS_DISABLED_BY_POLICY).\n";
+                    return 1;
+                }
+            }
         }
 
         // Check MicaNT executive test & diagnostic commands
@@ -346,6 +377,7 @@ public:
             if (cmd == "wdac" || cmd == "ci") { cmdWdac(tokens, out); return 0; }
             if (cmd == "cipher" || cmd == "efs") { cmdCipher(tokens, out); return 0; }
             if (cmd == "sentinel" || cmd == "wsc" || cmd == "security" || cmd == "securitycenter") { cmdWsc(tokens, out); return 0; }
+            if (cmd == "amsi" || cmd == "sentinelscan") { cmdAmsi(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -655,6 +687,7 @@ private:
             << "  WDAC [status|mode|rules|logs|test] Windows Defender Application Control & CI (wdac test)\n"
             << "  CIPHER [/e|/d|/c|/k|/w|status|test] Windows Encrypting File System (EFS) Tool (cipher test)\n"
             << "  SENTINEL / WSC [status|health|products|register|unregister|test] Sentinel Security System for MicaNT (sentinel test)\n"
+            << "  AMSI / SENTINELSCAN [status|scan|block|unblock|clear|test] Antimalware Scan Interface (amsi test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20565,6 +20598,195 @@ private:
             << "  Servicing & System Updates:   " << healthToString(hUp) << " (CBS Sovereign Stack)\n"
             << "  Core Service Status:          Operational (wscsvc / SentinelCenter)\n"
             << "  Total Security Providers:     " << SovereignWscManager::get().getProducts().size() << "\n";
+    }
+
+    void cmdAmsi(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::amsi;
+        InitializeAmsiSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help")) {
+            out << "Sentinel Security System for MicaNT (amsi.dll / SentinelScan)\n"
+                << "Antimalware Scan Interface (AMSI) Specification Parity\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  amsi status                         Displays AMSI engine status, active sessions, and scan statistics\n"
+                << "  amsi scan <content>                 Scans a text payload or script snippet and reports risk assessment\n"
+                << "  amsi block <pattern>                Adds an administrator content block rule\n"
+                << "  amsi unblock <pattern>              Removes an administrator content block rule\n"
+                << "  amsi clear                          Clears all administrator content block rules\n"
+                << "  amsi test                           Executes SentinelScan AMSI diagnostic test suite\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
+            out << "[TEST] Running SentinelScan Antimalware Scan Interface (AMSI) Diagnostics...\n";
+
+            HAMSICONTEXT ctx = nullptr;
+            HRESULT hr = AmsiInitialize(L"MicaNTDiagnosticEngine", &ctx);
+            if (FAILED(hr) || !ctx) {
+                out << "[-] AmsiInitialize failed: hr=0x" << std::hex << hr << std::dec << "\n";
+                return;
+            }
+            out << "  [+] AmsiInitialize initialized successfully\n";
+
+            HAMSISESSION session = nullptr;
+            hr = AmsiOpenSession(ctx, &session);
+            if (FAILED(hr) || !session) {
+                AmsiUninitialize(ctx);
+                out << "[-] AmsiOpenSession failed: hr=0x" << std::hex << hr << std::dec << "\n";
+                return;
+            }
+            out << "  [+] AmsiOpenSession created session handle\n";
+
+            // Test 1: Benign payload
+            AMSI_RESULT res = AMSI_RESULT_CLEAN;
+            hr = AmsiScanString(ctx, L"echo MicaNT Diagnostic Test", L"diagnostic.cmd", session, &res);
+            if (FAILED(hr) || res != AMSI_RESULT_NOT_DETECTED) {
+                out << "[-] Benign scan failed or incorrectly flagged: res=" << res << "\n";
+                AmsiCloseSession(ctx, session);
+                AmsiUninitialize(ctx);
+                return;
+            }
+            out << "  [+] Benign payload scan passed: NOT_DETECTED\n";
+
+            // Test 2: EICAR standard pattern
+            std::wstring eicarPatternW = GetEicarTestPatternW();
+            hr = AmsiScanString(ctx, eicarPatternW.c_str(), L"eicar.com", session, &res);
+            if (FAILED(hr) || res != AMSI_RESULT_DETECTED) {
+                out << "[-] EICAR pattern detection failed: res=" << res << "\n";
+                AmsiCloseSession(ctx, session);
+                AmsiUninitialize(ctx);
+                return;
+            }
+            out << "  [+] EICAR standard virus signature detected: DETECTED (0x8000)\n";
+
+            // Test 3: PowerShell Download Cradle
+            std::wstring kCradle = BuildTestDownloadCradle();
+            hr = AmsiScanString(ctx, kCradle.c_str(), L"cradle.ps1", session, &res);
+            if (FAILED(hr) || res != AMSI_RESULT_DETECTED) {
+                out << "[-] Download cradle detection failed: res=" << res << "\n";
+                AmsiCloseSession(ctx, session);
+                AmsiUninitialize(ctx);
+                return;
+            }
+            out << "  [+] Malicious PowerShell download cradle detected: DETECTED\n";
+
+            // Test 4: Shellcode NOP sled buffer
+            unsigned char shellcodeBuf[64]{};
+            std::memset(shellcodeBuf, 0x90, 32); // 32-byte NOP sled
+            shellcodeBuf[32] = 0x31; shellcodeBuf[33] = 0xc0; shellcodeBuf[34] = 0x50; shellcodeBuf[35] = 0x68;
+            hr = AmsiScanBuffer(ctx, shellcodeBuf, sizeof(shellcodeBuf), L"stage.bin", session, &res);
+            if (FAILED(hr) || res != AMSI_RESULT_DETECTED) {
+                out << "[-] Shellcode NOP sled detection failed: res=" << res << "\n";
+                AmsiCloseSession(ctx, session);
+                AmsiUninitialize(ctx);
+                return;
+            }
+            out << "  [+] Binary shellcode NOP sled detected: DETECTED\n";
+
+            // Test 5: AmsiNotifyOperation
+            hr = AmsiNotifyOperation(ctx, (void*)"test_operation", 14, L"op.ps1", &res);
+            if (FAILED(hr)) {
+                out << "[-] AmsiNotifyOperation failed: hr=0x" << std::hex << hr << std::dec << "\n";
+                AmsiCloseSession(ctx, session);
+                AmsiUninitialize(ctx);
+                return;
+            }
+            out << "  [+] AmsiNotifyOperation verified\n";
+
+            AmsiCloseSession(ctx, session);
+            AmsiUninitialize(ctx);
+            out << "[SUCCESS] SentinelScan AMSI Subsystem Self-Test Finished.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "scan") {
+            if (tokens.size() < 3) {
+                out << "Usage: amsi scan <content>\n";
+                return;
+            }
+            std::string contentToScan;
+            for (size_t i = 2; i < tokens.size(); ++i) {
+                if (i > 2) contentToScan += " ";
+                contentToScan += tokens[i];
+            }
+
+            std::wstring wcontent;
+            wcontent.reserve(contentToScan.size());
+            for (char c : contentToScan) wcontent.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+
+            HAMSICONTEXT ctx = nullptr;
+            HAMSISESSION session = nullptr;
+            AmsiInitialize(L"MicaNTShellScan", &ctx);
+            AmsiOpenSession(ctx, &session);
+
+            AMSI_RESULT res = AMSI_RESULT_CLEAN;
+            AmsiScanString(ctx, wcontent.c_str(), L"ShellScanInput.txt", session, &res);
+
+            AmsiCloseSession(ctx, session);
+            AmsiUninitialize(ctx);
+
+            out << "SentinelScan Inspection Results for: \"" << contentToScan << "\"\n";
+            if (AmsiResultIsMalware(res)) {
+                out << "  Result:        DETECTED (Threat / Exploit Detected - 0x8000)\n"
+                    << "  Action:        Execution Blocked by Sentinel Security System\n";
+            } else if (AmsiResultIsBlockedByAdmin(res)) {
+                out << "  Result:        BLOCKED_BY_ADMIN (0x4000)\n"
+                    << "  Action:        Execution Denied by Administrator Policy\n";
+            } else {
+                out << "  Result:        NOT_DETECTED (Clean - 0x0001)\n"
+                    << "  Action:        Allowed to Execute\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "block") {
+            if (tokens.size() < 3) {
+                out << "Usage: amsi block <pattern>\n";
+                return;
+            }
+            std::wstring pat;
+            for (char c : tokens[2]) pat.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+            SovereignAmsiManager::get().addAdminBlockRule(pat);
+            out << "[+] Added administrator block rule for pattern: \"" << tokens[2] << "\"\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "unblock") {
+            if (tokens.size() < 3) {
+                out << "Usage: amsi unblock <pattern>\n";
+                return;
+            }
+            std::wstring pat;
+            for (char c : tokens[2]) pat.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+            SovereignAmsiManager::get().removeAdminBlockRule(pat);
+            out << "[+] Removed administrator block rule for pattern: \"" << tokens[2] << "\"\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "clear") {
+            SovereignAmsiManager::get().clearAdminBlockRules();
+            out << "[+] Cleared all administrator block rules.\n";
+            return;
+        }
+
+        // Default: display status
+        auto& mgr = SovereignAmsiManager::get();
+        out << "Sentinel Security System for MicaNT (amsi.dll / SentinelScan):\n"
+            << "  Provider Interface:           amsi.dll (Win32 C ABI Parity)\n"
+            << "  Active Primary Provider:      SentinelScan Sovereign Heuristic Analyzer\n"
+            << "  Cloud Telemetry:              DISABLED (100% Offline Local Analysis)\n"
+            << "  Engine Operational Status:    Active & Enforcing\n"
+            << "  Total Memory Scans:           " << mgr.getTotalScans() << "\n"
+            << "  Threats Intercepted:          " << mgr.getTotalThreatsDetected() << "\n"
+            << "  Admin Block Enforcements:     " << mgr.getTotalAdminBlocked() << "\n"
+            << "  Active Scanning Sessions:     " << mgr.getActiveSessionsCount() << "\n"
+            << "  Registered AMSI Providers:    " << mgr.getProvidersCount() << "\n";
     }
 
     static std::string trim(std::string_view s) {

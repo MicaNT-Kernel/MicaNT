@@ -37,6 +37,7 @@ These names:
 | **Cryptographic Services** | **CipherKSP** | `micant::crypto`<br/>`micant::ksp` | `se.hpp`<br/>`sam.hpp` | Clean-room Cryptography Next Generation (CNG / BCrypt), PBKDF2 key derivation, SHA-256, and AES symmetric encryption. |
 | **File-Level Encryption (EFS)** | **EmeraldCrypt** | `micant::efs` | `feclient.hpp` | Clean-room Encrypting File System (EFS) client, per-file AES-256 symmetric encryption, NTFS alternate utility stream ($EFS), and multi-user DDF/DRF key management. |
 | **Endpoint Security System** | **Sentinel Security System for MicaNT** | `micant::wsc`<br/>`micant::sentinel` | `wscapi.hpp`<br/>`se.hpp` | Sovereign endpoint security umbrella providing unified telemetry-free protection and health aggregation across SentinelCenter (`wscapi.dll`), Firewall (WFP), Antivirus (AegisDefender), Volume Encryption (FVE), and UAC. |
+| **In-Memory & Script Inspection (AMSI)** | **SentinelScan** | `micant::amsi` | `amsi.hpp` | Clean-room Antimalware Scan Interface (`amsi.dll`), providing in-memory buffer inspection, shellcode/NOP sled detection, script de-obfuscation heuristics, and command prompt interception. |
 
 ---
 
@@ -188,6 +189,23 @@ These names:
   - Observer pattern with thread-safe subscription and callback dispatch.
   - COM interfaces: `IWscProduct`, `IWscProduct2`, `IWscProduct3`, `IWSCProductList` with standard reference counting.
   - CLI: `sentinel` / `wsc` (`sentinel status`, `sentinel health [provider]`, `sentinel products`, `sentinel test`).
+
+### 3.21 SentinelScan (Antimalware Scan Interface & amsi.dll Subsystem)
+- **Role:** In-memory code and script buffer inspection bridge between calling applications (command shells, PowerShell runtimes, scripting engines, and office suites) and installed antimalware engines.
+- **Capabilities:**
+  - Standard Win32 C ABI exports (`amsi.dll`): `AmsiInitialize`, `AmsiOpenSession`, `AmsiScanBuffer`, `AmsiScanString`, `AmsiNotifyOperation`, `AmsiCloseSession`, `AmsiUninitialize`, `AmsiResultIsMalware`, `AmsiResultIsBlockedByAdmin`, `AmsiResultIsValid`.
+  - Standard COM interfaces: `IAmsiStream` (`{3E47F2E5-81D4-4AE7-897E-585A823CE1F8}`) and `IAmsiProvider` (`{B2CABFE3-F61D-4729-A586-64623C669004}`).
+  - Built-in sovereign heuristic provider (`SovereignSentinelScanProvider`) with zero telemetry:
+    - EICAR standard test detection.
+    - NOP sled & binary shellcode detection (16+ consecutive 0x90s, common stack pivot signatures).
+    - Obfuscated PowerShell download cradle detection (`Invoke-Expression` / `IEX` with `WebClient` / `DownloadString`).
+    - Credential dumping pattern matching (`mimikatz`, `sekurlsa`, `logonpasswords`).
+    - AMSI tampering attempt detection (`amsiInitFailed`, `AmsiUtils`).
+    - In-memory process injection primitives (`VirtualAlloc` + `WriteProcessMemory` + `CreateRemoteThread`).
+    - Shannon block entropy analysis for encrypted dropper detection (> 7.6 bits/byte).
+  - Administrative policy block rules (`AMSI_RESULT_BLOCKED_BY_ADMIN_START`).
+  - Interactive shell pre-execution interception and blocking (`0x800700DF` `ERROR_VIRUS_INFECTED`).
+  - CLI: `amsi` (`amsi status`, `amsi scan <content>`, `amsi block <pattern>`, `amsi unblock <pattern>`, `amsi clear`, `amsi test`).
 
 ---
 

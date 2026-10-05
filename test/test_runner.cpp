@@ -142,6 +142,7 @@
 #include "micant/fwpuclnt.hpp"
 #include "micant/feclient.hpp"
 #include "micant/wscapi.hpp"
+#include "micant/amsi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -31815,8 +31816,245 @@ void Test_WindowsSecurityCenter_WSC_Subsystem() {
     std::cout << "[TEST] Suite 136: Sentinel Security System (SentinelCenter / wscapi.dll) PASSED.\n";
 }
 
+void Test_WindowsAMSI_SentinelScan_Subsystem() {
+    std::cout << "\n[TEST] Starting Suite 137: Antimalware Scan Interface (AMSI / SentinelScan) & amsi.dll Subsystem...\n";
+
+    using namespace micant::amsi;
+    InitializeAmsiSubsystemExports();
+
+    // 1. Module Registration & VersionDatabase Verification
+    {
+        auto mod = version::VersionDatabase::Instance().FindModule("amsi.dll");
+        TEST_ASSERT(mod != nullptr, "amsi.dll must be registered in VersionDatabase");
+        TEST_ASSERT(mod->stringTable.at("FileVersion") == "10.0.26100.1", "amsi.dll FileVersion must match 10.0.26100.1");
+        TEST_ASSERT(mod->stringTable.at("FileDescription").find("Antimalware Scan Interface") != std::string::npos, "Description must match");
+    }
+
+    // 2. DynamicLoader Function Export Verification
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("amsi.dll", "AmsiInitialize") != nullptr, "AmsiInitialize must be exported");
+        TEST_ASSERT(ldr.getExport("amsi.dll", "AmsiUninitialize") != nullptr, "AmsiUninitialize must be exported");
+        TEST_ASSERT(ldr.getExport("amsi.dll", "AmsiOpenSession") != nullptr, "AmsiOpenSession must be exported");
+        TEST_ASSERT(ldr.getExport("amsi.dll", "AmsiCloseSession") != nullptr, "AmsiCloseSession must be exported");
+        TEST_ASSERT(ldr.getExport("amsi.dll", "AmsiScanBuffer") != nullptr, "AmsiScanBuffer must be exported");
+        TEST_ASSERT(ldr.getExport("amsi.dll", "AmsiScanString") != nullptr, "AmsiScanString must be exported");
+        TEST_ASSERT(ldr.getExport("amsi.dll", "AmsiNotifyOperation") != nullptr, "AmsiNotifyOperation must be exported");
+    }
+
+    // 3. AmsiInitialize & Context/Session Validation
+    HAMSICONTEXT ctx = nullptr;
+    HRESULT hr = AmsiInitialize(nullptr, &ctx);
+    TEST_ASSERT(FAILED(hr), "AmsiInitialize with null appName must fail");
+
+    hr = AmsiInitialize(L"MicaNTScriptHost", nullptr);
+    TEST_ASSERT(FAILED(hr), "AmsiInitialize with null outContext must fail");
+
+    hr = AmsiInitialize(L"MicaNTScriptHost", &ctx);
+    TEST_ASSERT(SUCCEEDED(hr) && ctx != nullptr, "AmsiInitialize must return S_OK and valid context");
+
+    HAMSISESSION session1 = nullptr;
+    hr = AmsiOpenSession(ctx, &session1);
+    TEST_ASSERT(SUCCEEDED(hr) && session1 != nullptr, "AmsiOpenSession must return S_OK and valid session");
+
+    HAMSISESSION session2 = nullptr;
+    hr = AmsiOpenSession(ctx, &session2);
+    TEST_ASSERT(SUCCEEDED(hr) && session2 != nullptr, "AmsiOpenSession must return unique second session");
+    TEST_ASSERT(session1 != session2, "Session handles must be distinct");
+
+    AmsiCloseSession(ctx, session2);
+
+    // 4. Benign Payload In-Memory Scanning
+    AMSI_RESULT res = AMSI_RESULT_CLEAN;
+    hr = AmsiScanString(ctx, L"Write-Host 'MicaNT Clean Script'", L"safe.ps1", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr), "AmsiScanString on benign string must succeed");
+    TEST_ASSERT(res == AMSI_RESULT_NOT_DETECTED, "Benign script must yield AMSI_RESULT_NOT_DETECTED");
+    TEST_ASSERT(!AmsiResultIsMalware(res), "AmsiResultIsMalware must be FALSE for benign script");
+    TEST_ASSERT(!AmsiResultIsBlockedByAdmin(res), "AmsiResultIsBlockedByAdmin must be FALSE for benign script");
+    TEST_ASSERT(AmsiResultIsValid(res), "AmsiResultIsValid must return TRUE");
+
+    const char* safeCmd = "dir C:\\Windows\\System32";
+    hr = AmsiScanBuffer(ctx, (void*)safeCmd, static_cast<ULONG>(std::strlen(safeCmd)), L"dir.cmd", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr), "AmsiScanBuffer on benign buffer must succeed");
+    TEST_ASSERT(res == AMSI_RESULT_NOT_DETECTED, "Benign buffer must yield AMSI_RESULT_NOT_DETECTED");
+
+    // 5. Heuristic & Signature Detection Tests
+    // 5a. EICAR Standard Virus Test Pattern
+    std::wstring eicarString = GetEicarTestPatternW();
+    hr = AmsiScanString(ctx, eicarString.c_str(), L"eicar_test.com", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr), "AmsiScanString on EICAR must return S_OK");
+    TEST_ASSERT(res == AMSI_RESULT_DETECTED, "EICAR string must yield AMSI_RESULT_DETECTED");
+    TEST_ASSERT(AmsiResultIsMalware(res), "AmsiResultIsMalware must be TRUE for EICAR");
+
+    // 5b. Malicious PowerShell Download Cradle
+    std::wstring cradlePayload = BuildTestDownloadCradle();
+    hr = AmsiScanString(ctx, cradlePayload.c_str(), L"cradle.ps1", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr), "AmsiScanString on download cradle must succeed");
+    TEST_ASSERT(res == AMSI_RESULT_DETECTED, "Download cradle must yield AMSI_RESULT_DETECTED");
+    TEST_ASSERT(AmsiResultIsMalware(res), "Download cradle must be recognized as malware");
+
+    // 5c. Credential Dumping (Mimikatz / sekurlsa)
+    std::wstring mimikatzPayload = BuildTestCredentialDump();
+    hr = AmsiScanString(ctx, mimikatzPayload.c_str(), L"mimikatz_eval.ps1", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr) && res == AMSI_RESULT_DETECTED, "Credential dumping token must yield AMSI_RESULT_DETECTED");
+
+    // 5d. AMSI Tampering / Memory Patching strings
+    std::wstring amsiPatchPayload = BuildTestAmsiBypass();
+    hr = AmsiScanString(ctx, amsiPatchPayload.c_str(), L"amsibypass.ps1", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr) && res == AMSI_RESULT_DETECTED, "AMSI tampering attempt must yield AMSI_RESULT_DETECTED");
+
+    // 5e. Binary Shellcode with NOP Sled
+    unsigned char shellcodePayload[48]{};
+    std::memset(shellcodePayload, 0x90, 24); // 24-byte NOP sled
+    shellcodePayload[24] = 0x31; shellcodePayload[25] = 0xc0; shellcodePayload[26] = 0x50; shellcodePayload[27] = 0x68;
+    hr = AmsiScanBuffer(ctx, shellcodePayload, sizeof(shellcodePayload), L"exploit.bin", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr) && res == AMSI_RESULT_DETECTED, "NOP sled shellcode must yield AMSI_RESULT_DETECTED");
+
+    // 6. AmsiNotifyOperation Verification
+    hr = AmsiNotifyOperation(ctx, (void*)"OfficeMacroExecutionHook", 24, L"document.docm", &res);
+    TEST_ASSERT(SUCCEEDED(hr), "AmsiNotifyOperation must return S_OK");
+    TEST_ASSERT(res == AMSI_RESULT_NOT_DETECTED, "Benign macro hook must return NOT_DETECTED");
+
+    // 7. Administrator Block Policy Verification
+    auto& mgr = SovereignAmsiManager::get();
+    mgr.addAdminBlockRule(L"restricted_app");
+
+    hr = AmsiScanString(ctx, L"echo safe text", L"restricted_app_script.ps1", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr), "AmsiScanString must succeed");
+    TEST_ASSERT(res == AMSI_RESULT_BLOCKED_BY_ADMIN_START, "Admin blocked content must yield AMSI_RESULT_BLOCKED_BY_ADMIN_START");
+    TEST_ASSERT(AmsiResultIsBlockedByAdmin(res), "AmsiResultIsBlockedByAdmin must be TRUE");
+    TEST_ASSERT(!AmsiResultIsMalware(res), "AmsiResultIsMalware must be FALSE for admin policy block");
+
+    mgr.removeAdminBlockRule(L"restricted_app");
+    hr = AmsiScanString(ctx, L"echo safe text", L"restricted_app_script.ps1", session1, &res);
+    TEST_ASSERT(res == AMSI_RESULT_NOT_DETECTED, "Content must be allowed once admin block rule is removed");
+
+    // 8. Custom IAmsiProvider Plug-in Verification
+    class TestCustomProvider final : public IAmsiProvider {
+    public:
+        TestCustomProvider() : m_refs(1) {}
+        HRESULT WINAPI QueryInterface(const micant::GUID& riid, void** ppv) noexcept override {
+            if (!ppv) return E_POINTER;
+            if (riid == ole32::IID_IUnknown || riid == IID_IAmsiProvider) {
+                *ppv = static_cast<IAmsiProvider*>(this);
+                AddRef();
+                return S_OK;
+            }
+            return E_NOINTERFACE;
+        }
+        uint32_t WINAPI AddRef() noexcept override { return ++m_refs; }
+        uint32_t WINAPI Release() noexcept override {
+            uint32_t c = --m_refs;
+            return c;
+        }
+        HRESULT WINAPI DisplayName(LPWSTR* p) override {
+            if (!p) return E_POINTER;
+            *p = nullptr;
+            return S_OK;
+        }
+        void WINAPI CloseSession(ULONGLONG) override {}
+        HRESULT WINAPI Scan(IAmsiStream* stream, AMSI_RESULT* result) override {
+            if (!stream || !result) return E_POINTER;
+            ULONG sz = 0;
+            stream->GetAttribute(AMSI_ATTRIBUTE_CONTENT_SIZE, sizeof(ULONG), (unsigned char*)&sz, nullptr);
+            std::vector<unsigned char> buf(sz);
+            ULONG readBytes = 0;
+            stream->Read(0, sz, buf.data(), &readBytes);
+            std::string content(reinterpret_cast<char*>(buf.data()), readBytes);
+            if (content.find("CUSTOM_TRIGGER_DETECT") != std::string::npos) {
+                *result = AMSI_RESULT_DETECTED;
+            } else {
+                *result = AMSI_RESULT_NOT_DETECTED;
+            }
+            return S_OK;
+        }
+    private:
+        std::atomic<uint32_t> m_refs;
+    };
+
+    TestCustomProvider customProv;
+    mgr.registerProvider(&customProv);
+
+    const char* customTestPayload = "echo variable; CUSTOM_TRIGGER_DETECT; echo done;";
+    hr = AmsiScanBuffer(ctx, (void*)customTestPayload, static_cast<ULONG>(std::strlen(customTestPayload)), L"plugin.ps1", session1, &res);
+    TEST_ASSERT(SUCCEEDED(hr) && res == AMSI_RESULT_DETECTED, "Custom provider must flag CUSTOM_TRIGGER_DETECT payload");
+
+    mgr.unregisterProvider(&customProv);
+
+    // 9. IAmsiStream Direct COM Verification
+    {
+        const unsigned char sampleData[] = "StreamDataSample";
+        auto* streamObj = new AmsiStreamImpl(L"HostApp", L"doc.bin", sampleData, sizeof(sampleData), 42);
+        
+        ULONG needed = 0;
+        hr = streamObj->GetAttribute(AMSI_ATTRIBUTE_CONTENT_SIZE, 0, nullptr, &needed);
+        TEST_ASSERT(needed == sizeof(ULONG), "Content size attribute size must be 4 bytes");
+
+        ULONG gotSize = 0;
+        hr = streamObj->GetAttribute(AMSI_ATTRIBUTE_CONTENT_SIZE, sizeof(ULONG), (unsigned char*)&gotSize, nullptr);
+        TEST_ASSERT(SUCCEEDED(hr) && gotSize == sizeof(sampleData), "Stream content size must match");
+
+        unsigned char readBuf[32]{};
+        ULONG bytesRead = 0;
+        hr = streamObj->Read(0, sizeof(readBuf), readBuf, &bytesRead);
+        TEST_ASSERT(SUCCEEDED(hr) && bytesRead == sizeof(sampleData), "Read must fetch entire stream content");
+        TEST_ASSERT(std::memcmp(readBuf, sampleData, bytesRead) == 0, "Read data must match sample data exactly");
+
+        streamObj->Release();
+    }
+
+    // 10. Interactive Command Shell (amsi CLI & shell interception)
+    {
+        shell::CommandShell proc;
+        std::ostringstream oss;
+
+        // 10a. amsi status
+        int shellRet = proc.execute("amsi status", oss);
+        TEST_ASSERT(shellRet == 0, "amsi status must return 0");
+        TEST_ASSERT(oss.str().find("SentinelScan") != std::string::npos, "amsi status must report SentinelScan");
+        TEST_ASSERT(oss.str().find("Active & Enforcing") != std::string::npos, "amsi status must report active state");
+
+        // 10b. amsi scan safe
+        oss.str("");
+        shellRet = proc.execute("amsi scan echo Hello MicaNT", oss);
+        TEST_ASSERT(shellRet == 0, "amsi scan safe must return 0");
+        TEST_ASSERT(oss.str().find("NOT_DETECTED") != std::string::npos, "Must report NOT_DETECTED for safe string");
+
+        // 10c. amsi scan malware
+        oss.str("");
+        std::string scanCmd = "amsi scan " + std::string("IEX (New-Object ") + "Net.WebClient)." + "DownloadString('http://127.0.0.1/test.ps1')";
+        shellRet = proc.execute(scanCmd, oss);
+        TEST_ASSERT(shellRet == 0, "amsi scan tool must execute");
+        TEST_ASSERT(oss.str().find("DETECTED") != std::string::npos, "amsi scan must detect malicious download cradle");
+
+        // 10d. Shell pre-execution interception: malicious command input must be blocked
+        oss.str("");
+        std::string execCmd = std::string("IEX (New-Object ") + "Net.WebClient)." + "DownloadString('http://127.0.0.1/malicious_payload.ps1')";
+        shellRet = proc.execute(execCmd, oss);
+        TEST_ASSERT(shellRet != 0, "Malicious script command must be rejected by shell pre-execution filter");
+        TEST_ASSERT(oss.str().find("Blocked by Sentinel Security System (AMSI") != std::string::npos, "Output must state AMSI block");
+        TEST_ASSERT(oss.str().find("0x800700DF") != std::string::npos, "Output must contain ERROR_VIRUS_INFECTED");
+
+        // 10e. amsi test
+        oss.str("");
+        shellRet = proc.execute("amsi test", oss);
+        TEST_ASSERT(shellRet == 0, "amsi test must return 0");
+        TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "amsi test must report SUCCESS");
+    }
+
+    // 11. Cleanup and Uninitialization
+    AmsiCloseSession(ctx, session1);
+    AmsiUninitialize(ctx);
+
+    std::cout << "[TEST] Suite 137: Antimalware Scan Interface (AMSI / SentinelScan) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite136")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite137")) {
+        RUN_TEST(Test_WindowsAMSI_SentinelScan_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite136") {
         RUN_TEST(Test_WindowsSecurityCenter_WSC_Subsystem);
         return g_FailedTests;
     }
@@ -32081,6 +32319,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsCodeIntegrity_WDAC_Subsystem);
     RUN_TEST(Test_WindowsEncryptingFileSystem_EFS_Subsystem);
     RUN_TEST(Test_WindowsSecurityCenter_WSC_Subsystem);
+    RUN_TEST(Test_WindowsAMSI_SentinelScan_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
