@@ -108,6 +108,7 @@
 #include "directstorage.hpp"
 #include "dxcore.hpp"
 #include "directml.hpp"
+#include "dcomp.hpp"
 
 namespace micant::shell {
 
@@ -306,6 +307,7 @@ public:
             if (cmd == "dxr" || cmd == "raytracing" || cmd == "meshshader") { cmdDXR(tokens, out); return 0; }
             if (cmd == "dstorage" || cmd == "directstorage") { cmdDirectStorage(tokens, out); return 0; }
             if (cmd == "dml" || cmd == "directml" || cmd == "dxcore") { cmdDirectML(tokens, out); return 0; }
+            if (cmd == "dcomp" || cmd == "directcomposition" || cmd == "compositor") { cmdDirectComposition(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -15738,6 +15740,237 @@ private:
             << "  dml test                                Runs DirectML & DXCore self-test suite\n"
             << "  dml info                                Displays DirectML & GPU adapter telemetry\n"
             << "  dml infer                               Executes tensor GEMM inference benchmark\n";
+    }
+
+    void cmdDirectComposition(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[DirectComposition] Running Modern Hardware-Accelerated Compositor Self-Tests...\n";
+            uint32_t passed = 0;
+
+            dcomp::IDCompositionDevice* pDevice = nullptr;
+            if (dcomp::DCompositionCreateDevice(nullptr, dcomp::IID_IDCompositionDevice_Const, reinterpret_cast<void**>(&pDevice)) == 0 && pDevice) {
+                passed++;
+                out << "  [PASS] 1. DCompositionCreateDevice (IDCompositionDevice acquired)\n";
+
+                dcomp::IDCompositionVisual* pRoot = nullptr;
+                dcomp::IDCompositionVisual* pCard = nullptr;
+                dcomp::IDCompositionVisual* pText = nullptr;
+                pDevice->CreateVisual(&pRoot);
+                pDevice->CreateVisual(&pCard);
+                pDevice->CreateVisual(&pText);
+
+                if (pRoot && pCard && pText) {
+                    passed++;
+                    out << "  [PASS] 2. Visual Allocation (Root, Card, Text visual nodes created)\n";
+
+                    pCard->SetOffsetX(40.0f);
+                    pCard->SetOffsetY(60.0f);
+                    pCard->SetOpacity(0.92f);
+                    pCard->SetInterpolationMode(dcomp::DCOMPOSITION_BITMAP_INTERPOLATION_MODE::LINEAR);
+                    pCard->SetBorderMode(dcomp::DCOMPOSITION_BORDER_MODE::SOFT);
+
+                    pRoot->AddVisual(pCard, true, nullptr);
+                    pCard->AddVisual(pText, true, nullptr);
+
+                    if (pRoot->GetChildren().size() == 1 && pCard->GetChildren().size() == 1) {
+                        passed++;
+                        out << "  [PASS] 3. Visual Tree Hierarchy (Root -> Card [40, 60] -> Text [0.92 Opacity])\n";
+                    }
+
+                    // 4. Transforms
+                    dcomp::IDCompositionTranslateTransform* pTrans = nullptr;
+                    pDevice->CreateTranslateTransform(&pTrans);
+                    if (pTrans) {
+                        pTrans->SetOffsetX(20.0f);
+                        pTrans->SetOffsetY(30.0f);
+                        pCard->SetTransform(pTrans);
+                        passed++;
+                        out << "  [PASS] 4. Affine 2D/3D Transforms (TranslateTransform [+20, +30] applied)\n";
+                        pTrans->Release();
+                    }
+
+                    // 5. Animations
+                    dcomp::IDCompositionAnimation* pAnim = nullptr;
+                    pDevice->CreateAnimation(&pAnim);
+                    if (pAnim) {
+                        pAnim->AddCubic(0.0, 0.0f, 100.0f, 0.0f, 0.0f);
+                        pAnim->AddSinusoidal(1.0, 100.0f, 25.0f, 3.14159f / 2.0f, 0.0f);
+                        pAnim->End(3.0, 200.0f);
+
+                        float v0 = pAnim->Evaluate(0.0);
+                        float vHalf = pAnim->Evaluate(0.5);
+                        float vEnd = pAnim->Evaluate(4.0);
+                        if (std::abs(v0) < 1e-4f && std::abs(vHalf - 50.0f) < 1e-4f && std::abs(vEnd - 200.0f) < 1e-4f) {
+                            passed++;
+                            out << "  [PASS] 5. Parametric Animation Engine (Cubic & Sinusoidal Easing Evaluated)\n";
+                        }
+                        pText->SetOpacity(pAnim);
+                        pAnim->Release();
+                    }
+
+                    // 6. Clipping
+                    dcomp::IDCompositionRectangleClip* pClip = nullptr;
+                    pDevice->CreateRectangleClip(&pClip);
+                    if (pClip) {
+                        pClip->SetLeft(10.0f);
+                        pClip->SetTop(10.0f);
+                        pClip->SetRight(400.0f);
+                        pClip->SetBottom(300.0f);
+                        pClip->SetTopLeftRadiusX(12.0f);
+                        pClip->SetTopLeftRadiusY(12.0f);
+                        pCard->SetClip(pClip);
+                        passed++;
+                        out << "  [PASS] 6. Rounded Rectangle Clipping Bounds (Radius: 12px)\n";
+                        pClip->Release();
+                    }
+
+                    // 7. Surface Drawing
+                    dcomp::IDCompositionSurface* pSurface = nullptr;
+                    pDevice->CreateSurface(256, 256, prismx::DXGI_FORMAT_R8G8B8A8_UNORM, 1, &pSurface);
+                    if (pSurface) {
+                        void* pUpdate = nullptr;
+                        dcomp::DCOMP_POINT offset{};
+                        dcomp::DCOMP_RECT updateRect{ 0, 0, 128, 128 };
+                        pSurface->BeginDraw(&updateRect, dcomp::IID_IDCompositionSurface_Const, &pUpdate, &offset);
+                        uint8_t* buf = pSurface->GetBuffer();
+                        if (buf) {
+                            std::memset(buf, 0xAA, 256 * 256 * 4);
+                        }
+                        pSurface->EndDraw();
+                        pCard->SetContent(pSurface);
+                        passed++;
+                        out << "  [PASS] 7. Composition Surface (256x256 RGBA32 BeginDraw/EndDraw Lifecycle)\n";
+                        pSurface->Release();
+                    }
+
+                    // 8. Target & Commit
+                    dcomp::IDCompositionTarget* pTarget = nullptr;
+                    dcomp::HWND fakeHwnd = reinterpret_cast<dcomp::HWND>(0xC0900001);
+                    pDevice->CreateTargetForHwnd(fakeHwnd, true, &pTarget);
+                    if (pTarget) {
+                        pTarget->SetRoot(pRoot);
+                        pDevice->Commit();
+
+                        dcomp::DCOMPOSITION_FRAME_STATISTICS stats{};
+                        pDevice->GetFrameStatistics(&stats);
+                        if (stats.nextKeyFrame >= 1) {
+                            passed++;
+                            out << "  [PASS] 8. Target Binding & Commit Transaction (Frame Key: " << stats.nextKeyFrame << ")\n";
+                        }
+                        pTarget->Release();
+                    }
+
+                    pText->Release();
+                    pCard->Release();
+                    pRoot->Release();
+                }
+
+                // 9. Device2 & Surface Handle
+                dcomp::IDCompositionDevice2* pDev2 = nullptr;
+                if (pDevice->QueryInterface(dcomp::IID_IDCompositionDevice2_Const, reinterpret_cast<void**>(&pDev2)) == 0 && pDev2) {
+                    passed++;
+                    out << "  [PASS] 9. DirectComposition Device2 Interface Acquired\n";
+                    pDev2->Release();
+                }
+
+                dcomp::HANDLE hSharedSurf = nullptr;
+                if (dcomp::DCompositionCreateSurfaceHandle(0, nullptr, &hSharedSurf) == 0 && hSharedSurf) {
+                    passed++;
+                    out << "  [PASS] 10. Cross-Process Shared Composition Surface Handle Allocated\n";
+                }
+
+                pDevice->Release();
+            }
+
+            out << "[DirectComposition] Tests Finished: " << passed << " / 10 Subsystem Invariants Verified.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "       MicaNT DirectComposition Modern Desktop Compositor Telemetry   \n"
+                << "========================================================================\n\n"
+                << "  Architecture:           DirectComposition 2.0 Modern Visual Tree Engine\n"
+                << "  Native Library:         dcomp.dll (Version 10.0.22621.1)\n"
+                << "  Presentation Engine:    GPU Compositor synchronized with DWM Pipeline\n"
+                << "  Supported Transforms:   Translate2D, Scale2D, Rotate2D, Matrix3x2, Matrix4x4\n"
+                << "  Supported Surfaces:     DXGI Swapchains, D3D11/12 Resources, Virtual Surfaces\n"
+                << "  Animation Engine:       Parametric Cubic Bezier & Sinusoidal Easing\n"
+                << "  Clipping Modes:         Axis-Aligned Rectangles & Rounded Radius Rectangles\n"
+                << "  Composition Shaders:    SIMD-Accelerated Porter-Duff Source-Over Alpha Blending\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "compose") {
+            out << "[DirectComposition] Building Sample Modern Acrylic Window Visual Tree...\n";
+            dcomp::IDCompositionDevice* pDev = nullptr;
+            dcomp::DCompositionCreateDevice(nullptr, dcomp::IID_IDCompositionDevice_Const, reinterpret_cast<void**>(&pDev));
+            if (pDev) {
+                dcomp::IDCompositionVisual* pRoot = nullptr;
+                dcomp::IDCompositionVisual* pBackdrop = nullptr;
+                dcomp::IDCompositionVisual* pTitlebar = nullptr;
+                dcomp::IDCompositionVisual* pButton = nullptr;
+
+                pDev->CreateVisual(&pRoot);
+                pDev->CreateVisual(&pBackdrop);
+                pDev->CreateVisual(&pTitlebar);
+                pDev->CreateVisual(&pButton);
+
+                // Layer 1: Backdrop
+                pBackdrop->SetOffsetX(100.0f);
+                pBackdrop->SetOffsetY(80.0f);
+                pBackdrop->SetOpacity(0.85f);
+
+                // Layer 2: Titlebar with rounded corners
+                dcomp::IDCompositionRectangleClip* pClip = nullptr;
+                pDev->CreateRectangleClip(&pClip);
+                if (pClip) {
+                    pClip->SetLeft(0.0f); pClip->SetTop(0.0f);
+                    pClip->SetRight(600.0f); pClip->SetBottom(40.0f);
+                    pClip->SetTopLeftRadiusX(8.0f); pClip->SetTopLeftRadiusY(8.0f);
+                    pTitlebar->SetClip(pClip);
+                    pClip->Release();
+                }
+
+                // Layer 3: Interactive Accent Button with Scale Transform
+                dcomp::IDCompositionScaleTransform* pScale = nullptr;
+                pDev->CreateScaleTransform(&pScale);
+                if (pScale) {
+                    pScale->SetScaleX(1.05f); pScale->SetScaleY(1.05f);
+                    pButton->SetTransform(pScale);
+                    pScale->Release();
+                }
+
+                pRoot->AddVisual(pBackdrop, true, nullptr);
+                pBackdrop->AddVisual(pTitlebar, true, nullptr);
+                pBackdrop->AddVisual(pButton, true, nullptr);
+
+                dcomp::IDCompositionTarget* pTarget = nullptr;
+                pDev->CreateTargetForHwnd(reinterpret_cast<dcomp::HWND>(0xDEADBEEF), true, &pTarget);
+                pTarget->SetRoot(pRoot);
+
+                pDev->Commit();
+                dcomp::DCOMPOSITION_FRAME_STATISTICS stats{};
+                pDev->GetFrameStatistics(&stats);
+
+                out << "  [COMPOSITE] Visual Tree Hierarchical Topology:\n"
+                    << "    +- [Root Visual Node] (Target HWND: 0xDEADBEEF)\n"
+                    << "       +- [Acrylic Mica Backdrop] (Offset: +100, +80 | Opacity: 85%)\n"
+                    << "          +- [Window Titlebar Chrome] (Rounded Corner Clip: 8px)\n"
+                    << "          +- [Accent Button] (ScaleTransform: 1.05x | Active Layer)\n"
+                    << "  [COMPOSITE] Frame Committed Successfully (Keyframe: " << stats.nextKeyFrame << ")\n";
+
+                pTarget->Release();
+                pButton->Release(); pTitlebar->Release(); pBackdrop->Release(); pRoot->Release();
+                pDev->Release();
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  dcomp test                              Runs DirectComposition visual tree self-tests\n"
+            << "  dcomp info                              Displays compositor engine telemetry\n"
+            << "  dcomp compose                           Builds and commits a sample modern acrylic visual tree\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -27261,8 +27261,235 @@ void Test_WindowsDirectML_Subsystem() {
     std::cout << "[TEST] Suite 116: Windows DirectML & DXCore Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 117: Windows DirectComposition Subsystem
+// ============================================================================
+void Test_WindowsDirectComposition_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 117: Windows DirectComposition & Modern Compositor Subsystem     \n";
+    std::cout << "========================================================================\n";
+
+    dcomp::InitializeDirectCompositionExports();
+
+    // 1. Dynamic Module Export Verification
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("dcomp.dll", "DCompositionCreateDevice") != nullptr, "DCompositionCreateDevice must be exported from dcomp.dll");
+    TEST_ASSERT(loader.getExport("dcomp.dll", "DCompositionCreateDevice2") != nullptr, "DCompositionCreateDevice2 must be exported from dcomp.dll");
+    TEST_ASSERT(loader.getExport("dcomp.dll", "DCompositionCreateDevice3") != nullptr, "DCompositionCreateDevice3 must be exported from dcomp.dll");
+    TEST_ASSERT(loader.getExport("dcomp.dll", "DCompositionCreateSurfaceHandle") != nullptr, "DCompositionCreateSurfaceHandle must be exported from dcomp.dll");
+
+    // 2. Version Database Verification
+    const auto* modDComp = version::VersionDatabase::Instance().GetModuleInfo("dcomp.dll");
+    TEST_ASSERT(modDComp != nullptr, "VersionDatabase must contain dcomp.dll");
+    TEST_ASSERT(modDComp->stringTable.at("FileVersion") == "10.0.22621.1", "dcomp.dll FileVersion must be 10.0.22621.1");
+
+    // 3. DirectComposition Device Creation
+    dcomp::IDCompositionDevice* pDcompDevice = nullptr;
+    int32_t hr = dcomp::DCompositionCreateDevice(nullptr, dcomp::IID_IDCompositionDevice_Const, reinterpret_cast<void**>(&pDcompDevice));
+    TEST_ASSERT(hr == 0 && pDcompDevice != nullptr, "DCompositionCreateDevice must succeed");
+
+    // 4. Visual Tree Hierarchy Construction (Root -> WindowFrame -> ContentCard -> ActionButton)
+    dcomp::IDCompositionVisual* pRoot = nullptr;
+    dcomp::IDCompositionVisual* pWindow = nullptr;
+    dcomp::IDCompositionVisual* pCard = nullptr;
+    dcomp::IDCompositionVisual* pButton = nullptr;
+
+    pDcompDevice->CreateVisual(&pRoot);
+    pDcompDevice->CreateVisual(&pWindow);
+    pDcompDevice->CreateVisual(&pCard);
+    pDcompDevice->CreateVisual(&pButton);
+
+    TEST_ASSERT(pRoot && pWindow && pCard && pButton, "CreateVisual for all tree nodes must succeed");
+
+    // Configure properties
+    pWindow->SetOffsetX(50.0f);
+    pWindow->SetOffsetY(50.0f);
+    pWindow->SetOpacity(0.95f);
+    pWindow->SetInterpolationMode(dcomp::DCOMPOSITION_BITMAP_INTERPOLATION_MODE::LINEAR);
+    pWindow->SetBorderMode(dcomp::DCOMPOSITION_BORDER_MODE::SOFT);
+
+    TEST_ASSERT(pWindow->GetOffsetX() == 50.0f, "Window visual offset X must be 50.0");
+    TEST_ASSERT(pWindow->GetOffsetY() == 50.0f, "Window visual offset Y must be 50.0");
+    TEST_ASSERT(std::abs(pWindow->GetOpacity() - 0.95f) < 1e-4f, "Window visual opacity must be 0.95");
+
+    pRoot->AddVisual(pWindow, true, nullptr);
+    pWindow->AddVisual(pCard, true, nullptr);
+    pWindow->AddVisual(pButton, true, pCard);
+
+    TEST_ASSERT(pRoot->GetChildren().size() == 1, "Root must have 1 child");
+    TEST_ASSERT(pWindow->GetChildren().size() == 2, "Window must have 2 children");
+    TEST_ASSERT(pWindow->GetChildren()[0] == pCard, "First child must be Card");
+    TEST_ASSERT(pWindow->GetChildren()[1] == pButton, "Second child must be Button");
+
+    // 5. Affine Transforms (Translate, Scale, Rotate, Matrix)
+    dcomp::IDCompositionTranslateTransform* pTrans = nullptr;
+    pDcompDevice->CreateTranslateTransform(&pTrans);
+    TEST_ASSERT(pTrans != nullptr, "CreateTranslateTransform must succeed");
+    pTrans->SetOffsetX(10.0f);
+    pTrans->SetOffsetY(20.0f);
+    pCard->SetTransform(pTrans);
+    TEST_ASSERT(pCard->GetTransform() == pTrans, "Card transform must match translate transform");
+
+    dcomp::IDCompositionScaleTransform* pScale = nullptr;
+    pDcompDevice->CreateScaleTransform(&pScale);
+    TEST_ASSERT(pScale != nullptr, "CreateScaleTransform must succeed");
+    pScale->SetScaleX(1.25f);
+    pScale->SetScaleY(1.25f);
+    pScale->SetCenterX(100.0f);
+    pScale->SetCenterY(50.0f);
+    TEST_ASSERT(pScale->GetScaleX() == 1.25f && pScale->GetScaleY() == 1.25f, "Scale values must match 1.25");
+
+    dcomp::IDCompositionRotateTransform* pRotate = nullptr;
+    pDcompDevice->CreateRotateTransform(&pRotate);
+    TEST_ASSERT(pRotate != nullptr, "CreateRotateTransform must succeed");
+    pRotate->SetAngle(45.0f);
+    TEST_ASSERT(pRotate->GetAngle() == 45.0f, "Rotate angle must match 45.0");
+
+    dcomp::IDCompositionMatrixTransform* pMatrixTrans = nullptr;
+    pDcompDevice->CreateMatrixTransform(&pMatrixTrans);
+    TEST_ASSERT(pMatrixTrans != nullptr, "CreateMatrixTransform must succeed");
+    dcomp::DCOMP_MATRIX3x2 m3x2{};
+    m3x2.m[0][0] = 3.0f; m3x2.m[1][1] = 3.0f;
+    pMatrixTrans->SetMatrix(m3x2);
+    TEST_ASSERT(pMatrixTrans->GetMatrix().m[0][0] == 3.0f, "Matrix transform element [0][0] must match 3.0");
+
+    // 6. Parametric Animation Engine
+    dcomp::IDCompositionAnimation* pAnim = nullptr;
+    pDcompDevice->CreateAnimation(&pAnim);
+    TEST_ASSERT(pAnim != nullptr, "CreateAnimation must succeed");
+
+    pAnim->AddCubic(0.0, 0.0f, 50.0f, 0.0f, 0.0f);
+    pAnim->AddSinusoidal(1.0, 50.0f, 10.0f, 3.14159f / 2.0f, 0.0f);
+    pAnim->End(3.0, 100.0f);
+
+    float val0 = pAnim->Evaluate(0.0);
+    float valHalf = pAnim->Evaluate(0.5);
+    float valEnd = pAnim->Evaluate(4.0);
+    TEST_ASSERT(std::abs(val0 - 0.0f) < 1e-4f, "Animation at t=0 must evaluate to 0.0");
+    TEST_ASSERT(std::abs(valHalf - 25.0f) < 1e-4f, "Animation at t=0.5 must evaluate to 25.0");
+    TEST_ASSERT(std::abs(valEnd - 100.0f) < 1e-4f, "Animation at t=4.0 must evaluate to 100.0");
+
+    pButton->SetOpacity(pAnim);
+
+    // 7. Clipping Bounds (Rect & Rounded Rectangle Clip)
+    dcomp::DCOMP_RECT baseClip{ 0, 0, 1024, 768 };
+    pRoot->SetClip(baseClip);
+    TEST_ASSERT(pRoot->HasClipRect(), "Root must have clip rect set");
+    TEST_ASSERT(pRoot->GetClipRect().right == 1024, "Root clip right must be 1024");
+
+    dcomp::IDCompositionRectangleClip* pRectClip = nullptr;
+    pDcompDevice->CreateRectangleClip(&pRectClip);
+    TEST_ASSERT(pRectClip != nullptr, "CreateRectangleClip must succeed");
+    pRectClip->SetLeft(5.0f);
+    pRectClip->SetTop(5.0f);
+    pRectClip->SetRight(200.0f);
+    pRectClip->SetBottom(150.0f);
+    pRectClip->SetTopLeftRadiusX(16.0f);
+    pRectClip->SetTopLeftRadiusY(16.0f);
+    pCard->SetClip(pRectClip);
+    TEST_ASSERT(pCard->GetClip() == pRectClip, "Card clip must match rectangle clip");
+
+    // 8. Composition Surface Lifecycle
+    dcomp::IDCompositionSurface* pSurface = nullptr;
+    pDcompDevice->CreateSurface(512, 512, prismx::DXGI_FORMAT_R8G8B8A8_UNORM, 1, &pSurface);
+    TEST_ASSERT(pSurface != nullptr, "CreateSurface must succeed");
+    TEST_ASSERT(pSurface->GetWidth() == 512 && pSurface->GetHeight() == 512, "Surface dimensions must be 512x512");
+
+    void* pDrawObj = nullptr;
+    dcomp::DCOMP_POINT drawOffset{};
+    dcomp::DCOMP_RECT updateRect{ 0, 0, 256, 256 };
+    hr = pSurface->BeginDraw(&updateRect, dcomp::IID_IDCompositionSurface_Const, &pDrawObj, &drawOffset);
+    TEST_ASSERT(hr == 0 && pDrawObj != nullptr, "BeginDraw on surface must succeed");
+
+    uint8_t* pPix = pSurface->GetBuffer();
+    TEST_ASSERT(pPix != nullptr, "Surface buffer pointer must not be null");
+    std::memset(pPix, 0x7F, 512 * 512 * 4);
+    hr = pSurface->EndDraw();
+    TEST_ASSERT(hr == 0, "EndDraw on surface must succeed");
+
+    pCard->SetContent(pSurface);
+    TEST_ASSERT(pCard->GetContent() == pSurface, "Card content must match surface");
+
+    // 9. Composition Target & Frame Commit Transaction
+    dcomp::HWND testHwnd = reinterpret_cast<dcomp::HWND>(0xDEAD0001);
+    dcomp::IDCompositionTarget* pTarget = nullptr;
+    hr = pDcompDevice->CreateTargetForHwnd(testHwnd, true, &pTarget);
+    TEST_ASSERT(hr == 0 && pTarget != nullptr, "CreateTargetForHwnd must succeed");
+    TEST_ASSERT(pTarget->GetHwnd() == testHwnd, "Target HWND must match");
+
+    hr = pTarget->SetRoot(pRoot);
+    TEST_ASSERT(hr == 0, "SetRoot on target must succeed");
+    TEST_ASSERT(pTarget->GetRoot() == pRoot, "Target root must match root visual");
+
+    hr = pDcompDevice->Commit();
+    TEST_ASSERT(hr == 0, "Commit transaction on compositor must succeed");
+
+    dcomp::DCOMPOSITION_FRAME_STATISTICS stats{};
+    hr = pDcompDevice->GetFrameStatistics(&stats);
+    TEST_ASSERT(hr == 0, "GetFrameStatistics must succeed");
+    TEST_ASSERT(stats.nextKeyFrame >= 1, "nextKeyFrame must be >= 1");
+    TEST_ASSERT(stats.currentFrameTime > 0, "currentFrameTime must be > 0");
+
+    // 10. DirectComposition Device2 & Surface Handle
+    dcomp::IDCompositionDevice2* pDevice2 = nullptr;
+    hr = pDcompDevice->QueryInterface(dcomp::IID_IDCompositionDevice2_Const, reinterpret_cast<void**>(&pDevice2));
+    TEST_ASSERT(hr == 0 && pDevice2 != nullptr, "QueryInterface for IDCompositionDevice2 must succeed");
+
+    dcomp::IDCompositionVisual2* pVis2 = nullptr;
+    hr = pDevice2->CreateVisual2(&pVis2);
+    TEST_ASSERT(hr == 0 && pVis2 != nullptr, "CreateVisual2 on IDCompositionDevice2 must succeed");
+    pVis2->SetOpacityMode(dcomp::DCOMPOSITION_OPACITY_MODE::MULTIPLY);
+    pVis2->SetBackFaceVisibility(dcomp::DCOMPOSITION_BACKFACE_VISIBILITY::HIDDEN);
+    TEST_ASSERT(pVis2->GetOpacityMode() == dcomp::DCOMPOSITION_OPACITY_MODE::MULTIPLY, "OpacityMode must match Multiply");
+    TEST_ASSERT(pVis2->GetBackFaceVisibility() == dcomp::DCOMPOSITION_BACKFACE_VISIBILITY::HIDDEN, "BackFaceVisibility must match Hidden");
+
+    dcomp::HANDLE hShared = nullptr;
+    hr = dcomp::DCompositionCreateSurfaceHandle(0, nullptr, &hShared);
+    TEST_ASSERT(hr == 0 && hShared != nullptr, "DCompositionCreateSurfaceHandle must succeed");
+
+    // 11. Interactive CLI Verification (dcomp test, dcomp info, dcomp compose)
+    shell::CommandShell shellEngine;
+    std::ostringstream testOut;
+    int rc = shellEngine.execute("dcomp test", testOut);
+    TEST_ASSERT(rc == 0, "dcomp test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("10 / 10 Subsystem Invariants Verified") != std::string::npos, "dcomp test must pass all 10 invariants");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("dcomp info", infoOut);
+    TEST_ASSERT(rc == 0, "dcomp info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("DirectComposition 2.0") != std::string::npos, "dcomp info must display DirectComposition architecture");
+
+    std::ostringstream composeOut;
+    rc = shellEngine.execute("dcomp compose", composeOut);
+    TEST_ASSERT(rc == 0, "dcomp compose CLI command must return 0");
+    TEST_ASSERT(composeOut.str().find("Frame Committed Successfully") != std::string::npos, "dcomp compose must commit composite frame");
+
+    // Cleanup
+    pVis2->Release();
+    pDevice2->Release();
+    pTarget->Release();
+    pSurface->Release();
+    pRectClip->Release();
+    pAnim->Release();
+    pMatrixTrans->Release();
+    pRotate->Release();
+    pScale->Release();
+    pTrans->Release();
+    pButton->Release();
+    pCard->Release();
+    pWindow->Release();
+    pRoot->Release();
+    pDcompDevice->Release();
+
+    std::cout << "[TEST] Suite 117: Windows DirectComposition Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite116")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite117")) {
+        RUN_TEST(Test_WindowsDirectComposition_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite116") {
         RUN_TEST(Test_WindowsDirectML_Subsystem);
         return g_FailedTests;
     }
@@ -27427,6 +27654,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirectX_Raytracing_Subsystem);
     RUN_TEST(Test_WindowsDirectStorage_Subsystem);
     RUN_TEST(Test_WindowsDirectML_Subsystem);
+    RUN_TEST(Test_WindowsDirectComposition_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

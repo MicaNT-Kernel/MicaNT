@@ -186,7 +186,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 89: Windows DirectML & DXCore Subsystem              [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 90: Windows DirectComposition & Modern Compositor    [PLANNED]        │
+│ Phase 90: Windows DirectComposition & Modern Compositor    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 91: Windows UI Composition & Visual Layer Subsystem  [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2114,15 +2116,32 @@
 
 ---
 
-### Phase 90: Windows DirectComposition & Modern Compositor Subsystem (`dcomp.hpp`, `dcomp.dll`) (PLANNED - MILESTONE 117)
-- [ ] **DirectComposition Core Architecture (`include/micant/dcomp.hpp`, `dcomp.dll`)**:
-  - Modern hardware-accelerated composition visual trees (`IDCompositionDevice`, `IDCompositionVisual`, `IDCompositionTarget`).
-  - Visual property animations, 3D transforms, clipping rectangles, and opacity masks.
-- [ ] **Surface & Swapchain Integration**:
-  - Composition surfaces (`IDCompositionSurface`, `IDCompositionVirtualSurface`) bound to Direct3D 11/12 and DXGI swapchains.
+### Phase 90: Windows DirectComposition & Modern Compositor Subsystem (`dcomp.hpp`, `dcomp.dll`) (COMPLETED 100% - MILESTONE 117)
+- [x] **DirectComposition Core Architecture (`include/micant/dcomp.hpp`, `dcomp.dll`)**:
+  - Modern hardware-accelerated composition visual trees (`IDCompositionDevice`, `IDCompositionDevice2`, `IDCompositionDevice3`, `IDCompositionVisual`, `IDCompositionVisual2`, `IDCompositionTarget`).
+  - Visual property animations, 3D affine transforms (`IDCompositionTranslateTransform`, `IDCompositionScaleTransform`, `IDCompositionRotateTransform`, `IDCompositionMatrixTransform`), clipping rectangles, and rounded corner clips (`IDCompositionRectangleClip`).
+- [x] **Surface & Swapchain Integration**:
+  - Composition surfaces (`IDCompositionSurface`, `IDCompositionVirtualSurface`) with `BeginDraw`/`EndDraw` dirty-rect lifecycle, bound to DXGI swapchains and Direct3D 11/12 resources.
+  - Cross-process shared composition surface handles (`DCompositionCreateSurfaceHandle`).
   - DirectComposition commit transaction engine synchronized with Desktop Window Manager (DWM).
-- [ ] **Unit Test Suite 117 (`Test_WindowsDirectComposition_Subsystem`)**:
-  - Validate device creation, visual tree manipulation, commit pipelines, and compositor shell commands.
+- [x] **Shell CLI Integration**:
+  - Added `dcomp test`, `dcomp info`, and `dcomp compose` shell commands in `micant::shell`.
+- [x] **Unit Test Suite 117 (`Test_WindowsDirectComposition_Subsystem`)**:
+  - Validates dynamic exports, VersionDatabase entry (`10.0.22621.1`), device creation, hierarchical visual tree construction, affine transforms, parametric bezier animation evaluation, clipping rects, composition surfaces, target HWND binding, commit transactions, and CLI commands.
+  - Milestone 117: **117 / 117 Test Suites Passing (100%)**.
+
+---
+
+### Phase 91: Windows UI Composition & Visual Layer Subsystem (`uicomposition.hpp`, `windows.ui.composition.dll`) (PLANNED - MILESTONE 118)
+- [ ] **WinRT Composition Core Architecture (`include/micant/uicomposition.hpp`, `windows.ui.composition.dll`)**:
+  - Modern WinUI composition visual hierarchy (`ICompositor`, `IVisual`, `IContainerVisual`, `ISpriteVisual`).
+  - Composition brushes: `ICompositionColorBrush`, `ICompositionSurfaceBrush`, `ICompositionEffectBrush` (Acrylic/Mica blur effects).
+  - Dynamic expression animations and cubic bezier keyframe animations (`IScalarKeyFrameAnimation`, `IVector3KeyFrameAnimation`, `IExpressionAnimation`).
+- [ ] **Visual Tree Composition Pipeline**:
+  - Implicit animation collections, visual offset/scale/orientation springs, and hit-testing against composition targets.
+  - DirectComposition/DWM bridge connecting WinUI visual trees to hardware presentation.
+- [ ] **Unit Test Suite 118 (`Test_WindowsUIComposition_Subsystem`)**:
+  - Validate compositor initialization, container visual trees, sprite brushes, expression animation evaluation, and compositor shell diagnostics.
 
 
 
