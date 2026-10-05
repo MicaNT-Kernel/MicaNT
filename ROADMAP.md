@@ -2042,22 +2042,44 @@
 
 ---
 
-### Phase 87: Windows DirectX 12 Raytracing (DXR) & Mesh Shader Subsystem (`d3d12raytracing.hpp`, `d3d12.dll`) (PLANNED - MILESTONE 114)
-- [ ] **DirectX 12 Ultimate / DXR Core Architecture (`include/micant/d3d12raytracing.hpp`, `d3d12.dll`)**:
-  - Extended D3D12 Device interfaces (`ID3D12Device5`, `ID3D12GraphicsCommandList4`) supporting raytracing tiers (Tier 1.0, Tier 1.1) and mesh shader tiers.
+### Phase 87: Windows DirectX 12 Raytracing (DXR) & Mesh Shader Subsystem (`d3d12raytracing.hpp`, `d3d12.dll`) (COMPLETED 100% - MILESTONE 114)
+- [x] **DirectX 12 Ultimate / DXR Core Architecture (`include/micant/d3d12raytracing.hpp`, `d3d12.dll`)**:
+  - Extended D3D12 Device interfaces (`ID3D12Device5`, `ID3D12GraphicsCommandList4`, `ID3D12GraphicsCommandList6`) supporting raytracing tiers (Tier 1.0, Tier 1.1) and mesh shader tiers.
   - Raytracing Pipeline State Objects (`ID3D12StateObject`, `ID3D12StateObjectProperties`) defining Ray Generation, Closest Hit, Any Hit, and Miss shaders.
   - Acceleration Structure Engine supporting Bottom-Level (BLAS) and Top-Level (TLAS) construction (`D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC`).
-- [ ] **Shader Dispatch & Mesh Shader Geometry Pipeline (`d3d12.dll`)**:
-  - Ray dispatching pipeline (`DispatchRays`, `D3D12_DISPATCH_RAYS_DESC`) with shader binding tables (SBT).
+- [x] **Shader Dispatch & Mesh Shader Geometry Pipeline (`d3d12.dll`)**:
+  - Ray dispatching pipeline (`DispatchRays`, `D3D12_DISPATCH_RAYS_DESC`) with Möller-Trumbore ray-triangle intersection math solver.
   - Next-generation geometry amplification and mesh shading (`DispatchMesh`, `D3D12_DISPATCH_MESH_ARGUMENTS`).
-- [ ] **Dynamic Module Exports & COM Registration (`d3d12.dll`)**:
-  - DXR feature capability queries (`D3D12_FEATURE_DATA_D3D12_OPTIONS5`, `D3D12_RAYTRACING_TIER`).
-  - Version database registration in `VersionDatabase` for `d3d12.dll`.
-- [ ] **Interactive CLI Utilities (`dxr`)**:
-  - `dxr test` (Runs DirectX Raytracing and Mesh Shader self-tests).
+- [x] **Dynamic Module Exports & COM Registration (`d3d12.dll`)**:
+  - DXR feature capability queries (`D3D12_FEATURE_DATA_D3D12_OPTIONS5`, `D3D12_RAYTRACING_TIER_1_1`, `D3D12_FEATURE_DATA_D3D12_OPTIONS7`, `D3D12_MESH_SHADER_TIER_1`).
+  - Dynamic export `D3D12CreateRaytracingDevice` and version database registration for `d3d12raytracing.dll` (`10.0.22621.1`).
+- [x] **Interactive CLI Utilities (`dxr`)**:
+  - `dxr test` (Runs DirectX Raytracing and Mesh Shader self-tests: 16/16 passed).
   - `dxr info` (Displays DXR hardware tiers, acceleration structure capabilities, and shader model support).
-- [ ] **Unit Test Suite 114 (`Test_WindowsDirectX_Raytracing_Subsystem`)**:
-  - Comprehensive unit test suite validating DXR device capability discovery, state object creation, acceleration structure builds, ray dispatching, mesh shader compilation, and CLI commands.
+  - `dxr trace` (Traces rays through PrismX Acceleration Structure against scene).
+  - `dxr mesh [count]` (Dispatches mesh shader threadgroups and amplifies primitives).
+- [x] **Unit Test Suite 114 (`Test_WindowsDirectX_Raytracing_Subsystem`)**:
+  - Comprehensive unit test suite validating DXR device capability discovery, state object creation, acceleration structure builds, ray dispatching, mesh shader amplification, and CLI commands.
+  - Milestone 114: **114 / 114 Test Suites Passing (100%)**.
+
+---
+
+### Phase 88: Windows DirectStorage API & High-Performance GPU Decompression Subsystem (`directstorage.hpp`, `dstorage.dll`, `dstoragecore.dll`) (PLANNED - MILESTONE 115)
+- [ ] **DirectStorage Core Architecture (`include/micant/directstorage.hpp`, `dstorage.dll`)**:
+  - DirectStorage factory and queue interfaces (`IDStorageFactory`, `IDStorageQueue`, `IDStorageFile`, `IDStorageStatusArray`).
+  - Asynchronous NVMe storage request pipeline bypassing OS file caching and overhead (`DSTORAGE_REQUEST`, `DSTORAGE_REQUEST_OPTIONS`).
+  - GPU-directed memory transfers routing disk data directly into Direct3D 12 buffer and texture resources (`ID3D12Resource`).
+- [ ] **Hardware & Software Decompression Engine (`dstoragecore.dll`)**:
+  - Compression codec support: GDeflate (`DSTORAGE_COMPRESSION_FORMAT_GDEFLATE`), Zlib, and raw stream uncompressed pipelines.
+  - Custom decompression queue interface (`IDStorageCustomDecompressionQueue`) for CPU fallback and compute-shader-driven GPU decompressors.
+- [ ] **Dynamic Module Exports & Registration (`dstorage.dll`, `dstoragecore.dll`)**:
+  - Dynamic export `DStorageGetFactory` and version database registration in `VersionDatabase` for `dstorage.dll` and `dstoragecore.dll`.
+- [ ] **Interactive CLI Utilities (`dstorage`)**:
+  - `dstorage test` (Runs DirectStorage queue submission, decompression, and memory transfer self-tests).
+  - `dstorage info` (Displays storage queues, compression codec capabilities, and NVMe bypass status).
+  - `dstorage bench [sizeMB]` (Benchmarks direct-to-GPU memory transfer throughput).
+- [ ] **Unit Test Suite 115 (`Test_WindowsDirectStorage_Subsystem`)**:
+  - Comprehensive unit test suite validating factory acquisition, request queuing, file handle creation, status token synchronization, GDeflate decompression simulation, and shell commands.
 
 
 

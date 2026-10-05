@@ -26611,8 +26611,175 @@ void Test_WindowsMediaFoundation_CaptureEngine_Subsystem() {
     std::cout << "[TEST] Suite 113: Windows Media Foundation Capture Engine Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 114: Windows DirectX 12 Raytracing (DXR) & Mesh Shader Subsystem
+// ============================================================================
+void Test_WindowsDirectX_Raytracing_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 114: Windows DirectX 12 Raytracing & Mesh Shader Subsystem      \n";
+    std::cout << "========================================================================\n";
+
+    dxr::InitializeDXRExports();
+
+    // 1. Dynamic Module Export Verification
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("d3d12.dll", "D3D12CreateRaytracingDevice") != nullptr, "D3D12CreateRaytracingDevice must be exported");
+
+    // 2. Version Database Verification
+    const auto* mod = version::VersionDatabase::Instance().GetModuleInfo("d3d12raytracing.dll");
+    TEST_ASSERT(mod != nullptr, "VersionDatabase must contain d3d12raytracing.dll");
+    TEST_ASSERT(mod->stringTable.at("ProductVersion") == "10.0.22621.1", "ProductVersion must be 10.0.22621.1");
+
+    // 3. Create Raytracing Device with Feature Level 12_2 (DirectX 12 Ultimate)
+    dxr::ID3D12Device5* pDevice5 = nullptr;
+    int32_t hr = dxr::D3D12CreateRaytracingDevice(nullptr, prism3d::D3D_FEATURE_LEVEL_12_2, dxr::IID_ID3D12Device5_Const, reinterpret_cast<void**>(&pDevice5));
+    TEST_ASSERT(hr == 0 && pDevice5 != nullptr, "D3D12CreateRaytracingDevice must succeed");
+
+    // 4. Check Feature Support for DXR Tier 1.1
+    dxr::D3D12_FEATURE_DATA_D3D12_OPTIONS5 opts5{};
+    hr = pDevice5->CheckFeatureSupport(27, &opts5, sizeof(opts5));
+    TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_OPTIONS5 must succeed");
+    TEST_ASSERT(opts5.RaytracingTier == dxr::D3D12_RAYTRACING_TIER_1_1, "Device must report D3D12_RAYTRACING_TIER_1_1 support");
+
+    // 5. Check Feature Support for Mesh Shader Tier 1
+    dxr::D3D12_FEATURE_DATA_D3D12_OPTIONS7 opts7{};
+    hr = pDevice5->CheckFeatureSupport(32, &opts7, sizeof(opts7));
+    TEST_ASSERT(hr == 0, "CheckFeatureSupport for D3D12_OPTIONS7 must succeed");
+    TEST_ASSERT(opts7.MeshShaderTier == dxr::D3D12_MESH_SHADER_TIER_1, "Device must report D3D12_MESH_SHADER_TIER_1 support");
+
+    // 6. Prebuild Info Calculation for Bottom-Level Acceleration Structure (BLAS)
+    dxr::D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS blasInputs{};
+    blasInputs.Type = dxr::D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+    blasInputs.Flags = dxr::D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    blasInputs.NumDescs = 50; // 50 geometric primitives
+    dxr::D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO blasPrebuild{};
+    pDevice5->GetRaytracingAccelerationStructurePrebuildInfo(&blasInputs, &blasPrebuild);
+    TEST_ASSERT(blasPrebuild.ResultDataMaxSizeInBytes == (50 * 128ULL + 256ULL), "BLAS result size calculation must match 50 primitives");
+    TEST_ASSERT(blasPrebuild.ScratchDataSizeInBytes == (50 * 64ULL + 128ULL), "BLAS scratch size calculation must match 50 primitives");
+
+    // 7. Prebuild Info Calculation for Top-Level Acceleration Structure (TLAS)
+    dxr::D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasInputs{};
+    tlasInputs.Type = dxr::D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+    tlasInputs.Flags = dxr::D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    tlasInputs.NumDescs = 8; // 8 instance descriptors
+    dxr::D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tlasPrebuild{};
+    pDevice5->GetRaytracingAccelerationStructurePrebuildInfo(&tlasInputs, &tlasPrebuild);
+    TEST_ASSERT(tlasPrebuild.ResultDataMaxSizeInBytes == (8 * 256ULL + 512ULL), "TLAS result size calculation must match 8 instances");
+    TEST_ASSERT(tlasPrebuild.ScratchDataSizeInBytes == (8 * 128ULL + 256ULL), "TLAS scratch size calculation must match 8 instances");
+
+    // 8. Command Allocator & Command List 4 Creation
+    prism3d12::ID3D12CommandAllocator* pAlloc = nullptr;
+    hr = pDevice5->CreateCommandAllocator(prism3d12::D3D12_COMMAND_LIST_TYPE_DIRECT, prism3d12::IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&pAlloc));
+    TEST_ASSERT(hr == 0 && pAlloc != nullptr, "CreateCommandAllocator must succeed");
+
+    dxr::ID3D12GraphicsCommandList4* pCmdList4 = nullptr;
+    hr = pDevice5->CreateCommandList(0, prism3d12::D3D12_COMMAND_LIST_TYPE_DIRECT, pAlloc, nullptr, dxr::IID_ID3D12GraphicsCommandList4_Const, reinterpret_cast<void**>(&pCmdList4));
+    TEST_ASSERT(hr == 0 && pCmdList4 != nullptr, "CreateCommandList for ID3D12GraphicsCommandList4 must succeed");
+
+    // 9. Query Interface for ID3D12GraphicsCommandList6 (Mesh Shader Dispatching)
+    dxr::ID3D12GraphicsCommandList6* pCmdList6 = nullptr;
+    hr = pCmdList4->QueryInterface(dxr::IID_ID3D12GraphicsCommandList6_Const, reinterpret_cast<void**>(&pCmdList6));
+    TEST_ASSERT(hr == 0 && pCmdList6 != nullptr, "QueryInterface for ID3D12GraphicsCommandList6 must succeed");
+
+    // 10. Acceleration Structure Construction (BLAS & TLAS)
+    dxr::D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC blasDesc{};
+    blasDesc.Inputs = blasInputs;
+    blasDesc.DestAccelerationStructureData = 0x50000;
+    pCmdList4->BuildRaytracingAccelerationStructure(&blasDesc, 0, nullptr);
+
+    dxr::D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC tlasDesc{};
+    tlasDesc.Inputs = tlasInputs;
+    tlasDesc.DestAccelerationStructureData = 0x60000;
+    pCmdList4->BuildRaytracingAccelerationStructure(&tlasDesc, 0, nullptr);
+
+    auto* pCmdImpl = static_cast<dxr::CDXRCommandListImpl*>(pCmdList4);
+    TEST_ASSERT(pCmdImpl->getBlasBuilds() == 1, "Command list must record 1 BLAS build");
+    TEST_ASSERT(pCmdImpl->getTlasBuilds() == 1, "Command list must record 1 TLAS build");
+
+    // 11. State Object Creation (Raytracing Pipeline State)
+    dxr::D3D12_HIT_GROUP_DESC hitGroup{};
+    hitGroup.HitGroupExport = L"HitGroupA";
+    hitGroup.Type = dxr::D3D12_HIT_GROUP_TYPE_TRIANGLES;
+    hitGroup.ClosestHitShaderImport = L"ClosestHitA";
+
+    dxr::D3D12_RAYTRACING_PIPELINE_CONFIG pipeCfg{};
+    pipeCfg.MaxTraceRecursionDepth = 4;
+
+    dxr::D3D12_STATE_SUBOBJECT subobjects[2]{};
+    subobjects[0].Type = dxr::D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+    subobjects[0].pDesc = &hitGroup;
+    subobjects[1].Type = dxr::D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
+    subobjects[1].pDesc = &pipeCfg;
+
+    dxr::D3D12_STATE_OBJECT_DESC soDesc{};
+    soDesc.Type = dxr::D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+    soDesc.NumSubobjects = 2;
+    soDesc.pSubobjects = subobjects;
+
+    dxr::ID3D12StateObject* pStateObject = nullptr;
+    hr = pDevice5->CreateStateObject(&soDesc, dxr::IID_ID3D12StateObject_Const, reinterpret_cast<void**>(&pStateObject));
+    TEST_ASSERT(hr == 0 && pStateObject != nullptr, "CreateStateObject must succeed");
+
+    // 12. State Object Properties & Shader Identifier Retrieval
+    dxr::ID3D12StateObjectProperties* pProps = nullptr;
+    hr = pStateObject->QueryInterface(dxr::IID_ID3D12StateObjectProperties_Const, reinterpret_cast<void**>(&pProps));
+    TEST_ASSERT(hr == 0 && pProps != nullptr, "QueryInterface for ID3D12StateObjectProperties must succeed");
+
+    void* pShaderId = pProps->GetShaderIdentifier(L"HitGroupA");
+    TEST_ASSERT(pShaderId != nullptr, "GetShaderIdentifier for HitGroupA must return valid 32-byte identifier");
+
+    void* pRayGenId = pProps->GetShaderIdentifier(L"MyRaygenShader");
+    TEST_ASSERT(pRayGenId != nullptr, "GetShaderIdentifier for default RayGen must succeed");
+
+    // 13. Pipeline Stack Size Configuration
+    pProps->SetPipelineStackSize(16384);
+    TEST_ASSERT(pProps->GetPipelineStackSize() == 16384, "Pipeline stack size must be set to 16,384 bytes");
+
+    // 14. SetPipelineState1 Binding
+    pCmdList4->SetPipelineState1(pStateObject);
+
+    // 15. DispatchRays Execution with Möller-Trumbore Ray-Triangle Intersections
+    dxr::D3D12_DISPATCH_RAYS_DESC dispatchDesc{};
+    dispatchDesc.Width = 32;
+    dispatchDesc.Height = 32;
+    dispatchDesc.Depth = 1;
+    pCmdList4->DispatchRays(&dispatchDesc);
+    TEST_ASSERT(pCmdImpl->getRaysDispatched() == 1024, "DispatchRays must simulate exactly 1024 rays (32x32)");
+    TEST_ASSERT(pCmdImpl->getRaysHit() > 0, "DispatchRays must detect triangle intersections against scene");
+
+    // 16. DispatchMesh Next-Gen Geometry Amplification & Shell CLI Verification
+    pCmdList6->DispatchMesh(8, 2, 1);
+    TEST_ASSERT(pCmdImpl->getMeshDispatches() == 1, "Command list must record 1 mesh dispatch");
+    TEST_ASSERT(pCmdImpl->getMeshAmplifiedPrimitives() == 1024, "Mesh shader must amplify 16 threadgroups into 1024 primitives");
+
+    std::ostringstream testOut;
+    micant::shell::CommandShell shellEngine;
+    int rc = shellEngine.execute("dxr test", testOut);
+    TEST_ASSERT(rc == 0, "dxr test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("16/16 PASSED") != std::string::npos, "dxr test must pass all 16 tests");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("dxr info", infoOut);
+    TEST_ASSERT(rc == 0, "dxr info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("D3D12_RAYTRACING_TIER_1_1") != std::string::npos, "dxr info must display DXR Tier 1.1 telemetry");
+
+    // Cleanup
+    pProps->Release();
+    pStateObject->Release();
+    pCmdList6->Release();
+    pCmdList4->Release();
+    pAlloc->Release();
+    pDevice5->Release();
+
+    std::cout << "[TEST] Suite 114: Windows DirectX 12 Raytracing & Mesh Shader Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite113")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite114")) {
+        RUN_TEST(Test_WindowsDirectX_Raytracing_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite113") {
         RUN_TEST(Test_WindowsMediaFoundation_CaptureEngine_Subsystem);
         return g_FailedTests;
     }
@@ -26762,6 +26929,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirect3D12_Video_Acceleration_Subsystem);
     RUN_TEST(Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem);
     RUN_TEST(Test_WindowsMediaFoundation_CaptureEngine_Subsystem);
+    RUN_TEST(Test_WindowsDirectX_Raytracing_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
