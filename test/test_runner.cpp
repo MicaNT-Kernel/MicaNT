@@ -29405,8 +29405,329 @@ void Test_WindowsMedia_OCR_Subsystem() {
     std::cout << "[TEST] Suite 126: Windows Optical Character Recognition (OCR) & Modern Media Vision Subsystem PASSED.\n";
 }
 
+void Test_WindowsMachineLearning_WinML_Subsystem() {
+    using namespace micant::winml;
+    std::cout << "[TEST] Running Suite 127: Windows Machine Learning (WinML) & Sovereign Neural Inference Subsystem...\n";
+
+    InitializeWinMLSubsystemExports();
+    auto& loader = ldr::DynamicLoader::get();
+
+    // 1. Dynamic Exports Verification
+    TEST_ASSERT(loader.getExport("windows.ai.machinelearning.dll", "WinMLCreateRuntime") != nullptr,
+                "WinMLCreateRuntime must be exported from windows.ai.machinelearning.dll");
+    TEST_ASSERT(loader.getExport("windows.ai.machinelearning.dll", "WinMLCreateTensorFloat") != nullptr,
+                "WinMLCreateTensorFloat must be exported from windows.ai.machinelearning.dll");
+    TEST_ASSERT(loader.getExport("windows.ai.machinelearning.dll", "WinMLCreateDevice") != nullptr,
+                "WinMLCreateDevice must be exported from windows.ai.machinelearning.dll");
+    TEST_ASSERT(loader.getExport("windows.ai.machinelearning.dll", "WinMLCreateSession") != nullptr,
+                "WinMLCreateSession must be exported from windows.ai.machinelearning.dll");
+    TEST_ASSERT(loader.getExport("windows.ai.machinelearning.dll", "DllGetActivationFactory") != nullptr,
+                "DllGetActivationFactory must be exported from windows.ai.machinelearning.dll");
+    TEST_ASSERT(loader.getExport("windows.ai.machinelearning.dll", "RoGetActivationFactory") != nullptr,
+                "RoGetActivationFactory must be exported from windows.ai.machinelearning.dll");
+
+    // 2. VersionDatabase Verification
+    const auto* mlMod = version::VersionDatabase::Instance().GetModuleInfo("windows.ai.machinelearning.dll");
+    TEST_ASSERT(mlMod != nullptr && mlMod->stringTable.at("ProductVersion") == "10.0.22621.1",
+                "windows.ai.machinelearning.dll must be registered in VersionDatabase at 10.0.22621.1");
+
+    // 3. Tensor Creation & Inspection (ITensor, ITensorFloatStatics)
+    const int64_t testShape[2] = { 2, 3 };
+    const float testData[6] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+    ITensor* pTensor = nullptr;
+    int32_t hr = WinMLCreateTensorFloat(testShape, 2, testData, 6, &pTensor);
+    TEST_ASSERT(hr == 0 && pTensor != nullptr, "WinMLCreateTensorFloat must succeed");
+
+    TensorDataType dt = TensorDataType::Undefined;
+    pTensor->GetTensorDataType(&dt);
+    TEST_ASSERT(dt == TensorDataType::Float, "Tensor data type must be Float");
+
+    size_t elemCount = 0;
+    pTensor->GetElementCount(&elemCount);
+    TEST_ASSERT(elemCount == 6, "Tensor element count must be 6");
+
+    int64_t* pRetShape = nullptr;
+    uint32_t rank = 0;
+    pTensor->GetShape(&pRetShape, &rank);
+    TEST_ASSERT(rank == 2 && pRetShape != nullptr && pRetShape[0] == 2 && pRetShape[1] == 3, "Shape must match [2, 3]");
+    ole32::CoTaskMemFree(pRetShape);
+
+    void* pBuf = nullptr;
+    size_t byteLen = 0;
+    pTensor->GetBuffer(&pBuf, &byteLen);
+    TEST_ASSERT(byteLen == 24 && pBuf != nullptr, "Byte length must be 24 bytes (6 * sizeof(float))");
+    const float* fBuf = static_cast<const float*>(pBuf);
+    TEST_ASSERT(fBuf[0] == 1.0f && fBuf[5] == 6.0f, "Buffer contents must match initialized data");
+    pTensor->Release();
+
+    // 4. Mathematical Neural Operator Kernels (Unit Verification)
+    // 4a. GEMM (Matrix Multiplication: Y = A @ B)
+    // A: [2, 3], B: [3, 2] -> Y: [2, 2]
+    const float matA[6] = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
+    const float matB[6] = { 7.0f, 8.0f, 9.0f, 1.0f, 2.0f, 3.0f };
+    float matY[4] = { 0.0f };
+    math::Gemm(matA, matB, nullptr, matY, 2, 3, 2, 1.0f, 0.0f);
+    TEST_ASSERT(matY[0] == 31.0f && matY[1] == 19.0f && matY[2] == 85.0f && matY[3] == 55.0f,
+                "GEMM matrix multiplication kernel numerical output must match exact values");
+
+    // 4b. 2D Convolution (NCHW)
+    std::vector<float> convIn(16, 1.0f);
+    std::vector<float> convK(9, 1.0f);
+    std::vector<float> convOut(4, 0.0f);
+    math::Conv2D(convIn.data(), convK.data(), nullptr, convOut.data(), 1, 1, 4, 4, 1, 3, 3, 1, 1, 0, 0);
+    TEST_ASSERT(convOut[0] == 9.0f && convOut[1] == 9.0f && convOut[2] == 9.0f && convOut[3] == 9.0f,
+                "Conv2D kernel output must equal 9.0 across all spatial positions");
+
+    // 4c. ReLU & Sigmoid & Softmax
+    float actIn[4] = { -2.0f, 0.0f, 3.0f, -0.5f };
+    float actOut[4] = { 0.0f };
+    math::Relu(actIn, actOut, 4);
+    TEST_ASSERT(actOut[0] == 0.0f && actOut[1] == 0.0f && actOut[2] == 3.0f && actOut[3] == 0.0f, "ReLU must zero negatives");
+
+    float sigIn[1] = { 0.0f };
+    float sigOut[1] = { 0.0f };
+    math::Sigmoid(sigIn, sigOut, 1);
+    TEST_ASSERT(std::abs(sigOut[0] - 0.5f) < 1e-5f, "Sigmoid(0) must equal 0.5");
+
+    float smIn[3] = { 1.0f, 2.0f, 3.0f };
+    float smOut[3] = { 0.0f };
+    math::Softmax(smIn, smOut, 1, 3);
+    float smSum = smOut[0] + smOut[1] + smOut[2];
+    TEST_ASSERT(std::abs(smSum - 1.0f) < 1e-5f, "Softmax probabilities must sum to 1.0");
+    TEST_ASSERT(smOut[2] > smOut[1] && smOut[1] > smOut[0], "Softmax output must be strictly monotonic");
+
+    // 4d. MaxPool2D
+    std::vector<float> poolIn = {
+        1.0f, 4.0f, 2.0f, 3.0f,
+        2.0f, 3.0f, 1.0f, 7.0f,
+        8.0f, 5.0f, 0.0f, 2.0f,
+        6.0f, 7.0f, 4.0f, 9.0f
+    };
+    std::vector<float> poolOut(4, 0.0f);
+    math::MaxPool2D(poolIn.data(), poolOut.data(), 1, 1, 4, 4, 2, 2, 2, 2);
+    TEST_ASSERT(poolOut[0] == 4.0f && poolOut[1] == 7.0f && poolOut[2] == 8.0f && poolOut[3] == 9.0f,
+                "MaxPool2D kernel must downsample to 2x2 maximum quadrant values");
+
+    // 5. ILearningModelStatics & Model Inspection
+    ILearningModelStatics* pStatics = nullptr;
+    hr = WinMLCreateRuntime(&pStatics);
+    TEST_ASSERT(hr == 0 && pStatics != nullptr, "WinMLCreateRuntime must succeed");
+
+    ILearningModel* pModel = nullptr;
+    hr = pStatics->LoadFromFilePath(L"sovereign_mlp.onnx", &pModel);
+    TEST_ASSERT(hr == 0 && pModel != nullptr, "LoadFromFilePath must return S_OK and valid ILearningModel");
+
+    wchar_t nameBuf[128]{};
+    uint32_t nameLen = 128;
+    pModel->GetName(nameBuf, &nameLen);
+    TEST_ASSERT(std::wcscmp(nameBuf, L"MicaNT.Sovereign.MLP") == 0, "Model name must be MicaNT.Sovereign.MLP");
+
+    int64_t modelVer = 0;
+    pModel->GetVersion(&modelVer);
+    TEST_ASSERT(modelVer == 1, "Model version must be 1");
+
+    // 6. Feature Descriptors Inspection
+    ILearningModelFeatureDescriptor** inFeats = nullptr;
+    uint32_t inCount = 0;
+    pModel->GetInputFeatures(&inFeats, &inCount);
+    TEST_ASSERT(inCount == 1 && inFeats != nullptr, "MLP model must specify 1 input feature");
+
+    wchar_t inName[128]{};
+    uint32_t inNameLen = 128;
+    inFeats[0]->GetName(inName, &inNameLen);
+    TEST_ASSERT(std::wcscmp(inName, L"input") == 0, "Input feature name must be 'input'");
+
+    LearningModelFeatureKind fKind{};
+    inFeats[0]->GetKind(&fKind);
+    TEST_ASSERT(fKind == LearningModelFeatureKind::Tensor, "Input feature kind must be Tensor");
+
+    ITensorFeatureDescriptor* pTensorDesc = nullptr;
+    inFeats[0]->GetTensorDescriptor(&pTensorDesc);
+    TEST_ASSERT(pTensorDesc != nullptr, "GetTensorDescriptor must succeed");
+
+    TensorDataType tType{};
+    pTensorDesc->GetTensorKind(&tType);
+    TEST_ASSERT(tType == TensorDataType::Float, "TensorDataType must be Float");
+    pTensorDesc->Release();
+
+    inFeats[0]->Release();
+    ole32::CoTaskMemFree(inFeats);
+
+    ILearningModelFeatureDescriptor** outFeats = nullptr;
+    uint32_t outCount = 0;
+    pModel->GetOutputFeatures(&outFeats, &outCount);
+    TEST_ASSERT(outCount == 1 && outFeats != nullptr, "MLP model must specify 1 output feature");
+
+    wchar_t outName[128]{};
+    uint32_t outNameLen = 128;
+    outFeats[0]->GetName(outName, &outNameLen);
+    TEST_ASSERT(std::wcscmp(outName, L"probabilities") == 0, "Output feature name must be 'probabilities'");
+    outFeats[0]->Release();
+    ole32::CoTaskMemFree(outFeats);
+
+    // 7. Device, Session Creation & Evaluation (MLP Model)
+    ILearningModelDevice* pDevice = nullptr;
+    hr = WinMLCreateDevice(LearningModelDeviceKind::Cpu, &pDevice);
+    TEST_ASSERT(hr == 0 && pDevice != nullptr, "WinMLCreateDevice for CPU must succeed");
+
+    LearningModelDeviceKind devKind{};
+    pDevice->GetDeviceKind(&devKind);
+    TEST_ASSERT(devKind == LearningModelDeviceKind::Cpu, "Device kind must be Cpu");
+
+    ILearningModelSession* pSession = nullptr;
+    hr = WinMLCreateSession(pModel, pDevice, &pSession);
+    TEST_ASSERT(hr == 0 && pSession != nullptr, "WinMLCreateSession must succeed");
+
+    const int64_t mlpInShape[2] = { 1, 4 };
+    const float mlpInData[4] = { 0.5f, 1.2f, 0.8f, 2.1f };
+    ITensor* pMlpInTensor = nullptr;
+    WinMLCreateTensorFloat(mlpInShape, 2, mlpInData, 4, &pMlpInTensor);
+
+    auto* pBinding = new CLearningModelBindingImpl();
+    pBinding->BindTensor(L"input", pMlpInTensor);
+    pMlpInTensor->Release();
+
+    ILearningModelEvaluationResult* pEvalResult = nullptr;
+    hr = pSession->Evaluate(pBinding, L"corr-mlp-test-01", &pEvalResult);
+    TEST_ASSERT(hr == 0 && pEvalResult != nullptr, "Session Evaluate must return S_OK and valid result");
+
+    bool evalSuccess = false;
+    pEvalResult->Succeeded(&evalSuccess);
+    TEST_ASSERT(evalSuccess, "Evaluation must report success");
+
+    wchar_t corrBuf[64]{};
+    uint32_t corrLen = 64;
+    pEvalResult->GetCorrelationId(corrBuf, &corrLen);
+    TEST_ASSERT(std::wcscmp(corrBuf, L"corr-mlp-test-01") == 0, "Correlation ID must match");
+
+    void* pOutProbVoid = nullptr;
+    pEvalResult->GetOutputByName(L"probabilities", &pOutProbVoid);
+    TEST_ASSERT(pOutProbVoid != nullptr, "Output 'probabilities' must be found");
+
+    auto* pOutProbTensor = static_cast<ITensor*>(pOutProbVoid);
+    size_t probCount = 0;
+    pOutProbTensor->GetElementCount(&probCount);
+    TEST_ASSERT(probCount == 3, "Output probability tensor must contain 3 classes");
+
+    void* pProbBuf = nullptr;
+    size_t probBytes = 0;
+    pOutProbTensor->GetBuffer(&pProbBuf, &probBytes);
+    const float* fProbs = static_cast<const float*>(pProbBuf);
+    float probSum = fProbs[0] + fProbs[1] + fProbs[2];
+    TEST_ASSERT(std::abs(probSum - 1.0f) < 1e-4f, "Class probabilities must sum to 1.0 (softmax invariant)");
+    TEST_ASSERT(fProbs[0] >= 0.0f && fProbs[1] >= 0.0f && fProbs[2] >= 0.0f, "All probabilities must be non-negative");
+
+    pOutProbTensor->Release();
+    pEvalResult->Release();
+    pBinding->Release();
+    pSession->Release();
+    pDevice->Release();
+    pModel->Release();
+
+    // 8. Convolutional Vision Network Evaluation (ConvNet Model)
+    ILearningModel* pConvModel = nullptr;
+    hr = pStatics->LoadFromFilePath(L"convnet_benchmark.onnx", &pConvModel);
+    TEST_ASSERT(hr == 0 && pConvModel != nullptr, "Load ConvNet model must succeed");
+
+    ILearningModelDevice* pConvDev = nullptr;
+    WinMLCreateDevice(LearningModelDeviceKind::Cpu, &pConvDev);
+    ILearningModelSession* pConvSession = nullptr;
+    WinMLCreateSession(pConvModel, pConvDev, &pConvSession);
+
+    std::vector<float> sampleImg(36, 0.2f);
+    for (size_t y = 0; y < 6; ++y) {
+        sampleImg[y * 6 + 2] = 1.0f;
+        sampleImg[y * 6 + 3] = 1.0f;
+    }
+    const int64_t imgShape[4] = { 1, 1, 6, 6 };
+    ITensor* pImgTensor = nullptr;
+    WinMLCreateTensorFloat(imgShape, 4, sampleImg.data(), 36, &pImgTensor);
+
+    auto* pConvBinding = new CLearningModelBindingImpl();
+    pConvBinding->BindTensor(L"image", pImgTensor);
+    pImgTensor->Release();
+
+    ILearningModelEvaluationResult* pConvResult = nullptr;
+    hr = pConvSession->Evaluate(pConvBinding, L"corr-conv-test", &pConvResult);
+    TEST_ASSERT(hr == 0 && pConvResult != nullptr, "ConvNet forward pass must succeed");
+
+    void* pClassProbsVoid = nullptr;
+    pConvResult->GetOutputByName(L"class_probs", &pClassProbsVoid);
+    TEST_ASSERT(pClassProbsVoid != nullptr, "Output 'class_probs' must be present");
+
+    auto* pClassProbsTensor = static_cast<ITensor*>(pClassProbsVoid);
+    size_t cCount = 0;
+    pClassProbsTensor->GetElementCount(&cCount);
+    TEST_ASSERT(cCount == 2, "ConvNet output must have 2 classes");
+
+    void* pCPBuf = nullptr;
+    size_t cpBytes = 0;
+    pClassProbsTensor->GetBuffer(&pCPBuf, &cpBytes);
+    const float* cpData = static_cast<const float*>(pCPBuf);
+    float cpSum = cpData[0] + cpData[1];
+    TEST_ASSERT(std::abs(cpSum - 1.0f) < 1e-4f, "ConvNet class probabilities must sum to 1.0");
+
+    pClassProbsTensor->Release();
+    pConvResult->Release();
+    pConvBinding->Release();
+    pConvSession->Release();
+    pConvDev->Release();
+    pConvModel->Release();
+
+    pStatics->Release();
+
+    // 9. WinRT Activation Factory Verification
+    void* pModelFactory = nullptr;
+    hr = DllGetActivationFactory(reinterpret_cast<HSTRING>(const_cast<wchar_t*>(L"Windows.AI.MachineLearning.LearningModel")), &pModelFactory);
+    TEST_ASSERT(hr == 0 && pModelFactory != nullptr, "DllGetActivationFactory for LearningModel must succeed");
+    static_cast<ILearningModelStatics*>(pModelFactory)->Release();
+
+    void* pTensorFactory = nullptr;
+    hr = DllGetActivationFactory(reinterpret_cast<HSTRING>(const_cast<wchar_t*>(L"Windows.AI.MachineLearning.TensorFloat")), &pTensorFactory);
+    TEST_ASSERT(hr == 0 && pTensorFactory != nullptr, "DllGetActivationFactory for TensorFloat must succeed");
+    static_cast<ITensorFloatStatics*>(pTensorFactory)->Release();
+
+    void* pRoFactory = nullptr;
+    hr = RoGetActivationFactory(reinterpret_cast<HSTRING>(const_cast<wchar_t*>(L"Windows.AI.MachineLearning.LearningModel")), IID_ILearningModelStatics, &pRoFactory);
+    TEST_ASSERT(hr == 0 && pRoFactory != nullptr, "RoGetActivationFactory for LearningModel must succeed");
+    static_cast<ILearningModelStatics*>(pRoFactory)->Release();
+
+    // 10. Shell Command Execution Verification
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("winml test", oss);
+    TEST_ASSERT(shellRet == 0, "winml test shell command must return 0");
+    TEST_ASSERT(oss.str().find("Windows Machine Learning (WinML) Diagnostics & Self-test passed cleanly") != std::string::npos,
+                "winml test output must report success message");
+
+    oss.str("");
+    shellRet = proc.execute("winml info", oss);
+    TEST_ASSERT(shellRet == 0, "winml info shell command must return 0");
+    TEST_ASSERT(oss.str().find("windows.ai.machinelearning.dll") != std::string::npos,
+                "winml info output must reference runtime DLL");
+
+    oss.str("");
+    shellRet = proc.execute("winml run 1.0 0.5 2.0 0.1", oss);
+    TEST_ASSERT(shellRet == 0, "winml run shell command must return 0");
+    TEST_ASSERT(oss.str().find("Top Classification") != std::string::npos,
+                "winml run output must report classification result");
+
+    oss.str("");
+    shellRet = proc.execute("winml conv", oss);
+    TEST_ASSERT(shellRet == 0, "winml conv shell command must return 0");
+    TEST_ASSERT(oss.str().find("Class Probabilities") != std::string::npos,
+                "winml conv output must report ConvNet probabilities");
+
+    std::cout << "[TEST] Suite 127: Windows Machine Learning (WinML) & Sovereign Neural Inference Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite126")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite127")) {
+        RUN_TEST(Test_WindowsMachineLearning_WinML_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite126") {
         RUN_TEST(Test_WindowsMedia_OCR_Subsystem);
         return g_FailedTests;
     }
@@ -29621,6 +29942,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSpellCheck_Linguistic_Subsystem);
     RUN_TEST(Test_WindowsSpeech_SAPI_Subsystem);
     RUN_TEST(Test_WindowsMedia_OCR_Subsystem);
+    RUN_TEST(Test_WindowsMachineLearning_WinML_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

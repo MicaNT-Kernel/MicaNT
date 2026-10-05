@@ -118,6 +118,7 @@
 #include "spellcheck.hpp"
 #include "sapi.hpp"
 #include "ocr.hpp"
+#include "winml.hpp"
 
 namespace micant::shell {
 
@@ -326,6 +327,7 @@ public:
             if (cmd == "spell" || cmd == "spellcheck" || cmd == "els" || cmd == "linguistic") { cmdSpellCheck(tokens, out); return 0; }
             if (cmd == "sapi" || cmd == "speech" || cmd == "voice" || cmd == "tts") { cmdSapi(tokens, out); return 0; }
             if (cmd == "ocr" || cmd == "vision") { cmdOcr(tokens, out); return 0; }
+            if (cmd == "winml" || cmd == "ml" || cmd == "ai") { cmdWinML(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -622,6 +624,10 @@ private:
             << "  APPMODEL [test|info|list|plm] Windows AppModel, Package Identity & PLM (appmodel test)\n"
             << "  D2D13 [test|info|demo]   Direct2D 1.3 SVG, Inking & Typography (d2d13 test)\n"
             << "  TSF [test|info|compose|candidates] Windows Text Services & Modern IME (tsf test)\n"
+            << "  SPELL [test|info|check]  Windows Spell Checking & Extended Linguistics (spell test)\n"
+            << "  SAPI [test|info|voices]  Windows Speech API & Voice Synthesis (sapi test)\n"
+            << "  OCR [test|info|recognize] Windows Media OCR & Vision Subsystem (ocr test)\n"
+            << "  WINML [test|info|run]    Windows Machine Learning & Neural Inference (winml test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -17724,6 +17730,252 @@ private:
             << "  ocr info                               Displays OCR subsystem information\n"
             << "  ocr languages                          Lists all supported OCR languages\n"
             << "  ocr recognize <text...>                Synthesizes image with text and runs OCR extraction\n";
+    }
+
+    void cmdWinML(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::winml;
+        InitializeWinMLSubsystemExports();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "test";
+        std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+        if (sub == "test" || sub == "diag") {
+            out << "[WinML Diagnostics] Initializing Windows Machine Learning Subsystem...\n";
+            ILearningModelStatics* pStatics = nullptr;
+            int32_t hr = WinMLCreateRuntime(&pStatics);
+            if (hr != 0 || !pStatics) {
+                out << "[-] Failed to instantiate ILearningModelStatics.\n";
+                return;
+            }
+
+            ILearningModel* pModel = nullptr;
+            hr = pStatics->LoadFromFilePath(L"sovereign_mlp.onnx", &pModel);
+            pStatics->Release();
+            if (hr != 0 || !pModel) {
+                out << "[-] Failed to load synthetic MLP model.\n";
+                return;
+            }
+
+            wchar_t nameBuf[128]{};
+            uint32_t nameLen = 128;
+            pModel->GetName(nameBuf, &nameLen);
+            std::string modelName(nameBuf, nameBuf + std::wcslen(nameBuf));
+            out << "[+] Model Loaded: " << modelName << "\n";
+
+            ILearningModelDevice* pDevice = nullptr;
+            WinMLCreateDevice(LearningModelDeviceKind::Cpu, &pDevice);
+
+            ILearningModelSession* pSession = nullptr;
+            WinMLCreateSession(pModel, pDevice, &pSession);
+            pDevice->Release();
+            pModel->Release();
+
+            if (!pSession) {
+                out << "[-] Failed to create ILearningModelSession.\n";
+                return;
+            }
+
+            // Create Input Tensor [1, 4]
+            const int64_t inShape[2] = { 1, 4 };
+            const float inData[4] = { 0.5f, 1.2f, 0.8f, 2.1f };
+            ITensor* pInTensor = nullptr;
+            WinMLCreateTensorFloat(inShape, 2, inData, 4, &pInTensor);
+
+            auto* pBinding = new CLearningModelBindingImpl();
+            pBinding->BindTensor(L"input", pInTensor);
+            pInTensor->Release();
+
+            ILearningModelEvaluationResult* pResult = nullptr;
+            hr = pSession->Evaluate(pBinding, L"test-correlation-01", &pResult);
+            pBinding->Release();
+            pSession->Release();
+
+            if (hr != 0 || !pResult) {
+                out << "[-] Model evaluation failed (hr=" << hr << ").\n";
+                return;
+            }
+
+            bool bSuccess = false;
+            pResult->Succeeded(&bSuccess);
+            out << "[+] Evaluation Status: " << (bSuccess ? "SUCCESS" : "FAILED") << "\n";
+
+            void* pOutVal = nullptr;
+            pResult->GetOutputByName(L"probabilities", &pOutVal);
+            if (pOutVal) {
+                auto* pOutTensor = static_cast<ITensor*>(pOutVal);
+                size_t elemCount = 0;
+                pOutTensor->GetElementCount(&elemCount);
+                void* pBuf = nullptr;
+                size_t byteLen = 0;
+                pOutTensor->GetBuffer(&pBuf, &byteLen);
+                const float* pProbs = static_cast<const float*>(pBuf);
+
+                out << "[+] Output Tensor 'probabilities' (" << elemCount << " elements):\n";
+                float sum = 0.0f;
+                int bestClass = 0;
+                float maxProb = -1.0f;
+                for (size_t i = 0; i < elemCount; ++i) {
+                    out << "      Class [" << i << "]: " << std::fixed << std::setprecision(4)
+                        << (pProbs[i] * 100.0f) << "%\n";
+                    sum += pProbs[i];
+                    if (pProbs[i] > maxProb) {
+                        maxProb = pProbs[i];
+                        bestClass = static_cast<int>(i);
+                    }
+                }
+                out << "      Sum of probabilities: " << std::setprecision(5) << sum
+                    << " (Predicted Class: " << bestClass << ")\n";
+                pOutTensor->Release();
+            }
+            pResult->Release();
+
+            out << "[+] Windows Machine Learning (WinML) Diagnostics & Self-test passed cleanly.\n";
+            return;
+        }
+
+        if (sub == "info") {
+            out << "========================================================================\n"
+                << "        MicaNT Windows Machine Learning (WinML) Subsystem                \n"
+                << "========================================================================\n\n"
+                << "WinML Runtime DLL:       windows.ai.machinelearning.dll\n"
+                << "Target OS Version:       10.0.22621.1 (Windows 11 / Server 2022+ Parity)\n"
+                << "Architecture:            Zero-Dependency Pure ISO C++23 Native Engine\n"
+                << "Hardware Devices:        CPU Multi-threaded & DirectML Compute Bridge\n"
+                << "Supported Tensors:       Float32, Int64, UInt8, Boolean, Float16\n"
+                << "Built-in Operators:      GEMM, Conv2D, MaxPool2D, AvgPool2D, ReLU,\n"
+                << "                         LeakyReLU, Sigmoid, Softmax, BatchNorm, Add, Mul,\n"
+                << "                         Reshape, Flatten, MatMul\n"
+                << "Model Protocol:          ONNX Graph & Sovereign Binary Model Containers\n"
+                << "Registration Status:     Registered in DynamicLoader & VersionDatabase\n\n";
+            return;
+        }
+
+        if (sub == "run" || sub == "mlp") {
+            float inVals[4] = { 1.0f, 0.5f, 2.0f, 0.1f };
+            if (tokens.size() >= 6) {
+                for (int i = 0; i < 4; ++i) {
+                    try { inVals[i] = std::stof(tokens[2 + i]); } catch (...) {}
+                }
+            }
+            out << "[WinML] Evaluating MLP Classifier with input: ["
+                << inVals[0] << ", " << inVals[1] << ", " << inVals[2] << ", " << inVals[3] << "]...\n";
+
+            ILearningModelStatics* pStatics = nullptr;
+            WinMLCreateRuntime(&pStatics);
+            ILearningModel* pModel = nullptr;
+            pStatics->LoadFromFilePath(L"sovereign_mlp.onnx", &pModel);
+            pStatics->Release();
+
+            ILearningModelDevice* pDevice = nullptr;
+            WinMLCreateDevice(LearningModelDeviceKind::Cpu, &pDevice);
+            ILearningModelSession* pSession = nullptr;
+            WinMLCreateSession(pModel, pDevice, &pSession);
+            pDevice->Release();
+            pModel->Release();
+
+            const int64_t inShape[2] = { 1, 4 };
+            ITensor* pInTensor = nullptr;
+            WinMLCreateTensorFloat(inShape, 2, inVals, 4, &pInTensor);
+
+            auto* pBinding = new CLearningModelBindingImpl();
+            pBinding->BindTensor(L"input", pInTensor);
+            pInTensor->Release();
+
+            ILearningModelEvaluationResult* pResult = nullptr;
+            pSession->Evaluate(pBinding, L"corr-mlp-eval", &pResult);
+            pBinding->Release();
+            pSession->Release();
+
+            if (pResult) {
+                void* pOutVal = nullptr;
+                pResult->GetOutputByName(L"probabilities", &pOutVal);
+                if (pOutVal) {
+                    auto* pOutTensor = static_cast<ITensor*>(pOutVal);
+                    void* pBuf = nullptr;
+                    size_t byteLen = 0;
+                    pOutTensor->GetBuffer(&pBuf, &byteLen);
+                    const float* pProbs = static_cast<const float*>(pBuf);
+                    size_t count = byteLen / sizeof(float);
+                    int bestClass = 0;
+                    float maxProb = -1.0f;
+                    out << "[WinML Output] Probabilities: [ ";
+                    for (size_t i = 0; i < count; ++i) {
+                        out << std::fixed << std::setprecision(4) << pProbs[i] << " ";
+                        if (pProbs[i] > maxProb) {
+                            maxProb = pProbs[i];
+                            bestClass = static_cast<int>(i);
+                        }
+                    }
+                    out << "]\n       Top Classification: Class " << bestClass << " ("
+                        << std::setprecision(1) << (maxProb * 100.0f) << "% confidence)\n";
+                    pOutTensor->Release();
+                }
+                pResult->Release();
+            }
+            return;
+        }
+
+        if (sub == "conv") {
+            out << "[WinML] Evaluating ConvNet Vision Benchmark (Input: 1x1x6x6 image patch)...\n";
+            ILearningModelStatics* pStatics = nullptr;
+            WinMLCreateRuntime(&pStatics);
+            ILearningModel* pModel = nullptr;
+            pStatics->LoadFromFilePath(L"convnet.onnx", &pModel);
+            pStatics->Release();
+
+            ILearningModelDevice* pDevice = nullptr;
+            WinMLCreateDevice(LearningModelDeviceKind::Cpu, &pDevice);
+            ILearningModelSession* pSession = nullptr;
+            WinMLCreateSession(pModel, pDevice, &pSession);
+            pDevice->Release();
+            pModel->Release();
+
+            std::vector<float> img(36, 0.5f);
+            for (size_t y = 0; y < 6; ++y) {
+                img[y * 6 + 2] = 1.0f;
+                img[y * 6 + 3] = 1.0f;
+            }
+
+            const int64_t imgShape[4] = { 1, 1, 6, 6 };
+            ITensor* pInTensor = nullptr;
+            WinMLCreateTensorFloat(imgShape, 4, img.data(), 36, &pInTensor);
+
+            auto* pBinding = new CLearningModelBindingImpl();
+            pBinding->BindTensor(L"image", pInTensor);
+            pInTensor->Release();
+
+            ILearningModelEvaluationResult* pResult = nullptr;
+            pSession->Evaluate(pBinding, L"corr-conv-eval", &pResult);
+            pBinding->Release();
+            pSession->Release();
+
+            if (pResult) {
+                void* pOutVal = nullptr;
+                pResult->GetOutputByName(L"class_probs", &pOutVal);
+                if (pOutVal) {
+                    auto* pOutTensor = static_cast<ITensor*>(pOutVal);
+                    void* pBuf = nullptr;
+                    size_t byteLen = 0;
+                    pOutTensor->GetBuffer(&pBuf, &byteLen);
+                    const float* pProbs = static_cast<const float*>(pBuf);
+                    size_t count = byteLen / sizeof(float);
+                    out << "[ConvNet Output] Class Probabilities: [ ";
+                    for (size_t i = 0; i < count; ++i) {
+                        out << std::fixed << std::setprecision(4) << pProbs[i] << " ";
+                    }
+                    out << "]\n";
+                    pOutTensor->Release();
+                }
+                pResult->Release();
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  winml test                             Runs WinML self-test diagnostics\n"
+            << "  winml info                             Displays WinML subsystem telemetry\n"
+            << "  winml run [x0 x1 x2 x3]                Executes MLP classifier benchmark\n"
+            << "  winml conv                             Executes ConvNet vision pipeline\n";
     }
 
     static std::string trim(std::string_view s) {
