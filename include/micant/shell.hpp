@@ -111,6 +111,7 @@
 #include "dcomp.hpp"
 #include "uicomposition.hpp"
 #include "wcs.hpp"
+#include "pointer.hpp"
 
 namespace micant::shell {
 
@@ -312,6 +313,7 @@ public:
             if (cmd == "dcomp" || cmd == "directcomposition" || cmd == "compositor") { cmdDirectComposition(tokens, out); return 0; }
             if (cmd == "uicomp" || cmd == "composition" || cmd == "visuals") { cmdUIComposition(tokens, out); return 0; }
             if (cmd == "wcs" || cmd == "colorsystem" || cmd == "colormgr") { cmdColorSystem(tokens, out); return 0; }
+            if (cmd == "pointer" || cmd == "touch" || cmd == "ink") { cmdPointer(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -604,6 +606,7 @@ private:
             << "  DCOMP [test|info|compose] Windows DirectComposition Modern Compositor (dcomp test)\n"
             << "  UICOMP [test|info|demo]  Windows UI Composition & Scene-Graph Visual Layer (uicomp test)\n"
             << "  WCS [test|info|gamut]    Windows Color System & HDR Subsystem (wcs test)\n"
+            << "  POINTER [test|info|inject] Windows Pointer Device & Touch Subsystem (pointer test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -16351,6 +16354,173 @@ private:
             << "  wcs test                                Runs Windows Color System & HDR self-tests\n"
             << "  wcs info                                Displays WCS and ICM subsystem telemetry\n"
             << "  wcs gamut                               Analyzes wide color gamut & PQ luminance steps\n";
+    }
+
+    void cmdPointer(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::pointer;
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[Pointer] Running Modern Pointer Device & Inking Subsystem Verification...\n";
+            int passed = 0;
+
+            // 1. Device Enumeration
+            uint32_t devCount = 0;
+            if (GetPointerDevices(&devCount, nullptr) && devCount >= 3) {
+                std::vector<POINTER_DEVICE_INFO> devs(devCount);
+                if (GetPointerDevices(&devCount, devs.data())) {
+                    passed++;
+                    out << "  [PASS] 1. GetPointerDevices (" << devCount << " modern digitizer/touch devices enumerated)\n";
+                }
+            }
+
+            // 2. Mouse In Pointer Toggle
+            BOOL origState = IsMouseInPointerEnabled();
+            EnableMouseInPointer(TRUE_VAL);
+            if (IsMouseInPointerEnabled() == TRUE_VAL) {
+                passed++;
+                out << "  [PASS] 2. EnableMouseInPointer (Mouse promoted to Unified Pointer Type)\n";
+            }
+            EnableMouseInPointer(origState);
+
+            // 3. Multi-Touch Contact Injection & Query
+            POINTER_TOUCH_INFO touch{};
+            touch.pointerInfo.pointerId = 101;
+            touch.pointerInfo.frameId = PointerSubsystemManager::get().NextFrameId();
+            touch.pointerInfo.pointerType = PT_TOUCH;
+            touch.pointerInfo.pointerFlags = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_PRIMARY | POINTER_FLAG_DOWN;
+            touch.pointerInfo.ptPixelLocation = { 640, 360 };
+            touch.rcContact = { 630, 350, 650, 370 };
+            touch.pressure = 768;
+            touch.orientation = 45;
+            PointerSubsystemManager::get().InjectTouch(touch);
+
+            POINTER_INFO qPointer{};
+            if (GetPointerInfo(101, &qPointer) && qPointer.pointerId == 101 && qPointer.ptPixelLocation.x == 640) {
+                passed++;
+                out << "  [PASS] 3. GetPointerInfo (Touch contact query: (640, 360), Frame: " << qPointer.frameId << ")\n";
+            }
+
+            POINTER_TOUCH_INFO qTouch{};
+            if (GetPointerTouchInfo(101, &qTouch) && qTouch.rcContact.right == 650 && qTouch.pressure == 768) {
+                passed++;
+                out << "  [PASS] 4. GetPointerTouchInfo (Subpixel Contact Rect [630, 350, 650, 370], Pressure: 768)\n";
+            }
+
+            // 4. Stylus / Pen Inking Injection & Query
+            POINTER_PEN_INFO pen{};
+            pen.pointerInfo.pointerId = 202;
+            pen.pointerInfo.frameId = PointerSubsystemManager::get().NextFrameId();
+            pen.pointerInfo.pointerType = PT_PEN;
+            pen.pointerInfo.pointerFlags = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON | POINTER_FLAG_UPDATE;
+            pen.pointerInfo.ptPixelLocation = { 800, 450 };
+            pen.penFlags = PEN_FLAG_BARREL;
+            pen.pressure = 3200;
+            pen.rotation = 90;
+            pen.tiltX = 25;
+            pen.tiltY = -10;
+            PointerSubsystemManager::get().InjectPen(pen);
+
+            POINTER_PEN_INFO qPen{};
+            if (GetPointerPenInfo(202, &qPen) && qPen.pressure == 3200 && qPen.tiltX == 25 && qPen.penFlags == PEN_FLAG_BARREL) {
+                passed++;
+                out << "  [PASS] 5. GetPointerPenInfo (Wacom EMR Pen: 3200/4096 Pressure, Tilt [25, -10], Barrel Button)\n";
+            }
+
+            // 5. Pointer Type Query
+            uint32_t ptType = 0;
+            if (GetPointerType(101, &ptType) && ptType == PT_TOUCH) {
+                if (GetPointerType(202, &ptType) && ptType == PT_PEN) {
+                    passed++;
+                    out << "  [PASS] 6. GetPointerType (Type distinction: Pointer 101 -> PT_TOUCH, 202 -> PT_PEN)\n";
+                }
+            }
+
+            // 6. Pointer History Retrieval
+            uint32_t histCount = 4;
+            POINTER_INFO histArray[4]{};
+            if (GetPointerInfoHistory(101, &histCount, histArray) && histCount >= 1) {
+                passed++;
+                out << "  [PASS] 7. GetPointerInfoHistory (High-rate packet history buffer retrieved: " << histCount << " samples)\n";
+            }
+
+            // 7. Device Rects & Monitor Mapping
+            user32::RECT devRect{}, dispRect{};
+            if (GetPointerDeviceRects(nullptr, &devRect, &dispRect) && devRect.right == 1920 && dispRect.bottom == 1080) {
+                passed++;
+                out << "  [PASS] 8. GetPointerDeviceRects (Digitizer surface mapped to 1920x1080 display geometry)\n";
+            }
+
+            // 8. Target Registration
+            if (RegisterPointerInputTarget(nullptr, PT_TOUCH) && UnregisterPointerInputTarget(nullptr, PT_TOUCH)) {
+                passed++;
+                out << "  [PASS] 9. Register/UnregisterPointerInputTarget (Window routing lifecycle verified)\n";
+            }
+
+            // 9. WinRT PointerPoint Object Model
+            auto* pProps = new PointerPointPropertiesImpl(0.78f, true, { 100, 100, 120, 120 }, 15, -8);
+            auto* pPoint = new PointerPointImpl(303, 50, { 550, 420 }, PT_PEN, pProps);
+            if (pPoint->GetPointerId() == 303 && pPoint->GetProperties()->GetPressure() == 0.78f && pPoint->GetProperties()->GetTiltX() == 15) {
+                passed++;
+                out << "  [PASS] 10. WinRT Windows.UI.Input.PointerPoint Interface (Pressure: 78%, TiltX: 15 deg)\n";
+            }
+            pPoint->Release();
+            pProps->Release();
+
+            out << "[Pointer] Tests Finished: " << passed << " / 10 Subsystem Invariants Verified.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "       MicaNT Modern Pointer & Touch Input Subsystem Telemetry          \n"
+                << "========================================================================\n\n"
+                << "  Architecture:           Windows Pointer Device Subsystem & WinRT Input\n"
+                << "  Native Library:         user32.dll & windows.ui.input.dll (Version 10.0.22621.1)\n"
+                << "  Active Devices:         3 Sovereign Hardware Pointer Adapters\n"
+                << "  Mouse-In-Pointer:       " << (IsMouseInPointerEnabled() ? "ENABLED (WM_POINTER)" : "DISABLED (WM_MOUSE)") << "\n"
+                << "  Active Pointer Feeds:   " << PointerSubsystemManager::get().GetActivePointerCount() << " live contact(s)\n\n"
+                << "  Attached Pointer Devices:\n";
+            const auto& devs = PointerSubsystemManager::get().GetDevices();
+            for (size_t i = 0; i < devs.size(); ++i) {
+                std::wstring wName(devs[i].productString);
+                std::string sName(wName.begin(), wName.end());
+                out << "    [" << i << "] Type: "
+                    << (devs[i].pointerDeviceType == PT_TOUCH ? "Multi-Touch Screen" :
+                        devs[i].pointerDeviceType == PT_PEN   ? "Precision Stylus" : "Precision Touchpad")
+                    << " | Max Contacts: " << devs[i].maxActiveContacts
+                    << "\n        Product: " << sName << "\n";
+            }
+            out << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "inject") {
+            out << "[Pointer] Injecting 5-Point Multi-Touch Pinch & Rotate Gesture...\n";
+            uint32_t frame = PointerSubsystemManager::get().NextFrameId();
+            for (int i = 0; i < 5; ++i) {
+                POINTER_TOUCH_INFO t{};
+                t.pointerInfo.pointerId = 1000 + i;
+                t.pointerInfo.frameId = frame;
+                t.pointerInfo.pointerType = PT_TOUCH;
+                t.pointerInfo.pointerFlags = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | (i == 0 ? POINTER_FLAG_PRIMARY : 0);
+                t.pointerInfo.ptPixelLocation = { 500 + i * 40, 300 + i * 30 };
+                t.rcContact = { 490 + i * 40, 290 + i * 30, 510 + i * 40, 310 + i * 30 };
+                t.pressure = 600 + i * 50;
+                PointerSubsystemManager::get().InjectTouch(t);
+
+                out << "  [CONTACT " << i << "] ID: " << t.pointerInfo.pointerId
+                    << " Location: (" << t.pointerInfo.ptPixelLocation.x << ", " << t.pointerInfo.ptPixelLocation.y << ")"
+                    << " Pressure: " << t.pressure << "/1024"
+                    << (i == 0 ? " [PRIMARY]" : "") << "\n";
+            }
+            out << "  [Pointer] Frame " << frame << " Multi-Touch Gesture Dispatched to Visual Tree.\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  pointer test                            Runs Pointer Device & Inking self-tests\n"
+            << "  pointer info                            Displays pointer device manager telemetry\n"
+            << "  pointer inject                          Simulates 5-point multi-touch gesture packets\n";
     }
 
     static std::string trim(std::string_view s) {

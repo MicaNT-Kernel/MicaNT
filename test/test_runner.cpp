@@ -27875,8 +27875,183 @@ void Test_WindowsColorSystem_Subsystem() {
     std::cout << "[TEST] Suite 119: Windows Color System (WCS) & Advanced HDR Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 120: Windows Pointer Device & Modern Touch/Inking Subsystem
+// ============================================================================
+void Test_WindowsPointerDevice_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 120: Windows Pointer Device & Modern Touch/Inking Subsystem      \n";
+    std::cout << "========================================================================\n";
+
+    using namespace micant::pointer;
+    InitializePointerExports();
+
+    // 1. Dynamic Module Export Verification
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("user32.dll", "GetPointerType") != nullptr,
+                "user32.dll must export GetPointerType");
+    TEST_ASSERT(loader.getExport("user32.dll", "GetPointerInfo") != nullptr,
+                "user32.dll must export GetPointerInfo");
+    TEST_ASSERT(loader.getExport("user32.dll", "GetPointerTouchInfo") != nullptr,
+                "user32.dll must export GetPointerTouchInfo");
+    TEST_ASSERT(loader.getExport("user32.dll", "GetPointerPenInfo") != nullptr,
+                "user32.dll must export GetPointerPenInfo");
+    TEST_ASSERT(loader.getExport("user32.dll", "GetPointerInfoHistory") != nullptr,
+                "user32.dll must export GetPointerInfoHistory");
+    TEST_ASSERT(loader.getExport("user32.dll", "GetPointerDevices") != nullptr,
+                "user32.dll must export GetPointerDevices");
+    TEST_ASSERT(loader.getExport("user32.dll", "EnableMouseInPointer") != nullptr,
+                "user32.dll must export EnableMouseInPointer");
+    TEST_ASSERT(loader.getExport("user32.dll", "IsMouseInPointerEnabled") != nullptr,
+                "user32.dll must export IsMouseInPointerEnabled");
+
+    TEST_ASSERT(loader.getExport("windows.ui.input.dll", "GetPointerType") != nullptr,
+                "windows.ui.input.dll must export GetPointerType");
+    TEST_ASSERT(loader.getExport("windows.ui.input.dll", "GetPointerInfo") != nullptr,
+                "windows.ui.input.dll must export GetPointerInfo");
+
+    // 2. Version Database Verification
+    const auto* modInput = version::VersionDatabase::Instance().GetModuleInfo("windows.ui.input.dll");
+    TEST_ASSERT(modInput != nullptr, "VersionDatabase must contain windows.ui.input.dll");
+    TEST_ASSERT(modInput->stringTable.at("FileVersion") == "10.0.22621.1",
+                "windows.ui.input.dll FileVersion must be 10.0.22621.1");
+
+    // 3. Pointer Device Enumeration
+    uint32_t devCount = 0;
+    BOOL bRes = GetPointerDevices(&devCount, nullptr);
+    TEST_ASSERT(bRes == TRUE_VAL && devCount >= 3, "GetPointerDevices must report >= 3 attached digitizer devices");
+
+    std::vector<POINTER_DEVICE_INFO> devs(devCount);
+    bRes = GetPointerDevices(&devCount, devs.data());
+    TEST_ASSERT(bRes == TRUE_VAL, "GetPointerDevices buffer retrieval must succeed");
+    TEST_ASSERT(devs[0].pointerDeviceType == PT_TOUCH && devs[0].maxActiveContacts == 10,
+                "Device 0 must be 10-contact Multi-Touch Screen");
+    TEST_ASSERT(devs[1].pointerDeviceType == PT_PEN && devs[1].maxActiveContacts == 1,
+                "Device 1 must be Precision Stylus Digitizer");
+    TEST_ASSERT(devs[2].pointerDeviceType == PT_TOUCHPAD && devs[2].maxActiveContacts == 5,
+                "Device 2 must be Precision Touchpad");
+
+    // 4. Mouse-In-Pointer Mode Promotion
+    BOOL origMouseMode = IsMouseInPointerEnabled();
+    EnableMouseInPointer(TRUE_VAL);
+    TEST_ASSERT(IsMouseInPointerEnabled() == TRUE_VAL, "EnableMouseInPointer must set active state");
+    EnableMouseInPointer(origMouseMode);
+
+    // 5. Multi-Touch Contact Event Injection & Spatial Geometry
+    POINTER_TOUCH_INFO touch{};
+    touch.pointerInfo.pointerId = 501;
+    touch.pointerInfo.frameId = PointerSubsystemManager::get().NextFrameId();
+    touch.pointerInfo.pointerType = PT_TOUCH;
+    touch.pointerInfo.pointerFlags = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_PRIMARY | POINTER_FLAG_DOWN;
+    touch.pointerInfo.ptPixelLocation = { 800, 600 };
+    touch.rcContact = { 790, 590, 810, 610 };
+    touch.pressure = 800;
+    touch.orientation = 90;
+    PointerSubsystemManager::get().InjectTouch(touch);
+
+    POINTER_INFO qPointer{};
+    bRes = GetPointerInfo(501, &qPointer);
+    TEST_ASSERT(bRes == TRUE_VAL && qPointer.pointerId == 501, "GetPointerInfo for touch contact must succeed");
+    TEST_ASSERT(qPointer.ptPixelLocation.x == 800 && qPointer.ptPixelLocation.y == 600, "Touch location must match (800, 600)");
+    TEST_ASSERT(qPointer.pointerType == PT_TOUCH, "Pointer type must be PT_TOUCH");
+
+    POINTER_TOUCH_INFO qTouch{};
+    bRes = GetPointerTouchInfo(501, &qTouch);
+    TEST_ASSERT(bRes == TRUE_VAL, "GetPointerTouchInfo must succeed");
+    TEST_ASSERT(qTouch.rcContact.left == 790 && qTouch.rcContact.right == 810, "Contact bounding rect must match (790, 810)");
+    TEST_ASSERT(qTouch.pressure == 800, "Touch pressure must match 800");
+
+    // 6. Stylus / Pen Inking Injection with 4096 Pressure Levels & Tilt
+    POINTER_PEN_INFO pen{};
+    pen.pointerInfo.pointerId = 602;
+    pen.pointerInfo.frameId = PointerSubsystemManager::get().NextFrameId();
+    pen.pointerInfo.pointerType = PT_PEN;
+    pen.pointerInfo.pointerFlags = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON | POINTER_FLAG_UPDATE;
+    pen.pointerInfo.ptPixelLocation = { 960, 540 };
+    pen.penFlags = PEN_FLAG_BARREL;
+    pen.pressure = 3584; // 87.5% of 4096 pressure
+    pen.rotation = 180;
+    pen.tiltX = 20;
+    pen.tiltY = -12;
+    PointerSubsystemManager::get().InjectPen(pen);
+
+    POINTER_PEN_INFO qPen{};
+    bRes = GetPointerPenInfo(602, &qPen);
+    TEST_ASSERT(bRes == TRUE_VAL && qPen.pressure == 3584, "GetPointerPenInfo pressure must match 3584");
+    TEST_ASSERT(qPen.tiltX == 20 && qPen.tiltY == -12, "Pen tilt angles must match (20, -12)");
+    TEST_ASSERT((qPen.penFlags & PEN_FLAG_BARREL) != 0, "Barrel button flag must be asserted");
+
+    uint32_t penType = 0;
+    GetPointerType(602, &penType);
+    TEST_ASSERT(penType == PT_PEN, "Pointer 602 type must be PT_PEN");
+
+    // 7. High-Rate Packet History Buffer
+    uint32_t histCount = 8;
+    POINTER_INFO histBuffer[8]{};
+    bRes = GetPointerInfoHistory(501, &histCount, histBuffer);
+    TEST_ASSERT(bRes == TRUE_VAL && histCount >= 1, "GetPointerInfoHistory must retrieve history packets");
+
+    // 8. Device Surface Rect Mapping
+    user32::RECT devRect{}, dispRect{};
+    bRes = GetPointerDeviceRects(nullptr, &devRect, &dispRect);
+    TEST_ASSERT(bRes == TRUE_VAL && devRect.right == 1920 && dispRect.bottom == 1080,
+                "Pointer device display rect must match 1920x1080");
+
+    // 9. Input Target Registration Lifecycle
+    bRes = RegisterPointerInputTarget(nullptr, PT_TOUCH);
+    TEST_ASSERT(bRes == TRUE_VAL, "RegisterPointerInputTarget must succeed");
+    bRes = UnregisterPointerInputTarget(nullptr, PT_TOUCH);
+    TEST_ASSERT(bRes == TRUE_VAL, "UnregisterPointerInputTarget must succeed");
+
+    // 10. WinRT Windows.UI.Input.PointerPoint Object Model
+    auto* pProps = new PointerPointPropertiesImpl(0.85f, true, { 200, 200, 230, 230 }, 18, -6);
+    auto* pPoint = new PointerPointImpl(701, 100, { 1024, 768 }, PT_PEN, pProps);
+
+    IPointerPoint* pQueryPoint = nullptr;
+    int32_t hr = pPoint->QueryInterface(IID_IPointerPoint, reinterpret_cast<void**>(&pQueryPoint));
+    TEST_ASSERT(hr == 0 && pQueryPoint != nullptr, "QueryInterface for IPointerPoint must succeed");
+    TEST_ASSERT(pQueryPoint->GetPointerId() == 701, "PointerPoint ID must match 701");
+    TEST_ASSERT(pQueryPoint->GetPosition().x == 1024 && pQueryPoint->GetPosition().y == 768, "Position must match (1024, 768)");
+    TEST_ASSERT(pQueryPoint->GetPointerDeviceType() == PT_PEN, "Device type must match PT_PEN");
+
+    IPointerPointProperties* pReadProps = pQueryPoint->GetProperties();
+    TEST_ASSERT(pReadProps != nullptr, "PointerPoint must contain valid IPointerPointProperties");
+    TEST_ASSERT(std::abs(pReadProps->GetPressure() - 0.85f) < 1e-4f, "Pressure must match 0.85");
+    TEST_ASSERT(pReadProps->GetTiltX() == 18 && pReadProps->GetTiltY() == -6, "Tilt angles must match (18, -6)");
+
+    pQueryPoint->Release();
+    pPoint->Release();
+    pProps->Release();
+
+    // 11. Interactive Shell Verification (pointer test, pointer info, pointer inject)
+    shell::CommandShell shellEngine;
+    std::ostringstream testOut;
+    int rc = shellEngine.execute("pointer test", testOut);
+    TEST_ASSERT(rc == 0, "pointer test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("10 / 10 Subsystem Invariants Verified") != std::string::npos,
+                "pointer test must verify all 10 invariants");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("pointer info", infoOut);
+    TEST_ASSERT(rc == 0, "pointer info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("Windows Pointer Device Subsystem") != std::string::npos,
+                "pointer info must display subsystem telemetry");
+
+    std::ostringstream injectOut;
+    rc = shellEngine.execute("pointer inject", injectOut);
+    TEST_ASSERT(rc == 0, "pointer inject CLI command must return 0");
+    TEST_ASSERT(injectOut.str().find("Multi-Touch Gesture Dispatched") != std::string::npos,
+                "pointer inject must dispatch multi-touch gesture packets");
+
+    std::cout << "[TEST] Suite 120: Windows Pointer Device & Modern Touch/Inking Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite119")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite120")) {
+        RUN_TEST(Test_WindowsPointerDevice_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite119") {
         RUN_TEST(Test_WindowsColorSystem_Subsystem);
         return g_FailedTests;
     }
@@ -28056,6 +28231,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirectComposition_Subsystem);
     RUN_TEST(Test_WindowsUIComposition_Subsystem);
     RUN_TEST(Test_WindowsColorSystem_Subsystem);
+    RUN_TEST(Test_WindowsPointerDevice_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
