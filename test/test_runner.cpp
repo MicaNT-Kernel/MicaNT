@@ -27679,8 +27679,208 @@ void Test_WindowsUIComposition_Subsystem() {
     std::cout << "[TEST] Suite 118: Windows UI Composition & Modern Visual Layer Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 119: Windows Color System (WCS) & Advanced HDR Subsystem
+// ============================================================================
+void Test_WindowsColorSystem_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 119: Windows Color System (WCS) & Advanced HDR Subsystem         \n";
+    std::cout << "========================================================================\n";
+
+    using namespace micant::wcs;
+    InitializeWCSExports();
+
+    // 1. Dynamic Module Export Verification
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("mscms.dll", "OpenColorProfileW") != nullptr,
+                "mscms.dll must export OpenColorProfileW");
+    TEST_ASSERT(loader.getExport("mscms.dll", "OpenColorProfileA") != nullptr,
+                "mscms.dll must export OpenColorProfileA");
+    TEST_ASSERT(loader.getExport("mscms.dll", "CloseColorProfile") != nullptr,
+                "mscms.dll must export CloseColorProfile");
+    TEST_ASSERT(loader.getExport("mscms.dll", "GetColorProfileHeader") != nullptr,
+                "mscms.dll must export GetColorProfileHeader");
+    TEST_ASSERT(loader.getExport("mscms.dll", "SetColorProfileHeader") != nullptr,
+                "mscms.dll must export SetColorProfileHeader");
+    TEST_ASSERT(loader.getExport("mscms.dll", "GetStandardColorSpaceProfileW") != nullptr,
+                "mscms.dll must export GetStandardColorSpaceProfileW");
+    TEST_ASSERT(loader.getExport("mscms.dll", "CreateColorTransformW") != nullptr,
+                "mscms.dll must export CreateColorTransformW");
+    TEST_ASSERT(loader.getExport("mscms.dll", "TranslateColors") != nullptr,
+                "mscms.dll must export TranslateColors");
+    TEST_ASSERT(loader.getExport("mscms.dll", "TranslateBitmapBits") != nullptr,
+                "mscms.dll must export TranslateBitmapBits");
+    TEST_ASSERT(loader.getExport("mscms.dll", "CheckColors") != nullptr,
+                "mscms.dll must export CheckColors");
+    TEST_ASSERT(loader.getExport("mscms.dll", "WcsGetDefaultColorProfile") != nullptr,
+                "mscms.dll must export WcsGetDefaultColorProfile");
+
+    TEST_ASSERT(loader.getExport("icm32.dll", "OpenColorProfileW") != nullptr,
+                "icm32.dll must export OpenColorProfileW");
+    TEST_ASSERT(loader.getExport("icm32.dll", "CreateColorTransformW") != nullptr,
+                "icm32.dll must export CreateColorTransformW");
+
+    // 2. Version Database Verification
+    const auto* modMscms = version::VersionDatabase::Instance().GetModuleInfo("mscms.dll");
+    TEST_ASSERT(modMscms != nullptr, "VersionDatabase must contain mscms.dll");
+    TEST_ASSERT(modMscms->stringTable.at("FileVersion") == "10.0.22621.1",
+                "mscms.dll FileVersion must be 10.0.22621.1");
+
+    const auto* modIcm = version::VersionDatabase::Instance().GetModuleInfo("icm32.dll");
+    TEST_ASSERT(modIcm != nullptr, "VersionDatabase must contain icm32.dll");
+    TEST_ASSERT(modIcm->stringTable.at("FileVersion") == "10.0.22621.1",
+                "icm32.dll FileVersion must be 10.0.22621.1");
+
+    // 3. Profile Creation from Memory & Header Verification
+    wcs::PROFILEHEADER hdr{};
+    hdr.phSize = sizeof(wcs::PROFILEHEADER);
+    hdr.phCMMType = 0x5052534D; // 'PRSM'
+    hdr.phVersion = 0x04300000; // v4.3.0
+    hdr.phClass = 0x6D6E7472;   // 'mntr'
+    hdr.phDataColorSpace = 0x52474220; // 'RGB '
+    hdr.phConnectionSpace = 0x58595A20; // 'XYZ '
+    hdr.phSignature = 0x61637370; // 'acsp'
+    hdr.phPlatform = 0x4D534654; // 'MSFT'
+    hdr.phRenderingIntent = wcs::INTENT_PERCEPTUAL;
+    hdr.phCreator = 0x4D494341; // 'MICA'
+
+    wcs::PROFILE profMem{};
+    profMem.dwType = wcs::PROFILE_MEMBUFFER;
+    profMem.pProfileData = &hdr;
+    profMem.cbDataSize = sizeof(hdr);
+
+    wcs::HPROFILE hProf = wcs::OpenColorProfileW(&profMem, wcs::PROFILE_READ, 1, wcs::OPEN_EXISTING);
+    TEST_ASSERT(hProf != nullptr, "OpenColorProfileW from memory buffer must succeed");
+
+    wcs::PROFILEHEADER readHdr{};
+    wcs::BOOL bRes = wcs::GetColorProfileHeader(hProf, &readHdr);
+    TEST_ASSERT(bRes == TRUE, "GetColorProfileHeader must return TRUE");
+    TEST_ASSERT(readHdr.phSignature == 0x61637370, "Profile signature must be 'acsp' (0x61637370)");
+    TEST_ASSERT(readHdr.phRenderingIntent == wcs::INTENT_PERCEPTUAL, "Initial intent must be INTENT_PERCEPTUAL");
+
+    readHdr.phRenderingIntent = wcs::INTENT_RELATIVE_COLORIMETRIC;
+    bRes = wcs::SetColorProfileHeader(hProf, &readHdr);
+    TEST_ASSERT(bRes == TRUE, "SetColorProfileHeader must return TRUE");
+
+    wcs::PROFILEHEADER updatedHdr{};
+    wcs::GetColorProfileHeader(hProf, &updatedHdr);
+    TEST_ASSERT(updatedHdr.phRenderingIntent == wcs::INTENT_RELATIVE_COLORIMETRIC, "Updated intent must be Relative Colorimetric");
+
+    // 4. Standard Color Space Profiles
+    wchar_t srgbBuf[260]{};
+    uint32_t srgbBytes = sizeof(srgbBuf);
+    bRes = wcs::GetStandardColorSpaceProfileW(nullptr, wcs::SPACE_sRGB, srgbBuf, &srgbBytes);
+    TEST_ASSERT(bRes == TRUE, "GetStandardColorSpaceProfileW for sRGB must succeed");
+    TEST_ASSERT(std::wstring(srgbBuf).find(L"sRGB") != std::wstring::npos, "sRGB profile path must contain 'sRGB'");
+
+    char srgbBufA[260]{};
+    uint32_t srgbBytesA = sizeof(srgbBufA);
+    bRes = wcs::GetStandardColorSpaceProfileA(nullptr, wcs::SPACE_sRGB, srgbBufA, &srgbBytesA);
+    TEST_ASSERT(bRes == TRUE, "GetStandardColorSpaceProfileA for sRGB must succeed");
+
+    wchar_t defProfile[64]{};
+    bRes = wcs::WcsGetDefaultColorProfile(0, nullptr, wcs::CPT_ICC, wcs::CPST_PERCEPTUAL, 0, sizeof(defProfile), defProfile);
+    TEST_ASSERT(bRes == TRUE, "WcsGetDefaultColorProfile must succeed");
+    TEST_ASSERT(std::wstring(defProfile).find(L"sRGB") != std::wstring::npos, "Default profile must be sRGB");
+
+    // 5. Color Transforms & Pixel Translation
+    wcs::PROFILE profFile{};
+    profFile.dwType = wcs::PROFILE_FILENAME;
+    profFile.pProfileData = const_cast<wchar_t*>(L"C:\\Windows\\System32\\spool\\drivers\\color\\sRGB.icm");
+    profFile.cbDataSize = 0;
+
+    wcs::HTRANSFORM hTrans = wcs::CreateColorTransformW(&profFile, 0, wcs::INTENT_PERCEPTUAL, 0);
+    TEST_ASSERT(hTrans != nullptr, "CreateColorTransformW must return valid transform handle");
+
+    // TranslateColors (RGB -> XYZ)
+    wcs::COLOR colIn{};
+    colIn.rgb.red = 65535; colIn.rgb.green = 65535; colIn.rgb.blue = 65535;
+    wcs::COLOR colOut{};
+    bRes = wcs::TranslateColors(hTrans, &colIn, 1, wcs::COLOR_RGB, &colOut, wcs::COLOR_XYZ);
+    TEST_ASSERT(bRes == TRUE, "TranslateColors RGB -> XYZ must succeed");
+    TEST_ASSERT(colOut.xyz.y > 60000, "White point Y in XYZ must be near 65535");
+
+    // CheckColors (Gamut verification)
+    uint8_t gamutRes = 0xFF;
+    bRes = wcs::CheckColors(hTrans, &colIn, 1, wcs::COLOR_RGB, &gamutRes);
+    TEST_ASSERT(bRes == TRUE && gamutRes == 0, "CheckColors must report standard white is in-gamut (0)");
+
+    // TranslateBitmapBits (BGRA -> RGBA)
+    uint8_t srcPixels[8] = { 255, 0, 0, 255, 0, 255, 0, 255 }; // Pixel 0: Blue, Pixel 1: Green
+    uint8_t dstPixels[8] = { 0 };
+    bRes = wcs::TranslateBitmapBits(hTrans, srcPixels, wcs::BM_BGRAQUADS, 2, 1, 8, dstPixels, wcs::BM_RGBAQUADS, 8, nullptr, nullptr);
+    TEST_ASSERT(bRes == TRUE, "TranslateBitmapBits must succeed");
+    TEST_ASSERT(dstPixels[0] == 0 && dstPixels[2] == 255, "BGRA blue byte must be swapped to RGBA blue byte index 2");
+    TEST_ASSERT(dstPixels[3] == 255 && dstPixels[7] == 255, "Alpha channels must be preserved");
+
+    // MultiProfileTransform
+    wcs::HPROFILE hProf2 = wcs::OpenColorProfileW(&profMem, wcs::PROFILE_READ, 1, wcs::OPEN_EXISTING);
+    wcs::HPROFILE profArray[2] = { hProf, hProf2 };
+    uint32_t intentArray[2] = { wcs::INTENT_PERCEPTUAL, wcs::INTENT_PERCEPTUAL };
+    wcs::HTRANSFORM hMulti = wcs::CreateMultiProfileTransform(profArray, 2, intentArray, 2, 0, 0);
+    TEST_ASSERT(hMulti != nullptr, "CreateMultiProfileTransform must succeed");
+    wcs::DeleteColorTransform(hMulti);
+    wcs::CloseColorProfile(hProf2);
+
+    wcs::DeleteColorTransform(hTrans);
+    wcs::CloseColorProfile(hProf);
+
+    // 6. Transfer Curves & High Dynamic Range (HDR) Colorimetry
+    float linVal = wcs::ColorMath::sRGBToLinear(0.5f);
+    TEST_ASSERT(linVal > 0.0f && linVal < 0.5f, "sRGB 0.5 to linear must be strictly in (0, 0.5)");
+    float srgbRecon = wcs::ColorMath::LinearTosRGB(linVal);
+    TEST_ASSERT(std::abs(srgbRecon - 0.5f) < 1e-4f, "sRGB roundtrip must match 0.5");
+
+    // SMPTE ST 2084 PQ (0 to 10,000 Nits)
+    float pq100 = wcs::ColorMath::NitsToPQ(100.0f);
+    float nits100 = wcs::ColorMath::PQToNits(pq100);
+    TEST_ASSERT(std::abs(nits100 - 100.0f) < 0.5f, "SMPTE ST 2084 100 Nits roundtrip must match");
+
+    float pq1000 = wcs::ColorMath::NitsToPQ(1000.0f);
+    float nits1000 = wcs::ColorMath::PQToNits(pq1000);
+    TEST_ASSERT(std::abs(nits1000 - 1000.0f) < 0.5f, "SMPTE ST 2084 1000 Nits roundtrip must match");
+    TEST_ASSERT(pq1000 > pq100, "1000 Nits PQ code must exceed 100 Nits PQ code");
+
+    // ARIB STD-B67 HLG
+    float hlgLinear = wcs::ColorMath::HLGToLinear(0.4f);
+    TEST_ASSERT(hlgLinear > 0.0f && hlgLinear < 1.0f, "HLG 0.4 to linear radiance must be in (0, 1)");
+
+    // ACES Film Tone Mapping & Delta E
+    float mappedTone = wcs::ColorMath::ACESFilm(3.0f);
+    TEST_ASSERT(mappedTone <= 1.0f && mappedTone > 0.0f, "ACES Film tone mapping must compress HDR to [0, 1]");
+
+    float deltaZero = wcs::ColorMath::DeltaE76({ 50.0f, 10.0f, -20.0f }, { 50.0f, 10.0f, -20.0f });
+    TEST_ASSERT(deltaZero < 1e-5f, "Identical colors must have Delta E of 0");
+
+    // 7. Interactive Shell Verification (wcs test, wcs info, wcs gamut)
+    shell::CommandShell shellEngine;
+    std::ostringstream testOut;
+    int rc = shellEngine.execute("wcs test", testOut);
+    TEST_ASSERT(rc == 0, "wcs test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("10 / 10 Subsystem Invariants Verified") != std::string::npos,
+                "wcs test must verify all 10 invariants");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("wcs info", infoOut);
+    TEST_ASSERT(rc == 0, "wcs info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("Windows Color System") != std::string::npos,
+                "wcs info must display WCS telemetry");
+
+    std::ostringstream gamutOut;
+    rc = shellEngine.execute("wcs gamut", gamutOut);
+    TEST_ASSERT(rc == 0, "wcs gamut CLI command must return 0");
+    TEST_ASSERT(gamutOut.str().find("Wide Color Gamut (WCG)") != std::string::npos,
+                "wcs gamut must analyze wide color gamut");
+
+    std::cout << "[TEST] Suite 119: Windows Color System (WCS) & Advanced HDR Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite118")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite119")) {
+        RUN_TEST(Test_WindowsColorSystem_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite118") {
         RUN_TEST(Test_WindowsUIComposition_Subsystem);
         return g_FailedTests;
     }
@@ -27855,6 +28055,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirectML_Subsystem);
     RUN_TEST(Test_WindowsDirectComposition_Subsystem);
     RUN_TEST(Test_WindowsUIComposition_Subsystem);
+    RUN_TEST(Test_WindowsColorSystem_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

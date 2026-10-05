@@ -110,6 +110,7 @@
 #include "directml.hpp"
 #include "dcomp.hpp"
 #include "uicomposition.hpp"
+#include "wcs.hpp"
 
 namespace micant::shell {
 
@@ -310,6 +311,7 @@ public:
             if (cmd == "dml" || cmd == "directml" || cmd == "dxcore") { cmdDirectML(tokens, out); return 0; }
             if (cmd == "dcomp" || cmd == "directcomposition" || cmd == "compositor") { cmdDirectComposition(tokens, out); return 0; }
             if (cmd == "uicomp" || cmd == "composition" || cmd == "visuals") { cmdUIComposition(tokens, out); return 0; }
+            if (cmd == "wcs" || cmd == "colorsystem" || cmd == "colormgr") { cmdColorSystem(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -599,6 +601,9 @@ private:
             << "  DXVA2 [test|procamp|info] Windows DirectX Video Acceleration 2.0 (dxva2 test)\n"
             << "  D3D11VA [test|proc|info] Windows Direct3D 11 Video Acceleration (d3d11va test)\n"
             << "  DSHOW [test|filters|render|devices] Windows DirectShow & Filter Graph Architecture (dshow test)\n"
+            << "  DCOMP [test|info|compose] Windows DirectComposition Modern Compositor (dcomp test)\n"
+            << "  UICOMP [test|info|demo]  Windows UI Composition & Scene-Graph Visual Layer (uicomp test)\n"
+            << "  WCS [test|info|gamut]    Windows Color System & HDR Subsystem (wcs test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -16189,6 +16194,163 @@ private:
             << "  uicomp test                             Runs UI Composition visual tree self-tests\n"
             << "  uicomp info                             Displays visual layer compositor telemetry\n"
             << "  uicomp demo                             Constructs and renders a sample fluent acrylic scene\n";
+    }
+
+    void cmdColorSystem(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::wcs;
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[WCS] Running Windows Color System & HDR Subsystem Verification...\n";
+            int passed = 0;
+
+            // 1. Profile Creation from Memory
+            PROFILEHEADER hdr{};
+            hdr.phSize = sizeof(PROFILEHEADER);
+            hdr.phCMMType = 0x5052534D; // 'PRSM'
+            hdr.phVersion = 0x04300000; // v4.3.0
+            hdr.phClass = 0x6D6E7472;   // 'mntr'
+            hdr.phDataColorSpace = 0x52474220; // 'RGB '
+            hdr.phConnectionSpace = 0x58595A20; // 'XYZ '
+            hdr.phSignature = 0x61637370; // 'acsp'
+            hdr.phPlatform = 0x4D534654; // 'MSFT'
+            hdr.phRenderingIntent = 0;
+            hdr.phCreator = 0x4D494341; // 'MICA'
+
+            PROFILE profMem{};
+            profMem.dwType = PROFILE_MEMBUFFER;
+            profMem.pProfileData = &hdr;
+            profMem.cbDataSize = sizeof(hdr);
+
+            HPROFILE hProf = OpenColorProfileW(&profMem, PROFILE_READ, 1, OPEN_EXISTING);
+            if (hProf) {
+                passed++;
+                out << "  [PASS] 1. OpenColorProfileW (Memory Buffer ICC v4.3 Profile Allocated)\n";
+
+                // 2. Query Header
+                PROFILEHEADER readHdr{};
+                if (GetColorProfileHeader(hProf, &readHdr) && readHdr.phSignature == 0x61637370) {
+                    passed++;
+                    out << "  [PASS] 2. GetColorProfileHeader (Signature 'acsp' 0x61637370 verified)\n";
+                }
+
+                // 3. Set Header
+                readHdr.phRenderingIntent = INTENT_RELATIVE_COLORIMETRIC;
+                if (SetColorProfileHeader(hProf, &readHdr)) {
+                    passed++;
+                    out << "  [PASS] 3. SetColorProfileHeader (Intent updated to Relative Colorimetric)\n";
+                }
+
+                CloseColorProfile(hProf);
+            }
+
+            // 4. Standard Color Space Profiles
+            wchar_t srgbPath[260]{};
+            uint32_t srgbSize = sizeof(srgbPath);
+            if (GetStandardColorSpaceProfileW(nullptr, SPACE_sRGB, srgbPath, &srgbSize)) {
+                passed++;
+                out << "  [PASS] 4. GetStandardColorSpaceProfileW (sRGB profile path resolved)\n";
+            }
+
+            // 5. Color Transform Creation
+            PROFILE profFile{};
+            profFile.dwType = PROFILE_FILENAME;
+            profFile.pProfileData = const_cast<wchar_t*>(L"C:\\Windows\\System32\\spool\\drivers\\color\\sRGB.icm");
+            profFile.cbDataSize = 0;
+
+            HTRANSFORM hTrans = CreateColorTransformW(&profFile, 0, INTENT_PERCEPTUAL, 0);
+            if (hTrans) {
+                passed++;
+                out << "  [PASS] 5. CreateColorTransformW (sRGB Color Transform handle created)\n";
+
+                // 6. Translate Colors (RGB to XYZ)
+                COLOR inCol{};
+                inCol.rgb.red = 65535; inCol.rgb.green = 65535; inCol.rgb.blue = 65535;
+                COLOR outCol{};
+                if (TranslateColors(hTrans, &inCol, 1, COLOR_RGB, &outCol, COLOR_XYZ)) {
+                    passed++;
+                    out << "  [PASS] 6. TranslateColors (RGB White to CIE XYZ D65 Transform)\n";
+                }
+
+                // 7. Translate Bitmap Bits (BGRA to RGBA)
+                uint8_t srcPixels[8] = { 255, 0, 0, 255, 0, 255, 0, 255 }; // Blue, Green
+                uint8_t dstPixels[8] = { 0 };
+                if (TranslateBitmapBits(hTrans, srcPixels, BM_BGRAQUADS, 2, 1, 8, dstPixels, BM_RGBAQUADS, 8, nullptr, nullptr)) {
+                    if (dstPixels[0] == 0 && dstPixels[2] == 255) { // Red=0, Blue=255 in RGBA
+                        passed++;
+                        out << "  [PASS] 7. TranslateBitmapBits (BGRA32 to RGBA32 channel translation)\n";
+                    }
+                }
+
+                // 8. Gamut Check
+                uint8_t gamutRes = 0xFF;
+                if (CheckColors(hTrans, &inCol, 1, COLOR_RGB, &gamutRes) && gamutRes == 0) {
+                    passed++;
+                    out << "  [PASS] 8. CheckColors (In-Gamut Verification for standard primaries)\n";
+                }
+
+                DeleteColorTransform(hTrans);
+            }
+
+            // 9. Transfer Curves: sRGB and SMPTE ST 2084 PQ (HDR10)
+            float pq100 = ColorMath::NitsToPQ(100.0f);
+            float nits100 = ColorMath::PQToNits(pq100);
+            if (std::abs(nits100 - 100.0f) < 0.5f) {
+                passed++;
+                out << "  [PASS] 9. SMPTE ST 2084 PQ Transfer Curve (100 Nits SDR reference roundtrip)\n";
+            }
+
+            // 10. ACES Film Tone Mapping & Delta E
+            float hdrToneMapped = ColorMath::ACESFilm(2.5f);
+            float deltaE = ColorMath::DeltaE76({ 100.0f, 0.0f, 0.0f }, { 100.0f, 0.0f, 0.0f });
+            if (hdrToneMapped <= 1.0f && deltaE < 1e-4f) {
+                passed++;
+                out << "  [PASS] 10. ACES Film Tone Mapping & CIE 1976 Delta E Metric Invariants\n";
+            }
+
+            out << "[WCS] Tests Finished: " << passed << " / 10 Subsystem Invariants Verified.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "       MicaNT Windows Color System (WCS) & Advanced HDR Telemetry      \n"
+                << "========================================================================\n\n"
+                << "  Architecture:           Windows Color System 2.0 & Image Color Management\n"
+                << "  Native Library:         mscms.dll & icm32.dll (Version 10.0.22621.1)\n"
+                << "  Color Engine:           Sovereign PrismColor Precision CMM\n"
+                << "  Supported Profiles:     ICC v4.3.0, WCS CAM02, CDMP, CAMP, GMMP\n"
+                << "  Color Spaces:           sRGB, scRGB, Adobe RGB, DCI-P3 / Display P3, BT.2020\n"
+                << "  Colorimetry Models:     CIE 1931 XYZ, CIE 1976 Lab, CIE Luv, Delta E (1976)\n"
+                << "  HDR Transfer Curves:    SMPTE ST 2084 (PQ 0-10,000 Nits), ARIB STD-B67 (HLG)\n"
+                << "  Tone Mapping:           ACES Filmic Curve & Reinhard Luminance Compression\n"
+                << "  Active Profiles:        " << ColorSubsystemManager::get().GetActiveProfileCount() << " registered\n"
+                << "  Active Transforms:      " << ColorSubsystemManager::get().GetActiveTransformCount() << " registered\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "gamut") {
+            out << "[WCS] Wide Color Gamut (WCG) & High Dynamic Range (HDR) Colorimetry:\n\n"
+                << "  Gamut Primaries Comparison (CIE 1931 Chromaticity Coordinates):\n"
+                << "    + sRGB / Rec.709:   R(0.640, 0.330), G(0.300, 0.600), B(0.150, 0.060), D65(0.3127, 0.3290)\n"
+                << "    + DCI-P3 Theater:   R(0.680, 0.320), G(0.265, 0.690), B(0.150, 0.060), D65(0.3127, 0.3290)\n"
+                << "    + Adobe RGB (1998): R(0.640, 0.330), G(0.210, 0.710), B(0.150, 0.060), D65(0.3127, 0.3290)\n"
+                << "    + ITU-R BT.2020:    R(0.708, 0.292), G(0.170, 0.797), B(0.131, 0.046), D65(0.3127, 0.3290)\n\n"
+                << "  SMPTE ST 2084 Perceptual Quantizer (PQ) Luminance Steps:\n";
+            const float nitLevels[] = { 10.0f, 100.0f, 400.0f, 1000.0f, 4000.0f, 10000.0f };
+            for (float nits : nitLevels) {
+                float pq = ColorMath::NitsToPQ(nits);
+                float aces = ColorMath::ACESFilm(nits / 1000.0f);
+                out << "    - Target Luminance: " << std::setw(6) << static_cast<int>(nits) << " Nits -> PQ Code: "
+                    << std::fixed << std::setprecision(4) << pq << " | ACES ToneMapped SDR: " << aces << "\n";
+            }
+            out << "\n  [WCS] Wide Gamut & HDR Color Analysis Completed.\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  wcs test                                Runs Windows Color System & HDR self-tests\n"
+            << "  wcs info                                Displays WCS and ICM subsystem telemetry\n"
+            << "  wcs gamut                               Analyzes wide color gamut & PQ luminance steps\n";
     }
 
     static std::string trim(std::string_view s) {
