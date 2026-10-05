@@ -2189,16 +2189,35 @@
 
 ---
 
-### Phase 94: Windows AppModel & Modern Application Lifecycle Management (`appmodel.hpp`, `kernelbase.dll`, `twinapi.appcore.dll`) (PLANNED - MILESTONE 121)
-- [ ] **Windows AppModel & Package Identity Architecture (`include/micant/appmodel.hpp`, `kernelbase.dll`)**:
+### Phase 94: Windows AppModel & Modern Application Lifecycle Management (`appmodel.hpp`, `kernelbase.dll`, `twinapi.appcore.dll`) (COMPLETED 100% - MILESTONE 121)
+- [x] **Windows AppModel & Package Identity Architecture (`include/micant/appmodel.hpp`, `kernelbase.dll`)**:
   - Package identity parsing: Package Family Name (PFN), Package Full Name, Publisher ID, Application User Model ID (AUMID).
-  - Native Win32 Package APIs: `GetCurrentPackageFamilyName`, `GetCurrentPackageFullName`, `GetCurrentPackagePath`, `GetPackageFamilyName`, `GetPackagePathByFullName`, `PackageIdFromFullName`.
-  - AppX/MSIX Package Manifest parser (`AppxManifest.xml`) resolving package capabilities, extensions, and entrypoint applications.
-- [ ] **Process Lifetime Management (PLM) & Application State Machine (`twinapi.appcore.dll`)**:
-  - Application lifecycle states: `Active`, `Suspending`, `Suspended`, `Resuming`, `Terminated`.
-  - Memory pressure handling, state persistence notifications, and PLM background execution tokens.
-- [ ] **Unit Test Suite 121 (`Test_WindowsAppModel_Lifecycle_Subsystem`)**:
-  - Validate package identity calculation, manifest parsing, PLM lifecycle state transitions, background task registrations, and interactive shell commands.
+  - Clean-room Base32 Crockford Publisher ID digest generation (`ComputePublisherId`).
+  - Native Win32 Package APIs: `GetCurrentPackageFamilyName`, `GetCurrentPackageFullName`, `GetCurrentPackagePath`, `GetPackageFamilyName`, `GetPackagePathByFullName`, `PackageFamilyNameFromFullName`, `PackageNameAndPublisherIdFromFamilyName`, `CheckIsMSIXPackage`.
+  - AppPolicy process governance APIs: `AppPolicyGetWindowingModel`, `AppPolicyGetProcessTerminationMethod`, `AppPolicyGetThreadInitializationType`, `AppPolicyGetShowDeveloperDiagnostic`.
+  - AppX/MSIX Package Manifest XML parser (`AppxManifest.xml`) resolving package capabilities, applications, visual elements, target device families, and dependencies.
+- [x] **Process Lifetime Management (PLM) & Application State Machine (`twinapi.appcore.dll`)**:
+  - Full application lifecycle states: `Active/Running`, `Suspending`, `Suspended`, `Resuming`, `Terminated`.
+  - Extended execution token allocation & revocation (`PlmRequestExtendedExecution`, `PlmRevokeExtendedExecution`).
+  - Process termination and memory trimming governance under system resource pressure.
+- [x] **Shell CLI Integration**:
+  - Added `appmodel test`, `appmodel info`, `appmodel list`, and `appmodel plm` commands in `micant::shell`.
+- [x] **Unit Test Suite 121 (`Test_WindowsAppModel_Lifecycle_Subsystem`)**:
+  - Validates dynamic exports, module version registrations (`10.0.22621.1`), 13-character base32 publisher hashing, identity formatting, manifest parsing, package staging, Win32 package APIs, PLM lifecycle transitions, extended execution grants, and CLI commands.
+  - Milestone 121: **121 / 121 Test Suites Passing (100%)**.
+
+---
+
+### Phase 95: Direct2D 1.3 & DirectWrite Advanced Typography / OpenType Subsystem (`d2d1_3.hpp`, `d2d1.dll`, `dwrite.dll`) (PLANNED - MILESTONE 122)
+- [ ] **Direct2D 1.3 High-Performance 2D Vector & Device Context Architecture (`d2d1.dll`)**:
+  - `ID2D1DeviceContext2`, `ID2D1DeviceContext3`, `ID2D1Factory3`.
+  - Color font rendering (OpenType SVG, COLR/CPAL, CBDT/CBLC glyph tables).
+  - Path geometry boolean operations (Union, Intersect, Xor, Exclude) and stroke dashes.
+- [ ] **DirectWrite Advanced OpenType Typography Engine (`dwrite.dll`)**:
+  - OpenType font feature tags (`kern`, `liga`, `clig`, `calt`, `smcp`, `onum`, `tnum`).
+  - Multi-script Unicode bidirectional layout and font fallback cascade resolver.
+- [ ] **Unit Test Suite 122 (`Test_WindowsDirect2D1_3_Typography_Subsystem`)**:
+  - Validate D2D 1.3 device contexts, SVG color glyph decoding, OpenType typographic feature tags, and interactive shell commands.
 
 
 

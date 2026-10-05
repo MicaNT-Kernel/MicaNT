@@ -112,6 +112,7 @@
 #include "uicomposition.hpp"
 #include "wcs.hpp"
 #include "pointer.hpp"
+#include "appmodel.hpp"
 
 namespace micant::shell {
 
@@ -314,6 +315,7 @@ public:
             if (cmd == "uicomp" || cmd == "composition" || cmd == "visuals") { cmdUIComposition(tokens, out); return 0; }
             if (cmd == "wcs" || cmd == "colorsystem" || cmd == "colormgr") { cmdColorSystem(tokens, out); return 0; }
             if (cmd == "pointer" || cmd == "touch" || cmd == "ink") { cmdPointer(tokens, out); return 0; }
+            if (cmd == "appmodel" || cmd == "package" || cmd == "plm" || cmd == "appx") { cmdAppModel(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -607,6 +609,7 @@ private:
             << "  UICOMP [test|info|demo]  Windows UI Composition & Scene-Graph Visual Layer (uicomp test)\n"
             << "  WCS [test|info|gamut]    Windows Color System & HDR Subsystem (wcs test)\n"
             << "  POINTER [test|info|inject] Windows Pointer Device & Touch Subsystem (pointer test)\n"
+            << "  APPMODEL [test|info|list|plm] Windows AppModel, Package Identity & PLM (appmodel test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -16521,6 +16524,217 @@ private:
             << "  pointer test                            Runs Pointer Device & Inking self-tests\n"
             << "  pointer info                            Displays pointer device manager telemetry\n"
             << "  pointer inject                          Simulates 5-point multi-touch gesture packets\n";
+    }
+
+    void cmdAppModel(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::appmodel;
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[AppModel] Running Windows AppModel & Process Lifetime Management (PLM) Self-Tests...\n";
+            int passed = 0;
+
+            // 1. Package Identity & Base32 Publisher ID Digest
+            std::string pubId = ComputePublisherId("CN=MicaNT Sovereign Project");
+            if (!pubId.empty() && pubId.length() == 13) {
+                passed++;
+                out << "  [PASS] 1. ComputePublisherId (13-character Base32 Digest: " << pubId << ")\n";
+            }
+
+            // 2. Full Name / Family Name Formatting
+            AppxPackageManifest manifest;
+            manifest.name = "Sovereign.Editor";
+            manifest.publisher = "CN=Sovereign Dev";
+            manifest.publisherId = ComputePublisherId(manifest.publisher);
+            manifest.version = { .Version = 0x0002000100000000ULL }; // 2.1.0.0
+            manifest.architecture = PROCESSOR_ARCHITECTURE_AMD64_VAL;
+            std::string fn = manifest.GetPackageFullName();
+            std::string fam = manifest.GetPackageFamilyName();
+            if (fn.find("Sovereign.Editor_2.1.0.0_x64__") != std::string::npos &&
+                fam.find("Sovereign.Editor_") != std::string::npos) {
+                passed++;
+                out << "  [PASS] 2. Package Identity Synthesis (Full: " << fn << ", Family: " << fam << ")\n";
+            }
+
+            // 3. Manifest XML Parsing
+            const char* testXml =
+                "<Package xmlns=\"http://schemas.microsoft.com/appx/manifest/foundation/windows10\">\n"
+                "  <Identity Name=\"Test.App\" Version=\"3.2.1.0\" Publisher=\"CN=Test\" ProcessorArchitecture=\"x64\"/>\n"
+                "  <Properties>\n"
+                "    <DisplayName>Test App</DisplayName>\n"
+                "    <PublisherDisplayName>Test Corp</PublisherDisplayName>\n"
+                "  </Properties>\n"
+                "  <Dependencies>\n"
+                "    <TargetDeviceFamily Name=\"Windows.Desktop\" MinVersion=\"10.0.19041.0\" MaxVersionTested=\"10.0.22621.0\"/>\n"
+                "  </Dependencies>\n"
+                "  <Capabilities>\n"
+                "    <Capability Name=\"internetClient\"/>\n"
+                "    <rescap:Capability Name=\"runFullTrust\"/>\n"
+                "  </Capabilities>\n"
+                "  <Applications>\n"
+                "    <Application Id=\"App\" Executable=\"TestApp.exe\" EntryPoint=\"TestApp.App\">\n"
+                "      <uap:VisualElements DisplayName=\"Test App\" Square150x150Logo=\"Logo.png\" Square44x44Logo=\"SmallLogo.png\" BackgroundColor=\"#0078D7\"/>\n"
+                "    </Application>\n"
+                "  </Applications>\n"
+                "</Package>";
+            AppxPackageManifest parsed;
+            if (AppxManifestParser::Parse(testXml, parsed) && parsed.name == "Test.App" && parsed.capabilities.size() >= 2 && !parsed.applications.empty()) {
+                passed++;
+                out << "  [PASS] 3. AppxManifest XML Parser (Identity: " << parsed.name << " v" << parsed.versionString << ", Capabilities: " << parsed.capabilities.size() << ")\n";
+            }
+
+            // 4. Dynamic Package Registration
+            std::string registeredFn;
+            if (AppModelCatalog::get().RegisterPackageXml(testXml, "C:\\Program Files\\WindowsApps\\Test.App", registeredFn)) {
+                passed++;
+                out << "  [PASS] 4. Package Catalog Registration (Staged: " << registeredFn << ")\n";
+            }
+
+            // 5. Win32 Package Identity API Parity (GetCurrentPackageFullName / FamilyName / Path)
+            wchar_t fullNameBuf[256]{};
+            uint32_t len = 256;
+            LONG r = GetCurrentPackageFullName(&len, fullNameBuf);
+            if (r == ERROR_SUCCESS_VAL && len > 0) {
+                wchar_t famBuf[256]{};
+                uint32_t famLen = 256;
+                r = GetCurrentPackageFamilyName(&famLen, famBuf);
+                if (r == ERROR_SUCCESS_VAL && famLen > 0) {
+                    passed++;
+                    std::string sFn = WideToUtf8(fullNameBuf);
+                    out << "  [PASS] 5. GetCurrentPackageFullName & GetCurrentPackageFamilyName (Active: " << sFn << ")\n";
+                }
+            }
+
+            // 6. Package Path Query by Full Name & Family Extraction
+            std::wstring wTestFn = Utf8ToWide(registeredFn);
+            wchar_t pathBuf[512]{};
+            uint32_t pLen = 512;
+            r = GetPackagePathByFullName(wTestFn.c_str(), &pLen, pathBuf);
+            if (r == ERROR_SUCCESS_VAL) {
+                wchar_t derivedFam[256]{};
+                uint32_t dfLen = 256;
+                r = PackageFamilyNameFromFullName(wTestFn.c_str(), &dfLen, derivedFam);
+                if (r == ERROR_SUCCESS_VAL) {
+                    passed++;
+                    out << "  [PASS] 6. GetPackagePathByFullName & PackageFamilyNameFromFullName (Path: " << WideToUtf8(pathBuf) << ")\n";
+                }
+            }
+
+            // 7. PLM State Machine Transitions (Running -> Suspending -> Suspended -> Resuming)
+            uint32_t testPid = 8840;
+            PlmManager::get().RegisterProcess(testPid, "Test.App_family!App", registeredFn);
+            bool s1 = (PlmManager::get().GetProcessState(testPid) == PlmApplicationState::Running);
+            PlmManager::get().SuspendProcess(testPid);
+            bool s2 = (PlmManager::get().GetProcessState(testPid) == PlmApplicationState::Suspended);
+            PlmManager::get().ResumeProcess(testPid);
+            bool s3 = (PlmManager::get().GetProcessState(testPid) == PlmApplicationState::Running);
+            if (s1 && s2 && s3) {
+                passed++;
+                out << "  [PASS] 7. PLM Lifecycle Engine (State Flow: Running -> Suspended -> Resumed)\n";
+            }
+
+            // 8. Extended Execution Grants & Revocation
+            uint32_t token = PlmManager::get().RequestExtendedExecution(testPid, PlmExtendedExecutionReason::SavingData, 15);
+            if (token != 0 && PlmManager::get().RevokeExtendedExecution(testPid, token)) {
+                passed++;
+                out << "  [PASS] 8. Extended Execution Grants (Token: " << token << ", Reason: SavingData [15s])\n";
+            }
+
+            // 9. AppPolicy Process Policies (Termination, Windowing, WinRT Init)
+            AppPolicyWindowingModel winModel{};
+            AppPolicyProcessTerminationMethod termMethod{};
+            AppPolicyThreadInitializationType threadInit{};
+            if (AppPolicyGetWindowingModel(nullptr, &winModel) == ERROR_SUCCESS_VAL &&
+                AppPolicyGetProcessTerminationMethod(nullptr, &termMethod) == ERROR_SUCCESS_VAL &&
+                AppPolicyGetThreadInitializationType(nullptr, &threadInit) == ERROR_SUCCESS_VAL) {
+                passed++;
+                out << "  [PASS] 9. AppPolicy APIs (Universal Windowing Model, TerminateProcess Method, WinRT Init)\n";
+            }
+
+            // 10. Dynamic Loader & VersionDatabase Verification
+            InitializeAppModelExports();
+            auto* pFn = micant::ldr::DynamicLoader::get().getExport("kernelbase.dll", "GetCurrentPackageFullName");
+            auto* pPlm = micant::ldr::DynamicLoader::get().getExport("twinapi.appcore.dll", "PlmSuspendApplication");
+            auto* pAppx = micant::ldr::DynamicLoader::get().getExport("appxdeploymentclient.dll", "AppxRegisterPackage");
+            if (pFn && pPlm && pAppx) {
+                passed++;
+                out << "  [PASS] 10. Dynamic Module Parity (kernelbase.dll, twinapi.appcore.dll, appxdeploymentclient.dll)\n";
+            }
+
+            // Cleanup test package
+            AppModelCatalog::get().UnregisterPackage(registeredFn);
+
+            out << "[AppModel] Tests Finished: " << passed << " / 10 Subsystem Invariants Verified.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "        MicaNT AppModel, Package Identity & PLM Subsystem Telemetry     \n"
+                << "========================================================================\n\n"
+                << "  Architecture:           Windows Modern Application Model & Process Lifetime\n"
+                << "  Core Dynamic DLLs:      kernelbase.dll, twinapi.appcore.dll, appxdeploymentclient.dll\n"
+                << "  Current Process:        " << AppModelCatalog::get().GetCurrentProcessPackage() << "\n"
+                << "  Installed Packages:     " << AppModelCatalog::get().GetAllPackages().size() << " packages registered\n"
+                << "  Active PLM Sessions:    " << PlmManager::get().GetAllSessions().size() << " process container(s)\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            out << "========================================================================\n"
+                << "                  MicaNT Installed Modern Package Catalog               \n"
+                << "========================================================================\n\n";
+            auto pkgs = AppModelCatalog::get().GetAllPackages();
+            for (size_t i = 0; i < pkgs.size(); ++i) {
+                out << "  [" << (i + 1) << "] " << pkgs[i].manifest.displayName << " (" << pkgs[i].manifest.name << ")\n"
+                    << "      Full Name:   " << pkgs[i].packageFullName << "\n"
+                    << "      Family Name: " << pkgs[i].packageFamilyName << "\n"
+                    << "      AUMID:       " << pkgs[i].aumid << "\n"
+                    << "      Path:        " << pkgs[i].installPath << "\n"
+                    << "      Version:     " << pkgs[i].manifest.versionString << " [" << ArchitectureToString(pkgs[i].manifest.architecture) << "]\n\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "plm") {
+            if (tokens.size() < 4) {
+                out << "Usage: appmodel plm <pid> <suspend|resume|terminate>\n";
+                return;
+            }
+            uint32_t pid = 0;
+            try { pid = static_cast<uint32_t>(std::stoul(tokens[2])); } catch (...) {
+                out << "Error: Invalid process ID\n";
+                return;
+            }
+            std::string action = tokens[3];
+            if (action == "suspend") {
+                if (PlmSuspendApplication(pid) == ERROR_SUCCESS_VAL) {
+                    out << "[PLM] Process " << pid << " transitioned to SUSPENDED state.\n";
+                } else {
+                    out << "[PLM] Error: Process " << pid << " not found in active PLM session store.\n";
+                }
+            } else if (action == "resume") {
+                if (PlmResumeApplication(pid) == ERROR_SUCCESS_VAL) {
+                    out << "[PLM] Process " << pid << " transitioned to RUNNING state.\n";
+                } else {
+                    out << "[PLM] Error: Failed to resume process " << pid << ".\n";
+                }
+            } else if (action == "terminate") {
+                if (PlmTerminateApplication(pid, "UserCommand") == ERROR_SUCCESS_VAL) {
+                    out << "[PLM] Process " << pid << " TERMINATED under resource governance.\n";
+                } else {
+                    out << "[PLM] Error: Failed to terminate process " << pid << ".\n";
+                }
+            } else {
+                out << "Error: Unknown PLM action '" << action << "'. Use suspend, resume, or terminate.\n";
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  appmodel test                           Runs AppModel, Package & PLM self-tests\n"
+            << "  appmodel info                           Displays AppModel subsystem telemetry\n"
+            << "  appmodel list                           Enumerates registered MSIX/AppX packages\n"
+            << "  appmodel plm <pid> <action>             Controls PLM state (suspend/resume/terminate)\n";
     }
 
     static std::string trim(std::string_view s) {

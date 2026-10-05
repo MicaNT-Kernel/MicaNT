@@ -28046,8 +28046,219 @@ void Test_WindowsPointerDevice_Subsystem() {
     std::cout << "[TEST] Suite 120: Windows Pointer Device & Modern Touch/Inking Subsystem PASSED.\n";
 }
 
+void Test_WindowsAppModel_Lifecycle_Subsystem() {
+    using namespace micant::appmodel;
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 121: Windows AppModel & Modern Application Lifecycle Management \n";
+    std::cout << "========================================================================\n";
+
+    // 1. Initialize Dynamic Exports & VersionDatabase
+    InitializeAppModelExports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("kernelbase.dll", "GetCurrentPackageFullName") != nullptr, "kernelbase GetCurrentPackageFullName must exist");
+    TEST_ASSERT(loader.getExport("twinapi.appcore.dll", "PlmSuspendApplication") != nullptr, "twinapi.appcore PlmSuspendApplication must exist");
+    TEST_ASSERT(loader.getExport("appxdeploymentclient.dll", "AppxRegisterPackage") != nullptr, "appxdeploymentclient AppxRegisterPackage must exist");
+
+    // 2. Base32 Publisher ID Digest Verification
+    std::string pubId1 = ComputePublisherId("CN=MicaNT Sovereign Project");
+    TEST_ASSERT(pubId1.length() == 13, "PublisherId must be exactly 13 characters long");
+    std::string pubId2 = ComputePublisherId("CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US");
+    TEST_ASSERT(pubId2.length() == 13, "PublisherId for Microsoft must be 13 characters");
+
+    // 3. Package Identity Structs & Synthesis
+    AppxPackageManifest manifest;
+    manifest.name = "MicaNT.VirtualCanvas";
+    manifest.publisher = "CN=MicaNT Sovereign Project";
+    manifest.publisherId = pubId1;
+    manifest.version = { .Version = 0x0001000200030004ULL }; // 1.2.3.4
+    manifest.architecture = PROCESSOR_ARCHITECTURE_AMD64_VAL;
+    manifest.resourceId = "";
+
+    std::string fullName = manifest.GetPackageFullName();
+    std::string familyName = manifest.GetPackageFamilyName();
+    std::string aumid = manifest.GetAUMID("CanvasApp");
+
+    TEST_ASSERT(fullName == ("MicaNT.VirtualCanvas_1.2.3.4_x64__" + pubId1), "Full name synthesis must follow standard formatting");
+    TEST_ASSERT(familyName == ("MicaNT.VirtualCanvas_" + pubId1), "Family name synthesis must follow standard formatting");
+    TEST_ASSERT(aumid == ("MicaNT.VirtualCanvas_" + pubId1 + "!CanvasApp"), "AUMID must follow FamilyName!AppId format");
+
+    // 4. AppX / MSIX Manifest XML Parsing
+    const std::string manifestXml =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<Package xmlns=\"http://schemas.microsoft.com/appx/manifest/foundation/windows10\">\n"
+        "  <Identity Name=\"Contoso.PhotoStudio\" Version=\"2.4.100.0\" Publisher=\"CN=Contoso Software\" ProcessorArchitecture=\"x64\"/>\n"
+        "  <Properties>\n"
+        "    <DisplayName>Contoso Photo Studio</DisplayName>\n"
+        "    <PublisherDisplayName>Contoso Software Inc.</PublisherDisplayName>\n"
+        "    <Description>Professional Sovereign Photo Editing</Description>\n"
+        "    <Logo>Assets\\StoreLogo.png</Logo>\n"
+        "  </Properties>\n"
+        "  <Dependencies>\n"
+        "    <TargetDeviceFamily Name=\"Windows.Desktop\" MinVersion=\"10.0.19041.0\" MaxVersionTested=\"10.0.22621.0\"/>\n"
+        "  </Dependencies>\n"
+        "  <Capabilities>\n"
+        "    <Capability Name=\"internetClient\"/>\n"
+        "    <Capability Name=\"picturesLibrary\"/>\n"
+        "    <rescap:Capability Name=\"runFullTrust\"/>\n"
+        "  </Capabilities>\n"
+        "  <Applications>\n"
+        "    <Application Id=\"PhotoApp\" Executable=\"PhotoStudio.exe\" EntryPoint=\"Contoso.PhotoStudio.App\">\n"
+        "      <uap:VisualElements DisplayName=\"Contoso Photo Studio\" Square150x150Logo=\"Assets\\Logo150.png\" Square44x44Logo=\"Assets\\Logo44.png\" BackgroundColor=\"#1A1A1A\"/>\n"
+        "    </Application>\n"
+        "  </Applications>\n"
+        "</Package>";
+
+    AppxPackageManifest parsed;
+    bool parseSuccess = AppxManifestParser::Parse(manifestXml, parsed);
+    TEST_ASSERT(parseSuccess, "AppxManifestParser::Parse must succeed");
+    TEST_ASSERT(parsed.name == "Contoso.PhotoStudio", "Manifest package name must match");
+    TEST_ASSERT(parsed.version.Major == 2 && parsed.version.Minor == 4 && parsed.version.Build == 100 && parsed.version.Revision == 0,
+                "Manifest version must parse accurately to 2.4.100.0");
+    TEST_ASSERT(parsed.architecture == PROCESSOR_ARCHITECTURE_AMD64_VAL, "Architecture must parse to x64");
+    TEST_ASSERT(parsed.capabilities.size() == 3, "All 3 declared capabilities must be extracted");
+    TEST_ASSERT(parsed.applications.size() == 1, "Declared Application must be parsed");
+    TEST_ASSERT(parsed.applications[0].id == "PhotoApp" && parsed.applications[0].executable == "PhotoStudio.exe",
+                "Application ID and Executable must match manifest");
+
+    // 5. Package Catalog Registration & Query
+    std::string registeredFullName;
+    bool regOk = AppModelCatalog::get().RegisterPackageXml(manifestXml, "C:\\Program Files\\WindowsApps\\Contoso.PhotoStudio_2.4.100.0_x64__test", registeredFullName);
+    TEST_ASSERT(regOk, "RegisterPackageXml must succeed");
+
+    InstalledPackage qPkg;
+    bool foundFull = AppModelCatalog::get().FindPackageByFullName(registeredFullName, qPkg);
+    TEST_ASSERT(foundFull, "FindPackageByFullName must locate registered package");
+    TEST_ASSERT(qPkg.manifest.displayName == "Contoso Photo Studio", "Installed package display name must match");
+
+    InstalledPackage qFamPkg;
+    bool foundFam = AppModelCatalog::get().FindPackageByFamilyName(qPkg.packageFamilyName, qFamPkg);
+    TEST_ASSERT(foundFam && qFamPkg.packageFullName == registeredFullName, "FindPackageByFamilyName must resolve correctly");
+
+    InstalledPackage qAumidPkg;
+    bool foundAumid = AppModelCatalog::get().FindPackageByAUMID(qPkg.aumid, qAumidPkg);
+    TEST_ASSERT(foundAumid && qAumidPkg.packageFullName == registeredFullName, "FindPackageByAUMID must resolve correctly");
+
+    // 6. Win32 Package Identity API Verification (kernelbase.dll)
+    wchar_t fnBuffer[256]{};
+    uint32_t fnLen = 256;
+    LONG r = GetCurrentPackageFullName(&fnLen, fnBuffer);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && fnLen > 0, "GetCurrentPackageFullName must succeed for active process");
+
+    wchar_t famBuffer[256]{};
+    uint32_t famLen = 256;
+    r = GetCurrentPackageFamilyName(&famLen, famBuffer);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && famLen > 0, "GetCurrentPackageFamilyName must succeed");
+
+    wchar_t pathBuffer[512]{};
+    uint32_t pathLen = 512;
+    r = GetCurrentPackagePath(&pathLen, pathBuffer);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && pathLen > 0, "GetCurrentPackagePath must succeed");
+
+    // Query path by full name
+    std::wstring wRegFn = Utf8ToWide(registeredFullName);
+    wchar_t qPathBuf[512]{};
+    uint32_t qpLen = 512;
+    r = GetPackagePathByFullName(wRegFn.c_str(), &qpLen, qPathBuf);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && std::wstring(qPathBuf).find(L"Contoso.PhotoStudio") != std::wstring::npos,
+                "GetPackagePathByFullName must return correct installation path");
+
+    // Derived family name from full name
+    wchar_t derivedFam[256]{};
+    uint32_t dfLen = 256;
+    r = PackageFamilyNameFromFullName(wRegFn.c_str(), &dfLen, derivedFam);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && std::wstring(derivedFam) == Utf8ToWide(qPkg.packageFamilyName),
+                "PackageFamilyNameFromFullName must extract exact family name");
+
+    // MSIX package verification
+    BOOL isMSIX = FALSE_VAL;
+    r = CheckIsMSIXPackage(wRegFn.c_str(), &isMSIX);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && isMSIX == TRUE_VAL, "CheckIsMSIXPackage must return TRUE for registered package");
+
+    // 7. AppPolicy Modern Application Governance
+    AppPolicyWindowingModel winModel{};
+    AppPolicyProcessTerminationMethod termMethod{};
+    AppPolicyThreadInitializationType threadInit{};
+    AppPolicyShowDeveloperDiagnostic devDiag{};
+
+    r = AppPolicyGetWindowingModel(nullptr, &winModel);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && winModel == AppPolicyWindowingModel::Universal, "Windowing model must be Universal");
+
+    r = AppPolicyGetProcessTerminationMethod(nullptr, &termMethod);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && termMethod == AppPolicyProcessTerminationMethod::TerminateProcess,
+                "Termination method must be TerminateProcess");
+
+    r = AppPolicyGetThreadInitializationType(nullptr, &threadInit);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && threadInit == AppPolicyThreadInitializationType::InitializeWinRT,
+                "Thread init must be InitializeWinRT");
+
+    r = AppPolicyGetShowDeveloperDiagnostic(nullptr, &devDiag);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && devDiag == AppPolicyShowDeveloperDiagnostic::ShowUI,
+                "Developer diagnostic policy must be ShowUI");
+
+    // 8. Process Lifetime Management (PLM) Lifecycle State Machine
+    uint32_t testPid = 9920;
+    PlmManager::get().RegisterProcess(testPid, qPkg.aumid, registeredFullName);
+    TEST_ASSERT(PlmManager::get().GetProcessState(testPid) == PlmApplicationState::Running, "Process must start in Running state");
+
+    PlmApplicationState qState{};
+    r = PlmGetApplicationState(testPid, &qState);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && qState == PlmApplicationState::Running, "PlmGetApplicationState must query Running");
+
+    // Suspend
+    r = PlmSuspendApplication(testPid);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL, "PlmSuspendApplication must succeed");
+    TEST_ASSERT(PlmManager::get().GetProcessState(testPid) == PlmApplicationState::Suspended, "Process must transition to Suspended");
+
+    // Resume
+    r = PlmResumeApplication(testPid);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL, "PlmResumeApplication must succeed");
+    TEST_ASSERT(PlmManager::get().GetProcessState(testPid) == PlmApplicationState::Running, "Process must transition to Running");
+
+    // 9. Extended Execution Grants & Revocation
+    uint32_t token = 0;
+    r = PlmRequestExtendedExecution(testPid, PlmExtendedExecutionReason::SavingData, 20, &token);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL && token != 0, "PlmRequestExtendedExecution must grant valid token");
+
+    r = PlmRevokeExtendedExecution(testPid, token);
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL, "PlmRevokeExtendedExecution must successfully revoke token");
+
+    // Terminate under memory pressure
+    r = PlmTerminateApplication(testPid, "SystemLowMemory");
+    TEST_ASSERT(r == ERROR_SUCCESS_VAL, "PlmTerminateApplication must terminate process");
+    TEST_ASSERT(PlmManager::get().GetProcessState(testPid) == PlmApplicationState::Terminated, "Process must transition to Terminated");
+
+    // 10. Interactive Shell Verification (appmodel test, appmodel info, appmodel list)
+    shell::CommandShell shellEngine;
+    std::ostringstream testOut;
+    int rc = shellEngine.execute("appmodel test", testOut);
+    TEST_ASSERT(rc == 0, "appmodel test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("10 / 10 Subsystem Invariants Verified") != std::string::npos,
+                "appmodel test must verify all 10 invariants");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("appmodel info", infoOut);
+    TEST_ASSERT(rc == 0, "appmodel info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("AppModel, Package Identity & PLM Subsystem Telemetry") != std::string::npos,
+                "appmodel info must display subsystem telemetry");
+
+    std::ostringstream listOut;
+    rc = shellEngine.execute("appmodel list", listOut);
+    TEST_ASSERT(rc == 0, "appmodel list CLI command must return 0");
+    TEST_ASSERT(listOut.str().find("MicaNT Installed Modern Package Catalog") != std::string::npos,
+                "appmodel list must enumerate installed packages");
+
+    // Cleanup
+    AppModelCatalog::get().UnregisterPackage(registeredFullName);
+
+    std::cout << "[TEST] Suite 121: Windows AppModel & Modern Application Lifecycle Management PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite120")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite121")) {
+        RUN_TEST(Test_WindowsAppModel_Lifecycle_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite120") {
         RUN_TEST(Test_WindowsPointerDevice_Subsystem);
         return g_FailedTests;
     }
@@ -28232,6 +28443,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsUIComposition_Subsystem);
     RUN_TEST(Test_WindowsColorSystem_Subsystem);
     RUN_TEST(Test_WindowsPointerDevice_Subsystem);
+    RUN_TEST(Test_WindowsAppModel_Lifecycle_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
