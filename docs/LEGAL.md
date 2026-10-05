@@ -64,9 +64,9 @@ MicaNT deliberately uses standard architectural, engineering, and RFC designatio
 | Volume Snapshots | **Volume Shadow Copy (VSS)** (`vssapi.dll`) | Volume Shadow Copy Service (`vssadmin`) |
 | Certificate Store | **Crypt32 Subsystem** (`crypt32.dll`) | Microsoft Certificate Store (`certmgr`) |
 | File-Level Encryption | **File Encryption Client / EFS** (`feclient.dll`) | Encrypting File System (`cipher`) |
-| Endpoint Security Center | **Windows Security Center (WSC)** (`wscapi.dll`) | Windows Security / Action Center (`wsc`) |
+| Endpoint Security Center | **Sentinel Security System / WSC** (`wscapi.dll`) | Windows Security / Action Center (`sentinel` / `wsc`) |
 
-All CLI commands clearly identify themselves as running in compatibility mode with prominent copyright disclaimers.
+The term "Sentinel" is a generic English dictionary word commonly used across computing and cybersecurity to denote a guard or monitoring mechanism; the **Sentinel Security System for MicaNT** is an original sovereign subsystem engineered exclusively for local platform integrity. All CLI commands clearly identify themselves as running in compatibility mode with prominent copyright disclaimers.
 
 ---
 

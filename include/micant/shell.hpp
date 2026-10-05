@@ -345,7 +345,7 @@ public:
             if (cmd == "signtool" || cmd == "wintrust" || cmd == "sign") { cmdSignTool(tokens, out); return 0; }
             if (cmd == "wdac" || cmd == "ci") { cmdWdac(tokens, out); return 0; }
             if (cmd == "cipher" || cmd == "efs") { cmdCipher(tokens, out); return 0; }
-            if (cmd == "wsc" || cmd == "security" || cmd == "securitycenter") { cmdWsc(tokens, out); return 0; }
+            if (cmd == "sentinel" || cmd == "wsc" || cmd == "security" || cmd == "securitycenter") { cmdWsc(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -654,7 +654,7 @@ private:
             << "  SIGNTOOL [verify|sign|catdb|test] Windows Authenticode & Code Integrity Tool (signtool test)\n"
             << "  WDAC [status|mode|rules|logs|test] Windows Defender Application Control & CI (wdac test)\n"
             << "  CIPHER [/e|/d|/c|/k|/w|status|test] Windows Encrypting File System (EFS) Tool (cipher test)\n"
-            << "  WSC [status|health|products|register|unregister|test] Windows Security Center & SentinelCenter (wsc test)\n"
+            << "  SENTINEL / WSC [status|health|products|register|unregister|test] Sentinel Security System for MicaNT (sentinel test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20330,16 +20330,16 @@ private:
         };
 
         if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help")) {
-            out << "Windows Security Center (WSC) & SentinelCenter Subsystem CLI\n"
+            out << "Sentinel Security System for MicaNT (wscapi.dll / SentinelCenter)\n"
                 << "Note: Windows Security Center, WSC, and Windows Defender are trademarks of Microsoft Corp. Referenced under nominative fair use.\n"
                 << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
                 << "Usage:\n"
-                << "  wsc status                          Displays aggregated system security posture and provider states\n"
-                << "  wsc health [provider]               Queries health state for specific provider (firewall|antivirus|uac|cbs|all)\n"
-                << "  wsc products                        Lists all registered endpoint security products in SentinelCenter\n"
-                << "  wsc register <name> <type> [path]   Registers a third-party or sovereign security provider\n"
-                << "  wsc unregister <guid>               Unregisters a security provider by GUID\n"
-                << "  wsc test                            Executes SentinelCenter diagnostic test suite\n";
+                << "  sentinel status                     Displays aggregated system security posture and provider states\n"
+                << "  sentinel health [provider]          Queries health state for specific provider (firewall|antivirus|uac|cbs|all)\n"
+                << "  sentinel products                   Lists all registered endpoint security products in SentinelCenter\n"
+                << "  sentinel register <name> <type> [p] Registers a third-party or sovereign security provider\n"
+                << "  sentinel unregister <guid>          Unregisters a security provider by GUID\n"
+                << "  sentinel test                       Executes Sentinel Security System diagnostic test suite\n";
             return;
         }
 
@@ -20557,13 +20557,13 @@ private:
             }
         };
 
-        out << "MicaNT Windows Security Center (SentinelCenter) Status:\n"
+        out << "Sentinel Security System for MicaNT Status:\n"
             << "  Aggregated System Posture:    " << healthToString(hOverall) << "\n"
             << "  Virus & Threat Protection:    " << healthToString(hAv) << " (AegisDefender Engine Active)\n"
             << "  Firewall & Network Protection: " << healthToString(hFw) << " (WFP Public Profile Enforcing)\n"
             << "  User Account Control (UAC):   " << healthToString(hUac) << " (LUA Active)\n"
             << "  Servicing & System Updates:   " << healthToString(hUp) << " (CBS Sovereign Stack)\n"
-            << "  Core Service Status:          Operational (wscsvc)\n"
+            << "  Core Service Status:          Operational (wscsvc / SentinelCenter)\n"
             << "  Total Security Providers:     " << SovereignWscManager::get().getProducts().size() << "\n";
     }
 

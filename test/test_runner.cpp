@@ -31780,10 +31780,16 @@ void Test_WindowsSecurityCenter_WSC_Subsystem() {
 
     int shellRet = proc.execute("wsc status", oss);
     TEST_ASSERT(shellRet == 0, "wsc status must return 0");
-    TEST_ASSERT(oss.str().find("SentinelCenter") != std::string::npos, "wsc status output must mention SentinelCenter");
+    TEST_ASSERT(oss.str().find("Sentinel") != std::string::npos, "wsc status output must mention Sentinel");
     TEST_ASSERT(oss.str().find("GOOD") != std::string::npos, "wsc status must report GOOD");
     TEST_ASSERT(oss.str().find("AegisDefender") != std::string::npos, "wsc status must mention AegisDefender");
     TEST_ASSERT(oss.str().find("WFP") != std::string::npos, "wsc status must mention WFP");
+
+    // Also verify "sentinel" command alias
+    oss.str("");
+    shellRet = proc.execute("sentinel status", oss);
+    TEST_ASSERT(shellRet == 0, "sentinel status must return 0");
+    TEST_ASSERT(oss.str().find("Sentinel Security System for MicaNT") != std::string::npos, "sentinel status output must report Sentinel Security System for MicaNT");
 
     oss.str("");
     shellRet = proc.execute("wsc health firewall", oss);
@@ -31802,11 +31808,11 @@ void Test_WindowsSecurityCenter_WSC_Subsystem() {
     TEST_ASSERT(oss.str().find("MicaNT Sovereign Advanced Firewall") != std::string::npos, "Must list Firewall");
 
     oss.str("");
-    shellRet = proc.execute("wsc test", oss);
-    TEST_ASSERT(shellRet == 0, "wsc test must return 0");
-    TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "wsc test must report SUCCESS");
+    shellRet = proc.execute("sentinel test", oss);
+    TEST_ASSERT(shellRet == 0, "sentinel test must return 0");
+    TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "sentinel test must report SUCCESS");
 
-    std::cout << "[TEST] Suite 136: Windows Security Center (SentinelCenter) & wscapi.dll Subsystem PASSED.\n";
+    std::cout << "[TEST] Suite 136: Sentinel Security System (SentinelCenter / wscapi.dll) PASSED.\n";
 }
 
 int main(int argc, char* argv[]) {

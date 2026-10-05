@@ -1,8 +1,8 @@
-# MicaNT Sovereign Security Architecture & Endpoint Protection Roadmap
+# Sentinel Security System for MicaNT: Sovereign Architecture & Endpoint Protection Roadmap
 
 **Document Reference:** `docs/SECURITY_ROADMAP.md`  
 **Classification:** Sovereign Systems Architecture & Defense Blueprint  
-**Subsystem Lineage:** Project MICA (Dave Cutler 1988) ➔ SentinelSec & AegisDefender  
+**Subsystem Lineage:** Project MICA (Dave Cutler 1988) ➔ Sentinel Security System (SentinelSec, SentinelCenter, AegisDefender)  
 **Status:** Active Architectural Charter  
 
 ---
