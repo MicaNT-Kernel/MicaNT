@@ -113,6 +113,7 @@
 #include "wcs.hpp"
 #include "pointer.hpp"
 #include "appmodel.hpp"
+#include "d2d1_3.hpp"
 
 namespace micant::shell {
 
@@ -316,6 +317,7 @@ public:
             if (cmd == "wcs" || cmd == "colorsystem" || cmd == "colormgr") { cmdColorSystem(tokens, out); return 0; }
             if (cmd == "pointer" || cmd == "touch" || cmd == "ink") { cmdPointer(tokens, out); return 0; }
             if (cmd == "appmodel" || cmd == "package" || cmd == "plm" || cmd == "appx") { cmdAppModel(tokens, out); return 0; }
+            if (cmd == "d2d13" || cmd == "d2d3" || cmd == "typography" || cmd == "svg") { cmdD2D1_3(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -610,6 +612,7 @@ private:
             << "  WCS [test|info|gamut]    Windows Color System & HDR Subsystem (wcs test)\n"
             << "  POINTER [test|info|inject] Windows Pointer Device & Touch Subsystem (pointer test)\n"
             << "  APPMODEL [test|info|list|plm] Windows AppModel, Package Identity & PLM (appmodel test)\n"
+            << "  D2D13 [test|info|demo]   Direct2D 1.3 SVG, Inking & Typography (d2d13 test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -16735,6 +16738,216 @@ private:
             << "  appmodel info                           Displays AppModel subsystem telemetry\n"
             << "  appmodel list                           Enumerates registered MSIX/AppX packages\n"
             << "  appmodel plm <pid> <action>             Controls PLM state (suspend/resume/terminate)\n";
+    }
+
+    void cmdD2D1_3(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::d2d1_3;
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[Direct2D 1.3] Running Direct2D 1.3 & DirectWrite Advanced Typography Self-Tests...\n";
+            int passed = 0;
+
+            // 1. Direct2D 1.3 Factory Creation
+            CD2D1Factory3Impl factory;
+            ID2D1DeviceContext2* pDC = nullptr;
+            int32_t hr = factory.CreateDeviceContext2(&pDC);
+            if (hr == 0 && pDC != nullptr) {
+                passed++;
+                out << "  [PASS] 1. ID2D1Factory3::CreateDeviceContext2 (DeviceContext2 instance initialized)\n";
+            }
+
+            // 2. Ink Style (Round & Square Nib Shapes)
+            D2D1_INK_STYLE_PROPERTIES styleProps{};
+            styleProps.nibShape = D2D1_INK_NIB_SHAPE_ROUND;
+            styleProps.nibTransform = { 1, 0, 0, 1, 0, 0 };
+            ID2D1InkStyle* pStyle = nullptr;
+            hr = factory.CreateInkStyle(&styleProps, &pStyle);
+            if (hr == 0 && pStyle != nullptr && pStyle->GetNibShape() == D2D1_INK_NIB_SHAPE_ROUND) {
+                passed++;
+                out << "  [PASS] 2. ID2D1InkStyle (Round Nib Shape, Identity Nib Transform)\n";
+            }
+
+            // 3. Hardware-Accelerated Ink & Bezier Segments
+            D2D1_INK_POINT startPt{ 100.0f, 100.0f, 3.5f };
+            ID2D1Ink* pInk = nullptr;
+            hr = pDC->CreateInk(&startPt, &pInk);
+            if (hr == 0 && pInk != nullptr) {
+                D2D1_INK_BEZIER_SEGMENT segs[2] = {
+                    { { 120.0f, 140.0f, 4.0f }, { 160.0f, 180.0f, 5.0f }, { 200.0f, 200.0f, 4.5f } },
+                    { { 240.0f, 210.0f, 4.0f }, { 280.0f, 190.0f, 3.0f }, { 320.0f, 150.0f, 2.0f } }
+                };
+                pInk->AddSegments(segs, 2);
+                d2d1::D2D1_RECT_F bounds{};
+                pInk->GetBounds(pStyle, nullptr, &bounds);
+                if (pInk->GetSegmentCount() == 2 && bounds.right >= 320.0f) {
+                    passed++;
+                    out << "  [PASS] 3. ID2D1Ink (Bézier Segments added: 2, Inking Bounds: [" << bounds.left << ", " << bounds.top << ", " << bounds.right << ", " << bounds.bottom << "])\n";
+                }
+            }
+
+            // 4. Inking Draw Execution
+            pDC->DrawInk(pInk, nullptr, pStyle);
+            auto* pDCImpl = static_cast<CD2D1DeviceContext2Impl*>(pDC);
+            if (pDCImpl->GetInkDrawCount() == 1) {
+                passed++;
+                out << "  [PASS] 4. ID2D1DeviceContext2::DrawInk (Inking stroke dispatched to pipeline)\n";
+            }
+
+            // 5. SpriteBatch Batched Rendering (1,000 Sprites)
+            ID2D1SpriteBatch* pBatch = nullptr;
+            hr = pDC->CreateSpriteBatch(&pBatch);
+            if (hr == 0 && pBatch != nullptr) {
+                std::vector<d2d1::D2D1_RECT_F> rects(1000);
+                std::vector<d2d1::D2D1_COLOR_F> colors(1000);
+                for (size_t i = 0; i < 1000; ++i) {
+                    rects[i] = { static_cast<float>(i % 50) * 16.0f, static_cast<float>(i / 50) * 16.0f,
+                                 static_cast<float>(i % 50) * 16.0f + 14.0f, static_cast<float>(i / 50) * 16.0f + 14.0f };
+                    colors[i] = { 1.0f, static_cast<float>(i) / 1000.0f, 0.5f, 1.0f };
+                }
+                pBatch->AddSprites(1000, rects.data(), nullptr, colors.data(), nullptr, 0, 0, 0, 0);
+                pDC->DrawSpriteBatch(pBatch, 0, 1000, nullptr, d2d1::D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_SPRITE_OPTIONS_NONE);
+                if (pBatch->GetSpriteCount() == 1000 && pDCImpl->GetSpriteBatchDrawCount() == 1) {
+                    passed++;
+                    out << "  [PASS] 5. ID2D1SpriteBatch (1,000 Sprites batched & drawn in single call)\n";
+                }
+            }
+
+            // 6. Gradient Mesh (16-Point Bicubic Coons Patch)
+            D2D1_GRADIENT_MESH_PATCH patch{};
+            patch.point00 = { 0, 0 }; patch.point03 = { 200, 0 };
+            patch.point30 = { 0, 200 }; patch.point33 = { 200, 200 };
+            patch.color00 = { 1, 0, 0, 1 }; patch.color03 = { 0, 1, 0, 1 };
+            patch.color30 = { 0, 0, 1, 1 }; patch.color33 = { 1, 1, 0, 1 };
+            ID2D1GradientMesh* pMesh = nullptr;
+            hr = pDC->CreateGradientMesh(&patch, 1, &pMesh);
+            if (hr == 0 && pMesh != nullptr && pMesh->GetPatchCount() == 1) {
+                pDC->DrawGradientMesh(pMesh);
+                passed++;
+                out << "  [PASS] 6. ID2D1GradientMesh (Bicubic Coons Patch mesh synthesized & rendered)\n";
+            }
+
+            // 7. SVG Document & SVG DOM Tree Construction
+            ID2D1SvgDocument* pSvgDoc = nullptr;
+            hr = pDC->CreateSvgDocument(nullptr, { 256, 256 }, &pSvgDoc);
+            if (hr == 0 && pSvgDoc != nullptr) {
+                ID2D1SvgElement* pRoot = nullptr;
+                pSvgDoc->GetRoot(&pRoot);
+                auto* pCircle = new CD2D1SvgElementImpl(pSvgDoc, L"circle");
+                pCircle->SetAttributeValue(L"id", L"sovereignCircle");
+                pCircle->SetAttributeValue(L"cx", L"128");
+                pCircle->SetAttributeValue(L"cy", L"128");
+                pCircle->SetAttributeValue(L"r", L"64");
+                pCircle->SetAttributeValue(L"fill", L"#0078D7");
+                pRoot->AppendChild(pCircle);
+
+                ID2D1SvgElement* pFound = nullptr;
+                pSvgDoc->FindElementById(L"sovereignCircle", &pFound);
+                std::string xml;
+                pSvgDoc->Serialize(xml);
+                pDC->DrawSvgDocument(pSvgDoc);
+
+                if (pFound != nullptr && xml.find("<circle") != std::string::npos && pDCImpl->GetSvgDrawCount() == 1) {
+                    passed++;
+                    out << "  [PASS] 7. ID2D1SvgDocument & ID2D1SvgElement (SVG DOM with element ID index & serialization)\n";
+                }
+                if (pFound) pFound->Release();
+                pCircle->Release();
+                if (pRoot) pRoot->Release();
+            }
+
+            // 8. DirectWrite OpenType Typographic Features (kern, liga, smcp, onum)
+            CDWriteTypographyImpl typo;
+            typo.AddFontFeature({ DWRITE_FONT_FEATURE_TAG_KERNING, 1 });
+            typo.AddFontFeature({ DWRITE_FONT_FEATURE_TAG_STANDARD_LIGATURES, 1 });
+            typo.AddFontFeature({ DWRITE_FONT_FEATURE_TAG_SMALL_CAPITALS, 1 });
+            typo.AddFontFeature({ DWRITE_FONT_FEATURE_TAG_OLD_STYLE_FIGURES, 1 });
+            if (typo.GetFontFeatureCount() == 4) {
+                DWRITE_FONT_FEATURE f{};
+                typo.GetFontFeature(2, &f);
+                if (f.nameTag == DWRITE_FONT_FEATURE_TAG_SMALL_CAPITALS) {
+                    passed++;
+                    out << "  [PASS] 8. IDWriteTypography (OpenType features: kern, liga, smcp, onum registered)\n";
+                }
+            }
+
+            // 9. DirectWrite Multi-Script Font Fallback Cascade
+            CDWriteFontFallbackImpl fallback;
+            std::wstring mappedLatin, mappedCJK, mappedArabic;
+            fallback.MapCharacters(L"Hello World", 11, L"en-US", mappedLatin);
+            fallback.MapCharacters(L"\u4E2D\u6587", 2, L"zh-CN", mappedCJK);
+            fallback.MapCharacters(L"\u0627\u0644\u0639\u0631\u0628\u064A\u0629", 7, L"ar-SA", mappedArabic);
+
+            if (mappedLatin == L"Segoe UI" && mappedCJK == L"Microsoft YaHei" && mappedArabic == L"Segoe UI Historic") {
+                passed++;
+                out << "  [PASS] 9. IDWriteFontFallback (Multi-script cascade: Latin -> Segoe UI, CJK -> YaHei, Arabic -> Historic)\n";
+            }
+
+            // 10. Dynamic Exports & VersionDatabase Parity
+            InitializeDirect2D1_3Exports();
+            auto* pF3 = micant::ldr::DynamicLoader::get().getExport("d2d1.dll", "D2D1CreateFactory3");
+            auto* pTypo = micant::ldr::DynamicLoader::get().getExport("dwrite.dll", "DWriteCreateTypography");
+            auto* pFBack = micant::ldr::DynamicLoader::get().getExport("dwrite.dll", "DWriteCreateFontFallback");
+            if (pF3 && pTypo && pFBack) {
+                passed++;
+                out << "  [PASS] 10. Dynamic Exports (d2d1.dll D2D1CreateFactory3, dwrite.dll Typography & Fallback)\n";
+            }
+
+            // Clean up
+            if (pSvgDoc) pSvgDoc->Release();
+            if (pMesh) pMesh->Release();
+            if (pBatch) pBatch->Release();
+            if (pInk) pInk->Release();
+            if (pStyle) pStyle->Release();
+            if (pDC) pDC->Release();
+
+            out << "[Direct2D 1.3] Tests Finished: " << passed << " / 10 Subsystem Invariants Verified.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "        MicaNT Direct2D 1.3 & DirectWrite Typography Telemetry          \n"
+                << "========================================================================\n\n"
+                << "  Engine:                 Direct2D 1.3 High-Performance Hardware 2D Vector Pipeline\n"
+                << "  Typography Engine:      DirectWrite OpenType Typographic Feature Processor\n"
+                << "  Native Libraries:       d2d1.dll & dwrite.dll (Version 10.0.22621.1)\n"
+                << "  Features Supported:     ID2D1Ink, ID2D1SpriteBatch, ID2D1GradientMesh, ID2D1SvgDocument\n"
+                << "  OpenType Features:      Kerning, Standard/Contextual Ligatures, Small Caps, OldStyle\n"
+                << "  Font Fallback:          Multi-Script Unified Unicode Cascade Resolver\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "demo") {
+            out << "[Direct2D 1.3] Generating Sovereign SVG Vector Shield Icon...\n";
+            CD2D1DeviceContext2Impl dc;
+            ID2D1SvgDocument* pDoc = nullptr;
+            dc.CreateSvgDocument(nullptr, { 128, 128 }, &pDoc);
+            ID2D1SvgElement* pRoot = nullptr;
+            pDoc->GetRoot(&pRoot);
+
+            auto* pPath = new CD2D1SvgElementImpl(pDoc, L"path");
+            pPath->SetAttributeValue(L"id", L"shieldPath");
+            pPath->SetAttributeValue(L"d", L"M 64 16 L 112 36 L 112 80 C 112 104 64 120 64 120 C 64 120 16 104 16 80 L 16 36 Z");
+            pPath->SetAttributeValue(L"fill", L"#0078D7");
+            pPath->SetAttributeValue(L"stroke", L"#FFFFFF");
+            pPath->SetAttributeValue(L"stroke-width", L"3");
+            pRoot->AppendChild(pPath);
+
+            std::string serialized;
+            pDoc->Serialize(serialized);
+            out << serialized << "\n";
+            out << "[Direct2D 1.3] SVG Vector Asset Synthesized (128x128 Viewport, Sovereign Theme).\n";
+
+            pPath->Release();
+            pRoot->Release();
+            pDoc->Release();
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  d2d13 test                              Runs Direct2D 1.3 & Typography self-tests\n"
+            << "  d2d13 info                              Displays Direct2D 1.3 subsystem telemetry\n"
+            << "  d2d13 demo                              Synthesizes and renders modern SVG vector asset\n";
     }
 
     static std::string trim(std::string_view s) {

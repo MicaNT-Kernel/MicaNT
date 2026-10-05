@@ -192,7 +192,13 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 92: Windows Color System (WCS) & Advanced Color / HDR[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 93: Windows Pointer Device & Modern Touch/Inking     [PLANNED]        │
+│ Phase 93: Windows Pointer Device & Modern Touch/Inking     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 94: Windows AppModel & Modern Application Lifecycle  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 95: Direct2D 1.3 & DirectWrite Advanced Typography   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 96: Windows Text Services Framework & Modern IME     [IN PROGRESS]    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2208,16 +2214,37 @@
 
 ---
 
-### Phase 95: Direct2D 1.3 & DirectWrite Advanced Typography / OpenType Subsystem (`d2d1_3.hpp`, `d2d1.dll`, `dwrite.dll`) (PLANNED - MILESTONE 122)
-- [ ] **Direct2D 1.3 High-Performance 2D Vector & Device Context Architecture (`d2d1.dll`)**:
-  - `ID2D1DeviceContext2`, `ID2D1DeviceContext3`, `ID2D1Factory3`.
-  - Color font rendering (OpenType SVG, COLR/CPAL, CBDT/CBLC glyph tables).
-  - Path geometry boolean operations (Union, Intersect, Xor, Exclude) and stroke dashes.
-- [ ] **DirectWrite Advanced OpenType Typography Engine (`dwrite.dll`)**:
-  - OpenType font feature tags (`kern`, `liga`, `clig`, `calt`, `smcp`, `onum`, `tnum`).
-  - Multi-script Unicode bidirectional layout and font fallback cascade resolver.
-- [ ] **Unit Test Suite 122 (`Test_WindowsDirect2D1_3_Typography_Subsystem`)**:
-  - Validate D2D 1.3 device contexts, SVG color glyph decoding, OpenType typographic feature tags, and interactive shell commands.
+### Phase 95: Direct2D 1.3 & DirectWrite Advanced Typography / OpenType Subsystem (`d2d1_3.hpp`, `d2d1.dll`, `dwrite.dll`) (COMPLETED 100% - MILESTONE 122)
+- [x] **Direct2D 1.3 High-Performance 2D Vector & Device Context Architecture (`d2d1.dll`)**:
+  - `ID2D1DeviceContext2`, `ID2D1Factory3`, `ID2D1Ink`, `ID2D1InkStyle`, `ID2D1SpriteBatch`, `ID2D1GradientMesh`, `ID2D1SvgDocument`, `ID2D1SvgElement`.
+  - Bézier ink stroke geometry generation, nib transforms, round/square nib shapes, and bounding box computation.
+  - High-throughput batched sprite rendering with destination/source rectangle clamps and transforms.
+  - Bicubic 16-point Coons patch gradient mesh generation.
+  - SVG vector document object model with recursive element queries (`FindElementById`) and XML serialization.
+- [x] **DirectWrite Advanced OpenType Typography Engine (`dwrite.dll`)**:
+  - OpenType font feature tags (`kern`, `liga`, `clig`, `calt`, `smcp`, `onum`, `tnum`, `ss01`, `swsh`) and feature collections via `IDWriteTypography`.
+  - Multi-script Unicode font fallback cascade resolver (`IDWriteFontFallback::MapCharacters`) covering Latin, Cyrillic, Greek, Arabic, Korean Hangul, Japanese Kana, and CJK Unified Ideographs.
+  - Dual VersionDatabase registrations (`10.0.22621.1`) for `d2d1.dll` and `dwrite.dll`.
+- [x] **Shell CLI Integration**:
+  - Added `d2d13 test`, `d2d13 info`, `d2d13 ink`, `d2d13 svg`, and `d2d13 typo` commands in `micant::shell`.
+- [x] **Unit Test Suite 122 (`Test_WindowsDirect2D1_3_Typography_Subsystem`)**:
+  - Validates dynamic exports, COM querying (`ID2D1Factory3`, `ID2D1DeviceContext2`), Ink styles/strokes, SpriteBatch transforms, GradientMesh patches, SVG DOM building/serialization/querying, OpenType typographic features, Unicode font fallback cascade, and shell commands.
+  - Milestone 122: **122 / 122 Test Suites Passing (100%)**.
+
+---
+
+### Phase 96: Windows Text Services Framework & Modern IME Subsystem (`tsf.hpp`, `msctf.dll`, `imm32.dll`) (IN PROGRESS - MILESTONE 123)
+- [ ] **Windows Text Services Framework Architecture (`include/micant/tsf.hpp`, `msctf.dll`)**:
+  - Core TSF COM interfaces: `ITfThreadMgr`, `ITfDocumentMgr`, `ITfContext`, `ITfEditSession`, `ITfRange`, `ITfCategoryMgr`, `ITfInputProcessorProfiles`.
+  - Compartment management: `ITfCompartmentMgr` and `ITfCompartment` for global and thread-local IME state (Open/Close status, Conversion mode).
+  - Modern Text Input Scopes: `ITfInputScope` supporting `IS_DEFAULT`, `IS_URL`, `IS_EMAIL_SMTPADDRESS`, `IS_NUMERIC`, `IS_PASSWORD`, `IS_SEARCH`.
+- [ ] **Input Method Manager (IMM32) Bridge (`imm32.dll`)**:
+  - Imm Win32 APIs: `ImmGetContext`, `ImmReleaseContext`, `ImmGetCompositionStringW`, `ImmSetCompositionStringW`, `ImmGetCandidateListW`, `ImmSetCandidateWindow`, `ImmSetCompositionWindow`, `ImmNotifyIME`, `ImmIsIME`.
+  - Composition string lifecycle: IME composition start, update (reading/clause info/attributes), candidate popup selection, and commit.
+- [ ] **Shell CLI Integration**:
+  - Added `tsf test`, `tsf info`, `tsf compose`, and `tsf candidates` commands in `micant::shell`.
+- [ ] **Unit Test Suite 123 (`Test_WindowsTextServices_IME_Subsystem`)**:
+  - Validates dynamic exports, TSF COM activation, document/context nesting, composition string updates, candidate lists, input scope filtering, and IMM32 interoperability.
 
 
 

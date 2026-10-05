@@ -28253,8 +28253,203 @@ void Test_WindowsAppModel_Lifecycle_Subsystem() {
     std::cout << "[TEST] Suite 121: Windows AppModel & Modern Application Lifecycle Management PASSED.\n";
 }
 
+void Test_WindowsDirect2D1_3_Typography_Subsystem() {
+    using namespace micant::d2d1_3;
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 122: Direct2D 1.3 & DirectWrite Advanced Typography Subsystem    \n";
+    std::cout << "========================================================================\n";
+
+    // 1. Dynamic Exports & VersionDatabase Parity
+    InitializeDirect2D1_3Exports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("d2d1.dll", "D2D1CreateFactory3") != nullptr, "d2d1.dll D2D1CreateFactory3 export must exist");
+    TEST_ASSERT(loader.getExport("dwrite.dll", "DWriteCreateTypography") != nullptr, "dwrite.dll DWriteCreateTypography export must exist");
+    TEST_ASSERT(loader.getExport("dwrite.dll", "DWriteCreateFontFallback") != nullptr, "dwrite.dll DWriteCreateFontFallback export must exist");
+
+    // 2. ID2D1Factory3 & ID2D1DeviceContext2 Creation
+    CD2D1Factory3Impl factory;
+    ID2D1DeviceContext2* pDC = nullptr;
+    int32_t hr = factory.CreateDeviceContext2(&pDC);
+    TEST_ASSERT(hr == 0 && pDC != nullptr, "CreateDeviceContext2 must succeed");
+
+    ID2D1Factory3* pQueryFactory = nullptr;
+    hr = factory.QueryInterface(IID_ID2D1Factory3, reinterpret_cast<void**>(&pQueryFactory));
+    TEST_ASSERT(hr == 0 && pQueryFactory != nullptr, "QueryInterface for IID_ID2D1Factory3 must succeed");
+    pQueryFactory->Release();
+
+    // 3. ID2D1InkStyle (Nib Shapes & Transform)
+    D2D1_INK_STYLE_PROPERTIES styleProps{};
+    styleProps.nibShape = D2D1_INK_NIB_SHAPE_SQUARE;
+    styleProps.nibTransform = { 1.5f, 0, 0, 1.5f, 0, 0 };
+    ID2D1InkStyle* pStyle = nullptr;
+    hr = factory.CreateInkStyle(&styleProps, &pStyle);
+    TEST_ASSERT(hr == 0 && pStyle != nullptr, "CreateInkStyle must succeed");
+    TEST_ASSERT(pStyle->GetNibShape() == D2D1_INK_NIB_SHAPE_SQUARE, "Nib shape must match D2D1_INK_NIB_SHAPE_SQUARE");
+
+    d2d1::D2D1_MATRIX_3X2_F outXform{};
+    pStyle->GetNibTransform(&outXform);
+    TEST_ASSERT(outXform._11 == 1.5f && outXform._22 == 1.5f, "Nib transform scaling must match 1.5");
+
+    // 4. ID2D1Ink (Bézier Segment Ingestion & Geometry Bounds)
+    D2D1_INK_POINT startPt{ 50.0f, 50.0f, 2.0f };
+    ID2D1Ink* pInk = nullptr;
+    hr = pDC->CreateInk(&startPt, &pInk);
+    TEST_ASSERT(hr == 0 && pInk != nullptr, "CreateInk must succeed");
+    TEST_ASSERT(pInk->GetStartPoint().x == 50.0f && pInk->GetStartPoint().y == 50.0f, "Ink start point must match (50, 50)");
+
+    D2D1_INK_BEZIER_SEGMENT segs[3] = {
+        { { 70.0f, 90.0f, 2.5f }, { 110.0f, 130.0f, 3.5f }, { 150.0f, 150.0f, 3.0f } },
+        { { 190.0f, 160.0f, 3.0f }, { 230.0f, 140.0f, 2.5f }, { 270.0f, 100.0f, 2.0f } },
+        { { 300.0f, 80.0f, 1.5f }, { 330.0f, 70.0f, 1.2f }, { 360.0f, 60.0f, 1.0f } }
+    };
+    hr = pInk->AddSegments(segs, 3);
+    TEST_ASSERT(hr == 0 && pInk->GetSegmentCount() == 3, "AddSegments must add 3 Bézier segments");
+
+    d2d1::D2D1_RECT_F inkBounds{};
+    hr = pInk->GetBounds(pStyle, nullptr, &inkBounds);
+    TEST_ASSERT(hr == 0 && inkBounds.left <= 50.0f && inkBounds.right >= 360.0f, "Ink bounds must encompass all stroke segments");
+
+    // 5. DrawInk Pipeline
+    pDC->DrawInk(pInk, nullptr, pStyle);
+    auto* pDCImpl = static_cast<CD2D1DeviceContext2Impl*>(pDC);
+    TEST_ASSERT(pDCImpl->GetInkDrawCount() == 1, "DrawInk must increment ink draw counter");
+
+    // 6. ID2D1SpriteBatch (High-Throughput 2D Rendering)
+    ID2D1SpriteBatch* pBatch = nullptr;
+    hr = pDC->CreateSpriteBatch(&pBatch);
+    TEST_ASSERT(hr == 0 && pBatch != nullptr, "CreateSpriteBatch must succeed");
+
+    std::vector<d2d1::D2D1_RECT_F> spriteRects(500);
+    std::vector<d2d1::D2D1_COLOR_F> spriteColors(500);
+    for (size_t i = 0; i < 500; ++i) {
+        spriteRects[i] = { static_cast<float>(i * 4), static_cast<float>(i * 2), static_cast<float>(i * 4 + 16), static_cast<float>(i * 2 + 16) };
+        spriteColors[i] = { 0.2f, 0.4f, 0.8f, 1.0f };
+    }
+    hr = pBatch->AddSprites(500, spriteRects.data(), nullptr, spriteColors.data(), nullptr, 0, 0, 0, 0);
+    TEST_ASSERT(hr == 0 && pBatch->GetSpriteCount() == 500, "AddSprites must batch 500 sprites");
+
+    pDC->DrawSpriteBatch(pBatch, 0, 500, nullptr, d2d1::D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_SPRITE_OPTIONS_NONE);
+    TEST_ASSERT(pDCImpl->GetSpriteBatchDrawCount() == 1, "DrawSpriteBatch must execute batched rendering");
+
+    // 7. ID2D1GradientMesh (Bicubic Coons Patch)
+    D2D1_GRADIENT_MESH_PATCH meshPatch{};
+    meshPatch.point00 = { 0, 0 }; meshPatch.point03 = { 100, 0 };
+    meshPatch.point30 = { 0, 100 }; meshPatch.point33 = { 100, 100 };
+    meshPatch.color00 = { 1, 0, 0, 1 }; meshPatch.color03 = { 0, 1, 0, 1 };
+    meshPatch.color30 = { 0, 0, 1, 1 }; meshPatch.color33 = { 1, 1, 1, 1 };
+
+    ID2D1GradientMesh* pMesh = nullptr;
+    hr = pDC->CreateGradientMesh(&meshPatch, 1, &pMesh);
+    TEST_ASSERT(hr == 0 && pMesh != nullptr && pMesh->GetPatchCount() == 1, "CreateGradientMesh must succeed");
+    pDC->DrawGradientMesh(pMesh);
+    TEST_ASSERT(pDCImpl->GetGradientMeshDrawCount() == 1, "DrawGradientMesh must execute");
+
+    // 8. ID2D1SvgDocument & ID2D1SvgElement (SVG DOM & Serialization)
+    ID2D1SvgDocument* pSvg = nullptr;
+    hr = pDC->CreateSvgDocument(nullptr, { 300.0f, 300.0f }, &pSvg);
+    TEST_ASSERT(hr == 0 && pSvg != nullptr, "CreateSvgDocument must succeed");
+    TEST_ASSERT(pSvg->GetViewportSize().width == 300.0f && pSvg->GetViewportSize().height == 300.0f, "Viewport size must match 300x300");
+
+    ID2D1SvgElement* pSvgRoot = nullptr;
+    pSvg->GetRoot(&pSvgRoot);
+    TEST_ASSERT(pSvgRoot != nullptr, "GetRoot must return root SVG element");
+
+    auto* pRectElem = new CD2D1SvgElementImpl(pSvg, L"rect");
+    pRectElem->SetAttributeValue(L"id", L"bgRect");
+    pRectElem->SetAttributeValue(L"x", L"10");
+    pRectElem->SetAttributeValue(L"y", L"10");
+    pRectElem->SetAttributeValue(L"width", L"280");
+    pRectElem->SetAttributeValue(L"height", L"280");
+    pRectElem->SetAttributeValue(L"fill", L"#1E1E1E");
+    pSvgRoot->AppendChild(pRectElem);
+
+    ID2D1SvgElement* pFoundElem = nullptr;
+    hr = pSvg->FindElementById(L"bgRect", &pFoundElem);
+    TEST_ASSERT(hr == 0 && pFoundElem != nullptr, "FindElementById must locate bgRect");
+
+    std::string svgXml;
+    pSvg->Serialize(svgXml);
+    TEST_ASSERT(svgXml.find("<rect") != std::string::npos && svgXml.find("fill=\"#1E1E1E\"") != std::string::npos,
+                "SVG serialization must contain child rect and attributes");
+
+    pDC->DrawSvgDocument(pSvg);
+    TEST_ASSERT(pDCImpl->GetSvgDrawCount() == 1, "DrawSvgDocument must execute");
+
+    pFoundElem->Release();
+    pRectElem->Release();
+    pSvgRoot->Release();
+
+    // 9. IDWriteTypography & OpenType Features
+    IDWriteTypography* pTypo = nullptr;
+    hr = DWriteCreateTypography(&pTypo);
+    TEST_ASSERT(hr == 0 && pTypo != nullptr, "DWriteCreateTypography must succeed");
+
+    pTypo->AddFontFeature({ DWRITE_FONT_FEATURE_TAG_KERNING, 1 });
+    pTypo->AddFontFeature({ DWRITE_FONT_FEATURE_TAG_STANDARD_LIGATURES, 1 });
+    pTypo->AddFontFeature({ DWRITE_FONT_FEATURE_TAG_SMALL_CAPITALS, 1 });
+    pTypo->AddFontFeature({ DWRITE_FONT_FEATURE_TAG_OLD_STYLE_FIGURES, 1 });
+    pTypo->AddFontFeature({ DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES, 1 });
+
+    TEST_ASSERT(pTypo->GetFontFeatureCount() == 5, "Typography must contain 5 registered OpenType features");
+    DWRITE_FONT_FEATURE featCheck{};
+    pTypo->GetFontFeature(4, &featCheck);
+    TEST_ASSERT(featCheck.nameTag == DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES, "Feature 4 must match tabular figures tag");
+
+    // 10. IDWriteFontFallback Multi-Script Cascade
+    IDWriteFontFallback* pFallback = nullptr;
+    hr = DWriteCreateFontFallback(&pFallback);
+    TEST_ASSERT(hr == 0 && pFallback != nullptr, "DWriteCreateFontFallback must succeed");
+
+    std::wstring fontLatin, fontCJK, fontArabic, fontHangul;
+    pFallback->MapCharacters(L"MicaNT Architecture", 19, L"en-US", fontLatin);
+    pFallback->MapCharacters(L"\u65E5\u672C\u8A9E", 3, L"ja-JP", fontCJK);
+    pFallback->MapCharacters(L"\u0633\u0644\u0627\u0645", 4, L"ar-SA", fontArabic);
+    pFallback->MapCharacters(L"\uD55C\uAE00", 2, L"ko-KR", fontHangul);
+
+    TEST_ASSERT(fontLatin == L"Segoe UI", "Latin must map to Segoe UI");
+    TEST_ASSERT(fontCJK == L"Microsoft YaHei" || fontCJK == L"Meiryo", "CJK must map to appropriate East Asian font");
+    TEST_ASSERT(fontArabic == L"Segoe UI Historic", "Arabic must map to Segoe UI Historic");
+    TEST_ASSERT(fontHangul == L"Malgun Gothic", "Hangul must map to Malgun Gothic");
+
+    // 11. Interactive Shell Verification (d2d13 test, d2d13 info, d2d13 demo)
+    shell::CommandShell shellEngine;
+    std::ostringstream testOut;
+    int rc = shellEngine.execute("d2d13 test", testOut);
+    TEST_ASSERT(rc == 0, "d2d13 test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("10 / 10 Subsystem Invariants Verified") != std::string::npos,
+                "d2d13 test must verify all 10 invariants");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("d2d13 info", infoOut);
+    TEST_ASSERT(rc == 0, "d2d13 info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("Direct2D 1.3 & DirectWrite Typography Telemetry") != std::string::npos,
+                "d2d13 info must display subsystem telemetry");
+
+    std::ostringstream demoOut;
+    rc = shellEngine.execute("d2d13 demo", demoOut);
+    TEST_ASSERT(rc == 0, "d2d13 demo CLI command must return 0");
+    TEST_ASSERT(demoOut.str().find("<path") != std::string::npos && demoOut.str().find("shieldPath") != std::string::npos,
+                "d2d13 demo must render SVG vector shield");
+
+    // Clean up
+    pFallback->Release();
+    pTypo->Release();
+    pSvg->Release();
+    pMesh->Release();
+    pBatch->Release();
+    pInk->Release();
+    pStyle->Release();
+    pDC->Release();
+
+    std::cout << "[TEST] Suite 122: Direct2D 1.3 & DirectWrite Advanced Typography Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite121")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite122")) {
+        RUN_TEST(Test_WindowsDirect2D1_3_Typography_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite121") {
         RUN_TEST(Test_WindowsAppModel_Lifecycle_Subsystem);
         return g_FailedTests;
     }
@@ -28444,6 +28639,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsColorSystem_Subsystem);
     RUN_TEST(Test_WindowsPointerDevice_Subsystem);
     RUN_TEST(Test_WindowsAppModel_Lifecycle_Subsystem);
+    RUN_TEST(Test_WindowsDirect2D1_3_Typography_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
