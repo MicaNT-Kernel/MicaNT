@@ -303,6 +303,10 @@ struct Vector3 {
     float x{ 0.0f };
     float y{ 0.0f };
     float z{ 0.0f };
+
+    constexpr bool operator==(const Vector3& o) const noexcept {
+        return x == o.x && y == o.y && z == o.z;
+    }
 };
 
 struct Vector4 {

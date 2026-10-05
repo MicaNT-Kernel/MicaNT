@@ -109,6 +109,7 @@
 #include "dxcore.hpp"
 #include "directml.hpp"
 #include "dcomp.hpp"
+#include "uicomposition.hpp"
 
 namespace micant::shell {
 
@@ -308,6 +309,7 @@ public:
             if (cmd == "dstorage" || cmd == "directstorage") { cmdDirectStorage(tokens, out); return 0; }
             if (cmd == "dml" || cmd == "directml" || cmd == "dxcore") { cmdDirectML(tokens, out); return 0; }
             if (cmd == "dcomp" || cmd == "directcomposition" || cmd == "compositor") { cmdDirectComposition(tokens, out); return 0; }
+            if (cmd == "uicomp" || cmd == "composition" || cmd == "visuals") { cmdUIComposition(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -15971,6 +15973,222 @@ private:
             << "  dcomp test                              Runs DirectComposition visual tree self-tests\n"
             << "  dcomp info                              Displays compositor engine telemetry\n"
             << "  dcomp compose                           Builds and commits a sample modern acrylic visual tree\n";
+    }
+
+    void cmdUIComposition(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::composition;
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[UIComposition] Running Modern Visual Layer & Scene-Graph Subsystem Verification...\n";
+            int passed = 0;
+
+            // 1. Activation Factory
+            IActivationFactory* pFactory = nullptr;
+            if (DllGetActivationFactory(reinterpret_cast<HSTRING>(const_cast<wchar_t*>(L"Windows.UI.Composition.Compositor")), &pFactory) == 0 && pFactory) {
+                passed++;
+                out << "  [PASS] 1. DllGetActivationFactory for Windows.UI.Composition.Compositor\n";
+
+                // 2. Activate Instance
+                IInspectable* pInsp = nullptr;
+                pFactory->ActivateInstance(&pInsp);
+                if (pInsp) {
+                    passed++;
+                    out << "  [PASS] 2. IActivationFactory::ActivateInstance succeeded\n";
+
+                    // 3. Query ICompositor
+                    ICompositor* pComp = nullptr;
+                    if (pInsp->QueryInterface(IID_ICompositor, reinterpret_cast<void**>(&pComp)) == 0 && pComp) {
+                        passed++;
+                        out << "  [PASS] 3. ICompositor interface acquired\n";
+
+                        // 4. Create Visuals
+                        IContainerVisual* pRoot = nullptr;
+                        ISpriteVisual* pCard = nullptr;
+                        pComp->CreateContainerVisual(&pRoot);
+                        pComp->CreateSpriteVisual(&pCard);
+                        if (pRoot && pCard) {
+                            passed++;
+                            out << "  [PASS] 4. ContainerVisual & SpriteVisual creation\n";
+
+                            // 5. Visual properties
+                            pCard->SetOffset({ 80.0f, 120.0f, 0.0f });
+                            pCard->SetSize({ 400.0f, 250.0f });
+                            pCard->SetOpacity(0.90f);
+                            if (pCard->GetOffset().x == 80.0f && pCard->GetOpacity() == 0.90f) {
+                                passed++;
+                                out << "  [PASS] 5. Visual geometric transformation & opacity properties\n";
+                            }
+
+                            // 6. Tree hierarchy
+                            IVisualCollection* pChildren = nullptr;
+                            pRoot->GetChildren(&pChildren);
+                            if (pChildren) {
+                                pChildren->InsertAtTop(pCard);
+                                if (pChildren->GetCount() == 1 && pCard->GetParent() == pRoot) {
+                                    passed++;
+                                    out << "  [PASS] 6. Visual tree hierarchy (VisualCollection Insertion)\n";
+                                }
+                                pChildren->Release();
+                            }
+
+                            // 7. Brushes (ColorBrush, SurfaceBrush, EffectBrush)
+                            ICompositionColorBrush* pColorBrush = nullptr;
+                            pComp->CreateColorBrushWithColor({ 255, 45, 60, 90 }, &pColorBrush);
+                            if (pColorBrush) {
+                                pCard->SetBrush(pColorBrush);
+                                if (pCard->GetBrush() == pColorBrush) {
+                                    passed++;
+                                    out << "  [PASS] 7. Composition ColorBrush & Sprite binding\n";
+                                }
+                                pColorBrush->Release();
+                            }
+
+                            ICompositionEffectBrush* pEffectBrush = nullptr;
+                            pComp->CreateEffectBrush(L"MicaBackdropBlur", &pEffectBrush);
+                            if (pEffectBrush) {
+                                passed++;
+                                out << "  [PASS] 8. Composition EffectBrush (Mica/Acrylic blur filter)\n";
+                                pEffectBrush->Release();
+                            }
+
+                            pCard->Release();
+                            pRoot->Release();
+                        }
+
+                        // 8. Keyframe & Expression Animations
+                        IScalarKeyFrameAnimation* pScalarAnim = nullptr;
+                        pComp->CreateScalarKeyFrameAnimation(&pScalarAnim);
+                        if (pScalarAnim) {
+                            pScalarAnim->InsertKeyFrame(0.0f, 0.0f);
+                            pScalarAnim->InsertKeyFrame(1.0f, 100.0f);
+                            if (std::abs(pScalarAnim->Evaluate(0.5f) - 50.0f) < 1e-4f) {
+                                passed++;
+                                out << "  [PASS] 9. Smooth Cubic Hermite Keyframe Animation Evaluation\n";
+                            }
+                            pScalarAnim->Release();
+                        }
+
+                        IExpressionAnimation* pExprAnim = nullptr;
+                        pComp->CreateExpressionAnimationWithExpression(L"Lerp(A, B, Progress)", &pExprAnim);
+                        if (pExprAnim) {
+                            pExprAnim->SetScalarParameter(L"A", 50.0f);
+                            pExprAnim->SetScalarParameter(L"B", 150.0f);
+                            pExprAnim->SetScalarParameter(L"Progress", 0.5f);
+                            if (std::abs(pExprAnim->EvaluateScalar() - 100.0f) < 1e-4f) {
+                                passed++;
+                                out << "  [PASS] 10. Dynamic Expression Animation Evaluation (Lerp(50, 150, 0.5))\n";
+                            }
+                            pExprAnim->Release();
+                        }
+
+                        pComp->Release();
+                    }
+                    pInsp->Release();
+                }
+                pFactory->Release();
+            }
+
+            out << "[UIComposition] Tests Finished: " << passed << " / 10 Subsystem Invariants Verified.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "   MicaNT Modern UI Composition & Visual Layer Subsystem Telemetry     \n"
+                << "========================================================================\n\n"
+                << "  Architecture:           Sovereign PrismComposition Scene-Graph Engine\n"
+                << "  Primary DLLs:           windows.ui.composition.dll (In-box Windows API)\n"
+                << "                          microsoft.ui.composition.dll (WinUI 3 / App SDK)\n"
+                << "  Specification:          Windows.UI.Composition 10.0.22621.1\n"
+                << "  Visual Entities:        IVisual, IContainerVisual, ISpriteVisual\n"
+                << "  Brush Architecture:     ColorBrush, SurfaceBrush, Acrylic/Mica EffectBrush\n"
+                << "  Animation Engine:       Hermite Keyframe Animations & Dynamic Expression Math\n"
+                << "  Property Systems:       Reactive ICompositionPropertySet Key-Value Store\n"
+                << "  Presentation Bridge:    DirectComposition & DWM Native Backing Surfaces\n\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "demo") {
+            out << "[UIComposition] Generating Live Fluent Acrylic Composition Tree...\n";
+            IActivationFactory* pFactory = nullptr;
+            DllGetActivationFactory(reinterpret_cast<HSTRING>(const_cast<wchar_t*>(L"Windows.UI.Composition.Compositor")), &pFactory);
+            if (pFactory) {
+                IInspectable* pInsp = nullptr;
+                pFactory->ActivateInstance(&pInsp);
+                if (pInsp) {
+                    ICompositor* pComp = nullptr;
+                    pInsp->QueryInterface(IID_ICompositor, reinterpret_cast<void**>(&pComp));
+                    if (pComp) {
+                        IContainerVisual* pRoot = nullptr;
+                        ISpriteVisual* pWindowBg = nullptr;
+                        ISpriteVisual* pAcrylicCard = nullptr;
+                        ISpriteVisual* pAccentPill = nullptr;
+
+                        pComp->CreateContainerVisual(&pRoot);
+                        pComp->CreateSpriteVisual(&pWindowBg);
+                        pComp->CreateSpriteVisual(&pAcrylicCard);
+                        pComp->CreateSpriteVisual(&pAccentPill);
+
+                        // Window background
+                        pWindowBg->SetSize({ 1280.0f, 720.0f });
+                        ICompositionColorBrush* pDarkBg = nullptr;
+                        pComp->CreateColorBrushWithColor({ 255, 24, 24, 28 }, &pDarkBg);
+                        pWindowBg->SetBrush(pDarkBg);
+
+                        // Acrylic Glass Card
+                        pAcrylicCard->SetOffset({ 120.0f, 80.0f, 0.0f });
+                        pAcrylicCard->SetSize({ 500.0f, 320.0f });
+                        pAcrylicCard->SetOpacity(0.85f);
+
+                        ICompositionEffectBrush* pAcrylicEffect = nullptr;
+                        pComp->CreateEffectBrush(L"AcrylicBlurEffect", &pAcrylicEffect);
+                        pAcrylicCard->SetBrush(pAcrylicEffect);
+
+                        // Interactive Accent Button
+                        pAccentPill->SetOffset({ 150.0f, 320.0f, 0.0f });
+                        pAccentPill->SetSize({ 160.0f, 40.0f });
+                        pAccentPill->SetScale({ 1.08f, 1.08f, 1.0f });
+
+                        ICompositionColorBrush* pAccentBrush = nullptr;
+                        pComp->CreateColorBrushWithColor({ 255, 0, 120, 215 }, &pAccentBrush);
+                        pAccentPill->SetBrush(pAccentBrush);
+
+                        // Visual hierarchy
+                        IVisualCollection* pRootChildren = nullptr;
+                        pRoot->GetChildren(&pRootChildren);
+                        pRootChildren->InsertAtTop(pWindowBg);
+                        pRootChildren->InsertAtTop(pAcrylicCard);
+                        pRootChildren->InsertAtTop(pAccentPill);
+
+                        out << "  [SCENE] Fluent UI Visual Scene Tree Hierarchy:\n"
+                            << "    +- [Root ContainerVisual] (Canvas 1280x720)\n"
+                            << "       +- [Window Background SpriteVisual] (Solid Color: #18181C)\n"
+                            << "       +- [Acrylic Glass Card SpriteVisual] (Offset: (120, 80) | Size: 500x320 | Opacity: 85%)\n"
+                            << "          +- Filter: AcrylicBlurEffect (Gaussian Backdrop Convolution)\n"
+                            << "       +- [Accent Action Pill SpriteVisual] (Offset: (150, 320) | Scale: 1.08x | Color: #0078D7)\n"
+                            << "  [SCENE] Scene Composition Successfully Realized.\n";
+
+                        if (pAccentBrush) pAccentBrush->Release();
+                        if (pAcrylicEffect) pAcrylicEffect->Release();
+                        if (pDarkBg) pDarkBg->Release();
+                        if (pRootChildren) pRootChildren->Release();
+                        pAccentPill->Release();
+                        pAcrylicCard->Release();
+                        pWindowBg->Release();
+                        pRoot->Release();
+                        pComp->Release();
+                    }
+                    pInsp->Release();
+                }
+                pFactory->Release();
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  uicomp test                             Runs UI Composition visual tree self-tests\n"
+            << "  uicomp info                             Displays visual layer compositor telemetry\n"
+            << "  uicomp demo                             Constructs and renders a sample fluent acrylic scene\n";
     }
 
     static std::string trim(std::string_view s) {

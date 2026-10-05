@@ -27484,8 +27484,207 @@ void Test_WindowsDirectComposition_Subsystem() {
     std::cout << "[TEST] Suite 117: Windows DirectComposition Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 118: Windows UI Composition & Modern Visual Layer Subsystem
+// ============================================================================
+void Test_WindowsUIComposition_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 118: Windows UI Composition & Modern Visual Layer Subsystem      \n";
+    std::cout << "========================================================================\n";
+
+    composition::InitializeUICompositionExports();
+
+    // 1. Dynamic Module Export Verification
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("windows.ui.composition.dll", "DllGetActivationFactory") != nullptr,
+                "windows.ui.composition.dll must export DllGetActivationFactory");
+    TEST_ASSERT(loader.getExport("windows.ui.composition.dll", "DllCanUnloadNow") != nullptr,
+                "windows.ui.composition.dll must export DllCanUnloadNow");
+    TEST_ASSERT(loader.getExport("microsoft.ui.composition.dll", "DllGetActivationFactory") != nullptr,
+                "microsoft.ui.composition.dll must export DllGetActivationFactory");
+    TEST_ASSERT(loader.getExport("microsoft.ui.composition.dll", "DllCanUnloadNow") != nullptr,
+                "microsoft.ui.composition.dll must export DllCanUnloadNow");
+
+    // 2. Version Database Verification
+    const auto* modWinUI = version::VersionDatabase::Instance().GetModuleInfo("windows.ui.composition.dll");
+    TEST_ASSERT(modWinUI != nullptr, "VersionDatabase must contain windows.ui.composition.dll");
+    TEST_ASSERT(modWinUI->stringTable.at("FileVersion") == "10.0.22621.1",
+                "windows.ui.composition.dll FileVersion must be 10.0.22621.1");
+
+    const auto* modMsUI = version::VersionDatabase::Instance().GetModuleInfo("microsoft.ui.composition.dll");
+    TEST_ASSERT(modMsUI != nullptr, "VersionDatabase must contain microsoft.ui.composition.dll");
+    TEST_ASSERT(modMsUI->stringTable.at("FileVersion") == "10.0.22621.1",
+                "microsoft.ui.composition.dll FileVersion must be 10.0.22621.1");
+
+    // 3. Activation Factory Resolution & Compositor Creation
+    composition::IActivationFactory* pFactory = nullptr;
+    int32_t hr = composition::DllGetActivationFactory(
+        reinterpret_cast<composition::HSTRING>(const_cast<wchar_t*>(L"Windows.UI.Composition.Compositor")),
+        &pFactory
+    );
+    TEST_ASSERT(hr == 0 && pFactory != nullptr, "DllGetActivationFactory for Windows.UI.Composition.Compositor must succeed");
+
+    composition::IInspectable* pInsp = nullptr;
+    hr = pFactory->ActivateInstance(&pInsp);
+    TEST_ASSERT(hr == 0 && pInsp != nullptr, "IActivationFactory::ActivateInstance must succeed");
+
+    composition::ICompositor* pCompositor = nullptr;
+    hr = pInsp->QueryInterface(composition::IID_ICompositor, reinterpret_cast<void**>(&pCompositor));
+    TEST_ASSERT(hr == 0 && pCompositor != nullptr, "QueryInterface for ICompositor must succeed");
+
+    // 4. Scene Graph Visual Tree Construction (Root Container -> Card Sprite -> Button Sprite)
+    composition::IContainerVisual* pRoot = nullptr;
+    composition::ISpriteVisual* pCard = nullptr;
+    composition::ISpriteVisual* pButton = nullptr;
+
+    pCompositor->CreateContainerVisual(&pRoot);
+    pCompositor->CreateSpriteVisual(&pCard);
+    pCompositor->CreateSpriteVisual(&pButton);
+    TEST_ASSERT(pRoot && pCard && pButton, "CreateContainerVisual and CreateSpriteVisual must succeed");
+
+    // Configure properties
+    pCard->SetOffset({ 100.0f, 120.0f, 0.0f });
+    pCard->SetSize({ 600.0f, 400.0f });
+    pCard->SetScale({ 1.0f, 1.0f, 1.0f });
+    pCard->SetOpacity(0.95f);
+    pCard->SetRotationAngle(0.15f);
+
+    TEST_ASSERT(pCard->GetOffset().x == 100.0f && pCard->GetOffset().y == 120.0f, "Card visual offset must match (100, 120)");
+    TEST_ASSERT(pCard->GetSize().x == 600.0f && pCard->GetSize().y == 400.0f, "Card visual size must match (600, 400)");
+    TEST_ASSERT(std::abs(pCard->GetOpacity() - 0.95f) < 1e-4f, "Card visual opacity must match 0.95");
+
+    // Hierarchy linking
+    composition::IVisualCollection* pRootChildren = nullptr;
+    pRoot->GetChildren(&pRootChildren);
+    TEST_ASSERT(pRootChildren != nullptr, "GetChildren must return valid VisualCollection");
+
+    pRootChildren->InsertAtTop(pCard);
+    pRootChildren->InsertAbove(pButton, pCard);
+    TEST_ASSERT(pRootChildren->GetCount() == 2, "Root visual must contain 2 children");
+    TEST_ASSERT(pRootChildren->GetAt(0) == pCard, "First child must be Card");
+    TEST_ASSERT(pRootChildren->GetAt(1) == pButton, "Second child must be Button");
+    TEST_ASSERT(pCard->GetParent() == pRoot && pButton->GetParent() == pRoot, "Children parent pointers must point to root");
+
+    // 5. Composition Brushes (ColorBrush, SurfaceBrush, EffectBrush)
+    composition::CompositionColor micaSlate{ 255, 32, 44, 60 };
+    composition::ICompositionColorBrush* pColorBrush = nullptr;
+    pCompositor->CreateColorBrushWithColor(micaSlate, &pColorBrush);
+    TEST_ASSERT(pColorBrush != nullptr, "CreateColorBrushWithColor must succeed");
+    TEST_ASSERT(pColorBrush->GetColor() == micaSlate, "ColorBrush color must match micaSlate");
+
+    pCard->SetBrush(pColorBrush);
+    TEST_ASSERT(pCard->GetBrush() == pColorBrush, "Card brush must match color brush");
+
+    composition::ICompositionSurfaceBrush* pSurfaceBrush = nullptr;
+    pCompositor->CreateSurfaceBrush(&pSurfaceBrush);
+    TEST_ASSERT(pSurfaceBrush != nullptr, "CreateSurfaceBrush must succeed");
+    pSurfaceBrush->SetStretch(composition::CompositionStretch::UniformToFill);
+    pSurfaceBrush->SetHorizontalAlignmentRatio(0.8f);
+    TEST_ASSERT(pSurfaceBrush->GetStretch() == composition::CompositionStretch::UniformToFill, "Stretch must match UniformToFill");
+    TEST_ASSERT(std::abs(pSurfaceBrush->GetHorizontalAlignmentRatio() - 0.8f) < 1e-4f, "HorizontalAlignmentRatio must match 0.8");
+
+    composition::ICompositionEffectBrush* pEffectBrush = nullptr;
+    pCompositor->CreateEffectBrush(L"AcrylicBackdropFilter", &pEffectBrush);
+    TEST_ASSERT(pEffectBrush != nullptr, "CreateEffectBrush must succeed");
+    pEffectBrush->SetSourceParameter(L"SourceBackdrop", pColorBrush);
+    TEST_ASSERT(pEffectBrush->GetSourceParameter(L"SourceBackdrop") == pColorBrush, "Source parameter brush must match");
+
+    // 6. Keyframe Animations (Scalar & Vector3)
+    composition::IScalarKeyFrameAnimation* pScalarAnim = nullptr;
+    pCompositor->CreateScalarKeyFrameAnimation(&pScalarAnim);
+    TEST_ASSERT(pScalarAnim != nullptr, "CreateScalarKeyFrameAnimation must succeed");
+    pScalarAnim->SetDuration(2.0f);
+    pScalarAnim->InsertKeyFrame(0.0f, 0.0f);
+    pScalarAnim->InsertKeyFrame(0.5f, 40.0f);
+    pScalarAnim->InsertKeyFrame(1.0f, 100.0f);
+
+    TEST_ASSERT(std::abs(pScalarAnim->Evaluate(0.0f) - 0.0f) < 1e-4f, "Scalar animation at t=0 must be 0.0");
+    TEST_ASSERT(std::abs(pScalarAnim->Evaluate(0.5f) - 40.0f) < 1e-4f, "Scalar animation at t=0.5 must be 40.0");
+    TEST_ASSERT(std::abs(pScalarAnim->Evaluate(1.0f) - 100.0f) < 1e-4f, "Scalar animation at t=1.0 must be 100.0");
+
+    pButton->StartAnimation(L"Opacity", pScalarAnim);
+
+    composition::IVector3KeyFrameAnimation* pVecAnim = nullptr;
+    pCompositor->CreateVector3KeyFrameAnimation(&pVecAnim);
+    TEST_ASSERT(pVecAnim != nullptr, "CreateVector3KeyFrameAnimation must succeed");
+    pVecAnim->InsertKeyFrame(0.0f, { 0.0f, 0.0f, 0.0f });
+    pVecAnim->InsertKeyFrame(1.0f, { 20.0f, 40.0f, 60.0f });
+    composition::Vector3 vMid = pVecAnim->Evaluate(0.5f);
+    TEST_ASSERT(std::abs(vMid.x - 10.0f) < 1e-3f, "Vector3 animation X at mid must be 10.0");
+    TEST_ASSERT(std::abs(vMid.y - 20.0f) < 1e-3f, "Vector3 animation Y at mid must be 20.0");
+    TEST_ASSERT(std::abs(vMid.z - 30.0f) < 1e-3f, "Vector3 animation Z at mid must be 30.0");
+
+    // 7. Dynamic Expression Animation Evaluation
+    composition::IExpressionAnimation* pExprAnim = nullptr;
+    pCompositor->CreateExpressionAnimationWithExpression(L"Lerp(A, B, Progress)", &pExprAnim);
+    TEST_ASSERT(pExprAnim != nullptr, "CreateExpressionAnimationWithExpression must succeed");
+    pExprAnim->SetScalarParameter(L"A", 100.0f);
+    pExprAnim->SetScalarParameter(L"B", 200.0f);
+    pExprAnim->SetScalarParameter(L"Progress", 0.75f);
+    float exprVal = pExprAnim->EvaluateScalar();
+    // 100 + (200 - 100) * 0.75 = 175.0
+    TEST_ASSERT(std::abs(exprVal - 175.0f) < 1e-4f, "Expression animation Lerp(100, 200, 0.75) must evaluate to 175.0");
+
+    // 8. Reactive Property Set Key-Value Store
+    composition::ICompositionPropertySet* pPropSet = nullptr;
+    pCompositor->CreatePropertySet(&pPropSet);
+    TEST_ASSERT(pPropSet != nullptr, "CreatePropertySet must succeed");
+    pPropSet->InsertScalar(L"BlurRadius", 16.0f);
+    pPropSet->InsertVector3(L"AnchorPoint", { 0.5f, 0.5f, 0.0f });
+
+    float readBlur = 0.0f;
+    hr = pPropSet->TryGetScalar(L"BlurRadius", &readBlur);
+    TEST_ASSERT(hr == 0 && std::abs(readBlur - 16.0f) < 1e-4f, "TryGetScalar for BlurRadius must return 16.0");
+
+    composition::Vector3 readAnchor{};
+    hr = pPropSet->TryGetVector3(L"AnchorPoint", &readAnchor);
+    TEST_ASSERT(hr == 0 && readAnchor == composition::Vector3(0.5f, 0.5f, 0.0f), "TryGetVector3 for AnchorPoint must match (0.5, 0.5, 0)");
+
+    // 9. Interactive CLI Verification (uicomp test, uicomp info, uicomp demo)
+    shell::CommandShell shellEngine;
+    std::ostringstream testOut;
+    int rc = shellEngine.execute("uicomp test", testOut);
+    TEST_ASSERT(rc == 0, "uicomp test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("10 / 10 Subsystem Invariants Verified") != std::string::npos,
+                "uicomp test must pass all 10 invariants");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("uicomp info", infoOut);
+    TEST_ASSERT(rc == 0, "uicomp info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("PrismComposition") != std::string::npos,
+                "uicomp info must display PrismComposition architecture");
+
+    std::ostringstream demoOut;
+    rc = shellEngine.execute("uicomp demo", demoOut);
+    TEST_ASSERT(rc == 0, "uicomp demo CLI command must return 0");
+    TEST_ASSERT(demoOut.str().find("Scene Composition Successfully Realized") != std::string::npos,
+                "uicomp demo must realize scene composition");
+
+    // Cleanup
+    pPropSet->Release();
+    pExprAnim->Release();
+    pVecAnim->Release();
+    pScalarAnim->Release();
+    pEffectBrush->Release();
+    pSurfaceBrush->Release();
+    pColorBrush->Release();
+    pRootChildren->Release();
+    pButton->Release();
+    pCard->Release();
+    pRoot->Release();
+    pCompositor->Release();
+    pInsp->Release();
+    pFactory->Release();
+
+    std::cout << "[TEST] Suite 118: Windows UI Composition & Modern Visual Layer Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite117")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite118")) {
+        RUN_TEST(Test_WindowsUIComposition_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite117") {
         RUN_TEST(Test_WindowsDirectComposition_Subsystem);
         return g_FailedTests;
     }
@@ -27655,6 +27854,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirectStorage_Subsystem);
     RUN_TEST(Test_WindowsDirectML_Subsystem);
     RUN_TEST(Test_WindowsDirectComposition_Subsystem);
+    RUN_TEST(Test_WindowsUIComposition_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

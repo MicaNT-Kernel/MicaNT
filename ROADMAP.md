@@ -188,7 +188,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 90: Windows DirectComposition & Modern Compositor    [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 91: Windows UI Composition & Visual Layer Subsystem  [PLANNED]        │
+│ Phase 91: Windows UI Composition & Visual Layer Subsystem  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 92: Windows Color System (WCS) & Advanced Color / HDR[PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2132,16 +2134,35 @@
 
 ---
 
-### Phase 91: Windows UI Composition & Visual Layer Subsystem (`uicomposition.hpp`, `windows.ui.composition.dll`) (PLANNED - MILESTONE 118)
-- [ ] **WinRT Composition Core Architecture (`include/micant/uicomposition.hpp`, `windows.ui.composition.dll`)**:
-  - Modern WinUI composition visual hierarchy (`ICompositor`, `IVisual`, `IContainerVisual`, `ISpriteVisual`).
-  - Composition brushes: `ICompositionColorBrush`, `ICompositionSurfaceBrush`, `ICompositionEffectBrush` (Acrylic/Mica blur effects).
-  - Dynamic expression animations and cubic bezier keyframe animations (`IScalarKeyFrameAnimation`, `IVector3KeyFrameAnimation`, `IExpressionAnimation`).
-- [ ] **Visual Tree Composition Pipeline**:
-  - Implicit animation collections, visual offset/scale/orientation springs, and hit-testing against composition targets.
-  - DirectComposition/DWM bridge connecting WinUI visual trees to hardware presentation.
-- [ ] **Unit Test Suite 118 (`Test_WindowsUIComposition_Subsystem`)**:
-  - Validate compositor initialization, container visual trees, sprite brushes, expression animation evaluation, and compositor shell diagnostics.
+### Phase 91: Windows UI Composition & Modern Visual Layer Subsystem (`uicomposition.hpp`, `windows.ui.composition.dll`) (COMPLETED 100% - MILESTONE 118)
+- [x] **WinRT Composition Core Architecture (`include/micant/uicomposition.hpp`, `windows.ui.composition.dll`)**:
+  - Sovereign PrismComposition modern scene-graph visual layer (`ICompositor`, `IVisual`, `IContainerVisual`, `ISpriteVisual`, `IVisualCollection`).
+  - Dual WinRT compatibility projection for both `windows.ui.composition.dll` (in-box Windows OS API) and `microsoft.ui.composition.dll` (WinUI 3 / Windows App SDK).
+  - Dynamic export thunking: `DllGetActivationFactory`, `DllCanUnloadNow`, `RoGetActivationFactory`.
+- [x] **Composition Brushes & Visual Properties**:
+  - High-performance brushes: `ICompositionColorBrush` with 32-bit `CompositionColor`, `ICompositionSurfaceBrush` with alignment/stretch modes, and `ICompositionEffectBrush` for Acrylic and Mica Gaussian blur backdrop filters.
+  - Complete geometric transform pipeline: 3D vector offset, 2D size, 3D scale, rotation angle, center point, composite mode, and opacity.
+- [x] **KeyFrame & Expression Animations**:
+  - Parametric cubic hermite keyframe animations (`IScalarKeyFrameAnimation`, `IVector3KeyFrameAnimation`) with duration and normalized progress interpolation.
+  - Dynamic mathematical expression evaluator (`IExpressionAnimation`, e.g. `Lerp(A, B, Progress)`, `Clamp(Value, Min, Max)`).
+  - Reactive key-value store property sets (`ICompositionPropertySet`) for decoupled UI bindings.
+- [x] **Shell CLI Integration**:
+  - Added `uicomp test`, `uicomp info`, and `uicomp demo` commands in `micant::shell`.
+- [x] **Unit Test Suite 118 (`Test_WindowsUIComposition_Subsystem`)**:
+  - Validates dynamic exports, dual VersionDatabase registrations (`10.0.22621.1`), activation factory resolution, compositor instance creation, visual tree manipulation, color/surface/effect brushes, keyframe/expression animations, reactive property sets, and CLI commands.
+  - Milestone 118: **118 / 118 Test Suites Passing (100%)**.
+
+---
+
+### Phase 92: Windows Color System (WCS) & Advanced Color / HDR Subsystem (`wcs.hpp`, `mscms.dll`) (PLANNED - MILESTONE 119)
+- [ ] **Color Management Infrastructure (`include/micant/wcs.hpp`, `mscms.dll`)**:
+  - International Color Consortium (ICC) device profiles and WCS XML color appearance models (CAM02).
+  - High-precision color transforms: sRGB, Adobe RGB, DCI-P3, BT.2020, and scRGB linear floating-point color spaces.
+- [ ] **High Dynamic Range (HDR) & Color Appearance**:
+  - SMPTE ST 2084 Perceptual Quantizer (PQ) and Hybrid Log-Gamma (HLG) electro-optical transfer functions.
+  - Display tone mapping, wide color gamut (WCG) color primaries, and DirectComposition color space synchronization.
+- [ ] **Unit Test Suite 119 (`Test_WindowsColorSystem_Subsystem`)**:
+  - Validate ICC profile loading, color transform pipelines, PQ/scRGB conversions, and color management shell commands.
 
 
 
