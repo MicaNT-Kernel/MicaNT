@@ -24,6 +24,7 @@
 #include "prismx.hpp"
 #include "prism3d.hpp"
 #include "prism3d12.hpp"
+#include "ldr.hpp"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -1172,6 +1173,12 @@ inline int32_t D3D12CreateVideoDevice(
     int32_t hr = videoDev->QueryInterface(riid, ppVideoDevice);
     videoDev->Release();
     return hr;
+}
+
+inline void InitializeD3D12VideoExports() {
+    auto& ldr = ldr::DynamicLoader::get();
+    ldr.registerExport("d3d12.dll", "D3D12CreateVideoDevice", reinterpret_cast<void*>(&D3D12CreateVideoDevice));
+    ldr.registerExport("d3d12video.dll", "D3D12CreateVideoDevice", reinterpret_cast<void*>(&D3D12CreateVideoDevice));
 }
 
 } // namespace micant::d3d12video

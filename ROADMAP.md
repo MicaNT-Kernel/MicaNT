@@ -1995,24 +1995,48 @@
 
 ---
 
-### Phase 85: Windows Media Foundation Source Reader & Sink Writer Subsystem (`mfreadwrite.hpp`, `mfreadwrite.dll`, `mfplat.dll`) (PLANNED - MILESTONE 112)
-- [ ] **Media Foundation Source Reader & Sink Writer Core Architecture (`include/micant/mfreadwrite.hpp`, `mfreadwrite.dll`)**:
+### Phase 85: Windows Media Foundation Source Reader & Sink Writer Subsystem (`mfreadwrite.hpp`, `mfreadwrite.dll`, `mfplat.dll`) (COMPLETED 100% - MILESTONE 112)
+- [x] **Media Foundation Source Reader & Sink Writer Core Architecture (`include/micant/mfreadwrite.hpp`, `mfreadwrite.dll`)**:
   - Source reader interface (`IMFSourceReader`, `IMFSourceReaderEx`, `MFCreateSourceReaderFromURL`, `MFCreateSourceReaderFromByteStream`) for high-level stream extraction and hardware-accelerated decode piping.
   - Sink writer interface (`IMFSinkWriter`, `IMFSinkWriterEx`, `MFCreateSinkWriterFromURL`) for stream multiplexing, audio/video encoding, and media container export.
-  - Asynchronous read and write engine with callback dispatching (`IMFSourceReaderCallback`).
-- [ ] **Stream Configuration & Sample Processing Pipeline (`mfreadwrite.dll`)**:
+  - Asynchronous read and write engine with callback dispatching (`IMFSourceReaderCallback`, `IMFSinkWriterCallback`).
+- [x] **Stream Configuration & Sample Processing Pipeline (`mfreadwrite.dll`)**:
   - Stream selection (`MF_SOURCE_READER_FIRST_VIDEO_STREAM`, `MF_SOURCE_READER_FIRST_AUDIO_STREAM`, `MF_SOURCE_READER_ALL_STREAMS`).
   - Automatic dynamic format conversion and color space negotiation between input media sources and output presentation surfaces (NV12, RGB32, YUY2).
-  - Media sample buffering, timestamp allocation (`100ns`), and duration tracking.
-- [ ] **Dynamic Module Exports & COM Registration (`mfreadwrite.dll`)**:
+  - Media sample buffering, timestamp allocation (`100ns`), duration tracking, and Direct3D Manager binding (`MF_SOURCE_READER_D3D_MANAGER`).
+- [x] **Dynamic Module Exports & COM Registration (`mfreadwrite.dll`)**:
   - `MFCreateSourceReaderFromURL`, `MFCreateSourceReaderFromByteStream`, `MFCreateSinkWriterFromURL`, `MFCreateSinkWriterFromByteStream`, `DllCanUnloadNow`, `DllGetClassObject`.
   - Version database registration in `VersionDatabase` for `mfreadwrite.dll` ("MicaNT Media Foundation Source Reader & Sink Writer Subsystem", `10.0.22621.1`).
-- [ ] **Interactive CLI Utilities (`mfreadwrite`)**:
-  - `mfreadwrite test` (Runs Source Reader and Sink Writer pipeline self-tests).
+- [x] **Interactive CLI Utilities (`mfreadwrite`)**:
+  - `mfreadwrite test` (Runs Source Reader and Sink Writer pipeline self-tests: 16/16 passed).
   - `mfreadwrite read <source>` (Extracts and reports stream samples and metadata).
+  - `mfreadwrite write <output> [frames]` (Encodes and multiplexes video/audio stream frames).
   - `mfreadwrite info` (Displays Media Foundation Read/Write subsystem capabilities and codec interfaces).
-- [ ] **Unit Test Suite 112 (`Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem`)**:
-  - Comprehensive unit test suite validating Source Reader creation, stream enumeration, format negotiation, Sink Writer multiplexing, sample serialization, dynamic module exports, and CLI commands.
+- [x] **Unit Test Suite 112 (`Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem`)**:
+  - Comprehensive unit test suite validating Source Reader creation, stream enumeration, format negotiation, asynchronous callbacks, D3D manager attachment, Sink Writer multiplexing, sample serialization, stream markers, dynamic module exports, and CLI commands.
+  - Milestone 112: **112 / 112 Test Suites Passing (100%)**.
+
+---
+
+### Phase 86: Windows Media Foundation Capture Engine & Video/Audio Ingestion Subsystem (`mfcaptureengine.hpp`, `mfcaptureengine.dll`, `mfplat.dll`) (PLANNED - MILESTONE 113)
+- [ ] **Media Foundation Capture Engine Core Architecture (`include/micant/mfcaptureengine.hpp`, `mfcaptureengine.dll`)**:
+  - Capture Engine interfaces (`IMFCaptureEngine`, `IMFCaptureEngineClassFactory`, `IMFCaptureEngineOnEventCallback`) for unified webcam, microphone, and screen recording control.
+  - Capture source abstractions (`IMFCaptureSource`) providing media stream discovery, device selection, native format enumeration, and frame delivery.
+  - Asynchronous event dispatcher handling device connection, recording state changes, stream error notifications, and preview frame timing.
+- [ ] **Multi-Sink Video & Audio Capture Pipeline (`mfcaptureengine.dll`)**:
+  - Preview sink (`IMFCapturePreviewSink`) providing zero-latency rendering to HWND display surfaces or D3D11/D3D12 swap chains.
+  - Record sink (`IMFCaptureRecordSink`) multiplexing audio/video streams directly into MP4/ASF containers via Sink Writer.
+  - Photo sink (`IMFCapturePhotoSink`) providing high-resolution still capture with format encoding (JPEG, PNG, BMP).
+- [ ] **Dynamic Module Exports & COM Registration (`mfcaptureengine.dll`)**:
+  - `MFCreateCaptureEngine`, `DllCanUnloadNow`, `DllGetClassObject`.
+  - Version database registration in `VersionDatabase` for `mfcaptureengine.dll` ("MicaNT Media Foundation Capture Engine Subsystem", `10.0.22621.1`).
+- [ ] **Interactive CLI Utilities (`mfcapture`)**:
+  - `mfcapture test` (Runs Capture Engine pipeline and sink lifecycle self-tests).
+  - `mfcapture info` (Displays available video/audio capture sources and supported formats).
+  - `mfcapture snap <device> <out.png>` (Captures a still image from the designated source).
+  - `mfcapture record <device> <out.mp4> [seconds]` (Records video/audio to file container).
+- [ ] **Unit Test Suite 113 (`Test_WindowsMediaFoundation_CaptureEngine_Subsystem`)**:
+  - Comprehensive unit test suite validating Capture Engine initialization, source device enumeration, preview and record sink bindings, asynchronous event callbacks, photo capture, dynamic exports, and CLI commands.
 
 
 

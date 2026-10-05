@@ -133,6 +133,7 @@
 #include "micant/dxva2.hpp"
 #include "micant/d3d11va.hpp"
 #include "micant/d3d12video.hpp"
+#include "micant/mfreadwrite.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -26108,8 +26109,281 @@ void Test_WindowsDirect3D12_Video_Acceleration_Subsystem() {
     std::cout << "[TEST] Suite 111: Windows Direct3D 12 Video Decode & Processing Subsystem PASSED.\n";
 }
 
+void Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 112: Windows Media Foundation Source Reader & Sink Writer       \n";
+    std::cout << "========================================================================\n";
+
+    // 1. Initialize Dynamic Loader Exports & Version Database
+    mfreadwrite::InitializeMFReadWriteExports();
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("mfreadwrite.dll", "MFCreateSourceReaderFromURL") != nullptr, "MFCreateSourceReaderFromURL export must exist");
+    TEST_ASSERT(ldr.getExport("mfreadwrite.dll", "MFCreateSinkWriterFromURL") != nullptr, "MFCreateSinkWriterFromURL export must exist");
+    TEST_ASSERT(ldr.getExport("mfreadwrite.dll", "DllCanUnloadNow") != nullptr, "DllCanUnloadNow export must exist");
+
+    auto* mod = version::VersionDatabase::Instance().FindModule("mfreadwrite.dll");
+    TEST_ASSERT(mod != nullptr, "mfreadwrite.dll must be registered in VersionDatabase");
+    TEST_ASSERT(mod->stringTable.at("ProductVersion") == "10.0.22621.1", "mfreadwrite.dll must report Windows 11 Build 22621 version parity");
+
+    // 2. Create Source Reader from URL & Verify COM Interface Query
+    mf::IMFSourceReader* pReader = nullptr;
+    int32_t hr = mfreadwrite::MFCreateSourceReaderFromURL(L"C:\\Videos\\trailer_4k.mp4", nullptr, &pReader);
+    TEST_ASSERT(hr == 0 && pReader != nullptr, "MFCreateSourceReaderFromURL must succeed");
+
+    mfreadwrite::IMFSourceReaderEx* pReaderEx = nullptr;
+    hr = pReader->QueryInterface(mfreadwrite::IID_IMFSourceReaderEx_Const, reinterpret_cast<void**>(&pReaderEx));
+    TEST_ASSERT(hr == 0 && pReaderEx != nullptr, "QueryInterface for IMFSourceReaderEx must succeed");
+
+    // 3. Multi-Stream Stream Selection
+    int32_t vSelected = 0, aSelected = 0;
+    hr = pReader->GetStreamSelection(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, &vSelected);
+    TEST_ASSERT(hr == 0 && vSelected == 1, "First video stream must be selected by default");
+
+    hr = pReader->GetStreamSelection(mfreadwrite::MF_SOURCE_READER_FIRST_AUDIO_STREAM, &aSelected);
+    TEST_ASSERT(hr == 0 && aSelected == 1, "First audio stream must be selected by default");
+
+    hr = pReader->SetStreamSelection(mfreadwrite::MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0);
+    TEST_ASSERT(hr == 0, "Deselecting audio stream must succeed");
+    hr = pReader->GetStreamSelection(mfreadwrite::MF_SOURCE_READER_FIRST_AUDIO_STREAM, &aSelected);
+    TEST_ASSERT(hr == 0 && aSelected == 0, "Audio stream must now be deselected");
+    pReader->SetStreamSelection(mfreadwrite::MF_SOURCE_READER_FIRST_AUDIO_STREAM, 1);
+
+    // 4. Native Stream Formats Inspection
+    mf::IMFMediaType* pNativeVideo = nullptr;
+    hr = pReader->GetNativeMediaType(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &pNativeVideo);
+    TEST_ASSERT(hr == 0 && pNativeVideo != nullptr, "GetNativeMediaType for video stream must succeed");
+
+    GUID vMajor{}, vSub{};
+    pNativeVideo->GetGUID(mf::MF_MT_MAJOR_TYPE, &vMajor);
+    pNativeVideo->GetGUID(mf::MF_MT_SUBTYPE, &vSub);
+    TEST_ASSERT(vMajor == mf::MFMediaType_Video && vSub == mf::MFVideoFormat_H264, "Native video stream must be H.264 Video");
+
+    mf::IMFMediaType* pNativeAudio = nullptr;
+    hr = pReader->GetNativeMediaType(mfreadwrite::MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, &pNativeAudio);
+    TEST_ASSERT(hr == 0 && pNativeAudio != nullptr, "GetNativeMediaType for audio stream must succeed");
+
+    GUID aMajor{}, aSub{};
+    pNativeAudio->GetGUID(mf::MF_MT_MAJOR_TYPE, &aMajor);
+    pNativeAudio->GetGUID(mf::MF_MT_SUBTYPE, &aSub);
+    TEST_ASSERT(aMajor == mf::MFMediaType_Audio && aSub == mf::MFAudioFormat_AAC, "Native audio stream must be AAC Audio");
+
+    // 5. Output Format Negotiation (H.264 -> NV12 / RGB32)
+    mf::IMFMediaType* pCurrVideo = nullptr;
+    hr = pReader->GetCurrentMediaType(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, &pCurrVideo);
+    TEST_ASSERT(hr == 0 && pCurrVideo != nullptr, "GetCurrentMediaType for video stream must succeed");
+
+    GUID currSub{};
+    pCurrVideo->GetGUID(mf::MF_MT_SUBTYPE, &currSub);
+    TEST_ASSERT(currSub == mf::MFVideoFormat_NV12, "Default current video output format must be uncompressed NV12");
+
+    auto* pRgbType = new mf::CMediaType();
+    pRgbType->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Video);
+    pRgbType->SetGUID(mf::MF_MT_SUBTYPE, mf::MFVideoFormat_RGB32);
+    hr = pReader->SetCurrentMediaType(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, pRgbType);
+    TEST_ASSERT(hr == 0, "SetCurrentMediaType to RGB32 must succeed");
+
+    // 6. Synchronous Sample Extraction & Buffer Validation
+    uint32_t actualIdx = 0, flags = 0;
+    int64_t timestamp = 0;
+    mf::IMFSample* pSample = nullptr;
+    hr = pReader->ReadSample(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &actualIdx, &flags, &timestamp, &pSample);
+    TEST_ASSERT(hr == 0 && pSample != nullptr, "ReadSample must return a valid sample");
+    TEST_ASSERT(actualIdx == 0, "Actual stream index must be 0 for first video stream");
+    TEST_ASSERT(timestamp == 0, "First frame timestamp must be 0");
+
+    uint32_t bufLen = 0;
+    pSample->GetTotalLength(&bufLen);
+    TEST_ASSERT(bufLen == 4096, "Sample total buffer length must match video payload size (4096 bytes)");
+
+    int64_t duration = 0;
+    pSample->GetSampleDuration(&duration);
+    TEST_ASSERT(duration == 333333LL, "Sample duration must be ~33.3ms (333333 hns) for 30fps video");
+
+    // 7. Dynamic Transform Management via IMFSourceReaderEx
+    auto* pColorMFT = new mf::CColorConvertMFT();
+    hr = pReaderEx->AddTransformForStream(0, pColorMFT);
+    TEST_ASSERT(hr == 0, "AddTransformForStream must succeed");
+
+    mf::IMFTransform* pTransOut = nullptr;
+    GUID catGuid{};
+    hr = pReaderEx->GetTransformForStream(0, 0, &catGuid, &pTransOut);
+    TEST_ASSERT(hr == 0 && pTransOut != nullptr, "GetTransformForStream must retrieve the installed transform");
+    pTransOut->Release();
+
+    hr = pReaderEx->RemoveAllTransformsForStream(0);
+    TEST_ASSERT(hr == 0, "RemoveAllTransformsForStream must succeed");
+
+    // 8. Stream Flush & Position Reset
+    hr = pReader->Flush(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM);
+    TEST_ASSERT(hr == 0, "Flush on video stream must succeed");
+
+    // 9. Asynchronous Source Reader Callback Operation
+    class TestReaderCallback : public mfreadwrite::IMFSourceReaderCallback {
+        uint32_t m_ref{ 1 };
+    public:
+        std::atomic<bool> sampleReceived{ false };
+        int64_t lastTimestamp{ 0 };
+
+        int32_t __stdcall QueryInterface(const GUID& riid, void** ppv) override {
+            if (!ppv) return ole32::E_POINTER;
+            if (riid == ole32::IID_IUnknown || riid == mfreadwrite::IID_IMFSourceReaderCallback_Const) {
+                *ppv = this;
+                AddRef();
+                return ole32::S_OK;
+            }
+            *ppv = nullptr;
+            return ole32::E_NOINTERFACE;
+        }
+        uint32_t __stdcall AddRef() override { return ++m_ref; }
+        uint32_t __stdcall Release() override {
+            uint32_t r = --m_ref;
+            if (r == 0) delete this;
+            return r;
+        }
+        int32_t __stdcall OnReadSample(int32_t, uint32_t, uint32_t, mf::LONGLONG llTimestamp, mf::IMFSample*) override {
+            lastTimestamp = llTimestamp;
+            sampleReceived = true;
+            return ole32::S_OK;
+        }
+        int32_t __stdcall OnFlush(uint32_t) override { return ole32::S_OK; }
+        int32_t __stdcall OnEvent(uint32_t, mf::IMFMediaEvent*) override { return ole32::S_OK; }
+    };
+
+    auto* pCallback = new TestReaderCallback();
+    auto* pAsyncAttrs = new mf::CAttributes();
+    pAsyncAttrs->SetUnknown(mfreadwrite::MF_SOURCE_READER_ASYNC_CALLBACK, pCallback);
+
+    mf::IMFSourceReader* pAsyncReader = nullptr;
+    hr = mfreadwrite::MFCreateSourceReaderFromURL(L"stream.mp4", pAsyncAttrs, &pAsyncReader);
+    TEST_ASSERT(hr == 0 && pAsyncReader != nullptr, "Async reader creation must succeed");
+
+    mf::IMFSample* pAsyncSample = nullptr;
+    hr = pAsyncReader->ReadSample(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, nullptr, &flags, &timestamp, &pAsyncSample);
+    TEST_ASSERT(hr == 0, "Async ReadSample invocation must succeed");
+    TEST_ASSERT(pCallback->sampleReceived.load(), "Callback OnReadSample must be dispatched");
+    if (pAsyncSample) pAsyncSample->Release();
+    pAsyncReader->Release();
+    pAsyncAttrs->Release();
+    pCallback->Release();
+
+    // 10. Hardware Direct3D Manager Binding Verification
+    auto* pD3DAttrs = new mf::CAttributes();
+    auto* pFakeD3DManager = new mf::CAttributes();
+    pD3DAttrs->SetUnknown(mfreadwrite::MF_SOURCE_READER_D3D_MANAGER, pFakeD3DManager);
+
+    mf::IMFSourceReader* pD3DReader = nullptr;
+    hr = mfreadwrite::MFCreateSourceReaderFromURL(L"hw_accel.mp4", pD3DAttrs, &pD3DReader);
+    TEST_ASSERT(hr == 0 && pD3DReader != nullptr, "Reader creation with D3D manager attribute must succeed");
+
+    ole32::IUnknown* pRetrievedD3D = nullptr;
+    hr = pD3DReader->GetServiceForStream(0, mfreadwrite::MF_SOURCE_READER_D3D_MANAGER, ole32::IID_IUnknown, reinterpret_cast<void**>(&pRetrievedD3D));
+    TEST_ASSERT(hr == 0 && pRetrievedD3D != nullptr, "GetServiceForStream must yield bound D3D manager");
+    if (pRetrievedD3D) pRetrievedD3D->Release();
+    pD3DReader->Release();
+    pFakeD3DManager->Release();
+    pD3DAttrs->Release();
+
+    // 11. Create Sink Writer from URL & Verify COM Interface Query
+    mf::IMFSinkWriter* pWriter = nullptr;
+    hr = mfreadwrite::MFCreateSinkWriterFromURL(L"C:\\Videos\\output_master.mp4", nullptr, nullptr, &pWriter);
+    TEST_ASSERT(hr == 0 && pWriter != nullptr, "MFCreateSinkWriterFromURL must succeed");
+
+    mfreadwrite::IMFSinkWriterEx* pWriterEx = nullptr;
+    hr = pWriter->QueryInterface(mfreadwrite::IID_IMFSinkWriterEx_Const, reinterpret_cast<void**>(&pWriterEx));
+    TEST_ASSERT(hr == 0 && pWriterEx != nullptr, "QueryInterface for IMFSinkWriterEx must succeed");
+
+    // 12. Add Output Streams & Configure Input Types
+    uint32_t outVideoStream = 0;
+    hr = pWriter->AddStream(pNativeVideo, &outVideoStream);
+    TEST_ASSERT(hr == 0 && outVideoStream == 0, "AddStream for video must assign stream index 0");
+
+    hr = pWriter->SetInputMediaType(outVideoStream, pRgbType, nullptr);
+    TEST_ASSERT(hr == 0, "SetInputMediaType (RGB32 uncompressed input) must succeed");
+
+    uint32_t outAudioStream = 0;
+    hr = pWriter->AddStream(pNativeAudio, &outAudioStream);
+    TEST_ASSERT(hr == 0 && outAudioStream == 1, "AddStream for audio must assign stream index 1");
+
+    auto* pPcmType = new mf::CMediaType();
+    pPcmType->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Audio);
+    pPcmType->SetGUID(mf::MF_MT_SUBTYPE, mf::MFAudioFormat_PCM);
+    hr = pWriter->SetInputMediaType(outAudioStream, pPcmType, nullptr);
+    TEST_ASSERT(hr == 0, "SetInputMediaType (PCM uncompressed audio) must succeed");
+
+    // 13. Begin Writing Lifecycle & Sample Emission
+    hr = pWriter->BeginWriting();
+    TEST_ASSERT(hr == 0, "BeginWriting must transition sink writer to active recording state");
+
+    for (int frame = 0; frame < 10; ++frame) {
+        auto* frameSample = new mf::CSample();
+        auto* frameBuf = new mf::CMediaBuffer(4096);
+        frameBuf->SetCurrentLength(4096);
+        frameSample->AddBuffer(frameBuf);
+        frameSample->SetSampleTime(frame * 333333LL);
+        frameSample->SetSampleDuration(333333LL);
+
+        hr = pWriter->WriteSample(outVideoStream, frameSample);
+        TEST_ASSERT(hr == 0, "WriteSample must accept video frames");
+        frameBuf->Release();
+        frameSample->Release();
+    }
+
+    // 14. Markers, End of Segment & Flush
+    hr = pWriter->SendStreamTick(outVideoStream, 10 * 333333LL);
+    TEST_ASSERT(hr == 0, "SendStreamTick must succeed");
+
+    hr = pWriter->PlaceMarker(outVideoStream, nullptr);
+    TEST_ASSERT(hr == 0, "PlaceMarker must succeed");
+
+    hr = pWriter->NotifyEndOfSegment(outVideoStream);
+    TEST_ASSERT(hr == 0, "NotifyEndOfSegment must succeed");
+
+    hr = pWriter->Flush(outVideoStream);
+    TEST_ASSERT(hr == 0, "Flush on sink writer must succeed");
+
+    // 15. Finalize Container & Inspect Telemetry
+    hr = pWriter->Finalize();
+    TEST_ASSERT(hr == 0, "Finalize must seal and commit output media file");
+
+    auto* writerImpl = static_cast<mfreadwrite::CAdvancedSinkWriter*>(pWriterEx);
+    TEST_ASSERT(writerImpl->isFinalized(), "Sink writer state must be finalized");
+    TEST_ASSERT(writerImpl->getSamplesWritten(outVideoStream) == 10, "Sink writer must record exactly 10 video frames written");
+    TEST_ASSERT(writerImpl->getBytesWritten(outVideoStream) == 40960, "Sink writer must record exactly 40,960 bytes multiplexed");
+
+    // 16. Shell CLI Commands Verification
+    std::ostringstream testOut;
+    micant::shell::CommandShell shellEngine;
+    int rc = shellEngine.execute("mfreadwrite test", testOut);
+    TEST_ASSERT(rc == 0, "mfreadwrite test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("16/16 PASSED") != std::string::npos, "mfreadwrite test must pass all 16 tests");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("mfreadwrite info", infoOut);
+    TEST_ASSERT(rc == 0, "mfreadwrite info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("IMFSourceReaderEx") != std::string::npos, "mfreadwrite info must display architecture telemetry");
+
+    // Cleanup
+    pPcmType->Release();
+    pWriterEx->Release();
+    pWriter->Release();
+    pColorMFT->Release();
+    pSample->Release();
+    pRgbType->Release();
+    pCurrVideo->Release();
+    pNativeAudio->Release();
+    pNativeVideo->Release();
+    pReaderEx->Release();
+    pReader->Release();
+
+    std::cout << "[TEST] Suite 112: Windows Media Foundation Source Reader & Sink Writer PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite111")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite112")) {
+        RUN_TEST(Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite111") {
         RUN_TEST(Test_WindowsDirect3D12_Video_Acceleration_Subsystem);
         return g_FailedTests;
     }
@@ -26249,6 +26523,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDXVA2_Hardware_Acceleration_Subsystem);
     RUN_TEST(Test_WindowsDirect3D11_Video_Acceleration_Subsystem);
     RUN_TEST(Test_WindowsDirect3D12_Video_Acceleration_Subsystem);
+    RUN_TEST(Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

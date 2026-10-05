@@ -101,6 +101,8 @@
 #include "evr.hpp"
 #include "dxva2.hpp"
 #include "d3d11va.hpp"
+#include "d3d12video.hpp"
+#include "mfreadwrite.hpp"
 
 namespace micant::shell {
 
@@ -289,6 +291,8 @@ public:
             if (cmd == "evr" || cmd == "renderer") { cmdEVR(tokens, out); return 0; }
             if (cmd == "dxva" || cmd == "dxva2") { cmdDXVA2(tokens, out); return 0; }
             if (cmd == "d3d11va" || cmd == "d3d11video" || cmd == "d3d11v") { cmdD3D11VA(tokens, out); return 0; }
+            if (cmd == "d3d12video" || cmd == "d3d12v") { cmdD3D12Video(tokens, out); return 0; }
+            if (cmd == "mfreadwrite" || cmd == "sourcereader" || cmd == "sinkwriter") { cmdMFReadWrite(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -14020,6 +14024,405 @@ private:
             << "  d3d11va test                            Runs Direct3D 11 Video Acceleration self-test\n"
             << "  d3d11va proc [file]                     Executes Direct3D 11 video processor conversion\n"
             << "  d3d11va info                            Displays D3D11 video architecture telemetry\n";
+    }
+
+    void cmdD3D12Video(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[D3D12Video] Running Direct3D 12 Video Decode & Processing Subsystem Self-Test...\n";
+
+            d3d12video::InitializeD3D12VideoExports();
+
+            // 1. Direct3D 12 Device Creation
+            prism3d12::ID3D12Device* pDevice = nullptr;
+            int32_t hr = prism3d12::D3D12CreateDevice(nullptr, prism3d12::D3D_FEATURE_LEVEL_12_1, prism3d12::IID_ID3D12Device, reinterpret_cast<void**>(&pDevice));
+            bool t1 = (hr == 0 && pDevice != nullptr);
+            out << "  [1/16] D3D12CreateDevice (Feature Level 12.1): " << (t1 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 2. Video Device Creation
+            d3d12video::ID3D12VideoDevice* pVideoDevice = nullptr;
+            hr = d3d12video::D3D12CreateVideoDevice(pDevice, d3d12video::IID_ID3D12VideoDevice, reinterpret_cast<void**>(&pVideoDevice));
+            bool t2 = (hr == 0 && pVideoDevice != nullptr);
+            out << "  [2/16] D3D12CreateVideoDevice: " << (t2 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 3. Query ID3D12VideoDevice1
+            d3d12video::ID3D12VideoDevice1* pVideoDevice1 = nullptr;
+            hr = pVideoDevice->QueryInterface(d3d12video::IID_ID3D12VideoDevice1, reinterpret_cast<void**>(&pVideoDevice1));
+            bool t3 = (hr == 0 && pVideoDevice1 != nullptr);
+            out << "  [3/16] QueryInterface (ID3D12VideoDevice1): " << (t3 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 4. Query Decode Profile Count
+            d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_PROFILE_COUNT profileCount{};
+            hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_PROFILE_COUNT, &profileCount, sizeof(profileCount));
+            bool t4 = (hr == 0 && profileCount.ProfileCount >= 6);
+            out << "  [4/16] CheckFeatureSupport (Decode Profile Count = " << profileCount.ProfileCount << "): " << (t4 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 5. Query Decode Profiles
+            std::vector<GUID> profiles(profileCount.ProfileCount);
+            d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_PROFILES profileData{};
+            profileData.ProfileCount = profileCount.ProfileCount;
+            profileData.pProfiles = profiles.data();
+            hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_PROFILES, &profileData, sizeof(profileData));
+            bool t5 = (hr == 0);
+            out << "  [5/16] CheckFeatureSupport (Decode Profiles Enumerated): " << (t5 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 6. Decode Support 4K H.264
+            d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_SUPPORT decode4K{};
+            decode4K.Configuration.DecodeProfile = d3d12video::D3D12_VIDEO_DECODE_PROFILE_H264;
+            decode4K.Width = 3840;
+            decode4K.Height = 2160;
+            decode4K.DecodeFormat = prismx::DXGI_FORMAT_NV12;
+            hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_SUPPORT, &decode4K, sizeof(decode4K));
+            bool t6 = (hr == 0 && (decode4K.SupportFlags & d3d12video::D3D12_VIDEO_DECODE_SUPPORT_FLAG_SUPPORTED));
+            out << "  [6/16] Video Decode Support (4K NV12 H.264): " << (t6 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 7. Decode Support 8K HEVC Main10 P010
+            d3d12video::D3D12_FEATURE_DATA_VIDEO_DECODE_SUPPORT decode8K{};
+            decode8K.Configuration.DecodeProfile = d3d12video::D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10;
+            decode8K.Width = 7680;
+            decode8K.Height = 4320;
+            decode8K.DecodeFormat = prismx::DXGI_FORMAT_P010;
+            hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_DECODE_SUPPORT, &decode8K, sizeof(decode8K));
+            bool t7 = (hr == 0 && (decode8K.SupportFlags & d3d12video::D3D12_VIDEO_DECODE_SUPPORT_FLAG_SUPPORTED));
+            out << "  [7/16] Video Decode Support (8K P010 HEVC Main 10): " << (t7 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 8. Video Processor Support
+            d3d12video::D3D12_FEATURE_DATA_VIDEO_PROCESS_SUPPORT procSupport{};
+            procSupport.InputDesc.Format = prismx::DXGI_FORMAT_NV12;
+            procSupport.OutputDesc.Format = prismx::DXGI_FORMAT_B8G8R8A8_UNORM;
+            hr = pVideoDevice->CheckFeatureSupport(d3d12video::D3D12_FEATURE_VIDEO_PROCESS_SUPPORT, &procSupport, sizeof(procSupport));
+            bool t8 = (hr == 0 && (procSupport.FeatureFlags & d3d12video::D3D12_VIDEO_PROCESS_FEATURE_FLAG_ALPHA_BLENDING));
+            out << "  [8/16] Video Processor Support (1080p NV12 -> RGBA8): " << (t8 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 9. Video Decode Command Allocator & List
+            prism3d12::ID3D12CommandAllocator* pAllocDecode = nullptr;
+            hr = pDevice->CreateCommandAllocator(prism3d12::D3D12_COMMAND_LIST_TYPE_VIDEO_DECODE, prism3d12::IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&pAllocDecode));
+            d3d12video::ID3D12VideoDecodeCommandList* pCmdListDecode = nullptr;
+            hr = pVideoDevice1->CreateVideoDecodeCommandList(0, pAllocDecode, d3d12video::IID_ID3D12VideoDecodeCommandList, reinterpret_cast<void**>(&pCmdListDecode));
+            bool t9 = (hr == 0 && pCmdListDecode != nullptr);
+            out << "  [9/16] CreateVideoDecodeCommandList: " << (t9 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 10. Video Process Command Allocator & List
+            prism3d12::ID3D12CommandAllocator* pAllocProcess = nullptr;
+            hr = pDevice->CreateCommandAllocator(prism3d12::D3D12_COMMAND_LIST_TYPE_VIDEO_PROCESS, prism3d12::IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&pAllocProcess));
+            d3d12video::ID3D12VideoProcessCommandList* pCmdListProcess = nullptr;
+            hr = pVideoDevice1->CreateVideoProcessCommandList(0, pAllocProcess, d3d12video::IID_ID3D12VideoProcessCommandList, reinterpret_cast<void**>(&pCmdListProcess));
+            bool t10 = (hr == 0 && pCmdListProcess != nullptr);
+            out << "  [10/16] CreateVideoProcessCommandList: " << (t10 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 11. Create Video Decoder Heap
+            d3d12video::D3D12_VIDEO_DECODER_HEAP_DESC heapDesc{};
+            heapDesc.Configuration.DecodeProfile = d3d12video::D3D12_VIDEO_DECODE_PROFILE_H264;
+            heapDesc.DecodeWidth = 1920;
+            heapDesc.DecodeHeight = 1080;
+            heapDesc.Format = prismx::DXGI_FORMAT_NV12;
+            d3d12video::ID3D12VideoDecoderHeap* pDecoderHeap = nullptr;
+            hr = pVideoDevice->CreateVideoDecoderHeap(&heapDesc, d3d12video::IID_ID3D12VideoDecoderHeap, reinterpret_cast<void**>(&pDecoderHeap));
+            bool t11 = (hr == 0 && pDecoderHeap != nullptr);
+            out << "  [11/16] CreateVideoDecoderHeap: " << (t11 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 12. Create Video Decoder
+            d3d12video::D3D12_VIDEO_DECODER_DESC decDesc{};
+            decDesc.Configuration = heapDesc.Configuration;
+            d3d12video::ID3D12VideoDecoder* pDecoder = nullptr;
+            hr = pVideoDevice->CreateVideoDecoder(&decDesc, d3d12video::IID_ID3D12VideoDecoder, reinterpret_cast<void**>(&pDecoder));
+            bool t12 = (hr == 0 && pDecoder != nullptr);
+            out << "  [12/16] CreateVideoDecoder: " << (t12 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 13. Create Video Processor
+            d3d12video::D3D12_VIDEO_PROCESS_INPUT_STREAM_DESC inStreamDesc{};
+            inStreamDesc.Format = prismx::DXGI_FORMAT_NV12;
+            inStreamDesc.ColorSpace = prismx::DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709;
+            inStreamDesc.SourceAspectRatio = { 16, 9 };
+            inStreamDesc.DestinationAspectRatio = { 16, 9 };
+            d3d12video::D3D12_VIDEO_PROCESS_OUTPUT_STREAM_DESC outStreamDesc{};
+            outStreamDesc.Format = prismx::DXGI_FORMAT_R8G8B8A8_UNORM;
+            outStreamDesc.ColorSpace = prismx::DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+            d3d12video::ID3D12VideoProcessor* pProcessor = nullptr;
+            hr = pVideoDevice->CreateVideoProcessor(0, &outStreamDesc, 1, &inStreamDesc, d3d12video::IID_ID3D12VideoProcessor, reinterpret_cast<void**>(&pProcessor));
+            bool t13 = (hr == 0 && pProcessor != nullptr);
+            out << "  [13/16] CreateVideoProcessor: " << (t13 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 14. Record DecodeFrame
+            d3d12video::D3D12_VIDEO_DECODE_OUTPUT_STREAM_ARGUMENTS outArgs{};
+            d3d12video::D3D12_VIDEO_DECODE_INPUT_STREAM_ARGUMENTS inArgs{};
+            pCmdListDecode->DecodeFrame(pDecoder, &outArgs, &inArgs);
+            hr = pCmdListDecode->Close();
+            bool t14 = (hr == 0);
+            out << "  [14/16] DecodeFrame & CommandList->Close: " << (t14 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 15. Record ProcessFrames
+            d3d12video::D3D12_VIDEO_PROCESS_OUTPUT_STREAM_ARGUMENTS vpOutArgs{};
+            d3d12video::D3D12_VIDEO_PROCESS_INPUT_STREAM_ARGUMENTS vpInArgs{};
+            pCmdListProcess->ProcessFrames(pProcessor, &vpOutArgs, 1, &vpInArgs);
+            hr = pCmdListProcess->Close();
+            bool t15 = (hr == 0);
+            out << "  [15/16] ProcessFrames & CommandList->Close: " << (t15 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 16. Dynamic Module Export Verification
+            auto& ldr = ldr::DynamicLoader::get();
+            bool t16 = (ldr.getExport("d3d12.dll", "D3D12CreateVideoDevice") != nullptr);
+            out << "  [16/16] Dynamic Loader Export Verification: " << (t16 ? "SUCCESS" : "FAILED") << "\n";
+
+            // Cleanup
+            if (pProcessor) pProcessor->Release();
+            if (pDecoder) pDecoder->Release();
+            if (pDecoderHeap) pDecoderHeap->Release();
+            if (pCmdListProcess) pCmdListProcess->Release();
+            if (pAllocProcess) pAllocProcess->Release();
+            if (pCmdListDecode) pCmdListDecode->Release();
+            if (pAllocDecode) pAllocDecode->Release();
+            if (pVideoDevice1) pVideoDevice1->Release();
+            if (pVideoDevice) pVideoDevice->Release();
+            if (pDevice) pDevice->Release();
+
+            bool allPassed = t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 && t12 && t13 && t14 && t15 && t16;
+            out << "\n[D3D12Video] Self-Test Result: " << (allPassed ? "16/16 PASSED (100%)" : "FAILED") << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "        MicaNT Direct3D 12 Video Subsystem Architecture Telemetry       \n"
+                << "========================================================================\n"
+                << "  Specification Parity:   Windows 11 Build 22621 / Direct3D 12 Video API\n"
+                << "  Export Library:         d3d12.dll, dxgi.dll\n"
+                << "  Hardware Decoder Profiles:\n"
+                << "    - H.264 / AVC (4K UHD 60fps NV12)\n"
+                << "    - HEVC / H.265 (Main & Main 10 8K UHD 120fps P010 HDR)\n"
+                << "    - VP9 (Profile 0 8-bit, Profile 2 10-bit HDR)\n"
+                << "    - AV1 (Profile 0 8K Next-Gen Open Video)\n"
+                << "  Video Processor Engine: Hardware CSC (NV12 -> RGBA8, P010 -> RGB10A2)\n"
+                << "  Color Space Pipelines:  BT.601, BT.709, BT.2020 PQ & HLG HDR\n"
+                << "  Command List Types:     D3D12_COMMAND_LIST_TYPE_VIDEO_DECODE (4)\n"
+                << "                          D3D12_COMMAND_LIST_TYPE_VIDEO_PROCESS (5)\n"
+                << "  Zero Telemetry Mode:    ACTIVE (Zero tracking, zero cloud telemetry)\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  d3d12video test                         Runs Direct3D 12 Video Subsystem self-test\n"
+            << "  d3d12video info                         Displays D3D12 video architecture telemetry\n";
+    }
+
+    void cmdMFReadWrite(const std::vector<std::string>& tokens, std::ostream& out) {
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[MFReadWrite] Running Media Foundation Source Reader & Sink Writer Self-Test...\n";
+
+            mfreadwrite::InitializeMFReadWriteExports();
+
+            // 1. Source Reader Creation from URL
+            mf::IMFSourceReader* pReader = nullptr;
+            int32_t hr = mfreadwrite::MFCreateSourceReaderFromURL(L"C:\\Media\\sample.mp4", nullptr, &pReader);
+            bool t1 = (hr == 0 && pReader != nullptr);
+            out << "  [1/16] MFCreateSourceReaderFromURL: " << (t1 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 2. Query IMFSourceReaderEx
+            mfreadwrite::IMFSourceReaderEx* pReaderEx = nullptr;
+            hr = pReader->QueryInterface(mfreadwrite::IID_IMFSourceReaderEx_Const, reinterpret_cast<void**>(&pReaderEx));
+            bool t2 = (hr == 0 && pReaderEx != nullptr);
+            out << "  [2/16] QueryInterface (IMFSourceReaderEx): " << (t2 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 3. Stream Selection Query
+            int32_t selected = 0;
+            hr = pReader->GetStreamSelection(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, &selected);
+            bool t3 = (hr == 0 && selected == 1);
+            out << "  [3/16] GetStreamSelection (FIRST_VIDEO_STREAM): " << (t3 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 4. Native Video Type Query
+            mf::IMFMediaType* pNativeVideo = nullptr;
+            hr = pReader->GetNativeMediaType(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &pNativeVideo);
+            GUID majorType{}, subType{};
+            if (pNativeVideo) {
+                pNativeVideo->GetGUID(mf::MF_MT_MAJOR_TYPE, &majorType);
+                pNativeVideo->GetGUID(mf::MF_MT_SUBTYPE, &subType);
+            }
+            bool t4 = (hr == 0 && majorType == mf::MFMediaType_Video && subType == mf::MFVideoFormat_H264);
+            out << "  [4/16] GetNativeMediaType (Video H.264): " << (t4 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 5. Native Audio Type Query
+            mf::IMFMediaType* pNativeAudio = nullptr;
+            hr = pReader->GetNativeMediaType(mfreadwrite::MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, &pNativeAudio);
+            GUID aMajor{}, aSub{};
+            if (pNativeAudio) {
+                pNativeAudio->GetGUID(mf::MF_MT_MAJOR_TYPE, &aMajor);
+                pNativeAudio->GetGUID(mf::MF_MT_SUBTYPE, &aSub);
+            }
+            bool t5 = (hr == 0 && aMajor == mf::MFMediaType_Audio && aSub == mf::MFAudioFormat_AAC);
+            out << "  [5/16] GetNativeMediaType (Audio AAC): " << (t5 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 6. Current Media Type Query
+            mf::IMFMediaType* pCurrVideo = nullptr;
+            hr = pReader->GetCurrentMediaType(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, &pCurrVideo);
+            GUID currSub{};
+            if (pCurrVideo) pCurrVideo->GetGUID(mf::MF_MT_SUBTYPE, &currSub);
+            bool t6 = (hr == 0 && currSub == mf::MFVideoFormat_NV12);
+            out << "  [6/16] GetCurrentMediaType (Uncompressed NV12): " << (t6 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 7. Configure Custom Output Format (RGB32)
+            auto* pCustomType = new mf::CMediaType();
+            pCustomType->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Video);
+            pCustomType->SetGUID(mf::MF_MT_SUBTYPE, mf::MFVideoFormat_RGB32);
+            hr = pReader->SetCurrentMediaType(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, pCustomType);
+            bool t7 = (hr == 0);
+            out << "  [7/16] SetCurrentMediaType (Video RGB32): " << (t7 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 8. Synchronous Sample Extraction
+            uint32_t actualStream = 0;
+            uint32_t streamFlags = 0;
+            int64_t timestamp = 0;
+            mf::IMFSample* pSample = nullptr;
+            hr = pReader->ReadSample(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &actualStream, &streamFlags, &timestamp, &pSample);
+            bool t8 = (hr == 0 && pSample != nullptr && actualStream == 0);
+            out << "  [8/16] ReadSample (Frame 0 @ " << timestamp << " hns): " << (t8 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 9. Sample Buffer Verification
+            uint32_t sampleLen = 0;
+            if (pSample) pSample->GetTotalLength(&sampleLen);
+            bool t9 = (sampleLen == 4096);
+            out << "  [9/16] IMFSample Payload Verification (Length = " << sampleLen << " bytes): " << (t9 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 10. Dynamic Transform Addition
+            auto* pTransform = new mf::CColorConvertMFT();
+            hr = pReaderEx->AddTransformForStream(0, pTransform);
+            mf::IMFTransform* pGetTrans = nullptr;
+            GUID cat{};
+            hr = pReaderEx->GetTransformForStream(0, 0, &cat, &pGetTrans);
+            bool t10 = (hr == 0 && pGetTrans != nullptr);
+            out << "  [10/16] AddTransformForStream (Color Converter MFT): " << (t10 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 11. Remove Transforms & Flush
+            hr = pReaderEx->RemoveAllTransformsForStream(0);
+            hr = pReader->Flush(mfreadwrite::MF_SOURCE_READER_ALL_STREAMS);
+            bool t11 = (hr == 0);
+            out << "  [11/16] RemoveAllTransformsForStream & Flush: " << (t11 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 12. Sink Writer Creation from URL
+            mf::IMFSinkWriter* pWriter = nullptr;
+            hr = mfreadwrite::MFCreateSinkWriterFromURL(L"C:\\Media\\out.mp4", nullptr, nullptr, &pWriter);
+            bool t12 = (hr == 0 && pWriter != nullptr);
+            out << "  [12/16] MFCreateSinkWriterFromURL: " << (t12 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 13. Query IMFSinkWriterEx
+            mfreadwrite::IMFSinkWriterEx* pWriterEx = nullptr;
+            hr = pWriter->QueryInterface(mfreadwrite::IID_IMFSinkWriterEx_Const, reinterpret_cast<void**>(&pWriterEx));
+            bool t13 = (hr == 0 && pWriterEx != nullptr);
+            out << "  [13/16] QueryInterface (IMFSinkWriterEx): " << (t13 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 14. Configure Sink Writer Streams & Input Formats
+            uint32_t outStreamIdx = 0;
+            hr = pWriter->AddStream(pNativeVideo, &outStreamIdx);
+            hr = pWriter->SetInputMediaType(outStreamIdx, pCustomType, nullptr);
+            hr = pWriter->BeginWriting();
+            bool t14 = (hr == 0 && outStreamIdx == 0);
+            out << "  [14/16] AddStream, SetInputMediaType & BeginWriting: " << (t14 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 15. Write Sample & Place Marker
+            hr = pWriter->WriteSample(outStreamIdx, pSample);
+            hr = pWriter->PlaceMarker(outStreamIdx, nullptr);
+            hr = pWriter->Finalize();
+            bool t15 = (hr == 0);
+            out << "  [15/16] WriteSample, PlaceMarker & Finalize: " << (t15 ? "SUCCESS" : "FAILED") << "\n";
+
+            // 16. Dynamic Module Export Verification
+            auto& ldr = ldr::DynamicLoader::get();
+            bool t16 = (ldr.getExport("mfreadwrite.dll", "MFCreateSourceReaderFromURL") != nullptr &&
+                        ldr.getExport("mfreadwrite.dll", "MFCreateSinkWriterFromURL") != nullptr);
+            out << "  [16/16] Dynamic Loader Export Verification (mfreadwrite.dll): " << (t16 ? "SUCCESS" : "FAILED") << "\n";
+
+            // Cleanup
+            if (pGetTrans) pGetTrans->Release();
+            if (pTransform) pTransform->Release();
+            if (pSample) pSample->Release();
+            if (pCustomType) pCustomType->Release();
+            if (pCurrVideo) pCurrVideo->Release();
+            if (pNativeAudio) pNativeAudio->Release();
+            if (pNativeVideo) pNativeVideo->Release();
+            if (pWriterEx) pWriterEx->Release();
+            if (pWriter) pWriter->Release();
+            if (pReaderEx) pReaderEx->Release();
+            if (pReader) pReader->Release();
+
+            bool allPassed = t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9 && t10 && t11 && t12 && t13 && t14 && t15 && t16;
+            out << "\n[MFReadWrite] Self-Test Result: " << (allPassed ? "16/16 PASSED (100%)" : "FAILED") << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            out << "========================================================================\n"
+                << "   MicaNT Media Foundation Read/Write Subsystem Architecture Telemetry  \n"
+                << "========================================================================\n"
+                << "  Specification Parity:   Windows 11 Build 22621 / mfreadwrite.dll\n"
+                << "  Export Library:         mfreadwrite.dll, mfplat.dll, mf.dll\n"
+                << "  Source Reader:          IMFSourceReader, IMFSourceReaderEx\n"
+                << "  Sink Writer:            IMFSinkWriter, IMFSinkWriterEx\n"
+                << "  Asynchronous Callbacks: IMFSourceReaderCallback, IMFSinkWriterCallback\n"
+                << "  Stream Support:         Multi-Stream Demuxing & Multiplexing (Video, Audio)\n"
+                << "  Color Space Conversion: Automatic Negotiation (H.264/HEVC -> NV12/RGB32)\n"
+                << "  Hardware Acceleration:  MF_SOURCE_READER_D3D_MANAGER (Direct3D 11/12 Binding)\n"
+                << "  Zero Telemetry Mode:    ACTIVE (Zero tracking, zero cloud telemetry)\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "read") {
+            std::string path = (tokens.size() > 2) ? tokens[2] : "sample.mp4";
+            out << "[MFReadWrite] Ingesting media stream from: " << path << "\n";
+            std::wstring wpath(path.begin(), path.end());
+            mf::IMFSourceReader* pReader = nullptr;
+            if (mfreadwrite::MFCreateSourceReaderFromURL(wpath.c_str(), nullptr, &pReader) == 0 && pReader) {
+                for (int i = 0; i < 5; ++i) {
+                    uint32_t streamIdx = 0, flags = 0;
+                    int64_t ts = 0;
+                    mf::IMFSample* pSample = nullptr;
+                    pReader->ReadSample(mfreadwrite::MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &streamIdx, &flags, &ts, &pSample);
+                    uint32_t len = 0;
+                    if (pSample) {
+                        pSample->GetTotalLength(&len);
+                        pSample->Release();
+                    }
+                    out << "  Frame " << i << ": Timestamp=" << ts << " hns, Length=" << len << " bytes, Flags=0x" << std::hex << flags << std::dec << "\n";
+                }
+                pReader->Release();
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "write") {
+            std::string path = (tokens.size() > 2) ? tokens[2] : "output.mp4";
+            out << "[MFReadWrite] Multiplexing media stream to: " << path << "\n";
+            std::wstring wpath(path.begin(), path.end());
+            mf::IMFSinkWriter* pWriter = nullptr;
+            if (mfreadwrite::MFCreateSinkWriterFromURL(wpath.c_str(), nullptr, nullptr, &pWriter) == 0 && pWriter) {
+                auto* mt = new mf::CMediaType();
+                mt->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Video);
+                mt->SetGUID(mf::MF_MT_SUBTYPE, mf::MFVideoFormat_H264);
+                uint32_t streamIdx = 0;
+                pWriter->AddStream(mt, &streamIdx);
+                pWriter->SetInputMediaType(streamIdx, mt, nullptr);
+                pWriter->BeginWriting();
+
+                for (int i = 0; i < 5; ++i) {
+                    auto* s = new mf::CSample();
+                    auto* b = new mf::CMediaBuffer(1024);
+                    b->SetCurrentLength(1024);
+                    s->AddBuffer(b);
+                    s->SetSampleTime(i * 333333LL);
+                    pWriter->WriteSample(streamIdx, s);
+                    b->Release();
+                    s->Release();
+                }
+                pWriter->Finalize();
+                pWriter->Release();
+                mt->Release();
+                out << "  Wrote 5 frames (5120 bytes) and finalized container.\n";
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  mfreadwrite test                        Runs Source Reader & Sink Writer self-test\n"
+            << "  mfreadwrite read [file]                 Ingests and reports stream frames\n"
+            << "  mfreadwrite write [file]                Encodes and multiplexes media frames\n"
+            << "  mfreadwrite info                        Displays MF Read/Write architecture telemetry\n";
     }
 
     static std::string trim(std::string_view s) {
