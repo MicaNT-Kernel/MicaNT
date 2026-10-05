@@ -28706,8 +28706,250 @@ void Test_WindowsTextServices_IME_Subsystem() {
     std::cout << "[TEST] Suite 123: Windows Text Services Framework & Modern IME Subsystem PASSED.\n";
 }
 
+void Test_WindowsSpellCheck_Linguistic_Subsystem() {
+    using namespace micant;
+    using namespace micant::spellcheck;
+
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 124: Windows Spell Checking & Extended Linguistic Services      \n";
+    std::cout << "========================================================================\n";
+
+    InitializeSpellCheckExports();
+
+    // 1. Dynamic Loader Exports Verification
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("spellcheck.dll", "SpellChecker_CreateFactory") != nullptr,
+                "SpellChecker_CreateFactory must be exported from spellcheck.dll");
+    TEST_ASSERT(loader.getExport("elscore.dll", "MappingGetServices") != nullptr,
+                "MappingGetServices must be exported from elscore.dll");
+    TEST_ASSERT(loader.getExport("elscore.dll", "MappingFreePropertyBag") != nullptr,
+                "MappingFreePropertyBag must be exported from elscore.dll");
+    TEST_ASSERT(loader.getExport("elscore.dll", "MappingRecognizeText") != nullptr,
+                "MappingRecognizeText must be exported from elscore.dll");
+    TEST_ASSERT(loader.getExport("elscore.dll", "MappingDoAction") != nullptr,
+                "MappingDoAction must be exported from elscore.dll");
+
+    // 2. VersionDatabase Verification
+    const auto* spellMod = version::VersionDatabase::Instance().GetModuleInfo("spellcheck.dll");
+    TEST_ASSERT(spellMod != nullptr && spellMod->stringTable.at("ProductVersion") == "10.0.22621.1",
+                "spellcheck.dll must be registered in VersionDatabase at 10.0.22621.1");
+
+    const auto* elsMod = version::VersionDatabase::Instance().GetModuleInfo("elscore.dll");
+    TEST_ASSERT(elsMod != nullptr && elsMod->stringTable.at("ProductVersion") == "10.0.22621.1",
+                "elscore.dll must be registered in VersionDatabase at 10.0.22621.1");
+
+    // 3. ISpellCheckerFactory COM Activation & Supported Languages
+    ISpellCheckerFactory* pFactory = nullptr;
+    int32_t hr = SpellChecker_CreateFactory(&pFactory);
+    TEST_ASSERT(hr == ole32::S_OK && pFactory != nullptr, "SpellChecker_CreateFactory must succeed");
+
+    IEnumString* pLangs = nullptr;
+    hr = pFactory->get_SupportedLanguages(&pLangs);
+    TEST_ASSERT(hr == ole32::S_OK && pLangs != nullptr, "get_SupportedLanguages must succeed");
+
+    wchar_t* langBuf[8]{};
+    uint32_t langsFetched = 0;
+    hr = pLangs->Next(8, langBuf, &langsFetched);
+    TEST_ASSERT((hr == ole32::S_OK || hr == ole32::S_FALSE) && langsFetched >= 4, "Must enumerate at least 4 supported languages");
+
+    bool hasEnUs = false;
+    for (uint32_t i = 0; i < langsFetched; ++i) {
+        if (langBuf[i]) {
+            if (wcscmp(langBuf[i], L"en-US") == 0) hasEnUs = true;
+            ole32::CoTaskMemFree(langBuf[i]);
+        }
+    }
+    pLangs->Release();
+    TEST_ASSERT(hasEnUs, "Supported languages must include en-US");
+
+    int32_t isEnSupported = 0;
+    pFactory->IsSupported(L"en-US", &isEnSupported);
+    TEST_ASSERT(isEnSupported == 1, "en-US must be reported as supported");
+
+    int32_t isInvalidSupported = 0;
+    pFactory->IsSupported(L"xx-YY", &isInvalidSupported);
+    TEST_ASSERT(isInvalidSupported == 0, "xx-YY must be reported as unsupported");
+
+    // 4. ISpellChecker Creation & Metadata
+    ISpellChecker* pChecker = nullptr;
+    hr = pFactory->CreateSpellChecker(L"en-US", &pChecker);
+    TEST_ASSERT(hr == ole32::S_OK && pChecker != nullptr, "CreateSpellChecker for en-US must succeed");
+
+    wchar_t* pTag = nullptr;
+    pChecker->get_LanguageTag(&pTag);
+    TEST_ASSERT(pTag != nullptr && wcscmp(pTag, L"en-US") == 0, "Language tag must be en-US");
+    ole32::CoTaskMemFree(pTag);
+
+    wchar_t* pId = nullptr;
+    pChecker->get_Id(&pId);
+    TEST_ASSERT(pId != nullptr && wcsstr(pId, L"SpellChecker") != nullptr, "Spell checker ID must be populated");
+    ole32::CoTaskMemFree(pId);
+
+    // 5. Spell Checking & Error Enumeration
+    const wchar_t* sampleText = L"The quick bron fox jumpd over teh lazy dog";
+    IEnumSpellingError* pErrors = nullptr;
+    hr = pChecker->Check(sampleText, &pErrors);
+    TEST_ASSERT(hr == ole32::S_OK && pErrors != nullptr, "Check must return IEnumSpellingError");
+
+    std::vector<std::pair<uint32_t, CORRECTIVE_ACTION>> detectedErrors;
+    ISpellingError* pErr = nullptr;
+    while (pErrors->Next(&pErr) == ole32::S_OK && pErr) {
+        uint32_t start = 0, len = 0;
+        CORRECTIVE_ACTION act = CORRECTIVE_ACTION_NONE;
+        wchar_t* repl = nullptr;
+        pErr->get_StartIndex(&start);
+        pErr->get_Length(&len);
+        pErr->get_CorrectiveAction(&act);
+        pErr->get_Replacement(&repl);
+
+        detectedErrors.push_back({ start, act });
+        if (act == CORRECTIVE_ACTION_REPLACE) {
+            TEST_ASSERT(repl != nullptr && wcscmp(repl, L"the") == 0, "Autocorrect 'teh' replacement must be 'the'");
+        }
+        if (repl) ole32::CoTaskMemFree(repl);
+        pErr->Release();
+    }
+    pErrors->Release();
+
+    TEST_ASSERT(detectedErrors.size() == 3, "Check must detect 3 errors ('bron', 'jumpd', 'teh')");
+    TEST_ASSERT(detectedErrors[0].second == CORRECTIVE_ACTION_GET_SUGGESTIONS, "First error must require suggestions");
+    TEST_ASSERT(detectedErrors[1].second == CORRECTIVE_ACTION_GET_SUGGESTIONS, "Second error must require suggestions");
+    TEST_ASSERT(detectedErrors[2].second == CORRECTIVE_ACTION_REPLACE, "Third error 'teh' must be autocorrect replacement");
+
+    // 6. Word Suggestions (Levenshtein & Soundex)
+    IEnumString* pSuggs = nullptr;
+    hr = pChecker->Suggest(L"speling", &pSuggs);
+    TEST_ASSERT(hr == ole32::S_OK && pSuggs != nullptr, "Suggest must return IEnumString");
+
+    wchar_t* suggList[8]{};
+    uint32_t suggCount = 0;
+    pSuggs->Next(8, suggList, &suggCount);
+    TEST_ASSERT(suggCount > 0, "Must return at least 1 suggestion for 'speling'");
+
+    bool foundSpelling = false;
+    for (uint32_t i = 0; i < suggCount; ++i) {
+        if (suggList[i]) {
+            if (wcscmp(suggList[i], L"spelling") == 0) foundSpelling = true;
+            ole32::CoTaskMemFree(suggList[i]);
+        }
+    }
+    pSuggs->Release();
+    TEST_ASSERT(foundSpelling, "Suggestions for 'speling' must include 'spelling'");
+
+    // 7. User Dictionary Management (Add, Ignore, AutoCorrect)
+    pChecker->Add(L"sovereignos");
+    IEnumSpellingError* pErrAdd = nullptr;
+    pChecker->Check(L"Running sovereignos kernel", &pErrAdd);
+    ISpellingError* pOneErr = nullptr;
+    TEST_ASSERT(pErrAdd->Next(&pOneErr) == ole32::S_FALSE, "Added word 'sovereignos' must not be flagged");
+    pErrAdd->Release();
+
+    pChecker->Ignore(L"antigravity");
+    IEnumSpellingError* pErrIgn = nullptr;
+    pChecker->Check(L"Running antigravity system", &pErrIgn);
+    TEST_ASSERT(pErrIgn->Next(&pOneErr) == ole32::S_FALSE, "Ignored word 'antigravity' must not be flagged");
+    pErrIgn->Release();
+
+    pChecker->AutoCorrect(L"mican", L"MicaNT");
+    IEnumSpellingError* pErrAc = nullptr;
+    pChecker->Check(L"Testing mican system", &pErrAc);
+    TEST_ASSERT(pErrAc->Next(&pOneErr) == ole32::S_OK && pOneErr != nullptr, "AutoCorrect 'mican' must be flagged");
+    CORRECTIVE_ACTION acAct = CORRECTIVE_ACTION_NONE;
+    wchar_t* acRepl = nullptr;
+    pOneErr->get_CorrectiveAction(&acAct);
+    pOneErr->get_Replacement(&acRepl);
+    TEST_ASSERT(acAct == CORRECTIVE_ACTION_REPLACE, "Action must be REPLACE");
+    TEST_ASSERT(acRepl != nullptr && wcscmp(acRepl, L"MicaNT") == 0, "Replacement must be 'MicaNT'");
+    ole32::CoTaskMemFree(acRepl);
+    pOneErr->Release();
+    pErrAc->Release();
+
+    // 8. Options Description
+    IEnumString* pOptionIds = nullptr;
+    hr = pChecker->get_OptionIds(&pOptionIds);
+    TEST_ASSERT(hr == ole32::S_OK && pOptionIds != nullptr, "get_OptionIds must succeed");
+    pOptionIds->Release();
+
+    IOptionDescription* pOptDesc = nullptr;
+    hr = pChecker->GetOptionDescription(L"ignore_uppercase", &pOptDesc);
+    TEST_ASSERT(hr == ole32::S_OK && pOptDesc != nullptr, "GetOptionDescription must succeed");
+    wchar_t* optHead = nullptr;
+    pOptDesc->get_Heading(&optHead);
+    TEST_ASSERT(optHead != nullptr && wcscmp(optHead, L"Ignore Uppercase Words") == 0, "Heading must match");
+    ole32::CoTaskMemFree(optHead);
+    pOptDesc->Release();
+
+    // 9. Extended Linguistic Services (ELS) APIs
+    MAPPING_SERVICE_INFO* pServices = nullptr;
+    uint32_t servicesCount = 0;
+    hr = MappingGetServices(nullptr, &pServices, &servicesCount);
+    TEST_ASSERT(hr == ole32::S_OK && pServices != nullptr && servicesCount == 3,
+                "MappingGetServices must return 3 ELS services");
+
+    // ELS Script Detection
+    MAPPING_PROPERTY_BAG bagScript{};
+    const wchar_t* cyrlSample = L"Привет мир";
+    hr = MappingRecognizeText(&pServices[1], cyrlSample, static_cast<uint32_t>(wcslen(cyrlSample)), 0, nullptr, &bagScript);
+    TEST_ASSERT(hr == ole32::S_OK && bagScript.pDataResult != nullptr, "MappingRecognizeText for script must succeed");
+    auto* scriptRes = static_cast<const wchar_t*>(bagScript.pDataResult);
+    TEST_ASSERT(wcscmp(scriptRes, L"Cyrl") == 0, "Cyrillic sample must detect 'Cyrl' script");
+    MappingFreePropertyBag(&bagScript);
+
+    // ELS Language Detection
+    MAPPING_PROPERTY_BAG bagLang{};
+    const wchar_t* esSample = L"Buenos dias amigo que tal";
+    hr = MappingRecognizeText(&pServices[0], esSample, static_cast<uint32_t>(wcslen(esSample)), 0, nullptr, &bagLang);
+    TEST_ASSERT(hr == ole32::S_OK && bagLang.pDataResult != nullptr, "MappingRecognizeText for language must succeed");
+    auto* langRes = static_cast<const wchar_t*>(bagLang.pDataResult);
+    TEST_ASSERT(wcscmp(langRes, L"es") == 0, "Spanish sample must detect 'es' language");
+    MappingFreePropertyBag(&bagLang);
+
+    // ELS Transliteration
+    MAPPING_PROPERTY_BAG bagTrans{};
+    const wchar_t* ruSample = L"Москва";
+    hr = MappingRecognizeText(&pServices[2], ruSample, static_cast<uint32_t>(wcslen(ruSample)), 0, nullptr, &bagTrans);
+    TEST_ASSERT(hr == ole32::S_OK && bagTrans.pDataResult != nullptr, "MappingRecognizeText for transliteration must succeed");
+    auto* transRes = static_cast<const wchar_t*>(bagTrans.pDataResult);
+    TEST_ASSERT(wcscmp(transRes, L"Moskva") == 0, "Cyrillic 'Москва' must transliterate to 'Moskva'");
+    MappingFreePropertyBag(&bagTrans);
+
+    // 10. Interactive Shell CLI Verification
+    shell::CommandShell shellEngine;
+    std::ostringstream ssTest, ssInfo, ssCheck, ssSuggest, ssEls;
+
+    int rc = shellEngine.execute("spell test", ssTest);
+    TEST_ASSERT(rc == 0, "spell test shell command must return 0");
+    TEST_ASSERT(ssTest.str().find("Self-test passed cleanly") != std::string::npos, "spell test must pass cleanly");
+
+    rc = shellEngine.execute("spell info", ssInfo);
+    TEST_ASSERT(rc == 0, "spell info shell command must return 0");
+    TEST_ASSERT(ssInfo.str().find("spellcheck.dll") != std::string::npos, "spell info must output DLL information");
+
+    rc = shellEngine.execute("spell check teh quik fox", ssCheck);
+    TEST_ASSERT(rc == 0, "spell check shell command must return 0");
+    TEST_ASSERT(ssCheck.str().find("Replace with \"the\"") != std::string::npos, "spell check must output autocorrect replacement");
+
+    rc = shellEngine.execute("spell suggest speling", ssSuggest);
+    TEST_ASSERT(rc == 0, "spell suggest shell command must return 0");
+    TEST_ASSERT(ssSuggest.str().find("spelling") != std::string::npos, "spell suggest must propose 'spelling'");
+
+    rc = shellEngine.execute("spell els translit Москва", ssEls);
+    TEST_ASSERT(rc == 0, "spell els shell command must return 0");
+    TEST_ASSERT(ssEls.str().find("Moskva") != std::string::npos, "spell els transliteration must display 'Moskva'");
+
+    // Cleanup
+    pChecker->Release();
+    pFactory->Release();
+
+    std::cout << "[TEST] Suite 124: Windows Spell Checking & Extended Linguistic Services PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite123")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite124")) {
+        RUN_TEST(Test_WindowsSpellCheck_Linguistic_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite123") {
         RUN_TEST(Test_WindowsTextServices_IME_Subsystem);
         return g_FailedTests;
     }
@@ -28907,6 +29149,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsAppModel_Lifecycle_Subsystem);
     RUN_TEST(Test_WindowsDirect2D1_3_Typography_Subsystem);
     RUN_TEST(Test_WindowsTextServices_IME_Subsystem);
+    RUN_TEST(Test_WindowsSpellCheck_Linguistic_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

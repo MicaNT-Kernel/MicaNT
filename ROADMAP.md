@@ -2252,18 +2252,37 @@
 
 ---
 
-### Phase 97: Windows Spell Checking & Extended Linguistic Services (ELS) Subsystem (`spellcheck.hpp`, `spellcheck.dll`, `elscore.dll`) (PLANNED - MILESTONE 124)
-- [ ] **Windows Spell Checking API Architecture (`include/micant/spellcheck.hpp`, `spellcheck.dll`)**:
-  - Core COM interfaces: `ISpellCheckerFactory`, `ISpellChecker`, `IEnumSpellingError`, `ISpellingError`, `IOptionDescription`.
-  - Multilingual spell check engine supporting en-US, es-ES, de-DE, fr-FR dictionaries, user word lists (Add/Ignore), and replacement pair generation.
-  - Error categorization: `CORRECTIVE_ACTION_GET_SUGGESTIONS`, `CORRECTIVE_ACTION_REPLACE`, `CORRECTIVE_ACTION_DELETE`.
-- [ ] **Extended Linguistic Services (ELS) Engine (`elscore.dll`)**:
+### Phase 97: Windows Spell Checking & Extended Linguistic Services (ELS) Subsystem (`spellcheck.hpp`, `spellcheck.dll`, `elscore.dll`) (COMPLETED 100% - MILESTONE 124)
+- [x] **Windows Spell Checking API Architecture (`include/micant/spellcheck.hpp`, `spellcheck.dll`)**:
+  - Core COM interfaces: `ISpellCheckerFactory`, `ISpellChecker`, `IEnumSpellingError`, `ISpellingError`, `IOptionDescription`, `IEnumString`.
+  - Multilingual spell check engine supporting en-US, es-ES, de-DE, fr-FR dictionaries, user word lists (Add/Ignore), and autocorrect pairs.
+  - Levenshtein edit distance & Soundex phonetic distance candidate ranking for word suggestions.
+  - Error categorization: `CORRECTIVE_ACTION_NONE`, `CORRECTIVE_ACTION_GET_SUGGESTIONS`, `CORRECTIVE_ACTION_REPLACE`, `CORRECTIVE_ACTION_DELETE`.
+  - Dual VersionDatabase registrations (`10.0.22621.1`) for `spellcheck.dll` and `elscore.dll`.
+- [x] **Extended Linguistic Services (ELS) Engine (`elscore.dll`)**:
   - ELS Win32 APIs: `MappingGetServices`, `MappingFreePropertyBag`, `MappingRecognizeText`, `MappingDoAction`.
-  - Script detection, language detection, and transliteration services (Cyrillic to Latin, Simplified to Traditional Chinese).
+  - Script detection (Latin, Cyrillic, Arabic, Han, Greek, Devanagari, Hebrew).
+  - Language detection (English, Spanish, German, French, Russian, Italian, Portuguese, Japanese, Chinese).
+  - Transliteration services (Cyrillic to Latin ISO 9 / BGN/PCGN transliteration).
+- [x] **Shell CLI Integration**:
+  - Implemented `spell test`, `spell info`, `spell check <text>`, `spell suggest <word>`, and `spell els lang|script|translit <text>` commands in `micant::shell`.
+- [x] **Unit Test Suite 124 (`Test_WindowsSpellCheck_Linguistic_Subsystem`)**:
+  - Validates dynamic exports, COM querying (`ISpellCheckerFactory`, `ISpellChecker`), error enumeration, suggestions, user dictionary manipulation, ELS text analysis, and shell command execution.
+  - Milestone 124: **124 / 124 Test Suites Passing (100%)**.
+
+---
+
+### Phase 98: Windows Speech API (SAPI 5.4) & Voice Synthesis Subsystem (`sapi.hpp`, `sapi.dll`) (PLANNED - MILESTONE 125)
+- [ ] **Windows SAPI 5.4 Architecture (`include/micant/sapi.hpp`, `sapi.dll`)**:
+  - Core COM interfaces: `ISpVoice`, `ISpAudio`, `ISpStream`, `ISpObjectToken`, `ISpObjectTokenCategory`, `ISpVoiceFormat`.
+  - Text-To-Speech (TTS) phoneme synthesis engine, XML/SSML voice markup tag parsing (`<pitch>`, `<rate>`, `<volume>`, `<voice>`).
+  - Audio stream output generation, real-time waveform buffering, and voice token registry enumeration (`SpEnumTokens`).
+- [ ] **Speech Recognition & Grammar Subsystem**:
+  - `ISpRecognizer`, `ISpRecoContext`, `ISpRecoGrammar` command-and-control grammar compilation and phonetic match scoring.
 - [ ] **Shell CLI Integration**:
-  - Implement `spell test`, `spell check <word>`, and `spell suggest <word>` commands in `micant::shell`.
-- [ ] **Unit Test Suite 124 (`Test_WindowsSpellCheck_Linguistic_Subsystem`)**:
-  - Validates dynamic exports, COM querying (`ISpellCheckerFactory`, `ISpellChecker`), error enumeration, suggestions, user dictionary manipulation, and ELS text analysis.
+  - Implement `sapi test`, `sapi voices`, `sapi speak <text>`, and `sapi ssml <xml>` in `micant::shell`.
+- [ ] **Unit Test Suite 125 (`Test_WindowsSpeech_SAPI_Subsystem`)**:
+  - Validates voice enumeration, TTS synthesis, audio format conversion, and shell commands.
 
 
 

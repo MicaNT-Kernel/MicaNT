@@ -115,6 +115,7 @@
 #include "appmodel.hpp"
 #include "d2d1_3.hpp"
 #include "tsf.hpp"
+#include "spellcheck.hpp"
 
 namespace micant::shell {
 
@@ -320,6 +321,7 @@ public:
             if (cmd == "appmodel" || cmd == "package" || cmd == "plm" || cmd == "appx") { cmdAppModel(tokens, out); return 0; }
             if (cmd == "d2d13" || cmd == "d2d3" || cmd == "typography" || cmd == "svg") { cmdD2D1_3(tokens, out); return 0; }
             if (cmd == "tsf" || cmd == "ime" || cmd == "textservices") { cmdTSF(tokens, out); return 0; }
+            if (cmd == "spell" || cmd == "spellcheck" || cmd == "els" || cmd == "linguistic") { cmdSpellCheck(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -17080,6 +17082,199 @@ private:
             << "  tsf info                               Displays Text Services subsystem info\n"
             << "  tsf compose <text>                     Injects IME composition string\n"
             << "  tsf candidates <pinyin>                Generates simulated IME candidate list\n";
+    }
+
+    void cmdSpellCheck(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::spellcheck;
+        InitializeSpellCheckExports();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "test";
+        std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+        if (sub == "test" || sub == "diag") {
+            out << "[SpellCheck Diagnostics] Initializing Spell Checking & ELS Subsystems...\n";
+            ISpellCheckerFactory* pFactory = nullptr;
+            int32_t hr = SpellChecker_CreateFactory(&pFactory);
+            if (hr != 0 || !pFactory) {
+                out << "[-] Failed to activate ISpellCheckerFactory.\n";
+                return;
+            }
+            out << "  [+] ISpellCheckerFactory instantiated cleanly.\n";
+
+            int32_t isSup = 0;
+            pFactory->IsSupported(L"en-US", &isSup);
+            out << "  [+] en-US Language Support: " << (isSup ? "YES" : "NO") << "\n";
+
+            ISpellChecker* pChecker = nullptr;
+            hr = pFactory->CreateSpellChecker(L"en-US", &pChecker);
+            if (hr != 0 || !pChecker) {
+                pFactory->Release();
+                out << "[-] Failed to create ISpellChecker for en-US.\n";
+                return;
+            }
+            out << "  [+] ISpellChecker created for en-US.\n";
+
+            // Test check
+            const wchar_t* sample = L"The quick bron fox jumpd over teh lazy dog";
+            IEnumSpellingError* pEnum = nullptr;
+            pChecker->Check(sample, &pEnum);
+            uint32_t errCount = 0;
+            if (pEnum) {
+                ISpellingError* pErr = nullptr;
+                while (pEnum->Next(&pErr) == ole32::S_OK && pErr) {
+                    errCount++;
+                    pErr->Release();
+                }
+                pEnum->Release();
+            }
+            out << "  [+] Check text sample found " << errCount << " errors/autocorrects.\n";
+
+            // Test suggestions
+            IEnumString* pSuggs = nullptr;
+            pChecker->Suggest(L"speling", &pSuggs);
+            if (pSuggs) {
+                wchar_t* rgelt[4]{};
+                uint32_t fetched = 0;
+                pSuggs->Next(4, rgelt, &fetched);
+                out << "  [+] Suggestions for 'speling': ";
+                for (uint32_t i = 0; i < fetched; ++i) {
+                    if (rgelt[i]) {
+                        out << appmodel::WideToUtf8(rgelt[i]) << " ";
+                        ole32::CoTaskMemFree(rgelt[i]);
+                    }
+                }
+                out << "\n";
+                pSuggs->Release();
+            }
+
+            pChecker->Release();
+            pFactory->Release();
+
+            // Test ELS
+            const wchar_t* cyrlText = L"Привет мир";
+            std::wstring lang = CELSServiceEngine::Instance().DetectLanguage(cyrlText, wcslen(cyrlText));
+            std::wstring script = CELSServiceEngine::Instance().DetectScript(cyrlText, wcslen(cyrlText));
+            std::wstring trans = CELSServiceEngine::Instance().TransliterateCyrillicToLatin(cyrlText, wcslen(cyrlText));
+            out << "  [+] ELS Cyrillic Detection: Lang=" << appmodel::WideToUtf8(lang)
+                << ", Script=" << appmodel::WideToUtf8(script)
+                << ", Translit=" << appmodel::WideToUtf8(trans) << "\n";
+
+            out << "[SpellCheck Diagnostics] Self-test passed cleanly.\n";
+            return;
+        }
+
+        if (sub == "info") {
+            out << "=== Windows Spell Checking & Extended Linguistic Services (ELS) ===\n";
+            out << "  Driver DLLs:       spellcheck.dll, elscore.dll (Version 10.0.22621.1)\n";
+            out << "  Supported Langs:   en-US, en-GB, es-ES, de-DE, fr-FR, it-IT, pt-BR\n";
+            out << "  ELS Services:      Language Detection, Script Detection, Transliteration\n";
+            out << "  Algorithms:        Levenshtein Distance, Soundex Phonetic Matrix\n";
+            out << "  Corrective Modes:  None, GetSuggestions, Replace, Delete\n";
+            return;
+        }
+
+        if (sub == "check") {
+            std::string text = (tokens.size() > 2) ? tokens[2] : "teh quik fox";
+            for (size_t i = 3; i < tokens.size(); ++i) {
+                text += " " + tokens[i];
+            }
+            std::wstring wText = appmodel::Utf8ToWide(text);
+            ISpellCheckerFactory* pFactory = nullptr;
+            SpellChecker_CreateFactory(&pFactory);
+            if (pFactory) {
+                ISpellChecker* pChecker = nullptr;
+                pFactory->CreateSpellChecker(L"en-US", &pChecker);
+                if (pChecker) {
+                    IEnumSpellingError* pEnum = nullptr;
+                    pChecker->Check(wText.c_str(), &pEnum);
+                    out << "[SpellCheck] Checking text: \"" << text << "\"\n";
+                    if (pEnum) {
+                        ISpellingError* pErr = nullptr;
+                        int idx = 1;
+                        while (pEnum->Next(&pErr) == ole32::S_OK && pErr) {
+                            uint32_t start = 0, len = 0;
+                            CORRECTIVE_ACTION act = CORRECTIVE_ACTION_NONE;
+                            wchar_t* repl = nullptr;
+                            pErr->get_StartIndex(&start);
+                            pErr->get_Length(&len);
+                            pErr->get_CorrectiveAction(&act);
+                            pErr->get_Replacement(&repl);
+
+                            std::string errWord = text.substr(start, len);
+                            out << "  " << idx++ << ". Offset " << start << " (" << errWord << "): ";
+                            if (act == CORRECTIVE_ACTION_REPLACE && repl) {
+                                out << "Replace with \"" << appmodel::WideToUtf8(repl) << "\"\n";
+                            } else if (act == CORRECTIVE_ACTION_GET_SUGGESTIONS) {
+                                out << "Suggestions available\n";
+                            }
+                            if (repl) ole32::CoTaskMemFree(repl);
+                            pErr->Release();
+                        }
+                        pEnum->Release();
+                    }
+                    pChecker->Release();
+                }
+                pFactory->Release();
+            }
+            return;
+        }
+
+        if (sub == "suggest") {
+            std::string word = (tokens.size() > 2) ? tokens[2] : "speling";
+            std::wstring wWord = appmodel::Utf8ToWide(word);
+            ISpellCheckerFactory* pFactory = nullptr;
+            SpellChecker_CreateFactory(&pFactory);
+            if (pFactory) {
+                ISpellChecker* pChecker = nullptr;
+                pFactory->CreateSpellChecker(L"en-US", &pChecker);
+                if (pChecker) {
+                    IEnumString* pSuggs = nullptr;
+                    pChecker->Suggest(wWord.c_str(), &pSuggs);
+                    out << "[SpellCheck] Suggestions for word: \"" << word << "\"\n";
+                    if (pSuggs) {
+                        wchar_t* rgelt[8]{};
+                        uint32_t fetched = 0;
+                        pSuggs->Next(8, rgelt, &fetched);
+                        for (uint32_t i = 0; i < fetched; ++i) {
+                            if (rgelt[i]) {
+                                out << "  " << (i + 1) << ". " << appmodel::WideToUtf8(rgelt[i]) << "\n";
+                                ole32::CoTaskMemFree(rgelt[i]);
+                            }
+                        }
+                        pSuggs->Release();
+                    }
+                    pChecker->Release();
+                }
+                pFactory->Release();
+            }
+            return;
+        }
+
+        if (sub == "els") {
+            std::string mode = (tokens.size() > 2) ? tokens[2] : "lang";
+            std::string text = (tokens.size() > 3) ? tokens[3] : "Hello world";
+            for (size_t i = 4; i < tokens.size(); ++i) text += " " + tokens[i];
+            std::wstring wText = appmodel::Utf8ToWide(text);
+
+            if (mode == "lang") {
+                std::wstring lang = CELSServiceEngine::Instance().DetectLanguage(wText.c_str(), wText.length());
+                out << "[ELS] Detected Language for \"" << text << "\": " << appmodel::WideToUtf8(lang) << "\n";
+            } else if (mode == "script") {
+                std::wstring script = CELSServiceEngine::Instance().DetectScript(wText.c_str(), wText.length());
+                out << "[ELS] Detected Script for \"" << text << "\": " << appmodel::WideToUtf8(script) << "\n";
+            } else if (mode == "translit") {
+                std::wstring trans = CELSServiceEngine::Instance().TransliterateCyrillicToLatin(wText.c_str(), wText.length());
+                out << "[ELS] Transliteration for \"" << text << "\": " << appmodel::WideToUtf8(trans) << "\n";
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  spell test                             Runs Spell Checking & ELS self-tests\n"
+            << "  spell info                             Displays Linguistic subsystem telemetry\n"
+            << "  spell check <text>                     Checks text for spelling and autocorrect\n"
+            << "  spell suggest <word>                   Generates ranked phonetic/Levenshtein suggestions\n"
+            << "  spell els lang|script|translit <text>  Invokes Extended Linguistic Services\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -161,8 +161,40 @@ inline std::string WideToUtf8(const std::wstring& wstr) {
 inline std::wstring Utf8ToWide(const std::string& str) {
     std::wstring wstr;
     wstr.reserve(str.size());
-    for (char c : str) {
-        wstr.push_back(static_cast<wchar_t>(static_cast<uint8_t>(c)));
+    size_t i = 0;
+    const size_t len = str.size();
+    while (i < len) {
+        uint8_t b0 = static_cast<uint8_t>(str[i++]);
+        if (b0 <= 0x7F) {
+            wstr.push_back(static_cast<wchar_t>(b0));
+        } else if ((b0 & 0xE0) == 0xC0) {
+            if (i < len) {
+                uint8_t b1 = static_cast<uint8_t>(str[i++]);
+                uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+                wstr.push_back(static_cast<wchar_t>(cp));
+            }
+        } else if ((b0 & 0xF0) == 0xE0) {
+            if (i + 1 < len) {
+                uint8_t b1 = static_cast<uint8_t>(str[i++]);
+                uint8_t b2 = static_cast<uint8_t>(str[i++]);
+                uint32_t cp = ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+                wstr.push_back(static_cast<wchar_t>(cp));
+            }
+        } else if ((b0 & 0xF8) == 0xF0) {
+            if (i + 2 < len) {
+                uint8_t b1 = static_cast<uint8_t>(str[i++]);
+                uint8_t b2 = static_cast<uint8_t>(str[i++]);
+                uint8_t b3 = static_cast<uint8_t>(str[i++]);
+                uint32_t cp = ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+                if (cp > 0xFFFF) {
+                    cp -= 0x10000;
+                    wstr.push_back(static_cast<wchar_t>(0xD800 + (cp >> 10)));
+                    wstr.push_back(static_cast<wchar_t>(0xDC00 + (cp & 0x3FF)));
+                } else {
+                    wstr.push_back(static_cast<wchar_t>(cp));
+                }
+            }
+        }
     }
     return wstr;
 }
