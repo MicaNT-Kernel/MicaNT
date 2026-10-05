@@ -121,6 +121,7 @@
 #include "winml.hpp"
 #include "webauthn.hpp"
 #include "wlanapi.hpp"
+#include "virtdisk.hpp"
 
 namespace micant::shell {
 
@@ -332,6 +333,7 @@ public:
             if (cmd == "winml" || cmd == "ml" || cmd == "ai") { cmdWinML(tokens, out); return 0; }
             if (cmd == "webauthn" || cmd == "fido2" || cmd == "passkey") { cmdWebAuthn(tokens, out); return 0; }
             if (cmd == "wlan" || cmd == "wifi" || cmd == "wireless") { cmdWlan(tokens, out); return 0; }
+            if (cmd == "vhd" || cmd == "virtdisk" || cmd == "vdisk") { cmdVirtDisk(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -634,6 +636,7 @@ private:
             << "  WINML [test|info|run]    Windows Machine Learning & Neural Inference (winml test)\n"
             << "  WEBAUTHN [test|info|register|auth] Windows Web Authentication & FIDO2 Passkeys (webauthn test)\n"
             << "  WLAN [test|info|scan|list|connect|disconnect] Windows Native Wifi & WLAN (wlan test)\n"
+            << "  VHD [test|info|create|attach|detach|expand|list] Windows Virtual Hard Disk (vhd test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -18511,6 +18514,377 @@ private:
             << "  wlan connect <ssid>                    Connects to specified wireless network\n"
             << "  wlan disconnect                        Disconnects active wireless association\n"
             << "  wlan test                              Runs Native Wifi self-test diagnostics\n";
+    }
+
+    void cmdVirtDisk(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::virtdisk;
+        InitializeVirtualDiskSubsystemExports();
+
+        auto typeToStr = [](ULONG devId) -> const char* {
+            switch (devId) {
+                case VIRTUAL_STORAGE_TYPE_DEVICE_VHD: return "VHD (Connectix 1.0)";
+                case VIRTUAL_STORAGE_TYPE_DEVICE_VHDX: return "VHDX (Microsoft 2.0)";
+                case VIRTUAL_STORAGE_TYPE_DEVICE_ISO: return "ISO Optical Image";
+                default: return "Unknown";
+            }
+        };
+
+        auto allocToStr = [](ULONG subType) -> const char* {
+            switch (subType) {
+                case 2: return "Fixed Allocation";
+                case 3: return "Dynamic Sparse";
+                case 4: return "Differencing Child";
+                default: return "Custom";
+            }
+        };
+
+        if (tokens.size() > 1 && tokens[1] == "list") {
+            auto& mgr = SovereignVirtDiskManager::get();
+            auto disks = mgr.getAllDisks();
+
+            out << "=== Registered Virtual Hard Disks (" << disks.size() << ") ===\n";
+            out << std::left << std::setw(36) << "Virtual Disk Path"
+                << std::setw(16) << "Format"
+                << std::setw(12) << "Size (MB)"
+                << std::setw(12) << "State"
+                << "Device Path\n";
+            out << std::string(90, '-') << "\n";
+
+            for (const auto& d : disks) {
+                std::string pathNarrow = d.filePathNarrow;
+                std::string fmt = (d.format == DiskFormat::Vhdx) ? "VHDX" : "VHD";
+                std::string sizeStr = std::to_string(d.virtualSize / (1024 * 1024)) + " MB";
+                std::string state = d.isAttached ? "Attached" : "Detached";
+                std::string devPath;
+                for (wchar_t wc : d.physicalDrivePath) devPath.push_back(static_cast<char>(wc));
+
+                out << std::left << std::setw(36) << pathNarrow
+                    << std::setw(16) << fmt
+                    << std::setw(12) << sizeStr
+                    << std::setw(12) << state
+                    << (devPath.empty() ? "-" : devPath) << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && tokens[1] == "info") {
+            std::string path = tokens[2];
+            std::wstring wPath(path.begin(), path.end());
+
+            VIRTUAL_STORAGE_TYPE stType{};
+            stType.DeviceId = path.ends_with(".vhdx") ? VIRTUAL_STORAGE_TYPE_DEVICE_VHDX : VIRTUAL_STORAGE_TYPE_DEVICE_VHD;
+            stType.VendorId = VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT;
+
+            HANDLE hDisk = nullptr;
+            OPEN_VIRTUAL_DISK_PARAMETERS openParams{};
+            openParams.Version = OPEN_VIRTUAL_DISK_VERSION_2;
+            openParams.Version2.GetInfoOnly = 1;
+
+            DWORD dwRet = OpenVirtualDisk(&stType, wPath.c_str(), VIRTUAL_DISK_ACCESS_GET_INFO,
+                                         OPEN_VIRTUAL_DISK_FLAG_NONE, &openParams, &hDisk);
+            if (dwRet != ERROR_SUCCESS || !hDisk) {
+                out << "Failed to open virtual disk [" << path << "]. Error: " << dwRet << "\n";
+                return;
+            }
+
+            GET_VIRTUAL_DISK_INFO info{};
+            ULONG infoSize = sizeof(GET_VIRTUAL_DISK_INFO);
+            ULONG sizeUsed = 0;
+
+            info.Version = GET_VIRTUAL_DISK_INFO_SIZE;
+            dwRet = GetVirtualDiskInformation(hDisk, &infoSize, &info, &sizeUsed);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "Failed to query virtual disk size. Error: " << dwRet << "\n";
+                SovereignVirtDiskManager::get().closeDisk(hDisk);
+                return;
+            }
+
+            uint64_t vSize = info.Size.VirtualSize;
+            uint64_t pSize = info.Size.PhysicalSize;
+            uint32_t sSize = info.Size.SectorSize;
+            uint32_t bSize = info.Size.BlockSize;
+
+            info.Version = GET_VIRTUAL_DISK_INFO_PROVIDER_SUBTYPE;
+            GetVirtualDiskInformation(hDisk, &infoSize, &info, &sizeUsed);
+            ULONG subType = info.ProviderSubtype;
+
+            info.Version = GET_VIRTUAL_DISK_INFO_IS_LOADED;
+            GetVirtualDiskInformation(hDisk, &infoSize, &info, &sizeUsed);
+            BOOL isLoaded = info.IsLoaded;
+
+            wchar_t physPath[256]{ 0 };
+            ULONG physPathSize = sizeof(physPath);
+            std::string physStr = "(Not Attached)";
+            if (isLoaded) {
+                if (GetVirtualDiskPhysicalPath(hDisk, &physPathSize, physPath) == ERROR_SUCCESS) {
+                    physStr.clear();
+                    for (int i = 0; physPath[i]; ++i) physStr.push_back(static_cast<char>(physPath[i]));
+                }
+            }
+
+            out << "=== Windows Virtual Disk Properties ===\n"
+                << "  Module:                          virtdisk.dll (Version 10.0.22621.1)\n"
+                << "  Disk Image File:                 " << path << "\n"
+                << "  Container Format:                " << typeToStr(stType.DeviceId) << "\n"
+                << "  Allocation Type:                 " << allocToStr(subType) << "\n"
+                << "  Virtual Size:                    " << (vSize / (1024 * 1024)) << " MB (" << vSize << " bytes)\n"
+                << "  Physical Allocation:             " << (pSize / (1024 * 1024)) << " MB (" << pSize << " bytes)\n"
+                << "  Logical Sector Size:             " << sSize << " bytes\n"
+                << "  Block / Chunk Size:              " << (bSize / 1024) << " KB\n"
+                << "  Attachment State:                " << (isLoaded ? "ATTACHED" : "DETACHED") << "\n"
+                << "  Physical Drive Path:             " << physStr << "\n";
+
+            SovereignVirtDiskManager::get().closeDisk(hDisk);
+            return;
+        }
+
+        if (tokens.size() > 3 && tokens[1] == "create") {
+            std::string path = tokens[2];
+            uint64_t sizeMb = std::stoull(tokens[3]);
+            std::wstring wPath(path.begin(), path.end());
+
+            CREATE_VIRTUAL_DISK_PARAMETERS params{};
+            params.Version = CREATE_VIRTUAL_DISK_VERSION_1;
+            params.Version1.MaximumSize = sizeMb * 1024ULL * 1024ULL;
+            params.Version1.SectorSizeInBytes = path.ends_with(".vhdx") ? 4096 : 512;
+            params.Version1.BlockSizeInBytes = 2097152;
+
+            CREATE_VIRTUAL_DISK_FLAG flags = CREATE_VIRTUAL_DISK_FLAG_NONE;
+            if (tokens.size() > 4 && tokens[4] == "fixed") {
+                flags = CREATE_VIRTUAL_DISK_FLAG_FULL_PHYSICAL_ALLOCATION;
+            }
+
+            VIRTUAL_STORAGE_TYPE stType{};
+            stType.DeviceId = path.ends_with(".vhdx") ? VIRTUAL_STORAGE_TYPE_DEVICE_VHDX : VIRTUAL_STORAGE_TYPE_DEVICE_VHD;
+            stType.VendorId = VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT;
+
+            HANDLE hDisk = nullptr;
+            DWORD dwRet = CreateVirtualDisk(&stType, wPath.c_str(), VIRTUAL_DISK_ACCESS_ALL, nullptr,
+                                            flags, 0, &params, nullptr, &hDisk);
+            if (dwRet == ERROR_SUCCESS && hDisk) {
+                out << "Virtual disk successfully created:\n"
+                    << "  File Path:      " << path << "\n"
+                    << "  Capacity:       " << sizeMb << " MB\n"
+                    << "  Type:           " << ((flags & CREATE_VIRTUAL_DISK_FLAG_FULL_PHYSICAL_ALLOCATION) ? "Fixed" : "Dynamic") << "\n";
+                SovereignVirtDiskManager::get().closeDisk(hDisk);
+            } else {
+                out << "Failed to create virtual disk. Error: " << dwRet << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && tokens[1] == "attach") {
+            std::string path = tokens[2];
+            std::wstring wPath(path.begin(), path.end());
+
+            VIRTUAL_STORAGE_TYPE stType{};
+            stType.DeviceId = path.ends_with(".vhdx") ? VIRTUAL_STORAGE_TYPE_DEVICE_VHDX : VIRTUAL_STORAGE_TYPE_DEVICE_VHD;
+            stType.VendorId = VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT;
+
+            HANDLE hDisk = nullptr;
+            OPEN_VIRTUAL_DISK_PARAMETERS openParams{};
+            openParams.Version = OPEN_VIRTUAL_DISK_VERSION_1;
+            openParams.Version1.RWDepth = 1;
+
+            DWORD dwRet = OpenVirtualDisk(&stType, wPath.c_str(), VIRTUAL_DISK_ACCESS_ALL,
+                                         OPEN_VIRTUAL_DISK_FLAG_NONE, &openParams, &hDisk);
+            if (dwRet != ERROR_SUCCESS || !hDisk) {
+                out << "Failed to open virtual disk for attachment. Error: " << dwRet << "\n";
+                return;
+            }
+
+            ATTACH_VIRTUAL_DISK_FLAG attachFlags = ATTACH_VIRTUAL_DISK_FLAG_NONE;
+            if (tokens.size() > 3 && (tokens[3] == "/readonly" || tokens[3] == "-ro")) {
+                attachFlags = ATTACH_VIRTUAL_DISK_FLAG_READ_ONLY;
+            }
+
+            ATTACH_VIRTUAL_DISK_PARAMETERS attachParams{};
+            attachParams.Version = ATTACH_VIRTUAL_DISK_VERSION_1;
+
+            dwRet = AttachVirtualDisk(hDisk, nullptr, attachFlags, 0, &attachParams, nullptr);
+            if (dwRet == ERROR_SUCCESS) {
+                wchar_t physPath[256]{ 0 };
+                ULONG physPathSize = sizeof(physPath);
+                std::string physStr;
+                if (GetVirtualDiskPhysicalPath(hDisk, &physPathSize, physPath) == ERROR_SUCCESS) {
+                    for (int i = 0; physPath[i]; ++i) physStr.push_back(static_cast<char>(physPath[i]));
+                }
+                out << "Virtual disk attached successfully:\n"
+                    << "  Disk Path:       " << path << "\n"
+                    << "  Physical Device: " << physStr << "\n"
+                    << "  Access Mode:     " << ((attachFlags & ATTACH_VIRTUAL_DISK_FLAG_READ_ONLY) ? "Read-Only" : "Read-Write") << "\n";
+            } else if (dwRet == ERROR_ALREADY_EXISTS) {
+                out << "Virtual disk [" << path << "] is already attached.\n";
+            } else {
+                out << "Attach failed with error: " << dwRet << "\n";
+            }
+
+            SovereignVirtDiskManager::get().closeDisk(hDisk);
+            return;
+        }
+
+        if (tokens.size() > 2 && tokens[1] == "detach") {
+            std::string path = tokens[2];
+            std::wstring wPath(path.begin(), path.end());
+
+            VIRTUAL_STORAGE_TYPE stType{};
+            stType.DeviceId = path.ends_with(".vhdx") ? VIRTUAL_STORAGE_TYPE_DEVICE_VHDX : VIRTUAL_STORAGE_TYPE_DEVICE_VHD;
+            stType.VendorId = VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT;
+
+            HANDLE hDisk = nullptr;
+            OPEN_VIRTUAL_DISK_PARAMETERS openParams{};
+            openParams.Version = OPEN_VIRTUAL_DISK_VERSION_1;
+            openParams.Version1.RWDepth = 1;
+
+            DWORD dwRet = OpenVirtualDisk(&stType, wPath.c_str(), VIRTUAL_DISK_ACCESS_ALL,
+                                         OPEN_VIRTUAL_DISK_FLAG_NONE, &openParams, &hDisk);
+            if (dwRet != ERROR_SUCCESS || !hDisk) {
+                out << "Failed to open virtual disk for detachment. Error: " << dwRet << "\n";
+                return;
+            }
+
+            dwRet = DetachVirtualDisk(hDisk, DETACH_VIRTUAL_DISK_FLAG_NONE, 0);
+            if (dwRet == ERROR_SUCCESS) {
+                out << "Virtual disk [" << path << "] detached successfully.\n";
+            } else if (dwRet == ERROR_NOT_FOUND) {
+                out << "Virtual disk [" << path << "] is not currently attached.\n";
+            } else {
+                out << "Detach failed with error: " << dwRet << "\n";
+            }
+
+            SovereignVirtDiskManager::get().closeDisk(hDisk);
+            return;
+        }
+
+        if (tokens.size() > 3 && tokens[1] == "expand") {
+            std::string path = tokens[2];
+            uint64_t newSizeMb = std::stoull(tokens[3]);
+            std::wstring wPath(path.begin(), path.end());
+
+            VIRTUAL_STORAGE_TYPE stType{};
+            stType.DeviceId = path.ends_with(".vhdx") ? VIRTUAL_STORAGE_TYPE_DEVICE_VHDX : VIRTUAL_STORAGE_TYPE_DEVICE_VHD;
+            stType.VendorId = VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT;
+
+            HANDLE hDisk = nullptr;
+            OPEN_VIRTUAL_DISK_PARAMETERS openParams{};
+            openParams.Version = OPEN_VIRTUAL_DISK_VERSION_1;
+
+            DWORD dwRet = OpenVirtualDisk(&stType, wPath.c_str(), VIRTUAL_DISK_ACCESS_ALL,
+                                         OPEN_VIRTUAL_DISK_FLAG_NONE, &openParams, &hDisk);
+            if (dwRet != ERROR_SUCCESS || !hDisk) {
+                out << "Failed to open virtual disk. Error: " << dwRet << "\n";
+                return;
+            }
+
+            EXPAND_VIRTUAL_DISK_PARAMETERS expParams{};
+            expParams.Version = EXPAND_VIRTUAL_DISK_VERSION_1;
+            expParams.Version1.NewSize = newSizeMb * 1024ULL * 1024ULL;
+
+            dwRet = ExpandVirtualDisk(hDisk, EXPAND_VIRTUAL_DISK_FLAG_NONE, &expParams, nullptr);
+            if (dwRet == ERROR_SUCCESS) {
+                out << "Virtual disk expanded successfully to " << newSizeMb << " MB.\n";
+            } else {
+                out << "Expand failed with error: " << dwRet << "\n";
+            }
+
+            SovereignVirtDiskManager::get().closeDisk(hDisk);
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[VirtualDisk Self-Test] Initiating Sovereign Virtual Hard Disk Subsystem Diagnostics...\n";
+
+            std::wstring testPath = L"C:\\Test\\DiagnosticsTest.vhd";
+            CREATE_VIRTUAL_DISK_PARAMETERS createParams{};
+            createParams.Version = CREATE_VIRTUAL_DISK_VERSION_1;
+            createParams.Version1.MaximumSize = 1024ULL * 1024 * 1024; // 1 GB
+            createParams.Version1.SectorSizeInBytes = 512;
+            createParams.Version1.BlockSizeInBytes = 2097152;
+
+            VIRTUAL_STORAGE_TYPE stType{};
+            stType.DeviceId = VIRTUAL_STORAGE_TYPE_DEVICE_VHD;
+            stType.VendorId = VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT;
+
+            HANDLE hDisk = nullptr;
+            DWORD dwRet = CreateVirtualDisk(&stType, testPath.c_str(), VIRTUAL_DISK_ACCESS_ALL, nullptr,
+                                            CREATE_VIRTUAL_DISK_FLAG_NONE, 0, &createParams, nullptr, &hDisk);
+            if (dwRet != ERROR_SUCCESS || !hDisk) {
+                out << "[FAIL] CreateVirtualDisk failed! Error: " << dwRet << "\n";
+                return;
+            }
+            out << "  [PASS] CreateVirtualDisk created 1 GB dynamic VHD container.\n";
+
+            GET_VIRTUAL_DISK_INFO info{};
+            ULONG infoSize = sizeof(GET_VIRTUAL_DISK_INFO);
+            ULONG sizeUsed = 0;
+            info.Version = GET_VIRTUAL_DISK_INFO_SIZE;
+            dwRet = GetVirtualDiskInformation(hDisk, &infoSize, &info, &sizeUsed);
+            if (dwRet != ERROR_SUCCESS || info.Size.VirtualSize != 1024ULL * 1024 * 1024) {
+                out << "[FAIL] GetVirtualDiskInformation failed!\n";
+                SovereignVirtDiskManager::get().closeDisk(hDisk);
+                return;
+            }
+            out << "  [PASS] GetVirtualDiskInformation verified virtual size (1024 MB) and sector geometry.\n";
+
+            ATTACH_VIRTUAL_DISK_PARAMETERS attachParams{};
+            attachParams.Version = ATTACH_VIRTUAL_DISK_VERSION_1;
+            dwRet = AttachVirtualDisk(hDisk, nullptr, ATTACH_VIRTUAL_DISK_FLAG_NONE, 0, &attachParams, nullptr);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "[FAIL] AttachVirtualDisk failed!\n";
+                SovereignVirtDiskManager::get().closeDisk(hDisk);
+                return;
+            }
+            out << "  [PASS] AttachVirtualDisk mounted container into kernel device tree.\n";
+
+            wchar_t physPath[256]{ 0 };
+            ULONG physPathSize = sizeof(physPath);
+            dwRet = GetVirtualDiskPhysicalPath(hDisk, &physPathSize, physPath);
+            if (dwRet != ERROR_SUCCESS || std::wcslen(physPath) == 0) {
+                out << "[FAIL] GetVirtualDiskPhysicalPath failed!\n";
+            } else {
+                std::string physStr;
+                for (int i = 0; physPath[i]; ++i) physStr.push_back(static_cast<char>(physPath[i]));
+                out << "  [PASS] GetVirtualDiskPhysicalPath mapped to: " << physStr << "\n";
+            }
+
+            EXPAND_VIRTUAL_DISK_PARAMETERS expParams{};
+            expParams.Version = EXPAND_VIRTUAL_DISK_VERSION_1;
+            expParams.Version1.NewSize = 2048ULL * 1024 * 1024; // 2 GB
+            dwRet = ExpandVirtualDisk(hDisk, EXPAND_VIRTUAL_DISK_FLAG_NONE, &expParams, nullptr);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "[FAIL] ExpandVirtualDisk failed!\n";
+            } else {
+                out << "  [PASS] ExpandVirtualDisk expanded volume boundary to 2048 MB.\n";
+            }
+
+            dwRet = CompactVirtualDisk(hDisk, COMPACT_VIRTUAL_DISK_FLAG_NONE, nullptr, nullptr);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "[FAIL] CompactVirtualDisk failed!\n";
+            } else {
+                out << "  [PASS] CompactVirtualDisk coalesced sparse allocation blocks.\n";
+            }
+
+            dwRet = DetachVirtualDisk(hDisk, DETACH_VIRTUAL_DISK_FLAG_NONE, 0);
+            if (dwRet != ERROR_SUCCESS) {
+                out << "[FAIL] DetachVirtualDisk failed!\n";
+            } else {
+                out << "  [PASS] DetachVirtualDisk safely unmounted volume.\n";
+            }
+
+            SovereignVirtDiskManager::get().closeDisk(hDisk);
+
+            out << "[SUCCESS] Windows Virtual Disk Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  vhd list                               Lists all registered virtual hard disks\n"
+            << "  vhd info <path>                        Displays properties of specified virtual disk\n"
+            << "  vhd create <path> <sizeMB> [fixed]     Creates a new VHD/VHDX image\n"
+            << "  vhd attach <path> [/readonly]          Mounts virtual disk as physical drive\n"
+            << "  vhd detach <path>                      Unmounts virtual disk\n"
+            << "  vhd expand <path> <newSizeMB>          Expands virtual disk capacity\n"
+            << "  vhd test                               Runs Virtual Disk self-test diagnostics\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -2389,22 +2389,43 @@
 
 ---
 
-### Phase 103: Windows Virtual Disk & Storage Management Subsystem (`virtdisk.hpp`, `virtdisk.dll` / `vds.exe`) (PLANNED - MILESTONE 130)
-- [ ] **Windows Virtual Disk Architecture (`include/micant/virtdisk.hpp`, `virtdisk.dll`)**:
-  - Native Win32 Virtual Disk C APIs: `CreateVirtualDisk`, `OpenVirtualDisk`, `AttachVirtualDisk`, `DetachVirtualDisk`, `GetVirtualDiskInformation`, `SetVirtualDiskInformation`, `GetVirtualDiskPhysicalPath`, `CompactVirtualDisk`, `ExpandVirtualDisk`, `ResizeVirtualDisk`, `MirrorVirtualDisk`, `BreakMirrorVirtualDisk`.
+### Phase 103: Windows Virtual Disk & Storage Management Subsystem (`virtdisk.hpp`, `virtdisk.dll` / `vds.exe`) (100% Completed - MILESTONE 130)
+- [x] **Windows Virtual Disk Architecture (`include/micant/virtdisk.hpp`, `virtdisk.dll`)**:
+  - Native Win32 Virtual Disk C APIs: `CreateVirtualDisk`, `OpenVirtualDisk`, `AttachVirtualDisk`, `DetachVirtualDisk`, `GetVirtualDiskInformation`, `SetVirtualDiskInformation`, `GetVirtualDiskPhysicalPath`, `GetAllAttachedVirtualDiskPhysicalPaths`, `CompactVirtualDisk`, `ExpandVirtualDisk`, `ResizeVirtualDisk`, `MirrorVirtualDisk`, `BreakMirrorVirtualDisk`, `AddVirtualDiskParent`, `MergeVirtualDisk`, `GetStorageDependencyInformation`.
   - VHD & VHDX Container Format Specification:
     * Dynamic, Fixed, and Differencing virtual disks.
     * Sector sizing (512e / 4Kn) and virtual cylinder-head-sector (CHS) geometry calculation.
-    * Block Allocation Table (BAT) simulation and virtual disk headers/footers.
+    * Connectix cookie ("conectix"), dynamic header ("cxsparse"), and VHDX file signature ("vhdxfile").
     * Attachment flags (`ATTACH_VIRTUAL_DISK_FLAG_READ_ONLY`, `ATTACH_VIRTUAL_DISK_FLAG_NO_DRIVE_LETTER`, `ATTACH_VIRTUAL_DISK_FLAG_PERMANENT_LIFETIME`).
   - Sovereign Virtual Disk Controller & Device Graph Integration:
-    * Mounting and synthetic SCSI device exposure into VirtualFileSystem (`\Device\HarddiskVolumeVirtual`).
-    * Detach teardown and resource reclamation.
+    * Mounting and synthetic SCSI device exposure (`\\.\PhysicalDrive<N>`, `\Device\HarddiskVolumeVirtual<N>`).
+    * Detach teardown, handle tracking, and resource reclamation.
   - VersionDatabase registration (`10.0.22621.1`) for `virtdisk.dll`.
+- [x] **Shell CLI Integration**:
+  - Implemented `vhd list`, `vhd info <path>`, `vhd create <path> <size_mb> [fixed]`, `vhd attach <path> [/readonly]`, `vhd detach <path>`, `vhd expand <path> <new_size_mb>`, and `vhd test` in `micant::shell`.
+- [x] **Unit Test Suite 130 (`Test_WindowsVirtualDisk_Storage_Subsystem`)**:
+  - Validates dynamic exports in `virtdisk.dll`, VersionDatabase entry, dynamic VHD creation, virtual geometry and size queries, attachment lifecycle and duplicate prevention, physical drive mapping (`\\.\PhysicalDrive<N>`), multi-path enumeration, disk expansion, dynamic compaction, dependency querying, detachment state teardown, fixed 4K VHDX creation, and shell CLI commands.
+  - Milestone 130: **130 / 130 Test Suites Passing (100%)**.
+
+---
+
+### Phase 104: Windows BitLocker & Full Volume Encryption (FVE) Subsystem (`fveapi.hpp`, `fveapi.dll` / `manage-bde.exe`) (PLANNED - MILESTONE 131)
+- [ ] **Windows BitLocker & Full Volume Encryption Architecture (`include/micant/fveapi.hpp`, `fveapi.dll`)**:
+  - Native Win32 FVE C APIs: `FveOpenVolume`, `FveCloseVolume`, `FveGetStatus`, `FveTurnOn`, `FveTurnOff`, `FveLockVolume`, `FveUnlockVolumeWithPassphrase`, `FveUnlockVolumeWithRecoveryPassword`, `FveAddAuthMethodPassphrase`, `FveAddAuthMethodRecoveryPassword`, `FveAddAuthMethodTpm`, `FveRemoveAuthMethod`, `FveGetAuthMethodInformation`.
+  - Cryptographic Volume Architecture:
+    * Volume Master Key (VMK) and Full Volume Encryption Key (FVEK).
+    * Cipher suites: XTS-AES-128, XTS-AES-256, and AES-CBC-128/256 with Elephant Diffuser.
+    * 48-digit numerical recovery password generation, checksumming, and validation (RFC 4648 format).
+    * TPM 2.0 PCR sealing and unsealing simulation for boot volumes.
+  - Sovereign FVE Controller & Volume Filter Driver:
+    * Transparent sector decryption and encryption overlay for mounted filesystem volumes.
+    * Conversion progress state machine (`FveStatusEncrypted`, `FveStatusDecrypted`, `FveStatusEncryptionInProgress`).
+  - VersionDatabase registration (`10.0.22621.1`) for `fveapi.dll`.
 - [ ] **Shell CLI Integration**:
-  - Implement `vhd create <path> <size_mb>`, `vhd attach <path>`, `vhd detach <path>`, `vhd info <path>`, and `vhd test` in `micant::shell`.
-- [ ] **Unit Test Suite 130 (`Test_WindowsVirtualDisk_Storage_Subsystem`)**:
-  - Validate dynamic exports in `virtdisk.dll`, VHD/VHDX creation, open/attach/detach lifecycle, disk info queries, resizing/compaction, and shell CLI commands.
+  - Implement `manage-bde -status`, `manage-bde -on <vol>`, `manage-bde -off <vol>`, `manage-bde -lock <vol>`, `manage-bde -unlock <vol>`, and `manage-bde test` in `micant::shell`.
+- [ ] **Unit Test Suite 131 (`Test_WindowsBitLocker_FVE_Subsystem`)**:
+  - Validate dynamic exports in `fveapi.dll`, volume status inspection, passphrase and recovery key enrollment, lock/unlock state transitions, XTS-AES volume crypto, and shell CLI commands.
+
 
 
 

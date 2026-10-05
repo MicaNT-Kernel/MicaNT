@@ -137,6 +137,7 @@
 #include "micant/directstorage.hpp"
 #include "micant/ocr.hpp"
 #include "micant/wlanapi.hpp"
+#include "micant/virtdisk.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -30247,8 +30248,233 @@ void Test_WindowsNativeWifi_WLAN_Subsystem() {
     std::cout << "[TEST] Suite 129: Windows Native Wifi & Sovereign WLAN Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 130: Windows Virtual Disk & Storage Management Subsystem
+// ============================================================================
+void Test_WindowsVirtualDisk_Storage_Subsystem() {
+    using namespace micant::virtdisk;
+
+    // 1. Initialize subsystem exports
+    InitializeVirtualDiskSubsystemExports();
+
+    // 2. Validate DynamicLoader exports for virtdisk.dll
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "CreateVirtualDisk") != nullptr, "virtdisk.dll must export CreateVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "OpenVirtualDisk") != nullptr, "virtdisk.dll must export OpenVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "AttachVirtualDisk") != nullptr, "virtdisk.dll must export AttachVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "DetachVirtualDisk") != nullptr, "virtdisk.dll must export DetachVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "GetVirtualDiskInformation") != nullptr, "virtdisk.dll must export GetVirtualDiskInformation");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "SetVirtualDiskInformation") != nullptr, "virtdisk.dll must export SetVirtualDiskInformation");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "GetVirtualDiskPhysicalPath") != nullptr, "virtdisk.dll must export GetVirtualDiskPhysicalPath");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "GetAllAttachedVirtualDiskPhysicalPaths") != nullptr, "virtdisk.dll must export GetAllAttachedVirtualDiskPhysicalPaths");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "CompactVirtualDisk") != nullptr, "virtdisk.dll must export CompactVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "ExpandVirtualDisk") != nullptr, "virtdisk.dll must export ExpandVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "ResizeVirtualDisk") != nullptr, "virtdisk.dll must export ResizeVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "MirrorVirtualDisk") != nullptr, "virtdisk.dll must export MirrorVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "BreakMirrorVirtualDisk") != nullptr, "virtdisk.dll must export BreakMirrorVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "AddVirtualDiskParent") != nullptr, "virtdisk.dll must export AddVirtualDiskParent");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "MergeVirtualDisk") != nullptr, "virtdisk.dll must export MergeVirtualDisk");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "GetStorageDependencyInformation") != nullptr, "virtdisk.dll must export GetStorageDependencyInformation");
+
+    // 3. Verify VersionDatabase registration
+    auto modInfo = version::VersionDatabase::Instance().GetModuleInfo("virtdisk.dll");
+    TEST_ASSERT(modInfo != nullptr, "virtdisk.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modInfo->stringTable.at("FileVersion") == "10.0.22621.1", "virtdisk.dll version must be 10.0.22621.1");
+
+    // 4. Create Dynamic VHD (512-byte sectors)
+    std::wstring vhdPath = L"C:\\Disks\\SystemData.vhd";
+    CREATE_VIRTUAL_DISK_PARAMETERS createParams{};
+    createParams.Version = CREATE_VIRTUAL_DISK_VERSION_1;
+    createParams.Version1.MaximumSize = 2ULL * 1024 * 1024 * 1024; // 2 GB
+    createParams.Version1.SectorSizeInBytes = 512;
+    createParams.Version1.BlockSizeInBytes = 2097152; // 2 MB
+
+    VIRTUAL_STORAGE_TYPE vhdType{};
+    vhdType.DeviceId = VIRTUAL_STORAGE_TYPE_DEVICE_VHD;
+    vhdType.VendorId = VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT;
+
+    HANDLE hVhd = nullptr;
+    DWORD dwRet = CreateVirtualDisk(&vhdType, vhdPath.c_str(), VIRTUAL_DISK_ACCESS_ALL, nullptr,
+                                    CREATE_VIRTUAL_DISK_FLAG_NONE, 0, &createParams, nullptr, &hVhd);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "CreateVirtualDisk for dynamic VHD must succeed");
+    TEST_ASSERT(hVhd != nullptr, "CreateVirtualDisk must return valid handle");
+
+    // 5. Query Information on Newly Created Disk
+    GET_VIRTUAL_DISK_INFO diskInfo{};
+    ULONG infoSize = sizeof(GET_VIRTUAL_DISK_INFO);
+    ULONG sizeUsed = 0;
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_SIZE;
+    dwRet = GetVirtualDiskInformation(hVhd, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "GetVirtualDiskInformation SIZE must succeed");
+    TEST_ASSERT(diskInfo.Size.VirtualSize == 2ULL * 1024 * 1024 * 1024, "Virtual size must match 2 GB");
+    TEST_ASSERT(diskInfo.Size.SectorSize == 512, "Sector size must be 512 bytes");
+    TEST_ASSERT(diskInfo.Size.BlockSize == 2097152, "Block size must be 2 MB");
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_PROVIDER_SUBTYPE;
+    dwRet = GetVirtualDiskInformation(hVhd, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "GetVirtualDiskInformation PROVIDER_SUBTYPE must succeed");
+    TEST_ASSERT(diskInfo.ProviderSubtype == 3, "Subtype must be 3 (Dynamic)");
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_VIRTUAL_STORAGE_TYPE;
+    dwRet = GetVirtualDiskInformation(hVhd, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "GetVirtualDiskInformation VIRTUAL_STORAGE_TYPE must succeed");
+    TEST_ASSERT(diskInfo.VirtualStorageType.DeviceId == VIRTUAL_STORAGE_TYPE_DEVICE_VHD, "Storage type must be VHD");
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_IS_LOADED;
+    dwRet = GetVirtualDiskInformation(hVhd, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && diskInfo.IsLoaded == 0, "Disk must initially be detached (not loaded)");
+
+    // 6. Attach Virtual Disk
+    ATTACH_VIRTUAL_DISK_PARAMETERS attachParams{};
+    attachParams.Version = ATTACH_VIRTUAL_DISK_VERSION_1;
+    dwRet = AttachVirtualDisk(hVhd, nullptr, ATTACH_VIRTUAL_DISK_FLAG_NONE, 0, &attachParams, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "AttachVirtualDisk must succeed");
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_IS_LOADED;
+    dwRet = GetVirtualDiskInformation(hVhd, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && diskInfo.IsLoaded == 1, "Disk must now be attached (loaded)");
+
+    // Verify duplicate attach fails
+    dwRet = AttachVirtualDisk(hVhd, nullptr, ATTACH_VIRTUAL_DISK_FLAG_NONE, 0, &attachParams, nullptr);
+    TEST_ASSERT(dwRet == ERROR_ALREADY_EXISTS, "Re-attaching already attached disk must return ERROR_ALREADY_EXISTS");
+
+    // 7. Get Virtual Disk Physical Path
+    wchar_t physPath[256]{ 0 };
+    ULONG physBytes = sizeof(physPath);
+    dwRet = GetVirtualDiskPhysicalPath(hVhd, &physBytes, physPath);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "GetVirtualDiskPhysicalPath must succeed");
+    TEST_ASSERT(std::wstring(physPath).find(L"PhysicalDrive") != std::wstring::npos,
+                "Physical path must contain PhysicalDrive");
+
+    // 8. Get All Attached Virtual Disk Physical Paths
+    wchar_t multiPaths[512]{ 0 };
+    ULONG multiBytes = sizeof(multiPaths);
+    dwRet = GetAllAttachedVirtualDiskPhysicalPaths(&multiBytes, multiPaths);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "GetAllAttachedVirtualDiskPhysicalPaths must succeed");
+    TEST_ASSERT(std::wstring(multiPaths).find(L"PhysicalDrive") != std::wstring::npos,
+                "All attached paths multi-sz must contain attached PhysicalDrive");
+
+    // 9. Expand Virtual Disk
+    EXPAND_VIRTUAL_DISK_PARAMETERS expParams{};
+    expParams.Version = EXPAND_VIRTUAL_DISK_VERSION_1;
+    expParams.Version1.NewSize = 4ULL * 1024 * 1024 * 1024; // Expand to 4 GB
+    dwRet = ExpandVirtualDisk(hVhd, EXPAND_VIRTUAL_DISK_FLAG_NONE, &expParams, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "ExpandVirtualDisk must succeed");
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_SIZE;
+    dwRet = GetVirtualDiskInformation(hVhd, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && diskInfo.Size.VirtualSize == 4ULL * 1024 * 1024 * 1024,
+                "Expanded virtual size must be 4 GB");
+
+    // 10. Compact Virtual Disk
+    dwRet = CompactVirtualDisk(hVhd, COMPACT_VIRTUAL_DISK_FLAG_NONE, nullptr, nullptr);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "CompactVirtualDisk must succeed");
+
+    // 11. Storage Dependency Information
+    STORAGE_DEPENDENCY_INFO depInfo{};
+    ULONG depSize = sizeof(depInfo);
+    ULONG depUsed = 0;
+    dwRet = GetStorageDependencyInformation(hVhd, GET_STORAGE_DEPENDENCY_FLAG_NONE, depSize, &depInfo, &depUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && depInfo.NumberEntries >= 1, "GetStorageDependencyInformation must return dependencies");
+
+    // 12. Detach Virtual Disk
+    dwRet = DetachVirtualDisk(hVhd, DETACH_VIRTUAL_DISK_FLAG_NONE, 0);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS, "DetachVirtualDisk must succeed");
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_IS_LOADED;
+    dwRet = GetVirtualDiskInformation(hVhd, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && diskInfo.IsLoaded == 0, "Disk must be detached after DetachVirtualDisk");
+
+    physBytes = sizeof(physPath);
+    dwRet = GetVirtualDiskPhysicalPath(hVhd, &physBytes, physPath);
+    TEST_ASSERT(dwRet == ERROR_NOT_FOUND, "GetVirtualDiskPhysicalPath after detach must return ERROR_NOT_FOUND");
+
+    SovereignVirtDiskManager::get().closeDisk(hVhd);
+
+    // 13. Create Fixed VHDX (4096-byte sectors)
+    std::wstring vhdxPath = L"C:\\Disks\\ModernVolume.vhdx";
+    CREATE_VIRTUAL_DISK_PARAMETERS vhdxParams{};
+    vhdxParams.Version = CREATE_VIRTUAL_DISK_VERSION_2;
+    vhdxParams.Version2.MaximumSize = 512ULL * 1024 * 1024; // 512 MB
+    vhdxParams.Version2.SectorSizeInBytes = 4096;
+    vhdxParams.Version2.BlockSizeInBytes = 32 * 1024 * 1024;
+
+    VIRTUAL_STORAGE_TYPE vhdxType{};
+    vhdxType.DeviceId = VIRTUAL_STORAGE_TYPE_DEVICE_VHDX;
+    vhdxType.VendorId = VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT;
+
+    HANDLE hVhdx = nullptr;
+    dwRet = CreateVirtualDisk(&vhdxType, vhdxPath.c_str(), VIRTUAL_DISK_ACCESS_ALL, nullptr,
+                             CREATE_VIRTUAL_DISK_FLAG_FULL_PHYSICAL_ALLOCATION, 0, &vhdxParams, nullptr, &hVhdx);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && hVhdx != nullptr, "CreateVirtualDisk for fixed VHDX must succeed");
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_IS_4K_ALIGNED;
+    dwRet = GetVirtualDiskInformation(hVhdx, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && diskInfo.Is4kAligned == 1, "VHDX must report 4K alignment");
+
+    diskInfo.Version = GET_VIRTUAL_DISK_INFO_PROVIDER_SUBTYPE;
+    dwRet = GetVirtualDiskInformation(hVhdx, &infoSize, &diskInfo, &sizeUsed);
+    TEST_ASSERT(dwRet == ERROR_SUCCESS && diskInfo.ProviderSubtype == 2, "VHDX allocation must report 2 (Fixed)");
+
+    SovereignVirtDiskManager::get().closeDisk(hVhdx);
+
+    // 14. CommandShell CLI Integration Verification
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("vhd test", oss);
+    TEST_ASSERT(shellRet == 0, "vhd test shell command must return 0");
+    TEST_ASSERT(oss.str().find("Windows Virtual Disk Diagnostics passed cleanly") != std::string::npos,
+                "vhd test output must indicate successful self-test");
+
+    oss.str("");
+    shellRet = proc.execute("vhd list", oss);
+    TEST_ASSERT(shellRet == 0, "vhd list shell command must return 0");
+    TEST_ASSERT(oss.str().find("Registered Virtual Hard Disks") != std::string::npos,
+                "vhd list must display header");
+
+    oss.str("");
+    shellRet = proc.execute("vhd create C:\\Storage\\CliDisk.vhd 256", oss);
+    TEST_ASSERT(shellRet == 0, "vhd create shell command must return 0");
+    TEST_ASSERT(oss.str().find("Virtual disk successfully created") != std::string::npos,
+                "vhd create must report success");
+
+    oss.str("");
+    shellRet = proc.execute("vhd info C:\\Storage\\CliDisk.vhd", oss);
+    TEST_ASSERT(shellRet == 0, "vhd info shell command must return 0");
+    TEST_ASSERT(oss.str().find("256 MB") != std::string::npos, "vhd info must show 256 MB virtual size");
+    TEST_ASSERT(oss.str().find("virtdisk.dll") != std::string::npos, "vhd info must reference virtdisk.dll");
+
+    oss.str("");
+    shellRet = proc.execute("vhd attach C:\\Storage\\CliDisk.vhd", oss);
+    TEST_ASSERT(shellRet == 0, "vhd attach shell command must return 0");
+    TEST_ASSERT(oss.str().find("Virtual disk attached successfully") != std::string::npos,
+                "vhd attach must report success");
+    TEST_ASSERT(oss.str().find("PhysicalDrive") != std::string::npos,
+                "vhd attach must print assigned PhysicalDrive device");
+
+    oss.str("");
+    shellRet = proc.execute("vhd expand C:\\Storage\\CliDisk.vhd 512", oss);
+    TEST_ASSERT(shellRet == 0, "vhd expand shell command must return 0");
+    TEST_ASSERT(oss.str().find("Virtual disk expanded successfully to 512 MB") != std::string::npos,
+                "vhd expand must report success");
+
+    oss.str("");
+    shellRet = proc.execute("vhd detach C:\\Storage\\CliDisk.vhd", oss);
+    TEST_ASSERT(shellRet == 0, "vhd detach shell command must return 0");
+    TEST_ASSERT(oss.str().find("detached successfully") != std::string::npos,
+                "vhd detach must report success");
+
+    std::cout << "[TEST] Suite 130: Windows Virtual Disk & Storage Management Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite129")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite130")) {
+        RUN_TEST(Test_WindowsVirtualDisk_Storage_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite129") {
         RUN_TEST(Test_WindowsNativeWifi_WLAN_Subsystem);
         return g_FailedTests;
     }
@@ -30478,6 +30704,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsMachineLearning_WinML_Subsystem);
     RUN_TEST(Test_WindowsWebAuthn_FIDO2_Subsystem);
     RUN_TEST(Test_WindowsNativeWifi_WLAN_Subsystem);
+    RUN_TEST(Test_WindowsVirtualDisk_Storage_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
