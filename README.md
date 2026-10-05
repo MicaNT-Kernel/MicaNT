@@ -6,6 +6,7 @@
 [![Website: micant.barrersoftware.com](https://img.shields.io/badge/Website-micant.barrersoftware.com-4CAF50.svg?logo=googlechrome&logoColor=white)](https://micant.barrersoftware.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Clean Room: Certified](https://img.shields.io/badge/Clean%20Room-Certified-success.svg)](docs/CLEAN_ROOM.md)
+[![Contributing: Guide](https://img.shields.io/badge/Contributing-Guide-blue.svg)](CONTRIBUTING.md)
 [![Standard: C++23](https://img.shields.io/badge/Language-C%2B%2B23-blue.svg)](https://en.cppreference.com/w/cpp/23)
 [![Reference: win32metadata](https://img.shields.io/badge/Reference-microsoft%2Fwin32metadata-purple.svg)](https://github.com/microsoft/win32metadata)
 [![Arch: x86__64 | ARM64](https://img.shields.io/badge/Arch-x86__64%20%7C%20ARM64-orange.svg)]()
@@ -32,7 +33,7 @@
 > System service interfaces, data structures, and status codes are referenced and auto-generated strictly from Microsoft's MIT-licensed open-source repository:  
 > **[`https://github.com/microsoft/win32metadata`](https://github.com/microsoft/win32metadata)**  
 > 
-> In accordance with the U.S. Supreme Court precedent in *Google LLC v. Oracle America, Inc.* (2021), reimplementing functional declaring code and interface signatures for binary interoperability is protected fair use. No proprietary or leaked Microsoft source code was used or referenced. See [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md), [docs/LEGAL.md](docs/LEGAL.md), and our [Open Statement to Microsoft Corporation](docs/LEGAL.md#8-an-open-statement--message-to-microsoft-corporation) for full compliance documentation and partnership intent.
+> In accordance with the U.S. Supreme Court precedent in *Google LLC v. Oracle America, Inc.* (2021), reimplementing functional declaring code and interface signatures for binary interoperability is protected fair use. No proprietary or leaked Microsoft source code was used or referenced. See [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md), [docs/LEGAL.md](docs/LEGAL.md), [CONTRIBUTING.md](CONTRIBUTING.md), and our [Open Statement to Microsoft Corporation](docs/LEGAL.md#8-an-open-statement--message-to-microsoft-corporation) for full compliance documentation and partnership intent.
 
 ---
 

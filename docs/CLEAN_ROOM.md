@@ -71,6 +71,16 @@ To facilitate seamless collaboration while upholding pristine legal boundaries:
        - `Signed-off-by: Full Name <alias@microsoft.com>`
    - When recognized, the Sentinel assigns the changeset `Clean-Room Status: Microsoft OSPO Authorized`.
 
+   ```git
+   feat(subsystem): refine executive component implementation
+
+   Detailed technical explanation of the changes made...
+
+   MS-OSPO-Approved: OSPO-2026-10492
+   Microsoft-Legal-Clearance: LCA-OSS-88319
+   Signed-off-by: Jane Doe <janedoe@microsoft.com>
+   ```
+
 3. **Exemption Policy**:
    - First-party technical declarations, internal structures, and NT architectural definitions contributed through this channel are recognized as authorized contributions and exempted from "unauthorized leak" heuristic flags.
    - Core quality and security checks remain active: code must still be written in clean C++23, follow RAII principles, and be free of raw disassembler scrapings (e.g. IDA Pro / Ghidra labels).
