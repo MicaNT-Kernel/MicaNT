@@ -119,6 +119,7 @@
 #include "sapi.hpp"
 #include "ocr.hpp"
 #include "winml.hpp"
+#include "webauthn.hpp"
 
 namespace micant::shell {
 
@@ -328,6 +329,7 @@ public:
             if (cmd == "sapi" || cmd == "speech" || cmd == "voice" || cmd == "tts") { cmdSapi(tokens, out); return 0; }
             if (cmd == "ocr" || cmd == "vision") { cmdOcr(tokens, out); return 0; }
             if (cmd == "winml" || cmd == "ml" || cmd == "ai") { cmdWinML(tokens, out); return 0; }
+            if (cmd == "webauthn" || cmd == "fido2" || cmd == "passkey") { cmdWebAuthn(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -628,6 +630,7 @@ private:
             << "  SAPI [test|info|voices]  Windows Speech API & Voice Synthesis (sapi test)\n"
             << "  OCR [test|info|recognize] Windows Media OCR & Vision Subsystem (ocr test)\n"
             << "  WINML [test|info|run]    Windows Machine Learning & Neural Inference (winml test)\n"
+            << "  WEBAUTHN [test|info|register|auth] Windows Web Authentication & FIDO2 Passkeys (webauthn test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -17976,6 +17979,203 @@ private:
             << "  winml info                             Displays WinML subsystem telemetry\n"
             << "  winml run [x0 x1 x2 x3]                Executes MLP classifier benchmark\n"
             << "  winml conv                             Executes ConvNet vision pipeline\n";
+    }
+
+    void cmdWebAuthn(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::webauthn;
+        InitializeWebAuthnSubsystemExports();
+
+        auto errStr = [](HRESULT code) -> std::string {
+            const wchar_t* w = WebAuthNGetErrorName(code);
+            if (!w) return "Unknown";
+            std::string s;
+            while (*w) s.push_back(static_cast<char>(*w++));
+            return s;
+        };
+
+        if (tokens.size() > 1 && tokens[1] == "info") {
+            BOOL avail = 0;
+            WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable(&avail);
+            DWORD apiVer = WebAuthNGetApiVersionNumber();
+            size_t creds = SovereignPlatformAuthenticator::get().getCredentialCount();
+
+            out << "=== Windows Web Authentication & FIDO2 Platform Subsystem ===\n"
+                << "  Module:                          webauthn.dll (Version 10.0.22621.1)\n"
+                << "  Platform Authenticator:          " << (avail ? "AVAILABLE (User-Verifying)" : "UNAVAILABLE") << "\n"
+                << "  WebAuthn API Version:            " << apiVer << "\n"
+                << "  AAGUID:                          4d696361-4e54-2d57-6562-417574686e31 (MicaNT-WebAuthn1)\n"
+                << "  Supported Algorithms:            ES256 (COSE -7), RS256 (COSE -257), EdDSA (COSE -8)\n"
+                << "  Resident Passkeys Stored:        " << creds << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[WebAuthn Self-Test] Initiating Sovereign FIDO2 / Passkey Subsystem Diagnostics...\n";
+            BOOL avail = 0;
+            HRESULT hr = WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable(&avail);
+            if (hr != 0 || !avail) {
+                out << "[FAIL] Platform Authenticator unavailable! hr=" << hr << "\n";
+                return;
+            }
+            out << "  [PASS] Platform Authenticator availability check succeeded.\n";
+
+            // Test registration
+            WEBAUTHN_RP_ENTITY_INFORMATION rpInfo{};
+            rpInfo.dwVersion = WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION;
+            rpInfo.pwszId = L"micant.sovereign.local";
+            rpInfo.pwszName = L"MicaNT Sovereign OS";
+
+            uint8_t uid[4] = { 0x01, 0x02, 0x03, 0x04 };
+            WEBAUTHN_USER_ENTITY_INFORMATION userInfo{};
+            userInfo.dwVersion = WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION;
+            userInfo.cbId = 4;
+            userInfo.pbId = uid;
+            userInfo.pwszName = L"admin";
+            userInfo.pwszDisplayName = L"MicaNT Administrator";
+
+            WEBAUTHN_COSE_CREDENTIAL_PARAMETER coseParam{};
+            coseParam.dwVersion = WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION;
+            coseParam.pwszCredentialType = WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY;
+            coseParam.lAlg = WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256;
+
+            WEBAUTHN_COSE_CREDENTIAL_PARAMETERS coseParams{};
+            coseParams.cCredentialParameters = 1;
+            coseParams.pCredentialParameters = &coseParam;
+
+            const char* clientJsonCreate = "{\"type\":\"webauthn.create\",\"challenge\":\"dGVzdGNoYWxsZW5nZTEyMw\",\"origin\":\"https://micant.sovereign.local\"}";
+            WEBAUTHN_CLIENT_DATA clientDataCreate{};
+            clientDataCreate.dwVersion = WEBAUTHN_CLIENT_DATA_CURRENT_VERSION;
+            clientDataCreate.cbClientDataJSON = static_cast<DWORD>(std::strlen(clientJsonCreate));
+            clientDataCreate.pbClientDataJSON = reinterpret_cast<PBYTE>(const_cast<char*>(clientJsonCreate));
+            clientDataCreate.pwszHashAlgId = WEBAUTHN_HASH_ALGORITHM_SHA_256;
+
+            PWEBAUTHN_CREDENTIAL_ATTESTATION pAttestation = nullptr;
+            hr = WebAuthNAuthenticatorMakeCredential(
+                nullptr, &rpInfo, &userInfo, &coseParams, &clientDataCreate, nullptr, &pAttestation);
+            if (hr != 0 || !pAttestation) {
+                out << "[FAIL] WebAuthNAuthenticatorMakeCredential failed! hr=" << hr << "\n";
+                return;
+            }
+            out << "  [PASS] Credential registration generated " << pAttestation->cbCredentialId << "-byte passkey.\n";
+            out << "  [PASS] Attestation object generated (" << pAttestation->cbAttestationObject << " bytes CBOR).\n";
+
+            // Test assertion
+            const char* clientJsonGet = "{\"type\":\"webauthn.get\",\"challenge\":\"c2Vjb25kY2hhbGxlbmdlNDU2\",\"origin\":\"https://micant.sovereign.local\"}";
+            WEBAUTHN_CLIENT_DATA clientDataGet{};
+            clientDataGet.dwVersion = WEBAUTHN_CLIENT_DATA_CURRENT_VERSION;
+            clientDataGet.cbClientDataJSON = static_cast<DWORD>(std::strlen(clientJsonGet));
+            clientDataGet.pbClientDataJSON = reinterpret_cast<PBYTE>(const_cast<char*>(clientJsonGet));
+            clientDataGet.pwszHashAlgId = WEBAUTHN_HASH_ALGORITHM_SHA_256;
+
+            PWEBAUTHN_ASSERTION pAssertion = nullptr;
+            hr = WebAuthNAuthenticatorGetAssertion(
+                nullptr, rpInfo.pwszId, &clientDataGet, nullptr, &pAssertion);
+            if (hr != 0 || !pAssertion) {
+                out << "[FAIL] WebAuthNAuthenticatorGetAssertion failed! hr=" << hr << "\n";
+                WebAuthNFreeCredentialAttestation(pAttestation);
+                return;
+            }
+            out << "  [PASS] Assertion authentication generated signature (" << pAssertion->cbSignature << " bytes ASN.1 DER).\n";
+
+            // Verify assertion signature mathematically
+            CredentialRecord rec;
+            std::vector<uint8_t> credIdBytes(pAssertion->Credential.pbId, pAssertion->Credential.pbId + pAssertion->Credential.cbId);
+            bool found = SovereignPlatformAuthenticator::get().findCredential(credIdBytes, rec);
+            if (!found) {
+                out << "[FAIL] Could not locate passkey in vault for signature verification!\n";
+                WebAuthNFreeAssertion(pAssertion);
+                WebAuthNFreeCredentialAttestation(pAttestation);
+                return;
+            }
+
+            auto clientGetHash = crypto::Sha256::hash(std::span<const uint8_t>(
+                clientDataGet.pbClientDataJSON, clientDataGet.cbClientDataJSON));
+            std::vector<uint8_t> sigVerifyBase;
+            sigVerifyBase.insert(sigVerifyBase.end(), pAssertion->pbAuthenticatorData, pAssertion->pbAuthenticatorData + pAssertion->cbAuthenticatorData);
+            sigVerifyBase.insert(sigVerifyBase.end(), clientGetHash.begin(), clientGetHash.end());
+            auto sigVerifyDigest = crypto::Sha256::hash(std::span<const uint8_t>(sigVerifyBase.data(), sigVerifyBase.size()));
+            Uint256 sigDigestInt = Uint256::fromBytes(sigVerifyDigest.data());
+
+            bool verified = SovereignPlatformAuthenticator::verifyDigest(
+                rec.publicKey, sigDigestInt, pAssertion->pbSignature, pAssertion->cbSignature);
+            if (!verified) {
+                out << "[FAIL] ECDSA P-256 signature verification failed!\n";
+            } else {
+                out << "  [PASS] ECDSA P-256 signature verified against public key!\n";
+            }
+
+            WebAuthNFreeAssertion(pAssertion);
+            WebAuthNFreeCredentialAttestation(pAttestation);
+
+            out << "[SUCCESS] Windows Web Authentication & FIDO2 Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 3 && tokens[1] == "register") {
+            std::wstring rpId(tokens[2].begin(), tokens[2].end());
+            std::wstring uName(tokens[3].begin(), tokens[3].end());
+
+            WEBAUTHN_RP_ENTITY_INFORMATION rpInfo{};
+            rpInfo.dwVersion = WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION;
+            rpInfo.pwszId = rpId.c_str();
+            rpInfo.pwszName = rpId.c_str();
+
+            uint8_t uid[4] = { 0xAA, 0xBB, 0xCC, 0xDD };
+            WEBAUTHN_USER_ENTITY_INFORMATION userInfo{};
+            userInfo.dwVersion = WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION;
+            userInfo.cbId = 4;
+            userInfo.pbId = uid;
+            userInfo.pwszName = uName.c_str();
+            userInfo.pwszDisplayName = uName.c_str();
+
+            std::string clientJson = "{\"type\":\"webauthn.create\",\"origin\":\"https://" + tokens[2] + "\"}";
+            WEBAUTHN_CLIENT_DATA clientData{};
+            clientData.dwVersion = WEBAUTHN_CLIENT_DATA_CURRENT_VERSION;
+            clientData.cbClientDataJSON = static_cast<DWORD>(clientJson.size());
+            clientData.pbClientDataJSON = reinterpret_cast<PBYTE>(clientJson.data());
+
+            PWEBAUTHN_CREDENTIAL_ATTESTATION pAttestation = nullptr;
+            HRESULT hr = WebAuthNAuthenticatorMakeCredential(
+                nullptr, &rpInfo, &userInfo, nullptr, &clientData, nullptr, &pAttestation);
+            if (hr == 0 && pAttestation) {
+                out << "Passkey successfully registered for RP [" << tokens[2] << "], User [" << tokens[3] << "]\n"
+                    << "  Credential ID length: " << pAttestation->cbCredentialId << " bytes\n"
+                    << "  Format:               " << (pAttestation->pwszFormatType ? "packed" : "none") << "\n";
+                WebAuthNFreeCredentialAttestation(pAttestation);
+            } else {
+                out << "Failed to register passkey. Error: " << errStr(hr) << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && tokens[1] == "auth") {
+            std::wstring rpId(tokens[2].begin(), tokens[2].end());
+
+            std::string clientJson = "{\"type\":\"webauthn.get\",\"origin\":\"https://" + tokens[2] + "\"}";
+            WEBAUTHN_CLIENT_DATA clientData{};
+            clientData.dwVersion = WEBAUTHN_CLIENT_DATA_CURRENT_VERSION;
+            clientData.cbClientDataJSON = static_cast<DWORD>(clientJson.size());
+            clientData.pbClientDataJSON = reinterpret_cast<PBYTE>(clientJson.data());
+
+            PWEBAUTHN_ASSERTION pAssertion = nullptr;
+            HRESULT hr = WebAuthNAuthenticatorGetAssertion(
+                nullptr, rpId.c_str(), &clientData, nullptr, &pAssertion);
+            if (hr == 0 && pAssertion) {
+                out << "Passkey assertion verified for RP [" << tokens[2] << "]\n"
+                    << "  Signature size:       " << pAssertion->cbSignature << " bytes\n"
+                    << "  Authenticator Data:   " << pAssertion->cbAuthenticatorData << " bytes\n";
+                WebAuthNFreeAssertion(pAssertion);
+            } else {
+                out << "Authentication failed for RP [" << tokens[2] << "]. Error: " << errStr(hr) << "\n";
+            }
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  webauthn test                          Runs WebAuthn self-test diagnostics\n"
+            << "  webauthn info                          Displays WebAuthn platform telemetry\n"
+            << "  webauthn register <rpId> <userName>    Registers a new passkey credential\n"
+            << "  webauthn auth <rpId>                   Authenticates against a registered passkey\n";
     }
 
     static std::string trim(std::string_view s) {

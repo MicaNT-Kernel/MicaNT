@@ -29722,8 +29722,260 @@ void Test_WindowsMachineLearning_WinML_Subsystem() {
     std::cout << "[TEST] Suite 127: Windows Machine Learning (WinML) & Sovereign Neural Inference Subsystem PASSED.\n";
 }
 
+void Test_WindowsWebAuthn_FIDO2_Subsystem() {
+    std::cout << "[TEST] Running Suite 128: Windows Web Authentication & Sovereign FIDO2 / Passkey Subsystem...\n";
+
+    using namespace micant::webauthn;
+    InitializeWebAuthnSubsystemExports();
+
+    // 1. Dynamic Export Verification in webauthn.dll
+    auto& ldr = micant::ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable") != nullptr,
+                "WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNAuthenticatorMakeCredential") != nullptr,
+                "WebAuthNAuthenticatorMakeCredential must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNAuthenticatorGetAssertion") != nullptr,
+                "WebAuthNAuthenticatorGetAssertion must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNFreeCredentialAttestation") != nullptr,
+                "WebAuthNFreeCredentialAttestation must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNFreeAssertion") != nullptr,
+                "WebAuthNFreeAssertion must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNGetCancellationId") != nullptr,
+                "WebAuthNGetCancellationId must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNCancelCurrentOperation") != nullptr,
+                "WebAuthNCancelCurrentOperation must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNGetErrorName") != nullptr,
+                "WebAuthNGetErrorName must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNGetApiVersionNumber") != nullptr,
+                "WebAuthNGetApiVersionNumber must be exported");
+    TEST_ASSERT(ldr.getExport("webauthn.dll", "WebAuthNDeletePlatformCredential") != nullptr,
+                "WebAuthNDeletePlatformCredential must be exported");
+
+    // 2. VersionDatabase Verification
+    const auto* mod = micant::version::VersionDatabase::Instance().GetModuleInfo("webauthn.dll");
+    TEST_ASSERT(mod != nullptr, "webauthn.dll must be registered in VersionDatabase");
+    TEST_ASSERT(mod->stringTable.at("FileVersion") == "10.0.22621.1", "webauthn.dll version must be 10.0.22621.1");
+
+    // 3. API Version Number & Platform Authenticator Availability
+    DWORD apiVer = WebAuthNGetApiVersionNumber();
+    TEST_ASSERT(apiVer == WEBAUTHN_API_VERSION_CURRENT, "WebAuthn API version must match current version (4)");
+
+    BOOL isAvail = 0;
+    HRESULT hr = WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable(&isAvail);
+    TEST_ASSERT(hr == 0 && isAvail == 1, "Platform authenticator must be available and user-verifying");
+
+    // Null pointer check
+    hr = WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable(nullptr);
+    TEST_ASSERT(hr != 0, "Passing null pointer to availability check must return error");
+
+    // 4. Cancellation ID Generation & Cancellation
+    GUID cancelId{};
+    hr = WebAuthNGetCancellationId(&cancelId);
+    TEST_ASSERT(hr == 0, "WebAuthNGetCancellationId must succeed");
+    TEST_ASSERT(cancelId.Data1 != 0 || cancelId.Data2 != 0, "Generated cancellation GUID must be non-zero");
+
+    hr = WebAuthNCancelCurrentOperation(&cancelId);
+    TEST_ASSERT(hr == 0, "WebAuthNCancelCurrentOperation must succeed");
+
+    // 5. Error Name Lookup
+    TEST_ASSERT(std::wcscmp(WebAuthNGetErrorName(0), L"S_OK") == 0, "WebAuthNGetErrorName(0) must return S_OK");
+    TEST_ASSERT(std::wcscmp(WebAuthNGetErrorName(static_cast<HRESULT>(0x80070057)), L"E_INVALIDARG") == 0, "WebAuthNGetErrorName(0x80070057) must return E_INVALIDARG");
+    TEST_ASSERT(std::wcscmp(WebAuthNGetErrorName(static_cast<HRESULT>(0x80090011)), L"NTE_NOT_FOUND") == 0, "WebAuthNGetErrorName(0x80090011) must return NTE_NOT_FOUND");
+    TEST_ASSERT(std::wcscmp(WebAuthNGetErrorName(static_cast<HRESULT>(0x800704C7)), L"ERROR_CANCELLED") == 0, "WebAuthNGetErrorName(0x800704C7) must return ERROR_CANCELLED");
+
+    // 6. WebAuthNAuthenticatorMakeCredential Verification
+    WEBAUTHN_RP_ENTITY_INFORMATION rpInfo{};
+    rpInfo.dwVersion = WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION;
+    rpInfo.pwszId = L"auth.micant.dev";
+    rpInfo.pwszName = L"MicaNT Dev Identity";
+
+    uint8_t uid[4] = { 0x10, 0x20, 0x30, 0x40 };
+    WEBAUTHN_USER_ENTITY_INFORMATION userInfo{};
+    userInfo.dwVersion = WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION;
+    userInfo.cbId = 4;
+    userInfo.pbId = uid;
+    userInfo.pwszName = L"alice";
+    userInfo.pwszDisplayName = L"Alice Wonderland";
+
+    WEBAUTHN_COSE_CREDENTIAL_PARAMETER coseParam{};
+    coseParam.dwVersion = WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION;
+    coseParam.pwszCredentialType = WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY;
+    coseParam.lAlg = WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256;
+
+    WEBAUTHN_COSE_CREDENTIAL_PARAMETERS coseParams{};
+    coseParams.cCredentialParameters = 1;
+    coseParams.pCredentialParameters = &coseParam;
+
+    const char* clientJsonCreate = "{\"type\":\"webauthn.create\",\"challenge\":\"c292ZXJlaWduLWNoYWxsZW5nZQ\",\"origin\":\"https://auth.micant.dev\"}";
+    WEBAUTHN_CLIENT_DATA clientDataCreate{};
+    clientDataCreate.dwVersion = WEBAUTHN_CLIENT_DATA_CURRENT_VERSION;
+    clientDataCreate.cbClientDataJSON = static_cast<DWORD>(std::strlen(clientJsonCreate));
+    clientDataCreate.pbClientDataJSON = reinterpret_cast<PBYTE>(const_cast<char*>(clientJsonCreate));
+    clientDataCreate.pwszHashAlgId = WEBAUTHN_HASH_ALGORITHM_SHA_256;
+
+    PWEBAUTHN_CREDENTIAL_ATTESTATION pAttestation = nullptr;
+    hr = WebAuthNAuthenticatorMakeCredential(
+        nullptr, &rpInfo, &userInfo, &coseParams, &clientDataCreate, nullptr, &pAttestation);
+    TEST_ASSERT(hr == 0 && pAttestation != nullptr, "WebAuthNAuthenticatorMakeCredential must succeed");
+    TEST_ASSERT(pAttestation->dwVersion == WEBAUTHN_CREDENTIAL_ATTESTATION_CURRENT_VERSION, "Attestation version must match");
+    TEST_ASSERT(pAttestation->cbCredentialId == 32, "Credential ID must be 32 bytes");
+    TEST_ASSERT(pAttestation->pbCredentialId != nullptr, "Credential ID pointer must be non-null");
+    TEST_ASSERT(pAttestation->cbAuthenticatorData > 37, "AuthenticatorData must include attested credential data");
+    TEST_ASSERT(std::wcscmp(pAttestation->pwszFormatType, L"packed") == 0, "Attestation format must be packed");
+    TEST_ASSERT(pAttestation->cbAttestationObject > 0, "AttestationObject CBOR must be present");
+
+    // AuthenticatorData inspection
+    // Bytes 0..31: RP ID SHA-256 hash
+    std::string rpUtf8 = "auth.micant.dev";
+    auto expectedRpHash = micant::crypto::Sha256::hash(std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t*>(rpUtf8.data()), rpUtf8.size()));
+    TEST_ASSERT(std::memcmp(pAttestation->pbAuthenticatorData, expectedRpHash.data(), 32) == 0,
+                "AuthenticatorData RP ID hash must match SHA-256 of RP ID");
+
+    // Byte 32: Flags (UP | UV | AT = 0x45)
+    uint8_t flags = pAttestation->pbAuthenticatorData[32];
+    TEST_ASSERT((flags & WEBAUTHN_AUTHENTICATOR_DATA_FLAG_UP) != 0, "User Present flag must be set");
+    TEST_ASSERT((flags & WEBAUTHN_AUTHENTICATOR_DATA_FLAG_UV) != 0, "User Verified flag must be set");
+    TEST_ASSERT((flags & WEBAUTHN_AUTHENTICATOR_DATA_FLAG_AT) != 0, "Attested Credential Data flag must be set");
+
+    // Bytes 33..36: Sign count (0 initially)
+    uint32_t initCount = (pAttestation->pbAuthenticatorData[33] << 24) |
+                         (pAttestation->pbAuthenticatorData[34] << 16) |
+                         (pAttestation->pbAuthenticatorData[35] << 8)  |
+                         (pAttestation->pbAuthenticatorData[36]);
+    TEST_ASSERT(initCount == 0, "Initial sign count must be 0");
+
+    // Bytes 37..52: AAGUID ("MicaNT-WebAuthn1")
+    const char* expectedAaguid = "MicaNT-WebAuthn1";
+    TEST_ASSERT(std::memcmp(pAttestation->pbAuthenticatorData + 37, expectedAaguid, 16) == 0,
+                "AAGUID must match MicaNT Sovereign Authenticator AAGUID");
+
+    // Save registered credential ID for assertion testing
+    std::vector<uint8_t> savedCredId(pAttestation->pbCredentialId, pAttestation->pbCredentialId + pAttestation->cbCredentialId);
+    WebAuthNFreeCredentialAttestation(pAttestation);
+
+    // 7. WebAuthNAuthenticatorGetAssertion Verification
+    const char* clientJsonGet = "{\"type\":\"webauthn.get\",\"challenge\":\"Y2hhbGxlbmdlLTQ1Ng\",\"origin\":\"https://auth.micant.dev\"}";
+    WEBAUTHN_CLIENT_DATA clientDataGet{};
+    clientDataGet.dwVersion = WEBAUTHN_CLIENT_DATA_CURRENT_VERSION;
+    clientDataGet.cbClientDataJSON = static_cast<DWORD>(std::strlen(clientJsonGet));
+    clientDataGet.pbClientDataJSON = reinterpret_cast<PBYTE>(const_cast<char*>(clientJsonGet));
+    clientDataGet.pwszHashAlgId = WEBAUTHN_HASH_ALGORITHM_SHA_256;
+
+    PWEBAUTHN_ASSERTION pAssertion = nullptr;
+    hr = WebAuthNAuthenticatorGetAssertion(
+        nullptr, rpInfo.pwszId, &clientDataGet, nullptr, &pAssertion);
+    TEST_ASSERT(hr == 0 && pAssertion != nullptr, "WebAuthNAuthenticatorGetAssertion must succeed");
+    TEST_ASSERT(pAssertion->dwVersion == WEBAUTHN_ASSERTION_CURRENT_VERSION, "Assertion version must match");
+    TEST_ASSERT(pAssertion->cbAuthenticatorData == 37, "Assertion AuthenticatorData must be exactly 37 bytes");
+    TEST_ASSERT(pAssertion->Credential.cbId == 32, "Assertion Credential ID length must match");
+    TEST_ASSERT(std::memcmp(pAssertion->Credential.pbId, savedCredId.data(), 32) == 0,
+                "Assertion Credential ID must match registered passkey ID");
+
+    // Verify counter incremented to 1
+    uint32_t assertCount1 = (pAssertion->pbAuthenticatorData[33] << 24) |
+                           (pAssertion->pbAuthenticatorData[34] << 16) |
+                           (pAssertion->pbAuthenticatorData[35] << 8)  |
+                           (pAssertion->pbAuthenticatorData[36]);
+    TEST_ASSERT(assertCount1 == 1, "Sign counter must increment to 1 on first assertion");
+
+    // Signature format: ASN.1 DER (starts with 0x30)
+    TEST_ASSERT(pAssertion->cbSignature >= 64 && pAssertion->pbSignature[0] == 0x30,
+                "Assertion signature must be valid ASN.1 DER sequence");
+
+    // Cryptographic verification of ECDSA P-256 signature
+    CredentialRecord credRec;
+    bool foundInVault = SovereignPlatformAuthenticator::get().findCredential(savedCredId, credRec);
+    TEST_ASSERT(foundInVault, "Registered credential must be queryable in Sovereign Vault");
+
+    auto clientGetDigest = micant::crypto::Sha256::hash(std::span<const uint8_t>(
+        clientDataGet.pbClientDataJSON, clientDataGet.cbClientDataJSON));
+    std::vector<uint8_t> sigVerifyBase;
+    sigVerifyBase.insert(sigVerifyBase.end(), pAssertion->pbAuthenticatorData, pAssertion->pbAuthenticatorData + pAssertion->cbAuthenticatorData);
+    sigVerifyBase.insert(sigVerifyBase.end(), clientGetDigest.begin(), clientGetDigest.end());
+    auto fullDigest = micant::crypto::Sha256::hash(std::span<const uint8_t>(sigVerifyBase.data(), sigVerifyBase.size()));
+    Uint256 fullDigestInt = Uint256::fromBytes(fullDigest.data());
+
+    bool sigValid = SovereignPlatformAuthenticator::verifyDigest(
+        credRec.publicKey, fullDigestInt, pAssertion->pbSignature, pAssertion->cbSignature);
+    TEST_ASSERT(sigValid, "Assertion ECDSA P-256 signature must be mathematically valid against public key");
+
+    WebAuthNFreeAssertion(pAssertion);
+
+    // 8. Second Assertion to verify signCount monotonic increment
+    pAssertion = nullptr;
+    hr = WebAuthNAuthenticatorGetAssertion(
+        nullptr, rpInfo.pwszId, &clientDataGet, nullptr, &pAssertion);
+    TEST_ASSERT(hr == 0 && pAssertion != nullptr, "Second assertion must succeed");
+    uint32_t assertCount2 = (pAssertion->pbAuthenticatorData[33] << 24) |
+                           (pAssertion->pbAuthenticatorData[34] << 16) |
+                           (pAssertion->pbAuthenticatorData[35] << 8)  |
+                           (pAssertion->pbAuthenticatorData[36]);
+    TEST_ASSERT(assertCount2 == 2, "Sign counter must monotonically increment to 2");
+    WebAuthNFreeAssertion(pAssertion);
+
+    // 9. Cancellation Enforcement in MakeCredential
+    GUID cancelToken{};
+    WebAuthNGetCancellationId(&cancelToken);
+    WebAuthNCancelCurrentOperation(&cancelToken);
+
+    WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS cancelOpts{};
+    cancelOpts.dwVersion = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_CURRENT_VERSION;
+    cancelOpts.pCancellationId = &cancelToken;
+
+    PWEBAUTHN_CREDENTIAL_ATTESTATION pCancelAttest = nullptr;
+    hr = WebAuthNAuthenticatorMakeCredential(
+        nullptr, &rpInfo, &userInfo, &coseParams, &clientDataCreate, &cancelOpts, &pCancelAttest);
+    TEST_ASSERT(hr == static_cast<HRESULT>(0x800704C7), "MakeCredential with cancelled token must return ERROR_CANCELLED");
+    TEST_ASSERT(pCancelAttest == nullptr, "Cancelled operation must not allocate attestation");
+
+    // 10. Platform Credential Deletion
+    hr = WebAuthNDeletePlatformCredential(static_cast<DWORD>(savedCredId.size()), savedCredId.data());
+    TEST_ASSERT(hr == 0, "WebAuthNDeletePlatformCredential must succeed");
+
+    pAssertion = nullptr;
+    hr = WebAuthNAuthenticatorGetAssertion(
+        nullptr, rpInfo.pwszId, &clientDataGet, nullptr, &pAssertion);
+    TEST_ASSERT(hr == static_cast<HRESULT>(0x80090011), "GetAssertion after deletion must return NTE_NOT_FOUND");
+
+    // 11. CommandShell CLI Integration Verification
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("webauthn test", oss);
+    TEST_ASSERT(shellRet == 0, "webauthn test shell command must return 0");
+    TEST_ASSERT(oss.str().find("Windows Web Authentication & FIDO2 Diagnostics passed cleanly") != std::string::npos,
+                "webauthn test output must indicate successful self-test");
+
+    oss.str("");
+    shellRet = proc.execute("webauthn info", oss);
+    TEST_ASSERT(shellRet == 0, "webauthn info shell command must return 0");
+    TEST_ASSERT(oss.str().find("webauthn.dll") != std::string::npos,
+                "webauthn info must reference webauthn.dll");
+    TEST_ASSERT(oss.str().find("MicaNT-WebAuthn1") != std::string::npos,
+                "webauthn info must display sovereign AAGUID");
+
+    oss.str("");
+    shellRet = proc.execute("webauthn register portal.example.com bob", oss);
+    TEST_ASSERT(shellRet == 0, "webauthn register shell command must return 0");
+    TEST_ASSERT(oss.str().find("Passkey successfully registered") != std::string::npos,
+                "webauthn register must report successful passkey registration");
+
+    oss.str("");
+    shellRet = proc.execute("webauthn auth portal.example.com", oss);
+    TEST_ASSERT(shellRet == 0, "webauthn auth shell command must return 0");
+    TEST_ASSERT(oss.str().find("Passkey assertion verified") != std::string::npos,
+                "webauthn auth must report successful assertion verification");
+
+    std::cout << "[TEST] Suite 128: Windows Web Authentication & Sovereign FIDO2 / Passkey Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite127")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite128")) {
+        RUN_TEST(Test_WindowsWebAuthn_FIDO2_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite127") {
         RUN_TEST(Test_WindowsMachineLearning_WinML_Subsystem);
         return g_FailedTests;
     }
@@ -29943,6 +30195,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSpeech_SAPI_Subsystem);
     RUN_TEST(Test_WindowsMedia_OCR_Subsystem);
     RUN_TEST(Test_WindowsMachineLearning_WinML_Subsystem);
+    RUN_TEST(Test_WindowsWebAuthn_FIDO2_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
