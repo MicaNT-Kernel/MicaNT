@@ -1901,24 +1901,48 @@
 
 ---
 
-### Phase 81: Windows Enhanced Video Renderer (EVR) Subsystem (`evr.hpp`, `evr.dll`, `mf.dll`) (PLANNED - MILESTONE 108)
-- [ ] **Enhanced Video Renderer Core Architecture (`include/micant/evr.hpp`, `evr.dll`)**:
-  - EVR media sink implementation (`IMFMediaSink`, `IMFVideoRenderer`, `IEVRFilterConfig`).
-  - EVR Presenter interface (`IMFVideoPresenter`, `IMFVideoDisplayControl`) for hardware-accelerated video presentation via Direct2D / DXGI.
+### Phase 81: Windows Enhanced Video Renderer (EVR) Subsystem (`evr.hpp`, `evr.dll`, `mf.dll`) (COMPLETED 100% - MILESTONE 108)
+- [x] **Enhanced Video Renderer Core Architecture (`include/micant/evr.hpp`, `evr.dll`)**:
+  - EVR media sink implementation (`IMFMediaSink`, `IMFVideoRenderer`, `IEVRFilterConfig`) with dynamic stream allocation (1..16 input streams).
+  - EVR Presenter interface (`IMFVideoPresenter`, `IMFClockStateSink`, `IMFVideoDisplayControl`) for hardware-accelerated video presentation via Direct2D / DXGI.
   - EVR Mixer engine (`IMFVideoMixerControl`, `IMFVideoMixerBitmap`) for multi-stream alpha blending and subtitle compositing.
-- [ ] **Video Processing & Color Space Conversion Pipeline (`evr.dll`)**:
-  - Hardware color conversion (NV12, YUY2, AYUV to BGRA / RGB32) and aspect ratio correction (`MFVideoAspectRatio`).
+- [x] **Video Processing & Color Space Conversion Pipeline (`evr.dll`)**:
+  - Hardware color conversion (NV12, YUY2 to BGRA / RGB32) and aspect ratio correction (`MFVideoAspectRatioMode`).
   - Presentation synchronizer with presentation clock (`IMFPresentationClock`) and frame drop detection.
-- [ ] **Dynamic Module Exports & COM Registration (`evr.dll`)**:
-  - `MFCreateVideoRenderer`, `MFCreateVideoPresenter`, `MFCreateVideoMixer`.
-  - COM class factory registration for `CLSID_EnhancedVideoRenderer`.
-  - Version database registration in `VersionDatabase` for `evr.dll`.
-- [ ] **Interactive CLI Utilities (`evr`)**:
-  - `evr test` (Runs EVR mixer, presenter, and display control self-tests).
-  - `evr render <video_stream>` (Presents video frames using Direct2D/DXGI swapchain).
-  - `evr info` (Displays EVR hardware acceleration capabilities).
-- [ ] **Unit Test Suite 108 (`Test_WindowsEnhancedVideoRenderer_Subsystem`)**:
+  - Sub-stream picture-in-picture (PiP) quad composition via normalized rectangles (`MFVideoNormalizedRect`).
+  - DIB / alpha-channel watermark overlay compositing via `IMFVideoMixerBitmap`.
+- [x] **Dynamic Module Exports & COM Registration (`evr.dll`)**:
+  - Dynamic module exports: `MFCreateVideoRenderer`, `MFCreateVideoPresenter`, `MFCreateVideoMixer`, `DllCanUnloadNow`, `DllGetClassObject`.
+  - COM class factory registration for `CLSID_EnhancedVideoRenderer`, `CLSID_MFVideoMixer9`, and `CLSID_MFVideoPresenter9`.
+  - Version database registration in `VersionDatabase` for `evr.dll` ("MicaNT Enhanced Video Renderer Subsystem", `10.0.22621.1`).
+- [x] **Interactive CLI Utilities (`evr`)**:
+  - `evr test` (Runs EVR mixer, presenter, and display control self-tests: 16/16 passed).
+  - `evr render <video_stream>` (Presents video frames using Direct2D hardware-accelerated surface).
+  - `evr info` (Displays EVR hardware acceleration and compositor telemetry).
+- [x] **Unit Test Suite 108 (`Test_WindowsEnhancedVideoRenderer_Subsystem`)**:
   - Comprehensive unit test suite validating EVR media sink, video display controls, presenter synchronization, mixer alpha compositing, and CLI commands.
+  - Milestone 108: **108 / 108 Test Suites Passing (100%)**.
+
+---
+
+### Phase 82: Windows DirectX Video Acceleration 2.0 (DXVA2) Subsystem (`dxva2.hpp`, `dxva2.dll`, `d3d9.dll`) (PLANNED - MILESTONE 109)
+- [ ] **DirectX Video Acceleration 2.0 Core Architecture (`include/micant/dxva2.hpp`, `dxva2.dll`)**:
+  - DXVA2 device manager (`IDirect3DDeviceManager9`, `DXVA2CreateDirect3DDeviceManager9`) with multi-thread device sharing and lock management.
+  - Video processor service (`IDirectXVideoProcessorService`, `IDirectXVideoProcessor`, `DXVA2CreateVideoService`) with sub-stream compositing, de-interlacing, and color space conversion.
+  - Video decoder service (`IDirectXVideoDecoderService`, `IDirectXVideoDecoder`) with compressed hardware bitstream acceleration (H.264, VC-1, MPEG-2).
+- [ ] **Video Processing & Color Controls (`dxva2.dll`)**:
+  - Color adjustment controls (`DXVA2_ProcAmp_Brightness`, `Contrast`, `Hue`, `Saturation`).
+  - Noise reduction and edge enhancement filters (`DXVA2_NoiseFilter`, `DXVA2_DetailFilter`).
+  - Target surface allocation and Direct3D 9 surface sharing (`IDirect3DSurface9`).
+- [ ] **Dynamic Module Exports & COM Registration (`dxva2.dll`)**:
+  - `DXVA2CreateDirect3DDeviceManager9`, `DXVA2CreateVideoService`.
+  - Version database registration in `VersionDatabase` for `dxva2.dll` ("MicaNT DirectX Video Acceleration 2.0 Subsystem", `10.0.22621.1`).
+- [ ] **Interactive CLI Utilities (`dxva2`)**:
+  - `dxva2 test` (Runs DXVA2 device manager, video processor, and decoder service self-tests).
+  - `dxva2 procamp [brightness] [contrast]` (Applies ProcAmp video color adjustments).
+  - `dxva2 info` (Displays hardware video acceleration capabilities and device manager telemetry).
+- [ ] **Unit Test Suite 109 (`Test_WindowsDXVA2_Hardware_Acceleration_Subsystem`)**:
+  - Comprehensive unit test suite validating DXVA2 device manager, video processor service, ProcAmp controls, surface allocation, and CLI commands.
 
 
 

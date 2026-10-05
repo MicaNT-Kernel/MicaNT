@@ -129,6 +129,7 @@
 #include "micant/gdiplus.hpp"
 #include "micant/d2d1.hpp"
 #include "micant/mfsession.hpp"
+#include "micant/evr.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -24771,8 +24772,475 @@ void Test_WindowsMediaFoundation_Topology_And_Session_Subsystem() {
     std::cout << "[TEST] Suite 107: Windows Media Foundation Topology & Advanced Media Session Pipeline PASSED.\n";
 }
 
+void Test_WindowsEnhancedVideoRenderer_Subsystem() {
+    std::cout << "[TEST] Suite 108: Windows Enhanced Video Renderer (EVR) Subsystem...\n";
+
+    // Initialize EVR exports
+    mf::evr::InitializeEnhancedVideoRendererExports();
+
+    // 1. EVR Media Sink Creation & Interface Query
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        int32_t hr = mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+        TEST_ASSERT(hr == ole32::S_OK && pSink != nullptr, "MFCreateVideoRenderer must succeed for IMFMediaSink");
+
+        mf::evr::IMFVideoRenderer* pRenderer = nullptr;
+        hr = pSink->QueryInterface(mf::evr::IID_IMFVideoRenderer, reinterpret_cast<void**>(&pRenderer));
+        TEST_ASSERT(hr == ole32::S_OK && pRenderer != nullptr, "QueryInterface IMFVideoRenderer must succeed");
+
+        mf::evr::IEVRFilterConfig* pConfig = nullptr;
+        hr = pSink->QueryInterface(mf::evr::IID_IEVRFilterConfig, reinterpret_cast<void**>(&pConfig));
+        TEST_ASSERT(hr == ole32::S_OK && pConfig != nullptr, "QueryInterface IEVRFilterConfig must succeed");
+
+        mf::evr::IMFGetService* pGetService = nullptr;
+        hr = pSink->QueryInterface(mf::evr::IID_IMFGetService, reinterpret_cast<void**>(&pGetService));
+        TEST_ASSERT(hr == ole32::S_OK && pGetService != nullptr, "QueryInterface IMFGetService must succeed");
+
+        mf::IMFClockStateSink* pClockSink = nullptr;
+        hr = pSink->QueryInterface(mf::IID_IMFClockStateSink, reinterpret_cast<void**>(&pClockSink));
+        TEST_ASSERT(hr == ole32::S_OK && pClockSink != nullptr, "QueryInterface IMFClockStateSink must succeed");
+
+        pClockSink->Release();
+        pGetService->Release();
+        pConfig->Release();
+        pRenderer->Release();
+        pSink->Release();
+    }
+
+    // 2. EVR Filter Configuration (IEVRFilterConfig)
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+        mf::evr::IEVRFilterConfig* pConfig = nullptr;
+        pSink->QueryInterface(mf::evr::IID_IEVRFilterConfig, reinterpret_cast<void**>(&pConfig));
+
+        uint32_t maxStreams = 0;
+        pConfig->GetNumberOfStreams(&maxStreams);
+        TEST_ASSERT(maxStreams == 1, "Default EVR stream count is 1");
+
+        int32_t hr = pConfig->SetNumberOfStreams(4);
+        TEST_ASSERT(hr == ole32::S_OK, "SetNumberOfStreams(4) must succeed");
+
+        pConfig->GetNumberOfStreams(&maxStreams);
+        TEST_ASSERT(maxStreams == 4, "EVR stream count is now 4");
+
+        // Boundary tests
+        TEST_ASSERT(pConfig->SetNumberOfStreams(0) == ole32::E_INVALIDARG, "SetNumberOfStreams(0) must fail with E_INVALIDARG");
+        TEST_ASSERT(pConfig->SetNumberOfStreams(17) == ole32::E_INVALIDARG, "SetNumberOfStreams(17) must fail with E_INVALIDARG");
+
+        pConfig->Release();
+        pSink->Release();
+    }
+
+    // 3. EVR Stream Sinks (IMFStreamSink & IMFMediaSink)
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+        mf::evr::IEVRFilterConfig* pConfig = nullptr;
+        pSink->QueryInterface(mf::evr::IID_IEVRFilterConfig, reinterpret_cast<void**>(&pConfig));
+        pConfig->SetNumberOfStreams(3);
+
+        uint32_t streamCount = 0;
+        pSink->GetStreamSinkCount(&streamCount);
+        TEST_ASSERT(streamCount == 3, "Stream sink count matches configured 3 streams");
+
+        for (uint32_t i = 0; i < 3; ++i) {
+            mf::evr::IMFStreamSink* pStream = nullptr;
+            int32_t hr = pSink->GetStreamSinkByIndex(i, &pStream);
+            TEST_ASSERT(hr == ole32::S_OK && pStream != nullptr, "GetStreamSinkByIndex must succeed");
+            uint32_t id = 999;
+            pStream->GetIdentifier(&id);
+            TEST_ASSERT(id == i, "Stream identifier matches index");
+
+            mf::evr::IMFMediaSink* pParent = nullptr;
+            pStream->GetMediaSink(&pParent);
+            TEST_ASSERT(pParent == pSink, "Stream parent matches EVR sink");
+            pParent->Release();
+            pStream->Release();
+        }
+
+        pConfig->Release();
+        pSink->Release();
+    }
+
+    // 4. Stream Sink Media Type Handler (IMFMediaTypeHandler)
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+        mf::evr::IMFStreamSink* pStream = nullptr;
+        pSink->GetStreamSinkByIndex(0, &pStream);
+
+        mf::evr::IMFMediaTypeHandler* pHandler = nullptr;
+        int32_t hr = pStream->GetMediaTypeHandler(&pHandler);
+        TEST_ASSERT(hr == ole32::S_OK && pHandler != nullptr, "GetMediaTypeHandler must succeed");
+
+        GUID majType{};
+        pHandler->GetMajorType(&majType);
+        TEST_ASSERT(majType == mf::MFMediaType_Video, "Major type must be MFMediaType_Video");
+
+        uint32_t count = 0;
+        pHandler->GetMediaTypeCount(&count);
+        TEST_ASSERT(count >= 3, "MediaType count must include RGB32, NV12, YUY2");
+
+        auto* pMt = new mf::CMediaType();
+        pMt->SetGUID(mf::MF_MT_MAJOR_TYPE, mf::MFMediaType_Video);
+        pMt->SetGUID(mf::MF_MT_SUBTYPE, mf::MFVideoFormat_RGB32);
+        TEST_ASSERT(pHandler->IsMediaTypeSupported(pMt, nullptr) == ole32::S_OK, "RGB32 must be supported");
+        TEST_ASSERT(pHandler->SetCurrentMediaType(pMt) == ole32::S_OK, "SetCurrentMediaType must succeed");
+
+        mf::IMFMediaType* pCur = nullptr;
+        pHandler->GetCurrentMediaType(&pCur);
+        TEST_ASSERT(pCur != nullptr, "GetCurrentMediaType returns current type");
+        GUID curSub{};
+        pCur->GetGUID(mf::MF_MT_SUBTYPE, &curSub);
+        TEST_ASSERT(curSub == mf::MFVideoFormat_RGB32, "Current subtype matches RGB32");
+
+        pCur->Release();
+        pMt->Release();
+        pHandler->Release();
+        pStream->Release();
+        pSink->Release();
+    }
+
+    // 5. EVR Custom Mixer & Presenter Initialization (IMFVideoRenderer)
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+        mf::evr::IMFVideoRenderer* pRenderer = nullptr;
+        pSink->QueryInterface(mf::evr::IID_IMFVideoRenderer, reinterpret_cast<void**>(&pRenderer));
+
+        auto* pCustomMixer = new mf::evr::CEVRMixer();
+        auto* pCustomPresenter = new mf::evr::CEVRPresenter();
+
+        int32_t hr = pRenderer->InitializeRenderer(pCustomMixer, pCustomPresenter);
+        TEST_ASSERT(hr == ole32::S_OK, "InitializeRenderer with custom mixer & presenter must succeed");
+
+        pCustomPresenter->Release();
+        pCustomMixer->Release();
+        pRenderer->Release();
+        pSink->Release();
+    }
+
+    // 6. EVR Service Provider (IMFGetService & MR_VIDEO_RENDER_SERVICE)
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+        mf::evr::IMFGetService* pGetService = nullptr;
+        pSink->QueryInterface(mf::evr::IID_IMFGetService, reinterpret_cast<void**>(&pGetService));
+
+        mf::evr::IMFVideoDisplayControl* pDisplay = nullptr;
+        int32_t hr = pGetService->GetService(mf::evr::MR_VIDEO_RENDER_SERVICE, mf::evr::IID_IMFVideoDisplayControl, reinterpret_cast<void**>(&pDisplay));
+        TEST_ASSERT(hr == ole32::S_OK && pDisplay != nullptr, "GetService MR_VIDEO_RENDER_SERVICE -> IMFVideoDisplayControl succeeds");
+
+        mf::evr::IMFVideoPresenter* pPres = nullptr;
+        hr = pGetService->GetService(mf::evr::MR_VIDEO_RENDER_SERVICE, mf::evr::IID_IMFVideoPresenter, reinterpret_cast<void**>(&pPres));
+        TEST_ASSERT(hr == ole32::S_OK && pPres != nullptr, "GetService MR_VIDEO_RENDER_SERVICE -> IMFVideoPresenter succeeds");
+
+        void* pInvalid = nullptr;
+        GUID invalidService = { 0x11111111, 0x2222, 0x3333, { 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb } };
+        hr = pGetService->GetService(invalidService, mf::evr::IID_IMFVideoDisplayControl, &pInvalid);
+        TEST_ASSERT(hr == mf::evr::MF_E_UNSUPPORTED_SERVICE, "Unsupported service GUID returns MF_E_UNSUPPORTED_SERVICE");
+
+        pPres->Release();
+        pDisplay->Release();
+        pGetService->Release();
+        pSink->Release();
+    }
+
+    // 7. EVR Service Provider (IMFGetService & MR_VIDEO_MIXING_SERVICE)
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+        mf::evr::IMFGetService* pGetService = nullptr;
+        pSink->QueryInterface(mf::evr::IID_IMFGetService, reinterpret_cast<void**>(&pGetService));
+
+        mf::evr::IMFVideoMixerControl* pMixCtrl = nullptr;
+        int32_t hr = pGetService->GetService(mf::evr::MR_VIDEO_MIXING_SERVICE, mf::evr::IID_IMFVideoMixerControl, reinterpret_cast<void**>(&pMixCtrl));
+        TEST_ASSERT(hr == ole32::S_OK && pMixCtrl != nullptr, "GetService MR_VIDEO_MIXING_SERVICE -> IMFVideoMixerControl succeeds");
+
+        mf::evr::IMFVideoMixerBitmap* pMixBmp = nullptr;
+        hr = pGetService->GetService(mf::evr::MR_VIDEO_MIXING_SERVICE, mf::evr::IID_IMFVideoMixerBitmap, reinterpret_cast<void**>(&pMixBmp));
+        TEST_ASSERT(hr == ole32::S_OK && pMixBmp != nullptr, "GetService MR_VIDEO_MIXING_SERVICE -> IMFVideoMixerBitmap succeeds");
+
+        mf::IMFTransform* pTransform = nullptr;
+        hr = pGetService->GetService(mf::evr::MR_VIDEO_MIXING_SERVICE, mf::IID_IMFTransform, reinterpret_cast<void**>(&pTransform));
+        TEST_ASSERT(hr == ole32::S_OK && pTransform != nullptr, "GetService MR_VIDEO_MIXING_SERVICE -> IMFTransform succeeds");
+
+        pTransform->Release();
+        pMixBmp->Release();
+        pMixCtrl->Release();
+        pGetService->Release();
+        pSink->Release();
+    }
+
+    // 8. EVR Mixer Multi-Stream Configuration (IMFVideoMixerControl)
+    {
+        auto* pMixer = new mf::evr::CEVRMixer();
+        uint32_t streamIDs[2] = { 1, 2 };
+        pMixer->AddInputStreams(2, streamIDs);
+
+        // Stream 1 Z-order
+        pMixer->SetStreamZOrder(1, 5);
+        uint32_t zOrder = 0;
+        pMixer->GetStreamZOrder(1, &zOrder);
+        TEST_ASSERT(zOrder == 5, "Stream 1 Z-Order matches 5");
+
+        // Stream 2 Normalized Rect
+        mf::evr::MFVideoNormalizedRect pipRect{ 0.5f, 0.5f, 1.0f, 1.0f };
+        pMixer->SetStreamOutputRect(2, &pipRect);
+        mf::evr::MFVideoNormalizedRect queryRect{};
+        pMixer->GetStreamOutputRect(2, &queryRect);
+        TEST_ASSERT(queryRect == pipRect, "Stream 2 Normalized Rect matches quad");
+
+        // Invalid stream number returns error
+        TEST_ASSERT(pMixer->SetStreamZOrder(99, 1) == mf::evr::MF_E_INVALIDSTREAMNUMBER, "Invalid stream returns MF_E_INVALIDSTREAMNUMBER");
+
+        pMixer->Release();
+    }
+
+    // 9. EVR Mixer Alpha Bitmap Overlay (IMFVideoMixerBitmap)
+    {
+        auto* pMixer = new mf::evr::CEVRMixer();
+
+        mf::evr::MFVideoAlphaBitmap bmpParam{};
+        bmpParam.params.dwFlags = mf::evr::MFVideoAlphaBitmap_Alpha | mf::evr::MFVideoAlphaBitmap_DestRect;
+        bmpParam.params.fAlpha = 0.75f;
+        bmpParam.params.nrcDest = { 0.8f, 0.8f, 1.0f, 1.0f };
+
+        int32_t hr = pMixer->SetAlphaBitmap(&bmpParam);
+        TEST_ASSERT(hr == ole32::S_OK, "SetAlphaBitmap succeeds");
+
+        mf::evr::MFVideoAlphaBitmapParams retParams{};
+        hr = pMixer->GetAlphaBitmapParameters(&retParams);
+        TEST_ASSERT(hr == ole32::S_OK && std::abs(retParams.fAlpha - 0.75f) < 0.001f, "GetAlphaBitmapParameters returns set alpha 0.75");
+
+        retParams.fAlpha = 0.50f;
+        hr = pMixer->UpdateAlphaBitmapParameters(&retParams);
+        TEST_ASSERT(hr == ole32::S_OK, "UpdateAlphaBitmapParameters succeeds");
+
+        pMixer->GetAlphaBitmapParameters(&retParams);
+        TEST_ASSERT(std::abs(retParams.fAlpha - 0.50f) < 0.001f, "Alpha updated to 0.50");
+
+        hr = pMixer->ClearAlphaBitmap();
+        TEST_ASSERT(hr == ole32::S_OK, "ClearAlphaBitmap succeeds");
+        TEST_ASSERT(pMixer->GetAlphaBitmapParameters(&retParams) == ole32::E_FAIL, "GetAlphaBitmapParameters fails after clear");
+
+        pMixer->Release();
+    }
+
+    // 10. EVR Mixer Frame Processing (IMFTransform)
+    {
+        auto* pMixer = new mf::evr::CEVRMixer();
+
+        mf::IMFSample* pSample = nullptr;
+        mf::MFCreateSample(&pSample);
+        mf::IMFMediaBuffer* pBuf = nullptr;
+        mf::MFCreateMemoryBuffer(640 * 480 * 4, &pBuf);
+        pSample->AddBuffer(pBuf);
+        pSample->SetSampleTime(12345678);
+        pSample->SetSampleDuration(333333);
+
+        int32_t hr = pMixer->ProcessInput(0, pSample, 0);
+        TEST_ASSERT(hr == ole32::S_OK, "ProcessInput on stream 0 succeeds");
+
+        mf::MFT_OUTPUT_DATA_BUFFER outData{};
+        uint32_t status = 0;
+        hr = pMixer->ProcessOutput(0, 1, &outData, &status);
+        TEST_ASSERT(hr == ole32::S_OK && outData.pSample != nullptr, "ProcessOutput succeeds");
+
+        int64_t sampleTime = 0;
+        outData.pSample->GetSampleTime(&sampleTime);
+        TEST_ASSERT(sampleTime == 12345678, "Output sample time matches input");
+        TEST_ASSERT(pMixer->GetMixedSampleCount() == 1, "Mixed sample count is 1");
+
+        outData.pSample->Release();
+        pBuf->Release();
+        pSample->Release();
+        pMixer->Release();
+    }
+
+    // 11. EVR Presenter Display Control (IMFVideoDisplayControl)
+    {
+        auto* pPres = new mf::evr::CEVRPresenter();
+
+        gdi32::SIZE nativeSz{}, arSz{};
+        pPres->GetNativeVideoSize(&nativeSz, &arSz);
+        TEST_ASSERT(nativeSz.cx == 1920 && nativeSz.cy == 1080, "Native video size is 1920x1080");
+        TEST_ASSERT(arSz.cx == 16 && arSz.cy == 9, "Pixel aspect ratio is 16:9");
+
+        gdi32::SIZE minSz{}, maxSz{};
+        pPres->GetIdealVideoSize(&minSz, &maxSz);
+        TEST_ASSERT(minSz.cx == 160 && maxSz.cx == 3840, "Ideal video sizes range 160 to 3840");
+
+        mf::evr::MFVideoNormalizedRect srcR{ 0.1f, 0.1f, 0.9f, 0.9f };
+        gdi32::RECT dstR{ 0, 0, 800, 600 };
+        pPres->SetVideoPosition(&srcR, &dstR);
+
+        mf::evr::MFVideoNormalizedRect querySrc{};
+        gdi32::RECT queryDst{};
+        pPres->GetVideoPosition(&querySrc, &queryDst);
+        TEST_ASSERT(querySrc == srcR && queryDst.right == 800 && queryDst.bottom == 600, "GetVideoPosition matches set position");
+
+        pPres->SetAspectRatioMode(mf::evr::MFVideoARMode_PreservePicture);
+        uint32_t arMode = 0;
+        pPres->GetAspectRatioMode(&arMode);
+        TEST_ASSERT(arMode == mf::evr::MFVideoARMode_PreservePicture, "Aspect ratio mode matches PreservePicture");
+
+        pPres->SetBorderColor(0x00FF00FF);
+        uint32_t clr = 0;
+        pPres->GetBorderColor(&clr);
+        TEST_ASSERT(clr == 0x00FF00FF, "Border color matches 0x00FF00FF");
+
+        pPres->Release();
+    }
+
+    // 12. EVR Presenter Window & Surface Management
+    {
+        auto* pPres = new mf::evr::CEVRPresenter();
+
+        void* fakeHwnd = reinterpret_cast<void*>(0xABCDEF00);
+        pPres->SetVideoWindow(fakeHwnd);
+        void* hwndRet = nullptr;
+        pPres->GetVideoWindow(&hwndRet);
+        TEST_ASSERT(hwndRet == fakeHwnd, "GetVideoWindow matches set HWND");
+
+        pPres->SetFullscreen(1);
+        int32_t fs = 0;
+        pPres->GetFullscreen(&fs);
+        TEST_ASSERT(fs == 1, "Fullscreen state is TRUE");
+
+        pPres->RepaintVideo();
+        TEST_ASSERT(pPres->GetFramesPresented() == 1, "RepaintVideo increments presented frame count");
+
+        gdi32::BITMAPINFOHEADER bih{};
+        uint8_t* pDib = nullptr;
+        uint32_t cbDib = 0;
+        int64_t ts = 0;
+        int32_t hr = pPres->GetCurrentImage(&bih, &pDib, &cbDib, &ts);
+        TEST_ASSERT(hr == ole32::S_OK && pDib != nullptr && bih.biWidth == 1920, "GetCurrentImage returns valid frame bitmap");
+
+        pPres->Release();
+    }
+
+    // 13. EVR Presentation Clock Synchronization (IMFClockStateSink)
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+
+        mf::IMFPresentationClock* pClock = nullptr;
+        mf::MFCreatePresentationClock(&pClock);
+
+        int32_t hr = pSink->SetPresentationClock(pClock);
+        TEST_ASSERT(hr == ole32::S_OK, "SetPresentationClock succeeds");
+
+        mf::IMFPresentationClock* pClockQuery = nullptr;
+        pSink->GetPresentationClock(&pClockQuery);
+        TEST_ASSERT(pClockQuery == pClock, "GetPresentationClock matches bound clock");
+        pClockQuery->Release();
+
+        // Clock state changes
+        pClock->Start(1000000);
+        pClock->Pause();
+        pClock->Start(2000000);
+        pClock->Stop();
+
+        pClock->Release();
+        pSink->Release();
+    }
+
+    // 14. End-to-End Stream Sink Sample Processing & Markers
+    {
+        mf::evr::IMFMediaSink* pSink = nullptr;
+        mf::evr::MFCreateVideoRenderer(mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pSink));
+        mf::evr::IMFStreamSink* pStream = nullptr;
+        pSink->GetStreamSinkByIndex(0, &pStream);
+
+        auto* pStreamSinkConcrete = static_cast<mf::evr::CEVRStreamSink*>(pStream);
+        TEST_ASSERT(pStreamSinkConcrete->GetQueuedSampleCount() == 0, "Initial queued sample count is 0");
+
+        mf::IMFSample* pSample = nullptr;
+        mf::MFCreateSample(&pSample);
+        mf::IMFMediaBuffer* pBuf = nullptr;
+        mf::MFCreateMemoryBuffer(2048, &pBuf);
+        pSample->AddBuffer(pBuf);
+        int32_t hr = pStream->ProcessSample(pSample);
+        TEST_ASSERT(hr == ole32::S_OK, "ProcessSample succeeds");
+        TEST_ASSERT(pStreamSinkConcrete->GetQueuedSampleCount() == 1, "Queued sample count is 1");
+
+        hr = pStream->PlaceMarker(mf::evr::MFSTREAMSINK_MARKER_TICK, nullptr, nullptr);
+        TEST_ASSERT(hr == ole32::S_OK, "PlaceMarker succeeds");
+
+        hr = pStream->Flush();
+        TEST_ASSERT(hr == ole32::S_OK, "Flush succeeds");
+        TEST_ASSERT(pStreamSinkConcrete->GetQueuedSampleCount() == 0, "Queued sample count after flush is 0");
+
+        pBuf->Release();
+        pSample->Release();
+        pStream->Release();
+        pSink->Release();
+    }
+
+    // 15. Dynamic Module Exports & Direct Creation (evr.dll)
+    {
+        mf::evr::InitializeEnhancedVideoRendererExports();
+
+        auto& loader = ldr::DynamicLoader::get();
+        TEST_ASSERT(loader.getExport("evr.dll", "MFCreateVideoRenderer") != nullptr, "evr.dll!MFCreateVideoRenderer resolved");
+        TEST_ASSERT(loader.getExport("evr.dll", "MFCreateVideoPresenter") != nullptr, "evr.dll!MFCreateVideoPresenter resolved");
+        TEST_ASSERT(loader.getExport("evr.dll", "MFCreateVideoMixer") != nullptr, "evr.dll!MFCreateVideoMixer resolved");
+        TEST_ASSERT(loader.getExport("evr.dll", "DllCanUnloadNow") != nullptr, "evr.dll!DllCanUnloadNow resolved");
+        TEST_ASSERT(loader.getExport("evr.dll", "DllGetClassObject") != nullptr, "evr.dll!DllGetClassObject resolved");
+
+        mf::evr::IMFVideoPresenter* pPres = nullptr;
+        int32_t hr = mf::evr::MFCreateVideoPresenter(nullptr, GUID{}, mf::evr::IID_IMFVideoPresenter, reinterpret_cast<void**>(&pPres));
+        TEST_ASSERT(hr == ole32::S_OK && pPres != nullptr, "MFCreateVideoPresenter direct creation succeeds");
+        pPres->Release();
+
+        mf::IMFTransform* pMix = nullptr;
+        hr = mf::evr::MFCreateVideoMixer(nullptr, GUID{}, mf::IID_IMFTransform, reinterpret_cast<void**>(&pMix));
+        TEST_ASSERT(hr == ole32::S_OK && pMix != nullptr, "MFCreateVideoMixer direct creation succeeds");
+        pMix->Release();
+    }
+
+    // 16. OLE32 COM Class Factory Activation & Version Database Integration
+    {
+        // COM activation via CoCreateInstance
+        mf::evr::IMFMediaSink* pEvrSink = nullptr;
+        int32_t hr = ole32::CoCreateInstance(mf::evr::CLSID_EnhancedVideoRenderer, nullptr, 1, mf::evr::IID_IMFMediaSink, reinterpret_cast<void**>(&pEvrSink));
+        TEST_ASSERT(hr == ole32::S_OK && pEvrSink != nullptr, "CoCreateInstance CLSID_EnhancedVideoRenderer must succeed");
+        pEvrSink->Release();
+
+        // Version database verification
+        auto& verDb = version::VersionDatabase::Instance();
+        const auto* vEvr = verDb.FindModule("evr.dll");
+        TEST_ASSERT(vEvr != nullptr && vEvr->stringTable.at("ProductName") == "MicaNT Enhanced Video Renderer Subsystem", "evr.dll version info match");
+        TEST_ASSERT(vEvr->stringTable.at("FileVersion") == "10.0.22621.1", "evr.dll FileVersion is 10.0.22621.1");
+
+        // Shell command integration (evr test, render, info)
+        shell::CommandShell testShell;
+        std::ostringstream out;
+
+        testShell.execute("evr test", out);
+        TEST_ASSERT(out.str().find("ALL 16 TESTS PASSED (100%)") != std::string::npos, "evr test must pass 100%");
+
+        out.str("");
+        testShell.execute("evr render test_frame.bmp", out);
+        TEST_ASSERT(out.str().find("Pipeline Status: PRESENTING") != std::string::npos, "evr render must present frame");
+
+        out.str("");
+        testShell.execute("evr info", out);
+        TEST_ASSERT(out.str().find("22621") != std::string::npos, "evr info must display telemetry");
+    }
+
+    std::cout << "[TEST] Suite 108: Windows Enhanced Video Renderer (EVR) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite107")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite108")) {
+        RUN_TEST(Test_WindowsEnhancedVideoRenderer_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite107") {
         RUN_TEST(Test_WindowsMediaFoundation_Topology_And_Session_Subsystem);
         return g_FailedTests;
     }
@@ -24892,6 +25360,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsGdiPlus_Imaging_Subsystem);
     RUN_TEST(Test_WindowsDirect2D_Hardware_Rendering_Subsystem);
     RUN_TEST(Test_WindowsMediaFoundation_Topology_And_Session_Subsystem);
+    RUN_TEST(Test_WindowsEnhancedVideoRenderer_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
