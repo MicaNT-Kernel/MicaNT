@@ -198,7 +198,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 95: Direct2D 1.3 & DirectWrite Advanced Typography   [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 96: Windows Text Services Framework & Modern IME     [IN PROGRESS]    │
+│ Phase 96: Windows Text Services Framework & Modern IME     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 97: Windows Spell Checking & Linguistic Services     [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2233,18 +2235,36 @@
 
 ---
 
-### Phase 96: Windows Text Services Framework & Modern IME Subsystem (`tsf.hpp`, `msctf.dll`, `imm32.dll`) (IN PROGRESS - MILESTONE 123)
-- [ ] **Windows Text Services Framework Architecture (`include/micant/tsf.hpp`, `msctf.dll`)**:
+### Phase 96: Windows Text Services Framework & Modern IME Subsystem (`tsf.hpp`, `msctf.dll`, `imm32.dll`) (COMPLETED 100% - MILESTONE 123)
+- [x] **Windows Text Services Framework Architecture (`include/micant/tsf.hpp`, `msctf.dll`)**:
   - Core TSF COM interfaces: `ITfThreadMgr`, `ITfDocumentMgr`, `ITfContext`, `ITfEditSession`, `ITfRange`, `ITfCategoryMgr`, `ITfInputProcessorProfiles`.
   - Compartment management: `ITfCompartmentMgr` and `ITfCompartment` for global and thread-local IME state (Open/Close status, Conversion mode).
   - Modern Text Input Scopes: `ITfInputScope` supporting `IS_DEFAULT`, `IS_URL`, `IS_EMAIL_SMTPADDRESS`, `IS_NUMERIC`, `IS_PASSWORD`, `IS_SEARCH`.
-- [ ] **Input Method Manager (IMM32) Bridge (`imm32.dll`)**:
+  - Dual VersionDatabase registrations (`10.0.22621.1`) for `msctf.dll` and `imm32.dll`.
+- [x] **Input Method Manager (IMM32) Bridge (`imm32.dll`)**:
   - Imm Win32 APIs: `ImmGetContext`, `ImmReleaseContext`, `ImmGetCompositionStringW`, `ImmSetCompositionStringW`, `ImmGetCandidateListW`, `ImmSetCandidateWindow`, `ImmSetCompositionWindow`, `ImmNotifyIME`, `ImmIsIME`.
   - Composition string lifecycle: IME composition start, update (reading/clause info/attributes), candidate popup selection, and commit.
-- [ ] **Shell CLI Integration**:
+- [x] **Shell CLI Integration**:
   - Added `tsf test`, `tsf info`, `tsf compose`, and `tsf candidates` commands in `micant::shell`.
-- [ ] **Unit Test Suite 123 (`Test_WindowsTextServices_IME_Subsystem`)**:
+- [x] **Unit Test Suite 123 (`Test_WindowsTextServices_IME_Subsystem`)**:
   - Validates dynamic exports, TSF COM activation, document/context nesting, composition string updates, candidate lists, input scope filtering, and IMM32 interoperability.
+  - Milestone 123: **123 / 123 Test Suites Passing (100%)**.
+
+---
+
+### Phase 97: Windows Spell Checking & Extended Linguistic Services (ELS) Subsystem (`spellcheck.hpp`, `spellcheck.dll`, `elscore.dll`) (PLANNED - MILESTONE 124)
+- [ ] **Windows Spell Checking API Architecture (`include/micant/spellcheck.hpp`, `spellcheck.dll`)**:
+  - Core COM interfaces: `ISpellCheckerFactory`, `ISpellChecker`, `IEnumSpellingError`, `ISpellingError`, `IOptionDescription`.
+  - Multilingual spell check engine supporting en-US, es-ES, de-DE, fr-FR dictionaries, user word lists (Add/Ignore), and replacement pair generation.
+  - Error categorization: `CORRECTIVE_ACTION_GET_SUGGESTIONS`, `CORRECTIVE_ACTION_REPLACE`, `CORRECTIVE_ACTION_DELETE`.
+- [ ] **Extended Linguistic Services (ELS) Engine (`elscore.dll`)**:
+  - ELS Win32 APIs: `MappingGetServices`, `MappingFreePropertyBag`, `MappingRecognizeText`, `MappingDoAction`.
+  - Script detection, language detection, and transliteration services (Cyrillic to Latin, Simplified to Traditional Chinese).
+- [ ] **Shell CLI Integration**:
+  - Implement `spell test`, `spell check <word>`, and `spell suggest <word>` commands in `micant::shell`.
+- [ ] **Unit Test Suite 124 (`Test_WindowsSpellCheck_Linguistic_Subsystem`)**:
+  - Validates dynamic exports, COM querying (`ISpellCheckerFactory`, `ISpellChecker`), error enumeration, suggestions, user dictionary manipulation, and ELS text analysis.
+
 
 
 

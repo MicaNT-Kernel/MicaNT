@@ -28444,8 +28444,274 @@ void Test_WindowsDirect2D1_3_Typography_Subsystem() {
     std::cout << "[TEST] Suite 122: Direct2D 1.3 & DirectWrite Advanced Typography Subsystem PASSED.\n";
 }
 
+void Test_WindowsTextServices_IME_Subsystem() {
+    using namespace micant::tsf;
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 123: Windows Text Services Framework & Modern IME Subsystem     \n";
+    std::cout << "========================================================================\n";
+
+    // 1. Dynamic Exports & VersionDatabase Parity
+    InitializeTextServicesExports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("msctf.dll", "TF_CreateThreadMgr") != nullptr, "msctf.dll TF_CreateThreadMgr export must exist");
+    TEST_ASSERT(loader.getExport("msctf.dll", "TF_CreateInputProcessorProfiles") != nullptr, "msctf.dll TF_CreateInputProcessorProfiles export must exist");
+    TEST_ASSERT(loader.getExport("msctf.dll", "TF_CreateCategoryMgr") != nullptr, "msctf.dll TF_CreateCategoryMgr export must exist");
+    TEST_ASSERT(loader.getExport("msctf.dll", "TF_GetGlobalCompartment") != nullptr, "msctf.dll TF_GetGlobalCompartment export must exist");
+
+    TEST_ASSERT(loader.getExport("imm32.dll", "ImmGetContext") != nullptr, "imm32.dll ImmGetContext export must exist");
+    TEST_ASSERT(loader.getExport("imm32.dll", "ImmReleaseContext") != nullptr, "imm32.dll ImmReleaseContext export must exist");
+    TEST_ASSERT(loader.getExport("imm32.dll", "ImmCreateContext") != nullptr, "imm32.dll ImmCreateContext export must exist");
+    TEST_ASSERT(loader.getExport("imm32.dll", "ImmDestroyContext") != nullptr, "imm32.dll ImmDestroyContext export must exist");
+    TEST_ASSERT(loader.getExport("imm32.dll", "ImmGetCompositionStringW") != nullptr, "imm32.dll ImmGetCompositionStringW export must exist");
+    TEST_ASSERT(loader.getExport("imm32.dll", "ImmSetCompositionStringW") != nullptr, "imm32.dll ImmSetCompositionStringW export must exist");
+    TEST_ASSERT(loader.getExport("imm32.dll", "ImmGetCandidateListW") != nullptr, "imm32.dll ImmGetCandidateListW export must exist");
+
+    const auto* pMsctfVer = version::VersionDatabase::Instance().GetModuleInfo("msctf.dll");
+    TEST_ASSERT(pMsctfVer != nullptr, "msctf.dll must be registered in VersionDatabase");
+    const auto* pImmVer = version::VersionDatabase::Instance().GetModuleInfo("imm32.dll");
+    TEST_ASSERT(pImmVer != nullptr, "imm32.dll must be registered in VersionDatabase");
+
+    // 2. ITfThreadMgr Activation & Document Management
+    ITfThreadMgr* pThreadMgr = nullptr;
+    int32_t hr = TF_CreateThreadMgr(&pThreadMgr);
+    TEST_ASSERT(hr == 0 && pThreadMgr != nullptr, "TF_CreateThreadMgr must succeed");
+
+    TfClientId clientId = 0;
+    hr = pThreadMgr->Activate(&clientId);
+    TEST_ASSERT(hr == 0 && clientId != 0, "ITfThreadMgr::Activate must return valid client ID");
+
+    int32_t fFocus = 0;
+    pThreadMgr->IsThreadFocus(&fFocus);
+    TEST_ASSERT(fFocus == 1, "Thread focus must be true after Activate");
+
+    ITfDocumentMgr* pDocMgr = nullptr;
+    hr = pThreadMgr->CreateDocumentMgr(&pDocMgr);
+    TEST_ASSERT(hr == 0 && pDocMgr != nullptr, "CreateDocumentMgr must succeed");
+
+    // 3. ITfContext & Text Store Binding
+    ITfContext* pContext = nullptr;
+    TfEditCookie cookie = 0;
+    hr = pDocMgr->CreateContext(clientId, 0, nullptr, &pContext, &cookie);
+    TEST_ASSERT(hr == 0 && pContext != nullptr && cookie != 0, "CreateContext must succeed");
+
+    hr = pDocMgr->Push(pContext);
+    TEST_ASSERT(hr == 0, "Push context must succeed");
+
+    ITfContext* pTopContext = nullptr;
+    hr = pDocMgr->GetTop(&pTopContext);
+    TEST_ASSERT(hr == 0 && pTopContext == pContext, "GetTop must return pushed context");
+    pTopContext->Release();
+
+    // 4. ITfEditSession & ITfRange Text Manipulation
+    class CTestEditSession : public ITfEditSession {
+    private:
+        std::atomic<uint32_t> m_ref{ 1 };
+        ITfContext* m_ctx{ nullptr };
+    public:
+        CTestEditSession(ITfContext* ctx) : m_ctx(ctx) {}
+        int32_t __stdcall QueryInterface(const GUID& riid, void** ppv) override {
+            if (!ppv) return ole32::E_POINTER;
+            if (riid == ole32::IID_IUnknown || riid == IID_ITfEditSession) {
+                *ppv = static_cast<ITfEditSession*>(this);
+                AddRef();
+                return ole32::S_OK;
+            }
+            *ppv = nullptr;
+            return ole32::E_NOINTERFACE;
+        }
+        uint32_t __stdcall AddRef() override { return ++m_ref; }
+        uint32_t __stdcall Release() override {
+            uint32_t r = --m_ref;
+            if (r == 0) delete this;
+            return r;
+        }
+        int32_t __stdcall DoEditSession(TfEditCookie ec) override {
+            ITfRange* pRange = nullptr;
+            m_ctx->GetStart(ec, &pRange);
+            const wchar_t* initialText = L"Hello, Sovereign OS!";
+            pRange->SetText(ec, 0, initialText, static_cast<int32_t>(wcslen(initialText)));
+
+            wchar_t readBuf[64]{};
+            uint32_t cch = 0;
+            pRange->GetText(ec, 0, readBuf, 64, &cch);
+            if (wcscmp(readBuf, initialText) != 0) {
+                pRange->Release();
+                return ole32::E_FAIL;
+            }
+
+            int32_t anchor = 0, extent = 0;
+            pRange->GetExtent(ec, &anchor, &extent);
+            if (extent != static_cast<int32_t>(wcslen(initialText))) {
+                pRange->Release();
+                return ole32::E_FAIL;
+            }
+
+            // Clone and collapse
+            ITfRange* pClone = nullptr;
+            pRange->Clone(&pClone);
+            pClone->Collapse(ec, TF_ANCHOR_END);
+            int32_t cloneAnchor = 0, cloneExtent = 0;
+            pClone->GetExtent(ec, &cloneAnchor, &cloneExtent);
+            if (cloneAnchor != extent || cloneExtent != 0) {
+                pClone->Release();
+                pRange->Release();
+                return ole32::E_FAIL;
+            }
+            pClone->Release();
+
+            pRange->Release();
+            return ole32::S_OK;
+        }
+    };
+
+    auto* pSession = new CTestEditSession(pContext);
+    int32_t sessionResult = 0;
+    hr = pContext->RequestEditSession(clientId, pSession, 0, &sessionResult);
+    TEST_ASSERT(hr == 0 && sessionResult == 0, "RequestEditSession must execute cleanly");
+    pSession->Release();
+
+    // 5. ITfCompartmentMgr & Compartments
+    ITfCompartmentMgr* pCompMgr = nullptr;
+    hr = pThreadMgr->GetGlobalCompartment(&pCompMgr);
+    TEST_ASSERT(hr == 0 && pCompMgr != nullptr, "GetGlobalCompartment must succeed");
+
+    ITfCompartment* pCompOpen = nullptr;
+    hr = pCompMgr->GetCompartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, &pCompOpen);
+    TEST_ASSERT(hr == 0 && pCompOpen != nullptr, "GetCompartment for OpenClose must succeed");
+
+    pCompOpen->SetValue(clientId, 1);
+    uint32_t compVal = 0;
+    pCompOpen->GetValue(&compVal);
+    TEST_ASSERT(compVal == 1, "Compartment value must be 1 (Open)");
+    pCompOpen->Release();
+    pCompMgr->Release();
+
+    // 6. ITfInputProcessorProfiles & Language Profiles
+    ITfInputProcessorProfiles* pProfiles = nullptr;
+    hr = TF_CreateInputProcessorProfiles(&pProfiles);
+    TEST_ASSERT(hr == 0 && pProfiles != nullptr, "TF_CreateInputProcessorProfiles must succeed");
+
+    uint16_t langId = 0;
+    GUID profGuid{};
+    GUID nullGuid{};
+    hr = pProfiles->GetActiveLanguageProfile(nullGuid, &langId, &profGuid);
+    TEST_ASSERT(hr == 0 && langId == 0x0409, "Active language profile must default to US English (0x0409)");
+    pProfiles->Release();
+
+    // 7. ITfCategoryMgr & GUID Mapping
+    ITfCategoryMgr* pCatMgr = nullptr;
+    hr = TF_CreateCategoryMgr(&pCatMgr);
+    TEST_ASSERT(hr == 0 && pCatMgr != nullptr, "TF_CreateCategoryMgr must succeed");
+
+    GUID testGuid = { 0x11223344, 0x5566, 0x7788, { 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00 } };
+    TfGuidAtom atom = 0;
+    hr = pCatMgr->RegisterGUID(testGuid, &atom);
+    TEST_ASSERT(hr == 0 && atom != 0, "RegisterGUID must return valid atom");
+
+    GUID lookupGuid{};
+    hr = pCatMgr->GetGUID(atom, &lookupGuid);
+    TEST_ASSERT(hr == 0 && lookupGuid == testGuid, "GetGUID must retrieve registered GUID from atom");
+    pCatMgr->Release();
+
+    // 8. ITfInputScope & Mobile / Soft-Keyboard Scopes
+    std::vector<InputScope> scopes = { IS_DEFAULT, IS_URL, IS_EMAIL_SMTPADDRESS, IS_NUMERIC, IS_PASSWORD };
+    ITfInputScope* pScope = nullptr;
+    hr = TF_CreateInputScope(scopes, &pScope);
+    TEST_ASSERT(hr == 0 && pScope != nullptr, "TF_CreateInputScope must succeed");
+
+    InputScope* pRetScopes = nullptr;
+    uint32_t scopeCount = 0;
+    hr = pScope->GetInputScopes(&pRetScopes, &scopeCount);
+    TEST_ASSERT(hr == 0 && scopeCount == 5 && pRetScopes != nullptr, "GetInputScopes must return 5 scopes");
+    TEST_ASSERT(pRetScopes[1] == IS_URL && pRetScopes[4] == IS_PASSWORD, "Input scopes must match configured enums");
+    ole32::CoTaskMemFree(pRetScopes);
+    pScope->Release();
+
+    // 9. Input Method Manager (IMM32) Context Lifecycle & Composition
+    win32::HWND hTestWnd = reinterpret_cast<win32::HWND>(0x2001);
+    HIMC hIMC = ImmGetContext(hTestWnd);
+    TEST_ASSERT(hIMC != nullptr, "ImmGetContext must return valid HIMC handle");
+
+    TEST_ASSERT(ImmGetOpenStatus(hIMC) == 1, "Default IME open status must be true");
+    ImmSetOpenStatus(hIMC, 0);
+    TEST_ASSERT(ImmGetOpenStatus(hIMC) == 0, "ImmSetOpenStatus(0) must update status to false");
+    ImmSetOpenStatus(hIMC, 1);
+
+    uint32_t convMode = 0, sentMode = 0;
+    ImmGetConversionStatus(hIMC, &convMode, &sentMode);
+    TEST_ASSERT((convMode & IME_CMODE_NATIVE) != 0, "Conversion status must include IME_CMODE_NATIVE");
+
+    // Composition string update
+    const wchar_t pinyin[] = L"ceshi";
+    int32_t setRes = ImmSetCompositionStringW(hIMC, GCS_COMPSTR, pinyin, sizeof(pinyin) - sizeof(wchar_t), nullptr, 0);
+    TEST_ASSERT(setRes == 1, "ImmSetCompositionStringW must succeed");
+
+    wchar_t readComp[32]{};
+    int32_t compBytes = ImmGetCompositionStringW(hIMC, GCS_COMPSTR, readComp, sizeof(readComp));
+    TEST_ASSERT(compBytes == 5 * sizeof(wchar_t) && wcscmp(readComp, L"ceshi") == 0, "Composition string must be 'ceshi'");
+    TEST_ASSERT(ImmGetCompositionStringW(hIMC, GCS_CURSORPOS, nullptr, 0) == 5, "Cursor position must be at offset 5");
+
+    // Commit result string
+    const wchar_t commitStr[] = L"测试";
+    ImmSetCompositionStringW(hIMC, GCS_RESULTSTR, commitStr, sizeof(commitStr) - sizeof(wchar_t), nullptr, 0);
+    wchar_t readResult[32]{};
+    int32_t resultBytes = ImmGetCompositionStringW(hIMC, GCS_RESULTSTR, readResult, sizeof(readResult));
+    TEST_ASSERT(resultBytes == 2 * sizeof(wchar_t) && wcscmp(readResult, L"测试") == 0, "Result string must match '测试'");
+
+    // Candidate list testing
+    auto* pContextState = CIMCManager::Instance().Lookup(hIMC);
+    TEST_ASSERT(pContextState != nullptr, "CIMCContext must be found in manager");
+    pContextState->candidates = { L"测试", L"侧室", L"策士", L"测视" };
+    pContextState->candidateSelection = 0;
+
+    uint32_t reqSize = ImmGetCandidateListW(hIMC, 0, nullptr, 0);
+    TEST_ASSERT(reqSize > sizeof(CANDIDATELIST), "Candidate list size query must succeed");
+
+    std::vector<uint8_t> candBuf(reqSize, 0);
+    auto* pCandList = reinterpret_cast<CANDIDATELIST*>(candBuf.data());
+    uint32_t fetched = ImmGetCandidateListW(hIMC, 0, pCandList, reqSize);
+    TEST_ASSERT(fetched == reqSize && pCandList->dwCount == 4, "Candidate list must contain 4 candidates");
+
+    const auto* firstCand = reinterpret_cast<const wchar_t*>(candBuf.data() + pCandList->dwOffset[0]);
+    TEST_ASSERT(wcscmp(firstCand, L"测试") == 0, "First candidate must be '测试'");
+
+    ImmReleaseContext(hTestWnd, hIMC);
+
+    // 10. Shell CLI Verification
+    shell::CommandShell shellEngine;
+    std::ostringstream ssTest, ssInfo, ssCompose, ssCand;
+
+    int rc = shellEngine.execute("tsf test", ssTest);
+    TEST_ASSERT(rc == 0, "tsf test shell command must return 0");
+    TEST_ASSERT(ssTest.str().find("Self-test passed cleanly") != std::string::npos, "tsf test shell command must succeed");
+
+    rc = shellEngine.execute("tsf info", ssInfo);
+    TEST_ASSERT(rc == 0, "tsf info shell command must return 0");
+    TEST_ASSERT(ssInfo.str().find("msctf.dll") != std::string::npos, "tsf info shell command must output msctf.dll info");
+
+    rc = shellEngine.execute("tsf compose hanyupinyin", ssCompose);
+    TEST_ASSERT(rc == 0, "tsf compose shell command must return 0");
+    TEST_ASSERT(ssCompose.str().find("hanyupinyin") != std::string::npos, "tsf compose shell command must display composition");
+
+    rc = shellEngine.execute("tsf candidates nihao", ssCand);
+    TEST_ASSERT(rc == 0, "tsf candidates shell command must return 0");
+    TEST_ASSERT(ssCand.str().find("你好") != std::string::npos, "tsf candidates shell command must output candidate");
+
+    // Cleanup
+    pContext->Release();
+    pDocMgr->Release();
+    pThreadMgr->Deactivate();
+    pThreadMgr->Release();
+
+    std::cout << "[TEST] Suite 123: Windows Text Services Framework & Modern IME Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite122")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite123")) {
+        RUN_TEST(Test_WindowsTextServices_IME_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite122") {
         RUN_TEST(Test_WindowsDirect2D1_3_Typography_Subsystem);
         return g_FailedTests;
     }
@@ -28640,6 +28906,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsPointerDevice_Subsystem);
     RUN_TEST(Test_WindowsAppModel_Lifecycle_Subsystem);
     RUN_TEST(Test_WindowsDirect2D1_3_Typography_Subsystem);
+    RUN_TEST(Test_WindowsTextServices_IME_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

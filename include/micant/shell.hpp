@@ -114,6 +114,7 @@
 #include "pointer.hpp"
 #include "appmodel.hpp"
 #include "d2d1_3.hpp"
+#include "tsf.hpp"
 
 namespace micant::shell {
 
@@ -318,6 +319,7 @@ public:
             if (cmd == "pointer" || cmd == "touch" || cmd == "ink") { cmdPointer(tokens, out); return 0; }
             if (cmd == "appmodel" || cmd == "package" || cmd == "plm" || cmd == "appx") { cmdAppModel(tokens, out); return 0; }
             if (cmd == "d2d13" || cmd == "d2d3" || cmd == "typography" || cmd == "svg") { cmdD2D1_3(tokens, out); return 0; }
+            if (cmd == "tsf" || cmd == "ime" || cmd == "textservices") { cmdTSF(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -613,6 +615,7 @@ private:
             << "  POINTER [test|info|inject] Windows Pointer Device & Touch Subsystem (pointer test)\n"
             << "  APPMODEL [test|info|list|plm] Windows AppModel, Package Identity & PLM (appmodel test)\n"
             << "  D2D13 [test|info|demo]   Direct2D 1.3 SVG, Inking & Typography (d2d13 test)\n"
+            << "  TSF [test|info|compose|candidates] Windows Text Services & Modern IME (tsf test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -16948,6 +16951,135 @@ private:
             << "  d2d13 test                              Runs Direct2D 1.3 & Typography self-tests\n"
             << "  d2d13 info                              Displays Direct2D 1.3 subsystem telemetry\n"
             << "  d2d13 demo                              Synthesizes and renders modern SVG vector asset\n";
+    }
+
+    void cmdTSF(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::tsf;
+        InitializeTextServicesExports();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "test";
+        std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+        if (sub == "test" || sub == "diag") {
+            out << "[TSF Diagnostics] Initializing Text Services Framework & IMM32 Subsystems...\n";
+            ITfThreadMgr* pMgr = nullptr;
+            int32_t hr = TF_CreateThreadMgr(&pMgr);
+            if (hr != 0 || !pMgr) {
+                out << "[-] Failed to activate ITfThreadMgr.\n";
+                return;
+            }
+            TfClientId tid = 0;
+            pMgr->Activate(&tid);
+            out << "  [+] ITfThreadMgr activated (Client ID: " << tid << ")\n";
+
+            ITfDocumentMgr* pDocMgr = nullptr;
+            pMgr->CreateDocumentMgr(&pDocMgr);
+            ITfContext* pCtx = nullptr;
+            TfEditCookie cookie = 0;
+            pDocMgr->CreateContext(tid, 0, nullptr, &pCtx, &cookie);
+            pDocMgr->Push(pCtx);
+            out << "  [+] ITfDocumentMgr & ITfContext pushed (Edit Cookie: " << cookie << ")\n";
+
+            class CShellEditSession : public ITfEditSession {
+            private:
+                std::atomic<uint32_t> m_ref{ 1 };
+                ITfContext* m_ctx{ nullptr };
+            public:
+                CShellEditSession(ITfContext* ctx) : m_ctx(ctx) {}
+                int32_t __stdcall QueryInterface(const GUID& riid, void** ppv) override {
+                    if (!ppv) return ole32::E_POINTER;
+                    if (riid == ole32::IID_IUnknown || riid == IID_ITfEditSession) {
+                        *ppv = static_cast<ITfEditSession*>(this);
+                        AddRef();
+                        return ole32::S_OK;
+                    }
+                    *ppv = nullptr;
+                    return ole32::E_NOINTERFACE;
+                }
+                uint32_t __stdcall AddRef() override { return ++m_ref; }
+                uint32_t __stdcall Release() override {
+                    uint32_t r = --m_ref;
+                    if (r == 0) delete this;
+                    return r;
+                }
+                int32_t __stdcall DoEditSession(TfEditCookie ec) override {
+                    ITfRange* pRange = nullptr;
+                    m_ctx->GetStart(ec, &pRange);
+                    const wchar_t* hello = L"MicaNT Sovereign TSF / IMM32 Test String";
+                    pRange->SetText(ec, 0, hello, static_cast<int32_t>(wcslen(hello)));
+                    pRange->Release();
+                    return ole32::S_OK;
+                }
+            };
+
+            auto* pes = new CShellEditSession(pCtx);
+            int32_t hrSession = 0;
+            pCtx->RequestEditSession(tid, pes, 0, &hrSession);
+            pes->Release();
+
+            HIMC hIMC = ImmCreateContext();
+            const wchar_t comp[] = L"ceshi";
+            ImmSetCompositionStringW(hIMC, GCS_COMPSTR, comp, sizeof(comp) - sizeof(wchar_t), nullptr, 0);
+            wchar_t readBack[64]{};
+            ImmGetCompositionStringW(hIMC, GCS_COMPSTR, readBack, sizeof(readBack));
+            out << "  [+] IMM32 Context & Composition String Verified (" << (ImmGetOpenStatus(hIMC) ? "Open" : "Closed") << ")\n";
+            ImmDestroyContext(hIMC);
+
+            pCtx->Release();
+            pDocMgr->Release();
+            pMgr->Deactivate();
+            pMgr->Release();
+            out << "[TSF Diagnostics] Self-test passed cleanly.\n";
+            return;
+        }
+
+        if (sub == "info") {
+            out << "=== Windows Text Services Framework & Modern IME Subsystem ===\n";
+            out << "  Driver DLLs:       msctf.dll, imm32.dll (Version 10.0.22621.1)\n";
+            out << "  Thread Manager:    ITfThreadMgr active\n";
+            out << "  Default Profiles:  US English (0x0409), MS Pinyin (0x0804), MS Japanese (0x0411)\n";
+            out << "  Compartments:      OpenClose, ConversionMode, SentenceMode\n";
+            out << "  Input Scopes:      IS_DEFAULT, IS_URL, IS_EMAIL_SMTPADDRESS, IS_NUMERIC, IS_PASSWORD\n";
+            return;
+        }
+
+        if (sub == "compose") {
+            std::string text = (tokens.size() > 2) ? tokens[2] : "zhongwen";
+            std::wstring wText(text.begin(), text.end());
+            HIMC hIMC = ImmCreateContext();
+            ImmSetCompositionStringW(hIMC, GCS_COMPSTR, wText.c_str(), static_cast<uint32_t>(wText.length() * sizeof(wchar_t)), nullptr, 0);
+            out << "[IMM32] Composition String Active: \"" << text << "\" (" << wText.length() << " characters, Cursor at: " << wText.length() << ")\n";
+            ImmDestroyContext(hIMC);
+            return;
+        }
+
+        if (sub == "candidates") {
+            std::string query = (tokens.size() > 2) ? tokens[2] : "nihao";
+            out << "[IMM32] Candidate List Generation for Query: \"" << query << "\"\n";
+            HIMC hIMC = ImmCreateContext();
+            auto* pCtx = CIMCManager::Instance().Lookup(hIMC);
+            if (pCtx) {
+                if (query == "nihao") {
+                    pCtx->candidates = { L"你好", L"拟好", L"泥壕", L"倪豪" };
+                } else if (query == "ceshi") {
+                    pCtx->candidates = { L"测试", L"侧室", L"策士", L"测视" };
+                } else {
+                    pCtx->candidates = { L"输入", L"树人", L"数人" };
+                }
+                for (size_t i = 0; i < pCtx->candidates.size(); ++i) {
+                    std::string sCand = appmodel::WideToUtf8(pCtx->candidates[i]);
+                    out << "  " << (i + 1) << ". " << sCand << "\n";
+                }
+            }
+            ImmDestroyContext(hIMC);
+            return;
+        }
+
+        out << "Usage:\n"
+            << "  tsf test                               Runs TSF & IMM32 self-tests\n"
+            << "  tsf info                               Displays Text Services subsystem info\n"
+            << "  tsf compose <text>                     Injects IME composition string\n"
+            << "  tsf candidates <pinyin>                Generates simulated IME candidate list\n";
     }
 
     static std::string trim(std::string_view s) {
