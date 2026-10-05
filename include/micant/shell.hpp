@@ -127,6 +127,7 @@
 #include "wintrust.hpp"
 #include "ci.hpp"
 #include "feclient.hpp"
+#include "wscapi.hpp"
 
 namespace micant::shell {
 
@@ -344,6 +345,7 @@ public:
             if (cmd == "signtool" || cmd == "wintrust" || cmd == "sign") { cmdSignTool(tokens, out); return 0; }
             if (cmd == "wdac" || cmd == "ci") { cmdWdac(tokens, out); return 0; }
             if (cmd == "cipher" || cmd == "efs") { cmdCipher(tokens, out); return 0; }
+            if (cmd == "wsc" || cmd == "security" || cmd == "securitycenter") { cmdWsc(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -652,6 +654,7 @@ private:
             << "  SIGNTOOL [verify|sign|catdb|test] Windows Authenticode & Code Integrity Tool (signtool test)\n"
             << "  WDAC [status|mode|rules|logs|test] Windows Defender Application Control & CI (wdac test)\n"
             << "  CIPHER [/e|/d|/c|/k|/w|status|test] Windows Encrypting File System (EFS) Tool (cipher test)\n"
+            << "  WSC [status|health|products|register|unregister|test] Windows Security Center & SentinelCenter (wsc test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20315,6 +20318,253 @@ private:
             << "  cipher /r:<cert_name>               Creates a new Data Recovery Agent (DRA) certificate and key\n"
             << "  cipher /w:<dir>                     Performs DoD 5220.22-M 3-pass disk space sanitization\n"
             << "  cipher test                         Executes Sovereign EFS & feclient.dll diagnostic test suite\n";
+    }
+
+    void cmdWsc(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::wsc;
+        InitializeWscSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help")) {
+            out << "Windows Security Center (WSC) & SentinelCenter Subsystem CLI\n"
+                << "Note: Windows Security Center, WSC, and Windows Defender are trademarks of Microsoft Corp. Referenced under nominative fair use.\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  wsc status                          Displays aggregated system security posture and provider states\n"
+                << "  wsc health [provider]               Queries health state for specific provider (firewall|antivirus|uac|cbs|all)\n"
+                << "  wsc products                        Lists all registered endpoint security products in SentinelCenter\n"
+                << "  wsc register <name> <type> [path]   Registers a third-party or sovereign security provider\n"
+                << "  wsc unregister <guid>               Unregisters a security provider by GUID\n"
+                << "  wsc test                            Executes SentinelCenter diagnostic test suite\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
+            out << "[TEST] Running Windows Security Center (SentinelCenter) Diagnostics...\n";
+
+            // 1. Query individual provider health
+            WSC_SECURITY_PROVIDER_HEALTH hFw = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+            HRESULT hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_FIREWALL, &hFw);
+            if (FAILED(hr) || hFw != WSC_SECURITY_PROVIDER_HEALTH_GOOD) {
+                out << "[-] Firewall health query failed: hr=0x" << std::hex << hr << " health=" << hFw << std::dec << "\n";
+                return;
+            }
+            out << "  [+] Firewall health verified: GOOD (WFP Active)\n";
+
+            WSC_SECURITY_PROVIDER_HEALTH hAv = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+            hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ANTIVIRUS, &hAv);
+            if (FAILED(hr) || hAv != WSC_SECURITY_PROVIDER_HEALTH_GOOD) {
+                out << "[-] Antivirus health query failed: " << hr << "\n";
+                return;
+            }
+            out << "  [+] Antivirus health verified: GOOD (AegisDefender Active)\n";
+
+            // 2. Query combined all-provider health
+            WSC_SECURITY_PROVIDER_HEALTH hAll = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+            hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ALL, &hAll);
+            if (FAILED(hr) || hAll != WSC_SECURITY_PROVIDER_HEALTH_GOOD) {
+                out << "[-] Overall health query failed: " << hr << "\n";
+                return;
+            }
+            out << "  [+] Overall system security health verified: GOOD\n";
+
+            // 3. Query WscQueryAntiVirusStatus
+            DWORD dwAvStatus = 0;
+            hr = WscQueryAntiVirusStatus(&dwAvStatus);
+            if (FAILED(hr) || (dwAvStatus & WSC_AV_STATUS_ON) == 0) {
+                out << "[-] WscQueryAntiVirusStatus failed: " << hr << "\n";
+                return;
+            }
+            out << "  [+] WscQueryAntiVirusStatus verified: 0x" << std::hex << dwAvStatus << std::dec << " (ON, UpToDate, RTP)\n";
+
+            // 4. Test change notification callback
+            static std::atomic<int> s_cbCount{0};
+            auto testCallback = [](void* ctx) -> uint32_t {
+                auto* pCount = reinterpret_cast<std::atomic<int>*>(ctx);
+                if (pCount) (*pCount)++;
+                return 0;
+            };
+
+            HANDLE hReg = nullptr;
+            hr = WscRegisterForChanges(nullptr, &hReg, testCallback, &s_cbCount);
+            if (FAILED(hr) || !hReg) {
+                out << "[-] WscRegisterForChanges failed: " << hr << "\n";
+                return;
+            }
+            out << "  [+] Registered change notification listener.\n";
+
+            // Register temporary product to trigger notification
+            GUID testGuid{};
+            hr = WscRegisterProduct(
+                L"Sentinel Test Security Agent",
+                WSC_SECURITY_PROVIDER_ANTIVIRUS,
+                L"C:\\Program Files\\TestSecurity\\agent.exe",
+                WSC_SECURITY_PRODUCT_STATE_ON,
+                1,
+                0,
+                &testGuid
+            );
+            if (FAILED(hr) || s_cbCount.load() == 0) {
+                out << "[-] Change notification did not fire on product registration.\n";
+                WscUnRegisterChanges(hReg);
+                return;
+            }
+            out << "  [+] Product registration triggered notification callback successfully (Count: " << s_cbCount.load() << ").\n";
+
+            // Update product status to Snoozed
+            int beforeCount = s_cbCount.load();
+            WscUpdateProductStatus(&testGuid, WSC_SECURITY_PRODUCT_STATE_SNOOZED, 1);
+            if (s_cbCount.load() <= beforeCount) {
+                out << "[-] Change notification did not fire on product status update.\n";
+                WscUnregisterProduct(&testGuid);
+                WscUnRegisterChanges(hReg);
+                return;
+            }
+            out << "  [+] Status update triggered notification callback cleanly.\n";
+
+            // Unregister product
+            WscUnregisterProduct(&testGuid);
+            WscUnRegisterChanges(hReg);
+            out << "  [+] Product unregistered and change listener detached successfully.\n";
+
+            // 5. Test COM IWSCProductList interface
+            IWSCProductList* pList = nullptr;
+            hr = WscCreateProductList(WSC_SECURITY_PROVIDER_ALL, &pList);
+            if (FAILED(hr) || !pList) {
+                out << "[-] WscCreateProductList failed: " << hr << "\n";
+                return;
+            }
+            LONG count = 0;
+            pList->get_Count(&count);
+            if (count < 4) {
+                out << "[-] IWSCProductList count unexpected: " << count << "\n";
+                pList->Release();
+                return;
+            }
+            IWscProduct* pFirst = nullptr;
+            hr = pList->get_Item(0, &pFirst);
+            if (FAILED(hr) || !pFirst) {
+                out << "[-] IWSCProductList get_Item failed.\n";
+                pList->Release();
+                return;
+            }
+            BSTR bstrName = nullptr;
+            pFirst->get_PackageName(&bstrName);
+            if (bstrName) {
+                std::wstring wsName(bstrName);
+                std::string sName(wsName.begin(), wsName.end());
+                out << "  [+] COM IWSCProductList verified: First product is '" << sName << "'.\n";
+                ole32::SysFreeString(bstrName);
+            }
+            pFirst->Release();
+            pList->Release();
+
+            out << "[SUCCESS] Windows Security Center (SentinelCenter) Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "products") {
+            out << "Registered Endpoint Security Products in SentinelCenter:\n"
+                << "-------------------------------------------------------------------------------\n";
+            auto prods = SovereignWscManager::get().getProducts(WSC_SECURITY_PROVIDER_ALL);
+            for (const auto& p : prods) {
+                std::string sName(p.productName.begin(), p.productName.end());
+                std::string sGuid = GuidToString(p.productGuid);
+                const char* stateStr = (p.state == WSC_SECURITY_PRODUCT_STATE_ON) ? "ON" :
+                                       (p.state == WSC_SECURITY_PRODUCT_STATE_SNOOZED) ? "SNOOZED" :
+                                       (p.state == WSC_SECURITY_PRODUCT_STATE_OFF) ? "OFF" : "EXPIRED";
+                out << "  Name:     " << sName << "\n"
+                    << "  GUID:     " << sGuid << "\n"
+                    << "  State:    " << stateStr << "\n"
+                    << "  Signatures: " << (p.signatureUpToDate ? "Up to date" : "Out of date") << "\n"
+                    << "  Real-Time:  " << (p.realTimeProtectionEnabled ? "Enabled" : "Disabled") << "\n";
+                if (!p.pathToProduct.empty()) {
+                    std::string sPath(p.pathToProduct.begin(), p.pathToProduct.end());
+                    out << "  Path:     " << sPath << "\n";
+                }
+                out << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "health") {
+            DWORD prov = WSC_SECURITY_PROVIDER_ALL;
+            std::string provName = "ALL";
+            if (tokens.size() > 2) {
+                std::string sub = toLower(tokens[2]);
+                if (sub == "firewall" || sub == "fw") { prov = WSC_SECURITY_PROVIDER_FIREWALL; provName = "FIREWALL"; }
+                else if (sub == "antivirus" || sub == "av") { prov = WSC_SECURITY_PROVIDER_ANTIVIRUS; provName = "ANTIVIRUS"; }
+                else if (sub == "uac") { prov = WSC_SECURITY_PROVIDER_USER_ACCOUNT_CONTROL; provName = "USER_ACCOUNT_CONTROL"; }
+                else if (sub == "cbs" || sub == "update") { prov = WSC_SECURITY_PROVIDER_AUTOUPDATE_SETTINGS; provName = "AUTOUPDATE_SETTINGS"; }
+                else if (sub == "service" || sub == "svc") { prov = WSC_SECURITY_PROVIDER_SERVICE; provName = "SERVICE"; }
+            }
+            WSC_SECURITY_PROVIDER_HEALTH h = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+            HRESULT hr = WscGetSecurityProviderHealth(prov, &h);
+            const char* hStr = (h == WSC_SECURITY_PROVIDER_HEALTH_GOOD) ? "GOOD (Protected)" :
+                               (h == WSC_SECURITY_PROVIDER_HEALTH_NOTMONITORED) ? "NOT MONITORED" :
+                               (h == WSC_SECURITY_PROVIDER_HEALTH_POOR) ? "POOR (Action Required)" :
+                               "SNOOZED (Temporarily Disabled)";
+            out << "Security Provider Health Query [" << provName << "]:\n"
+                << "  HRESULT:  0x" << std::hex << hr << std::dec << "\n"
+                << "  Health:   " << hStr << " (Code: " << h << ")\n";
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "unregister") {
+            std::string guidStr = tokens[2];
+            auto prods = SovereignWscManager::get().getProducts(WSC_SECURITY_PROVIDER_ALL);
+            bool found = false;
+            for (const auto& p : prods) {
+                if (GuidToString(p.productGuid) == guidStr) {
+                    WscUnregisterProduct(&p.productGuid);
+                    out << "Successfully unregistered security provider: " << guidStr << "\n";
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                out << "Error: Security provider GUID not found: " << guidStr << "\n";
+            }
+            return;
+        }
+
+        // Default: wsc status
+        WSC_SECURITY_PROVIDER_HEALTH hOverall = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+        WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ALL, &hOverall);
+
+        WSC_SECURITY_PROVIDER_HEALTH hFw = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+        WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_FIREWALL, &hFw);
+
+        WSC_SECURITY_PROVIDER_HEALTH hAv = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+        WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ANTIVIRUS, &hAv);
+
+        WSC_SECURITY_PROVIDER_HEALTH hUac = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+        WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_USER_ACCOUNT_CONTROL, &hUac);
+
+        WSC_SECURITY_PROVIDER_HEALTH hUp = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+        WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_AUTOUPDATE_SETTINGS, &hUp);
+
+        auto healthToString = [](WSC_SECURITY_PROVIDER_HEALTH h) {
+            switch (h) {
+                case WSC_SECURITY_PROVIDER_HEALTH_GOOD: return "GOOD";
+                case WSC_SECURITY_PROVIDER_HEALTH_NOTMONITORED: return "NOT MONITORED";
+                case WSC_SECURITY_PROVIDER_HEALTH_SNOOZE: return "SNOOZED";
+                case WSC_SECURITY_PROVIDER_HEALTH_POOR: default: return "POOR";
+            }
+        };
+
+        out << "MicaNT Windows Security Center (SentinelCenter) Status:\n"
+            << "  Aggregated System Posture:    " << healthToString(hOverall) << "\n"
+            << "  Virus & Threat Protection:    " << healthToString(hAv) << " (AegisDefender Engine Active)\n"
+            << "  Firewall & Network Protection: " << healthToString(hFw) << " (WFP Public Profile Enforcing)\n"
+            << "  User Account Control (UAC):   " << healthToString(hUac) << " (LUA Active)\n"
+            << "  Servicing & System Updates:   " << healthToString(hUp) << " (CBS Sovereign Stack)\n"
+            << "  Core Service Status:          Operational (wscsvc)\n"
+            << "  Total Security Providers:     " << SovereignWscManager::get().getProducts().size() << "\n";
     }
 
     static std::string trim(std::string_view s) {

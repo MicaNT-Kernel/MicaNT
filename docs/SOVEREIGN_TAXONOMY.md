@@ -36,6 +36,7 @@ These names:
 | **Process Sandbox & Isolation** | **AegisSandbox** | `micant::sandbox`<br/>`micant::job` | `ps.hpp`<br/>`section.hpp` | Win32 Job Object containment, process isolation boundaries, CPU rate limits, and memory quota fences. |
 | **Cryptographic Services** | **CipherKSP** | `micant::crypto`<br/>`micant::ksp` | `se.hpp`<br/>`sam.hpp` | Clean-room Cryptography Next Generation (CNG / BCrypt), PBKDF2 key derivation, SHA-256, and AES symmetric encryption. |
 | **File-Level Encryption (EFS)** | **EmeraldCrypt** | `micant::efs` | `feclient.hpp` | Clean-room Encrypting File System (EFS) client, per-file AES-256 symmetric encryption, NTFS alternate utility stream ($EFS), and multi-user DDF/DRF key management. |
+| **Security Center & Health Aggregator** | **SentinelCenter** | `micant::wsc` | `wscapi.hpp` | Sovereign Security Center providing telemetry-free health aggregation across Firewall (WFP), Antivirus (AegisDefender), Volume Encryption (FVE), User Account Control (UAC), and Servicing. |
 
 ---
 
@@ -177,6 +178,16 @@ These names:
   - Data Recovery Field (DRF) supporting corporate Data Recovery Agents (DRA).
   - Zero-knowledge raw encrypted streaming (`OpenEncryptedFileRawW`, `ReadEncryptedFileRaw`, `WriteEncryptedFileRaw`) for enterprise backup agents.
   - DoD 5220.22-M NISPOM 3-pass disk space sanitization (`cipher /w`).
+
+### 3.20 SentinelCenter (Windows Security Center & Health Aggregation Subsystem)
+- **Role:** Central telemetry-free health interrogation, security provider registration, asynchronous change notification dispatcher, and COM integration (`IWscProduct`, `IWSCProductList`).
+- **Capabilities:**
+  - Standard Win32 C ABI exports (`wscapi.dll`): `WscGetSecurityProviderHealth`, `WscRegisterForChanges`, `WscUnRegisterChanges`, `WscQueryAntiVirusStatus`, `WscRegisterProduct`, `WscUnregisterProduct`, `WscUpdateProductStatus`, `WscGetAntiVirusProducts`, `WscFreeMemory`.
+  - Health aggregation with worst-case priority resolution (`POOR` > `SNOOZE` > `NOTMONITORED` > `GOOD`).
+  - Real-time provider integration with WFP firewall, AegisDefender engine, UAC, CBS servicing stack, and `wscsvc`.
+  - Observer pattern with thread-safe subscription and callback dispatch.
+  - COM interfaces: `IWscProduct`, `IWscProduct2`, `IWscProduct3`, `IWSCProductList` with standard reference counting.
+  - CLI: `wsc` (`wsc status`, `wsc health [provider]`, `wsc products`, `wsc test`).
 
 ---
 

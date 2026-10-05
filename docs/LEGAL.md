@@ -64,6 +64,7 @@ MicaNT deliberately uses standard architectural, engineering, and RFC designatio
 | Volume Snapshots | **Volume Shadow Copy (VSS)** (`vssapi.dll`) | Volume Shadow Copy Service (`vssadmin`) |
 | Certificate Store | **Crypt32 Subsystem** (`crypt32.dll`) | Microsoft Certificate Store (`certmgr`) |
 | File-Level Encryption | **File Encryption Client / EFS** (`feclient.dll`) | Encrypting File System (`cipher`) |
+| Endpoint Security Center | **Windows Security Center (WSC)** (`wscapi.dll`) | Windows Security / Action Center (`wsc`) |
 
 All CLI commands clearly identify themselves as running in compatibility mode with prominent copyright disclaimers.
 

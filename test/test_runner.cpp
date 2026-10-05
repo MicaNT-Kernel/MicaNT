@@ -141,6 +141,7 @@
 #include "micant/fveapi.hpp"
 #include "micant/fwpuclnt.hpp"
 #include "micant/feclient.hpp"
+#include "micant/wscapi.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -31562,8 +31563,258 @@ void Test_WindowsEncryptingFileSystem_EFS_Subsystem() {
     std::cout << "[TEST] Suite 135: Windows Encrypting File System (EFS) & feclient.dll Subsystem PASSED.\n";
 }
 
+void Test_WindowsSecurityCenter_WSC_Subsystem() {
+    std::cout << "\n[TEST] Starting Suite 136: Windows Security Center (SentinelCenter) & wscapi.dll Subsystem...\n";
+
+    using namespace micant::wsc;
+
+    // Reset to pristine state
+    SovereignWscManager::get().resetToDefaults();
+
+    // 1. Dynamic Loader & Version Database Export Registration
+    InitializeWscSubsystemExports();
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscGetSecurityProviderHealth") != nullptr, "WscGetSecurityProviderHealth must be exported");
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscRegisterForChanges") != nullptr, "WscRegisterForChanges must be exported");
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscUnRegisterChanges") != nullptr, "WscUnRegisterChanges must be exported");
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscQueryAntiVirusStatus") != nullptr, "WscQueryAntiVirusStatus must be exported");
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscRegisterProduct") != nullptr, "WscRegisterProduct must be exported");
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscUnregisterProduct") != nullptr, "WscUnregisterProduct must be exported");
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscUpdateProductStatus") != nullptr, "WscUpdateProductStatus must be exported");
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscGetAntiVirusProducts") != nullptr, "WscGetAntiVirusProducts must be exported");
+    TEST_ASSERT(ldr.getExport("wscapi.dll", "WscFreeMemory") != nullptr, "WscFreeMemory must be exported");
+
+    const auto* modInfo = version::VersionDatabase::Instance().FindModule("wscapi.dll");
+    TEST_ASSERT(modInfo != nullptr, "wscapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modInfo->stringTable.find("FileVersion") != modInfo->stringTable.end() &&
+                modInfo->stringTable.at("FileVersion") == "10.0.26100.1", "wscapi.dll version must be 10.0.26100.1");
+
+    // 2. Individual Provider Health Queries (WscGetSecurityProviderHealth)
+    WSC_SECURITY_PROVIDER_HEALTH hFw = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+    HRESULT hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_FIREWALL, &hFw);
+    TEST_ASSERT(SUCCEEDED(hr), "WscGetSecurityProviderHealth(FIREWALL) must succeed");
+    TEST_ASSERT(hFw == WSC_SECURITY_PROVIDER_HEALTH_GOOD, "Firewall health must be GOOD");
+
+    WSC_SECURITY_PROVIDER_HEALTH hAv = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ANTIVIRUS, &hAv);
+    TEST_ASSERT(SUCCEEDED(hr), "WscGetSecurityProviderHealth(ANTIVIRUS) must succeed");
+    TEST_ASSERT(hAv == WSC_SECURITY_PROVIDER_HEALTH_GOOD, "Antivirus health must be GOOD");
+
+    WSC_SECURITY_PROVIDER_HEALTH hUac = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_USER_ACCOUNT_CONTROL, &hUac);
+    TEST_ASSERT(SUCCEEDED(hr), "WscGetSecurityProviderHealth(UAC) must succeed");
+    TEST_ASSERT(hUac == WSC_SECURITY_PROVIDER_HEALTH_GOOD, "UAC health must be GOOD");
+
+    WSC_SECURITY_PROVIDER_HEALTH hCbs = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_AUTOUPDATE_SETTINGS, &hCbs);
+    TEST_ASSERT(SUCCEEDED(hr), "WscGetSecurityProviderHealth(AUTOUPDATE) must succeed");
+    TEST_ASSERT(hCbs == WSC_SECURITY_PROVIDER_HEALTH_GOOD, "AutoUpdate health must be GOOD");
+
+    WSC_SECURITY_PROVIDER_HEALTH hSvc = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_SERVICE, &hSvc);
+    TEST_ASSERT(SUCCEEDED(hr), "WscGetSecurityProviderHealth(SERVICE) must succeed");
+    TEST_ASSERT(hSvc == WSC_SECURITY_PROVIDER_HEALTH_GOOD, "Service health must be GOOD");
+
+    // 3. Error Validation (Null pointers & Invalid bitmasks)
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_FIREWALL, nullptr);
+    TEST_ASSERT(hr == E_POINTER, "Null pointer must return E_POINTER");
+
+    hr = WscGetSecurityProviderHealth(0, &hFw);
+    TEST_ASSERT(hr == E_INVALIDARG, "Zero provider mask must return E_INVALIDARG");
+
+    hr = WscGetSecurityProviderHealth(0x80000000, &hFw);
+    TEST_ASSERT(hr == E_INVALIDARG, "Invalid provider mask bit must return E_INVALIDARG");
+
+    // 4. Combined Multi-Provider Health Aggregation & Worst-Case Resolution
+    WSC_SECURITY_PROVIDER_HEALTH hAll = WSC_SECURITY_PROVIDER_HEALTH_POOR;
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ALL, &hAll);
+    TEST_ASSERT(SUCCEEDED(hr), "WscGetSecurityProviderHealth(ALL) must succeed");
+    TEST_ASSERT(hAll == WSC_SECURITY_PROVIDER_HEALTH_GOOD, "Overall system health must be GOOD");
+
+    // Simulate Antivirus Snoozed: Overall health must transition to SNOOZE
+    SovereignWscManager::get().setProviderOverride(WSC_SECURITY_PROVIDER_ANTIVIRUS, WSC_SECURITY_PROVIDER_HEALTH_SNOOZE);
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_FIREWALL | WSC_SECURITY_PROVIDER_ANTIVIRUS, &hAll);
+    TEST_ASSERT(SUCCEEDED(hr) && hAll == WSC_SECURITY_PROVIDER_HEALTH_SNOOZE, "Combined health with snoozed AV must be SNOOZE");
+
+    // Simulate Firewall Disabled (POOR): Overall health must transition to POOR (precedence over SNOOZE)
+    SovereignWscManager::get().setProviderOverride(WSC_SECURITY_PROVIDER_FIREWALL, WSC_SECURITY_PROVIDER_HEALTH_POOR);
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ALL, &hAll);
+    TEST_ASSERT(SUCCEEDED(hr) && hAll == WSC_SECURITY_PROVIDER_HEALTH_POOR, "POOR must take precedence over SNOOZE and GOOD");
+
+    // Clear simulation overrides
+    SovereignWscManager::get().clearOverrides();
+    hr = WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ALL, &hAll);
+    TEST_ASSERT(SUCCEEDED(hr) && hAll == WSC_SECURITY_PROVIDER_HEALTH_GOOD, "System health must restore to GOOD after clearing overrides");
+
+    // 5. Antivirus Status Bitmask (WscQueryAntiVirusStatus)
+    DWORD dwAvStatus = 0;
+    hr = WscQueryAntiVirusStatus(&dwAvStatus);
+    TEST_ASSERT(SUCCEEDED(hr), "WscQueryAntiVirusStatus must succeed");
+    TEST_ASSERT((dwAvStatus & WSC_AV_STATUS_ON) != 0, "Product state must be ON");
+    TEST_ASSERT((dwAvStatus & WSC_AV_STATUS_SIGNATURE_UPTODATE) != 0, "Signatures must be up to date");
+    TEST_ASSERT((dwAvStatus & WSC_AV_STATUS_RTP_ENABLED) != 0, "Real-time protection must be active");
+    TEST_ASSERT((dwAvStatus & WSC_AV_STATUS_PROVIDER_ANTIVIRUS) != 0, "Provider type must be Antivirus");
+
+    // 6. Security Product Registration & Lifecycle (WscRegisterProduct / Update / Unregister)
+    GUID testProductGuid{};
+    hr = WscRegisterProduct(
+        L"Sovereign Falcon Endpoint Detection",
+        WSC_SECURITY_PROVIDER_ANTIVIRUS,
+        L"C:\\Program Files\\Sovereign\\Falcon.exe",
+        WSC_SECURITY_PRODUCT_STATE_ON,
+        1,
+        0,
+        &testProductGuid
+    );
+    TEST_ASSERT(SUCCEEDED(hr), "WscRegisterProduct must return S_OK");
+    TEST_ASSERT(testProductGuid.Data1 != 0, "Product GUID must be valid");
+
+    auto prodOpt = SovereignWscManager::get().getProductByGuid(testProductGuid);
+    TEST_ASSERT(prodOpt.has_value(), "Registered product must be discoverable in manager");
+    TEST_ASSERT(prodOpt->productName == L"Sovereign Falcon Endpoint Detection", "Product name must match");
+    TEST_ASSERT(prodOpt->state == WSC_SECURITY_PRODUCT_STATE_ON, "Initial product state must be ON");
+
+    // Update Product Status
+    hr = WscUpdateProductStatus(&testProductGuid, WSC_SECURITY_PRODUCT_STATE_SNOOZED, 0);
+    TEST_ASSERT(SUCCEEDED(hr), "WscUpdateProductStatus must return S_OK");
+    prodOpt = SovereignWscManager::get().getProductByGuid(testProductGuid);
+    TEST_ASSERT(prodOpt.has_value() && prodOpt->state == WSC_SECURITY_PRODUCT_STATE_SNOOZED, "Product state must update to SNOOZED");
+    TEST_ASSERT(!prodOpt->signatureUpToDate, "Signatures must update to out of date");
+
+    // Query Products Array (WscGetAntiVirusProducts & WscFreeMemory)
+    DWORD prodCount = 0;
+    WscProductEntry* pProdArray = nullptr;
+    hr = WscGetAntiVirusProducts(&prodCount, &pProdArray);
+    TEST_ASSERT(SUCCEEDED(hr), "WscGetAntiVirusProducts must succeed");
+    TEST_ASSERT(prodCount >= 2, "Must contain at least 2 registered antivirus products");
+    TEST_ASSERT(pProdArray != nullptr, "Product array pointer must not be null");
+    WscFreeMemory(pProdArray);
+
+    // Unregister Product
+    hr = WscUnregisterProduct(&testProductGuid);
+    TEST_ASSERT(SUCCEEDED(hr), "WscUnregisterProduct must succeed");
+    prodOpt = SovereignWscManager::get().getProductByGuid(testProductGuid);
+    TEST_ASSERT(!prodOpt.has_value(), "Unregistered product must no longer exist");
+
+    // Unregister non-existent product
+    GUID dummyGuid{ 0xDEADBEEF, 0x0000, 0x0000, {0} };
+    hr = WscUnregisterProduct(&dummyGuid);
+    TEST_ASSERT(FAILED(hr), "Unregistering non-existent GUID must fail");
+
+    // 7. Change Notification Subscriptions (WscRegisterForChanges / WscUnRegisterChanges)
+    static std::atomic<int> s_notifyCount{ 0 };
+    auto notifyCb = [](void* ctx) -> uint32_t {
+        auto* p = reinterpret_cast<std::atomic<int>*>(ctx);
+        if (p) (*p)++;
+        return 0;
+    };
+
+    // Argument validation
+    HANDLE hListener = nullptr;
+    hr = WscRegisterForChanges(reinterpret_cast<void*>(0x1234), &hListener, notifyCb, &s_notifyCount);
+    TEST_ASSERT(hr == E_INVALIDARG, "Non-null Reserved argument must fail with E_INVALIDARG");
+
+    hr = WscRegisterForChanges(nullptr, nullptr, notifyCb, &s_notifyCount);
+    TEST_ASSERT(hr == E_POINTER, "Null registration handle pointer must fail with E_POINTER");
+
+    hr = WscRegisterForChanges(nullptr, &hListener, nullptr, &s_notifyCount);
+    TEST_ASSERT(hr == E_POINTER, "Null callback routine pointer must fail with E_POINTER");
+
+    // Valid registration
+    s_notifyCount.store(0);
+    hr = WscRegisterForChanges(nullptr, &hListener, notifyCb, &s_notifyCount);
+    TEST_ASSERT(SUCCEEDED(hr) && hListener != nullptr, "WscRegisterForChanges must succeed with valid handle");
+
+    // Trigger notification via product registration
+    GUID g2{};
+    WscRegisterProduct(L"Notification Probe Agent", WSC_SECURITY_PROVIDER_ANTIVIRUS, L"", WSC_SECURITY_PRODUCT_STATE_ON, 1, 0, &g2);
+    TEST_ASSERT(s_notifyCount.load() > 0, "Notification callback must be invoked when a product is registered");
+
+    int prevCount = s_notifyCount.load();
+    WscUpdateProductStatus(&g2, WSC_SECURITY_PRODUCT_STATE_OFF, 0);
+    TEST_ASSERT(s_notifyCount.load() > prevCount, "Notification callback must be invoked when product status updates");
+
+    WscUnregisterProduct(&g2);
+
+    // Unregister listener
+    hr = WscUnRegisterChanges(hListener);
+    TEST_ASSERT(SUCCEEDED(hr), "WscUnRegisterChanges must succeed");
+
+    // Unregistering same handle again must fail
+    hr = WscUnRegisterChanges(hListener);
+    TEST_ASSERT(FAILED(hr), "Unregistering inactive handle must fail");
+
+    // 8. COM Interfaces (IWSCProductList & IWscProduct)
+    IWSCProductList* pList = nullptr;
+    hr = WscCreateProductList(WSC_SECURITY_PROVIDER_ALL, &pList);
+    TEST_ASSERT(SUCCEEDED(hr) && pList != nullptr, "WscCreateProductList must return S_OK and valid interface");
+
+    LONG totalItems = 0;
+    pList->get_Count(&totalItems);
+    TEST_ASSERT(totalItems >= 4, "Product list count must be at least 4");
+
+    IWscProduct* pItem = nullptr;
+    hr = pList->get_Item(0, &pItem);
+    TEST_ASSERT(SUCCEEDED(hr) && pItem != nullptr, "get_Item(0) must succeed");
+
+    BSTR bstrPkg = nullptr;
+    pItem->get_PackageName(&bstrPkg);
+    TEST_ASSERT(bstrPkg != nullptr, "get_PackageName must return valid BSTR");
+    ole32::SysFreeString(bstrPkg);
+
+    WSC_SECURITY_PRODUCT_STATE stState = WSC_SECURITY_PRODUCT_STATE_OFF;
+    pItem->get_ProductState(&stState);
+    TEST_ASSERT(stState == WSC_SECURITY_PRODUCT_STATE_ON, "Default product state must be ON");
+
+    WSC_SECURITY_PRODUCT_SUBSTATUS stSub = WSC_SECURITY_PRODUCT_SUBSTATUS_NOT_SET;
+    pItem->get_SignatureStatus(&stSub);
+    TEST_ASSERT(stSub == WSC_SECURITY_PRODUCT_SUBSTATUS_NO_ACTION, "Signature status must be NO_ACTION");
+
+    pItem->Release();
+    pList->Release();
+
+    // 9. Interactive Shell Integration (wsc CLI commands)
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("wsc status", oss);
+    TEST_ASSERT(shellRet == 0, "wsc status must return 0");
+    TEST_ASSERT(oss.str().find("SentinelCenter") != std::string::npos, "wsc status output must mention SentinelCenter");
+    TEST_ASSERT(oss.str().find("GOOD") != std::string::npos, "wsc status must report GOOD");
+    TEST_ASSERT(oss.str().find("AegisDefender") != std::string::npos, "wsc status must mention AegisDefender");
+    TEST_ASSERT(oss.str().find("WFP") != std::string::npos, "wsc status must mention WFP");
+
+    oss.str("");
+    shellRet = proc.execute("wsc health firewall", oss);
+    TEST_ASSERT(shellRet == 0, "wsc health firewall must return 0");
+    TEST_ASSERT(oss.str().find("GOOD") != std::string::npos, "Firewall health must report GOOD");
+
+    oss.str("");
+    shellRet = proc.execute("wsc health antivirus", oss);
+    TEST_ASSERT(shellRet == 0, "wsc health antivirus must return 0");
+    TEST_ASSERT(oss.str().find("GOOD") != std::string::npos, "Antivirus health must report GOOD");
+
+    oss.str("");
+    shellRet = proc.execute("wsc products", oss);
+    TEST_ASSERT(shellRet == 0, "wsc products must return 0");
+    TEST_ASSERT(oss.str().find("AegisDefender Antivirus") != std::string::npos, "Must list AegisDefender");
+    TEST_ASSERT(oss.str().find("MicaNT Sovereign Advanced Firewall") != std::string::npos, "Must list Firewall");
+
+    oss.str("");
+    shellRet = proc.execute("wsc test", oss);
+    TEST_ASSERT(shellRet == 0, "wsc test must return 0");
+    TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "wsc test must report SUCCESS");
+
+    std::cout << "[TEST] Suite 136: Windows Security Center (SentinelCenter) & wscapi.dll Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite135")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite136")) {
+        RUN_TEST(Test_WindowsSecurityCenter_WSC_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite135") {
         RUN_TEST(Test_WindowsEncryptingFileSystem_EFS_Subsystem);
         return g_FailedTests;
     }
@@ -31823,6 +32074,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsAuthenticode_WinTrust_Subsystem);
     RUN_TEST(Test_WindowsCodeIntegrity_WDAC_Subsystem);
     RUN_TEST(Test_WindowsEncryptingFileSystem_EFS_Subsystem);
+    RUN_TEST(Test_WindowsSecurityCenter_WSC_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -99,13 +99,15 @@ flowchart LR
 
 ## 4. The 5-Phase Sovereign Security Roadmap
 
-### Phase 1: Windows Security Center Subsystem (`wscapi.dll` / `wscapi.h` - SentinelCenter)
+### Phase 1: Windows Security Center Subsystem (`wscapi.dll` / `wscapi.h` - SentinelCenter) - **COMPLETED (Milestone 136)**
 - **Goal**: Build the central health aggregator for the entire operating system.
-- **Components**:
+- **Implemented Components**:
   - `include/micant/wscapi.hpp` exporting `wscapi.dll`.
-  - APIs: `WscGetSecurityProviderHealth`, `WscRegisterForChanges`, `WscUnRegisterChanges`, `WscQueryAntiVirusStatus`.
-  - Provider Status: Firewall (WFP), Antivirus (AegisDefender), Volume Encryption (FVE), User Account Control (UAC), Servicing (CBS).
-  - CLI: `wsc` / `security` (`wsc status`, `wsc health`, `wsc test`).
+  - Win32 C ABI: `WscGetSecurityProviderHealth`, `WscRegisterForChanges`, `WscUnRegisterChanges`, `WscQueryAntiVirusStatus`, `WscRegisterProduct`, `WscUnregisterProduct`, `WscUpdateProductStatus`, `WscGetAntiVirusProducts`, `WscFreeMemory`.
+  - COM Interfaces: `IWscProduct`, `IWscProduct2`, `IWscProduct3`, `IWSCProductList` with standard reference counting.
+  - Pre-seeded Providers: Firewall (WFP), Antivirus (AegisDefender), Servicing (CBS), User Account Control (UAC), Core Service (`wscsvc`).
+  - CLI: `wsc` (`wsc status`, `wsc health [provider]`, `wsc products`, `wsc test`).
+  - Verification: Unit Test Suite 136 (`Test_WindowsSecurityCenter_WSC_Subsystem`) passing at 100%.
 
 ### Phase 2: Antimalware Scan Interface (AMSI - `amsi.dll` / `amsi.h`)
 - **Goal**: Enable applications, scripts, and command shells to submit code buffers to the antimalware engine before execution.
