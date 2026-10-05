@@ -134,6 +134,7 @@
 #include "micant/d3d11va.hpp"
 #include "micant/d3d12video.hpp"
 #include "micant/mfreadwrite.hpp"
+#include "micant/directstorage.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -26774,8 +26775,270 @@ void Test_WindowsDirectX_Raytracing_Subsystem() {
     std::cout << "[TEST] Suite 114: Windows DirectX 12 Raytracing & Mesh Shader Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 115: Windows DirectStorage API & GPU Decompression Subsystem
+// ============================================================================
+void Test_WindowsDirectStorage_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 115: Windows DirectStorage & High-Performance GPU I/O Subsystem \n";
+    std::cout << "========================================================================\n";
+
+    directstorage::InitializeDirectStorageExports();
+
+    // 1. Dynamic Module Export Verification
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("dstorage.dll", "DStorageGetFactory") != nullptr, "DStorageGetFactory must be exported from dstorage.dll");
+    TEST_ASSERT(ldr.getExport("dstoragecore.dll", "DStorageGetFactory") != nullptr, "DStorageGetFactory must be exported from dstoragecore.dll");
+
+    // 2. Version Database Verification
+    const auto* mod = version::VersionDatabase::Instance().GetModuleInfo("dstorage.dll");
+    TEST_ASSERT(mod != nullptr, "VersionDatabase must contain dstorage.dll");
+    TEST_ASSERT(mod->stringTable.at("FileVersion") == "1.2.2.0", "dstorage.dll FileVersion must be 1.2.2.0");
+
+    const auto* modCore = version::VersionDatabase::Instance().GetModuleInfo("dstoragecore.dll");
+    TEST_ASSERT(modCore != nullptr, "VersionDatabase must contain dstoragecore.dll");
+
+    // 3. Factory Acquisition
+    directstorage::IDStorageFactory* pFactory = nullptr;
+    int32_t hr = directstorage::DStorageGetFactory(directstorage::IID_IDStorageFactory_Const, reinterpret_cast<void**>(&pFactory));
+    TEST_ASSERT(hr == 0 && pFactory != nullptr, "DStorageGetFactory must succeed");
+
+    // 4. Staging Buffer & Debug Configuration
+    pFactory->SetStagingBufferSize(64 * 1024 * 1024);
+    pFactory->SetDebugFlags(directstorage::DSTORAGE_DEBUG_SHOW_ERRORS);
+    auto* pFactImpl = static_cast<directstorage::CStorageFactoryImpl*>(pFactory);
+    TEST_ASSERT(pFactImpl->GetStagingBufferSize() == 64 * 1024 * 1024, "Staging buffer must be 64 MB");
+    TEST_ASSERT(pFactImpl->GetDebugFlags() == directstorage::DSTORAGE_DEBUG_SHOW_ERRORS, "Debug flags must match");
+
+    // 5. Status Array Creation
+    directstorage::IDStorageStatusArray* pStatusArray = nullptr;
+    hr = pFactory->CreateStatusArray(16, "TestSuiteStatusArray", directstorage::IID_IDStorageStatusArray_Const, reinterpret_cast<void**>(&pStatusArray));
+    TEST_ASSERT(hr == 0 && pStatusArray != nullptr, "CreateStatusArray must succeed");
+    TEST_ASSERT(!pStatusArray->IsComplete(0), "Status token 0 must initially be incomplete");
+    TEST_ASSERT(!pStatusArray->IsComplete(1), "Status token 1 must initially be incomplete");
+
+    // 6. Direct3D 12 Device, Resource & Fence Creation
+    prism3d12::ID3D12Device* pDev = nullptr;
+    hr = prism3d12::D3D12CreateDevice(nullptr, prism3d::D3D_FEATURE_LEVEL_12_2, prism3d12::IID_ID3D12Device, reinterpret_cast<void**>(&pDev));
+    TEST_ASSERT(hr == 0 && pDev != nullptr, "D3D12CreateDevice must succeed");
+
+    prism3d12::D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = prism3d12::D3D12_HEAP_TYPE_DEFAULT;
+
+    prism3d12::D3D12_RESOURCE_DESC resDesc{};
+    resDesc.Dimension = prism3d12::D3D12_RESOURCE_DIMENSION_BUFFER;
+    resDesc.Width = 65536; // 64 KB
+    resDesc.Height = 1;
+    resDesc.DepthOrArraySize = 1;
+    resDesc.MipLevels = 1;
+
+    prism3d12::ID3D12Resource* pRes = nullptr;
+    hr = pDev->CreateCommittedResource(&heapProps, prism3d12::D3D12_HEAP_FLAG_NONE, &resDesc, prism3d12::D3D12_RESOURCE_STATE_COMMON, nullptr, prism3d12::IID_ID3D12Resource, reinterpret_cast<void**>(&pRes));
+    TEST_ASSERT(hr == 0 && pRes != nullptr, "CreateCommittedResource must succeed");
+
+    prism3d12::ID3D12Fence* pFence = nullptr;
+    hr = pDev->CreateFence(0, prism3d12::D3D12_FENCE_FLAG_NONE, prism3d12::IID_ID3D12Fence, reinterpret_cast<void**>(&pFence));
+    TEST_ASSERT(hr == 0 && pFence != nullptr, "CreateFence must succeed");
+
+    // 7. Memory-Source DirectStorage Queue Creation
+    directstorage::DSTORAGE_QUEUE_DESC qDesc{};
+    qDesc.SourceType = directstorage::DSTORAGE_REQUEST_SOURCE_MEMORY;
+    qDesc.Capacity = 128;
+    qDesc.Priority = directstorage::DSTORAGE_PRIORITY_NORMAL;
+    qDesc.Name = "MicaNT_MemQueue";
+    qDesc.Device = pDev;
+
+    directstorage::IDStorageQueue* pQueue = nullptr;
+    hr = pFactory->CreateQueue(&qDesc, directstorage::IID_IDStorageQueue_Const, reinterpret_cast<void**>(&pQueue));
+    TEST_ASSERT(hr == 0 && pQueue != nullptr, "CreateQueue must succeed");
+
+    // 8. Direct Memory-to-GPU Buffer Request (Uncompressed)
+    std::vector<uint8_t> uncompressedData(4096);
+    for (size_t i = 0; i < uncompressedData.size(); ++i) {
+        uncompressedData[i] = static_cast<uint8_t>((i * 7 + 13) & 0xFF);
+    }
+
+    directstorage::DSTORAGE_REQUEST req1{};
+    req1.Options.SourceType = directstorage::DSTORAGE_REQUEST_SOURCE_MEMORY;
+    req1.Options.DestinationType = directstorage::DSTORAGE_REQUEST_DESTINATION_BUFFER;
+    req1.Options.Compression = directstorage::DSTORAGE_COMPRESSION_FORMAT_NONE;
+    req1.Source.Memory.Source = uncompressedData.data();
+    req1.Source.Memory.Size = static_cast<uint32_t>(uncompressedData.size());
+    req1.Destination.Buffer.Resource = pRes;
+    req1.Destination.Buffer.Offset = 0;
+    req1.Destination.Buffer.Size = static_cast<uint32_t>(uncompressedData.size());
+    req1.UncompressedSize = static_cast<uint32_t>(uncompressedData.size());
+
+    pQueue->EnqueueRequest(&req1);
+    pQueue->EnqueueStatus(pStatusArray, 0);
+    pQueue->EnqueueSignal(pFence, 100);
+    pQueue->Submit();
+
+    TEST_ASSERT(pStatusArray->IsComplete(0), "StatusArray index 0 must be complete");
+    TEST_ASSERT(pStatusArray->GetHResult(0) == 0, "StatusArray index 0 HRESULT must be S_OK (0)");
+    TEST_ASSERT(pFence->GetCompletedValue() == 100, "Fence value must reach 100");
+
+    void* mapped = nullptr;
+    pRes->Map(0, nullptr, &mapped);
+    TEST_ASSERT(mapped != nullptr, "Resource Map must succeed");
+    TEST_ASSERT(std::memcmp(mapped, uncompressedData.data(), uncompressedData.size()) == 0, "Resource data must match uncompressed data exactly");
+    pRes->Unmap(0, nullptr);
+
+    // 9. GDeflate Compression & Direct-to-GPU Decompression
+    std::vector<uint8_t> originalTexture(8192);
+    for (size_t i = 0; i < originalTexture.size(); ++i) {
+        originalTexture[i] = static_cast<uint8_t>((i / 16) & 0xFF);
+    }
+
+    auto gdefCompressed = directstorage::codec::CompressGDeflate(originalTexture.data(), static_cast<uint32_t>(originalTexture.size()));
+    TEST_ASSERT(!gdefCompressed.empty() && gdefCompressed.size() < originalTexture.size(), "GDeflate compression must reduce asset footprint");
+
+    directstorage::DSTORAGE_REQUEST reqGDef{};
+    reqGDef.Options.SourceType = directstorage::DSTORAGE_REQUEST_SOURCE_MEMORY;
+    reqGDef.Options.DestinationType = directstorage::DSTORAGE_REQUEST_DESTINATION_BUFFER;
+    reqGDef.Options.Compression = directstorage::DSTORAGE_COMPRESSION_FORMAT_GDEFLATE;
+    reqGDef.Source.Memory.Source = gdefCompressed.data();
+    reqGDef.Source.Memory.Size = static_cast<uint32_t>(gdefCompressed.size());
+    reqGDef.Destination.Buffer.Resource = pRes;
+    reqGDef.Destination.Buffer.Offset = 4096;
+    reqGDef.Destination.Buffer.Size = static_cast<uint32_t>(originalTexture.size());
+    reqGDef.UncompressedSize = static_cast<uint32_t>(originalTexture.size());
+
+    pQueue->EnqueueRequest(&reqGDef);
+    pQueue->EnqueueStatus(pStatusArray, 1);
+    pQueue->EnqueueSignal(pFence, 200);
+    pQueue->Submit();
+
+    TEST_ASSERT(pStatusArray->IsComplete(1), "StatusArray index 1 must be complete");
+    TEST_ASSERT(pFence->GetCompletedValue() == 200, "Fence value must reach 200");
+
+    pRes->Map(0, nullptr, &mapped);
+    TEST_ASSERT(std::memcmp(static_cast<uint8_t*>(mapped) + 4096, originalTexture.data(), originalTexture.size()) == 0, "Decompressed GDeflate data in VRAM must match source exactly");
+    pRes->Unmap(0, nullptr);
+
+    // 10. Zlib Compression & Decompression Pipeline
+    auto zlibCompressed = directstorage::codec::CompressZlib(originalTexture.data(), static_cast<uint32_t>(originalTexture.size()));
+    TEST_ASSERT(!zlibCompressed.empty(), "Zlib compression must succeed");
+
+    std::vector<uint8_t> zlibDecompressed(originalTexture.size(), 0);
+    directstorage::DSTORAGE_REQUEST reqZlib{};
+    reqZlib.Options.SourceType = directstorage::DSTORAGE_REQUEST_SOURCE_MEMORY;
+    reqZlib.Options.DestinationType = directstorage::DSTORAGE_REQUEST_DESTINATION_MEMORY;
+    reqZlib.Options.Compression = directstorage::DSTORAGE_COMPRESSION_FORMAT_ZLIB;
+    reqZlib.Source.Memory.Source = zlibCompressed.data();
+    reqZlib.Source.Memory.Size = static_cast<uint32_t>(zlibCompressed.size());
+    reqZlib.Destination.Memory.Buffer = zlibDecompressed.data();
+    reqZlib.Destination.Memory.Size = static_cast<uint32_t>(zlibDecompressed.size());
+    reqZlib.UncompressedSize = static_cast<uint32_t>(originalTexture.size());
+
+    pQueue->EnqueueRequest(&reqZlib);
+    pQueue->EnqueueStatus(pStatusArray, 2);
+    pQueue->EnqueueSignal(pFence, 300);
+    pQueue->Submit();
+
+    TEST_ASSERT(pStatusArray->IsComplete(2), "StatusArray index 2 must be complete");
+    TEST_ASSERT(pFence->GetCompletedValue() == 300, "Fence value must reach 300");
+    TEST_ASSERT(std::memcmp(zlibDecompressed.data(), originalTexture.data(), originalTexture.size()) == 0, "Decompressed Zlib data must match source exactly");
+
+    // 11. Virtual File System & File Queue
+    std::vector<uint8_t> fileAsset(16384, 0x42);
+    pFactImpl->RegisterVirtualFile(L"C:\\game\\mesh_geometry.bin", fileAsset);
+
+    directstorage::IDStorageFile* pStorageFile = nullptr;
+    hr = pFactory->OpenFile(L"C:\\game\\mesh_geometry.bin", directstorage::IID_IDStorageFile_Const, reinterpret_cast<void**>(&pStorageFile));
+    TEST_ASSERT(hr == 0 && pStorageFile != nullptr, "OpenFile must succeed");
+    TEST_ASSERT(pStorageFile->GetFileSize() == 16384, "Virtual file size must match 16 KB");
+
+    directstorage::DSTORAGE_QUEUE_DESC fileQDesc{};
+    fileQDesc.SourceType = directstorage::DSTORAGE_REQUEST_SOURCE_FILE;
+    fileQDesc.Capacity = 64;
+    fileQDesc.Priority = directstorage::DSTORAGE_PRIORITY_HIGH;
+    fileQDesc.Name = "MicaNT_FileQueue";
+    fileQDesc.Device = pDev;
+
+    directstorage::IDStorageQueue* pFileQueue = nullptr;
+    hr = pFactory->CreateQueue(&fileQDesc, directstorage::IID_IDStorageQueue_Const, reinterpret_cast<void**>(&pFileQueue));
+    TEST_ASSERT(hr == 0 && pFileQueue != nullptr, "CreateQueue for file queue must succeed");
+
+    std::vector<uint8_t> readFromDisk(16384, 0);
+    directstorage::DSTORAGE_REQUEST reqFile{};
+    reqFile.Options.SourceType = directstorage::DSTORAGE_REQUEST_SOURCE_FILE;
+    reqFile.Options.DestinationType = directstorage::DSTORAGE_REQUEST_DESTINATION_MEMORY;
+    reqFile.Options.Compression = directstorage::DSTORAGE_COMPRESSION_FORMAT_NONE;
+    reqFile.Source.File.Source = pStorageFile;
+    reqFile.Source.File.Offset = 0;
+    reqFile.Source.File.Size = 16384;
+    reqFile.Destination.Memory.Buffer = readFromDisk.data();
+    reqFile.Destination.Memory.Size = 16384;
+    reqFile.UncompressedSize = 16384;
+
+    pFileQueue->EnqueueRequest(&reqFile);
+    pFileQueue->EnqueueStatus(pStatusArray, 3);
+    pFileQueue->EnqueueSignal(pFence, 400);
+    pFileQueue->Submit();
+
+    TEST_ASSERT(pStatusArray->IsComplete(3), "StatusArray index 3 must be complete");
+    TEST_ASSERT(pFence->GetCompletedValue() == 400, "Fence value must reach 400");
+    TEST_ASSERT(readFromDisk == fileAsset, "File contents read via DirectStorage must match source exactly");
+
+    // 12. Tag-Based Request Cancellation Filtering
+    directstorage::DSTORAGE_REQUEST reqCancel{};
+    reqCancel.CancellationTag = 0xCAFE;
+    reqCancel.Options.SourceType = directstorage::DSTORAGE_REQUEST_SOURCE_MEMORY;
+    reqCancel.Options.DestinationType = directstorage::DSTORAGE_REQUEST_DESTINATION_MEMORY;
+    reqCancel.Options.Compression = directstorage::DSTORAGE_COMPRESSION_FORMAT_NONE;
+    reqCancel.Source.Memory.Source = uncompressedData.data();
+    reqCancel.Source.Memory.Size = 100;
+    reqCancel.Destination.Memory.Buffer = readFromDisk.data();
+    reqCancel.Destination.Memory.Size = 100;
+
+    pFileQueue->EnqueueRequest(&reqCancel);
+    pFileQueue->CancelRequestsWithTag(0xFFFF, 0xCAFE);
+    pFileQueue->Submit();
+
+    // 13. Custom Decompression Queue
+    directstorage::IDStorageCustomDecompressionQueue* pCustomQueue = nullptr;
+    hr = pFactory->QueryInterface(directstorage::IID_IDStorageCustomDecompressionQueue_Const, reinterpret_cast<void**>(&pCustomQueue));
+    TEST_ASSERT(hr == 0 && pCustomQueue != nullptr, "QueryInterface for IDStorageCustomDecompressionQueue must succeed");
+    TEST_ASSERT(pCustomQueue->GetEvent() != nullptr, "GetEvent on custom decompression queue must return valid handle");
+
+    // 14. Interactive Shell CLI Verification
+    std::ostringstream testOut;
+    micant::shell::CommandShell shellEngine;
+    int rc = shellEngine.execute("dstorage test", testOut);
+    TEST_ASSERT(rc == 0, "dstorage test CLI command must return 0");
+    TEST_ASSERT(testOut.str().find("16/16 PASSED") != std::string::npos, "dstorage test must pass all 16 tests");
+
+    std::ostringstream infoOut;
+    rc = shellEngine.execute("dstorage info", infoOut);
+    TEST_ASSERT(rc == 0, "dstorage info CLI command must return 0");
+    TEST_ASSERT(infoOut.str().find("NVMe Kernel Queue Bypass") != std::string::npos, "dstorage info must display telemetry");
+
+    std::ostringstream benchOut;
+    rc = shellEngine.execute("dstorage bench 16", benchOut);
+    TEST_ASSERT(rc == 0, "dstorage bench CLI command must return 0");
+    TEST_ASSERT(benchOut.str().find("GB/s") != std::string::npos, "dstorage bench must display bandwidth in GB/s");
+
+    // Cleanup
+    pCustomQueue->Release();
+    pFileQueue->Release();
+    pStorageFile->Release();
+    pQueue->Release();
+    pFence->Release();
+    pRes->Release();
+    pDev->Release();
+    pStatusArray->Release();
+    pFactory->Release();
+
+    std::cout << "[TEST] Suite 115: Windows DirectStorage & High-Performance GPU I/O Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite114")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite115")) {
+        RUN_TEST(Test_WindowsDirectStorage_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite114") {
         RUN_TEST(Test_WindowsDirectX_Raytracing_Subsystem);
         return g_FailedTests;
     }
@@ -26930,6 +27193,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsMediaFoundation_SourceReader_SinkWriter_Subsystem);
     RUN_TEST(Test_WindowsMediaFoundation_CaptureEngine_Subsystem);
     RUN_TEST(Test_WindowsDirectX_Raytracing_Subsystem);
+    RUN_TEST(Test_WindowsDirectStorage_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
