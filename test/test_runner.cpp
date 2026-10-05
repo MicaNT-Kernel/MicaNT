@@ -140,6 +140,7 @@
 #include "micant/virtdisk.hpp"
 #include "micant/fveapi.hpp"
 #include "micant/fwpuclnt.hpp"
+#include "micant/feclient.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -31325,8 +31326,248 @@ void Test_WindowsCodeIntegrity_WDAC_Subsystem() {
     std::cout << "[TEST] Suite 134: Windows Code Integrity & WDAC Subsystem PASSED.\n";
 }
 
+void Test_WindowsEncryptingFileSystem_EFS_Subsystem() {
+    std::cout << "\n[TEST] Starting Suite 135: Windows Encrypting File System (EFS) & feclient.dll Subsystem...\n";
+    using namespace micant::efs;
+    InitializeEfsSubsystemExports();
+
+    // 1. Initialization & Verification of Dynamic Loader
+    uint32_t initRes = EfsClientInitialize();
+    TEST_ASSERT(initRes == ERROR_SUCCESS, "EfsClientInitialize must return ERROR_SUCCESS");
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("feclient.dll", "EncryptFileW") != nullptr, "feclient.dll!EncryptFileW must be exported");
+    TEST_ASSERT(ldr.getExport("feclient.dll", "DecryptFileW") != nullptr, "feclient.dll!DecryptFileW must be exported");
+    TEST_ASSERT(ldr.getExport("feclient.dll", "OpenEncryptedFileRawW") != nullptr, "feclient.dll!OpenEncryptedFileRawW must be exported");
+    TEST_ASSERT(ldr.getExport("feclient.dll", "ReadEncryptedFileRaw") != nullptr, "feclient.dll!ReadEncryptedFileRaw must be exported");
+    TEST_ASSERT(ldr.getExport("feclient.dll", "WriteEncryptedFileRaw") != nullptr, "feclient.dll!WriteEncryptedFileRaw must be exported");
+    TEST_ASSERT(ldr.getExport("advapi32.dll", "EncryptFileW") != nullptr, "advapi32.dll!EncryptFileW must be exported");
+
+    // 2. Pre-Encryption Status Verification
+    const wchar_t* testFile = L"C:\\Users\\Default\\Documents\\TopSecret.doc";
+    uint32_t status = 0xFFFFFFFF;
+    uint32_t stRes = FileEncryptionStatusW(testFile, &status);
+    TEST_ASSERT(stRes == ERROR_SUCCESS, "FileEncryptionStatusW must succeed");
+    TEST_ASSERT(status == FILE_ENCRYPTABLE, "Unencrypted file must be FILE_ENCRYPTABLE");
+
+    // 3. Transparent File Encryption
+    std::string testContent = "MicaNT Dave Cutler 1988 MICA High-Assurance Sovereign EFS Payload 2026";
+    std::vector<uint8_t> plainBytes(testContent.begin(), testContent.end());
+    uint32_t encRes = SovereignEfsManager::get().encryptFile(testFile, plainBytes);
+    TEST_ASSERT(encRes == ERROR_SUCCESS, "encryptFile must succeed");
+
+    status = 0;
+    stRes = FileEncryptionStatusW(testFile, &status);
+    TEST_ASSERT(stRes == ERROR_SUCCESS, "FileEncryptionStatusW must succeed after encryption");
+    TEST_ASSERT(status == FILE_IS_ENCRYPTED, "File status must be FILE_IS_ENCRYPTED");
+
+    // 4. NTFS $EFS Stream Serialization & Deserialization
+    EfsMetadata meta;
+    meta.version = 2;
+    meta.algorithmId = CALG_AES_256;
+    meta.keySizeBits = 256;
+    meta.iv.fill(0x42);
+    meta.fekChecksum.fill(0x77);
+
+    EfsUserKeyEntry u1{};
+    u1.userSid = L"S-1-5-21-1001";
+    u1.displayName = L"MicaAdmin";
+    u1.certThumbprint = {0xAA, 0xBB, 0xCC, 0xDD};
+    u1.encryptedFek = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    meta.ddfEntries.push_back(u1);
+
+    EfsDraKeyEntry d1{};
+    d1.draSid = L"S-1-5-32-544";
+    d1.displayName = L"Builtin\\Administrators";
+    d1.certThumbprint = {0xEE, 0xFF, 0x00, 0x11};
+    d1.encryptedFek = {0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC};
+    meta.drfEntries.push_back(d1);
+
+    std::vector<uint8_t> serializedStream = meta.serialize();
+    TEST_ASSERT(serializedStream.size() > sizeof(EFS_STREAM_HEADER), "Serialized stream must exceed header size");
+
+    EfsMetadata parsedMeta;
+    bool desRes = parsedMeta.deserialize(serializedStream);
+    TEST_ASSERT(desRes, "Deserialization of $EFS stream must succeed");
+    TEST_ASSERT(parsedMeta.version == 2, "Parsed version must be 2");
+    TEST_ASSERT(parsedMeta.algorithmId == CALG_AES_256, "Parsed algorithm must be CALG_AES_256");
+    TEST_ASSERT(parsedMeta.ddfEntries.size() == 1, "Parsed DDF count must be 1");
+    TEST_ASSERT(parsedMeta.ddfEntries[0].userSid == L"S-1-5-21-1001", "Parsed user SID must match");
+    TEST_ASSERT(parsedMeta.drfEntries.size() == 1, "Parsed DRF count must be 1");
+    TEST_ASSERT(parsedMeta.drfEntries[0].draSid == L"S-1-5-32-544", "Parsed DRA SID must match");
+
+    // 5. Query Users (DDF) and Recovery Agents (DRF)
+    PENCRYPTION_CERTIFICATE_HASH_LIST pUsers = nullptr;
+    uint32_t qUserRes = QueryUsersOnEncryptedFile(testFile, &pUsers);
+    TEST_ASSERT(qUserRes == ERROR_SUCCESS, "QueryUsersOnEncryptedFile must succeed");
+    TEST_ASSERT(pUsers != nullptr, "pUsers must not be null");
+    TEST_ASSERT(pUsers->nCert_Hash >= 1, "Must have at least 1 user in DDF");
+    TEST_ASSERT(pUsers->pUsers[0]->pHash != nullptr, "User cert hash must be present");
+    TEST_ASSERT(pUsers->pUsers[0]->pHash->cbData == 32, "User cert hash must be 32 bytes (SHA-256)");
+    FreeEncryptionCertificateHashList(pUsers);
+
+    PENCRYPTION_CERTIFICATE_HASH_LIST pDra = nullptr;
+    uint32_t qDraRes = QueryRecoveryAgentsOnEncryptedFile(testFile, &pDra);
+    TEST_ASSERT(qDraRes == ERROR_SUCCESS, "QueryRecoveryAgentsOnEncryptedFile must succeed");
+    TEST_ASSERT(pDra != nullptr, "pDra must not be null");
+    TEST_ASSERT(pDra->nCert_Hash >= 1, "Must have at least 1 recovery agent in DRF");
+    FreeEncryptionCertificateHashList(pDra);
+
+    // 6. Transparent Read by Authorized Primary User
+    std::wstring adminSid = SovereignEfsManager::get().getCurrentUserSid();
+    std::vector<uint8_t> readBytes;
+    uint32_t readRes = SovereignEfsManager::get().readFile(testFile, adminSid, readBytes);
+    TEST_ASSERT(readRes == ERROR_SUCCESS, "Primary authorized user must read file transparently");
+    TEST_ASSERT(readBytes == plainBytes, "Read bytes must match original plaintext");
+
+    // 7. Multi-User Sharing: Add Collaborator Alice
+    std::wstring aliceSid = L"S-1-5-21-3623811015-3361044348-30300820-2002";
+    uint32_t addRes = SovereignEfsManager::get().addUserToFile(testFile, aliceSid, L"AliceCollaborator");
+    TEST_ASSERT(addRes == ERROR_SUCCESS, "Adding Alice to DDF must succeed");
+
+    std::vector<uint8_t> aliceBytes;
+    uint32_t aliceReadRes = SovereignEfsManager::get().readFile(testFile, aliceSid, aliceBytes);
+    TEST_ASSERT(aliceReadRes == ERROR_SUCCESS, "Alice must be able to read file transparently");
+    TEST_ASSERT(aliceBytes == plainBytes, "Alice read bytes must match original plaintext");
+
+    // 8. Access Control: Unauthorized User Mallory Must Be Denied
+    std::wstring mallorySid = L"S-1-5-21-9999999999-9999999999-99999999-9999";
+    std::vector<uint8_t> malloryBytes;
+    uint32_t malloryReadRes = SovereignEfsManager::get().readFile(testFile, mallorySid, malloryBytes);
+    TEST_ASSERT(malloryReadRes == ERROR_ACCESS_DENIED, "Mallory must be denied with ERROR_ACCESS_DENIED");
+
+    // 9. Remove Alice and verify revocation
+    uint32_t remRes = SovereignEfsManager::get().removeUserFromFile(testFile, aliceSid);
+    TEST_ASSERT(remRes == ERROR_SUCCESS, "Removing Alice from DDF must succeed");
+
+    aliceBytes.clear();
+    aliceReadRes = SovereignEfsManager::get().readFile(testFile, aliceSid, aliceBytes);
+    TEST_ASSERT(aliceReadRes == ERROR_ACCESS_DENIED, "Alice must be denied after removal from DDF");
+
+    // 10. Raw Export & Import (Zero-Knowledge Backup & Restore)
+    void* rawExport = nullptr;
+    uint32_t rawOpenExp = OpenEncryptedFileRawW(testFile, 0, &rawExport);
+    TEST_ASSERT(rawOpenExp == ERROR_SUCCESS, "OpenEncryptedFileRawW for export must succeed");
+    TEST_ASSERT(rawExport != nullptr, "rawExport handle must not be null");
+
+    struct BackupStore {
+        std::vector<uint8_t> buffer;
+    } backup;
+
+    auto exportCallback = [](uint8_t* pbData, void* pvCallbackContext, uint32_t ulLength) -> uint32_t {
+        auto* b = reinterpret_cast<BackupStore*>(pvCallbackContext);
+        b->buffer.insert(b->buffer.end(), pbData, pbData + ulLength);
+        return ERROR_SUCCESS;
+    };
+
+    while (ReadEncryptedFileRaw(exportCallback, &backup, rawExport) == ERROR_SUCCESS) {
+    }
+    CloseEncryptedFileRaw(rawExport);
+
+    TEST_ASSERT(!backup.buffer.empty(), "Raw backup stream must contain bytes");
+    TEST_ASSERT(backup.buffer.size() >= 16, "Raw backup stream must have header");
+    uint32_t pkgMagic = 0;
+    std::memcpy(&pkgMagic, backup.buffer.data(), 4);
+    TEST_ASSERT(pkgMagic == EFS_RAW_PACKAGE_MAGIC, "Raw package magic must be 'REFS'");
+
+    // Restore to new path: RestoredSecret.doc
+    const wchar_t* restoredFile = L"C:\\Users\\Default\\Documents\\RestoredSecret.doc";
+    void* rawImport = nullptr;
+    uint32_t rawOpenImp = OpenEncryptedFileRawW(restoredFile, CREATE_FOR_IMPORT, &rawImport);
+    TEST_ASSERT(rawOpenImp == ERROR_SUCCESS, "OpenEncryptedFileRawW for import must succeed");
+    TEST_ASSERT(rawImport != nullptr, "rawImport handle must not be null");
+
+    struct RestoreFeed {
+        std::span<const uint8_t> data;
+        size_t cursor{0};
+    } feed{backup.buffer, 0};
+
+    auto importCallback = [](uint8_t* pbData, void* pvCallbackContext, uint32_t* pulLength) -> uint32_t {
+        auto* f = reinterpret_cast<RestoreFeed*>(pvCallbackContext);
+        size_t remain = f->data.size() - f->cursor;
+        if (remain == 0) {
+            *pulLength = 0;
+            return ERROR_SUCCESS;
+        }
+        uint32_t chunkSize = static_cast<uint32_t>(std::min<size_t>(remain, *pulLength));
+        std::memcpy(pbData, f->data.data() + f->cursor, chunkSize);
+        f->cursor += chunkSize;
+        *pulLength = chunkSize;
+        return ERROR_SUCCESS;
+    };
+
+    uint32_t writeRes = WriteEncryptedFileRaw(importCallback, &feed, rawImport);
+    TEST_ASSERT(writeRes == ERROR_SUCCESS, "WriteEncryptedFileRaw must succeed");
+    CloseEncryptedFileRaw(rawImport);
+
+    // Verify restored file can be decrypted by Admin
+    std::vector<uint8_t> restoredBytes;
+    uint32_t restReadRes = SovereignEfsManager::get().readFile(restoredFile, adminSid, restoredBytes);
+    TEST_ASSERT(restReadRes == ERROR_SUCCESS, "Restored file must be readable by Admin");
+    TEST_ASSERT(restoredBytes == plainBytes, "Restored content must match original plaintext");
+
+    // 11. DecryptFileW
+    uint32_t decRes = DecryptFileW(restoredFile, 0);
+    TEST_ASSERT(decRes == ERROR_SUCCESS, "DecryptFileW must return ERROR_SUCCESS");
+
+    status = 0;
+    FileEncryptionStatusW(restoredFile, &status);
+    TEST_ASSERT(status == FILE_ENCRYPTABLE, "Decrypted file must return FILE_ENCRYPTABLE");
+
+    // 12. Free Space Sanitization (DoD 5220.22-M)
+    std::ostringstream wipeOss;
+    bool wipeOk = SovereignEfsManager::get().wipeFreeSpace(L"C:\\Users\\Default", wipeOss);
+    TEST_ASSERT(wipeOk, "wipeFreeSpace must return true");
+    TEST_ASSERT(wipeOss.str().find("DoD 5220.22-M") != std::string::npos, "Wipe must mention DoD 5220.22-M");
+    TEST_ASSERT(wipeOss.str().find("Pass 1/3") != std::string::npos, "Wipe must execute Pass 1");
+    TEST_ASSERT(wipeOss.str().find("Pass 2/3") != std::string::npos, "Wipe must execute Pass 2");
+    TEST_ASSERT(wipeOss.str().find("Pass 3/3") != std::string::npos, "Wipe must execute Pass 3");
+
+    // 13. Interactive Shell Integration (cipher / efs CLI commands)
+    shell::CommandShell proc;
+    std::ostringstream oss;
+    int shellRet = proc.execute("cipher status", oss);
+    TEST_ASSERT(shellRet == 0, "cipher status must return 0");
+    TEST_ASSERT(oss.str().find("Operational") != std::string::npos, "Must report operational");
+    TEST_ASSERT(oss.str().find("AES-256") != std::string::npos, "Must report AES-256");
+
+    oss.str("");
+    shellRet = proc.execute("cipher test", oss);
+    TEST_ASSERT(shellRet == 0, "cipher test must return 0");
+    TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "cipher test must report SUCCESS");
+
+    oss.str("");
+    shellRet = proc.execute("cipher /e C:\\Users\\Temp\\Doc.txt", oss);
+    TEST_ASSERT(shellRet == 0, "cipher /e must return 0");
+    TEST_ASSERT(oss.str().find("E [OK]") != std::string::npos, "cipher /e must report OK");
+
+    oss.str("");
+    shellRet = proc.execute("cipher /c C:\\Users\\Temp\\Doc.txt", oss);
+    TEST_ASSERT(shellRet == 0, "cipher /c must return 0");
+    TEST_ASSERT(oss.str().find("Users who can decrypt") != std::string::npos, "cipher /c must list users");
+
+    oss.str("");
+    shellRet = proc.execute("cipher /d C:\\Users\\Temp\\Doc.txt", oss);
+    TEST_ASSERT(shellRet == 0, "cipher /d must return 0");
+    TEST_ASSERT(oss.str().find("U [OK]") != std::string::npos, "cipher /d must report OK");
+
+    oss.str("");
+    shellRet = proc.execute("cipher /k", oss);
+    TEST_ASSERT(shellRet == 0, "cipher /k must return 0");
+
+    // 14. Subsystem Shutdown
+    uint32_t shutRes = EfsClientShutdown();
+    TEST_ASSERT(shutRes == ERROR_SUCCESS, "EfsClientShutdown must return ERROR_SUCCESS");
+
+    std::cout << "[TEST] Suite 135: Windows Encrypting File System (EFS) & feclient.dll Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite134")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite135")) {
+        RUN_TEST(Test_WindowsEncryptingFileSystem_EFS_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite134") {
         RUN_TEST(Test_WindowsCodeIntegrity_WDAC_Subsystem);
         return g_FailedTests;
     }
@@ -31581,6 +31822,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsFilteringPlatform_Firewall_Subsystem);
     RUN_TEST(Test_WindowsAuthenticode_WinTrust_Subsystem);
     RUN_TEST(Test_WindowsCodeIntegrity_WDAC_Subsystem);
+    RUN_TEST(Test_WindowsEncryptingFileSystem_EFS_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

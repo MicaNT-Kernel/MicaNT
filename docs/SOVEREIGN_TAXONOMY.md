@@ -35,6 +35,7 @@ These names:
 | **Crash Diagnostics & Reliability** | **PolarisDiag** | `micant::diag`<br/>`micant::crash` | `trap.hpp`<br/>`po.hpp` | Clean-room kernel bugcheck (`KeBugCheckEx`), crashdump capture, and telemetry-free error reporting. |
 | **Process Sandbox & Isolation** | **AegisSandbox** | `micant::sandbox`<br/>`micant::job` | `ps.hpp`<br/>`section.hpp` | Win32 Job Object containment, process isolation boundaries, CPU rate limits, and memory quota fences. |
 | **Cryptographic Services** | **CipherKSP** | `micant::crypto`<br/>`micant::ksp` | `se.hpp`<br/>`sam.hpp` | Clean-room Cryptography Next Generation (CNG / BCrypt), PBKDF2 key derivation, SHA-256, and AES symmetric encryption. |
+| **File-Level Encryption (EFS)** | **EmeraldCrypt** | `micant::efs` | `feclient.hpp` | Clean-room Encrypting File System (EFS) client, per-file AES-256 symmetric encryption, NTFS alternate utility stream ($EFS), and multi-user DDF/DRF key management. |
 
 ---
 
@@ -166,6 +167,16 @@ These names:
   - Cryptography Next Generation (CNG / `bcrypt.dll`) parity.
   - Deterministic random number generation (CSPRNG).
   - SHA-256 / HMAC hashing, PBKDF2 key derivation, and AES symmetric encryption.
+
+### 3.19 EmeraldCrypt (File-Level Encryption & EFS Subsystem)
+- **Role:** High-assurance transparent per-file encryption, NTFS `$EFS` alternate data stream engine, and enterprise Data Recovery Agent management.
+- **Capabilities:**
+  - Standard Win32 EFS C ABI exports (`feclient.dll` / `advapi32.dll`): `EncryptFileW`, `DecryptFileW`, `FileEncryptionStatusW`, `QueryUsersOnEncryptedFile`, `QueryRecoveryAgentsOnEncryptedFile`, `AddUsersToEncryptedFile`, `RemoveUsersFromEncryptedFile`.
+  - Transparent per-file AES-256-CBC symmetric encryption with unique File Encryption Keys (FEK).
+  - Data Decryption Field (DDF) supporting multi-user access control and key wrapping.
+  - Data Recovery Field (DRF) supporting corporate Data Recovery Agents (DRA).
+  - Zero-knowledge raw encrypted streaming (`OpenEncryptedFileRawW`, `ReadEncryptedFileRaw`, `WriteEncryptedFileRaw`) for enterprise backup agents.
+  - DoD 5220.22-M NISPOM 3-pass disk space sanitization (`cipher /w`).
 
 ---
 

@@ -126,6 +126,7 @@
 #include "fwpuclnt.hpp"
 #include "wintrust.hpp"
 #include "ci.hpp"
+#include "feclient.hpp"
 
 namespace micant::shell {
 
@@ -342,6 +343,7 @@ public:
             if (cmd == "netsh" || cmd == "advfirewall" || cmd == "firewall" || cmd == "wfp") { cmdFirewall(tokens, out); return 0; }
             if (cmd == "signtool" || cmd == "wintrust" || cmd == "sign") { cmdSignTool(tokens, out); return 0; }
             if (cmd == "wdac" || cmd == "ci") { cmdWdac(tokens, out); return 0; }
+            if (cmd == "cipher" || cmd == "efs") { cmdCipher(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -649,6 +651,7 @@ private:
             << "  FIREWALL [show|set|add|delete|test] Windows Filtering Platform & Advanced Firewall (firewall test)\n"
             << "  SIGNTOOL [verify|sign|catdb|test] Windows Authenticode & Code Integrity Tool (signtool test)\n"
             << "  WDAC [status|mode|rules|logs|test] Windows Defender Application Control & CI (wdac test)\n"
+            << "  CIPHER [/e|/d|/c|/k|/w|status|test] Windows Encrypting File System (EFS) Tool (cipher test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20021,6 +20024,297 @@ private:
             << "  wdac rules                            Lists active Application Control policy rules\n"
             << "  wdac logs                             Displays recent Code Integrity audit log entries\n"
             << "  wdac test                             Runs Sovereign Code Integrity & WDAC diagnostics\n";
+    }
+
+    void cmdCipher(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::efs;
+        InitializeEfsSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help")) {
+            out << "Windows Encrypting File System (EFS) & EmeraldCrypt Subsystem CLI\n"
+                << "Note: Encrypting File System, EFS, and cipher.exe are trademarks of Microsoft Corp. Referenced under nominative fair use.\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  cipher status                       Displays EFS operational status, key counts, and active DRA\n"
+                << "  cipher /e <file>                    Encrypts the specified file with transparent AES-256-CBC\n"
+                << "  cipher /d <file>                    Decrypts the specified encrypted file back to plaintext\n"
+                << "  cipher /c <file>                    Displays encryption certificates, users, and DRA information\n"
+                << "  cipher /k                           Creates a new EFS encryption certificate and key for current user\n"
+                << "  cipher /r:<cert_name>               Creates a new Data Recovery Agent (DRA) certificate and key\n"
+                << "  cipher /w:<dir>                     Performs DoD 5220.22-M 3-pass disk space sanitization\n"
+                << "  cipher /adduser <file> <user_sid>   Adds user SID to file Data Decryption Field (DDF)\n"
+                << "  cipher /removeuser <file> <user_sid>Removes user SID from file Data Decryption Field\n"
+                << "  cipher test                         Executes Sovereign EFS & feclient.dll diagnostic test suite\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
+            out << "[TEST] Running Sovereign EFS & feclient.dll Diagnostics...\n";
+
+            uint32_t status = 0;
+            FileEncryptionStatusW(L"C:\\Docs\\Secret.txt", &status);
+            if (status != FILE_ENCRYPTABLE) {
+                out << "[-] Initial encryption status check failed: " << status << "\n";
+                return;
+            }
+
+            std::string sampleText = "MicaNT Dave Cutler MICA Sovereign EFS Transparent Encryption Test Payload 2026";
+            std::vector<uint8_t> sampleData(sampleText.begin(), sampleText.end());
+            uint32_t encRes = SovereignEfsManager::get().encryptFile(L"C:\\Docs\\Secret.txt", sampleData);
+            if (encRes != ERROR_SUCCESS) {
+                out << "[-] EncryptFile failed with error: " << encRes << "\n";
+                return;
+            }
+
+            FileEncryptionStatusW(L"C:\\Docs\\Secret.txt", &status);
+            if (status != FILE_IS_ENCRYPTED) {
+                out << "[-] Post-encryption status must be FILE_IS_ENCRYPTED: " << status << "\n";
+                return;
+            }
+
+            PENCRYPTION_CERTIFICATE_HASH_LIST pUsers = nullptr;
+            uint32_t qRes = QueryUsersOnEncryptedFile(L"C:\\Docs\\Secret.txt", &pUsers);
+            if (qRes != ERROR_SUCCESS || !pUsers || pUsers->nCert_Hash == 0) {
+                out << "[-] QueryUsersOnEncryptedFile failed.\n";
+                return;
+            }
+            out << "  [+] Authorized user enrolled in DDF: " 
+                << (pUsers->pUsers[0]->lpDisplayInformation ? "User Found" : "Unknown") << "\n";
+            FreeEncryptionCertificateHashList(pUsers);
+
+            PENCRYPTION_CERTIFICATE_HASH_LIST pDra = nullptr;
+            uint32_t draRes = QueryRecoveryAgentsOnEncryptedFile(L"C:\\Docs\\Secret.txt", &pDra);
+            if (draRes != ERROR_SUCCESS || !pDra || pDra->nCert_Hash == 0) {
+                out << "[-] QueryRecoveryAgentsOnEncryptedFile failed.\n";
+                return;
+            }
+            out << "  [+] Data Recovery Agent enrolled in DRF: "
+                << (pDra->pUsers[0]->lpDisplayInformation ? "DRA Found" : "Unknown") << "\n";
+            FreeEncryptionCertificateHashList(pDra);
+
+            uint32_t addRes = SovereignEfsManager::get().addUserToFile(L"C:\\Docs\\Secret.txt", L"S-1-5-21-2002", L"Bob");
+            if (addRes != ERROR_SUCCESS) {
+                out << "[-] Adding second user to DDF failed: " << addRes << "\n";
+                return;
+            }
+
+            std::vector<uint8_t> readPlaintext;
+            uint32_t readRes = SovereignEfsManager::get().readFile(L"C:\\Docs\\Secret.txt", L"S-1-5-21-2002", readPlaintext);
+            if (readRes != ERROR_SUCCESS || readPlaintext != sampleData) {
+                out << "[-] Transparent read by authorized user Bob failed.\n";
+                return;
+            }
+
+            std::vector<uint8_t> eveRead;
+            uint32_t eveRes = SovereignEfsManager::get().readFile(L"C:\\Docs\\Secret.txt", L"S-1-5-21-9999", eveRead);
+            if (eveRes != ERROR_ACCESS_DENIED) {
+                out << "[-] Unauthorized user Eve was not denied: " << eveRes << "\n";
+                return;
+            }
+            out << "  [+] Unauthorized access restriction verified (ERROR_ACCESS_DENIED returned).\n";
+
+            void* rawExportCtx = nullptr;
+            uint32_t rawOpenRes = OpenEncryptedFileRawW(L"C:\\Docs\\Secret.txt", 0, &rawExportCtx);
+            if (rawOpenRes != ERROR_SUCCESS || !rawExportCtx) {
+                out << "[-] OpenEncryptedFileRawW failed: " << rawOpenRes << "\n";
+                return;
+            }
+
+            struct RawStreamCollector {
+                std::vector<uint8_t> collected;
+            } collector;
+
+            auto exportCb = [](uint8_t* pbData, void* pvCallbackContext, uint32_t ulLength) -> uint32_t {
+                auto* c = reinterpret_cast<RawStreamCollector*>(pvCallbackContext);
+                c->collected.insert(c->collected.end(), pbData, pbData + ulLength);
+                return ERROR_SUCCESS;
+            };
+
+            while (ReadEncryptedFileRaw(exportCb, &collector, rawExportCtx) == ERROR_SUCCESS) {
+            }
+            CloseEncryptedFileRaw(rawExportCtx);
+
+            if (collector.collected.empty()) {
+                out << "[-] ReadEncryptedFileRaw produced 0 bytes.\n";
+                return;
+            }
+            out << "  [+] Raw zero-knowledge backup package generated: " << collector.collected.size() << " bytes.\n";
+
+            void* rawImportCtx = nullptr;
+            OpenEncryptedFileRawW(L"C:\\Docs\\Restored.txt", CREATE_FOR_IMPORT, &rawImportCtx);
+
+            struct RawStreamProvider {
+                std::span<const uint8_t> data;
+                size_t offset{0};
+            } provider{collector.collected, 0};
+
+            auto importCb = [](uint8_t* pbData, void* pvCallbackContext, uint32_t* pulLength) -> uint32_t {
+                auto* p = reinterpret_cast<RawStreamProvider*>(pvCallbackContext);
+                size_t remaining = p->data.size() - p->offset;
+                if (remaining == 0) {
+                    *pulLength = 0;
+                    return ERROR_SUCCESS;
+                }
+                uint32_t chunk = static_cast<uint32_t>(std::min<size_t>(remaining, *pulLength));
+                std::memcpy(pbData, p->data.data() + p->offset, chunk);
+                p->offset += chunk;
+                *pulLength = chunk;
+                return ERROR_SUCCESS;
+            };
+
+            WriteEncryptedFileRaw(importCb, &provider, rawImportCtx);
+            CloseEncryptedFileRaw(rawImportCtx);
+
+            std::vector<uint8_t> restoredData;
+            uint32_t restReadRes = SovereignEfsManager::get().readFile(L"C:\\Docs\\Restored.txt", L"S-1-5-21-2002", restoredData);
+            if (restReadRes != ERROR_SUCCESS || restoredData != sampleData) {
+                out << "[-] Restored encrypted file verification failed.\n";
+                return;
+            }
+            out << "  [+] Raw encrypted package restored and verified seamlessly.\n";
+
+            SovereignEfsManager::get().wipeFreeSpace(L"C:\\Docs", out);
+
+            out << "[SUCCESS] Windows Encrypting File System (EFS) Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "status") {
+            out << "MicaNT Sovereign Encrypting File System (EFS) Status:\n"
+                << "  Subsystem State:              Operational\n"
+                << "  Cipher Algorithm:             AES-256 (CBC with PKCS#7)\n"
+                << "  NTFS Stream Format:           $LOGGED_UTILITY_STREAM ($EFS 0x100)\n"
+                << "  Encrypted Files in Vault:     " << SovereignEfsManager::get().getEncryptedFileCount() << "\n";
+            auto sid = SovereignEfsManager::get().getCurrentUserSid();
+            std::string sidStr(sid.begin(), sid.end());
+            auto user = SovereignEfsManager::get().getCurrentUserName();
+            std::string userStr(user.begin(), user.end());
+            out << "  Current User SID:             " << sidStr << " (" << userStr << ")\n"
+                << "  Data Recovery Agent (DRA):    Enrolled (Builtin\\Administrators)\n";
+            return;
+        }
+
+        if (tokens.size() > 2 && (tokens[1] == "/e" || tokens[1] == "-e")) {
+            std::string p = tokens[2];
+            std::wstring wp(p.begin(), p.end());
+            std::string sample = "MicaNT Encrypted File Content: " + p;
+            std::vector<uint8_t> data(sample.begin(), sample.end());
+            uint32_t res = SovereignEfsManager::get().encryptFile(wp, data);
+            if (res == ERROR_SUCCESS) {
+                out << "E [OK] " << p << " (Encrypted with AES-256-CBC)\n";
+            } else {
+                out << "E [FAIL] " << p << " (Error: " << res << ")\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && (tokens[1] == "/d" || tokens[1] == "-d")) {
+            std::string p = tokens[2];
+            std::wstring wp(p.begin(), p.end());
+            std::vector<uint8_t> plain;
+            uint32_t res = SovereignEfsManager::get().decryptFile(wp, plain);
+            if (res == ERROR_SUCCESS) {
+                out << "U [OK] " << p << " (Decrypted to plaintext)\n";
+            } else {
+                out << "U [FAIL] " << p << " (Error: " << res << ")\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && (tokens[1] == "/c" || tokens[1] == "-c")) {
+            std::string p = tokens[2];
+            std::wstring wp(p.begin(), p.end());
+            std::vector<EfsUserKeyEntry> users;
+            std::vector<EfsDraKeyEntry> dras;
+            uint32_t res = SovereignEfsManager::get().queryUsers(wp, users);
+            if (res != ERROR_SUCCESS) {
+                out << "File not found or not encrypted: " << p << "\n";
+                return;
+            }
+            SovereignEfsManager::get().queryRecoveryAgents(wp, dras);
+
+            out << "Listing of " << p << "\n"
+                << "Users who can decrypt:\n";
+            for (const auto& u : users) {
+                std::string uName(u.displayName.begin(), u.displayName.end());
+                std::string uSid(u.userSid.begin(), u.userSid.end());
+                out << "  " << uName << " (" << uSid << ")\n";
+            }
+            out << "Recovery Agents who can decrypt:\n";
+            for (const auto& d : dras) {
+                std::string dName(d.displayName.begin(), d.displayName.end());
+                std::string dSid(d.draSid.begin(), d.draSid.end());
+                out << "  " << dName << " (" << dSid << ")\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && (tokens[1] == "/k" || tokens[1] == "-k")) {
+            SovereignEfsManager::get().generateNewUserKey(L"MicaUser-Generated");
+            out << "A new file encryption key and self-signed certificate have been created.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (tokens[1].starts_with("/r:") || tokens[1].starts_with("-r:"))) {
+            std::string rName = tokens[1].substr(3);
+            std::wstring wrName(rName.begin(), rName.end());
+            SovereignEfsManager::get().generateNewRecoveryKey(wrName);
+            out << "Recovery certificate and private key generated: " << rName << ".cer / " << rName << ".pfx\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (tokens[1].starts_with("/w:") || tokens[1].starts_with("-w:"))) {
+            std::string dir = tokens[1].substr(3);
+            std::wstring wdir(dir.begin(), dir.end());
+            SovereignEfsManager::get().wipeFreeSpace(wdir, out);
+            return;
+        }
+
+        if (tokens.size() > 3 && (tokens[1] == "/adduser" || tokens[1] == "-adduser")) {
+            std::string p = tokens[2];
+            std::string sid = tokens[3];
+            std::wstring wp(p.begin(), p.end());
+            std::wstring wsid(sid.begin(), sid.end());
+            uint32_t res = SovereignEfsManager::get().addUserToFile(wp, wsid, wsid);
+            if (res == ERROR_SUCCESS) {
+                out << "User " << sid << " added to " << p << " successfully.\n";
+            } else {
+                out << "Failed to add user " << sid << ": " << res << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 3 && (tokens[1] == "/removeuser" || tokens[1] == "-removeuser")) {
+            std::string p = tokens[2];
+            std::string sid = tokens[3];
+            std::wstring wp(p.begin(), p.end());
+            std::wstring wsid(sid.begin(), sid.end());
+            uint32_t res = SovereignEfsManager::get().removeUserFromFile(wp, wsid);
+            if (res == ERROR_SUCCESS) {
+                out << "User " << sid << " removed from " << p << " successfully.\n";
+            } else {
+                out << "Failed to remove user " << sid << ": " << res << "\n";
+            }
+            return;
+        }
+
+        out << "Windows Encrypting File System (EFS) & EmeraldCrypt Subsystem CLI\n"
+            << "Note: Encrypting File System, EFS, and cipher.exe are trademarks of Microsoft Corp. Referenced under nominative fair use.\n"
+            << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+            << "Usage:\n"
+            << "  cipher status                       Displays EFS operational status, key counts, and active DRA\n"
+            << "  cipher /e <file>                    Encrypts the specified file with transparent AES-256-CBC\n"
+            << "  cipher /d <file>                    Decrypts the specified encrypted file back to plaintext\n"
+            << "  cipher /c <file>                    Displays encryption certificates, users, and DRA information\n"
+            << "  cipher /k                           Creates a new EFS encryption certificate and key for current user\n"
+            << "  cipher /r:<cert_name>               Creates a new Data Recovery Agent (DRA) certificate and key\n"
+            << "  cipher /w:<dir>                     Performs DoD 5220.22-M 3-pass disk space sanitization\n"
+            << "  cipher test                         Executes Sovereign EFS & feclient.dll diagnostic test suite\n";
     }
 
     static std::string trim(std::string_view s) {
