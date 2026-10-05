@@ -135,6 +135,7 @@
 #include "micant/d3d12video.hpp"
 #include "micant/mfreadwrite.hpp"
 #include "micant/directstorage.hpp"
+#include "micant/ocr.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -29134,8 +29135,282 @@ void Test_WindowsSpeech_SAPI_Subsystem() {
     std::cout << "[TEST] Suite 125: Windows Speech API (SAPI 5.4) & Voice Synthesis Subsystem PASSED.\n";
 }
 
+void Test_WindowsMedia_OCR_Subsystem() {
+    std::cout << "[TEST] Running Suite 126: Windows Optical Character Recognition (OCR) & Modern Media Vision Subsystem...\n";
+
+    using namespace micant::ocr;
+    InitializeOcrSubsystemExports();
+
+    // 1. Dynamic Exports Verification (windows.media.ocr.dll)
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("windows.media.ocr.dll", "OcrCreateEngine") != nullptr,
+                "OcrCreateEngine must be exported from windows.media.ocr.dll");
+    TEST_ASSERT(loader.getExport("windows.media.ocr.dll", "OcrCreateSoftwareBitmap") != nullptr,
+                "OcrCreateSoftwareBitmap must be exported from windows.media.ocr.dll");
+    TEST_ASSERT(loader.getExport("windows.media.ocr.dll", "OcrGetAvailableLanguages") != nullptr,
+                "OcrGetAvailableLanguages must be exported from windows.media.ocr.dll");
+    TEST_ASSERT(loader.getExport("windows.media.ocr.dll", "OcrGetEngineStatics") != nullptr,
+                "OcrGetEngineStatics must be exported from windows.media.ocr.dll");
+    TEST_ASSERT(loader.getExport("windows.media.ocr.dll", "DllGetActivationFactory") != nullptr,
+                "DllGetActivationFactory must be exported from windows.media.ocr.dll");
+
+    // 2. VersionDatabase Verification
+    const auto* ocrMod = version::VersionDatabase::Instance().GetModuleInfo("windows.media.ocr.dll");
+    TEST_ASSERT(ocrMod != nullptr && ocrMod->stringTable.at("ProductVersion") == "10.0.22621.1",
+                "windows.media.ocr.dll must be registered in VersionDatabase at 10.0.22621.1");
+
+    // 3. IOcrEngineStatics Activation & Language Discovery
+    IOcrEngineStatics* pStatics = nullptr;
+    int32_t hr = OcrGetEngineStatics(&pStatics);
+    TEST_ASSERT(hr == 0 && pStatics != nullptr, "OcrGetEngineStatics must return S_OK and valid pointer");
+
+    uint32_t maxW = 0, maxH = 0;
+    pStatics->GetMaxImageDimension(&maxW, &maxH);
+    TEST_ASSERT(maxW == 4096 && maxH == 4096, "Max image dimensions must report 4096 x 4096");
+
+    int32_t supported = 0;
+    pStatics->IsLanguageSupported(L"en-US", &supported);
+    TEST_ASSERT(supported == 1, "en-US must be reported as supported");
+    pStatics->IsLanguageSupported(L"de-DE", &supported);
+    TEST_ASSERT(supported == 1, "de-DE must be reported as supported");
+    pStatics->IsLanguageSupported(L"es-ES", &supported);
+    TEST_ASSERT(supported == 1, "es-ES must be reported as supported");
+    pStatics->IsLanguageSupported(L"xx-YY", &supported);
+    TEST_ASSERT(supported == 0, "Invalid language xx-YY must be reported as unsupported");
+
+    wchar_t** ppLangs = nullptr;
+    uint32_t langCount = 0;
+    hr = pStatics->GetAvailableRecognizerLanguages(&ppLangs, &langCount);
+    TEST_ASSERT(hr == 0 && ppLangs != nullptr && langCount == 9, "Must return 9 supported languages");
+    for (uint32_t i = 0; i < langCount; ++i) {
+        ole32::CoTaskMemFree(ppLangs[i]);
+    }
+    ole32::CoTaskMemFree(ppLangs);
+
+    // 4. TryCreateFromLanguage & Engine Activation
+    IOcrEngine* pInvalidEngine = reinterpret_cast<IOcrEngine*>(0x1);
+    hr = pStatics->TryCreateFromLanguage(L"non-existent", &pInvalidEngine);
+    TEST_ASSERT(hr == 0 && pInvalidEngine == nullptr, "TryCreateFromLanguage with unsupported tag must yield nullptr");
+
+    IOcrEngine* pEngine = nullptr;
+    hr = pStatics->TryCreateFromLanguage(L"en-US", &pEngine);
+    TEST_ASSERT(hr == 0 && pEngine != nullptr, "TryCreateFromLanguage for en-US must succeed");
+    pStatics->Release();
+
+    wchar_t wEngineLang[64]{};
+    uint32_t wEngineLen = 64;
+    pEngine->GetRecognizerLanguage(wEngineLang, &wEngineLen);
+    TEST_ASSERT(std::wcscmp(wEngineLang, L"en-US") == 0, "Engine language must match en-US");
+
+    // 5. SoftwareBitmap Creation & Pixel Manipulation
+    ISoftwareBitmap* pBitmap = nullptr;
+    hr = OcrCreateSoftwareBitmap(160, 48, BitmapPixelFormat_Bgra8, nullptr, &pBitmap);
+    TEST_ASSERT(hr == 0 && pBitmap != nullptr, "OcrCreateSoftwareBitmap must succeed");
+    TEST_ASSERT(pBitmap->GetWidth() == 160 && pBitmap->GetHeight() == 48, "Bitmap dimensions must match");
+    TEST_ASSERT(pBitmap->GetBitmapPixelFormat() == BitmapPixelFormat_Bgra8, "Format must match Bgra8");
+
+    // Fill white background
+    for (uint32_t y = 0; y < 48; ++y) {
+        for (uint32_t x = 0; x < 160; ++x) {
+            pBitmap->SetPixel(x, y, 0xFFFFFFFF);
+        }
+    }
+    TEST_ASSERT(pBitmap->GetPixel(0, 0) == 0xFFFFFFFF, "Pixel at (0,0) must be white");
+
+    // Draw single word "MICANT"
+    pBitmap->DrawString(16, 16, "MICANT", 0xFF000000, 1);
+
+    // 6. RecognizeText on Single Word
+    IOcrResult* pResult1 = nullptr;
+    hr = pEngine->RecognizeText(pBitmap, &pResult1);
+    TEST_ASSERT(hr == 0 && pResult1 != nullptr, "RecognizeText must return S_OK and valid IOcrResult");
+
+    wchar_t wText1[256]{};
+    uint32_t t1Len = 256;
+    pResult1->GetText(wText1, &t1Len);
+    TEST_ASSERT(std::wcscmp(wText1, L"MICANT") == 0, "Recognized text must match 'MICANT'");
+
+    IOcrLine** ppLines1 = nullptr;
+    uint32_t lineCount1 = 0;
+    pResult1->GetLines(&ppLines1, &lineCount1);
+    TEST_ASSERT(lineCount1 == 1 && ppLines1 != nullptr, "Single word image must produce 1 line");
+
+    IOcrLine* pLine1 = ppLines1[0];
+    OcrRect lRect1{};
+    pLine1->GetBoundingRect(&lRect1);
+    TEST_ASSERT(lRect1.x >= 14.0f && lRect1.x <= 18.0f, "Line X bounding box must enclose text start");
+    TEST_ASSERT(lRect1.width >= 40.0f && lRect1.width <= 56.0f, "Line width must match character extent");
+
+    IOcrWord** ppWords1 = nullptr;
+    uint32_t wordCount1 = 0;
+    pLine1->GetWords(&ppWords1, &wordCount1);
+    TEST_ASSERT(wordCount1 == 1 && ppWords1 != nullptr, "Line must contain 1 word");
+
+    IOcrWord* pWord1 = ppWords1[0];
+    wchar_t wWord1[64]{};
+    uint32_t wLen1 = 64;
+    pWord1->GetText(wWord1, &wLen1);
+    TEST_ASSERT(std::wcscmp(wWord1, L"MICANT") == 0, "Word text must be 'MICANT'");
+    float conf1 = 0.0f;
+    pWord1->GetConfidence(&conf1);
+    TEST_ASSERT(conf1 > 0.85f, "Word recognition confidence must be > 85%");
+
+    // Cleanup first recognition
+    pWord1->Release();
+    ole32::CoTaskMemFree(ppWords1);
+    pLine1->Release();
+    ole32::CoTaskMemFree(ppLines1);
+    pResult1->Release();
+    pBitmap->Release();
+
+    // 7. RecognizeText on Multi-Word Sentence ("SOVEREIGN OS 2026")
+    ISoftwareBitmap* pBitmap2 = nullptr;
+    OcrCreateSoftwareBitmap(240, 48, BitmapPixelFormat_Bgra8, nullptr, &pBitmap2);
+    TEST_ASSERT(pBitmap2 != nullptr, "Second bitmap creation must succeed");
+    for (uint32_t y = 0; y < 48; ++y) {
+        for (uint32_t x = 0; x < 240; ++x) {
+            pBitmap2->SetPixel(x, y, 0xFFFFFFFF);
+        }
+    }
+    pBitmap2->DrawString(16, 16, "SOVEREIGN OS 2026", 0xFF000000, 1);
+
+    IOcrResult* pResult2 = nullptr;
+    hr = pEngine->RecognizeText(pBitmap2, &pResult2);
+    TEST_ASSERT(hr == 0 && pResult2 != nullptr, "Multi-word RecognizeText must succeed");
+
+    wchar_t wText2[256]{};
+    uint32_t t2Len = 256;
+    pResult2->GetText(wText2, &t2Len);
+    TEST_ASSERT(std::wcscmp(wText2, L"SOVEREIGN OS 2026") == 0,
+                "Extracted text must match 'SOVEREIGN OS 2026'");
+
+    IOcrLine** ppLines2 = nullptr;
+    uint32_t lineCount2 = 0;
+    pResult2->GetLines(&ppLines2, &lineCount2);
+    TEST_ASSERT(lineCount2 == 1, "Must contain 1 line");
+
+    IOcrWord** ppWords2 = nullptr;
+    uint32_t wordCount2 = 0;
+    ppLines2[0]->GetWords(&ppWords2, &wordCount2);
+    TEST_ASSERT(wordCount2 == 3, "Sentence must be segmented into 3 words");
+
+    wchar_t wWordBuf[64]{};
+    uint32_t wbLen = 64;
+    ppWords2[0]->GetText(wWordBuf, &wbLen);
+    TEST_ASSERT(std::wcscmp(wWordBuf, L"SOVEREIGN") == 0, "Word 1 must be 'SOVEREIGN'");
+
+    wbLen = 64;
+    ppWords2[1]->GetText(wWordBuf, &wbLen);
+    TEST_ASSERT(std::wcscmp(wWordBuf, L"OS") == 0, "Word 2 must be 'OS'");
+
+    wbLen = 64;
+    ppWords2[2]->GetText(wWordBuf, &wbLen);
+    TEST_ASSERT(std::wcscmp(wWordBuf, L"2026") == 0, "Word 3 must be '2026'");
+
+    for (uint32_t i = 0; i < wordCount2; ++i) ppWords2[i]->Release();
+    ole32::CoTaskMemFree(ppWords2);
+    ppLines2[0]->Release();
+    ole32::CoTaskMemFree(ppLines2);
+    pResult2->Release();
+    pBitmap2->Release();
+
+    // 8. Multi-Line Text Recognition ("HELLO WORLD\nMICANT")
+    ISoftwareBitmap* pBitmap3 = nullptr;
+    OcrCreateSoftwareBitmap(180, 64, BitmapPixelFormat_Bgra8, nullptr, &pBitmap3);
+    for (uint32_t y = 0; y < 64; ++y) {
+        for (uint32_t x = 0; x < 180; ++x) {
+            pBitmap3->SetPixel(x, y, 0xFFFFFFFF);
+        }
+    }
+    pBitmap3->DrawString(16, 12, "HELLO WORLD\nMICANT", 0xFF000000, 1);
+
+    IOcrResult* pResult3 = nullptr;
+    hr = pEngine->RecognizeText(pBitmap3, &pResult3);
+    TEST_ASSERT(hr == 0 && pResult3 != nullptr, "Multi-line RecognizeText must succeed");
+
+    wchar_t wText3[256]{};
+    uint32_t t3Len = 256;
+    pResult3->GetText(wText3, &t3Len);
+    TEST_ASSERT(std::wcscmp(wText3, L"HELLO WORLD\nMICANT") == 0,
+                "Multi-line extracted text must match 'HELLO WORLD\\nMICANT'");
+
+    IOcrLine** ppLines3 = nullptr;
+    uint32_t lineCount3 = 0;
+    pResult3->GetLines(&ppLines3, &lineCount3);
+    TEST_ASSERT(lineCount3 == 2, "Multi-line image must be segmented into 2 lines");
+
+    for (uint32_t i = 0; i < lineCount3; ++i) ppLines3[i]->Release();
+    ole32::CoTaskMemFree(ppLines3);
+    pResult3->Release();
+    pBitmap3->Release();
+
+    // 9. Inverted Polarity (White text on black background)
+    ISoftwareBitmap* pBitmap4 = nullptr;
+    OcrCreateSoftwareBitmap(128, 32, BitmapPixelFormat_Bgra8, nullptr, &pBitmap4);
+    for (uint32_t y = 0; y < 32; ++y) {
+        for (uint32_t x = 0; x < 128; ++x) {
+            pBitmap4->SetPixel(x, y, 0xFF000000);
+        }
+    }
+    pBitmap4->DrawString(16, 8, "DARK 42", 0xFFFFFFFF, 1);
+
+    IOcrResult* pResult4 = nullptr;
+    hr = pEngine->RecognizeText(pBitmap4, &pResult4);
+    TEST_ASSERT(hr == 0 && pResult4 != nullptr, "Inverted polarity RecognizeText must succeed");
+
+    wchar_t wText4[128]{};
+    uint32_t t4Len = 128;
+    pResult4->GetText(wText4, &t4Len);
+    TEST_ASSERT(std::wcscmp(wText4, L"DARK 42") == 0,
+                "Inverted polarity text must be recognized as 'DARK 42'");
+    pResult4->Release();
+    pBitmap4->Release();
+
+    // 10. WinRT Activation Factory Verification (DllGetActivationFactory)
+    void* pActFactory = nullptr;
+    hr = DllGetActivationFactory(reinterpret_cast<HSTRING>(const_cast<wchar_t*>(L"Windows.Media.Ocr.OcrEngine")), &pActFactory);
+    TEST_ASSERT(hr == 0 && pActFactory != nullptr, "DllGetActivationFactory for Windows.Media.Ocr.OcrEngine must succeed");
+    auto* pFactoryStatics = static_cast<IOcrEngineStatics*>(pActFactory);
+    pFactoryStatics->Release();
+
+    pEngine->Release();
+
+    // 11. Shell Command Execution Verification
+    shell::CommandShell proc;
+    std::ostringstream oss;
+
+    int shellRet = proc.execute("ocr test", oss);
+    TEST_ASSERT(shellRet == 0, "ocr test shell command must return 0");
+    TEST_ASSERT(oss.str().find("Windows Media OCR Diagnostics & Self-test passed cleanly") != std::string::npos,
+                "ocr test output must contain success message");
+
+    oss.str("");
+    shellRet = proc.execute("ocr info", oss);
+    TEST_ASSERT(shellRet == 0, "ocr info shell command must return 0");
+    TEST_ASSERT(oss.str().find("windows.media.ocr.dll") != std::string::npos,
+                "ocr info output must contain driver DLL");
+
+    oss.str("");
+    shellRet = proc.execute("ocr languages", oss);
+    TEST_ASSERT(shellRet == 0, "ocr languages shell command must return 0");
+    TEST_ASSERT(oss.str().find("en-US (Default / System Profile)") != std::string::npos,
+                "ocr languages output must list default language");
+
+    oss.str("");
+    shellRet = proc.execute("ocr recognize SOVEREIGN MICANT", oss);
+    TEST_ASSERT(shellRet == 0, "ocr recognize command must return 0");
+    TEST_ASSERT(oss.str().find("SOVEREIGN MICANT") != std::string::npos,
+                "ocr recognize output must extract synthesized text");
+
+    std::cout << "[TEST] Suite 126: Windows Optical Character Recognition (OCR) & Modern Media Vision Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite125")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite126")) {
+        RUN_TEST(Test_WindowsMedia_OCR_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite125") {
         RUN_TEST(Test_WindowsSpeech_SAPI_Subsystem);
         return g_FailedTests;
     }
@@ -29345,6 +29620,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsTextServices_IME_Subsystem);
     RUN_TEST(Test_WindowsSpellCheck_Linguistic_Subsystem);
     RUN_TEST(Test_WindowsSpeech_SAPI_Subsystem);
+    RUN_TEST(Test_WindowsMedia_OCR_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
