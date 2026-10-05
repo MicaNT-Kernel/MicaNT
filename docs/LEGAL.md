@@ -113,5 +113,6 @@ We believe in open source, mutual respect, and intellectual property compliance.
 
 - **We welcome your direct outreach**: We will readily and cooperatively work with you in good faith to clarify, adjust, or refine any wording, disclaimer, or taxonomy needed to maintain pristine legal boundaries.
 - **We invite your engineering audit**: Our automated clean-room provenance sentinel is open-source and publicly inspectable in our repository.
+- **Authorized Microsoft OSPO Contribution Channel**: We have established an official OSPO clearance channel within our automated Clean-Room Sentinel CI. If Microsoft engineers contribute code with OSPO and legal clearance (e.g. from an `@microsoft.com` email or with an `MS-OSPO-Approved` commit trailer), our sentinel automatically recognizes the first-party open-source authorization and waives generic leak heuristics for official Microsoft technical structures. See [docs/CLEAN_ROOM.md § 5](CLEAN_ROOM.md#5-authorized-microsoft-employee--ospo-contribution-channel).
 
 Our goal is simple and sincere: **to honor a timeless architectural masterwork and build a faster, cleaner, more respectful computing foundation for everyone.**

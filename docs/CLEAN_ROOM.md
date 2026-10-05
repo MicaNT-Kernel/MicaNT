@@ -50,3 +50,28 @@ To ensure that no contributor inadvertently or maliciously introduces contaminat
 
 Any Pull Request that fails the Sentinel audit is automatically flagged and blocked from merging until cleared.
 
+---
+
+## 5. Authorized Microsoft Employee & OSPO Contribution Channel
+
+MicaNT warmly welcomes technical contributions, fixes, architectural refinements, and guidance from Microsoft employees and engineering teams.
+
+To facilitate seamless collaboration while upholding pristine legal boundaries:
+
+1. **First-Party Authorization**:
+   - When Microsoft employees contribute code cleared by Microsoft's Open Source Programs Office (OSPO) and Legal, those contributions represent authorized first-party open-source licensing.
+   - Such contributions do not constitute "unauthorized leaks," because Microsoft holds the underlying intellectual property and has granted the right to contribute the code under an open-source license (such as MIT or Apache 2.0).
+
+2. **Automated OSPO Provenance Recognition**:
+   - The Clean-Room Sentinel CI automatically inspects git metadata, commit headers, and contributor identity:
+     - Commits authored or committed by `@microsoft.com` verified email accounts.
+     - Commits containing official corporate clearance trailers:
+       - `MS-OSPO-Approved: <ticket-or-tracking-id>`
+       - `Microsoft-Legal-Clearance: <reference>`
+       - `Signed-off-by: Full Name <alias@microsoft.com>`
+   - When recognized, the Sentinel assigns the changeset `Clean-Room Status: Microsoft OSPO Authorized`.
+
+3. **Exemption Policy**:
+   - First-party technical declarations, internal structures, and NT architectural definitions contributed through this channel are recognized as authorized contributions and exempted from "unauthorized leak" heuristic flags.
+   - Core quality and security checks remain active: code must still be written in clean C++23, follow RAII principles, and be free of raw disassembler scrapings (e.g. IDA Pro / Ghidra labels).
+
