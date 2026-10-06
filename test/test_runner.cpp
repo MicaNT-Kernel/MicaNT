@@ -145,6 +145,7 @@
 #include "micant/wscapi.hpp"
 #include "micant/amsi.hpp"
 #include "micant/mpengine.hpp"
+#include "micant/exploit_guard.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -32400,8 +32401,320 @@ void Test_WindowsDefender_AegisDefender_Subsystem() {
     std::cout << "[TEST] Suite 138: Microsoft Malware Protection Engine (AegisDefender) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 139: Windows Defender Exploit Guard (SentinelGuard) Subsystem
+// ============================================================================
+void Test_WindowsExploitGuard_SentinelGuard_Subsystem() {
+    using namespace micant::exploit_guard;
+
+    // 1. Dynamic Subsystem Initialization & Win32 C ABI Export Resolution
+    InitializeExploitGuardSubsystemExports();
+
+    auto& loader = ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExport("kernel32.dll", "GetProcessMitigationPolicy") != nullptr, "kernel32!GetProcessMitigationPolicy must be exported");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "SetProcessMitigationPolicy") != nullptr, "kernel32!SetProcessMitigationPolicy must be exported");
+    TEST_ASSERT(loader.getExport("mitlib.dll", "GetProcessMitigationPolicy") != nullptr, "mitlib!GetProcessMitigationPolicy must be exported");
+    TEST_ASSERT(loader.getExport("mitlib.dll", "SetProcessMitigationPolicy") != nullptr, "mitlib!SetProcessMitigationPolicy must be exported");
+    TEST_ASSERT(loader.getExport("api-ms-win-core-processthreads-l1-1-3.dll", "GetProcessMitigationPolicy") != nullptr, "api-ms-win-core-processthreads-l1-1-3!GetProcessMitigationPolicy must be exported");
+    TEST_ASSERT(loader.getExport("api-ms-win-core-processthreads-l1-1-3.dll", "SetProcessMitigationPolicy") != nullptr, "api-ms-win-core-processthreads-l1-1-3!SetProcessMitigationPolicy must be exported");
+
+    // Version database registration
+    auto modInfo = version::VersionDatabase::Instance().GetModuleInfo("mitlib.dll");
+    TEST_ASSERT(modInfo != nullptr, "mitlib.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modInfo->stringTable.at("FileVersion") == "10.0.26100.1", "mitlib.dll version must be 10.0.26100.1");
+
+    auto& mgr = SentinelGuardManager::get();
+    mgr.resetToBaseline();
+
+    // 2. Query Baseline Policies via GetProcessMitigationPolicy
+    {
+        // 2a. ProcessDEPPolicy
+        PROCESS_MITIGATION_DEP_POLICY dep{};
+        win32::BOOL ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessDEPPolicy, &dep, sizeof(dep));
+        TEST_ASSERT(ok == win32::TRUE, "GetProcessMitigationPolicy(ProcessDEPPolicy) must succeed");
+        TEST_ASSERT(dep.Enable == 1, "DEP must be enabled by default");
+        TEST_ASSERT(dep.DisableAtlThunkEmulation == 1, "ATL thunk emulation must be disabled by default");
+        TEST_ASSERT(dep.Permanent == 1, "DEP must be permanent by default");
+
+        // 2b. ProcessASLRPolicy
+        PROCESS_MITIGATION_ASLR_POLICY aslr{};
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessASLRPolicy, &aslr, sizeof(aslr));
+        TEST_ASSERT(ok == win32::TRUE, "GetProcessMitigationPolicy(ProcessASLRPolicy) must succeed");
+        TEST_ASSERT(aslr.EnableBottomUpRandomization == 1, "ASLR bottom-up randomization must be enabled");
+        TEST_ASSERT(aslr.EnableHighEntropy == 1, "ASLR high-entropy 64-bit VA must be enabled");
+        TEST_ASSERT(aslr.EnableForceRelocateImages == 1, "ASLR force relocate images must be enabled");
+
+        // 2c. ProcessControlFlowGuardPolicy
+        PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY cfg{};
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessControlFlowGuardPolicy, &cfg, sizeof(cfg));
+        TEST_ASSERT(ok == win32::TRUE, "GetProcessMitigationPolicy(ProcessControlFlowGuardPolicy) must succeed");
+        TEST_ASSERT(cfg.EnableControlFlowGuard == 1, "CFG must be enabled by default");
+        TEST_ASSERT(cfg.EnableExportSuppression == 1, "CFG export suppression must be enabled by default");
+        TEST_ASSERT(cfg.StrictMode == 1, "CFG strict mode must be enabled by default");
+    }
+
+    // 3. Robust Parameter Validation & Error Handling
+    {
+        PROCESS_MITIGATION_DEP_POLICY dep{};
+        // Null buffer
+        win32::BOOL ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessDEPPolicy, nullptr, sizeof(dep));
+        TEST_ASSERT(!ok && win32::GetLastError() == 87, "Null buffer to GetPolicy must return FALSE and ERROR_INVALID_PARAMETER (87)");
+
+        // Zero size
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessDEPPolicy, &dep, 0);
+        TEST_ASSERT(!ok && win32::GetLastError() == 87, "Zero size to GetPolicy must return FALSE and ERROR_INVALID_PARAMETER (87)");
+
+        // Truncated buffer
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessDEPPolicy, &dep, sizeof(uint16_t));
+        TEST_ASSERT(!ok && win32::GetLastError() == 87, "Truncated buffer must return FALSE and ERROR_INVALID_PARAMETER (87)");
+
+        // Invalid policy ID
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), static_cast<PROCESS_MITIGATION_POLICY>(9999), &dep, sizeof(dep));
+        TEST_ASSERT(!ok && win32::GetLastError() == 87, "Invalid policy enum must return FALSE and ERROR_INVALID_PARAMETER (87)");
+
+        // SetProcessMitigationPolicy invalid parameters
+        ok = SetProcessMitigationPolicy(ProcessDEPPolicy, nullptr, sizeof(dep));
+        TEST_ASSERT(!ok && win32::GetLastError() == 87, "Null buffer to SetPolicy must return FALSE and ERROR_INVALID_PARAMETER (87)");
+
+        ok = SetProcessMitigationPolicy(ProcessDEPPolicy, &dep, 0);
+        TEST_ASSERT(!ok && win32::GetLastError() == 87, "Zero length to SetPolicy must return FALSE and ERROR_INVALID_PARAMETER (87)");
+    }
+
+    // 4. Immutability & Permanence Invariant: Attempting to relax permanent DEP must fail with ERROR_ACCESS_DENIED (5)
+    {
+        PROCESS_MITIGATION_DEP_POLICY disableDep{};
+        disableDep.Enable = 0;
+        disableDep.Permanent = 0;
+        win32::BOOL ok = SetProcessMitigationPolicy(ProcessDEPPolicy, &disableDep, sizeof(disableDep));
+        TEST_ASSERT(!ok, "Disabling permanent DEP must return FALSE");
+        TEST_ASSERT(win32::GetLastError() == 5, "Disabling permanent DEP must set ERROR_ACCESS_DENIED (5)");
+    }
+
+    // 5. Arbitrary Code Guard (ACG / Dynamic Code Policy) & Permanence
+    {
+        TEST_ASSERT(mgr.isDynamicCodeAllowed(), "Dynamic code should be allowed initially");
+
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY acg{};
+        acg.ProhibitDynamicCode = 1;
+        acg.AllowThreadOptOut = 0; // Permanent ACG
+        win32::BOOL ok = SetProcessMitigationPolicy(ProcessDynamicCodePolicy, &acg, sizeof(acg));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessDynamicCodePolicy) must succeed");
+
+        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY qAcg{};
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessDynamicCodePolicy, &qAcg, sizeof(qAcg));
+        TEST_ASSERT(ok == win32::TRUE && qAcg.ProhibitDynamicCode == 1, "ACG ProhibitDynamicCode must be active in query");
+        TEST_ASSERT(!mgr.isDynamicCodeAllowed(), "isDynamicCodeAllowed must return false when ACG is active");
+
+        // Attempting to relax permanent ACG must fail with ERROR_ACCESS_DENIED (5)
+        acg.ProhibitDynamicCode = 0;
+        ok = SetProcessMitigationPolicy(ProcessDynamicCodePolicy, &acg, sizeof(acg));
+        TEST_ASSERT(!ok, "Attempt to disable permanent ACG must return FALSE");
+        TEST_ASSERT(win32::GetLastError() == 5, "Attempt to disable permanent ACG must set ERROR_ACCESS_DENIED (5)");
+    }
+
+    // 6. Strict Handle Checking Policy & Permanence
+    {
+        PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY handlePol{};
+        handlePol.RaiseExceptionOnInvalidHandleReference = 1;
+        handlePol.HandleExceptionsPermanentlyEnabled = 1;
+        win32::BOOL ok = SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy, &handlePol, sizeof(handlePol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy) must succeed");
+
+        PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY qHandle{};
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessStrictHandleCheckPolicy, &qHandle, sizeof(qHandle));
+        TEST_ASSERT(ok == win32::TRUE && qHandle.RaiseExceptionOnInvalidHandleReference == 1, "Strict handle checking must be active in query");
+
+        // Attempting to disable permanent strict handle check must fail
+        handlePol.RaiseExceptionOnInvalidHandleReference = 0;
+        ok = SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy, &handlePol, sizeof(handlePol));
+        TEST_ASSERT(!ok, "Attempt to relax permanent strict handle must return FALSE");
+        TEST_ASSERT(win32::GetLastError() == 5, "Attempt to relax permanent strict handle must set ERROR_ACCESS_DENIED (5)");
+    }
+
+    // 7. System Call Disable Policy (Win32k Lockdown) & Permanence
+    {
+        TEST_ASSERT(mgr.isWin32kAllowed(), "Win32k calls initially allowed");
+
+        PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY sysCall{};
+        sysCall.DisallowWin32kSystemCalls = 1;
+        win32::BOOL ok = SetProcessMitigationPolicy(ProcessSystemCallDisablePolicy, &sysCall, sizeof(sysCall));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessSystemCallDisablePolicy) must succeed");
+        TEST_ASSERT(!mgr.isWin32kAllowed(), "isWin32kAllowed must return false after Win32k lockdown");
+
+        // Attempt to relax permanent Win32k lockdown must fail
+        sysCall.DisallowWin32kSystemCalls = 0;
+        ok = SetProcessMitigationPolicy(ProcessSystemCallDisablePolicy, &sysCall, sizeof(sysCall));
+        TEST_ASSERT(!ok, "Attempt to relax permanent Win32k lockdown must return FALSE");
+        TEST_ASSERT(win32::GetLastError() == 5, "Attempt to relax permanent Win32k lockdown must set ERROR_ACCESS_DENIED (5)");
+    }
+
+    // 8. Child Process Policy & Permanence
+    {
+        TEST_ASSERT(mgr.isChildProcessCreationAllowed(), "Child process creation initially allowed");
+
+        PROCESS_MITIGATION_CHILD_PROCESS_POLICY childPol{};
+        childPol.NoChildProcessCreation = 1;
+        win32::BOOL ok = SetProcessMitigationPolicy(ProcessChildProcessPolicy, &childPol, sizeof(childPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessChildProcessPolicy) must succeed");
+        TEST_ASSERT(!mgr.isChildProcessCreationAllowed(), "isChildProcessCreationAllowed must return false");
+
+        // Attempt to relax permanent child process policy must fail
+        childPol.NoChildProcessCreation = 0;
+        ok = SetProcessMitigationPolicy(ProcessChildProcessPolicy, &childPol, sizeof(childPol));
+        TEST_ASSERT(!ok, "Attempt to relax permanent child process policy must return FALSE");
+        TEST_ASSERT(win32::GetLastError() == 5, "Attempt to relax permanent child process policy must set ERROR_ACCESS_DENIED (5)");
+    }
+
+    // 9. Extension Point, Signature, Font Disable, and Image Load Policies
+    {
+        // 9a. Extension Point
+        PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY extPol{};
+        extPol.DisableExtensionPoints = 1;
+        win32::BOOL ok = SetProcessMitigationPolicy(ProcessExtensionPointDisablePolicy, &extPol, sizeof(extPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessExtensionPointDisablePolicy) must succeed");
+
+        PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY qExt{};
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessExtensionPointDisablePolicy, &qExt, sizeof(qExt));
+        TEST_ASSERT(ok == win32::TRUE && qExt.DisableExtensionPoints == 1, "Extension points must be disabled in query");
+
+        // 9b. Signature Policy
+        PROCESS_MITIGATION_SIGNATURE_POLICY sigPol{};
+        sigPol.MicrosoftSignedOnly = 1;
+        sigPol.StoreSignedOnly = 1;
+        ok = SetProcessMitigationPolicy(ProcessSignaturePolicy, &sigPol, sizeof(sigPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessSignaturePolicy) must succeed");
+
+        PROCESS_MITIGATION_SIGNATURE_POLICY qSig{};
+        ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessSignaturePolicy, &qSig, sizeof(qSig));
+        TEST_ASSERT(ok == win32::TRUE && qSig.MicrosoftSignedOnly == 1 && qSig.StoreSignedOnly == 1, "Signature policy must be active in query");
+
+        // 9c. Font Disable Policy
+        TEST_ASSERT(mgr.isNonSystemFontAllowed(), "Non-system fonts initially allowed");
+        PROCESS_MITIGATION_FONT_DISABLE_POLICY fontPol{};
+        fontPol.DisableNonSystemFonts = 1;
+        ok = SetProcessMitigationPolicy(ProcessFontDisablePolicy, &fontPol, sizeof(fontPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessFontDisablePolicy) must succeed");
+        TEST_ASSERT(!mgr.isNonSystemFontAllowed(), "isNonSystemFontAllowed must return false");
+
+        // 9d. Image Load Policy
+        TEST_ASSERT(mgr.isRemoteImageLoadingAllowed(), "Remote image loading initially allowed");
+        PROCESS_MITIGATION_IMAGE_LOAD_POLICY imgPol{};
+        imgPol.NoRemoteImages = 1;
+        imgPol.PreferSystem32Images = 1;
+        ok = SetProcessMitigationPolicy(ProcessImageLoadPolicy, &imgPol, sizeof(imgPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessImageLoadPolicy) must succeed");
+        TEST_ASSERT(!mgr.isRemoteImageLoadingAllowed(), "isRemoteImageLoadingAllowed must return false");
+    }
+
+    // 10. Payload Restriction (EAF/IAF/ROP) and User Shadow Stack (CET)
+    {
+        // 10a. Payload Restriction
+        TEST_ASSERT(!mgr.isPayloadRestrictionActive(), "Payload restriction initially inactive");
+        PROCESS_MITIGATION_PAYLOAD_RESTRICTION_POLICY payloadPol{};
+        payloadPol.EnableExportAddressFilter = 1;
+        payloadPol.EnableExportAddressFilterPlus = 1;
+        payloadPol.EnableImportAddressFilter = 1;
+        payloadPol.EnableRopStackPivot = 1;
+        payloadPol.EnableRopCallerCheck = 1;
+        win32::BOOL ok = SetProcessMitigationPolicy(ProcessPayloadRestrictionPolicy, &payloadPol, sizeof(payloadPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessPayloadRestrictionPolicy) must succeed");
+        TEST_ASSERT(mgr.isPayloadRestrictionActive(), "isPayloadRestrictionActive must return true");
+
+        // 10b. User Shadow Stack (CET)
+        TEST_ASSERT(!mgr.isShadowStackActive(), "Shadow stack initially inactive");
+        PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY cetPol{};
+        cetPol.EnableUserShadowStack = 1;
+        cetPol.EnableUserShadowStackStrictMode = 1;
+        cetPol.SetContextIpValidation = 1;
+        ok = SetProcessMitigationPolicy(ProcessUserShadowStackPolicy, &cetPol, sizeof(cetPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessUserShadowStackPolicy) must succeed");
+        TEST_ASSERT(mgr.isShadowStackActive(), "isShadowStackActive must return true");
+
+        // 10c. Side Channel Isolation & Redirection Trust
+        PROCESS_MITIGATION_SIDE_CHANNEL_ISOLATION_POLICY scPol{};
+        scPol.SmtBranchTargetIsolation = 1;
+        scPol.DisableSpeculativeStoreBypass = 1;
+        ok = SetProcessMitigationPolicy(ProcessSideChannelIsolationPolicy, &scPol, sizeof(scPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessSideChannelIsolationPolicy) must succeed");
+
+        PROCESS_MITIGATION_REDIRECTION_TRUST_POLICY rtPol{};
+        rtPol.EnforceRedirectionTrust = 1;
+        ok = SetProcessMitigationPolicy(ProcessRedirectionTrustPolicy, &rtPol, sizeof(rtPol));
+        TEST_ASSERT(ok == win32::TRUE, "SetProcessMitigationPolicy(ProcessRedirectionTrustPolicy) must succeed");
+    }
+
+    // 11. Violation Audit Trail & Sovereign Telemetry Counter Invariants
+    {
+        mgr.clearViolations();
+        uint64_t beforeBlocked = mgr.getTotalViolationsBlocked();
+
+        mgr.recordViolation(ProcessDynamicCodePolicy, "JIT RWX allocation blocked at 0x7FFF00100000", true);
+        mgr.recordViolation(ProcessChildProcessPolicy, "cmd.exe spawn blocked under NoChildProcessCreation", true);
+
+        auto viols = mgr.getViolations();
+        TEST_ASSERT(viols.size() == 2, "Violations count must be 2");
+        TEST_ASSERT(viols[0].policy == ProcessDynamicCodePolicy, "First violation policy must be ProcessDynamicCodePolicy");
+        TEST_ASSERT(viols[0].policyName == "ProcessDynamicCodePolicy", "First violation policyName must match");
+        TEST_ASSERT(viols[0].blocked == true, "First violation blocked flag must be true");
+        TEST_ASSERT(viols[1].policy == ProcessChildProcessPolicy, "Second violation policy must be ProcessChildProcessPolicy");
+        TEST_ASSERT(mgr.getTotalViolationsBlocked() == beforeBlocked + 2, "Violations blocked counter must increment by 2");
+
+        mgr.clearViolations();
+        TEST_ASSERT(mgr.getViolations().empty(), "Violations list must be empty after clearViolations");
+    }
+
+    // 12. Interactive Shell Integration (guard / exploitguard / sentinel guard)
+    {
+        shell::CommandShell proc;
+        std::ostringstream oss;
+
+        // 12a. guard /?
+        int shellRet = proc.execute("guard /?", oss);
+        TEST_ASSERT(shellRet == 0, "guard /? must return 0");
+        TEST_ASSERT(oss.str().find("SentinelGuard / mitlib.dll") != std::string::npos, "Help must reference SentinelGuard");
+
+        // 12b. guard status
+        oss.str("");
+        shellRet = proc.execute("guard status", oss);
+        TEST_ASSERT(shellRet == 0, "guard status must return 0");
+        TEST_ASSERT(oss.str().find("SentinelGuard") != std::string::npos, "Must show SentinelGuard status header");
+        TEST_ASSERT(oss.str().find("Data Execution Prevention (DEP)") != std::string::npos, "Must show DEP status");
+
+        // 12c. guard list
+        oss.str("");
+        shellRet = proc.execute("guard list", oss);
+        TEST_ASSERT(shellRet == 0, "guard list must return 0");
+        TEST_ASSERT(oss.str().find("ProcessDEPPolicy") != std::string::npos, "Must list ProcessDEPPolicy");
+        TEST_ASSERT(oss.str().find("ProcessUserShadowStackPolicy") != std::string::npos, "Must list ProcessUserShadowStackPolicy");
+
+        // 12d. guard enable dynamiccode
+        oss.str("");
+        shellRet = proc.execute("guard enable dynamiccode", oss);
+        TEST_ASSERT(shellRet == 0, "guard enable dynamiccode must return 0");
+        TEST_ASSERT(oss.str().find("ProcessDynamicCodePolicy (ACG) successfully enabled") != std::string::npos, "Must confirm ACG enabled");
+
+        // 12e. guard test (diagnostic self-test)
+        oss.str("");
+        shellRet = proc.execute("guard test", oss);
+        TEST_ASSERT(shellRet == 0, "guard test must return 0");
+        TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "guard test must report [SUCCESS]");
+
+        // 12f. sentinel guard
+        oss.str("");
+        shellRet = proc.execute("sentinel guard", oss);
+        TEST_ASSERT(shellRet == 0, "sentinel guard must return 0");
+        TEST_ASSERT(oss.str().find("SentinelGuard") != std::string::npos, "sentinel guard must route to guard status");
+    }
+
+    std::cout << "[TEST] Suite 139: Windows Defender Exploit Guard (SentinelGuard) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite138")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite139")) {
+        RUN_TEST(Test_WindowsExploitGuard_SentinelGuard_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite138") {
         RUN_TEST(Test_WindowsDefender_AegisDefender_Subsystem);
         return g_FailedTests;
     }
@@ -32676,6 +32989,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSecurityCenter_WSC_Subsystem);
     RUN_TEST(Test_WindowsAMSI_SentinelScan_Subsystem);
     RUN_TEST(Test_WindowsDefender_AegisDefender_Subsystem);
+    RUN_TEST(Test_WindowsExploitGuard_SentinelGuard_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

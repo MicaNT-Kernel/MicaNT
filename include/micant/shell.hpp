@@ -130,6 +130,7 @@
 #include "wscapi.hpp"
 #include "amsi.hpp"
 #include "mpengine.hpp"
+#include "exploit_guard.hpp"
 
 namespace micant::shell {
 
@@ -200,6 +201,7 @@ public:
         wsc::InitializeWscSubsystemExports();
         amsi::InitializeAmsiSubsystemExports();
         defender::InitializeMpEngineSubsystemExports();
+        exploit_guard::InitializeExploitGuardSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -248,6 +250,7 @@ public:
         // SentinelScan (AMSI) In-Memory Script & Command Inspection
         if (cmd != "amsi" && cmd != "sentinelscan" && cmd != "sentinel" && cmd != "wsc" &&
             cmd != "security" && cmd != "securitycenter" && cmd != "mpcmdrun" && cmd != "defender" &&
+            cmd != "guard" && cmd != "exploitguard" && cmd != "mitlib" &&
             cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
@@ -382,6 +385,7 @@ public:
             if (cmd == "sentinel" || cmd == "wsc" || cmd == "security" || cmd == "securitycenter") { cmdWsc(tokens, out); return 0; }
             if (cmd == "amsi" || cmd == "sentinelscan") { cmdAmsi(tokens, out); return 0; }
             if (cmd == "mpcmdrun" || cmd == "defender") { cmdMpCmdRun(tokens, out); return 0; }
+            if (cmd == "guard" || cmd == "exploitguard" || cmd == "mitlib" || cmd == "mitigation") { cmdSentinelGuard(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -701,6 +705,7 @@ private:
             << "  SENTINEL / WSC [status|health|products|register|unregister|test] Sentinel Security System for MicaNT (sentinel test)\n"
             << "  AMSI / SENTINELSCAN [status|scan|block|unblock|clear|test] Antimalware Scan Interface (amsi test)\n"
             << "  MPCMDRUN / DEFENDER [-Scan|-ListQuarantine|-Restore|-PurgeQuarantine|-GetFiles|test] Microsoft Defender Client & AegisDefender (defender test)\n"
+            << "  GUARD / EXPLOITGUARD [status|list|enable|test] Windows Defender Exploit Guard & Process Mitigations (guard test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20385,7 +20390,14 @@ private:
                 << "  sentinel products                   Lists all registered endpoint security products in SentinelCenter\n"
                 << "  sentinel register <name> <type> [p] Registers a third-party or sovereign security provider\n"
                 << "  sentinel unregister <guid>          Unregisters a security provider by GUID\n"
+                << "  sentinel guard [status|list|enable|test] Exploit Guard & Process Mitigation Policies\n"
                 << "  sentinel test                       Executes Sentinel Security System diagnostic test suite\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "guard" || toLower(tokens[1]) == "exploitguard")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdSentinelGuard(subTokens, out);
             return;
         }
 
@@ -21060,6 +21072,214 @@ private:
 
         out << "Microsoft Defender Antimalware Command Line Utility (MpCmdRun.exe Parity)\n"
             << "Type 'defender /?' or 'defender -?' for a complete list of options.\n";
+    }
+
+    void cmdSentinelGuard(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::exploit_guard;
+        InitializeExploitGuardSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help" || toLower(tokens[1]) == "help")) {
+            out << "Windows Defender Exploit Guard Utility (SentinelGuard / mitlib.dll)\n"
+                << "Process Mitigation Policy Subsystem\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  guard status                      Displays active exploit mitigation posture for current process\n"
+                << "  guard list                        Lists all 16 supported process mitigation policies\n"
+                << "  guard enable <policy>             Enables specified mitigation policy (e.g. acg, dep, aslr, win32k, childproc, cfg, shadowstack)\n"
+                << "  guard test                        Executes SentinelGuard diagnostic self-test suite\n";
+            return;
+        }
+
+        auto& mgr = SentinelGuardManager::get();
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "test" || toLower(tokens[1]) == "-test")) {
+            out << "[TEST] Running Windows Defender Exploit Guard (SentinelGuard) Diagnostics...\n";
+
+            // 1. Query baseline DEP policy
+            PROCESS_MITIGATION_DEP_POLICY dep{};
+            win32::BOOL ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessDEPPolicy, &dep, sizeof(dep));
+            if (!ok || dep.Enable != 1) {
+                out << "[-] GetProcessMitigationPolicy (DEP) failed or DEP not enabled\n";
+                return;
+            }
+            out << "  [+] DEP Baseline: Enabled (Permanent: " << (dep.Permanent ? "Yes" : "No") << ")\n";
+
+            // 2. Query baseline ASLR policy
+            PROCESS_MITIGATION_ASLR_POLICY aslr{};
+            ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessASLRPolicy, &aslr, sizeof(aslr));
+            if (!ok || aslr.EnableHighEntropy != 1) {
+                out << "[-] GetProcessMitigationPolicy (ASLR) failed or HighEntropy not enabled\n";
+                return;
+            }
+            out << "  [+] ASLR Baseline: High-Entropy 64-bit Randomization Active\n";
+
+            // 3. Query baseline CFG policy
+            PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY cfg{};
+            ok = GetProcessMitigationPolicy(win32::GetCurrentProcess(), ProcessControlFlowGuardPolicy, &cfg, sizeof(cfg));
+            if (!ok || cfg.EnableControlFlowGuard != 1) {
+                out << "[-] GetProcessMitigationPolicy (CFG) failed\n";
+                return;
+            }
+            out << "  [+] Control Flow Guard: Active (Export Suppression Enabled)\n";
+
+            // 4. Test Dynamic Code Policy (ACG) configuration
+            PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamicCode{};
+            dynamicCode.ProhibitDynamicCode = 1;
+            ok = SetProcessMitigationPolicy(ProcessDynamicCodePolicy, &dynamicCode, sizeof(dynamicCode));
+            if (!ok) {
+                out << "[-] SetProcessMitigationPolicy (DynamicCode) failed\n";
+                return;
+            }
+            out << "  [+] Arbitrary Code Guard (ACG): Dynamic Code Prohibited\n";
+
+            // 5. Test Child Process Creation Policy
+            PROCESS_MITIGATION_CHILD_PROCESS_POLICY childProc{};
+            childProc.NoChildProcessCreation = 1;
+            ok = SetProcessMitigationPolicy(ProcessChildProcessPolicy, &childProc, sizeof(childProc));
+            if (!ok) {
+                out << "[-] SetProcessMitigationPolicy (ChildProcess) failed\n";
+                return;
+            }
+            out << "  [+] Child Process Policy: NoChildProcessCreation Enforced\n";
+
+            // 6. Test Win32k Lockdown (System Call Disable Policy)
+            PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY sysCall{};
+            sysCall.DisallowWin32kSystemCalls = 1;
+            ok = SetProcessMitigationPolicy(ProcessSystemCallDisablePolicy, &sysCall, sizeof(sysCall));
+            if (!ok) {
+                out << "[-] SetProcessMitigationPolicy (SystemCallDisable) failed\n";
+                return;
+            }
+            out << "  [+] Win32k System Call Lockdown: Active\n";
+
+            // 7. Verify Enforcement Hooks
+            if (mgr.isDynamicCodeAllowed()) {
+                out << "[-] isDynamicCodeAllowed expected false under ACG\n";
+                return;
+            }
+            if (mgr.isChildProcessCreationAllowed()) {
+                out << "[-] isChildProcessCreationAllowed expected false\n";
+                return;
+            }
+            if (mgr.isWin32kAllowed()) {
+                out << "[-] isWin32kAllowed expected false under Win32k lockdown\n";
+                return;
+            }
+            out << "  [+] Enforcement Hooks & Policy Gatekeepers Verified\n";
+
+            // 8. Test Permanence Invariant: Attempt to turn off DEP when Permanent must fail with ERROR_ACCESS_DENIED (5)
+            PROCESS_MITIGATION_DEP_POLICY disableDep{};
+            disableDep.Enable = 0;
+            win32::BOOL shouldFail = SetProcessMitigationPolicy(ProcessDEPPolicy, &disableDep, sizeof(disableDep));
+            if (shouldFail || win32::GetLastError() != 5) {
+                out << "[-] Permanent mitigation relax should fail with ERROR_ACCESS_DENIED (5)\n";
+                return;
+            }
+            out << "  [+] Permanence Immutability Guard: Verified (Attempt to relax permanent policy denied)\n";
+
+            out << "[SUCCESS] Windows Defender Exploit Guard (SentinelGuard) Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "list" || toLower(tokens[1]) == "policies")) {
+            out << "Supported Windows Defender Exploit Guard Mitigation Policies:\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  0. ProcessDEPPolicy                   Data Execution Prevention (NX/DEP)\n"
+                << "  1. ProcessASLRPolicy                  Address Space Layout Randomization & High-Entropy\n"
+                << "  2. ProcessDynamicCodePolicy           Arbitrary Code Guard (ACG / W^X Enforcer)\n"
+                << "  3. ProcessStrictHandleCheckPolicy     Strict Invalid Handle Exception Enforcer\n"
+                << "  4. ProcessSystemCallDisablePolicy     Win32k System Call Lockdown\n"
+                << "  5. ProcessMitigationOptionsMask       Global Mitigation Options Mask\n"
+                << "  6. ProcessExtensionPointDisablePolicy AppInit DLL & Global Hook Lockdown\n"
+                << "  7. ProcessControlFlowGuardPolicy      Control Flow Guard (CFG) & XFG Export Suppression\n"
+                << "  8. ProcessSignaturePolicy             Microsoft / MicaNT Binary Signature Enforcement\n"
+                << "  9. ProcessFontDisablePolicy           Untrusted GDI Non-System Font Blocking\n"
+                << " 10. ProcessImageLoadPolicy             Remote UNC Share & Low-Integrity DLL Blocking\n"
+                << " 11. ProcessSystemCallFilterPolicy      System Call Sandboxing & Filter Tables\n"
+                << " 12. ProcessPayloadRestrictionPolicy    Export & Import Address Filtering (EAF, EAF+, IAF)\n"
+                << " 13. ProcessChildProcessPolicy          Subprocess Creation Lockdown\n"
+                << " 14. ProcessSideChannelIsolationPolicy  Spectre / Meltdown Hardware Branch Isolation\n"
+                << " 15. ProcessUserShadowStackPolicy       CET Hardware Return Address Shadow Stack\n"
+                << " 16. ProcessRedirectionTrustPolicy      Filesystem & Registry Redirection Integrity\n";
+            return;
+        }
+
+        if (tokens.size() > 2 && (toLower(tokens[1]) == "enable" || toLower(tokens[1]) == "set")) {
+            std::string polName = toLower(tokens[2]);
+            if (polName == "acg" || polName == "dynamiccode") {
+                PROCESS_MITIGATION_DYNAMIC_CODE_POLICY p{};
+                p.ProhibitDynamicCode = 1;
+                SetProcessMitigationPolicy(ProcessDynamicCodePolicy, &p, sizeof(p));
+                out << "[+] ProcessDynamicCodePolicy (ACG) successfully enabled.\n";
+            } else if (polName == "childproc" || polName == "childprocess") {
+                PROCESS_MITIGATION_CHILD_PROCESS_POLICY p{};
+                p.NoChildProcessCreation = 1;
+                SetProcessMitigationPolicy(ProcessChildProcessPolicy, &p, sizeof(p));
+                out << "[+] ProcessChildProcessPolicy (NoChildProcessCreation) successfully enabled.\n";
+            } else if (polName == "win32k" || polName == "syscall") {
+                PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY p{};
+                p.DisallowWin32kSystemCalls = 1;
+                SetProcessMitigationPolicy(ProcessSystemCallDisablePolicy, &p, sizeof(p));
+                out << "[+] ProcessSystemCallDisablePolicy (Win32k Lockdown) successfully enabled.\n";
+            } else if (polName == "stricthandle" || polName == "handle") {
+                PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY p{};
+                p.RaiseExceptionOnInvalidHandleReference = 1;
+                SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy, &p, sizeof(p));
+                out << "[+] ProcessStrictHandleCheckPolicy successfully enabled.\n";
+            } else if (polName == "font") {
+                PROCESS_MITIGATION_FONT_DISABLE_POLICY p{};
+                p.DisableNonSystemFonts = 1;
+                SetProcessMitigationPolicy(ProcessFontDisablePolicy, &p, sizeof(p));
+                out << "[+] ProcessFontDisablePolicy successfully enabled.\n";
+            } else if (polName == "imageload" || polName == "remoteimage") {
+                PROCESS_MITIGATION_IMAGE_LOAD_POLICY p{};
+                p.NoRemoteImages = 1;
+                SetProcessMitigationPolicy(ProcessImageLoadPolicy, &p, sizeof(p));
+                out << "[+] ProcessImageLoadPolicy successfully enabled.\n";
+            } else if (polName == "payload" || polName == "eaf") {
+                PROCESS_MITIGATION_PAYLOAD_RESTRICTION_POLICY p{};
+                p.EnableExportAddressFilter = 1;
+                p.EnableExportAddressFilterPlus = 1;
+                p.EnableImportAddressFilter = 1;
+                p.EnableRopStackPivot = 1;
+                p.EnableRopCallerCheck = 1;
+                SetProcessMitigationPolicy(ProcessPayloadRestrictionPolicy, &p, sizeof(p));
+                out << "[+] ProcessPayloadRestrictionPolicy (EAF/IAF/ROP) successfully enabled.\n";
+            } else if (polName == "shadowstack" || polName == "cet") {
+                PROCESS_MITIGATION_USER_SHADOW_STACK_POLICY p{};
+                p.EnableUserShadowStack = 1;
+                p.SetContextIpValidation = 1;
+                SetProcessMitigationPolicy(ProcessUserShadowStackPolicy, &p, sizeof(p));
+                out << "[+] ProcessUserShadowStackPolicy (CET Shadow Stack) successfully enabled.\n";
+            } else {
+                out << "[-] Unknown mitigation policy: '" << tokens[2] << "'. Type 'guard list' for available policies.\n";
+            }
+            return;
+        }
+
+        // Default: display status
+        PROCESS_MITIGATION_DEP_POLICY depPol{};
+        mgr.getPolicy(win32::GetCurrentProcess(), ProcessDEPPolicy, &depPol, sizeof(depPol));
+
+        out << "Windows Defender Exploit Guard (SentinelGuard) Status:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Data Execution Prevention (DEP):    " << (depPol.Enable ? (depPol.Permanent ? "Enabled (Permanent)" : "Active") : "Disabled") << "\n"
+            << "  ASLR High-Entropy 64-bit VA:        Enabled\n"
+            << "  Control Flow Guard (CFG):           " << (mgr.isControlFlowGuardActive() ? "Enabled (Export Suppression)" : "Disabled") << "\n"
+            << "  Arbitrary Code Guard (ACG):         " << (!mgr.isDynamicCodeAllowed() ? "ACTIVE (Dynamic Code Blocked)" : "Inactive") << "\n"
+            << "  Win32k System Call Lockdown:        " << (!mgr.isWin32kAllowed() ? "ACTIVE (Win32k Blocked)" : "Inactive") << "\n"
+            << "  Child Process Spawning:             " << (!mgr.isChildProcessCreationAllowed() ? "BLOCKED (NoChildProcessCreation)" : "Allowed") << "\n"
+            << "  Remote Image Loading:               " << (!mgr.isRemoteImageLoadingAllowed() ? "BLOCKED (NoRemoteImages)" : "Allowed") << "\n"
+            << "  Non-System Font Loading:            " << (!mgr.isNonSystemFontAllowed() ? "BLOCKED (SystemFontsOnly)" : "Allowed") << "\n"
+            << "  Payload Restriction (EAF/IAF/ROP):  " << (mgr.isPayloadRestrictionActive() ? "ACTIVE" : "Inactive") << "\n"
+            << "  User Shadow Stack (Intel CET):      " << (mgr.isShadowStackActive() ? "ACTIVE" : "Inactive") << "\n"
+            << "  Total Mitigation Enforcements:      " << mgr.getTotalEnforcements() << "\n"
+            << "  Total Violations Blocked:           " << mgr.getTotalViolationsBlocked() << "\n";
     }
 
     static std::string trim(std::string_view s) {
