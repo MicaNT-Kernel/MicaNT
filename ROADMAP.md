@@ -2621,23 +2621,43 @@
 
 ---
 
-### Phase 114: Sovereign Protected Process Light (PPL) & Early Launch Anti-Malware (ELAM) (Milestone 141)
+### Phase 114: Sovereign Protected Process Light (PPL) & Early Launch Anti-Malware (ELAM) (Milestone 141) (100% Completed)
 *Goal: Harden security processes (MsMpEng, LsaIso, lsass, csrss) with Protected Process Light (PPL) access filtering against administrative manipulation and debuggers, and implement kernel boot-time driver classification via Early Launch Anti-Malware (ELAM) callbacks.*
-- [ ] **Protected Process Light (PPL) Subsystem (`include/micant/ppl.hpp`)**:
+- [x] **Protected Process Light (PPL) Subsystem (`include/micant/ppl.hpp`)**:
   - `PS_PROTECTION` bitfield definition: Type (None, ProtectedLight, Protected), Signer (Authenticode, CodeGen, Antimalware, Lsa, Windows, WinTcb, WinSystem, App), and Audit bit.
   - Access Mask Filtering: Intercepts `NtOpenProcess` and `NtDuplicateObject` access requests against protected processes.
   - Strips dangerous rights (`PROCESS_TERMINATE`, `PROCESS_CREATE_THREAD`, `PROCESS_VM_WRITE`, `PROCESS_VM_READ`, `PROCESS_SUSPEND_RESUME`, `PROCESS_DUP_HANDLE`) unless caller's signer level >= target signer level.
   - Immunity against `SeDebugPrivilege` privilege escalation.
-- [ ] **Early Launch Anti-Malware (ELAM) Subsystem (`include/micant/elam.hpp`)**:
+  - Pre-seeded protected processes: System (PID 4), lsass.exe (PID 492), LsaIso.exe (PID 500), csrss.exe (PID 600), services.exe (PID 700), MsMpEng.exe (PID 900), NisSrv.exe (PID 904).
+- [x] **Early Launch Anti-Malware (ELAM) Subsystem (`include/micant/ppl.hpp`)**:
   - Kernel callback infrastructure: `IoRegisterBootDriverCallback`, `IoUnRegisterBootDriverCallback`.
   - Boot driver classification: `BDCB_CLASSIFICATION_KNOWN_GOOD`, `BDCB_CLASSIFICATION_UNKNOWN`, `BDCB_CLASSIFICATION_KNOWN_BAD`, `BDCB_CLASSIFICATION_KNOWN_BAD_CRITICAL`.
-  - Boot Driver loader interception: Blocks malicious drivers before kernel initialization.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `PsIsProtectedProcess`, `PsGetProcessProtection`, `RtlCreateProcessParametersEx`.
+  - Boot Driver loader interception: Evaluates boot drivers and blocks malicious rootkits before kernel initialization.
+  - Configurable ELAM policy: `GOOD_ONLY`, `GOOD_AND_UNKNOWN` (Windows default), `GOOD_UNKNOWN_AND_BAD_CRITICAL`, `ALL`.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - DynamicLoader exports in `ntoskrnl.exe` and `kernel32.dll`: `PsIsProtectedProcess`, `PsGetProcessProtection`, `PsSetProcessProtection`, `PsFilterAccessMask`, `PsTerminateProcessSecure`, `IoRegisterBootDriverCallback`, `IoUnRegisterBootDriverCallback`, `ElamGetDriverClassification`, `ElamSetDriverClassification`, `ElamEvaluateBootDriver`.
+  - VersionDatabase registration (`10.0.26100.1`) for `ntoskrnl.exe` and `elam.sys`.
+- [x] **Interactive Shell CLI (`include/micant/shell.hpp`)**:
+  - Implemented `ppl status`, `ppl list`, `ppl protect <pid> <signer>`, `ppl terminate-attempt <pid>`, `ppl test`, `elam status`, `elam classify <driver> <class>`, `elam test`, and `sentinel ppl` / `sentinel elam` routing in `micant::shell`.
+- [x] **Unit Test Suite 141 (`Test_WindowsProtectedProcessLight_ELAM_Subsystem`)**:
+  - Validates dynamic exports, VersionDatabase entries, pre-seeded protected daemons, signer dominance matrix, access mask sanitization, process termination immunity (`STATUS_ACCESS_DENIED`), ELAM boot driver classification, dynamic callback registration, and shell CLI commands.
+  - Milestone 141: **141 / 141 Test Suites Passing (100%)**.
+
+---
+
+### Phase 115: System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) (Milestone 142)
+*Goal: Establish hardware-rooted Dynamic Root of Trust for Measurement (DRTM) using Intel TXT / AMD SKINIT, TPM 2.0 Platform Configuration Register (PCR) sealing (PCR 0-14), and TCG log verification.*
+- [ ] **System Guard & Measured Boot Subsystem (`include/micant/sysguard.hpp`)**:
+  - Dynamic Root of Trust for Measurement (DRTM) hardware launch sequence.
+  - TPM 2.0 PCR sealing & attestation: PCR 7 (Secure Boot), PCR 11 (BitLocker), and PCR 12-14 (Kernel & PPL integrity).
+  - TCG 2.0 event log replay and hash chain validation.
+- [ ] **Win32 TBS C ABI Parity**:
+  - `Tbsi_Context_Create`, `Tbsi_Context_Close`, `Tbsip_Submit_Command`, `Tbsi_Get_TCG_Log`.
 - [ ] **Interactive Shell CLI**:
-  - `ppl status`, `ppl protect <pid> <signer>`, `ppl terminate-attempt <pid>`, `elam status`, `elam classify <driver> <class>`.
-- [ ] **Unit Test Suite 141 (`Test_WindowsProtectedProcessLight_ELAM_Subsystem`)**:
-  - Comprehensive verification of PPL signer hierarchy, access mask stripping, termination immunity, ELAM boot driver callback dispatching, and driver blocking.
+  - `sysguard status`, `sysguard pcr`, `sysguard attest`, `sysguard test`.
+- [ ] **Unit Test Suite 142 (`Test_WindowsSystemGuard_SecureLaunch_Subsystem`)**:
+  - Comprehensive verification of DRTM measurement chain, PCR sealing, TCG log integrity, and TBS API surface.
+
 
 
 

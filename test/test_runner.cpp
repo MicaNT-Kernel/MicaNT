@@ -52,6 +52,7 @@
 #include "micant/user32.hpp"
 #include "micant/ws2_32.hpp"
 #include "micant/shell.hpp"
+#include "micant/ppl.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -32995,8 +32996,328 @@ void Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem() {
     std::cout << "[TEST] Suite 140: Windows Credential Guard & Isolated User Mode Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 141: Windows Protected Process Light (PPL) & ELAM Subsystem
+// ============================================================================
+void Test_WindowsProtectedProcessLight_ELAM_Subsystem() {
+    using namespace micant::ppl;
+
+    InitializePplSubsystemExports();
+
+    // 1. DynamicLoader Export Registration in ntoskrnl.exe and kernel32.dll
+    {
+        auto& loader = ldr::DynamicLoader::get();
+
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "PsIsProtectedProcess") != nullptr, "ntoskrnl.exe must export PsIsProtectedProcess");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "PsGetProcessProtection") != nullptr, "ntoskrnl.exe must export PsGetProcessProtection");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "PsSetProcessProtection") != nullptr, "ntoskrnl.exe must export PsSetProcessProtection");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "PsFilterAccessMask") != nullptr, "ntoskrnl.exe must export PsFilterAccessMask");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "PsTerminateProcessSecure") != nullptr, "ntoskrnl.exe must export PsTerminateProcessSecure");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "IoRegisterBootDriverCallback") != nullptr, "ntoskrnl.exe must export IoRegisterBootDriverCallback");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "IoUnRegisterBootDriverCallback") != nullptr, "ntoskrnl.exe must export IoUnRegisterBootDriverCallback");
+
+        TEST_ASSERT(loader.getExport("kernel32.dll", "PsIsProtectedProcess") != nullptr, "kernel32.dll must export PsIsProtectedProcess");
+        TEST_ASSERT(loader.getExport("kernel32.dll", "ElamGetDriverClassification") != nullptr, "kernel32.dll must export ElamGetDriverClassification");
+        TEST_ASSERT(loader.getExport("kernel32.dll", "ElamSetDriverClassification") != nullptr, "kernel32.dll must export ElamSetDriverClassification");
+        TEST_ASSERT(loader.getExport("kernel32.dll", "ElamEvaluateBootDriver") != nullptr, "kernel32.dll must export ElamEvaluateBootDriver");
+    }
+
+    // 2. VersionDatabase Registration for ntoskrnl.exe and elam.sys
+    {
+        auto modKernel = version::VersionDatabase::Instance().GetModuleInfo("ntoskrnl.exe");
+        TEST_ASSERT(modKernel != nullptr, "VersionDatabase must register ntoskrnl.exe");
+        TEST_ASSERT(modKernel->stringTable.at("FileVersion") == "10.0.26100.1", "ntoskrnl.exe version must match Windows 11 build");
+        TEST_ASSERT(modKernel->stringTable.at("FileDescription").find("Kernel") != std::string::npos, "ntoskrnl.exe description must mention Kernel");
+
+        auto modElam = version::VersionDatabase::Instance().GetModuleInfo("elam.sys");
+        TEST_ASSERT(modElam != nullptr, "VersionDatabase must register elam.sys");
+        TEST_ASSERT(modElam->stringTable.at("FileVersion") == "10.0.26100.1", "elam.sys version must match Windows 11 build");
+        TEST_ASSERT(modElam->stringTable.at("FileDescription").find("Early Launch") != std::string::npos, "elam.sys description must mention Early Launch");
+    }
+
+    // 3. Pre-Seeded Protected Daemons (System, lsass, LsaIso, csrss, MsMpEng)
+    {
+        auto& mgr = ProtectedProcessManager::get();
+        mgr.reset(); // Reset to fresh baseline
+
+        // PID 4: System (Protected, WinSystem)
+        PS_PROTECTION prot{};
+        TEST_ASSERT(mgr.getProcessProtection(4, prot), "PID 4 (System) must be registered in PPL");
+        TEST_ASSERT(prot.Type == PsProtectedTypeProtected, "System must have Type=Protected");
+        TEST_ASSERT(prot.Signer == PsProtectedSignerWinSystem, "System must have Signer=WinSystem");
+
+        // PID 492: lsass.exe (ProtectedLight, Lsa)
+        TEST_ASSERT(mgr.getProcessProtection(492, prot), "PID 492 (lsass.exe) must be registered in PPL");
+        TEST_ASSERT(prot.Type == PsProtectedTypeProtectedLight, "lsass.exe must have Type=ProtectedLight");
+        TEST_ASSERT(prot.Signer == PsProtectedSignerLsa, "lsass.exe must have Signer=Lsa");
+
+        // PID 500: LsaIso.exe (Protected, Lsa)
+        TEST_ASSERT(mgr.getProcessProtection(500, prot), "PID 500 (LsaIso.exe) must be registered in PPL");
+        TEST_ASSERT(prot.Type == PsProtectedTypeProtected, "LsaIso.exe must have Type=Protected");
+        TEST_ASSERT(prot.Signer == PsProtectedSignerLsa, "LsaIso.exe must have Signer=Lsa");
+
+        // PID 600: csrss.exe (Protected, WinTcb)
+        TEST_ASSERT(mgr.getProcessProtection(600, prot), "PID 600 (csrss.exe) must be registered in PPL");
+        TEST_ASSERT(prot.Type == PsProtectedTypeProtected, "csrss.exe must have Type=Protected");
+        TEST_ASSERT(prot.Signer == PsProtectedSignerWinTcb, "csrss.exe must have Signer=WinTcb");
+
+        // PID 900: MsMpEng.exe (ProtectedLight, Antimalware)
+        TEST_ASSERT(mgr.getProcessProtection(900, prot), "PID 900 (MsMpEng.exe) must be registered in PPL");
+        TEST_ASSERT(prot.Type == PsProtectedTypeProtectedLight, "MsMpEng.exe must have Type=ProtectedLight");
+        TEST_ASSERT(prot.Signer == PsProtectedSignerAntimalware, "MsMpEng.exe must have Signer=Antimalware");
+
+        // Check C ABI PsIsProtectedProcess
+        TEST_ASSERT(PsIsProtectedProcess(900) == 1, "PsIsProtectedProcess must return 1 for MsMpEng.exe");
+        TEST_ASSERT(PsIsProtectedProcess(12345) == 0, "PsIsProtectedProcess must return 0 for unprotected process");
+    }
+
+    // 4. Signer Dominance Matrix (RtlTestProtectedAccess)
+    {
+        PS_PROTECTION unpriv{};
+        unpriv.Type = PsProtectedTypeNone;
+        unpriv.Signer = PsProtectedSignerNone;
+
+        PS_PROTECTION antimalware{};
+        antimalware.Type = PsProtectedTypeProtectedLight;
+        antimalware.Signer = PsProtectedSignerAntimalware;
+
+        PS_PROTECTION windows{};
+        windows.Type = PsProtectedTypeProtectedLight;
+        windows.Signer = PsProtectedSignerWindows;
+
+        PS_PROTECTION winTcb{};
+        winTcb.Type = PsProtectedTypeProtected;
+        winTcb.Signer = PsProtectedSignerWinTcb;
+
+        PS_PROTECTION winSystem{};
+        winSystem.Type = PsProtectedTypeProtected;
+        winSystem.Signer = PsProtectedSignerWinSystem;
+
+        // Unprivileged cannot access any protected process
+        TEST_ASSERT(!RtlTestProtectedAccess(unpriv, antimalware), "Unprivileged cannot access Antimalware");
+        TEST_ASSERT(!RtlTestProtectedAccess(unpriv, winTcb), "Unprivileged cannot access WinTcb");
+
+        // Protected process CAN access unprivileged process
+        TEST_ASSERT(RtlTestProtectedAccess(antimalware, unpriv), "Antimalware can access unprivileged process");
+
+        // Peer Antimalware can access Antimalware
+        TEST_ASSERT(RtlTestProtectedAccess(antimalware, antimalware), "Antimalware can access peer Antimalware");
+
+        // Antimalware CANNOT access Windows, WinTcb, or WinSystem
+        TEST_ASSERT(!RtlTestProtectedAccess(antimalware, windows), "Antimalware cannot dominate Windows");
+        TEST_ASSERT(!RtlTestProtectedAccess(antimalware, winTcb), "Antimalware cannot dominate WinTcb");
+        TEST_ASSERT(!RtlTestProtectedAccess(antimalware, winSystem), "Antimalware cannot dominate WinSystem");
+
+        // Windows dominates Antimalware
+        TEST_ASSERT(RtlTestProtectedAccess(windows, antimalware), "Windows dominates Antimalware");
+
+        // WinTcb dominates Windows and Antimalware
+        TEST_ASSERT(RtlTestProtectedAccess(winTcb, windows), "WinTcb dominates Windows");
+        TEST_ASSERT(RtlTestProtectedAccess(winTcb, antimalware), "WinTcb dominates Antimalware");
+
+        // WinSystem dominates everything
+        TEST_ASSERT(RtlTestProtectedAccess(winSystem, winTcb), "WinSystem dominates WinTcb");
+        TEST_ASSERT(RtlTestProtectedAccess(winSystem, antimalware), "WinSystem dominates Antimalware");
+    }
+
+    // 5. Access Mask Sanitization (PsFilterAccessMask)
+    {
+        uint32_t granted = 0;
+
+        // Unprivileged process (PID 1000) requests PROCESS_ALL_ACCESS against MsMpEng (PID 900)
+        NTSTATUS st = PsFilterAccessMask(1000, 900, PROCESS_ALL_ACCESS, &granted);
+        TEST_ASSERT(st == STATUS_SUCCESS, "PsFilterAccessMask must return STATUS_SUCCESS");
+        // Must strip PROCESS_TERMINATE (0x1), PROCESS_VM_WRITE (0x20), PROCESS_VM_READ (0x10), etc.
+        TEST_ASSERT((granted & PROCESS_TERMINATE) == 0, "PROCESS_TERMINATE must be stripped");
+        TEST_ASSERT((granted & PROCESS_VM_WRITE) == 0, "PROCESS_VM_WRITE must be stripped");
+        TEST_ASSERT((granted & PROCESS_VM_READ) == 0, "PROCESS_VM_READ must be stripped");
+        TEST_ASSERT((granted & PROCESS_CREATE_THREAD) == 0, "PROCESS_CREATE_THREAD must be stripped");
+        TEST_ASSERT((granted & PROCESS_SUSPEND_RESUME) == 0, "PROCESS_SUSPEND_RESUME must be stripped");
+        // Safe read-only flags are preserved
+        TEST_ASSERT((granted & PROCESS_QUERY_LIMITED_INFORMATION) != 0, "PROCESS_QUERY_LIMITED_INFORMATION must be preserved");
+
+        // Unprivileged process requests ONLY PROCESS_TERMINATE -> all stripped -> returns STATUS_ACCESS_DENIED
+        uint32_t onlyTermGranted = 0;
+        st = PsFilterAccessMask(1000, 900, PROCESS_TERMINATE, &onlyTermGranted);
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "Exclusive dangerous right request must return STATUS_ACCESS_DENIED");
+        TEST_ASSERT(onlyTermGranted == 0, "No access granted for exclusive dangerous request");
+
+        // WinSystem (PID 4) requests PROCESS_ALL_ACCESS against MsMpEng -> granted completely
+        uint32_t sysGranted = 0;
+        st = PsFilterAccessMask(4, 900, PROCESS_ALL_ACCESS, &sysGranted);
+        TEST_ASSERT(st == STATUS_SUCCESS, "PsFilterAccessMask for WinSystem must succeed");
+        TEST_ASSERT(sysGranted == PROCESS_ALL_ACCESS, "WinSystem must receive full PROCESS_ALL_ACCESS");
+    }
+
+    // 6. Process Termination Immunity & SeDebugPrivilege Escalation Defense
+    {
+        auto& mgr = ProtectedProcessManager::get();
+
+        // 6a. Attempt to terminate MsMpEng.exe from unprivileged caller without SeDebugPrivilege
+        NTSTATUS st = mgr.attemptTerminate(1000, 900, false);
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "attemptTerminate against MsMpEng without privilege must return STATUS_ACCESS_DENIED");
+
+        // 6b. Attempt to terminate MsMpEng.exe with SeDebugPrivilege enabled (Mimikatz / Taskkill admin)
+        // In PPL, SeDebugPrivilege MUST NOT bypass process protection
+        st = mgr.attemptTerminate(1000, 900, true);
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "attemptTerminate against MsMpEng with SeDebugPrivilege MUST STILL return STATUS_ACCESS_DENIED");
+
+        // 6c. Attempt to terminate csrss.exe (WinTcb) from Antimalware (lower signer)
+        st = mgr.attemptTerminate(900, 600, false);
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "Antimalware cannot terminate WinTcb (csrss.exe)");
+
+        // 6d. WinSystem terminating an unprivileged or dominated process
+        st = mgr.attemptTerminate(4, 900, false);
+        TEST_ASSERT(st == STATUS_SUCCESS, "WinSystem can terminate dominated Antimalware process");
+
+        // 6e. Audit log records blocked terminations
+        auto audit = mgr.getAuditLog();
+        TEST_ASSERT(!audit.empty(), "Audit log must contain blocked termination events");
+        TEST_ASSERT(audit.back().targetPid == 600 || audit.back().targetPid == 900, "Audit log must identify target PID");
+    }
+
+    // 7. Early Launch Anti-Malware (ELAM) Boot Driver Classification & Policy
+    {
+        auto& elam = EarlyLaunchAntiMalwareManager::get();
+        elam.reset();
+
+        // Check pre-seeded classifications
+        TEST_ASSERT(elam.getDriverClassification(L"disk.sys") == BDCB_CLASSIFICATION_KNOWN_GOOD, "disk.sys must be KNOWN_GOOD");
+        TEST_ASSERT(elam.getDriverClassification(L"rootkit.sys") == BDCB_CLASSIFICATION_KNOWN_BAD, "rootkit.sys must be KNOWN_BAD");
+        TEST_ASSERT(elam.getDriverClassification(L"unknown_driver.sys") == BDCB_CLASSIFICATION_UNKNOWN, "unknown driver must be UNKNOWN");
+
+        // Evaluate known good driver under default policy (GOOD_AND_UNKNOWN)
+        NTSTATUS st = elam.evaluateBootDriver(L"disk.sys");
+        TEST_ASSERT(st == STATUS_SUCCESS, "disk.sys evaluation must succeed");
+
+        // Evaluate unknown driver under default policy (GOOD_AND_UNKNOWN)
+        st = elam.evaluateBootDriver(L"third_party_controller.sys");
+        TEST_ASSERT(st == STATUS_SUCCESS, "unknown driver must be allowed under standard default policy");
+
+        // Evaluate known bad rootkit driver -> MUST BE BLOCKED
+        st = elam.evaluateBootDriver(L"rootkit.sys");
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "rootkit.sys evaluation MUST return STATUS_ACCESS_DENIED");
+
+        // Verify blocked drivers log
+        auto blocked = elam.getBlockedDrivers();
+        TEST_ASSERT(!blocked.empty(), "Blocked drivers list must contain rootkit.sys");
+        TEST_ASSERT(blocked.back().driverPath == L"rootkit.sys", "Blocked record must record rootkit path");
+
+        // Switch policy to GOOD_ONLY
+        elam.setPolicy(ELAM_POLICY_GOOD_ONLY);
+        st = elam.evaluateBootDriver(L"third_party_controller.sys");
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "unknown driver must be blocked under GOOD_ONLY policy");
+
+        // Switch policy to ALL (audit mode)
+        elam.setPolicy(ELAM_POLICY_ALL);
+        st = elam.evaluateBootDriver(L"rootkit.sys");
+        TEST_ASSERT(st == STATUS_SUCCESS, "all drivers allowed under ALL/Audit policy");
+
+        elam.setPolicy(ELAM_POLICY_GOOD_AND_UNKNOWN);
+    }
+
+    // 8. Dynamic ELAM Boot Driver Callback Registration & Inspection
+    {
+        auto& elam = EarlyLaunchAntiMalwareManager::get();
+        void* hCallback = nullptr;
+
+        static bool s_callbackInvoked = false;
+        PBOOT_DRIVER_CALLBACK_FUNCTION myCallback = [](void*, BDCB_CALLBACK_TYPE type, void* info) -> NTSTATUS {
+            if (type == BdCbInitializeImage && info) {
+                s_callbackInvoked = true;
+                auto* img = static_cast<BDCB_IMAGE_INFORMATION*>(info);
+                if (img->ImagePath.find(L"dynamic_malware") != std::wstring::npos) {
+                    img->Classification = BDCB_CLASSIFICATION_KNOWN_BAD;
+                }
+            }
+            return STATUS_SUCCESS;
+        };
+
+        NTSTATUS st = IoRegisterBootDriverCallback(myCallback, nullptr, &hCallback);
+        TEST_ASSERT(st == STATUS_SUCCESS && hCallback != nullptr, "IoRegisterBootDriverCallback must succeed");
+        TEST_ASSERT(elam.getCallbackCount() == 1, "Callback count must be 1");
+
+        // Evaluate image that triggers dynamic callback classification
+        s_callbackInvoked = false;
+        st = ElamEvaluateBootDriver(L"dynamic_malware.sys", "abc123sha256hash");
+        TEST_ASSERT(s_callbackInvoked, "Registered ELAM callback must be invoked during driver evaluation");
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "Driver classified by callback as KNOWN_BAD must be blocked");
+
+        // Unregister callback
+        st = IoUnRegisterBootDriverCallback(hCallback);
+        TEST_ASSERT(st == STATUS_SUCCESS, "IoUnRegisterBootDriverCallback must succeed");
+        TEST_ASSERT(elam.getCallbackCount() == 0, "Callback count must be 0 after unregister");
+    }
+
+    // 9. Interactive Shell Integration (ppl, elam, sentinel ppl, sentinel elam)
+    {
+        shell::CommandShell proc;
+        std::ostringstream oss;
+
+        // 9a. ppl /?
+        int shellRet = proc.execute("ppl /?", oss);
+        TEST_ASSERT(shellRet == 0, "ppl /? must return 0");
+        TEST_ASSERT(oss.str().find("Protected Process Light (PPL)") != std::string::npos, "Help must reference PPL");
+
+        // 9b. ppl status
+        oss.str("");
+        shellRet = proc.execute("ppl status", oss);
+        TEST_ASSERT(shellRet == 0, "ppl status must return 0");
+        TEST_ASSERT(oss.str().find("MsMpEng.exe") != std::string::npos, "ppl status must display MsMpEng.exe");
+        TEST_ASSERT(oss.str().find("ProtectedLight") != std::string::npos, "ppl status must display ProtectedLight");
+
+        // 9c. ppl terminate-attempt
+        oss.str("");
+        shellRet = proc.execute("ppl terminate-attempt 900", oss);
+        TEST_ASSERT(shellRet == 0, "ppl terminate-attempt must return 0");
+        TEST_ASSERT(oss.str().find("STATUS_ACCESS_DENIED") != std::string::npos, "ppl terminate-attempt must confirm blocked termination");
+
+        // 9d. ppl test
+        oss.str("");
+        shellRet = proc.execute("ppl test", oss);
+        TEST_ASSERT(shellRet == 0, "ppl test must return 0");
+        TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "ppl test must report [SUCCESS]");
+
+        // 9e. elam /?
+        oss.str("");
+        shellRet = proc.execute("elam /?", oss);
+        TEST_ASSERT(shellRet == 0, "elam /? must return 0");
+        TEST_ASSERT(oss.str().find("Early Launch Anti-Malware (ELAM)") != std::string::npos, "Help must reference ELAM");
+
+        // 9f. elam status
+        oss.str("");
+        shellRet = proc.execute("elam status", oss);
+        TEST_ASSERT(shellRet == 0, "elam status must return 0");
+        TEST_ASSERT(oss.str().find("Active ELAM Policy:") != std::string::npos, "elam status must show policy");
+        TEST_ASSERT(oss.str().find("disk.sys") != std::string::npos, "elam status must show disk.sys");
+
+        // 9g. elam test
+        oss.str("");
+        shellRet = proc.execute("elam test", oss);
+        TEST_ASSERT(shellRet == 0, "elam test must return 0");
+        TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "elam test must report [SUCCESS]");
+
+        // 9h. sentinel ppl & sentinel elam routing
+        oss.str("");
+        shellRet = proc.execute("sentinel ppl status", oss);
+        TEST_ASSERT(shellRet == 0, "sentinel ppl status must return 0");
+        TEST_ASSERT(oss.str().find("Protected Process Light (PPL)") != std::string::npos, "sentinel ppl must route to ppl");
+
+        oss.str("");
+        shellRet = proc.execute("sentinel elam status", oss);
+        TEST_ASSERT(shellRet == 0, "sentinel elam status must return 0");
+        TEST_ASSERT(oss.str().find("Early Launch Anti-Malware (ELAM)") != std::string::npos, "sentinel elam must route to elam");
+    }
+
+    std::cout << "[TEST] Suite 141: Windows Protected Process Light (PPL) & ELAM Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite140")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite141")) {
+        RUN_TEST(Test_WindowsProtectedProcessLight_ELAM_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite140") {
         RUN_TEST(Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem);
         return g_FailedTests;
     }
@@ -33281,6 +33602,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDefender_AegisDefender_Subsystem);
     RUN_TEST(Test_WindowsExploitGuard_SentinelGuard_Subsystem);
     RUN_TEST(Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem);
+    RUN_TEST(Test_WindowsProtectedProcessLight_ELAM_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

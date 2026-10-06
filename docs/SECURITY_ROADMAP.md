@@ -153,9 +153,9 @@ flowchart LR
   5. **CLI Integration**: `credguard` / `sentinel credguard` commands (`status`, `enable`, `isolate`, `dump-attempt`, `test`).
   6. **Automated Verification**: Unit Test Suite 140 (`Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem`).
 
-### Phase 6: Sovereign Protected Process Light (PPL) & Early Launch Anti-Malware (ELAM) (`ppl.hpp` / `elam.hpp` / `ntoskrnl.exe`) - **ACTIVE (Milestone 141)**
+### Phase 6: Sovereign Protected Process Light (PPL) & Early Launch Anti-Malware (ELAM) (`ppl.hpp` / `elam.hpp` / `ntoskrnl.exe`) - **COMPLETED (Milestone 141)**
 - **Goal**: Harden system and security processes against rootkits and administrative manipulation (`SeDebugPrivilege`), and implement boot driver classification and verification via Early Launch Anti-Malware (ELAM) callbacks.
-- **Core Capabilities**:
+- **Implemented Components**:
   1. **Process Protection Level (PPL) Access Filtering**:
      - Kernel object manager filters `NtOpenProcess` and `NtDuplicateObject` access masks when targeting protected processes.
      - Strips `PROCESS_TERMINATE` (0x0001), `PROCESS_VM_WRITE` (0x0020), `PROCESS_VM_READ` (0x0010), `PROCESS_CREATE_THREAD` (0x0002), and `PROCESS_SUSPEND_RESUME` (0x0800) when accessor signer level < target signer level.
@@ -165,12 +165,22 @@ flowchart LR
      - `BDCB_IMAGE_INFORMATION` driver classification (`BDCB_CLASSIFICATION_KNOWN_GOOD`, `BDCB_CLASSIFICATION_UNKNOWN`, `BDCB_CLASSIFICATION_KNOWN_BAD`, `BDCB_CLASSIFICATION_KNOWN_BAD_CRITICAL`).
      - Driver load verification: Prevents kernel rootkits from loading during boot phase before the full antimalware engine starts.
   3. **Win32 & NT Export Parity**:
-     - `PsIsProtectedProcess`, `PsGetProcessProtection`, `RtlCreateProcessParametersEx`.
+     - `PsIsProtectedProcess`, `PsGetProcessProtection`, `PsSetProcessProtection`, `PsFilterAccessMask`, `PsTerminateProcessSecure`, `IoRegisterBootDriverCallback`, `IoUnRegisterBootDriverCallback`, `ElamGetDriverClassification`, `ElamSetDriverClassification`, `ElamEvaluateBootDriver`.
   4. **CLI Integration**:
      - `ppl` / `sentinel ppl` (`status`, `protect`, `terminate-attempt`, `test`).
      - `elam` / `sentinel elam` (`status`, `classify`, `test`).
   5. **Automated Verification**:
-     - Unit Test Suite 141 (`Test_WindowsProtectedProcessLight_ELAM_Subsystem`).
+     - Unit Test Suite 141 (`Test_WindowsProtectedProcessLight_ELAM_Subsystem`) passing at 100%.
+
+### Phase 7: System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) (`system_guard.hpp` / `tbs.dll` / `measured_boot.sys`) - **ACTIVE (Milestone 142)**
+- **Goal**: Establish hardware-rooted Dynamic Root of Trust for Measurement (DRTM) using Intel TXT / AMD SKINIT, TPM 2.0 Platform Configuration Register (PCR) sealing (PCR 0-14), and TCG log verification.
+- **Core Capabilities**:
+  1. **Dynamic Root of Trust for Measurement (DRTM)**: Hardware-enforced hypervisor and micro-kernel launch measurements bypassing firmware/UEFI trust boundaries.
+  2. **TPM 2.0 PCR Sealing & Attestation**: Cryptographic sealing of OS keys against PCR 7 (Secure Boot), PCR 11 (BitLocker), and PCR 12-14 (Kernel & PPL integrity).
+  3. **TCG Event Log Verification**: Clean-room parsing and replay of TCG 2.0 event logs ensuring firmware, bootloader, kernel, and ELAM driver chain-of-trust continuity.
+  4. **Win32 TBS C ABI Parity**: `Tbsi_Context_Create`, `Tbsi_Context_Close`, `Tbsip_Submit_Command`, `Tbsi_Get_TCG_Log`.
+  5. **CLI Integration**: `sysguard` / `sentinel sysguard` (`status`, `pcr`, `attest`, `test`).
+  6. **Automated Verification**: Unit Test Suite 142 (`Test_WindowsSystemGuard_SecureLaunch_Subsystem`).
 
 ---
 

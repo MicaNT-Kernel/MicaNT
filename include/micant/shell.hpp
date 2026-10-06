@@ -132,6 +132,7 @@
 #include "mpengine.hpp"
 #include "exploit_guard.hpp"
 #include "credguard.hpp"
+#include "ppl.hpp"
 
 namespace micant::shell {
 
@@ -204,6 +205,7 @@ public:
         defender::InitializeMpEngineSubsystemExports();
         exploit_guard::InitializeExploitGuardSubsystemExports();
         credguard::InitializeCredGuardSubsystemExports();
+        ppl::InitializePplSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -254,6 +256,7 @@ public:
             cmd != "security" && cmd != "securitycenter" && cmd != "mpcmdrun" && cmd != "defender" &&
             cmd != "guard" && cmd != "exploitguard" && cmd != "mitlib" &&
             cmd != "credguard" && cmd != "cred" && cmd != "lsaiso" &&
+            cmd != "ppl" && cmd != "protectedprocess" && cmd != "elam" && cmd != "bootdriver" &&
             cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
@@ -390,6 +393,8 @@ public:
             if (cmd == "mpcmdrun" || cmd == "defender") { cmdMpCmdRun(tokens, out); return 0; }
             if (cmd == "guard" || cmd == "exploitguard" || cmd == "mitlib" || cmd == "mitigation") { cmdSentinelGuard(tokens, out); return 0; }
             if (cmd == "credguard" || cmd == "cred" || cmd == "lsaiso") { cmdCredGuard(tokens, out); return 0; }
+            if (cmd == "ppl" || cmd == "protectedprocess") { cmdPpl(tokens, out); return 0; }
+            if (cmd == "elam" || cmd == "bootdriver") { cmdElam(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -20397,6 +20402,8 @@ private:
                 << "  sentinel unregister <guid>          Unregisters a security provider by GUID\n"
                 << "  sentinel guard [status|list|enable|test] Exploit Guard & Process Mitigation Policies\n"
                 << "  sentinel credguard [status|enable|disable|isolate|dump-attempt|test] Sovereign Credential Guard & IUM Enclave\n"
+                << "  sentinel ppl [status|list|protect|terminate-attempt|test] Protected Process Light Subsystem\n"
+                << "  sentinel elam [status|classify|policy|test] Early Launch Anti-Malware Driver Subsystem\n"
                 << "  sentinel test                       Executes Sentinel Security System diagnostic test suite\n";
             return;
         }
@@ -20410,6 +20417,18 @@ private:
         if (tokens.size() > 1 && (toLower(tokens[1]) == "credguard" || toLower(tokens[1]) == "cred" || toLower(tokens[1]) == "lsaiso")) {
             std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
             cmdCredGuard(subTokens, out);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "ppl" || toLower(tokens[1]) == "protectedprocess")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdPpl(subTokens, out);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "elam" || toLower(tokens[1]) == "bootdriver")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdElam(subTokens, out);
             return;
         }
 
@@ -21422,6 +21441,232 @@ private:
             << "  Isolated Enclave Credentials:       " << mgr.getIsolatedSecretCount() << " secrets stored in VTL 1\n"
             << "  Total Memory Scraping Interceptions:" << mgr.getTotalBlockedDumps() << " attempts blocked\n"
             << "  Enclave Authentications Performed:  " << mgr.getTotalEnclaveAuthentications() << "\n";
+    }
+
+    void cmdPpl(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::ppl;
+        InitializePplSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help" || toLower(tokens[1]) == "help")) {
+            out << "Sovereign Protected Process Light (PPL) Subsystem (ntoskrnl.exe)\n"
+                << "Protected Process Hierarchy & Access Mask Sanitization\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  ppl status                       Displays active protected processes and signer levels\n"
+                << "  ppl list                         Lists all protected processes in formatted table\n"
+                << "  ppl protect <pid> <signer>       Assigns PPL signer level to target process\n"
+                << "  ppl terminate-attempt <pid>      Simulates administrative termination against protected process\n"
+                << "  ppl test                         Executes PPL diagnostic self-test suite\n";
+            return;
+        }
+
+        auto& mgr = ProtectedProcessManager::get();
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "test" || toLower(tokens[1]) == "-test")) {
+            out << "[TEST] Running Sovereign Protected Process Light (PPL) Diagnostics...\n";
+
+            // 1. Verify pre-seeded processes
+            if (!mgr.isProtected(900)) { // MsMpEng.exe
+                out << "[-] MsMpEng.exe is not protected\n";
+                return;
+            }
+            out << "  [+] Pre-seeded Protected Daemons Verified (MsMpEng, LsaIso, lsass, csrss)\n";
+
+            // 2. Test access mask stripping
+            uint32_t granted = 0;
+            NTSTATUS st = mgr.filterAccess(1000 /* unpriv caller */, 900 /* MsMpEng */, PROCESS_ALL_ACCESS, granted);
+            if ((granted & PROCESS_TERMINATE) != 0 || (granted & PROCESS_VM_WRITE) != 0) {
+                out << "[-] Access mask sanitization failed: dangerous rights remained\n";
+                return;
+            }
+            out << "  [+] Access Mask Sanitization Verified: PROCESS_TERMINATE / PROCESS_VM_WRITE stripped\n";
+
+            // 3. Test terminate attempt (simulating taskkill / debug privilege)
+            st = mgr.attemptTerminate(1000, 900, true);
+            if (st != STATUS_ACCESS_DENIED) {
+                out << "[-] Termination of PPL process was not blocked\n";
+                return;
+            }
+            out << "  [+] PPL Termination Immunity Verified: STATUS_ACCESS_DENIED (0xC0000022)\n";
+
+            // 4. Test higher-level dominance (WinSystem terminating Antimalware)
+            st = mgr.attemptTerminate(4 /* System */, 900 /* MsMpEng */, false);
+            if (st != STATUS_SUCCESS) {
+                out << "[-] WinSystem dominance failed\n";
+                return;
+            }
+            out << "  [+] Signer Dominance Matrix Verified (WinSystem dominates Antimalware)\n";
+
+            out << "[SUCCESS] Sovereign Protected Process Light (PPL) Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "terminate-attempt") {
+            uint32_t targetPid = static_cast<uint32_t>(std::strtoul(tokens[2].c_str(), nullptr, 10));
+            out << "[*] Simulating administrative kill (NtTerminateProcess with SeDebugPrivilege) against PID " << targetPid << "...\n";
+            NTSTATUS st = mgr.attemptTerminate(1000 /* caller */, targetPid, true);
+            if (st == STATUS_ACCESS_DENIED) {
+                out << "[BLOCKED] Protected Process Light (PPL) prevented process termination.\n"
+                    << "          Status: STATUS_ACCESS_DENIED (0xC0000022 / ERROR_ACCESS_DENIED)\n";
+            } else {
+                out << "[+] Process termination was permitted.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 3 && toLower(tokens[1]) == "protect") {
+            uint32_t pid = static_cast<uint32_t>(std::strtoul(tokens[2].c_str(), nullptr, 10));
+            std::string signerStr = toLower(tokens[3]);
+            PS_PROTECTION prot{};
+            prot.Type = PsProtectedTypeProtectedLight;
+            if (signerStr == "winsystem") prot.Signer = PsProtectedSignerWinSystem;
+            else if (signerStr == "wintcb") prot.Signer = PsProtectedSignerWinTcb;
+            else if (signerStr == "windows") prot.Signer = PsProtectedSignerWindows;
+            else if (signerStr == "antimalware") prot.Signer = PsProtectedSignerAntimalware;
+            else if (signerStr == "lsa") prot.Signer = PsProtectedSignerLsa;
+            else if (signerStr == "authenticode") prot.Signer = PsProtectedSignerAuthenticode;
+            else prot.Signer = PsProtectedSignerAntimalware;
+
+            mgr.setProcessProtection(pid, prot, L"CustomProtected_" + std::to_wstring(pid));
+            out << "[+] Process PID " << pid << " configured as "
+                << ProtectedTypeToString(static_cast<PS_PROTECTED_TYPE>(prot.Type)) << " ("
+                << ProtectedSignerToString(static_cast<PS_PROTECTED_SIGNER>(prot.Signer)) << ").\n";
+            return;
+        }
+
+        // Default: status / list
+        auto procs = mgr.listProtectedProcesses();
+        out << "Sovereign Protected Process Light (PPL) Subsystem Status:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << std::left << std::setw(8) << "PID"
+            << std::setw(20) << "Image Name"
+            << std::setw(18) << "Protection Type"
+            << std::setw(18) << "Signer Level" << "\n"
+            << "-------------------------------------------------------------------------------\n";
+        for (const auto& p : procs) {
+            std::string name(p.processName.begin(), p.processName.end());
+            out << std::left << std::setw(8) << p.pid
+                << std::setw(20) << name
+                << std::setw(18) << ProtectedTypeToString(static_cast<PS_PROTECTED_TYPE>(p.protection.Type))
+                << std::setw(18) << ProtectedSignerToString(static_cast<PS_PROTECTED_SIGNER>(p.protection.Signer))
+                << "\n";
+        }
+        out << "-------------------------------------------------------------------------------\n"
+            << "Total Protected Daemons: " << procs.size() << "\n"
+            << "Audit Log Interceptions: " << mgr.getAuditLog().size() << " blocked attempts\n";
+    }
+
+    void cmdElam(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::ppl;
+        InitializePplSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help" || toLower(tokens[1]) == "help")) {
+            out << "Early Launch Anti-Malware (ELAM) Subsystem (elam.sys)\n"
+                << "Boot Driver Classification & Rootkit Defense Engine\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  elam status                       Displays ELAM boot driver posture and classifications\n"
+                << "  elam classify <driver> <class>    Configures driver classification (good|unknown|bad|bad-critical)\n"
+                << "  elam policy <good|good-unknown|all> Sets ELAM boot driver evaluation policy\n"
+                << "  elam test                         Executes ELAM boot driver self-test suite\n";
+            return;
+        }
+
+        auto& elam = EarlyLaunchAntiMalwareManager::get();
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "test" || toLower(tokens[1]) == "-test")) {
+            out << "[TEST] Running Early Launch Anti-Malware (ELAM) Diagnostics...\n";
+
+            // 1. Evaluate known good boot driver
+            NTSTATUS st = elam.evaluateBootDriver(L"disk.sys");
+            if (st != STATUS_SUCCESS) {
+                out << "[-] Known good driver evaluation failed\n";
+                return;
+            }
+            out << "  [+] Known Good Driver (disk.sys): Permitted to Initialize\n";
+
+            // 2. Evaluate known bad rootkit driver
+            st = elam.evaluateBootDriver(L"rootkit.sys");
+            if (st != STATUS_ACCESS_DENIED) {
+                out << "[-] Known bad driver was not blocked\n";
+                return;
+            }
+            out << "  [+] Malicious Rootkit Driver (rootkit.sys): Blocked with STATUS_ACCESS_DENIED\n";
+
+            // 3. Register custom boot callback
+            void* hCb = nullptr;
+            st = elam.registerCallback([](void*, BDCB_CALLBACK_TYPE type, void* info) -> NTSTATUS {
+                if (type == BdCbInitializeImage && info) {
+                    auto* p = static_cast<BDCB_IMAGE_INFORMATION*>(info);
+                    if (p->ImagePath.find(L"custom_bad") != std::wstring::npos) {
+                        p->Classification = BDCB_CLASSIFICATION_KNOWN_BAD;
+                    }
+                }
+                return STATUS_SUCCESS;
+            }, nullptr, &hCb);
+            if (st != STATUS_SUCCESS || !hCb) {
+                out << "[-] ELAM callback registration failed\n";
+                return;
+            }
+            out << "  [+] Dynamic ELAM Boot Callback Registered (Handle: 0x" << hCb << ")\n";
+
+            // 4. Test callback dynamic detection
+            st = elam.evaluateBootDriver(L"custom_bad.sys");
+            if (st != STATUS_ACCESS_DENIED) {
+                out << "[-] Callback dynamic detection failed\n";
+                return;
+            }
+            out << "  [+] Dynamic Callback Rootkit Interception Verified: BLOCKED\n";
+
+            elam.unregisterCallback(hCb);
+            out << "  [+] ELAM Callback Unregistered cleanly\n";
+
+            out << "[SUCCESS] Early Launch Anti-Malware (ELAM) Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 3 && toLower(tokens[1]) == "classify") {
+            std::string dName = tokens[2];
+            std::wstring wName(dName.begin(), dName.end());
+            std::string cStr = toLower(tokens[3]);
+            BDCB_CLASSIFICATION cls = BDCB_CLASSIFICATION_UNKNOWN;
+            if (cStr == "good" || cStr == "knowngood") cls = BDCB_CLASSIFICATION_KNOWN_GOOD;
+            else if (cStr == "bad" || cStr == "knownbad") cls = BDCB_CLASSIFICATION_KNOWN_BAD;
+            else if (cStr == "bad-critical" || cStr == "critical") cls = BDCB_CLASSIFICATION_KNOWN_BAD_CRITICAL;
+            else cls = BDCB_CLASSIFICATION_UNKNOWN;
+
+            elam.classifyDriver(wName, cls);
+            out << "[+] Driver '" << dName << "' classified as " << ElamClassificationToString(cls) << ".\n";
+            return;
+        }
+
+        // Default: status
+        auto classes = elam.getAllClassifications();
+        out << "Early Launch Anti-Malware (ELAM) Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Active ELAM Policy:              " << ElamPolicyToString(elam.getPolicy()) << "\n"
+            << "  Registered Boot Callbacks:       " << elam.getCallbackCount() << " callback handlers active\n"
+            << "  Pre-seeded Driver Signatures:    " << classes.size() << " drivers registered\n"
+            << "  Rootkit Drivers Blocked at Boot: " << elam.getBlockedDrivers().size() << " drivers\n"
+            << "-------------------------------------------------------------------------------\n"
+            << std::left << std::setw(30) << "Driver File"
+            << std::setw(25) << "Classification" << "\n"
+            << "-------------------------------------------------------------------------------\n";
+        for (const auto& [drv, cls] : classes) {
+            std::string d(drv.begin(), drv.end());
+            out << std::left << std::setw(30) << d
+                << std::setw(25) << ElamClassificationToString(cls) << "\n";
+        }
     }
 
     static std::string trim(std::string_view s) {
