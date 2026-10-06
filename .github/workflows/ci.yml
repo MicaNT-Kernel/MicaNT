@@ -19,9 +19,10 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path bin
 
-      - name: Compile Test Runner (Clang C++23)
+      - name: Compile Test Runner & Fixtures (Clang C++23)
         shell: pwsh
         run: |
+          clang++ -O2 -nostdlib "-Wl,-e,main" -lmsvcrt -lkernel32 test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
           clang++ -std=c++23 -O2 -Iinclude test/test_runner.cpp kernel/dispatcher.cpp kernel/syscalls.cpp -o bin/micant_tests.exe
 
       - name: Execute Full 138-Suite Test Battery (100% Pass Rate Required)

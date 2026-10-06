@@ -54,6 +54,13 @@ inline MicaFile** __iob_func() noexcept {
     return g_IobArray;
 }
 
+inline MicaFile* __acrt_iob_func(unsigned id) noexcept {
+    if (id == 0) return &g_StdInFile;
+    if (id == 1) return &g_StdOutFile;
+    if (id == 2) return &g_StdErrFile;
+    return &g_StdOutFile;
+}
+
 // ============================================================================
 // 2. Memory Management (malloc / free / realloc / calloc)
 // ============================================================================
@@ -280,6 +287,28 @@ inline int fprintf(MicaFile* stream, const char* format, ...) noexcept {
     return len;
 }
 
+inline int __stdio_common_vfprintf(uint64_t /*options*/, MicaFile* stream, const char* format, void* /*locale*/, va_list arglist) noexcept {
+    if (!format) return 0;
+    char buf[4096]{};
+    int len = std::vsnprintf(buf, sizeof(buf), format, arglist);
+    if (len > 0) {
+        win32::HANDLE hOut = (stream == &g_StdErrFile) 
+            ? win32::GetStdHandle(win32::STD_ERROR_HANDLE) 
+            : win32::GetStdHandle(win32::STD_OUTPUT_HANDLE);
+        win32::DWORD written = 0;
+        win32::WriteFile(hOut, buf, static_cast<win32::DWORD>(len), &written, nullptr);
+    }
+    return len;
+}
+
+inline int fflush(MicaFile* /*stream*/) noexcept {
+    return 0;
+}
+
+inline int setvbuf(MicaFile* /*stream*/, char* /*buffer*/, int /*mode*/, size_t /*size*/) noexcept {
+    return 0;
+}
+
 // ============================================================================
 // 5. Environment & Process Lifecycle
 // ============================================================================
@@ -340,7 +369,26 @@ inline void _amsg_exit(int /*err*/) noexcept { win32::ExitProcess(255); }
 
 inline int g_Commode = 0;
 inline int g_Fmode = 0;
-inline char** g_Environ = nullptr;
+inline char* s_DefaultArgv[] = { const_cast<char*>("micant.exe"), nullptr };
+inline char* s_DefaultEnv[]  = { const_cast<char*>("OS=MicaNT"), const_cast<char*>("SystemRoot=C:\\Windows"), nullptr };
+inline int g_Argc = 1;
+inline char** g_Argv = s_DefaultArgv;
+inline char** g_Environ = s_DefaultEnv;
+
+inline int* __p___argc() noexcept { return &g_Argc; }
+inline char*** __p___argv() noexcept { return &g_Argv; }
+inline int* __p__commode() noexcept { return &g_Commode; }
+inline int* __p__fmode() noexcept { return &g_Fmode; }
+inline char*** __p__environ() noexcept { return &g_Environ; }
+inline int _configure_narrow_argv(int /*mode*/) noexcept { return 0; }
+inline int _initialize_narrow_environment() noexcept { return 0; }
+inline char** _get_initial_narrow_environment() noexcept { return g_Environ; }
+inline int _seh_filter_exe(unsigned long /*xcptnum*/, void* /*pxcptinfoptrs*/) noexcept { return 0; }
+inline void _set_app_type(int /*type*/) noexcept {}
+inline void* _set_invalid_parameter_handler(void* /*pNew*/) noexcept { return nullptr; }
+inline int _configthreadlocale(int /*per_thread_locale_type*/) noexcept { return 0; }
+inline int _set_new_mode(int /*newMode*/) noexcept { return 0; }
+inline int _crt_atexit(void (*fn)()) noexcept { return atexit(fn); }
 
 inline void _initterm(void (**start)(void), void (**end)(void)) noexcept {
     if (!start || !end) return;
@@ -370,11 +418,9 @@ inline int __getmainargs(
     int /*doWildCard*/,
     void* /*startInfo*/
 ) noexcept {
-    static char* s_DefaultArgv[] = { const_cast<char*>("micant.exe"), nullptr };
-    static char* s_DefaultEnv[]  = { const_cast<char*>("OS=MicaNT"), const_cast<char*>("SystemRoot=C:\\Windows"), nullptr };
-    if (argc) *argc = 1;
-    if (argv) *argv = s_DefaultArgv;
-    if (envp) *envp = s_DefaultEnv;
+    if (argc) *argc = g_Argc;
+    if (argv) *argv = g_Argv;
+    if (envp) *envp = g_Environ;
     return 0;
 }
 
@@ -398,6 +444,10 @@ inline void InitializeMsvcrtSubsystemExports() {
 
     // Standard Streams & I/O
     ldr.registerExport("msvcrt.dll", "__iob_func", reinterpret_cast<void*>(__iob_func));
+    ldr.registerExport("msvcrt.dll", "__acrt_iob_func", reinterpret_cast<void*>(__acrt_iob_func));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vfprintf", reinterpret_cast<void*>(__stdio_common_vfprintf));
+    ldr.registerExport("msvcrt.dll", "fflush", reinterpret_cast<void*>(fflush));
+    ldr.registerExport("msvcrt.dll", "setvbuf", reinterpret_cast<void*>(setvbuf));
     ldr.registerExport("msvcrt.dll", "printf", reinterpret_cast<void*>(printf));
     ldr.registerExport("msvcrt.dll", "fprintf", reinterpret_cast<void*>(fprintf));
     ldr.registerExport("msvcrt.dll", "sprintf", reinterpret_cast<void*>(sprintf));
@@ -457,6 +507,22 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_commode", reinterpret_cast<void*>(&g_Commode));
     ldr.registerExport("msvcrt.dll", "_fmode", reinterpret_cast<void*>(&g_Fmode));
     ldr.registerExport("msvcrt.dll", "_environ", reinterpret_cast<void*>(&g_Environ));
+
+    // Universal CRT (UCRT) narrow environment & runtime exports
+    ldr.registerExport("msvcrt.dll", "__p___argc", reinterpret_cast<void*>(__p___argc));
+    ldr.registerExport("msvcrt.dll", "__p___argv", reinterpret_cast<void*>(__p___argv));
+    ldr.registerExport("msvcrt.dll", "__p__commode", reinterpret_cast<void*>(__p__commode));
+    ldr.registerExport("msvcrt.dll", "__p__fmode", reinterpret_cast<void*>(__p__fmode));
+    ldr.registerExport("msvcrt.dll", "__p__environ", reinterpret_cast<void*>(__p__environ));
+    ldr.registerExport("msvcrt.dll", "_configure_narrow_argv", reinterpret_cast<void*>(_configure_narrow_argv));
+    ldr.registerExport("msvcrt.dll", "_initialize_narrow_environment", reinterpret_cast<void*>(_initialize_narrow_environment));
+    ldr.registerExport("msvcrt.dll", "_get_initial_narrow_environment", reinterpret_cast<void*>(_get_initial_narrow_environment));
+    ldr.registerExport("msvcrt.dll", "_seh_filter_exe", reinterpret_cast<void*>(_seh_filter_exe));
+    ldr.registerExport("msvcrt.dll", "_set_app_type", reinterpret_cast<void*>(_set_app_type));
+    ldr.registerExport("msvcrt.dll", "_set_invalid_parameter_handler", reinterpret_cast<void*>(_set_invalid_parameter_handler));
+    ldr.registerExport("msvcrt.dll", "_configthreadlocale", reinterpret_cast<void*>(_configthreadlocale));
+    ldr.registerExport("msvcrt.dll", "_set_new_mode", reinterpret_cast<void*>(_set_new_mode));
+    ldr.registerExport("msvcrt.dll", "_crt_atexit", reinterpret_cast<void*>(_crt_atexit));
 }
 
 } // namespace micant::msvcrt

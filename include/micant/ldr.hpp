@@ -129,6 +129,25 @@ public:
         if (it != exportRegistry_.end()) {
             return it->second;
         }
+
+        // Standard Windows ApiSet schema and forwarder resolution
+        std::string modLower;
+        modLower.reserve(moduleName.size());
+        for (char c : moduleName) {
+            modLower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+
+        if (modLower.starts_with("api-ms-win-crt-") || modLower == "ucrtbase.dll" || modLower == "ucrtbase") {
+            auto itCrt = exportRegistry_.find(normalizeKey("msvcrt.dll", functionName));
+            if (itCrt != exportRegistry_.end()) {
+                return itCrt->second;
+            }
+        } else if (modLower.starts_with("api-ms-win-core-") || modLower == "kernelbase.dll" || modLower == "kernelbase") {
+            auto itK32 = exportRegistry_.find(normalizeKey("kernel32.dll", functionName));
+            if (itK32 != exportRegistry_.end()) {
+                return itK32->second;
+            }
+        }
         return nullptr;
     }
 

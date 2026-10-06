@@ -2037,6 +2037,30 @@ inline BOOL FlsFree(uint32_t dwFlsIndex) noexcept {
     return TRUE;
 }
 
+inline thread_local void* g_TlsSlots[64]{};
+
+inline DWORD TlsAlloc() noexcept {
+    static std::atomic<DWORD> s_TlsIndex{0};
+    return s_TlsIndex.fetch_add(1);
+}
+
+inline LPVOID TlsGetValue(DWORD dwTlsIndex) noexcept {
+    if (dwTlsIndex < 64) return g_TlsSlots[dwTlsIndex];
+    return nullptr;
+}
+
+inline BOOL TlsSetValue(DWORD dwTlsIndex, LPVOID lpTlsValue) noexcept {
+    if (dwTlsIndex < 64) {
+        g_TlsSlots[dwTlsIndex] = lpTlsValue;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+inline BOOL TlsFree(DWORD /*dwTlsIndex*/) noexcept {
+    return TRUE;
+}
+
 inline void InitializeCriticalSection(void* /*cs*/) noexcept {}
 inline BOOL InitializeCriticalSectionEx(void* /*cs*/, uint32_t /*spin*/, uint32_t /*flags*/) noexcept { return TRUE; }
 inline void EnterCriticalSection(void* /*cs*/) noexcept {}
@@ -2296,6 +2320,29 @@ inline BOOL VirtualProtect(LPVOID /*lpAddress*/, SIZE_T /*dwSize*/, DWORD /*flNe
     return TRUE;
 }
 
+struct MEMORY_BASIC_INFORMATION {
+    LPVOID BaseAddress;
+    LPVOID AllocationBase;
+    DWORD AllocationProtect;
+    uint16_t PartitionId;
+    SIZE_T RegionSize;
+    DWORD State;
+    DWORD Protect;
+    DWORD Type;
+};
+
+inline SIZE_T VirtualQuery(LPCVOID lpAddress, MEMORY_BASIC_INFORMATION* lpBuffer, SIZE_T dwLength) noexcept {
+    if (!lpBuffer || dwLength < sizeof(MEMORY_BASIC_INFORMATION)) return 0;
+    lpBuffer->BaseAddress = const_cast<LPVOID>(lpAddress);
+    lpBuffer->AllocationBase = const_cast<LPVOID>(lpAddress);
+    lpBuffer->AllocationProtect = PAGE_EXECUTE_READWRITE;
+    lpBuffer->RegionSize = 0x10000;
+    lpBuffer->State = 0x1000; // MEM_COMMIT
+    lpBuffer->Protect = PAGE_EXECUTE_READWRITE;
+    lpBuffer->Type = 0x20000; // MEM_PRIVATE
+    return sizeof(MEMORY_BASIC_INFORMATION);
+}
+
 inline void RtlCaptureContext(void* /*ContextRecord*/) noexcept {}
 inline void* RtlLookupFunctionEntry(uint64_t /*ControlPc*/, uint64_t* ImageBase, void* /*HistoryTable*/) noexcept {
     if (ImageBase) *ImageBase = g_CurrentExecutableBase ? g_CurrentExecutableBase : 0x140000000ULL;
@@ -2455,6 +2502,11 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "FreeEnvironmentStringsW", reinterpret_cast<void*>(FreeEnvironmentStringsW));
     ldr.registerExport("kernel32.dll", "GetStringTypeW", reinterpret_cast<void*>(GetStringTypeW));
     ldr.registerExport("kernel32.dll", "VirtualProtect", reinterpret_cast<void*>(VirtualProtect));
+    ldr.registerExport("kernel32.dll", "VirtualQuery", reinterpret_cast<void*>(VirtualQuery));
+    ldr.registerExport("kernel32.dll", "TlsAlloc", reinterpret_cast<void*>(TlsAlloc));
+    ldr.registerExport("kernel32.dll", "TlsGetValue", reinterpret_cast<void*>(TlsGetValue));
+    ldr.registerExport("kernel32.dll", "TlsSetValue", reinterpret_cast<void*>(TlsSetValue));
+    ldr.registerExport("kernel32.dll", "TlsFree", reinterpret_cast<void*>(TlsFree));
     ldr.registerExport("kernel32.dll", "RtlCaptureContext", reinterpret_cast<void*>(RtlCaptureContext));
     ldr.registerExport("kernel32.dll", "RtlLookupFunctionEntry", reinterpret_cast<void*>(RtlLookupFunctionEntry));
     ldr.registerExport("kernel32.dll", "RtlVirtualUnwind", reinterpret_cast<void*>(RtlVirtualUnwind));

@@ -11,6 +11,7 @@
  * without any MicaNT headers or shims to test clean-room MSVCRT dynamic import binding,
  * heap allocation, string manipulation, and formatted I/O on MicaNT.
  */
+extern "C" void __main() {}
 
 int main() {
     printf("MicaNT: Standard C Runtime (msvcrt.dll) executing successfully!\n");
@@ -25,5 +26,6 @@ int main() {
     printf("Buffer Length: %zu characters\n", strlen(buffer));
 
     free(buffer);
+    ExitProcess(0);
     return 0;
 }

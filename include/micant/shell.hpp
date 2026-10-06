@@ -518,6 +518,8 @@ public:
         ldr::DynamicLoader::get().registerExport("kernel32.dll", "TerminateProcess", reinterpret_cast<void*>(ShellBinaryTerminateProcess));
         ldr::DynamicLoader::get().registerExport("msvcrt.dll", "exit", reinterpret_cast<void*>(ShellBinaryExitProcess));
         ldr::DynamicLoader::get().registerExport("msvcrt.dll", "_exit", reinterpret_cast<void*>(ShellBinaryExitProcess));
+        ldr::DynamicLoader::get().registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "exit", reinterpret_cast<void*>(ShellBinaryExitProcess));
+        ldr::DynamicLoader::get().registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_exit", reinterpret_cast<void*>(ShellBinaryExitProcess));
 
         // 4. Bind Imports
         pe::PeLoader::bindImports(
@@ -576,8 +578,14 @@ public:
         // Restore original exports
         if (origExit) ldr::DynamicLoader::get().registerExport("kernel32.dll", "ExitProcess", origExit);
         if (origTerminate) ldr::DynamicLoader::get().registerExport("kernel32.dll", "TerminateProcess", origTerminate);
-        if (origMsvcrtExit) ldr::DynamicLoader::get().registerExport("msvcrt.dll", "exit", origMsvcrtExit);
-        if (origMsvcrt_Exit) ldr::DynamicLoader::get().registerExport("msvcrt.dll", "_exit", origMsvcrt_Exit);
+        if (origMsvcrtExit) {
+            ldr::DynamicLoader::get().registerExport("msvcrt.dll", "exit", origMsvcrtExit);
+            ldr::DynamicLoader::get().registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "exit", origMsvcrtExit);
+        }
+        if (origMsvcrt_Exit) {
+            ldr::DynamicLoader::get().registerExport("msvcrt.dll", "_exit", origMsvcrt_Exit);
+            ldr::DynamicLoader::get().registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_exit", origMsvcrt_Exit);
+        }
 
         if (s_LastBinaryExited.load()) {
             exitCode = s_LastBinaryExitCode.load();
