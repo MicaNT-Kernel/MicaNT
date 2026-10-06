@@ -2664,19 +2664,44 @@
 
 ---
 
-### Phase 116: Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI) (Milestone 143)
+### Phase 116: Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI) (Milestone 143) (100% Completed)
 *Goal: Implement hypervisor-enforced memory page permission enforcement (SLAT / EPT / NPT) preventing Ring 0 kernel code modification and enforcing W^X (Write XOR Execute) in kernel space.*
-- [ ] **Virtualization-Based Security Subsystem (`include/micant/vbs_hvci.hpp`)**:
-  - Second-Level Address Translation (SLAT) page tables marking executable kernel memory non-writable.
-  - Virtual Trust Level (VTL 0 and VTL 1) memory partitioning and page attribute table management.
-  - Secure Kernel (SK) call interface (`VbsCall` / Hypercall interface).
+- [x] **Virtualization-Based Security Subsystem (`include/micant/vbs_hvci.hpp`)**:
+  - Second-Level Address Translation (SLAT / Intel EPT / AMD NPT) stage-2 page tables marking executable kernel memory non-writable.
+  - Virtual Trust Level (VTL 0 Normal World and VTL 1 Secure World) memory partitioning and page attribute table management.
+  - Strict W^X memory protection invariant in kernel space (rejects simultaneous Write + Execute, prevents kernel code patching on .text, prevents execution of NonPagedPool data).
+  - VTL 1 Isolation: blocks VTL 0 read/write access to `securekernel.exe` and `LsaIso.exe` IUM enclaves with `STATUS_VTL_ACCESS_DENIED`.
+  - Clean-Room Hypercall Dispatch: `VbsInvokeHypercall` handling `HV_CALL_GET_VTL_STATUS`, `HV_CALL_ENTER_VTL1`, `HV_CALL_PROTECT_KERNEL_PAGE`, `HV_CALL_VERIFY_DRIVER_SIG`, `HV_CALL_ENFORCE_WX`, `HV_CALL_QUERY_PAGE_ATTR`, `HV_CALL_GET_VIOLATION_LOG`, `HV_CALL_RETURN_VTL0`.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `vbs.dll`: `VbsIsVirtualizationBasedSecuritySupported`, `VbsIsVirtualizationBasedSecurityEnabled`, `VbsGetHypervisorEnforcedCodeIntegrityStatus`, `VbsSetHypervisorEnforcedCodeIntegrity`, `VbsQueryVirtualTrustLevel`, `VbsInvokeHypercall`, `VbsGetMemoryProtectionPolicy`, `VbsAuditSecurityViolation`.
+  - `ntoskrnl.exe`: `HvlIsHypervisorPresent`, `HvlGetVirtualTrustLevel`, `HvlEnforceKernelCodeIntegrity`, `HvlProtectPageFrame`, `HvlValidateMemoryAttributes`, `HvlRegisterHvciCallback`, `HvlGetHvciViolationCount`.
+  - VersionDatabase registration (`10.0.26100.1`) for `vbs.dll` and `securekernel.exe`.
+- [x] **Interactive Shell CLI (`include/micant/shell.hpp`)**:
+  - Implemented `vbs status`, `vbs enable [uefi_lock]`, `vbs verify <addr>`, `vbs protect <addr> <perms>`, `vbs simulate-attack [patch|pool|scrape]`, `vbs pages`, `vbs test`, and `sentinel hvci` / `sentinel vbs` routing.
+- [x] **Unit Test Suite 143 (`Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem`)**:
+  - Comprehensive verification of SLAT page enforcement, W^X kernel memory protections, rootkit attack simulations, VTL isolation, hypercall dispatch engine, and VBS API surface.
+  - Milestone 143: **143 / 143 Test Suites Passing (100%)**.
+
+---
+
+### Phase 117: Kernel DMA Protection & IOMMU Remapping (VT-d / AMD-Vi / DMA Guard) (Milestone 144)
+*Goal: Implement sovereign Input-Output Memory Management Unit (IOMMU) hardware page remapping and Kernel DMA Protection (DMA Guard) to prevent physical Direct Memory Access (DMA) attacks via external hot-plug PCIe, Thunderbolt 3/4, and USB4 peripherals.*
+- [ ] **Kernel DMA Protection & IOMMU Remapping Subsystem (`include/micant/dma_guard.hpp`)**:
+  - Hardware IOMMU page tables (Intel VT-d DMA Remapping / AMD-Vi Device Table Entry DTE & I/O Page Tables).
+  - Domain isolation: device-to-domain mapping, physical memory isolation for untrusted PCIe endpoints.
+  - Kernel DMA Protection policies: `DmaGuardPolicy::BlockUntrusted`, `DmaGuardPolicy::AllowAuthorizedOnly`, `DmaGuardPolicy::Disabled`.
+  - External bus topology management: detection of internal fixed bus vs external hot-plug Thunderbolt/USB4 controllers.
+  - Peripheral enumeration, device authorization list (`AuthorizedDevices`), and pre-boot DMA protection flags (ACPI DMAR / IVRS parsing).
+  - Malicious DMA attack simulation: hot-plug physical memory read/write scraper interception returning `STATUS_DEVICE_NOT_AUTHORIZED` / `STATUS_ACCESS_DENIED`.
 - [ ] **Win32 & NT Clean-Room Export Parity**:
-  - Exports in `vbs.dll` and `ntoskrnl.exe`.
-  - VersionDatabase registrations for `vbs.dll` and `securekernel.exe`.
+  - `hal.dll`: `HalAllocateDomain`, `HalFreeDomain`, `HalAttachDeviceDomain`, `HalDetachDeviceDomain`, `HalMapIommuRange`, `HalUnmapIommuRange`, `HalFlushIommuTlb`.
+  - `pci.sys` / `ntoskrnl.exe`: `DmaGuardIsProtectionSupported`, `DmaGuardIsProtectionEnabled`, `DmaGuardGetDevicePolicy`, `DmaGuardAuthorizeDevice`, `DmaGuardRevokeDevice`, `DmaGuardInterceptDmaTransfer`.
+  - VersionDatabase registrations for `dma_guard.sys` and `pci.sys`.
 - [ ] **Interactive Shell CLI**:
-  - `vbs status`, `vbs enable`, `vbs verify`, `vbs test`, and `sentinel hvci` routing.
-- [ ] **Unit Test Suite 143 (`Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem`)**:
-  - Comprehensive verification of SLAT page enforcement, W^X kernel memory protections, VTL isolation, and VBS API surface.
+  - `dmaguard status`, `dmaguard devices`, `dmaguard policy <block|allow|disable>`, `dmaguard authorize <dev_id>`, `dmaguard simulate-attack`, `dmaguard test`, and `sentinel dma` routing.
+- [ ] **Unit Test Suite 144 (`Test_WindowsKernelDMA_Protection_IOMMU_Subsystem`)**:
+  - Verification of IOMMU domain allocation, page remapping, Thunderbolt hot-plug defense, device authorization lifecycle, HAL/PCI exports, and attack interception telemetry.
+
 
 
 

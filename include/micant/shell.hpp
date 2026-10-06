@@ -134,6 +134,7 @@
 #include "credguard.hpp"
 #include "ppl.hpp"
 #include "sysguard.hpp"
+#include "vbs_hvci.hpp"
 
 namespace micant::shell {
 
@@ -208,6 +209,7 @@ public:
         credguard::InitializeCredGuardSubsystemExports();
         ppl::InitializePplSubsystemExports();
         sysguard::InitializeSysGuardSubsystemExports();
+        vbs_hvci::InitializeVbsHvciSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -260,6 +262,7 @@ public:
             cmd != "credguard" && cmd != "cred" && cmd != "lsaiso" &&
             cmd != "ppl" && cmd != "protectedprocess" && cmd != "elam" && cmd != "bootdriver" &&
             cmd != "sysguard" && cmd != "systemguard" && cmd != "measuredboot" && cmd != "tbs" &&
+            cmd != "vbs" && cmd != "hvci" &&
             cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
@@ -399,6 +402,7 @@ public:
             if (cmd == "ppl" || cmd == "protectedprocess") { cmdPpl(tokens, out); return 0; }
             if (cmd == "elam" || cmd == "bootdriver") { cmdElam(tokens, out); return 0; }
             if (cmd == "sysguard" || cmd == "systemguard" || cmd == "measuredboot" || cmd == "tbs") { cmdSysGuard(tokens, out); return 0; }
+            if (cmd == "vbs" || cmd == "hvci") { cmdVbs(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -20409,6 +20413,7 @@ private:
                 << "  sentinel ppl [status|list|protect|terminate-attempt|test] Protected Process Light Subsystem\n"
                 << "  sentinel elam [status|classify|policy|test] Early Launch Anti-Malware Driver Subsystem\n"
                 << "  sentinel sysguard [status|pcr|attest|seal|unseal|test] System Guard & Measured Boot Subsystem\n"
+                << "  sentinel hvci [status|enable|verify|protect|simulate-attack|test] Virtualization-Based Security (VBS) & HVCI\n"
                 << "  sentinel test                       Executes Sentinel Security System diagnostic test suite\n";
             return;
         }
@@ -20440,6 +20445,12 @@ private:
         if (tokens.size() > 1 && (toLower(tokens[1]) == "sysguard" || toLower(tokens[1]) == "systemguard" || toLower(tokens[1]) == "measuredboot" || toLower(tokens[1]) == "tbs")) {
             std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
             cmdSysGuard(subTokens, out);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "hvci" || toLower(tokens[1]) == "vbs")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdVbs(subTokens, out);
             return;
         }
 
@@ -21902,6 +21913,176 @@ private:
             << "  Sealed Cryptographic Keys:       " << mgr.getSealedKeyCount() << " keys active\n"
             << "  Tamper Interceptions:            " << mgr.getTotalTamperDetections() << " unauthorized access attempts\n"
             << "  Attestation Health State:        " << (mgr.validateEventLog() ? "100% Verified (Chain of Trust Valid)" : "Compromised") << "\n"
+            << "-------------------------------------------------------------------------------\n";
+    }
+
+    void cmdVbs(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::vbs_hvci;
+        InitializeVbsHvciSubsystemExports();
+        auto& mgr = VirtualizationBasedSecurityManager::Instance();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "help" || tokens[1] == "/?")) {
+            out << "Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI)\n\n"
+                << "Usage:\n"
+                << "  vbs status                                Displays hypervisor, VTL, SLAT/EPT, and HVCI status\n"
+                << "  vbs enable [uefi_lock]                    Enables VBS and HVCI (optionally with immutable UEFI lock)\n"
+                << "  vbs verify <hex_addr>                     Verifies SLAT stage-2 memory permissions and W^X integrity\n"
+                << "  vbs protect <hex_addr> <perms>            Modifies SLAT page protection via hypercall (e.g. RX, RW)\n"
+                << "  vbs simulate-attack [patch|pool|scrape]   Simulates rootkit code patching, pool execution, or VTL 1 scrape\n"
+                << "  vbs pages                                 Dumps all active SLAT stage-2 page descriptors\n"
+                << "  vbs test                                  Runs VBS & HVCI unit self-test\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
+            out << "[TEST] Running VBS & HVCI Memory Integrity Self-Test...\n";
+            // 1. Verify VBS Supported & Enabled
+            if (!VbsIsVirtualizationBasedSecuritySupported() || !VbsIsVirtualizationBasedSecurityEnabled()) {
+                out << "[-] VBS is not enabled or supported.\n";
+                return;
+            }
+            out << "  [+] VBS is Active (VTL " << VbsQueryVirtualTrustLevel() << ")\n";
+
+            // 2. Verify HVCI Active
+            if (!VbsGetHypervisorEnforcedCodeIntegrityStatus()) {
+                out << "[-] HVCI is not active.\n";
+                return;
+            }
+            out << "  [+] HVCI (Memory Integrity) Active: W^X Enforced\n";
+
+            // 3. Test SLAT W^X Violation interception
+            BOOLEAN blocked = FALSE;
+            NTSTATUS st = VbsAuditSecurityViolation(0xFFFFF80000001000ULL, SLAT_PERM_WRITE, VTL_0_NORMAL, &blocked);
+            if (st != STATUS_HVCI_WX_VIOLATION || !blocked) {
+                out << "[-] Failed: Write to executable kernel code was not trapped!\n";
+                return;
+            }
+            out << "  [+] Kernel Code Modification Trapped: STATUS_HVCI_WX_VIOLATION (0xC0000431)\n";
+
+            // 4. Test Pool Execution Interception
+            st = VbsAuditSecurityViolation(0xFFFFFA8000004000ULL, SLAT_PERM_EXECUTE, VTL_0_NORMAL, &blocked);
+            if (st != STATUS_HVCI_CODE_INTEGRITY_VIOLATION || !blocked) {
+                out << "[-] Failed: Execution of non-paged pool was not trapped!\n";
+                return;
+            }
+            out << "  [+] Pool Shellcode Execution Trapped: STATUS_HVCI_CODE_INTEGRITY_VIOLATION (0xC0000428)\n";
+
+            // 5. Test VTL 1 Enclave Isolation
+            st = VbsAuditSecurityViolation(0xFFFFF87F00401000ULL, SLAT_PERM_READ, VTL_0_NORMAL, &blocked);
+            if (st != STATUS_VTL_ACCESS_DENIED || !blocked) {
+                out << "[-] Failed: VTL 0 access to VTL 1 memory was not denied!\n";
+                return;
+            }
+            out << "  [+] Cross-VTL Enclave Access Blocked: STATUS_VTL_ACCESS_DENIED (0xC0000432)\n";
+
+            // 6. Test Hypercall Dispatch
+            uint64_t vtlResult = 0;
+            st = VbsInvokeHypercall(HV_CALL_GET_VTL_STATUS, 0, 0, &vtlResult);
+            if (st != STATUS_SUCCESS) {
+                out << "[-] Hypercall failed.\n";
+                return;
+            }
+            out << "  [+] Hypercall Interface Verified: HV_CALL_GET_VTL_STATUS succeeded\n";
+
+            out << "[+] VBS & HVCI Memory Integrity Subsystem: ALL TESTS PASSED (100%)\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "simulate-attack" || toLower(tokens[1]) == "attack")) {
+            std::string type = "KernelCodePatching";
+            if (tokens.size() > 2) {
+                std::string arg = toLower(tokens[2]);
+                if (arg == "pool" || arg == "shellcode" || arg == "data") type = "NonPagedPoolExecution";
+                else if (arg == "scrape" || arg == "mimikatz" || arg == "vtl1" || arg == "lsaiso") type = "Vtl1MemoryScrape";
+                else type = "KernelCodePatching";
+            }
+            out << mgr.simulateRootkitAttack(type);
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "pages") {
+            out << "SLAT (Second-Level Address Translation) Page Table Entries:\n"
+                << "----------------------------------------------------------------------------------------\n"
+                << std::left << std::setw(22) << "Virtual Address"
+                << std::setw(12) << "Size"
+                << std::setw(12) << "VTL 0 Perms"
+                << std::setw(12) << "VTL 1 Perms"
+                << std::setw(8)  << "Owner"
+                << std::setw(26) << "Module / Enclave" << "\n"
+                << "----------------------------------------------------------------------------------------\n";
+
+            auto permStr = [](uint32_t p) -> std::string {
+                if (p == 0) return "---";
+                std::string s = "";
+                s += (p & SLAT_PERM_READ) ? 'R' : '-';
+                s += (p & SLAT_PERM_WRITE) ? 'W' : '-';
+                s += (p & SLAT_PERM_EXECUTE) ? 'X' : '-';
+                return s;
+            };
+
+            for (const auto& pg : mgr.getPages()) {
+                std::ostringstream vaddrSs;
+                vaddrSs << "0x" << std::hex << pg.virtualAddress;
+                out << std::left << std::setw(22) << vaddrSs.str()
+                    << std::setw(12) << (std::to_string(pg.size / 1024) + " KB")
+                    << std::setw(12) << permStr(pg.vtl0Permissions)
+                    << std::setw(12) << permStr(pg.vtl1Permissions)
+                    << std::setw(8)  << ("VTL " + std::to_string(pg.ownerVtl))
+                    << std::setw(26) << pg.moduleOwner << "\n";
+            }
+            out << "----------------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "enable") {
+            bool lock = (tokens.size() > 2 && toLower(tokens[2]) == "uefi_lock");
+            NTSTATUS st = mgr.setHvciState(true, lock);
+            if (st == STATUS_SUCCESS) {
+                out << "[+] VBS & HVCI Memory Integrity enabled" << (lock ? " with UEFI lock (immutable)" : "") << ".\n";
+            } else {
+                out << "[-] Failed to enable VBS/HVCI: 0x" << std::hex << st << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "verify") {
+            uint64_t addr = std::strtoull(tokens[2].c_str(), nullptr, 0);
+            out << "[*] Verifying memory at 0x" << std::hex << addr << " against hypervisor SLAT table...\n";
+            BOOLEAN blocked = FALSE;
+            NTSTATUS st = VbsAuditSecurityViolation(addr, SLAT_PERM_WRITE, VTL_0_NORMAL, &blocked);
+            if (st == STATUS_HVCI_WX_VIOLATION) {
+                out << "  [!] SLAT Attribute: READ-EXECUTE (R-X) - Executable Code\n"
+                    << "  [+] W^X Invariant: ENFORCED (Writes are hypervisor-trapped)\n";
+            } else if (st == STATUS_VTL_ACCESS_DENIED) {
+                out << "  [!] SLAT Attribute: VTL 1 SECURE ENCLAVE\n"
+                    << "  [+] Isolation: ENFORCED (VTL 0 access completely prohibited)\n";
+            } else {
+                out << "  [+] Memory range accessible: normal read/write page.\n";
+            }
+            return;
+        }
+
+        // Default: status
+        auto pol = mgr.getPolicyInfo();
+        out << "Virtualization-Based Security (VBS) & HVCI Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  VBS Architecture:                " << (pol.VbsStatus == VBS_STATUS_ENABLED_WITH_UEFI_LOCK ? "Enabled (with UEFI Lock)" : (pol.VbsStatus == VBS_STATUS_ENABLED ? "Enabled" : "Disabled")) << "\n"
+            << "  Hypervisor State:                Present (Hardware Hyper-V Root)\n"
+            << "  Hardware SLAT Extension:         " << ((pol.HypervisorFeatures & HV_FEATURE_SLAT_EPT) ? "Intel EPT (Extended Page Tables)" : "AMD NPT (Nested Page Tables)") << "\n"
+            << "  Mode-Based Execute Control:      " << ((pol.HypervisorFeatures & HV_FEATURE_MBEC) ? "Active (MBEC Supported)" : "Inactive") << "\n"
+            << "  Virtual Trust Levels:            VTL 0 (Normal World) & VTL 1 (Secure World)\n"
+            << "  Current Execution VTL:           VTL " << pol.CurrentVtl << "\n"
+            << "  HVCI (Memory Integrity):         " << (pol.HvciStatus ? "ENFORCED (Strict W^X Active)" : "Disabled") << "\n"
+            << "  Kernel Code Modification:        BLOCKED (Hypervisor EPT Trap on .text write)\n"
+            << "  Pool Shellcode Execution:        BLOCKED (Hypervisor EPT Trap on pool execute)\n"
+            << "  VTL 1 Enclave Isolation:         ENFORCED (LsaIso & Secure Kernel inaccessible)\n"
+            << "  Protected SLAT Pages:            " << pol.ProtectedPageCount << " descriptors\n"
+            << "  Exploit Attempts Neutralized:    " << pol.ViolationsPrevented << " trapped\n"
             << "-------------------------------------------------------------------------------\n";
     }
 

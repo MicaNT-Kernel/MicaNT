@@ -54,6 +54,7 @@
 #include "micant/shell.hpp"
 #include "micant/ppl.hpp"
 #include "micant/sysguard.hpp"
+#include "micant/vbs_hvci.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -33606,8 +33607,258 @@ void Test_WindowsSystemGuard_SecureLaunch_Subsystem() {
     std::cout << "[TEST] Suite 142: Windows System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 143: Windows Virtualization-Based Security (VBS) & Hypervisor-Enforced
+// Code Integrity (HVCI / Memory Integrity) Subsystem
+// ============================================================================
+void Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem() {
+    using namespace micant::vbs_hvci;
+
+    std::cout << "[TEST] Running Suite 143: Windows Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI)...\n";
+
+    // 1. DynamicLoader Export Surface Parity
+    {
+        InitializeVbsHvciSubsystemExports();
+        auto& loader = ldr::DynamicLoader::get();
+
+        // 1a. vbs.dll exports
+        std::vector<std::string> vbsExports = {
+            "VbsIsVirtualizationBasedSecuritySupported",
+            "VbsIsVirtualizationBasedSecurityEnabled",
+            "VbsGetHypervisorEnforcedCodeIntegrityStatus",
+            "VbsSetHypervisorEnforcedCodeIntegrity",
+            "VbsQueryVirtualTrustLevel",
+            "VbsInvokeHypercall",
+            "VbsGetMemoryProtectionPolicy",
+            "VbsAuditSecurityViolation"
+        };
+        for (const auto& sym : vbsExports) {
+            TEST_ASSERT(loader.getExport("vbs.dll", sym) != nullptr, ("vbs.dll export '" + sym + "' must be registered").c_str());
+        }
+
+        // 1b. ntoskrnl.exe exports
+        std::vector<std::string> ntosExports = {
+            "HvlIsHypervisorPresent",
+            "HvlGetVirtualTrustLevel",
+            "HvlEnforceKernelCodeIntegrity",
+            "HvlProtectPageFrame",
+            "HvlValidateMemoryAttributes",
+            "HvlRegisterHvciCallback",
+            "HvlGetHvciViolationCount"
+        };
+        for (const auto& sym : ntosExports) {
+            TEST_ASSERT(loader.getExport("ntoskrnl.exe", sym) != nullptr, ("ntoskrnl.exe export '" + sym + "' must be registered").c_str());
+        }
+    }
+
+    // 2. VersionDatabase Module Registrations
+    {
+        auto& vdb = version::VersionDatabase::Instance();
+        const auto* vbsInfo = vdb.GetModuleInfo("vbs.dll");
+        TEST_ASSERT(vbsInfo != nullptr, "vbs.dll must be registered in VersionDatabase");
+        TEST_ASSERT(vbsInfo->stringTable.at("FileVersion") == "10.0.26100.1", "vbs.dll version must match 10.0.26100.1");
+
+        const auto* skInfo = vdb.GetModuleInfo("securekernel.exe");
+        TEST_ASSERT(skInfo != nullptr, "securekernel.exe must be registered in VersionDatabase");
+        TEST_ASSERT(skInfo->stringTable.at("FileVersion") == "10.0.26100.1", "securekernel.exe version must match 10.0.26100.1");
+    }
+
+    // 3. Hypervisor Presence, VBS & HVCI Posture Verification
+    {
+        auto& mgr = VirtualizationBasedSecurityManager::Instance();
+        TEST_ASSERT(mgr.isSupported(), "Hypervisor SLAT (EPT/NPT) must be supported");
+        TEST_ASSERT(mgr.isEnabled(), "VBS must be enabled by default");
+        TEST_ASSERT(mgr.isHvciActive(), "HVCI (Memory Integrity) must be active by default");
+        TEST_ASSERT(mgr.getCurrentVtl() == VTL_0_NORMAL, "Initial execution must be in VTL 0 (Normal World)");
+
+        auto features = mgr.getFeatures();
+        TEST_ASSERT((features & HV_FEATURE_SLAT_EPT) != 0, "SLAT EPT must be supported");
+        TEST_ASSERT((features & HV_FEATURE_MBEC) != 0, "Mode-Based Execute Control must be supported");
+        TEST_ASSERT((features & HV_FEATURE_VTL) != 0, "Virtual Trust Levels must be supported");
+        TEST_ASSERT((features & HV_FEATURE_HYPERVISOR_PRESENT) != 0, "Hypervisor present bit must be set");
+
+        auto policy = mgr.getPolicyInfo();
+        TEST_ASSERT(policy.ProtectedPageCount >= 7, "At least 7 pre-seeded SLAT page regions must be registered");
+    }
+
+    // 4. Second-Level Address Translation (SLAT) Page Table & W^X Enforcement
+    {
+        auto& mgr = VirtualizationBasedSecurityManager::Instance();
+
+        // 4a. Verify ntoskrnl .text is mapped R-X
+        BOOLEAN blocked = FALSE;
+        NTSTATUS st = VbsAuditSecurityViolation(0xFFFFF80000000000ULL, SLAT_PERM_READ, VTL_0_NORMAL, &blocked);
+        TEST_ASSERT(st == STATUS_SUCCESS && !blocked, "Read of ntoskrnl .text must be allowed");
+
+        st = VbsAuditSecurityViolation(0xFFFFF80000000000ULL, SLAT_PERM_EXECUTE, VTL_0_NORMAL, &blocked);
+        TEST_ASSERT(st == STATUS_SUCCESS && !blocked, "Execution of ntoskrnl .text must be allowed");
+
+        // 4b. Strict W^X: Direct write to ntoskrnl .text MUST be trapped by hypervisor EPT
+        st = VbsAuditSecurityViolation(0xFFFFF80000000000ULL, SLAT_PERM_WRITE, VTL_0_NORMAL, &blocked);
+        TEST_ASSERT(st == STATUS_HVCI_WX_VIOLATION && blocked, "Write to executable kernel code must trigger STATUS_HVCI_WX_VIOLATION");
+
+        // 4c. Verify NonPagedPool is mapped RW- (No Execute)
+        st = VbsAuditSecurityViolation(0xFFFFFA8000000000ULL, SLAT_PERM_WRITE, VTL_0_NORMAL, &blocked);
+        TEST_ASSERT(st == STATUS_SUCCESS && !blocked, "Write to NonPagedPool must be allowed");
+
+        st = VbsAuditSecurityViolation(0xFFFFFA8000000000ULL, SLAT_PERM_EXECUTE, VTL_0_NORMAL, &blocked);
+        TEST_ASSERT(st == STATUS_HVCI_CODE_INTEGRITY_VIOLATION && blocked, "Execution of NonPagedPool must trigger STATUS_HVCI_CODE_INTEGRITY_VIOLATION");
+
+        // 4d. Rejection of simultaneous Write and Execute allocation (W+X forbidden)
+        st = mgr.protectKernelPage(0xFFFFF80001000000ULL, 4096, SLAT_PERM_WRITE | SLAT_PERM_EXECUTE, VTL_0_NORMAL);
+        TEST_ASSERT(st == STATUS_HVCI_WX_VIOLATION, "protectKernelPage with W+X must return STATUS_HVCI_WX_VIOLATION");
+
+        // 4e. VTL 0 cannot directly grant execute permission on kernel pages
+        st = mgr.protectKernelPage(0xFFFFF80001000000ULL, 4096, SLAT_PERM_EXECUTE, VTL_0_NORMAL);
+        TEST_ASSERT(st == STATUS_HVCI_POLICY_VIOLATION, "VTL 0 cannot mark memory executable without VTL 1 hypercall");
+    }
+
+    // 5. Cross-VTL Enclave Isolation (Secure Kernel & LsaIso)
+    {
+        auto& mgr = VirtualizationBasedSecurityManager::Instance();
+
+        // 5a. Normal world (VTL 0) reading Secure Kernel memory -> STATUS_VTL_ACCESS_DENIED
+        BOOLEAN blocked = FALSE;
+        NTSTATUS st = VbsAuditSecurityViolation(0xFFFFF87F00000000ULL, SLAT_PERM_READ, VTL_0_NORMAL, &blocked);
+        TEST_ASSERT(st == STATUS_VTL_ACCESS_DENIED && blocked, "VTL 0 Read of Secure Kernel must trigger STATUS_VTL_ACCESS_DENIED");
+
+        // 5b. Normal world (VTL 0) writing to LsaIso IUM Enclave -> STATUS_VTL_ACCESS_DENIED
+        st = VbsAuditSecurityViolation(0xFFFFF87F00400000ULL, SLAT_PERM_WRITE, VTL_0_NORMAL, &blocked);
+        TEST_ASSERT(st == STATUS_VTL_ACCESS_DENIED && blocked, "VTL 0 Write to LsaIso Enclave must trigger STATUS_VTL_ACCESS_DENIED");
+
+        // 5c. VTL 0 attempting to modify page table permissions of VTL 1 enclave
+        st = mgr.protectKernelPage(0xFFFFF87F00400000ULL, 4096, SLAT_PERM_RW, VTL_0_NORMAL);
+        TEST_ASSERT(st == STATUS_VTL_ACCESS_DENIED, "VTL 0 cannot modify VTL 1 enclave page permissions");
+
+        // 5d. Secure world (VTL 1) can access its own memory
+        st = mgr.verifyAccess(0xFFFFF87F00000000ULL, SLAT_PERM_READ, VTL_1_SECURE);
+        TEST_ASSERT(st == STATUS_SUCCESS, "VTL 1 must be permitted to read its own memory");
+    }
+
+    // 6. Hypercall Dispatch & Cross-VTL Execution Engine
+    {
+        uint64_t result = 0;
+
+        // 6a. Query VTL status hypercall
+        NTSTATUS st = VbsInvokeHypercall(HV_CALL_GET_VTL_STATUS, 0, 0, &result);
+        TEST_ASSERT(st == STATUS_SUCCESS, "HV_CALL_GET_VTL_STATUS must succeed");
+
+        // 6b. Transition to VTL 1 hypercall
+        st = VbsInvokeHypercall(HV_CALL_ENTER_VTL1, 0, 0, &result);
+        TEST_ASSERT(st == STATUS_SUCCESS && result == VTL_1_SECURE, "HV_CALL_ENTER_VTL1 must return VTL_1_SECURE");
+        TEST_ASSERT(VbsQueryVirtualTrustLevel() == VTL_1_SECURE, "QueryVirtualTrustLevel must reflect VTL 1");
+
+        // 6c. In VTL 1, verify driver signature and grant R-X permission in SLAT
+        st = VbsInvokeHypercall(HV_CALL_VERIFY_DRIVER_SIG, 0xFFFFF80002000000ULL, 65536, &result);
+        TEST_ASSERT(st == STATUS_SUCCESS, "HV_CALL_VERIFY_DRIVER_SIG must succeed");
+
+        // Check page was granted R-X
+        st = VbsInvokeHypercall(HV_CALL_QUERY_PAGE_ATTR, 0xFFFFF80002000000ULL, 0, &result);
+        TEST_ASSERT(st == STATUS_SUCCESS, "HV_CALL_QUERY_PAGE_ATTR must locate verified driver page");
+        uint32_t vtl0Perms = static_cast<uint32_t>(result & 0xFFFFFFFF);
+        TEST_ASSERT((vtl0Perms & SLAT_PERM_EXECUTE) != 0, "Verified driver page must have execute permission");
+
+        // Return to VTL 0 Normal World
+        st = VbsInvokeHypercall(HV_CALL_RETURN_VTL0, 0, 0, &result);
+        TEST_ASSERT(st == STATUS_SUCCESS && result == VTL_0_NORMAL, "HV_CALL_RETURN_VTL0 must return VTL_0_NORMAL");
+        TEST_ASSERT(VbsQueryVirtualTrustLevel() == VTL_0_NORMAL, "QueryVirtualTrustLevel must reflect VTL 0");
+
+        // 6d. Invalid hypercall handling
+        st = VbsInvokeHypercall(0x9999, 0, 0, &result);
+        TEST_ASSERT(st == STATUS_HVCI_INVALID_HYPERCALL, "Unrecognized hypercall must return STATUS_HVCI_INVALID_HYPERCALL");
+    }
+
+    // 7. UEFI Lock & Immutability Enforcement
+    {
+        // When enabled with UEFI lock, disable attempts must be rejected with STATUS_ACCESS_DENIED
+        NTSTATUS st = VbsSetHypervisorEnforcedCodeIntegrity(FALSE, FALSE);
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "Disabling VBS with active UEFI lock must return STATUS_ACCESS_DENIED");
+        TEST_ASSERT(VbsGetHypervisorEnforcedCodeIntegrityStatus() == TRUE, "HVCI must remain active after unauthorized disable attempt");
+    }
+
+    // 8. Simulated Rootkit Attacks & Interception Reporting
+    {
+        auto& mgr = VirtualizationBasedSecurityManager::Instance();
+
+        // 8a. Kernel Code Patching simulation
+        std::string report = mgr.simulateRootkitAttack("KernelCodePatching");
+        TEST_ASSERT(report.find("[BLOCKED]") != std::string::npos, "Simulation must report BLOCKED for code patching");
+        TEST_ASSERT(report.find("0xC0000431") != std::string::npos, "Simulation report must contain STATUS_HVCI_WX_VIOLATION");
+
+        // 8b. NonPagedPool Execution simulation
+        report = mgr.simulateRootkitAttack("NonPagedPoolExecution");
+        TEST_ASSERT(report.find("[BLOCKED]") != std::string::npos, "Simulation must report BLOCKED for pool execution");
+        TEST_ASSERT(report.find("0xC0000428") != std::string::npos, "Simulation report must contain STATUS_HVCI_CODE_INTEGRITY_VIOLATION");
+
+        // 8c. VTL 1 Memory Scraping simulation
+        report = mgr.simulateRootkitAttack("Vtl1MemoryScrape");
+        TEST_ASSERT(report.find("[BLOCKED]") != std::string::npos, "Simulation must report BLOCKED for VTL 1 scrape");
+        TEST_ASSERT(report.find("0xC0000432") != std::string::npos, "Simulation report must contain STATUS_VTL_ACCESS_DENIED");
+
+        // Verify violation metrics
+        TEST_ASSERT(mgr.getViolationCount() >= 5, "Total violations prevented must be tracked");
+        TEST_ASSERT(!mgr.getViolations().empty(), "Violation audit log must contain records");
+    }
+
+    // 9. Interactive Shell Integration (vbs, sentinel hvci)
+    {
+        shell::CommandShell proc;
+        std::ostringstream oss;
+
+        // 9a. vbs /?
+        int shellRet = proc.execute("vbs /?", oss);
+        TEST_ASSERT(shellRet == 0, "vbs /? must return 0");
+        TEST_ASSERT(oss.str().find("Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI)") != std::string::npos, "Help must reference VBS & HVCI");
+
+        // 9b. vbs status
+        oss.str("");
+        shellRet = proc.execute("vbs status", oss);
+        TEST_ASSERT(shellRet == 0, "vbs status must return 0");
+        TEST_ASSERT(oss.str().find("Virtualization-Based Security (VBS) & HVCI Posture:") != std::string::npos, "vbs status must display posture");
+        TEST_ASSERT(oss.str().find("ENFORCED (Strict W^X Active)") != std::string::npos, "vbs status must confirm HVCI enforced");
+
+        // 9c. vbs pages
+        oss.str("");
+        shellRet = proc.execute("vbs pages", oss);
+        TEST_ASSERT(shellRet == 0, "vbs pages must return 0");
+        TEST_ASSERT(oss.str().find("ntoskrnl.exe (.text)") != std::string::npos, "vbs pages must list ntoskrnl .text");
+        TEST_ASSERT(oss.str().find("NonPagedPool") != std::string::npos, "vbs pages must list NonPagedPool");
+        TEST_ASSERT(oss.str().find("securekernel.exe") != std::string::npos, "vbs pages must list securekernel.exe");
+
+        // 9d. vbs verify 0xFFFFF80000000000
+        oss.str("");
+        shellRet = proc.execute("vbs verify 0xFFFFF80000000000", oss);
+        TEST_ASSERT(shellRet == 0, "vbs verify must return 0");
+        TEST_ASSERT(oss.str().find("READ-EXECUTE (R-X)") != std::string::npos, "vbs verify must identify R-X section");
+
+        // 9e. vbs simulate-attack
+        oss.str("");
+        shellRet = proc.execute("vbs simulate-attack", oss);
+        TEST_ASSERT(shellRet == 0, "vbs simulate-attack must return 0");
+        TEST_ASSERT(oss.str().find("[BLOCKED]") != std::string::npos, "vbs simulate-attack must report BLOCKED");
+
+        // 9f. vbs test
+        oss.str("");
+        shellRet = proc.execute("vbs test", oss);
+        TEST_ASSERT(shellRet == 0, "vbs test must return 0");
+        TEST_ASSERT(oss.str().find("ALL TESTS PASSED (100%)") != std::string::npos, "vbs test must pass all tests");
+
+        // 9g. sentinel hvci status routing
+        oss.str("");
+        shellRet = proc.execute("sentinel hvci status", oss);
+        TEST_ASSERT(shellRet == 0, "sentinel hvci status must return 0");
+        TEST_ASSERT(oss.str().find("Virtualization-Based Security (VBS) & HVCI Posture:") != std::string::npos, "sentinel hvci must route to vbs status");
+    }
+
+    std::cout << "[TEST] Suite 143: Windows Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite142")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite143")) {
+        RUN_TEST(Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite142") {
         RUN_TEST(Test_WindowsSystemGuard_SecureLaunch_Subsystem);
         return g_FailedTests;
     }
@@ -33902,6 +34153,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem);
     RUN_TEST(Test_WindowsProtectedProcessLight_ELAM_Subsystem);
     RUN_TEST(Test_WindowsSystemGuard_SecureLaunch_Subsystem);
+    RUN_TEST(Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
