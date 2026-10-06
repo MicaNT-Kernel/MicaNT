@@ -2684,23 +2684,45 @@
 
 ---
 
-### Phase 117: Kernel DMA Protection & IOMMU Remapping (VT-d / AMD-Vi / DMA Guard) (Milestone 144)
+### Phase 117: Kernel DMA Protection & IOMMU Remapping (VT-d / AMD-Vi / DMA Guard) (Milestone 144) (100% Completed)
 *Goal: Implement sovereign Input-Output Memory Management Unit (IOMMU) hardware page remapping and Kernel DMA Protection (DMA Guard) to prevent physical Direct Memory Access (DMA) attacks via external hot-plug PCIe, Thunderbolt 3/4, and USB4 peripherals.*
-- [ ] **Kernel DMA Protection & IOMMU Remapping Subsystem (`include/micant/dma_guard.hpp`)**:
+- [x] **Kernel DMA Protection & IOMMU Remapping Subsystem (`include/micant/dma_guard.hpp`)**:
   - Hardware IOMMU page tables (Intel VT-d DMA Remapping / AMD-Vi Device Table Entry DTE & I/O Page Tables).
   - Domain isolation: device-to-domain mapping, physical memory isolation for untrusted PCIe endpoints.
-  - Kernel DMA Protection policies: `DmaGuardPolicy::BlockUntrusted`, `DmaGuardPolicy::AllowAuthorizedOnly`, `DmaGuardPolicy::Disabled`.
-  - External bus topology management: detection of internal fixed bus vs external hot-plug Thunderbolt/USB4 controllers.
-  - Peripheral enumeration, device authorization list (`AuthorizedDevices`), and pre-boot DMA protection flags (ACPI DMAR / IVRS parsing).
-  - Malicious DMA attack simulation: hot-plug physical memory read/write scraper interception returning `STATUS_DEVICE_NOT_AUTHORIZED` / `STATUS_ACCESS_DENIED`.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - Kernel DMA Protection policies: `DmaGuardPolicy::BlockUntrusted`, `DmaGuardPolicy::AllowAll`, `DmaGuardPolicy::AllowAuthorizedOnly`, `DmaGuardPolicy::Disabled`.
+  - External bus topology management: detection of internal fixed bus vs external hot-plug Thunderbolt 3, Thunderbolt 4, and USB4 controllers.
+  - Peripheral enumeration, device authorization whitelist (`AuthorizedDevices`), and pre-boot DMA protection flags (ACPI DMAR Bit 2 `DMA_CTRL_PLATFORM_OPT_IN`).
+  - Physical DMA attack defense: intercepts PCILeech direct memory read/write scraping, unmapped IOVA faults, read-only memory corruption, and enforces non-executable DMA page tables.
+  - UEFI Lock Immutability: firmware-enforced protection cannot be relaxed or disabled by software at runtime.
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `hal.dll`: `HalAllocateDomain`, `HalFreeDomain`, `HalAttachDeviceDomain`, `HalDetachDeviceDomain`, `HalMapIommuRange`, `HalUnmapIommuRange`, `HalFlushIommuTlb`.
-  - `pci.sys` / `ntoskrnl.exe`: `DmaGuardIsProtectionSupported`, `DmaGuardIsProtectionEnabled`, `DmaGuardGetDevicePolicy`, `DmaGuardAuthorizeDevice`, `DmaGuardRevokeDevice`, `DmaGuardInterceptDmaTransfer`.
-  - VersionDatabase registrations for `dma_guard.sys` and `pci.sys`.
+  - `pci.sys` / `ntoskrnl.exe`: `DmaGuardIsProtectionSupported`, `DmaGuardIsProtectionEnabled`, `DmaGuardGetDevicePolicy`, `DmaGuardSetDevicePolicy`, `DmaGuardAuthorizeDevice`, `DmaGuardRevokeDevice`, `DmaGuardInterceptDmaTransfer`, `DmaGuardGetViolationCount`.
+  - DynamicLoader exports registered in `hal.dll`, `pci.sys`, and `ntoskrnl.exe`.
+  - VersionDatabase registration (`10.0.26100.1`) for `dma_guard.sys` and `pci.sys`.
+- [x] **Interactive Shell CLI (`include/micant/shell.hpp`)**:
+  - Implemented `dmaguard status`, `dmaguard devices`, `dmaguard domains`, `dmaguard policy <block|allow|whitelist|disable>`, `dmaguard authorize <dev>`, `dmaguard revoke <dev>`, `dmaguard simulate-attack [pcileech|unmapped|readonly]`, `dmaguard test`, and `sentinel dma` routing.
+- [x] **Unit Test Suite 144 (`Test_WindowsKernelDMA_Protection_IOMMU_Subsystem`)**:
+  - Comprehensive verification of IOMMU domain allocation, translation page remapping, Thunderbolt 3/4 and USB4 hot-plug defense, device authorization lifecycle, HAL/PCI exports, and attack interception telemetry.
+  - Milestone 144: **144 / 144 Test Suites Passing (100%)**.
+
+---
+
+### Phase 118: Windows Subsystem for Linux (WSL / LXSS / Sovereign Pico Provider & VFS Bridge) (Milestone 145)
+*Goal: Implement sovereign Windows Subsystem for Linux (WSL 1 / Pico Process Architecture) provider, bridging Linux syscalls (fork, execve, clone, mmap, epoll, vfs) directly to the MicaNT NT kernel without virtualization overhead.*
+- [ ] **WSL Pico Provider & LXSS Core Subsystem (`include/micant/wsl_lxss.hpp`)**:
+  - Pico Process & Pico Thread abstraction: Linux ELF64 binary execution container operating under the NT kernel umbrella.
+  - Linux Syscall Translation Layer: Direct routing of POSIX/Linux x86_64 syscalls to NT executive primitives.
+  - Sovereign Pico VFS Bridge (VolFs & DrvFs): Mounting NTFS/FAT32 volumes under `/mnt/c` and mapping Linux POSIX permissions (mode, uid, gid) into NT Security Descriptors.
+  - Linux IPC & Sockets: AF_UNIX local domain sockets, pipes, and epoll event demultiplexer.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `lxcore.sys`: `LxInitialize`, `LxCreatePicoProcess`, `LxCreatePicoThread`, `LxRegisterSyscallHandler`.
+  - `wslapi.dll`: `WslIsDistributionRegistered`, `WslRegisterDistribution`, `WslUnregisterDistribution`, `WslConfigureDistribution`, `WslGetDistributionConfiguration`, `WslLaunchInteractive`.
+  - VersionDatabase registrations for `wslapi.dll` and `lxcore.sys`.
 - [ ] **Interactive Shell CLI**:
-  - `dmaguard status`, `dmaguard devices`, `dmaguard policy <block|allow|disable>`, `dmaguard authorize <dev_id>`, `dmaguard simulate-attack`, `dmaguard test`, and `sentinel dma` routing.
-- [ ] **Unit Test Suite 144 (`Test_WindowsKernelDMA_Protection_IOMMU_Subsystem`)**:
-  - Verification of IOMMU domain allocation, page remapping, Thunderbolt hot-plug defense, device authorization lifecycle, HAL/PCI exports, and attack interception telemetry.
+  - `wsl status`, `wsl list`, `wsl run <cmd>`, `wsl mount`, `wsl test`.
+- [ ] **Unit Test Suite 145 (`Test_WindowsSubsystemForLinux_LXSS_Subsystem`)**:
+  - Verification of Pico process creation, Linux ELF64 loader, POSIX syscall translation, DrvFs file mounting, and wslapi.dll export surface.
+
 
 
 

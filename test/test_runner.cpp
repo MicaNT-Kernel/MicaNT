@@ -55,6 +55,7 @@
 #include "micant/ppl.hpp"
 #include "micant/sysguard.hpp"
 #include "micant/vbs_hvci.hpp"
+#include "micant/dma_guard.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -33853,8 +33854,311 @@ void Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem() {
     std::cout << "[TEST] Suite 143: Windows Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 144: Windows Kernel DMA Protection & IOMMU Remapping Subsystem
+// ============================================================================
+void Test_WindowsKernelDMA_Protection_IOMMU_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 144: Windows Kernel DMA Protection & IOMMU Remapping (VT-d / AMD-Vi / DMA Guard)...\n";
+
+    using namespace micant::dma_guard;
+
+    // 1. Clean-Room Export Registration & DynamicLoader Verification
+    InitializeDmaGuardSubsystemExports();
+    auto& loader = ldr::DynamicLoader::get();
+
+    // hal.dll exports
+    TEST_ASSERT(loader.getExport("hal.dll", "HalAllocateDomain") != nullptr, "HalAllocateDomain must be exported by hal.dll");
+    TEST_ASSERT(loader.getExport("hal.dll", "HalFreeDomain") != nullptr, "HalFreeDomain must be exported by hal.dll");
+    TEST_ASSERT(loader.getExport("hal.dll", "HalAttachDeviceDomain") != nullptr, "HalAttachDeviceDomain must be exported by hal.dll");
+    TEST_ASSERT(loader.getExport("hal.dll", "HalDetachDeviceDomain") != nullptr, "HalDetachDeviceDomain must be exported by hal.dll");
+    TEST_ASSERT(loader.getExport("hal.dll", "HalMapIommuRange") != nullptr, "HalMapIommuRange must be exported by hal.dll");
+    TEST_ASSERT(loader.getExport("hal.dll", "HalUnmapIommuRange") != nullptr, "HalUnmapIommuRange must be exported by hal.dll");
+    TEST_ASSERT(loader.getExport("hal.dll", "HalFlushIommuTlb") != nullptr, "HalFlushIommuTlb must be exported by hal.dll");
+
+    // pci.sys exports
+    TEST_ASSERT(loader.getExport("pci.sys", "DmaGuardIsProtectionSupported") != nullptr, "DmaGuardIsProtectionSupported must be exported by pci.sys");
+    TEST_ASSERT(loader.getExport("pci.sys", "DmaGuardIsProtectionEnabled") != nullptr, "DmaGuardIsProtectionEnabled must be exported by pci.sys");
+    TEST_ASSERT(loader.getExport("pci.sys", "DmaGuardGetDevicePolicy") != nullptr, "DmaGuardGetDevicePolicy must be exported by pci.sys");
+    TEST_ASSERT(loader.getExport("pci.sys", "DmaGuardSetDevicePolicy") != nullptr, "DmaGuardSetDevicePolicy must be exported by pci.sys");
+    TEST_ASSERT(loader.getExport("pci.sys", "DmaGuardAuthorizeDevice") != nullptr, "DmaGuardAuthorizeDevice must be exported by pci.sys");
+    TEST_ASSERT(loader.getExport("pci.sys", "DmaGuardRevokeDevice") != nullptr, "DmaGuardRevokeDevice must be exported by pci.sys");
+    TEST_ASSERT(loader.getExport("pci.sys", "DmaGuardInterceptDmaTransfer") != nullptr, "DmaGuardInterceptDmaTransfer must be exported by pci.sys");
+    TEST_ASSERT(loader.getExport("pci.sys", "DmaGuardGetViolationCount") != nullptr, "DmaGuardGetViolationCount must be exported by pci.sys");
+
+    // ntoskrnl.exe exports
+    TEST_ASSERT(loader.getExport("ntoskrnl.exe", "DmaGuardIsProtectionSupported") != nullptr, "DmaGuardIsProtectionSupported must be exported by ntoskrnl.exe");
+    TEST_ASSERT(loader.getExport("ntoskrnl.exe", "DmaGuardIsProtectionEnabled") != nullptr, "DmaGuardIsProtectionEnabled must be exported by ntoskrnl.exe");
+    TEST_ASSERT(loader.getExport("ntoskrnl.exe", "DmaGuardInterceptDmaTransfer") != nullptr, "DmaGuardInterceptDmaTransfer must be exported by ntoskrnl.exe");
+    TEST_ASSERT(loader.getExport("ntoskrnl.exe", "DmaGuardGetViolationCount") != nullptr, "DmaGuardGetViolationCount must be exported by ntoskrnl.exe");
+
+    // 2. VersionDatabase Verification
+    {
+        auto& vdb = version::VersionDatabase::Instance();
+        const auto* dmaSys = vdb.GetModuleInfo("dma_guard.sys");
+        TEST_ASSERT(dmaSys != nullptr, "dma_guard.sys must be registered in VersionDatabase");
+        TEST_ASSERT(dmaSys->stringTable.at("FileVersion") == "10.0.26100.1", "dma_guard.sys version must match 10.0.26100.1");
+
+        const auto* pciSys = vdb.GetModuleInfo("pci.sys");
+        TEST_ASSERT(pciSys != nullptr, "pci.sys must be registered in VersionDatabase");
+        TEST_ASSERT(pciSys->stringTable.at("FileVersion") == "10.0.26100.1", "pci.sys version must match 10.0.26100.1");
+    }
+
+    // 3. Platform Capabilities & ACPI DMAR Pre-Boot Opt-In
+    auto& mgr = KernelDmaProtectionManager::Instance();
+    TEST_ASSERT(DmaGuardIsProtectionSupported() == TRUE, "DmaGuardIsProtectionSupported must return TRUE");
+    TEST_ASSERT(DmaGuardIsProtectionEnabled() == TRUE, "DmaGuardIsProtectionEnabled must return TRUE");
+    TEST_ASSERT(mgr.isSupported(), "Manager isSupported must return true");
+    TEST_ASSERT(mgr.isEnabled(), "Manager isEnabled must return true");
+    TEST_ASSERT((mgr.getAcpiDmarFlags() & ACPI_DMAR_FLAG_DMA_CTRL_PLATFORM_OPT_IN) != 0, "ACPI DMAR table must have Bit 2 DMA_CTRL_PLATFORM_OPT_IN set");
+    TEST_ASSERT(mgr.getArchitecture() == IommuArchitecture::IntelVtd, "Architecture must default to Intel VT-d");
+    TEST_ASSERT(DmaGuardGetDevicePolicy() == static_cast<uint32_t>(DmaGuardPolicy::BlockUntrusted), "Default policy must be BlockUntrusted");
+
+    // 4. Internal Peripheral Trusted Bus Mastering (NVMe SSD, GPU, Ethernet)
+    {
+        auto devices = mgr.getDevices();
+        TEST_ASSERT(devices.size() >= 6, "Device list must track at least 6 standard devices");
+
+        // Verify Samsung NVMe SSD is internal and authorized
+        uint64_t physAddr = 0;
+        NTSTATUS st = DmaGuardInterceptDmaTransfer(
+            "PCI\\VEN_144D&DEV_A80A&SUBSYS_A801144D&REV_00",
+            0x10000000ULL, 4096, TRUE, &physAddr
+        );
+        TEST_ASSERT(st == STATUS_SUCCESS, "Internal NVMe DMA transfer must succeed");
+        TEST_ASSERT(physAddr == 0x40000000ULL, "Physical address translation must match mapped base (0x40000000)");
+
+        // Verify NVIDIA RTX 4090 internal GPU DMA
+        st = DmaGuardInterceptDmaTransfer(
+            "PCI\\VEN_10DE&DEV_2684&SUBSYS_168410DE&REV_A1",
+            0x20000000ULL, 8192, TRUE, &physAddr
+        );
+        TEST_ASSERT(st == STATUS_SUCCESS, "Internal GPU DMA transfer must succeed");
+        TEST_ASSERT(physAddr == 0x50000000ULL, "GPU physical address translation must match mapped base (0x50000000)");
+    }
+
+    // 5. Unauthorized External Hot-Plug DMA Defense (Thunderbolt 3/4 & USB4)
+    {
+        const char* tb3 = "PCI\\VEN_8086&DEV_15D2&SUBSYS_00000000&REV_02";
+        const char* tb4 = "PCI\\VEN_8086&DEV_9A1B&SUBSYS_00000000&REV_01";
+        const char* usb4 = "PCI\\VEN_1022&DEV_1639&SUBSYS_00000000&REV_00";
+
+        uint64_t physTarget = 0;
+
+        // TB3 unauthorized DMA transfer
+        NTSTATUS st = DmaGuardInterceptDmaTransfer(tb3, 0x100000ULL, 4096, FALSE, &physTarget);
+        TEST_ASSERT(st == STATUS_DEVICE_NOT_AUTHORIZED, "Unauthorized TB3 DMA must return STATUS_DEVICE_NOT_AUTHORIZED");
+
+        // TB4 unauthorized DMA transfer
+        st = DmaGuardInterceptDmaTransfer(tb4, 0x200000ULL, 4096, TRUE, &physTarget);
+        TEST_ASSERT(st == STATUS_DEVICE_NOT_AUTHORIZED, "Unauthorized TB4 DMA must return STATUS_DEVICE_NOT_AUTHORIZED");
+
+        // USB4 unauthorized DMA transfer
+        st = DmaGuardInterceptDmaTransfer(usb4, 0x300000ULL, 4096, FALSE, &physTarget);
+        TEST_ASSERT(st == STATUS_DEVICE_NOT_AUTHORIZED, "Unauthorized USB4 DMA must return STATUS_DEVICE_NOT_AUTHORIZED");
+    }
+
+    // 6. Device Authorization Whitelist Lifecycle
+    {
+        const char* tb3 = "PCI\\VEN_8086&DEV_15D2&SUBSYS_00000000&REV_02";
+
+        // Authorize device
+        NTSTATUS st = DmaGuardAuthorizeDevice(tb3);
+        TEST_ASSERT(st == STATUS_SUCCESS, "DmaGuardAuthorizeDevice must succeed");
+
+        // Attempt transfer on assigned domain buffer
+        uint32_t assignedDom = 0;
+        for (const auto& d : mgr.getDevices()) {
+            if (d.deviceId == tb3) { assignedDom = d.domainId; break; }
+        }
+        uint64_t iovaBase = 0x80000000ULL + (assignedDom * 0x10000000ULL);
+        uint64_t physTarget = 0;
+        st = DmaGuardInterceptDmaTransfer(tb3, iovaBase, 4096, TRUE, &physTarget);
+        TEST_ASSERT(st == STATUS_SUCCESS, "Authorized peripheral DMA must succeed within assigned domain");
+        TEST_ASSERT(physTarget == (0x70000000ULL + (assignedDom * 0x10000000ULL)), "Translated physical address must match domain mapping");
+
+        // Revoke authorization
+        st = DmaGuardRevokeDevice(tb3);
+        TEST_ASSERT(st == STATUS_SUCCESS, "DmaGuardRevokeDevice must succeed");
+
+        // Attempt transfer again: must be blocked
+        st = DmaGuardInterceptDmaTransfer(tb3, iovaBase, 4096, TRUE, &physTarget);
+        TEST_ASSERT(st == STATUS_DEVICE_NOT_AUTHORIZED, "Revoked peripheral must be blocked with STATUS_DEVICE_NOT_AUTHORIZED");
+    }
+
+    // 7. Hardware IOMMU Domain & Page Table Lifecycle (HAL ABI)
+    {
+        uint32_t domId = 0;
+        NTSTATUS st = HalAllocateDomain(0, &domId);
+        TEST_ASSERT(st == STATUS_SUCCESS && domId != 0, "HalAllocateDomain must allocate unique domain ID");
+
+        // Map IOVA range (4MB) with Read/Write
+        uint64_t testIova = 0x77000000ULL;
+        uint64_t testPhys = 0x88000000ULL;
+        st = HalMapIommuRange(domId, testIova, testPhys, 0x00400000, IOMMU_PERM_RW);
+        TEST_ASSERT(st == STATUS_SUCCESS, "HalMapIommuRange must succeed");
+
+        // Attach NVMe device to this domain
+        const char* nvme = "PCI\\VEN_144D&DEV_A80A&SUBSYS_A801144D&REV_00";
+        st = HalAttachDeviceDomain(domId, nvme);
+        TEST_ASSERT(st == STATUS_SUCCESS, "HalAttachDeviceDomain must attach device");
+
+        // Transfer within mapped range
+        uint64_t physTarget = 0;
+        st = DmaGuardInterceptDmaTransfer(nvme, testIova + 0x1000, 4096, TRUE, &physTarget);
+        TEST_ASSERT(st == STATUS_SUCCESS, "DMA transfer in custom domain must succeed");
+        TEST_ASSERT(physTarget == (testPhys + 0x1000), "Physical address must reflect offset into mapped range");
+
+        // Unmapped IOVA fault check
+        st = DmaGuardInterceptDmaTransfer(nvme, 0xF0000000ULL, 4096, TRUE, &physTarget);
+        TEST_ASSERT(st == STATUS_IOMMU_PAGE_FAULT, "Accessing unmapped IOVA must trigger STATUS_IOMMU_PAGE_FAULT");
+
+        // Read-only permission check
+        uint64_t roIova = 0x78000000ULL;
+        st = HalMapIommuRange(domId, roIova, 0x89000000ULL, 4096, IOMMU_PERM_READ);
+        TEST_ASSERT(st == STATUS_SUCCESS, "Mapping read-only page must succeed");
+
+        st = DmaGuardInterceptDmaTransfer(nvme, roIova, 512, TRUE, &physTarget);
+        TEST_ASSERT(st == STATUS_IOMMU_ACCESS_VIOLATION, "Writing to read-only page must trigger STATUS_IOMMU_ACCESS_VIOLATION");
+
+        st = DmaGuardInterceptDmaTransfer(nvme, roIova, 512, FALSE, &physTarget);
+        TEST_ASSERT(st == STATUS_SUCCESS, "Reading from read-only page must succeed");
+
+        // Strict W^X Invariant for DMA
+        st = HalMapIommuRange(domId, 0x79000000ULL, 0x8A000000ULL, 4096, IOMMU_PERM_RW | IOMMU_PERM_EXEC);
+        TEST_ASSERT(st == STATUS_IOMMU_WX_VIOLATION, "Executable DMA mapping must be rejected with STATUS_IOMMU_WX_VIOLATION");
+
+        // Flush TLB
+        st = HalFlushIommuTlb(domId);
+        TEST_ASSERT(st == STATUS_SUCCESS, "HalFlushIommuTlb must succeed");
+
+        // Unmap range
+        st = HalUnmapIommuRange(domId, testIova, 0x00400000);
+        TEST_ASSERT(st == STATUS_SUCCESS, "HalUnmapIommuRange must succeed");
+
+        // Detach device and reattach to Domain 1 (restore NVMe)
+        HalDetachDeviceDomain(domId, nvme);
+        HalAttachDeviceDomain(1, nvme);
+
+        // Free domain
+        st = HalFreeDomain(domId);
+        TEST_ASSERT(st == STATUS_SUCCESS, "HalFreeDomain must succeed");
+    }
+
+    // 8. Policy Configuration & UEFI Lock Immutability
+    {
+        // Change policy to AllowAll then back to BlockUntrusted
+        NTSTATUS st = DmaGuardSetDevicePolicy(static_cast<uint32_t>(DmaGuardPolicy::AllowAll));
+        TEST_ASSERT(st == STATUS_SUCCESS, "Setting policy to AllowAll must succeed");
+        TEST_ASSERT(DmaGuardGetDevicePolicy() == static_cast<uint32_t>(DmaGuardPolicy::AllowAll), "Policy must reflect AllowAll");
+
+        st = DmaGuardSetDevicePolicy(static_cast<uint32_t>(DmaGuardPolicy::BlockUntrusted));
+        TEST_ASSERT(st == STATUS_SUCCESS, "Setting policy back to BlockUntrusted must succeed");
+
+        // Enable UEFI lock
+        st = mgr.setState(DmaGuardState::EnabledUefiLocked);
+        TEST_ASSERT(st == STATUS_SUCCESS, "Setting EnabledUefiLocked must succeed");
+        TEST_ASSERT(mgr.isUefiLocked(), "isUefiLocked must return true");
+
+        // Attempting to disable policy under active UEFI lock must be rejected
+        st = DmaGuardSetDevicePolicy(static_cast<uint32_t>(DmaGuardPolicy::Disabled));
+        TEST_ASSERT(st == STATUS_DMA_GUARD_LOCKED, "Disabling policy under UEFI lock must return STATUS_DMA_GUARD_LOCKED");
+
+        // Attempting to disable state under active UEFI lock must be rejected
+        st = mgr.setState(DmaGuardState::Disabled);
+        TEST_ASSERT(st == STATUS_DMA_GUARD_LOCKED, "Disabling state under UEFI lock must return STATUS_DMA_GUARD_LOCKED");
+
+        // Unlock state for subsequent tests
+        mgr.setState(DmaGuardState::Enabled);
+    }
+
+    // 9. Hardware DMA Attack Simulations
+    {
+        // 9a. PCILeech direct RAM scraping attack
+        std::string report = mgr.simulateDmaAttack("PciLeechDirectRam");
+        TEST_ASSERT(report.find("[BLOCKED]") != std::string::npos, "PCILeech simulation must report BLOCKED");
+        TEST_ASSERT(report.find("0xC0000405") != std::string::npos, "PCILeech simulation must reference STATUS_DEVICE_NOT_AUTHORIZED");
+
+        // 9b. Unmapped IOVA spray attack
+        report = mgr.simulateDmaAttack("UnmappedIovaSpray");
+        TEST_ASSERT(report.find("[BLOCKED]") != std::string::npos, "Unmapped spray simulation must report BLOCKED");
+        TEST_ASSERT(report.find("0xC0000407") != std::string::npos, "Unmapped spray simulation must reference STATUS_IOMMU_PAGE_FAULT");
+
+        // 9c. Read-only corruption attack
+        report = mgr.simulateDmaAttack("ReadOnlyMemoryCorruption");
+        TEST_ASSERT(report.find("[BLOCKED]") != std::string::npos, "Read-only simulation must report BLOCKED");
+        TEST_ASSERT(report.find("0xC0000408") != std::string::npos, "Read-only simulation must reference STATUS_IOMMU_ACCESS_VIOLATION");
+
+        // Verify violation counters
+        TEST_ASSERT(DmaGuardGetViolationCount() >= 5, "DmaGuardGetViolationCount must report intercepted violations");
+        TEST_ASSERT(!mgr.getViolations().empty(), "Violation audit log must contain records");
+    }
+
+    // 10. Interactive Shell CLI Integration (dmaguard, sentinel dma)
+    {
+        shell::CommandShell proc;
+        std::ostringstream oss;
+
+        // 10a. dmaguard /?
+        int shellRet = proc.execute("dmaguard /?", oss);
+        TEST_ASSERT(shellRet == 0, "dmaguard /? must return 0");
+        TEST_ASSERT(oss.str().find("Kernel DMA Protection & IOMMU Remapping Subsystem") != std::string::npos, "Help must reference Kernel DMA Protection");
+
+        // 10b. dmaguard status
+        oss.str("");
+        shellRet = proc.execute("dmaguard status", oss);
+        TEST_ASSERT(shellRet == 0, "dmaguard status must return 0");
+        TEST_ASSERT(oss.str().find("Kernel DMA Protection & Hardware IOMMU Posture:") != std::string::npos, "status must display posture header");
+        TEST_ASSERT(oss.str().find("Intel VT-d") != std::string::npos, "status must display Intel VT-d");
+        TEST_ASSERT(oss.str().find("DMA_CTRL_PLATFORM_OPT_IN") != std::string::npos, "status must show ACPI opt-in");
+
+        // 10c. dmaguard devices
+        oss.str("");
+        shellRet = proc.execute("dmaguard devices", oss);
+        TEST_ASSERT(shellRet == 0, "dmaguard devices must return 0");
+        TEST_ASSERT(oss.str().find("PCIe & Hot-Plug Peripheral DMA Protection Table:") != std::string::npos, "devices must display table");
+        TEST_ASSERT(oss.str().find("Thunderbolt 3") != std::string::npos, "devices must list Thunderbolt 3");
+        TEST_ASSERT(oss.str().find("Internal PCIe") != std::string::npos, "devices must list Internal PCIe");
+
+        // 10d. dmaguard domains
+        oss.str("");
+        shellRet = proc.execute("dmaguard domains", oss);
+        TEST_ASSERT(shellRet == 0, "dmaguard domains must return 0");
+        TEST_ASSERT(oss.str().find("Hardware IOMMU Translation Domains") != std::string::npos, "domains must display domain list");
+
+        // 10e. dmaguard policy block
+        oss.str("");
+        shellRet = proc.execute("dmaguard policy block", oss);
+        TEST_ASSERT(shellRet == 0, "dmaguard policy block must return 0");
+        TEST_ASSERT(oss.str().find("policy updated") != std::string::npos, "policy update must succeed");
+
+        // 10f. dmaguard simulate-attack
+        oss.str("");
+        shellRet = proc.execute("dmaguard simulate-attack", oss);
+        TEST_ASSERT(shellRet == 0, "dmaguard simulate-attack must return 0");
+        TEST_ASSERT(oss.str().find("[BLOCKED]") != std::string::npos, "simulate-attack must report BLOCKED");
+
+        // 10g. dmaguard test
+        oss.str("");
+        shellRet = proc.execute("dmaguard test", oss);
+        TEST_ASSERT(shellRet == 0, "dmaguard test must return 0");
+        TEST_ASSERT(oss.str().find("ALL TESTS PASSED (100%)") != std::string::npos, "dmaguard test must report ALL TESTS PASSED");
+
+        // 10h. sentinel dma status routing
+        oss.str("");
+        shellRet = proc.execute("sentinel dma status", oss);
+        TEST_ASSERT(shellRet == 0, "sentinel dma status must return 0");
+        TEST_ASSERT(oss.str().find("Kernel DMA Protection & Hardware IOMMU Posture:") != std::string::npos, "sentinel dma must route to dmaguard status");
+    }
+
+    std::cout << "[TEST] Suite 144: Windows Kernel DMA Protection & IOMMU Remapping Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite143")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite144")) {
+        RUN_TEST(Test_WindowsKernelDMA_Protection_IOMMU_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite143") {
         RUN_TEST(Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem);
         return g_FailedTests;
     }
@@ -34154,6 +34458,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsProtectedProcessLight_ELAM_Subsystem);
     RUN_TEST(Test_WindowsSystemGuard_SecureLaunch_Subsystem);
     RUN_TEST(Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem);
+    RUN_TEST(Test_WindowsKernelDMA_Protection_IOMMU_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

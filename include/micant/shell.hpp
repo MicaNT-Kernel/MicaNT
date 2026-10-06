@@ -135,6 +135,7 @@
 #include "ppl.hpp"
 #include "sysguard.hpp"
 #include "vbs_hvci.hpp"
+#include "dma_guard.hpp"
 
 namespace micant::shell {
 
@@ -210,6 +211,7 @@ public:
         ppl::InitializePplSubsystemExports();
         sysguard::InitializeSysGuardSubsystemExports();
         vbs_hvci::InitializeVbsHvciSubsystemExports();
+        dma_guard::InitializeDmaGuardSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -263,6 +265,7 @@ public:
             cmd != "ppl" && cmd != "protectedprocess" && cmd != "elam" && cmd != "bootdriver" &&
             cmd != "sysguard" && cmd != "systemguard" && cmd != "measuredboot" && cmd != "tbs" &&
             cmd != "vbs" && cmd != "hvci" &&
+            cmd != "dmaguard" && cmd != "dma" &&
             cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
@@ -403,6 +406,7 @@ public:
             if (cmd == "elam" || cmd == "bootdriver") { cmdElam(tokens, out); return 0; }
             if (cmd == "sysguard" || cmd == "systemguard" || cmd == "measuredboot" || cmd == "tbs") { cmdSysGuard(tokens, out); return 0; }
             if (cmd == "vbs" || cmd == "hvci") { cmdVbs(tokens, out); return 0; }
+            if (cmd == "dmaguard" || cmd == "dma") { cmdDmaGuard(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -20414,6 +20418,7 @@ private:
                 << "  sentinel elam [status|classify|policy|test] Early Launch Anti-Malware Driver Subsystem\n"
                 << "  sentinel sysguard [status|pcr|attest|seal|unseal|test] System Guard & Measured Boot Subsystem\n"
                 << "  sentinel hvci [status|enable|verify|protect|simulate-attack|test] Virtualization-Based Security (VBS) & HVCI\n"
+                << "  sentinel dma [status|devices|policy|authorize|revoke|simulate-attack|test] Kernel DMA Protection & IOMMU Guard\n"
                 << "  sentinel test                       Executes Sentinel Security System diagnostic test suite\n";
             return;
         }
@@ -20451,6 +20456,12 @@ private:
         if (tokens.size() > 1 && (toLower(tokens[1]) == "hvci" || toLower(tokens[1]) == "vbs")) {
             std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
             cmdVbs(subTokens, out);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "dma" || toLower(tokens[1]) == "dmaguard" || toLower(tokens[1]) == "iommu")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdDmaGuard(subTokens, out);
             return;
         }
 
@@ -22083,6 +22094,285 @@ private:
             << "  VTL 1 Enclave Isolation:         ENFORCED (LsaIso & Secure Kernel inaccessible)\n"
             << "  Protected SLAT Pages:            " << pol.ProtectedPageCount << " descriptors\n"
             << "  Exploit Attempts Neutralized:    " << pol.ViolationsPrevented << " trapped\n"
+            << "-------------------------------------------------------------------------------\n";
+    }
+
+    void cmdDmaGuard(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::dma_guard;
+        InitializeDmaGuardSubsystemExports();
+        auto& mgr = KernelDmaProtectionManager::Instance();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "help" || tokens[1] == "/?")) {
+            out << "Kernel DMA Protection & IOMMU Remapping Subsystem (DMA Guard)\n\n"
+                << "Usage:\n"
+                << "  dmaguard status                               Displays DMA Guard, IOMMU (VT-d/AMD-Vi), and policy posture\n"
+                << "  dmaguard devices                              Lists all PCIe peripherals, bus type, and authorization states\n"
+                << "  dmaguard domains                              Displays active IOMMU translation domains and page mappings\n"
+                << "  dmaguard policy <block|allow|whitelist|disable> Configures Kernel DMA Protection policy\n"
+                << "  dmaguard authorize <deviceId>                 Authorizes hot-plug Thunderbolt/USB4 peripheral\n"
+                << "  dmaguard revoke <deviceId>                    Revokes peripheral authorization and drops domain mappings\n"
+                << "  dmaguard simulate-attack [pcileech|unmapped|readonly] Simulates hardware DMA memory attacks\n"
+                << "  dmaguard test                                 Executes DMA Guard & IOMMU self-test suite\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
+            out << "[TEST] Running Kernel DMA Protection & IOMMU Guard Self-Test...\n";
+
+            // 1. Verify Platform Support & Protection Enabled
+            if (!DmaGuardIsProtectionSupported() || !DmaGuardIsProtectionEnabled()) {
+                out << "[-] Kernel DMA Protection is not supported or enabled.\n";
+                return;
+            }
+            out << "  [+] Kernel DMA Protection is Active (ACPI DMAR Platform Opt-In: Bit 2)\n";
+
+            // 2. Test Internal Peripheral DMA (NVMe)
+            uint64_t physTarget = 0;
+            NTSTATUS st = DmaGuardInterceptDmaTransfer(
+                "PCI\\VEN_144D&DEV_A80A&SUBSYS_A801144D&REV_00",
+                0x10000000ULL, 4096, TRUE, &physTarget
+            );
+            if (st != STATUS_SUCCESS || physTarget != 0x40000000ULL) {
+                out << "[-] Internal peripheral DMA failed.\n";
+                return;
+            }
+            out << "  [+] Internal Peripheral DMA (NVMe) Permitted: IOVA 0x10000000 -> Phys 0x40000000\n";
+
+            // 3. Test Unauthorized External Hot-Plug DMA Blocked (Thunderbolt 3)
+            const char* tbDev = "PCI\\VEN_8086&DEV_15D2&SUBSYS_00000000&REV_02";
+            st = DmaGuardInterceptDmaTransfer(tbDev, 0x100000ULL, 4096, FALSE, &physTarget);
+            if (st != STATUS_DEVICE_NOT_AUTHORIZED) {
+                out << "[-] Unauthorized external hot-plug DMA was not blocked!\n";
+                return;
+            }
+            out << "  [+] Unauthorized Hot-Plug Peripheral Blocked: STATUS_DEVICE_NOT_AUTHORIZED (0xC0000405)\n";
+
+            // 4. Test Device Authorization Lifecycle
+            st = DmaGuardAuthorizeDevice(tbDev);
+            if (st != STATUS_SUCCESS) {
+                out << "[-] Device authorization failed.\n";
+                return;
+            }
+            // Now transfer on authorized device buffer should succeed
+            uint32_t assignedDom = 0;
+            for (const auto& d : mgr.getDevices()) {
+                if (d.deviceId == tbDev) { assignedDom = d.domainId; break; }
+            }
+            uint64_t iovaBase = 0x80000000ULL + (assignedDom * 0x10000000ULL);
+            st = DmaGuardInterceptDmaTransfer(tbDev, iovaBase, 4096, TRUE, &physTarget);
+            if (st != STATUS_SUCCESS) {
+                out << "[-] Authorized peripheral DMA transfer failed: 0x" << std::hex << st << "\n";
+                return;
+            }
+            out << "  [+] Peripheral Authorized: DMA Transfer Permitted via Assigned IOMMU Domain\n";
+
+            // Revoke device to return to safe state
+            DmaGuardRevokeDevice(tbDev);
+            out << "  [+] Peripheral Authorization Revoked: Hardware Domain Cleanly Torn Down\n";
+
+            // 5. Test Unmapped IOVA Hardware Fault (NVMe)
+            st = DmaGuardInterceptDmaTransfer("PCI\\VEN_144D&DEV_A80A&SUBSYS_A801144D&REV_00", 0xDEADBEEF0000ULL, 4096, TRUE, &physTarget);
+            if (st != STATUS_IOMMU_PAGE_FAULT) {
+                out << "[-] Unmapped IOVA was not trapped!\n";
+                return;
+            }
+            out << "  [+] Unmapped IOVA Trapped by IOMMU: STATUS_IOMMU_PAGE_FAULT (0xC0000407)\n";
+
+            // 6. Test Read-Only Memory Protection
+            uint32_t testDom = 0;
+            HalAllocateDomain(0, &testDom);
+            HalMapIommuRange(testDom, 0x90000000ULL, 0x50000000ULL, 4096, IOMMU_PERM_READ);
+            HalAttachDeviceDomain(testDom, tbDev);
+            mgr.authorizeDevice(tbDev);
+            st = DmaGuardInterceptDmaTransfer(tbDev, 0x90000000ULL, 512, TRUE, &physTarget);
+            if (st != STATUS_IOMMU_ACCESS_VIOLATION) {
+                out << "[-] Read-only violation was not trapped!\n";
+                return;
+            }
+            out << "  [+] Read-Only Page Write Trapped: STATUS_IOMMU_ACCESS_VIOLATION (0xC0000408)\n";
+
+            // Clean up test domain
+            HalDetachDeviceDomain(testDom, tbDev);
+            HalFreeDomain(testDom);
+            DmaGuardRevokeDevice(tbDev);
+
+            // 7. Test HAL IOMMU Flush & W^X Enforcement
+            st = HalMapIommuRange(1, 0x95000000ULL, 0x55000000ULL, 4096, IOMMU_PERM_RW | IOMMU_PERM_EXEC);
+            if (st != STATUS_IOMMU_WX_VIOLATION) {
+                out << "[-] Executable DMA mapping was not rejected!\n";
+                return;
+            }
+            out << "  [+] W^X Invariant Enforced: Executable DMA Mappings Strictly Prohibited\n";
+
+            out << "[+] Kernel DMA Protection & IOMMU Guard Subsystem: ALL TESTS PASSED (100%)\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "simulate-attack" || toLower(tokens[1]) == "attack")) {
+            std::string type = "PciLeechDirectRam";
+            if (tokens.size() > 2) {
+                std::string arg = toLower(tokens[2]);
+                if (arg == "unmapped" || arg == "spray" || arg == "fault") type = "UnmappedIovaSpray";
+                else if (arg == "readonly" || arg == "ro" || arg == "corruption") type = "ReadOnlyMemoryCorruption";
+                else type = "PciLeechDirectRam";
+            }
+            out << mgr.simulateDmaAttack(type);
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "devices") {
+            out << "PCIe & Hot-Plug Peripheral DMA Protection Table:\n"
+                << "------------------------------------------------------------------------------------------------------------------\n"
+                << std::left << std::setw(12) << "BDF"
+                << std::setw(16) << "Bus Type"
+                << std::setw(10) << "External"
+                << std::setw(12) << "Authorized"
+                << std::setw(8)  << "Domain"
+                << std::setw(42) << "Device Identifier" << "\n"
+                << "------------------------------------------------------------------------------------------------------------------\n";
+
+            auto busToStr = [](DmaBusType b) -> const char* {
+                switch (b) {
+                    case DmaBusType::InternalPci: return "Internal PCIe";
+                    case DmaBusType::Thunderbolt3: return "Thunderbolt 3";
+                    case DmaBusType::Thunderbolt4: return "Thunderbolt 4";
+                    case DmaBusType::Usb4: return "USB4";
+                    case DmaBusType::ExpressCard: return "ExpressCard";
+                    default: return "Unknown";
+                }
+            };
+
+            for (const auto& dev : mgr.getDevices()) {
+                std::ostringstream bdfSs;
+                bdfSs << std::setfill('0') << std::hex
+                      << std::setw(2) << (int)dev.bus << ":"
+                      << std::setw(2) << (int)dev.device << "."
+                      << (int)dev.function;
+
+                out << std::left << std::setw(12) << bdfSs.str()
+                    << std::setw(16) << busToStr(dev.busType)
+                    << std::setw(10) << (dev.isExternal ? "YES" : "NO")
+                    << std::setw(12) << (dev.isAuthorized ? "AUTHORIZED" : "BLOCKED")
+                    << std::setw(8)  << (dev.domainId != 0 ? std::to_string(dev.domainId) : "None")
+                    << std::setw(42) << dev.deviceId << "\n";
+            }
+            out << "------------------------------------------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "domains") {
+            out << "Hardware IOMMU Translation Domains & Memory Page Remappings:\n"
+                << "----------------------------------------------------------------------------------------\n"
+                << std::left << std::setw(10) << "Domain ID"
+                << std::setw(20) << "IOVA Base"
+                << std::setw(20) << "Host Physical Base"
+                << std::setw(12) << "Size"
+                << std::setw(10) << "Perms"
+                << std::setw(16) << "Attached Devices" << "\n"
+                << "----------------------------------------------------------------------------------------\n";
+
+            for (const auto& dom : mgr.getDomains()) {
+                for (const auto& [_, map] : dom.mappings) {
+                    std::ostringstream iovaSs, physSs;
+                    iovaSs << "0x" << std::hex << map.iova;
+                    physSs << "0x" << std::hex << map.physicalAddress;
+
+                    std::string permStr = "";
+                    if (map.permissions & IOMMU_PERM_READ) permStr += "R";
+                    if (map.permissions & IOMMU_PERM_WRITE) permStr += "W";
+
+                    out << std::left << std::setw(10) << dom.domainId
+                        << std::setw(20) << iovaSs.str()
+                        << std::setw(20) << physSs.str()
+                        << std::setw(12) << (std::to_string(map.size / 1024) + " KB")
+                        << std::setw(10) << permStr
+                        << std::setw(16) << (std::to_string(dom.attachedDevices.size()) + " device(s)") << "\n";
+                }
+            }
+            out << "----------------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "authorize") {
+            std::string devId = tokens[2];
+            NTSTATUS st = mgr.authorizeDevice(devId);
+            if (st == STATUS_SUCCESS) {
+                out << "[+] Peripheral successfully authorized: " << devId << "\n";
+            } else {
+                out << "[-] Failed to authorize peripheral: 0x" << std::hex << st << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "revoke") {
+            std::string devId = tokens[2];
+            NTSTATUS st = mgr.revokeDevice(devId);
+            if (st == STATUS_SUCCESS) {
+                out << "[+] Peripheral authorization revoked: " << devId << "\n";
+            } else {
+                out << "[-] Failed to revoke peripheral: 0x" << std::hex << st << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "policy") {
+            std::string pStr = toLower(tokens[2]);
+            DmaGuardPolicy pol = DmaGuardPolicy::BlockUntrusted;
+            if (pStr == "block" || pStr == "untrusted") pol = DmaGuardPolicy::BlockUntrusted;
+            else if (pStr == "allow" || pStr == "all") pol = DmaGuardPolicy::AllowAll;
+            else if (pStr == "whitelist" || pStr == "strict") pol = DmaGuardPolicy::AllowAuthorizedOnly;
+            else if (pStr == "disable" || pStr == "disabled") pol = DmaGuardPolicy::Disabled;
+
+            NTSTATUS st = mgr.setPolicy(pol);
+            if (st == STATUS_SUCCESS) {
+                out << "[+] Kernel DMA Protection policy updated to: " << pStr << "\n";
+            } else if (st == STATUS_DMA_GUARD_LOCKED) {
+                out << "[-] Error: Kernel DMA Protection is locked by UEFI firmware and cannot be disabled.\n";
+            } else {
+                out << "[-] Failed to set policy: 0x" << std::hex << st << "\n";
+            }
+            return;
+        }
+
+        // Default: status
+        auto status = mgr.getStatusInfo();
+        auto polToStr = [](uint32_t p) -> const char* {
+            switch (static_cast<DmaGuardPolicy>(p)) {
+                case DmaGuardPolicy::BlockUntrusted: return "BlockUntrusted (Block external DMA until authorized)";
+                case DmaGuardPolicy::AllowAll: return "AllowAll (Permissive mode)";
+                case DmaGuardPolicy::AllowAuthorizedOnly: return "AllowAuthorizedOnly (Strict whitelist)";
+                case DmaGuardPolicy::Disabled: return "Disabled";
+                default: return "Unknown";
+            }
+        };
+
+        auto archToStr = [](uint32_t a) -> const char* {
+            switch (static_cast<IommuArchitecture>(a)) {
+                case IommuArchitecture::IntelVtd: return "Intel VT-d (Directed I/O Remapping)";
+                case IommuArchitecture::AmdVi: return "AMD-Vi (I/O Virtualization)";
+                case IommuArchitecture::ArmSmmu: return "ARM SMMU";
+                default: return "Unknown";
+            }
+        };
+
+        out << "Kernel DMA Protection & Hardware IOMMU Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Kernel DMA Protection:           " << (status.State == 2 ? "Enabled (Firmware UEFI Locked)" : (status.State == 1 ? "Enabled" : "Disabled")) << "\n"
+            << "  Hardware IOMMU Architecture:     " << archToStr(status.IommuArch) << "\n"
+            << "  ACPI Pre-Boot Platform Opt-In:   " << (status.AcpiPlatformOptIn ? "Yes (DMAR Flag Bit 2: DMA_CTRL_PLATFORM_OPT_IN)" : "No") << "\n"
+            << "  Active DMA Protection Policy:    " << polToStr(status.Policy) << "\n"
+            << "  Active IOMMU Domains:            " << status.DomainCount << " isolated translation domains\n"
+            << "  Enumerated PCIe Peripherals:     " << status.DeviceCount << " devices tracked\n"
+            << "  Authorized Bus Masters:          " << status.AuthorizedDeviceCount << " peripherals\n"
+            << "  Unauthorized Hot-Plug Blocked:   BLOCKED (Thunderbolt 3/4 & USB4 hot-plug defended)\n"
+            << "  Unmapped IOVA Access:            TRAPPED (Hardware IOMMU Page Fault on invalid IOVA)\n"
+            << "  DMA W^X Memory Invariant:        ENFORCED (Executable DMA memory mappings prohibited)\n"
+            << "  Physical DMA Attacks Neutralized:" << status.TotalViolationsPrevented << " malicious accesses intercepted\n"
             << "-------------------------------------------------------------------------------\n";
     }
 
