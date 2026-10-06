@@ -244,7 +244,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 118: Windows Subsystem for Linux (WSL / LXSS / Pico)  [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 119: Windows Sandbox & Lightweight Containers (wsb)   [PLANNED]        │
+│ Phase 119: Windows Sandbox & Lightweight Containers (wsb)   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 120: Windows Hypervisor Platform (WHP) & Viridian     [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2756,21 +2758,41 @@
 
 ---
 
-### Phase 119: Windows Sandbox & Lightweight Containers (wsb.exe / cmshim.dll / Sovereign Container Broker) (Milestone 146)
+### Phase 119: Windows Sandbox & Lightweight Containers (wsb.exe / cmshim.dll / Sovereign Container Broker) (Milestone 146) (100% Completed)
 *Goal: Implement sovereign Windows Sandbox and lightweight container subsystem providing disposable, isolated desktop and execution environments using dynamic base images and container shim bridges without persistent side-effects.*
-- [ ] **Windows Sandbox Broker Subsystem (`include/micant/sandbox.hpp`)**:
-  - Disposable Sandbox Runtime (`wsb.exe`): Ephemeral container instantiation with clean desktop, disposable user profile, and automatic teardown upon exit.
-  - Dynamic Base Image & Host Storage Passthrough: Copy-on-Write layering over host Windows filesystem (`\DosDevices\C:\`), isolating modifications to temporary differential VHDX overlays.
-  - Container Networking & NAT Bridge: Isolated virtual switch and adapter mapping host network with dedicated container IP address and firewall isolation.
-  - Container Configuration Manifest Parser (`.wsb` XML): Support for `<VGpu>`, `<Networking>`, `<MappedFolders>`, `<LogonCommand>`, `<MemoryInMB>`.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `cmshim.dll`: Container manager shim APIs (`CmCreateContainer`, `CmStartContainer`, `CmStopContainer`, `CmDestroyContainer`, `CmQueryContainerStatus`).
-  - `wsbcore.sys` / `vmcompute.dll`: Container broker kernel driver and userland management exports.
+- [x] **Windows Sandbox Broker Subsystem (`include/micant/sandbox.hpp`)**:
+  - Disposable Sandbox Runtime (`wsb.exe`): Ephemeral container instantiation with clean desktop, disposable user profile under `WDAGUtilityAccount`, and guaranteed zero-residual teardown upon exit.
+  - Dynamic Base Image & Host Storage Passthrough: Copy-on-Write layering over host Windows filesystem (`\DosDevices\C:\`), isolating modifications to temporary differential scratch disk overlays.
+  - Container Networking & NAT Bridge: Isolated virtual switch and adapter mapping host network with dedicated container IP address (`172.16.1.x`) and synthetic VMSwitch adapter isolation.
+  - Container Configuration Manifest Parser (`.wsb` XML): Clean-room parser for `<VGpu>`, `<Networking>`, `<MappedFolders>`, `<LogonCommand>`, `<MemoryInMB>`, `<AudioInput>`, `<VideoInput>`, `<ProtectedClient>`, `<PrinterRedirection>`, `<ClipboardRedirection>`.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `cmshim.dll`: Container manager shim APIs (`CmCreateContainer`, `CmStartContainer`, `CmStopContainer`, `CmDestroyContainer`, `CmQueryContainerStatus`, `CmExecuteInContainer`, `CmMapFolder`).
+  - `wsbcore.sys`: Container broker kernel driver exports (`WsbInitialize`, `WsbCreateSandbox`, `WsbTeardownSandbox`, `WsbGetActiveCount`).
   - VersionDatabase registration (`10.0.26100.1`) for `cmshim.dll` and `wsb.exe`.
+- [x] **Interactive Shell CLI**:
+  - `sandbox status`, `sandbox launch [name]`, `sandbox list`, `sandbox stop <cid>`, `sandbox destroy <cid>`, `sandbox map <cid> <host> [guest] [ro|rw]`, `sandbox exec <cid> <cmd>`, `sandbox test`, `sentinel sandbox`.
+- [x] **Unit Test Suite 146 (`Test_WindowsSandbox_LightweightContainer_Subsystem`)**:
+  - Verification of `.wsb` manifest parsing, dynamic base image layering, isolated sandbox lifecycle, folder mapping, guest execution, differential filesystem CoW overlay, zero-residual destruction wipe, container shim C ABI, and shell CLI commands.
+  - Milestone 146: **146 / 146 Test Suites Passing (100%)**.
+
+---
+
+### Phase 120: Windows Hypervisor Platform (WHP) & Sovereign Viridian Hypervisor Subsystem (Milestone 147)
+*Goal: Implement clean-room Windows Hypervisor Platform (WinHvPlatform.dll / WinHvEmulation.dll) and Viridian hypervisor emulation providing hardware-assisted virtualization partition management, vCPU scheduling, guest physical address (GPA) mapping, VM exit handling, and hypercall dispatching without external hypervisor dependencies.*
+- [ ] **Windows Hypervisor Platform Subsystem (`include/micant/whp.hpp`)**:
+  - Partition Management & Virtual Processors: Clean-room partition creation (`WHvCreatePartition`, `WHvSetupPartition`), vCPU allocation (`WHvCreateVirtualProcessor`, `WHvRunVirtualProcessor`), and register state context management.
+  - GPA / Guest Memory Space: GPA-to-HVA memory mappings (`WHvMapGpaRange`, `WHvUnmapGpaRange`), memory access permissions (Read/Write/Execute), and dirty page tracking.
+  - VM Exit & Interception Engine: Interception handling for IO port accesses, MMIO faults, MSR reads/writes, CPUID traps, and synthetic interrupts.
+  - Hypercall Dispatcher & Viridian Synthetic MSRs: Hyper-V synthetic MSR parity (`HV_X64_MSR_GUEST_OS_ID`, `HV_X64_MSR_HYPERCALL`, `HV_X64_MSR_VP_INDEX`) and hypercall dispatching.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `WinHvPlatform.dll`: Clean-room implementation of WHP userland APIs.
+  - `WinHvEmulation.dll`: Clean-room emulation helper library for instruction decoding and emulation.
+  - `hvix64.sys` / `winhvr.sys`: Kernel-level hypervisor interface driver exports.
+  - DynamicLoader registration and VersionDatabase (`10.0.26100.1`) entries.
 - [ ] **Interactive Shell CLI**:
-  - `sandbox status`, `sandbox launch [config.wsb]`, `sandbox list`, `sandbox stop <id>`, `sandbox test`.
-- [ ] **Unit Test Suite 146 (`Test_WindowsSandbox_LightweightContainer_Subsystem`)**:
-  - Verification of `.wsb` manifest parsing, dynamic base image layering, isolated sandbox lifecycle, container shim C ABI, and shell CLI commands.
+  - `whp status`, `whp partitions`, `whp create`, `whp delete <id>`, `whp test`, `sentinel whp`.
+- [ ] **Unit Test Suite 147 (`Test_WindowsHypervisorPlatform_Viridian_Subsystem`)**:
+  - Verification of partition lifecycle, vCPU execution, GPA mapping, VM exit handling, synthetic hypercalls, C ABI exports, and shell CLI integration.
 
 
 

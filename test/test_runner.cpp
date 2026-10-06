@@ -57,6 +57,7 @@
 #include "micant/vbs_hvci.hpp"
 #include "micant/dma_guard.hpp"
 #include "micant/wsl_lxss.hpp"
+#include "micant/sandbox.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -34404,8 +34405,265 @@ void Test_WindowsSubsystemForLinux_LXSS_Subsystem() {
     std::cout << "[TEST] Suite 145: Windows Subsystem for Linux (WSL / LXSS) Subsystem PASSED.\n";
 }
 
+void Test_WindowsSandbox_LightweightContainer_Subsystem() {
+    using namespace micant::sandbox;
+
+    // ------------------------------------------------------------------------
+    // 1. Subsystem Initialization & Singleton
+    // ------------------------------------------------------------------------
+    InitializeSandboxSubsystemExports();
+    auto& mgr = SandboxManager::Instance();
+    TEST_ASSERT(mgr.isInitialized(), "SandboxManager must be initialized");
+
+    // ------------------------------------------------------------------------
+    // 2. Clean-Room .wsb XML Manifest Parsing
+    // ------------------------------------------------------------------------
+    std::string wsbSample =
+        "<Configuration>\n"
+        "  <VGpu>Disable</VGpu>\n"
+        "  <Networking>Enable</Networking>\n"
+        "  <MemoryInMB>3072</MemoryInMB>\n"
+        "  <AudioInput>Enable</AudioInput>\n"
+        "  <VideoInput>Disable</VideoInput>\n"
+        "  <ProtectedClient>Enable</ProtectedClient>\n"
+        "  <PrinterRedirection>Disable</PrinterRedirection>\n"
+        "  <ClipboardRedirection>Enable</ClipboardRedirection>\n"
+        "  <MappedFolders>\n"
+        "    <MappedFolder>\n"
+        "      <HostFolder>C:\\SharedDocs</HostFolder>\n"
+        "      <SandboxFolder>C:\\Users\\WDAGUtilityAccount\\Desktop\\SharedDocs</SandboxFolder>\n"
+        "      <ReadOnly>true</ReadOnly>\n"
+        "    </MappedFolder>\n"
+        "    <MappedFolder>\n"
+        "      <HostFolder>C:\\Work</HostFolder>\n"
+        "      <ReadOnly>false</ReadOnly>\n"
+        "    </MappedFolder>\n"
+        "  </MappedFolders>\n"
+        "  <LogonCommand>\n"
+        "    <Command>powershell.exe -ExecutionPolicy Bypass -File C:\\start.ps1</Command>\n"
+        "  </LogonCommand>\n"
+        "</Configuration>";
+
+    SandboxConfig cfg;
+    bool parsed = WsbManifestParser::Parse(wsbSample, &cfg);
+    TEST_ASSERT(parsed, "WsbManifestParser::Parse must succeed on valid WSB XML");
+    TEST_ASSERT(cfg.vGpu == VGpuPolicy::Disable, "VGpu must be parsed as Disable");
+    TEST_ASSERT(cfg.networking == NetworkingPolicy::Enable, "Networking must be parsed as Enable");
+    TEST_ASSERT(cfg.memoryInMB == 3072, "MemoryInMB must be 3072");
+    TEST_ASSERT(cfg.audioInput == AudioInputPolicy::Enable, "AudioInput must be Enable");
+    TEST_ASSERT(cfg.videoInput == VideoInputPolicy::Disable, "VideoInput must be Disable");
+    TEST_ASSERT(cfg.protectedClient == ProtectedClientPolicy::Enable, "ProtectedClient must be Enable");
+    TEST_ASSERT(cfg.printerRedirection == PrinterRedirectionPolicy::Disable, "PrinterRedirection must be Disable");
+    TEST_ASSERT(cfg.clipboardRedirection == ClipboardRedirectionPolicy::Enable, "ClipboardRedirection must be Enable");
+    TEST_ASSERT(cfg.mappedFolders.size() == 2, "MappedFolders count must be 2");
+    TEST_ASSERT(cfg.mappedFolders[0].hostFolder == "C:\\SharedDocs", "Mapped folder 0 host must match");
+    TEST_ASSERT(cfg.mappedFolders[0].readOnly == true, "Mapped folder 0 must be ReadOnly");
+    TEST_ASSERT(cfg.mappedFolders[1].hostFolder == "C:\\Work", "Mapped folder 1 host must match");
+    TEST_ASSERT(cfg.mappedFolders[1].readOnly == false, "Mapped folder 1 must be ReadWrite");
+    TEST_ASSERT(cfg.logonCommand.find("start.ps1") != std::string::npos, "LogonCommand must match");
+
+    // Test default parser fallback
+    SandboxConfig defCfg;
+    TEST_ASSERT(WsbManifestParser::Parse("<Configuration></Configuration>", &defCfg), "Empty Configuration parse must succeed");
+    TEST_ASSERT(defCfg.memoryInMB == 4096, "Default memory must be 4096 MB");
+    TEST_ASSERT(defCfg.vGpu == VGpuPolicy::Default, "Default VGpu must be Default");
+
+    // ------------------------------------------------------------------------
+    // 3. Container Creation & Dynamic Base Image Layering
+    // ------------------------------------------------------------------------
+    uint32_t cid = 0;
+    NTSTATUS stCreate = mgr.createContainer("Suite146Sandbox", cfg, &cid);
+    TEST_ASSERT(stCreate == STATUS_SUCCESS, "createContainer must succeed");
+    TEST_ASSERT(cid > 0, "Container ID must be non-zero");
+
+    CmContainerStatus status{};
+    NTSTATUS stQuery = mgr.queryStatus(cid, &status);
+    TEST_ASSERT(stQuery == STATUS_SUCCESS, "queryStatus must succeed on created container");
+    TEST_ASSERT(status.containerId == cid, "Status CID must match");
+    TEST_ASSERT(status.state == static_cast<uint32_t>(SandboxState::Created), "State must be Created");
+    TEST_ASSERT(status.memoryAllocatedMB == 3072, "Memory allocated must be 3072 MB");
+    TEST_ASSERT(status.mappedFolderCount == 2, "Mapped folders count must be 2");
+    TEST_ASSERT(status.isGpuAccelerated == 0, "GPU acceleration must be disabled per config");
+    TEST_ASSERT(status.isNetworkingEnabled == 1, "Networking must be enabled per config");
+
+    // ------------------------------------------------------------------------
+    // 4. Folder Mapping Dynamic Injection
+    // ------------------------------------------------------------------------
+    NTSTATUS stMap = mgr.mapFolder(cid, "D:\\Data", "C:\\Users\\WDAGUtilityAccount\\Desktop\\Data", false);
+    TEST_ASSERT(stMap == STATUS_SUCCESS, "mapFolder must succeed");
+    stQuery = mgr.queryStatus(cid, &status);
+    TEST_ASSERT(status.mappedFolderCount == 3, "Mapped folders count must now be 3");
+
+    // ------------------------------------------------------------------------
+    // 5. Container Startup & Guest Process Lifecycle
+    // ------------------------------------------------------------------------
+    NTSTATUS stStart = mgr.startContainer(cid);
+    TEST_ASSERT(stStart == STATUS_SUCCESS, "startContainer must succeed");
+    stQuery = mgr.queryStatus(cid, &status);
+    TEST_ASSERT(status.state == static_cast<uint32_t>(SandboxState::Running), "State must be Running");
+    TEST_ASSERT(status.activeProcessCount > 0, "Active processes must be > 0 when running");
+
+    // Redundant start returns success
+    TEST_ASSERT(mgr.startContainer(cid) == STATUS_SUCCESS, "Redundant startContainer must return STATUS_SUCCESS");
+
+    // ------------------------------------------------------------------------
+    // 6. Guest Command Execution in Micro-Isolation
+    // ------------------------------------------------------------------------
+    uint32_t exitCode = 99;
+    std::string outWhoami;
+    NTSTATUS stExec = mgr.executeInContainer(cid, "whoami", &exitCode, &outWhoami);
+    TEST_ASSERT(stExec == STATUS_SUCCESS, "executeInContainer whoami must succeed");
+    TEST_ASSERT(exitCode == 0, "whoami exit code must be 0");
+    TEST_ASSERT(outWhoami.find("WDAGUtilityAccount") != std::string::npos, "whoami must output WDAGUtilityAccount");
+
+    std::string outHost;
+    mgr.executeInContainer(cid, "hostname", &exitCode, &outHost);
+    TEST_ASSERT(outHost.find("Suite146Sandbox") != std::string::npos, "hostname must match container name");
+
+    std::string outIp;
+    mgr.executeInContainer(cid, "ipconfig", &exitCode, &outIp);
+    TEST_ASSERT(outIp.find("Windows Sandbox VMSwitch") != std::string::npos, "ipconfig must show VMSwitch");
+    TEST_ASSERT(outIp.find("172.16.1.") != std::string::npos, "ipconfig must show 172.16.1.x subnet");
+
+    std::string outDir;
+    mgr.executeInContainer(cid, "dir", &exitCode, &outDir);
+    TEST_ASSERT(outDir.find("C:\\SharedDocs") != std::string::npos, "dir must list mapped folder C:\\SharedDocs");
+    TEST_ASSERT(outDir.find("D:\\Data") != std::string::npos, "dir must list mapped folder D:\\Data");
+    TEST_ASSERT(outDir.find("desktop.ini") != std::string::npos, "dir must list desktop.ini");
+
+    // ------------------------------------------------------------------------
+    // 7. Dynamic Base Image CoW Layering & Ephemeral Filesystem
+    // ------------------------------------------------------------------------
+    const std::string scratchPath = "C:\\Users\\WDAGUtilityAccount\\Desktop\\sensitive.key";
+    const std::string secretPayload = "TOP_SECRET_EPHEMERAL_KEY_12345";
+    NTSTATUS stWrite = mgr.writeDifferentialFile(cid, scratchPath, secretPayload);
+    TEST_ASSERT(stWrite == STATUS_SUCCESS, "writeDifferentialFile must succeed");
+
+    std::string readBack;
+    NTSTATUS stRead = mgr.readDifferentialFile(cid, scratchPath, &readBack);
+    TEST_ASSERT(stRead == STATUS_SUCCESS, "readDifferentialFile must succeed");
+    TEST_ASSERT(readBack == secretPayload, "Read back differential content must match payload");
+
+    // Read non-existent file
+    std::string missingContent;
+    TEST_ASSERT(mgr.readDifferentialFile(cid, "C:\\nonexistent.txt", &missingContent) == STATUS_NOT_FOUND, "Reading missing file must return STATUS_NOT_FOUND");
+
+    // ------------------------------------------------------------------------
+    // 8. Container Stop & Zero-Residual Teardown
+    // ------------------------------------------------------------------------
+    NTSTATUS stStop = mgr.stopContainer(cid);
+    TEST_ASSERT(stStop == STATUS_SUCCESS, "stopContainer must succeed");
+    stQuery = mgr.queryStatus(cid, &status);
+    TEST_ASSERT(status.state == static_cast<uint32_t>(SandboxState::Stopped), "State must be Stopped");
+
+    // Executing when stopped fails
+    std::string deadOut;
+    TEST_ASSERT(mgr.executeInContainer(cid, "whoami", &exitCode, &deadOut) == STATUS_INVALID_DEVICE_STATE, "executeInContainer must fail on stopped container");
+
+    // Destroy and verify zero-residual wipe
+    NTSTATUS stDestroy = mgr.destroyContainer(cid);
+    TEST_ASSERT(stDestroy == STATUS_SUCCESS, "destroyContainer must succeed");
+    TEST_ASSERT(mgr.queryStatus(cid, &status) == STATUS_NOT_FOUND, "queryStatus must return STATUS_NOT_FOUND after container destroyed");
+    TEST_ASSERT(mgr.readDifferentialFile(cid, scratchPath, &readBack) == STATUS_NOT_FOUND, "readDifferentialFile must return STATUS_NOT_FOUND after destroy");
+
+    // ------------------------------------------------------------------------
+    // 9. Win32 & NT Clean-Room C ABI Export Verification (cmshim.dll & wsbcore.sys)
+    // ------------------------------------------------------------------------
+    uint32_t abiCid = 0;
+    NTSTATUS stAbi = CmCreateContainer(L"AbiSandbox", nullptr, &abiCid);
+    TEST_ASSERT(stAbi == STATUS_SUCCESS && abiCid > 0, "CmCreateContainer C ABI must succeed");
+
+    NTSTATUS stAbiMap = CmMapFolder(abiCid, L"C:\\AbiFolder", L"C:\\Users\\WDAGUtilityAccount\\Desktop\\AbiFolder", TRUE);
+    TEST_ASSERT(stAbiMap == STATUS_SUCCESS, "CmMapFolder C ABI must succeed");
+
+    NTSTATUS stAbiStart = CmStartContainer(abiCid);
+    TEST_ASSERT(stAbiStart == STATUS_SUCCESS, "CmStartContainer C ABI must succeed");
+
+    CmContainerStatus abiStatus{};
+    NTSTATUS stAbiQuery = CmQueryContainerStatus(abiCid, &abiStatus);
+    TEST_ASSERT(stAbiQuery == STATUS_SUCCESS, "CmQueryContainerStatus C ABI must succeed");
+    TEST_ASSERT(abiStatus.containerId == abiCid, "CmContainerStatus CID must match");
+    TEST_ASSERT(abiStatus.mappedFolderCount == 1, "Mapped folder count must be 1");
+
+    uint32_t abiExit = 99;
+    NTSTATUS stAbiExec = CmExecuteInContainer(abiCid, L"whoami", &abiExit);
+    TEST_ASSERT(stAbiExec == STATUS_SUCCESS, "CmExecuteInContainer C ABI must succeed");
+    TEST_ASSERT(abiExit == 0, "CmExecuteInContainer exit code must be 0");
+
+    // wsbcore.sys driver C ABI
+    TEST_ASSERT(WsbInitialize() == STATUS_SUCCESS, "WsbInitialize must return STATUS_SUCCESS");
+    TEST_ASSERT(WsbGetActiveCount() >= 1, "WsbGetActiveCount must return >= 1 active sandbox");
+    TEST_ASSERT(WsbTeardownSandbox(abiCid) == STATUS_SUCCESS, "WsbTeardownSandbox must succeed");
+    TEST_ASSERT(CmStopContainer(abiCid) == STATUS_NOT_FOUND, "CmStopContainer on torn-down container must return STATUS_NOT_FOUND");
+    TEST_ASSERT(CmDestroyContainer(abiCid) == STATUS_NOT_FOUND, "CmDestroyContainer on torn-down container must return STATUS_NOT_FOUND");
+
+    // ------------------------------------------------------------------------
+    // 10. DynamicLoader & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("cmshim.dll", "CmCreateContainer") != nullptr, "cmshim.dll must export CmCreateContainer");
+    TEST_ASSERT(ldr.getExport("cmshim.dll", "CmStartContainer") != nullptr, "cmshim.dll must export CmStartContainer");
+    TEST_ASSERT(ldr.getExport("cmshim.dll", "CmStopContainer") != nullptr, "cmshim.dll must export CmStopContainer");
+    TEST_ASSERT(ldr.getExport("cmshim.dll", "CmDestroyContainer") != nullptr, "cmshim.dll must export CmDestroyContainer");
+    TEST_ASSERT(ldr.getExport("cmshim.dll", "CmQueryContainerStatus") != nullptr, "cmshim.dll must export CmQueryContainerStatus");
+    TEST_ASSERT(ldr.getExport("cmshim.dll", "CmExecuteInContainer") != nullptr, "cmshim.dll must export CmExecuteInContainer");
+    TEST_ASSERT(ldr.getExport("cmshim.dll", "CmMapFolder") != nullptr, "cmshim.dll must export CmMapFolder");
+
+    TEST_ASSERT(ldr.getExport("wsbcore.sys", "WsbInitialize") != nullptr, "wsbcore.sys must export WsbInitialize");
+    TEST_ASSERT(ldr.getExport("wsbcore.sys", "WsbCreateSandbox") != nullptr, "wsbcore.sys must export WsbCreateSandbox");
+    TEST_ASSERT(ldr.getExport("wsbcore.sys", "WsbTeardownSandbox") != nullptr, "wsbcore.sys must export WsbTeardownSandbox");
+    TEST_ASSERT(ldr.getExport("wsbcore.sys", "WsbGetActiveCount") != nullptr, "wsbcore.sys must export WsbGetActiveCount");
+
+    auto& vdb = version::VersionDatabase::Instance();
+    auto* pCmshim = vdb.GetModuleInfo("cmshim.dll");
+    TEST_ASSERT(pCmshim != nullptr, "VersionDatabase must contain cmshim.dll");
+    TEST_ASSERT(pCmshim->stringTable.at("FileVersion") == "10.0.26100.1", "cmshim.dll FileVersion must be 10.0.26100.1");
+
+    auto* pWsb = vdb.GetModuleInfo("wsb.exe");
+    TEST_ASSERT(pWsb != nullptr, "VersionDatabase must contain wsb.exe");
+    TEST_ASSERT(pWsb->stringTable.at("FileVersion") == "10.0.26100.1", "wsb.exe FileVersion must be 10.0.26100.1");
+
+    // ------------------------------------------------------------------------
+    // 11. Interactive Shell Integration & Routing
+    // ------------------------------------------------------------------------
+    shell::CommandShell testShell;
+
+    // sandbox status
+    std::ostringstream ossStatus;
+    testShell.execute("sandbox status", ossStatus);
+    std::string strStatus = ossStatus.str();
+    TEST_ASSERT(strStatus.find("Windows Sandbox & Lightweight Containers") != std::string::npos, "sandbox status must display header");
+    TEST_ASSERT(strStatus.find("WDAGUtilityAccount") != std::string::npos, "sandbox status must display WDAGUtilityAccount");
+
+    // sandbox list
+    std::ostringstream ossList;
+    testShell.execute("sandbox list", ossList);
+    TEST_ASSERT(ossList.str().find("Windows Sandbox & Lightweight Containers:") != std::string::npos, "sandbox list must execute");
+
+    // sandbox test
+    std::ostringstream ossTest;
+    testShell.execute("sandbox test", ossTest);
+    TEST_ASSERT(ossTest.str().find("[+] All Windows Sandbox & Lightweight Container tests passed successfully.") != std::string::npos, "sandbox test must pass self-test suite");
+
+    // sentinel sandbox routing
+    std::ostringstream ossSentinel;
+    testShell.execute("sentinel sandbox", ossSentinel);
+    TEST_ASSERT(ossSentinel.str().find("Windows Sandbox & Lightweight Containers (wsbcore.sys / cmshim.dll) Posture:") != std::string::npos, "sentinel sandbox must route to sandbox status");
+
+    // sandbox launch, exec, stop, destroy cycle via shell
+    std::ostringstream ossLaunch;
+    testShell.execute("sandbox launch ShellSandbox", ossLaunch);
+    TEST_ASSERT(ossLaunch.str().find("launched successfully") != std::string::npos, "sandbox launch must succeed");
+
+    std::cout << "[TEST] Suite 146: Windows Sandbox & Lightweight Containers Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite145")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite146")) {
+        RUN_TEST(Test_WindowsSandbox_LightweightContainer_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite145") {
         RUN_TEST(Test_WindowsSubsystemForLinux_LXSS_Subsystem);
         return g_FailedTests;
     }
@@ -34715,6 +34973,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem);
     RUN_TEST(Test_WindowsKernelDMA_Protection_IOMMU_Subsystem);
     RUN_TEST(Test_WindowsSubsystemForLinux_LXSS_Subsystem);
+    RUN_TEST(Test_WindowsSandbox_LightweightContainer_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -139,6 +139,7 @@ inline constexpr NTSTATUS STATUS_ACCOUNT_LOCKED_OUT     = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_NO_MEMORY              = static_cast<NTSTATUS>(0xC0000017);
 inline constexpr NTSTATUS STATUS_NOT_FOUND              = static_cast<NTSTATUS>(0xC0000225);
 inline constexpr NTSTATUS STATUS_DATA_ERROR             = static_cast<NTSTATUS>(0xC000003E);
+inline constexpr NTSTATUS STATUS_INVALID_DEVICE_STATE   = static_cast<NTSTATUS>(0xC0000184);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
     return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);

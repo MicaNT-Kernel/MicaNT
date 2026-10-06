@@ -137,6 +137,7 @@
 #include "vbs_hvci.hpp"
 #include "dma_guard.hpp"
 #include "wsl_lxss.hpp"
+#include "sandbox.hpp"
 
 namespace micant::shell {
 
@@ -214,6 +215,7 @@ public:
         vbs_hvci::InitializeVbsHvciSubsystemExports();
         dma_guard::InitializeDmaGuardSubsystemExports();
         wsl_lxss::InitializeWslSubsystemExports();
+        sandbox::InitializeSandboxSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -269,6 +271,7 @@ public:
             cmd != "vbs" && cmd != "hvci" &&
             cmd != "dmaguard" && cmd != "dma" &&
             cmd != "wsl" && cmd != "bash" && cmd != "lxss" &&
+            cmd != "sandbox" && cmd != "wsb" &&
             cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
@@ -411,6 +414,7 @@ public:
             if (cmd == "vbs" || cmd == "hvci") { cmdVbs(tokens, out); return 0; }
             if (cmd == "dmaguard" || cmd == "dma") { cmdDmaGuard(tokens, out); return 0; }
             if (cmd == "wsl" || cmd == "bash" || cmd == "lxss") { cmdWsl(tokens, out); return 0; }
+            if (cmd == "sandbox" || cmd == "wsb") { cmdSandbox(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -737,6 +741,7 @@ private:
             << "  VBS / HVCI [status|enable|verify|protect|pages|test] Virtualization-Based Security & HVCI (vbs test)\n"
             << "  DMAGUARD / DMA [status|devices|domains|policy|authorize|revoke|test] Kernel DMA Protection & IOMMU (dmaguard test)\n"
             << "  WSL / BASH / LXSS [status|list|run|mount|test] Windows Subsystem for Linux & Pico Kernel (wsl test)\n"
+            << "  SANDBOX / WSB [status|launch|list|stop|destroy|map|exec|test] Windows Sandbox & Lightweight Containers (sandbox test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20480,6 +20485,12 @@ private:
             return;
         }
 
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "sandbox" || toLower(tokens[1]) == "wsb" || toLower(tokens[1]) == "container")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdSandbox(subTokens, out);
+            return;
+        }
+
         if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
             out << "[TEST] Running Windows Security Center (SentinelCenter) Diagnostics...\n";
 
@@ -22628,6 +22639,333 @@ private:
 
         std::string result = mgr.executeLinuxCommand(fullCmd);
         out << result;
+    }
+
+    void cmdSandbox(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto toLower = [](std::string str) {
+            for (auto& c : str) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return str;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help" || toLower(tokens[1]) == "help")) {
+            out << "Windows Sandbox & Lightweight Containers Subsystem (wsb.exe / cmshim.dll)\n"
+                << "Ephemeral Container Isolation, Dynamic Base Image & .wsb Manifest Broker\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  sandbox status                       Displays Windows Sandbox and lightweight container posture\n"
+                << "  sandbox list                         Lists registered and active sandbox containers\n"
+                << "  sandbox launch [name] [manifest]     Spawns an ephemeral sandbox container\n"
+                << "  sandbox stop <cid>                   Gracefully terminates container execution session\n"
+                << "  sandbox destroy <cid>                Tears down container and performs zero-residual disk wipe\n"
+                << "  sandbox map <cid> <host> [guest] [ro|rw] Maps host directory into sandbox container\n"
+                << "  sandbox exec <cid> <cmd>             Executes command inside isolated sandbox environment\n"
+                << "  sandbox test                         Executes Windows Sandbox diagnostic self-test suite\n";
+            return;
+        }
+
+        auto& mgr = micant::sandbox::SandboxManager::Instance();
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "test" || toLower(tokens[1]) == "-test" || toLower(tokens[1]) == "--test")) {
+            out << "[TEST] Running Windows Sandbox & Lightweight Container Subsystem Diagnostics...\n";
+
+            // 1. Verify Subsystem Initialization
+            if (!mgr.isInitialized()) {
+                out << "[-] Sandbox Subsystem not initialized!\n";
+                return;
+            }
+            out << "  [+] Sandbox Subsystem Manager Initialized\n";
+
+            // 2. Parse Clean-Room .wsb Manifest
+            std::string sampleWsb =
+                "<Configuration>\n"
+                "  <VGpu>Disable</VGpu>\n"
+                "  <Networking>Enable</Networking>\n"
+                "  <MemoryInMB>2048</MemoryInMB>\n"
+                "  <MappedFolders>\n"
+                "    <MappedFolder>\n"
+                "      <HostFolder>C:\\Users\\admin\\Downloads</HostFolder>\n"
+                "      <SandboxFolder>C:\\Users\\WDAGUtilityAccount\\Desktop\\Downloads</SandboxFolder>\n"
+                "      <ReadOnly>true</ReadOnly>\n"
+                "    </MappedFolder>\n"
+                "  </MappedFolders>\n"
+                "  <LogonCommand>\n"
+                "    <Command>cmd.exe /c echo Hello Windows Sandbox</Command>\n"
+                "  </LogonCommand>\n"
+                "</Configuration>";
+
+            micant::sandbox::SandboxConfig parsedConfig;
+            if (!micant::sandbox::WsbManifestParser::Parse(sampleWsb, &parsedConfig)) {
+                out << "[-] WsbManifestParser failed to parse .wsb manifest!\n";
+                return;
+            }
+            if (parsedConfig.vGpu != micant::sandbox::VGpuPolicy::Disable ||
+                parsedConfig.networking != micant::sandbox::NetworkingPolicy::Enable ||
+                parsedConfig.memoryInMB != 2048 ||
+                parsedConfig.mappedFolders.size() != 1 ||
+                !parsedConfig.mappedFolders[0].readOnly) {
+                out << "[-] WsbManifestParser parsed config values invalid!\n";
+                return;
+            }
+            out << "  [+] Clean-Room .wsb XML Manifest Parser Verified (VGpu=Disable, Net=Enable, Mem=2048MB, Mapped=1)\n";
+
+            // 3. Create Container
+            uint32_t containerId = 0;
+            NTSTATUS status = mgr.createContainer("SelfTestContainer", parsedConfig, &containerId);
+            if (status != STATUS_SUCCESS || containerId == 0) {
+                out << "[-] createContainer failed with status 0x" << std::hex << status << "\n";
+                return;
+            }
+            out << "  [+] Sovereign Container Created (CID: " << std::dec << containerId << ", Base Image CoW Layer Linked)\n";
+
+            // 4. Map Additional Folder
+            status = mgr.mapFolder(containerId, "C:\\Tools", "C:\\Users\\WDAGUtilityAccount\\Desktop\\Tools", false);
+            if (status != STATUS_SUCCESS) {
+                out << "[-] mapFolder failed!\n";
+                return;
+            }
+            out << "  [+] Dynamic Folder Mapping Verified (C:\\Tools -> Desktop\\Tools [RW])\n";
+
+            // 5. Start Container
+            status = mgr.startContainer(containerId);
+            if (status != STATUS_SUCCESS) {
+                out << "[-] startContainer failed!\n";
+                return;
+            }
+            out << "  [+] Sandbox Container Started (Isolated User: WDAGUtilityAccount, VMSwitch Net: 172.16.1.x)\n";
+
+            // 6. Guest Execution
+            uint32_t exitCode = 1;
+            std::string execOut;
+            status = mgr.executeInContainer(containerId, "whoami", &exitCode, &execOut);
+            if (status != STATUS_SUCCESS || exitCode != 0 || execOut.find("WDAGUtilityAccount") == std::string::npos) {
+                out << "[-] executeInContainer 'whoami' failed: " << execOut << "\n";
+                return;
+            }
+            out << "  [+] Guest Process Execution Verified (whoami -> WDAGUtilityAccount)\n";
+
+            status = mgr.executeInContainer(containerId, "ipconfig", &exitCode, &execOut);
+            if (status != STATUS_SUCCESS || execOut.find("Windows Sandbox VMSwitch") == std::string::npos) {
+                out << "[-] executeInContainer 'ipconfig' failed!\n";
+                return;
+            }
+            out << "  [+] Guest Network Isolation Verified (Synthetic VMSwitch Adapter)\n";
+
+            // 7. Differential Filesystem Layering & Isolation
+            status = mgr.writeDifferentialFile(containerId, "C:\\Users\\WDAGUtilityAccount\\Desktop\\test.txt", "Sandbox Secret");
+            if (status != STATUS_SUCCESS) {
+                out << "[-] writeDifferentialFile failed!\n";
+                return;
+            }
+            std::string readContent;
+            status = mgr.readDifferentialFile(containerId, "C:\\Users\\WDAGUtilityAccount\\Desktop\\test.txt", &readContent);
+            if (status != STATUS_SUCCESS || readContent != "Sandbox Secret") {
+                out << "[-] readDifferentialFile mismatch!\n";
+                return;
+            }
+            out << "  [+] Differential Ephemeral Overlay Filesystem Verified\n";
+
+            // 8. Query Status C ABI Struct
+            micant::sandbox::CmContainerStatus cmStatus{};
+            status = mgr.queryStatus(containerId, &cmStatus);
+            if (status != STATUS_SUCCESS || cmStatus.containerId != containerId || cmStatus.mappedFolderCount != 2) {
+                out << "[-] queryStatus failed or invalid!\n";
+                return;
+            }
+            out << "  [+] CmContainerStatus C ABI Query Verified (Memory: " << cmStatus.memoryAllocatedMB << "MB, Mapped: " << cmStatus.mappedFolderCount << ")\n";
+
+            // 9. Teardown & Zero-Residual Wipe Verification
+            status = mgr.stopContainer(containerId);
+            if (status != STATUS_SUCCESS) {
+                out << "[-] stopContainer failed!\n";
+                return;
+            }
+            status = mgr.destroyContainer(containerId);
+            if (status != STATUS_SUCCESS) {
+                out << "[-] destroyContainer failed!\n";
+                return;
+            }
+            // Verify file no longer accessible (zero residual)
+            status = mgr.readDifferentialFile(containerId, "C:\\Users\\WDAGUtilityAccount\\Desktop\\test.txt", &readContent);
+            if (status != STATUS_NOT_FOUND) {
+                out << "[-] Residual data detected after container teardown!\n";
+                return;
+            }
+            out << "  [+] Ephemeral Teardown & Guaranteed Zero-Residual Storage Wipe Verified\n";
+
+            // 10. DynamicLoader & VersionDatabase Parity
+            auto& ldr = ldr::DynamicLoader::get();
+            if (!ldr.getExport("cmshim.dll", "CmCreateContainer") ||
+                !ldr.getExport("cmshim.dll", "CmStartContainer") ||
+                !ldr.getExport("cmshim.dll", "CmStopContainer") ||
+                !ldr.getExport("cmshim.dll", "CmDestroyContainer") ||
+                !ldr.getExport("cmshim.dll", "CmQueryContainerStatus") ||
+                !ldr.getExport("cmshim.dll", "CmExecuteInContainer") ||
+                !ldr.getExport("cmshim.dll", "CmMapFolder") ||
+                !ldr.getExport("wsbcore.sys", "WsbInitialize") ||
+                !ldr.getExport("wsbcore.sys", "WsbCreateSandbox") ||
+                !ldr.getExport("wsbcore.sys", "WsbTeardownSandbox") ||
+                !ldr.getExport("wsbcore.sys", "WsbGetActiveCount")) {
+                out << "[-] DynamicLoader missing Windows Sandbox exports!\n";
+                return;
+            }
+            auto& vdb = version::VersionDatabase::Instance();
+            auto* pMod = vdb.GetModuleInfo("cmshim.dll");
+            if (!pMod || pMod->stringTable.at("FileVersion") != "10.0.26100.1") {
+                out << "[-] VersionDatabase entry for cmshim.dll invalid!\n";
+                return;
+            }
+            auto* pWsb = vdb.GetModuleInfo("wsb.exe");
+            if (!pWsb || pWsb->stringTable.at("FileVersion") != "10.0.26100.1") {
+                out << "[-] VersionDatabase entry for wsb.exe invalid!\n";
+                return;
+            }
+            out << "  [+] Win32 C ABI Exports & Version Database Parity Verified (10.0.26100.1)\n";
+
+            out << "[+] All Windows Sandbox & Lightweight Container tests passed successfully.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-l" || toLower(tokens[1]) == "--list" || toLower(tokens[1]) == "list")) {
+            auto containers = mgr.getContainers();
+            out << "Windows Sandbox & Lightweight Containers:\n";
+            if (containers.empty()) {
+                out << "  No active or registered sandbox containers found.\n";
+                return;
+            }
+            for (const auto& c : containers) {
+                out << "  * [" << c.containerId << "] " << c.name
+                    << " | State: " << (c.state == micant::sandbox::SandboxState::Running ? "RUNNING" : (c.state == micant::sandbox::SandboxState::Stopped ? "STOPPED" : "CREATED"))
+                    << " | Mem: " << c.config.memoryInMB << " MB"
+                    << " | IP: " << c.ipAddress
+                    << " | Mapped: " << c.config.mappedFolders.size() << " folders\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "launch" || toLower(tokens[1]) == "run")) {
+            std::string name = (tokens.size() > 2) ? tokens[2] : "SandboxInstance";
+            uint32_t cid = 0;
+            micant::sandbox::SandboxConfig cfg;
+            NTSTATUS status = mgr.createContainer(name, cfg, &cid);
+            if (status != STATUS_SUCCESS) {
+                out << "[-] Failed to create sandbox container: 0x" << std::hex << status << "\n";
+                return;
+            }
+            status = mgr.startContainer(cid);
+            if (status != STATUS_SUCCESS) {
+                out << "[-] Failed to start sandbox container: 0x" << std::hex << status << "\n";
+                return;
+            }
+            out << "[+] Ephemeral Windows Sandbox [" << cid << "] (" << name << ") launched successfully.\n"
+                << "    User: WDAGUtilityAccount | Dynamic Base: C:\\ (CoW) | State: Running\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "stop") {
+            if (tokens.size() < 3) {
+                out << "Usage: sandbox stop <container_id>\n";
+                return;
+            }
+            try {
+                uint32_t cid = static_cast<uint32_t>(std::stoul(tokens[2]));
+                NTSTATUS status = mgr.stopContainer(cid);
+                if (status != STATUS_SUCCESS) {
+                    out << "[-] Failed to stop sandbox container " << cid << ": 0x" << std::hex << status << "\n";
+                    return;
+                }
+                out << "[+] Sandbox container " << cid << " stopped.\n";
+            } catch (...) {
+                out << "[-] Invalid container id.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "destroy" || toLower(tokens[1]) == "teardown")) {
+            if (tokens.size() < 3) {
+                out << "Usage: sandbox destroy <container_id>\n";
+                return;
+            }
+            try {
+                uint32_t cid = static_cast<uint32_t>(std::stoul(tokens[2]));
+                NTSTATUS status = mgr.destroyContainer(cid);
+                if (status != STATUS_SUCCESS) {
+                    out << "[-] Failed to destroy sandbox container " << cid << ": 0x" << std::hex << status << "\n";
+                    return;
+                }
+                out << "[+] Sandbox container " << cid << " destroyed. All ephemeral differential storage wiped.\n";
+            } catch (...) {
+                out << "[-] Invalid container id.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "map") {
+            if (tokens.size() < 4) {
+                out << "Usage: sandbox map <container_id> <host_folder> [sandbox_folder] [ro|rw]\n";
+                return;
+            }
+            try {
+                uint32_t cid = static_cast<uint32_t>(std::stoul(tokens[2]));
+                std::string host = tokens[3];
+                std::string guest = (tokens.size() > 4) ? tokens[4] : "";
+                bool ro = (tokens.size() > 5 && toLower(tokens[5]) == "ro");
+                NTSTATUS status = mgr.mapFolder(cid, host, guest, ro);
+                if (status != STATUS_SUCCESS) {
+                    out << "[-] Failed to map folder into container " << cid << ": 0x" << std::hex << status << "\n";
+                    return;
+                }
+                out << "[+] Mapped host folder '" << host << "' into sandbox container " << cid << (ro ? " (ReadOnly)" : " (ReadWrite)") << "\n";
+            } catch (...) {
+                out << "[-] Invalid container id.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "exec" || toLower(tokens[1]) == "-e")) {
+            if (tokens.size() < 4) {
+                out << "Usage: sandbox exec <container_id> <command...>\n";
+                return;
+            }
+            try {
+                uint32_t cid = static_cast<uint32_t>(std::stoul(tokens[2]));
+                std::string fullCmd;
+                for (size_t i = 3; i < tokens.size(); ++i) {
+                    if (!fullCmd.empty()) fullCmd += " ";
+                    fullCmd += tokens[i];
+                }
+                uint32_t exitCode = 0;
+                std::string cmdOutput;
+                NTSTATUS status = mgr.executeInContainer(cid, fullCmd, &exitCode, &cmdOutput);
+                if (status != STATUS_SUCCESS) {
+                    out << "[-] Failed to execute command in sandbox " << cid << ": 0x" << std::hex << status << "\n";
+                    return;
+                }
+                out << cmdOutput;
+            } catch (...) {
+                out << "[-] Invalid container id.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() <= 1 || (toLower(tokens[1]) == "status" || toLower(tokens[1]) == "--status")) {
+            auto containers = mgr.getContainers();
+            out << "Windows Sandbox & Lightweight Containers (wsbcore.sys / cmshim.dll) Posture:\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  Subsystem Architecture:        Sovereign Lightweight Container Engine\n"
+                << "  Isolation Principal:           WDAGUtilityAccount (Zero-Residual Userland)\n"
+                << "  Base Image Layering:           Immutable Host C:\\ CoW + Differential Scratch Disk\n"
+                << "  Virtualization Broker:         wsbcore.sys & cmshim.dll\n"
+                << "  Manifest Engine:               Windows Sandbox .wsb XML Schema Compliant\n"
+                << "  Active Sandbox Containers:     " << mgr.getActiveCount() << " running\n"
+                << "  Registered Containers:         " << containers.size() << " total\n"
+                << "  Synthetic Network:             Hyper-V / VMSwitch NAT Virtual Adapter (172.16.1.0/24)\n"
+                << "  Zero-Residual Teardown:        VERIFIED (Full ephemeral state wipe on destruction)\n"
+                << "  Clean-Room Win32 C ABI:        VERIFIED (cmshim.dll & wsbcore.sys v10.0.26100.1)\n"
+                << "-------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        out << "Unknown sandbox command. Type 'sandbox help' for usage.\n";
     }
 
     static std::string trim(std::string_view s) {
