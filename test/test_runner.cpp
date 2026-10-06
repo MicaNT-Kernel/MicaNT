@@ -146,6 +146,7 @@
 #include "micant/amsi.hpp"
 #include "micant/mpengine.hpp"
 #include "micant/exploit_guard.hpp"
+#include "micant/credguard.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -32709,8 +32710,297 @@ void Test_WindowsExploitGuard_SentinelGuard_Subsystem() {
     std::cout << "[TEST] Suite 139: Windows Defender Exploit Guard (SentinelGuard) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 140: Windows Credential Guard & Isolated User Mode Subsystem
+// ============================================================================
+void Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem() {
+    using namespace micant::credguard;
+
+    // 1. Dynamic Subsystem Initialization & Win32 C ABI Export Resolution
+    InitializeCredGuardSubsystemExports();
+
+    auto& loader = ldr::DynamicLoader::get();
+
+    // Check sspicli.dll exports
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaOpenPolicy") != nullptr, "sspicli!LsaOpenPolicy must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaClose") != nullptr, "sspicli!LsaClose must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaFreeMemory") != nullptr, "sspicli!LsaFreeMemory must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaQueryInformationPolicy") != nullptr, "sspicli!LsaQueryInformationPolicy must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaSetInformationPolicy") != nullptr, "sspicli!LsaSetInformationPolicy must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaEnumerateLogonSessions") != nullptr, "sspicli!LsaEnumerateLogonSessions must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaGetLogonSessionData") != nullptr, "sspicli!LsaGetLogonSessionData must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaRegisterLogonProcess") != nullptr, "sspicli!LsaRegisterLogonProcess must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaDeregisterLogonProcess") != nullptr, "sspicli!LsaDeregisterLogonProcess must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaLookupAuthenticationPackage") != nullptr, "sspicli!LsaLookupAuthenticationPackage must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaCallAuthenticationPackage") != nullptr, "sspicli!LsaCallAuthenticationPackage must be exported");
+    TEST_ASSERT(loader.getExport("sspicli.dll", "LsaFreeReturnBuffer") != nullptr, "sspicli!LsaFreeReturnBuffer must be exported");
+
+    // Check secur32.dll forwards
+    TEST_ASSERT(loader.getExport("secur32.dll", "LsaOpenPolicy") != nullptr, "secur32!LsaOpenPolicy must be exported");
+    TEST_ASSERT(loader.getExport("secur32.dll", "LsaQueryInformationPolicy") != nullptr, "secur32!LsaQueryInformationPolicy must be exported");
+    TEST_ASSERT(loader.getExport("secur32.dll", "LsaEnumerateLogonSessions") != nullptr, "secur32!LsaEnumerateLogonSessions must be exported");
+
+    // Check lsasrv.dll Credential Guard specialized exports
+    TEST_ASSERT(loader.getExport("lsasrv.dll", "CredGuardGetState") != nullptr, "lsasrv!CredGuardGetState must be exported");
+    TEST_ASSERT(loader.getExport("lsasrv.dll", "CredGuardSetState") != nullptr, "lsasrv!CredGuardSetState must be exported");
+    TEST_ASSERT(loader.getExport("lsasrv.dll", "CredGuardIsLsaIsoRunning") != nullptr, "lsasrv!CredGuardIsLsaIsoRunning must be exported");
+    TEST_ASSERT(loader.getExport("lsasrv.dll", "CredGuardProtectSecret") != nullptr, "lsasrv!CredGuardProtectSecret must be exported");
+    TEST_ASSERT(loader.getExport("lsasrv.dll", "CredGuardUnsealSecret") != nullptr, "lsasrv!CredGuardUnsealSecret must be exported");
+    TEST_ASSERT(loader.getExport("lsasrv.dll", "CredGuardChallengeResponse") != nullptr, "lsasrv!CredGuardChallengeResponse must be exported");
+    TEST_ASSERT(loader.getExport("lsasrv.dll", "CredGuardInterceptDump") != nullptr, "lsasrv!CredGuardInterceptDump must be exported");
+
+    // Version database registration verification
+    auto modLsa = version::VersionDatabase::Instance().GetModuleInfo("lsasrv.dll");
+    TEST_ASSERT(modLsa != nullptr, "lsasrv.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modLsa->stringTable.at("FileVersion") == "10.0.26100.1", "lsasrv.dll version must be 10.0.26100.1");
+
+    auto modSspi = version::VersionDatabase::Instance().GetModuleInfo("sspicli.dll");
+    TEST_ASSERT(modSspi != nullptr, "sspicli.dll must be registered in VersionDatabase");
+
+    auto& mgr = SentinelCredGuardManager::get();
+    mgr.resetToBaseline();
+
+    // 2. Baseline Credential Guard State & LsaQueryInformationPolicy
+    {
+        uint32_t status = 999;
+        uint32_t flags = 0;
+        win32::BOOL ok = CredGuardGetState(&status, &flags);
+        TEST_ASSERT(ok == win32::TRUE, "CredGuardGetState must succeed");
+        TEST_ASSERT(status == CREDGUARD_STATUS_DISABLED, "Initial status must be CREDGUARD_STATUS_DISABLED");
+        TEST_ASSERT(!mgr.isLsaIsoRunning(), "LsaIso must not be running initially");
+        TEST_ASSERT(!mgr.isUefiLocked(), "UEFI lock must not be active initially");
+
+        // LsaQueryInformationPolicy (DeviceGuard)
+        void* buffer = nullptr;
+        NTSTATUS st = LsaQueryInformationPolicy(0, PolicyDeviceGuardInformation, &buffer);
+        TEST_ASSERT(st == STATUS_SUCCESS && buffer != nullptr, "LsaQueryInformationPolicy(DeviceGuard) must succeed");
+        const auto* dg = static_cast<const POLICY_DEVICE_GUARD_INFO*>(buffer);
+        TEST_ASSERT(dg->CredGuardStatus == CREDGUARD_STATUS_DISABLED, "CredGuardStatus must be 0");
+        TEST_ASSERT(dg->LsaIsoPid == 0, "LsaIsoPid must be 0 initially");
+        LsaFreeMemory(buffer);
+    }
+
+    // 3. Credential Guard Activation without UEFI Lock
+    {
+        win32::BOOL ok = CredGuardSetState(CREDGUARD_STATUS_ENABLED_WITHOUT_UEFI_LOCK, 0);
+        TEST_ASSERT(ok == win32::TRUE, "CredGuardSetState without lock must succeed");
+
+        uint32_t status = 0;
+        uint32_t flags = 0;
+        CredGuardGetState(&status, &flags);
+        TEST_ASSERT(status == CREDGUARD_STATUS_ENABLED_WITHOUT_UEFI_LOCK, "Status must be enabled without lock");
+        TEST_ASSERT((flags & CREDGUARD_FLAG_VBS_ENABLED) != 0, "VBS flag must be set");
+        TEST_ASSERT((flags & CREDGUARD_FLAG_HVCI_ACTIVE) != 0, "HVCI flag must be set");
+        TEST_ASSERT((flags & CREDGUARD_FLAG_LSAISO_RUNNING) != 0, "LSAISO_RUNNING flag must be set");
+        TEST_ASSERT(CredGuardIsLsaIsoRunning() == win32::TRUE, "CredGuardIsLsaIsoRunning must return TRUE");
+
+        // Query through LsaQueryInformationPolicy
+        void* buffer = nullptr;
+        NTSTATUS st = LsaQueryInformationPolicy(0, PolicyDeviceGuardInformation, &buffer);
+        TEST_ASSERT(st == STATUS_SUCCESS && buffer != nullptr, "LsaQueryInformationPolicy must succeed");
+        const auto* dg = static_cast<const POLICY_DEVICE_GUARD_INFO*>(buffer);
+        TEST_ASSERT(dg->CredGuardStatus == CREDGUARD_STATUS_ENABLED_WITHOUT_UEFI_LOCK, "CredGuardStatus must match");
+        TEST_ASSERT(dg->VbsStatus == 1, "VbsStatus must be 1");
+        TEST_ASSERT(dg->LsaIsoPid == LSAISO_PROCESS_ID, "LsaIsoPid must be 500");
+        LsaFreeMemory(buffer);
+
+        // Can disable when not locked
+        ok = CredGuardSetState(CREDGUARD_STATUS_DISABLED, 0);
+        TEST_ASSERT(ok == win32::TRUE, "Disabling without lock must succeed");
+        TEST_ASSERT(CredGuardIsLsaIsoRunning() == win32::FALSE, "LsaIso must stop after disable");
+    }
+
+    // 4. Secret Sealing into VTL 1 Enclave & Opaque Handle Issuance
+    {
+        mgr.enable(false);
+
+        const uint8_t sampleHash[] = {
+            0xAA, 0x11, 0xBB, 0x22, 0xCC, 0x33, 0xDD, 0x44,
+            0xEE, 0x55, 0xFF, 0x66, 0x12, 0x34, 0x56, 0x78
+        };
+        uint64_t handleId = 0;
+        win32::BOOL ok = CredGuardProtectSecret(sampleHash, sizeof(sampleHash), &handleId);
+        TEST_ASSERT(ok == win32::TRUE && handleId != 0, "CredGuardProtectSecret must succeed and return non-zero handle");
+        TEST_ASSERT(mgr.getIsolatedSecretCount() == 1, "Enclave must hold 1 secret");
+
+        // Invalid parameters
+        ok = CredGuardProtectSecret(nullptr, sizeof(sampleHash), &handleId);
+        TEST_ASSERT(!ok && win32::GetLastError() == 87, "Null buffer must fail with ERROR_INVALID_PARAMETER (87)");
+        ok = CredGuardProtectSecret(sampleHash, 0, &handleId);
+        TEST_ASSERT(!ok && win32::GetLastError() == 87, "Zero length must fail with ERROR_INVALID_PARAMETER (87)");
+
+        // Unseal Secret in authenticated context
+        uint8_t unsealed[32]{};
+        size_t cbUnsealed = sizeof(unsealed);
+        ok = CredGuardUnsealSecret(handleId, unsealed, &cbUnsealed);
+        TEST_ASSERT(ok == win32::TRUE, "CredGuardUnsealSecret must succeed");
+        TEST_ASSERT(cbUnsealed == sizeof(sampleHash), "Unsealed length must match original");
+        TEST_ASSERT(std::memcmp(sampleHash, unsealed, sizeof(sampleHash)) == 0, "Unsealed data must match original plaintext");
+
+        // Buffer too small test
+        size_t shortSize = 4;
+        ok = CredGuardUnsealSecret(handleId, unsealed, &shortSize);
+        TEST_ASSERT(!ok && win32::GetLastError() == 122, "Short buffer must fail with ERROR_INSUFFICIENT_BUFFER (122)");
+    }
+
+    // 5. In-Enclave Challenge-Response Authentication (Zero Plaintext Exposure)
+    {
+        const uint8_t sampleHash[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C};
+        uint64_t hSecret = mgr.isolateSecret(L"MICANT", L"CorpUser", sampleHash);
+
+        const uint8_t challenge[] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
+        uint8_t response[64]{};
+        size_t cbResponse = sizeof(response);
+
+        win32::BOOL ok = CredGuardChallengeResponse(hSecret, challenge, sizeof(challenge), response, &cbResponse);
+        TEST_ASSERT(ok == win32::TRUE, "CredGuardChallengeResponse must succeed");
+        TEST_ASSERT(cbResponse == 16, "NTLM challenge-response must be 16 bytes");
+
+        // Verify that the computation matches clean-room RFC 1320 digest
+        auto expected = lsass::crypto::computeChallengeResponse(sampleHash, challenge);
+        TEST_ASSERT(std::memcmp(response, expected.data(), 16) == 0, "In-enclave challenge-response must match expected digest");
+        TEST_ASSERT(mgr.getTotalEnclaveAuthentications() >= 1, "Enclave authentication counter must increment");
+    }
+
+    // 6. Mimikatz / ProcDump / MiniDumpWriteDump Memory Scraping Interception
+    {
+        uint64_t beforeBlocked = mgr.getTotalBlockedDumps();
+
+        // 6a. Attempt to read LSASS memory with PROCESS_VM_READ (Mimikatz sekurlsa::logonpasswords)
+        win32::BOOL ok = CredGuardInterceptDump(LSASS_PROCESS_ID, 0x0010 /* PROCESS_VM_READ */, "Mimikatz sekurlsa::logonpasswords");
+        TEST_ASSERT(!ok, "Reading LSASS memory under Credential Guard must fail");
+        TEST_ASSERT(win32::GetLastError() == 5, "Must set ERROR_ACCESS_DENIED (5)");
+
+        // 6b. Attempt to open LsaIso enclave with PROCESS_ALL_ACCESS (ProcDump / MiniDump)
+        ok = CredGuardInterceptDump(LSAISO_PROCESS_ID, 0x1FFFFF /* PROCESS_ALL_ACCESS */, "procdump.exe -ma lsaiso.exe");
+        TEST_ASSERT(!ok, "Accessing LsaIso enclave memory must fail");
+        TEST_ASSERT(win32::GetLastError() == 5, "Must set ERROR_ACCESS_DENIED (5)");
+
+        // 6c. Verify audit records
+        TEST_ASSERT(mgr.getTotalBlockedDumps() == beforeBlocked + 2, "Blocked dumps counter must increment by 2");
+        auto audit = mgr.getAuditLog();
+        TEST_ASSERT(audit.size() >= 2, "Audit log must contain at least 2 entries");
+        TEST_ASSERT(audit.back().targetPid == LSAISO_PROCESS_ID, "Target PID must be LSAISO_PROCESS_ID");
+        TEST_ASSERT(audit.back().blocked == true, "Blocked must be true");
+    }
+
+    // 7. Hardware UEFI Lock Immutability
+    {
+        // Enable with UEFI lock
+        win32::BOOL ok = CredGuardSetState(CREDGUARD_STATUS_ENABLED_WITH_UEFI_LOCK, 0);
+        TEST_ASSERT(ok == win32::TRUE, "Enabling with UEFI lock must succeed");
+        TEST_ASSERT(mgr.isUefiLocked(), "isUefiLocked must be true");
+
+        // Attempt to disable must be rejected with ERROR_ACCESS_DENIED (5)
+        ok = CredGuardSetState(CREDGUARD_STATUS_DISABLED, 0);
+        TEST_ASSERT(!ok, "Attempt to disable UEFI-locked Credential Guard must fail");
+        TEST_ASSERT(win32::GetLastError() == 5, "Attempt to disable UEFI-locked Credential Guard must set ERROR_ACCESS_DENIED (5)");
+
+        // Attempting to disable via LsaSetInformationPolicy must also return STATUS_ACCESS_DENIED
+        POLICY_DEVICE_GUARD_INFO disableInfo{};
+        disableInfo.CredGuardStatus = CREDGUARD_STATUS_DISABLED;
+        NTSTATUS st = LsaSetInformationPolicy(0, PolicyDeviceGuardInformation, &disableInfo);
+        TEST_ASSERT(st == STATUS_ACCESS_DENIED, "LsaSetInformationPolicy disable must return STATUS_ACCESS_DENIED");
+    }
+
+    // 8. Standard LSA Policy & Logon Session Enumeration
+    {
+        uintptr_t hPolicy = 0;
+        NTSTATUS st = LsaOpenPolicy(nullptr, nullptr, 0, &hPolicy);
+        TEST_ASSERT(st == STATUS_SUCCESS && hPolicy != 0, "LsaOpenPolicy must succeed");
+
+        // Query Primary Domain Information
+        void* domainBuf = nullptr;
+        st = LsaQueryInformationPolicy(hPolicy, PolicyPrimaryDomainInformation, &domainBuf);
+        TEST_ASSERT(st == STATUS_SUCCESS && domainBuf != nullptr, "LsaQueryInformationPolicy(PrimaryDomain) must succeed");
+        const auto* pdi = static_cast<const POLICY_PRIMARY_DOMAIN_INFO*>(domainBuf);
+        TEST_ASSERT(std::wcscmp(pdi->Name.Buffer, L"MICANT") == 0, "Domain name must be MICANT");
+        LsaFreeMemory(domainBuf);
+
+        // Enumerate logon sessions
+        uint32_t sessionCount = 0;
+        Luid* pSessionList = nullptr;
+        st = LsaEnumerateLogonSessions(&sessionCount, &pSessionList);
+        TEST_ASSERT(st == STATUS_SUCCESS, "LsaEnumerateLogonSessions must succeed");
+        TEST_ASSERT(sessionCount >= 1 && pSessionList != nullptr, "Must have at least 1 active logon session");
+
+        // Get Logon Session Data for first session
+        SECURITY_LOGON_SESSION_DATA* pSessionData = nullptr;
+        st = LsaGetLogonSessionData(&pSessionList[0], &pSessionData);
+        TEST_ASSERT(st == STATUS_SUCCESS && pSessionData != nullptr, "LsaGetLogonSessionData must succeed");
+        TEST_ASSERT(pSessionData->Size == sizeof(SECURITY_LOGON_SESSION_DATA), "Session data size must match struct size");
+        LsaFreeMemory(pSessionData);
+        LsaFreeMemory(pSessionList);
+
+        // Register and deregister logon process
+        LSA_STRING procName{static_cast<uint16_t>(6), static_cast<uint16_t>(7), const_cast<char*>("winlog")};
+        uintptr_t hLsa = 0;
+        uint32_t mode = 0;
+        st = LsaRegisterLogonProcess(&procName, &hLsa, &mode);
+        TEST_ASSERT(st == STATUS_SUCCESS && hLsa != 0, "LsaRegisterLogonProcess must succeed");
+
+        uint32_t pkgId = 0;
+        LSA_STRING pkgName{static_cast<uint16_t>(6), static_cast<uint16_t>(7), const_cast<char*>("MSV1_0")};
+        st = LsaLookupAuthenticationPackage(hLsa, &pkgName, &pkgId);
+        TEST_ASSERT(st == STATUS_SUCCESS && pkgId == 1, "LsaLookupAuthenticationPackage for MSV1_0 must succeed");
+
+        st = LsaDeregisterLogonProcess(hLsa);
+        TEST_ASSERT(st == STATUS_SUCCESS, "LsaDeregisterLogonProcess must succeed");
+
+        LsaClose(hPolicy);
+    }
+
+    // 9. Interactive Shell Integration (credguard / sentinel credguard)
+    {
+        shell::CommandShell proc;
+        std::ostringstream oss;
+
+        // 9a. credguard /?
+        int shellRet = proc.execute("credguard /?", oss);
+        TEST_ASSERT(shellRet == 0, "credguard /? must return 0");
+        TEST_ASSERT(oss.str().find("SentinelCredGuard / lsasrv.dll") != std::string::npos, "Help must reference SentinelCredGuard");
+
+        // 9b. credguard status
+        oss.str("");
+        shellRet = proc.execute("credguard status", oss);
+        TEST_ASSERT(shellRet == 0, "credguard status must return 0");
+        TEST_ASSERT(oss.str().find("Sovereign Credential Guard (SentinelCredGuard) Posture:") != std::string::npos, "Must show posture header");
+        TEST_ASSERT(oss.str().find("Virtualization-Based Security (VBS):") != std::string::npos, "Must show VBS status");
+
+        // 9c. credguard isolate
+        oss.str("");
+        shellRet = proc.execute("credguard isolate Alice SecretPassword999!", oss);
+        TEST_ASSERT(shellRet == 0, "credguard isolate must return 0");
+        TEST_ASSERT(oss.str().find("isolated into VTL 1 enclave") != std::string::npos, "Must confirm credential sealed");
+
+        // 9d. credguard dump-attempt
+        oss.str("");
+        shellRet = proc.execute("credguard dump-attempt", oss);
+        TEST_ASSERT(shellRet == 0, "credguard dump-attempt must return 0");
+        TEST_ASSERT(oss.str().find("STATUS_ACCESS_DENIED") != std::string::npos, "Must confirm dump blocked with STATUS_ACCESS_DENIED");
+
+        // 9e. credguard test (diagnostic self-test)
+        oss.str("");
+        shellRet = proc.execute("credguard test", oss);
+        TEST_ASSERT(shellRet == 0, "credguard test must return 0");
+        TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "credguard test must report [SUCCESS]");
+
+        // 9f. sentinel credguard
+        oss.str("");
+        shellRet = proc.execute("sentinel credguard", oss);
+        TEST_ASSERT(shellRet == 0, "sentinel credguard must return 0");
+        TEST_ASSERT(oss.str().find("Sovereign Credential Guard (SentinelCredGuard) Posture:") != std::string::npos, "sentinel credguard must route to posture");
+    }
+
+    std::cout << "[TEST] Suite 140: Windows Credential Guard & Isolated User Mode Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite139")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite140")) {
+        RUN_TEST(Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite139") {
         RUN_TEST(Test_WindowsExploitGuard_SentinelGuard_Subsystem);
         return g_FailedTests;
     }
@@ -32990,6 +33280,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsAMSI_SentinelScan_Subsystem);
     RUN_TEST(Test_WindowsDefender_AegisDefender_Subsystem);
     RUN_TEST(Test_WindowsExploitGuard_SentinelGuard_Subsystem);
+    RUN_TEST(Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

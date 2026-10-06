@@ -2585,6 +2585,41 @@
   - Validates dynamic exports, baseline policy states, parameter validation errors (87), permanence protection (5), ACG, strict handle, Win32k lockdown, child process prevention, font/image load restrictions, EAF/ROP payload filters, CET shadow stack, violation audit telemetry, and shell CLI commands.
   - Milestone 139: **139 / 139 Test Suites Passing (100%)**.
 
+---
+
+### Phase 113: Windows Credential Guard & Isolated User Mode (SentinelCredGuard) Subsystem (`credguard.hpp`, `lsasrv.dll`, `sspicli.dll` / `credguard.exe`) (100% Completed - MILESTONE 140)
+- [x] **Sovereign Credential Guard & Virtualization-Based Security Architecture (`include/micant/credguard.hpp`, `lsasrv.dll`, `sspicli.dll`)**:
+  - Native Win32 LSA and Credential Guard C ABI:
+    * `LsaOpenPolicy`, `LsaClose`, `LsaFreeMemory`.
+    * `LsaQueryInformationPolicy`, `LsaSetInformationPolicy` (`PolicyDeviceGuardInformation`, `PolicyPrimaryDomainInformation`).
+    * `LsaEnumerateLogonSessions`, `LsaGetLogonSessionData`.
+    * `LsaRegisterLogonProcess`, `LsaDeregisterLogonProcess`.
+    * `LsaLookupAuthenticationPackage`, `LsaCallAuthenticationPackage`, `LsaFreeReturnBuffer`.
+    * `CredGuardGetState`, `CredGuardSetState`.
+    * `CredGuardIsLsaIsoRunning`.
+    * `CredGuardProtectSecret`, `CredGuardUnsealSecret`.
+    * `CredGuardChallengeResponse`.
+    * `CredGuardInterceptDump`.
+  - Isolated User Mode (IUM) & Virtual Trust Level 1 (VTL 1) Enclave (`LsaIso.exe` PID 500):
+    * Hardware/hypervisor-isolated secure memory container hosting credential secrets.
+    * AES-256-CBC envelope encryption with SHA-256 HMAC integrity tags.
+    * Opaque token issuance for VTL 0 callers.
+    * In-enclave authentication challenge-response without plaintext hash exposure.
+  - Mimikatz & Memory Scraper Defense:
+    * Intercepts `PROCESS_VM_READ`, `PROCESS_DUP_HANDLE`, and `PROCESS_ALL_ACCESS` targeting LSASS (PID 492) or LsaIso (PID 500).
+    * Blocks dumping attempts with `STATUS_ACCESS_DENIED` (`ERROR_ACCESS_DENIED` / code 5).
+    * High-precision audit log of blocked scraping attempts.
+  - Hardware UEFI Lock Immutability:
+    * When enabled with UEFI lock (state 1), Credential Guard cannot be disabled via software or registry; attempts return `STATUS_ACCESS_DENIED`.
+  - DynamicLoader exports in `sspicli.dll`, `secur32.dll`, and `lsasrv.dll`.
+  - VersionDatabase registration (`10.0.26100.1`) for `lsasrv.dll`.
+- [x] **Shell CLI Integration**:
+  - Implemented `credguard status`, `credguard enable [--uefi-lock]`, `credguard disable`, `credguard isolate <user> <secret>`, `credguard dump-attempt`, `credguard test`, and `sentinel credguard` routing in `micant::shell`.
+- [x] **Unit Test Suite 140 (`Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem`)**:
+  - Validates dynamic exports, VersionDatabase entries, baseline state queries, enable/disable without lock, secret sealing into VTL 1, in-enclave challenge-response digest, Mimikatz memory scraping interception (ACCESS_DENIED / code 5), audit log tracking, UEFI lock immutability, standard LSA policy and logon session enumeration, and shell CLI commands.
+  - Milestone 140: **140 / 140 Test Suites Passing (100%)**.
+
+
 
 
 

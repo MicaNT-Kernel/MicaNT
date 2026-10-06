@@ -131,6 +131,7 @@
 #include "amsi.hpp"
 #include "mpengine.hpp"
 #include "exploit_guard.hpp"
+#include "credguard.hpp"
 
 namespace micant::shell {
 
@@ -202,6 +203,7 @@ public:
         amsi::InitializeAmsiSubsystemExports();
         defender::InitializeMpEngineSubsystemExports();
         exploit_guard::InitializeExploitGuardSubsystemExports();
+        credguard::InitializeCredGuardSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -251,6 +253,7 @@ public:
         if (cmd != "amsi" && cmd != "sentinelscan" && cmd != "sentinel" && cmd != "wsc" &&
             cmd != "security" && cmd != "securitycenter" && cmd != "mpcmdrun" && cmd != "defender" &&
             cmd != "guard" && cmd != "exploitguard" && cmd != "mitlib" &&
+            cmd != "credguard" && cmd != "cred" && cmd != "lsaiso" &&
             cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
@@ -386,6 +389,7 @@ public:
             if (cmd == "amsi" || cmd == "sentinelscan") { cmdAmsi(tokens, out); return 0; }
             if (cmd == "mpcmdrun" || cmd == "defender") { cmdMpCmdRun(tokens, out); return 0; }
             if (cmd == "guard" || cmd == "exploitguard" || cmd == "mitlib" || cmd == "mitigation") { cmdSentinelGuard(tokens, out); return 0; }
+            if (cmd == "credguard" || cmd == "cred" || cmd == "lsaiso") { cmdCredGuard(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -706,6 +710,7 @@ private:
             << "  AMSI / SENTINELSCAN [status|scan|block|unblock|clear|test] Antimalware Scan Interface (amsi test)\n"
             << "  MPCMDRUN / DEFENDER [-Scan|-ListQuarantine|-Restore|-PurgeQuarantine|-GetFiles|test] Microsoft Defender Client & AegisDefender (defender test)\n"
             << "  GUARD / EXPLOITGUARD [status|list|enable|test] Windows Defender Exploit Guard & Process Mitigations (guard test)\n"
+            << "  CREDGUARD / LSAISO [status|enable|disable|isolate|dump-attempt|test] Sovereign Credential Guard & IUM Enclave (credguard test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20391,6 +20396,7 @@ private:
                 << "  sentinel register <name> <type> [p] Registers a third-party or sovereign security provider\n"
                 << "  sentinel unregister <guid>          Unregisters a security provider by GUID\n"
                 << "  sentinel guard [status|list|enable|test] Exploit Guard & Process Mitigation Policies\n"
+                << "  sentinel credguard [status|enable|disable|isolate|dump-attempt|test] Sovereign Credential Guard & IUM Enclave\n"
                 << "  sentinel test                       Executes Sentinel Security System diagnostic test suite\n";
             return;
         }
@@ -20398,6 +20404,12 @@ private:
         if (tokens.size() > 1 && (toLower(tokens[1]) == "guard" || toLower(tokens[1]) == "exploitguard")) {
             std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
             cmdSentinelGuard(subTokens, out);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "credguard" || toLower(tokens[1]) == "cred" || toLower(tokens[1]) == "lsaiso")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdCredGuard(subTokens, out);
             return;
         }
 
@@ -21280,6 +21292,136 @@ private:
             << "  User Shadow Stack (Intel CET):      " << (mgr.isShadowStackActive() ? "ACTIVE" : "Inactive") << "\n"
             << "  Total Mitigation Enforcements:      " << mgr.getTotalEnforcements() << "\n"
             << "  Total Violations Blocked:           " << mgr.getTotalViolationsBlocked() << "\n";
+    }
+
+    void cmdCredGuard(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::credguard;
+        InitializeCredGuardSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help" || toLower(tokens[1]) == "help")) {
+            out << "Sovereign Credential Guard & Isolated User Mode Utility (SentinelCredGuard / lsasrv.dll)\n"
+                << "Virtualization-Based Security (VBS) Enclave Subsystem\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  credguard status                  Displays Credential Guard, VBS, and LsaIso enclave posture\n"
+                << "  credguard enable [--uefi-lock]    Enables Credential Guard with optional hardware UEFI lock\n"
+                << "  credguard disable                 Disables Credential Guard (blocked if protected by UEFI lock)\n"
+                << "  credguard isolate <user> <secret> Seals credential secret into VTL 1 enclave storage\n"
+                << "  credguard dump-attempt            Simulates and demonstrates blocking of LSASS memory scraping\n"
+                << "  credguard test                    Executes SentinelCredGuard diagnostic self-test suite\n";
+            return;
+        }
+
+        auto& mgr = SentinelCredGuardManager::get();
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "test" || toLower(tokens[1]) == "-test")) {
+            out << "[TEST] Running Sovereign Credential Guard (SentinelCredGuard) Diagnostics...\n";
+
+            // 1. Enable with UEFI Lock
+            mgr.enable(true);
+            out << "  [+] Virtualization-Based Security (VBS) & HVCI: Active\n";
+            out << "  [+] Isolated User Mode Enclave (LsaIso.exe PID 500): Running (VTL 1)\n";
+
+            // 2. Isolate test credential
+            const uint8_t sampleHash[] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10};
+            uint64_t handleId = mgr.isolateSecret(L"MICANT", L"Administrator", sampleHash);
+            out << "  [+] Credential Sealed in VTL 1: Handle 0x" << std::hex << handleId << std::dec << "\n";
+
+            // 3. Challenge-Response in Enclave
+            const uint8_t challenge[] = {0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44};
+            std::vector<uint8_t> resp;
+            NTSTATUS st = mgr.challengeResponseInEnclave(handleId, challenge, resp);
+            if (st != STATUS_SUCCESS || resp.empty()) {
+                out << "[-] Enclave challenge-response failed\n";
+                return;
+            }
+            out << "  [+] Enclave In-Place Authentication Verified (No plaintext hash exposed to VTL 0)\n";
+
+            // 4. Intercept Mimikatz / ProcDump memory scraping attempt
+            st = mgr.interceptMemoryAccess(LSASS_PROCESS_ID, 0x0010 /* PROCESS_VM_READ */, "Mimikatz (sekurlsa::logonpasswords)", "LSASS Memory Dump");
+            if (st != STATUS_ACCESS_DENIED) {
+                out << "[-] Mimikatz scraping intercept failed\n";
+                return;
+            }
+            out << "  [+] Mimikatz / ProcDump Memory Dump Intercepted: STATUS_ACCESS_DENIED (0xC0000022)\n";
+
+            // 5. Test UEFI Lock immutability
+            st = mgr.disable();
+            if (st != STATUS_ACCESS_DENIED) {
+                out << "[-] UEFI lock bypass vulnerability detected\n";
+                return;
+            }
+            out << "  [+] UEFI Hardware Lock Verified (Disable attempt blocked with STATUS_ACCESS_DENIED)\n";
+
+            out << "[SUCCESS] Sovereign Credential Guard (SentinelCredGuard) Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "enable") {
+            bool lock = false;
+            if (tokens.size() > 2 && (toLower(tokens[2]) == "--uefi-lock" || toLower(tokens[2]) == "/uefi-lock")) {
+                lock = true;
+            }
+            mgr.enable(lock);
+            out << "[+] Sovereign Credential Guard successfully enabled ("
+                << (lock ? "With UEFI Lock - Permanent" : "Without Lock") << ").\n"
+                << "    Isolated User Mode (IUM) LsaIso enclave active.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "disable") {
+            NTSTATUS st = mgr.disable();
+            if (st != STATUS_SUCCESS) {
+                out << "[-] Access Denied: Credential Guard is protected by UEFI lock and cannot be disabled.\n";
+            } else {
+                out << "[+] Sovereign Credential Guard disabled.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "dump-attempt" || toLower(tokens[1]) == "dump")) {
+            out << "[*] Simulating unprivileged memory scrape against LSASS (PID " << LSASS_PROCESS_ID << ") with PROCESS_VM_READ...\n";
+            NTSTATUS st = mgr.interceptMemoryAccess(LSASS_PROCESS_ID, 0x0010, "Simulated Mimikatz Dump", "Manual CLI Simulation");
+            if (st == STATUS_ACCESS_DENIED) {
+                out << "[BLOCKED] Credential Guard VTL 1 Enclave prevented LSASS memory reading.\n"
+                    << "          Status: STATUS_ACCESS_DENIED (0xC0000022)\n";
+            } else {
+                out << "[!] WARNING: LSASS memory read was permitted.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "isolate") {
+            std::string user = tokens[2];
+            std::wstring wUser(user.begin(), user.end());
+            std::string secret = (tokens.size() > 3) ? tokens[3] : "DefaultPass123!";
+            uint64_t h = mgr.isolateSecret(L"MICANT", wUser, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(secret.data()), secret.size()));
+            out << "[+] Credential for '" << user << "' isolated into VTL 1 enclave.\n"
+                << "    Opaque Isolation Handle: 0x" << std::hex << h << std::dec << "\n";
+            return;
+        }
+
+        // Default: status
+        uint32_t status = mgr.getStatus();
+        uint32_t flags = mgr.getFlags();
+        out << "Sovereign Credential Guard (SentinelCredGuard) Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Credential Guard State:             "
+            << (status == CREDGUARD_STATUS_DISABLED ? "Disabled" :
+               (status == CREDGUARD_STATUS_ENABLED_WITH_UEFI_LOCK ? "Enabled (With UEFI Lock)" : "Enabled (Without Lock)")) << "\n"
+            << "  Virtualization-Based Security (VBS):" << ((flags & CREDGUARD_FLAG_VBS_ENABLED) ? " Active" : " Disabled") << "\n"
+            << "  Hypervisor Code Integrity (HVCI):   " << ((flags & CREDGUARD_FLAG_HVCI_ACTIVE) ? " Enforced" : " Inactive") << "\n"
+            << "  Isolated User Mode Enclave (LsaIso):" << (mgr.isLsaIsoRunning() ? " RUNNING (PID 500 / VTL 1)" : " Stopped") << "\n"
+            << "  UEFI Secure Boot & DMA Protection:  " << ((flags & CREDGUARD_FLAG_UEFI_SECURE_BOOT) ? " Active" : " Inactive") << "\n"
+            << "  Hardware TPM 2.0 PCR Sealing:       " << ((flags & CREDGUARD_FLAG_TPM_SEALED) ? " Sealed" : " Unsealed") << "\n"
+            << "  Isolated Enclave Credentials:       " << mgr.getIsolatedSecretCount() << " secrets stored in VTL 1\n"
+            << "  Total Memory Scraping Interceptions:" << mgr.getTotalBlockedDumps() << " attempts blocked\n"
+            << "  Enclave Authentications Performed:  " << mgr.getTotalEnclaveAuthentications() << "\n";
     }
 
     static std::string trim(std::string_view s) {

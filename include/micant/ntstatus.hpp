@@ -135,6 +135,9 @@ inline constexpr NTSTATUS STATUS_NO_SUCH_LOGON_SESSION  = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_LOGON_TYPE_NOT_GRANTED = static_cast<NTSTATUS>(0xC000015B);
 inline constexpr NTSTATUS STATUS_INSUFFICIENT_RESOURCES = static_cast<NTSTATUS>(0xC000009A);
 inline constexpr NTSTATUS STATUS_ACCOUNT_LOCKED_OUT     = static_cast<NTSTATUS>(0xC0000234);
+inline constexpr NTSTATUS STATUS_NO_MEMORY              = static_cast<NTSTATUS>(0xC0000017);
+inline constexpr NTSTATUS STATUS_NOT_FOUND              = static_cast<NTSTATUS>(0xC0000225);
+inline constexpr NTSTATUS STATUS_DATA_ERROR             = static_cast<NTSTATUS>(0xC000003E);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
     return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);

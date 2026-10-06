@@ -133,14 +133,25 @@ flowchart LR
   - CLI: `mpcmdrun` / `defender` (`defender -Scan -ScanType <1|2>`, `defender -Scan -File <path>`, `defender -ListQuarantine`, `defender -Restore`, `defender -PurgeQuarantine`, `defender -SignatureUpdate`, `defender -GetFiles`, `defender status`, `defender test`).
   - Verification: Unit Test Suite 138 (`Test_WindowsDefender_AegisDefender_Subsystem`) passing at 100%.
 
-### Phase 4: Process Exploit Mitigations & Hardening (`mitigation.hpp`)
-- **Goal**: Memory defense preventing buffer overflows, shellcode execution, and ROP gadgets.
-- **Components**:
-  - Win32 API: `SetProcessMitigationPolicy`, `GetProcessMitigationPolicy`.
-  - Policies: Data Execution Prevention (DEP / NX bit), High-Entropy ASLR, Arbitrary Code Guard (ACG - prevents dynamic code execution in heap/stack), Strict Handle Checks.
+### Phase 4: Windows Defender Exploit Guard (SentinelGuard - `exploit_guard.hpp` / `mitlib.dll`) - **COMPLETED (Milestone 139)**
+- **Goal**: Memory defense preventing buffer overflows, shellcode execution, ROP gadgets, and unauthorized subprocess spawning.
+- **Implemented Components**:
+  - `include/micant/exploit_guard.hpp` exporting `mitlib.dll`, `kernel32.dll`, and `api-ms-win-core-processthreads-l1-1-3.dll`.
+  - Win32 C ABI Exports: `GetProcessMitigationPolicy`, `SetProcessMitigationPolicy`.
+  - All 16 Windows SDK mitigation policies: DEP, ASLR, Dynamic Code (ACG), Strict Handle Check, Win32k Lockdown, Extension Point Disable, Control Flow Guard (CFG/XFG), Signature Policy, Font Disable, Image Load, Payload Restriction (EAF/IAF/ROP), Child Process Policy, Side Channel Isolation, User Shadow Stack (Intel CET), Redirection Trust.
+  - Immutability & Permanence: Attempts to relax permanent mitigations return `FALSE` with `ERROR_ACCESS_DENIED` (5).
+  - CLI: `guard` / `exploitguard` / `sentinel guard` (`guard status`, `guard list`, `guard enable <policy>`, `guard test`).
+  - Verification: Unit Test Suite 139 (`Test_WindowsExploitGuard_SentinelGuard_Subsystem`) passing at 100%.
 
-### Phase 5: Sovereign Credential Guard & Isolated Security Mode (IUM)
-- **Goal**: Isolate high-privilege credentials (Kerberos tickets, NTLM/PBKDF2 hashes, LSA secrets) into a memory-fenced enclave protected from user-mode debuggers and Ring 3 dumping tools.
+### Phase 5: Sovereign Credential Guard & Isolated Security Mode (SentinelCredGuard - `credguard.hpp` / `sspicli.dll` / `lsaiso.exe`) - **ACTIVE (Milestone 140)**
+- **Goal**: Isolate high-privilege credentials (Kerberos tickets, NTLM/PBKDF2 hashes, LSA secrets, DPAPI keys) into a Virtual Trust Level 1 (VTL 1) memory-fenced Isolated User Mode (IUM) enclave (`LsaIso`), completely immune to Ring 3 debuggers, MiniDumpWriteDump, and memory scraping tools (Mimikatz / ProcDump).
+- **Core Capabilities**:
+  1. **Virtual Trust Level 1 (VTL 1) Enclave (`LsaIso`)**: Hardware/hypervisor-isolated secure memory container hosting credential secrets.
+  2. **Sealed Token Transport**: VTL 0 (normal LSASS) receives opaque, encrypted isolation handles rather than raw password hashes.
+  3. **Memory Scraping Interception**: Attempts to read or dump LSASS / LsaIso memory via `PROCESS_VM_READ`, `MiniDumpWriteDump`, or `CreateToolhelp32Snapshot` are blocked with `STATUS_ACCESS_DENIED`.
+  4. **Win32 C ABI Parity**: LSA policy, authentication package call, and credential guard query APIs in `sspicli.dll` and `secur32.dll`.
+  5. **CLI Integration**: `credguard` / `sentinel credguard` commands (`status`, `enable`, `isolate`, `dump-attempt`, `test`).
+  6. **Automated Verification**: Unit Test Suite 140 (`Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem`).
 
 ---
 
