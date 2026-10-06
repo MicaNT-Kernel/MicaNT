@@ -58,6 +58,7 @@
 #include "micant/dma_guard.hpp"
 #include "micant/wsl_lxss.hpp"
 #include "micant/sandbox.hpp"
+#include "micant/whp.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -34658,8 +34659,262 @@ void Test_WindowsSandbox_LightweightContainer_Subsystem() {
     std::cout << "[TEST] Suite 146: Windows Sandbox & Lightweight Containers Subsystem PASSED.\n";
 }
 
+void Test_WindowsHypervisorPlatform_Viridian_Subsystem() {
+    using namespace micant::whp;
+
+    // ------------------------------------------------------------------------
+    // 1. Subsystem Initialization
+    // ------------------------------------------------------------------------
+    InitializeWhpSubsystemExports();
+    auto& mgr = HypervisorManager::Instance();
+    TEST_ASSERT(mgr.isInitialized(), "HypervisorManager must be initialized");
+
+    // ------------------------------------------------------------------------
+    // 2. Hypervisor Capabilities & Feature Flags
+    // ------------------------------------------------------------------------
+    uint32_t isPresent = 0;
+    uint32_t written = 0;
+    HRESULT hrCap = WHvGetCapability(WHvCapabilityCodeHypervisorPresent, &isPresent, sizeof(isPresent), &written);
+    TEST_ASSERT(SUCCEEDED(hrCap), "WHvGetCapability HypervisorPresent must succeed");
+    TEST_ASSERT(isPresent == 1, "Hypervisor must be present in MicaNT");
+    TEST_ASSERT(written == sizeof(uint32_t), "Written size must match uint32_t");
+
+    WHV_CAPABILITY_FEATURES feats{};
+    hrCap = WHvGetCapability(WHvCapabilityCodeFeatures, &feats, sizeof(feats), &written);
+    TEST_ASSERT(SUCCEEDED(hrCap), "WHvGetCapability Features must succeed");
+    TEST_ASSERT(feats.LocalApicEmulation == 1, "LocalApicEmulation feature must be supported");
+    TEST_ASSERT(feats.DirtyPageTracking == 1, "DirtyPageTracking feature must be supported");
+    TEST_ASSERT(feats.Xsave == 1, "Xsave feature must be supported");
+
+    uint64_t extExits = 0;
+    hrCap = WHvGetCapability(WHvCapabilityCodeExtendedVmExits, &extExits, sizeof(extExits), &written);
+    TEST_ASSERT(SUCCEEDED(hrCap), "WHvGetCapability ExtendedVmExits must succeed");
+    TEST_ASSERT(extExits != 0, "ExtendedVmExits must be non-zero");
+
+    // Invalid parameters
+    TEST_ASSERT(FAILED(WHvGetCapability(WHvCapabilityCodeHypervisorPresent, nullptr, sizeof(isPresent), &written)), "Null buffer must fail");
+    TEST_ASSERT(FAILED(WHvGetCapability(WHvCapabilityCodeHypervisorPresent, &isPresent, 0, &written)), "Zero size must fail");
+
+    // ------------------------------------------------------------------------
+    // 3. Partition Creation & Properties
+    // ------------------------------------------------------------------------
+    WHV_PARTITION_HANDLE hPart = nullptr;
+    HRESULT hrCreate = WHvCreatePartition(&hPart);
+    TEST_ASSERT(SUCCEEDED(hrCreate), "WHvCreatePartition must succeed");
+    TEST_ASSERT(hPart != nullptr, "Partition handle must not be null");
+
+    uint32_t cpuCount = 8;
+    HRESULT hrSetProp = WHvSetPartitionProperty(hPart, WHvPartitionPropertyCodeProcessorCount, &cpuCount, sizeof(cpuCount));
+    TEST_ASSERT(SUCCEEDED(hrSetProp), "WHvSetPartitionProperty ProcessorCount must succeed");
+
+    uint32_t queriedCpu = 0;
+    HRESULT hrGetProp = WHvGetPartitionProperty(hPart, WHvPartitionPropertyCodeProcessorCount, &queriedCpu, sizeof(queriedCpu), &written);
+    TEST_ASSERT(SUCCEEDED(hrGetProp), "WHvGetPartitionProperty ProcessorCount must succeed");
+    TEST_ASSERT(queriedCpu == 8, "Queried CPU count must match set value");
+
+    HRESULT hrSetup = WHvSetupPartition(hPart);
+    TEST_ASSERT(SUCCEEDED(hrSetup), "WHvSetupPartition must succeed");
+
+    // ------------------------------------------------------------------------
+    // 4. GPA Memory Range Mapping & Translation
+    // ------------------------------------------------------------------------
+    std::vector<uint8_t> ramBuffer(0x20000, 0xCC); // 128 KB
+    const WHV_GUEST_PHYSICAL_ADDRESS guestGpa = 0x200000;
+    HRESULT hrMap = WHvMapGpaRange(hPart, ramBuffer.data(), guestGpa, ramBuffer.size(),
+                                  static_cast<WHV_MAP_GPA_RANGE_FLAGS>(WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite | WHvMapGpaRangeFlagExecute));
+    TEST_ASSERT(SUCCEEDED(hrMap), "WHvMapGpaRange must succeed");
+
+    // ------------------------------------------------------------------------
+    // 5. Virtual Processor Lifecycle & Register State
+    // ------------------------------------------------------------------------
+    HRESULT hrVp = WHvCreateVirtualProcessor(hPart, 0, 0);
+    TEST_ASSERT(SUCCEEDED(hrVp), "WHvCreateVirtualProcessor VP 0 must succeed");
+
+    // Duplicate create
+    TEST_ASSERT(FAILED(WHvCreateVirtualProcessor(hPart, 0, 0)), "Duplicate vCPU creation must fail");
+
+    WHV_TRANSLATE_GVA_RESULT tResult{};
+    WHV_GUEST_PHYSICAL_ADDRESS outGpa = 0;
+    HRESULT hrTrans = WHvTranslateGva(hPart, 0, guestGpa, WHvTranslateGvaFlagNone, &tResult, &outGpa);
+    TEST_ASSERT(SUCCEEDED(hrTrans), "WHvTranslateGva must succeed");
+    TEST_ASSERT(tResult.ResultCode == WHvTranslateGvaResultSuccess, "Translation result must be Success");
+    TEST_ASSERT(outGpa == guestGpa, "Translated GPA must match input GVA");
+
+    // Register inspection
+    WHV_REGISTER_NAME rNames[] = {
+        WHvX64RegisterRip,
+        WHvX64RegisterRsp,
+        WHvX64RegisterRflags,
+        WHvX64RegisterCr0
+    };
+    WHV_REGISTER_VALUE rVals[4]{};
+    HRESULT hrGetReg = WHvGetVirtualProcessorRegisters(hPart, 0, rNames, 4, rVals);
+    TEST_ASSERT(SUCCEEDED(hrGetReg), "WHvGetVirtualProcessorRegisters must succeed");
+    TEST_ASSERT(rVals[0].Reg64 == 0x0000fff0, "Default RIP must match initial x86 reset vector");
+    TEST_ASSERT(rVals[1].Reg64 == 0x00007c00, "Default RSP must match initial stack");
+
+    // Register modification
+    rVals[0].Reg64 = 0x200000;
+    rVals[1].Reg64 = 0x208000;
+    HRESULT hrSetReg = WHvSetVirtualProcessorRegisters(hPart, 0, rNames, 2, rVals);
+    TEST_ASSERT(SUCCEEDED(hrSetReg), "WHvSetVirtualProcessorRegisters must succeed");
+
+    WHV_REGISTER_VALUE verifyVals[2]{};
+    WHvGetVirtualProcessorRegisters(hPart, 0, rNames, 2, verifyVals);
+    TEST_ASSERT(verifyVals[0].Reg64 == 0x200000, "Modified RIP must persist");
+    TEST_ASSERT(verifyVals[1].Reg64 == 0x208000, "Modified RSP must persist");
+
+    // ------------------------------------------------------------------------
+    // 6. Virtual Processor Execution & VM Exit Interception
+    // ------------------------------------------------------------------------
+    WHV_RUN_VP_EXIT_CONTEXT exitCtx{};
+    HRESULT hrRun = WHvRunVirtualProcessor(hPart, 0, &exitCtx, sizeof(exitCtx));
+    TEST_ASSERT(SUCCEEDED(hrRun), "WHvRunVirtualProcessor must succeed");
+    TEST_ASSERT(exitCtx.ExitReason != WHvRunVpExitReasonNone, "VM ExitReason must not be None");
+
+    // Cancel test
+    HRESULT hrCancel = WHvCancelRunVirtualProcessor(hPart, 0, 0);
+    TEST_ASSERT(SUCCEEDED(hrCancel), "WHvCancelRunVirtualProcessor must succeed");
+    WHvRunVirtualProcessor(hPart, 0, &exitCtx, sizeof(exitCtx));
+    TEST_ASSERT(exitCtx.ExitReason == WHvRunVpExitReasonCanceled, "ExitReason after cancel must be Canceled");
+
+    // ------------------------------------------------------------------------
+    // 7. Virtual Interrupt Injection
+    // ------------------------------------------------------------------------
+    WHV_INTERRUPT_CONTROL intr{};
+    intr.Vector = 0x30;
+    intr.Destination = 0;
+    HRESULT hrIntr = WHvRequestInterrupt(hPart, &intr, sizeof(intr));
+    TEST_ASSERT(SUCCEEDED(hrIntr), "WHvRequestInterrupt must succeed");
+
+    // ------------------------------------------------------------------------
+    // 8. Unmap GPA Range
+    // ------------------------------------------------------------------------
+    HRESULT hrUnmap = WHvUnmapGpaRange(hPart, guestGpa, ramBuffer.size());
+    TEST_ASSERT(SUCCEEDED(hrUnmap), "WHvUnmapGpaRange must succeed");
+
+    // ------------------------------------------------------------------------
+    // 9. WinHvEmulation.dll Parity
+    // ------------------------------------------------------------------------
+    WHV_EMULATOR_HANDLE hEmu = nullptr;
+    HRESULT hrEmuCreate = WHvEmulatorCreateEmulator(nullptr, &hEmu);
+    TEST_ASSERT(SUCCEEDED(hrEmuCreate), "WHvEmulatorCreateEmulator must succeed");
+    TEST_ASSERT(hEmu != nullptr, "Emulator handle must not be null");
+
+    WHV_EMULATOR_STATUS emuStatus{};
+    HRESULT hrIoEmu = WHvEmulatorTryIoEmulation(hEmu, nullptr, &exitCtx, nullptr, &emuStatus);
+    TEST_ASSERT(SUCCEEDED(hrIoEmu), "WHvEmulatorTryIoEmulation must succeed");
+    TEST_ASSERT(emuStatus == WHvEmulatorIoEmulated, "Emulator status must be IoEmulated");
+
+    HRESULT hrMmioEmu = WHvEmulatorTryMmioEmulation(hEmu, nullptr, &exitCtx, nullptr, &emuStatus);
+    TEST_ASSERT(SUCCEEDED(hrMmioEmu), "WHvEmulatorTryMmioEmulation must succeed");
+    TEST_ASSERT(emuStatus == WHvEmulatorMmioEmulated, "Emulator status must be MmioEmulated");
+
+    HRESULT hrEmuDestroy = WHvEmulatorDestroyEmulator(hEmu);
+    TEST_ASSERT(SUCCEEDED(hrEmuDestroy), "WHvEmulatorDestroyEmulator must succeed");
+
+    // ------------------------------------------------------------------------
+    // 10. Viridian Hypervisor Driver (hvix64.sys) Parity
+    // ------------------------------------------------------------------------
+    uint32_t hviFeats = 0;
+    NTSTATUS stHvi = HviGetHypervisorFeatures(&hviFeats);
+    TEST_ASSERT(stHvi == STATUS_SUCCESS, "HviGetHypervisorFeatures must return STATUS_SUCCESS");
+    TEST_ASSERT(hviFeats != 0, "Hypervisor features must be non-zero");
+
+    uint64_t hcPost = HviDispatchHypercall(HvCallPostMessage, 0x1000, 0x2000);
+    TEST_ASSERT(hcPost == 0, "HviDispatchHypercall HvCallPostMessage must return 0");
+
+    uint64_t hcSig = HviDispatchHypercall(HvCallSignalEvent, 0x1000, 0);
+    TEST_ASSERT(hcSig == 0, "HviDispatchHypercall HvCallSignalEvent must return 0");
+
+    uint64_t hcBad = HviDispatchHypercall(0xFFFF, 0, 0);
+    TEST_ASSERT(hcBad != 0, "Invalid hypercall code must return non-zero");
+
+    TEST_ASSERT(HviQueryPartitionCount() >= 1, "HviQueryPartitionCount must return >= 1");
+
+    // Delete VP & Partition
+    WHvDeleteVirtualProcessor(hPart, 0);
+    HRESULT hrDel = WHvDeletePartition(hPart);
+    TEST_ASSERT(SUCCEEDED(hrDel), "WHvDeletePartition must succeed");
+
+    // ------------------------------------------------------------------------
+    // 11. DynamicLoader & VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvGetCapability") != nullptr, "WinHvPlatform.dll must export WHvGetCapability");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvCreatePartition") != nullptr, "WinHvPlatform.dll must export WHvCreatePartition");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvSetupPartition") != nullptr, "WinHvPlatform.dll must export WHvSetupPartition");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvDeletePartition") != nullptr, "WinHvPlatform.dll must export WHvDeletePartition");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvMapGpaRange") != nullptr, "WinHvPlatform.dll must export WHvMapGpaRange");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvUnmapGpaRange") != nullptr, "WinHvPlatform.dll must export WHvUnmapGpaRange");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvTranslateGva") != nullptr, "WinHvPlatform.dll must export WHvTranslateGva");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvCreateVirtualProcessor") != nullptr, "WinHvPlatform.dll must export WHvCreateVirtualProcessor");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvDeleteVirtualProcessor") != nullptr, "WinHvPlatform.dll must export WHvDeleteVirtualProcessor");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvRunVirtualProcessor") != nullptr, "WinHvPlatform.dll must export WHvRunVirtualProcessor");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvCancelRunVirtualProcessor") != nullptr, "WinHvPlatform.dll must export WHvCancelRunVirtualProcessor");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvGetVirtualProcessorRegisters") != nullptr, "WinHvPlatform.dll must export WHvGetVirtualProcessorRegisters");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvSetVirtualProcessorRegisters") != nullptr, "WinHvPlatform.dll must export WHvSetVirtualProcessorRegisters");
+    TEST_ASSERT(ldr.getExport("WinHvPlatform.dll", "WHvRequestInterrupt") != nullptr, "WinHvPlatform.dll must export WHvRequestInterrupt");
+
+    TEST_ASSERT(ldr.getExport("WinHvEmulation.dll", "WHvEmulatorCreateEmulator") != nullptr, "WinHvEmulation.dll must export WHvEmulatorCreateEmulator");
+    TEST_ASSERT(ldr.getExport("WinHvEmulation.dll", "WHvEmulatorDestroyEmulator") != nullptr, "WinHvEmulation.dll must export WHvEmulatorDestroyEmulator");
+    TEST_ASSERT(ldr.getExport("WinHvEmulation.dll", "WHvEmulatorTryIoEmulation") != nullptr, "WinHvEmulation.dll must export WHvEmulatorTryIoEmulation");
+    TEST_ASSERT(ldr.getExport("WinHvEmulation.dll", "WHvEmulatorTryMmioEmulation") != nullptr, "WinHvEmulation.dll must export WHvEmulatorTryMmioEmulation");
+
+    TEST_ASSERT(ldr.getExport("hvix64.sys", "HviGetHypervisorFeatures") != nullptr, "hvix64.sys must export HviGetHypervisorFeatures");
+    TEST_ASSERT(ldr.getExport("hvix64.sys", "HviDispatchHypercall") != nullptr, "hvix64.sys must export HviDispatchHypercall");
+    TEST_ASSERT(ldr.getExport("hvix64.sys", "HviQueryPartitionCount") != nullptr, "hvix64.sys must export HviQueryPartitionCount");
+
+    auto& vdb = version::VersionDatabase::Instance();
+    auto* pPlat = vdb.GetModuleInfo("WinHvPlatform.dll");
+    TEST_ASSERT(pPlat != nullptr, "VersionDatabase must contain WinHvPlatform.dll");
+    TEST_ASSERT(pPlat->stringTable.at("FileVersion") == "10.0.26100.1", "WinHvPlatform.dll FileVersion must be 10.0.26100.1");
+
+    auto* pEmu = vdb.GetModuleInfo("WinHvEmulation.dll");
+    TEST_ASSERT(pEmu != nullptr, "VersionDatabase must contain WinHvEmulation.dll");
+    TEST_ASSERT(pEmu->stringTable.at("FileVersion") == "10.0.26100.1", "WinHvEmulation.dll FileVersion must be 10.0.26100.1");
+
+    // ------------------------------------------------------------------------
+    // 12. Interactive Shell Integration & Routing
+    // ------------------------------------------------------------------------
+    shell::CommandShell testShell;
+
+    // whp status
+    std::ostringstream ossStatus;
+    testShell.execute("whp status", ossStatus);
+    std::string strStatus = ossStatus.str();
+    TEST_ASSERT(strStatus.find("Windows Hypervisor Platform (WHP / Viridian)") != std::string::npos, "whp status must display header");
+    TEST_ASSERT(strStatus.find("Hardware-Assisted Virtualization Enabled") != std::string::npos, "whp status must display hypervisor state");
+
+    // whp partitions
+    std::ostringstream ossParts;
+    testShell.execute("whp partitions", ossParts);
+    TEST_ASSERT(ossParts.str().find("Windows Hypervisor Platform Partitions:") != std::string::npos, "whp partitions must execute");
+
+    // whp test
+    std::ostringstream ossTest;
+    testShell.execute("whp test", ossTest);
+    TEST_ASSERT(ossTest.str().find("[+] All Windows Hypervisor Platform (WHP) tests passed successfully.") != std::string::npos, "whp test must execute self-test suite");
+
+    // sentinel whp routing
+    std::ostringstream ossSentinel;
+    testShell.execute("sentinel whp", ossSentinel);
+    TEST_ASSERT(ossSentinel.str().find("Windows Hypervisor Platform (WHP / Viridian) Subsystem Posture:") != std::string::npos, "sentinel whp must route to whp status");
+
+    // whp create and delete cycle
+    std::ostringstream ossCreate;
+    testShell.execute("whp create", ossCreate);
+    TEST_ASSERT(ossCreate.str().find("created and configured") != std::string::npos, "whp create must succeed");
+
+    std::cout << "[TEST] Suite 147: Windows Hypervisor Platform (WHP) & Viridian Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite146")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite147")) {
+        RUN_TEST(Test_WindowsHypervisorPlatform_Viridian_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite146") {
         RUN_TEST(Test_WindowsSandbox_LightweightContainer_Subsystem);
         return g_FailedTests;
     }
@@ -34974,6 +35229,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsKernelDMA_Protection_IOMMU_Subsystem);
     RUN_TEST(Test_WindowsSubsystemForLinux_LXSS_Subsystem);
     RUN_TEST(Test_WindowsSandbox_LightweightContainer_Subsystem);
+    RUN_TEST(Test_WindowsHypervisorPlatform_Viridian_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

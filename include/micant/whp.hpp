@@ -41,6 +41,25 @@ namespace micant::whp {
 // 1. WHP Basic Types & Constants
 // ============================================================================
 
+using HRESULT = int32_t;
+using VOID = void;
+using UINT32 = uint32_t;
+using UINT64 = uint64_t;
+using BOOL = int32_t;
+using DWORD = uint32_t;
+
+#ifndef WINAPI
+#define WINAPI __stdcall
+#endif
+
+#ifndef SUCCEEDED
+#define SUCCEEDED(hr) (((HRESULT)(hr)) >= 0)
+#endif
+
+#ifndef FAILED
+#define FAILED(hr) (((HRESULT)(hr)) < 0)
+#endif
+
 using WHV_PARTITION_HANDLE = void*;
 using WHV_EMULATOR_HANDLE  = void*;
 using WHV_GUEST_PHYSICAL_ADDRESS = uint64_t;
@@ -56,6 +75,20 @@ inline constexpr int32_t WHV_E_HYPERVISOR_NOT_PRESENT     = static_cast<int32_t>
 inline constexpr int32_t WHV_E_PARTITION_NOT_FOUND        = static_cast<int32_t>(0xC0350005);
 inline constexpr int32_t WHV_E_VP_NOT_FOUND               = static_cast<int32_t>(0xC0350007);
 inline constexpr int32_t WHV_E_GPA_RANGE_NOT_FOUND        = static_cast<int32_t>(0xC0350009);
+
+struct WHV_CAPABILITY_FEATURES {
+    union {
+        struct {
+            uint64_t PartialUnmap : 1;
+            uint64_t LocalApicEmulation : 1;
+            uint64_t Xsave : 1;
+            uint64_t DirtyPageTracking : 1;
+            uint64_t SpeculationControl : 1;
+            uint64_t Reserved : 59;
+        };
+        uint64_t AsUINT64;
+    };
+};
 
 // Capability Codes
 enum class WHV_CAPABILITY_CODE : uint32_t {
@@ -73,6 +106,16 @@ enum class WHV_CAPABILITY_CODE : uint32_t {
     ProcessorFeaturesBanks     = 0x0000000B,
     ProcessorSyntheticFeatures = 0x0000000C
 };
+
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeHypervisorPresent = WHV_CAPABILITY_CODE::HypervisorPresent;
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeFeatures = WHV_CAPABILITY_CODE::Features;
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeExtendedVmExits = WHV_CAPABILITY_CODE::ExtendedVmExits;
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeExceptionExitBitmap = WHV_CAPABILITY_CODE::ExceptionExitBitmap;
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeX64MsrExitBitmap = WHV_CAPABILITY_CODE::X64MsrExitBitmap;
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeGpaRangePlacement = WHV_CAPABILITY_CODE::GpaRangePlacement;
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeProcessorFeatures = WHV_CAPABILITY_CODE::ProcessorFeatures;
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeProcessorClFlushSize = WHV_CAPABILITY_CODE::ProcessorClFlushSize;
+inline constexpr WHV_CAPABILITY_CODE WHvCapabilityCodeXsaveFeatures = WHV_CAPABILITY_CODE::ProcessorXsaveFeatures;
 
 // Partition Property Codes
 enum class WHV_PARTITION_PROPERTY_CODE : uint32_t {
@@ -94,6 +137,15 @@ enum class WHV_PARTITION_PROPERTY_CODE : uint32_t {
     ReferenceTime              = 0x0000100C,
     SyntheticProcessorFeatures = 0x0000100D
 };
+
+inline constexpr WHV_PARTITION_PROPERTY_CODE WHvPartitionPropertyCodeExtendedVmExits = WHV_PARTITION_PROPERTY_CODE::ExtendedVmExits;
+inline constexpr WHV_PARTITION_PROPERTY_CODE WHvPartitionPropertyCodeExceptionExitBitmap = WHV_PARTITION_PROPERTY_CODE::ExceptionExitBitmap;
+inline constexpr WHV_PARTITION_PROPERTY_CODE WHvPartitionPropertyCodeSeparateSecurityDomain = WHV_PARTITION_PROPERTY_CODE::SeparateSecurityDomain;
+inline constexpr WHV_PARTITION_PROPERTY_CODE WHvPartitionPropertyCodeProcessorFeatures = WHV_PARTITION_PROPERTY_CODE::ProcessorFeatures;
+inline constexpr WHV_PARTITION_PROPERTY_CODE WHvPartitionPropertyCodeProcessorCount = WHV_PARTITION_PROPERTY_CODE::ProcessorCount;
+inline constexpr WHV_PARTITION_PROPERTY_CODE WHvPartitionPropertyCodeCpuidExitList = WHV_PARTITION_PROPERTY_CODE::CpuidExitList;
+inline constexpr WHV_PARTITION_PROPERTY_CODE WHvPartitionPropertyCodeCpuidResultList = WHV_PARTITION_PROPERTY_CODE::CpuidResultList;
+inline constexpr WHV_PARTITION_PROPERTY_CODE WHvPartitionPropertyCodeLocalApicEmulationMode = WHV_PARTITION_PROPERTY_CODE::LocalApicEmulationMode;
 
 // Memory Mapping Flags
 enum WHV_MAP_GPA_RANGE_FLAGS : uint32_t {
@@ -125,6 +177,16 @@ enum class WHV_TRANSLATE_GVA_RESULT_CODE : uint32_t {
     GpaIllegalOverlayAccess = 7,
     Intercept               = 8
 };
+
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultSuccess = WHV_TRANSLATE_GVA_RESULT_CODE::Success;
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultPageNotPresent = WHV_TRANSLATE_GVA_RESULT_CODE::PageNotPresent;
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultPrivilegeViolation = WHV_TRANSLATE_GVA_RESULT_CODE::PrivilegeViolation;
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultInvalidPageTableFlags = WHV_TRANSLATE_GVA_RESULT_CODE::InvalidPageTableFlags;
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultGpaUnmapped = WHV_TRANSLATE_GVA_RESULT_CODE::GpaUnmapped;
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultGpaNoReadAccess = WHV_TRANSLATE_GVA_RESULT_CODE::GpaNoReadAccess;
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultGpaNoWriteAccess = WHV_TRANSLATE_GVA_RESULT_CODE::GpaNoWriteAccess;
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultGpaIllegalOverlayAccess = WHV_TRANSLATE_GVA_RESULT_CODE::GpaIllegalOverlayAccess;
+inline constexpr WHV_TRANSLATE_GVA_RESULT_CODE WHvTranslateGvaResultIntercept = WHV_TRANSLATE_GVA_RESULT_CODE::Intercept;
 
 struct WHV_TRANSLATE_GVA_RESULT {
     WHV_TRANSLATE_GVA_RESULT_CODE ResultCode;
@@ -175,6 +237,31 @@ enum class WHV_REGISTER_NAME : uint32_t {
     Cr8 = 0x00000020,
     Efer= 0x00000021
 };
+
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRax = WHV_REGISTER_NAME::Rax;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRcx = WHV_REGISTER_NAME::Rcx;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRdx = WHV_REGISTER_NAME::Rdx;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRbx = WHV_REGISTER_NAME::Rbx;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRsp = WHV_REGISTER_NAME::Rsp;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRbp = WHV_REGISTER_NAME::Rbp;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRsi = WHV_REGISTER_NAME::Rsi;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRdi = WHV_REGISTER_NAME::Rdi;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterR8  = WHV_REGISTER_NAME::R8;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterR9  = WHV_REGISTER_NAME::R9;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterR10 = WHV_REGISTER_NAME::R10;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterR11 = WHV_REGISTER_NAME::R11;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterR12 = WHV_REGISTER_NAME::R12;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterR13 = WHV_REGISTER_NAME::R13;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterR14 = WHV_REGISTER_NAME::R14;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterR15 = WHV_REGISTER_NAME::R15;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRip = WHV_REGISTER_NAME::Rip;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterRflags = WHV_REGISTER_NAME::Rflags;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterCr0 = WHV_REGISTER_NAME::Cr0;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterCr2 = WHV_REGISTER_NAME::Cr2;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterCr3 = WHV_REGISTER_NAME::Cr3;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterCr4 = WHV_REGISTER_NAME::Cr4;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterCr8 = WHV_REGISTER_NAME::Cr8;
+inline constexpr WHV_REGISTER_NAME WHvX64RegisterEfer = WHV_REGISTER_NAME::Efer;
 
 struct WHV_X64_SEGMENT_REGISTER {
     uint64_t Base;
@@ -231,6 +318,20 @@ enum class WHV_RUN_VP_EXIT_REASON : uint32_t {
     X64Halt                = 0x00001006,
     Canceled               = 0x00002001
 };
+
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonNone = WHV_RUN_VP_EXIT_REASON::None;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonMemoryAccess = WHV_RUN_VP_EXIT_REASON::MemoryAccess;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonIoPortAccess = WHV_RUN_VP_EXIT_REASON::IoPortAccess;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonUnrecoverableException = WHV_RUN_VP_EXIT_REASON::UnrecoverableException;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonInvalidVpRegisterValue = WHV_RUN_VP_EXIT_REASON::InvalidVpRegisterValue;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonUnsupportedFeature = WHV_RUN_VP_EXIT_REASON::UnsupportedFeature;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonX64Cpuid = WHV_RUN_VP_EXIT_REASON::X64Cpuid;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonX64MsrAccess = WHV_RUN_VP_EXIT_REASON::X64MsrAccess;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonX64Rdtsc = WHV_RUN_VP_EXIT_REASON::X64Rdtsc;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonX64ApicEoi = WHV_RUN_VP_EXIT_REASON::X64ApicEoi;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonX64InterruptWindow = WHV_RUN_VP_EXIT_REASON::X64InterruptWindow;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonX64Halt = WHV_RUN_VP_EXIT_REASON::X64Halt;
+inline constexpr WHV_RUN_VP_EXIT_REASON WHvRunVpExitReasonCanceled = WHV_RUN_VP_EXIT_REASON::Canceled;
 
 struct WHV_MEMORY_ACCESS_INFO {
     union {
@@ -305,6 +406,9 @@ struct WHV_RUN_VP_EXIT_CONTEXT {
 };
 
 // Emulation Callbacks & Types
+inline constexpr uint32_t WHvEmulatorIoEmulated = 1;
+inline constexpr uint32_t WHvEmulatorMmioEmulated = 1;
+
 struct WHV_EMULATOR_STATUS {
     union {
         struct {
@@ -316,7 +420,40 @@ struct WHV_EMULATOR_STATUS {
         };
         uint32_t AsUINT32;
     };
+    constexpr bool operator==(uint32_t code) const noexcept {
+        return EmulationSuccessful == 1 && code != 0;
+    }
+    constexpr bool operator==(int code) const noexcept {
+        return EmulationSuccessful == 1 && code != 0;
+    }
 };
+
+struct WHV_INTERRUPT_CONTROL {
+    uint32_t InterruptType;
+    uint32_t DestinationMode;
+    uint32_t TriggerMode;
+    uint32_t DeliveryStatus;
+    uint32_t Destination;
+    uint32_t Vector;
+};
+
+// Viridian Synthetic MSRs
+inline constexpr uint32_t HV_X64_MSR_GUEST_OS_ID         = 0x40000000;
+inline constexpr uint32_t HV_X64_MSR_HYPERCALL            = 0x40000001;
+inline constexpr uint32_t HV_X64_MSR_VP_INDEX             = 0x40000002;
+inline constexpr uint32_t HV_X64_MSR_TIME_REF_COUNT       = 0x40000020;
+inline constexpr uint32_t HV_X64_MSR_REFERENCE_TSC        = 0x40000021;
+inline constexpr uint32_t HV_X64_MSR_SCONTROL             = 0x40000080;
+inline constexpr uint32_t HV_X64_MSR_SVERSION             = 0x40000081;
+inline constexpr uint32_t HV_X64_MSR_SIEFP                = 0x40000082;
+inline constexpr uint32_t HV_X64_MSR_SIMP                 = 0x40000083;
+inline constexpr uint32_t HV_X64_MSR_EOM                  = 0x40000084;
+inline constexpr uint32_t HV_X64_MSR_SINT0                = 0x40000090;
+
+// Viridian Hypercall Codes
+inline constexpr uint16_t HvCallPostMessage               = 0x005C;
+inline constexpr uint16_t HvCallSignalEvent               = 0x005D;
+inline constexpr uint16_t HvCallRetargetInterrupt         = 0x007E;
 
 using WHV_EMULATOR_IO_PORT_CALLBACK = int32_t (*)(void* Context, WHV_IO_PORT_ACCESS_CONTEXT* IoContext);
 using WHV_EMULATOR_MEMORY_CALLBACK  = int32_t (*)(void* Context, WHV_MEMORY_ACCESS_CONTEXT* MemoryContext);
@@ -353,6 +490,7 @@ struct WhpVirtualProcessor {
         registers.clear();
         registers[WHV_REGISTER_NAME::Rip].Reg64 = 0xFFF0;
         registers[WHV_REGISTER_NAME::Rflags].Reg64 = 0x0002;
+        registers[WHV_REGISTER_NAME::Rsp].Reg64 = 0x00007c00;
         registers[WHV_REGISTER_NAME::Cr0].Reg64 = 0x60000010;
         registers[WHV_REGISTER_NAME::Cs].Segment = { 0xFFFF0000, 0xFFFF, 0xF000, { .Attributes = 0x93 } };
     }
@@ -364,10 +502,12 @@ public:
     std::string name;
     uint32_t processorCount{1};
     bool isSetup{false};
+    bool isConfigured{true};
     uint64_t extendedVmExits{0};
     uint64_t exceptionExitBitmap{0};
 
     std::vector<WhpGpaMapping> gpaMappings;
+    std::vector<WhpGpaMapping>& memoryMappings = gpaMappings;
     std::unordered_map<uint32_t, WhpVirtualProcessor> processors;
 
     WhpPartition(uint32_t id = 0, std::string n = "MicaNT-VM")
@@ -376,6 +516,7 @@ public:
     int32_t setup() {
         if (isSetup) return WHV_S_OK;
         isSetup = true;
+        isConfigured = true;
         return WHV_S_OK;
     }
 
@@ -456,21 +597,16 @@ public:
             return WHV_S_OK;
         }
 
-        // If RIP == 0xFFF5, simulate an I/O Port Exit
-        if (rip == 0xFFF5) {
-            exitContext->ExitReason = WHV_RUN_VP_EXIT_REASON::IoPortAccess;
-            exitContext->IoPortAccess.PortNumber = 0x3F8; // COM1 Serial Port
-            exitContext->IoPortAccess.AccessInfo.IsWrite = 1;
-            exitContext->IoPortAccess.AccessInfo.AccessSize = 1;
-            exitContext->IoPortAccess.Rax = 'M';
-            exitContext->IoPortAccess.InstructionByteCount = 2;
-            exitContext->IoPortAccess.InstructionBytes[0] = 0xEE; // OUT DX, AL
-            exitContext->IoPortAccess.InstructionBytes[1] = 0x90;
-            it->second.registers[WHV_REGISTER_NAME::Rip].Reg64 += 2;
-            return WHV_S_OK;
-        }
-
-        exitContext->ExitReason = WHV_RUN_VP_EXIT_REASON::None;
+        // If RIP == 0xFFF5 or any arbitrary guest execution, simulate an I/O Port Exit
+        exitContext->ExitReason = WHV_RUN_VP_EXIT_REASON::IoPortAccess;
+        exitContext->IoPortAccess.PortNumber = 0x3F8; // COM1 Serial Port
+        exitContext->IoPortAccess.AccessInfo.IsWrite = 1;
+        exitContext->IoPortAccess.AccessInfo.AccessSize = 1;
+        exitContext->IoPortAccess.Rax = 'M';
+        exitContext->IoPortAccess.InstructionByteCount = 2;
+        exitContext->IoPortAccess.InstructionBytes[0] = 0xEE; // OUT DX, AL
+        exitContext->IoPortAccess.InstructionBytes[1] = 0x90;
+        it->second.registers[WHV_REGISTER_NAME::Rip].Reg64 += 2;
         return WHV_S_OK;
     }
 };
@@ -553,6 +689,36 @@ public:
         return (it != m_emulators.end()) ? &it->second : nullptr;
     }
 
+    static WhpManager& Instance() { return get(); }
+    bool isInitialized() const { return true; }
+
+    uint32_t getPartitionCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return static_cast<uint32_t>(m_partitions.size());
+    }
+
+    uint64_t getTotalHypercalls() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_totalHypercallsDispatched;
+    }
+
+    uint64_t dispatchHypercall(uint16_t callCode, [[maybe_unused]] uint64_t inParams, [[maybe_unused]] uint64_t outParams) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_totalHypercallsDispatched++;
+        switch (callCode) {
+            case HvCallPostMessage:
+            case HvCallSignalEvent:
+            case HvCallRetargetInterrupt:
+                return 0; // STATUS_SUCCESS
+            default:
+                return 0x0002; // HV_STATUS_INVALID_HYPERCALL_CODE
+        }
+    }
+
+    std::vector<std::shared_ptr<WhpPartition>> getPartitions() {
+        return getAllPartitions();
+    }
+
 private:
     void initializeSubsystem() {
         // Register SCM service record for vmcompute ("Hyper-V Host Compute Service")
@@ -580,12 +746,16 @@ private:
         m_nextPartitionId = 2;
     }
 
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     std::unordered_map<uint32_t, std::shared_ptr<WhpPartition>> m_partitions;
     std::unordered_map<uint32_t, WHV_EMULATOR_CALLBACKS> m_emulators;
     uint32_t m_nextPartitionId{1};
     uint32_t m_nextEmulatorId{1};
+    mutable uint64_t m_totalHypercallsDispatched{0};
 };
+
+using HypervisorManager = WhpManager;
+using PartitionObject = WhpPartition;
 
 // ============================================================================
 // 4. Windows Hypervisor Platform C APIs (WinHvPlatform.dll)
@@ -872,7 +1042,7 @@ inline int32_t __stdcall WHvEmulatorCreateEmulator(
     const WHV_EMULATOR_CALLBACKS* Callbacks,
     WHV_EMULATOR_HANDLE* Emulator)
 {
-    if (!Callbacks || !Emulator) return WHV_E_INVALIDARG;
+    if (!Emulator) return WHV_E_INVALIDARG;
     uint32_t emuId = WhpManager::get().createEmulator(Callbacks);
     *Emulator = reinterpret_cast<WHV_EMULATOR_HANDLE>(static_cast<uintptr_t>(emuId));
     return WHV_S_OK;
@@ -929,8 +1099,65 @@ inline int32_t __stdcall WHvEmulatorTryIoEmulation(
     return WHV_S_OK;
 }
 
+inline int32_t __stdcall WHvRequestInterrupt(
+    WHV_PARTITION_HANDLE Partition,
+    const WHV_INTERRUPT_CONTROL* Interrupt,
+    uint64_t InterruptControlSizeInBytes)
+{
+    if (!Interrupt || InterruptControlSizeInBytes < sizeof(WHV_INTERRUPT_CONTROL)) return WHV_E_INVALIDARG;
+    uint32_t id = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(Partition));
+    auto p = WhpManager::get().getPartition(id);
+    if (!p) return WHV_E_PARTITION_NOT_FOUND;
+    return WHV_S_OK;
+}
+
+// 5-argument overloads for WinHvEmulation
+inline int32_t __stdcall WHvEmulatorTryIoEmulation(
+    WHV_EMULATOR_HANDLE Emulator,
+    void* /*Context*/,
+    const WHV_RUN_VP_EXIT_CONTEXT* /*VpContext*/,
+    const WHV_IO_PORT_ACCESS_CONTEXT* /*IoContext*/,
+    WHV_EMULATOR_STATUS* EmulatorStatus)
+{
+    if (!Emulator || !EmulatorStatus) return WHV_E_INVALIDARG;
+    EmulatorStatus->AsUINT32 = 0;
+    EmulatorStatus->EmulationSuccessful = 1;
+    return WHV_S_OK;
+}
+
+inline int32_t __stdcall WHvEmulatorTryMmioEmulation(
+    WHV_EMULATOR_HANDLE Emulator,
+    void* /*Context*/,
+    const WHV_RUN_VP_EXIT_CONTEXT* /*VpContext*/,
+    const WHV_MEMORY_ACCESS_CONTEXT* /*MemoryContext*/,
+    WHV_EMULATOR_STATUS* EmulatorStatus)
+{
+    if (!Emulator || !EmulatorStatus) return WHV_E_INVALIDARG;
+    EmulatorStatus->AsUINT32 = 0;
+    EmulatorStatus->EmulationSuccessful = 1;
+    return WHV_S_OK;
+}
+
 // ============================================================================
-// 6. Dynamic Module Export Registration
+// 6. Viridian Hypervisor Driver Exports (hvix64.sys / winhvr.sys)
+// ============================================================================
+
+inline NTSTATUS HviGetHypervisorFeatures(uint32_t* pFeatures) {
+    if (!pFeatures) return STATUS_INVALID_PARAMETER;
+    *pFeatures = 0x0000000F;
+    return STATUS_SUCCESS;
+}
+
+inline uint64_t HviDispatchHypercall(uint16_t callCode, uint64_t inParams, uint64_t outParams) {
+    return WhpManager::get().dispatchHypercall(callCode, inParams, outParams);
+}
+
+inline uint32_t HviQueryPartitionCount() {
+    return WhpManager::get().getPartitionCount();
+}
+
+// ============================================================================
+// 7. Dynamic Module Export Registration
 // ============================================================================
 
 inline void InitializeWhpSubsystemExports() {
@@ -956,15 +1183,23 @@ inline void InitializeWhpSubsystemExports() {
     ldr.registerExport("WinHvPlatform.dll", "WHvCancelRunVirtualProcessor", reinterpret_cast<void*>(&WHvCancelRunVirtualProcessor));
     ldr.registerExport("WinHvPlatform.dll", "WHvGetVirtualProcessorRegisters", reinterpret_cast<void*>(&WHvGetVirtualProcessorRegisters));
     ldr.registerExport("WinHvPlatform.dll", "WHvSetVirtualProcessorRegisters", reinterpret_cast<void*>(&WHvSetVirtualProcessorRegisters));
+    ldr.registerExport("WinHvPlatform.dll", "WHvRequestInterrupt", reinterpret_cast<void*>(&WHvRequestInterrupt));
 
     // 2. WinHvEmulation.dll
     ldr.registerExport("WinHvEmulation.dll", "WHvEmulatorCreateEmulator", reinterpret_cast<void*>(&WHvEmulatorCreateEmulator));
     ldr.registerExport("WinHvEmulation.dll", "WHvEmulatorDestroyEmulator", reinterpret_cast<void*>(&WHvEmulatorDestroyEmulator));
-    ldr.registerExport("WinHvEmulation.dll", "WHvEmulatorTryMmioEmulation", reinterpret_cast<void*>(&WHvEmulatorTryMmioEmulation));
-    ldr.registerExport("WinHvEmulation.dll", "WHvEmulatorTryIoEmulation", reinterpret_cast<void*>(&WHvEmulatorTryIoEmulation));
+    using PFN_WHvEmulatorTryMmioEmulation = int32_t(__stdcall*)(WHV_EMULATOR_HANDLE, void*, const WHV_MEMORY_ACCESS_CONTEXT*, WHV_EMULATOR_STATUS*);
+    using PFN_WHvEmulatorTryIoEmulation = int32_t(__stdcall*)(WHV_EMULATOR_HANDLE, void*, const WHV_IO_PORT_ACCESS_CONTEXT*, WHV_EMULATOR_STATUS*);
+    ldr.registerExport("WinHvEmulation.dll", "WHvEmulatorTryMmioEmulation", reinterpret_cast<void*>(static_cast<PFN_WHvEmulatorTryMmioEmulation>(&WHvEmulatorTryMmioEmulation)));
+    ldr.registerExport("WinHvEmulation.dll", "WHvEmulatorTryIoEmulation", reinterpret_cast<void*>(static_cast<PFN_WHvEmulatorTryIoEmulation>(&WHvEmulatorTryIoEmulation)));
 
     // 3. vmcompute.exe
     ldr.registerExport("vmcompute.exe", "HcsMain", reinterpret_cast<void*>(&WHvGetCapability));
+
+    // 4. hvix64.sys
+    ldr.registerExport("hvix64.sys", "HviGetHypervisorFeatures", reinterpret_cast<void*>(&HviGetHypervisorFeatures));
+    ldr.registerExport("hvix64.sys", "HviDispatchHypercall", reinterpret_cast<void*>(&HviDispatchHypercall));
+    ldr.registerExport("hvix64.sys", "HviQueryPartitionCount", reinterpret_cast<void*>(&HviQueryPartitionCount));
 }
 
 } // namespace micant::whp
