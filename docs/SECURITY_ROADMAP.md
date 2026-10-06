@@ -97,7 +97,7 @@ flowchart LR
 
 ---
 
-## 4. The 5-Phase Sovereign Security Roadmap
+## 4. The Sovereign Sentinel Security Roadmap
 
 ### Phase 1: Windows Security Center Subsystem (`wscapi.dll` / `wscapi.h` - SentinelCenter) - **COMPLETED (Milestone 136)**
 - **Goal**: Build the central health aggregator for the entire operating system.
@@ -143,7 +143,7 @@ flowchart LR
   - CLI: `guard` / `exploitguard` / `sentinel guard` (`guard status`, `guard list`, `guard enable <policy>`, `guard test`).
   - Verification: Unit Test Suite 139 (`Test_WindowsExploitGuard_SentinelGuard_Subsystem`) passing at 100%.
 
-### Phase 5: Sovereign Credential Guard & Isolated Security Mode (SentinelCredGuard - `credguard.hpp` / `sspicli.dll` / `lsaiso.exe`) - **ACTIVE (Milestone 140)**
+### Phase 5: Sovereign Credential Guard & Isolated Security Mode (SentinelCredGuard - `credguard.hpp` / `sspicli.dll` / `lsaiso.exe`) - **COMPLETED (Milestone 140)**
 - **Goal**: Isolate high-privilege credentials (Kerberos tickets, NTLM/PBKDF2 hashes, LSA secrets, DPAPI keys) into a Virtual Trust Level 1 (VTL 1) memory-fenced Isolated User Mode (IUM) enclave (`LsaIso`), completely immune to Ring 3 debuggers, MiniDumpWriteDump, and memory scraping tools (Mimikatz / ProcDump).
 - **Core Capabilities**:
   1. **Virtual Trust Level 1 (VTL 1) Enclave (`LsaIso`)**: Hardware/hypervisor-isolated secure memory container hosting credential secrets.
@@ -152,6 +152,25 @@ flowchart LR
   4. **Win32 C ABI Parity**: LSA policy, authentication package call, and credential guard query APIs in `sspicli.dll` and `secur32.dll`.
   5. **CLI Integration**: `credguard` / `sentinel credguard` commands (`status`, `enable`, `isolate`, `dump-attempt`, `test`).
   6. **Automated Verification**: Unit Test Suite 140 (`Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem`).
+
+### Phase 6: Sovereign Protected Process Light (PPL) & Early Launch Anti-Malware (ELAM) (`ppl.hpp` / `elam.hpp` / `ntoskrnl.exe`) - **ACTIVE (Milestone 141)**
+- **Goal**: Harden system and security processes against rootkits and administrative manipulation (`SeDebugPrivilege`), and implement boot driver classification and verification via Early Launch Anti-Malware (ELAM) callbacks.
+- **Core Capabilities**:
+  1. **Process Protection Level (PPL) Access Filtering**:
+     - Kernel object manager filters `NtOpenProcess` and `NtDuplicateObject` access masks when targeting protected processes.
+     - Strips `PROCESS_TERMINATE` (0x0001), `PROCESS_VM_WRITE` (0x0020), `PROCESS_VM_READ` (0x0010), `PROCESS_CREATE_THREAD` (0x0002), and `PROCESS_SUSPEND_RESUME` (0x0800) when accessor signer level < target signer level.
+     - Supports `PsProtectedSignerAntimalware`, `PsProtectedSignerLsa`, `PsProtectedSignerWindows`, `PsProtectedSignerWinTcb`, and `PsProtectedSignerWinSystem`.
+  2. **Early Launch Anti-Malware (ELAM) Callbacks**:
+     - `IoRegisterBootDriverCallback` / `IoUnRegisterBootDriverCallback` C ABI.
+     - `BDCB_IMAGE_INFORMATION` driver classification (`BDCB_CLASSIFICATION_KNOWN_GOOD`, `BDCB_CLASSIFICATION_UNKNOWN`, `BDCB_CLASSIFICATION_KNOWN_BAD`, `BDCB_CLASSIFICATION_KNOWN_BAD_CRITICAL`).
+     - Driver load verification: Prevents kernel rootkits from loading during boot phase before the full antimalware engine starts.
+  3. **Win32 & NT Export Parity**:
+     - `PsIsProtectedProcess`, `PsGetProcessProtection`, `RtlCreateProcessParametersEx`.
+  4. **CLI Integration**:
+     - `ppl` / `sentinel ppl` (`status`, `protect`, `terminate-attempt`, `test`).
+     - `elam` / `sentinel elam` (`status`, `classify`, `test`).
+  5. **Automated Verification**:
+     - Unit Test Suite 141 (`Test_WindowsProtectedProcessLight_ELAM_Subsystem`).
 
 ---
 

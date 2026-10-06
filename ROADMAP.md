@@ -2619,6 +2619,26 @@
   - Validates dynamic exports, VersionDatabase entries, baseline state queries, enable/disable without lock, secret sealing into VTL 1, in-enclave challenge-response digest, Mimikatz memory scraping interception (ACCESS_DENIED / code 5), audit log tracking, UEFI lock immutability, standard LSA policy and logon session enumeration, and shell CLI commands.
   - Milestone 140: **140 / 140 Test Suites Passing (100%)**.
 
+---
+
+### Phase 114: Sovereign Protected Process Light (PPL) & Early Launch Anti-Malware (ELAM) (Milestone 141)
+*Goal: Harden security processes (MsMpEng, LsaIso, lsass, csrss) with Protected Process Light (PPL) access filtering against administrative manipulation and debuggers, and implement kernel boot-time driver classification via Early Launch Anti-Malware (ELAM) callbacks.*
+- [ ] **Protected Process Light (PPL) Subsystem (`include/micant/ppl.hpp`)**:
+  - `PS_PROTECTION` bitfield definition: Type (None, ProtectedLight, Protected), Signer (Authenticode, CodeGen, Antimalware, Lsa, Windows, WinTcb, WinSystem, App), and Audit bit.
+  - Access Mask Filtering: Intercepts `NtOpenProcess` and `NtDuplicateObject` access requests against protected processes.
+  - Strips dangerous rights (`PROCESS_TERMINATE`, `PROCESS_CREATE_THREAD`, `PROCESS_VM_WRITE`, `PROCESS_VM_READ`, `PROCESS_SUSPEND_RESUME`, `PROCESS_DUP_HANDLE`) unless caller's signer level >= target signer level.
+  - Immunity against `SeDebugPrivilege` privilege escalation.
+- [ ] **Early Launch Anti-Malware (ELAM) Subsystem (`include/micant/elam.hpp`)**:
+  - Kernel callback infrastructure: `IoRegisterBootDriverCallback`, `IoUnRegisterBootDriverCallback`.
+  - Boot driver classification: `BDCB_CLASSIFICATION_KNOWN_GOOD`, `BDCB_CLASSIFICATION_UNKNOWN`, `BDCB_CLASSIFICATION_KNOWN_BAD`, `BDCB_CLASSIFICATION_KNOWN_BAD_CRITICAL`.
+  - Boot Driver loader interception: Blocks malicious drivers before kernel initialization.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `PsIsProtectedProcess`, `PsGetProcessProtection`, `RtlCreateProcessParametersEx`.
+- [ ] **Interactive Shell CLI**:
+  - `ppl status`, `ppl protect <pid> <signer>`, `ppl terminate-attempt <pid>`, `elam status`, `elam classify <driver> <class>`.
+- [ ] **Unit Test Suite 141 (`Test_WindowsProtectedProcessLight_ELAM_Subsystem`)**:
+  - Comprehensive verification of PPL signer hierarchy, access mask stripping, termination immunity, ELAM boot driver callback dispatching, and driver blocking.
+
 
 
 
