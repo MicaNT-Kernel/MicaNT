@@ -2645,18 +2645,38 @@
 
 ---
 
-### Phase 115: System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) (Milestone 142)
-*Goal: Establish hardware-rooted Dynamic Root of Trust for Measurement (DRTM) using Intel TXT / AMD SKINIT, TPM 2.0 Platform Configuration Register (PCR) sealing (PCR 0-14), and TCG log verification.*
-- [ ] **System Guard & Measured Boot Subsystem (`include/micant/sysguard.hpp`)**:
-  - Dynamic Root of Trust for Measurement (DRTM) hardware launch sequence.
-  - TPM 2.0 PCR sealing & attestation: PCR 7 (Secure Boot), PCR 11 (BitLocker), and PCR 12-14 (Kernel & PPL integrity).
-  - TCG 2.0 event log replay and hash chain validation.
-- [ ] **Win32 TBS C ABI Parity**:
-  - `Tbsi_Context_Create`, `Tbsi_Context_Close`, `Tbsip_Submit_Command`, `Tbsi_Get_TCG_Log`.
+### Phase 115: System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) (Milestone 142) (100% Completed)
+*Goal: Establish hardware-rooted Dynamic Root of Trust for Measurement (DRTM) using Intel TXT / AMD SKINIT, TPM 2.0 Platform Configuration Register (PCR) sealing (PCR 0-14, 17, 18), and TCG log verification.*
+- [x] **System Guard & Measured Boot Subsystem (`include/micant/sysguard.hpp`)**:
+  - Dynamic Root of Trust for Measurement (DRTM) hardware launch sequence (`SysGuardLaunchType::DrtmIntelTxt`, `SysGuardLaunchType::DrtmAmdSkinit`).
+  - TPM 2.0 PCR sealing & attestation: Complete 24-register SHA-256 bank, PCR 7 (Secure Boot), PCR 11 (BitLocker), and PCR 12-14 (Kernel & PPL integrity), PCR 17 (DRTM ACM), PCR 18 (Secure Kernel Runtime).
+  - TCG 2.0 event log recording, cryptographic replay, and hash-chain attestation validation.
+  - Cryptographic sealing/unsealing with tamper-detection preventing unsealing if any measured PCR deviates.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - DynamicLoader exports in `tbs.dll`: `Tbsi_Context_Create`, `Tbsi_Context_Close`, `Tbsip_Submit_Command`, `Tbsi_Get_TCG_Log`, `Tbsi_GetDeviceInfo`, `Tbsi_Revoke_Tickets`, `Tbsi_Get_OwnerAuth`.
+  - DynamicLoader exports in `ntoskrnl.exe`: `SysGuardIsSecureLaunchSupported`, `SysGuardIsSecureLaunchEnabled`, `SysGuardGetPcrValue`, `SysGuardExtendPcr`, `SysGuardSealKey`, `SysGuardUnsealKey`, `SysGuardValidateEventLog`, `SysGuardGetAttestationReport`.
+  - VersionDatabase registration (`10.0.26100.1`) for `tbs.dll` and `measured_boot.sys`.
+- [x] **Interactive Shell CLI (`include/micant/shell.hpp`)**:
+  - Implemented `sysguard status`, `sysguard pcr [idx]`, `sysguard attest`, `sysguard seal <key> <secret> [pcrs]`, `sysguard unseal <key>`, `sysguard test`, and `sentinel sysguard` routing in `micant::shell`.
+- [x] **Unit Test Suite 142 (`Test_WindowsSystemGuard_SecureLaunch_Subsystem`)**:
+  - Validates dynamic exports, VersionDatabase entries, DRTM launch sequence, PCR 0-23 registers, PCR extend formula, TCG event log continuous replay verification, tamper detection, PCR sealing and unsealing, TBS C ABI commands, device info, TCG binary log extraction, and shell CLI commands.
+  - Milestone 142: **142 / 142 Test Suites Passing (100%)**.
+
+---
+
+### Phase 116: Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI) (Milestone 143)
+*Goal: Implement hypervisor-enforced memory page permission enforcement (SLAT / EPT / NPT) preventing Ring 0 kernel code modification and enforcing W^X (Write XOR Execute) in kernel space.*
+- [ ] **Virtualization-Based Security Subsystem (`include/micant/vbs_hvci.hpp`)**:
+  - Second-Level Address Translation (SLAT) page tables marking executable kernel memory non-writable.
+  - Virtual Trust Level (VTL 0 and VTL 1) memory partitioning and page attribute table management.
+  - Secure Kernel (SK) call interface (`VbsCall` / Hypercall interface).
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - Exports in `vbs.dll` and `ntoskrnl.exe`.
+  - VersionDatabase registrations for `vbs.dll` and `securekernel.exe`.
 - [ ] **Interactive Shell CLI**:
-  - `sysguard status`, `sysguard pcr`, `sysguard attest`, `sysguard test`.
-- [ ] **Unit Test Suite 142 (`Test_WindowsSystemGuard_SecureLaunch_Subsystem`)**:
-  - Comprehensive verification of DRTM measurement chain, PCR sealing, TCG log integrity, and TBS API surface.
+  - `vbs status`, `vbs enable`, `vbs verify`, `vbs test`, and `sentinel hvci` routing.
+- [ ] **Unit Test Suite 143 (`Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem`)**:
+  - Comprehensive verification of SLAT page enforcement, W^X kernel memory protections, VTL isolation, and VBS API surface.
 
 
 

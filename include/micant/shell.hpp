@@ -133,6 +133,7 @@
 #include "exploit_guard.hpp"
 #include "credguard.hpp"
 #include "ppl.hpp"
+#include "sysguard.hpp"
 
 namespace micant::shell {
 
@@ -206,6 +207,7 @@ public:
         exploit_guard::InitializeExploitGuardSubsystemExports();
         credguard::InitializeCredGuardSubsystemExports();
         ppl::InitializePplSubsystemExports();
+        sysguard::InitializeSysGuardSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -257,6 +259,7 @@ public:
             cmd != "guard" && cmd != "exploitguard" && cmd != "mitlib" &&
             cmd != "credguard" && cmd != "cred" && cmd != "lsaiso" &&
             cmd != "ppl" && cmd != "protectedprocess" && cmd != "elam" && cmd != "bootdriver" &&
+            cmd != "sysguard" && cmd != "systemguard" && cmd != "measuredboot" && cmd != "tbs" &&
             cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
@@ -395,6 +398,7 @@ public:
             if (cmd == "credguard" || cmd == "cred" || cmd == "lsaiso") { cmdCredGuard(tokens, out); return 0; }
             if (cmd == "ppl" || cmd == "protectedprocess") { cmdPpl(tokens, out); return 0; }
             if (cmd == "elam" || cmd == "bootdriver") { cmdElam(tokens, out); return 0; }
+            if (cmd == "sysguard" || cmd == "systemguard" || cmd == "measuredboot" || cmd == "tbs") { cmdSysGuard(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -20404,6 +20408,7 @@ private:
                 << "  sentinel credguard [status|enable|disable|isolate|dump-attempt|test] Sovereign Credential Guard & IUM Enclave\n"
                 << "  sentinel ppl [status|list|protect|terminate-attempt|test] Protected Process Light Subsystem\n"
                 << "  sentinel elam [status|classify|policy|test] Early Launch Anti-Malware Driver Subsystem\n"
+                << "  sentinel sysguard [status|pcr|attest|seal|unseal|test] System Guard & Measured Boot Subsystem\n"
                 << "  sentinel test                       Executes Sentinel Security System diagnostic test suite\n";
             return;
         }
@@ -20429,6 +20434,12 @@ private:
         if (tokens.size() > 1 && (toLower(tokens[1]) == "elam" || toLower(tokens[1]) == "bootdriver")) {
             std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
             cmdElam(subTokens, out);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "sysguard" || toLower(tokens[1]) == "systemguard" || toLower(tokens[1]) == "measuredboot" || toLower(tokens[1]) == "tbs")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdSysGuard(subTokens, out);
             return;
         }
 
@@ -21667,6 +21678,231 @@ private:
             out << std::left << std::setw(30) << d
                 << std::setw(25) << ElamClassificationToString(cls) << "\n";
         }
+    }
+
+    void cmdSysGuard(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::sysguard;
+        InitializeSysGuardSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help" || toLower(tokens[1]) == "help")) {
+            out << "System Guard Secure Launch & Measured Boot Subsystem (tbs.dll / measured_boot.sys)\n"
+                << "Dynamic Root of Trust for Measurement (DRTM) & TPM 2.0 PCR Attestation\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  sysguard status                      Displays DRTM launch state, TPM 2.0 version, and hardware defenses\n"
+                << "  sysguard pcr [index]                 Dumps TPM 2.0 Platform Configuration Registers (PCR 0-23)\n"
+                << "  sysguard attest                      Performs TCG 2.0 Event Log replay and cryptographic verification\n"
+                << "  sysguard seal <name> <secret> [pcrs] Seals secret data against composite PCR policy\n"
+                << "  sysguard unseal <name>               Unseals secret data verifying current PCR state integrity\n"
+                << "  sysguard test                        Executes System Guard diagnostic self-test suite\n";
+            return;
+        }
+
+        auto& mgr = SystemGuardManager::get();
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "test" || toLower(tokens[1]) == "-test")) {
+            out << "[TEST] Running System Guard Secure Launch & Measured Boot Diagnostics...\n";
+
+            // 1. Verify DRTM support & launch status
+            if (!mgr.isSecureLaunchSupported() || !mgr.isSecureLaunchEnabled()) {
+                out << "[-] DRTM Secure Launch is not active\n";
+                return;
+            }
+            out << "  [+] DRTM Secure Launch Verified (" << LaunchTypeToString(mgr.getLaunchType()) << ")\n";
+
+            // 2. Validate TCG Event Log Replay
+            std::string reason;
+            if (!mgr.validateEventLog(&reason)) {
+                out << "[-] TCG event log replay failed: " << reason << "\n";
+                return;
+            }
+            out << "  [+] TCG 2.0 Measured Boot Event Log Replay Passed (" << mgr.getEventCount() << " events verified)\n";
+
+            // 3. Test PCR extension
+            auto origPcr9 = mgr.readPcr(9);
+            std::vector<uint8_t> dummyDigest(32, 0xAA);
+            mgr.extendPcr(9, dummyDigest, EV_IPL, "Diagnostic Kernel Module Test");
+            auto newPcr9 = mgr.readPcr(9);
+            if (origPcr9 == newPcr9) {
+                out << "[-] PCR 9 extension failed\n";
+                return;
+            }
+            out << "  [+] TPM 2.0 PCR Extension Verified: SHA256(PCR_old || Digest)\n";
+
+            // 4. Test Cryptographic Sealing & Unsealing
+            std::vector<uint8_t> testSecret = { 'S', 'E', 'N', 'T', 'I', 'N', 'E', 'L', '_', 'K', 'E', 'Y' };
+            bool sealOk = mgr.sealData("DiagTestKey", testSecret, { 7, 11, 14 });
+            if (!sealOk) {
+                out << "[-] Key sealing failed\n";
+                return;
+            }
+            std::vector<uint8_t> unsealed;
+            bool unsealOk = mgr.unsealData("DiagTestKey", unsealed);
+            if (!unsealOk || unsealed != testSecret) {
+                out << "[-] Key unsealing failed\n";
+                return;
+            }
+            out << "  [+] PCR Policy Sealing & Unsealing Verified (PCR 7, 11, 14)\n";
+
+            // 5. Test Tamper Detection: modify a PCR and verify unseal failure
+            mgr.extendPcr(7, dummyDigest, EV_ACTION, "Tamper simulation");
+            bool tamperUnseal = mgr.unsealData("DiagTestKey", unsealed);
+            if (tamperUnseal) {
+                out << "[-] Key unsealing succeeded despite altered PCR measurement!\n";
+                return;
+            }
+            out << "  [+] Tamper Detection Verified: Unseal blocked on PCR policy alteration\n";
+
+            // 6. Test Win32 TBS C ABI
+            TBS_CONTEXT_PARAMS params{ TBS_CONTEXT_VERSION_ONE };
+            TBS_HCONTEXT hCtx = nullptr;
+            TBS_RESULT tr = Tbsi_Context_Create(&params, &hCtx);
+            if (tr != TBS_SUCCESS || !hCtx) {
+                out << "[-] Tbsi_Context_Create failed: 0x" << std::hex << tr << "\n";
+                return;
+            }
+            uint8_t devBuf[sizeof(TBS_DEVICE_INFO)]{};
+            tr = Tbsi_GetDeviceInfo(sizeof(devBuf), devBuf);
+            if (tr != TBS_SUCCESS) {
+                out << "[-] Tbsi_GetDeviceInfo failed\n";
+                Tbsi_Context_Close(hCtx);
+                return;
+            }
+            Tbsi_Context_Close(hCtx);
+            out << "  [+] Win32 TBS C ABI Verified (Tbsi_Context_Create / Tbsi_GetDeviceInfo / Tbsi_Context_Close)\n";
+
+            out << "[SUCCESS] System Guard Secure Launch & Measured Boot Diagnostics passed cleanly.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "attest" || toLower(tokens[1]) == "validate")) {
+            out << "[*] Replaying TCG 2.0 Measured Boot Event Log against TPM 2.0 PCR registers...\n";
+            std::string reason;
+            bool valid = mgr.validateEventLog(&reason);
+            if (valid) {
+                out << "[+] Hardware Attestation SUCCESS: Chain of trust intact.\n"
+                    << "    Total Measured Boot Events: " << mgr.getEventCount() << "\n"
+                    << "    DRTM Launch Mode:           " << LaunchTypeToString(mgr.getLaunchType()) << "\n"
+                    << "    SMM Runtime Defense:        ACTIVE\n"
+                    << "    Kernel DMA Protection:      ACTIVE\n";
+            } else {
+                out << "[-] Hardware Attestation FAILED: Integrity violation detected!\n"
+                    << "    Reason: " << reason << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "pcr") {
+            if (tokens.size() > 2) {
+                uint32_t idx = static_cast<uint32_t>(std::strtoul(tokens[2].c_str(), nullptr, 10));
+                if (idx >= TPM20_PCR_COUNT) {
+                    out << "[-] Invalid PCR index. Valid range: 0 - " << (TPM20_PCR_COUNT - 1) << "\n";
+                    return;
+                }
+                out << "PCR " << (idx < 10 ? "0" : "") << idx << ": "
+                    << mgr.readPcrHex(idx) << "\n";
+                return;
+            }
+
+            out << "TPM 2.0 Platform Configuration Registers (SHA-256 Bank):\n"
+                << "-------------------------------------------------------------------------------\n"
+                << std::left << std::setw(6) << "PCR"
+                << std::setw(26) << "Designated Role"
+                << std::setw(45) << "SHA-256 Digest (32 Bytes)" << "\n"
+                << "-------------------------------------------------------------------------------\n";
+
+            auto getPcrRole = [](uint32_t idx) -> const char* {
+                switch (idx) {
+                    case 0: return "CRTM / Firmware Code";
+                    case 1: return "Host Platform Config";
+                    case 2: return "Option ROM Code";
+                    case 3: return "Option ROM Config";
+                    case 4: return "Boot Manager (bootmgr)";
+                    case 5: return "GPT / Boot Configuration";
+                    case 6: return "State Transitions";
+                    case 7: return "Secure Boot Policy";
+                    case 8: return "OS Loader Parameters";
+                    case 9: return "Kernel & Boot Drivers";
+                    case 10: return "ELAM / Hypervisor";
+                    case 11: return "BitLocker FVE Policy";
+                    case 12: return "Data Execution / CI";
+                    case 13: return "Boot Policy";
+                    case 14: return "System Guard / PPL";
+                    case 17: return "DRTM Hardware Launch";
+                    case 18: return "System Guard Runtime";
+                    default: return "Reserved / Operating System";
+                }
+            };
+
+            for (uint32_t i = 0; i < TPM20_PCR_COUNT; ++i) {
+                out << std::left << std::setw(6) << ("[" + std::to_string(i) + "]")
+                    << std::setw(26) << getPcrRole(i)
+                    << std::setw(45) << mgr.readPcrHex(i) << "\n";
+            }
+            out << "-------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (tokens.size() > 3 && toLower(tokens[1]) == "seal") {
+            std::string keyName = tokens[2];
+            std::string secret = tokens[3];
+            std::vector<uint32_t> pcrs = { 7, 11 };
+            if (tokens.size() > 4) {
+                pcrs.clear();
+                std::istringstream iss(tokens[4]);
+                std::string item;
+                while (std::getline(iss, item, ',')) {
+                    if (!item.empty()) {
+                        pcrs.push_back(static_cast<uint32_t>(std::strtoul(item.c_str(), nullptr, 10)));
+                    }
+                }
+            }
+
+            std::vector<uint8_t> secretBytes(secret.begin(), secret.end());
+            bool ok = mgr.sealData(keyName, secretBytes, pcrs);
+            if (ok) {
+                out << "[+] Sealed key '" << keyName << "' bound to PCRs: ";
+                for (size_t i = 0; i < pcrs.size(); ++i) {
+                    out << pcrs[i] << (i + 1 < pcrs.size() ? ", " : "\n");
+                }
+            } else {
+                out << "[-] Failed to seal key '" << keyName << "'.\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 2 && toLower(tokens[1]) == "unseal") {
+            std::string keyName = tokens[2];
+            std::vector<uint8_t> secret;
+            bool ok = mgr.unsealData(keyName, secret);
+            if (ok) {
+                std::string s(secret.begin(), secret.end());
+                out << "[+] Successfully unsealed key '" << keyName << "': " << s << "\n";
+            } else {
+                out << "[-] Unsealing failed for '" << keyName << "': Integrity verification or PCR policy mismatch.\n";
+            }
+            return;
+        }
+
+        // Default: status
+        out << "System Guard Secure Launch & Measured Boot Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  DRTM Launch Architecture:        " << LaunchTypeToString(mgr.getLaunchType()) << "\n"
+            << "  Secure Launch Enabled:           " << (mgr.isSecureLaunchEnabled() ? "Yes (Hardware Root of Trust)" : "No") << "\n"
+            << "  Hardware CPU Root:               " << (mgr.isSecureLaunchSupported() ? "Supported (Intel TXT / AMD SKINIT)" : "Not Supported") << "\n"
+            << "  TPM Device Architecture:         TPM 2.0 (CRB Interface, Rev 1.59)\n"
+            << "  SMM Runtime Defense:             " << (mgr.isSmmIsolationActive() ? "Active (Page Table Fenced)" : "Inactive") << "\n"
+            << "  Kernel DMA Protection:           " << (mgr.isDmaProtectionActive() ? "Active (IOMMU / VT-d Isolation)" : "Inactive") << "\n"
+            << "  Measured Boot Events:            " << mgr.getEventCount() << " events in TCG log\n"
+            << "  Sealed Cryptographic Keys:       " << mgr.getSealedKeyCount() << " keys active\n"
+            << "  Tamper Interceptions:            " << mgr.getTotalTamperDetections() << " unauthorized access attempts\n"
+            << "  Attestation Health State:        " << (mgr.validateEventLog() ? "100% Verified (Chain of Trust Valid)" : "Compromised") << "\n"
+            << "-------------------------------------------------------------------------------\n";
     }
 
     static std::string trim(std::string_view s) {

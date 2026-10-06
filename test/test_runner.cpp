@@ -53,6 +53,7 @@
 #include "micant/ws2_32.hpp"
 #include "micant/shell.hpp"
 #include "micant/ppl.hpp"
+#include "micant/sysguard.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -33312,8 +33313,305 @@ void Test_WindowsProtectedProcessLight_ELAM_Subsystem() {
     std::cout << "[TEST] Suite 141: Windows Protected Process Light (PPL) & ELAM Subsystem PASSED.\n";
 }
 
+void Test_WindowsSystemGuard_SecureLaunch_Subsystem() {
+    using namespace micant::sysguard;
+
+    std::cout << "[TEST] Running Suite 142: Windows System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) Subsystem...\n";
+
+    // 1. Dynamic Loader & Version Database Parity
+    {
+        InitializeSysGuardSubsystemExports();
+
+        auto& loader = ldr::DynamicLoader::get();
+
+        // Verify tbs.dll exports
+        TEST_ASSERT(loader.getExport("tbs.dll", "Tbsi_Context_Create") != nullptr, "tbs.dll must export Tbsi_Context_Create");
+        TEST_ASSERT(loader.getExport("tbs.dll", "Tbsi_Context_Close") != nullptr, "tbs.dll must export Tbsi_Context_Close");
+        TEST_ASSERT(loader.getExport("tbs.dll", "Tbsip_Submit_Command") != nullptr, "tbs.dll must export Tbsip_Submit_Command");
+        TEST_ASSERT(loader.getExport("tbs.dll", "Tbsi_Get_TCG_Log") != nullptr, "tbs.dll must export Tbsi_Get_TCG_Log");
+        TEST_ASSERT(loader.getExport("tbs.dll", "Tbsi_GetDeviceInfo") != nullptr, "tbs.dll must export Tbsi_GetDeviceInfo");
+        TEST_ASSERT(loader.getExport("tbs.dll", "Tbsi_Revoke_Tickets") != nullptr, "tbs.dll must export Tbsi_Revoke_Tickets");
+        TEST_ASSERT(loader.getExport("tbs.dll", "Tbsi_Get_OwnerAuth") != nullptr, "tbs.dll must export Tbsi_Get_OwnerAuth");
+
+        // Verify ntoskrnl.exe exports
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "SysGuardIsSecureLaunchSupported") != nullptr, "ntoskrnl.exe must export SysGuardIsSecureLaunchSupported");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "SysGuardIsSecureLaunchEnabled") != nullptr, "ntoskrnl.exe must export SysGuardIsSecureLaunchEnabled");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "SysGuardGetPcrValue") != nullptr, "ntoskrnl.exe must export SysGuardGetPcrValue");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "SysGuardExtendPcr") != nullptr, "ntoskrnl.exe must export SysGuardExtendPcr");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "SysGuardSealKey") != nullptr, "ntoskrnl.exe must export SysGuardSealKey");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "SysGuardUnsealKey") != nullptr, "ntoskrnl.exe must export SysGuardUnsealKey");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "SysGuardValidateEventLog") != nullptr, "ntoskrnl.exe must export SysGuardValidateEventLog");
+        TEST_ASSERT(loader.getExport("ntoskrnl.exe", "SysGuardGetAttestationReport") != nullptr, "ntoskrnl.exe must export SysGuardGetAttestationReport");
+
+        // VersionDatabase entries
+        auto& vdb = version::VersionDatabase::Instance();
+        const auto* tbsInfo = vdb.GetModuleInfo("tbs.dll");
+        TEST_ASSERT(tbsInfo != nullptr, "tbs.dll must be registered in VersionDatabase");
+        TEST_ASSERT(tbsInfo->stringTable.at("FileVersion") == "10.0.26100.1", "tbs.dll version must be 10.0.26100.1");
+
+        const auto* mbInfo = vdb.GetModuleInfo("measured_boot.sys");
+        TEST_ASSERT(mbInfo != nullptr, "measured_boot.sys must be registered in VersionDatabase");
+        TEST_ASSERT(mbInfo->stringTable.at("FileVersion") == "10.0.26100.1", "measured_boot.sys version must be 10.0.26100.1");
+    }
+
+    // 2. Dynamic Root of Trust for Measurement (DRTM) Hardware Launch Architecture
+    {
+        auto& mgr = SystemGuardManager::get();
+
+        BOOLEAN supported = FALSE;
+        NTSTATUS st = SysGuardIsSecureLaunchSupported(&supported);
+        TEST_ASSERT(st == STATUS_SUCCESS && supported == TRUE, "SysGuardIsSecureLaunchSupported must return TRUE");
+
+        BOOLEAN enabled = FALSE;
+        st = SysGuardIsSecureLaunchEnabled(&enabled);
+        TEST_ASSERT(st == STATUS_SUCCESS && enabled == TRUE, "SysGuardIsSecureLaunchEnabled must return TRUE");
+
+        TEST_ASSERT(mgr.isSmmIsolationActive(), "SMM Runtime Defense must be active");
+        TEST_ASSERT(mgr.isDmaProtectionActive(), "Kernel DMA Protection must be active");
+        TEST_ASSERT(mgr.getLaunchType() == SysGuardLaunchType::DrtmIntelTxt, "DRTM Intel TXT launch mode must be initial default");
+
+        // PCR 17 & PCR 18 must be non-zero after DRTM launch
+        auto pcr17 = mgr.readPcr(17);
+        auto pcr18 = mgr.readPcr(18);
+        bool pcr17NonZero = false, pcr18NonZero = false;
+        for (auto b : pcr17) if (b != 0) pcr17NonZero = true;
+        for (auto b : pcr18) if (b != 0) pcr18NonZero = true;
+        TEST_ASSERT(pcr17NonZero, "PCR 17 (DRTM ACM Hardware measurement) must be non-zero");
+        TEST_ASSERT(pcr18NonZero, "PCR 18 (System Guard Secure Kernel Runtime measurement) must be non-zero");
+    }
+
+    // 3. TPM 2.0 Platform Configuration Registers (PCR 0-23)
+    {
+        auto& mgr = SystemGuardManager::get();
+
+        // Verify initial boot chain measurements
+        for (uint32_t i : { 0, 1, 4, 5, 7, 8, 9, 10, 11, 12, 14, 17, 18 }) {
+            auto val = mgr.readPcr(i);
+            TEST_ASSERT(val.size() == 32, "PCR value must be 32 bytes");
+            bool nonZero = false;
+            for (auto b : val) if (b != 0) nonZero = true;
+            TEST_ASSERT(nonZero, "Pre-measured boot PCRs must be non-zero");
+        }
+
+        // Test PCR extension: PCR_new = SHA256(PCR_old || Digest)
+        auto pcr12Old = mgr.readPcr(12);
+        std::vector<uint8_t> testDigest(32, 0x42);
+
+        // Manually compute expected:
+        std::vector<uint8_t> manualBuf;
+        manualBuf.insert(manualBuf.end(), pcr12Old.begin(), pcr12Old.end());
+        manualBuf.insert(manualBuf.end(), testDigest.begin(), testDigest.end());
+        auto expectedHash = crypto::Sha256::hash(std::span<const uint8_t>(manualBuf.data(), manualBuf.size()));
+
+        NTSTATUS st = SysGuardExtendPcr(12, testDigest.data(), static_cast<uint32_t>(testDigest.size()), "Suite142 Test Extend");
+        TEST_ASSERT(st == STATUS_SUCCESS, "SysGuardExtendPcr must succeed");
+
+        auto pcr12New = mgr.readPcr(12);
+        TEST_ASSERT(pcr12New == expectedHash, "Extended PCR must match SHA256(PCR_old || Digest)");
+
+        // Out of bounds PCR index test
+        st = SysGuardExtendPcr(30, testDigest.data(), 32, "Invalid PCR");
+        TEST_ASSERT(st == STATUS_INVALID_PARAMETER, "Invalid PCR index must return STATUS_INVALID_PARAMETER");
+    }
+
+    // 4. TCG 2.0 Measured Boot Event Log Replay & Attestation
+    {
+        auto& mgr = SystemGuardManager::get();
+
+        BOOLEAN isValid = FALSE;
+        NTSTATUS st = SysGuardValidateEventLog(&isValid);
+        TEST_ASSERT(st == STATUS_SUCCESS && isValid == TRUE, "SysGuardValidateEventLog must succeed on authentic log");
+
+        // Verify total events
+        TEST_ASSERT(mgr.getEventCount() >= 10, "Event log must record at least 10 measured boot events");
+
+        // Tamper test: Alter a PCR register directly without extending via event log
+        mgr.resetPcr(6, 0xEE); // Force discrepancy in PCR 6
+
+        std::string failReason;
+        bool validAfterTamper = mgr.validateEventLog(&failReason);
+        TEST_ASSERT(!validAfterTamper, "validateEventLog must detect tampered PCR register");
+        TEST_ASSERT(failReason.find("PCR 6 mismatch") != std::string::npos, "Failure reason must flag PCR 6 discrepancy");
+
+        // Restore valid PCR 6
+        mgr.resetPcr(6, 0x00);
+        TEST_ASSERT(mgr.validateEventLog(), "Event log validation must pass after restoration");
+    }
+
+    // 5. Cryptographic PCR Sealing & Unsealing
+    {
+        auto& mgr = SystemGuardManager::get();
+
+        std::vector<uint8_t> secret = { 0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x23, 0x45, 0x67 };
+        uint32_t pcrs[] = { 7, 11, 14 };
+
+        NTSTATUS st = SysGuardSealKey("BitLockerVMK_Test", secret.data(), static_cast<uint32_t>(secret.size()), pcrs, 3);
+        TEST_ASSERT(st == STATUS_SUCCESS, "SysGuardSealKey must return STATUS_SUCCESS");
+        TEST_ASSERT(mgr.getSealedKeyCount() >= 1, "Sealed key count must be at least 1");
+
+        // Unseal immediately
+        std::vector<uint8_t> outSecret(32, 0);
+        uint32_t outLen = static_cast<uint32_t>(outSecret.size());
+        st = SysGuardUnsealKey("BitLockerVMK_Test", outSecret.data(), &outLen);
+        TEST_ASSERT(st == STATUS_SUCCESS, "SysGuardUnsealKey must succeed");
+        TEST_ASSERT(outLen == secret.size(), "Unsealed length must match original");
+        outSecret.resize(outLen);
+        TEST_ASSERT(outSecret == secret, "Unsealed plaintext must match original secret");
+
+        // Tamper with PCR 7 (Secure Boot policy altered)
+        std::vector<uint8_t> tamperDigest(32, 0x99);
+        mgr.extendPcr(7, tamperDigest, EV_ACTION, "Malicious OptionROM/Tampered Policy");
+
+        // Attempt unseal: MUST FAIL with STATUS_IMAGE_INTEGRITY_FAIL
+        st = SysGuardUnsealKey("BitLockerVMK_Test", outSecret.data(), &outLen);
+        TEST_ASSERT(st == STATUS_IMAGE_INTEGRITY_FAIL, "Unseal must fail with STATUS_IMAGE_INTEGRITY_FAIL when PCR state is altered");
+        TEST_ASSERT(mgr.getTotalTamperDetections() >= 1, "Tamper detections counter must increment on failed unseal");
+    }
+
+    // 6. Win32 TPM Base Services (TBS) C ABI (tbs.dll)
+    {
+        TBS_CONTEXT_PARAMS params{ TBS_CONTEXT_VERSION_ONE };
+        TBS_HCONTEXT hCtx = nullptr;
+
+        TBS_RESULT tr = Tbsi_Context_Create(&params, &hCtx);
+        TEST_ASSERT(tr == TBS_SUCCESS && hCtx != nullptr, "Tbsi_Context_Create must return TBS_SUCCESS");
+
+        // Get device info
+        TBS_DEVICE_INFO devInfo{};
+        tr = Tbsi_GetDeviceInfo(sizeof(devInfo), &devInfo);
+        TEST_ASSERT(tr == TBS_SUCCESS, "Tbsi_GetDeviceInfo must succeed");
+        TEST_ASSERT(devInfo.tpmVersion == TPM_VERSION_20, "Device info must report TPM 2.0");
+        TEST_ASSERT(devInfo.tpmInterfaceType == TPM_IFTYPE_1, "Interface type must be CRB (1)");
+
+        // Submit TPM command: TPM_CC_Startup
+        uint8_t startupCmd[10] = {
+            0x80, 0x01,             // tag: TPM_ST_NO_SESSIONS
+            0x00, 0x00, 0x00, 0x0A, // size: 10
+            0x00, 0x00, 0x01, 0x44  // code: TPM_CC_Startup
+        };
+        uint8_t respBuf[64]{};
+        uint32_t respLen = sizeof(respBuf);
+
+        tr = Tbsip_Submit_Command(hCtx, TBS_COMMAND_LOCALITY_ZERO, TBS_COMMAND_PRIORITY_NORMAL,
+                                  startupCmd, sizeof(startupCmd), respBuf, &respLen);
+        TEST_ASSERT(tr == TBS_SUCCESS, "Tbsip_Submit_Command for Startup must return TBS_SUCCESS");
+        TEST_ASSERT(respLen == 10, "Startup response length must be 10");
+        TEST_ASSERT(respBuf[6] == 0 && respBuf[7] == 0 && respBuf[8] == 0 && respBuf[9] == 0,
+                    "Startup response code must be TPM_RC_SUCCESS (0x00000000)");
+
+        // Submit TPM command: TPM_CC_GetRandom
+        uint8_t randomCmd[10] = {
+            0x80, 0x01,
+            0x00, 0x00, 0x00, 0x0A,
+            0x00, 0x00, 0x01, 0x7B  // TPM_CC_GetRandom
+        };
+        respLen = sizeof(respBuf);
+        tr = Tbsip_Submit_Command(hCtx, TBS_COMMAND_LOCALITY_ZERO, TBS_COMMAND_PRIORITY_NORMAL,
+                                  randomCmd, sizeof(randomCmd), respBuf, &respLen);
+        TEST_ASSERT(tr == TBS_SUCCESS, "Tbsip_Submit_Command for GetRandom must return TBS_SUCCESS");
+        TEST_ASSERT(respLen == 26, "GetRandom response length must be 10 + 16 = 26");
+
+        // Get TCG Event Log via TBS API
+        uint32_t logLen = 0;
+        tr = Tbsi_Get_TCG_Log(hCtx, nullptr, &logLen);
+        TEST_ASSERT(tr == TBS_E_BUFFER_TOO_SMALL && logLen > 0, "Tbsi_Get_TCG_Log with null buffer must return TBS_E_BUFFER_TOO_SMALL with required size");
+
+        std::vector<uint8_t> logBuf(logLen);
+        tr = Tbsi_Get_TCG_Log(hCtx, logBuf.data(), &logLen);
+        TEST_ASSERT(tr == TBS_SUCCESS, "Tbsi_Get_TCG_Log with sized buffer must return TBS_SUCCESS");
+
+        // Revoke tickets & Owner auth
+        tr = Tbsi_Revoke_Tickets(hCtx);
+        TEST_ASSERT(tr == TBS_SUCCESS, "Tbsi_Revoke_Tickets must return TBS_SUCCESS");
+
+        uint32_t ownerAuthLen = 0;
+        tr = Tbsi_Get_OwnerAuth(hCtx, 0, nullptr, &ownerAuthLen);
+        TEST_ASSERT(tr == TBS_SUCCESS && ownerAuthLen == 0, "Tbsi_Get_OwnerAuth must succeed with 0 length");
+
+        // Close context
+        tr = Tbsi_Context_Close(hCtx);
+        TEST_ASSERT(tr == TBS_SUCCESS, "Tbsi_Context_Close must return TBS_SUCCESS");
+
+        // Reuse closed context must fail
+        tr = Tbsi_Revoke_Tickets(hCtx);
+        TEST_ASSERT(tr == TBS_E_INVALID_CONTEXT_PARAM, "Closed context must return TBS_E_INVALID_CONTEXT_PARAM");
+    }
+
+    // 7. Kernel Attestation Report
+    {
+        char reportBuf[1024]{};
+        uint32_t reportLen = sizeof(reportBuf);
+        NTSTATUS st = SysGuardGetAttestationReport(reportBuf, &reportLen);
+        TEST_ASSERT(st == STATUS_SUCCESS, "SysGuardGetAttestationReport must succeed");
+        std::string report(reportBuf);
+        TEST_ASSERT(report.find("Hardware Attestation Report") != std::string::npos, "Report must have header");
+        TEST_ASSERT(report.find("DRTM Launch Architecture") != std::string::npos, "Report must detail DRTM architecture");
+        TEST_ASSERT(report.find("SMM Runtime Defense") != std::string::npos, "Report must detail SMM Runtime Defense");
+    }
+
+    // 8. Interactive Shell Integration (sysguard, sentinel sysguard)
+    {
+        shell::CommandShell proc;
+        std::ostringstream oss;
+
+        // 8a. sysguard /?
+        int shellRet = proc.execute("sysguard /?", oss);
+        TEST_ASSERT(shellRet == 0, "sysguard /? must return 0");
+        TEST_ASSERT(oss.str().find("System Guard Secure Launch & Measured Boot") != std::string::npos, "Help must reference System Guard");
+
+        // 8b. sysguard status
+        oss.str("");
+        shellRet = proc.execute("sysguard status", oss);
+        TEST_ASSERT(shellRet == 0, "sysguard status must return 0");
+        TEST_ASSERT(oss.str().find("DRTM Launch Architecture:") != std::string::npos, "sysguard status must show launch architecture");
+        TEST_ASSERT(oss.str().find("TPM 2.0") != std::string::npos, "sysguard status must show TPM 2.0");
+
+        // 8c. sysguard pcr
+        oss.str("");
+        shellRet = proc.execute("sysguard pcr", oss);
+        TEST_ASSERT(shellRet == 0, "sysguard pcr must return 0");
+        TEST_ASSERT(oss.str().find("[0]") != std::string::npos, "sysguard pcr must list PCR 0");
+        TEST_ASSERT(oss.str().find("[17]") != std::string::npos, "sysguard pcr must list PCR 17");
+
+        // 8d. sysguard pcr 7
+        oss.str("");
+        shellRet = proc.execute("sysguard pcr 7", oss);
+        TEST_ASSERT(shellRet == 0, "sysguard pcr 7 must return 0");
+        TEST_ASSERT(oss.str().find("PCR 07:") != std::string::npos, "sysguard pcr 7 must dump PCR 7");
+
+        // 8e. sysguard seal & unseal
+        oss.str("");
+        shellRet = proc.execute("sysguard seal RecoveryPass P@ssword123 7,11", oss);
+        TEST_ASSERT(shellRet == 0, "sysguard seal must return 0");
+        TEST_ASSERT(oss.str().find("Sealed key 'RecoveryPass'") != std::string::npos, "sysguard seal must confirm sealing");
+
+        oss.str("");
+        shellRet = proc.execute("sysguard unseal RecoveryPass", oss);
+        TEST_ASSERT(shellRet == 0, "sysguard unseal must return 0");
+        TEST_ASSERT(oss.str().find("P@ssword123") != std::string::npos, "sysguard unseal must return plaintext password");
+
+        // 8f. sysguard test
+        oss.str("");
+        shellRet = proc.execute("sysguard test", oss);
+        TEST_ASSERT(shellRet == 0, "sysguard test must return 0");
+        TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "sysguard test must report [SUCCESS]");
+
+        // 8g. sentinel sysguard status routing
+        oss.str("");
+        shellRet = proc.execute("sentinel sysguard status", oss);
+        TEST_ASSERT(shellRet == 0, "sentinel sysguard status must return 0");
+        TEST_ASSERT(oss.str().find("System Guard Secure Launch & Measured Boot Posture:") != std::string::npos, "sentinel sysguard must route to sysguard");
+    }
+
+    std::cout << "[TEST] Suite 142: Windows System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite141")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite142")) {
+        RUN_TEST(Test_WindowsSystemGuard_SecureLaunch_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite141") {
         RUN_TEST(Test_WindowsProtectedProcessLight_ELAM_Subsystem);
         return g_FailedTests;
     }
@@ -33603,6 +33901,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsExploitGuard_SentinelGuard_Subsystem);
     RUN_TEST(Test_WindowsCredentialGuard_SentinelCredGuard_Subsystem);
     RUN_TEST(Test_WindowsProtectedProcessLight_ELAM_Subsystem);
+    RUN_TEST(Test_WindowsSystemGuard_SecureLaunch_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

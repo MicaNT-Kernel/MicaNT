@@ -25,7 +25,7 @@ jobs:
           clang++ -O2 test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
           clang++ -std=c++23 -O2 -Iinclude test/test_runner.cpp kernel/dispatcher.cpp kernel/syscalls.cpp -o bin/micant_tests.exe
 
-      - name: Execute Full 141-Suite Test Battery (100% Pass Rate Required)
+      - name: Execute Full 142-Suite Test Battery (100% Pass Rate Required)
         shell: pwsh
         run: |
           .\bin\micant_tests.exe

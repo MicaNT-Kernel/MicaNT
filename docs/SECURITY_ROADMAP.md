@@ -172,15 +172,26 @@ flowchart LR
   5. **Automated Verification**:
      - Unit Test Suite 141 (`Test_WindowsProtectedProcessLight_ELAM_Subsystem`) passing at 100%.
 
-### Phase 7: System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) (`system_guard.hpp` / `tbs.dll` / `measured_boot.sys`) - **ACTIVE (Milestone 142)**
-- **Goal**: Establish hardware-rooted Dynamic Root of Trust for Measurement (DRTM) using Intel TXT / AMD SKINIT, TPM 2.0 Platform Configuration Register (PCR) sealing (PCR 0-14), and TCG log verification.
+### Phase 7: System Guard Secure Launch & Measured Boot (DRTM / TPM 2.0 PCR Attestation) (`sysguard.hpp` / `tbs.dll` / `measured_boot.sys`) - **COMPLETED (Milestone 142)**
+- **Goal**: Establish hardware-rooted Dynamic Root of Trust for Measurement (DRTM) using Intel TXT / AMD SKINIT, TPM 2.0 Platform Configuration Register (PCR) sealing (PCR 0-14, 17, 18), and TCG log verification.
+- **Implemented Components**:
+  1. **Dynamic Root of Trust for Measurement (DRTM)**: Hardware-enforced hypervisor and micro-kernel launch measurements bypassing firmware/UEFI trust boundaries (`SysGuardLaunchType::DrtmIntelTxt`, `SysGuardLaunchType::DrtmAmdSkinit`).
+  2. **TPM 2.0 PCR Sealing & Attestation**: Cryptographic sealing of OS keys against PCR 7 (Secure Boot), PCR 11 (BitLocker), and PCR 12-14 (Kernel & PPL integrity), with tamper detection blocking unauthorized unseals.
+  3. **TCG Event Log Verification**: Clean-room parsing and continuous hash-chain replay validation of TCG 2.0 event logs ensuring firmware, bootloader, kernel, and ELAM driver chain-of-trust continuity.
+  4. **Win32 TBS C ABI Parity**: `Tbsi_Context_Create`, `Tbsi_Context_Close`, `Tbsip_Submit_Command` (TPM 2.0 command parser & response generator), `Tbsi_Get_TCG_Log`, `Tbsi_GetDeviceInfo`, `Tbsi_Revoke_Tickets`, `Tbsi_Get_OwnerAuth` in `tbs.dll`.
+  5. **Kernel Exports**: `SysGuardIsSecureLaunchSupported`, `SysGuardIsSecureLaunchEnabled`, `SysGuardGetPcrValue`, `SysGuardExtendPcr`, `SysGuardSealKey`, `SysGuardUnsealKey`, `SysGuardValidateEventLog`, `SysGuardGetAttestationReport` in `ntoskrnl.exe`.
+  6. **CLI Integration**: `sysguard` / `sentinel sysguard` (`status`, `pcr`, `attest`, `seal`, `unseal`, `test`).
+  7. **Automated Verification**: Unit Test Suite 142 (`Test_WindowsSystemGuard_SecureLaunch_Subsystem`) passing at 100%.
+
+### Phase 8: Virtualization-Based Security (VBS) & Hypervisor-Enforced Code Integrity (HVCI) (`vbs_hvci.hpp` / `vbs.dll` / `securekernel.exe`) - **ACTIVE (Milestone 143)**
+- **Goal**: Implement hypervisor-enforced memory page permission enforcement (SLAT / EPT / NPT) preventing Ring 0 kernel code modification and enforcing W^X (Write XOR Execute) in kernel space.
 - **Core Capabilities**:
-  1. **Dynamic Root of Trust for Measurement (DRTM)**: Hardware-enforced hypervisor and micro-kernel launch measurements bypassing firmware/UEFI trust boundaries.
-  2. **TPM 2.0 PCR Sealing & Attestation**: Cryptographic sealing of OS keys against PCR 7 (Secure Boot), PCR 11 (BitLocker), and PCR 12-14 (Kernel & PPL integrity).
-  3. **TCG Event Log Verification**: Clean-room parsing and replay of TCG 2.0 event logs ensuring firmware, bootloader, kernel, and ELAM driver chain-of-trust continuity.
-  4. **Win32 TBS C ABI Parity**: `Tbsi_Context_Create`, `Tbsi_Context_Close`, `Tbsip_Submit_Command`, `Tbsi_Get_TCG_Log`.
-  5. **CLI Integration**: `sysguard` / `sentinel sysguard` (`status`, `pcr`, `attest`, `test`).
-  6. **Automated Verification**: Unit Test Suite 142 (`Test_WindowsSystemGuard_SecureLaunch_Subsystem`).
+  1. **Hypervisor-Enforced Code Integrity (HVCI / Memory Integrity)**: Second-Level Address Translation (SLAT) page tables marking executable kernel memory non-writable, neutralizing kernel pool injection and rootkit code patching.
+  2. **Virtual Trust Level (VTL) Memory Partitioning**: VTL 0 (standard OS kernel) vs VTL 1 (Secure Kernel) hardware isolation.
+  3. **Secure Kernel Hypercall Interface**: Enclave calls for page permission transitions and code integrity enforcement.
+  4. **Win32 C ABI Parity**: Query and configure VBS and HVCI status via kernel exports and userland APIs in `vbs.dll`.
+  5. **CLI Integration**: `vbs` / `hvci` / `sentinel hvci` (`status`, `enable`, `verify`, `test`).
+  6. **Automated Verification**: Unit Test Suite 143 (`Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem`).
 
 ---
 
