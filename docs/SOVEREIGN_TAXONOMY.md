@@ -39,6 +39,7 @@ These names:
 | **Endpoint Security System** | **Sentinel Security System for MicaNT** | `micant::wsc`<br/>`micant::sentinel` | `wscapi.hpp`<br/>`se.hpp` | Sovereign endpoint security umbrella providing unified telemetry-free protection and health aggregation across SentinelCenter (`wscapi.dll`), Firewall (WFP), Antivirus (AegisDefender), Volume Encryption (FVE), and UAC. |
 | **In-Memory & Script Inspection (AMSI)** | **SentinelScan** | `micant::amsi` | `amsi.hpp` | Clean-room Antimalware Scan Interface (`amsi.dll`), providing in-memory buffer inspection, shellcode/NOP sled detection, script de-obfuscation heuristics, and command prompt interception. |
 | **Antimalware Engine & Client** | **AegisDefender** | `micant::defender` | `mpengine.hpp` | Clean-room Microsoft Malware Protection Engine (`mpengine.dll`) and Client (`mpclient.dll`), providing Shannon entropy PE section heuristics, local offline threat database matching, and AES-256 encrypted quarantine vault isolation. |
+| **Driver Frameworks (KMDF & UMDF)** | **TitanWDF / AegisWDF** | `micant::wdf` | `wdf.hpp` | Clean-room Windows Driver Frameworks (KMDF v1.33 / UMDF 2.0) object models, queue pacing, and user-mode driver host isolation. |
 
 ---
 
@@ -216,6 +217,18 @@ These names:
   - Local threat catalog and signature matching (`PowerDrop`, `LsaDump`, `AmsiTamper`, `WannaCrypt`, `ShellcodeStager`) operating 100% offline with zero cloud telemetry.
   - Encrypted Quarantine Vault (`C:\ProgramData\MicaNT\Quarantine`) using AES-256-CBC, unique IV generation, and SHA-256 cryptographic verification for isolated containment and authenticated restoration.
   - Interactive CLI: `MpCmdRun.exe` parity via `defender` / `mpcmdrun` (`-Scan`, `-ListQuarantine`, `-Restore`, `-PurgeQuarantine`, `-SignatureUpdate`, `-GetFiles`, `status`, `test`).
+
+### 3.23 TitanWDF (Windows Driver Frameworks: KMDF v1.33 & UMDF 2.0 Subsystem)
+- **Role:** Clean-room driver infrastructure supporting both kernel-mode (`Wdf01000.sys`) and user-mode (`WUDFHost.exe` / `wudfrd.sys`) device drivers with unified object lifetimes, PnP/Power state machines, and flexible I/O queue dispatching.
+- **Capabilities:**
+  - Unified WDF object hierarchy (`WDFOBJECT`, `WDFDRIVER`, `WDFDEVICE`, `WDFQUEUE`, `WDFREQUEST`, `WDFMEMORY`, `WDFIOTARGET`) with recursive cascade cleanup and type-safe typed context associations (`WDF_OBJECT_CONTEXT_TYPE_INFO`).
+  - PnP and Power state machines (`WdfDevStatePnpStarted`, `WdfDevStatePowerD0` through `WdfDevStatePowerD3`) with callback routing (`EvtDevicePrepareHardware`, `EvtDeviceD0Entry`, etc.).
+  - Queue dispatching modes:
+    - **Sequential:** Single request serialization with automatic pacing upon request completion.
+    - **Parallel:** Concurrent multi-request dispatch.
+    - **Manual:** Explicit polling via `WdfIoQueueRetrieveNextRequest`.
+  - UMDF 2.0 Host Isolation: User-mode driver crashes are contained inside `WUDFHost.exe` by the Sovereign Reflector (`wudfrd.sys`), preventing OS bugchecks.
+  - Interactive CLI: `wdf` (`wdf status`, `wdf drivers`, `wdf devices`, `wdf queues`, `wdf umdf`, `wdf test`).
 
 ---
 

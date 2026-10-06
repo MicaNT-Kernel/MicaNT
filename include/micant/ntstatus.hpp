@@ -138,6 +138,8 @@ inline constexpr NTSTATUS STATUS_INSUFFICIENT_RESOURCES = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_ACCOUNT_LOCKED_OUT     = static_cast<NTSTATUS>(0xC0000234);
 inline constexpr NTSTATUS STATUS_NO_MEMORY              = static_cast<NTSTATUS>(0xC0000017);
 inline constexpr NTSTATUS STATUS_NOT_FOUND              = static_cast<NTSTATUS>(0xC0000225);
+inline constexpr NTSTATUS STATUS_PENDING                = static_cast<NTSTATUS>(0x00000103);
+inline constexpr NTSTATUS STATUS_NO_MORE_ENTRIES        = static_cast<NTSTATUS>(0x8000001A);
 inline constexpr NTSTATUS STATUS_DATA_ERROR             = static_cast<NTSTATUS>(0xC000003E);
 inline constexpr NTSTATUS STATUS_INVALID_DEVICE_STATE   = static_cast<NTSTATUS>(0xC0000184);
 
@@ -148,6 +150,10 @@ inline constexpr NTSTATUS STATUS_INVALID_DEVICE_STATE   = static_cast<NTSTATUS>(
 // Standard NT macro semantics evaluated constexpr
 [[nodiscard]] constexpr bool NT_SUCCESS(NtStatus status) noexcept {
     return static_cast<int32_t>(status) >= 0;
+}
+
+[[nodiscard]] constexpr bool NT_SUCCESS(int32_t status) noexcept {
+    return status >= 0;
 }
 
 [[nodiscard]] constexpr bool NT_INFORMATION(NtStatus status) noexcept {

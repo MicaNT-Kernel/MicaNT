@@ -1,4 +1,4 @@
-﻿# MicaNT (Project MICA)
+# MicaNT (Project MICA)
 
 > **"The cleanest NT architecture on Earth."**  
 > An open-source, zero-telemetry, modern C++23 NT-compatible operating system kernel and executive, built as a **strict clean-room implementation** using Microsoft's official [`win32metadata`](https://github.com/microsoft/win32metadata) repository for interface reference.
@@ -201,7 +201,7 @@ node tools/codegen/generate_syscalls.js
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 148 Test Suites:
+# Run all 149 Test Suites:
 .\bin\micant_tests.exe
 ```
 
