@@ -248,7 +248,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 120: Windows Hypervisor Platform (WHP) & Viridian     [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 121: Windows Package Manager & Modern App Installer   [PLANNED]        │
+│ Phase 121: Windows Package Manager & Modern App Installer   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 122: Windows Terminal & Pseudoconsole Subsystem (ConPTY)[PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2799,20 +2801,39 @@
 
 ---
 
-### Phase 121: Windows Package Manager & Modern App Installer (winget / appxinstaller / Sovereign App Repository Engine) (Milestone 148) [PLANNED]
+### Phase 121: Windows Package Manager & Modern App Installer (winget / AppInstaller / Sovereign App Repository Engine) (Milestone 148) (100% Completed)
 *Goal: Implement clean-room Windows Package Manager (`winget.exe` / `AppInstaller.dll`) and MSIX/AppX dependency resolution subsystem providing package discovery, manifest validation, version pinning, sovereign local repository caching, and cryptographic verification without external telemetric package brokers.*
-- [ ] **Windows Package Manager Subsystem (`include/micant/winget.hpp`)**:
-  - Package Manifest Engine: YAML/JSON manifest parser supporting Multi-Locale, Dependencies, Installers (`msix`, `exe`, `msi`, `zip`), and Architecture filtering (`x64`, `arm64`).
-  - Dependency Resolution Graph: DAG resolution for app dependencies, shared runtime dependencies, and framework packages.
-  - Sovereign Repository & Cache Manager: Offline repository index catalog, source management (`winget source`), cryptographic SHA256 integrity verification, and package staging.
+- [x] **Windows Package Manager Subsystem (`include/micant/winget.hpp`)**:
+  - Package Manifest Engine: YAML/JSON schema v1.6.0 manifest parser and validator supporting PackageIdentifier, PackageVersion, PackageName, Publisher, License, Moniker, Installers (`msix`, `exe`, `msi`, `zip`), and Dependencies.
+  - Dependency Resolution Graph: Directed acyclic graph resolution for app dependencies with topological ordering (`A -> B -> C`) and circular dependency detection (`WINGET_INST_E_DEPENDENCY_CYCLE`).
+  - Cryptographic SHA-256 Engine: Clean-room NIST FIPS 180-4 digest calculation and tamper detection (`WINGET_INST_E_HASH_MISMATCH`).
+  - Sovereign Repository & Cache Manager: Local offline repository catalog, source management (`winget source [list|add|remove]`), package staging, version pinning, and upgrade life-cycle.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `AppInstaller.dll`: Clean-room C ABI exports (`WinGetCreatePackageManager`, `WinGetFindPackages`, `WinGetInstallPackage`, `WinGetUninstallPackage`, `WinGetGetPackageManifest`, `WinGetVerifyPackageHash`, `WinGetRegisterSource`, `WinGetUnregisterSource`, `WinGetGetInstalledCount`).
+  - `winget.exe`: Command-line executable frontend and entrypoint (`WinGetMain`).
+  - SCM Service: `AppInstallerService` (`AppInstallerService.exe`, display name `Windows App-Installer-Dienst`, PID 1192, `SERVICE_RUNNING`).
+  - DynamicLoader registration and VersionDatabase (`10.0.26100.1`) entries for `AppInstaller.dll` and `winget.exe`.
+- [x] **Interactive Shell CLI**:
+  - `winget status`, `winget search <query>`, `winget show <id>`, `winget install <id>`, `winget uninstall <id>`, `winget list`, `winget upgrade <id>`, `winget source [list|add|remove]`, `winget hash <text>`, `winget pin [list|add|remove]`, `winget test`, and `sentinel winget`.
+- [x] **Unit Test Suite 148 (`Test_WindowsPackageManager_AppInstaller_Subsystem`)**:
+  - 12 comprehensive test stages: Dynamic export resolution, VersionDatabase validation, NIST SHA-256 computation, tamper detection, YAML/JSON manifest parsing, topological dependency DAG resolution, cycle detection, package installation lifecycle, duplicate prevention, package version pinning, uninstallation/rollback, and interactive shell execution.
+  - Milestone 148: **148 / 148 Test Suites Passing (100%)**.
+
+---
+
+### Phase 122: Windows Terminal & Pseudoconsole Subsystem (ConPTY / OpenConsole / wt.exe / Modern Tabbed Multiplexer & VT/ANSI Engine) (Milestone 149) [PLANNED]
+*Goal: Implement clean-room Windows Terminal (`wt.exe`), Pseudoconsole API (`CreatePseudoConsole`, `ResizePseudoConsole`, `ClosePseudoConsole`), and ConPTY headless rendering engine (`conpty.dll` / `OpenConsole.exe`) providing modern VT-100/VT-520 ANSI escape sequence translation, tabbed terminal multiplexing, profile configuration (`settings.json`), and sovereign headless terminal hosting.*
+- [ ] **Windows Pseudoconsole Architecture (`include/micant/conpty.hpp`)**:
+  - ConPTY Engine: Implementation of HPCON pseudoconsole lifecycle (`CreatePseudoConsole`, `ResizePseudoConsole`, `ClosePseudoConsole`), bidirectional pipe IPC coupling, and VT parser/renderer.
+  - ANSI/VT Sequence Engine: Clean-room parser for CSI (Color, Cursor, Erase), OSC (Window title, Hyperlinks), and 24-bit TrueColor sequences.
+  - Modern Terminal Host (`wt.exe` / `OpenConsole.exe`): Tabbed multi-pane multiplexer, profile management (`settings.json`), pane splitting, and keyboard binding dispatcher.
 - [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `AppInstaller.dll`: Package installer COM/Win32 APIs and package manager client exports.
-  - `winget.exe`: Command-line interface frontend and execution broker.
-  - DynamicLoader registration and VersionDatabase (`10.0.26100.1`) entries.
+  - `kernel32.dll` / `conpty.dll`: Export parity for `CreatePseudoConsole`, `ResizePseudoConsole`, `ClosePseudoConsole`, `GetConsoleMode`, `SetConsoleMode` with `ENABLE_VIRTUAL_TERMINAL_PROCESSING`.
+  - DynamicLoader registration and VersionDatabase (`10.0.26100.1`) entries for `conpty.dll`, `OpenConsole.exe`, and `wt.exe`.
 - [ ] **Interactive Shell CLI**:
-  - `winget status`, `winget search <query>`, `winget install <id>`, `winget uninstall <id>`, `winget list`, `winget source`, `winget test`, `sentinel winget`.
-- [ ] **Unit Test Suite 148 (`Test_WindowsPackageManager_AppInstaller_Subsystem`)**:
-  - Verification of manifest parsing, repository catalog search, package resolution, installation simulation, integrity verification, and shell CLI integration.
+  - `wt status`, `wt new-tab`, `wt split-pane`, `wt profiles`, `wt render`, `wt test`, `sentinel wt`.
+- [ ] **Unit Test Suite 149 (`Test_WindowsTerminal_ConPTY_Subsystem`)**:
+  - Verification of pseudoconsole creation/destruction, pipe communication, VT-100 escape sequence translation, terminal layout multiplexing, and shell CLI integration.
 
 
 

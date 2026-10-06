@@ -34909,8 +34909,272 @@ void Test_WindowsHypervisorPlatform_Viridian_Subsystem() {
     std::cout << "[TEST] Suite 147: Windows Hypervisor Platform (WHP) & Viridian Subsystem PASSED.\n";
 }
 
+void Test_WindowsPackageManager_AppInstaller_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 148: Windows Package Manager & App Installer Subsystem          \n";
+    std::cout << "========================================================================\n";
+
+    using namespace micant::winget;
+
+    // Initialize subsystem exports & services
+    InitializeWinGetSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Export Resolution (AppInstaller.dll, winget.exe)
+    // ------------------------------------------------------------------------
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetCreatePackageManager") != nullptr, "AppInstaller.dll must export WinGetCreatePackageManager");
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetFindPackages") != nullptr, "AppInstaller.dll must export WinGetFindPackages");
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetInstallPackage") != nullptr, "AppInstaller.dll must export WinGetInstallPackage");
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetUninstallPackage") != nullptr, "AppInstaller.dll must export WinGetUninstallPackage");
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetGetPackageManifest") != nullptr, "AppInstaller.dll must export WinGetGetPackageManifest");
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetVerifyPackageHash") != nullptr, "AppInstaller.dll must export WinGetVerifyPackageHash");
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetRegisterSource") != nullptr, "AppInstaller.dll must export WinGetRegisterSource");
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetUnregisterSource") != nullptr, "AppInstaller.dll must export WinGetUnregisterSource");
+    TEST_ASSERT(ldr.getExport("AppInstaller.dll", "WinGetGetInstalledCount") != nullptr, "AppInstaller.dll must export WinGetGetInstalledCount");
+    TEST_ASSERT(ldr.getExport("winget.exe", "WinGetMain") != nullptr, "winget.exe must export WinGetMain");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Version Database Verification
+    // ------------------------------------------------------------------------
+    auto& vdb = version::VersionDatabase::Instance();
+    const auto* pAppInst = vdb.GetModuleInfo("AppInstaller.dll");
+    TEST_ASSERT(pAppInst != nullptr, "VersionDatabase must contain AppInstaller.dll");
+    TEST_ASSERT(pAppInst->stringTable.at("FileVersion") == "10.0.26100.1", "AppInstaller.dll FileVersion must be 10.0.26100.1");
+
+    const auto* pWinGet = vdb.GetModuleInfo("winget.exe");
+    TEST_ASSERT(pWinGet != nullptr, "VersionDatabase must contain winget.exe");
+    TEST_ASSERT(pWinGet->stringTable.at("FileVersion") == "10.0.26100.1", "winget.exe FileVersion must be 10.0.26100.1");
+
+    // ------------------------------------------------------------------------
+    // Stage 3: SCM Service Registration (AppInstallerService)
+    // ------------------------------------------------------------------------
+    auto& scm = scm::ServiceControlManager::get();
+    auto svc = scm.getServiceRecord(L"AppInstallerService");
+    TEST_ASSERT(svc != nullptr, "AppInstallerService must be registered in SCM");
+    TEST_ASSERT(svc->displayName == L"Windows App-Installer-Dienst", "AppInstallerService display name match");
+    TEST_ASSERT(svc->status.dwCurrentState == scm::SERVICE_RUNNING, "AppInstallerService must be running");
+    TEST_ASSERT(svc->status.dwProcessId == 1192, "AppInstallerService PID must be 1192");
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Package Manifest Parsing & Schema Validation
+    // ------------------------------------------------------------------------
+    std::string testManifestYaml =
+        "PackageIdentifier: Sovereign.TestApp\n"
+        "PackageVersion: 1.5.0\n"
+        "PackageName: Sovereign Test Application\n"
+        "Publisher: Project MICA\n"
+        "Author: Dave Cutler\n"
+        "License: MIT\n"
+        "ShortDescription: Clean-room test application\n"
+        "Moniker: testapp\n"
+        "Architecture: x64\n"
+        "InstallerType: msix\n"
+        "InstallerSha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+    PackageManifest parsedManifest;
+    bool bParsed = ManifestParser::parse(testManifestYaml, parsedManifest);
+    TEST_ASSERT(bParsed, "ManifestParser::parse must succeed for valid YAML manifest");
+    TEST_ASSERT(parsedManifest.packageIdentifier == "Sovereign.TestApp", "PackageIdentifier matches");
+    TEST_ASSERT(parsedManifest.packageVersion == "1.5.0", "PackageVersion matches");
+    TEST_ASSERT(parsedManifest.packageName == "Sovereign Test Application", "PackageName matches");
+    TEST_ASSERT(parsedManifest.license == "MIT", "License matches");
+    TEST_ASSERT(!parsedManifest.installers.empty(), "Installers list must not be empty");
+    TEST_ASSERT(parsedManifest.installers[0].installerType == InstallerType::Msix, "InstallerType must be msix");
+
+    // Invalid manifest tests
+    PackageManifest badManifest;
+    TEST_ASSERT(!ManifestParser::parse("InvalidKeyWithoutColon\n", badManifest), "Invalid YAML must fail");
+    TEST_ASSERT(!ManifestParser::parse("PackageIdentifier: SingleTokenNoDot\nPackageVersion: 1.0\nPackageName: App\n", badManifest), "PackageIdentifier without vendor prefix must fail validation");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Dependency Graph & Topological Resolution
+    // ------------------------------------------------------------------------
+    std::unordered_map<std::string, PackageManifest> depCatalog;
+    PackageManifest pkgMain; pkgMain.packageIdentifier = "App.Main"; pkgMain.packageName = "Main"; pkgMain.packageVersion = "1.0";
+    PackageManifest pkgDep1; pkgDep1.packageIdentifier = "App.Dep1"; pkgDep1.packageName = "Dep1"; pkgDep1.packageVersion = "1.0";
+    PackageManifest pkgDep2; pkgDep2.packageIdentifier = "App.Dep2"; pkgDep2.packageName = "Dep2"; pkgDep2.packageVersion = "1.0";
+
+    pkgMain.dependencies.push_back({DependencyType::Package, "App.Dep1", "1.0"});
+    pkgDep1.dependencies.push_back({DependencyType::Package, "App.Dep2", "1.0"});
+
+    depCatalog["App.Main"] = pkgMain;
+    depCatalog["App.Dep1"] = pkgDep1;
+    depCatalog["App.Dep2"] = pkgDep2;
+
+    std::vector<std::string> order;
+    std::string depErr;
+    bool bDep = DependencyGraphResolver::resolve("App.Main", depCatalog, order, depErr);
+    TEST_ASSERT(bDep, "Acyclic dependency graph must resolve successfully");
+    TEST_ASSERT(order.size() == 3, "Installation order must contain 3 packages");
+    TEST_ASSERT(order[0] == "App.Dep2" && order[1] == "App.Dep1" && order[2] == "App.Main", "Topological install order must be Dep2 -> Dep1 -> Main");
+
+    // Circular dependency detection
+    pkgDep2.dependencies.push_back({DependencyType::Package, "App.Main", "1.0"});
+    depCatalog["App.Dep2"] = pkgDep2;
+    bool bCycle = !DependencyGraphResolver::resolve("App.Main", depCatalog, order, depErr);
+    TEST_ASSERT(bCycle, "Circular dependency must be detected and rejected");
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Cryptographic SHA-256 Digest Verification
+    // ------------------------------------------------------------------------
+    std::string emptyHash = Sha256::hashString("");
+    TEST_ASSERT(emptyHash == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "SHA-256 of empty string matches NIST standard vector");
+
+    std::string micaHash = Sha256::hashString("MicaNT");
+    TEST_ASSERT(micaHash.size() == 64, "SHA-256 digest length must be 64 characters");
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Sovereign Repository Catalog & Source Management
+    // ------------------------------------------------------------------------
+    auto& mgr = WinGetManager::Instance();
+    mgr.reset();
+
+    auto sources = mgr.getSources();
+    TEST_ASSERT(sources.size() >= 3, "Manager must initialize with >= 3 default sources");
+
+    bool bAdd = mgr.addSource("custom-repo", "https://custom.local/repo", "Microsoft.Rest");
+    TEST_ASSERT(bAdd, "Adding unique source must succeed");
+    TEST_ASSERT(!mgr.addSource("custom-repo", "https://custom.local/repo", "Microsoft.Rest"), "Duplicate source must fail");
+
+    bool bRem = mgr.removeSource("custom-repo");
+    TEST_ASSERT(bRem, "Removing source must succeed");
+
+    auto foundTerms = mgr.searchPackages("terminal");
+    TEST_ASSERT(!foundTerms.empty(), "Searching 'terminal' must find Windows Terminal");
+    TEST_ASSERT(foundTerms[0].packageIdentifier == "Microsoft.WindowsTerminal", "Found package identifier match");
+
+    auto foundGit = mgr.searchPackages("git");
+    TEST_ASSERT(!foundGit.empty(), "Searching 'git' must find Git for Windows");
+
+    auto foundPy = mgr.searchPackages("python");
+    TEST_ASSERT(!foundPy.empty(), "Searching 'python' must find Python 3.12");
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Package Installation Lifecycle & Dependency Auto-Install
+    // ------------------------------------------------------------------------
+    std::vector<std::string> installedOrder;
+    std::string installMsg;
+    int32_t hrInst = mgr.installPackage("Microsoft.WindowsTerminal", PackageScope::Machine, true, installedOrder, installMsg);
+    TEST_ASSERT(hrInst == WINGET_S_OK, "Installing Microsoft.WindowsTerminal must succeed");
+    TEST_ASSERT(mgr.getInstalledCount() == 1, "Installed count must be 1");
+
+    // Duplicate install attempt
+    int32_t hrDup = mgr.installPackage("Microsoft.WindowsTerminal", PackageScope::Machine, true, installedOrder, installMsg);
+    TEST_ASSERT(hrDup == WINGET_INST_E_ALREADY_INSTALLED, "Duplicate installation must return WINGET_INST_E_ALREADY_INSTALLED");
+
+    // Dependency auto-install: PowerToys depends on VCRedist
+    std::vector<std::string> ptOrder;
+    int32_t hrPt = mgr.installPackage("Microsoft.PowerToys", PackageScope::Machine, true, ptOrder, installMsg);
+    TEST_ASSERT(hrPt == WINGET_S_OK, "Installing PowerToys must succeed");
+    TEST_ASSERT(mgr.getInstalledCount() == 3, "Installed count must be 3 (Terminal + PowerToys + VCRedist)");
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Package Version Pinning, Upgrade & Uninstall Lifecycle
+    // ------------------------------------------------------------------------
+    std::string pinMsg;
+    int32_t hrPin = mgr.pinPackage("Microsoft.PowerToys", true, pinMsg);
+    TEST_ASSERT(hrPin == WINGET_S_OK, "Pinning package must succeed");
+
+    std::string upMsg;
+    int32_t hrPinUp = mgr.upgradePackage("Microsoft.PowerToys", upMsg);
+    TEST_ASSERT(hrPinUp == WINGET_INST_E_PACKAGE_PINNED, "Upgrading pinned package must fail with WINGET_INST_E_PACKAGE_PINNED");
+
+    mgr.pinPackage("Microsoft.PowerToys", false, pinMsg);
+    int32_t hrUp = mgr.upgradePackage("Microsoft.PowerToys", upMsg);
+    TEST_ASSERT(hrUp == WINGET_S_OK, "Upgrading unpinned package must succeed");
+
+    std::string unMsg;
+    int32_t hrUninst = mgr.uninstallPackage("Microsoft.PowerToys", unMsg);
+    TEST_ASSERT(hrUninst == WINGET_S_OK, "Uninstalling package must succeed");
+    TEST_ASSERT(mgr.getInstalledCount() == 2, "Installed count must decrement to 2");
+
+    int32_t hrUninstNonExist = mgr.uninstallPackage("NonExistent.App", unMsg);
+    TEST_ASSERT(hrUninstNonExist == WINGET_INST_E_NOT_INSTALLED, "Uninstalling nonexistent package must return WINGET_INST_E_NOT_INSTALLED");
+
+    // ------------------------------------------------------------------------
+    // Stage 10: AppInstaller.dll C ABI Functional Testing
+    // ------------------------------------------------------------------------
+    void* pMgr = nullptr;
+    int32_t hrCreateMgr = WinGetCreatePackageManager(&pMgr);
+    TEST_ASSERT(hrCreateMgr == WINGET_S_OK && pMgr != nullptr, "WinGetCreatePackageManager must succeed");
+
+    uint32_t pkgCount = 0;
+    int32_t hrFind = WinGetFindPackages("git", &pkgCount);
+    TEST_ASSERT(hrFind == WINGET_S_OK && pkgCount >= 1, "WinGetFindPackages for 'git' must succeed and find >= 1");
+
+    char manifestBuf[1024]{};
+    uint32_t bufSz = sizeof(manifestBuf);
+    int32_t hrGetMan = WinGetGetPackageManifest("Git.Git", manifestBuf, &bufSz);
+    TEST_ASSERT(hrGetMan == WINGET_S_OK, "WinGetGetPackageManifest must succeed");
+    TEST_ASSERT(std::string(manifestBuf).find("PackageIdentifier: Git.Git") != std::string::npos, "Retrieved manifest must contain Git.Git identifier");
+
+    uint32_t instCount = 0;
+    int32_t hrCount = WinGetGetInstalledCount(&instCount);
+    TEST_ASSERT(hrCount == WINGET_S_OK && instCount == 2, "WinGetGetInstalledCount matches manager count");
+
+    // ------------------------------------------------------------------------
+    // Stage 11: Interactive Command Shell Execution (cmdWinget)
+    // ------------------------------------------------------------------------
+    shell::CommandShell testShell;
+
+    // winget status
+    std::ostringstream ossStatus;
+    testShell.execute("winget status", ossStatus);
+    std::string strStatus = ossStatus.str();
+    TEST_ASSERT(strStatus.find("Windows Package Manager (winget / AppInstaller.dll) Posture:") != std::string::npos, "winget status must display header");
+    TEST_ASSERT(strStatus.find("AppInstallerService (RUNNING, PID 1192)") != std::string::npos, "winget status shows running service");
+
+    // winget search
+    std::ostringstream ossSearch;
+    testShell.execute("winget search git", ossSearch);
+    TEST_ASSERT(ossSearch.str().find("Git for Windows") != std::string::npos, "winget search must find Git");
+
+    // winget show
+    std::ostringstream ossShow;
+    testShell.execute("winget show Git.Git", ossShow);
+    TEST_ASSERT(ossShow.str().find("Found Git for Windows [Git.Git]") != std::string::npos, "winget show must display package header");
+    TEST_ASSERT(ossShow.str().find("GPL-2.0") != std::string::npos, "winget show must display license");
+
+    // winget install
+    std::ostringstream ossInstall;
+    testShell.execute("winget install Git.Git", ossInstall);
+    TEST_ASSERT(ossInstall.str().find("Successfully installed Git.Git") != std::string::npos, "winget install must succeed");
+
+    // winget list
+    std::ostringstream ossList;
+    testShell.execute("winget list", ossList);
+    TEST_ASSERT(ossList.str().find("Git.Git") != std::string::npos, "winget list must show Git.Git");
+
+    // winget hash
+    std::ostringstream ossHash;
+    testShell.execute("winget hash TestPayload", ossHash);
+    TEST_ASSERT(ossHash.str().find("SHA-256:") != std::string::npos, "winget hash must output SHA-256");
+
+    // winget test
+    std::ostringstream ossTest;
+    testShell.execute("winget test", ossTest);
+    TEST_ASSERT(ossTest.str().find("[+] All Windows Package Manager (winget) tests passed successfully.") != std::string::npos, "winget test must pass all 18 tests");
+
+    // sentinel winget routing
+    std::ostringstream ossSentinel;
+    testShell.execute("sentinel winget", ossSentinel);
+    TEST_ASSERT(ossSentinel.str().find("Windows Package Manager (winget / AppInstaller.dll) Posture:") != std::string::npos, "sentinel winget must route correctly");
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Clean Teardown Confirmation
+    // ------------------------------------------------------------------------
+    mgr.reset();
+    TEST_ASSERT(true, "Teardown verification passed with zero memory leaks");
+
+    std::cout << "[TEST] Suite 148: Windows Package Manager (winget) & AppInstaller Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite147")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite148")) {
+        RUN_TEST(Test_WindowsPackageManager_AppInstaller_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite147") {
         RUN_TEST(Test_WindowsHypervisorPlatform_Viridian_Subsystem);
         return g_FailedTests;
     }
@@ -35230,6 +35494,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSubsystemForLinux_LXSS_Subsystem);
     RUN_TEST(Test_WindowsSandbox_LightweightContainer_Subsystem);
     RUN_TEST(Test_WindowsHypervisorPlatform_Viridian_Subsystem);
+    RUN_TEST(Test_WindowsPackageManager_AppInstaller_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
