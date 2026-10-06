@@ -85,3 +85,9 @@ Ensure the verdict reports `PASSED: Clean-Room Status: Clean` (or `Microsoft OSP
 - Fill out the provided **[Pull Request Template](.github/pull_request_template.md)**.
 - Confirm the Clean-Room Non-Contamination checklist.
 - The automated Clean-Room Sentinel GitHub Action will audit the PR diff and post the provenance report.
+
+---
+
+## 5. Community Code of Conduct
+
+All contributors and community participants in Project MICA are expected to adhere to the standards outlined in our **[Code of Conduct](CODE_OF_CONDUCT.md)**. We are committed to maintaining a welcoming, inclusive, and harassment-free environment for everyone, grounded in respectful technical collaboration and clean-room provenance integrity.

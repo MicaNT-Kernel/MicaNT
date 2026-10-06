@@ -259,12 +259,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (142 Suites, 100% Passing)
+### Build & Run Unit Test Suite (145 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 142 Test Suites:
+# Run all 145 Test Suites:
 .\bin\micant_tests.exe
 ```
 
@@ -294,4 +294,14 @@ If you appreciate the clean-room preservation of the MICA architecture, the sub-
 [![Buy Me a Coffee at Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20ssfdre38-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/ssfdre38)
 
 - **Ko-fi:** [https://ko-fi.com/ssfdre38](https://ko-fi.com/ssfdre38)
+
+---
+
+## 8. Community & Contributing
+
+We welcome community participation, technical discussions, and contributions!
+- **[CONTRIBUTING.md](CONTRIBUTING.md)**: Clean-room engineering rules, developer workflow, and Microsoft OSPO authorized contribution channel.
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**: Contributor Covenant v2.1 standards for a welcoming, respectful, and harassment-free community.
+- **[Security Policy](.github/SECURITY.md)**: Responsible disclosure and vulnerability reporting process.
+
 
