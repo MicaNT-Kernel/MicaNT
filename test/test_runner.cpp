@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <cmath>
+#include <filesystem>
 #include "micant/ntstatus.hpp"
 #include "micant/ntdef.hpp"
 #include "micant/ob.hpp"
@@ -3123,7 +3124,7 @@ void Test_MsvcrtBridge_And_CommandShell() {
     std::cout << "\n[Shell Test] Executing unmodified CRT binary 'bin/unmodified_crt_sample.exe' via CommandShell...\n";
     if (!std::filesystem::exists("bin/unmodified_crt_sample.exe") && std::filesystem::exists("test/unmodified_crt_sample.cpp")) {
         std::filesystem::create_directories("bin");
-        (void)std::system("clang++ -O2 -nostdlib \"-Wl,-e,main\" -lmsvcrt -lkernel32 test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe");
+        (void)std::system("clang++ -O2 test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe");
     }
     int execRc = cmdShell.execute("exec bin/unmodified_crt_sample.exe", oss);
     std::string execOutput = oss.str();
