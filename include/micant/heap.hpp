@@ -322,6 +322,9 @@ inline void* RtlCreateHeap(
     void* /*lock*/ = nullptr,
     void* /*parameters*/ = nullptr
 ) {
+    if (reserveSize == 0 || (flags & HEAP_GROWABLE)) {
+        flags |= HEAP_GROWABLE;
+    }
     size_t initialSize = commitSize ? commitSize : (reserveSize ? reserveSize : 64 * 1024);
     auto heap = std::make_unique<UserHeap>(flags, initialSize);
     return heap.release();

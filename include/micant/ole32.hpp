@@ -556,17 +556,28 @@ inline void CoUninitialize() noexcept {
 }
 
 inline void* CoTaskMemAlloc(size_t cb) noexcept {
-    return heap::RtlAllocateHeap(win32::GetProcessHeap(), 0, cb);
+    void* p = heap::RtlAllocateHeap(win32::GetProcessHeap(), 0, cb);
+    if (!p && cb > 0) {
+        p = std::malloc(cb);
+    }
+    return p;
 }
 
 inline void CoTaskMemFree(void* pv) noexcept {
     if (pv) {
-        heap::RtlFreeHeap(win32::GetProcessHeap(), 0, pv);
+        if (!heap::RtlFreeHeap(win32::GetProcessHeap(), 0, pv)) {
+            std::free(pv);
+        }
     }
 }
 
 inline void* CoTaskMemRealloc(void* pv, size_t cb) noexcept {
-    return heap::RtlReAllocateHeap(win32::GetProcessHeap(), 0, pv, cb);
+    if (!pv) return CoTaskMemAlloc(cb);
+    void* p = heap::RtlReAllocateHeap(win32::GetProcessHeap(), 0, pv, cb);
+    if (!p && cb > 0) {
+        p = std::realloc(pv, cb);
+    }
+    return p;
 }
 
 inline int StringFromGUID2(REFGUID rguid, wchar_t* lpsz, int cchMax) noexcept {

@@ -217,7 +217,7 @@ inline HANDLE GetProcessHeap() noexcept {
 
     static HANDLE s_defaultProcessHeap = nullptr;
     if (!s_defaultProcessHeap) {
-        s_defaultProcessHeap = ntdll::RtlCreateHeap(0, nullptr, 0x100000, 0x10000, nullptr, nullptr);
+        s_defaultProcessHeap = ntdll::RtlCreateHeap(heap::HEAP_GROWABLE, nullptr, 0, 0x100000, nullptr, nullptr);
     }
     if (peb && peb->processHeap == 0) {
         peb->processHeap = reinterpret_cast<uint64_t>(s_defaultProcessHeap);
