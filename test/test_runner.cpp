@@ -56,6 +56,7 @@
 #include "micant/sysguard.hpp"
 #include "micant/vbs_hvci.hpp"
 #include "micant/dma_guard.hpp"
+#include "micant/wsl_lxss.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -34153,8 +34154,262 @@ void Test_WindowsKernelDMA_Protection_IOMMU_Subsystem() {
     std::cout << "[TEST] Suite 144: Windows Kernel DMA Protection & IOMMU Remapping Subsystem PASSED.\n";
 }
 
+void Test_WindowsSubsystemForLinux_LXSS_Subsystem() {
+    using namespace micant::wsl_lxss;
+
+    // ------------------------------------------------------------------------
+    // 1. Subsystem Initialization
+    // ------------------------------------------------------------------------
+    InitializeWslSubsystemExports();
+    NTSTATUS initSt = LxInitialize();
+    TEST_ASSERT(initSt == STATUS_SUCCESS, "LxInitialize must succeed");
+
+    auto& mgr = PicoKernelManager::Instance();
+    TEST_ASSERT(mgr.isInitialized(), "PicoKernelManager must be initialized");
+
+    // ------------------------------------------------------------------------
+    // 2. DynamicLoader Exports Parity (wslapi.dll & lxcore.sys)
+    // ------------------------------------------------------------------------
+    auto& loader = ldr::DynamicLoader::get();
+
+    // wslapi.dll exports
+    TEST_ASSERT(loader.getExport("wslapi.dll", "WslIsDistributionRegistered") != nullptr, "wslapi.dll must export WslIsDistributionRegistered");
+    TEST_ASSERT(loader.getExport("wslapi.dll", "WslRegisterDistribution") != nullptr, "wslapi.dll must export WslRegisterDistribution");
+    TEST_ASSERT(loader.getExport("wslapi.dll", "WslUnregisterDistribution") != nullptr, "wslapi.dll must export WslUnregisterDistribution");
+    TEST_ASSERT(loader.getExport("wslapi.dll", "WslConfigureDistribution") != nullptr, "wslapi.dll must export WslConfigureDistribution");
+    TEST_ASSERT(loader.getExport("wslapi.dll", "WslGetDistributionConfiguration") != nullptr, "wslapi.dll must export WslGetDistributionConfiguration");
+    TEST_ASSERT(loader.getExport("wslapi.dll", "WslLaunchInteractive") != nullptr, "wslapi.dll must export WslLaunchInteractive");
+
+    // lxcore.sys exports
+    TEST_ASSERT(loader.getExport("lxcore.sys", "LxInitialize") != nullptr, "lxcore.sys must export LxInitialize");
+    TEST_ASSERT(loader.getExport("lxcore.sys", "LxCreatePicoProcess") != nullptr, "lxcore.sys must export LxCreatePicoProcess");
+    TEST_ASSERT(loader.getExport("lxcore.sys", "LxCreatePicoThread") != nullptr, "lxcore.sys must export LxCreatePicoThread");
+    TEST_ASSERT(loader.getExport("lxcore.sys", "LxDispatchSyscall") != nullptr, "lxcore.sys must export LxDispatchSyscall");
+    TEST_ASSERT(loader.getExport("lxcore.sys", "LxGetPicoProcessCount") != nullptr, "lxcore.sys must export LxGetPicoProcessCount");
+
+    // ------------------------------------------------------------------------
+    // 3. VersionDatabase Parity
+    // ------------------------------------------------------------------------
+    auto& vdb = version::VersionDatabase::Instance();
+    const auto* modWslApi = vdb.GetModuleInfo("wslapi.dll");
+    TEST_ASSERT(modWslApi != nullptr, "VersionDatabase must contain wslapi.dll");
+    TEST_ASSERT(modWslApi->stringTable.at("FileVersion") == "10.0.26100.1", "wslapi.dll FileVersion must be 10.0.26100.1");
+    TEST_ASSERT(modWslApi->stringTable.at("FileDescription") == "Windows Subsystem for Linux Launcher API", "wslapi.dll FileDescription mismatch");
+
+    const auto* modLxCore = vdb.GetModuleInfo("lxcore.sys");
+    TEST_ASSERT(modLxCore != nullptr, "VersionDatabase must contain lxcore.sys");
+    TEST_ASSERT(modLxCore->stringTable.at("FileVersion") == "10.0.26100.1", "lxcore.sys FileVersion must be 10.0.26100.1");
+    TEST_ASSERT(modLxCore->stringTable.at("FileDescription") == "MicaNT Linux Subsystem Pico Process Core Driver", "lxcore.sys FileDescription mismatch");
+
+    // ------------------------------------------------------------------------
+    // 4. Linux ELF64 Binary Header Parser & Validation
+    // ------------------------------------------------------------------------
+    Elf64_Ehdr ehdrValid{};
+    ehdrValid.e_ident[0] = ELF_MAG0;
+    ehdrValid.e_ident[1] = ELF_MAG1;
+    ehdrValid.e_ident[2] = ELF_MAG2;
+    ehdrValid.e_ident[3] = ELF_MAG3;
+    ehdrValid.e_ident[4] = ELFCLASS64;
+    ehdrValid.e_ident[5] = ELFDATA2LSB;
+    ehdrValid.e_machine = EM_X86_64;
+    ehdrValid.e_entry = 0x00401122ULL;
+
+    uint64_t parsedEntry = 0;
+    std::span<const uint8_t> validElfSpan(reinterpret_cast<const uint8_t*>(&ehdrValid), sizeof(ehdrValid));
+    TEST_ASSERT(mgr.validateElfHeader(validElfSpan, &parsedEntry), "Valid ELF64 header must be accepted");
+    TEST_ASSERT(parsedEntry == 0x00401122ULL, "ELF entry point must match 0x00401122");
+
+    // Corrupted magic
+    Elf64_Ehdr ehdrCorrupt = ehdrValid;
+    ehdrCorrupt.e_ident[0] = 0x00;
+    TEST_ASSERT(!mgr.validateElfHeader(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&ehdrCorrupt), sizeof(ehdrCorrupt)), &parsedEntry), "Invalid ELF magic must be rejected");
+
+    // 32-bit ELF (ELFCLASS32 = 1)
+    Elf64_Ehdr ehdr32 = ehdrValid;
+    ehdr32.e_ident[4] = 1;
+    TEST_ASSERT(!mgr.validateElfHeader(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&ehdr32), sizeof(ehdr32)), &parsedEntry), "32-bit ELF must be rejected on 64-bit Pico kernel");
+
+    // Wrong architecture (e.g. EM_ARM = 40)
+    Elf64_Ehdr ehdrArm = ehdrValid;
+    ehdrArm.e_machine = 40;
+    TEST_ASSERT(!mgr.validateElfHeader(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&ehdrArm), sizeof(ehdrArm)), &parsedEntry), "Non-x86_64 ELF must be rejected");
+
+    // Buffer smaller than header
+    TEST_ASSERT(!mgr.validateElfHeader(validElfSpan.subspan(0, 10), &parsedEntry), "Truncated ELF header must be rejected");
+
+    // ------------------------------------------------------------------------
+    // 5. Pico Process & Thread Container Lifecycle
+    // ------------------------------------------------------------------------
+    size_t countBefore = LxGetPicoProcessCount();
+    uint32_t picoPid = 0;
+    NTSTATUS createSt = LxCreatePicoProcess("/bin/test_service", "/var/run", &picoPid);
+    TEST_ASSERT(createSt == STATUS_SUCCESS, "LxCreatePicoProcess must return STATUS_SUCCESS");
+    TEST_ASSERT(picoPid >= 100, "Allocated Pico PID must be >= 100");
+    TEST_ASSERT(LxGetPicoProcessCount() == countBefore + 1, "Pico process count must increment");
+
+    uint32_t picoTid = 0;
+    NTSTATUS threadSt = LxCreatePicoThread(picoPid, 0x00400000ULL, &picoTid);
+    TEST_ASSERT(threadSt == STATUS_SUCCESS, "LxCreatePicoThread must return STATUS_SUCCESS");
+    TEST_ASSERT(picoTid == 1, "Initial Pico thread ID must be 1");
+
+    // ------------------------------------------------------------------------
+    // 6. Linux Syscall Translation Dispatcher (x86_64 ABI)
+    // ------------------------------------------------------------------------
+    // SYS_uname
+    LinuxUtsName uts{};
+    int64_t scUname = LxDispatchSyscall(picoPid, LINUX_SYS_UNAME, reinterpret_cast<uint64_t>(&uts), 0, 0, 0, 0, 0);
+    TEST_ASSERT(scUname == 0, "SYS_uname must return 0");
+    TEST_ASSERT(std::string(uts.sysname) == "Linux", "uts.sysname must be Linux");
+    TEST_ASSERT(std::string(uts.nodename) == "MicaNT", "uts.nodename must be MicaNT");
+    TEST_ASSERT(std::string(uts.release) == "6.6.0-microsoft-standard-WSL1", "uts.release must be 6.6.0-microsoft-standard-WSL1");
+    TEST_ASSERT(std::string(uts.machine) == "x86_64", "uts.machine must be x86_64");
+
+    // SYS_getpid
+    int64_t scPid = LxDispatchSyscall(picoPid, LINUX_SYS_GETPID, 0, 0, 0, 0, 0, 0);
+    TEST_ASSERT(scPid == static_cast<int64_t>(picoPid), "SYS_getpid must return container PID");
+
+    // SYS_getuid / gid
+    TEST_ASSERT(LxDispatchSyscall(picoPid, LINUX_SYS_GETUID, 0, 0, 0, 0, 0, 0) == 1000, "SYS_getuid must return 1000");
+    TEST_ASSERT(LxDispatchSyscall(picoPid, LINUX_SYS_GETGID, 0, 0, 0, 0, 0, 0) == 1000, "SYS_getgid must return 1000");
+
+    // SYS_brk (heap management)
+    uint64_t curBrk = static_cast<uint64_t>(LxDispatchSyscall(picoPid, LINUX_SYS_BRK, 0, 0, 0, 0, 0, 0));
+    TEST_ASSERT(curBrk == 0x00600000ULL, "Initial heap break must be 0x00600000");
+    uint64_t expBrk = static_cast<uint64_t>(LxDispatchSyscall(picoPid, LINUX_SYS_BRK, curBrk + 0x4000, 0, 0, 0, 0, 0));
+    TEST_ASSERT(expBrk == 0x00604000ULL, "Expanded heap break must be 0x00604000");
+
+    // SYS_arch_prctl (TLS FS_BASE)
+    uint64_t targetFs = 0x00007ffff7fbc700ULL;
+    int64_t scSetFs = LxDispatchSyscall(picoPid, LINUX_SYS_ARCH_PRCTL, ARCH_SET_FS, targetFs, 0, 0, 0, 0);
+    TEST_ASSERT(scSetFs == 0, "ARCH_SET_FS must return 0");
+    uint64_t queriedFs = 0;
+    int64_t scGetFs = LxDispatchSyscall(picoPid, LINUX_SYS_ARCH_PRCTL, ARCH_GET_FS, reinterpret_cast<uint64_t>(&queriedFs), 0, 0, 0, 0);
+    TEST_ASSERT(scGetFs == 0, "ARCH_GET_FS must return 0");
+    TEST_ASSERT(queriedFs == targetFs, "Queried FS_BASE must match target address");
+
+    // SYS_write (stdout)
+    const char msg[] = "PicoSyscallOk\n";
+    int64_t scWrite = LxDispatchSyscall(picoPid, LINUX_SYS_WRITE, 1, reinterpret_cast<uint64_t>(msg), sizeof(msg) - 1, 0, 0, 0);
+    TEST_ASSERT(scWrite == static_cast<int64_t>(sizeof(msg) - 1), "SYS_write to stdout must return byte count");
+
+    // SYS_write invalid fd
+    int64_t scWriteBad = LxDispatchSyscall(picoPid, LINUX_SYS_WRITE, 88, reinterpret_cast<uint64_t>(msg), sizeof(msg) - 1, 0, 0, 0);
+    TEST_ASSERT(scWriteBad == LINUX_EBADF, "SYS_write to invalid fd must return LINUX_EBADF");
+
+    // SYS_open / SYS_close
+    const char osRelPath[] = "/etc/os-release";
+    int64_t openFd = LxDispatchSyscall(picoPid, LINUX_SYS_OPEN, reinterpret_cast<uint64_t>(osRelPath), 0, 0, 0, 0, 0);
+    TEST_ASSERT(openFd >= 3, "SYS_open on /etc/os-release must return valid fd >= 3");
+
+    int64_t closeFd = LxDispatchSyscall(picoPid, LINUX_SYS_CLOSE, static_cast<uint64_t>(openFd), 0, 0, 0, 0, 0);
+    TEST_ASSERT(closeFd == 0, "SYS_close must return 0");
+
+    // SYS_open non-existent
+    const char badPath[] = "/nonexistent/null";
+    int64_t openBad = LxDispatchSyscall(picoPid, LINUX_SYS_OPEN, reinterpret_cast<uint64_t>(badPath), 0, 0, 0, 0, 0);
+    TEST_ASSERT(openBad == LINUX_ENOENT, "SYS_open on missing path must return LINUX_ENOENT");
+
+    // SYS_exit
+    int64_t scExit = LxDispatchSyscall(picoPid, LINUX_SYS_EXIT, 0, 0, 0, 0, 0, 0);
+    TEST_ASSERT(scExit == 0, "SYS_exit must succeed");
+
+    // ------------------------------------------------------------------------
+    // 7. Distribution Management Lifecycle & WslApi C ABI
+    // ------------------------------------------------------------------------
+    TEST_ASSERT(WslIsDistributionRegistered(L"Ubuntu-24.04") == TRUE, "Ubuntu-24.04 must be registered by default");
+    TEST_ASSERT(WslIsDistributionRegistered(L"Debian") == TRUE, "Debian must be registered by default");
+    TEST_ASSERT(WslIsDistributionRegistered(L"Alpine") == TRUE, "Alpine must be registered by default");
+    TEST_ASSERT(WslIsDistributionRegistered(L"NonExistentOS") == FALSE, "NonExistentOS must not be registered");
+
+    uint32_t defUid = 0, distFlags = 0;
+    NTSTATUS cfgSt = WslGetDistributionConfiguration(L"Ubuntu-24.04", &defUid, &distFlags);
+    TEST_ASSERT(cfgSt == STATUS_SUCCESS, "WslGetDistributionConfiguration must succeed");
+    TEST_ASSERT(defUid == 1000, "Default UID must be 1000");
+    TEST_ASSERT((distFlags & 0x7) == 0x7, "WSL distribution flags must be 0x7");
+
+    // Register custom distro
+    NTSTATUS regSt = WslRegisterDistribution(L"SovereignLinux", L"sovereign.tar.gz");
+    TEST_ASSERT(regSt == STATUS_SUCCESS, "WslRegisterDistribution must succeed");
+    TEST_ASSERT(WslIsDistributionRegistered(L"SovereignLinux") == TRUE, "SovereignLinux must be registered");
+
+    // Colliding registration
+    NTSTATUS regCol = WslRegisterDistribution(L"SovereignLinux", L"duplicate.tar.gz");
+    TEST_ASSERT(regCol == STATUS_OBJECT_NAME_COLLISION, "Duplicate distribution registration must return STATUS_OBJECT_NAME_COLLISION");
+
+    // Unregister custom distro
+    NTSTATUS unregSt = WslUnregisterDistribution(L"SovereignLinux");
+    TEST_ASSERT(unregSt == STATUS_SUCCESS, "WslUnregisterDistribution must succeed");
+    TEST_ASSERT(WslIsDistributionRegistered(L"SovereignLinux") == FALSE, "SovereignLinux must no longer be registered");
+
+    // Unregister non-existent
+    TEST_ASSERT(WslUnregisterDistribution(L"SovereignLinux") == STATUS_NOT_FOUND, "Unregistering non-existent distro must return STATUS_NOT_FOUND");
+
+    // ------------------------------------------------------------------------
+    // 8. Sovereign VFS Bridge & Command Execution Emulation
+    // ------------------------------------------------------------------------
+    std::string outUname = mgr.executeLinuxCommand("uname -a");
+    TEST_ASSERT(outUname.find("Linux MicaNT 6.6.0-microsoft-standard-WSL1") != std::string::npos, "uname -a must contain MicaNT WSL1 kernel info");
+    TEST_ASSERT(outUname.find("x86_64") != std::string::npos, "uname -a must contain x86_64");
+
+    std::string outRel = mgr.executeLinuxCommand("cat /etc/os-release");
+    TEST_ASSERT(outRel.find("Ubuntu 24.04 LTS") != std::string::npos, "cat /etc/os-release must contain Ubuntu 24.04 LTS");
+
+    std::string outProc = mgr.executeLinuxCommand("cat /proc/version");
+    TEST_ASSERT(outProc.find("MicaNT Sovereign Pico Kernel") != std::string::npos, "cat /proc/version must contain Sovereign Pico Kernel");
+
+    std::string outId = mgr.executeLinuxCommand("id");
+    TEST_ASSERT(outId.find("uid=1000(user)") != std::string::npos, "id must contain uid=1000(user)");
+
+    std::string outMount = mgr.executeLinuxCommand("ls /mnt/c");
+    TEST_ASSERT(outMount.find("Program Files") != std::string::npos, "ls /mnt/c must display DrvFs root directories");
+
+    // ------------------------------------------------------------------------
+    // 9. Interactive Shell Integration & Routing
+    // ------------------------------------------------------------------------
+    shell::CommandShell testShell;
+
+    // wsl status
+    std::ostringstream ossStatus;
+    testShell.execute("wsl status", ossStatus);
+    std::string strStatus = ossStatus.str();
+    TEST_ASSERT(strStatus.find("WSL 1 Sovereign Pico Process Provider (lxcore.sys)") != std::string::npos, "wsl status must display architecture");
+    TEST_ASSERT(strStatus.find("Linux 6.6.0 ABI") != std::string::npos, "wsl status must display Linux ABI version");
+
+    // wsl -l
+    std::ostringstream ossList;
+    testShell.execute("wsl -l", ossList);
+    std::string strList = ossList.str();
+    TEST_ASSERT(strList.find("Ubuntu-24.04 (Default)") != std::string::npos, "wsl -l must list Ubuntu-24.04 as default");
+
+    // wsl mount
+    std::ostringstream ossMount;
+    testShell.execute("wsl mount", ossMount);
+    TEST_ASSERT(ossMount.str().find("drvfs on /mnt/c type drvfs") != std::string::npos, "wsl mount must display DrvFs mount");
+
+    // wsl test
+    std::ostringstream ossTest;
+    testShell.execute("wsl test", ossTest);
+    TEST_ASSERT(ossTest.str().find("[+] All WSL / LXSS Pico Kernel tests passed successfully.") != std::string::npos, "wsl test must execute self-test suite");
+
+    // sentinel wsl routing
+    std::ostringstream ossSentinel;
+    testShell.execute("sentinel wsl", ossSentinel);
+    TEST_ASSERT(ossSentinel.str().find("Windows Subsystem for Linux (WSL / LXSS) Subsystem Posture:") != std::string::npos, "sentinel wsl must route to wsl status");
+
+    // command execution via shell
+    std::ostringstream ossRun;
+    testShell.execute("wsl uname -a", ossRun);
+    TEST_ASSERT(ossRun.str().find("Linux MicaNT") != std::string::npos, "wsl uname -a via shell must return Linux kernel banner");
+
+    std::cout << "[TEST] Suite 145: Windows Subsystem for Linux (WSL / LXSS) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite144")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite145")) {
+        RUN_TEST(Test_WindowsSubsystemForLinux_LXSS_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite144") {
         RUN_TEST(Test_WindowsKernelDMA_Protection_IOMMU_Subsystem);
         return g_FailedTests;
     }
@@ -34459,6 +34714,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSystemGuard_SecureLaunch_Subsystem);
     RUN_TEST(Test_WindowsVBS_HVCI_MemoryIntegrity_Subsystem);
     RUN_TEST(Test_WindowsKernelDMA_Protection_IOMMU_Subsystem);
+    RUN_TEST(Test_WindowsSubsystemForLinux_LXSS_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

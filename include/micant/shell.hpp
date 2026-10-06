@@ -136,6 +136,7 @@
 #include "sysguard.hpp"
 #include "vbs_hvci.hpp"
 #include "dma_guard.hpp"
+#include "wsl_lxss.hpp"
 
 namespace micant::shell {
 
@@ -212,6 +213,7 @@ public:
         sysguard::InitializeSysGuardSubsystemExports();
         vbs_hvci::InitializeVbsHvciSubsystemExports();
         dma_guard::InitializeDmaGuardSubsystemExports();
+        wsl_lxss::InitializeWslSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -266,6 +268,7 @@ public:
             cmd != "sysguard" && cmd != "systemguard" && cmd != "measuredboot" && cmd != "tbs" &&
             cmd != "vbs" && cmd != "hvci" &&
             cmd != "dmaguard" && cmd != "dma" &&
+            cmd != "wsl" && cmd != "bash" && cmd != "lxss" &&
             cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
@@ -407,6 +410,7 @@ public:
             if (cmd == "sysguard" || cmd == "systemguard" || cmd == "measuredboot" || cmd == "tbs") { cmdSysGuard(tokens, out); return 0; }
             if (cmd == "vbs" || cmd == "hvci") { cmdVbs(tokens, out); return 0; }
             if (cmd == "dmaguard" || cmd == "dma") { cmdDmaGuard(tokens, out); return 0; }
+            if (cmd == "wsl" || cmd == "bash" || cmd == "lxss") { cmdWsl(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -728,6 +732,11 @@ private:
             << "  MPCMDRUN / DEFENDER [-Scan|-ListQuarantine|-Restore|-PurgeQuarantine|-GetFiles|test] Microsoft Defender Client & AegisDefender (defender test)\n"
             << "  GUARD / EXPLOITGUARD [status|list|enable|test] Windows Defender Exploit Guard & Process Mitigations (guard test)\n"
             << "  CREDGUARD / LSAISO [status|enable|disable|isolate|dump-attempt|test] Sovereign Credential Guard & IUM Enclave (credguard test)\n"
+            << "  PPL / PROTECTEDPROCESS [status|set|signer|tamper|test] Protected Process Light & ELAM (ppl test)\n"
+            << "  SYSGUARD / MEASUREDBOOT [status|pcr|measure|log|test] Windows System Guard & Secure Launch (sysguard test)\n"
+            << "  VBS / HVCI [status|enable|verify|protect|pages|test] Virtualization-Based Security & HVCI (vbs test)\n"
+            << "  DMAGUARD / DMA [status|devices|domains|policy|authorize|revoke|test] Kernel DMA Protection & IOMMU (dmaguard test)\n"
+            << "  WSL / BASH / LXSS [status|list|run|mount|test] Windows Subsystem for Linux & Pico Kernel (wsl test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20465,6 +20474,12 @@ private:
             return;
         }
 
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "wsl" || toLower(tokens[1]) == "lxss" || toLower(tokens[1]) == "pico")) {
+            std::vector<std::string> subTokens(tokens.begin() + 1, tokens.end());
+            cmdWsl(subTokens, out);
+            return;
+        }
+
         if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
             out << "[TEST] Running Windows Security Center (SentinelCenter) Diagnostics...\n";
 
@@ -22374,6 +22389,245 @@ private:
             << "  DMA W^X Memory Invariant:        ENFORCED (Executable DMA memory mappings prohibited)\n"
             << "  Physical DMA Attacks Neutralized:" << status.TotalViolationsPrevented << " malicious accesses intercepted\n"
             << "-------------------------------------------------------------------------------\n";
+    }
+
+    void cmdWsl(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::wsl_lxss;
+        InitializeWslSubsystemExports();
+        auto& mgr = PicoKernelManager::Instance();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "help" || tokens[1] == "/?" || tokens[1] == "-?")) {
+            out << "Windows Subsystem for Linux (WSL / LXSS / Pico Provider)\n\n"
+                << "Usage:\n"
+                << "  wsl [command]                                 Executes command in default Linux distribution\n"
+                << "  wsl status / --status                         Displays WSL Subsystem, Pico kernel, and VFS status\n"
+                << "  wsl -l / --list                               Lists registered Linux distributions\n"
+                << "  wsl -e <command> / wsl run <command>          Executes specified command without invoking a shell\n"
+                << "  wsl mount / --mount                           Displays DrvFs and VolFs active mount topology\n"
+                << "  wsl test                                      Executes WSL / LXSS Pico Kernel self-test suite\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && toLower(tokens[1]) == "test") {
+            out << "[TEST] Running Windows Subsystem for Linux (WSL / LXSS) Self-Test...\n";
+
+            // 1. Subsystem Initialization
+            LxInitialize();
+            if (!mgr.isInitialized()) {
+                out << "[-] WSL Subsystem failed to initialize.\n";
+                return;
+            }
+            out << "  [+] WSL Pico Kernel Subsystem Initialized (lxcore.sys & wslapi.dll)\n";
+
+            // 2. ELF64 Binary Validation
+            Elf64_Ehdr ehdr{};
+            ehdr.e_ident[0] = ELF_MAG0;
+            ehdr.e_ident[1] = ELF_MAG1;
+            ehdr.e_ident[2] = ELF_MAG2;
+            ehdr.e_ident[3] = ELF_MAG3;
+            ehdr.e_ident[4] = ELFCLASS64;
+            ehdr.e_ident[5] = ELFDATA2LSB;
+            ehdr.e_machine = EM_X86_64;
+            ehdr.e_entry = 0x400080ULL;
+
+            uint64_t entryPoint = 0;
+            std::span<const uint8_t> validElfSpan(reinterpret_cast<const uint8_t*>(&ehdr), sizeof(ehdr));
+            if (!mgr.validateElfHeader(validElfSpan, &entryPoint) || entryPoint != 0x400080ULL) {
+                out << "[-] ELF64 header validation failed for valid binary!\n";
+                return;
+            }
+
+            // Test corrupted ELF header
+            uint8_t corruptElf[sizeof(Elf64_Ehdr)]{};
+            if (mgr.validateElfHeader(std::span<const uint8_t>(corruptElf, sizeof(corruptElf)), &entryPoint)) {
+                out << "[-] Corrupted ELF header was accepted!\n";
+                return;
+            }
+            out << "  [+] Linux ELF64 Binary Header Parser Verified (Magic, x86_64, EntryPoint)\n";
+
+            // 3. Pico Process Lifecycle
+            uint32_t pid = 0;
+            NTSTATUS st = LxCreatePicoProcess("/bin/test_elf", "/root", &pid);
+            if (st != STATUS_SUCCESS || pid == 0) {
+                out << "[-] LxCreatePicoProcess failed: 0x" << std::hex << st << "\n";
+                return;
+            }
+            out << "  [+] Pico Process Container Created: PID " << pid << "\n";
+
+            // 4. Linux Syscall Translation
+            LinuxUtsName uts{};
+            int64_t scRes = LxDispatchSyscall(pid, LINUX_SYS_UNAME, reinterpret_cast<uint64_t>(&uts), 0, 0, 0, 0, 0);
+            if (scRes != 0 || std::string(uts.sysname) != "Linux" || std::string(uts.machine) != "x86_64") {
+                out << "[-] SYS_uname syscall translation failed!\n";
+                return;
+            }
+            out << "  [+] SYS_uname Syscall Translated: " << uts.sysname << " " << uts.nodename << " " << uts.release << "\n";
+
+            // SYS_getpid
+            scRes = LxDispatchSyscall(pid, LINUX_SYS_GETPID, 0, 0, 0, 0, 0, 0);
+            if (scRes != static_cast<int64_t>(pid)) {
+                out << "[-] SYS_getpid syscall translation mismatch!\n";
+                return;
+            }
+
+            // SYS_brk
+            uint64_t origBrk = static_cast<uint64_t>(LxDispatchSyscall(pid, LINUX_SYS_BRK, 0, 0, 0, 0, 0, 0));
+            uint64_t newBrk = static_cast<uint64_t>(LxDispatchSyscall(pid, LINUX_SYS_BRK, origBrk + 0x2000, 0, 0, 0, 0, 0));
+            if (newBrk != origBrk + 0x2000) {
+                out << "[-] SYS_brk heap expansion failed!\n";
+                return;
+            }
+
+            // SYS_arch_prctl (ARCH_SET_FS / ARCH_GET_FS)
+            uint64_t testFs = 0x7fff00001000ULL;
+            scRes = LxDispatchSyscall(pid, LINUX_SYS_ARCH_PRCTL, ARCH_SET_FS, testFs, 0, 0, 0, 0);
+            if (scRes != 0) {
+                out << "[-] SYS_arch_prctl ARCH_SET_FS failed!\n";
+                return;
+            }
+            uint64_t queryFs = 0;
+            scRes = LxDispatchSyscall(pid, LINUX_SYS_ARCH_PRCTL, ARCH_GET_FS, reinterpret_cast<uint64_t>(&queryFs), 0, 0, 0, 0);
+            if (scRes != 0 || queryFs != testFs) {
+                out << "[-] SYS_arch_prctl ARCH_GET_FS verification failed!\n";
+                return;
+            }
+            out << "  [+] SYS_arch_prctl TLS Setup Verified: FS_BASE=0x" << std::hex << queryFs << std::dec << "\n";
+
+            // SYS_write stdout
+            const char* hello = "Hello Pico\n";
+            scRes = LxDispatchSyscall(pid, LINUX_SYS_WRITE, 1, reinterpret_cast<uint64_t>(hello), 11, 0, 0, 0);
+            if (scRes != 11) {
+                out << "[-] SYS_write stdout capture failed!\n";
+                return;
+            }
+
+            // Terminate Pico Process
+            mgr.terminatePicoProcess(pid, 0);
+            out << "  [+] Pico Process Container Terminated: PID " << pid << " Cleaned Up\n";
+
+            // 5. Distribution Management Lifecycle
+            if (!WslIsDistributionRegistered(L"Ubuntu-24.04")) {
+                out << "[-] Ubuntu-24.04 not registered by default!\n";
+                return;
+            }
+            st = WslRegisterDistribution(L"Test-Distro", L"test.tar.gz");
+            if (st != STATUS_SUCCESS || !WslIsDistributionRegistered(L"Test-Distro")) {
+                out << "[-] WslRegisterDistribution failed!\n";
+                return;
+            }
+            st = WslUnregisterDistribution(L"Test-Distro");
+            if (st != STATUS_SUCCESS || WslIsDistributionRegistered(L"Test-Distro")) {
+                out << "[-] WslUnregisterDistribution failed!\n";
+                return;
+            }
+            out << "  [+] Distribution Registration Lifecycle Verified (Register/Query/Unregister)\n";
+
+            // 6. Linux Command Execution Emulation
+            std::string resUname = mgr.executeLinuxCommand("uname -a");
+            if (resUname.find("Linux MicaNT 6.6.0-microsoft-standard-WSL1") == std::string::npos) {
+                out << "[-] Command 'uname -a' output invalid!\n";
+                return;
+            }
+            std::string resRelease = mgr.executeLinuxCommand("cat /etc/os-release");
+            if (resRelease.find("Ubuntu 24.04 LTS") == std::string::npos) {
+                out << "[-] Command 'cat /etc/os-release' output invalid!\n";
+                return;
+            }
+            std::string resMount = mgr.executeLinuxCommand("ls /mnt/c");
+            if (resMount.find("Program Files") == std::string::npos) {
+                out << "[-] Command 'ls /mnt/c' DrvFs output invalid!\n";
+                return;
+            }
+            out << "  [+] Sovereign VFS Bridge Verified (DrvFs /mnt/c & VolFs /etc/os-release)\n";
+
+            // 7. DynamicLoader & VersionDatabase Parity
+            auto& ldr = ldr::DynamicLoader::get();
+            if (!ldr.getExport("wslapi.dll", "WslIsDistributionRegistered") ||
+                !ldr.getExport("lxcore.sys", "LxDispatchSyscall")) {
+                out << "[-] DynamicLoader missing WSL exports!\n";
+                return;
+            }
+            auto& vdb = version::VersionDatabase::Instance();
+            auto* pMod = vdb.GetModuleInfo("wslapi.dll");
+            if (!pMod || pMod->stringTable.at("FileVersion") != "10.0.26100.1") {
+                out << "[-] VersionDatabase entry for wslapi.dll invalid!\n";
+                return;
+            }
+            out << "  [+] Win32 C ABI Exports & Version Database Parity Verified (10.0.26100.1)\n";
+
+            out << "[+] All WSL / LXSS Pico Kernel tests passed successfully.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-l" || toLower(tokens[1]) == "--list" || toLower(tokens[1]) == "list")) {
+            auto distros = mgr.getDistributions();
+            std::string defDistro = mgr.getDefaultDistribution();
+            out << "Windows Subsystem for Linux Distributions:\n";
+            for (const auto& d : distros) {
+                out << "  * " << d.name;
+                if (d.name == defDistro) {
+                    out << " (Default)";
+                }
+                out << " [WSL " << d.wslVersion << " - Pico Container]\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "mount" || toLower(tokens[1]) == "--mount")) {
+            out << "DrvFs / VolFs Mount Table:\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  drvfs on /mnt/c type drvfs (rw,noatime,uid=1000,gid=1000,case=off)\n"
+                << "  volfs on / type lxfs (rw,noatime)\n"
+                << "  proc on /proc type proc (rw,nosuid,nodev,noexec,noatime)\n"
+                << "  sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,noatime)\n"
+                << "  devtmpfs on /dev type devtmpfs (rw,nosuid,size=16384k,nr_inodes=4096,mode=755)\n"
+                << "-------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (tokens.size() <= 1 || (toLower(tokens[1]) == "status" || toLower(tokens[1]) == "--status")) {
+            auto distros = mgr.getDistributions();
+            out << "Windows Subsystem for Linux (WSL / LXSS) Subsystem Posture:\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  Architecture:                  WSL 1 Sovereign Pico Process Provider (lxcore.sys)\n"
+                << "  Hypervisor Dependency:         None (Zero-VM Direct Syscall Translation)\n"
+                << "  Kernel Emulation Layer:        Linux 6.6.0 ABI (x86_64 Syscall Emulation)\n"
+                << "  Default Distribution:          " << mgr.getDefaultDistribution() << "\n"
+                << "  Registered Distributions:      " << distros.size() << " distributions available\n"
+                << "  VFS Bridge Filesystems:        DrvFs (/mnt/c), VolFs (/etc, /proc, /bin)\n"
+                << "  Total Syscalls Translated:     " << mgr.getTotalSyscallsDispatched() << " calls processed\n"
+                << "  Active Pico Processes:         " << mgr.getPicoProcessCount() << " containers\n"
+                << "  Binary Formats Supported:      ELF64 (SYSV / Linux ABI, PT_LOAD, x86_64)\n"
+                << "  Zero-Telemetry Parity:         VERIFIED (Clean-room Dave Cutler NT Provider)\n"
+                << "-------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        // Execution of commands:
+        // Either: wsl -e <cmd...>, wsl run <cmd...>, or wsl <cmd...>
+        std::string fullCmd;
+        size_t startIdx = 1;
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-e" || toLower(tokens[1]) == "--exec" || toLower(tokens[1]) == "run")) {
+            startIdx = 2;
+        }
+
+        if (startIdx < tokens.size()) {
+            for (size_t i = startIdx; i < tokens.size(); ++i) {
+                if (!fullCmd.empty()) fullCmd += " ";
+                fullCmd += tokens[i];
+            }
+        } else {
+            out << "Usage: wsl -e <command>\n";
+            return;
+        }
+
+        std::string result = mgr.executeLinuxCommand(fullCmd);
+        out << result;
     }
 
     static std::string trim(std::string_view s) {

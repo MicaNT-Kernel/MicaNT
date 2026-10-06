@@ -218,7 +218,33 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 105: Windows Filtering Platform (WFP) & Firewall     [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 106: Windows Authenticode & Trust Subsystem(wintrust)[PLANNED]        │
+│ Phase 106: Windows Authenticode & Trust Subsystem (wintrust)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 107: Windows Code Integrity & WDAC (ci.dll)           [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 108: Windows Encrypting File System (EFS)             [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 109: Windows Security Center (SentinelCenter / WSC)   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 110: Antimalware Scan Interface (AMSI / SentinelScan) [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 111: Malware Protection Engine (AegisDefender / MpEng)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 112: Windows Defender Exploit Guard (SentinelGuard)   [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 113: Windows Credential Guard & Isolated User Mode    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 114: Windows Protected Process Light (PPL) & ELAM     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 115: System Guard Secure Launch & Measured Boot (DRTM)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 116: Virtualization-Based Security (VBS) & HVCI       [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 117: Kernel DMA Protection & IOMMU Remapping (DMA)    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 118: Windows Subsystem for Linux (WSL / LXSS / Pico)  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 119: Windows Sandbox & Lightweight Containers (wsb)   [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2707,21 +2733,44 @@
 
 ---
 
-### Phase 118: Windows Subsystem for Linux (WSL / LXSS / Sovereign Pico Provider & VFS Bridge) (Milestone 145)
-*Goal: Implement sovereign Windows Subsystem for Linux (WSL 1 / Pico Process Architecture) provider, bridging Linux syscalls (fork, execve, clone, mmap, epoll, vfs) directly to the MicaNT NT kernel without virtualization overhead.*
-- [ ] **WSL Pico Provider & LXSS Core Subsystem (`include/micant/wsl_lxss.hpp`)**:
-  - Pico Process & Pico Thread abstraction: Linux ELF64 binary execution container operating under the NT kernel umbrella.
-  - Linux Syscall Translation Layer: Direct routing of POSIX/Linux x86_64 syscalls to NT executive primitives.
-  - Sovereign Pico VFS Bridge (VolFs & DrvFs): Mounting NTFS/FAT32 volumes under `/mnt/c` and mapping Linux POSIX permissions (mode, uid, gid) into NT Security Descriptors.
-  - Linux IPC & Sockets: AF_UNIX local domain sockets, pipes, and epoll event demultiplexer.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `lxcore.sys`: `LxInitialize`, `LxCreatePicoProcess`, `LxCreatePicoThread`, `LxRegisterSyscallHandler`.
+### Phase 118: Windows Subsystem for Linux (WSL / LXSS / Sovereign Pico Provider & VFS Bridge) (Milestone 145) (100% Completed)
+*Goal: Implement sovereign Windows Subsystem for Linux (WSL 1 / Pico Process Architecture) provider, bridging Linux syscalls (fork, execve, clone, mmap, brk, arch_prctl, vfs) directly to the MicaNT NT kernel without virtualization overhead.*
+- [x] **WSL Pico Provider & LXSS Core Subsystem (`include/micant/wsl_lxss.hpp`)**:
+  - Pico Process & Pico Thread abstraction: Unmodified Linux ELF64 binary container executing natively on host NT scheduler with zero hypervisor overhead.
+  - Linux ELF64 Binary Loader: Validates 64-bit ELF magic (`\x7fELF`), little-endian, EM_X86_64, SYSV/Linux ABI, and program header layout.
+  - Linux Syscall Translation Dispatcher (x86_64 ABI): Direct translation for `SYS_read`, `SYS_write`, `SYS_open`, `SYS_close`, `SYS_brk`, `SYS_getpid`, `SYS_getuid`, `SYS_getgid`, `SYS_arch_prctl` (FS_BASE TLS management), `SYS_uname`, `SYS_clock_gettime`, `SYS_sched_yield`, `SYS_exit`, and `SYS_exit_group`.
+  - Sovereign Pico VFS Bridge (VolFs & DrvFs): DrvFs direct bidirectional mount of Windows drives (`C:\` -> `/mnt/c`), and VolFs in-memory POSIX filesystem pre-seeded with `/etc/os-release`, `/proc/version`, `/proc/cpuinfo`, `/proc/meminfo`, `/bin/sh`, `/bin/bash`, and `/bin/uname`.
+  - Multi-distribution management: pre-seeded Ubuntu-24.04 (default), Debian, and Alpine containers.
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `wslapi.dll`: `WslIsDistributionRegistered`, `WslRegisterDistribution`, `WslUnregisterDistribution`, `WslConfigureDistribution`, `WslGetDistributionConfiguration`, `WslLaunchInteractive`.
-  - VersionDatabase registrations for `wslapi.dll` and `lxcore.sys`.
+  - `lxcore.sys`: `LxInitialize`, `LxCreatePicoProcess`, `LxCreatePicoThread`, `LxDispatchSyscall`, `LxGetPicoProcessCount`.
+  - DynamicLoader registrations for all exports in `wslapi.dll` and `lxcore.sys`.
+  - VersionDatabase registration (`10.0.26100.1`) for `wslapi.dll` and `lxcore.sys`.
+- [x] **Interactive Shell CLI (`include/micant/shell.hpp`)**:
+  - Integrated `wsl status`, `wsl -l` / `wsl --list`, `wsl -e <cmd>` / `wsl run <cmd>`, `wsl mount`, `wsl test`, and direct command execution (e.g. `wsl uname -a`).
+  - Added `sentinel wsl` / `sentinel lxss` routing in `cmdWsc`.
+  - Added `wsl`, `bash`, `lxss` to AMSI inspection bypass whitelist.
+- [x] **Unit Test Suite 145 (`Test_WindowsSubsystemForLinux_LXSS_Subsystem`)**:
+  - Validates dynamic exports, VersionDatabase entries, ELF64 header verification, Pico process lifecycle, Linux syscall translation (`SYS_uname`, `SYS_brk`, `SYS_getpid`, `SYS_arch_prctl`, `SYS_write`), distribution registration/unregistration lifecycle, VFS bridge command emulation, and shell CLI commands.
+  - Milestone 145: **145 / 145 Test Suites Passing (100%)**.
+
+---
+
+### Phase 119: Windows Sandbox & Lightweight Containers (wsb.exe / cmshim.dll / Sovereign Container Broker) (Milestone 146)
+*Goal: Implement sovereign Windows Sandbox and lightweight container subsystem providing disposable, isolated desktop and execution environments using dynamic base images and container shim bridges without persistent side-effects.*
+- [ ] **Windows Sandbox Broker Subsystem (`include/micant/sandbox.hpp`)**:
+  - Disposable Sandbox Runtime (`wsb.exe`): Ephemeral container instantiation with clean desktop, disposable user profile, and automatic teardown upon exit.
+  - Dynamic Base Image & Host Storage Passthrough: Copy-on-Write layering over host Windows filesystem (`\DosDevices\C:\`), isolating modifications to temporary differential VHDX overlays.
+  - Container Networking & NAT Bridge: Isolated virtual switch and adapter mapping host network with dedicated container IP address and firewall isolation.
+  - Container Configuration Manifest Parser (`.wsb` XML): Support for `<VGpu>`, `<Networking>`, `<MappedFolders>`, `<LogonCommand>`, `<MemoryInMB>`.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `cmshim.dll`: Container manager shim APIs (`CmCreateContainer`, `CmStartContainer`, `CmStopContainer`, `CmDestroyContainer`, `CmQueryContainerStatus`).
+  - `wsbcore.sys` / `vmcompute.dll`: Container broker kernel driver and userland management exports.
+  - VersionDatabase registration (`10.0.26100.1`) for `cmshim.dll` and `wsb.exe`.
 - [ ] **Interactive Shell CLI**:
-  - `wsl status`, `wsl list`, `wsl run <cmd>`, `wsl mount`, `wsl test`.
-- [ ] **Unit Test Suite 145 (`Test_WindowsSubsystemForLinux_LXSS_Subsystem`)**:
-  - Verification of Pico process creation, Linux ELF64 loader, POSIX syscall translation, DrvFs file mounting, and wslapi.dll export surface.
+  - `sandbox status`, `sandbox launch [config.wsb]`, `sandbox list`, `sandbox stop <id>`, `sandbox test`.
+- [ ] **Unit Test Suite 146 (`Test_WindowsSandbox_LightweightContainer_Subsystem`)**:
+  - Verification of `.wsb` manifest parsing, dynamic base image layering, isolated sandbox lifecycle, container shim C ABI, and shell CLI commands.
 
 
 
