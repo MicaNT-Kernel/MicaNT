@@ -143,6 +143,7 @@
 #include "micant/feclient.hpp"
 #include "micant/wscapi.hpp"
 #include "micant/amsi.hpp"
+#include "micant/mpengine.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -32049,8 +32050,357 @@ void Test_WindowsAMSI_SentinelScan_Subsystem() {
     std::cout << "[TEST] Suite 137: Antimalware Scan Interface (AMSI / SentinelScan) Subsystem PASSED.\n";
 }
 
+void Test_WindowsDefender_AegisDefender_Subsystem() {
+    std::cout << "\n[TEST] Starting Suite 138: Microsoft Malware Protection Engine (AegisDefender) & mpclient.dll Subsystem...\n";
+
+    using namespace micant::defender;
+    InitializeMpEngineSubsystemExports();
+
+    // 1. Module Registration & VersionDatabase Verification
+    {
+        auto modClient = version::VersionDatabase::Instance().FindModule("mpclient.dll");
+        TEST_ASSERT(modClient != nullptr, "mpclient.dll must be registered in VersionDatabase");
+        TEST_ASSERT(modClient->stringTable.at("FileVersion") == "10.0.26100.1", "mpclient.dll FileVersion must match 10.0.26100.1");
+        TEST_ASSERT(modClient->stringTable.at("FileDescription").find("Malware Protection Client") != std::string::npos, "Client description must match");
+        TEST_ASSERT(modClient->stringTable.at("CompanyName") == "MicaNT Sovereign Project", "CompanyName must match");
+
+        auto modEngine = version::VersionDatabase::Instance().FindModule("mpengine.dll");
+        TEST_ASSERT(modEngine != nullptr, "mpengine.dll must be registered in VersionDatabase");
+        TEST_ASSERT(modEngine->stringTable.at("FileVersion") == "10.0.26100.1", "mpengine.dll FileVersion must match 10.0.26100.1");
+        TEST_ASSERT(modEngine->stringTable.at("FileDescription").find("Malware Protection Engine") != std::string::npos, "Engine description must match");
+    }
+
+    // 2. DynamicLoader Function Export Verification (mpclient.dll and mpengine.dll)
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        for (const char* modName : { "mpclient.dll", "mpengine.dll" }) {
+            TEST_ASSERT(ldr.getExport(modName, "MpManagerOpen") != nullptr, "MpManagerOpen must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpManagerClose") != nullptr, "MpManagerClose must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpScanStart") != nullptr, "MpScanStart must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpScanControl") != nullptr, "MpScanControl must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpThreatOpen") != nullptr, "MpThreatOpen must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpThreatEnumerate") != nullptr, "MpThreatEnumerate must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpThreatClose") != nullptr, "MpThreatClose must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpCleanOpen") != nullptr, "MpCleanOpen must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpCleanStart") != nullptr, "MpCleanStart must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpCleanClose") != nullptr, "MpCleanClose must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpGetThreatInfo") != nullptr, "MpGetThreatInfo must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpGetQuarantineVault") != nullptr, "MpGetQuarantineVault must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpQuarantineRestore") != nullptr, "MpQuarantineRestore must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpQuarantineDelete") != nullptr, "MpQuarantineDelete must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpFreeMemory") != nullptr, "MpFreeMemory must be exported");
+            TEST_ASSERT(ldr.getExport(modName, "MpErrorMessageFormat") != nullptr, "MpErrorMessageFormat must be exported");
+        }
+    }
+
+    // 3. MpManagerOpen / MpManagerClose Lifecycle
+    {
+        MPHANDLE hMgr = nullptr;
+        HRESULT hr = MpManagerOpen(0, nullptr);
+        TEST_ASSERT(FAILED(hr), "MpManagerOpen with null out handle must fail");
+
+        hr = MpManagerOpen(0, &hMgr);
+        TEST_ASSERT(SUCCEEDED(hr) && hMgr != nullptr, "MpManagerOpen must return valid handle");
+
+        hr = MpManagerClose(nullptr);
+        TEST_ASSERT(FAILED(hr), "MpManagerClose with null handle must fail");
+
+        hr = MpManagerClose(hMgr);
+        TEST_ASSERT(SUCCEEDED(hr), "MpManagerClose must return S_OK");
+    }
+
+    // 4. Shannon Entropy PE Section Heuristics
+    {
+        // 4a. Shannon entropy calculation verification
+        std::vector<uint8_t> uniformBytes(1024, 0x55);
+        double entUniform = SovereignDefenderEngine::calculateEntropy(uniformBytes.data(), uniformBytes.size());
+        TEST_ASSERT(entUniform < 0.001, "Uniform byte sequence entropy must be ~0");
+
+        // High entropy byte distribution (pseudo-random)
+        std::vector<uint8_t> diverseBytes(256 * 16);
+        for (size_t i = 0; i < diverseBytes.size(); ++i) {
+            diverseBytes[i] = static_cast<uint8_t>((i * 101 + 37) % 256);
+        }
+        double entDiverse = SovereignDefenderEngine::calculateEntropy(diverseBytes.data(), diverseBytes.size());
+        TEST_ASSERT(entDiverse > 7.9, "Uniformly distributed byte sequence entropy must be > 7.9");
+
+        // 4b. Synthetic PE image with high entropy executable section
+        std::vector<uint8_t> peImage(4096, 0);
+        auto* dos = reinterpret_cast<pe::ImageDosHeader*>(peImage.data());
+        dos->e_magic = pe::IMAGE_DOS_SIGNATURE;
+        dos->e_lfanew = 128;
+
+        auto* nt64 = reinterpret_cast<pe::ImageNtHeaders64*>(peImage.data() + 128);
+        nt64->signature = pe::IMAGE_NT_SIGNATURE;
+        nt64->fileHeader.numberOfSections = 1;
+        nt64->fileHeader.sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+        nt64->optionalHeader.magic = pe::IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+
+        size_t secOffset = 128 + sizeof(uint32_t) + sizeof(pe::ImageFileHeader) + sizeof(pe::ImageOptionalHeader64);
+        auto* sec = reinterpret_cast<pe::ImageSectionHeader*>(peImage.data() + secOffset);
+        std::memcpy(sec->name, ".text", 5);
+        sec->pointerToRawData = 1024;
+        sec->sizeOfRawData = 1024;
+        sec->characteristics = 0x20000000 | 0x40000000; // IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ
+
+        // Fill .text raw data with high entropy bytes
+        for (size_t i = 1024; i < 2048; ++i) {
+            peImage[i] = static_cast<uint8_t>((i * 167 + 13) % 256);
+        }
+
+        MPTHREAT_INFO threat{};
+        bool detected = SovereignDefenderEngine::get().scanPEBuffer(peImage.data(), peImage.size(), L"C:\\Test\\packed.exe", threat);
+        TEST_ASSERT(detected, "High entropy executable section must trigger packed dropper detection");
+        TEST_ASSERT(threat.ThreatId == 4001, "ThreatId must be 4001 (Trojan:Win32/PackedDropper.A)");
+        TEST_ASSERT(threat.Category == MPTHREAT_CATEGORY_DROPPER, "Category must be DROPPER");
+
+        // Low entropy .text section should not be flagged
+        std::fill(peImage.begin() + 1024, peImage.begin() + 2048, 0xCC);
+        MPTHREAT_INFO cleanThreat{};
+        bool cleanDetected = SovereignDefenderEngine::get().scanPEBuffer(peImage.data(), peImage.size(), L"C:\\Test\\clean.exe", cleanThreat);
+        TEST_ASSERT(!cleanDetected, "Low entropy executable section must not trigger dropper heuristic");
+    }
+
+    // 5. Memory & Buffer Threat Scanning (Signatures & Heuristics)
+    {
+        MPHANDLE hMgr = nullptr;
+        MpManagerOpen(0, &hMgr);
+
+        // 5a. Benign memory scan
+        std::string safePayload = "Hello MicaNT Antimalware Protection Engine";
+        MPRESOURCE_INFO resSafe{};
+        resSafe.dwResourceType = 0;
+        resSafe.pwszResourcePath = L"safe.txt";
+        SovereignDefenderEngine::get().setVirtualFile(L"safe.txt", {safePayload.begin(), safePayload.end()});
+
+        MPHANDLE hScan = nullptr;
+        HRESULT hr = MpScanStart(hMgr, MPSCAN_TYPE_RESOURCE, 0, &resSafe, nullptr, &hScan);
+        TEST_ASSERT(SUCCEEDED(hr) && hr == S_OK, "Benign resource scan must return S_OK");
+
+        // 5b. Shellcode NOP sled detection (>= 16 consecutive 0x90)
+        std::vector<uint8_t> nopSled(64, 0x90);
+        nopSled[32] = 0x31; nopSled[33] = 0xC0;
+        SovereignDefenderEngine::get().setVirtualFile(L"shellcode.bin", nopSled);
+        MPRESOURCE_INFO resNop{};
+        resNop.pwszResourcePath = L"shellcode.bin";
+        hr = MpScanStart(hMgr, MPSCAN_TYPE_RESOURCE, 0, &resNop, nullptr, &hScan);
+        TEST_ASSERT(hr == HRESULT_FROM_WIN32_VIRUS_INFECTED, "NOP sled buffer must return HRESULT_FROM_WIN32_VIRUS_INFECTED");
+
+        // Verify threat info from last scan
+        const auto& threats = SovereignDefenderEngine::get().getLastScanThreats();
+        TEST_ASSERT(!threats.empty(), "Threat list must contain detected threat");
+        TEST_ASSERT(threats[0].ThreatId == 4003, "Threat ID must be 4003 (Exploit:Win32/ShellcodeStager.A)");
+
+        // 5c. Local Signature Detection: PowerDrop (dynamically assembled)
+        std::string powerDropToken = std::string("test_") + "download" + "string" + "_payload";
+        SovereignDefenderEngine::get().setVirtualFile(L"powerdrop.ps1", {powerDropToken.begin(), powerDropToken.end()});
+        MPRESOURCE_INFO resPowerDrop{};
+        resPowerDrop.pwszResourcePath = L"powerdrop.ps1";
+        hr = MpScanStart(hMgr, MPSCAN_TYPE_RESOURCE, 0, &resPowerDrop, nullptr, &hScan);
+        TEST_ASSERT(hr == HRESULT_FROM_WIN32_VIRUS_INFECTED, "PowerDrop signature must be detected");
+        TEST_ASSERT(SovereignDefenderEngine::get().getLastScanThreats()[0].ThreatId == 1001, "Threat ID must be 1001");
+
+        // 5d. Local Signature Detection: LsaDump
+        std::string lsaDumpToken = std::string("mimikatz_") + "logon" + "passwords";
+        SovereignDefenderEngine::get().setVirtualFile(L"lsadump.bin", {lsaDumpToken.begin(), lsaDumpToken.end()});
+        MPRESOURCE_INFO resLsa{};
+        resLsa.pwszResourcePath = L"lsadump.bin";
+        hr = MpScanStart(hMgr, MPSCAN_TYPE_RESOURCE, 0, &resLsa, nullptr, &hScan);
+        TEST_ASSERT(hr == HRESULT_FROM_WIN32_VIRUS_INFECTED, "LsaDump signature must be detected");
+        TEST_ASSERT(SovereignDefenderEngine::get().getLastScanThreats()[0].ThreatId == 1002, "Threat ID must be 1002");
+
+        MpManagerClose(hMgr);
+    }
+
+    // 6. Threat Enumeration API (MpThreatOpen, MpThreatEnumerate, MpThreatClose, MpGetThreatInfo)
+    {
+        MPHANDLE hMgr = nullptr;
+        MpManagerOpen(0, &hMgr);
+
+        // Stage threat detection
+        std::string ransomToken = std::string("malware_") + "wana" + "cry" + "_payload";
+        SovereignDefenderEngine::get().setVirtualFile(L"ransom.bin", {ransomToken.begin(), ransomToken.end()});
+        MPRESOURCE_INFO resRansom{};
+        resRansom.pwszResourcePath = L"ransom.bin";
+        MPHANDLE hScan = nullptr;
+        MpScanStart(hMgr, MPSCAN_TYPE_RESOURCE, 0, &resRansom, nullptr, &hScan);
+
+        MPHANDLE hThreatEnum = nullptr;
+        HRESULT hr = MpThreatOpen(hMgr, &hThreatEnum);
+        TEST_ASSERT(SUCCEEDED(hr) && hThreatEnum != nullptr, "MpThreatOpen must return S_OK");
+
+        PMPTHREAT_INFO pInfo = nullptr;
+        hr = MpThreatEnumerate(hThreatEnum, &pInfo);
+        TEST_ASSERT(SUCCEEDED(hr) && hr == S_OK && pInfo != nullptr, "MpThreatEnumerate must return first threat");
+        TEST_ASSERT(pInfo->ThreatId == 1004, "ThreatId must match WannaCrypt (1004)");
+        TEST_ASSERT(pInfo->Category == MPTHREAT_CATEGORY_RANSOMWARE, "Category must be RANSOMWARE");
+        TEST_ASSERT(pInfo->Severity == MPTHREAT_SEVERITY_SEVERE, "Severity must be SEVERE");
+        MpFreeMemory(pInfo);
+
+        hr = MpThreatEnumerate(hThreatEnum, &pInfo);
+        TEST_ASSERT(hr == S_FALSE && pInfo == nullptr, "MpThreatEnumerate must return S_FALSE when done");
+
+        hr = MpThreatClose(hThreatEnum);
+        TEST_ASSERT(SUCCEEDED(hr), "MpThreatClose must return S_OK");
+
+        // MpGetThreatInfo
+        PMPTHREAT_INFO pInfoDirect = nullptr;
+        hr = MpGetThreatInfo(hMgr, 1004, &pInfoDirect);
+        TEST_ASSERT(SUCCEEDED(hr) && pInfoDirect != nullptr, "MpGetThreatInfo must find existing threat");
+        TEST_ASSERT(std::wcscmp(pInfoDirect->wszThreatName, L"Ransomware:Win32/WannaCrypt.A") == 0, "Threat name must match");
+        MpFreeMemory(pInfoDirect);
+
+        hr = MpGetThreatInfo(hMgr, 999999, &pInfoDirect);
+        TEST_ASSERT(hr == MP_E_THREAT_NOT_FOUND, "Non-existent threat ID must return MP_E_THREAT_NOT_FOUND");
+
+        MpManagerClose(hMgr);
+    }
+
+    // 7. Clean / Remediation / Encrypted Quarantine Vault (AES-256)
+    {
+        MPHANDLE hMgr = nullptr;
+        MpManagerOpen(0, &hMgr);
+
+        std::wstring infectedPath = L"C:\\Users\\admin\\Desktop\\badware.exe";
+        std::string infectedContent = std::string("prefix_") + "amsiinit" + "failed" + "_suffix";
+        SovereignDefenderEngine::get().setVirtualFile(infectedPath, {infectedContent.begin(), infectedContent.end()});
+
+        // Scan to populate threat info
+        MPRESOURCE_INFO resInfect{};
+        resInfect.pwszResourcePath = infectedPath.c_str();
+        MPHANDLE hScan = nullptr;
+        MpScanStart(hMgr, MPSCAN_TYPE_RESOURCE, 0, &resInfect, nullptr, &hScan);
+
+        // Open clean session and quarantine
+        MPHANDLE hClean = nullptr;
+        HRESULT hr = MpCleanOpen(hMgr, &hClean);
+        TEST_ASSERT(SUCCEEDED(hr) && hClean != nullptr, "MpCleanOpen must succeed");
+
+        hr = MpCleanStart(hClean, &resInfect, nullptr);
+        TEST_ASSERT(SUCCEEDED(hr), "MpCleanStart (Quarantine) must succeed");
+        MpCleanClose(hClean);
+
+        // Verify infected file was removed from active virtual filesystem
+        TEST_ASSERT(!SovereignDefenderEngine::get().hasVirtualFile(infectedPath), "Infected file must be removed from virtual file system");
+
+        // Inspect Encrypted Quarantine Vault
+        DWORD count = 0;
+        PMPQUARANTINE_ENTRY pEntries = nullptr;
+        hr = MpGetQuarantineVault(hMgr, &count, &pEntries);
+        TEST_ASSERT(SUCCEEDED(hr) && count >= 1 && pEntries != nullptr, "Quarantine vault must contain quarantined entry");
+
+        bool foundQuarantined = false;
+        for (DWORD i = 0; i < count; ++i) {
+            if (std::wcscmp(pEntries[i].wszThreatName, L"Trojan:Win32/AmsiTamper.A") == 0) {
+                foundQuarantined = true;
+                TEST_ASSERT(std::wcscmp(pEntries[i].wszOriginalPath, infectedPath.c_str()) == 0, "Original path must match");
+                TEST_ASSERT(pEntries[i].FileSize == infectedContent.size(), "File size must match");
+                break;
+            }
+        }
+        TEST_ASSERT(foundQuarantined, "Target threat must be in quarantine vault");
+        MpFreeMemory(pEntries);
+
+        // 8. Authenticated Quarantine Restoration & Deletion
+        hr = MpQuarantineRestore(hMgr, L"Trojan:Win32/AmsiTamper.A", nullptr);
+        TEST_ASSERT(SUCCEEDED(hr), "MpQuarantineRestore must restore file successfully");
+        TEST_ASSERT(SovereignDefenderEngine::get().hasVirtualFile(infectedPath), "Restored file must now exist in file system");
+
+        // Verify restored file content integrity
+        auto restoredData = SovereignDefenderEngine::get().getVaultItems();
+        bool stillInVault = false;
+        for (const auto& itm : restoredData) {
+            if (itm.threatName == L"Trojan:Win32/AmsiTamper.A") stillInVault = true;
+        }
+        TEST_ASSERT(!stillInVault, "Restored threat must be removed from vault");
+
+        // Re-quarantine then delete
+        MpCleanOpen(hMgr, &hClean);
+        MpCleanStart(hClean, &resInfect, nullptr);
+        MpCleanClose(hClean);
+
+        hr = MpQuarantineDelete(hMgr, L"Trojan:Win32/AmsiTamper.A");
+        TEST_ASSERT(SUCCEEDED(hr), "MpQuarantineDelete must delete threat from vault");
+
+        hr = MpQuarantineDelete(hMgr, L"NonExistentThreat");
+        TEST_ASSERT(hr == MP_E_THREAT_NOT_FOUND, "Deleting non-existent threat must return MP_E_THREAT_NOT_FOUND");
+
+        MpManagerClose(hMgr);
+    }
+
+    // 9. MpErrorMessageFormat & Error Formatting
+    {
+        LPWSTR pMsg = nullptr;
+        HRESULT hr = MpErrorMessageFormat(nullptr, HRESULT_FROM_WIN32_VIRUS_INFECTED, &pMsg);
+        TEST_ASSERT(SUCCEEDED(hr) && pMsg != nullptr, "MpErrorMessageFormat must succeed");
+        TEST_ASSERT(std::wstring(pMsg).find(L"Threat detected") != std::wstring::npos, "Error message must state threat detected");
+        std::free(pMsg);
+
+        pMsg = nullptr;
+        hr = MpErrorMessageFormat(nullptr, MP_E_THREAT_NOT_FOUND, &pMsg);
+        TEST_ASSERT(SUCCEEDED(hr) && pMsg != nullptr, "MpErrorMessageFormat for threat not found must succeed");
+        std::free(pMsg);
+
+        hr = MpErrorMessageFormat(nullptr, S_OK, nullptr);
+        TEST_ASSERT(hr == E_POINTER, "Null output pointer must return E_POINTER");
+    }
+
+    // 10. Interactive Shell (defender / mpcmdrun CLI)
+    {
+        shell::CommandShell proc;
+        std::ostringstream oss;
+
+        // 10a. defender /?
+        int shellRet = proc.execute("defender /?", oss);
+        TEST_ASSERT(shellRet == 0, "defender /? must return 0");
+        TEST_ASSERT(oss.str().find("MpCmdRun.exe Parity") != std::string::npos, "Help must reference MpCmdRun");
+
+        // 10b. defender status
+        oss.str("");
+        shellRet = proc.execute("defender status", oss);
+        TEST_ASSERT(shellRet == 0, "defender status must return 0");
+        TEST_ASSERT(oss.str().find("mpengine.dll") != std::string::npos, "Must show mpengine.dll");
+        TEST_ASSERT(oss.str().find("AegisDefender Subsystem") != std::string::npos, "Must show AegisDefender Subsystem");
+
+        // 10c. defender -SignatureUpdate
+        oss.str("");
+        shellRet = proc.execute("defender -SignatureUpdate", oss);
+        TEST_ASSERT(shellRet == 0, "defender -SignatureUpdate must return 0");
+        TEST_ASSERT(oss.str().find("Version 1.415.2026.0") != std::string::npos, "Must show signature version");
+
+        // 10d. defender -GetFiles
+        oss.str("");
+        shellRet = proc.execute("defender -GetFiles", oss);
+        TEST_ASSERT(shellRet == 0, "defender -GetFiles must return 0");
+        TEST_ASSERT(oss.str().find("SupportLog.txt") != std::string::npos, "Must show SupportLog");
+
+        // 10e. defender -Scan -ScanType 1 (Quick Scan)
+        oss.str("");
+        shellRet = proc.execute("defender -Scan -ScanType 1", oss);
+        TEST_ASSERT(shellRet == 0, "defender -Scan -ScanType 1 must return 0");
+
+        // 10f. defender -ListQuarantine
+        oss.str("");
+        shellRet = proc.execute("defender -ListQuarantine", oss);
+        TEST_ASSERT(shellRet == 0, "defender -ListQuarantine must return 0");
+        TEST_ASSERT(oss.str().find("Encrypted Quarantine Vault") != std::string::npos, "Must show vault header");
+
+        // 10g. defender test (self-test command)
+        oss.str("");
+        shellRet = proc.execute("defender test", oss);
+        TEST_ASSERT(shellRet == 0, "defender test must return 0");
+        TEST_ASSERT(oss.str().find("[SUCCESS]") != std::string::npos, "defender test must report [SUCCESS]");
+    }
+
+    std::cout << "[TEST] Suite 138: Microsoft Malware Protection Engine (AegisDefender) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite137")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite138")) {
+        RUN_TEST(Test_WindowsDefender_AegisDefender_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite137") {
         RUN_TEST(Test_WindowsAMSI_SentinelScan_Subsystem);
         return g_FailedTests;
     }
@@ -32320,6 +32670,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsEncryptingFileSystem_EFS_Subsystem);
     RUN_TEST(Test_WindowsSecurityCenter_WSC_Subsystem);
     RUN_TEST(Test_WindowsAMSI_SentinelScan_Subsystem);
+    RUN_TEST(Test_WindowsDefender_AegisDefender_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

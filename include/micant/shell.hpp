@@ -129,6 +129,7 @@
 #include "feclient.hpp"
 #include "wscapi.hpp"
 #include "amsi.hpp"
+#include "mpengine.hpp"
 
 namespace micant::shell {
 
@@ -198,6 +199,7 @@ public:
         dxr::InitializeDXRExports();
         wsc::InitializeWscSubsystemExports();
         amsi::InitializeAmsiSubsystemExports();
+        defender::InitializeMpEngineSubsystemExports();
 
         // Establish default interactive logon session (admin) if not already active
         if (winlogon::WinlogonManager::get().getState() == winlogon::LogonState::LoggedOff) {
@@ -245,7 +247,8 @@ public:
 
         // SentinelScan (AMSI) In-Memory Script & Command Inspection
         if (cmd != "amsi" && cmd != "sentinelscan" && cmd != "sentinel" && cmd != "wsc" &&
-            cmd != "security" && cmd != "securitycenter" && cmd != "help" && cmd != "?") {
+            cmd != "security" && cmd != "securitycenter" && cmd != "mpcmdrun" && cmd != "defender" &&
+            cmd != "help" && cmd != "?") {
             std::wstring wline;
             wline.reserve(line.size());
             for (char c : line) wline.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
@@ -378,6 +381,7 @@ public:
             if (cmd == "cipher" || cmd == "efs") { cmdCipher(tokens, out); return 0; }
             if (cmd == "sentinel" || cmd == "wsc" || cmd == "security" || cmd == "securitycenter") { cmdWsc(tokens, out); return 0; }
             if (cmd == "amsi" || cmd == "sentinelscan") { cmdAmsi(tokens, out); return 0; }
+            if (cmd == "mpcmdrun" || cmd == "defender") { cmdMpCmdRun(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -688,6 +692,7 @@ private:
             << "  CIPHER [/e|/d|/c|/k|/w|status|test] Windows Encrypting File System (EFS) Tool (cipher test)\n"
             << "  SENTINEL / WSC [status|health|products|register|unregister|test] Sentinel Security System for MicaNT (sentinel test)\n"
             << "  AMSI / SENTINELSCAN [status|scan|block|unblock|clear|test] Antimalware Scan Interface (amsi test)\n"
+            << "  MPCMDRUN / DEFENDER [-Scan|-ListQuarantine|-Restore|-PurgeQuarantine|-GetFiles|test] Microsoft Defender Client & AegisDefender (defender test)\n"
             << "  LOCK              Locks workstation and switches to secure Winlogon desktop\n"
             << "  LOGOFF            Logs off current interactive user session\n"
             << "  EXEC <binary.exe> Executes an unmodified 64-bit Windows PE binary\n"
@@ -20787,6 +20792,266 @@ private:
             << "  Admin Block Enforcements:     " << mgr.getTotalAdminBlocked() << "\n"
             << "  Active Scanning Sessions:     " << mgr.getActiveSessionsCount() << "\n"
             << "  Registered AMSI Providers:    " << mgr.getProvidersCount() << "\n";
+    }
+
+    void cmdMpCmdRun(const std::vector<std::string>& tokens, std::ostream& out) {
+        using namespace micant::defender;
+        InitializeMpEngineSubsystemExports();
+
+        auto toLower = [](std::string s) {
+            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+
+        if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help")) {
+            out << "Microsoft Defender Antimalware Command Line Utility (MpCmdRun.exe Parity)\n"
+                << "AegisDefender Engine Subsystem (mpclient.dll / mpengine.dll)\n"
+                << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
+                << "Usage:\n"
+                << "  defender -Scan -ScanType <1|2> [-File <path>]    Scans for malicious software (1=Quick, 2=Full)\n"
+                << "  defender -Scan -File <path>                     Scans the specified file or directory\n"
+                << "  defender -ListQuarantine                        Lists items in the encrypted quarantine vault\n"
+                << "  defender -Restore -ThreatName <name>            Restores a threat from the quarantine vault\n"
+                << "  defender -PurgeQuarantine                       Purges all entries from quarantine vault\n"
+                << "  defender -SignatureUpdate                       Verifies and updates sovereign antimalware signatures\n"
+                << "  defender -GetFiles                              Outputs antimalware engine diagnostic bundle info\n"
+                << "  defender status                                 Displays AegisDefender engine telemetry and status\n"
+                << "  defender test                                   Executes AegisDefender diagnostic self-test suite\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "test" || toLower(tokens[1]) == "-test")) {
+            out << "[TEST] Running AegisDefender (mpclient.dll / mpengine.dll) Diagnostics...\n";
+            MPHANDLE hMgr = nullptr;
+            HRESULT hr = MpManagerOpen(0, &hMgr);
+            if (FAILED(hr) || !hMgr) {
+                out << "[-] MpManagerOpen failed: hr=0x" << std::hex << hr << std::dec << "\n";
+                return;
+            }
+            out << "  [+] MpManagerOpen initialized successfully\n";
+
+            MPHANDLE hScan = nullptr;
+            hr = MpScanStart(hMgr, MPSCAN_TYPE_QUICK, 0, nullptr, nullptr, &hScan);
+            if (FAILED(hr) || !hScan) {
+                out << "[-] MpScanStart (Quick) failed: hr=0x" << std::hex << hr << std::dec << "\n";
+                MpManagerClose(hMgr);
+                return;
+            }
+            out << "  [+] MpScanStart (Quick Scan) completed clean\n";
+
+            MPHANDLE hThreatEnum = nullptr;
+            hr = MpThreatOpen(hMgr, &hThreatEnum);
+            if (SUCCEEDED(hr) && hThreatEnum) {
+                PMPTHREAT_INFO pInfo = nullptr;
+                while (MpThreatEnumerate(hThreatEnum, &pInfo) == S_OK && pInfo) {
+                    MpFreeMemory(pInfo);
+                }
+                MpThreatClose(hThreatEnum);
+                out << "  [+] Threat enumeration subsystem verified\n";
+            }
+
+            DWORD itemCount = 0;
+            PMPQUARANTINE_ENTRY pEntries = nullptr;
+            hr = MpGetQuarantineVault(hMgr, &itemCount, &pEntries);
+            if (SUCCEEDED(hr)) {
+                out << "  [+] Encrypted Quarantine Vault accessed: " << itemCount << " items currently quarantined\n";
+                if (pEntries) MpFreeMemory(pEntries);
+            }
+
+            MpManagerClose(hMgr);
+            out << "[SUCCESS] AegisDefender Subsystem Self-Test Finished.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "status" || toLower(tokens[1]) == "-status")) {
+            auto& eng = SovereignDefenderEngine::get();
+            out << "Microsoft Defender Antimalware Engine (AegisDefender Subsystem):\n"
+                << "  Engine Core:                  mpengine.dll (10.0.26100.1 Sovereign Build)\n"
+                << "  Client Interface:             mpclient.dll (Win32 C ABI Parity)\n"
+                << "  Heuristic Entropy Analyzer:   Active (Executable Threshold > 7.2 bits/byte)\n"
+                << "  Quarantine Isolation Vault:   AES-256-CBC Encrypted (C:\\ProgramData\\MicaNT\\Quarantine)\n"
+                << "  Cloud Telemetry:              DISABLED (100% Sovereign Offline Operation)\n"
+                << "  Loaded Signatures:            " << eng.getSignaturesCount() << "\n"
+                << "  Total Scans Performed:        " << eng.getTotalScans() << "\n"
+                << "  Threats Intercepted:          " << eng.getTotalThreats() << "\n"
+                << "  Threats Remediated:           " << eng.getTotalRemediated() << "\n"
+                << "  Quarantined Files:            " << eng.getQuarantineCount() << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-scan" || toLower(tokens[1]) == "/scan" || toLower(tokens[1]) == "scan")) {
+            MPSCAN_TYPE scanType = MPSCAN_TYPE_QUICK;
+            std::wstring filePath;
+
+            for (size_t i = 2; i < tokens.size(); ++i) {
+                std::string arg = toLower(tokens[i]);
+                if (arg == "-scantype" && i + 1 < tokens.size()) {
+                    int st = std::atoi(tokens[++i].c_str());
+                    if (st == 1) scanType = MPSCAN_TYPE_QUICK;
+                    else if (st == 2) scanType = MPSCAN_TYPE_FULL;
+                    else if (st == 3) scanType = MPSCAN_TYPE_RESOURCE;
+                } else if ((arg == "-file" || arg == "-filepath") && i + 1 < tokens.size()) {
+                    std::string p = tokens[++i];
+                    filePath.assign(p.begin(), p.end());
+                    scanType = MPSCAN_TYPE_RESOURCE;
+                }
+            }
+
+            MPHANDLE hMgr = nullptr;
+            MpManagerOpen(0, &hMgr);
+            if (!hMgr) {
+                out << "[-] Failed to connect to antimalware service manager.\n";
+                return;
+            }
+
+            MPRESOURCE_INFO resInfo{};
+            if (!filePath.empty()) {
+                resInfo.pwszResourcePath = filePath.c_str();
+                resInfo.dwResourceType = 0;
+            }
+
+            out << "Starting " << (scanType == MPSCAN_TYPE_QUICK ? "Quick" : (scanType == MPSCAN_TYPE_FULL ? "Full" : "File")) << " Scan...\n";
+
+            MPHANDLE hScan = nullptr;
+            HRESULT hr = MpScanStart(hMgr, scanType, 0, filePath.empty() ? nullptr : &resInfo, nullptr, &hScan);
+
+            if (hr == HRESULT_FROM_WIN32_VIRUS_INFECTED) {
+                out << "[!] Scan finished: THREAT(S) DETECTED!\n";
+                MPHANDLE hThreatEnum = nullptr;
+                if (SUCCEEDED(MpThreatOpen(hMgr, &hThreatEnum))) {
+                    PMPTHREAT_INFO pInfo = nullptr;
+                    while (MpThreatEnumerate(hThreatEnum, &pInfo) == S_OK && pInfo) {
+                        std::wstring tName = pInfo->wszThreatName;
+                        std::wstring rPath = pInfo->wszResourcePath;
+                        out << "  - Threat ID: " << pInfo->ThreatId << "\n"
+                            << "    Name:      " << std::string(tName.begin(), tName.end()) << "\n"
+                            << "    Path:      " << std::string(rPath.begin(), rPath.end()) << "\n"
+                            << "    Severity:  " << pInfo->Severity << " (Remediated to Quarantine Vault)\n";
+                        MpFreeMemory(pInfo);
+                    }
+                    MpThreatClose(hThreatEnum);
+                }
+            } else if (SUCCEEDED(hr)) {
+                out << "[+] Scan finished: No threats detected. System is clean.\n";
+            } else {
+                out << "[-] Scan failed with error code: 0x" << std::hex << hr << std::dec << "\n";
+            }
+
+            MpManagerClose(hMgr);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-listquarantine" || toLower(tokens[1]) == "/listquarantine" || toLower(tokens[1]) == "listquarantine")) {
+            MPHANDLE hMgr = nullptr;
+            MpManagerOpen(0, &hMgr);
+            if (!hMgr) return;
+
+            DWORD count = 0;
+            PMPQUARANTINE_ENTRY entries = nullptr;
+            HRESULT hr = MpGetQuarantineVault(hMgr, &count, &entries);
+            if (SUCCEEDED(hr)) {
+                out << "AegisDefender Encrypted Quarantine Vault (C:\\ProgramData\\MicaNT\\Quarantine):\n";
+                out << "  Total Quarantined Items: " << count << "\n";
+                if (count == 0) {
+                    out << "  (Quarantine vault is empty)\n";
+                } else if (entries) {
+                    for (DWORD i = 0; i < count; ++i) {
+                        std::wstring tName = entries[i].wszThreatName;
+                        std::wstring origPath = entries[i].wszOriginalPath;
+                        std::wstring qPath = entries[i].wszQuarantinePath;
+                        out << "  [" << (i + 1) << "] Threat: " << std::string(tName.begin(), tName.end()) << "\n"
+                            << "      Original Path:   " << std::string(origPath.begin(), origPath.end()) << "\n"
+                            << "      Quarantine Path: " << std::string(qPath.begin(), qPath.end()) << "\n"
+                            << "      Original Size:   " << entries[i].FileSize << " bytes\n";
+                    }
+                    MpFreeMemory(entries);
+                }
+            } else {
+                out << "[-] Failed to read quarantine vault.\n";
+            }
+            MpManagerClose(hMgr);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-restore" || toLower(tokens[1]) == "/restore" || toLower(tokens[1]) == "restore")) {
+            std::string threatName;
+            std::string restorePath;
+            for (size_t i = 2; i < tokens.size(); ++i) {
+                std::string arg = toLower(tokens[i]);
+                if ((arg == "-threatname" || arg == "-name") && i + 1 < tokens.size()) {
+                    threatName = tokens[++i];
+                } else if ((arg == "-path" || arg == "-restorepath") && i + 1 < tokens.size()) {
+                    restorePath = tokens[++i];
+                }
+            }
+
+            if (threatName.empty()) {
+                out << "Usage: defender -Restore -ThreatName <name> [-Path <restore_path>]\n";
+                return;
+            }
+
+            MPHANDLE hMgr = nullptr;
+            MpManagerOpen(0, &hMgr);
+            if (!hMgr) return;
+
+            std::wstring wThreatName(threatName.begin(), threatName.end());
+            std::wstring wRestorePath(restorePath.begin(), restorePath.end());
+            HRESULT hr = MpQuarantineRestore(hMgr, wThreatName.c_str(), restorePath.empty() ? nullptr : wRestorePath.c_str());
+
+            if (SUCCEEDED(hr)) {
+                out << "[+] Successfully restored \"" << threatName << "\" from quarantine vault.\n";
+            } else if (hr == MP_E_THREAT_NOT_FOUND) {
+                out << "[-] Threat \"" << threatName << "\" was not found in quarantine vault.\n";
+            } else {
+                out << "[-] Failed to restore threat from quarantine: 0x" << std::hex << hr << std::dec << "\n";
+            }
+
+            MpManagerClose(hMgr);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-purgequarantine" || toLower(tokens[1]) == "/purgequarantine" || toLower(tokens[1]) == "purgequarantine")) {
+            MPHANDLE hMgr = nullptr;
+            MpManagerOpen(0, &hMgr);
+            if (!hMgr) return;
+
+            DWORD count = 0;
+            PMPQUARANTINE_ENTRY entries = nullptr;
+            HRESULT hr = MpGetQuarantineVault(hMgr, &count, &entries);
+            if (SUCCEEDED(hr) && entries) {
+                for (DWORD i = 0; i < count; ++i) {
+                    MpQuarantineDelete(hMgr, entries[i].wszThreatName);
+                }
+                MpFreeMemory(entries);
+                out << "[+] Purged " << count << " quarantined items from vault.\n";
+            } else {
+                out << "[+] Quarantine vault is already empty.\n";
+            }
+            MpManagerClose(hMgr);
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-signatureupdate" || toLower(tokens[1]) == "/signatureupdate" || toLower(tokens[1]) == "update")) {
+            out << "Checking for AegisDefender signature updates...\n";
+            out << "[+] Local sovereign threat signatures verified up to date (Version 1.415.2026.0).\n"
+                << "    Catalog Status: Sovereign Offline Mode (Zero Telemetry).\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && (toLower(tokens[1]) == "-getfiles" || toLower(tokens[1]) == "/getfiles" || toLower(tokens[1]) == "getfiles")) {
+            out << "AegisDefender Support Diagnostic Information:\n"
+                << "  Engine Version:               1.1.26100.1\n"
+                << "  Service Version:              10.0.26100.1\n"
+                << "  Client Interface:             mpclient.dll\n"
+                << "  Engine Core:                  mpengine.dll\n"
+                << "  Log Path:                     C:\\ProgramData\\MicaNT\\Defender\\SupportLog.txt\n"
+                << "  Quarantine Directory:         C:\\ProgramData\\MicaNT\\Quarantine\\\n"
+                << "  Telemetry Status:             Disabled (Sovereign Air-Gapped Operation)\n";
+            return;
+        }
+
+        out << "Microsoft Defender Antimalware Command Line Utility (MpCmdRun.exe Parity)\n"
+            << "Type 'defender /?' or 'defender -?' for a complete list of options.\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -120,16 +120,18 @@ flowchart LR
   - CLI: `amsi` (`amsi status`, `amsi scan <content>`, `amsi block <pattern>`, `amsi unblock <pattern>`, `amsi clear`, `amsi test`).
   - Verification: Unit Test Suite 137 (`Test_WindowsAMSI_SentinelScan_Subsystem`) passing at 100%.
 
-### Phase 3: AegisDefender Antimalware Engine (`mpengine.dll` / `MpCmdRun.exe`)
-- **Goal**: Full clean-room file scanner and threat remediation engine.
-- **Components**:
-  - `include/micant/mpengine.hpp` exporting `mpengine.dll`.
+### Phase 3: AegisDefender Antimalware Engine (`mpclient.dll` / `mpengine.dll` / `MpCmdRun.exe`) - **COMPLETED (Milestone 138)**
+- **Goal**: Full clean-room file scanner and threat remediation engine with zero background telemetry.
+- **Implemented Components**:
+  - `include/micant/mpengine.hpp` exporting `mpclient.dll` and `mpengine.dll`.
+  - Win32 C ABI Exports: `MpManagerOpen`, `MpManagerClose`, `MpScanStart`, `MpScanControl`, `MpThreatOpen`, `MpThreatEnumerate`, `MpThreatClose`, `MpCleanOpen`, `MpCleanStart`, `MpCleanClose`, `MpGetThreatInfo`, `MpGetQuarantineVault`, `MpQuarantineRestore`, `MpQuarantineDelete`, `MpFreeMemory`, `MpErrorMessageFormat`.
   - Core Capabilities:
-    1. **Signature Database**: Local binary definitions matching known malicious shellcode and exploit payloads.
-    2. **PE Section Entropy Heuristics**: Calculates Shannon entropy of PE image sections (`.text`, `.data`, `.rsrc`) to detect packed or encrypted malware droppers.
-    3. **Quarantine Vault**: Encrypted on-disk store (`C:\ProgramData\MicaNT\Quarantine`) using AES-256 to isolate detected threats safely.
-    4. **Remediation Actions**: Clean, Quarantine, Remove, Allow.
-  - CLI: `mpcmdrun` / `defender` (`mpcmdrun -Scan -ScanType 1`, `mpcmdrun -ListQuarantine`, `mpcmdrun -Restore`).
+    1. **Signature Database**: Local binary definitions matching known malicious shellcode, stagers, and exploit payloads without cloud beaconing.
+    2. **PE Section Entropy Heuristics**: Shannon entropy calculation ($H = -\sum p_i \log_2(p_i)$) on PE image section headers (`.text`, `.data`, `.rsrc`) detecting packed and encrypted malware droppers (> 7.2 bits/byte in executable sections).
+    3. **Quarantine Vault**: Encrypted on-disk isolation store (`C:\ProgramData\MicaNT\Quarantine`) using AES-256-CBC, unique IV generation, and SHA-256 cryptographic verification for quarantine and authenticated restoration.
+    4. **Remediation Actions**: Clean, Quarantine, Remove, Allow, Block.
+  - CLI: `mpcmdrun` / `defender` (`defender -Scan -ScanType <1|2>`, `defender -Scan -File <path>`, `defender -ListQuarantine`, `defender -Restore`, `defender -PurgeQuarantine`, `defender -SignatureUpdate`, `defender -GetFiles`, `defender status`, `defender test`).
+  - Verification: Unit Test Suite 138 (`Test_WindowsDefender_AegisDefender_Subsystem`) passing at 100%.
 
 ### Phase 4: Process Exploit Mitigations & Hardening (`mitigation.hpp`)
 - **Goal**: Memory defense preventing buffer overflows, shellcode execution, and ROP gadgets.

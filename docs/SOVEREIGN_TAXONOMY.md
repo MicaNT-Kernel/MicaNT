@@ -38,6 +38,7 @@ These names:
 | **File-Level Encryption (EFS)** | **EmeraldCrypt** | `micant::efs` | `feclient.hpp` | Clean-room Encrypting File System (EFS) client, per-file AES-256 symmetric encryption, NTFS alternate utility stream ($EFS), and multi-user DDF/DRF key management. |
 | **Endpoint Security System** | **Sentinel Security System for MicaNT** | `micant::wsc`<br/>`micant::sentinel` | `wscapi.hpp`<br/>`se.hpp` | Sovereign endpoint security umbrella providing unified telemetry-free protection and health aggregation across SentinelCenter (`wscapi.dll`), Firewall (WFP), Antivirus (AegisDefender), Volume Encryption (FVE), and UAC. |
 | **In-Memory & Script Inspection (AMSI)** | **SentinelScan** | `micant::amsi` | `amsi.hpp` | Clean-room Antimalware Scan Interface (`amsi.dll`), providing in-memory buffer inspection, shellcode/NOP sled detection, script de-obfuscation heuristics, and command prompt interception. |
+| **Antimalware Engine & Client** | **AegisDefender** | `micant::defender` | `mpengine.hpp` | Clean-room Microsoft Malware Protection Engine (`mpengine.dll`) and Client (`mpclient.dll`), providing Shannon entropy PE section heuristics, local offline threat database matching, and AES-256 encrypted quarantine vault isolation. |
 
 ---
 
@@ -206,6 +207,15 @@ These names:
   - Administrative policy block rules (`AMSI_RESULT_BLOCKED_BY_ADMIN_START`).
   - Interactive shell pre-execution interception and blocking (`0x800700DF` `ERROR_VIRUS_INFECTED`).
   - CLI: `amsi` (`amsi status`, `amsi scan <content>`, `amsi block <pattern>`, `amsi unblock <pattern>`, `amsi clear`, `amsi test`).
+
+### 3.22 AegisDefender (Microsoft Malware Protection Engine & Client Subsystem)
+- **Role:** Clean-room offline antimalware engine (`mpengine.dll`) and client interface (`mpclient.dll`) providing heuristic threat classification, Shannon entropy analysis, and encrypted quarantine vault isolation without cloud beaconing.
+- **Capabilities:**
+  - Standard Win32 C ABI exports (`mpclient.dll` & `mpengine.dll`): `MpManagerOpen`, `MpManagerClose`, `MpScanStart`, `MpScanControl`, `MpThreatOpen`, `MpThreatEnumerate`, `MpThreatClose`, `MpCleanOpen`, `MpCleanStart`, `MpCleanClose`, `MpGetThreatInfo`, `MpGetQuarantineVault`, `MpQuarantineRestore`, `MpQuarantineDelete`, `MpFreeMemory`, `MpErrorMessageFormat`.
+  - Shannon entropy PE section heuristic analyzer ($H = -\sum p_i \log_2(p_i)$) detecting packed/encrypted droppers (> 7.2 bits/byte in executable sections) and shellcode in data sections (> 7.6 bits/byte).
+  - Local threat catalog and signature matching (`PowerDrop`, `LsaDump`, `AmsiTamper`, `WannaCrypt`, `ShellcodeStager`) operating 100% offline with zero cloud telemetry.
+  - Encrypted Quarantine Vault (`C:\ProgramData\MicaNT\Quarantine`) using AES-256-CBC, unique IV generation, and SHA-256 cryptographic verification for isolated containment and authenticated restoration.
+  - Interactive CLI: `MpCmdRun.exe` parity via `defender` / `mpcmdrun` (`-Scan`, `-ListQuarantine`, `-Restore`, `-PurgeQuarantine`, `-SignatureUpdate`, `-GetFiles`, `status`, `test`).
 
 ---
 
