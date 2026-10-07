@@ -64,6 +64,7 @@ These names:
 | **Intel SGX/TDX & AMD SEV-SNP Confidential Computing Subsystem** | **TitanTEE / AegisTEE** | `micant::tee` | `tee.hpp` | Clean-room hardware Trusted Execution Environment (TEE) and Confidential Computing subsystem (`virtenclave.sys`, `isv_enclave.sys`, `confidential_vm.sys`), Intel SGX 1/2 enclaves, Intel TDX 1.5 Trust Domains, AMD SEV-SNP memory protection, 512 MB EPC with AES-256-XTS MEE, EPCM tracking, AEX state scrubbing, and ECDSA-P384 attestation reports. |
 | **Intel DSA & IAA Fast-Memory Streaming Subsystem** | **TitanDSA / NexusDSA** | `micant::dsa` | `dsa.hpp` | Clean-room Intel Data Streaming Accelerator (DSA 2.0/3.0) and In-Memory Analytics Accelerator (IAA 1.0) subsystem (`intel_dsa.sys`, `intel_iaa.sys`, `dsa_accel.sys`, PCIe `00:0B.0` & `00:0B.1`), DWQ/SWQ portals with ENQCMD/ENQCMDS, fast memory copy/fill, mismatch compare, CRC32C, DualCast, and IAA columnar scan/extract acceleration. |
 | **Intel AMX & Arm SME Deep Learning Matrix Accelerator Subsystem** | **TitanMatrix / NexusAMX** | `micant::amx` | `amx.hpp` | Clean-room Intel Advanced Matrix Extensions (AMX: TILE, INT8, BF16, FP16) and Arm Scalable Matrix Extension (SME/SME2) subsystem (`intel_amx.sys`, `arm_sme.sys`, `matrix_accel.sys`), 64-byte `tilecfg` palette, 8KB 2D tile register file (`TMM0`..`TMM7`), INT8 dot products (`TDPBUSD`), BF16/FP16 multiplication (`TDPBF16PS`/`TDPFP16PS`), and Arm SME streaming SVE mode with ZA matrix outer products (`FMOPA`). |
+| **PCIe SR-IOV, PASID & Shared Virtual Addressing Subsystem** | **TitanSRIOV / NexusSVA** | `micant::sriov` | `sriov.hpp` | Clean-room PCIe Single Root I/O Virtualization (SR-IOV 1.1), Address Translation Services (ATS 1.1), Page Request Interface (PRI / PRS), Process Address Space ID (PASID 20-bit) Extended Capabilities, and Windows Shared Virtual Addressing (SVA / SVM) driver stack (`pci_sriov.sys`, `pcie_sva.sys`), Virtual Function (VF) partitioning, on-device Address Translation Cache (ATC), and PRI Peripheral Page Request demand page-in. |
 
 ---
 
@@ -754,6 +755,29 @@ These names:
     - Direct in-core systolic hardware execution delivering massive throughput acceleration for LLMs, neural networks, and scientific matrix computing.
   - System Service & Driver Integration: SCM registered drivers for `intel_amx` (`SERVICE_BOOT_START`), `arm_sme` (`SERVICE_SYSTEM_START`), and `matrix_accel` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration (`intel_amx.sys` 10.0.26100.1).
   - Interactive CLI: `amx` / `sme` / `matrix` / `titanmatrix` / `nexusamx` (`status`, `tiles`, `int8`, `bf16`, `fp16`, `sme`, `bench` / `benchmark`).
+
+### 3.48 TitanSRIOV / NexusSVA (PCIe SR-IOV, PASID & Shared Virtual Addressing Subsystem)
+- **Role:** High-performance PCIe I/O virtualization, Virtual Function partitioning, userland Process Address Space ID tagging, and hardware Address Translation Services.
+- **Capabilities:**
+  - PCIe SR-IOV Architecture (PCI-SIG SR-IOV 1.1):
+    - Physical Function (PF) enumeration and SR-IOV Extended Capability discovery.
+    - Dynamic Virtual Function (VF) configuration: `TotalVFs`, `NumVFs`, `VF Offset`, `VF Stride`, `VF Device ID`, and `VF System Page Size`.
+    - Arithmetic BDF derivation: `VF_BDF = PF_BDF + First_VF_Offset + (VF_Index * VF_Stride)`.
+    - Independent Base Address Register (BAR0..BAR5) partitioning and Function Level Reset (FLR).
+    - Safe direct hardware passthrough to Hyper-V virtual machines and container partitions.
+  - Process Address Space ID (PASID 20-bit):
+    - PCIe PASID Extended Capability supporting up to 1,048,576 discrete virtual address spaces per device.
+    - Direct binding of userland `EPROCESS` page directory tables (CR3 / TTBR0) to accelerator hardware endpoints (GPUs, NPUs, NICs, CXL).
+    - Granular execute permission and privileged mode enforcement.
+  - Address Translation Services (ATS 1.1):
+    - On-device Address Translation Cache (ATC) with sub-5ns cache hit lookups.
+    - IOMMU first-stage page table walk handling on ATC cache misses.
+    - Dynamic ATC cache invalidation and selective address range flushes.
+  - Page Request Interface (PRI / PRS):
+    - Peripheral Page Request (PPR) handling for device-side demand paging faults.
+    - Dynamic operating system page-in allocation and Page Request Group (PRG) Response completion sequencing.
+  - System Service & Driver Integration: SCM registered drivers for `pci_sriov` (`SERVICE_BOOT_START`) and `pcie_sva` (`SERVICE_SYSTEM_START`), dynamic C ABI loader exports, and Version Database registration (`pci_sriov.sys` 10.0.26100.1).
+  - Interactive CLI: `sriov` / `sva` / `pasid` / `titansriov` / `nexussva` (`status`, `list`, `enable`, `disable`, `bindings`, `translate`, `pri-fault`, `bench` / `benchmark`).
 
 ---
 

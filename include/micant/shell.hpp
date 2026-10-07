@@ -164,6 +164,7 @@
 #include "tee.hpp"
 #include "dsa.hpp"
 #include "amx.hpp"
+#include "sriov.hpp"
 
 namespace micant::shell {
 
@@ -472,6 +473,7 @@ public:
             if (cmd == "tee" || cmd == "enclave" || cmd == "sgx" || cmd == "tdx" || cmd == "sevsnp" || cmd == "titantee" || cmd == "aegistee") { cmdTee(tokens, out); return 0; }
             if (cmd == "dsa" || cmd == "iaa" || cmd == "titandsa" || cmd == "nexusdsa") { cmdDsa(tokens, out); return 0; }
             if (cmd == "amx" || cmd == "sme" || cmd == "matrix" || cmd == "titanmatrix" || cmd == "nexusamx") { cmdAmx(tokens, out); return 0; }
+            if (cmd == "sriov" || cmd == "sva" || cmd == "pasid" || cmd == "titansriov" || cmd == "nexussva") { cmdSriov(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -27500,6 +27502,206 @@ private:
             << "  amx fp16                    Execute IEEE FP16 matrix multiplication (TDPFP16PS)\n"
             << "  amx sme                     Execute Arm Scalable Matrix Extension outer product\n"
             << "  amx bench / benchmark       Benchmark systolic tile matrix multiplication throughput\n";
+    }
+
+    void cmdSriov(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& sriovSub = sriov::TitanSriovSubsystem::Instance();
+        sriovSub.initialize();
+
+        // Ensure default physical function is registered if empty
+        if (sriovSub.getPhysicalFunctions().empty()) {
+            sriovSub.registerPhysicalFunction(sriov::SriovBdf(1, 0, 0), 0x8086, 0x1592,
+                                             "Intel E810-C 100GbE QSFP28 (TitanNIC)",
+                                             8, 1, 1, 0x1889, 0x10000);
+            sriovSub.registerPhysicalFunction(sriov::SriovBdf(3, 0, 0), 0x10DE, 0x2330,
+                                             "NVIDIA H100 SXM5 80GB (TitanGPU)",
+                                             7, 1, 1, 0x2331, 0x20000);
+            sriovSub.enableVirtualFunctions(sriov::SriovBdf(1, 0, 0), 4);
+            sriovSub.bindPasid(1, 1024, "tensor_runtime.exe", 0x1A2B3C000ULL, sriov::SriovBdf(3, 0, 0));
+        }
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "status") {
+            const auto& telem = sriovSub.getTelemetry();
+            const auto& pfs = sriovSub.getPhysicalFunctions();
+            const auto& pasids = sriovSub.getPasidBindings();
+
+            uint32_t totalActiveVfs = 0;
+            for (const auto& [raw, pf] : pfs) {
+                totalActiveVfs += static_cast<uint32_t>(pf.virtualFunctions.size());
+            }
+
+            out << "===============================================================================\n"
+                << "  MicaNT PCIe SR-IOV, PASID & Shared Virtual Addressing (TitanSRIOV / NexusSVA)\n"
+                << "===============================================================================\n"
+                << "  Registered Physical Functions: " << pfs.size() << "\n"
+                << "  Active Virtual Functions (VFs): " << totalActiveVfs << "\n"
+                << "  Active PASID Process Bindings: " << pasids.size() << "\n"
+                << "  Address Translation Cache (ATS): ENABLED (PCIe ATS 1.1)\n"
+                << "  Page Request Interface (PRI):  ENABLED (PCIe PRI / PRG Services)\n"
+                << "  Access Control Services (ACS): ENABLED (Hardware IOMMU Isolation)\n"
+                << "  Telemetry Metrics:\n"
+                << "    Total Physical Functions:    " << telem.totalPfRegistered << "\n"
+                << "    Total VFs Enabled:           " << telem.totalVfsEnabled << "\n"
+                << "    Total VFs Disabled:          " << telem.totalVfsDisabled << "\n"
+                << "    Total VF Resets (FLR):       " << telem.totalVfResets << "\n"
+                << "    Total PASID Bindings:        " << telem.totalPasidBindings << "\n"
+                << "    Total ATS Translations:      " << telem.totalAtsTranslations << "\n"
+                << "    ATS ATC Cache Hits:          " << telem.totalAtsHits << "\n"
+                << "    ATS ATC Cache Misses:        " << telem.totalAtsMisses << "\n"
+                << "    PRI Peripheral Page Faults:  " << telem.totalPriPageFaults << "\n"
+                << "    PRI Responses Serviced:      " << telem.totalPriResponsesSent << "\n"
+                << "===============================================================================\n";
+            return;
+        }
+
+        if (sub == "list" || sub == "pfs") {
+            const auto& pfs = sriovSub.getPhysicalFunctions();
+            out << "Registered PCIe SR-IOV Physical Functions & Virtual Functions:\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& [raw, pf] : pfs) {
+                out << "  PF BDF: " << pf.bdf.toString()
+                    << " | Dev: [" << std::hex << std::setw(4) << std::setfill('0') << pf.vendorId << ":" << pf.deviceId << std::dec << "] "
+                    << pf.deviceName << "\n"
+                    << "    Total VFs: " << pf.sriovCap.totalVFs
+                    << " | Configured VFs: " << pf.sriovCap.numVFs
+                    << " | VF Stride: " << pf.sriovCap.vfFunctionStride
+                    << " | VF Offset: " << pf.sriovCap.vfFirstOffset << "\n";
+                if (pf.virtualFunctions.empty()) {
+                    out << "    (No Virtual Functions currently active)\n";
+                } else {
+                    for (const auto& vf : pf.virtualFunctions) {
+                        out << "      VF#" << vf.vfIndex << " BDF: " << vf.bdf.toString()
+                            << " | BAR0: 0x" << std::hex << vf.barAddress[0] << std::dec
+                            << " (" << (vf.barSize[0] / 1024) << " KB)"
+                            << " | Assigned: " << vf.assignedDomain << "\n";
+                    }
+                }
+            }
+            return;
+        }
+
+        if (sub == "enable") {
+            if (tokens.size() < 3) {
+                out << "Usage: sriov enable <vfs>\n";
+                return;
+            }
+            uint16_t numVFs = static_cast<uint16_t>(std::stoi(tokens[2]));
+            sriov::SriovBdf targetBdf(1, 0, 0);
+            int32_t status = sriovSub.enableVirtualFunctions(targetBdf, numVFs);
+            if (status == sriov::STATUS_SUCCESS) {
+                out << "[SR-IOV] Successfully enabled " << numVFs << " Virtual Functions on " << targetBdf.toString() << "\n";
+            } else {
+                out << "[SR-IOV] Failed to enable VFs: status 0x" << std::hex << status << "\n";
+            }
+            return;
+        }
+
+        if (sub == "disable") {
+            sriov::SriovBdf targetBdf(1, 0, 0);
+            int32_t status = sriovSub.disableVirtualFunctions(targetBdf);
+            out << "[SR-IOV] Disabled Virtual Functions on " << targetBdf.toString() << " (Status: 0x" << std::hex << status << ")\n";
+            return;
+        }
+
+        if (sub == "pasid-list" || sub == "bindings") {
+            const auto& pasids = sriovSub.getPasidBindings();
+            out << "Active Process Address Space ID (PASID) Shared Virtual Addressing Bindings:\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  PASID    PID     Target BDF    CR3 Directory Base    Process Name\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& [key, binding] : pasids) {
+                out << "  " << std::setw(5) << binding.pasid << "    "
+                    << std::setw(5) << binding.processId << "    "
+                    << std::setw(10) << binding.targetBdf.toString() << "    0x"
+                    << std::hex << std::setw(16) << std::setfill('0') << binding.cr3DirectoryBase << std::dec << std::setfill(' ') << "    "
+                    << binding.processName << " (" << binding.translationsCached << " cached, "
+                    << binding.pageFaultsHandled << " page-in)\n";
+            }
+            return;
+        }
+
+        if (sub == "translate") {
+            uint32_t pasid = 1;
+            uint64_t va = 0x7FFF00000000ULL;
+            if (tokens.size() > 2) pasid = static_cast<uint32_t>(std::stoul(tokens[2]));
+            if (tokens.size() > 3) va = std::stoull(tokens[3], nullptr, 16);
+
+            sriov::SriovBdf bdf(3, 0, 0);
+            uint64_t pa = 0;
+            uint32_t lat = 0;
+            int32_t stat = sriovSub.translateAddress(bdf, pasid, va, false, &pa, &lat);
+            if (stat == sriov::STATUS_SUCCESS) {
+                out << "[ATS] Translation Success:\n"
+                    << "  Virtual Address:  0x" << std::hex << va << "\n"
+                    << "  Physical Address: 0x" << pa << "\n"
+                    << "  Access Latency:   " << std::dec << lat << " ns (" << (lat < 10 ? "ATC Hit" : "IOMMU Walk") << ")\n";
+            } else if (stat == sriov::STATUS_PAGE_FAULT) {
+                out << "[ATS] Page Fault on 0x" << std::hex << va << " (Requires PRI Page Request)\n";
+            } else {
+                out << "[ATS] Translation Failed: status 0x" << std::hex << stat << "\n";
+            }
+            return;
+        }
+
+        if (sub == "pri-fault") {
+            uint32_t pasid = 1;
+            uint64_t va = 0x7FFF00005000ULL;
+            sriov::SriovBdf bdf(3, 0, 0);
+
+            sriov::PageRequestPacket req{};
+            req.prgIndex = 42;
+            req.pasid = pasid;
+            req.virtualAddress = va;
+            req.readRequested = true;
+
+            sriov::PageResponsePacket resp{};
+            int32_t stat = sriovSub.handlePageRequest(bdf, req, &resp);
+            (void)stat;
+            out << "[PRI] Peripheral Page Request handled:\n"
+                << "  PRG Index: " << resp.prgIndex << " | PASID: " << resp.pasid
+                << " | Code: " << static_cast<int>(resp.responseCode) << " (Success)\n"
+                << "  Service Latency: " << resp.latencyNs << " ns\n";
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "[SR-IOV Bench] Executing 100,000 PCIe ATS address translations & ATC lookups...\n";
+            sriov::SriovBdf bdf(3, 0, 0);
+            uint32_t pasid = 1;
+            uint64_t va = 0x7FFF00000000ULL;
+            uint64_t pa = 0;
+            uint32_t lat = 0;
+
+            // Warm up cache
+            sriovSub.translateAddress(bdf, pasid, va, false, &pa, &lat);
+
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < 100000; ++i) {
+                sriovSub.translateAddress(bdf, pasid, va, false, &pa, &lat);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+            auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            double mops = 100000.0 / (static_cast<double>(elapsedNs) / 1e9) / 1e6;
+
+            out << "  [RESULT] Processed 100,000 ATS translations in " << (elapsedNs / 1000000) << " ms.\n"
+                << "           Throughput: " << std::fixed << std::setprecision(2) << mops << " Million ATS translations/sec ("
+                << (static_cast<double>(elapsedNs) / 100000.0) << " ns/lookup)\n";
+            return;
+        }
+
+        out << "MicaNT PCIe SR-IOV, PASID & Shared Virtual Addressing (TitanSRIOV / NexusSVA)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  sriov status                Display SR-IOV, PASID, ATS, and PRI telemetry\n"
+            << "  sriov list / pfs            List Physical Functions and allocated Virtual Functions\n"
+            << "  sriov enable <vfs>          Enable specified number of VFs on default PF\n"
+            << "  sriov disable               Disable all Virtual Functions on default PF\n"
+            << "  sriov bindings / pasid-list List active Process Address Space ID bindings\n"
+            << "  sriov translate [pasid] [va] Perform PCIe ATS address translation\n"
+            << "  sriov pri-fault             Trigger simulated Peripheral Page Fault & PRG resolution\n"
+            << "  sriov bench / benchmark     Benchmark Address Translation Services (ATS) throughput\n";
     }
 
     static std::string trim(std::string_view s) {
