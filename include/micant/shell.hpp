@@ -155,6 +155,7 @@
 #include "cxl.hpp"
 #include "ucsi.hpp"
 #include "bypassio.hpp"
+#include "pmem.hpp"
 
 namespace micant::shell {
 
@@ -454,6 +455,7 @@ public:
             if (cmd == "cxl" || cmd == "cxlmem" || cmd == "cxlhost" || cmd == "cxlbus" || cmd == "titancxl") { cmdCxl(tokens, out); return 0; }
             if (cmd == "ucsi" || cmd == "usbpd" || cmd == "titanucsi" || cmd == "usbc") { cmdUcsi(tokens, out); return 0; }
             if (cmd == "bypassio" || cmd == "bpio" || cmd == "storqos" || cmd == "titanstorage") { cmdBypassIo(tokens, out); return 0; }
+            if (cmd == "pmem" || cmd == "optane" || cmd == "nvdimm" || cmd == "dax" || cmd == "titanpmem") { cmdPmem(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -26246,6 +26248,105 @@ private:
             << "  bypassio gdeflate              DirectStorage 1.2 GDeflate GPU decompression info\n"
             << "  bypassio bench / benchmark     Execute direct NVMe-to-VRAM DMA benchmark\n"
             << "  bypassio pause / resume        Pause/resume BypassIO for volume snapshot operations\n";
+    }
+
+    void cmdPmem(const std::vector<std::string>& tokens, std::ostream& out) {
+        pmem::InitializePmemSubsystem();
+        auto& pmemSub = pmem::TitanPmemSubsystem::Instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "devices" || sub == "list" || sub == "nvdimm") {
+            auto devs = pmemSub.getDevices();
+            out << "Persistent Memory Physical Devices (NVDIMM-N / Intel Optane PMEM):\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& d : devs) {
+                out << "  Device ID: " << d.deviceId << " | " << d.modelNumber << "\n"
+                    << "    Physical Location:   Socket " << d.socketId << ", Channel " << d.channelId << ", Slot " << d.slotId << "\n"
+                    << "    Serial Number:       " << d.serialNumber << "\n"
+                    << "    Capacity:            " << (d.capacityBytes / (1024ULL * 1024ULL * 1024ULL)) << " GB\n"
+                    << "    Health Status:       " << (d.health == pmem::PmemHealthStatus::Healthy ? "HEALTHY (Normal)" : "DEGRADED") << "\n"
+                    << "    Operating Temp:      " << std::fixed << std::setprecision(1) << d.temperatureCelsius << " deg C\n"
+                    << "    Life Consumed:       " << static_cast<int>(d.percentLifeUsed) << "%\n"
+                    << "    ADR Power-Loss Protection: " << (d.adrBatteryBacked ? "ARMED (Asynchronous DRAM Refresh Battery Backup)" : "UNSUPPORTED") << "\n\n";
+            }
+            return;
+        }
+
+        if (sub == "pools") {
+            auto pools = pmemSub.getPools();
+            out << "Persistent Memory Logical Storage Pools:\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& p : pools) {
+                out << "  Pool " << p.poolId << ": " << p.poolName << "\n"
+                    << "    Operating Mode:      " << (p.mode == pmem::PmemOperatingMode::AppDirect_DAX ? "App Direct (Direct Access - DAX Byte Addressable)" : "Sector Mode (BTT Atomic 4KB Block)") << "\n"
+                    << "    Base SPA Address:    0x" << std::hex << p.spaBaseAddress << std::dec << "\n"
+                    << "    Total Capacity:      " << (p.totalCapacityBytes / (1024ULL * 1024ULL * 1024ULL)) << " GB\n"
+                    << "    Allocated Space:     " << (p.allocatedBytes / (1024ULL * 1024ULL * 1024ULL)) << " GB\n"
+                    << "    Interleave Topology: " << p.interleaveWays << "-Way Interleaved (" << p.interleaveLineSize << "B line size)\n"
+                    << "    Member NVDIMMs:      " << p.participatingDeviceIds.size() << " Modules\n\n";
+            }
+            return;
+        }
+
+        if (sub == "dax") {
+            auto maps = pmemSub.getActiveDaxMappings();
+            out << "Active Direct Access (DAX) Userland Memory Mappings (" << maps.size() << " Active Files):\n"
+                << "-------------------------------------------------------------------------------\n";
+            if (maps.empty()) {
+                out << "  No active userland DAX mappings. Use 'pmem bench' to test zero-copy mapping.\n\n";
+            } else {
+                for (const auto& m : maps) {
+                    out << "  Mapping ID: " << m.mappingId << " | " << m.filePath << "\n"
+                        << "    Virtual Address:     0x" << std::hex << m.virtualAddress << std::dec << "\n"
+                        << "    Physical Address:    0x" << std::hex << m.physicalSpaAddress << std::dec << "\n"
+                        << "    Size:                " << (m.sizeBytes / (1024 * 1024)) << " MB\n"
+                        << "    Access Mode:         " << (m.isWritable ? "Read/Write (Zero Page Cache)" : "Read-Only") << "\n"
+                        << "    Cache Line Flushes:  " << m.flushCount << " flushes (Last latency: " << m.lastFlushLatencyNs << " ns)\n\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "Running Persistent Memory (Optane PMEM) Latency Benchmark...\n";
+            uint64_t virtAddr = 0;
+            uint64_t mid = pmemSub.createDaxMapping("C:\\Database\\in_memory.db", 1024 * 1024 * 1024, true, &virtAddr);
+
+            uint32_t flushLat = 0;
+            pmemSub.flushCacheLine(mid, 0, 64, &flushLat);
+
+            out << "  -> Memory Tier Latency & Throughput Comparison:\n"
+                << "     Standard DDR5 DRAM:       ~80 ns read  | ~115 GB/s\n"
+                << "     Optane PMEM App Direct:   ~210 ns read | ~38 GB/s (Non-Volatile)\n"
+                << "     Cache Flush (clwb+sfence): " << flushLat << " ns (Hardware Persistence Barrier)\n"
+                << "     PCIe Gen5 x4 NVMe SSD:    ~15,000 ns read (15 us) | 7.4 GB/s\n"
+                << "     DAX Zero-Copy Advantage:  Eliminates 100% of OS page cache copies & context switches\n";
+
+            pmemSub.removeDaxMapping(mid);
+            return;
+        }
+
+        // Default: status
+        auto telem = pmemSub.getTelemetry();
+        out << "Persistent Memory (NVDIMM / Intel Optane PMEM) Architecture Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Kernel Driver Subsystem:       pmem.sys (NVDIMM Core Driver - Active)\n"
+            << "  Filesystem DAX Filter Driver:  dax.sys (Direct Access Storage - Active)\n"
+            << "  ACPI Interface Table:          NFIT (NVDIMM Firmware Interface Table 6.5)\n"
+            << "  Total NVDIMM Hardware Modules: " << telem.totalNvdimmCount << " Installed Modules\n"
+            << "  Total Persistent Memory Pool:  " << (telem.totalCapacityBytes / (1024ULL * 1024ULL * 1024ULL * 1024ULL)) << " TB (" << (telem.totalCapacityBytes / (1024ULL * 1024ULL * 1024ULL)) << " GB)\n"
+            << "  Active DAX Allocated Memory:   " << (telem.totalAllocatedDaxBytes / (1024ULL * 1024ULL)) << " MB\n"
+            << "  Average Read Latency:          " << telem.avgReadLatencyNs << " ns (Sub-microsecond)\n"
+            << "  Average Write Latency:         " << telem.avgWriteLatencyNs << " ns (Non-volatile)\n"
+            << "  Average Flush Latency:         " << telem.avgFlushLatencyNs << " ns (clwb / sfence)\n"
+            << "  Power-Loss Protection (ADR):   " << (telem.adrProtectionArmActive ? "ARMED (Asynchronous DRAM Refresh Active)" : "DISABLED") << "\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  pmem status                    Display PMEM subsystem status and telemetry\n"
+            << "  pmem devices / list            Enumerate physical NVDIMM / Optane hardware\n"
+            << "  pmem pools                     Inspect App Direct and BTT logical storage pools\n"
+            << "  pmem dax                       Inspect active Direct Access memory mappings\n"
+            << "  pmem bench / benchmark         Run byte-addressable latency benchmark\n";
     }
 
     static std::string trim(std::string_view s) {

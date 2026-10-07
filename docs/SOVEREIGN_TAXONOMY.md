@@ -55,6 +55,7 @@ These names:
 | **Compute Express Link (CXL 2.0 / 3.1)** | **TitanCXL / NexusCXL** | `micant::cxl` | `cxl.hpp` | Clean-room Compute Express Link 2.0/3.1 heterogeneous memory fabric (`cxlhost.sys`, `cxlmem.sys`, `cxlbus.sys` at 00:09.0 & Bus 4) with CXL.io, CXL.cache, CXL.mem, Type 1/2/3 devices, HDM decoders, DMT NUMA tiering, and mailbox. |
 | **USB Type-C & Power Delivery (UCSI 2.1/3.0 / PD 3.1)** | **TitanUCSI / NexusUCSI** | `micant::ucsi` | `ucsi.hpp` | Clean-room USB Type-C Connector System Software Interface (UCSI 2.1/3.0) and USB Power Delivery 3.1 (240W EPR) subsystem (`ucsi.sys`, `usbc.sys`, `ppm.sys`, ACPI `\_SB.UBTC`) with 4 physical ports, EPR AVS (15-48V @ 5A), E-Marker discovery, and dynamic role swapping (`PR_SWAP` / `DR_SWAP`). |
 | **DirectStorage 1.2 & BypassIO Subsystem** | **TitanBypassIO / NexusBypassIO** | `micant::bypassio` | `bypassio.hpp` | Clean-room Windows BypassIO architecture (`FSCTL_MANAGE_BYPASS_IO`) & DirectStorage 1.2 GPU decompression driver stack (`bypassio.sys`, `storqos.sys`) with direct NVMe-to-VRAM DMA (<25us latency), GDeflate GPU compute/CPU SIMD codec, and 3-tier Storage QoS. |
+| **Persistent Memory & DAX Storage Subsystem** | **TitanPMEM / NexusPMEM** | `micant::pmem` | `pmem.hpp` | Clean-room Persistent Memory (NVDIMM / Optane PMEM) & DAX driver stack (`pmem.sys`, `dax.sys`), ACPI 6.5 NFIT parser, App Direct zero-copy DAX userland mapping (`SEC_DAX`), Block Translation Table (BTT) 4KB atomic sector update crash protection, `clwb` + `sfence` persistence flush barriers (<100ns latency), and Asynchronous DRAM Refresh (ADR) power-loss protection. |
 
 ---
 
@@ -576,6 +577,27 @@ These names:
     - 3-tier traffic scheduling: Tier 0 DirectStorage Real-Time Streaming (5.5 GB/s guaranteed, 70% weight, 1.5M IOPS), Tier 1 Foreground Applications (25% weight), and Tier 2 Background Maintenance (5% weight).
   - System Service & Driver Integration: SCM registered drivers for `bypassio` (`SERVICE_BOOT_START`) and `storqos` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `bypassio` / `bpio` / `storqos` / `titanstorage` (`status`, `filters` / `stack`, `qos`, `gdeflate`, `bench` / `benchmark`, `pause` / `resume`).
+
+### 3.39 TitanPMEM & NexusPMEM (Persistent Memory & Direct Access Storage Subsystem)
+- **Role:** Sovereign non-volatile byte-addressable persistent storage subsystem implementing the Microsoft Windows PMEM architecture (`pmem.sys`), Direct Access filesystem filter driver (`dax.sys`), JEDEC NVDIMM-N standard (JESD245), ACPI 6.5 NFIT specification, and SNIA NVM Programming Model.
+- **Capabilities:**
+  - Standard PMEM Driver C ABI exports (`pmem.sys`, `dax.sys`): `PmemInitialize`, `PmemGetVersion`, `PmemGetDeviceCount`, `PmemGetDeviceInfo`, `PmemGetPoolCount`, `PmemGetPoolInfo`, `PmemFlushCacheLine`, `PmemGetTelemetry`, `DaxMapFileToMemory`, `DaxUnmapFile`.
+  - ACPI 6.5 NFIT Table & Range Parsing:
+    - Parses System Physical Address (SPA) range structures, NVDIMM Control Regions, and Interleave structures.
+    - Full standard GUID compliance: `GUID_PMEM_BYTE_ADDRESSABLE` (`7305944F-FDDA-44E3-A162-98240E7F3D76`), `GUID_PMEM_BLOCK_TRANSLATION_TABLE` (`1928CDAB-7065-4ADE-B887-6199A7911012`), and `GUID_PMEM_VOLATILE_MEMORY`.
+  - Physical NVDIMM Hardware Topology:
+    - Pre-seeded dual physical Intel Optane PMEM 300 Series 512GB modules (1 TB aggregate pool) across dual memory controller channels.
+    - Health monitoring tracking module temperature (~38.5°C), life percentage used, dirty shutdown counts, and health status codes.
+  - App Direct Mode & Direct Access (DAX) Zero-Copy Userland Mappings:
+    - Zero-copy virtual memory window assignment at `0x7FFF00000000ULL` (`VirtualAlloc` with `SEC_DAX` flag `0x02000000`).
+    - Eliminates operating system page cache, filesystem buffer trees, and page fault overhead, providing direct byte-addressable CPU loads and stores (~210ns read, ~180ns write).
+  - Block Translation Table (BTT) Crash Protection:
+    - Atomic 4KB sector update engine with pre-allocation table logging, guaranteeing no torn writes on sudden power loss for conventional block filesystems.
+  - Hardware Persistence Barrier Flush:
+    - Enforces Cache Line Write Back (`clwb`) and Store Fence (`sfence`) pipeline synchronization with sub-100ns latency (~85ns).
+    - Asynchronous DRAM Refresh (ADR) circuit armed and active, guaranteeing in-flight write queue drainage to non-volatile media upon system power failure.
+  - System Service & Driver Integration: SCM registered drivers for `pmem` (`SERVICE_BOOT_START`) and `dax` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `pmem` / `optane` / `nvdimm` / `dax` / `titanpmem` (`status`, `devices` / `list`, `pools`, `dax`, `bench` / `benchmark`).
 
 ---
 
