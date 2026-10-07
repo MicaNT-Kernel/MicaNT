@@ -744,6 +744,8 @@ const testAllContent = `// =====================================================
 ${DRIVER_SPECS.map(d => `#include "micant/${d.header}"`).join('\n')}
 
 using namespace micant;
+using namespace micant::wdf;
+using namespace micant::usb4;
 
 static int g_PassedTests = 0;
 static int g_FailedTests = 0;
