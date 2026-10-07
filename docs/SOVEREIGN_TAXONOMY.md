@@ -41,6 +41,7 @@ These names:
 | **Antimalware Engine & Client** | **AegisDefender** | `micant::defender` | `mpengine.hpp` | Clean-room Microsoft Malware Protection Engine (`mpengine.dll`) and Client (`mpclient.dll`), providing Shannon entropy PE section heuristics, local offline threat database matching, and AES-256 encrypted quarantine vault isolation. |
 | **Driver Frameworks (KMDF & UMDF)** | **TitanWDF / AegisWDF** | `micant::wdf` | `wdf.hpp` | Clean-room Windows Driver Frameworks (KMDF v1.33 / UMDF 2.0) object models, queue pacing, and user-mode driver host isolation. |
 | **Pseudo Console & Terminal (ConPTY)** | **TitanPTY / SurPTY** | `micant::conpty` | `conpty.hpp` | Named in tribute to the Windows Terminal and Console Host architecture evolution. Unifies headless VT server, differential VT rendering, and Win32 character grids. |
+| **Universal Serial Bus (USB 3.2 & xHCI)** | **TitanUSB / NexusUSB** | `micant::usb`<br/>`micant::xhci` | `usb.hpp` | Clean-room xHCI 1.2 Extensible Host Controller Interface, Transfer Request Blocks (TRB), Root Hub, Mass Storage (BOT/SCSI), HID, CDC-ACM, and WinUSB subsystem. |
 
 ---
 
@@ -248,6 +249,22 @@ These names:
   - Bidirectional VT Input Parser: Translates incoming terminal sequences (arrows, home, end, function keys, SGR 1006 mouse events) into standard Win32 `INPUT_RECORD` structures (`KEY_EVENT`, `MOUSE_EVENT`, `WINDOW_BUFFER_SIZE_EVENT`).
   - System Service Registration: SCM registered service `OpenConsole` (`TitanPTY Headless Console Host Server`).
   - Interactive CLI: `conpty` / `pty` / `pseudoconsole` (`status`, `list`, `create`, `write`, `resize`, `close`, `test`).
+
+### 3.25 TitanUSB (Universal Serial Bus 3.2 & xHCI Host Controller Subsystem)
+- **Role:** Clean-room Universal Serial Bus (USB 3.2 Gen 2) and Extensible Host Controller Interface (xHCI 1.2) architecture providing hardware register virtualization, TRB ring execution, root hub port status management, standard device class drivers, and WinUSB client driver APIs (`winusb.dll`).
+- **Heritage:** Conceived as the sovereign hardware I/O sibling to TitanHAL and VanguardDriver, named *TitanUSB* / *NexusUSB* to reflect direct host controller virtualization and device tree topology mapping.
+- **Capabilities:**
+  - Standard Win32 / WinUSB C ABI exports (`winusb.dll`): `WinUsb_Initialize`, `WinUsb_Free`, `WinUsb_GetAssociatedInterface`, `WinUsb_GetDescriptor`, `WinUsb_QueryInterfaceSettings`, `WinUsb_QueryDeviceInformation`, `WinUsb_SetCurrentAlternateSetting`, `WinUsb_QueryPipe`, `WinUsb_SetPipePolicy`, `WinUsb_GetPipePolicy`, `WinUsb_ReadPipe`, `WinUsb_WritePipe`, `WinUsb_ControlTransfer`, `WinUsb_ResetPipe`, `WinUsb_AbortPipe`, `WinUsb_FlushPipe`.
+  - xHCI 1.2 Extensible Host Controller Register Model: Capability registers (CAPLENGTH, HCIVERSION, HCSPARAMS1-3, HCCPARAMS1-2, DBOFF, RTSOFF), Operational registers (USBCMD, USBSTS, PAGESIZE, DNCTRL, CRCR, DCBAAP, CONFIG), and Interrupter Runtime registers (IMAN, IMOD, ERSTSZ, ERSTBA, ERDP).
+  - TRB Ring Engine: Command Ring, Event Ring, and Transfer Rings with 64-byte TRB cycle bits, event interrupts, transfer completion codes (`Success`, `DataBufferError`, `BabbleDetected`, `ShortPacket`, `StallError`), and slot/endpoint doorbell mechanisms.
+  - Standard USB 3.2 Descriptor Model: Full support for Device (`USB_DEVICE_DESCRIPTOR`), Configuration (`USB_CONFIGURATION_DESCRIPTOR`), Interface (`USB_INTERFACE_DESCRIPTOR`), Endpoint (`USB_ENDPOINT_DESCRIPTOR`), and SuperSpeed Companion (`USB_SS_ENDPOINT_COMPANION_DESCRIPTOR`) descriptors.
+  - Root Hub & Port State Machine: Port status and control registers (`PORTSC`) handling connect detection (`CurrentConnectStatus`), port reset signaling (`PortReset`), link speed negotiation (`LowSpeed`, `FullSpeed`, `HighSpeed`, `SuperSpeed`, `SuperSpeedPlus`), and port disable/enable transitions.
+  - Device Class Drivers:
+    - **Mass Storage (BOT / SCSI):** Bulk-Only Transport state machine with Command Block Wrapper (CBW) and Command Status Wrapper (CSW), processing SCSI `INQUIRY`, `READ_CAPACITY_10`, `READ_10`, and `WRITE_10` over 512-byte sectors.
+    - **Human Interface Device (HID):** Standard USB mouse reports (3-button, X/Y relative coordinate delta packets) with input report buffering and endpoint polling.
+    - **Communication Device Class (CDC-ACM):** Virtual serial COM port emulation (`USBSER`) with line coding configuration (`SetLineCoding`, `GetLineCoding`), modem control lines (`SetControlLineState`), and bidirectional data stream transfers.
+  - System Service & Driver Integration: SCM registered services for `usbxhci` (TitanUSB xHCI Controller Driver) and `usbhub3` (TitanUSB SuperSpeed Hub Driver), integrated with JanusLDR Dynamic Loader and Version Database.
+  - Interactive CLI: `usb` / `xhci` / `winusb` (`status`, `list` / `tree`, `attach`, `detach`, `xhci`, `test`).
 
 ---
 
