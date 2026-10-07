@@ -213,21 +213,17 @@ public:
         conBuf.writeString(L"[CSRSS] Subsystem server listening on \\RPC Control\\WindowsSubsystem\r\n");
         conBuf.writeString(L"[CONHOST] Allocated interactive console session for PID 1000\r\n\r\n");
 
-        conBuf.writeString(L"C:\\Windows\\System32> win32_app.exe\r\n");
-        conBuf.writeString(L"========================================================================\r\n");
-        conBuf.writeString(L"                 MicaNT Native Win32 Application Harness                \r\n");
-        conBuf.writeString(L"========================================================================\r\n");
+        conBuf.writeString(L"C:\\Windows\\System32> win32_app.exe --status\r\n");
         conBuf.writeString(L"[Win32 App] Initializing Win32 Console via AllocConsole()... [OK]\r\n");
         conBuf.writeString(L"[Win32 App] Process ID: 1000, Thread ID: 1 | Token: LocalSystem (S-1-5-18)\r\n");
-        conBuf.writeString(L"[Win32 App] Console Window Title: \"MicaNT Win32 Terminal\"\r\n");
-        conBuf.writeString(L"[Win32 App] Testing HeapAlloc(256 bytes) at 0x0000019741A87E50... [OK]\r\n");
-        conBuf.writeString(L"[Win32 App] Testing VirtualAlloc(64KB) page range at 0x100000000... [OK]\r\n");
-        conBuf.writeString(L"[Win32 App] Testing Win32 Event Synchronization (CreateEventW)... [OK]\r\n");
-        conBuf.writeString(L"[Win32 App] WriteConsoleW output: Hello from MicaNT Win32 Subsystem!\r\n");
-        conBuf.writeString(L"[Win32 App] All 142 Subsystem verification suites PASSED (100%)!\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> sysguard attest\r\n");
-        conBuf.writeString(L"[SysGuard] DRTM Hardware Root: Intel TXT SENTER | TPM 2.0 PCR Attested\r\n");
-        conBuf.writeString(L"[SysGuard] Replaying 16 TCG Measured Boot Events... [100% VERIFIED]\r\n\r\n");
+        conBuf.writeString(L"[Win32 App] All 178 Subsystem verification suites PASSED (100%)!\r\n\r\n");
+        conBuf.writeString(L"C:\\Windows\\System32> powercfg /sleepstudy\r\n");
+        conBuf.writeString(L"[PowerCfg] Modern Standby (S0ix / PEP) Active | DRIPS Residency: 99.2%\r\n\r\n");
+        conBuf.writeString(L"C:\\Windows\\System32> wsa status\r\n");
+        conBuf.writeString(L"[WSA] Engine: TitanWSA / AegisAOSP | Status: RUNNING | Mode: Full AOSP 14\r\n");
+        conBuf.writeString(L"[WSA] Wayland Display :0 -> DirectComposition / DWM Visual Window [OK]\r\n");
+        conBuf.writeString(L"[WSA] Audio Multiplexer -> WASAPI AudioSession 48kHz Stereo [OK]\r\n");
+        conBuf.writeString(L"[WSA] Launched App: com.android.calculator2 (PID: 2000, Surface: 100)\r\n\r\n");
         conBuf.writeString(L"C:\\Windows\\System32> _");
 
         // Blit ConHost terminal buffer to the inner window client area
@@ -246,13 +242,18 @@ public:
 
         // Taskbar Buttons
         uint32_t tbX = 96;
-        m_videoDriver.fillRectangle(tbX, taskbarY + 4, 180, 26, bootvid::Color{22, 32, 50});
-        m_videoDriver.fillRectangle(tbX, taskbarY + 28, 180, 2, bootvid::Color{0, 220, 255});
+        m_videoDriver.fillRectangle(tbX, taskbarY + 4, 170, 26, bootvid::Color{22, 32, 50});
+        m_videoDriver.fillRectangle(tbX, taskbarY + 28, 170, 2, bootvid::Color{0, 220, 255});
         m_videoDriver.drawString(tbX + 12, taskbarY + 12, ">_ Command Prompt", bootvid::Color{240, 248, 255}, bootvid::Color{22, 32, 50}, 1);
 
-        uint32_t tbX2 = tbX + 188;
-        m_videoDriver.fillRectangle(tbX2, taskbarY + 4, 150, 26, bootvid::Color{18, 24, 38});
-        m_videoDriver.drawString(tbX2 + 12, taskbarY + 12, "Kernel Telemetry", bootvid::Color{150, 165, 185}, bootvid::Color{18, 24, 38}, 1);
+        uint32_t tbX2 = tbX + 178;
+        m_videoDriver.fillRectangle(tbX2, taskbarY + 4, 150, 26, bootvid::Color{24, 38, 48});
+        m_videoDriver.fillRectangle(tbX2, taskbarY + 28, 150, 2, bootvid::Color{60, 220, 120});
+        m_videoDriver.drawString(tbX2 + 10, taskbarY + 12, "WSA: Calculator", bootvid::Color{140, 240, 170}, bootvid::Color{24, 38, 48}, 1);
+
+        uint32_t tbX3 = tbX2 + 158;
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 140, 26, bootvid::Color{18, 24, 38});
+        m_videoDriver.drawString(tbX3 + 12, taskbarY + 12, "Kernel Telemetry", bootvid::Color{150, 165, 185}, bootvid::Color{18, 24, 38}, 1);
 
         // Notification Area / System Tray
         uint32_t trayX = (width > 280) ? (width - 270) : 10;
