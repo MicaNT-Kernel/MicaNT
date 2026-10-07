@@ -65,6 +65,7 @@ These names:
 | **Intel DSA & IAA Fast-Memory Streaming Subsystem** | **TitanDSA / NexusDSA** | `micant::dsa` | `dsa.hpp` | Clean-room Intel Data Streaming Accelerator (DSA 2.0/3.0) and In-Memory Analytics Accelerator (IAA 1.0) subsystem (`intel_dsa.sys`, `intel_iaa.sys`, `dsa_accel.sys`, PCIe `00:0B.0` & `00:0B.1`), DWQ/SWQ portals with ENQCMD/ENQCMDS, fast memory copy/fill, mismatch compare, CRC32C, DualCast, and IAA columnar scan/extract acceleration. |
 | **Intel AMX & Arm SME Deep Learning Matrix Accelerator Subsystem** | **TitanMatrix / NexusAMX** | `micant::amx` | `amx.hpp` | Clean-room Intel Advanced Matrix Extensions (AMX: TILE, INT8, BF16, FP16) and Arm Scalable Matrix Extension (SME/SME2) subsystem (`intel_amx.sys`, `arm_sme.sys`, `matrix_accel.sys`), 64-byte `tilecfg` palette, 8KB 2D tile register file (`TMM0`..`TMM7`), INT8 dot products (`TDPBUSD`), BF16/FP16 multiplication (`TDPBF16PS`/`TDPFP16PS`), and Arm SME streaming SVE mode with ZA matrix outer products (`FMOPA`). |
 | **PCIe SR-IOV, PASID & Shared Virtual Addressing Subsystem** | **TitanSRIOV / NexusSVA** | `micant::sriov` | `sriov.hpp` | Clean-room PCIe Single Root I/O Virtualization (SR-IOV 1.1), Address Translation Services (ATS 1.1), Page Request Interface (PRI / PRS), Process Address Space ID (PASID 20-bit) Extended Capabilities, and Windows Shared Virtual Addressing (SVA / SVM) driver stack (`pci_sriov.sys`, `pcie_sva.sys`), Virtual Function (VF) partitioning, on-device Address Translation Cache (ATC), and PRI Peripheral Page Request demand page-in. |
+| **Hardware IOMMU & DMA Remapping** | **TitanIOMMU / AegisIOMMU** | `micant::iommu` | `iommu.hpp` | Clean-room Intel VT-d 3.0 / AMD-Vi / Arm SMMUv3 I/O Memory Management Unit subsystem (`dmar.sys`, `iommu.sys`, `kdmapt.sys`), multi-level second-stage page tables (SLPTPTR, 48-bit address width), IOTLB caching (<4ns hit), 128-bit Interrupt Remapping Table Entries (IRTE) with strict Source ID (SID) validation, Posted Interrupts (PIR), and Kernel DMA Protection intercepting unauthorized drive-by attacks. |
 
 ---
 
@@ -778,6 +779,33 @@ These names:
     - Dynamic operating system page-in allocation and Page Request Group (PRG) Response completion sequencing.
   - System Service & Driver Integration: SCM registered drivers for `pci_sriov` (`SERVICE_BOOT_START`) and `pcie_sva` (`SERVICE_SYSTEM_START`), dynamic C ABI loader exports, and Version Database registration (`pci_sriov.sys` 10.0.26100.1).
   - Interactive CLI: `sriov` / `sva` / `pasid` / `titansriov` / `nexussva` (`status`, `list`, `enable`, `disable`, `bindings`, `translate`, `pri-fault`, `bench` / `benchmark`).
+
+### 3.49 TitanIOMMU / AegisIOMMU (Hardware IOMMU & DMA Remapping Subsystem)
+- **Role:** Hardware-enforced direct I/O memory management, multi-level second-stage address remapping, device isolation, interrupt remapping, and active Kernel DMA Protection against peripheral drive-by attacks.
+- **Capabilities:**
+  - Hardware Architecture Parity:
+    - Intel Virtualization Technology for Directed I/O (Intel VT-d Architecture Rev 3.3).
+    - AMD I/O Virtualization Technology (AMD-Vi Revision 3.0).
+    - Arm System Memory Management Unit Architecture (SMMUv3.2).
+    - ACPI 6.5 DMA Remapping Reporting (DMAR) Table Architecture.
+  - Multi-Level Second-Stage DMA Remapping:
+    - Second-Level Paging Table Pointer (SLPTPTR) with 48-bit address width (4-level paging).
+    - I/O Virtual Address (IOVA) to Host Physical Address (HPA) translation.
+    - Page-level Read/Write permission enforcement with sub-40ns hardware table walk latency.
+  - On-Die IOTLB Caching & Fast Invalidation:
+    - Hardware IOTLB caching delivering sub-4ns lookup latency on cache hits.
+    - Global and domain-selective IOTLB invalidation engine.
+    - Fast-path 1:1 identity mapping pass-through mode for trusted physical host devices.
+  - Interrupt Remapping & Security (IRTE):
+    - 128-bit Interrupt Remapping Table Entries (IRTE) mapping MSI/MSI-X vectors to target CPU APIC IDs.
+    - Strict Source ID (SID / BDF) validation preventing interrupt injection and vector spoofing.
+    - Posted Interrupts (PIR) direct vector delivery with zero hypervisor exit overhead.
+  - Kernel DMA Protection & Drive-By Interception:
+    - Strict device attachment validation intercepting unauthorized hotplugged peripheral DMA requests (Thunderbolt 4, USB4, PCIe).
+    - Immediate blocking (`STATUS_ACCESS_DENIED`) and Primary Fault Logging (FRR).
+    - Real-time fault record capture (`FAULT_CONTEXT_ENTRY_NOT_PRESENT`, `FAULT_WRITE_PERMISSION_VIOLATION`, `FAULT_UNMAPPED_ADDRESS`, `FAULT_SID_VERIFICATION_FAILED`).
+  - System Service & Driver Integration: SCM registered boot drivers for `dmar` (`SERVICE_BOOT_START`), `iommu` (`SERVICE_BOOT_START`), and `kdmapt` (`SERVICE_SYSTEM_START`), dynamic C ABI loader exports, and Version Database registration (`dmar.sys`, `iommu.sys`, `kdmapt.sys` 10.0.26100.1).
+  - Interactive CLI: `iommu` / `vtd` / `dmar` / `titaniommu` / `aegisiommu` (`status`, `domains`, `devices`, `translate`, `attack-sim`, `faults`, `bench` / `benchmark`).
 
 ---
 

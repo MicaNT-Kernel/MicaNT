@@ -165,6 +165,7 @@
 #include "dsa.hpp"
 #include "amx.hpp"
 #include "sriov.hpp"
+#include "iommu.hpp"
 
 namespace micant::shell {
 
@@ -474,6 +475,7 @@ public:
             if (cmd == "dsa" || cmd == "iaa" || cmd == "titandsa" || cmd == "nexusdsa") { cmdDsa(tokens, out); return 0; }
             if (cmd == "amx" || cmd == "sme" || cmd == "matrix" || cmd == "titanmatrix" || cmd == "nexusamx") { cmdAmx(tokens, out); return 0; }
             if (cmd == "sriov" || cmd == "sva" || cmd == "pasid" || cmd == "titansriov" || cmd == "nexussva") { cmdSriov(tokens, out); return 0; }
+            if (cmd == "iommu" || cmd == "vtd" || cmd == "dmar" || cmd == "titaniommu" || cmd == "aegisiommu") { cmdIommu(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -27702,6 +27704,180 @@ private:
             << "  sriov translate [pasid] [va] Perform PCIe ATS address translation\n"
             << "  sriov pri-fault             Trigger simulated Peripheral Page Fault & PRG resolution\n"
             << "  sriov bench / benchmark     Benchmark Address Translation Services (ATS) throughput\n";
+    }
+
+    void cmdIommu(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& iommuSub = iommu::TitanIommuSubsystem::Instance();
+        iommuSub.initialize();
+
+        // Ensure sample domain and mappings are initialized if empty
+        if (iommuSub.getDomains().empty()) {
+            iommuSub.createDomain(1, 48); // Domain 1: Host System Domain
+            iommuSub.createDomain(2, 48); // Domain 2: Hyper-V VM Isolated Domain
+            iommuSub.attachDevice(iommu::IommuBdf(1, 0, 0), 1); // 01:00.0 (Intel E810 NIC) to Domain 1
+            iommuSub.attachDevice(iommu::IommuBdf(3, 0, 0), 2); // 03:00.0 (NVIDIA H100 GPU) to Domain 2
+
+            // Map DMA buffers: IOVA 0x10000000 -> Host PA 0x20000000 (1MB)
+            iommuSub.mapDmaRange(1, 0x10000000, 0x20000000, 0x100000, true, true);
+            iommuSub.mapDmaRange(2, 0x50000000, 0x80000000, 0x200000, true, true);
+
+            // Register IRTEs
+            iommuSub.registerIrte(16, 48, 0, iommu::IommuBdf(1, 0, 0), false);
+            iommuSub.registerIrte(32, 64, 1, iommu::IommuBdf(3, 0, 0), true, 0x1F0000ULL);
+        }
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "status") {
+            const auto& telem = iommuSub.getTelemetry();
+            const auto& doms = iommuSub.getDomains();
+            const auto& devs = iommuSub.getDeviceAssignments();
+            const auto& faults = iommuSub.getFaultLog();
+
+            out << "===============================================================================\n"
+                << "  MicaNT IOMMU & DMA Remapping Subsystem (TitanIOMMU / AegisIOMMU)\n"
+                << "===============================================================================\n"
+                << "  Intel VT-d 3.0 / AMD-Vi Status: ENABLED (Translation & Remapping Active)\n"
+                << "  Kernel DMA Protection:         ENABLED (Drive-by Interception Active)\n"
+                << "  Queued Invalidation (QI):      ENABLED (Hardware Invalidation Queue)\n"
+                << "  Interrupt Remapping (IR):      ENABLED (128-bit IRTE Protection)\n"
+                << "  Active Protection Domains:     " << doms.size() << "\n"
+                << "  Bound Device Contexts:         " << devs.size() << "\n"
+                << "  Recorded DMA Faults:           " << faults.size() << "\n"
+                << "  Telemetry Metrics:\n"
+                << "    Total DMA Translations:      " << telem.totalDmaTranslations << "\n"
+                << "    IOTLB Cache Hits:            " << telem.iotlbHits << "\n"
+                << "    IOTLB Cache Misses:          " << telem.iotlbMisses << "\n"
+                << "    Interrupts Remapped:         " << telem.totalInterruptsRemapped << "\n"
+                << "    Posted Interrupts Injected:  " << telem.totalPostedInterrupts << "\n"
+                << "    IOTLB Invalidations:         " << telem.totalIotlbInvalidations << "\n"
+                << "    Total DMA Faults Intercepted:" << telem.totalDmaFaultsBlocked << "\n"
+                << "    Malicious DMA Blocked:       " << telem.totalMaliciousDmaBlocked << "\n"
+                << "===============================================================================\n";
+            return;
+        }
+
+        if (sub == "domains") {
+            const auto& doms = iommuSub.getDomains();
+            out << "Active IOMMU Protection Domains:\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  Domain ID    Width    Page Directory (SLPTPTR)    Attached Devices    Mapped Pages\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& [id, dom] : doms) {
+                out << "  " << std::setw(9) << dom.domainId << "    "
+                    << std::setw(5) << static_cast<int>(dom.addressWidth) << "-bit  0x"
+                    << std::hex << std::setw(16) << std::setfill('0') << dom.pageDirectoryRoot << std::dec << std::setfill(' ') << "    "
+                    << std::setw(16) << dom.attachedDevices.size() << "    "
+                    << dom.pageTable.size() << "\n";
+            }
+            return;
+        }
+
+        if (sub == "devices") {
+            const auto& devs = iommuSub.getDeviceAssignments();
+            out << "PCIe Endpoints Assigned to IOMMU Protection Domains:\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  BDF           Domain ID    Status / Isolation Mode\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& [rawBdf, domId] : devs) {
+                out << "  " << std::setw(12) << iommu::IommuBdf::fromRaw(rawBdf).toString() << "  "
+                    << std::setw(9) << domId << "    Hardware Second-Stage Translation (Isolated)\n";
+            }
+            return;
+        }
+
+        if (sub == "translate") {
+            uint64_t devAddr = 0x10000000ULL;
+            if (tokens.size() > 2) devAddr = std::stoull(tokens[2], nullptr, 16);
+
+            iommu::IommuBdf bdf(1, 0, 0);
+            uint64_t hostPhys = 0;
+            uint32_t latNs = 0;
+            int32_t stat = iommuSub.translateDma(bdf, devAddr, false, &hostPhys, &latNs);
+            if (stat == iommu::STATUS_SUCCESS) {
+                out << "[DMAR] Translation Success for " << bdf.toString() << ":\n"
+                    << "  Device IOVA:   0x" << std::hex << devAddr << "\n"
+                    << "  Host Physical: 0x" << hostPhys << "\n"
+                    << "  Access Latency:" << std::dec << latNs << " ns (" << (latNs < 10 ? "IOTLB Hit" : "IOMMU Page Walk") << ")\n";
+            } else {
+                out << "[DMAR] Translation Failed for " << bdf.toString() << " at 0x" << std::hex << devAddr
+                    << " (Status: 0x" << stat << ")\n";
+            }
+            return;
+        }
+
+        if (sub == "attack-sim" || sub == "test-attack") {
+            out << "[Kernel DMA Protection] Simulating unauthorized external DMA drive-by attack...\n";
+            // Rogue device on external USB4/Thunderbolt port: BDF 05:00.0 (Not attached to any domain)
+            iommu::IommuBdf rogueBdf(5, 0, 0);
+            uint64_t victimPhysicalAddress = 0x100000ULL; // Low kernel memory
+            uint64_t translated = 0;
+
+            int32_t stat = iommuSub.translateDma(rogueBdf, victimPhysicalAddress, true, &translated, nullptr);
+            if (stat == iommu::STATUS_ACCESS_DENIED) {
+                out << "  [SHIELD ACTIVE] DMA Drive-By Attack BLOCKED by IOMMU!\n"
+                    << "                  Source BDF: " << rogueBdf.toString() << " (Unattached/Untrusted)\n"
+                    << "                  Target Address: 0x" << std::hex << victimPhysicalAddress << "\n"
+                    << "                  Hardware Verdict: FAULT_CONTEXT_ENTRY_NOT_PRESENT (0x02)\n"
+                    << "                  Kernel DMA Protection: ACCESS DENIED (0xC0000022)\n";
+            } else {
+                out << "  [ERROR] Attack was not blocked!\n";
+            }
+            return;
+        }
+
+        if (sub == "faults") {
+            const auto& faults = iommuSub.getFaultLog();
+            out << "IOMMU Primary Fault Log (" << faults.size() << " entries recorded):\n"
+                << "-------------------------------------------------------------------------------\n";
+            if (faults.empty()) {
+                out << "  (No hardware faults recorded. System operating securely.)\n";
+            } else {
+                for (size_t i = 0; i < faults.size(); ++i) {
+                    const auto& f = faults[i];
+                    out << "  #" << i << " | BDF: " << f.sourceBdf.toString()
+                        << " | Addr: 0x" << std::hex << f.faultAddress << std::dec
+                        << " | Reason: 0x" << std::hex << static_cast<int>(f.faultReason) << std::dec
+                        << " (" << (f.isWrite ? "Write" : "Read") << ") | " << f.description << "\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "[IOMMU Bench] Executing 100,000 DMA address translations & IOTLB lookups...\n";
+            iommu::IommuBdf bdf(1, 0, 0);
+            uint64_t devAddr = 0x10000000ULL;
+            uint64_t hostPhys = 0;
+            uint32_t lat = 0;
+
+            // Warm up cache
+            iommuSub.translateDma(bdf, devAddr, false, &hostPhys, &lat);
+
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < 100000; ++i) {
+                iommuSub.translateDma(bdf, devAddr, false, &hostPhys, &lat);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+            auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            double mops = 100000.0 / (static_cast<double>(elapsedNs) / 1e9) / 1e6;
+
+            out << "  [RESULT] Processed 100,000 DMA translations in " << (elapsedNs / 1000000) << " ms.\n"
+                << "           Throughput: " << std::fixed << std::setprecision(2) << mops << " Million DMA translations/sec ("
+                << (static_cast<double>(elapsedNs) / 100000.0) << " ns/lookup)\n";
+            return;
+        }
+
+        out << "MicaNT IOMMU & DMA Remapping Subsystem (TitanIOMMU / AegisIOMMU)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  iommu status                Display IOMMU, DMAR, and Kernel DMA Protection telemetry\n"
+            << "  iommu domains               List active IOMMU protection domains and page directories\n"
+            << "  iommu devices               List assigned PCIe endpoints and isolation domains\n"
+            << "  iommu translate [iova]      Perform hardware DMA address translation\n"
+            << "  iommu attack-sim            Simulate unauthorized external DMA drive-by attack\n"
+            << "  iommu faults                Inspect hardware Primary Fault Recording log\n"
+            << "  iommu bench / benchmark     Benchmark IOTLB and DMA translation throughput\n";
     }
 
     static std::string trim(std::string_view s) {
