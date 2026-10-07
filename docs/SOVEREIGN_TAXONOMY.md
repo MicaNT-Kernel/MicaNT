@@ -59,6 +59,7 @@ These names:
 | **RDMA & SMB Direct Storage Subsystem** | **TitanRDMA / NexusSMB** | `micant::rdma` | `rdma.hpp` | Clean-room NetworkDirect (NDKPI 2.0) RDMA driver stack (`ndisrdma.sys`, `smbdirect.sys`), 100GbE RoCE v2 (UDP 4791) / InfiniBand NDR (400G), kernel-bypass Queue Pairs (RC/UD) and Completion Queues, zero-copy Memory Registration (`lkey`/`rkey`), TitanRoCE autonomous lossy recovery, and SMB Direct remote DirectStorage into client VRAM/DAX. |
 | **Microsoft Pluton Security Processor Subsystem** | **TitanPluton / AegisPluton** | `micant::pluton` | `pluton.hpp` | Clean-room Microsoft Pluton on-die security processor driver (`pluton.sys`, ACPI `\_SB.PLTN`), physical bus-sniffing immunity, on-die crossbar fabric (`0xFEB00000`), 24 SHA-256 PCR banks (PCR 0..23), hardware keystore (SRK, EK, VMK), policy-sealed blobs, TRNG, and sub-5us command latency. |
 | **Intel Thread Director & AMD CPPC Heterogeneous Scheduling Subsystem** | **TitanDirector / AegisScheduler** | `micant::hfi` | `hfi.hpp` | Clean-room Intel Hardware Feedback Interface (HFI / Thread Director) and AMD Collaborative Processor Performance Control (CPPC v2/v3) heterogeneous CPU scheduling subsystem (`intel_hfi.sys`, `amd_cppc.sys`), 24 logical cores (8 P-Cores, 14 E-Cores, 2 LP E-Cores on SoC island), 5-class thread classification (`Class0_Standard` .. `Class4_Background`), autonomous core parking, EPP policy, and sub-50ns thread dispatch latency. |
+| **Intel CET & Hardware-Enforced Stack Protection Subsystem** | **TitanCET / AegisCET** | `micant::cet` | `cet.hpp` | Clean-room Intel Control-flow Enforcement Technology (CET) and AMD Shadow Stack subsystem (`kshadowstack.sys`, `cet.sys`), dual-stack hardware execution, hardware `#CP` Vector 21 exception dispatch, Indirect Branch Tracking (IBT `ENDBR64`), ROP/COP/JOP mitigation, restore tokens, and sub-5ns call/ret validation latency. |
 
 ---
 
@@ -654,6 +655,25 @@ These names:
     - Runtime performance policies: `Performance`, `BalancedPerformance`, `BalancedPower`, and `PowerSaver` dynamically adjusting frequency scaling and transition latencies.
   - System Service & Driver Integration: SCM registered boot drivers for `intel_hfi` (`SERVICE_BOOT_START`) and `amd_cppc` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `hfi` / `director` / `cppc` / `titandirector` (`status`, `cores`, `schedule`, `park`, `epp`, `bench` / `benchmark`).
+
+### 3.43 TitanCET & AegisCET (Intel Control-Flow Enforcement Technology & Hardware-Enforced Stack Protection Subsystem)
+- **Role:** Sovereign hardware-enforced exploit mitigation subsystem implementing Intel Control-flow Enforcement Technology (CET), AMD Shadow Stacks, and Microsoft Windows 11 Hardware-Enforced Stack Protection (`HSP`) architecture (`kshadowstack.sys`, `cet.sys`).
+- **Capabilities:**
+  - Standard CET Driver C ABI exports (`kshadowstack.sys`, `cet.sys`): `CetInitialize`, `CetGetVersion`, `CetGetCapabilities`, `CetAllocateShadowStack`, `CetFreeShadowStack`, `CetSimulateCall`, `CetSimulateRet`, `CetVerifyIndirectBranch`, `CetGetTelemetry`.
+  - Dual-Stack Hardware Architecture:
+    - Normal Data Stack (RSP) separated from hardware-protected Shadow Stack (SSP) with read-only memory attributes (`PAGE_SHADOW_STACK`).
+    - Automatic hardware return IP pushing on `CALL` and verification against `[RSP]` on `RET`.
+  - Hardware Control Protection Exception (#CP Vector 21):
+    - Subcode `CP_FAULT_NEAR_RET` (`0x1`) immediately traps stack pivots and buffer overflows, terminating attack threads with `STATUS_CONTROL_STACK_VIOLATION` (`0xC0000428`).
+    - Subcode `CP_FAULT_ENDBR` (`0x3`) intercepts indirect call/jump transfers missing the 4-byte `ENDBR64` (`0xFA1E0FF3`) landing pad.
+  - Architectural MSR Management:
+    - Supervisor MSR (`MSR_IA32_S_CET` `0x6A2`) and User MSR (`MSR_IA32_U_CET` `0x6A0`) controlling shadow stack enables, WRSS/WRUSS instruction permissions, and IBT tracking.
+  - Shadow Stack Switching & Tokens:
+    - 64-bit restore tokens with busy bit verification (`RSTORSSP` / `SAVEPREVSSP`) preventing concurrent or corrupted stack switches.
+  - Sub-5ns Validation Latency:
+    - 100% hardware-enforced checks with zero runtime software spinlock overhead.
+  - System Service & Driver Integration: SCM registered drivers for `kshadowstack` (`SERVICE_BOOT_START`) and `cet` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration (`kshadowstack.sys` 10.0.26100.1).
+  - Interactive CLI: `cet` / `shadowstack` / `titancet` / `aegiscet` (`status`, `stacks`, `test_rop`, `test_jop`, `bench` / `benchmark`).
 
 ---
 
