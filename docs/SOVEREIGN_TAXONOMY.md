@@ -47,6 +47,7 @@ These names:
 | **ACPI Platform & AML Interpreter** | **TitanACPI / AegisACPI** | `micant::acpi` | `acpi.hpp` | Clean-room ACPI 6.5 table validation (RSDP/XSDT/FADT/MADT/MCFG/DMAR/SRAT), AML AST evaluation, ACPI namespace (`\_SB`, `\_PR`, `\_TZ`), and `acpi.sys` driver. |
 | **High Definition Audio (HDA & UAC2)** | **TitanHDA / NexusHDA** | `micant::hda` | `hdaudio.hpp` | Clean-room Intel HDA 1.0a controller, CORB/RIRB DMA rings, Codec Widget tree (ALC887 DAC/ADC/Pins), Jack Sense, USB Audio Class 2.0, and `hdaudio.sys` driver. |
 | **Windows Display Driver Model (WDDM 3.2)** | **TitanWDDM / NexusWDDM** | `micant::wddm` | `wddm.hpp`<br/>`dxgkrnl.hpp` | Clean-room WDDM 3.2 graphics kernel subsystem (`dxgkrnl.sys`, `displib.sys`), VidMm physical memory segments, VidPN 3.0 display topology, WDDM 3.2 direct hardware queues, monitored fences, TDR recovery, and multi-vendor miniports (NVIDIA, AMD, Intel, PrismX). |
+| **Network Driver Specification (NDIS 6.88)** | **TitanNDIS / RazzleNet** | `micant::ndis` | `ndis.hpp` | Clean-room NDIS 6.88 network driver subsystem (`ndis.sys`), NET_BUFFER_LIST pools, Hardware Offloads (IPv4/IPv6 Checksum, LSOv2 64KB, RSC), RSS Toeplitz hash & 128-entry indirection table, SR-IOV 16 VFs, and RazzleNet 10GbE/100GbE PCIe miniport (`razzlenet.sys` at 00:04.0) with dual 512-entry DMA descriptor rings. |
 
 ---
 
@@ -373,6 +374,31 @@ These names:
     - **Microsoft Basic Display Driver:** `basicdisplay.sys` (VGA / UEFI GOP / VirtIO fallback)
   - System Service & Driver Integration: SCM registered boot drivers for `dxgkrnl` and `displib` (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `wddm` / `gpu` / `graphics` (`status`, `adapters` / `list`, `vidmm` / `vram`, `vidpn` / `displays`, `queues` / `engines`, `tdr`, `test`).
+
+### 3.31 TitanNDIS & RazzleNet (Network Driver Interface Specification 6.88 & High-Speed PCIe Miniports)
+- **Designation:** `TitanNDIS` (NDIS 6.88 Subsystem) / `RazzleNet` (10GbE/40GbE/100GbE PCIe Miniport Adapter)
+- **Role:** Clean-room Windows Network Driver Interface Specification (NDIS 6.0 through 6.88) architecture, NDIS miniport driver model (`ndis.sys`), high-throughput NET_BUFFER (NB) and NET_BUFFER_LIST (NBL) memory pools, Hardware Offload Engine (IPv4/IPv6 Checksum, LSOv2 64KB, RSC), Receive Side Scaling (RSS) with 40-byte Toeplitz Hash and 128-entry indirection table, Single Root I/O Virtualization (SR-IOV) Virtual Function management, and high-speed RazzleNet PCIe Miniport (`razzlenet.sys`) at PCIe BDF `00:04.0`.
+- **Heritage:** Conceived as the core kernel-mode network driver orchestrator, linking physical high-speed network interfaces, DMA descriptor rings, and protocol stacks (TCP/IP) into a unified zero-copy packet pipeline.
+- **Capabilities:**
+  - Standard Network Driver C ABI exports (`ndis.sys`, `razzlenet.sys`): `NdisMRegisterMiniportDriver`, `NdisMDeregisterMiniportDriver`, `NdisMSetMiniportAttributes`, `NdisAllocateNetBufferListPool`, `NdisFreeNetBufferListPool`, `NdisAllocateNetBufferList`, `NdisFreeNetBufferList`, `NdisMIndicateReceiveNetBufferLists`, `NdisMSendNetBufferListsComplete`, `NdisQueryAdapterInformation`, `RazzleNetInitializeMiniport`, `RazzleNetTransmitPacket`.
+  - Memory Management & Descriptor Pools:
+    - Pre-allocated thread-safe `NetBufferListPool` recycling `NET_BUFFER_LIST` and `NET_BUFFER` objects.
+    - OOB metadata channels (`TcpIpChecksumNetBufferListInfo`, `TcpLargeSendNetBufferListInfo`, `TcpReceiveSegmentCoalescingInfo`).
+  - Hardware Offload Engine:
+    - Checksum Offload: IPv4 header checksum and TCP/UDP (IPv4/IPv6) calculation and verification via RFC 1071 16-bit 1's complement sum.
+    - Large Send Offload v2 (LSOv2 / TSO): Hardware segmentation of up to 64KB TCP payloads into MTU-sized Ethernet frames in DMA.
+    - Receive Segment Coalescing (RSC): Aggregation of consecutive incoming TCP segments into coalesced NBLs to minimize CPU interrupt load.
+  - Receive Side Scaling (RSS):
+    - 40-byte Toeplitz Hash algorithm calculated over packet 4-tuples (SrcIP, DstIP, SrcPort, DstPort).
+    - 128-entry Indirection Table distributing incoming traffic across multi-core CPU processor queues.
+  - High-Speed DMA Ring Buffers:
+    - Dual 512-entry circular DMA descriptor rings (TX and RX) with Head/Tail doorbell registers (`TDT`/`RDT`).
+    - Adaptive Interrupt Moderation (AIM) dynamically tuning interrupt frequency based on line rate throughput.
+  - Virtualization & Multi-Tenancy:
+    - Single Root I/O Virtualization (SR-IOV) supporting Physical Function (PF) resource management and up to 16 Virtual Functions (VFs 0..15).
+    - Dedicated VF MAC addresses, 802.1Q VLAN isolation (1..4095), rate limiting (Mbps), and hardware MAC anti-spoofing enforcement.
+  - System Service & Driver Integration: SCM registered boot drivers for `ndis` (`SERVICE_BOOT_START`) and `razzlenet` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `ndis` / `nic` / `razzlenet` (`status`, `adapters` / `nics`, `rings` / `dma`, `rss`, `offloads`, `sriov`, `stats`, `test`).
 
 ---
 

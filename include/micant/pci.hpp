@@ -46,6 +46,10 @@
 #include "version.hpp"
 #include "vanguarddriver.hpp"
 
+#ifndef WINAPI
+#define WINAPI __stdcall
+#endif
+
 namespace micant::pci {
 
 using BOOL = int32_t;
