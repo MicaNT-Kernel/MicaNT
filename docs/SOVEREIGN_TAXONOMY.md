@@ -45,6 +45,7 @@ These names:
 | **PCI Express (PCIe 5.0 & 6.0 Bus)** | **TitanPCI / NexusPCI** | `micant::pci`<br/>`micant::pcie` | `pci.hpp` | Clean-room PCI Express 5.0/6.0 Root Complex, Type 0/1 configuration space, BAR dynamic sizing, MSI/MSI-X vector engines, and Advanced Error Reporting (AER). |
 | **NVM Express & Flash Storage (NVMe/UFS/eMMC/AHCI)** | **TitanNVMe / TitanFlash / EmeraldNVMe** | `micant::nvme`<br/>`micant::storage` | `nvme.hpp`<br/>`storage.hpp` | Clean-room NVM Express 1.0e–2.0d host controller, multi-namespace flash storage, S.M.A.R.T. telemetry, UFS 4.0, eMMC 5.1 SDHCI, and AHCI SATA SSD with NCQ. |
 | **ACPI Platform & AML Interpreter** | **TitanACPI / AegisACPI** | `micant::acpi` | `acpi.hpp` | Clean-room ACPI 6.5 table validation (RSDP/XSDT/FADT/MADT/MCFG/DMAR/SRAT), AML AST evaluation, ACPI namespace (`\_SB`, `\_PR`, `\_TZ`), and `acpi.sys` driver. |
+| **High Definition Audio (HDA & UAC2)** | **TitanHDA / NexusHDA** | `micant::hda` | `hdaudio.hpp` | Clean-room Intel HDA 1.0a controller, CORB/RIRB DMA rings, Codec Widget tree (ALC887 DAC/ADC/Pins), Jack Sense, USB Audio Class 2.0, and `hdaudio.sys` driver. |
 
 ---
 
@@ -326,6 +327,23 @@ These names:
     - `\_TZ.TZ00`: Thermal Zone policy object exporting `_TMP` (current temperature in tenths of Kelvin, 45.0°C), `_CRT` (critical trip point, 100.0°C), and `_AC0` (active cooling fan threshold, 55.0°C).
   - System Service & Driver Integration: SCM registered boot driver for `acpi.sys` (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `acpi` / `aml` (`status`, `tables` / `list`, `tree` / `devices`, `power [state]`, `thermal`, `battery`, `cpu`, `eval <path>`, `test`).
+
+### 3.29 TitanHDA & NexusHDA (Intel High Definition Audio 1.0a & USB Audio Platform Subsystem)
+- **Role:** Clean-room Intel High Definition Audio (HDA 1.0a / Azalia) controller, Command Outbound Ring Buffer (CORB), Response Inbound Ring Buffer (RIRB), Audio Codec Widget hierarchy (DAC, ADC, Mixer, Pin Complexes with Jack Sense), USB Audio Class (UAC 2.0/3.0), and Windows HD Audio Driver (`hdaudio.sys`, `usbaudio2.sys`).
+- **Heritage:** Conceived as the bare-metal hardware audio presentation sibling to PrismAudio and VectorHID, interfacing directly with PCIe device `00:05.0` and the USB Root Hub to provide low-latency multi-channel PCM streaming.
+- **Capabilities:**
+  - Standard Windows HD Audio Driver C ABI exports (`hdaudio.sys`): `HdaControllerReset`, `HdaSendVerb`, `HdaSetupStream`, `HdaStartStream`, `HdaStopStream`, `HdaGetStreamPosition`, `HdaGetCodecInfo`, `HdaGetJackStatus`, `HdaSynthesizeTone`.
+  - Hardware MMIO Register Virtualization: Full register map including Global Capabilities (`GCAP`), Global Control (`GCTL` with `CRST` reset state machine), Interrupt Control/Status (`INTCTL`, `INTSTS`), Wall Clock (`WALCLK` 24 MHz counter), and Stream Synchronization (`SSYNC`).
+  - Circular Ring Buffer Engines:
+    - **CORB:** 1024-byte Command Outbound Ring Buffer (256 entries) with write/read pointer pacing (`CORBWP`, `CORBRP`, `CORBCTL`).
+    - **RIRB:** 2048-byte Response Inbound Ring Buffer (256 entries) with 64-bit response handling (`RIRBWP`, `RINTCNT`, `RIRBCTL`).
+    - **Immediate Command Interface:** Fallback register interface (`ICO`, `ICI`, `ICS`) for direct verb dispatch.
+  - Stream Descriptor & DMA Architecture: 8 independent streams (4 Input, 4 Output) with 16-byte Buffer Descriptor List (BDL) entries, cyclic DMA buffers, Link Position in Buffer (`SD_LPIB`), and format encoding (`HdaEncodeFormat` for 44.1k/48k/96k/192k, 16/20/24/32-bit, 1..16 channels).
+  - Codec Widget Architecture: Pre-seeded Realtek ALC887 / Sovereign Studio HDA Codec at address 0 (Node 0 Root, Node 1 Audio Function Group, Node 0x02 DAC 0 Front Stereo, Node 0x03 DAC 1 Headphone, Node 0x04 ADC 0 Mic/Line In, Node 0x0C Mixer, Nodes 0x14/0x15/0x18 Pin Complexes) supporting verb execution (`GET_PARAM`, `SET_STREAM_CHANNEL`, `SET_AMP_GAIN_MUTE`, `SET_PIN_CTRL`, `GET_PIN_SENSE` Jack Presence Detect with unsolicited event injection).
+  - USB Audio Class 2.0 / 3.0: Studio DAC dongle emulation (48kHz 24-bit stereo isochronous streaming) with master volume and mute controls.
+  - Tone Synthesis & Audio Engine Bridge: Realtime PCM sine wave DMA generation linked with `micant::audio` / `PrismAudioSubsystem` software mixer.
+  - System Service & Driver Integration: SCM registered boot/system drivers for `hdaudio` (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`) and `usbaudio2` (`SERVICE_DEMAND_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `hda` / `hdaudio` / `azalia` (`status`, `codecs` / `list`, `widgets`, `streams`, `jacks`, `uac` / `usb`, `play <hz> [ms] [vol]`, `test`).
 
 ---
 
