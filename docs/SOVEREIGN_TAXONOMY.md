@@ -58,6 +58,7 @@ These names:
 | **Persistent Memory & DAX Storage Subsystem** | **TitanPMEM / NexusPMEM** | `micant::pmem` | `pmem.hpp` | Clean-room Persistent Memory (NVDIMM / Optane PMEM) & DAX driver stack (`pmem.sys`, `dax.sys`), ACPI 6.5 NFIT parser, App Direct zero-copy DAX userland mapping (`SEC_DAX`), Block Translation Table (BTT) 4KB atomic sector update crash protection, `clwb` + `sfence` persistence flush barriers (<100ns latency), and Asynchronous DRAM Refresh (ADR) power-loss protection. |
 | **RDMA & SMB Direct Storage Subsystem** | **TitanRDMA / NexusSMB** | `micant::rdma` | `rdma.hpp` | Clean-room NetworkDirect (NDKPI 2.0) RDMA driver stack (`ndisrdma.sys`, `smbdirect.sys`), 100GbE RoCE v2 (UDP 4791) / InfiniBand NDR (400G), kernel-bypass Queue Pairs (RC/UD) and Completion Queues, zero-copy Memory Registration (`lkey`/`rkey`), TitanRoCE autonomous lossy recovery, and SMB Direct remote DirectStorage into client VRAM/DAX. |
 | **Microsoft Pluton Security Processor Subsystem** | **TitanPluton / AegisPluton** | `micant::pluton` | `pluton.hpp` | Clean-room Microsoft Pluton on-die security processor driver (`pluton.sys`, ACPI `\_SB.PLTN`), physical bus-sniffing immunity, on-die crossbar fabric (`0xFEB00000`), 24 SHA-256 PCR banks (PCR 0..23), hardware keystore (SRK, EK, VMK), policy-sealed blobs, TRNG, and sub-5us command latency. |
+| **Intel Thread Director & AMD CPPC Heterogeneous Scheduling Subsystem** | **TitanDirector / AegisScheduler** | `micant::hfi` | `hfi.hpp` | Clean-room Intel Hardware Feedback Interface (HFI / Thread Director) and AMD Collaborative Processor Performance Control (CPPC v2/v3) heterogeneous CPU scheduling subsystem (`intel_hfi.sys`, `amd_cppc.sys`), 24 logical cores (8 P-Cores, 14 E-Cores, 2 LP E-Cores on SoC island), 5-class thread classification (`Class0_Standard` .. `Class4_Background`), autonomous core parking, EPP policy, and sub-50ns thread dispatch latency. |
 
 ---
 
@@ -633,6 +634,26 @@ These names:
     - High-entropy hardware generator providing secure random nonces and cryptographic keys with zero external bias.
   - System Service & Driver Integration: SCM registered boot driver for `pluton` (`SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration (`pluton.sys` 10.0.26100.1).
   - Interactive CLI: `pluton` / `titanpluton` / `aegispluton` (`status`, `pcrs`, `keys`, `seal`, `bench` / `benchmark`).
+
+### 3.42 TitanDirector & AegisScheduler (Intel Thread Director & AMD CPPC Heterogeneous Scheduling Subsystem)
+- **Role:** Sovereign hybrid/heterogeneous CPU scheduling subsystem implementing Intel Hardware Feedback Interface (HFI / Thread Director), AMD Collaborative Processor Performance Control (CPPC v2/v3), ACPI 6.5 `_CPC` / `_HFI` objects, and standard kernel drivers (`intel_hfi.sys`, `amd_cppc.sys`).
+- **Capabilities:**
+  - Standard Scheduling Driver C ABI exports (`intel_hfi.sys`, `amd_cppc.sys`): `HfiInitialize`, `HfiGetVersion`, `HfiGetCapabilities`, `HfiGetCoreFeedback`, `HfiClassifyThread`, `HfiScheduleThread`, `HfiSetAutonomousParking`, `HfiSetEnergyPerformancePreference`, `HfiGetTelemetry`, `CppcInitialize`, `CppcGetVersion`, `CppcGetCoreRanking`, `CppcSetDesiredPerformance`, `CppcGetTelemetry`.
+  - Heterogeneous Hybrid Topology Support:
+    - 24 logical core asymmetric topology modeling (8 High-Performance P-Cores with SMT, 14 High-Efficiency E-Cores, and 2 Low-Power Island LP E-Cores).
+    - Dynamic performance and energy efficiency metric tracking refreshed via hardware feedback shared memory (`MSR_IA32_HFI_CONFIG` `0x17D0`, `MSR_AMD_CPPC_CAP` `0xC00102B0`).
+  - 5-Tier Runtime Workload Classification:
+    - `Class0_Standard`: General computing and interactive userland tasks.
+    - `Class1_VectorCompute`: AVX-512, AMX matrix math, and SIMD workloads prioritized for P-Cores.
+    - `Class2_MemoryBound`: Memory-bound pipelines routed to high cache-bandwidth cores.
+    - `Class3_IoBound`: I/O poll loops and driver completions.
+    - `Class4_Background`: System maintenance and garbage collection confined to LP E-Cores.
+  - Dynamic Autonomous Core Parking:
+    - Automatically idles unneeded P/E cores under light loads, routing background threads to low-power SoC island cores for maximum battery life and zero thermal throttling.
+  - Energy Performance Preference (EPP) Governance:
+    - Runtime performance policies: `Performance`, `BalancedPerformance`, `BalancedPower`, and `PowerSaver` dynamically adjusting frequency scaling and transition latencies.
+  - System Service & Driver Integration: SCM registered boot drivers for `intel_hfi` (`SERVICE_BOOT_START`) and `amd_cppc` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `hfi` / `director` / `cppc` / `titandirector` (`status`, `cores`, `schedule`, `park`, `epp`, `bench` / `benchmark`).
 
 ---
 

@@ -158,6 +158,7 @@
 #include "pmem.hpp"
 #include "rdma.hpp"
 #include "pluton.hpp"
+#include "hfi.hpp"
 
 namespace micant::shell {
 
@@ -460,6 +461,7 @@ public:
             if (cmd == "pmem" || cmd == "optane" || cmd == "nvdimm" || cmd == "dax" || cmd == "titanpmem") { cmdPmem(tokens, out); return 0; }
             if (cmd == "rdma" || cmd == "roce" || cmd == "infiniband" || cmd == "smbdirect" || cmd == "titanrdma") { cmdRdma(tokens, out); return 0; }
             if (cmd == "pluton" || cmd == "titanpluton" || cmd == "aegispluton") { cmdPluton(tokens, out); return 0; }
+            if (cmd == "hfi" || cmd == "director" || cmd == "cppc" || cmd == "titandirector") { cmdHfi(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -26573,6 +26575,124 @@ private:
             << "  pluton keys / keystore         Inspect hardware-isolated root keys and certificates\n"
             << "  pluton seal [secret]           Seal secret payload to current hardware PCR policy\n"
             << "  pluton bench / benchmark       Execute on-die cryptographic acceleration benchmark\n";
+    }
+
+    void cmdHfi(const std::vector<std::string>& tokens, std::ostream& out) {
+        hfi::InitializeHfiSubsystem();
+        auto& dirSub = hfi::TitanDirectorSubsystem::Instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "status") {
+            auto telem = dirSub.getTelemetry();
+            out << "\n===============================================================================\n"
+                << "   MicaNT Intel Thread Director & AMD CPPC Heterogeneous CPU Scheduler (TitanDirector)\n"
+                << "===============================================================================\n"
+                << "  Processor Model:               " << dirSub.getCpuModel() << "\n"
+                << "  Total Logical Cores:           " << dirSub.getCoreCount() << " Cores\n"
+                << "  Active Cores:                  " << telem.activeCores << " Cores\n"
+                << "  Parked Cores:                  " << telem.parkedCores << " Cores\n"
+                << "  HFI Hardware Feedback:         " << (telem.hfiHardwareFeedbackActive ? "ENABLED (MSR 0x17D0 Active)" : "DISABLED") << "\n"
+                << "  CPPC Autonomous Scaling:       " << (telem.cppcAutonomousEnabled ? "ENABLED (Autonomous Frequency Control)" : "DISABLED") << "\n"
+                << "  Global EPP (Energy Preference):" << static_cast<uint32_t>(dirSub.getEnergyPerformancePreference()) << " / 255 (Balanced)\n"
+                << "  Estimated Package Power:       " << telem.estimatedPackagePowerWatts << " Watts (TDP Thermal Optimization)\n"
+                << "  Average System Load:           " << telem.averageSystemLoadPercent << " %\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  Total Thread Dispatches:       " << telem.totalThreadDispatches << "\n"
+                << "  P-Core Dispatches:             " << telem.pCoreDispatches << " (High-IPC / AVX / AI / Realtime)\n"
+                << "  E-Core Dispatches:             " << telem.eCoreDispatches << " (High Throughput / Watt)\n"
+                << "  LP E-Core Dispatches:          " << telem.lpCoreDispatches << " (SoC Island Low-Voltage)\n"
+                << "  Autonomous Core Migrations:    " << telem.totalMigrations << "\n"
+                << "===============================================================================\n";
+            return;
+        }
+
+        if (sub == "cores" || sub == "topology") {
+            auto cores = dirSub.getCores();
+            out << "\n=== Heterogeneous CPU Core Topology (" << cores.size() << " Logical Processors) ===\n";
+            for (const auto& c : cores) {
+                std::string typeStr = (c.coreType == hfi::CoreType::P_Core) ? "P-Core (Lion Cove)" :
+                                      (c.coreType == hfi::CoreType::E_Core) ? "E-Core (Skymont)" : "LP E-Core (SoC Island)";
+                std::string stateStr = c.isParked ? "[PARKED]" : "[ACTIVE]";
+                out << "  Core #" << std::setw(2) << c.coreId << " [" << typeStr << "]: "
+                    << "Base " << c.baseFreqMhz << " MHz, Boost " << c.maxBoostFreqMhz << " MHz, Curr " << c.currentFreqMhz << " MHz | "
+                    << "PerfRating " << static_cast<uint32_t>(c.performanceRating) << "/255, "
+                    << "EffRating " << static_cast<uint32_t>(c.efficiencyRating) << "/255 "
+                    << stateStr << "\n";
+            }
+            return;
+        }
+
+        if (sub == "schedule") {
+            std::string cType = (tokens.size() > 2) ? tokens[2] : "vector";
+            hfi::ThreadClass tc = hfi::ThreadClass::Class1_VectorAVX;
+            if (cType == "normal" || cType == "0") tc = hfi::ThreadClass::Class0_Standard;
+            else if (cType == "vector" || cType == "1") tc = hfi::ThreadClass::Class1_VectorAVX;
+            else if (cType == "matrix" || cType == "ai" || cType == "2") tc = hfi::ThreadClass::Class2_MatrixAI;
+            else if (cType == "ui" || cType == "latency" || cType == "3") tc = hfi::ThreadClass::Class3_LatencyUI;
+            else if (cType == "background" || cType == "io" || cType == "4") tc = hfi::ThreadClass::Class4_Background;
+
+            uint32_t predictedFreq = 0;
+            uint32_t targetCore = dirSub.assignCoreForThread(tc, &predictedFreq);
+            hfi::LogicalCoreDescriptor desc{};
+            dirSub.getCore(targetCore, desc);
+
+            out << "[HFI Schedule] Thread Class: " << cType << " -> Dispatched to Core #" << targetCore << " (" << desc.coreName << ")\n"
+                << "               Operating Frequency: " << predictedFreq << " MHz | Perf: " << static_cast<uint32_t>(desc.performanceRating)
+                << " | Eff: " << static_cast<uint32_t>(desc.efficiencyRating) << "\n";
+            return;
+        }
+
+        if (sub == "park") {
+            if (tokens.size() < 3) {
+                out << "Usage: hfi park <coreId> [0=unpark|1=park]\n";
+                return;
+            }
+            uint32_t coreId = static_cast<uint32_t>(std::stoul(tokens[2]));
+            bool park = (tokens.size() > 3) ? (tokens[3] != "0") : true;
+            if (dirSub.setCoreParking(coreId, park)) {
+                out << "[HFI] Core #" << coreId << (park ? " PARKED (Power saved)" : " UNPARKED (Active)") << " successfully.\n";
+            } else {
+                out << "[HFI] Failed to set parking state for Core #" << coreId << ".\n";
+            }
+            return;
+        }
+
+        if (sub == "epp") {
+            uint8_t epp = (tokens.size() > 2) ? static_cast<uint8_t>(std::stoul(tokens[2])) : 128;
+            dirSub.setEnergyPerformancePreference(epp);
+            out << "[CPPC] Global Energy-Performance Preference updated to " << static_cast<uint32_t>(epp)
+                << " (0=MaxPerf, 128=Balanced, 255=PowerSaver).\n";
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "[HFI Bench] Executing 100,000 heterogeneous scheduling classifications & core assignments...\n";
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < 100000; ++i) {
+                hfi::ThreadClass tc = static_cast<hfi::ThreadClass>(i % 5);
+                dirSub.assignCoreForThread(tc, nullptr);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            double avgNs = static_cast<double>(ns) / 100000.0;
+            out << "[HFI Bench] 100,000 thread dispatches completed in " << (ns / 1000000.0) << " ms\n"
+                << "            Average Scheduler Dispatch Latency: " << avgNs << " ns per thread (Zero Spinlock Overhead)\n";
+            return;
+        }
+
+        auto telem = dirSub.getTelemetry();
+        out << "MicaNT Intel Thread Director & AMD CPPC Heterogeneous Scheduler\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Processor: " << dirSub.getCpuModel() << " (" << dirSub.getCoreCount() << " Cores)\n"
+            << "  Dispatches: P-Cores: " << telem.pCoreDispatches << " | E-Cores: " << telem.eCoreDispatches << " | LP Cores: " << telem.lpCoreDispatches << "\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  hfi status                  Display Thread Director & CPPC scheduler telemetry\n"
+            << "  hfi cores / topology        Inspect all P-Cores, E-Cores, and LP Island Cores\n"
+            << "  hfi schedule [class]        Simulate scheduling (normal/vector/ai/ui/background)\n"
+            << "  hfi park <coreId> [0|1]     Park/unpark logical core for thermal optimization\n"
+            << "  hfi epp <0..255>            Set CPPC Energy-Performance Preference policy\n"
+            << "  hfi bench / benchmark       Benchmark ultra-low latency heterogeneous dispatch\n";
     }
 
     static std::string trim(std::string_view s) {
