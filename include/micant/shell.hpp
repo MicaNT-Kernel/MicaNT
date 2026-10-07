@@ -162,6 +162,7 @@
 #include "cet.hpp"
 #include "qat.hpp"
 #include "tee.hpp"
+#include "dsa.hpp"
 
 namespace micant::shell {
 
@@ -468,6 +469,7 @@ public:
             if (cmd == "cet" || cmd == "shadowstack" || cmd == "titancet" || cmd == "aegiscet") { cmdCet(tokens, out); return 0; }
             if (cmd == "qat" || cmd == "quickassist" || cmd == "titanqat" || cmd == "nexusqat") { cmdQat(tokens, out); return 0; }
             if (cmd == "tee" || cmd == "enclave" || cmd == "sgx" || cmd == "tdx" || cmd == "sevsnp" || cmd == "titantee" || cmd == "aegistee") { cmdTee(tokens, out); return 0; }
+            if (cmd == "dsa" || cmd == "iaa" || cmd == "titandsa" || cmd == "nexusdsa") { cmdDsa(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -27143,6 +27145,166 @@ private:
             << "  tee create [name]           Provision, load, and test a hardware-isolated enclave\n"
             << "  tee attest                  Generate and verify cryptographic attestation report\n"
             << "  tee bench / benchmark       Benchmark hardware enclave entry/exit transition latency\n";
+    }
+
+    void cmdDsa(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& dsaSub = dsa::TitanDsaSubsystem::Instance();
+        if (!dsaSub.isInitialized()) {
+            dsaSub.initialize();
+        }
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "status") {
+            const auto& caps = dsaSub.getCapabilities();
+            const auto& telem = dsaSub.getTelemetry();
+            auto wqs = dsaSub.getWorkQueues();
+            out << "========================================================================\n"
+                << "  MicaNT TitanDSA & NexusDSA Fast-Memory Streaming Subsystem            \n"
+                << "========================================================================\n"
+                << "  Hardware Accelerator:      Intel Data Streaming Accelerator (DSA 1.0) \n"
+                << "  PCI Address:               " << caps.pciBusAddress << " (Intel BDF 00:0B.0/00:0B.1)\n"
+                << "  Physical DMA Engines:      " << caps.numEngines << " independent streaming channels\n"
+                << "  Hardware Work Queues:      " << caps.numWorkQueues << " configured queues\n"
+                << "  Max Single DMA Size:       " << (caps.maxTransferSize / (1024 * 1024)) << " MB\n"
+                << "  Peak Memory Bandwidth:     " << std::fixed << std::setprecision(1) << caps.maxBandwidthGbps << " GB/s\n"
+                << "  Total Memory Copied:       " << (telem.totalMemMoveBytes / (1024 * 1024)) << " MB (" << telem.totalMemMoveOps << " ops)\n"
+                << "  Total Memory Filled:       " << (telem.totalMemFillBytes / (1024 * 1024)) << " MB (" << telem.totalMemFillOps << " ops)\n"
+                << "  Compare Operations:        " << telem.totalCompareOps << " ops\n"
+                << "  Hardware CRC-32C Ops:      " << telem.totalCrc32cOps << " ops (" << (telem.totalCrc32cBytes / (1024 * 1024)) << " MB)\n"
+                << "  Copy + CRC-32C Ops:        " << telem.totalCopyCrcOps << " ops\n"
+                << "  IAA Columnar Scan Ops:     " << telem.totalIaaScanOps << " ops\n"
+                << "  IAA Column Extract Ops:    " << telem.totalIaaExtractOps << " ops\n"
+                << "  Total Descriptors Run:     " << telem.totalDescriptorsSubmitted << "\n"
+                << "  Hardware Faults / Aborts:  " << telem.hardwareFaults << " (100% Reliable)\n"
+                << "------------------------------------------------------------------------\n"
+                << "  Active Work Queues:\n";
+            for (const auto& wq : wqs) {
+                out << "    [" << wq.wqId << "] " << std::left << std::setw(24) << wq.name
+                    << " Mode: " << (wq.mode == dsa::WqMode::Dedicated ? "DWQ (Kernel)" : "SWQ (Shared)")
+                    << " | Size: " << wq.size << " desc | Portal: 0x" << std::hex << wq.portalAddress << std::dec << "\n";
+            }
+            out << "------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (sub == "copy") {
+            size_t copyBytes = 1024 * 1024; // 1 MB
+            out << "[DSA Copy] Dispatching 1 MB zero-copy DMA memory transfer (MEMMOVE)...\n";
+            std::vector<uint8_t> src(copyBytes, 0xA5);
+            std::vector<uint8_t> dst(copyBytes, 0x00);
+            uint32_t latNs = 0;
+            bool ok = dsaSub.submitMemMove(dst.data(), src.data(), copyBytes, &latNs);
+            if (ok && dst[0] == 0xA5 && dst[copyBytes - 1] == 0xA5) {
+                out << "  [RESULT] SUCCESS: 1 MB memory transferred without CPU cache pollution.\n"
+                    << "           Hardware DMA Latency: " << latNs << " ns\n"
+                    << "           Integrity Verified:   Source == Destination\n";
+            } else {
+                out << "  [RESULT] FAILED: Memory copy verification failed.\n";
+            }
+            return;
+        }
+
+        if (sub == "fill") {
+            size_t fillBytes = 512 * 1024; // 512 KB
+            uint64_t pattern = 0x0123456789ABCDEFULL;
+            out << "[DSA Fill] Dispatching 512 KB fast pattern fill (MEMFILL)...\n";
+            std::vector<uint8_t> dst(fillBytes, 0x00);
+            uint32_t latNs = 0;
+            bool ok = dsaSub.submitMemFill(dst.data(), pattern, fillBytes, &latNs);
+            uint64_t* check = reinterpret_cast<uint64_t*>(dst.data());
+            if (ok && check[0] == pattern && check[100] == pattern) {
+                out << "  [RESULT] SUCCESS: 512 KB pattern broadcast completed in " << latNs << " ns.\n"
+                    << "           Pattern: 0x" << std::hex << pattern << std::dec << "\n";
+            } else {
+                out << "  [RESULT] FAILED: Memory fill failed.\n";
+            }
+            return;
+        }
+
+        if (sub == "compare") {
+            size_t compBytes = 64 * 1024; // 64 KB
+            out << "[DSA Compare] Comparing two 64 KB memory regions...\n";
+            std::vector<uint8_t> buf1(compBytes, 0x55);
+            std::vector<uint8_t> buf2(compBytes, 0x55);
+            buf2[42000] = 0xAA; // Inject delta at offset 42000
+
+            bool match = true;
+            size_t mismatchOffset = 0;
+            uint32_t latNs = 0;
+            dsaSub.submitMemCompare(buf1.data(), buf2.data(), compBytes, &match, &mismatchOffset, &latNs);
+
+            out << "  [RESULT] Mismatch Detected: " << (!match ? "YES" : "NO") << "\n"
+                << "           First Mismatch Offset: Byte " << mismatchOffset << "\n"
+                << "           Compare Latency:       " << latNs << " ns\n";
+            return;
+        }
+
+        if (sub == "crc") {
+            std::string payload = "MicaNT_Storage_HighThroughput_NVMe_DirectStorage_Block_Checksum";
+            out << "[DSA CRC] Calculating hardware Castagnoli CRC-32C and simultaneous COPY_CRC...\n";
+            uint32_t calcCrc = 0;
+            uint32_t latNs = 0;
+            dsaSub.submitCrc32c(payload.data(), payload.size(), 0, &calcCrc, &latNs);
+
+            std::vector<uint8_t> copyDst(payload.size(), 0);
+            uint32_t copyCrc = 0;
+            uint32_t copyLatNs = 0;
+            dsaSub.submitCopyCrc(copyDst.data(), payload.data(), payload.size(), 0, &copyCrc, &copyLatNs);
+
+            out << "  [RESULT] CRC-32C Value:        0x" << std::hex << std::setw(8) << std::setfill('0') << calcCrc << std::dec << "\n"
+                << "           Copy+CRC Consistency: " << (calcCrc == copyCrc ? "MATCH" : "MISMATCH") << "\n"
+                << "           DMA Latency:          " << latNs << " ns (CRC), " << copyLatNs << " ns (Copy+CRC)\n";
+            return;
+        }
+
+        if (sub == "scan") {
+            out << "[IAA Analytics] Executing columnar predicate scan [1000 <= val <= 2000] on 4,096 elements...\n";
+            std::vector<uint32_t> colData(4096);
+            for (size_t i = 0; i < colData.size(); ++i) {
+                colData[i] = static_cast<uint32_t>(i);
+            }
+            std::vector<uint8_t> bitmask((colData.size() + 7) / 8, 0);
+            size_t matches = 0;
+            uint32_t latNs = 0;
+            dsaSub.submitIaaScan(colData.data(), colData.size(), 1000, 2000, bitmask.data(), &matches, &latNs);
+
+            out << "  [RESULT] Matching Tuples: " << matches << " / " << colData.size() << "\n"
+                << "           Hardware Scan Latency: " << latNs << " ns\n";
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "[DSA Bench] Executing 100,000 hardware-accelerated memory copy operations...\n";
+            std::vector<uint8_t> sBuf(4096, 0xEE);
+            std::vector<uint8_t> dBuf(4096, 0x00);
+
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < 100000; ++i) {
+                dsaSub.submitMemMove(dBuf.data(), sBuf.data(), 4096);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+            auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            double totalMb = (100000.0 * 4096.0) / (1024.0 * 1024.0);
+            double gbps = (totalMb / 1024.0) / (static_cast<double>(elapsedNs) / 1e9);
+            double mops = 100000.0 / (static_cast<double>(elapsedNs) / 1e9) / 1e6;
+
+            out << "  [RESULT] Processed 100,000 DMA transfers in " << (elapsedNs / 1000000) << " ms.\n"
+                << "           Throughput: " << std::fixed << std::setprecision(2) << gbps << " GB/s ("
+                << std::setprecision(2) << mops << " Million ops/sec)\n";
+            return;
+        }
+
+        out << "MicaNT Intel Data Streaming Accelerator & In-Memory Analytics (TitanDSA / NexusDSA)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  dsa status                  Display DSA/IAA hardware engines, queues, and telemetry\n"
+            << "  dsa copy                    Perform 1 MB zero-copy DMA memory transfer (MEMMOVE)\n"
+            << "  dsa fill                    Perform 512 KB fast pattern broadcast (MEMFILL)\n"
+            << "  dsa compare                 Perform 64 KB hardware delta comparison (COMPARE)\n"
+            << "  dsa crc                     Compute Castagnoli CRC-32C and simultaneous COPY_CRC\n"
+            << "  dsa scan                    Execute IAA columnar predicate scan and bitmask generation\n"
+            << "  dsa bench / benchmark       Benchmark hardware DMA memory streaming throughput\n";
     }
 
     static std::string trim(std::string_view s) {

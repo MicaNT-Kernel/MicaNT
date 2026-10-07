@@ -62,6 +62,7 @@ These names:
 | **Intel CET & Hardware-Enforced Stack Protection Subsystem** | **TitanCET / AegisCET** | `micant::cet` | `cet.hpp` | Clean-room Intel Control-flow Enforcement Technology (CET) and AMD Shadow Stack subsystem (`kshadowstack.sys`, `cet.sys`), dual-stack hardware execution, hardware `#CP` Vector 21 exception dispatch, Indirect Branch Tracking (IBT `ENDBR64`), ROP/COP/JOP mitigation, restore tokens, and sub-5ns call/ret validation latency. |
 | **Intel QAT Hardware Offload Subsystem** | **TitanQAT / NexusQAT** | `micant::qat` | `qat.hpp` | Clean-room Intel QuickAssist Technology (QAT 2.0 / 4xxx) cryptographic & compression accelerator (`intel_qat.sys`, `qat_crypto.sys`, `qat_comp.sys`, PCIe `00:0A.0`), 10 acceleration engines (4 Sym Crypto, 2 Asym PKE, 4 Compression), 16 SR-IOV VFs, zero-copy ring queue pairs with doorbells, and wire-speed offload (>400 Gbps crypto, >160 Gbps comp). |
 | **Intel SGX/TDX & AMD SEV-SNP Confidential Computing Subsystem** | **TitanTEE / AegisTEE** | `micant::tee` | `tee.hpp` | Clean-room hardware Trusted Execution Environment (TEE) and Confidential Computing subsystem (`virtenclave.sys`, `isv_enclave.sys`, `confidential_vm.sys`), Intel SGX 1/2 enclaves, Intel TDX 1.5 Trust Domains, AMD SEV-SNP memory protection, 512 MB EPC with AES-256-XTS MEE, EPCM tracking, AEX state scrubbing, and ECDSA-P384 attestation reports. |
+| **Intel DSA & IAA Fast-Memory Streaming Subsystem** | **TitanDSA / NexusDSA** | `micant::dsa` | `dsa.hpp` | Clean-room Intel Data Streaming Accelerator (DSA 2.0/3.0) and In-Memory Analytics Accelerator (IAA 1.0) subsystem (`intel_dsa.sys`, `intel_iaa.sys`, `dsa_accel.sys`, PCIe `00:0B.0` & `00:0B.1`), DWQ/SWQ portals with ENQCMD/ENQCMDS, fast memory copy/fill, mismatch compare, CRC32C, DualCast, and IAA columnar scan/extract acceleration. |
 
 ---
 
@@ -709,6 +710,25 @@ These names:
     - Microsecond-level enclave creation and sub-100ns context entry/exit switches.
   - System Service & Driver Integration: SCM registered drivers for `virtenclave` (`SERVICE_BOOT_START`), `isv_enclave` (`SERVICE_AUTO_START`), and `confidential_vm` (`SERVICE_AUTO_START`), dynamic loader exports, and Version Database registration (`virtenclave.sys` 10.0.26100.1).
   - Interactive CLI: `tee` / `enclave` / `sgx` / `tdx` / `sevsnp` / `titantee` / `aegistee` (`status`, `enclaves`, `create`, `attest`, `bench` / `benchmark`).
+
+### 3.46 TitanDSA & NexusDSA (Intel Data Streaming Accelerator & In-Memory Analytics Subsystem)
+- **Role:** Sovereign hardware streaming DMA and columnar data transformation accelerator implementing Intel Data Streaming Accelerator (DSA 2.0 / 3.0, PCIe BDF `00:0B.0`, `VEN_8086&DEV_0B25`) and Intel In-Memory Analytics Accelerator (IAA 1.0, PCIe BDF `00:0B.1`, `VEN_8086&DEV_0CFE`) driver stack (`intel_dsa.sys`, `intel_iaa.sys`, `dsa_accel.sys`).
+- **Capabilities:**
+  - Standard DSA Driver C ABI exports (`intel_dsa.sys`, `intel_iaa.sys`, `dsa_accel.sys`): `DsaInitialize`, `DsaGetVersion`, `DsaGetCapabilities`, `DsaSubmitMemCopy`, `DsaSubmitMemFill`, `DsaSubmitCompare`, `DsaSubmitCrc32c`, `DsaSubmitDualCast`, `DsaSubmitIaaScan`, `DsaSubmitIaaExtract`, `DsaGetTelemetry`.
+  - Dedicated & Shared Work Queues (DWQ / SWQ):
+    - Dedicated Work Queues (DWQ) for low-latency kernel-mode DMA submissions.
+    - Shared Work Queues (SWQ) with `ENQCMD`/`ENQCMDS` portal submissions and userland MMIO portal apertures.
+  - Streaming Fast-Memory Primitives:
+    - Zero-copy DMA bulk memory copy, memory fill, and memory comparison with mismatch offset detection.
+    - Hardware-accelerated CRC32C calculation (Castagnoli polynomial `0x82F63B78`).
+    - DualCast dual-destination memory writes updating two separate target buffers in a single pass.
+  - In-Memory Analytics Accelerator (IAA):
+    - Columnar bitmask scan filtering (`IAA_SCAN`) with greater/lesser/equal predicate evaluation.
+    - Bit-packed columnar data extraction (`IAA_EXTRACT`) decoding structured columns with sub-microsecond latency.
+  - Sub-Microsecond Hardware Dispatch Latency:
+    - Zero CPU memory-loop saturation and wire-speed memory streaming (> 60 GB/s aggregate throughput).
+  - System Service & Driver Integration: SCM registered drivers for `intel_dsa` (`SERVICE_BOOT_START`), `intel_iaa` (`SERVICE_SYSTEM_START`), and `dsa_accel` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration (`intel_dsa.sys` 10.0.26100.1).
+  - Interactive CLI: `dsa` / `iaa` / `titandsa` / `nexusdsa` (`status`, `portals`, `copy`, `fill`, `compare`, `crc`, `iaa`, `bench` / `benchmark`).
 
 ---
 
