@@ -46,6 +46,7 @@ These names:
 | **NVM Express & Flash Storage (NVMe/UFS/eMMC/AHCI)** | **TitanNVMe / TitanFlash / EmeraldNVMe** | `micant::nvme`<br/>`micant::storage` | `nvme.hpp`<br/>`storage.hpp` | Clean-room NVM Express 1.0e–2.0d host controller, multi-namespace flash storage, S.M.A.R.T. telemetry, UFS 4.0, eMMC 5.1 SDHCI, and AHCI SATA SSD with NCQ. |
 | **ACPI Platform & AML Interpreter** | **TitanACPI / AegisACPI** | `micant::acpi` | `acpi.hpp` | Clean-room ACPI 6.5 table validation (RSDP/XSDT/FADT/MADT/MCFG/DMAR/SRAT), AML AST evaluation, ACPI namespace (`\_SB`, `\_PR`, `\_TZ`), and `acpi.sys` driver. |
 | **High Definition Audio (HDA & UAC2)** | **TitanHDA / NexusHDA** | `micant::hda` | `hdaudio.hpp` | Clean-room Intel HDA 1.0a controller, CORB/RIRB DMA rings, Codec Widget tree (ALC887 DAC/ADC/Pins), Jack Sense, USB Audio Class 2.0, and `hdaudio.sys` driver. |
+| **Windows Display Driver Model (WDDM 3.2)** | **TitanWDDM / NexusWDDM** | `micant::wddm` | `wddm.hpp`<br/>`dxgkrnl.hpp` | Clean-room WDDM 3.2 graphics kernel subsystem (`dxgkrnl.sys`, `displib.sys`), VidMm physical memory segments, VidPN 3.0 display topology, WDDM 3.2 direct hardware queues, monitored fences, TDR recovery, and multi-vendor miniports (NVIDIA, AMD, Intel, PrismX). |
 
 ---
 
@@ -344,6 +345,34 @@ These names:
   - Tone Synthesis & Audio Engine Bridge: Realtime PCM sine wave DMA generation linked with `micant::audio` / `PrismAudioSubsystem` software mixer.
   - System Service & Driver Integration: SCM registered boot/system drivers for `hdaudio` (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`) and `usbaudio2` (`SERVICE_DEMAND_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `hda` / `hdaudio` / `azalia` (`status`, `codecs` / `list`, `widgets`, `streams`, `jacks`, `uac` / `usb`, `play <hz> [ms] [vol]`, `test`).
+
+### 3.30 TitanWDDM & NexusWDDM (Windows Display Driver Model 3.2 & Graphics Kernel Subsystem)
+- **Role:** Clean-room Windows Display Driver Model (WDDM 1.x through 3.2) architecture, DirectX Graphics Kernel Subsystem (`dxgkrnl.sys`, `displib.sys`), Video Memory Manager (`VidMm`), Video Present Network (`VidPN`), GPU Scheduler (`VidSch`) with Direct Hardware Queues, Multi-Plane Overlay (`MPO 3.0`), 64-bit Monitored Fences, Timeout Detection & Recovery (`TDR`), and Multi-Vendor Display Miniport Driver bindings (NVIDIA `nvlddmkm.sys`, AMD `amdkmdag.sys`, Intel `igdkmdn64.sys`, PrismX `prismx_kmd.sys`, and `basicdisplay.sys`).
+- **Heritage:** Conceived as the core kernel-mode graphics engine orchestrating physical GPU hardware, dedicated video memory (VRAM), and display outputs, establishing seamless driver compatibility across all major graphics cards.
+- **Capabilities:**
+  - Standard Graphics Driver C ABI exports (`dxgkrnl.sys`, `displib.sys`): `DxgkInitialize`, `DxgkCreateDevice`, `DxgkCreateAllocation`, `DxgkDestroyAllocation`, `DxgkCreateHwQueue`, `DxgkSubmitCommandHwQueue`, `DxgkPresentFrame`, `DxgkTriggerTdr`.
+  - Video Memory Manager (`VidMm`):
+    - Multi-segment physical memory topologies: Segment 1 (PCIe Aperture / GTT System RAM) and Segment 2 (Dedicated Local VRAM 16GB).
+    - 48-bit GPU Virtual Addressing (`GPUVA`) with per-allocation address reservation and paging.
+    - Dynamic residency engine (`MakeResident`, `Evict`) managing memory pressure.
+  - Video Present Network (`VidPN 3.0`):
+    - Graph topology linking Sources (Primary Desktop, Extended Desktop) to Targets (DisplayPort 2.1 UHBR20, HDMI 2.1 FRL 48Gbps, eDP 1.5, USB-C DP Alt-mode).
+    - Display mode sets supporting 1080p, 1440p, 4K UHD 120Hz HDR10, and 8K 60Hz across SDR (`B8G8R8A8_UNORM`), HDR10 (`R10G10B10A2_UNORM`), and scRGB Float (`R16G16B16A16_FLOAT`).
+    - Variable Refresh Rate (`VRR`): G-Sync Compatible and AMD FreeSync Premium Pro (48 Hz to 240 Hz).
+    - Multi-Plane Overlay (`MPO 3.0`): 4 hardware composition planes with direct scanout flip (`DirectFlip`) bypassing desktop compositor copy overhead.
+  - GPU Scheduler (`VidSch`) & Hardware Scheduling:
+    - WDDM 3.2 Direct Hardware Queues across 3D/Render, Async Compute, Video Decode (NVDEC/VCN/QSV), Video Encode (NVENC/VCE/QSV), and DMA Copy engines.
+    - Monitored Fences: 64-bit monotonically advancing GPU/CPU synchronization fences.
+    - VBlank interrupt timing and scan line tracking.
+    - Timeout Detection & Recovery (`TDR`): Watchdog timer detecting engine hangs, executing state machine recovery (`DETECTED` -> `PREPARE` -> `RESET` -> `RESTART` -> `RECOVERED`) without system crash or blue screen (BSOD).
+  - Multi-Vendor Display Miniport Drivers:
+    - **NVIDIA GeForce / RTX:** `nvlddmkm.sys` (Vendor `0x10DE`)
+    - **AMD Radeon:** `amdkmdag.sys` (Vendor `0x1002`)
+    - **Intel Arc & Iris:** `igdkmdn64.sys` (Vendor `0x8086`)
+    - **MicaNT PrismX Discrete 3D GPU:** `prismx_kmd.sys` (PCIe BDF `01:00.0`, Gen 5 x16, 16GB VRAM)
+    - **Microsoft Basic Display Driver:** `basicdisplay.sys` (VGA / UEFI GOP / VirtIO fallback)
+  - System Service & Driver Integration: SCM registered boot drivers for `dxgkrnl` and `displib` (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `wddm` / `gpu` / `graphics` (`status`, `adapters` / `list`, `vidmm` / `vram`, `vidpn` / `displays`, `queues` / `engines`, `tdr`, `test`).
 
 ---
 
