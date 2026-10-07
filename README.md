@@ -254,6 +254,7 @@ To guarantee total clean-room independence and prevent name collisions with clos
 - **TitanNDIS / RazzleNet**: Windows Network Driver Interface Specification (NDIS 6.88) & High-Speed Network Adapter Subsystem (`ndis.sys`, `razzlenet.sys`), NET_BUFFER_LIST pools, hardware offloads (IPv4/IPv6 Checksum, LSOv2 64KB, RSC), RSS Toeplitz hash & 128-entry indirection table, SR-IOV 16 VFs, and RazzleNet 10GbE/100GbE PCIe miniport (BDF 00:04.0) with dual 512-entry DMA descriptor rings.
 - **TitanBTH / NexusBTH**: Windows Bluetooth 5.4 & LE Audio Kernel Port Driver Subsystem (`bthport.sys`, `bthusb.sys`, `rfcomm.sys`, `bthenum.sys`), HCI command/event packet processing, L2CAP protocol multiplexing, RFCOMM virtual serial COM port emulation (`COM4`), and Low Energy Audio (LE Audio CIS / Auracast) LC3 codec streaming.
 - **TitanWiFi / NexusWiFi**: Windows Wi-Fi 7 (802.11be Extremely High Throughput) & WLAN Device Driver Interface (WDI / NetAdapterCx) Miniport Subsystem (`wdiwifi.sys`, `netadaptercx.sys`, `titanwifi.sys`), Multi-Link Operation (MLO) Simultaneous Transmit and Receive (STR) multi-band bonding (6 GHz 320 MHz + 5 GHz 160 MHz yielding >8.64 Gbps aggregate throughput), 4096-QAM (4K-QAM), WPA3-Personal SAE / WPA3-Enterprise 192-bit CNSA GCMP-256 security, NetAdapterCx Tx/Rx descriptor rings with preamble puncturing, and Intel BE200-class PCIe miniport (BDF 00:06.0).
+- **TitanUSB4 / NexusUSB4**: Windows USB4 2.0 & Thunderbolt 4 Protocol Tunneling Subsystem (`usb4host.sys`, `thunderbolt.sys`, `usb4router.sys`), 80 Gbps symmetric PAM3 and 120 Gbps asymmetric PAM3 (120G Tx / 40G Rx) physical layer signaling, native PCIe tunneling for external GPUs (eGPUs) and NVMe storage arrays, DisplayPort 2.1 UHBR20 video tunneling, SuperSpeed USB 3.2 tunneling, credit-based flow control, dynamic path management (`USB4_PATH`), Thunderbolt DMA Security Levels (SL0..SL3) with cryptographic peripheral authorization, and Arrow Lake USB4 Host Router (BDF 00:07.0).
 
 👉 For complete architectural specifications and namespace conventions, see **[docs/SOVEREIGN_TAXONOMY.md](docs/SOVEREIGN_TAXONOMY.md)**.
 
@@ -283,12 +284,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (159 Suites, 100% Passing)
+### Build & Run Unit Test Suite (160 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 159 Test Suites:
+# Run all 160 Test Suites:
 .\bin\micant_tests.exe
 ```
 

@@ -1013,6 +1013,28 @@ public:
     }
 };
 
+// Sovereign TitanUSB4 2.0 / Thunderbolt 4 Host Router
+class TitanUsb4PciDevice : public PciDevice {
+public:
+    TitanUsb4PciDevice(PciAddress addr)
+        : PciDevice(addr, 0x8086, 0x9A1B, PciBaseClass::SerialBus, 0x03, 0x40, PCI_HEADER_TYPE_NORMAL)
+    {
+        setName("TitanUSB4 2.0 / Thunderbolt 4 Host Router (Intel Arrow Lake)");
+
+        // BAR0: 64KB MMIO (64-bit non-prefetchable)
+        configureBar(0, PciBarType::Memory64, 64 * 1024, false);
+
+        // PCIe Gen 4 x4
+        addPcieCapability(0x70, PciLinkSpeed::Gen4_16_0GT, PciLinkWidth::x4);
+
+        // MSI-X with 8 vectors
+        addMsixCapability(0x90, 8, 0, 0x2000, 0x3000);
+
+        // AER
+        addAerCapability(0x100);
+    }
+};
+
 // ============================================================================
 // 8. PCI Bus Topology & Root Complex Engine
 // ============================================================================
@@ -1109,6 +1131,10 @@ public:
         // 00:06.0 - TitanWiFi 7 (802.11be)
         auto wifi = std::make_shared<TitanWiFiPciDevice>(PciAddress(0, 6, 0));
         m_buses[0]->attachDevice(wifi);
+
+        // 00:07.0 - TitanUSB4 2.0 Host Router
+        auto usb4 = std::make_shared<TitanUsb4PciDevice>(PciAddress(0, 7, 0));
+        m_buses[0]->attachDevice(usb4);
 
         // Bus 1: PrismX 3D GPU
         auto gpu = std::make_shared<PrismXGpuPciDevice>(PciAddress(1, 0, 0));

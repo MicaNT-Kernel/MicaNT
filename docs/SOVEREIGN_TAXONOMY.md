@@ -50,6 +50,7 @@ These names:
 | **Network Driver Specification (NDIS 6.88)** | **TitanNDIS / RazzleNet** | `micant::ndis` | `ndis.hpp` | Clean-room NDIS 6.88 network driver subsystem (`ndis.sys`), NET_BUFFER_LIST pools, Hardware Offloads (IPv4/IPv6 Checksum, LSOv2 64KB, RSC), RSS Toeplitz hash & 128-entry indirection table, SR-IOV 16 VFs, and RazzleNet 10GbE/100GbE PCIe miniport (`razzlenet.sys` at 00:04.0) with dual 512-entry DMA descriptor rings. |
 | **Bluetooth 5.4 & LE Audio** | **TitanBTH / NexusBTH** | `micant::bth` | `bthport.hpp` | Clean-room Bluetooth 5.4 kernel port driver (`bthport.sys`), USB transport miniport (`bthusb.sys`), RFCOMM serial protocol (`rfcomm.sys`), and bus enumerator (`bthenum.sys`) with LE Audio (LC3 / Auracast). |
 | **Wi-Fi 7 & WDI Miniport Subsystem** | **TitanWiFi / NexusWiFi** | `micant::wdi` | `wdiwifi.hpp` | Clean-room Wi-Fi 7 (802.11be EHT) & WDI framework (`wdiwifi.sys`), NetAdapterCx WDF class extension (`netadaptercx.sys`), and TitanWiFi PCIe miniport (`titanwifi.sys` at 00:06.0) with Multi-Link Operation (MLO STR), 320 MHz channels, and 4096-QAM. |
+| **USB4 2.0 & Thunderbolt 4 Subsystem** | **TitanUSB4 / NexusUSB4** | `micant::usb4` | `usb4.hpp` | Clean-room USB4 2.0 & Thunderbolt 4/5 Host Router subsystem (`usb4host.sys`, `thunderbolt.sys`, `usb4router.sys` at 00:07.0) with PAM3 80G symmetric / 120G asymmetric signaling, native PCIe tunneling, DP 2.1 tunneling, and SL2 DMA protection. |
 
 ---
 
@@ -455,6 +456,29 @@ These names:
     - Hardware packet classification and offload extensions.
   - System Service & Driver Integration: SCM registered drivers for `wdiwifi` (`SERVICE_BOOT_START`), `netadaptercx` (`SERVICE_BOOT_START`), and `titanwifi` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `wifi7` / `wdiwifi` / `titanwifi` / `mlo` (`status`, `scan` / `list`, `mlo`, `connect`, `disconnect`, `radio`, `test`).
+
+### 3.34 TitanUSB4 & NexusUSB4 (USB4 2.0 / Thunderbolt 4 Protocol Tunneling Subsystem)
+- **Designation:** `TitanUSB4` (USB4 2.0 Host Router & Transport Fabric) / `NexusUSB4` (Thunderbolt 4 Security & Protocol Tunneling Manager)
+- **Role:** Clean-room implementation of the USB4™ Specification Version 2.0 and Intel Thunderbolt™ 4 / 5 architecture (`usb4host.sys`, `thunderbolt.sys`, `usb4router.sys`) authored from open industry specifications and `win32metadata`.
+- **Heritage:** Conceived to provide sovereign multi-protocol converged I/O over Type-C, enabling deterministic PCIe tunneling for external GPUs and storage arrays, DisplayPort 2.1 video tunneling, and SuperSpeed USB 3.2 data tunneling with hardware DMA protection.
+- **Capabilities:**
+  - Standard USB4 Driver C ABI exports (`usb4host.sys`, `thunderbolt.sys`, `usb4router.sys`): `Usb4HostInitialize`, `Usb4HostEnumerateTopology`, `Usb4HostCreatePath`, `Usb4HostDestroyPath`, `Usb4HostGetRouterCapabilities`, `ThunderboltGetSecurityLevel`, `ThunderboltSetSecurityLevel`, `ThunderboltAuthorizeDevice`, `Usb4TunnelPciePacket`.
+  - Next-Generation Physical Layer Signaling (PAM3):
+    - 80 Gbps symmetric mode (40 Gbps x 2 PAM3) for standard high-speed interconnects.
+    - 120 Gbps asymmetric mode (120 Gbps Tx / 40 Gbps Rx PAM3) dynamically engaged for extreme external display bandwidth (dual 8K HDR) and external GPU compute streaming.
+  - Protocol Tunneling Layer & Adapters:
+    - Native PCIe Tunneling (Adapter Type 0x01/0x02) encapsulating PCIe Transaction Layer Packets (TLP) into USB4 transport frames over Hop ID paths, bridging external devices directly into the `TitanPCI` bus hierarchy.
+    - DisplayPort 2.1 Tunneling (Adapter Type 0x03/0x04) supporting UHBR20 video multiplexing.
+    - SuperSpeed USB 3.2 Tunneling (Adapter Type 0x05/0x06) streaming 10/20 Gbps USB packets.
+  - Connection Manager & Router Topology Tree:
+    - Multi-hop router discovery and depth management (Host Router at Depth 0, Tier 1 Docks at Depth 1, Tier 2 eGPUs / Storage Enclosures at Depth 2).
+    - Dynamic path creation (`USB4_PATH`) with Hop ID allocation, bandwidth reservation, and credit-based flow control.
+  - Thunderbolt DMA Guard & Security Policies:
+    - Strict enforcement of security levels: SL0 (No Security), SL1 (User Authorization), SL2 (Secure Connection with HMAC-SHA256 challenge-response peripheral authorization), SL3 (DisplayPort Only - PCIe blocked), SL4 (USB Only).
+    - Deep integration with Kernel DMA Protection / IOMMU (Pillar 64).
+  - PCIe Miniport Placement: Host Router bound to PCIe BDF `00:07.0` (`VEN_8086&DEV_9A1B`, Intel Arrow Lake class) with 64KB MMIO BAR0 and 8 MSI-X vectors.
+  - System Service & Driver Integration: SCM registered drivers for `usb4host` (`SERVICE_BOOT_START`), `thunderbolt` (`SERVICE_BOOT_START`), and `usb4router` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `usb4` / `thunderbolt` / `tbt` / `titanusb4` (`status`, `tree` / `topology`, `paths`, `security`, `asymmetric`, `tunnel`, `test`).
 
 ---
 
