@@ -72,6 +72,7 @@ enum class NtStatus : uint32_t {
     FileIsADirectory                 = 0xC00000BA,
     DirectoryNotEmpty                = 0xC0000101,
     NotADirectory                    = 0xC0000103,
+    DevicePowerFailure               = 0xC000009E,
     DeviceNotReady                   = 0xC00000A3,
     DiskFull                         = 0xC000007F,
     UnrecognizedVolume               = 0xC00000DB,
@@ -141,6 +142,7 @@ inline constexpr NTSTATUS STATUS_NOT_FOUND              = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_PENDING                = static_cast<NTSTATUS>(0x00000103);
 inline constexpr NTSTATUS STATUS_NO_MORE_ENTRIES        = static_cast<NTSTATUS>(0x8000001A);
 inline constexpr NTSTATUS STATUS_DATA_ERROR             = static_cast<NTSTATUS>(0xC000003E);
+inline constexpr NTSTATUS STATUS_DEVICE_POWER_FAILURE   = static_cast<NTSTATUS>(0xC000009E);
 inline constexpr NTSTATUS STATUS_INVALID_DEVICE_STATE   = static_cast<NTSTATUS>(0xC0000184);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {

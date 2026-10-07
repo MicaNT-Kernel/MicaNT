@@ -991,6 +991,28 @@ public:
     }
 };
 
+// Sovereign TitanWiFi 7 (802.11be) Wireless Network Adapter
+class TitanWiFiPciDevice : public PciDevice {
+public:
+    TitanWiFiPciDevice(PciAddress addr)
+        : PciDevice(addr, 0x8086, 0x272B, PciBaseClass::Network, 0x80, 0x00, PCI_HEADER_TYPE_NORMAL)
+    {
+        setName("TitanWiFi 7 802.11be Wireless Adapter (Intel BE200)");
+
+        // BAR0: 1MB MMIO (64-bit non-prefetchable)
+        configureBar(0, PciBarType::Memory64, 1024 * 1024, false);
+
+        // PCIe Gen 4 x1
+        addPcieCapability(0x70, PciLinkSpeed::Gen4_16_0GT, PciLinkWidth::x1);
+
+        // MSI-X with 16 vectors
+        addMsixCapability(0x90, 16, 0, 0x8000, 0x9000);
+
+        // AER
+        addAerCapability(0x100);
+    }
+};
+
 // ============================================================================
 // 8. PCI Bus Topology & Root Complex Engine
 // ============================================================================
@@ -1083,6 +1105,10 @@ public:
         // 00:05.0 - PrismAudio HDA
         auto audio = std::make_shared<PrismAudioPciDevice>(PciAddress(0, 5, 0));
         m_buses[0]->attachDevice(audio);
+
+        // 00:06.0 - TitanWiFi 7 (802.11be)
+        auto wifi = std::make_shared<TitanWiFiPciDevice>(PciAddress(0, 6, 0));
+        m_buses[0]->attachDevice(wifi);
 
         // Bus 1: PrismX 3D GPU
         auto gpu = std::make_shared<PrismXGpuPciDevice>(PciAddress(1, 0, 0));

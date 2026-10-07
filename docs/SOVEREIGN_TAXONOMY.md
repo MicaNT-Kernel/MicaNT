@@ -49,6 +49,7 @@ These names:
 | **Windows Display Driver Model (WDDM 3.2)** | **TitanWDDM / NexusWDDM** | `micant::wddm` | `wddm.hpp`<br/>`dxgkrnl.hpp` | Clean-room WDDM 3.2 graphics kernel subsystem (`dxgkrnl.sys`, `displib.sys`), VidMm physical memory segments, VidPN 3.0 display topology, WDDM 3.2 direct hardware queues, monitored fences, TDR recovery, and multi-vendor miniports (NVIDIA, AMD, Intel, PrismX). |
 | **Network Driver Specification (NDIS 6.88)** | **TitanNDIS / RazzleNet** | `micant::ndis` | `ndis.hpp` | Clean-room NDIS 6.88 network driver subsystem (`ndis.sys`), NET_BUFFER_LIST pools, Hardware Offloads (IPv4/IPv6 Checksum, LSOv2 64KB, RSC), RSS Toeplitz hash & 128-entry indirection table, SR-IOV 16 VFs, and RazzleNet 10GbE/100GbE PCIe miniport (`razzlenet.sys` at 00:04.0) with dual 512-entry DMA descriptor rings. |
 | **Bluetooth 5.4 & LE Audio** | **TitanBTH / NexusBTH** | `micant::bth` | `bthport.hpp` | Clean-room Bluetooth 5.4 kernel port driver (`bthport.sys`), USB transport miniport (`bthusb.sys`), RFCOMM serial protocol (`rfcomm.sys`), and bus enumerator (`bthenum.sys`) with LE Audio (LC3 / Auracast). |
+| **Wi-Fi 7 & WDI Miniport Subsystem** | **TitanWiFi / NexusWiFi** | `micant::wdi` | `wdiwifi.hpp` | Clean-room Wi-Fi 7 (802.11be EHT) & WDI framework (`wdiwifi.sys`), NetAdapterCx WDF class extension (`netadaptercx.sys`), and TitanWiFi PCIe miniport (`titanwifi.sys` at 00:06.0) with Multi-Link Operation (MLO STR), 320 MHz channels, and 4096-QAM. |
 
 ---
 
@@ -427,6 +428,33 @@ These names:
     - Pre-seeded devices: Titan Wireless Mechanical Keyboard (HID Keyboard, `BTHENUM\{00001124-...}`) and PrismAudio Studio Auracast Headset (LE Audio LC3, `BTHENUM\{0000110B-...}`).
   - System Service & Driver Integration: SCM registered drivers for `bthport` (`SERVICE_BOOT_START`), `bthusb` (`SERVICE_SYSTEM_START`), `rfcomm` (`SERVICE_SYSTEM_START`), and `bthenum` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `bth` / `bt` / `bthport` (`status`, `devices` / `list`, `l2cap`, `rfcomm`, `leaudio` / `iso`, `test`).
+
+### 3.33 TitanWiFi & NexusWiFi (Wi-Fi 7 / 802.11be & WDI NetAdapterCx Subsystem)
+- **Designation:** `TitanWiFi` (Wi-Fi 7 Miniport Subsystem) / `NexusWiFi` (WDI Framework & NetAdapterCx Stack)
+- **Role:** Clean-room Windows WLAN Device Driver Interface (WDI) framework (`wdiwifi.sys`), Network Adapter WDF Class Extension (`netadaptercx.sys`), and Sovereign TitanWiFi 7 (802.11be) PCIe Miniport Driver (`titanwifi.sys`) authored from IEEE 802.11be-2024 and open `win32metadata`.
+- **Heritage:** Conceived as the ultra-high throughput wireless counterpart to RazzleNet and TitanBTH, delivering multi-gigabit wireless networking, sub-millisecond deterministic latency, and multi-band radio coordination.
+- **Capabilities:**
+  - Standard Wi-Fi Driver C ABI exports (`wdiwifi.sys`, `netadaptercx.sys`, `titanwifi.sys`): `WdiInitialize`, `WdiRegisterMiniportDriver`, `WdiDeregisterMiniportDriver`, `WdiSendTaskCommand`, `WdiIndicateTaskComplete`, `WdiGetAdapterCapabilities`, `NetAdapterCreate`, `NetAdapterStart`, `NetAdapterStop`, `TitanWiFiInitialize`, `TitanWiFiTransmitFrame`.
+  - Multi-Link Operation (MLO):
+    - Simultaneous Transmit and Receive (STR / MLMR) bonding across 2.4 GHz, 5 GHz, and 6 GHz bands.
+    - Station MLD (`00:1A:7D:DA:72:01`) and AP MLD coordination with hitless link failover and packet-level aggregation.
+    - Combined aggregate PHY throughput exceeding 8.64 Gbps (5.76 Gbps on 6 GHz 320 MHz + 2.88 Gbps on 5 GHz 160 MHz).
+  - 802.11be Extremely High Throughput (EHT) Radio Architecture:
+    - 320 MHz ultra-wide channelization in the 6 GHz band (UNII-5 through UNII-8).
+    - 4096-QAM (4K-QAM) constellation modulation delivering 12 bits per OFDM symbol.
+    - Preamble Puncturing (Multi-RU) enabling wide channel operation under partial frequency interference.
+  - Robust Security Suites:
+    - WPA3-Personal with Simultaneous Authentication of Equals (SAE) with Hash-to-Element (H2E).
+    - WPA3-Enterprise 192-bit CNSA mode with GCMP-256 (Galois/Counter Mode).
+    - Mandatory Protected Management Frames (802.11w PMF).
+  - WDI Task & Command Engine:
+    - Asynchronous TLV serialized task processing: `WDI_TASK_SCAN`, `WDI_TASK_CONNECT`, `WDI_TASK_DISCONNECT`, `WDI_TASK_DOT11_RESET`, `WDI_TASK_SET_RADIO_STATE`.
+    - Capability interrogation and real-time BSS scan catalog maintenance.
+  - NetAdapterCx Ring Queues & DMA Datapath:
+    - High-throughput Tx/Rx ring descriptor queues bypassing legacy NDIS protocol latency.
+    - Hardware packet classification and offload extensions.
+  - System Service & Driver Integration: SCM registered drivers for `wdiwifi` (`SERVICE_BOOT_START`), `netadaptercx` (`SERVICE_BOOT_START`), and `titanwifi` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `wifi7` / `wdiwifi` / `titanwifi` / `mlo` (`status`, `scan` / `list`, `mlo`, `connect`, `disconnect`, `radio`, `test`).
 
 ---
 
