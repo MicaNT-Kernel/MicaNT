@@ -929,6 +929,7 @@ jobs:
   build-and-test:
     runs-on: \${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
     steps:
