@@ -118,7 +118,7 @@ int main() {
         // 3. ConHost Screen Buffer Rendering
         conhost::ConsoleScreenBuffer conBuf(WIN_COLS, WIN_ROWS);
         conBuf.writeString(L"MicaNT Executive [Version 10.0.26100.1] - Bare-Metal UEFI\r\n");
-        conBuf.writeString(L"(c) 1988-2026 Mica Architecture Team. Dave Cutler Clean-Room Design.\r\n");
+        conBuf.writeString(L"MicaNT Clean-Room Architecture | MIT License | Dave Cutler Design Heritage\r\n");
         conBuf.writeString(L"Zero Telemetry | 4 SMP Cores | Sub-32MB Footprint | NonPagedPool: 64 KB\r\n\r\n");
 
         conBuf.writeString(L"C:\\Windows\\System32> smss.exe\r\n");
