@@ -152,6 +152,7 @@
 #include "wdiwifi.hpp"
 #include "usb4.hpp"
 #include "npu.hpp"
+#include "cxl.hpp"
 
 namespace micant::shell {
 
@@ -448,6 +449,7 @@ public:
             if (cmd == "wifi7" || cmd == "wdiwifi" || cmd == "titanwifi" || cmd == "mlo") { cmdWdiWiFi(tokens, out); return 0; }
             if (cmd == "usb4" || cmd == "thunderbolt" || cmd == "tbt" || cmd == "titanusb4") { cmdUsb4(tokens, out); return 0; }
             if (cmd == "npu" || cmd == "mcdm" || cmd == "titannpu" || cmd == "ai") { cmdNpu(tokens, out); return 0; }
+            if (cmd == "cxl" || cmd == "cxlmem" || cmd == "cxlhost" || cmd == "cxlbus" || cmd == "titancxl") { cmdCxl(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -25847,6 +25849,147 @@ private:
             << "  npu infer <model>              Run hardware accelerated inference (phi-3, llama, etc.)\n"
             << "  npu benchmark                  Execute synthetic TOPS and bandwidth stress test\n"
             << "  npu power <d0|d0low|d3hot>     Control NPU power and thermal states\n";
+    }
+
+    void cmdCxl(const std::vector<std::string>& tokens, std::ostream& out) {
+        cxl::InitializeCxlSubsystem();
+        auto& cxlSub = cxl::TitanCxlSubsystem::Instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "devices" || sub == "list") {
+            auto devs = cxlSub.getDevices();
+            out << "CXL Bus & Device Enumeration Topology (" << devs.size() << " Active Devices):\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& d : devs) {
+                out << "  Device ID: " << d.deviceId << " | " << d.deviceName << "\n"
+                    << "    PCIe Address:        " << d.pciAddress.toString() << " (VEN_"
+                    << std::hex << std::uppercase << d.vendorId << "&DEV_" << d.devId << std::dec << ")\n"
+                    << "    Device Type:         "
+                    << (d.type == cxl::CxlDeviceType::Type1_Accelerator ? "Type 1 (Accelerator)" :
+                        d.type == cxl::CxlDeviceType::Type2_DenseAccelerator ? "Type 2 (Dense Accelerator with Memory)" :
+                        "Type 3 (Memory Expander / Pooling)") << "\n"
+                    << "    Memory Capacity:     " << (d.totalMemoryBytes / (1024 * 1024 * 1024)) << " GB\n"
+                    << "    NUMA Domain:         Node " << d.numaNodeId << "\n"
+                    << "    Physical Link:       PCIe Gen5 x" << static_cast<int>(d.linkWidth) << " (32 GT/s Flit Mode)\n"
+                    << "    HDM Decoders:        " << d.decoders.size() << " Committed\n\n";
+            }
+            return;
+        }
+
+        if (sub == "hdm" || sub == "decoders") {
+            auto devs = cxlSub.getDevices();
+            out << "CXL Host-Managed Device Memory (HDM) Decoders:\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& d : devs) {
+                out << "  Device: " << d.deviceName << " [" << d.pciAddress.toString() << "]\n";
+                for (const auto& dec : d.decoders) {
+                    out << "    Decoder " << static_cast<int>(dec.decoderIndex) << ": "
+                        << "Base SPA: 0x" << std::hex << dec.baseSpa << std::dec
+                        << " | Size: " << (dec.sizeBytes / (1024 * 1024 * 1024)) << " GB"
+                        << " | Granularity: " << (dec.granularity == cxl::CxlInterleaveGranularity::Granularity256B ? "256B" : "512B")
+                        << " | Committed: " << (dec.isCommitted ? "YES" : "NO") << "\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "smart" || sub == "health") {
+            auto devs = cxlSub.getDevices();
+            out << "CXL S.M.A.R.T. Health Telemetry & Media Status:\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& d : devs) {
+                const auto* sh = cxlSub.getSmartHealth(d.deviceId);
+                if (sh) {
+                    out << "  Device: " << d.deviceName << "\n"
+                        << "    Health Status:       " << (sh->healthStatus == 0 ? "NORMAL" : "DEGRADED") << "\n"
+                        << "    Media Status:        " << (sh->mediaStatus == 0 ? "NORMAL" : "READ-ONLY") << "\n"
+                        << "    Temperature:         " << std::fixed << std::setprecision(1) << sh->temperatureCelsius << " deg C\n"
+                        << "    Life Used:           " << static_cast<int>(sh->percentLifeUsed) << "%\n"
+                        << "    Dirty Shutdowns:     " << sh->dirtyShutdownCount << "\n"
+                        << "    Corrected Errors:    " << sh->correctedVolatileErrorCount << "\n"
+                        << "    Uncorrected Errors:  " << sh->uncorrectedVolatileErrorCount << "\n\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "numa" || sub == "tiering") {
+            const auto& t = cxlSub.getNumaTieringInfo();
+            out << "CXL Dynamic Memory Tiering (DMT) & NUMA Topology:\n"
+                << "-------------------------------------------------------------------------------\n";
+            out << "  Memory Tier:           Tier " << t.tierId << " (CXL Far Memory)\n"
+                << "  Associated NUMA Node:  Node " << t.numaNodeId << "\n"
+                << "  Total Capacity:        " << (t.totalCapacityBytes / (1024 * 1024 * 1024)) << " GB\n"
+                << "  Allocated Capacity:    " << (t.allocatedBytes / (1024 * 1024 * 1024)) << " GB\n"
+                << "  Read / Write Latency:  " << t.readLatencyNs << " ns / " << t.writeLatencyNs << " ns (Near DDR5 ~80ns)\n"
+                << "  Peak Fabric Bandwidth: " << t.peakBandwidthGBps << " GB/s (PCIe 5.0 x16)\n"
+                << "  Cold Pages Demoted:    " << t.pagesMigratedToFar << " (to CXL Far Memory)\n"
+                << "  Hot Pages Promoted:    " << t.pagesPromotedToNear << " (to CPU Near Memory)\n";
+            return;
+        }
+
+        if (sub == "poison") {
+            auto devs = cxlSub.getDevices();
+            out << "CXL Address Poisoning & Hardware Fault Containment Table:\n"
+                << "-------------------------------------------------------------------------------\n";
+            bool found = false;
+            for (const auto& d : devs) {
+                auto poison = cxlSub.getPoisonList(d.deviceId);
+                if (!poison.empty()) {
+                    found = true;
+                    out << "  Device: " << d.deviceName << " (" << poison.size() << " poisoned cache lines)\n";
+                    for (const auto& p : poison) {
+                        out << "    DPA: 0x" << std::hex << p.devicePhysicalAddress << std::dec
+                            << " | Length: " << p.lengthBytes << " bytes | Source: Software Injected\n";
+                    }
+                }
+            }
+            if (!found) {
+                out << "  No poisoned cache lines recorded. All CXL memory lines healthy.\n";
+            }
+            return;
+        }
+
+        if (sub == "mailbox") {
+            out << "Executing CXL Mailbox IDENTIFY_MEMORY_DEVICE (Opcode 0x4000)...\n";
+            std::vector<uint8_t> outPayload;
+            NTSTATUS st = cxlSub.sendMailboxCommand(1, cxl::CXL_MBOX_OP_IDENTIFY_MEMORY_DEVICE, {}, outPayload);
+            if (st == STATUS_SUCCESS) {
+                out << "  Mailbox Command Completed: STATUS_SUCCESS\n"
+                    << "  Identity String:           " << std::string(reinterpret_cast<char*>(outPayload.data()), 15) << "\n";
+            } else {
+                out << "  Mailbox Command Failed: 0x" << std::hex << st << std::dec << "\n";
+            }
+            return;
+        }
+
+        // Default: status
+        uint32_t maj = 0, min = 0;
+        cxlSub.getVersion(&maj, &min);
+        const auto& telem = cxlSub.getTelemetry();
+        auto bridgeAddr = cxlSub.getHostBridgeAddress();
+
+        out << "Compute Express Link (CXL) & Heterogeneous Memory Fabric Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  CXL Specification:             CXL Revision " << maj << "." << min << "\n"
+            << "  Host Bridge & Root Port:       Bus " << bridgeAddr.toString() << " (VEN_1E98&DEV_0001)\n"
+            << "  Kernel Driver Subsystem:       cxlhost.sys, cxlmem.sys, cxlbus.sys (All Active)\n"
+            << "  Active CXL Devices:            " << telem.activeDevices << " Endpoints\n"
+            << "  Total CXL Read Transactions:   " << telem.totalCxlReadTransactions << "\n"
+            << "  Total CXL Write Transactions:  " << telem.totalCxlWriteTransactions << "\n"
+            << "  Total Flits Transferred:       " << telem.totalFlitsTransferred << " Flits\n"
+            << "  Mailbox Commands Executed:     " << telem.totalMailboxCommandsExecuted << "\n"
+            << "  Current Fabric Throughput:     " << std::fixed << std::setprecision(1) << telem.currentFabricThroughputGBps << " GB/s\n"
+            << "  Total Poisoned Cache Lines:    " << telem.totalPoisonEntries << "\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  cxl status                     Display CXL host fabric status and telemetry\n"
+            << "  cxl devices / list             Enumerate attached CXL devices and types\n"
+            << "  cxl hdm / decoders             Display HDM decoder address windows\n"
+            << "  cxl smart / health             Inspect CXL S.M.A.R.T. health and wear\n"
+            << "  cxl numa / tiering             Display Dynamic Memory Tiering (DMT) statistics\n"
+            << "  cxl poison                     Query address poison containment list\n"
+            << "  cxl mailbox                    Test CXL mailbox command interface\n";
     }
 
     static std::string trim(std::string_view s) {

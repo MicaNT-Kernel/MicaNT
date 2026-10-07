@@ -52,6 +52,7 @@ These names:
 | **Wi-Fi 7 & WDI Miniport Subsystem** | **TitanWiFi / NexusWiFi** | `micant::wdi` | `wdiwifi.hpp` | Clean-room Wi-Fi 7 (802.11be EHT) & WDI framework (`wdiwifi.sys`), NetAdapterCx WDF class extension (`netadaptercx.sys`), and TitanWiFi PCIe miniport (`titanwifi.sys` at 00:06.0) with Multi-Link Operation (MLO STR), 320 MHz channels, and 4096-QAM. |
 | **USB4 2.0 & Thunderbolt 4 Subsystem** | **TitanUSB4 / NexusUSB4** | `micant::usb4` | `usb4.hpp` | Clean-room USB4 2.0 & Thunderbolt 4/5 Host Router subsystem (`usb4host.sys`, `thunderbolt.sys`, `usb4router.sys` at 00:07.0) with PAM3 80G symmetric / 120G asymmetric signaling, native PCIe tunneling, DP 2.1 tunneling, and SL2 DMA protection. |
 | **Neural Processing Unit & MCDM** | **TitanNPU / NexusNPU** | `micant::npu` | `npu.hpp` | Clean-room Microsoft Compute Driver Model (MCDM 1.0/2.0) & NPU subsystem (`mcdm.sys`, `npu.sys`, `titannpu.sys` at 00:08.0) with 48 INT8 TOPS Copilot+ compliance, 4 compute tiles, INT4/FP8/FP16/BF16 precisions, DirectML hardware queues, and SLM execution. |
+| **Compute Express Link (CXL 2.0 / 3.1)** | **TitanCXL / NexusCXL** | `micant::cxl` | `cxl.hpp` | Clean-room Compute Express Link 2.0/3.1 heterogeneous memory fabric (`cxlhost.sys`, `cxlmem.sys`, `cxlbus.sys` at 00:09.0 & Bus 4) with CXL.io, CXL.cache, CXL.mem, Type 1/2/3 devices, HDM decoders, DMT NUMA tiering, and mailbox. |
 
 ---
 
@@ -503,6 +504,30 @@ These names:
   - PCIe Miniport Placement: Processing Accelerator bound to PCIe BDF `00:08.0` (`VEN_8086&DEV_7D1D`, Class 0x12) with 16MB MMIO BAR0, 128MB prefetchable SRAM BAR2, and 16 MSI-X vectors.
   - System Service & Driver Integration: SCM registered drivers for `mcdm` (`SERVICE_BOOT_START`), `npu` (`SERVICE_BOOT_START`), and `titannpu` (`SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `npu` / `mcdm` / `titannpu` / `ai` (`status`, `caps` / `info`, `tiles`, `models`, `infer <model>`, `benchmark`, `power <state>`).
+
+### 3.36 TitanCXL & NexusCXL (Compute Express Link & Heterogeneous Memory Fabric Subsystem)
+- **Role:** Sovereign memory fabric and accelerator interconnect subsystem implementing the Compute Express Link™ (CXL™) Specifications Revision 2.0 and 3.1.
+- **Capabilities:**
+  - Standard CXL Driver C ABI exports (`cxlhost.sys`, `cxlmem.sys`, `cxlbus.sys`): `CxlHostInitialize`, `CxlHostGetVersion`, `CxlHostEnumerateBridges`, `CxlMemGetDeviceInfo`, `CxlMemConfigureHdmDecoder`, `CxlMemGetSmartHealth`, `CxlMemQueryPoisonList`, `CxlMemInjectPoison`, `CxlMemMigratePages`, `CxlBusRegisterDevice`, `CxlBusGetDeviceCount`, `CxlBusSendMailboxCommand`.
+  - Protocol Triad Implementation:
+    - **`CXL.io`:** Enhanced PCIe 5.0/6.0 configuration space, device enumeration, AER, and non-coherent DMA.
+    - **`CXL.cache`:** Coherent device caching of host memory with ultra-low latency D2H/H2D flits.
+    - **`CXL.mem`:** Byte-addressable host read/write access to device-attached volatile (DRAM) or non-volatile memory via M2S/S2M flits.
+  - Multi-Generation Device Topologies:
+    - **Type 1 Accelerators:** Offload processors without host memory (CXL.io + CXL.cache).
+    - **Type 2 Dense Accelerators:** High-performance GPUs/NPUs with local coherent HBM (CXL.io + CXL.cache + CXL.mem).
+    - **Type 3 Memory Expanders:** Byte-addressable DRAM expanders and memory pooling blades (CXL.io + CXL.mem).
+  - Host-Managed Device Memory (HDM) Decoders:
+    - Decoders 0..3 mapping CXL device memory directly into the System Physical Address (SPA) map with configurable interleave granularities (256B to 16KB) and ways (1 to 16-way).
+  - Dynamic Memory Tiering (DMT) & NUMA Node 1 Expansion:
+    - Far Memory NUMA Node 1 managing 128GB expansion capacity (~140ns read latency, 64 GB/s PCIe Gen5 x16 bandwidth) with automated hot/cold page migration.
+  - CXL Mailbox Command Processing & S.M.A.R.T. Telemetry:
+    - Standard command set (`IDENTIFY_MEMORY_DEVICE`, `GET_SMART_HEALTH`, `GET_POISON_LIST`, `INJECT_POISON`, `CLEAR_POISON`).
+  - Address Poisoning & Error Isolation:
+    - Hardware-isolated 64-byte poisoned cache line table preventing blue screen bugchecks.
+  - PCIe Bus Placement: CXL Host Bridge at `00:09.0` (`VEN_1E98&DEV_0001`, Bridge Class 0x06, Subclass 0x04) bridging to Bus 4 hosting `TitanCXL 128GB DDR5 Expander` (`04:00.0`) and `TitanCXL Type 2 Heterogeneous Accelerator` (`04:01.0`).
+  - System Service & Driver Integration: SCM registered drivers for `cxlhost` (`SERVICE_BOOT_START`), `cxlmem` (`SERVICE_BOOT_START`), and `cxlbus` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `cxl` / `cxlmem` / `cxlhost` / `cxlbus` / `titancxl` (`status`, `devices` / `list`, `hdm` / `decoders`, `smart` / `health`, `numa` / `tiering`, `poison`, `mailbox`, `test`).
 
 ---
 

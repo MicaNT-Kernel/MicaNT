@@ -1060,6 +1060,71 @@ public:
     }
 };
 
+// Sovereign TitanCXL 3.1 Host Bridge & Root Port
+class TitanCxlHostBridgePciDevice : public PciRootPort {
+public:
+    TitanCxlHostBridgePciDevice(PciAddress addr, uint8_t secondaryBus = 4, uint8_t subordinateBus = 4)
+        : PciRootPort(addr, secondaryBus, subordinateBus, PciLinkSpeed::Gen5_32_0GT, PciLinkWidth::x16)
+    {
+        setName("TitanCXL 3.1 Host Bridge & Root Complex (CXL.io / CXL.cache / CXL.mem)");
+        writeConfigWord(PCI_CONFIG_VENDOR_ID, 0x1E98); // CXL Consortium Vendor ID
+        writeConfigWord(PCI_CONFIG_DEVICE_ID, 0x0001); // CXL 3.1 Host Bridge
+
+        // BAR0: 64KB MMIO for CXL Host Bridge Component Registers (CXL.cachemem / HDM Decoders)
+        configureBar(0, PciBarType::Memory64, 64 * 1024, false);
+    }
+};
+
+// Sovereign TitanCXL 128GB Type 3 DDR5 Memory Expander
+class TitanCxlMemoryPciDevice : public PciDevice {
+public:
+    TitanCxlMemoryPciDevice(PciAddress addr)
+        : PciDevice(addr, 0x1E98, 0x0010, PciBaseClass::Memory, 0x80, 0x00, PCI_HEADER_TYPE_NORMAL)
+    {
+        setName("TitanCXL 128GB DDR5 Type 3 Memory Expander");
+
+        // BAR0: 64KB MMIO (64-bit non-prefetchable) - CXL Component / Mailbox Registers
+        configureBar(0, PciBarType::Memory64, 64 * 1024, false);
+
+        // BAR2: 128GB MMIO (64-bit prefetchable) - CXL.mem Byte-Addressable Aperture
+        configureBar(2, PciBarType::Memory64, 128ULL * 1024 * 1024 * 1024, true);
+
+        // PCIe Gen 5 x16
+        addPcieCapability(0x70, PciLinkSpeed::Gen5_32_0GT, PciLinkWidth::x16);
+
+        // MSI-X with 16 vectors
+        addMsixCapability(0x90, 16, 0, 0x2000, 0x3000);
+
+        // AER
+        addAerCapability(0x100);
+    }
+};
+
+// Sovereign TitanCXL Type 2 Heterogeneous AI Accelerator
+class TitanCxlAcceleratorPciDevice : public PciDevice {
+public:
+    TitanCxlAcceleratorPciDevice(PciAddress addr)
+        : PciDevice(addr, 0x1E98, 0x0020, PciBaseClass::Accelerator, 0x00, 0x00, PCI_HEADER_TYPE_NORMAL)
+    {
+        setName("TitanCXL Type 2 Heterogeneous Accelerator (CXL.cache / CXL.mem 64GB HBM)");
+
+        // BAR0: 32MB MMIO (64-bit non-prefetchable) - Control & DMA Registers
+        configureBar(0, PciBarType::Memory64, 32 * 1024 * 1024, false);
+
+        // BAR2: 64GB MMIO (64-bit prefetchable) - Coherent Local Memory Aperture
+        configureBar(2, PciBarType::Memory64, 64ULL * 1024 * 1024 * 1024, true);
+
+        // PCIe Gen 5 x16
+        addPcieCapability(0x70, PciLinkSpeed::Gen5_32_0GT, PciLinkWidth::x16);
+
+        // MSI-X with 32 vectors
+        addMsixCapability(0x90, 32, 0, 0x4000, 0x5000);
+
+        // AER
+        addAerCapability(0x100);
+    }
+};
+
 // ============================================================================
 // 8. PCI Bus Topology & Root Complex Engine
 // ============================================================================
@@ -1120,8 +1185,8 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_initialized.load()) return;
 
-        // Create Buses 0..3
-        for (uint8_t b = 0; b <= 3; ++b) {
+        // Create Buses 0..4
+        for (uint8_t b = 0; b <= 4; ++b) {
             m_buses[b] = std::make_shared<PciBus>(b);
         }
 
@@ -1165,6 +1230,10 @@ public:
         auto npu = std::make_shared<TitanNpuPciDevice>(PciAddress(0, 8, 0));
         m_buses[0]->attachDevice(npu);
 
+        // 00:09.0 - TitanCXL 3.1 Host Bridge / Root Port (Bridge to Bus 4: CXL Fabric)
+        auto cxlBridge = std::make_shared<TitanCxlHostBridgePciDevice>(PciAddress(0, 9, 0), 4, 4);
+        m_buses[0]->attachDevice(cxlBridge);
+
         // Bus 1: PrismX 3D GPU
         auto gpu = std::make_shared<PrismXGpuPciDevice>(PciAddress(1, 0, 0));
         m_buses[1]->attachDevice(gpu);
@@ -1176,6 +1245,15 @@ public:
         // Bus 3: TitanUSB xHCI Controller
         auto xhci = std::make_shared<TitanXhciPciDevice>(PciAddress(3, 0, 0));
         m_buses[3]->attachDevice(xhci);
+
+        // Bus 4: CXL Fabric Devices
+        // 04:00.0 - TitanCXL 128GB Type 3 DDR5 Memory Expander
+        auto cxlMem = std::make_shared<TitanCxlMemoryPciDevice>(PciAddress(4, 0, 0));
+        m_buses[4]->attachDevice(cxlMem);
+
+        // 04:01.0 - TitanCXL Type 2 Heterogeneous AI Accelerator
+        auto cxlAcc = std::make_shared<TitanCxlAcceleratorPciDevice>(PciAddress(4, 1, 0));
+        m_buses[4]->attachDevice(cxlAcc);
 
         // Assign MMIO and I/O ranges to all devices
         allocateResources();
