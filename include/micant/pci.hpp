@@ -1035,6 +1035,31 @@ public:
     }
 };
 
+// Sovereign TitanNPU Core Ultra NPU 4000 (Processing Accelerator)
+class TitanNpuPciDevice : public PciDevice {
+public:
+    TitanNpuPciDevice(PciAddress addr)
+        : PciDevice(addr, 0x8086, 0x7D1D, PciBaseClass::Accelerator, 0x00, 0x00, PCI_HEADER_TYPE_NORMAL)
+    {
+        setName("TitanNPU Core Ultra NPU 4000 (Intel AI Boost)");
+
+        // BAR0: 16MB MMIO (64-bit non-prefetchable) - NPU Registers & Command Rings
+        configureBar(0, PciBarType::Memory64, 16 * 1024 * 1024, false);
+
+        // BAR2: 128MB MMIO (64-bit prefetchable) - On-Chip Weight / Activation SRAM window
+        configureBar(2, PciBarType::Memory64, 128 * 1024 * 1024, true);
+
+        // PCIe Gen 4 x4
+        addPcieCapability(0x70, PciLinkSpeed::Gen4_16_0GT, PciLinkWidth::x4);
+
+        // MSI-X with 16 vectors
+        addMsixCapability(0x90, 16, 0, 0x2000, 0x3000);
+
+        // AER
+        addAerCapability(0x100);
+    }
+};
+
 // ============================================================================
 // 8. PCI Bus Topology & Root Complex Engine
 // ============================================================================
@@ -1135,6 +1160,10 @@ public:
         // 00:07.0 - TitanUSB4 2.0 Host Router
         auto usb4 = std::make_shared<TitanUsb4PciDevice>(PciAddress(0, 7, 0));
         m_buses[0]->attachDevice(usb4);
+
+        // 00:08.0 - TitanNPU AI Accelerator
+        auto npu = std::make_shared<TitanNpuPciDevice>(PciAddress(0, 8, 0));
+        m_buses[0]->attachDevice(npu);
 
         // Bus 1: PrismX 3D GPU
         auto gpu = std::make_shared<PrismXGpuPciDevice>(PciAddress(1, 0, 0));

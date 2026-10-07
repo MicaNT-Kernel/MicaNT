@@ -51,6 +51,7 @@ These names:
 | **Bluetooth 5.4 & LE Audio** | **TitanBTH / NexusBTH** | `micant::bth` | `bthport.hpp` | Clean-room Bluetooth 5.4 kernel port driver (`bthport.sys`), USB transport miniport (`bthusb.sys`), RFCOMM serial protocol (`rfcomm.sys`), and bus enumerator (`bthenum.sys`) with LE Audio (LC3 / Auracast). |
 | **Wi-Fi 7 & WDI Miniport Subsystem** | **TitanWiFi / NexusWiFi** | `micant::wdi` | `wdiwifi.hpp` | Clean-room Wi-Fi 7 (802.11be EHT) & WDI framework (`wdiwifi.sys`), NetAdapterCx WDF class extension (`netadaptercx.sys`), and TitanWiFi PCIe miniport (`titanwifi.sys` at 00:06.0) with Multi-Link Operation (MLO STR), 320 MHz channels, and 4096-QAM. |
 | **USB4 2.0 & Thunderbolt 4 Subsystem** | **TitanUSB4 / NexusUSB4** | `micant::usb4` | `usb4.hpp` | Clean-room USB4 2.0 & Thunderbolt 4/5 Host Router subsystem (`usb4host.sys`, `thunderbolt.sys`, `usb4router.sys` at 00:07.0) with PAM3 80G symmetric / 120G asymmetric signaling, native PCIe tunneling, DP 2.1 tunneling, and SL2 DMA protection. |
+| **Neural Processing Unit & MCDM** | **TitanNPU / NexusNPU** | `micant::npu` | `npu.hpp` | Clean-room Microsoft Compute Driver Model (MCDM 1.0/2.0) & NPU subsystem (`mcdm.sys`, `npu.sys`, `titannpu.sys` at 00:08.0) with 48 INT8 TOPS Copilot+ compliance, 4 compute tiles, INT4/FP8/FP16/BF16 precisions, DirectML hardware queues, and SLM execution. |
 
 ---
 
@@ -479,6 +480,29 @@ These names:
   - PCIe Miniport Placement: Host Router bound to PCIe BDF `00:07.0` (`VEN_8086&DEV_9A1B`, Intel Arrow Lake class) with 64KB MMIO BAR0 and 8 MSI-X vectors.
   - System Service & Driver Integration: SCM registered drivers for `usb4host` (`SERVICE_BOOT_START`), `thunderbolt` (`SERVICE_BOOT_START`), and `usb4router` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `usb4` / `thunderbolt` / `tbt` / `titanusb4` (`status`, `tree` / `topology`, `paths`, `security`, `asymmetric`, `tunnel`, `test`).
+
+### 3.35 TitanNPU & NexusNPU (Neural Processing Unit & Microsoft Compute Driver Model Subsystem)
+- **Role:** Sovereign AI acceleration subsystem implementing the Microsoft Compute Driver Model (MCDM 1.0/2.0) and dedicated Neural Processing Unit (NPU) accelerator driver architecture for modern Copilot+ PC silicon.
+- **Capabilities:**
+  - Standard MCDM & NPU Driver C ABI exports (`mcdm.sys`, `npu.sys`, `titannpu.sys`): `McdmDeviceCreate`, `McdmDeviceDestroy`, `McdmCreateCommandQueue`, `McdmSubmitCommandBuffer`, `McdmSignalFence`, `McdmWaitForFence`, `McdmAllocateVirtualMemory`, `McdmFreeVirtualMemory`, `NpuGetCapabilities`, `NpuExecuteModel`, `NpuSetPowerState`, `NpuGetTelemetry`, `TitanNpuHardwareReset`.
+  - Microsoft Compute Driver Model (MCDM 1.0/2.0) Architecture:
+    - Headless compute execution queues eliminating display/presentation engine overhead.
+    - 64-bit monotonic fence synchronization (`McdmFence`) with lock-free atomic advancement.
+    - Asynchronous command rings with zero CPU interrupt overhead during model weight streaming.
+    - Advanced virtual memory management (`McdmAllocateVirtualMemory`) supporting on-chip high-bandwidth scratchpad SRAM (`LocalSram`) and host-visible pinned memory.
+  - Multi-Tile Neural Compute Engine (NCE Array):
+    - 4 independent compute tiles operating at 1600 MHz with 16 MB total on-chip dedicated SRAM cache (4 MB per tile).
+    - 4,096 INT8 MAC units per tile (16,384 total MACs) delivering 48.0 INT8 TOPS, 24.0 FP16 TFLOPS, and 48.0 FP8 TOPS (exceeding Microsoft's 40 TOPS Copilot+ requirement).
+  - Tensor Precision & Operator Matrix:
+    - Native hardware execution for INT4, INT8, FP8 (E4M3 / E5M2), FP16, BF16, and FP32 tensor formats.
+    - Dedicated silicon acceleration for modern generative AI operators: `MatMul`, `Conv2D`, `LayerNorm`, `RMSNorm`, `Softmax`, `RoPE` (Rotary Positional Embeddings), `Attention`, and `SiLU`/`GELU`.
+  - Pre-Compiled DirectML / ONNX Model Catalog:
+    - Embedded execution paths for Phi-3 Mini 4K Instruct (3.8B INT4 SLM), LLaMA-3 8B INT4, Mistral 7B, Mobile Segment Anything, and DirectSR 4x super-resolution @ 240 FPS.
+  - Intelligent Power & Thermal Management:
+    - Dynamic power states: D0 Active (15W peak), D0 Low-Power (3.5W with tile clock gating), D3 Hot sleep (< 1ms resume), and D3 Cold (0W).
+  - PCIe Miniport Placement: Processing Accelerator bound to PCIe BDF `00:08.0` (`VEN_8086&DEV_7D1D`, Class 0x12) with 16MB MMIO BAR0, 128MB prefetchable SRAM BAR2, and 16 MSI-X vectors.
+  - System Service & Driver Integration: SCM registered drivers for `mcdm` (`SERVICE_BOOT_START`), `npu` (`SERVICE_BOOT_START`), and `titannpu` (`SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `npu` / `mcdm` / `titannpu` / `ai` (`status`, `caps` / `info`, `tiles`, `models`, `infer <model>`, `benchmark`, `power <state>`).
 
 ---
 

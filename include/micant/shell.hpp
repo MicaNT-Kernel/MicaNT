@@ -151,6 +151,7 @@
 #include "bthport.hpp"
 #include "wdiwifi.hpp"
 #include "usb4.hpp"
+#include "npu.hpp"
 
 namespace micant::shell {
 
@@ -446,6 +447,7 @@ public:
             if (cmd == "bth" || cmd == "bt" || cmd == "bthport") { cmdBth(tokens, out); return 0; }
             if (cmd == "wifi7" || cmd == "wdiwifi" || cmd == "titanwifi" || cmd == "mlo") { cmdWdiWiFi(tokens, out); return 0; }
             if (cmd == "usb4" || cmd == "thunderbolt" || cmd == "tbt" || cmd == "titanusb4") { cmdUsb4(tokens, out); return 0; }
+            if (cmd == "npu" || cmd == "mcdm" || cmd == "titannpu" || cmd == "ai") { cmdNpu(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -25705,6 +25707,146 @@ private:
             << "  usb4 asymmetric <on|off>       Toggle 120 Gbps Asymmetric PAM3 high-bandwidth mode\n"
             << "  usb4 tunnel <pcie|dp|usb3>     Inject test protocol tunnel frame\n"
             << "  usb4 test                      Execute USB4 2.0 / Thunderbolt 4 self-test\n";
+    }
+
+    void cmdNpu(const std::vector<std::string>& tokens, std::ostream& out) {
+        npu::InitializeNpuSubsystem();
+        auto& npuSub = npu::TitanNpuSubsystem::Instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "caps" || sub == "info") {
+            const auto& caps = npuSub.getCapabilities();
+            out << "TitanNPU Hardware Architecture & Compute Capabilities:\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  Device Name:                   " << caps.deviceName << "\n"
+                << "  PCIe Address:                  Bus 00:08.0 (VEN_8086&DEV_7D1D, Processing Accelerator)\n"
+                << "  Driver Interface:              Microsoft Compute Driver Model (mcdm.sys, npu.sys)\n"
+                << "  Neural Compute Tiles:          " << static_cast<int>(caps.numTiles) << " Independent Engine Tiles (1600 MHz)\n"
+                << "  On-Chip SRAM Cache:            " << (caps.totalSramBytes / (1024 * 1024)) << " MB Dedicated High-Bandwidth SRAM\n"
+                << "  Peak INT8 Performance:         " << caps.peakInt8Tops << " TOPS (Copilot+ Certified >= 40 TOPS)\n"
+                << "  Peak FP16 Performance:         " << caps.peakFp16Tflops << " TFLOPS\n"
+                << "  Peak FP8 (E4M3/E5M2):          " << caps.peakFp8Tops << " TOPS\n"
+                << "  On-Chip SRAM Bandwidth:        " << caps.sramBandwidthGBps << " GB/s\n"
+                << "  PCIe Gen4 x4 DMA Bandwidth:    " << caps.dmaBandwidthGBps << " GB/s\n"
+                << "  Copilot+ PC Compliant:         " << (caps.copilotPlusCompliant ? "YES (Exceeds 40 TOPS Standard)" : "NO") << "\n"
+                << "-------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (sub == "tiles") {
+            auto tiles = npuSub.getTiles();
+            out << "TitanNPU Neural Compute Tiles (Intel NPU 4000 Array):\n"
+                << "-------------------------------------------------------------------------------\n"
+                << std::left << std::setw(10) << "Tile"
+                << std::setw(14) << "Clock"
+                << std::setw(14) << "SRAM Size"
+                << std::setw(14) << "MAC Units"
+                << std::setw(14) << "State"
+                << "Utilization\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& t : tiles) {
+                out << std::left << std::setw(10) << ("Tile #" + std::to_string(t.tileId))
+                    << std::setw(14) << (std::to_string(t.frequencyMhz) + " MHz")
+                    << std::setw(14) << (std::to_string(t.sramBytes / (1024 * 1024)) + " MB")
+                    << std::setw(14) << (std::to_string(t.macUnits) + " INT8")
+                    << std::setw(14) << (t.isActive ? "ACTIVE" : "GATED")
+                    << std::fixed << std::setprecision(1) << t.utilizationPercent << "%\n";
+            }
+            out << "-------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (sub == "models" || sub == "list") {
+            auto models = npuSub.getRegisteredModels();
+            out << "TitanNPU Pre-Compiled DirectML / ONNX Hardware Model Catalog:\n"
+                << "--------------------------------------------------------------------------------------------------\n"
+                << std::left << std::setw(28) << "Model Identifier"
+                << std::setw(12) << "Params"
+                << std::setw(10) << "Format"
+                << std::setw(14) << "Memory (SRAM)"
+                << std::setw(14) << "Throughput"
+                << "Architecture\n"
+                << "--------------------------------------------------------------------------------------------------\n";
+            for (const auto& m : models) {
+                out << std::left << std::setw(28) << m.modelName
+                    << std::setw(12) << (std::to_string(m.parameterCountBillions).substr(0, 4) + "B")
+                    << std::setw(10) << npu::NpuPrecisionToString(m.precision)
+                    << std::setw(14) << (std::to_string(m.weightsSizeBytes / (1024 * 1024)) + " MB")
+                    << std::setw(14) << (std::to_string(static_cast<int>(m.expectedTokensPerSec)) + " tps/fps")
+                    << m.architecture << "\n";
+            }
+            out << "--------------------------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (sub == "infer") {
+            std::string model = (tokens.size() > 2) ? tokens[2] : "phi-3";
+            uint32_t promptTokens = 128;
+            uint32_t genTokens = 64;
+            out << "Dispatching DirectML hardware inference queue to TitanNPU: " << model << "...\n";
+            auto res = npuSub.executeModel(model, promptTokens, genTokens);
+            if (!res.success) {
+                out << "Inference failed: " << res.outputText << "\n";
+                return;
+            }
+            out << "Inference Complete:\n"
+                << "  Model:                         " << res.modelName << "\n"
+                << "  Prompt / Generated Tokens:     " << res.promptTokens << " prompt / " << res.generatedTokens << " generated\n"
+                << "  Generation Speed:              " << std::fixed << std::setprecision(1) << res.tokensPerSecond << " tokens/sec\n"
+                << "  Latency:                       " << (res.latencyUs / 1000) << " ms\n"
+                << "  Effective NPU Throughput:      " << res.effectiveTops << " TOPS\n"
+                << "  Power Consumption:             " << res.powerWatts << " Watts\n"
+                << "  Output: " << res.outputText << "\n";
+            return;
+        }
+
+        if (sub == "benchmark" || sub == "bench") {
+            out << "Executing TitanNPU Synthetic TOPS & Bandwidth Stress Test...\n";
+            auto bench = npuSub.runBenchmark();
+            out << bench.summary << "\n";
+            return;
+        }
+
+        if (sub == "power") {
+            if (tokens.size() > 2) {
+                std::string pState = tokens[2];
+                if (pState == "d0" || pState == "active") npuSub.setPowerState(npu::NpuPowerState::D0_Active);
+                else if (pState == "d0low" || pState == "low") npuSub.setPowerState(npu::NpuPowerState::D0_LowPower);
+                else if (pState == "d3hot" || pState == "sleep") npuSub.setPowerState(npu::NpuPowerState::D3_Hot);
+                else if (pState == "d3cold" || pState == "off") npuSub.setPowerState(npu::NpuPowerState::D3_Cold);
+                out << "TitanNPU power state updated.\n";
+            }
+            out << "Current NPU Power State: " << npu::NpuPowerStateToString(npuSub.getPowerState()) << "\n";
+            return;
+        }
+
+        // Default: status
+        auto telem = npuSub.getTelemetry();
+        auto caps = npuSub.getCapabilities();
+        out << "Neural Processing Unit (NPU) & Microsoft Compute Driver Model (MCDM) Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Hardware Accelerator:          " << caps.deviceName << "\n"
+            << "  PCIe Address:                  Bus 00:08.0 (Class 0x12 Processing Accelerator)\n"
+            << "  Kernel Driver Subsystem:       mcdm.sys, npu.sys, titannpu.sys (All Active)\n"
+            << "  Current Power State:           " << npu::NpuPowerStateToString(telem.powerState) << "\n"
+            << "  Peak Compute Rating:           " << caps.peakInt8Tops << " INT8 TOPS | " << caps.peakFp16Tflops << " FP16 TFLOPS\n"
+            << "  Current Temperature:           " << std::fixed << std::setprecision(1) << telem.temperatureCelsius << " °C\n"
+            << "  Current Power Draw:            " << telem.currentPowerWatts << " Watts\n"
+            << "  Active Compute Queues:         " << telem.activeQueues << " Hardware Queues (MCDM Rings)\n"
+            << "  Total Inferences Executed:     " << telem.totalInferences << " Inferences\n"
+            << "  Total Tokens Generated:        " << telem.totalTokensGenerated << " Tokens\n"
+            << "  Total Tensor Operations:       " << telem.totalMacOperations << " MACs\n"
+            << "  Average Latency:               " << telem.averageLatencyMs << " ms\n"
+            << "  DirectML / ONNX Acceleration:  ACTIVE (Zero CPU Fallback)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  npu status                     Display NPU device status and telemetry\n"
+            << "  npu caps / info                Inspect NPU architecture, TOPS, and features\n"
+            << "  npu tiles                      Display neural compute tile array utilization\n"
+            << "  npu models                     List pre-compiled DirectML / ONNX models\n"
+            << "  npu infer <model>              Run hardware accelerated inference (phi-3, llama, etc.)\n"
+            << "  npu benchmark                  Execute synthetic TOPS and bandwidth stress test\n"
+            << "  npu power <d0|d0low|d3hot>     Control NPU power and thermal states\n";
     }
 
     static std::string trim(std::string_view s) {

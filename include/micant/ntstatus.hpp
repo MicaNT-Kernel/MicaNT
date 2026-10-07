@@ -144,6 +144,8 @@ inline constexpr NTSTATUS STATUS_NO_MORE_ENTRIES        = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_DATA_ERROR             = static_cast<NTSTATUS>(0xC000003E);
 inline constexpr NTSTATUS STATUS_DEVICE_POWER_FAILURE   = static_cast<NTSTATUS>(0xC000009E);
 inline constexpr NTSTATUS STATUS_INVALID_DEVICE_STATE   = static_cast<NTSTATUS>(0xC0000184);
+inline constexpr NTSTATUS STATUS_NO_SUCH_DEVICE         = static_cast<NTSTATUS>(0xC000000E);
+inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(0x00000102);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
     return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);
