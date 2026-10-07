@@ -54,6 +54,7 @@ These names:
 | **Neural Processing Unit & MCDM** | **TitanNPU / NexusNPU** | `micant::npu` | `npu.hpp` | Clean-room Microsoft Compute Driver Model (MCDM 1.0/2.0) & NPU subsystem (`mcdm.sys`, `npu.sys`, `titannpu.sys` at 00:08.0) with 48 INT8 TOPS Copilot+ compliance, 4 compute tiles, INT4/FP8/FP16/BF16 precisions, DirectML hardware queues, and SLM execution. |
 | **Compute Express Link (CXL 2.0 / 3.1)** | **TitanCXL / NexusCXL** | `micant::cxl` | `cxl.hpp` | Clean-room Compute Express Link 2.0/3.1 heterogeneous memory fabric (`cxlhost.sys`, `cxlmem.sys`, `cxlbus.sys` at 00:09.0 & Bus 4) with CXL.io, CXL.cache, CXL.mem, Type 1/2/3 devices, HDM decoders, DMT NUMA tiering, and mailbox. |
 | **USB Type-C & Power Delivery (UCSI 2.1/3.0 / PD 3.1)** | **TitanUCSI / NexusUCSI** | `micant::ucsi` | `ucsi.hpp` | Clean-room USB Type-C Connector System Software Interface (UCSI 2.1/3.0) and USB Power Delivery 3.1 (240W EPR) subsystem (`ucsi.sys`, `usbc.sys`, `ppm.sys`, ACPI `\_SB.UBTC`) with 4 physical ports, EPR AVS (15-48V @ 5A), E-Marker discovery, and dynamic role swapping (`PR_SWAP` / `DR_SWAP`). |
+| **DirectStorage 1.2 & BypassIO Subsystem** | **TitanBypassIO / NexusBypassIO** | `micant::bypassio` | `bypassio.hpp` | Clean-room Windows BypassIO architecture (`FSCTL_MANAGE_BYPASS_IO`) & DirectStorage 1.2 GPU decompression driver stack (`bypassio.sys`, `storqos.sys`) with direct NVMe-to-VRAM DMA (<25us latency), GDeflate GPU compute/CPU SIMD codec, and 3-tier Storage QoS. |
 
 ---
 
@@ -552,6 +553,29 @@ These names:
     - Data Role Swap (`DR_SWAP` DFP Host <-> UFP Device) and VCONN swapping.
   - System Service & Driver Integration: SCM registered drivers for `ucsi` (`SERVICE_BOOT_START`), `usbc` (`SERVICE_BOOT_START`), and `ppm` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `ucsi` / `usbpd` / `titanucsi` / `usbc` (`status`, `ports` / `list`, `pd` / `power`, `cable`, `swap`).
+
+### 3.38 TitanBypassIO & NexusBypassIO (DirectStorage 1.2 & BypassIO Subsystem)
+- **Role:** Sovereign high-speed storage acceleration subsystem implementing the Microsoft Windows BypassIO architecture (`FSCTL_MANAGE_BYPASS_IO` `0x00090280`), DirectStorage 1.2 GDeflate GPU decompression driver stack (`bypassio.sys`), and Storage Quality of Service (`storqos.sys`).
+- **Capabilities:**
+  - Standard BypassIO Driver C ABI exports (`bypassio.sys`, `storqos.sys`): `BypassIoInitialize`, `BypassIoGetVersion`, `BypassIoManageOperation`, `BypassIoProcessFastRead`, `BypassIoQueryVolumeStatus`, `BypassIoPauseVolume`, `BypassIoResumeVolume`, `DirectStorageKernelDecompress`, `DirectStorageTransferNvmeToVram`, `StorQosConfigureStream`, `StorQosGetTelemetry`.
+  - Kernel-Mode Fast-Path Architecture (`bypassio.sys`):
+    - Completely eliminates filesystem minifilter stack traversal (`fltmgr.sys`) for authorized game streaming and dense compute I/O.
+    - Achieves sub-25 microsecond read latency and zero CPU cache pollution by delegating NVMe completion rings straight to target memories.
+  - Minifilter Stack Compatibility Enforcement:
+    - Scans and validates all registered volume minifilters (`EmeraldFlt`, `SentinelScanFlt`, `WfpTrafficFlt`).
+    - Rejects BypassIO activation with `FS_BPIO_STATUS_FILTER_INCOMPATIBLE` and identifies culprit driver if any non-compatible filter is attached.
+  - Dynamic Volume Stack State Management:
+    - Supports Volume Stack Pause (`FS_BPIO_OP_VOLUME_STACK_PAUSE`) and Resume (`FS_BPIO_OP_VOLUME_STACK_RESUME`) for atomic VSS volume shadow copies.
+  - Direct NVMe-to-VRAM DMA Engine:
+    - Direct DMA streaming from PCIe Gen 5 x4 NVMe controllers to WDDM 3.2 GPU Virtual Address (`GPUVA`) apertures exceeding 7.4 GB/s.
+    - Enforces 64KB page / 2MB large page alignment constraints for GPU memory protection.
+  - DirectStorage 1.2 GDeflate Hardware & Compute Acceleration:
+    - Full container format compliance (`GDEFLATE_MAGIC` `0x44474447`, `GDEFLATE_VERSION` `0x00010200`) with 64KB tile partitioning and ~2.4x compression ratio.
+    - Dual decompression pipelines: Direct3D 12 compute shader dispatch on GPU or multi-threaded CPU SIMD fallback.
+  - Storage Quality of Service (`storqos.sys`):
+    - 3-tier traffic scheduling: Tier 0 DirectStorage Real-Time Streaming (5.5 GB/s guaranteed, 70% weight, 1.5M IOPS), Tier 1 Foreground Applications (25% weight), and Tier 2 Background Maintenance (5% weight).
+  - System Service & Driver Integration: SCM registered drivers for `bypassio` (`SERVICE_BOOT_START`) and `storqos` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `bypassio` / `bpio` / `storqos` / `titanstorage` (`status`, `filters` / `stack`, `qos`, `gdeflate`, `bench` / `benchmark`, `pause` / `resume`).
 
 ---
 
