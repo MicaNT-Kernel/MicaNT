@@ -63,6 +63,7 @@ These names:
 | **Intel QAT Hardware Offload Subsystem** | **TitanQAT / NexusQAT** | `micant::qat` | `qat.hpp` | Clean-room Intel QuickAssist Technology (QAT 2.0 / 4xxx) cryptographic & compression accelerator (`intel_qat.sys`, `qat_crypto.sys`, `qat_comp.sys`, PCIe `00:0A.0`), 10 acceleration engines (4 Sym Crypto, 2 Asym PKE, 4 Compression), 16 SR-IOV VFs, zero-copy ring queue pairs with doorbells, and wire-speed offload (>400 Gbps crypto, >160 Gbps comp). |
 | **Intel SGX/TDX & AMD SEV-SNP Confidential Computing Subsystem** | **TitanTEE / AegisTEE** | `micant::tee` | `tee.hpp` | Clean-room hardware Trusted Execution Environment (TEE) and Confidential Computing subsystem (`virtenclave.sys`, `isv_enclave.sys`, `confidential_vm.sys`), Intel SGX 1/2 enclaves, Intel TDX 1.5 Trust Domains, AMD SEV-SNP memory protection, 512 MB EPC with AES-256-XTS MEE, EPCM tracking, AEX state scrubbing, and ECDSA-P384 attestation reports. |
 | **Intel DSA & IAA Fast-Memory Streaming Subsystem** | **TitanDSA / NexusDSA** | `micant::dsa` | `dsa.hpp` | Clean-room Intel Data Streaming Accelerator (DSA 2.0/3.0) and In-Memory Analytics Accelerator (IAA 1.0) subsystem (`intel_dsa.sys`, `intel_iaa.sys`, `dsa_accel.sys`, PCIe `00:0B.0` & `00:0B.1`), DWQ/SWQ portals with ENQCMD/ENQCMDS, fast memory copy/fill, mismatch compare, CRC32C, DualCast, and IAA columnar scan/extract acceleration. |
+| **Intel AMX & Arm SME Deep Learning Matrix Accelerator Subsystem** | **TitanMatrix / NexusAMX** | `micant::amx` | `amx.hpp` | Clean-room Intel Advanced Matrix Extensions (AMX: TILE, INT8, BF16, FP16) and Arm Scalable Matrix Extension (SME/SME2) subsystem (`intel_amx.sys`, `arm_sme.sys`, `matrix_accel.sys`), 64-byte `tilecfg` palette, 8KB 2D tile register file (`TMM0`..`TMM7`), INT8 dot products (`TDPBUSD`), BF16/FP16 multiplication (`TDPBF16PS`/`TDPFP16PS`), and Arm SME streaming SVE mode with ZA matrix outer products (`FMOPA`). |
 
 ---
 
@@ -729,6 +730,30 @@ These names:
     - Zero CPU memory-loop saturation and wire-speed memory streaming (> 60 GB/s aggregate throughput).
   - System Service & Driver Integration: SCM registered drivers for `intel_dsa` (`SERVICE_BOOT_START`), `intel_iaa` (`SERVICE_SYSTEM_START`), and `dsa_accel` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration (`intel_dsa.sys` 10.0.26100.1).
   - Interactive CLI: `dsa` / `iaa` / `titandsa` / `nexusdsa` (`status`, `portals`, `copy`, `fill`, `compare`, `crc`, `iaa`, `bench` / `benchmark`).
+
+### 3.47 TitanMatrix & NexusAMX (Intel Advanced Matrix Extensions & Arm SME Matrix Accelerator Subsystem)
+- **Role:** Sovereign hardware 2D tile systolic matrix multiplication and deep learning tensor accelerator implementing Intel Advanced Matrix Extensions (Intel AMX: AMX-TILE, AMX-INT8, AMX-BF16, AMX-FP16) and Arm Scalable Matrix Extension (SME / SME2) driver stack (`intel_amx.sys`, `arm_sme.sys`, `matrix_accel.sys`).
+- **Capabilities:**
+  - Standard AMX Driver C ABI exports (`intel_amx.sys`, `arm_sme.sys`, `matrix_accel.sys`): `AmxInitialize`, `AmxGetVersion`, `AmxGetCapabilities`, `AmxConfigurePalette`, `AmxLoadTile`, `AmxStoreTile`, `AmxMultiplyInt8`, `AmxMultiplyBf16`, `AmxMultiplyFp16`, `AmxReleaseTiles`, `AmxGetTelemetry`.
+  - 2D Tile Register Architecture (AMX-TILE):
+    - 64-byte `tilecfg` configuration palette with row/column dimensions and palette ID validation.
+    - 8KB 2D tile register file featuring 8 1KB registers (`TMM0` through `TMM7`, up to 16 rows x 64 bytes).
+    - High-throughput restartable tile memory loads (`TILELOADD`) and stores (`TILESTORED`).
+    - Instantaneous tile register deallocation and zeroing via `TILERELEASE`.
+  - High-Performance Systolic Precision Engines:
+    - `AMX-INT8`: Signed/unsigned 8-bit integer dot product with 32-bit integer accumulation (`TDPBUSD` / `TDPBSSD` / `TDPBUUD`).
+    - `AMX-BF16`: BFloat16 dot product with IEEE 754 single-precision FP32 accumulation (`TDPBF16PS`).
+    - `AMX-FP16`: IEEE 754 half-precision FP16 dot product with single-precision FP32 accumulation (`TDPFP16PS`).
+  - Arm Scalable Matrix Extension (SME / SME2) Bridge:
+    - Streaming SVE execution mode (`PSTATE.SM = 1`) with scalable vector lengths (128-bit to 2048-bit).
+    - 2D ZA matrix tile storage (`ZA0`..`ZA7`) with outer product vector accumulation (`SMOPA`, `FMOPA`).
+  - Extended Processor State (XState / XSAVE) Integration:
+    - Full OS-level tracking of `XFEATURE_MASK_XTILECFG` (bit 17) and `XFEATURE_MASK_XTILEDATA` (bit 18).
+    - On-demand dynamic tile state allocation preventing physical memory waste across non-AI threads.
+  - Sub-20ns Systolic Compute Latency:
+    - Direct in-core systolic hardware execution delivering massive throughput acceleration for LLMs, neural networks, and scientific matrix computing.
+  - System Service & Driver Integration: SCM registered drivers for `intel_amx` (`SERVICE_BOOT_START`), `arm_sme` (`SERVICE_SYSTEM_START`), and `matrix_accel` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration (`intel_amx.sys` 10.0.26100.1).
+  - Interactive CLI: `amx` / `sme` / `matrix` / `titanmatrix` / `nexusamx` (`status`, `tiles`, `int8`, `bf16`, `fp16`, `sme`, `bench` / `benchmark`).
 
 ---
 

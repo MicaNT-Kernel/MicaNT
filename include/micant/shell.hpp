@@ -163,6 +163,7 @@
 #include "qat.hpp"
 #include "tee.hpp"
 #include "dsa.hpp"
+#include "amx.hpp"
 
 namespace micant::shell {
 
@@ -470,6 +471,7 @@ public:
             if (cmd == "qat" || cmd == "quickassist" || cmd == "titanqat" || cmd == "nexusqat") { cmdQat(tokens, out); return 0; }
             if (cmd == "tee" || cmd == "enclave" || cmd == "sgx" || cmd == "tdx" || cmd == "sevsnp" || cmd == "titantee" || cmd == "aegistee") { cmdTee(tokens, out); return 0; }
             if (cmd == "dsa" || cmd == "iaa" || cmd == "titandsa" || cmd == "nexusdsa") { cmdDsa(tokens, out); return 0; }
+            if (cmd == "amx" || cmd == "sme" || cmd == "matrix" || cmd == "titanmatrix" || cmd == "nexusamx") { cmdAmx(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -27305,6 +27307,199 @@ private:
             << "  dsa crc                     Compute Castagnoli CRC-32C and simultaneous COPY_CRC\n"
             << "  dsa scan                    Execute IAA columnar predicate scan and bitmask generation\n"
             << "  dsa bench / benchmark       Benchmark hardware DMA memory streaming throughput\n";
+    }
+
+    void cmdAmx(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& amxSub = amx::TitanMatrixSubsystem::Instance();
+        amxSub.initialize();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "status") {
+            const auto& caps = amxSub.getCapabilities();
+            const auto& telem = amxSub.getTelemetry();
+            const auto& cfg = amxSub.getCurrentConfig();
+            const auto& sme = amxSub.getSmeState();
+
+            out << "===============================================================================\n"
+                << "  MicaNT Intel AMX & Arm SME Matrix Accelerator Subsystem (TitanMatrix/NexusAMX)\n"
+                << "===============================================================================\n"
+                << "  AMX-TILE Support:              " << (caps.hasAmxTile ? "ENABLED (8 Tiles x 1KB = 8KB Tile File)" : "Disabled") << "\n"
+                << "  AMX-INT8 (TMUL) Precision:     " << (caps.hasAmxInt8 ? "ENABLED (TDPBUSD / TDPBSSD / TDPBUUD)" : "Disabled") << "\n"
+                << "  AMX-BF16 Precision:            " << (caps.hasAmxBf16 ? "ENABLED (TDPBF16PS BFloat16 -> FP32 Accum)" : "Disabled") << "\n"
+                << "  AMX-FP16 Precision:            " << (caps.hasAmxFp16 ? "ENABLED (TDPFP16PS IEEE Half -> FP32 Accum)" : "Disabled") << "\n"
+                << "  Arm SME (Scalable Matrix Ext): " << (caps.hasArmSme ? "ENABLED (Streaming SVE + ZA Storage)" : "Disabled") << "\n"
+                << "  Active Palette ID:             " << static_cast<int>(cfg.paletteId) << " (" << (cfg.paletteId == 1 ? "Palette 1 Configured" : "Unconfigured / Released") << ")\n"
+                << "  Arm SME State:                 Streaming SM: " << (sme.streamingMode ? "ACTIVE" : "INACTIVE")
+                << " | ZA Storage: " << (sme.zaStorageEnabled ? "ACTIVE" : "INACTIVE")
+                << " | SVL: " << sme.svlBits << "-bit\n"
+                << "  Telemetry Metrics:\n"
+                << "    Tile Loads (TILELOADD):      " << telem.totalTileLoads << "\n"
+                << "    Tile Stores (TILESTORED):    " << telem.totalTileStores << "\n"
+                << "    INT8 Matrix Dot Products:    " << telem.totalInt8Ops << "\n"
+                << "    BF16 Matrix Dot Products:    " << telem.totalBf16Ops << "\n"
+                << "    FP16 Matrix Dot Products:    " << telem.totalFp16Ops << "\n"
+                << "    Arm SME Outer Products:      " << telem.totalArmSmeOps << "\n"
+                << "    Tile Releases (TILERELEASE): " << telem.totalTilesReleased << "\n"
+                << "    Config Switches (LDTILECFG): " << telem.totalTileConfigSwitches << "\n"
+                << "===============================================================================\n";
+            return;
+        }
+
+        if (sub == "tiles" || sub == "tmm") {
+            const auto& cfg = amxSub.getCurrentConfig();
+            out << "Intel AMX 2D Tile Register File (TMM0 .. TMM7):\n"
+                << "-------------------------------------------------------------------------------\n"
+                << "  Tile    Rows    Bytes/Row    Total Bytes    Format / Role\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (uint32_t i = 0; i < amx::AMX_MAX_TILES; ++i) {
+                uint32_t r = cfg.rows[i];
+                uint32_t c = cfg.colsb[i];
+                out << "  TMM" << i << "    " << std::setw(4) << r << "    "
+                    << std::setw(9) << c << "    "
+                    << std::setw(11) << (r * c) << "    "
+                    << (r == 0 ? "(Empty / Inactive)" : "Active 2D Matrix") << "\n";
+            }
+            out << "-------------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (sub == "int8") {
+            out << "[AMX-INT8] Executing 16x16 INT8 tile dot product with INT32 accumulation...\n";
+            amx::TileConfig cfg{};
+            cfg.paletteId = amx::AMX_PALETTE_ID_1;
+            cfg.rows[0] = 16; cfg.colsb[0] = 64; // TMM0: 16 rows x 16 int32s (64 bytes)
+            cfg.rows[1] = 16; cfg.colsb[1] = 64; // TMM1: 16 rows x 64 int8s (64 bytes)
+            cfg.rows[2] = 16; cfg.colsb[2] = 64; // TMM2: 16 rows x 16 tuples (64 bytes)
+            amxSub.configurePalette(cfg);
+
+            std::vector<int8_t> matA(16 * 64, 2);
+            std::vector<int8_t> matB(16 * 64, 3);
+            amxSub.loadTile(1, matA.data(), 64);
+            amxSub.loadTile(2, matB.data(), 64);
+
+            uint32_t latNs = 0;
+            amxSub.multiplyInt8(0, 1, 2, true, true, &latNs);
+
+            std::vector<int32_t> matC(16 * 16, 0);
+            amxSub.storeTile(0, matC.data(), 64);
+
+            out << "  [RESULT] TMM0[0][0] = " << matC[0] << " (Expected: " << (16 * 4 * 2 * 3) << ")\n"
+                << "           Systolic Execution Latency: " << latNs << " ns\n";
+            return;
+        }
+
+        if (sub == "bf16") {
+            out << "[AMX-BF16] Executing 16x16 BFloat16 tile multiplication with FP32 accumulation...\n";
+            amx::TileConfig cfg{};
+            cfg.paletteId = amx::AMX_PALETTE_ID_1;
+            cfg.rows[0] = 16; cfg.colsb[0] = 64; // TMM0: 16 rows x 16 floats (64 bytes)
+            cfg.rows[1] = 16; cfg.colsb[1] = 64; // TMM1: 16 rows x 32 bf16s (64 bytes)
+            cfg.rows[2] = 16; cfg.colsb[2] = 64; // TMM2: 16 rows x 16 bf16 pairs (64 bytes)
+            amxSub.configurePalette(cfg);
+
+            std::vector<uint16_t> matA(16 * 32, amx::FloatToBf16(1.5f));
+            std::vector<uint16_t> matB(16 * 32, amx::FloatToBf16(2.0f));
+            amxSub.loadTile(1, matA.data(), 64);
+            amxSub.loadTile(2, matB.data(), 64);
+
+            uint32_t latNs = 0;
+            amxSub.multiplyBf16(0, 1, 2, &latNs);
+
+            std::vector<float> matC(16 * 16, 0.0f);
+            amxSub.storeTile(0, matC.data(), 64);
+
+            out << "  [RESULT] TMM0[0][0] = " << matC[0] << " (Expected: " << (16 * 2 * 1.5f * 2.0f) << ")\n"
+                << "           Systolic Execution Latency: " << latNs << " ns\n";
+            return;
+        }
+
+        if (sub == "fp16") {
+            out << "[AMX-FP16] Executing 16x16 IEEE FP16 tile multiplication with FP32 accumulation...\n";
+            amx::TileConfig cfg{};
+            cfg.paletteId = amx::AMX_PALETTE_ID_1;
+            cfg.rows[0] = 16; cfg.colsb[0] = 64;
+            cfg.rows[1] = 16; cfg.colsb[1] = 64;
+            cfg.rows[2] = 16; cfg.colsb[2] = 64;
+            amxSub.configurePalette(cfg);
+
+            std::vector<uint16_t> matA(16 * 32, amx::FloatToFp16(2.5f));
+            std::vector<uint16_t> matB(16 * 32, amx::FloatToFp16(4.0f));
+            amxSub.loadTile(1, matA.data(), 64);
+            amxSub.loadTile(2, matB.data(), 64);
+
+            uint32_t latNs = 0;
+            amxSub.multiplyFp16(0, 1, 2, &latNs);
+
+            std::vector<float> matC(16 * 16, 0.0f);
+            amxSub.storeTile(0, matC.data(), 64);
+
+            out << "  [RESULT] TMM0[0][0] = " << matC[0] << " (Expected: " << (16 * 2 * 2.5f * 4.0f) << ")\n"
+                << "           Systolic Execution Latency: " << latNs << " ns\n";
+            return;
+        }
+
+        if (sub == "sme") {
+            out << "[Arm SME] Configuring Streaming SVE Mode and executing ZA outer product (FMOPA)...\n";
+            amxSub.setSmeStreamingMode(true, true);
+
+            std::vector<float> vecA = {1.0f, 2.0f, 3.0f, 4.0f};
+            std::vector<float> vecB = {5.0f, 6.0f, 7.0f, 8.0f};
+            uint32_t latNs = 0;
+            amxSub.smeOuterProduct(0, vecA.data(), vecB.data(), 4, &latNs);
+
+            const auto& raw = amxSub.getTileRaw(0);
+            const float* zaRow0 = reinterpret_cast<const float*>(raw.data[0]);
+
+            out << "  [RESULT] ZA0[0][0..3] = [" << zaRow0[0] << ", " << zaRow0[1] << ", "
+                << zaRow0[2] << ", " << zaRow0[3] << "]\n"
+                << "           Streaming SVE Latency: " << latNs << " ns\n";
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "[AMX Bench] Executing 100,000 systolic matrix multiplications (TDPBF16PS)...\n";
+            amx::TileConfig cfg{};
+            cfg.paletteId = amx::AMX_PALETTE_ID_1;
+            for (int i = 0; i < 3; ++i) {
+                cfg.rows[i] = 16;
+                cfg.colsb[i] = 64;
+            }
+            amxSub.configurePalette(cfg);
+
+            std::vector<uint16_t> matA(16 * 32, amx::FloatToBf16(1.0f));
+            std::vector<uint16_t> matB(16 * 32, amx::FloatToBf16(1.0f));
+            amxSub.loadTile(1, matA.data(), 64);
+            amxSub.loadTile(2, matB.data(), 64);
+
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < 100000; ++i) {
+                amxSub.multiplyBf16(0, 1, 2);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+            auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+
+            // Each 16x16x32 matmul does 16 * 16 * 32 * 2 FLOPs = 16,384 FLOPs
+            double totalFlops = 100000.0 * 16384.0;
+            double gflops = (totalFlops / 1e9) / (static_cast<double>(elapsedNs) / 1e9);
+            double mops = 100000.0 / (static_cast<double>(elapsedNs) / 1e9) / 1e6;
+
+            out << "  [RESULT] Processed 100,000 matrix multiplications in " << (elapsedNs / 1000000) << " ms.\n"
+                << "           Compute Performance: " << std::fixed << std::setprecision(2) << gflops << " GFLOPS ("
+                << std::setprecision(2) << mops << " Million matmuls/sec)\n";
+            return;
+        }
+
+        out << "MicaNT Intel AMX & Arm SME Matrix Accelerator (TitanMatrix / NexusAMX)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  amx status                  Display AMX/SME capabilities, palette, and telemetry\n"
+            << "  amx tiles / tmm             Display 2D tile register file (TMM0..TMM7) configuration\n"
+            << "  amx int8                    Execute INT8 matrix dot product (TDPBUSD / TMUL)\n"
+            << "  amx bf16                    Execute BFloat16 matrix multiplication (TDPBF16PS)\n"
+            << "  amx fp16                    Execute IEEE FP16 matrix multiplication (TDPFP16PS)\n"
+            << "  amx sme                     Execute Arm Scalable Matrix Extension outer product\n"
+            << "  amx bench / benchmark       Benchmark systolic tile matrix multiplication throughput\n";
     }
 
     static std::string trim(std::string_view s) {
