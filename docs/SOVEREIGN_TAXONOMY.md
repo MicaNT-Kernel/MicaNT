@@ -44,6 +44,7 @@ These names:
 | **Universal Serial Bus (USB 3.2 & xHCI)** | **TitanUSB / NexusUSB** | `micant::usb`<br/>`micant::xhci` | `usb.hpp` | Clean-room xHCI 1.2 Extensible Host Controller Interface, Transfer Request Blocks (TRB), Root Hub, Mass Storage (BOT/SCSI), HID, CDC-ACM, and WinUSB subsystem. |
 | **PCI Express (PCIe 5.0 & 6.0 Bus)** | **TitanPCI / NexusPCI** | `micant::pci`<br/>`micant::pcie` | `pci.hpp` | Clean-room PCI Express 5.0/6.0 Root Complex, Type 0/1 configuration space, BAR dynamic sizing, MSI/MSI-X vector engines, and Advanced Error Reporting (AER). |
 | **NVM Express & Flash Storage (NVMe/UFS/eMMC/AHCI)** | **TitanNVMe / TitanFlash / EmeraldNVMe** | `micant::nvme`<br/>`micant::storage` | `nvme.hpp`<br/>`storage.hpp` | Clean-room NVM Express 1.0e–2.0d host controller, multi-namespace flash storage, S.M.A.R.T. telemetry, UFS 4.0, eMMC 5.1 SDHCI, and AHCI SATA SSD with NCQ. |
+| **ACPI Platform & AML Interpreter** | **TitanACPI / AegisACPI** | `micant::acpi` | `acpi.hpp` | Clean-room ACPI 6.5 table validation (RSDP/XSDT/FADT/MADT/MCFG/DMAR/SRAT), AML AST evaluation, ACPI namespace (`\_SB`, `\_PR`, `\_TZ`), and `acpi.sys` driver. |
 
 ---
 
@@ -300,6 +301,31 @@ These names:
   - StorPort Miniport Driver Architecture: Standard C ABI exports in `stornvme.sys` (`NvmeControllerReset`, `NvmeSubmitAdminCommand`, `NvmeSubmitIoCommand`, `NvmeReadSectors`, `NvmeWriteSectors`, `NvmeGetSmartLog`, `NvmeCreateIoQueuePair`).
   - System Service & Driver Integration: SCM registered boot/system drivers for `stornvme` (NVMe StorPort Miniport), `storahci` (SATA AHCI Driver), and `storufs` (Universal Flash Storage Driver), integrated with JanusLDR Dynamic Loader and Version Database.
   - Interactive CLI: `nvme` / `flash` (`status`, `list` / `ns`, `smart`, `ufs`, `emmc`, `ahci`, `test`).
+
+### 3.28 TitanACPI & AegisACPI (ACPI 6.5 Platform Architecture & AML Interpreter Subsystem)
+- **Role:** Clean-room ACPI 6.5 platform management, physical table validation (`RSDP`, `XSDT`, `FADT`, `MADT`, `MCFG`, `DMAR`, `SRAT`), ACPI Machine Language (AML) AST evaluation engine, ACPI namespace tree (`\_SB`, `\_PR`, `\_TZ`), and Windows ACPI Platform Driver (`acpi.sys`).
+- **Heritage:** Conceived as the unifying hardware platform discovery and power management layer bridging UEFI bootloader handoff and kernel drivers, named *TitanACPI* / *AegisACPI* to signify platform-level sovereignty and energy governance.
+- **Capabilities:**
+  - Standard ACPI Platform Driver C ABI exports (`acpi.sys`): `AcpiFindTable`, `AcpiEvaluateObject`, `AcpiGetSystemPowerState`, `AcpiSetSystemPowerState`, `AcpiGetThermalZoneTemp`, `AcpiGetBatteryStatus`, `AcpiGetProcessorCount`.
+  - Physical Hardware Table Validation: 8-bit checksum verification across all ACPI tables:
+    - `RSDP`: Root System Description Pointer supporting both ACPI 1.0 (20-byte) and ACPI 2.0+ (36-byte extended with 64-bit XsdtAddress).
+    - `XSDT`: Extended System Description Table containing 64-bit physical entry pointers to system description tables.
+    - `FADT`: Fixed ACPI Description Table with Preferred PM Profile (`PM_DESKTOP`), hardware reset register (`0xCF9`, reset value `0x06`), 24-bit PM timer (`0x0408` at 3.579545 MHz), and SCI IRQ 9.
+    - `MADT` (`APIC`): Multiple APIC Description Table with 4 SMP Local APIC processor cores (IDs 0..3), 1 I/O APIC at `0xFEC00000`, and Interrupt Source Overrides (IRQ 0 -> GSI 2, IRQ 9 -> GSI 9 level/active-high).
+    - `MCFG`: PCI Express Memory Mapped Configuration Space Base Address Table with PCIe ECAM MMIO Base `0xE0000000` spanning buses 0..255.
+    - `DMAR`: DMA Remapping Table modeling Intel VT-d / AMD-Vi hardware IOMMU page-table translation and security isolation flags.
+    - `SRAT`: System Resource Affinity Table mapping processors and memory affinity ranges to NUMA domain 0.
+  - AML AST Evaluation Engine & Namespace Tree:
+    - Evaluates AML opcodes and hierarchical object paths.
+    - `\_OSI`: Responds positively to standard OS interface inquiries (`Windows 2022`, `Windows 2019`, `Windows 2016`, `Windows 2015`, `Linux`).
+    - `\_PTS` & `\_WAK`: Prepare-to-Sleep and System Wake methods managing system power state transitions (S0 Working, S3 Sleep, S4 Hibernate, S5 Soft Off).
+    - `\_PR.CPU0..3`: Processor power management objects exporting `_PSS` (P-states P0 3.2GHz, P1 2.4GHz, P2 1.6GHz) and `_CST` (C-states C1 active halt, C2 stop-grant, C3 deep sleep).
+    - `\_SB.PCI0`: PCIe Root Bus bridge device (`_HID PNP0A08`) hosting child endpoint devices `NVME`, `GFX0`, and `XUSB`.
+    - `\_SB.BAT0`: Smart Battery fuel gauge subsystem exporting `_BST` (battery status, rate, remaining capacity, voltage) and `_BIF` (battery information, design capacity, chemistry).
+    - `\_SB.PWRB`: ACPI Power Button device (`_HID PNP0C0C`).
+    - `\_TZ.TZ00`: Thermal Zone policy object exporting `_TMP` (current temperature in tenths of Kelvin, 45.0°C), `_CRT` (critical trip point, 100.0°C), and `_AC0` (active cooling fan threshold, 55.0°C).
+  - System Service & Driver Integration: SCM registered boot driver for `acpi.sys` (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `acpi` / `aml` (`status`, `tables` / `list`, `tree` / `devices`, `power [state]`, `thermal`, `battery`, `cpu`, `eval <path>`, `test`).
 
 ---
 
