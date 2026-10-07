@@ -48,6 +48,7 @@ These names:
 | **High Definition Audio (HDA & UAC2)** | **TitanHDA / NexusHDA** | `micant::hda` | `hdaudio.hpp` | Clean-room Intel HDA 1.0a controller, CORB/RIRB DMA rings, Codec Widget tree (ALC887 DAC/ADC/Pins), Jack Sense, USB Audio Class 2.0, and `hdaudio.sys` driver. |
 | **Windows Display Driver Model (WDDM 3.2)** | **TitanWDDM / NexusWDDM** | `micant::wddm` | `wddm.hpp`<br/>`dxgkrnl.hpp` | Clean-room WDDM 3.2 graphics kernel subsystem (`dxgkrnl.sys`, `displib.sys`), VidMm physical memory segments, VidPN 3.0 display topology, WDDM 3.2 direct hardware queues, monitored fences, TDR recovery, and multi-vendor miniports (NVIDIA, AMD, Intel, PrismX). |
 | **Network Driver Specification (NDIS 6.88)** | **TitanNDIS / RazzleNet** | `micant::ndis` | `ndis.hpp` | Clean-room NDIS 6.88 network driver subsystem (`ndis.sys`), NET_BUFFER_LIST pools, Hardware Offloads (IPv4/IPv6 Checksum, LSOv2 64KB, RSC), RSS Toeplitz hash & 128-entry indirection table, SR-IOV 16 VFs, and RazzleNet 10GbE/100GbE PCIe miniport (`razzlenet.sys` at 00:04.0) with dual 512-entry DMA descriptor rings. |
+| **Bluetooth 5.4 & LE Audio** | **TitanBTH / NexusBTH** | `micant::bth` | `bthport.hpp` | Clean-room Bluetooth 5.4 kernel port driver (`bthport.sys`), USB transport miniport (`bthusb.sys`), RFCOMM serial protocol (`rfcomm.sys`), and bus enumerator (`bthenum.sys`) with LE Audio (LC3 / Auracast). |
 
 ---
 
@@ -399,6 +400,33 @@ These names:
     - Dedicated VF MAC addresses, 802.1Q VLAN isolation (1..4095), rate limiting (Mbps), and hardware MAC anti-spoofing enforcement.
   - System Service & Driver Integration: SCM registered boot drivers for `ndis` (`SERVICE_BOOT_START`) and `razzlenet` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `ndis` / `nic` / `razzlenet` (`status`, `adapters` / `nics`, `rings` / `dma`, `rss`, `offloads`, `sriov`, `stats`, `test`).
+
+### 3.32 TitanBTH & NexusBTH (Bluetooth 5.4 Kernel Port Driver & LE Audio Subsystem)
+- **Designation:** `TitanBTH` (Kernel Port Driver Subsystem) / `NexusBTH` (Bluetooth Bus Enumerator & Peripheral Stack)
+- **Role:** Clean-room Windows Bluetooth Kernel Port Driver architecture (`bthport.sys`), Bluetooth USB Transport Miniport (`bthusb.sys`), RFCOMM Serial Protocol Driver (`rfcomm.sys`), and Bluetooth Bus Enumerator (`bthenum.sys`) authored from Bluetooth Core Specification v5.4, ETSI TS 07.10, and open `win32metadata`.
+- **Heritage:** Conceived as the core kernel-mode wireless peripheral interconnect, bridging physical USB/PCIe Bluetooth controllers, L2CAP protocol multiplexing, RFCOMM serial streaming, and next-generation LE Audio isochronous streams.
+- **Capabilities:**
+  - Standard Bluetooth Driver C ABI exports (`bthport.sys`, `bthusb.sys`, `rfcomm.sys`, `bthenum.sys`): `BthPortInitialize`, `BthPortSendHciCommand`, `BthPortOpenL2capChannel`, `BthPortCloseL2capChannel`, `BthPortCreateRfcommPort`, `BthUsbInitialize`, `BthEnumEnumerateDevices`.
+  - Host Controller Interface (HCI) Engine:
+    - Standard H4 packet types: Command (0x01), ACL Data (0x02), SCO Audio (0x03), Event (0x04), and ISO Data (0x05 for LE Audio).
+    - Core Opcodes: `HCI_OP_RESET`, `HCI_OP_READ_BD_ADDR`, `HCI_OP_READ_LOCAL_VERSION_INFO`, `HCI_OP_WRITE_SCAN_ENABLE`, `HCI_OP_LE_SET_CIG_PARAMETERS`, `HCI_OP_LE_CREATE_CIS`.
+    - Bluetooth Core Spec 5.4 identification: HCI Version `0x0D` (5.4), LMP Version 13, Sovereign Controller Vendor ID `0x005D`.
+  - Logical Link Control and Adaptation Protocol (L2CAP):
+    - Dynamic channel identifier allocation (`0x0040` through `0xFFFF`).
+    - Fixed signaling channels: Signaling (`0x0001`), Connectionless (`0x0002`), ATT/GATT (`0x0004`), SMP (`0x0006`).
+    - Protocol/Service Multiplexing (PSM): SDP (`0x0001`), RFCOMM (`0x0003`), HID Control/Interrupt (`0x0011`/`0x0013`), AVDTP (`0x0019`).
+  - RFCOMM Serial Port Emulation (`rfcomm.sys`):
+    - ETSI TS 07.10 multiplexer protocol supporting server channels 1..30.
+    - Virtual serial COM port creation (`\Device\BthModem0` / `COM4`) at 115,200 baud.
+    - Modem control status signaling (RTC, RTR, DV).
+  - Low Energy Audio (LE Audio) & Isochronous Streams:
+    - Connected Isochronous Streams (CIS 0x0010) delivering 48 kHz stereo audio at 10ms frame durations via the Low Complexity Communication Codec (LC3).
+    - Broadcast Isochronous Streams (BIS / Auracast public broadcast).
+  - Bluetooth Bus Enumerator (`bthenum.sys`):
+    - Plug-and-Play (PnP) peripheral device tree managing paired devices.
+    - Pre-seeded devices: Titan Wireless Mechanical Keyboard (HID Keyboard, `BTHENUM\{00001124-...}`) and PrismAudio Studio Auracast Headset (LE Audio LC3, `BTHENUM\{0000110B-...}`).
+  - System Service & Driver Integration: SCM registered drivers for `bthport` (`SERVICE_BOOT_START`), `bthusb` (`SERVICE_SYSTEM_START`), `rfcomm` (`SERVICE_SYSTEM_START`), and `bthenum` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `bth` / `bt` / `bthport` (`status`, `devices` / `list`, `l2cap`, `rfcomm`, `leaudio` / `iso`, `test`).
 
 ---
 

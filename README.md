@@ -252,6 +252,7 @@ To guarantee total clean-room independence and prevent name collisions with clos
 - **TitanHDA / NexusHDA**: Clean-room Intel High Definition Audio (HDA 1.0a) controller, CORB/RIRB DMA ring engines, Realtek ALC887 codec widget tree, Jack Sense, and USB Audio Class 2.0.
 - **TitanWDDM / NexusWDDM**: Windows Display Driver Model (WDDM 3.2) & DirectX Graphics Kernel Subsystem (`dxgkrnl.sys`, `displib.sys`), VidMm physical memory segments, VidPN 3.0 display topology, direct hardware queues, monitored fences, TDR recovery, and multi-vendor graphics drivers (NVIDIA GeForce/RTX, AMD Radeon, Intel Arc, and PrismX).
 - **TitanNDIS / RazzleNet**: Windows Network Driver Interface Specification (NDIS 6.88) & High-Speed Network Adapter Subsystem (`ndis.sys`, `razzlenet.sys`), NET_BUFFER_LIST pools, hardware offloads (IPv4/IPv6 Checksum, LSOv2 64KB, RSC), RSS Toeplitz hash & 128-entry indirection table, SR-IOV 16 VFs, and RazzleNet 10GbE/100GbE PCIe miniport (BDF 00:04.0) with dual 512-entry DMA descriptor rings.
+- **TitanBTH / NexusBTH**: Windows Bluetooth 5.4 & LE Audio Kernel Port Driver Subsystem (`bthport.sys`, `bthusb.sys`, `rfcomm.sys`, `bthenum.sys`), HCI command/event packet processing, L2CAP protocol multiplexing, RFCOMM virtual serial COM port emulation (`COM4`), and Low Energy Audio (LE Audio CIS / Auracast) LC3 codec streaming.
 
 👉 For complete architectural specifications and namespace conventions, see **[docs/SOVEREIGN_TAXONOMY.md](docs/SOVEREIGN_TAXONOMY.md)**.
 
@@ -281,12 +282,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (157 Suites, 100% Passing)
+### Build & Run Unit Test Suite (158 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 157 Test Suites:
+# Run all 158 Test Suites:
 .\bin\micant_tests.exe
 ```
 
