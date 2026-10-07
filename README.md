@@ -169,6 +169,7 @@ To guarantee total clean-room independence and prevent name collisions with clos
 - **PrismAudio**: Multi-stream PCM software audio mixer and low-latency frequency synthesizer.
 - **TitanUSB**: Universal Serial Bus (USB 3.2 Gen 2) and xHCI 1.2 host controller architecture, root hub, and WinUSB driver stack.
 - **TitanPCI**: PCI Express (PCIe 5.0/6.0) bus architecture, Root Complex, BAR dynamic sizing, MSI-X, and AER error telemetry.
+- **TitanNVMe / TitanFlash**: NVM Express (NVMe 1.0e–2.0d) controller, multi-namespace flash storage (512B / 4Kn), S.M.A.R.T. health telemetry, UFS 4.0, eMMC 5.1 SDHCI, and AHCI SATA SSD with NCQ.
 
 👉 For complete architectural specifications and namespace conventions, see **[docs/SOVEREIGN_TAXONOMY.md](docs/SOVEREIGN_TAXONOMY.md)**.
 
@@ -198,12 +199,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (152 Suites, 100% Passing)
+### Build & Run Unit Test Suite (153 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 152 Test Suites:
+# Run all 153 Test Suites:
 .\bin\micant_tests.exe
 ```
 

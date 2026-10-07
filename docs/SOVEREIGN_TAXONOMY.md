@@ -43,6 +43,7 @@ These names:
 | **Pseudo Console & Terminal (ConPTY)** | **TitanPTY / SurPTY** | `micant::conpty` | `conpty.hpp` | Named in tribute to the Windows Terminal and Console Host architecture evolution. Unifies headless VT server, differential VT rendering, and Win32 character grids. |
 | **Universal Serial Bus (USB 3.2 & xHCI)** | **TitanUSB / NexusUSB** | `micant::usb`<br/>`micant::xhci` | `usb.hpp` | Clean-room xHCI 1.2 Extensible Host Controller Interface, Transfer Request Blocks (TRB), Root Hub, Mass Storage (BOT/SCSI), HID, CDC-ACM, and WinUSB subsystem. |
 | **PCI Express (PCIe 5.0 & 6.0 Bus)** | **TitanPCI / NexusPCI** | `micant::pci`<br/>`micant::pcie` | `pci.hpp` | Clean-room PCI Express 5.0/6.0 Root Complex, Type 0/1 configuration space, BAR dynamic sizing, MSI/MSI-X vector engines, and Advanced Error Reporting (AER). |
+| **NVM Express & Flash Storage (NVMe/UFS/eMMC/AHCI)** | **TitanNVMe / TitanFlash / EmeraldNVMe** | `micant::nvme`<br/>`micant::storage` | `nvme.hpp`<br/>`storage.hpp` | Clean-room NVM Express 1.0e–2.0d host controller, multi-namespace flash storage, S.M.A.R.T. telemetry, UFS 4.0, eMMC 5.1 SDHCI, and AHCI SATA SSD with NCQ. |
 
 ---
 
@@ -279,6 +280,26 @@ These names:
   - Sovereign Root Complex Topology: Pre-seeded device tree containing Host Bridge (`00:00.0`), 3 PCIe Root Ports (`00:01.0` through `00:03.0`), PrismX 3D GPU (`01:00.0`, Gen 5 x16), TitanNVMe Controller (`02:00.0`, Gen 4 x4), TitanUSB xHCI Controller (`03:00.0`), RazzleNet 10GbE NIC (`00:04.0`), and PrismAudio Controller (`00:05.0`).
   - System Service & Driver Integration: SCM registered boot driver for `pci.sys` (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `pci` / `pcie` / `lspci` (`status`, `list`, `tree`, `read <b:d.f> <offset>`, `aer`, `msi`, `test`).
+
+### 3.27 TitanNVMe & TitanFlash (NVM Express 1.0–2.0 & Universal Flash Storage Subsystem)
+- **Role:** Clean-room multi-generation NVM Express (NVMe 1.0e through 2.0d) controller, multi-namespace flash storage engine, S.M.A.R.T. health telemetry, and universal flash storage architectures including UFS 4.0, eMMC 5.1 SDHCI, and AHCI 1.3.1 SATA SSD with NCQ (`stornvme.sys`, `storahci.sys`, `storufs.sys`).
+- **Heritage:** Conceived as the ultra-high performance solid-state storage foundation directly interfaced with TitanPCI (PCIe Gen 4 x4, BDF `02:00.0`) and EmeraldFS, named *TitanNVMe* / *TitanFlash* / *EmeraldNVMe* to honor next-generation flash storage speed and reliability.
+- **Capabilities:**
+  - Multi-Generation NVMe Versioning: Seamless compatibility across legacy NVMe 1.0e, 1.1, 1.2.1, 1.3d, 1.4b, and latest modular NVMe 2.0d specifications via register `VS` and software feature gating.
+  - Hardware MMIO Register Virtualization: Full register map emulation including Controller Capabilities (`CAP` with 1024 max queue entries, doorbell stride), Version (`VS`), Controller Configuration (`CC` enable, arbitration, I/O queue sizes), Controller Status (`CSTS` ready bit), Admin Queue Attributes (`AQA`), Admin SQ/CQ Base Addresses (`ASQ`, `ACQ`), and Doorbell arrays for SQ/CQ 0..1024.
+  - Submission & Completion Queuing Architecture: 64-byte Submission Queue Entries (SQE) with PRP/SGL pointer formats and 16-byte Completion Queue Entries (CQE) featuring deterministic hardware phase tag toggling for zero-copy completion synchronization.
+  - Admin & NVM Command Sets:
+    - **Admin Commands:** `Identify Controller`, `Identify Namespace`, `Create/Delete I/O Submission Queue`, `Create/Delete I/O Completion Queue`, `Get/Set Features` (arbitration, interrupt coalescing, power states), and `Get Log Page`.
+    - **NVM I/O Commands:** `NVME_NVM_READ`, `NVME_NVM_WRITE`, `NVME_NVM_FLUSH`, `NVME_NVM_WRITE_ZEROES`, and `NVME_NVM_DATASET_MGMT` (TRIM / deallocate).
+  - Multi-Namespace Flash Architecture: Dynamic namespace management supporting `NSID 1` (System OS volume, 512-byte LBA) and `NSID 2` (High-performance 4Kn database volume, 4096-byte LBA) with full `storage::IBlockDevice` filesystem mount parity for EmeraldFS, NTFS, and FAT32.
+  - S.M.A.R.T. / Health Telemetry: Comprehensive telemetry log page (`0x02`) tracking composite temperature (Kelvin), spare endurance capacity remaining, percentage used, data units read/written, host read/write commands, unsafe shutdowns, media error counts, and temperature warning alarms.
+  - Universal Flash Storage Architecture Spectrum:
+    - **Universal Flash Storage (UFS 3.1/4.0):** Host controller interface with UTP Transfer Request Lists, UniPro M-PHY link layer, LUN 0 Boot Partition, and LUN 1 User Data Partition.
+    - **eMMC 5.1 / SDHCI:** Host controller interface with CMD/DAT bus protocol, HS400 dual-data rate timing, Boot Partition 1/2, RPMB replay-protected block partition, and User Area partition.
+    - **AHCI 1.3.1 SATA SSD with NCQ:** Advanced Host Controller Interface with 32-tag Native Command Queuing (NCQ FPDMA Read/Write), Command List, Command Table, and PRDT scatter-gather descriptors.
+  - StorPort Miniport Driver Architecture: Standard C ABI exports in `stornvme.sys` (`NvmeControllerReset`, `NvmeSubmitAdminCommand`, `NvmeSubmitIoCommand`, `NvmeReadSectors`, `NvmeWriteSectors`, `NvmeGetSmartLog`, `NvmeCreateIoQueuePair`).
+  - System Service & Driver Integration: SCM registered boot/system drivers for `stornvme` (NVMe StorPort Miniport), `storahci` (SATA AHCI Driver), and `storufs` (Universal Flash Storage Driver), integrated with JanusLDR Dynamic Loader and Version Database.
+  - Interactive CLI: `nvme` / `flash` (`status`, `list` / `ns`, `smart`, `ufs`, `emmc`, `ahci`, `test`).
 
 ---
 
