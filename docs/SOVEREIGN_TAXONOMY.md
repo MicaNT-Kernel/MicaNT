@@ -42,6 +42,7 @@ These names:
 | **Driver Frameworks (KMDF & UMDF)** | **TitanWDF / AegisWDF** | `micant::wdf` | `wdf.hpp` | Clean-room Windows Driver Frameworks (KMDF v1.33 / UMDF 2.0) object models, queue pacing, and user-mode driver host isolation. |
 | **Pseudo Console & Terminal (ConPTY)** | **TitanPTY / SurPTY** | `micant::conpty` | `conpty.hpp` | Named in tribute to the Windows Terminal and Console Host architecture evolution. Unifies headless VT server, differential VT rendering, and Win32 character grids. |
 | **Universal Serial Bus (USB 3.2 & xHCI)** | **TitanUSB / NexusUSB** | `micant::usb`<br/>`micant::xhci` | `usb.hpp` | Clean-room xHCI 1.2 Extensible Host Controller Interface, Transfer Request Blocks (TRB), Root Hub, Mass Storage (BOT/SCSI), HID, CDC-ACM, and WinUSB subsystem. |
+| **PCI Express (PCIe 5.0 & 6.0 Bus)** | **TitanPCI / NexusPCI** | `micant::pci`<br/>`micant::pcie` | `pci.hpp` | Clean-room PCI Express 5.0/6.0 Root Complex, Type 0/1 configuration space, BAR dynamic sizing, MSI/MSI-X vector engines, and Advanced Error Reporting (AER). |
 
 ---
 
@@ -265,6 +266,19 @@ These names:
     - **Communication Device Class (CDC-ACM):** Virtual serial COM port emulation (`USBSER`) with line coding configuration (`SetLineCoding`, `GetLineCoding`), modem control lines (`SetControlLineState`), and bidirectional data stream transfers.
   - System Service & Driver Integration: SCM registered services for `usbxhci` (TitanUSB xHCI Controller Driver) and `usbhub3` (TitanUSB SuperSpeed Hub Driver), integrated with JanusLDR Dynamic Loader and Version Database.
   - Interactive CLI: `usb` / `xhci` / `winusb` (`status`, `list` / `tree`, `attach`, `detach`, `xhci`, `test`).
+
+### 3.26 TitanPCI (PCI Express 5.0/6.0 Bus, Root Complex & AER Subsystem)
+- **Role:** Clean-room PCI Express (PCIe 5.0/6.0) bus architecture, Root Complex virtualization, Type 0/1 configuration space engine, Base Address Register (BAR) dynamic sizing, MSI/MSI-X interrupt distribution, and Advanced Error Reporting (AER) telemetry subsystem (`pci.sys`).
+- **Heritage:** Conceived as the unifying hardware bus interconnect across Dave Cutler's DEC Alpha / PRISM / VAX systems and modern PC architecture, named *TitanPCI* / *NexusPCI* to reflect central hardware bus mastery and endpoint topology mapping.
+- **Capabilities:**
+  - Standard PCI Bus Driver C ABI exports (`pci.sys`): `PciReadConfigByte`, `PciReadConfigWord`, `PciReadConfigDword`, `PciWriteConfigByte`, `PciWriteConfigWord`, `PciWriteConfigDword`, `PciFindDevice`, `PciGetBarInfo`, `PciEnableBusMastering`, `PciEnableMemorySpace`, `PciConfigureMsi`, `PciConfigureMsix`, `PciTriggerMsiVector`, `PciInjectAerError`, `PciClearAerStatus`.
+  - Configuration Space Model: 4096-byte PCIe configuration space with Type 0 (Endpoint) and Type 1 (PCI-to-PCI Bridge / Root Port) header layouts, Command/Status register bitmask evaluation, and capabilities pointer traversal.
+  - Base Address Register (BAR) Dynamic Sizing: 32-bit Memory, 64-bit Memory (low/high paired registers with prefetchable flags), and I/O Space windows with standard OS sizing probe (`0xFFFFFFFF` write inquiry) simulation.
+  - Standard Capability List: Power Management (PMCAP), Message Signaled Interrupts (MSI with 32/64-bit addresses and up to 32 vectors), PCI Express Capability (Gen 1..5 link speeds and x1..x16 link widths), and MSI-X Capability (up to 2048 vectors with per-vector masking and Pending Bit Array PBA tracking).
+  - PCIe Extended Capabilities: Advanced Error Reporting (AER with uncorrectable fatal/non-fatal status, correctable status, and 16-byte TLP packet header log recording) and Single Root I/O Virtualization (SR-IOV with InitialVFs/TotalVFs and VF BAR sizing).
+  - Sovereign Root Complex Topology: Pre-seeded device tree containing Host Bridge (`00:00.0`), 3 PCIe Root Ports (`00:01.0` through `00:03.0`), PrismX 3D GPU (`01:00.0`, Gen 5 x16), TitanNVMe Controller (`02:00.0`, Gen 4 x4), TitanUSB xHCI Controller (`03:00.0`), RazzleNet 10GbE NIC (`00:04.0`), and PrismAudio Controller (`00:05.0`).
+  - System Service & Driver Integration: SCM registered boot driver for `pci.sys` (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `pci` / `pcie` / `lspci` (`status`, `list`, `tree`, `read <b:d.f> <offset>`, `aer`, `msi`, `test`).
 
 ---
 
