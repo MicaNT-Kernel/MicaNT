@@ -57,6 +57,7 @@ These names:
 | **DirectStorage 1.2 & BypassIO Subsystem** | **TitanBypassIO / NexusBypassIO** | `micant::bypassio` | `bypassio.hpp` | Clean-room Windows BypassIO architecture (`FSCTL_MANAGE_BYPASS_IO`) & DirectStorage 1.2 GPU decompression driver stack (`bypassio.sys`, `storqos.sys`) with direct NVMe-to-VRAM DMA (<25us latency), GDeflate GPU compute/CPU SIMD codec, and 3-tier Storage QoS. |
 | **Persistent Memory & DAX Storage Subsystem** | **TitanPMEM / NexusPMEM** | `micant::pmem` | `pmem.hpp` | Clean-room Persistent Memory (NVDIMM / Optane PMEM) & DAX driver stack (`pmem.sys`, `dax.sys`), ACPI 6.5 NFIT parser, App Direct zero-copy DAX userland mapping (`SEC_DAX`), Block Translation Table (BTT) 4KB atomic sector update crash protection, `clwb` + `sfence` persistence flush barriers (<100ns latency), and Asynchronous DRAM Refresh (ADR) power-loss protection. |
 | **RDMA & SMB Direct Storage Subsystem** | **TitanRDMA / NexusSMB** | `micant::rdma` | `rdma.hpp` | Clean-room NetworkDirect (NDKPI 2.0) RDMA driver stack (`ndisrdma.sys`, `smbdirect.sys`), 100GbE RoCE v2 (UDP 4791) / InfiniBand NDR (400G), kernel-bypass Queue Pairs (RC/UD) and Completion Queues, zero-copy Memory Registration (`lkey`/`rkey`), TitanRoCE autonomous lossy recovery, and SMB Direct remote DirectStorage into client VRAM/DAX. |
+| **Microsoft Pluton Security Processor Subsystem** | **TitanPluton / AegisPluton** | `micant::pluton` | `pluton.hpp` | Clean-room Microsoft Pluton on-die security processor driver (`pluton.sys`, ACPI `\_SB.PLTN`), physical bus-sniffing immunity, on-die crossbar fabric (`0xFEB00000`), 24 SHA-256 PCR banks (PCR 0..23), hardware keystore (SRK, EK, VMK), policy-sealed blobs, TRNG, and sub-5us command latency. |
 
 ---
 
@@ -616,6 +617,22 @@ These names:
     - Native zero-copy file sharing transport for clustered storage, streaming remote NVMe payloads directly into client GPU VRAM (`GPUVA`) and DAX persistent memory without CPU cache pollution.
   - System Service & Driver Integration: SCM registered drivers for `ndisrdma` (`SERVICE_BOOT_START`) and `smbdirect` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `rdma` / `roce` / `infiniband` / `smbdirect` / `titanrdma` (`status`, `devices` / `list`, `qp` / `queues`, `mr` / `memory`, `smb`, `bench` / `benchmark`).
+
+### 3.41 TitanPluton & AegisPluton (Microsoft Pluton Security Processor & Hardware Root-of-Trust Subsystem)
+- **Role:** Sovereign on-die cryptographic security processor and hardware Root-of-Trust (RoT) subsystem implementing the Microsoft Pluton architecture, TCG TPM 2.0 Library Specification, ACPI 6.5 Hardware Security Devices (`\_SB.PLTN`), and Windows Pluton driver (`pluton.sys`).
+- **Capabilities:**
+  - Standard Pluton Driver C ABI exports (`pluton.sys`): `PlutonInitialize`, `PlutonGetVersion`, `PlutonGetCapabilities`, `PlutonReadPcr`, `PlutonExtendPcr`, `PlutonSealData`, `PlutonUnsealData`, `PlutonGenerateRandom`, `PlutonGetTelemetry`.
+  - Physical Bus-Sniffing Immunity:
+    - 100% on-die CPU silicon integration connected via internal crossbar interconnect fabric (`0xFEB00000`), completely eliminating exposed motherboard traces (LPC/SPI/I2C) vulnerable to hardware interposer bus-probing attacks.
+  - On-Die Platform Configuration Registers (PCRs):
+    - 24 on-die SHA-256 PCR banks (PCR 0..23) tracking firmware integrity (PCR 0), Secure Boot configuration (PCR 7), BitLocker policies (PCR 11), and operating system boot phases with cryptographic extend operations.
+  - Hardware Keystore & Policy Sealing:
+    - Dedicated secure enclave housing Storage Root Keys (SRK ECC-P384), Endorsement Keys (EK RSA-4096), and sealed BitLocker Volume Master Keys (VMK-Sealed AES-256-GCM).
+    - Multi-PCR policy sealing (`PlutonSealData` / `PlutonUnsealData`) with automatic tamper rejection (`STATUS_ACCESS_DENIED`) on state changes.
+  - True Random Number Generator (TRNG):
+    - High-entropy hardware generator providing secure random nonces and cryptographic keys with zero external bias.
+  - System Service & Driver Integration: SCM registered boot driver for `pluton` (`SERVICE_BOOT_START`), dynamic loader exports, and Version Database registration (`pluton.sys` 10.0.26100.1).
+  - Interactive CLI: `pluton` / `titanpluton` / `aegispluton` (`status`, `pcrs`, `keys`, `seal`, `bench` / `benchmark`).
 
 ---
 

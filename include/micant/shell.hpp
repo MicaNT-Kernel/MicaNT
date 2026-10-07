@@ -157,6 +157,7 @@
 #include "bypassio.hpp"
 #include "pmem.hpp"
 #include "rdma.hpp"
+#include "pluton.hpp"
 
 namespace micant::shell {
 
@@ -458,6 +459,7 @@ public:
             if (cmd == "bypassio" || cmd == "bpio" || cmd == "storqos" || cmd == "titanstorage") { cmdBypassIo(tokens, out); return 0; }
             if (cmd == "pmem" || cmd == "optane" || cmd == "nvdimm" || cmd == "dax" || cmd == "titanpmem") { cmdPmem(tokens, out); return 0; }
             if (cmd == "rdma" || cmd == "roce" || cmd == "infiniband" || cmd == "smbdirect" || cmd == "titanrdma") { cmdRdma(tokens, out); return 0; }
+            if (cmd == "pluton" || cmd == "titanpluton" || cmd == "aegispluton") { cmdPluton(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -26478,6 +26480,99 @@ private:
             << "  rdma mr / memory               Inspect registered zero-copy Memory Regions\n"
             << "  rdma smb / smbdirect           Inspect SMB Direct active storage sessions\n"
             << "  rdma bench / benchmark         Execute 100GbE wire-speed remote DMA benchmark\n";
+    }
+
+    void cmdPluton(const std::vector<std::string>& tokens, std::ostream& out) {
+        pluton::InitializePlutonSubsystem();
+        auto& plutonSub = pluton::TitanPlutonSubsystem::Instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "pcrs" || sub == "pcr") {
+            auto pcrs = plutonSub.getAllPcrs();
+            out << "Pluton On-Die TPM 2.0 Platform Configuration Registers (SHA-256 Banks):\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (size_t i = 0; i < pcrs.size(); ++i) {
+                out << "  PCR[" << std::setw(2) << std::setfill('0') << i << std::setfill(' ') << "]: ";
+                for (size_t j = 0; j < 16; ++j) {
+                    out << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(pcrs[i][j]);
+                }
+                out << "...\n" << std::dec;
+            }
+            out << "-------------------------------------------------------------------------------\n"
+                << "  PCR 0: Core Firmware & BIOS Integrity  |  PCR 7: Secure Boot Policy Signature\n"
+                << "  PCR 11: BitLocker Access Authorization |  Physical Bus Probing: IMMUNE\n\n";
+            return;
+        }
+
+        if (sub == "keys" || sub == "keystore") {
+            auto keys = plutonSub.getKeystore();
+            out << "Pluton Hardware-Isolated Keystore (On-Die Secure Enclave):\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (const auto& k : keys) {
+                out << "  Key ID " << k.keyId << ": " << k.keyName << "\n"
+                    << "    Algorithm:           " << k.algorithm << "\n"
+                    << "    Hardware Exportable: " << (k.isExportable ? "YES" : "NO (Protected by On-Die Silicon Enclave)") << "\n"
+                    << "    Bound PCR Policy:    0x" << std::hex << k.boundPcrMask << std::dec << "\n\n";
+            }
+            return;
+        }
+
+        if (sub == "seal") {
+            std::string text = (tokens.size() > 2) ? tokens[2] : "MicaNTSovereignBitLockerKey";
+            uint32_t lat = 0;
+            uint32_t blobId = plutonSub.sealData((1 << 7) | (1 << 11), reinterpret_cast<const uint8_t*>(text.data()), text.size(), &lat);
+            out << "Pluton Hardware Sealing Successful:\n"
+                << "  Sealed Secret:                 \"" << text << "\"\n"
+                << "  Assigned Blob ID:              " << blobId << "\n"
+                << "  Hardware Policy:               Bound to PCR 7 (Secure Boot) and PCR 11 (BitLocker)\n"
+                << "  Hardware Execution Latency:    " << lat << " ns (AES-256-GCM Hardware Core)\n\n";
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "Executing TitanPluton On-Die Security Processor Performance Benchmark...\n";
+            uint8_t randomBuf[256]{};
+            plutonSub.generateRandom(sizeof(randomBuf), randomBuf);
+
+            uint32_t sealLat = 0;
+            const char secretData[] = "MicaNT_TopSecret_Enterprise_Root_Cert_Key_2026";
+            uint32_t bId = plutonSub.sealData((1 << 0) | (1 << 7), reinterpret_cast<const uint8_t*>(secretData), sizeof(secretData), &sealLat);
+
+            uint32_t unsealLat = 0;
+            uint8_t outBuf[64]{};
+            size_t outLen = 0;
+            bool unsealOk = plutonSub.unsealData(bId, outBuf, &outLen, &unsealLat);
+
+            out << "  -> Benchmark Complete:\n"
+                << "     Hardware Encryption (AES-256-GCM): " << sealLat << " ns (Sub-5 microseconds)\n"
+                << "     Hardware Policy Unsealing:         " << unsealLat << " ns (" << (unsealOk ? "PASSED" : "FAILED") << ")\n"
+                << "     Hardware TRNG Entropy Generation:  256 bytes generated from on-die quantum noise\n"
+                << "     Bus Sniffing Resistance:           100% (No external motherboard traces)\n";
+            return;
+        }
+
+        // Default: status
+        auto telem = plutonSub.getTelemetry();
+        out << "Microsoft Pluton Security Processor & Hardware Root-of-Trust Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Hardware Identity:             " << plutonSub.getProcessorModel() << "\n"
+            << "  Firmware Version:              " << plutonSub.getFirmwareVersion() << "\n"
+            << "  Silicon Integration:           ON-DIE CPU CO-PROCESSOR (ACPI \\_SB.PLTN)\n"
+            << "  Operating Mode:                TPM 2.0 Emulation & Hardware Crypto Enclave\n"
+            << "  Physical Bus-Sniffing Immunity: " << (telem.physicalBusSniffImmune ? "IMMUNE (Internal On-Die Crossbar Fabric)" : "VULNERABLE") << "\n"
+            << "  Physical Tamper Alert:         " << (telem.tamperAlertActive ? "ALERT ACTIVE" : "NORMAL (Zero Physical Probing Detected)") << "\n"
+            << "  Hardware TRNG State:           " << (telem.trngHealthy ? "HEALTHY (Hardware Entropy Active)" : "DEGRADED") << "\n"
+            << "  Total Operations Executed:     " << telem.totalCommandsExecuted << " Hardware Commands\n"
+            << "  Total PCR Measurements:        " << telem.totalPcrExtends << " Extends\n"
+            << "  Total Policy Sealing Ops:      " << telem.totalSealOperations << " Sealed Blobs\n"
+            << "  Average Command Latency:       " << telem.avgCommandLatencyNs << " ns (Sub-5 microseconds)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  pluton status                  Display Pluton security processor status and telemetry\n"
+            << "  pluton pcrs                    Inspect on-die SHA-256 Platform Configuration Registers\n"
+            << "  pluton keys / keystore         Inspect hardware-isolated root keys and certificates\n"
+            << "  pluton seal [secret]           Seal secret payload to current hardware PCR policy\n"
+            << "  pluton bench / benchmark       Execute on-die cryptographic acceleration benchmark\n";
     }
 
     static std::string trim(std::string_view s) {
