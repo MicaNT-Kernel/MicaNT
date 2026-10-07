@@ -939,7 +939,7 @@ jobs:
       - name: Build All Drivers
         run: cmake --build build --config Release
       - name: Run Master Driver Test Suite
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build -C Release --output-on-failure
 `;
 fs.writeFileSync(path.join(ghWorkflowsDir, 'ci.yml'), ciContent, 'utf8');
 
