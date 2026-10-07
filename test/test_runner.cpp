@@ -182,6 +182,7 @@
 #include "micant/iommu.hpp"
 #include "micant/uefi_rt.hpp"
 #include "micant/modern_standby.hpp"
+#include "micant/wsa.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -40263,8 +40264,281 @@ void Test_ModernStandby_PEP_SleepStudy_Subsystem() {
     std::cout << "[TEST] Suite 177: Modern Standby (S0ix / PEP / Low Power S0 Idle) & Sleep Study Subsystem PASSED.\n";
 }
 
+void Test_WindowsSubsystemForAndroid_WSA_Subsystem() {
+    std::cout << "\n--- [Suite 178] Windows Subsystem for Android (WSA / AOSP Microdroid Container) Subsystem ---\n";
+
+    wsa::InitializeWsaSubsystem();
+
+    // 1. Dynamic Loader & VersionDatabase Parity
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.GetModuleInfo("wsa.dll") != nullptr && vdb.GetModuleInfo("wsa.dll")->moduleName == "wsa.dll", "wsa.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.GetModuleInfo("wsa.sys") != nullptr && vdb.GetModuleInfo("wsa.sys")->moduleName == "wsa.sys", "wsa.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.GetModuleInfo("wsaservice.exe") != nullptr && vdb.GetModuleInfo("wsaservice.exe")->moduleName == "wsaservice.exe", "wsaservice.exe must be registered in VersionDatabase");
+
+    auto& ldr = ldr::DynamicLoader::get();
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaInitializeSubsystem") != nullptr, "wsa.dll must export WsaInitializeSubsystem");
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaTerminateSubsystem") != nullptr, "wsa.dll must export WsaTerminateSubsystem");
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaGetContainerStatus") != nullptr, "wsa.dll must export WsaGetContainerStatus");
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaInstallPackage") != nullptr, "wsa.dll must export WsaInstallPackage");
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaUninstallPackage") != nullptr, "wsa.dll must export WsaUninstallPackage");
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaLaunchPackage") != nullptr, "wsa.dll must export WsaLaunchPackage");
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaStopPackage") != nullptr, "wsa.dll must export WsaStopPackage");
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaGetPackageCount") != nullptr, "wsa.dll must export WsaGetPackageCount");
+    TEST_ASSERT(ldr.getExport("wsa.dll", "WsaSendIntent") != nullptr, "wsa.dll must export WsaSendIntent");
+
+    // 2. SCM Service Registration
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto wsaDrv = scm.getServiceRecord(L"wsa");
+    TEST_ASSERT(wsaDrv != nullptr, "wsa driver service must exist in SCM");
+    TEST_ASSERT(wsaDrv->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "wsa must be a kernel driver service");
+    TEST_ASSERT(wsaDrv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "wsa driver must be RUNNING");
+
+    auto wsaSvc = scm.getServiceRecord(L"wsaservice");
+    TEST_ASSERT(wsaSvc != nullptr, "wsaservice must exist in SCM");
+    TEST_ASSERT(wsaSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "wsaservice must be RUNNING");
+
+    // 3. Container Bootstrap: Microdroid Lightweight Mode
+    auto& engine = wsa::WsaContainerEngine::Instance();
+    bool microOk = engine.startContainer(wsa::WsaContainerMode::MicrodroidLightweight, 512, 2);
+    TEST_ASSERT(microOk, "startContainer(MicrodroidLightweight) must succeed");
+    TEST_ASSERT(engine.isRunning(), "WSA container must be running in Microdroid mode");
+    TEST_ASSERT(engine.getMode() == wsa::WsaContainerMode::MicrodroidLightweight, "Mode must be MicrodroidLightweight");
+    TEST_ASSERT(engine.getStatus().allocatedMemoryMb == 512, "Memory must be 512 MB");
+
+    bool stopMicro = engine.stopContainer();
+    TEST_ASSERT(stopMicro, "stopContainer must succeed");
+    TEST_ASSERT(!engine.isRunning(), "WSA container must be stopped");
+
+    // 4. Full AOSP Container Bootstrap & Network Addressing
+    bool fullOk = engine.startContainer(wsa::WsaContainerMode::FullAosp, 4096, 8);
+    TEST_ASSERT(fullOk, "startContainer(FullAosp) must succeed");
+    TEST_ASSERT(engine.isRunning(), "WSA container must be running in FullAosp mode");
+    TEST_ASSERT(engine.getMode() == wsa::WsaContainerMode::FullAosp, "Mode must be FullAosp");
+    auto fullStatus = engine.getStatus();
+    TEST_ASSERT(fullStatus.allocatedMemoryMb == 4096, "Memory must be 4096 MB");
+    TEST_ASSERT(fullStatus.cpuCoreCount == 8, "vCPU cores must be 8");
+    TEST_ASSERT(fullStatus.ipAddress == "172.28.0.2", "Container IP must be 172.28.0.2");
+    TEST_ASSERT(fullStatus.gatewayAddress == "172.28.0.1", "Container gateway must be 172.28.0.1");
+
+    // 5. Wayland-to-DWM Surface Compositing Bridge (AegisWayland)
+    auto& wm = wsa::WaylandCompositorBridge::Instance();
+    uint32_t surfId = wm.createSurface("org.videolan.vlc", "VLC Media Player", 1920, 1080, wsa::WsaPixelFormat::RGBA8888, 1.5);
+    TEST_ASSERT(surfId >= 100, "createSurface must return a valid surfaceId");
+
+    wsa::WaylandSurfaceDescriptor sDesc;
+    bool surfFound = wm.getSurface(surfId, &sDesc);
+    TEST_ASSERT(surfFound, "getSurface must locate created surface");
+    TEST_ASSERT(sDesc.width == 1920 && sDesc.height == 1080, "Surface dimensions must match 1920x1080");
+    TEST_ASSERT(sDesc.stride == 7680, "Surface stride must match 7680 bytes");
+    TEST_ASSERT(sDesc.scaleFactor == 1.5, "DPI scale factor must match 1.5");
+    TEST_ASSERT(sDesc.dwmWindowHandle != 0, "DWM visual integration HWND must be assigned");
+
+    std::vector<uint8_t> dummyBuffer(7680 * 10, 0xFF);
+    bool commitOk = wm.commitBuffer(surfId, dummyBuffer.data(), dummyBuffer.size(), 0, 0, 1920, 10);
+    TEST_ASSERT(commitOk, "commitBuffer must succeed");
+    TEST_ASSERT(wm.getSurface(surfId, &sDesc) && sDesc.dirtyCount > 1, "commitBuffer must increment dirty count");
+
+    bool resizeOk = wm.resizeSurface(surfId, 2560, 1440);
+    TEST_ASSERT(resizeOk, "resizeSurface must succeed");
+    TEST_ASSERT(wm.getSurface(surfId, &sDesc) && sDesc.width == 2560 && sDesc.height == 1440, "Resized surface must match 2560x1440");
+
+    bool destroySurf = wm.destroySurface(surfId);
+    TEST_ASSERT(destroySurf, "destroySurface must succeed");
+
+    // 6. AAudio / OpenSLES CoreAudio Multiplexing Bridge (AegisAAudio)
+    auto& am = wsa::AAudioCoreBridge::Instance();
+    uint32_t audId = am.openStream("org.videolan.vlc", 48000, 2, 256);
+    TEST_ASSERT(audId >= 1, "openStream must return a valid streamId");
+    TEST_ASSERT(am.getActiveStreamCount() >= 1, "Active stream count must be >= 1");
+
+    std::vector<float> pcmSamples(512, 0.5f);
+    bool writePcm = am.writeAudioFrames(audId, pcmSamples.data(), 256);
+    TEST_ASSERT(writePcm, "writeAudioFrames must succeed");
+
+    bool volOk = am.setVolume(audId, 0.85f);
+    TEST_ASSERT(volOk, "setVolume must succeed");
+
+    bool closeAud = am.closeStream(audId);
+    TEST_ASSERT(closeAud, "closeStream must succeed");
+
+    // 7. Android Package Manager & Pre-seeded AOSP System Apps
+    auto& pm = wsa::AndroidPackageManager::Instance();
+    TEST_ASSERT(pm.getPackageCount() >= 5, "Pre-seeded package count must be >= 5");
+    TEST_ASSERT(pm.hasPackage("com.android.settings"), "AOSP Settings app must exist");
+    TEST_ASSERT(pm.hasPackage("com.android.calculator2"), "AOSP Calculator app must exist");
+    TEST_ASSERT(pm.hasPackage("com.android.documentsui"), "AOSP DocumentsUI / Files app must exist");
+    TEST_ASSERT(pm.hasPackage("org.chromium.webview_shell"), "AOSP WebView Shell app must exist");
+    TEST_ASSERT(pm.hasPackage("com.android.gallery3d"), "AOSP Gallery app must exist");
+
+    wsa::AndroidPackageInfo setPkg;
+    bool getSetOk = pm.getPackage("com.android.settings", &setPkg);
+    TEST_ASSERT(getSetOk, "getPackage(Settings) must succeed");
+    TEST_ASSERT(setPkg.isSystemApp, "Settings must be marked as system app");
+    TEST_ASSERT(setPkg.versionCode == 34, "Settings target API level must be 34");
+
+    // 8. APK Sideloading, Manifest Parsing & Uninstallation
+    bool installTermux = pm.installApk(
+        "/data/local/tmp/termux.apk",
+        "Termux Terminal",
+        "com.termux",
+        "0.118.0",
+        118,
+        "com.termux.app.TermuxActivity",
+        {"android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"},
+        85000000
+    );
+    TEST_ASSERT(installTermux, "installApk(Termux) must succeed");
+    TEST_ASSERT(pm.hasPackage("com.termux"), "Termux must be present in package manager");
+
+    wsa::AndroidPackageInfo tInfo;
+    TEST_ASSERT(pm.getPackage("com.termux", &tInfo) && !tInfo.isSystemApp, "Termux must be marked as user app");
+    TEST_ASSERT(tInfo.permissions.size() == 2, "Termux permissions count must be 2");
+
+    // Prevent uninstalling system app
+    bool uninstallSys = pm.uninstallPackage("com.android.settings");
+    TEST_ASSERT(!uninstallSys, "Uninstalling core AOSP system app must fail");
+
+    // Uninstall custom user app
+    bool uninstallTermux = pm.uninstallPackage("com.termux");
+    TEST_ASSERT(uninstallTermux, "Uninstalling user-installed app must succeed");
+    TEST_ASSERT(!pm.hasPackage("com.termux"), "Termux must no longer exist after uninstallation");
+
+    // 9. Application Execution Lifecycle (Launch, Run, PID, Stop)
+    uint32_t calcPid = 0;
+    auto launchRes = engine.launchApp("com.android.calculator2", "", &calcPid);
+    TEST_ASSERT(launchRes == wsa::WsaLaunchResult::Success, "launchApp(Calculator) must succeed");
+    TEST_ASSERT(calcPid >= 2000, "Allocated PID must be >= 2000");
+    TEST_ASSERT(engine.isAppRunning("com.android.calculator2"), "Calculator must be marked as running");
+
+    // Second launch should return AlreadyRunning and same PID
+    uint32_t secondPid = 0;
+    auto secondRes = engine.launchApp("com.android.calculator2", "", &secondPid);
+    TEST_ASSERT(secondRes == wsa::WsaLaunchResult::AlreadyRunning && secondPid == calcPid, "Re-launching active app must return AlreadyRunning");
+
+    // Verify Wayland surface and audio stream created
+    auto calcSurfs = wm.getSurfacesForPackage("com.android.calculator2");
+    TEST_ASSERT(!calcSurfs.empty(), "Active app must have at least one Wayland surface");
+
+    bool stopCalc = engine.stopApp("com.android.calculator2");
+    TEST_ASSERT(stopCalc, "stopApp(Calculator) must succeed");
+    TEST_ASSERT(!engine.isAppRunning("com.android.calculator2"), "Calculator must no longer be running");
+    TEST_ASSERT(wm.getSurfacesForPackage("com.android.calculator2").empty(), "Wayland surfaces must be cleaned up");
+
+    // 10. Android Intent & Protocol Router (AegisIntent)
+    auto& router = wsa::AndroidIntentRouter::Instance();
+    router.clear();
+
+    wsa::AndroidIntent expIntent;
+    expIntent.action = "android.intent.action.MAIN";
+    expIntent.targetPackage = "com.android.settings";
+    std::string resExp;
+    bool routeExp = router.routeIntent(expIntent, &resExp);
+    TEST_ASSERT(routeExp, "Explicit intent to Settings must resolve");
+    TEST_ASSERT(resExp.find("com.android.settings") != std::string::npos, "Resolution string must contain target package");
+
+    wsa::AndroidIntent webIntent;
+    webIntent.action = "android.intent.action.VIEW";
+    webIntent.dataUri = "https://source.android.com";
+    std::string resWeb;
+    bool routeWeb = router.routeIntent(webIntent, &resWeb);
+    TEST_ASSERT(routeWeb, "Implicit URL intent must resolve to browser");
+    TEST_ASSERT(resWeb.find("WebView Browser") != std::string::npos, "Browser must be resolved for HTTP/HTTPS");
+
+    wsa::AndroidIntent docIntent;
+    docIntent.action = "android.intent.action.VIEW";
+    docIntent.dataUri = "content://media/external/file/42";
+    std::string resDoc;
+    bool routeDoc = router.routeIntent(docIntent, &resDoc);
+    TEST_ASSERT(routeDoc, "Content URI intent must resolve to DocumentsUI");
+
+    // 11. Sovereign VFS Shared Storage Bridge
+    auto& vfs = wsa::WsaStorageVfsBridge::Instance();
+    std::string hostDl;
+    bool dlOk = vfs.translateGuestToHost("/sdcard/Download/update.zip", hostDl);
+    TEST_ASSERT(dlOk, "translateGuestToHost for Download must succeed");
+    TEST_ASSERT(hostDl == "C:\\Users\\admin\\Downloads\\update.zip", "Host path must match Downloads folder");
+
+    std::string guestPic;
+    bool picOk = vfs.translateHostToGuest("C:\\Users\\admin\\Pictures\\screenshot.png", guestPic);
+    TEST_ASSERT(picOk, "translateHostToGuest for Pictures must succeed");
+    TEST_ASSERT(guestPic == "/sdcard/Pictures/screenshot.png", "Guest path must match /sdcard/Pictures");
+
+    // 12. C ABI Parity & CommandShell CLI Integration
+    wsa::WsaContainerStatus cStatus{};
+    NTSTATUS stC = wsa::WsaGetContainerStatus(&cStatus);
+    TEST_ASSERT(stC == STATUS_SUCCESS, "WsaGetContainerStatus C ABI must succeed");
+    TEST_ASSERT(cStatus.state == wsa::WsaContainerState::Running, "Status must show running container");
+
+    uint32_t cPid = 0;
+    NTSTATUS stLaunch = wsa::WsaLaunchPackage("com.android.documentsui", nullptr, &cPid);
+    TEST_ASSERT(stLaunch == STATUS_SUCCESS && cPid >= 2000, "WsaLaunchPackage C ABI must succeed");
+
+    NTSTATUS stStop = wsa::WsaStopPackage("com.android.documentsui");
+    TEST_ASSERT(stStop == STATUS_SUCCESS, "WsaStopPackage C ABI must succeed");
+
+    NTSTATUS stIntent = wsa::WsaSendIntent("android.intent.action.MAIN", nullptr, "com.android.settings");
+    TEST_ASSERT(stIntent == STATUS_SUCCESS, "WsaSendIntent C ABI must succeed");
+
+    size_t pkgCount = wsa::WsaGetPackageCount();
+    TEST_ASSERT(pkgCount >= 5, "WsaGetPackageCount C ABI must report >= 5");
+
+    shell::CommandShell testShell;
+    std::ostringstream ssOut;
+
+    int r1 = testShell.execute("wsa status", ssOut);
+    TEST_ASSERT(r1 == 0, "wsa status must return 0");
+    std::string out1 = ssOut.str();
+    TEST_ASSERT(out1.find("TitanWSA / AegisAOSP") != std::string::npos, "wsa status must mention TitanWSA");
+
+    ssOut.str("");
+    int r2 = testShell.execute("wsa packages", ssOut);
+    TEST_ASSERT(r2 == 0, "wsa packages must return 0");
+    std::string out2 = ssOut.str();
+    TEST_ASSERT(out2.find("com.android.settings") != std::string::npos, "wsa packages must list Settings");
+
+    ssOut.str("");
+    int r3 = testShell.execute("wsa vfs", ssOut);
+    TEST_ASSERT(r3 == 0, "wsa vfs must return 0");
+    std::string out3 = ssOut.str();
+    TEST_ASSERT(out3.find("/sdcard/Download") != std::string::npos, "wsa vfs must list /sdcard/Download");
+
+    ssOut.str("");
+    int r4 = testShell.execute("wsa test", ssOut);
+    TEST_ASSERT(r4 == 0, "wsa test must return 0");
+    std::string out4 = ssOut.str();
+    TEST_ASSERT(out4.find("All Windows Subsystem for Android (WSA) Self-Tests Passed") != std::string::npos, "wsa self-tests must pass");
+
+    // Concurrency Stress: Multi-threaded app launch & terminate
+    std::vector<std::thread> workers;
+    std::atomic<int> successCycles{0};
+    for (int i = 0; i < 4; ++i) {
+        workers.emplace_back([&, i]() {
+            for (int cycle = 0; cycle < 5; ++cycle) {
+                std::string appName = (i % 2 == 0) ? "com.android.calculator2" : "com.android.documentsui";
+                uint32_t p = 0;
+                engine.launchApp(appName, "", &p);
+                engine.stopApp(appName);
+                successCycles++;
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(successCycles.load() == 20, "20 concurrent app launch/stop cycles must complete cleanly");
+
+    engine.stopContainer();
+    TEST_ASSERT(!engine.isRunning(), "Container must be cleanly stopped at end of suite");
+
+    std::cout << "[TEST] Suite 178: Windows Subsystem for Android (WSA / AOSP Microdroid Container) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite177")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite178")) {
+        RUN_TEST(Test_WindowsSubsystemForAndroid_WSA_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite177") {
         RUN_TEST(Test_ModernStandby_PEP_SleepStudy_Subsystem);
         return g_FailedTests;
     }
@@ -40734,6 +41008,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_HardwareIOMMU_VTd_AMDVi_DMA_Remapping_Subsystem);
     RUN_TEST(Test_WindowsUEFI_RuntimeServices_CapsuleUpdate_Subsystem);
     RUN_TEST(Test_ModernStandby_PEP_SleepStudy_Subsystem);
+    RUN_TEST(Test_WindowsSubsystemForAndroid_WSA_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
