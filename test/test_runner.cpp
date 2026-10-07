@@ -181,6 +181,7 @@
 #include "micant/sriov.hpp"
 #include "micant/iommu.hpp"
 #include "micant/uefi_rt.hpp"
+#include "micant/modern_standby.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -40045,8 +40046,229 @@ void Test_WindowsUEFI_RuntimeServices_CapsuleUpdate_Subsystem() {
     std::cout << "[TEST] Suite 176: UEFI Runtime Services, ESRT & Firmware Capsule Update Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 177: Modern Standby (S0ix / PEP / Low Power S0 Idle) & Sleep Study Subsystem
+// ============================================================================
+void Test_ModernStandby_PEP_SleepStudy_Subsystem() {
+    std::cout << "\n--- [Suite 177] Modern Standby, PEP & Sleep Study Subsystem ---\n";
+
+    // 1. Subsystem Initialization & SCM / Version Registration
+    standby::InitializeModernStandbySubsystem();
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto pepSvc = scm.getServiceRecord(L"pep");
+    TEST_ASSERT(pepSvc != nullptr && pepSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "pep service must be running");
+    auto pwrSvc = scm.getServiceRecord(L"power");
+    TEST_ASSERT(pwrSvc != nullptr && pwrSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "power service must be running");
+
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    const auto* pepMod = vdb.GetModuleInfo("pep.sys");
+    TEST_ASSERT(pepMod != nullptr && pepMod->stringTable.at("ProductVersion") == "10.0.26100.1", "pep.sys version must match 10.0.26100.1");
+    const auto* pwrMod = vdb.GetModuleInfo("powrprof.dll");
+    TEST_ASSERT(pwrMod != nullptr && pwrMod->stringTable.at("ProductVersion") == "10.0.26100.1", "powrprof.dll version must match 10.0.26100.1");
+
+    // 2. Platform Extension Plugin (PEP) Device Constraints & DRIPS Readiness
+    auto& pep = standby::PlatformExtensionPlugin::Instance();
+    TEST_ASSERT(pep.getDeviceCount() >= 8, "PEP must have at least 8 hardware devices registered");
+
+    auto wakeDevs = pep.getWakeArmedDevices();
+    TEST_ASSERT(!wakeDevs.empty(), "PEP must report wake-armed devices (Wi-Fi, USB xHCI)");
+
+    std::vector<std::string> blockers;
+    bool initialDrips = pep.evaluateDripsReady(&blockers);
+    TEST_ASSERT(!initialDrips, "In active S0 working state, devices in D0 must initially block DRIPS");
+    TEST_ASSERT(!blockers.empty(), "Blocker list must not be empty while in active working state");
+
+    // 3. Modern Standby Coordinator - Connected Standby Transition
+    auto& coord = standby::ModernStandbyCoordinator::Instance();
+    TEST_ASSERT(coord.getCurrentPhase() == standby::StandbyPhase::ActiveWorking, "Initial phase must be ActiveWorking");
+    TEST_ASSERT(!coord.isInStandby(), "Platform must not be in standby initially");
+
+    bool enterOk = coord.enterStandby(standby::StandbyMode::ConnectedStandby);
+    TEST_ASSERT(enterOk, "enterStandby(ConnectedStandby) must succeed");
+    TEST_ASSERT(coord.isInStandby(), "Coordinator must report isInStandby == true");
+    TEST_ASSERT(coord.getCurrentPhase() == standby::StandbyPhase::LowPowerIdle, "Phase must reach LowPowerIdle (DRIPS)");
+    TEST_ASSERT(coord.getStandbyMode() == standby::StandbyMode::ConnectedStandby, "Mode must be ConnectedStandby");
+
+    // Verify PEP transitioned devices to D3 and DRIPS is now ready
+    bool dripsReady = pep.evaluateDripsReady(&blockers);
+    TEST_ASSERT(dripsReady, "All device constraints must be satisfied in LowPowerIdle");
+    TEST_ASSERT(blockers.empty(), "Blockers must be empty when DRIPS is ready");
+
+    // 4. Maintenance Cycle & Resiliency Tests
+    bool maintOk = coord.triggerMaintenanceCycle();
+    TEST_ASSERT(maintOk, "triggerMaintenanceCycle must succeed while in LowPowerIdle");
+    TEST_ASSERT(coord.getCurrentPhase() == standby::StandbyPhase::LowPowerIdle, "Phase must return to LowPowerIdle after maintenance");
+
+    bool resOk = coord.triggerResiliencyCheck();
+    TEST_ASSERT(resOk, "triggerResiliencyCheck must succeed while in LowPowerIdle");
+    TEST_ASSERT(coord.getCurrentPhase() == standby::StandbyPhase::LowPowerIdle, "Phase must return to LowPowerIdle after resiliency");
+
+    // 5. Exit Standby (Wake Event)
+    bool exitOk = coord.exitStandby(standby::WakeReason::PowerButton, 3600000); // 1 hour simulated
+    TEST_ASSERT(exitOk, "exitStandby must succeed");
+    TEST_ASSERT(!coord.isInStandby(), "Platform must no longer be in standby");
+    TEST_ASSERT(coord.getCurrentPhase() == standby::StandbyPhase::ActiveWorking, "Phase must return to ActiveWorking");
+    TEST_ASSERT(coord.getLastWakeReason() == standby::WakeReason::PowerButton, "Wake reason must be PowerButton");
+
+    // 6. Disconnected Standby Lifecycle
+    bool discOk = coord.enterStandby(standby::StandbyMode::DisconnectedStandby);
+    TEST_ASSERT(discOk, "enterStandby(DisconnectedStandby) must succeed");
+    TEST_ASSERT(coord.getStandbyMode() == standby::StandbyMode::DisconnectedStandby, "Mode must be DisconnectedStandby");
+
+    bool exitDisc = coord.exitStandby(standby::WakeReason::LidOpen, 1800000); // 30 mins
+    TEST_ASSERT(exitDisc, "exitStandby on LidOpen must succeed");
+    TEST_ASSERT(coord.getLastWakeReason() == standby::WakeReason::LidOpen, "Wake reason must be LidOpen");
+
+    // 7. Power References & DFx (Directed Power Management Framework)
+    coord.enterStandby(standby::StandbyMode::ConnectedStandby);
+    TEST_ASSERT(pep.evaluateDripsReady(), "DRIPS must be ready initially in standby");
+
+    pep.setPowerReference("PCI\\VEN_8086&DEV_46A6", true); // Acquire GPU reference
+    bool blockedByGpu = !pep.evaluateDripsReady(&blockers);
+    TEST_ASSERT(blockedByGpu, "Acquiring power reference on GPU must block DRIPS");
+    TEST_ASSERT(!blockers.empty() && blockers[0].find("GPU") != std::string::npos, "GPU must be reported as blocker");
+
+    bool dfxOk = pep.directedPowerDown("PCI\\VEN_8086&DEV_46A6"); // DFx forced D3
+    TEST_ASSERT(dfxOk, "directedPowerDown (DFx) must succeed");
+    TEST_ASSERT(pep.evaluateDripsReady(), "DRIPS must be unblocked after DFx directed power down");
+
+    coord.exitStandby(standby::WakeReason::SoftwareRequest, 600000);
+
+    // 8. Sleep Study Logging & Telemetry
+    auto& sleepStudy = standby::SleepStudyEngine::Instance();
+    TEST_ASSERT(sleepStudy.getSessionCount() >= 4, "SleepStudy must have logged at least 4 sessions");
+
+    auto sessions = sleepStudy.getSessions();
+    TEST_ASSERT(sessions.size() >= 4, "SleepStudy sessions count must be >= 4");
+    const auto& lastSess = sessions.back();
+    TEST_ASSERT(lastSess.durationMs == 600000, "Session duration must match 600000 ms");
+    TEST_ASSERT(lastSess.dripsPercentage >= 95.0, "DRIPS residency must meet or exceed 95% target");
+    TEST_ASSERT(lastSess.exitReason == standby::WakeReason::SoftwareRequest, "Exit reason in session must match SoftwareRequest");
+
+    const auto& prevSess = sessions[sessions.size() - 2];
+    TEST_ASSERT(prevSess.durationMs == 1800000, "Previous session duration must match 1800000 ms");
+    TEST_ASSERT(prevSess.dripsPercentage >= 95.0, "Previous DRIPS residency must meet or exceed 95% target");
+    TEST_ASSERT(prevSess.exitReason == standby::WakeReason::LidOpen, "Exit reason in previous session must match LidOpen");
+
+    std::string report = sleepStudy.generateSleepStudyReport();
+    TEST_ASSERT(report.find("MicaNT Sovereign Sleep Study Report") != std::string::npos, "Report must contain title");
+    TEST_ASSERT(report.find("Low Power S0 Idle (Modern Standby / S0ix)") != std::string::npos, "Report must mention S0ix architecture");
+    TEST_ASSERT(report.find("Connected Standby") != std::string::npos, "Report must show Connected Standby");
+    TEST_ASSERT(report.find("Disconnected Standby") != std::string::npos, "Report must show Disconnected Standby");
+
+    // 9. Win32 & NT Export Parity Surface (CallNtPowerInformation)
+    standby::SYSTEM_POWER_CAPABILITIES caps{};
+    NTSTATUS stCaps = standby::CallNtPowerInformation(
+        standby::SystemPowerCapabilities,
+        nullptr, 0,
+        &caps, sizeof(caps)
+    );
+    TEST_ASSERT(stCaps == STATUS_SUCCESS, "CallNtPowerInformation(SystemPowerCapabilities) must succeed");
+    TEST_ASSERT(caps.AoAc == 1, "AoAc must be 1 (Always On Always Connected / Modern Standby enabled)");
+    TEST_ASSERT(caps.SystemS3 == 0, "SystemS3 must be 0 (legacy S3 sleep disabled on modern standby)");
+    TEST_ASSERT(caps.SystemS4 == 1, "SystemS4 must be 1 (hibernate available)");
+    TEST_ASSERT(caps.PowerButtonPresent == 1, "PowerButtonPresent must be 1");
+    TEST_ASSERT(caps.LidPresent == 1, "LidPresent must be 1");
+
+    BOOLEAN platInfo = 0;
+    NTSTATUS stPlat = standby::CallNtPowerInformation(
+        standby::PlatformInformation,
+        nullptr, 0,
+        &platInfo, sizeof(platInfo)
+    );
+    TEST_ASSERT(stPlat == STATUS_SUCCESS && platInfo == 1, "CallNtPowerInformation(PlatformInformation) must return 1");
+
+    // 10. C ABI Export Helpers
+    NTSTATUS cAbiReg = standby::PepRegisterDevice("TEST_DEVICE_EXT", "External Sensor Hub", 1, 4);
+    TEST_ASSERT(cAbiReg == STATUS_SUCCESS, "PepRegisterDevice C ABI export must succeed");
+
+    BOOLEAN cAbiDrips = 0;
+    NTSTATUS cAbiDripsSt = standby::PepEvaluateDripsState(&cAbiDrips);
+    TEST_ASSERT(cAbiDripsSt == STATUS_SUCCESS, "PepEvaluateDripsState C ABI export must succeed");
+
+    size_t cAbiCount = standby::SleepStudyGetSessionCount();
+    TEST_ASSERT(cAbiCount >= 4, "SleepStudyGetSessionCount C ABI export must report >= 4");
+
+    // 11. CommandShell CLI Integration Verification
+    shell::CommandShell testShell;
+    std::ostringstream ssOut;
+
+    // powercfg /sleepstudy
+    int pcfg1 = testShell.execute("powercfg /sleepstudy", ssOut);
+    TEST_ASSERT(pcfg1 == 0, "powercfg /sleepstudy must return 0");
+    std::string outPcfg1 = ssOut.str();
+    TEST_ASSERT(outPcfg1.find("MicaNT Sovereign Sleep Study Report") != std::string::npos, "powercfg output must contain sleep study header");
+    TEST_ASSERT(outPcfg1.find("Target DRIPS Residency: >= 95.0%") != std::string::npos, "powercfg output must mention target DRIPS residency");
+
+    // powercfg /energy
+    ssOut.str("");
+    int pcfg2 = testShell.execute("powercfg /energy", ssOut);
+    TEST_ASSERT(pcfg2 == 0, "powercfg /energy must return 0");
+    std::string outPcfg2 = ssOut.str();
+    TEST_ASSERT(outPcfg2.find("MicaNT Power & Energy Diagnostic Assessment") != std::string::npos, "powercfg /energy must show diagnostic header");
+    TEST_ASSERT(outPcfg2.find("Connected Standby (AoAc): Supported & Operational") != std::string::npos, "powercfg /energy must verify AoAc");
+
+    // powercfg /devicequery wake_armed
+    ssOut.str("");
+    int pcfg3 = testShell.execute("powercfg /devicequery wake_armed", ssOut);
+    TEST_ASSERT(pcfg3 == 0, "powercfg /devicequery wake_armed must return 0");
+    std::string outPcfg3 = ssOut.str();
+    TEST_ASSERT(outPcfg3.find("Intel Wi-Fi 7") != std::string::npos, "powercfg wake_armed must list Wi-Fi adapter");
+
+    // powercfg /a
+    ssOut.str("");
+    int pcfg4 = testShell.execute("powercfg /a", ssOut);
+    TEST_ASSERT(pcfg4 == 0, "powercfg /a must return 0");
+    std::string outPcfg4 = ssOut.str();
+    TEST_ASSERT(outPcfg4.find("Standby (S0 Low Power Idle) Network Connected") != std::string::npos, "powercfg /a must show S0 low power idle");
+
+    // standby status
+    ssOut.str("");
+    int sb1 = testShell.execute("standby status", ssOut);
+    TEST_ASSERT(sb1 == 0, "standby status must return 0");
+    std::string outSb1 = ssOut.str();
+    TEST_ASSERT(outSb1.find("TitanStandby / AegisPEP") != std::string::npos, "standby status must mention TitanStandby");
+
+    // standby test
+    ssOut.str("");
+    int sb2 = testShell.execute("standby test", ssOut);
+    TEST_ASSERT(sb2 == 0, "standby test must return 0");
+    std::string outSb2 = ssOut.str();
+    TEST_ASSERT(outSb2.find("All Modern Standby & PEP Subsystem Self-Tests Passed") != std::string::npos, "standby self-test must pass");
+
+    // 12. Concurrency & Rapid Standby Transitions
+    std::vector<std::thread> workers;
+    std::atomic<int> successCycles{0};
+    for (int i = 0; i < 4; ++i) {
+        workers.emplace_back([&, i]() {
+            for (int cycle = 0; cycle < 5; ++cycle) {
+                standby::StandbyMode m = (cycle % 2 == 0) ? standby::StandbyMode::ConnectedStandby : standby::StandbyMode::DisconnectedStandby;
+                coord.enterStandby(m);
+                coord.triggerMaintenanceCycle();
+                standby::WakeReason wr = (i == 0) ? standby::WakeReason::KeyboardInput :
+                                         (i == 1) ? standby::WakeReason::MouseInput :
+                                         (i == 2) ? standby::WakeReason::NetworkPacket :
+                                                    standby::WakeReason::RTCAlarm;
+                coord.exitStandby(wr, 5000);
+                successCycles++;
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(successCycles.load() == 20, "20 concurrent modern standby transition cycles must complete cleanly");
+
+    std::cout << "[TEST] Suite 177: Modern Standby (S0ix / PEP / Low Power S0 Idle) & Sleep Study Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite176")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite177")) {
+        RUN_TEST(Test_ModernStandby_PEP_SleepStudy_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite176") {
         RUN_TEST(Test_WindowsUEFI_RuntimeServices_CapsuleUpdate_Subsystem);
         return g_FailedTests;
     }
@@ -40511,6 +40733,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_PCIeSRIOV_PASID_SharedVirtualAddressing_Subsystem);
     RUN_TEST(Test_HardwareIOMMU_VTd_AMDVi_DMA_Remapping_Subsystem);
     RUN_TEST(Test_WindowsUEFI_RuntimeServices_CapsuleUpdate_Subsystem);
+    RUN_TEST(Test_ModernStandby_PEP_SleepStudy_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

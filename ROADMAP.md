@@ -3141,31 +3141,40 @@
 
 ---
 
-### Phase 150: Modern Standby (S0ix / PEP / Low Power S0 Idle) & Sleep Study Subsystem (Milestone 177) [PLANNED]
+### Phase 150: Modern Standby (S0ix / PEP / Low Power S0 Idle) & Sleep Study Subsystem (`include/micant/modern_standby.hpp`, `pep.sys`, `powrprof.dll`, `TitanStandby`, `AegisPEP`) (Milestone 177) (COMPLETED 100%)
 *Goal: Implement clean-room Modern Standby / Low Power S0 Idle architecture, Platform Extension Plugin (PEP / `pep.sys`), Power Engine Plugins, Directed Power Management Framework (DFx), and Windows Sleep Study diagnostic telemetry.*
-- [ ] **Modern Standby & PEP Architecture (`include/micant/modern_standby.hpp`)**:
+- [x] **Modern Standby & PEP Architecture (`include/micant/modern_standby.hpp`)**:
   - S0 Low Power Idle (S0ix) state transitions (Connected Standby / Disconnected Standby).
   - Platform Extension Plugin (PEP) driver interfaces for device constraints, SoC power rails, and clock gating.
   - Directed Power Management Framework (DFx) testing and runtime device power references (PoFx).
   - Sleep Study session logger and energy drain diagnostic reporting (`powercfg /sleepstudy`).
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `powrprof.dll`: `CallNtPowerInformation`, `PowerRegisterSuspendResumeNotification`, `PowerUnregisterSuspendResumeNotification`.
-  - `pep.sys`: Platform Extension Plugin interfaces.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration.
-- [ ] **Interactive Shell CLI**:
-  - `powercfg /sleepstudy`, `powercfg /energy`, `powercfg /devicequery`, `standby status`, `standby test`.
-- [ ] **Unit Test Suite 177 (`Test_ModernStandby_PEP_SleepStudy_Subsystem`)**:
-  - Verification of S0ix entry/exit transitions, PEP constraint evaluation, DFx device testing, and Sleep Study report generation.
+  - `pep.sys`: Platform Extension Plugin interfaces (`PepRegisterDevice`, `PepEvaluateDripsState`, `SleepStudyGetSessionCount`).
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`pep.sys`, `powrprof.dll`).
+- [x] **Interactive Shell CLI**:
+  - `powercfg /sleepstudy`, `powercfg /energy`, `powercfg /devicequery wake_armed`, `powercfg /a`, `standby status`, `standby enter`, `standby exit`, `standby drips`, `standby blockers`, `standby dfx`, `standby test`.
+- [x] **Unit Test Suite 177 (`Test_ModernStandby_PEP_SleepStudy_Subsystem`)**:
+  - 12 comprehensive validation stages verifying S0ix entry/exit transitions, PEP constraint evaluation, DFx device testing, Sleep Study report generation, Win32/NT export parity, shell integration, and concurrent transitions.
+  - Milestone 177: **177 / 177 Test Suites Passing (100%)**.
 
 ---
 
-### Future Architectural Horizons: Windows Subsystem for Android (WSA)
+### Phase 151: Windows Subsystem for Android (WSA / AOSP Microdroid Container Engine & Bridge) (`wsa.hpp`, `wsa.dll`, `TitanWSA`, `AegisAOSP`) (Milestone 178) [PLANNED]
 *Goal: Implement clean-room Windows Subsystem for Android (WSA / AOSP Microdroid Container Engine & Bridge) atop MicaNT's Hypervisor Platform (WHP) and composite VFS bridges.*
-- [ ] **WSA Container Architecture**:
+- [ ] **WSA Container Architecture (`include/micant/wsa.hpp`)**:
   - Android Open Source Project (AOSP) Android 13/14 micro-runtime execution within lightweight WHP virtual partition.
   - Wayland-to-DWM bridge converting Android SurfaceFlinger buffers into DirectComposition / DWM visual surfaces.
   - OpenSLES / AAudio bridge multiplexing Android audio streams into WASAPI / AudioSession.
   - IPC Intents bridge bridging Win32 Shell protocol handlers and Android Intent URI schemes.
+  - Package management & APK sideloading bridge (`wsa install`, `wsa launch`, `wsa stop`).
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `wsa.dll`: `WsaInitializeSubsystem`, `WsaLaunchPackage`, `WsaTerminateSubsystem`, `WsaQueryContainerStatus`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`wsa.sys`, `wsaservice.exe`).
+- [ ] **Interactive Shell CLI**:
+  - `wsa status`, `wsa start`, `wsa stop`, `wsa packages`, `wsa install <apk>`, `wsa launch <package>`, `wsa test`.
+- [ ] **Unit Test Suite 178 (`Test_WindowsSubsystemForAndroid_WSA_Subsystem`)**:
+  - Container lifecycle, Wayland surface compositing, APK package registry, intent resolution, audio pipeline bridge, and concurrent multi-package execution.
 
 
 
