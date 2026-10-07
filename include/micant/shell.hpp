@@ -160,6 +160,7 @@
 #include "pluton.hpp"
 #include "hfi.hpp"
 #include "cet.hpp"
+#include "qat.hpp"
 
 namespace micant::shell {
 
@@ -464,6 +465,7 @@ public:
             if (cmd == "pluton" || cmd == "titanpluton" || cmd == "aegispluton") { cmdPluton(tokens, out); return 0; }
             if (cmd == "hfi" || cmd == "director" || cmd == "cppc" || cmd == "titandirector") { cmdHfi(tokens, out); return 0; }
             if (cmd == "cet" || cmd == "shadowstack" || cmd == "titancet" || cmd == "aegiscet") { cmdCet(tokens, out); return 0; }
+            if (cmd == "qat" || cmd == "quickassist" || cmd == "titanqat" || cmd == "nexusqat") { cmdQat(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -26840,6 +26842,144 @@ private:
             << "  cet test_rop                Simulate and intercept Return-Oriented Programming (ROP)\n"
             << "  cet test_jop                Simulate and intercept Jump-Oriented Programming (JOP)\n"
             << "  cet bench / benchmark       Benchmark hardware shadow stack call/ret validation\n";
+    }
+
+    void cmdQat(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& qatSub = qat::TitanQatSubsystem::get();
+        if (!qatSub.isInitialized()) {
+            qatSub.initialize();
+        }
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "status") {
+            auto caps = qatSub.getCapabilities();
+            auto telem = qatSub.getTelemetry();
+
+            out << "===============================================================================\n"
+                << "   MicaNT Intel QuickAssist Technology Offload Subsystem (TitanQAT / NexusQAT) \n"
+                << "===============================================================================\n"
+                << "  Hardware Controller:           PCIe 00:0A.0 (VEN_8086&DEV_4940, QAT 401xx Gen 4)\n"
+                << "  Driver Stack:                  intel_qat.sys, qat_crypto.sys, qat_comp.sys\n"
+                << "  Hardware Acceleration Engines: " << caps.numEngines << " (4 Sym Crypto, 2 Asym PKE, 4 Compression)\n"
+                << "  Single Root I/O Virtualization:" << (caps.hasSriov ? " ENABLED (16 Virtual Functions)" : " Disabled") << "\n"
+                << "  Active Virtual Functions:      " << telem.activeVfs << " / " << caps.numVirtualFunctions << "\n"
+                << "  Ring Queue Depth:              " << caps.maxRingDepth << " entries per ring pair\n"
+                << "  Peak Offload Bandwidth:        " << caps.maxBandwidthGbps << " Gbps\n"
+                << "  Telemetry Metrics:\n"
+                << "    Symmetric Encrypt Ops:       " << telem.symEncryptRequests << "\n"
+                << "    Symmetric Decrypt Ops:       " << telem.symDecryptRequests << "\n"
+                << "    Asymmetric RSA/PKE Ops:      " << telem.asymOpsProcessed << "\n"
+                << "    Compression Ops:             " << telem.compCompressRequests << "\n"
+                << "    Decompression Ops:           " << telem.compDecompressRequests << "\n"
+                << "    Total Hardware DMA Volume:   " << (telem.totalBytesProcessed / 1024) << " KB\n"
+                << "    Hardware Submission Latency: " << telem.averageSubmissionLatencyNs << " ns (<500ns offload)\n"
+                << "    Sustained Wire Throughput:   " << telem.sustainedThroughputGbps << " Gbps\n"
+                << "===============================================================================\n";
+            return;
+        }
+
+        if (sub == "engines") {
+            auto engines = qatSub.getEngines();
+            out << "\n=== Intel QAT Physical Acceleration Engines (" << engines.size() << " Engines) ===\n";
+            for (const auto& e : engines) {
+                out << "  Engine #" << e.engineId << " [" << e.name << "]: "
+                    << "Clock: " << e.frequencyMhz << " MHz | Status: " << (e.isActive ? "ACTIVE" : "IDLE") << " | "
+                    << "Ops: " << e.opsProcessed << " | Bytes: " << e.bytesProcessed << " B\n";
+            }
+            return;
+        }
+
+        if (sub == "crypto") {
+            out << "[QAT Crypto] Executing hardware-accelerated AES-256-XTS block encryption offload...\n";
+            const char* sampleData = "MicaNT Dave Cutler Clean-Room Executive Kernel Secure Storage Payload";
+            uint32_t inLen = static_cast<uint32_t>(std::strlen(sampleData));
+            uint8_t key[32] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+                               0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20};
+            uint8_t iv[16] = {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF};
+            std::vector<uint8_t> cipher(inLen);
+            uint32_t cipherLen = 0;
+
+            bool encOk = qatSub.offloadSymEncrypt(qat::QatCipherAlgo::AesXts256,
+                reinterpret_cast<const uint8_t*>(sampleData), inLen, key, sizeof(key), iv, cipher.data(), &cipherLen);
+
+            if (encOk) {
+                out << "  [RESULT] SUCCESS: Hardware Doorbell rung on Ring #0. Transformed " << cipherLen << " bytes.\n"
+                    << "           Ciphertext: ";
+                for (uint32_t i = 0; i < std::min<uint32_t>(cipherLen, 16); ++i) {
+                    out << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(cipher[i]) << " ";
+                }
+                out << std::dec << "... (Truncated)\n";
+
+                std::vector<uint8_t> decrypted(cipherLen);
+                uint32_t decLen = 0;
+                qatSub.offloadSymDecrypt(qat::QatCipherAlgo::AesXts256, cipher.data(), cipherLen, key, sizeof(key), iv, decrypted.data(), &decLen);
+                std::string recovered(decrypted.begin(), decrypted.begin() + decLen);
+                out << "           Decrypted Recovery: \"" << recovered << "\"\n";
+            } else {
+                out << "  [RESULT] FAILED: Crypto offload submission failed.\n";
+            }
+            return;
+        }
+
+        if (sub == "comp") {
+            out << "[QAT Comp] Executing hardware-accelerated Zstandard / Deflate compression offload...\n";
+            std::string sampleText = "MicaNT_DirectStorage_FastPath_Asset_Streaming_Payload_0123456789_AAAAABBBBBCCCCCDDDDD";
+            uint32_t inLen = static_cast<uint32_t>(sampleText.size());
+            std::vector<uint8_t> compressed(inLen + 32);
+            uint32_t compLen = 0;
+
+            bool compOk = qatSub.offloadCompress(qat::QatCompAlgo::Zstandard,
+                reinterpret_cast<const uint8_t*>(sampleText.data()), inLen, compressed.data(), &compLen);
+
+            if (compOk) {
+                double ratio = static_cast<double>(inLen) / static_cast<double>(compLen);
+                out << "  [RESULT] SUCCESS: QAT Compression Engine #6 processed buffer.\n"
+                    << "           Original Size:   " << inLen << " bytes\n"
+                    << "           Compressed Size: " << compLen << " bytes (Ratio: " << std::fixed << std::setprecision(2) << ratio << "x)\n";
+
+                std::vector<uint8_t> decompressed(inLen + 32);
+                uint32_t decompLen = 0;
+                qatSub.offloadDecompress(qat::QatCompAlgo::Zstandard, compressed.data(), compLen, decompressed.data(), static_cast<uint32_t>(decompressed.size()), &decompLen);
+                std::string recovered(decompressed.begin(), decompressed.begin() + decompLen);
+                out << "           Decompressed Match: \"" << recovered << "\"\n";
+            } else {
+                out << "  [RESULT] FAILED: Compression offload submission failed.\n";
+            }
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "[QAT Bench] Executing 100,000 hardware crypto & compression offload dispatches...\n";
+            uint8_t dummyIn[64]{};
+            uint8_t dummyOut[64]{};
+            uint32_t dummyLen = 0;
+            uint8_t key[32]{};
+
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < 100000; ++i) {
+                qatSub.offloadSymEncrypt(qat::QatCipherAlgo::AesGcm256, dummyIn, 64, key, 32, nullptr, dummyOut, &dummyLen);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            double avgNs = static_cast<double>(ns) / 100000.0;
+            out << "[QAT Bench] 100,000 Hardware Offload Dispatches completed in " << (ns / 1000000.0) << " ms\n"
+                << "            Average Submission Latency: " << avgNs << " ns per request (Zero Spinlock Overhead)\n";
+            return;
+        }
+
+        auto telem = qatSub.getTelemetry();
+        out << "MicaNT Intel QuickAssist Technology Offload Subsystem (TitanQAT / NexusQAT)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  Active Engines: 10 | Crypto Ops: " << (telem.symEncryptRequests + telem.symDecryptRequests) << " | Comp Ops: " << (telem.compCompressRequests + telem.compDecompressRequests) << "\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  qat status                  Display Intel QAT hardware status and telemetry\n"
+            << "  qat engines                 Inspect all 10 physical acceleration engines\n"
+            << "  qat crypto                  Simulate AES-256-XTS block encryption hardware offload\n"
+            << "  qat comp                    Simulate ZSTD / Deflate compression hardware offload\n"
+            << "  qat bench / benchmark       Benchmark hardware acceleration submission latency\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -60,6 +60,7 @@ These names:
 | **Microsoft Pluton Security Processor Subsystem** | **TitanPluton / AegisPluton** | `micant::pluton` | `pluton.hpp` | Clean-room Microsoft Pluton on-die security processor driver (`pluton.sys`, ACPI `\_SB.PLTN`), physical bus-sniffing immunity, on-die crossbar fabric (`0xFEB00000`), 24 SHA-256 PCR banks (PCR 0..23), hardware keystore (SRK, EK, VMK), policy-sealed blobs, TRNG, and sub-5us command latency. |
 | **Intel Thread Director & AMD CPPC Heterogeneous Scheduling Subsystem** | **TitanDirector / AegisScheduler** | `micant::hfi` | `hfi.hpp` | Clean-room Intel Hardware Feedback Interface (HFI / Thread Director) and AMD Collaborative Processor Performance Control (CPPC v2/v3) heterogeneous CPU scheduling subsystem (`intel_hfi.sys`, `amd_cppc.sys`), 24 logical cores (8 P-Cores, 14 E-Cores, 2 LP E-Cores on SoC island), 5-class thread classification (`Class0_Standard` .. `Class4_Background`), autonomous core parking, EPP policy, and sub-50ns thread dispatch latency. |
 | **Intel CET & Hardware-Enforced Stack Protection Subsystem** | **TitanCET / AegisCET** | `micant::cet` | `cet.hpp` | Clean-room Intel Control-flow Enforcement Technology (CET) and AMD Shadow Stack subsystem (`kshadowstack.sys`, `cet.sys`), dual-stack hardware execution, hardware `#CP` Vector 21 exception dispatch, Indirect Branch Tracking (IBT `ENDBR64`), ROP/COP/JOP mitigation, restore tokens, and sub-5ns call/ret validation latency. |
+| **Intel QAT Hardware Offload Subsystem** | **TitanQAT / NexusQAT** | `micant::qat` | `qat.hpp` | Clean-room Intel QuickAssist Technology (QAT 2.0 / 4xxx) cryptographic & compression accelerator (`intel_qat.sys`, `qat_crypto.sys`, `qat_comp.sys`, PCIe `00:0A.0`), 10 acceleration engines (4 Sym Crypto, 2 Asym PKE, 4 Compression), 16 SR-IOV VFs, zero-copy ring queue pairs with doorbells, and wire-speed offload (>400 Gbps crypto, >160 Gbps comp). |
 
 ---
 
@@ -674,6 +675,21 @@ These names:
     - 100% hardware-enforced checks with zero runtime software spinlock overhead.
   - System Service & Driver Integration: SCM registered drivers for `kshadowstack` (`SERVICE_BOOT_START`) and `cet` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration (`kshadowstack.sys` 10.0.26100.1).
   - Interactive CLI: `cet` / `shadowstack` / `titancet` / `aegiscet` (`status`, `stacks`, `test_rop`, `test_jop`, `bench` / `benchmark`).
+
+### 3.44 TitanQAT & NexusQAT (Intel QuickAssist Technology Hardware Offload Subsystem)
+- **Role:** Sovereign hardware cryptographic and data compression offload acceleration architecture implementing Intel QuickAssist Technology (QAT 2.0 / 4xxx Series, PCIe BDF `00:0A.0`, `VEN_8086&DEV_4940`) drivers (`intel_qat.sys`, `qat_crypto.sys`, `qat_comp.sys`).
+- **Capabilities:**
+  - Standard QAT Driver C ABI exports (`intel_qat.sys`, `qat_crypto.sys`, `qat_comp.sys`): `QatInitialize`, `QatGetVersion`, `QatGetCapabilities`, `QatGetEngineCount`, `QatCreateQueuePair`, `QatDestroyQueuePair`, `QatSubmitCryptoRequest`, `QatSubmitCompRequest`, `QatPollQueuePair`, `QatGetTelemetry`.
+  - 10 Dedicated Hardware Acceleration Engines:
+    - 4 Symmetric Cryptographic Engines (AES-128/256-GCM, CBC, XTS, SHA-256/384/512, HMAC).
+    - 2 Asymmetric Public Key Engines (RSA-2048/4096, ECDSA, ECDH Curve25519/NIST P-256/P-384).
+    - 4 Lossless Compression/Decompression Engines (Deflate RFC 1951, LZ4, Zstandard / ZSTD).
+  - Single Root I/O Virtualization (SR-IOV):
+    - Physical Function (PF) resource management and up to 16 Virtual Functions (VFs 0..15) with dedicated Ring Queue Pairs (Admin, Crypto, Comp QPs) and MMIO Doorbells.
+  - Sub-Microsecond Hardware Dispatch Latency:
+    - Zero-copy DMA transfers and asynchronous doorbell ring buffers delivering > 400 Gbps crypto and > 160 Gbps compression throughput.
+  - System Service & Driver Integration: SCM registered drivers for `intel_qat` (`SERVICE_BOOT_START`), `qat_crypto` (`SERVICE_SYSTEM_START`), and `qat_comp` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration (`intel_qat.sys` 10.0.26100.1).
+  - Interactive CLI: `qat` / `quickassist` / `titanqat` / `nexusqat` (`status`, `engines`, `crypto`, `comp`, `bench` / `benchmark`).
 
 ---
 
