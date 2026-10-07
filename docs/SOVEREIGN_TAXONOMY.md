@@ -53,6 +53,7 @@ These names:
 | **USB4 2.0 & Thunderbolt 4 Subsystem** | **TitanUSB4 / NexusUSB4** | `micant::usb4` | `usb4.hpp` | Clean-room USB4 2.0 & Thunderbolt 4/5 Host Router subsystem (`usb4host.sys`, `thunderbolt.sys`, `usb4router.sys` at 00:07.0) with PAM3 80G symmetric / 120G asymmetric signaling, native PCIe tunneling, DP 2.1 tunneling, and SL2 DMA protection. |
 | **Neural Processing Unit & MCDM** | **TitanNPU / NexusNPU** | `micant::npu` | `npu.hpp` | Clean-room Microsoft Compute Driver Model (MCDM 1.0/2.0) & NPU subsystem (`mcdm.sys`, `npu.sys`, `titannpu.sys` at 00:08.0) with 48 INT8 TOPS Copilot+ compliance, 4 compute tiles, INT4/FP8/FP16/BF16 precisions, DirectML hardware queues, and SLM execution. |
 | **Compute Express Link (CXL 2.0 / 3.1)** | **TitanCXL / NexusCXL** | `micant::cxl` | `cxl.hpp` | Clean-room Compute Express Link 2.0/3.1 heterogeneous memory fabric (`cxlhost.sys`, `cxlmem.sys`, `cxlbus.sys` at 00:09.0 & Bus 4) with CXL.io, CXL.cache, CXL.mem, Type 1/2/3 devices, HDM decoders, DMT NUMA tiering, and mailbox. |
+| **USB Type-C & Power Delivery (UCSI 2.1/3.0 / PD 3.1)** | **TitanUCSI / NexusUCSI** | `micant::ucsi` | `ucsi.hpp` | Clean-room USB Type-C Connector System Software Interface (UCSI 2.1/3.0) and USB Power Delivery 3.1 (240W EPR) subsystem (`ucsi.sys`, `usbc.sys`, `ppm.sys`, ACPI `\_SB.UBTC`) with 4 physical ports, EPR AVS (15-48V @ 5A), E-Marker discovery, and dynamic role swapping (`PR_SWAP` / `DR_SWAP`). |
 
 ---
 
@@ -528,6 +529,29 @@ These names:
   - PCIe Bus Placement: CXL Host Bridge at `00:09.0` (`VEN_1E98&DEV_0001`, Bridge Class 0x06, Subclass 0x04) bridging to Bus 4 hosting `TitanCXL 128GB DDR5 Expander` (`04:00.0`) and `TitanCXL Type 2 Heterogeneous Accelerator` (`04:01.0`).
   - System Service & Driver Integration: SCM registered drivers for `cxlhost` (`SERVICE_BOOT_START`), `cxlmem` (`SERVICE_BOOT_START`), and `cxlbus` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
   - Interactive CLI: `cxl` / `cxlmem` / `cxlhost` / `cxlbus` / `titancxl` (`status`, `devices` / `list`, `hdm` / `decoders`, `smart` / `health`, `numa` / `tiering`, `poison`, `mailbox`, `test`).
+
+### 3.37 TitanUCSI & NexusUCSI (USB Type-C UCSI 2.1/3.0 & Power Delivery 3.1 Subsystem)
+- **Role:** Sovereign USB Type-C subsystem implementing the USB Type-C™ Connector System Software Interface (UCSI) Revision 2.1/3.0 and USB Power Delivery Specification Revision 3.1 Version 1.8.
+- **Capabilities:**
+  - Standard UCSI & USB-C Driver C ABI exports (`ucsi.sys`, `usbc.sys`, `ppm.sys`): `UcsiPpmInitialize`, `UcsiPpmGetVersion`, `UcsiGetConnectorCount`, `UcsiGetConnectorStatus`, `UcsiGetCableProperties`, `UcsiNegotiateEprContract`, `UcsiSwapPowerRole`, `UcsiSwapDataRole`, `UcsiGetPdoList`, `UcsiAcknowledgeCci`.
+  - Platform Policy Manager (PPM) & Operating System Policy Manager (OPM) Architecture:
+    - Standard ACPI mailbox interface on `\_SB.UBTC` (`USBC000` / `PNP0CA0`) at MMIO base `0xFEDC0000`.
+    - 16-byte Mailbox Message In/Out registers, 64-bit Control register, and asynchronous Connector Change Indication (CCI) interrupts.
+  - Multi-Port Physical Connector Matrix:
+    - **Port 1 (Left Rear):** 240W Extended Power Range (EPR) Sink charging port (48V @ 5A peak power delivery).
+    - **Port 2 (Left Front):** DisplayPort 2.1 UHBR20 Alt-Mode 65W Source port (DP 4-lane video output + 20V @ 3.25A PD Source).
+    - **Port 3 (Right Rear):** 15W High-Speed USB 3.2 / USB4 Peripheral SSD port (5V @ 3A Source, DFP Host data role).
+    - **Port 4 (Right Front):** 27W Programmable Power Supply (PPS) Fast-Charging port (9V @ 3A Source, dynamic voltage scaling).
+  - USB Power Delivery 3.1 Extended Power Range (EPR) Protocol:
+    - Fixed PDOs: 5V/3A (15W), 9V/3A (27W), 15V/3A (45W), 20V/5A (100W Standard Power Range - SPR), 28V/5A (140W), 36V/5A (180W), and 48V/5A (240W Extended Power Range - EPR).
+    - Adjustable Voltage Supply (AVS): Fine-grained power stepping from 15V to 48V in 100mV increments for high-efficiency workstation charging.
+  - Cable Electronic Marker (E-Marker) SOP' Discovery:
+    - Queries active/passive cable capabilities including 50V/5A electrical ratings and 80 Gbps PAM3 high-speed signaling flags.
+  - Dynamic Role Renegotiation:
+    - Power Role Swap (`PR_SWAP` Source <-> Sink) enabling bidirectional laptop-to-monitor and laptop-to-phone charging.
+    - Data Role Swap (`DR_SWAP` DFP Host <-> UFP Device) and VCONN swapping.
+  - System Service & Driver Integration: SCM registered drivers for `ucsi` (`SERVICE_BOOT_START`), `usbc` (`SERVICE_BOOT_START`), and `ppm` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration.
+  - Interactive CLI: `ucsi` / `usbpd` / `titanucsi` / `usbc` (`status`, `ports` / `list`, `pd` / `power`, `cable`, `swap`).
 
 ---
 

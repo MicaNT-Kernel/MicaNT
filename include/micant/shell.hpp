@@ -153,6 +153,7 @@
 #include "usb4.hpp"
 #include "npu.hpp"
 #include "cxl.hpp"
+#include "ucsi.hpp"
 
 namespace micant::shell {
 
@@ -450,6 +451,7 @@ public:
             if (cmd == "usb4" || cmd == "thunderbolt" || cmd == "tbt" || cmd == "titanusb4") { cmdUsb4(tokens, out); return 0; }
             if (cmd == "npu" || cmd == "mcdm" || cmd == "titannpu" || cmd == "ai") { cmdNpu(tokens, out); return 0; }
             if (cmd == "cxl" || cmd == "cxlmem" || cmd == "cxlhost" || cmd == "cxlbus" || cmd == "titancxl") { cmdCxl(tokens, out); return 0; }
+            if (cmd == "ucsi" || cmd == "usbpd" || cmd == "titanucsi" || cmd == "usbc") { cmdUcsi(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -25990,6 +25992,132 @@ private:
             << "  cxl numa / tiering             Display Dynamic Memory Tiering (DMT) statistics\n"
             << "  cxl poison                     Query address poison containment list\n"
             << "  cxl mailbox                    Test CXL mailbox command interface\n";
+    }
+
+    void cmdUcsi(const std::vector<std::string>& tokens, std::ostream& out) {
+        ucsi::InitializeUcsiSubsystem();
+        auto& ucsiSub = ucsi::TitanUcsiSubsystem::Instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "ports" || sub == "connectors" || sub == "list") {
+            uint8_t count = ucsiSub.getConnectorCount();
+            out << "USB Type-C Connectors & Capabilities (" << static_cast<int>(count) << " Ports Available):\n"
+                << "-------------------------------------------------------------------------------\n";
+            for (uint8_t i = 1; i <= count; ++i) {
+                const auto* cap = ucsiSub.getConnectorCapability(i);
+                const auto* st = ucsiSub.getConnectorStatus(i);
+                if (cap && st) {
+                    out << "  Port " << static_cast<int>(i) << ": " << cap->connectorLocation << "\n"
+                        << "    State:               " << (st->isConnected ? "CONNECTED" : "DISCONNECTED") << "\n";
+                    if (st->isConnected) {
+                        out << "    Power Role:          " << (st->powerRole == ucsi::UcsiPowerRole::Sink ? "Sink (Charging Host)" : "Source (Supplying Device)") << "\n"
+                            << "    Data Role:           " << (st->dataRole == ucsi::UcsiDataRole::Dfp ? "DFP (Host)" : "UFP (Device)") << "\n"
+                            << "    Power Delivery:      " << (st->isPowerContractActive ? "ACTIVE CONTRACT" : "NO CONTRACT")
+                            << " [" << (st->currentPowerRange == ucsi::UsbPdPowerRange::ExtendedPowerRange_EPR ? "240W EPR" : "100W SPR") << "]\n"
+                            << "    Negotiated Contract: " << (st->negotiatedVoltageMv / 1000) << "V @ "
+                            << std::fixed << std::setprecision(1) << (st->negotiatedCurrentMa / 1000.0f) << "A ("
+                            << (st->negotiatedPowerMw / 1000) << " Watts)\n"
+                            << "    Alternate Mode:      " << (st->activeAltMode == ucsi::UsbAltMode::DisplayPort21_UHBR20 ? "DisplayPort 2.1 UHBR20" :
+                                                               st->activeAltMode == ucsi::UsbAltMode::Thunderbolt_USB4 ? "Thunderbolt / USB4" : "None (USB Only)") << "\n";
+                    }
+                    out << "    Supported Max Power: " << (cap->supportsEpr240W ? "240W (EPR 48V @ 5A)" : "100W (SPR 20V @ 5A)") << "\n"
+                        << "    Alt-Mode Support:    " << (cap->supportsDisplayPortAltMode ? "DisplayPort 2.1 " : "")
+                        << (cap->supportsThunderboltAltMode ? "Thunderbolt/USB4" : "") << "\n\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "pd" || sub == "power") {
+            out << "USB Power Delivery 3.1 Extended Power Range (240W EPR) Engine:\n"
+                << "-------------------------------------------------------------------------------\n";
+            uint8_t count = ucsiSub.getConnectorCount();
+            for (uint8_t i = 1; i <= count; ++i) {
+                const auto* cap = ucsiSub.getConnectorCapability(i);
+                if (cap) {
+                    out << "  Connector " << static_cast<int>(i) << " Power Data Objects (PDOs):\n";
+                    if (!cap->sinkCapabilities.empty()) {
+                        out << "    Sink PDOs (Inbound Power):\n";
+                        for (const auto& pdo : cap->sinkCapabilities) {
+                            out << "      - " << (pdo.type == ucsi::UsbPdPdoType::AdjustableVoltageSupply ? "AVS (Adjustable): " : "Fixed Supply:    ")
+                                << (pdo.voltageMillivolts / 1000) << "V @ "
+                                << (pdo.maxCurrentMilliamps / 1000) << "A ("
+                                << (pdo.maxPowerMilliwatts / 1000) << "W) ["
+                                << (pdo.powerRange == ucsi::UsbPdPowerRange::ExtendedPowerRange_EPR ? "EPR" : "SPR") << "]\n";
+                        }
+                    }
+                    if (!cap->sourceCapabilities.empty()) {
+                        out << "    Source PDOs (Outbound Power):\n";
+                        for (const auto& pdo : cap->sourceCapabilities) {
+                            out << "      - Fixed Supply:    "
+                                << (pdo.voltageMillivolts / 1000) << "V @ "
+                                << (pdo.maxCurrentMilliamps / 1000) << "A ("
+                                << (pdo.maxPowerMilliwatts / 1000) << "W)\n";
+                        }
+                    }
+                    out << "\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "cable") {
+            out << "USB Type-C Cable E-Marker & Physical Media Discovery:\n"
+                << "-------------------------------------------------------------------------------\n";
+            uint8_t count = ucsiSub.getConnectorCount();
+            for (uint8_t i = 1; i <= count; ++i) {
+                const auto* cb = ucsiSub.getCableInfo(i);
+                if (cb) {
+                    out << "  Port " << static_cast<int>(i) << " Cable:\n"
+                        << "    E-Marker Chip:       " << (cb->hasElectronicMarker ? "PRESENT (SOP' Responded)" : "ABSENT / Standard Cable") << "\n"
+                        << "    Manufacturer:        " << cb->manufacturer << "\n"
+                        << "    Cable Model:         " << cb->cableModel << "\n"
+                        << "    Voltage / Current:   " << (cb->maxVoltageMillivolts / 1000) << "V / " << (cb->maxCurrentMilliamps / 1000) << "A\n"
+                        << "    240W EPR Rated:      " << (cb->isEprCapable ? "YES (50V 5A Specification)" : "NO (100W Standard)") << "\n"
+                        << "    Maximum Data Speed:  " << cb->maxDataSpeedGbps << " Gbps\n\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "swap") {
+            if (tokens.size() > 3) {
+                uint8_t p = static_cast<uint8_t>(std::atoi(tokens[2].c_str()));
+                std::string swapType = tokens[3];
+                bool pr = (swapType == "power" || swapType == "all");
+                bool dr = (swapType == "data" || swapType == "all");
+                bool ok = ucsiSub.executeRoleSwap(p, pr, dr);
+                out << "Role swap execution on Port " << static_cast<int>(p) << ": " << (ok ? "SUCCESS" : "FAILED / UNSUPPORTED") << "\n";
+                return;
+            }
+            out << "Usage: ucsi swap <port_number> <power|data|all>\n";
+            return;
+        }
+
+        // Default: status
+        uint32_t maj = 0, min = 0;
+        ucsiSub.getVersion(&maj, &min);
+        const auto& telem = ucsiSub.getTelemetry();
+
+        out << "USB Type-C Connector System Software Interface (UCSI) Posture:\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "  UCSI Specification:            UCSI Revision " << maj << "." << min << " (USB-IF)\n"
+            << "  ACPI Interface Device:         \\_SB.UBTC (USBC000 / PNP0CA0)\n"
+            << "  Kernel Driver Subsystem:       ucsi.sys, usbc.sys, ppm.sys (All Active)\n"
+            << "  Total Type-C Ports:            " << static_cast<int>(ucsiSub.getConnectorCount()) << " Ports Managed by Platform Policy Manager\n"
+            << "  Active 240W EPR Contracts:     " << telem.totalEprContractsActive << " Active EPR Contracts\n"
+            << "  Total Power Contracts Active:  " << telem.totalPowerContractsNegotiated << " Negotiated Contracts\n"
+            << "  Total PPM Commands Executed:   " << telem.totalCommandsExecuted << "\n"
+            << "  Total Role Swaps Completed:    " << telem.totalRoleSwapsExecuted << "\n"
+            << "  System DC Input Power:         " << std::fixed << std::setprecision(1) << telem.currentSystemPowerInputWatts << " Watts (Charging)\n"
+            << "  System Peripheral Output:      " << telem.currentSystemPowerOutputWatts << " Watts (Outbound VBUS)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  ucsi status                    Display UCSI platform status and power telemetry\n"
+            << "  ucsi ports / list              Inspect all Type-C ports, roles, and status\n"
+            << "  ucsi pd / power                Display USB PD 3.1 Power Data Objects (PDOs)\n"
+            << "  ucsi cable                     Inspect cable electronic marker (E-Marker) telemetry\n"
+            << "  ucsi swap <port> <power|data>  Execute dynamic role swap (PR_SWAP / DR_SWAP)\n";
     }
 
     static std::string trim(std::string_view s) {

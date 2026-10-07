@@ -257,6 +257,7 @@ To guarantee total clean-room independence and prevent name collisions with clos
 - **TitanUSB4 / NexusUSB4**: Windows USB4 2.0 & Thunderbolt 4 Protocol Tunneling Subsystem (`usb4host.sys`, `thunderbolt.sys`, `usb4router.sys`), 80 Gbps symmetric PAM3 and 120 Gbps asymmetric PAM3 (120G Tx / 40G Rx) physical layer signaling, native PCIe tunneling for external GPUs (eGPUs) and NVMe storage arrays, DisplayPort 2.1 UHBR20 video tunneling, SuperSpeed USB 3.2 tunneling, credit-based flow control, dynamic path management (`USB4_PATH`), Thunderbolt DMA Security Levels (SL0..SL3) with cryptographic peripheral authorization, and Arrow Lake USB4 Host Router (BDF 00:07.0).
 - **TitanNPU / NexusNPU**: Windows Neural Processing Unit (NPU) & Microsoft Compute Driver Model (MCDM 1.0/2.0) Subsystem (`mcdm.sys`, `npu.sys`, `titannpu.sys`), dedicated Copilot+ PC AI silicon acceleration, headless compute command queues (`McdmCommandQueue`), 64-bit monotonic fence synchronization (`McdmFence`), 4-tile NCE array @ 1600 MHz with 16MB on-chip dedicated SRAM delivering 48.0 INT8 TOPS / 24.0 FP16 TFLOPS (exceeding Microsoft's 40 TOPS Copilot+ requirement), native INT4/INT8/FP8/FP16/BF16/FP32 precision execution, DirectML/ONNX hardware execution for Small Language Models (Phi-3 Mini 4K, LLaMA-3 8B INT4) and real-time DirectSR super-resolution (240 FPS), dynamic power management (D0..D3), and Arrow Lake NPU 4000 PCIe accelerator (BDF 00:08.0).
 - **TitanCXL / NexusCXL**: Compute Express Link (CXL 2.0 / 3.1) & Heterogeneous Memory Fabric Subsystem (`cxlhost.sys`, `cxlmem.sys`, `cxlbus.sys`), next-generation server, workstation, and AI PC interconnect, CXL.io (PCIe 5.0/6.0 configuration, enumeration, AER, and DMA), CXL.cache (ultra-low latency coherent device caching of host memory), CXL.mem (byte-addressable host access to device memory), Type 1/2/3 device support, Host-Managed Device Memory (HDM) Decoders 0..3 with System Physical Address (SPA) mapping, Dynamic Memory Tiering (DMT) & NUMA Node 1 expansion (128GB capacity, ~140ns read latency, 64 GB/s PCIe Gen5 x16 bandwidth) with hot/cold page migration, CXL Mailbox command processing (`IDENTIFY_MEMORY_DEVICE`, `GET_SMART_HEALTH`, `GET_POISON_LIST`), Address Poisoning fault containment (64-byte cache line isolation), and CXL Host Bridge (BDF 00:09.0) bridging to Bus 4.
+- **TitanUCSI / NexusUCSI**: USB Type-C Connector System Software Interface (UCSI 2.1 / 3.0) & USB Power Delivery 3.1 Subsystem (`ucsi.sys`, `usbc.sys`, `ppm.sys`), ACPI mailbox interface (`\_SB.UBTC` `PNP0CA0` / `USBC000`), 4 physical Type-C connectors, USB PD 3.1 Extended Power Range (EPR) up to 240W (48V @ 5A), Adjustable Voltage Supply (AVS 15V-48V in 100mV steps), Cable Electronic Marker (E-Marker) SOP' discovery, and dynamic role negotiation (`PR_SWAP` / `DR_SWAP`).
 
 👉 For complete architectural specifications and namespace conventions, see **[docs/SOVEREIGN_TAXONOMY.md](docs/SOVEREIGN_TAXONOMY.md)**.
 
@@ -286,12 +287,12 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 node tools/codegen/generate_syscalls.js
 ```
 
-### Build & Run Unit Test Suite (162 Suites, 100% Passing)
+### Build & Run Unit Test Suite (163 Suites, 100% Passing)
 ```bash
 # With MSVC Developer Prompt:
 cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
 
-# Run all 162 Test Suites:
+# Run all 163 Test Suites:
 .\bin\micant_tests.exe
 ```
 
