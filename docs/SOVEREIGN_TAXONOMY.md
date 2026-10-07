@@ -61,6 +61,7 @@ These names:
 | **Intel Thread Director & AMD CPPC Heterogeneous Scheduling Subsystem** | **TitanDirector / AegisScheduler** | `micant::hfi` | `hfi.hpp` | Clean-room Intel Hardware Feedback Interface (HFI / Thread Director) and AMD Collaborative Processor Performance Control (CPPC v2/v3) heterogeneous CPU scheduling subsystem (`intel_hfi.sys`, `amd_cppc.sys`), 24 logical cores (8 P-Cores, 14 E-Cores, 2 LP E-Cores on SoC island), 5-class thread classification (`Class0_Standard` .. `Class4_Background`), autonomous core parking, EPP policy, and sub-50ns thread dispatch latency. |
 | **Intel CET & Hardware-Enforced Stack Protection Subsystem** | **TitanCET / AegisCET** | `micant::cet` | `cet.hpp` | Clean-room Intel Control-flow Enforcement Technology (CET) and AMD Shadow Stack subsystem (`kshadowstack.sys`, `cet.sys`), dual-stack hardware execution, hardware `#CP` Vector 21 exception dispatch, Indirect Branch Tracking (IBT `ENDBR64`), ROP/COP/JOP mitigation, restore tokens, and sub-5ns call/ret validation latency. |
 | **Intel QAT Hardware Offload Subsystem** | **TitanQAT / NexusQAT** | `micant::qat` | `qat.hpp` | Clean-room Intel QuickAssist Technology (QAT 2.0 / 4xxx) cryptographic & compression accelerator (`intel_qat.sys`, `qat_crypto.sys`, `qat_comp.sys`, PCIe `00:0A.0`), 10 acceleration engines (4 Sym Crypto, 2 Asym PKE, 4 Compression), 16 SR-IOV VFs, zero-copy ring queue pairs with doorbells, and wire-speed offload (>400 Gbps crypto, >160 Gbps comp). |
+| **Intel SGX/TDX & AMD SEV-SNP Confidential Computing Subsystem** | **TitanTEE / AegisTEE** | `micant::tee` | `tee.hpp` | Clean-room hardware Trusted Execution Environment (TEE) and Confidential Computing subsystem (`virtenclave.sys`, `isv_enclave.sys`, `confidential_vm.sys`), Intel SGX 1/2 enclaves, Intel TDX 1.5 Trust Domains, AMD SEV-SNP memory protection, 512 MB EPC with AES-256-XTS MEE, EPCM tracking, AEX state scrubbing, and ECDSA-P384 attestation reports. |
 
 ---
 
@@ -690,6 +691,24 @@ These names:
     - Zero-copy DMA transfers and asynchronous doorbell ring buffers delivering > 400 Gbps crypto and > 160 Gbps compression throughput.
   - System Service & Driver Integration: SCM registered drivers for `intel_qat` (`SERVICE_BOOT_START`), `qat_crypto` (`SERVICE_SYSTEM_START`), and `qat_comp` (`SERVICE_SYSTEM_START`), dynamic loader exports, and Version Database registration (`intel_qat.sys` 10.0.26100.1).
   - Interactive CLI: `qat` / `quickassist` / `titanqat` / `nexusqat` (`status`, `engines`, `crypto`, `comp`, `bench` / `benchmark`).
+
+### 3.45 TitanTEE & AegisTEE (Intel SGX / TDX & AMD SEV-SNP Confidential Computing Subsystem)
+- **Role:** Sovereign hardware Trusted Execution Environment (TEE) and Confidential Computing architecture implementing Intel SGX 1/2, Intel TDX 1.5, AMD SEV-SNP, and Microsoft VBS enclaves (`virtenclave.sys`, `isv_enclave.sys`, `confidential_vm.sys`).
+- **Capabilities:**
+  - Standard TEE Driver C ABI exports (`virtenclave.sys`, `isv_enclave.sys`, `confidential_vm.sys`): `TeeInitialize`, `TeeGetVersion`, `TeeGetCapabilities`, `TeeCreateEnclave`, `TeeLoadEnclaveData`, `TeeInitializeEnclave`, `TeeEnterEnclave`, `TeeGenerateAttestationReport`, `TeeVerifyAttestationReport`, `TeeGetTelemetry`.
+  - Enclave Page Cache (EPC) & Memory Encryption Engine (MEE):
+    - 512 MB physical EPC aperture protected by AES-256-XTS on-die memory controller.
+    - Hardware Enclave Page Cache Map (EPCM) tracking page types (PT_SECS, PT_TCS, PT_REG, PT_VA, PT_TRIM), virtual addresses, and access permissions.
+  - Multi-Architecture Hardware Isolation:
+    - Intel SGX 1/2: Ring 3 userland enclave lifecycle (`ECREATE`, `EADD`, `EEXTEND` SHA-256, `EINIT`, `EENTER`, `EEXIT`, `ERESUME`) with State Save Area (SSA) and Asynchronous Enclave Exit (AEX) state scrubbing.
+    - Intel TDX 1.5: Hardware-isolated Trust Domain virtual machines with multi-register runtime measurement (MRTD and RTMR 0..3).
+    - AMD SEV-SNP: Hardware Reverse Map Tables (RMP) preventing memory aliasing and Virtual Machine Privilege Levels (VMPL 0..3).
+  - Cryptographic Attestation Engine:
+    - Hardware Root-of-Trust ECDSA-P384 signatures bound to runtime user nonce `report_data` with tamper detection.
+  - Sub-100ns Hardware Transition Latency:
+    - Microsecond-level enclave creation and sub-100ns context entry/exit switches.
+  - System Service & Driver Integration: SCM registered drivers for `virtenclave` (`SERVICE_BOOT_START`), `isv_enclave` (`SERVICE_AUTO_START`), and `confidential_vm` (`SERVICE_AUTO_START`), dynamic loader exports, and Version Database registration (`virtenclave.sys` 10.0.26100.1).
+  - Interactive CLI: `tee` / `enclave` / `sgx` / `tdx` / `sevsnp` / `titantee` / `aegistee` (`status`, `enclaves`, `create`, `attest`, `bench` / `benchmark`).
 
 ---
 

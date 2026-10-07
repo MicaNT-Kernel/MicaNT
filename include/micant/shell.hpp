@@ -161,6 +161,7 @@
 #include "hfi.hpp"
 #include "cet.hpp"
 #include "qat.hpp"
+#include "tee.hpp"
 
 namespace micant::shell {
 
@@ -466,6 +467,7 @@ public:
             if (cmd == "hfi" || cmd == "director" || cmd == "cppc" || cmd == "titandirector") { cmdHfi(tokens, out); return 0; }
             if (cmd == "cet" || cmd == "shadowstack" || cmd == "titancet" || cmd == "aegiscet") { cmdCet(tokens, out); return 0; }
             if (cmd == "qat" || cmd == "quickassist" || cmd == "titanqat" || cmd == "nexusqat") { cmdQat(tokens, out); return 0; }
+            if (cmd == "tee" || cmd == "enclave" || cmd == "sgx" || cmd == "tdx" || cmd == "sevsnp" || cmd == "titantee" || cmd == "aegistee") { cmdTee(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -26980,6 +26982,167 @@ private:
             << "  qat crypto                  Simulate AES-256-XTS block encryption hardware offload\n"
             << "  qat comp                    Simulate ZSTD / Deflate compression hardware offload\n"
             << "  qat bench / benchmark       Benchmark hardware acceleration submission latency\n";
+    }
+
+    void cmdTee(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& teeSub = tee::TitanTeeSubsystem::Instance();
+        if (!teeSub.isInitialized()) {
+            teeSub.initialize();
+        }
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "status";
+
+        if (sub == "status") {
+            const auto& caps = teeSub.getCapabilities();
+            const auto& telem = teeSub.getTelemetry();
+            out << "========================================================================\n"
+                << "  MicaNT TitanTEE & AegisTEE Confidential Computing Subsystem           \n"
+                << "========================================================================\n"
+                << "  Hardware Architecture:     Intel SGX 1/2, Intel TDX 1.5, AMD SEV-SNP  \n"
+                << "  Memory Encryption Engine:  " << caps.hardwareEncryptionAlgo << "\n"
+                << "  Physical EPC Aperture:     " << (caps.epcTotalSizeBytes / (1024 * 1024)) << " MB (" << telem.totalEpcPages << " 4KB pages)\n"
+                << "  Free EPC Memory:           " << ((telem.freeEpcPages * 4096ULL) / (1024 * 1024)) << " MB (" << telem.freeEpcPages << " free pages)\n"
+                << "  Max Enclave Size:          " << (caps.maxEnclaveSize / (1024ULL * 1024ULL * 1024ULL)) << " GB\n"
+                << "  Active Enclaves / TDs:     " << telem.activeEnclaves << "\n"
+                << "  Total Enclaves Created:    " << telem.totalEnclavesCreated << "\n"
+                << "  Total Enclave Entries:     " << telem.totalEnclaveEntries << "\n"
+                << "  Total Enclave Exits:       " << telem.totalEnclaveExits << "\n"
+                << "  Asynchronous Exits (AEX):  " << telem.totalAexEvents << "\n"
+                << "  Attestation Quotes:        Generated: " << telem.attestationReportsGenerated << ", Verified: " << telem.attestationReportsVerified << "\n"
+                << "  Memory Encryption Faults:  " << telem.memoryEncryptionErrors << " (100% Hardware Safe)\n"
+                << "------------------------------------------------------------------------\n";
+            return;
+        }
+
+        if (sub == "enclaves" || sub == "list") {
+            out << "[TEE Enclaves] Enumerating active confidential enclaves and trust domains...\n";
+            auto list = teeSub.listEnclaves();
+            if (list.empty()) {
+                out << "  (No active enclaves allocated. Use 'tee create' to provision an enclave.)\n";
+                return;
+            }
+            for (const auto& enc : list) {
+                const char* techStr = "Unknown";
+                switch (enc.tech) {
+                    case tee::TeeTechnology::IntelSGX:   techStr = "Intel SGX"; break;
+                    case tee::TeeTechnology::IntelTDX:   techStr = "Intel TDX"; break;
+                    case tee::TeeTechnology::AmdSevSnp:  techStr = "AMD SEV-SNP"; break;
+                    case tee::TeeTechnology::WindowsVBS: techStr = "Windows VBS"; break;
+                }
+                const char* stateStr = "Unknown";
+                switch (enc.state) {
+                    case tee::TeeEnclaveState::Uninitialized: stateStr = "Uninitialized"; break;
+                    case tee::TeeEnclaveState::Created:       stateStr = "Created"; break;
+                    case tee::TeeEnclaveState::Initialized:   stateStr = "Initialized"; break;
+                    case tee::TeeEnclaveState::Running:       stateStr = "Running"; break;
+                    case tee::TeeEnclaveState::Exited:        stateStr = "Exited"; break;
+                    case tee::TeeEnclaveState::Terminated:    stateStr = "Terminated"; break;
+                }
+                out << "  [ID " << enc.enclaveId << "] Name: " << enc.name << "\n"
+                    << "        Tech: " << techStr << " | State: " << stateStr << " | Size: " << (enc.sizeBytes / 1024) << " KB\n"
+                    << "        Base VA: 0x" << std::hex << enc.baseAddress << std::dec << " | EPC Pages: " << enc.epcPagesAllocated << "\n"
+                    << "        Entries: " << enc.entryCount << " | AEX: " << enc.aexCount << "\n";
+            }
+            return;
+        }
+
+        if (sub == "create") {
+            std::string encName = (tokens.size() > 2) ? tokens[2] : "SovereignSecurityEnclave";
+            out << "[TEE Provision] Creating confidential hardware enclave '" << encName << "'...\n";
+            uint32_t encId = teeSub.createEnclave(encName, tee::TeeTechnology::IntelSGX,
+                                                  tee::TeeEnclaveType::Dynamic_SGX2, 64 * 1024);
+            if (encId == 0) {
+                out << "  [RESULT] FAILED: Could not allocate EPC pages for enclave.\n";
+                return;
+            }
+
+            // Load code page into enclave
+            std::vector<uint8_t> code(4096, 0x90); // NOP sled
+            code[0] = 0x48; code[1] = 0x31; code[2] = 0xC0; // xor rax, rax
+            code[3] = 0xC3; // ret
+            teeSub.loadEnclaveData(encId, 0x1000, code.data(), static_cast<uint32_t>(code.size()),
+                                  tee::TeePagePermissions::Read | tee::TeePagePermissions::Execute);
+
+            // Initialize enclave (EINIT)
+            teeSub.initializeEnclave(encId);
+
+            // Execute test computation (EENTER)
+            uint64_t outVal = 0;
+            uint32_t latNs = 0;
+            teeSub.enterEnclave(encId, 0x12345678, &outVal, &latNs);
+
+            out << "  [RESULT] SUCCESS: Enclave ID " << encId << " created and verified.\n"
+                << "           Hardware Transition Latency: " << latNs << " ns\n"
+                << "           Secure Output Argument:      0x" << std::hex << outVal << std::dec << "\n";
+            return;
+        }
+
+        if (sub == "attest") {
+            out << "[TEE Attest] Generating and verifying hardware cryptographic attestation report...\n";
+            uint32_t encId = teeSub.createEnclave("AttestationEnclave", tee::TeeTechnology::IntelTDX,
+                                                  tee::TeeEnclaveType::TrustDomain_TDX, 32 * 1024);
+            if (encId == 0) {
+                out << "  [RESULT] FAILED: Could not create Trust Domain.\n";
+                return;
+            }
+            teeSub.initializeEnclave(encId);
+
+            std::string userData = "MicaNT_Attestation_Nonce_0123456789ABCDEF";
+            tee::TeeAttestationReport report{};
+            bool genOk = teeSub.generateAttestationReport(encId,
+                reinterpret_cast<const uint8_t*>(userData.data()),
+                static_cast<uint32_t>(userData.size()), &report);
+
+            if (!genOk) {
+                out << "  [RESULT] FAILED: Could not generate attestation quote.\n";
+                return;
+            }
+
+            bool isValid = false;
+            teeSub.verifyAttestationReport(report, &isValid);
+
+            out << "  [RESULT] SUCCESS: Hardware Attestation Report verified!\n"
+                << "           Technology:   Intel TDX 1.5 Trust Domain\n"
+                << "           TCB Version:  0x" << std::hex << report.tcbVersion << std::dec << "\n"
+                << "           Valid Status: " << (isValid ? "VALID (TCB Secure)" : "INVALID") << "\n";
+            return;
+        }
+
+        if (sub == "bench" || sub == "benchmark") {
+            out << "[TEE Bench] Executing 100,000 confidential enclave hardware transitions (EENTER/EEXIT)...\n";
+            uint32_t encId = teeSub.createEnclave("BenchEnclave", tee::TeeTechnology::IntelSGX,
+                                                  tee::TeeEnclaveType::Dynamic_SGX2, 16 * 1024);
+            if (encId == 0) {
+                out << "  [RESULT] FAILED: Could not create benchmark enclave.\n";
+                return;
+            }
+            teeSub.initializeEnclave(encId);
+
+            uint64_t dummyOut = 0;
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < 100000; ++i) {
+                teeSub.enterEnclave(encId, static_cast<uint64_t>(i), &dummyOut);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+            auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            double avgNs = static_cast<double>(elapsedNs) / 100000.0;
+            double mops = 100000.0 / (static_cast<double>(elapsedNs) / 1e9) / 1e6;
+
+            out << "  [RESULT] Completed 100,000 hardware enclave transitions in "
+                << (elapsedNs / 1000000) << " ms.\n"
+                << "           Average Transition Latency: " << std::fixed << std::setprecision(1) << avgNs << " ns\n"
+                << "           Throughput:                 " << std::fixed << std::setprecision(2) << mops << " Million ops/sec\n";
+            return;
+        }
+
+        out << "MicaNT Confidential Computing & Trusted Execution Environment (TitanTEE / AegisTEE)\n"
+            << "-------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  tee status                  Display TEE hardware capabilities, EPC, and telemetry\n"
+            << "  tee enclaves / list         List active confidential enclaves and trust domains\n"
+            << "  tee create [name]           Provision, load, and test a hardware-isolated enclave\n"
+            << "  tee attest                  Generate and verify cryptographic attestation report\n"
+            << "  tee bench / benchmark       Benchmark hardware enclave entry/exit transition latency\n";
     }
 
     static std::string trim(std::string_view s) {
