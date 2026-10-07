@@ -65,13 +65,9 @@ using WDFTIMER    = void*;
 using WDFIOTARGET = void*;
 using WDFCONTEXT  = void*;
 
-using BOOLEAN = uint8_t;
-#ifndef TRUE
-inline constexpr BOOLEAN TRUE  = 1;
-#endif
-#ifndef FALSE
-inline constexpr BOOLEAN FALSE = 0;
-#endif
+using micant::BOOLEAN;
+using micant::TRUE;
+using micant::FALSE;
 
 // Status Codes (NTSTATUS mapping)
 inline constexpr NTSTATUS STATUS_WDF_TOO_MANY_HANDLES      = static_cast<NTSTATUS>(0xC0200001);

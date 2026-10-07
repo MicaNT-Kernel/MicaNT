@@ -180,6 +180,7 @@
 #include "micant/amx.hpp"
 #include "micant/sriov.hpp"
 #include "micant/iommu.hpp"
+#include "micant/uefi_rt.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -39839,8 +39840,217 @@ void Test_HardwareIOMMU_VTd_AMDVi_DMA_Remapping_Subsystem() {
     std::cout << "[TEST] Suite 175: Hardware-Accelerated IOMMU (Intel VT-d / AMD-Vi / Arm SMMUv3) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 176: UEFI Runtime Services, ESRT & Firmware Capsule Update Subsystem
+// UEFI 2.10 / NIST SP 800-193 Platform Firmware Resiliency (TitanUEFI / AegisCapsule)
+// ============================================================================
+void Test_WindowsUEFI_RuntimeServices_CapsuleUpdate_Subsystem() {
+    std::cout << "\n--- [Suite 176] UEFI Runtime Services, ESRT & Capsule Update Subsystem ---\n";
+
+    auto& uefiMgr = micant::uefi::UefiRuntimeManager::getInstance();
+    uefiMgr.reset();
+
+    // Stage 1: Version Database & Module Identity
+    auto& verDb = micant::version::VersionDatabase::Instance();
+    const auto* modRt = verDb.GetModuleInfo("uefi_rt.sys");
+    TEST_ASSERT(modRt != nullptr, "uefi_rt.sys must be registered in VersionDatabase");
+    TEST_ASSERT(modRt->stringTable.at("ProductVersion") == "10.0.26100.1", "uefi_rt.sys version must match 10.0.26100.1");
+
+    const auto* modCap = verDb.GetModuleInfo("capsule.sys");
+    TEST_ASSERT(modCap != nullptr, "capsule.sys must be registered in VersionDatabase");
+    TEST_ASSERT(modCap->stringTable.at("ProductVersion") == "10.0.26100.1", "capsule.sys version must match 10.0.26100.1");
+
+    const auto* modEsrt = verDb.GetModuleInfo("esrt.sys");
+    TEST_ASSERT(modEsrt != nullptr, "esrt.sys must be registered in VersionDatabase");
+
+    const auto* modFwExe = verDb.GetModuleInfo("fwupdate.exe");
+    TEST_ASSERT(modFwExe != nullptr, "fwupdate.exe must be registered in VersionDatabase");
+
+    // Stage 2: SCM Boot & System Driver Service Registration
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto rtSvc = scm.getServiceRecord(L"uefi_rt");
+    TEST_ASSERT(rtSvc != nullptr, "uefi_rt service must be registered in SCM");
+    TEST_ASSERT(rtSvc->startType == micant::scm::SERVICE_BOOT_START, "uefi_rt must be SERVICE_BOOT_START");
+
+    auto capSvc = scm.getServiceRecord(L"capsule");
+    TEST_ASSERT(capSvc != nullptr, "capsule service must be registered in SCM");
+    TEST_ASSERT(capSvc->startType == micant::scm::SERVICE_SYSTEM_START, "capsule must be SERVICE_SYSTEM_START");
+
+    auto esrtSvc = scm.getServiceRecord(L"esrt");
+    TEST_ASSERT(esrtSvc != nullptr, "esrt service must be registered in SCM");
+    TEST_ASSERT(esrtSvc->startType == micant::scm::SERVICE_BOOT_START, "esrt must be SERVICE_BOOT_START");
+
+    // Stage 3: Core UEFI Variable Query (GetVariable)
+    uint8_t sbVal = 0;
+    size_t sbSize = sizeof(sbVal);
+    uint32_t sbAttrs = 0;
+    micant::uefi::EFI_STATUS sbStat = uefiMgr.getVariable("SecureBoot", micant::uefi::EFI_GLOBAL_VARIABLE_GUID,
+                                                          &sbAttrs, &sbVal, &sbSize);
+    TEST_ASSERT(sbStat == micant::uefi::EFI_SUCCESS, "GetVariable(SecureBoot) must return EFI_SUCCESS");
+    TEST_ASSERT(sbVal == 1, "SecureBoot must be 1 (Enabled)");
+    TEST_ASSERT((sbAttrs & micant::uefi::EFI_VARIABLE_RUNTIME_ACCESS) != 0, "SecureBoot must have RUNTIME_ACCESS attribute");
+
+    uint8_t bootCur[2] = {0};
+    size_t bcSize = sizeof(bootCur);
+    uint32_t bcAttrs = 0;
+    micant::uefi::EFI_STATUS bcStat = uefiMgr.getVariable("BootCurrent", micant::uefi::EFI_GLOBAL_VARIABLE_GUID,
+                                                          &bcAttrs, bootCur, &bcSize);
+    TEST_ASSERT(bcStat == micant::uefi::EFI_SUCCESS, "GetVariable(BootCurrent) must succeed");
+    TEST_ASSERT(bootCur[0] == 0x01, "BootCurrent index must be 1 (MicaNT OS Loader)");
+
+    // Stage 4: Dynamic Variable Creation & Read-Back (SetVariable -> GetVariable)
+    std::string testVarName = "MicaBootConfig";
+    std::vector<uint8_t> testPayload = {'M', 'I', 'C', 'A', '_', 'O', 'S', '_', '2', '0', '2', '6'};
+    uint32_t testAttrs = micant::uefi::EFI_VARIABLE_BOOTSERVICE_ACCESS |
+                         micant::uefi::EFI_VARIABLE_RUNTIME_ACCESS |
+                         micant::uefi::EFI_VARIABLE_NON_VOLATILE;
+
+    micant::uefi::EFI_STATUS setStat = uefiMgr.setVariable(testVarName, micant::uefi::EFI_GLOBAL_VARIABLE_GUID,
+                                                           testAttrs, testPayload.data(), testPayload.size());
+    TEST_ASSERT(setStat == micant::uefi::EFI_SUCCESS, "setVariable for MicaBootConfig must succeed");
+
+    std::vector<uint8_t> readBuf(64, 0);
+    size_t readSize = readBuf.size();
+    uint32_t readAttrs = 0;
+    micant::uefi::EFI_STATUS getStat = uefiMgr.getVariable(testVarName, micant::uefi::EFI_GLOBAL_VARIABLE_GUID,
+                                                           &readAttrs, readBuf.data(), &readSize);
+    TEST_ASSERT(getStat == micant::uefi::EFI_SUCCESS, "getVariable for MicaBootConfig must succeed");
+    TEST_ASSERT(readSize == testPayload.size(), "Read size must match written size");
+    TEST_ASSERT(readAttrs == testAttrs, "Read attributes must match written attributes");
+    TEST_ASSERT(std::memcmp(readBuf.data(), testPayload.data(), testPayload.size()) == 0, "Read payload must match written payload");
+
+    // Stage 5: Variable Deletion via Zero-Size SetVariable
+    micant::uefi::EFI_STATUS delStat = uefiMgr.setVariable(testVarName, micant::uefi::EFI_GLOBAL_VARIABLE_GUID,
+                                                           testAttrs, nullptr, 0);
+    TEST_ASSERT(delStat == micant::uefi::EFI_SUCCESS, "Deleting variable via size 0 must return EFI_SUCCESS");
+
+    size_t checkSize = 32;
+    micant::uefi::EFI_STATUS checkStat = uefiMgr.getVariable(testVarName, micant::uefi::EFI_GLOBAL_VARIABLE_GUID,
+                                                             nullptr, readBuf.data(), &checkSize);
+    TEST_ASSERT(checkStat == micant::uefi::EFI_NOT_FOUND, "Deleted variable must return EFI_NOT_FOUND");
+
+    // Stage 6: Authenticated Variable Protection (PK / KEK / db / dbx)
+    std::vector<uint8_t> rogueKey = {'R', 'O', 'G', 'U', 'E'};
+    // Attempting to overwrite PK without authentication or setup mode must fail
+    micant::uefi::EFI_STATUS authViolStat = uefiMgr.setVariable("PK", micant::uefi::EFI_IMAGE_SECURITY_DATABASE_GUID,
+                                                                testAttrs, rogueKey.data(), rogueKey.size());
+    TEST_ASSERT(authViolStat == micant::uefi::EFI_SECURITY_VIOLATION, "Unauthenticated write to PK must return EFI_SECURITY_VIOLATION");
+    TEST_ASSERT(uefiMgr.getTelemetry().TotalAuthFailures >= 1, "TotalAuthFailures telemetry must be incremented");
+
+    // Stage 7: Query Variable Info (Storage Capacity & Free Space)
+    uint64_t maxStorage = 0, remainingStorage = 0, maxVarSize = 0;
+    micant::uefi::EFI_STATUS qStat = uefiMgr.queryVariableInfo(testAttrs, &maxStorage, &remainingStorage, &maxVarSize);
+    TEST_ASSERT(qStat == micant::uefi::EFI_SUCCESS, "queryVariableInfo must succeed");
+    TEST_ASSERT(maxStorage == 256 * 1024, "Max storage must be 256KB");
+    TEST_ASSERT(remainingStorage > 0 && remainingStorage < maxStorage, "Remaining storage must reflect used variables");
+    TEST_ASSERT(maxVarSize == 32 * 1024, "Max single variable size must be 32KB");
+
+    // Stage 8: Variable Enumeration (GetNextVariableName)
+    std::string enumName = "";
+    std::string enumGuid = "";
+    size_t enumNameSize = 256;
+    int varCount = 0;
+    while (uefiMgr.getNextVariableName(&enumNameSize, enumName, enumGuid) == micant::uefi::EFI_SUCCESS) {
+        varCount++;
+        enumNameSize = 256;
+        if (varCount > 20) break; // Safeguard
+    }
+    TEST_ASSERT(varCount >= 8, "Variable table must enumerate at least 8 pre-seeded variables");
+
+    // Stage 9: EFI System Resource Table (ESRT) Discovery
+    auto esrtTable = uefiMgr.getEsrtTable();
+    TEST_ASSERT(esrtTable.size() == 4, "ESRT catalog must contain exactly 4 pre-seeded firmware entries");
+
+    micant::uefi::EfiSystemResourceEntry biosEntry{};
+    bool foundBios = uefiMgr.getResourceEntry("{A01B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}", biosEntry);
+    TEST_ASSERT(foundBios, "System BIOS resource must be found in ESRT");
+    TEST_ASSERT(biosEntry.FwType == micant::uefi::ESRT_FW_TYPE_SYSTEM, "System BIOS must have type ESRT_FW_TYPE_SYSTEM");
+    TEST_ASSERT(biosEntry.FwVersion == 0x02040000, "Initial BIOS version must be 2.4.0 (0x02040000)");
+    TEST_ASSERT(biosEntry.LowestSupportedFwVersion == 0x02000000, "Lowest supported version must be 2.0.0 (anti-rollback floor)");
+
+    // Stage 10: Firmware Capsule Staging & Anti-Rollback Invariant Enforcement (NIST SP 800-193)
+    micant::uefi::EfiCapsuleHeader capHeader;
+    capHeader.CapsuleGuid = biosEntry.FwClass;
+    capHeader.Flags = micant::uefi::CAPSULE_FLAGS_PERSIST_ACROSS_RESET;
+    capHeader.CapsuleImageSize = 2 * 1024 * 1024; // 2MB image
+
+    // Test A: Rollback Attack Simulation (Try flashing v1.9.0 which is < lowest supported 2.0.0)
+    std::vector<uint8_t> dummyFw(1024, 0x55);
+    micant::uefi::EFI_STATUS rollbackStat = uefiMgr.stageCapsule(capHeader, 0x01090000, dummyFw, true);
+    TEST_ASSERT(rollbackStat == micant::uefi::EFI_SECURITY_VIOLATION, "Downgrade below LowestSupportedFwVersion must return EFI_SECURITY_VIOLATION");
+
+    micant::uefi::EfiSystemResourceEntry biosAfterRollback{};
+    uefiMgr.getResourceEntry(biosEntry.FwClass, biosAfterRollback);
+    TEST_ASSERT(biosAfterRollback.LastAttemptStatus == micant::uefi::LAST_ATTEMPT_STATUS_ERROR_VERSION_ROLLBACK,
+                "LastAttemptStatus must record LAST_ATTEMPT_STATUS_ERROR_VERSION_ROLLBACK");
+    TEST_ASSERT(uefiMgr.getTelemetry().TotalRollbackRejections >= 1, "TotalRollbackRejections must be incremented");
+
+    // Test B: Invalid Signature Rejection
+    micant::uefi::EFI_STATUS badSigStat = uefiMgr.stageCapsule(capHeader, 0x02050000, dummyFw, false);
+    TEST_ASSERT(badSigStat == micant::uefi::EFI_SECURITY_VIOLATION, "Invalid signature capsule must return EFI_SECURITY_VIOLATION");
+    TEST_ASSERT(uefiMgr.getTelemetry().TotalAuthFailures >= 2, "TotalAuthFailures must increment on bad signature");
+
+    // Test C: Valid Capsule Staging (v2.5.0 >= lowest 2.0.0, valid signature)
+    micant::uefi::EFI_STATUS validStageStat = uefiMgr.stageCapsule(capHeader, 0x02050000, dummyFw, true);
+    TEST_ASSERT(validStageStat == micant::uefi::EFI_SUCCESS, "Staging valid capsule v2.5.0 must return EFI_SUCCESS");
+    TEST_ASSERT(uefiMgr.getStagedCapsuleCount() == 1, "Staged capsule count must be 1");
+
+    // Stage 11: Firmware Capsule Commit & Live Version Transition
+    micant::uefi::EFI_STATUS applyStat = uefiMgr.applyStagedCapsules();
+    TEST_ASSERT(applyStat == micant::uefi::EFI_SUCCESS, "applyStagedCapsules must return EFI_SUCCESS");
+    TEST_ASSERT(uefiMgr.getStagedCapsuleCount() == 0, "Staged capsules must be cleared after apply");
+
+    micant::uefi::EfiSystemResourceEntry biosAfterUpdate{};
+    uefiMgr.getResourceEntry(biosEntry.FwClass, biosAfterUpdate);
+    TEST_ASSERT(biosAfterUpdate.FwVersion == 0x02050000, "System BIOS version must be updated to 2.5.0 (0x02050000)");
+    TEST_ASSERT(biosAfterUpdate.LastAttemptStatus == micant::uefi::LAST_ATTEMPT_STATUS_SUCCESS, "LastAttemptStatus must be SUCCESS");
+
+    // Stage 12: Win32 API Bridge, Driver C ABI & Interactive Shell Commands
+    char win32Buf[32] = {0};
+    uint32_t win32Bytes = micant::uefi::GetFirmwareEnvironmentVariableA("SecureBoot",
+                                                                         micant::uefi::EFI_GLOBAL_VARIABLE_GUID.c_str(),
+                                                                         win32Buf, sizeof(win32Buf));
+    TEST_ASSERT(win32Bytes == 1, "GetFirmwareEnvironmentVariableA must return 1 byte");
+    TEST_ASSERT(win32Buf[0] == 1, "SecureBoot value via Win32 API must be 1");
+
+    int win32Set = micant::uefi::SetFirmwareEnvironmentVariableA("MicaWin32Var",
+                                                                  micant::uefi::EFI_GLOBAL_VARIABLE_GUID.c_str(),
+                                                                  "Active", 6);
+    TEST_ASSERT(win32Set == 1, "SetFirmwareEnvironmentVariableA must succeed");
+
+    // Shell CLI verification
+    shell::CommandShell testShell;
+    std::ostringstream ssOut;
+
+    int cliStat1 = testShell.execute("fwupdate status", ssOut);
+    TEST_ASSERT(cliStat1 == 0, "fwupdate status must return 0");
+    std::string out1 = ssOut.str();
+    TEST_ASSERT(out1.find("TitanUEFI") != std::string::npos, "CLI output must mention TitanUEFI");
+    TEST_ASSERT(out1.find("Secure Boot State") != std::string::npos, "CLI output must mention Secure Boot State");
+
+    ssOut.str("");
+    int cliStat2 = testShell.execute("fwupdate list", ssOut);
+    TEST_ASSERT(cliStat2 == 0, "fwupdate list must return 0");
+    std::string out2 = ssOut.str();
+    TEST_ASSERT(out2.find("MicaNT Titan UEFI System BIOS") != std::string::npos, "CLI list must include System BIOS");
+    TEST_ASSERT(out2.find("PrismX 3D Discrete GPU VBIOS") != std::string::npos, "CLI list must include GPU VBIOS");
+
+    ssOut.str("");
+    int cliStat3 = testShell.execute("fwupdate test", ssOut);
+    TEST_ASSERT(cliStat3 == 0, "fwupdate test must return 0");
+    std::string out3 = ssOut.str();
+    TEST_ASSERT(out3.find("All UEFI Runtime & Capsule Subsystem Self-Tests Passed") != std::string::npos,
+                "CLI self-test must report success");
+
+    std::cout << "[TEST] Suite 176: UEFI Runtime Services, ESRT & Firmware Capsule Update Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite175")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite176")) {
+        RUN_TEST(Test_WindowsUEFI_RuntimeServices_CapsuleUpdate_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite175") {
         RUN_TEST(Test_HardwareIOMMU_VTd_AMDVi_DMA_Remapping_Subsystem);
         return g_FailedTests;
     }
@@ -40300,6 +40510,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_IntelAMX_ArmSME_MatrixAccelerator_Subsystem);
     RUN_TEST(Test_PCIeSRIOV_PASID_SharedVirtualAddressing_Subsystem);
     RUN_TEST(Test_HardwareIOMMU_VTd_AMDVi_DMA_Remapping_Subsystem);
+    RUN_TEST(Test_WindowsUEFI_RuntimeServices_CapsuleUpdate_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

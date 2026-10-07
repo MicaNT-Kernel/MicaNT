@@ -59,8 +59,8 @@ using DWORD_PTR = uintptr_t;
 using ULONG_PTR = uintptr_t;
 using LONG_PTR  = intptr_t;
 
-inline constexpr BOOL TRUE  = 1;
-inline constexpr BOOL FALSE = 0;
+using micant::TRUE;
+using micant::FALSE;
 inline const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1));
 
 /**

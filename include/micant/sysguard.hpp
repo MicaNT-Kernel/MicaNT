@@ -75,9 +75,9 @@
 
 namespace micant::sysguard {
 
-using BOOLEAN = uint8_t;
-inline constexpr BOOLEAN TRUE  = 1;
-inline constexpr BOOLEAN FALSE = 0;
+using micant::BOOLEAN;
+using micant::TRUE;
+using micant::FALSE;
 
 inline constexpr NTSTATUS STATUS_IMAGE_INTEGRITY_FAIL = 0xC0000428;
 

@@ -44,10 +44,9 @@ namespace micant::wcs {
 
 using HPROFILE = void*;
 using HTRANSFORM = void*;
-using BOOL = int32_t;
-
-inline constexpr BOOL TRUE = 1;
-inline constexpr BOOL FALSE = 0;
+using micant::BOOL;
+using micant::TRUE;
+using micant::FALSE;
 
 // ============================================================================
 // 1. Constants & Enums (ICC & WCS Specifications)

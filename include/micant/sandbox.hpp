@@ -62,9 +62,9 @@
 
 namespace micant::sandbox {
 
-using BOOLEAN = uint8_t;
-inline constexpr BOOLEAN TRUE  = 1;
-inline constexpr BOOLEAN FALSE = 0;
+using micant::BOOLEAN;
+using micant::TRUE;
+using micant::FALSE;
 
 void InitializeSandboxSubsystemExports();
 

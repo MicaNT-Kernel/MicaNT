@@ -80,9 +80,9 @@
 
 namespace micant::dma_guard {
 
-using BOOLEAN = uint8_t;
-inline constexpr BOOLEAN TRUE  = 1;
-inline constexpr BOOLEAN FALSE = 0;
+using micant::BOOLEAN;
+using micant::TRUE;
+using micant::FALSE;
 
 // ============================================================================
 // 1. Status Codes & Error Definitions
@@ -829,7 +829,7 @@ public:
             .State = static_cast<uint32_t>(m_state),
             .Policy = static_cast<uint32_t>(m_policy),
             .IommuArch = static_cast<uint32_t>(m_architecture),
-            .AcpiPlatformOptIn = m_acpiPlatformOptIn ? TRUE : FALSE,
+            .AcpiPlatformOptIn = static_cast<BOOLEAN>(m_acpiPlatformOptIn ? 1 : 0),
             .DomainCount = static_cast<uint32_t>(m_domains.size()),
             .DeviceCount = static_cast<uint32_t>(m_devices.size()),
             .AuthorizedDeviceCount = authCount,

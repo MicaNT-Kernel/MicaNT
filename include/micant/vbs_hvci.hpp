@@ -79,9 +79,9 @@
 
 namespace micant::vbs_hvci {
 
-using BOOLEAN = uint8_t;
-inline constexpr BOOLEAN TRUE  = 1;
-inline constexpr BOOLEAN FALSE = 0;
+using micant::BOOLEAN;
+using micant::TRUE;
+using micant::FALSE;
 
 // ============================================================================
 // 1. Status Codes & Error Definitions

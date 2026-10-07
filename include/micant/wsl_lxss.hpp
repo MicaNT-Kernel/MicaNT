@@ -68,9 +68,9 @@
 
 namespace micant::wsl_lxss {
 
-using BOOLEAN = uint8_t;
-inline constexpr BOOLEAN TRUE  = 1;
-inline constexpr BOOLEAN FALSE = 0;
+using micant::BOOLEAN;
+using micant::TRUE;
+using micant::FALSE;
 
 // ============================================================================
 // 1. Linux Syscall Numbers (x86_64) & Error Codes

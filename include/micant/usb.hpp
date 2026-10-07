@@ -1415,12 +1415,8 @@ using PUCHAR = uint8_t*;
 using ULONG = uint32_t;
 using PULONG = uint32_t*;
 using PVOID = void*;
-#ifndef TRUE
-inline constexpr BOOL TRUE  = 1;
-#endif
-#ifndef FALSE
-inline constexpr BOOL FALSE = 0;
-#endif
+using micant::TRUE;
+using micant::FALSE;
 #endif
 
 using WINUSB_INTERFACE_HANDLE = void*;
