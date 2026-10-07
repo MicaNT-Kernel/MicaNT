@@ -40,6 +40,7 @@ These names:
 | **In-Memory & Script Inspection (AMSI)** | **SentinelScan** | `micant::amsi` | `amsi.hpp` | Clean-room Antimalware Scan Interface (`amsi.dll`), providing in-memory buffer inspection, shellcode/NOP sled detection, script de-obfuscation heuristics, and command prompt interception. |
 | **Antimalware Engine & Client** | **AegisDefender** | `micant::defender` | `mpengine.hpp` | Clean-room Microsoft Malware Protection Engine (`mpengine.dll`) and Client (`mpclient.dll`), providing Shannon entropy PE section heuristics, local offline threat database matching, and AES-256 encrypted quarantine vault isolation. |
 | **Driver Frameworks (KMDF & UMDF)** | **TitanWDF / AegisWDF** | `micant::wdf` | `wdf.hpp` | Clean-room Windows Driver Frameworks (KMDF v1.33 / UMDF 2.0) object models, queue pacing, and user-mode driver host isolation. |
+| **Pseudo Console & Terminal (ConPTY)** | **TitanPTY / SurPTY** | `micant::conpty` | `conpty.hpp` | Named in tribute to the Windows Terminal and Console Host architecture evolution. Unifies headless VT server, differential VT rendering, and Win32 character grids. |
 
 ---
 
@@ -229,6 +230,24 @@ These names:
     - **Manual:** Explicit polling via `WdfIoQueueRetrieveNextRequest`.
   - UMDF 2.0 Host Isolation: User-mode driver crashes are contained inside `WUDFHost.exe` by the Sovereign Reflector (`wudfrd.sys`), preventing OS bugchecks.
   - Interactive CLI: `wdf` (`wdf status`, `wdf drivers`, `wdf devices`, `wdf queues`, `wdf umdf`, `wdf test`).
+
+### 3.24 TitanPTY (Windows Pseudo Console & Terminal Host Subsystem)
+- **Role:** Clean-room pseudo console (ConPTY) and terminal server bridging legacy Win32 console applications with modern DEC VT100/VT220, xterm-256, and 24-bit TrueColor VT terminal emulators.
+- **Heritage:** Conceived as the sovereign dual to SurWin (`conhost.exe`), named *TitanPTY* / *SurPTY* to reflect high-performance terminal plumbing and the modern Windows Terminal hosting model.
+- **Capabilities:**
+  - Standard Win32 C ABI exports (`kernel32.dll` / `conpty.dll`): `CreatePseudoConsole`, `ResizePseudoConsole`, `ClosePseudoConsole`.
+  - Process Creation Integration: `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` support for attaching child processes cleanly to pseudo consoles.
+  - Headless VT Terminal Server: Decoupled in-memory pipe infrastructure (`ConptyPipe`) with bidirectional streaming, input parsing, and asynchronous worker dispatching.
+  - Differential VT Rendering Engine: Minimizes I/O bandwidth by calculating cell differences between the primary character grid and a shadow buffer, emitting optimized ANSI/VT sequences (cursor movements, SGR text formatting, bold, underline, 24-bit RGB TrueColor `\x1b[38;2;R;G;Bm`).
+  - Terminal Control Sequence Support:
+    - Primary and alternate screen buffers (`\x1b[?1049h`, `\x1b[?1049l`).
+    - Dynamic window title manipulation (`\x1b]0;Title\x07` / `\x1b]2;Title\x07`).
+    - Dynamic console window resize renegotiation (`\x1b[8;H;Wt`).
+    - Soft terminal reset (`\x1b[!p`).
+    - Cursor styling (blinking block, steady block, blinking underline, steady underline, blinking bar, steady bar via `\x1b[q`).
+  - Bidirectional VT Input Parser: Translates incoming terminal sequences (arrows, home, end, function keys, SGR 1006 mouse events) into standard Win32 `INPUT_RECORD` structures (`KEY_EVENT`, `MOUSE_EVENT`, `WINDOW_BUFFER_SIZE_EVENT`).
+  - System Service Registration: SCM registered service `OpenConsole` (`TitanPTY Headless Console Host Server`).
+  - Interactive CLI: `conpty` / `pty` / `pseudoconsole` (`status`, `list`, `create`, `write`, `resize`, `close`, `test`).
 
 ---
 

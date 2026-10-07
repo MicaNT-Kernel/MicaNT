@@ -60,6 +60,7 @@
 #include "micant/sandbox.hpp"
 #include "micant/whp.hpp"
 #include "micant/wdf.hpp"
+#include "micant/conpty.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -35413,8 +35414,210 @@ void Test_WindowsDriverFrameworks_WDF_Subsystem() {
     std::cout << "[TEST] Suite 149: Windows Driver Frameworks (KMDF & UMDF 2.0) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 150: Windows Pseudo Console (ConPTY) & Terminal Host Subsystem
+// ============================================================================
+
+void Test_WindowsPseudoConsole_ConPTY_Subsystem() {
+    std::cout << "\n========================================================================\n"
+              << "  Suite 150: Windows Pseudo Console (ConPTY) & Terminal Host Subsystem  \n"
+              << "========================================================================\n";
+
+    // Stage 1: Subsystem Initialization & Dynamic Loader Exports
+    conpty::InitializeConptySubsystem();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    void* fnCreate = ldr.getExport("kernel32.dll", "CreatePseudoConsole");
+    void* fnResize = ldr.getExport("kernel32.dll", "ResizePseudoConsole");
+    void* fnClose  = ldr.getExport("kernel32.dll", "ClosePseudoConsole");
+    void* fnAttrInit = ldr.getExport("kernel32.dll", "InitializeProcThreadAttributeList");
+    void* fnAttrUpd  = ldr.getExport("kernel32.dll", "UpdateProcThreadAttribute");
+    void* fnAttrDel  = ldr.getExport("kernel32.dll", "DeleteProcThreadAttributeList");
+
+    TEST_ASSERT(fnCreate != nullptr, "kernel32.dll must export CreatePseudoConsole");
+    TEST_ASSERT(fnResize != nullptr, "kernel32.dll must export ResizePseudoConsole");
+    TEST_ASSERT(fnClose != nullptr, "kernel32.dll must export ClosePseudoConsole");
+    TEST_ASSERT(fnAttrInit != nullptr, "kernel32.dll must export InitializeProcThreadAttributeList");
+    TEST_ASSERT(fnAttrUpd != nullptr, "kernel32.dll must export UpdateProcThreadAttribute");
+    TEST_ASSERT(fnAttrDel != nullptr, "kernel32.dll must export DeleteProcThreadAttributeList");
+
+    auto scmRec = scm::ServiceControlManager::get().getServiceRecord(L"OpenConsole");
+    TEST_ASSERT(scmRec != nullptr, "SCM must have OpenConsole service registered");
+    TEST_ASSERT(scmRec->status.dwProcessId == 1190, "OpenConsole service PID must be 1190");
+
+    auto& engine = conpty::TitanPtyEngine::Instance();
+
+    // Stage 2: PseudoConsole Creation (CreatePseudoConsole)
+    conpty::HPCON hPC = nullptr;
+    conpty::COORD initialSize{80, 24};
+    conpty::HRESULT hr = conpty::CreatePseudoConsole(
+        initialSize,
+        nullptr,
+        nullptr,
+        conpty::PSEUDOCONSOLE_INHERIT_CURSOR,
+        &hPC
+    );
+    TEST_ASSERT(hr == conpty::S_OK && hPC != nullptr, "CreatePseudoConsole must succeed and return non-null handle");
+
+    auto sess = engine.getSession(hPC);
+    TEST_ASSERT(sess != nullptr, "TitanPtyEngine must track created session");
+    TEST_ASSERT(sess->getSize().X == 80 && sess->getSize().Y == 24, "Session dimensions must be 80x24");
+    TEST_ASSERT(sess->isActive(), "Session must be active");
+
+    // Stage 3: In-Memory Pipe I/O & Basic VT Output
+    sess->writeString("MicaNT ConPTY Kernel\r\n");
+    std::string outData = sess->getOutputPipe()->readString();
+    TEST_ASSERT(!outData.empty(), "Output pipe must receive rendered VT bytes");
+    TEST_ASSERT(outData.find("MicaNT ConPTY Kernel") != std::string::npos, "Rendered VT output must contain written string");
+    TEST_ASSERT(sess->getCursorPosition().Y == 1 && sess->getCursorPosition().X == 0, "Cursor must advance to line 1 column 0 after newline");
+
+    // Stage 4: TrueColor (24-bit RGB) Output Formatting
+    sess->setTextColorRgb(255, 128, 64);
+    sess->setBackgroundColorRgb(16, 32, 64);
+    sess->writeString("TrueColor Palette");
+    std::string rgbData = sess->getOutputPipe()->readString();
+    TEST_ASSERT(rgbData.find("\x1b[38;2;255;128;64m") != std::string::npos, "Output must contain 24-bit TrueColor FG escape sequence");
+    TEST_ASSERT(rgbData.find("\x1b[48;2;16;32;64m") != std::string::npos, "Output must contain 24-bit TrueColor BG escape sequence");
+
+    // Stage 5: Text Attributes (Bold, Underline, Invert)
+    sess->setTextStyles(true, true, true);
+    sess->writeString("Highlighted");
+    std::string attrData = sess->getOutputPipe()->readString();
+    TEST_ASSERT(attrData.find("\x1b[1m") != std::string::npos, "Bold attribute must emit \\x1b[1m");
+    TEST_ASSERT(attrData.find("\x1b[4m") != std::string::npos, "Underline attribute must emit \\x1b[4m");
+    TEST_ASSERT(attrData.find("\x1b[7m") != std::string::npos, "Invert attribute must emit \\x1b[7m");
+
+    // Stage 6: Cursor Movement, Visibility & Cursor Styles
+    sess->setCursorPosition(conpty::COORD{50, 15});
+    TEST_ASSERT(sess->getCursorPosition().X == 50 && sess->getCursorPosition().Y == 15, "Cursor position must update to 50,15");
+
+    sess->setCursorVisibility(false);
+    std::string hideCur = sess->getOutputPipe()->readString();
+    TEST_ASSERT(hideCur.find("\x1b[?25l") != std::string::npos, "Hiding cursor must emit \\x1b[?25l");
+
+    sess->setCursorVisibility(true);
+    std::string showCur = sess->getOutputPipe()->readString();
+    TEST_ASSERT(showCur.find("\x1b[?25h") != std::string::npos, "Showing cursor must emit \\x1b[?25h");
+
+    sess->setCursorStyle(conpty::CursorStyle::BlinkingUnderline);
+    std::string styleCur = sess->getOutputPipe()->readString();
+    TEST_ASSERT(styleCur.find("\x1b[3 q") != std::string::npos, "Blinking underline cursor style must emit \\x1b[3 q");
+
+    // Stage 7: Alternate Screen Buffer Switching
+    sess->setAlternateScreenBuffer(true);
+    TEST_ASSERT(sess->isAlternateScreenActive(), "Alternate screen buffer must be active");
+    std::string enterAlt = sess->getOutputPipe()->readString();
+    TEST_ASSERT(enterAlt.find("\x1b[?1049h") != std::string::npos, "Entering alternate buffer must emit \\x1b[?1049h");
+
+    sess->writeString("TUI Fullscreen Modal");
+    sess->setAlternateScreenBuffer(false);
+    TEST_ASSERT(!sess->isAlternateScreenActive(), "Primary screen buffer must be restored");
+    std::string exitAlt = sess->getOutputPipe()->readString();
+    TEST_ASSERT(exitAlt.find("\x1b[?1049l") != std::string::npos, "Exiting alternate buffer must emit \\x1b[?1049l");
+
+    // Stage 8: Geometry Renegotiation & Dynamic Resize (ResizePseudoConsole)
+    conpty::COORD newSize{120, 36};
+    hr = conpty::ResizePseudoConsole(hPC, newSize);
+    TEST_ASSERT(hr == conpty::S_OK, "ResizePseudoConsole must succeed");
+    TEST_ASSERT(sess->getSize().X == 120 && sess->getSize().Y == 36, "Session size must be 120x36");
+    std::string resizeSeq = sess->getOutputPipe()->readString();
+    TEST_ASSERT(resizeSeq.find("\x1b[8;36;120t") != std::string::npos, "Resize must emit \\x1b[8;36;120t");
+
+    conpty::INPUT_RECORD resizeRec{};
+    bool gotResize = sess->dequeueInputRecord(&resizeRec);
+    TEST_ASSERT(gotResize && resizeRec.EventType == conpty::ConptyEventType::WindowBufferSizeEvent, "WindowBufferSizeEvent must be enqueued");
+    TEST_ASSERT(resizeRec.Event.WindowBufferSizeEvent.dwSize.X == 120 && resizeRec.Event.WindowBufferSizeEvent.dwSize.Y == 36, "WindowBufferSizeEvent size must match newSize");
+
+    // Stage 9: Terminal VT Input Parsing (Arrow Keys, Nav, Function Keys, Control)
+    sess->processTerminalInput("\x1b[A\x1b[B\x1b[C\x1b[D\x1b[H\x1b[F\x1b[5~\x1b[6~\x1bOP\x1b[15~\r\t\x08\x03");
+    
+    conpty::INPUT_RECORD inKey{};
+    // Up
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_UP, "Parsed Up arrow");
+    // Down
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_DOWN, "Parsed Down arrow");
+    // Right
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_RIGHT, "Parsed Right arrow");
+    // Left
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_LEFT, "Parsed Left arrow");
+    // Home
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_HOME, "Parsed Home key");
+    // End
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_END, "Parsed End key");
+    // PgUp
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_PRIOR, "Parsed PgUp key");
+    // PgDn
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_NEXT, "Parsed PgDn key");
+    // F1
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_F1, "Parsed F1 key");
+    // F5
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_F1 + 4, "Parsed F5 key");
+    // Return
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_RETURN, "Parsed Return key");
+    // Tab
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_TAB, "Parsed Tab key");
+    // Backspace
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == conpty::VK_BACK, "Parsed Backspace key");
+    // Ctrl+C
+    TEST_ASSERT(sess->dequeueInputRecord(&inKey) && inKey.Event.KeyEvent.wVirtualKeyCode == 'C' && (inKey.Event.KeyEvent.dwControlKeyState & conpty::LEFT_CTRL_PRESSED), "Parsed Ctrl+C");
+
+    // Stage 10: Mouse SGR Protocol Parsing
+    sess->processTerminalInput("\x1b[<0;30;12M\x1b[<64;30;12M");
+    conpty::INPUT_RECORD inMouse{};
+    TEST_ASSERT(sess->dequeueInputRecord(&inMouse) && inMouse.EventType == conpty::ConptyEventType::MouseEvent, "Mouse click must parse into MouseEvent");
+    TEST_ASSERT(inMouse.Event.MouseEvent.dwMousePosition.X == 29 && inMouse.Event.MouseEvent.dwMousePosition.Y == 11, "Mouse coordinates must be 0-indexed (29, 11)");
+    TEST_ASSERT(inMouse.Event.MouseEvent.dwButtonState == conpty::FROM_LEFT_1ST_BUTTON_PRESSED, "Left mouse button flag set");
+
+    TEST_ASSERT(sess->dequeueInputRecord(&inMouse) && inMouse.EventType == conpty::ConptyEventType::MouseEvent, "Mouse scroll must parse into MouseEvent");
+    TEST_ASSERT(inMouse.Event.MouseEvent.dwEventFlags == conpty::MOUSE_WHEELED, "Mouse wheel flag set");
+
+    // Stage 11: Process Thread Attribute List & Child Process Attachment
+    size_t requiredBytes = 0;
+    conpty::InitializeProcThreadAttributeList(nullptr, 1, 0, &requiredBytes);
+    TEST_ASSERT(requiredBytes > 0, "Querying attribute list size must return positive byte count");
+
+    std::vector<uint8_t> attrStorage(requiredBytes, 0);
+    auto* pAttrList = reinterpret_cast<conpty::LPPROC_THREAD_ATTRIBUTE_LIST>(attrStorage.data());
+    conpty::BOOL initOk = conpty::InitializeProcThreadAttributeList(pAttrList, 1, 0, &requiredBytes);
+    TEST_ASSERT(initOk == conpty::TRUE, "InitializeProcThreadAttributeList must return TRUE");
+
+    conpty::BOOL updOk = conpty::UpdateProcThreadAttribute(
+        pAttrList,
+        0,
+        conpty::PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+        hPC,
+        sizeof(conpty::HPCON),
+        nullptr,
+        nullptr
+    );
+    TEST_ASSERT(updOk == conpty::TRUE, "UpdateProcThreadAttribute must register PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE");
+    TEST_ASSERT(pAttrList->Count == 1, "Attribute list count must be 1");
+
+    sess->attachProcess(3840);
+    auto pids = sess->getAttachedPids();
+    TEST_ASSERT(std::find(pids.begin(), pids.end(), 3840) != pids.end(), "Process PID 3840 must be attached to session");
+
+    sess->detachProcess(3840);
+    pids = sess->getAttachedPids();
+    TEST_ASSERT(std::find(pids.begin(), pids.end(), 3840) == pids.end(), "Process PID 3840 must be detached");
+
+    conpty::DeleteProcThreadAttributeList(pAttrList);
+    TEST_ASSERT(pAttrList->Count == 0, "DeleteProcThreadAttributeList must clear entries");
+
+    // Stage 12: Session Teardown & Resource Cleanup (ClosePseudoConsole)
+    conpty::ClosePseudoConsole(hPC);
+    TEST_ASSERT(engine.getSession(hPC) == nullptr, "Closed session must be removed from TitanPtyEngine");
+    TEST_ASSERT(!sess->isActive(), "Closed session isActive flag must be false");
+
+    std::cout << "[TEST] Suite 150: Windows Pseudo Console (ConPTY) & Terminal Host Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite149")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite150")) {
+        RUN_TEST(Test_WindowsPseudoConsole_ConPTY_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite149") {
         RUN_TEST(Test_WindowsDriverFrameworks_WDF_Subsystem);
         return g_FailedTests;
     }
@@ -35744,6 +35947,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsHypervisorPlatform_Viridian_Subsystem);
     RUN_TEST(Test_WindowsPackageManager_AppInstaller_Subsystem);
     RUN_TEST(Test_WindowsDriverFrameworks_WDF_Subsystem);
+    RUN_TEST(Test_WindowsPseudoConsole_ConPTY_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
