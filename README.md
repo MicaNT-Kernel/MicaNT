@@ -271,6 +271,7 @@ To guarantee total clean-room independence and prevent name collisions with clos
 - **TitanSRIOV / NexusSVA**: PCIe Single Root I/O Virtualization (SR-IOV 1.1), Process Address Space ID (PASID 20-bit) & Shared Virtual Addressing (SVA) Subsystem (`sriov.hpp`, `pci_sriov.sys`, `pcie_sva.sys`), hardware Virtual Function (VF) partitioning, independent BAR allocations, Function Level Reset (FLR), userland `EPROCESS` page table root binding (CR3 / TTBR0), on-device Address Translation Cache (ATC) with sub-5ns lookup, and PCIe Page Request Interface (PRI / PRS) Peripheral Page Fault demand paging.
 - **TitanIOMMU / AegisIOMMU**: Hardware-Accelerated I/O Memory Management Unit (Intel VT-d 3.0 / AMD-Vi / Arm SMMUv3) Subsystem (`iommu.hpp`, `dmar.sys`, `iommu.sys`, `kdmapt.sys`), multi-level second-stage page tables (SLPTPTR, 48-bit address width), sub-4ns IOTLB caching, 128-bit Interrupt Remapping Table Entries (IRTE) with strict Source ID (SID) validation, Posted Interrupts (PIR), and Kernel DMA Protection intercepting unauthorized peripheral drive-by attacks.
 
+👉 For standalone, decoupled driver packages with Windows INF installers and isolated unit tests, explore **[MicaNT-Drivers](https://github.com/MicaNT-Kernel/MicaNT-Drivers)**.  
 👉 For complete architectural specifications and namespace conventions, see **[docs/SOVEREIGN_TAXONOMY.md](docs/SOVEREIGN_TAXONOMY.md)**.
 
 ---

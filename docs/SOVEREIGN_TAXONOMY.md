@@ -9,7 +9,7 @@ To maintain rigorous clean-room compliance, avoid intellectual property ambiguit
 These names:
 1. **Pay Tribute:** Honor Dave Cutler's legendary engineering heritage across DEC Mica, DEC PRISM, and foundational Windows NT development projects.
 2. **Prevent Name Collisions:** Distinguish MicaNT's clean-room ISO C++23 implementations from proprietary Microsoft Windows system binaries and drivers.
-3. **Establish Modularity:** Allow subsystems to be developed, unit-tested, and published as standalone decoupled components (such as [PrismX](https://github.com/MicaNT-Kernel/PrismX)).
+3. **Establish Modularity:** Allow subsystems to be developed, unit-tested, and published as standalone decoupled components (such as [PrismX](https://github.com/MicaNT-Kernel/PrismX) and [MicaNT-Drivers](https://github.com/MicaNT-Kernel/MicaNT-Drivers)).
 
 ---
 
