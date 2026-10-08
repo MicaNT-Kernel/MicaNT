@@ -3372,20 +3372,40 @@
 
 ---
 
-### Phase 161: Windows Virtual Machine Bus (VMBus / `vmbus.sys`) & Hyper-V Synthetic Driver Subsystem (`vmbus.hpp`, `vmbus.sys`, `storvsc.sys`, `netvsc.sys`, `hv_sock.dll`, `TitanVMBus`, `AegisChannel`) (Milestone 188) [PLANNED]
+### Phase 161: Windows Virtual Machine Bus (VMBus / `vmbus.sys`) & Hyper-V Synthetic Driver Subsystem (`vmbus.hpp`, `vmbus.sys`, `storvsc.sys`, `netvsc.sys`, `hv_sock.dll`, `TitanVMBus`, `AegisChannel`) (Milestone 188) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Virtual Machine Bus (VMBus / vmbus.sys), Hyper-V synthetic device communication channels, Guest Physical Address Descriptors (GPADL), ring buffer management, Synthetic Storage (`storvsc.sys`), Synthetic Network (`netvsc.sys`), Hyper-V guest-to-host VM sockets (`hv_sock`), Dynamic Memory ballooning (`dmvsc.sys`), and hypervisor synthetic interrupt delivery.*
-- [ ] **Virtual Machine Bus (VMBus) Core Architecture (`include/micant/vmbus.hpp`)**:
-  - VMBus Channel & Protocol Management: Channel Offer/Rescind, Gpadl registration, send/receive ring buffers, and transaction sequence numbering.
+- [x] **Virtual Machine Bus (VMBus) Core Architecture (`include/micant/vmbus.hpp`)**:
+  - VMBus Channel & Protocol Management: Channel Offer/Rescind, Gpadl registration, send/receive circular ring buffers, and transaction sequence numbering.
   - Synthetic Device Drivers: `storvsc.sys` (synthetic SCSI/SATA fast storage pipe), `netvsc.sys` (synthetic network interface with RNDIS control & multi-queue RSS packet offload).
   - Hyper-V Sockets (`hv_sock` / `AF_HYPERV`): Host-to-guest container and VM interconnect without virtual network dependency.
   - Dynamic Memory & Ballooning: Memory hot-add and target demand ballooning coordination (`dmvsc.sys`).
-- [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `vmbus.sys` / `hv_sock.dll`: `VmbusChannelInit`, `VmbusChannelOpen`, `VmbusChannelSend`, `VmbusChannelReceive`, `HvSocketCreate`, `HvSocketConnect`.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `vmbus.sys` / `hv_sock.dll`: `VmbusInitializeSubsystem`, `VmbusChannelEnumerate`, `VmbusChannelOpen`, `VmbusChannelClose`, `VmbusChannelSendPacket`, `VmbusChannelReceivePacket`, `HvSocketCreate`, `HvSocketSend`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`VmBusService`, `svchost.exe -k LocalSystemNetworkRestricted`).
-- [ ] **Interactive Shell CLI**:
-  - `vmbus status`, `vmbus channels`, `vmbus offer <devType>`, `vmbus storvsc`, `vmbus netvsc`, `vmbus hvsock`, `vmbus test`.
-- [ ] **Unit Test Suite 188 (`Test_WindowsVMBus_SyntheticDriver_Subsystem`)**:
+- [x] **Interactive Shell CLI**:
+  - `vmbus status`, `vmbus channels`, `vmbus storvsc`, `vmbus netvsc`, `vmbus hvsock`, `vmbus balloon`, `vmbus test`.
+- [x] **Unit Test Suite 188 (`Test_WindowsVMBus_SyntheticDriver_Subsystem`)**:
   - 12 comprehensive validation stages verifying VMBus initialization, GPADL buffer mapping, synthetic channel discovery, ring buffer packet roundtrips, storvsc SCSI read/write commands, netvsc packet streaming, hv_sock IPC rendezvous, dynamic memory pressure ballooning, Win32 C ABI parity exports, and multi-threaded synthetic channel throughput stress testing.
+  - Milestone 188: **188 / 188 Test Suites Passing (100%)**.
+
+---
+
+### Phase 162: Windows Virtual PCI (VPCI / `vpci.sys`), SR-IOV Synthetic Device Assignment & Discrete Device Assignment (DDA) Subsystem (`vpci.hpp`, `vpci.sys`, `TitanVPCI`, `AegisPassthrough`) (Milestone 189) [PLANNED]
+*Goal: Implement clean-room Windows Virtual PCI Bus (VPCI / vpci.sys), Single Root I/O Virtualization (SR-IOV) Virtual Function (VF) hardware pass-through, Discrete Device Assignment (DDA), Virtual PCI configuration space emulation (Type 0 headers, capability pointers), MSI/MSI-X interrupt mapping, MMIO BAR space remapping, and NetVSC dynamic VF failover teaming.*
+- [ ] **Virtual PCI (VPCI) Bus Architecture (`include/micant/vpci.hpp`)**:
+  - VPCI Bus Protocol & Device Enumeration: Child device discovery over Hyper-V VPCI protocol, virtual bus scanning, device addition/removal notifications.
+  - PCI Config Space Emulation: Virtual standard Type 0 configuration header (Vendor ID, Device ID, Command, Status, Revision, Class Code, Subsystem IDs), Extended Capabilities (PCIe Cap, MSI, MSI-X, SR-IOV, ACS).
+  - MMIO BAR Resource Remapping: 32-bit and 64-bit BAR address assignment, guest physical address (GPA) to host physical address (HPA) SLAT paging translations.
+  - Interrupt Vector Assignment: MSI/MSI-X table vector routing, synthetic interrupt controller (SynIC) APIC interrupt injection.
+  - SR-IOV & NetVSC Hardware Accelerated Teaming: Failover binding between synthetic NetVSC adapter and hardware SR-IOV VF, live-migration revocation handoff.
+  - Discrete Device Assignment (DDA): Full physical PCIe device partition assignment directly into guest VM space.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `vpci.sys`: `VpciInitializeSubsystem`, `VpciDeviceEnumerate`, `VpciReadConfigSpace`, `VpciWriteConfigSpace`, `VpciMapBarSpace`, `VpciAssignMsiInterrupt`, `VpciQueryDeviceCapabilities`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`VpciService`, `svchost.exe -k LocalSystemNetworkRestricted`).
+- [ ] **Interactive Shell CLI**:
+  - `vpci status`, `vpci list`, `vpci read <devId> <offset>`, `vpci bars <devId>`, `vpci msi <devId>`, `vpci sriov <enable|disable> [devId]`, `vpci dda [devId]`, `vpci test`.
+- [ ] **Unit Test Suite 189 (`Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem`)**:
+  - 12 comprehensive validation stages verifying VPCI subsystem initialization, virtual PCI bus device enumeration, standard Type 0 PCI configuration space read/write, PCIe capabilities walk, MMIO BAR address mapping, MSI/MSI-X interrupt injection, SR-IOV VF assignment, NetVSC failover teaming, DDA passthrough device containment, Win32 C ABI parity exports, and multi-threaded MMIO/DMA transaction stress testing.
 
 
 

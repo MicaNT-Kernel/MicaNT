@@ -192,6 +192,7 @@
 #include "micant/sensorscx.hpp"
 #include "micant/mbbcx.hpp"
 #include "micant/pmp.hpp"
+#include "micant/vmbus.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -42505,8 +42506,231 @@ void Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem() {
     std::cout << "[TEST] Suite 187: Windows Hardware Protected Media Path (PMP), Protected Audio Video Path (PAVP) & HDCP 2.3 Subsystem PASSED.\n";
 }
 
+void Test_WindowsVMBus_SyntheticDriver_Subsystem() {
+    std::cout << "[TEST] Executing Suite 188: Windows Virtual Machine Bus (VMBus) & Hyper-V Synthetic Driver Subsystem...\n";
+
+    // Stage 1: VMBus Subsystem SCM & VersionDatabase Module Registration
+    micant::vmbus::RegisterVmbusSubsystem();
+    auto& verDb = version::VersionDatabase::Instance();
+    TEST_ASSERT(verDb.FindModule("vmbus.sys") != nullptr, "vmbus.sys must be registered in VersionDatabase");
+    TEST_ASSERT(verDb.FindModule("storvsc.sys") != nullptr, "storvsc.sys must be registered in VersionDatabase");
+    TEST_ASSERT(verDb.FindModule("netvsc.sys") != nullptr, "netvsc.sys must be registered in VersionDatabase");
+    TEST_ASSERT(verDb.FindModule("hv_sock.dll") != nullptr, "hv_sock.dll must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto scmSvc = scm.getServiceRecord(L"VmBusService");
+    TEST_ASSERT(scmSvc != nullptr, "VmBusService must be registered in SCM");
+    TEST_ASSERT(scmSvc->binaryPath.find(L"svchost.exe") != std::wstring::npos, "VmBusService must be hosted by svchost.exe");
+    TEST_ASSERT(scmSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "VmBusService must be running");
+
+    auto& vmBus = micant::vmbus::VmbusSubsystem::get();
+    TEST_ASSERT(vmBus.isInitialized() == true, "VmbusSubsystem must report initialized");
+
+    // Stage 2: Synthetic Device Channels Discovery & Channel Offers
+    TEST_ASSERT(vmBus.getChannelCount() >= 4, "VMBus must contain at least 4 synthetic channels");
+    auto chStorage = vmBus.getChannel(1);
+    TEST_ASSERT(chStorage != nullptr, "Channel 1 (Storage) must exist");
+    TEST_ASSERT(chStorage->getType() == micant::vmbus::VmbusChannelType::Storage, "Channel 1 must be Storage type");
+    TEST_ASSERT(chStorage->getState() == micant::vmbus::VmbusChannelState::Active, "Channel 1 must be Active");
+    TEST_ASSERT(chStorage->getGpadlId() == 1001, "Channel 1 GPADL ID must be 1001");
+
+    auto chNet = vmBus.getChannel(2);
+    TEST_ASSERT(chNet != nullptr && chNet->getType() == micant::vmbus::VmbusChannelType::Network, "Channel 2 must be Network type");
+
+    auto chMem = vmBus.getChannel(3);
+    TEST_ASSERT(chMem != nullptr && chMem->getType() == micant::vmbus::VmbusChannelType::DynamicMemory, "Channel 3 must be DynamicMemory type");
+
+    auto chSock = vmBus.getChannel(4);
+    TEST_ASSERT(chSock != nullptr && chSock->getType() == micant::vmbus::VmbusChannelType::HvSocket, "Channel 4 must be HvSocket type");
+
+    uint32_t dynChId = vmBus.offerChannel(micant::vmbus::VmbusChannelType::Heartbeat, L"Hyper-V Heartbeat Service");
+    TEST_ASSERT(dynChId >= 5, "Offered channel ID must be >= 5");
+    auto dynCh = vmBus.getChannel(dynChId);
+    TEST_ASSERT(dynCh != nullptr && dynCh->getState() == micant::vmbus::VmbusChannelState::Offered, "Offered channel must be in Offered state");
+    TEST_ASSERT(std::string(micant::vmbus::VmbusChannelTypeToGuid(micant::vmbus::VmbusChannelType::Storage)).find("ba6163d9") != std::string::npos, "Storage GUID must match");
+
+    // Stage 3: GPADL (Guest Physical Address Descriptors List) Registration & Mapping
+    uint32_t gpadlId = vmBus.registerGpadl(64, {0x3000, 0x3001, 0x3002});
+    TEST_ASSERT(gpadlId > 1004, "Registered GPADL ID must be > 1004");
+    micant::vmbus::GpadlDescriptor desc{};
+    TEST_ASSERT(vmBus.getGpadl(gpadlId, desc), "Querying GPADL descriptor must succeed");
+    TEST_ASSERT(desc.pageCount == 64 && desc.isMapped == true, "GPADL must have 64 pages and report mapped");
+    TEST_ASSERT(desc.guestPfns.size() == 3, "GPADL PFN list size must match");
+
+    // Stage 4: VMBus Channel State Machine (Open, Rescind, Close)
+    TEST_ASSERT(vmBus.rescindChannel(dynChId), "Rescinding channel offer must succeed");
+    TEST_ASSERT(dynCh->getState() == micant::vmbus::VmbusChannelState::Rescinded, "Channel state must be Rescinded");
+
+    TEST_ASSERT(vmBus.openChannel(dynChId, gpadlId), "Opening channel must succeed");
+    TEST_ASSERT(dynCh->getState() == micant::vmbus::VmbusChannelState::Active, "Channel state must be Active");
+    TEST_ASSERT(dynCh->getGpadlId() == gpadlId, "Channel GPADL ID must be set");
+
+    TEST_ASSERT(vmBus.closeChannel(dynChId), "Closing channel must succeed");
+    TEST_ASSERT(dynCh->getState() == micant::vmbus::VmbusChannelState::Closed, "Channel state must be Closed");
+    TEST_ASSERT(!vmBus.closeChannel(9999), "Closing nonexistent channel must return false");
+
+    // Stage 5: VMBus Circular Ring Buffer Packet Transaction Streaming
+    auto& ring = chStorage->getOutRing();
+    ring.clear();
+    uint8_t pktData[48] = { 0xDE, 0xAD, 0xBE, 0xEF };
+    TEST_ASSERT(ring.write(pktData, 48, 0xCAFE), "Writing packet to ring buffer must succeed");
+    TEST_ASSERT(ring.getQueuedCount() == 1, "Ring buffer queued packet count must be 1");
+    TEST_ASSERT(ring.getTotalPacketsWritten() >= 1, "Total packets written must be >= 1");
+
+    uint8_t outPkt[64] = { 0 };
+    uint32_t outLen = 0;
+    uint64_t outTrans = 0;
+    TEST_ASSERT(ring.read(outPkt, 64, outLen, outTrans), "Reading packet from ring buffer must succeed");
+    TEST_ASSERT(outLen == 48, "Read packet length must match written length (48)");
+    TEST_ASSERT(outTrans == 0xCAFE, "Transaction ID must match 0xCAFE");
+    TEST_ASSERT(outPkt[0] == 0xDE && outPkt[1] == 0xAD, "Read payload must match written data");
+    TEST_ASSERT(ring.getQueuedCount() == 0, "Ring buffer queue must now be empty");
+    TEST_ASSERT(!ring.read(outPkt, 64, outLen, outTrans), "Reading from empty ring buffer must return false");
+
+    // Stage 6: Synthetic Storage (storvsc.sys) Fast Ring SCSI Operations
+    auto stDev = vmBus.getStorageDevice();
+    TEST_ASSERT(stDev != nullptr, "Synthetic storage device must exist");
+    TEST_ASSERT(stDev->getCapacityBytes() == 512ULL * 1024ULL * 1024ULL * 1024ULL, "Storage capacity must be 512 GB");
+    std::vector<uint8_t> wrSec(1024, 0x55);
+    std::vector<uint8_t> rdSec(1024, 0x00);
+    TEST_ASSERT(stDev->scsiWrite(0x100, 2, wrSec.data()), "SCSI Write of 2 sectors must succeed");
+    TEST_ASSERT(stDev->scsiRead(0x100, 2, rdSec.data()), "SCSI Read of 2 sectors must succeed");
+    TEST_ASSERT(stDev->getReadOps() >= 1 && stDev->getWriteOps() >= 1, "SCSI read/write ops count must increase");
+    TEST_ASSERT(stDev->getReadBytes() >= 1024 && stDev->getWriteBytes() >= 1024, "SCSI byte count must increase");
+    TEST_ASSERT(!stDev->scsiWrite(0xFFFFFFFFFFF, 2, wrSec.data()), "Out of bounds SCSI write must fail");
+
+    // Stage 7: Synthetic Network Adapter (netvsc.sys) Packet Pipeline & MTU
+    auto netDev = vmBus.getNetworkAdapter();
+    TEST_ASSERT(netDev != nullptr, "Synthetic network adapter must exist");
+    TEST_ASSERT(netDev->getMacAddress() == "00:15:5D:01:A0:42", "NetVSC MAC must match Hyper-V standard OUI 00:15:5D");
+    TEST_ASSERT(netDev->getLinkSpeedGbps() == 100, "NetVSC link speed must be 100 Gbps");
+    TEST_ASSERT(netDev->getMtu() == 1500, "Initial MTU must be 1500");
+
+    uint8_t txBuf[256] = { 0xAA };
+    for (int p = 0; p < 5; ++p) TEST_ASSERT(netDev->transmitPacket(txBuf, 256), "transmitPacket must succeed");
+    for (int p = 0; p < 10; ++p) TEST_ASSERT(netDev->receivePacket(512), "receivePacket must succeed");
+    TEST_ASSERT(netDev->getTxPackets() == 5, "TX packet count must be 5");
+    TEST_ASSERT(netDev->getRxPackets() == 10, "RX packet count must be 10");
+    TEST_ASSERT(netDev->getTxBytes() == 1280, "TX byte count must be 1280");
+    TEST_ASSERT(netDev->getRxBytes() == 5120, "RX byte count must be 5120");
+
+    std::vector<uint8_t> jumboBuf(8000, 0x12);
+    TEST_ASSERT(!netDev->transmitPacket(jumboBuf.data(), 8000), "Transmit exceeding MTU must fail");
+    netDev->setMtu(9000);
+    TEST_ASSERT(netDev->transmitPacket(jumboBuf.data(), 8000), "Transmit with jumbo MTU 9000 must succeed");
+    netDev->setMtu(1500); // restore
+
+    // Stage 8: Hyper-V Guest Sockets (hv_sock / AF_HYPERV) Interconnect
+    uint32_t sockId = vmBus.createHvSocket(L"{e0762426-32d3-465d-98be-812301980860}");
+    TEST_ASSERT(sockId >= 1, "Created HvSocket ID must be valid");
+    auto sock = vmBus.getHvSocket(sockId);
+    TEST_ASSERT(sock != nullptr, "HvSocket endpoint must be retrievable");
+    TEST_ASSERT(sock->isConnected() == true, "HvSocket must be connected");
+    uint8_t msgData[64] = "Test_AF_HYPERV_Message_Payload";
+    TEST_ASSERT(sock->sendData(msgData, 64), "sendData on connected socket must succeed");
+    TEST_ASSERT(sock->getBytesSent() == 64, "Socket bytes sent must be 64");
+    sock->setConnected(false);
+    TEST_ASSERT(!sock->sendData(msgData, 64), "sendData on disconnected socket must fail");
+    sock->setConnected(true);
+
+    // Stage 9: Dynamic Memory (dmvsc.sys) Ballooning & Pressure Management
+    TEST_ASSERT(vmBus.getBalloonedPages() == 0, "Initial ballooned pages must be 0");
+    vmBus.requestMemoryBalloon(25600);
+    TEST_ASSERT(vmBus.getBalloonedPages() == 25600, "Ballooned pages must be 25600 (100 MB)");
+    vmBus.requestMemoryBalloon(12800);
+    TEST_ASSERT(vmBus.getBalloonedPages() == 38400, "Ballooned pages must be 38400 (150 MB)");
+    vmBus.releaseMemoryBalloon(10000);
+    TEST_ASSERT(vmBus.getBalloonedPages() == 28400, "Ballooned pages after release must be 28400");
+    vmBus.releaseMemoryBalloon(50000);
+    TEST_ASSERT(vmBus.getBalloonedPages() == 0, "Releasing more than ballooned must clamp to 0");
+
+    // Stage 10: Multi-Channel Enumeration & State String Formatters
+    auto allChs = vmBus.getAllChannels();
+    TEST_ASSERT(allChs.size() >= 5, "Total channel count must be >= 5");
+    TEST_ASSERT(std::string(micant::vmbus::VmbusChannelTypeToString(micant::vmbus::VmbusChannelType::Storage)).find("SCSI") != std::string::npos, "TypeToString Storage");
+    TEST_ASSERT(std::string(micant::vmbus::VmbusChannelTypeToString(micant::vmbus::VmbusChannelType::Network)).find("Network") != std::string::npos, "TypeToString Network");
+    TEST_ASSERT(std::string(micant::vmbus::VmbusChannelStateToString(micant::vmbus::VmbusChannelState::Active)).find("ACTIVE") != std::string::npos, "StateToString Active");
+    TEST_ASSERT(std::string(micant::vmbus::VmbusChannelStateToString(micant::vmbus::VmbusChannelState::Rescinded)).find("RESCINDED") != std::string::npos, "StateToString Rescinded");
+
+    // Stage 11: Clean-Room Win32 C ABI Parity Exports & Boundary Error Handling
+    TEST_ASSERT(micant::vmbus::VmbusInitializeSubsystem() == micant::STATUS_SUCCESS, "VmbusInitializeSubsystem must return STATUS_SUCCESS");
+
+    uint32_t abiChCnt = 0;
+    TEST_ASSERT(micant::vmbus::VmbusChannelEnumerate(nullptr, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null count ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vmbus::VmbusChannelEnumerate(&abiChCnt, nullptr) == micant::STATUS_SUCCESS, "Querying count with null array must succeed");
+    TEST_ASSERT(abiChCnt >= 4, "Enumerated channel count must be >= 4");
+
+    std::vector<uint32_t> abiChList(abiChCnt);
+    TEST_ASSERT(micant::vmbus::VmbusChannelEnumerate(&abiChCnt, abiChList.data()) == micant::STATUS_SUCCESS, "Enumerating channel IDs must succeed");
+    TEST_ASSERT(abiChList[0] == 1, "First channel ID must be 1");
+
+    uint32_t abiOpenSt = 0;
+    TEST_ASSERT(micant::vmbus::VmbusChannelOpen(9999, 1001, &abiOpenSt) == micant::STATUS_NOT_FOUND, "Opening nonexistent channel must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::vmbus::VmbusChannelOpen(1, 1001, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null status ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vmbus::VmbusChannelOpen(1, 1001, &abiOpenSt) == micant::STATUS_SUCCESS, "Opening channel 1 must return STATUS_SUCCESS");
+    TEST_ASSERT(abiOpenSt == 1, "Channel open status must be 1");
+
+    TEST_ASSERT(micant::vmbus::VmbusChannelClose(9999) == micant::STATUS_NOT_FOUND, "Closing nonexistent channel must return STATUS_NOT_FOUND");
+
+    uint8_t abiPkt[16] = { 0x55 };
+    TEST_ASSERT(micant::vmbus::VmbusChannelSendPacket(1, nullptr, 16, 1) == micant::STATUS_INVALID_PARAMETER, "Null data send must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vmbus::VmbusChannelSendPacket(9999, abiPkt, 16, 1) == micant::STATUS_NOT_FOUND, "Send on nonexistent channel must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::vmbus::VmbusChannelSendPacket(1, abiPkt, 16, 0x1234) == micant::STATUS_SUCCESS, "VmbusChannelSendPacket must succeed");
+
+    uint8_t abiRecvBuf[64] = { 0 };
+    uint32_t abiRecvBytes = 0;
+    uint64_t abiTransId = 0;
+    TEST_ASSERT(micant::vmbus::VmbusChannelReceivePacket(1, nullptr, 64, &abiRecvBytes, &abiTransId) == micant::STATUS_INVALID_PARAMETER, "Null recv buf must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vmbus::VmbusChannelReceivePacket(9999, abiRecvBuf, 64, &abiRecvBytes, &abiTransId) == micant::STATUS_NOT_FOUND, "Receive on nonexistent channel must return STATUS_NOT_FOUND");
+
+    uint32_t abiSockId = 0;
+    TEST_ASSERT(micant::vmbus::HvSocketCreate(nullptr, &abiSockId) == micant::STATUS_INVALID_PARAMETER, "Null GUID in HvSocketCreate must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vmbus::HvSocketCreate(L"{e0762426-32d3-465d-98be-812301980860}", &abiSockId) == micant::STATUS_SUCCESS, "HvSocketCreate must succeed");
+    TEST_ASSERT(abiSockId > 0, "Created socket ID must be non-zero");
+
+    TEST_ASSERT(micant::vmbus::HvSocketSend(9999, abiPkt, 16) == micant::STATUS_NOT_FOUND, "Send on invalid socket must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::vmbus::HvSocketSend(abiSockId, abiPkt, 16) == micant::STATUS_SUCCESS, "HvSocketSend must return STATUS_SUCCESS");
+
+    // Stage 12: Multi-Threaded Concurrent Synthetic Channel Throughput Stress Test
+    std::atomic<uint32_t> totalRoundtrips{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([&vmBus, &totalRoundtrips, t]() {
+            uint32_t workerChId = vmBus.offerChannel(micant::vmbus::VmbusChannelType::Storage, L"StressStorageWorker");
+            vmBus.openChannel(workerChId, 2000 + t);
+            auto ch = vmBus.getChannel(workerChId);
+            if (ch) {
+                for (int p = 0; p < 25; ++p) {
+                    uint8_t tx[32] = { static_cast<uint8_t>(t * 10 + p) };
+                    uint8_t rx[32] = { 0 };
+                    uint32_t rLen = 0;
+                    uint64_t tId = 0;
+                    if (ch->getInRing().write(tx, 32, p + 1)) {
+                        if (ch->getInRing().read(rx, 32, rLen, tId)) {
+                            if (rLen == 32 && tId == static_cast<uint64_t>(p + 1) && rx[0] == tx[0]) {
+                                totalRoundtrips++;
+                            }
+                        }
+                    }
+                }
+            }
+            vmBus.closeChannel(workerChId);
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(totalRoundtrips.load() == 100, "100 concurrent VMBus ring buffer roundtrip packet transfers must complete without race conditions or memory faults");
+
+    std::cout << "[TEST] Suite 188: Windows Virtual Machine Bus (VMBus) & Hyper-V Synthetic Driver Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite187")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite188")) {
+        RUN_TEST(Test_WindowsVMBus_SyntheticDriver_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite187") {
         RUN_TEST(Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem);
         return g_FailedTests;
     }
@@ -43026,6 +43250,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSensorsCxV2_SensorFusion_Subsystem);
     RUN_TEST(Test_WindowsMbbCx_MBIM40_5G_Subsystem);
     RUN_TEST(Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem);
+    RUN_TEST(Test_WindowsVMBus_SyntheticDriver_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
