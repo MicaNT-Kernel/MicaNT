@@ -207,6 +207,7 @@
 #include "micant/vmms.hpp"
 #include "micant/activedirectory.hpp"
 #include "micant/grouppolicy.hpp"
+#include "micant/remotedesktop.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -45453,8 +45454,227 @@ void Test_WindowsGroupPolicy_Engine_CSE_Subsystem() {
     std::cout << "[TEST] Suite 202: Windows Group Policy Client & Engine Subsystem PASSED.\n";
 }
 
+void Test_WindowsRemoteDesktop_VirtualChannels_Subsystem() {
+    std::cout << "[TEST] Suite 203: Windows Remote Desktop Services & RDP Virtual Channels Subsystem...\n";
+
+    auto& rds = micant::rds::RemoteDesktopSubsystem::instance();
+
+    // Stage 1: SCM Services Registration (TermService, SessionEnv, UmRdpService)
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto pTerm = scm.getServiceRecord(L"TermService");
+    auto pEnv = scm.getServiceRecord(L"SessionEnv");
+    auto pBus = scm.getServiceRecord(L"UmRdpService");
+    TEST_ASSERT(pTerm != nullptr, "TermService must be registered in SCM");
+    TEST_ASSERT(pTerm->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "TermService must be in SERVICE_RUNNING state");
+    TEST_ASSERT(pTerm->binaryPath == L"C:\\Windows\\System32\\termsrv.dll", "TermService binary path must be termsrv.dll");
+    TEST_ASSERT(pEnv != nullptr, "SessionEnv must be registered in SCM");
+    TEST_ASSERT(pEnv->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SessionEnv must be in SERVICE_RUNNING state");
+    TEST_ASSERT(pBus != nullptr, "UmRdpService must be registered in SCM");
+    TEST_ASSERT(pBus->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "UmRdpService must be SERVICE_KERNEL_DRIVER");
+
+    // Stage 2: VersionDatabase Modules
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    const auto* modTerm = vdb.FindModule("termsrv.dll");
+    const auto* modWts = vdb.FindModule("wtsapi32.dll");
+    const auto* modDr = vdb.FindModule("rdpdr.sys");
+    const auto* modMstsc = vdb.FindModule("mstsc.exe");
+    const auto* modCore = vdb.FindModule("rdpcorets.dll");
+    TEST_ASSERT(modTerm != nullptr, "termsrv.dll must exist in VersionDatabase");
+    TEST_ASSERT(modWts != nullptr, "wtsapi32.dll must exist in VersionDatabase");
+    TEST_ASSERT(modDr != nullptr, "rdpdr.sys must exist in VersionDatabase");
+    TEST_ASSERT(modMstsc != nullptr, "mstsc.exe must exist in VersionDatabase");
+    TEST_ASSERT(modCore != nullptr, "rdpcorets.dll must exist in VersionDatabase");
+    TEST_ASSERT(modTerm->stringTable.at("FileVersion") == "10.0.26100.1", "termsrv.dll build must be 10.0.26100.1");
+
+    // Stage 3: Default WinStation Sessions (Session 0 Services, Session 1 Console)
+    micant::rds::RdpSession s0{};
+    micant::rds::RdpSession s1{};
+    TEST_ASSERT(rds.getSession(0, &s0), "Session 0 must exist");
+    TEST_ASSERT(s0.winStationName == L"Services", "Session 0 name must be Services");
+    TEST_ASSERT(s0.userName == L"SYSTEM", "Session 0 user must be SYSTEM");
+    TEST_ASSERT(s0.state == micant::rds::WTSConnected, "Session 0 state must be WTSConnected");
+
+    TEST_ASSERT(rds.getSession(1, &s1), "Session 1 must exist");
+    TEST_ASSERT(s1.winStationName == L"Console", "Session 1 name must be Console");
+    TEST_ASSERT(s1.userName == L"Administrator", "Session 1 user must be Administrator");
+    TEST_ASSERT(s1.state == micant::rds::WTSActive, "Session 1 state must be WTSActive");
+    TEST_ASSERT(s1.isConsoleSession == true, "Session 1 must be marked console session");
+
+    // Stage 4: RDP Connection Sequence & Handshake State Machine
+    micant::rds::ClientDisplayMetrics disp1080{1920, 1080, 32, 60, 1};
+    uint32_t aliceSid = 0;
+    bool connAlice = rds.initiateRdpConnection(L"TITAN-WS01", "192.168.1.100", L"Alice", L"MICANT", disp1080, true, &aliceSid);
+    TEST_ASSERT(connAlice && aliceSid >= 2, "Alice RDP connection must succeed with valid session ID");
+
+    micant::rds::RdpSession sAlice{};
+    TEST_ASSERT(rds.getSession(aliceSid, &sAlice), "Alice session must be retrieved");
+    TEST_ASSERT(sAlice.state == micant::rds::WTSActive, "Alice session must be WTSActive");
+    TEST_ASSERT(sAlice.handshakeState == micant::rds::RdpHandshakeState::FinalizedSession, "Alice session handshake must be FinalizedSession");
+    TEST_ASSERT(sAlice.nlaAuthenticated == true, "Alice session must be NLA authenticated");
+
+    // Stage 5: NLA (CredSSP) Enforcement
+    uint32_t rejectedSid = 0;
+    rds.setNlaEnforced(true);
+    bool connNlaFail = rds.initiateRdpConnection(L"ROGUE-CLIENT", "10.0.0.99", L"Attacker", L"WORKGROUP", disp1080, false, &rejectedSid);
+    TEST_ASSERT(!connNlaFail, "Non-NLA connection must be rejected when NLA is enforced");
+
+    rds.setNlaEnforced(false);
+    uint32_t nonNlaSid = 0;
+    bool connNlaOk = rds.initiateRdpConnection(L"LEGACY-XP", "10.0.0.50", L"LegacyUser", L"WORKGROUP", disp1080, false, &nonNlaSid);
+    TEST_ASSERT(connNlaOk, "Non-NLA connection must succeed when NLA is not enforced");
+    rds.setNlaEnforced(true); // Re-enforce
+    rds.logoffSession(nonNlaSid);
+
+    // Stage 6: Client Display Metrics & Capability Negotiation (4K multimon)
+    micant::rds::ClientDisplayMetrics disp4k{3840, 2160, 32, 144, 2};
+    uint32_t bobSid = 0;
+    bool connBob = rds.initiateRdpConnection(L"TITAN-PRO", "192.168.1.102", L"Bob", L"MICANT", disp4k, true, &bobSid);
+    TEST_ASSERT(connBob && bobSid >= 2, "Bob RDP connection must succeed");
+
+    micant::rds::RdpSession sBob{};
+    TEST_ASSERT(rds.getSession(bobSid, &sBob), "Bob session must be queryable");
+    TEST_ASSERT(sBob.display.width == 3840 && sBob.display.height == 2160, "Bob display resolution must match 4K");
+    TEST_ASSERT(sBob.display.refreshRateHz == 144, "Bob refresh rate must be 144Hz");
+    TEST_ASSERT(sBob.display.monitorCount == 2, "Bob monitor count must be 2");
+
+    // Stage 7: Static Virtual Channels Binding
+    TEST_ASSERT(sAlice.virtualChannels.find("cliprdr") != sAlice.virtualChannels.end(), "cliprdr virtual channel must be bound");
+    TEST_ASSERT(sAlice.virtualChannels.find("rdpsnd") != sAlice.virtualChannels.end(), "rdpsnd virtual channel must be bound");
+    TEST_ASSERT(sAlice.virtualChannels.find("rdpdr") != sAlice.virtualChannels.end(), "rdpdr virtual channel must be bound");
+    TEST_ASSERT(sAlice.virtualChannels.find("rdpgfx") != sAlice.virtualChannels.end(), "rdpgfx virtual channel must be bound");
+    TEST_ASSERT(sAlice.virtualChannels.at("cliprdr").channelId == 1004, "cliprdr channel ID must be 1004");
+
+    // Stage 8: Virtual Channel Packet I/O Round-trip
+    std::vector<uint8_t> clipboardPayload = {0x01, 0x00, 0x00, 0x00, 'T', 'E', 'X', 'T', 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F};
+    bool writeOk = rds.writeVirtualChannel(aliceSid, "cliprdr", clipboardPayload.data(), clipboardPayload.size());
+    TEST_ASSERT(writeOk, "writeVirtualChannel to cliprdr must succeed");
+
+    std::vector<uint8_t> readPkt;
+    bool readOk = rds.readVirtualChannel(aliceSid, "cliprdr", readPkt);
+    TEST_ASSERT(readOk, "readVirtualChannel from cliprdr must succeed");
+    TEST_ASSERT(readPkt == clipboardPayload, "Read packet must match written payload");
+
+    // Stage 9: Remote Shadow Session Initiation & Mode Arbitration
+    bool shadowOk = rds.startShadowSession(bobSid, aliceSid, micant::rds::WTS_SHADOW_ENABLE_INPUT_NO_NOTIFY);
+    TEST_ASSERT(shadowOk, "startShadowSession from Bob to Alice must succeed");
+
+    micant::rds::RdpSession sBobShadow{};
+    TEST_ASSERT(rds.getSession(bobSid, &sBobShadow), "Bob session query must succeed");
+    TEST_ASSERT(sBobShadow.state == micant::rds::WTSShadow, "Bob session state must transition to WTSShadow");
+    TEST_ASSERT(sBobShadow.shadowSessionId == aliceSid, "Bob shadow target must be Alice");
+    TEST_ASSERT(sBobShadow.shadowMode == micant::rds::WTS_SHADOW_ENABLE_INPUT_NO_NOTIFY, "Shadow mode must match");
+
+    // Stage 10: Remote Shadow Session Teardown & Reversion
+    bool stopShadowOk = rds.stopShadowSession(bobSid);
+    TEST_ASSERT(stopShadowOk, "stopShadowSession must succeed");
+    micant::rds::RdpSession sBobActive{};
+    TEST_ASSERT(rds.getSession(bobSid, &sBobActive), "Bob session query must succeed");
+    TEST_ASSERT(sBobActive.state == micant::rds::WTSActive, "Bob session state must revert to WTSActive");
+    TEST_ASSERT(sBobActive.shadowSessionId == 0, "Bob shadowSessionId must reset to 0");
+
+    // Stage 11: Session Disconnection & Reconnection
+    bool disconnFailConsole = rds.disconnectSession(1);
+    TEST_ASSERT(!disconnFailConsole, "Disconnecting console session (Session 1) must be rejected");
+
+    bool disconnAlice = rds.disconnectSession(aliceSid);
+    TEST_ASSERT(disconnAlice, "Disconnecting Alice session must succeed");
+    micant::rds::RdpSession sAliceDisc{};
+    TEST_ASSERT(rds.getSession(aliceSid, &sAliceDisc), "Alice session query must succeed");
+    TEST_ASSERT(sAliceDisc.state == micant::rds::WTSDisconnected, "Alice session state must be WTSDisconnected");
+
+    // Stage 12: Session Logoff & Clean Removal
+    bool logoffFailConsole = rds.logoffSession(1);
+    TEST_ASSERT(!logoffFailConsole, "Logging off console session (Session 1) must be rejected");
+
+    bool logoffAlice = rds.logoffSession(aliceSid);
+    TEST_ASSERT(logoffAlice, "Logging off Alice session must succeed");
+    micant::rds::RdpSession sAliceGone{};
+    TEST_ASSERT(!rds.getSession(aliceSid, &sAliceGone), "Alice session must no longer exist after logoff");
+
+    rds.logoffSession(bobSid);
+
+    // Stage 13: Win32 C ABI Parity Exports
+    void* hServer = micant::rds::MicaWTSOpenServerW(L"TITAN-RDS");
+    TEST_ASSERT(hServer != nullptr, "MicaWTSOpenServerW must return non-null server handle");
+
+    micant::rds::WTS_SESSION_INFOW* pSessArr = nullptr;
+    uint32_t sessCount = 0;
+    int32_t enumRes = micant::rds::MicaWTSEnumerateSessionsW(hServer, 0, 1, &pSessArr, &sessCount);
+    TEST_ASSERT(enumRes == 1 && pSessArr != nullptr && sessCount >= 2, "MicaWTSEnumerateSessionsW must return active sessions");
+    micant::rds::MicaWTSFreeMemory(pSessArr);
+
+    // Create an RDP session via API and open virtual channel
+    uint32_t charlieSid = 0;
+    rds.initiateRdpConnection(L"TITAN-REMOTE", "192.168.1.105", L"Charlie", L"MICANT", disp1080, true, &charlieSid);
+
+    void* hChan = micant::rds::MicaWTSVirtualChannelOpen(hServer, charlieSid, "cliprdr");
+    TEST_ASSERT(hChan != nullptr, "MicaWTSVirtualChannelOpen must open valid channel handle");
+
+    const char testPdu[] = "RDP_CLIPBOARD_SYNC";
+    uint32_t bytesWritten = 0;
+    int32_t writeRes = micant::rds::MicaWTSVirtualChannelWrite(hChan, testPdu, sizeof(testPdu), &bytesWritten);
+    TEST_ASSERT(writeRes == 1 && bytesWritten == sizeof(testPdu), "MicaWTSVirtualChannelWrite must succeed");
+
+    char readBuf[64]{};
+    uint32_t bytesRead = 0;
+    int32_t readRes = micant::rds::MicaWTSVirtualChannelRead(hChan, 1000, readBuf, sizeof(readBuf), &bytesRead);
+    TEST_ASSERT(readRes == 1 && bytesRead == sizeof(testPdu), "MicaWTSVirtualChannelRead must succeed");
+    TEST_ASSERT(std::memcmp(readBuf, testPdu, sizeof(testPdu)) == 0, "Buffer content must match");
+
+    int32_t closeRes = micant::rds::MicaWTSVirtualChannelClose(hChan);
+    TEST_ASSERT(closeRes == 1, "MicaWTSVirtualChannelClose must succeed");
+
+    int32_t discRes = micant::rds::MicaWTSDisconnectSession(hServer, charlieSid, 0);
+    TEST_ASSERT(discRes == 1, "MicaWTSDisconnectSession must return 1");
+
+    int32_t logoffRes = micant::rds::MicaWTSLogoffSession(hServer, charlieSid, 0);
+    TEST_ASSERT(logoffRes == 1, "MicaWTSLogoffSession must return 1");
+
+    micant::rds::MicaWTSCloseServer(hServer);
+
+    // Stage 14: Multithreaded High-Concurrency Stress Test (8 threads, 120 operations)
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&rds, &stressSuccessCount, t]() {
+            micant::rds::ClientDisplayMetrics m{1920, 1080, 32, 60, 1};
+            for (int i = 0; i < 15; ++i) {
+                uint32_t sid = 0;
+                std::wstring uName = L"StressUser_" + std::to_wstring(t) + L"_" + std::to_wstring(i);
+                bool cOk = rds.initiateRdpConnection(L"TITAN-STRESS", "127.0.0.1", uName, L"MICANT", m, true, &sid);
+                if (!cOk) continue;
+
+                const uint8_t dummyData[] = {0xDE, 0xAD, 0xBE, 0xEF};
+                bool wOk = rds.writeVirtualChannel(sid, "cliprdr", dummyData, sizeof(dummyData));
+                std::vector<uint8_t> rData;
+                bool rOk = rds.readVirtualChannel(sid, "cliprdr", rData);
+                bool dOk = rds.disconnectSession(sid);
+                bool lOk = rds.logoffSession(sid);
+
+                if (wOk && rOk && dOk && lOk && rData.size() == sizeof(dummyData)) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded Remote Desktop stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 203: Windows Remote Desktop Services & RDP Virtual Channels Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite202")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite203")) {
+        RUN_TEST(Test_WindowsRemoteDesktop_VirtualChannels_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite202") {
         RUN_TEST(Test_WindowsGroupPolicy_Engine_CSE_Subsystem);
         return g_FailedTests;
     }
@@ -46050,6 +46270,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem);
     RUN_TEST(Test_WindowsActiveDirectory_KerberosKDC_Subsystem);
     RUN_TEST(Test_WindowsGroupPolicy_Engine_CSE_Subsystem);
+    RUN_TEST(Test_WindowsRemoteDesktop_VirtualChannels_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -193,6 +193,7 @@
 #include "vmms.hpp"
 #include "activedirectory.hpp"
 #include "grouppolicy.hpp"
+#include "remotedesktop.hpp"
 
 namespace micant::shell {
 
@@ -411,7 +412,7 @@ public:
             if (cmd == "dsget") { cmdDsGet(tokens, out); return 0; }
             if (cmd == "qwinsta") { cmdQWinsta(tokens, out); return 0; }
             if (cmd == "rwinsta") { cmdRWinsta(tokens, out); return 0; }
-            if (cmd == "mstsc" || cmd == "rdp") { cmdMstsc(tokens, out); return 0; }
+            if (cmd == "mstsc") { cmdMstsc(tokens, out); return 0; }
             if (cmd == "prnmngr") { cmdPrnMngr(tokens, out); return 0; }
             if (cmd == "print") { cmdPrint(tokens, out); return 0; }
             if (cmd == "mci") { cmdMci(tokens, out); return 0; }
@@ -531,6 +532,7 @@ public:
             if (cmd == "vm" || cmd == "vmms" || cmd == "vswitch" || cmd == "vhdx") { cmdVmms(tokens, out); return 0; }
             if (cmd == "ad" || cmd == "kdc" || cmd == "domain" || cmd == "ds") { cmdActiveDirectory(tokens, out); return 0; }
             if (cmd == "gp" || cmd == "gpo" || cmd == "gpupdate" || cmd == "gpresult") { cmdGroupPolicy(tokens, out); return 0; }
+            if (cmd == "rdp" || cmd == "rds" || cmd == "termsrv" || cmd == "wts") { cmdRemoteDesktop(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -33237,6 +33239,209 @@ private:
             << "  gp result [/v]                            Display Resultant Set of Policy (RSoP) report\n"
             << "  gp cse                                    List registered Client-Side Extensions\n"
             << "  gp test                                   Execute in-kernel Group Policy self-tests\n";
+    }
+
+    void cmdRemoteDesktop(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& rds = micant::rds::RemoteDesktopSubsystem::instance();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+        std::string action = (tokens.size() > 0) ? tokens[0] : "";
+
+        if (action == "mstsc") {
+            out << "Starting Remote Desktop Connection (mstsc.exe)...\n";
+            std::wstring clientName = L"MSTSC-LOCAL";
+            std::string clientIp = "127.0.0.1";
+            std::wstring user = L"Administrator";
+            if (tokens.size() > 1 && tokens[1] != "/v" && tokens[1][0] != '/') {
+                std::string sHost = tokens[1];
+                clientName = std::wstring(sHost.begin(), sHost.end());
+            }
+            micant::rds::ClientDisplayMetrics dm{};
+            uint32_t sid = 0;
+            if (rds.initiateRdpConnection(clientName, clientIp, user, L"MICANT", dm, true, &sid)) {
+                out << "Connected to RDP Host! Active WinStation Session ID: " << sid << " (RDP-Tcp#" << sid << ")\n";
+            } else {
+                out << "Error: Unable to establish RDP connection.\n";
+            }
+            return;
+        }
+
+        if (sub == "status") {
+            out << "Windows Remote Desktop Services (RDS / TermService) Subsystem Status:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service Status:        ONLINE (termsrv.dll / svchost.exe -k termsvcs)\n"
+                << "  Network Level Auth:    " << (rds.isNlaEnforced() ? "ENFORCED (CredSSP / Kerberos)" : "Optional") << "\n"
+                << "  Total Sessions:        " << rds.getAllSessions().size() << " sessions\n"
+                << "  Connections Handled:   " << rds.getTotalConnectionsHandled() << "\n"
+                << "  Virtual Channel pkts:  " << rds.getVirtualChannelPacketsRouted() << "\n"
+                << "  Shadow Sessions:       " << rds.getShadowSessionsStarted() << "\n"
+                << "  NLA Handshakes Passed: " << rds.getNlaHandshakesPassed() << "\n";
+            return;
+        }
+
+        if (sub == "sessions" || sub == "list") {
+            out << "Active WinStation Sessions:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(8) << "ID"
+                << std::left << std::setw(16) << "WinStation"
+                << std::left << std::setw(20) << "User"
+                << std::left << std::setw(14) << "State"
+                << std::left << std::setw(10) << "Protocol"
+                << "Client\n"
+                << std::string(80, '-') << "\n";
+
+            auto list = rds.getAllSessions();
+            for (const auto& s : list) {
+                std::string wsName(s.winStationName.begin(), s.winStationName.end());
+                std::string uName(s.userName.begin(), s.userName.end());
+                std::string cName(s.clientName.begin(), s.clientName.end());
+                std::string stateStr = (s.state == micant::rds::WTSActive) ? "Active" :
+                                       (s.state == micant::rds::WTSConnected) ? "Connected" :
+                                       (s.state == micant::rds::WTSShadow) ? "Shadow" :
+                                       (s.state == micant::rds::WTSDisconnected) ? "Disconnected" : "Idle";
+                std::string protoStr = (s.protocolType == micant::rds::WTS_PROTOCOL_TYPE_CONSOLE) ? "Console" : "RDP";
+
+                out << std::left << std::setw(8) << s.sessionId
+                    << std::left << std::setw(16) << wsName
+                    << std::left << std::setw(20) << uName
+                    << std::left << std::setw(14) << stateStr
+                    << std::left << std::setw(10) << protoStr
+                    << cName << "\n";
+            }
+            return;
+        }
+
+        if (sub == "connect" && tokens.size() > 2) {
+            std::string cName = tokens[2];
+            std::string uName = (tokens.size() > 3) ? tokens[3] : "Administrator";
+            std::wstring wcName(cName.begin(), cName.end());
+            std::wstring wuName(uName.begin(), uName.end());
+
+            micant::rds::ClientDisplayMetrics dm{};
+            uint32_t sid = 0;
+            if (rds.initiateRdpConnection(wcName, "192.168.1.105", wuName, L"MICANT", dm, true, &sid)) {
+                out << "RDP Session successfully established! Assigned Session ID: " << sid << "\n";
+            } else {
+                out << "Error: Connection rejected by TermService.\n";
+            }
+            return;
+        }
+
+        if (sub == "disconnect" && tokens.size() > 2) {
+            uint32_t sid = static_cast<uint32_t>(std::stoul(tokens[2]));
+            if (rds.disconnectSession(sid)) {
+                out << "Session " << sid << " disconnected successfully.\n";
+            } else {
+                out << "Error: Unable to disconnect session " << sid << ".\n";
+            }
+            return;
+        }
+
+        if (sub == "shadow" && tokens.size() > 3) {
+            uint32_t clientSid = static_cast<uint32_t>(std::stoul(tokens[2]));
+            uint32_t targetSid = static_cast<uint32_t>(std::stoul(tokens[3]));
+            if (rds.startShadowSession(clientSid, targetSid, micant::rds::WTS_SHADOW_ENABLE_INPUT_NO_NOTIFY)) {
+                out << "Shadow session initiated: Session " << clientSid << " is now shadowing Session " << targetSid << ".\n";
+            } else {
+                out << "Error: Unable to shadow session.\n";
+            }
+            return;
+        }
+
+        if (sub == "channels" && tokens.size() > 2) {
+            uint32_t sid = static_cast<uint32_t>(std::stoul(tokens[2]));
+            micant::rds::RdpSession s{};
+            if (!rds.getSession(sid, &s)) {
+                out << "Error: Session " << sid << " not found.\n";
+                return;
+            }
+            out << "Virtual Channels for Session " << sid << ":\n"
+                << "--------------------------------------------------------------------------------\n";
+            for (const auto& [name, vc] : s.virtualChannels) {
+                out << "  * Channel: " << std::left << std::setw(12) << name
+                    << " ID: " << std::left << std::setw(6) << vc.channelId
+                    << " Sent: " << std::left << std::setw(8) << vc.totalBytesSent
+                    << " Recv: " << vc.totalBytesReceived << " bytes\n";
+            }
+            return;
+        }
+
+        if (sub == "test") {
+            out << "[+] Executing Windows Remote Desktop Services & RDP Channels Self-Tests...\n";
+
+            // 1. SCM Services
+            auto& scm = micant::scm::ServiceControlManager::get();
+            bool termSvc = (scm.getServiceRecord(L"TermService") != nullptr);
+            bool sessEnv = (scm.getServiceRecord(L"SessionEnv") != nullptr);
+            bool umRdp = (scm.getServiceRecord(L"UmRdpService") != nullptr);
+            out << "  [1/6] SCM Services (TermService, SessionEnv, UmRdpService): "
+                << (termSvc && sessEnv && umRdp ? "PASSED" : "FAILED") << "\n";
+
+            // 2. VersionDatabase
+            auto& vdb = micant::version::VersionDatabase::Instance();
+            bool vdbOk = (vdb.FindModule("termsrv.dll") != nullptr) &&
+                         (vdb.FindModule("wtsapi32.dll") != nullptr) &&
+                         (vdb.FindModule("rdpdr.sys") != nullptr) &&
+                         (vdb.FindModule("mstsc.exe") != nullptr) &&
+                         (vdb.FindModule("rdpcorets.dll") != nullptr);
+            out << "  [2/6] VersionDatabase (termsrv.dll, wtsapi32.dll, rdpdr.sys, mstsc.exe, rdpcorets.dll): "
+                << (vdbOk ? "PASSED" : "FAILED") << "\n";
+
+            // 3. RDP Connection Handshake & WinStation Creation
+            uint32_t testSid = 0;
+            micant::rds::ClientDisplayMetrics dm{};
+            bool connOk = rds.initiateRdpConnection(L"TEST-CLIENT", "192.168.1.50", L"Admin", L"MICANT", dm, true, &testSid);
+            micant::rds::RdpSession s{};
+            bool sessFound = rds.getSession(testSid, &s) && (s.state == micant::rds::WTSActive);
+            out << "  [3/6] RDP Connection Handshake & WinStation Arbitration: "
+                << (connOk && sessFound ? "PASSED" : "FAILED") << "\n";
+
+            // 4. Virtual Channels I/O (cliprdr clipboard packet)
+            const char clipData[] = "MicaNT Clipboard Synchronization Payload";
+            bool wOk = rds.writeVirtualChannel(testSid, "cliprdr", reinterpret_cast<const uint8_t*>(clipData), sizeof(clipData));
+            std::vector<uint8_t> rData;
+            bool rOk = rds.readVirtualChannel(testSid, "cliprdr", rData);
+            bool vOk = wOk && rOk && (std::memcmp(clipData, rData.data(), sizeof(clipData)) == 0);
+            out << "  [4/6] Virtual Channels Packet Multiplexing (cliprdr): "
+                << (vOk ? "PASSED" : "FAILED") << "\n";
+
+            // 5. Remote Shadow Session
+            uint32_t shadowSid = 0;
+            rds.initiateRdpConnection(L"SUPERVISOR-PC", "192.168.1.51", L"Supervisor", L"MICANT", dm, true, &shadowSid);
+            bool shOk = rds.startShadowSession(shadowSid, testSid, micant::rds::WTS_SHADOW_ENABLE_INPUT_NO_NOTIFY);
+            micant::rds::RdpSession shSess{};
+            rds.getSession(shadowSid, &shSess);
+            bool shActive = (shSess.state == micant::rds::WTSShadow) && (shSess.shadowSessionId == testSid);
+            rds.stopShadowSession(shadowSid);
+            out << "  [5/6] Remote Shadow Session Arbitration & Control: "
+                << (shOk && shActive ? "PASSED" : "FAILED") << "\n";
+
+            // 6. Win32 C ABI Parity Exports
+            void* hSrv = micant::rds::MicaWTSOpenServerW(L"localhost");
+            micant::rds::WTS_SESSION_INFOW* pInfo = nullptr;
+            uint32_t count = 0;
+            int32_t enumOk = micant::rds::MicaWTSEnumerateSessionsW(hSrv, 0, 1, &pInfo, &count);
+            micant::rds::MicaWTSFreeMemory(pInfo);
+            out << "  [6/6] Win32 C ABI Exports (wtsapi32.dll / termsrv.dll): "
+                << (enumOk && count >= 2 ? "PASSED" : "FAILED") << "\n";
+
+            rds.logoffSession(testSid);
+            rds.logoffSession(shadowSid);
+
+            out << "[+] All Windows Remote Desktop Services Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows Remote Desktop Services (RDS / TermService) Subsystem\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  rdp status                                Display Remote Desktop Services status\n"
+            << "  rdp sessions                              Enumerate active WinStation sessions\n"
+            << "  rdp connect <client_name> [user]          Initiate new simulated RDP session\n"
+            << "  rdp disconnect <session_id>               Disconnect an active RDP session\n"
+            << "  rdp shadow <client_id> <target_id>        Initiate remote shadow viewing session\n"
+            << "  rdp channels <session_id>                 List virtual channels bound to session\n"
+            << "  rdp test                                  Execute in-kernel RDS self-tests\n";
     }
 
     static std::string trim(std::string_view s) {

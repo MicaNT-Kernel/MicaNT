@@ -3681,21 +3681,22 @@
 
 ---
 
-### Phase 176: Remote Desktop Services & RDP Virtual Channels Subsystem (`termsrv.dll`, `rdpdr.sys`, `mstsc.exe`, `TitanRDS`, `AegisRDP`) (Milestone 203) [PLANNED]
+### Phase 176: Remote Desktop Services & RDP Virtual Channels Subsystem (`termsrv.dll`, `rdpdr.sys`, `mstsc.exe`, `TitanRDS`, `AegisRDP`) (Milestone 203) [COMPLETED 100%]
 *Goal: Implement clean-room Remote Desktop Services (RDS / Terminal Services) and RDP Virtual Channels architecture, supporting multi-user WinStation session arbitration, T.128 / MCS protocol negotiation, static & dynamic virtual channels (clipboard, audio, printer/drive redirection), Network Level Authentication (NLA), and remote shadow viewing.*
-- [ ] **Remote Desktop Services Core (`include/micant/remotedesktop.hpp`)**:
+- [x] **Remote Desktop Services Core (`include/micant/remotedesktop.hpp`)**:
   - RDP Protocol Stack: X.224 Connection Request/Confirm, MCS Connect Initial/Response, Security Exchange, Client Info PDU, Capability Exchange.
   - Session Arbitrator & WinStation Manager: Session state machine (Active, Connected, Disconnected, Idle, Shadowing, Reset), multi-user session lifecycle.
   - Virtual Channels Architecture: Static Channels (`cliprdr` clipboard, `rdpsnd` audio, `rdpdr` device redirection, `rdpcap` input), Dynamic Virtual Channels (DVC / `rdpgfx` graphics pipeline).
   - Network Level Authentication (NLA): CredSSP / Kerberos mutual authentication prior to session handshake.
   - Shadow Session Controller: Remote desktop view and interactive control sharing.
-- [ ] **Win32 & SCM Clean-Room Export Parity**:
-  - `termsrv.dll` / `wtsapi32.dll`: `WTSOpenServerW`, `WTSQuerySessionInformationW`, `WTSEnumerateSessionsW`, `WTSVirtualChannelOpen`, `WTSVirtualChannelWrite`, `WTSVirtualChannelRead`, `WTSDisconnectSession`, `WTSLogoffSession`.
+- [x] **Win32 & SCM Clean-Room Export Parity**:
+  - `termsrv.dll` / `wtsapi32.dll`: `WTSOpenServerW`, `WTSQuerySessionInformationW`, `WTSEnumerateSessionsW`, `WTSVirtualChannelOpen`, `WTSVirtualChannelWrite`, `WTSVirtualChannelRead`, `WTSVirtualChannelClose`, `WTSDisconnectSession`, `WTSLogoffSession`, `WTSFreeMemory`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`TermService`, `SessionEnv`, `UmRdpService`).
-- [ ] **Interactive Shell CLI**:
-  - `rdp` / `rds` / `termsrv` / `mstsc` / `wts` (`status`, `sessions`, `connect`, `disconnect`, `shadow`, `channels`, `test`).
-- [ ] **Unit Test Suite 203 (`Test_WindowsRemoteDesktop_VirtualChannels_Subsystem`)**:
-  - 14-stage validation suite covering connection sequence, MCS domain negotiation, virtual channel multiplexing, session arbitration, NLA authentication, and concurrent multi-session stress testing.
+- [x] **Interactive Shell CLI**:
+  - `rdp` / `rds` / `termsrv` / `wts` (`status`, `sessions`, `connect`, `disconnect`, `shadow`, `channels`, `test`).
+- [x] **Unit Test Suite 203 (`Test_WindowsRemoteDesktop_VirtualChannels_Subsystem`)**:
+  - 14 comprehensive validation stages: SCM service registration (`TermService`, `SessionEnv`, `UmRdpService`), VersionDatabase registration (`termsrv.dll`, `wtsapi32.dll`, `rdpdr.sys`, `mstsc.exe`, `rdpcorets.dll`), default WinStation sessions (Session 0 Services, Session 1 Console), RDP connection handshake state machine, NLA (CredSSP) enforcement and rejection of unauthenticated sessions, client display metrics and multi-monitor capability negotiation (4K 144Hz 2 monitors), static virtual channels binding (`cliprdr`, `rdpsnd`, `rdpdr`, `rdpgfx`), virtual channel bidirectional packet I/O, remote shadow session initiation & mode arbitration (`WTS_SHADOW_ENABLE_INPUT_NO_NOTIFY`), shadow session teardown & reversion to `WTSActive`, session disconnection & reconnection, session logoff & clean removal, Win32 C ABI export parity verification, and 120-operation concurrent multithreaded Remote Desktop stress test.
+  - Milestone 203: **203 / 203 Test Suites Passing (100%)**.
 
 ---
 
@@ -3713,6 +3714,23 @@
   - `wsrm` / `quota` / `fairshare` (`status`, `policies`, `apply`, `accounting`, `test`).
 - [ ] **Unit Test Suite 204 (`Test_WindowsSystemResourceManager_FairShare_Subsystem`)**:
   - 14-stage validation suite covering policy parsing, CPU rate control, multi-session fair share balancing, accounting logs, and multithreaded quota stress testing.
+
+---
+
+### Phase 178: Windows Network Policy Server & RADIUS Subsystem (`ias.dll`, `radius.sys`, `TitanNPS`, `AegisRADIUS`) (Milestone 205) [PLANNED]
+*Goal: Implement clean-room Windows Network Policy Server (NPS / Internet Authentication Service - IAS) and RADIUS client/server subsystem, providing enterprise 802.1X network access control, RADIUS packet processing (Access-Request, Access-Accept, Access-Reject, Accounting-Request), EAP/PEAP authentication methods, connection request policies, and RADIUS accounting.*
+- [ ] **Network Policy Server Core (`include/micant/nps.hpp`)**:
+  - RADIUS Protocol Engine: UDP 1812/1813 packet serialization/deserialization, MD5/HMAC secret authenticator verification, RADIUS attributes dictionary (User-Name, NAS-IP-Address, Framed-Protocol, Service-Type, MS-CHAP2).
+  - Authentication & EAP Engine: EAP-TLS, PEAP-MSCHAPv2, EAP-TTLS negotiation state machine, shared secret validation.
+  - Connection Request Policies (CRP) & Network Policies: Condition matching (NAS Port Type, Client IPv4/IPv6, Day/Time constraints, Group membership), policy constraint resolution, access permission arbitration (Grant / Deny).
+  - RADIUS Accounting & Logging: Session start, interim update, session stop event recording, accounting data store.
+- [ ] **Win32 & SCM Clean-Room Export Parity**:
+  - `ias.dll` / `iaspolcy.dll` / `radius.sys`: `IasInitialize`, `IasProcessRadiusPacket`, `IasVerifySecret`, `IasEvaluatePolicy`, `IasRecordAccounting`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`IAS`).
+- [ ] **Interactive Shell CLI**:
+  - `nps` / `ias` / `radius` (`status`, `clients`, `policies`, `auth`, `accounting`, `test`).
+- [ ] **Unit Test Suite 205 (`Test_WindowsNetworkPolicyServer_RADIUS_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, RADIUS packet parsing, shared secret HMAC validation, EAP/PEAP handshake arbitration, connection request policy matching, network policy evaluation, accounting logging, Win32 C ABI exports, and concurrent multithreaded RADIUS authentication stress testing.
 
 
 
