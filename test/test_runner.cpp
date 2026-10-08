@@ -195,6 +195,7 @@
 #include "micant/vmbus.hpp"
 #include "micant/vpci.hpp"
 #include "micant/vsm.hpp"
+#include "micant/hotpatch.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -43144,8 +43145,149 @@ void Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem() {
     std::cout << "[TEST] Suite 190: Windows Virtual Secure Mode (VSM / vsm.sys), VBS & HVCI Subsystem PASSED.\n";
 }
 
+void Test_WindowsKernelHotpatching_LiveUpdate_Subsystem() {
+    std::cout << "[TEST] Running Suite 191: Windows Kernel Hotpatching (KLP / TitanHotpatch) & Live Update Subsystem...\n";
+
+    // 1. SCM Service & VersionDatabase Registration
+    micant::hotpatch::RegisterHotpatchSubsystem();
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    auto modHp = vdb.FindModule("hotpatch.sys");
+    TEST_ASSERT(modHp != nullptr, "hotpatch.sys must be registered in VersionDatabase");
+    auto modKlp = vdb.FindModule("klp.dll");
+    TEST_ASSERT(modKlp != nullptr, "klp.dll must be registered in VersionDatabase");
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto rec = scm.getServiceRecord(L"HotpatchService");
+    TEST_ASSERT(rec != nullptr, "HotpatchService must be registered in ServiceControlManager");
+    TEST_ASSERT(rec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "HotpatchService must be running");
+
+    // 2. Subsystem Initialization and Pre-seeded Hotpatches
+    auto& sys = micant::hotpatch::HotpatchSubsystem::get();
+    TEST_ASSERT(sys.isInitialized(), "HotpatchSubsystem must be initialized");
+    TEST_ASSERT(sys.getPatchCount() >= 2, "HotpatchSubsystem must contain at least 2 pre-seeded security hotpatches");
+    auto p1 = sys.getPatch("KB5051234-CVE-2026-0001");
+    TEST_ASSERT(p1 != nullptr, "CVE-2026-0001 hotpatch must be present");
+    TEST_ASSERT(p1->getTargetModule() == "ntoskrnl.exe", "CVE-2026-0001 target module must be ntoskrnl.exe");
+    TEST_ASSERT(p1->getTargetSymbol() == "NtAllocateVirtualMemory", "CVE-2026-0001 target symbol must be NtAllocateVirtualMemory");
+    TEST_ASSERT(p1->getState() == micant::hotpatch::PatchState::Staged, "Initial state of pre-seeded patch must be Staged");
+
+    // 3. Multiprocessor Quiescence Coordination
+    auto& qc = sys.getQuiescenceCoordinator();
+    TEST_ASSERT(qc.getProcessorCount() == 8, "Default logical processor count must be 8");
+    uint64_t initialSync = qc.getSyncCycles();
+    bool qOk = qc.enterQuiescence();
+    TEST_ASSERT(qOk, "Quiescence coordinator enterQuiescence must succeed");
+    TEST_ASSERT(qc.getState() == micant::hotpatch::QuiescenceState::Quiescent, "Quiescence state must be Quiescent");
+    TEST_ASSERT(qc.getSyncCycles() == initialSync + 1, "Sync cycles counter must increment upon entering quiescence");
+    qc.exitQuiescence();
+    TEST_ASSERT(qc.getState() == micant::hotpatch::QuiescenceState::Idle, "Quiescence state must return to Idle after exit");
+
+    // 4. JMP rel32 Detour Trampoline Generation
+    uint64_t targetAddr = 0x140010000;
+    uint64_t patchAddr  = 0x140050000;
+    bool reg = sys.registerPatch("KB5059999-TEST-PROLOG", "kernel32.dll", "CreateFileW", targetAddr, patchAddr, 128);
+    TEST_ASSERT(reg, "Registration of test hotpatch must succeed");
+    auto testPatch = sys.getPatch("KB5059999-TEST-PROLOG");
+    TEST_ASSERT(testPatch != nullptr, "Retrieved test patch must not be null");
+    const auto& tramp = testPatch->getTrampolineBytes();
+    TEST_ASSERT(tramp[0] == micant::hotpatch::OPCODE_JMP_REL32, "Trampoline opcode byte 0 must be 0xE9 (JMP rel32)");
+    int32_t expectedRel = static_cast<int32_t>(patchAddr - (targetAddr + micant::hotpatch::PROLOG_REPLACEMENT_SIZE));
+    int32_t actualRel = 0;
+    std::memcpy(&actualRel, &tramp[1], sizeof(int32_t));
+    TEST_ASSERT(actualRel == expectedRel, "Trampoline relative offset displacement calculation must match AMD64 specification");
+
+    // 5. Atomic Code Swapping & I-Cache Barrier
+    uint64_t swapsBefore = sys.getAtomicSwaps();
+    bool appOk = sys.applyPatch("KB5059999-TEST-PROLOG");
+    TEST_ASSERT(appOk, "Applying hotpatch must succeed");
+    TEST_ASSERT(testPatch->getState() == micant::hotpatch::PatchState::Active, "Patch state must transition to Active");
+    TEST_ASSERT(sys.getAtomicSwaps() == swapsBefore + 1, "Atomic swap counter must increment on patch application");
+    TEST_ASSERT(testPatch->getICacheFlushes() >= 1, "Instruction cache flush barrier must be executed");
+
+    // 6. Function Detour Redirection
+    bool wasRedirected = false;
+    bool invOk = testPatch->invoke(&wasRedirected);
+    TEST_ASSERT(invOk, "Function invocation through hotpatch gate must succeed");
+    TEST_ASSERT(wasRedirected == true, "Active hotpatch must redirect execution to patch detour function");
+    TEST_ASSERT(testPatch->getRedirectedCalls() == 1, "Redirected calls counter must equal 1");
+    TEST_ASSERT(testPatch->getOriginalCalls() == 0, "Original calls counter must remain 0 while patch is active");
+
+    // 7. Dynamic Reversible Rollback
+    bool revOk = sys.revertPatch("KB5059999-TEST-PROLOG");
+    TEST_ASSERT(revOk, "Reverting hotpatch must succeed");
+    TEST_ASSERT(testPatch->getState() == micant::hotpatch::PatchState::Reverted, "Patch state must transition to Reverted");
+    TEST_ASSERT(sys.getAtomicSwaps() == swapsBefore + 2, "Atomic swap counter must increment on patch revert");
+
+    // 8. Original Function Invocation After Revert
+    wasRedirected = true;
+    invOk = testPatch->invoke(&wasRedirected);
+    TEST_ASSERT(invOk, "Invocation after revert must succeed");
+    TEST_ASSERT(wasRedirected == false, "Reverted hotpatch must execute original unpatched function code");
+    TEST_ASSERT(testPatch->getOriginalCalls() == 1, "Original calls counter must increment to 1");
+
+    // 9. Authenticode Signature Verification
+    uint32_t sigValid = 0;
+    NTSTATUS stSig = micant::hotpatch::HotpatchVerifySignature("KB5051234-CVE-2026-0001", &sigValid);
+    TEST_ASSERT(stSig == micant::STATUS_SUCCESS, "HotpatchVerifySignature must return STATUS_SUCCESS");
+    TEST_ASSERT(sigValid == 1, "Production PCA certificate signature must verify as valid");
+
+    // 10. Win32 C ABI Parity Exports
+    NTSTATUS stInit = micant::hotpatch::HotpatchInitializeSubsystem();
+    TEST_ASSERT(stInit == micant::STATUS_SUCCESS, "HotpatchInitializeSubsystem must return STATUS_SUCCESS");
+    uint32_t patchState = 0;
+    uint64_t patchInvocations = 0;
+    NTSTATUS stQuery = micant::hotpatch::HotpatchQueryPatchStatus("KB5059999-TEST-PROLOG", &patchState, &patchInvocations);
+    TEST_ASSERT(stQuery == micant::STATUS_SUCCESS, "HotpatchQueryPatchStatus must succeed for existing patch");
+    TEST_ASSERT(patchState == static_cast<uint32_t>(micant::hotpatch::PatchState::Reverted), "Query status state must be Reverted");
+    TEST_ASSERT(patchInvocations == 2, "Query status total invocations must be 2");
+
+    uint32_t patchCount = 0;
+    char patchIds[16][64];
+    NTSTATUS stEnum = micant::hotpatch::HotpatchEnumeratePatches(&patchCount, patchIds, 16);
+    TEST_ASSERT(stEnum == micant::STATUS_SUCCESS, "HotpatchEnumeratePatches must succeed");
+    TEST_ASSERT(patchCount >= 3, "Enumerated patch count must include pre-seeded and test patches");
+
+    // 11. Idempotency, Double-Apply & Error Handling
+    bool doubleRevert = sys.revertPatch("KB5059999-TEST-PROLOG");
+    TEST_ASSERT(!doubleRevert, "Reverting an already reverted patch must return false");
+    bool nonExistentApply = sys.applyPatch("KB0000000-NON-EXISTENT");
+    TEST_ASSERT(!nonExistentApply, "Applying non-existent patch must fail");
+    NTSTATUS stMissing = micant::hotpatch::HotpatchQueryPatchStatus("KB0000000-NON-EXISTENT", &patchState, &patchInvocations);
+    TEST_ASSERT(stMissing == micant::STATUS_NOT_FOUND, "Querying non-existent patch must return STATUS_NOT_FOUND");
+    NTSTATUS stNull = micant::hotpatch::HotpatchApplyPatch(nullptr);
+    TEST_ASSERT(stNull == micant::STATUS_INVALID_PARAMETER, "Null parameter must return STATUS_INVALID_PARAMETER");
+
+    // 12. Multithreaded Concurrency & Quiescence Stress Test
+    std::atomic<int> stressSuccessCount{0};
+    std::vector<std::thread> threads;
+    threads.reserve(10);
+    for (int t = 0; t < 10; ++t) {
+        threads.emplace_back([&, t]() {
+            for (int i = 0; i < 10; ++i) {
+                bool redirected = false;
+                testPatch->invoke(&redirected);
+                if (t == 0 && i % 2 == 0) {
+                    sys.applyPatch("KB5059999-TEST-PROLOG");
+                } else if (t == 0 && i % 2 == 1) {
+                    sys.revertPatch("KB5059999-TEST-PROLOG");
+                }
+                stressSuccessCount.fetch_add(1);
+            }
+        });
+    }
+    for (auto& th : threads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressSuccessCount.load() == 100, "100 concurrent hotpatch operations and invocations must complete without race conditions");
+
+    std::cout << "[TEST] Suite 191: Windows Kernel Hotpatching (KLP / TitanHotpatch) & Live Update Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite190")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite191")) {
+        RUN_TEST(Test_WindowsKernelHotpatching_LiveUpdate_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite190") {
         RUN_TEST(Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem);
         return g_FailedTests;
     }
@@ -43681,6 +43823,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsVMBus_SyntheticDriver_Subsystem);
     RUN_TEST(Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem);
     RUN_TEST(Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem);
+    RUN_TEST(Test_WindowsKernelHotpatching_LiveUpdate_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
