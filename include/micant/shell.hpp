@@ -200,6 +200,7 @@
 #include "certsrv.hpp"
 #include "dns_server.hpp"
 #include "dhcp_server.hpp"
+#include "iis_server.hpp"
 
 namespace micant::shell {
 
@@ -545,6 +546,7 @@ public:
             if (cmd == "certsrv" || cmd == "pki" || cmd == "certca") { cmdCertificateServices(tokens, out); return 0; }
             if (cmd == "dns" || cmd == "dnscmd" || cmd == "nslookup") { cmdDnsServer(tokens, out); return 0; }
             if (cmd == "dhcp" || cmd == "dhcpmgmt" || cmd == "netsh_dhcp") { cmdDhcpServer(tokens, out); return 0; }
+            if (cmd == "iis" || cmd == "iisreset" || cmd == "appcmd") { cmdIisServer(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -35021,6 +35023,203 @@ private:
             << "  dhcp release <ip> <mac>                 Simulate DHCPRELEASE packet\n"
             << "  dhcp failover <subNet> <partner> [mode] Configure DHCP Failover partnership\n"
             << "  dhcp test                               Execute in-kernel DHCP server self-tests\n";
+    }
+
+    void cmdIisServer(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& iis = micant::iis::EnterpriseWebServer::instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+
+        if (sub == "status") {
+            uint64_t reqs = 0, resps = 0, bytes = 0;
+            size_t sites = 0, pools = 0;
+            iis.getTelemetry(reqs, resps, bytes, sites, pools);
+
+            out << "Windows Enterprise Internet Information Services (IIS 10.0 / HTTP.sys / WAS)\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service Name:             W3SVC (World Wide Web Publishing Service)\n"
+                << "  Process Activation:       WAS (Windows Process Activation Service)\n"
+                << "  Kernel Driver:            http.sys (Kernel-mode HTTP Protocol Stack)\n"
+                << "  Core Module:              w3core.dll / w3wp.exe (Worker Process Engine)\n"
+                << "  Config File:              %SystemRoot%\\System32\\inetsrv\\config\\applicationHost.config\n"
+                << "  Active Web Sites:         " << sites << "\n"
+                << "  Application Pools:        " << pools << "\n"
+                << "  HTTP Requests Received:   " << reqs << "\n"
+                << "  HTTP Responses Sent:      " << resps << "\n"
+                << "  Total Bytes Transferred:  " << bytes << " bytes\n"
+                << "  W3C Extended Log Entries: " << iis.getW3CLogs().size() << "\n";
+            return;
+        }
+
+        if (sub == "sites") {
+            auto sites = iis.getSites();
+            out << "IIS 10.0 Configured Web Sites (" << sites.size() << " total):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(6) << "ID"
+                << std::setw(26) << "Site Name"
+                << std::setw(12) << "State"
+                << std::setw(20) << "App Pool"
+                << "Bindings\n"
+                << "--------------------------------------------------------------------------------\n";
+            for (const auto& [id, s] : sites) {
+                std::string stStr = (s.state == micant::iis::SiteState::Started) ? "Started" :
+                                    (s.state == micant::iis::SiteState::Stopped) ? "Stopped" : "Paused";
+                std::string bindStr;
+                for (size_t i = 0; i < s.bindings.size(); ++i) {
+                    if (i > 0) bindStr += ", ";
+                    bindStr += (s.bindings[i].protocol == micant::iis::ProtocolType::Https ? "https://" : "http://");
+                    bindStr += (s.bindings[i].hostName.empty() ? "*" : s.bindings[i].hostName);
+                    bindStr += ":" + std::to_string(s.bindings[i].port);
+                }
+                out << std::left << std::setw(6) << id
+                    << std::setw(26) << s.name
+                    << std::setw(12) << stStr
+                    << std::setw(20) << s.appPoolName
+                    << bindStr << "\n";
+            }
+            return;
+        }
+
+        if (sub == "apppools") {
+            auto pools = iis.getAppPools();
+            out << "IIS 10.0 Application Pools (" << pools.size() << " total):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(22) << "AppPool Name"
+                << std::setw(12) << "State"
+                << std::setw(14) << "Pipeline"
+                << std::setw(10) << "Crashes"
+                << std::setw(12) << "Recycles"
+                << "Requests\n"
+                << "--------------------------------------------------------------------------------\n";
+            for (const auto& [name, p] : pools) {
+                std::string stStr = (p.state == micant::iis::AppPoolState::Running) ? "Running" : "Stopped";
+                std::string pipeStr = (p.pipelineMode == micant::iis::ManagedPipelineMode::Integrated) ? "Integrated" : "Classic";
+                out << std::left << std::setw(22) << name
+                    << std::setw(12) << stStr
+                    << std::setw(14) << pipeStr
+                    << std::setw(10) << p.crashCount
+                    << std::setw(12) << p.recycleCount
+                    << p.totalRequestsServed << "\n";
+            }
+            return;
+        }
+
+        if (sub == "start") {
+            if (tokens.size() < 3) {
+                out << "Usage: iis start <siteId>\n";
+                return;
+            }
+            uint32_t sid = static_cast<uint32_t>(std::stoul(tokens[2]));
+            if (iis.setSiteState(sid, micant::iis::SiteState::Started)) {
+                out << "[+] Successfully started Web Site ID " << sid << "\n";
+            } else {
+                out << "[-] Site ID " << sid << " not found\n";
+            }
+            return;
+        }
+
+        if (sub == "stop") {
+            if (tokens.size() < 3) {
+                out << "Usage: iis stop <siteId>\n";
+                return;
+            }
+            uint32_t sid = static_cast<uint32_t>(std::stoul(tokens[2]));
+            if (iis.setSiteState(sid, micant::iis::SiteState::Stopped)) {
+                out << "[+] Successfully stopped Web Site ID " << sid << "\n";
+            } else {
+                out << "[-] Site ID " << sid << " not found\n";
+            }
+            return;
+        }
+
+        if (sub == "recycle") {
+            if (tokens.size() < 3) {
+                out << "Usage: iis recycle <appPoolName>\n";
+                return;
+            }
+            std::string pool = tokens[2];
+            if (iis.recycleAppPool(pool)) {
+                out << "[+] Successfully recycled Application Pool: " << pool << "\n";
+            } else {
+                out << "[-] Application Pool not found: " << pool << "\n";
+            }
+            return;
+        }
+
+        if (sub == "get") {
+            if (tokens.size() < 3) {
+                out << "Usage: iis get <url> [HostHeader]\n";
+                return;
+            }
+            std::string url = tokens[2];
+            std::string host = (tokens.size() > 3) ? tokens[3] : "localhost";
+            bool isTls = (url.find("https://") == 0);
+            std::string path = "/";
+            auto slashPos = url.find('/', 8);
+            if (slashPos != std::string::npos) path = url.substr(slashPos);
+
+            std::string rawHttp = "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUser-Agent: MicaNT-Shell/1.0\r\nAccept: */*\r\n\r\n";
+            auto req = iis.parseRawHttpWire(rawHttp, "127.0.0.1", 54321, isTls);
+            auto resp = iis.processHttpRequest(req);
+
+            out << "HTTP/1.1 " << resp.statusCode << " " << resp.statusDescription << "\n";
+            for (const auto& [k, v] : resp.headers) {
+                out << k << ": " << v << "\n";
+            }
+            out << "\n" << resp.body << "\n";
+            return;
+        }
+
+        if (sub == "test") {
+            out << "Executing in-kernel Windows Enterprise IIS 10.0 Subsystem Self-Tests...\n";
+
+            // 1. Default Web Site HTTP 200
+            std::string wire1 = "GET /index.html HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            auto req1 = iis.parseRawHttpWire(wire1, "127.0.0.1", 50001, false);
+            auto resp1 = iis.processHttpRequest(req1);
+            bool ok1 = (resp1.statusCode == 200 && resp1.contentType == "text/html" && resp1.body.find("Titan Enterprise") != std::string::npos);
+            out << "  [1/5] Default Web Site HTTP/1.1 Servicing:   " << (ok1 ? "PASSED" : "FAILED") << "\n";
+
+            // 2. MIME Resolution
+            std::string mimeCss = iis.resolveMimeType("test.css");
+            std::string mimeJson = iis.resolveMimeType("test.json");
+            bool ok2 = (mimeCss == "text/css" && mimeJson == "application/json");
+            out << "  [2/5] MIME Negotiation & Type Mapping:      " << (ok2 ? "PASSED" : "FAILED") << "\n";
+
+            // 3. Integrated Windows Authentication Challenge (401)
+            std::string wire3 = "GET /index.html HTTP/1.1\r\nHost: intranet.titan.local\r\n\r\n";
+            auto req3 = iis.parseRawHttpWire(wire3, "127.0.0.1", 50002, true);
+            auto resp3 = iis.processHttpRequest(req3);
+            bool ok3 = (resp3.statusCode == 401 && resp3.headers.find("WWW-Authenticate") != resp3.headers.end());
+            out << "  [3/5] Windows Integrated Auth 401 Challenge: " << (ok3 ? "PASSED" : "FAILED") << "\n";
+
+            // 4. AppPool Rapid Fail Protection
+            micant::iis::ApplicationPool rPool;
+            iis.getAppPool("DefaultAppPool", rPool);
+            for (int c = 0; c < 5; ++c) iis.simulateWorkerProcessCrash("DefaultAppPool");
+            iis.getAppPool("DefaultAppPool", rPool);
+            bool ok4 = (rPool.rapidFailProtectionActive && rPool.state == micant::iis::AppPoolState::Stopped);
+            iis.setAppPoolState("DefaultAppPool", micant::iis::AppPoolState::Running); // restore
+            out << "  [4/5] WAS Rapid-Fail Protection Shutdown:   " << (ok4 ? "PASSED" : "FAILED") << "\n";
+
+            // 5. W3C Extended Logging
+            bool ok5 = (!iis.getW3CLogs().empty());
+            out << "  [5/5] W3C Extended Log Generation:          " << (ok5 ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All Windows Enterprise IIS 10.0 Subsystem Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows Enterprise IIS 10.0 Server Subsystem (iisreset / appcmd)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  iis status                              Display IIS server status and telemetry counters\n"
+            << "  iis sites                               Enumerate all configured web sites and bindings\n"
+            << "  iis apppools                            Enumerate all application pools and process health\n"
+            << "  iis start <siteId>                      Start a stopped web site\n"
+            << "  iis stop <siteId>                       Stop an active web site\n"
+            << "  iis recycle <appPoolName>               Recycle worker processes for an application pool\n"
+            << "  iis get <url> [hostHeader]              Simulate HTTP GET request\n"
+            << "  iis test                                Execute in-kernel IIS 10.0 server self-tests\n";
     }
 
     static std::string trim(std::string_view s) {

@@ -371,6 +371,8 @@
 │ Phase 181: Windows Enterprise DNS Server Subsystem (M208)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 182: Windows Enterprise DHCP Server Subsystem (M209)[COMPLETED 100%]│
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 183: Windows Enterprise IIS & HTTP Server (M210)   [COMPLETED 100%]│
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3832,6 +3834,33 @@
   - `dhcp` / `dhcpmgmt` / `netsh dhcp` (`status`, `scopes`, `addscope`, `leases`, `reservations`, `addreserve`, `delreserve`, `discover`, `request`, `release`, `failover`, `test`).
 - [x] **Unit Test Suite 209 (`Test_WindowsEnterpriseDHCP_Server_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration, VersionDatabase registration, Active Directory authorization & rogue server suppression, scope and exclusion range enforcement, DHCPv4 DORA 4-way allocation, MAC reservation binding, lease expiration & release re-pooling, Option 81 Dynamic DNS registration, RFC 3074 DHCP Failover synchronization, DHCPv6 SARR allocation, Win32 C ABI exports, and concurrent 8-thread multithreaded stress test (120 client allocations).
+
+---
+
+### Phase 183: Windows Enterprise Internet Information Services (IIS 10.0) & HTTP Server Stack (`http.sys`, `w3wp.exe`, `w3core.dll`, `apphostsvc.dll`, `iisreset.exe`, `appcmd.exe`, `W3SVC`, `WAS`, `TitanIIS`) (Milestone 210) [COMPLETED 100%]
+*Goal: Implement clean-room Windows Enterprise Internet Information Services (IIS 10.0) and HTTP Protocol Server Stack, featuring kernel HTTP Server API (`http.sys`), Windows Process Activation Service (`WAS`), World Wide Web Publishing Service (`W3SVC`), application pools with worker process lifecycle management, HTTP/1.1 and HTTP/2 wire protocol parsing, virtual directory routing, static file servicing with MIME negotiation, default document resolution, Integrated Windows Authentication (Kerberos/NTLM/Basic), URL authorization rules, TLS/SSL SNI host bindings with ADCS enterprise certificate integration, Gzip/Deflate compression, W3C Extended logging, Win32 C ABI exports, and interactive shell management (`iis`, `iisreset`, `appcmd`).*
+- [x] **Kernel HTTP Stack & WAS Process Activation (`include/micant/iis_server.hpp`)**:
+  - `http.sys` Kernel Protocol Driver: Request queue registration, URL prefix reservation listening (`http://+:80/`, `https://+:443/`), kernel-mode zero-copy response caching, and connection pooling.
+  - Windows Process Activation Service (`WAS`): Application pool container lifecycle management, rapid-fail protection (crash count threshold within rolling time window), worker process ping health-checks, idle timeout auto-shutdown, and recycling triggers (requests served, schedule, memory limits).
+  - W3SVC Web Publishing Service: Web site administration (Started, Stopped, Paused), binding table (IP, port, hostname SNI header), and virtual directory mapping (`/` -> `C:\inetpub\wwwroot`, `/api` -> `C:\inetpub\titan_api`).
+  - Core Request Pipeline (`w3core.dll`): Multi-stage request processing pipeline:
+    * BeginRequest & URL Rewriting / Normalization
+    * AuthenticateRequest: Anonymous, Basic, and Windows Integrated Authentication (NTLM/Kerberos negotiate token validation)
+    * AuthorizeRequest: Active Directory user and security group allow/deny rules
+    * ResolveRequestCache: Kernel/User-mode response cache hit evaluation
+    * ExecuteRequestHandler: Static file handler, default document resolution (`index.html`, `default.htm`), custom REST/API handlers
+    * SendResponse: HTTP status code generation (200, 301, 302, 400, 401, 403, 404, 500, 502, 503), headers emission, chunked transfer encoding, and content compression (`gzip`, `deflate`)
+    * LogRequest: W3C Extended Log Format recording (date, time, s-ip, cs-method, cs-uri-stem, cs-uri-query, s-port, cs-username, c-ip, sc-status, time-taken)
+- [x] **Win32 & SCM Parity**:
+  - SCM Service registration:
+    * `W3SVC` (World Wide Web Publishing Service, Auto Start, Running, `svchost.exe -k iissvcs` / `w3wp.exe`)
+    * `WAS` (Windows Process Activation Service, Auto Start, Running, `svchost.exe -k iissvcs`)
+  - VersionDatabase registration (`10.0.26100.1`): `http.sys`, `w3wp.exe`, `w3core.dll`, `apphostsvc.dll`, `iisreset.exe`, `appcmd.exe`.
+  - Win32 C ABI exports: `MicaIisInitialize`, `MicaIisCreateAppPool`, `MicaIisCreateSite`, `MicaIisAddBinding`, `MicaIisProcessRequest`, `MicaIisRecycleAppPool`, `MicaIisGetStats`, `MicaIisShutdown`.
+- [x] **Interactive Shell CLI**:
+  - `iis` / `iisreset` / `appcmd` (`status`, `sites`, `apppools`, `start`, `stop`, `restart`, `recycle`, `bindings`, `request`, `test`).
+- [x] **Unit Test Suite 210 (`Test_WindowsEnterpriseIIS_HttpServer_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, ApplicationHost configuration, AppPool lifecycle & rapid-fail protection, HTTP/1.1 request wire parsing, static file servicing & MIME mapping, default document resolution, HTTP status codes & custom error pages, Integrated Windows Authentication, TLS SNI binding & certificate validation, Gzip content compression negotiation, W3C Extended logging, Win32 C ABI exports, and concurrent 8-thread multithreaded stress test (120 HTTP requests).
 
 
 

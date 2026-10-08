@@ -214,6 +214,7 @@
 #include "micant/certsrv.hpp"
 #include "micant/dns_server.hpp"
 #include "micant/dhcp_server.hpp"
+#include "micant/iis_server.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -47278,8 +47279,257 @@ void Test_WindowsEnterpriseDHCP_Server_Subsystem() {
     std::cout << "[TEST] Suite 209: Windows Enterprise DHCP Server Subsystem PASSED.\n";
 }
 
+void Test_WindowsEnterpriseIIS_HttpServer_Subsystem() {
+    std::cout << "[TEST] Suite 210: Windows Enterprise IIS & HTTP Server Subsystem...\n";
+
+    auto& iis = micant::iis::EnterpriseWebServer::instance();
+    iis.initialize();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: SCM Service Registration (W3SVC & WAS)
+    // ------------------------------------------------------------------------
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto sW3svc = scm.getServiceRecord(L"W3SVC");
+    TEST_ASSERT(sW3svc != nullptr, "W3SVC service must be registered in SCM");
+    TEST_ASSERT(sW3svc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "W3SVC must be in SERVICE_RUNNING state");
+    TEST_ASSERT(sW3svc->startType == micant::scm::SERVICE_AUTO_START, "W3SVC must be configured for SERVICE_AUTO_START");
+
+    auto sWas = scm.getServiceRecord(L"WAS");
+    TEST_ASSERT(sWas != nullptr, "WAS service must be registered in SCM");
+    TEST_ASSERT(sWas->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WAS must be in SERVICE_RUNNING state");
+    TEST_ASSERT(sWas->startType == micant::scm::SERVICE_AUTO_START, "WAS must be configured for SERVICE_AUTO_START");
+
+    // ------------------------------------------------------------------------
+    // Stage 2: VersionDatabase Registration (10.0.26100.1)
+    // ------------------------------------------------------------------------
+    auto& verDb = micant::version::VersionDatabase::Instance();
+    std::vector<std::string> expectedBins = {
+        "http.sys", "w3wp.exe", "w3core.dll", "apphostsvc.dll", "iisreset.exe", "appcmd.exe"
+    };
+    for (const auto& bin : expectedBins) {
+        const auto* mod = verDb.FindModule(bin);
+        TEST_ASSERT(mod != nullptr, "Binary " + bin + " must be registered in VersionDatabase");
+        TEST_ASSERT(mod->stringTable.at("FileVersion") == "10.0.26100.1", bin + " fileVersion must be 10.0.26100.1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: ApplicationHost Catalog & Site Configuration
+    // ------------------------------------------------------------------------
+    auto sites = iis.getSites();
+    TEST_ASSERT(sites.find(1) != sites.end(), "Site ID 1 (Default Web Site) must exist");
+    auto defSite = sites[1];
+    TEST_ASSERT(defSite.name == "Default Web Site", "Site 1 name must be 'Default Web Site'");
+    TEST_ASSERT(defSite.appPoolName == "DefaultAppPool", "Site 1 must bind to DefaultAppPool");
+    TEST_ASSERT(!defSite.bindings.empty(), "Site 1 must have at least one binding");
+    TEST_ASSERT(defSite.bindings[0].port == 80 && defSite.bindings[0].protocol == micant::iis::ProtocolType::Http, "Site 1 binding must be HTTP on port 80");
+    TEST_ASSERT(!defSite.virtualDirectories.empty(), "Site 1 must have root virtual directory");
+    TEST_ASSERT(defSite.virtualDirectories[0].physicalPath == "C:\\inetpub\\wwwroot", "Root physical path must be C:\\inetpub\\wwwroot");
+
+    TEST_ASSERT(sites.find(2) != sites.end(), "Site ID 2 (Titan-Intranet) must exist");
+    auto intraSite = sites[2];
+    TEST_ASSERT(intraSite.name == "Titan-Intranet", "Site 2 name must be 'Titan-Intranet'");
+    TEST_ASSERT(intraSite.bindings[0].port == 443 && intraSite.bindings[0].protocol == micant::iis::ProtocolType::Https, "Site 2 binding must be HTTPS on port 443");
+    TEST_ASSERT(intraSite.bindings[0].hostName == "intranet.titan.local", "Site 2 binding hostName must be intranet.titan.local");
+    TEST_ASSERT(intraSite.bindings[0].requireSni == true, "Site 2 must require SNI");
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Application Pool Lifecycle & State Management
+    // ------------------------------------------------------------------------
+    micant::iis::ApplicationPool pTest;
+    bool getPoolOk = iis.getAppPool("DefaultAppPool", pTest);
+    TEST_ASSERT(getPoolOk == true, "getAppPool for DefaultAppPool must succeed");
+    TEST_ASSERT(pTest.state == micant::iis::AppPoolState::Running, "DefaultAppPool must initially be Running");
+
+    bool createPoolOk = iis.createAppPool("FinanceAppPool", micant::iis::ManagedPipelineMode::Classic);
+    TEST_ASSERT(createPoolOk == true, "createAppPool for FinanceAppPool must succeed");
+    iis.getAppPool("FinanceAppPool", pTest);
+    TEST_ASSERT(pTest.pipelineMode == micant::iis::ManagedPipelineMode::Classic, "FinanceAppPool pipeline mode must be Classic");
+
+    bool recycleOk = iis.recycleAppPool("FinanceAppPool");
+    TEST_ASSERT(recycleOk == true, "recycleAppPool must succeed");
+    iis.getAppPool("FinanceAppPool", pTest);
+    TEST_ASSERT(pTest.recycleCount == 1, "FinanceAppPool recycleCount must be 1");
+
+    // ------------------------------------------------------------------------
+    // Stage 5: WAS Rapid-Fail Protection
+    // ------------------------------------------------------------------------
+    iis.createAppPool("CrashingAppPool");
+    for (int i = 0; i < 4; ++i) {
+        iis.simulateWorkerProcessCrash("CrashingAppPool");
+    }
+    iis.getAppPool("CrashingAppPool", pTest);
+    TEST_ASSERT(pTest.crashCount == 4 && pTest.rapidFailProtectionActive == false && pTest.state == micant::iis::AppPoolState::Running,
+                "Under threshold, AppPool must still be Running");
+
+    // 5th crash triggers rapid-fail protection shutdown
+    iis.simulateWorkerProcessCrash("CrashingAppPool");
+    iis.getAppPool("CrashingAppPool", pTest);
+    TEST_ASSERT(pTest.crashCount == 5 && pTest.rapidFailProtectionActive == true && pTest.state == micant::iis::AppPoolState::Stopped,
+                "Exceeding threshold must trigger rapid-fail protection and stop AppPool");
+
+    // ------------------------------------------------------------------------
+    // Stage 6: HTTP/1.1 Wire Request Parsing
+    // ------------------------------------------------------------------------
+    std::string rawHttp = "POST /api/upload?type=xml HTTP/1.1\r\n"
+                          "Host: api.titan.local:8080\r\n"
+                          "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
+                          "Content-Type: application/xml\r\n"
+                          "Accept: */*\r\n"
+                          "\r\n"
+                          "<record id=\"1001\"><name>TitanUnit</name></record>";
+    auto req = iis.parseRawHttpWire(rawHttp, "10.0.0.50", 49152, false);
+    TEST_ASSERT(req.method == "POST", "Parsed method must be POST");
+    TEST_ASSERT(req.uri == "/api/upload?type=xml", "Parsed URI must match");
+    TEST_ASSERT(req.path == "/api/upload", "Parsed path must be /api/upload");
+    TEST_ASSERT(req.queryString == "type=xml", "Parsed queryString must be type=xml");
+    TEST_ASSERT(req.serverPort == 8080, "Parsed serverPort from Host header must be 8080");
+    TEST_ASSERT(req.headers["content-type"] == "application/xml", "Content-Type header must be parsed");
+    TEST_ASSERT(req.body.find("<record id=\"1001\">") != std::string::npos, "Request body must be parsed");
+
+    // ------------------------------------------------------------------------
+    // Stage 7: Static File Servicing & MIME Type Mapping
+    // ------------------------------------------------------------------------
+    std::string rawCss = "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    auto reqCss = iis.parseRawHttpWire(rawCss, "127.0.0.1", 50100, false);
+    auto respCss = iis.processHttpRequest(reqCss);
+    TEST_ASSERT(respCss.statusCode == 200, "GET /style.css must return 200 OK");
+    TEST_ASSERT(respCss.contentType == "text/css", "style.css must have MIME text/css");
+    TEST_ASSERT(respCss.body.find("font-family") != std::string::npos, "style.css body must match content");
+
+    std::string rawJson = "GET /health.json HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    auto reqJson = iis.parseRawHttpWire(rawJson, "127.0.0.1", 50101, false);
+    auto respJson = iis.processHttpRequest(reqJson);
+    TEST_ASSERT(respJson.statusCode == 200, "GET /health.json must return 200 OK");
+    TEST_ASSERT(respJson.contentType == "application/json", "health.json must have MIME application/json");
+    TEST_ASSERT(respJson.body.find("\"healthy\"") != std::string::npos, "health.json body must match content");
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Default Document Resolution
+    // ------------------------------------------------------------------------
+    std::string rawRoot = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    auto reqRoot = iis.parseRawHttpWire(rawRoot, "127.0.0.1", 50102, false);
+    auto respRoot = iis.processHttpRequest(reqRoot);
+    TEST_ASSERT(respRoot.statusCode == 200, "GET / must return 200 OK via default document index.html");
+    TEST_ASSERT(respRoot.contentType == "text/html", "Default document must have MIME text/html");
+    TEST_ASSERT(respRoot.body.find("Titan Enterprise Web Server") != std::string::npos, "Default document content must match");
+
+    // ------------------------------------------------------------------------
+    // Stage 9: HTTP Status Codes & Custom Error Generation
+    // ------------------------------------------------------------------------
+    std::string rawMissing = "GET /nonexistent.txt HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    auto reqMissing = iis.parseRawHttpWire(rawMissing, "127.0.0.1", 50103, false);
+    auto respMissing = iis.processHttpRequest(reqMissing);
+    TEST_ASSERT(respMissing.statusCode == 404, "Nonexistent file must return 404 Not Found");
+    TEST_ASSERT(respMissing.body.find("HTTP Error 404.0 - Not Found") != std::string::npos, "404 response must include custom error HTML");
+
+    // Stop DefaultAppPool to test 503
+    iis.setAppPoolState("DefaultAppPool", micant::iis::AppPoolState::Stopped);
+    auto resp503 = iis.processHttpRequest(reqRoot);
+    TEST_ASSERT(resp503.statusCode == 503, "Request to site with stopped AppPool must return 503 Service Unavailable");
+    TEST_ASSERT(resp503.body.find("application pool is stopped") != std::string::npos, "503 body must mention stopped application pool");
+    iis.setAppPoolState("DefaultAppPool", micant::iis::AppPoolState::Running); // restore
+
+    // ------------------------------------------------------------------------
+    // Stage 10: Integrated Windows Authentication
+    // ------------------------------------------------------------------------
+    std::string rawIntraUnauth = "GET /index.html HTTP/1.1\r\nHost: intranet.titan.local\r\n\r\n";
+    auto reqIntraUnauth = iis.parseRawHttpWire(rawIntraUnauth, "10.0.1.100", 50200, true);
+    auto respIntraUnauth = iis.processHttpRequest(reqIntraUnauth);
+    TEST_ASSERT(respIntraUnauth.statusCode == 401, "Protected intranet site without credentials must return 401 Unauthorized");
+    TEST_ASSERT(respIntraUnauth.headers.find("WWW-Authenticate") != respIntraUnauth.headers.end(), "401 must include WWW-Authenticate header");
+    TEST_ASSERT(respIntraUnauth.headers["WWW-Authenticate"].find("Negotiate") != std::string::npos, "WWW-Authenticate must include Negotiate");
+
+    std::string rawIntraAuth = "GET /index.html HTTP/1.1\r\n"
+                               "Host: intranet.titan.local\r\n"
+                               "Authorization: Negotiate TlRMTVNTUAABAAAAl4II4gAAAAAAAAAAAAAAAAAAAAAGAbEdAAAADw==\r\n"
+                               "\r\n";
+    auto reqIntraAuth = iis.parseRawHttpWire(rawIntraAuth, "10.0.1.100", 50201, true);
+    auto respIntraAuth = iis.processHttpRequest(reqIntraAuth);
+    TEST_ASSERT(respIntraAuth.statusCode == 200, "Protected intranet site with valid Negotiate token must return 200 OK");
+    TEST_ASSERT(respIntraAuth.body.find("Titan Intranet Portal") != std::string::npos, "Intranet response body must be returned");
+
+    // ------------------------------------------------------------------------
+    // Stage 11: TLS/SSL SNI Host Binding & Resolution
+    // ------------------------------------------------------------------------
+    micant::iis::WebSite s2;
+    iis.getSite(2, s2);
+    TEST_ASSERT(!s2.bindings.empty(), "Site 2 must have bindings");
+    TEST_ASSERT(s2.bindings[0].sslCertThumbprint == "A1B2C3D4E5F60123456789ABCDEF0123456789AB", "Site 2 SSL thumbprint must match ADCS certificate");
+    TEST_ASSERT(s2.bindings[0].requireSni == true, "Site 2 binding must require SNI");
+
+    // ------------------------------------------------------------------------
+    // Stage 12: Content Compression Negotiation (Gzip)
+    // ------------------------------------------------------------------------
+    std::string rawGzip = "GET /index.html HTTP/1.1\r\n"
+                          "Host: localhost\r\n"
+                          "Accept-Encoding: gzip, deflate\r\n"
+                          "\r\n";
+    auto reqGzip = iis.parseRawHttpWire(rawGzip, "127.0.0.1", 50300, false);
+    auto respGzip = iis.processHttpRequest(reqGzip);
+    TEST_ASSERT(respGzip.statusCode == 200, "Compressed request must return 200 OK");
+    TEST_ASSERT(respGzip.isCompressed == true, "Response must have isCompressed set to true");
+    TEST_ASSERT(respGzip.contentEncoding == "gzip", "contentEncoding must be gzip");
+    TEST_ASSERT(respGzip.headers["Content-Encoding"] == "gzip", "Content-Encoding header must be present");
+    TEST_ASSERT(respGzip.body.size() > 10 && static_cast<uint8_t>(respGzip.body[0]) == 0x1f && static_cast<uint8_t>(respGzip.body[1]) == 0x8b,
+                "Body must contain RFC 1952 Gzip magic bytes (0x1f, 0x8b)");
+
+    // ------------------------------------------------------------------------
+    // Stage 13: W3C Extended Logging Verification
+    // ------------------------------------------------------------------------
+    const auto& logs = iis.getW3CLogs();
+    TEST_ASSERT(!logs.empty(), "W3C Extended Logs must contain recorded HTTP requests");
+    const auto& lastLog = logs.back();
+    TEST_ASSERT(lastLog.date == "2026-10-08", "Log date must match current date");
+    TEST_ASSERT(lastLog.method == "GET", "Log method must be GET");
+    TEST_ASSERT(lastLog.uriStem == "/index.html", "Log uriStem must be /index.html");
+    TEST_ASSERT(lastLog.scStatus == 200, "Log scStatus must be 200");
+
+    // ------------------------------------------------------------------------
+    // Stage 14: Win32 C ABI Exports & Concurrent Multithreaded Stress Test
+    // ------------------------------------------------------------------------
+    void* pEngine = nullptr;
+    int32_t initRes = micant::iis::MicaIisInitialize(&pEngine);
+    TEST_ASSERT(initRes == 1 && pEngine != nullptr, "MicaIisInitialize must return engine pointer via C ABI");
+
+    char respBuf[2048]{};
+    const char* cReq = "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    int32_t statusAbi = micant::iis::MicaIisProcessRequest(pEngine, cReq, 0, respBuf, sizeof(respBuf));
+    TEST_ASSERT(statusAbi == 200, "MicaIisProcessRequest must return 200 via C ABI");
+    TEST_ASSERT(std::string(respBuf).find("HTTP/1.1 200 OK") != std::string::npos, "Response buffer must contain HTTP 200 OK");
+
+    // Multithreaded High-Throughput Concurrent HTTP Stress Test (120 requests)
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&iis, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                std::string wire = "GET /health.json HTTP/1.1\r\nHost: localhost\r\n\r\n";
+                auto reqS = iis.parseRawHttpWire(wire, "10.10." + std::to_string(t) + "." + std::to_string(op + 1), 40000 + t * 100 + op, false);
+                auto respS = iis.processHttpRequest(reqS);
+                if (respS.statusCode == 200 && respS.contentType == "application/json" && !respS.body.empty()) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded HTTP stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 210: Windows Enterprise IIS & HTTP Server Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite209")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite210")) {
+        RUN_TEST(Test_WindowsEnterpriseIIS_HttpServer_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite209") {
         RUN_TEST(Test_WindowsEnterpriseDHCP_Server_Subsystem);
         return g_FailedTests;
     }
@@ -47910,6 +48160,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem);
     RUN_TEST(Test_WindowsEnterpriseDNS_Server_Subsystem);
     RUN_TEST(Test_WindowsEnterpriseDHCP_Server_Subsystem);
+    RUN_TEST(Test_WindowsEnterpriseIIS_HttpServer_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
