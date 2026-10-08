@@ -312,7 +312,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 152: Precision Touchpad & DirectManipulation Subsystem [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 153: Windows Ink Workspace, ISF & Pen Inking Digitizer [PLANNED]        │
+│ Phase 153: Windows Ink Workspace, ISF & Pen Inking Digitizer [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 154: Windows Spatial Audio Platform & Audio Processing [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3208,21 +3210,39 @@
 
 ---
 
-### Phase 153: Windows Ink Workspace, Ink Serialized Format / ISF & Pen Inking Digitizer Stack (`ink.hpp`, `inkobj.dll`, `wisptis.exe`, `TitanInk`, `AegisStylus`) (Milestone 180) [PLANNED]
+### Phase 153: Windows Ink Workspace, Ink Serialized Format / ISF & Pen Inking Digitizer Stack (`ink.hpp`, `inkobj.dll`, `wisptis.exe`, `TitanInk`, `AegisStylus`) (Milestone 180) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Ink Workspace, Ink Serialized Format (ISF) binary parser/serializer, pen digitizer HID reports (tip pressure, eraser, barrel button, tilt X/Y, hover/in-range), Bezier stroke smoothing, and Ink Desktop Workspace overlay.*
-- [ ] **Windows Ink & Pen Digitizer Architecture (`include/micant/ink.hpp`)**:
-  - HID Digitizer Pen / Stylus Usage Page (0x0D): Tip Switch, In-Range, Barrel Switch, Invert / Eraser, Tip Pressure (4096 levels), X/Y Tilt (-90..+90 deg), Twist.
-  - Ink Stroke Geometry & Bezier Curve Fitting: Real-time cubic Bezier smoothing, pressure-to-width tapering, velocity filtering, and stroke bounding box computation.
-  - Ink Serialized Format (ISF) Binary Engine: Clean-room encoder/decoder for Microsoft ISF stream format (tag-based stream, packet property descriptions, delta compression, and embedded custom properties).
-  - Windows Ink Workspace (`wisptis.exe` / `inkobj.dll`): Whiteboard canvas, Screen Sketch annotation layer, Sticky Notes ink intake, and Radial Menu (pen shortcuts).
+- [x] **Windows Ink & Pen Digitizer Architecture (`include/micant/ink.hpp`)**:
+  - HID Digitizer Pen / Stylus Usage Page (0x0D): Tip Switch (0x42), In-Range (0x32), Barrel Switch (0x44), Invert / Eraser (0x3C), Tip Pressure (4096 levels, 12-bit), X/Y Tilt (-90..+90 deg), Twist.
+  - Ink Stroke Geometry & Bezier Curve Fitting: Real-time Catmull-Rom to Cubic Bézier smoothing, pressure-to-width tapering, velocity filtering, and stroke bounding box computation.
+  - Ink Serialized Format (ISF) Binary Engine: Clean-room encoder/decoder for Microsoft ISF stream format (tag-based stream, variable-length integer LEB128/VLQ, zigzag signed delta compression, and embedded drawing attributes).
+  - Windows Ink Workspace (`wisptis.exe` / `inkobj.dll`): Multi-stroke canvas management, geometric stroke hit-testing, eraser point suppression (`eraseAt`), and `InkCollector` window presentation pipeline.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `inkobj.dll`: `CreateInkDisp`, `CreateInkCollector`, `InkGetStrokeCount`, `SaveInkToStream`, `LoadInkFromStream`.
+  - `wisptis.exe`: `WisptisRegisterDigitizer`, `WisptisProcessPenReport`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`TabletInputService`, `svchost.exe -k TabletInputGroup`).
+- [x] **Interactive Shell CLI**:
+  - `ink status`, `ink stroke <add|list|clear>`, `ink pen <x> <y> [pressure] [state]`, `ink isf`, `ink test`.
+- [x] **Unit Test Suite 180 (`Test_WindowsInk_PenDigitizer_ISF_Subsystem`)**:
+  - 12 comprehensive validation stages verifying subsystem registration, HID pen report ingestion, 12-bit pressure dynamics, cubic Bézier smoothing, bounding box calculation, ISF binary serialization, ISF round-trip fidelity, stroke canvas deletion/clearing, geometric hit-testing eraser invalidation, `InkCollector` presentation, dynamic C ABI exports, and multi-threaded report concurrency.
+  - Milestone 180: **180 / 180 Test Suites Passing (100%)**.
+
+---
+
+### Phase 154: Windows Spatial Audio Platform, Audio Processing Objects (APO) & 3D Binaural Sound Subsystem (`spatial_audio.hpp`, `audioengine.dll`, `spatialaudioclient.h`, `TitanSpatial`, `AegisAudioAPO`) (Milestone 181) [PLANNED]
+*Goal: Implement clean-room Windows Spatial Audio Platform (ISpatialAudioClient, ISpatialAudioObjectRenderStream, dynamic 3D audio objects), Audio Processing Objects (APO) architecture (sAPO, GFX, LFX, EFX DSP pipeline), Ambisonic spherical harmonics, and Head-Related Transfer Function (HRTF) binaural virtualization.*
+- [ ] **Windows Spatial Audio Architecture (`include/micant/spatial_audio.hpp`)**:
+  - `ISpatialAudioClient`: Querying spatial audio capabilities, maximum active dynamic sound objects, static channel bed configurations (5.1.2, 7.1.4, 9.1.6).
+  - `ISpatialAudioObjectRenderStream` & `ISpatialAudioObject`: Real-time 3D positional positioning (X, Y, Z coordinates), distance attenuation curves (linear, inverse, exponential), Doppler shifts, and cone directivity.
+  - Audio Processing Object (APO) Architecture (`IAudioProcessingObject`, `IAudioProcessingObjectRT`): System Effects Audio Processing Objects (sAPO) supporting GFX (Global Effects), LFX (Local Effects), and EFX (Endpoint Effects) in-place audio DSP.
+  - Ambisonics & HRTF Binaural Engine: First/second-order spherical harmonic B-Format decoding and interaural time/level difference (ITD/ILD) spatial filtering for stereo headphones.
 - [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `inkobj.dll`: `CreateInkDisp`, `CreateInkStroke`, `CreateInkCollector`, `LoadInkFromStream`, `SaveInkToStream`.
-  - `wisptis.exe`: Windows Ink and Tablet PC Input Subsystem daemon.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`TabletInputService`).
+  - `audioengine.dll`: `CreateSpatialAudioClient`, `RegisterAudioProcessingObject`, `ApoProcessAudio`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`SpatialAudioService`, `svchost.exe -k AudioGroup`).
 - [ ] **Interactive Shell CLI**:
-  - `ink status`, `ink stroke <draw|clear|list>`, `ink pen <hover|down|up|tilt>`, `ink isf <save|load|inspect>`, `ink test`.
-- [ ] **Unit Test Suite 180 (`Test_WindowsInk_PenDigitizer_ISF_Subsystem`)**:
-  - Pen report ingestion, pressure dynamics, tilt compensation, Bezier stroke smoothing, ISF stream serialization/deserialization, and ink collection APIs.
+  - `spatial status`, `spatial play <x> <y> <z> [freq]`, `spatial stream <start|stop>`, `spatial format <bed|objects>`, `spatial test`.
+- [ ] **Unit Test Suite 181 (`Test_WindowsSpatialAudio_APO_Subsystem`)**:
+  - Multi-channel bed rendering, dynamic 3D positional panning, HRTF binauralization, APO DSP buffer processing, C ABI exports, and multi-threaded audio object stream stress testing.
 
 
 

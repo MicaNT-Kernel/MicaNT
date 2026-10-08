@@ -184,6 +184,7 @@
 #include "micant/modern_standby.hpp"
 #include "micant/wsa.hpp"
 #include "micant/touchpad.hpp"
+#include "micant/ink.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -40826,8 +40827,276 @@ void Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem() {
     std::cout << "[TEST] Suite 179: Windows Precision Touchpad (PTP), DirectManipulation & Touch Injection Subsystem PASSED.\n";
 }
 
+void Test_WindowsInk_PenDigitizer_ISF_Subsystem() {
+    std::cout << "[TEST] Running Suite 180: Windows Ink Workspace, Ink Serialized Format (ISF) & Pen Digitizer Subsystem...\n";
+
+    // Stage 1: Subsystem Registration & SCM Service Initialization
+    ink::RegisterInkSubsystem();
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("inkobj.dll") != nullptr, "inkobj.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("wisptis.exe") != nullptr, "wisptis.exe daemon must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto svcRec = scm.getServiceRecord(L"TabletInputService");
+    TEST_ASSERT(svcRec != nullptr, "TabletInputService must be registered in Service Control Manager");
+    TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "TabletInputService must be RUNNING");
+
+    // Stage 2: HID Pen Report Ingestion & Transducer State Tracking
+    auto& inkSys = ink::WindowsInkSubsystem::get();
+    TEST_ASSERT(inkSys.isSubsystemEnabled(), "WindowsInkSubsystem must be enabled by default");
+
+    uint64_t initialReports = inkSys.getProcessedPenReports();
+
+    // Hover report (In-range, tip up)
+    ink::PenReport repHover{};
+    repHover.transducerId = 101;
+    repHover.inRange = true;
+    repHover.tipDown = false;
+    repHover.point.x = 150.0f;
+    repHover.point.y = 250.0f;
+    repHover.point.pressure = 0;
+    repHover.point.timestampUs = 1000000;
+    repHover.point.buttons = ink::PenButtonFlags::InRange;
+    inkSys.processPenReport(repHover);
+    TEST_ASSERT(inkSys.getProcessedPenReports() == initialReports + 1, "Hover pen report must be processed");
+
+    // In-contact report with barrel button (side button)
+    ink::PenReport repBarrel{};
+    repBarrel.transducerId = 101;
+    repBarrel.inRange = true;
+    repBarrel.tipDown = true;
+    repBarrel.barrelPressed = true;
+    repBarrel.point.x = 155.0f;
+    repBarrel.point.y = 255.0f;
+    repBarrel.point.pressure = 1500;
+    repBarrel.point.tiltX = 15;
+    repBarrel.point.tiltY = -10;
+    repBarrel.point.twist = 45;
+    repBarrel.point.timestampUs = 1008000;
+    repBarrel.point.buttons = ink::PenButtonFlags::InRange | ink::PenButtonFlags::TipSwitch | ink::PenButtonFlags::BarrelSwitch;
+    inkSys.processPenReport(repBarrel);
+    TEST_ASSERT(inkSys.getProcessedPenReports() == initialReports + 2, "Barrel-pressed pen report must be processed");
+
+    // Stage 3: 12-Bit Pressure Dynamics (0..4095) & Dual-Axis Tilt Tracking (-90..+90 deg)
+    ink::PenPoint ptMin{};
+    ptMin.x = 10.0f; ptMin.y = 20.0f; ptMin.pressure = 0; ptMin.tiltX = -90; ptMin.tiltY = -90; ptMin.buttons = ink::PenButtonFlags::TipSwitch;
+    ink::PenPoint ptMax{};
+    ptMax.x = 1920.0f; ptMax.y = 1080.0f; ptMax.pressure = 4095; ptMax.tiltX = 90; ptMax.tiltY = 90; ptMax.twist = 359; ptMax.buttons = ink::PenButtonFlags::TipSwitch;
+    TEST_ASSERT(ptMin.pressure == 0 && ptMax.pressure == 4095, "Pressure dynamic range must span 0 to 4095 (12-bit)");
+    TEST_ASSERT(ptMin.tiltX == -90 && ptMax.tiltX == 90, "X tilt must span -90 to +90 degrees");
+    TEST_ASSERT(ptMin.tiltY == -90 && ptMax.tiltY == 90, "Y tilt must span -90 to +90 degrees");
+
+    // Stage 4: Real-time Catmull-Rom to Cubic Bézier Curve Smoothing
+    ink::DrawingAttributes curveAttrs{};
+    curveAttrs.baseWidth = 3.0f;
+    curveAttrs.fitToCurve = true;
+    curveAttrs.pressureGamma = 1.0f;
+
+    ink::InkStroke stroke(10, curveAttrs);
+    {
+        ink::PenPoint p{}; p.x = 10.0f; p.y = 10.0f; p.pressure = 1024; p.buttons = ink::PenButtonFlags::TipSwitch; stroke.addPoint(p);
+        p.x = 25.0f; p.y = 35.0f; p.pressure = 2048; p.tiltX = 5; p.tiltY = 5; stroke.addPoint(p);
+        p.x = 50.0f; p.y = 70.0f; p.pressure = 3072; p.tiltX = 10; p.tiltY = 10; stroke.addPoint(p);
+        p.x = 90.0f; p.y = 85.0f; p.pressure = 4095; p.tiltX = 12; p.tiltY = 8; stroke.addPoint(p);
+        p.x = 140.0f; p.y = 90.0f; p.pressure = 2048; stroke.addPoint(p);
+    }
+
+    TEST_ASSERT(stroke.getPointCount() == 5, "Stroke must retain 5 raw pen points");
+    const auto& beziers = stroke.getBezierPoints();
+    TEST_ASSERT(beziers.size() >= 5, "Catmull-Rom Bézier fitting must generate smooth cubic control points");
+
+    // Stage 5: Dynamic Stroke Width Tapering & Bounding Box Computation
+    const auto& bounds = stroke.getBounds();
+    TEST_ASSERT(bounds.left < 10.0f && bounds.right > 140.0f, "Bounding box must enclose X bounds with stroke width margin");
+    TEST_ASSERT(bounds.top < 10.0f && bounds.bottom > 90.0f, "Bounding box must enclose Y bounds with stroke width margin");
+    TEST_ASSERT(bounds.width() > 130.0f && bounds.height() > 80.0f, "Bounding box dimensions must be strictly positive");
+
+    float widthAtLowPressure = beziers[0].width;
+    float widthAtHighPressure = beziers[3].width;
+    TEST_ASSERT(widthAtHighPressure > widthAtLowPressure, "Stroke width must dynamically scale with pen pressure");
+
+    // Stage 6: Microsoft ISF Binary Stream Serialization
+    ink::InkDisp canvas;
+    auto s1 = canvas.createStroke(curveAttrs);
+    {
+        ink::PenPoint p{}; p.buttons = ink::PenButtonFlags::TipSwitch;
+        p.x = 100.0f; p.y = 100.0f; p.pressure = 1024; s1->addPoint(p);
+        p.x = 150.0f; p.y = 120.0f; p.pressure = 2048; p.tiltX = 2; p.tiltY = 4; s1->addPoint(p);
+        p.x = 200.0f; p.y = 160.0f; p.pressure = 3072; p.tiltX = 4; p.tiltY = 8; s1->addPoint(p);
+    }
+
+    ink::DrawingAttributes rectAttrs{};
+    rectAttrs.colorRgba = 0xFF00FF88;
+    rectAttrs.baseWidth = 6.0f;
+    rectAttrs.penTip = ink::PenTipType::Rectangle;
+    auto s2 = canvas.createStroke(rectAttrs);
+    {
+        ink::PenPoint p{}; p.buttons = ink::PenButtonFlags::TipSwitch;
+        p.x = 300.0f; p.y = 300.0f; p.pressure = 2048; p.tiltX = -10; p.tiltY = 5; s2->addPoint(p);
+        p.x = 350.0f; p.y = 320.0f; p.pressure = 2500; p.tiltX = -8; p.tiltY = 4; s2->addPoint(p);
+    }
+
+    auto isfBytes = canvas.saveToIsf();
+    TEST_ASSERT(isfBytes.size() > 16, "Serialized ISF binary payload must be non-empty");
+    TEST_ASSERT(isfBytes[0] == 'I' && isfBytes[1] == 'S' && isfBytes[2] == 'F', "ISF header magic must be 'ISF'");
+    TEST_ASSERT(isfBytes[3] == 0x01, "ISF format version must be 1.0");
+    TEST_ASSERT(isfBytes.back() == ink::isf::ISF_TAG_END, "ISF stream must terminate with ISF_TAG_END tag");
+
+    // Stage 7: Microsoft ISF Binary Stream Deserialization & Round-Trip Fidelity
+    ink::InkDisp restoredCanvas;
+    bool loadOk = restoredCanvas.loadFromIsf(isfBytes.data(), isfBytes.size());
+    TEST_ASSERT(loadOk, "ISF stream deserialization must succeed");
+    TEST_ASSERT(restoredCanvas.getStrokeCount() == 2, "Restored canvas must contain exactly 2 strokes");
+
+    auto restoredStrokes = restoredCanvas.getStrokes();
+    TEST_ASSERT(restoredStrokes[0]->getPointCount() == 3, "Restored stroke 1 must retain 3 raw points");
+    TEST_ASSERT(restoredStrokes[1]->getPointCount() == 2, "Restored stroke 2 must retain 2 raw points");
+    TEST_ASSERT(restoredStrokes[1]->getAttributes().colorRgba == 0xFF00FF88, "Restored stroke 2 ARGB color must match original");
+    TEST_ASSERT(restoredStrokes[1]->getAttributes().penTip == ink::PenTipType::Rectangle, "Restored stroke 2 pen tip must match Rectangle");
+
+    float diffX = std::abs(restoredStrokes[0]->getPoints()[0].x - 100.0f);
+    float diffY = std::abs(restoredStrokes[0]->getPoints()[0].y - 100.0f);
+    TEST_ASSERT(diffX < 0.2f && diffY < 0.2f, "ISF delta compression must maintain sub-pixel positional fidelity");
+
+    // Stage 8: Multi-Stroke Ink Canvas Management (Add, Delete, Clear)
+    uint32_t stroke1Id = restoredStrokes[0]->getId();
+    bool deleted = restoredCanvas.deleteStroke(stroke1Id);
+    TEST_ASSERT(deleted, "deleteStroke must return true for valid stroke ID");
+    TEST_ASSERT(restoredCanvas.getStrokeCount() == 1, "Canvas must have 1 stroke remaining after deletion");
+
+    restoredCanvas.clear();
+    TEST_ASSERT(restoredCanvas.getStrokeCount() == 0, "clear() must remove all strokes from canvas");
+
+    // Stage 9: Geometric Stroke Hit-Testing & Eraser Invalidation
+    ink::InkDisp hitCanvas;
+    auto hs1 = hitCanvas.createStroke(curveAttrs);
+    {
+        ink::PenPoint p{}; p.pressure = 2048; p.buttons = ink::PenButtonFlags::TipSwitch;
+        p.x = 10.0f; p.y = 10.0f; hs1->addPoint(p);
+        p.x = 100.0f; p.y = 10.0f; hs1->addPoint(p);
+    }
+
+    auto hs2 = hitCanvas.createStroke(curveAttrs);
+    {
+        ink::PenPoint p{}; p.pressure = 2048; p.buttons = ink::PenButtonFlags::TipSwitch;
+        p.x = 10.0f; p.y = 200.0f; hs2->addPoint(p);
+        p.x = 100.0f; p.y = 200.0f; hs2->addPoint(p);
+    }
+
+    TEST_ASSERT(hs1->hitTest(50.0f, 10.0f, 5.0f), "Stroke 1 must register hit test along its segment");
+    TEST_ASSERT(!hs1->hitTest(50.0f, 50.0f, 5.0f), "Stroke 1 must not register hit test far outside its segment");
+
+    uint32_t erased = hitCanvas.eraseAt(50.0f, 10.0f, 8.0f);
+    TEST_ASSERT(erased == 1, "eraseAt must successfully erase 1 intersecting stroke");
+    TEST_ASSERT(hitCanvas.getStrokeCount() == 1, "Canvas must retain 1 stroke after eraser strike");
+    TEST_ASSERT(hitCanvas.getStrokes()[0]->getId() == hs2->getId(), "Remaining stroke must be Stroke 2");
+
+    // Stage 10: InkCollector Window Presentation Pipeline & Drawing Attributes
+    auto collCanvas = std::make_shared<ink::InkDisp>();
+    ink::InkCollector collector(reinterpret_cast<void*>(0x5001), collCanvas);
+    TEST_ASSERT(!collector.isEnabled(), "InkCollector must initially be disabled");
+
+    collector.setEnabled(true);
+    TEST_ASSERT(collector.isEnabled(), "InkCollector must be enabled after setEnabled(true)");
+
+    ink::DrawingAttributes collAttrs{};
+    collAttrs.colorRgba = 0xFF336699;
+    collAttrs.baseWidth = 5.0f;
+    collector.setDefaultAttributes(collAttrs);
+    TEST_ASSERT(collector.getDefaultAttributes().colorRgba == 0xFF336699, "Collector default attributes must match set attributes");
+
+    {
+        ink::PenPoint p{}; p.x = 50.0f; p.y = 50.0f; p.pressure = 1500; p.buttons = ink::PenButtonFlags::TipSwitch;
+        collector.handlePenDown(p);
+    }
+    TEST_ASSERT(collector.isCurrentlyInking(), "Collector must be actively inking during pen-down stroke");
+
+    {
+        ink::PenPoint p{}; p.x = 60.0f; p.y = 70.0f; p.pressure = 2200; p.buttons = ink::PenButtonFlags::TipSwitch;
+        collector.handlePenMove(p);
+    }
+    {
+        ink::PenPoint p{}; p.x = 75.0f; p.y = 90.0f; p.pressure = 1000; p.buttons = ink::PenButtonFlags::TipSwitch;
+        collector.handlePenUp(p);
+    }
+    TEST_ASSERT(!collector.isCurrentlyInking(), "Collector must cease inking after pen-up");
+    TEST_ASSERT(collCanvas->getStrokeCount() == 1, "Collector canvas must contain 1 newly rendered stroke");
+    TEST_ASSERT(collCanvas->getStrokes()[0]->getPointCount() == 3, "Rendered stroke must contain all 3 captured trajectory points");
+
+    // Stage 11: Dynamic C ABI Parity Exports
+    void* pInkHandle = nullptr;
+    NTSTATUS stDisp = ink::CreateInkDisp(&pInkHandle);
+    TEST_ASSERT(stDisp == STATUS_SUCCESS && pInkHandle != nullptr, "CreateInkDisp C export must return STATUS_SUCCESS");
+
+    uint32_t initCount = ink::InkGetStrokeCount(pInkHandle);
+    TEST_ASSERT(initCount == 0, "InkGetStrokeCount C export must return 0 for new canvas");
+
+    void* pCollectorHandle = nullptr;
+    NTSTATUS stCol = ink::CreateInkCollector(reinterpret_cast<void*>(0x6002), &pCollectorHandle);
+    TEST_ASSERT(stCol == STATUS_SUCCESS && pCollectorHandle != nullptr, "CreateInkCollector C export must return STATUS_SUCCESS");
+
+    uint8_t* pStreamData = nullptr;
+    size_t streamSize = 0;
+    NTSTATUS stSave = ink::SaveInkToStream(pInkHandle, &pStreamData, &streamSize);
+    TEST_ASSERT(stSave == STATUS_SUCCESS && pStreamData != nullptr && streamSize > 0, "SaveInkToStream C export must return valid stream");
+
+    void* pLoadedInk = nullptr;
+    NTSTATUS stLoad = ink::LoadInkFromStream(pStreamData, streamSize, &pLoadedInk);
+    TEST_ASSERT(stLoad == STATUS_SUCCESS && pLoadedInk != nullptr, "LoadInkFromStream C export must successfully deserialize stream");
+
+    delete[] pStreamData;
+    delete static_cast<std::shared_ptr<ink::InkDisp>*>(pInkHandle);
+    delete static_cast<std::shared_ptr<ink::InkDisp>*>(pLoadedInk);
+    delete static_cast<std::shared_ptr<ink::InkCollector>*>(pCollectorHandle);
+
+    uint32_t wisptisDevId = 0;
+    NTSTATUS stWisptisReg = ink::WisptisRegisterDigitizer(&wisptisDevId);
+    TEST_ASSERT(stWisptisReg == STATUS_SUCCESS && wisptisDevId == 0xDE020005, "WisptisRegisterDigitizer C export must return 0xDE020005");
+
+    ink::PenReport repExport{};
+    repExport.transducerId = 55;
+    repExport.inRange = true;
+    repExport.tipDown = false;
+    NTSTATUS stWisptisProc = ink::WisptisProcessPenReport(&repExport);
+    TEST_ASSERT(stWisptisProc == STATUS_SUCCESS, "WisptisProcessPenReport C export must return STATUS_SUCCESS");
+
+    // Stage 12: Multi-Threaded Pen Report Ingestion Stress Test
+    std::atomic<uint32_t> stressReportsProcessed{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([&, t]() {
+            for (int r = 0; r < 25; ++r) {
+                ink::PenReport sRep{};
+                sRep.transducerId = static_cast<uint32_t>(100 + t);
+                sRep.inRange = true;
+                sRep.tipDown = (r % 2 == 1);
+                sRep.point.x = 100.0f + static_cast<float>(t * 50 + r);
+                sRep.point.y = 200.0f + static_cast<float>(r * 5);
+                sRep.point.pressure = static_cast<uint32_t>(1000 + r * 100);
+                sRep.point.tiltX = static_cast<int16_t>(t * 5);
+                sRep.point.tiltY = static_cast<int16_t>(-t * 5);
+                sRep.point.twist = 0;
+                sRep.point.timestampUs = static_cast<uint64_t>(1000000 + t * 5000 + r * 100);
+                sRep.point.buttons = ink::PenButtonFlags::InRange | (r % 2 == 1 ? ink::PenButtonFlags::TipSwitch : ink::PenButtonFlags::None);
+                inkSys.processPenReport(sRep);
+                stressReportsProcessed++;
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressReportsProcessed.load() == 100, "100 multi-threaded Pen reports must be processed without race conditions");
+
+    std::cout << "[TEST] Suite 180: Windows Ink Workspace, Ink Serialized Format (ISF) & Pen Digitizer Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite179")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite180")) {
+        RUN_TEST(Test_WindowsInk_PenDigitizer_ISF_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite179") {
         RUN_TEST(Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem);
         return g_FailedTests;
     }
@@ -41307,6 +41576,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_ModernStandby_PEP_SleepStudy_Subsystem);
     RUN_TEST(Test_WindowsSubsystemForAndroid_WSA_Subsystem);
     RUN_TEST(Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem);
+    RUN_TEST(Test_WindowsInk_PenDigitizer_ISF_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

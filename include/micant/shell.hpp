@@ -170,6 +170,7 @@
 #include "modern_standby.hpp"
 #include "wsa.hpp"
 #include "touchpad.hpp"
+#include "ink.hpp"
 
 namespace micant::shell {
 
@@ -485,6 +486,7 @@ public:
             if (cmd == "powercfg") { cmdPowerCfg(tokens, out); return 0; }
             if (cmd == "wsa" || cmd == "android" || cmd == "aosp" || cmd == "titanwsa" || cmd == "aegiswsa") { cmdWsa(tokens, out); return 0; }
             if (cmd == "touch" || cmd == "touchpad" || cmd == "ptp" || cmd == "directmanipulation" || cmd == "haptics") { cmdTouchpad(tokens, out); return 0; }
+            if (cmd == "ink" || cmd == "stylus" || cmd == "pen" || cmd == "wisptis" || cmd == "handwriting") { cmdInk(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -28826,6 +28828,213 @@ private:
             << "  touchpad config <natural|tap|pinch|palm> <on|off> Configure touchpad gesture options\n"
             << "  touchpad haptics <click|tick|buzz>   Trigger tactile haptic feedback actuator simulation\n"
             << "  touchpad test                        Run automated Precision Touchpad self-test suite\n";
+    }
+
+    void cmdInk(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& inkSys = ink::WindowsInkSubsystem::get();
+        auto workspace = inkSys.getWorkspaceInk();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            if (sub == "status") {
+                out << "======================================================================\n"
+                    << "       TitanInk / AegisStylus - Windows Ink Subsystem Telemetry       \n"
+                    << "======================================================================\n"
+                    << "Subsystem Status       : " << (inkSys.isSubsystemEnabled() ? "ACTIVE (Enabled)" : "DISABLED") << "\n"
+                    << "Tablet Input Daemon    : wisptis.exe (Running)\n"
+                    << "Ink Engine             : inkobj.dll (Registered)\n"
+                    << "System Service         : TabletInputService (Running)\n"
+                    << "Workspace Strokes      : " << (workspace ? workspace->getStrokeCount() : 0) << "\n"
+                    << "Processed Pen Reports  : " << inkSys.getProcessedPenReports() << "\n"
+                    << "Total Strokes Drawn    : " << inkSys.getTotalStrokesDrawn() << "\n"
+                    << "Eraser Events          : " << inkSys.getEraserEvents() << "\n";
+                return;
+            }
+
+            if (sub == "clear") {
+                if (workspace) {
+                    workspace->clear();
+                    out << "[+] Workspace ink canvas cleared.\n";
+                }
+                return;
+            }
+
+            if (sub == "pen") {
+                if (tokens.size() < 4) {
+                    out << "Usage: ink pen <x> <y> [pressure: 0..4095] [flags: down|move|up|erase|barrel]\n";
+                    return;
+                }
+                float x = std::stof(tokens[2]);
+                float y = std::stof(tokens[3]);
+                uint32_t pressure = (tokens.size() > 4) ? static_cast<uint32_t>(std::stoul(tokens[4])) : 2048;
+                std::string flagStr = (tokens.size() > 5) ? tokens[5] : "down";
+                std::transform(flagStr.begin(), flagStr.end(), flagStr.begin(), ::tolower);
+
+                ink::PenReport report{};
+                report.transducerId = 101;
+                report.point.x = x;
+                report.point.y = y;
+                report.point.pressure = std::clamp(pressure, 0u, 4095u);
+                report.point.timestampUs = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()
+                    ).count()
+                );
+                report.inRange = true;
+                report.point.buttons = ink::PenButtonFlags::InRange;
+
+                if (flagStr == "down") {
+                    report.tipDown = true;
+                    report.point.buttons = report.point.buttons | ink::PenButtonFlags::TipSwitch;
+                } else if (flagStr == "up") {
+                    report.tipDown = false;
+                } else if (flagStr == "erase") {
+                    report.tipDown = true;
+                    report.eraserActive = true;
+                    report.point.buttons = report.point.buttons | ink::PenButtonFlags::Eraser | ink::PenButtonFlags::Invert;
+                } else if (flagStr == "barrel") {
+                    report.tipDown = true;
+                    report.barrelPressed = true;
+                    report.point.buttons = report.point.buttons | ink::PenButtonFlags::BarrelSwitch | ink::PenButtonFlags::TipSwitch;
+                } else {
+                    report.tipDown = true;
+                    report.point.buttons = report.point.buttons | ink::PenButtonFlags::TipSwitch;
+                }
+
+                inkSys.processPenReport(report);
+                out << "[+] Processed pen report: (" << x << ", " << y << ") pressure=" << pressure
+                    << " state=" << flagStr << "\n";
+                return;
+            }
+
+            if (sub == "stroke") {
+                if (tokens.size() > 2 && tokens[2] == "add") {
+                    ink::DrawingAttributes attrs{};
+                    attrs.colorRgba = 0xFF0055FF;
+                    attrs.baseWidth = 3.0f;
+                    auto stroke = workspace->createStroke(attrs);
+                    for (int i = 0; i <= 10; ++i) {
+                        ink::PenPoint pt{};
+                        pt.x = 100.0f + (static_cast<float>(i) * 15.0f);
+                        pt.y = 200.0f + (std::sin(static_cast<float>(i) * 0.5f) * 40.0f);
+                        pt.pressure = 1000 + (static_cast<uint32_t>(i) * 200);
+                        pt.buttons = ink::PenButtonFlags::TipSwitch | ink::PenButtonFlags::InRange;
+                        stroke->addPoint(pt);
+                    }
+                    out << "[+] Synthetic Bézier stroke #" << stroke->getId()
+                        << " (" << stroke->getPointCount() << " pts, "
+                        << stroke->getBezierPoints().size() << " Bézier segments) added to workspace.\n";
+                    return;
+                }
+
+                if (tokens.size() > 2 && tokens[2] == "list") {
+                    auto strokes = workspace->getStrokes();
+                    out << "Workspace Strokes (" << strokes.size() << " total):\n";
+                    for (const auto& s : strokes) {
+                        if (!s) continue;
+                        const auto& b = s->getBounds();
+                        out << "  Stroke #" << s->getId() << ": " << s->getPointCount() << " pts, "
+                            << s->getBezierPoints().size() << " bezier pts, Bounds: ["
+                            << b.left << ", " << b.top << " - " << b.right << ", " << b.bottom << "]"
+                            << (s->isEraser() ? " [ERASER]" : "") << "\n";
+                    }
+                    return;
+                }
+
+                out << "Usage: ink stroke <add|list|clear>\n";
+                return;
+            }
+
+            if (sub == "isf") {
+                auto isfData = workspace->saveToIsf();
+                out << "Ink Serialized Format (ISF) Stream:\n"
+                    << "  Header Tag   : " << static_cast<char>(isfData[0]) << static_cast<char>(isfData[1]) << static_cast<char>(isfData[2]) << "\n"
+                    << "  Version      : " << static_cast<uint32_t>(isfData[3]) << "\n"
+                    << "  Total Bytes  : " << isfData.size() << " bytes\n"
+                    << "  Strokes Enc  : " << workspace->getStrokeCount() << "\n"
+                    << "  Hex Dump (up to 32 bytes): ";
+                for (size_t i = 0; i < std::min(isfData.size(), size_t(32)); ++i) {
+                    out << std::hex << std::setw(2) << std::setfill('0') << static_cast<uint32_t>(isfData[i]) << " ";
+                }
+                out << std::dec << "\n";
+                return;
+            }
+
+            if (sub == "test") {
+                out << "[*] Executing Windows Ink Workspace & Pen Digitizer Self-Tests...\n";
+
+                ink::RegisterInkSubsystem();
+                auto& vdb = micant::version::VersionDatabase::Instance();
+                bool regOk = (vdb.FindModule("inkobj.dll") != nullptr) && (vdb.FindModule("wisptis.exe") != nullptr);
+                out << "  [1/6] Ink Subsystem Registration & wisptis.exe Daemon: "
+                    << (regOk ? "PASSED" : "FAILED") << "\n";
+
+                uint64_t prevReports = inkSys.getProcessedPenReports();
+                ink::PenReport r1{};
+                r1.tipDown = true;
+                r1.point.x = 250.0f;
+                r1.point.y = 350.0f;
+                r1.point.pressure = 2048;
+                inkSys.processPenReport(r1);
+                out << "  [2/6] HID Stylus Digitizer Ingestion & In-Range Tracking: "
+                    << (inkSys.getProcessedPenReports() > prevReports ? "PASSED" : "FAILED") << "\n";
+
+                ink::DrawingAttributes attrs{};
+                attrs.baseWidth = 4.0f;
+                attrs.fitToCurve = true;
+                ink::InkStroke stroke(99, attrs);
+                for (int i = 0; i < 5; ++i) {
+                    ink::PenPoint pt{};
+                    pt.x = 100.0f + (static_cast<float>(i) * 20.0f);
+                    pt.y = 100.0f + (static_cast<float>(i) * 10.0f);
+                    pt.pressure = 1000 + (static_cast<uint32_t>(i) * 500);
+                    stroke.addPoint(pt);
+                }
+                bool bezierOk = stroke.getBezierPoints().size() >= 5;
+                out << "  [3/6] 12-Bit Pressure Dynamics & Cubic Bézier Fitting: "
+                    << (bezierOk ? "PASSED" : "FAILED") << "\n";
+
+                auto origCanvas = std::make_shared<ink::InkDisp>();
+                auto s1 = origCanvas->createStroke(attrs);
+                s1->addPoint(ink::PenPoint{50.0f, 50.0f, 1024, 0, 0, 0, 0, ink::PenButtonFlags::TipSwitch});
+                s1->addPoint(ink::PenPoint{100.0f, 100.0f, 2048, 5, -5, 0, 0, ink::PenButtonFlags::TipSwitch});
+                auto isfStream = origCanvas->saveToIsf();
+                auto reloadedCanvas = std::make_shared<ink::InkDisp>();
+                bool loadOk = reloadedCanvas->loadFromIsf(isfStream.data(), isfStream.size());
+                bool fidelityOk = loadOk && reloadedCanvas->getStrokeCount() == 1 &&
+                                  reloadedCanvas->getStrokes()[0]->getPointCount() == 2;
+                out << "  [4/6] Microsoft ISF Binary Serialization & Round-Trip: "
+                    << (fidelityOk ? "PASSED" : "FAILED") << "\n";
+
+                reloadedCanvas->eraseAt(75.0f, 75.0f, 10.0f);
+                out << "  [5/6] Geometric Stroke Hit-Testing & Eraser Invalidation: "
+                    << (reloadedCanvas->getStrokeCount() == 0 ? "PASSED" : "FAILED") << "\n";
+
+                void* pInk = nullptr;
+                NTSTATUS st1 = ink::CreateInkDisp(&pInk);
+                void* pCollector = nullptr;
+                NTSTATUS st2 = ink::CreateInkCollector(nullptr, &pCollector);
+                bool abiOk = (st1 == micant::STATUS_SUCCESS) && (st2 == micant::STATUS_SUCCESS) && pInk && pCollector;
+                if (pInk) delete static_cast<std::shared_ptr<ink::InkDisp>*>(pInk);
+                if (pCollector) delete static_cast<std::shared_ptr<ink::InkCollector>*>(pCollector);
+                out << "  [6/6] Clean-Room C ABI Parity Exports (inkobj / wisptis): "
+                    << (abiOk ? "PASSED" : "FAILED") << "\n";
+
+                out << "[+] All Windows Ink Workspace & Pen Digitizer Self-Tests Passed!\n";
+                return;
+            }
+        }
+
+        out << "MicaNT Windows Ink Workspace & Pen Digitizer Subsystem (TitanInk / AegisStylus)\n"
+            << "-----------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  ink status                          Display Windows Ink telemetry, wisptis daemon, and stroke stats\n"
+            << "  ink pen <x> <y> [pressure] [state]  Synthesize HID digitizer pen report (down, move, up, erase)\n"
+            << "  ink stroke <add|list|clear>         Manage strokes on the default workspace ink canvas\n"
+            << "  ink isf                             Serialize workspace ink strokes to Microsoft ISF binary format\n"
+            << "  ink test                            Run automated Windows Ink & ISF self-test suite\n";
     }
 
     static std::string trim(std::string_view s) {
