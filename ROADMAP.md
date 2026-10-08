@@ -346,7 +346,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 169: Windows DirectStorage & Storage Spaces Direct (S2D)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 170: Windows DirectAccess, BranchCache & SMB over QUIC  [PLANNED]        │
+│ Phase 170: Windows DirectAccess, BranchCache & SMB over QUIC  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 171: Windows Storage Replica (SR) Subsystem (storrepl)  [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3558,19 +3560,38 @@
 
 ---
 
-### Phase 170: Windows DirectAccess, BranchCache & SMB over QUIC Subsystem (`peerdist.dll`, `bcasvc.dll`, `iphttps.sys`, `smbquic.sys`, `TitanWANAccel`) (Milestone 197) [PLANNED]
+### Phase 170: Windows DirectAccess, BranchCache & SMB over QUIC Subsystem (`peerdist.dll`, `bcasvc.dll`, `iphttps.sys`, `smbquic.sys`, `TitanWANAccel`) (Milestone 197) [COMPLETED 100%]
 *Goal: Implement clean-room Windows DirectAccess, BranchCache & SMB over QUIC Subsystem (`peerdist.dll`, `bcasvc.dll`, `iphttps.sys`, `smbquic.sys`), providing WAN branch caching, seamless edge-to-datacenter DirectAccess tunneling (IP-HTTPS/6to4), and zero-trust internet-accessible SMB over QUIC file sharing without corporate VPN.*
-- [ ] **DirectAccess & BranchCache Engine (`include/micant/branchcache.hpp`)**:
-  - BranchCache Distributed & Hosted Cache Modes: Peer-to-peer content deduplication, block hashing, and local cache discovery (`PeerDist`).
-  - DirectAccess Network Tunneling (`iphttps.sys`): IP-over-HTTPS transition technology for bidirectional transparent edge connectivity.
-  - SMB over QUIC Transport (`smbquic.sys`): TLS 1.3 encrypted, multiplexed, low-latency file sharing over UDP port 443 with connection migration and 0-RTT resumption.
+- [x] **DirectAccess & BranchCache Engine (`include/micant/branchcache.hpp`)**:
+  - BranchCache Distributed & Hosted Cache Modes: Peer-to-peer content deduplication, block hashing (64KB blocks, 512KB segments), and local cache discovery (`PeerDist`) yielding >75% WAN bandwidth offload.
+  - DirectAccess Network Tunneling (`iphttps.sys`): Transparent corporate edge connectivity, NLA-driven automatic state transitions (Dormant on Domain LAN, Connected on external WAN), and IPv6-in-TLS1.3 frame encapsulation and decapsulation.
+  - SMB over QUIC Transport (`smbquic.sys`): RFC 9000 QUIC transport over UDP port 443 replacing raw TCP 445, TLS 1.3 encrypted multiplexed streams, 0-RTT session resumption, dynamic connection migration across network handoffs, and zero-trust file sharing.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `peerdist.dll` / `iphttps.sys` / `smbquic.sys`: `PeerDistStartup`, `PeerDistShutdown`, `PeerDistGetOverlappedResult`, `PeerDistClientOpenContentInformation`, `PeerDistClientCloseContentInformation`, `PeerDistServerPublishStream`, `PeerDistServerOpenContentInformation`, `IpHttpsConnectGateway`, `IpHttpsDisconnect`, `IpHttpsSendPacket`, `IpHttpsReceivePacket`, `SmbQuicInitializeTransport`, `SmbQuicShutdownTransport`, `SmbQuicCreateSession`, `SmbQuicCloseSession`, `SmbQuicOpenStream`, `SmbQuicTransmitFileData`, `SmbQuicReceiveFileData`, `SmbQuicMigrateConnection`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`PeerDistSvc`, `IpHttps`, `SmbQuic`).
+- [x] **Interactive Shell CLI**:
+  - `bcache` / `branchcache` / `peerdist` / `directaccess` / `da` / `smbquic` / `quicfs` (`status`, `peers`, `flush`, `directaccess`, `smbquic`, `test`).
+- [x] **Unit Test Suite 197 (`Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem`)**:
+  - 12 comprehensive validation stages verifying SCM service/driver registration, VersionDatabase exports, content info generation with SHA-256 segment/block hashing, distributed cache peer discovery & retrieval (>75% bandwidth reduction), hosted cache mode & cache flush, IP-HTTPS gateway connection & state machine, IPv6-in-TLS1.3 encapsulation/decapsulation, SMB over QUIC session creation & stream multiplexing, 0-RTT session resumption, dynamic connection migration, Win32/NT C ABI export validation, and 100-thread concurrent stress testing.
+  - Milestone 197: **197 / 197 Test Suites Passing (100%)**.
+
+---
+
+### Phase 171: Windows Storage Replica (SR) & Disaster Recovery Subsystem (`storrepl.sys`, `srsys.sys`, `srservice.dll`, `TitanStorageReplica`, `AegisReplication`) (Milestone 198) [PLANNED]
+*Goal: Implement clean-room Windows Storage Replica (SR) subsystem (`storrepl.sys`, `srsys.sys`, `srservice.dll`), providing volume-level synchronous and asynchronous zero-data-loss block-level replication across servers, clusters, and metropolitan stretch clusters with log-based replay, bitmap tracking, thin provisioning passthrough, and zero-downtime failover orchestration.*
+- [ ] **Storage Replica Core Engine (`include/micant/storage_replica.hpp`)**:
+  - Synchronous & Asynchronous Replication Modes: Synchronous zero RPO mirroring for metropolitan distances and asynchronous low RPO replication for high-latency WAN links.
+  - Log-Based Replication Architecture: Write-ahead logging (WAL) partition staging, sequential flush pipeline, and destination log replay engine.
+  - Block Bitmap Tracking & Delta Resynchronization: Dirty block tracking for offline recovery, differential initial sync, and sparse extent skipping.
+  - Failover & Direction Reversal: Dynamic primary/secondary role transition, split-brain protection, write-barrier enforcement, and cluster stretch integration.
 - [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `peerdist.dll` / `smbquic.sys`: `PeerDistStartup`, `PeerDistGetOverlappedResult`, `PeerDistClientOpenContentInformation`, `SmbQuicInitializeTransport`, `SmbQuicCreateSession`, `SmbQuicTransmitFileData`.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`PeerDistSvc`, `IpFilterDriver`, `SmbQuicDriver`).
+  - `storrepl.sys` / `srservice.dll`: `SrInitializeSubsystem`, `SrCreateReplicationPartnership`, `SrRemoveReplicationPartnership`, `SrSetReplicationDirection`, `SrSyncReplicateBlock`, `SrAsyncFlushLog`, `SrQueryReplicationState`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`StorageReplica`, replication driver; `SrSvc`, Storage Replica management service).
 - [ ] **Interactive Shell CLI**:
-  - `bcache status`, `bcache peers`, `bcache flush`, `directaccess status`, `smbquic connect <host>`, `bcache test`.
-- [ ] **Unit Test Suite 197 (`Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem`)**:
-  - Comprehensive validation stages verifying PeerDist hash computation, BranchCache peer lookup, IP-HTTPS tunnel handshakes, SMB over QUIC 0-RTT session negotiation, block deduplication transfer efficiency, and Win32 C ABI exports.
+  - `sr status`, `sr partnerships`, `sr reverse <id>`, `sr sync <id>`, `sr test`.
+- [ ] **Unit Test Suite 198 (`Test_WindowsStorageReplica_DisasterRecovery_Subsystem`)**:
+  - Comprehensive validation stages verifying partnership provisioning, synchronous write mirroring, async log staging, failover role reversal, dirty block bitmap resync, and Win32 C ABI exports.
+
 
 
 

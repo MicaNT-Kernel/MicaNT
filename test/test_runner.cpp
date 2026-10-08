@@ -201,6 +201,7 @@
 #include "micant/csvfs.hpp"
 #include "micant/wcifs.hpp"
 #include "micant/s2d.hpp"
+#include "micant/branchcache.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -44123,8 +44124,263 @@ void Test_WindowsDirectStorage_S2D_Subsystem() {
     std::cout << "[TEST] Suite 196: Windows DirectStorage & Storage Spaces Direct (S2D) Subsystem PASSED.\n";
 }
 
+void Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem() {
+    std::cout << "[TEST] Running Suite 197: Windows DirectAccess, BranchCache & SMB over QUIC Subsystem...\n";
+
+    // 1. SCM Services & Driver Registration
+    micant::wan::RegisterWanSubsystem();
+    auto& bcache = micant::wan::BranchCacheSubsystem::get();
+    auto& da = micant::wan::DirectAccessSubsystem::get();
+    auto& quic = micant::wan::SmbQuicSubsystem::get();
+
+    bcache.reset();
+    da.reset();
+    quic.reset();
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+
+    auto peerDistSvc = scm.getServiceRecord(L"PeerDistSvc");
+    TEST_ASSERT(peerDistSvc != nullptr, "PeerDistSvc must be registered in SCM");
+    TEST_ASSERT(peerDistSvc->serviceType == micant::scm::SERVICE_WIN32_SHARE_PROCESS, "PeerDistSvc must be SERVICE_WIN32_SHARE_PROCESS");
+    TEST_ASSERT(peerDistSvc->startType == micant::scm::SERVICE_AUTO_START, "PeerDistSvc must be SERVICE_AUTO_START");
+    TEST_ASSERT(peerDistSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "PeerDistSvc must be RUNNING");
+
+    auto ipHttpsSvc = scm.getServiceRecord(L"IpHttps");
+    TEST_ASSERT(ipHttpsSvc != nullptr, "IpHttps must be registered in SCM");
+    TEST_ASSERT(ipHttpsSvc->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "IpHttps must be SERVICE_KERNEL_DRIVER");
+    TEST_ASSERT(ipHttpsSvc->startType == micant::scm::SERVICE_BOOT_START, "IpHttps must be SERVICE_BOOT_START");
+    TEST_ASSERT(ipHttpsSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "IpHttps must be RUNNING");
+
+    auto smbQuicSvc = scm.getServiceRecord(L"SmbQuic");
+    TEST_ASSERT(smbQuicSvc != nullptr, "SmbQuic must be registered in SCM");
+    TEST_ASSERT(smbQuicSvc->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "SmbQuic must be SERVICE_KERNEL_DRIVER");
+    TEST_ASSERT(smbQuicSvc->startType == micant::scm::SERVICE_SYSTEM_START, "SmbQuic must be SERVICE_SYSTEM_START");
+    TEST_ASSERT(smbQuicSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SmbQuic must be RUNNING");
+
+    // 2. VersionDatabase (10.0.26100.1) entries
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("peerdist.dll") != nullptr, "peerdist.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("bcasvc.dll") != nullptr, "bcasvc.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("iphttps.sys") != nullptr, "iphttps.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("smbquic.sys") != nullptr, "smbquic.sys must be registered in VersionDatabase");
+
+    // 3. PeerDist Content Information & SHA-256 Block Hashing
+    const size_t testDocSize = 192 * 1024; // 192 KB = exactly 3 64KB blocks
+    std::vector<uint8_t> testDocData(testDocSize);
+    for (size_t i = 0; i < testDocSize; ++i) {
+        testDocData[i] = static_cast<uint8_t>((i * 13 + 37) & 0xFF);
+    }
+    auto contentInfo = bcache.publishContent("CorporateQuarterlySales2026.docx", testDocData.data(), testDocData.size());
+    TEST_ASSERT(contentInfo != nullptr, "Publishing content to BranchCache must return Content Information structure");
+    TEST_ASSERT(contentInfo->contentId == "CorporateQuarterlySales2026.docx", "Content ID must match");
+    TEST_ASSERT(contentInfo->totalContentLength == testDocSize, "Total content length must match");
+    TEST_ASSERT(!contentInfo->segments.empty(), "Segments list must not be empty");
+    TEST_ASSERT(contentInfo->segments[0].blocks.size() == 3, "192 KB file must partition into exactly 3 64KB blocks");
+
+    // Verify SHA-256 hash calculation for block 0
+    auto expectedHash0 = micant::wan::BranchCacheSubsystem::computeSha256(testDocData.data(), micant::wan::PEERDIST_DEFAULT_BLOCK_SIZE);
+    TEST_ASSERT(contentInfo->segments[0].blocks[0].hash == expectedHash0, "Block 0 SHA-256 hash must accurately match payload digest");
+    TEST_ASSERT(contentInfo->segments[0].blocks[0].offset == 0, "Block 0 offset must be 0");
+    TEST_ASSERT(contentInfo->segments[0].blocks[1].offset == 64 * 1024, "Block 1 offset must be 64KB");
+    TEST_ASSERT(contentInfo->segments[0].blocks[2].offset == 128 * 1024, "Block 2 offset must be 128KB");
+
+    // 4. BranchCache Distributed Peer Discovery & Subnet Block Serving
+    TEST_ASSERT(bcache.getMode() == micant::wan::BranchCacheMode::Distributed, "Default mode must be Distributed");
+    TEST_ASSERT(bcache.getDiscoveredPeerCount() >= 3, "Initial discovered peers on subnet 192.168.1.0/24 must be >= 3");
+
+    micant::wan::BranchPeerInfo deltaPeer{"PeerNode-Delta", "192.168.1.104", 3702, 1, 0, true};
+    bcache.addPeer(deltaPeer);
+    TEST_ASSERT(bcache.getDiscoveredPeerCount() >= 4, "Peer discovery must accept dynamic subnet peers");
+
+    // Retrieve block 0 from local cache
+    std::vector<uint8_t> block0Buf;
+    std::string block0Src;
+    TEST_ASSERT(bcache.retrieveBlock(expectedHash0, block0Buf, &block0Src), "Retrieving block 0 must succeed");
+    TEST_ASSERT(block0Src == "LocalBranchCache", "Recently published block must be served from LocalBranchCache");
+    TEST_ASSERT(block0Buf.size() == micant::wan::PEERDIST_DEFAULT_BLOCK_SIZE, "Retrieved block size must be 64KB");
+    TEST_ASSERT(std::memcmp(block0Buf.data(), testDocData.data(), block0Buf.size()) == 0, "Retrieved block data must match source");
+
+    // 5. BranchCache Hosted Cache Mode & Centralized Staging
+    bcache.setHostedCacheServer("hostedcache.branch01.contoso.com");
+    TEST_ASSERT(bcache.getMode() == micant::wan::BranchCacheMode::Hosted, "BranchCache mode must transition to Hosted");
+    TEST_ASSERT(bcache.getHostedCacheServer() == "hostedcache.branch01.contoso.com", "Hosted cache server FQDN must match");
+
+    bcache.flushCache();
+    TEST_ASSERT(bcache.getLocalBlockCount() == 0, "Local block cache must be empty after flush");
+
+    std::array<uint8_t, 32> syntheticUncachedHash{};
+    syntheticUncachedHash.fill(0xEE);
+    std::vector<uint8_t> hostedBlockBuf;
+    std::string hostedSrc;
+    TEST_ASSERT(bcache.retrieveBlock(syntheticUncachedHash, hostedBlockBuf, &hostedSrc), "Retrieving uncached block in Hosted mode must succeed");
+    TEST_ASSERT(hostedSrc == "HostedCacheServer:hostedcache.branch01.contoso.com", "Source must be HostedCacheServer");
+
+    // Revert back to Distributed mode and re-publish content
+    bcache.setMode(micant::wan::BranchCacheMode::Distributed);
+    bcache.publishContent("CorporateQuarterlySales2026.docx", testDocData.data(), testDocData.size());
+
+    // 6. Network Location Awareness (NLA) Domain vs Public Network Transition
+    TEST_ASSERT(da.isInitialized(), "DirectAccessSubsystem must be initialized");
+    TEST_ASSERT(da.getState() == micant::wan::DirectAccessTunnelState::Connected_IPHTTPS, "Initial state outside corp boundary must be Connected_IPHTTPS");
+
+    // Simulate joining Corporate Domain Authenticated LAN
+    da.updateNetworkLocation(micant::nla::NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED);
+    TEST_ASSERT(da.getState() == micant::wan::DirectAccessTunnelState::Dormant_InsideCorp, "DirectAccess must transition to Dormant inside corporate LAN");
+
+    // Encapsulation must not proceed when dormant
+    const char dummyPacket[] = "IPV6_RAW_TEST_PAYLOAD";
+    std::vector<uint8_t> dummyEnc;
+    TEST_ASSERT(!da.encapsulatePacket(dummyPacket, sizeof(dummyPacket), dummyEnc), "DirectAccess must not encapsulate packets while Dormant inside corp network");
+
+    // Simulate leaving corp network to Public Wi-Fi / WAN
+    da.updateNetworkLocation(micant::nla::NLM_NETWORK_CATEGORY_PUBLIC);
+    TEST_ASSERT(da.getState() == micant::wan::DirectAccessTunnelState::Connected_IPHTTPS, "DirectAccess must automatically reconnect IP-HTTPS on public network");
+
+    // 7. IP-HTTPS (DirectAccess) Tunnel Encapsulation & Decapsulation
+    const uint8_t rawIpv6TestFrame[] = {
+        0x60, 0x00, 0x00, 0x00, 0x00, 0x20, 0x06, 0x40, // IPv6 header start
+        0x20, 0x02, 0xc0, 0xa8, 0x01, 0x64, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x88, 0x88,
+        0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0xBE, 0xEF
+    };
+    std::vector<uint8_t> ipHttpsFrame;
+    TEST_ASSERT(da.encapsulatePacket(rawIpv6TestFrame, sizeof(rawIpv6TestFrame), ipHttpsFrame), "Encapsulating IPv6 frame into IP-HTTPS must succeed");
+    TEST_ASSERT(ipHttpsFrame.size() == sizeof(rawIpv6TestFrame) + 6, "Encapsulated frame must have 6-byte IP-HTTPS header");
+    TEST_ASSERT(ipHttpsFrame[0] == 'I' && ipHttpsFrame[1] == 'P' && ipHttpsFrame[2] == 'H' && ipHttpsFrame[3] == 'T', "IP-HTTPS header magic must match 'IPHT'");
+
+    std::vector<uint8_t> decapsulatedIpv6;
+    TEST_ASSERT(da.decapsulatePacket(ipHttpsFrame.data(), ipHttpsFrame.size(), decapsulatedIpv6), "Decapsulating IP-HTTPS frame must succeed");
+    TEST_ASSERT(decapsulatedIpv6.size() == sizeof(rawIpv6TestFrame), "Decapsulated frame size must match original");
+    TEST_ASSERT(std::memcmp(decapsulatedIpv6.data(), rawIpv6TestFrame, sizeof(rawIpv6TestFrame)) == 0, "Decapsulated IPv6 frame must bitwise match input");
+    TEST_ASSERT(da.getPacketsEncapsulated() >= 1, "Packets encapsulated counter must be >= 1");
+    TEST_ASSERT(da.getPacketsDecapsulated() >= 1, "Packets decapsulated counter must be >= 1");
+
+    // 8. SMB over QUIC Connection Handshake over UDP 443
+    TEST_ASSERT(quic.isInitialized(), "SmbQuicSubsystem must be initialized");
+    auto session = quic.createSession("fs-edge.contoso.com", 443);
+    TEST_ASSERT(session != nullptr, "Creating SMB over QUIC session must succeed");
+    TEST_ASSERT(session->getServerHost() == "fs-edge.contoso.com", "Server host must match");
+    TEST_ASSERT(session->getServerPort() == 443, "SMB over QUIC port must be 443 (UDP)");
+    TEST_ASSERT(session->getClientCid() != 0, "Client Connection ID (CID) must be non-zero");
+    TEST_ASSERT(session->getServerCid() != 0, "Server Connection ID (CID) must be non-zero");
+
+    TEST_ASSERT(session->connect(false), "Standard 1-RTT QUIC handshake must succeed");
+    TEST_ASSERT(session->getState() == micant::wan::SmbQuicConnectionState::Connected, "Connection state must be Connected");
+    TEST_ASSERT(!session->is0RttResumed(), "Initial session must not be 0-RTT resumed");
+
+    // 9. SMB over QUIC Multiplexed Stream Transfer & 0-RTT Resumption
+    const char smbNegotiateReq[] = "\x00\x00\x00\x44\xFE\x53\x4D\x42\x40\x00\x00\x00\x00\x00\x00\x00"; // SMB2 header
+    TEST_ASSERT(session->writeStream(0, smbNegotiateReq, sizeof(smbNegotiateReq)), "Writing SMB negotiate on QUIC Stream 0 must succeed");
+    TEST_ASSERT(session->getBytesTransmitted() >= sizeof(smbNegotiateReq), "Bytes transmitted counter must update");
+
+    const char smbFileReadResp[] = "FILE_CONTENT_TRANSFERRED_OVER_MULTIPLEXED_QUIC_STREAM_4";
+    session->injectReceiveData(4, smbFileReadResp, sizeof(smbFileReadResp));
+    char readBuffer[128]{};
+    size_t bytesRead = 0;
+    TEST_ASSERT(session->readStream(4, readBuffer, sizeof(readBuffer), &bytesRead), "Reading from QUIC Stream 4 must succeed");
+    TEST_ASSERT(bytesRead == sizeof(smbFileReadResp), "Read bytes must match injected response size");
+    TEST_ASSERT(std::memcmp(readBuffer, smbFileReadResp, sizeof(smbFileReadResp)) == 0, "Received payload must bitwise match file content");
+
+    // Test 0-RTT session resumption with cached session ticket
+    auto sessionResumed = quic.createSession("fs-edge.contoso.com", 443);
+    sessionResumed->connect(false); // Seed resumption ticket
+    TEST_ASSERT(sessionResumed->connect(true), "0-RTT session resumption must succeed");
+    TEST_ASSERT(sessionResumed->getState() == micant::wan::SmbQuicConnectionState::Resumed_0RTT, "State must be Resumed_0RTT");
+    TEST_ASSERT(sessionResumed->is0RttResumed(), "is0RttResumed must return true");
+    TEST_ASSERT(sessionResumed->getRttMs() == 1, "0-RTT round-trip latency must be 1 ms");
+
+    // 10. SMB over QUIC Connection Migration (IP address change / interface handoff)
+    TEST_ASSERT(session->getActiveClientIp() == "192.168.1.150", "Initial client IP must be 192.168.1.150");
+    TEST_ASSERT(session->migrateConnection("10.75.120.44"), "Migrating connection to 5G cellular IP must succeed");
+    TEST_ASSERT(session->getState() == micant::wan::SmbQuicConnectionState::ConnectionMigrated, "State must be ConnectionMigrated");
+    TEST_ASSERT(session->isMigrated(), "isMigrated must be true");
+    TEST_ASSERT(session->getActiveClientIp() == "10.75.120.44", "Active client IP must reflect migrated endpoint");
+
+    // Transmit data on migrated connection
+    const char migratedData[] = "SMB2_WRITE_AFTER_SEAMLESS_CONNECTION_MIGRATION";
+    TEST_ASSERT(session->writeStream(8, migratedData, sizeof(migratedData)), "Writing data on migrated connection stream must succeed");
+
+    // 11. WAN Bandwidth Deduplication Savings Metric (> 75% savings)
+    // Perform multiple block fetches that hit local cache or subnet peers
+    for (size_t b = 0; b < 3; ++b) {
+        std::vector<uint8_t> dummyBuf;
+        std::string dummySource;
+        bcache.retrieveBlock(contentInfo->segments[0].blocks[b].hash, dummyBuf, &dummySource);
+    }
+    double wanSavings = bcache.getWanSavingsRatio();
+    TEST_ASSERT(wanSavings >= 75.0, "WAN Bandwidth Savings Ratio must exceed 75%");
+    TEST_ASSERT(bcache.getBytesRequested() > 0, "Bytes requested must be non-zero");
+    TEST_ASSERT(bcache.getBytesFromLocalCache() + bcache.getBytesFromPeers() > 0, "Bytes from cache/peers must be non-zero");
+
+    // 12. Clean-Room Win32 / NT C ABI Exports & Multithreaded Concurrency
+    uint32_t peerDistStatus = 0;
+    TEST_ASSERT(micant::wan::PeerDistStartup(micant::wan::PEERDIST_VERSION_1_0, &peerDistStatus) == micant::STATUS_SUCCESS, "PeerDistStartup via C ABI must succeed");
+    TEST_ASSERT(peerDistStatus == micant::wan::PEERDIST_ERROR_SUCCESS, "PeerDistStartup status must be PEERDIST_ERROR_SUCCESS");
+
+    void* cInfoHandle = nullptr;
+    TEST_ASSERT(micant::wan::PeerDistClientOpenContentInformation("CorporateQuarterlySales2026.docx", &cInfoHandle) == micant::STATUS_SUCCESS, "PeerDistClientOpenContentInformation via C ABI must succeed");
+    TEST_ASSERT(cInfoHandle != nullptr, "Content information handle must be non-null");
+    TEST_ASSERT(micant::wan::PeerDistClientCloseContentInformation(cInfoHandle) == micant::STATUS_SUCCESS, "PeerDistClientCloseContentInformation via C ABI must succeed");
+
+    TEST_ASSERT(micant::wan::IpHttpsInitializeAdapter() == micant::STATUS_SUCCESS, "IpHttpsInitializeAdapter via C ABI must succeed");
+    uint32_t daConnected = 0;
+    TEST_ASSERT(micant::wan::IpHttpsConnectGateway("gateway.corp.contoso.com", 443, &daConnected) == micant::STATUS_SUCCESS, "IpHttpsConnectGateway via C ABI must succeed");
+    TEST_ASSERT(daConnected == 1, "Gateway connection flag must be 1");
+
+    uint32_t daTunnelState = 0, daLatencyMs = 0;
+    TEST_ASSERT(micant::wan::IpHttpsGetTunnelState(&daTunnelState, &daLatencyMs) == micant::STATUS_SUCCESS, "IpHttpsGetTunnelState via C ABI must succeed");
+    TEST_ASSERT(daTunnelState == static_cast<uint32_t>(micant::wan::DirectAccessTunnelState::Connected_IPHTTPS), "Tunnel state must match Connected_IPHTTPS");
+
+    TEST_ASSERT(micant::wan::SmbQuicInitializeTransport() == micant::STATUS_SUCCESS, "SmbQuicInitializeTransport via C ABI must succeed");
+    uint32_t abiSessionId = 0;
+    TEST_ASSERT(micant::wan::SmbQuicCreateSession("filecluster.corp.contoso.com", 443, &abiSessionId) == micant::STATUS_SUCCESS, "SmbQuicCreateSession via C ABI must succeed");
+    TEST_ASSERT(abiSessionId != 0, "Created session ID must be non-zero");
+
+    const char abiData[] = "SMB_OVER_QUIC_C_ABI_STREAM_DATA_TEST";
+    TEST_ASSERT(micant::wan::SmbQuicTransmitFileData(abiSessionId, 0, abiData, sizeof(abiData)) == micant::STATUS_SUCCESS, "SmbQuicTransmitFileData via C ABI must succeed");
+
+    auto abiSessPtr = quic.getSession(abiSessionId);
+    if (abiSessPtr) abiSessPtr->injectReceiveData(0, abiData, sizeof(abiData));
+
+    char abiRecvBuf[64]{};
+    size_t abiBytesRead = 0;
+    TEST_ASSERT(micant::wan::SmbQuicReceiveFileData(abiSessionId, 0, abiRecvBuf, sizeof(abiRecvBuf), &abiBytesRead) == micant::STATUS_SUCCESS, "SmbQuicReceiveFileData via C ABI must succeed");
+    TEST_ASSERT(abiBytesRead == sizeof(abiData) && std::memcmp(abiRecvBuf, abiData, sizeof(abiData)) == 0, "Received data via C ABI must match transmitted payload");
+
+    TEST_ASSERT(micant::wan::SmbQuicCloseSession(abiSessionId) == micant::STATUS_SUCCESS, "SmbQuicCloseSession via C ABI must succeed");
+
+    // Multithreaded Concurrency Stress Test: 10 threads concurrently reading/writing streams and retrieving blocks
+    std::atomic<int> wanStressSuccess{0};
+    std::vector<std::thread> threads;
+    threads.reserve(10);
+    for (int t = 0; t < 10; ++t) {
+        threads.emplace_back([&, t]() {
+            for (int i = 0; i < 10; ++i) {
+                // QUIC Stream Write
+                uint64_t stId = static_cast<uint64_t>(t * 100 + i);
+                std::string msg = "THREAD_" + std::to_string(t) + "_QUIC_MSG_" + std::to_string(i);
+                if (session->writeStream(stId, msg.data(), msg.size())) {
+                    wanStressSuccess.fetch_add(1);
+                }
+            }
+        });
+    }
+    for (auto& th : threads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(wanStressSuccess.load() == 100, "100 concurrent SMB over QUIC stream transmissions across 10 threads must succeed");
+
+    std::cout << "[TEST] Suite 197: Windows DirectAccess, BranchCache & SMB over QUIC Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite196")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite197")) {
+        RUN_TEST(Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite196") {
         RUN_TEST(Test_WindowsDirectStorage_S2D_Subsystem);
         return g_FailedTests;
     }
@@ -44690,6 +44946,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsClusterSharedVolume_CSVFS_Subsystem);
     RUN_TEST(Test_WindowsContainerStorage_Wcifs_Subsystem);
     RUN_TEST(Test_WindowsDirectStorage_S2D_Subsystem);
+    RUN_TEST(Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
