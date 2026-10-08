@@ -318,7 +318,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 155: Windows Human Presence Detection & Adaptive Lock  [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 156: Windows Camera Device Class Extension (CameraCx)  [PLANNED]        │
+│ Phase 156: Windows Camera Device Class Extension (CameraCx)  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 157: Windows Display VRR, Adaptive-Sync & Advanced Color[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 158: Windows Sensor Class Extension v2 (SensorsCx & IMU)[PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3285,23 +3289,43 @@
 
 ---
 
-### Phase 157: Windows Display Variable Refresh Rate (VRR), Adaptive-Sync & Advanced Color Management (ACM) Subsystem (`vrr.hpp`, `dxgkrnl.sys`, `display.sys`, `TitanDisplay`, `AegisRefresh`) (Milestone 184) [PLANNED]
+### Phase 157: Windows Display Variable Refresh Rate (VRR), Adaptive-Sync & Advanced Color Management (ACM) Subsystem (`vrr.hpp`, `dxgkrnl.sys`, `display.sys`, `TitanDisplay`, `AegisRefresh`) (Milestone 184) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Variable Refresh Rate (VRR / VESA Adaptive-Sync / G-Sync / FreeSync), Dynamic Refresh Rate (DRR 60Hz <-> 120Hz/240Hz), seamless VBlank presentation timing, tearing-free frame pacing, Auto HDR luminance tone-mapping (PQ / SMPTE ST 2084, scRGB 16-bit float), and Windows Advanced Color Management (ACM) ICC/MHC color calibration.*
-- [ ] **Variable Refresh Rate & Dynamic Refresh Architecture (`include/micant/vrr.hpp`)**:
+- [x] **Variable Refresh Rate & Dynamic Refresh Architecture (`include/micant/vrr.hpp`)**:
   - Display Timing Engine: VESA Adaptive-Sync frame duration negotiation (min/max refresh Hz, e.g. 48Hz - 240Hz), dynamic VBlank interval calculation based on GPU frame render time.
-  - Dynamic Refresh Rate (DRR): Automatic seamless refresh boost upon mouse motion, stylus inking, and scrolling; battery-saving fallback to 60Hz when idle.
-  - Frame Pacing & Presentation Sync: Low-latency tearing elimination, PresentDuration pacing, and flip queue management (`D3DKMT_PRESENT_MULTIPLANE_OVERLAY`).
-- [ ] **Auto HDR & Advanced Color Management (ACM)**:
+  - Low-Framerate Compensation (LFC): Dynamic multi-frame insertion / frame doubling when render rate drops below min VRR threshold (e.g. 30 fps on 48Hz floor -> 60 Hz frame doubled).
+  - Dynamic Refresh Rate (DRR): Automatic seamless refresh boost upon user interaction (mouse motion, touch, inking: 60 Hz -> 144 Hz) and battery-saving fallback when idle.
+  - Frame Pacing & Presentation Sync: Low-latency tearing elimination, PresentDuration pacing, flip queue management (`D3DKMT_PRESENT_MULTIPLANE_OVERLAY`).
+- [x] **Auto HDR & Advanced Color Management (ACM)**:
   - Per-monitor color gamut profiles: sRGB, DCI-P3, BT.2020.
-  - SMPTE ST 2084 Perceptual Quantizer (PQ) EOTF curve and scRGB linear FP16 color surface transform.
-  - Auto HDR SDR-to-HDR tone-expansion engine with maximum nit peak luminance and white level calibration.
+  - EOTF transforms: SMPTE ST 2084 Perceptual Quantizer (PQ) curve, scRGB linear FP16 color surface transform, and Gamma 2.2.
+  - Auto HDR SDR-to-HDR tone-expansion engine with maximum nit peak luminance and paper-white calibration.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `dxgkrnl.sys` / `display.sys`: `DxgkGetDisplayVrrCapabilities`, `DxgkSetDisplayRefreshRate`, `DxgkConfigureAutoHdr`, `DxgkApplyMonitorColorProfile`, `DxgkCalculatePresentPacing`, `DxgkTransformSdrToHdr`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`DisplayEnhancementService`, `svchost.exe -k DisplayGroup`).
+- [x] **Interactive Shell CLI**:
+  - `vrr status`, `vrr list`, `vrr set <hz> [id]`, `vrr drr <boost|idle> [id]`, `vrr autohdr <on|off> [id]`, `vrr profile <srgb|p3|bt2020> [id]`, `vrr test`.
+- [x] **Unit Test Suite 184 (`Test_WindowsDisplayVRR_AutoHDR_Subsystem`)**:
+  - 12 comprehensive validation stages verifying display capabilities query, VRR range negotiation, DRR motion-based refresh rate switching, VBlank pacing, LFC frame doubling, fast render clamping, Auto HDR SDR-to-HDR highlight expansion, monitor color profile application, dynamic C ABI exports, and multi-threaded presentation stress test.
+  - Milestone 184: **184 / 184 Test Suites Passing (100%)**.
+
+---
+
+### Phase 158: Windows Sensor Class Extension v2 (SensorsCx / SensorsCx.sys), 9-DoF Sensor Fusion & Inertial Measurement Unit (IMU) Subsystem (`sensorscx.hpp`, `sensorscx.sys`, `sensrsvc.dll`, `TitanSensorFusion`, `AegisOrientation`) (Milestone 185) [PLANNED]
+*Goal: Implement clean-room Windows Sensor Class Extension version 2 (SensorsCx / SensorsCx.sys), 9-DoF Sensor Fusion (3-axis Accelerometer, 3-axis Gyroscope, 3-axis Magnetometer, Barometer, Ambient Light Sensor / ALS), Madgwick/Mahony quaternion attitude estimation (Pitch, Roll, Yaw / Heading), device display auto-rotation screen orientation lock, step detector / pedometer, gesture triggers (shake, tilt, free-fall), and dynamic batching FIFO.*
+- [ ] **SensorsCx v2 Class Extension Architecture (`include/micant/sensorscx.hpp`)**:
+  - Sensor Categories & Types: Accelerometer 3D, Gyroscope 3D, Magnetometer 3D, Inclinometer 3D, Barometer (ambient pressure & barometric elevation), ALS (lux & color temperature), and Orientation Fusion.
+  - Data Update Modes: Change sensitivity thresholds (per-axis delta filtering), event-driven report delivery, and dynamic hardware batching FIFO.
+  - 9-DoF Sensor Fusion Engine: Madgwick AHRS quaternion filter combining linear acceleration, angular rate, and magnetic flux into drift-free orientation (Quaternion W/X/Y/Z and Euler Pitch/Roll/Yaw).
+  - Gesture & Motion Detector: Free-fall detection (near 0g vector magnitude), shake gesture detection, flip-over detection, and step pedometer counter.
+  - Display Auto-Rotation Lock: Screen orientation state machine (`LANDSCAPE`, `PORTRAIT`, `LANDSCAPE_FLIPPED`, `PORTRAIT_FLIPPED`, `FACE_UP`, `FACE_DOWN`) with hysteresis deadband.
 - [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `dxgkrnl.sys` / `display.sys`: `DxgkSetDisplayRefreshRate`, `DxgkGetDisplayVrrCapabilities`, `DxgkConfigureAutoHdr`, `DxgkApplyMonitorColorProfile`.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`DisplayEnhancementService`).
+  - `sensorscx.sys` / `sensrsvc.dll`: `SensorsCxDeviceInitialize`, `SensorsCxSensorCreate`, `SensorsCxSensorStart`, `SensorsCxSensorStop`, `SensorsCxSensorDataReady`, `SensorsCxGetDeviceOrientation`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`SensorService`, `svchost.exe -k SensorGroup`).
 - [ ] **Interactive Shell CLI**:
-  - `vrr status`, `vrr list`, `vrr set <hz>`, `vrr autohdr <on|off>`, `vrr profile <srgb|p3|bt2020>`, `vrr test`.
-- [ ] **Unit Test Suite 184 (`Test_WindowsDisplayVRR_AutoHDR_Subsystem`)**:
-  - 12 comprehensive validation stages verifying display capabilities query, VRR range negotiation, DRR motion-based refresh rate switching, VBlank pacing, FP16 scRGB tone mapping, Auto HDR peak luminance expansion, monitor color profile application, dynamic C ABI exports, and multi-threaded presentation stress test.
+  - `sensor status`, `sensor list`, `sensor read <type>`, `sensor inject <type> <val...>`, `sensor fusion`, `sensor orientation <auto|lock>`, `sensor test`.
+- [ ] **Unit Test Suite 185 (`Test_WindowsSensorsCxV2_SensorFusion_Subsystem`)**:
+  - 12 comprehensive validation stages verifying SensorsCx registration, multi-sensor initialization, raw data ingestion, Madgwick quaternion fusion math, pitch/roll/yaw calculation, hysteresis display orientation transitions, step counter, free-fall & shake detection, threshold report filtering, dynamic C ABI exports, and multi-threaded sensor reading concurrency.
 
 
 

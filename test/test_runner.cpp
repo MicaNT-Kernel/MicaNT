@@ -188,6 +188,7 @@
 #include "micant/spatial_audio.hpp"
 #include "micant/hpd.hpp"
 #include "micant/cameracx.hpp"
+#include "micant/vrr.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -41709,8 +41710,196 @@ void Test_WindowsCameraClassExtension_Subsystem() {
     std::cout << "[TEST] Suite 183: Windows Camera Device Class Extension (CameraCx) & AVStream Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 184: Windows Display Variable Refresh Rate (VRR) & Auto HDR Subsystem
+// ============================================================================
+void Test_WindowsDisplayVRR_AutoHDR_Subsystem() {
+    std::cout << "[TEST] Executing Suite 184: Windows Display VRR, Adaptive-Sync & Advanced Color Management...\n";
+
+    // Stage 1: Subsystem registration in SCM and VersionDatabase
+    micant::vrr::RegisterVrrSubsystem();
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    auto modDxgk = vdb.FindModule("dxgkrnl.sys");
+    auto modDisp = vdb.FindModule("display.sys");
+    TEST_ASSERT(modDxgk != nullptr, "dxgkrnl.sys must be registered in VersionDatabase");
+    TEST_ASSERT(modDisp != nullptr, "display.sys must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto svcRec = scm.getServiceRecord(L"DisplayEnhancementService");
+    TEST_ASSERT(svcRec != nullptr, "DisplayEnhancementService SCM record must exist");
+    TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "DisplayEnhancementService must be running");
+
+    // Stage 2: Subsystem instance and pre-registered primary display
+    auto& vrrSys = micant::vrr::VrrSubsystem::get();
+    vrrSys.setSubsystemEnabled(true);
+    TEST_ASSERT(vrrSys.isSubsystemEnabled() == true, "VrrSubsystem must be enabled");
+    TEST_ASSERT(vrrSys.getDisplayCount() >= 1, "VrrSubsystem must have at least one pre-registered display");
+
+    auto disp1 = vrrSys.getDisplay(1);
+    TEST_ASSERT(disp1 != nullptr, "Default primary display endpoint (ID=1) must exist");
+    TEST_ASSERT(disp1->getId() == 1, "Primary display ID must be 1");
+    TEST_ASSERT(disp1->getWidth() == 3840 && disp1->getHeight() == 2160, "Primary display must be 4K UHD");
+    TEST_ASSERT(disp1->getVrrCaps().vrrSupported == true, "Primary display must support VRR");
+    TEST_ASSERT(disp1->getColorGamut() == micant::vrr::DisplayColorGamut::DCIP3, "Default gamut must be DCI-P3");
+
+    // Stage 3: New Display Endpoint Registration & Resolution Specification
+    uint32_t secDispId = vrrSys.registerDisplay(L"Titan Ultrawide Gaming Monitor", 3440, 1440);
+    TEST_ASSERT(secDispId > 1, "New secondary display endpoint must receive unique ID > 1");
+    auto secDisp = vrrSys.getDisplay(secDispId);
+    TEST_ASSERT(secDisp != nullptr, "Registered secondary display must be retrievable");
+    TEST_ASSERT(secDisp->getName() == L"Titan Ultrawide Gaming Monitor", "Display name must match");
+    TEST_ASSERT(secDisp->getWidth() == 3440 && secDisp->getHeight() == 1440, "Resolution must match 3440x1440 UWQHD");
+    TEST_ASSERT(vrrSys.getDisplayCount() >= 2, "Display count must reflect newly registered endpoint");
+
+    // Stage 4: Variable Refresh Rate (VRR) Adaptive-Sync Boundary Range
+    auto vrrCaps = secDisp->getVrrCaps();
+    TEST_ASSERT(vrrCaps.vrrSupported == true, "VRR must be supported by default");
+    TEST_ASSERT(vrrCaps.minRefreshHz == 48.0f, "Default minimum VRR refresh rate must be 48Hz");
+    TEST_ASSERT(vrrCaps.maxRefreshHz == 240.0f, "Default maximum VRR refresh rate must be 240Hz");
+
+    secDisp->setRefreshRate(165.0f);
+    TEST_ASSERT(secDisp->getVrrCaps().currentRefreshHz == 165.0f, "Refresh rate must update to 165Hz within boundary");
+
+    secDisp->setRefreshRate(500.0f);
+    TEST_ASSERT(secDisp->getVrrCaps().currentRefreshHz == 240.0f, "Refresh rate above max must clamp to 240Hz");
+
+    secDisp->setRefreshRate(10.0f);
+    TEST_ASSERT(secDisp->getVrrCaps().currentRefreshHz == 48.0f, "Refresh rate below min must clamp to 48Hz");
+
+    // Stage 5: Dynamic Refresh Rate (DRR) Interaction Modulation
+    secDisp->setDynamicRefreshRate(true, 60.0f, 144.0f);
+    TEST_ASSERT(secDisp->getVrrCaps().dynamicRefreshRateEnabled == true, "DRR must be enabled");
+
+    secDisp->notifyUserInteraction(false); // Idle state
+    TEST_ASSERT(secDisp->getVrrCaps().currentRefreshHz == 60.0f, "Idle state must fall back to 60Hz power-saving base");
+    TEST_ASSERT(secDisp->isInHighMotion() == false, "High motion flag must be false when idle");
+
+    secDisp->notifyUserInteraction(true); // User scrolling / inking
+    TEST_ASSERT(secDisp->getVrrCaps().currentRefreshHz == 144.0f, "Active interaction must boost refresh rate to 144Hz");
+    TEST_ASSERT(secDisp->isInHighMotion() == true, "High motion flag must be true during interaction");
+
+    secDisp->setDynamicRefreshRate(false);
+    TEST_ASSERT(secDisp->getVrrCaps().dynamicRefreshRateEnabled == false, "DRR must report disabled");
+
+    // Stage 6: VESA Adaptive-Sync Frame Pacing Timing (Normal Range)
+    uint64_t pacedBefore = vrrSys.getTotalPacedFrames();
+    micant::vrr::DisplayPacingInfo pace120{};
+    bool okPace = vrrSys.paceFrame(secDispId, 8333, pace120); // 8.33ms = 120 FPS
+    TEST_ASSERT(okPace, "paceFrame on active display must succeed");
+    TEST_ASSERT(pace120.calculatedVBlankUs >= 8000 && pace120.calculatedVBlankUs <= 8500, "Paced VBlank duration must match ~8333us");
+    TEST_ASSERT(pace120.frameDoubled == false, "Normal pacing must not engage LFC frame doubling");
+    TEST_ASSERT(pace120.effectiveRefreshHz >= 115.0f && pace120.effectiveRefreshHz <= 125.0f, "Effective refresh rate must be ~120Hz");
+    TEST_ASSERT(vrrSys.getTotalPacedFrames() > pacedBefore, "Total paced frames counter must increment");
+
+    // Stage 7: Low-Framerate Compensation (LFC) Frame Doubling (Below minRefreshHz)
+    micant::vrr::DisplayPacingInfo paceLfc{};
+    vrrSys.paceFrame(secDispId, 33333, paceLfc); // 33.3ms = 30 FPS (< 48Hz min boundary)
+    TEST_ASSERT(paceLfc.frameDoubled == true, "Slow frame must trigger LFC frame doubling to prevent flicker");
+    TEST_ASSERT(paceLfc.calculatedVBlankUs == 33333 / 2, "LFC interval must be halved to double refresh cycles");
+    TEST_ASSERT(paceLfc.effectiveRefreshHz >= 58.0f && paceLfc.effectiveRefreshHz <= 62.0f, "LFC effective rate must be doubled to ~60Hz");
+
+    // Stage 8: Render Time Clamping (Faster than maxRefreshHz)
+    micant::vrr::DisplayPacingInfo paceFast{};
+    vrrSys.paceFrame(secDispId, 2000, paceFast); // 2ms = 500 FPS (> 240Hz max boundary)
+    TEST_ASSERT(paceFast.frameDoubled == false, "Fast frame must not frame double");
+    TEST_ASSERT(paceFast.calculatedVBlankUs == static_cast<uint32_t>(1000000.0 / 240.0), "Fast frame must clamp to max refresh rate period");
+
+    // Stage 9: Auto HDR SDR-to-HDR Highlight Tone Expansion
+    auto hdrCaps = secDisp->getHdrCaps();
+    hdrCaps.autoHdrEnabled = true;
+    hdrCaps.paperWhiteNits = 200.0f;
+    hdrCaps.maxPeakLuminanceNits = 1000.0f;
+    secDisp->setHdrCaps(hdrCaps);
+
+    uint64_t hdrBefore = vrrSys.getTotalHdrConversions();
+    float sdrMidR = 0.3f, sdrMidG = 0.3f, sdrMidB = 0.3f;
+    float hdrMidR = 0.0f, hdrMidG = 0.0f, hdrMidB = 0.0f;
+    vrrSys.convertSdrToHdr(secDispId, sdrMidR, sdrMidG, sdrMidB, hdrMidR, hdrMidG, hdrMidB);
+
+    // Midtone: lum <= 0.5 -> linear scale by paperWhite / 80 = 200 / 80 = 2.5
+    TEST_ASSERT(std::abs(hdrMidR - (0.3f * 2.5f)) < 0.01f, "Midtone SDR must scale proportionally to paper white reference");
+
+    float sdrBrightR = 0.9f, sdrBrightG = 0.9f, sdrBrightB = 0.9f;
+    float hdrBrightR = 0.0f, hdrBrightG = 0.0f, hdrBrightB = 0.0f;
+    vrrSys.convertSdrToHdr(secDispId, sdrBrightR, sdrBrightG, sdrBrightB, hdrBrightR, hdrBrightG, hdrBrightB);
+
+    // Bright highlight: lum > 0.5 -> highlight shoulder expansion kicks in
+    TEST_ASSERT(hdrBrightR > (0.9f * 2.5f), "Bright highlights must receive non-linear Auto HDR headroom boost");
+    TEST_ASSERT(vrrSys.getTotalHdrConversions() >= hdrBefore + 2, "HDR conversion counter must increment");
+
+    // Stage 10: Advanced Color Management (ACM) Gamut Profile Switching & Helpers
+    secDisp->setColorGamut(micant::vrr::DisplayColorGamut::sRGB);
+    TEST_ASSERT(secDisp->getColorGamut() == micant::vrr::DisplayColorGamut::sRGB, "Gamut must switch to sRGB");
+
+    secDisp->setColorGamut(micant::vrr::DisplayColorGamut::BT2020);
+    TEST_ASSERT(secDisp->getColorGamut() == micant::vrr::DisplayColorGamut::BT2020, "Gamut must switch to BT.2020");
+
+    TEST_ASSERT(std::string(micant::vrr::DisplayColorGamutToString(micant::vrr::DisplayColorGamut::sRGB)) == "sRGB (BT.709 / SDR)", "sRGB string helper");
+    TEST_ASSERT(std::string(micant::vrr::DisplayColorGamutToString(micant::vrr::DisplayColorGamut::DCIP3)) == "DCI-P3 (Display P3 Wide Gamut)", "DCI-P3 string helper");
+    TEST_ASSERT(std::string(micant::vrr::DisplayColorGamutToString(micant::vrr::DisplayColorGamut::BT2020)) == "BT.2020 (Ultra-Wide HDR Gamut)", "BT.2020 string helper");
+    TEST_ASSERT(std::string(micant::vrr::DisplayTransferFunctionToString(micant::vrr::DisplayTransferFunction::ST2084)) == "SMPTE ST 2084 (Perceptual Quantizer / PQ)", "ST2084 string helper");
+    TEST_ASSERT(std::string(micant::vrr::DisplayTransferFunctionToString(micant::vrr::DisplayTransferFunction::Linear)) == "scRGB Linear Floating Point", "Linear string helper");
+
+    // Stage 11: Clean-Room Dynamic C ABI Parity Exports
+    micant::vrr::DisplayVrrCapabilities abiCaps{};
+    NTSTATUS stCaps = micant::vrr::DxgkGetDisplayVrrCapabilities(secDispId, &abiCaps);
+    TEST_ASSERT(stCaps == micant::STATUS_SUCCESS && abiCaps.vrrSupported, "DxgkGetDisplayVrrCapabilities ABI must succeed");
+
+    NTSTATUS stRate = micant::vrr::DxgkSetDisplayRefreshRate(secDispId, 120.0f);
+    TEST_ASSERT(stRate == micant::STATUS_SUCCESS, "DxgkSetDisplayRefreshRate ABI must succeed");
+
+    NTSTATUS stHdr = micant::vrr::DxgkConfigureAutoHdr(secDispId, 1, 250.0f, 1200.0f);
+    TEST_ASSERT(stHdr == micant::STATUS_SUCCESS, "DxgkConfigureAutoHdr ABI must succeed");
+
+    NTSTATUS stGamut = micant::vrr::DxgkApplyMonitorColorProfile(secDispId, static_cast<uint32_t>(micant::vrr::DisplayColorGamut::DCIP3));
+    TEST_ASSERT(stGamut == micant::STATUS_SUCCESS, "DxgkApplyMonitorColorProfile ABI must succeed");
+
+    micant::vrr::DisplayPacingInfo abiPacing{};
+    NTSTATUS stPace = micant::vrr::DxgkCalculatePresentPacing(secDispId, 10000, &abiPacing);
+    TEST_ASSERT(stPace == micant::STATUS_SUCCESS && abiPacing.calculatedVBlankUs > 0, "DxgkCalculatePresentPacing ABI must succeed");
+
+    float outR = 0.0f, outG = 0.0f, outB = 0.0f;
+    NTSTATUS stTrans = micant::vrr::DxgkTransformSdrToHdr(secDispId, 0.5f, 0.5f, 0.5f, &outR, &outG, &outB);
+    TEST_ASSERT(stTrans == micant::STATUS_SUCCESS && outR > 0.5f, "DxgkTransformSdrToHdr ABI must succeed");
+
+    // ABI parameter boundary checks
+    TEST_ASSERT(micant::vrr::DxgkGetDisplayVrrCapabilities(secDispId, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null caps ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vrr::DxgkSetDisplayRefreshRate(99999, 120.0f) == micant::STATUS_NOT_FOUND, "Nonexistent display must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::vrr::DxgkApplyMonitorColorProfile(secDispId, 999) == micant::STATUS_INVALID_PARAMETER, "Invalid gamut enum must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vrr::DxgkCalculatePresentPacing(secDispId, 10000, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null pacing ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vrr::DxgkTransformSdrToHdr(secDispId, 0.5f, 0.5f, 0.5f, nullptr, nullptr, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null transform ptrs must return STATUS_INVALID_PARAMETER");
+
+    // Stage 12: Multi-Threaded Concurrent Display Presentation Stress Test
+    std::atomic<uint32_t> stressFramesProcessed{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([&vrrSys, &stressFramesProcessed, t]() {
+            uint32_t thDispId = vrrSys.registerDisplay(L"Thread Display Endpoint", 1920, 1080);
+            for (int f = 0; f < 25; ++f) {
+                micant::vrr::DisplayPacingInfo pInfo{};
+                uint32_t renderTime = 5000 + (t * 2000) + (f * 500);
+                if (vrrSys.paceFrame(thDispId, renderTime, pInfo)) {
+                    float oR = 0.0f, oG = 0.0f, oB = 0.0f;
+                    vrrSys.convertSdrToHdr(thDispId, 0.7f, 0.7f, 0.7f, oR, oG, oB);
+                    stressFramesProcessed++;
+                }
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressFramesProcessed.load() == 100, "100 concurrent display pacing calculations must complete without race conditions");
+
+    std::cout << "[TEST] Suite 184: Windows Display VRR, Adaptive-Sync & Advanced Color Management PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite183")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite184")) {
+        RUN_TEST(Test_WindowsDisplayVRR_AutoHDR_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite183") {
         RUN_TEST(Test_WindowsCameraClassExtension_Subsystem);
         return g_FailedTests;
     }
@@ -42210,6 +42399,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSpatialAudio_APO_Subsystem);
     RUN_TEST(Test_WindowsHumanPresenceDetection_Subsystem);
     RUN_TEST(Test_WindowsCameraClassExtension_Subsystem);
+    RUN_TEST(Test_WindowsDisplayVRR_AutoHDR_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
