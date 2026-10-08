@@ -364,7 +364,7 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 178: System Resource Manager & Fair Share (M205) [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 179: Windows Deployment Services & PXE Boot (M206)      [PLANNED]  │
+│ Phase 179: Windows Deployment Services & PXE Boot (M206)[COMPLETED 100%] │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3743,20 +3743,20 @@
 
 ---
 
-### Phase 179: Windows Deployment Services & PXE Network Boot Subsystem (`wdssvc.dll`, `wdsmgfw.efi`, `wdsclient.dll`, `TitanWDS`, `AegisPXE`) (Milestone 206) [PLANNED]
+### Phase 179: Windows Deployment Services & PXE Network Boot Subsystem (`wdssvc.dll`, `wdsmgfw.efi`, `wdsclient.dll`, `TitanWDS`, `AegisPXE`) (Milestone 206) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Deployment Services (WDS), Preboot Execution Environment (PXE / DHCP Option 66/67 / RFC 951 / RFC 2131), and Trivial File Transfer Protocol (TFTP / RFC 1350 / RFC 2347 / RFC 2348) network boot infrastructure, enabling bare-metal automated OS image deployment, BCD store network streaming, WIM image servicing, and unattended XML answer file generation.*
-- [ ] **WDS & PXE Subsystem Core (`include/micant/wds.hpp`)**:
+- [x] **WDS & PXE Subsystem Core (`include/micant/wds.hpp`)**:
   - DHCP / BOOTP & PXE negotiation (DHCP Offer / Ack with vendor option 60 `PXEClient`, Option 66 Next Server IP, Option 67 Bootfile name `boot\x64\wdsmgfw.efi`).
   - TFTP Network Server & Windowed Transfer Engine (UDP port 69, block size negotiation `blksize`, transfer size `tsize`, timeout option `timeout`, windowsize RFC 7440 for multi-packet ACK aggregation).
   - WDS Image Catalog & Architecture Arbitration: x86, x64, ARM64 UEFI boot targets, boot image index inspection, install image groups.
   - BCD (Boot Configuration Data) Network Store generator: creates dynamic in-memory network BCD with `{bootmgr}` and `{default}` ramdisk options.
   - Unattend Engine: Automated Answer File (`unattend.xml`) generator for automated disk partitioning, domain join, and product key injection.
-- [ ] **Win32 & SCM Clean-Room Export Parity**:
+- [x] **Win32 & SCM Clean-Room Export Parity**:
   - `wdssvc.dll`, `wdsclient.dll`, `wdsmgfw.efi`, `wdstftp.dll`: `WdsInitialize`, `WdsRegisterImage`, `WdsStartServer`, `WdsProcessPxeRequest`, `WdsTftpGetFile`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`WDSServer`, `BINLSVC`, `WdsTftp`).
-- [ ] **Interactive Shell CLI**:
+- [x] **Interactive Shell CLI**:
   - `wds` / `pxe` / `tftp` (`status`, `images`, `addimage`, `bootfiles`, `clients`, `test`).
-- [ ] **Unit Test Suite 206 (`Test_WindowsDeploymentServices_PXE_Subsystem`)**:
+- [x] **Unit Test Suite 206 (`Test_WindowsDeploymentServices_PXE_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration, VersionDatabase registration, PXE DHCP option parsing, TFTP read request (RRQ) block sequencing and windowsize handling, WIM image catalog registration, multi-architecture arbitration (x64/ARM64), dynamic BCD store generation, Unattend XML serialization, Win32 C ABI exports, and concurrent multithreaded PXE client boot stress testing.
 
 

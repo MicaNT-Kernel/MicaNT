@@ -209,6 +209,8 @@
 #include "micant/grouppolicy.hpp"
 #include "micant/remotedesktop.hpp"
 #include "micant/nps.hpp"
+#include "micant/wsrm.hpp"
+#include "micant/wds.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -46189,8 +46191,294 @@ void Test_WindowsSystemResourceManager_FairShare_Subsystem() {
     std::cout << "[TEST] Suite 205: Windows System Resource Manager & Fair Share Scheduling Subsystem PASSED.\n";
 }
 
+void Test_WindowsDeploymentServices_PXE_Subsystem() {
+    std::cout << "[TEST] Suite 206: Windows Deployment Services & PXE Network Boot Subsystem...\n";
+
+    auto& wds = micant::wds::DeploymentServicesEngine::instance();
+    wds.initialize();
+
+    // Stage 1: SCM Services Registration
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto sWds = scm.getServiceRecord(L"WDSServer");
+    auto sBinl = scm.getServiceRecord(L"BINLSVC");
+    auto sTftp = scm.getServiceRecord(L"WdsTftp");
+
+    TEST_ASSERT(sWds != nullptr, "WDSServer service must be registered in SCM");
+    TEST_ASSERT(sWds->startType == micant::scm::SERVICE_AUTO_START, "WDSServer must be auto-start");
+    TEST_ASSERT(sWds->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WDSServer must be running");
+
+    TEST_ASSERT(sBinl != nullptr, "BINLSVC service must be registered in SCM");
+    TEST_ASSERT(sBinl->displayName == L"Boot Information Negotiation Layer", "BINLSVC display name must match");
+    TEST_ASSERT(sBinl->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "BINLSVC must be running");
+
+    TEST_ASSERT(sTftp != nullptr, "WdsTftp service must be registered in SCM");
+    TEST_ASSERT(sTftp->displayName == L"Windows Deployment Services TFTP Server", "WdsTftp display name must match");
+    TEST_ASSERT(sTftp->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WdsTftp must be running");
+
+    // Stage 2: VersionDatabase Modules
+    auto& db = micant::version::VersionDatabase::Instance();
+    const auto* mSvc = db.FindModule("wdssvc.dll");
+    const auto* mEfi = db.FindModule("wdsmgfw.efi");
+    const auto* mCli = db.FindModule("wdsclient.dll");
+    const auto* mTftp = db.FindModule("wdstftp.dll");
+    const auto* mUtil = db.FindModule("wdsutil.exe");
+
+    TEST_ASSERT(mSvc != nullptr, "wdssvc.dll must exist in VersionDatabase");
+    TEST_ASSERT(mSvc->stringTable.at("FileVersion") == "10.0.26100.1", "wdssvc.dll version must be 10.0.26100.1");
+
+    TEST_ASSERT(mEfi != nullptr, "wdsmgfw.efi must exist in VersionDatabase");
+    TEST_ASSERT(mEfi->stringTable.at("FileDescription") == "Windows Deployment Services UEFI Boot Manager", "wdsmgfw.efi description must match");
+
+    TEST_ASSERT(mCli != nullptr, "wdsclient.dll must exist in VersionDatabase");
+    TEST_ASSERT(mTftp != nullptr, "wdstftp.dll must exist in VersionDatabase");
+    TEST_ASSERT(mUtil != nullptr, "wdsutil.exe must exist in VersionDatabase");
+
+    // Stage 3: Image Catalog Management
+    auto images = wds.getAllImages();
+    TEST_ASSERT(images.size() >= 3, "Catalog must have at least 3 default images");
+
+    micant::wds::WdsImageRecord rWinPe{};
+    TEST_ASSERT(wds.getImage("IMG-WINPE-X64", &rWinPe), "Default x64 WinPE image must be present");
+    TEST_ASSERT(rWinPe.type == micant::wds::ImageType::BootImage, "IMG-WINPE-X64 must be BootImage");
+    TEST_ASSERT(rWinPe.architecture == "x64", "Architecture must be x64");
+
+    micant::wds::WdsImageRecord rWin11{};
+    TEST_ASSERT(wds.getImage("IMG-WIN11-ENT-X64", &rWin11), "Default Windows 11 image must be present");
+    TEST_ASSERT(rWin11.type == micant::wds::ImageType::InstallImage, "IMG-WIN11-ENT-X64 must be InstallImage");
+
+    // Register a custom image
+    micant::wds::WdsImageRecord customImg{};
+    customImg.imageId = "IMG-SRV2025-DATACENTER";
+    customImg.imageName = "Windows Server 2025 Datacenter Edition";
+    customImg.architecture = "x64";
+    customImg.filePath = "sources\\install_server2025.wim";
+    customImg.type = micant::wds::ImageType::InstallImage;
+    customImg.imageIndex = 1;
+    customImg.sizeBytes = 5368709120ULL; // 5 GB
+    TEST_ASSERT(wds.registerImage(customImg), "Registering custom image must succeed");
+
+    micant::wds::WdsImageRecord fetchedCustom{};
+    TEST_ASSERT(wds.getImage("IMG-SRV2025-DATACENTER", &fetchedCustom), "Custom image must be retrievable");
+    TEST_ASSERT(fetchedCustom.imageName == "Windows Server 2025 Datacenter Edition", "Image name must match");
+
+    // Stage 4: Virtual Boot Store Files
+    auto tftpFiles = wds.getAllTftpFiles();
+    TEST_ASSERT(tftpFiles.size() >= 5, "TFTP store must contain at least 5 default virtual boot files");
+
+    // Verify EFI bootloader files have PE magic 'M','Z'
+    std::vector<uint8_t> blk0;
+    bool isLast = false;
+    TEST_ASSERT(wds.getTftpFileBlock("boot\\x64\\wdsmgfw.efi", 1, 512, blk0, &isLast), "Must read block 1 of wdsmgfw.efi");
+    TEST_ASSERT(blk0.size() == 512, "Block 1 must have 512 bytes");
+    TEST_ASSERT(blk0[0] == 'M' && blk0[1] == 'Z', "wdsmgfw.efi must have MZ PE stub");
+
+    // Stage 5: Dynamic BCD Store Structure
+    auto bcdContent = wds.generateBcdStoreContent();
+    std::string bcdStr(bcdContent.begin(), bcdContent.end());
+    TEST_ASSERT(bcdStr.find("{bootmgr}") != std::string::npos, "BCD must contain {bootmgr}");
+    TEST_ASSERT(bcdStr.find("{ramdisk}") != std::string::npos, "BCD must contain {ramdisk}");
+    TEST_ASSERT(bcdStr.find("{default}") != std::string::npos, "BCD must contain {default}");
+
+    // Stage 6: Multi-Architecture Bootfile Resolution
+    TEST_ASSERT(wds.resolveBootFileForArchitecture(micant::wds::ClientArchitecture::EFI_x86_64) == "boot\\x64\\wdsmgfw.efi", "x64 UEFI must resolve to boot\\x64\\wdsmgfw.efi");
+    TEST_ASSERT(wds.resolveBootFileForArchitecture(micant::wds::ClientArchitecture::EFI_ARM64) == "boot\\arm64\\wdsmgfw.efi", "ARM64 UEFI must resolve to boot\\arm64\\wdsmgfw.efi");
+    TEST_ASSERT(wds.resolveBootFileForArchitecture(micant::wds::ClientArchitecture::EFI_IA32) == "boot\\x86\\wdsmgfw.efi", "IA32 UEFI must resolve to boot\\x86\\wdsmgfw.efi");
+    TEST_ASSERT(wds.resolveBootFileForArchitecture(micant::wds::ClientArchitecture::Intelx86PC) == "boot\\x86\\wdsnbp.com", "Legacy BIOS must resolve to boot\\x86\\wdsnbp.com");
+
+    // Stage 7: PXE DHCP Discover / Offer Negotiation (x64)
+    std::vector<uint8_t> reqX64(sizeof(micant::wds::DhcpHeader) + 64, 0);
+    auto* hdrX64 = reinterpret_cast<micant::wds::DhcpHeader*>(reqX64.data());
+    hdrX64->op = 1; hdrX64->htype = 1; hdrX64->hlen = 6; hdrX64->xid = 0xA1B2C3D4;
+    hdrX64->chaddr[0] = 0x00; hdrX64->chaddr[1] = 0x15; hdrX64->chaddr[2] = 0x5D;
+    hdrX64->chaddr[3] = 0xAA; hdrX64->chaddr[4] = 0xBB; hdrX64->chaddr[5] = 0xCC;
+
+    size_t offX64 = sizeof(micant::wds::DhcpHeader);
+    reqX64[offX64] = 0x63; reqX64[offX64+1] = 0x82; reqX64[offX64+2] = 0x53; reqX64[offX64+3] = 0x63; // magic cookie
+    offX64 += 4;
+    reqX64[offX64++] = 53; reqX64[offX64++] = 1; reqX64[offX64++] = 1; // Discover
+    std::string pxeClientStr = "PXEClient:Arch:00007:UNDI:002001";
+    reqX64[offX64++] = 60; reqX64[offX64++] = static_cast<uint8_t>(pxeClientStr.size());
+    std::memcpy(&reqX64[offX64], pxeClientStr.data(), pxeClientStr.size());
+    offX64 += pxeClientStr.size();
+    reqX64[offX64++] = 93; reqX64[offX64++] = 2; reqX64[offX64++] = 0; reqX64[offX64++] = 7; // EFI x64
+    reqX64[offX64++] = 255;
+    reqX64.resize(offX64);
+
+    std::vector<uint8_t> offerX64;
+    TEST_ASSERT(wds.processPxeRequest(reqX64.data(), reqX64.size(), offerX64), "PXE DHCP request must succeed");
+    TEST_ASSERT(offerX64.size() >= sizeof(micant::wds::DhcpHeader), "Offer must be at least DhcpHeader size");
+
+    const auto* offHdrX64 = reinterpret_cast<const micant::wds::DhcpHeader*>(offerX64.data());
+    TEST_ASSERT(offHdrX64->op == 2, "Offer op must be 2 (BOOTREPLY)");
+    TEST_ASSERT(offHdrX64->xid == 0xA1B2C3D4, "Transaction ID must match request");
+    TEST_ASSERT(offHdrX64->siaddr == 0xC0A80132, "Next server IP must be 192.168.1.50");
+    TEST_ASSERT(std::string(offHdrX64->file) == "boot\\x64\\wdsmgfw.efi", "Bootfile must be boot\\x64\\wdsmgfw.efi");
+
+    // Stage 8: PXE DHCP Discover / Offer Negotiation (ARM64 & Legacy BIOS)
+    // Modify Option 93 to ARM64 (11)
+    reqX64[reqX64.size() - 3] = 0;
+    reqX64[reqX64.size() - 2] = 11;
+    std::vector<uint8_t> offerArm64;
+    TEST_ASSERT(wds.processPxeRequest(reqX64.data(), reqX64.size(), offerArm64), "ARM64 PXE request must succeed");
+    const auto* offHdrArm = reinterpret_cast<const micant::wds::DhcpHeader*>(offerArm64.data());
+    TEST_ASSERT(std::string(offHdrArm->file) == "boot\\arm64\\wdsmgfw.efi", "Bootfile for ARM64 must be boot\\arm64\\wdsmgfw.efi");
+
+    // Modify Option 93 to BIOS (0)
+    reqX64[reqX64.size() - 3] = 0;
+    reqX64[reqX64.size() - 2] = 0;
+    std::vector<uint8_t> offerBios;
+    TEST_ASSERT(wds.processPxeRequest(reqX64.data(), reqX64.size(), offerBios), "BIOS PXE request must succeed");
+    const auto* offHdrBios = reinterpret_cast<const micant::wds::DhcpHeader*>(offerBios.data());
+    TEST_ASSERT(std::string(offHdrBios->file) == "boot\\x86\\wdsnbp.com", "Bootfile for BIOS must be boot\\x86\\wdsnbp.com");
+
+    // Stage 9: TFTP Read Request (RRQ) & Option Negotiation (RFC 1350/2347)
+    micant::wds::DeploymentServicesEngine::TftpSessionParams tftpParams{};
+    std::vector<uint8_t> oackPkt;
+    TEST_ASSERT(wds.processTftpRrq("boot\\x64\\wdsmgfw.efi", 1456, 8, &tftpParams, oackPkt), "TFTP RRQ for wdsmgfw.efi must succeed");
+    TEST_ASSERT(tftpParams.blockSize == 1456, "Negotiated blksize must be 1456");
+    TEST_ASSERT(tftpParams.windowSize == 8, "Negotiated windowsize must be 8");
+    TEST_ASSERT(tftpParams.transferSize == 1048576, "wdsmgfw.efi transfer size must be 1 MB");
+    TEST_ASSERT(oackPkt.size() > 2, "OACK packet must have content");
+    TEST_ASSERT(oackPkt[1] == 6, "OACK OpCode must be 6");
+
+    // Stage 10: TFTP Windowed Data Streaming (RFC 7440)
+    uint32_t totalBlocks = static_cast<uint32_t>((tftpParams.transferSize + tftpParams.blockSize - 1) / tftpParams.blockSize);
+    size_t streamBytesRead = 0;
+    for (uint32_t blk = 1; blk <= totalBlocks; ++blk) {
+        std::vector<uint8_t> blockBuf;
+        bool last = false;
+        TEST_ASSERT(wds.getTftpFileBlock("boot\\x64\\wdsmgfw.efi", blk, tftpParams.blockSize, blockBuf, &last), "Block read must succeed");
+        streamBytesRead += blockBuf.size();
+        if (blk == totalBlocks) {
+            TEST_ASSERT(last == true, "Final block must flag isLastBlock == true");
+        } else {
+            TEST_ASSERT(last == false, "Intermediate block must not be last");
+            TEST_ASSERT(blockBuf.size() == tftpParams.blockSize, "Intermediate block must equal negotiated blockSize");
+        }
+    }
+    TEST_ASSERT(streamBytesRead == tftpParams.transferSize, "Total bytes streamed must match transferSize");
+
+    // Stage 11: Automated Answer File (unattend.xml) Generator
+    std::string unattendXml = wds.generateUnattendXml("TITAN-DC01", "P@ssw0rd2026!", "TITAN.LOCAL");
+    TEST_ASSERT(unattendXml.find("<ComputerName>TITAN-DC01</ComputerName>") != std::string::npos, "ComputerName must be in unattend.xml");
+    TEST_ASSERT(unattendXml.find("<Value>P@ssw0rd2026!</Value>") != std::string::npos, "AdministratorPassword must be in unattend.xml");
+    TEST_ASSERT(unattendXml.find("<JoinDomain>TITAN.LOCAL</JoinDomain>") != std::string::npos, "JoinDomain must be in unattend.xml");
+    TEST_ASSERT(unattendXml.find("<DiskConfiguration>") != std::string::npos, "DiskConfiguration must be present");
+    TEST_ASSERT(unattendXml.find("<Type>EFI</Type>") != std::string::npos, "EFI partition definition must be present");
+
+    // Stage 12: TFTP Edge Cases & Negative Testing
+    micant::wds::DeploymentServicesEngine::TftpSessionParams errParams{};
+    std::vector<uint8_t> errOack;
+    TEST_ASSERT(!wds.processTftpRrq("non_existent_boot_file.efi", 512, 1, &errParams, errOack), "Non-existent file must return false");
+
+    std::vector<uint8_t> badBlock;
+    bool badLast = false;
+    TEST_ASSERT(!wds.getTftpFileBlock("boot\\x64\\wdsmgfw.efi", 0, 512, badBlock, &badLast), "Block 0 must return false (blocks are 1-indexed)");
+
+    TEST_ASSERT(wds.getTftpFileBlock("boot\\x64\\wdsmgfw.efi", 99999, 512, badBlock, &badLast), "Block past EOF must return true with empty and isLast=true");
+    TEST_ASSERT(badBlock.empty() && badLast, "Past EOF block must be empty and last");
+
+    std::vector<uint8_t> badDhcp(20, 0);
+    std::vector<uint8_t> badOffer;
+    TEST_ASSERT(!wds.processPxeRequest(badDhcp.data(), badDhcp.size(), badOffer), "Malformed short DHCP packet must be rejected");
+
+    // Stage 13: Clean-Room Win32 C ABI Exports (wdssvc.dll / wdstftp.dll)
+    void* pEngine = nullptr;
+    int32_t initRes = micant::wds::MicaWdsInitialize(&pEngine);
+    TEST_ASSERT(initRes == 1 && pEngine != nullptr, "MicaWdsInitialize must succeed");
+
+    int32_t regRes = micant::wds::MicaWdsRegisterImage(pEngine, "ABI-Test-Image", "x64", "sources\\abi.wim", 1);
+    TEST_ASSERT(regRes == 1, "MicaWdsRegisterImage must succeed");
+
+    uint8_t offerBuf[1024]{};
+    uint32_t offerLen = 0;
+    int32_t pxeRes = micant::wds::MicaWdsProcessPxeRequest(pEngine, reqX64.data(), static_cast<uint32_t>(reqX64.size()), offerBuf, sizeof(offerBuf), &offerLen);
+    TEST_ASSERT(pxeRes == 1 && offerLen > 0, "MicaWdsProcessPxeRequest must succeed via C ABI");
+
+    uint32_t abiTotalBlks = 0;
+    int32_t tftpRes = micant::wds::MicaWdsTftpServeFile(pEngine, "boot\\x64\\wdsmgfw.efi", 1456, 4, &abiTotalBlks);
+    TEST_ASSERT(tftpRes == 1 && abiTotalBlks > 0, "MicaWdsTftpServeFile must succeed via C ABI");
+
+    char xmlOut[2048]{};
+    uint32_t xmlLen = 0;
+    int32_t xmlRes = micant::wds::MicaWdsGenerateUnattendXml(pEngine, "ABI-HOST", "ABIPass123!", xmlOut, sizeof(xmlOut), &xmlLen);
+    TEST_ASSERT(xmlRes == 1 && xmlLen > 0, "MicaWdsGenerateUnattendXml must succeed via C ABI");
+
+    int32_t shutRes = micant::wds::MicaWdsShutdown(pEngine);
+    TEST_ASSERT(shutRes == 1, "MicaWdsShutdown must succeed");
+
+    // Stage 14: Multithreaded High-Throughput Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&wds, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                // Select architecture
+                micant::wds::ClientArchitecture arch = (op % 3 == 0) ? micant::wds::ClientArchitecture::EFI_x86_64 :
+                                                        (op % 3 == 1) ? micant::wds::ClientArchitecture::EFI_ARM64 :
+                                                                        micant::wds::ClientArchitecture::Intelx86PC;
+                uint16_t aVal = static_cast<uint16_t>(arch);
+
+                // Build DHCP packet
+                std::vector<uint8_t> pkt(sizeof(micant::wds::DhcpHeader) + 64, 0);
+                auto* h = reinterpret_cast<micant::wds::DhcpHeader*>(pkt.data());
+                h->op = 1; h->htype = 1; h->hlen = 6;
+                h->xid = 0x10000000 + (t * 1000) + op;
+                size_t o = sizeof(micant::wds::DhcpHeader);
+                pkt[o] = 0x63; pkt[o+1] = 0x82; pkt[o+2] = 0x53; pkt[o+3] = 0x63;
+                o += 4;
+                pkt[o++] = 53; pkt[o++] = 1; pkt[o++] = 1;
+                std::string pxeStr = "PXEClient";
+                pkt[o++] = 60; pkt[o++] = static_cast<uint8_t>(pxeStr.size());
+                std::memcpy(&pkt[o], pxeStr.data(), pxeStr.size());
+                o += pxeStr.size();
+                pkt[o++] = 93; pkt[o++] = 2;
+                pkt[o++] = static_cast<uint8_t>((aVal >> 8) & 0xFF);
+                pkt[o++] = static_cast<uint8_t>(aVal & 0xFF);
+                pkt[o++] = 255;
+                pkt.resize(o);
+
+                std::vector<uint8_t> off;
+                bool pxeOk = wds.processPxeRequest(pkt.data(), pkt.size(), off);
+
+                // TFTP RRQ
+                micant::wds::DeploymentServicesEngine::TftpSessionParams sp{};
+                std::vector<uint8_t> oack;
+                bool tftpOk = wds.processTftpRrq("boot\\x64\\wdsmgfw.efi", 1456, 4, &sp, oack);
+
+                // TFTP Block
+                std::vector<uint8_t> bData;
+                bool last = false;
+                bool blkOk = wds.getTftpFileBlock("boot\\x64\\wdsmgfw.efi", 1, 1456, bData, &last);
+
+                // Unattend XML
+                std::string uXml = wds.generateUnattendXml("STRESS-NODE", "StressPass123!");
+                bool xmlOk = !uXml.empty();
+
+                if (pxeOk && tftpOk && blkOk && xmlOk) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded WDS stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 206: Windows Deployment Services & PXE Network Boot Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite205")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite206")) {
+        RUN_TEST(Test_WindowsDeploymentServices_PXE_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite205") {
         RUN_TEST(Test_WindowsSystemResourceManager_FairShare_Subsystem);
         return g_FailedTests;
     }
@@ -46801,6 +47089,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsRemoteDesktop_VirtualChannels_Subsystem);
     RUN_TEST(Test_WindowsNetworkPolicyServer_RADIUS_Subsystem);
     RUN_TEST(Test_WindowsSystemResourceManager_FairShare_Subsystem);
+    RUN_TEST(Test_WindowsDeploymentServices_PXE_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

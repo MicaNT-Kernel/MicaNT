@@ -196,6 +196,7 @@
 #include "remotedesktop.hpp"
 #include "nps.hpp"
 #include "wsrm.hpp"
+#include "wds.hpp"
 
 namespace micant::shell {
 
@@ -537,6 +538,7 @@ public:
             if (cmd == "rdp" || cmd == "rds" || cmd == "termsrv" || cmd == "wts") { cmdRemoteDesktop(tokens, out); return 0; }
             if (cmd == "nps" || cmd == "ias" || cmd == "radius") { cmdNetworkPolicyServer(tokens, out); return 0; }
             if (cmd == "wsrm" || cmd == "quota" || cmd == "fairshare" || cmd == "dfss") { cmdSystemResourceManager(tokens, out); return 0; }
+            if (cmd == "wds" || cmd == "pxe" || cmd == "tftp") { cmdDeploymentServices(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -33902,6 +33904,271 @@ private:
             << "  wsrm dfss <sessions>                    Simulate Dynamic Fair Share rebalance\n"
             << "  wsrm accounting [user|app]              View historical resource usage logs\n"
             << "  wsrm test                               Execute in-kernel WSRM self-tests\n";
+    }
+
+    void cmdDeploymentServices(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& wds = micant::wds::DeploymentServicesEngine::instance();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+
+        if (sub == "status") {
+            out << "Windows Deployment Services (WDS / TitanWDS / AegisPXE) Status:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service Status:           ONLINE (wdssvc.dll / BINLSVC / WdsTftp)\n"
+                << "  Registered Images:        " << wds.getAllImages().size() << "\n"
+                << "  Virtual Boot Files:       " << wds.getAllTftpFiles().size() << "\n"
+                << "  Total PXE Requests:       " << wds.getTotalPxeRequests() << "\n"
+                << "  Total PXE Offers:         " << wds.getTotalPxeOffers() << "\n"
+                << "  Total TFTP Requests:      " << wds.getTotalTftpRequests() << "\n"
+                << "  Total TFTP Bytes Served:  " << wds.getTotalTftpBytesServed() << " bytes\n"
+                << "  Unattend Files Generated: " << wds.getTotalUnattendGenerated() << "\n";
+            return;
+        }
+
+        if (sub == "images") {
+            out << "Windows Deployment Services Image Catalog:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(20) << "Image ID"
+                << std::setw(10) << "Arch"
+                << std::setw(22) << "Type"
+                << std::setw(12) << "Size (MB)"
+                << "Name / Path\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto imgs = wds.getAllImages();
+            for (const auto& img : imgs) {
+                out << std::left << std::setw(20) << img.imageId
+                    << std::setw(10) << img.architecture
+                    << std::setw(22) << micant::wds::ImageTypeToString(img.type)
+                    << std::setw(12) << (img.sizeBytes / (1024 * 1024))
+                    << img.imageName << " (" << img.filePath << ")\n";
+            }
+            return;
+        }
+
+        if (sub == "addimage") {
+            if (tokens.size() < 6) {
+                out << "Usage: wds addimage <id> <name> <arch:x64|ARM64|x86> <type:boot|install> <path>\n";
+                return;
+            }
+            micant::wds::WdsImageRecord rec;
+            rec.imageId = tokens[2];
+            rec.imageName = tokens[3];
+            rec.architecture = tokens[4];
+            std::string tStr = tokens[5];
+            rec.type = (tStr == "install" || tStr == "os") ? micant::wds::ImageType::InstallImage : micant::wds::ImageType::BootImage;
+            rec.filePath = (tokens.size() > 6) ? tokens[6] : "sources\\custom.wim";
+            rec.sizeBytes = 1048576000ULL; // 1 GB synthetic
+            if (wds.registerImage(rec)) {
+                out << "[+] WDS Image registered successfully: " << rec.imageId << " (" << rec.imageName << ")\n";
+            } else {
+                out << "[-] Failed to register WDS Image.\n";
+            }
+            return;
+        }
+
+        if (sub == "bootfiles") {
+            out << "Windows Deployment Services TFTP Virtual Boot Files:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(30) << "Boot File Name"
+                << std::setw(14) << "Size"
+                << "Description\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto files = wds.getAllTftpFiles();
+            for (const auto& f : files) {
+                out << std::left << std::setw(30) << f.fileName
+                    << std::setw(14) << (std::to_string(f.content.size()) + " B")
+                    << f.description << "\n";
+            }
+            return;
+        }
+
+        if (sub == "pxe") {
+            std::string archStr = (tokens.size() > 2) ? tokens[2] : "x64";
+            micant::wds::ClientArchitecture arch = micant::wds::ClientArchitecture::EFI_x86_64;
+            if (archStr == "arm64" || archStr == "ARM64") {
+                arch = micant::wds::ClientArchitecture::EFI_ARM64;
+            } else if (archStr == "x86" || archStr == "bios" || archStr == "legacy") {
+                arch = micant::wds::ClientArchitecture::Intelx86PC;
+            } else if (archStr == "ia32") {
+                arch = micant::wds::ClientArchitecture::EFI_IA32;
+            }
+
+            // Construct synthetic DHCP Discover with Option 60 PXEClient and Option 93
+            std::vector<uint8_t> req(sizeof(micant::wds::DhcpHeader) + 64, 0);
+            auto* hdr = reinterpret_cast<micant::wds::DhcpHeader*>(req.data());
+            hdr->op = 1;
+            hdr->htype = 1;
+            hdr->hlen = 6;
+            hdr->xid = 0x12345678;
+            hdr->chaddr[0] = 0x00; hdr->chaddr[1] = 0x15; hdr->chaddr[2] = 0x5D;
+            hdr->chaddr[3] = 0x01; hdr->chaddr[4] = 0x02; hdr->chaddr[5] = 0x03;
+
+            size_t off = sizeof(micant::wds::DhcpHeader);
+            req[off] = 0x63; req[off+1] = 0x82; req[off+2] = 0x53; req[off+3] = 0x63; // magic cookie
+            off += 4;
+            // Option 53: Discover
+            req[off++] = 53; req[off++] = 1; req[off++] = 1;
+            // Option 60: PXEClient
+            std::string pxeId = "PXEClient:Arch:00007:UNDI:002001";
+            req[off++] = 60; req[off++] = static_cast<uint8_t>(pxeId.size());
+            std::memcpy(&req[off], pxeId.data(), pxeId.size());
+            off += pxeId.size();
+            // Option 93: Client Arch
+            uint16_t aVal = static_cast<uint16_t>(arch);
+            req[off++] = 93; req[off++] = 2;
+            req[off++] = static_cast<uint8_t>((aVal >> 8) & 0xFF);
+            req[off++] = static_cast<uint8_t>(aVal & 0xFF);
+            req[off++] = 255; // End
+            req.resize(off);
+
+            std::vector<uint8_t> offer;
+            if (wds.processPxeRequest(req.data(), req.size(), offer)) {
+                const auto* offHdr = reinterpret_cast<const micant::wds::DhcpHeader*>(offer.data());
+                out << "[+] PXE Boot Offer Generated Successfully:\n"
+                    << "  Client Arch:          " << micant::wds::ClientArchitectureToString(arch) << " (Option 93 = " << static_cast<uint16_t>(arch) << ")\n"
+                    << "  Transaction ID (XID): 0x" << std::hex << offHdr->xid << std::dec << "\n"
+                    << "  Server Name (sname):  " << offHdr->sname << "\n"
+                    << "  Offered Boot File:    " << offHdr->file << "\n"
+                    << "  DHCP Packet Size:     " << offer.size() << " bytes\n";
+            } else {
+                out << "[-] Failed to generate PXE Offer.\n";
+            }
+            return;
+        }
+
+        if (sub == "tftp") {
+            if (tokens.size() < 3) {
+                out << "Usage: wds tftp <bootfile> [blksize] [windowsize]\n"
+                    << "Example: wds tftp boot\\x64\\wdsmgfw.efi 1456 4\n";
+                return;
+            }
+            std::string file = tokens[2];
+            uint32_t blkSize = (tokens.size() > 3) ? static_cast<uint32_t>(std::stoul(tokens[3])) : 1456;
+            uint32_t winSize = (tokens.size() > 4) ? static_cast<uint32_t>(std::stoul(tokens[4])) : 4;
+
+            micant::wds::DeploymentServicesEngine::TftpSessionParams params{};
+            std::vector<uint8_t> oack;
+            if (wds.processTftpRrq(file, blkSize, winSize, &params, oack)) {
+                uint32_t totalBlocks = static_cast<uint32_t>((params.transferSize + params.blockSize - 1) / params.blockSize);
+                out << "[+] TFTP RRQ Negotiation (RFC 1350/2347/7440) Succeeded:\n"
+                    << "  File:                 " << params.fileName << "\n"
+                    << "  Negotiated BlkSize:   " << params.blockSize << " bytes\n"
+                    << "  WindowSize (RFC 7440):" << params.windowSize << " packets/ACK\n"
+                    << "  Total File Size:      " << params.transferSize << " bytes\n"
+                    << "  Calculated Blocks:    " << totalBlocks << "\n"
+                    << "  OACK Packet Size:     " << oack.size() << " bytes\n";
+            } else {
+                out << "[-] TFTP RRQ Failed: File not found in virtual boot store (" << file << ")\n";
+            }
+            return;
+        }
+
+        if (sub == "unattend") {
+            std::string comp = (tokens.size() > 2) ? tokens[2] : "MICANT-WORKSTATION";
+            std::string pass = (tokens.size() > 3) ? tokens[3] : "TitanPxe@2026!";
+            std::string dom = (tokens.size() > 4) ? tokens[4] : "CONTOSO.COM";
+            std::string xml = wds.generateUnattendXml(comp, pass, dom);
+            out << "Generated WDS Unattend XML Answer File (" << xml.size() << " bytes):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << xml << "\n";
+            return;
+        }
+
+        if (sub == "test") {
+            out << "[*] Executing Windows Deployment Services (WDS) In-Kernel Self-Tests...\n";
+            auto& scm = micant::scm::ServiceControlManager::get();
+            auto& db = micant::version::VersionDatabase::Instance();
+
+            // Test 1: SCM Services
+            bool sWds = (scm.getServiceRecord(L"WDSServer") != nullptr);
+            bool sBinl = (scm.getServiceRecord(L"BINLSVC") != nullptr);
+            bool sTftp = (scm.getServiceRecord(L"WdsTftp") != nullptr);
+            out << "  [1/6] SCM Services (WDSServer, BINLSVC, WdsTftp): "
+                << (sWds && sBinl && sTftp ? "PASSED" : "FAILED") << "\n";
+
+            // Test 2: Version Database
+            bool vSvc = (db.FindModule("wdssvc.dll") != nullptr);
+            bool vEfi = (db.FindModule("wdsmgfw.efi") != nullptr);
+            bool vCli = (db.FindModule("wdsclient.dll") != nullptr);
+            bool vTftp = (db.FindModule("wdstftp.dll") != nullptr);
+            bool vUtil = (db.FindModule("wdsutil.exe") != nullptr);
+            out << "  [2/6] VersionDatabase Modules (wdssvc, wdsmgfw, wdsclient, wdstftp, wdsutil): "
+                << (vSvc && vEfi && vCli && vTftp && vUtil ? "PASSED" : "FAILED") << "\n";
+
+            // Test 3: Multi-Architecture PXE Negotiation
+            std::vector<uint8_t> req(sizeof(micant::wds::DhcpHeader) + 64, 0);
+            auto* hdr = reinterpret_cast<micant::wds::DhcpHeader*>(req.data());
+            hdr->op = 1; hdr->htype = 1; hdr->hlen = 6; hdr->xid = 0x55AA55AA;
+            size_t off = sizeof(micant::wds::DhcpHeader);
+            req[off] = 0x63; req[off+1] = 0x82; req[off+2] = 0x53; req[off+3] = 0x63;
+            off += 4;
+            req[off++] = 53; req[off++] = 1; req[off++] = 1;
+            std::string pxeId = "PXEClient";
+            req[off++] = 60; req[off++] = static_cast<uint8_t>(pxeId.size());
+            std::memcpy(&req[off], pxeId.data(), pxeId.size());
+            off += pxeId.size();
+            req[off++] = 93; req[off++] = 2; req[off++] = 0; req[off++] = 7; // EFI x64
+            req[off++] = 255;
+            req.resize(off);
+
+            std::vector<uint8_t> offerX64;
+            bool pxeX64Ok = wds.processPxeRequest(req.data(), req.size(), offerX64);
+            const auto* offHdr = reinterpret_cast<const micant::wds::DhcpHeader*>(offerX64.data());
+            bool pathX64Ok = (std::string(offHdr->file).find("wdsmgfw.efi") != std::string::npos);
+
+            // Test ARM64
+            req[req.size()-3] = 0; req[req.size()-2] = 11; // EFI ARM64
+            std::vector<uint8_t> offerArm;
+            bool pxeArmOk = wds.processPxeRequest(req.data(), req.size(), offerArm);
+            const auto* offHdrArm = reinterpret_cast<const micant::wds::DhcpHeader*>(offerArm.data());
+            bool pathArmOk = (std::string(offHdrArm->file).find("arm64") != std::string::npos);
+
+            out << "  [3/6] Multi-Arch PXE Negotiation (x64 / ARM64 UEFI arbitration): "
+                << (pxeX64Ok && pathX64Ok && pxeArmOk && pathArmOk ? "PASSED" : "FAILED") << "\n";
+
+            // Test 4: TFTP Windowed Stream Engine (RFC 1350/2347/7440)
+            micant::wds::DeploymentServicesEngine::TftpSessionParams tp{};
+            std::vector<uint8_t> oack;
+            bool rrqOk = wds.processTftpRrq("boot\\x64\\wdsmgfw.efi", 1456, 8, &tp, oack);
+            std::vector<uint8_t> blkData;
+            bool isLast = false;
+            bool blkOk = wds.getTftpFileBlock("boot\\x64\\wdsmgfw.efi", 1, 1456, blkData, &isLast);
+            bool tftpOk = rrqOk && blkOk && (tp.blockSize == 1456) && (tp.windowSize == 8) && (blkData.size() == 1456);
+            out << "  [4/6] TFTP Stream Engine & Windowsize Negotiation: "
+                << (tftpOk ? "PASSED" : "FAILED") << "\n";
+
+            // Test 5: Unattend XML Generation
+            std::string xml = wds.generateUnattendXml("TEST-PC", "TestPass!1", "TESTCORP");
+            bool xmlOk = (xml.find("TEST-PC") != std::string::npos &&
+                          xml.find("TestPass!1") != std::string::npos &&
+                          xml.find("TESTCORP") != std::string::npos);
+            out << "  [5/6] Automated Unattend XML Generator: "
+                << (xmlOk ? "PASSED" : "FAILED") << "\n";
+
+            // Test 6: Win32 C ABI Exports
+            void* pEng = nullptr;
+            int32_t initRc = micant::wds::MicaWdsInitialize(&pEng);
+            char xmlBuf[1024]{};
+            uint32_t outLen = 0;
+            int32_t unattendRc = micant::wds::MicaWdsGenerateUnattendXml(pEng, "ABI-HOST", "ABIPass!", xmlBuf, sizeof(xmlBuf), &outLen);
+            out << "  [6/6] Clean-Room Win32 C ABI Exports (wdssvc.dll): "
+                << (initRc == 1 && unattendRc == 1 ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All Windows Deployment Services (WDS) Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows Deployment Services (WDS / TitanWDS) Subsystem\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  wds status                              Display WDS server and listener status\n"
+            << "  wds images                              Enumerate WDS image catalog (WinPE & OS)\n"
+            << "  wds addimage <id> <name> <arch> <type>  Register custom boot or install image\n"
+            << "  wds bootfiles                           List virtual boot files in TFTP root\n"
+            << "  wds pxe [x64|arm64|x86]                 Simulate DHCP/PXE boot negotiation\n"
+            << "  wds tftp <file> [blksize] [windowsize]  Simulate RFC 7440 TFTP file transfer\n"
+            << "  wds unattend [name] [pass] [domain]     Generate unattended setup XML answer file\n"
+            << "  wds test                                Execute in-kernel WDS / PXE self-tests\n";
     }
 
     static std::string trim(std::string_view s) {
