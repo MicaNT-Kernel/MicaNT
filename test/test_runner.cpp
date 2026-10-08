@@ -194,6 +194,7 @@
 #include "micant/pmp.hpp"
 #include "micant/vmbus.hpp"
 #include "micant/vpci.hpp"
+#include "micant/vsm.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -42939,8 +42940,216 @@ void Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem() {
     std::cout << "[TEST] Suite 189: Windows Virtual PCI (VPCI / vpci.sys) & SR-IOV / DDA Subsystem PASSED.\n";
 }
 
+void Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem() {
+    std::cout << "[TEST] Executing Suite 190: Windows Virtual Secure Mode (VSM / vsm.sys), VBS & HVCI Subsystem...\n";
+
+    // Stage 1: VSM Subsystem Initialization & SCM/Version Database Registration
+    micant::vsm::RegisterVsmSubsystem();
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto scmSvc = scm.getServiceRecord(L"VsmService");
+    TEST_ASSERT(scmSvc != nullptr, "VsmService SCM service record must be registered");
+    TEST_ASSERT(scmSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "VsmService must be running");
+    TEST_ASSERT(scmSvc->binaryPath.find(L"svchost.exe") != std::wstring::npos, "VsmService must be hosted by svchost.exe");
+
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    auto modVsm = vdb.FindModule("vsm.sys");
+    TEST_ASSERT(modVsm != nullptr, "vsm.sys must be registered in VersionDatabase");
+    TEST_ASSERT(modVsm->stringTable.at("FileVersion") == "10.0.26100.1", "vsm.sys file version must be 10.0.26100.1");
+
+    auto modSec = vdb.FindModule("securekernel.exe");
+    TEST_ASSERT(modSec != nullptr, "securekernel.exe must be registered in VersionDatabase");
+
+    auto modHvci = vdb.FindModule("hvci.dll");
+    TEST_ASSERT(modHvci != nullptr, "hvci.dll must be registered in VersionDatabase");
+
+    auto& vsmSys = micant::vsm::VsmSubsystem::get();
+    TEST_ASSERT(vsmSys.isInitialized(), "VsmSubsystem must be initialized");
+
+    // Stage 2: Dual Virtual Trust Level (VTL 0 & 1) Processor Architectural State
+    TEST_ASSERT(vsmSys.getActiveVtl() == micant::vsm::VTL_NORMAL, "Initial active VTL must be VTL 0 (Normal World)");
+
+    // Stage 3: VTL Hypercall Context Switching (HvCallSwitchVtl & HvCallEnterVtl1)
+    uint64_t initialSwitches = vsmSys.getVtlSwitchCount();
+    micant::vsm::VtlProcessorState inState{}, outState{};
+    inState.rip = 0x140005000;
+    inState.rsp = 0x1000FE000;
+
+    uint16_t sw1 = vsmSys.switchVtl(micant::vsm::VTL_SECURE, &inState, &outState);
+    TEST_ASSERT(sw1 == micant::vsm::HV_STATUS_SUCCESS, "Switching to VTL 1 must return HV_STATUS_SUCCESS");
+    TEST_ASSERT(vsmSys.getActiveVtl() == micant::vsm::VTL_SECURE, "Active VTL must now be VTL 1 (Secure World)");
+    TEST_ASSERT(vsmSys.getVtlSwitchCount() == initialSwitches + 1, "VTL switch count must increment");
+    TEST_ASSERT(outState.rip == 0xFFFFF80000800000, "VTL 1 restored RIP must point to Secure Kernel entry");
+
+    uint16_t sw2 = vsmSys.switchVtl(micant::vsm::VTL_NORMAL, nullptr, &outState);
+    TEST_ASSERT(sw2 == micant::vsm::HV_STATUS_SUCCESS, "Switching back to VTL 0 must succeed");
+    TEST_ASSERT(vsmSys.getActiveVtl() == micant::vsm::VTL_NORMAL, "Active VTL must be restored to VTL 0");
+    TEST_ASSERT(outState.rip == 0x140005000, "VTL 0 restored RIP must match saved RIP");
+
+    TEST_ASSERT(vsmSys.switchVtl(99) == micant::vsm::HV_STATUS_INVALID_PARAMETER, "Invalid VTL index must return HV_STATUS_INVALID_PARAMETER");
+
+    // Stage 4: SLAT (Second-Level Address Translation) Page Table Hardening
+    // While in VTL 0, attempting to modify protections must fail (VTL 0 cannot modify SLAT)
+    uint16_t deniedSt = vsmSys.modifyVtlProtectionMask(micant::vsm::VTL_NORMAL, 0x140400000, micant::vsm::HV_MAP_GPA_PERM_RX);
+    TEST_ASSERT(deniedSt == micant::vsm::HV_STATUS_ACCESS_DENIED, "VTL 0 must be denied from modifying SLAT protections");
+
+    // Switch to VTL 1 (Secure Kernel) to configure SLAT permissions
+    vsmSys.switchVtl(micant::vsm::VTL_SECURE);
+    uint16_t okSt = vsmSys.modifyVtlProtectionMask(micant::vsm::VTL_NORMAL, 0x140400000, micant::vsm::HV_MAP_GPA_PERM_RX, "test_driver.sys");
+    TEST_ASSERT(okSt == micant::vsm::HV_STATUS_SUCCESS, "VTL 1 must be permitted to modify VTL 0 SLAT protections");
+
+    uint32_t queriedPerms = 0;
+    TEST_ASSERT(vsmSys.queryPageProtection(0x140400000, micant::vsm::VTL_NORMAL, &queriedPerms), "Querying page protection must succeed");
+    TEST_ASSERT(queriedPerms == micant::vsm::HV_MAP_GPA_PERM_RX, "Page protection must be Read+Execute (RX)");
+    vsmSys.switchVtl(micant::vsm::VTL_NORMAL);
+
+    // Stage 5: Hardware-Enforced W^X (Write-XOR-Execute) Policy & Violation Trapping
+    vsmSys.switchVtl(micant::vsm::VTL_SECURE);
+    // Attempting to set RWX on VTL 0 under HVCI must trigger W^X policy violation
+    uint16_t wxViol = vsmSys.modifyVtlProtectionMask(micant::vsm::VTL_NORMAL, 0x140400000, micant::vsm::HV_MAP_GPA_PERM_RWX);
+    TEST_ASSERT(wxViol == micant::vsm::HV_STATUS_POLICY_VIOLATION, "Setting RWX in VTL 0 must be blocked by W^X policy");
+    vsmSys.switchVtl(micant::vsm::VTL_NORMAL);
+
+    std::string reason;
+    // Attempt to write to executable page (0x140400000 is RX)
+    bool writeAllowed = vsmSys.validateMemoryAccess(0x140400000, micant::vsm::HV_MAP_GPA_PERM_WRITE, micant::vsm::VTL_NORMAL, &reason);
+    TEST_ASSERT(!writeAllowed, "Writing to RX code page must be trapped by SLAT / HVCI W^X intercept");
+    TEST_ASSERT(vsmSys.getSlatViolations() >= 1, "SLAT violations counter must increment");
+
+    // Reading or executing RX page must succeed
+    TEST_ASSERT(vsmSys.validateMemoryAccess(0x140400000, micant::vsm::HV_MAP_GPA_PERM_READ, micant::vsm::VTL_NORMAL), "Reading RX page must succeed");
+    TEST_ASSERT(vsmSys.validateMemoryAccess(0x140400000, micant::vsm::HV_MAP_GPA_PERM_EXECUTE, micant::vsm::VTL_NORMAL), "Executing RX page must succeed");
+
+    // Stage 6: Hypervisor-Protected Code Integrity (HVCI) Authenticode Signature Verification
+    auto& hvci = vsmSys.getHvci();
+    TEST_ASSERT(hvci.isEnabled(), "HVCI must be enabled");
+
+    std::string signer;
+    TEST_ASSERT(hvci.verifyModule("vsm.sys", nullptr, 0, &signer), "Pre-approved system driver vsm.sys must verify");
+    TEST_ASSERT(signer.find("Production PCA") != std::string::npos, "Signer must indicate Production PCA");
+
+    std::vector<uint8_t> validDrv(256, 0x90);
+    validDrv[0] = 0x4D; validDrv[1] = 0x5A; // MZ
+    TEST_ASSERT(hvci.verifyModule("whql_net_driver.sys", validDrv.data(), validDrv.size(), &signer), "Valid driver must verify");
+    TEST_ASSERT(signer.find("WHQL") != std::string::npos, "Valid driver signer must be WHQL certified");
+    TEST_ASSERT(hvci.getVerifiedCount() >= 2, "Verified drivers count must be >= 2");
+
+    // Stage 7: Mandatory Vulnerable Driver Blocklist Rejection (WDAC / HVCI Mitigation)
+    std::string blkReason;
+    TEST_ASSERT(!hvci.verifyModule("gdrv.sys", validDrv.data(), validDrv.size(), &blkReason), "Blocked driver gdrv.sys must fail verification");
+    TEST_ASSERT(blkReason.find("CVE-2018-19320") != std::string::npos, "Rejection reason must reference CVE-2018-19320");
+
+    TEST_ASSERT(!hvci.verifyModule("procexp.sys", validDrv.data(), validDrv.size(), &blkReason), "Blocked driver procexp.sys must fail verification");
+    TEST_ASSERT(blkReason.find("CVE-2016-9067") != std::string::npos, "Rejection reason must reference CVE-2016-9067");
+
+    TEST_ASSERT(!hvci.verifyModule("rtcore64.sys", validDrv.data(), validDrv.size(), &blkReason), "Blocked driver rtcore64.sys must fail verification");
+    TEST_ASSERT(hvci.getBlockedCount() >= 3, "Blocked drivers count must be >= 3");
+
+    // Stage 8: Credential Guard (LSA Isolated / lsaiso.exe) Isolated Secret Storage
+    auto& credGuard = vsmSys.getCredentialGuard();
+    TEST_ASSERT(credGuard.isActive(), "Credential Guard must be active");
+    TEST_ASSERT(credGuard.getSecretCount() >= 2, "Pre-seeded secrets must exist in VTL 1 vault");
+
+    std::vector<uint8_t> tgtData;
+    std::string tgtType;
+    TEST_ASSERT(credGuard.getSecret("krbtgt@MICANT.LOCAL", tgtData, tgtType), "Querying krbtgt secret must succeed");
+    TEST_ASSERT(tgtType == "KERBEROS_TGT" && tgtData.size() == 32, "krbtgt secret must be 32-byte KERBEROS_TGT");
+
+    uint8_t dpapiMasterKey[32] = { 0x55, 0xAA, 0x12, 0x34, 0x56, 0x78, 0x90, 0xAB };
+    TEST_ASSERT(credGuard.storeSecret("SYSTEM_DPAPI", "LocalSystem", "NT AUTHORITY", "DPAPI_MASTER_KEY", dpapiMasterKey, 32), "Storing DPAPI secret in VTL 1 vault must succeed");
+    TEST_ASSERT(credGuard.getSecretCount() >= 3, "Secret count must now be >= 3");
+
+    // Stage 9: Credential Guard Isolated NTLM Challenge-Response Computation
+    std::vector<uint8_t> ntlmChallenge = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
+    std::vector<uint8_t> ntlmResponse;
+    TEST_ASSERT(credGuard.authenticateNtlm("Administrator@MICANT", ntlmChallenge.data(), ntlmChallenge.size(), ntlmResponse), "NTLM challenge authentication in VTL 1 must succeed");
+    TEST_ASSERT(ntlmResponse.size() == 24, "NTLM response length must be 24 bytes");
+    TEST_ASSERT(!credGuard.authenticateNtlm("NonExistentUser@MICANT", ntlmChallenge.data(), ntlmChallenge.size(), ntlmResponse), "Authenticating non-existent user must fail");
+    TEST_ASSERT(credGuard.getRpcCallCount() >= 3, "Credential Guard RPC call count must increase");
+
+    // Stage 10: Virtual TPM 2.0 (vTPM) PCR Extension & Measured Boot Validation
+    auto& vtpm = vsmSys.getVirtualTpm();
+    TEST_ASSERT(vtpm.isActive(), "Virtual TPM 2.0 must be active");
+
+    std::array<uint8_t, 32> pcr0{}, pcr7{}, pcr11_before{}, pcr11_after{};
+    TEST_ASSERT(vtpm.readPcr(micant::vsm::VTPM_PCR_FIRMWARE_CRTM, pcr0.data(), pcr0.size()), "Reading PCR 0 must succeed");
+    TEST_ASSERT(pcr0[0] == 0x5C && pcr0[31] == 0xE1, "PCR 0 CRTM measurement must match initialized value");
+
+    TEST_ASSERT(vtpm.readPcr(micant::vsm::VTPM_PCR_SECURE_BOOT, pcr7.data(), pcr7.size()), "Reading PCR 7 must succeed");
+    TEST_ASSERT(vtpm.readPcr(micant::vsm::VTPM_PCR_BITLOCKER_VSM, pcr11_before.data(), pcr11_before.size()), "Reading PCR 11 must succeed");
+
+    uint8_t measurement[16] = { 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10 };
+    TEST_ASSERT(vtpm.extendPcr(micant::vsm::VTPM_PCR_BITLOCKER_VSM, measurement, sizeof(measurement)), "Extending PCR 11 must succeed");
+    TEST_ASSERT(vtpm.readPcr(micant::vsm::VTPM_PCR_BITLOCKER_VSM, pcr11_after.data(), pcr11_after.size()), "Reading extended PCR 11 must succeed");
+    TEST_ASSERT(pcr11_before != pcr11_after, "PCR 11 digest must change after extension");
+
+    // Stage 11: Virtual TPM 2.0 PCR-Policy Data Sealing & Cryptographic Unsealing
+    std::string sensitiveSecret = "Sovereign_BitLocker_VMK_2026_Enterprise_Volume";
+    std::vector<uint8_t> sealedBlob;
+    uint32_t policyMask = (1u << micant::vsm::VTPM_PCR_SECURE_BOOT); // Sealed to Secure Boot PCR 7
+
+    TEST_ASSERT(vtpm.sealData(policyMask, reinterpret_cast<const uint8_t*>(sensitiveSecret.data()), sensitiveSecret.size(), sealedBlob), "Sealing data to PCR 7 must succeed");
+    TEST_ASSERT(sealedBlob.size() >= 44 + sensitiveSecret.size(), "Sealed blob must include header and ciphertext");
+
+    std::vector<uint8_t> unsealedData;
+    TEST_ASSERT(vtpm.unsealData(sealedBlob.data(), sealedBlob.size(), unsealedData), "Unsealing data with valid PCR state must succeed");
+    std::string recoveredSecret(unsealedData.begin(), unsealedData.end());
+    TEST_ASSERT(recoveredSecret == sensitiveSecret, "Unsealed secret must match original plaintext");
+
+    // Tamper with PCR 7 (simulate Secure Boot policy violation)
+    uint8_t tamperData[4] = { 0xDE, 0xAD, 0x00, 0x01 };
+    vtpm.extendPcr(micant::vsm::VTPM_PCR_SECURE_BOOT, tamperData, sizeof(tamperData));
+
+    std::vector<uint8_t> failedUnseal;
+    TEST_ASSERT(!vtpm.unsealData(sealedBlob.data(), sealedBlob.size(), failedUnseal), "Unsealing must FAIL when PCR measurements do not match policy");
+
+    // Stage 12: Clean-Room Win32 C ABI Parity Exports & Multi-threaded VTL/Enclave Stress Test
+    TEST_ASSERT(micant::vsm::VsmInitializeSubsystem() == micant::STATUS_SUCCESS, "VsmInitializeSubsystem must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::vsm::VsmQueryTrustLevel() == micant::vsm::VTL_NORMAL, "VsmQueryTrustLevel must return VTL 0");
+
+    uint32_t newTrustletId = 0;
+    TEST_ASSERT(micant::vsm::VsmRegisterSecurityEnclave("custom_trustlet.exe", 16 * 1024 * 1024, &newTrustletId) == micant::STATUS_SUCCESS, "Registering trustlet via C ABI must succeed");
+    TEST_ASSERT(newTrustletId >= 3, "New trustlet ID must be >= 3");
+
+    micant::vsm::TrustletDescriptor tDesc{};
+    TEST_ASSERT(micant::vsm::VsmGetEnclaveMetrics(newTrustletId, &tDesc) == micant::STATUS_SUCCESS, "Querying trustlet metrics must succeed");
+    TEST_ASSERT(std::string(tDesc.name) == "custom_trustlet.exe", "Trustlet name must match");
+
+    TEST_ASSERT(micant::vsm::HvciVerifyModule("custom_signed.sys", validDrv.data(), validDrv.size()) == micant::STATUS_SUCCESS, "HvciVerifyModule on valid driver must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::vsm::HvciVerifyModule("gdrv.sys", validDrv.data(), validDrv.size()) == micant::vsm::STATUS_IMAGE_CERT_REVOKED, "HvciVerifyModule on blocked driver must return STATUS_IMAGE_CERT_REVOKED");
+
+    // Multi-threaded concurrent VTL and Credential Guard query stress test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 4; ++t) {
+        threads.emplace_back([&vsmSys, &stressSuccessCount]() {
+            for (int iter = 0; iter < 25; ++iter) {
+                uint32_t vtl = vsmSys.getActiveVtl();
+                if (vtl <= 1) {
+                    std::vector<uint8_t> secret;
+                    std::string sType;
+                    if (vsmSys.getCredentialGuard().getSecret("krbtgt@MICANT.LOCAL", secret, sType)) {
+                        if (sType == "KERBEROS_TGT") {
+                            stressSuccessCount++;
+                        }
+                    }
+                }
+            }
+        });
+    }
+    for (auto& th : threads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressSuccessCount.load() == 100, "100 concurrent VTL queries and Credential Guard operations must complete without race conditions");
+
+    std::cout << "[TEST] Suite 190: Windows Virtual Secure Mode (VSM / vsm.sys), VBS & HVCI Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite189")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite190")) {
+        RUN_TEST(Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite189") {
         RUN_TEST(Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem);
         return g_FailedTests;
     }
@@ -42948,6 +43157,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_WindowsVMBus_SyntheticDriver_Subsystem);
         return g_FailedTests;
     }
+
     if (argc > 1 && std::string(argv[1]) == "--suite187") {
         RUN_TEST(Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem);
         return g_FailedTests;
@@ -43470,6 +43680,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem);
     RUN_TEST(Test_WindowsVMBus_SyntheticDriver_Subsystem);
     RUN_TEST(Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem);
+    RUN_TEST(Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

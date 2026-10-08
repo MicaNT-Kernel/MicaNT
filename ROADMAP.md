@@ -3410,22 +3410,42 @@
 
 ---
 
-### Phase 163: Windows Virtualization-Based Security (VBS), Virtual Secure Mode (VSM) & Hypervisor-Protected Code Integrity (HVCI) Subsystem (`vsm.hpp`, `vsm.sys`, `securekernel.exe`, `hvci.dll`, `TitanVSM`, `AegisTrust`) (Milestone 190) [PLANNED]
+### Phase 163: Windows Virtualization-Based Security (VBS), Virtual Secure Mode (VSM) & Hypervisor-Protected Code Integrity (HVCI) Subsystem (`vsm.hpp`, `vsm.sys`, `securekernel.exe`, `hvci.dll`, `TitanVSM`, `AegisTrust`) (Milestone 190) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Virtualization-Based Security (VBS), Virtual Secure Mode (VSM), Virtual Trust Levels (VTL 0 normal world vs VTL 1 secure world / Secure Kernel `securekernel.exe`), Hypervisor-Protected Code Integrity (HVCI / W^X write-xor-execute memory protection enforcement via SLAT / Second-Level Address Translation), Isolated User Mode (IUM / Trustlets), Credential Guard (LSA Iso), and Virtual TPM (vTPM) attestation.*
-- [ ] **Virtual Secure Mode (VSM) & VBS Core Architecture (`include/micant/vsm.hpp`)**:
+- [x] **Virtual Secure Mode (VSM) & VBS Core Architecture (`include/micant/vsm.hpp`)**:
   - Virtual Trust Levels (VTL): Dual-world architecture separating VTL 0 (normal NT kernel/userland) and VTL 1 (Secure Kernel & Isolated User Mode trustlets).
   - VTL Switching Hypercalls: Hyper-V VSM hypercall engine (`HvCallEnterVtl1`, `HvCallSwitchVtl`, `HvCallModifyVtlProtectionMask`), secure register save/restore state.
   - SLAT Page Permission Hardening (W^X): Second-Level Address Translation enforcement preventing VTL 0 kernel code from modifying executable memory or executing writable memory.
   - Hypervisor-Protected Code Integrity (HVCI): Strict cryptographic verification of kernel mode drivers and executable code before page validation and execution authorization.
   - Credential Guard (LSA Isolated): Isolated Local Security Authority (`lsaiso.exe`) running within VTL 1 to shield NT password hashes, Kerberos tickets, and DPAPI master keys from Ring 0 kernel compromise.
   - Virtual TPM (vTPM 2.0): Hypervisor-backed synthetic TPM 2.0 enclave rooted in VTL 1 for measured boot PCR validation and BitLocker secret sealing.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `vsm.sys` / `securekernel.exe` / `hvci.dll`: `VsmInitializeSubsystem`, `VsmVtlSwitch`, `VsmSetPageProtection`, `HvciVerifyModule`, `VsmQueryTrustLevel`, `VsmRegisterSecurityEnclave`, `VsmGetEnclaveMetrics`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`VsmService`, `svchost.exe -k LocalSystemNetworkRestricted`).
-- [ ] **Interactive Shell CLI**:
+- [x] **Interactive Shell CLI**:
   - `vsm status`, `vsm vtl [target]`, `vsm hvci <enable|disable>`, `vsm credguard`, `vsm vtpm`, `vsm enclaves`, `vsm test`.
-- [ ] **Unit Test Suite 190 (`Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem`)**:
+- [x] **Unit Test Suite 190 (`Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem`)**:
   - 12 comprehensive validation stages verifying VBS/VSM subsystem initialization, dual VTL (0 & 1) execution state partitioning, VTL hypercall context switching, SLAT W^X page protection modification and violation trapping, HVCI driver signature and code integrity enforcement, Credential Guard isolated secret vault, vTPM 2.0 PCR measurement extension, Win32 C ABI parity exports, and multi-threaded secure enclave call concurrency.
+  - Milestone 190: **190 / 190 Test Suites Passing (100%)**.
+
+---
+
+### Phase 164: Windows Kernel Hotpatching & Live Update Subsystem (`hotpatch.hpp`, `hotpatch.sys`, `klp.dll`, `TitanHotpatch`, `AegisLiveUpdate`) (Milestone 191) [PLANNED]
+*Goal: Implement clean-room Windows Kernel Hotpatching (KLP / hotpatch.sys), rebootless OS security updating, dynamic binary function redirection via 5-byte relative jumps (trampolines), quiescence thread synchronization across all processors, atomic instruction patching with I-cache invalidation, hotpatch payload verification (.hp PE files), patch rollback, and live telemetry.*
+- [ ] **Kernel Hotpatching Core Architecture (`include/micant/hotpatch.hpp`)**:
+  - Binary Function Detour Engine: 5-byte JMP relative detour trampoline injection, instruction boundary preservation, original function prolog displacement and execution preservation.
+  - Multiprocessor Quiescence Synchronization: Inter-Processor Interrupt (IPI) broadcast pausing all active CPU threads at safe instruction boundaries (no thread executing inside the target function body during patch application).
+  - Atomic Instruction Patching: 64-bit atomic memory write / interlocked compare-and-swap (CMPXCHG16B) with CPU instruction cache invalidation (`clflush` / `isb`).
+  - Hotpatch Package Model: Authenticode-signed `.hp` hotpatch PE module parser, target symbol lookup, relocation fixup, and metadata verification.
+  - Patch Lifecycle Management: Staged, Active, Reverted, Committed states with instant reversible rollback upon anomaly detection.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `hotpatch.sys` / `klp.dll`: `HotpatchInitializeSubsystem`, `HotpatchApplyPatch`, `HotpatchRevertPatch`, `HotpatchQueryPatchStatus`, `HotpatchEnumeratePatches`, `HotpatchVerifySignature`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`HotpatchService`, `svchost.exe -k LocalSystemNetworkRestricted`).
+- [ ] **Interactive Shell CLI**:
+  - `hotpatch status`, `hotpatch list`, `hotpatch apply <patchName>`, `hotpatch revert <patchId>`, `hotpatch verify <patchName>`, `hotpatch test`.
+- [ ] **Unit Test Suite 191 (`Test_WindowsKernelHotpatching_LiveUpdate_Subsystem`)**:
+  - 12 comprehensive validation stages verifying hotpatch subsystem initialization, detour trampoline injection, multiprocessor quiescence coordination, atomic instruction replacement, function redirection execution, prolog preservation, hotpatch signature verification, patch rollback and unhooking, Win32 C ABI parity exports, and multi-threaded concurrent patched function execution stress testing.
+
 
 
 
