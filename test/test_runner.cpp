@@ -183,6 +183,7 @@
 #include "micant/uefi_rt.hpp"
 #include "micant/modern_standby.hpp"
 #include "micant/wsa.hpp"
+#include "micant/touchpad.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -40533,8 +40534,304 @@ void Test_WindowsSubsystemForAndroid_WSA_Subsystem() {
     std::cout << "[TEST] Suite 178: Windows Subsystem for Android (WSA / AOSP Microdroid Container) Subsystem PASSED.\n";
 }
 
+void Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem() {
+    std::cout << "[TEST] Suite 179: Windows Precision Touchpad (PTP), DirectManipulation & Touch Injection Subsystem\n";
+
+    // Stage 1: Subsystem Registration & SCM/Version Database Integration
+    touchpad::RegisterTouchpadSubsystem();
+    auto& vdb = version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("directmanipulation.dll") != nullptr, "directmanipulation.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("hidtouch.sys") != nullptr, "hidtouch.sys must be registered in VersionDatabase");
+
+    auto& scm = scm::ServiceControlManager::get();
+    auto pSvc = scm.getServiceRecord(L"TouchpadService");
+    TEST_ASSERT(pSvc != nullptr, "TouchpadService must be registered in SCM");
+    TEST_ASSERT(pSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "TouchpadService must be running in SCM");
+
+    auto& ptp = touchpad::PrecisionTouchpadSubsystem::get();
+    TEST_ASSERT(ptp.isTouchpadEnabled(), "Precision Touchpad must be enabled by default");
+    TEST_ASSERT(ptp.isTapToClick(), "Tap to click must be enabled by default");
+    TEST_ASSERT(ptp.isTwoFingerScroll(), "Two-finger scroll must be enabled by default");
+    TEST_ASSERT(ptp.isPinchToZoom(), "Pinch to zoom must be enabled by default");
+    TEST_ASSERT(ptp.isPalmRejection(), "Palm rejection must be enabled by default");
+
+    // Stage 2: PTP Digitizer Report Parsing & Contact Tracking (Up to 10 contacts)
+    touchpad::PtpReport r10{};
+    r10.contactCount = 10;
+    r10.scanTimeUs = 100000;
+    for (uint32_t i = 0; i < 10; ++i) {
+        r10.contacts[i].contactId = i;
+        r10.contacts[i].tipSwitch = true;
+        r10.contacts[i].confidence = true;
+        r10.contacts[i].x = 100.0f + static_cast<float>(i * 40);
+        r10.contacts[i].y = 200.0f;
+        r10.contacts[i].pressure = 512;
+        r10.contacts[i].widthMm = 4.0f;
+        r10.contacts[i].heightMm = 4.0f;
+    }
+    uint64_t prevReports = ptp.getProcessedReports();
+    auto evs10 = ptp.processPtpReport(r10);
+    TEST_ASSERT(ptp.getProcessedReports() == prevReports + 1, "PTP report counter must increment on ingestion");
+
+    // Stage 3: Hardware Palm Rejection & Edge Suppression
+    touchpad::PtpReport palmRep{};
+    palmRep.contactCount = 2;
+    // Normal contact
+    palmRep.contacts[0].contactId = 0;
+    palmRep.contacts[0].tipSwitch = true;
+    palmRep.contacts[0].confidence = true;
+    palmRep.contacts[0].widthMm = 5.0f;
+    palmRep.contacts[0].heightMm = 5.0f;
+    palmRep.contacts[0].x = 400.0f;
+    palmRep.contacts[0].y = 300.0f;
+
+    // Palm contact (>12mm dimension / >144 mm^2 area)
+    palmRep.contacts[1].contactId = 1;
+    palmRep.contacts[1].tipSwitch = true;
+    palmRep.contacts[1].confidence = true;
+    palmRep.contacts[1].widthMm = 16.0f;
+    palmRep.contacts[1].heightMm = 16.0f; // 256 mm^2
+    palmRep.contacts[1].x = 700.0f;
+    palmRep.contacts[1].y = 300.0f;
+
+    uint64_t prevPalms = ptp.getPalmRejections();
+    ptp.processPtpReport(palmRep);
+    TEST_ASSERT(ptp.getPalmRejections() > prevPalms, "Palm rejection must suppress oversized contact area");
+    TEST_ASSERT(!palmRep.contacts[1].confidence, "Palm contact confidence bit must be cleared by rejection engine");
+
+    // Stage 4: Physical Button Click & Haptic Feedback Correlation
+    auto& haptics = ptp.getHaptics();
+    uint64_t prevHapticEvents = haptics.getTriggerCount();
+
+    touchpad::PtpReport clickRep{};
+    clickRep.contactCount = 1;
+    clickRep.contacts[0] = touchpad::PtpContact(0, true, true, 400.0f, 400.0f, 800, 5.0f, 5.0f);
+    clickRep.button.buttonDown = true;
+    clickRep.button.buttonRight = false; // Left click
+    ptp.processPtpReport(clickRep);
+    TEST_ASSERT(haptics.getTriggerCount() > prevHapticEvents, "Left physical click must trigger haptic press/click");
+
+    clickRep.button.buttonRight = true; // Right click
+    ptp.processPtpReport(clickRep);
+    TEST_ASSERT(haptics.getTriggerCount() > prevHapticEvents + 1, "Right physical click must trigger haptic feedback");
+
+    // Stage 5: Tap & Multi-Finger Tap Gestures
+    touchpad::PtpReport tapDown{}, tapUp{};
+    tapDown.contactCount = 1;
+    tapDown.contacts[0] = touchpad::PtpContact(0, true, true, 500.0f, 400.0f, 400, 5.0f, 5.0f);
+    tapDown.scanTimeUs = 200000;
+    ptp.processPtpReport(tapDown);
+
+    tapUp.contactCount = 1;
+    tapUp.contacts[0] = touchpad::PtpContact(0, false, true, 500.0f, 400.0f, 0, 5.0f, 5.0f);
+    tapUp.scanTimeUs = 250000; // 50ms tap duration
+    auto tapEvs = ptp.processPtpReport(tapUp);
+    bool tapFound = false;
+    for (const auto& ev : tapEvs) {
+        if (ev.type == touchpad::GestureType::Tap) tapFound = true;
+    }
+    TEST_ASSERT(tapFound, "1-finger quick release must synthesize Tap gesture");
+
+    // 2-finger tap (right click)
+    touchpad::PtpReport twoTapDown{}, twoTapUp{};
+    twoTapDown.contactCount = 2;
+    twoTapDown.contacts[0] = touchpad::PtpContact(0, true, true, 450.0f, 400.0f, 400, 5.0f, 5.0f);
+    twoTapDown.contacts[1] = touchpad::PtpContact(1, true, true, 550.0f, 400.0f, 400, 5.0f, 5.0f);
+    twoTapDown.scanTimeUs = 300000;
+    ptp.processPtpReport(twoTapDown);
+
+    twoTapUp.contactCount = 2;
+    twoTapUp.contacts[0] = touchpad::PtpContact(0, false, true, 450.0f, 400.0f, 0, 5.0f, 5.0f);
+    twoTapUp.contacts[1] = touchpad::PtpContact(1, false, true, 550.0f, 400.0f, 0, 5.0f, 5.0f);
+    twoTapUp.scanTimeUs = 340000;
+    auto twoTapEvs = ptp.processPtpReport(twoTapUp);
+    bool twoTapFound = false;
+    for (const auto& ev : twoTapEvs) {
+        if (ev.type == touchpad::GestureType::TwoFingerTap) twoTapFound = true;
+    }
+    TEST_ASSERT(twoTapFound, "2-finger simultaneous tap must synthesize TwoFingerTap (Right Click)");
+
+    // Stage 6: Two-Finger Kinetic Scrolling & Natural Scrolling Toggle
+    ptp.setNaturalScrolling(false);
+    touchpad::PtpReport scroll1{}, scroll2{};
+    scroll1.contactCount = 2;
+    scroll1.contacts[0] = touchpad::PtpContact(0, true, true, 400.0f, 300.0f, 500, 5.0f, 5.0f);
+    scroll1.contacts[1] = touchpad::PtpContact(1, true, true, 460.0f, 300.0f, 500, 5.0f, 5.0f);
+    scroll1.scanTimeUs = 400000;
+    ptp.processPtpReport(scroll1);
+
+    scroll2.contactCount = 2;
+    scroll2.contacts[0] = touchpad::PtpContact(0, true, true, 400.0f, 350.0f, 500, 5.0f, 5.0f); // Down 50px
+    scroll2.contacts[1] = touchpad::PtpContact(1, true, true, 460.0f, 350.0f, 500, 5.0f, 5.0f);
+    scroll2.scanTimeUs = 420000;
+    auto scrollEvsStd = ptp.processPtpReport(scroll2);
+    TEST_ASSERT(!scrollEvsStd.empty() && scrollEvsStd[0].type == touchpad::GestureType::TwoFingerScroll, "TwoFingerScroll gesture must be detected");
+    float stdDeltaY = scrollEvsStd[0].deltaY;
+
+    // Toggle natural scrolling and repeat with inverted expectation
+    ptp.setNaturalScrolling(true);
+    ptp.processPtpReport(scroll1);
+    auto scrollEvsNat = ptp.processPtpReport(scroll2);
+    TEST_ASSERT(!scrollEvsNat.empty() && scrollEvsNat[0].type == touchpad::GestureType::TwoFingerScroll, "Natural scrolling gesture must be detected");
+    TEST_ASSERT(scrollEvsNat[0].deltaY == -stdDeltaY, "Natural scrolling must invert Y scrolling delta");
+
+    // Stage 7: Pinch-to-Zoom & Two-Finger Rotation
+    touchpad::PtpReport pinch1{}, pinch2{};
+    pinch1.contactCount = 2;
+    pinch1.contacts[0] = touchpad::PtpContact(0, true, true, 400.0f, 400.0f, 500, 5.0f, 5.0f);
+    pinch1.contacts[1] = touchpad::PtpContact(1, true, true, 500.0f, 400.0f, 500, 5.0f, 5.0f); // Dist = 100px
+    pinch1.scanTimeUs = 500000;
+    ptp.processPtpReport(pinch1);
+
+    pinch2.contactCount = 2;
+    pinch2.contacts[0] = touchpad::PtpContact(0, true, true, 350.0f, 400.0f, 500, 5.0f, 5.0f);
+    pinch2.contacts[1] = touchpad::PtpContact(1, true, true, 550.0f, 400.0f, 500, 5.0f, 5.0f); // Dist = 200px (2x zoom)
+    pinch2.scanTimeUs = 520000;
+    auto pinchEvs = ptp.processPtpReport(pinch2);
+    bool zoomFound = false;
+    for (const auto& ev : pinchEvs) {
+        if (ev.type == touchpad::GestureType::PinchZoom && ev.scale > 1.2f) zoomFound = true;
+    }
+    TEST_ASSERT(zoomFound, "Pinch-out gesture must produce PinchZoom with scale > 1.2");
+
+    // Stage 8: Three-Finger & Four-Finger Multi-Touch Shell Gestures
+    touchpad::PtpReport swipe3_1{}, swipe3_2{};
+    swipe3_1.contactCount = 3;
+    swipe3_2.contactCount = 3;
+    swipe3_1.scanTimeUs = 600000;
+    swipe3_2.scanTimeUs = 625000;
+    for (uint32_t i = 0; i < 3; ++i) {
+        swipe3_1.contacts[i] = touchpad::PtpContact(i, true, true, 300.0f + static_cast<float>(i * 50), 500.0f, 500, 5.0f, 5.0f);
+        swipe3_2.contacts[i] = touchpad::PtpContact(i, true, true, 300.0f + static_cast<float>(i * 50), 380.0f, 500, 5.0f, 5.0f); // Delta Y = -120px (Up)
+    }
+    ptp.processPtpReport(swipe3_1);
+    auto s3Evs = ptp.processPtpReport(swipe3_2);
+    bool s3UpFound = false;
+    for (const auto& ev : s3Evs) {
+        if (ev.type == touchpad::GestureType::ThreeFingerSwipeUp) s3UpFound = true;
+    }
+    TEST_ASSERT(s3UpFound, "3-finger swipe up must trigger ThreeFingerSwipeUp (Task View)");
+
+    // 4-finger swipe right (Virtual Desktop)
+    touchpad::PtpReport swipe4_1{}, swipe4_2{};
+    swipe4_1.contactCount = 4;
+    swipe4_2.contactCount = 4;
+    swipe4_1.scanTimeUs = 700000;
+    swipe4_2.scanTimeUs = 725000;
+    for (uint32_t i = 0; i < 4; ++i) {
+        swipe4_1.contacts[i] = touchpad::PtpContact(i, true, true, 200.0f + static_cast<float>(i * 40), 400.0f, 500, 5.0f, 5.0f);
+        swipe4_2.contacts[i] = touchpad::PtpContact(i, true, true, 300.0f + static_cast<float>(i * 40), 400.0f, 500, 5.0f, 5.0f); // Delta X = +100px (Right)
+    }
+    ptp.processPtpReport(swipe4_1);
+    auto s4Evs = ptp.processPtpReport(swipe4_2);
+    bool s4RightFound = false;
+    for (const auto& ev : s4Evs) {
+        if (ev.type == touchpad::GestureType::FourFingerSwipeRight) s4RightFound = true;
+    }
+    TEST_ASSERT(s4RightFound, "4-finger swipe right must trigger FourFingerSwipeRight (Virtual Desktop +1)");
+
+    // Stage 9: DirectManipulation Viewport Creation, Configuration & States
+    auto& dm = ptp.getDirectManipulation();
+    uint32_t vpId = dm.createViewport();
+    auto* vp = dm.getViewport(vpId);
+    TEST_ASSERT(vp != nullptr, "DirectManipulation viewport must be successfully created");
+    TEST_ASSERT(vp->getStatus() == touchpad::DIRECTMANIPULATION_ENABLED, "Initial viewport state must be ENABLED");
+
+    vp->setViewportBounds(1920, 1080);
+    vp->setContentBounds(3840, 2160);
+
+    // Stage 10: Kinetic Momentum, Friction Deceleration & Boundary Spring Physics
+    touchpad::GestureEvent kineticEv{};
+    kineticEv.type = touchpad::GestureType::TwoFingerScroll;
+    kineticEv.deltaY = -200.0f;
+    kineticEv.velocityY = -1000.0f;
+    vp->processGesture(kineticEv);
+    TEST_ASSERT(vp->getStatus() == touchpad::DIRECTMANIPULATION_INERTIA, "Viewport must enter INERTIA state when finger lifts with velocity");
+
+    float initVel = vp->getVelocityY();
+    vp->advanceTime(0.016f); // 1 frame at 60fps
+    float decayedVel = vp->getVelocityY();
+    TEST_ASSERT(std::abs(decayedVel) < std::abs(initVel), "Kinetic velocity must decay exponentially due to friction");
+
+    // Advance 120 frames to simulate settlement
+    for (int f = 0; f < 120; ++f) {
+        vp->advanceTime(0.016f);
+    }
+    TEST_ASSERT(vp->getStatus() == touchpad::DIRECTMANIPULATION_READY, "Viewport must settle to READY state when motion stops");
+
+    // Stage 11: Win32 Pointer & Touch Injection API
+    auto& injection = ptp.getInjection();
+    TEST_ASSERT(injection.isInitialized(), "TouchInjectionManager must be initialized");
+
+    pointer::POINTER_TOUCH_INFO injectContact{};
+    injectContact.pointerInfo.pointerType = pointer::PT_TOUCH;
+    injectContact.pointerInfo.pointerId = 7;
+    injectContact.pointerInfo.ptPixelLocation = {800, 600};
+    injectContact.pointerInfo.pointerFlags = pointer::POINTER_FLAG_INCONTACT | pointer::POINTER_FLAG_FIRSTBUTTON | pointer::POINTER_FLAG_DOWN;
+    injectContact.touchMask = pointer::TOUCH_MASK_CONTACTAREA | pointer::TOUCH_MASK_PRESSURE;
+    injectContact.pressure = 850;
+    injectContact.rcContact = {796, 596, 804, 604};
+
+    BOOL injOk = injection.injectTouchInput(1, &injectContact);
+    TEST_ASSERT(injOk == TRUE, "injectTouchInput must succeed for valid contact");
+
+    pointer::POINTER_TOUCH_INFO retrievedContact{};
+    BOOL getOk = injection.getPointerTouchInfo(7, &retrievedContact);
+    TEST_ASSERT(getOk == TRUE, "getPointerTouchInfo must retrieve injected pointer");
+    TEST_ASSERT(retrievedContact.pointerInfo.ptPixelLocation.x == 800, "Retrieved X coordinate must match injected X");
+    TEST_ASSERT(retrievedContact.pressure == 850, "Retrieved pressure must match injected pressure (850)");
+
+    // Stage 12: Win32 & NT Clean-Room Dynamic C ABI Parity Exports
+    void* pDmManager = nullptr;
+    NTSTATUS hrDm = touchpad::DirectManipulationCreateInstance(&pDmManager);
+    TEST_ASSERT(hrDm == STATUS_SUCCESS && pDmManager != nullptr, "DirectManipulationCreateInstance export must succeed");
+
+    void* pDmDirect = touchpad::GetDirectManipulationManager();
+    TEST_ASSERT(pDmDirect == pDmManager, "GetDirectManipulationManager must return matching manager instance");
+
+    uint32_t vpStatus = touchpad::DirectManipulationGetViewportStatus(vpId);
+    TEST_ASSERT(vpStatus == static_cast<uint32_t>(touchpad::DIRECTMANIPULATION_READY), "DirectManipulationGetViewportStatus must return accurate status");
+
+    uint32_t devId = 0;
+    NTSTATUS ptpRegOk = touchpad::PtpRegisterDigitizer(&devId);
+    TEST_ASSERT(ptpRegOk == STATUS_SUCCESS && devId != 0, "PtpRegisterDigitizer must return STATUS_SUCCESS and valid device ID");
+
+    NTSTATUS ptpHapticOk = touchpad::PtpTriggerHaptic(static_cast<uint32_t>(touchpad::HapticFeedbackType::DetentTick), 65);
+    TEST_ASSERT(ptpHapticOk == STATUS_SUCCESS, "PtpTriggerHaptic C export must return STATUS_SUCCESS");
+
+    BOOL injInitExport = touchpad::InitializeTouchInjection(10, 0);
+    TEST_ASSERT(injInitExport == TRUE, "InitializeTouchInjection C export must return TRUE");
+
+    // Concurrency & Multi-Thread Stress: 4 threads feeding PTP reports concurrently
+    std::atomic<uint32_t> stressReportsProcessed{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([&, t]() {
+            for (int r = 0; r < 25; ++r) {
+                touchpad::PtpReport rep{};
+                rep.contactCount = 2;
+                rep.contacts[0] = {0, true, true, 100.0f + static_cast<float>(t * 50 + r), 200.0f, 500, 5.0f, 5.0f};
+                rep.contacts[1] = {1, true, true, 150.0f + static_cast<float>(t * 50 + r), 200.0f, 500, 5.0f, 5.0f};
+                rep.scanTimeUs = 1000000 + (t * 10000) + (r * 1000);
+                ptp.processPtpReport(rep);
+                stressReportsProcessed++;
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressReportsProcessed.load() == 100, "100 multi-threaded PTP reports must be processed without race conditions");
+
+    std::cout << "[TEST] Suite 179: Windows Precision Touchpad (PTP), DirectManipulation & Touch Injection Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite178")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite179")) {
+        RUN_TEST(Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite178") {
         RUN_TEST(Test_WindowsSubsystemForAndroid_WSA_Subsystem);
         return g_FailedTests;
     }
@@ -41009,6 +41306,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsUEFI_RuntimeServices_CapsuleUpdate_Subsystem);
     RUN_TEST(Test_ModernStandby_PEP_SleepStudy_Subsystem);
     RUN_TEST(Test_WindowsSubsystemForAndroid_WSA_Subsystem);
+    RUN_TEST(Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

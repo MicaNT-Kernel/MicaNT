@@ -306,7 +306,13 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 149: UEFI Runtime Services, ESRT & Capsule Update      [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 150: Modern Standby (S0ix / PEP) & Sleep Study Subsys  [PLANNED]        │
+│ Phase 150: Modern Standby (S0ix / PEP) & Sleep Study Subsys  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 151: Windows Subsystem for Android (WSA / Microdroid)  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 152: Precision Touchpad & DirectManipulation Subsystem [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 153: Windows Ink Workspace, ISF & Pen Inking Digitizer [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3182,22 +3188,41 @@
 
 ---
 
-### Phase 152: Windows Precision Touchpad, DirectManipulation & Touch Injection Subsystem (`touchpad.hpp`, `hidtouch.sys`, `directmanipulation.dll`, `TitanTouch`, `AegisHaptics`) (Milestone 179) [PLANNED]
+### Phase 152: Windows Precision Touchpad, DirectManipulation & Touch Injection Subsystem (`touchpad.hpp`, `hidtouch.sys`, `directmanipulation.dll`, `TitanTouch`, `AegisHaptics`) (Milestone 179) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Precision Touchpad (PTP), HID-over-I2C/USB digitizer stack, DirectManipulation 60/120 FPS kinetic physics curves, Win32 touch injection, and synthetic haptic feedback.*
-- [ ] **Precision Touchpad & Gesture Architecture (`include/micant/touchpad.hpp`)**:
-  - Windows Precision Touchpad (PTP) HID digitizer reports and contact telemetry (X/Y, pressure, contact ID, confidence bit).
-  - Multi-touch gesture engine: pinch-to-zoom, 2-finger scroll with kinetic inertia, 3/4-finger desktop switching, rotational gestures.
-  - DirectManipulation COM API (`IDirectManipulationManager`, `IDirectManipulationViewport`, `IDirectManipulationUpdateManager`).
-  - Synthetic touch injection Win32 API (`InitializeTouchInjection`, `InjectTouchInput`, `GetPointerTouchInfo`).
-  - Haptic feedback waveform generator and actuator simulation (`IHapticsFeedbackProvider`).
+- [x] **Precision Touchpad & Gesture Architecture (`include/micant/touchpad.hpp`)**:
+  - Windows Precision Touchpad (PTP) HID digitizer reports and contact telemetry (X/Y, pressure [0..1023], contact ID [0..9], confidence bit, width/height mm, scan time).
+  - Multi-touch gesture engine (`GestureEngine`): 1-finger tap/double-tap, 2-finger right click tap, 2-finger kinetic scroll (with natural scrolling toggle), pinch-to-zoom scaling, 2-finger rotation, 3-finger swipe up/down/left/right (Task View, Show Desktop, Alt+Tab app switch), 4-finger virtual desktop navigation, and 4-finger Action Center tap.
+  - DirectManipulation COM Engine (`DirectManipulationViewport`, `DirectManipulationManager`): status tracking (`BUILDING`, `ENABLED`, `RUNNING`, `INERTIA`, `READY`), kinetic momentum curves, friction decay, boundary elastic overscroll and spring bounce physics.
+  - Synthetic touch injection Win32 API (`TouchInjectionManager`): `InitializeTouchInjection`, `InjectTouchInput`, `GetPointerTouchInfo` integrating with `POINTER_TOUCH_INFO`.
+  - AegisHaptics Actuator Simulation (`HapticsEngine`): tactile mechanical click (170Hz), double-click, heavy press (150Hz), release (210Hz), detent tick (230Hz), and buzz alerts.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `directmanipulation.dll`: `DirectManipulationCreateInstance`, `GetDirectManipulationManager`, `DirectManipulationGetViewportStatus`.
+  - `user32.dll` / `hidtouch.sys`: `InitializeTouchInjection`, `InjectTouchInput`, `GetPointerTouchInfo`, `PtpRegisterDigitizer`, `PtpProcessReport`, `PtpTriggerHaptic`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`TouchpadService`, `svchost.exe -k TouchpadGroup`).
+- [x] **Interactive Shell CLI**:
+  - `touch status`, `touch inject <x> <y> [pressure]`, `touch gesture <tap|scroll|pinch|swipe3|swipe4>`, `touchpad config <natural|tap|pinch|palm> <on|off>`, `touchpad haptics <click|tick|buzz>`, `touchpad test`.
+- [x] **Unit Test Suite 179 (`Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem`)**:
+  - 12 comprehensive validation stages verifying PTP reports, contact tracking, palm rejection suppression (>12mm / >144mm^2), physical button clicks, tap gestures, natural scrolling, pinch zoom, 3-finger/4-finger gestures, DirectManipulation viewports, kinetic momentum/spring bounce, touch injection, haptic waveforms, C ABI exports, and multi-threaded report concurrency.
+  - Milestone 179: **179 / 179 Test Suites Passing (100%)**.
+
+---
+
+### Phase 153: Windows Ink Workspace, Ink Serialized Format / ISF & Pen Inking Digitizer Stack (`ink.hpp`, `inkobj.dll`, `wisptis.exe`, `TitanInk`, `AegisStylus`) (Milestone 180) [PLANNED]
+*Goal: Implement clean-room Windows Ink Workspace, Ink Serialized Format (ISF) binary parser/serializer, pen digitizer HID reports (tip pressure, eraser, barrel button, tilt X/Y, hover/in-range), Bezier stroke smoothing, and Ink Desktop Workspace overlay.*
+- [ ] **Windows Ink & Pen Digitizer Architecture (`include/micant/ink.hpp`)**:
+  - HID Digitizer Pen / Stylus Usage Page (0x0D): Tip Switch, In-Range, Barrel Switch, Invert / Eraser, Tip Pressure (4096 levels), X/Y Tilt (-90..+90 deg), Twist.
+  - Ink Stroke Geometry & Bezier Curve Fitting: Real-time cubic Bezier smoothing, pressure-to-width tapering, velocity filtering, and stroke bounding box computation.
+  - Ink Serialized Format (ISF) Binary Engine: Clean-room encoder/decoder for Microsoft ISF stream format (tag-based stream, packet property descriptions, delta compression, and embedded custom properties).
+  - Windows Ink Workspace (`wisptis.exe` / `inkobj.dll`): Whiteboard canvas, Screen Sketch annotation layer, Sticky Notes ink intake, and Radial Menu (pen shortcuts).
 - [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `directmanipulation.dll`: `DirectManipulationCreateInstance`.
-  - `user32.dll` / `touchpad.sys`: Touch injection and PTP kernel dispatch.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`hidtouch.sys`).
+  - `inkobj.dll`: `CreateInkDisp`, `CreateInkStroke`, `CreateInkCollector`, `LoadInkFromStream`, `SaveInkToStream`.
+  - `wisptis.exe`: Windows Ink and Tablet PC Input Subsystem daemon.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`TabletInputService`).
 - [ ] **Interactive Shell CLI**:
-  - `touch status`, `touch inject`, `touch gesture`, `touchpad config`, `touchpad test`.
-- [ ] **Unit Test Suite 179 (`Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem`)**:
-  - HID report parsing, contact tracking, kinetic scrolling curves, touch injection, haptic feedback profiles, and gesture recognition.
+  - `ink status`, `ink stroke <draw|clear|list>`, `ink pen <hover|down|up|tilt>`, `ink isf <save|load|inspect>`, `ink test`.
+- [ ] **Unit Test Suite 180 (`Test_WindowsInk_PenDigitizer_ISF_Subsystem`)**:
+  - Pen report ingestion, pressure dynamics, tilt compensation, Bezier stroke smoothing, ISF stream serialization/deserialization, and ink collection APIs.
 
 
 

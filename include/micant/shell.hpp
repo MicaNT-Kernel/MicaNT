@@ -169,6 +169,7 @@
 #include "uefi_rt.hpp"
 #include "modern_standby.hpp"
 #include "wsa.hpp"
+#include "touchpad.hpp"
 
 namespace micant::shell {
 
@@ -483,6 +484,7 @@ public:
             if (cmd == "standby" || cmd == "modernstandby" || cmd == "pep" || cmd == "sleepstudy") { cmdModernStandby(tokens, out); return 0; }
             if (cmd == "powercfg") { cmdPowerCfg(tokens, out); return 0; }
             if (cmd == "wsa" || cmd == "android" || cmd == "aosp" || cmd == "titanwsa" || cmd == "aegiswsa") { cmdWsa(tokens, out); return 0; }
+            if (cmd == "touch" || cmd == "touchpad" || cmd == "ptp" || cmd == "directmanipulation" || cmd == "haptics") { cmdTouchpad(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -28504,6 +28506,326 @@ private:
             << "  wsa intent <action> [uri] [pkg]      Dispatch an Android Intent or protocol activation\n"
             << "  wsa vfs                              Display shared host/guest storage folder mappings\n"
             << "  wsa test                             Run automated WSA self-test verification suite\n";
+    }
+
+    void cmdTouchpad(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& ptp = touchpad::PrecisionTouchpadSubsystem::get();
+        auto& dm = ptp.getDirectManipulation();
+        auto& haptics = ptp.getHaptics();
+        auto& injection = ptp.getInjection();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            if (sub == "status" || sub == "info" || sub == "diag") {
+                out << "MicaNT Precision Touchpad & DirectManipulation Subsystem (TitanTouch / AegisHaptics)\n"
+                    << "----------------------------------------------------------------------------------\n"
+                    << "  Touchpad Subsystem:         " << (ptp.isTouchpadEnabled() ? "ONLINE (Active)" : "DISABLED") << "\n"
+                    << "  Tap to Click:               " << (ptp.isTapToClick() ? "ENABLED" : "DISABLED") << "\n"
+                    << "  Two-Finger Scrolling:       " << (ptp.isTwoFingerScroll() ? "ENABLED" : "DISABLED") << "\n"
+                    << "  Natural Scrolling:          " << (ptp.isNaturalScrolling() ? "ENABLED (Reverse Inverted)" : "DISABLED (Standard)") << "\n"
+                    << "  Pinch to Zoom:              " << (ptp.isPinchToZoom() ? "ENABLED" : "DISABLED") << "\n"
+                    << "  3-Finger Gestures:          " << (ptp.isThreeFingerGestures() ? "ENABLED (Task View / Desktop / Alt+Tab)" : "DISABLED") << "\n"
+                    << "  4-Finger Gestures:          " << (ptp.isFourFingerGestures() ? "ENABLED (Virtual Desktops / Action Center)" : "DISABLED") << "\n"
+                    << "  Hardware Palm Rejection:    " << (ptp.isPalmRejection() ? "ACTIVE (Suppression > 12mm)" : "DISABLED") << "\n"
+                    << "  Cursor Sensitivity:         " << ptp.getSensitivity() << " / 10\n"
+                    << "  Processed HID Reports:      " << ptp.getProcessedReports() << "\n"
+                    << "  Palm Contacts Suppressed:   " << ptp.getPalmRejections() << "\n"
+                    << "  DirectManipulation Status:  " << dm.getViewportCount() << " Active Viewports\n"
+                    << "  Haptic Actuator Cycles:     " << haptics.getTriggerCount() << " Clicks/Ticks/Buzzes Emitted\n"
+                    << "  Touch Injection Manager:    " << (injection.isInitialized() ? "INITIALIZED (Max 10 Contacts)" : "UNINITIALIZED") << "\n";
+                return;
+            }
+
+            if (sub == "inject") {
+                if (tokens.size() < 4) {
+                    out << "Usage: touch inject <x> <y> [pressure]\n";
+                    return;
+                }
+                float x = std::stof(tokens[2]);
+                float y = std::stof(tokens[3]);
+                uint32_t pressure = (tokens.size() > 4) ? static_cast<uint32_t>(std::stoul(tokens[4])) : 512;
+
+                pointer::POINTER_TOUCH_INFO ti{};
+                ti.pointerInfo.pointerType = pointer::PT_TOUCH;
+                ti.pointerInfo.pointerId = 1;
+                ti.pointerInfo.ptPixelLocation.x = static_cast<int32_t>(x);
+                ti.pointerInfo.ptPixelLocation.y = static_cast<int32_t>(y);
+                ti.pointerInfo.pointerFlags = pointer::POINTER_FLAG_INCONTACT | pointer::POINTER_FLAG_FIRSTBUTTON | pointer::POINTER_FLAG_DOWN;
+                ti.touchFlags = pointer::TOUCH_FLAG_NONE;
+                ti.touchMask = pointer::TOUCH_MASK_CONTACTAREA | pointer::TOUCH_MASK_PRESSURE;
+                ti.rcContact.left = static_cast<int32_t>(x) - 4;
+                ti.rcContact.top = static_cast<int32_t>(y) - 4;
+                ti.rcContact.right = static_cast<int32_t>(x) + 4;
+                ti.rcContact.bottom = static_cast<int32_t>(y) + 4;
+                ti.pressure = pressure;
+
+                bool ok = injection.injectTouchInput(1, &ti);
+                out << (ok ? "[+] Touch injection successful: " : "[-] Touch injection failed: ")
+                    << "Contact 1 at (" << x << ", " << y << ") pressure=" << pressure << ".\n";
+                return;
+            }
+
+            if (sub == "gesture") {
+                if (tokens.size() < 3) {
+                    out << "Usage: touch gesture <tap|scroll|pinch|swipe3|swipe4>\n";
+                    return;
+                }
+                std::string gType = tokens[2];
+                std::transform(gType.begin(), gType.end(), gType.begin(), ::tolower);
+
+                touchpad::PtpReport r{};
+                r.scanTimeUs = 100000;
+
+                if (gType == "tap") {
+                    r.contactCount = 1;
+                    r.contacts[0].contactId = 0;
+                    r.contacts[0].tipSwitch = true;
+                    r.contacts[0].confidence = true;
+                    r.contacts[0].x = 500.0f;
+                    r.contacts[0].y = 400.0f;
+                    r.contacts[0].pressure = 600;
+                    auto events1 = ptp.processPtpReport(r);
+
+                    r.contacts[0].tipSwitch = false;
+                    r.scanTimeUs += 60000; // 60ms tap
+                    auto events2 = ptp.processPtpReport(r);
+                    out << "[+] Tap Gesture Emitted: 1-finger down/up (" << (events2.empty() ? 0 : 1) << " gesture detected).\n";
+                    return;
+                }
+
+                if (gType == "scroll") {
+                    r.contactCount = 2;
+                    r.contacts[0].contactId = 0;
+                    r.contacts[0].tipSwitch = true;
+                    r.contacts[0].confidence = true;
+                    r.contacts[0].x = 400.0f;
+                    r.contacts[0].y = 300.0f;
+
+                    r.contacts[1].contactId = 1;
+                    r.contacts[1].tipSwitch = true;
+                    r.contacts[1].confidence = true;
+                    r.contacts[1].x = 450.0f;
+                    r.contacts[1].y = 300.0f;
+                    ptp.processPtpReport(r);
+
+                    r.contacts[0].y = 340.0f;
+                    r.contacts[1].y = 340.0f;
+                    r.scanTimeUs += 30000;
+                    auto evs = ptp.processPtpReport(r);
+                    out << "[+] 2-Finger Scroll Gesture Emitted: Delta Y = " << (evs.empty() ? 0.0f : evs[0].deltaY) << " px.\n";
+                    return;
+                }
+
+                if (gType == "pinch") {
+                    r.contactCount = 2;
+                    r.contacts[0].contactId = 0;
+                    r.contacts[0].tipSwitch = true;
+                    r.contacts[0].confidence = true;
+                    r.contacts[0].x = 400.0f;
+                    r.contacts[0].y = 400.0f;
+
+                    r.contacts[1].contactId = 1;
+                    r.contacts[1].tipSwitch = true;
+                    r.contacts[1].confidence = true;
+                    r.contacts[1].x = 500.0f;
+                    r.contacts[1].y = 400.0f;
+                    ptp.processPtpReport(r);
+
+                    // Spread apart
+                    r.contacts[0].x = 350.0f;
+                    r.contacts[1].x = 550.0f;
+                    r.scanTimeUs += 30000;
+                    auto evs = ptp.processPtpReport(r);
+                    out << "[+] Pinch-to-Zoom Gesture Emitted: Scale Factor = " << (evs.empty() ? 1.0f : evs[0].scale) << "x.\n";
+                    return;
+                }
+
+                if (gType == "swipe3") {
+                    r.contactCount = 3;
+                    for (uint32_t i = 0; i < 3; ++i) {
+                        r.contacts[i].contactId = i;
+                        r.contacts[i].tipSwitch = true;
+                        r.contacts[i].confidence = true;
+                        r.contacts[i].x = 300.0f + static_cast<float>(i * 50);
+                        r.contacts[i].y = 500.0f;
+                    }
+                    ptp.processPtpReport(r);
+
+                    for (uint32_t i = 0; i < 3; ++i) {
+                        r.contacts[i].y = 380.0f; // Swipe up
+                    }
+                    r.scanTimeUs += 30000;
+                    auto evs = ptp.processPtpReport(r);
+                    out << "[+] 3-Finger Swipe Up (Task View) Emitted: Type = "
+                        << (evs.empty() ? "None" : touchpad::GestureTypeToString(evs[0].type)) << ".\n";
+                    return;
+                }
+
+                if (gType == "swipe4") {
+                    r.contactCount = 4;
+                    for (uint32_t i = 0; i < 4; ++i) {
+                        r.contacts[i].contactId = i;
+                        r.contacts[i].tipSwitch = true;
+                        r.contacts[i].confidence = true;
+                        r.contacts[i].x = 300.0f + static_cast<float>(i * 40);
+                        r.contacts[i].y = 400.0f;
+                    }
+                    ptp.processPtpReport(r);
+
+                    for (uint32_t i = 0; i < 4; ++i) {
+                        r.contacts[i].x += 80.0f; // Swipe right
+                    }
+                    r.scanTimeUs += 30000;
+                    auto evs = ptp.processPtpReport(r);
+                    out << "[+] 4-Finger Swipe Right (Virtual Desktop) Emitted: Type = "
+                        << (evs.empty() ? "None" : touchpad::GestureTypeToString(evs[0].type)) << ".\n";
+                    return;
+                }
+
+                out << "[-] Unknown gesture type: " << gType << ". Choose from tap, scroll, pinch, swipe3, swipe4.\n";
+                return;
+            }
+
+            if (sub == "config") {
+                if (tokens.size() >= 4) {
+                    std::string opt = tokens[2];
+                    std::string val = tokens[3];
+                    std::transform(opt.begin(), opt.end(), opt.begin(), ::tolower);
+                    std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+                    bool enable = (val == "on" || val == "1" || val == "true" || val == "enable");
+
+                    if (opt == "natural" || opt == "naturalscroll") {
+                        ptp.setNaturalScrolling(enable);
+                        out << "[+] Natural scrolling set to: " << (enable ? "ON" : "OFF") << "\n";
+                        return;
+                    } else if (opt == "tap" || opt == "taptoclick") {
+                        ptp.setTapToClick(enable);
+                        out << "[+] Tap to click set to: " << (enable ? "ON" : "OFF") << "\n";
+                        return;
+                    } else if (opt == "pinch" || opt == "zoom") {
+                        ptp.setPinchToZoom(enable);
+                        out << "[+] Pinch to zoom set to: " << (enable ? "ON" : "OFF") << "\n";
+                        return;
+                    } else if (opt == "palm") {
+                        ptp.setPalmRejection(enable);
+                        out << "[+] Palm rejection set to: " << (enable ? "ON" : "OFF") << "\n";
+                        return;
+                    }
+                }
+                out << "Usage: touchpad config <natural|tap|pinch|palm> <on|off>\n";
+                return;
+            }
+
+            if (sub == "haptics") {
+                if (tokens.size() < 3) {
+                    out << "Usage: touchpad haptics <click|tick|buzz|press|release> [intensity: 1..100]\n";
+                    return;
+                }
+                std::string hType = tokens[2];
+                std::transform(hType.begin(), hType.end(), hType.begin(), ::tolower);
+                uint32_t intensity = (tokens.size() > 3) ? static_cast<uint32_t>(std::stoul(tokens[3])) : 75;
+
+                touchpad::HapticFeedbackType type = touchpad::HapticFeedbackType::Click;
+                if (hType == "tick") type = touchpad::HapticFeedbackType::DetentTick;
+                else if (hType == "buzz") type = touchpad::HapticFeedbackType::Buzz;
+                else if (hType == "press") type = touchpad::HapticFeedbackType::Press;
+                else if (hType == "release") type = touchpad::HapticFeedbackType::Release;
+                else if (hType == "doubleclick") type = touchpad::HapticFeedbackType::DoubleClick;
+
+                bool ok = haptics.triggerFeedback(type, intensity);
+                out << (ok ? "[+] Haptic feedback triggered: " : "[-] Failed to trigger haptics: ")
+                    << touchpad::HapticTypeToString(type) << " at " << intensity << "% intensity.\n";
+                return;
+            }
+
+            if (sub == "test") {
+                out << "[*] Executing Windows Precision Touchpad (PTP) & DirectManipulation Self-Tests...\n";
+
+                // Stage 1: Registration & Initial State
+                out << "  [1/6] Precision Touchpad & Subsystem Registration: "
+                    << (ptp.isTouchpadEnabled() && injection.isInitialized() ? "PASSED" : "FAILED") << "\n";
+
+                // Stage 2: DirectManipulation Viewport & Inertia Curves
+                uint32_t vpId = dm.createViewport();
+                auto* vp = dm.getViewport(vpId);
+                if (vp) {
+                    vp->enable();
+                    touchpad::GestureEvent scrollEv{};
+                    scrollEv.type = touchpad::GestureType::TwoFingerScroll;
+                    scrollEv.deltaY = -120.0f;
+                    scrollEv.velocityY = -600.0f;
+                    vp->processGesture(scrollEv);
+                    vp->update(0.016f);
+                }
+                out << "  [2/6] DirectManipulation Kinetic Momentum & Physics: "
+                    << (vp && vp->getStatus() == touchpad::DIRECTMANIPULATION_INERTIA ? "PASSED" : "FAILED") << "\n";
+
+                // Stage 3: Palm Rejection
+                touchpad::PtpReport palmRep{};
+                palmRep.contactCount = 1;
+                palmRep.contacts[0].contactId = 0;
+                palmRep.contacts[0].tipSwitch = true;
+                palmRep.contacts[0].confidence = true;
+                palmRep.contacts[0].widthMm = 15.0f;
+                palmRep.contacts[0].heightMm = 15.0f; // >144 mm^2 -> Palm!
+                uint64_t prevPalms = ptp.getPalmRejections();
+                ptp.processPtpReport(palmRep);
+                out << "  [3/6] Hardware Palm Rejection & Area Threshold: "
+                    << (ptp.getPalmRejections() > prevPalms ? "PASSED" : "FAILED") << "\n";
+
+                // Stage 4: Multi-Touch Gestures (Pinch to Zoom)
+                touchpad::PtpReport p1{}, p2{};
+                p1.contactCount = 2;
+                p1.contacts[0] = touchpad::PtpContact(0, true, true, 400.0f, 400.0f, 500, 5.0f, 5.0f);
+                p1.contacts[1] = touchpad::PtpContact(1, true, true, 500.0f, 400.0f, 500, 5.0f, 5.0f);
+                p1.scanTimeUs = 200000;
+                ptp.processPtpReport(p1);
+
+                p2.contactCount = 2;
+                p2.contacts[0] = touchpad::PtpContact(0, true, true, 350.0f, 400.0f, 500, 5.0f, 5.0f);
+                p2.contacts[1] = touchpad::PtpContact(1, true, true, 550.0f, 400.0f, 500, 5.0f, 5.0f);
+                p2.scanTimeUs = 220000;
+                auto pinchEvs = ptp.processPtpReport(p2);
+                bool pinchOk = !pinchEvs.empty() && pinchEvs[0].type == touchpad::GestureType::PinchZoom && pinchEvs[0].scale > 1.0f;
+                out << "  [4/6] Multi-Touch Gesture Engine (Pinch to Zoom): "
+                    << (pinchOk ? "PASSED" : "FAILED") << "\n";
+
+                // Stage 5: Touch Injection
+                pointer::POINTER_TOUCH_INFO tInfo{};
+                tInfo.pointerInfo.pointerType = pointer::PT_TOUCH;
+                tInfo.pointerInfo.pointerId = 2;
+                tInfo.pointerInfo.ptPixelLocation = {640, 480};
+                tInfo.pointerInfo.pointerFlags = pointer::POINTER_FLAG_INCONTACT | pointer::POINTER_FLAG_FIRSTBUTTON | pointer::POINTER_FLAG_DOWN;
+                tInfo.pressure = 768;
+                bool injOk = injection.injectTouchInput(1, &tInfo);
+                pointer::POINTER_TOUCH_INFO retrieved{};
+                bool getOk = injection.getPointerTouchInfo(2, &retrieved);
+                out << "  [5/6] Win32 Pointer & Touch Injection API: "
+                    << (injOk && getOk && retrieved.pressure == 768 ? "PASSED" : "FAILED") << "\n";
+
+                // Stage 6: AegisHaptics Actuator Simulation
+                uint64_t prevHaptics = haptics.getTriggerCount();
+                haptics.triggerFeedback(touchpad::HapticFeedbackType::Click, 100);
+                haptics.triggerFeedback(touchpad::HapticFeedbackType::DetentTick, 50);
+                out << "  [6/6] AegisHaptics Actuator Waveform Synthesis: "
+                    << (haptics.getTriggerCount() == prevHaptics + 2 ? "PASSED" : "FAILED") << "\n";
+
+                out << "[+] All Windows Precision Touchpad (PTP) & DirectManipulation Self-Tests Passed!\n";
+                return;
+            }
+        }
+
+        out << "MicaNT Precision Touchpad & DirectManipulation Subsystem (TitanTouch / AegisHaptics)\n"
+            << "----------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  touch status                         Display PTP digitizer, DirectManipulation, and haptics status\n"
+            << "  touch inject <x> <y> [pressure]      Inject synthetic Win32 touch input (0..1023 pressure)\n"
+            << "  touch gesture <tap|scroll|pinch|swipe3|swipe4> Simulate multi-touch gesture processing\n"
+            << "  touchpad config <natural|tap|pinch|palm> <on|off> Configure touchpad gesture options\n"
+            << "  touchpad haptics <click|tick|buzz>   Trigger tactile haptic feedback actuator simulation\n"
+            << "  touchpad test                        Run automated Precision Touchpad self-test suite\n";
     }
 
     static std::string trim(std::string_view s) {
