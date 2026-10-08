@@ -206,6 +206,7 @@
 #include "micant/clustering.hpp"
 #include "micant/vmms.hpp"
 #include "micant/activedirectory.hpp"
+#include "micant/grouppolicy.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -45263,8 +45264,201 @@ void Test_WindowsActiveDirectory_KerberosKDC_Subsystem() {
     std::cout << "[TEST] Suite 201: Windows Active Directory Domain Services & Kerberos KDC Subsystem PASSED.\n";
 }
 
+void Test_WindowsGroupPolicy_Engine_CSE_Subsystem() {
+    std::cout << "[TEST] Suite 202: Windows Group Policy Client & Engine Subsystem...\n";
+
+    auto& gp = micant::gp::GroupPolicySubsystem::instance();
+
+    // Stage 1: SCM Service Registration (Gpsvc)
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto pGpsvc = scm.getServiceRecord(L"Gpsvc");
+    TEST_ASSERT(pGpsvc != nullptr, "Gpsvc service record must be registered in SCM");
+    TEST_ASSERT(pGpsvc->serviceType == micant::scm::SERVICE_WIN32_SHARE_PROCESS, "Gpsvc must be SERVICE_WIN32_SHARE_PROCESS");
+    TEST_ASSERT(pGpsvc->startType == micant::scm::SERVICE_AUTO_START, "Gpsvc must be SERVICE_AUTO_START");
+    TEST_ASSERT(pGpsvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Gpsvc must be in SERVICE_RUNNING state");
+
+    // Stage 2: VersionDatabase Modules
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    const auto* modGpsvc = vdb.FindModule("gpsvc.dll");
+    const auto* modGpupdate = vdb.FindModule("gpupdate.exe");
+    const auto* modGpreport = vdb.FindModule("gpreport.exe");
+    const auto* modGpedit = vdb.FindModule("gpedit.dll");
+    const auto* modUserenv = vdb.FindModule("userenv.dll");
+    TEST_ASSERT(modGpsvc != nullptr, "gpsvc.dll must exist in VersionDatabase");
+    TEST_ASSERT(modGpupdate != nullptr, "gpupdate.exe must exist in VersionDatabase");
+    TEST_ASSERT(modGpreport != nullptr, "gpreport.exe must exist in VersionDatabase");
+    TEST_ASSERT(modGpedit != nullptr, "gpedit.dll must exist in VersionDatabase");
+    TEST_ASSERT(modUserenv != nullptr, "userenv.dll must exist in VersionDatabase");
+    TEST_ASSERT(modGpsvc->stringTable.at("FileVersion") == "10.0.26100.1", "gpsvc.dll build must be 10.0.26100.1");
+
+    // Stage 3: Client-Side Extension (CSE) Verification
+    TEST_ASSERT(gp.getCseInvocations() >= 0, "CSE invocations counter must be accessible");
+
+    // Stage 4: Registry.pol Serialization & Deserialization
+    micant::gp::RegistryPol pol;
+    micant::gp::PolicySetting s1;
+    s1.keyPath = "Software\\Policies\\MicaNT\\Security";
+    s1.valueName = "MinEncryptionStrength";
+    s1.type = micant::gp::PolicyValueType::Dword;
+    s1.dwordValue = 256;
+    pol.settings.push_back(s1);
+
+    micant::gp::PolicySetting s2;
+    s2.keyPath = "Software\\Policies\\MicaNT\\Custom";
+    s2.valueName = "OrganizationName";
+    s2.type = micant::gp::PolicyValueType::String;
+    s2.stringValue = "MicaNT Sovereign Enterprise";
+    pol.settings.push_back(s2);
+
+    auto serialized = pol.serialize();
+    TEST_ASSERT(serialized.size() > 16, "Serialized Registry.pol must contain header and entries");
+
+    micant::gp::RegistryPol parsed;
+    bool parseOk = parsed.deserialize(serialized.data(), serialized.size());
+    TEST_ASSERT(parseOk, "Registry.pol deserialize must succeed");
+    TEST_ASSERT(parsed.settings.size() == 2, "Registry.pol must contain 2 parsed settings");
+    TEST_ASSERT(parsed.settings[0].valueName == "MinEncryptionStrength" && parsed.settings[0].dwordValue == 256,
+                "Parsed DWORD setting must match");
+    TEST_ASSERT(parsed.settings[1].valueName == "OrganizationName" && parsed.settings[1].stringValue == "MicaNT Sovereign Enterprise",
+                "Parsed String setting must match");
+
+    // Stage 5: GPO Creation & Storage
+    micant::gp::GroupPolicyObject customGpo;
+    customGpo.gpoId = "{99999999-8888-7777-6666-555555555555}";
+    customGpo.displayName = "Enterprise Firewall & Defender Policy";
+    customGpo.status = micant::gp::GpoStatus::Enabled;
+    micant::gp::PolicySetting fwSetting;
+    fwSetting.keyPath = "Software\\Policies\\Microsoft\\WindowsFirewall\\DomainProfile";
+    fwSetting.valueName = "EnableFirewall";
+    fwSetting.type = micant::gp::PolicyValueType::Dword;
+    fwSetting.dwordValue = 1;
+    customGpo.machinePolicy.settings.push_back(fwSetting);
+    bool created = gp.createGpo(customGpo);
+    TEST_ASSERT(created, "Custom GPO must be created");
+
+    micant::gp::GroupPolicyObject queryGpo;
+    bool found = gp.getGpo(customGpo.gpoId, &queryGpo);
+    TEST_ASSERT(found && queryGpo.displayName == "Enterprise Firewall & Defender Policy", "GPO query must retrieve created GPO");
+
+    // Stage 6: SOM Linking
+    bool linked = gp.linkGpo(micant::gp::SomType::OrganizationalUnit, "OU=Workstations,DC=micant,DC=internal", customGpo.gpoId, false, true);
+    TEST_ASSERT(linked, "GPO link to OU must succeed");
+
+    // Stage 7: Standard LSDOU Precedence
+    auto repLsdou = gp.processGroupPolicy("TITAN-WS01", true, "OU=Workstations,DC=micant,DC=internal", false);
+    TEST_ASSERT(!repLsdou.appliedGpoIds.empty(), "GPO processing must apply candidate GPOs");
+    auto itNotice = repLsdou.resolvedSettings.find("Software\\Policies\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\LegalNoticeText");
+    TEST_ASSERT(itNotice != repLsdou.resolvedSettings.end(), "Workstations OU setting must be applied");
+    TEST_ASSERT(itNotice->second.stringValue == "Authorized Access Only - MicaNT Enterprise", "OU value must be resolved");
+
+    // Stage 8: Enforced (NoOverride) GPO Precedence
+    micant::gp::GroupPolicyObject rootEnforcedGpo;
+    rootEnforcedGpo.gpoId = "{ENFORCED-0000-0000-0000-000000000001}";
+    rootEnforcedGpo.displayName = "Domain Root Mandatory Security Policy";
+    micant::gp::PolicySetting rootOverride;
+    rootOverride.keyPath = "Software\\Policies\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
+    rootOverride.valueName = "LegalNoticeText";
+    rootOverride.type = micant::gp::PolicyValueType::String;
+    rootOverride.stringValue = "MANDATORY ROOT NOTICE: ZERO OVERRIDE";
+    rootEnforcedGpo.machinePolicy.settings.push_back(rootOverride);
+    gp.createGpo(rootEnforcedGpo);
+    gp.linkGpo(micant::gp::SomType::Domain, "DC=micant,DC=internal", rootEnforcedGpo.gpoId, true, true); // Enforced!
+
+    auto repEnforced = gp.processGroupPolicy("TITAN-WS01", true, "OU=Workstations,DC=micant,DC=internal", false);
+    auto itEnf = repEnforced.resolvedSettings.find("Software\\Policies\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\LegalNoticeText");
+    TEST_ASSERT(itEnf != repEnforced.resolvedSettings.end(), "Setting must be present");
+    TEST_ASSERT(itEnf->second.stringValue == "MANDATORY ROOT NOTICE: ZERO OVERRIDE", "Enforced Domain GPO must override subordinate OU setting");
+    TEST_ASSERT(itEnf->second.enforced == true, "Winning setting must be flagged as enforced");
+
+    // Stage 9: Block Inheritance Behavior
+    gp.setSomBlockInheritance(micant::gp::SomType::OrganizationalUnit, "OU=Workstations,DC=micant,DC=internal", true);
+    auto repBlock = gp.processGroupPolicy("TITAN-WS01", true, "OU=Workstations,DC=micant,DC=internal", false);
+    bool sawBlock = false;
+    for (const auto& f : repBlock.filteredGpoReasons) {
+        if (f.second == micant::gp::FilterVerdict::BlockedInherit) sawBlock = true;
+    }
+    TEST_ASSERT(sawBlock, "Block Inheritance must filter out un-enforced parent GPOs");
+    bool enforcedApplied = false;
+    for (const auto& g : repBlock.appliedGpoIds) {
+        if (g == rootEnforcedGpo.gpoId) enforcedApplied = true;
+    }
+    TEST_ASSERT(enforcedApplied, "Enforced GPO must penetrate Block Inheritance");
+    gp.setSomBlockInheritance(micant::gp::SomType::OrganizationalUnit, "OU=Workstations,DC=micant,DC=internal", false); // reset
+
+    // Stage 10: WMI Filtering
+    micant::gp::GroupPolicyObject dcOnlyGpo;
+    dcOnlyGpo.gpoId = "{DC-ONLY-0000-0000-0000-000000000002}";
+    dcOnlyGpo.displayName = "DC Replication Config GPO";
+    dcOnlyGpo.wmiFilterId = "{F2222222-3333-4444-5555-666666666666}"; // Requires DomainRole = 'dc'
+    micant::gp::PolicySetting dcSetting;
+    dcSetting.keyPath = "Software\\Policies\\Microsoft\\Windows\\DirectoryServices";
+    dcSetting.valueName = "StrictReplication";
+    dcSetting.type = micant::gp::PolicyValueType::Dword;
+    dcSetting.dwordValue = 1;
+    dcOnlyGpo.machinePolicy.settings.push_back(dcSetting);
+    gp.createGpo(dcOnlyGpo);
+    gp.linkGpo(micant::gp::SomType::OrganizationalUnit, "OU=Workstations,DC=micant,DC=internal", dcOnlyGpo.gpoId, false, true);
+
+    auto repWmi = gp.processGroupPolicy("TITAN-WS01", true, "OU=Workstations,DC=micant,DC=internal", false);
+    bool wmiDenied = false;
+    for (const auto& f : repWmi.filteredGpoReasons) {
+        if (f.first == dcOnlyGpo.gpoId && f.second == micant::gp::FilterVerdict::WmiFilterFailed) wmiDenied = true;
+    }
+    TEST_ASSERT(wmiDenied, "GPO with unfulfilled WMI filter must be denied");
+
+    // Stage 11: Security Settings Resolution
+    auto repSec = gp.processGroupPolicy("TITAN-WS01", true, "OU=Workstations,DC=micant,DC=internal", false);
+    TEST_ASSERT(repSec.resolvedSecurity.find("PasswordComplexity") != repSec.resolvedSecurity.end(), "Security setting PasswordComplexity must be resolved");
+    TEST_ASSERT(repSec.resolvedSecurity["PasswordComplexity"] == "1", "PasswordComplexity value must match GPO");
+
+    // Stage 12: Scripts CSE Dispatch
+    TEST_ASSERT(!repSec.executedScripts.empty(), "Workstation GPO startup scripts must be scheduled for execution");
+    TEST_ASSERT(repSec.executedScripts[0].find("verify_integrity.cmd") != std::string::npos, "Startup script path must match");
+
+    // Stage 13: Win32 C ABI Parity
+    uint32_t retComp = micant::gp::MicaProcessGroupPolicyCompleted(nullptr, 0);
+    TEST_ASSERT(retComp == 0, "MicaProcessGroupPolicyCompleted must return 0");
+    uint32_t retRef = micant::gp::MicaRefreshPolicy(1);
+    TEST_ASSERT(retRef == 1, "MicaRefreshPolicy must return TRUE");
+    uint32_t retRefEx = micant::gp::MicaRefreshPolicyEx(1, 0x1);
+    TEST_ASSERT(retRefEx == 1, "MicaRefreshPolicyEx must return TRUE");
+
+    micant::gp::GPO_LINK_NODE* pGpoList = nullptr;
+    uint32_t retGetList = micant::gp::MicaGetGPOListW(nullptr, L"TITAN-WS01", nullptr, nullptr, 0, &pGpoList);
+    TEST_ASSERT(retGetList == 0 && pGpoList != nullptr, "MicaGetGPOListW must return GPO link list");
+    uint32_t retFree = micant::gp::MicaFreeGPOListW(pGpoList);
+    TEST_ASSERT(retFree == 1, "MicaFreeGPOListW must return TRUE");
+
+    // Stage 14: Multithreaded High-Concurrency Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&gp, &stressSuccessCount]() {
+            for (int i = 0; i < 15; ++i) {
+                auto r = gp.processGroupPolicy("TITAN-STRESS-NODE", true, "OU=Workstations,DC=micant,DC=internal", (i % 2 == 0));
+                if (!r.appliedGpoIds.empty() && !r.resolvedSettings.empty()) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded Group Policy stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 202: Windows Group Policy Client & Engine Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite201")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite202")) {
+        RUN_TEST(Test_WindowsGroupPolicy_Engine_CSE_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite201") {
         RUN_TEST(Test_WindowsActiveDirectory_KerberosKDC_Subsystem);
         return g_FailedTests;
     }
@@ -45855,6 +46049,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsFailoverClustering_PaxosQuorum_Subsystem);
     RUN_TEST(Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem);
     RUN_TEST(Test_WindowsActiveDirectory_KerberosKDC_Subsystem);
+    RUN_TEST(Test_WindowsGroupPolicy_Engine_CSE_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

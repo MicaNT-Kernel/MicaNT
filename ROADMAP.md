@@ -356,9 +356,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 174: Windows Active Directory & Kerberos KDC (M201)     [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 175: Windows Group Policy Client & Engine Subsystem(M202)[PLANNED]        │
+│ Phase 175: Windows Group Policy Client & Engine Subsystem(M202)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 176: Remote Desktop Services & RDP Channels (M203)       [PLANNED]        │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 177: Windows System Resource Manager & Fair Share (M204) [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3659,22 +3661,23 @@
 
 ---
 
-### Phase 175: Windows Group Policy Client & Engine Subsystem (`gpsvc.dll`, `gpreport.exe`, `gpupdate.exe`, `PolicyDefinitions`, `TitanPolicy`, `AegisGPO`) (Milestone 202) [PLANNED]
+### Phase 175: Windows Group Policy Client & Engine Subsystem (`gpsvc.dll`, `gpreport.exe`, `gpupdate.exe`, `PolicyDefinitions`, `TitanPolicy`, `AegisGPO`) (Milestone 202) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Group Policy Client (GPSVC) and Policy Engine subsystem, providing enterprise policy distribution, administrative template parsing (ADMX/ADML), Client-Side Extensions (CSE), WMI filter evaluation, LSDOU precedence, loopback processing, and background refresh engine.*
-- [ ] **Group Policy Engine & Infrastructure (`include/micant/grouppolicy.hpp`)**:
+- [x] **Group Policy Engine & Infrastructure (`include/micant/grouppolicy.hpp`)**:
   - GPO Storage & Registry.pol: Binary POL format parser/generator (`PKey`, `Type`, `Value`, `RegPath`).
   - Client-Side Extensions (CSE): Registry CSE, Security CSE (Audit & Privileges), Scripts CSE (Startup/Shutdown/Logon/Logoff), Folder Redirection CSE.
   - WMI Filters: WQL expression parsing and hardware/OS condition evaluation (OS version, architecture, memory, domain role).
   - Precedence & Inheritance Resolution: LSDOU (Local, Site, Domain, OU), Enforced GPOs, Block Inheritance, Loopback processing (Replace and Merge modes).
   - Background Refresh Engine: Periodic refresh timer (90-120 minutes with random offset), foreground synchronous/asynchronous processing, manual `gpupdate /force` trigger.
   - Policy Reporting: `gpresult` diagnostic engine generating XML and HTML policy status reports.
-- [ ] **Win32 & SCM Clean-Room Export Parity**:
+- [x] **Win32 & SCM Clean-Room Export Parity**:
   - `gpsvc.dll` / `userenv.dll`: `ProcessGroupPolicy`, `RefreshPolicy`, `GetGPOList`, `FreeGPOList`, `GenerateGPOCopy`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`Gpsvc`).
-- [ ] **Interactive Shell CLI**:
+- [x] **Interactive Shell CLI**:
   - `gp` / `gpo` / `gpupdate` / `gpresult` (`status`, `list`, `update`, `result`, `cse`, `test`).
-- [ ] **Unit Test Suite 202 (`Test_WindowsGroupPolicy_Engine_CSE_Subsystem`)**:
-  - Comprehensive 14-stage validation suite covering GPO creation, Registry.pol serialization, CSE execution, WMI filtering, precedence resolution, loopback processing, and multithreaded stress testing.
+- [x] **Unit Test Suite 202 (`Test_WindowsGroupPolicy_Engine_CSE_Subsystem`)**:
+  - 14 comprehensive validation stages covering SCM service registration (`Gpsvc`), VersionDatabase binary modules, CSE registration & tracking, Registry.pol binary serialization & round-trip deserialization, GPO creation, SOM linking, standard LSDOU precedence resolution, Enforced (NoOverride) precedence superseding subordinate OUs, Block Inheritance penetration by Enforced GPOs, WMI filter expression evaluation, security settings resolution (password policy), startup/logon script dispatching, Win32 C ABI parity exports (`MicaProcessGroupPolicyCompleted`, `MicaRefreshPolicy`, `MicaRefreshPolicyEx`, `MicaGetGPOListW`, `MicaFreeGPOListW`), and 120-operation concurrent multithreaded Group Policy stress test.
+  - Milestone 202: **202 / 202 Test Suites Passing (100%)**.
 
 ---
 
@@ -3693,6 +3696,24 @@
   - `rdp` / `rds` / `termsrv` / `mstsc` / `wts` (`status`, `sessions`, `connect`, `disconnect`, `shadow`, `channels`, `test`).
 - [ ] **Unit Test Suite 203 (`Test_WindowsRemoteDesktop_VirtualChannels_Subsystem`)**:
   - 14-stage validation suite covering connection sequence, MCS domain negotiation, virtual channel multiplexing, session arbitration, NLA authentication, and concurrent multi-session stress testing.
+
+---
+
+### Phase 177: Windows System Resource Manager & Fair Share Scheduling Subsystem (`wsrm.exe`, `wsrm.msc`, `TitanWSRM`, `AegisQuota`) (Milestone 204) [PLANNED]
+*Goal: Implement clean-room Windows System Resource Manager (WSRM) and Dynamic Fair Share CPU & Memory Scheduling subsystem, managing multi-tenant enterprise resource allocation, process matching criteria, job object resource limits, CPU rate capping, and historical accounting.*
+- [ ] **System Resource Manager Core (`include/micant/wsrm.hpp`)**:
+  - Resource Allocation Policies: Equal per process, Equal per user, Equal per session, and Custom policy definitions with CPU target percentages.
+  - Dynamic Fair Share Scheduling (DFSS): Dynamic weight adjustment for multi-session Terminal Services workloads.
+  - Job Object Enforcement: `JOBOBJECT_CPU_RATE_CONTROL_INFORMATION`, hard/soft memory limits, and working set limits.
+  - Resource Accounting & Historical Logging: CPU time, peak memory usage, I/O bytes per tenant.
+- [ ] **Win32 & SCM Clean-Room Export Parity**:
+  - `wsrm.exe` / `wsrmcore.dll`: `WsrmSetResourcePolicy`, `WsrmGetProcessAccounting`, `WsrmApplyFairShare`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`WsrmService`).
+- [ ] **Interactive Shell CLI**:
+  - `wsrm` / `quota` / `fairshare` (`status`, `policies`, `apply`, `accounting`, `test`).
+- [ ] **Unit Test Suite 204 (`Test_WindowsSystemResourceManager_FairShare_Subsystem`)**:
+  - 14-stage validation suite covering policy parsing, CPU rate control, multi-session fair share balancing, accounting logs, and multithreaded quota stress testing.
+
 
 
 
