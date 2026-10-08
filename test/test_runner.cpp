@@ -203,6 +203,7 @@
 #include "micant/s2d.hpp"
 #include "micant/branchcache.hpp"
 #include "micant/storage_replica.hpp"
+#include "micant/clustering.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -44570,8 +44571,255 @@ void Test_WindowsStorageReplica_DisasterRecovery_Subsystem() {
     std::cout << "[TEST] Suite 198: Windows Storage Replica (SR) & Disaster Recovery Subsystem PASSED.\n";
 }
 
+void Test_WindowsFailoverClustering_PaxosQuorum_Subsystem() {
+    std::cout << "[TEST] Suite 199: Windows Failover Clustering, Cluster Shared Network & Paxos Quorum Subsystem...\n";
+
+    // Stage 1: SCM Services Registration & Status Check
+    micant::cluster::RegisterFailoverClusteringSubsystem();
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto clusSvc = scm.getServiceRecord(L"ClusSvc");
+    TEST_ASSERT(clusSvc != nullptr, "ClusSvc service must be registered in SCM");
+    TEST_ASSERT(clusSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "ClusSvc must be in SERVICE_RUNNING state");
+    TEST_ASSERT(clusSvc->binaryPath == L"C:\\Windows\\System32\\clussvc.exe", "ClusSvc binary path must point to clussvc.exe");
+
+    auto clusNet = scm.getServiceRecord(L"ClusNet");
+    TEST_ASSERT(clusNet != nullptr, "ClusNet kernel driver must be registered in SCM");
+    TEST_ASSERT(clusNet->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "ClusNet must be in SERVICE_RUNNING state");
+
+    auto clusDisk = scm.getServiceRecord(L"ClusDisk");
+    TEST_ASSERT(clusDisk != nullptr, "ClusDisk driver must be registered in SCM");
+    TEST_ASSERT(clusDisk->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "ClusDisk must be in SERVICE_RUNNING state");
+
+    // Stage 2: VersionDatabase Modules Registration
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("clusapi.dll") != nullptr, "clusapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("resutils.dll") != nullptr, "resutils.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("clusnet.sys") != nullptr, "clusnet.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("clusdisk.sys") != nullptr, "clusdisk.sys must be registered in VersionDatabase");
+
+    // Stage 3: Multi-Node Topology Formation & Membership
+    auto& clusSys = micant::cluster::FailoverClusterSubsystem::get();
+    clusSys.reset();
+    TEST_ASSERT(clusSys.isInitialized(), "FailoverClusterSubsystem must be initialized");
+    TEST_ASSERT(clusSys.getNodeCount() == 3, "Initial cluster topology must consist of 3 nodes");
+
+    auto* n1 = clusSys.getNode(1);
+    auto* n2 = clusSys.getNode(2);
+    auto* n3 = clusSys.getNode(3);
+    TEST_ASSERT(n1 != nullptr && n2 != nullptr && n3 != nullptr, "All 3 cluster nodes must exist");
+    TEST_ASSERT(n1->isCoordinator, "Node 1 must be designated coordinator");
+    TEST_ASSERT(n1->state == micant::cluster::ClusterNodeState::Up, "Node 1 state must be Up");
+    TEST_ASSERT(n2->state == micant::cluster::ClusterNodeState::Up, "Node 2 state must be Up");
+    TEST_ASSERT(n3->state == micant::cluster::ClusterNodeState::Up, "Node 3 state must be Up");
+
+    // Stage 4: Paxos Consensus Ballot & Epoch Progression
+    uint32_t initEpoch = clusSys.getEpoch();
+    TEST_ASSERT(initEpoch >= 1, "Initial cluster epoch must be >= 1");
+
+    bool paxosOk1 = clusSys.proposePaxosValue("DatabaseVip", "10.200.1.50", 1);
+    TEST_ASSERT(paxosOk1, "Proposing Paxos value DatabaseVip must succeed under quorum");
+    TEST_ASSERT(clusSys.getPaxosValue("DatabaseVip") == "10.200.1.50", "Committed Paxos value must match proposal");
+    TEST_ASSERT(clusSys.getEpoch() > initEpoch, "Cluster epoch must increment upon Paxos commit");
+
+    bool paxosOk2 = clusSys.proposePaxosValue("MaxFailoverAttempts", "5", 1);
+    TEST_ASSERT(paxosOk2, "Second Paxos proposal must succeed");
+    TEST_ASSERT(clusSys.getPaxosValue("MaxFailoverAttempts") == "5", "Second Paxos value must match");
+
+    // Stage 5: Dynamic Quorum Calculation & Witness Arbitration
+    TEST_ASSERT(clusSys.hasQuorum(), "Cluster must possess active quorum initially");
+    TEST_ASSERT(clusSys.getQuorumVotesTotal() == 4, "Total votes must be 4 (3 nodes + 1 witness)");
+    TEST_ASSERT(clusSys.getQuorumVotesActive() == 4, "Active votes must be 4");
+
+    clusSys.setWitness(micant::cluster::QuorumWitnessType::DiskWitness, true);
+    TEST_ASSERT(clusSys.getWitnessType() == micant::cluster::QuorumWitnessType::DiskWitness, "Witness type must switch to DiskWitness");
+    TEST_ASSERT(clusSys.hasQuorum(), "Quorum must hold with Disk Witness");
+
+    clusSys.setWitness(micant::cluster::QuorumWitnessType::None, false);
+    TEST_ASSERT(clusSys.getQuorumVotesTotal() == 3, "Total votes must be 3 with No Witness");
+    TEST_ASSERT(clusSys.hasQuorum(), "Quorum must hold with 3 nodes without witness (3 > 1)");
+
+    clusSys.setWitness(micant::cluster::QuorumWitnessType::FileShareWitness, true);
+
+    // Stage 6: Cluster Network Driver (clusnet.sys) Heartbeating Mesh
+    uint64_t hbStart = clusSys.getHeartbeatCount();
+    bool hb1 = clusSys.sendHeartbeat(1, 2);
+    bool hb2 = clusSys.sendHeartbeat(1, 3);
+    TEST_ASSERT(hb1 && hb2, "Sending clusnet heartbeats from Node 1 to Nodes 2 and 3 must succeed");
+    TEST_ASSERT(clusSys.getHeartbeatCount() == hbStart + 2, "Heartbeat counter must increment by 2");
+    TEST_ASSERT(n2->lastHeartbeatTimestampUs > 0, "Target node 2 heartbeat timestamp must update");
+    TEST_ASSERT(n2->missedHeartbeats == 0, "Target node 2 missed heartbeats must be 0");
+
+    // Stage 7: Heartbeat Timeout Injection & Node Down Declaration
+    micant::cluster::ClusterNodeInfo n4{};
+    n4.nodeId = 4;
+    n4.nodeName = "TITAN-CLUS-04";
+    n4.ipAddress = "192.168.10.14";
+    n4.state = micant::cluster::ClusterNodeState::Up;
+    n4.voteWeight = 1;
+    n4.currentVote = 1;
+    bool add4 = clusSys.addNode(n4);
+    TEST_ASSERT(add4, "Adding Node 4 must succeed");
+
+    clusSys.injectHeartbeatTimeout(4);
+    auto* n4Ref = clusSys.getNode(4);
+    TEST_ASSERT(n4Ref != nullptr, "Node 4 must exist");
+    TEST_ASSERT(n4Ref->state == micant::cluster::ClusterNodeState::Down, "Node 4 state must be Down after timeout injection");
+    TEST_ASSERT(n4Ref->missedHeartbeats > 5, "Node 4 missed heartbeats must exceed threshold");
+    TEST_ASSERT(n4Ref->currentVote == 0, "Node 4 voting weight must drop to 0");
+
+    bool remove4 = clusSys.removeNode(4);
+    TEST_ASSERT(remove4, "Removing evicted Node 4 must succeed");
+
+    // Stage 8: Split-Brain Fencing Verification
+    clusSys.setWitness(micant::cluster::QuorumWitnessType::None, false);
+    TEST_ASSERT(clusSys.getQuorumVotesTotal() == 3, "Total votes must be 3");
+
+    clusSys.injectHeartbeatTimeout(2); // Node 2 down
+    clusSys.injectHeartbeatTimeout(3); // Node 3 down
+    TEST_ASSERT(!clusSys.hasQuorum(), "Cluster must lose quorum when 2 out of 3 nodes are down without witness (1 <= 1)");
+
+    bool splitProposal = clusSys.proposePaxosValue("IllegalSplitValue", "Corrupt", 1);
+    TEST_ASSERT(!splitProposal, "Paxos proposals must be rejected when quorum is lost, preventing split-brain");
+
+    // Restore healthy 3-node cluster
+    clusSys.reset();
+    TEST_ASSERT(clusSys.hasQuorum(), "Quorum must be restored after cluster reset");
+
+    // Stage 9: SCSI-3 Persistent Reservation (PR) & Preempt Fencing (clusdisk.sys)
+    uint64_t keyNode1 = 0x0000000100000001ULL;
+    uint64_t keyNode2 = 0x0000000200000002ULL;
+
+    bool res1 = clusSys.reserveScsiDisk(0, 1, keyNode1);
+    TEST_ASSERT(res1, "Node 1 reserving SCSI LUN 0 must succeed");
+
+    bool resConflict = clusSys.reserveScsiDisk(0, 2, keyNode2);
+    TEST_ASSERT(!resConflict, "Node 2 reserving already reserved SCSI LUN 0 must fail with reservation conflict");
+
+    bool preemptOk = clusSys.preemptScsiDisk(0, 2, keyNode2);
+    TEST_ASSERT(preemptOk, "Node 2 preempting LUN 0 must succeed and fence out Node 1");
+
+    bool releaseOk = clusSys.releaseScsiDisk(0, 2);
+    TEST_ASSERT(releaseOk, "Node 2 releasing LUN 0 must succeed");
+
+    // Stage 10: Resource State Machine Lifecycle & Dependency Enforcement (resutils.dll)
+    micant::cluster::ClusterResource appRes{};
+    appRes.resourceId = "RES-APP-01";
+    appRes.resourceName = "SQL Engine Service";
+    appRes.resourceType = "Generic Service";
+    appRes.ownerGroup = "GRP-SQL-HA";
+    appRes.ownerNodeId = 1;
+    appRes.state = micant::cluster::ClusterResourceState::Offline;
+    appRes.dependencies.push_back("RES-NAME-01"); // Depends on Network Name
+
+    bool addAppRes = clusSys.createResource(appRes);
+    TEST_ASSERT(addAppRes, "Creating dependent cluster resource must succeed");
+
+    // Take Network Name offline
+    bool offName = clusSys.setResourceOffline("RES-NAME-01");
+    TEST_ASSERT(offName, "Offlining RES-NAME-01 must succeed");
+    TEST_ASSERT(clusSys.getResourceState("RES-NAME-01") == micant::cluster::ClusterResourceState::Offline, "RES-NAME-01 state must be Offline");
+
+    // Attempt to bring App Online while dependency is Offline -> Must Fail
+    bool onFail = clusSys.setResourceOnline("RES-APP-01");
+    TEST_ASSERT(!onFail, "Bringing RES-APP-01 online must fail when dependency RES-NAME-01 is offline");
+
+    // Bring dependency Online, then bring App Online -> Must Succeed
+    bool onName = clusSys.setResourceOnline("RES-NAME-01");
+    TEST_ASSERT(onName, "Bringing RES-NAME-01 online must succeed");
+
+    bool onApp = clusSys.setResourceOnline("RES-APP-01");
+    TEST_ASSERT(onApp, "Bringing RES-APP-01 online must succeed when dependencies are satisfied");
+    TEST_ASSERT(clusSys.getResourceState("RES-APP-01") == micant::cluster::ClusterResourceState::Online, "RES-APP-01 must now be Online");
+
+    // Stage 11: Coordinated Automatic Group Failover Upon Node Eviction
+    auto* sqlGrp = clusSys.getGroup("GRP-SQL-HA");
+    TEST_ASSERT(sqlGrp != nullptr, "SQL HA group must exist");
+    TEST_ASSERT(sqlGrp->ownerNodeId == 1, "SQL HA group initial owner must be Node 1");
+    TEST_ASSERT(sqlGrp->state == micant::cluster::ClusterGroupState::Online, "SQL HA group state must be Online");
+
+    bool failoverOk = clusSys.failoverGroup("GRP-SQL-HA", 2);
+    TEST_ASSERT(failoverOk, "Failing over group GRP-SQL-HA to Node 2 must succeed");
+    TEST_ASSERT(sqlGrp->ownerNodeId == 2, "Group owner must now be Node 2");
+    TEST_ASSERT(sqlGrp->state == micant::cluster::ClusterGroupState::Online, "Group state must remain Online after coordinated migration");
+
+    auto resList = clusSys.getAllResources();
+    for (const auto& r : resList) {
+        if (r.ownerGroup == "GRP-SQL-HA") {
+            TEST_ASSERT(r.ownerNodeId == 2, "Resources in group must be reassigned to target Node 2");
+            TEST_ASSERT(r.state == micant::cluster::ClusterResourceState::Online, "Resources in group must be Online on new owner");
+        }
+    }
+
+    // Stage 12: Win32 & NT Clean-Room C ABI Driver Export Verification
+    void* hCluster = nullptr;
+    NTSTATUS stOpen = micant::cluster::OpenCluster("TitanCluster", &hCluster);
+    TEST_ASSERT(stOpen == micant::STATUS_SUCCESS && hCluster != nullptr, "OpenCluster must return STATUS_SUCCESS and valid handle");
+
+    void* hEnum = nullptr;
+    NTSTATUS stEnum = micant::cluster::ClusterOpenEnum(hCluster, 1, &hEnum);
+    TEST_ASSERT(stEnum == micant::STATUS_SUCCESS && hEnum != nullptr, "ClusterOpenEnum must return STATUS_SUCCESS");
+
+    void* hRes = nullptr;
+    NTSTATUS stCreate = micant::cluster::CreateClusterResource(nullptr, "RES-TEST-ABI", "Generic Application", &hRes);
+    TEST_ASSERT(stCreate == micant::STATUS_SUCCESS && hRes != nullptr, "CreateClusterResource must return STATUS_SUCCESS");
+
+    NTSTATUS stOn = micant::cluster::OnlineClusterResource(hRes, "RES-TEST-ABI");
+    TEST_ASSERT(stOn == micant::STATUS_SUCCESS, "OnlineClusterResource must return STATUS_SUCCESS");
+
+    NTSTATUS stOff = micant::cluster::OfflineClusterResource(hRes, "RES-TEST-ABI");
+    TEST_ASSERT(stOff == micant::STATUS_SUCCESS, "OfflineClusterResource must return STATUS_SUCCESS");
+
+    NTSTATUS stHb = micant::cluster::ClusNetSendHeartbeat(1, 2);
+    TEST_ASSERT(stHb == micant::STATUS_SUCCESS, "ClusNetSendHeartbeat must return STATUS_SUCCESS");
+
+    NTSTATUS stPr = micant::cluster::ClusDiskReserveLUN(0, 2, 0xABCDEF0123456789ULL);
+    TEST_ASSERT(stPr == micant::STATUS_SUCCESS, "ClusDiskReserveLUN must return STATUS_SUCCESS");
+
+    NTSTATUS stGrp = micant::cluster::FailClusterResourceGroup("GRP-SQL-HA", 3);
+    TEST_ASSERT(stGrp == micant::STATUS_SUCCESS, "FailClusterResourceGroup must return STATUS_SUCCESS");
+
+    NTSTATUS stClose = micant::cluster::CloseCluster(hCluster);
+    TEST_ASSERT(stClose == micant::STATUS_SUCCESS, "CloseCluster must return STATUS_SUCCESS");
+
+    // Stage 13: 100-Operation Concurrent Multithreaded Consensus & Heartbeat Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([&clusSys, &stressSuccessCount, t]() {
+            for (int i = 0; i < 10; ++i) {
+                // Alternating Paxos proposal and Heartbeat
+                std::string k = "STRESS_T" + std::to_string(t) + "_K" + std::to_string(i);
+                std::string v = "VAL_" + std::to_string(t * 100 + i);
+
+                bool paxosOk = clusSys.proposePaxosValue(k, v, 1);
+                bool hbOk = clusSys.sendHeartbeat(1, 2);
+
+                if (paxosOk && hbOk && clusSys.getPaxosValue(k) == v) {
+                    stressSuccessCount.fetch_add(1);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 100, "100 concurrent multi-threaded Paxos proposals and heartbeats must succeed with 0 deadlocks");
+
+    clusSys.reset();
+    std::cout << "[TEST] Suite 199: Windows Failover Clustering, Cluster Shared Network & Paxos Quorum Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite198")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite199")) {
+        RUN_TEST(Test_WindowsFailoverClustering_PaxosQuorum_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite198") {
         RUN_TEST(Test_WindowsStorageReplica_DisasterRecovery_Subsystem);
         return g_FailedTests;
     }
@@ -45147,6 +45395,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirectStorage_S2D_Subsystem);
     RUN_TEST(Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem);
     RUN_TEST(Test_WindowsStorageReplica_DisasterRecovery_Subsystem);
+    RUN_TEST(Test_WindowsFailoverClustering_PaxosQuorum_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
