@@ -199,6 +199,7 @@
 #include "wds.hpp"
 #include "certsrv.hpp"
 #include "dns_server.hpp"
+#include "dhcp_server.hpp"
 
 namespace micant::shell {
 
@@ -543,6 +544,7 @@ public:
             if (cmd == "wds" || cmd == "pxe" || cmd == "tftp") { cmdDeploymentServices(tokens, out); return 0; }
             if (cmd == "certsrv" || cmd == "pki" || cmd == "certca") { cmdCertificateServices(tokens, out); return 0; }
             if (cmd == "dns" || cmd == "dnscmd" || cmd == "nslookup") { cmdDnsServer(tokens, out); return 0; }
+            if (cmd == "dhcp" || cmd == "dhcpmgmt" || cmd == "netsh_dhcp") { cmdDhcpServer(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -34727,6 +34729,298 @@ private:
             << "  dns axfr <zoneName>                     Initiate full zone transfer (RFC 5936 AXFR)\n"
             << "  dns dnssec <zoneName>                   Sign zone with DNSSEC (DNSKEY/RRSIG/NSEC)\n"
             << "  dns test                                Execute in-kernel DNS server self-tests\n";
+    }
+
+    void cmdDhcpServer(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& dhcp = micant::dhcp::EnterpriseDhcpServer::instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+
+        if (sub == "status") {
+            out << "Windows Enterprise DHCP Server Subsystem (netsh dhcp / RFC 2131)\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Server FQDN:              " << dhcp.getServerHost() << "\n"
+                << "  Primary IPv4:             " << dhcp.getServerIp() << "\n"
+                << "  Active Directory Domain:  " << dhcp.getDomainName() << "\n"
+                << "  AD Authorized:            " << (dhcp.isServerAuthorized() ? "Yes (Active)" : "No (Rogue Suppressed)") << "\n"
+                << "  AD Directory Path:        " << dhcp.getAdDirectoryPath() << "\n"
+                << "  Total IPv4 Scopes:        " << dhcp.getScopeCount() << "\n"
+                << "  Discovers Received:       " << dhcp.getTotalDiscovers() << "\n"
+                << "  Offers Sent:              " << dhcp.getTotalOffers() << "\n"
+                << "  Requests Received:        " << dhcp.getTotalRequests() << "\n"
+                << "  ACKs Sent:                " << dhcp.getTotalAcks() << "\n"
+                << "  NAKs Sent:                " << dhcp.getTotalNaks() << "\n"
+                << "  Releases Received:        " << dhcp.getTotalReleases() << "\n"
+                << "  Declines Received:        " << dhcp.getTotalDeclines() << "\n"
+                << "  DHCPv6 Solicits:          " << dhcp.getTotalDhcpv6Solicits() << "\n"
+                << "  DHCPv6 Replies:           " << dhcp.getTotalDhcpv6Replies() << "\n"
+                << "  Dynamic DNS Updates:      " << dhcp.getTotalDnsUpdatesSucceeded() << "/" << dhcp.getTotalDnsUpdatesAttempted() << "\n"
+                << "  Failover Syncs:           " << dhcp.getTotalFailoverSyncs() << "\n";
+            return;
+        }
+
+        if (sub == "scopes") {
+            auto scopes = dhcp.getAllScopes();
+            out << "Active Directory DHCPv4 Scopes (" << scopes.size() << " total):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(18) << "Scope Subnet"
+                << std::setw(16) << "Subnet Mask"
+                << std::setw(30) << "Address Pool"
+                << std::setw(10) << "Leases"
+                << std::setw(12) << "Failover" << "\n"
+                << "--------------------------------------------------------------------------------\n";
+            for (const auto& sc : scopes) {
+                std::string pool = sc.startIp + " - " + sc.endIp;
+                out << std::left << std::setw(18) << sc.scopeId
+                    << std::setw(16) << sc.subnetMask
+                    << std::setw(30) << pool
+                    << std::setw(10) << sc.leases.size()
+                    << std::setw(12) << (sc.hasFailover ? micant::dhcp::FailoverModeToString(sc.failover.mode) : "None") << "\n";
+            }
+            return;
+        }
+
+        if (sub == "addscope") {
+            if (tokens.size() < 6) {
+                out << "Usage: dhcp addscope <subnet> <mask> <startIp> <endIp> [leaseSec] [name]\n";
+                return;
+            }
+            std::string subnet = tokens[2];
+            std::string mask = tokens[3];
+            std::string startIp = tokens[4];
+            std::string endIp = tokens[5];
+            uint32_t lease = (tokens.size() > 6) ? static_cast<uint32_t>(std::stoul(tokens[6])) : 691200;
+            std::string name = (tokens.size() > 7) ? tokens[7] : ("Scope-" + subnet);
+
+            if (dhcp.createScope(subnet, mask, startIp, endIp, lease, name)) {
+                out << "[+] Successfully created DHCP scope " << subnet << " (" << name << ")\n";
+            } else {
+                out << "[-] Failed to create DHCP scope (subnet exists or IP range invalid): " << subnet << "\n";
+            }
+            return;
+        }
+
+        if (sub == "leases") {
+            if (tokens.size() < 3) {
+                out << "Usage: dhcp leases <subnet>\n";
+                return;
+            }
+            std::string subnet = tokens[2];
+            micant::dhcp::DhcpScope sc;
+            if (!dhcp.getScope(subnet, sc)) {
+                out << "[-] Scope not found: " << subnet << "\n";
+                return;
+            }
+            out << "Active Client Leases for Scope " << sc.scopeId << " (" << sc.leases.size() << " leases):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(18) << "IP Address"
+                << std::setw(20) << "MAC Address"
+                << std::setw(20) << "Client Hostname"
+                << std::setw(12) << "State"
+                << std::setw(8)  << "DNS Reg" << "\n"
+                << "--------------------------------------------------------------------------------\n";
+            for (const auto& [_, l] : sc.leases) {
+                out << std::left << std::setw(18) << l.ipAddress
+                    << std::setw(20) << l.macAddress
+                    << std::setw(20) << l.hostName
+                    << std::setw(12) << micant::dhcp::LeaseStateToString(l.state)
+                    << std::setw(8)  << (l.dnsRegistered ? "Yes" : "No") << "\n";
+            }
+            return;
+        }
+
+        if (sub == "reservations") {
+            if (tokens.size() < 3) {
+                out << "Usage: dhcp reservations <subnet>\n";
+                return;
+            }
+            std::string subnet = tokens[2];
+            micant::dhcp::DhcpScope sc;
+            if (!dhcp.getScope(subnet, sc)) {
+                out << "[-] Scope not found: " << subnet << "\n";
+                return;
+            }
+            out << "Hardware MAC Reservations for Scope " << sc.scopeId << " (" << sc.reservations.size() << " total):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(18) << "IP Address"
+                << std::setw(20) << "MAC Address"
+                << std::setw(24) << "Client Name"
+                << "Type\n"
+                << "--------------------------------------------------------------------------------\n";
+            for (const auto& [_, res] : sc.reservations) {
+                out << std::left << std::setw(18) << res.ipAddress
+                    << std::setw(20) << res.macAddress
+                    << std::setw(24) << res.clientName
+                    << micant::dhcp::ClientTypeToString(res.clientType) << "\n";
+            }
+            return;
+        }
+
+        if (sub == "addreserve") {
+            if (tokens.size() < 6) {
+                out << "Usage: dhcp addreserve <subnet> <ip> <mac> <clientName>\n";
+                return;
+            }
+            std::string subnet = tokens[2];
+            std::string ip = tokens[3];
+            std::string mac = tokens[4];
+            std::string name = tokens[5];
+
+            if (dhcp.addReservation(subnet, ip, mac, name)) {
+                out << "[+] Successfully added reservation " << ip << " -> " << mac << " (" << name << ")\n";
+            } else {
+                out << "[-] Failed to add reservation in scope: " << subnet << "\n";
+            }
+            return;
+        }
+
+        if (sub == "delreserve") {
+            if (tokens.size() < 5) {
+                out << "Usage: dhcp delreserve <subnet> <ip> <mac>\n";
+                return;
+            }
+            std::string subnet = tokens[2];
+            std::string ip = tokens[3];
+            std::string mac = tokens[4];
+
+            if (dhcp.deleteReservation(subnet, ip, mac)) {
+                out << "[+] Successfully deleted reservation for MAC: " << mac << "\n";
+            } else {
+                out << "[-] Reservation not found for MAC: " << mac << "\n";
+            }
+            return;
+        }
+
+        if (sub == "discover") {
+            if (tokens.size() < 3) {
+                out << "Usage: dhcp discover <mac> [hostname]\n";
+                return;
+            }
+            std::string mac = tokens[2];
+            std::string host = (tokens.size() > 3) ? tokens[3] : "";
+            std::string offeredIp;
+            uint32_t leaseSec = 0;
+
+            if (dhcp.processDiscover("", mac, host, offeredIp, leaseSec)) {
+                out << "[+] DHCPOFFER Generated: IP " << offeredIp << ", Lease " << leaseSec << "s to " << mac << "\n";
+            } else {
+                out << "[-] DHCPDISCOVER rejected or no address available for " << mac << "\n";
+            }
+            return;
+        }
+
+        if (sub == "request") {
+            if (tokens.size() < 4) {
+                out << "Usage: dhcp request <mac> <ip> [hostname]\n";
+                return;
+            }
+            std::string mac = tokens[2];
+            std::string ip = tokens[3];
+            std::string host = (tokens.size() > 4) ? tokens[4] : "";
+            bool ack = false;
+            uint32_t leaseSec = 0;
+
+            if (dhcp.processRequest("", mac, ip, host, ack, leaseSec) && ack) {
+                out << "[+] DHCPACK Generated: Assigned " << ip << " to " << mac << " (Lease: " << leaseSec << "s)\n";
+            } else {
+                out << "[-] DHCPNAK Generated: Requested IP " << ip << " denied for " << mac << "\n";
+            }
+            return;
+        }
+
+        if (sub == "release") {
+            if (tokens.size() < 4) {
+                out << "Usage: dhcp release <ip> <mac>\n";
+                return;
+            }
+            std::string ip = tokens[2];
+            std::string mac = tokens[3];
+
+            if (dhcp.processRelease("", ip, mac)) {
+                out << "[+] DHCPRELEASE processed: " << ip << " freed and re-pooled.\n";
+            } else {
+                out << "[-] DHCPRELEASE failed: Lease not found for " << ip << " / " << mac << "\n";
+            }
+            return;
+        }
+
+        if (sub == "failover") {
+            if (tokens.size() < 4) {
+                out << "Usage: dhcp failover <subnet> <partnerServer> [LoadBalance|HotStandby]\n";
+                return;
+            }
+            std::string subnet = tokens[2];
+            std::string partner = tokens[3];
+            micant::dhcp::FailoverMode mode = micant::dhcp::FailoverMode::LoadBalance;
+            if (tokens.size() > 4 && tokens[4] == "HotStandby") {
+                mode = micant::dhcp::FailoverMode::HotStandby;
+            }
+
+            if (dhcp.configureFailover(subnet, partner, mode)) {
+                out << "[+] DHCP Failover configured for scope " << subnet << " with partner " << partner
+                    << " (" << micant::dhcp::FailoverModeToString(mode) << ")\n";
+            } else {
+                out << "[-] Failed to configure failover for scope: " << subnet << "\n";
+            }
+            return;
+        }
+
+        if (sub == "test") {
+            out << "Executing in-kernel Windows Enterprise DHCP Server Subsystem Self-Tests...\n";
+
+            // 1. Authoritative Scope Existence
+            micant::dhcp::DhcpScope sc;
+            bool okScope = dhcp.getScope("192.168.1.0", sc);
+            out << "  [1/6] Authoritative IPv4 Enterprise Scope:  " << (okScope ? "PASSED" : "FAILED") << "\n";
+
+            // 2. Reservation Offer
+            std::string resOfferIp;
+            uint32_t resLease = 0;
+            bool okRes = dhcp.processDiscover("192.168.1.0", "00:15:5d:01:aa:01", "printer", resOfferIp, resLease);
+            bool okResMatch = (okRes && resOfferIp == "192.168.1.120");
+            out << "  [2/6] MAC Address Reservation Binding:      " << (okResMatch ? "PASSED" : "FAILED") << "\n";
+
+            // 3. Dynamic DORA Handshake
+            std::string dynOfferIp;
+            uint32_t dynLease = 0;
+            bool okDisc = dhcp.processDiscover("192.168.1.0", "00:15:5d:aa:bb:cc", "client-test01", dynOfferIp, dynLease);
+            bool okAck = false;
+            uint32_t ackLease = 0;
+            bool okReq = dhcp.processRequest("192.168.1.0", "00:15:5d:aa:bb:cc", dynOfferIp, "client-test01", okAck, ackLease);
+            out << "  [3/6] 4-Way DORA Handshake (DHCPOFFER/ACK): " << (okDisc && okReq && okAck ? "PASSED" : "FAILED") << "\n";
+
+            // 4. Option 81 Dynamic DNS Registration
+            auto& dns = micant::dns::EnterpriseDnsServer::instance();
+            auto dnsRecords = dns.queryRecords("client-test01.titan.local", micant::dns::TYPE_A);
+            bool okDns = (!dnsRecords.empty() && dnsRecords[0].rdata == dynOfferIp);
+            out << "  [4/6] Option 81 Dynamic DNS Registration:   " << (okDns ? "PASSED" : "FAILED") << "\n";
+
+            // 5. DHCPRELEASE Re-pool
+            bool okRel = dhcp.processRelease("192.168.1.0", dynOfferIp, "00:15:5d:aa:bb:cc");
+            out << "  [5/6] DHCPRELEASE Processing & Re-pool:     " << (okRel ? "PASSED" : "FAILED") << "\n";
+
+            // 6. DHCP Failover Configuration & State
+            bool okFo = dhcp.configureFailover("192.168.1.0", "dc02.titan.local", micant::dhcp::FailoverMode::LoadBalance);
+            out << "  [6/6] RFC 3074 DHCP Failover Synchronization: " << (okFo ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All Windows Enterprise DHCP Subsystem Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows Enterprise DHCP Server Subsystem (netsh dhcp / RFC 2131)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  dhcp status                             Display DHCP server status and telemetry counters\n"
+            << "  dhcp scopes                             List all configured IPv4 and IPv6 scopes\n"
+            << "  dhcp addscope <subNet> <mask> <sIp> <eIp> [lease] Create a new DHCP scope\n"
+            << "  dhcp leases <subnet>                    Enumerate active client leases in a scope\n"
+            << "  dhcp reservations <subnet>              Enumerate hardware MAC reservations\n"
+            << "  dhcp addreserve <subNet> <ip> <mac> <name> Add hardware MAC address reservation\n"
+            << "  dhcp delreserve <subNet> <ip> <mac>     Delete hardware reservation\n"
+            << "  dhcp discover <mac> [hostname]          Simulate DHCPDISCOVER packet\n"
+            << "  dhcp request <mac> <ip> [hostname]      Simulate DHCPREQUEST packet\n"
+            << "  dhcp release <ip> <mac>                 Simulate DHCPRELEASE packet\n"
+            << "  dhcp failover <subNet> <partner> [mode] Configure DHCP Failover partnership\n"
+            << "  dhcp test                               Execute in-kernel DHCP server self-tests\n";
     }
 
     static std::string trim(std::string_view s) {

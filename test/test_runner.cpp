@@ -213,6 +213,7 @@
 #include "micant/wds.hpp"
 #include "micant/certsrv.hpp"
 #include "micant/dns_server.hpp"
+#include "micant/dhcp_server.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -47034,8 +47035,255 @@ void Test_WindowsEnterpriseDNS_Server_Subsystem() {
     std::cout << "[TEST] Suite 208: Windows Enterprise DNS Server Subsystem PASSED.\n";
 }
 
+void Test_WindowsEnterpriseDHCP_Server_Subsystem() {
+    std::cout << "[TEST] Suite 209: Windows Enterprise DHCP Server Subsystem...\n";
+
+    auto& dhcp = micant::dhcp::EnterpriseDhcpServer::instance();
+    dhcp.initialize();
+
+    // Stage 1: SCM Registration & State
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto sDhcp = scm.getServiceRecord(L"DHCPServer");
+    TEST_ASSERT(sDhcp != nullptr, "DHCPServer service must be registered in SCM");
+    TEST_ASSERT(sDhcp->serviceName == L"DHCPServer", "Service name must be DHCPServer");
+    TEST_ASSERT(sDhcp->displayName == L"DHCP Server", "Display name must match DHCP Server");
+    TEST_ASSERT(sDhcp->startType == micant::scm::SERVICE_AUTO_START, "DHCPServer startType must be AUTO_START");
+    TEST_ASSERT(sDhcp->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "DHCPServer state must be SERVICE_RUNNING");
+    TEST_ASSERT(sDhcp->binaryPath == L"C:\\Windows\\System32\\tcpsvcs.exe", "DHCPServer binary path must match");
+
+    // Stage 2: VersionDatabase PE Metadata & Modules
+    auto& verDb = micant::version::VersionDatabase::Instance();
+    const auto* modTcp = verDb.FindModule("tcpsvcs.exe");
+    TEST_ASSERT(modTcp != nullptr, "tcpsvcs.exe must be registered in VersionDatabase");
+    TEST_ASSERT(modTcp->stringTable.at("FileVersion") == "10.0.26100.1", "tcpsvcs.exe version must be 10.0.26100.1");
+
+    const auto* modSvc = verDb.FindModule("dhcpsvc.dll");
+    TEST_ASSERT(modSvc != nullptr, "dhcpsvc.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modSvc->stringTable.at("FileVersion") == "10.0.26100.1", "dhcpsvc.dll version must be 10.0.26100.1");
+
+    const auto* modApi = verDb.FindModule("dhcpsapi.dll");
+    TEST_ASSERT(modApi != nullptr, "dhcpsapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modApi->stringTable.at("FileVersion") == "10.0.26100.1", "dhcpsapi.dll version must be 10.0.26100.1");
+
+    const auto* modCore = verDb.FindModule("dhcpcore.dll");
+    TEST_ASSERT(modCore != nullptr, "dhcpcore.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modCore->stringTable.at("FileVersion") == "10.0.26100.1", "dhcpcore.dll version must be 10.0.26100.1");
+
+    const auto* modMon = verDb.FindModule("dhcpcmonitor.dll");
+    TEST_ASSERT(modMon != nullptr, "dhcpcmonitor.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modMon->stringTable.at("FileVersion") == "10.0.26100.1", "dhcpcmonitor.dll version must be 10.0.26100.1");
+
+    // Stage 3: Active Directory Authorization & Rogue DHCP Suppression
+    TEST_ASSERT(dhcp.isServerAuthorized() == true, "DHCP server must initially be authorized in Active Directory");
+    TEST_ASSERT(dhcp.isRogueSuppressed() == false, "DHCP server must not be rogue-suppressed initially");
+    TEST_ASSERT(dhcp.getAdDirectoryPath().find("CN=NetServices") != std::string::npos, "AD directory path must reference NetServices");
+
+    bool unauthOk = dhcp.unauthorizeServerInAd("192.168.1.10", "titan.local");
+    TEST_ASSERT(unauthOk == true, "Unauthorizing server in AD must succeed");
+    TEST_ASSERT(dhcp.isServerAuthorized() == false, "Server must be unauthorized");
+    TEST_ASSERT(dhcp.isRogueSuppressed() == true, "Server must enter rogue suppressed state");
+
+    std::string unauthIp;
+    uint32_t unauthLease = 0;
+    bool blockedDisc = dhcp.processDiscover("192.168.1.0", "00:15:5d:00:11:22", "unauth-test", unauthIp, unauthLease);
+    TEST_ASSERT(blockedDisc == false, "DHCPDISCOVER must be rejected when server is rogue-suppressed");
+
+    bool reauthOk = dhcp.authorizeServerInAd("192.168.1.10", "titan.local");
+    TEST_ASSERT(reauthOk == true, "Re-authorizing server in AD must succeed");
+    TEST_ASSERT(dhcp.isServerAuthorized() == true, "Server must be active again");
+
+    // Stage 4: Default IPv4 Enterprise Scope Catalog & Options
+    micant::dhcp::DhcpScope sc;
+    TEST_ASSERT(dhcp.getScope("192.168.1.0", sc), "Default enterprise scope 192.168.1.0 must exist");
+    TEST_ASSERT(sc.subnetMask == "255.255.255.0", "Subnet mask must be 255.255.255.0");
+    TEST_ASSERT(sc.startIp == "192.168.1.100" && sc.endIp == "192.168.1.200", "Pool range must be 192.168.1.100 - 192.168.1.200");
+    TEST_ASSERT(sc.leaseDurationSeconds == 691200, "Default lease duration must be 8 days (691200s)");
+    TEST_ASSERT(sc.router == "192.168.1.1", "Default gateway router must be 192.168.1.1");
+    TEST_ASSERT(sc.dnsServers.size() >= 2 && sc.dnsServers[0] == "192.168.1.10", "DNS server option must contain domain controller IP");
+    TEST_ASSERT(sc.domainName == "titan.local", "Domain name option must be titan.local");
+    TEST_ASSERT(!sc.exclusions.empty(), "Scope must have at least one exclusion range");
+
+    // Stage 5: DHCPv4 4-Way DORA Handshake (DISCOVER, OFFER, REQUEST, ACK / RFC 2131)
+    std::string offeredIp;
+    uint32_t offeredLease = 0;
+    bool discOk = dhcp.processDiscover("192.168.1.0", "00:15:5d:00:22:33", "ws-finance01", offeredIp, offeredLease);
+    TEST_ASSERT(discOk == true, "processDiscover must succeed");
+    TEST_ASSERT(!offeredIp.empty(), "Offered IP must be non-empty");
+    TEST_ASSERT(micant::dhcp::isIpInRange(offeredIp, sc.startIp, sc.endIp), "Offered IP must be within scope range");
+    TEST_ASSERT(offeredLease == sc.leaseDurationSeconds, "Offered lease must match scope configuration");
+
+    bool ackOk = false;
+    uint32_t grantedLease = 0;
+    bool reqOk = dhcp.processRequest("192.168.1.0", "00:15:5d:00:22:33", offeredIp, "ws-finance01", ackOk, grantedLease);
+    TEST_ASSERT(reqOk == true && ackOk == true, "processRequest must yield DHCPACK");
+    TEST_ASSERT(grantedLease == sc.leaseDurationSeconds, "Granted lease duration must match");
+
+    micant::dhcp::DhcpScope scCheck;
+    dhcp.getScope("192.168.1.0", scCheck);
+    auto lIt = scCheck.leases.find(offeredIp);
+    TEST_ASSERT(lIt != scCheck.leases.end(), "Granted lease must be recorded in scope database");
+    TEST_ASSERT(lIt->second.macAddress == "00:15:5d:00:22:33", "Lease MAC must match client MAC");
+    TEST_ASSERT(lIt->second.state == micant::dhcp::LeaseState::Active, "Lease state must be Active");
+
+    // Stage 6: IP Exclusion Range Enforcement
+    bool exAck = false;
+    uint32_t exLease = 0;
+    bool exReq = dhcp.processRequest("192.168.1.0", "00:15:5d:99:99:99", "192.168.1.155", "rogue-static", exAck, exLease);
+    TEST_ASSERT(exReq == false && exAck == false, "Request for IP inside exclusion range must be rejected with DHCPNAK");
+
+    // Stage 7: Hardware MAC Address Reservation Binding
+    std::string printerOfferIp;
+    uint32_t printerLease = 0;
+    bool pDiscOk = dhcp.processDiscover("192.168.1.0", "00:15:5d:01:aa:01", "titan-printer01", printerOfferIp, printerLease);
+    TEST_ASSERT(pDiscOk == true && printerOfferIp == "192.168.1.120", "Reserved MAC must receive exactly reserved IP (192.168.1.120)");
+
+    bool addResOk = dhcp.addReservation("192.168.1.0", "192.168.1.199", "00:15:5d:01:aa:99", "kiosk-01");
+    TEST_ASSERT(addResOk == true, "addReservation must succeed");
+
+    std::string kioskOfferIp;
+    uint32_t kioskLease = 0;
+    bool kDiscOk = dhcp.processDiscover("192.168.1.0", "00:15:5d:01:aa:99", "kiosk-01", kioskOfferIp, kioskLease);
+    TEST_ASSERT(kDiscOk == true && kioskOfferIp == "192.168.1.199", "Newly added reservation must be honored on DISCOVER");
+
+    // Stage 8: Lease State Tracking & Existing Lease Re-offer
+    std::string reOfferIp;
+    uint32_t reLease = 0;
+    bool reDiscOk = dhcp.processDiscover("192.168.1.0", "00:15:5d:00:22:33", "ws-finance01", reOfferIp, reLease);
+    TEST_ASSERT(reDiscOk == true && reOfferIp == offeredIp, "Client with active lease must be re-offered the same IP address");
+
+    // Stage 9: DHCPRELEASE Processing & Address Re-pool
+    bool relOk = dhcp.processRelease("192.168.1.0", offeredIp, "00:15:5d:00:22:33");
+    TEST_ASSERT(relOk == true, "processRelease must succeed");
+
+    dhcp.getScope("192.168.1.0", scCheck);
+    TEST_ASSERT(scCheck.leases.find(offeredIp) == scCheck.leases.end(), "Released IP must be immediately removed and returned to the pool");
+
+    // Stage 10: Option 81 Dynamic DNS Registration with Conflict Detection
+    std::string ddnsHost = "ws-accounting99";
+    std::string ddnsIp = "192.168.1.135";
+    bool ddnsAck = false;
+    uint32_t ddnsLease = 0;
+    bool ddnsReqOk = dhcp.processRequest("192.168.1.0", "00:15:5d:77:88:99", ddnsIp, ddnsHost, ddnsAck, ddnsLease);
+    TEST_ASSERT(ddnsReqOk == true && ddnsAck == true, "DHCP request with Option 81 FQDN must succeed");
+
+    auto& dns = micant::dns::EnterpriseDnsServer::instance();
+    auto dnsA = dns.queryRecords(ddnsHost + ".titan.local", micant::dns::TYPE_A);
+    TEST_ASSERT(!dnsA.empty() && dnsA[0].rdata == ddnsIp, "Option 81 forward A record must be registered automatically in DNS");
+
+    auto dnsPtr = dns.queryRecords("135.1.168.192.in-addr.arpa", micant::dns::TYPE_PTR);
+    TEST_ASSERT(!dnsPtr.empty() && dnsPtr[0].rdata == ddnsHost + ".titan.local", "Option 81 reverse PTR record must be registered in in-addr.arpa");
+
+    // Stage 11: DHCP Failover & High Availability (RFC 3074)
+    bool foCfgOk = dhcp.configureFailover("192.168.1.0", "dc02.titan.local", micant::dhcp::FailoverMode::LoadBalance, 3600, 50);
+    TEST_ASSERT(foCfgOk == true, "configureFailover must succeed");
+
+    micant::dhcp::DhcpLease partnerLease;
+    partnerLease.ipAddress = "192.168.1.175";
+    partnerLease.macAddress = "00:15:5d:ee:ff:01";
+    partnerLease.hostName = "partner-client01";
+    partnerLease.state = micant::dhcp::LeaseState::Active;
+    bool syncOk = dhcp.syncFailoverLease("192.168.1.0", partnerLease);
+    TEST_ASSERT(syncOk == true, "syncFailoverLease must synchronize partner lease");
+
+    bool stateOk = dhcp.setFailoverState("192.168.1.0", micant::dhcp::FailoverState::PartnerDown);
+    TEST_ASSERT(stateOk == true, "setFailoverState to PartnerDown must succeed");
+
+    dhcp.setFailoverState("192.168.1.0", micant::dhcp::FailoverState::Normal);
+
+    // Stage 12: DHCPv6 4-Way SARR Handshake (RFC 8415)
+    std::string v6Duid = "00010001aabbccdd00155d445566";
+    std::string advIp;
+    uint32_t v6Lifetime = 0;
+    bool solOk = dhcp.processV6Solicit(v6Duid, "ipv6-host01", advIp, v6Lifetime);
+    TEST_ASSERT(solOk == true, "processV6Solicit must succeed");
+    TEST_ASSERT(!advIp.empty() && advIp.find("2001:db8:1::") != std::string::npos, "Advertised IPv6 must belong to configured prefix");
+
+    bool v6Reply = false;
+    uint32_t grantV6Lifetime = 0;
+    bool v6ReqOk = dhcp.processV6Request(v6Duid, advIp, "ipv6-host01", v6Reply, grantV6Lifetime);
+    TEST_ASSERT(v6ReqOk == true && v6Reply == true, "processV6Request must yield DHCPV6_REPLY");
+    TEST_ASSERT(grantV6Lifetime == 86400, "DHCPv6 valid lifetime must be 86400s");
+
+    bool v6RelOk = dhcp.processV6Release(v6Duid, advIp);
+    TEST_ASSERT(v6RelOk == true, "processV6Release must succeed");
+
+    // Stage 13: Clean-Room Win32 C ABI Exports (MicaDhcp*)
+    void* pEngine = nullptr;
+    int32_t initRes = micant::dhcp::MicaDhcpInitialize(&pEngine);
+    TEST_ASSERT(initRes == 1 && pEngine != nullptr, "MicaDhcpInitialize must succeed");
+
+    int32_t authRes = micant::dhcp::MicaDhcpAuthorizeServer(pEngine, "192.168.1.10", "titan.local");
+    TEST_ASSERT(authRes == 1, "MicaDhcpAuthorizeServer must succeed via C ABI");
+
+    int32_t scRes = micant::dhcp::MicaDhcpCreateScope(pEngine, "10.50.0.0", "255.255.0.0", "10.50.1.1", "10.50.1.250", 86400);
+    TEST_ASSERT(scRes == 1, "MicaDhcpCreateScope must succeed via C ABI");
+
+    int32_t resRes = micant::dhcp::MicaDhcpAddReservation(pEngine, "10.50.0.0", "10.50.1.5", "00:11:22:33:44:55", "branch-gw");
+    TEST_ASSERT(resRes == 1, "MicaDhcpAddReservation must succeed via C ABI");
+
+    char offIpBuf[64]{};
+    int32_t discRes = micant::dhcp::MicaDhcpProcessDiscover(pEngine, "00:11:22:33:44:55", "branch-gw", offIpBuf, sizeof(offIpBuf));
+    TEST_ASSERT(discRes == 1 && std::string(offIpBuf) == "10.50.1.5", "MicaDhcpProcessDiscover must honor reservation via C ABI");
+
+    uint32_t cAbiLease = 0;
+    int32_t reqRes = micant::dhcp::MicaDhcpProcessRequest(pEngine, "00:11:22:33:44:55", offIpBuf, "branch-gw", &cAbiLease);
+    TEST_ASSERT(reqRes == 1 && cAbiLease == 86400, "MicaDhcpProcessRequest must yield ACK via C ABI");
+
+    int32_t foRes = micant::dhcp::MicaDhcpConfigureFailover(pEngine, "10.50.0.0", "10.50.0.2", 0);
+    TEST_ASSERT(foRes == 1, "MicaDhcpConfigureFailover must succeed via C ABI");
+
+    int32_t shutRes = micant::dhcp::MicaDhcpShutdown(pEngine);
+    TEST_ASSERT(shutRes == 1, "MicaDhcpShutdown must succeed via C ABI");
+
+    // Stage 14: Multithreaded High-Throughput Concurrent DHCP Stress Test
+    bool stressScopeOk = dhcp.createScope("10.240.0.0", "255.255.0.0", "10.240.1.1", "10.240.2.254", 3600, "Titan-Stress-Scope");
+    TEST_ASSERT(stressScopeOk == true, "createScope for high-capacity stress test scope must succeed");
+
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&dhcp, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                char macBuf[32];
+                std::snprintf(macBuf, sizeof(macBuf), "00:15:5d:99:%02x:%02x", t, op);
+                std::string clientMac = macBuf;
+                std::string clientHost = "stress-node-t" + std::to_string(t) + "-o" + std::to_string(op);
+
+                std::string offIp;
+                uint32_t offLease = 0;
+                bool dOk = dhcp.processDiscover("10.240.0.0", clientMac, clientHost, offIp, offLease);
+
+                bool rAck = false;
+                uint32_t rLease = 0;
+                bool rOk = false;
+                if (dOk && !offIp.empty()) {
+                    rOk = dhcp.processRequest("10.240.0.0", clientMac, offIp, clientHost, rAck, rLease);
+                }
+
+                if (dOk && rOk && rAck && !offIp.empty() && rLease > 0) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded DHCP stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 209: Windows Enterprise DHCP Server Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite208")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite209")) {
+        RUN_TEST(Test_WindowsEnterpriseDHCP_Server_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite208") {
         RUN_TEST(Test_WindowsEnterpriseDNS_Server_Subsystem);
         return g_FailedTests;
     }
@@ -47661,6 +47909,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDeploymentServices_PXE_Subsystem);
     RUN_TEST(Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem);
     RUN_TEST(Test_WindowsEnterpriseDNS_Server_Subsystem);
+    RUN_TEST(Test_WindowsEnterpriseDHCP_Server_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

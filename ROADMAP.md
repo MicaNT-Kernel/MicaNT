@@ -369,6 +369,8 @@
 │ Phase 180: Active Directory Certificate Services (M207)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 181: Windows Enterprise DNS Server Subsystem (M208)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 182: Windows Enterprise DHCP Server Subsystem (M209)[COMPLETED 100%]│
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3807,6 +3809,29 @@
   - `dns` / `dnscmd` / `nslookup` (`status`, `zones`, `addzone`, `records`, `addrecord`, `query`, `update`, `cache`, `flush`, `axfr`, `dnssec`, `test`).
 - [x] **Unit Test Suite 208 (`Test_WindowsEnterpriseDNS_Server_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration, VersionDatabase registration, zone catalog verification (AD forward, `_msdcs`, reverse arpa), SRV locator discovery for AD DS / Kerberos, RFC 1035 wire packet parsing and answer generation, EDNS0 OPT buffer negotiation, Dynamic DNS update with SOA increment, CNAME alias resolution, reverse PTR lookup, DNSSEC DNSKEY/RRSIG/NSEC generation, in-memory resolver cache & TTL eviction, AXFR zone transfer streaming, Win32 C ABI exports, and concurrent 8-thread multithreaded stress test (120 operations).
+
+---
+
+### Phase 182: Windows Enterprise DHCP Server Subsystem (`tcpsvcs.exe`, `dhcpsvc.dll`, `dhcpsapi.dll`, `dhcpcore.dll`, `dhcpcmonitor.dll`, `DHCPServer`, `TitanDHCP`) (Milestone 209) [COMPLETED 100%]
+*Goal: Implement clean-room Windows Enterprise DHCP Server Subsystem, featuring authoritative DHCPv4 (RFC 2131/2132) and DHCPv6 (RFC 8415) server engine, Active Directory authorization and rogue DHCP suppression, dynamic DORA/SARR lease allocation, IP exclusion ranges, MAC address reservations, high-availability DHCP failover (RFC 3074 load-balancing & hot standby with MCLT), Option 81 FQDN dynamic DNS updates, SCM DHCPServer service, VersionDatabase modules, Win32 C ABI exports, and interactive shell management.*
+- [x] **DHCP Core Engine & Scope Architecture (`include/micant/dhcp_server.hpp`)**:
+  - Scope Hierarchy: Authoritative IPv4 (`192.168.1.0/24`) and DHCPv6 (`2001:db8:1::/64`) scopes with subnet masks, allocation pools, exclusion ranges, and lease lifespans.
+  - Active Directory Authorization: Rogue DHCP server suppression enforcing domain authorization in Active Directory directory tree (`CN=NetServices,CN=Services,CN=Configuration,DC=titan,DC=local`). Unauthorized servers automatically suspend packet servicing.
+  - Option Catalog: Standard DHCP options including Option 3 (Router/Default Gateway), Option 6 (Domain Name Server), Option 15 (Domain Name), Option 44/46 (WINS/NetBIOS Node), Option 51 (Lease Time), Option 53 (Message Type), Option 54 (Server Identifier), and Option 81 (Client FQDN).
+  - 4-Way DORA Handshake: State machine implementing DHCPDISCOVER, DHCPOFFER, DHCPREQUEST, and DHCPACK/DHCPNAK, with client lease tracking and hardware MAC binding.
+  - DHCPv6 4-Way SARR Handshake: IPv6 state machine implementing SOLICIT, ADVERTISE, REQUEST, and REPLY with IA_NA (Identity Association for Non-Temporary Addresses) and IA Address assignment.
+  - Hardware MAC Reservations: Permanent IP-to-MAC reservation bindings supporting both DHCP and BOOTP client profiles.
+  - Lease Lifecycle & Re-pool: Expiration timers, active/grace/quarantined states, DHCPRELEASE processing, and immediate re-pooling.
+  - DHCP Failover & High Availability (RFC 3074): Active-Active load balancing with MAC hashing split and Hot-Standby failover with Maximum Client Lead Time (MCLT) state synchronization.
+  - Dynamic DNS Integration: Automatic Option 81 client FQDN forward (A) and reverse (PTR) record registration in `EnterpriseDnsServer` with conflict detection.
+- [x] **Win32 & SCM Parity**:
+  - SCM Service registration: `DHCPServer` (DHCP Server, Auto Start, Running, `tcpsvcs.exe`).
+  - VersionDatabase registration (`10.0.26100.1`): `tcpsvcs.exe`, `dhcpsvc.dll`, `dhcpsapi.dll`, `dhcpcore.dll`, `dhcpcmonitor.dll`.
+  - Win32 C ABI exports: `MicaDhcpInitialize`, `MicaDhcpAuthorizeServer`, `MicaDhcpCreateScope`, `MicaDhcpAddReservation`, `MicaDhcpProcessDiscover`, `MicaDhcpProcessRequest`, `MicaDhcpConfigureFailover`, `MicaDhcpShutdown`.
+- [x] **Interactive Shell CLI**:
+  - `dhcp` / `dhcpmgmt` / `netsh dhcp` (`status`, `scopes`, `addscope`, `leases`, `reservations`, `addreserve`, `delreserve`, `discover`, `request`, `release`, `failover`, `test`).
+- [x] **Unit Test Suite 209 (`Test_WindowsEnterpriseDHCP_Server_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, Active Directory authorization & rogue server suppression, scope and exclusion range enforcement, DHCPv4 DORA 4-way allocation, MAC reservation binding, lease expiration & release re-pooling, Option 81 Dynamic DNS registration, RFC 3074 DHCP Failover synchronization, DHCPv6 SARR allocation, Win32 C ABI exports, and concurrent 8-thread multithreaded stress test (120 client allocations).
 
 
 
