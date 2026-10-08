@@ -338,7 +338,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 165: Windows Hyper-V Hypercall & Nested Virt (winhvr.sys)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 166: Windows DirectStorage & NVMe BypassIO (bypassio.sys)[PLANNED]        │
+│ Phase 166: Windows ReFS (Resilient File System) (refs.sys)    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 167: Windows Cluster Shared Volume File System (csvfs)  [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3478,20 +3480,39 @@
 
 ---
 
-### Phase 166: Windows DirectStorage & NVMe BypassIO Subsystem (`bypassio.sys`, `storqosflt.sys`, `TitanStorageIO`, `AegisBypassIO`) (Milestone 193) [PLANNED]
-*Goal: Implement clean-room Windows DirectStorage and NVMe BypassIO architecture (`bypassio.sys`, `storqosflt.sys`), providing low-overhead file system filter bypass (`FSCTL_MANAGE_BYPASS_IO`), direct hardware submission queues, GPU asset streaming acceleration, storage QoS scheduling, and zero-copy NVMe transfers.*
-- [ ] **DirectStorage & BypassIO Core Architecture (`include/micant/bypassio.hpp`)**:
-  - BypassIO Execution Engine: File-level bypass status tracking (`BypassIoEnabled`, `BypassIoSuspended`, `BypassIoDisabled`), filter driver stack evaluation, and driver bypass validation.
-  - Hardware Direct Submission: Direct DMA command ring mapping from NVMe controller to GPU / Ring 3 memory spaces, bypassing cache manager and I/O manager bottlenecks.
-  - Storage QoS Filter (`storqosflt.sys`): Bandwidth reservation, IOPS rate limiting, and priority scheduling for gaming, real-time analytics, and container storage.
-  - Decompression & Telemetry Offload: Direct hardware decompression pipeline integration (GDeflate) and storage telemetry aggregation.
+### Phase 166: Windows ReFS (Resilient File System v3.12) Subsystem (`refs.sys`, `refsutil.exe`, `TitanReFS`, `AegisStorageIntegrity`) (Milestone 193) [COMPLETED 100%]
+*Goal: Implement clean-room Windows ReFS (Resilient File System v3.12) architecture (`refs.sys`, `refsutil.exe`), featuring B+ tree on-disk table metadata, integrity streams with hardware-accelerated CRC32C/SHA-256 verification, allocate-on-write (Copy-on-Write / CoW), Block Cloning (FSCTL_DUPLICATE_EXTENTS_TO_FILE) for instant VHDX checkpoints, real-time background scrubbing, and online volume resilience.*
+- [x] **ReFS Core File System Engine (`include/micant/refs.hpp`)**:
+  - B+ Tree Table Hierarchy: Object ID tables, schema tables, directory tables, parent-child table navigation, 64KB page clusters, and key-value record management.
+  - Integrity Streams & Checksumming: Per-cluster and per-extent checksum verification (CRC32C / SHA-256) detecting and self-healing silent bit rot.
+  - Allocate-on-Write (CoW): Non-destructive atomic write allocations preventing write holes and eliminating chkdsk downtime.
+  - Block Cloning (`FSCTL_DUPLICATE_EXTENTS_TO_FILE`): Block-level extent duplication enabling instantaneous zero-copy file cloning and differential checkpointing.
+  - Real-Time Scrubbing & Salvage: Proactive background scrubber isolating bad clusters while keeping the volume online and responsive.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `refs.sys` / `refsutil.exe`: `RefsInitializeSubsystem`, `RefsMountVolume`, `RefsCreateFile`, `RefsWriteFileCoW`, `RefsReadFileWithIntegrity`, `RefsDuplicateExtents`, `RefsScrubVolume`, `RefsQueryVolumeState`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`ReFS`, boot start kernel driver).
+- [x] **Interactive Shell CLI**:
+  - `refs status`, `refs volumes`, `refs clone <src> <dst>`, `refs scrub <vol>`, `refs tree <vol>`, `refs test`.
+- [x] **Unit Test Suite 193 (`Test_WindowsReFS_ResilientFileSystem_Subsystem`)**:
+  - 12 comprehensive validation stages verifying ReFS superblock parsing, B+ tree root/leaf navigation, CoW atomic write allocation, integrity stream CRC32C verification, block cloning and extent deduplication, sparse valid data length (VDL), real-time background scrubbing, corrupted block salvage, volume mount/unmount lifecycle, Win32 C ABI exports, and multi-threaded concurrent transactional write stress testing.
+
+---
+
+### Phase 167: Windows Cluster Shared Volume File System (CSVFS v2.0 / `csvfs.sys`, `clussvc.exe`, `TitanCSVFS`, `FailoverClustering`) (Milestone 194) [PLANNED]
+*Goal: Implement clean-room Windows Cluster Shared Volume File System (CSVFS v2.0 / `csvfs.sys`, `clussvc.exe`), enabling multi-node concurrent read/write access to shared ReFS/NTFS storage volumes with coordinated metadata delegation, direct I/O path routing, and fault-tolerant failover orchestration.*
+- [ ] **CSVFS Core File System Engine (`include/micant/csvfs.hpp`)**:
+  - Filter and Mini-Redirector Architecture: CSVFS layered on top of underlying NTFS/ReFS storage volumes.
+  - Direct I/O Path vs. Redirected I/O Path: Uninhibited parallel block read/write I/O directly to underlying disk, bypassing cluster network for pure data operations.
+  - Metadata Synchronization & Delegation: Routing all namespace and allocation metadata mutations through the assigned Coordinator Node via cluster RPC.
+  - FSCTL Control Surface: `FSCTL_CSV_CONTROL`, `CSV_QUERY_VOLUME_REDIRECT_STATE`, `CSV_QUERY_FILE_REDIRECT_STATE`, `FSCTL_CSV_INTERNAL_OPTIMIZE_FOR_WRITE`.
+  - Failover & Dynamic Rebalancing: Dynamic coordinator failover, pause/resume I/O queuing during cluster re-synchronization.
 - [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `bypassio.sys` / `storqosflt.sys`: `BypassIoInitializeSubsystem`, `BypassIoEnableForFile`, `BypassIoQueryFileState`, `BypassIoIssueReadAsync`, `BypassIoConfigureQosPolicy`, `BypassIoDisableForFile`.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`BypassIoService`, `storqosflt.sys`).
+  - `csvfs.sys` / `clussvc.exe`: `CsvfsInitializeSubsystem`, `CsvfsMountVolume`, `CsvfsQueryRedirectState`, `CsvfsDirectIoRead`, `CsvfsDirectIoWrite`, `CsvfsDelegateMetadataOperation`, `CsvfsTriggerFailover`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`CSVFS`, file system filter driver).
 - [ ] **Interactive Shell CLI**:
-  - `bypassio status`, `bypassio files`, `bypassio qos`, `bypassio benchmark`, `bypassio test`.
-- [ ] **Unit Test Suite 193 (`Test_WindowsDirectStorage_BypassIO_Subsystem`)**:
-  - 12 comprehensive validation stages verifying BypassIO subsystem initialization, volume bypass capability query, file handle registration, filter driver stack evaluation, IOCTL/FSCTL dispatch, direct DMA queue submission, QoS rate limiting, hardware GDeflate decompression, Win32 C ABI exports, and high-throughput concurrent I/O stress testing.
+  - `csvfs status`, `csvfs volumes`, `csvfs nodes`, `csvfs redirect`, `csvfs failover`, `csvfs test`.
+- [ ] **Unit Test Suite 194 (`Test_WindowsClusterSharedVolume_CSVFS_Subsystem`)**:
+  - Comprehensive validation stages verifying CSVFS volume mounting, coordinator delegation, direct block I/O path execution, redirected I/O failback, volume pause/resume queuing, multi-node concurrent I/O stress, and Win32 C ABI exports.
 
 
 

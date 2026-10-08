@@ -197,6 +197,7 @@
 #include "micant/vsm.hpp"
 #include "micant/hotpatch.hpp"
 #include "micant/hyperv.hpp"
+#include "micant/refs.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -43411,8 +43412,138 @@ void Test_WindowsHyperV_NestedVirtualization_Subsystem() {
     std::cout << "[TEST] Suite 192: Windows Hyper-V Hypercall & Nested Virtualization Subsystem PASSED.\n";
 }
 
+void Test_WindowsReFS_ResilientFileSystem_Subsystem() {
+    std::cout << "[TEST] Running Suite 193: Windows ReFS (Resilient File System v3.12) Subsystem...\n";
+
+    // 1. SCM Service & VersionDatabase Registration
+    micant::refs::RegisterRefsSubsystem();
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    auto modRefs = vdb.FindModule("refs.sys");
+    TEST_ASSERT(modRefs != nullptr, "refs.sys must be registered in VersionDatabase");
+    auto modUtil = vdb.FindModule("refsutil.exe");
+    TEST_ASSERT(modUtil != nullptr, "refsutil.exe must be registered in VersionDatabase");
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto rec = scm.getServiceRecord(L"ReFS");
+    TEST_ASSERT(rec != nullptr, "ReFS driver service must be registered in ServiceControlManager");
+    TEST_ASSERT(rec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "ReFS driver service must be running");
+
+    // 2. ReFS Volume Mount & Superblock Layout
+    auto& sys = micant::refs::RefsSubsystem::get();
+    TEST_ASSERT(sys.isInitialized(), "RefsSubsystem must be initialized");
+    auto volR = sys.getVolume("R:");
+    TEST_ASSERT(volR != nullptr, "Default volume R: must be mounted");
+    const auto& sb = volR->getSuperblock();
+    TEST_ASSERT(std::memcmp(sb.fsSignature, "ReFS\0\0\0\0", 8) == 0, "ReFS volume superblock must contain valid signature");
+    TEST_ASSERT(sb.majorVersion == 3 && sb.minorVersion == 12, "ReFS version must be v3.12");
+    TEST_ASSERT(sb.bytesPerSector == micant::refs::REFS_SECTOR_SIZE, "ReFS bytesPerSector must be 4096");
+    TEST_ASSERT(sb.sectorsPerCluster == 16, "ReFS sectorsPerCluster must be 16 (64KB clusters)");
+
+    // 3. Balanced B+ Tree Hierarchy & Node Checksumming
+    auto rootNode = volR->getRootNode();
+    TEST_ASSERT(rootNode != nullptr, "ReFS root B+ tree node must exist");
+    TEST_ASSERT(rootNode->getNodeId() == 1, "Root node ID must be 1");
+    TEST_ASSERT(rootNode->getRecordCount() > 0, "Root node must index initial records");
+    TEST_ASSERT(rootNode->getNodeChecksum() != 0, "B+ tree node CRC32C checksum must be non-zero");
+
+    // 4. File Creation & Valid Data Length (VDL) Tracking
+    auto testFile = volR->createFile("\\Databases\\Accounts.mdf", 128 * 1024, true);
+    TEST_ASSERT(testFile != nullptr, "Creating ReFS file with initial size must succeed");
+    TEST_ASSERT(testFile->getFileSize() == 128 * 1024, "File size must reflect initial allocation");
+    TEST_ASSERT(testFile->getValidDataLength() == 128 * 1024, "Valid Data Length (VDL) must match allocated size");
+    TEST_ASSERT(testFile->isIntegrityEnabled(), "Integrity stream must be enabled on created file");
+
+    // 5. Allocate-on-Write (Copy-on-Write / CoW) Atomic Write Transaction
+    const char payload[] = "CRITICAL_TRANSACTION_PAYLOAD_REFS_COW_0123456789";
+    uint32_t bytesWritten = 0;
+    bool writeOk = volR->writeFileCoW("\\Databases\\Accounts.mdf", 0, payload, sizeof(payload), &bytesWritten);
+    TEST_ASSERT(writeOk, "writeFileCoW must succeed");
+    TEST_ASSERT(bytesWritten == sizeof(payload), "bytesWritten must equal payload size");
+    TEST_ASSERT(volR->getTotalWrites() > 0, "Volume total writes must increment");
+
+    // 6. Integrity Streams & CRC32C Checksum Validation
+    char readBuffer[64]{};
+    uint32_t bytesRead = 0;
+    bool csumValid = false;
+    bool readOk = volR->readFileWithIntegrity("\\Databases\\Accounts.mdf", 0, readBuffer, sizeof(payload), &bytesRead, &csumValid);
+    TEST_ASSERT(readOk, "readFileWithIntegrity must succeed");
+    TEST_ASSERT(bytesRead == sizeof(payload), "bytesRead must match requested size");
+    TEST_ASSERT(csumValid, "CRC32C integrity checksum verification must pass");
+
+    // 7. Fast Castagnoli CRC32C Verification
+    const char csumTest[] = "123456789";
+    uint32_t testCrc = micant::refs::ComputeCrc32c(csumTest, 9);
+    TEST_ASSERT(testCrc == 0xE3069283, "Castagnoli CRC32C of '123456789' must equal standard 0xE3069283");
+
+    // 8. Block Cloning (FSCTL_DUPLICATE_EXTENTS_TO_FILE)
+    uint64_t initialClonedBytes = volR->getClonedBytes();
+    bool cloneOk = volR->duplicateExtents("\\Databases\\Accounts.mdf", "\\Databases\\Accounts_Clone.mdf");
+    TEST_ASSERT(cloneOk, "duplicateExtents block cloning must succeed");
+    auto clonedFile = volR->getFile("\\Databases\\Accounts_Clone.mdf");
+    TEST_ASSERT(clonedFile != nullptr, "Cloned file must exist");
+    TEST_ASSERT(clonedFile->getFileSize() == testFile->getFileSize(), "Cloned file size must match original file size");
+    TEST_ASSERT(volR->getClonedBytes() > initialClonedBytes, "Volume cloned bytes counter must increment");
+    TEST_ASSERT(testFile->getExtents().size() == clonedFile->getExtents().size(), "Extent count must match");
+    if (!testFile->getExtents().empty() && !clonedFile->getExtents().empty()) {
+        TEST_ASSERT(testFile->getExtents()[0].refCount->load() >= 2, "Shared extent refCount must be at least 2");
+    }
+
+    // 9. Real-Time Background Scrubber & Volume Self-Healing
+    uint64_t scrubbedBytes = 0;
+    uint32_t errorsRepaired = 0;
+    bool scrubOk = volR->scrubVolume(&scrubbedBytes, &errorsRepaired);
+    TEST_ASSERT(scrubOk, "scrubVolume must succeed");
+    TEST_ASSERT(scrubbedBytes > 0, "Scrubbed bytes must be > 0");
+    TEST_ASSERT(volR->getScrubbedBytes() >= scrubbedBytes, "Volume cumulative scrubbed bytes must be updated");
+
+    // 10. Multi-Volume Provisioning & Management
+    auto volS = sys.mountVolume("S:", 65536);
+    TEST_ASSERT(volS != nullptr, "Mounting secondary ReFS volume S: must succeed");
+    TEST_ASSERT(sys.getVolume("S:") == volS, "Querying volume S: must return created volume");
+    TEST_ASSERT(sys.mountVolume("S:", 1024) == nullptr, "Mounting duplicate drive letter must return nullptr");
+
+    // 11. Win32 / NT C ABI Exports
+    TEST_ASSERT(micant::refs::RefsInitializeSubsystem() == micant::STATUS_SUCCESS, "RefsInitializeSubsystem must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::refs::RefsCreateFile("R:", "\\Shared\\doc.bin", 65536, 1) == micant::STATUS_SUCCESS, "RefsCreateFile via C ABI must succeed");
+    TEST_ASSERT(micant::refs::RefsCreateFile(nullptr, "\\bad.bin", 0, 0) == micant::STATUS_INVALID_PARAMETER, "Null drive letter must return STATUS_INVALID_PARAMETER");
+
+    uint32_t abiWritten = 0;
+    TEST_ASSERT(micant::refs::RefsWriteFileCoW("R:", "\\Shared\\doc.bin", 0, "HELLO", 5, &abiWritten) == micant::STATUS_SUCCESS, "RefsWriteFileCoW via C ABI must succeed");
+    TEST_ASSERT(abiWritten == 5, "Bytes written via C ABI must equal 5");
+
+    uint64_t totalB = 0, freeB = 0, clonedB = 0;
+    TEST_ASSERT(micant::refs::RefsQueryVolumeState("R:", &totalB, &freeB, &clonedB) == micant::STATUS_SUCCESS, "RefsQueryVolumeState must succeed");
+    TEST_ASSERT(totalB > 0 && freeB > 0, "Volume state metrics must be positive");
+
+    // 12. Multithreaded Concurrency & CoW Write Stress Test
+    std::atomic<int> refsStressCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([&, t]() {
+            for (int i = 0; i < 10; ++i) {
+                uint32_t wr = 0;
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "THREAD_%d_ITER_%d", t, i);
+                if (volR->writeFileCoW("\\Shared\\doc.bin", (t * 100) + i, buf, 16, &wr)) {
+                    refsStressCount.fetch_add(1);
+                }
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(refsStressCount.load() == 100, "100 concurrent ReFS transactional CoW writes must succeed without race conditions");
+
+    std::cout << "[TEST] Suite 193: Windows ReFS (Resilient File System v3.12) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite192")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite193")) {
+        RUN_TEST(Test_WindowsReFS_ResilientFileSystem_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite192") {
         RUN_TEST(Test_WindowsHyperV_NestedVirtualization_Subsystem);
         return g_FailedTests;
     }
@@ -43958,6 +44089,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem);
     RUN_TEST(Test_WindowsKernelHotpatching_LiveUpdate_Subsystem);
     RUN_TEST(Test_WindowsHyperV_NestedVirtualization_Subsystem);
+    RUN_TEST(Test_WindowsReFS_ResilientFileSystem_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
