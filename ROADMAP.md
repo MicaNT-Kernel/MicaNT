@@ -322,7 +322,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 157: Windows Display VRR, Adaptive-Sync & Advanced Color[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 158: Windows Sensor Class Extension v2 (SensorsCx & IMU)[PLANNED]        │
+│ Phase 158: Windows Sensor Class Extension v2 (SensorsCx & IMU)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 159: Mobile Broadband Class Extension (MBIM 4.0 / MbbCx)[PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3311,21 +3313,39 @@
 
 ---
 
-### Phase 158: Windows Sensor Class Extension v2 (SensorsCx / SensorsCx.sys), 9-DoF Sensor Fusion & Inertial Measurement Unit (IMU) Subsystem (`sensorscx.hpp`, `sensorscx.sys`, `sensrsvc.dll`, `TitanSensorFusion`, `AegisOrientation`) (Milestone 185) [PLANNED]
+### Phase 158: Windows Sensor Class Extension v2 (SensorsCx / SensorsCx.sys), 9-DoF Sensor Fusion & Inertial Measurement Unit (IMU) Subsystem (`sensorscx.hpp`, `sensorscx.sys`, `sensrsvc.dll`, `TitanSensorFusion`, `AegisOrientation`) (Milestone 185) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Sensor Class Extension version 2 (SensorsCx / SensorsCx.sys), 9-DoF Sensor Fusion (3-axis Accelerometer, 3-axis Gyroscope, 3-axis Magnetometer, Barometer, Ambient Light Sensor / ALS), Madgwick/Mahony quaternion attitude estimation (Pitch, Roll, Yaw / Heading), device display auto-rotation screen orientation lock, step detector / pedometer, gesture triggers (shake, tilt, free-fall), and dynamic batching FIFO.*
-- [ ] **SensorsCx v2 Class Extension Architecture (`include/micant/sensorscx.hpp`)**:
+- [x] **SensorsCx v2 Class Extension Architecture (`include/micant/sensorscx.hpp`)**:
   - Sensor Categories & Types: Accelerometer 3D, Gyroscope 3D, Magnetometer 3D, Inclinometer 3D, Barometer (ambient pressure & barometric elevation), ALS (lux & color temperature), and Orientation Fusion.
   - Data Update Modes: Change sensitivity thresholds (per-axis delta filtering), event-driven report delivery, and dynamic hardware batching FIFO.
   - 9-DoF Sensor Fusion Engine: Madgwick AHRS quaternion filter combining linear acceleration, angular rate, and magnetic flux into drift-free orientation (Quaternion W/X/Y/Z and Euler Pitch/Roll/Yaw).
   - Gesture & Motion Detector: Free-fall detection (near 0g vector magnitude), shake gesture detection, flip-over detection, and step pedometer counter.
   - Display Auto-Rotation Lock: Screen orientation state machine (`LANDSCAPE`, `PORTRAIT`, `LANDSCAPE_FLIPPED`, `PORTRAIT_FLIPPED`, `FACE_UP`, `FACE_DOWN`) with hysteresis deadband.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `sensorscx.sys` / `sensrsvc.dll`: `SensorsCxDeviceInitialize`, `SensorsCxSensorCreate`, `SensorsCxSensorStart`, `SensorsCxSensorStop`, `SensorsCxSensorDataReady`, `SensorsCxGetDeviceOrientation`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`SensorService`, `svchost.exe -k SensorGroup`).
-- [ ] **Interactive Shell CLI**:
-  - `sensor status`, `sensor list`, `sensor read <type>`, `sensor inject <type> <val...>`, `sensor fusion`, `sensor orientation <auto|lock>`, `sensor test`.
-- [ ] **Unit Test Suite 185 (`Test_WindowsSensorsCxV2_SensorFusion_Subsystem`)**:
+- [x] **Interactive Shell CLI**:
+  - `sensorscx status`, `sensorscx list`, `sensorscx read <type>`, `sensorscx inject <type> <x y z>`, `sensorscx fusion`, `sensorscx orientation <auto|lock>`, `sensorscx test`.
+- [x] **Unit Test Suite 185 (`Test_WindowsSensorsCxV2_SensorFusion_Subsystem`)**:
   - 12 comprehensive validation stages verifying SensorsCx registration, multi-sensor initialization, raw data ingestion, Madgwick quaternion fusion math, pitch/roll/yaw calculation, hysteresis display orientation transitions, step counter, free-fall & shake detection, threshold report filtering, dynamic C ABI exports, and multi-threaded sensor reading concurrency.
+  - Milestone 185: **185 / 185 Test Suites Passing (100%)**.
+
+---
+
+### Phase 159: Windows Mobile Broadband Class Extension (MBIM 4.0 / MbbCx), 5G NR Telephony & eSIM Remote SIM Provisioning Subsystem (`mbbcx.hpp`, `mbbcx.sys`, `wwansvc.dll`, `TitanCellular`, `AegisRadio`) (Milestone 186) [PLANNED]
+*Goal: Implement clean-room Windows Mobile Broadband Class Extension (MbbCx / mbbcx.sys), USB Mobile Broadband Interface Model (MBIM 4.0), 5G NR Standalone (SA) / Non-Standalone (NSA) network registration, SIM / UICC / eSIM Remote SIM Provisioning (GSMA RSP SGP.22 / LPA), dual-SIM dual-active (DSDA), APN data connection multiplexing, and WWAN telephony service integration.*
+- [ ] **Mobile Broadband Class Extension Architecture (`include/micant/mbbcx.hpp`)**:
+  - MBIM 4.0 Control & Data Message Protocol: Open/Close, Connect/Disconnect, Pin, SignalState, PacketService, RadioState, Provider, Registration, and DeviceCaps.
+  - 5G NR & Multi-RAT Modem Support: 5G NR SA/NSA, LTE-Advanced Pro, sub-6 GHz / mmWave frequency bands, Signal Strength (RSRP, RSRQ, SINR).
+  - eSIM & LPA Architecture: GSMA SGP.22 Local Profile Assistant (LPA) engine, embedded UICC (eUICC) profile download, enable/disable/delete profile lifecycle, activation codes.
+  - Data Session Multiplexing: Multiple PDP context and Packet Data Network (PDN) connections (Internet, IMS, MMS, Enterprise APN).
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `mbbcx.sys` / `wwansvc.dll`: `MbbDeviceInitialize`, `MbbAdapterCreate`, `MbbRadioStateSet`, `MbbConnectDataSession`, `MbbGetSignalState`, `MbbEsimProfileManage`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`WwanSvc`, `svchost.exe -k NetworkService`).
+- [ ] **Interactive Shell CLI**:
+  - `wwan status`, `wwan connect <apn>`, `wwan disconnect`, `wwan signal`, `wwan esim <list|install|enable|disable>`, `wwan test`.
+- [ ] **Unit Test Suite 186 (`Test_WindowsMbbCx_MBIM40_5G_Subsystem`)**:
+  - 12 comprehensive validation stages verifying MbbCx driver registration, modem discovery, MBIM 4.0 handshake, 5G NR network registration, RSRP signal metrics, dual APN packet sessions, eSIM LPA profile activation, radio kill switch, Win32 C ABI parity exports, and multi-threaded cell data throughput stress testing.
 
 
 

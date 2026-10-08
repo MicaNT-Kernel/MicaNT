@@ -189,6 +189,7 @@
 #include "micant/hpd.hpp"
 #include "micant/cameracx.hpp"
 #include "micant/vrr.hpp"
+#include "micant/sensorscx.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -41894,8 +41895,213 @@ void Test_WindowsDisplayVRR_AutoHDR_Subsystem() {
     std::cout << "[TEST] Suite 184: Windows Display VRR, Adaptive-Sync & Advanced Color Management PASSED.\n";
 }
 
+void Test_WindowsSensorsCxV2_SensorFusion_Subsystem() {
+    std::cout << "[TEST] Executing Suite 185: Windows SensorsCx v2 & 9-DoF Sensor Fusion Subsystem...\n";
+
+    // Stage 1: SensorsCx Subsystem SCM & VersionDatabase Registration
+    micant::sensorscx::RegisterSensorsCxSubsystem();
+    auto& verDb = version::VersionDatabase::Instance();
+    TEST_ASSERT(verDb.FindModule("sensorscx.sys") != nullptr, "sensorscx.sys must be registered in VersionDatabase");
+    TEST_ASSERT(verDb.FindModule("sensrsvc.dll") != nullptr, "sensrsvc.dll must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto scmSvc = scm.getServiceRecord(L"SensorService");
+    TEST_ASSERT(scmSvc != nullptr, "SensorService must be registered in SCM");
+    TEST_ASSERT(scmSvc->binaryPath.find(L"svchost.exe") != std::wstring::npos, "SensorService must be hosted by svchost.exe");
+    TEST_ASSERT(scmSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SensorService must be running");
+
+    auto& sensorSys = micant::sensorscx::SensorsCxSubsystem::get();
+    TEST_ASSERT(sensorSys.isInitialized() == true, "SensorsCxSubsystem must report initialized");
+
+    // Stage 2: Hardware Sensor Discovery & Pre-seeded Physical Sensors
+    auto allSensors = sensorSys.getAllSensors();
+    TEST_ASSERT(allSensors.size() >= 7, "Subsystem must register at least 7 default sensor endpoints");
+
+    auto acc = sensorSys.getSensorByType(micant::sensorscx::SensorType::Accelerometer3D);
+    auto gyr = sensorSys.getSensorByType(micant::sensorscx::SensorType::Gyrometer3D);
+    auto mag = sensorSys.getSensorByType(micant::sensorscx::SensorType::Magnetometer3D);
+    auto baro = sensorSys.getSensorByType(micant::sensorscx::SensorType::Barometer);
+    auto als = sensorSys.getSensorByType(micant::sensorscx::SensorType::AmbientLight);
+    auto fusion = sensorSys.getSensorByType(micant::sensorscx::SensorType::OrientationFusion);
+    auto step = sensorSys.getSensorByType(micant::sensorscx::SensorType::Pedometer);
+
+    TEST_ASSERT(acc != nullptr && acc->getPowerState() == micant::sensorscx::SensorPowerState::Active, "Accelerometer must be present and active");
+    TEST_ASSERT(gyr != nullptr && gyr->getPowerState() == micant::sensorscx::SensorPowerState::Active, "Gyrometer must be present and active");
+    TEST_ASSERT(mag != nullptr && mag->getPowerState() == micant::sensorscx::SensorPowerState::Active, "Magnetometer must be present and active");
+    TEST_ASSERT(baro != nullptr, "Barometer must be present");
+    TEST_ASSERT(als != nullptr, "Ambient light sensor must be present");
+    TEST_ASSERT(fusion != nullptr, "Orientation fusion synthetic sensor must be present");
+    TEST_ASSERT(step != nullptr, "Pedometer sensor must be present");
+
+    // Stage 3: Custom Sensor Creation & Dynamic Lifecycle
+    uint32_t customId = sensorSys.registerSensor(micant::sensorscx::SensorType::Inclinometer3D, "Custom Inclinometer");
+    auto customSensor = sensorSys.getSensor(customId);
+    TEST_ASSERT(customSensor != nullptr, "Newly registered sensor must be retrievable by ID");
+    TEST_ASSERT(customSensor->getType() == micant::sensorscx::SensorType::Inclinometer3D, "Sensor type must match Inclinometer3D");
+    customSensor->setPowerState(micant::sensorscx::SensorPowerState::Standby);
+    TEST_ASSERT(customSensor->getPowerState() == micant::sensorscx::SensorPowerState::Standby, "Power state must transition to Standby");
+    customSensor->setReportIntervalMs(5); // 200 Hz
+    TEST_ASSERT(customSensor->getReportIntervalMs() == 5, "Report interval must be updated to 5 ms");
+
+    // Stage 4: Dynamic Hardware Batching FIFO
+    customSensor->enableBatching(16);
+    for (int i = 0; i < 20; ++i) {
+        micant::sensorscx::SensorReading r{};
+        r.sensorType = micant::sensorscx::SensorType::Inclinometer3D;
+        r.sequenceNumber = i + 1;
+        r.values[0] = static_cast<float>(i);
+        customSensor->pushReading(r);
+    }
+    TEST_ASSERT(customSensor->getSampleCount() == 20, "Total sample count must record 20 pushed readings");
+    auto flushed = customSensor->flushBatch();
+    TEST_ASSERT(flushed.size() == 16, "FIFO batch must hold exactly capacity limit of 16 items after overflow");
+    TEST_ASSERT(flushed.front().sequenceNumber == 5, "FIFO front must be sequence 5 (first 4 evicted)");
+    TEST_ASSERT(flushed.back().sequenceNumber == 20, "FIFO back must be sequence 20");
+    auto secondFlush = customSensor->flushBatch();
+    TEST_ASSERT(secondFlush.empty() == true, "Flushing again must yield empty batch");
+
+    // Stage 5: 3D Vector Math & Quaternion Euler Transformations
+    micant::sensorscx::Vector3f v1(1.0f, 0.0f, 0.0f);
+    micant::sensorscx::Vector3f v2(0.0f, 1.0f, 0.0f);
+    TEST_ASSERT(std::abs(v1.length() - 1.0f) < 1e-5f, "Unit vector length must be 1.0");
+    TEST_ASSERT(std::abs(v1.dot(v2)) < 1e-5f, "Orthogonal vector dot product must be 0");
+    auto vCross = v1.cross(v2);
+    TEST_ASSERT(std::abs(vCross.x) < 1e-5f && std::abs(vCross.y) < 1e-5f && std::abs(vCross.z - 1.0f) < 1e-5f, "v1 x v2 must yield Z unit vector (0,0,1)");
+
+    micant::sensorscx::Quaternion qIdent;
+    float pitch0 = 0.0f, roll0 = 0.0f, yaw0 = 0.0f;
+    qIdent.toEulerAngles(pitch0, roll0, yaw0);
+    TEST_ASSERT(std::abs(pitch0) < 1e-3f && std::abs(roll0) < 1e-3f && std::abs(yaw0) < 1e-3f, "Identity quaternion must convert to 0 Euler angles");
+
+    // Stage 6: 9-DoF Madgwick AHRS Gradient Descent Attitude Fusion Convergence
+    sensorSys.reset();
+    // Feed standard resting condition: 1G along +Z, 0 gyro rate, normal terrestrial magnetic field
+    sensorSys.injectReading(1, { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f });
+    sensorSys.injectReading(2, { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f });
+    sensorSys.injectReading(3, { 20.0f, 0.0f, 40.0f, 0.0f, 0.0f, 0.0f });
+    for (int stepIdx = 0; stepIdx < 100; ++stepIdx) {
+        sensorSys.processFusionStep();
+    }
+    auto qConverged = sensorSys.getCurrentOrientationQuaternion();
+    TEST_ASSERT(qConverged.w > 0.85f, "Madgwick filter must converge to level attitude (w near 1.0)");
+    float pTest = 0, rTest = 0, yTest = 0;
+    sensorSys.getCurrentEulerAngles(pTest, rTest, yTest);
+    TEST_ASSERT(std::abs(pTest) < 15.0f && std::abs(rTest) < 15.0f, "Level attitude must yield near-zero pitch and roll");
+
+    // Stage 7: Attitude Tracking under Angular Rotation & Heading Update
+    // Inject 45 deg/s yaw rotation
+    for (int stepIdx = 0; stepIdx < 40; ++stepIdx) {
+        sensorSys.injectReading(2, { 0.0f, 0.0f, 45.0f, 0.0f, 0.0f, 0.0f });
+        sensorSys.processFusionStep();
+    }
+    auto qRot = sensorSys.getCurrentOrientationQuaternion();
+    TEST_ASSERT(std::abs(qRot.z) > 0.01f || std::abs(qRot.w) < 0.999f, "Quaternion must register Z-axis angular rotation");
+
+    // Stage 8: Display Auto-Rotation Orientation State Transitions with Hysteresis
+    // Normal upright portrait: ax = 0, ay = -1, az = 0
+    sensorSys.injectReading(1, { 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f });
+    TEST_ASSERT(sensorSys.getDisplayOrientation() == micant::sensorscx::DisplayOrientation::Portrait, "Upright acceleration must select Portrait orientation");
+
+    // Left tilt: ax = 1.0, ay = 0, az = 0 -> Landscape
+    sensorSys.injectReading(1, { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f });
+    TEST_ASSERT(sensorSys.getDisplayOrientation() == micant::sensorscx::DisplayOrientation::Landscape, "Side tilt must select Landscape orientation");
+
+    // Inverted portrait: ax = 0, ay = 1.0, az = 0 -> PortraitFlipped
+    sensorSys.injectReading(1, { 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f });
+    TEST_ASSERT(sensorSys.getDisplayOrientation() == micant::sensorscx::DisplayOrientation::PortraitFlipped, "Inverted acceleration must select PortraitFlipped");
+
+    // Right tilt: ax = -1.0, ay = 0, az = 0 -> LandscapeFlipped
+    sensorSys.injectReading(1, { -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f });
+    TEST_ASSERT(sensorSys.getDisplayOrientation() == micant::sensorscx::DisplayOrientation::LandscapeFlipped, "Right tilt must select LandscapeFlipped");
+
+    // Flat on table face up: az = 1.0
+    sensorSys.injectReading(1, { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f });
+    TEST_ASSERT(sensorSys.getDisplayOrientation() == micant::sensorscx::DisplayOrientation::FaceUp, "Table flat acceleration must select FaceUp");
+
+    // Stage 9: Orientation Screen Lock Guard
+    sensorSys.setOrientationLock(true);
+    TEST_ASSERT(sensorSys.isOrientationLocked() == true, "Orientation lock must report true");
+    sensorSys.setOrientationLock(false);
+    TEST_ASSERT(sensorSys.isOrientationLocked() == false, "Orientation lock must report false after unlock");
+
+    // Stage 10: Hardware Gesture Engine: Free-Fall & Shake Detection
+    // Free-fall: near 0G
+    sensorSys.injectReading(1, { 0.05f, 0.05f, 0.08f, 0.0f, 0.0f, 0.0f }); // Length ~0.1G < 0.25G
+    const auto& gd = sensorSys.getGestureDetector();
+    TEST_ASSERT(gd.getFreeFallCount() > 0, "Free-fall gesture must be detected on near-zero gravity");
+
+    // Shake: violent acceleration > 2.5G
+    sensorSys.injectReading(1, { 2.2f, 1.8f, 0.9f, 0.0f, 0.0f, 0.0f }); // Length ~3.0G > 2.5G
+    TEST_ASSERT(gd.getShakeCount() > 0, "Shake gesture must be detected on rapid acceleration surge");
+
+    // Stage 11: Pedometer / Step Counter Zero-Crossing Detection
+    sensorSys.injectReading(1, { 0.0f, 0.0f, 0.85f, 0.0f, 0.0f, 0.0f }); // Reset to valley state
+    uint32_t initialSteps = gd.getStepCount();
+    // Simulate walking steps: alternate between high peak (>1.15G) and valley (<0.95G)
+    for (int s = 0; s < 6; ++s) {
+        sensorSys.injectReading(1, { 0.0f, 0.0f, 1.30f, 0.0f, 0.0f, 0.0f }); // Peak
+        sensorSys.injectReading(1, { 0.0f, 0.0f, 0.85f, 0.0f, 0.0f, 0.0f }); // Valley
+    }
+    TEST_ASSERT(gd.getStepCount() >= (initialSteps + 5), "Pedometer must register at least 5 simulated steps");
+
+    // Stage 12: Clean-Room Win32 C ABI Parity Exports & Multi-Threaded Concurrency
+    NTSTATUS abiInit = micant::sensorscx::SensorsCxDeviceInitialize(nullptr);
+    TEST_ASSERT(abiInit == micant::STATUS_SUCCESS, "SensorsCxDeviceInitialize must succeed");
+
+    uint32_t abiSensId = 0;
+    NTSTATUS abiCreate = micant::sensorscx::SensorsCxSensorCreate(static_cast<uint32_t>(micant::sensorscx::SensorType::AmbientLight), &abiSensId);
+    TEST_ASSERT(abiCreate == micant::STATUS_SUCCESS && abiSensId > 0, "SensorsCxSensorCreate must succeed");
+
+    NTSTATUS abiStart = micant::sensorscx::SensorsCxSensorStart(abiSensId);
+    TEST_ASSERT(abiStart == micant::STATUS_SUCCESS, "SensorsCxSensorStart must succeed");
+
+    float alsData[3] = { 450.0f, 5500.0f, 0.0f };
+    NTSTATUS abiData = micant::sensorscx::SensorsCxSensorDataReady(abiSensId, alsData, 3);
+    TEST_ASSERT(abiData == micant::STATUS_SUCCESS, "SensorsCxSensorDataReady must succeed");
+
+    uint32_t abiOrient = 0;
+    float abiP = 0, abiR = 0, abiY = 0;
+    NTSTATUS abiGetOrient = micant::sensorscx::SensorsCxGetDeviceOrientation(&abiOrient, &abiP, &abiR, &abiY);
+    TEST_ASSERT(abiGetOrient == micant::STATUS_SUCCESS, "SensorsCxGetDeviceOrientation must succeed");
+
+    NTSTATUS abiStop = micant::sensorscx::SensorsCxSensorStop(abiSensId);
+    TEST_ASSERT(abiStop == micant::STATUS_SUCCESS, "SensorsCxSensorStop must succeed");
+
+    // ABI Boundary & Parameter Validation
+    TEST_ASSERT(micant::sensorscx::SensorsCxSensorCreate(999, &abiSensId) == micant::STATUS_INVALID_PARAMETER, "Invalid sensor type must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::sensorscx::SensorsCxSensorCreate(0, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null sensor ID ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::sensorscx::SensorsCxSensorStart(99999) == micant::STATUS_NOT_FOUND, "Nonexistent sensor ID must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::sensorscx::SensorsCxSensorDataReady(abiSensId, nullptr, 3) == micant::STATUS_INVALID_PARAMETER, "Null data ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::sensorscx::SensorsCxGetDeviceOrientation(nullptr, nullptr, nullptr, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null orientation ptr must return STATUS_INVALID_PARAMETER");
+
+    // Multi-threaded concurrent sensor ingestion stress test (4 threads x 25 readings = 100 readings)
+    std::atomic<uint32_t> stressReadingsCount{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([&sensorSys, &stressReadingsCount, t]() {
+            uint32_t thSensId = sensorSys.registerSensor(micant::sensorscx::SensorType::Accelerometer3D, "Thread Stress Accel");
+            for (int r = 0; r < 25; ++r) {
+                float val = 0.5f + (t * 0.1f) + (r * 0.01f);
+                if (sensorSys.injectReading(thSensId, { val, 0.0f, 1.0f - val, 0.0f, 0.0f, 0.0f })) {
+                    stressReadingsCount++;
+                }
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressReadingsCount.load() == 100, "100 concurrent sensor reading injections must complete without race conditions");
+
+    std::cout << "[TEST] Suite 185: Windows SensorsCx v2 & 9-DoF Sensor Fusion Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite184")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite185")) {
+        RUN_TEST(Test_WindowsSensorsCxV2_SensorFusion_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite184") {
         RUN_TEST(Test_WindowsDisplayVRR_AutoHDR_Subsystem);
         return g_FailedTests;
     }
@@ -42400,6 +42606,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsHumanPresenceDetection_Subsystem);
     RUN_TEST(Test_WindowsCameraClassExtension_Subsystem);
     RUN_TEST(Test_WindowsDisplayVRR_AutoHDR_Subsystem);
+    RUN_TEST(Test_WindowsSensorsCxV2_SensorFusion_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
