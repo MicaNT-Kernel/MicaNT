@@ -316,7 +316,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 154: Windows Spatial Audio Platform & Audio Processing [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 155: Windows Human Presence Detection & Adaptive Lock  [PLANNED]        │
+│ Phase 155: Windows Human Presence Detection & Adaptive Lock  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 156: Windows Camera Device Class Extension (CameraCx)  [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3249,19 +3251,36 @@
 
 ---
 
-### Phase 155: Windows Human Presence Detection (HPD / Presence Sensing), Adaptive Dimming & Wake on Approach / Walk Away Lock Subsystem (`hpd.hpp`, `sensrsvc.dll`, `hpd.sys`, `TitanPresence`, `AegisPresence`) (Milestone 182) [PLANNED]
+### Phase 155: Windows Human Presence Detection (HPD / Presence Sensing), Adaptive Dimming & Wake on Approach / Walk Away Lock Subsystem (`hpd.hpp`, `sensrsvc.dll`, `hpd.sys`, `TitanPresence`, `AegisPresence`) (Milestone 182) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Human Presence Detection (HPD) framework, Radar/Time-of-Flight (ToF) distance sensing, human presence state machine (Approaching, Engaged, Leaving, Absent), Adaptive Dimming, Look Away Dim, and Walk-Away Lock security integration.*
-- [ ] **Windows Human Presence Architecture (`include/micant/hpd.hpp`)**:
-  - Sensor Data Engine: Field of view (horizontal/vertical azimuth angles), distance detection threshold zones (Near: <1.2m, Far: >2.5m).
-  - Presence State Machine: `HumanPresenceState` (Engaged, Unengaged, Approaching, Leaving, Absent).
-  - Power & Security Automation: Adaptive Dimming (display brightness reduction when user looks away), Wake on Approach (instant system resume from Modern Standby), and Walk-Away Lock (automatic workstation locking).
+- [x] **Windows Human Presence Architecture (`include/micant/hpd.hpp`)**:
+  - Sensor Data Engine: Field of view (horizontal/vertical azimuth angles), distance detection threshold zones (Near: <1.2m, Far: >2.0m), confidence scoring, multi-sensor modalities (ToF, mmWave Radar, Ultrasonic, Computer Vision IR).
+  - Presence State Machine: `HumanPresenceState` (Engaged, Unengaged, Approaching, Leaving, Present, NotPresent, Unknown).
+  - Power & Security Automation: Adaptive Dimming (display brightness reduction to 20% floor when user looks away or leaves), Wake on Approach (instant system display resume from Modern Standby), and Walk-Away Lock (automatic workstation locking after absence timeout).
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `sensrsvc.dll` / `hpd.sys`: `RegisterHumanPresenceSensor`, `HpdProcessSensorReading`, `HpdGetPresenceState`, `HpdConfigurePolicy`, `HpdGetPolicy`, `HpdGetDisplayBrightnessFactor`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`SensorService`, `svchost.exe -k SensorGroup`).
+- [x] **Interactive Shell CLI**:
+  - `hpd status`, `hpd inject <meters> [0|1] [type]`, `hpd policy <dim|wake|lock> <on|off>`, `hpd unlock`, `hpd test`.
+- [x] **Unit Test Suite 182 (`Test_WindowsHumanPresenceDetection_Subsystem`)**:
+  - 12 comprehensive validation stages verifying subsystem SCM/driver registration, sensor allocation, approach distance state transitions, near-field user gaze engagement, look-away dimming transition and power throttling, gaze return brightness restoration, departure detection, walk-away lock absence timeout, workstation unlock, wake-on-approachModern Standby signal, policy reconfiguration, clean-room C ABI exports, and 4-thread concurrent presence report stress testing.
+  - Milestone 182: **182 / 182 Test Suites Passing (100%)**.
+
+---
+
+### Phase 156: Windows Camera Device Class Extension (CameraCx), AVStream ISP & Frame Server Pipeline (`cameracx.hpp`, `camerasvc.dll`, `cameracx.sys`, `TitanCamera`, `AegisVision`) (Milestone 183) [PLANNED]
+*Goal: Implement clean-room Windows Camera Device Class Extension (CameraCx), AVStream architecture, Image Signal Processor (ISP) pipeline, multi-pin media negotiation (RGB24, NV12, MJPEG, RAW Bayer), Windows Hello secure IR camera stream isolation, and Frame Server brokering.*
+- [ ] **Camera Device Class Extension Architecture (`include/micant/cameracx.hpp`)**:
+  - Pin & Stream Negotiation: Capture, Preview, Still, and Secure Infrared (IR) pins; frame formats (NV12, RGB24, MJPEG, IR16); resolution & framerate descriptor tables.
+  - ISP Pipeline: Auto-exposure (AE), auto-white-balance (AWB), auto-focus (AF) statistics engine; Bayer demosaicing filter; camera metadata & hardware timestamp generation.
+  - Frame Server Engine: Multi-client zero-copy frame buffer ring, priority subscriber delivery, secure IR biometrics stream isolation for Windows Hello.
 - [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `sensrsvc.dll` / `hpd.sys`: `RegisterHumanPresenceSensor`, `GetHumanPresenceStatus`, `ConfigureHumanPresencePolicies`.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`SensorService`).
+  - `camerasvc.dll` / `cameracx.sys`: `CameraCreateDevice`, `CameraOpenStream`, `CameraGetFrame`, `CameraConfigureIsp`, `CameraReleaseFrame`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`FrameServer`, `svchost.exe -k CameraGroup`).
 - [ ] **Interactive Shell CLI**:
-  - `hpd status`, `hpd inject <distance_m> [engaged]`, `hpd policy <dim|wake|lock> <on|off>`, `hpd test`.
-- [ ] **Unit Test Suite 182 (`Test_WindowsHumanPresenceDetection_Subsystem`)**:
-  - Sensor registration, distance threshold transitions, adaptive display dimming, walk-away lock trigger, Modern Standby wake signaling, C ABI exports, and concurrent multi-thread presence report ingestion.
+  - `camera status`, `camera stream <pin>`, `camera snap <format>`, `camera isp <ae|awb>`, `camera test`.
+- [ ] **Unit Test Suite 183 (`Test_WindowsCameraClassExtension_Subsystem`)**:
+  - Camera device creation, stream pin allocation, ISP exposure/color temperature adjustments, zero-copy buffer recycling, secure IR stream separation, C ABI exports, and concurrent multi-client frame subscriber stress tests.
 
 
 

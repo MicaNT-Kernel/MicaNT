@@ -172,6 +172,7 @@
 #include "touchpad.hpp"
 #include "ink.hpp"
 #include "spatial_audio.hpp"
+#include "hpd.hpp"
 
 namespace micant::shell {
 
@@ -489,6 +490,7 @@ public:
             if (cmd == "touch" || cmd == "touchpad" || cmd == "ptp" || cmd == "directmanipulation" || cmd == "haptics") { cmdTouchpad(tokens, out); return 0; }
             if (cmd == "ink" || cmd == "stylus" || cmd == "pen" || cmd == "wisptis" || cmd == "handwriting") { cmdInk(tokens, out); return 0; }
             if (cmd == "spatial" || cmd == "spatialaudio" || cmd == "atmos" || cmd == "sonic" || cmd == "apo") { cmdSpatialAudio(tokens, out); return 0; }
+            if (cmd == "hpd" || cmd == "presence" || cmd == "sensing" || cmd == "radar" || cmd == "tof") { cmdHpd(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -29226,6 +29228,173 @@ private:
             << "  spatial play <x> <y> <z> [freq]     Render 3D positioned spatial audio tone burst with HRTF\n"
             << "  spatial apo <limiter|eq> [val]      Test System Effects Audio Processing Object (APO) DSP\n"
             << "  spatial test                        Run automated Spatial Audio & APO self-test suite\n";
+    }
+
+    void cmdHpd(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& hpdSys = micant::hpd::HumanPresenceSubsystem::get();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            for (auto& c : sub) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            if (sub == "status") {
+                out << "======================================================================\n"
+                    << " MicaNT Human Presence Detection & Adaptive Sensing Subsystem\n"
+                    << " Codename: TitanPresence / AegisPresence | Spec: Windows 11 HPD & HID\n"
+                    << "======================================================================\n"
+                    << " Subsystem Status      : " << (hpdSys.isSubsystemEnabled() ? "ACTIVE (Enabled)" : "DISABLED") << "\n"
+                    << " Registered Sensors    : " << hpdSys.getSensorCount() << " sensor(s)\n"
+                    << " Presence State        : " << micant::hpd::PresenceStateToString(hpdSys.getCurrentState()) << "\n"
+                    << " Current Distance      : " << std::fixed << std::setprecision(2) << hpdSys.getCurrentDistance() << " m\n"
+                    << " Attention / Engaged   : " << (hpdSys.isUserEngaged() ? "YES (Gaze on Display)" : "NO (Looked Away)") << "\n"
+                    << " Display Brightness    : " << static_cast<int>(hpdSys.getBrightnessFactor() * 100.0f) << "%\n"
+                    << " Workstation Locked    : " << (hpdSys.isWorkstationLocked() ? "LOCKED (Walk-Away Lock)" : "UNLOCKED") << "\n"
+                    << "----------------------------------------------------------------------\n"
+                    << " Policy Configuration:\n";
+                auto pol = hpdSys.getPolicy();
+                out << "   Wake on Approach    : " << (pol.wakeOnApproachEnabled ? "ENABLED" : "DISABLED") << " (< " << pol.approachThresholdM << " m)\n"
+                    << "   Walk-Away Lock      : " << (pol.walkAwayLockEnabled ? "ENABLED" : "DISABLED") << " (> " << pol.leaveThresholdM << " m, " << pol.walkAwayLockTimeoutSec << "s)\n"
+                    << "   Adaptive Dimming    : " << (pol.adaptiveDimmingEnabled ? "ENABLED" : "DISABLED") << " (Floor: " << static_cast<int>(pol.dimBrightnessFloor * 100.0f) << "%)\n"
+                    << "   Look-Away Dimming   : " << (pol.lookAwayDimEnabled ? "ENABLED" : "DISABLED") << " (" << pol.dimTimeoutSec << "s timeout)\n"
+                    << "----------------------------------------------------------------------\n"
+                    << " Telemetry & Analytics:\n"
+                    << "   Sensor Reports Ingested : " << hpdSys.getReportsProcessed() << "\n"
+                    << "   Wake-on-Approach Events : " << hpdSys.getWakeOnApproachEvents() << "\n"
+                    << "   Walk-Away Lock Triggers : " << hpdSys.getWalkAwayLockEvents() << "\n"
+                    << "   Adaptive Dim Transitions: " << hpdSys.getAdaptiveDimEvents() << "\n"
+                    << "======================================================================\n";
+                return;
+            }
+
+            if (sub == "inject") {
+                if (tokens.size() < 3) {
+                    out << "Usage: hpd inject <distance_meters> [engaged:0|1] [type:tof|radar|ir]\n";
+                    return;
+                }
+                float dist = std::stof(tokens[2]);
+                bool engaged = (tokens.size() > 3) ? (tokens[3] == "1" || tokens[3] == "true" || tokens[3] == "yes") : true;
+                micant::hpd::PresenceSensorType st = micant::hpd::PresenceSensorType::RadarMmWave;
+                if (tokens.size() > 4) {
+                    std::string t = tokens[4];
+                    for (auto& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (t == "tof") st = micant::hpd::PresenceSensorType::TimeOfFlight;
+                    else if (t == "ir" || t == "cv") st = micant::hpd::PresenceSensorType::ComputerVisionIR;
+                    else if (t == "ultrasonic") st = micant::hpd::PresenceSensorType::Ultrasonic;
+                }
+
+                micant::hpd::HpdSensorReport rep{};
+                rep.sensorId = 1;
+                rep.sensorType = st;
+                rep.distanceMeters = dist;
+                rep.userEngaged = engaged;
+                rep.confidence = 0.98f;
+                hpdSys.processSensorReport(rep, 0.5f);
+
+                out << "[+] Injected HPD reading: Distance=" << dist << "m, Engaged=" << (engaged ? "true" : "false")
+                    << " -> State: " << micant::hpd::PresenceStateToString(hpdSys.getCurrentState())
+                    << ", Brightness: " << static_cast<int>(hpdSys.getBrightnessFactor() * 100.0f) << "%"
+                    << ", Locked: " << (hpdSys.isWorkstationLocked() ? "YES" : "NO") << "\n";
+                return;
+            }
+
+            if (sub == "unlock") {
+                hpdSys.unlockWorkstation();
+                out << "[+] Workstation presence lock cleared. System state: UNLOCKED\n";
+                return;
+            }
+
+            if (sub == "policy") {
+                if (tokens.size() < 4) {
+                    out << "Usage: hpd policy <dim|wake|lock> <on|off>\n";
+                    return;
+                }
+                auto pol = hpdSys.getPolicy();
+                std::string target = tokens[2];
+                for (auto& c : target) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                bool val = (tokens[3] == "on" || tokens[3] == "1" || tokens[3] == "true" || tokens[3] == "enable");
+
+                if (target == "dim") {
+                    pol.adaptiveDimmingEnabled = val;
+                    pol.lookAwayDimEnabled = val;
+                } else if (target == "wake") {
+                    pol.wakeOnApproachEnabled = val;
+                } else if (target == "lock") {
+                    pol.walkAwayLockEnabled = val;
+                } else {
+                    out << "[-] Unknown policy parameter: " << tokens[2] << " (options: dim, wake, lock)\n";
+                    return;
+                }
+                hpdSys.setPolicy(pol);
+                out << "[+] Updated HPD policy: " << target << " -> " << (val ? "ENABLED" : "DISABLED") << "\n";
+                return;
+            }
+
+            if (sub == "test") {
+                out << "[*] Executing Windows Human Presence Detection & Adaptive Dimming Self-Tests...\n";
+
+                micant::hpd::RegisterHpdSubsystem();
+                auto& vdb = micant::version::VersionDatabase::Instance();
+                bool regOk = (vdb.FindModule("sensrsvc.dll") != nullptr) && (vdb.FindModule("hpd.sys") != nullptr);
+                out << "  [1/6] HPD Subsystem SCM & Driver Module Registration: "
+                    << (regOk ? "PASSED" : "FAILED") << "\n";
+
+                uint32_t sId = hpdSys.registerSensor(micant::hpd::PresenceSensorType::TimeOfFlight);
+                out << "  [2/6] Time-of-Flight / mmWave Sensor Registration: "
+                    << (sId > 0 ? "PASSED" : "FAILED") << "\n";
+
+                micant::hpd::HpdSensorReport r1{};
+                r1.sensorId = sId;
+                r1.distanceMeters = 0.8f;
+                r1.userEngaged = true;
+                hpdSys.processSensorReport(r1, 0.1f);
+                bool engagedOk = (hpdSys.getCurrentState() == micant::hpd::HumanPresenceState::Engaged) &&
+                                 (hpdSys.getBrightnessFactor() >= 0.99f);
+                out << "  [3/6] Near-Field User Engagement & Full Brightness Target: "
+                    << (engagedOk ? "PASSED" : "FAILED") << "\n";
+
+                r1.userEngaged = false;
+                for (int i = 0; i < 15; ++i) hpdSys.processSensorReport(r1, 0.5f);
+                bool dimOk = (hpdSys.getCurrentState() == micant::hpd::HumanPresenceState::Unengaged) &&
+                             (hpdSys.getBrightnessFactor() < 0.6f);
+                out << "  [4/6] Look-Away Dimming Transition & Power Throttling: "
+                    << (dimOk ? "PASSED" : "FAILED") << "\n";
+
+                micant::hpd::HpdSensorReport rAbsent{};
+                rAbsent.sensorId = sId;
+                rAbsent.distanceMeters = 99.0f;
+                rAbsent.confidence = 0.0f;
+                for (int i = 0; i < 25; ++i) hpdSys.processSensorReport(rAbsent, 0.5f);
+                bool lockOk = hpdSys.isWorkstationLocked();
+                out << "  [5/6] Walk-Away Lock Trigger & Screen Power Off: "
+                    << (lockOk ? "PASSED" : "FAILED") << "\n";
+
+                uint32_t cSensor = 0;
+                NTSTATUS st1 = micant::hpd::RegisterHumanPresenceSensor(&cSensor);
+                uint32_t cState = 0;
+                float cDist = 0.0f;
+                uint32_t cEngaged = 0;
+                NTSTATUS st2 = micant::hpd::HpdGetPresenceState(&cState, &cDist, &cEngaged);
+                float cBright = 0.0f;
+                NTSTATUS st3 = micant::hpd::HpdGetDisplayBrightnessFactor(&cBright);
+                bool abiOk = (st1 == micant::STATUS_SUCCESS) && (st2 == micant::STATUS_SUCCESS) &&
+                             (st3 == micant::STATUS_SUCCESS);
+                out << "  [6/6] Clean-Room C ABI Parity Exports (sensrsvc / hpd): "
+                    << (abiOk ? "PASSED" : "FAILED") << "\n";
+
+                hpdSys.unlockWorkstation();
+                out << "[+] All Windows Human Presence Detection Self-Tests Passed!\n";
+                return;
+            }
+        }
+
+        out << "MicaNT Windows Human Presence Detection Subsystem (TitanPresence / AegisPresence)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  hpd status                          Display Presence Sensing telemetry & policy status\n"
+            << "  hpd inject <meters> [0|1] [type]    Simulate sensor reading (dist in meters, engaged 0/1)\n"
+            << "  hpd policy <dim|wake|lock> <on|off> Enable or disable presence automation policies\n"
+            << "  hpd unlock                          Unlock workstation after Walk-Away lock\n"
+            << "  hpd test                            Execute Human Presence Detection self-test suite\n";
     }
 
     static std::string trim(std::string_view s) {

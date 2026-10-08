@@ -186,6 +186,7 @@
 #include "micant/touchpad.hpp"
 #include "micant/ink.hpp"
 #include "micant/spatial_audio.hpp"
+#include "micant/hpd.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -41281,8 +41282,222 @@ void Test_WindowsSpatialAudio_APO_Subsystem() {
     std::cout << "[TEST] Suite 181: Windows Spatial Audio Platform & Audio Processing Objects (APO) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 182: Windows Human Presence Detection & Adaptive Dimming Subsystem
+// ============================================================================
+void Test_WindowsHumanPresenceDetection_Subsystem() {
+    std::cout << "[TEST] Executing Suite 182: Windows Human Presence Detection (HPD) & Adaptive Lock Subsystem...\n";
+
+    // Stage 1: Registration of HPD SCM service and driver/DLL modules in VersionDatabase
+    micant::hpd::RegisterHpdSubsystem();
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    auto modSensr = vdb.FindModule("sensrsvc.dll");
+    auto modHpdSys = vdb.FindModule("hpd.sys");
+    TEST_ASSERT(modSensr != nullptr, "sensrsvc.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modHpdSys != nullptr, "hpd.sys must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto svcRec = scm.getServiceRecord(L"SensorService");
+    TEST_ASSERT(svcRec != nullptr, "SensorService SCM record must exist");
+    TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SensorService must be running");
+
+    // Stage 2: Subsystem instance and sensor registration
+    auto& hpdSys = micant::hpd::HumanPresenceSubsystem::get();
+    hpdSys.setSubsystemEnabled(true);
+    // Reset policy to defaults
+    micant::hpd::HumanPresencePolicy defaultPolicy{};
+    hpdSys.setPolicy(defaultPolicy);
+    hpdSys.unlockWorkstation();
+
+    uint32_t tofSensorId = hpdSys.registerSensor(micant::hpd::PresenceSensorType::TimeOfFlight);
+    uint32_t radarSensorId = hpdSys.registerSensor(micant::hpd::PresenceSensorType::RadarMmWave);
+    TEST_ASSERT(tofSensorId > 0 && radarSensorId > 0, "Registered sensors must return valid IDs");
+    TEST_ASSERT(hpdSys.getSensorCount() >= 2, "Sensor count must reflect registered devices");
+
+    // Stage 3: Initial presence report ingestion - user approaching from distance
+    micant::hpd::HpdSensorReport repApproach1{};
+    repApproach1.sensorId = radarSensorId;
+    repApproach1.distanceMeters = 2.5f;
+    repApproach1.userEngaged = true;
+    hpdSys.processSensorReport(repApproach1, 0.1f);
+
+    micant::hpd::HpdSensorReport repApproach2{};
+    repApproach2.sensorId = radarSensorId;
+    repApproach2.distanceMeters = 1.8f;
+    repApproach2.userEngaged = true;
+    hpdSys.processSensorReport(repApproach2, 0.1f);
+
+    TEST_ASSERT(hpdSys.getCurrentState() == micant::hpd::HumanPresenceState::Approaching,
+                "State must transition to Approaching as user closes distance in intermediate zone");
+
+    // Stage 4: User Engaged near-field detection (inside approachThresholdM <= 1.2m)
+    micant::hpd::HpdSensorReport repEngaged{};
+    repEngaged.sensorId = tofSensorId;
+    repEngaged.distanceMeters = 0.8f;
+    repEngaged.userEngaged = true;
+    hpdSys.processSensorReport(repEngaged, 0.1f);
+
+    TEST_ASSERT(hpdSys.getCurrentState() == micant::hpd::HumanPresenceState::Engaged,
+                "State must transition to Engaged when inside approach threshold and gaze active");
+    TEST_ASSERT(hpdSys.isUserEngaged() == true, "User attention must be reported as engaged");
+    TEST_ASSERT(std::abs(hpdSys.getBrightnessFactor() - 1.0f) < 0.01f, "Display brightness must be 100% when engaged");
+
+    // Stage 5: Look-Away dimming transition - user present at 0.8m but looks away
+    micant::hpd::HpdSensorReport repLookAway{};
+    repLookAway.sensorId = tofSensorId;
+    repLookAway.distanceMeters = 0.8f;
+    repLookAway.userEngaged = false; // Gaze averted
+    for (int i = 0; i < 8; ++i) {
+        hpdSys.processSensorReport(repLookAway, 0.5f);
+    }
+    TEST_ASSERT(hpdSys.getCurrentState() == micant::hpd::HumanPresenceState::Unengaged,
+                "State must transition to Unengaged when user looks away");
+    TEST_ASSERT(hpdSys.getBrightnessFactor() < 0.9f, "Brightness must dim after look-away timeout");
+
+    // Stage 6: Immediate brightness restoration upon gaze return
+    repEngaged.distanceMeters = 0.8f;
+    repEngaged.userEngaged = true;
+    hpdSys.processSensorReport(repEngaged, 0.1f);
+    TEST_ASSERT(hpdSys.getCurrentState() == micant::hpd::HumanPresenceState::Engaged,
+                "State must immediately return to Engaged upon gaze return");
+    TEST_ASSERT(std::abs(hpdSys.getBrightnessFactor() - 1.0f) < 0.01f,
+                "Brightness must immediately restore to 100% upon gaze return");
+
+    // Stage 7: User departure / leaving transition (distance increasing from 1.0m to 2.2m)
+    micant::hpd::HpdSensorReport repLeave1{};
+    repLeave1.sensorId = radarSensorId;
+    repLeave1.distanceMeters = 1.0f;
+    hpdSys.processSensorReport(repLeave1, 0.1f);
+
+    micant::hpd::HpdSensorReport repLeave2{};
+    repLeave2.sensorId = radarSensorId;
+    repLeave2.distanceMeters = 2.2f;
+    hpdSys.processSensorReport(repLeave2, 0.1f);
+
+    TEST_ASSERT(hpdSys.getCurrentState() == micant::hpd::HumanPresenceState::Leaving,
+                "State must transition to Leaving when distance increases past leave threshold");
+
+    // Stage 8: User absent timeout - Walk-Away Lock Trigger
+    micant::hpd::HpdSensorReport repAbsent{};
+    repAbsent.sensorId = radarSensorId;
+    repAbsent.confidence = 0.0f;
+    repAbsent.distanceMeters = 0.0f;
+    for (int i = 0; i < 24; ++i) {
+        hpdSys.processSensorReport(repAbsent, 0.5f);
+    }
+    TEST_ASSERT(hpdSys.getCurrentState() == micant::hpd::HumanPresenceState::NotPresent,
+                "State must be NotPresent when target absent");
+    TEST_ASSERT(hpdSys.isWorkstationLocked() == true, "Workstation must lock automatically upon walk-away timeout");
+    TEST_ASSERT(hpdSys.isSystemAwake() == false, "System display state must be asleep when locked");
+    TEST_ASSERT(hpdSys.getBrightnessFactor() <= defaultPolicy.dimBrightnessFloor + 0.01f,
+                "Brightness factor must reach floor when user absent");
+
+    // Stage 9: Workstation manual unlock & Wake-on-Approach trigger
+    hpdSys.unlockWorkstation();
+    TEST_ASSERT(hpdSys.isWorkstationLocked() == false, "Manual workstation unlock must clear lock state");
+
+    uint64_t wakeBefore = hpdSys.getWakeOnApproachEvents();
+    micant::hpd::HpdSensorReport repPreWake{};
+    repPreWake.sensorId = tofSensorId;
+    repPreWake.distanceMeters = 2.0f;
+    repPreWake.userEngaged = true;
+    hpdSys.processSensorReport(repPreWake, 0.1f);
+
+    micant::hpd::HpdSensorReport repWake{};
+    repWake.sensorId = tofSensorId;
+    repWake.distanceMeters = 0.9f;
+    repWake.userEngaged = true;
+    hpdSys.processSensorReport(repWake, 0.1f);
+
+    TEST_ASSERT(hpdSys.isSystemAwake() == true, "System display must wake on approach");
+    TEST_ASSERT(hpdSys.getWakeOnApproachEvents() > wakeBefore, "Wake-on-Approach counter must increment");
+
+    // Stage 10: Policy reconfiguration
+    micant::hpd::HumanPresencePolicy customPolicy;
+    customPolicy.approachThresholdM = 0.7f;
+    customPolicy.leaveThresholdM = 1.5f;
+    customPolicy.dimBrightnessFloor = 0.10f;
+    customPolicy.walkAwayLockTimeoutSec = 5;
+    customPolicy.adaptiveDimmingEnabled = false;
+    hpdSys.setPolicy(customPolicy);
+
+    auto retrievedPolicy = hpdSys.getPolicy();
+    TEST_ASSERT(std::abs(retrievedPolicy.approachThresholdM - 0.7f) < 0.001f, "Policy approach threshold must match");
+    TEST_ASSERT(std::abs(retrievedPolicy.dimBrightnessFloor - 0.10f) < 0.001f, "Policy dim brightness floor must match");
+    TEST_ASSERT(retrievedPolicy.adaptiveDimmingEnabled == false, "Policy adaptive dimming flag must be false");
+
+    hpdSys.setPolicy(defaultPolicy);
+
+    // Stage 11: Clean-room C ABI parity export validation
+    uint32_t cSensor = 0;
+    NTSTATUS stReg = micant::hpd::RegisterHumanPresenceSensor(&cSensor);
+    TEST_ASSERT(stReg == micant::STATUS_SUCCESS && cSensor > 0, "RegisterHumanPresenceSensor ABI must succeed");
+
+    micant::hpd::HpdSensorReport abiReport{};
+    abiReport.sensorId = cSensor;
+    abiReport.distanceMeters = 0.75f;
+    abiReport.userEngaged = true;
+    abiReport.confidence = 0.95f;
+    NTSTATUS stProc = micant::hpd::HpdProcessSensorReading(cSensor, &abiReport);
+    TEST_ASSERT(stProc == micant::STATUS_SUCCESS, "HpdProcessSensorReading ABI must succeed");
+
+    uint32_t stateVal = 0;
+    float distVal = 0.0f;
+    uint32_t engagedVal = 0;
+    NTSTATUS stState = micant::hpd::HpdGetPresenceState(&stateVal, &distVal, &engagedVal);
+    TEST_ASSERT(stState == micant::STATUS_SUCCESS, "HpdGetPresenceState ABI must succeed");
+    TEST_ASSERT(stateVal == static_cast<uint32_t>(micant::hpd::HumanPresenceState::Engaged),
+                "HpdGetPresenceState ABI must return Engaged state");
+    TEST_ASSERT(std::abs(distVal - 0.75f) < 0.01f, "HpdGetPresenceState ABI must return reported distance");
+    TEST_ASSERT(engagedVal == 1, "HpdGetPresenceState ABI must return engaged == 1");
+
+    float brightVal = 0.0f;
+    NTSTATUS stBright = micant::hpd::HpdGetDisplayBrightnessFactor(&brightVal);
+    TEST_ASSERT(stBright == micant::STATUS_SUCCESS && std::abs(brightVal - 1.0f) < 0.01f,
+                "HpdGetDisplayBrightnessFactor ABI must succeed with 100% brightness");
+
+    micant::hpd::HumanPresencePolicy polAbi{};
+    NTSTATUS stPolGet = micant::hpd::HpdGetPolicy(&polAbi);
+    TEST_ASSERT(stPolGet == micant::STATUS_SUCCESS, "HpdGetPolicy ABI must succeed");
+    NTSTATUS stPolSet = micant::hpd::HpdConfigurePolicy(&polAbi);
+    TEST_ASSERT(stPolSet == micant::STATUS_SUCCESS, "HpdConfigurePolicy ABI must succeed");
+
+    TEST_ASSERT(micant::hpd::RegisterHumanPresenceSensor(nullptr) == micant::STATUS_INVALID_PARAMETER, "Null sensor ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::hpd::HpdProcessSensorReading(cSensor, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null report ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::hpd::HpdGetPresenceState(nullptr, &distVal, &engagedVal) == micant::STATUS_INVALID_PARAMETER, "Null state ptr must return STATUS_INVALID_PARAMETER");
+
+    // Stage 12: Multi-Threaded Sensor Report Concurrency Stress Test
+    std::atomic<uint32_t> stressReportsProcessed{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        (void)t;
+        stressThreads.emplace_back([&]() {
+            uint32_t threadSensor = hpdSys.registerSensor(micant::hpd::PresenceSensorType::RadarMmWave);
+            for (int r = 0; r < 25; ++r) {
+                micant::hpd::HpdSensorReport sRep{};
+                sRep.sensorId = threadSensor;
+                sRep.distanceMeters = 0.5f + (static_cast<float>(r) * 0.05f);
+                sRep.userEngaged = (r % 2 == 0);
+                sRep.confidence = 0.90f;
+                hpdSys.processSensorReport(sRep, 0.05f);
+                stressReportsProcessed++;
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressReportsProcessed.load() == 100, "100 concurrent sensor reports must be processed without race conditions");
+
+    std::cout << "[TEST] Suite 182: Windows Human Presence Detection & Adaptive Lock Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite181")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite182")) {
+        RUN_TEST(Test_WindowsHumanPresenceDetection_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite181") {
         RUN_TEST(Test_WindowsSpatialAudio_APO_Subsystem);
         return g_FailedTests;
     }
@@ -41772,6 +41987,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem);
     RUN_TEST(Test_WindowsInk_PenDigitizer_ISF_Subsystem);
     RUN_TEST(Test_WindowsSpatialAudio_APO_Subsystem);
+    RUN_TEST(Test_WindowsHumanPresenceDetection_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
