@@ -185,6 +185,7 @@
 #include "micant/wsa.hpp"
 #include "micant/touchpad.hpp"
 #include "micant/ink.hpp"
+#include "micant/spatial_audio.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -41091,8 +41092,201 @@ void Test_WindowsInk_PenDigitizer_ISF_Subsystem() {
     std::cout << "[TEST] Suite 180: Windows Ink Workspace, Ink Serialized Format (ISF) & Pen Digitizer Subsystem PASSED.\n";
 }
 
+void Test_WindowsSpatialAudio_APO_Subsystem() {
+    std::cout << "[TEST] Running Suite 181: Windows Spatial Audio Platform & Audio Processing Objects (APO) Subsystem...\n";
+
+    // Stage 1: Subsystem Registration & SCM Service Initialization
+    spatial::RegisterSpatialAudioSubsystem();
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("audioengine.dll") != nullptr, "audioengine.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("spatialaudioclient.dll") != nullptr, "spatialaudioclient.dll must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto svcRec = scm.getServiceRecord(L"SpatialAudioService");
+    TEST_ASSERT(svcRec != nullptr, "SpatialAudioService must be registered in Service Control Manager");
+    TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SpatialAudioService must be RUNNING");
+
+    // Stage 2: Spatial Audio Subsystem Coordinator & Stream Allocation
+    auto& spatialSys = spatial::SpatialAudioSubsystem::get();
+    TEST_ASSERT(spatialSys.isSubsystemEnabled(), "SpatialAudioSubsystem must be enabled");
+
+    uint32_t streamId = spatialSys.createStream(64, 48000);
+    auto stream = spatialSys.getStream(streamId);
+    TEST_ASSERT(stream != nullptr, "SpatialAudioStream must be successfully created");
+    TEST_ASSERT(stream->getMaxObjects() == 64, "Max dynamic object limit must be 64");
+    TEST_ASSERT(stream->getSampleRate() == 48000, "Sample rate must match requested 48000 Hz");
+
+    // Stage 3: Dynamic Spatial Object Allocation & Capacity Limiting
+    std::vector<std::shared_ptr<spatial::SpatialAudioObject>> objects;
+    for (uint32_t i = 0; i < 64; ++i) {
+        auto obj = stream->activateSpatialAudioObject(spatial::AudioObjectType_Dynamic);
+        TEST_ASSERT(obj != nullptr, "Dynamic audio object creation must succeed within capacity");
+        objects.push_back(obj);
+    }
+    TEST_ASSERT(stream->getActiveObjectCount() == 64, "Active object count must reach 64");
+    auto overflowObj = stream->activateSpatialAudioObject(spatial::AudioObjectType_Dynamic);
+    TEST_ASSERT(overflowObj == nullptr, "Exceeding max dynamic objects must return nullptr");
+
+    for (size_t i = 1; i < objects.size(); ++i) {
+        stream->releaseSpatialAudioObject(objects[i]->getId());
+    }
+    TEST_ASSERT(stream->getActiveObjectCount() == 1, "Active object count must reduce to 1 after release");
+
+    // Stage 4: 3D Cartesian Positioning & Spherical Parameter Mapping
+    auto targetObj = objects[0];
+    targetObj->setPosition(2.0f, 1.0f, 3.0f);
+    targetObj->setVolume(1.0f);
+    auto pos = targetObj->getPosition();
+    TEST_ASSERT(pos.x == 2.0f && pos.y == 1.0f && pos.z == 3.0f, "Target object position must match set coordinates");
+
+    // Stage 5: Woodworth Interaural Time Difference (ITD) Delay Line Synthesis
+    spatial::HrtfBinauralEngine hrtf;
+    float impulseMono[100];
+    std::fill(impulseMono, impulseMono + 100, 0.0f);
+    impulseMono[0] = 1.0f;
+
+    float outL[100], outR[100];
+    hrtf.spatializePoint(impulseMono, outL, outR, 100, 48000, spatial::SpatialPosition{5.0f, 0.0f, 0.01f});
+
+    size_t rightPeak = 0, leftPeak = 0;
+    for (size_t i = 0; i < 100; ++i) {
+        if (outR[i] > 0.01f && rightPeak == 0) rightPeak = i;
+        if (outL[i] > 0.01f && leftPeak == 0) leftPeak = i;
+    }
+    TEST_ASSERT(rightPeak <= leftPeak, "Right ear must receive sound earlier than left ear for sound source on the right (+X)");
+
+    // Stage 6: Interaural Level Difference (ILD) Head-Shadowing Attenuation
+    hrtf.reset();
+    float toneMono[480];
+    for (size_t i = 0; i < 480; ++i) toneMono[i] = 0.5f;
+
+    float toneL[480], toneR[480];
+    hrtf.spatializePoint(toneMono, toneL, toneR, 480, 48000, spatial::SpatialPosition{-3.0f, 0.0f, 1.0f});
+    float sumL = 0.0f, sumR = 0.0f;
+    for (size_t i = 0; i < 480; ++i) {
+        sumL += std::abs(toneL[i]);
+        sumR += std::abs(toneR[i]);
+    }
+    TEST_ASSERT(sumL > sumR * 2.0f, "Left ear ILD gain must dominate for sound source located on left (-X)");
+
+    // Stage 7: Inverse Distance Sound Attenuation Curves
+    float nearL[480], nearR[480], farL[480], farR[480];
+    hrtf.reset();
+    hrtf.spatializePoint(toneMono, nearL, nearR, 480, 48000, spatial::SpatialPosition{0.0f, 0.0f, 1.0f},
+                         spatial::DistanceDecayModel::NaturalInverse, 1.0f, 50.0f);
+    hrtf.reset();
+    hrtf.spatializePoint(toneMono, farL, farR, 480, 48000, spatial::SpatialPosition{0.0f, 0.0f, 10.0f},
+                         spatial::DistanceDecayModel::NaturalInverse, 1.0f, 50.0f);
+    float nearPower = 0.0f, farPower = 0.0f;
+    for (size_t i = 0; i < 480; ++i) {
+        nearPower += nearL[i] * nearL[i];
+        farPower  += farL[i] * farL[i];
+    }
+    TEST_ASSERT(nearPower > farPower * 10.0f, "1m distance must exhibit substantially higher acoustic energy than 10m");
+
+    // Stage 8: System Effects APO (sAPO) PeakLimiter Threshold Containment
+    spatial::PeakLimiterAPO limiter(0.6f);
+    TEST_ASSERT(limiter.getThreshold() == 0.6f, "PeakLimiter threshold must be 0.6f");
+
+    std::vector<float> hotSignal = {1.5f, -2.0f, 1.2f, -1.8f};
+    std::vector<float> limitedSignal(4, 0.0f);
+    spatial::ApoBuffer inApo{hotSignal.data(), 2, 2, 48000};
+    spatial::ApoBuffer outApo{limitedSignal.data(), 2, 2, 48000};
+
+    limiter.apoProcess(inApo, outApo);
+    for (float s : limitedSignal) {
+        TEST_ASSERT(std::abs(s) <= 0.6001f, "PeakLimiter APO must strictly contain audio samples within threshold");
+    }
+
+    // Stage 9: System Effects APO (sAPO) ParametricEQ Gain Scaling
+    spatial::ParametricEqAPO eq(6.0f, 6.0f, 6.0f);
+    std::vector<float> quietSignal = {0.1f, 0.1f};
+    std::vector<float> eqSignal(2, 0.0f);
+    spatial::ApoBuffer inEq{quietSignal.data(), 1, 2, 48000};
+    spatial::ApoBuffer outEq{eqSignal.data(), 1, 2, 48000};
+
+    eq.apoProcess(inEq, outEq);
+    TEST_ASSERT(eqSignal[0] > quietSignal[0] * 1.8f, "ParametricEQ APO must apply gain boost as configured");
+
+    // Stage 10: Spatial Audio Object Stream Processing Pipeline
+    targetObj->setPosition(0.0f, 0.0f, 1.0f);
+    float* objBuffer = targetObj->getBuffer(480);
+    for (size_t i = 0; i < 480; ++i) {
+        objBuffer[i] = 0.25f;
+    }
+
+    std::vector<float> renderedMixed;
+    stream->processAudioBatch(renderedMixed);
+    TEST_ASSERT(renderedMixed.size() == 960, "Interleaved stereo batch must contain 960 samples (480 frames x 2 ch)");
+    TEST_ASSERT(stream->getProcessedBatches() >= 1, "Processed batches counter must increment");
+    TEST_ASSERT(stream->getRenderedFrames() >= 480, "Rendered frames counter must track total audio duration");
+
+    // Stage 11: Clean-Room Dynamic C ABI Parity Exports
+    void* pClientAbi = nullptr;
+    NTSTATUS stClient = spatial::CreateSpatialAudioClient(&pClientAbi);
+    TEST_ASSERT(stClient == STATUS_SUCCESS && pClientAbi != nullptr, "CreateSpatialAudioClient export must succeed");
+
+    void* pObjAbi = nullptr;
+    NTSTATUS stObj = spatial::CreateSpatialAudioObject(pClientAbi, spatial::AudioObjectType_Dynamic, &pObjAbi);
+    TEST_ASSERT(stObj == STATUS_SUCCESS && pObjAbi != nullptr, "CreateSpatialAudioObject export must succeed");
+
+    void* pApoAbi = nullptr;
+    NTSTATUS stApo = spatial::RegisterAudioProcessingObject("PeakLimiter", &pApoAbi);
+    TEST_ASSERT(stApo == STATUS_SUCCESS && pApoAbi != nullptr, "RegisterAudioProcessingObject export must succeed for PeakLimiter");
+
+    float dspIn[2] = {1.5f, -1.5f};
+    float dspOut[2] = {0.0f, 0.0f};
+    NTSTATUS stDsp = spatial::ApoProcessAudioBuffer(pApoAbi, dspIn, dspOut, 1);
+    TEST_ASSERT(stDsp == STATUS_SUCCESS, "ApoProcessAudioBuffer export must succeed");
+
+    float hrtfMono[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+    float hrtfL[4] = {0.0f}, hrtfR[4] = {0.0f};
+    NTSTATUS stHrtf = spatial::SpatialAudioProcessHrtf(hrtfMono, hrtfL, hrtfR, 4, 1.0f, 0.0f, 1.0f);
+    TEST_ASSERT(stHrtf == STATUS_SUCCESS, "SpatialAudioProcessHrtf export must return STATUS_SUCCESS");
+
+    delete static_cast<std::shared_ptr<spatial::SpatialAudioStream>*>(pClientAbi);
+    delete static_cast<std::shared_ptr<spatial::SpatialAudioObject>*>(pObjAbi);
+    delete static_cast<std::shared_ptr<spatial::IAudioProcessingObjectRT>*>(pApoAbi);
+
+    // Stage 12: Multi-Threaded Spatial Audio Object Stream Concurrency Stress Test
+    std::atomic<uint32_t> stressBatchesRendered{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([&, t]() {
+            uint32_t localStreamId = spatialSys.createStream(16, 48000);
+            auto localStream = spatialSys.getStream(localStreamId);
+            if (localStream) {
+                auto lObj = localStream->activateSpatialAudioObject(spatial::AudioObjectType_Dynamic);
+                if (lObj) {
+                    lObj->setPosition(static_cast<float>(t) - 1.5f, 0.0f, 2.0f);
+                    float* b = lObj->getBuffer(480);
+                    std::fill(b, b + 480, 0.1f);
+                }
+                for (int b = 0; b < 25; ++b) {
+                    std::vector<float> mixedBuf;
+                    localStream->processAudioBatch(mixedBuf);
+                    stressBatchesRendered++;
+                }
+            }
+            spatialSys.destroyStream(localStreamId);
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressBatchesRendered.load() == 100, "100 multi-threaded spatial audio batches must be rendered without race conditions");
+
+    spatialSys.destroyStream(streamId);
+
+    std::cout << "[TEST] Suite 181: Windows Spatial Audio Platform & Audio Processing Objects (APO) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite180")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite181")) {
+        RUN_TEST(Test_WindowsSpatialAudio_APO_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite180") {
         RUN_TEST(Test_WindowsInk_PenDigitizer_ISF_Subsystem);
         return g_FailedTests;
     }
@@ -41577,6 +41771,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSubsystemForAndroid_WSA_Subsystem);
     RUN_TEST(Test_WindowsPrecisionTouchpad_DirectManipulation_Subsystem);
     RUN_TEST(Test_WindowsInk_PenDigitizer_ISF_Subsystem);
+    RUN_TEST(Test_WindowsSpatialAudio_APO_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

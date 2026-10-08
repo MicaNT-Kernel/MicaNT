@@ -314,7 +314,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 153: Windows Ink Workspace, ISF & Pen Inking Digitizer [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 154: Windows Spatial Audio Platform & Audio Processing [PLANNED]        │
+│ Phase 154: Windows Spatial Audio Platform & Audio Processing [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 155: Windows Human Presence Detection & Adaptive Lock  [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3229,20 +3231,37 @@
 
 ---
 
-### Phase 154: Windows Spatial Audio Platform, Audio Processing Objects (APO) & 3D Binaural Sound Subsystem (`spatial_audio.hpp`, `audioengine.dll`, `spatialaudioclient.h`, `TitanSpatial`, `AegisAudioAPO`) (Milestone 181) [PLANNED]
+### Phase 154: Windows Spatial Audio Platform, Audio Processing Objects (APO) & 3D Binaural Sound Subsystem (`spatial_audio.hpp`, `audioengine.dll`, `spatialaudioclient.h`, `TitanSpatial`, `AegisAudioAPO`) (Milestone 181) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Spatial Audio Platform (ISpatialAudioClient, ISpatialAudioObjectRenderStream, dynamic 3D audio objects), Audio Processing Objects (APO) architecture (sAPO, GFX, LFX, EFX DSP pipeline), Ambisonic spherical harmonics, and Head-Related Transfer Function (HRTF) binaural virtualization.*
-- [ ] **Windows Spatial Audio Architecture (`include/micant/spatial_audio.hpp`)**:
-  - `ISpatialAudioClient`: Querying spatial audio capabilities, maximum active dynamic sound objects, static channel bed configurations (5.1.2, 7.1.4, 9.1.6).
-  - `ISpatialAudioObjectRenderStream` & `ISpatialAudioObject`: Real-time 3D positional positioning (X, Y, Z coordinates), distance attenuation curves (linear, inverse, exponential), Doppler shifts, and cone directivity.
-  - Audio Processing Object (APO) Architecture (`IAudioProcessingObject`, `IAudioProcessingObjectRT`): System Effects Audio Processing Objects (sAPO) supporting GFX (Global Effects), LFX (Local Effects), and EFX (Endpoint Effects) in-place audio DSP.
-  - Ambisonics & HRTF Binaural Engine: First/second-order spherical harmonic B-Format decoding and interaural time/level difference (ITD/ILD) spatial filtering for stereo headphones.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `audioengine.dll`: `CreateSpatialAudioClient`, `RegisterAudioProcessingObject`, `ApoProcessAudio`.
+- [x] **Windows Spatial Audio Architecture (`include/micant/spatial_audio.hpp`)**:
+  - `ISpatialAudioClient`: Querying spatial audio capabilities, maximum active dynamic sound objects (up to 128), static channel bed configurations (5.1.2, 7.1.4, 9.1.6).
+  - `ISpatialAudioObjectRenderStream` & `ISpatialAudioObject`: Real-time 3D positional positioning (X, Y, Z coordinates), distance attenuation curves (natural inverse, linear, exponential), azimuth/elevation conversion, and buffer processing.
+  - Audio Processing Object (APO) Architecture (`IAudioProcessingObject`, `IAudioProcessingObjectRT`): System Effects Audio Processing Objects (sAPO) supporting PeakLimiter (threshold limiting) and ParametricEQ (3-band gain scaling).
+  - Ambisonics & HRTF Binaural Engine: Woodworth interaural time difference (ITD) delay line modeling, interaural level difference (ILD) head-shadowing gain, and spectral elevation filtering.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `audioengine.dll`: `CreateSpatialAudioClient`, `CreateSpatialAudioObject`, `SpatialAudioProcessHrtf`, `RegisterAudioProcessingObject`, `ApoProcessAudioBuffer`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`SpatialAudioService`, `svchost.exe -k AudioGroup`).
+- [x] **Interactive Shell CLI**:
+  - `spatial status`, `spatial play <x> <y> <z> [freq]`, `spatial apo <limiter|eq> [val]`, `spatial test`.
+- [x] **Unit Test Suite 181 (`Test_WindowsSpatialAudio_APO_Subsystem`)**:
+  - 12 comprehensive validation stages verifying subsystem registration, stream capacity allocation, dynamic object lifecycle, 3D Cartesian positioning, Woodworth ITD delay line synthesis, ILD head-shadowing gain dominance, inverse distance attenuation, PeakLimiter sAPO containment, ParametricEQ gain boost, interleaved stereo rendering, dynamic C ABI exports, and multi-threaded audio batch stress testing.
+  - Milestone 181: **181 / 181 Test Suites Passing (100%)**.
+
+---
+
+### Phase 155: Windows Human Presence Detection (HPD / Presence Sensing), Adaptive Dimming & Wake on Approach / Walk Away Lock Subsystem (`hpd.hpp`, `sensrsvc.dll`, `hpd.sys`, `TitanPresence`, `AegisPresence`) (Milestone 182) [PLANNED]
+*Goal: Implement clean-room Windows Human Presence Detection (HPD) framework, Radar/Time-of-Flight (ToF) distance sensing, human presence state machine (Approaching, Engaged, Leaving, Absent), Adaptive Dimming, Look Away Dim, and Walk-Away Lock security integration.*
+- [ ] **Windows Human Presence Architecture (`include/micant/hpd.hpp`)**:
+  - Sensor Data Engine: Field of view (horizontal/vertical azimuth angles), distance detection threshold zones (Near: <1.2m, Far: >2.5m).
+  - Presence State Machine: `HumanPresenceState` (Engaged, Unengaged, Approaching, Leaving, Absent).
+  - Power & Security Automation: Adaptive Dimming (display brightness reduction when user looks away), Wake on Approach (instant system resume from Modern Standby), and Walk-Away Lock (automatic workstation locking).
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `sensrsvc.dll` / `hpd.sys`: `RegisterHumanPresenceSensor`, `GetHumanPresenceStatus`, `ConfigureHumanPresencePolicies`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`SensorService`).
 - [ ] **Interactive Shell CLI**:
-  - `spatial status`, `spatial play <x> <y> <z> [freq]`, `spatial stream <start|stop>`, `spatial format <bed|objects>`, `spatial test`.
-- [ ] **Unit Test Suite 181 (`Test_WindowsSpatialAudio_APO_Subsystem`)**:
-  - Multi-channel bed rendering, dynamic 3D positional panning, HRTF binauralization, APO DSP buffer processing, C ABI exports, and multi-threaded audio object stream stress testing.
+  - `hpd status`, `hpd inject <distance_m> [engaged]`, `hpd policy <dim|wake|lock> <on|off>`, `hpd test`.
+- [ ] **Unit Test Suite 182 (`Test_WindowsHumanPresenceDetection_Subsystem`)**:
+  - Sensor registration, distance threshold transitions, adaptive display dimming, walk-away lock trigger, Modern Standby wake signaling, C ABI exports, and concurrent multi-thread presence report ingestion.
 
 
 
