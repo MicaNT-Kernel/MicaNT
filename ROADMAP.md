@@ -340,7 +340,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 166: Windows ReFS (Resilient File System) (refs.sys)    [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 167: Windows Cluster Shared Volume File System (csvfs)  [PLANNED]        │
+│ Phase 167: Windows Cluster Shared Volume File System (csvfs)  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 168: Windows Container Storage & Isolation Filter(wcifs)[PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3498,21 +3500,38 @@
 
 ---
 
-### Phase 167: Windows Cluster Shared Volume File System (CSVFS v2.0 / `csvfs.sys`, `clussvc.exe`, `TitanCSVFS`, `FailoverClustering`) (Milestone 194) [PLANNED]
+### Phase 167: Windows Cluster Shared Volume File System (CSVFS v2.0 / `csvfs.sys`, `clussvc.exe`, `TitanCSVFS`, `FailoverClustering`) (Milestone 194) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Cluster Shared Volume File System (CSVFS v2.0 / `csvfs.sys`, `clussvc.exe`), enabling multi-node concurrent read/write access to shared ReFS/NTFS storage volumes with coordinated metadata delegation, direct I/O path routing, and fault-tolerant failover orchestration.*
-- [ ] **CSVFS Core File System Engine (`include/micant/csvfs.hpp`)**:
+- [x] **CSVFS Core File System Engine (`include/micant/csvfs.hpp`)**:
   - Filter and Mini-Redirector Architecture: CSVFS layered on top of underlying NTFS/ReFS storage volumes.
   - Direct I/O Path vs. Redirected I/O Path: Uninhibited parallel block read/write I/O directly to underlying disk, bypassing cluster network for pure data operations.
   - Metadata Synchronization & Delegation: Routing all namespace and allocation metadata mutations through the assigned Coordinator Node via cluster RPC.
   - FSCTL Control Surface: `FSCTL_CSV_CONTROL`, `CSV_QUERY_VOLUME_REDIRECT_STATE`, `CSV_QUERY_FILE_REDIRECT_STATE`, `FSCTL_CSV_INTERNAL_OPTIMIZE_FOR_WRITE`.
   - Failover & Dynamic Rebalancing: Dynamic coordinator failover, pause/resume I/O queuing during cluster re-synchronization.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `csvfs.sys` / `clussvc.exe`: `CsvfsInitializeSubsystem`, `CsvfsMountVolume`, `CsvfsQueryRedirectState`, `CsvfsDirectIoRead`, `CsvfsDirectIoWrite`, `CsvfsDelegateMetadataOperation`, `CsvfsTriggerFailover`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`CSVFS`, file system filter driver).
-- [ ] **Interactive Shell CLI**:
+- [x] **Interactive Shell CLI**:
   - `csvfs status`, `csvfs volumes`, `csvfs nodes`, `csvfs redirect`, `csvfs failover`, `csvfs test`.
-- [ ] **Unit Test Suite 194 (`Test_WindowsClusterSharedVolume_CSVFS_Subsystem`)**:
+- [x] **Unit Test Suite 194 (`Test_WindowsClusterSharedVolume_CSVFS_Subsystem`)**:
   - Comprehensive validation stages verifying CSVFS volume mounting, coordinator delegation, direct block I/O path execution, redirected I/O failback, volume pause/resume queuing, multi-node concurrent I/O stress, and Win32 C ABI exports.
+
+---
+
+### Phase 168: Windows Container Storage & Host Compute System Isolation (`wcifs.sys`, `wcnfs.sys`, `hcsshim`, `TitanContainerStorage`) (Milestone 195) [PLANNED]
+*Goal: Implement clean-room Windows Container Storage & Isolation Subsystem (`wcifs.sys`, `wcnfs.sys`, `hcsshim`), providing copy-on-write overlay layers, container storage virtualisation, registry layer merging, process silo isolation, and Host Compute Service (HCS) container lifecycle control.*
+- [ ] **Container Storage Filter Engine (`include/micant/wcifs.hpp`)**:
+  - Windows Container Isolation Filter (`wcifs.sys`): Multi-layer read-only base image merging with read/write scratch layer.
+  - Windows Container Namespace Filter (`wcnfs.sys`): Per-container registry hive virtualization and symbolic link redirection.
+  - Process Silos: Isolated server silos (`JOB_OBJECT_SILO`) separating object namespaces, handles, and networking.
+  - Host Compute Service (HCS / `vmcompute.exe`, `hcs.dll`): Compute system container creation, initialization, execution, and termination.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `wcifs.sys` / `hcs.dll`: `WcifsInitializeSubsystem`, `WcifsCreateLayer`, `WcifsAttachContainerStorage`, `WcifsReadLayeredFile`, `WcifsWriteCoWLayeredFile`, `HcsCreateComputeSystem`, `HcsStartComputeSystem`, `HcsTerminateComputeSystem`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`Wcifs`, file system filter driver; `vmcompute`, Host Compute Service).
+- [ ] **Interactive Shell CLI**:
+  - `wcn status`, `wcn containers`, `wcn layers`, `wcn run <image>`, `wcn stop <id>`, `wcn test`.
+- [ ] **Unit Test Suite 195 (`Test_WindowsContainerStorage_Wcifs_Subsystem`)**:
+  - Comprehensive validation stages verifying multi-layer image stack composition, Copy-on-Write write divergence, registry hive virtualization, silo namespace isolation, HCS container lifecycle, and Win32 C ABI exports.
 
 
 

@@ -198,6 +198,7 @@
 #include "micant/hotpatch.hpp"
 #include "micant/hyperv.hpp"
 #include "micant/refs.hpp"
+#include "micant/csvfs.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -43538,8 +43539,175 @@ void Test_WindowsReFS_ResilientFileSystem_Subsystem() {
     std::cout << "[TEST] Suite 193: Windows ReFS (Resilient File System v3.12) Subsystem PASSED.\n";
 }
 
+void Test_WindowsClusterSharedVolume_CSVFS_Subsystem() {
+    std::cout << "[TEST] Running Suite 194: Windows Cluster Shared Volume File System (CSVFS v2.0) Subsystem...\n";
+
+    // 1. SCM Driver & Service Registration
+    micant::csvfs::RegisterCsvfsSubsystem();
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto csvfsSvc = scm.getServiceRecord(L"CSVFS");
+    TEST_ASSERT(csvfsSvc != nullptr, "CSVFS kernel driver must be registered in SCM");
+    TEST_ASSERT(csvfsSvc->serviceType == micant::scm::SERVICE_FILE_SYSTEM_DRIVER, "CSVFS must be registered as SERVICE_FILE_SYSTEM_DRIVER");
+    TEST_ASSERT(csvfsSvc->startType == micant::scm::SERVICE_SYSTEM_START, "CSVFS must be configured for SERVICE_SYSTEM_START");
+
+    auto clusSvc = scm.getServiceRecord(L"ClusSvc");
+    TEST_ASSERT(clusSvc != nullptr, "Cluster Service (clussvc.exe) must be registered in SCM");
+    TEST_ASSERT(clusSvc->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "ClusSvc must be SERVICE_WIN32_OWN_PROCESS");
+
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("csvfs.sys") != nullptr, "csvfs.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("clussvc.exe") != nullptr, "clussvc.exe must be registered in VersionDatabase");
+
+    // 2. Multi-Node Cluster Topology
+    auto& sys = micant::csvfs::CsvfsSubsystem::get();
+    TEST_ASSERT(sys.isInitialized(), "CsvfsSubsystem must be initialized");
+    TEST_ASSERT(sys.getNodeCount() >= 3, "Cluster must have at least 3 initial nodes");
+
+    auto node1 = sys.getNode(1);
+    TEST_ASSERT(node1 != nullptr, "Node 1 must exist");
+    TEST_ASSERT(node1->isCoordinator, "Node 1 must be initial Coordinator");
+    TEST_ASSERT(node1->hasDirectStorageAccess, "Node 1 must have direct storage access");
+
+    auto node2 = sys.getNode(2);
+    TEST_ASSERT(node2 != nullptr && !node2->isCoordinator, "Node 2 must be a worker node");
+
+    // 3. Cluster Shared Volume Mounting
+    auto vol1 = sys.getVolume("C:\\ClusterStorage\\Volume1");
+    TEST_ASSERT(vol1 != nullptr, "Primary CSV Volume C:\\ClusterStorage\\Volume1 must exist");
+    TEST_ASSERT(vol1->getCoordinatorNodeId() == 1, "Coordinator Node ID must initially be 1");
+    TEST_ASSERT(vol1->getVolumeState() == micant::csvfs::CsvVolumeState::Online, "Volume state must be ONLINE");
+    TEST_ASSERT(vol1->getRedirectState() == micant::csvfs::CsvRedirectState::DirectIo, "Volume redirect state must be DirectIo");
+    TEST_ASSERT(vol1->getCapacityMb() == 2097152, "Volume capacity must be 2 TB");
+
+    // 4. Coordinator Metadata Delegation (File Creation, Allocation, Rename)
+    uint32_t metaStatus = 0;
+    bool metaCreateOk = vol1->delegateMetadata(micant::csvfs::CsvMetadataOp::CreateFile, "\\VirtualMachines\\ClusterVM1.vhdx", 100 * 1024 * 1024ULL, &metaStatus, 2);
+    TEST_ASSERT(metaCreateOk && metaStatus == 0, "Delegated file creation from Node 2 to Coordinator must succeed");
+
+    auto vmFile = vol1->getFile("\\VirtualMachines\\ClusterVM1.vhdx");
+    TEST_ASSERT(vmFile != nullptr, "Created file must be present in CSV namespace");
+    TEST_ASSERT(vmFile->getSizeBytes() == 100 * 1024 * 1024ULL, "File size must match allocated parameter");
+
+    bool metaAllocOk = vol1->delegateMetadata(micant::csvfs::CsvMetadataOp::SetAllocationSize, "\\VirtualMachines\\ClusterVM1.vhdx", 200 * 1024 * 1024ULL, &metaStatus, 3);
+    TEST_ASSERT(metaAllocOk && metaStatus == 0, "Delegated allocation resizing from Node 3 must succeed");
+    TEST_ASSERT(vmFile->getSizeBytes() == 200 * 1024 * 1024ULL, "Resized file size must match new allocation");
+
+    // 5. Direct I/O Path Execution (Parallel Reads and Writes)
+    const char writePayload[] = "CSVFS_V2_DIRECT_IO_BLOCK_WRITE_TEST_DATA_PAYLOAD";
+    uint32_t directWritten = 0;
+    bool directWriteOk = vol1->directIoWrite("\\VirtualMachines\\ClusterVM1.vhdx", 0, writePayload, sizeof(writePayload), &directWritten, 2);
+    TEST_ASSERT(directWriteOk, "Direct I/O write from worker Node 2 must succeed");
+    TEST_ASSERT(directWritten == sizeof(writePayload), "Direct bytes written must match payload size");
+    TEST_ASSERT(vol1->getTotalDirectWrites() > 0, "Volume total direct writes must increment");
+
+    char directReadBuf[64]{};
+    uint32_t directReadBytes = 0;
+    bool directReadOk = vol1->directIoRead("\\VirtualMachines\\ClusterVM1.vhdx", 0, directReadBuf, sizeof(writePayload), &directReadBytes, 3);
+    TEST_ASSERT(directReadOk, "Direct I/O read from worker Node 3 must succeed");
+    TEST_ASSERT(directReadBytes == sizeof(writePayload), "Direct bytes read must match payload size");
+    TEST_ASSERT(vol1->getTotalDirectReads() > 0, "Volume total direct reads must increment");
+
+    // 6. Network Redirect Path Routing Failback
+    vol1->setRedirectState(micant::csvfs::CsvRedirectState::FileRedirected);
+    TEST_ASSERT(vol1->getRedirectState() == micant::csvfs::CsvRedirectState::FileRedirected, "Volume redirect state must be FileRedirected");
+
+    uint32_t redirWritten = 0;
+    bool redirWriteOk = vol1->directIoWrite("\\VirtualMachines\\ClusterVM1.vhdx", 4096, writePayload, sizeof(writePayload), &redirWritten, 2);
+    TEST_ASSERT(redirWriteOk, "Redirected write must succeed over network routing");
+    TEST_ASSERT(vol1->getTotalRedirectedOps() > 0, "Volume total redirected operations must increment");
+
+    uint32_t redirReadBytes = 0;
+    bool redirReadOk = vol1->directIoRead("\\VirtualMachines\\ClusterVM1.vhdx", 4096, directReadBuf, sizeof(writePayload), &redirReadBytes, 3);
+    TEST_ASSERT(redirReadOk, "Redirected read must succeed over network routing");
+
+    // 7. User-Requested Maintenance Redirection
+    vol1->setRedirectState(micant::csvfs::CsvRedirectState::UserRequested);
+    TEST_ASSERT(vol1->getRedirectState() == micant::csvfs::CsvRedirectState::UserRequested, "Volume redirect state must be UserRequested");
+    vol1->setRedirectState(micant::csvfs::CsvRedirectState::DirectIo);
+    TEST_ASSERT(vol1->getRedirectState() == micant::csvfs::CsvRedirectState::DirectIo, "Volume redirect state must return to DirectIo");
+
+    // 8. Dynamic Coordinator Failover with I/O Freeze & Drain
+    // Trigger I/O operations while volume is paused
+    vol1->setVolumeState(micant::csvfs::CsvVolumeState::Paused);
+    TEST_ASSERT(vol1->getVolumeState() == micant::csvfs::CsvVolumeState::Paused, "Volume must be in PAUSED state");
+
+    uint32_t pausedWritten = 0;
+    vol1->directIoWrite("\\VirtualMachines\\ClusterVM1.vhdx", 8192, writePayload, sizeof(writePayload), &pausedWritten, 2);
+    TEST_ASSERT(vol1->getQueuedIoCount() >= 1, "Queued I/O operation must be pending in paused volume queue");
+
+    uint32_t drainedOps = 0;
+    bool failoverOk = vol1->failoverCoordinator(2, &drainedOps);
+    TEST_ASSERT(failoverOk, "Coordinator failover to Node 2 must succeed");
+    TEST_ASSERT(vol1->getCoordinatorNodeId() == 2, "New Coordinator Node ID must be 2");
+    TEST_ASSERT(vol1->getVolumeState() == micant::csvfs::CsvVolumeState::Online, "Volume state must return to ONLINE after failover");
+    TEST_ASSERT(drainedOps >= 1, "Drained I/O count must reflect previously paused operations");
+    TEST_ASSERT(vol1->getQueuedIoCount() == 0, "Paused I/O queue must be completely drained");
+    TEST_ASSERT(vol1->getFailoverCount() >= 1, "Volume failover counter must be incremented");
+
+    // 9. ReFS v3.12 Block Cloning Interoperability
+    uint32_t cloneStatus = 0;
+    bool cloneMetaOk = vol1->delegateMetadata(micant::csvfs::CsvMetadataOp::DuplicateExtents, "\\VirtualMachines\\ClusterVM1.vhdx", 0, &cloneStatus, 2);
+    TEST_ASSERT(cloneMetaOk && cloneStatus == 0, "Delegated extent duplication (Block Cloning) must succeed");
+    auto clonedVm = vol1->getFile("\\VirtualMachines\\ClusterVM1.vhdx_clone.vhdx");
+    TEST_ASSERT(clonedVm != nullptr, "Cloned VM file must exist in CSV namespace");
+
+    // 10. Secondary Volume Mounting
+    auto vol2 = sys.mountVolume("C:\\ClusterStorage\\Volume2", "S:", 2, 1048576);
+    TEST_ASSERT(vol2 != nullptr, "Mounting secondary volume C:\\ClusterStorage\\Volume2 must succeed");
+    TEST_ASSERT(sys.getVolume("C:\\ClusterStorage\\Volume2") == vol2, "Querying volume 2 must return valid pointer");
+    TEST_ASSERT(sys.mountVolume("C:\\ClusterStorage\\Volume2", "S:", 2, 512) == nullptr, "Mounting duplicate volume path must fail");
+
+    // 11. Clean-Room Win32 / NT C ABI Exports
+    TEST_ASSERT(micant::csvfs::CsvfsInitializeSubsystem() == micant::STATUS_SUCCESS, "CsvfsInitializeSubsystem must return STATUS_SUCCESS");
+
+    uint32_t abiRedir = 0;
+    TEST_ASSERT(micant::csvfs::CsvfsQueryRedirectState("C:\\ClusterStorage\\Volume1", &abiRedir) == micant::STATUS_SUCCESS, "CsvfsQueryRedirectState via C ABI must succeed");
+
+    TEST_ASSERT(micant::csvfs::CsvfsSetRedirectState("C:\\ClusterStorage\\Volume1", 0) == micant::STATUS_SUCCESS, "CsvfsSetRedirectState via C ABI must succeed");
+
+    uint32_t abiWr = 0;
+    TEST_ASSERT(micant::csvfs::CsvfsDirectIoWrite("C:\\ClusterStorage\\Volume1", "\\Shared\\Data.bin", 0, "DATA", 4, &abiWr) == micant::STATUS_SUCCESS, "CsvfsDirectIoWrite via C ABI must succeed");
+    TEST_ASSERT(abiWr == 4, "Bytes written via C ABI must match 4");
+
+    uint32_t abiRd = 0;
+    char abiRdBuf[16]{};
+    TEST_ASSERT(micant::csvfs::CsvfsDirectIoRead("C:\\ClusterStorage\\Volume1", "\\Shared\\Data.bin", 0, abiRdBuf, 4, &abiRd) == micant::STATUS_SUCCESS, "CsvfsDirectIoRead via C ABI must succeed");
+    TEST_ASSERT(abiRd == 4, "Bytes read via C ABI must match 4");
+
+    uint64_t stDirect = 0, stRedir = 0, stMeta = 0;
+    TEST_ASSERT(micant::csvfs::CsvfsQueryVolumeStats("C:\\ClusterStorage\\Volume1", &stDirect, &stRedir, &stMeta) == micant::STATUS_SUCCESS, "CsvfsQueryVolumeStats via C ABI must succeed");
+    TEST_ASSERT(stDirect > 0, "Direct I/O stats must be recorded");
+
+    // 12. Multithreaded Concurrency & Parallel Direct I/O Stress Test
+    std::atomic<int> csvStressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([&, t]() {
+            for (int i = 0; i < 10; ++i) {
+                uint32_t wr = 0;
+                char payloadBuf[32];
+                std::snprintf(payloadBuf, sizeof(payloadBuf), "CSV_T%d_I%d", t, i);
+                if (vol1->directIoWrite("\\VirtualMachines\\ClusterVM1.vhdx", (t * 256) + i, payloadBuf, 16, &wr, (t % 3) + 1)) {
+                    csvStressSuccessCount.fetch_add(1);
+                }
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(csvStressSuccessCount.load() == 100, "100 concurrent parallel direct I/O writes across 10 threads must complete successfully");
+
+    std::cout << "[TEST] Suite 194: Windows Cluster Shared Volume File System (CSVFS v2.0) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite193")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite194")) {
+        RUN_TEST(Test_WindowsClusterSharedVolume_CSVFS_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite193") {
         RUN_TEST(Test_WindowsReFS_ResilientFileSystem_Subsystem);
         return g_FailedTests;
     }
@@ -44090,6 +44258,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsKernelHotpatching_LiveUpdate_Subsystem);
     RUN_TEST(Test_WindowsHyperV_NestedVirtualization_Subsystem);
     RUN_TEST(Test_WindowsReFS_ResilientFileSystem_Subsystem);
+    RUN_TEST(Test_WindowsClusterSharedVolume_CSVFS_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
