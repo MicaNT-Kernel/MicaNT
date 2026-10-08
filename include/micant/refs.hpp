@@ -302,11 +302,15 @@ public:
         // Allocate initial clusters if initialSize > 0
         if (initialSize > 0) {
             uint64_t offset = 0;
+            static const uint32_t s_fullZeroCrc = []() {
+                std::vector<uint8_t> z(REFS_CLUSTER_SIZE, 0);
+                return ComputeCrc32c(z.data(), REFS_CLUSTER_SIZE);
+            }();
+
             while (offset < initialSize) {
                 uint32_t chunk = static_cast<uint32_t>(std::min<uint64_t>(REFS_CLUSTER_SIZE, initialSize - offset));
                 uint64_t lcn = allocateClusterLcn();
-                std::vector<uint8_t> zeros(chunk, 0);
-                uint32_t csum = ComputeCrc32c(zeros.data(), chunk);
+                uint32_t csum = (chunk == REFS_CLUSTER_SIZE) ? s_fullZeroCrc : 0;
                 file->addExtent({offset, lcn, chunk, std::make_shared<std::atomic<uint32_t>>(1), csum, ChecksumType::Crc32c});
                 m_rootNode->insertRecord(fid ^ offset, lcn, chunk, csum);
                 offset += chunk;
@@ -497,8 +501,8 @@ public:
         m_volumes["R:"] = volR;
 
         // Pre-create VM Base Disks and database logs for instant block cloning demonstration
-        auto f1 = volR->createFile("\\VirtualMachines\\BaseOS_Win2025.vhdx", 4ULL * 1024 * 1024 * 1024, true);
-        auto f2 = volR->createFile("\\SQLServer\\Data\\master.mdf", 512 * 1024 * 1024, true);
+        auto f1 = volR->createFile("\\VirtualMachines\\BaseOS_Win2025.vhdx", 64ULL * 1024 * 1024, true);
+        auto f2 = volR->createFile("\\SQLServer\\Data\\master.mdf", 16 * 1024 * 1024, true);
 
         // Pre-clone a VM disk checkpoint to demonstrate zero-copy block cloning
         volR->duplicateExtents("\\VirtualMachines\\BaseOS_Win2025.vhdx", "\\VirtualMachines\\BaseOS_Win2025_Snap1.vhdx");

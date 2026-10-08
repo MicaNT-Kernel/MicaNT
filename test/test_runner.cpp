@@ -200,6 +200,7 @@
 #include "micant/refs.hpp"
 #include "micant/csvfs.hpp"
 #include "micant/wcifs.hpp"
+#include "micant/s2d.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -43911,8 +43912,223 @@ void Test_WindowsContainerStorage_Wcifs_Subsystem() {
     std::cout << "[TEST] Suite 195: Windows Container Storage & Host Compute System (HCS) Isolation Subsystem PASSED.\n";
 }
 
+void Test_WindowsDirectStorage_S2D_Subsystem() {
+    std::cout << "[TEST] Running Suite 196: Windows DirectStorage & Storage Spaces Direct (S2D) Subsystem...\n";
+
+    // 1. SCM Drivers & Services Registration
+    micant::dstorage::RegisterDirectStorageSubsystem();
+    micant::dstorage::DirectStorageSubsystem::get().reset();
+    auto& scm = micant::scm::ServiceControlManager::get();
+
+    auto spaceportSvc = scm.getServiceRecord(L"Spaceport");
+    TEST_ASSERT(spaceportSvc != nullptr, "spaceport.sys storage spaces port driver must be registered in SCM");
+    TEST_ASSERT(spaceportSvc->serviceType == micant::scm::SERVICE_FILE_SYSTEM_DRIVER, "Spaceport must be SERVICE_FILE_SYSTEM_DRIVER");
+    TEST_ASSERT(spaceportSvc->startType == micant::scm::SERVICE_BOOT_START, "Spaceport must be configured for SERVICE_BOOT_START");
+    TEST_ASSERT(spaceportSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Spaceport must be RUNNING");
+
+    auto s2dSvc = scm.getServiceRecord(L"S2D");
+    TEST_ASSERT(s2dSvc != nullptr, "s2d.sys clustered bus driver must be registered in SCM");
+    TEST_ASSERT(s2dSvc->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "S2D must be SERVICE_KERNEL_DRIVER");
+    TEST_ASSERT(s2dSvc->startType == micant::scm::SERVICE_SYSTEM_START, "S2D must be configured for SERVICE_SYSTEM_START");
+    TEST_ASSERT(s2dSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "S2D must be RUNNING");
+
+    auto dstorageSvc = scm.getServiceRecord(L"DStorageSvc");
+    TEST_ASSERT(dstorageSvc != nullptr, "DirectStorage Acceleration Service must be registered in SCM");
+    TEST_ASSERT(dstorageSvc->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "DStorageSvc must be SERVICE_WIN32_OWN_PROCESS");
+    TEST_ASSERT(dstorageSvc->startType == micant::scm::SERVICE_AUTO_START, "DStorageSvc must be SERVICE_AUTO_START");
+    TEST_ASSERT(dstorageSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "DStorageSvc must be RUNNING");
+
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("dstorage.dll") != nullptr, "dstorage.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("dstoragecore.dll") != nullptr, "dstoragecore.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("spaceport.sys") != nullptr, "spaceport.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("s2d.sys") != nullptr, "s2d.sys must be registered in VersionDatabase");
+
+    // 2. DirectStorage Factory & Queue Creation
+    auto& factory = micant::dstorage::IDStorageFactory::get();
+    micant::dstorage::DSTORAGE_QUEUE_DESC qDesc{};
+    qDesc.Capacity = 128;
+    qDesc.Priority = micant::dstorage::DSTORAGE_PRIORITY_REALTIME;
+    qDesc.Name = "DirectStorage-HighPriority-Queue";
+    auto queue = factory.createQueue(qDesc);
+    TEST_ASSERT(queue != nullptr, "DirectStorage queue creation must succeed");
+    TEST_ASSERT(queue->getCapacity() == 128, "Queue capacity must match configured value");
+    TEST_ASSERT(queue->getDesc().Priority == micant::dstorage::DSTORAGE_PRIORITY_REALTIME, "Queue priority must match configured value");
+
+    // 3. BypassIO Fast Path & Storage File Abstraction
+    auto storageFile = factory.openFile("C:\\Games\\Cyberpunk2077\\archive\\pc\\content\\models.bin", 1024ULL * 1024 * 10);
+    TEST_ASSERT(storageFile != nullptr, "Opening storage file via IDStorageFactory must succeed");
+    TEST_ASSERT(storageFile->isBypassIoSupported(), "BypassIO must be supported on direct NVMe storage path");
+    TEST_ASSERT(storageFile->getSizeBytes() == 1024ULL * 1024 * 10, "Storage file size must match initialized capacity");
+
+    // 4. GDeflate Hardware/CPU Compression & Decompression Pipeline
+    const char assetString[] = "DIRECTSTORAGE_HIGH_RES_TEXTURE_4K_DIFFUSE_MAP_UNCOMPRESSED_RGBA8888_PIXEL_DATA_ARRAY";
+    auto compressedAsset = micant::dstorage::CompressGDeflate(assetString, sizeof(assetString));
+    TEST_ASSERT(!compressedAsset.empty(), "GDeflate compression must generate output buffer");
+    TEST_ASSERT(compressedAsset.size() >= sizeof(micant::dstorage::GDeflateHeader), "Compressed output must contain GDeflate header");
+
+    char decompTarget[256]{};
+    uint32_t decompBytes = 0;
+    bool decompResult = micant::dstorage::DecompressGDeflate(compressedAsset.data(), static_cast<uint32_t>(compressedAsset.size()),
+                                                             decompTarget, sizeof(decompTarget), &decompBytes);
+    TEST_ASSERT(decompResult, "GDeflate decompression must succeed");
+    TEST_ASSERT(decompBytes == sizeof(assetString), "Decompressed bytes must match original length");
+    TEST_ASSERT(std::memcmp(decompTarget, assetString, sizeof(assetString)) == 0, "Decompressed payload must bitwise match uncompressed input");
+
+    // 5. DirectStorage Asynchronous Request Enqueue & Batch Submission
+    micant::dstorage::DSTORAGE_REQUEST req{};
+    req.CompressionFormat = micant::dstorage::DSTORAGE_COMPRESSION_FORMAT_GDEFLATE;
+    req.SourceMemory = compressedAsset.data();
+    req.SourceSize = static_cast<uint32_t>(compressedAsset.size());
+    char memoryDst[256]{};
+    req.DestinationBuffer = memoryDst;
+    req.DestinationSize = sizeof(memoryDst);
+    req.UncompressedSize = sizeof(assetString);
+
+    TEST_ASSERT(queue->enqueueRequest(req), "Enqueueing valid DirectStorage request must succeed");
+    TEST_ASSERT(queue->getPendingCount() == 1, "Pending request count must be 1");
+
+    uint32_t submittedCount = queue->submit();
+    TEST_ASSERT(submittedCount == 1, "Submitted request count must be 1");
+    TEST_ASSERT(queue->getPendingCount() == 0, "Pending queue must be empty after submit");
+    TEST_ASSERT(queue->getTotalCompleted() == 1, "Completed requests counter must be 1");
+    TEST_ASSERT(std::memcmp(memoryDst, assetString, sizeof(assetString)) == 0, "DirectStorage memory destination must hold decompressed asset");
+
+    // 6. Fence Signaling & Queue Synchronization
+    queue->enqueueSignal(500);
+    queue->submit();
+    TEST_ASSERT(queue->getCompletedFenceValue() == 500, "Completed fence value must reflect signaled value (500)");
+
+    // 7. Storage Spaces Direct (S2D) Physical Disk Discovery & Pool Aggregation
+    auto& dstorageSys = micant::dstorage::DirectStorageSubsystem::get();
+    TEST_ASSERT(dstorageSys.isInitialized(), "DirectStorageSubsystem must be initialized");
+    auto pool = dstorageSys.getPool(1);
+    TEST_ASSERT(pool != nullptr, "Default S2D pool 1 must exist");
+    TEST_ASSERT(pool->getAllPhysicalDisks().size() >= 5, "Pool must contain at least 4 data NVMe disks + 1 hot-spare");
+    TEST_ASSERT(pool->getStatus() == micant::dstorage::StorageOperationalStatus::OK, "Storage pool status must be OK");
+
+    auto disk1 = pool->getPhysicalDisk(1);
+    TEST_ASSERT(disk1 != nullptr, "Physical disk 1 must exist");
+    TEST_ASSERT(disk1->busType == "NVMe", "Bus type must be NVMe");
+    TEST_ASSERT(disk1->isHealthy, "Physical disk 1 must be healthy");
+
+    auto spare = pool->getPhysicalDisk(5);
+    TEST_ASSERT(spare != nullptr && spare->isHotSpare, "Physical disk 5 must be marked as HOT SPARE");
+
+    // 8. Two-Way and Three-Way Mirror Virtual Disk Creation with Slab Allocation
+    auto mirrorDisk = pool->createVirtualDisk("Prod_VM_Mirror", 1024ULL * 1024 * 1024 * 20, micant::dstorage::StorageResiliencyType::Mirror2); // 20 GB
+    TEST_ASSERT(mirrorDisk != nullptr, "Creating 2-Way Mirror virtual disk must succeed");
+    TEST_ASSERT(mirrorDisk->getResiliency() == micant::dstorage::StorageResiliencyType::Mirror2, "Resiliency must be Mirror2");
+    TEST_ASSERT(!mirrorDisk->getSlabs().empty(), "Virtual disk must have allocated slabs");
+    TEST_ASSERT(mirrorDisk->getSlabs()[0].physicalDiskIds.size() == 2, "2-Way Mirror slab must reference 2 distinct physical drives");
+
+    const char vmPayload[] = "ENTERPRISE_DATABASE_REPLICATED_PAYLOAD_BLOCK_0";
+    TEST_ASSERT(mirrorDisk->writeData(0, vmPayload, sizeof(vmPayload)), "Writing to mirrored virtual disk must succeed");
+    char vmReadBuf[64]{};
+    size_t vmBytesRead = 0;
+    TEST_ASSERT(mirrorDisk->readData(0, vmReadBuf, sizeof(vmPayload), &vmBytesRead), "Reading from mirrored virtual disk must succeed");
+    TEST_ASSERT(vmBytesRead == sizeof(vmPayload) && std::memcmp(vmReadBuf, vmPayload, sizeof(vmPayload)) == 0, "Read data must match written payload");
+
+    // 9. Parity / Erasure Coding Virtual Disk Resiliency
+    auto parityDisk = pool->createVirtualDisk("Archive_Parity", 1024ULL * 1024 * 1024 * 30, micant::dstorage::StorageResiliencyType::Parity); // 30 GB
+    TEST_ASSERT(parityDisk != nullptr, "Creating Parity virtual disk must succeed");
+    TEST_ASSERT(parityDisk->getResiliency() == micant::dstorage::StorageResiliencyType::Parity, "Resiliency must be Parity");
+    TEST_ASSERT(parityDisk->getSlabs()[0].physicalDiskIds.size() >= 3, "Parity slab must stripe across at least 3 drives");
+
+    const char archivePayload[] = "PARITY_ENCODED_ARCHIVE_STORAGE_BLOCK";
+    TEST_ASSERT(parityDisk->writeData(0, archivePayload, sizeof(archivePayload)), "Writing to parity virtual disk must succeed");
+
+    // 10. Dynamic Physical Drive Failure Injection, Degraded State & Hot-Spare Automatic Rebuild
+    TEST_ASSERT(pool->failDisk(1), "Injecting failure on disk 1 must succeed");
+    TEST_ASSERT(!disk1->isHealthy, "Disk 1 must be marked unhealthy / failed");
+    TEST_ASSERT(pool->getStatus() == micant::dstorage::StorageOperationalStatus::Degraded, "Storage pool must transition to DEGRADED");
+    TEST_ASSERT(mirrorDisk->getStatus() == micant::dstorage::StorageOperationalStatus::Degraded, "Mirrored virtual disk must transition to DEGRADED");
+
+    // Read should still succeed from surviving mirror replica!
+    char degradedReadBuf[64]{};
+    size_t degradedBytes = 0;
+    TEST_ASSERT(mirrorDisk->readData(0, degradedReadBuf, sizeof(vmPayload), &degradedBytes), "Reading from degraded mirror must succeed from survivor disk");
+    TEST_ASSERT(degradedBytes == sizeof(vmPayload) && std::memcmp(degradedReadBuf, vmPayload, sizeof(vmPayload)) == 0, "Data must remain intact during disk failure");
+
+    // Trigger hot-spare automatic rebuild
+    TEST_ASSERT(pool->rebuildWithHotSpare(), "Automatic rebuild with hot-spare disk 5 must succeed");
+    TEST_ASSERT(pool->getStatus() == micant::dstorage::StorageOperationalStatus::OK, "Pool status must return to OK after rebuild");
+    TEST_ASSERT(mirrorDisk->getStatus() == micant::dstorage::StorageOperationalStatus::OK, "Mirrored virtual disk status must return to OK after rebuild");
+    TEST_ASSERT(!spare->isHotSpare, "Hot-spare disk must now be promoted to active member");
+
+    // 11. Clean-Room Win32 / NT C ABI Exports
+    TEST_ASSERT(micant::dstorage::DStorageInitializeSubsystem() == micant::STATUS_SUCCESS, "DStorageInitializeSubsystem must return STATUS_SUCCESS");
+
+    void* abiQueue = nullptr;
+    TEST_ASSERT(micant::dstorage::DStorageCreateQueue(32, 0, &abiQueue) == micant::STATUS_SUCCESS, "DStorageCreateQueue via C ABI must succeed");
+    TEST_ASSERT(abiQueue != nullptr, "Created queue pointer must be non-null");
+
+    void* abiFile = nullptr;
+    TEST_ASSERT(micant::dstorage::DStorageOpenFile("C:\\abi_file.bin", 4096, &abiFile) == micant::STATUS_SUCCESS, "DStorageOpenFile via C ABI must succeed");
+    TEST_ASSERT(abiFile != nullptr, "Opened file pointer must be non-null");
+
+    char abiDecompBuf[128]{};
+    uint32_t abiDecompBytes = 0;
+    TEST_ASSERT(micant::dstorage::DStorageDecompressGDeflate(compressedAsset.data(), static_cast<uint32_t>(compressedAsset.size()),
+                                                             abiDecompBuf, sizeof(abiDecompBuf), &abiDecompBytes) == micant::STATUS_SUCCESS, "DStorageDecompressGDeflate via C ABI must succeed");
+    TEST_ASSERT(abiDecompBytes == sizeof(assetString), "Decompressed bytes via C ABI must match length");
+
+    uint32_t abiDiskId = 0;
+    TEST_ASSERT(micant::dstorage::StorageSpacesCreateVirtualDisk(1, "ABI_Space", 1024ULL * 1024 * 1024 * 5, 1, &abiDiskId) == micant::STATUS_SUCCESS, "StorageSpacesCreateVirtualDisk via C ABI must succeed");
+    TEST_ASSERT(abiDiskId != 0, "Created virtual disk ID must be non-zero");
+
+    const char abiPayload[] = "ABI_S2D_PAYLOAD";
+    TEST_ASSERT(micant::dstorage::StorageSpacesWriteVirtualDisk(1, abiDiskId, 0, abiPayload, sizeof(abiPayload)) == micant::STATUS_SUCCESS, "StorageSpacesWriteVirtualDisk via C ABI must succeed");
+
+    char abiReadPayload[32]{};
+    size_t abiReadLen = 0;
+    TEST_ASSERT(micant::dstorage::StorageSpacesReadVirtualDisk(1, abiDiskId, 0, abiReadPayload, sizeof(abiPayload), &abiReadLen) == micant::STATUS_SUCCESS, "StorageSpacesReadVirtualDisk via C ABI must succeed");
+    TEST_ASSERT(abiReadLen == sizeof(abiPayload) && std::memcmp(abiReadPayload, abiPayload, sizeof(abiPayload)) == 0, "Read data via C ABI must match written bytes");
+
+    // 12. Multithreaded Concurrency & High-Bandwidth DirectStorage Queue Stress Test
+    std::atomic<int> dstorageStressSuccess{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([&, t]() {
+            micant::dstorage::DSTORAGE_QUEUE_DESC tDesc{};
+            tDesc.Capacity = 32;
+            tDesc.Priority = micant::dstorage::DSTORAGE_PRIORITY_NORMAL;
+            tDesc.Name = "StressQueue_" + std::to_string(t);
+            auto tQueue = factory.createQueue(tDesc);
+
+            char localBuf[64]{};
+            for (int i = 0; i < 10; ++i) {
+                micant::dstorage::DSTORAGE_REQUEST treq{};
+                treq.CompressionFormat = micant::dstorage::DSTORAGE_COMPRESSION_FORMAT_NONE;
+                std::string msg = "THREAD_" + std::to_string(t) + "_ITEM_" + std::to_string(i);
+                treq.SourceMemory = msg.c_str();
+                treq.SourceSize = static_cast<uint32_t>(msg.size() + 1);
+                treq.DestinationBuffer = localBuf;
+                treq.DestinationSize = sizeof(localBuf);
+                treq.UncompressedSize = treq.SourceSize;
+
+                tQueue->enqueueRequest(treq);
+                if (tQueue->submit() == 1) {
+                    dstorageStressSuccess.fetch_add(1);
+                }
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(dstorageStressSuccess.load() == 100, "100 concurrent DirectStorage queue requests across 10 threads must complete successfully");
+
+    std::cout << "[TEST] Suite 196: Windows DirectStorage & Storage Spaces Direct (S2D) Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite195")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite196")) {
+        RUN_TEST(Test_WindowsDirectStorage_S2D_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite195") {
         RUN_TEST(Test_WindowsContainerStorage_Wcifs_Subsystem);
         return g_FailedTests;
     }
@@ -44473,6 +44689,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsReFS_ResilientFileSystem_Subsystem);
     RUN_TEST(Test_WindowsClusterSharedVolume_CSVFS_Subsystem);
     RUN_TEST(Test_WindowsContainerStorage_Wcifs_Subsystem);
+    RUN_TEST(Test_WindowsDirectStorage_S2D_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
