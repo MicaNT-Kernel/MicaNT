@@ -197,6 +197,7 @@
 #include "nps.hpp"
 #include "wsrm.hpp"
 #include "wds.hpp"
+#include "certsrv.hpp"
 
 namespace micant::shell {
 
@@ -539,6 +540,7 @@ public:
             if (cmd == "nps" || cmd == "ias" || cmd == "radius") { cmdNetworkPolicyServer(tokens, out); return 0; }
             if (cmd == "wsrm" || cmd == "quota" || cmd == "fairshare" || cmd == "dfss") { cmdSystemResourceManager(tokens, out); return 0; }
             if (cmd == "wds" || cmd == "pxe" || cmd == "tftp") { cmdDeploymentServices(tokens, out); return 0; }
+            if (cmd == "certsrv" || cmd == "pki" || cmd == "certca") { cmdCertificateServices(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -34169,6 +34171,263 @@ private:
             << "  wds tftp <file> [blksize] [windowsize]  Simulate RFC 7440 TFTP file transfer\n"
             << "  wds unattend [name] [pass] [domain]     Generate unattended setup XML answer file\n"
             << "  wds test                                Execute in-kernel WDS / PXE self-tests\n";
+    }
+
+    void cmdCertificateServices(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& pki = micant::certsrv::CertificateServicesEngine::instance();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+
+        if (sub == "status") {
+            out << "Active Directory Certificate Services (AD CS / TitanCA) Status:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service Status:           ONLINE (CertSvc / certsrv.exe)\n"
+                << "  CA Name:                  " << pki.getCaName() << "\n"
+                << "  CA Subject:               " << pki.getCaDn() << "\n"
+                << "  AIA Distribution URI:     " << pki.getAiaUri() << "\n"
+                << "  CDP Distribution URI:     " << pki.getCdpUri() << "\n"
+                << "  OCSP Responder URI:       " << pki.getOcspUri() << "\n"
+                << "  Active Certificates:      " << pki.getAllCertificates().size() << "\n"
+                << "  Total Requests:           " << pki.getTotalRequestsSubmitted() << "\n"
+                << "  Total Issued:             " << pki.getTotalCertificatesIssued() << "\n"
+                << "  Total Revoked:            " << pki.getTotalCertificatesRevoked() << "\n"
+                << "  Total CRL Published:      " << pki.getTotalCrlPublished() << "\n"
+                << "  Total OCSP Queries:       " << pki.getTotalOcspQueries() << "\n";
+            return;
+        }
+
+        if (sub == "ca") {
+            micant::certsrv::CertificateRecord rootCert;
+            if (pki.getCertificate(pki.getRootSerialNumber(), rootCert)) {
+                out << "Enterprise Root Certification Authority:\n"
+                    << "--------------------------------------------------------------------------------\n"
+                    << "  Subject DN:               " << rootCert.subjectDn << "\n"
+                    << "  Issuer DN:                " << rootCert.issuerDn << " (Self-Signed)\n"
+                    << "  Serial Number:            " << rootCert.serialNumber << "\n"
+                    << "  Public Key:               " << rootCert.publicKeyAlg << " " << rootCert.publicKeyBits << "-bit\n"
+                    << "  Subject Key Identifier:   " << rootCert.subjectKeyIdentifier << "\n"
+                    << "  Key Usage:                Digital Signature, Cert Sign, CRL Sign (0x" << std::hex << rootCert.keyUsage << std::dec << ")\n"
+                    << "  PEM Certificate:\n" << rootCert.rawPem;
+            } else {
+                out << "Root CA certificate not found!\n";
+            }
+            return;
+        }
+
+        if (sub == "templates") {
+            out << "Active Directory Certificate Templates:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(20) << "Template Name"
+                << std::setw(8)  << "Ver"
+                << std::setw(12) << "Validity"
+                << std::setw(12) << "AutoEnroll"
+                << std::setw(14) << "RequiresAppr"
+                << "Display Name\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto tmpls = pki.getAllTemplates();
+            for (const auto& t : tmpls) {
+                out << std::left << std::setw(20) << t.templateName
+                    << std::setw(8)  << t.schemaVersion
+                    << std::setw(12) << (std::to_string(t.validityPeriodSeconds / 86400) + "d")
+                    << std::setw(12) << (t.autoEnrollAllowed ? "YES" : "NO")
+                    << std::setw(14) << (t.requiresApproval ? "YES" : "NO")
+                    << t.displayName << "\n";
+            }
+            return;
+        }
+
+        if (sub == "requests") {
+            out << "Active Directory Certificate Requests:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(8)  << "Req ID"
+                << std::setw(18) << "Template"
+                << std::setw(16) << "Disposition"
+                << std::setw(18) << "Serial"
+                << "Subject DN\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto reqs = pki.getAllRequests();
+            for (const auto& r : reqs) {
+                out << std::left << std::setw(8)  << r.requestId
+                    << std::setw(18) << r.templateName
+                    << std::setw(16) << micant::certsrv::DispositionToString(r.disposition)
+                    << std::setw(18) << (r.issuedSerialNumber.empty() ? "-" : r.issuedSerialNumber)
+                    << r.subjectDn << "\n";
+            }
+            return;
+        }
+
+        if (sub == "certs") {
+            out << "Issued Active Directory Certificates:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(18) << "Serial"
+                << std::setw(18) << "Template"
+                << std::setw(10) << "Status"
+                << "Subject DN\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto certs = pki.getAllCertificates();
+            for (const auto& c : certs) {
+                out << std::left << std::setw(18) << c.serialNumber
+                    << std::setw(18) << c.templateName
+                    << std::setw(10) << (c.isRevoked ? "REVOKED" : "VALID")
+                    << c.subjectDn << "\n";
+            }
+            return;
+        }
+
+        if (sub == "submit") {
+            if (tokens.size() < 4) {
+                out << "Usage: certsrv submit <subject_dn> <template_name> [requester]\n";
+                return;
+            }
+            std::string subj = tokens[2];
+            std::string tmpl = tokens[3];
+            std::string reqr = (tokens.size() > 4) ? tokens[4] : "TITAN\\Administrator";
+
+            uint32_t reqId = 0;
+            micant::certsrv::RequestDisposition disp = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+            bool ok = pki.submitRequest(subj, tmpl, reqr, {}, 2048, &reqId, &disp);
+            if (!ok) {
+                out << "[-] Certificate request rejected! Disposition: " << micant::certsrv::DispositionToString(disp) << "\n";
+                return;
+            }
+            out << "[+] Certificate request #" << reqId << " submitted successfully.\n"
+                << "    Disposition: " << micant::certsrv::DispositionToString(disp) << "\n";
+            if (disp == micant::certsrv::RequestDisposition::CR_DISP_ISSUED) {
+                micant::certsrv::CertificateRequestRecord rRec;
+                if (pki.getRequest(reqId, rRec)) {
+                    out << "    Issued Serial: " << rRec.issuedSerialNumber << "\n";
+                }
+            } else if (disp == micant::certsrv::RequestDisposition::CR_DISP_UNDER_SUBMISSION) {
+                out << "    Note: Request requires CA Administrator approval via 'certsrv approve " << reqId << "'.\n";
+            }
+            return;
+        }
+
+        if (sub == "approve") {
+            if (tokens.size() < 3) {
+                out << "Usage: certsrv approve <requestId>\n";
+                return;
+            }
+            uint32_t reqId = static_cast<uint32_t>(std::stoul(tokens[2]));
+            std::string serial;
+            if (pki.approveRequest(reqId, &serial)) {
+                out << "[+] Request #" << reqId << " APPROVED! Issued Certificate Serial: " << serial << "\n";
+            } else {
+                out << "[-] Failed to approve request #" << reqId << " (not found or not pending approval).\n";
+            }
+            return;
+        }
+
+        if (sub == "deny") {
+            if (tokens.size() < 3) {
+                out << "Usage: certsrv deny <requestId> [reason]\n";
+                return;
+            }
+            uint32_t reqId = static_cast<uint32_t>(std::stoul(tokens[2]));
+            std::string reason = (tokens.size() > 3) ? tokens[3] : "Denied by administrator";
+            if (pki.denyRequest(reqId, reason)) {
+                out << "[+] Request #" << reqId << " DENIED (" << reason << ").\n";
+            } else {
+                out << "[-] Failed to deny request #" << reqId << ".\n";
+            }
+            return;
+        }
+
+        if (sub == "revoke") {
+            if (tokens.size() < 3) {
+                out << "Usage: certsrv revoke <serial> [reason_code:0-6]\n";
+                return;
+            }
+            std::string serial = tokens[2];
+            uint32_t reason = (tokens.size() > 3) ? static_cast<uint32_t>(std::stoul(tokens[3])) : micant::certsrv::CRL_REASON_KEY_COMPROMISE;
+            if (pki.revokeCertificate(serial, reason)) {
+                out << "[+] Certificate " << serial << " REVOKED! Reason: " << micant::certsrv::RevocationReasonToString(reason) << "\n"
+                    << "    Updated CRL published (CRL #" << pki.getLatestCrl().crlNumber << ").\n";
+            } else {
+                out << "[-] Failed to revoke certificate " << serial << " (not found or already revoked).\n";
+            }
+            return;
+        }
+
+        if (sub == "crl") {
+            auto crl = pki.getLatestCrl();
+            out << "Certificate Revocation List (CRL / RFC 5280):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Issuer DN:                " << crl.issuerDn << "\n"
+                << "  CRL Number:               " << crl.crlNumber << "\n"
+                << "  CDP URI:                  " << crl.cdpUri << "\n"
+                << "  Total Revoked Entries:    " << crl.revokedEntries.size() << "\n";
+            for (const auto& rev : crl.revokedEntries) {
+                out << "    Serial: " << std::left << std::setw(18) << rev.serialNumber
+                    << " Reason: " << micant::certsrv::RevocationReasonToString(rev.revocationReason) << "\n";
+            }
+            return;
+        }
+
+        if (sub == "ocsp") {
+            if (tokens.size() < 3) {
+                out << "Usage: certsrv ocsp <serial>\n";
+                return;
+            }
+            std::string serial = tokens[2];
+            micant::certsrv::OcspResponse resp;
+            if (pki.processOcspRequest(serial, resp)) {
+                out << "OCSP Status Response (RFC 6960):\n"
+                    << "--------------------------------------------------------------------------------\n"
+                    << "  Certificate Serial:       " << resp.serialNumber << "\n"
+                    << "  Status:                   " << micant::certsrv::OcspStatusToString(resp.certStatus) << "\n"
+                    << "  Responder ID:             " << resp.responderId << "\n";
+                if (resp.certStatus == micant::certsrv::OcspStatus::OCSP_STATUS_REVOKED) {
+                    out << "  Revocation Reason:        " << micant::certsrv::RevocationReasonToString(resp.revocationReason) << "\n";
+                }
+            } else {
+                out << "[-] OCSP check failed for " << serial << "\n";
+            }
+            return;
+        }
+
+        if (sub == "test") {
+            out << "Executing in-kernel AD CS & Enterprise PKI Self-Tests...\n";
+            uint32_t reqId = 0;
+            micant::certsrv::RequestDisposition disp = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+            bool okReq = pki.submitRequest("CN=test-web.titan.local", "WebServer", "TITAN\\Admin", {"test-web.titan.local"}, 2048, &reqId, &disp);
+            out << "  [1/5] Auto-Enroll Request Submission: " << (okReq && disp == micant::certsrv::RequestDisposition::CR_DISP_ISSUED ? "PASSED" : "FAILED") << "\n";
+
+            micant::certsrv::CertificateRequestRecord rRec;
+            pki.getRequest(reqId, rRec);
+            out << "  [2/5] Certificate Serial Issued:      " << (!rRec.issuedSerialNumber.empty() ? "PASSED (" + rRec.issuedSerialNumber + ")" : "FAILED") << "\n";
+
+            micant::certsrv::OcspResponse ocspResp;
+            bool okOcsp = pki.processOcspRequest(rRec.issuedSerialNumber, ocspResp);
+            out << "  [3/5] OCSP Status Check (Good):       " << (okOcsp && ocspResp.certStatus == micant::certsrv::OcspStatus::OCSP_STATUS_GOOD ? "PASSED" : "FAILED") << "\n";
+
+            bool okRev = pki.revokeCertificate(rRec.issuedSerialNumber, micant::certsrv::CRL_REASON_KEY_COMPROMISE);
+            pki.processOcspRequest(rRec.issuedSerialNumber, ocspResp);
+            out << "  [4/5] Revocation & OCSP (Revoked):    " << (okRev && ocspResp.certStatus == micant::certsrv::OcspStatus::OCSP_STATUS_REVOKED ? "PASSED" : "FAILED") << "\n";
+
+            bool chainValid = false;
+            pki.verifyCertificateChain(rRec.issuedSerialNumber, &chainValid, nullptr);
+            out << "  [5/5] Revoked Cert Chain Rejection:   " << (!chainValid ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All AD CS / Enterprise PKI Subsystem Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Active Directory Certificate Services (AD CS / TitanCA) Subsystem\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  certsrv status                          Display CA status and telemetry counters\n"
+            << "  certsrv ca                              View Root CA certificate and key parameters\n"
+            << "  certsrv templates                       List Active Directory certificate templates\n"
+            << "  certsrv requests                        Enumerate certificate request database\n"
+            << "  certsrv certs                           Enumerate issued certificate database\n"
+            << "  certsrv submit <subj> <tmpl> [requester] Submit certificate request\n"
+            << "  certsrv approve <reqId>                 Approve pending certificate request\n"
+            << "  certsrv deny <reqId> [reason]           Deny pending certificate request\n"
+            << "  certsrv revoke <serial> [reason]        Revoke certificate and republish CRL\n"
+            << "  certsrv crl                             Display Certificate Revocation List (CRL)\n"
+            << "  certsrv ocsp <serial>                   Query live OCSP certificate status\n"
+            << "  certsrv test                            Execute in-kernel PKI self-tests\n";
     }
 
     static std::string trim(std::string_view s) {

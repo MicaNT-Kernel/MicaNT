@@ -365,6 +365,8 @@
 │ Phase 178: System Resource Manager & Fair Share (M205) [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 179: Windows Deployment Services & PXE Boot (M206)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 180: Active Directory Certificate Services (M207)[COMPLETED 100%] │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3758,6 +3760,28 @@
   - `wds` / `pxe` / `tftp` (`status`, `images`, `addimage`, `bootfiles`, `clients`, `test`).
 - [x] **Unit Test Suite 206 (`Test_WindowsDeploymentServices_PXE_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration, VersionDatabase registration, PXE DHCP option parsing, TFTP read request (RRQ) block sequencing and windowsize handling, WIM image catalog registration, multi-architecture arbitration (x64/ARM64), dynamic BCD store generation, Unattend XML serialization, Win32 C ABI exports, and concurrent multithreaded PXE client boot stress testing.
+
+---
+
+### Phase 180: Active Directory Certificate Services (AD CS) & Enterprise PKI Subsystem (`certsrv.exe`, `certcli.dll`, `certenroll.dll`, `certadm.dll`, `CertSvc`, `TitanCA`, `AegisPKI`) (Milestone 207) [COMPLETED 100%]
+*Goal: Implement clean-room Active Directory Certificate Services (AD CS) and Enterprise Public Key Infrastructure (PKI), providing multi-tier Certificate Authority (Root CA & Subordinate CA) hierarchies, X.509 v3 certificate issuance and validation, Active Directory certificate template policies, Certificate Revocation Lists (CRL / RFC 5280), Online Certificate Status Protocol (OCSP / RFC 6960), automated DCOM/RPC certificate enrollment, and Win32 C ABI exports.*
+- [x] **AD CS Core Engine & CA Architecture (`include/micant/certsrv.hpp`)**:
+  - Certificate Authority Hierarchy: Enterprise Root CA and Subordinate Issuing CA with self-signed Root certificate, AIA, CDP, and OCSP URIs.
+  - X.509 v3 Certificate Engine: ASN.1 DER and PEM serialization, high-entropy unique serial numbers, validity periods (NotBefore / NotAfter), Subject / Issuer Distinguished Name parsing.
+  - Standard Certificate Extensions: Basic Constraints (CA flag, path length), Key Usage bitmask, Extended Key Usage (EKU) OIDs (Server Auth, Client Auth, Code Signing, Smart Card Logon, S/MIME, KDC Auth), Subject Alternative Name (SAN: DNS, IP, UPN), Authority Key Identifier (AKI), and Subject Key Identifier (SKI).
+  - Certificate Templates: 8 pre-seeded enterprise templates (`DomainController`, `User`, `Computer`, `WebServer`, `CodeSigning`, `SubCA`, `SmartcardLogon`, `EnrollmentAgent`) with auto-enrollment flags, key size minimums, and approval policy enforcement.
+  - Certificate Request (CSR / PKCS#10) Processing: submission, administrative approval / denial workflows, disposition state machine (`CR_DISP_ISSUED`, `CR_DISP_UNDER_SUBMISSION`, `CR_DISP_DENIED`, `CR_DISP_REVOKED`).
+  - Revocation & CRL Generator: RFC 5280 CRL publishing, incremental CRL numbers, revocation reasons (`KeyCompromise`, `CACompromise`, `AffiliationChanged`, `Superseded`, `CessationOfOperation`, `CertificateHold`).
+  - Online Certificate Status Protocol (OCSP) Responder: RFC 6960 query engine returning `Good`, `Revoked`, or `Unknown` statuses with timestamped response structures.
+  - Certificate Chain & Trust Path Validation: multi-hop chain verification from leaf certificate through intermediate CA to Trusted Root CA anchor.
+- [x] **Win32 & SCM Parity**:
+  - SCM Service registration: `CertSvc` (Active Directory Certificate Services, Auto Start).
+  - VersionDatabase registration (`10.0.26100.1`): `certsrv.exe`, `certcli.dll`, `certenroll.dll`, `certadm.dll`.
+  - Win32 C ABI exports: `MicaCertSrvInitialize`, `MicaCertSrvSubmitRequest`, `MicaCertSrvRetrieveCertificate`, `MicaCertSrvRevokeCertificate`, `MicaCertSrvGetCrl`, `MicaCertSrvOcspCheck`, `MicaCertSrvShutdown`.
+- [x] **Interactive Shell CLI**:
+  - `certsrv` / `pki` (`status`, `ca`, `templates`, `requests`, `certs`, `submit`, `approve`, `deny`, `revoke`, `crl`, `ocsp`, `test`).
+- [x] **Unit Test Suite 207 (`Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, Root CA self-signed attributes, template catalog verification, auto-approval request workflow, manual approval workflow, denial workflow, X.509 v3 extension parsing (SAN/EKU/KeyUsage/AKI/SKI), certificate chain path validation, CRL generation and revocation reasons, OCSP RFC 6960 status response verification, edge cases / negative checks, Win32 C ABI exports, and high-concurrency 8-thread multithreaded stress test.
 
 
 

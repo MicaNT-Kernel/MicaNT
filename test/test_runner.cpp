@@ -211,6 +211,7 @@
 #include "micant/nps.hpp"
 #include "micant/wsrm.hpp"
 #include "micant/wds.hpp"
+#include "micant/certsrv.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -46470,11 +46471,297 @@ void Test_WindowsDeploymentServices_PXE_Subsystem() {
 
     TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded WDS stress test must complete with 100% success");
 
+
     std::cout << "[TEST] Suite 206: Windows Deployment Services & PXE Network Boot Subsystem PASSED.\n";
 }
 
+void Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem() {
+    std::cout << "[TEST] Suite 207: Active Directory Certificate Services & Enterprise PKI Subsystem...\n";
+
+    auto& pki = micant::certsrv::CertificateServicesEngine::instance();
+    pki.initialize();
+
+    // Stage 1: SCM Registration & State
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto sCert = scm.getServiceRecord(L"CertSvc");
+    TEST_ASSERT(sCert != nullptr, "CertSvc service must be registered in SCM");
+    TEST_ASSERT(sCert->serviceName == L"CertSvc", "Service name must be CertSvc");
+    TEST_ASSERT(sCert->displayName == L"Active Directory Certificate Services", "Display name must match AD CS");
+    TEST_ASSERT(sCert->startType == micant::scm::SERVICE_AUTO_START, "CertSvc startType must be AUTO_START");
+    TEST_ASSERT(sCert->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "CertSvc state must be SERVICE_RUNNING");
+
+    // Stage 2: VersionDatabase PE Metadata & Exports
+    auto& verDb = micant::version::VersionDatabase::Instance();
+    const auto* modSrv = verDb.FindModule("certsrv.exe");
+    TEST_ASSERT(modSrv != nullptr, "certsrv.exe must be registered in VersionDatabase");
+    TEST_ASSERT(modSrv->stringTable.at("FileVersion") == "10.0.26100.1", "certsrv.exe version must be 10.0.26100.1");
+
+    const auto* modCli = verDb.FindModule("certcli.dll");
+    TEST_ASSERT(modCli != nullptr, "certcli.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modCli->stringTable.at("FileVersion") == "10.0.26100.1", "certcli.dll version must be 10.0.26100.1");
+
+    const auto* modEnroll = verDb.FindModule("certenroll.dll");
+    TEST_ASSERT(modEnroll != nullptr, "certenroll.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modEnroll->stringTable.at("FileVersion") == "10.0.26100.1", "certenroll.dll version must be 10.0.26100.1");
+
+    const auto* modAdm = verDb.FindModule("certadm.dll");
+    TEST_ASSERT(modAdm != nullptr, "certadm.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modAdm->stringTable.at("FileVersion") == "10.0.26100.1", "certadm.dll version must be 10.0.26100.1");
+
+    // Stage 3: Enterprise Root CA Hierarchy & Self-Signed Root Attributes
+    TEST_ASSERT(pki.getCaName() == "Titan Enterprise Root CA", "CA name must match");
+    TEST_ASSERT(pki.getCaDn() == "CN=Titan Enterprise Root CA,DC=titan,DC=local", "CA DN must match");
+    TEST_ASSERT(pki.getCaState() == micant::certsrv::CaState::Running, "CA state must be Running");
+    TEST_ASSERT(pki.getCaType() == micant::certsrv::CaType::EnterpriseRootCA, "CA type must be EnterpriseRootCA");
+    TEST_ASSERT(!pki.getAiaUri().empty(), "AIA URI must be non-empty");
+    TEST_ASSERT(!pki.getCdpUri().empty(), "CDP URI must be non-empty");
+    TEST_ASSERT(!pki.getOcspUri().empty(), "OCSP URI must be non-empty");
+
+    micant::certsrv::CertificateRecord rootCert;
+    TEST_ASSERT(pki.getCertificate(pki.getRootSerialNumber(), rootCert), "Root CA certificate must exist in store");
+    TEST_ASSERT(rootCert.serialNumber == "01", "Root CA serial must be 01");
+    TEST_ASSERT(rootCert.subjectDn == rootCert.issuerDn, "Root CA must be self-signed (subject == issuer)");
+    TEST_ASSERT(rootCert.isCa == true, "Root CA isCa flag must be true");
+    TEST_ASSERT(rootCert.publicKeyBits == 4096, "Root CA public key must be 4096 bits");
+    TEST_ASSERT((rootCert.keyUsage & micant::certsrv::KU_KEY_CERT_SIGN) != 0, "Root CA must have KU_KEY_CERT_SIGN");
+    TEST_ASSERT((rootCert.keyUsage & micant::certsrv::KU_CRL_SIGN) != 0, "Root CA must have KU_CRL_SIGN");
+    TEST_ASSERT(!rootCert.rawDer.empty() && !rootCert.rawPem.empty(), "Root CA must have DER and PEM representations");
+    TEST_ASSERT(rootCert.rawPem.find("-----BEGIN CERTIFICATE-----") != std::string::npos, "PEM must contain standard header");
+
+    // Stage 4: Certificate Template Catalog
+    auto allTemplates = pki.getAllTemplates();
+    TEST_ASSERT(allTemplates.size() >= 8, "Must contain at least 8 default certificate templates");
+
+    micant::certsrv::CertificateTemplate tmplDc, tmplWeb, tmplCode, tmplSubCa;
+    TEST_ASSERT(pki.getTemplate("DomainController", tmplDc), "DomainController template must exist");
+    TEST_ASSERT(tmplDc.autoEnrollAllowed == true, "DomainController must support auto-enrollment");
+    TEST_ASSERT(tmplDc.requiresApproval == false, "DomainController must not require manual approval");
+    TEST_ASSERT(std::find(tmplDc.ekus.begin(), tmplDc.ekus.end(), micant::certsrv::OID_KDC_AUTH) != tmplDc.ekus.end(), "DomainController must contain KDC Auth EKU");
+
+    TEST_ASSERT(pki.getTemplate("WebServer", tmplWeb), "WebServer template must exist");
+    TEST_ASSERT(tmplWeb.validityPeriodSeconds == 63072000, "WebServer validity must be 2 years");
+
+    TEST_ASSERT(pki.getTemplate("CodeSigning", tmplCode), "CodeSigning template must exist");
+    TEST_ASSERT(tmplCode.requiresApproval == true, "CodeSigning must require manual approval");
+    TEST_ASSERT(tmplCode.minKeySizeBits == 3072, "CodeSigning min key size must be 3072 bits");
+
+    TEST_ASSERT(pki.getTemplate("SubCA", tmplSubCa), "SubCA template must exist");
+    TEST_ASSERT(tmplSubCa.isCa == true, "SubCA isCa must be true");
+    TEST_ASSERT(tmplSubCa.minKeySizeBits == 4096, "SubCA min key size must be 4096 bits");
+
+    // Stage 5: Certificate Request Submission & Auto-Approval
+    uint32_t reqIdWeb = 0;
+    micant::certsrv::RequestDisposition dispWeb = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+    bool subWebOk = pki.submitRequest("CN=portal.titan.local,O=Titan Technologies", "WebServer", "TITAN\\WebAdmin", {"portal.titan.local", "www.titan.local"}, 2048, &reqIdWeb, &dispWeb);
+    TEST_ASSERT(subWebOk == true, "WebServer request submission must succeed");
+    TEST_ASSERT(reqIdWeb >= 1001, "Request ID must be assigned");
+    TEST_ASSERT(dispWeb == micant::certsrv::RequestDisposition::CR_DISP_ISSUED, "WebServer request must be auto-issued");
+
+    micant::certsrv::CertificateRequestRecord reqWeb;
+    TEST_ASSERT(pki.getRequest(reqIdWeb, reqWeb), "Request record must be queryable");
+    TEST_ASSERT(!reqWeb.issuedSerialNumber.empty(), "Issued serial number must be populated");
+
+    micant::certsrv::CertificateRecord certWeb;
+    TEST_ASSERT(pki.getCertificate(reqWeb.issuedSerialNumber, certWeb), "Issued WebServer certificate must be retrievable");
+    TEST_ASSERT(certWeb.templateName == "WebServer", "Certificate template must match");
+    TEST_ASSERT(certWeb.sanDnsNames.size() == 2, "Certificate must have 2 SAN DNS names");
+    TEST_ASSERT(certWeb.isRevoked == false, "Newly issued certificate must not be revoked");
+
+    // Stage 6: Pending Certificate Request & Administrative Approval Workflow
+    uint32_t reqIdCode = 0;
+    micant::certsrv::RequestDisposition dispCode = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+    bool subCodeOk = pki.submitRequest("CN=Titan Code Signing Authority,O=Titan Technologies", "CodeSigning", "TITAN\\DevLead", {}, 3072, &reqIdCode, &dispCode);
+    TEST_ASSERT(subCodeOk == true, "CodeSigning request submission must succeed");
+    TEST_ASSERT(dispCode == micant::certsrv::RequestDisposition::CR_DISP_UNDER_SUBMISSION, "CodeSigning request must be queued for administrative approval");
+
+    micant::certsrv::CertificateRequestRecord reqCodePending;
+    pki.getRequest(reqIdCode, reqCodePending);
+    TEST_ASSERT(reqCodePending.issuedSerialNumber.empty(), "Serial must not be assigned while under submission");
+
+    std::string approvedSerial;
+    bool appOk = pki.approveRequest(reqIdCode, &approvedSerial);
+    TEST_ASSERT(appOk == true, "approveRequest must succeed for pending request");
+    TEST_ASSERT(!approvedSerial.empty(), "Approved request must yield valid serial");
+
+    micant::certsrv::CertificateRequestRecord reqCodeApproved;
+    pki.getRequest(reqIdCode, reqCodeApproved);
+    TEST_ASSERT(reqCodeApproved.disposition == micant::certsrv::RequestDisposition::CR_DISP_ISSUED, "Approved request disposition must be CR_DISP_ISSUED");
+    TEST_ASSERT(reqCodeApproved.issuedSerialNumber == approvedSerial, "Assigned serial must match");
+
+    // Stage 7: Administrative Request Denial Workflow
+    uint32_t reqIdSubCa = 0;
+    micant::certsrv::RequestDisposition dispSubCa = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+    bool subSubCaOk = pki.submitRequest("CN=Rogue Subordinate CA", "SubCA", "TITAN\\Guest", {}, 4096, &reqIdSubCa, &dispSubCa);
+    TEST_ASSERT(subSubCaOk == true, "SubCA request submission must succeed");
+    TEST_ASSERT(dispSubCa == micant::certsrv::RequestDisposition::CR_DISP_UNDER_SUBMISSION, "SubCA request must be queued for approval");
+
+    bool denyOk = pki.denyRequest(reqIdSubCa, "Unauthorized Subordinate CA enrollment attempt");
+    TEST_ASSERT(denyOk == true, "denyRequest must succeed");
+
+    micant::certsrv::CertificateRequestRecord reqSubCaDenied;
+    pki.getRequest(reqIdSubCa, reqSubCaDenied);
+    TEST_ASSERT(reqSubCaDenied.disposition == micant::certsrv::RequestDisposition::CR_DISP_DENIED, "Denied request disposition must be CR_DISP_DENIED");
+    TEST_ASSERT(reqSubCaDenied.statusMessage.find("Unauthorized") != std::string::npos, "Status message must reflect denial reason");
+
+    // Stage 8: X.509 v3 Certificate Extension Validation
+    uint32_t reqIdDc = 0;
+    micant::certsrv::RequestDisposition dispDc = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+    pki.submitRequest("CN=titan-dc01.titan.local,OU=Domain Controllers,DC=titan,DC=local", "DomainController", "TITAN\\dc01$", {"titan-dc01.titan.local"}, 2048, &reqIdDc, &dispDc);
+    TEST_ASSERT(dispDc == micant::certsrv::RequestDisposition::CR_DISP_ISSUED, "DomainController cert must be issued");
+
+    micant::certsrv::CertificateRequestRecord reqDcRec;
+    pki.getRequest(reqIdDc, reqDcRec);
+    micant::certsrv::CertificateRecord certDc;
+    pki.getCertificate(reqDcRec.issuedSerialNumber, certDc);
+
+    TEST_ASSERT((certDc.keyUsage & micant::certsrv::KU_DIGITAL_SIGNATURE) != 0, "DC cert must have KU_DIGITAL_SIGNATURE");
+    TEST_ASSERT((certDc.keyUsage & micant::certsrv::KU_KEY_ENCIPHERMENT) != 0, "DC cert must have KU_KEY_ENCIPHERMENT");
+    TEST_ASSERT(certDc.authorityKeyIdentifier == rootCert.subjectKeyIdentifier, "AKI must match Root CA's SKI");
+    TEST_ASSERT(certDc.subjectKeyIdentifier.size() == 40, "SKI must be a 40-character SHA-1 hex digest");
+
+    // Stage 9: Certificate Chain Verification & Path Validation to Trusted Root CA
+    bool chainOk = false;
+    std::vector<std::string> chainDns;
+    TEST_ASSERT(pki.verifyCertificateChain(certDc.serialNumber, &chainOk, &chainDns), "Chain verification must execute");
+    TEST_ASSERT(chainOk == true, "Certificate chain from DC cert to Root CA must be valid");
+    TEST_ASSERT(chainDns.size() == 2, "Chain depth must be 2 (Leaf -> Root)");
+    TEST_ASSERT(chainDns[0] == certDc.subjectDn, "Chain leaf must be DC subject DN");
+    TEST_ASSERT(chainDns[1] == rootCert.subjectDn, "Chain root must be Root CA subject DN");
+
+    // Stage 10: Certificate Revocation Lifecycle (CRL generation)
+    uint32_t crlNumBefore = pki.getLatestCrl().crlNumber;
+    bool revOk = pki.revokeCertificate(certWeb.serialNumber, micant::certsrv::CRL_REASON_KEY_COMPROMISE);
+    TEST_ASSERT(revOk == true, "revokeCertificate must succeed");
+
+    micant::certsrv::CertificateRecord revCertCheck;
+    pki.getCertificate(certWeb.serialNumber, revCertCheck);
+    TEST_ASSERT(revCertCheck.isRevoked == true, "Certificate must be marked isRevoked == true");
+    TEST_ASSERT(revCertCheck.revocationReason == micant::certsrv::CRL_REASON_KEY_COMPROMISE, "Revocation reason must match");
+
+    auto latestCrl = pki.getLatestCrl();
+    TEST_ASSERT(latestCrl.crlNumber > crlNumBefore, "CRL number must increment after revocation");
+    TEST_ASSERT(!latestCrl.rawCrlDer.empty(), "CRL raw DER must be populated");
+
+    bool foundInCrl = false;
+    for (const auto& entry : latestCrl.revokedEntries) {
+        if (entry.serialNumber == certWeb.serialNumber) {
+            foundInCrl = true;
+            TEST_ASSERT(entry.revocationReason == micant::certsrv::CRL_REASON_KEY_COMPROMISE, "CRL entry revocation reason must match");
+            break;
+        }
+    }
+    TEST_ASSERT(foundInCrl == true, "Revoked certificate must be present in CRL");
+
+    // Stage 11: Online Certificate Status Protocol (OCSP / RFC 6960) Responder
+    micant::certsrv::OcspResponse ocspGood;
+    TEST_ASSERT(pki.processOcspRequest(certDc.serialNumber, ocspGood), "OCSP request for DC cert must succeed");
+    TEST_ASSERT(ocspGood.certStatus == micant::certsrv::OcspStatus::OCSP_STATUS_GOOD, "DC cert must return OCSP_STATUS_GOOD");
+    TEST_ASSERT(ocspGood.signature.size() == 256, "OCSP response must be signed (256-byte signature)");
+
+    micant::certsrv::OcspResponse ocspRevoked;
+    TEST_ASSERT(pki.processOcspRequest(certWeb.serialNumber, ocspRevoked), "OCSP request for WebServer cert must succeed");
+    TEST_ASSERT(ocspRevoked.certStatus == micant::certsrv::OcspStatus::OCSP_STATUS_REVOKED, "WebServer cert must return OCSP_STATUS_REVOKED");
+    TEST_ASSERT(ocspRevoked.revocationReason == micant::certsrv::CRL_REASON_KEY_COMPROMISE, "OCSP revocation reason must match");
+
+    micant::certsrv::OcspResponse ocspUnknown;
+    TEST_ASSERT(pki.processOcspRequest("DEADBEEF99999999", ocspUnknown), "OCSP request for unknown cert must succeed");
+    TEST_ASSERT(ocspUnknown.certStatus == micant::certsrv::OcspStatus::OCSP_STATUS_UNKNOWN, "Unknown serial must return OCSP_STATUS_UNKNOWN");
+
+    // Stage 12: Negative Testing & Security Boundary Checks
+    uint32_t badReqId = 0;
+    micant::certsrv::RequestDisposition badDisp = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+    bool badTmplOk = pki.submitRequest("CN=bad.local", "NonExistentTemplate", "TITAN\\User", {}, 2048, &badReqId, &badDisp);
+    TEST_ASSERT(badTmplOk == false && badDisp == micant::certsrv::RequestDisposition::CR_DISP_ERROR, "Non-existent template must be rejected with CR_DISP_ERROR");
+
+    bool badKeyOk = pki.submitRequest("CN=weak.local", "CodeSigning", "TITAN\\User", {}, 1024, &badReqId, &badDisp);
+    TEST_ASSERT(badKeyOk == false && badDisp == micant::certsrv::RequestDisposition::CR_DISP_DENIED, "Undersized key must be rejected with CR_DISP_DENIED");
+
+    bool doubleRev = pki.revokeCertificate(certWeb.serialNumber, micant::certsrv::CRL_REASON_SUPERSEDED);
+    TEST_ASSERT(doubleRev == false, "Double revocation of already revoked certificate must return false");
+
+    bool badApprove = pki.approveRequest(99999, nullptr);
+    TEST_ASSERT(badApprove == false, "Approving non-existent request ID must return false");
+
+    // Stage 13: Clean-Room Win32 C ABI Exports
+    void* pEngine = nullptr;
+    int32_t initRes = micant::certsrv::MicaCertSrvInitialize(&pEngine);
+    TEST_ASSERT(initRes == 1 && pEngine != nullptr, "MicaCertSrvInitialize must succeed");
+
+    uint32_t abiReqId = 0;
+    uint32_t abiDisp = 0;
+    int32_t subRes = micant::certsrv::MicaCertSrvSubmitRequest(pEngine, "CN=abi-test.titan.local", "Computer", "TITAN\\HOST01$", &abiReqId, &abiDisp);
+    TEST_ASSERT(subRes == 1 && abiReqId > 0 && abiDisp == static_cast<uint32_t>(micant::certsrv::RequestDisposition::CR_DISP_ISSUED), "MicaCertSrvSubmitRequest must succeed via C ABI");
+
+    char serialOut[64]{};
+    uint8_t derOut[1024]{};
+    uint32_t derActual = 0;
+    int32_t retRes = micant::certsrv::MicaCertSrvRetrieveCertificate(pEngine, abiReqId, serialOut, sizeof(serialOut), derOut, sizeof(derOut), &derActual);
+    TEST_ASSERT(retRes == 1 && std::strlen(serialOut) > 0 && derActual > 0, "MicaCertSrvRetrieveCertificate must succeed via C ABI");
+
+    uint32_t ocspStat = 999;
+    int32_t ocspRes = micant::certsrv::MicaCertSrvOcspCheck(pEngine, serialOut, &ocspStat);
+    TEST_ASSERT(ocspRes == 1 && ocspStat == static_cast<uint32_t>(micant::certsrv::OcspStatus::OCSP_STATUS_GOOD), "MicaCertSrvOcspCheck must return Good via C ABI");
+
+    int32_t revRes = micant::certsrv::MicaCertSrvRevokeCertificate(pEngine, serialOut, micant::certsrv::CRL_REASON_CESSATION_OF_OPERATION);
+    TEST_ASSERT(revRes == 1, "MicaCertSrvRevokeCertificate must succeed via C ABI");
+
+    uint32_t crlNum = 0;
+    uint32_t revCount = 0;
+    int32_t crlRes = micant::certsrv::MicaCertSrvGetCrl(pEngine, &crlNum, &revCount);
+    TEST_ASSERT(crlRes == 1 && crlNum > 0 && revCount > 0, "MicaCertSrvGetCrl must succeed via C ABI");
+
+    int32_t shutRes = micant::certsrv::MicaCertSrvShutdown(pEngine);
+    TEST_ASSERT(shutRes == 1, "MicaCertSrvShutdown must succeed");
+
+    // Stage 14: Multithreaded High-Throughput Concurrent PKI Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&pki, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                std::string hostName = "node" + std::to_string(t) + "-" + std::to_string(op) + ".titan.local";
+                std::string subj = "CN=" + hostName + ",OU=Compute Nodes,DC=titan,DC=local";
+                uint32_t rId = 0;
+                micant::certsrv::RequestDisposition disp = micant::certsrv::RequestDisposition::CR_DISP_INCOMPLETE;
+
+                bool subOk = pki.submitRequest(subj, "Computer", "TITAN\\ClusterService", {hostName}, 2048, &rId, &disp);
+
+                micant::certsrv::CertificateRequestRecord rRec;
+                bool getReqOk = pki.getRequest(rId, rRec);
+
+                micant::certsrv::CertificateRecord cRec;
+                bool getCertOk = pki.getCertificate(rRec.issuedSerialNumber, cRec);
+
+                micant::certsrv::OcspResponse oResp;
+                bool ocspOk = pki.processOcspRequest(rRec.issuedSerialNumber, oResp);
+
+                bool chainOkInner = false;
+                bool verOk = pki.verifyCertificateChain(rRec.issuedSerialNumber, &chainOkInner, nullptr);
+
+                if (subOk && getReqOk && getCertOk && ocspOk && verOk && chainOkInner && oResp.certStatus == micant::certsrv::OcspStatus::OCSP_STATUS_GOOD) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded PKI stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 207: Active Directory Certificate Services & Enterprise PKI Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite206")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite207")) {
+        RUN_TEST(Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite206") {
         RUN_TEST(Test_WindowsDeploymentServices_PXE_Subsystem);
         return g_FailedTests;
     }
@@ -47090,6 +47377,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsNetworkPolicyServer_RADIUS_Subsystem);
     RUN_TEST(Test_WindowsSystemResourceManager_FairShare_Subsystem);
     RUN_TEST(Test_WindowsDeploymentServices_PXE_Subsystem);
+    RUN_TEST(Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
