@@ -187,6 +187,7 @@
 #include "micant/ink.hpp"
 #include "micant/spatial_audio.hpp"
 #include "micant/hpd.hpp"
+#include "micant/cameracx.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -41492,8 +41493,228 @@ void Test_WindowsHumanPresenceDetection_Subsystem() {
     std::cout << "[TEST] Suite 182: Windows Human Presence Detection & Adaptive Lock Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 183: Windows Camera Device Class Extension (CameraCx) & AVStream Subsystem
+// ============================================================================
+void Test_WindowsCameraClassExtension_Subsystem() {
+    std::cout << "[TEST] Executing Suite 183: Windows Camera Device Class Extension (CameraCx) & AVStream Subsystem...\n";
+
+    // Stage 1: Subsystem registration in SCM and VersionDatabase
+    micant::camera::RegisterCameraSubsystem();
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    auto modCamSvc = vdb.FindModule("camerasvc.dll");
+    auto modCamCx = vdb.FindModule("cameracx.sys");
+    TEST_ASSERT(modCamSvc != nullptr, "camerasvc.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modCamCx != nullptr, "cameracx.sys must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto svcRec = scm.getServiceRecord(L"FrameServer");
+    TEST_ASSERT(svcRec != nullptr, "FrameServer SCM record must exist");
+    TEST_ASSERT(svcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "FrameServer must be running");
+
+    // Stage 2: Subsystem instance and pre-registered camera device
+    auto& camSys = micant::camera::CameraSubsystem::get();
+    camSys.setSubsystemEnabled(true);
+    TEST_ASSERT(camSys.isSubsystemEnabled() == true, "CameraSubsystem must be enabled");
+    TEST_ASSERT(camSys.getDeviceCount() >= 1, "CameraSubsystem must have at least one pre-registered device");
+
+    auto dev1 = camSys.getDevice(1);
+    TEST_ASSERT(dev1 != nullptr, "Default integrated front camera device (ID=1) must exist");
+    TEST_ASSERT(dev1->getId() == 1, "Default integrated camera ID must be 1");
+    TEST_ASSERT(dev1->getName() == L"MicaNT Sovereign Integrated Front Camera", "Default camera name must match");
+
+    // Stage 3: New Camera Device Creation & Enumeration
+    uint32_t extCamId = camSys.registerCameraDevice(L"Titan External 4K Conference Camera");
+    TEST_ASSERT(extCamId > 1, "New external camera device must receive unique ID > 1");
+    auto extDev = camSys.getDevice(extCamId);
+    TEST_ASSERT(extDev != nullptr, "Registered external camera must be retrievable");
+    TEST_ASSERT(extDev->getName() == L"Titan External 4K Conference Camera", "External camera name must match");
+    TEST_ASSERT(camSys.getDeviceCount() >= 2, "Camera device count must reflect newly registered device");
+
+    // Stage 4: Pin Discovery and Default Formats
+    auto* pCapture = extDev->getStream(micant::camera::CameraPinType::Capture);
+    auto* pPreview = extDev->getStream(micant::camera::CameraPinType::Preview);
+    auto* pStill   = extDev->getStream(micant::camera::CameraPinType::Still);
+    auto* pSecureIR= extDev->getStream(micant::camera::CameraPinType::SecureIR);
+
+    TEST_ASSERT(pCapture != nullptr && pPreview != nullptr && pStill != nullptr && pSecureIR != nullptr,
+                "All 4 standard CameraCx pin streams must exist on created device");
+    TEST_ASSERT(pCapture->getFormat().width == 1920 && pCapture->getFormat().height == 1080, "Default Capture pin must be 1080p");
+    TEST_ASSERT(pCapture->getFormat().pixelFormat == micant::camera::CameraPixelFormat::NV12, "Default Capture format must be NV12");
+    TEST_ASSERT(pPreview->getFormat().width == 1280 && pPreview->getFormat().height == 720, "Default Preview pin must be 720p");
+    TEST_ASSERT(pStill->getFormat().width == 3840 && pStill->getFormat().height == 2160, "Default Still pin must be 4K (3840x2160)");
+    TEST_ASSERT(pSecureIR->getFormat().pixelFormat == micant::camera::CameraPixelFormat::IR16, "SecureIR pin must default to IR16");
+
+    // Stage 5: Custom Pin Format Negotiation & Helpers
+    micant::camera::CameraStreamFormat customFmt{
+        .width = 2560,
+        .height = 1440,
+        .maxFps = 60,
+        .pixelFormat = micant::camera::CameraPixelFormat::MJPEG,
+        .strideBytes = 2560 * 2,
+        .frameSizeBytes = 2560 * 1440 * 2
+    };
+    extDev->configurePin(micant::camera::CameraPinType::Capture, customFmt);
+    auto* pReconfCap = extDev->getStream(micant::camera::CameraPinType::Capture);
+    TEST_ASSERT(pReconfCap->getFormat().width == 2560 && pReconfCap->getFormat().height == 1440,
+                "Capture pin must successfully reconfigure to 1440p");
+    TEST_ASSERT(pReconfCap->getFormat().pixelFormat == micant::camera::CameraPixelFormat::MJPEG,
+                "Capture pin must reconfigure to MJPEG format");
+
+    TEST_ASSERT(std::string(micant::camera::CameraPinTypeToString(micant::camera::CameraPinType::Capture)) == "Capture", "Pin string helper valid");
+    TEST_ASSERT(std::string(micant::camera::CameraPinTypeToString(micant::camera::CameraPinType::SecureIR)) == "Secure Infrared (Hello IR)", "IR pin string helper valid");
+    TEST_ASSERT(std::string(micant::camera::CameraPixelFormatToString(micant::camera::CameraPixelFormat::NV12)) == "NV12 (YUV 4:2:0)", "Format string helper valid");
+
+    // Stage 6: Stream Lifecycle & Frame Acquisition
+    pReconfCap->start();
+    TEST_ASSERT(pReconfCap->isStreaming() == true, "Stream must report isStreaming() == true once started");
+
+    micant::camera::CameraFrameHeader hdrCap{};
+    std::vector<uint8_t> dataCap;
+    for (int i = 0; i < 5; ++i) {
+        bool ok = camSys.fetchFrame(extCamId, micant::camera::CameraPinType::Capture, hdrCap, dataCap);
+        TEST_ASSERT(ok, "fetchFrame on active Capture pin must succeed");
+        TEST_ASSERT(hdrCap.frameId == static_cast<uint32_t>(i + 1), "FrameId must sequentially increment");
+        TEST_ASSERT(hdrCap.width == 2560 && hdrCap.height == 1440, "Frame resolution must match configured pin format");
+        TEST_ASSERT(!dataCap.empty(), "Frame payload buffer must not be empty");
+        TEST_ASSERT(hdrCap.metadata.timestampUs > 0, "Hardware QPC microsecond timestamp must be non-zero");
+    }
+    TEST_ASSERT(pReconfCap->getFramesDelivered() == 5, "Frames delivered counter must equal 5");
+
+    // Stage 7: Windows Hello Biometric Secure IR Stream Isolation
+    pSecureIR->start();
+    uint64_t irFramesBefore = camSys.getSecureIrFramesIsolated();
+    micant::camera::CameraFrameHeader hdrIR{};
+    std::vector<uint8_t> dataIR;
+    bool okIR = camSys.fetchFrame(extCamId, micant::camera::CameraPinType::SecureIR, hdrIR, dataIR);
+    TEST_ASSERT(okIR, "fetchFrame on SecureIR pin must succeed");
+    TEST_ASSERT(hdrIR.metadata.secureStream == true, "SecureIR stream must be cryptographically marked secureStream == true");
+    TEST_ASSERT(hdrIR.pixelFormat == micant::camera::CameraPixelFormat::IR16, "SecureIR frame must be IR16");
+    TEST_ASSERT(camSys.getSecureIrFramesIsolated() > irFramesBefore, "Secure IR isolated counter must increment");
+
+    // Stage 8: Image Signal Processor (ISP) Auto-Exposure Feedback Loop
+    micant::camera::CameraIspParameters ispParams = extDev->getIspParameters();
+    ispParams.autoExposureEnabled = true;
+    ispParams.targetLuminance = 180; // Request brighter exposure
+    extDev->setIspParameters(ispParams);
+
+    uint32_t prevExposure = hdrCap.metadata.exposureTimeUs;
+    camSys.fetchFrame(extCamId, micant::camera::CameraPinType::Capture, hdrCap, dataCap);
+    // Since initial luminance is 128 < 180, exposureTimeUs should increment towards target
+    TEST_ASSERT(hdrCap.metadata.exposureTimeUs >= prevExposure, "Auto-Exposure must increase exposure time towards higher target luminance");
+
+    // Verify manual ISP controls
+    ispParams.autoExposureEnabled = false;
+    ispParams.manualExposureUs = 8000;
+    ispParams.manualGain = 2.5f;
+    ispParams.autoWhiteBalanceEnabled = false;
+    ispParams.colorTemperatureK = 6500;
+    extDev->setIspParameters(ispParams);
+
+    camSys.fetchFrame(extCamId, micant::camera::CameraPinType::Capture, hdrCap, dataCap);
+    TEST_ASSERT(hdrCap.metadata.exposureTimeUs == 8000, "Manual exposure time must be applied directly");
+    TEST_ASSERT(std::abs(hdrCap.metadata.analogGain - 2.5f) < 0.01f, "Manual gain must be applied directly");
+    TEST_ASSERT(hdrCap.metadata.colorTemperatureK == 6500, "Manual white balance color temp must be applied directly");
+
+    // Stage 9: Hardware Privacy Shutter Physical Kill Switch Enforcement
+    ispParams.hardwarePrivacyShutterClosed = true;
+    extDev->setIspParameters(ispParams);
+
+    camSys.fetchFrame(extCamId, micant::camera::CameraPinType::Capture, hdrCap, dataCap);
+    TEST_ASSERT(hdrCap.metadata.exposureTimeUs == 0, "Privacy shutter engagement must zero out exposure time");
+    TEST_ASSERT(hdrCap.metadata.analogGain == 0.0f, "Privacy shutter engagement must zero out analog gain");
+
+    // Verify all bytes in dataCap are 0 (zero-luminance black frame)
+    bool allZero = std::all_of(dataCap.begin(), dataCap.end(), [](uint8_t b) { return b == 0; });
+    TEST_ASSERT(allZero, "Hardware privacy shutter engagement must ensure 100% black frame buffer with zero optical leakage");
+
+    // Reset privacy shutter
+    ispParams.hardwarePrivacyShutterClosed = false;
+    extDev->setIspParameters(ispParams);
+
+    // Stage 10: Multi-Client Zero-Copy Ring Buffer Delivery & Stream Stop
+    // Fetch 6 more frames to wrap around the 4-slot ring buffer pool
+    for (int k = 0; k < 6; ++k) {
+        bool ok = camSys.fetchFrame(extCamId, micant::camera::CameraPinType::Capture, hdrCap, dataCap);
+        TEST_ASSERT(ok, "Continuous zero-copy ring buffer cycling must succeed");
+    }
+    pReconfCap->stop();
+    TEST_ASSERT(pReconfCap->isStreaming() == false, "Stream must report isStreaming() == false when stopped");
+    bool fetchStopped = camSys.fetchFrame(extCamId, micant::camera::CameraPinType::Capture, hdrCap, dataCap);
+    TEST_ASSERT(!fetchStopped, "fetchFrame must fail on stopped camera stream");
+
+    // Stage 11: Clean-Room Dynamic C ABI Parity Exports
+    uint32_t abiDevId = 0;
+    NTSTATUS stCreate = micant::camera::CameraCreateDevice(L"Aegis Virtual PTZ Camera", &abiDevId);
+    TEST_ASSERT(stCreate == micant::STATUS_SUCCESS && abiDevId > 0, "CameraCreateDevice ABI must succeed");
+
+    NTSTATUS stConf = micant::camera::CameraConfigurePin(abiDevId,
+        static_cast<uint32_t>(micant::camera::CameraPinType::Capture),
+        1920, 1080, 60, static_cast<uint32_t>(micant::camera::CameraPixelFormat::NV12));
+    TEST_ASSERT(stConf == micant::STATUS_SUCCESS, "CameraConfigurePin ABI must succeed");
+
+    NTSTATUS stStart = micant::camera::CameraStartStream(abiDevId, static_cast<uint32_t>(micant::camera::CameraPinType::Capture));
+    TEST_ASSERT(stStart == micant::STATUS_SUCCESS, "CameraStartStream ABI must succeed");
+
+    micant::camera::CameraFrameHeader abiHdr{};
+    std::vector<uint8_t> abiBuffer(1920 * 1080 * 2, 0);
+    NTSTATUS stGet = micant::camera::CameraGetNextFrame(abiDevId,
+        static_cast<uint32_t>(micant::camera::CameraPinType::Capture),
+        &abiHdr, abiBuffer.data(), abiBuffer.size());
+    TEST_ASSERT(stGet == micant::STATUS_SUCCESS, "CameraGetNextFrame ABI must succeed");
+    TEST_ASSERT(abiHdr.width == 1920 && abiHdr.height == 1080, "ABI retrieved frame width and height must match");
+
+    NTSTATUS stStop = micant::camera::CameraStopStream(abiDevId, static_cast<uint32_t>(micant::camera::CameraPinType::Capture));
+    TEST_ASSERT(stStop == micant::STATUS_SUCCESS, "CameraStopStream ABI must succeed");
+
+    micant::camera::CameraIspParameters abiIsp{};
+    abiIsp.autoExposureEnabled = true;
+    NTSTATUS stIsp = micant::camera::CameraConfigureIsp(abiDevId, &abiIsp);
+    TEST_ASSERT(stIsp == micant::STATUS_SUCCESS, "CameraConfigureIsp ABI must succeed");
+
+    // ABI parameter boundary checks
+    TEST_ASSERT(micant::camera::CameraCreateDevice(nullptr, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null deviceId ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::camera::CameraConfigurePin(99999, 0, 1920, 1080, 60, 0) == micant::STATUS_NOT_FOUND, "Nonexistent device must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::camera::CameraStartStream(99999, 0) == micant::STATUS_NOT_FOUND, "Nonexistent device stream start must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::camera::CameraGetNextFrame(abiDevId, 0, nullptr, nullptr, 0) == micant::STATUS_INVALID_PARAMETER, "Null buffer pointers must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::camera::CameraConfigureIsp(abiDevId, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null ISP pointer must return STATUS_INVALID_PARAMETER");
+
+    // Stage 12: Multi-Threaded Concurrent Camera Streaming Stress Test
+    std::atomic<uint32_t> stressFramesProcessed{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([&camSys, &stressFramesProcessed, t]() {
+            uint32_t thDevId = camSys.registerCameraDevice(L"Thread Sensor Device");
+            auto thDev = camSys.getDevice(thDevId);
+            if (!thDev) return;
+
+            auto pin = static_cast<micant::camera::CameraPinType>(t % 4);
+            auto* pStream = thDev->getStream(pin);
+            if (pStream) pStream->start();
+
+            for (int f = 0; f < 25; ++f) {
+                micant::camera::CameraFrameHeader thHdr{};
+                std::vector<uint8_t> thData;
+                if (camSys.fetchFrame(thDevId, pin, thHdr, thData)) {
+                    stressFramesProcessed++;
+                }
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressFramesProcessed.load() == 100, "100 concurrent camera frames must be processed across 4 worker threads without race conditions");
+
+    std::cout << "[TEST] Suite 183: Windows Camera Device Class Extension (CameraCx) & AVStream Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite182")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite183")) {
+        RUN_TEST(Test_WindowsCameraClassExtension_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite182") {
         RUN_TEST(Test_WindowsHumanPresenceDetection_Subsystem);
         return g_FailedTests;
     }
@@ -41988,6 +42209,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsInk_PenDigitizer_ISF_Subsystem);
     RUN_TEST(Test_WindowsSpatialAudio_APO_Subsystem);
     RUN_TEST(Test_WindowsHumanPresenceDetection_Subsystem);
+    RUN_TEST(Test_WindowsCameraClassExtension_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
