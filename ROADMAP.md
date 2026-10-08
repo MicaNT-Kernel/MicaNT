@@ -3518,20 +3518,37 @@
 
 ---
 
-### Phase 168: Windows Container Storage & Host Compute System Isolation (`wcifs.sys`, `wcnfs.sys`, `hcsshim`, `TitanContainerStorage`) (Milestone 195) [PLANNED]
+### Phase 168: Windows Container Storage & Host Compute System Isolation (`wcifs.sys`, `wcnfs.sys`, `hcsshim`, `TitanContainerStorage`) (Milestone 195) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Container Storage & Isolation Subsystem (`wcifs.sys`, `wcnfs.sys`, `hcsshim`), providing copy-on-write overlay layers, container storage virtualisation, registry layer merging, process silo isolation, and Host Compute Service (HCS) container lifecycle control.*
-- [ ] **Container Storage Filter Engine (`include/micant/wcifs.hpp`)**:
+- [x] **Container Storage Filter Engine (`include/micant/wcifs.hpp`)**:
   - Windows Container Isolation Filter (`wcifs.sys`): Multi-layer read-only base image merging with read/write scratch layer.
   - Windows Container Namespace Filter (`wcnfs.sys`): Per-container registry hive virtualization and symbolic link redirection.
   - Process Silos: Isolated server silos (`JOB_OBJECT_SILO`) separating object namespaces, handles, and networking.
   - Host Compute Service (HCS / `vmcompute.exe`, `hcs.dll`): Compute system container creation, initialization, execution, and termination.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `wcifs.sys` / `hcs.dll`: `WcifsInitializeSubsystem`, `WcifsCreateLayer`, `WcifsAttachContainerStorage`, `WcifsReadLayeredFile`, `WcifsWriteCoWLayeredFile`, `HcsCreateComputeSystem`, `HcsStartComputeSystem`, `HcsTerminateComputeSystem`.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`Wcifs`, file system filter driver; `vmcompute`, Host Compute Service).
-- [ ] **Interactive Shell CLI**:
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`Wcifs`, file system filter driver; `wcnfs`, namespace filter driver; `vmcompute`, Host Compute Service).
+- [x] **Interactive Shell CLI**:
   - `wcn status`, `wcn containers`, `wcn layers`, `wcn run <image>`, `wcn stop <id>`, `wcn test`.
-- [ ] **Unit Test Suite 195 (`Test_WindowsContainerStorage_Wcifs_Subsystem`)**:
-  - Comprehensive validation stages verifying multi-layer image stack composition, Copy-on-Write write divergence, registry hive virtualization, silo namespace isolation, HCS container lifecycle, and Win32 C ABI exports.
+- [x] **Unit Test Suite 195 (`Test_WindowsContainerStorage_Wcifs_Subsystem`)**:
+  - 12 comprehensive validation stages verifying SCM driver/service registration, storage layer immutability, silo namespace partitioning, multi-layer stack assembly, top-down read traversal, transparent CoW divergence, tombstone deletion masking, registry diff hives, HCS lifecycle, Hyper-V isolation mode, Win32 C ABI exports, and high-density multi-threaded silo concurrency.
+  - Milestone 195: **195 / 195 Test Suites Passing (100%)**.
+
+---
+
+### Phase 169: Windows DirectStorage & Storage Spaces Direct / S2D Subsystem (`dstorage.dll`, `spaceport.sys`, `s2d.sys`, `TitanDirectStorage`) (Milestone 196) [PLANNED]
+*Goal: Implement clean-room Windows DirectStorage & Storage Spaces Direct (S2D) Subsystem (`dstorage.dll`, `spaceport.sys`), providing GPU-decompressed asynchronous NVMe storage queues, bypassing OS file system overhead, resilient multi-tier storage pooling, and software-defined high-availability storage spaces.*
+- [ ] **DirectStorage Engine (`include/micant/directstorage.hpp`)**:
+  - Asynchronous NVMe Direct-to-GPU Queue Architecture: Bypassing legacy OS thread-switching bottlenecks via optimized ring buffers.
+  - Hardware & GDeflate Asset Decompression: GPU-driven decompression offloading CPU overhead.
+  - Storage Spaces Direct (S2D) Virtual Storage Pools: Multi-resiliency mirror, parity, and hybrid tiering with automatic slab redistribution.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `dstorage.dll` / `spaceport.sys`: `DStorageCreateFactory`, `DStorageCreateQueue`, `DStorageOpenFile`, `DStorageEnqueueRequest`, `DStorageSubmit`, `StorageSpacesCreatePool`, `StorageSpacesCreateVirtualDisk`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`spaceport.sys`, storage bus driver).
+- [ ] **Interactive Shell CLI**:
+  - `dstorage status`, `dstorage queues`, `dstorage benchmark`, `spaces pools`, `spaces disks`, `dstorage test`.
+- [ ] **Unit Test Suite 196 (`Test_WindowsDirectStorage_S2D_Subsystem`)**:
+  - Comprehensive validation stages verifying DirectStorage queue scheduling, GDeflate decompression, bypassIO fast path, Storage Spaces pool creation, and multi-tier read/write throughput.
 
 
 

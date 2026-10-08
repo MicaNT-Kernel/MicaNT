@@ -199,6 +199,7 @@
 #include "micant/hyperv.hpp"
 #include "micant/refs.hpp"
 #include "micant/csvfs.hpp"
+#include "micant/wcifs.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -43702,8 +43703,220 @@ void Test_WindowsClusterSharedVolume_CSVFS_Subsystem() {
     std::cout << "[TEST] Suite 194: Windows Cluster Shared Volume File System (CSVFS v2.0) Subsystem PASSED.\n";
 }
 
+void Test_WindowsContainerStorage_Wcifs_Subsystem() {
+    std::cout << "[TEST] Running Suite 195: Windows Container Storage & Host Compute System (HCS) Isolation Subsystem...\n";
+
+    // 1. SCM Driver & Host Compute Service Registration
+    micant::wcifs::RegisterWcifsSubsystem();
+    auto& scm = micant::scm::ServiceControlManager::get();
+
+    auto wcifsSvc = scm.getServiceRecord(L"Wcifs");
+    TEST_ASSERT(wcifsSvc != nullptr, "wcifs.sys kernel minifilter must be registered in SCM");
+    TEST_ASSERT(wcifsSvc->serviceType == micant::scm::SERVICE_FILE_SYSTEM_DRIVER, "Wcifs must be SERVICE_FILE_SYSTEM_DRIVER");
+    TEST_ASSERT(wcifsSvc->startType == micant::scm::SERVICE_SYSTEM_START, "Wcifs must be configured for SERVICE_SYSTEM_START");
+    TEST_ASSERT(wcifsSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Wcifs must be RUNNING");
+
+    auto wcnfsSvc = scm.getServiceRecord(L"Wcnfs");
+    TEST_ASSERT(wcnfsSvc != nullptr, "wcnfs.sys namespace minifilter must be registered in SCM");
+    TEST_ASSERT(wcnfsSvc->serviceType == micant::scm::SERVICE_FILE_SYSTEM_DRIVER, "Wcnfs must be SERVICE_FILE_SYSTEM_DRIVER");
+    TEST_ASSERT(wcnfsSvc->startType == micant::scm::SERVICE_SYSTEM_START, "Wcnfs must be configured for SERVICE_SYSTEM_START");
+    TEST_ASSERT(wcnfsSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Wcnfs must be RUNNING");
+
+    auto hcsSvc = scm.getServiceRecord(L"vmcompute");
+    TEST_ASSERT(hcsSvc != nullptr, "Host Compute Service (vmcompute.exe) must be registered in SCM");
+    TEST_ASSERT(hcsSvc->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "vmcompute must be SERVICE_WIN32_OWN_PROCESS");
+    TEST_ASSERT(hcsSvc->startType == micant::scm::SERVICE_AUTO_START, "vmcompute must be SERVICE_AUTO_START");
+    TEST_ASSERT(hcsSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "vmcompute must be RUNNING");
+
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("wcifs.sys") != nullptr, "wcifs.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("wcnfs.sys") != nullptr, "wcnfs.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("vmcompute.exe") != nullptr, "vmcompute.exe must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("hcs.dll") != nullptr, "hcs.dll must be registered in VersionDatabase");
+
+    // 2. Storage Layer Registration & Immutability
+    auto& sys = micant::wcifs::WcifsSubsystem::get();
+    TEST_ASSERT(sys.isInitialized(), "WcifsSubsystem must be initialized");
+    TEST_ASSERT(sys.getLayerCount() >= 2, "Default base OS layers (NanoServer & ServerCore) must be registered");
+
+    auto nanoLayer = sys.getLayer("{A1B2C3D4-NANO-SERVER-2025-000000000001}");
+    TEST_ASSERT(nanoLayer != nullptr, "NanoServer base layer must exist");
+    TEST_ASSERT(nanoLayer->isReadOnly, "Base layers must be immutable / read-only");
+    TEST_ASSERT(nanoLayer->fileTable.find("\\Windows\\System32\\ntdll.dll") != nanoLayer->fileTable.end(), "ntdll.dll must exist in NanoServer layer");
+
+    auto appLayer = sys.registerLayer("{C3D4E5F6-APP-NODEJS-2025-000000000003}", "C:\\ProgramData\\docker\\windowsfilter\\node_layer", true, 128 * 1024 * 1024ULL);
+    TEST_ASSERT(appLayer != nullptr, "Custom application layer registration must succeed");
+    appLayer->fileTable["\\app\\server.js"] = { 'c', 'o', 'n', 's', 'o', 'l', 'e', '.', 'l', 'o', 'g', '(', '"', 'O', 'K', '"', ')', ';' };
+    appLayer->fileTable["\\app\\package.json"] = { '{', '"', 'n', 'a', 'm', 'e', '"', ':', '"', 'n', 'o', 'd', 'e', '-', 'a', 'p', 'p', '"', '}' };
+    TEST_ASSERT(sys.getLayer("{C3D4E5F6-APP-NODEJS-2025-000000000003}") == appLayer, "Querying registered app layer by GUID must match");
+
+    // 3. Compute System Creation & Silo Object Manager Namespace Partitioning
+    auto container = sys.createComputeSystem("web-app-silo", "nanoserver:ltsc2025", micant::wcifs::ContainerIsolationType::ProcessSilo);
+    TEST_ASSERT(container != nullptr, "Host Compute System creation must succeed");
+    TEST_ASSERT(container->getId() >= 1001, "Container ID must be assigned");
+    TEST_ASSERT(container->getState() == micant::wcifs::ComputeSystemState::Created, "Initial state must be Created");
+    TEST_ASSERT(container->getIsolationType() == micant::wcifs::ContainerIsolationType::ProcessSilo, "Isolation must be ProcessSilo");
+
+    std::string expectedNamespace = "\\Sessions\\" + std::to_string(container->getId()) + "\\BaseNamedObjects";
+    TEST_ASSERT(container->getSiloNamespace() == expectedNamespace, "Silo Object Manager namespace must match container ID partition");
+
+    // 4. Multi-Layer Stack Assembly & Hierarchy Binding
+    auto stack = container->getStorageStack();
+    TEST_ASSERT(stack != nullptr, "Container storage stack must be allocated");
+    TEST_ASSERT(stack->getContainerId() == container->getId(), "Storage stack container ID must match");
+    size_t baseCountInitial = stack->getBaseLayerCount();
+    stack->addBaseLayer(appLayer);
+    TEST_ASSERT(stack->getBaseLayerCount() == baseCountInitial + 1, "App layer must be stacked onto container storage");
+
+    // 5. Top-Down Layered File Read Traversal
+    std::vector<uint8_t> ntdllBytes;
+    bool ntdllReadOk = stack->readFile("\\Windows\\System32\\ntdll.dll", ntdllBytes);
+    TEST_ASSERT(ntdllReadOk, "Reading ntdll.dll from stacked base layer must succeed");
+    TEST_ASSERT(ntdllBytes.size() >= 4 && ntdllBytes[0] == 0x4D && ntdllBytes[1] == 0x5A, "ntdll.dll must have valid PE DOS magic");
+
+    std::vector<uint8_t> appBytes;
+    bool appReadOk = stack->readFile("\\app\\server.js", appBytes);
+    TEST_ASSERT(appReadOk, "Reading server.js from intermediate app layer must succeed");
+    TEST_ASSERT(!appBytes.empty() && appBytes[0] == 'c', "server.js content must match app layer payload");
+    TEST_ASSERT(stack->getBaseLayerReads() >= 2, "Base layer read counter must reflect reads from layers");
+    TEST_ASSERT(stack->getScratchReads() == 0, "No scratch reads should occur for pristine base layer files");
+
+    // 6. Transparent Copy-on-Write (CoW) Scratch Divergence
+    const uint8_t patchedNtdll[] = { 0x90, 0x90, 0xCC, 0xC3 };
+    bool cowWriteOk = stack->writeFileCoW("\\Windows\\System32\\ntdll.dll", patchedNtdll, sizeof(patchedNtdll));
+    TEST_ASSERT(cowWriteOk, "Writing to existing base file must trigger CoW write into scratch layer");
+    TEST_ASSERT(stack->getCowDivergences() == 1, "CoW divergence counter must be exactly 1");
+
+    std::vector<uint8_t> scratchNtdll;
+    bool readScratchOk = stack->readFile("\\Windows\\System32\\ntdll.dll", scratchNtdll);
+    TEST_ASSERT(readScratchOk, "Reading modified file must read from top scratch layer");
+    TEST_ASSERT(scratchNtdll.size() == sizeof(patchedNtdll) && scratchNtdll[0] == 0x90, "Read data must match scratch layer modification");
+    TEST_ASSERT(stack->getScratchReads() >= 1, "Scratch reads counter must be incremented");
+
+    // Verify underlying base layer is completely pristine and untouched
+    const auto& pristineBase = nanoLayer->fileTable["\\Windows\\System32\\ntdll.dll"];
+    TEST_ASSERT(pristineBase.size() >= 2 && pristineBase[0] == 0x4D && pristineBase[1] == 0x5A, "Base layer must remain strictly read-only and unpolluted");
+
+    // 7. Whiteout / Tombstone Deletion Semantics
+    TEST_ASSERT(stack->hasFile("\\app\\package.json"), "package.json must initially exist via app base layer");
+    bool delOk = stack->deleteFile("\\app\\package.json");
+    TEST_ASSERT(delOk, "Deleting layered file must succeed and place tombstone marker");
+    TEST_ASSERT(stack->getTombstoneDeletes() >= 1, "Tombstone deletion counter must increment");
+    TEST_ASSERT(!stack->hasFile("\\app\\package.json"), "hasFile must return false for tombstoned file");
+
+    std::vector<uint8_t> tombstoneTest;
+    bool tombstoneMasked = !stack->readFile("\\app\\package.json", tombstoneTest);
+    TEST_ASSERT(tombstoneMasked, "readFile on tombstoned file must fail even though present in lower layer");
+
+    // Overwriting a tombstoned file clears tombstone
+    const char newPkg[] = "{\"name\":\"overwritten-pkg\"}";
+    stack->writeFileCoW("\\app\\package.json", newPkg, sizeof(newPkg));
+    TEST_ASSERT(stack->hasFile("\\app\\package.json"), "Writing to tombstoned file must clear tombstone and create in scratch");
+
+    // 8. Per-Container Virtualized Registry Diff Hives (wcnfs.sys)
+    container->setRegistryDiff("HKLM\\SOFTWARE\\NodeApp\\Port", "8080");
+    container->setRegistryDiff("HKLM\\SYSTEM\\CurrentControlSet\\Services\\AppSvc\\Start", "2");
+    TEST_ASSERT(container->getRegistryKeyCount() == 2, "Registry diff hive must contain 2 modified keys");
+
+    std::string regPort;
+    bool regReadOk = container->getRegistryValue("HKLM\\SOFTWARE\\NodeApp\\Port", regPort);
+    TEST_ASSERT(regReadOk && regPort == "8080", "Querying virtualized registry port must return '8080'");
+
+    std::string missingKey;
+    TEST_ASSERT(!container->getRegistryValue("HKLM\\SOFTWARE\\NonExistent", missingKey), "Querying non-existent registry key must return false");
+
+    // 9. Host Compute Service (HCS) Lifecycle Operations
+    TEST_ASSERT(container->start(), "HCS start must succeed");
+    TEST_ASSERT(container->getState() == micant::wcifs::ComputeSystemState::Running, "State must be Running");
+    TEST_ASSERT(!container->start(), "Starting an already running container must return false");
+
+    TEST_ASSERT(container->pause(), "HCS pause must succeed");
+    TEST_ASSERT(container->getState() == micant::wcifs::ComputeSystemState::Paused, "State must be Paused");
+    TEST_ASSERT(!container->pause(), "Pausing an already paused container must return false");
+
+    TEST_ASSERT(container->resume(), "HCS resume must succeed");
+    TEST_ASSERT(container->getState() == micant::wcifs::ComputeSystemState::Running, "State must return to Running");
+
+    TEST_ASSERT(container->terminate(), "HCS terminate must succeed");
+    TEST_ASSERT(container->getState() == micant::wcifs::ComputeSystemState::Stopped, "State must be Stopped");
+
+    // 10. Hyper-V Isolated Micro-VM Container Mode
+    auto hvContainer = sys.createComputeSystem("hyperv-secure-vault", "servercore:ltsc2025", micant::wcifs::ContainerIsolationType::HyperV);
+    TEST_ASSERT(hvContainer != nullptr, "Creating Hyper-V container must succeed");
+    TEST_ASSERT(hvContainer->getIsolationType() == micant::wcifs::ContainerIsolationType::HyperV, "Isolation type must be HyperV");
+    TEST_ASSERT(hvContainer->start(), "Starting Hyper-V container must succeed");
+    TEST_ASSERT(hvContainer->getState() == micant::wcifs::ComputeSystemState::Running, "Hyper-V container state must be Running");
+    hvContainer->terminate();
+    TEST_ASSERT(hvContainer->getState() == micant::wcifs::ComputeSystemState::Stopped, "Hyper-V container termination must succeed");
+
+    // 11. Clean-Room Win32 / NT C ABI Exports
+    TEST_ASSERT(micant::wcifs::WcifsInitializeSubsystem() == micant::STATUS_SUCCESS, "WcifsInitializeSubsystem must return STATUS_SUCCESS");
+
+    TEST_ASSERT(micant::wcifs::WcifsCreateLayer(nullptr, "path", 1, 0) == micant::STATUS_INVALID_PARAMETER, "WcifsCreateLayer with null GUID must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::wcifs::WcifsCreateLayer("{D4E5F6A1-ABI-LAYER-2025-000000000004}", "C:\\docker\\abi_layer", 1, 1024) == micant::STATUS_SUCCESS, "WcifsCreateLayer via C ABI must succeed");
+
+    uint32_t abiCid = 0;
+    TEST_ASSERT(micant::wcifs::HcsCreateComputeSystem("abi-container", "nanoserver:ltsc2025", 0, &abiCid) == micant::STATUS_SUCCESS, "HcsCreateComputeSystem via C ABI must succeed");
+    TEST_ASSERT(abiCid != 0, "Created container ID must be non-zero");
+
+    TEST_ASSERT(micant::wcifs::HcsStartComputeSystem(abiCid) == micant::STATUS_SUCCESS, "HcsStartComputeSystem via C ABI must succeed");
+
+    const char abiData[] = "C_ABI_TEST_DATA";
+    TEST_ASSERT(micant::wcifs::WcifsWriteCoWLayeredFile(abiCid, "\\abi_test.txt", abiData, sizeof(abiData)) == micant::STATUS_SUCCESS, "WcifsWriteCoWLayeredFile via C ABI must succeed");
+
+    char abiReadData[32]{};
+    size_t abiBytesRead = 0;
+    TEST_ASSERT(micant::wcifs::WcifsReadLayeredFile(abiCid, "\\abi_test.txt", abiReadData, sizeof(abiReadData), &abiBytesRead) == micant::STATUS_SUCCESS, "WcifsReadLayeredFile via C ABI must succeed");
+    TEST_ASSERT(abiBytesRead == sizeof(abiData) && std::memcmp(abiReadData, abiData, sizeof(abiData)) == 0, "Read data via C ABI must match written bytes");
+
+    uint32_t qState = 0;
+    uint64_t qCow = 0;
+    TEST_ASSERT(micant::wcifs::HcsQueryComputeSystemState(abiCid, &qState, &qCow) == micant::STATUS_SUCCESS, "HcsQueryComputeSystemState via C ABI must succeed");
+    TEST_ASSERT(qState == static_cast<uint32_t>(micant::wcifs::ComputeSystemState::Running), "Queried state must be Running");
+
+    TEST_ASSERT(micant::wcifs::WcifsDeleteLayeredFile(abiCid, "\\abi_test.txt") == micant::STATUS_SUCCESS, "WcifsDeleteLayeredFile via C ABI must succeed");
+    TEST_ASSERT(micant::wcifs::WcifsReadLayeredFile(abiCid, "\\abi_test.txt", abiReadData, sizeof(abiReadData), &abiBytesRead) == micant::STATUS_OBJECT_NAME_NOT_FOUND, "Reading deleted file must return STATUS_OBJECT_NAME_NOT_FOUND");
+
+    TEST_ASSERT(micant::wcifs::HcsTerminateComputeSystem(abiCid) == micant::STATUS_SUCCESS, "HcsTerminateComputeSystem via C ABI must succeed");
+
+    // 12. Multithreaded Concurrency & High-Density Silo CoW Stress Test
+    std::atomic<int> cowStressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([&, t]() {
+            std::string cname = "stress-worker-" + std::to_string(t);
+            auto sc = sys.createComputeSystem(cname, "nanoserver:ltsc2025", micant::wcifs::ContainerIsolationType::ProcessSilo);
+            if (!sc) return;
+            sc->start();
+
+            for (int i = 0; i < 10; ++i) {
+                std::string filePath = "\\data\\thread_" + std::to_string(t) + "_item_" + std::to_string(i) + ".bin";
+                uint32_t val = (t * 1000) + i;
+                if (sc->getStorageStack()->writeFileCoW(filePath, &val, sizeof(val))) {
+                    std::vector<uint8_t> readBack;
+                    if (sc->getStorageStack()->readFile(filePath, readBack) && readBack.size() == sizeof(val)) {
+                        cowStressSuccessCount.fetch_add(1);
+                    }
+                }
+            }
+            sc->terminate();
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(cowStressSuccessCount.load() == 100, "100 concurrent parallel CoW writes & reads across 10 container silos must succeed");
+
+    std::cout << "[TEST] Suite 195: Windows Container Storage & Host Compute System (HCS) Isolation Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite194")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite195")) {
+        RUN_TEST(Test_WindowsContainerStorage_Wcifs_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite194") {
         RUN_TEST(Test_WindowsClusterSharedVolume_CSVFS_Subsystem);
         return g_FailedTests;
     }
@@ -44259,6 +44472,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsHyperV_NestedVirtualization_Subsystem);
     RUN_TEST(Test_WindowsReFS_ResilientFileSystem_Subsystem);
     RUN_TEST(Test_WindowsClusterSharedVolume_CSVFS_Subsystem);
+    RUN_TEST(Test_WindowsContainerStorage_Wcifs_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
