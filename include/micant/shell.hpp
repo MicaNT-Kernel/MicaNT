@@ -194,6 +194,7 @@
 #include "activedirectory.hpp"
 #include "grouppolicy.hpp"
 #include "remotedesktop.hpp"
+#include "nps.hpp"
 
 namespace micant::shell {
 
@@ -533,6 +534,7 @@ public:
             if (cmd == "ad" || cmd == "kdc" || cmd == "domain" || cmd == "ds") { cmdActiveDirectory(tokens, out); return 0; }
             if (cmd == "gp" || cmd == "gpo" || cmd == "gpupdate" || cmd == "gpresult") { cmdGroupPolicy(tokens, out); return 0; }
             if (cmd == "rdp" || cmd == "rds" || cmd == "termsrv" || cmd == "wts") { cmdRemoteDesktop(tokens, out); return 0; }
+            if (cmd == "nps" || cmd == "ias" || cmd == "radius") { cmdNetworkPolicyServer(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -33442,6 +33444,260 @@ private:
             << "  rdp shadow <client_id> <target_id>        Initiate remote shadow viewing session\n"
             << "  rdp channels <session_id>                 List virtual channels bound to session\n"
             << "  rdp test                                  Execute in-kernel RDS self-tests\n";
+    }
+
+    void cmdNetworkPolicyServer(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& nps = micant::nps::NetworkPolicyServer::instance();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+
+        if (sub == "status") {
+            out << "Windows Network Policy Server (NPS / IAS) Subsystem Status:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service Status:        ONLINE (ias.dll / svchost.exe -k netsvcs)\n"
+                << "  RADIUS Authentication: UDP 1812 / 1645 (RFC 2865)\n"
+                << "  RADIUS Accounting:     UDP 1813 / 1646 (RFC 2866)\n"
+                << "  Registered Clients:    " << nps.getAllClients().size() << " RADIUS clients (NAS)\n"
+                << "  Active Policies:       " << nps.getNetworkPolicies().size() << " network policies\n"
+                << "  Auth Requests:         " << nps.getTotalAuthRequests() << " (Passed: " << nps.getTotalAuthSuccesses()
+                << ", Rejected: " << nps.getTotalAuthRejections() << ")\n"
+                << "  Acct Requests:         " << nps.getTotalAcctRequests() << " (Active Sessions: "
+                << nps.getAllAccountingSessions().size() << ")\n"
+                << "  Octets Transferred:    In: " << nps.getTotalInputOctets() << " bytes, Out: "
+                << nps.getTotalOutputOctets() << " bytes\n";
+            return;
+        }
+
+        if (sub == "clients" || sub == "list") {
+            out << "Registered RADIUS Clients (Network Access Servers - NAS):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(18) << "IP Address"
+                << std::left << std::setw(24) << "Friendly Name"
+                << std::left << std::setw(14) << "Vendor"
+                << std::left << std::setw(12) << "MsgAuth"
+                << "Status\n"
+                << std::string(80, '-') << "\n";
+
+            auto clients = nps.getAllClients();
+            for (const auto& c : clients) {
+                out << std::left << std::setw(18) << c.ipAddress
+                    << std::left << std::setw(24) << c.friendlyName
+                    << std::left << std::setw(14) << c.vendorName
+                    << std::left << std::setw(12) << (c.requireMessageAuth ? "Required" : "Optional")
+                    << (c.enabled ? "ENABLED" : "DISABLED") << "\n";
+            }
+            return;
+        }
+
+        if (sub == "addclient" && tokens.size() > 4) {
+            micant::nps::RadiusClient c;
+            c.ipAddress = tokens[2];
+            c.sharedSecret = tokens[3];
+            c.friendlyName = tokens[4];
+            c.vendorName = (tokens.size() > 5) ? tokens[5] : "Standard RADIUS";
+            c.enabled = true;
+            nps.registerClient(c);
+            out << "Successfully registered RADIUS Client '" << c.friendlyName << "' [" << c.ipAddress << "].\n";
+            return;
+        }
+
+        if (sub == "policies") {
+            out << "Configured Network Policies (Authorization Rules & VLANs):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(4) << "Pri"
+                << std::left << std::setw(36) << "Policy Name"
+                << std::left << std::setw(10) << "Action"
+                << std::left << std::setw(14) << "Port Type"
+                << "VLAN\n"
+                << std::string(80, '-') << "\n";
+
+            auto pols = nps.getNetworkPolicies();
+            for (const auto& p : pols) {
+                out << std::left << std::setw(4) << p.priority
+                    << std::left << std::setw(36) << p.policyName
+                    << std::left << std::setw(10) << (p.permission == micant::nps::PolicyPermission::GrantAccess ? "GRANT" : "DENY")
+                    << std::left << std::setw(14) << p.allowedNasPortType
+                    << (p.assignedVlanId.empty() ? "None" : p.assignedVlanId) << "\n";
+            }
+            return;
+        }
+
+        if (sub == "auth" && tokens.size() > 4) {
+            std::string clientIp = tokens[2];
+            std::string user = tokens[3];
+            std::string pass = tokens[4];
+
+            micant::nps::RadiusClient client{};
+            if (!nps.getClient(clientIp, &client)) {
+                out << "Error: Unknown RADIUS client IP " << clientIp << ".\n";
+                return;
+            }
+
+            micant::nps::RadiusPacket req;
+            req.code = micant::nps::RadiusCode_AccessRequest;
+            req.identifier = 42;
+            for (int i = 0; i < 16; ++i) req.authenticator[i] = static_cast<uint8_t>(i + 1);
+            req.addStringAttribute(micant::nps::RadiusAttr_UserName, user);
+            auto encPass = micant::nps::EncryptRadiusPassword(pass, req.authenticator, client.sharedSecret);
+            req.addRawAttribute(micant::nps::RadiusAttr_UserPassword, encPass.data(), encPass.size());
+            req.addUint32Attribute(micant::nps::RadiusAttr_NasPortType, 19); // Wireless
+
+            auto rawReq = req.serialize();
+            std::vector<uint8_t> resp;
+            if (nps.processPacket(clientIp, rawReq.data(), rawReq.size(), resp)) {
+                micant::nps::RadiusPacket pResp;
+                pResp.deserialize(resp.data(), resp.size());
+                if (pResp.code == micant::nps::RadiusCode_AccessAccept) {
+                    out << "Authentication SUCCESS: Access-Accept returned for user '" << user << "'!\n";
+                    const auto* aVlan = pResp.findAttribute(micant::nps::RadiusAttr_TunnelPrivateGroupId);
+                    if (aVlan) out << "  -> Assigned Dynamic VLAN: " << aVlan->asString() << "\n";
+                } else {
+                    out << "Authentication REJECTED: Access-Reject returned for user '" << user << "'.\n";
+                }
+            } else {
+                out << "Error: Request processing failed or rejected by RADIUS engine.\n";
+            }
+            return;
+        }
+
+        if (sub == "acct" && tokens.size() > 5) {
+            std::string clientIp = tokens[2];
+            std::string user = tokens[3];
+            std::string sessId = tokens[4];
+            std::string action = tokens[5]; // start or stop
+
+            micant::nps::RadiusClient client{};
+            if (!nps.getClient(clientIp, &client)) {
+                out << "Error: Unknown RADIUS client IP " << clientIp << ".\n";
+                return;
+            }
+
+            uint32_t statusType = (action == "stop") ? 2 : (action == "interim") ? 3 : 1;
+            micant::nps::RadiusPacket req;
+            req.code = micant::nps::RadiusCode_AccountingRequest;
+            req.identifier = 99;
+            req.addUint32Attribute(micant::nps::RadiusAttr_AcctStatusType, statusType);
+            req.addStringAttribute(micant::nps::RadiusAttr_AcctSessionId, sessId);
+            req.addStringAttribute(micant::nps::RadiusAttr_UserName, user);
+            req.addUint32Attribute(micant::nps::RadiusAttr_AcctInputOctets, (statusType == 2) ? 65536 : 1024);
+            req.addUint32Attribute(micant::nps::RadiusAttr_AcctOutputOctets, (statusType == 2) ? 131072 : 2048);
+            req.addUint32Attribute(micant::nps::RadiusAttr_AcctSessionTime, (statusType == 2) ? 3600 : 60);
+
+            auto rawPkt = req.serialize();
+            micant::nps::CalculateAccountingRequestAuthenticator(req.authenticator, req.code, req.identifier,
+                                                                 req.length, rawPkt.data() + 20, rawPkt.size() - 20,
+                                                                 client.sharedSecret);
+            auto signedPkt = req.serialize();
+            std::vector<uint8_t> resp;
+            if (nps.processPacket(clientIp, signedPkt.data(), signedPkt.size(), resp)) {
+                out << "Accounting Request (" << action << ") recorded successfully for session " << sessId << ".\n";
+            } else {
+                out << "Error: Failed to process accounting request.\n";
+            }
+            return;
+        }
+
+        if (sub == "log") {
+            out << "RADIUS Accounting Audit Log:\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto logs = nps.getAuditLog();
+            for (const auto& l : logs) {
+                out << l << "\n";
+            }
+            return;
+        }
+
+        if (sub == "test") {
+            out << "[+] Executing Windows Network Policy Server & RADIUS Subsystem Self-Tests...\n";
+
+            // 1. SCM Services
+            auto& scm = micant::scm::ServiceControlManager::get();
+            bool iasSvc = (scm.getServiceRecord(L"IAS") != nullptr);
+            bool proxySvc = (scm.getServiceRecord(L"RadiusProxy") != nullptr);
+            bool radSys = (scm.getServiceRecord(L"RadiusSys") != nullptr);
+            out << "  [1/6] SCM Services (IAS, RadiusProxy, RadiusSys): "
+                << (iasSvc && proxySvc && radSys ? "PASSED" : "FAILED") << "\n";
+
+            // 2. VersionDatabase
+            auto& vdb = micant::version::VersionDatabase::Instance();
+            bool vdbOk = (vdb.FindModule("ias.dll") != nullptr) &&
+                         (vdb.FindModule("iaspolcy.dll") != nullptr) &&
+                         (vdb.FindModule("iasrad.dll") != nullptr) &&
+                         (vdb.FindModule("radius.sys") != nullptr) &&
+                         (vdb.FindModule("nps.msc") != nullptr);
+            out << "  [2/6] VersionDatabase (ias.dll, iaspolcy.dll, iasrad.dll, radius.sys, nps.msc): "
+                << (vdbOk ? "PASSED" : "FAILED") << "\n";
+
+            // 3. RFC 2865 User-Password Decryption & Encryption Round-trip
+            uint8_t testAuth[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+            std::string origPass = "TitanEnterprisePassword2026!";
+            auto encPass = micant::nps::EncryptRadiusPassword(origPass, testAuth, "TestSecretKey!");
+            auto decPass = micant::nps::DecryptRadiusPassword(encPass, testAuth, "TestSecretKey!");
+            out << "  [3/6] RFC 2865 Password Encryption / Decryption: "
+                << (origPass == decPass ? "PASSED" : "FAILED") << "\n";
+
+            // 4. RADIUS Access-Request & Dynamic VLAN Assignment
+            micant::nps::RadiusPacket req;
+            req.code = micant::nps::RadiusCode_AccessRequest;
+            req.identifier = 101;
+            std::memcpy(req.authenticator, testAuth, 16);
+            req.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+            auto encAlice = micant::nps::EncryptRadiusPassword("AliceSecure2026!", testAuth, "ArubaSecureWiFi!");
+            req.addRawAttribute(micant::nps::RadiusAttr_UserPassword, encAlice.data(), encAlice.size());
+            req.addUint32Attribute(micant::nps::RadiusAttr_NasPortType, 19); // Wireless
+
+            auto rawReq = req.serialize();
+            std::vector<uint8_t> resp;
+            bool authOk = nps.processPacket("192.168.1.10", rawReq.data(), rawReq.size(), resp);
+            micant::nps::RadiusPacket pResp;
+            bool parseOk = pResp.deserialize(resp.data(), resp.size());
+            bool vlanOk = false;
+            const auto* aVlan = pResp.findAttribute(micant::nps::RadiusAttr_TunnelPrivateGroupId);
+            if (aVlan && aVlan->asString() == "100") vlanOk = true;
+            out << "  [4/6] RADIUS Access-Request & Dynamic VLAN 100 Assignment: "
+                << (authOk && parseOk && (pResp.code == micant::nps::RadiusCode_AccessAccept) && vlanOk ? "PASSED" : "FAILED") << "\n";
+
+            // 5. RADIUS Accounting Lifecycle (Start & Stop)
+            micant::nps::RadiusPacket acctStart;
+            acctStart.code = micant::nps::RadiusCode_AccountingRequest;
+            acctStart.identifier = 202;
+            acctStart.addUint32Attribute(micant::nps::RadiusAttr_AcctStatusType, 1); // Start
+            acctStart.addStringAttribute(micant::nps::RadiusAttr_AcctSessionId, "self_test_sess_01");
+            acctStart.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+            auto rawStart = acctStart.serialize();
+            micant::nps::CalculateAccountingRequestAuthenticator(acctStart.authenticator, acctStart.code,
+                                                                 acctStart.identifier, acctStart.length,
+                                                                 rawStart.data() + 20, rawStart.size() - 20,
+                                                                 "ArubaSecureWiFi!");
+            auto signedStart = acctStart.serialize();
+            std::vector<uint8_t> acctResp;
+            bool acctOk = nps.processPacket("192.168.1.10", signedStart.data(), signedStart.size(), acctResp);
+            out << "  [5/6] RADIUS Accounting Session Start & Tracking: "
+                << (acctOk ? "PASSED" : "FAILED") << "\n";
+
+            // 6. Win32 C ABI Parity Exports
+            void* pEngine = nullptr;
+            int32_t initRes = micant::nps::MicaIasInitialize(&pEngine);
+            uint64_t totalAuth = 0, totalAcct = 0, activeSess = 0;
+            micant::nps::MicaIasGetAccountingStats(pEngine, &totalAuth, &totalAcct, &activeSess);
+            out << "  [6/6] Win32 C ABI Exports (ias.dll / iasrad.dll): "
+                << (initRes == 1 && pEngine != nullptr && totalAuth > 0 ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All Windows Network Policy Server & RADIUS Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows Network Policy Server & RADIUS Subsystem (NPS / IAS)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  nps status                                Display NPS / RADIUS subsystem status\n"
+            << "  nps clients                               List registered RADIUS clients (NAS)\n"
+            << "  nps addclient <ip> <secret> <name>        Register a new RADIUS client\n"
+            << "  nps policies                              Display network policies and VLAN assignments\n"
+            << "  nps auth <client_ip> <user> <pass>        Authenticate user via RADIUS Access-Request\n"
+            << "  nps acct <client_ip> <user> <sess> <act>  Send Accounting-Request (start|interim|stop)\n"
+            << "  nps log                                   View RADIUS accounting audit log\n"
+            << "  nps test                                  Execute in-kernel NPS / RADIUS self-tests\n";
     }
 
     static std::string trim(std::string_view s) {

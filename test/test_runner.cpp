@@ -208,6 +208,7 @@
 #include "micant/activedirectory.hpp"
 #include "micant/grouppolicy.hpp"
 #include "micant/remotedesktop.hpp"
+#include "micant/nps.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -45669,8 +45670,290 @@ void Test_WindowsRemoteDesktop_VirtualChannels_Subsystem() {
     std::cout << "[TEST] Suite 203: Windows Remote Desktop Services & RDP Virtual Channels Subsystem PASSED.\n";
 }
 
+void Test_WindowsNetworkPolicyServer_RADIUS_Subsystem() {
+    std::cout << "[TEST] Suite 204: Windows Network Policy Server & RADIUS Subsystem...\n";
+
+    auto& nps = micant::nps::NetworkPolicyServer::instance();
+
+    // Stage 1: SCM Services Registration (IAS, RadiusProxy, RadiusSys)
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto pIas = scm.getServiceRecord(L"IAS");
+    auto pProxy = scm.getServiceRecord(L"RadiusProxy");
+    auto pSys = scm.getServiceRecord(L"RadiusSys");
+    TEST_ASSERT(pIas != nullptr, "IAS service record must be registered in SCM");
+    TEST_ASSERT(pIas->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "IAS must be in SERVICE_RUNNING state");
+    TEST_ASSERT(pIas->binaryPath == L"C:\\Windows\\System32\\ias.dll", "IAS binary path must be ias.dll");
+    TEST_ASSERT(pProxy != nullptr, "RadiusProxy service record must be registered in SCM");
+    TEST_ASSERT(pProxy->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "RadiusProxy must be in SERVICE_RUNNING state");
+    TEST_ASSERT(pSys != nullptr, "RadiusSys service record must be registered in SCM");
+    TEST_ASSERT(pSys->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "RadiusSys must be SERVICE_KERNEL_DRIVER");
+
+    // Stage 2: VersionDatabase Modules Registration
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    const auto* modIas = vdb.FindModule("ias.dll");
+    const auto* modPol = vdb.FindModule("iaspolcy.dll");
+    const auto* modRad = vdb.FindModule("iasrad.dll");
+    const auto* modSys = vdb.FindModule("radius.sys");
+    const auto* modMsc = vdb.FindModule("nps.msc");
+    TEST_ASSERT(modIas != nullptr, "ias.dll must exist in VersionDatabase");
+    TEST_ASSERT(modPol != nullptr, "iaspolcy.dll must exist in VersionDatabase");
+    TEST_ASSERT(modRad != nullptr, "iasrad.dll must exist in VersionDatabase");
+    TEST_ASSERT(modSys != nullptr, "radius.sys must exist in VersionDatabase");
+    TEST_ASSERT(modMsc != nullptr, "nps.msc must exist in VersionDatabase");
+    TEST_ASSERT(modIas->stringTable.at("FileVersion") == "10.0.26100.1", "ias.dll build must be 10.0.26100.1");
+
+    // Stage 3: RADIUS Packet Serialization & Deserialization
+    micant::nps::RadiusPacket pkt;
+    pkt.code = micant::nps::RadiusCode_AccessRequest;
+    pkt.identifier = 0x55;
+    for (int i = 0; i < 16; ++i) pkt.authenticator[i] = static_cast<uint8_t>(i * 3 + 1);
+    pkt.addStringAttribute(micant::nps::RadiusAttr_UserName, "TestUser@micant.corp");
+    pkt.addUint32Attribute(micant::nps::RadiusAttr_NasPort, 5001);
+    pkt.addUint32Attribute(micant::nps::RadiusAttr_NasPortType, 19); // Wireless
+
+    auto serialized = pkt.serialize();
+    TEST_ASSERT(serialized.size() >= 20, "Serialized packet must be at least 20 bytes");
+
+    micant::nps::RadiusPacket parsedPkt;
+    bool parseOk = parsedPkt.deserialize(serialized.data(), serialized.size());
+    TEST_ASSERT(parseOk, "Deserialization must succeed");
+    TEST_ASSERT(parsedPkt.code == micant::nps::RadiusCode_AccessRequest, "Packet code must match");
+    TEST_ASSERT(parsedPkt.identifier == 0x55, "Packet identifier must match");
+    const auto* parsedUser = parsedPkt.findAttribute(micant::nps::RadiusAttr_UserName);
+    TEST_ASSERT(parsedUser && parsedUser->asString() == "TestUser@micant.corp", "User-Name attribute must match");
+    const auto* parsedPort = parsedPkt.findAttribute(micant::nps::RadiusAttr_NasPort);
+    TEST_ASSERT(parsedPort && parsedPort->asUint32() == 5001, "NAS-Port attribute must match");
+
+    // Stage 4: RFC 2865 User-Password XOR-MD5 Encryption & Decryption Round-trip
+    uint8_t reqAuth[16] = {0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xEE, 0xFF};
+    std::string secret = "SuperSecretRADIUSKey!";
+    std::string plaintextPassword = "MicaNT_Enterprise_WiFi_Password_2026";
+    auto encPassword = micant::nps::EncryptRadiusPassword(plaintextPassword, reqAuth, secret);
+    TEST_ASSERT(encPassword.size() >= 16 && (encPassword.size() % 16) == 0, "Encrypted password must be multiple of 16 octets");
+    std::string recoveredPassword = micant::nps::DecryptRadiusPassword(encPassword, reqAuth, secret);
+    TEST_ASSERT(recoveredPassword == plaintextPassword, "RFC 2865 Decrypted password must exactly match plaintext password");
+
+    // Stage 5: RADIUS Client (NAS) Registration & Secret Arbitration
+    micant::nps::RadiusClient nasBranch{};
+    nasBranch.ipAddress = "10.200.1.1";
+    nasBranch.friendlyName = "Branch-Office-Switch-01";
+    nasBranch.sharedSecret = "BranchSecretKey2026!";
+    nasBranch.vendorName = "Cisco";
+    nasBranch.enabled = true;
+    bool clientRegOk = nps.registerClient(nasBranch);
+    TEST_ASSERT(clientRegOk, "registerClient must succeed");
+
+    micant::nps::RadiusClient retrievedNas{};
+    bool clientFound = nps.getClient("10.200.1.1", &retrievedNas);
+    TEST_ASSERT(clientFound && retrievedNas.friendlyName == "Branch-Office-Switch-01", "Client must be found by IP");
+    TEST_ASSERT(retrievedNas.sharedSecret == "BranchSecretKey2026!", "Shared secret must match");
+
+    // Stage 6: Connection Request Policy (CRP) Matching
+    auto pols = nps.getNetworkPolicies();
+    TEST_ASSERT(!pols.empty(), "Default network policies must be loaded");
+
+    // Stage 7: RADIUS Access-Request & Access-Accept with Dynamic VLAN Assignment (Alice / VLAN 100)
+    micant::nps::RadiusPacket reqAlice;
+    reqAlice.code = micant::nps::RadiusCode_AccessRequest;
+    reqAlice.identifier = 12;
+    std::memcpy(reqAlice.authenticator, reqAuth, 16);
+    reqAlice.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+    auto encAlicePass = micant::nps::EncryptRadiusPassword("AliceSecure2026!", reqAuth, "ArubaSecureWiFi!");
+    reqAlice.addRawAttribute(micant::nps::RadiusAttr_UserPassword, encAlicePass.data(), encAlicePass.size());
+    reqAlice.addUint32Attribute(micant::nps::RadiusAttr_NasPortType, 19); // Wireless-802.11
+
+    auto rawAliceReq = reqAlice.serialize();
+    std::vector<uint8_t> respAlice;
+    bool processAliceOk = nps.processPacket("192.168.1.10", rawAliceReq.data(), rawAliceReq.size(), respAlice);
+    TEST_ASSERT(processAliceOk, "processPacket for Alice must succeed");
+
+    micant::nps::RadiusPacket pRespAlice;
+    TEST_ASSERT(pRespAlice.deserialize(respAlice.data(), respAlice.size()), "Response must deserialize");
+    TEST_ASSERT(pRespAlice.code == micant::nps::RadiusCode_AccessAccept, "Response code must be Access-Accept (2)");
+    TEST_ASSERT(pRespAlice.identifier == reqAlice.identifier, "Response identifier must match request");
+
+    const auto* aVlanAlice = pRespAlice.findAttribute(micant::nps::RadiusAttr_TunnelPrivateGroupId);
+    TEST_ASSERT(aVlanAlice != nullptr, "Tunnel-Private-Group-ID must be present");
+    TEST_ASSERT(aVlanAlice->asString() == "100", "Assigned VLAN must be 100");
+    const auto* aTunnelType = pRespAlice.findAttribute(micant::nps::RadiusAttr_TunnelType);
+    TEST_ASSERT(aTunnelType != nullptr && aTunnelType->asUint32() == 13, "Tunnel-Type must be 13 (VLAN)");
+
+    // Stage 8: Authentication Rejection (Access-Reject) for Invalid Password
+    micant::nps::RadiusPacket reqBadPass;
+    reqBadPass.code = micant::nps::RadiusCode_AccessRequest;
+    reqBadPass.identifier = 13;
+    std::memcpy(reqBadPass.authenticator, reqAuth, 16);
+    reqBadPass.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+    auto encBadPass = micant::nps::EncryptRadiusPassword("WrongPassword123", reqAuth, "ArubaSecureWiFi!");
+    reqBadPass.addRawAttribute(micant::nps::RadiusAttr_UserPassword, encBadPass.data(), encBadPass.size());
+    reqBadPass.addUint32Attribute(micant::nps::RadiusAttr_NasPortType, 19);
+
+    auto rawBadReq = reqBadPass.serialize();
+    std::vector<uint8_t> respBad;
+    bool procBadOk = nps.processPacket("192.168.1.10", rawBadReq.data(), rawBadReq.size(), respBad);
+    TEST_ASSERT(procBadOk, "processPacket must return response for bad credentials");
+    micant::nps::RadiusPacket pRespBad;
+    TEST_ASSERT(pRespBad.deserialize(respBad.data(), respBad.size()), "Bad response must deserialize");
+    TEST_ASSERT(pRespBad.code == micant::nps::RadiusCode_AccessReject, "Response must be Access-Reject (3)");
+
+    // Stage 9: Authentication Rejection for Disabled Account (DisabledUser)
+    micant::nps::RadiusPacket reqDisabled;
+    reqDisabled.code = micant::nps::RadiusCode_AccessRequest;
+    reqDisabled.identifier = 14;
+    std::memcpy(reqDisabled.authenticator, reqAuth, 16);
+    reqDisabled.addStringAttribute(micant::nps::RadiusAttr_UserName, "DisabledUser");
+    auto encDisPass = micant::nps::EncryptRadiusPassword("NeverLogon!", reqAuth, "ArubaSecureWiFi!");
+    reqDisabled.addRawAttribute(micant::nps::RadiusAttr_UserPassword, encDisPass.data(), encDisPass.size());
+
+    auto rawDisReq = reqDisabled.serialize();
+    std::vector<uint8_t> respDis;
+    nps.processPacket("192.168.1.10", rawDisReq.data(), rawDisReq.size(), respDis);
+    micant::nps::RadiusPacket pRespDis;
+    pRespDis.deserialize(respDis.data(), respDis.size());
+    TEST_ASSERT(pRespDis.code == micant::nps::RadiusCode_AccessReject, "Disabled account must receive Access-Reject (3)");
+
+    // Stage 10: 802.1X EAP Identity Handshake & Access-Challenge Generation (PEAP Start)
+    micant::nps::RadiusPacket reqEapId;
+    reqEapId.code = micant::nps::RadiusCode_AccessRequest;
+    reqEapId.identifier = 15;
+    std::memcpy(reqEapId.authenticator, reqAuth, 16);
+    reqEapId.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+    uint8_t eapIdPayload[] = { 0x02, 0x01, 0x00, 0x09, 0x01, 'A', 'l', 'i', 'c', 'e' }; // EAP-Response/Identity
+    reqEapId.addRawAttribute(micant::nps::RadiusAttr_EapMessage, eapIdPayload, sizeof(eapIdPayload));
+
+    auto rawEapReq = reqEapId.serialize();
+    std::vector<uint8_t> respEap;
+    bool procEapOk = nps.processPacket("192.168.1.10", rawEapReq.data(), rawEapReq.size(), respEap);
+    TEST_ASSERT(procEapOk, "EAP request processing must succeed");
+    micant::nps::RadiusPacket pRespEap;
+    pRespEap.deserialize(respEap.data(), respEap.size());
+    TEST_ASSERT(pRespEap.code == micant::nps::RadiusCode_AccessChallenge, "EAP Identity Response must produce Access-Challenge (11)");
+    TEST_ASSERT(pRespEap.findAttribute(micant::nps::RadiusAttr_EapMessage) != nullptr, "EAP-Message must be in Access-Challenge");
+
+    // Stage 11: RADIUS Accounting Request (Start -> Interim -> Stop) & MD5 Request Authenticator Verification
+    std::string testSessId = "MicaNT_RadSess_0042";
+    micant::nps::RadiusPacket acctStart;
+    acctStart.code = micant::nps::RadiusCode_AccountingRequest;
+    acctStart.identifier = 77;
+    acctStart.addUint32Attribute(micant::nps::RadiusAttr_AcctStatusType, 1); // Start
+    acctStart.addStringAttribute(micant::nps::RadiusAttr_AcctSessionId, testSessId);
+    acctStart.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+    acctStart.addStringAttribute(micant::nps::RadiusAttr_CallingStationId, "CC-22-33-44-55-66");
+    acctStart.addUint32Attribute(micant::nps::RadiusAttr_NasPort, 10);
+
+    auto rawStartPkt = acctStart.serialize();
+    micant::nps::CalculateAccountingRequestAuthenticator(acctStart.authenticator, acctStart.code,
+                                                         acctStart.identifier, static_cast<uint16_t>(rawStartPkt.size()),
+                                                         rawStartPkt.data() + 20, rawStartPkt.size() - 20,
+                                                         "ArubaSecureWiFi!");
+    auto signedStartPkt = acctStart.serialize();
+    std::vector<uint8_t> respStart;
+    bool acctStartOk = nps.processPacket("192.168.1.10", signedStartPkt.data(), signedStartPkt.size(), respStart);
+    TEST_ASSERT(acctStartOk, "Accounting-Request Start must succeed");
+
+    micant::nps::RadiusPacket pRespStart;
+    pRespStart.deserialize(respStart.data(), respStart.size());
+    TEST_ASSERT(pRespStart.code == micant::nps::RadiusCode_AccountingResponse, "Response must be Accounting-Response (5)");
+
+    // Accounting Stop
+    micant::nps::RadiusPacket acctStop;
+    acctStop.code = micant::nps::RadiusCode_AccountingRequest;
+    acctStop.identifier = 78;
+    acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctStatusType, 2); // Stop
+    acctStop.addStringAttribute(micant::nps::RadiusAttr_AcctSessionId, testSessId);
+    acctStop.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+    acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctInputOctets, 1048576);
+    acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctOutputOctets, 2097152);
+    acctStop.addUint32Attribute(micant::nps::RadiusAttr_AcctSessionTime, 7200);
+
+    auto rawStopPkt = acctStop.serialize();
+    micant::nps::CalculateAccountingRequestAuthenticator(acctStop.authenticator, acctStop.code,
+                                                        acctStop.identifier, static_cast<uint16_t>(rawStopPkt.size()),
+                                                        rawStopPkt.data() + 20, rawStopPkt.size() - 20,
+                                                        "ArubaSecureWiFi!");
+    auto signedStopPkt = acctStop.serialize();
+    std::vector<uint8_t> respStop;
+    bool acctStopOk = nps.processPacket("192.168.1.10", signedStopPkt.data(), signedStopPkt.size(), respStop);
+    TEST_ASSERT(acctStopOk, "Accounting-Request Stop must succeed");
+
+    // Stage 12: Accounting Store Query & Octets Aggregation
+    micant::nps::AccountingSessionRecord rec{};
+    bool acctFound = nps.getAccountingSession(testSessId, &rec);
+    TEST_ASSERT(acctFound, "Session must exist in accounting store");
+    TEST_ASSERT(rec.userName == "Alice", "User must match");
+    TEST_ASSERT(rec.inputOctets == 1048576, "Input octets must match Stop packet");
+    TEST_ASSERT(rec.outputOctets == 2097152, "Output octets must match Stop packet");
+    TEST_ASSERT(rec.sessionTimeSec == 7200, "Session time must match");
+    TEST_ASSERT(rec.active == false, "Session must be closed (inactive) after Stop");
+
+    // Stage 13: Win32 C ABI Parity Exports
+    void* pEngine = nullptr;
+    int32_t abiInit = micant::nps::MicaIasInitialize(&pEngine);
+    TEST_ASSERT(abiInit == 1 && pEngine != nullptr, "MicaIasInitialize must succeed");
+
+    int32_t abiReg = micant::nps::MicaIasRegisterClient(pEngine, "172.16.0.1", "VpnSecret123!", "Remote-VPN-Gateway");
+    TEST_ASSERT(abiReg == 1, "MicaIasRegisterClient must return 1");
+
+    uint8_t outPktBuf[4096]{};
+    uint32_t outPktLen = 0;
+    int32_t abiProc = micant::nps::MicaIasProcessPacket(pEngine, "192.168.1.10", signedStartPkt.data(),
+                                                        static_cast<uint32_t>(signedStartPkt.size()),
+                                                        outPktBuf, sizeof(outPktBuf), &outPktLen);
+    TEST_ASSERT(abiProc == 1 && outPktLen >= 20, "MicaIasProcessPacket must process packet and write response");
+
+    uint64_t sAuth = 0, sAcct = 0, sAct = 0;
+    int32_t abiStats = micant::nps::MicaIasGetAccountingStats(pEngine, &sAuth, &sAcct, &sAct);
+    TEST_ASSERT(abiStats == 1 && sAuth > 0 && sAcct > 0, "MicaIasGetAccountingStats must return valid counters");
+
+    micant::nps::MicaIasShutdown(pEngine);
+
+    // Stage 14: Multithreaded High-Concurrency Stress Test (8 threads, 120 concurrent RADIUS operations)
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&nps, &stressSuccessCount, t]() {
+            uint8_t localAuth[16]{};
+            for (int k = 0; k < 16; ++k) localAuth[k] = static_cast<uint8_t>(t * 16 + k + 1);
+
+            for (int i = 0; i < 15; ++i) {
+                micant::nps::RadiusPacket req;
+                req.code = micant::nps::RadiusCode_AccessRequest;
+                req.identifier = static_cast<uint8_t>(t * 15 + i + 1);
+                std::memcpy(req.authenticator, localAuth, 16);
+                req.addStringAttribute(micant::nps::RadiusAttr_UserName, "Alice");
+                auto encPass = micant::nps::EncryptRadiusPassword("AliceSecure2026!", localAuth, "CiscoSecretKey!");
+                req.addRawAttribute(micant::nps::RadiusAttr_UserPassword, encPass.data(), encPass.size());
+                req.addUint32Attribute(micant::nps::RadiusAttr_NasPortType, 15); // Ethernet
+
+                auto rawReq = req.serialize();
+                std::vector<uint8_t> resp;
+                bool pOk = nps.processPacket("192.168.1.1", rawReq.data(), rawReq.size(), resp);
+
+                micant::nps::RadiusPacket pResp;
+                if (pOk && pResp.deserialize(resp.data(), resp.size()) && pResp.code == micant::nps::RadiusCode_AccessAccept) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded NPS / RADIUS stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 204: Windows Network Policy Server & RADIUS Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite203")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite204")) {
+        RUN_TEST(Test_WindowsNetworkPolicyServer_RADIUS_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite203") {
         RUN_TEST(Test_WindowsRemoteDesktop_VirtualChannels_Subsystem);
         return g_FailedTests;
     }
@@ -46271,6 +46554,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsActiveDirectory_KerberosKDC_Subsystem);
     RUN_TEST(Test_WindowsGroupPolicy_Engine_CSE_Subsystem);
     RUN_TEST(Test_WindowsRemoteDesktop_VirtualChannels_Subsystem);
+    RUN_TEST(Test_WindowsNetworkPolicyServer_RADIUS_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
