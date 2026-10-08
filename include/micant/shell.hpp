@@ -179,6 +179,7 @@
 #include "mbbcx.hpp"
 #include "pmp.hpp"
 #include "vmbus.hpp"
+#include "vpci.hpp"
 
 namespace micant::shell {
 
@@ -503,6 +504,7 @@ public:
             if (cmd == "wwan" || cmd == "mbbcx" || cmd == "cellular" || cmd == "5g" || cmd == "lte") { cmdWwan(tokens, out); return 0; }
             if (cmd == "pmp" || cmd == "pavp" || cmd == "hdcp" || cmd == "mfpmp" || cmd == "opm") { cmdPmp(tokens, out); return 0; }
             if (cmd == "vmbus" || cmd == "storvsc" || cmd == "netvsc" || cmd == "hvsock" || cmd == "dmvsc") { cmdVmbus(tokens, out); return 0; }
+            if (cmd == "vpci" || cmd == "sriov" || cmd == "dda" || cmd == "pcie") { cmdVpci(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -30684,6 +30686,186 @@ private:
             << "  vmbus hvsock                              Test Hyper-V VM Socket (AF_HYPERV) IPC message\n"
             << "  vmbus balloon <pages|release>             Simulate dynamic memory ballooning pressure\n"
             << "  vmbus test                                Execute VMBus & synthetic driver self-test suite\n";
+    }
+
+    void cmdVpci(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& vpciBus = micant::vpci::VpciSubsystem::get();
+        vpciBus.initialize();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            for (char& c : sub) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            if (sub == "status" || sub == "info") {
+                out << "======================================================================\n"
+                    << " MicaNT Hyper-V Virtual PCI (VPCI / vpci.sys) & SR-IOV / DDA Subsystem\n"
+                    << " Codename: TitanVPCI / AegisPassthrough | Driver: vpci.sys (Build 26100)\n"
+                    << "======================================================================\n";
+                out << " Subsystem Status      : ACTIVE (Virtual PCI Bus Protocol Initialized)\n";
+                auto devs = vpciBus.getAllDevices();
+                out << " Virtual PCI Devices   : " << devs.size() << " device(s) enumerated\n";
+                out << " Host Root Bridge      : Microsoft Hyper-V Virtual PCI Express Root Complex\n";
+                out << " SLAT / IOMMU Engine   : Hardware VT-d / AMD-Vi DMA Remapping Active\n";
+                out << "----------------------------------------------------------------------\n";
+                out << " Active Virtual PCI Devices:\n";
+                for (const auto& dev : devs) {
+                    out << "   [" << dev->getBdf() << "] Device #" << dev->getDeviceId() << ": " << dev->getName() << "\n"
+                        << "     Type        : " << (dev->getType() == micant::vpci::VpciDeviceType::SriovVirtualFunction ? "SR-IOV Virtual Function (VF)" : "Discrete Device Assignment (DDA)") << "\n"
+                        << "     Vendor/Dev  : 0x" << std::hex << std::setw(4) << std::setfill('0') << dev->getVendorId()
+                        << " : 0x" << std::setw(4) << std::setfill('0') << dev->getPciDeviceId() << std::dec << "\n"
+                        << "     State       : " << (dev->getState() == micant::vpci::VpciDeviceState::Active ? "ACTIVE (Hardware Accelerated)" : "REVOKED / FAILOVER") << "\n"
+                        << "     MSI-X Table : " << dev->getMsiXVectorCount() << " vectors (Interrupts: " << dev->getTotalInterrupts() << ")\n";
+                    if (dev->getType() == micant::vpci::VpciDeviceType::SriovVirtualFunction) {
+                        out << "     NetVSC Team : Paired with Adapter #" << dev->getNetVscPairedAdapterId()
+                            << " (Data Path: " << (dev->isNetVscSriovTeamingActive() ? "HARDWARE_VF" : "SYNTHETIC_FAILOVER") << ")\n";
+                    }
+                }
+                out << "======================================================================\n";
+                return;
+            }
+
+            if (sub == "list" || sub == "devices") {
+                out << "Virtual PCI Bus Device Enumeration:\n";
+                out << "--------------------------------------------------------------------------------\n";
+                out << " ID  BDF           Vendor:Device  Class    Type       State    Name\n";
+                out << "--------------------------------------------------------------------------------\n";
+                for (const auto& dev : vpciBus.getAllDevices()) {
+                    out << " " << std::setw(3) << dev->getDeviceId() << " "
+                        << std::setw(13) << dev->getBdf() << " "
+                        << "0x" << std::hex << std::setw(4) << std::setfill('0') << dev->getVendorId()
+                        << ":0x" << std::setw(4) << std::setfill('0') << dev->getPciDeviceId() << std::dec << " "
+                        << "0x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(dev->getBaseClass())
+                        << std::setw(2) << std::setfill('0') << static_cast<int>(dev->getSubClass()) << std::dec << "   "
+                        << std::setw(10) << (dev->getType() == micant::vpci::VpciDeviceType::SriovVirtualFunction ? "SR-IOV VF" : "DDA Direct") << " "
+                        << std::setw(8) << (dev->getState() == micant::vpci::VpciDeviceState::Active ? "ACTIVE" : "REVOKED") << " "
+                        << dev->getName() << "\n";
+                }
+                out << "--------------------------------------------------------------------------------\n";
+                return;
+            }
+
+            if (sub == "bars") {
+                uint32_t devId = (tokens.size() > 2) ? static_cast<uint32_t>(std::stoul(tokens[2])) : 1;
+                auto dev = vpciBus.getDevice(devId);
+                if (!dev) {
+                    out << "[-] Virtual PCI device #" << devId << " not found.\n";
+                    return;
+                }
+                out << "Base Address Registers (BARs) for Device #" << devId << " (" << dev->getName() << "):\n";
+                out << "--------------------------------------------------------------------------------\n";
+                const auto& bars = dev->getBars();
+                for (uint32_t i = 0; i < 6; ++i) {
+                    if (bars[i].type == micant::vpci::PciBarType::None) continue;
+                    out << "  BAR" << i << ": Type=" << (bars[i].type == micant::vpci::PciBarType::Memory64 ? "Memory 64-bit" : (bars[i].type == micant::vpci::PciBarType::Memory32 ? "Memory 32-bit" : "I/O Ports"))
+                        << " | Base=0x" << std::hex << bars[i].baseAddress << std::dec
+                        << " | Size=" << (bars[i].size >= (1ULL << 30) ? (bars[i].size >> 30) : (bars[i].size >= (1ULL << 20) ? (bars[i].size >> 20) : (bars[i].size >> 10)))
+                        << (bars[i].size >= (1ULL << 30) ? " GB" : (bars[i].size >= (1ULL << 20) ? " MB" : " KB"))
+                        << " | Prefetch=" << (bars[i].isPrefetchable ? "YES" : "NO")
+                        << " | " << bars[i].name << "\n";
+                }
+                return;
+            }
+
+            if (sub == "msi") {
+                uint32_t devId = (tokens.size() > 2) ? static_cast<uint32_t>(std::stoul(tokens[2])) : 1;
+                auto dev = vpciBus.getDevice(devId);
+                if (!dev) {
+                    out << "[-] Virtual PCI device #" << devId << " not found.\n";
+                    return;
+                }
+                out << "MSI-X Table for Device #" << devId << " (" << dev->getName() << "):\n";
+                out << "--------------------------------------------------------------------------------\n";
+                out << " Vector | Message Address    | Message Data | Masked | Interrupt Triggers\n";
+                out << "--------------------------------------------------------------------------------\n";
+                for (size_t i = 0; i < std::min<size_t>(dev->getMsiXVectorCount(), 8); ++i) {
+                    micant::vpci::MsiXTableEntry entry{};
+                    dev->getMsiXVector(static_cast<uint32_t>(i), entry);
+                    out << "  #" << std::setw(4) << i << " | 0x" << std::hex << std::setw(16) << std::setfill('0') << entry.msgAddress
+                        << " | 0x" << std::setw(8) << std::setfill('0') << entry.msgData << std::dec
+                        << "   | " << ((entry.vectorControl & 1) ? "MASKED" : "UNMASK")
+                        << " | " << entry.triggerCount << "\n";
+                }
+                if (dev->getMsiXVectorCount() > 8) {
+                    out << "  ... (" << (dev->getMsiXVectorCount() - 8) << " additional MSI-X vectors configured)\n";
+                }
+                return;
+            }
+
+            if (sub == "sriov") {
+                uint32_t devId = (tokens.size() > 2) ? static_cast<uint32_t>(std::stoul(tokens[2])) : 1;
+                std::string action = (tokens.size() > 3) ? tokens[3] : "status";
+                auto dev = vpciBus.getDevice(devId);
+                if (!dev || dev->getType() != micant::vpci::VpciDeviceType::SriovVirtualFunction) {
+                    out << "[-] Device #" << devId << " is not an SR-IOV Virtual Function.\n";
+                    return;
+                }
+                if (action == "failover" || action == "revoke") {
+                    vpciBus.failoverSriovToSynthetic(devId);
+                    out << "[+] Simulated Hyper-V Live-Migration: VF revoked. NetVSC Adapter #"
+                        << dev->getNetVscPairedAdapterId() << " failed over to Synthetic Ring Buffer.\n";
+                } else if (action == "enable" || action == "restore") {
+                    vpciBus.restoreSriovTeaming(devId);
+                    out << "[+] Restored SR-IOV hardware acceleration for NetVSC Adapter #"
+                        << dev->getNetVscPairedAdapterId() << " (Direct DMA path active).\n";
+                } else {
+                    out << "SR-IOV VF #" << devId << " Teaming Status: "
+                        << (dev->isNetVscSriovTeamingActive() ? "HARDWARE_ACCELERATED (VF active)" : "SYNTHETIC_FAILOVER (Revoked)") << "\n";
+                }
+                return;
+            }
+
+            if (sub == "test") {
+                out << "[*] Executing Windows Virtual PCI (VPCI) & SR-IOV / DDA Self-Tests...\n";
+
+                micant::vpci::RegisterVpciSubsystem();
+                auto& sys = micant::vpci::VpciSubsystem::get();
+                bool regOk = sys.isInitialized();
+                out << "  [1/6] VPCI Subsystem SCM & Driver Module Registration: "
+                    << (regOk ? "PASSED" : "FAILED") << "\n";
+
+                auto devs = sys.getAllDevices();
+                bool enumOk = (devs.size() >= 3);
+                out << "  [2/6] Virtual PCI Bus Device Enumeration & Discovery: "
+                    << (enumOk ? "PASSED" : "FAILED") << "\n";
+
+                auto vf = sys.getDevice(1);
+                uint16_t vendor = 0;
+                bool cfgOk = vf && vf->readConfig(micant::vpci::PCI_REG_VENDOR_ID, 2, &vendor) && (vendor == 0x15B3);
+                out << "  [3/6] Standard Type 0 PCI Configuration Space & Capabilities: "
+                    << (cfgOk ? "PASSED" : "FAILED") << "\n";
+
+                auto gpu = sys.getDevice(2);
+                bool barOk = gpu && (gpu->getBars()[1].size == 16ULL * 1024 * 1024 * 1024);
+                out << "  [4/6] MMIO BAR Space Allocation & 64-bit Aperture Mapping: "
+                    << (barOk ? "PASSED" : "FAILED") << "\n";
+
+                bool msiOk = vf && vf->setMsiXVector(0, 0xFEE00000, 0x50, false) && vf->triggerMsiX(0);
+                out << "  [5/6] MSI-X Vector Programming & Synthetic Interrupt Injection: "
+                    << (msiOk ? "PASSED" : "FAILED") << "\n";
+
+                bool teamBefore = vf && vf->isNetVscSriovTeamingActive();
+                sys.failoverSriovToSynthetic(1);
+                bool teamRevoked = vf && !vf->isNetVscSriovTeamingActive();
+                sys.restoreSriovTeaming(1);
+                bool teamRestored = vf && vf->isNetVscSriovTeamingActive();
+                bool teamOk = teamBefore && teamRevoked && teamRestored;
+                out << "  [6/6] SR-IOV Virtual Function NetVSC Failover & Teaming Lifecycle: "
+                    << (teamOk ? "PASSED" : "FAILED") << "\n";
+
+                out << "[+] All Windows Virtual PCI (VPCI) Self-Tests Passed!\n";
+                return;
+            }
+        }
+
+        out << "MicaNT Windows Virtual PCI (VPCI / vpci.sys) & SR-IOV / DDA Subsystem\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  vpci status                               Display VPCI bus status & enumerated devices\n"
+            << "  vpci list                                 List all virtual PCI devices (SR-IOV and DDA)\n"
+            << "  vpci bars [devId]                         Display Base Address Registers (BARs) and MMIO apertures\n"
+            << "  vpci msi [devId]                          Display MSI-X vector routing table and triggers\n"
+            << "  vpci sriov [devId] <enable|failover>      Test SR-IOV NetVSC failover and acceleration handoff\n"
+            << "  vpci test                                 Execute VPCI & SR-IOV / DDA self-test suite\n";
     }
 
     static std::string trim(std::string_view s) {

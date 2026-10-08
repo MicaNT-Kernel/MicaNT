@@ -3390,22 +3390,42 @@
 
 ---
 
-### Phase 162: Windows Virtual PCI (VPCI / `vpci.sys`), SR-IOV Synthetic Device Assignment & Discrete Device Assignment (DDA) Subsystem (`vpci.hpp`, `vpci.sys`, `TitanVPCI`, `AegisPassthrough`) (Milestone 189) [PLANNED]
+### Phase 162: Windows Virtual PCI (VPCI / `vpci.sys`), SR-IOV Synthetic Device Assignment & Discrete Device Assignment (DDA) Subsystem (`vpci.hpp`, `vpci.sys`, `TitanVPCI`, `AegisPassthrough`) (Milestone 189) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Virtual PCI Bus (VPCI / vpci.sys), Single Root I/O Virtualization (SR-IOV) Virtual Function (VF) hardware pass-through, Discrete Device Assignment (DDA), Virtual PCI configuration space emulation (Type 0 headers, capability pointers), MSI/MSI-X interrupt mapping, MMIO BAR space remapping, and NetVSC dynamic VF failover teaming.*
-- [ ] **Virtual PCI (VPCI) Bus Architecture (`include/micant/vpci.hpp`)**:
+- [x] **Virtual PCI (VPCI) Bus Architecture (`include/micant/vpci.hpp`)**:
   - VPCI Bus Protocol & Device Enumeration: Child device discovery over Hyper-V VPCI protocol, virtual bus scanning, device addition/removal notifications.
   - PCI Config Space Emulation: Virtual standard Type 0 configuration header (Vendor ID, Device ID, Command, Status, Revision, Class Code, Subsystem IDs), Extended Capabilities (PCIe Cap, MSI, MSI-X, SR-IOV, ACS).
   - MMIO BAR Resource Remapping: 32-bit and 64-bit BAR address assignment, guest physical address (GPA) to host physical address (HPA) SLAT paging translations.
   - Interrupt Vector Assignment: MSI/MSI-X table vector routing, synthetic interrupt controller (SynIC) APIC interrupt injection.
   - SR-IOV & NetVSC Hardware Accelerated Teaming: Failover binding between synthetic NetVSC adapter and hardware SR-IOV VF, live-migration revocation handoff.
   - Discrete Device Assignment (DDA): Full physical PCIe device partition assignment directly into guest VM space.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `vpci.sys`: `VpciInitializeSubsystem`, `VpciDeviceEnumerate`, `VpciReadConfigSpace`, `VpciWriteConfigSpace`, `VpciMapBarSpace`, `VpciAssignMsiInterrupt`, `VpciQueryDeviceCapabilities`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`VpciService`, `svchost.exe -k LocalSystemNetworkRestricted`).
-- [ ] **Interactive Shell CLI**:
+- [x] **Interactive Shell CLI**:
   - `vpci status`, `vpci list`, `vpci read <devId> <offset>`, `vpci bars <devId>`, `vpci msi <devId>`, `vpci sriov <enable|disable> [devId]`, `vpci dda [devId]`, `vpci test`.
-- [ ] **Unit Test Suite 189 (`Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem`)**:
+- [x] **Unit Test Suite 189 (`Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem`)**:
   - 12 comprehensive validation stages verifying VPCI subsystem initialization, virtual PCI bus device enumeration, standard Type 0 PCI configuration space read/write, PCIe capabilities walk, MMIO BAR address mapping, MSI/MSI-X interrupt injection, SR-IOV VF assignment, NetVSC failover teaming, DDA passthrough device containment, Win32 C ABI parity exports, and multi-threaded MMIO/DMA transaction stress testing.
+  - Milestone 189: **189 / 189 Test Suites Passing (100%)**.
+
+---
+
+### Phase 163: Windows Virtualization-Based Security (VBS), Virtual Secure Mode (VSM) & Hypervisor-Protected Code Integrity (HVCI) Subsystem (`vsm.hpp`, `vsm.sys`, `securekernel.exe`, `hvci.dll`, `TitanVSM`, `AegisTrust`) (Milestone 190) [PLANNED]
+*Goal: Implement clean-room Windows Virtualization-Based Security (VBS), Virtual Secure Mode (VSM), Virtual Trust Levels (VTL 0 normal world vs VTL 1 secure world / Secure Kernel `securekernel.exe`), Hypervisor-Protected Code Integrity (HVCI / W^X write-xor-execute memory protection enforcement via SLAT / Second-Level Address Translation), Isolated User Mode (IUM / Trustlets), Credential Guard (LSA Iso), and Virtual TPM (vTPM) attestation.*
+- [ ] **Virtual Secure Mode (VSM) & VBS Core Architecture (`include/micant/vsm.hpp`)**:
+  - Virtual Trust Levels (VTL): Dual-world architecture separating VTL 0 (normal NT kernel/userland) and VTL 1 (Secure Kernel & Isolated User Mode trustlets).
+  - VTL Switching Hypercalls: Hyper-V VSM hypercall engine (`HvCallEnterVtl1`, `HvCallSwitchVtl`, `HvCallModifyVtlProtectionMask`), secure register save/restore state.
+  - SLAT Page Permission Hardening (W^X): Second-Level Address Translation enforcement preventing VTL 0 kernel code from modifying executable memory or executing writable memory.
+  - Hypervisor-Protected Code Integrity (HVCI): Strict cryptographic verification of kernel mode drivers and executable code before page validation and execution authorization.
+  - Credential Guard (LSA Isolated): Isolated Local Security Authority (`lsaiso.exe`) running within VTL 1 to shield NT password hashes, Kerberos tickets, and DPAPI master keys from Ring 0 kernel compromise.
+  - Virtual TPM (vTPM 2.0): Hypervisor-backed synthetic TPM 2.0 enclave rooted in VTL 1 for measured boot PCR validation and BitLocker secret sealing.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `vsm.sys` / `securekernel.exe` / `hvci.dll`: `VsmInitializeSubsystem`, `VsmVtlSwitch`, `VsmSetPageProtection`, `HvciVerifyModule`, `VsmQueryTrustLevel`, `VsmRegisterSecurityEnclave`, `VsmGetEnclaveMetrics`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`VsmService`, `svchost.exe -k LocalSystemNetworkRestricted`).
+- [ ] **Interactive Shell CLI**:
+  - `vsm status`, `vsm vtl [target]`, `vsm hvci <enable|disable>`, `vsm credguard`, `vsm vtpm`, `vsm enclaves`, `vsm test`.
+- [ ] **Unit Test Suite 190 (`Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem`)**:
+  - 12 comprehensive validation stages verifying VBS/VSM subsystem initialization, dual VTL (0 & 1) execution state partitioning, VTL hypercall context switching, SLAT W^X page protection modification and violation trapping, HVCI driver signature and code integrity enforcement, Credential Guard isolated secret vault, vTPM 2.0 PCR measurement extension, Win32 C ABI parity exports, and multi-threaded secure enclave call concurrency.
 
 
 

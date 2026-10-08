@@ -193,6 +193,7 @@
 #include "micant/mbbcx.hpp"
 #include "micant/pmp.hpp"
 #include "micant/vmbus.hpp"
+#include "micant/vpci.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -42725,8 +42726,225 @@ void Test_WindowsVMBus_SyntheticDriver_Subsystem() {
     std::cout << "[TEST] Suite 188: Windows Virtual Machine Bus (VMBus) & Hyper-V Synthetic Driver Subsystem PASSED.\n";
 }
 
+void Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem() {
+    std::cout << "[TEST] Executing Suite 189: Windows Virtual PCI (VPCI / vpci.sys) & SR-IOV / DDA Subsystem...\n";
+
+    // Stage 1: VPCI Subsystem Initialization & SCM/Version Database Registration
+    micant::vpci::RegisterVpciSubsystem();
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto scmSvc = scm.getServiceRecord(L"VpciService");
+    TEST_ASSERT(scmSvc != nullptr, "VpciService SCM service record must be registered");
+    TEST_ASSERT(scmSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "VpciService must be in running state");
+    TEST_ASSERT(scmSvc->binaryPath.find(L"svchost.exe") != std::wstring::npos, "VpciService host must be svchost.exe");
+
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    auto mod = vdb.FindModule("vpci.sys");
+    TEST_ASSERT(mod != nullptr, "vpci.sys must be registered in VersionDatabase");
+    TEST_ASSERT(mod->stringTable.at("FileVersion") == "10.0.26100.1", "vpci.sys version must match 10.0.26100.1");
+
+    auto& vpciBus = micant::vpci::VpciSubsystem::get();
+    TEST_ASSERT(vpciBus.isInitialized(), "VpciSubsystem must be initialized");
+
+    // Stage 2: Virtual PCI Bus Device Enumeration & Discovery
+    auto devices = vpciBus.getAllDevices();
+    TEST_ASSERT(devices.size() >= 3, "VPCI bus must enumerate at least 3 devices");
+
+    auto dev1 = vpciBus.getDevice(1);
+    TEST_ASSERT(dev1 != nullptr, "Device #1 (Mellanox VF) must exist");
+    TEST_ASSERT(dev1->getType() == micant::vpci::VpciDeviceType::SriovVirtualFunction, "Device #1 type must be SriovVirtualFunction");
+    TEST_ASSERT(dev1->getBdf() == "0000:01:00.1", "Device #1 BDF must be 0000:01:00.1");
+
+    auto dev2 = vpciBus.getDevice(2);
+    TEST_ASSERT(dev2 != nullptr, "Device #2 (NVIDIA A100 GPU) must exist");
+    TEST_ASSERT(dev2->getType() == micant::vpci::VpciDeviceType::DiscreteDeviceAssignment, "Device #2 type must be DiscreteDeviceAssignment");
+    TEST_ASSERT(dev2->getBdf() == "0000:02:00.0", "Device #2 BDF must be 0000:02:00.0");
+
+    auto dev3 = vpciBus.getDevice(3);
+    TEST_ASSERT(dev3 != nullptr, "Device #3 (Samsung PM1733 NVMe) must exist");
+    TEST_ASSERT(dev3->getType() == micant::vpci::VpciDeviceType::DiscreteDeviceAssignment, "Device #3 type must be DiscreteDeviceAssignment");
+
+    TEST_ASSERT(vpciBus.getDevice(9999) == nullptr, "Querying non-existent device must return nullptr");
+
+    // Stage 3: Standard Type 0 PCI Configuration Space Header Read
+    uint16_t vendorId = 0;
+    TEST_ASSERT(dev1->readConfig(micant::vpci::PCI_REG_VENDOR_ID, sizeof(uint16_t), &vendorId), "Read Vendor ID must succeed");
+    TEST_ASSERT(vendorId == 0x15B3, "Mellanox VF Vendor ID must be 0x15B3");
+
+    uint16_t deviceId = 0;
+    TEST_ASSERT(dev1->readConfig(micant::vpci::PCI_REG_DEVICE_ID, sizeof(uint16_t), &deviceId), "Read Device ID must succeed");
+    TEST_ASSERT(deviceId == 0x101E, "ConnectX-6 Dx VF Device ID must be 0x101E");
+
+    uint8_t baseClass = 0, subClass = 0;
+    TEST_ASSERT(dev1->readConfig(micant::vpci::PCI_REG_CLASS_BASE, 1, &baseClass), "Read base class must succeed");
+    TEST_ASSERT(dev1->readConfig(micant::vpci::PCI_REG_CLASS_SUB, 1, &subClass), "Read sub class must succeed");
+    TEST_ASSERT(baseClass == 0x02, "Network Controller base class must be 0x02");
+    TEST_ASSERT(subClass == 0x00, "Ethernet Controller sub class must be 0x00");
+
+    uint8_t headerType = 0;
+    TEST_ASSERT(dev1->readConfig(micant::vpci::PCI_REG_HEADER_TYPE, 1, &headerType), "Read header type must succeed");
+    TEST_ASSERT(headerType == 0x00, "PCI Header Type must be 0x00 (Type 0 Standard Header)");
+
+    uint16_t pciStatus = 0;
+    TEST_ASSERT(dev1->readConfig(micant::vpci::PCI_REG_STATUS, sizeof(uint16_t), &pciStatus), "Read status register must succeed");
+    TEST_ASSERT((pciStatus & micant::vpci::PCI_STATUS_CAP_LIST) != 0, "Capabilities List bit must be set in status register");
+
+    // Stage 4: PCI Configuration Space Capability Pointer Traversal (PCIe & MSI-X)
+    uint8_t capPtr = 0;
+    TEST_ASSERT(dev1->readConfig(micant::vpci::PCI_REG_CAP_PTR, 1, &capPtr), "Read capability pointer must succeed");
+    TEST_ASSERT(capPtr == 0x40, "First capability must be at offset 0x40");
+
+    uint8_t cap1Id = 0, cap1Next = 0;
+    TEST_ASSERT(dev1->readConfig(0x40, 1, &cap1Id) && dev1->readConfig(0x41, 1, &cap1Next), "Read Cap 1 header must succeed");
+    TEST_ASSERT(cap1Id == micant::vpci::PCI_CAP_ID_EXP, "Cap 1 ID must be PCI Express (0x10)");
+    TEST_ASSERT(cap1Next == 0x70, "Next capability pointer must point to 0x70");
+
+    uint8_t cap2Id = 0, cap2Next = 0;
+    TEST_ASSERT(dev1->readConfig(0x70, 1, &cap2Id) && dev1->readConfig(0x71, 1, &cap2Next), "Read Cap 2 header must succeed");
+    TEST_ASSERT(cap2Id == micant::vpci::PCI_CAP_ID_MSIX, "Cap 2 ID must be MSI-X (0x11)");
+    TEST_ASSERT(cap2Next == 0x00, "Next capability pointer must be 0x00 (end of capability chain)");
+
+    // Stage 5: PCI Configuration Space Register Modification (Command Register)
+    uint16_t origCmd = 0;
+    TEST_ASSERT(dev1->readConfig(micant::vpci::PCI_REG_COMMAND, sizeof(uint16_t), &origCmd), "Read command register must succeed");
+    TEST_ASSERT((origCmd & micant::vpci::PCI_CMD_BUS_MASTER) != 0, "Bus Master bit must initially be set");
+
+    uint16_t newCmd = micant::vpci::PCI_CMD_MEMORY_SPACE | micant::vpci::PCI_CMD_BUS_MASTER | micant::vpci::PCI_CMD_INTX_DISABLE;
+    TEST_ASSERT(dev1->writeConfig(micant::vpci::PCI_REG_COMMAND, sizeof(uint16_t), &newCmd), "Write command register must succeed");
+    uint16_t readCmd = 0;
+    dev1->readConfig(micant::vpci::PCI_REG_COMMAND, sizeof(uint16_t), &readCmd);
+    TEST_ASSERT(readCmd == newCmd, "Modified command register must read back written value");
+    dev1->writeConfig(micant::vpci::PCI_REG_COMMAND, sizeof(uint16_t), &origCmd); // restore
+
+    // Stage 6: MMIO BAR Base Address Allocation & Guest Physical Space Mapping
+    const auto& bars1 = dev1->getBars();
+    TEST_ASSERT(bars1[0].type == micant::vpci::PciBarType::Memory64, "Device 1 BAR0 must be Memory64");
+    TEST_ASSERT(bars1[0].baseAddress == 0xFE000000, "Device 1 BAR0 base address must be 0xFE000000");
+    TEST_ASSERT(bars1[0].size == 64 * 1024 * 1024, "Device 1 BAR0 size must be 64 MB");
+    TEST_ASSERT(bars1[0].isPrefetchable == true, "Device 1 BAR0 must be prefetchable");
+    TEST_ASSERT(bars1[0].isMapped == true, "Device 1 BAR0 must be mapped in GPA space");
+
+    // Stage 7: 64-bit Large MMIO Aperture Validation (16GB BAR for A100 GPU)
+    const auto& bars2 = dev2->getBars();
+    TEST_ASSERT(bars2[0].type == micant::vpci::PciBarType::Memory32, "A100 BAR0 must be Memory32");
+    TEST_ASSERT(bars2[0].size == 16 * 1024 * 1024, "A100 BAR0 size must be 16 MB");
+    TEST_ASSERT(bars2[1].type == micant::vpci::PciBarType::Memory64, "A100 BAR1 must be Memory64");
+    TEST_ASSERT(bars2[1].size == 16ULL * 1024 * 1024 * 1024, "A100 BAR1 aperture must be 16 GB");
+    TEST_ASSERT(bars2[1].baseAddress == 0x2000000000ULL, "A100 BAR1 base must be at 128 GB physical boundary (0x2000000000)");
+
+    // Stage 8: MSI-X Interrupt Vector Configuration & Table Programming
+    TEST_ASSERT(dev1->isMsiXEnabled(), "Device 1 must have MSI-X enabled");
+    TEST_ASSERT(dev1->getMsiXVectorCount() == 16, "Device 1 must have 16 MSI-X vectors");
+    TEST_ASSERT(dev3->getMsiXVectorCount() == 64, "Device 3 must have 64 MSI-X vectors");
+
+    TEST_ASSERT(dev1->setMsiXVector(0, 0xFEE00000, 0x40, false), "Programming unmasked vector 0 must succeed");
+    TEST_ASSERT(dev1->setMsiXVector(1, 0xFEE01000, 0x41, true), "Programming masked vector 1 must succeed");
+    TEST_ASSERT(!dev1->setMsiXVector(99, 0, 0, false), "Programming out-of-bounds vector must fail");
+
+    micant::vpci::MsiXTableEntry e0{}, e1{};
+    TEST_ASSERT(dev1->getMsiXVector(0, e0), "Retrieve vector 0 must succeed");
+    TEST_ASSERT(e0.msgAddress == 0xFEE00000 && e0.msgData == 0x40 && e0.vectorControl == 0, "Vector 0 parameters must match");
+    TEST_ASSERT(dev1->getMsiXVector(1, e1), "Retrieve vector 1 must succeed");
+    TEST_ASSERT(e1.msgAddress == 0xFEE01000 && e1.vectorControl == 1, "Vector 1 must be masked");
+
+    // Stage 9: MSI-X Synthetic Interrupt Injection & Delivery Verification
+    TEST_ASSERT(dev1->triggerMsiX(0) == true, "Triggering unmasked vector 0 must return true");
+    dev1->getMsiXVector(0, e0);
+    TEST_ASSERT(e0.triggerCount == 1, "Vector 0 triggerCount must be 1");
+    TEST_ASSERT(dev1->getTotalInterrupts() == 1, "Total interrupts fired must be 1");
+
+    TEST_ASSERT(dev1->triggerMsiX(1) == false, "Triggering masked vector 1 must be suppressed (return false)");
+    dev1->getMsiXVector(1, e1);
+    TEST_ASSERT(e1.triggerCount == 0, "Masked vector 1 triggerCount must remain 0");
+
+    dev1->setMsiXVector(1, 0xFEE01000, 0x41, false); // unmask
+    TEST_ASSERT(dev1->triggerMsiX(1) == true, "Triggering unmasked vector 1 must succeed");
+    dev1->getMsiXVector(1, e1);
+    TEST_ASSERT(e1.triggerCount == 1, "Vector 1 triggerCount must now be 1");
+    TEST_ASSERT(dev1->getTotalInterrupts() == 2, "Total interrupts fired must be 2");
+
+    // Stage 10: SR-IOV Virtual Function NetVSC Accelerated Data Path Teaming Handshake
+    TEST_ASSERT(dev1->isNetVscSriovTeamingActive() == true, "Device 1 must be active in NetVSC SR-IOV teaming");
+    TEST_ASSERT(dev1->getNetVscPairedAdapterId() == 2, "Device 1 paired adapter ID must be 2");
+    TEST_ASSERT(dev2->isNetVscSriovTeamingActive() == false, "Device 2 (GPU) must not be NetVSC paired");
+
+    // Stage 11: Dynamic Live-Migration VF Revocation & NetVSC Failover to Synthetic Ring Buffer
+    TEST_ASSERT(vpciBus.failoverSriovToSynthetic(1) == true, "Failing over SR-IOV VF to synthetic must succeed");
+    TEST_ASSERT(dev1->getState() == micant::vpci::VpciDeviceState::Revoked, "Device 1 state must become Revoked");
+    TEST_ASSERT(dev1->isNetVscSriovTeamingActive() == false, "NetVSC teaming active must be false during failover");
+
+    TEST_ASSERT(vpciBus.restoreSriovTeaming(1) == true, "Restoring SR-IOV teaming must succeed");
+    TEST_ASSERT(dev1->getState() == micant::vpci::VpciDeviceState::Active, "Device 1 state must be restored to Active");
+    TEST_ASSERT(dev1->isNetVscSriovTeamingActive() == true, "NetVSC teaming active must be true after restore");
+
+    // Stage 12: Clean-Room Win32 C ABI Parity Exports & Multi-threaded MMIO Access Stress Test
+    TEST_ASSERT(micant::vpci::VpciInitializeSubsystem() == micant::STATUS_SUCCESS, "VpciInitializeSubsystem must return STATUS_SUCCESS");
+
+    uint32_t devCnt = 0;
+    TEST_ASSERT(micant::vpci::VpciDeviceEnumerate(nullptr, nullptr, 0) == micant::STATUS_INVALID_PARAMETER, "Null count must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vpci::VpciDeviceEnumerate(&devCnt, nullptr, 0) == micant::STATUS_SUCCESS, "Enumerate count query must succeed");
+    TEST_ASSERT(devCnt >= 3, "Enumerated device count must be >= 3");
+
+    std::vector<uint32_t> devIds(devCnt);
+    TEST_ASSERT(micant::vpci::VpciDeviceEnumerate(&devCnt, devIds.data(), devCnt) == micant::STATUS_SUCCESS, "Enumerate IDs must succeed");
+    TEST_ASSERT(devIds[0] == 1 && devIds[1] == 2 && devIds[2] == 3, "Device IDs must be 1, 2, 3");
+
+    uint16_t cVendor = 0;
+    TEST_ASSERT(micant::vpci::VpciReadConfigSpace(9999, 0, 2, &cVendor) == micant::STATUS_NOT_FOUND, "Read config on invalid dev must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::vpci::VpciReadConfigSpace(1, 0, 2, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null buf must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::vpci::VpciReadConfigSpace(1, 0, 2, &cVendor) == micant::STATUS_SUCCESS, "Read config via C ABI must succeed");
+    TEST_ASSERT(cVendor == 0x15B3, "C ABI read vendor ID must be 0x15B3");
+
+    uint64_t barAddr = 0, barSz = 0;
+    TEST_ASSERT(micant::vpci::VpciMapBarSpace(1, 0, &barAddr, &barSz) == micant::STATUS_SUCCESS, "VpciMapBarSpace must succeed");
+    TEST_ASSERT(barAddr == 0xFE000000 && barSz == 64 * 1024 * 1024, "VpciMapBarSpace values must match BAR0");
+    TEST_ASSERT(micant::vpci::VpciMapBarSpace(1, 5, &barAddr, &barSz) == micant::STATUS_NOT_FOUND, "Unconfigured BAR must return STATUS_NOT_FOUND");
+
+    uint32_t isSriov = 0, isDda = 0, netPaired = 0;
+    TEST_ASSERT(micant::vpci::VpciQueryDeviceCapabilities(1, &isSriov, &isDda, &netPaired) == micant::STATUS_SUCCESS, "Query capabilities must succeed");
+    TEST_ASSERT(isSriov == 1 && isDda == 0 && netPaired == 1, "Capabilities for dev 1 must indicate SR-IOV paired with NetVSC");
+
+    TEST_ASSERT(micant::vpci::VpciQueryDeviceCapabilities(2, &isSriov, &isDda, &netPaired) == micant::STATUS_SUCCESS, "Query capabilities for GPU must succeed");
+    TEST_ASSERT(isSriov == 0 && isDda == 1 && netPaired == 0, "Capabilities for GPU must indicate DDA without NetVSC");
+
+    TEST_ASSERT(micant::vpci::VpciAssignMsiInterrupt(1, 2, 0xFEE02000, 0x42) == micant::STATUS_SUCCESS, "Assigning vector 2 via C ABI must succeed");
+    TEST_ASSERT(micant::vpci::VpciTriggerInterrupt(1, 2) == micant::STATUS_SUCCESS, "Triggering vector 2 via C ABI must succeed");
+
+    // Multi-threaded concurrent MMIO/Config read stress test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 4; ++t) {
+        threads.emplace_back([&vpciBus, &stressSuccessCount]() {
+            for (int iter = 0; iter < 25; ++iter) {
+                uint32_t targetId = (iter % 3) + 1;
+                auto dev = vpciBus.getDevice(targetId);
+                if (!dev) continue;
+
+                uint16_t vId = 0;
+                if (dev->readConfig(0, 2, &vId)) {
+                    if (vId == dev->getVendorId()) {
+                        const auto& b = dev->getBars();
+                        if (b[0].type != micant::vpci::PciBarType::None) {
+                            stressSuccessCount++;
+                        }
+                    }
+                }
+            }
+        });
+    }
+    for (auto& th : threads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressSuccessCount.load() == 100, "100 concurrent VPCI config and BAR operations must succeed with zero race conditions");
+
+    std::cout << "[TEST] Suite 189: Windows Virtual PCI (VPCI / vpci.sys) & SR-IOV / DDA Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite188")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite189")) {
+        RUN_TEST(Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite188") {
         RUN_TEST(Test_WindowsVMBus_SyntheticDriver_Subsystem);
         return g_FailedTests;
     }
@@ -43251,6 +43469,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsMbbCx_MBIM40_5G_Subsystem);
     RUN_TEST(Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem);
     RUN_TEST(Test_WindowsVMBus_SyntheticDriver_Subsystem);
+    RUN_TEST(Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
