@@ -354,7 +354,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 173: Hyper-V VMMS, Virtual Switch & VHDX (Milestone 200)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 174: Windows Active Directory & Kerberos KDC (M201)     [PLANNED]        │
+│ Phase 174: Windows Active Directory & Kerberos KDC (M201)     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 175: Windows Group Policy Client & Engine Subsystem(M202)[PLANNED]        │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 176: Remote Desktop Services & RDP Channels (M203)       [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3637,20 +3641,59 @@
 
 ---
 
-### Phase 174: Windows Active Directory Domain Services & Kerberos KDC Subsystem (`kdcsvc.dll`, `kdc.sys`, `ntds.dit`, `TitanDirectory`, `AegisKDC`) (Milestone 201) [PLANNED]
+### Phase 174: Windows Active Directory Domain Services & Kerberos KDC Subsystem (`kdcsvc.dll`, `kdc.sys`, `ntds.dit`, `TitanDirectory`, `AegisKDC`) (Milestone 201) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Active Directory Domain Services (AD DS) and Kerberos Key Distribution Center (KDC) subsystem (`kdcsvc.dll`, `kdc.sys`, `ntds.dit`), providing enterprise identity directory management, LDAP directory queries, Kerberos v5 AS-REQ / AS-REP and TGS-REQ / TGS-REP ticket granting, PAC validation, and cross-realm domain trust authentication.*
-- [ ] **Active Directory Domain Services Core (`include/micant/activedirectory.hpp`)**:
+- [x] **Active Directory Domain Services Core (`include/micant/activedirectory.hpp`)**:
   - NTDS Database (`ntds.dit` / ESE): Hierarchical organizational units (OU), security principals (users, computer accounts, security groups), and distinguished names (`DC=micant,DC=internal`).
   - Kerberos KDC Subsystem (`kdcsvc.dll` / `kdc.sys`): AS-REQ/AS-REP ticket granting service, TGS-REQ/TGS-REP service ticket generation, TGT signing, AES-256-CTS-HMAC-SHA1-96 encryption, and Privilege Attribute Certificate (PAC) generation and verification.
   - LDAP Directory Query Service (`wldap32.dll`): Lightweight Directory Access Protocol query evaluation, subtree search, and object attribute filtering.
   - Enterprise Domain Trust & Netlogon (`netlogon.dll`): Two-way transitive realm trust verification, secure channel validation, and Kerberos referral ticket generation.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `kdcsvc.dll` / `kdc.sys` / `wldap32.dll`: `KdcAuthenticateClient`, `KdcGrantServiceTicket`, `KdcVerifyTicket`, `NtdsCreatePrincipal`, `NtdsQueryObject`, `LdapSearchDirectory`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`Kdc`, `NTDS`, `Netlogon`).
+- [x] **Interactive Shell CLI**:
+  - `ad` / `kdc` / `domain` (`status`, `users`, `computers`, `tickets`, `ldap`, `trusts`, `test`).
+- [x] **Unit Test Suite 201 (`Test_WindowsActiveDirectory_KerberosKDC_Subsystem`)**:
+  - 14 comprehensive validation stages: SCM service registration (`Kdc`, `NTDS`, `Netlogon`), VersionDatabase entry verification, default domain schema & root naming context, security principal creation (OU, User, Computer, Group), Kerberos AS-REQ pre-authentication & TGT issuance, Privilege Attribute Certificate (PAC) generation & checksums, Kerberos TGS-REQ service ticket issuance & verification, cross-realm trust referral ticketing, LDAP subtree search & filter evaluation, expired ticket rejection & time-skew checking, Win32 C ABI export verification, and high-concurrency 100-request multithreaded ticket granting stress test.
+  - Milestone 201: **201 / 201 Test Suites Passing (100%)**.
+
+---
+
+### Phase 175: Windows Group Policy Client & Engine Subsystem (`gpsvc.dll`, `gpreport.exe`, `gpupdate.exe`, `PolicyDefinitions`, `TitanPolicy`, `AegisGPO`) (Milestone 202) [PLANNED]
+*Goal: Implement clean-room Windows Group Policy Client (GPSVC) and Policy Engine subsystem, providing enterprise policy distribution, administrative template parsing (ADMX/ADML), Client-Side Extensions (CSE), WMI filter evaluation, LSDOU precedence, loopback processing, and background refresh engine.*
+- [ ] **Group Policy Engine & Infrastructure (`include/micant/grouppolicy.hpp`)**:
+  - GPO Storage & Registry.pol: Binary POL format parser/generator (`PKey`, `Type`, `Value`, `RegPath`).
+  - Client-Side Extensions (CSE): Registry CSE, Security CSE (Audit & Privileges), Scripts CSE (Startup/Shutdown/Logon/Logoff), Folder Redirection CSE.
+  - WMI Filters: WQL expression parsing and hardware/OS condition evaluation (OS version, architecture, memory, domain role).
+  - Precedence & Inheritance Resolution: LSDOU (Local, Site, Domain, OU), Enforced GPOs, Block Inheritance, Loopback processing (Replace and Merge modes).
+  - Background Refresh Engine: Periodic refresh timer (90-120 minutes with random offset), foreground synchronous/asynchronous processing, manual `gpupdate /force` trigger.
+  - Policy Reporting: `gpresult` diagnostic engine generating XML and HTML policy status reports.
+- [ ] **Win32 & SCM Clean-Room Export Parity**:
+  - `gpsvc.dll` / `userenv.dll`: `ProcessGroupPolicy`, `RefreshPolicy`, `GetGPOList`, `FreeGPOList`, `GenerateGPOCopy`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`Gpsvc`).
 - [ ] **Interactive Shell CLI**:
-  - `ad` / `kdc` / `domain` (`status`, `users`, `computers`, `tickets`, `ldap`, `test`).
-- [ ] **Unit Test Suite 201 (`Test_WindowsActiveDirectory_KerberosKDC_Subsystem`)**:
-  - Comprehensive validation suite testing AD DS schema hierarchy, Kerberos TGT/TGS ticket lifecycle, AES-256 PAC signatures, LDAP search expressions, and concurrent ticket granting operations.
+  - `gp` / `gpo` / `gpupdate` / `gpresult` (`status`, `list`, `update`, `result`, `cse`, `test`).
+- [ ] **Unit Test Suite 202 (`Test_WindowsGroupPolicy_Engine_CSE_Subsystem`)**:
+  - Comprehensive 14-stage validation suite covering GPO creation, Registry.pol serialization, CSE execution, WMI filtering, precedence resolution, loopback processing, and multithreaded stress testing.
+
+---
+
+### Phase 176: Remote Desktop Services & RDP Virtual Channels Subsystem (`termsrv.dll`, `rdpdr.sys`, `mstsc.exe`, `TitanRDS`, `AegisRDP`) (Milestone 203) [PLANNED]
+*Goal: Implement clean-room Remote Desktop Services (RDS / Terminal Services) and RDP Virtual Channels architecture, supporting multi-user WinStation session arbitration, T.128 / MCS protocol negotiation, static & dynamic virtual channels (clipboard, audio, printer/drive redirection), Network Level Authentication (NLA), and remote shadow viewing.*
+- [ ] **Remote Desktop Services Core (`include/micant/remotedesktop.hpp`)**:
+  - RDP Protocol Stack: X.224 Connection Request/Confirm, MCS Connect Initial/Response, Security Exchange, Client Info PDU, Capability Exchange.
+  - Session Arbitrator & WinStation Manager: Session state machine (Active, Connected, Disconnected, Idle, Shadowing, Reset), multi-user session lifecycle.
+  - Virtual Channels Architecture: Static Channels (`cliprdr` clipboard, `rdpsnd` audio, `rdpdr` device redirection, `rdpcap` input), Dynamic Virtual Channels (DVC / `rdpgfx` graphics pipeline).
+  - Network Level Authentication (NLA): CredSSP / Kerberos mutual authentication prior to session handshake.
+  - Shadow Session Controller: Remote desktop view and interactive control sharing.
+- [ ] **Win32 & SCM Clean-Room Export Parity**:
+  - `termsrv.dll` / `wtsapi32.dll`: `WTSOpenServerW`, `WTSQuerySessionInformationW`, `WTSEnumerateSessionsW`, `WTSVirtualChannelOpen`, `WTSVirtualChannelWrite`, `WTSVirtualChannelRead`, `WTSDisconnectSession`, `WTSLogoffSession`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`TermService`, `SessionEnv`, `UmRdpService`).
+- [ ] **Interactive Shell CLI**:
+  - `rdp` / `rds` / `termsrv` / `mstsc` / `wts` (`status`, `sessions`, `connect`, `disconnect`, `shadow`, `channels`, `test`).
+- [ ] **Unit Test Suite 203 (`Test_WindowsRemoteDesktop_VirtualChannels_Subsystem`)**:
+  - 14-stage validation suite covering connection sequence, MCS domain negotiation, virtual channel multiplexing, session arbitration, NLA authentication, and concurrent multi-session stress testing.
+
 
 
 

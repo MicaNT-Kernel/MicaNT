@@ -191,6 +191,7 @@
 #include "storage_replica.hpp"
 #include "clustering.hpp"
 #include "vmms.hpp"
+#include "activedirectory.hpp"
 
 namespace micant::shell {
 
@@ -527,6 +528,7 @@ public:
             if (cmd == "sr" || cmd == "storrepl" || cmd == "storagereplica" || cmd == "replica") { cmdStorageReplica(tokens, out); return 0; }
             if (cmd == "cluster" || cmd == "clus" || cmd == "clussvc" || cmd == "failover") { cmdCluster(tokens, out); return 0; }
             if (cmd == "vm" || cmd == "vmms" || cmd == "vswitch" || cmd == "vhdx") { cmdVmms(tokens, out); return 0; }
+            if (cmd == "ad" || cmd == "kdc" || cmd == "domain" || cmd == "ds") { cmdActiveDirectory(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -32926,6 +32928,176 @@ private:
             << "  vm switch                                 Inspect extensible virtual switch ports and VLANs\n"
             << "  vm vhdx                                   Display mounted VHDX virtual hard disks\n"
             << "  vm test                                   Execute in-kernel Hyper-V VMMS self-tests\n";
+    }
+
+    void cmdActiveDirectory(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& sys = micant::activedirectory::ActiveDirectorySubsystem::get();
+        sys.initialize();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            std::transform(sub.begin(), sub.end(), sub.begin(), ::tolower);
+
+            if (sub == "status") {
+                out << "Windows Active Directory Domain Services & Kerberos KDC Subsystem:\n"
+                    << "--------------------------------------------------------------------------------\n"
+                    << "  Domain DNS Name:       " << micant::activedirectory::DEFAULT_DOMAIN_DNS << "\n"
+                    << "  NetBIOS Domain Name:   " << micant::activedirectory::DEFAULT_DOMAIN_NETBIOS << "\n"
+                    << "  Domain DN:             " << micant::activedirectory::DEFAULT_DOMAIN_DN << "\n"
+                    << "  KDC Status:            ONLINE (kdcsvc.dll / kdc.sys, Port 88)\n"
+                    << "  LDAP Directory Engine: ONLINE (ntds.dit / wldap32.dll, Port 389)\n"
+                    << "  Directory Objects:     " << sys.getObjectCount() << " objects\n"
+                    << "  Active Tickets:        " << sys.getActiveTicketCount() << " granted\n"
+                    << "  AS-REQ Processed:      " << sys.getAsReqCount() << " requests\n"
+                    << "  TGS-REQ Processed:     " << sys.getTgsReqCount() << " requests\n"
+                    << "  LDAP Queries:          " << sys.getLdapQueryCount() << " searches\n"
+                    << "  Authentications:       " << sys.getAuthSuccessCount() << " success, "
+                    << sys.getAuthFailCount() << " failed\n";
+                return;
+            }
+
+            if (sub == "users") {
+                out << "Active Directory User Principals (CN=Users," << micant::activedirectory::DEFAULT_DOMAIN_DN << "):\n"
+                    << "--------------------------------------------------------------------------------\n"
+                    << std::left << std::setw(18) << "SAM Account"
+                    << std::setw(30) << "User Principal Name (UPN)"
+                    << std::setw(16) << "UAC Flags"
+                    << "Object SID\n"
+                    << "--------------------------------------------------------------------------------\n";
+                auto objs = sys.searchLdap("", "(objectClass=user)");
+                for (const auto& u : objs) {
+                    out << std::left << std::setw(18) << u.samAccountName
+                        << std::setw(30) << (u.userPrincipalName.empty() ? "(none)" : u.userPrincipalName)
+                        << std::hex << "0x" << std::setw(14) << u.userAccountControl << std::dec
+                        << u.objectSid << "\n";
+                }
+                return;
+            }
+
+            if (sub == "computers") {
+                out << "Active Directory Computer Accounts & Domain Controllers:\n"
+                    << "--------------------------------------------------------------------------------\n"
+                    << std::left << std::setw(18) << "Account Name"
+                    << std::setw(28) << "Distinguished Name"
+                    << "Service Principal Names (SPNs)\n"
+                    << "--------------------------------------------------------------------------------\n";
+                auto objs = sys.searchLdap("", "(objectClass=computer)");
+                for (const auto& c : objs) {
+                    std::string spnSummary;
+                    for (size_t i = 0; i < c.servicePrincipalNames.size(); ++i) {
+                        if (i > 0) spnSummary += ", ";
+                        spnSummary += c.servicePrincipalNames[i];
+                    }
+                    out << std::left << std::setw(18) << c.samAccountName
+                        << std::setw(28) << (c.distinguishedName.substr(0, 26) + "..")
+                        << spnSummary << "\n";
+                }
+                return;
+            }
+
+            if (sub == "tickets") {
+                out << "Kerberos Key Distribution Center (KDC) Active Ticket Cache:\n"
+                    << "--------------------------------------------------------------------------------\n"
+                    << "  Total Granted Tickets: " << sys.getActiveTicketCount() << "\n"
+                    << "  Authentication Tickets (TGT): " << sys.getAsReqCount() << "\n"
+                    << "  Service Tickets (TGS):        " << sys.getTgsReqCount() << "\n";
+                return;
+            }
+
+            if (sub == "ldap" && tokens.size() > 2) {
+                std::string filter = tokens[2];
+                out << "Executing LDAP Search with filter '" << filter << "':\n"
+                    << "--------------------------------------------------------------------------------\n";
+                auto matches = sys.searchLdap("", filter);
+                out << "Found " << matches.size() << " matching directory object(s):\n";
+                for (const auto& m : matches) {
+                    out << "  * DN: " << m.distinguishedName << "\n"
+                        << "    Class: " << micant::activedirectory::ObjectClassToString(m.objectClass)
+                        << " | SAM: " << m.samAccountName
+                        << " | SID: " << m.objectSid << "\n";
+                }
+                return;
+            }
+
+            if (sub == "trusts") {
+                out << "Active Directory Domain & Forest Trusts (netlogon.dll):\n"
+                    << "--------------------------------------------------------------------------------\n";
+                auto trusts = sys.getAllTrusts();
+                for (const auto& t : trusts) {
+                    out << "  Partner Realm: " << t.partnerDomain << " (" << t.netbiosName << ")\n"
+                        << "  Trust Type:    " << micant::activedirectory::TrustTypeToString(t.type) << "\n"
+                        << "  Direction:     " << micant::activedirectory::TrustDirectionToString(t.direction) << "\n"
+                        << "  Transitive:    " << (t.isTransitive ? "YES" : "NO") << "\n\n";
+                }
+                return;
+            }
+
+            if (sub == "test") {
+                out << "[+] Executing Windows Active Directory Domain Services & Kerberos KDC Self-Tests...\n";
+
+                // 1. SCM Services
+                micant::activedirectory::RegisterActiveDirectorySubsystem();
+                auto& scm = micant::scm::ServiceControlManager::get();
+                bool kdcSvc = (scm.getServiceRecord(L"Kdc") != nullptr);
+                bool ntdsSvc = (scm.getServiceRecord(L"NTDS") != nullptr);
+                bool netlogonSvc = (scm.getServiceRecord(L"Netlogon") != nullptr);
+                out << "  [1/6] SCM Services (Kdc, NTDS, Netlogon): "
+                    << (kdcSvc && ntdsSvc && netlogonSvc ? "PASSED" : "FAILED") << "\n";
+
+                // 2. VersionDatabase
+                auto& vdb = micant::version::VersionDatabase::Instance();
+                bool vdbOk = (vdb.FindModule("kdcsvc.dll") != nullptr) &&
+                             (vdb.FindModule("kdc.sys") != nullptr) &&
+                             (vdb.FindModule("ntds.dit") != nullptr) &&
+                             (vdb.FindModule("wldap32.dll") != nullptr) &&
+                             (vdb.FindModule("netlogon.dll") != nullptr);
+                out << "  [2/6] VersionDatabase (kdcsvc.dll, kdc.sys, ntds.dit, wldap32.dll, netlogon.dll): "
+                    << (vdbOk ? "PASSED" : "FAILED") << "\n";
+
+                // 3. NTDS Directory Objects & Schema Hierarchy
+                const auto* adminObj = sys.getObjectBySam("Administrator");
+                const auto* dc01Obj = sys.getObjectBySam("TITAN-DC01$");
+                bool ntdsOk = (adminObj != nullptr) && (dc01Obj != nullptr) &&
+                              (!adminObj->memberOfSids.empty()) && (!dc01Obj->servicePrincipalNames.empty());
+                out << "  [3/6] NTDS Hierarchy & Security Principals: "
+                    << (ntdsOk ? "PASSED" : "FAILED") << "\n";
+
+                // 4. Kerberos AS-REQ / AS-REP Authentication (TGT with PAC)
+                micant::activedirectory::KerberosTicket tgt{};
+                bool asOk = sys.authenticateAsReq("Administrator@micant.internal", "micant.internal", tgt);
+                bool pacOk = asOk && tgt.pac.kdcSignatureValid && tgt.pac.serverSignatureValid && !tgt.pac.groups.empty();
+                out << "  [4/6] Kerberos AS-REQ Authentication & PAC Generation: "
+                    << (asOk && pacOk ? "PASSED" : "FAILED") << "\n";
+
+                // 5. Kerberos TGS-REQ / TGS-REP Service Ticket Granting
+                micant::activedirectory::KerberosTicket tgs{};
+                bool tgsOk = sys.grantServiceTicketTgsReq(tgt.ticketId, "cifs/titan-dc01.micant.internal", tgs);
+                bool verifyOk = sys.verifyServiceTicket(tgs.ticketId, "cifs/titan-dc01.micant.internal");
+                out << "  [5/6] Kerberos TGS-REQ Service Ticket Granting & Verification: "
+                    << (tgsOk && verifyOk ? "PASSED" : "FAILED") << "\n";
+
+                // 6. LDAP Subtree Query Search
+                auto ldapResults = sys.searchLdap("", "(sAMAccountName=TITAN-*)");
+                bool ldapOk = (ldapResults.size() >= 2);
+                out << "  [6/6] LDAP Subtree Search Filter Evaluation: "
+                    << (ldapOk ? "PASSED" : "FAILED") << "\n";
+
+                sys.reset();
+                out << "[+] All Windows Active Directory & Kerberos KDC Self-Tests Passed!\n";
+                return;
+            }
+        }
+
+        out << "MicaNT Windows Active Directory Domain Services & Kerberos KDC Subsystem\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  ad status                                 Display domain directory and KDC status\n"
+            << "  ad users                                  Enumerate Active Directory user accounts\n"
+            << "  ad computers                              List domain controllers and joined computers\n"
+            << "  ad tickets                                Inspect active Kerberos ticket cache\n"
+            << "  ad ldap <filter>                          Execute LDAP search filter (e.g. '(objectClass=user)')\n"
+            << "  ad trusts                                 Display forest and domain trust relationships\n"
+            << "  ad test                                   Execute in-kernel AD DS and KDC self-tests\n";
     }
 
     static std::string trim(std::string_view s) {

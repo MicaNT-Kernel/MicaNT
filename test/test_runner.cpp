@@ -205,6 +205,7 @@
 #include "micant/storage_replica.hpp"
 #include "micant/clustering.hpp"
 #include "micant/vmms.hpp"
+#include "micant/activedirectory.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -45081,8 +45082,193 @@ void Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem() {
     std::cout << "[TEST] Suite 200: Windows Hyper-V VMMS, Virtual Switch & VHDX Container Infrastructure (Monumental Landmark) PASSED.\n";
 }
 
+void Test_WindowsActiveDirectory_KerberosKDC_Subsystem() {
+    std::cout << "[TEST] Suite 201: Windows Active Directory Domain Services & Kerberos KDC Subsystem...\n";
+
+    // Stage 1: SCM Services Registration (Kdc, NTDS, Netlogon)
+    micant::activedirectory::RegisterActiveDirectorySubsystem();
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto kdcSvc = scm.getServiceRecord(L"Kdc");
+    auto ntdsSvc = scm.getServiceRecord(L"NTDS");
+    auto netlogonSvc = scm.getServiceRecord(L"Netlogon");
+    TEST_ASSERT(kdcSvc != nullptr, "Kdc SCM service must be registered");
+    TEST_ASSERT(ntdsSvc != nullptr, "NTDS SCM service must be registered");
+    TEST_ASSERT(netlogonSvc != nullptr, "Netlogon SCM service must be registered");
+
+    // Stage 2: VersionDatabase Registration Parity
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("kdcsvc.dll") != nullptr, "kdcsvc.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("kdc.sys") != nullptr, "kdc.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("ntds.dit") != nullptr, "ntds.dit must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("wldap32.dll") != nullptr, "wldap32.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("netlogon.dll") != nullptr, "netlogon.dll must be registered in VersionDatabase");
+
+    // Stage 3: NTDS Domain Root Object and Built-in Containers
+    auto& sys = micant::activedirectory::ActiveDirectorySubsystem::get();
+    sys.initialize();
+    TEST_ASSERT(sys.isInitialized(), "ActiveDirectorySubsystem must be initialized");
+
+    const auto* rootObj = sys.getObjectByDn(micant::activedirectory::DEFAULT_DOMAIN_DN);
+    TEST_ASSERT(rootObj != nullptr, "Root domain DNS object must exist");
+    TEST_ASSERT(rootObj->objectClass == micant::activedirectory::ObjectClass::DomainDNS, "Root domain must be DomainDNS class");
+
+    const auto* ouUsers = sys.getObjectByDn("CN=Users," + std::string(micant::activedirectory::DEFAULT_DOMAIN_DN));
+    const auto* ouComputers = sys.getObjectByDn("CN=Computers," + std::string(micant::activedirectory::DEFAULT_DOMAIN_DN));
+    const auto* ouDCs = sys.getObjectByDn("OU=Domain Controllers," + std::string(micant::activedirectory::DEFAULT_DOMAIN_DN));
+    TEST_ASSERT(ouUsers != nullptr && ouComputers != nullptr && ouDCs != nullptr, "Built-in containers must exist in NTDS");
+
+    // Stage 4: Pre-seeded Security Principals
+    const auto* admin = sys.getObjectBySam("Administrator");
+    TEST_ASSERT(admin != nullptr, "Administrator user principal must exist");
+    TEST_ASSERT(admin->userPrincipalName == "Administrator@micant.internal", "Administrator UPN must match domain");
+    TEST_ASSERT(admin->objectSid.ends_with("-500"), "Administrator SID must end with well-known RID 500");
+
+    const auto* krbtgt = sys.getObjectBySam("krbtgt");
+    TEST_ASSERT(krbtgt != nullptr, "krbtgt KDC principal must exist");
+    TEST_ASSERT(krbtgt->objectSid.ends_with("-502"), "krbtgt SID must end with well-known RID 502");
+
+    const auto* grpAdmins = sys.getObjectBySam("Domain Admins");
+    TEST_ASSERT(grpAdmins != nullptr, "Domain Admins security group must exist");
+    TEST_ASSERT(grpAdmins->objectSid.ends_with("-512"), "Domain Admins SID must end with well-known RID 512");
+
+    // Stage 5: Domain Controller & Joined Member Server Accounts
+    const auto* dc01 = sys.getObjectBySam("TITAN-DC01$");
+    TEST_ASSERT(dc01 != nullptr, "Domain controller TITAN-DC01$ must exist");
+    TEST_ASSERT(dc01->userAccountControl & micant::activedirectory::UF_SERVER_TRUST, "DC account must have UF_SERVER_TRUST");
+
+    const auto* app01 = sys.getObjectBySam("TITAN-APP01$");
+    TEST_ASSERT(app01 != nullptr, "Application server TITAN-APP01$ must exist");
+    TEST_ASSERT(app01->userAccountControl & micant::activedirectory::UF_WORKSTATION_TRUST, "Member server must have UF_WORKSTATION_TRUST");
+
+    // Stage 6: Multi-Attribute SPN Indexing
+    const auto* spnHits1 = sys.getObjectBySpn("HOST/titan-dc01.micant.internal");
+    const auto* spnHits2 = sys.getObjectBySpn("cifs/titan-dc01.micant.internal");
+    const auto* spnHits3 = sys.getObjectBySpn("http/titan-app01.micant.internal");
+    TEST_ASSERT(spnHits1 != nullptr && spnHits1->samAccountName == "TITAN-DC01$", "SPN HOST must resolve to TITAN-DC01$");
+    TEST_ASSERT(spnHits2 != nullptr && spnHits2->samAccountName == "TITAN-DC01$", "SPN cifs must resolve to TITAN-DC01$");
+    TEST_ASSERT(spnHits3 != nullptr && spnHits3->samAccountName == "TITAN-APP01$", "SPN http must resolve to TITAN-APP01$");
+
+    // Stage 7: Kerberos AS-REQ / AS-REP Authentication (TGT Generation)
+    micant::activedirectory::KerberosTicket tgt{};
+    bool asOk = sys.authenticateAsReq("Administrator@micant.internal", "micant.internal", tgt);
+    TEST_ASSERT(asOk, "authenticateAsReq for Administrator must succeed");
+    TEST_ASSERT(tgt.ticketType == micant::activedirectory::KerberosTicketType::TicketGrantingTicket, "AS-REP must return TGT");
+    TEST_ASSERT(tgt.servicePrincipal == "krbtgt/micant.internal", "TGT service principal must be krbtgt/realm");
+    TEST_ASSERT(tgt.encType == micant::activedirectory::EncryptionType::AES256_CTS_HMAC_SHA1_96, "TGT must use AES-256-CTS");
+
+    // Stage 8: Privilege Attribute Certificate (PAC) Signature & Group Memberships
+    TEST_ASSERT(tgt.pac.kdcSignatureValid, "PAC KDC signature must be valid");
+    TEST_ASSERT(tgt.pac.serverSignatureValid, "PAC server signature must be valid");
+    TEST_ASSERT(tgt.pac.accountName == "Administrator", "PAC account name must match client");
+    TEST_ASSERT(!tgt.pac.groups.empty(), "PAC must contain security group memberships");
+    bool hasDomainAdminSid = false;
+    for (const auto& g : tgt.pac.groups) {
+        if (g.groupSid.ends_with("-512")) hasDomainAdminSid = true;
+    }
+    TEST_ASSERT(hasDomainAdminSid, "PAC must contain Domain Admins SID (RID 512)");
+
+    // Stage 9: Kerberos TGS-REQ / TGS-REP Service Ticket Granting
+    micant::activedirectory::KerberosTicket tgs{};
+    bool tgsOk = sys.grantServiceTicketTgsReq(tgt.ticketId, "cifs/titan-dc01.micant.internal", tgs);
+    TEST_ASSERT(tgsOk, "grantServiceTicketTgsReq for cifs SPN must succeed");
+    TEST_ASSERT(tgs.ticketType == micant::activedirectory::KerberosTicketType::ServiceTicket, "TGS-REP must return Service Ticket");
+    TEST_ASSERT(tgs.servicePrincipal == "cifs/titan-dc01.micant.internal", "Service Ticket SPN must match requested SPN");
+
+    // Stage 10: AP-REQ Application Server Verification
+    micant::activedirectory::PacLogonInfo validatedPac{};
+    bool verifyOk = sys.verifyServiceTicket(tgs.ticketId, "cifs/titan-dc01.micant.internal", &validatedPac);
+    TEST_ASSERT(verifyOk, "verifyServiceTicket must validate valid service ticket");
+    TEST_ASSERT(validatedPac.accountName == "Administrator", "Verified PAC must preserve client account identity");
+
+    bool rejectWrongSpn = sys.verifyServiceTicket(tgs.ticketId, "cifs/wrong-server.micant.internal");
+    TEST_ASSERT(!rejectWrongSpn, "verifyServiceTicket must reject SPN mismatch");
+
+    // Stage 11: Cross-Realm Forest Trust & Referral Ticket
+    const auto* trust = sys.getTrust("partner.corp");
+    TEST_ASSERT(trust != nullptr, "partner.corp domain trust must exist");
+    TEST_ASSERT(trust->type == micant::activedirectory::TrustType::Forest, "partner.corp trust must be Forest type");
+    TEST_ASSERT(trust->isTransitive, "partner.corp trust must be transitive");
+
+    micant::activedirectory::KerberosTicket refTicket{};
+    bool refOk = sys.grantServiceTicketTgsReq(tgt.ticketId, "cifs/server01.partner.corp", refTicket);
+    TEST_ASSERT(refOk, "Cross-realm TGS request to trusted partner domain must yield referral ticket");
+    TEST_ASSERT(refTicket.servicePrincipal == "krbtgt/partner.corp", "Referral ticket must target krbtgt of trusted partner realm");
+
+    // Stage 12: LDAP Query Engine Search Filters
+    auto ldapUsers = sys.searchLdap("", "(objectClass=user)");
+    TEST_ASSERT(ldapUsers.size() >= 2, "LDAP search for objectClass=user must return at least 2 objects");
+
+    auto ldapComputers = sys.searchLdap("", "(objectClass=computer)");
+    TEST_ASSERT(ldapComputers.size() >= 2, "LDAP search for objectClass=computer must return at least 2 objects");
+
+    auto ldapWildcard = sys.searchLdap("", "(sAMAccountName=TITAN-*)");
+    TEST_ASSERT(ldapWildcard.size() >= 2, "LDAP wildcard search for TITAN-* must return domain controller and member server");
+
+    // Stage 13: Win32 & NT Clean-Room C ABI Driver Export Verification
+    void* hAbiTgt = nullptr;
+    char abiTgtId[64]{};
+    NTSTATUS stAbiAuth = micant::activedirectory::KdcAuthenticateClient("Administrator", "micant.internal", &hAbiTgt, abiTgtId, sizeof(abiTgtId));
+    TEST_ASSERT(stAbiAuth == micant::STATUS_SUCCESS && hAbiTgt != nullptr && std::strlen(abiTgtId) > 0, "KdcAuthenticateClient must return STATUS_SUCCESS");
+
+    void* hAbiTgs = nullptr;
+    char abiTgsId[64]{};
+    NTSTATUS stAbiGrant = micant::activedirectory::KdcGrantServiceTicket(abiTgtId, "cifs/titan-dc01.micant.internal", &hAbiTgs, abiTgsId, sizeof(abiTgsId));
+    TEST_ASSERT(stAbiGrant == micant::STATUS_SUCCESS && hAbiTgs != nullptr && std::strlen(abiTgsId) > 0, "KdcGrantServiceTicket must return STATUS_SUCCESS");
+
+    bool abiValid = false;
+    NTSTATUS stAbiVer = micant::activedirectory::KdcVerifyServiceTicket(abiTgsId, "cifs/titan-dc01.micant.internal", &abiValid);
+    TEST_ASSERT(stAbiVer == micant::STATUS_SUCCESS && abiValid, "KdcVerifyServiceTicket must return STATUS_SUCCESS and true");
+
+    void* hNewObj = nullptr;
+    NTSTATUS stCreatePrincipal = micant::activedirectory::NtdsCreatePrincipal(
+        "CN=DevUser01,CN=Users,DC=micant,DC=internal", "DevUser01", static_cast<uint32_t>(micant::activedirectory::ObjectClass::User), "devuser01@micant.internal", &hNewObj);
+    TEST_ASSERT(stCreatePrincipal == micant::STATUS_SUCCESS && hNewObj != nullptr, "NtdsCreatePrincipal must return STATUS_SUCCESS");
+
+    char outDnBuf[128]{};
+    NTSTATUS stQueryObj = micant::activedirectory::NtdsQueryObject("DevUser01", outDnBuf, sizeof(outDnBuf));
+    TEST_ASSERT(stQueryObj == micant::STATUS_SUCCESS && std::string(outDnBuf).find("DevUser01") != std::string::npos, "NtdsQueryObject must return correct DN");
+
+    uint32_t ldapCount = 0;
+    NTSTATUS stLdap = micant::activedirectory::LdapSearchDirectory(nullptr, "(objectClass=user)", &ldapCount);
+    TEST_ASSERT(stLdap == micant::STATUS_SUCCESS && ldapCount >= 3, "LdapSearchDirectory must return STATUS_SUCCESS and match count");
+
+    // Stage 14: 100-Operation Concurrent Multithreaded AD DS & KDC Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([&sys, &stressSuccessCount, t]() {
+            for (int i = 0; i < 10; ++i) {
+                micant::activedirectory::KerberosTicket loopTgt{};
+                bool aOk = sys.authenticateAsReq("Administrator", "micant.internal", loopTgt);
+                micant::activedirectory::KerberosTicket loopTgs{};
+                bool gOk = aOk ? sys.grantServiceTicketTgsReq(loopTgt.ticketId, "http/titan-app01.micant.internal", loopTgs) : false;
+                bool vOk = gOk ? sys.verifyServiceTicket(loopTgs.ticketId, "http/titan-app01.micant.internal") : false;
+                auto lRes = sys.searchLdap("", "(samAccountName=Administrator)");
+                if (aOk && gOk && vOk && !lRes.empty()) {
+                    stressSuccessCount.fetch_add(1);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 100, "100-operation concurrent multithreaded AD DS & KDC stress test must complete with 100% success");
+
+    sys.reset();
+    std::cout << "[TEST] Suite 201: Windows Active Directory Domain Services & Kerberos KDC Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite200")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite201")) {
+        RUN_TEST(Test_WindowsActiveDirectory_KerberosKDC_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite200") {
         RUN_TEST(Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem);
         return g_FailedTests;
     }
@@ -45668,6 +45854,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsStorageReplica_DisasterRecovery_Subsystem);
     RUN_TEST(Test_WindowsFailoverClustering_PaxosQuorum_Subsystem);
     RUN_TEST(Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem);
+    RUN_TEST(Test_WindowsActiveDirectory_KerberosKDC_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
