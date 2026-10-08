@@ -352,7 +352,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 172: Windows Failover Clustering & Quorum (clussvc/clusnet)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 173: Hyper-V VMMS, Virtual Switch & VHDX (Milestone 200) [PLANNED]     │
+│ Phase 173: Hyper-V VMMS, Virtual Switch & VHDX (Milestone 200)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 174: Windows Active Directory & Kerberos KDC (M201)     [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3617,20 +3619,39 @@
 
 ---
 
-### Phase 173: Windows Virtual Machine Management Service, Hyper-V Virtual Switch & VHDX Container Infrastructure (`vmms.exe`, `vmswitch.sys`, `vhdsvc.dll`, `vid.sys`, `TitanHyperCore`, `AegisVMM`) (Milestone 200 - Monumental Landmark) [PLANNED]
+### Phase 173: Windows Virtual Machine Management Service, Hyper-V Virtual Switch & VHDX Container Infrastructure (`vmms.exe`, `vmswitch.sys`, `vhdsvc.dll`, `vid.sys`, `TitanHyperCore`, `AegisVMM`) (Milestone 200 - Monumental Landmark) (100% Completed)
 *Goal: Implement clean-room Windows Hyper-V Virtual Machine Management Service (`vmms.exe`, `vmswitch.sys`, `vid.sys`, `vhdsvc.dll`), providing full enterprise virtualization orchestration, synthetic virtual switch packet filtering, dynamic memory allocation/ballooning, VHDX extensible virtual disk container formats with differential snapshots, and live migration.*
-- [ ] **Hyper-V VMMS & Virtual Switch Core Engine (`include/micant/vmms.hpp`)**:
+- [x] **Hyper-V VMMS & Virtual Switch Core Engine (`include/micant/vmms.hpp`)**:
   - Virtual Machine Management Service (`vmms.exe`): VM lifecycle state machine (Defined, Starting, Running, Paused, Saved, Stopping), synthetic CPU topologies, and NUMA-aware partition scheduling.
   - Virtual Infrastructure Driver (`vid.sys`): Hypervisor partition manager, hypercall dispatcher, and guest physical address (GPA) mapping.
   - Hyper-V Synthetic Virtual Switch (`vmswitch.sys`): Layer-2 extensible virtual switch, port ACLs, VLAN tagging (802.1Q), bandwidth shaping, and SR-IOV virtual function (VF) teaming.
   - VHDX Extensible Virtual Disk Parser (`vhdsvc.dll`): Dynamic sizing, fixed, and differencing virtual disks with 1MB payload blocks, log replays, and zero-downtime checkpoints.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `vmms.exe` / `vmswitch.sys` / `vid.sys` / `vhdsvc.dll`: `VmmsCreateVirtualMachine`, `VmmsStartVirtualMachine`, `VmmsStopVirtualMachine`, `VmmsPauseVirtualMachine`, `VmSwitchCreatePort`, `VmSwitchSendFrame`, `VhdxMountDisk`, `VhdxCreateCheckpoint`.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `vmms.exe` / `vmswitch.sys` / `vid.sys` / `vhdsvc.dll`: `VmmsCreateVirtualMachine`, `VmmsStartVirtualMachine`, `VmmsStopVirtualMachine`, `VmmsPauseVirtualMachine`, `VmmsResumeVirtualMachine`, `VmmsSetDynamicMemory`, `VmSwitchCreatePort`, `VmSwitchSendFrame`, `VhdxCreateDisk`, `VhdxWriteBlock`, `VhdxReadBlock`, `VhdxCreateCheckpoint`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`Vmms`, `VmSwitch`, `VidDriver`).
+- [x] **Interactive Shell CLI**:
+  - `vm` / `vmms` / `vswitch` / `vhdx` (`status`, `list`, `start`, `stop`, `pause`, `resume`, `balloon`, `switch`, `vhdx`, `test`).
+- [x] **Unit Test Suite 200 (`Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem`)**:
+  - 14 comprehensive landmark validation stages verifying SCM service/driver records, VersionDatabase exports, VM lifecycle transitions (Starting, Running, Paused, Saved, Stopping, Off), dynamic memory ballooning & demand adjustment, extensible virtual switch port management & MAC learning, 802.1Q cross-VLAN isolation filtering, VHDX format header verification & block allocations, differencing disk parent fallback resolution, zero-downtime checkpoints & rollback, live migration pre-copy dirty page tracking & brownout cutover, C ABI exports, and 100-operation concurrent multithreaded VM / vSwitch / VHDX stress test.
+  - Milestone 200: **200 / 200 Test Suites Passing (100%)**.
+
+---
+
+### Phase 174: Windows Active Directory Domain Services & Kerberos KDC Subsystem (`kdcsvc.dll`, `kdc.sys`, `ntds.dit`, `TitanDirectory`, `AegisKDC`) (Milestone 201) [PLANNED]
+*Goal: Implement clean-room Windows Active Directory Domain Services (AD DS) and Kerberos Key Distribution Center (KDC) subsystem (`kdcsvc.dll`, `kdc.sys`, `ntds.dit`), providing enterprise identity directory management, LDAP directory queries, Kerberos v5 AS-REQ / AS-REP and TGS-REQ / TGS-REP ticket granting, PAC validation, and cross-realm domain trust authentication.*
+- [ ] **Active Directory Domain Services Core (`include/micant/activedirectory.hpp`)**:
+  - NTDS Database (`ntds.dit` / ESE): Hierarchical organizational units (OU), security principals (users, computer accounts, security groups), and distinguished names (`DC=micant,DC=internal`).
+  - Kerberos KDC Subsystem (`kdcsvc.dll` / `kdc.sys`): AS-REQ/AS-REP ticket granting service, TGS-REQ/TGS-REP service ticket generation, TGT signing, AES-256-CTS-HMAC-SHA1-96 encryption, and Privilege Attribute Certificate (PAC) generation and verification.
+  - LDAP Directory Query Service (`wldap32.dll`): Lightweight Directory Access Protocol query evaluation, subtree search, and object attribute filtering.
+  - Enterprise Domain Trust & Netlogon (`netlogon.dll`): Two-way transitive realm trust verification, secure channel validation, and Kerberos referral ticket generation.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `kdcsvc.dll` / `kdc.sys` / `wldap32.dll`: `KdcAuthenticateClient`, `KdcGrantServiceTicket`, `KdcVerifyTicket`, `NtdsCreatePrincipal`, `NtdsQueryObject`, `LdapSearchDirectory`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`Kdc`, `NTDS`, `Netlogon`).
 - [ ] **Interactive Shell CLI**:
-  - `vm` / `vmms` / `hyperv` (`status`, `list`, `start`, `stop`, `switch`, `vhdx`, `test`).
-- [ ] **Unit Test Suite 200 (`Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem`)**:
-  - Comprehensive landmark validation suite verifying VM lifecycle states, virtual switch frame routing, VHDX differential tree integrity, memory ballooning, and concurrent multi-VM workload execution.
+  - `ad` / `kdc` / `domain` (`status`, `users`, `computers`, `tickets`, `ldap`, `test`).
+- [ ] **Unit Test Suite 201 (`Test_WindowsActiveDirectory_KerberosKDC_Subsystem`)**:
+  - Comprehensive validation suite testing AD DS schema hierarchy, Kerberos TGT/TGS ticket lifecycle, AES-256 PAC signatures, LDAP search expressions, and concurrent ticket granting operations.
+
 
 
 

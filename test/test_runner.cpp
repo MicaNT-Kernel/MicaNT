@@ -204,6 +204,7 @@
 #include "micant/branchcache.hpp"
 #include "micant/storage_replica.hpp"
 #include "micant/clustering.hpp"
+#include "micant/vmms.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -44814,8 +44815,278 @@ void Test_WindowsFailoverClustering_PaxosQuorum_Subsystem() {
     std::cout << "[TEST] Suite 199: Windows Failover Clustering, Cluster Shared Network & Paxos Quorum Subsystem PASSED.\n";
 }
 
+void Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem() {
+    std::cout << "[TEST] Suite 200: Windows Hyper-V VMMS, Virtual Switch & VHDX Container Infrastructure (Monumental Landmark)...\n";
+
+    // Stage 1: SCM Services Registration & Status Check
+    micant::vmms::RegisterVmmsSubsystem();
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto vmmsSvc = scm.getServiceRecord(L"Vmms");
+    TEST_ASSERT(vmmsSvc != nullptr, "Vmms service must be registered in SCM");
+    TEST_ASSERT(vmmsSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "Vmms must be in SERVICE_RUNNING state");
+    TEST_ASSERT(vmmsSvc->binaryPath == L"C:\\Windows\\System32\\vmms.exe", "Vmms binary path must point to vmms.exe");
+
+    auto vswitchSvc = scm.getServiceRecord(L"VmSwitch");
+    TEST_ASSERT(vswitchSvc != nullptr, "VmSwitch kernel driver must be registered in SCM");
+    TEST_ASSERT(vswitchSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "VmSwitch must be in SERVICE_RUNNING state");
+
+    auto vidSvc = scm.getServiceRecord(L"VidDriver");
+    TEST_ASSERT(vidSvc != nullptr, "VidDriver must be registered in SCM");
+    TEST_ASSERT(vidSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "VidDriver must be in SERVICE_RUNNING state");
+
+    // Stage 2: VersionDatabase Modules Registration
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("vmms.exe") != nullptr, "vmms.exe must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("vhdsvc.dll") != nullptr, "vhdsvc.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("vmswitch.sys") != nullptr, "vmswitch.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("vid.sys") != nullptr, "vid.sys must be registered in VersionDatabase");
+
+    // Stage 3: Virtual Machine Lifecycle State Transitions
+    auto& sys = micant::vmms::VmmsSubsystem::get();
+    sys.reset();
+    TEST_ASSERT(sys.isInitialized(), "VmmsSubsystem must be initialized");
+
+    micant::vmms::VirtualMachine testVm("VM-TEST-01", "TITAN-TEST-VM", 2, 2048);
+    TEST_ASSERT(testVm.getState() == micant::vmms::VmState::Off, "Initial VM state must be Off");
+
+    bool stStart = testVm.start();
+    TEST_ASSERT(stStart, "Starting VM must succeed");
+    TEST_ASSERT(testVm.getState() == micant::vmms::VmState::Running, "VM state must be Running");
+
+    bool stPause = testVm.pause();
+    TEST_ASSERT(stPause, "Pausing VM must succeed");
+    TEST_ASSERT(testVm.getState() == micant::vmms::VmState::Paused, "VM state must be Paused");
+
+    bool stResume = testVm.resume();
+    TEST_ASSERT(stResume, "Resuming VM must succeed");
+    TEST_ASSERT(testVm.getState() == micant::vmms::VmState::Running, "VM state must be Running after resume");
+
+    bool stSave = testVm.save();
+    TEST_ASSERT(stSave, "Saving VM must succeed");
+    TEST_ASSERT(testVm.getState() == micant::vmms::VmState::Saved, "VM state must be Saved");
+
+    bool stStartSaved = testVm.start();
+    TEST_ASSERT(stStartSaved, "Starting saved VM must succeed");
+    TEST_ASSERT(testVm.getState() == micant::vmms::VmState::Running, "VM state must return to Running");
+
+    bool stStop = testVm.stop();
+    TEST_ASSERT(stStop, "Stopping VM must succeed");
+    TEST_ASSERT(testVm.getState() == micant::vmms::VmState::Off, "VM state must be Off");
+
+    // Stage 4: Synthetic vCPU & NUMA Topology Verification
+    const auto& topo = testVm.getTopology();
+    TEST_ASSERT(topo.vCpuCount == 2, "vCPU count must be 2");
+    TEST_ASSERT(topo.coresPerSocket == 2, "Cores per socket must be 2");
+    TEST_ASSERT(topo.apicIds.size() == 2, "APIC IDs list must have 2 entries");
+    TEST_ASSERT(topo.apicIds[0] == 0 && topo.apicIds[1] == 2, "APIC IDs must match synthetic topology");
+
+    // Stage 5: Dynamic Memory Ballooning & Reservation Guarantees
+    const auto& mem = testVm.getMemory();
+    TEST_ASSERT(mem.startupRamMb == 2048, "Startup RAM must be 2048 MB");
+    TEST_ASSERT(mem.currentAllocatedMb == 2048, "Initial allocated RAM must be 2048 MB");
+
+    bool balloonOk1 = testVm.adjustBalloonMemory(3072);
+    TEST_ASSERT(balloonOk1, "Balloon adjustment to 3072 MB must succeed");
+    TEST_ASSERT(testVm.getMemory().currentAllocatedMb == 3072, "Allocated RAM must update to 3072 MB");
+
+    bool balloonFailLow = testVm.adjustBalloonMemory(512); // below min 1024
+    TEST_ASSERT(!balloonFailLow, "Balloon adjustment below min limit (1024 MB) must fail");
+
+    bool balloonFailHigh = testVm.adjustBalloonMemory(32768); // above max 16384
+    TEST_ASSERT(!balloonFailHigh, "Balloon adjustment above max limit (16384 MB) must fail");
+
+    bool balloonRestore = testVm.adjustBalloonMemory(2048);
+    TEST_ASSERT(balloonRestore, "Restoring balloon to 2048 MB must succeed");
+
+    // Stage 6: Extensible Virtual Switch (vmswitch.sys) Port Management & L2 Forwarding
+    auto* sw = sys.getVirtualSwitch("DefaultSwitch");
+    TEST_ASSERT(sw != nullptr, "Default virtual switch must exist");
+    size_t initPorts = sw->getPortCount();
+    TEST_ASSERT(initPorts >= 2, "DefaultSwitch must have at least 2 pre-seeded ports");
+
+    bool createPortOk = sw->createPort("PORT-TEST-01", "TitanTestNic", "00:15:5D:AA:BB:CC", 10);
+    TEST_ASSERT(createPortOk, "Creating vSwitch port must succeed");
+    TEST_ASSERT(sw->getPortCount() == initPorts + 1, "Switch port count must increment");
+
+    uint64_t framesBefore = sw->getTotalFramesSwitched();
+    bool fwdOk = sw->forwardFrame("PORT-NIC-01", "00:15:5D:AA:BB:CC", 10, 256);
+    TEST_ASSERT(fwdOk, "Forwarding frame to learned MAC on VLAN 10 must succeed");
+    TEST_ASSERT(sw->getTotalFramesSwitched() > framesBefore, "Switched frames counter must increment");
+
+    bool delPortOk = sw->deletePort("PORT-TEST-01");
+    TEST_ASSERT(delPortOk, "Deleting vSwitch port must succeed");
+    TEST_ASSERT(sw->getPortCount() == initPorts, "Port count must return to initial");
+
+    // Stage 7: 802.1Q VLAN Isolation & Filtering
+    sw->createPort("PORT-VLAN-10", "Vlan10Port", "00:15:5D:11:11:11", 10);
+    sw->createPort("PORT-VLAN-20", "Vlan20Port", "00:15:5D:22:22:22", 20);
+
+    uint64_t dropsBefore = sw->getTotalFramesDropped();
+    bool crossVlanFwd = sw->forwardFrame("PORT-VLAN-10", "00:15:5D:22:22:22", 10, 128);
+    TEST_ASSERT(!crossVlanFwd, "Forwarding cross-VLAN frame (VLAN 10 -> VLAN 20) must be rejected by isolation filter");
+    TEST_ASSERT(sw->getTotalFramesDropped() > dropsBefore, "Dropped frames counter must increment upon VLAN mismatch");
+
+    sw->deletePort("PORT-VLAN-10");
+    sw->deletePort("PORT-VLAN-20");
+
+    // Stage 8: VHDX File Format Header Parsing & vhdxfile Signature
+    auto* baseDisk = sys.getVhdx("C:\\VirtualDisks\\BaseOS_Windows2025.vhdx");
+    TEST_ASSERT(baseDisk != nullptr, "BaseOS VHDX disk must exist");
+    TEST_ASSERT(baseDisk->getSignature() == micant::vmms::VHDX_FILE_SIGNATURE, "VHDX signature must match 'vhdxfile' (0x656C696678646876)");
+    TEST_ASSERT(baseDisk->getBlockSize() == micant::vmms::VHDX_DEFAULT_BLOCK_SIZE, "VHDX block size must be 1 MB");
+    TEST_ASSERT(baseDisk->getVirtualSizeBytes() == 64ULL * 1024 * 1024 * 1024, "VHDX capacity must be 64 GB");
+    TEST_ASSERT(baseDisk->getTotalBlocks() == 65536, "Total blocks must be 65536");
+
+    // Stage 9: Dynamic VHDX Payload Block Allocation & Sparse Read
+    micant::vmms::VhdxDisk testDyn("C:\\VirtualDisks\\TestDynamic.vhdx", 10ULL * 1024 * 1024 * 1024, micant::vmms::VhdxDiskType::Dynamic);
+    TEST_ASSERT(testDyn.getAllocatedBlocks() == 0, "Initial allocated blocks on dynamic VHDX must be 0");
+
+    char sparseBuf[64]{};
+    bool readSparse = testDyn.readBlock(0x400000, sparseBuf, sizeof(sparseBuf));
+    TEST_ASSERT(readSparse, "Reading unallocated block must succeed with sparse zeros");
+    bool allZeros = true;
+    for (char c : sparseBuf) if (c != 0) allZeros = false;
+    TEST_ASSERT(allZeros, "Sparse read block must be zero-filled");
+
+    const char testPayload[] = "DYNAMIC_BLOCK_DATA_PAYLOAD_TEST";
+    bool writeDyn = testDyn.writeBlock(0x400000, testPayload, sizeof(testPayload));
+    TEST_ASSERT(writeDyn, "Writing block to dynamic VHDX must succeed");
+    TEST_ASSERT(testDyn.getAllocatedBlocks() == 1, "Allocated blocks must increment to 1 after write");
+
+    char verifyDyn[64]{};
+    bool readDyn = testDyn.readBlock(0x400000, verifyDyn, sizeof(testPayload));
+    TEST_ASSERT(readDyn, "Reading written block must succeed");
+    TEST_ASSERT(std::memcmp(verifyDyn, testPayload, sizeof(testPayload)) == 0, "Read data must match written payload");
+
+    // Stage 10: VHDX Differencing Disks & Parent Locator Resolution
+    auto* childDisk = sys.getVhdx("C:\\VirtualDisks\\TitanDC01.vhdx");
+    TEST_ASSERT(childDisk != nullptr, "Child differencing disk must exist");
+    TEST_ASSERT(childDisk->getDiskType() == micant::vmms::VhdxDiskType::Differencing, "Disk type must be Differencing");
+    TEST_ASSERT(childDisk->getParentPath() == "C:\\VirtualDisks\\BaseOS_Windows2025.vhdx", "Parent path must match BaseOS");
+
+    char parentReadBuf[64]{};
+    bool diffFallback = childDisk->readBlock(0x100000, parentReadBuf, sizeof(parentReadBuf), baseDisk);
+    TEST_ASSERT(diffFallback, "Reading block not in child must transparently fall back to parent disk");
+    TEST_ASSERT(std::string(parentReadBuf).find("TITAN_BASE_OS") != std::string::npos, "Parent content must be retrieved on differencing read");
+
+    char childReadBuf[64]{};
+    bool diffChildRead = childDisk->readBlock(0x200000, childReadBuf, sizeof(childReadBuf), baseDisk);
+    TEST_ASSERT(diffChildRead, "Reading block modified in child must read child delta block");
+    TEST_ASSERT(std::string(childReadBuf).find("TITAN_DC01_DIFF") != std::string::npos, "Child delta content must be retrieved");
+
+    // Stage 11: VM Snapshot & Checkpoint Tree Creation and Rollback
+    std::string cpId;
+    bool cpOk = testDyn.createCheckpoint("Pre-Upgrade Snapshot", cpId);
+    TEST_ASSERT(cpOk && !cpId.empty(), "Creating VHDX checkpoint must succeed");
+    TEST_ASSERT(testDyn.getCheckpointCount() == 1, "Checkpoint count must be 1");
+
+    const char corruptPayload[] = "CORRUPTED_DELTA_DATA_POST_UPGRADE";
+    testDyn.writeBlock(0x400000, corruptPayload, sizeof(corruptPayload));
+
+    char checkCorrupt[64]{};
+    testDyn.readBlock(0x400000, checkCorrupt, sizeof(corruptPayload));
+    TEST_ASSERT(std::memcmp(checkCorrupt, corruptPayload, sizeof(corruptPayload)) == 0, "Corrupted data must be present before rollback");
+
+    bool rollbackOk = testDyn.rollbackCheckpoint(cpId);
+    TEST_ASSERT(rollbackOk, "Rolling back to checkpoint must succeed");
+
+    char checkRestored[64]{};
+    testDyn.readBlock(0x400000, checkRestored, sizeof(testPayload));
+    TEST_ASSERT(std::memcmp(checkRestored, testPayload, sizeof(testPayload)) == 0, "Original data must be perfectly restored after rollback");
+
+    // Stage 12: Simulated VM Live Migration Pre-Copy & Brownout Cutover
+    auto* dc01 = sys.getVirtualMachineByName("TITAN-DC01");
+    TEST_ASSERT(dc01 != nullptr, "TITAN-DC01 must exist");
+    bool migOk = dc01->simulateLiveMigration(3);
+    TEST_ASSERT(migOk, "Simulating live migration on running VM must succeed");
+    TEST_ASSERT(dc01->getMigrationPagesCopied() > 1000000, "Live migration must transfer >1M memory pages");
+    TEST_ASSERT(dc01->getMigrationBrownoutMs() <= 15, "Migration brownout cutover must be <= 15ms for zero perceptible disruption");
+
+    // Stage 13: Win32 & NT Clean-Room C ABI Driver Export Verification
+    void* hVm = nullptr;
+    NTSTATUS stAbiVm = micant::vmms::VmmsCreateVirtualMachine("VM-ABI-RUNNER", 4, 4096, &hVm);
+    TEST_ASSERT(stAbiVm == micant::STATUS_SUCCESS && hVm != nullptr, "VmmsCreateVirtualMachine must return STATUS_SUCCESS");
+
+    NTSTATUS stAbiStart = micant::vmms::VmmsStartVirtualMachine(hVm, "VM-ABI-RUNNER");
+    TEST_ASSERT(stAbiStart == micant::STATUS_SUCCESS, "VmmsStartVirtualMachine must return STATUS_SUCCESS");
+
+    NTSTATUS stAbiBalloon = micant::vmms::VmmsSetDynamicMemory(hVm, "VM-ABI-RUNNER", 5120);
+    TEST_ASSERT(stAbiBalloon == micant::STATUS_SUCCESS, "VmmsSetDynamicMemory must return STATUS_SUCCESS");
+
+    NTSTATUS stAbiPause = micant::vmms::VmmsPauseVirtualMachine(hVm, "VM-ABI-RUNNER");
+    TEST_ASSERT(stAbiPause == micant::STATUS_SUCCESS, "VmmsPauseVirtualMachine must return STATUS_SUCCESS");
+
+    NTSTATUS stAbiResume = micant::vmms::VmmsResumeVirtualMachine(hVm, "VM-ABI-RUNNER");
+    TEST_ASSERT(stAbiResume == micant::STATUS_SUCCESS, "VmmsResumeVirtualMachine must return STATUS_SUCCESS");
+
+    NTSTATUS stAbiStop = micant::vmms::VmmsStopVirtualMachine(hVm, "VM-ABI-RUNNER", false);
+    TEST_ASSERT(stAbiStop == micant::STATUS_SUCCESS, "VmmsStopVirtualMachine must return STATUS_SUCCESS");
+
+    void* hPort = nullptr;
+    NTSTATUS stAbiPort = micant::vmms::VmSwitchCreatePort("DefaultSwitch", "ABI-PORT-01", "AbiNic", "00:15:5D:AA:11:22", 10, &hPort);
+    TEST_ASSERT(stAbiPort == micant::STATUS_SUCCESS && hPort != nullptr, "VmSwitchCreatePort must return STATUS_SUCCESS");
+
+    NTSTATUS stAbiFwd = micant::vmms::VmSwitchSendFrame("DefaultSwitch", "ABI-PORT-01", "00:15:5D:01:0A:01", 10, 128);
+    TEST_ASSERT(stAbiFwd == micant::STATUS_SUCCESS, "VmSwitchSendFrame must return STATUS_SUCCESS");
+
+    void* hVhdx = nullptr;
+    NTSTATUS stAbiVhdx = micant::vmms::VhdxCreateDisk("C:\\VirtualDisks\\AbiTest.vhdx", 1024 * 1024 * 1024, 2, nullptr, &hVhdx);
+    TEST_ASSERT(stAbiVhdx == micant::STATUS_SUCCESS && hVhdx != nullptr, "VhdxCreateDisk must return STATUS_SUCCESS");
+
+    const char abiBlock[] = "ABI_TEST_BLOCK_PAYLOAD_VHDX";
+    NTSTATUS stAbiWrite = micant::vmms::VhdxWriteBlock("C:\\VirtualDisks\\AbiTest.vhdx", 0x100000, abiBlock, sizeof(abiBlock));
+    TEST_ASSERT(stAbiWrite == micant::STATUS_SUCCESS, "VhdxWriteBlock must return STATUS_SUCCESS");
+
+    char abiReadBuf[64]{};
+    NTSTATUS stAbiRead = micant::vmms::VhdxReadBlock("C:\\VirtualDisks\\AbiTest.vhdx", 0x100000, abiReadBuf, sizeof(abiReadBuf));
+    TEST_ASSERT(stAbiRead == micant::STATUS_SUCCESS && std::strcmp(abiReadBuf, abiBlock) == 0, "VhdxReadBlock must verify written block");
+
+    char cpBuf[64]{};
+    NTSTATUS stAbiCp = micant::vmms::VhdxCreateCheckpoint("C:\\VirtualDisks\\AbiTest.vhdx", "AbiCheckpoint", cpBuf, sizeof(cpBuf));
+    TEST_ASSERT(stAbiCp == micant::STATUS_SUCCESS && std::strlen(cpBuf) > 0, "VhdxCreateCheckpoint must return STATUS_SUCCESS and CP id");
+
+    // Stage 14: Monumental Landmark 100-Operation Concurrent Multithreaded VM & vSwitch Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([&sys, &stressSuccessCount, t]() {
+            for (int i = 0; i < 10; ++i) {
+                // Alternating balloon adjustment, vSwitch frame forward, and VHDX write/read
+                auto* vm = sys.getVirtualMachineByName("TITAN-DC01");
+                auto* sw = sys.getVirtualSwitch("DefaultSwitch");
+                auto* disk = sys.getVhdx("C:\\VirtualDisks\\BaseOS_Windows2025.vhdx");
+
+                bool bOk = vm ? vm->adjustBalloonMemory(4096 + (t * 50) + i) : false;
+                bool sOk = sw ? sw->forwardFrame("PORT-NIC-01", "00:15:5D:01:0A:02", 10, 64) : false;
+                char buf[64]{};
+                bool dOk = disk ? disk->readBlock(0x100000, buf, 16) : false;
+
+                if (bOk && sOk && dOk) {
+                    stressSuccessCount.fetch_add(1);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 100, "100 concurrent multi-threaded VM, vSwitch, and VHDX operations must succeed with 0 deadlocks");
+
+    sys.reset();
+    std::cout << "[TEST] Suite 200: Windows Hyper-V VMMS, Virtual Switch & VHDX Container Infrastructure (Monumental Landmark) PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite199")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite200")) {
+        RUN_TEST(Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite199") {
         RUN_TEST(Test_WindowsFailoverClustering_PaxosQuorum_Subsystem);
         return g_FailedTests;
     }
@@ -45396,6 +45667,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem);
     RUN_TEST(Test_WindowsStorageReplica_DisasterRecovery_Subsystem);
     RUN_TEST(Test_WindowsFailoverClustering_PaxosQuorum_Subsystem);
+    RUN_TEST(Test_WindowsHyperV_VMMS_VirtualSwitch_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
