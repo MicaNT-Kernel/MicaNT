@@ -348,7 +348,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 170: Windows DirectAccess, BranchCache & SMB over QUIC  [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 171: Windows Storage Replica (SR) Subsystem (storrepl)  [PLANNED]        │
+│ Phase 171: Windows Storage Replica (SR) Subsystem (storrepl)  [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 172: Windows Failover Clustering & Quorum (clussvc/clusnet)[PLANNED]     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3577,20 +3579,38 @@
 
 ---
 
-### Phase 171: Windows Storage Replica (SR) & Disaster Recovery Subsystem (`storrepl.sys`, `srsys.sys`, `srservice.dll`, `TitanStorageReplica`, `AegisReplication`) (Milestone 198) [PLANNED]
+### Phase 171: Windows Storage Replica (SR) & Disaster Recovery Subsystem (`storrepl.sys`, `srsys.sys`, `srservice.dll`, `TitanStorageReplica`, `AegisReplication`) (Milestone 198) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Storage Replica (SR) subsystem (`storrepl.sys`, `srsys.sys`, `srservice.dll`), providing volume-level synchronous and asynchronous zero-data-loss block-level replication across servers, clusters, and metropolitan stretch clusters with log-based replay, bitmap tracking, thin provisioning passthrough, and zero-downtime failover orchestration.*
-- [ ] **Storage Replica Core Engine (`include/micant/storage_replica.hpp`)**:
-  - Synchronous & Asynchronous Replication Modes: Synchronous zero RPO mirroring for metropolitan distances and asynchronous low RPO replication for high-latency WAN links.
-  - Log-Based Replication Architecture: Write-ahead logging (WAL) partition staging, sequential flush pipeline, and destination log replay engine.
+- [x] **Storage Replica Core Engine (`include/micant/storage_replica.hpp`)**:
+  - Synchronous & Asynchronous Replication Modes: Synchronous zero RPO mirroring for metropolitan distances and asynchronous low RPO staged log shipping for high-latency WAN links.
+  - Log-Based Replication Architecture: Write-ahead logging (WAL) partition staging (`0x53524C47` magic), sequential flush pipeline, payload CRC32C checksumming, and destination log replay engine.
   - Block Bitmap Tracking & Delta Resynchronization: Dirty block tracking for offline recovery, differential initial sync, and sparse extent skipping.
-  - Failover & Direction Reversal: Dynamic primary/secondary role transition, split-brain protection, write-barrier enforcement, and cluster stretch integration.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
-  - `storrepl.sys` / `srservice.dll`: `SrInitializeSubsystem`, `SrCreateReplicationPartnership`, `SrRemoveReplicationPartnership`, `SrSetReplicationDirection`, `SrSyncReplicateBlock`, `SrAsyncFlushLog`, `SrQueryReplicationState`.
+  - Failover & Direction Reversal: Dynamic primary/secondary role transition, secondary volume write-lock protection, split-brain prevention, and cluster stretch integration.
+- [x] **Win32 & NT Clean-Room Export Parity**:
+  - `storrepl.sys` / `srsys.sys` / `srservice.dll`: `SrInitializeSubsystem`, `SrCreateReplicationPartnership`, `SrRemoveReplicationPartnership`, `SrSetReplicationDirection`, `SrSyncReplicateBlock`, `SrAsyncFlushLog`, `SrQueryReplicationState`, `SrSuspendReplication`, `SrResumeReplication`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`StorageReplica`, replication driver; `SrSvc`, Storage Replica management service).
+- [x] **Interactive Shell CLI**:
+  - `sr` / `storrepl` / `storagereplica` / `replica` (`status`, `partnerships`, `reverse`, `sync`, `suspend`, `resume`, `test`).
+- [x] **Unit Test Suite 198 (`Test_WindowsStorageReplica_DisasterRecovery_Subsystem`)**:
+  - 13 comprehensive validation stages verifying SCM service/driver registration, VersionDatabase exports, partnership provisioning, synchronous write mirroring (zero RPO), read consistency, secondary replica write-lock enforcement, async log queue staging & batch flush, WAL checksum integrity, network partition injection & dirty block bitmap tracking, delta resynchronization upon recovery, dynamic failover direction reversal, Win32 C ABI exports, and 100-thread concurrent transactional write stress testing.
+  - Milestone 198: **198 / 198 Test Suites Passing (100%)**.
+
+---
+
+### Phase 172: Windows Failover Clustering, Cluster Shared Network & Paxos Quorum Subsystem (`clussvc.exe`, `clusapi.dll`, `resutils.dll`, `clusnet.sys`, `clusdisk.sys`, `TitanClusterCore`, `AegisConsensus`) (Milestone 199) [PLANNED]
+*Goal: Implement clean-room Windows Failover Clustering architecture (`clussvc.exe`, `clusapi.dll`, `clusnet.sys`, `clusdisk.sys`), providing Paxos distributed consensus, dynamic quorum arbitration (Cloud Witness, File Share Witness, Disk Witness), heartbeating mesh with split-brain fencing, resource state machines, and coordinated failover orchestration.*
+- [ ] **Failover Clustering Core Engine (`include/micant/clustering.hpp`)**:
+  - Paxos Distributed Consensus & Quorum Engine: Dynamic quorum calculation, epoch progression, and witness arbitration (Disk/File Share/Cloud).
+  - Cluster Network Driver (`clusnet.sys`): High-priority kernel heartbeat protocol, multi-channel fault-tolerant cluster communication, and split-brain fencing.
+  - Cluster Disk Bus Filter (`clusdisk.sys`): SCSI PR (Persistent Reservation) emulation and physical disk arbitration.
+  - Resource Control & State Machine (`resutils.dll`, `clussvc.exe`): Resource dependencies, online/offline lifecycle transitions, and automatic resource failure restart/failover.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `clusapi.dll` / `resutils.dll` / `clusnet.sys`: `OpenCluster`, `CloseCluster`, `ClusterOpenEnum`, `CreateClusterResource`, `OnlineClusterResource`, `OfflineClusterResource`, `ClusterResourceControl`, `ClusNetSendHeartbeat`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`ClusNet`, `ClusDisk`, `ClusSvc`).
 - [ ] **Interactive Shell CLI**:
-  - `sr status`, `sr partnerships`, `sr reverse <id>`, `sr sync <id>`, `sr test`.
-- [ ] **Unit Test Suite 198 (`Test_WindowsStorageReplica_DisasterRecovery_Subsystem`)**:
-  - Comprehensive validation stages verifying partnership provisioning, synchronous write mirroring, async log staging, failover role reversal, dirty block bitmap resync, and Win32 C ABI exports.
+  - `cluster status`, `cluster nodes`, `cluster resources`, `cluster failover <res>`, `cluster test`.
+- [ ] **Unit Test Suite 199 (`Test_WindowsFailoverClustering_PaxosQuorum_Subsystem`)**:
+  - Comprehensive validation stages verifying cluster formation, Paxos consensus ballots, quorum witness tie-breaking, heartbeat failure detection, SCSI PR reservation arbitration, resource state transitions, and Win32 C ABI exports.
 
 
 

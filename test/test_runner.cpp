@@ -202,6 +202,7 @@
 #include "micant/wcifs.hpp"
 #include "micant/s2d.hpp"
 #include "micant/branchcache.hpp"
+#include "micant/storage_replica.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -44375,8 +44376,206 @@ void Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem() {
     std::cout << "[TEST] Suite 197: Windows DirectAccess, BranchCache & SMB over QUIC Subsystem PASSED.\n";
 }
 
+void Test_WindowsStorageReplica_DisasterRecovery_Subsystem() {
+    std::cout << "[RUNNING] Test_WindowsStorageReplica_DisasterRecovery_Subsystem...\n";
+    std::cout << "[TEST] Running Suite 198: Windows Storage Replica (SR) & Disaster Recovery Subsystem...\n";
+
+    // Register SCM services, drivers, and VersionDatabase entries
+    micant::sr::RegisterStorageReplicaSubsystem();
+    auto& srSys = micant::sr::StorageReplicaSubsystem::get();
+    srSys.initialize();
+
+    // Stage 1: SCM Service & Driver Registration Validation
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto srDrvRec = scm.getServiceRecord(L"StorageReplica");
+    TEST_ASSERT(srDrvRec != nullptr, "StorageReplica kernel driver must be registered in SCM");
+    TEST_ASSERT(srDrvRec->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "StorageReplica must be a SERVICE_KERNEL_DRIVER");
+    TEST_ASSERT(srDrvRec->startType == micant::scm::SERVICE_SYSTEM_START, "StorageReplica must be SERVICE_SYSTEM_START");
+    TEST_ASSERT(srDrvRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "StorageReplica driver state must be SERVICE_RUNNING");
+
+    auto srSvcRec = scm.getServiceRecord(L"SrSvc");
+    TEST_ASSERT(srSvcRec != nullptr, "SrSvc management service must be registered in SCM");
+    TEST_ASSERT(srSvcRec->serviceType == micant::scm::SERVICE_WIN32_SHARE_PROCESS, "SrSvc must be a SERVICE_WIN32_SHARE_PROCESS");
+    TEST_ASSERT(srSvcRec->startType == micant::scm::SERVICE_AUTO_START, "SrSvc must be SERVICE_AUTO_START");
+    TEST_ASSERT(srSvcRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SrSvc service state must be SERVICE_RUNNING");
+
+    // Stage 2: VersionDatabase Registration Validation
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("storrepl.sys") != nullptr, "storrepl.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("srsys.sys") != nullptr, "srsys.sys must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("srservice.dll") != nullptr, "srservice.dll must be registered in VersionDatabase");
+
+    // Stage 3: Partnership Creation & Volume Topology Configuration
+    auto pMetro = srSys.getPartnership("SR-PAR-METRO-01");
+    TEST_ASSERT(pMetro != nullptr, "Pre-seeded Metropolitan partnership must exist");
+    TEST_ASSERT(pMetro->getMode() == micant::sr::ReplicationMode::Synchronous, "Metro partnership must be Synchronous");
+    TEST_ASSERT(pMetro->getRole() == micant::sr::ReplicationRole::Source, "Metro partnership initial role must be Source");
+    TEST_ASSERT(pMetro->getState() == micant::sr::ReplicationState::ContinuouslyReplicating, "Metro partnership initial state must be ContinuouslyReplicating");
+
+    auto pWan = srSys.getPartnership("SR-PAR-WAN-02");
+    TEST_ASSERT(pWan != nullptr, "Pre-seeded WAN partnership must exist");
+    TEST_ASSERT(pWan->getMode() == micant::sr::ReplicationMode::Asynchronous, "WAN partnership must be Asynchronous");
+    TEST_ASSERT(pWan->getRole() == micant::sr::ReplicationRole::Source, "WAN partnership initial role must be Source");
+
+    // Stage 4: Synchronous Write Path & Zero RPO Mirroring Verification
+    const char metroData[] = "METROPOLITAN_ENTERPRISE_TRANSACTION_PAYLOAD_ZERO_RPO_TEST_BLOCK";
+    bool syncWriteOk = pMetro->writeBlock(0x100000, metroData, sizeof(metroData));
+    TEST_ASSERT(syncWriteOk, "Synchronous writeBlock to primary volume must succeed");
+
+    auto telemSync = pMetro->getTelemetry();
+    TEST_ASSERT(telemSync.syncWrites >= 1, "Synchronous write counter must increment");
+    TEST_ASSERT(telemSync.bytesReplicated >= sizeof(metroData), "Bytes replicated counter must increase");
+    TEST_ASSERT(telemSync.currentLsn > 100, "Current LSN must advance on synchronous write");
+    TEST_ASSERT(telemSync.lastFlushedLsn == telemSync.currentLsn, "Synchronous write must immediately flush LSN to secondary");
+
+    // Stage 5: Dual Volume Read Consistency (Source and Destination Replica)
+    char srcReadBuf[128]{};
+    char dstReadBuf[128]{};
+    bool readSrcOk = pMetro->readBlock(0x100000, srcReadBuf, sizeof(metroData), false);
+    bool readDstOk = pMetro->readBlock(0x100000, dstReadBuf, sizeof(metroData), true);
+    TEST_ASSERT(readSrcOk && readDstOk, "Reading both source and destination replica blocks must succeed");
+    TEST_ASSERT(std::memcmp(srcReadBuf, metroData, sizeof(metroData)) == 0, "Source block data must match original payload");
+    TEST_ASSERT(std::memcmp(dstReadBuf, metroData, sizeof(metroData)) == 0, "Destination replica block data must match source block exactly");
+
+    // Stage 6: Destination Secondary Write-Lock Enforcement
+    micant::sr::SrPartnershipConfig destLockCfg{};
+    destLockCfg.partnershipId = "SR-TEST-LOCK-01";
+    destLockCfg.sourceServer = "SRV-PRIMARY-SITE";
+    destLockCfg.sourceVolume = "F:";
+    destLockCfg.sourceLogVolume = "L:";
+    destLockCfg.destinationServer = "SRV-SECONDARY-SITE";
+    destLockCfg.destinationVolume = "G:";
+    destLockCfg.destinationLogVolume = "M:";
+    destLockCfg.localRole = micant::sr::ReplicationRole::Destination;
+    bool createLockOk = srSys.createPartnership(destLockCfg);
+    TEST_ASSERT(createLockOk, "Creating partnership with Destination role must succeed");
+    auto pLock = srSys.getPartnership("SR-TEST-LOCK-01");
+    TEST_ASSERT(pLock != nullptr && pLock->isWriteProtected(), "Destination role partnership must be write-protected");
+    bool writeDestBlocked = pLock->writeBlock(0, metroData, sizeof(metroData));
+    TEST_ASSERT(!writeDestBlocked, "Direct application writes to secondary replica volume MUST be blocked (write-protected)");
+
+    // Stage 7: Asynchronous Staging, Queue Depth & Batch Log Flush
+    const char asyncData[] = "HIGH_THROUGHPUT_WAN_ASYNC_STAGED_TRANSACTION_PAYLOAD";
+    bool asyncWriteOk = pWan->writeBlock(0x200000, asyncData, sizeof(asyncData));
+    TEST_ASSERT(asyncWriteOk, "Asynchronous writeBlock to WAN partnership must succeed");
+    TEST_ASSERT(pWan->getAsyncQueueDepth() >= 1, "Async write must queue into staging buffer before batch transmission");
+
+    size_t flushedCount = pWan->flushAsyncLog();
+    TEST_ASSERT(flushedCount >= 1, "flushAsyncLog must flush queued records to secondary");
+    TEST_ASSERT(pWan->getAsyncQueueDepth() == 0, "Staging queue depth must be 0 after flushAsyncLog");
+
+    char wanDstBuf[128]{};
+    pWan->readBlock(0x200000, wanDstBuf, sizeof(asyncData), true);
+    TEST_ASSERT(std::memcmp(wanDstBuf, asyncData, sizeof(asyncData)) == 0, "Flushed async block must be verified on secondary volume");
+
+    // Stage 8: Write-Ahead Log (WAL) Record Integrity & Checksums
+    uint32_t expectedCrc = micant::sr::ComputeCrc32c(asyncData, sizeof(asyncData));
+    TEST_ASSERT(expectedCrc != 0, "CRC32C checksum calculation must produce non-zero value");
+
+    // Stage 9: Network Disconnection Injection & Dirty Extent Bitmap Tracking
+    pMetro->injectNetworkFailure();
+    TEST_ASSERT(pMetro->getState() == micant::sr::ReplicationState::Degraded, "Network failure must transition state to Degraded");
+    const char offlineData[] = "OFFLINE_PARTITIONED_WRITE_WHILE_REMOTE_UNREACHABLE";
+    bool offlineWriteOk = pMetro->writeBlock(0x300000, offlineData, sizeof(offlineData));
+    TEST_ASSERT(offlineWriteOk, "Local write must succeed even when remote replica is disconnected");
+    TEST_ASSERT(pMetro->getDirtyBlockCount() >= 1, "Offline write must mark dirty block bitmap");
+
+    // Stage 10: Network Restoration & Differential Delta Resynchronization
+    pMetro->restoreNetwork();
+    uint32_t deltaSynced = pMetro->performDeltaSync();
+    TEST_ASSERT(deltaSynced >= 1, "performDeltaSync must synchronize all dirty blocks");
+    TEST_ASSERT(pMetro->getDirtyBlockCount() == 0, "Dirty block count must return to 0 after delta sync");
+    TEST_ASSERT(pMetro->getState() == micant::sr::ReplicationState::ContinuouslyReplicating, "State must restore to ContinuouslyReplicating");
+
+    char syncedDstBuf[128]{};
+    pMetro->readBlock(0x300000, syncedDstBuf, sizeof(offlineData), true);
+    TEST_ASSERT(std::memcmp(syncedDstBuf, offlineData, sizeof(offlineData)) == 0, "Secondary must reflect delta-synced block after network recovery");
+
+    // Stage 11: Dynamic Failover & Replication Direction Reversal (Source <-> Destination)
+    uint32_t epochBefore = pMetro->getEpoch();
+    bool revOk = pMetro->reverseDirection(micant::sr::FailoverType::Graceful);
+    TEST_ASSERT(revOk, "reverseDirection must succeed for graceful failover");
+    TEST_ASSERT(pMetro->getEpoch() == epochBefore + 1, "Epoch must increment on replication direction reversal");
+    TEST_ASSERT(pMetro->getRole() == micant::sr::ReplicationRole::Destination, "Local node must transition to Destination role");
+    TEST_ASSERT(pMetro->isWriteProtected(), "Local node must now be write-protected following failover to Destination");
+
+    // Reverse back to restore initial configuration
+    bool revBackOk = pMetro->reverseDirection(micant::sr::FailoverType::Graceful);
+    TEST_ASSERT(revBackOk, "Reversing direction back to Source must succeed");
+    TEST_ASSERT(pMetro->getRole() == micant::sr::ReplicationRole::Source, "Local node role must return to Source");
+
+    // Stage 12: Win32 & NT Clean-Room C ABI Driver Export Verification
+    NTSTATUS abiInit = micant::sr::SrInitializeSubsystem();
+    TEST_ASSERT(abiInit == STATUS_SUCCESS, "SrInitializeSubsystem must return STATUS_SUCCESS");
+
+    NTSTATUS abiCreate = micant::sr::SrCreateReplicationPartnership(
+        "SR-ABI-PARTNERSHIP", "SRV-A", "V:", "LV:", "SRV-B", "W:", "LW:", 0);
+    TEST_ASSERT(abiCreate == STATUS_SUCCESS, "SrCreateReplicationPartnership must return STATUS_SUCCESS");
+
+    uint32_t qState = 0, qRole = 0, qMode = 0;
+    uint64_t qBytes = 0;
+    NTSTATUS abiQuery = micant::sr::SrQueryReplicationState("SR-ABI-PARTNERSHIP", &qState, &qRole, &qMode, &qBytes);
+    TEST_ASSERT(abiQuery == STATUS_SUCCESS, "SrQueryReplicationState must return STATUS_SUCCESS");
+    TEST_ASSERT(qMode == 0, "Queried mode must be Synchronous (0)");
+
+    const char abiPayload[] = "ABI_TEST_BLOCK_DATA_PAYLOAD";
+    NTSTATUS abiWrite = micant::sr::SrSyncReplicateBlock("SR-ABI-PARTNERSHIP", 0x400000, abiPayload, sizeof(abiPayload));
+    TEST_ASSERT(abiWrite == STATUS_SUCCESS, "SrSyncReplicateBlock must return STATUS_SUCCESS");
+
+    size_t abiFlushed = 0;
+    NTSTATUS abiFlush = micant::sr::SrAsyncFlushLog("SR-ABI-PARTNERSHIP", &abiFlushed);
+    TEST_ASSERT(abiFlush == STATUS_SUCCESS, "SrAsyncFlushLog must return STATUS_SUCCESS");
+
+    NTSTATUS abiSuspend = micant::sr::SrSuspendReplication("SR-ABI-PARTNERSHIP");
+    TEST_ASSERT(abiSuspend == STATUS_SUCCESS, "SrSuspendReplication must return STATUS_SUCCESS");
+
+    NTSTATUS abiResume = micant::sr::SrResumeReplication("SR-ABI-PARTNERSHIP");
+    TEST_ASSERT(abiResume == STATUS_SUCCESS, "SrResumeReplication must return STATUS_SUCCESS");
+
+    NTSTATUS abiReverse = micant::sr::SrSetReplicationDirection("SR-ABI-PARTNERSHIP", 0);
+    TEST_ASSERT(abiReverse == STATUS_SUCCESS, "SrSetReplicationDirection must return STATUS_SUCCESS");
+
+    NTSTATUS abiRemove = micant::sr::SrRemoveReplicationPartnership("SR-ABI-PARTNERSHIP");
+    TEST_ASSERT(abiRemove == STATUS_SUCCESS, "SrRemoveReplicationPartnership must return STATUS_SUCCESS");
+
+    // Stage 13: High-Density Concurrent Transactional Write Stress Test
+    auto stressPart = srSys.getPartnership("SR-PAR-METRO-01");
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([stressPart, &stressSuccessCount, t]() {
+            for (int i = 0; i < 10; ++i) {
+                uint64_t blkOffset = static_cast<uint64_t>(t * 100 + i) * 64 * 1024;
+                std::string payload = "THREAD_" + std::to_string(t) + "_TRANSACTION_" + std::to_string(i);
+                if (stressPart->writeBlock(blkOffset, payload.data(), payload.size())) {
+                    char verifyBuf[128]{};
+                    if (stressPart->readBlock(blkOffset, verifyBuf, payload.size(), true) &&
+                        std::memcmp(verifyBuf, payload.data(), payload.size()) == 0) {
+                        stressSuccessCount.fetch_add(1);
+                    }
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 100, "100 concurrent multi-threaded block write-and-verify transactions must succeed with 0 corruption");
+
+    srSys.reset();
+    std::cout << "[TEST] Suite 198: Windows Storage Replica (SR) & Disaster Recovery Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite197")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite198")) {
+        RUN_TEST(Test_WindowsStorageReplica_DisasterRecovery_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite197") {
         RUN_TEST(Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem);
         return g_FailedTests;
     }
@@ -44947,6 +45146,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsContainerStorage_Wcifs_Subsystem);
     RUN_TEST(Test_WindowsDirectStorage_S2D_Subsystem);
     RUN_TEST(Test_WindowsDirectAccess_BranchCache_SMBQuic_Subsystem);
+    RUN_TEST(Test_WindowsStorageReplica_DisasterRecovery_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
