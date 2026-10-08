@@ -191,6 +191,7 @@
 #include "micant/vrr.hpp"
 #include "micant/sensorscx.hpp"
 #include "micant/mbbcx.hpp"
+#include "micant/pmp.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -42274,8 +42275,242 @@ void Test_WindowsMbbCx_MBIM40_5G_Subsystem() {
     std::cout << "[TEST] Suite 186: Windows Mobile Broadband Class Extension (MBIM 4.0 / MbbCx) & 5G NR Subsystem PASSED.\n";
 }
 
+void Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem() {
+    std::cout << "[TEST] Executing Suite 187: Windows Hardware Protected Media Path (PMP), Protected Audio Video Path (PAVP) & HDCP 2.3 Subsystem...\n";
+
+    // Stage 1: PMP Subsystem SCM & VersionDatabase Module Registration
+    micant::pmp::RegisterPmpSubsystem();
+    auto& verDb = version::VersionDatabase::Instance();
+    TEST_ASSERT(verDb.FindModule("mfpmp.exe") != nullptr, "mfpmp.exe must be registered in VersionDatabase");
+    TEST_ASSERT(verDb.FindModule("dxva2.dll") != nullptr, "dxva2.dll must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto scmSvc = scm.getServiceRecord(L"PmpService");
+    TEST_ASSERT(scmSvc != nullptr, "PmpService must be registered in SCM");
+    TEST_ASSERT(scmSvc->binaryPath.find(L"svchost.exe") != std::wstring::npos, "PmpService must be hosted by svchost.exe");
+    TEST_ASSERT(scmSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "PmpService must be running");
+
+    auto& pmpSys = micant::pmp::PmpSubsystem::get();
+    TEST_ASSERT(pmpSys.isInitialized() == true, "PmpSubsystem must report initialized");
+
+    // Stage 2: Output Protection Manager (OPM) Video Output Discovery & Topology
+    TEST_ASSERT(pmpSys.getOutputCount() >= 2, "PmpSubsystem must contain at least 2 protected display outputs");
+    auto out1 = pmpSys.getOutput(1);
+    TEST_ASSERT(out1 != nullptr, "Display Output 1 must exist");
+    TEST_ASSERT(out1->getName().find(L"Alienware AW3225QF") != std::wstring::npos, "Output 1 name must identify Alienware AW3225QF");
+    TEST_ASSERT(out1->getHMonitor() == 0x10001, "Output 1 hMonitor must match 0x10001");
+    TEST_ASSERT(out1->getConnector() == micant::pmp::OpmConnectorType::DisplayPort_External, "Output 1 connector must be DisplayPort_External");
+    TEST_ASSERT(out1->getMaxHdcp() == micant::pmp::HdcpProtectionLevel::Hdcp23_Type1, "Output 1 max HDCP must be HDCP 2.3 Type 1");
+
+    auto out2 = pmpSys.getOutput(2);
+    TEST_ASSERT(out2 != nullptr, "Display Output 2 must exist");
+    TEST_ASSERT(out2->getName().find(L"BRAVIA XR Master 8K") != std::wstring::npos, "Output 2 name must identify Sony BRAVIA XR 8K");
+    TEST_ASSERT(out2->getHMonitor() == 0x10002, "Output 2 hMonitor must match 0x10002");
+    TEST_ASSERT(out2->getConnector() == micant::pmp::OpmConnectorType::HDMI, "Output 2 connector must be HDMI");
+
+    uint32_t out3Id = pmpSys.registerOutput(0x10003, L"Embedded OLED Laptop Display",
+                                           micant::pmp::OpmConnectorType::DisplayPort_Embedded,
+                                           micant::pmp::HdcpProtectionLevel::Hdcp22_Type0);
+    TEST_ASSERT(out3Id == 3, "Registered third output must receive ID 3");
+    TEST_ASSERT(pmpSys.getOutputCount() == 3, "Output count must now be 3");
+    auto out3 = pmpSys.getOutput(3);
+    TEST_ASSERT(out3 != nullptr && out3->getConnector() == micant::pmp::OpmConnectorType::DisplayPort_Embedded, "Output 3 must be eDP");
+
+    // Stage 3: OPM Simulated X.509 Certificate Generation & Verification
+    const auto& cert1 = out1->getCertificate();
+    TEST_ASSERT(cert1.size() == 256, "Output 1 certificate must be 256 bytes");
+    const auto& cert2 = out2->getCertificate();
+    TEST_ASSERT(cert2.size() == 256, "Output 2 certificate must be 256 bytes");
+    TEST_ASSERT(cert1 != cert2, "Certificates for different outputs must be cryptographically distinct");
+    TEST_ASSERT(std::string(micant::pmp::OpmConnectorTypeToString(micant::pmp::OpmConnectorType::HDMI)).find("HDMI") != std::string::npos, "OpmConnectorTypeToString must format HDMI");
+    TEST_ASSERT(std::string(micant::pmp::HdcpProtectionLevelToString(micant::pmp::HdcpProtectionLevel::Hdcp23_Type1)).find("HDCP 2.3") != std::string::npos, "HdcpProtectionLevelToString must format HDCP 2.3");
+
+    // Stage 4: HDCP 2.3 Protection Level Transitions
+    TEST_ASSERT(out3->setProtection(micant::pmp::HdcpProtectionLevel::Off), "Setting HDCP to Off must succeed");
+    TEST_ASSERT(out3->getCurrentHdcp() == micant::pmp::HdcpProtectionLevel::Off, "Current HDCP must be Off");
+    TEST_ASSERT(out3->setProtection(micant::pmp::HdcpProtectionLevel::Hdcp14), "Setting HDCP to 1.4 must succeed");
+    TEST_ASSERT(out3->getCurrentHdcp() == micant::pmp::HdcpProtectionLevel::Hdcp14, "Current HDCP must be HDCP 1.4");
+    TEST_ASSERT(out3->setProtection(micant::pmp::HdcpProtectionLevel::Hdcp22_Type0), "Setting HDCP to 2.2 must succeed");
+    TEST_ASSERT(out3->getCurrentHdcp() == micant::pmp::HdcpProtectionLevel::Hdcp22_Type0, "Current HDCP must be HDCP 2.2");
+    TEST_ASSERT(!out3->setProtection(micant::pmp::HdcpProtectionLevel::Hdcp23_Type1), "Setting HDCP 2.3 on output capped at 2.2 must fail");
+
+    // Stage 5: Resolution & HDR Stream Policy Enforcement
+    TEST_ASSERT(out1->setProtection(micant::pmp::HdcpProtectionLevel::Off), "Disabling HDCP on Output 1 must succeed");
+    TEST_ASSERT(!out1->isStreamAuthorized(1080, false), "Stream must not be authorized when HDCP is Off");
+
+    out1->setProtection(micant::pmp::HdcpProtectionLevel::Hdcp14);
+    TEST_ASSERT(out1->isStreamAuthorized(1080, false), "1080p SDR must be authorized with HDCP 1.4");
+    TEST_ASSERT(!out1->isStreamAuthorized(2160, false), "4K SDR must NOT be authorized with HDCP 1.4");
+    TEST_ASSERT(!out1->isStreamAuthorized(1080, true), "1080p HDR must NOT be authorized with HDCP 1.4 (HDR requires HDCP 2.2+)");
+
+    out1->setProtection(micant::pmp::HdcpProtectionLevel::Hdcp22_Type0);
+    TEST_ASSERT(out1->isStreamAuthorized(2160, true), "4K HDR must be authorized with HDCP 2.2");
+    TEST_ASSERT(!out1->isStreamAuthorized(4320, false), "8K must NOT be authorized with HDCP 2.2 (requires HDCP 2.3 Type 1)");
+
+    out1->setProtection(micant::pmp::HdcpProtectionLevel::Hdcp23_Type1);
+    TEST_ASSERT(out1->isStreamAuthorized(4320, true), "8K HDR must be authorized with HDCP 2.3 Type 1");
+
+    // Stage 6: Repeater Topology & Downstream Device Cascade Limits
+    out1->setRepeater(true, 4, 2);
+    TEST_ASSERT(out1->isRepeater() == true, "Repeater flag must be true");
+    TEST_ASSERT(out1->getRepeaterCount() == 4, "Repeater device count must be 4");
+    TEST_ASSERT(out1->getRepeaterDepth() == 2, "Repeater depth must be 2");
+    TEST_ASSERT(!out1->isStreamAuthorized(4320, true), "8K stream must NOT be authorized through repeaters in HDCP 2.3 Type 1 mode");
+    out1->setRepeater(false, 0, 0);
+    TEST_ASSERT(out1->isStreamAuthorized(4320, true), "8K stream must be authorized directly to display (no repeater)");
+
+    // Stage 7: Protected Process Light (PPL) Media Foundation Host Environment
+    auto& host = pmpSys.getProcessHost();
+    TEST_ASSERT(host.processId == 2048, "mfpmp host PID must be 2048");
+    TEST_ASSERT(host.isPplActive == true, "mfpmp host must have PPL active");
+    TEST_ASSERT(host.isCodeIntegrityPassed == true, "mfpmp code integrity must be verified");
+    TEST_ASSERT(host.binaryPath.find(L"mfpmp.exe") != std::wstring::npos, "Host binary path must point to mfpmp.exe");
+
+    // Stage 8: PAVP Secure Memory & AES-128 Keystream Decryption Reversibility
+    auto sess1 = pmpSys.getSession(101);
+    TEST_ASSERT(sess1 != nullptr, "Default session 101 must exist");
+    TEST_ASSERT(sess1->getWidth() == 3840 && sess1->getHeight() == 2160, "Session 101 resolution must be 3840x2160");
+    TEST_ASSERT(sess1->isHdr() == true, "Session 101 must be HDR");
+
+    std::vector<uint8_t> plainText(64);
+    for (size_t i = 0; i < plainText.size(); ++i) {
+        plainText[i] = static_cast<uint8_t>(0xA0 + (i & 0x1F));
+    }
+    std::vector<uint8_t> cipherText(64, 0);
+    std::vector<uint8_t> recoveredText(64, 0);
+    uint32_t encLen = 0, decLen = 0;
+
+    // Apply keystream transform (encrypt)
+    TEST_ASSERT(sess1->decryptFrame(plainText.data(), static_cast<uint32_t>(plainText.size()), cipherText.data(), encLen), "Keystream application must succeed");
+    TEST_ASSERT(encLen == 64, "Encrypted length must be 64 bytes");
+    TEST_ASSERT(cipherText != plainText, "Ciphertext must not match plaintext");
+
+    // Apply keystream transform (decrypt)
+    TEST_ASSERT(sess1->decryptFrame(cipherText.data(), static_cast<uint32_t>(cipherText.size()), recoveredText.data(), decLen), "Keystream reverse transform must succeed");
+    TEST_ASSERT(decLen == 64, "Decrypted length must be 64 bytes");
+    TEST_ASSERT(recoveredText == plainText, "Decrypted text must match original plaintext exactly");
+    TEST_ASSERT(sess1->getFramesProcessed() == 2, "Session must have processed 2 frames");
+    TEST_ASSERT(sess1->getBytesDecrypted() == 128, "Session must have processed 128 bytes");
+
+    // Stage 9: Cryptographic Key Invalidation & Revocation Manager
+    auto& revMgr = pmpSys.getRevocationManager();
+    TEST_ASSERT(revMgr.getRevokedCount() == 0, "Initial revocation count must be 0");
+    TEST_ASSERT(!revMgr.isRevoked(cert1), "Certificate 1 must not be revoked initially");
+
+    sess1->setKeyRevoked(true);
+    TEST_ASSERT(!sess1->decryptFrame(plainText.data(), 64, cipherText.data(), encLen), "Decryption must fail when key is revoked");
+    sess1->setKeyRevoked(false);
+    TEST_ASSERT(sess1->decryptFrame(plainText.data(), 64, cipherText.data(), encLen), "Decryption must succeed when key is valid");
+
+    // Revoke certificate hash
+    uint32_t sampleHash = 2166136261u;
+    for (auto b : cert2) { sampleHash ^= b; sampleHash *= 16777619u; }
+    revMgr.revokeCertificateHash(sampleHash);
+    TEST_ASSERT(revMgr.isRevoked(cert2) == true, "Certificate 2 must report revoked after adding hash");
+    TEST_ASSERT(revMgr.isRevoked(cert1) == false, "Certificate 1 must remain valid");
+    TEST_ASSERT(revMgr.getRevokedCount() == 1, "Revocation manager count must be 1");
+    revMgr.clear();
+    TEST_ASSERT(revMgr.getRevokedCount() == 0, "Revocation manager must be clear");
+
+    // Stage 10: Dynamic Secure Session Creation & Teardown Lifecycle
+    uint32_t dynSid = pmpSys.createSecureSession(L"DolbyVision_Profile8_4K", 3840, 2160, true);
+    TEST_ASSERT(dynSid > 101, "Dynamically created session ID must be > 101");
+    auto dynSess = pmpSys.getSession(dynSid);
+    TEST_ASSERT(dynSess != nullptr, "Dynamically created session must be retrievable");
+    TEST_ASSERT(dynSess->getName() == L"DolbyVision_Profile8_4K", "Session name must match");
+    TEST_ASSERT(pmpSys.getSessionCount() >= 2, "Session count must be at least 2");
+
+    bool closed = pmpSys.closeSession(dynSid);
+    TEST_ASSERT(closed == true, "Closing dynamic session must succeed");
+    TEST_ASSERT(pmpSys.getSession(dynSid) == nullptr, "Closed session must not be retrievable");
+    TEST_ASSERT(!pmpSys.closeSession(9999), "Closing invalid session must return false");
+
+    // Stage 11: Clean-Room Win32 C ABI Parity Exports & Boundary Parameter Checks
+    TEST_ASSERT(micant::pmp::PmpInitializeSubsystem() == micant::STATUS_SUCCESS, "PmpInitializeSubsystem must return STATUS_SUCCESS");
+
+    uint32_t outCount = 0;
+    TEST_ASSERT(micant::pmp::OPMGetVideoOutputsFromHMONITOR(0, nullptr, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null count pointer must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::pmp::OPMGetVideoOutputsFromHMONITOR(0, &outCount, nullptr) == micant::STATUS_SUCCESS, "Querying output count with null buffer must succeed");
+    TEST_ASSERT(outCount >= 2, "Output count must be >= 2");
+
+    std::vector<uint32_t> outBuf(outCount);
+    TEST_ASSERT(micant::pmp::OPMGetVideoOutputsFromHMONITOR(0, &outCount, outBuf.data()) == micant::STATUS_SUCCESS, "Querying outputs must succeed");
+    TEST_ASSERT(outBuf[0] == 1, "First output must be ID 1");
+
+    uint32_t mon1Count = 0;
+    TEST_ASSERT(micant::pmp::OPMGetVideoOutputsFromHMONITOR(0x10001, &mon1Count, nullptr) == micant::STATUS_SUCCESS, "Querying by hMonitor must succeed");
+    TEST_ASSERT(mon1Count == 1, "Querying by 0x10001 must return exactly 1 output");
+
+    uint32_t protHandle = 0;
+    TEST_ASSERT(micant::pmp::OPMCreateProtectedOutput(1, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null handle pointer must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::pmp::OPMCreateProtectedOutput(9999, &protHandle) == micant::STATUS_NOT_FOUND, "Nonexistent output ID must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::pmp::OPMCreateProtectedOutput(1, &protHandle) == micant::STATUS_SUCCESS, "Creating protected output 1 must succeed");
+    TEST_ASSERT(protHandle == 1, "Protected handle must match output ID");
+
+    uint32_t certSz = 0;
+    TEST_ASSERT(micant::pmp::OPMGetCertificateSize(protHandle, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null cert size pointer must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::pmp::OPMGetCertificateSize(protHandle, &certSz) == micant::STATUS_SUCCESS, "Getting cert size must succeed");
+    TEST_ASSERT(certSz == 256, "Certificate size must be 256 bytes");
+
+    std::vector<uint8_t> certBuf(256);
+    TEST_ASSERT(micant::pmp::OPMGetCertificate(protHandle, nullptr, 256) == micant::STATUS_INVALID_PARAMETER, "Null cert buffer must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::pmp::OPMGetCertificate(protHandle, certBuf.data(), 100) == micant::STATUS_BUFFER_TOO_SMALL, "Small buffer must return STATUS_BUFFER_TOO_SMALL");
+    TEST_ASSERT(micant::pmp::OPMGetCertificate(protHandle, certBuf.data(), 256) == micant::STATUS_SUCCESS, "Getting certificate must succeed");
+
+    TEST_ASSERT(micant::pmp::OPMSetProtectionLevel(9999, 1, 3) == micant::STATUS_NOT_FOUND, "Nonexistent output must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::pmp::OPMSetProtectionLevel(protHandle, 2, 3) == micant::STATUS_NOT_SUPPORTED, "Non-HDCP protection type must return STATUS_NOT_SUPPORTED");
+    TEST_ASSERT(micant::pmp::OPMSetProtectionLevel(protHandle, 1, 99) == micant::STATUS_INVALID_PARAMETER, "Invalid protection level must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::pmp::OPMSetProtectionLevel(protHandle, 1, 3) == micant::STATUS_SUCCESS, "Setting HDCP 2.3 must return STATUS_SUCCESS");
+
+    uint32_t abiSid = 0;
+    TEST_ASSERT(micant::pmp::PmpCreateSecureSession(nullptr, 1920, 1080, 0, &abiSid) == micant::STATUS_INVALID_PARAMETER, "Null session name must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::pmp::PmpCreateSecureSession(L"AbiSession", 1920, 1080, 0, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null sid ptr must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::pmp::PmpCreateSecureSession(L"AbiSession", 1920, 1080, 0, &abiSid) == micant::STATUS_SUCCESS, "PmpCreateSecureSession must succeed");
+    TEST_ASSERT(abiSid > 0, "Created session ID must be non-zero");
+
+    uint8_t sampleEnc[32] = {1, 2, 3, 4, 5, 6, 7, 8};
+    uint8_t sampleDec[32] = {0};
+    uint32_t decOutSz = 0;
+    TEST_ASSERT(micant::pmp::PmpDecryptSample(abiSid, nullptr, 32, sampleDec, &decOutSz) == micant::STATUS_INVALID_PARAMETER, "Null encData must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::pmp::PmpDecryptSample(99999, sampleEnc, 32, sampleDec, &decOutSz) == micant::STATUS_NOT_FOUND, "Nonexistent session must return STATUS_NOT_FOUND");
+    TEST_ASSERT(micant::pmp::PmpDecryptSample(abiSid, sampleEnc, 32, sampleDec, &decOutSz) == micant::STATUS_SUCCESS, "PmpDecryptSample must succeed");
+    TEST_ASSERT(decOutSz == 32, "Decrypted size must match input size");
+
+    // Stage 12: Multi-Threaded Concurrent Secure Frame Decryption Stress Test
+    std::atomic<uint32_t> totalFramesDecrypted{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([&pmpSys, &totalFramesDecrypted, t]() {
+            std::wstring sName = L"WorkerStream_" + std::to_wstring(t);
+            uint32_t thSid = pmpSys.createSecureSession(sName, 1920, 1080, false);
+            auto thSess = pmpSys.getSession(thSid);
+            if (thSess) {
+                std::vector<uint8_t> inBuf(128, static_cast<uint8_t>(t * 17));
+                std::vector<uint8_t> outBuf(128, 0);
+                uint32_t outBytes = 0;
+                for (int f = 0; f < 25; ++f) {
+                    if (thSess->decryptFrame(inBuf.data(), static_cast<uint32_t>(inBuf.size()), outBuf.data(), outBytes)) {
+                        totalFramesDecrypted++;
+                    }
+                }
+            }
+            pmpSys.closeSession(thSid);
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(totalFramesDecrypted.load() == 100, "100 concurrent secure frame decryptions must complete without race conditions or memory faults");
+
+    std::cout << "[TEST] Suite 187: Windows Hardware Protected Media Path (PMP), Protected Audio Video Path (PAVP) & HDCP 2.3 Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite186")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite187")) {
+        RUN_TEST(Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite186") {
         RUN_TEST(Test_WindowsMbbCx_MBIM40_5G_Subsystem);
         return g_FailedTests;
     }
@@ -42790,6 +43025,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsDisplayVRR_AutoHDR_Subsystem);
     RUN_TEST(Test_WindowsSensorsCxV2_SensorFusion_Subsystem);
     RUN_TEST(Test_WindowsMbbCx_MBIM40_5G_Subsystem);
+    RUN_TEST(Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

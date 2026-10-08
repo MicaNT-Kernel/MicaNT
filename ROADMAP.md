@@ -324,7 +324,11 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 158: Windows Sensor Class Extension v2 (SensorsCx & IMU)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 159: Mobile Broadband Class Extension (MBIM 4.0 / MbbCx)[PLANNED]        │
+│ Phase 159: Mobile Broadband Class Extension (MBIM 4.0 / MbbCx)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 160: Windows Hardware Protected Media Path (PMP/HDCP 2.3)[COMPLETED 100%]│
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 161: Hyper-V Virtual Machine Bus (VMBus / vmbus.sys)    [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3350,20 +3354,38 @@
 
 ---
 
-### Phase 160: Windows Hardware Protected Media Path (PMP), Protected Audio Video Path (PAVP) & HDCP 2.3 Subsystem (`pmp.hpp`, `mfpmp.exe`, `dxva2.dll`, `TitanPMP`, `AegisContent`) (Milestone 187) [PLANNED]
+### Phase 160: Windows Hardware Protected Media Path (PMP), Protected Audio Video Path (PAVP) & HDCP 2.3 Subsystem (`pmp.hpp`, `mfpmp.exe`, `dxva2.dll`, `TitanPMP`, `AegisContent`) (Milestone 187) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Hardware Protected Media Path (PMP / mfpmp.exe), Protected Audio Video Path (PAVP), DirectX Video Acceleration 2.0 (DXVA2), High-bandwidth Digital Content Protection 2.3 (HDCP 2.3), DRM cryptographic key exchange, Output Protection Management (OPM / COPP), and hardware-enforced secure media pipeline.*
-- [ ] **Hardware Protected Media Path & PAVP Architecture (`include/micant/pmp.hpp`)**:
+- [x] **Hardware Protected Media Path & PAVP Architecture (`include/micant/pmp.hpp`)**:
   - Media Foundation Protected Process: `mfpmp.exe` isolated protected process hosting decoders and decryptors away from Ring 3 tampered memory.
   - Output Protection Management (OPM): High-bandwidth Digital Content Protection (HDCP 1.4 / 2.2 / 2.3), DisplayPort content protection (DPCP), and analog CGMS-A copy protection.
   - Cryptographic Key Exchange & Session Keys: RSA-2048 / AES-128-CTR content key unwrapping, Certificate Revocation Lists (CRL), and hardware root of trust.
   - DXVA2 Hardware Video Acceleration: Protected session handle creation, hardware video decode surfaces, and frame decrypt/render binding.
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `dxva2.dll` / `mfpmp.exe`: `OPMGetVideoOutputsFromHMONITOR`, `OPMCreateProtectedOutput`, `OPMGetCertificateSize`, `OPMGetCertificate`, `OPMSetProtectionLevel`, `PmpInitializeSubsystem`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`PmpService`, `svchost.exe -k MediaGroup`).
-- [ ] **Interactive Shell CLI**:
+- [x] **Interactive Shell CLI**:
   - `pmp status`, `pmp monitors`, `pmp hdcp <level> [monId]`, `pmp keys`, `pmp session <create|close>`, `pmp test`.
-- [ ] **Unit Test Suite 187 (`Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem`)**:
+- [x] **Unit Test Suite 187 (`Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem`)**:
   - 12 comprehensive validation stages verifying PMP isolated process hosting, OPM certificate chain verification, HDCP 2.3 handshake and renegotiation, content encryption/decryption validation, DXVA2 protected surface allocation, revocation testing, dynamic C ABI exports, and multi-threaded secure stream playback stress test.
+  - Milestone 187: **187 / 187 Test Suites Passing (100%)**.
+
+---
+
+### Phase 161: Windows Virtual Machine Bus (VMBus / `vmbus.sys`) & Hyper-V Synthetic Driver Subsystem (`vmbus.hpp`, `vmbus.sys`, `storvsc.sys`, `netvsc.sys`, `hv_sock.dll`, `TitanVMBus`, `AegisChannel`) (Milestone 188) [PLANNED]
+*Goal: Implement clean-room Windows Virtual Machine Bus (VMBus / vmbus.sys), Hyper-V synthetic device communication channels, Guest Physical Address Descriptors (GPADL), ring buffer management, Synthetic Storage (`storvsc.sys`), Synthetic Network (`netvsc.sys`), Hyper-V guest-to-host VM sockets (`hv_sock`), Dynamic Memory ballooning (`dmvsc.sys`), and hypervisor synthetic interrupt delivery.*
+- [ ] **Virtual Machine Bus (VMBus) Core Architecture (`include/micant/vmbus.hpp`)**:
+  - VMBus Channel & Protocol Management: Channel Offer/Rescind, Gpadl registration, send/receive ring buffers, and transaction sequence numbering.
+  - Synthetic Device Drivers: `storvsc.sys` (synthetic SCSI/SATA fast storage pipe), `netvsc.sys` (synthetic network interface with RNDIS control & multi-queue RSS packet offload).
+  - Hyper-V Sockets (`hv_sock` / `AF_HYPERV`): Host-to-guest container and VM interconnect without virtual network dependency.
+  - Dynamic Memory & Ballooning: Memory hot-add and target demand ballooning coordination (`dmvsc.sys`).
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `vmbus.sys` / `hv_sock.dll`: `VmbusChannelInit`, `VmbusChannelOpen`, `VmbusChannelSend`, `VmbusChannelReceive`, `HvSocketCreate`, `HvSocketConnect`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`VmBusService`, `svchost.exe -k LocalSystemNetworkRestricted`).
+- [ ] **Interactive Shell CLI**:
+  - `vmbus status`, `vmbus channels`, `vmbus offer <devType>`, `vmbus storvsc`, `vmbus netvsc`, `vmbus hvsock`, `vmbus test`.
+- [ ] **Unit Test Suite 188 (`Test_WindowsVMBus_SyntheticDriver_Subsystem`)**:
+  - 12 comprehensive validation stages verifying VMBus initialization, GPADL buffer mapping, synthetic channel discovery, ring buffer packet roundtrips, storvsc SCSI read/write commands, netvsc packet streaming, hv_sock IPC rendezvous, dynamic memory pressure ballooning, Win32 C ABI parity exports, and multi-threaded synthetic channel throughput stress testing.
 
 
 
