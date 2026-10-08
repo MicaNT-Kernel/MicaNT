@@ -45948,8 +45948,253 @@ void Test_WindowsNetworkPolicyServer_RADIUS_Subsystem() {
     std::cout << "[TEST] Suite 204: Windows Network Policy Server & RADIUS Subsystem PASSED.\n";
 }
 
+void Test_WindowsSystemResourceManager_FairShare_Subsystem() {
+    std::cout << "[TEST] Suite 205: Windows System Resource Manager & Fair Share Scheduling Subsystem...\n";
+
+    auto& wsrm = micant::wsrm::SystemResourceManager::instance();
+    wsrm.initialize();
+
+    // Stage 1: SCM Services Registration
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto sWsrm = scm.getServiceRecord(L"WsrmService");
+    auto sQuota = scm.getServiceRecord(L"TitanQuota");
+    TEST_ASSERT(sWsrm != nullptr, "WsrmService must be registered in SCM");
+    TEST_ASSERT(sQuota != nullptr, "TitanQuota kernel driver must be registered in SCM");
+    TEST_ASSERT(sWsrm->serviceType == micant::scm::SERVICE_WIN32_OWN_PROCESS, "WsrmService must be SERVICE_WIN32_OWN_PROCESS");
+    TEST_ASSERT(sQuota->serviceType == micant::scm::SERVICE_KERNEL_DRIVER, "TitanQuota must be SERVICE_KERNEL_DRIVER");
+    TEST_ASSERT(sWsrm->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WsrmService must be RUNNING");
+    TEST_ASSERT(sQuota->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "TitanQuota must be RUNNING");
+
+    // Stage 2: VersionDatabase Modules Registration (@ 10.0.26100.1)
+    auto& db = micant::version::VersionDatabase::Instance();
+    auto modExe = db.FindModule("wsrm.exe");
+    auto modDll = db.FindModule("wsrmcore.dll");
+    auto modMsc = db.FindModule("wsrm.msc");
+    auto modSys = db.FindModule("wsrmcore.sys");
+    TEST_ASSERT(modExe != nullptr, "wsrm.exe must exist in VersionDatabase");
+    TEST_ASSERT(modDll != nullptr, "wsrmcore.dll must exist in VersionDatabase");
+    TEST_ASSERT(modMsc != nullptr, "wsrm.msc must exist in VersionDatabase");
+    TEST_ASSERT(modSys != nullptr, "wsrmcore.sys must exist in VersionDatabase");
+    TEST_ASSERT(modExe->stringTable.at("FileVersion") == "10.0.26100.1", "wsrm.exe version must be 10.0.26100.1");
+    TEST_ASSERT(modDll->stringTable.at("FileVersion") == "10.0.26100.1", "wsrmcore.dll version must be 10.0.26100.1");
+
+    // Stage 3: Default Built-in Process Matching Criteria (PMC)
+    micant::wsrm::ProcessMatchingCriteria pmcSql{}, pmcIis{}, pmcDev{};
+    TEST_ASSERT(wsrm.getMatchingCriteria("SQLServer_Workload", &pmcSql), "SQLServer_Workload criteria must exist");
+    TEST_ASSERT(pmcSql.appPattern == "sqlservr.exe" && pmcSql.targetCpuPercent == 40, "SQLServer_Workload pattern and target CPU match");
+    TEST_ASSERT(pmcSql.memoryLimitBytes == 4ULL * 1024 * 1024 * 1024, "SQLServer_Workload 4GB memory limit");
+    TEST_ASSERT(wsrm.getMatchingCriteria("IIS_Worker_Pool", &pmcIis), "IIS_Worker_Pool criteria must exist");
+    TEST_ASSERT(pmcIis.appPattern == "w3wp.exe" && pmcIis.targetCpuPercent == 30, "IIS_Worker_Pool pattern and target CPU match");
+
+    // Stage 4: Process Registration & Equal-Per-Process Dynamic Allocation
+    wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerProcess);
+    TEST_ASSERT(wsrm.getAllocationPolicy() == micant::wsrm::AllocationPolicyType::EqualPerProcess, "Policy must be EqualPerProcess");
+
+    wsrm.registerProcess(101, "proc1.exe", "UserA", 1);
+    wsrm.registerProcess(102, "proc2.exe", "UserB", 1);
+    micant::wsrm::ManagedProcessRecord rec101{}, rec102{};
+    TEST_ASSERT(wsrm.getProcessAccounting(101, &rec101), "PID 101 must exist");
+    TEST_ASSERT(wsrm.getProcessAccounting(102, &rec102), "PID 102 must exist");
+    TEST_ASSERT(rec101.allocatedCpuPercent == 50.0, "With 2 processes, PID 101 gets 50% CPU");
+    TEST_ASSERT(rec102.allocatedCpuPercent == 50.0, "With 2 processes, PID 102 gets 50% CPU");
+
+    // Adding 2 more processes -> 25% each
+    wsrm.registerProcess(103, "proc3.exe", "UserC", 1);
+    wsrm.registerProcess(104, "proc4.exe", "UserD", 1);
+    wsrm.getProcessAccounting(101, &rec101);
+    wsrm.getProcessAccounting(104, &rec102);
+    TEST_ASSERT(rec101.allocatedCpuPercent == 25.0, "With 4 processes, PID 101 gets 25% CPU");
+    TEST_ASSERT(rec102.allocatedCpuPercent == 25.0, "With 4 processes, PID 104 gets 25% CPU");
+
+    // Cleanup 101-104
+    wsrm.deregisterProcess(101);
+    wsrm.deregisterProcess(102);
+    wsrm.deregisterProcess(103);
+    wsrm.deregisterProcess(104);
+
+    // Stage 5: Equal-Per-User Multi-Process Grouping & Allocation
+    wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerUser);
+    wsrm.registerProcess(201, "appA1.exe", "Alice", 1);
+    wsrm.registerProcess(202, "appA2.exe", "Alice", 1);
+    wsrm.registerProcess(203, "appB1.exe", "Bob", 1);
+
+    micant::wsrm::ManagedProcessRecord rA1{}, rA2{}, rB1{};
+    wsrm.getProcessAccounting(201, &rA1);
+    wsrm.getProcessAccounting(202, &rA2);
+    wsrm.getProcessAccounting(203, &rB1);
+    // 2 users: Alice receives 50% (split between 2 procs = 25% each), Bob receives 50% (single proc = 50%)
+    TEST_ASSERT(rB1.allocatedCpuPercent == 50.0, "Bob receives 50% CPU for his single process");
+    TEST_ASSERT(rA1.allocatedCpuPercent == 25.0, "Alice process 1 receives 25% CPU");
+    TEST_ASSERT(rA2.allocatedCpuPercent == 25.0, "Alice process 2 receives 25% CPU");
+
+    wsrm.deregisterProcess(201);
+    wsrm.deregisterProcess(202);
+    wsrm.deregisterProcess(203);
+
+    // Stage 6: Equal-Per-Session (DFSS) Multi-Session Allocation
+    wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerSession);
+    wsrm.registerProcess(301, "shell_console.exe", "UserConsole", 1); // Session 1
+    wsrm.registerProcess(302, "tool_console.exe", "UserConsole", 1);  // Session 1
+    wsrm.registerProcess(303, "shell_rdp.exe", "UserRdp", 2);         // Session 2
+    wsrm.registerProcess(304, "tool_rdp.exe", "UserRdp", 2);          // Session 2
+
+    micant::wsrm::ManagedProcessRecord rS1_1{}, rS2_1{};
+    wsrm.getProcessAccounting(301, &rS1_1);
+    wsrm.getProcessAccounting(303, &rS2_1);
+    // 2 sessions: Session 1 receives 50% (25% per proc), Session 2 receives 50% (25% per proc)
+    TEST_ASSERT(rS1_1.allocatedCpuPercent == 25.0, "Session 1 process receives 25% CPU");
+    TEST_ASSERT(rS2_1.allocatedCpuPercent == 25.0, "Session 2 process receives 25% CPU");
+
+    wsrm.deregisterProcess(301);
+    wsrm.deregisterProcess(302);
+    wsrm.deregisterProcess(303);
+    wsrm.deregisterProcess(304);
+
+    // Stage 7: Dynamic Fair Share Scheduling (DFSS) Session Scale Testing
+    wsrm.registerProcess(401, "session_worker.exe", "ClientUser", 1);
+    wsrm.applyFairShare(2);
+    micant::wsrm::ManagedProcessRecord rFs{};
+    wsrm.getProcessAccounting(401, &rFs);
+    TEST_ASSERT(rFs.allocatedCpuPercent == 50.0, "2 active sessions -> 50% per session");
+
+    wsrm.applyFairShare(5);
+    wsrm.getProcessAccounting(401, &rFs);
+    TEST_ASSERT(rFs.allocatedCpuPercent == 20.0, "5 active sessions -> 20% per session");
+
+    wsrm.applyFairShare(10);
+    wsrm.getProcessAccounting(401, &rFs);
+    TEST_ASSERT(rFs.allocatedCpuPercent == 10.0, "10 active sessions -> 10% per session");
+    wsrm.deregisterProcess(401);
+
+    // Stage 8: Custom Weighted Allocation Policy with Process Matching Criteria
+    wsrm.registerProcess(501, "sqlservr.exe", "SYSTEM", 0);
+    wsrm.registerProcess(502, "w3wp.exe", "NETWORK SERVICE", 0);
+    wsrm.registerProcess(503, "notepad.exe", "Alice", 1);
+    wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::CustomWeighted);
+
+    micant::wsrm::ManagedProcessRecord rSql{}, rIis{}, rNote{};
+    wsrm.getProcessAccounting(501, &rSql);
+    wsrm.getProcessAccounting(502, &rIis);
+    wsrm.getProcessAccounting(503, &rNote);
+
+    TEST_ASSERT(rSql.allocatedCpuPercent == 40.0, "SQLServer matched criteria -> 40% CPU");
+    TEST_ASSERT(rSql.memoryLimitBytes == 4ULL * 1024 * 1024 * 1024, "SQLServer memory limit -> 4GB");
+    TEST_ASSERT(rIis.allocatedCpuPercent == 30.0, "IIS matched criteria -> 30% CPU");
+    TEST_ASSERT(rIis.memoryLimitBytes == 2ULL * 1024 * 1024 * 1024, "IIS memory limit -> 2GB");
+    TEST_ASSERT(rNote.allocatedCpuPercent == 10.0, "Notepad unmatched criteria -> 10% baseline");
+
+    // Stage 9: Job Object CPU Rate Control Flags
+    TEST_ASSERT((rSql.rateControlFlags & micant::wsrm::JOBOBJECT_CPU_RATE_CONTROL_ENABLE) != 0, "CPU Rate control must be ENABLED");
+    TEST_ASSERT((rSql.rateControlFlags & micant::wsrm::JOBOBJECT_CPU_RATE_CONTROL_HARD_CAP) != 0, "Hard cap flag must be present on SQL");
+
+    // Stage 10: Working Set and Memory Quota Bounds
+    micant::wsrm::ProcessMatchingCriteria customPmc{};
+    customPmc.criteriaName = "HighMem_DataScience";
+    customPmc.appPattern = "python_ds.exe";
+    customPmc.targetCpuPercent = 50;
+    customPmc.memoryLimitBytes = 8ULL * 1024 * 1024 * 1024;
+    customPmc.minWorkingSetBytes = 128 * 1024 * 1024;
+    customPmc.maxWorkingSetBytes = 4ULL * 1024 * 1024 * 1024;
+    wsrm.addMatchingCriteria(customPmc);
+
+    micant::wsrm::ProcessMatchingCriteria fetchedPmc{};
+    TEST_ASSERT(wsrm.getMatchingCriteria("HighMem_DataScience", &fetchedPmc), "Criteria added and retrieved");
+    TEST_ASSERT(fetchedPmc.memoryLimitBytes == 8ULL * 1024 * 1024 * 1024, "8GB memory cap verified");
+    TEST_ASSERT(fetchedPmc.minWorkingSetBytes == 128 * 1024 * 1024, "128MB min working set verified");
+
+    // Stage 11: Real-Time Telemetry & CPU Throttling Violation Tracking
+    wsrm.updateProcessTelemetry(501, 100000, 20000, 2ULL * 1024 * 1024 * 1024, 10485760, true);
+    wsrm.getProcessAccounting(501, &rSql);
+    TEST_ASSERT(rSql.userTimeUs == 100000, "User time updated");
+    TEST_ASSERT(rSql.kernelTimeUs == 20000, "Kernel time updated");
+    TEST_ASSERT(rSql.peakWorkingSetBytes == 2ULL * 1024 * 1024 * 1024, "Peak working set recorded");
+    TEST_ASSERT(rSql.throttlingEvents == 1, "Throttling event incremented");
+    TEST_ASSERT(wsrm.getTotalThrottlingEvents() > 0, "Total throttling counter updated");
+
+    // Stage 12: Process Termination & Historical Resource Accounting Logging
+    wsrm.deregisterProcess(501); // SQL exits
+    wsrm.deregisterProcess(502);
+    wsrm.deregisterProcess(503);
+
+    uint64_t histCpu = 0, histMem = 0, histIo = 0;
+    bool histFound = wsrm.getTenantAccounting("sqlservr.exe", &histCpu, &histMem, &histIo);
+    TEST_ASSERT(histFound, "sqlservr.exe historical accounting record must be present");
+    TEST_ASSERT(histCpu == 120000, "Historical CPU time (100000 user + 20000 kernel) matches");
+    TEST_ASSERT(histMem == 2ULL * 1024 * 1024 * 1024, "Historical peak memory matches");
+    TEST_ASSERT(histIo == 10485760, "Historical I/O bytes match");
+
+    // Stage 13: Win32 C ABI Parity Exports
+    void* pEngine = nullptr;
+    int32_t abiInit = micant::wsrm::MicaWsrmInitialize(&pEngine);
+    TEST_ASSERT(abiInit == 1 && pEngine != nullptr, "MicaWsrmInitialize must succeed");
+
+    int32_t abiPol = micant::wsrm::MicaWsrmSetAllocationPolicy(pEngine, 1); // EqualPerUser
+    TEST_ASSERT(abiPol == 1, "MicaWsrmSetAllocationPolicy must succeed");
+
+    int32_t abiCrit = micant::wsrm::MicaWsrmCreateProcessMatchingCriteria(pEngine, "CustomAbiTest", "abi_test.exe", 35);
+    TEST_ASSERT(abiCrit == 1, "MicaWsrmCreateProcessMatchingCriteria must succeed");
+
+    int32_t abiFs = micant::wsrm::MicaWsrmApplyFairShare(pEngine, 4);
+    TEST_ASSERT(abiFs == 1, "MicaWsrmApplyFairShare must succeed");
+
+    uint64_t abiCpu = 0, abiMem = 0, abiIo = 0;
+    int32_t abiHist = micant::wsrm::MicaWsrmGetTenantAccounting(pEngine, "sqlservr.exe", &abiCpu, &abiMem, &abiIo);
+    TEST_ASSERT(abiHist == 1 && abiCpu == 120000, "MicaWsrmGetTenantAccounting must return valid metrics");
+
+    micant::wsrm::MicaWsrmShutdown(pEngine);
+
+    // Stage 14: Multithreaded High-Concurrency Stress Test (8 threads, 120 concurrent quota updates and accounting queries)
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&wsrm, &stressSuccessCount, t]() {
+            for (int i = 0; i < 15; ++i) {
+                uint32_t pid = static_cast<uint32_t>(10000 + t * 100 + i);
+                std::string pName = "worker_" + std::to_string(t) + ".exe";
+                std::string uName = "User_" + std::to_string(t);
+
+                // Register
+                bool regOk = wsrm.registerProcess(pid, pName, uName, static_cast<uint32_t>(t % 4 + 1));
+
+                // Telemetry
+                bool telOk = wsrm.updateProcessTelemetry(pid, 1000 * (i + 1), 500 * (i + 1), 65536 * (i + 1), 4096 * (i + 1), (i % 3 == 0));
+
+                // Query
+                micant::wsrm::ManagedProcessRecord rec{};
+                bool queryOk = wsrm.getProcessAccounting(pid, &rec);
+
+                // Rebalance / Fair share query
+                if (i % 5 == 0) {
+                    wsrm.applyFairShare(static_cast<uint32_t>(t + 2));
+                }
+
+                // Deregister
+                bool deregOk = wsrm.deregisterProcess(pid);
+
+                if (regOk && telOk && queryOk && deregOk) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded WSRM stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 205: Windows System Resource Manager & Fair Share Scheduling Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite204")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite205")) {
+        RUN_TEST(Test_WindowsSystemResourceManager_FairShare_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite204") {
         RUN_TEST(Test_WindowsNetworkPolicyServer_RADIUS_Subsystem);
         return g_FailedTests;
     }
@@ -46555,6 +46800,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsGroupPolicy_Engine_CSE_Subsystem);
     RUN_TEST(Test_WindowsRemoteDesktop_VirtualChannels_Subsystem);
     RUN_TEST(Test_WindowsNetworkPolicyServer_RADIUS_Subsystem);
+    RUN_TEST(Test_WindowsSystemResourceManager_FairShare_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

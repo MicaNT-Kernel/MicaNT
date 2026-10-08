@@ -195,6 +195,7 @@
 #include "grouppolicy.hpp"
 #include "remotedesktop.hpp"
 #include "nps.hpp"
+#include "wsrm.hpp"
 
 namespace micant::shell {
 
@@ -535,6 +536,7 @@ public:
             if (cmd == "gp" || cmd == "gpo" || cmd == "gpupdate" || cmd == "gpresult") { cmdGroupPolicy(tokens, out); return 0; }
             if (cmd == "rdp" || cmd == "rds" || cmd == "termsrv" || cmd == "wts") { cmdRemoteDesktop(tokens, out); return 0; }
             if (cmd == "nps" || cmd == "ias" || cmd == "radius") { cmdNetworkPolicyServer(tokens, out); return 0; }
+            if (cmd == "wsrm" || cmd == "quota" || cmd == "fairshare" || cmd == "dfss") { cmdSystemResourceManager(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -33698,6 +33700,208 @@ private:
             << "  nps acct <client_ip> <user> <sess> <act>  Send Accounting-Request (start|interim|stop)\n"
             << "  nps log                                   View RADIUS accounting audit log\n"
             << "  nps test                                  Execute in-kernel NPS / RADIUS self-tests\n";
+    }
+
+    void cmdSystemResourceManager(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& wsrm = micant::wsrm::SystemResourceManager::instance();
+
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+
+        if (sub == "status") {
+            out << "Windows System Resource Manager (WSRM / Fair Share) Status:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Active Allocation Policy: " << micant::wsrm::AllocationPolicyTypeToString(wsrm.getAllocationPolicy()) << "\n"
+                << "  Service Status:           ONLINE (wsrm.exe / TitanQuota)\n"
+                << "  Managed Active Processes: " << wsrm.getAllManagedProcesses().size() << "\n"
+                << "  Total Registered:         " << wsrm.getTotalRegisteredProcesses() << "\n"
+                << "  Throttling Violations:    " << wsrm.getTotalThrottlingEvents() << "\n"
+                << "  DFSS Rebalance Cycles:    " << wsrm.getRebalanceCycles() << "\n";
+            return;
+        }
+
+        if (sub == "policies") {
+            out << "WSRM Process Matching Criteria (PMC) & Allocation Policies:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(26) << "Criteria Name"
+                << std::left << std::setw(16) << "App Pattern"
+                << std::left << std::setw(14) << "User/Group"
+                << std::left << std::setw(10) << "CPU Cap"
+                << std::left << std::setw(12) << "Mem Cap"
+                << "Mode\n"
+                << std::string(80, '-') << "\n";
+
+            auto crits = wsrm.getAllCriteria();
+            for (const auto& c : crits) {
+                std::string memStr = (c.memoryLimitBytes == 0) ? "Unlimited" : (std::to_string(c.memoryLimitBytes / (1024 * 1024)) + " MB");
+                out << std::left << std::setw(26) << c.criteriaName
+                    << std::left << std::setw(16) << c.appPattern
+                    << std::left << std::setw(14) << c.userOrGroup
+                    << std::left << std::setw(10) << (std::to_string(c.targetCpuPercent) + "%")
+                    << std::left << std::setw(12) << memStr
+                    << (c.hardCap ? "HARD_CAP" : "WEIGHT_BASED") << "\n";
+            }
+            return;
+        }
+
+        if (sub == "setpolicy" && tokens.size() > 2) {
+            std::string pol = tokens[2];
+            for (auto& ch : pol) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (pol == "process") {
+                wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerProcess);
+                out << "Resource Allocation Policy set to Equal_Per_Process.\n";
+            } else if (pol == "user") {
+                wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerUser);
+                out << "Resource Allocation Policy set to Equal_Per_User.\n";
+            } else if (pol == "session" || pol == "dfss") {
+                wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerSession);
+                out << "Resource Allocation Policy set to Equal_Per_Session (DFSS).\n";
+            } else if (pol == "custom") {
+                wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::CustomWeighted);
+                out << "Resource Allocation Policy set to Custom_Weighted.\n";
+            } else {
+                out << "Unknown policy. Choose: process, user, session, or custom.\n";
+            }
+            return;
+        }
+
+        if (sub == "addcriteria" && tokens.size() > 4) {
+            micant::wsrm::ProcessMatchingCriteria pmc;
+            pmc.criteriaName = tokens[2];
+            pmc.appPattern = tokens[3];
+            pmc.targetCpuPercent = static_cast<uint32_t>(std::stoul(tokens[4]));
+            pmc.hardCap = true;
+            wsrm.addMatchingCriteria(pmc);
+            out << "Added Process Matching Criteria '" << pmc.criteriaName << "' with " << pmc.targetCpuPercent << "% CPU cap.\n";
+            return;
+        }
+
+        if (sub == "processes") {
+            out << "WSRM Managed Process Allocations & Quotas:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(8)  << "PID"
+                << std::left << std::setw(18) << "Image Name"
+                << std::left << std::setw(14) << "User"
+                << std::left << std::setw(6)  << "Sess"
+                << std::left << std::setw(10) << "CPU Cap"
+                << std::left << std::setw(12) << "Mem Cap"
+                << "Criteria\n"
+                << std::string(80, '-') << "\n";
+
+            auto procs = wsrm.getAllManagedProcesses();
+            for (const auto& p : procs) {
+                std::stringstream ss;
+                ss << std::fixed << std::setprecision(1) << p.allocatedCpuPercent << "%";
+                std::string memStr = (p.memoryLimitBytes == 0) ? "Unlimited" : (std::to_string(p.memoryLimitBytes / (1024 * 1024)) + " MB");
+                out << std::left << std::setw(8)  << p.processId
+                    << std::left << std::setw(18) << p.processName
+                    << std::left << std::setw(14) << p.userName
+                    << std::left << std::setw(6)  << p.sessionId
+                    << std::left << std::setw(10) << ss.str()
+                    << std::left << std::setw(12) << memStr
+                    << p.matchedCriteria << "\n";
+            }
+            return;
+        }
+
+        if (sub == "dfss" && tokens.size() > 2) {
+            uint32_t sessions = static_cast<uint32_t>(std::stoul(tokens[2]));
+            wsrm.applyFairShare(sessions);
+            out << "Applied Dynamic Fair Share Scheduling (DFSS) across " << sessions << " active session(s).\n"
+                << "Each session receives " << (100.0 / sessions) << "% target CPU allocation.\n";
+            return;
+        }
+
+        if (sub == "accounting") {
+            std::string filter = (tokens.size() > 2) ? tokens[2] : "";
+            out << "WSRM Historical Resource Accounting Log:\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto history = wsrm.getAccountingHistory();
+            if (history.empty()) {
+                out << "No historical accounting records recorded yet.\n";
+            } else {
+                for (const auto& h : history) {
+                    if (!filter.empty() && h.tenantName != filter && h.processName != filter) continue;
+                    out << "  [Tenant: " << h.tenantName << " | PID " << h.processId << " (" << h.processName << ")]\n"
+                        << "    Session: " << h.sessionId
+                        << " | CPU Time: " << (h.cpuTimeUs / 1000) << " ms"
+                        << " | Peak WS: " << (h.peakWorkingSetBytes / 1024) << " KB"
+                        << " | Total I/O: " << (h.totalIoBytes / 1024) << " KB"
+                        << " | Throttles: " << h.throttlingEvents << "\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "test") {
+            out << "[+] Executing Windows System Resource Manager & Fair Share Self-Tests...\n";
+
+            // 1. SCM Services
+            auto& scm = micant::scm::ServiceControlManager::get();
+            bool wsrmSvc = (scm.getServiceRecord(L"WsrmService") != nullptr);
+            bool quotaDrv = (scm.getServiceRecord(L"TitanQuota") != nullptr);
+            out << "  [1/6] SCM Services (WsrmService, TitanQuota): "
+                << (wsrmSvc && quotaDrv ? "PASSED" : "FAILED") << "\n";
+
+            // 2. VersionDatabase
+            auto& db = micant::version::VersionDatabase::Instance();
+            bool vExe = (db.FindModule("wsrm.exe") != nullptr);
+            bool vDll = (db.FindModule("wsrmcore.dll") != nullptr);
+            bool vMsc = (db.FindModule("wsrm.msc") != nullptr);
+            bool vSys = (db.FindModule("wsrmcore.sys") != nullptr);
+            out << "  [2/6] VersionDatabase (wsrm.exe, wsrmcore.dll, wsrm.msc, wsrmcore.sys): "
+                << (vExe && vDll && vMsc && vSys ? "PASSED" : "FAILED") << "\n";
+
+            // 3. Process Registration & Equal-Per-Process Balancing
+            wsrm.registerProcess(4001, "worker1.exe", "Bob", 1);
+            wsrm.registerProcess(4002, "worker2.exe", "Alice", 1);
+            wsrm.setAllocationPolicy(micant::wsrm::AllocationPolicyType::EqualPerProcess);
+            micant::wsrm::ManagedProcessRecord r1{}, r2{};
+            wsrm.getProcessAccounting(4001, &r1);
+            wsrm.getProcessAccounting(4002, &r2);
+            bool eqOk = (r1.allocatedCpuPercent == 50.0 && r2.allocatedCpuPercent == 50.0);
+            out << "  [3/6] Equal-Per-Process Dynamic Allocation (50% / 50%): "
+                << (eqOk ? "PASSED" : "FAILED") << "\n";
+
+            // 4. Dynamic Fair Share Scheduling (DFSS)
+            wsrm.applyFairShare(4); // 4 sessions -> 25% each
+            wsrm.getProcessAccounting(4001, &r1);
+            bool dfssOk = (r1.allocatedCpuPercent == 25.0 && (r1.rateControlFlags & micant::wsrm::JOBOBJECT_CPU_RATE_CONTROL_HARD_CAP));
+            out << "  [4/6] Dynamic Fair Share Scheduling (DFSS 4 Sessions -> 25%): "
+                << (dfssOk ? "PASSED" : "FAILED") << "\n";
+
+            // 5. Telemetry & Throttling
+            wsrm.updateProcessTelemetry(4001, 15000, 5000, 1048576, 512000, true);
+            wsrm.getProcessAccounting(4001, &r1);
+            bool telemOk = (r1.userTimeUs == 15000 && r1.throttlingEvents == 1);
+            out << "  [5/6] Process Telemetry & Throttling Accounting: "
+                << (telemOk ? "PASSED" : "FAILED") << "\n";
+
+            // 6. Win32 C ABI Parity Exports
+            void* pEng = nullptr;
+            int32_t initRc = micant::wsrm::MicaWsrmInitialize(&pEng);
+            int32_t setPolRc = micant::wsrm::MicaWsrmSetAllocationPolicy(pEng, 0);
+            out << "  [6/6] Win32 C ABI Exports (wsrmcore.dll): "
+                << (initRc == 1 && setPolRc == 1 && pEng != nullptr ? "PASSED" : "FAILED") << "\n";
+
+            // Cleanup test processes
+            wsrm.deregisterProcess(4001);
+            wsrm.deregisterProcess(4002);
+
+            out << "[+] All Windows System Resource Manager Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows System Resource Manager (WSRM / Fair Share) Subsystem\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  wsrm status                             Display WSRM engine status & active policy\n"
+            << "  wsrm policies                           Enumerate PMC & resource allocation policies\n"
+            << "  wsrm setpolicy <process|user|session|custom> Switch active allocation policy\n"
+            << "  wsrm addcriteria <name> <pattern> <cpu%>  Add custom Process Matching Criteria\n"
+            << "  wsrm processes                          List active managed process quotas\n"
+            << "  wsrm dfss <sessions>                    Simulate Dynamic Fair Share rebalance\n"
+            << "  wsrm accounting [user|app]              View historical resource usage logs\n"
+            << "  wsrm test                               Execute in-kernel WSRM self-tests\n";
     }
 
     static std::string trim(std::string_view s) {

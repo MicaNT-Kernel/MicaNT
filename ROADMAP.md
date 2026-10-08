@@ -362,7 +362,9 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 177: Network Policy Server & RADIUS (M204)       [COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 178: Windows System Resource Manager & Fair Share (M205)[PLANNED]  │
+│ Phase 178: System Resource Manager & Fair Share (M205) [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 179: Windows Deployment Services & PXE Boot (M206)      [PLANNED]  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3722,20 +3724,40 @@
 
 ---
 
-### Phase 178: Windows System Resource Manager & Fair Share Scheduling Subsystem (`wsrm.exe`, `wsrm.msc`, `TitanWSRM`, `AegisQuota`) (Milestone 205) [PLANNED]
+### Phase 178: Windows System Resource Manager & Fair Share Scheduling Subsystem (`wsrm.exe`, `wsrm.msc`, `TitanWSRM`, `AegisQuota`) (Milestone 205) [COMPLETED 100%]
 *Goal: Implement clean-room Windows System Resource Manager (WSRM) and Dynamic Fair Share CPU & Memory Scheduling subsystem, managing multi-tenant enterprise resource allocation, process matching criteria, job object resource limits, CPU rate capping, and historical accounting.*
-- [ ] **System Resource Manager Core (`include/micant/wsrm.hpp`)**:
-  - Resource Allocation Policies: Equal per process, Equal per user, Equal per session, and Custom policy definitions with CPU target percentages.
-  - Dynamic Fair Share Scheduling (DFSS): Dynamic weight adjustment for multi-session Terminal Services workloads.
-  - Job Object Enforcement: `JOBOBJECT_CPU_RATE_CONTROL_INFORMATION`, hard/soft memory limits, and working set limits.
-  - Resource Accounting & Historical Logging: CPU time, peak memory usage, I/O bytes per tenant.
+- [x] **System Resource Manager Core (`include/micant/wsrm.hpp`)**:
+  - Resource Allocation Policies: Equal per process (dynamic N-way division), Equal per user (hierarchical user-process tree balancing), Equal per session (DFSS - Dynamic Fair Share Scheduling for Terminal Services / RDS), and Custom Weighted policy definitions with CPU target percentages.
+  - Dynamic Fair Share Scheduling (DFSS): Dynamic weight adjustment for multi-session Terminal Services workloads (e.g. 2 sessions -> 50% each; 5 sessions -> 20% each; 10 sessions -> 10% each).
+  - Job Object Enforcement: `JOBOBJECT_CPU_RATE_CONTROL_INFORMATION` flags (`CPU_RATE_CONTROL_ENABLE`, `CPU_RATE_CONTROL_HARD_CAP`, `CPU_RATE_CONTROL_WEIGHT_BASED`), hard/soft memory limits, and working set bounds.
+  - Resource Accounting & Historical Logging: User time, kernel time, peak working set, I/O bytes per tenant, throttling event detection, and in-memory persistent audit log.
+- [x] **Win32 & SCM Clean-Room Export Parity**:
+  - `wsrm.exe` / `wsrmcore.dll`: `MicaWsrmInitialize`, `MicaWsrmShutdown`, `MicaWsrmSetAllocationPolicy`, `MicaWsrmCreateProcessMatchingCriteria`, `MicaWsrmApplyFairShare`, `MicaWsrmGetTenantAccounting`.
+  - VersionDatabase registration (`10.0.26100.1`) for `wsrm.exe`, `wsrmcore.dll`, `wsrm.msc`, and `wsrmcore.sys`.
+  - SCM service registration for `WsrmService` ("Windows System Resource Manager", `SERVICE_WIN32_OWN_PROCESS`) and `TitanQuota` ("Titan Kernel Resource Quota Driver", `SERVICE_KERNEL_DRIVER`).
+- [x] **Interactive Shell CLI**:
+  - `wsrm` / `quota` / `fairshare` / `dfss` (`status`, `policies`, `setpolicy`, `addcriteria`, `processes`, `dfss`, `accounting`, `test`).
+- [x] **Unit Test Suite 205 (`Test_WindowsSystemResourceManager_FairShare_Subsystem`)**:
+  - 14 comprehensive validation stages: SCM service registration (`WsrmService`, `TitanQuota`), VersionDatabase registration (`wsrm.exe`, `wsrmcore.dll`, `wsrm.msc`, `wsrmcore.sys` @ `10.0.26100.1`), default Process Matching Criteria (`SQLServer_Workload`, `IIS_Worker_Pool`, `Developer_Build_Tasks`), Equal-Per-Process dynamic allocation, Equal-Per-User multi-process grouping & allocation, Equal-Per-Session (DFSS) multi-session allocation, DFSS session scale testing (2 -> 5 -> 10 sessions), Custom Weighted policy evaluation with process matching criteria, Job Object CPU Rate Control flags, working set and memory quota bounds, real-time telemetry and CPU throttling violation tracking, process termination & historical accounting logging, Win32 C ABI exports, and 120-operation concurrent multithreaded WSRM stress test with 8 threads.
+  - Milestone 205: **205 / 205 Test Suites Passing (100%)**.
+
+---
+
+### Phase 179: Windows Deployment Services & PXE Network Boot Subsystem (`wdssvc.dll`, `wdsmgfw.efi`, `wdsclient.dll`, `TitanWDS`, `AegisPXE`) (Milestone 206) [PLANNED]
+*Goal: Implement clean-room Windows Deployment Services (WDS), Preboot Execution Environment (PXE / DHCP Option 66/67 / RFC 951 / RFC 2131), and Trivial File Transfer Protocol (TFTP / RFC 1350 / RFC 2347 / RFC 2348) network boot infrastructure, enabling bare-metal automated OS image deployment, BCD store network streaming, WIM image servicing, and unattended XML answer file generation.*
+- [ ] **WDS & PXE Subsystem Core (`include/micant/wds.hpp`)**:
+  - DHCP / BOOTP & PXE negotiation (DHCP Offer / Ack with vendor option 60 `PXEClient`, Option 66 Next Server IP, Option 67 Bootfile name `boot\x64\wdsmgfw.efi`).
+  - TFTP Network Server & Windowed Transfer Engine (UDP port 69, block size negotiation `blksize`, transfer size `tsize`, timeout option `timeout`, windowsize RFC 7440 for multi-packet ACK aggregation).
+  - WDS Image Catalog & Architecture Arbitration: x86, x64, ARM64 UEFI boot targets, boot image index inspection, install image groups.
+  - BCD (Boot Configuration Data) Network Store generator: creates dynamic in-memory network BCD with `{bootmgr}` and `{default}` ramdisk options.
+  - Unattend Engine: Automated Answer File (`unattend.xml`) generator for automated disk partitioning, domain join, and product key injection.
 - [ ] **Win32 & SCM Clean-Room Export Parity**:
-  - `wsrm.exe` / `wsrmcore.dll`: `WsrmSetResourcePolicy`, `WsrmGetProcessAccounting`, `WsrmApplyFairShare`.
-  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`WsrmService`).
+  - `wdssvc.dll`, `wdsclient.dll`, `wdsmgfw.efi`, `wdstftp.dll`: `WdsInitialize`, `WdsRegisterImage`, `WdsStartServer`, `WdsProcessPxeRequest`, `WdsTftpGetFile`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`WDSServer`, `BINLSVC`, `WdsTftp`).
 - [ ] **Interactive Shell CLI**:
-  - `wsrm` / `quota` / `fairshare` (`status`, `policies`, `apply`, `accounting`, `test`).
-- [ ] **Unit Test Suite 205 (`Test_WindowsSystemResourceManager_FairShare_Subsystem`)**:
-  - 14-stage validation suite covering policy parsing, CPU rate control, multi-session fair share balancing, accounting logs, and multithreaded quota stress testing.
+  - `wds` / `pxe` / `tftp` (`status`, `images`, `addimage`, `bootfiles`, `clients`, `test`).
+- [ ] **Unit Test Suite 206 (`Test_WindowsDeploymentServices_PXE_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, PXE DHCP option parsing, TFTP read request (RRQ) block sequencing and windowsize handling, WIM image catalog registration, multi-architecture arbitration (x64/ARM64), dynamic BCD store generation, Unattend XML serialization, Win32 C ABI exports, and concurrent multithreaded PXE client boot stress testing.
 
 
 
