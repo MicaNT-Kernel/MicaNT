@@ -367,6 +367,8 @@
 │ Phase 179: Windows Deployment Services & PXE Boot (M206)[COMPLETED 100%] │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 180: Active Directory Certificate Services (M207)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 181: Windows Enterprise DNS Server Subsystem (M208)[COMPLETED 100%] │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3782,6 +3784,29 @@
   - `certsrv` / `pki` (`status`, `ca`, `templates`, `requests`, `certs`, `submit`, `approve`, `deny`, `revoke`, `crl`, `ocsp`, `test`).
 - [x] **Unit Test Suite 207 (`Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration, VersionDatabase registration, Root CA self-signed attributes, template catalog verification, auto-approval request workflow, manual approval workflow, denial workflow, X.509 v3 extension parsing (SAN/EKU/KeyUsage/AKI/SKI), certificate chain path validation, CRL generation and revocation reasons, OCSP RFC 6960 status response verification, edge cases / negative checks, Win32 C ABI exports, and high-concurrency 8-thread multithreaded stress test.
+
+---
+
+### Phase 181: Windows Enterprise DNS Server Subsystem (`dns.exe`, `dnsapi.dll`, `dnslib.dll`, `dnscache.dll`, `dnscmd.exe`, `DNS`, `TitanDNS`, `AegisDNS`) (Milestone 208) [COMPLETED 100%]
+*Goal: Implement clean-room Windows Enterprise DNS Server Subsystem, featuring authoritative forward and reverse lookup zones, Active Directory integrated zone replication, RFC 2136 Dynamic DNS updates, Active Directory domain locator SRV records, wire-protocol packet serialization/parsing (RFC 1035 / RFC 6891 EDNS0), recursive resolution and caching engine, DNSSEC RRSET signing (RFC 4034/4035), AXFR full zone transfers, and Win32 C ABI exports.*
+- [x] **DNS Server Core Engine & Zone Architecture (`include/micant/dns_server.hpp`)**:
+  - Zone Hierarchy: Authoritative primary, secondary, stub, and forwarder zones with Active Directory integrated replication scope.
+  - Pre-seeded AD Zones: `titan.local`, `_msdcs.titan.local`, `1.168.192.in-addr.arpa`, and IPv6 reverse arpa zone.
+  - Resource Record (RR) Catalog: A, AAAA, CNAME, PTR, MX, NS, SOA, SRV (RFC 2782), TXT, DNSKEY, RRSIG, NSEC.
+  - Active Directory Service Discovery SRV records: LDAP (`_ldap._tcp`), Kerberos (`_kerberos._tcp`), KDC Password (`_kpasswd._tcp`), Global Catalog (`_gc._tcp`), PDC locator.
+  - Wire-Format Parser & Serializer: RFC 1035 binary DNS packet format with label compression pointers, header bitfields (QR, AA, TC, RD, RA, RCODE), QDCOUNT, ANCOUNT, NSCOUNT, ARCOUNT, and RFC 6891 EDNS0 OPT RR (4096-byte UDP buffers, DO flag).
+  - Dynamic DNS (RFC 2136 DDNS): Secure dynamic record registration for domain machines with prerequisite validation, atomic update sections, and SOA serial auto-increment.
+  - Recursive Resolver & Caching Engine: In-memory TTL-aware cache with positive/negative caching, cache hit/miss telemetry, and cache flushing.
+  - DNSSEC Signing Engine: Zone key management (`DNSKEY`), synthetic `RRSIG` signatures for RRsets, and `NSEC` authenticated denial of existence.
+  - Zone Transfer Engine (AXFR - RFC 5936): Full zone streaming bracketed by authoritative SOA records.
+- [x] **Win32 & SCM Parity**:
+  - SCM Service registration: `DNS` (DNS Server, Auto Start).
+  - VersionDatabase registration (`10.0.26100.1`): `dns.exe`, `dnsapi.dll`, `dnslib.dll`, `dnscache.dll`, `dnscmd.exe`.
+  - Win32 C ABI exports: `MicaDnsInitialize`, `MicaDnsCreateZone`, `MicaDnsAddRecord`, `MicaDnsQuery`, `MicaDnsDynamicUpdate`, `MicaDnsZoneTransfer`, `MicaDnsShutdown`.
+- [x] **Interactive Shell CLI**:
+  - `dns` / `dnscmd` / `nslookup` (`status`, `zones`, `addzone`, `records`, `addrecord`, `query`, `update`, `cache`, `flush`, `axfr`, `dnssec`, `test`).
+- [x] **Unit Test Suite 208 (`Test_WindowsEnterpriseDNS_Server_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, zone catalog verification (AD forward, `_msdcs`, reverse arpa), SRV locator discovery for AD DS / Kerberos, RFC 1035 wire packet parsing and answer generation, EDNS0 OPT buffer negotiation, Dynamic DNS update with SOA increment, CNAME alias resolution, reverse PTR lookup, DNSSEC DNSKEY/RRSIG/NSEC generation, in-memory resolver cache & TTL eviction, AXFR zone transfer streaming, Win32 C ABI exports, and concurrent 8-thread multithreaded stress test (120 operations).
 
 
 

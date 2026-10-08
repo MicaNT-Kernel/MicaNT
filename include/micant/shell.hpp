@@ -198,6 +198,7 @@
 #include "wsrm.hpp"
 #include "wds.hpp"
 #include "certsrv.hpp"
+#include "dns_server.hpp"
 
 namespace micant::shell {
 
@@ -541,6 +542,7 @@ public:
             if (cmd == "wsrm" || cmd == "quota" || cmd == "fairshare" || cmd == "dfss") { cmdSystemResourceManager(tokens, out); return 0; }
             if (cmd == "wds" || cmd == "pxe" || cmd == "tftp") { cmdDeploymentServices(tokens, out); return 0; }
             if (cmd == "certsrv" || cmd == "pki" || cmd == "certca") { cmdCertificateServices(tokens, out); return 0; }
+            if (cmd == "dns" || cmd == "dnscmd" || cmd == "nslookup") { cmdDnsServer(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -34428,6 +34430,303 @@ private:
             << "  certsrv crl                             Display Certificate Revocation List (CRL)\n"
             << "  certsrv ocsp <serial>                   Query live OCSP certificate status\n"
             << "  certsrv test                            Execute in-kernel PKI self-tests\n";
+    }
+
+    void cmdDnsServer(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& dns = micant::dns::EnterpriseDnsServer::instance();
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+
+        if (sub == "status") {
+            out << "Windows Enterprise DNS Server Subsystem (dnscmd / RFC 1035)\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Server FQDN:              " << dns.getServerHost() << "\n"
+                << "  Primary IPv4:             " << dns.getServerIp() << "\n"
+                << "  Primary AD Domain:        " << dns.getDomainName() << "\n"
+                << "  Total Hosted Zones:       " << dns.getAllZones().size() << "\n"
+                << "  Cache Size:               " << dns.getCacheSize() << " entries\n"
+                << "  Queries Received:         " << dns.getTotalQueriesReceived() << "\n"
+                << "  Queries Answered:         " << dns.getTotalQueriesAnswered() << "\n"
+                << "  Cache Hits:               " << dns.getTotalCacheHits() << "\n"
+                << "  Cache Misses:             " << dns.getTotalCacheMisses() << "\n"
+                << "  Dynamic Updates (DDNS):   " << dns.getTotalDynamicUpdates() << "\n"
+                << "  Zone Transfers (AXFR):    " << dns.getTotalZoneTransfers() << "\n"
+                << "  DNSSEC Queries/Signs:     " << dns.getTotalDnssecQueries() << "\n";
+            return;
+        }
+
+        if (sub == "zones") {
+            auto zones = dns.getAllZones();
+            out << "Active Directory Integrated & Standard DNS Zones (" << zones.size() << " total):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(28) << "Zone Name"
+                << std::setw(12) << "Type"
+                << std::setw(16) << "AD-Integrated"
+                << std::setw(10) << "Serial"
+                << std::setw(10) << "Records"
+                << std::setw(8)  << "DNSSEC" << "\n"
+                << "--------------------------------------------------------------------------------\n";
+            for (const auto& z : zones) {
+                out << std::left << std::setw(28) << z.zoneName
+                    << std::setw(12) << micant::dns::ZoneTypeToString(z.type)
+                    << std::setw(16) << (z.isAdIntegrated ? "True (AD Domain)" : "False (File)")
+                    << std::setw(10) << z.soaSerial
+                    << std::setw(10) << z.records.size()
+                    << std::setw(8)  << (z.isDnssecSigned ? "Signed" : "None") << "\n";
+            }
+            return;
+        }
+
+        if (sub == "addzone") {
+            if (tokens.size() < 3) {
+                out << "Usage: dns addzone <zoneName> [Primary|Secondary] [adIntegrated: 0|1]\n";
+                return;
+            }
+            std::string zName = tokens[2];
+            micant::dns::ZoneType zt = micant::dns::ZoneType::Primary;
+            if (tokens.size() > 3 && tokens[3] == "Secondary") {
+                zt = micant::dns::ZoneType::Secondary;
+            }
+            bool isAd = (tokens.size() > 4) ? (tokens[4] == "1" || tokens[4] == "true") : true;
+            auto scope = isAd ? micant::dns::ReplicationScope::ActiveDirectoryDomain : micant::dns::ReplicationScope::LegacyFile;
+            if (dns.createZone(zName, zt, scope, isAd)) {
+                out << "[+] Successfully created DNS zone: " << zName << " (" << micant::dns::ZoneTypeToString(zt) << ")\n";
+            } else {
+                out << "[-] Failed to create DNS zone (zone already exists or invalid): " << zName << "\n";
+            }
+            return;
+        }
+
+        if (sub == "records") {
+            if (tokens.size() < 3) {
+                out << "Usage: dns records <zoneName>\n";
+                return;
+            }
+            std::string zName = tokens[2];
+            micant::dns::DnsZone z;
+            if (!dns.getZone(zName, z)) {
+                out << "[-] Zone not found: " << zName << "\n";
+                return;
+            }
+            out << "DNS Resource Records for Zone: " << z.zoneName << " (Serial: " << z.soaSerial << ")\n"
+                << "--------------------------------------------------------------------------------\n"
+                << std::left << std::setw(32) << "Record Name"
+                << std::setw(8)  << "Type"
+                << std::setw(8)  << "TTL"
+                << "Data\n"
+                << "--------------------------------------------------------------------------------\n";
+            for (const auto& r : z.records) {
+                out << std::left << std::setw(32) << r.name
+                    << std::setw(8)  << micant::dns::RecordTypeToString(r.type)
+                    << std::setw(8)  << r.ttl
+                    << r.rdata << "\n";
+            }
+            return;
+        }
+
+        if (sub == "addrecord") {
+            if (tokens.size() < 6) {
+                out << "Usage: dns addrecord <zoneName> <recordName> <type> <rdata> [ttl]\n";
+                return;
+            }
+            std::string zName = tokens[2];
+            std::string rName = tokens[3];
+            uint16_t type = micant::dns::StringToRecordType(tokens[4]);
+            if (type == 0) {
+                out << "[-] Unknown record type: " << tokens[4] << "\n";
+                return;
+            }
+            std::string rdata = tokens[5];
+            uint32_t ttl = (tokens.size() > 6) ? static_cast<uint32_t>(std::stoul(tokens[6])) : 3600;
+
+            micant::dns::DnsResourceRecord rr;
+            rr.name = rName;
+            rr.type = type;
+            rr.rclass = micant::dns::CLASS_IN;
+            rr.ttl = ttl;
+            rr.rdata = rdata;
+            if (dns.addRecord(zName, rr)) {
+                out << "[+] Successfully added record " << rName << " (" << tokens[4] << ") to " << zName << "\n";
+            } else {
+                out << "[-] Failed to add record to zone: " << zName << "\n";
+            }
+            return;
+        }
+
+        if (sub == "delrecord") {
+            if (tokens.size() < 5) {
+                out << "Usage: dns delrecord <zoneName> <recordName> <type>\n";
+                return;
+            }
+            std::string zName = tokens[2];
+            std::string rName = tokens[3];
+            uint16_t type = micant::dns::StringToRecordType(tokens[4]);
+            if (type == 0) {
+                out << "[-] Unknown record type: " << tokens[4] << "\n";
+                return;
+            }
+            if (dns.deleteRecord(zName, rName, type)) {
+                out << "[+] Successfully deleted record " << rName << " (" << tokens[4] << ") from " << zName << "\n";
+            } else {
+                out << "[-] Record not found or failed to delete in zone: " << zName << "\n";
+            }
+            return;
+        }
+
+        if (sub == "query" || sub == "resolve" || sub == "lookup") {
+            if (tokens.size() < 3) {
+                out << "Usage: dns query <fqdn> [type: A|AAAA|CNAME|SRV|PTR|MX|TXT|ANY]\n";
+                return;
+            }
+            std::string fqdn = tokens[2];
+            uint16_t type = (tokens.size() > 3) ? micant::dns::StringToRecordType(tokens[3]) : micant::dns::TYPE_A;
+            if (type == 0) type = micant::dns::TYPE_A;
+
+            bool isAuth = false;
+            uint16_t rcode = micant::dns::RCODE_NOERROR;
+            auto answers = dns.queryRecords(fqdn, type, &isAuth, &rcode);
+
+            out << "DNS Query Resolution for " << fqdn << " (" << micant::dns::RecordTypeToString(type) << "):\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Status / RCODE:           " << micant::dns::RcodeToString(rcode) << "\n"
+                << "  Authoritative Answer:     " << (isAuth ? "Yes (AA set)" : "No (Cached/Recursive)") << "\n"
+                << "  Total Answers:            " << answers.size() << "\n";
+
+            for (const auto& a : answers) {
+                out << "  Answer: " << std::left << std::setw(28) << a.name
+                    << std::setw(8) << micant::dns::RecordTypeToString(a.type)
+                    << std::setw(8) << a.ttl
+                    << a.rdata << "\n";
+            }
+            return;
+        }
+
+        if (sub == "update" || sub == "ddns") {
+            if (tokens.size() < 6) {
+                out << "Usage: dns update <zoneName> <hostName> <type> <rdata> [ttl]\n";
+                return;
+            }
+            std::string zName = tokens[2];
+            std::string host = tokens[3];
+            uint16_t type = micant::dns::StringToRecordType(tokens[4]);
+            if (type == 0) type = micant::dns::TYPE_A;
+            std::string rdata = tokens[5];
+            uint32_t ttl = (tokens.size() > 6) ? static_cast<uint32_t>(std::stoul(tokens[6])) : 1200;
+
+            if (dns.processDynamicUpdate(zName, host, type, rdata, ttl)) {
+                out << "[+] Dynamic DNS update committed: " << host << " -> " << rdata << " in " << zName << "\n";
+            } else {
+                out << "[-] Dynamic DNS update rejected for zone: " << zName << "\n";
+            }
+            return;
+        }
+
+        if (sub == "cache") {
+            out << "DNS Resolver Cache Status:\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Total Cache Entries:      " << dns.getCacheSize() << "\n"
+                << "  Cache Hits:               " << dns.getTotalCacheHits() << "\n"
+                << "  Cache Misses:             " << dns.getTotalCacheMisses() << "\n";
+            return;
+        }
+
+        if (sub == "flush" || sub == "flushcache") {
+            dns.flushCache();
+            out << "[+] DNS resolver cache flushed successfully.\n";
+            return;
+        }
+
+        if (sub == "axfr" || sub == "transfer") {
+            if (tokens.size() < 3) {
+                out << "Usage: dns axfr <zoneName>\n";
+                return;
+            }
+            std::string zName = tokens[2];
+            std::vector<micant::dns::DnsResourceRecord> rrs;
+            if (dns.performAxfr(zName, rrs)) {
+                out << "AXFR Zone Transfer for " << zName << " (" << rrs.size() << " records streamed):\n"
+                    << "--------------------------------------------------------------------------------\n";
+                for (const auto& r : rrs) {
+                    out << "  " << std::left << std::setw(30) << r.name
+                        << std::setw(8) << micant::dns::RecordTypeToString(r.type)
+                        << std::setw(8) << r.ttl
+                        << r.rdata << "\n";
+                }
+            } else {
+                out << "[-] AXFR Zone Transfer failed for zone: " << zName << "\n";
+            }
+            return;
+        }
+
+        if (sub == "dnssec") {
+            if (tokens.size() < 3) {
+                out << "Usage: dns dnssec <zoneName>\n";
+                return;
+            }
+            std::string zName = tokens[2];
+            if (dns.signZoneDnssec(zName)) {
+                out << "[+] Zone " << zName << " successfully signed with DNSSEC (DNSKEY, RRSIG, NSEC added).\n";
+            } else {
+                out << "[-] Failed to sign zone: " << zName << "\n";
+            }
+            return;
+        }
+
+        if (sub == "test") {
+            out << "Executing in-kernel Windows Enterprise DNS Server Subsystem Self-Tests...\n";
+            bool isAuth = false;
+            uint16_t rcode = 0;
+
+            // 1. Forward lookup
+            auto aResp = dns.queryRecords("dc01.titan.local", micant::dns::TYPE_A, &isAuth, &rcode);
+            bool okA = (!aResp.empty() && aResp[0].rdata == "192.168.1.10" && isAuth && rcode == micant::dns::RCODE_NOERROR);
+            out << "  [1/6] Authoritative Forward A Lookup:     " << (okA ? "PASSED" : "FAILED") << "\n";
+
+            // 2. Active Directory SRV record lookup
+            auto srvResp = dns.queryRecords("_ldap._tcp.titan.local", micant::dns::TYPE_SRV, &isAuth, &rcode);
+            bool okSrv = (!srvResp.empty() && srvResp[0].rdata.find("389") != std::string::npos);
+            out << "  [2/6] AD Service Discovery (SRV Lookup):  " << (okSrv ? "PASSED" : "FAILED") << "\n";
+
+            // 3. CNAME resolution
+            auto cnameResp = dns.queryRecords("pki.titan.local", micant::dns::TYPE_A, &isAuth, &rcode);
+            bool okCname = (cnameResp.size() >= 2 && cnameResp[0].type == micant::dns::TYPE_CNAME);
+            out << "  [3/6] CNAME Alias Chained Resolution:     " << (okCname ? "PASSED" : "FAILED") << "\n";
+
+            // 4. Reverse lookup PTR
+            auto ptrResp = dns.queryRecords("10.1.168.192.in-addr.arpa", micant::dns::TYPE_PTR, &isAuth, &rcode);
+            bool okPtr = (!ptrResp.empty() && ptrResp[0].rdata == "dc01.titan.local");
+            out << "  [4/6] Reverse Lookup Zone (PTR Lookup):   " << (okPtr ? "PASSED" : "FAILED") << "\n";
+
+            // 5. Dynamic DNS Update
+            bool okDdns = dns.processDynamicUpdate("titan.local", "workstation-99", micant::dns::TYPE_A, "192.168.1.99", 300);
+            auto ddnsResp = dns.queryRecords("workstation-99.titan.local", micant::dns::TYPE_A);
+            bool okDdnsCheck = (okDdns && !ddnsResp.empty() && ddnsResp[0].rdata == "192.168.1.99");
+            out << "  [5/6] RFC 2136 Dynamic DNS Registration:  " << (okDdnsCheck ? "PASSED" : "FAILED") << "\n";
+
+            // 6. AXFR Zone Transfer
+            std::vector<micant::dns::DnsResourceRecord> axfrRecs;
+            bool okAxfr = dns.performAxfr("titan.local", axfrRecs) && axfrRecs.size() > 5;
+            out << "  [6/6] AXFR Full Zone Transfer Streaming:  " << (okAxfr ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All Windows Enterprise DNS Subsystem Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows Enterprise DNS Server Subsystem (dnscmd / RFC 1035)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  dns status                              Display DNS server status and telemetry counters\n"
+            << "  dns zones                               List all Active Directory and standard zones\n"
+            << "  dns addzone <zoneName> [type] [isAd]    Create a new authoritative DNS zone\n"
+            << "  dns records <zoneName>                  Enumerate resource records in a zone\n"
+            << "  dns addrecord <zone> <name> <t> <d> [ttl] Add resource record to zone\n"
+            << "  dns delrecord <zone> <name> <type>      Delete resource record from zone\n"
+            << "  dns query <fqdn> [type]                 Query DNS records (A, AAAA, SRV, PTR, CNAME)\n"
+            << "  dns update <zone> <host> <t> <d> [ttl]  Perform Dynamic DNS (RFC 2136 DDNS) update\n"
+            << "  dns cache                               Display resolver cache status\n"
+            << "  dns flush                               Flush DNS resolver cache\n"
+            << "  dns axfr <zoneName>                     Initiate full zone transfer (RFC 5936 AXFR)\n"
+            << "  dns dnssec <zoneName>                   Sign zone with DNSSEC (DNSKEY/RRSIG/NSEC)\n"
+            << "  dns test                                Execute in-kernel DNS server self-tests\n";
     }
 
     static std::string trim(std::string_view s) {

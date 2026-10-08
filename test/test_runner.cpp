@@ -212,6 +212,7 @@
 #include "micant/wsrm.hpp"
 #include "micant/wds.hpp"
 #include "micant/certsrv.hpp"
+#include "micant/dns_server.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -46756,8 +46757,289 @@ void Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem() {
     std::cout << "[TEST] Suite 207: Active Directory Certificate Services & Enterprise PKI Subsystem PASSED.\n";
 }
 
+void Test_WindowsEnterpriseDNS_Server_Subsystem() {
+    std::cout << "[TEST] Suite 208: Windows Enterprise DNS Server Subsystem...\n";
+
+    auto& dns = micant::dns::EnterpriseDnsServer::instance();
+    dns.initialize();
+
+    // Stage 1: SCM Registration & State
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto sDns = scm.getServiceRecord(L"DNS");
+    TEST_ASSERT(sDns != nullptr, "DNS service must be registered in SCM");
+    TEST_ASSERT(sDns->serviceName == L"DNS", "Service name must be DNS");
+    TEST_ASSERT(sDns->displayName == L"DNS Server", "Display name must match DNS Server");
+    TEST_ASSERT(sDns->startType == micant::scm::SERVICE_AUTO_START, "DNS startType must be AUTO_START");
+    TEST_ASSERT(sDns->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "DNS state must be SERVICE_RUNNING");
+    TEST_ASSERT(sDns->binaryPath == L"C:\\Windows\\System32\\dns.exe", "DNS binary path must match");
+
+    // Stage 2: VersionDatabase PE Metadata & Modules
+    auto& verDb = micant::version::VersionDatabase::Instance();
+    const auto* modDns = verDb.FindModule("dns.exe");
+    TEST_ASSERT(modDns != nullptr, "dns.exe must be registered in VersionDatabase");
+    TEST_ASSERT(modDns->stringTable.at("FileVersion") == "10.0.26100.1", "dns.exe version must be 10.0.26100.1");
+
+    const auto* modApi = verDb.FindModule("dnsapi.dll");
+    TEST_ASSERT(modApi != nullptr, "dnsapi.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modApi->stringTable.at("FileVersion") == "10.0.26100.1", "dnsapi.dll version must be 10.0.26100.1");
+
+    const auto* modLib = verDb.FindModule("dnslib.dll");
+    TEST_ASSERT(modLib != nullptr, "dnslib.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modLib->stringTable.at("FileVersion") == "10.0.26100.1", "dnslib.dll version must be 10.0.26100.1");
+
+    const auto* modCache = verDb.FindModule("dnscache.dll");
+    TEST_ASSERT(modCache != nullptr, "dnscache.dll must be registered in VersionDatabase");
+    TEST_ASSERT(modCache->stringTable.at("FileVersion") == "10.0.26100.1", "dnscache.dll version must be 10.0.26100.1");
+
+    const auto* modCmd = verDb.FindModule("dnscmd.exe");
+    TEST_ASSERT(modCmd != nullptr, "dnscmd.exe must be registered in VersionDatabase");
+    TEST_ASSERT(modCmd->stringTable.at("FileVersion") == "10.0.26100.1", "dnscmd.exe version must be 10.0.26100.1");
+
+    // Stage 3: Authoritative Zone Catalog & Configuration
+    auto zones = dns.getAllZones();
+    TEST_ASSERT(zones.size() >= 3, "Must contain at least 3 seeded default zones");
+
+    micant::dns::DnsZone zTitan, zMsdcs, zRev;
+    TEST_ASSERT(dns.getZone("titan.local", zTitan), "titan.local zone must exist");
+    TEST_ASSERT(zTitan.type == micant::dns::ZoneType::Primary, "titan.local must be Primary zone");
+    TEST_ASSERT(zTitan.isAdIntegrated == true, "titan.local must be AD integrated");
+    TEST_ASSERT(zTitan.replication == micant::dns::ReplicationScope::ActiveDirectoryDomain, "titan.local replication must be AD domain");
+    TEST_ASSERT(zTitan.soaSerial >= 100, "titan.local SOA serial must be >= 100");
+    TEST_ASSERT(zTitan.primaryNs == "dc01.titan.local", "Primary NS must be dc01.titan.local");
+
+    TEST_ASSERT(dns.getZone("_msdcs.titan.local", zMsdcs), "_msdcs.titan.local zone must exist");
+    TEST_ASSERT(zMsdcs.replication == micant::dns::ReplicationScope::ActiveDirectoryForest, "_msdcs must replicate to AD forest");
+
+    TEST_ASSERT(dns.getZone("1.168.192.in-addr.arpa", zRev), "Reverse lookup zone 1.168.192.in-addr.arpa must exist");
+
+    // Stage 4: Active Directory Domain Service Discovery SRV Records (RFC 2782)
+    bool isAuth = false;
+    uint16_t rcode = micant::dns::RCODE_NOERROR;
+
+    auto srvLdap = dns.queryRecords("_ldap._tcp.titan.local", micant::dns::TYPE_SRV, &isAuth, &rcode);
+    TEST_ASSERT(!srvLdap.empty(), "SRV _ldap._tcp.titan.local must resolve");
+    TEST_ASSERT(isAuth == true && rcode == micant::dns::RCODE_NOERROR, "LDAP SRV query must be authoritative with NOERROR");
+    TEST_ASSERT(srvLdap[0].rdata.find("389") != std::string::npos, "LDAP SRV port must be 389");
+    TEST_ASSERT(srvLdap[0].rdata.find("dc01.titan.local") != std::string::npos, "LDAP SRV target must be dc01.titan.local");
+
+    auto srvKrb = dns.queryRecords("_kerberos._tcp.titan.local", micant::dns::TYPE_SRV, &isAuth, &rcode);
+    TEST_ASSERT(!srvKrb.empty() && srvKrb[0].rdata.find("88") != std::string::npos, "Kerberos SRV port must be 88");
+
+    auto srvKpasswd = dns.queryRecords("_kpasswd._tcp.titan.local", micant::dns::TYPE_SRV, &isAuth, &rcode);
+    TEST_ASSERT(!srvKpasswd.empty() && srvKpasswd[0].rdata.find("464") != std::string::npos, "Kpasswd SRV port must be 464");
+
+    auto srvGc = dns.queryRecords("_gc._tcp.titan.local", micant::dns::TYPE_SRV, &isAuth, &rcode);
+    TEST_ASSERT(!srvGc.empty() && srvGc[0].rdata.find("3268") != std::string::npos, "Global Catalog SRV port must be 3268");
+
+    auto srvDc = dns.queryRecords("_ldap._tcp.dc._msdcs.titan.local", micant::dns::TYPE_SRV, &isAuth, &rcode);
+    TEST_ASSERT(!srvDc.empty() && srvDc[0].rdata.find("dc01.titan.local") != std::string::npos, "Forest DC locator SRV must resolve");
+
+    // Stage 5: RFC 1035 Wire Packet Query Resolution (A, AAAA, MX, TXT)
+    auto aDc01 = dns.queryRecords("dc01.titan.local", micant::dns::TYPE_A, &isAuth, &rcode);
+    TEST_ASSERT(!aDc01.empty(), "dc01.titan.local A query must return records");
+    TEST_ASSERT(aDc01[0].rdata == "192.168.1.10", "dc01 IPv4 must be 192.168.1.10");
+
+    auto aaaaDc01 = dns.queryRecords("dc01.titan.local", micant::dns::TYPE_AAAA, &isAuth, &rcode);
+    TEST_ASSERT(!aaaaDc01.empty(), "dc01.titan.local AAAA query must return records");
+    TEST_ASSERT(aaaaDc01[0].rdata == "2001:db8::10", "dc01 IPv6 must be 2001:db8::10");
+
+    auto mxRec = dns.queryRecords("titan.local", micant::dns::TYPE_MX, &isAuth, &rcode);
+    TEST_ASSERT(!mxRec.empty(), "titan.local MX query must return records");
+    TEST_ASSERT(mxRec[0].rdata.find("mail.titan.local") != std::string::npos, "MX target must be mail.titan.local");
+
+    auto txtRec = dns.queryRecords("titan.local", micant::dns::TYPE_TXT, &isAuth, &rcode);
+    TEST_ASSERT(!txtRec.empty(), "titan.local TXT query must return records");
+    TEST_ASSERT(txtRec[0].rdata.find("v=spf1") != std::string::npos, "TXT record must contain SPF string");
+
+    // Stage 6: CNAME Alias Resolution & Chained Canonical Target Lookup
+    auto cnamePki = dns.queryRecords("pki.titan.local", micant::dns::TYPE_A, &isAuth, &rcode);
+    TEST_ASSERT(cnamePki.size() >= 2, "CNAME resolution for pki.titan.local must return CNAME and target A record");
+    TEST_ASSERT(cnamePki[0].type == micant::dns::TYPE_CNAME, "First record must be CNAME");
+    TEST_ASSERT(cnamePki[0].rdata == "titan-ca.titan.local", "CNAME target must be titan-ca.titan.local");
+    TEST_ASSERT(cnamePki[1].type == micant::dns::TYPE_A && cnamePki[1].rdata == "192.168.1.60", "Target A record must be 192.168.1.60");
+
+    auto cnamePxe = dns.queryRecords("pxe.titan.local", micant::dns::TYPE_A, &isAuth, &rcode);
+    TEST_ASSERT(cnamePxe.size() >= 2 && cnamePxe[0].type == micant::dns::TYPE_CNAME, "CNAME resolution for pxe.titan.local must succeed");
+    TEST_ASSERT(cnamePxe[1].rdata == "192.168.1.50", "Target A record for WDS must be 192.168.1.50");
+
+    // Stage 7: Reverse Lookup Zone (in-addr.arpa) PTR Record Resolution
+    auto ptrDc01 = dns.queryRecords("10.1.168.192.in-addr.arpa", micant::dns::TYPE_PTR, &isAuth, &rcode);
+    TEST_ASSERT(!ptrDc01.empty(), "PTR for 192.168.1.10 must resolve");
+    TEST_ASSERT(ptrDc01[0].rdata == "dc01.titan.local", "PTR target must be dc01.titan.local");
+
+    auto ptrCa = dns.queryRecords("60.1.168.192.in-addr.arpa", micant::dns::TYPE_PTR, &isAuth, &rcode);
+    TEST_ASSERT(!ptrCa.empty() && ptrCa[0].rdata == "titan-ca.titan.local", "PTR target must be titan-ca.titan.local");
+
+    // Stage 8: RFC 6891 EDNS0 OPT RR Handling & Buffer Size Negotiation
+    std::vector<uint8_t> ednsQuery;
+    micant::dns::DnsHeaderWire ednsHdr{};
+    ednsHdr.id = 0x1234;
+    ednsHdr.flags = 0x0100; // RD = 1
+    ednsHdr.qdcount = 0x0100; // 1 Question
+    ednsHdr.arcount = 0x0100; // 1 Additional (OPT)
+    ednsQuery.resize(sizeof(ednsHdr));
+    std::memcpy(ednsQuery.data(), &ednsHdr, sizeof(ednsHdr));
+
+    // Question: dc01.titan.local IN A
+    const char* qLabels[] = { "dc01", "titan", "local" };
+    for (const char* lbl : qLabels) {
+        size_t len = std::strlen(lbl);
+        ednsQuery.push_back(static_cast<uint8_t>(len));
+        ednsQuery.insert(ednsQuery.end(), lbl, lbl + len);
+    }
+    ednsQuery.push_back(0x00); // Root terminator
+    ednsQuery.push_back(0x00); ednsQuery.push_back(micant::dns::TYPE_A);
+    ednsQuery.push_back(0x00); ednsQuery.push_back(micant::dns::CLASS_IN);
+
+    // Additional: EDNS0 OPT RR (Type 41, Payload 4096)
+    ednsQuery.push_back(0x00); // Root Name
+    ednsQuery.push_back(0x00); ednsQuery.push_back(micant::dns::TYPE_OPT);
+    ednsQuery.push_back(0x10); ednsQuery.push_back(0x00); // 4096 bytes buffer size (0x1000)
+    ednsQuery.push_back(0x00); // Extended RCODE
+    ednsQuery.push_back(0x00); // EDNS Version 0
+    ednsQuery.push_back(0x80); ednsQuery.push_back(0x00); // Flags: DO (DNSSEC OK)
+    ednsQuery.push_back(0x00); ednsQuery.push_back(0x00); // RDLEN = 0
+
+    std::vector<uint8_t> ednsResp;
+    TEST_ASSERT(dns.processWireQuery(ednsQuery.data(), ednsQuery.size(), ednsResp), "Wire query with EDNS0 OPT must succeed");
+    TEST_ASSERT(ednsResp.size() >= sizeof(micant::dns::DnsHeaderWire), "Wire response must be valid DNS packet");
+    auto* outHdr = reinterpret_cast<const micant::dns::DnsHeaderWire*>(ednsResp.data());
+    uint16_t respArcount = ((outHdr->arcount >> 8) & 0xFF) | ((outHdr->arcount << 8) & 0xFF00);
+    TEST_ASSERT(respArcount == 1, "EDNS0 response must include 1 additional record (OPT RR)");
+
+    // Stage 9: RFC 2136 Dynamic DNS (DDNS) Updates & SOA Serial Auto-Increment
+    micant::dns::DnsZone zPre;
+    dns.getZone("titan.local", zPre);
+    uint32_t serialPre = zPre.soaSerial;
+
+    bool ddnsOk = dns.processDynamicUpdate("titan.local", "sqlcluster-01", micant::dns::TYPE_A, "192.168.1.180", 300);
+    TEST_ASSERT(ddnsOk == true, "processDynamicUpdate must succeed");
+
+    micant::dns::DnsZone zPost;
+    dns.getZone("titan.local", zPost);
+    TEST_ASSERT(zPost.soaSerial == serialPre + 1, "SOA serial must auto-increment by 1 upon DDNS update");
+
+    auto ddnsQuery = dns.queryRecords("sqlcluster-01.titan.local", micant::dns::TYPE_A, &isAuth, &rcode);
+    TEST_ASSERT(!ddnsQuery.empty() && ddnsQuery[0].rdata == "192.168.1.180", "Dynamically registered host must resolve immediately");
+
+    // Stage 10: In-Memory Resolver Cache, Positive Caching & Cache Flush
+    dns.flushCache();
+    TEST_ASSERT(dns.getCacheSize() == 0, "Cache must be empty after flushCache");
+
+    uint64_t hitsPre = dns.getTotalCacheHits();
+    uint64_t missesPre = dns.getTotalCacheMisses();
+
+    dns.queryRecords("dc01.titan.local", micant::dns::TYPE_A);
+    TEST_ASSERT(dns.getTotalCacheMisses() > missesPre, "Initial query must be a cache miss");
+
+    dns.queryRecords("dc01.titan.local", micant::dns::TYPE_A);
+    TEST_ASSERT(dns.getTotalCacheHits() > hitsPre, "Subsequent query must be a cache hit");
+    TEST_ASSERT(dns.getCacheSize() > 0, "Cache size must be greater than zero");
+
+    dns.flushCache();
+    TEST_ASSERT(dns.getCacheSize() == 0, "Cache size must be 0 after flush");
+
+    // Stage 11: Negative Caching (NXDOMAIN Caching & Fast Denial)
+    auto nxQuery1 = dns.queryRecords("nonexistent-node.titan.local", micant::dns::TYPE_A, &isAuth, &rcode);
+    TEST_ASSERT(nxQuery1.empty() && rcode == micant::dns::RCODE_NXDOMAIN, "Non-existent host query must return NXDOMAIN");
+
+    uint64_t hitsPreNeg = dns.getTotalCacheHits();
+    auto nxQuery2 = dns.queryRecords("nonexistent-node.titan.local", micant::dns::TYPE_A, &isAuth, &rcode);
+    TEST_ASSERT(nxQuery2.empty() && rcode == micant::dns::RCODE_NXDOMAIN, "Negative cache query must return NXDOMAIN");
+    TEST_ASSERT(dns.getTotalCacheHits() > hitsPreNeg, "Repeated non-existent query must be answered as negative cache hit");
+
+    // Stage 12: DNSSEC Zone Signing Engine (RFC 4034/4035: DNSKEY, RRSIG, NSEC)
+    bool signOk = dns.signZoneDnssec("titan.local");
+    TEST_ASSERT(signOk == true, "signZoneDnssec must succeed");
+
+    micant::dns::DnsZone zSigned;
+    dns.getZone("titan.local", zSigned);
+    TEST_ASSERT(zSigned.isDnssecSigned == true, "Zone must be marked as DNSSEC signed");
+
+    auto keys = dns.queryRecords("titan.local", micant::dns::TYPE_DNSKEY);
+    TEST_ASSERT(keys.size() >= 2, "Signed zone must contain ZSK and KSK DNSKEY records");
+
+    auto sigs = dns.queryRecords("titan.local", micant::dns::TYPE_RRSIG);
+    TEST_ASSERT(!sigs.empty(), "Signed zone must contain RRSIG record");
+
+    auto nsec = dns.queryRecords("titan.local", micant::dns::TYPE_NSEC);
+    TEST_ASSERT(!nsec.empty(), "Signed zone must contain NSEC record");
+
+    // Stage 13: AXFR Full Zone Transfer Streaming (RFC 5936)
+    std::vector<micant::dns::DnsResourceRecord> axfrRecords;
+    bool axfrOk = dns.performAxfr("titan.local", axfrRecords);
+    TEST_ASSERT(axfrOk == true, "performAxfr must succeed");
+    TEST_ASSERT(axfrRecords.size() >= 10, "AXFR must stream all zone resource records");
+    TEST_ASSERT(axfrRecords.front().type == micant::dns::TYPE_SOA, "AXFR stream must open with SOA record");
+    TEST_ASSERT(axfrRecords.back().type == micant::dns::TYPE_SOA, "AXFR stream must terminate with SOA record");
+
+    // Stage 14: Clean-Room Win32 C ABI Exports
+    void* pEngine = nullptr;
+    int32_t initRes = micant::dns::MicaDnsInitialize(&pEngine);
+    TEST_ASSERT(initRes == 1 && pEngine != nullptr, "MicaDnsInitialize must succeed");
+
+    int32_t crzRes = micant::dns::MicaDnsCreateZone(pEngine, "branch01.titan.local", 0, 1);
+    TEST_ASSERT(crzRes == 1, "MicaDnsCreateZone must succeed");
+
+    int32_t addRes = micant::dns::MicaDnsAddRecord(pEngine, "branch01.titan.local", "router.branch01.titan.local", micant::dns::TYPE_A, "10.200.1.1", 300);
+    TEST_ASSERT(addRes == 1, "MicaDnsAddRecord must succeed");
+
+    uint8_t pktOut[1024]{};
+    uint32_t cbPkt = 0;
+    int32_t qRes = micant::dns::MicaDnsQuery(pEngine, "router.branch01.titan.local", micant::dns::TYPE_A, pktOut, sizeof(pktOut), &cbPkt);
+    TEST_ASSERT(qRes == 1 && cbPkt > 0, "MicaDnsQuery must succeed via C ABI");
+
+    int32_t updRes = micant::dns::MicaDnsDynamicUpdate(pEngine, "branch01.titan.local", "switch01", micant::dns::TYPE_A, "10.200.1.2", 300);
+    TEST_ASSERT(updRes == 1, "MicaDnsDynamicUpdate must succeed via C ABI");
+
+    uint32_t axfrTotal = 0;
+    int32_t xfrRes = micant::dns::MicaDnsZoneTransfer(pEngine, "branch01.titan.local", &axfrTotal);
+    TEST_ASSERT(xfrRes == 1 && axfrTotal >= 4, "MicaDnsZoneTransfer must succeed via C ABI");
+
+    int32_t shutRes = micant::dns::MicaDnsShutdown(pEngine);
+    TEST_ASSERT(shutRes == 1, "MicaDnsShutdown must succeed");
+
+    // Stage 15: Multithreaded High-Throughput Concurrent DNS Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&dns, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                std::string host = "node-t" + std::to_string(t) + "-o" + std::to_string(op);
+                std::string ip = "192.168.100." + std::to_string(t * 20 + op + 1);
+
+                bool upOk = dns.processDynamicUpdate("titan.local", host, micant::dns::TYPE_A, ip, 300);
+
+                bool innerAuth = false;
+                uint16_t innerRcode = micant::dns::RCODE_NOERROR;
+                auto qResp = dns.queryRecords(host + ".titan.local", micant::dns::TYPE_A, &innerAuth, &innerRcode);
+
+                auto srvResp = dns.queryRecords("_ldap._tcp.titan.local", micant::dns::TYPE_SRV);
+
+                if (upOk && !qResp.empty() && qResp[0].rdata == ip && !srvResp.empty()) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded DNS stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 208: Windows Enterprise DNS Server Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite207")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite208")) {
+        RUN_TEST(Test_WindowsEnterpriseDNS_Server_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite207") {
         RUN_TEST(Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem);
         return g_FailedTests;
     }
@@ -47378,6 +47660,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsSystemResourceManager_FairShare_Subsystem);
     RUN_TEST(Test_WindowsDeploymentServices_PXE_Subsystem);
     RUN_TEST(Test_ActiveDirectoryCertificateServices_ADCS_PKI_Subsystem);
+    RUN_TEST(Test_WindowsEnterpriseDNS_Server_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
