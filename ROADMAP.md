@@ -328,7 +328,17 @@
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 160: Windows Hardware Protected Media Path (PMP/HDCP 2.3)[COMPLETED 100%]│
 ├────────────────────────────────────────────────────────────────────────┤
-│ Phase 161: Hyper-V Virtual Machine Bus (VMBus / vmbus.sys)    [PLANNED]        │
+│ Phase 161: Hyper-V Virtual Machine Bus (VMBus / vmbus.sys)    [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 162: Windows Virtual PCI & SR-IOV / DDA (vpci.sys)      [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 163: Windows Virtual Secure Mode & HVCI (vsm.sys)        [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 164: Windows Kernel Hotpatching (hotpatch.sys / KLP)     [COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 165: Windows Hyper-V Hypercall & Nested Virt (winhvr.sys)[COMPLETED 100%] │
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 166: Windows DirectStorage & NVMe BypassIO (bypassio.sys)[PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3449,21 +3459,39 @@
 
 ---
 
-### Phase 165: Windows Hyper-V Hypercall & Nested Virtualization Subsystem (`hvix64.sys`, `winhvr.sys`, `TitanHypervisor`, `AegisNestedVM`) (Milestone 192) [PLANNED]
+### Phase 165: Windows Hyper-V Hypercall & Nested Virtualization Subsystem (`hvix64.sys`, `winhvr.sys`, `TitanHypervisor`, `AegisNestedVM`) (Milestone 192) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Hyper-V Hypercall interface and Nested Virtualization Subsystem (`hvix64.sys`, `winhvr.sys`), Hypercall code page mapping, enlightened VMCS (EnlightenedVmcs) shadowing, L1/L2 guest VM-Exit routing, synthetic MSRs, partition and virtual processor lifecycle management, and nested virtualization hardware acceleration (Intel VT-x / AMD-V).*
-- [ ] **Hyper-V Hypercall & Nested Virtualization Core Architecture (`include/micant/hyperv.hpp`)**:
+- [x] **Hyper-V Hypercall & Nested Virtualization Core Architecture (`include/micant/hyperv.hpp`)**:
   - Hypercall Dispatch Engine: Hypercall code page configuration via synthetic MSR (`HV_X64_MSR_HYPERCALL`), hypercall input/output parameter buffers, fast hypercalls (RCX/RDX register convention).
   - Nested Virtualization (L0 / L1 / L2): L1 hypervisor support hosting nested L2 guest virtual machines, VMCS/VMCB shadowing and nesting state synchronization.
   - Enlightened VMCS (eVMCS): Microsoft Enlightened VMCS protocol reducing VM-read/VM-write exits through shared memory structures between hypervisor and guest.
   - Virtual Processor Assist Pages (VPAP): Per-VP enlightened communication page, APIC assist page, and synthetic interrupt controller (SynIC) routing.
   - Synthetic Timers & Clock Enlightenment: Reference TSC page, invariant time enlightenment (`HV_X64_MSR_REFERENCE_TSC`, `HV_X64_MSR_TIME_REF_COUNT`).
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `hvix64.sys` / `winhvr.sys`: `HvrInitializeSubsystem`, `HvrCreateGuestPartition`, `HvrConfigureNestedVmcs`, `HvrInjectVmExit`, `HvrQueryEnlightenments`, `HvrMapHypercallPage`, `HvrGetVirtualProcessorState`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`HypervService`, `svchost.exe -k LocalSystemNetworkRestricted`).
-- [ ] **Interactive Shell CLI**:
+- [x] **Interactive Shell CLI**:
   - `hyperv status`, `hyperv partitions`, `hyperv nested`, `hyperv hypercalls`, `hyperv evmcs`, `hyperv test`.
-- [ ] **Unit Test Suite 192 (`Test_WindowsHyperV_NestedVirtualization_Subsystem`)**:
+- [x] **Unit Test Suite 192 (`Test_WindowsHyperV_NestedVirtualization_Subsystem`)**:
   - 12 comprehensive validation stages verifying Hyper-V hypercall subsystem initialization, hypercall code page activation, fast hypercall invocation, partition lifecycle, virtual processor register management, nested VMCS shadowing, enlightened VMCS synchronization, VM-Exit dispatch and injection, synthetic reference TSC timekeeping, Win32 C ABI exports, and multi-threaded nested VM partition concurrency.
+  - Milestone 192: **192 / 192 Test Suites Passing (100%)**.
+
+---
+
+### Phase 166: Windows DirectStorage & NVMe BypassIO Subsystem (`bypassio.sys`, `storqosflt.sys`, `TitanStorageIO`, `AegisBypassIO`) (Milestone 193) [PLANNED]
+*Goal: Implement clean-room Windows DirectStorage and NVMe BypassIO architecture (`bypassio.sys`, `storqosflt.sys`), providing low-overhead file system filter bypass (`FSCTL_MANAGE_BYPASS_IO`), direct hardware submission queues, GPU asset streaming acceleration, storage QoS scheduling, and zero-copy NVMe transfers.*
+- [ ] **DirectStorage & BypassIO Core Architecture (`include/micant/bypassio.hpp`)**:
+  - BypassIO Execution Engine: File-level bypass status tracking (`BypassIoEnabled`, `BypassIoSuspended`, `BypassIoDisabled`), filter driver stack evaluation, and driver bypass validation.
+  - Hardware Direct Submission: Direct DMA command ring mapping from NVMe controller to GPU / Ring 3 memory spaces, bypassing cache manager and I/O manager bottlenecks.
+  - Storage QoS Filter (`storqosflt.sys`): Bandwidth reservation, IOPS rate limiting, and priority scheduling for gaming, real-time analytics, and container storage.
+  - Decompression & Telemetry Offload: Direct hardware decompression pipeline integration (GDeflate) and storage telemetry aggregation.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `bypassio.sys` / `storqosflt.sys`: `BypassIoInitializeSubsystem`, `BypassIoEnableForFile`, `BypassIoQueryFileState`, `BypassIoIssueReadAsync`, `BypassIoConfigureQosPolicy`, `BypassIoDisableForFile`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`BypassIoService`, `storqosflt.sys`).
+- [ ] **Interactive Shell CLI**:
+  - `bypassio status`, `bypassio files`, `bypassio qos`, `bypassio benchmark`, `bypassio test`.
+- [ ] **Unit Test Suite 193 (`Test_WindowsDirectStorage_BypassIO_Subsystem`)**:
+  - 12 comprehensive validation stages verifying BypassIO subsystem initialization, volume bypass capability query, file handle registration, filter driver stack evaluation, IOCTL/FSCTL dispatch, direct DMA queue submission, QoS rate limiting, hardware GDeflate decompression, Win32 C ABI exports, and high-throughput concurrent I/O stress testing.
 
 
 

@@ -196,6 +196,7 @@
 #include "micant/vpci.hpp"
 #include "micant/vsm.hpp"
 #include "micant/hotpatch.hpp"
+#include "micant/hyperv.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -43282,8 +43283,140 @@ void Test_WindowsKernelHotpatching_LiveUpdate_Subsystem() {
     std::cout << "[TEST] Suite 191: Windows Kernel Hotpatching (KLP / TitanHotpatch) & Live Update Subsystem PASSED.\n";
 }
 
+void Test_WindowsHyperV_NestedVirtualization_Subsystem() {
+    std::cout << "[TEST] Running Suite 192: Windows Hyper-V Hypercall & Nested Virtualization Subsystem...\n";
+
+    // 1. SCM Service & VersionDatabase Registration
+    micant::hyperv::RegisterHypervSubsystem();
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    auto modHv = vdb.FindModule("hvix64.sys");
+    TEST_ASSERT(modHv != nullptr, "hvix64.sys must be registered in VersionDatabase");
+    auto modHvr = vdb.FindModule("winhvr.sys");
+    TEST_ASSERT(modHvr != nullptr, "winhvr.sys must be registered in VersionDatabase");
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto rec = scm.getServiceRecord(L"HypervService");
+    TEST_ASSERT(rec != nullptr, "HypervService must be registered in ServiceControlManager");
+    TEST_ASSERT(rec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "HypervService must be running");
+
+    // 2. Subsystem Initialization and Hypercall Code Page GPA alignment
+    auto& sys = micant::hyperv::HypervSubsystem::get();
+    TEST_ASSERT(sys.isInitialized(), "HypervSubsystem must be initialized");
+    TEST_ASSERT(sys.isHypercallPageEnabled(), "Hypercall page must be enabled");
+    TEST_ASSERT((sys.getHypercallPageGpa() & 0xFFF) == 0, "Hypercall page GPA must be 4KB page aligned");
+
+    // 3. Reference TSC page sequence and invariant scale validation
+    const auto& refTsc = sys.getReferenceTsc();
+    TEST_ASSERT(refTsc.tscSequence >= 1, "Reference TSC sequence must be >= 1");
+    TEST_ASSERT(refTsc.tscScale == 0x100000000ULL, "Reference TSC scale must be 1.0 (0x100000000)");
+
+    // 4. Fast & Standard Hypercall Execution with Status Verification
+    uint64_t outVal = 0;
+    uint16_t statusTrans = sys.invokeHypercall(micant::hyperv::HvCallTranslateVirtualAddress, true, 0x140001000ULL, &outVal);
+    TEST_ASSERT(statusTrans == micant::hyperv::HV_STATUS_SUCCESS, "HvCallTranslateVirtualAddress fast hypercall must succeed");
+    TEST_ASSERT(outVal == 0x140002000ULL, "Translated physical address should match expected GPA page offset");
+
+    uint16_t statusMsg = sys.invokeHypercall(micant::hyperv::HvCallPostMessage, false, 0x5000);
+    TEST_ASSERT(statusMsg == micant::hyperv::HV_STATUS_SUCCESS, "HvCallPostMessage buffered hypercall must succeed");
+
+    uint16_t statusBad = sys.invokeHypercall(0xFFFF, false, 0);
+    TEST_ASSERT(statusBad == micant::hyperv::HV_STATUS_INVALID_HYPERCALL_CODE, "Unknown hypercall code must return HV_STATUS_INVALID_HYPERCALL_CODE");
+
+    // 5. Root Partition and Guest Partition Discovery & Management
+    TEST_ASSERT(sys.getPartitionCount() >= 2, "HypervSubsystem must have at least 2 partitions (Root and WSL2)");
+    auto rootPart = sys.getPartition(0);
+    TEST_ASSERT(rootPart != nullptr, "Root partition (ID 0) must exist");
+    TEST_ASSERT(rootPart->getName() == "MicaNT-Root-Partition", "Root partition name must match");
+    TEST_ASSERT(rootPart->isNestedEnabled(), "Root partition should have nested virtualization enabled");
+
+    auto customPart = sys.createPartition(100, "Titan-Isolated-VM", 4096);
+    TEST_ASSERT(customPart != nullptr, "Creating new guest partition 100 must succeed");
+    TEST_ASSERT(sys.getPartition(100) == customPart, "Querying guest partition 100 must return created instance");
+    TEST_ASSERT(sys.createPartition(100, "Duplicate", 1024) == nullptr, "Creating duplicate partition ID must return nullptr");
+
+    // 6. Virtual Processor & VPAP (Virtual Processor Assist Page) Allocation
+    auto vp0 = customPart->createVirtualProcessor(0);
+    TEST_ASSERT(vp0 != nullptr, "VirtualProcessor 0 must be created for partition 100");
+    TEST_ASSERT(vp0->getVpIndex() == 0, "VP index must be 0");
+    TEST_ASSERT(vp0->getPartitionId() == 100, "VP partition ID must be 100");
+    const auto& vpap = vp0->getVpap();
+    TEST_ASSERT((vpap.enlightenedVmcsGpa & 0xFFF) == 0, "VPAP enlightenedVmcsGpa must be 4KB page aligned");
+    TEST_ASSERT(vpap.nestedEnlightenmentsControl == 1, "VPAP nestedEnlightenmentsControl must be active");
+
+    // 7. Enlightened VMCS (eVMCS) Revision ID & Architectural Structure Validation
+    auto& evmcs = vp0->getEnlightenedVmcs();
+    TEST_ASSERT(evmcs.revisionId == micant::hyperv::HV_VMX_ENLIGHTENED_VMCS_VERSION, "eVMCS revision must match HV_VMX_ENLIGHTENED_VMCS_VERSION");
+    TEST_ASSERT(evmcs.guestCr0 == 0x80050033, "Default guest CR0 must match protected mode paging configuration");
+    TEST_ASSERT(evmcs.hostCr0 == 0x80050033, "Default host CR0 must match protected mode paging configuration");
+
+    // 8. Nested Virtualization Context Transition (L1 Host -> L2 Guest Level 2)
+    customPart->enableNestedVirtualization(true);
+    TEST_ASSERT(customPart->isNestedEnabled(), "Partition 100 nested virtualization must be enabled");
+    TEST_ASSERT(vp0->getExecutionLevel() == 1, "Initial execution level must be L1");
+    TEST_ASSERT(!vp0->isNestedActive(), "Initial nested state must be false");
+
+    vp0->setExecutionLevel(2);
+    TEST_ASSERT(vp0->getExecutionLevel() == 2, "Execution level must transition to L2");
+    TEST_ASSERT(vp0->isNestedActive(), "isNestedActive must return true in L2 level");
+
+    // 9. L2-to-L1 Reflective Nested VM-Exit Interception & Injection
+    uint64_t initialNestedExits = vp0->getNestedVmExits();
+    bool exitInjected = sys.injectNestedVmExit(100, 0, micant::hyperv::NestedExitReason::Cpuid, 0x1234);
+    TEST_ASSERT(exitInjected, "Injecting nested VM-exit for Partition 100 VP 0 must succeed");
+    TEST_ASSERT(vp0->getExecutionLevel() == 1, "VP must reflect back to L1 execution context following nested VM-exit");
+    TEST_ASSERT(vp0->getNestedVmExits() == initialNestedExits + 1, "Nested VM-exit count must increment by 1");
+    TEST_ASSERT(vp0->getEnlightenedVmcs().exitReason == static_cast<uint32_t>(micant::hyperv::NestedExitReason::Cpuid), "eVMCS exitReason must be CPUID");
+    TEST_ASSERT(vp0->getEnlightenedVmcs().exitQualification == 0x1234, "eVMCS exitQualification must match injected value");
+
+    // 10. eVMCS Clean Fields Mask Clearing and Dirty Sync
+    vp0->getEnlightenedVmcs().cleanFieldsMask = 0xFFFFFFFF;
+    bool syncClean = sys.syncEnlightenedVmcs(100, 0, micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_PROC | micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_GUEST_GRP1);
+    TEST_ASSERT(syncClean, "syncEnlightenedVmcs must succeed");
+    TEST_ASSERT((vp0->getEnlightenedVmcs().cleanFieldsMask & micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_PROC) == 0, "CONTROL_PROC clean bit must be cleared");
+    TEST_ASSERT((vp0->getEnlightenedVmcs().cleanFieldsMask & micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_GUEST_GRP1) == 0, "GUEST_GRP1 clean bit must be cleared");
+    TEST_ASSERT((vp0->getEnlightenedVmcs().cleanFieldsMask & micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_HOST_GRP1) != 0, "HOST_GRP1 clean bit must remain set");
+
+    // 11. Win32 / NT C ABI Parity Exports
+    TEST_ASSERT(micant::hyperv::HvrInitializeSubsystem() == micant::STATUS_SUCCESS, "HvrInitializeSubsystem must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::hyperv::HvrCreateGuestPartition(200, "C-ABI-Partition", 4096) == micant::STATUS_SUCCESS, "HvrCreateGuestPartition must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::hyperv::HvrCreateGuestPartition(200, nullptr, 4096) == micant::STATUS_INVALID_PARAMETER, "Null partition name must return STATUS_INVALID_PARAMETER");
+
+    uint64_t abiOut = 0;
+    TEST_ASSERT(micant::hyperv::HvrInvokeHypercall(micant::hyperv::HvCallTranslateVirtualAddress, 1, 0x2000000ULL, &abiOut) == micant::STATUS_SUCCESS, "HvrInvokeHypercall fast call must return STATUS_SUCCESS");
+
+    uint32_t hasNested = 0, hasEvmcs = 0, hasRefTsc = 0;
+    TEST_ASSERT(micant::hyperv::HvrQueryEnlightenments(&hasNested, &hasEvmcs, &hasRefTsc) == micant::STATUS_SUCCESS, "HvrQueryEnlightenments must succeed");
+    TEST_ASSERT(hasNested == 1 && hasEvmcs == 1 && hasRefTsc == 1, "Enlightenments query must report 1 for nested, evmcs, and refTsc");
+    TEST_ASSERT(micant::hyperv::HvrQueryEnlightenments(nullptr, &hasEvmcs, &hasRefTsc) == micant::STATUS_INVALID_PARAMETER, "Null pointer to HvrQueryEnlightenments must return STATUS_INVALID_PARAMETER");
+
+    // 12. Multithreaded Concurrency & Hypercall Stress Test
+    std::atomic<int> hypervStressCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(10);
+    for (int t = 0; t < 10; ++t) {
+        stressThreads.emplace_back([&, t]() {
+            for (int i = 0; i < 10; ++i) {
+                uint64_t outT = 0;
+                uint16_t st = sys.invokeHypercall(micant::hyperv::HvCallTranslateVirtualAddress, true, 0x1000000ULL + (t * 0x1000) + i, &outT);
+                if (st == micant::hyperv::HV_STATUS_SUCCESS) {
+                    hypervStressCount.fetch_add(1);
+                }
+            }
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(hypervStressCount.load() == 100, "100 concurrent Hyper-V hypercall invocations must succeed without race conditions");
+
+    std::cout << "[TEST] Suite 192: Windows Hyper-V Hypercall & Nested Virtualization Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite191")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite192")) {
+        RUN_TEST(Test_WindowsHyperV_NestedVirtualization_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite191") {
         RUN_TEST(Test_WindowsKernelHotpatching_LiveUpdate_Subsystem);
         return g_FailedTests;
     }
@@ -43824,6 +43957,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsVirtualPCI_SRIOV_DDA_Subsystem);
     RUN_TEST(Test_WindowsVirtualSecureMode_VBS_HVCI_Subsystem);
     RUN_TEST(Test_WindowsKernelHotpatching_LiveUpdate_Subsystem);
+    RUN_TEST(Test_WindowsHyperV_NestedVirtualization_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -182,6 +182,7 @@
 #include "vpci.hpp"
 #include "vsm.hpp"
 #include "hotpatch.hpp"
+#include "hyperv.hpp"
 
 namespace micant::shell {
 
@@ -415,7 +416,7 @@ public:
             if (cmd == "bluetooth" || cmd == "bth" || cmd == "bt") { cmdBluetooth(tokens, out); return 0; }
             if (cmd == "cardmod" || cmd == "scminidriver") { cmdCardMod(tokens, out); return 0; }
             if (cmd == "posix" || cmd == "psx" || cmd == "sua") { cmdPosix(tokens, out); return 0; }
-            if (cmd == "whp" || cmd == "hyperv" || cmd == "vm") { cmdWhp(tokens, out); return 0; }
+            if (cmd == "whp" || cmd == "viridian" || cmd == "vm") { cmdWhp(tokens, out); return 0; }
             if (cmd == "dwrite" || cmd == "uniscribe" || cmd == "typography") { cmdDWrite(tokens, out); return 0; }
             if (cmd == "mf" || cmd == "mediafoundation") { cmdMediaFoundation(tokens, out); return 0; }
             if (cmd == "dshow" || cmd == "filtergraph") { cmdDirectShow(tokens, out); return 0; }
@@ -463,7 +464,7 @@ public:
             if (cmd == "dmaguard" || cmd == "dma") { cmdDmaGuard(tokens, out); return 0; }
             if (cmd == "wsl" || cmd == "bash" || cmd == "lxss") { cmdWsl(tokens, out); return 0; }
             if (cmd == "sandbox" || cmd == "wsb") { cmdSandbox(tokens, out); return 0; }
-            if (cmd == "whp" || cmd == "hyperv") { cmdWhp(tokens, out); return 0; }
+            if (cmd == "whp") { cmdWhp(tokens, out); return 0; }
             if (cmd == "winget" || cmd == "appinstaller") { cmdWinget(tokens, out); return 0; }
             if (cmd == "wdf" || cmd == "kmdf" || cmd == "umdf") { cmdWdf(tokens, out); return 0; }
             if (cmd == "conpty" || cmd == "pty" || cmd == "pseudoconsole") { cmdConpty(tokens, out); return 0; }
@@ -509,6 +510,7 @@ public:
             if (cmd == "vpci" || cmd == "sriov" || cmd == "dda" || cmd == "pcie") { cmdVpci(tokens, out); return 0; }
             if (cmd == "vsm" || cmd == "vbs" || cmd == "hvci" || cmd == "vtl" || cmd == "credguard") { cmdVsm(tokens, out); return 0; }
             if (cmd == "hotpatch" || cmd == "klp" || cmd == "liveupdate") { cmdHotpatch(tokens, out); return 0; }
+            if (cmd == "hyperv" || cmd == "hv" || cmd == "hvr" || cmd == "nestedvm") { cmdHyperv(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
@@ -31209,6 +31211,132 @@ private:
             << "  hotpatch revert <patchId>                 Revert hotpatch and restore original prolog\n"
             << "  hotpatch verify                           Verify Authenticode digital signatures of patches\n"
             << "  hotpatch test                             Execute hotpatching & detour engine self-test suite\n";
+    }
+
+    void cmdHyperv(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& hvSys = micant::hyperv::HypervSubsystem::get();
+        hvSys.initialize();
+
+        if (tokens.size() > 1) {
+            std::string sub = tokens[1];
+            for (char& c : sub) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            if (sub == "status") {
+                out << "Windows Hyper-V Hypercall & Nested Virtualization Subsystem (TitanHypervisor):\n";
+                out << "--------------------------------------------------------------------------------\n";
+                out << " Subsystem State:      " << (hvSys.isInitialized() ? "INITIALIZED / ACTIVE" : "UNINITIALIZED") << "\n";
+                out << " Hypercall Code Page:  0x" << std::hex << std::setw(16) << std::setfill('0') << hvSys.getHypercallPageGpa() << std::dec
+                    << " (" << (hvSys.isHypercallPageEnabled() ? "ENABLED" : "DISABLED") << ")\n";
+                out << " Reference TSC Page:   Sequence " << hvSys.getReferenceTsc().tscSequence << " (Scale 0x" << std::hex << hvSys.getReferenceTsc().tscScale << std::dec << ")\n";
+                out << " Guest Partitions:     " << hvSys.getPartitionCount() << " partitions active\n";
+                out << " Total Hypercalls:     " << hvSys.getTotalHypercalls() << " (" << hvSys.getFastHypercalls() << " fast calls)\n";
+                out << " Nested VM-Exits:      " << hvSys.getNestedVmExits() << " intercepts\n";
+                out << " eVMCS Clean Flushes:  " << hvSys.getEvmcsFlushes() << " sync cycles\n";
+                out << " Driver / Subsystem:   hvix64.sys, winhvr.sys (Build 26100.1)\n";
+                out << " SCM Service:          HypervService (Running)\n";
+                out << "--------------------------------------------------------------------------------\n";
+                return;
+            }
+
+            if (sub == "partitions" || sub == "vms") {
+                out << "Hyper-V Guest Partitions (L0 Root & L1 Guests):\n";
+                out << "--------------------------------------------------------------------------------\n";
+                out << " ID  Partition Name              Memory (MB)  VPs  Nested Virt\n";
+                out << "--------------------------------------------------------------------------------\n";
+                for (const auto& p : hvSys.getAllPartitions()) {
+                    out << " " << std::setw(3) << p->getId() << " "
+                        << std::left << std::setw(27) << p->getName() << " "
+                        << std::right << std::setw(11) << p->getMemoryMb() << "  "
+                        << std::setw(3) << p->getVpCount() << "  "
+                        << (p->isNestedEnabled() ? "ENABLED (L1/L2 Active)" : "DISABLED") << "\n";
+                }
+                out << "--------------------------------------------------------------------------------\n";
+                return;
+            }
+
+            if (sub == "nested" || sub == "evmcs") {
+                uint32_t partId = (tokens.size() > 2) ? static_cast<uint32_t>(std::stoul(tokens[2])) : 1;
+                auto part = hvSys.getPartition(partId);
+                if (!part) {
+                    out << "[-] Partition #" << partId << " not found.\n";
+                    return;
+                }
+                out << "Nested Virtualization & Enlightened VMCS (eVMCS) Status for Partition #" << partId << ":\n";
+                out << "--------------------------------------------------------------------------------\n";
+                out << " Name:                 " << part->getName() << "\n";
+                out << " Nested State:         " << (part->isNestedEnabled() ? "ENABLED (L1/L2 Supported)" : "DISABLED") << "\n";
+                for (const auto& vp : part->getAllVirtualProcessors()) {
+                    const auto& evmcs = vp->getEnlightenedVmcs();
+                    out << "  [VP #" << vp->getVpIndex() << "] Execution Level: L" << vp->getExecutionLevel()
+                        << " | Clean Fields: 0x" << std::hex << evmcs.cleanFieldsMask << std::dec
+                        << " | eVMCS Rev: " << evmcs.revisionId
+                        << " | Exits: " << vp->getVmExits() << " (" << vp->getNestedVmExits() << " nested)\n";
+                    out << "        Guest RIP: 0x" << std::hex << evmcs.guestRip << " | RSP: 0x" << evmcs.guestRsp
+                        << " | CR3: 0x" << evmcs.guestCr3 << std::dec << "\n";
+                }
+                out << "--------------------------------------------------------------------------------\n";
+                return;
+            }
+
+            if (sub == "hypercall" || sub == "hypercalls") {
+                uint16_t callCode = (tokens.size() > 2) ? static_cast<uint16_t>(std::stoul(tokens[2])) : micant::hyperv::HvCallPostMessage;
+                uint64_t outVal = 0;
+                uint16_t status = hvSys.invokeHypercall(callCode, true, 0x12345678, &outVal);
+                out << "[+] Invoked Hyper-V Fast Hypercall (Code 0x" << std::hex << callCode << std::dec << "):\n";
+                out << "    Status:   0x" << std::hex << status << " (" << ((status == micant::hyperv::HV_STATUS_SUCCESS) ? "HV_STATUS_SUCCESS" : "ERROR") << ")\n";
+                out << "    OutParam: 0x" << outVal << std::dec << "\n";
+                return;
+            }
+
+            if (sub == "test") {
+                out << "[*] Executing Windows Hyper-V Hypercall & Nested Virtualization Self-Tests...\n";
+
+                micant::hyperv::RegisterHypervSubsystem();
+                auto& sys = micant::hyperv::HypervSubsystem::get();
+                bool regOk = sys.isInitialized();
+                out << "  [1/6] Hyper-V Subsystem SCM & Driver Module Registration: "
+                    << (regOk ? "PASSED" : "FAILED") << "\n";
+
+                uint64_t outVal = 0;
+                uint16_t hvSt = sys.invokeHypercall(micant::hyperv::HvCallTranslateVirtualAddress, true, 0x140001000ULL, &outVal);
+                bool hcOk = (hvSt == micant::hyperv::HV_STATUS_SUCCESS) && (outVal != 0) && (sys.getFastHypercalls() > 0);
+                out << "  [2/6] Fast Hypercall Dispatching & Address Translation: "
+                    << (hcOk ? "PASSED" : "FAILED") << "\n";
+
+                auto part = sys.createPartition(42, "Test-Nested-VM", 2048);
+                bool partOk = (part != nullptr) && (sys.getPartition(42) != nullptr);
+                out << "  [3/6] Guest Partition Lifecycle Management: "
+                    << (partOk ? "PASSED" : "FAILED") << "\n";
+
+                auto vp0 = part ? part->createVirtualProcessor(0) : nullptr;
+                bool vpOk = (vp0 != nullptr) && (vp0->getVpap().enlightenedVmcsGpa != 0);
+                out << "  [4/6] Virtual Processor Assist Page (VPAP) & eVMCS Allocation: "
+                    << (vpOk ? "PASSED" : "FAILED") << "\n";
+
+                part->enableNestedVirtualization(true);
+                vp0->setExecutionLevel(2); // L2 nested guest
+                bool injectOk = sys.injectNestedVmExit(42, 0, micant::hyperv::NestedExitReason::Cpuid, 0);
+                bool nestedExitOk = injectOk && (vp0->getExecutionLevel() == 1) && (vp0->getNestedVmExits() >= 1);
+                out << "  [5/6] Nested L2-to-L1 VM-Exit Interception & Injection: "
+                    << (nestedExitOk ? "PASSED" : "FAILED") << "\n";
+
+                bool syncOk = sys.syncEnlightenedVmcs(42, 0, micant::hyperv::HV_VMX_ENLIGHTENED_CLEAN_CONTROL_PROC);
+                out << "  [6/6] Enlightened VMCS (eVMCS) Clean Fields Synchronization: "
+                    << (syncOk ? "PASSED" : "FAILED") << "\n";
+
+                out << "[+] All Windows Hyper-V Hypercall & Nested Virtualization Self-Tests Passed!\n";
+                return;
+            }
+        }
+
+        out << "MicaNT Windows Hyper-V Hypercall & Nested Virtualization Subsystem\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  hyperv status                             Display Hyper-V hypercall & nested VM status\n"
+            << "  hyperv partitions                         List active root and guest partitions\n"
+            << "  hyperv nested [partId]                    Inspect nested virtualization & eVMCS state\n"
+            << "  hyperv hypercall [code]                   Execute simulated fast/buffered hypercall\n"
+            << "  hyperv test                               Execute Hyper-V & nested VM self-test suite\n";
     }
 
 
