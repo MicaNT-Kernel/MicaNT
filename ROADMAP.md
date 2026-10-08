@@ -3332,20 +3332,38 @@
 
 ---
 
-### Phase 159: Windows Mobile Broadband Class Extension (MBIM 4.0 / MbbCx), 5G NR Telephony & eSIM Remote SIM Provisioning Subsystem (`mbbcx.hpp`, `mbbcx.sys`, `wwansvc.dll`, `TitanCellular`, `AegisRadio`) (Milestone 186) [PLANNED]
+### Phase 159: Windows Mobile Broadband Class Extension (MBIM 4.0 / MbbCx), 5G NR Telephony & eSIM Remote SIM Provisioning Subsystem (`mbbcx.hpp`, `mbbcx.sys`, `wwansvc.dll`, `TitanCellular`, `AegisRadio`) (Milestone 186) [COMPLETED 100%]
 *Goal: Implement clean-room Windows Mobile Broadband Class Extension (MbbCx / mbbcx.sys), USB Mobile Broadband Interface Model (MBIM 4.0), 5G NR Standalone (SA) / Non-Standalone (NSA) network registration, SIM / UICC / eSIM Remote SIM Provisioning (GSMA RSP SGP.22 / LPA), dual-SIM dual-active (DSDA), APN data connection multiplexing, and WWAN telephony service integration.*
-- [ ] **Mobile Broadband Class Extension Architecture (`include/micant/mbbcx.hpp`)**:
+- [x] **Mobile Broadband Class Extension Architecture (`include/micant/mbbcx.hpp`)**:
   - MBIM 4.0 Control & Data Message Protocol: Open/Close, Connect/Disconnect, Pin, SignalState, PacketService, RadioState, Provider, Registration, and DeviceCaps.
   - 5G NR & Multi-RAT Modem Support: 5G NR SA/NSA, LTE-Advanced Pro, sub-6 GHz / mmWave frequency bands, Signal Strength (RSRP, RSRQ, SINR).
   - eSIM & LPA Architecture: GSMA SGP.22 Local Profile Assistant (LPA) engine, embedded UICC (eUICC) profile download, enable/disable/delete profile lifecycle, activation codes.
   - Data Session Multiplexing: Multiple PDP context and Packet Data Network (PDN) connections (Internet, IMS, MMS, Enterprise APN).
-- [ ] **Win32 & NT Clean-Room Export Parity**:
+- [x] **Win32 & NT Clean-Room Export Parity**:
   - `mbbcx.sys` / `wwansvc.dll`: `MbbDeviceInitialize`, `MbbAdapterCreate`, `MbbRadioStateSet`, `MbbConnectDataSession`, `MbbGetSignalState`, `MbbEsimProfileManage`.
   - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`WwanSvc`, `svchost.exe -k NetworkService`).
-- [ ] **Interactive Shell CLI**:
-  - `wwan status`, `wwan connect <apn>`, `wwan disconnect`, `wwan signal`, `wwan esim <list|install|enable|disable>`, `wwan test`.
-- [ ] **Unit Test Suite 186 (`Test_WindowsMbbCx_MBIM40_5G_Subsystem`)**:
+- [x] **Interactive Shell CLI**:
+  - `wwan status`, `wwan list`, `wwan radio <on|off|airplane>`, `wwan connect <apn>`, `wwan disconnect [sessionId]`, `wwan signal`, `wwan esim <list|enable|disable|delete> [iccid]`, `wwan test`.
+- [x] **Unit Test Suite 186 (`Test_WindowsMbbCx_MBIM40_5G_Subsystem`)**:
   - 12 comprehensive validation stages verifying MbbCx driver registration, modem discovery, MBIM 4.0 handshake, 5G NR network registration, RSRP signal metrics, dual APN packet sessions, eSIM LPA profile activation, radio kill switch, Win32 C ABI parity exports, and multi-threaded cell data throughput stress testing.
+  - Milestone 186: **186 / 186 Test Suites Passing (100%)**.
+
+---
+
+### Phase 160: Windows Hardware Protected Media Path (PMP), Protected Audio Video Path (PAVP) & HDCP 2.3 Subsystem (`pmp.hpp`, `mfpmp.exe`, `dxva2.dll`, `TitanPMP`, `AegisContent`) (Milestone 187) [PLANNED]
+*Goal: Implement clean-room Windows Hardware Protected Media Path (PMP / mfpmp.exe), Protected Audio Video Path (PAVP), DirectX Video Acceleration 2.0 (DXVA2), High-bandwidth Digital Content Protection 2.3 (HDCP 2.3), DRM cryptographic key exchange, Output Protection Management (OPM / COPP), and hardware-enforced secure media pipeline.*
+- [ ] **Hardware Protected Media Path & PAVP Architecture (`include/micant/pmp.hpp`)**:
+  - Media Foundation Protected Process: `mfpmp.exe` isolated protected process hosting decoders and decryptors away from Ring 3 tampered memory.
+  - Output Protection Management (OPM): High-bandwidth Digital Content Protection (HDCP 1.4 / 2.2 / 2.3), DisplayPort content protection (DPCP), and analog CGMS-A copy protection.
+  - Cryptographic Key Exchange & Session Keys: RSA-2048 / AES-128-CTR content key unwrapping, Certificate Revocation Lists (CRL), and hardware root of trust.
+  - DXVA2 Hardware Video Acceleration: Protected session handle creation, hardware video decode surfaces, and frame decrypt/render binding.
+- [ ] **Win32 & NT Clean-Room Export Parity**:
+  - `dxva2.dll` / `mfpmp.exe`: `OPMGetVideoOutputsFromHMONITOR`, `OPMCreateProtectedOutput`, `OPMGetCertificateSize`, `OPMGetCertificate`, `OPMSetProtectionLevel`, `PmpInitializeSubsystem`.
+  - VersionDatabase registration (`10.0.26100.1`) and SCM service registration (`PmpService`, `svchost.exe -k MediaGroup`).
+- [ ] **Interactive Shell CLI**:
+  - `pmp status`, `pmp monitors`, `pmp hdcp <level> [monId]`, `pmp keys`, `pmp session <create|close>`, `pmp test`.
+- [ ] **Unit Test Suite 187 (`Test_WindowsProtectedMedia_PAVP_HDCP_Subsystem`)**:
+  - 12 comprehensive validation stages verifying PMP isolated process hosting, OPM certificate chain verification, HDCP 2.3 handshake and renegotiation, content encryption/decryption validation, DXVA2 protected surface allocation, revocation testing, dynamic C ABI exports, and multi-threaded secure stream playback stress test.
 
 
 

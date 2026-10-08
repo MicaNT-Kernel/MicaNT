@@ -190,6 +190,7 @@
 #include "micant/cameracx.hpp"
 #include "micant/vrr.hpp"
 #include "micant/sensorscx.hpp"
+#include "micant/mbbcx.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -42096,8 +42097,189 @@ void Test_WindowsSensorsCxV2_SensorFusion_Subsystem() {
     std::cout << "[TEST] Suite 185: Windows SensorsCx v2 & 9-DoF Sensor Fusion Subsystem PASSED.\n";
 }
 
+void Test_WindowsMbbCx_MBIM40_5G_Subsystem() {
+    std::cout << "[TEST] Executing Suite 186: Windows Mobile Broadband Class Extension (MBIM 4.0 / MbbCx) & 5G NR Subsystem...\n";
+
+    // Stage 1: MBIM 4.0 Subsystem SCM & VersionDatabase Registration
+    micant::mbbcx::RegisterMbbSubsystem();
+    auto& verDb = version::VersionDatabase::Instance();
+    TEST_ASSERT(verDb.FindModule("mbbcx.sys") != nullptr, "mbbcx.sys must be registered in VersionDatabase");
+    TEST_ASSERT(verDb.FindModule("wwansvc.dll") != nullptr, "wwansvc.dll must be registered in VersionDatabase");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto scmSvc = scm.getServiceRecord(L"WwanSvc");
+    TEST_ASSERT(scmSvc != nullptr, "WwanSvc must be registered in SCM");
+    TEST_ASSERT(scmSvc->binaryPath.find(L"svchost.exe") != std::wstring::npos, "WwanSvc must be hosted by svchost.exe");
+    TEST_ASSERT(scmSvc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WwanSvc must be running");
+
+    auto& mbbSys = micant::mbbcx::MbbSubsystem::get();
+    TEST_ASSERT(mbbSys.isInitialized() == true, "MbbSubsystem must report initialized");
+
+    // Stage 2: Default Modem Discovery & Hardware Context (Snapdragon X75 5G)
+    TEST_ASSERT(mbbSys.getAdapterCount() >= 1, "MbbSubsystem must contain at least 1 cellular modem adapter");
+    auto primaryAdapter = mbbSys.getAdapter(1);
+    TEST_ASSERT(primaryAdapter != nullptr, "Primary cellular modem adapter (ID 1) must be accessible");
+    TEST_ASSERT(primaryAdapter->getName().find(L"Snapdragon X75") != std::wstring::npos, "Primary adapter name must identify Snapdragon X75");
+    TEST_ASSERT(primaryAdapter->getImei() == "861234567890123", "Primary adapter IMEI must match initialized 15-digit TAC");
+    TEST_ASSERT(primaryAdapter->getImsi() == "310410123456789", "Primary adapter IMSI must match initialized carrier identity");
+
+    // Stage 3: 5G NR Standalone (SA) Network Registration & Carrier Identity
+    TEST_ASSERT(primaryAdapter->getRat() == micant::mbbcx::CellularRat::NR5G_SA, "Initial RAT must be 5G NR Standalone (SA)");
+    TEST_ASSERT(primaryAdapter->getRegistrationState() == micant::mbbcx::NetworkRegistrationState::RegisteredHome, "Primary adapter must report RegisteredHome");
+    TEST_ASSERT(primaryAdapter->getOperatorName() == L"MicaNT Sovereign 5G NR", "Registered carrier operator name must match MicaNT Sovereign 5G NR");
+    TEST_ASSERT(std::string(micant::mbbcx::CellularRatToString(micant::mbbcx::CellularRat::NR5G_SA)).find("5G NR SA") != std::string::npos, "CellularRatToString must return correct description");
+    TEST_ASSERT(std::string(micant::mbbcx::NetworkRegistrationStateToString(micant::mbbcx::NetworkRegistrationState::RegisteredHome)).find("Home Network") != std::string::npos, "NetworkRegistrationStateToString must return correct description");
+
+    // Stage 4: Radio Power State Transitions (Airplane Mode, Off, On)
+    TEST_ASSERT(primaryAdapter->getRadioState() == micant::mbbcx::CellularRadioState::On, "Initial radio state must be On");
+    primaryAdapter->setRadioState(micant::mbbcx::CellularRadioState::AirplaneMode);
+    TEST_ASSERT(primaryAdapter->getRadioState() == micant::mbbcx::CellularRadioState::AirplaneMode, "Radio state must transition to AirplaneMode");
+    primaryAdapter->setRadioState(micant::mbbcx::CellularRadioState::Off);
+    TEST_ASSERT(primaryAdapter->getRadioState() == micant::mbbcx::CellularRadioState::Off, "Radio state must transition to Off");
+    primaryAdapter->setRadioState(micant::mbbcx::CellularRadioState::On);
+    TEST_ASSERT(primaryAdapter->getRadioState() == micant::mbbcx::CellularRadioState::On, "Radio state must restore to On");
+
+    // Stage 5: 5G/LTE Signal Quality Metrics & Dynamic Bar Calculation
+    auto initialSig = primaryAdapter->getSignal();
+    TEST_ASSERT(initialSig.rsrp == -82 && initialSig.rsrq == -10 && initialSig.sinr == 22, "Initial signal telemetry must match seeded RSRP/RSRQ/SINR");
+    TEST_ASSERT(initialSig.bars == 4, "RSRP of -82 dBm must evaluate to 4 bars");
+
+    primaryAdapter->setSignal(-75, -8, 28);
+    TEST_ASSERT(primaryAdapter->getSignal().bars == 5, "RSRP of -75 dBm (>= -80) must evaluate to 5 bars (maximum signal)");
+
+    primaryAdapter->setSignal(-115, -18, -2);
+    TEST_ASSERT(primaryAdapter->getSignal().bars == 1, "RSRP of -115 dBm must evaluate to 1 bar");
+
+    primaryAdapter->setSignal(-128, -20, -5);
+    TEST_ASSERT(primaryAdapter->getSignal().bars == 0, "RSRP of -128 dBm must evaluate to 0 bars (cell edge)");
+
+    primaryAdapter->setSignal(-82, -10, 22); // restore normal signal
+
+    // Stage 6: GSMA SGP.22 eSIM Local Profile Assistant (LPA) Enumeration
+    auto esimList = primaryAdapter->getEsimProfiles();
+    TEST_ASSERT(esimList.size() >= 2, "Default cellular adapter must contain at least 2 eSIM profiles");
+    bool foundActive = false;
+    for (const auto& prof : esimList) {
+        if (prof.iccid == L"89014103211118501234") {
+            TEST_ASSERT(prof.state == micant::mbbcx::EsimProfileState::Enabled, "Primary profile 89014103211118501234 must be Enabled");
+            foundActive = true;
+        }
+    }
+    TEST_ASSERT(foundActive, "Primary eSIM profile must be found");
+
+    // Stage 7: eSIM Profile Switching & Mutual Exclusivity
+    bool switched = primaryAdapter->enableEsimProfile(L"89012604987654321098");
+    TEST_ASSERT(switched, "Switching to secondary eSIM profile 89012604987654321098 must succeed");
+    auto updatedProfiles = primaryAdapter->getEsimProfiles();
+    for (const auto& prof : updatedProfiles) {
+        if (prof.iccid == L"89012604987654321098") {
+            TEST_ASSERT(prof.state == micant::mbbcx::EsimProfileState::Enabled, "Secondary profile must now be Enabled");
+        } else if (prof.iccid == L"89014103211118501234") {
+            TEST_ASSERT(prof.state == micant::mbbcx::EsimProfileState::Disabled, "Primary profile must now be Disabled (single active profile)");
+        }
+    }
+
+    // Add and delete dynamic profile
+    micant::mbbcx::EsimProfile tempProf{};
+    tempProf.iccid = L"89019999999999999999";
+    tempProf.profileName = L"Temporary Test Profile";
+    tempProf.carrierName = L"Test Carrier";
+    tempProf.state = micant::mbbcx::EsimProfileState::Disabled;
+    primaryAdapter->addEsimProfile(tempProf);
+    TEST_ASSERT(primaryAdapter->getEsimProfiles().size() == 3, "Profile count must increase to 3 after add");
+    bool deleted = primaryAdapter->deleteEsimProfile(L"89019999999999999999");
+    TEST_ASSERT(deleted, "Deleting profile must succeed");
+    TEST_ASSERT(primaryAdapter->getEsimProfiles().size() == 2, "Profile count must return to 2 after delete");
+
+    primaryAdapter->enableEsimProfile(L"89014103211118501234"); // restore primary
+
+    // Stage 8: Packet Data Session Creation & Dual-Stack APN Negotiation
+    auto allSessions = primaryAdapter->getAllSessions();
+    TEST_ASSERT(!allSessions.empty(), "Primary adapter must have at least one active default session");
+    auto defSession = primaryAdapter->getDataSession(allSessions.front().sessionId);
+    TEST_ASSERT(defSession != nullptr && defSession->isConnected, "Default session must be connected");
+    TEST_ASSERT(defSession->apn == L"internet", "Default session APN must be 'internet'");
+    TEST_ASSERT(!defSession->ipV4.empty() && !defSession->ipV6.empty(), "Default session must have dual-stack IPv4/IPv6");
+    TEST_ASSERT(defSession->mtu == 1500, "Default session MTU must be 1500");
+
+    uint32_t imsSid = primaryAdapter->establishDataSession(L"ims", "10.128.5.10", "2607:fb90:ims::1");
+    TEST_ASSERT(imsSid > 0, "Establishing IMS APN session must return valid session ID");
+    auto imsSession = primaryAdapter->getDataSession(imsSid);
+    TEST_ASSERT(imsSession != nullptr && imsSession->apn == L"ims", "IMS session must be present with APN 'ims'");
+
+    // Stage 9: Packet Transmission, Reception & Throughput Accounting
+    bool txOk = primaryAdapter->transmitPacket(imsSid, 1280);
+    TEST_ASSERT(txOk, "transmitPacket must succeed on active session");
+    for (int p = 0; p < 4; ++p) primaryAdapter->transmitPacket(imsSid, 1280);
+    TEST_ASSERT(imsSession->txPackets == 5, "txPackets must equal 5");
+    TEST_ASSERT(imsSession->txBytes == (5 * 1280), "txBytes must equal 6400 bytes");
+
+    for (int p = 0; p < 10; ++p) primaryAdapter->receivePacket(imsSid, 1420);
+    TEST_ASSERT(imsSession->rxPackets == 10, "rxPackets must equal 10");
+    TEST_ASSERT(imsSession->rxBytes == (10 * 1420), "rxBytes must equal 14200 bytes");
+
+    TEST_ASSERT(primaryAdapter->transmitPacket(99999, 100) == false, "transmitPacket on non-existent session must return false");
+
+    // Stage 10: Packet Data Session Teardown
+    bool closed = primaryAdapter->closeDataSession(imsSid);
+    TEST_ASSERT(closed, "closeDataSession must return true for active session");
+    TEST_ASSERT(primaryAdapter->getDataSession(imsSid) == nullptr, "Closed session must no longer be retrievable");
+
+    // Stage 11: Clean-Room Win32 C ABI Parity Exports & Boundary Error Handling
+    TEST_ASSERT(micant::mbbcx::MbbDeviceInitialize(nullptr) == micant::STATUS_SUCCESS, "MbbDeviceInitialize must return STATUS_SUCCESS");
+
+    uint32_t abiAdpId = 0;
+    NTSTATUS abiCreate = micant::mbbcx::MbbAdapterCreate(L"Virtual LTE Modem", &abiAdpId);
+    TEST_ASSERT(abiCreate == micant::STATUS_SUCCESS && abiAdpId > 1, "MbbAdapterCreate must succeed with new adapter ID");
+
+    TEST_ASSERT(micant::mbbcx::MbbRadioStateSet(abiAdpId, 0) == micant::STATUS_SUCCESS, "MbbRadioStateSet Off must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::mbbcx::MbbRadioStateSet(abiAdpId, 1) == micant::STATUS_SUCCESS, "MbbRadioStateSet On must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::mbbcx::MbbRadioStateSet(abiAdpId, 99) == micant::STATUS_INVALID_PARAMETER, "MbbRadioStateSet with invalid state must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::mbbcx::MbbRadioStateSet(99999, 1) == micant::STATUS_NOT_FOUND, "MbbRadioStateSet on nonexistent adapter must return STATUS_NOT_FOUND");
+
+    uint32_t abiSid = 0;
+    TEST_ASSERT(micant::mbbcx::MbbConnectDataSession(abiAdpId, L"custom.apn", 0, &abiSid) == micant::STATUS_SUCCESS, "MbbConnectDataSession must succeed");
+    TEST_ASSERT(abiSid > 0, "Created session ID must be non-zero");
+
+    int32_t abiRsrp = 0, abiRsrq = 0, abiSinr = 0;
+    TEST_ASSERT(micant::mbbcx::MbbGetSignalState(abiAdpId, &abiRsrp, &abiRsrq, &abiSinr) == micant::STATUS_SUCCESS, "MbbGetSignalState must succeed");
+
+    uint32_t abiEsimRes = 0;
+    TEST_ASSERT(micant::mbbcx::MbbEsimProfileManage(abiAdpId, 99, L"dummy", &abiEsimRes) == micant::STATUS_INVALID_PARAMETER, "Invalid action in MbbEsimProfileManage must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::mbbcx::MbbEsimProfileManage(abiAdpId, 0, nullptr, &abiEsimRes) == micant::STATUS_INVALID_PARAMETER, "Null ICCID must return STATUS_INVALID_PARAMETER");
+    TEST_ASSERT(micant::mbbcx::MbbAdapterCreate(nullptr, nullptr) == micant::STATUS_INVALID_PARAMETER, "Null pointers in MbbAdapterCreate must return STATUS_INVALID_PARAMETER");
+
+    // Stage 12: Multi-Threaded Concurrent Cellular Data Session Stress Test
+    std::atomic<uint32_t> totalPacketsHandled{0};
+    std::vector<std::thread> stressThreads;
+    for (int t = 0; t < 4; ++t) {
+        stressThreads.emplace_back([primaryAdapter, &totalPacketsHandled, t]() {
+            uint32_t thSid = primaryAdapter->establishDataSession(L"stress_apn", "10.200.0.1", "fe80::100");
+            for (int p = 0; p < 25; ++p) {
+                if (primaryAdapter->transmitPacket(thSid, 512)) {
+                    totalPacketsHandled++;
+                }
+                if (primaryAdapter->receivePacket(thSid, 1024)) {
+                    totalPacketsHandled++;
+                }
+            }
+            primaryAdapter->closeDataSession(thSid);
+        });
+    }
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(totalPacketsHandled.load() == 200, "200 concurrent cellular packet transmissions/receptions must complete without data corruption or race conditions");
+
+    std::cout << "[TEST] Suite 186: Windows Mobile Broadband Class Extension (MBIM 4.0 / MbbCx) & 5G NR Subsystem PASSED.\n";
+}
+
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite185")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite186")) {
+        RUN_TEST(Test_WindowsMbbCx_MBIM40_5G_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite185") {
         RUN_TEST(Test_WindowsSensorsCxV2_SensorFusion_Subsystem);
         return g_FailedTests;
     }
@@ -42607,6 +42789,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsCameraClassExtension_Subsystem);
     RUN_TEST(Test_WindowsDisplayVRR_AutoHDR_Subsystem);
     RUN_TEST(Test_WindowsSensorsCxV2_SensorFusion_Subsystem);
+    RUN_TEST(Test_WindowsMbbCx_MBIM40_5G_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
