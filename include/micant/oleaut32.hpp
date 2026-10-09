@@ -1225,6 +1225,18 @@ inline void InitializeOleAut32SubsystemExports() {
     ldr.registerExport("oleaut32.dll", "SysReAllocString", reinterpret_cast<void*>(SysReAllocString));
     ldr.registerExport("oleaut32.dll", "SysReAllocStringLen", reinterpret_cast<void*>(SysReAllocStringLen));
 
+    // Standard OLEAUT32 Export Ordinals
+    ldr.registerExportOrdinal("oleaut32.dll", 2, reinterpret_cast<void*>(SysAllocString));
+    ldr.registerExportOrdinal("oleaut32.dll", 4, reinterpret_cast<void*>(SysAllocStringLen));
+    ldr.registerExportOrdinal("oleaut32.dll", 6, reinterpret_cast<void*>(SysFreeString));
+    ldr.registerExportOrdinal("oleaut32.dll", 7, reinterpret_cast<void*>(SysStringLen));
+    ldr.registerExportOrdinal("oleaut32.dll", 8, reinterpret_cast<void*>(VariantCopy));
+    ldr.registerExportOrdinal("oleaut32.dll", 9, reinterpret_cast<void*>(VariantInit));
+    ldr.registerExportOrdinal("oleaut32.dll", 10, reinterpret_cast<void*>(VariantClear));
+    ldr.registerExportOrdinal("oleaut32.dll", 12, reinterpret_cast<void*>(VariantChangeType));
+    ldr.registerExportOrdinal("oleaut32.dll", 149, reinterpret_cast<void*>(SysStringByteLen));
+    ldr.registerExportOrdinal("oleaut32.dll", 150, reinterpret_cast<void*>(SysAllocStringByteLen));
+
     // VARIANT APIs
     ldr.registerExport("oleaut32.dll", "VariantInit", reinterpret_cast<void*>(VariantInit));
     ldr.registerExport("oleaut32.dll", "VariantClear", reinterpret_cast<void*>(VariantClear));

@@ -120,11 +120,34 @@ public:
         return key;
     }
 
+    static std::string normalizeOrdinalKey(std::string_view moduleName, uint16_t ordinal) {
+        std::string key;
+        key.reserve(moduleName.size() + 8);
+        for (char c : moduleName) {
+            key.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        key.push_back('#');
+        key.append(std::to_string(ordinal));
+        return key;
+    }
+
     void registerExport(std::string_view moduleName, std::string_view functionName, void* address) {
         exportRegistry_[normalizeKey(moduleName, functionName)] = address;
     }
 
-    [[nodiscard]] void* getExport(std::string_view moduleName, std::string_view functionName) const {
+    void registerExportOrdinal(std::string_view moduleName, uint16_t ordinal, void* address) {
+        exportRegistry_[normalizeOrdinalKey(moduleName, ordinal)] = address;
+    }
+
+    [[nodiscard]] void* getExportOrdinal(std::string_view moduleName, uint16_t ordinal) const {
+        auto it = exportRegistry_.find(normalizeOrdinalKey(moduleName, ordinal));
+        return (it != exportRegistry_.end()) ? it->second : nullptr;
+    }
+
+    [[nodiscard]] void* getExport(std::string_view moduleName, std::string_view functionName, uint16_t ordinal = 0) const {
+        if (functionName.empty() && ordinal > 0) {
+            return getExportOrdinal(moduleName, ordinal);
+        }
         auto it = exportRegistry_.find(normalizeKey(moduleName, functionName));
         if (it != exportRegistry_.end()) {
             return it->second;
