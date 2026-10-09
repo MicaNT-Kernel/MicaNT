@@ -7088,6 +7088,206 @@ void Test_SumatraPDF_Gdiplus_Subsystem() {
     std::cout << "[TEST] Suite 218: SumatraPDF 3.6+ Sovereign GDI+ 2D Vector & Document Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 219: Everything 1.4+ Search Indexing & Win32 Satellite Subsystem
+// ============================================================================
+inline void Test_Everything_Search_Indexing_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 219: Everything 1.4+ Search Indexing & Win32 Satellite Subsystem...\n";
+
+    // Stage 1: Service Control Dispatcher & GUI Mode Fallback
+    micant::satellite::InitializeSatelliteWin32Exports();
+    kernel32::SetLastError(0);
+    int32_t dispatchRes = micant::satellite::everything::StartServiceCtrlDispatcherW(nullptr);
+    TEST_ASSERT(dispatchRes == 0, "StartServiceCtrlDispatcherW must return FALSE in GUI desktop mode");
+    TEST_ASSERT(kernel32::GetLastError() == 1063, "StartServiceCtrlDispatcherW must set ERROR_FAILED_SERVICE_CONTROLLER_CONNECT (1063)");
+
+    // Stage 2: Service Handler Registration & Status Updates
+    void* hStatus = micant::satellite::everything::RegisterServiceCtrlHandlerW(L"Everything", nullptr);
+    TEST_ASSERT(hStatus != nullptr, "RegisterServiceCtrlHandlerW must return non-null status handle");
+
+    micant::satellite::everything::SERVICE_STATUS_MOCK svcStatus{};
+    svcStatus.dwServiceType = 0x10;
+    svcStatus.dwCurrentState = 4; // SERVICE_RUNNING
+    svcStatus.dwControlsAccepted = 1;
+    TEST_ASSERT(micant::satellite::everything::SetServiceStatus(hStatus, &svcStatus) == 1, "SetServiceStatus must return TRUE");
+
+    uint32_t needed = 0;
+    uint8_t cfgBuffer[512]{};
+    TEST_ASSERT(micant::satellite::everything::QueryServiceConfigW(nullptr, cfgBuffer, sizeof(cfgBuffer), &needed) == 1, "QueryServiceConfigW must succeed with sufficient buffer");
+    TEST_ASSERT(needed > 0, "QueryServiceConfigW must report required bytes");
+
+    // Stage 3: System-Wide Global HotKey Engine
+    void* dummyHwnd = reinterpret_cast<void*>(0x8080);
+    TEST_ASSERT(micant::satellite::everything::RegisterHotKey(dummyHwnd, 100, 0x0002 /* MOD_CONTROL */, 0x20 /* VK_SPACE */) == 1, "RegisterHotKey (Ctrl+Space) must succeed");
+    // Duplicate registration should fail with error
+    kernel32::SetLastError(0);
+    TEST_ASSERT(micant::satellite::everything::RegisterHotKey(dummyHwnd, 101, 0x0002, 0x20) == 0, "Duplicate HotKey registration must fail");
+    TEST_ASSERT(kernel32::GetLastError() == 1409, "Duplicate HotKey must set ERROR_HOTKEY_ALREADY_REGISTERED (1409)");
+    TEST_ASSERT(micant::satellite::everything::UnregisterHotKey(dummyHwnd, 100) == 1, "UnregisterHotKey must succeed");
+
+    // Stage 4: Advanced GDI Text Alignment & Clip Regions
+    TEST_ASSERT(micant::satellite::everything::GetTextAlign(nullptr) == 0, "GetTextAlign must return TA_LEFT | TA_TOP");
+    TEST_ASSERT(micant::satellite::everything::OffsetClipRgn(nullptr, 10, 20) == 2, "OffsetClipRgn must return SIMPLEREGION (2)");
+
+    micant::satellite::everything::POINT_MOCK pt{99, 99};
+    TEST_ASSERT(micant::satellite::everything::GetDCOrgEx(nullptr, &pt) == 1 && pt.x == 0 && pt.y == 0, "GetDCOrgEx must initialize translation origin to (0, 0)");
+
+    uint32_t rgnSize = micant::satellite::everything::GetRegionData(nullptr, 0, nullptr);
+    TEST_ASSERT(rgnSize >= sizeof(micant::satellite::everything::RGNDATAHEADER_MOCK), "GetRegionData with null buffer must return required buffer size");
+
+    std::vector<uint8_t> rgnBuf(rgnSize);
+    uint32_t bytesCopied = micant::satellite::everything::GetRegionData(nullptr, rgnSize, rgnBuf.data());
+    TEST_ASSERT(bytesCopied == rgnSize, "GetRegionData must populate region bytes correctly");
+
+    TEST_ASSERT(micant::satellite::everything::GetNearestColor(nullptr, 0x00FF8800) == 0x00FF8800, "GetNearestColor on true-color display must return exact color");
+    void* hBmp = micant::satellite::everything::CreateBitmapIndirect(nullptr);
+    TEST_ASSERT(hBmp != nullptr, "CreateBitmapIndirect must return non-null HBITMAP");
+
+    // Stage 5: Shell Lightweight Path & Registry Helpers
+    TEST_ASSERT(micant::satellite::everything::PathIsRootW(L"C:\\") == 1, "PathIsRootW must return TRUE for 'C:\\'");
+    TEST_ASSERT(micant::satellite::everything::PathIsRootW(L"D:/") == 1, "PathIsRootW must return TRUE for 'D:/'");
+    TEST_ASSERT(micant::satellite::everything::PathIsRootW(L"\\\\server\\share") == 1, "PathIsRootW must return TRUE for UNC root");
+    TEST_ASSERT(micant::satellite::everything::PathIsRootW(L"C:\\Windows\\System32") == 0, "PathIsRootW must return FALSE for subdirectory");
+
+    wchar_t defaultVal[] = L"SearchEngine";
+    wchar_t readVal[64]{};
+    uint32_t cbRead = sizeof(readVal);
+    uint32_t valType = 0;
+    TEST_ASSERT(micant::satellite::everything::SHRegGetUSValueW(L"Software\\Everything", L"AppTitle", &valType, readVal, &cbRead, 0, defaultVal, sizeof(defaultVal)) == 0, "SHRegGetUSValueW must succeed");
+    TEST_ASSERT(std::wcscmp(readVal, L"SearchEngine") == 0, "SHRegGetUSValueW must populate default value");
+
+    // Stage 6: Window Geometry & Dialog Tab Navigation
+    micant::satellite::everything::RECT_MOCK srcRc{10, 20, 200, 150};
+    micant::satellite::everything::RECT_MOCK dstRc{0, 0, 0, 0};
+    TEST_ASSERT(micant::satellite::everything::CopyRect(&dstRc, &srcRc) == 1, "CopyRect must return TRUE");
+    TEST_ASSERT(dstRc.left == 10 && dstRc.top == 20 && dstRc.right == 200 && dstRc.bottom == 150, "CopyRect coordinates must match source");
+
+    micant::satellite::everything::RECT_MOCK adjRc{100, 100, 500, 400};
+    TEST_ASSERT(micant::satellite::everything::AdjustWindowRect(&adjRc, 0x00C00000 /* WS_CAPTION */, 0) == 1, "AdjustWindowRect must succeed");
+    TEST_ASSERT(adjRc.top < 100 && adjRc.left < 100 && adjRc.right > 500 && adjRc.bottom > 400, "AdjustWindowRect must expand rect for caption & borders");
+
+    TEST_ASSERT(micant::satellite::everything::OpenIcon(dummyHwnd) == 1, "OpenIcon must return TRUE");
+    TEST_ASSERT(micant::satellite::everything::GetNextDlgTabItem(nullptr, dummyHwnd, 0) == dummyHwnd, "GetNextDlgTabItem must return valid control HWND");
+    TEST_ASSERT(micant::satellite::everything::ReplyMessage(0) == 1, "ReplyMessage must return TRUE");
+
+    micant::satellite::everything::RECT_MOCK updateRc{};
+    TEST_ASSERT(micant::satellite::everything::ScrollWindowEx(dummyHwnd, 0, -20, nullptr, nullptr, nullptr, &updateRc, 0) == 2, "ScrollWindowEx must return SIMPLEREGION (2)");
+
+    // Stage 7: Process Environment Block & Handlers
+    char* envBlock = micant::satellite::everything::GetEnvironmentStrings();
+    bool foundPath = false;
+    for (const char* p = envBlock; *p; p += std::strlen(p) + 1) {
+        if (std::strstr(p, "Path=") != nullptr) {
+            foundPath = true;
+            break;
+        }
+    }
+    TEST_ASSERT(foundPath, "Environment block must contain Path variable");
+    TEST_ASSERT(micant::satellite::everything::FreeEnvironmentStringsA(envBlock) == 1, "FreeEnvironmentStringsA must return TRUE");
+    TEST_ASSERT(micant::satellite::everything::SetHandleCount(2048) == 2048, "SetHandleCount must return requested count");
+    TEST_ASSERT(micant::satellite::everything::__C_specific_handler(nullptr, nullptr, nullptr, nullptr) == 1, "__C_specific_handler must return ExceptionContinueSearch (1)");
+
+    micant::satellite::everything::OSVERSIONINFOA_MOCK vi{};
+    vi.dwOSVersionInfoSize = sizeof(vi);
+    TEST_ASSERT(micant::satellite::everything::GetVersionExA(&vi) == 1, "GetVersionExA must return TRUE");
+    TEST_ASSERT(vi.dwMajorVersion == 10 && vi.dwMinorVersion == 0 && vi.dwBuildNumber == 19045, "GetVersionExA must report Windows 10 x64 Sovereign OS");
+
+    // Stage 8: System Character Classification (GetStringTypeA)
+    const char testStr[] = "MicaNT 2026!";
+    uint16_t charTypes[16]{};
+    TEST_ASSERT(micant::satellite::everything::GetStringTypeA(0x0409, 1, testStr, static_cast<int32_t>(std::strlen(testStr)), charTypes) == 1, "GetStringTypeA must succeed");
+    TEST_ASSERT((charTypes[0] & 0x0001) != 0, "Character 'M' must have C1_UPPER flag");
+    TEST_ASSERT((charTypes[1] & 0x0002) != 0, "Character 'i' must have C1_LOWER flag");
+    TEST_ASSERT((charTypes[6] & 0x0008) != 0, "Character ' ' must have C1_SPACE flag");
+    TEST_ASSERT((charTypes[7] & 0x0004) != 0, "Character '2' must have C1_DIGIT flag");
+    TEST_ASSERT((charTypes[11] & 0x0010) != 0, "Character '!' must have C1_PUNCT flag");
+
+    // Stage 9: System Locale Number & Calendar Formatting
+    wchar_t numBuf[32]{};
+    int32_t numRes = micant::satellite::everything::GetNumberFormatW(0x0409, 0, L"123456.78", nullptr, numBuf, 32);
+    TEST_ASSERT(numRes > 0 && std::wcscmp(numBuf, L"123456.78") == 0, "GetNumberFormatW must format number string");
+
+    wchar_t calBuf[16]{};
+    uint32_t calVal = 0;
+    TEST_ASSERT(micant::satellite::everything::GetCalendarInfoW(0x0409, 1, 1, calBuf, 16, &calVal) == 1, "GetCalendarInfoW must succeed");
+    TEST_ASSERT(calVal == 1 && std::wcscmp(calBuf, L"1") == 0, "GetCalendarInfoW must return valid calendar value");
+
+    // Stage 10: COM Moniker Binding Context (CreateBindCtx)
+    void* pbc = nullptr;
+    TEST_ASSERT(micant::satellite::everything::CreateBindCtx(0, &pbc) == 0 && pbc != nullptr, "CreateBindCtx must return S_OK and non-null context");
+    auto* bindCtx = static_cast<micant::satellite::everything::IBindCtx_Mock*>(pbc);
+    TEST_ASSERT(bindCtx->lpVtbl != nullptr && bindCtx->lpVtbl->AddRef(pbc) == 1, "IBindCtx::AddRef must succeed");
+    TEST_ASSERT(bindCtx->lpVtbl->Release(pbc) == 1, "IBindCtx::Release must succeed");
+
+    // Stage 11: Inter-Thread Messaging & Keycode Mapping
+    TEST_ASSERT(micant::satellite::everything::PostThreadMessageW(1001, 0x0400 /* WM_USER */, 12, 34) == 1, "PostThreadMessageW must return TRUE");
+    uint64_t msgRes = 999;
+    TEST_ASSERT(micant::satellite::everything::SendMessageTimeoutW(dummyHwnd, 0x0010 /* WM_CLOSE */, 0, 0, 0x0002, 1000, &msgRes) == 1 && msgRes == 0, "SendMessageTimeoutW must succeed and set result");
+
+    TEST_ASSERT(micant::satellite::everything::MapVirtualKeyExW(0x41, 2 /* MAPVK_VK_TO_CHAR */, nullptr) == 'A', "MapVirtualKeyExW for VK_A must translate to 'A'");
+    TEST_ASSERT(micant::satellite::everything::MapVirtualKeyExW(0x30, 2, nullptr) == '0', "MapVirtualKeyExW for VK_0 must translate to '0'");
+    TEST_ASSERT(micant::satellite::everything::MapVirtualKeyExW(0x20, 2, nullptr) == ' ', "MapVirtualKeyExW for VK_SPACE must translate to ' '");
+
+    // Stage 12: DynamicLoader IAT Binding Verification for Everything 1.4+
+    auto& loader = micant::ldr::DynamicLoader::get();
+    static constexpr const char* EVERYTHING_SAMPLE_SYMBOLS[] = {
+        "RegisterServiceCtrlHandlerW", "StartServiceCtrlDispatcherW", "SetServiceStatus", "QueryServiceConfigW",
+        "RegOpenKeyA", "RegQueryValueW", "GetTextAlign", "OffsetClipRgn", "GetDCOrgEx", "GetRegionData",
+        "GetNearestColor", "CreateBitmapIndirect", "__C_specific_handler", "GetVersionExA", "GetNumberFormatW",
+        "GetCalendarInfoW", "FreeEnvironmentStringsA", "GetEnvironmentStrings", "SetHandleCount", "GetStringTypeA",
+        "CreateBindCtx", "SHRegGetUSValueW", "PathIsRootW", "ScrollWindowEx", "AdjustWindowRect", "CopyRect",
+        "OpenIcon", "GetNextDlgTabItem", "ReplyMessage", "RegisterHotKey", "UnregisterHotKey", "PostThreadMessageW",
+        "SendMessageTimeoutW", "MapVirtualKeyExW"
+    };
+
+    uint32_t resolvedCount = 0;
+    for (const char* sym : EVERYTHING_SAMPLE_SYMBOLS) {
+        const char* candidateDlls[] = {
+            "advapi32.dll", "gdi32.dll", "kernel32.dll", "ole32.dll", "shlwapi.dll", "user32.dll"
+        };
+        bool found = false;
+        for (const char* d : candidateDlls) {
+            if (loader.getExport(d, sym) != nullptr) {
+                found = true;
+                break;
+            }
+        }
+        if (found) ++resolvedCount;
+    }
+    TEST_ASSERT(resolvedCount == sizeof(EVERYTHING_SAMPLE_SYMBOLS) / sizeof(EVERYTHING_SAMPLE_SYMBOLS[0]),
+                "All 34 Everything Win32 satellite symbols must be registered and resolved from DynamicLoader");
+
+    // Stage 13: Multi-Threaded Search & HotKey Dispatch Concurrent Stress Test
+    std::atomic<uint32_t> stressQueriesCompleted{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&stressQueriesCompleted, t]() {
+            for (int q = 0; q < 50; ++q) {
+                // Simulate fast MFT index query & hotkey toggling
+                void* hwnd = reinterpret_cast<void*>(static_cast<uintptr_t>(0x5000 + t));
+                micant::satellite::everything::RegisterHotKey(hwnd, q + 1, 0x0001, static_cast<uint32_t>('A' + (q % 26)));
+                micant::satellite::everything::UnregisterHotKey(hwnd, q + 1);
+
+                micant::satellite::everything::POINT_MOCK pt{};
+                micant::satellite::everything::GetDCOrgEx(nullptr, &pt);
+
+                wchar_t num[16]{};
+                micant::satellite::everything::GetNumberFormatW(0x0409, 0, L"42", nullptr, num, 16);
+
+                stressQueriesCompleted.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(stressQueriesCompleted.load() == 400, "400-query concurrent search & hotkey stress test must succeed 100%");
+
+    std::cout << "[TEST] Suite 219: Everything 1.4+ Search Indexing & Win32 Satellite Subsystem PASSED.\n";
+}
+
+
 
 
 

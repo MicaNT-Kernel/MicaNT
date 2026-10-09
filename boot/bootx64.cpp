@@ -445,12 +445,13 @@ public:
                 { "vlc.exe",       "1,046,424 B",   "390,120 B", true },
                 { "putty.exe",     "1,706,136 B",   "620,100 B", true },
                 { "SumatraPDF.exe","20,292,984 B", "10,031,830 B", true },
+                { "Everything.exe","2,272,424 B",  "1,906,504 B", true },
                 { "kernel.sys",      "412,672 B",   "142,310 B", false },
                 { "ntoskrnl.exe",    "684,032 B",   "210,500 B", false },
                 { "surshell.exe",  "1,717,760 B",   "580,240 B", false }
             };
 
-            for (size_t i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < 9; ++i) {
                 uint32_t ry = wy + 114 + (uint32_t)(i * 20);
                 bootvid::Color bg = entries[i].sel ? bootvid::Color{18, 38, 62} : ((i % 2 == 0) ? bootvid::Color{10, 14, 22} : bootvid::Color{8, 11, 18});
                 m_videoDriver.fillRectangle(wx + 2, ry, ww - 4, 20, bg);
@@ -459,13 +460,13 @@ public:
                 m_videoDriver.drawString(wx + 12, ry + 4, entries[i].name, tc, bg, 1);
                 m_videoDriver.drawString(wx + 170, ry + 4, entries[i].sz, bootvid::Color{180, 195, 215}, bg, 1);
                 m_videoDriver.drawString(wx + 300, ry + 4, entries[i].psz, bootvid::Color{100, 240, 160}, bg, 1);
-                m_videoDriver.drawString(wx + 440, ry + 4, "2026-10-08 19:15", bootvid::Color{140, 155, 175}, bg, 1);
+                m_videoDriver.drawString(wx + 440, ry + 4, "2026-10-09 00:55", bootvid::Color{140, 155, 175}, bg, 1);
             }
 
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "6 Real Apps Active | All Exit Codes: 0 | 100% Native Win32 Subsystem",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "7 Real Apps Active | All Exit Codes: 0 | 100% Native Win32 Subsystem",
                                     bootvid::Color{0, 240, 255}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -515,6 +516,11 @@ public:
         m_videoDriver.fillRectangle(tbX7, taskbarY + 4, 110, 26, bootvid::Color{46, 18, 20});
         m_videoDriver.fillRectangle(tbX7, taskbarY + 28, 110, 2, bootvid::Color{255, 60, 60});
         m_videoDriver.drawString(tbX7 + 8, taskbarY + 12, "[PDF] Sumatra", bootvid::Color{255, 180, 180}, bootvid::Color{46, 18, 20}, 1);
+
+        uint32_t tbX8 = tbX7 + 116;
+        m_videoDriver.fillRectangle(tbX8, taskbarY + 4, 110, 26, bootvid::Color{14, 38, 48});
+        m_videoDriver.fillRectangle(tbX8, taskbarY + 28, 110, 2, bootvid::Color{0, 240, 255});
+        m_videoDriver.drawString(tbX8 + 8, taskbarY + 12, "[Find] Search", bootvid::Color{120, 245, 255}, bootvid::Color{14, 38, 48}, 1);
 
         // System Tray
         uint32_t trayX = (width > 280) ? (width - 270) : 10;

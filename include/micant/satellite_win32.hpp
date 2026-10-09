@@ -22,6 +22,7 @@
 #include "satellite_putty.hpp"
 #include "satellite_gdiplus.hpp"
 #include "satellite_sumatra.hpp"
+#include "satellite_everything.hpp"
 
 namespace micant::satellite {
 
@@ -375,6 +376,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // SumatraPDF 3.6+ Subsystem Extensions
     sumatra::InitializeSumatraWin32Exports();
+
+    // Everything 1.4+ Search Subsystem Extensions
+    everything::InitializeEverythingExports();
 }
 
 } // namespace micant::satellite
