@@ -21,6 +21,7 @@ jobs:
 
       - name: Compile Test Runner & Fixtures (Clang C++23)
         shell: pwsh
+        run: |
           clang++ -O2 -D_CRT_SECURE_NO_WARNINGS test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
           clang++ -c kernel/dispatcher.cpp -o bin/dispatcher.o
           clang++ -c kernel/syscalls.cpp -o bin/syscalls.o
