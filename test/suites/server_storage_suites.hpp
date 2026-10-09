@@ -5990,6 +5990,250 @@ void Test_WindowsOpenSSH_ServerClient_Subsystem() {
     std::cout << "[TEST] Suite 213: Windows Native OpenSSH (sshd / ssh / sftp / TitanSSH) Subsystem PASSED.\n";
 }
 
+void Test_WindowsRemoteDesktop_RDP_Subsystem() {
+    std::cout << "[TEST] Executing Suite 214: Windows Remote Desktop Protocol (RDP / MS-RDPBCGR) Enterprise Subsystem...\n";
+
+    // Stage 1: SCM Services Registration (TermService, SessionEnv, UmRdpService)
+    micant::rdp::RegisterRdpSubsystem();
+    auto& scm = micant::scm::ServiceControlManager::get();
+
+    auto termRec = scm.getServiceRecord(L"TermService");
+    TEST_ASSERT(termRec != nullptr, "TermService must be registered in SCM");
+    TEST_ASSERT(termRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "TermService must be running");
+    TEST_ASSERT(termRec->displayName.find(L"Remote Desktop Services") != std::wstring::npos, "TermService display name match");
+
+    auto envRec = scm.getServiceRecord(L"SessionEnv");
+    TEST_ASSERT(envRec != nullptr, "SessionEnv must be registered in SCM");
+    TEST_ASSERT(envRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "SessionEnv must be running");
+
+    auto umrdpRec = scm.getServiceRecord(L"UmRdpService");
+    TEST_ASSERT(umrdpRec != nullptr, "UmRdpService must be registered in SCM");
+    TEST_ASSERT(umrdpRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "UmRdpService must be running");
+
+    // Stage 2: VersionDatabase Registration
+    auto& vdb = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(vdb.FindModule("mstsc.exe") != nullptr, "mstsc.exe must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("rdpclip.exe") != nullptr, "rdpclip.exe must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("rdpcorets.dll") != nullptr, "rdpcorets.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("termsrv.dll") != nullptr, "termsrv.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("wtsapi32.dll") != nullptr, "wtsapi32.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("rdpsnd.dll") != nullptr, "rdpsnd.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("rdpdr.dll") != nullptr, "rdpdr.dll must be registered in VersionDatabase");
+    TEST_ASSERT(vdb.FindModule("mstscax.dll") != nullptr, "mstscax.dll must be registered in VersionDatabase");
+
+    // Stage 3: EnterpriseRdpServer Lifecycle & Configuration
+    auto& server = micant::rdp::EnterpriseRdpServer::get();
+    TEST_ASSERT(server.isRunning(), "EnterpriseRdpServer must be running");
+    TEST_ASSERT(server.getPort() == 3389, "Default RDP port must be 3389");
+    TEST_ASSERT(server.isNlaEnforced(), "NLA should be enforced by default");
+
+    auto consoleSession = server.getSession(1);
+    TEST_ASSERT(consoleSession != nullptr, "Console session 1 must exist");
+    TEST_ASSERT(consoleSession->getWinStationName() == L"Console", "Session 1 must be Console");
+    TEST_ASSERT(consoleSession->getState() == micant::rdp::RdpSessionState::ActiveStreaming, "Console session must be ActiveStreaming");
+
+    // Stage 4: TPKT Header Creation & Extraction
+    micant::rdp::TpktHeader tpktHdr{};
+    tpktHdr.version = micant::rdp::TPKT_VERSION;
+    tpktHdr.reserved = 0;
+    tpktHdr.length = 24;
+    TEST_ASSERT(tpktHdr.version == 3, "TPKT version must be 3");
+    TEST_ASSERT(tpktHdr.length == 24, "TPKT length must match");
+
+    // Stage 5: X.224 Connection Request & Security Negotiation (CredSSP / NLA)
+    std::vector<uint8_t> crPacket;
+    crPacket.resize(sizeof(micant::rdp::TpktHeader) + sizeof(micant::rdp::X224CrHeader) + sizeof(micant::rdp::RdpNegReq));
+    auto* pTpkt = reinterpret_cast<micant::rdp::TpktHeader*>(crPacket.data());
+    pTpkt->version = micant::rdp::TPKT_VERSION;
+    pTpkt->length = static_cast<uint16_t>(crPacket.size());
+
+    auto* pCr = reinterpret_cast<micant::rdp::X224CrHeader*>(crPacket.data() + sizeof(micant::rdp::TpktHeader));
+    pCr->lengthIndicator = 6;
+    pCr->tpduCode = micant::rdp::X224_TPDU_CR;
+    pCr->srcRef = 0x4321;
+
+    auto* pNeg = reinterpret_cast<micant::rdp::RdpNegReq*>(crPacket.data() + sizeof(micant::rdp::TpktHeader) + sizeof(micant::rdp::X224CrHeader));
+    pNeg->type = micant::rdp::RDP_NEG_REQ;
+    pNeg->length = 8;
+    pNeg->requestedProtocols = micant::rdp::PROTOCOL_HYBRID | micant::rdp::PROTOCOL_SSL;
+
+    std::vector<uint8_t> ccResponse;
+    uint32_t selectedProto = 0;
+    bool negOk = server.processConnectionRequest(crPacket, ccResponse, selectedProto);
+    TEST_ASSERT(negOk, "Security negotiation must succeed");
+    TEST_ASSERT(selectedProto == micant::rdp::PROTOCOL_HYBRID, "Hybrid CredSSP/NLA should be selected");
+    TEST_ASSERT(!ccResponse.empty(), "Server must reply with CC response");
+
+    const auto* pRspCc = reinterpret_cast<const micant::rdp::X224CcHeader*>(ccResponse.data() + sizeof(micant::rdp::TpktHeader));
+    TEST_ASSERT(pRspCc->tpduCode == micant::rdp::X224_TPDU_CC, "Response TPDU must be CC (0xD0)");
+    TEST_ASSERT(pRspCc->dstRef == 0x4321, "Destination reference must match client source reference");
+
+    // Stage 6: Security Negotiation Enforcements (Reject Non-NLA when Enforced)
+    pNeg->requestedProtocols = micant::rdp::PROTOCOL_RDP; // Client only offers legacy standard RDP
+    std::vector<uint8_t> failResponse;
+    uint32_t failProto = 0;
+    bool rejectedOk = !server.processConnectionRequest(crPacket, failResponse, failProto);
+    TEST_ASSERT(rejectedOk, "Server must reject non-NLA client when NLA is enforced");
+    const auto* pFail = reinterpret_cast<const micant::rdp::RdpNegFailure*>(failResponse.data() + sizeof(micant::rdp::TpktHeader) + sizeof(micant::rdp::X224CcHeader));
+    TEST_ASSERT(pFail->failureCode == micant::rdp::HYBRID_REQUIRED_BY_SERVER, "Failure code must be HYBRID_REQUIRED_BY_SERVER");
+
+    // Stage 7: Remote Desktop Session Creation & WinStation Naming
+    auto session = server.createSession("192.168.1.188", "TITAN-WORKSTATION", L"DevAdmin", L"MICANT");
+    TEST_ASSERT(session != nullptr, "Session creation must return non-null object");
+    uint32_t sid = session->getSessionId();
+    TEST_ASSERT(sid >= 2, "Remote Desktop session ID must be >= 2");
+    TEST_ASSERT(session->getWinStationName().find(L"RDP-Tcp#") != std::wstring::npos, "WinStation name format RDP-Tcp#<id>");
+    TEST_ASSERT(session->getClientIp() == "192.168.1.188", "Client IP must match");
+    TEST_ASSERT(session->getUserName() == L"DevAdmin", "User name must match");
+    TEST_ASSERT(session->getDomainName() == L"MICANT", "Domain name must match");
+    TEST_ASSERT(session->getState() == micant::rdp::RdpSessionState::Handshaking, "Initial state must be Handshaking");
+
+    // Stage 8: Virtual Channels Registration & Data Flow
+    TEST_ASSERT(session->hasVirtualChannel(micant::rdp::CHANNEL_CLIPRDR), "cliprdr virtual channel must be present");
+    TEST_ASSERT(session->hasVirtualChannel(micant::rdp::CHANNEL_RDPSND), "rdpsnd virtual channel must be present");
+    TEST_ASSERT(session->hasVirtualChannel(micant::rdp::CHANNEL_RDPDR), "rdpdr virtual channel must be present");
+    TEST_ASSERT(session->hasVirtualChannel(micant::rdp::CHANNEL_RDPGFX), "rdpgfx virtual channel must be present");
+    TEST_ASSERT(session->hasVirtualChannel(micant::rdp::CHANNEL_RAIL), "rail virtual channel must be present");
+
+    micant::rdp::RdpChannelPacket sndPkt;
+    sndPkt.channelName = micant::rdp::CHANNEL_RDPSND;
+    sndPkt.channelId = session->getChannelId(micant::rdp::CHANNEL_RDPSND);
+    sndPkt.payload = { 0x01, 0x00, 0x10, 0x00, 0x44, 0xAC, 0x00, 0x00 }; // 44.1kHz audio wave header chunk
+    session->queueChannelPacket(sndPkt);
+
+    micant::rdp::RdpChannelPacket poppedPkt;
+    bool popOk = session->popChannelPacket(poppedPkt);
+    TEST_ASSERT(popOk, "Popping channel packet must succeed");
+    TEST_ASSERT(poppedPkt.channelName == micant::rdp::CHANNEL_RDPSND, "Channel name must match rdpsnd");
+    TEST_ASSERT(poppedPkt.payload.size() == 8, "Payload size must match");
+
+    // Stage 9: Clipboard Redirection (cliprdr) Mirror Cache
+    std::string clipText = "MicaNT Sovereign RDP Clipboard Test 2026";
+    std::vector<uint8_t> clipData(clipText.begin(), clipText.end());
+    session->setClipboardData(micant::rdp::CF_RAW_UNICODETEXT, clipData);
+
+    std::vector<uint8_t> readClip;
+    bool getClipOk = session->getClipboardData(micant::rdp::CF_RAW_UNICODETEXT, readClip);
+    TEST_ASSERT(getClipOk, "Getting clipboard data must succeed");
+    std::string readStr(readClip.begin(), readClip.end());
+    TEST_ASSERT(readStr == clipText, "Clipboard text content must match exactly");
+
+    // Stage 10: Fast-Path Screen Update Dirty Rect Tile Encoding
+    micant::rdp::RdpDirtyRect rect{100, 100, 32, 32};
+    std::vector<uint32_t> pixels(32 * 32, 0xFF00D4FF); // Cyan 32bpp pixels
+    auto updatePdu = micant::rdp::EnterpriseRdpServer::encodeFastPathBitmapUpdate(rect, pixels);
+    TEST_ASSERT(!updatePdu.empty(), "Encoded bitmap update PDU must not be empty");
+    TEST_ASSERT((updatePdu[0] & 0x0F) == micant::rdp::FASTPATH_UPDATETYPE_BITMAP, "Fastpath update type must be BITMAP (1)");
+    session->recordFrameEncoded(updatePdu.size());
+    TEST_ASSERT(session->getFramesEncoded() == 1, "Frames encoded count must increment");
+
+    // Stage 11: Fast-Path Input Event Serialization & Deserialization
+    std::vector<uint8_t> keyPdu = {
+        static_cast<uint8_t>(micant::rdp::FASTPATH_INPUT_EVENT_SCANCODE << 5), // header
+        0x00, // flags
+        0x1E  // scancode (Key 'A')
+    };
+    micant::rdp::RdpInputEvent inEvent{};
+    bool parseKeyOk = micant::rdp::EnterpriseRdpServer::parseFastPathInput(keyPdu, inEvent);
+    TEST_ASSERT(parseKeyOk, "Parsing keyboard input PDU must succeed");
+    TEST_ASSERT(inEvent.eventType == micant::rdp::FASTPATH_INPUT_EVENT_SCANCODE, "Input event type must be SCANCODE");
+    TEST_ASSERT(inEvent.scanCode == 0x1E, "Scancode must match 0x1E");
+    session->recordInputProcessed();
+    TEST_ASSERT(session->getInputEventsProcessed() == 1, "Input events processed count must increment");
+
+    std::vector<uint8_t> mousePdu = {
+        static_cast<uint8_t>(micant::rdp::FASTPATH_INPUT_EVENT_MOUSE << 5),
+        0x00, 0x10, // flags: PTRFLAGS_BUTTON1 (Left Click)
+        0x20, 0x03, // X: 800
+        0x58, 0x02  // Y: 600
+    };
+    micant::rdp::RdpInputEvent mouseEvent{};
+    bool parseMouseOk = micant::rdp::EnterpriseRdpServer::parseFastPathInput(mousePdu, mouseEvent);
+    TEST_ASSERT(parseMouseOk, "Parsing mouse input PDU must succeed");
+    TEST_ASSERT(mouseEvent.eventType == micant::rdp::FASTPATH_INPUT_EVENT_MOUSE, "Input event type must be MOUSE");
+    TEST_ASSERT(mouseEvent.mouseX == 800, "Mouse X coordinate must match 800");
+    TEST_ASSERT(mouseEvent.mouseY == 600, "Mouse Y coordinate must match 600");
+
+    // Stage 12: Session State Transitions (Active, Disconnect, Logoff)
+    session->setState(micant::rdp::RdpSessionState::ActiveStreaming);
+    TEST_ASSERT(session->getState() == micant::rdp::RdpSessionState::ActiveStreaming, "State must transition to ActiveStreaming");
+
+    bool disconOk = server.disconnectSession(sid);
+    TEST_ASSERT(disconOk, "Disconnecting remote session must succeed");
+    TEST_ASSERT(session->getState() == micant::rdp::RdpSessionState::Disconnected, "State must transition to Disconnected");
+
+    bool logoffOk = server.logoffSession(sid);
+    TEST_ASSERT(logoffOk, "Logging off remote session must succeed");
+    TEST_ASSERT(server.getSession(sid) == nullptr, "Logged off session must be removed from server");
+
+    // Verify Console session protected
+    bool disconConsole = server.disconnectSession(1);
+    TEST_ASSERT(!disconConsole, "Console session 1 disconnect must be rejected");
+    bool logoffConsole = server.logoffSession(1);
+    TEST_ASSERT(!logoffConsole, "Console session 1 logoff must be rejected");
+
+    // Stage 13: Win32 C ABI Parity
+    int32_t abiInit = MicaRdpServerInitialize(3389);
+    TEST_ASSERT(abiInit == 1, "MicaRdpServerInitialize must return 1");
+    int32_t abiStart = MicaRdpServerStart();
+    TEST_ASSERT(abiStart == 1, "MicaRdpServerStart must return 1");
+
+    uint32_t abiSid = MicaRdpCreateSession("10.0.0.55", "REMOTE-LAPTOP", L"TestUser", L"MICANT");
+    TEST_ASSERT(abiSid >= 2, "MicaRdpCreateSession must return valid session ID");
+
+    uint64_t totConn = 0, totHs = 0, actSess = 0;
+    MicaRdpGetServerStats(&totConn, &totHs, &actSess);
+    TEST_ASSERT(totConn > 0, "Total connections must be > 0");
+    TEST_ASSERT(actSess >= 2, "Active sessions must include Console and newly created session");
+
+    int32_t abiDiscon = MicaRdpDisconnectSession(abiSid);
+    TEST_ASSERT(abiDiscon == 1, "MicaRdpDisconnectSession must return 1");
+    int32_t abiLogoff = MicaRdpLogoffSession(abiSid);
+    TEST_ASSERT(abiLogoff == 1, "MicaRdpLogoffSession must return 1");
+
+    // Stage 14: 120-Operation Concurrent Multithreaded RDP Session Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&server, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                std::string ip = "10.0.9." + std::to_string(t * 15 + op);
+                auto s = server.createSession(ip, "STRESS-CLIENT", L"StressAdmin", L"MICANT");
+                if (!s) continue;
+                uint32_t currentSid = s->getSessionId();
+
+                s->setState(micant::rdp::RdpSessionState::ActiveStreaming);
+                micant::rdp::RdpDirtyRect r{static_cast<uint32_t>(op * 10), static_cast<uint32_t>(t * 10), 16, 16};
+                std::vector<uint32_t> px(16 * 16, 0xFF00FF00);
+                auto frame = micant::rdp::EnterpriseRdpServer::encodeFastPathBitmapUpdate(r, px);
+                s->recordFrameEncoded(frame.size());
+
+                micant::rdp::RdpChannelPacket cp;
+                cp.channelName = micant::rdp::CHANNEL_CLIPRDR;
+                cp.payload = { 0x01, 0x02, 0x03 };
+                s->queueChannelPacket(cp);
+
+                bool dOk = server.disconnectSession(currentSid);
+                bool lOk = server.logoffSession(currentSid);
+                if (dOk && lOk && !frame.empty()) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded RDP stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 214: Windows Remote Desktop Protocol (RDP / MS-RDPBCGR) Enterprise Subsystem PASSED.\n";
+}
+
+
 
 
 

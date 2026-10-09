@@ -379,6 +379,8 @@
 │ Phase 185: Windows Remote Management (WinRM M212)        [COMPLETED 100%]│
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 186: Windows Native OpenSSH Subsystem (SSH M213)   [COMPLETED 100%]│
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 187: Sovereign Remote Desktop Protocol (RDP M214)  [COMPLETED 100%]│
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3939,6 +3941,36 @@
   - `ssh` (`[user@]hostname [command]`), `sshd` (`status`, `start`, `stop`, `restart`, `config`), `ssh-keygen` (`-t <type> -b <bits> -f <path>`), `ssh-agent` (`status`, `list`), `sftp`, `scp`.
 - [x] **Unit Test Suite 213 (`Test_WindowsOpenSSH_ServerClient_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration (`sshd`, `ssh-agent`), VersionDatabase registration, SSH-2 protocol version exchange (`SSH-2.0-MicaNT_OpenSSH_10.0`), host key generation and fingerprinting (RSA & Ed25519), TCP Port 22 listener binding, public key authentication (`authorized_keys`), Windows password/token authentication, ConPTY interactive session allocation and ANSI stream rendering, remote command execution and exit code return, SFTP file transfer protocol operations (upload, read, dir listing), signal delivery & session termination, Win32 C ABI exports, and concurrent 8-thread multithreaded SSH connection stress test (120 client sessions).
+
+---
+
+### Phase 187: Sovereign Remote Desktop Protocol (RDP / MS-RDPBCGR) Enterprise Subsystem (`rdp.hpp`, `mstsc.exe`, `rdpclip.exe`, `rdpcorets.dll`, `termsrv.dll`, `wtsapi32.dll`, `rdpsnd.dll`, `rdpdr.dll`, `mstscax.dll`) (Milestone 214) [COMPLETED 100%]
+*Goal: Implement clean-room sovereign Windows Remote Desktop Protocol (RDP / MS-RDPBCGR) 10.x enterprise server & client subsystem, featuring TPKT/X.224 connection negotiation, RDP_NEG_REQ / RDP_NEG_RSP multi-protocol security (Standard RDP, TLS 1.3, CredSSP/NLA), MCS domain and channel join sequencing, Static & Dynamic Virtual Channels (`cliprdr`, `rdpsnd`, `rdpdr`, `rdpgfx`, `rail`), Fast-Path dirty rectangle bitmap tile encoding, Fast-Path input event handling (keyboard scan codes, mouse coordinates, buttons, wheel), SCM TermService / SessionEnv / UmRdpService registration, VersionDatabase registration, Win32 C ABI exports, and multi-tenant concurrent session stress verification.*
+- [x] **MS-RDPBCGR Protocol & Transport Architecture (`include/micant/rdp.hpp`)**:
+  - `EnterpriseRdpServer`: High-performance TCP Port 3389 listener, connection lifecycle management, and session dispatch.
+  - TPKT & X.224 framing: TPKT Header (Version 3), X.224 Connection Request (CR), Connection Confirm (CC), Disconnect Request (DR).
+  - RDP Security Negotiation: `RDP_NEG_REQ`, `RDP_NEG_RSP`, `RDP_NEG_FAILURE` supporting `PROTOCOL_RDP`, `PROTOCOL_SSL`, and `PROTOCOL_HYBRID` (CredSSP / NLA) with strict server-side policy enforcement.
+  - Session Management: Multi-session tracking with auto-generated WinStation names (`RDP-Tcp#<id>`), user, domain, client IP, resolution, and state machine (`Handshaking` -> `ActiveStreaming` -> `Disconnected` -> `LoggingOff`).
+  - Virtual Channels Architecture:
+    * `cliprdr`: Shared clipboard mirror cache with multi-format support (`CF_RAW_UNICODETEXT`, `CF_RAW_TEXT`, `CF_RAW_DIB`).
+    * `rdpsnd`: Audio output streaming buffer with PCM / WASAPI multiplexing.
+    * `rdpdr`: Device redirection virtual channel for disks, printers, and smart cards.
+    * `rdpgfx`: RemoteFX progressive tile encoding and modern graphics pipeline.
+    * `rail`: RemoteApp local desktop integration.
+  - Fast-Path Frame & Input Processing:
+    * `FASTPATH_UPDATETYPE_BITMAP`: Dirty rectangular region tile encoding with 32bpp BGRA serialization.
+    * `FASTPATH_INPUT_EVENT_SCANCODE`: Keystroke make/break and scancode processing.
+    * `FASTPATH_INPUT_EVENT_MOUSE`: Sub-pixel cursor coordinates, button states (Left, Right, Middle), and wheel delta.
+- [x] **Win32 & SCM Parity**:
+  - SCM Service registration:
+    * `TermService` ("Remote Desktop Services", Auto Start, Running, `svchost.exe -k termsvcs`).
+    * `SessionEnv` ("Remote Desktop Configuration", Auto Start, Running, `svchost.exe -k netsvcs`).
+    * `UmRdpService` ("Remote Desktop Device Redirector Configuration Service", Demand Start, Running, `svchost.exe -k LocalSystemNetworkRestricted`).
+  - VersionDatabase registration (`10.0.26100.1`): `mstsc.exe`, `rdpclip.exe`, `rdpcorets.dll`, `termsrv.dll`, `wtsapi32.dll`, `rdpsnd.dll`, `rdpdr.dll`, `mstscax.dll`.
+  - Win32 C ABI exports: `MicaRdpServerInitialize`, `MicaRdpServerStart`, `MicaRdpServerStop`, `MicaRdpCreateSession`, `MicaRdpDisconnectSession`, `MicaRdpLogoffSession`, `MicaRdpGetServerStats`, `MicaRdpServerShutdown`.
+- [x] **Unit Test Suite 214 (`Test_WindowsRemoteDesktop_RDP_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, server lifecycle, TPKT framing, X.224 CR/CC negotiation with NLA CredSSP, policy rejection of non-NLA clients, session creation and WinStation naming, virtual channel packet routing, clipboard redirection cache, Fast-Path dirty rect tile encoding, Fast-Path keyboard and mouse input parsing, session state transitions, Win32 C ABI parity, and 120-operation concurrent multithreaded stress test (8 threads).
+
 
 
 
