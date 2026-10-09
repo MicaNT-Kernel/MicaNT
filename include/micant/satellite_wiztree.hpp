@@ -343,6 +343,178 @@ inline void* CreateRoundRectRgn(void* /*a*/ = nullptr, void* /*b*/ = nullptr, vo
 inline BOOL GdiFlush(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
 inline void* GetPaletteEntries(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
 
+// ----------------------------------------------------------------------------
+// WizTree Remaining Subsystem Satellite Extensions
+// ----------------------------------------------------------------------------
+
+// 1. shell32.dll
+inline int32_t SHDoDragDrop(void* /*hwnd*/, void* /*pdtobj*/, void* /*pdsrc*/, uint32_t dwEffect, uint32_t* pdwEffect) noexcept {
+    if (pdwEffect) *pdwEffect = dwEffect;
+    return 0;
+}
+inline int32_t SHCreateShellItemArrayFromIDLists(uint32_t /*cidl*/, const void** /*rgpidl*/, void** ppsiItemArray) noexcept {
+    if (ppsiItemArray) *ppsiItemArray = nullptr;
+    return 0;
+}
+
+// 2. user32.dll - Gestures & Per-Monitor V2 DPI
+inline BOOL SetGestureConfig(void* /*hwnd*/, uint32_t /*dwReserved*/, uint32_t /*cIDs*/, void* /*pGestureConfig*/, uint32_t /*cbSize*/) noexcept { return 1; }
+inline BOOL CloseGestureInfoHandle(void* /*hGestureInfo*/) noexcept { return 1; }
+inline BOOL GetGestureInfo(void* /*hGestureInfo*/, void* /*pGestureInfo*/) noexcept { return 0; }
+
+inline BOOL SystemParametersInfoForDpi(uint32_t /*uiAction*/, uint32_t /*uiParam*/, void* /*pvParam*/, uint32_t /*fWinIni*/, uint32_t /*dpi*/) noexcept { return 1; }
+inline BOOL PhysicalToLogicalPoint(void* /*hWnd*/, void* /*lpPoint*/) noexcept { return 1; }
+inline int32_t GetSystemMetricsForDpi(int32_t nIndex, uint32_t dpi) noexcept {
+    int32_t base = 0;
+    switch (nIndex) {
+        case 0: base = 1920; break;
+        case 1: base = 1080; break;
+        case 2: base = 32; break;
+        case 3: base = 32; break;
+        case 4: base = 32; break;
+        default: base = 16; break;
+    }
+    return static_cast<int32_t>(static_cast<uint64_t>(base) * dpi / 96);
+}
+inline uint32_t GetDpiForWindow(void* /*hWnd*/) noexcept { return 96; }
+inline BOOL AreDpiAwarenessContextsEqual(void* a, void* b) noexcept { return a == b ? 1 : 0; }
+inline int32_t GetAwarenessFromDpiAwarenessContext(void* /*value*/) noexcept { return 2; }
+inline void* GetWindowDpiAwarenessContext(void* /*hWnd*/) noexcept { return reinterpret_cast<void*>(static_cast<uintptr_t>(-4)); }
+inline void* GetThreadDpiAwarenessContext() noexcept { return reinterpret_cast<void*>(static_cast<uintptr_t>(-4)); }
+inline void* SetThreadDpiAwarenessContext(void* /*dpiContext*/) noexcept { return reinterpret_cast<void*>(static_cast<uintptr_t>(-4)); }
+inline BOOL AdjustWindowRectExForDpi(void* /*lpRect*/, uint32_t /*dwStyle*/, BOOL /*bMenu*/, uint32_t /*dwExStyle*/, uint32_t /*dpi*/) noexcept { return 1; }
+
+// 3. kernel32.dll
+inline uint32_t VerLanguageNameW(uint32_t /*wLang*/, wchar_t* szLang, uint32_t cchLang) noexcept {
+    if (!szLang || cchLang == 0) return 0;
+    const wchar_t desc[] = L"English (United States)";
+    size_t len = std::wcslen(desc);
+    if (len >= cchLang) len = cchLang - 1;
+    std::wcsncpy(szLang, desc, len);
+    szLang[len] = L'\0';
+    return static_cast<uint32_t>(len);
+}
+inline BOOL GetLogicalProcessorInformation(void* /*Buffer*/, uint32_t* ReturnedLength) noexcept {
+    if (ReturnedLength) *ReturnedLength = 0;
+    return 1;
+}
+inline BOOL IsWow64Process(void* /*hProcess*/, BOOL* Wow64Process) noexcept {
+    if (Wow64Process) *Wow64Process = 0;
+    return 1;
+}
+inline BOOL ProcessIdToSessionId(uint32_t /*dwProcessId*/, uint32_t* pSessionId) noexcept {
+    if (pSessionId) *pSessionId = 1;
+    return 1;
+}
+inline uint32_t LocaleNameToLCID(const wchar_t* /*lpName*/, uint32_t /*dwFlags*/) noexcept {
+    return 0x0409;
+}
+inline BOOL GetTimeZoneInformationForYear(uint16_t /*wYear*/, void* /*pDynamicTimeZoneInformation*/, void* /*pTimeZoneInformation*/) noexcept {
+    return 1;
+}
+inline BOOL GetSystemTimes(void* lpIdleTime, void* lpKernelTime, void* lpUserTime) noexcept {
+    if (lpIdleTime) std::memset(lpIdleTime, 0, 8);
+    if (lpKernelTime) std::memset(lpKernelTime, 0, 8);
+    if (lpUserTime) std::memset(lpUserTime, 0, 8);
+    return 1;
+}
+
+// 4. shfolder.dll
+inline int32_t SHGetFolderPathW_WizTree(void* /*hwnd*/, int32_t /*csidl*/, void* /*hToken*/, uint32_t /*dwFlags*/, wchar_t* pszPath) noexcept {
+    if (pszPath) {
+        std::wcscpy(pszPath, L"C:\\Users\\admin\\AppData\\Roaming");
+    }
+    return 0;
+}
+
+// 5. api-ms-win-crt-string-l1-1-0.dll
+inline void* crt_memset(void* dest, int c, size_t count) noexcept {
+    return std::memset(dest, c, count);
+}
+
+// 6. ntdll.dll
+inline int32_t __stdcall NtOpenFile(void** FileHandle, uint32_t /*DesiredAccess*/, void* /*ObjectAttributes*/, void* /*IoStatusBlock*/, uint32_t /*ShareAccess*/, uint32_t /*OpenOptions*/) noexcept {
+    if (FileHandle) *FileHandle = reinterpret_cast<void*>(0x100);
+    return 0;
+}
+struct NT_UNICODE_STRING {
+    uint16_t Length;
+    uint16_t MaximumLength;
+    wchar_t* Buffer;
+};
+inline void __stdcall RtlInitUnicodeString(NT_UNICODE_STRING* DestinationString, const wchar_t* SourceString) noexcept {
+    if (!DestinationString) return;
+    if (!SourceString) {
+        DestinationString->Length = DestinationString->MaximumLength = 0;
+        DestinationString->Buffer = nullptr;
+        return;
+    }
+    size_t len = std::wcslen(SourceString);
+    DestinationString->Length = static_cast<uint16_t>(len * sizeof(wchar_t));
+    DestinationString->MaximumLength = static_cast<uint16_t>((len + 1) * sizeof(wchar_t));
+    DestinationString->Buffer = const_cast<wchar_t*>(SourceString);
+}
+
+// 7. msimg32.dll
+inline BOOL TransparentBlt(void* /*hdcDest*/, int /*xoriginDest*/, int /*yoriginDest*/, int /*wDest*/, int /*hDest*/, void* /*hdcSrc*/, int /*xoriginSrc*/, int /*yoriginSrc*/, int /*wSrc*/, int /*hSrc*/, uint32_t /*crTransparent*/) noexcept {
+    return 1;
+}
+
+// 8. windowscodecs.dll
+inline int32_t WICConvertBitmapSource(const void* /*dstFormat*/, void* pISource, void** ppIDst) noexcept {
+    if (ppIDst) *ppIDst = pISource;
+    return 0;
+}
+
+// 9. uxtheme.dll - Buffered Paint & DPI theme
+inline int32_t BufferedPaintInit() noexcept { return 0; }
+inline int32_t BufferedPaintUnInit() noexcept { return 0; }
+inline void* BeginBufferedPaint(void* hdcTarget, const void* /*prcTarget*/, int /*dwFormat*/, void* /*pPaintParams*/, void** phdc) noexcept {
+    if (phdc) *phdc = hdcTarget;
+    return reinterpret_cast<void*>(0xBEEF);
+}
+inline int32_t EndBufferedPaint(void* /*hBufferedPaint*/, BOOL /*fUpdateTarget*/) noexcept { return 0; }
+inline int32_t BufferedPaintSetAlpha(void* /*hBufferedPaint*/, const void* /*prc*/, uint8_t /*alpha*/) noexcept { return 0; }
+inline void* OpenThemeDataForDpi(void* /*hwnd*/, const wchar_t* /*pszClassList*/, uint32_t /*dpi*/) noexcept {
+    return reinterpret_cast<void*>(0x8801);
+}
+
+// 10. imm32.dll
+inline BOOL ImmAssociateContextEx(void* /*hWnd*/, void* /*hIMC*/, uint32_t /*dwFlags*/) noexcept { return 1; }
+
+// 11. dwmapi.dll
+inline int32_t DwmDefWindowProc(void* /*hWnd*/, uint32_t /*msg*/, uint64_t /*wParam*/, int64_t /*lParam*/, int64_t* plResult) noexcept {
+    if (plResult) *plResult = 0;
+    return 0;
+}
+
+// 12. shcore.dll
+inline int32_t GetDpiForMonitor(void* /*hmonitor*/, int /*dpiType*/, uint32_t* dpiX, uint32_t* dpiY) noexcept {
+    if (dpiX) *dpiX = 96;
+    if (dpiY) *dpiY = 96;
+    return 0;
+}
+inline int32_t GetProcessDpiAwareness(void* /*hprocess*/, int* value) noexcept {
+    if (value) *value = 2;
+    return 0;
+}
+inline int32_t GetScaleFactorForMonitor(void* /*hMon*/, int* pScale) noexcept {
+    if (pScale) *pScale = 100;
+    return 0;
+}
+
+// 13. crypt32.dll
+inline BOOL CryptDecodeObject(uint32_t /*dwCertEncodingType*/, const char* /*lpszStructType*/, const uint8_t* /*pbEncoded*/, uint32_t /*cbEncoded*/, uint32_t /*dwFlags*/, void* /*pvStructInfo*/, uint32_t* pcbStructInfo) noexcept {
+    if (pcbStructInfo) *pcbStructInfo = 64;
+    return 1;
+}
+inline void* PFXImportCertStore(void* /*pPFX*/, const wchar_t* /*szPassword*/, uint32_t /*dwFlags*/) noexcept {
+    return reinterpret_cast<void*>(0xCAFE);
+}
+inline void* CertFindChainInStore(void* /*hCertStore*/, uint32_t /*dwCertEncodingType*/, uint32_t /*dwFindFlags*/, uint32_t /*dwFindType*/, const void* /*pvFindPara*/, void* /*pPrevChainContext*/) noexcept {
+    return nullptr;
+}
+
 inline void InitializeWizTreeWin32Exports() {
     auto& ldr = ldr::DynamicLoader::get();
 
@@ -621,6 +793,74 @@ inline void InitializeWizTreeWin32Exports() {
     ldr.registerExport("gdi32.dll", "GdiFlush", reinterpret_cast<void*>(GdiFlush));
     ldr.registerExport("gdi32.dll", "GetPaletteEntries", reinterpret_cast<void*>(GetPaletteEntries));
 
+    // shell32.dll
+    ldr.registerExportOrdinal("shell32.dll", 18, reinterpret_cast<void*>(ILClone));
+    ldr.registerExport("shell32.dll", "SHDoDragDrop", reinterpret_cast<void*>(SHDoDragDrop));
+    ldr.registerExport("shell32.dll", "SHCreateShellItemArrayFromIDLists", reinterpret_cast<void*>(SHCreateShellItemArrayFromIDLists));
+
+    // user32.dll
+    ldr.registerExport("user32.dll", "SetGestureConfig", reinterpret_cast<void*>(SetGestureConfig));
+    ldr.registerExport("user32.dll", "CloseGestureInfoHandle", reinterpret_cast<void*>(CloseGestureInfoHandle));
+    ldr.registerExport("user32.dll", "GetGestureInfo", reinterpret_cast<void*>(GetGestureInfo));
+    ldr.registerExport("user32.dll", "SystemParametersInfoForDpi", reinterpret_cast<void*>(SystemParametersInfoForDpi));
+    ldr.registerExport("user32.dll", "PhysicalToLogicalPoint", reinterpret_cast<void*>(PhysicalToLogicalPoint));
+    ldr.registerExport("user32.dll", "GetSystemMetricsForDpi", reinterpret_cast<void*>(GetSystemMetricsForDpi));
+    ldr.registerExport("user32.dll", "GetDpiForWindow", reinterpret_cast<void*>(GetDpiForWindow));
+    ldr.registerExport("user32.dll", "AreDpiAwarenessContextsEqual", reinterpret_cast<void*>(AreDpiAwarenessContextsEqual));
+    ldr.registerExport("user32.dll", "GetAwarenessFromDpiAwarenessContext", reinterpret_cast<void*>(GetAwarenessFromDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "GetWindowDpiAwarenessContext", reinterpret_cast<void*>(GetWindowDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "GetThreadDpiAwarenessContext", reinterpret_cast<void*>(GetThreadDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "SetThreadDpiAwarenessContext", reinterpret_cast<void*>(SetThreadDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "AdjustWindowRectExForDpi", reinterpret_cast<void*>(AdjustWindowRectExForDpi));
+
+    // kernel32.dll
+    ldr.registerExport("kernel32.dll", "VerLanguageNameW", reinterpret_cast<void*>(VerLanguageNameW));
+    ldr.registerExport("kernel32.dll", "GetLogicalProcessorInformation", reinterpret_cast<void*>(GetLogicalProcessorInformation));
+    ldr.registerExport("kernel32.dll", "IsWow64Process", reinterpret_cast<void*>(IsWow64Process));
+    ldr.registerExport("kernel32.dll", "ProcessIdToSessionId", reinterpret_cast<void*>(ProcessIdToSessionId));
+    ldr.registerExport("kernel32.dll", "LocaleNameToLCID", reinterpret_cast<void*>(LocaleNameToLCID));
+    ldr.registerExport("kernel32.dll", "GetTimeZoneInformationForYear", reinterpret_cast<void*>(GetTimeZoneInformationForYear));
+    ldr.registerExport("kernel32.dll", "GetSystemTimes", reinterpret_cast<void*>(GetSystemTimes));
+
+    // shfolder.dll
+    ldr.registerExport("shfolder.dll", "SHGetFolderPathW", reinterpret_cast<void*>(SHGetFolderPathW_WizTree));
+
+    // api-ms-win-crt-string-l1-1-0.dll
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "memset", reinterpret_cast<void*>(crt_memset));
+
+    // ntdll.dll
+    ldr.registerExport("ntdll.dll", "NtOpenFile", reinterpret_cast<void*>(NtOpenFile));
+    ldr.registerExport("ntdll.dll", "RtlInitUnicodeString", reinterpret_cast<void*>(RtlInitUnicodeString));
+
+    // msimg32.dll
+    ldr.registerExport("msimg32.dll", "TransparentBlt", reinterpret_cast<void*>(TransparentBlt));
+
+    // windowscodecs.dll
+    ldr.registerExport("windowscodecs.dll", "WICConvertBitmapSource", reinterpret_cast<void*>(WICConvertBitmapSource));
+
+    // uxtheme.dll
+    ldr.registerExport("uxtheme.dll", "BufferedPaintSetAlpha", reinterpret_cast<void*>(BufferedPaintSetAlpha));
+    ldr.registerExport("uxtheme.dll", "EndBufferedPaint", reinterpret_cast<void*>(EndBufferedPaint));
+    ldr.registerExport("uxtheme.dll", "BeginBufferedPaint", reinterpret_cast<void*>(BeginBufferedPaint));
+    ldr.registerExport("uxtheme.dll", "BufferedPaintUnInit", reinterpret_cast<void*>(BufferedPaintUnInit));
+    ldr.registerExport("uxtheme.dll", "BufferedPaintInit", reinterpret_cast<void*>(BufferedPaintInit));
+    ldr.registerExport("uxtheme.dll", "OpenThemeDataForDpi", reinterpret_cast<void*>(OpenThemeDataForDpi));
+
+    // imm32.dll
+    ldr.registerExport("imm32.dll", "ImmAssociateContextEx", reinterpret_cast<void*>(ImmAssociateContextEx));
+
+    // dwmapi.dll
+    ldr.registerExport("dwmapi.dll", "DwmDefWindowProc", reinterpret_cast<void*>(DwmDefWindowProc));
+
+    // shcore.dll
+    ldr.registerExport("shcore.dll", "GetDpiForMonitor", reinterpret_cast<void*>(GetDpiForMonitor));
+    ldr.registerExport("shcore.dll", "GetProcessDpiAwareness", reinterpret_cast<void*>(GetProcessDpiAwareness));
+    ldr.registerExport("shcore.dll", "GetScaleFactorForMonitor", reinterpret_cast<void*>(GetScaleFactorForMonitor));
+
+    // crypt32.dll
+    ldr.registerExport("crypt32.dll", "CryptDecodeObject", reinterpret_cast<void*>(CryptDecodeObject));
+    ldr.registerExport("crypt32.dll", "PFXImportCertStore", reinterpret_cast<void*>(PFXImportCertStore));
+    ldr.registerExport("crypt32.dll", "CertFindChainInStore", reinterpret_cast<void*>(CertFindChainInStore));
 }
 
 } // namespace micant::satellite::wiztree

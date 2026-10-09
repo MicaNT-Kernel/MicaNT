@@ -1234,8 +1234,10 @@ inline void InitializeOleAut32SubsystemExports() {
     ldr.registerExportOrdinal("oleaut32.dll", 9, reinterpret_cast<void*>(VariantInit));
     ldr.registerExportOrdinal("oleaut32.dll", 10, reinterpret_cast<void*>(VariantClear));
     ldr.registerExportOrdinal("oleaut32.dll", 12, reinterpret_cast<void*>(VariantChangeType));
+    ldr.registerExportOrdinal("oleaut32.dll", 26, reinterpret_cast<void*>(SafeArrayPutElement));
     ldr.registerExportOrdinal("oleaut32.dll", 149, reinterpret_cast<void*>(SysStringByteLen));
     ldr.registerExportOrdinal("oleaut32.dll", 150, reinterpret_cast<void*>(SysAllocStringByteLen));
+    ldr.registerExportOrdinal("oleaut32.dll", 411, reinterpret_cast<void*>(SafeArrayCreateVector));
 
     // VARIANT APIs
     ldr.registerExport("oleaut32.dll", "VariantInit", reinterpret_cast<void*>(VariantInit));

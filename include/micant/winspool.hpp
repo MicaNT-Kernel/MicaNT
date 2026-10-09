@@ -977,6 +977,7 @@ inline void InitializePrintSpoolerSubsystemExports() {
     ldr.registerExport("winspool.drv", "EnumPrintersA", reinterpret_cast<void*>(EnumPrintersA));
     ldr.registerExport("winspool.drv", "GetPrinterW", reinterpret_cast<void*>(GetPrinterW));
     ldr.registerExport("winspool.drv", "GetDefaultPrinterW", reinterpret_cast<void*>(GetDefaultPrinterW));
+    ldr.registerExportOrdinal("winspool.drv", 203, reinterpret_cast<void*>(GetDefaultPrinterW));
     ldr.registerExport("winspool.drv", "GetDefaultPrinterA", reinterpret_cast<void*>(GetDefaultPrinterA));
     ldr.registerExport("winspool.drv", "SetDefaultPrinterW", reinterpret_cast<void*>(SetDefaultPrinterW));
     ldr.registerExport("winspool.drv", "StartDocPrinterW", reinterpret_cast<void*>(StartDocPrinterW));

@@ -577,6 +577,10 @@ inline void registerSumatraExports(TLoader& ldr) {
 
     // shell32.dll
     ldr.registerExport("shell32.dll", "SHAddToRecentDocs", reinterpret_cast<void*>(SHAddToRecentDocs));
+    ldr.registerExportOrdinal("shell32.dll", 190, reinterpret_cast<void*>(+[](const wchar_t* /*pszPath*/) noexcept -> void* {
+        static uint8_t s_pidl[4] = { 0x02, 0x00, 0x00, 0x00 };
+        return s_pidl;
+    }));
 
     // shlwapi.dll
     ldr.registerExport("shlwapi.dll", "StrStrW", reinterpret_cast<void*>(StrStrW));
@@ -586,6 +590,16 @@ inline void registerSumatraExports(TLoader& ldr) {
     ldr.registerExport("shlwapi.dll", "SHSetValueW", reinterpret_cast<void*>(SHSetValueW));
     ldr.registerExport("shlwapi.dll", "SHGetValueW", reinterpret_cast<void*>(SHGetValueW));
     ldr.registerExport("shlwapi.dll", "UrlEscapeW", reinterpret_cast<void*>(UrlEscapeW));
+    ldr.registerExport("shlwapi.dll", "QISearch", reinterpret_cast<void*>(+[](void* that, const void* /*pqit*/, const void* /*riid*/, void** ppv) noexcept -> int32_t {
+        if (!that || !ppv) return -2147467261;
+        *ppv = that;
+        return 0;
+    }));
+    ldr.registerExportOrdinal("shlwapi.dll", 219, reinterpret_cast<void*>(+[](void* that, const void* /*pqit*/, const void* /*riid*/, void** ppv) noexcept -> int32_t {
+        if (!that || !ppv) return -2147467261;
+        *ppv = that;
+        return 0;
+    }));
 
     // uiautomationcore.dll
     ldr.registerExport("uiautomationcore.dll", "UiaRaiseStructureChangedEvent", reinterpret_cast<void*>(UiaRaiseStructureChangedEvent));

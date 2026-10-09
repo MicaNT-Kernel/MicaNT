@@ -294,6 +294,73 @@ inline char* inet_ntoa(in_addr in) noexcept {
     return buf;
 }
 
+inline int getpeername(SOCKET s, sockaddr* name, int* namelen) noexcept {
+    if (s == INVALID_SOCKET || !name || !namelen || *namelen < static_cast<int>(sizeof(sockaddr_in))) {
+        g_WsaLastError = WSAEINVAL;
+        return SOCKET_ERROR;
+    }
+    auto* sin = reinterpret_cast<sockaddr_in*>(name);
+    sin->sin_family = AF_INET;
+    sin->sin_port = htons(80);
+    sin->sin_addr.S_un.S_addr = INADDR_LOOPBACK;
+    *namelen = sizeof(sockaddr_in);
+    return 0;
+}
+
+inline int getsockname(SOCKET s, sockaddr* name, int* namelen) noexcept {
+    if (s == INVALID_SOCKET || !name || !namelen || *namelen < static_cast<int>(sizeof(sockaddr_in))) {
+        g_WsaLastError = WSAEINVAL;
+        return SOCKET_ERROR;
+    }
+    auto* sin = reinterpret_cast<sockaddr_in*>(name);
+    sin->sin_family = AF_INET;
+    sin->sin_port = htons(8080);
+    sin->sin_addr.S_un.S_addr = INADDR_LOOPBACK;
+    *namelen = sizeof(sockaddr_in);
+    return 0;
+}
+
+inline int setsockopt([[maybe_unused]] SOCKET s, [[maybe_unused]] int level, [[maybe_unused]] int optname, [[maybe_unused]] const char* optval, [[maybe_unused]] int optlen) noexcept {
+    return 0;
+}
+
+inline int shutdown([[maybe_unused]] SOCKET s, [[maybe_unused]] int how) noexcept {
+    return 0;
+}
+
+struct hostent {
+    char*  h_name;
+    char** h_aliases;
+    int16_t h_addrtype;
+    int16_t h_length;
+    char** h_addr_list;
+};
+
+inline hostent* gethostbyname(const char* name) noexcept {
+    static thread_local hostent s_he{};
+    static thread_local char s_name[256];
+    static thread_local char* s_aliases[1]{nullptr};
+    static thread_local in_addr s_addr{};
+    static thread_local char* s_addr_list[2]{nullptr, nullptr};
+
+    if (!name) return nullptr;
+    std::strncpy(s_name, name, sizeof(s_name) - 1);
+    s_addr.S_un.S_addr = INADDR_LOOPBACK;
+    s_addr_list[0] = reinterpret_cast<char*>(&s_addr);
+    s_addr_list[1] = nullptr;
+
+    s_he.h_name = s_name;
+    s_he.h_aliases = s_aliases;
+    s_he.h_addrtype = AF_INET;
+    s_he.h_length = 4;
+    s_he.h_addr_list = s_addr_list;
+    return &s_he;
+}
+
+inline int WSAAsyncSelect([[maybe_unused]] SOCKET s, [[maybe_unused]] void* hWnd, [[maybe_unused]] unsigned int wMsg, [[maybe_unused]] long lEvent) noexcept {
+    return 0;
+}
+
 inline void InitializeWs2_32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("ws2_32.dll", "WSAStartup", reinterpret_cast<void*>(WSAStartup));
@@ -317,6 +384,34 @@ inline void InitializeWs2_32SubsystemExports() {
     ldr.registerExport("ws2_32.dll", "ntohs", reinterpret_cast<void*>(ntohs));
     ldr.registerExport("ws2_32.dll", "htonl", reinterpret_cast<void*>(htonl));
     ldr.registerExport("ws2_32.dll", "ntohl", reinterpret_cast<void*>(ntohl));
+    ldr.registerExport("ws2_32.dll", "getpeername", reinterpret_cast<void*>(getpeername));
+    ldr.registerExport("ws2_32.dll", "getsockname", reinterpret_cast<void*>(getsockname));
+    ldr.registerExport("ws2_32.dll", "setsockopt", reinterpret_cast<void*>(setsockopt));
+    ldr.registerExport("ws2_32.dll", "shutdown", reinterpret_cast<void*>(shutdown));
+    ldr.registerExport("ws2_32.dll", "gethostbyname", reinterpret_cast<void*>(gethostbyname));
+    ldr.registerExport("ws2_32.dll", "WSAAsyncSelect", reinterpret_cast<void*>(WSAAsyncSelect));
+
+    // Standard Winsock 1.1 / 2.0 Numeric Export Ordinals
+    ldr.registerExportOrdinal("ws2_32.dll", 1, reinterpret_cast<void*>(accept));
+    ldr.registerExportOrdinal("ws2_32.dll", 2, reinterpret_cast<void*>(bind));
+    ldr.registerExportOrdinal("ws2_32.dll", 3, reinterpret_cast<void*>(closesocket));
+    ldr.registerExportOrdinal("ws2_32.dll", 4, reinterpret_cast<void*>(connect));
+    ldr.registerExportOrdinal("ws2_32.dll", 5, reinterpret_cast<void*>(getpeername));
+    ldr.registerExportOrdinal("ws2_32.dll", 6, reinterpret_cast<void*>(getsockname));
+    ldr.registerExportOrdinal("ws2_32.dll", 9, reinterpret_cast<void*>(htons));
+    ldr.registerExportOrdinal("ws2_32.dll", 11, reinterpret_cast<void*>(inet_addr));
+    ldr.registerExportOrdinal("ws2_32.dll", 13, reinterpret_cast<void*>(listen));
+    ldr.registerExportOrdinal("ws2_32.dll", 15, reinterpret_cast<void*>(ntohs));
+    ldr.registerExportOrdinal("ws2_32.dll", 16, reinterpret_cast<void*>(recv));
+    ldr.registerExportOrdinal("ws2_32.dll", 19, reinterpret_cast<void*>(send));
+    ldr.registerExportOrdinal("ws2_32.dll", 21, reinterpret_cast<void*>(setsockopt));
+    ldr.registerExportOrdinal("ws2_32.dll", 22, reinterpret_cast<void*>(shutdown));
+    ldr.registerExportOrdinal("ws2_32.dll", 23, reinterpret_cast<void*>(socket));
+    ldr.registerExportOrdinal("ws2_32.dll", 52, reinterpret_cast<void*>(gethostbyname));
+    ldr.registerExportOrdinal("ws2_32.dll", 101, reinterpret_cast<void*>(WSAAsyncSelect));
+    ldr.registerExportOrdinal("ws2_32.dll", 111, reinterpret_cast<void*>(WSAGetLastError));
+    ldr.registerExportOrdinal("ws2_32.dll", 115, reinterpret_cast<void*>(WSAStartup));
+    ldr.registerExportOrdinal("ws2_32.dll", 116, reinterpret_cast<void*>(WSACleanup));
 }
 
 } // namespace micant::ws2_32

@@ -18,6 +18,7 @@
 #include "kernel32.hpp"
 #include "user32.hpp"
 #include "ldr.hpp"
+#include "mpr.hpp"
 #include "satellite_wiztree.hpp"
 #include "satellite_putty.hpp"
 #include "satellite_gdiplus.hpp"
@@ -383,6 +384,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // WinMerge 2.16+ Visual Diff & Merge Subsystem Extensions
     winmerge::InitializeWinMergeExports();
+
+    // MPR 1.0 Network Provider Router Subsystem
+    mpr::InitializeMprSubsystemExports();
 }
 
 } // namespace micant::satellite

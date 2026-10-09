@@ -555,6 +555,9 @@ inline void registerEverythingExports(ldr::DynamicLoader& ldr) {
     ldr.registerExport("shlwapi.dll", "SHRegGetUSValueW", reinterpret_cast<void*>(SHRegGetUSValueW));
     ldr.registerExport("shlwapi.dll", "PathIsRootW", reinterpret_cast<void*>(PathIsRootW));
 
+    // shell32.dll
+    ldr.registerExportOrdinal("shell32.dll", 16, reinterpret_cast<void*>(+[](const void* pidl) noexcept -> void* { return const_cast<void*>(pidl); }));
+
     // user32.dll
     ldr.registerExport("user32.dll", "ScrollWindowEx", reinterpret_cast<void*>(ScrollWindowEx));
     ldr.registerExport("user32.dll", "AdjustWindowRect", reinterpret_cast<void*>(AdjustWindowRect));
