@@ -538,11 +538,26 @@ inline uint64_t clock() noexcept {
     return win32::GetTickCount64();
 }
 
+#ifdef _acmdln
+#undef _acmdln
+#endif
+#ifdef _wcmdln
+#undef _wcmdln
+#endif
+#ifdef __initenv
+#undef __initenv
+#endif
+#ifdef __winitenv
+#undef __winitenv
+#endif
+
 inline char g_CommandLineBuffer[260] = "surshell.exe";
-inline char* _acmdln = g_CommandLineBuffer;
+inline char* g_Acmdln = g_CommandLineBuffer;
+inline char** __p__acmdln() noexcept { return &g_Acmdln; }
 
 inline char* g_InitEnv[2] = { nullptr, nullptr };
-inline char** __initenv = g_InitEnv;
+inline char** g_InitEnvPtr = g_InitEnv;
+inline char*** __p___initenv() noexcept { return &g_InitEnvPtr; }
 
 inline unsigned int ___lc_codepage_func() noexcept {
     return 65001; // CP_UTF8
@@ -815,8 +830,10 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "wcsstr", reinterpret_cast<void*>(wcsstr));
 
     // Environment & Codepages
-    ldr.registerExport("msvcrt.dll", "__initenv", reinterpret_cast<void*>(&__initenv));
-    ldr.registerExport("msvcrt.dll", "_acmdln", reinterpret_cast<void*>(&_acmdln));
+    ldr.registerExport("msvcrt.dll", "__initenv", reinterpret_cast<void*>(&g_InitEnvPtr));
+    ldr.registerExport("msvcrt.dll", "_acmdln", reinterpret_cast<void*>(&g_Acmdln));
+    ldr.registerExport("msvcrt.dll", "__p__acmdln", reinterpret_cast<void*>(__p__acmdln));
+    ldr.registerExport("msvcrt.dll", "__p___initenv", reinterpret_cast<void*>(__p___initenv));
     ldr.registerExport("msvcrt.dll", "___lc_codepage_func", reinterpret_cast<void*>(___lc_codepage_func));
     ldr.registerExport("msvcrt.dll", "___mb_cur_max_func", reinterpret_cast<void*>(___mb_cur_max_func));
 
