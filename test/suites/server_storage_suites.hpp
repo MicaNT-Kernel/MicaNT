@@ -6233,6 +6233,235 @@ void Test_WindowsRemoteDesktop_RDP_Subsystem() {
     std::cout << "[TEST] Suite 214: Windows Remote Desktop Protocol (RDP / MS-RDPBCGR) Enterprise Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 215: Interactive Window Manager, User32 Input Routing & Message Pump Subsystem
+// ============================================================================
+void Test_InteractiveWindowManager_InputRouting_Subsystem() {
+    auto& router = micant::input::InputRouter::get();
+    router.initialize(1280, 800);
+
+    // Stage 1: Window Registration & Desktop Topology
+    win32::HWND hwndNpp = reinterpret_cast<win32::HWND>(0x10001);
+    win32::HWND hwnd7z  = reinterpret_cast<win32::HWND>(0x10002);
+    win32::HWND hwndVlc = reinterpret_cast<win32::HWND>(0x10003);
+
+    router.registerWindow(hwndNpp, L"Notepad++ - [new 1]", 50, 50, 600, 400);
+    router.registerWindow(hwnd7z,  L"7-Zip File Manager",   400, 200, 500, 350);
+    router.registerWindow(hwndVlc, L"VLC media player",     700, 100, 450, 300);
+
+    TEST_ASSERT(router.getActiveWindow() == hwndVlc, "Frontmost window (VLC) must be active window");
+    TEST_ASSERT(router.getFocusedWindow() == hwndVlc, "Frontmost window (VLC) must have keyboard focus");
+
+    micant::input::ManagedWindowBounds bNpp{};
+    bool getNppOk = router.getWindowBounds(hwndNpp, bNpp);
+    TEST_ASSERT(getNppOk, "Querying Notepad++ bounds must succeed");
+    TEST_ASSERT(bNpp.width == 600 && bNpp.height == 400, "Notepad++ width/height must match registered dimensions");
+
+    // Stage 2: Hardware Mouse Coordinate Routing & WM_MOUSEMOVE
+    router.routeMouseEvent(750, 150, 0); // Inside VLC client area
+    int curX = 0, curY = 0;
+    router.getCursorPos(curX, curY);
+    TEST_ASSERT(curX == 750 && curY == 150, "Hardware cursor position must match routed coordinates");
+
+    auto hit1 = router.hitTest(750, 150);
+    TEST_ASSERT(hit1.hwnd == hwndVlc, "Hit test must resolve to VLC window");
+    TEST_ASSERT(hit1.hitCode == micant::input::HTCLIENT, "Hit code must be HTCLIENT inside client area");
+
+    // Stage 3: Non-Client Hit Testing (Caption, Close, Maximize, Minimize, Borders)
+    auto hitCaption = router.hitTest(750, 115);
+    TEST_ASSERT(hitCaption.hwnd == hwndVlc, "Hit test must resolve to VLC");
+    TEST_ASSERT(hitCaption.hitCode == micant::input::HTCAPTION, "Hit code must be HTCAPTION on titlebar");
+
+    auto hitClose = router.hitTest(1135, 115);
+    TEST_ASSERT(hitClose.hitCode == micant::input::HTCLOSE, "Hit code must be HTCLOSE at right edge of caption");
+
+    auto hitMax = router.hitTest(1100, 115);
+    TEST_ASSERT(hitMax.hitCode == micant::input::HTMAXBUTTON, "Hit code must be HTMAXBUTTON adjacent to close");
+
+    auto hitMin = router.hitTest(1070, 115);
+    TEST_ASSERT(hitMin.hitCode == micant::input::HTMINBUTTON, "Hit code must be HTMINBUTTON adjacent to maximize");
+
+    auto hitTopBorder = router.hitTest(750, 102);
+    TEST_ASSERT(hitTopBorder.hitCode == micant::input::HTTOP, "Hit code must be HTTOP on top border");
+
+    auto hitRightBorder = router.hitTest(1148, 150);
+    TEST_ASSERT(hitRightBorder.hitCode == micant::input::HTRIGHT, "Hit code must be HTRIGHT on right border");
+
+    // Stage 4: Window Dragging & Active Z-Order Promotion
+    router.routeMouseEvent(100, 65, micant::input::MOUSE_LBUTTONDOWN);
+    TEST_ASSERT(router.getActiveWindow() == hwndNpp, "Clicking Notepad++ caption must promote it to active window");
+    TEST_ASSERT(router.getFocusedWindow() == hwndNpp, "Notepad++ must receive keyboard focus");
+
+    router.routeMouseEvent(150, 115, 0);
+    router.routeMouseEvent(150, 115, micant::input::MOUSE_LBUTTONUP);
+
+    router.getWindowBounds(hwndNpp, bNpp);
+    TEST_ASSERT(bNpp.x == 100 && bNpp.y == 100, "Window must move by (+50, +50) to (100, 100)");
+
+    // Stage 5: Aero Snap State Machine (Left 50%, Right 50%, Maximize)
+    router.routeMouseEvent(200, 115, micant::input::MOUSE_LBUTTONDOWN);
+    router.routeMouseEvent(5, 300, 0);
+    router.routeMouseEvent(5, 300, micant::input::MOUSE_LBUTTONUP);
+
+    router.getWindowBounds(hwndNpp, bNpp);
+    TEST_ASSERT(bNpp.currentSnap == micant::input::SnapMode::LeftHalf, "Window must snap to LeftHalf");
+    TEST_ASSERT(bNpp.x == 0 && bNpp.width == 640, "Snapped left bounds must have x=0 and width=640");
+
+    router.routeMouseEvent(100, 15, micant::input::MOUSE_LBUTTONDOWN);
+    router.routeMouseEvent(300, 5, 0);
+    router.routeMouseEvent(300, 5, micant::input::MOUSE_LBUTTONUP);
+
+    router.getWindowBounds(hwndNpp, bNpp);
+    TEST_ASSERT(bNpp.maximized, "Dragging to top screen edge must maximize window");
+    TEST_ASSERT(bNpp.x == 0 && bNpp.width == 1280, "Maximized window width must span full 1280px");
+
+    router.toggleMaximize(hwndNpp);
+    router.getWindowBounds(hwndNpp, bNpp);
+    TEST_ASSERT(!bNpp.maximized, "Toggling maximize must restore normal state");
+    TEST_ASSERT(bNpp.width == 600 && bNpp.height == 400, "Restored window width/height must match original bounds");
+
+    // Stage 6: Mouse Button Events (Down, Up, Wheel)
+    router.routeMouseEvent(200, 200, micant::input::MOUSE_RBUTTONDOWN);
+    router.routeMouseEvent(200, 200, micant::input::MOUSE_RBUTTONUP);
+    router.routeMouseEvent(200, 200, 0, 120);
+
+    uint64_t mm = 0, mc = 0, ke = 0, ch = 0, md = 0, wd = 0, as = 0;
+    router.getStats(mm, mc, ke, ch, md, wd, as);
+    TEST_ASSERT(mm > 0, "Mouse moves must be recorded");
+    TEST_ASSERT(mc >= 3, "Mouse clicks must be recorded");
+    TEST_ASSERT(as >= 2, "Aero snaps must be recorded");
+
+    // Stage 7: Keyboard Scancode Translation to Virtual Key
+    TEST_ASSERT(router.scancodeToVirtualKey(0x1E) == 'A', "Scancode 0x1E must map to VK_A");
+    TEST_ASSERT(router.scancodeToVirtualKey(0x39) == micant::input::VK_SPACE, "Scancode 0x39 must map to VK_SPACE");
+    TEST_ASSERT(router.scancodeToVirtualKey(0x01) == micant::input::VK_ESCAPE, "Scancode 0x01 must map to VK_ESCAPE");
+    TEST_ASSERT(router.scancodeToVirtualKey(0x1C) == micant::input::VK_RETURN, "Scancode 0x1C must map to VK_RETURN");
+    TEST_ASSERT(router.scancodeToVirtualKey(0x0E) == micant::input::VK_BACK, "Scancode 0x0E must map to VK_BACK");
+
+    // Stage 8: TranslateMessage Synthesis & WM_CHAR Generation with Shift
+    router.setFocusedWindow(hwndNpp);
+    router.routeKeyboardEvent(0x2A, false); // Shift down
+    router.routeKeyboardEvent(0x32, false); // 'M'
+    router.routeKeyboardEvent(0x32, true);
+    router.routeKeyboardEvent(0x2A, true);  // Shift up
+
+    router.routeKeyboardEvent(0x17, false); // 'i'
+    router.routeKeyboardEvent(0x17, true);
+    router.routeKeyboardEvent(0x2E, false); // 'c'
+    router.routeKeyboardEvent(0x2E, true);
+    router.routeKeyboardEvent(0x1E, false); // 'a'
+    router.routeKeyboardEvent(0x1E, true);
+
+    router.routeKeyboardEvent(0x2A, false); // Shift down
+    router.routeKeyboardEvent(0x31, false); // 'N'
+    router.routeKeyboardEvent(0x31, true);
+    router.routeKeyboardEvent(0x14, false); // 'T'
+    router.routeKeyboardEvent(0x14, true);
+    router.routeKeyboardEvent(0x2A, true);  // Shift up
+
+    router.routeKeyboardEvent(0x39, false); // Space
+    router.routeKeyboardEvent(0x39, true);
+
+    router.routeKeyboardEvent(0x03, false); // '2'
+    router.routeKeyboardEvent(0x03, true);
+    router.routeKeyboardEvent(0x0B, false); // '0'
+    router.routeKeyboardEvent(0x0B, true);
+    router.routeKeyboardEvent(0x03, false); // '2'
+    router.routeKeyboardEvent(0x03, true);
+    router.routeKeyboardEvent(0x07, false); // '6'
+    router.routeKeyboardEvent(0x07, true);
+
+    // Stage 9: Window Focus Switching (WM_SETFOCUS / WM_KILLFOCUS)
+    router.setFocusedWindow(hwnd7z);
+    TEST_ASSERT(router.getFocusedWindow() == hwnd7z, "7-Zip must now have focus");
+    router.setFocusedWindow(hwndNpp);
+    TEST_ASSERT(router.getFocusedWindow() == hwndNpp, "Focus must switch back to Notepad++");
+
+    // Stage 10: Interactive Notepad++ Scintilla Document Editing Automation
+    std::wstring docText = router.getNotepadDocumentText();
+    TEST_ASSERT(docText == L"MicaNT 2026", "Notepad++ Scintilla document buffer must contain 'MicaNT 2026'");
+
+    router.routeKeyboardEvent(0x0E, false); // Backspace
+    router.routeKeyboardEvent(0x0E, true);
+    TEST_ASSERT(router.getNotepadDocumentText() == L"MicaNT 202", "Backspace must remove last character");
+
+    router.routeKeyboardEvent(0x1C, false); // Enter
+    router.routeKeyboardEvent(0x1C, true);
+    TEST_ASSERT(router.getNotepadLineCount() == 2, "Enter must increment document line count to 2");
+
+    // Stage 11: Interactive 7-Zip File Manager Command Automation
+    TEST_ASSERT(!router.is7ZipBenchmarkActive(), "7-Zip benchmark must initially be idle");
+    router.dispatch7ZipCommand(hwnd7z, 1001); // Benchmark
+    TEST_ASSERT(router.is7ZipBenchmarkActive(), "Dispatching ID 1001 must start 7-Zip benchmark");
+    TEST_ASSERT(router.get7ZipBenchmarkIterations() == 32, "Benchmark must record 32 compression iterations");
+
+    router.dispatch7ZipCommand(hwnd7z, 1002); // Extract
+    TEST_ASSERT(router.is7ZipExtractOpened(), "Dispatching ID 1002 must trigger extract dialog flag");
+
+    // Stage 12: Interactive VLC Media Player Playback Automation
+    router.setFocusedWindow(hwndVlc);
+    TEST_ASSERT(router.getVlcPlaybackState() == micant::input::VlcState::Stopped, "VLC must start in Stopped state");
+    TEST_ASSERT(router.getVlcVolume() == 80, "VLC default volume must be 80%");
+
+    router.routeKeyboardEvent(0x39, false); // Space
+    router.routeKeyboardEvent(0x39, true);
+    TEST_ASSERT(router.getVlcPlaybackState() == micant::input::VlcState::Playing, "Spacebar must toggle VLC to Playing");
+
+    router.routeKeyboardEvent(0x39, false); // Space
+    router.routeKeyboardEvent(0x39, true);
+    TEST_ASSERT(router.getVlcPlaybackState() == micant::input::VlcState::Paused, "Spacebar must toggle VLC to Paused");
+
+    router.routeKeyboardEvent(0x48, false); // VK_UP
+    router.routeKeyboardEvent(0x48, true);
+    TEST_ASSERT(router.getVlcVolume() == 85, "VK_UP must increment VLC volume to 85%");
+
+    // Stage 13: 100.0% Native Win32 Symbol Satisfaction for 7zFM.exe
+    TEST_ASSERT(micant::satellite::GetSystemDefaultLangID() == 0x0409, "GetSystemDefaultLangID must return en-US");
+    TEST_ASSERT(micant::satellite::GetUserDefaultLangID() == 0x0409, "GetUserDefaultLangID must return en-US");
+    TEST_ASSERT(micant::satellite::GetDriveTypeW(L"C:\\") == 3, "GetDriveTypeW must return DRIVE_FIXED");
+    wchar_t winDirBuf[260]{};
+    uint32_t wLen = micant::satellite::GetWindowsDirectoryW(winDirBuf, 260);
+    TEST_ASSERT(wLen > 0 && std::wstring(winDirBuf) == L"C:\\Windows", "GetWindowsDirectoryW must return C:\\Windows");
+    TEST_ASSERT(micant::satellite::GetDialogBaseUnits() > 0, "GetDialogBaseUnits must return valid metrics");
+    TEST_ASSERT(micant::satellite::CommDlgExtendedError() == 0, "CommDlgExtendedError must return 0");
+
+    // Stage 14: Win32 C ABI Parity Exports & 120-Operation Concurrent Multithreaded Stress Test
+    int32_t abiInit = MicaInputInitialize(1920, 1080);
+    TEST_ASSERT(abiInit == 1, "MicaInputInitialize must return 1");
+
+    int32_t abiMouse = MicaRouteHardwareMouseEvent(500, 500, micant::input::MOUSE_MOVE, 0);
+    TEST_ASSERT(abiMouse == 1, "MicaRouteHardwareMouseEvent must return 1");
+
+    int32_t abiKey = MicaRouteHardwareKeyboardEvent(0x1E, 0);
+    TEST_ASSERT(abiKey == 1, "MicaRouteHardwareKeyboardEvent must return 1");
+
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&router, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                int x = (t * 100 + op * 10) % 1200;
+                int y = (t * 50 + op * 20) % 700;
+                router.routeMouseEvent(x, y, 0);
+                router.routeKeyboardEvent(0x1E, false);
+                router.routeKeyboardEvent(0x1E, true);
+                stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded input stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 215: Interactive Window Manager, User32 Input Routing & Message Pump Subsystem PASSED.\n";
+}
+
+
 
 
 

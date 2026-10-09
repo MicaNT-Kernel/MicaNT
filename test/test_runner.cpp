@@ -219,6 +219,8 @@
 #include "micant/winrm_server.hpp"
 #include "micant/ssh.hpp"
 #include "micant/rdp.hpp"
+#include "micant/input_router.hpp"
+#include "micant/satellite_win32.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -261,7 +263,11 @@ static int g_FailedTests = 0;
 #include "suites/server_storage_suites.hpp"
 
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite214")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite215")) {
+        RUN_TEST(Test_InteractiveWindowManager_InputRouting_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite214") {
         RUN_TEST(Test_WindowsRemoteDesktop_RDP_Subsystem);
         return g_FailedTests;
     }
@@ -917,6 +923,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsRemoteManagement_WinRM_Subsystem);
     RUN_TEST(Test_WindowsOpenSSH_ServerClient_Subsystem);
     RUN_TEST(Test_WindowsRemoteDesktop_RDP_Subsystem);
+    RUN_TEST(Test_InteractiveWindowManager_InputRouting_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

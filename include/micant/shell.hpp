@@ -204,6 +204,8 @@
 #include "wsus_server.hpp"
 #include "winrm_server.hpp"
 #include "ssh.hpp"
+#include "rdp.hpp"
+#include "input_router.hpp"
 
 namespace micant::shell {
 
@@ -553,6 +555,7 @@ public:
             if (cmd == "wsus" || cmd == "wsusutil" || cmd == "wuauclt") { cmdWsus(tokens, out); return 0; }
             if (cmd == "winrm" || cmd == "winrs" || cmd == "wsman") { cmdWinRm(tokens, out); return 0; }
             if (cmd == "ssh" || cmd == "sshd" || cmd == "ssh-keygen" || cmd == "ssh-agent" || cmd == "sftp" || cmd == "scp") { cmdSsh(tokens, out); return 0; }
+            if (cmd == "input" || cmd == "msgpump" || cmd == "wndmgr") { cmdInputRouter(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {
