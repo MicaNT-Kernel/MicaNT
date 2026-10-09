@@ -1538,6 +1538,7 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shlwapi.dll", "PathStripPathA", reinterpret_cast<void*>(PathStripPathA));
     ldr.registerExport("shlwapi.dll", "StrRetToStrW", reinterpret_cast<void*>(StrRetToStrW));
     ldr.registerExport("api-ms-win-shcore-scaling-l1-1-1.dll", "SetProcessDpiAwareness", reinterpret_cast<void*>(SetProcessDpiAwareness));
+    ldr.registerExport("api-ms-win-shcore-obsolete-l1-1-0.dll", "CommandLineToArgvW", reinterpret_cast<void*>(CommandLineToArgvW));
 }
 
 } // namespace micant::shell32
