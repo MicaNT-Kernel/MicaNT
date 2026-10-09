@@ -30,6 +30,7 @@
 #include "satellite_qbittorrent.hpp"
 #include "satellite_winscp.hpp"
 #include "satellite_wireshark.hpp"
+#include "satellite_filezilla.hpp"
 
 namespace micant::satellite {
 
@@ -404,6 +405,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // Wireshark 4.x / Universal C Runtime & MSVC STL Subsystem Extensions
     wireshark::InitializeWiresharkExports();
+
+    // FileZilla 3.x / Sovereign Networking & Enterprise FTP Subsystem Extensions
+    filezilla::InitializeFileZillaExports();
 
     // MPR 1.0 Network Provider Router Subsystem
     mpr::InitializeMprSubsystemExports();

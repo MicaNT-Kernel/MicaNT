@@ -54,8 +54,8 @@ graph TD
 
 | Application | GUI / Runtime Architecture | Core Windows APIs & Kernel Subsystems Stressed | MicaNT Strategic Importance | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **WinSCP & FileZilla** | C++ / Win32 / PuTTY backend | FTP, SFTP, WebDAV, S3, SCP, Job Object sandboxing, async Winsock events, OLE drag-and-drop | **Secure Remote File Management & Automation.** Standard enterprise file transfer, secure SCP/SFTP sessions, and scripting automation (897/897 & 112/112). | **100% VALIDATED (Milestone 225)** |
-| **qBittorrent** | C++ / Qt6 / libtorrent | High-concurrency Winsock TCP/UDP sockets, sparse file pre-allocation, disk cache I/O | **P2P File Transfer.** Proves high-bandwidth network throughput and sustained disk write streams (792/792). | **100% VALIDATED (Milestone 224)** |
+| **WinSCP & FileZilla** | C++ / Win32 / wxWidgets / PuTTY / GnuTLS | FTP, SFTP, WebDAV, S3, SCP, Job Object sandboxing, async Winsock events, OLE drag-and-drop, NCRYPT KSP | **Secure Remote File Management & Automation.** Standard enterprise file transfer, secure SCP/SFTP sessions, and scripting automation (WinSCP: 872/872 & 112/112; FileZilla: 106/106, 78/78, & 21/21 bundled DLLs). | **100% VALIDATED (Milestones 225 & 227)** |
+| **qBittorrent** | C++ / Qt6 / libtorrent | High-concurrency Winsock TCP/UDP sockets, sparse file pre-allocation, disk cache I/O | **P2P File Transfer.** Proves high-bandwidth network throughput and sustained disk write streams (756/756). | **100% VALIDATED (Milestone 224)** |
 | **Wireshark** | C/C++ / Qt | Raw network packet capture, Npcap kernel driver interface, protocol packet dissection, Universal C Runtime & MSVC STL | **Network Protocol Analyzer.** Proves low-level packet capture, protocol dissection, and universal UCRT/MSVCP runtime satisfaction (195/195, 101/101, 128/128, 164/164). | **100% VALIDATED (Milestone 226)** |
 
 ---

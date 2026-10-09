@@ -27,7 +27,7 @@ jobs:
           clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/syscalls.cpp -o bin/syscalls.o
           clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp bin/dispatcher.o bin/syscalls.o -o bin/micant_tests.exe
 
-      - name: Execute Full 226-Suite Test Battery (100% Pass Rate Required)
+      - name: Execute Full 227-Suite Test Battery (100% Pass Rate Required)
         shell: pwsh
         run: |
           .\bin\micant_tests.exe

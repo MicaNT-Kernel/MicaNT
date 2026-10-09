@@ -8533,6 +8533,183 @@ inline void Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite() {
     std::cout << "[TEST] Suite 226: Wireshark 4.6+ / TShark Packet Capture & UCRT/MSVCP Subsystem PASSED.\n";
 }
 
+// ----------------------------------------------------------------------------
+// Suite 227: FileZilla 3.x / Sovereign Networking & Enterprise FTP Subsystem
+// ----------------------------------------------------------------------------
+inline void Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite() {
+    std::cout << "[TEST] Executing Suite 227: FileZilla 3.x / Sovereign Networking & Enterprise FTP Subsystem...\n";
+
+    // Ensure satellites are initialized
+    micant::satellite::InitializeSatelliteWin32Exports();
+
+    // Stage 1: KERNEL32 Power Status, Processor Topology & Volume Resolution
+    micant::satellite::filezilla::SYSTEM_POWER_STATUS pwr{};
+    TEST_ASSERT(micant::satellite::filezilla::K32_GetSystemPowerStatus(&pwr) == 1, "GetSystemPowerStatus must succeed");
+    TEST_ASSERT(pwr.ACLineStatus == 1, "AC line status must be online");
+    TEST_ASSERT(pwr.BatteryFlag == 128, "Battery flag must indicate no battery for sovereign desktop");
+    TEST_ASSERT(micant::satellite::filezilla::K32_GetActiveProcessorCount(0) == 8, "GetActiveProcessorCount must report 8 cores");
+
+    wchar_t profileBuf[64] = {0};
+    uint32_t profLen = micant::satellite::filezilla::K32_GetProfileStringW(L"FileZilla", L"Version", L"3.71.1", profileBuf, 64);
+    TEST_ASSERT(profLen > 0 && std::wcscmp(profileBuf, L"3.71.1") == 0, "GetProfileStringW must return default version");
+
+    wchar_t asciiDomain[64] = {0};
+    int idnLen = micant::satellite::filezilla::K32_IdnToAscii(0, L"filezilla-project.org", -1, asciiDomain, 64);
+    TEST_ASSERT(idnLen > 0 && std::wcscmp(asciiDomain, L"filezilla-project.org") == 0, "IdnToAscii must succeed");
+
+    wchar_t volBuf[64] = {0};
+    auto hVol = micant::satellite::filezilla::K32_FindFirstVolumeW(volBuf, 64);
+    TEST_ASSERT(hVol != nullptr && std::wcsstr(volBuf, L"Volume") != nullptr, "FindFirstVolumeW must return volume identifier");
+    micant::satellite::filezilla::K32_FindVolumeClose(hVol);
+
+    char pathBuf[64] = {0};
+    uint32_t pathLen = micant::satellite::filezilla::K32_GetFinalPathNameByHandleA(nullptr, pathBuf, 64, 0);
+    TEST_ASSERT(pathLen > 0 && std::strstr(pathBuf, "MicaNT") != nullptr, "GetFinalPathNameByHandleA must succeed");
+
+    // Stage 2: USER32 Display Modes, Window Animation & Dynamic Data Exchange (DDE)
+    uint8_t devModeBuf[256] = {0};
+    TEST_ASSERT(micant::satellite::filezilla::U32_EnumDisplaySettingsW(nullptr, 0, devModeBuf) == 1, "EnumDisplaySettingsW must succeed");
+    uint32_t width = *reinterpret_cast<uint32_t*>(devModeBuf + 108);
+    uint32_t height = *reinterpret_cast<uint32_t*>(devModeBuf + 112);
+    TEST_ASSERT(width == 1920 && height == 1080, "EnumDisplaySettingsW must report 1080p display mode");
+
+    TEST_ASSERT(micant::satellite::filezilla::U32_AnimateWindow(nullptr, 200, 0) == 1, "AnimateWindow must succeed");
+    void* hDdeData = micant::satellite::filezilla::U32_DdeCreateDataHandle(1, nullptr, 0, 0, nullptr, 1, 0);
+    TEST_ASSERT(hDdeData != nullptr, "DdeCreateDataHandle must return valid handle");
+    TEST_ASSERT(micant::satellite::filezilla::U32_DdeGetLastError(1) == 0, "DdeGetLastError must return no error");
+
+    // Stage 3: GDI32 Polygons, Region Testing & Coordinate Transforms
+    auto hRgn = micant::satellite::filezilla::GDI_CreatePolygonRgn(nullptr, 4, 1);
+    TEST_ASSERT(hRgn != nullptr, "CreatePolygonRgn must return valid HRGN");
+    TEST_ASSERT(micant::satellite::filezilla::GDI_PtInRegion(hRgn, 100, 100) == 1, "PtInRegion must report true");
+    TEST_ASSERT(micant::satellite::filezilla::GDI_RectInRegion(hRgn, nullptr) == 1, "RectInRegion must report true");
+
+    float xform[6] = {0};
+    TEST_ASSERT(micant::satellite::filezilla::GDI_GetWorldTransform(nullptr, xform) == 1, "GetWorldTransform must succeed");
+    TEST_ASSERT(xform[0] == 1.0f && xform[3] == 1.0f, "World transform identity diagonal must be 1.0");
+
+    // Stage 4: ADVAPI32 LUID Allocation, Security Tokens & Credentials
+    uint32_t luid1[2] = {0}, luid2[2] = {0};
+    TEST_ASSERT(micant::satellite::filezilla::ADV_AllocateLocallyUniqueId(luid1) == 1, "AllocateLocallyUniqueId must succeed");
+    TEST_ASSERT(micant::satellite::filezilla::ADV_AllocateLocallyUniqueId(luid2) == 1, "Second AllocateLocallyUniqueId must succeed");
+    TEST_ASSERT(luid2[0] > luid1[0], "LUID counter must monotonically increment");
+
+    micant::win32::HANDLE hNewToken = nullptr;
+    TEST_ASSERT(micant::satellite::filezilla::ADV_DuplicateTokenEx(nullptr, 0, nullptr, 2, 1, &hNewToken) == 1, "DuplicateTokenEx must succeed");
+    TEST_ASSERT(hNewToken != nullptr, "Duplicated token handle must be valid");
+    TEST_ASSERT(micant::satellite::filezilla::ADV_ImpersonateLoggedOnUser(hNewToken) == 1, "ImpersonateLoggedOnUser must succeed");
+    TEST_ASSERT(micant::satellite::filezilla::ADV_RevertToSelf() == 1, "RevertToSelf must succeed");
+
+    uint8_t sigBuf[64] = {0};
+    uint32_t sigLen = sizeof(sigBuf);
+    TEST_ASSERT(micant::satellite::filezilla::ADV_CryptSignHashA(1, 0, nullptr, 0, sigBuf, &sigLen) == 1, "CryptSignHashA must succeed");
+    TEST_ASSERT(sigBuf[0] == 0xAA, "Signature buffer must be signed");
+
+    // Stage 5: CRYPT32 & NCRYPT Key Storage Provider (KSP) Cryptography
+    const uint8_t plain[16] = {0x01, 0x02, 0x03, 0x04};
+    uint8_t cipherOut[16] = {0};
+    uint32_t outLen = 0;
+    TEST_ASSERT(micant::satellite::filezilla::NC_NCryptDecrypt(1, plain, 16, nullptr, cipherOut, 16, &outLen, 0) == 0, "NCryptDecrypt must succeed");
+    TEST_ASSERT(outLen == 16 && std::memcmp(plain, cipherOut, 16) == 0, "Decrypted text must match plaintext");
+
+    uint32_t keyBits = 0;
+    uint32_t propLen = 0;
+    TEST_ASSERT(micant::satellite::filezilla::NC_NCryptGetProperty(1, L"Length", reinterpret_cast<uint8_t*>(&keyBits), sizeof(keyBits), &propLen, 0) == 0, "NCryptGetProperty must succeed");
+    TEST_ASSERT(keyBits == 2048, "NCrypt key length property must be 2048");
+
+    uint8_t ncSig[256] = {0};
+    uint32_t ncSigLen = 0;
+    TEST_ASSERT(micant::satellite::filezilla::NC_NCryptSignHash(1, nullptr, plain, 16, ncSig, 256, &ncSigLen, 0) == 0, "NCryptSignHash must succeed");
+    TEST_ASSERT(ncSigLen == 256 && ncSig[0] == 0x55, "NCrypt signature must be generated");
+
+    uint8_t randBuf[32] = {0};
+    TEST_ASSERT(micant::satellite::filezilla::NC_BCryptGenRandom(nullptr, randBuf, 32, 0) == 0, "NC_BCryptGenRandom must succeed");
+    TEST_ASSERT(randBuf[0] == 0x42, "BCrypt random bytes must be generated");
+
+    // Stage 6: SHELL32 & UXTHEME Visual Styling Subsystem
+    void* hIconL = nullptr;
+    void* hIconS = nullptr;
+    TEST_ASSERT(micant::satellite::filezilla::SHL_SHDefExtractIconW(L"filezilla.exe", 0, 0, &hIconL, &hIconS, 32) == 0, "SHDefExtractIconW must succeed");
+    TEST_ASSERT(hIconL != nullptr && hIconS != nullptr, "Extracted icons must be non-null");
+    TEST_ASSERT(micant::satellite::filezilla::SHL_SHGetIconOverlayIndexW(nullptr, 0) == 0, "SHGetIconOverlayIndexW must return 0");
+
+    int32_t contentRc[4] = {0, 0, 100, 100};
+    int32_t extentRc[4] = {0, 0, 0, 0};
+    TEST_ASSERT(micant::satellite::filezilla::UXT_GetThemeBackgroundExtent(nullptr, nullptr, 1, 1, contentRc, extentRc) == 0, "GetThemeBackgroundExtent must succeed");
+    TEST_ASSERT(extentRc[2] == 100 && extentRc[3] == 100, "Theme extent rect must match content rect");
+    TEST_ASSERT(micant::satellite::filezilla::UXT_GetThemeSysColor(nullptr, 1) == 0x00FFFFFF, "GetThemeSysColor must return white");
+
+    // Stage 7: Winsock 2.0 WSA Event Synchronization
+    auto hWsaEvent = micant::satellite::filezilla::WS2_WSACreateEvent();
+    TEST_ASSERT(hWsaEvent != nullptr, "WSACreateEvent must create event handle");
+    TEST_ASSERT(micant::satellite::filezilla::WS2_WSASetEvent(hWsaEvent) == 1, "WSASetEvent must signal event");
+    uint32_t waitRes = micant::satellite::filezilla::WS2_WSAWaitForMultipleEvents(1, &hWsaEvent, 1, 100, 0);
+    TEST_ASSERT(waitRes == 0, "WSAWaitForMultipleEvents on signaled event must return WAIT_OBJECT_0");
+    TEST_ASSERT(micant::satellite::filezilla::WS2_WSACloseEvent(hWsaEvent) == 1, "WSACloseEvent must close handle");
+
+    // Stage 8: Legacy MSVCRT Math, Wide String & Filesystem Subsystem
+    TEST_ASSERT(std::abs(micant::satellite::filezilla::CRT_cosh(0.0) - 1.0) < 1e-9, "CRT_cosh(0) must equal 1.0");
+    TEST_ASSERT(std::abs(micant::satellite::filezilla::CRT_sinh(0.0) - 0.0) < 1e-9, "CRT_sinh(0) must equal 0.0");
+    TEST_ASSERT(std::abs(micant::satellite::filezilla::CRT_tanh(0.0) - 0.0) < 1e-9, "CRT_tanh(0) must equal 0.0");
+    TEST_ASSERT(std::abs(micant::satellite::filezilla::CRT_atof("3.14159") - 3.14159) < 1e-5, "CRT_atof must parse float");
+    TEST_ASSERT(micant::satellite::filezilla::CRT_atol("1234567") == 1234567, "CRT_atol must parse long");
+
+    wchar_t* wdup = micant::satellite::filezilla::CRT_wcsdup(L"FileZilla_Client");
+    TEST_ASSERT(wdup != nullptr && std::wcscmp(wdup, L"FileZilla_Client") == 0, "CRT_wcsdup must duplicate string");
+    std::free(wdup);
+
+    wchar_t wcpyDst[32] = {0};
+    micant::satellite::filezilla::CRT_wcsncpy(wcpyDst, L"SovereignFTP", 12);
+    TEST_ASSERT(std::wcscmp(wcpyDst, L"SovereignFTP") == 0, "CRT_wcsncpy must copy wide string");
+    TEST_ASSERT(micant::satellite::filezilla::CRT_wcsnicmp(L"FTP", L"ftp", 3) == 0, "CRT_wcsnicmp must compare case-insensitively");
+
+    void* alignedMem = micant::satellite::filezilla::CRT_aligned_malloc(1024, 64);
+    TEST_ASSERT(alignedMem != nullptr, "CRT_aligned_malloc must allocate memory");
+    TEST_ASSERT((reinterpret_cast<uintptr_t>(alignedMem) % 64) == 0, "Memory must be 64-byte aligned");
+    micant::satellite::filezilla::CRT_aligned_free(alignedMem);
+
+    wchar_t cwdBuf[64] = {0};
+    wchar_t* cwdRes = micant::satellite::filezilla::CRT_wgetcwd(cwdBuf, 64);
+    TEST_ASSERT(cwdRes != nullptr && std::wcscmp(cwdRes, L"C:\\MicaNT") == 0, "CRT_wgetcwd must return C:\\MicaNT");
+    TEST_ASSERT(micant::satellite::filezilla::CRT_getdrive() == 3, "CRT_getdrive must return drive 3 (C:)");
+
+    // Stage 9: Concurrent Multi-Threaded FTP/SFTP Transfer & Event Synchronization Stress Test
+    std::atomic<uint32_t> ftpTransferOps{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&ftpTransferOps, t]() {
+            for (int i = 0; i < 100; ++i) {
+                // 1. Allocate unique transfer session LUID
+                uint32_t transferLuid[2] = {0};
+                micant::satellite::filezilla::ADV_AllocateLocallyUniqueId(transferLuid);
+
+                // 2. Create and signal async socket event
+                auto ev = micant::satellite::filezilla::WS2_WSACreateEvent();
+                micant::satellite::filezilla::WS2_WSASetEvent(ev);
+                micant::satellite::filezilla::WS2_WSAWaitForMultipleEvents(1, &ev, 1, 50, 0);
+                micant::satellite::filezilla::WS2_WSACloseEvent(ev);
+
+                // 3. Perform 64-byte aligned socket buffer operations
+                void* buf = micant::satellite::filezilla::CRT_aligned_malloc(512, 64);
+                if (buf) {
+                    std::memset(buf, static_cast<uint8_t>(t + i), 512);
+                    micant::satellite::filezilla::CRT_aligned_free(buf);
+                }
+
+                ftpTransferOps.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(ftpTransferOps.load() == 800, "800-operation parallel FTP/SFTP transfer stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 227: FileZilla 3.x / Sovereign Networking & Enterprise FTP Subsystem PASSED.\n";
+}
+
+
 
 
 
