@@ -12,11 +12,54 @@
 #include "micant/uefi.hpp"
 #include "micant/boot.hpp"
 #include "micant/bootvid.hpp"
-#include "micant/boot_event_loop.hpp"
 #include <new>
 #include <vector>
 
 namespace micant::bootloader {
+
+/**
+ * @brief Freestanding 12x19 Software Mouse Cursor for bare-metal UEFI GOP.
+ */
+struct SoftwareCursor {
+    static constexpr uint32_t CURSOR_WIDTH = 12;
+    static constexpr uint32_t CURSOR_HEIGHT = 19;
+    static constexpr const char* CURSOR_BITMAP[19] = {
+        "X           ",
+        "XX          ",
+        "X.X         ",
+        "X..X        ",
+        "X...X       ",
+        "X....X      ",
+        "X.....X     ",
+        "X......X    ",
+        "X.......X   ",
+        "X........X  ",
+        "X.....XXXXX ",
+        "X..X..X     ",
+        "X.X X..X    ",
+        "XX   X..X   ",
+        "X     X..X  ",
+        "      X..X  ",
+        "       XX   ",
+        "            ",
+        "            "
+    };
+
+    void render(bootvid::BootVideoDriver& driver, int32_t x, int32_t y) {
+        bootvid::Color white{255, 255, 255};
+        bootvid::Color black{0, 0, 0};
+        for (uint32_t row = 0; row < CURSOR_HEIGHT; ++row) {
+            for (uint32_t col = 0; col < CURSOR_WIDTH; ++col) {
+                char c = CURSOR_BITMAP[row][col];
+                if (c == 'X') {
+                    driver.putPixel(x + col, y + row, black);
+                } else if (c == '.') {
+                    driver.putPixel(x + col, y + row, white);
+                }
+            }
+        }
+    }
+};
 
 /**
  * @brief Core UEFI Boot Engine logic.
