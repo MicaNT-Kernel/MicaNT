@@ -6871,6 +6871,223 @@ void Test_PuTTYTerminal_AnsiWin32_Subsystem() {
     std::cout << "[TEST] Suite 217: PuTTY 0.82+ Sovereign Win32 Satellite Subsystem & ANSI Terminal Engine PASSED.\n";
 }
 
+void Test_SumatraPDF_Gdiplus_Subsystem() {
+    std::cout << "[TEST] Running Suite 218: SumatraPDF 3.6+ Sovereign GDI+ 2D Vector & Document Subsystem...\n";
+
+    // Stage 1: GDI+ Memory Allocator & Lifecycle (GdipAlloc, GdipFree)
+    void* mem = micant::satellite::gdiplus::GdipAlloc(256);
+    TEST_ASSERT(mem != nullptr, "GdipAlloc must return valid allocated buffer");
+    std::memset(mem, 0xAA, 256);
+    TEST_ASSERT(reinterpret_cast<uint8_t*>(mem)[0] == 0xAA, "Allocated buffer must be writable");
+    micant::satellite::gdiplus::GdipFree(mem);
+
+    // Stage 2: 2D Affine Matrix Engine (scale, rotate, translate, invert, point transform)
+    micant::satellite::gdiplus::GpMatrix* mat = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateMatrix(&mat) == micant::satellite::gdiplus::Ok && mat != nullptr, "GdipCreateMatrix must succeed");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipTranslateMatrix(mat, 10.0f, 20.0f, micant::satellite::gdiplus::MatrixOrderAppend) == micant::satellite::gdiplus::Ok, "TranslateMatrix must succeed");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipScaleMatrix(mat, 2.0f, 2.0f, micant::satellite::gdiplus::MatrixOrderPrepend) == micant::satellite::gdiplus::Ok, "ScaleMatrix must succeed");
+
+    micant::satellite::gdiplus::PointF pt{5.0f, 5.0f};
+    TEST_ASSERT(micant::satellite::gdiplus::GdipTransformMatrixPoints(mat, &pt, 1) == micant::satellite::gdiplus::Ok, "TransformMatrixPoints must succeed");
+    // scale(2) then translate(10, 20): 5*2+10 = 20, 5*2+20 = 30
+    TEST_ASSERT(pt.X == 20.0f && pt.Y == 30.0f, "Transformed coordinates must match affine matrix equation");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipInvertMatrix(mat) == micant::satellite::gdiplus::Ok, "InvertMatrix must succeed");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipDeleteMatrix(mat) == micant::satellite::gdiplus::Ok, "GdipDeleteMatrix must succeed");
+
+    // Stage 3: Graphics Path Geometry & Rectangles
+    micant::satellite::gdiplus::GpPath* path = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCreatePath(micant::satellite::gdiplus::FillModeAlternate, &path) == micant::satellite::gdiplus::Ok && path != nullptr, "GdipCreatePath must succeed");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipAddPathRectangleI(path, 10, 10, 200, 100) == micant::satellite::gdiplus::Ok, "AddPathRectangleI must succeed");
+    TEST_ASSERT(path->points.size() == 4, "Rectangle path must contain 4 vertices");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipResetPath(path) == micant::satellite::gdiplus::Ok && path->points.empty(), "ResetPath must clear points");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipDeletePath(path) == micant::satellite::gdiplus::Ok, "DeletePath must succeed");
+
+    // Stage 4: Pens, Brushes & Dash Styles
+    micant::satellite::gdiplus::GpBrush solidBrush{};
+    micant::satellite::gdiplus::GdipSetSolidFillColor(&solidBrush, 0xFFFF8000);
+    TEST_ASSERT(solidBrush.color == 0xFFFF8000, "Solid brush color must match set ARGB");
+
+    micant::satellite::gdiplus::GpBrush* hatch = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateHatchBrush(1, 0xFF000000, 0xFFFFFFFF, &hatch) == micant::satellite::gdiplus::Ok && hatch != nullptr, "CreateHatchBrush must succeed");
+    TEST_ASSERT(hatch->type == 1 && hatch->color == 0xFF000000 && hatch->backColor == 0xFFFFFFFF, "Hatch brush properties must match");
+
+    micant::satellite::gdiplus::GpBrush* cloned = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCloneBrush(hatch, &cloned) == micant::satellite::gdiplus::Ok && cloned != nullptr, "CloneBrush must succeed");
+    delete hatch;
+    delete cloned;
+
+    micant::satellite::gdiplus::GpPen* pen = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCreatePen2(&solidBrush, 2.5f, micant::satellite::gdiplus::UnitPixel, &pen) == micant::satellite::gdiplus::Ok && pen != nullptr, "CreatePen2 must succeed");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipSetPenDashStyle(pen, micant::satellite::gdiplus::DashStyleDash) == micant::satellite::gdiplus::Ok, "SetPenDashStyle must succeed");
+    TEST_ASSERT(pen->dashStyle == micant::satellite::gdiplus::DashStyleDash && pen->width == 2.5f, "Pen properties must match");
+    delete pen;
+
+    // Stage 5: Regions & Clipping
+    micant::satellite::gdiplus::GpRegion* rgn = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateRegion(&rgn) == micant::satellite::gdiplus::Ok && rgn != nullptr, "CreateRegion must succeed");
+    micant::satellite::gdiplus::RectF bounds{};
+    TEST_ASSERT(micant::satellite::gdiplus::GdipGetRegionBounds(rgn, nullptr, &bounds) == micant::satellite::gdiplus::Ok, "GetRegionBounds must succeed");
+    TEST_ASSERT(bounds.Width == 1000.0f && bounds.Height == 1000.0f, "Default region bounds must match");
+    void* hRgn = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipGetRegionHRgn(rgn, nullptr, &hRgn) == micant::satellite::gdiplus::Ok && hRgn != nullptr, "GetRegionHRgn must return valid handle");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipDeleteRegion(rgn) == micant::satellite::gdiplus::Ok, "DeleteRegion must succeed");
+
+    // Stage 6: Graphics Context Configuration
+    micant::satellite::gdiplus::GpGraphics gfx{};
+    TEST_ASSERT(micant::satellite::gdiplus::GdipSetSmoothingMode(&gfx, micant::satellite::gdiplus::SmoothingModeAntiAlias) == micant::satellite::gdiplus::Ok, "SetSmoothingMode must succeed");
+    TEST_ASSERT(gfx.smoothing == micant::satellite::gdiplus::SmoothingModeAntiAlias, "Smoothing mode must be AntiAlias");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipSetInterpolationMode(&gfx, micant::satellite::gdiplus::InterpolationModeHighQualityBicubic) == micant::satellite::gdiplus::Ok, "SetInterpolationMode must succeed");
+    TEST_ASSERT(gfx.interpolation == micant::satellite::gdiplus::InterpolationModeHighQualityBicubic, "Interpolation mode must be HighQualityBicubic");
+    void* hdc = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipGetDC(&gfx, &hdc) == micant::satellite::gdiplus::Ok && hdc != nullptr, "GetDC must return valid HDC");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipReleaseDC(&gfx, hdc) == micant::satellite::gdiplus::Ok, "ReleaseDC must succeed");
+
+    // Stage 7: Bitmap Creation, Scan0 LockBits/UnlockBits & Dimensions
+    micant::satellite::gdiplus::GpBitmap* bmp = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateBitmapFromGraphics(640, 480, &gfx, &bmp) == micant::satellite::gdiplus::Ok && bmp != nullptr, "CreateBitmapFromGraphics must succeed");
+    uint32_t bmpW = 0, bmpH = 0;
+    micant::satellite::gdiplus::GdipGetImageWidth(bmp, &bmpW);
+    micant::satellite::gdiplus::GdipGetImageHeight(bmp, &bmpH);
+    TEST_ASSERT(bmpW == 640 && bmpH == 480, "Bitmap dimensions must match 640x480");
+
+    micant::satellite::gdiplus::BitmapData bdata{};
+    micant::satellite::gdiplus::Rect lockRect{0, 0, 640, 480};
+    TEST_ASSERT(micant::satellite::gdiplus::GdipBitmapLockBits(bmp, &lockRect, 1, micant::satellite::gdiplus::PixelFormat32bppARGB, &bdata) == micant::satellite::gdiplus::Ok, "BitmapLockBits must succeed");
+    TEST_ASSERT(bdata.Scan0 != nullptr && bdata.Stride == 640 * 4, "BitmapData scan0 buffer and stride must be valid");
+    TEST_ASSERT(micant::satellite::gdiplus::GdipBitmapUnlockBits(bmp, &bdata) == micant::satellite::gdiplus::Ok, "BitmapUnlockBits must succeed");
+    delete bmp;
+
+    // Stage 8: Typography, Font Families, Fonts & String Measurement
+    micant::satellite::gdiplus::GpFontFamily* fam = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateFontFamilyFromName(L"Segoe UI", nullptr, &fam) == micant::satellite::gdiplus::Ok && fam != nullptr, "CreateFontFamilyFromName must succeed");
+    wchar_t famName[32]{};
+    TEST_ASSERT(micant::satellite::gdiplus::GdipGetFamilyName(fam, famName, 0) == micant::satellite::gdiplus::Ok && std::wcscmp(famName, L"Segoe UI") == 0, "Font family name must match Segoe UI");
+
+    micant::satellite::gdiplus::GpFont* font = nullptr;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateFont(fam, 12.0f, 0, micant::satellite::gdiplus::UnitPoint, &font) == micant::satellite::gdiplus::Ok && font != nullptr, "CreateFont must succeed");
+    float fHeight = 0.0f;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipGetFontHeight(font, nullptr, &fHeight) == micant::satellite::gdiplus::Ok && fHeight > 0.0f, "Font height must be positive");
+
+    micant::satellite::gdiplus::RectF strBox{};
+    int fitted = 0, lines = 0;
+    TEST_ASSERT(micant::satellite::gdiplus::GdipMeasureString(&gfx, L"SumatraPDF Document Canvas", 26, font, nullptr, nullptr, &strBox, &fitted, &lines) == micant::satellite::gdiplus::Ok, "MeasureString must succeed");
+    TEST_ASSERT(strBox.Width > 0.0f && fitted == 26 && lines == 1, "Measured string box and codepoint fit count must be valid");
+    delete font;
+    delete fam;
+
+    // Stage 9: User32 Dynamic Data Exchange (DDE) Single-Instance Subsystem
+    uint32_t ddeInst = 0;
+    TEST_ASSERT(micant::satellite::sumatra::DdeInitializeW(&ddeInst, nullptr, 0, 0) == 0 && ddeInst > 0, "DdeInitializeW must succeed with valid instance ID");
+    void* hszService = micant::satellite::sumatra::DdeCreateStringHandleW(ddeInst, L"SUMATRA", 1200);
+    TEST_ASSERT(hszService != nullptr, "DdeCreateStringHandleW must return valid handle");
+    void* hConv = micant::satellite::sumatra::DdeConnect(ddeInst, hszService, nullptr, nullptr);
+    TEST_ASSERT(hConv != nullptr, "DdeConnect must establish conversation handle");
+    uint32_t ddeResult = 0;
+    void* hData = micant::satellite::sumatra::DdeClientTransaction(nullptr, 0, hConv, nullptr, 1, 0x0050, 5000, &ddeResult);
+    TEST_ASSERT(hData != nullptr, "DdeClientTransaction must dispatch command");
+    TEST_ASSERT(micant::satellite::sumatra::DdeFreeDataHandle(hData) == 1, "DdeFreeDataHandle must succeed");
+    TEST_ASSERT(micant::satellite::sumatra::DdeDisconnect(hConv) == 1, "DdeDisconnect must succeed");
+    TEST_ASSERT(micant::satellite::sumatra::DdeFreeStringHandle(ddeInst, hszService) == 1, "DdeFreeStringHandle must succeed");
+    TEST_ASSERT(micant::satellite::sumatra::DdeUninitialize(ddeInst) == 1, "DdeUninitialize must succeed");
+
+    // Stage 10: Shlwapi Substring & URL Escaping
+    const wchar_t* fullUrl = L"https://www.sumatrapdfreader.org/docs/manual.html";
+    const wchar_t* sub = micant::satellite::sumatra::StrStrW(fullUrl, L"manual");
+    TEST_ASSERT(sub != nullptr && std::wcscmp(sub, L"manual.html") == 0, "StrStrW must locate substring exactly");
+    const wchar_t* rsub = micant::satellite::sumatra::StrRStrIW(fullUrl, nullptr, L"DOCS");
+    TEST_ASSERT(rsub != nullptr && std::wcsncmp(rsub, L"docs", 4) == 0, "StrRStrIW case-insensitive search must succeed");
+
+    wchar_t escaped[64]{};
+    uint32_t escLen = 64;
+    TEST_ASSERT(micant::satellite::sumatra::UrlEscapeW(L"file://doc.pdf", escaped, &escLen, 0) == 0, "UrlEscapeW must succeed");
+    TEST_ASSERT(std::wcscmp(escaped, L"file://doc.pdf") == 0, "Escaped URL buffer must be populated");
+
+    // Stage 11: Kernel32 Time & Directory Helpers
+    uint64_t fileTime = 0;
+    TEST_ASSERT(micant::satellite::sumatra::DosDateTimeToFileTime(0x5928, 0x4800, &fileTime) == 1 && fileTime > 0, "DosDateTimeToFileTime must produce valid 64-bit FILETIME");
+    uint32_t drives = micant::satellite::sumatra::GetLogicalDrives();
+    TEST_ASSERT((drives & 0x0C) == 0x0C, "Logical drives bitmask must indicate C: and D: availability");
+
+    wchar_t volPath[16]{};
+    TEST_ASSERT(micant::satellite::sumatra::GetVolumePathNameW(L"D:\\MicaNT_Apps\\doc.pdf", volPath, 16) == 1, "GetVolumePathNameW must succeed");
+    TEST_ASSERT(std::wcscmp(volPath, L"D:\\") == 0, "Volume path name must resolve to D:\\");
+
+    wchar_t tmpPath[260]{};
+    uint32_t tmpId = micant::satellite::sumatra::GetTempFileNameW(L"C:\\Temp\\", L"SMP", 0x1234, tmpPath);
+    TEST_ASSERT(tmpId == 0x1234 && std::wcsstr(tmpPath, L"SMP1234.tmp") != nullptr, "GetTempFileNameW must format temporary file path");
+
+    // Stage 12: UI Automation Core & MsImg32 Graphics
+    TEST_ASSERT(micant::satellite::sumatra::UiaRaiseStructureChangedEvent(nullptr, nullptr, nullptr, 0) == 0, "UiaRaiseStructureChangedEvent must return S_OK");
+    void* hostProv = nullptr;
+    TEST_ASSERT(micant::satellite::sumatra::UiaHostProviderFromHwnd(reinterpret_cast<void*>(0x9001), &hostProv) == 0 && hostProv != nullptr, "UiaHostProviderFromHwnd must return provider pointer");
+    TEST_ASSERT(micant::satellite::sumatra::GradientFill(nullptr, nullptr, 0, nullptr, 0, 0) == 1, "GradientFill must succeed");
+    TEST_ASSERT(micant::satellite::sumatra::PrintDlgExW(nullptr) == 0, "PrintDlgExW must return S_OK");
+
+    // Stage 13: DynamicLoader IAT Binding & Symbol Satisfaction
+    micant::satellite::InitializeSatelliteWin32Exports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+
+    static constexpr const char* SUMATRA_SAMPLE_SYMBOLS[] = {
+        // GDI+ Core
+        "GdipAlloc", "GdipFree", "GdipCreateMatrix", "GdipDeleteMatrix", "GdipSetWorldTransform",
+        "GdipTranslateMatrix", "GdipScaleMatrix", "GdipRotateMatrix", "GdipInvertMatrix",
+        "GdipCreatePath", "GdipAddPathRectangleI", "GdipCreatePen2", "GdipCreateHatchBrush",
+        "GdipCreateRegion", "GdipSetSmoothingMode", "GdipCreateBitmapFromGraphics",
+        "GdipBitmapLockBits", "GdipBitmapUnlockBits", "GdipCreateFontFamilyFromName",
+        "GdipCreateFont", "GdipMeasureString", "GdipDrawString",
+        // Sumatra Win32
+        "DdeInitializeW", "DdeConnect", "DdeClientTransaction", "DdeDisconnect", "DdeUninitialize",
+        "StrStrW", "StrRStrIW", "UrlEscapeW", "DosDateTimeToFileTime", "SystemTimeToFileTime",
+        "GetLogicalDrives", "GetVolumePathNameW", "GetTempFileNameW", "AttachConsole",
+        "UiaRaiseStructureChangedEvent", "UiaHostProviderFromHwnd", "GradientFill", "PrintDlgExW"
+    };
+
+    uint32_t resolvedCount = 0;
+    for (const char* sym : SUMATRA_SAMPLE_SYMBOLS) {
+        const char* candidateDlls[] = {
+            "gdiplus.dll", "kernel32.dll", "user32.dll", "shlwapi.dll",
+            "msimg32.dll", "comdlg32.dll", "uiautomationcore.dll"
+        };
+        bool found = false;
+        for (const char* d : candidateDlls) {
+            if (loader.getExport(d, sym) != nullptr) {
+                found = true;
+                break;
+            }
+        }
+        if (found) ++resolvedCount;
+    }
+    TEST_ASSERT(resolvedCount == sizeof(SUMATRA_SAMPLE_SYMBOLS) / sizeof(SUMATRA_SAMPLE_SYMBOLS[0]),
+                "All sampled GDI+ and SumatraPDF Win32 symbols must be resolved from DynamicLoader export table");
+
+    // Stage 14: Multi-Threaded GDI+ Transformation & Document Stream Concurrent Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> threads;
+    threads.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        threads.emplace_back([&stressSuccessCount, t]() {
+            for (int op = 0; op < 25; ++op) {
+                micant::satellite::gdiplus::GpMatrix* m = nullptr;
+                if (micant::satellite::gdiplus::GdipCreateMatrix(&m) == micant::satellite::gdiplus::Ok && m) {
+                    micant::satellite::gdiplus::GdipTranslateMatrix(m, static_cast<float>(t), static_cast<float>(op), micant::satellite::gdiplus::MatrixOrderAppend);
+                    micant::satellite::gdiplus::PointF p{10.0f, 10.0f};
+                    micant::satellite::gdiplus::GdipTransformMatrixPoints(m, &p, 1);
+                    if (p.X == 10.0f + t && p.Y == 10.0f + op) {
+                        stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    micant::satellite::gdiplus::GdipDeleteMatrix(m);
+                }
+            }
+        });
+    }
+    for (auto& th : threads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(stressSuccessCount.load() == 200, "200-transaction GDI+ transformation concurrent stress test must succeed 100%");
+
+    std::cout << "[TEST] Suite 218: SumatraPDF 3.6+ Sovereign GDI+ 2D Vector & Document Subsystem PASSED.\n";
+}
+
 
 
 

@@ -20,6 +20,8 @@
 #include "ldr.hpp"
 #include "satellite_wiztree.hpp"
 #include "satellite_putty.hpp"
+#include "satellite_gdiplus.hpp"
+#include "satellite_sumatra.hpp"
 
 namespace micant::satellite {
 
@@ -367,6 +369,12 @@ inline void InitializeSatelliteWin32Exports() {
 
     // PuTTY 0.82+ Subsystem Extensions
     putty::registerPuTTYExports(ldr);
+
+    // GDI+ 2D Vector & Imaging Subsystem
+    gdiplus::InitializeGdiPlusSatelliteExports();
+
+    // SumatraPDF 3.6+ Subsystem Extensions
+    sumatra::InitializeSumatraWin32Exports();
 }
 
 } // namespace micant::satellite

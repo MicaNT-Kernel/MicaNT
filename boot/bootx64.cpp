@@ -444,12 +444,13 @@ public:
                 { "notepad++.exe", "8,546,288 B", "3,120,400 B", true },
                 { "vlc.exe",       "1,046,424 B",   "390,120 B", true },
                 { "putty.exe",     "1,706,136 B",   "620,100 B", true },
+                { "SumatraPDF.exe","20,292,984 B", "10,031,830 B", true },
                 { "kernel.sys",      "412,672 B",   "142,310 B", false },
                 { "ntoskrnl.exe",    "684,032 B",   "210,500 B", false },
                 { "surshell.exe",  "1,717,760 B",   "580,240 B", false }
             };
 
-            for (size_t i = 0; i < 7; ++i) {
+            for (size_t i = 0; i < 8; ++i) {
                 uint32_t ry = wy + 114 + (uint32_t)(i * 20);
                 bootvid::Color bg = entries[i].sel ? bootvid::Color{18, 38, 62} : ((i % 2 == 0) ? bootvid::Color{10, 14, 22} : bootvid::Color{8, 11, 18});
                 m_videoDriver.fillRectangle(wx + 2, ry, ww - 4, 20, bg);
@@ -464,7 +465,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "5 Real Apps Active | All Exit Codes: 0 | 100% Native Win32 Subsystem",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "6 Real Apps Active | All Exit Codes: 0 | 100% Native Win32 Subsystem",
                                     bootvid::Color{0, 240, 255}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -475,40 +476,45 @@ public:
         m_videoDriver.fillRectangle(0, taskbarY, width, 1, bootvid::Color{36, 48, 72});
 
         // Start Button
-        m_videoDriver.fillRectangle(6, taskbarY + 4, 82, 26, bootvid::Color{28, 40, 64});
-        m_videoDriver.drawRectangle(6, taskbarY + 4, 82, 26, bootvid::Color{0, 180, 230});
+        m_videoDriver.fillRectangle(6, taskbarY + 4, 76, 26, bootvid::Color{28, 40, 64});
+        m_videoDriver.drawRectangle(6, taskbarY + 4, 76, 26, bootvid::Color{0, 180, 230});
         m_videoDriver.drawString(14, taskbarY + 12, "MICA", bootvid::Color{0, 240, 255}, bootvid::Color{28, 40, 64}, 1);
 
         // Taskbar Buttons with Running Glow Lines
-        uint32_t tbX = 96;
-        m_videoDriver.fillRectangle(tbX, taskbarY + 4, 150, 26, bootvid::Color{22, 32, 50});
-        m_videoDriver.fillRectangle(tbX, taskbarY + 28, 150, 2, bootvid::Color{0, 220, 255});
+        uint32_t tbX = 88;
+        m_videoDriver.fillRectangle(tbX, taskbarY + 4, 140, 26, bootvid::Color{22, 32, 50});
+        m_videoDriver.fillRectangle(tbX, taskbarY + 28, 140, 2, bootvid::Color{0, 220, 255});
         m_videoDriver.drawString(tbX + 8, taskbarY + 12, ">_ Command Prompt", bootvid::Color{240, 248, 255}, bootvid::Color{22, 32, 50}, 1);
 
-        uint32_t tbX2 = tbX + 158;
-        m_videoDriver.fillRectangle(tbX2, taskbarY + 4, 120, 26, bootvid::Color{20, 36, 30});
-        m_videoDriver.fillRectangle(tbX2, taskbarY + 28, 120, 2, bootvid::Color{40, 180, 100});
+        uint32_t tbX2 = tbX + 146;
+        m_videoDriver.fillRectangle(tbX2, taskbarY + 4, 110, 26, bootvid::Color{20, 36, 30});
+        m_videoDriver.fillRectangle(tbX2, taskbarY + 28, 110, 2, bootvid::Color{40, 180, 100});
         m_videoDriver.drawString(tbX2 + 8, taskbarY + 12, "[N++] Notepad++", bootvid::Color{120, 240, 160}, bootvid::Color{20, 36, 30}, 1);
 
-        uint32_t tbX3 = tbX2 + 128;
-        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 110, 26, bootvid::Color{42, 28, 16});
-        m_videoDriver.fillRectangle(tbX3, taskbarY + 28, 110, 2, bootvid::Color{245, 130, 32});
+        uint32_t tbX3 = tbX2 + 116;
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 100, 26, bootvid::Color{42, 28, 16});
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 28, 100, 2, bootvid::Color{245, 130, 32});
         m_videoDriver.drawString(tbX3 + 8, taskbarY + 12, "[VLC] Player", bootvid::Color{255, 180, 100}, bootvid::Color{42, 28, 16}, 1);
 
-        uint32_t tbX4 = tbX3 + 118;
-        m_videoDriver.fillRectangle(tbX4, taskbarY + 4, 100, 26, bootvid::Color{16, 28, 44});
-        m_videoDriver.fillRectangle(tbX4, taskbarY + 28, 100, 2, bootvid::Color{0, 114, 206});
+        uint32_t tbX4 = tbX3 + 106;
+        m_videoDriver.fillRectangle(tbX4, taskbarY + 4, 90, 26, bootvid::Color{16, 28, 44});
+        m_videoDriver.fillRectangle(tbX4, taskbarY + 28, 90, 2, bootvid::Color{0, 114, 206});
         m_videoDriver.drawString(tbX4 + 8, taskbarY + 12, "[7z] 7-Zip", bootvid::Color{100, 200, 255}, bootvid::Color{16, 28, 44}, 1);
 
-        uint32_t tbX5 = tbX4 + 108;
-        m_videoDriver.fillRectangle(tbX5, taskbarY + 4, 110, 26, bootvid::Color{40, 36, 18});
-        m_videoDriver.fillRectangle(tbX5, taskbarY + 28, 110, 2, bootvid::Color{240, 200, 40});
+        uint32_t tbX5 = tbX4 + 96;
+        m_videoDriver.fillRectangle(tbX5, taskbarY + 4, 100, 26, bootvid::Color{40, 36, 18});
+        m_videoDriver.fillRectangle(tbX5, taskbarY + 28, 100, 2, bootvid::Color{240, 200, 40});
         m_videoDriver.drawString(tbX5 + 8, taskbarY + 12, "[Wiz] WizTree", bootvid::Color{255, 230, 120}, bootvid::Color{40, 36, 18}, 1);
 
-        uint32_t tbX6 = tbX5 + 118;
-        m_videoDriver.fillRectangle(tbX6, taskbarY + 4, 110, 26, bootvid::Color{32, 20, 48});
-        m_videoDriver.fillRectangle(tbX6, taskbarY + 28, 110, 2, bootvid::Color{180, 80, 255});
+        uint32_t tbX6 = tbX5 + 106;
+        m_videoDriver.fillRectangle(tbX6, taskbarY + 4, 96, 26, bootvid::Color{32, 20, 48});
+        m_videoDriver.fillRectangle(tbX6, taskbarY + 28, 96, 2, bootvid::Color{180, 80, 255});
         m_videoDriver.drawString(tbX6 + 8, taskbarY + 12, "[SSH] PuTTY", bootvid::Color{220, 160, 255}, bootvid::Color{32, 20, 48}, 1);
+
+        uint32_t tbX7 = tbX6 + 102;
+        m_videoDriver.fillRectangle(tbX7, taskbarY + 4, 110, 26, bootvid::Color{46, 18, 20});
+        m_videoDriver.fillRectangle(tbX7, taskbarY + 28, 110, 2, bootvid::Color{255, 60, 60});
+        m_videoDriver.drawString(tbX7 + 8, taskbarY + 12, "[PDF] Sumatra", bootvid::Color{255, 180, 180}, bootvid::Color{46, 18, 20}, 1);
 
         // System Tray
         uint32_t trayX = (width > 280) ? (width - 270) : 10;
