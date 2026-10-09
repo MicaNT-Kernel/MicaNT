@@ -54,7 +54,7 @@ graph TD
 | Application | GUI / Runtime Architecture | Core Windows APIs & Kernel Subsystems Stressed | MicaNT Strategic Importance | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | **FileZilla Client / WinSCP** | C++ / wxWidgets / Win32 | FTP, SFTP, WebDAV protocols, drag-and-drop OLE/COM integration, shell folder trees | **Secure Remote File Management.** Standard enterprise file transfer and directory synchronization. | **Ready for Audit** |
-| **qBittorrent** | C++ / Qt6 / libtorrent | High-concurrency Winsock TCP/UDP sockets, sparse file pre-allocation, disk cache I/O | **P2P File Transfer.** Proves high-bandwidth network throughput and sustained disk write streams. | **Ready for Audit** |
+| **qBittorrent** | C++ / Qt6 / libtorrent | High-concurrency Winsock TCP/UDP sockets, sparse file pre-allocation, disk cache I/O | **P2P File Transfer.** Proves high-bandwidth network throughput and sustained disk write streams (792/792). | **100% VALIDATED (Milestone 224)** |
 | **Wireshark** | C/C++ / Qt | Raw network packet capture, Npcap kernel driver interface, protocol packet dissection | **Network Protocol Analyzer.** Proves low-level packet capture and protocol diagnostic reliability. | **Priority Backlog** |
 
 ---

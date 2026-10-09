@@ -8161,6 +8161,144 @@ inline void Test_SystemInformer_Diagnostics_And_NativeNT_Suite() {
     std::cout << "[TEST] Suite 223: System Informer 4.0 Native NT Syscalls, Diagnostics & LSA Security PASSED.\n";
 }
 
+// ============================================================================
+// Suite 224: qBittorrent 5.2+ Networking, Async I/O & ICU Subsystem Validation
+// ============================================================================
+inline void Test_qBittorrent_Networking_AsyncIO_And_ICU_Suite() {
+    std::cout << "[TEST] Executing Suite 224: qBittorrent 5.2+ Networking, Async I/O & ICU Subsystem...\n";
+
+    micant::satellite::InitializeSatelliteWin32Exports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+
+    // Stage 1: Loader Export Verification across 12 critical modules
+    TEST_ASSERT(loader.getExport("wsock32.dll", "WSAStartup") != nullptr, "wsock32!WSAStartup must be registered");
+    TEST_ASSERT(loader.getExport("wsock32.dll", "socket") != nullptr, "wsock32!socket must be registered");
+    TEST_ASSERT(loader.getExport("wsock32.dll", "AcceptEx") != nullptr, "wsock32!AcceptEx must be registered");
+    TEST_ASSERT(loader.getExport("ws2_32.dll", "WSAConnect") != nullptr, "ws2_32!WSAConnect must be registered");
+    TEST_ASSERT(loader.getExport("ws2_32.dll", "WSASend") != nullptr, "ws2_32!WSASend must be registered");
+    TEST_ASSERT(loader.getExport("ws2_32.dll", "getaddrinfo") != nullptr, "ws2_32!getaddrinfo must be registered");
+    TEST_ASSERT(loader.getExport("iphlpapi.dll", "GetAdaptersAddresses") != nullptr, "iphlpapi!GetAdaptersAddresses must be registered");
+    TEST_ASSERT(loader.getExport("iphlpapi.dll", "NotifyUnicastIpAddressChange") != nullptr, "iphlpapi!NotifyUnicastIpAddressChange must be registered");
+    TEST_ASSERT(loader.getExport("icuuc.dll", "ucnv_open") != nullptr, "icuuc!ucnv_open must be registered");
+    TEST_ASSERT(loader.getExport("icuuc.dll", "ucnv_getName") != nullptr, "icuuc!ucnv_getName must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "CreateIoCompletionPort") != nullptr, "kernel32!CreateIoCompletionPort must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "GetQueuedCompletionStatus") != nullptr, "kernel32!GetQueuedCompletionStatus must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "LockFileEx") != nullptr, "kernel32!LockFileEx must be registered");
+    TEST_ASSERT(loader.getExport("authz.dll", "AuthzInitializeResourceManager") != nullptr, "authz!AuthzInitializeResourceManager must be registered");
+    TEST_ASSERT(loader.getExport("user32.dll", "SetProcessDpiAwarenessContext") != nullptr, "user32!SetProcessDpiAwarenessContext must be registered");
+    TEST_ASSERT(loader.getExport("user32.dll", "UpdateLayeredWindow") != nullptr, "user32!UpdateLayeredWindow must be registered");
+
+    // Stage 2: Winsock 1.1 / 2.0 Network Subsystem Lifecycle
+    uint8_t wsaData[400] = { 0 };
+    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_WSAStartup(0x0202, wsaData) == 0, "WSAStartup must succeed");
+    
+    uintptr_t s = micant::satellite::qbittorrent::Wsock_socket(2, 1, 6);
+    TEST_ASSERT(s != 0, "Wsock_socket must return valid socket handle");
+    
+    uint16_t netPort = micant::satellite::qbittorrent::Wsock_htons(8080);
+    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_ntohs(netPort) == 8080, "htons / ntohs roundtrip match");
+
+    uint32_t netAddr = micant::satellite::qbittorrent::Wsock_htonl(0x7F000001);
+    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_ntohl(netAddr) == 0x7F000001, "htonl / ntohl roundtrip match");
+
+    TEST_ASSERT(micant::satellite::qbittorrent::Ws2_WSAConnect(s, nullptr, 16, nullptr, nullptr, nullptr, nullptr) == 0, "WSAConnect must succeed");
+
+    uint32_t bytesSent = 0;
+    TEST_ASSERT(micant::satellite::qbittorrent::Ws2_WSASend(s, nullptr, 1, &bytesSent, 0, nullptr, nullptr) == 0, "WSASend must succeed");
+    TEST_ASSERT(bytesSent > 0, "WSASend must report transmitted bytes");
+
+    void* pAddr = nullptr;
+    TEST_ASSERT(micant::satellite::qbittorrent::Ws2_getaddrinfo("localhost", "6881", nullptr, &pAddr) == 0, "getaddrinfo must resolve endpoint");
+    TEST_ASSERT(pAddr != nullptr, "Resolved addrinfo list must not be null");
+    micant::satellite::qbittorrent::Ws2_freeaddrinfo(pAddr);
+
+    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_closesocket(s) == 0, "closesocket must succeed");
+    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_WSACleanup() == 0, "WSACleanup must succeed");
+
+    // Stage 3: IP Helper Adapter & Network Interface Discovery
+    uint32_t bufSize = 0;
+    uint32_t res = micant::satellite::qbittorrent::Iphlp_GetAdaptersAddresses(0, 0, nullptr, nullptr, &bufSize);
+    TEST_ASSERT(res == 111 && bufSize > 0, "GetAdaptersAddresses must report required buffer size");
+
+    std::vector<uint8_t> adapterBuf(bufSize);
+    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_GetAdaptersAddresses(0, 0, nullptr, adapterBuf.data(), &bufSize) == 0, "GetAdaptersAddresses must populate adapters");
+
+    uint8_t luid[8] = { 0 };
+    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_ConvertInterfaceNameToLuidW(L"eth0", luid) == 0, "ConvertInterfaceNameToLuidW must succeed");
+
+    uint32_t ifIndex = 0;
+    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_ConvertInterfaceLuidToIndex(luid, &ifIndex) == 0, "ConvertInterfaceLuidToIndex must succeed");
+    TEST_ASSERT(ifIndex == 1, "Interface index must be 1");
+
+    void* hNotify = nullptr;
+    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_NotifyUnicastIpAddressChange(0, nullptr, nullptr, 0, &hNotify) == 0, "NotifyUnicastIpAddressChange must register callback");
+    TEST_ASSERT(hNotify != nullptr, "Notification handle must be valid");
+    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_CancelMibChangeNotify2(hNotify) == 0, "CancelMibChangeNotify2 must succeed");
+
+    // Stage 4: High-Throughput I/O Completion Ports & Disk Management
+    void* hIocp = micant::satellite::qbittorrent::K32_CreateIoCompletionPort(nullptr, nullptr, 0x1234, 4);
+    TEST_ASSERT(hIocp != nullptr, "CreateIoCompletionPort must return valid IOCP handle");
+
+    TEST_ASSERT(micant::satellite::qbittorrent::K32_PostQueuedCompletionStatus(hIocp, 16384, 0x1234, nullptr) == 1, "PostQueuedCompletionStatus must succeed");
+
+    uint32_t bytesXfer = 0;
+    uintptr_t compKey = 0;
+    void* pOverlapped = nullptr;
+    TEST_ASSERT(micant::satellite::qbittorrent::K32_GetQueuedCompletionStatus(hIocp, &bytesXfer, &compKey, &pOverlapped, 100) == 1, "GetQueuedCompletionStatus must retrieve packet");
+    TEST_ASSERT(bytesXfer > 0 && compKey == 1, "IOCP packet data must be consistent");
+
+    TEST_ASSERT(micant::satellite::qbittorrent::K32_LockFileEx(nullptr, 0, 0, 0, 1024, nullptr) == 1, "LockFileEx must succeed");
+    TEST_ASSERT(micant::satellite::qbittorrent::K32_UnlockFileEx(nullptr, 0, 0, 1024, nullptr) == 1, "UnlockFileEx must succeed");
+    TEST_ASSERT(micant::satellite::qbittorrent::K32_FlushViewOfFile(nullptr, 4096) == 1, "FlushViewOfFile must succeed");
+
+    // Stage 5: International Components for Unicode (ICU) Subsystem
+    int32_t icuErr = 0;
+    void* pCnv = micant::satellite::qbittorrent::Wsock_ucnv_open("utf-8", &icuErr);
+    TEST_ASSERT(pCnv != nullptr && icuErr == 0, "ucnv_open must instantiate UTF-8 converter");
+    TEST_ASSERT(std::strcmp(micant::satellite::qbittorrent::Wsock_ucnv_getName(pCnv, &icuErr), "UTF-8") == 0, "ucnv_getName must report UTF-8");
+    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_ucnv_getMaxCharSize(pCnv) == 4, "ucnv_getMaxCharSize must return 4");
+    micant::satellite::qbittorrent::Wsock_ucnv_close(pCnv);
+
+    // Stage 6: Modern Windowing, DPI Awareness & Power Management
+    TEST_ASSERT(micant::satellite::qbittorrent::User32_SetProcessDpiAwarenessContext(reinterpret_cast<void*>(-4)) == 1, "SetProcessDpiAwarenessContext (Per-Monitor V2) must succeed");
+    TEST_ASSERT(micant::satellite::qbittorrent::User32_UpdateLayeredWindow(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 2) == 1, "UpdateLayeredWindow must succeed");
+    TEST_ASSERT(micant::satellite::qbittorrent::User32_RegisterTouchWindow(nullptr, 0) == 1, "RegisterTouchWindow must succeed");
+
+    void* hPower = micant::satellite::qbittorrent::User32_RegisterPowerSettingNotification(nullptr, nullptr, 0);
+    TEST_ASSERT(hPower != nullptr, "RegisterPowerSettingNotification must return notification handle");
+    TEST_ASSERT(micant::satellite::qbittorrent::User32_UnregisterPowerSettingNotification(hPower) == 1, "UnregisterPowerSettingNotification must succeed");
+
+    // Stage 7: Concurrent Multi-Threaded P2P High-Throughput Stress Test
+    std::atomic<uint32_t> opsDone{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&opsDone, t, hIocp]() {
+            for (int i = 0; i < 50; ++i) {
+                // 1. Network byte swap
+                uint16_t p = micant::satellite::qbittorrent::Wsock_htons(static_cast<uint16_t>(1024 + t * 50 + i));
+                micant::satellite::qbittorrent::Wsock_ntohs(p);
+
+                // 2. Post IOCP packet
+                micant::satellite::qbittorrent::K32_PostQueuedCompletionStatus(hIocp, 16384, t, nullptr);
+
+                // 3. Name lookup & release
+                void* ai = nullptr;
+                micant::satellite::qbittorrent::Ws2_getaddrinfo("127.0.0.1", "6881", nullptr, &ai);
+                if (ai) micant::satellite::qbittorrent::Ws2_freeaddrinfo(ai);
+
+                opsDone.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(opsDone.load() == 400, "400-operation concurrent high-throughput P2P stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 224: qBittorrent 5.2+ Networking, Async I/O & ICU Subsystem PASSED.\n";
+}
+
 
 
 

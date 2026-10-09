@@ -27,6 +27,7 @@
 #include "satellite_winmerge.hpp"
 #include "satellite_rufus.hpp"
 #include "satellite_system_informer.hpp"
+#include "satellite_qbittorrent.hpp"
 
 namespace micant::satellite {
 
@@ -392,6 +393,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // System Informer 4.0 Native NT & Diagnostics Subsystem Extensions
     system_informer::InitializeSystemInformerExports();
+
+    // qBittorrent 5.2+ High-Throughput I/O & Networking Subsystem Extensions
+    qbittorrent::InitializeQBittorrentExports();
 
     // MPR 1.0 Network Provider Router Subsystem
     mpr::InitializeMprSubsystemExports();
