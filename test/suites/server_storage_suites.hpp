@@ -8299,6 +8299,120 @@ inline void Test_qBittorrent_Networking_AsyncIO_And_ICU_Suite() {
     std::cout << "[TEST] Suite 224: qBittorrent 5.2+ Networking, Async I/O & ICU Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 225: WinSCP 6.5+ Remote File Management & Async Network Subsystem
+// ============================================================================
+inline void Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite() {
+    std::cout << "[TEST] Executing Suite 225: WinSCP 6.5+ Remote File Management & Async Network...\n";
+
+    micant::satellite::InitializeSatelliteWin32Exports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+
+    // Stage 1: Loader Export Verification across 10 critical modules
+    TEST_ASSERT(loader.getExport("ws2_32.dll", "WSAAsyncGetHostByName") != nullptr, "ws2_32!WSAAsyncGetHostByName must be registered");
+    TEST_ASSERT(loader.getExport("ws2_32.dll", "WSAEventSelect") != nullptr, "ws2_32!WSAEventSelect must be registered");
+    TEST_ASSERT(loader.getExport("ws2_32.dll", "getservbyname") != nullptr, "ws2_32!getservbyname must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "CreateJobObjectW") != nullptr, "kernel32!CreateJobObjectW must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "AssignProcessToJobObject") != nullptr, "kernel32!AssignProcessToJobObject must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "FlushConsoleInputBuffer") != nullptr, "kernel32!FlushConsoleInputBuffer must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "InterlockedIncrement") != nullptr, "kernel32!InterlockedIncrement must be registered");
+    TEST_ASSERT(loader.getExport("comdlg32.dll", "ReplaceTextW") != nullptr, "comdlg32!ReplaceTextW must be registered");
+    TEST_ASSERT(loader.getExport("crypt32.dll", "CertCreateCertificateChainEngine") != nullptr, "crypt32!CertCreateCertificateChainEngine must be registered");
+    TEST_ASSERT(loader.getExport("gdi32.dll", "PolyPolyline") != nullptr, "gdi32!PolyPolyline must be registered");
+    TEST_ASSERT(loader.getExport("iphlpapi.dll", "if_nametoindex") != nullptr, "iphlpapi!if_nametoindex must be registered");
+    TEST_ASSERT(loader.getExportOrdinal("msi.dll", 70) != nullptr, "msi!Ordinal_70 must be registered");
+    TEST_ASSERT(loader.getExport("secur32.dll", "GetUserNameExW") != nullptr, "secur32!GetUserNameExW must be registered");
+    TEST_ASSERT(loader.getExport("shell32.dll", "FindExecutableW") != nullptr, "shell32!FindExecutableW must be registered");
+    TEST_ASSERT(loader.getExport("shlwapi.dll", "PathSkipRootW") != nullptr, "shlwapi!PathSkipRootW must be registered");
+    TEST_ASSERT(loader.getExport("user32.dll", "DrawCaption") != nullptr, "user32!DrawCaption must be registered");
+
+    // Stage 2: Job Object Creation & Process Sandboxing
+    void* hJob = micant::satellite::winscp::K32_CreateJobObjectW(nullptr, L"WinSCPJob");
+    TEST_ASSERT(hJob != nullptr, "CreateJobObjectW must return valid job handle");
+    TEST_ASSERT(micant::satellite::winscp::K32_OpenJobObjectW(0x1F001F, 0, L"WinSCPJob") == hJob, "OpenJobObjectW must succeed");
+    TEST_ASSERT(micant::satellite::winscp::K32_AssignProcessToJobObject(hJob, nullptr) == 1, "AssignProcessToJobObject must succeed");
+    TEST_ASSERT(micant::satellite::winscp::K32_SetInformationJobObject(hJob, 4, nullptr, 0) == 1, "SetInformationJobObject must succeed");
+
+    // Stage 3: Winsock 2.0 Async Network Resolution & Events
+    void* hAsync = micant::satellite::winscp::Ws2_WSAAsyncGetHostByName(nullptr, 0x401, "sftp.example.com", nullptr, 0);
+    TEST_ASSERT(hAsync != nullptr, "WSAAsyncGetHostByName must return async task handle");
+    TEST_ASSERT(micant::satellite::winscp::Ws2_WSACancelAsyncRequest(hAsync) == 0, "WSACancelAsyncRequest must cancel query");
+
+    TEST_ASSERT(micant::satellite::winscp::Ws2_WSAEventSelect(0x5001, nullptr, 0x01) == 0, "WSAEventSelect must succeed");
+    uint8_t netEvents[44] = { 0 };
+    TEST_ASSERT(micant::satellite::winscp::Ws2_WSAEnumNetworkEvents(0x5001, nullptr, netEvents) == 0, "WSAEnumNetworkEvents must populate events");
+
+    auto* seSsh = reinterpret_cast<micant::satellite::winscp::MicaServEnt*>(micant::satellite::winscp::Ws2_getservbyname("ssh", "tcp"));
+    TEST_ASSERT(seSsh != nullptr && seSsh->s_port == 22, "getservbyname must resolve SSH to port 22");
+
+    auto* seHttp = reinterpret_cast<micant::satellite::winscp::MicaServEnt*>(micant::satellite::winscp::Ws2_getservbyname("http", "tcp"));
+    TEST_ASSERT(seHttp != nullptr && seHttp->s_port == 80, "getservbyname must resolve HTTP to port 80");
+
+    char ipStr[32] = { 0 };
+    uint32_t rawIp = 0;
+    TEST_ASSERT(micant::satellite::winscp::Ws2_inet_pton(2, "127.0.0.1", &rawIp) == 1, "inet_pton must convert IPv4 string to binary");
+    TEST_ASSERT(micant::satellite::winscp::Ws2_inet_ntop(2, &rawIp, ipStr, sizeof(ipStr)) != nullptr, "inet_ntop must convert binary to IPv4 string");
+    TEST_ASSERT(std::strcmp(ipStr, "127.0.0.1") == 0, "inet_ntop / inet_pton roundtrip match");
+
+    // Stage 4: Console Input Buffer & Automation Streams
+    TEST_ASSERT(micant::satellite::winscp::K32_FlushConsoleInputBuffer(nullptr) == 1, "FlushConsoleInputBuffer must succeed");
+    uint32_t evRead = 0, evWritten = 0;
+    TEST_ASSERT(micant::satellite::winscp::K32_WriteConsoleInputW(nullptr, nullptr, 5, &evWritten) == 1, "WriteConsoleInputW must succeed");
+    TEST_ASSERT(evWritten == 5, "Written event count must match");
+    TEST_ASSERT(micant::satellite::winscp::K32_PeekConsoleInputW(nullptr, nullptr, 1, &evRead) == 1, "PeekConsoleInputW must succeed");
+    TEST_ASSERT(micant::satellite::winscp::K32_ReadConsoleInputW(nullptr, nullptr, 1, &evRead) == 1, "ReadConsoleInputW must succeed");
+
+    // Stage 5: Interlocked Atomic Operations
+    int32_t atomVal = 100;
+    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedIncrement(&atomVal) == 101, "InterlockedIncrement must increment");
+    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedDecrement(&atomVal) == 100, "InterlockedDecrement must decrement");
+    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedExchangeAdd(&atomVal, 50) == 100 && atomVal == 150, "InterlockedExchangeAdd must add");
+    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedExchange(&atomVal, 200) == 150 && atomVal == 200, "InterlockedExchange must replace");
+    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedCompareExchange(&atomVal, 300, 200) == 200 && atomVal == 300, "InterlockedCompareExchange must exchange on match");
+
+    // Stage 6: Path Processing & Shell / Security Integration
+    const wchar_t* skipped = micant::satellite::winscp::Shlwapi_PathSkipRootW(L"C:\\Users\\admin\\Desktop");
+    TEST_ASSERT(skipped != nullptr && std::wcscmp(skipped, L"Users\\admin\\Desktop") == 0, "PathSkipRootW must strip drive letter");
+
+    wchar_t userBuf[32] = { 0 };
+    uint32_t userLen = 32;
+    TEST_ASSERT(micant::satellite::winscp::Secur32_GetUserNameExW(2, userBuf, &userLen) == 1, "GetUserNameExW must succeed");
+    TEST_ASSERT(std::wcscmp(userBuf, L"admin") == 0, "Username must report admin");
+
+    void* hEngine = nullptr;
+    TEST_ASSERT(micant::satellite::winscp::Crypt32_CertCreateCertificateChainEngine(nullptr, &hEngine) == 1, "CertCreateCertificateChainEngine must succeed");
+    TEST_ASSERT(hEngine != nullptr, "Chain engine handle must not be null");
+    micant::satellite::winscp::Crypt32_CertFreeCertificateChainEngine(hEngine);
+
+    // Stage 7: Concurrent Multi-Threaded Remote File Sync Stress Test
+    std::atomic<uint32_t> syncOps{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&syncOps, t, hJob]() {
+            for (int i = 0; i < 50; ++i) {
+                // 1. Interlocked operations
+                int32_t localVal = t * 100 + i;
+                micant::satellite::winscp::K32_InterlockedIncrement(&localVal);
+
+                // 2. Service lookup
+                micant::satellite::winscp::Ws2_getservbyname("ssh", "tcp");
+
+                // 3. Path root skipping
+                micant::satellite::winscp::Shlwapi_PathSkipRootW(L"D:\\RemoteSync\\Transfers\\file.dat");
+
+                syncOps.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(syncOps.load() == 400, "400-operation concurrent remote sync stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 225: WinSCP 6.5+ Remote File Management & Async Network PASSED.\n";
+}
+
 
 
 

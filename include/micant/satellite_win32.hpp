@@ -28,6 +28,7 @@
 #include "satellite_rufus.hpp"
 #include "satellite_system_informer.hpp"
 #include "satellite_qbittorrent.hpp"
+#include "satellite_winscp.hpp"
 
 namespace micant::satellite {
 
@@ -396,6 +397,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // qBittorrent 5.2+ High-Throughput I/O & Networking Subsystem Extensions
     qbittorrent::InitializeQBittorrentExports();
+
+    // WinSCP 6.5+ Secure Remote File Management Subsystem Extensions
+    winscp::InitializeWinScpExports();
 
     // MPR 1.0 Network Provider Router Subsystem
     mpr::InitializeMprSubsystemExports();
