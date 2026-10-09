@@ -266,7 +266,11 @@ static int g_FailedTests = 0;
 #include "suites/server_storage_suites.hpp"
 
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite225")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite226")) {
+        RUN_TEST(Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite225") {
         RUN_TEST(Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite);
         return g_FailedTests;
     }
@@ -977,6 +981,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_SystemInformer_Diagnostics_And_NativeNT_Suite);
     RUN_TEST(Test_qBittorrent_Networking_AsyncIO_And_ICU_Suite);
     RUN_TEST(Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite);
+    RUN_TEST(Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

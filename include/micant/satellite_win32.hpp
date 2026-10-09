@@ -29,6 +29,7 @@
 #include "satellite_system_informer.hpp"
 #include "satellite_qbittorrent.hpp"
 #include "satellite_winscp.hpp"
+#include "satellite_wireshark.hpp"
 
 namespace micant::satellite {
 
@@ -400,6 +401,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // WinSCP 6.5+ Secure Remote File Management Subsystem Extensions
     winscp::InitializeWinScpExports();
+
+    // Wireshark 4.x / Universal C Runtime & MSVC STL Subsystem Extensions
+    wireshark::InitializeWiresharkExports();
 
     // MPR 1.0 Network Provider Router Subsystem
     mpr::InitializeMprSubsystemExports();

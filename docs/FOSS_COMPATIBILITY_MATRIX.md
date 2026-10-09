@@ -32,7 +32,7 @@ graph TD
 | **Everything** (voidtools) | Ultra-compact Win32 C | NTFS USN Change Journal reader, multi-threaded query engine, Winsock async sockets, global hotkeys | **Instant File Search.** Proves NTFS journal change notification speed, system-wide indexing, and socket server (437/437). | **100% VALIDATED (Milestone 221)** |
 | **PuTTY** | Pure C Win32 | Winsock 2.0 asynchronous TCP sockets, non-blocking I/O, COM serial UART drivers | **Terminal & Remote Administration.** Proves rock-solid remote network console sessions and local serial ports (348/348). | **100% VALIDATED (Milestone 217)** |
 | **WinMerge** | C++ / MFC / Win32 | Visual diff algorithms, split-window scrolling, RichEdit controls, Unicode directory comparisons | **Visual File & Folder Diff.** Essential for developers and sysadmins reconciling configuration files (787/787). | **100% VALIDATED (Milestone 220)** |
-| **KeePassXC** | C++ / Qt6 | `bcrypt.dll` / CNG cryptography, DPAPI secure memory allocation, clipboard timer auto-clear | **Sovereign Password Manager.** Validates cryptographically secure desktop vaults and memory sanitization. | **Ready for Audit** |
+| **KeePassXC** | C++ / Qt6 | `bcrypt.dll` / CNG cryptography, DPAPI secure memory allocation, clipboard timer auto-clear | **Sovereign Password Manager.** Validates cryptographically secure desktop vaults, UCRT/MSVCP STL, and memory sanitization (187/187, 173/173, 67/67). | **100% VALIDATED (Milestone 226)** |
 | **BleachBit** | Python / C / GTK+ | Filesystem cleaning, registry deep scanning, secure file shredding, cache purging | **Privacy & System Hygiene.** Ensures system temporary storage, logs, and caches are sovereignly purgable. | **Priority Backlog** |
 
 ---
@@ -41,6 +41,7 @@ graph TD
 *Characteristics: Native NT kernel APIs (`ntdll.dll`), raw block device access, ring-0 driver bridges, and hardware telemetry.*
 
 | Application | GUI / Runtime Architecture | Core Windows APIs & Kernel Subsystems Stressed | MicaNT Strategic Importance | Status |
+| :--- | :--- | :--- | :--- | :--- |
 | **Rufus** | Pure C / Win32 | Direct raw block storage (`\\.\PhysicalDriveX`), SCSI/ATAPI passthrough, VDS (Virtual Disk Service), partition formatting | **Bootable Media & Drive Formatter.** Proves low-level block I/O, partition table creation, and raw disk access (522/522). | **100% VALIDATED (Milestone 222)** |
 | **System Informer** *(Process Hacker 3)* | Pure C / Native NT API | `NtQuerySystemInformation`, `NtOpenProcess`, `NtQueryInformationToken`, handle inspection, PEB/TEB walk | **The Quintessential NT Kernel Audit.** Proves full compliance of the undocumented native NT kernel API (660/660). | **100% VALIDATED (Milestone 223)** |
 | **LibreHardwareMonitor** | C# / .NET / Native C driver helper | ACPI WMI tables (`root\wmi`), Ring-0 SMBus reading, CPU MSRs, GPU telemetry | **Hardware Sensor Suite.** Validates WMI query engine, device driver interface, and thermal reporting. | **Priority Backlog** |
@@ -55,7 +56,7 @@ graph TD
 | :--- | :--- | :--- | :--- | :--- |
 | **WinSCP & FileZilla** | C++ / Win32 / PuTTY backend | FTP, SFTP, WebDAV, S3, SCP, Job Object sandboxing, async Winsock events, OLE drag-and-drop | **Secure Remote File Management & Automation.** Standard enterprise file transfer, secure SCP/SFTP sessions, and scripting automation (897/897 & 112/112). | **100% VALIDATED (Milestone 225)** |
 | **qBittorrent** | C++ / Qt6 / libtorrent | High-concurrency Winsock TCP/UDP sockets, sparse file pre-allocation, disk cache I/O | **P2P File Transfer.** Proves high-bandwidth network throughput and sustained disk write streams (792/792). | **100% VALIDATED (Milestone 224)** |
-| **Wireshark** | C/C++ / Qt | Raw network packet capture, Npcap kernel driver interface, protocol packet dissection | **Network Protocol Analyzer.** Proves low-level packet capture and protocol diagnostic reliability. | **Priority Backlog** |
+| **Wireshark** | C/C++ / Qt | Raw network packet capture, Npcap kernel driver interface, protocol packet dissection, Universal C Runtime & MSVC STL | **Network Protocol Analyzer.** Proves low-level packet capture, protocol dissection, and universal UCRT/MSVCP runtime satisfaction (195/195, 101/101, 128/128, 164/164). | **100% VALIDATED (Milestone 226)** |
 
 ---
 

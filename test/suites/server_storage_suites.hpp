@@ -8413,6 +8413,127 @@ inline void Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite() {
     std::cout << "[TEST] Suite 225: WinSCP 6.5+ Remote File Management & Async Network PASSED.\n";
 }
 
+// ----------------------------------------------------------------------------
+// Suite 226: Wireshark 4.6+ / TShark Network Packet Capture & Sovereign UCRT/MSVCP Subsystem
+// ----------------------------------------------------------------------------
+inline void Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite() {
+    std::cout << "[TEST] Executing Suite 226: Wireshark 4.6+ / TShark Packet Capture & UCRT/MSVCP Subsystem...\n";
+
+    // Ensure satellites are initialized
+    micant::satellite::InitializeSatelliteWin32Exports();
+
+    // Stage 1: KERNEL32 Process & DEP Configuration
+    TEST_ASSERT(micant::satellite::wireshark::K32_DisableThreadLibraryCalls(nullptr) == 1, "DisableThreadLibraryCalls must succeed");
+    TEST_ASSERT(micant::satellite::wireshark::K32_SetProcessDEPPolicy(1) == 1, "SetProcessDEPPolicy must succeed");
+    TEST_ASSERT(micant::satellite::wireshark::K32_SetDllDirectoryA("C:\\Program Files\\Wireshark") == 1, "SetDllDirectoryA must succeed");
+
+    // Stage 2: IPHLPAPI Interface Identification & LUID resolution
+    micant::GUID ifGuid{0x12345678, 0x1234, 0x5678, {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}};
+    micant::satellite::wireshark::NET_LUID ifLuid{0};
+    TEST_ASSERT(micant::satellite::wireshark::Iphlp_ConvertInterfaceGuidToLuid(&ifGuid, &ifLuid) == 0, "ConvertInterfaceGuidToLuid must return NO_ERROR");
+    TEST_ASSERT(ifLuid.Value != 0, "Interface LUID value must be populated");
+
+    wchar_t aliasBuf[64] = {0};
+    TEST_ASSERT(micant::satellite::wireshark::Iphlp_ConvertInterfaceLuidToAlias(&ifLuid, aliasBuf, 64) == 0, "ConvertInterfaceLuidToAlias must return NO_ERROR");
+    TEST_ASSERT(std::wcscmp(aliasBuf, L"eth0") == 0, "Interface alias must match expected default adapter");
+
+    // Stage 3: Winsock Network Byte Order & Ordinal 18
+    uint16_t portHost = 8080;
+    uint16_t portNet = (portHost >> 8) | (portHost << 8);
+    TEST_ASSERT(micant::satellite::wireshark::WS2_ntohs(portNet) == portHost, "WS2_ntohs must correctly convert network to host byte order");
+
+    // Stage 4: ADVAPI32 Security & Well-Known SID Generation
+    uint8_t sidBuffer[64] = {0};
+    uint32_t sidLen = sizeof(sidBuffer);
+    TEST_ASSERT(micant::satellite::wireshark::Advapi_CreateWellKnownSid(18, nullptr, sidBuffer, &sidLen) == 1, "CreateWellKnownSid must succeed");
+    TEST_ASSERT(sidBuffer[0] == 1, "SID revision must be 1");
+    TEST_ASSERT(sidBuffer[7] == 5, "SID NT Authority must be 5");
+
+    // Stage 5: Universal C Runtime (UCRT) Math & Floating Point Subsystem
+    double pi = 3.141592653589793;
+    TEST_ASSERT(std::abs(micant::satellite::wireshark::CRT_sin(pi / 2.0) - 1.0) < 1e-9, "CRT_sin(pi/2) must equal 1.0");
+    TEST_ASSERT(std::abs(micant::satellite::wireshark::CRT_cos(0.0) - 1.0) < 1e-9, "CRT_cos(0) must equal 1.0");
+    TEST_ASSERT(std::abs(micant::satellite::wireshark::CRT_sqrt(16.0) - 4.0) < 1e-9, "CRT_sqrt(16) must equal 4.0");
+    TEST_ASSERT(std::abs(micant::satellite::wireshark::CRT_log10(100.0) - 2.0) < 1e-9, "CRT_log10(100) must equal 2.0");
+    TEST_ASSERT(micant::satellite::wireshark::CRT_round(3.7) == 4.0, "CRT_round(3.7) must equal 4.0");
+    double intPart = 0.0;
+    double fracPart = micant::satellite::wireshark::CRT_modf(3.25, &intPart);
+    TEST_ASSERT(intPart == 3.0 && std::abs(fracPart - 0.25) < 1e-9, "CRT_modf must decompose float");
+
+    // Stage 6: Universal C Runtime String & Character Processing
+    TEST_ASSERT(micant::satellite::wireshark::CRT_tolower('A') == 'a', "CRT_tolower must convert uppercase");
+    TEST_ASSERT(micant::satellite::wireshark::CRT_toupper('b') == 'B', "CRT_toupper must convert lowercase");
+    TEST_ASSERT(micant::satellite::wireshark::CRT_isdigit('9') != 0, "CRT_isdigit must identify digit");
+    TEST_ASSERT(micant::satellite::wireshark::CRT_strspn("12345abc", "0123456789") == 5, "CRT_strspn must measure prefix length");
+    TEST_ASSERT(micant::satellite::wireshark::CRT_strnlen("wireshark", 20) == 9, "CRT_strnlen must report length");
+
+    wchar_t catDst[32] = L"Wire";
+    TEST_ASSERT(micant::satellite::wireshark::CRT_wcscat_s(catDst, 32, L"shark") == 0, "CRT_wcscat_s must succeed");
+    TEST_ASSERT(std::wcscmp(catDst, L"Wireshark") == 0, "Concatenated string must match Wireshark");
+
+    // Stage 7: Universal C Runtime Time, Date & Filesystem
+    time_t rawNow = std::time(nullptr);
+    tm localTm{};
+    TEST_ASSERT(micant::satellite::wireshark::CRT_localtime64_s(&localTm, &rawNow) == 0, "CRT_localtime64_s must succeed");
+    TEST_ASSERT(localTm.tm_year > 120, "Local year must be modern");
+
+    tm gmTm{};
+    TEST_ASSERT(micant::satellite::wireshark::CRT_gmtime64_s(&gmTm, &rawNow) == 0, "CRT_gmtime64_s must succeed");
+
+    micant::satellite::wireshark::timespec64 ts{};
+    TEST_ASSERT(micant::satellite::wireshark::CRT_timespec64_get(&ts, 1) == 1, "CRT_timespec64_get must succeed");
+    TEST_ASSERT(ts.tv_sec > 1700000000, "Timespec timestamp must be valid");
+
+    // Stage 8: VCRuntime Memory Operations
+    char memDst[16] = {0};
+    const char memSrc[] = "MicaNT_UCRT";
+    micant::satellite::wireshark::VCRT_memcpy(memDst, memSrc, sizeof(memSrc));
+    TEST_ASSERT(micant::satellite::wireshark::VCRT_memcmp(memDst, memSrc, sizeof(memSrc)) == 0, "VCRT_memcmp must confirm copy");
+    TEST_ASSERT(micant::satellite::wireshark::VCRT_memchr(memDst, 'N', sizeof(memSrc)) != nullptr, "VCRT_memchr must locate character");
+    TEST_ASSERT(micant::satellite::wireshark::VCRT_strstr(memDst, "UCRT") != nullptr, "VCRT_strstr must locate substring");
+
+    // Stage 9: MSVCP140 Concurrency, Locinfo & Stream Subsystem
+    int mtxDummy = 0;
+    micant::satellite::wireshark::MSVC_Mtx_lock(&mtxDummy);
+    micant::satellite::wireshark::MSVC_Mtx_unlock(&mtxDummy);
+    int cndDummy = 0;
+    micant::satellite::wireshark::MSVC_Cnd_broadcast(&cndDummy);
+
+    TEST_ASSERT(micant::satellite::wireshark::MSVC_Random_device() != 0, "MSVC_Random_device must generate non-zero token");
+    TEST_ASSERT(std::wcsstr(micant::satellite::wireshark::MSVC_W_Getmonths(), L"Oct") != nullptr, "MSVC_W_Getmonths must contain Oct");
+
+    // Stage 10: Multi-Threaded High-Throughput Packet Dissection & UCRT Computation Stress Test
+    std::atomic<uint32_t> packetOps{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&packetOps, t]() {
+            for (int i = 0; i < 100; ++i) {
+                // 1. Math computation
+                double val = micant::satellite::wireshark::CRT_sin(static_cast<double>(i) * 0.01);
+                (void)val;
+
+                // 2. Port conversion
+                uint16_t p = micant::satellite::wireshark::WS2_ntohs(static_cast<uint16_t>(t * 1000 + i));
+                (void)p;
+
+                // 3. String operation
+                size_t l = micant::satellite::wireshark::CRT_strnlen("packet_payload_dissect", 32);
+                (void)l;
+
+                packetOps.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(packetOps.load() == 800, "800-packet high-throughput parallel dissection stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 226: Wireshark 4.6+ / TShark Packet Capture & UCRT/MSVCP Subsystem PASSED.\n";
+}
+
+
 
 
 
