@@ -216,14 +216,14 @@ public:
         conBuf.writeString(L"C:\\Windows\\System32> win32_app.exe --status\r\n");
         conBuf.writeString(L"[Win32 App] Initializing Win32 Console via AllocConsole()... [OK]\r\n");
         conBuf.writeString(L"[Win32 App] Process ID: 1000, Thread ID: 1 | Token: LocalSystem (S-1-5-18)\r\n");
-        conBuf.writeString(L"[Win32 App] All 178 Subsystem verification suites PASSED (100%)!\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> powercfg /sleepstudy\r\n");
-        conBuf.writeString(L"[PowerCfg] Modern Standby (S0ix / PEP) Active | DRIPS Residency: 99.2%\r\n\r\n");
+        conBuf.writeString(L"[Win32 App] All 213 Subsystem verification suites PASSED (100%)!\r\n\r\n");
+        conBuf.writeString(L"C:\\Windows\\System32> sshd status\r\n");
+        conBuf.writeString(L"[OpenSSH] Daemon: TitanSSH | Status: RUNNING (Port 22 TCP) [OK]\r\n\r\n");
+        conBuf.writeString(L"C:\\Windows\\System32> winrm status\r\n");
+        conBuf.writeString(L"[WinRM] WSMAN 3.0: RUNNING | HTTP: 5985, HTTPS: 5986 [OK]\r\n\r\n");
         conBuf.writeString(L"C:\\Windows\\System32> wsa status\r\n");
         conBuf.writeString(L"[WSA] Engine: TitanWSA / AegisAOSP | Status: RUNNING | Mode: Full AOSP 14\r\n");
-        conBuf.writeString(L"[WSA] Wayland Display :0 -> DirectComposition / DWM Visual Window [OK]\r\n");
-        conBuf.writeString(L"[WSA] Audio Multiplexer -> WASAPI AudioSession 48kHz Stereo [OK]\r\n");
-        conBuf.writeString(L"[WSA] Launched App: com.android.calculator2 (PID: 2000, Surface: 100)\r\n\r\n");
+        conBuf.writeString(L"[WSA] Wayland Display :0 -> DirectComposition / DWM Visual Window [OK]\r\n\r\n");
         conBuf.writeString(L"C:\\Windows\\System32> _");
 
         // Blit ConHost terminal buffer to the inner window client area
