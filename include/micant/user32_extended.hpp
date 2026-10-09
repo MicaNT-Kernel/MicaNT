@@ -571,6 +571,7 @@ inline void InitializeUser32ExtendedExports() {
     ldr.registerExport("user32.dll", "MonitorFromPoint", reinterpret_cast<void*>(MonitorFromPoint));
     ldr.registerExport("user32.dll", "MonitorFromWindow", reinterpret_cast<void*>(MonitorFromWindow));
     ldr.registerExport("user32.dll", "GetMonitorInfoW", reinterpret_cast<void*>(GetMonitorInfoW));
+    ldr.registerExport("api-ms-win-ntuser-sysparams-l1-1-0.dll", "GetMonitorInfoW", reinterpret_cast<void*>(GetMonitorInfoW));
     ldr.registerExport("user32.dll", "EnumDisplayMonitors", reinterpret_cast<void*>(EnumDisplayMonitors));
     ldr.registerExport("user32.dll", "CreateDialogParamW", reinterpret_cast<void*>(CreateDialogParamW));
     ldr.registerExport("user32.dll", "CreateDialogIndirectParamW", reinterpret_cast<void*>(CreateDialogIndirectParamW));
@@ -622,6 +623,7 @@ inline void InitializeUser32ExtendedExports() {
     ldr.registerExport("user32.dll", "GetUpdateRgn", reinterpret_cast<void*>(GetUpdateRgn));
     ldr.registerExport("user32.dll", "SystemParametersInfoA", reinterpret_cast<void*>(SystemParametersInfoA));
     ldr.registerExport("user32.dll", "SystemParametersInfoW", reinterpret_cast<void*>(SystemParametersInfoW));
+    ldr.registerExport("api-ms-win-ntuser-sysparams-l1-1-0.dll", "SystemParametersInfoW", reinterpret_cast<void*>(SystemParametersInfoW));
     ldr.registerExport("user32.dll", "GetDoubleClickTime", reinterpret_cast<void*>(GetDoubleClickTime));
     ldr.registerExport("user32.dll", "LoadStringW", reinterpret_cast<void*>(LoadStringW));
     ldr.registerExport("user32.dll", "LoadStringA", reinterpret_cast<void*>(LoadStringA));

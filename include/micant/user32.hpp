@@ -1402,6 +1402,49 @@ inline win32::DWORD DdeQueryStringW(win32::DWORD /*idInst*/, void* /*hsz*/, win3
     return 0;
 }
 
+inline uintptr_t GetClassLongPtrA([[maybe_unused]] win32::HWND hWnd, [[maybe_unused]] int nIndex) noexcept {
+    return 0;
+}
+
+inline win32::UINT GetRawInputDeviceInfoA([[maybe_unused]] win32::HANDLE hDevice,
+                                          [[maybe_unused]] win32::UINT uiCommand,
+                                          [[maybe_unused]] win32::LPVOID pData,
+                                          win32::UINT* pcbSize) noexcept {
+    if (pcbSize) *pcbSize = 0;
+    return 0;
+}
+
+inline win32::BOOL GetWindowDisplayAffinity([[maybe_unused]] win32::HWND hWnd, win32::DWORD* pdwAffinity) noexcept {
+    if (pdwAffinity) *pdwAffinity = 0;
+    return win32::TRUE;
+}
+
+inline int32_t GetWindowLongA(win32::HWND hWnd, int nIndex) noexcept {
+    return GetWindowLongW(hWnd, nIndex);
+}
+
+inline win32::UINT MapVirtualKeyA(win32::UINT uCode, [[maybe_unused]] win32::UINT uMapType) noexcept {
+    return uCode;
+}
+
+inline win32::BOOL SetProcessDPIAware() noexcept {
+    return win32::TRUE;
+}
+
+inline int ToUnicodeEx(win32::UINT wVirtKey, [[maybe_unused]] win32::UINT wScanCode,
+                       [[maybe_unused]] const uint8_t* lpKeyState, win32::LPWSTR pwszBuff,
+                       int cchBuff, [[maybe_unused]] win32::UINT wFlags, [[maybe_unused]] void* dwhkl) noexcept {
+    if (pwszBuff && cchBuff > 0 && wVirtKey >= 32 && wVirtKey <= 126) {
+        pwszBuff[0] = static_cast<wchar_t>(wVirtKey);
+        return 1;
+    }
+    return 0;
+}
+
+inline int16_t VkKeyScanExA(char ch, [[maybe_unused]] void* dwhkl) noexcept {
+    return static_cast<int16_t>(static_cast<uint8_t>(ch));
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -1485,6 +1528,14 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "DdeNameService", reinterpret_cast<void*>(DdeNameService));
     ldr.registerExport("user32.dll", "DdePostAdvise", reinterpret_cast<void*>(DdePostAdvise));
     ldr.registerExport("user32.dll", "DdeQueryStringW", reinterpret_cast<void*>(DdeQueryStringW));
+    ldr.registerExport("user32.dll", "GetClassLongPtrA", reinterpret_cast<void*>(GetClassLongPtrA));
+    ldr.registerExport("user32.dll", "GetRawInputDeviceInfoA", reinterpret_cast<void*>(GetRawInputDeviceInfoA));
+    ldr.registerExport("user32.dll", "GetWindowDisplayAffinity", reinterpret_cast<void*>(GetWindowDisplayAffinity));
+    ldr.registerExport("user32.dll", "GetWindowLongA", reinterpret_cast<void*>(GetWindowLongA));
+    ldr.registerExport("user32.dll", "MapVirtualKeyA", reinterpret_cast<void*>(MapVirtualKeyA));
+    ldr.registerExport("user32.dll", "SetProcessDPIAware", reinterpret_cast<void*>(SetProcessDPIAware));
+    ldr.registerExport("user32.dll", "ToUnicodeEx", reinterpret_cast<void*>(ToUnicodeEx));
+    ldr.registerExport("user32.dll", "VkKeyScanExA", reinterpret_cast<void*>(VkKeyScanExA));
 }
 
 } // namespace micant::user32

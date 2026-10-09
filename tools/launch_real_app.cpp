@@ -37,6 +37,9 @@
 #include "micant/iphlpapi.hpp"
 #include "micant/satellite_win32.hpp"
 #include "micant/user32_extended.hpp"
+#include "micant/winmm.hpp"
+#include "micant/mpr.hpp"
+#include "micant/cfgmgr32.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -126,6 +129,9 @@ static void InitializeAllMicaNtExports() {
     iphlpapi::InitializeIpHlpApiSubsystemExports();
     satellite::InitializeSatelliteWin32Exports();
     user32::InitializeUser32ExtendedExports();
+    winmm::InitializeWinMMExports();
+    mpr::InitializeMprSubsystemExports();
+    cfgmgr32::InitializeCfgMgr32SubsystemExports();
 }
 
 struct AppAuditResult {

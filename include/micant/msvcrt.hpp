@@ -30,6 +30,7 @@
 #include <csignal>
 #include <ctime>
 #include <cmath>
+#include <cfenv>
 #include <new>
 #include <exception>
 #include <atomic>
@@ -1276,6 +1277,388 @@ inline int64_t MSVC_streambuf_sputn(void*, const char*, int64_t count) noexcept 
 inline int MSVC_istream_peek(void*) noexcept { return -1; }
 
 
+
+// ============================================================================
+// 12. Tier 4 Universal CRT, C99 Math & MSVCP140 Subsystem Expansion
+// ============================================================================
+
+// --- Single-Precision C99 Math ---
+inline float CRT_sinf(float x) noexcept { return std::sin(x); }
+inline float CRT_cosf(float x) noexcept { return std::cos(x); }
+inline float CRT_tanf(float x) noexcept { return std::tan(x); }
+inline float CRT_asinf(float x) noexcept { return std::asin(x); }
+inline float CRT_acosf(float x) noexcept { return std::acos(x); }
+inline float CRT_atanf(float x) noexcept { return std::atan(x); }
+inline float CRT_atan2f(float y, float x) noexcept { return std::atan2(y, x); }
+inline float CRT_sinhf(float x) noexcept { return std::sinh(x); }
+inline float CRT_coshf(float x) noexcept { return std::cosh(x); }
+inline float CRT_tanhf(float x) noexcept { return std::tanh(x); }
+inline float CRT_expf(float x) noexcept { return std::exp(x); }
+inline double CRT_exp2(double x) noexcept { return std::exp2(x); }
+inline float CRT_exp2f(float x) noexcept { return std::exp2(x); }
+inline double CRT_expm1(double x) noexcept { return std::expm1(x); }
+inline float CRT_logf(float x) noexcept { return std::log(x); }
+inline float CRT_log10f(float x) noexcept { return std::log10(x); }
+inline double CRT_log1p(double x) noexcept { return std::log1p(x); }
+inline float CRT_log2f(float x) noexcept { return std::log2(x); }
+inline long double CRT_log2l(long double x) noexcept { return std::log2(x); }
+inline float CRT_powf(float x, float y) noexcept { return std::pow(x, y); }
+inline float CRT_sqrtf(float x) noexcept { return std::sqrt(x); }
+inline float CRT_cbrtf(float x) noexcept { return std::cbrt(x); }
+inline float CRT_ceilf(float x) noexcept { return std::ceil(x); }
+inline float CRT_floorf(float x) noexcept { return std::floor(x); }
+inline double CRT_trunc(double x) noexcept { return std::trunc(x); }
+inline float CRT_truncf(float x) noexcept { return std::trunc(x); }
+inline float CRT_roundf(float x) noexcept { return std::round(x); }
+inline float CRT_rintf(float x) noexcept { return std::rint(x); }
+inline long CRT_lrint(double x) noexcept { return std::lrint(x); }
+inline long CRT_lrintf(float x) noexcept { return std::lrint(x); }
+inline long CRT_lroundf(float x) noexcept { return std::lround(x); }
+inline long long CRT_llround(double x) noexcept { return std::llround(x); }
+inline long long CRT_llroundf(float x) noexcept { return std::llround(x); }
+inline double CRT_fmin(double x, double y) noexcept { return std::fmin(x, y); }
+inline float CRT_fminf(float x, float y) noexcept { return std::fmin(x, y); }
+inline double CRT_fmax(double x, double y) noexcept { return std::fmax(x, y); }
+inline float CRT_fmaxf(float x, float y) noexcept { return std::fmax(x, y); }
+inline float CRT_fmodf(float x, float y) noexcept { return std::fmod(x, y); }
+inline double CRT_remainder(double x, double y) noexcept { return std::remainder(x, y); }
+inline double CRT_remquo(double x, double y, int* quo) noexcept { return std::remquo(x, y, quo); }
+inline double CRT_fabs(double x) noexcept { return std::fabs(x); }
+inline float CRT_fabsf(float x) noexcept { return std::fabs(x); }
+inline double CRT_fma(double x, double y, double z) noexcept { return std::fma(x, y, z); }
+inline int CRT_ilogb(double x) noexcept { return std::ilogb(x); }
+inline double CRT_scalbn(double x, int n) noexcept { return std::scalbn(x, n); }
+inline float CRT_modff(float x, float* iptr) noexcept { return std::modf(x, iptr); }
+inline double CRT_frexp(double x, int* exp) noexcept { return std::frexp(x, exp); }
+inline float CRT_nextafterf(float x, float y) noexcept { return std::nextafter(x, y); }
+inline float CRT_nexttowardf(float x, long double y) noexcept { return std::nexttoward(x, y); }
+inline double CRT_hypot(double x, double y) noexcept { return std::hypot(x, y); }
+inline float CRT_hypotf(float x, float y) noexcept { return std::hypot(x, y); }
+inline int CRT_finite(double x) noexcept { return std::isfinite(x) ? 1 : 0; }
+inline int CRT_isnan(double x) noexcept { return std::isnan(x) ? 1 : 0; }
+inline int CRT_dsign(double x) noexcept { return std::signbit(x) ? 1 : 0; }
+inline short CRT_dtest(double* px) noexcept {
+    if (!px) return 0;
+    int c = std::fpclassify(*px);
+    if (c == FP_ZERO) return 0;
+    if (c == FP_NORMAL || c == FP_SUBNORMAL) return 1;
+    if (c == FP_INFINITE) return 2;
+    return 3;
+}
+inline short CRT_fdtest(float* px) noexcept {
+    if (!px) return 0;
+    int c = std::fpclassify(*px);
+    if (c == FP_ZERO) return 0;
+    if (c == FP_NORMAL || c == FP_SUBNORMAL) return 1;
+    if (c == FP_INFINITE) return 2;
+    return 3;
+}
+inline short CRT_fdclass(float x) noexcept {
+    int c = std::fpclassify(x);
+    if (c == FP_ZERO) return 0;
+    if (c == FP_NORMAL || c == FP_SUBNORMAL) return 1;
+    if (c == FP_INFINITE) return 2;
+    return 3;
+}
+inline double __std_smf_hypot3(double x, double y, double z) noexcept { return std::sqrt(x*x + y*y + z*z); }
+inline float __std_smf_hypot3f(float x, float y, float z) noexcept { return std::sqrt(x*x + y*y + z*z); }
+
+// --- Conversion & String ---
+inline double CRT_strtod(const char* str, char** endptr) noexcept { return std::strtod(str, endptr); }
+inline float CRT_strtof(const char* str, char** endptr) noexcept { return std::strtof(str, endptr); }
+inline long long CRT_atoll(const char* str) noexcept { return std::atoll(str); }
+inline long long CRT_strtoll(const char* str, char** endptr, int base) noexcept { return std::strtoll(str, endptr, base); }
+inline unsigned long long CRT_strtoull(const char* str, char** endptr, int base) noexcept { return std::strtoull(str, endptr, base); }
+inline int CRT_wcsicmp(const wchar_t* s1, const wchar_t* s2) noexcept {
+    if (!s1 && !s2) return 0;
+    if (!s1) return -1;
+    if (!s2) return 1;
+    while (*s1 && *s2) {
+        wint_t c1 = std::towlower(*s1);
+        wint_t c2 = std::towlower(*s2);
+        if (c1 != c2) return (c1 < c2) ? -1 : 1;
+        ++s1; ++s2;
+    }
+    return (std::towlower(*s1) < std::towlower(*s2)) ? -1 : ((std::towlower(*s1) > std::towlower(*s2)) ? 1 : 0);
+}
+inline wchar_t* CRT_wcslwr(wchar_t* s) noexcept {
+    if (!s) return nullptr;
+    for (wchar_t* p = s; *p; ++p) *p = std::towlower(*p);
+    return s;
+}
+inline int CRT_isprint(int c) noexcept { return std::isprint(c); }
+inline int CRT_ispunct(int c) noexcept { return std::ispunct(c); }
+inline errno_t CRT_strcpy_s(char* dest, size_t destsz, const char* src) noexcept {
+    if (!dest || !src || destsz == 0) return 22;
+    size_t srclen = std::strlen(src);
+    if (srclen >= destsz) { dest[0] = '\0'; return 34; }
+    std::memcpy(dest, src, srclen + 1);
+    return 0;
+}
+inline errno_t CRT_strncpy_s(char* dest, size_t destsz, const char* src, size_t count) noexcept {
+    if (!dest || !src || destsz == 0) return 22;
+    if (count == 0) { dest[0] = '\0'; return 0; }
+    size_t copyLen = (count < destsz) ? count : destsz - 1;
+    std::strncpy(dest, src, copyLen);
+    dest[copyLen] = '\0';
+    return 0;
+}
+inline errno_t CRT_strncat_s(char* dest, size_t destsz, const char* src, size_t count) noexcept {
+    if (!dest || !src || destsz == 0) return 22;
+    size_t curlen = std::strlen(dest);
+    if (curlen >= destsz) return 22;
+    size_t remain = destsz - curlen;
+    size_t copyLen = (count < remain - 1) ? count : remain - 1;
+    std::strncat(dest, src, copyLen);
+    dest[curlen + copyLen] = '\0';
+    return 0;
+}
+inline char* CRT_strtok_s(char* str, const char* delim, char** context) noexcept {
+    return strtok_s(str, delim, context);
+}
+inline errno_t CRT_wcscpy_s(wchar_t* dest, size_t destsz, const wchar_t* src) noexcept {
+    if (!dest || !src || destsz == 0) return 22;
+    size_t srclen = std::wcslen(src);
+    if (srclen >= destsz) { dest[0] = L'\0'; return 34; }
+    std::memcpy(dest, src, (srclen + 1) * sizeof(wchar_t));
+    return 0;
+}
+
+// --- Filesystem & Environment ---
+inline int CRT_chdir(const char* dir) noexcept {
+    return kernel32::SetCurrentDirectoryA(dir) ? 0 : -1;
+}
+inline void CRT_lock_file(FILE* /*stream*/) noexcept {}
+inline void CRT_unlock_file(FILE* /*stream*/) noexcept {}
+inline int CRT_unlink(const char* filename) noexcept { return std::remove(filename); }
+struct CRT_stat64i32 {
+    uint32_t st_dev;
+    uint16_t st_ino;
+    uint16_t st_mode;
+    int16_t  st_nlink;
+    int16_t  st_uid;
+    int16_t  st_gid;
+    uint32_t st_rdev;
+    int32_t  st_size;
+    int64_t  st_atime;
+    int64_t  st_mtime;
+    int64_t  st_ctime;
+};
+inline int CRT_stat64i32_fn(const char* path, CRT_stat64i32* buf) noexcept {
+    if (!path || !buf) return -1;
+    std::memset(buf, 0, sizeof(*buf));
+    uint32_t attr = kernel32::GetFileAttributesA(path);
+    if (attr == 0xFFFFFFFF) return -1;
+    buf->st_mode = (attr & 0x10) ? 0040777 : 0100666;
+    buf->st_size = 1024;
+    return 0;
+}
+inline errno_t CRT_dupenv_s(char** pBuffer, size_t* pBufferSizeInBytes, const char* varname) noexcept {
+    if (!pBuffer || !varname) return 22;
+    const char* val = std::getenv(varname);
+    if (!val) {
+        *pBuffer = nullptr;
+        if (pBufferSizeInBytes) *pBufferSizeInBytes = 0;
+        return 0;
+    }
+    size_t len = std::strlen(val) + 1;
+    *pBuffer = static_cast<char*>(std::malloc(len));
+    if (!*pBuffer) return 12;
+    std::memcpy(*pBuffer, val, len);
+    if (pBufferSizeInBytes) *pBufferSizeInBytes = len;
+    return 0;
+}
+inline errno_t CRT_putenv_s(const char* name, const char* value) noexcept {
+    if (!name || !value) return 22;
+    return kernel32::SetEnvironmentVariableA(name, value) ? 0 : 22;
+}
+inline errno_t CRT_wputenv_s(const wchar_t* name, const wchar_t* value) noexcept {
+    if (!name || !value) return 22;
+    return kernel32::SetEnvironmentVariableW(name, value) ? 0 : 22;
+}
+inline errno_t CRT_getenv_s(size_t* pReturnSize, char* dstBuf, size_t dstSizeInBytes, const char* varname) noexcept {
+    if (!pReturnSize || !varname) return 22;
+    const char* val = std::getenv(varname);
+    if (!val) {
+        if (dstBuf && dstSizeInBytes > 0) dstBuf[0] = '\0';
+        *pReturnSize = 0;
+        return 0;
+    }
+    size_t len = std::strlen(val) + 1;
+    *pReturnSize = len;
+    if (!dstBuf || dstSizeInBytes < len) return 34;
+    std::memcpy(dstBuf, val, len);
+    return 0;
+}
+inline void __initialize_lconv_for_unsigned_char() noexcept {}
+
+// --- Runtime, StdIO, Time, Utility ---
+inline unsigned int CRT_clearfp() noexcept { return 0; }
+inline unsigned int CRT_statusfp() noexcept { return 0; }
+inline errno_t CRT_controlfp_s(unsigned int* currentControl, unsigned int /*newControl*/, unsigned int /*mask*/) noexcept {
+    if (currentControl) *currentControl = 0;
+    return 0;
+}
+inline errno_t CRT_get_errno(int* pValue) noexcept {
+    if (!pValue) return 22;
+    *pValue = errno;
+    return 0;
+}
+inline errno_t CRT_set_errno(int value) noexcept {
+    errno = value;
+    return 0;
+}
+inline void CRT_invoke_watson(const wchar_t* /*expression*/, const wchar_t* /*functionName*/, const wchar_t* /*fileName*/, unsigned int /*lineNumber*/, uintptr_t /*reserved*/) noexcept {}
+inline int CRT_feclearexcept(int excepts) noexcept { return std::feclearexcept(excepts); }
+inline int CRT_fetestexcept(int excepts) noexcept { return std::fetestexcept(excepts); }
+inline void CRT_perror(const char* s) noexcept { std::perror(s); }
+inline errno_t CRT_strerror_s(char* buffer, size_t numberOfElements, int errnum) noexcept {
+    if (!buffer || numberOfElements == 0) return 22;
+    const char* s = std::strerror(errnum);
+    if (!s) s = "Unknown error";
+    size_t len = std::strlen(s);
+    if (len >= numberOfElements) {
+        std::strncpy(buffer, s, numberOfElements - 1);
+        buffer[numberOfElements - 1] = '\0';
+        return 34;
+    }
+    std::strcpy(buffer, s);
+    return 0;
+}
+inline int CRT_system(const char* command) noexcept { return std::system(command); }
+inline int CRT_fseeki64(FILE* stream, int64_t offset, int origin) noexcept {
+    return std::fseek(stream, static_cast<long>(offset), origin);
+}
+inline int64_t CRT_ftelli64(FILE* stream) noexcept {
+    return static_cast<int64_t>(std::ftell(stream));
+}
+inline int CRT_flushall() noexcept { return std::fflush(nullptr); }
+inline int CRT_pipe(int* pfds, unsigned int /*psize*/, int /*textmode*/) noexcept {
+    if (pfds) { pfds[0] = 3; pfds[1] = 4; }
+    return 0;
+}
+inline int CRT_get_stream_buffer_pointers(FILE* /*stream*/, char*** /*base*/, char*** /*ptr*/, int** /*cnt*/) noexcept {
+    return -1;
+}
+inline int CRT_kbhit() noexcept { return 0; }
+inline errno_t CRT_mktemp_s(char* nameTemplate, size_t sizeInChars) noexcept {
+    if (!nameTemplate || sizeInChars == 0) return 22;
+    static uint32_t counter = 1000;
+    std::snprintf(nameTemplate, sizeInChars, "tmp_%06u", counter++);
+    return 0;
+}
+inline errno_t CRT_fopen_s(FILE** pFile, const char* filename, const char* mode) noexcept {
+    if (!pFile || !filename || !mode) return 22;
+    *pFile = std::fopen(filename, mode);
+    return *pFile ? 0 : errno;
+}
+inline errno_t CRT_freopen_s(FILE** pFile, const char* filename, const char* mode, FILE* oldFile) noexcept {
+    if (!pFile || !filename || !mode || !oldFile) return 22;
+    *pFile = std::freopen(filename, mode, oldFile);
+    return *pFile ? 0 : errno;
+}
+inline errno_t CRT_wfopen_s(FILE** pFile, const wchar_t* filename, const wchar_t* mode) noexcept {
+    if (!pFile || !filename || !mode) return 22;
+    *pFile = _wfopen(filename, mode);
+    return *pFile ? 0 : errno;
+}
+inline int CRT_sopen_dispatch(const char* /*filename*/, int /*oflag*/, int /*shflag*/, int /*pmode*/, int* pfh, int /*bSecure*/) noexcept {
+    if (pfh) *pfh = 3;
+    return 0;
+}
+inline errno_t CRT_sopen_s(int* pfh, const char* /*filename*/, int /*oflag*/, int /*shflag*/, int /*pmode*/) noexcept {
+    if (!pfh) return 22;
+    *pfh = 3;
+    return 0;
+}
+inline int CRT_wsopen_dispatch(const wchar_t* /*filename*/, int /*oflag*/, int /*shflag*/, int /*pmode*/, int* pfh, int /*bSecure*/) noexcept {
+    if (pfh) *pfh = 3;
+    return 0;
+}
+inline int __stdio_common_vsprintf_p(uint64_t /*options*/, char* buffer, size_t buffer_count, const char* format, void* /*locale*/, va_list arglist) noexcept {
+    return std::vsnprintf(buffer, buffer_count, format, arglist);
+}
+inline int __stdio_common_vsprintf_s(uint64_t /*options*/, char* buffer, size_t buffer_count, const char* format, void* /*locale*/, va_list arglist) noexcept {
+    return std::vsnprintf(buffer, buffer_count, format, arglist);
+}
+inline int __stdio_common_vsnprintf_s(uint64_t /*options*/, char* buffer, size_t buffer_count, size_t /*max_count*/, const char* format, void* /*locale*/, va_list arglist) noexcept {
+    return std::vsnprintf(buffer, buffer_count, format, arglist);
+}
+inline int __stdio_common_vfwprintf(uint64_t /*options*/, FILE* stream, const wchar_t* format, void* /*locale*/, va_list arglist) noexcept {
+    return std::vfwprintf(stream, format, arglist);
+}
+inline int __stdio_common_vswscanf(uint64_t /*options*/, const wchar_t* input, size_t /*length*/, const wchar_t* format, void* /*locale*/, va_list arglist) noexcept {
+    return std::vswscanf(input, format, arglist);
+}
+inline errno_t CRT_ctime64_s(char* buffer, size_t numberOfElements, const int64_t* timer) noexcept {
+    if (!buffer || !timer || numberOfElements == 0) return 22;
+    time_t t = static_cast<time_t>(*timer);
+    char* res = std::ctime(&t);
+    if (!res) return 22;
+    size_t len = std::strlen(res);
+    if (len >= numberOfElements) return 34;
+    std::strcpy(buffer, res);
+    return 0;
+}
+inline double CRT_difftime64(int64_t t1, int64_t t0) noexcept {
+    return static_cast<double>(t1 - t0);
+}
+struct __timeb64 {
+    int64_t time;
+    unsigned short millitm;
+    short timezone;
+    short dstflag;
+};
+inline void CRT_ftime64(__timeb64* timeptr) noexcept {
+    if (!timeptr) return;
+    timeptr->time = std::time(nullptr);
+    timeptr->millitm = 0;
+    timeptr->timezone = 0;
+    timeptr->dstflag = 0;
+}
+inline div_t CRT_div(int numer, int denom) noexcept { return std::div(numer, denom); }
+inline ldiv_t CRT_ldiv(long numer, long denom) noexcept { return std::ldiv(numer, denom); }
+
+// --- VCRuntime & MSVCP Core Stubs ---
+inline const wchar_t* CRT_wcsrchr(const wchar_t* str, wchar_t ch) noexcept {
+    return std::wcsrchr(str, ch);
+}
+inline const char* __std_type_info_name(void* /*typeInfo*/, void* /*undecoratedBuffer*/) noexcept {
+    return "type_info";
+}
+inline size_t __std_type_info_hash(const void* typeInfo) noexcept {
+    return reinterpret_cast<size_t>(typeInfo);
+}
+inline int __CxxFrameHandler3(void* /*pExcept*/, void* /*pRN*/, void* /*pContext*/, void* /*pDC*/) noexcept {
+    return 1;
+}
+inline void* __RTCastToVoid(void* ptr) noexcept { return ptr; }
+inline void* __RTtypeid(void* /*ptr*/) noexcept { return nullptr; }
+
+inline void* MSVC_GenericStub(void* p1 = nullptr, void* /*p2*/ = nullptr, void* /*p3*/ = nullptr, void* /*p4*/ = nullptr) noexcept {
+    return p1;
+}
+inline int MSVC_GenericInt0(void* /*p1*/ = nullptr, void* /*p2*/ = nullptr) noexcept { return 0; }
+inline int MSVC_GenericInt1(void* /*p1*/ = nullptr) noexcept { return 1; }
+inline uint32_t MSVC_Thrd_id() noexcept { return 1; }
+inline uint32_t MSVC_Thrd_hardware_concurrency() noexcept { return 8; }
+inline int64_t MSVC_Query_perf_counter() noexcept { return 1000; }
+inline int64_t MSVC_Query_perf_frequency() noexcept { return 10000000; }
+inline int64_t MSVC_Xtime_get_ticks() noexcept { return 1000; }
+inline int MSVC_Winerror_map(int err) noexcept { return err; }
+inline bool MSVC_uncaught_exception() noexcept { return false; }
+inline void MSVC_Xout_of_range(const char* /*msg*/) noexcept {}
+inline void MSVC_Xinvalid_argument(const char* /*msg*/) noexcept {}
+inline void MSVC_Xruntime_error(const char* /*msg*/) noexcept {}
+inline void MSVC_Xregex_error(int /*code*/) noexcept {}
+inline void MSVC_ExceptionPtrAssign(void* /*p1*/, const void* /*p2*/) noexcept {}
+inline void MSVC_ExceptionPtrCopyException(void* /*p1*/, const void* /*p2*/, const void* /*p3*/) noexcept {}
+inline void MSVC_ExceptionPtrRethrow(const void* /*p*/) noexcept {}
+inline bool MSVC_ExceptionPtrToBool(const void* /*p*/) noexcept { return false; }
+inline char MSVC_cout_buffer[1024] = {0};
+inline char MSVC_cerr_buffer[1024] = {0};
+inline char MSVC_clog_buffer[1024] = {0};
+
 inline void InitializeMsvcrtSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
@@ -1901,6 +2284,553 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_strtoui64", reinterpret_cast<void*>(CRT_strtoui64));
     ldr.registerExport("msvcrt.dll", "_ctime64", reinterpret_cast<void*>(CRT_ctime64));
     ldr.registerExport("msvcrt.dll", "_timezone", reinterpret_cast<void*>(&CRT_timezone_val));
+
+    // --- Tier 4: Universal CRT & C99 Math Registrations ---
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "sinf", reinterpret_cast<void*>(CRT_sinf));
+    ldr.registerExport("ucrtbase.dll", "sinf", reinterpret_cast<void*>(CRT_sinf));
+    ldr.registerExport("msvcrt.dll", "sinf", reinterpret_cast<void*>(CRT_sinf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "cosf", reinterpret_cast<void*>(CRT_cosf));
+    ldr.registerExport("ucrtbase.dll", "cosf", reinterpret_cast<void*>(CRT_cosf));
+    ldr.registerExport("msvcrt.dll", "cosf", reinterpret_cast<void*>(CRT_cosf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "tanf", reinterpret_cast<void*>(CRT_tanf));
+    ldr.registerExport("ucrtbase.dll", "tanf", reinterpret_cast<void*>(CRT_tanf));
+    ldr.registerExport("msvcrt.dll", "tanf", reinterpret_cast<void*>(CRT_tanf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "asinf", reinterpret_cast<void*>(CRT_asinf));
+    ldr.registerExport("ucrtbase.dll", "asinf", reinterpret_cast<void*>(CRT_asinf));
+    ldr.registerExport("msvcrt.dll", "asinf", reinterpret_cast<void*>(CRT_asinf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "acosf", reinterpret_cast<void*>(CRT_acosf));
+    ldr.registerExport("ucrtbase.dll", "acosf", reinterpret_cast<void*>(CRT_acosf));
+    ldr.registerExport("msvcrt.dll", "acosf", reinterpret_cast<void*>(CRT_acosf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "atanf", reinterpret_cast<void*>(CRT_atanf));
+    ldr.registerExport("ucrtbase.dll", "atanf", reinterpret_cast<void*>(CRT_atanf));
+    ldr.registerExport("msvcrt.dll", "atanf", reinterpret_cast<void*>(CRT_atanf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "atan2f", reinterpret_cast<void*>(CRT_atan2f));
+    ldr.registerExport("ucrtbase.dll", "atan2f", reinterpret_cast<void*>(CRT_atan2f));
+    ldr.registerExport("msvcrt.dll", "atan2f", reinterpret_cast<void*>(CRT_atan2f));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "sinhf", reinterpret_cast<void*>(CRT_sinhf));
+    ldr.registerExport("ucrtbase.dll", "sinhf", reinterpret_cast<void*>(CRT_sinhf));
+    ldr.registerExport("msvcrt.dll", "sinhf", reinterpret_cast<void*>(CRT_sinhf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "coshf", reinterpret_cast<void*>(CRT_coshf));
+    ldr.registerExport("ucrtbase.dll", "coshf", reinterpret_cast<void*>(CRT_coshf));
+    ldr.registerExport("msvcrt.dll", "coshf", reinterpret_cast<void*>(CRT_coshf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "tanhf", reinterpret_cast<void*>(CRT_tanhf));
+    ldr.registerExport("ucrtbase.dll", "tanhf", reinterpret_cast<void*>(CRT_tanhf));
+    ldr.registerExport("msvcrt.dll", "tanhf", reinterpret_cast<void*>(CRT_tanhf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "expf", reinterpret_cast<void*>(CRT_expf));
+    ldr.registerExport("ucrtbase.dll", "expf", reinterpret_cast<void*>(CRT_expf));
+    ldr.registerExport("msvcrt.dll", "expf", reinterpret_cast<void*>(CRT_expf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "exp2", reinterpret_cast<void*>(CRT_exp2));
+    ldr.registerExport("ucrtbase.dll", "exp2", reinterpret_cast<void*>(CRT_exp2));
+    ldr.registerExport("msvcrt.dll", "exp2", reinterpret_cast<void*>(CRT_exp2));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "exp2f", reinterpret_cast<void*>(CRT_exp2f));
+    ldr.registerExport("ucrtbase.dll", "exp2f", reinterpret_cast<void*>(CRT_exp2f));
+    ldr.registerExport("msvcrt.dll", "exp2f", reinterpret_cast<void*>(CRT_exp2f));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "expm1", reinterpret_cast<void*>(CRT_expm1));
+    ldr.registerExport("ucrtbase.dll", "expm1", reinterpret_cast<void*>(CRT_expm1));
+    ldr.registerExport("msvcrt.dll", "expm1", reinterpret_cast<void*>(CRT_expm1));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "logf", reinterpret_cast<void*>(CRT_logf));
+    ldr.registerExport("ucrtbase.dll", "logf", reinterpret_cast<void*>(CRT_logf));
+    ldr.registerExport("msvcrt.dll", "logf", reinterpret_cast<void*>(CRT_logf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "log10f", reinterpret_cast<void*>(CRT_log10f));
+    ldr.registerExport("ucrtbase.dll", "log10f", reinterpret_cast<void*>(CRT_log10f));
+    ldr.registerExport("msvcrt.dll", "log10f", reinterpret_cast<void*>(CRT_log10f));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "log1p", reinterpret_cast<void*>(CRT_log1p));
+    ldr.registerExport("ucrtbase.dll", "log1p", reinterpret_cast<void*>(CRT_log1p));
+    ldr.registerExport("msvcrt.dll", "log1p", reinterpret_cast<void*>(CRT_log1p));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "log2f", reinterpret_cast<void*>(CRT_log2f));
+    ldr.registerExport("ucrtbase.dll", "log2f", reinterpret_cast<void*>(CRT_log2f));
+    ldr.registerExport("msvcrt.dll", "log2f", reinterpret_cast<void*>(CRT_log2f));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "log2l", reinterpret_cast<void*>(CRT_log2l));
+    ldr.registerExport("ucrtbase.dll", "log2l", reinterpret_cast<void*>(CRT_log2l));
+    ldr.registerExport("msvcrt.dll", "log2l", reinterpret_cast<void*>(CRT_log2l));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "powf", reinterpret_cast<void*>(CRT_powf));
+    ldr.registerExport("ucrtbase.dll", "powf", reinterpret_cast<void*>(CRT_powf));
+    ldr.registerExport("msvcrt.dll", "powf", reinterpret_cast<void*>(CRT_powf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "sqrtf", reinterpret_cast<void*>(CRT_sqrtf));
+    ldr.registerExport("ucrtbase.dll", "sqrtf", reinterpret_cast<void*>(CRT_sqrtf));
+    ldr.registerExport("msvcrt.dll", "sqrtf", reinterpret_cast<void*>(CRT_sqrtf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "cbrtf", reinterpret_cast<void*>(CRT_cbrtf));
+    ldr.registerExport("ucrtbase.dll", "cbrtf", reinterpret_cast<void*>(CRT_cbrtf));
+    ldr.registerExport("msvcrt.dll", "cbrtf", reinterpret_cast<void*>(CRT_cbrtf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "ceilf", reinterpret_cast<void*>(CRT_ceilf));
+    ldr.registerExport("ucrtbase.dll", "ceilf", reinterpret_cast<void*>(CRT_ceilf));
+    ldr.registerExport("msvcrt.dll", "ceilf", reinterpret_cast<void*>(CRT_ceilf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "floorf", reinterpret_cast<void*>(CRT_floorf));
+    ldr.registerExport("ucrtbase.dll", "floorf", reinterpret_cast<void*>(CRT_floorf));
+    ldr.registerExport("msvcrt.dll", "floorf", reinterpret_cast<void*>(CRT_floorf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "trunc", reinterpret_cast<void*>(CRT_trunc));
+    ldr.registerExport("ucrtbase.dll", "trunc", reinterpret_cast<void*>(CRT_trunc));
+    ldr.registerExport("msvcrt.dll", "trunc", reinterpret_cast<void*>(CRT_trunc));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "truncf", reinterpret_cast<void*>(CRT_truncf));
+    ldr.registerExport("ucrtbase.dll", "truncf", reinterpret_cast<void*>(CRT_truncf));
+    ldr.registerExport("msvcrt.dll", "truncf", reinterpret_cast<void*>(CRT_truncf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "roundf", reinterpret_cast<void*>(CRT_roundf));
+    ldr.registerExport("ucrtbase.dll", "roundf", reinterpret_cast<void*>(CRT_roundf));
+    ldr.registerExport("msvcrt.dll", "roundf", reinterpret_cast<void*>(CRT_roundf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "rintf", reinterpret_cast<void*>(CRT_rintf));
+    ldr.registerExport("ucrtbase.dll", "rintf", reinterpret_cast<void*>(CRT_rintf));
+    ldr.registerExport("msvcrt.dll", "rintf", reinterpret_cast<void*>(CRT_rintf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "lrint", reinterpret_cast<void*>(CRT_lrint));
+    ldr.registerExport("ucrtbase.dll", "lrint", reinterpret_cast<void*>(CRT_lrint));
+    ldr.registerExport("msvcrt.dll", "lrint", reinterpret_cast<void*>(CRT_lrint));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "lrintf", reinterpret_cast<void*>(CRT_lrintf));
+    ldr.registerExport("ucrtbase.dll", "lrintf", reinterpret_cast<void*>(CRT_lrintf));
+    ldr.registerExport("msvcrt.dll", "lrintf", reinterpret_cast<void*>(CRT_lrintf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "lroundf", reinterpret_cast<void*>(CRT_lroundf));
+    ldr.registerExport("ucrtbase.dll", "lroundf", reinterpret_cast<void*>(CRT_lroundf));
+    ldr.registerExport("msvcrt.dll", "lroundf", reinterpret_cast<void*>(CRT_lroundf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "llround", reinterpret_cast<void*>(CRT_llround));
+    ldr.registerExport("ucrtbase.dll", "llround", reinterpret_cast<void*>(CRT_llround));
+    ldr.registerExport("msvcrt.dll", "llround", reinterpret_cast<void*>(CRT_llround));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "llroundf", reinterpret_cast<void*>(CRT_llroundf));
+    ldr.registerExport("ucrtbase.dll", "llroundf", reinterpret_cast<void*>(CRT_llroundf));
+    ldr.registerExport("msvcrt.dll", "llroundf", reinterpret_cast<void*>(CRT_llroundf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fmin", reinterpret_cast<void*>(CRT_fmin));
+    ldr.registerExport("ucrtbase.dll", "fmin", reinterpret_cast<void*>(CRT_fmin));
+    ldr.registerExport("msvcrt.dll", "fmin", reinterpret_cast<void*>(CRT_fmin));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fminf", reinterpret_cast<void*>(CRT_fminf));
+    ldr.registerExport("ucrtbase.dll", "fminf", reinterpret_cast<void*>(CRT_fminf));
+    ldr.registerExport("msvcrt.dll", "fminf", reinterpret_cast<void*>(CRT_fminf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fmax", reinterpret_cast<void*>(CRT_fmax));
+    ldr.registerExport("ucrtbase.dll", "fmax", reinterpret_cast<void*>(CRT_fmax));
+    ldr.registerExport("msvcrt.dll", "fmax", reinterpret_cast<void*>(CRT_fmax));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fmaxf", reinterpret_cast<void*>(CRT_fmaxf));
+    ldr.registerExport("ucrtbase.dll", "fmaxf", reinterpret_cast<void*>(CRT_fmaxf));
+    ldr.registerExport("msvcrt.dll", "fmaxf", reinterpret_cast<void*>(CRT_fmaxf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fmodf", reinterpret_cast<void*>(CRT_fmodf));
+    ldr.registerExport("ucrtbase.dll", "fmodf", reinterpret_cast<void*>(CRT_fmodf));
+    ldr.registerExport("msvcrt.dll", "fmodf", reinterpret_cast<void*>(CRT_fmodf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "remainder", reinterpret_cast<void*>(CRT_remainder));
+    ldr.registerExport("ucrtbase.dll", "remainder", reinterpret_cast<void*>(CRT_remainder));
+    ldr.registerExport("msvcrt.dll", "remainder", reinterpret_cast<void*>(CRT_remainder));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "remquo", reinterpret_cast<void*>(CRT_remquo));
+    ldr.registerExport("ucrtbase.dll", "remquo", reinterpret_cast<void*>(CRT_remquo));
+    ldr.registerExport("msvcrt.dll", "remquo", reinterpret_cast<void*>(CRT_remquo));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fabs", reinterpret_cast<void*>(CRT_fabs));
+    ldr.registerExport("ucrtbase.dll", "fabs", reinterpret_cast<void*>(CRT_fabs));
+    ldr.registerExport("msvcrt.dll", "fabs", reinterpret_cast<void*>(CRT_fabs));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fabsf", reinterpret_cast<void*>(CRT_fabsf));
+    ldr.registerExport("ucrtbase.dll", "fabsf", reinterpret_cast<void*>(CRT_fabsf));
+    ldr.registerExport("msvcrt.dll", "fabsf", reinterpret_cast<void*>(CRT_fabsf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fma", reinterpret_cast<void*>(CRT_fma));
+    ldr.registerExport("ucrtbase.dll", "fma", reinterpret_cast<void*>(CRT_fma));
+    ldr.registerExport("msvcrt.dll", "fma", reinterpret_cast<void*>(CRT_fma));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "ilogb", reinterpret_cast<void*>(CRT_ilogb));
+    ldr.registerExport("ucrtbase.dll", "ilogb", reinterpret_cast<void*>(CRT_ilogb));
+    ldr.registerExport("msvcrt.dll", "ilogb", reinterpret_cast<void*>(CRT_ilogb));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "scalbn", reinterpret_cast<void*>(CRT_scalbn));
+    ldr.registerExport("ucrtbase.dll", "scalbn", reinterpret_cast<void*>(CRT_scalbn));
+    ldr.registerExport("msvcrt.dll", "scalbn", reinterpret_cast<void*>(CRT_scalbn));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "modff", reinterpret_cast<void*>(CRT_modff));
+    ldr.registerExport("ucrtbase.dll", "modff", reinterpret_cast<void*>(CRT_modff));
+    ldr.registerExport("msvcrt.dll", "modff", reinterpret_cast<void*>(CRT_modff));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "frexp", reinterpret_cast<void*>(CRT_frexp));
+    ldr.registerExport("ucrtbase.dll", "frexp", reinterpret_cast<void*>(CRT_frexp));
+    ldr.registerExport("msvcrt.dll", "frexp", reinterpret_cast<void*>(CRT_frexp));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "nextafterf", reinterpret_cast<void*>(CRT_nextafterf));
+    ldr.registerExport("ucrtbase.dll", "nextafterf", reinterpret_cast<void*>(CRT_nextafterf));
+    ldr.registerExport("msvcrt.dll", "nextafterf", reinterpret_cast<void*>(CRT_nextafterf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "nexttowardf", reinterpret_cast<void*>(CRT_nexttowardf));
+    ldr.registerExport("ucrtbase.dll", "nexttowardf", reinterpret_cast<void*>(CRT_nexttowardf));
+    ldr.registerExport("msvcrt.dll", "nexttowardf", reinterpret_cast<void*>(CRT_nexttowardf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "hypot", reinterpret_cast<void*>(CRT_hypot));
+    ldr.registerExport("ucrtbase.dll", "hypot", reinterpret_cast<void*>(CRT_hypot));
+    ldr.registerExport("msvcrt.dll", "hypot", reinterpret_cast<void*>(CRT_hypot));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "hypotf", reinterpret_cast<void*>(CRT_hypotf));
+    ldr.registerExport("ucrtbase.dll", "hypotf", reinterpret_cast<void*>(CRT_hypotf));
+    ldr.registerExport("msvcrt.dll", "hypotf", reinterpret_cast<void*>(CRT_hypotf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_hypot", reinterpret_cast<void*>(CRT_hypot));
+    ldr.registerExport("ucrtbase.dll", "_hypot", reinterpret_cast<void*>(CRT_hypot));
+    ldr.registerExport("msvcrt.dll", "_hypot", reinterpret_cast<void*>(CRT_hypot));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_hypotf", reinterpret_cast<void*>(CRT_hypotf));
+    ldr.registerExport("ucrtbase.dll", "_hypotf", reinterpret_cast<void*>(CRT_hypotf));
+    ldr.registerExport("msvcrt.dll", "_hypotf", reinterpret_cast<void*>(CRT_hypotf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_finite", reinterpret_cast<void*>(CRT_finite));
+    ldr.registerExport("ucrtbase.dll", "_finite", reinterpret_cast<void*>(CRT_finite));
+    ldr.registerExport("msvcrt.dll", "_finite", reinterpret_cast<void*>(CRT_finite));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_isnan", reinterpret_cast<void*>(CRT_isnan));
+    ldr.registerExport("ucrtbase.dll", "_isnan", reinterpret_cast<void*>(CRT_isnan));
+    ldr.registerExport("msvcrt.dll", "_isnan", reinterpret_cast<void*>(CRT_isnan));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_dsign", reinterpret_cast<void*>(CRT_dsign));
+    ldr.registerExport("ucrtbase.dll", "_dsign", reinterpret_cast<void*>(CRT_dsign));
+    ldr.registerExport("msvcrt.dll", "_dsign", reinterpret_cast<void*>(CRT_dsign));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_dtest", reinterpret_cast<void*>(CRT_dtest));
+    ldr.registerExport("ucrtbase.dll", "_dtest", reinterpret_cast<void*>(CRT_dtest));
+    ldr.registerExport("msvcrt.dll", "_dtest", reinterpret_cast<void*>(CRT_dtest));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_fdtest", reinterpret_cast<void*>(CRT_fdtest));
+    ldr.registerExport("ucrtbase.dll", "_fdtest", reinterpret_cast<void*>(CRT_fdtest));
+    ldr.registerExport("msvcrt.dll", "_fdtest", reinterpret_cast<void*>(CRT_fdtest));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_fdclass", reinterpret_cast<void*>(CRT_fdclass));
+    ldr.registerExport("ucrtbase.dll", "_fdclass", reinterpret_cast<void*>(CRT_fdclass));
+    ldr.registerExport("msvcrt.dll", "_fdclass", reinterpret_cast<void*>(CRT_fdclass));
+    ldr.registerExport("msvcp140_2.dll", "__std_smf_hypot3", reinterpret_cast<void*>(__std_smf_hypot3));
+    ldr.registerExport("msvcp140_2.dll", "__std_smf_hypot3f", reinterpret_cast<void*>(__std_smf_hypot3f));
+    ldr.registerExport("api-ms-win-crt-convert-l1-1-0.dll", "strtod", reinterpret_cast<void*>(CRT_strtod));
+    ldr.registerExport("ucrtbase.dll", "strtod", reinterpret_cast<void*>(CRT_strtod));
+    ldr.registerExport("msvcrt.dll", "strtod", reinterpret_cast<void*>(CRT_strtod));
+    ldr.registerExport("api-ms-win-crt-convert-l1-1-0.dll", "strtof", reinterpret_cast<void*>(CRT_strtof));
+    ldr.registerExport("ucrtbase.dll", "strtof", reinterpret_cast<void*>(CRT_strtof));
+    ldr.registerExport("msvcrt.dll", "strtof", reinterpret_cast<void*>(CRT_strtof));
+    ldr.registerExport("api-ms-win-crt-convert-l1-1-0.dll", "atoll", reinterpret_cast<void*>(CRT_atoll));
+    ldr.registerExport("ucrtbase.dll", "atoll", reinterpret_cast<void*>(CRT_atoll));
+    ldr.registerExport("msvcrt.dll", "atoll", reinterpret_cast<void*>(CRT_atoll));
+    ldr.registerExport("api-ms-win-crt-convert-l1-1-0.dll", "strtoll", reinterpret_cast<void*>(CRT_strtoll));
+    ldr.registerExport("ucrtbase.dll", "strtoll", reinterpret_cast<void*>(CRT_strtoll));
+    ldr.registerExport("msvcrt.dll", "strtoll", reinterpret_cast<void*>(CRT_strtoll));
+    ldr.registerExport("api-ms-win-crt-convert-l1-1-0.dll", "strtoull", reinterpret_cast<void*>(CRT_strtoull));
+    ldr.registerExport("ucrtbase.dll", "strtoull", reinterpret_cast<void*>(CRT_strtoull));
+    ldr.registerExport("msvcrt.dll", "strtoull", reinterpret_cast<void*>(CRT_strtoull));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "_wcsicmp", reinterpret_cast<void*>(CRT_wcsicmp));
+    ldr.registerExport("ucrtbase.dll", "_wcsicmp", reinterpret_cast<void*>(CRT_wcsicmp));
+    ldr.registerExport("msvcrt.dll", "_wcsicmp", reinterpret_cast<void*>(CRT_wcsicmp));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "_wcslwr", reinterpret_cast<void*>(CRT_wcslwr));
+    ldr.registerExport("ucrtbase.dll", "_wcslwr", reinterpret_cast<void*>(CRT_wcslwr));
+    ldr.registerExport("msvcrt.dll", "_wcslwr", reinterpret_cast<void*>(CRT_wcslwr));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "isprint", reinterpret_cast<void*>(CRT_isprint));
+    ldr.registerExport("ucrtbase.dll", "isprint", reinterpret_cast<void*>(CRT_isprint));
+    ldr.registerExport("msvcrt.dll", "isprint", reinterpret_cast<void*>(CRT_isprint));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "ispunct", reinterpret_cast<void*>(CRT_ispunct));
+    ldr.registerExport("ucrtbase.dll", "ispunct", reinterpret_cast<void*>(CRT_ispunct));
+    ldr.registerExport("msvcrt.dll", "ispunct", reinterpret_cast<void*>(CRT_ispunct));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strcpy_s", reinterpret_cast<void*>(CRT_strcpy_s));
+    ldr.registerExport("ucrtbase.dll", "strcpy_s", reinterpret_cast<void*>(CRT_strcpy_s));
+    ldr.registerExport("msvcrt.dll", "strcpy_s", reinterpret_cast<void*>(CRT_strcpy_s));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strncpy_s", reinterpret_cast<void*>(CRT_strncpy_s));
+    ldr.registerExport("ucrtbase.dll", "strncpy_s", reinterpret_cast<void*>(CRT_strncpy_s));
+    ldr.registerExport("msvcrt.dll", "strncpy_s", reinterpret_cast<void*>(CRT_strncpy_s));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strncat_s", reinterpret_cast<void*>(CRT_strncat_s));
+    ldr.registerExport("ucrtbase.dll", "strncat_s", reinterpret_cast<void*>(CRT_strncat_s));
+    ldr.registerExport("msvcrt.dll", "strncat_s", reinterpret_cast<void*>(CRT_strncat_s));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strtok_s", reinterpret_cast<void*>(CRT_strtok_s));
+    ldr.registerExport("ucrtbase.dll", "strtok_s", reinterpret_cast<void*>(CRT_strtok_s));
+    ldr.registerExport("msvcrt.dll", "strtok_s", reinterpret_cast<void*>(CRT_strtok_s));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "wcscpy_s", reinterpret_cast<void*>(CRT_wcscpy_s));
+    ldr.registerExport("ucrtbase.dll", "wcscpy_s", reinterpret_cast<void*>(CRT_wcscpy_s));
+    ldr.registerExport("msvcrt.dll", "wcscpy_s", reinterpret_cast<void*>(CRT_wcscpy_s));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_chdir", reinterpret_cast<void*>(CRT_chdir));
+    ldr.registerExport("ucrtbase.dll", "_chdir", reinterpret_cast<void*>(CRT_chdir));
+    ldr.registerExport("msvcrt.dll", "_chdir", reinterpret_cast<void*>(CRT_chdir));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_lock_file", reinterpret_cast<void*>(CRT_lock_file));
+    ldr.registerExport("ucrtbase.dll", "_lock_file", reinterpret_cast<void*>(CRT_lock_file));
+    ldr.registerExport("msvcrt.dll", "_lock_file", reinterpret_cast<void*>(CRT_lock_file));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_unlock_file", reinterpret_cast<void*>(CRT_unlock_file));
+    ldr.registerExport("ucrtbase.dll", "_unlock_file", reinterpret_cast<void*>(CRT_unlock_file));
+    ldr.registerExport("msvcrt.dll", "_unlock_file", reinterpret_cast<void*>(CRT_unlock_file));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_unlink", reinterpret_cast<void*>(CRT_unlink));
+    ldr.registerExport("ucrtbase.dll", "_unlink", reinterpret_cast<void*>(CRT_unlink));
+    ldr.registerExport("msvcrt.dll", "_unlink", reinterpret_cast<void*>(CRT_unlink));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_stat64i32", reinterpret_cast<void*>(CRT_stat64i32_fn));
+    ldr.registerExport("ucrtbase.dll", "_stat64i32", reinterpret_cast<void*>(CRT_stat64i32_fn));
+    ldr.registerExport("msvcrt.dll", "_stat64i32", reinterpret_cast<void*>(CRT_stat64i32_fn));
+    ldr.registerExport("api-ms-win-crt-environment-l1-1-0.dll", "_dupenv_s", reinterpret_cast<void*>(CRT_dupenv_s));
+    ldr.registerExport("ucrtbase.dll", "_dupenv_s", reinterpret_cast<void*>(CRT_dupenv_s));
+    ldr.registerExport("msvcrt.dll", "_dupenv_s", reinterpret_cast<void*>(CRT_dupenv_s));
+    ldr.registerExport("api-ms-win-crt-environment-l1-1-0.dll", "_putenv_s", reinterpret_cast<void*>(CRT_putenv_s));
+    ldr.registerExport("ucrtbase.dll", "_putenv_s", reinterpret_cast<void*>(CRT_putenv_s));
+    ldr.registerExport("msvcrt.dll", "_putenv_s", reinterpret_cast<void*>(CRT_putenv_s));
+    ldr.registerExport("api-ms-win-crt-environment-l1-1-0.dll", "_wputenv_s", reinterpret_cast<void*>(CRT_wputenv_s));
+    ldr.registerExport("ucrtbase.dll", "_wputenv_s", reinterpret_cast<void*>(CRT_wputenv_s));
+    ldr.registerExport("msvcrt.dll", "_wputenv_s", reinterpret_cast<void*>(CRT_wputenv_s));
+    ldr.registerExport("api-ms-win-crt-environment-l1-1-0.dll", "getenv_s", reinterpret_cast<void*>(CRT_getenv_s));
+    ldr.registerExport("ucrtbase.dll", "getenv_s", reinterpret_cast<void*>(CRT_getenv_s));
+    ldr.registerExport("msvcrt.dll", "getenv_s", reinterpret_cast<void*>(CRT_getenv_s));
+    ldr.registerExport("api-ms-win-crt-locale-l1-1-0.dll", "__initialize_lconv_for_unsigned_char", reinterpret_cast<void*>(__initialize_lconv_for_unsigned_char));
+    ldr.registerExport("ucrtbase.dll", "__initialize_lconv_for_unsigned_char", reinterpret_cast<void*>(__initialize_lconv_for_unsigned_char));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_clearfp", reinterpret_cast<void*>(CRT_clearfp));
+    ldr.registerExport("ucrtbase.dll", "_clearfp", reinterpret_cast<void*>(CRT_clearfp));
+    ldr.registerExport("msvcrt.dll", "_clearfp", reinterpret_cast<void*>(CRT_clearfp));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_statusfp", reinterpret_cast<void*>(CRT_statusfp));
+    ldr.registerExport("ucrtbase.dll", "_statusfp", reinterpret_cast<void*>(CRT_statusfp));
+    ldr.registerExport("msvcrt.dll", "_statusfp", reinterpret_cast<void*>(CRT_statusfp));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_controlfp_s", reinterpret_cast<void*>(CRT_controlfp_s));
+    ldr.registerExport("ucrtbase.dll", "_controlfp_s", reinterpret_cast<void*>(CRT_controlfp_s));
+    ldr.registerExport("msvcrt.dll", "_controlfp_s", reinterpret_cast<void*>(CRT_controlfp_s));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_get_errno", reinterpret_cast<void*>(CRT_get_errno));
+    ldr.registerExport("ucrtbase.dll", "_get_errno", reinterpret_cast<void*>(CRT_get_errno));
+    ldr.registerExport("msvcrt.dll", "_get_errno", reinterpret_cast<void*>(CRT_get_errno));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_set_errno", reinterpret_cast<void*>(CRT_set_errno));
+    ldr.registerExport("ucrtbase.dll", "_set_errno", reinterpret_cast<void*>(CRT_set_errno));
+    ldr.registerExport("msvcrt.dll", "_set_errno", reinterpret_cast<void*>(CRT_set_errno));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_invoke_watson", reinterpret_cast<void*>(CRT_invoke_watson));
+    ldr.registerExport("ucrtbase.dll", "_invoke_watson", reinterpret_cast<void*>(CRT_invoke_watson));
+    ldr.registerExport("msvcrt.dll", "_invoke_watson", reinterpret_cast<void*>(CRT_invoke_watson));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "feclearexcept", reinterpret_cast<void*>(CRT_feclearexcept));
+    ldr.registerExport("ucrtbase.dll", "feclearexcept", reinterpret_cast<void*>(CRT_feclearexcept));
+    ldr.registerExport("msvcrt.dll", "feclearexcept", reinterpret_cast<void*>(CRT_feclearexcept));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "fetestexcept", reinterpret_cast<void*>(CRT_fetestexcept));
+    ldr.registerExport("ucrtbase.dll", "fetestexcept", reinterpret_cast<void*>(CRT_fetestexcept));
+    ldr.registerExport("msvcrt.dll", "fetestexcept", reinterpret_cast<void*>(CRT_fetestexcept));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "perror", reinterpret_cast<void*>(CRT_perror));
+    ldr.registerExport("ucrtbase.dll", "perror", reinterpret_cast<void*>(CRT_perror));
+    ldr.registerExport("msvcrt.dll", "perror", reinterpret_cast<void*>(CRT_perror));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "strerror_s", reinterpret_cast<void*>(CRT_strerror_s));
+    ldr.registerExport("ucrtbase.dll", "strerror_s", reinterpret_cast<void*>(CRT_strerror_s));
+    ldr.registerExport("msvcrt.dll", "strerror_s", reinterpret_cast<void*>(CRT_strerror_s));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "system", reinterpret_cast<void*>(CRT_system));
+    ldr.registerExport("ucrtbase.dll", "system", reinterpret_cast<void*>(CRT_system));
+    ldr.registerExport("msvcrt.dll", "system", reinterpret_cast<void*>(CRT_system));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vsprintf_p", reinterpret_cast<void*>(__stdio_common_vsprintf_p));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vsprintf_p", reinterpret_cast<void*>(__stdio_common_vsprintf_p));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vsprintf_p", reinterpret_cast<void*>(__stdio_common_vsprintf_p));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vsprintf_s", reinterpret_cast<void*>(__stdio_common_vsprintf_s));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vsprintf_s", reinterpret_cast<void*>(__stdio_common_vsprintf_s));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vsprintf_s", reinterpret_cast<void*>(__stdio_common_vsprintf_s));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vsnprintf_s", reinterpret_cast<void*>(__stdio_common_vsnprintf_s));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vsnprintf_s", reinterpret_cast<void*>(__stdio_common_vsnprintf_s));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vsnprintf_s", reinterpret_cast<void*>(__stdio_common_vsnprintf_s));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vfwprintf", reinterpret_cast<void*>(__stdio_common_vfwprintf));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vfwprintf", reinterpret_cast<void*>(__stdio_common_vfwprintf));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vfwprintf", reinterpret_cast<void*>(__stdio_common_vfwprintf));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vswscanf", reinterpret_cast<void*>(__stdio_common_vswscanf));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vswscanf", reinterpret_cast<void*>(__stdio_common_vswscanf));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vswscanf", reinterpret_cast<void*>(__stdio_common_vswscanf));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_fseeki64", reinterpret_cast<void*>(CRT_fseeki64));
+    ldr.registerExport("ucrtbase.dll", "_fseeki64", reinterpret_cast<void*>(CRT_fseeki64));
+    ldr.registerExport("msvcrt.dll", "_fseeki64", reinterpret_cast<void*>(CRT_fseeki64));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_ftelli64", reinterpret_cast<void*>(CRT_ftelli64));
+    ldr.registerExport("ucrtbase.dll", "_ftelli64", reinterpret_cast<void*>(CRT_ftelli64));
+    ldr.registerExport("msvcrt.dll", "_ftelli64", reinterpret_cast<void*>(CRT_ftelli64));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_flushall", reinterpret_cast<void*>(CRT_flushall));
+    ldr.registerExport("ucrtbase.dll", "_flushall", reinterpret_cast<void*>(CRT_flushall));
+    ldr.registerExport("msvcrt.dll", "_flushall", reinterpret_cast<void*>(CRT_flushall));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_pipe", reinterpret_cast<void*>(CRT_pipe));
+    ldr.registerExport("ucrtbase.dll", "_pipe", reinterpret_cast<void*>(CRT_pipe));
+    ldr.registerExport("msvcrt.dll", "_pipe", reinterpret_cast<void*>(CRT_pipe));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_get_stream_buffer_pointers", reinterpret_cast<void*>(CRT_get_stream_buffer_pointers));
+    ldr.registerExport("ucrtbase.dll", "_get_stream_buffer_pointers", reinterpret_cast<void*>(CRT_get_stream_buffer_pointers));
+    ldr.registerExport("msvcrt.dll", "_get_stream_buffer_pointers", reinterpret_cast<void*>(CRT_get_stream_buffer_pointers));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_kbhit", reinterpret_cast<void*>(CRT_kbhit));
+    ldr.registerExport("ucrtbase.dll", "_kbhit", reinterpret_cast<void*>(CRT_kbhit));
+    ldr.registerExport("msvcrt.dll", "_kbhit", reinterpret_cast<void*>(CRT_kbhit));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_mktemp_s", reinterpret_cast<void*>(CRT_mktemp_s));
+    ldr.registerExport("ucrtbase.dll", "_mktemp_s", reinterpret_cast<void*>(CRT_mktemp_s));
+    ldr.registerExport("msvcrt.dll", "_mktemp_s", reinterpret_cast<void*>(CRT_mktemp_s));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "fopen_s", reinterpret_cast<void*>(CRT_fopen_s));
+    ldr.registerExport("ucrtbase.dll", "fopen_s", reinterpret_cast<void*>(CRT_fopen_s));
+    ldr.registerExport("msvcrt.dll", "fopen_s", reinterpret_cast<void*>(CRT_fopen_s));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "freopen_s", reinterpret_cast<void*>(CRT_freopen_s));
+    ldr.registerExport("ucrtbase.dll", "freopen_s", reinterpret_cast<void*>(CRT_freopen_s));
+    ldr.registerExport("msvcrt.dll", "freopen_s", reinterpret_cast<void*>(CRT_freopen_s));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_wfopen_s", reinterpret_cast<void*>(CRT_wfopen_s));
+    ldr.registerExport("ucrtbase.dll", "_wfopen_s", reinterpret_cast<void*>(CRT_wfopen_s));
+    ldr.registerExport("msvcrt.dll", "_wfopen_s", reinterpret_cast<void*>(CRT_wfopen_s));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_sopen_dispatch", reinterpret_cast<void*>(CRT_sopen_dispatch));
+    ldr.registerExport("ucrtbase.dll", "_sopen_dispatch", reinterpret_cast<void*>(CRT_sopen_dispatch));
+    ldr.registerExport("msvcrt.dll", "_sopen_dispatch", reinterpret_cast<void*>(CRT_sopen_dispatch));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_sopen_s", reinterpret_cast<void*>(CRT_sopen_s));
+    ldr.registerExport("ucrtbase.dll", "_sopen_s", reinterpret_cast<void*>(CRT_sopen_s));
+    ldr.registerExport("msvcrt.dll", "_sopen_s", reinterpret_cast<void*>(CRT_sopen_s));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_wsopen_dispatch", reinterpret_cast<void*>(CRT_wsopen_dispatch));
+    ldr.registerExport("ucrtbase.dll", "_wsopen_dispatch", reinterpret_cast<void*>(CRT_wsopen_dispatch));
+    ldr.registerExport("msvcrt.dll", "_wsopen_dispatch", reinterpret_cast<void*>(CRT_wsopen_dispatch));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_ctime64_s", reinterpret_cast<void*>(CRT_ctime64_s));
+    ldr.registerExport("ucrtbase.dll", "_ctime64_s", reinterpret_cast<void*>(CRT_ctime64_s));
+    ldr.registerExport("msvcrt.dll", "_ctime64_s", reinterpret_cast<void*>(CRT_ctime64_s));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_difftime64", reinterpret_cast<void*>(CRT_difftime64));
+    ldr.registerExport("ucrtbase.dll", "_difftime64", reinterpret_cast<void*>(CRT_difftime64));
+    ldr.registerExport("msvcrt.dll", "_difftime64", reinterpret_cast<void*>(CRT_difftime64));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_ftime64", reinterpret_cast<void*>(CRT_ftime64));
+    ldr.registerExport("ucrtbase.dll", "_ftime64", reinterpret_cast<void*>(CRT_ftime64));
+    ldr.registerExport("msvcrt.dll", "_ftime64", reinterpret_cast<void*>(CRT_ftime64));
+    ldr.registerExport("api-ms-win-crt-utility-l1-1-0.dll", "div", reinterpret_cast<void*>(CRT_div));
+    ldr.registerExport("ucrtbase.dll", "div", reinterpret_cast<void*>(CRT_div));
+    ldr.registerExport("msvcrt.dll", "div", reinterpret_cast<void*>(CRT_div));
+    ldr.registerExport("api-ms-win-crt-utility-l1-1-0.dll", "ldiv", reinterpret_cast<void*>(CRT_ldiv));
+    ldr.registerExport("ucrtbase.dll", "ldiv", reinterpret_cast<void*>(CRT_ldiv));
+    ldr.registerExport("msvcrt.dll", "ldiv", reinterpret_cast<void*>(CRT_ldiv));
+    ldr.registerExport("vcruntime140.dll", "wcsrchr", reinterpret_cast<void*>(CRT_wcsrchr));
+    ldr.registerExport("msvcrt.dll", "wcsrchr", reinterpret_cast<void*>(CRT_wcsrchr));
+    ldr.registerExport("vcruntime140.dll", "wcsstr", reinterpret_cast<void*>(wcsstr));
+    ldr.registerExport("msvcrt.dll", "wcsstr", reinterpret_cast<void*>(wcsstr));
+    ldr.registerExport("vcruntime140.dll", "__std_type_info_name", reinterpret_cast<void*>(__std_type_info_name));
+    ldr.registerExport("msvcrt.dll", "__std_type_info_name", reinterpret_cast<void*>(__std_type_info_name));
+    ldr.registerExport("vcruntime140.dll", "__std_type_info_hash", reinterpret_cast<void*>(__std_type_info_hash));
+    ldr.registerExport("msvcrt.dll", "__std_type_info_hash", reinterpret_cast<void*>(__std_type_info_hash));
+    ldr.registerExport("vcruntime140.dll", "__CxxFrameHandler3", reinterpret_cast<void*>(__CxxFrameHandler3));
+    ldr.registerExport("msvcrt.dll", "__CxxFrameHandler3", reinterpret_cast<void*>(__CxxFrameHandler3));
+    ldr.registerExport("vcruntime140.dll", "__RTCastToVoid", reinterpret_cast<void*>(__RTCastToVoid));
+    ldr.registerExport("msvcrt.dll", "__RTCastToVoid", reinterpret_cast<void*>(__RTCastToVoid));
+    ldr.registerExport("vcruntime140.dll", "__RTtypeid", reinterpret_cast<void*>(__RTtypeid));
+    ldr.registerExport("msvcrt.dll", "__RTtypeid", reinterpret_cast<void*>(__RTtypeid));
+
+    // --- MSVCP140 C++ Standard Library Symbols ---
+    ldr.registerExport("msvcp140.dll", "??0?$basic_ios@DU?$char_traits@D@std@@@std@@IEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0?$basic_iostream@DU?$char_traits@D@std@@@std@@QEAA@PEAV?$basic_streambuf@DU?$char_traits@D@std@@@1@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0?$basic_istream@DU?$char_traits@D@std@@@std@@QEAA@PEAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAA@PEAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0?$codecvt@_SDU_Mbstatet@@@std@@QEAA@_K@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0?$codecvt@_UDU_Mbstatet@@@std@@QEAA@_K@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0?$codecvt@_WDU_Mbstatet@@@std@@QEAA@_K@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0_Locinfo@std@@QEAA@HPEBD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0_Locinfo@std@@QEAA@PEBD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0_Lockit@std@@QEAA@H@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0facet@locale@std@@IEAA@_K@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??0ios_base@std@@IEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1?$basic_ios@DU?$char_traits@D@std@@@std@@UEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1?$basic_iostream@DU?$char_traits@D@std@@@std@@UEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1?$basic_istream@DU?$char_traits@D@std@@@std@@UEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1?$basic_ostream@DU?$char_traits@D@std@@@std@@UEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1?$basic_streambuf@DU?$char_traits@D@std@@@std@@UEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1?$codecvt@_SDU_Mbstatet@@@std@@MEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1?$codecvt@_UDU_Mbstatet@@@std@@MEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1?$codecvt@_WDU_Mbstatet@@@std@@MEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1_Locinfo@std@@QEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1_Lockit@std@@QEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1facet@locale@std@@MEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??1ios_base@std@@UEAA@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??4?$_Yarn@D@std@@QEAAAEAV01@PEBD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??5?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@AEAH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??5?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@AEAI@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??5?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@AEAM@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??5?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@AEAN@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??5?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@AEAPEAX@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@F@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@G@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@H@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@I@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@K@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@M@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@P6AAEAVios_base@1@AEAV21@@Z@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@PEAV?$basic_streambuf@DU?$char_traits@D@std@@@1@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@PEBX@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@_J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@_K@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@_N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??7ios_base@std@@QEBA_NXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??Bios_base@std@@QEBA_NXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??_D?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAXXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "??_D?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAXXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Decref@facet@locale@std@@UEAAPEAV_Facet_base@3@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Fiopen@std@@YAPEAU_iobuf@@PEBDHH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Fiopen@std@@YAPEAU_iobuf@@PEB_WHH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Getcat@?$codecvt@DDU_Mbstatet@@@std@@SA_KPEAPEBVfacet@locale@2@PEBV42@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Getcat@?$ctype@D@std@@SA_KPEAPEBVfacet@locale@2@PEBV42@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Getcat@?$time_put@DV?$ostreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@SA_KPEAPEBVfacet@locale@2@PEBV42@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Getcoll@_Locinfo@std@@QEBA?AU_Collvec@@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Getfalse@_Locinfo@std@@QEBAPEBDXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Getgloballocale@locale@std@@CAPEAV_Locimp@12@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Gettrue@_Locinfo@std@@QEBAPEBDXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Gnavail@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEBA_JXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Gndec@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Gninc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Id_cnt@id@locale@std@@0HA", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Incref@facet@locale@std@@UEAAXXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Init@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAXPEAPEAD0PEAH001@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Init@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAXXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Init@locale@std@@CAPEAV_Locimp@12@_N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Ipfx@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAA_N_N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Locimp_Addfac@_Locimp@locale@std@@CAXPEAV123@PEAVfacet@23@_K@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Lock@?$basic_streambuf@DU?$char_traits@D@std@@@std@@UEAAXXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Makeloc@_Locimp@locale@std@@CAPEAV123@AEBV_Locinfo@3@HPEAV123@PEBV23@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_New_Locimp@_Locimp@locale@std@@CAPEAV123@AEBV123@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_New_Locimp@_Locimp@locale@std@@CAPEAV123@_N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Pnavail@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEBA_JXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Pninc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Unlock@?$basic_streambuf@DU?$char_traits@D@std@@@std@@UEAAXXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Winerror_map@std@@YAHH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Xinvalid_argument@std@@YAXPEBD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Xout_of_range@std@@YAXPEBD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Xregex_error@std@@YAXW4error_type@regex_constants@1@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?_Xruntime_error@std@@YAXPEBD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?__ExceptionPtrAssign@@YAXPEAXPEBX@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?__ExceptionPtrCopyException@@YAXPEAXPEBX1@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?__ExceptionPtrRethrow@@YAXPEBX@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?__ExceptionPtrToBool@@YA_NPEBX@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?always_noconv@codecvt_base@std@@QEBA_NXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?bad@ios_base@std@@QEBA_NXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?c_str@?$_Yarn@D@std@@QEBAPEBDXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?cerr@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?classic@locale@std@@SAAEBV12@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?clear@?$basic_ios@DU?$char_traits@D@std@@@std@@QEAAXH_N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?clog@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?copyfmt@ios_base@std@@QEAAAEAV12@AEBV12@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?eback@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEBAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?egptr@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEBAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?eof@ios_base@std@@QEBA_NXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?epptr@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEBAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?exceptions@ios_base@std@@QEAAXH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?fail@ios_base@std@@QEBA_NXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?fill@?$basic_ios@DU?$char_traits@D@std@@@std@@QEAADD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?gbump@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAXH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?getloc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEBA?AVlocale@2@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?getloc@ios_base@std@@QEBA?AVlocale@2@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?gptr@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEBAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?id@?$codecvt@DDU_Mbstatet@@@std@@2V0locale@2@A", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?id@?$codecvt@_WDU_Mbstatet@@@std@@2V0locale@2@A", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?id@?$collate@D@std@@2V0locale@2@A", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?id@?$ctype@D@std@@2V0locale@2@A", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?id@?$numpunct@D@std@@2V0locale@2@A", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?id@?$time_put@DV?$ostreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@2V0locale@2@A", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?imbue@?$basic_ios@DU?$char_traits@D@std@@@std@@QEAA?AVlocale@2@AEBV32@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?imbue@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAXAEBVlocale@2@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?in@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEAD3AEAPEAD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?in@?$codecvt@_WDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEA_W3AEAPEA_W@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?init@?$basic_ios@DU?$char_traits@D@std@@@std@@IEAAXPEAV?$basic_streambuf@DU?$char_traits@D@std@@@2@_N@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?out@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEAD3AEAPEAD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?out@?$codecvt@_SDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEB_S1AEAPEB_SPEAD3AEAPEAD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?out@?$codecvt@_UDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEB_U1AEAPEB_UPEAD3AEAPEAD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?out@?$codecvt@_WDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEB_W1AEAPEB_WPEAD3AEAPEAD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?pbackfail@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAHH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?pbase@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEBAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?pbump@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAXH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?pptr@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEBAPEADXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?precision@ios_base@std@@QEAA_J_J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?precision@ios_base@std@@QEBA_JXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?put@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@D@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?put@?$time_put@DV?$ostreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@QEBA?AV?$ostreambuf_iterator@DU?$char_traits@D@std@@@2@V32@AEAVios_base@2@DPEBUtm@@PEBD3@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?rdbuf@?$basic_ios@DU?$char_traits@D@std@@@std@@QEAAPEAV?$basic_streambuf@DU?$char_traits@D@std@@@2@PEAV32@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?read@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@PEAD_J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?sbumpc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAAHXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?seekg@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@V?$fpos@U_Mbstatet@@@2@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?seekg@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@_JH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?seekoff@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAA?AV?$fpos@U_Mbstatet@@@2@_JHH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?seekp@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@V?$fpos@U_Mbstatet@@@2@@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?seekp@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@_JH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?seekpos@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAA?AV?$fpos@U_Mbstatet@@@2@V32@H@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?setbuf@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAPEAV12@PEAD_J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?setf@ios_base@std@@QEAAHH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?setf@ios_base@std@@QEAAHHH@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?setg@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAXPEAD00@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?setp@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAXPEAD00@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?setp@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IEAAXPEAD0@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?setprecision@std@@YA?AU?$_Smanip@_J@1@_J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?setw@std@@YA?AU?$_Smanip@_J@1@_J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?sgetc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAAHXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?showmanyc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAA_JXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?snextc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAAHXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?sync@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAHXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?tellg@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAA?AV?$fpos@U_Mbstatet@@@2@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?tellp@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAA?AV?$fpos@U_Mbstatet@@@2@XZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?tolower@?$ctype@D@std@@QEBADD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?tolower@?$ctype@D@std@@QEBAPEBDPEADPEBD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?uflow@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAHXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?uncaught_exception@std@@YA_NXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?underflow@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAAHXZ", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?unshift@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEAD1AEAPEAD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?widen@?$basic_ios@DU?$char_traits@D@std@@@std@@QEBADD@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?xsgetn@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAA_JPEAD_J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "?xsputn@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MEAA_JPEBD_J@Z", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Cnd_do_broadcast_at_thread_exit", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Cnd_register_at_thread_exit", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Cnd_signal", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Cnd_unregister_at_thread_exit", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Exp", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Lock_shared_ptr_spin_lock", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Query_perf_counter", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Query_perf_frequency", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Strcoll", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Strxfrm", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Thrd_detach", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Thrd_hardware_concurrency", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Thrd_id", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Thrd_join", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Thrd_yield", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Unlock_shared_ptr_spin_lock", reinterpret_cast<void*>(MSVC_GenericStub));
+    ldr.registerExport("msvcp140.dll", "_Xtime_get_ticks", reinterpret_cast<void*>(MSVC_GenericStub));
+
 }
 
 } // namespace micant::msvcrt

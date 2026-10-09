@@ -1041,6 +1041,73 @@ inline MMRESULT __stdcall waveInClose(HWAVEIN hwi) {
     return MMSYSERR_NOERROR;
 }
 
+inline MMRESULT __stdcall waveOutMessage([[maybe_unused]] HWAVEOUT hwo, [[maybe_unused]] uint32_t uMsg, [[maybe_unused]] uintptr_t dw1, [[maybe_unused]] uintptr_t dw2) {
+    return MMSYSERR_NOTSUPPORTED;
+}
+
+inline MMRESULT __stdcall waveInMessage([[maybe_unused]] HWAVEIN hwi, [[maybe_unused]] uint32_t uMsg, [[maybe_unused]] uintptr_t dw1, [[maybe_unused]] uintptr_t dw2) {
+    return MMSYSERR_NOTSUPPORTED;
+}
+
+using HMIXER = void*;
+using HMIXEROBJ = void*;
+
+struct MIXERCAPSW {
+    uint16_t wMid;
+    uint16_t wPid;
+    uint32_t vDriverVersion;
+    wchar_t szPname[32];
+    uint32_t fdwSupport;
+    uint32_t cDestinations;
+};
+
+inline MMRESULT __stdcall mixerGetNumDevs() { return 1; }
+
+inline MMRESULT __stdcall mixerGetDevCapsW([[maybe_unused]] uintptr_t uMxId, MIXERCAPSW* pmxcaps, uint32_t cbmxcaps) {
+    if (!pmxcaps || cbmxcaps < sizeof(MIXERCAPSW)) return MMSYSERR_INVALPARAM;
+    std::memset(pmxcaps, 0, sizeof(MIXERCAPSW));
+    pmxcaps->wMid = 1;
+    pmxcaps->wPid = 1;
+    pmxcaps->vDriverVersion = 0x0100;
+    std::wcscpy(pmxcaps->szPname, L"MicaNT Audio Mixer");
+    pmxcaps->cDestinations = 1;
+    return MMSYSERR_NOERROR;
+}
+
+inline MMRESULT __stdcall mixerOpen(HMIXER* phmx, [[maybe_unused]] uintptr_t uMxId, [[maybe_unused]] uintptr_t dwCallback, [[maybe_unused]] uintptr_t dwInstance, [[maybe_unused]] uint32_t fdwOpen) {
+    if (!phmx) return MMSYSERR_INVALPARAM;
+    *phmx = reinterpret_cast<HMIXER>(0x00010001);
+    return MMSYSERR_NOERROR;
+}
+
+inline MMRESULT __stdcall mixerClose([[maybe_unused]] HMIXER hmx) {
+    return MMSYSERR_NOERROR;
+}
+
+inline MMRESULT __stdcall mixerGetID([[maybe_unused]] HMIXEROBJ hmxobj, uint32_t* puMxId, [[maybe_unused]] uint32_t fdwId) {
+    if (puMxId) *puMxId = 0;
+    return MMSYSERR_NOERROR;
+}
+
+inline MMRESULT __stdcall mixerGetLineInfoW([[maybe_unused]] HMIXEROBJ hmxobj, void* pmxl, [[maybe_unused]] uint32_t fdwInfo) {
+    if (!pmxl) return MMSYSERR_INVALPARAM;
+    return MMSYSERR_NOERROR;
+}
+
+inline MMRESULT __stdcall mixerGetLineControlsW([[maybe_unused]] HMIXEROBJ hmxobj, void* pmxlc, [[maybe_unused]] uint32_t fdwControls) {
+    if (!pmxlc) return MMSYSERR_INVALPARAM;
+    return MMSYSERR_NOERROR;
+}
+
+inline MMRESULT __stdcall mixerGetControlDetailsW([[maybe_unused]] HMIXEROBJ hmxobj, void* pmxcd, [[maybe_unused]] uint32_t fdwDetails) {
+    if (!pmxcd) return MMSYSERR_INVALPARAM;
+    return MMSYSERR_NOERROR;
+}
+
+inline MMRESULT __stdcall mixerSetControlDetails([[maybe_unused]] HMIXEROBJ hmxobj, [[maybe_unused]] void* pmxcd, [[maybe_unused]] uint32_t fdwDetails) {
+    return MMSYSERR_NOERROR;
+}
+
 // PlaySound / sndPlaySound
 inline int32_t __stdcall PlaySoundA(const char* pszSound, void*, uint32_t fdwSound) {
     if (!pszSound) {
@@ -1154,6 +1221,16 @@ inline void InitializeWinMMExports() {
     ldr.registerExport("winmm.dll", "joyGetDevCapsA", reinterpret_cast<void*>(joyGetDevCapsA));
     ldr.registerExport("winmm.dll", "joyGetPos", reinterpret_cast<void*>(joyGetPos));
     ldr.registerExport("winmm.dll", "joyGetPosEx", reinterpret_cast<void*>(joyGetPosEx));
+    ldr.registerExport("winmm.dll", "waveOutMessage", reinterpret_cast<void*>(waveOutMessage));
+    ldr.registerExport("winmm.dll", "waveInMessage", reinterpret_cast<void*>(waveInMessage));
+    ldr.registerExport("winmm.dll", "mixerClose", reinterpret_cast<void*>(mixerClose));
+    ldr.registerExport("winmm.dll", "mixerGetControlDetailsW", reinterpret_cast<void*>(mixerGetControlDetailsW));
+    ldr.registerExport("winmm.dll", "mixerGetDevCapsW", reinterpret_cast<void*>(mixerGetDevCapsW));
+    ldr.registerExport("winmm.dll", "mixerGetID", reinterpret_cast<void*>(mixerGetID));
+    ldr.registerExport("winmm.dll", "mixerGetLineControlsW", reinterpret_cast<void*>(mixerGetLineControlsW));
+    ldr.registerExport("winmm.dll", "mixerGetLineInfoW", reinterpret_cast<void*>(mixerGetLineInfoW));
+    ldr.registerExport("winmm.dll", "mixerOpen", reinterpret_cast<void*>(mixerOpen));
+    ldr.registerExport("winmm.dll", "mixerSetControlDetails", reinterpret_cast<void*>(mixerSetControlDetails));
 }
 
 } // namespace micant::winmm

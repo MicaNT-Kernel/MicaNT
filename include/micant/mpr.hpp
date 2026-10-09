@@ -96,6 +96,15 @@ inline DWORD __stdcall WNetGetConnectionW([[maybe_unused]] const wchar_t* lpLoca
     return ERROR_NO_NETWORK;
 }
 
+inline DWORD __stdcall WNetGetConnectionA([[maybe_unused]] const char* lpLocalName,
+                                          char* lpRemoteName,
+                                          DWORD* lpnLength) noexcept {
+    if (lpnLength && *lpnLength > 0 && lpRemoteName) {
+        lpRemoteName[0] = '\0';
+    }
+    return ERROR_NO_NETWORK;
+}
+
 inline void InitializeMprSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("mpr.dll", "WNetOpenEnumW", reinterpret_cast<void*>(WNetOpenEnumW));
@@ -105,6 +114,7 @@ inline void InitializeMprSubsystemExports() {
     ldr.registerExport("mpr.dll", "WNetGetResourceParentW", reinterpret_cast<void*>(WNetGetResourceParentW));
     ldr.registerExport("mpr.dll", "WNetGetResourceInformationW", reinterpret_cast<void*>(WNetGetResourceInformationW));
     ldr.registerExport("mpr.dll", "WNetGetConnectionW", reinterpret_cast<void*>(WNetGetConnectionW));
+    ldr.registerExport("mpr.dll", "WNetGetConnectionA", reinterpret_cast<void*>(WNetGetConnectionA));
 }
 
 } // namespace micant::mpr

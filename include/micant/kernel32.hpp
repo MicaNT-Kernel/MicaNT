@@ -135,6 +135,18 @@ inline void SetLastError(DWORD dwErrCode) noexcept {
     ntdll::RtlSetLastWin32Error(dwErrCode);
 }
 
+// Win32 System Error Codes
+inline constexpr DWORD ERROR_SUCCESS            = 0;
+inline constexpr DWORD ERROR_FILE_NOT_FOUND     = 2;
+inline constexpr DWORD ERROR_PATH_NOT_FOUND     = 3;
+inline constexpr DWORD ERROR_ACCESS_DENIED      = 5;
+inline constexpr DWORD ERROR_INVALID_HANDLE     = 6;
+inline constexpr DWORD ERROR_NOT_ENOUGH_MEMORY  = 8;
+inline constexpr DWORD ERROR_INVALID_DATA       = 13;
+inline constexpr DWORD ERROR_INVALID_PARAMETER  = 87;
+inline constexpr DWORD ERROR_ALREADY_EXISTS     = 183;
+inline constexpr DWORD ERROR_NO_MORE_ITEMS      = 259;
+
 // Heap Flags
 inline constexpr DWORD HEAP_NO_SERIALIZE        = 0x00000001;
 inline constexpr DWORD HEAP_GENERATE_EXCEPTIONS = 0x00000004;
@@ -3367,6 +3379,150 @@ inline BOOL Process32NextW(HANDLE /*hSnapshot*/, LPPROCESSENTRY32W /*lppe*/) noe
     return FALSE;
 }
 
+inline BOOL GetFileAttributesExA(LPCSTR lpFileName, int fInfoLevelId, LPVOID lpFileInformation) noexcept {
+    if (!lpFileName) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    std::string s(lpFileName);
+    std::wstring w(s.begin(), s.end());
+    return GetFileAttributesExW(w.c_str(), fInfoLevelId, lpFileInformation);
+}
+
+struct MODULEENTRY32 {
+    DWORD   dwSize;
+    DWORD   th32ModuleID;
+    DWORD   th32ProcessID;
+    DWORD   GlblcntUsage;
+    DWORD   ProccntUsage;
+    BYTE*   modBaseAddr;
+    DWORD   modBaseSize;
+    HMODULE hModule;
+    char    szModule[256];
+    char    szExePath[260];
+};
+
+inline BOOL Module32First([[maybe_unused]] HANDLE hSnapshot, MODULEENTRY32* lpme) noexcept {
+    if (!lpme || lpme->dwSize < sizeof(MODULEENTRY32)) return FALSE;
+    lpme->th32ModuleID = 1;
+    lpme->th32ProcessID = 1000;
+    lpme->modBaseAddr = reinterpret_cast<BYTE*>(0x140000000ULL);
+    lpme->modBaseSize = 0x1000000;
+    lpme->hModule = reinterpret_cast<HMODULE>(0x140000000ULL);
+    std::strcpy(lpme->szModule, "micant_app.exe");
+    std::strcpy(lpme->szExePath, "C:\\Windows\\System32\\micant_app.exe");
+    return TRUE;
+}
+
+inline BOOL Module32Next([[maybe_unused]] HANDLE hSnapshot, [[maybe_unused]] MODULEENTRY32* lpme) noexcept {
+    return FALSE;
+}
+
+struct PROCESSENTRY32 {
+    DWORD   dwSize;
+    DWORD   cntUsage;
+    DWORD   th32ProcessID;
+    ULONG_PTR th32DefaultHeapID;
+    DWORD   th32ModuleID;
+    DWORD   cntThreads;
+    DWORD   th32ParentProcessID;
+    LONG    pcPriClassBase;
+    DWORD   dwFlags;
+    char    szExeFile[260];
+};
+
+inline BOOL Process32First([[maybe_unused]] HANDLE hSnapshot, PROCESSENTRY32* lppe) noexcept {
+    if (!lppe || lppe->dwSize < sizeof(PROCESSENTRY32)) return FALSE;
+    lppe->cntUsage = 1;
+    lppe->th32ProcessID = 1000;
+    lppe->cntThreads = 4;
+    lppe->th32ParentProcessID = 500;
+    lppe->pcPriClassBase = 8;
+    lppe->dwFlags = 0;
+    std::strcpy(lppe->szExeFile, "micant_app.exe");
+    return TRUE;
+}
+
+inline BOOL Process32Next([[maybe_unused]] HANDLE hSnapshot, [[maybe_unused]] PROCESSENTRY32* lppe) noexcept {
+    return FALSE;
+}
+
+inline HANDLE CreateJobObjectA([[maybe_unused]] void* lpJobAttributes, [[maybe_unused]] LPCSTR lpName) noexcept {
+    static uint64_t dummyJob = 0x50B00001;
+    return reinterpret_cast<HANDLE>(&dummyJob);
+}
+
+inline HANDLE CreateWaitableTimerExW([[maybe_unused]] void* lpTimerAttributes,
+                                    [[maybe_unused]] LPCWSTR lpTimerName,
+                                    [[maybe_unused]] DWORD dwFlags,
+                                    [[maybe_unused]] DWORD dwDesiredAccess) noexcept {
+    static uint64_t dummyTimer = 0x713E0001;
+    return reinterpret_cast<HANDLE>(&dummyTimer);
+}
+
+inline BOOL GetComputerNameA(LPSTR lpBuffer, LPDWORD nSize) noexcept {
+    if (!lpBuffer || !nSize || *nSize < 7) return FALSE;
+    const char name[] = "MICANT";
+    std::memcpy(lpBuffer, name, sizeof(name));
+    *nSize = sizeof(name) - 1;
+    return TRUE;
+}
+
+inline BOOL K32EnumProcessModules([[maybe_unused]] HANDLE hProcess, void* lphModule, DWORD cb, LPDWORD lpcbNeeded) noexcept {
+    if (lpcbNeeded) *lpcbNeeded = sizeof(HMODULE);
+    if (lphModule && cb >= sizeof(HMODULE)) {
+        *reinterpret_cast<HMODULE*>(lphModule) = reinterpret_cast<HMODULE>(0x140000000ULL);
+    }
+    return TRUE;
+}
+
+inline DWORD K32GetMappedFileNameW([[maybe_unused]] HANDLE hProcess, [[maybe_unused]] LPVOID lpv, LPWSTR lpFilename, DWORD nSize) noexcept {
+    if (!lpFilename || nSize == 0) return 0;
+    const wchar_t path[] = L"\\Device\\HarddiskVolume1\\Windows\\System32\\micant_app.exe";
+    size_t len = std::min<size_t>(std::wcslen(path), nSize - 1);
+    std::wcsncpy(lpFilename, path, len);
+    lpFilename[len] = L'\0';
+    return static_cast<DWORD>(len);
+}
+
+inline DWORD K32GetModuleFileNameExA([[maybe_unused]] HANDLE hProcess, [[maybe_unused]] HMODULE hModule, LPSTR lpFilename, DWORD nSize) noexcept {
+    if (!lpFilename || nSize == 0) return 0;
+    const char path[] = "C:\\Windows\\System32\\micant_app.exe";
+    size_t len = std::min<size_t>(std::strlen(path), nSize - 1);
+    std::strncpy(lpFilename, path, len);
+    lpFilename[len] = '\0';
+    return static_cast<DWORD>(len);
+}
+
+inline BOOL K32GetProcessMemoryInfo([[maybe_unused]] HANDLE hProcess, void* ppsmemCounters, DWORD cb) noexcept {
+    if (!ppsmemCounters || cb < 72) return FALSE;
+    std::memset(ppsmemCounters, 0, cb);
+    auto* p = reinterpret_cast<uint64_t*>(ppsmemCounters);
+    p[0] = cb;
+    p[2] = 64 * 1024 * 1024ULL; // PeakWorkingSetSize (64MB)
+    p[3] = 32 * 1024 * 1024ULL; // WorkingSetSize (32MB)
+    return TRUE;
+}
+
+inline BOOL SetProcessInformation([[maybe_unused]] HANDLE hProcess,
+                                  [[maybe_unused]] int ProcessInformationClass,
+                                  [[maybe_unused]] void* ProcessInformation,
+                                  [[maybe_unused]] DWORD ProcessInformationSize) noexcept {
+    return TRUE;
+}
+
+inline BOOL SetProcessShutdownParameters([[maybe_unused]] DWORD dwLevel, [[maybe_unused]] DWORD dwFlags) noexcept {
+    return TRUE;
+}
+
+inline BOOL UnmapViewOfFileEx(LPCVOID lpBaseAddress, [[maybe_unused]] DWORD UnmapFlags) noexcept {
+    return UnmapViewOfFile(lpBaseAddress);
+}
+
+inline ULONG RemoveVectoredExceptionHandler([[maybe_unused]] void* Handle) noexcept {
+    return 1;
+}
+
 inline BOOL ReadDirectoryChangesW(HANDLE, LPVOID, DWORD, BOOL, DWORD, LPDWORD lpBytesReturned, LPOVERLAPPED, void*) noexcept {
     if (lpBytesReturned) *lpBytesReturned = 0;
     return TRUE;
@@ -3965,6 +4121,24 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetFinalPathNameByHandleA", reinterpret_cast<void*>(GetFinalPathNameByHandleA));
     ldr.registerExport("kernel32.dll", "FillConsoleOutputCharacterW", reinterpret_cast<void*>(FillConsoleOutputCharacterW));
     ldr.registerExport("kernel32.dll", "ReadConsoleOutputCharacterA", reinterpret_cast<void*>(ReadConsoleOutputCharacterA));
+    ldr.registerExport("kernel32.dll", "CreateJobObjectA", reinterpret_cast<void*>(CreateJobObjectA));
+    ldr.registerExport("kernel32.dll", "CreateWaitableTimerExW", reinterpret_cast<void*>(CreateWaitableTimerExW));
+    ldr.registerExport("api-ms-win-core-synch-l1-1-0.dll", "CreateWaitableTimerExW", reinterpret_cast<void*>(CreateWaitableTimerExW));
+    ldr.registerExport("kernel32.dll", "GetComputerNameA", reinterpret_cast<void*>(GetComputerNameA));
+    ldr.registerExport("kernel32.dll", "GetFileAttributesExA", reinterpret_cast<void*>(GetFileAttributesExA));
+    ldr.registerExport("kernel32.dll", "K32EnumProcessModules", reinterpret_cast<void*>(K32EnumProcessModules));
+    ldr.registerExport("kernel32.dll", "K32GetMappedFileNameW", reinterpret_cast<void*>(K32GetMappedFileNameW));
+    ldr.registerExport("kernel32.dll", "K32GetModuleFileNameExA", reinterpret_cast<void*>(K32GetModuleFileNameExA));
+    ldr.registerExport("kernel32.dll", "K32GetProcessMemoryInfo", reinterpret_cast<void*>(K32GetProcessMemoryInfo));
+    ldr.registerExport("kernel32.dll", "Module32First", reinterpret_cast<void*>(Module32First));
+    ldr.registerExport("kernel32.dll", "Module32Next", reinterpret_cast<void*>(Module32Next));
+    ldr.registerExport("kernel32.dll", "Process32First", reinterpret_cast<void*>(Process32First));
+    ldr.registerExport("kernel32.dll", "Process32Next", reinterpret_cast<void*>(Process32Next));
+    ldr.registerExport("kernel32.dll", "SetProcessInformation", reinterpret_cast<void*>(SetProcessInformation));
+    ldr.registerExport("kernel32.dll", "SetProcessShutdownParameters", reinterpret_cast<void*>(SetProcessShutdownParameters));
+    ldr.registerExport("kernel32.dll", "UnmapViewOfFileEx", reinterpret_cast<void*>(UnmapViewOfFileEx));
+    ldr.registerExport("kernel32.dll", "RemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
+    ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "RemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

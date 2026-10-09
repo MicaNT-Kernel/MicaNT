@@ -224,6 +224,9 @@
 #include "micant/boot_event_loop.hpp"
 #include "micant/satellite_wiztree.hpp"
 #include "micant/satellite_putty.hpp"
+#include "micant/mpr.hpp"
+#include "micant/dbghelp.hpp"
+#include "micant/cfgmgr32.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -987,6 +990,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite);
     RUN_TEST(Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite);
     RUN_TEST(Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite);
+    RUN_TEST(Test_Tier4_Multimedia_Creative_Workstation_Ecosystem_Suite);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

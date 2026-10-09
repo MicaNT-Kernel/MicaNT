@@ -806,6 +806,8 @@ inline void InitializeOle32SubsystemExports() {
     ldr.registerExport("ole32.dll", "CoRevokeClassObject", reinterpret_cast<void*>(CoRevokeClassObject));
     ldr.registerExport("ole32.dll", "CoTaskMemAlloc", reinterpret_cast<void*>(CoTaskMemAlloc));
     ldr.registerExport("ole32.dll", "CoTaskMemFree", reinterpret_cast<void*>(CoTaskMemFree));
+    ldr.registerExport("api-ms-win-core-com-l1-1-0.dll", "CoTaskMemAlloc", reinterpret_cast<void*>(CoTaskMemAlloc));
+    ldr.registerExport("api-ms-win-core-com-l1-1-0.dll", "CoTaskMemFree", reinterpret_cast<void*>(CoTaskMemFree));
     ldr.registerExport("ole32.dll", "CoTaskMemRealloc", reinterpret_cast<void*>(CoTaskMemRealloc));
     ldr.registerExport("ole32.dll", "StringFromGUID2", reinterpret_cast<void*>(StringFromGUID2));
     ldr.registerExport("ole32.dll", "IIDFromString", reinterpret_cast<void*>(IIDFromString));

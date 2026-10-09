@@ -1386,6 +1386,66 @@ inline UINT DragQueryFileW(void* /*hDrop*/, UINT iFile, LPWSTR lpszFile, UINT cc
     return 0;
 }
 
+inline UINT DragQueryFileA(void* /*hDrop*/, UINT iFile, LPSTR lpszFile, UINT cch) noexcept {
+    if (iFile == 0xFFFFFFFF) {
+        return 0;
+    }
+    if (lpszFile && cch > 0) lpszFile[0] = '\0';
+    return 0;
+}
+
+inline HRESULT SHGetPropertyStoreForWindow([[maybe_unused]] HWND hwnd,
+                                           [[maybe_unused]] const micant::GUID& riid,
+                                           void** ppv) noexcept {
+    if (ppv) *ppv = nullptr;
+    return E_FAIL;
+}
+
+inline HRESULT AssocQueryKeyA([[maybe_unused]] DWORD flags,
+                              [[maybe_unused]] DWORD assockey,
+                              [[maybe_unused]] LPCSTR pszAssoc,
+                              [[maybe_unused]] LPCSTR pszExtra,
+                              HKEY* phkey) noexcept {
+    if (phkey) *phkey = nullptr;
+    return E_FAIL;
+}
+
+inline BOOL PathAppendA(LPSTR pszPath, LPCSTR pszMore) noexcept {
+    if (!pszPath || !pszMore) return FALSE;
+    std::string sPath(pszPath);
+    std::string sMore(pszMore);
+    std::wstring wPath(sPath.begin(), sPath.end());
+    std::wstring wMore(sMore.begin(), sMore.end());
+    wchar_t wBuf[260] = {0};
+    std::wcsncpy(wBuf, wPath.c_str(), 259);
+    BOOL res = PathAppendW(wBuf, wMore.c_str());
+    if (res) {
+        std::string resA;
+        for (wchar_t c : std::wstring_view(wBuf)) resA.push_back(static_cast<char>(c));
+        std::strncpy(pszPath, resA.c_str(), 259);
+        pszPath[259] = '\0';
+    }
+    return res;
+}
+
+inline void PathStripPathA(LPSTR pszPath) noexcept {
+    if (!pszPath) return;
+    std::string s(pszPath);
+    size_t slash = s.find_last_of("/\\");
+    if (slash != std::string::npos) {
+        std::memmove(pszPath, pszPath + slash + 1, s.size() - slash);
+    }
+}
+
+inline HRESULT StrRetToStrW([[maybe_unused]] void* pstr, [[maybe_unused]] void* pidl, LPWSTR* ppsz) noexcept {
+    if (ppsz) *ppsz = nullptr;
+    return S_OK;
+}
+
+inline HRESULT SetProcessDpiAwareness([[maybe_unused]] int value) noexcept {
+    return S_OK;
+}
+
 inline void DragFinish(void* /*hDrop*/) noexcept {}
 
 inline HRESULT ShellOrdinal165(void* /*p1*/, void* /*p2*/, void* /*p3*/, void* /*p4*/) noexcept {
@@ -1432,6 +1492,8 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "SHFileOperationW", reinterpret_cast<void*>(SHFileOperationW));
     ldr.registerExport("shell32.dll", "DragQueryPoint", reinterpret_cast<void*>(DragQueryPoint));
     ldr.registerExport("shell32.dll", "DragQueryFileW", reinterpret_cast<void*>(DragQueryFileW));
+    ldr.registerExport("shell32.dll", "DragQueryFileA", reinterpret_cast<void*>(DragQueryFileA));
+    ldr.registerExport("shell32.dll", "SHGetPropertyStoreForWindow", reinterpret_cast<void*>(SHGetPropertyStoreForWindow));
     ldr.registerExport("shell32.dll", "DragFinish", reinterpret_cast<void*>(DragFinish));
     ldr.registerExport("shell32.dll", "SHDefExtractIconW", reinterpret_cast<void*>(SHDefExtractIconW));
     ldr.registerExport("shell32.dll", "SHGetIconOverlayIndexW", reinterpret_cast<void*>(SHGetIconOverlayIndexW));
@@ -1471,6 +1533,11 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shlwapi.dll", "ColorRGBToHLS", reinterpret_cast<void*>(ColorRGBToHLS));
     ldr.registerExport("shlwapi.dll", "PathStripPathW", reinterpret_cast<void*>(PathStripPathW));
     ldr.registerExport("shlwapi.dll", "PathRemoveExtensionW", reinterpret_cast<void*>(PathRemoveExtensionW));
+    ldr.registerExport("shlwapi.dll", "AssocQueryKeyA", reinterpret_cast<void*>(AssocQueryKeyA));
+    ldr.registerExport("shlwapi.dll", "PathAppendA", reinterpret_cast<void*>(PathAppendA));
+    ldr.registerExport("shlwapi.dll", "PathStripPathA", reinterpret_cast<void*>(PathStripPathA));
+    ldr.registerExport("shlwapi.dll", "StrRetToStrW", reinterpret_cast<void*>(StrRetToStrW));
+    ldr.registerExport("api-ms-win-shcore-scaling-l1-1-1.dll", "SetProcessDpiAwareness", reinterpret_cast<void*>(SetProcessDpiAwareness));
 }
 
 } // namespace micant::shell32

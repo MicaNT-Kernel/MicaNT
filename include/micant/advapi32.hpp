@@ -857,6 +857,7 @@ inline constexpr uint32_t REG_QWORD     = 11;
 
 inline constexpr int32_t ERROR_SUCCESS = 0;
 inline constexpr int32_t ERROR_FILE_NOT_FOUND = 2;
+inline constexpr int32_t ERROR_INVALID_PARAMETER = 87;
 inline constexpr int32_t ERROR_MORE_DATA = 234;
 
 struct RegValue {
@@ -1101,6 +1102,69 @@ inline int32_t RegEnumValueW(HKEY hKey, uint32_t dwIndex, wchar_t* lpValueName, 
     return ERROR_SUCCESS;
 }
 
+inline int32_t RegOpenCurrentUser([[maybe_unused]] uint32_t samDesired, HKEY* phkResult) noexcept {
+    if (!phkResult) return ERROR_INVALID_PARAMETER;
+    *phkResult = HKEY_CURRENT_USER;
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegCreateKeyW(HKEY hKey, const wchar_t* lpSubKey, HKEY* phkResult) noexcept {
+    return RegCreateKeyExW(hKey, lpSubKey, 0, nullptr, 0, 0, nullptr, phkResult, nullptr);
+}
+
+inline int32_t RegDeleteTreeA(HKEY hKey, const char* lpSubKey) noexcept {
+    if (!lpSubKey || !lpSubKey[0]) {
+        auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+        if (node) {
+            node->subkeys.clear();
+            node->values.clear();
+        }
+        return ERROR_SUCCESS;
+    }
+    std::wstring subKeyW;
+    const char* p = lpSubKey;
+    while (*p) subKeyW.push_back(static_cast<wchar_t>(*p++));
+    auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (node) {
+        node->subkeys.erase(subKeyW);
+    }
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegEnumKeyExA(HKEY hKey, uint32_t dwIndex, char* lpName, uint32_t* lpcchName, uint32_t* lpReserved,
+                             char* /*lpClass*/, uint32_t* /*lpcchClass*/, void* lpftLastWriteTime) noexcept {
+    if (!lpName || !lpcchName) return ERROR_INVALID_PARAMETER;
+    wchar_t wBuf[260] = {0};
+    uint32_t cch = 260;
+    int32_t st = RegEnumKeyExW(hKey, dwIndex, wBuf, &cch, lpReserved, nullptr, nullptr, lpftLastWriteTime);
+    if (st != ERROR_SUCCESS) return st;
+    size_t len = 0;
+    while (wBuf[len] && len + 1 < *lpcchName) {
+        lpName[len] = static_cast<char>(wBuf[len]);
+        len++;
+    }
+    lpName[len] = '\0';
+    *lpcchName = static_cast<uint32_t>(len);
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegEnumValueA(HKEY hKey, uint32_t dwIndex, char* lpValueName, uint32_t* lpcchValueName, uint32_t* lpReserved,
+                             uint32_t* lpType, uint8_t* lpData, uint32_t* lpcbData) noexcept {
+    if (!lpValueName || !lpcchValueName) return ERROR_INVALID_PARAMETER;
+    wchar_t wBuf[260] = {0};
+    uint32_t cch = 260;
+    int32_t st = RegEnumValueW(hKey, dwIndex, wBuf, &cch, lpReserved, lpType, lpData, lpcbData);
+    if (st != ERROR_SUCCESS) return st;
+    size_t len = 0;
+    while (wBuf[len] && len + 1 < *lpcchValueName) {
+        lpValueName[len] = static_cast<char>(wBuf[len]);
+        len++;
+    }
+    lpValueName[len] = '\0';
+    *lpcchValueName = static_cast<uint32_t>(len);
+    return ERROR_SUCCESS;
+}
+
 inline int32_t RegQueryInfoKeyW(HKEY hKey, wchar_t* /*lpClass*/, uint32_t* /*lpcchClass*/, uint32_t* /*lpReserved*/,
                                 uint32_t* lpcSubKeys, uint32_t* /*lpcbMaxSubKeyLen*/, uint32_t* /*lpcbMaxClassLen*/,
                                 uint32_t* lpcValues, uint32_t* /*lpcbMaxValueNameLen*/, uint32_t* /*lpcbMaxValueLen*/,
@@ -1320,6 +1384,79 @@ inline win32::BOOL CryptSignHashA([[maybe_unused]] uintptr_t hHash,
     return win32::TRUE;
 }
 
+struct TRUSTEE_W {
+    void* pMultipleTrustee;
+    uint32_t MultipleTrusteeOperation;
+    uint32_t TrusteeForm;
+    uint32_t TrusteeType;
+    wchar_t* ptstrName;
+};
+
+struct EXPLICIT_ACCESS_W {
+    uint32_t grfAccessPermissions;
+    uint32_t grfAccessMode;
+    uint32_t grfInheritance;
+    TRUSTEE_W Trustee;
+};
+
+inline void BuildExplicitAccessWithNameW(
+    EXPLICIT_ACCESS_W* pExplicitAccess,
+    wchar_t* pTrusteeName,
+    uint32_t AccessPermissions,
+    uint32_t AccessMode,
+    uint32_t Inheritance
+) noexcept {
+    if (!pExplicitAccess) return;
+    pExplicitAccess->grfAccessPermissions = AccessPermissions;
+    pExplicitAccess->grfAccessMode = AccessMode;
+    pExplicitAccess->grfInheritance = Inheritance;
+    pExplicitAccess->Trustee.pMultipleTrustee = nullptr;
+    pExplicitAccess->Trustee.MultipleTrusteeOperation = 0;
+    pExplicitAccess->Trustee.TrusteeForm = 1; // TRUSTEE_IS_NAME
+    pExplicitAccess->Trustee.TrusteeType = 0; // TRUSTEE_IS_UNKNOWN
+    pExplicitAccess->Trustee.ptstrName = pTrusteeName;
+}
+
+inline uint32_t BuildSecurityDescriptorW(
+    [[maybe_unused]] void* pOwner,
+    [[maybe_unused]] void* pGroup,
+    [[maybe_unused]] uint32_t cCountOfAccessEntries,
+    [[maybe_unused]] void* pListOfAccessEntries,
+    [[maybe_unused]] uint32_t cCountOfAuditEntries,
+    [[maybe_unused]] void* pListOfAuditEntries,
+    [[maybe_unused]] void* pOldSD,
+    uint32_t* pSizeNewSD,
+    void** pNewSD
+) noexcept {
+    if (pSizeNewSD) *pSizeNewSD = 64;
+    if (pNewSD) {
+        static uint8_t dummySD[64] = { 0x01, 0x00, 0x04, 0x80 }; // Standard revision 1, self-relative
+        *pNewSD = dummySD;
+    }
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::BOOL ConvertStringSecurityDescriptorToSecurityDescriptorW(
+    [[maybe_unused]] const wchar_t* StringSecurityDescriptor,
+    [[maybe_unused]] uint32_t StringSDRevision,
+    void** SecurityDescriptor,
+    uint32_t* SecurityDescriptorSize
+) noexcept {
+    if (!SecurityDescriptor) return win32::FALSE;
+    static uint8_t dummySD[64] = { 0x01, 0x00, 0x04, 0x80 };
+    *SecurityDescriptor = dummySD;
+    if (SecurityDescriptorSize) *SecurityDescriptorSize = sizeof(dummySD);
+    return win32::TRUE;
+}
+
+inline win32::BOOL SystemFunction036(void* pbBuffer, uint32_t dwLen) noexcept {
+    if (!pbBuffer && dwLen > 0) return win32::FALSE;
+    if (dwLen > 0) {
+        crypto::Csprng::get().getBytes(std::span<uint8_t>(static_cast<uint8_t*>(pbBuffer), dwLen));
+    }
+    return win32::TRUE;
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("advapi32.dll", "CryptAcquireContextA", reinterpret_cast<void*>(CryptAcquireContextA));
@@ -1400,6 +1537,32 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "SetTokenInformation", reinterpret_cast<void*>(SetTokenInformation));
     ldr.registerExport("advapi32.dll", "CryptSetProvParam", reinterpret_cast<void*>(CryptSetProvParam));
     ldr.registerExport("advapi32.dll", "CryptSignHashA", reinterpret_cast<void*>(CryptSignHashA));
+    ldr.registerExport("advapi32.dll", "BuildExplicitAccessWithNameW", reinterpret_cast<void*>(BuildExplicitAccessWithNameW));
+    ldr.registerExport("advapi32.dll", "BuildSecurityDescriptorW", reinterpret_cast<void*>(BuildSecurityDescriptorW));
+    ldr.registerExport("advapi32.dll", "ConvertStringSecurityDescriptorToSecurityDescriptorW", reinterpret_cast<void*>(ConvertStringSecurityDescriptorToSecurityDescriptorW));
+    ldr.registerExport("advapi32.dll", "SystemFunction036", reinterpret_cast<void*>(SystemFunction036));
+    ldr.registerExport("advapi32.dll", "RegOpenCurrentUser", reinterpret_cast<void*>(RegOpenCurrentUser));
+    ldr.registerExport("advapi32.dll", "RegCreateKeyW", reinterpret_cast<void*>(RegCreateKeyW));
+    ldr.registerExport("advapi32.dll", "RegDeleteTreeA", reinterpret_cast<void*>(RegDeleteTreeA));
+    ldr.registerExport("advapi32.dll", "RegEnumKeyExA", reinterpret_cast<void*>(RegEnumKeyExA));
+    ldr.registerExport("advapi32.dll", "RegEnumValueA", reinterpret_cast<void*>(RegEnumValueA));
+
+    // api-ms-win-core-registry-l1-1-0.dll
+    ldr.registerExport("api-ms-win-core-registry-l1-1-0.dll", "RegOpenKeyExW", reinterpret_cast<void*>(RegOpenKeyExW));
+    ldr.registerExport("api-ms-win-core-registry-l1-1-0.dll", "RegCloseKey", reinterpret_cast<void*>(RegCloseKey));
+    ldr.registerExport("api-ms-win-core-registry-l1-1-0.dll", "RegQueryValueExW", reinterpret_cast<void*>(RegQueryValueExW));
+    ldr.registerExport("api-ms-win-core-registry-l1-1-0.dll", "RegOpenCurrentUser", reinterpret_cast<void*>(RegOpenCurrentUser));
+    ldr.registerExport("api-ms-win-core-registry-l1-1-0.dll", "RegSetValueExW", reinterpret_cast<void*>(RegSetValueExW));
+
+    // api-ms-win-core-registry-l2-1-0.dll
+    ldr.registerExport("api-ms-win-core-registry-l2-1-0.dll", "RegCreateKeyW", reinterpret_cast<void*>(RegCreateKeyW));
+    ldr.registerExport("api-ms-win-core-registry-l2-1-0.dll", "RegDeleteKeyW", reinterpret_cast<void*>(RegDeleteKeyW));
+
+    // api-ms-win-security-sddl-l1-1-0.dll
+    ldr.registerExport("api-ms-win-security-sddl-l1-1-0.dll", "ConvertStringSecurityDescriptorToSecurityDescriptorW", reinterpret_cast<void*>(ConvertStringSecurityDescriptorToSecurityDescriptorW));
+
+    // api-ms-win-security-systemfunctions-l1-1-0.dll
+    ldr.registerExport("api-ms-win-security-systemfunctions-l1-1-0.dll", "SystemFunction036", reinterpret_cast<void*>(SystemFunction036));
 
     // Initialize SCM daemon
     scm::ServiceControlManager::get().initialize();

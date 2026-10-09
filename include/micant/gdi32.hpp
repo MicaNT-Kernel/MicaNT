@@ -1120,6 +1120,12 @@ inline win32::BOOL SwapBuffers(HDC hdc) noexcept {
     return win32::TRUE;
 }
 
+inline int GetPixelFormat(HDC hdc) noexcept {
+    auto dc = GdiEngine::get().getDc(hdc);
+    if (!dc) return 0;
+    return 1;
+}
+
 using LPLOGFONTW = LOGFONTW*;
 using FONTENUMPROCW = int (*)(const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM);
 
@@ -1455,6 +1461,7 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "SetPixelFormat", reinterpret_cast<void*>(SetPixelFormat));
     ldr.registerExport("gdi32.dll", "DescribePixelFormat", reinterpret_cast<void*>(DescribePixelFormat));
     ldr.registerExport("gdi32.dll", "SwapBuffers", reinterpret_cast<void*>(SwapBuffers));
+    ldr.registerExport("gdi32.dll", "GetPixelFormat", reinterpret_cast<void*>(GetPixelFormat));
     ldr.registerExport("gdi32.dll", "CreateFontW", reinterpret_cast<void*>(CreateFontW));
     ldr.registerExport("gdi32.dll", "CreateFontIndirectW", reinterpret_cast<void*>(CreateFontIndirectW));
     ldr.registerExport("gdi32.dll", "CreateBitmap", reinterpret_cast<void*>(CreateBitmap));

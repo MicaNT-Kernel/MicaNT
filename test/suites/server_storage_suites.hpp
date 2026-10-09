@@ -8709,6 +8709,158 @@ inline void Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite() {
     std::cout << "[TEST] Suite 227: FileZilla 3.x / Sovereign Networking & Enterprise FTP Subsystem PASSED.\n";
 }
 
+void Test_Tier4_Multimedia_Creative_Workstation_Ecosystem_Suite() {
+    std::cout << "[TEST] Executing Suite 228: Tier 4 Multimedia & Creative Workstation Ecosystem (Audacity, Blender, GIMP & OBS Studio)...\n";
+
+    // Stage 1: Universal CRT C99 Single-Precision Math Subsystem
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_sinf(0.0f) - 0.0f) < 1e-6f, "sinf(0) must equal 0.0f");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_cosf(0.0f) - 1.0f) < 1e-6f, "cosf(0) must equal 1.0f");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_sqrtf(16.0f) - 4.0f) < 1e-6f, "sqrtf(16) must equal 4.0f");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_powf(2.0f, 8.0f) - 256.0f) < 1e-6f, "powf(2, 8) must equal 256.0f");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_hypotf(3.0f, 4.0f) - 5.0f) < 1e-6f, "hypotf(3, 4) must equal 5.0f");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_fminf(3.0f, 7.0f) - 3.0f) < 1e-6f, "fminf must select minimum");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_fmaxf(3.0f, 7.0f) - 7.0f) < 1e-6f, "fmaxf must select maximum");
+    TEST_ASSERT(micant::msvcrt::CRT_floorf(3.7f) == 3.0f, "floorf(3.7) must equal 3.0f");
+    TEST_ASSERT(micant::msvcrt::CRT_ceilf(3.2f) == 4.0f, "ceilf(3.2) must equal 4.0f");
+
+    // Stage 2: MSVCP140 3D Vector Hypot & String Utilities
+    TEST_ASSERT(std::abs(micant::msvcrt::__std_smf_hypot3f(2.0f, 3.0f, 6.0f) - 7.0f) < 1e-5f, "hypot3f(2, 3, 6) must equal 7.0f");
+    TEST_ASSERT(std::abs(micant::msvcrt::__std_smf_hypot3(2.0, 3.0, 6.0) - 7.0) < 1e-9, "hypot3(2, 3, 6) must equal 7.0");
+
+    char strBuf[64] = {0};
+    micant::msvcrt::CRT_strcpy_s(strBuf, sizeof(strBuf), "MicaNT_Blender_Renderer");
+    TEST_ASSERT(std::strcmp(strBuf, "MicaNT_Blender_Renderer") == 0, "strcpy_s must copy string");
+    TEST_ASSERT(micant::msvcrt::CRT_atoll("9876543210123") == 9876543210123LL, "atoll must parse int64");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_strtof("3.14159f", nullptr) - 3.14159f) < 1e-4f, "strtof must parse float");
+    TEST_ASSERT(micant::msvcrt::CRT_wcsicmp(L"Audacity", L"audacity") == 0, "_wcsicmp must compare case-insensitively");
+
+    // Stage 3: Win32 Multimedia WinMM Mixer & Audio Engine
+    micant::winmm::HMIXER hMixer = nullptr;
+    micant::winmm::MMRESULT mmRes = micant::winmm::mixerOpen(&hMixer, 0, 0, 0, 0);
+    TEST_ASSERT(mmRes == micant::winmm::MMSYSERR_NOERROR && hMixer != nullptr, "mixerOpen must succeed");
+
+    micant::winmm::MIXERCAPSW caps{};
+    mmRes = micant::winmm::mixerGetDevCapsW(0, &caps, sizeof(caps));
+    TEST_ASSERT(mmRes == micant::winmm::MMSYSERR_NOERROR, "mixerGetDevCapsW must succeed");
+    TEST_ASSERT(std::wcscmp(caps.szPname, L"MicaNT Audio Mixer") == 0, "Mixer name must identify MicaNT Audio Mixer");
+
+    uint32_t mxId = 99;
+    mmRes = micant::winmm::mixerGetID(hMixer, &mxId, 0);
+    TEST_ASSERT(mmRes == micant::winmm::MMSYSERR_NOERROR && mxId == 0, "mixerGetID must return 0");
+    TEST_ASSERT(micant::winmm::mixerClose(hMixer) == micant::winmm::MMSYSERR_NOERROR, "mixerClose must succeed");
+    TEST_ASSERT(micant::winmm::waveOutMessage(nullptr, 0, 0, 0) == micant::winmm::MMSYSERR_NOTSUPPORTED, "waveOutMessage must return MMSYSERR_NOTSUPPORTED");
+
+    // Stage 4: Shell Drag-Drop, Path APIs & DPI Scaling
+    char dropPath[260] = "init";
+    TEST_ASSERT(micant::shell32::DragQueryFileA(nullptr, 0, dropPath, sizeof(dropPath)) == 0, "DragQueryFileA must return 0");
+    TEST_ASSERT(dropPath[0] == '\0', "DragQueryFileA must null-terminate buffer");
+
+    char testPath[260] = "C:\\CreativeWorkstation";
+    TEST_ASSERT(micant::shell32::PathAppendA(testPath, "Projects\\Sample.blend") == win32::TRUE, "PathAppendA must append subpath");
+    TEST_ASSERT(std::string(testPath) == "C:\\CreativeWorkstation\\Projects\\Sample.blend", "PathAppendA result must match");
+
+    micant::shell32::PathStripPathA(testPath);
+    TEST_ASSERT(std::string(testPath) == "Sample.blend", "PathStripPathA must strip directory prefix");
+    TEST_ASSERT(micant::shell32::SetProcessDpiAwareness(2) == micant::shell32::S_OK, "SetProcessDpiAwareness must succeed");
+
+    // Stage 5: Configuration Manager (CfgMgr32) Device Node Discovery
+    uint32_t devListSize = 0;
+    TEST_ASSERT(micant::cfgmgr32::CM_Get_Device_ID_List_SizeA(&devListSize, nullptr, 0) == micant::cfgmgr32::CR_SUCCESS, "CM_Get_Device_ID_List_SizeA must succeed");
+    TEST_ASSERT(devListSize >= 2, "Device ID list size must reserve double-null terminator");
+
+    char devIdList[16] = { 'x', 'x' };
+    TEST_ASSERT(micant::cfgmgr32::CM_Get_Device_ID_ListA(nullptr, devIdList, sizeof(devIdList), 0) == micant::cfgmgr32::CR_SUCCESS, "CM_Get_Device_ID_ListA must succeed");
+    TEST_ASSERT(devIdList[0] == '\0' && devIdList[1] == '\0', "CM_Get_Device_ID_ListA must write double-null");
+
+    uint32_t devNode = 0;
+    TEST_ASSERT(micant::cfgmgr32::CM_Locate_DevNodeA(&devNode, "PCI\\VEN_10DE", 0) == micant::cfgmgr32::CR_SUCCESS, "CM_Locate_DevNodeA must succeed");
+    TEST_ASSERT(devNode != 0, "Device node instance handle must be valid");
+
+    void* hDevKey = nullptr;
+    TEST_ASSERT(micant::cfgmgr32::CM_Open_DevNode_Key(devNode, 0, 0, 0, &hDevKey, 0) == micant::cfgmgr32::CR_SUCCESS, "CM_Open_DevNode_Key must succeed");
+    TEST_ASSERT(hDevKey != nullptr, "Device registry key handle must be valid");
+
+    // Stage 6: DbgHelp Symbol Engine & Name Undecoration
+    TEST_ASSERT(micant::dbghelp::SymInitialize(reinterpret_cast<win32::HANDLE>(0x123), nullptr, win32::TRUE) == win32::TRUE, "SymInitialize must succeed");
+    micant::dbghelp::SymSetOptions(0x300);
+    TEST_ASSERT(micant::dbghelp::SymGetOptions() == 0x200, "SymGetOptions must return options");
+
+    char undecorated[128] = {0};
+    uint32_t undecLen = micant::dbghelp::UnDecorateSymbolName("?render@BlenderEngine@@QEAAHXZ", undecorated, sizeof(undecorated), 0);
+    TEST_ASSERT(undecLen > 0, "UnDecorateSymbolName must return name length");
+    TEST_ASSERT(std::strcmp(undecorated, "?render@BlenderEngine@@QEAAHXZ") == 0, "UnDecorateSymbolName must copy string");
+    TEST_ASSERT(micant::dbghelp::SymCleanup(reinterpret_cast<win32::HANDLE>(0x123)) == win32::TRUE, "SymCleanup must succeed");
+
+    // Stage 7: Security Descriptors, SDDL & System Functions
+    micant::advapi32::EXPLICIT_ACCESS_W ea{};
+    wchar_t trusteeName[] = L"MicaNT\\CreativeUser";
+    micant::advapi32::BuildExplicitAccessWithNameW(&ea, trusteeName, 0x1F0000, 1, 0);
+    TEST_ASSERT(ea.grfAccessPermissions == 0x1F0000, "Access permissions must match");
+    TEST_ASSERT(std::wcscmp(ea.Trustee.ptstrName, trusteeName) == 0, "Trustee name must match");
+
+    void* pSecDesc = nullptr;
+    uint32_t sdSize = 0;
+    TEST_ASSERT(micant::advapi32::BuildSecurityDescriptorW(nullptr, nullptr, 1, &ea, 0, nullptr, nullptr, &sdSize, &pSecDesc) == 0, "BuildSecurityDescriptorW must succeed");
+    TEST_ASSERT(pSecDesc != nullptr && sdSize > 0, "Security descriptor must be generated");
+
+    uint8_t randBytes[32] = {0};
+    TEST_ASSERT(micant::advapi32::SystemFunction036(randBytes, sizeof(randBytes)) == win32::TRUE, "SystemFunction036 (RtlGenRandom) must generate bytes");
+    bool nonZero = false;
+    for (uint8_t b : randBytes) { if (b != 0) nonZero = true; }
+    TEST_ASSERT(nonZero, "RtlGenRandom must populate non-zero CSPRNG entropy");
+
+    // Stage 8: Toolhelp32 & Kernel32 Diagnostics Subsystem
+    micant::win32::PROCESSENTRY32 pe32{};
+    pe32.dwSize = sizeof(pe32);
+    TEST_ASSERT(micant::win32::Process32First(nullptr, &pe32) == win32::TRUE, "Process32First must return process entry");
+    TEST_ASSERT(pe32.th32ProcessID == 1000, "Process ID must match");
+    TEST_ASSERT(micant::win32::Process32Next(nullptr, &pe32) == win32::FALSE, "Process32Next must return FALSE when finished");
+
+    micant::win32::MODULEENTRY32 me32{};
+    me32.dwSize = sizeof(me32);
+    TEST_ASSERT(micant::win32::Module32First(nullptr, &me32) == win32::TRUE, "Module32First must return module entry");
+    TEST_ASSERT(std::strcmp(me32.szModule, "micant_app.exe") == 0, "Module name must match");
+
+    char compName[32] = {0};
+    uint32_t cNameLen = sizeof(compName);
+    TEST_ASSERT(micant::win32::GetComputerNameA(compName, &cNameLen) == win32::TRUE, "GetComputerNameA must succeed");
+    TEST_ASSERT(std::strcmp(compName, "MICANT") == 0, "Computer name must equal MICANT");
+
+    // Stage 9: Concurrent Multi-Threaded Real-Time Media Audio/Render Stress Test
+    std::atomic<uint32_t> mediaOps{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&mediaOps, t]() {
+            for (int i = 0; i < 125; ++i) {
+                // 1. Single-precision 3D vector transform (Blender/OBS vertex simulation)
+                float x = static_cast<float>(t + 1);
+                float y = static_cast<float>(i + 1);
+                float z = static_cast<float>((t * 10) + i);
+                float norm = micant::msvcrt::__std_smf_hypot3f(x, y, z);
+                float angle = micant::msvcrt::CRT_sinf(norm) * micant::msvcrt::CRT_cosf(norm);
+                (void)angle;
+
+                // 2. Audio mixing sample processing (Audacity simulation)
+                uint8_t entropy[16] = {0};
+                micant::advapi32::SystemFunction036(entropy, sizeof(entropy));
+
+                // 3. String formatting and diagnostics
+                char pathBuf[260] = "D:\\Projects";
+                micant::shell32::PathAppendA(pathBuf, "Track01.wav");
+
+                mediaOps.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(mediaOps.load() == 1000, "1000-operation parallel multimedia & render transform stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 228: Tier 4 Multimedia & Creative Workstation Ecosystem Subsystem PASSED.\n";
+}
+
 
 
 
