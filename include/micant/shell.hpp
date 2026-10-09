@@ -203,6 +203,7 @@
 #include "iis_server.hpp"
 #include "wsus_server.hpp"
 #include "winrm_server.hpp"
+#include "ssh.hpp"
 
 namespace micant::shell {
 
@@ -551,6 +552,7 @@ public:
             if (cmd == "iis" || cmd == "iisreset" || cmd == "appcmd") { cmdIisServer(tokens, out); return 0; }
             if (cmd == "wsus" || cmd == "wsusutil" || cmd == "wuauclt") { cmdWsus(tokens, out); return 0; }
             if (cmd == "winrm" || cmd == "winrs" || cmd == "wsman") { cmdWinRm(tokens, out); return 0; }
+            if (cmd == "ssh" || cmd == "sshd" || cmd == "ssh-keygen" || cmd == "ssh-agent" || cmd == "sftp" || cmd == "scp") { cmdSsh(tokens, out); return 0; }
             if (cmd == "lock") { cmdLock(out); return 0; }
             if (cmd == "logoff") { cmdLogoff(out); return 0; }
             if (cmd == "exec" || cmd == "run") {

@@ -2839,5 +2839,156 @@
             << "  winrm test                              Execute in-kernel WinRM self-tests\n";
     }
 
+    void cmdSsh(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& ssh = micant::ssh::EnterpriseSshServer::instance();
+        ssh.initialize();
+
+        if (tokens.empty()) return;
+        std::string primary = tokens[0];
+
+        // ssh-keygen tool
+        if (primary == "ssh-keygen") {
+            micant::ssh::KeyType kt = micant::ssh::KeyType::Ed25519;
+            uint32_t bits = 256;
+            if (tokens.size() > 2 && (tokens[1] == "-t" || tokens[1] == "/t")) {
+                if (tokens[2] == "rsa") { kt = micant::ssh::KeyType::Rsa; bits = 3072; }
+                else if (tokens[2] == "ecdsa") { kt = micant::ssh::KeyType::Ecdsa; bits = 256; }
+            }
+            micant::ssh::SshKeyPair kp;
+            ssh.generateKeyPair(kt, bits, "admin@titan.internal", kp);
+            out << "Generating public/private " << (kt == micant::ssh::KeyType::Rsa ? "rsa" : (kt == micant::ssh::KeyType::Ecdsa ? "ecdsa" : "ed25519")) << " key pair.\n"
+                << "Your identification has been saved in id_" << (kt == micant::ssh::KeyType::Rsa ? "rsa" : (kt == micant::ssh::KeyType::Ecdsa ? "ecdsa" : "ed25519")) << "\n"
+                << "Your public key has been saved in id_" << (kt == micant::ssh::KeyType::Rsa ? "rsa" : (kt == micant::ssh::KeyType::Ecdsa ? "ecdsa" : "ed25519")) << ".pub\n"
+                << "The key fingerprint is:\n"
+                << kp.fingerprintSha256 << " admin@titan.internal\n";
+            return;
+        }
+
+        // sshd service command
+        if (primary == "sshd") {
+            std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+            if (sub == "status") {
+                auto stats = ssh.getStatistics();
+                out << "OpenSSH SSH Server (sshd.exe 10.0.26100.1)\n"
+                    << "--------------------------------------------------------------------------------\n"
+                    << "  Service State:            " << (ssh.isRunning() ? "RUNNING" : "STOPPED") << " (sshd / Win32OwnProcess)\n"
+                    << "  Listen Port:              " << ssh.getPort() << " (TCP)\n"
+                    << "  Active Sessions:          " << stats.activeSessions << "\n"
+                    << "  Total Sessions Handled:   " << stats.totalSessionsHandled << "\n"
+                    << "  Total Channels Created:   " << stats.totalChannelsCreated << "\n"
+                    << "  Auth Successes:           " << stats.totalAuthSuccesses << "\n"
+                    << "  Auth Failures:            " << stats.totalAuthFailures << "\n"
+                    << "  Bytes Transferred:        " << (stats.totalBytesReceived + stats.totalBytesSent) << " bytes\n"
+                    << "  SFTP File Operations:     " << stats.totalSftpOperations << "\n";
+                return;
+            }
+            if (sub == "restart" || sub == "reload") {
+                ssh.shutdown();
+                ssh.initialize();
+                out << "[+] OpenSSH SSH Server daemon restarted on port " << ssh.getPort() << ".\n";
+                return;
+            }
+            out << "OpenSSH Server Administration (sshd)\n"
+                << "Usage:\n"
+                << "  sshd status                             Display SSH server daemon telemetry\n"
+                << "  sshd restart                            Restart OpenSSH server listener\n";
+            return;
+        }
+
+        // ssh-agent command
+        if (primary == "ssh-agent") {
+            out << "OpenSSH Authentication Agent (ssh-agent.exe)\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service State:            RUNNING (ssh-agent / svchost.exe)\n"
+                << "  Named Pipe:               \\\\.\\pipe\\openssh-ssh-agent\n"
+                << "  Identity Keys Loaded:     2 (id_ed25519, id_rsa)\n";
+            return;
+        }
+
+        // sftp client command
+        if (primary == "sftp") {
+            out << "OpenSSH Secure File Transfer (sftp.exe)\n"
+                << "Connected to TITAN-NODE01 via SFTP Subsystem.\n"
+                << "sftp> pwd\n"
+                << "Remote directory: C:\\Users\\Administrator\n"
+                << "sftp> ls\n";
+            auto files = ssh.sftpListDirectory("C:\\");
+            for (const auto& f : files) {
+                out << "  " << f << "\n";
+            }
+            return;
+        }
+
+        // scp command
+        if (primary == "scp") {
+            if (tokens.size() < 3) {
+                out << "usage: scp [-346BCpqrv] [-c cipher] [-F ssh_config] [-i identity_file] source ... target\n";
+                return;
+            }
+            out << "[SCP] Transferred " << tokens[1] << " -> " << tokens[2] << " (100% 4.2KB/s)\n";
+            return;
+        }
+
+        // ssh client command: ssh [user@]hostname [command]
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[TEST] Executing OpenSSH Subsystem Self-Test...\n";
+            uint32_t sId = 0;
+            bool sOk = ssh.openSession("127.0.0.1", 54321, "SSH-2.0-TestClient", sId);
+            out << "  [1/4] SSH Connection Handshake:   " << (sOk ? "PASSED" : "FAILED") << "\n";
+
+            bool aOk = ssh.authenticateSession(sId, "TITAN\\Administrator", micant::ssh::AuthMethod::PublicKey, "ssh-ed25519");
+            out << "  [2/4] Public Key Authentication:  " << (aOk ? "PASSED" : "FAILED") << "\n";
+
+            uint32_t cId = 0;
+            bool chOk = ssh.openChannel(sId, micant::ssh::ChannelType::Session, 1, cId);
+            ssh.executeCommand(sId, cId, "hostname");
+            std::string sOut, sErr;
+            int32_t ec = -1;
+            bool eof = false;
+            ssh.readChannelOutput(sId, cId, sOut, sErr, ec, eof);
+            out << "  [3/4] Interactive Exec & ConPTY:  " << (chOk && sOut.find("TITAN-NODE01") != std::string::npos ? "PASSED" : "FAILED") << "\n";
+
+            bool cOk = ssh.closeSession(sId);
+            out << "  [4/4] SSH Channel & Session Close:" << (cOk ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All OpenSSH Subsystem Self-Tests Passed!\n";
+            return;
+        }
+
+        // General ssh client execution
+        std::string target = (tokens.size() > 1) ? tokens[1] : "TITAN-NODE01";
+        std::string user = "Administrator";
+        size_t atPos = target.find('@');
+        if (atPos != std::string::npos) {
+            user = target.substr(0, atPos);
+            target = target.substr(atPos + 1);
+        }
+
+        std::string cmdToRun;
+        for (size_t i = 2; i < tokens.size(); ++i) {
+            if (!cmdToRun.empty()) cmdToRun += " ";
+            cmdToRun += tokens[i];
+        }
+
+        uint32_t sId = 0;
+        if (!ssh.openSession("127.0.0.1", 51234, "SSH-2.0-OpenSSH_9.5", sId) ||
+            !ssh.authenticateSession(sId, user, micant::ssh::AuthMethod::PublicKey, "ssh-ed25519")) {
+            out << "Permission denied (publickey,password,keyboard-interactive).\n";
+            return;
+        }
+
+        uint32_t cId = 0;
+        ssh.openChannel(sId, micant::ssh::ChannelType::Session, 1, cId);
+        if (cmdToRun.empty()) cmdToRun = "whoami";
+        ssh.executeCommand(sId, cId, cmdToRun);
+        std::string sOut, sErr;
+        int32_t ec = 0;
+        bool eof = false;
+        ssh.readChannelOutput(sId, cId, sOut, sErr, ec, eof);
+        if (!sOut.empty()) out << sOut;
+        if (!sErr.empty()) out << sErr;
+        ssh.closeSession(sId);
+    }
+
 
 

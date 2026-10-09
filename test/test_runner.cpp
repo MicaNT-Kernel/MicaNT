@@ -217,6 +217,7 @@
 #include "micant/iis_server.hpp"
 #include "micant/wsus_server.hpp"
 #include "micant/winrm_server.hpp"
+#include "micant/ssh.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -259,7 +260,11 @@ static int g_FailedTests = 0;
 #include "suites/server_storage_suites.hpp"
 
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite212")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite213")) {
+        RUN_TEST(Test_WindowsOpenSSH_ServerClient_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite212") {
         RUN_TEST(Test_WindowsRemoteManagement_WinRM_Subsystem);
         return g_FailedTests;
     }
@@ -905,6 +910,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsEnterpriseIIS_HttpServer_Subsystem);
     RUN_TEST(Test_WindowsServerUpdateServices_WSUS_Subsystem);
     RUN_TEST(Test_WindowsRemoteManagement_WinRM_Subsystem);
+    RUN_TEST(Test_WindowsOpenSSH_ServerClient_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

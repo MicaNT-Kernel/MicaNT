@@ -5811,5 +5811,185 @@ void Test_WindowsRemoteManagement_WinRM_Subsystem() {
     std::cout << "[TEST] Suite 212: Windows Remote Management (WinRM 3.0 / WS-Management / PSRP) Subsystem PASSED.\n";
 }
 
+void Test_WindowsOpenSSH_ServerClient_Subsystem() {
+    std::cout << "[TEST] Executing Suite 213: Windows Native OpenSSH (sshd / ssh / sftp / TitanSSH) Subsystem...\n";
+
+    // Stage 1: SCM Service Registration (sshd and ssh-agent)
+    auto& ssh = micant::ssh::EnterpriseSshServer::instance();
+    TEST_ASSERT(ssh.initialize(), "EnterpriseSshServer initialization must succeed");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto sshdRec = scm.getServiceRecord(L"sshd");
+    TEST_ASSERT(sshdRec != nullptr, "sshd service must be registered in SCM");
+    TEST_ASSERT(sshdRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "sshd service must be in running state");
+    TEST_ASSERT(sshdRec->binaryPath.find(L"sshd.exe") != std::wstring::npos, "sshd binary path must point to sshd.exe");
+
+    auto agentRec = scm.getServiceRecord(L"ssh-agent");
+    TEST_ASSERT(agentRec != nullptr, "ssh-agent service must be registered in SCM");
+    TEST_ASSERT(agentRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "ssh-agent service must be running");
+
+    // Stage 2: VersionDatabase Registration
+    auto& db = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(db.FindModule("ssh.exe") != nullptr, "ssh.exe must be registered in VersionDatabase");
+    TEST_ASSERT(db.FindModule("sshd.exe") != nullptr, "sshd.exe must be registered in VersionDatabase");
+    TEST_ASSERT(db.FindModule("ssh-keygen.exe") != nullptr, "ssh-keygen.exe must be registered in VersionDatabase");
+    TEST_ASSERT(db.FindModule("ssh-agent.exe") != nullptr, "ssh-agent.exe must be registered in VersionDatabase");
+    TEST_ASSERT(db.FindModule("sftp-server.exe") != nullptr, "sftp-server.exe must be registered in VersionDatabase");
+
+    // Stage 3: Host Key Generation & Storage (ssh-keygen)
+    micant::ssh::SshKeyPair edKey;
+    bool genEdOk = ssh.generateKeyPair(micant::ssh::KeyType::Ed25519, 256, "host@titan-node01", edKey);
+    TEST_ASSERT(genEdOk, "Generating Ed25519 host key must succeed");
+    TEST_ASSERT(edKey.publicKeyString.find("ssh-ed25519") != std::string::npos, "Public key must identify ssh-ed25519");
+    TEST_ASSERT(edKey.fingerprintSha256.find("SHA256:") == 0, "Fingerprint must begin with SHA256:");
+
+    micant::ssh::SshKeyPair rsaKey;
+    bool genRsaOk = ssh.generateKeyPair(micant::ssh::KeyType::Rsa, 3072, "host@titan-node01", rsaKey);
+    TEST_ASSERT(genRsaOk, "Generating RSA 3072 host key must succeed");
+    TEST_ASSERT(rsaKey.publicKeyString.find("ssh-rsa") != std::string::npos, "Public key must identify ssh-rsa");
+
+    // Stage 4: TCP Port 22 Server Listener Initialization
+    TEST_ASSERT(ssh.isRunning(), "SSH server daemon must report running");
+    TEST_ASSERT(ssh.getPort() == 22, "SSH server default port must be 22");
+
+    // Stage 5: Client Connection Session Lifecycle
+    uint32_t sId1 = 0;
+    bool okS1 = ssh.openSession("192.168.1.150", 49152, "SSH-2.0-OpenSSH_9.5", sId1);
+    TEST_ASSERT(okS1 && sId1 > 0, "Opening SSH client connection session must succeed");
+
+    // Stage 6: Public Key Authentication (authorized_keys)
+    bool authPubOk = ssh.authenticateSession(sId1, "admin", micant::ssh::AuthMethod::PublicKey, "ssh-ed25519");
+    TEST_ASSERT(authPubOk, "Public key authentication for admin must succeed");
+
+    // Stage 7: Windows Password Authentication Fallback
+    uint32_t sId2 = 0;
+    ssh.openSession("192.168.1.151", 49153, "SSH-2.0-PuTTY_Release_0.80", sId2);
+    bool authPassOk = ssh.authenticateSession(sId2, "Administrator", micant::ssh::AuthMethod::Password, "MicaNT@2026!");
+    TEST_ASSERT(authPassOk, "Windows password authentication for Administrator must succeed");
+
+    // Stage 8: Authentication Rejection on Invalid Credentials
+    uint32_t sIdBad = 0;
+    ssh.openSession("192.168.1.199", 49154, "SSH-2.0-BadClient", sIdBad);
+    bool badAuth = ssh.authenticateSession(sIdBad, "intruder", micant::ssh::AuthMethod::Password, "WrongPass!");
+    TEST_ASSERT(!badAuth, "Authentication with incorrect credentials must be rejected");
+    ssh.closeSession(sIdBad);
+
+    // Stage 9: Interactive Channel & Pseudo Console (ConPTY) Allocation
+    uint32_t cId1 = 0;
+    bool okChan = ssh.openChannel(sId1, micant::ssh::ChannelType::Session, 0, cId1);
+    TEST_ASSERT(okChan && cId1 > 0, "Opening session channel must succeed");
+
+    micant::ssh::TerminalPtyInfo pty;
+    pty.term = "xterm-256color";
+    pty.widthChars = 120;
+    pty.heightChars = 30;
+    bool ptyOk = ssh.allocatePty(sId1, cId1, pty);
+    TEST_ASSERT(ptyOk, "Allocating ConPTY pseudo console must succeed");
+
+    // Stage 10: Remote Command Execution & Output Stream Capture
+    bool execOk = ssh.executeCommand(sId1, cId1, "hostname");
+    TEST_ASSERT(execOk, "Executing 'hostname' command over SSH channel must succeed");
+
+    std::string sOut, sErr;
+    int32_t exitCode = -1;
+    bool isEof = false;
+    ssh.readChannelOutput(sId1, cId1, sOut, sErr, exitCode, isEof);
+    TEST_ASSERT(isEof && exitCode == 0, "Command execution must report EOF and exit code 0");
+    TEST_ASSERT(sOut.find("TITAN-NODE01") != std::string::npos, "Stdout must contain hostname TITAN-NODE01");
+
+    // Stage 11: SFTP Subsystem Virtual Filesystem Read Operations
+    uint32_t sftpChanId = 0;
+    ssh.openChannel(sId1, micant::ssh::ChannelType::Session, 1, sftpChanId);
+    bool sftpReqOk = ssh.requestSubsystem(sId1, sftpChanId, "sftp");
+    TEST_ASSERT(sftpReqOk, "Requesting 'sftp' subsystem must succeed");
+
+    std::vector<uint8_t> sftpData;
+    bool sftpReadOk = ssh.sftpReadFile("C:\\ProgramData\\ssh\\sshd_config", sftpData);
+    TEST_ASSERT(sftpReadOk && !sftpData.empty(), "Reading sshd_config via SFTP must succeed");
+    std::string confStr(sftpData.begin(), sftpData.end());
+    TEST_ASSERT(confStr.find("Port 22") != std::string::npos, "sshd_config content must specify Port 22");
+
+    // Stage 12: SFTP Subsystem Virtual Filesystem Write & Directory Listing
+    std::string uploadPath = "C:\\Users\\Administrator\\test_payload.bin";
+    std::vector<uint8_t> uploadData = {'T','E','S','T','_','S','F','T','P','_','2','0','2','6'};
+    bool sftpWriteOk = ssh.sftpWriteFile(uploadPath, uploadData);
+    TEST_ASSERT(sftpWriteOk, "Writing file via SFTP must succeed");
+
+    auto dirList = ssh.sftpListDirectory("C:\\Users\\Administrator");
+    TEST_ASSERT(!dirList.empty(), "SFTP directory listing must return files");
+    bool foundUploaded = false;
+    for (const auto& item : dirList) {
+        if (item.find("test_payload.bin") != std::string::npos) foundUploaded = true;
+    }
+    TEST_ASSERT(foundUploaded, "Directory listing must include uploaded test_payload.bin");
+
+    ssh.closeSession(sId1);
+    ssh.closeSession(sId2);
+
+    // Stage 13: Win32 C ABI Parity (MicaSsh*)
+    NTSTATUS abiInit = MicaSshInitialize();
+    TEST_ASSERT(abiInit == micant::STATUS_SUCCESS, "MicaSshInitialize must return STATUS_SUCCESS");
+
+    char pubK[256]{}, fp[128]{};
+    NTSTATUS abiGen = MicaSshGenerateKeyPair(0, 256, "abi@titan", pubK, sizeof(pubK), fp, sizeof(fp));
+    TEST_ASSERT(abiGen == micant::STATUS_SUCCESS && std::strlen(pubK) > 0, "MicaSshGenerateKeyPair must succeed");
+
+    uint32_t abiSid = 0;
+    NTSTATUS abiOpen = MicaSshOpenSession("127.0.0.1", 44332, &abiSid);
+    TEST_ASSERT(abiOpen == micant::STATUS_SUCCESS && abiSid > 0, "MicaSshOpenSession must succeed");
+
+    NTSTATUS abiAuth = MicaSshAuthenticate(abiSid, "Administrator", 1, "MicaNT@2026!");
+    TEST_ASSERT(abiAuth == micant::STATUS_SUCCESS, "MicaSshAuthenticate must succeed");
+
+    char abiOut[256]{};
+    int32_t abiEc = -1;
+    NTSTATUS abiExec = MicaSshExecuteCommand(abiSid, "uname -a", abiOut, sizeof(abiOut), &abiEc);
+    TEST_ASSERT(abiExec == micant::STATUS_SUCCESS && abiEc == 0, "MicaSshExecuteCommand must succeed");
+    TEST_ASSERT(std::string(abiOut).find("MicaNT") != std::string::npos, "C ABI output must contain MicaNT");
+
+    NTSTATUS abiClose = MicaSshCloseSession(abiSid);
+    TEST_ASSERT(abiClose == micant::STATUS_SUCCESS, "MicaSshCloseSession must return STATUS_SUCCESS");
+
+    uint32_t actS = 0, totS = 0;
+    uint64_t totB = 0;
+    MicaSshGetStats(&actS, &totS, &totB);
+    TEST_ASSERT(totS > 0, "MicaSshGetStats must report total sessions");
+
+    // Stage 14: 120-Operation Concurrent Multithreaded SSH Session Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&ssh, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                uint32_t sId = 0;
+                bool okO = ssh.openSession("10.0.8." + std::to_string(t), 50000 + op, "SSH-2.0-StressClient", sId);
+                bool okA = ssh.authenticateSession(sId, "Administrator", micant::ssh::AuthMethod::Password, "MicaNT@2026!");
+                uint32_t cId = 0;
+                bool okC = ssh.openChannel(sId, micant::ssh::ChannelType::Session, 0, cId);
+                bool okE = ssh.executeCommand(sId, cId, "echo StressWorker_" + std::to_string(t) + "_" + std::to_string(op));
+                std::string oS, oE;
+                int32_t ec = 0;
+                bool f = false;
+                bool okR = ssh.readChannelOutput(sId, cId, oS, oE, ec, f);
+                bool okCl = ssh.closeSession(sId);
+                if (okO && okA && okC && okE && okR && okCl && f && ec == 0) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded SSH stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 213: Windows Native OpenSSH (sshd / ssh / sftp / TitanSSH) Subsystem PASSED.\n";
+}
+
+
 
 
