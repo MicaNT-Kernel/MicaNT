@@ -6676,6 +6676,201 @@ void Test_BareMetalEventLoop_WizTreeMFT_Subsystem() {
     std::cout << "[TEST] Suite 216: Bare-Metal UEFI Interactive Event Loop, Software Cursor & WizTree 4.x Sovereign MFT Subsystem PASSED.\n";
 }
 
+void Test_PuTTYTerminal_AnsiWin32_Subsystem() {
+    std::cout << "[TEST] Running Suite 217: PuTTY 0.82+ Sovereign Win32 Satellite Subsystem & ANSI Terminal Engine...\n";
+
+    // Stage 1: ANSI String Conversion & Transcoding (AnsiToWide)
+    std::wstring w1 = micant::satellite::putty::AnsiToWide("putty.exe");
+    TEST_ASSERT(w1 == L"putty.exe", "AnsiToWide must match putty.exe exactly");
+    std::wstring w2 = micant::satellite::putty::AnsiToWide("MicaNT SSH Terminal");
+    TEST_ASSERT(w2 == L"MicaNT SSH Terminal", "AnsiToWide must match terminal title");
+    TEST_ASSERT(micant::satellite::putty::AnsiToWide(nullptr).empty(), "Null string must return empty wide string");
+
+    // Stage 2: GDI32 Font Metrics & Character Placement
+    micant::satellite::putty::LOGFONTA lf{};
+    std::strcpy(lf.lfFaceName, "Lucida Console");
+    lf.lfHeight = 16;
+    void* hFont = micant::satellite::putty::CreateFontIndirectA(&lf);
+    TEST_ASSERT(hFont != nullptr, "CreateFontIndirectA must return valid non-null HFONT");
+
+    micant::satellite::putty::TEXTMETRICA tm{};
+    TEST_ASSERT(micant::satellite::putty::GetTextMetricsA(nullptr, &tm) == 1, "GetTextMetricsA must succeed");
+    TEST_ASSERT(tm.tmHeight == 14 && tm.tmAveCharWidth == 8, "TEXTMETRICA default metrics must match 14x8 terminal font");
+
+    int charWidths[10] = {0};
+    TEST_ASSERT(micant::satellite::putty::GetCharWidth32A(nullptr, 32, 41, charWidths) == 1, "GetCharWidth32A must succeed");
+    for (int w : charWidths) {
+        TEST_ASSERT(w == 8, "Monospace terminal character widths must be exactly 8 pixels");
+    }
+
+    micant::satellite::putty::ABCFLOAT abc[5]{};
+    TEST_ASSERT(micant::satellite::putty::GetCharABCWidthsFloatA(nullptr, 65, 69, abc) == 1, "GetCharABCWidthsFloatA must succeed");
+    TEST_ASSERT(abc[0].abcfB == 8.0f, "ABCFLOAT width must be 8.0f");
+
+    uint32_t placementLen = micant::satellite::putty::GetCharacterPlacementW(nullptr, L"SSH-2.0-OpenSSH_9.9", 19, 0, nullptr, 0);
+    TEST_ASSERT(placementLen == 19 * 8, "Character placement extent must match character count * 8");
+
+    // Stage 3: Serial / COM UART Hardware Communication State Machine
+    micant::satellite::putty::DCB dcb{};
+    TEST_ASSERT(micant::satellite::putty::GetCommState(nullptr, &dcb) == 1, "GetCommState must succeed");
+    TEST_ASSERT(dcb.BaudRate == 115200, "Default serial baud rate must be 115200");
+    TEST_ASSERT(dcb.ByteSize == 8, "Default byte size must be 8");
+    TEST_ASSERT(micant::satellite::putty::SetCommState(nullptr, &dcb) == 1, "SetCommState must succeed");
+
+    micant::satellite::putty::COMMTIMEOUTS timeouts{};
+    TEST_ASSERT(micant::satellite::putty::SetCommTimeouts(nullptr, &timeouts) == 1, "SetCommTimeouts must succeed");
+    TEST_ASSERT(micant::satellite::putty::SetCommBreak(nullptr) == 1, "SetCommBreak must succeed");
+    TEST_ASSERT(micant::satellite::putty::ClearCommBreak(nullptr) == 1, "ClearCommBreak must succeed");
+
+    // Stage 4: Anonymous & Named Pipe IPC Primitives
+    void* hRead = nullptr;
+    void* hWrite = nullptr;
+    TEST_ASSERT(micant::satellite::putty::CreatePipe(&hRead, &hWrite, nullptr, 4096) == 1, "CreatePipe must succeed");
+    TEST_ASSERT(hRead != nullptr && hWrite != nullptr && hRead != hWrite, "CreatePipe must return distinct valid read/write handles");
+    void* hNamedPipe = micant::satellite::putty::CreateNamedPipeA("\\\\.\\pipe\\putty-pageant", 3, 0, 1, 1024, 1024, 0, nullptr);
+    TEST_ASSERT(hNamedPipe != nullptr, "CreateNamedPipeA must return valid handle");
+    TEST_ASSERT(micant::satellite::putty::WaitNamedPipeA("\\\\.\\pipe\\putty-pageant", 1000) == 1, "WaitNamedPipeA must succeed");
+
+    // Stage 5: Synchronization & Memory Mapping ANSI Adapters
+    void* hEvt = micant::satellite::putty::CreateEventA(nullptr, 1, 0, "PuttyEvent");
+    TEST_ASSERT(hEvt != nullptr, "CreateEventA must return non-null handle");
+    void* hMtx = micant::satellite::putty::CreateMutexA(nullptr, 0, "PuttyMutex");
+    TEST_ASSERT(hMtx != nullptr, "CreateMutexA must return non-null handle");
+    void* hMap = micant::satellite::putty::CreateFileMappingA(reinterpret_cast<void*>(~0ULL), nullptr, 4, 0, 65536, "PuttySharedMem");
+    TEST_ASSERT(hMap != nullptr, "CreateFileMappingA must return non-null handle");
+
+    // Stage 6: System Directories & Environment Paths
+    char sysDir[64]{};
+    uint32_t sysLen = micant::satellite::putty::GetSystemDirectoryA(sysDir, sizeof(sysDir));
+    TEST_ASSERT(sysLen > 0 && std::string(sysDir) == "C:\\Windows\\System32", "GetSystemDirectoryA must return C:\\Windows\\System32");
+    char winDir[64]{};
+    uint32_t winLen = micant::satellite::putty::GetWindowsDirectoryA(winDir, sizeof(winDir));
+    TEST_ASSERT(winLen > 0 && std::string(winDir) == "C:\\Windows", "GetWindowsDirectoryA must return C:\\Windows");
+    char tmpDir[64]{};
+    uint32_t tmpLen = micant::satellite::putty::GetTempPathA(sizeof(tmpDir), tmpDir);
+    TEST_ASSERT(tmpLen > 0 && std::string(tmpDir) == "C:\\Temp\\", "GetTempPathA must return C:\\Temp\\");
+
+    // Stage 7: Global Memory Status & 64-Bit Memory Sizing
+    micant::satellite::putty::MEMORYSTATUS mem{};
+    micant::satellite::putty::GlobalMemoryStatus(&mem);
+    TEST_ASSERT(mem.dwLength == sizeof(micant::satellite::putty::MEMORYSTATUS), "dwLength must match structure size");
+    TEST_ASSERT(mem.dwTotalPhys >= (1ULL * 1024 * 1024 * 1024), "Physical memory must report at least 1GB");
+    TEST_ASSERT(mem.dwTotalVirtual >= (1ULL * 1024 * 1024 * 1024 * 1024), "64-bit virtual memory must report multi-terabyte address space");
+
+    // Stage 8: Advapi32 Security Descriptors & SID Duplication
+    uint8_t srcSid[68] = { 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x12, 0x00, 0x00, 0x00 }; // S-1-5-18 LocalSystem
+    uint8_t destSid[68] = {0};
+    TEST_ASSERT(micant::satellite::putty::CopySid(sizeof(destSid), destSid, srcSid) == 1, "CopySid must succeed");
+    TEST_ASSERT(std::memcmp(destSid, srcSid, 12) == 0, "Copied SID must match source LocalSystem SID");
+
+    char userName[64]{};
+    uint32_t userLen = sizeof(userName);
+    TEST_ASSERT(micant::satellite::putty::GetUserNameA(userName, &userLen) == 1, "GetUserNameA must succeed");
+    TEST_ASSERT(std::string(userName) == "MicaAdmin", "GetUserNameA must return sovereign user name MicaAdmin");
+
+    // Stage 9: IMM32 IME Composition & Localization
+    TEST_ASSERT(micant::satellite::putty::ImmSetCompositionFontA(nullptr, &lf) == 1, "ImmSetCompositionFontA must succeed");
+
+    // Stage 10: ComDlg32 Common Dialog Handlers
+    TEST_ASSERT(micant::satellite::putty::ChooseColorA(nullptr) == 1, "ChooseColorA must return 1 (IDOK)");
+    TEST_ASSERT(micant::satellite::putty::ChooseFontA(nullptr) == 1, "ChooseFontA must return 1 (IDOK)");
+    TEST_ASSERT(micant::satellite::putty::GetOpenFileNameA(nullptr) == 1, "GetOpenFileNameA must return 1");
+    TEST_ASSERT(micant::satellite::putty::GetSaveFileNameA(nullptr) == 1, "GetSaveFileNameA must return 1");
+
+    // Stage 11: User32 Window Message & Dialog Handlers
+    void* hDlg = micant::satellite::putty::CreateDialogParamA(nullptr, "IDD_PUTTY_CONFIG", nullptr, nullptr, 0);
+    TEST_ASSERT(hDlg != nullptr, "CreateDialogParamA must return valid dialog HWND");
+    TEST_ASSERT(micant::satellite::putty::DialogBoxParamA(nullptr, "IDD_ABOUT", nullptr, nullptr, 0) == 1, "DialogBoxParamA must return 1");
+    TEST_ASSERT(micant::satellite::putty::FlashWindow(hDlg, 1) == 1, "FlashWindow must succeed");
+
+    char winTitle[64] = "PuTTY - (inactive)";
+    micant::satellite::putty::SetWindowTextA(hDlg, winTitle);
+    char readTitle[64]{};
+    int titleLen = micant::satellite::putty::GetWindowTextA(hDlg, readTitle, sizeof(readTitle));
+    TEST_ASSERT(titleLen > 0 && std::string(readTitle) == "PuTTY - (inactive)", "Window text must be successfully stored and retrieved in ANSI");
+
+    // Stage 12: Virtual Key ASCII Translation (ToAsciiEx)
+    uint16_t outChar = 0;
+    uint8_t keyState[256]{};
+    // Test lowercase 'a' (no shift)
+    int asciiCount = micant::satellite::putty::ToAsciiEx('A', 0x1E, keyState, &outChar, 0, nullptr);
+    TEST_ASSERT(asciiCount == 1 && outChar == 'a', "Virtual key 'A' without shift must translate to 'a'");
+    // Test uppercase 'A' (with shift)
+    keyState[0x10] = 0x80;
+    asciiCount = micant::satellite::putty::ToAsciiEx('A', 0x1E, keyState, &outChar, 0, nullptr);
+    TEST_ASSERT(asciiCount == 1 && outChar == 'A', "Virtual key 'A' with shift must translate to 'A'");
+    // Test Return key
+    asciiCount = micant::satellite::putty::ToAsciiEx(0x0D, 0x1C, keyState, &outChar, 0, nullptr);
+    TEST_ASSERT(asciiCount == 1 && outChar == '\r', "VK_RETURN must translate to '\\r'");
+
+    // Stage 13: DynamicLoader IAT Binding & Symbol Satisfaction for PuTTY
+    micant::satellite::InitializeSatelliteWin32Exports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+
+    static constexpr const char* PUTTY_TEST_SYMBOLS[] = {
+        "CopySid", "GetUserNameA", "RegDeleteKeyA", "RegEnumKeyA",
+        "ChooseColorA", "ChooseFontA", "GetOpenFileNameA", "GetSaveFileNameA",
+        "ImmSetCompositionFontA",
+        "Beep", "ClearCommBreak", "SetCommBreak", "GetCommState", "SetCommState",
+        "SetCommTimeouts", "SetHandleInformation", "CreateEventA", "CreateMutexA",
+        "CreateFileMappingA", "CreateNamedPipeA", "WaitNamedPipeA", "CreatePipe",
+        "FindResourceA", "GetOverlappedResult", "GetSystemDirectoryA", "GetWindowsDirectoryA",
+        "GetTempPathA", "GetThreadTimes", "GlobalMemoryStatus", "LocalFileTimeToFileTime",
+        "CreateFontA", "CreateFontIndirectA", "GetCharABCWidthsFloatA", "GetCharWidth32A",
+        "GetCharWidth32W", "GetCharWidthA", "GetCharWidthW", "GetCharacterPlacementW",
+        "GetObjectA", "GetOutlineTextMetricsA", "GetTextExtentPointA", "GetTextMetricsA",
+        "TranslateCharsetInfo", "UpdateColors",
+        "CreateDialogParamA", "DefDlgProcA", "DefWindowProcA", "DialogBoxParamA",
+        "FindWindowA", "FlashWindow", "GetClipboardOwner", "GetMessageA",
+        "GetQueueStatus", "GetWindowLongPtrA", "GetWindowTextLengthA", "GetWindowTextA",
+        "InsertMenuA", "LoadCursorA", "LoadIconA", "LoadImageA",
+        "MessageBoxIndirectW", "PostMessageA", "RegisterClassA", "RegisterClipboardFormatA",
+        "RegisterWindowMessageA", "SendDlgItemMessageA", "SetClassLongPtrA", "SetWindowLongPtrA",
+        "SetWindowTextA", "ToAsciiEx"
+    };
+
+    uint32_t resolvedCount = 0;
+    for (const char* sym : PUTTY_TEST_SYMBOLS) {
+        const char* candidateDlls[] = {
+            "kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll",
+            "comdlg32.dll", "imm32.dll", "shell32.dll", "ole32.dll"
+        };
+        bool found = false;
+        for (const char* d : candidateDlls) {
+            if (loader.getExport(d, sym) != nullptr) {
+                found = true;
+                break;
+            }
+        }
+        if (found) ++resolvedCount;
+    }
+    TEST_ASSERT(resolvedCount == sizeof(PUTTY_TEST_SYMBOLS) / sizeof(PUTTY_TEST_SYMBOLS[0]),
+                "All 70 newly implemented PuTTY Win32 symbols must be resolved from DynamicLoader export table");
+
+    // Stage 14: Multi-Threaded Terminal Stream Stress Test
+    std::atomic<uint32_t> streamSuccessCount{0};
+    std::vector<std::thread> termThreads;
+    termThreads.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        termThreads.emplace_back([&streamSuccessCount, t]() {
+            for (int op = 0; op < 25; ++op) {
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "TermThread_%d_Op_%d", t, op);
+                std::wstring w = micant::satellite::putty::AnsiToWide(buf);
+                if (!w.empty() && w.length() == std::strlen(buf)) {
+                    streamSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    for (auto& th : termThreads) {
+        if (th.joinable()) th.join();
+    }
+    TEST_ASSERT(streamSuccessCount.load() == 200, "200-transaction terminal stream concurrent stress test must succeed 100%");
+
+    std::cout << "[TEST] Suite 217: PuTTY 0.82+ Sovereign Win32 Satellite Subsystem & ANSI Terminal Engine PASSED.\n";
+}
+
 
 
 

@@ -19,6 +19,7 @@
 #include "user32.hpp"
 #include "ldr.hpp"
 #include "satellite_wiztree.hpp"
+#include "satellite_putty.hpp"
 
 namespace micant::satellite {
 
@@ -363,6 +364,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // WizTree 4.x Subsystem Extensions
     wiztree::InitializeWizTreeWin32Exports();
+
+    // PuTTY 0.82+ Subsystem Extensions
+    putty::registerPuTTYExports(ldr);
 }
 
 } // namespace micant::satellite
