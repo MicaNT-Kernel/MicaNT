@@ -230,6 +230,20 @@ static void PrintAuditReport(const AppAuditResult& r) {
               << " (" << std::fixed << std::setprecision(1) << totalPct << "% Native MicaNT Coverage)\n";
     std::cout << "  UNIVERSAL STUB FALLBACK:  " << r.stubbedImports << " symbols gracefully bridged\n";
     std::cout << "--------------------------------------------------------------------------------\n";
+    if (!r.missingSymbols.empty()) {
+        std::cout << "  Missing / Stubbed Symbols (first 30):\n";
+        size_t count = 0;
+        for (const auto& sym : r.missingSymbols) {
+            std::cout << "    * " << sym << "\n";
+            if (++count >= 30) {
+                if (r.missingSymbols.size() > 30) {
+                    std::cout << "    ... and " << (r.missingSymbols.size() - 30) << " more.\n";
+                }
+                break;
+            }
+        }
+        std::cout << "--------------------------------------------------------------------------------\n";
+    }
     std::cout << "  Loader Stages Status:\n";
     std::cout << "    [1] PE Headers & Section Allocation:    " << (r.memoryMappedSuccessfully ? "[PASS]" : "[FAIL]") << "\n";
     std::cout << "    [2] 100% IAT Binding (Native + Stubs):  " << (r.importsBoundSuccessfully ? "[PASS]" : "[FAIL]") << "\n";

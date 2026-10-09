@@ -58,6 +58,8 @@ using SIZE_T    = size_t;
 using DWORD_PTR = uintptr_t;
 using ULONG_PTR = uintptr_t;
 using LONG_PTR  = intptr_t;
+using LONG      = int32_t;
+using LPLONG    = int32_t*;
 
 using micant::TRUE;
 using micant::FALSE;
@@ -1985,6 +1987,121 @@ inline BOOL SwitchToThread() noexcept {
     return TRUE;
 }
 
+inline DWORD ResumeThread(HANDLE hThread) noexcept {
+    (void)hThread;
+    return 0;
+}
+
+inline DWORD SuspendThread(HANDLE hThread) noexcept {
+    (void)hThread;
+    return 0;
+}
+
+inline BOOL TerminateThread(HANDLE hThread, DWORD dwExitCode) noexcept {
+    (void)hThread;
+    (void)dwExitCode;
+    return TRUE;
+}
+
+inline BOOL GetThreadContext(HANDLE hThread, void* lpContext) noexcept {
+    (void)hThread;
+    if (lpContext) {
+        std::memset(lpContext, 0, 1232); // sizeof(CONTEXT) on x64
+    }
+    return TRUE;
+}
+
+using LPTHREAD_START_ROUTINE = DWORD (*)(LPVOID lpThreadParameter);
+
+inline HANDLE CreateThread(
+    void* /*lpThreadAttributes*/,
+    SIZE_T /*dwStackSize*/,
+    LPTHREAD_START_ROUTINE /*lpStartAddress*/,
+    LPVOID /*lpParameter*/,
+    DWORD /*dwCreationFlags*/,
+    DWORD* lpThreadId
+) noexcept {
+    static uint32_t s_NextTid = 0x3000;
+    uint32_t tid = ++s_NextTid;
+    if (lpThreadId) *lpThreadId = tid;
+    return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(0x80000000ULL | tid));
+}
+
+inline HANDLE OpenThread(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwThreadId) noexcept {
+    (void)dwDesiredAccess;
+    (void)bInheritHandle;
+    return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(0x2000 + dwThreadId));
+}
+
+inline DWORD_PTR SetThreadAffinityMask(HANDLE hThread, DWORD_PTR dwThreadAffinityMask) noexcept {
+    (void)hThread;
+    return dwThreadAffinityMask ? dwThreadAffinityMask : 1;
+}
+
+inline DWORD GetVersion() noexcept {
+    return 0x65F4000A; // Windows 11 Build 26100 (Major 10, Minor 0)
+}
+
+inline SIZE_T GetLargePageMinimum() noexcept {
+    return 2 * 1024 * 1024; // 2 MB
+}
+
+inline void SetFileApisToOEM() noexcept {}
+inline void SetFileApisToANSI() noexcept {}
+
+inline HANDLE CreateSemaphoreW(void* lpAttributes, LONG lInitialCount, LONG lMaximumCount, LPCWSTR lpName) noexcept {
+    (void)lpAttributes;
+    (void)lInitialCount;
+    (void)lMaximumCount;
+    (void)lpName;
+    static uint32_t s_NextSem = 0x5000;
+    return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(++s_NextSem));
+}
+
+inline BOOL ReleaseSemaphore(HANDLE hSemaphore, LONG lReleaseCount, LONG* lpPreviousCount) noexcept {
+    (void)hSemaphore;
+    (void)lReleaseCount;
+    if (lpPreviousCount) *lpPreviousCount = 1;
+    return TRUE;
+}
+
+inline BOOL DuplicateHandle(HANDLE hSourceProcessHandle, HANDLE hSourceHandle, HANDLE hTargetProcessHandle,
+                           HANDLE* lpTargetHandle, DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwOptions) noexcept {
+    (void)hSourceProcessHandle;
+    (void)hTargetProcessHandle;
+    (void)dwDesiredAccess;
+    (void)bInheritHandle;
+    (void)dwOptions;
+    if (lpTargetHandle) *lpTargetHandle = hSourceHandle;
+    return TRUE;
+}
+
+inline DWORD GetProcessId(HANDLE hProcess) noexcept {
+    if (!hProcess || hProcess == GetCurrentProcess()) return GetCurrentProcessId();
+    return 1024;
+}
+
+inline BOOL HeapSetInformation(HANDLE HeapHandle, DWORD HeapInformationClass, void* HeapInformation, SIZE_T HeapInformationLength) noexcept {
+    (void)HeapHandle;
+    (void)HeapInformationClass;
+    (void)HeapInformation;
+    (void)HeapInformationLength;
+    return TRUE;
+}
+
+inline BOOL IsDBCSLeadByteEx(UINT CodePage, uint8_t TestChar) noexcept {
+    (void)CodePage;
+    (void)TestChar;
+    return FALSE;
+}
+
+inline UINT SetErrorMode(UINT uMode) noexcept {
+    static UINT s_Mode = 0;
+    UINT prev = s_Mode;
+    s_Mode = uMode;
+    return prev;
+}
+
 // ============================================================================
 // 17. CRT Startup & Advanced Win32 Interop Support
 // ============================================================================
@@ -2111,6 +2228,15 @@ struct STARTUPINFOA {
     HANDLE  hStdOutput{nullptr};
     HANDLE  hStdError{nullptr};
 };
+
+inline void GetStartupInfoA(STARTUPINFOA* si) noexcept {
+    if (si) {
+        *si = STARTUPINFOA{};
+        si->hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si->hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si->hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    }
+}
 
 struct PROCESS_INFORMATION {
     HANDLE hProcess{nullptr};
@@ -2343,6 +2469,10 @@ inline SIZE_T VirtualQuery(LPCVOID lpAddress, MEMORY_BASIC_INFORMATION* lpBuffer
     return sizeof(MEMORY_BASIC_INFORMATION);
 }
 
+inline SIZE_T VirtualQueryEx(HANDLE /*hProcess*/, LPCVOID lpAddress, void* lpBuffer, SIZE_T dwLength) noexcept {
+    return VirtualQuery(lpAddress, reinterpret_cast<MEMORY_BASIC_INFORMATION*>(lpBuffer), dwLength);
+}
+
 inline void RtlCaptureContext(void* /*ContextRecord*/) noexcept {}
 inline void* RtlLookupFunctionEntry(uint64_t /*ControlPc*/, uint64_t* ImageBase, void* /*HistoryTable*/) noexcept {
     if (ImageBase) *ImageBase = g_CurrentExecutableBase ? g_CurrentExecutableBase : 0x140000000ULL;
@@ -2468,6 +2598,26 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetExitCodeProcess", reinterpret_cast<void*>(GetExitCodeProcess));
     ldr.registerExport("kernel32.dll", "TerminateProcess", reinterpret_cast<void*>(TerminateProcess));
     ldr.registerExport("kernel32.dll", "SwitchToThread", reinterpret_cast<void*>(SwitchToThread));
+    ldr.registerExport("kernel32.dll", "ResumeThread", reinterpret_cast<void*>(ResumeThread));
+    ldr.registerExport("kernel32.dll", "SuspendThread", reinterpret_cast<void*>(SuspendThread));
+    ldr.registerExport("kernel32.dll", "TerminateThread", reinterpret_cast<void*>(TerminateThread));
+    ldr.registerExport("kernel32.dll", "GetThreadContext", reinterpret_cast<void*>(GetThreadContext));
+    ldr.registerExport("kernel32.dll", "CreateThread", reinterpret_cast<void*>(CreateThread));
+    ldr.registerExport("kernel32.dll", "OpenThread", reinterpret_cast<void*>(OpenThread));
+    ldr.registerExport("kernel32.dll", "SetThreadAffinityMask", reinterpret_cast<void*>(SetThreadAffinityMask));
+    ldr.registerExport("kernel32.dll", "GetVersion", reinterpret_cast<void*>(GetVersion));
+    ldr.registerExport("kernel32.dll", "GetLargePageMinimum", reinterpret_cast<void*>(GetLargePageMinimum));
+    ldr.registerExport("kernel32.dll", "SetFileApisToOEM", reinterpret_cast<void*>(SetFileApisToOEM));
+    ldr.registerExport("kernel32.dll", "SetFileApisToANSI", reinterpret_cast<void*>(SetFileApisToANSI));
+    ldr.registerExport("kernel32.dll", "CreateSemaphoreW", reinterpret_cast<void*>(CreateSemaphoreW));
+    ldr.registerExport("kernel32.dll", "ReleaseSemaphore", reinterpret_cast<void*>(ReleaseSemaphore));
+    ldr.registerExport("kernel32.dll", "DuplicateHandle", reinterpret_cast<void*>(DuplicateHandle));
+    ldr.registerExport("kernel32.dll", "GetProcessId", reinterpret_cast<void*>(GetProcessId));
+    ldr.registerExport("kernel32.dll", "GetStartupInfoA", reinterpret_cast<void*>(GetStartupInfoA));
+    ldr.registerExport("kernel32.dll", "HeapSetInformation", reinterpret_cast<void*>(HeapSetInformation));
+    ldr.registerExport("kernel32.dll", "IsDBCSLeadByteEx", reinterpret_cast<void*>(IsDBCSLeadByteEx));
+    ldr.registerExport("kernel32.dll", "SetErrorMode", reinterpret_cast<void*>(SetErrorMode));
+    ldr.registerExport("kernel32.dll", "VirtualQueryEx", reinterpret_cast<void*>(VirtualQueryEx));
 
     // CRT startup & interop helpers
     ldr.registerExport("kernel32.dll", "InitializeSListHead", reinterpret_cast<void*>(InitializeSListHead));

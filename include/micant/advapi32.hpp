@@ -599,6 +599,36 @@ inline win32::BOOL LookupPrivilegeNameW(
     return win32::FALSE;
 }
 
+inline win32::BOOL AdjustTokenPrivileges(
+    win32::HANDLE /*TokenHandle*/,
+    win32::BOOL /*DisableAllPrivileges*/,
+    void* /*NewState*/,
+    uint32_t /*BufferLength*/,
+    void* /*PreviousState*/,
+    uint32_t* /*ReturnLength*/
+) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL GetFileSecurityW(
+    const wchar_t* /*lpFileName*/,
+    uint32_t /*RequestedInformation*/,
+    void* /*pSecurityDescriptor*/,
+    uint32_t /*nLength*/,
+    uint32_t* lpcbLengthNeeded
+) noexcept {
+    if (lpcbLengthNeeded) *lpcbLengthNeeded = 64;
+    return win32::TRUE;
+}
+
+inline win32::BOOL SetFileSecurityW(
+    const wchar_t* /*lpFileName*/,
+    uint32_t /*SecurityInformation*/,
+    void* /*pSecurityDescriptor*/
+) noexcept {
+    return win32::TRUE;
+}
+
 inline NTSTATUS LsaOpenPolicy(
     const void* /*SystemName*/,
     const void* /*ObjectAttributes*/,
@@ -801,6 +831,285 @@ inline win32::BOOL CloseServiceHandle(SC_HANDLE hSCObject) noexcept {
     return win32::TRUE;
 }
 
+// ============================================================================
+// Clean-Room Win32 Registry APIs (advapi32.dll)
+// ============================================================================
+
+using HKEY = win32::HKEY;
+using REGSAM = uint32_t;
+using PHKEY = HKEY*;
+
+inline const HKEY HKEY_CLASSES_ROOT   = reinterpret_cast<HKEY>(static_cast<uintptr_t>(0x80000000UL));
+inline const HKEY HKEY_CURRENT_USER   = reinterpret_cast<HKEY>(static_cast<uintptr_t>(0x80000001UL));
+inline const HKEY HKEY_LOCAL_MACHINE  = reinterpret_cast<HKEY>(static_cast<uintptr_t>(0x80000002UL));
+inline const HKEY HKEY_USERS          = reinterpret_cast<HKEY>(static_cast<uintptr_t>(0x80000003UL));
+inline const HKEY HKEY_CURRENT_CONFIG = reinterpret_cast<HKEY>(static_cast<uintptr_t>(0x80000005UL));
+
+inline constexpr uint32_t REG_NONE      = 0;
+inline constexpr uint32_t REG_SZ        = 1;
+inline constexpr uint32_t REG_EXPAND_SZ = 2;
+inline constexpr uint32_t REG_BINARY    = 3;
+inline constexpr uint32_t REG_DWORD     = 4;
+inline constexpr uint32_t REG_MULTI_SZ  = 7;
+inline constexpr uint32_t REG_QWORD     = 11;
+
+inline constexpr int32_t ERROR_SUCCESS = 0;
+inline constexpr int32_t ERROR_FILE_NOT_FOUND = 2;
+inline constexpr int32_t ERROR_MORE_DATA = 234;
+
+struct RegValue {
+    uint32_t type{REG_SZ};
+    std::vector<uint8_t> data;
+};
+
+struct RegNode {
+    std::wstring name;
+    std::unordered_map<std::wstring, RegValue> values;
+    std::unordered_map<std::wstring, std::shared_ptr<RegNode>> subkeys;
+};
+
+class SovereignRegistryDatabase {
+public:
+    static SovereignRegistryDatabase& Instance() {
+        static SovereignRegistryDatabase s_Inst;
+        return s_Inst;
+    }
+
+    SovereignRegistryDatabase() {
+        m_hklm = std::make_shared<RegNode>();
+        m_hkcu = std::make_shared<RegNode>();
+        m_hkcr = std::make_shared<RegNode>();
+        m_hku  = std::make_shared<RegNode>();
+
+        auto cv = getOrCreatePath(m_hklm, L"Software\\Microsoft\\Windows NT\\CurrentVersion");
+        setValue(cv, L"ProductName", REG_SZ, L"MicaNT Cutler Edition");
+        setValue(cv, L"CurrentBuild", REG_SZ, L"26100");
+        setValue(cv, L"ReleaseId", REG_SZ, L"2026");
+
+        auto shell = getOrCreatePath(m_hkcu, L"Software\\MicaNT\\SurShell");
+        setValue(shell, L"Theme", REG_SZ, L"DarkMica");
+    }
+
+    std::shared_ptr<RegNode> getRoot(HKEY hKey) {
+        uintptr_t v = reinterpret_cast<uintptr_t>(hKey);
+        if (v == 0x80000000UL) return m_hkcr;
+        if (v == 0x80000001UL) return m_hkcu;
+        if (v == 0x80000002UL) return m_hklm;
+        if (v == 0x80000003UL) return m_hku;
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_openHandles.find(v);
+        if (it != m_openHandles.end()) return it->second;
+        return m_hklm;
+    }
+
+    HKEY allocateHandle(std::shared_ptr<RegNode> node) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uintptr_t h = ++m_nextHandle;
+        m_openHandles[h] = node;
+        return reinterpret_cast<HKEY>(h);
+    }
+
+    void closeHandle(HKEY hKey) {
+        uintptr_t v = reinterpret_cast<uintptr_t>(hKey);
+        if (v >= 0x80000000UL && v <= 0x80000005UL) return;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_openHandles.erase(v);
+    }
+
+    std::shared_ptr<RegNode> getOrCreatePath(std::shared_ptr<RegNode> root, const std::wstring& path) {
+        auto cur = root;
+        size_t start = 0;
+        while (start < path.size()) {
+            size_t slash = path.find(L'\\', start);
+            std::wstring part = (slash == std::wstring::npos) ? path.substr(start) : path.substr(start, slash - start);
+            if (!part.empty()) {
+                auto& child = cur->subkeys[part];
+                if (!child) {
+                    child = std::make_shared<RegNode>();
+                    child->name = part;
+                }
+                cur = child;
+            }
+            if (slash == std::wstring::npos) break;
+            start = slash + 1;
+        }
+        return cur;
+    }
+
+    void setValue(std::shared_ptr<RegNode> node, const std::wstring& name, uint32_t type, const std::wstring& strVal) {
+        RegValue rv;
+        rv.type = type;
+        size_t byteLen = (strVal.size() + 1) * sizeof(wchar_t);
+        rv.data.resize(byteLen);
+        std::memcpy(rv.data.data(), strVal.c_str(), byteLen);
+        node->values[name] = rv;
+    }
+
+private:
+    std::mutex m_mutex;
+    std::shared_ptr<RegNode> m_hklm;
+    std::shared_ptr<RegNode> m_hkcu;
+    std::shared_ptr<RegNode> m_hkcr;
+    std::shared_ptr<RegNode> m_hku;
+    std::unordered_map<uintptr_t, std::shared_ptr<RegNode>> m_openHandles;
+    uintptr_t m_nextHandle{0x1000};
+};
+
+inline int32_t RegOpenKeyExW(HKEY hKey, const wchar_t* lpSubKey, uint32_t /*ulOptions*/, REGSAM /*samDesired*/, PHKEY phkResult) noexcept {
+    if (!phkResult) return 87; // ERROR_INVALID_PARAMETER
+    auto root = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (!root) return ERROR_FILE_NOT_FOUND;
+
+    if (!lpSubKey || !*lpSubKey) {
+        *phkResult = hKey;
+        return ERROR_SUCCESS;
+    }
+
+    auto target = SovereignRegistryDatabase::Instance().getOrCreatePath(root, lpSubKey);
+    *phkResult = SovereignRegistryDatabase::Instance().allocateHandle(target);
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegOpenKeyExA(HKEY hKey, const char* lpSubKey, uint32_t ulOptions, REGSAM samDesired, PHKEY phkResult) noexcept {
+    std::wstring subKeyW;
+    if (lpSubKey) {
+        while (*lpSubKey) subKeyW.push_back(static_cast<wchar_t>(*lpSubKey++));
+    }
+    return RegOpenKeyExW(hKey, subKeyW.c_str(), ulOptions, samDesired, phkResult);
+}
+
+inline int32_t RegQueryValueExW(HKEY hKey, const wchar_t* lpValueName, uint32_t* /*lpReserved*/, uint32_t* lpType, uint8_t* lpData, uint32_t* lpcbData) noexcept {
+    auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (!node) return ERROR_FILE_NOT_FOUND;
+
+    std::wstring vName = lpValueName ? lpValueName : L"";
+    auto it = node->values.find(vName);
+    if (it == node->values.end()) {
+        if (lpcbData) *lpcbData = 0;
+        return ERROR_FILE_NOT_FOUND;
+    }
+
+    if (lpType) *lpType = it->second.type;
+    uint32_t dataSize = static_cast<uint32_t>(it->second.data.size());
+
+    if (!lpData) {
+        if (lpcbData) *lpcbData = dataSize;
+        return ERROR_SUCCESS;
+    }
+
+    if (lpcbData && *lpcbData < dataSize) {
+        *lpcbData = dataSize;
+        return ERROR_MORE_DATA;
+    }
+
+    std::memcpy(lpData, it->second.data.data(), dataSize);
+    if (lpcbData) *lpcbData = dataSize;
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegQueryValueExA(HKEY hKey, const char* lpValueName, uint32_t* lpReserved, uint32_t* lpType, uint8_t* lpData, uint32_t* lpcbData) noexcept {
+    std::wstring vNameW;
+    if (lpValueName) {
+        while (*lpValueName) vNameW.push_back(static_cast<wchar_t>(*lpValueName++));
+    }
+    return RegQueryValueExW(hKey, vNameW.c_str(), lpReserved, lpType, lpData, lpcbData);
+}
+
+inline int32_t RegCloseKey(HKEY hKey) noexcept {
+    SovereignRegistryDatabase::Instance().closeHandle(hKey);
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegCreateKeyExW(HKEY hKey, const wchar_t* lpSubKey, uint32_t ulOptions, const wchar_t* /*lpClass*/, uint32_t /*dwOptions*/,
+                               REGSAM samDesired, void* /*lpSecurityAttributes*/, PHKEY phkResult, uint32_t* lpdwDisposition) noexcept {
+    if (lpdwDisposition) *lpdwDisposition = 1; // REG_CREATED_NEW_KEY
+    return RegOpenKeyExW(hKey, lpSubKey, ulOptions, samDesired, phkResult);
+}
+
+inline int32_t RegCreateKeyExA(HKEY hKey, const char* lpSubKey, uint32_t ulOptions, const char* lpClass, uint32_t dwOptions,
+                               REGSAM samDesired, void* lpSecurityAttributes, PHKEY phkResult, uint32_t* lpdwDisposition) noexcept {
+    (void)lpClass; (void)dwOptions; (void)lpSecurityAttributes;
+    return RegOpenKeyExA(hKey, lpSubKey, ulOptions, samDesired, phkResult);
+}
+
+inline int32_t RegSetValueExW(HKEY hKey, const wchar_t* lpValueName, uint32_t /*Reserved*/, uint32_t dwType, const uint8_t* lpData, uint32_t cbData) noexcept {
+    auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (!node) return ERROR_FILE_NOT_FOUND;
+    std::wstring vName = lpValueName ? lpValueName : L"";
+    RegValue rv;
+    rv.type = dwType;
+    if (lpData && cbData > 0) {
+        rv.data.assign(lpData, lpData + cbData);
+    }
+    node->values[vName] = rv;
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegSetValueExA(HKEY hKey, const char* lpValueName, uint32_t Reserved, uint32_t dwType, const uint8_t* lpData, uint32_t cbData) noexcept {
+    std::wstring vNameW;
+    if (lpValueName) {
+        while (*lpValueName) vNameW.push_back(static_cast<wchar_t>(*lpValueName++));
+    }
+    return RegSetValueExW(hKey, vNameW.c_str(), Reserved, dwType, lpData, cbData);
+}
+
+inline int32_t RegDeleteKeyW(HKEY hKey, const wchar_t* lpSubKey) noexcept {
+    auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (node && lpSubKey) node->subkeys.erase(lpSubKey);
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegDeleteValueW(HKEY hKey, const wchar_t* lpValueName) noexcept {
+    auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (node && lpValueName) node->values.erase(lpValueName);
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegEnumKeyExW(HKEY hKey, uint32_t dwIndex, wchar_t* lpName, uint32_t* lpcchName, uint32_t* /*lpReserved*/,
+                             wchar_t* /*lpClass*/, uint32_t* /*lpcchClass*/, void* /*lpftLastWriteTime*/) noexcept {
+    auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (!node) return ERROR_FILE_NOT_FOUND;
+    if (dwIndex >= node->subkeys.size()) return 259; // ERROR_NO_MORE_ITEMS
+    auto it = node->subkeys.begin();
+    std::advance(it, dwIndex);
+    if (lpName && lpcchName && *lpcchName > it->first.size()) {
+        wcscpy_s(lpName, *lpcchName, it->first.c_str());
+        *lpcchName = static_cast<uint32_t>(it->first.size());
+    }
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegEnumValueW(HKEY hKey, uint32_t dwIndex, wchar_t* lpValueName, uint32_t* lpcchValueName, uint32_t* /*lpReserved*/,
+                             uint32_t* lpType, uint8_t* lpData, uint32_t* lpcbData) noexcept {
+    auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (!node) return ERROR_FILE_NOT_FOUND;
+    if (dwIndex >= node->values.size()) return 259; // ERROR_NO_MORE_ITEMS
+    auto it = node->values.begin();
+    std::advance(it, dwIndex);
+    if (lpValueName && lpcchValueName && *lpcchValueName > it->first.size()) {
+        wcscpy_s(lpValueName, *lpcchValueName, it->first.c_str());
+        *lpcchValueName = static_cast<uint32_t>(it->first.size());
+    }
+    if (lpType) *lpType = it->second.type;
+    if (lpData && lpcbData && *lpcbData >= it->second.data.size()) {
+        std::memcpy(lpData, it->second.data.data(), it->second.data.size());
+        *lpcbData = static_cast<uint32_t>(it->second.data.size());
+    }
+    return ERROR_SUCCESS;
+}
+
+inline int32_t RegQueryInfoKeyW(HKEY hKey, wchar_t* /*lpClass*/, uint32_t* /*lpcchClass*/, uint32_t* /*lpReserved*/,
+                                uint32_t* lpcSubKeys, uint32_t* /*lpcbMaxSubKeyLen*/, uint32_t* /*lpcbMaxClassLen*/,
+                                uint32_t* lpcValues, uint32_t* /*lpcbMaxValueNameLen*/, uint32_t* /*lpcbMaxValueLen*/,
+                                void* /*lpcbSecurityDescriptor*/, void* /*lpftLastWriteTime*/) noexcept {
+    auto node = SovereignRegistryDatabase::Instance().getRoot(hKey);
+    if (!node) return ERROR_FILE_NOT_FOUND;
+    if (lpcSubKeys) *lpcSubKeys = static_cast<uint32_t>(node->subkeys.size());
+    if (lpcValues) *lpcValues = static_cast<uint32_t>(node->values.size());
+    return ERROR_SUCCESS;
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("advapi32.dll", "CryptAcquireContextA", reinterpret_cast<void*>(CryptAcquireContextA));
@@ -837,6 +1146,25 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "LookupPrivilegeNameW", reinterpret_cast<void*>(LookupPrivilegeNameW));
     ldr.registerExport("advapi32.dll", "LsaOpenPolicy", reinterpret_cast<void*>(LsaOpenPolicy));
     ldr.registerExport("advapi32.dll", "LsaClose", reinterpret_cast<void*>(LsaClose));
+    ldr.registerExport("advapi32.dll", "AdjustTokenPrivileges", reinterpret_cast<void*>(AdjustTokenPrivileges));
+    ldr.registerExport("advapi32.dll", "GetFileSecurityW", reinterpret_cast<void*>(GetFileSecurityW));
+    ldr.registerExport("advapi32.dll", "SetFileSecurityW", reinterpret_cast<void*>(SetFileSecurityW));
+
+    // Win32 Registry Exports
+    ldr.registerExport("advapi32.dll", "RegOpenKeyExW", reinterpret_cast<void*>(RegOpenKeyExW));
+    ldr.registerExport("advapi32.dll", "RegOpenKeyExA", reinterpret_cast<void*>(RegOpenKeyExA));
+    ldr.registerExport("advapi32.dll", "RegQueryValueExW", reinterpret_cast<void*>(RegQueryValueExW));
+    ldr.registerExport("advapi32.dll", "RegQueryValueExA", reinterpret_cast<void*>(RegQueryValueExA));
+    ldr.registerExport("advapi32.dll", "RegCloseKey", reinterpret_cast<void*>(RegCloseKey));
+    ldr.registerExport("advapi32.dll", "RegCreateKeyExW", reinterpret_cast<void*>(RegCreateKeyExW));
+    ldr.registerExport("advapi32.dll", "RegCreateKeyExA", reinterpret_cast<void*>(RegCreateKeyExA));
+    ldr.registerExport("advapi32.dll", "RegSetValueExW", reinterpret_cast<void*>(RegSetValueExW));
+    ldr.registerExport("advapi32.dll", "RegSetValueExA", reinterpret_cast<void*>(RegSetValueExA));
+    ldr.registerExport("advapi32.dll", "RegDeleteKeyW", reinterpret_cast<void*>(RegDeleteKeyW));
+    ldr.registerExport("advapi32.dll", "RegDeleteValueW", reinterpret_cast<void*>(RegDeleteValueW));
+    ldr.registerExport("advapi32.dll", "RegEnumKeyExW", reinterpret_cast<void*>(RegEnumKeyExW));
+    ldr.registerExport("advapi32.dll", "RegEnumValueW", reinterpret_cast<void*>(RegEnumValueW));
+    ldr.registerExport("advapi32.dll", "RegQueryInfoKeyW", reinterpret_cast<void*>(RegQueryInfoKeyW));
 
     // Initialize SCM daemon
     scm::ServiceControlManager::get().initialize();

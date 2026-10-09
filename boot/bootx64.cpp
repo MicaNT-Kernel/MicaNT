@@ -216,14 +216,11 @@ public:
         conBuf.writeString(L"C:\\Windows\\System32> win32_app.exe --status\r\n");
         conBuf.writeString(L"[Win32 App] Initializing Win32 Console via AllocConsole()... [OK]\r\n");
         conBuf.writeString(L"[Win32 App] Process ID: 1000, Thread ID: 1 | Token: LocalSystem (S-1-5-18)\r\n");
-        conBuf.writeString(L"[Win32 App] All 213 Subsystem verification suites PASSED (100%)!\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> sshd status\r\n");
-        conBuf.writeString(L"[OpenSSH] Daemon: TitanSSH | Status: RUNNING (Port 22 TCP) [OK]\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> winrm status\r\n");
-        conBuf.writeString(L"[WinRM] WSMAN 3.0: RUNNING | HTTP: 5985, HTTPS: 5986 [OK]\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> wsa status\r\n");
-        conBuf.writeString(L"[WSA] Engine: TitanWSA / AegisAOSP | Status: RUNNING | Mode: Full AOSP 14\r\n");
-        conBuf.writeString(L"[WSA] Wayland Display :0 -> DirectComposition / DWM Visual Window [OK]\r\n\r\n");
+        conBuf.writeString(L"[Win32 App] All 214 Subsystem verification suites PASSED (100%)!\r\n\r\n");
+        conBuf.writeString(L"C:\\Windows\\System32> rdp status\r\n");
+        conBuf.writeString(L"[RDP] Sovereign MS-RDPBCGR: RUNNING (Port 3389 TCP) [OK]\r\n\r\n");
+        conBuf.writeString(L"C:\\Windows\\System32> launch_real_app.exe --audit\r\n");
+        conBuf.writeString(L"[PE Ldr] Notepad++ (8.3MB): READY | VLC (1.0MB): READY | 7-Zip: READY\r\n\r\n");
         conBuf.writeString(L"C:\\Windows\\System32> _");
 
         // Blit ConHost terminal buffer to the inner window client area
@@ -247,13 +244,19 @@ public:
         m_videoDriver.drawString(tbX + 12, taskbarY + 12, ">_ Command Prompt", bootvid::Color{240, 248, 255}, bootvid::Color{22, 32, 50}, 1);
 
         uint32_t tbX2 = tbX + 178;
-        m_videoDriver.fillRectangle(tbX2, taskbarY + 4, 150, 26, bootvid::Color{24, 38, 48});
-        m_videoDriver.fillRectangle(tbX2, taskbarY + 28, 150, 2, bootvid::Color{60, 220, 120});
-        m_videoDriver.drawString(tbX2 + 10, taskbarY + 12, "WSA: Calculator", bootvid::Color{140, 240, 170}, bootvid::Color{24, 38, 48}, 1);
+        m_videoDriver.fillRectangle(tbX2, taskbarY + 4, 130, 26, bootvid::Color{20, 36, 30});
+        m_videoDriver.fillRectangle(tbX2, taskbarY + 28, 130, 2, bootvid::Color{40, 180, 100});
+        m_videoDriver.drawString(tbX2 + 8, taskbarY + 12, "[N++] Notepad++", bootvid::Color{120, 240, 160}, bootvid::Color{20, 36, 30}, 1);
 
-        uint32_t tbX3 = tbX2 + 158;
-        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 140, 26, bootvid::Color{18, 24, 38});
-        m_videoDriver.drawString(tbX3 + 12, taskbarY + 12, "Kernel Telemetry", bootvid::Color{150, 165, 185}, bootvid::Color{18, 24, 38}, 1);
+        uint32_t tbX3 = tbX2 + 138;
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 120, 26, bootvid::Color{42, 28, 16});
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 28, 120, 2, bootvid::Color{245, 130, 32});
+        m_videoDriver.drawString(tbX3 + 8, taskbarY + 12, "[VLC] Player", bootvid::Color{255, 180, 100}, bootvid::Color{42, 28, 16}, 1);
+
+        uint32_t tbX4 = tbX3 + 128;
+        m_videoDriver.fillRectangle(tbX4, taskbarY + 4, 110, 26, bootvid::Color{16, 28, 44});
+        m_videoDriver.fillRectangle(tbX4, taskbarY + 28, 110, 2, bootvid::Color{0, 114, 206});
+        m_videoDriver.drawString(tbX4 + 8, taskbarY + 12, "[7z] 7-Zip", bootvid::Color{100, 200, 255}, bootvid::Color{16, 28, 44}, 1);
 
         // Notification Area / System Tray
         uint32_t trayX = (width > 280) ? (width - 270) : 10;

@@ -44,21 +44,29 @@ struct MicaFile {
     bool isError{false};
 };
 
+#ifdef _iob
+#undef _iob
+#endif
+
 inline MicaFile g_StdInFile{reinterpret_cast<win32::HANDLE>(0x10), true, false, false, false};
 inline MicaFile g_StdOutFile{reinterpret_cast<win32::HANDLE>(0x14), false, true, false, false};
 inline MicaFile g_StdErrFile{reinterpret_cast<win32::HANDLE>(0x18), false, true, false, false};
 
-inline MicaFile* g_IobArray[3] = { &g_StdInFile, &g_StdOutFile, &g_StdErrFile };
+inline MicaFile _iob[3] = {
+    { reinterpret_cast<win32::HANDLE>(0x10), true, false, false, false },
+    { reinterpret_cast<win32::HANDLE>(0x14), false, true, false, false },
+    { reinterpret_cast<win32::HANDLE>(0x18), false, true, false, false }
+};
+
+inline MicaFile* g_IobArray[3] = { &_iob[0], &_iob[1], &_iob[2] };
 
 inline MicaFile** __iob_func() noexcept {
     return g_IobArray;
 }
 
 inline MicaFile* __acrt_iob_func(unsigned id) noexcept {
-    if (id == 0) return &g_StdInFile;
-    if (id == 1) return &g_StdOutFile;
-    if (id == 2) return &g_StdErrFile;
-    return &g_StdOutFile;
+    if (id < 3) return &_iob[id];
+    return &_iob[1];
 }
 
 // ============================================================================
@@ -102,6 +110,18 @@ inline size_t strlen(const char* str) noexcept {
 
 inline size_t wcslen(const wchar_t* str) noexcept {
     return str ? std::wcslen(str) : 0;
+}
+
+inline int wcscmp(const wchar_t* s1, const wchar_t* s2) noexcept {
+    if (!s1 && !s2) return 0;
+    if (!s1) return -1;
+    if (!s2) return 1;
+    return std::wcscmp(s1, s2);
+}
+
+inline const wchar_t* wcsstr(const wchar_t* str, const wchar_t* substr) noexcept {
+    if (!str || !substr) return nullptr;
+    return std::wcsstr(str, substr);
 }
 
 inline int strcmp(const char* s1, const char* s2) noexcept {
@@ -253,6 +273,39 @@ inline int putchar(int c) noexcept {
     char ch = static_cast<char>(c);
     win32::WriteFile(hOut, &ch, 1, &written, nullptr);
     return c;
+}
+
+inline int fputc(int c, MicaFile* stream) noexcept {
+    if (!stream) return -1;
+    char ch = static_cast<char>(c);
+    win32::DWORD written = 0;
+    win32::WriteFile(stream->handle, &ch, 1, &written, nullptr);
+    return (written == 1) ? static_cast<unsigned char>(ch) : -1;
+}
+
+inline int fputs(const char* str, MicaFile* stream) noexcept {
+    if (!str || !stream) return -1;
+    size_t len = std::strlen(str);
+    win32::DWORD written = 0;
+    win32::WriteFile(stream->handle, str, static_cast<win32::DWORD>(len), &written, nullptr);
+    return (written == len) ? 0 : -1;
+}
+
+inline int fgetc(MicaFile* stream) noexcept {
+    if (!stream) return -1;
+    char ch = 0;
+    win32::DWORD readBytes = 0;
+    if (win32::ReadFile(stream->handle, &ch, 1, &readBytes, nullptr) && readBytes == 1) {
+        return static_cast<unsigned char>(ch);
+    }
+    return -1;
+}
+
+inline int _fileno(MicaFile* stream) noexcept {
+    if (stream == &_iob[0]) return 0;
+    if (stream == &_iob[1]) return 1;
+    if (stream == &_iob[2]) return 2;
+    return 3;
 }
 
 inline int printf(const char* format, ...) noexcept {
@@ -435,6 +488,30 @@ inline uint64_t clock() noexcept {
     return win32::GetTickCount64();
 }
 
+inline char g_CommandLineBuffer[260] = "surshell.exe";
+inline char* _acmdln = g_CommandLineBuffer;
+
+inline char* g_InitEnv[2] = { nullptr, nullptr };
+inline char** __initenv = g_InitEnv;
+
+inline unsigned int ___lc_codepage_func() noexcept {
+    return 65001; // CP_UTF8
+}
+
+inline size_t ___mb_cur_max_func() noexcept {
+    return 2;
+}
+
+inline uint64_t __C_specific_handler(void*, void*, void*, void*) noexcept {
+    return 0;
+}
+
+inline void _CxxThrowException(void*, void*) noexcept {}
+
+inline uint64_t __CxxFrameHandler(void*, void*, void*, void*) noexcept {
+    return 0;
+}
+
 // ============================================================================
 // 7. Dynamic Loader Registration for msvcrt.dll
 // ============================================================================
@@ -523,6 +600,28 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_configthreadlocale", reinterpret_cast<void*>(_configthreadlocale));
     ldr.registerExport("msvcrt.dll", "_set_new_mode", reinterpret_cast<void*>(_set_new_mode));
     ldr.registerExport("msvcrt.dll", "_crt_atexit", reinterpret_cast<void*>(_crt_atexit));
+
+    // Standard I/O & Filesystem Streams
+    ldr.registerExport("msvcrt.dll", "_iob", reinterpret_cast<void*>(_iob));
+    ldr.registerExport("msvcrt.dll", "fputc", reinterpret_cast<void*>(fputc));
+    ldr.registerExport("msvcrt.dll", "fputs", reinterpret_cast<void*>(fputs));
+    ldr.registerExport("msvcrt.dll", "fgetc", reinterpret_cast<void*>(fgetc));
+    ldr.registerExport("msvcrt.dll", "_fileno", reinterpret_cast<void*>(_fileno));
+
+    // Wide string extensions
+    ldr.registerExport("msvcrt.dll", "wcscmp", reinterpret_cast<void*>(wcscmp));
+    ldr.registerExport("msvcrt.dll", "wcsstr", reinterpret_cast<void*>(wcsstr));
+
+    // Environment & Codepages
+    ldr.registerExport("msvcrt.dll", "__initenv", reinterpret_cast<void*>(&__initenv));
+    ldr.registerExport("msvcrt.dll", "_acmdln", reinterpret_cast<void*>(&_acmdln));
+    ldr.registerExport("msvcrt.dll", "___lc_codepage_func", reinterpret_cast<void*>(___lc_codepage_func));
+    ldr.registerExport("msvcrt.dll", "___mb_cur_max_func", reinterpret_cast<void*>(___mb_cur_max_func));
+
+    // Exception handling
+    ldr.registerExport("msvcrt.dll", "__C_specific_handler", reinterpret_cast<void*>(__C_specific_handler));
+    ldr.registerExport("msvcrt.dll", "_CxxThrowException", reinterpret_cast<void*>(_CxxThrowException));
+    ldr.registerExport("msvcrt.dll", "__CxxFrameHandler", reinterpret_cast<void*>(__CxxFrameHandler));
 }
 
 } // namespace micant::msvcrt

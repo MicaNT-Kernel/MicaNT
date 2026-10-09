@@ -1217,6 +1217,64 @@ inline win32::BOOL CloseDesktop(win32::HANDLE /*hDesktop*/) noexcept {
     return win32::TRUE;
 }
 
+inline win32::LPWSTR CharUpperW(win32::LPWSTR lpsz) noexcept {
+    if (!lpsz) return nullptr;
+    if (reinterpret_cast<uintptr_t>(lpsz) <= 0xFFFF) {
+        wchar_t ch = static_cast<wchar_t>(reinterpret_cast<uintptr_t>(lpsz));
+        return reinterpret_cast<win32::LPWSTR>(static_cast<uintptr_t>(std::towupper(ch)));
+    }
+    for (wchar_t* p = lpsz; *p; ++p) {
+        *p = std::towupper(*p);
+    }
+    return lpsz;
+}
+
+inline win32::HWND GetDesktopWindow() noexcept {
+    return reinterpret_cast<win32::HWND>(static_cast<uintptr_t>(0x10001));
+}
+
+inline int32_t GetSystemMetrics(int32_t nIndex) noexcept {
+    switch (nIndex) {
+        case 0: return 1920; // SM_CXSCREEN
+        case 1: return 1080; // SM_CYSCREEN
+        case 2: return 0;    // SM_CXVSCROLL
+        case 3: return 0;    // SM_CYHSCROLL
+        case 4: return 32;   // SM_CYCAPTION
+        default: return 0;
+    }
+}
+
+inline win32::HWND SetFocus(win32::HWND hWnd) noexcept {
+    return hWnd;
+}
+
+inline win32::HWND GetFocus() noexcept {
+    return reinterpret_cast<win32::HWND>(static_cast<uintptr_t>(0x100));
+}
+
+inline win32::BOOL EnableWindow(win32::HWND /*hWnd*/, win32::BOOL /*bEnable*/) noexcept {
+    return win32::FALSE; // previously enabled
+}
+
+inline win32::BOOL IsWindowEnabled(win32::HWND /*hWnd*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL SetWindowTextW(win32::HWND /*hWnd*/, const wchar_t* /*lpString*/) noexcept {
+    return win32::TRUE;
+}
+
+inline int32_t GetWindowTextW(win32::HWND /*hWnd*/, wchar_t* lpString, int32_t nMaxCount) noexcept {
+    if (lpString && nMaxCount > 0) {
+        *lpString = L'\0';
+    }
+    return 0;
+}
+
+inline int32_t GetWindowTextLengthW(win32::HWND /*hWnd*/) noexcept {
+    return 0;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -1273,6 +1331,16 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "CloseDesktop", reinterpret_cast<void*>(CloseDesktop));
     ldr.registerExport("user32.dll", "MessageBoxW", reinterpret_cast<void*>(MessageBoxW));
     ldr.registerExport("user32.dll", "MessageBoxA", reinterpret_cast<void*>(MessageBoxA));
+    ldr.registerExport("user32.dll", "CharUpperW", reinterpret_cast<void*>(CharUpperW));
+    ldr.registerExport("user32.dll", "GetDesktopWindow", reinterpret_cast<void*>(GetDesktopWindow));
+    ldr.registerExport("user32.dll", "GetSystemMetrics", reinterpret_cast<void*>(GetSystemMetrics));
+    ldr.registerExport("user32.dll", "SetFocus", reinterpret_cast<void*>(SetFocus));
+    ldr.registerExport("user32.dll", "GetFocus", reinterpret_cast<void*>(GetFocus));
+    ldr.registerExport("user32.dll", "EnableWindow", reinterpret_cast<void*>(EnableWindow));
+    ldr.registerExport("user32.dll", "IsWindowEnabled", reinterpret_cast<void*>(IsWindowEnabled));
+    ldr.registerExport("user32.dll", "SetWindowTextW", reinterpret_cast<void*>(SetWindowTextW));
+    ldr.registerExport("user32.dll", "GetWindowTextW", reinterpret_cast<void*>(GetWindowTextW));
+    ldr.registerExport("user32.dll", "GetWindowTextLengthW", reinterpret_cast<void*>(GetWindowTextLengthW));
 }
 
 } // namespace micant::user32
