@@ -13,6 +13,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <atomic>
 
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
@@ -1187,6 +1188,138 @@ inline int32_t IsTextUnicode(const void* lpv, int iSize, int* lpiResult) noexcep
     return hasZero ? 1 : 0;
 }
 
+inline win32::BOOL CreateWellKnownSid(win32::DWORD /*WellKnownSidType*/, void* /*pContextSid*/, void* pSid, win32::DWORD* cbSid) noexcept {
+    if (!cbSid) return win32::FALSE;
+    if (!pSid || *cbSid < 28) {
+        *cbSid = 28;
+        return win32::FALSE;
+    }
+    // Create standard Local System SID S-1-5-18
+    uint8_t* b = reinterpret_cast<uint8_t*>(pSid);
+    std::memset(b, 0, 28);
+    b[0] = 1; // Revision
+    b[1] = 1; // SubAuthorityCount
+    b[7] = 5; // IdentifierAuthority (NT Authority)
+    *reinterpret_cast<uint32_t*>(&b[8]) = 18; // SECURITY_LOCAL_SYSTEM_RID
+    *cbSid = 28;
+    return win32::TRUE;
+}
+
+inline std::atomic<uint32_t> g_luidCounter{1000};
+
+inline win32::BOOL AllocateLocallyUniqueId(void* Luid) noexcept {
+    if (!Luid) return win32::FALSE;
+    uint32_t* p = reinterpret_cast<uint32_t*>(Luid);
+    p[0] = g_luidCounter.fetch_add(1);
+    p[1] = 0;
+    return win32::TRUE;
+}
+
+inline win32::BOOL CredReadW([[maybe_unused]] LPCWSTR TargetName,
+                             [[maybe_unused]] win32::DWORD Type,
+                             [[maybe_unused]] win32::DWORD Flags,
+                             void** Credential) noexcept {
+    if (Credential) *Credential = nullptr;
+    win32::SetLastError(1168); // ERROR_NOT_FOUND
+    return win32::FALSE;
+}
+
+inline void CredFree([[maybe_unused]] void* Buffer) noexcept {
+}
+
+inline win32::BOOL CredWriteW([[maybe_unused]] void* Credential,
+                              [[maybe_unused]] win32::DWORD Flags) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL CredDeleteW([[maybe_unused]] LPCWSTR TargetName,
+                               [[maybe_unused]] win32::DWORD Type,
+                               [[maybe_unused]] win32::DWORD Flags) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL DuplicateTokenEx(win32::HANDLE hExistingToken,
+                                    [[maybe_unused]] win32::DWORD dwDesiredAccess,
+                                    [[maybe_unused]] void* lpTokenAttributes,
+                                    [[maybe_unused]] int ImpersonationLevel,
+                                    [[maybe_unused]] int TokenType,
+                                    win32::HANDLE* phNewToken) noexcept {
+    if (phNewToken) {
+        *phNewToken = hExistingToken ? hExistingToken : reinterpret_cast<win32::HANDLE>(0x00040001);
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL ImpersonateLoggedOnUser([[maybe_unused]] win32::HANDLE hToken) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL RevertToSelf() noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL LogonUserExW([[maybe_unused]] LPCWSTR lpszUsername,
+                                [[maybe_unused]] LPCWSTR lpszDomain,
+                                [[maybe_unused]] LPCWSTR lpszPassword,
+                                [[maybe_unused]] win32::DWORD dwLogonType,
+                                [[maybe_unused]] win32::DWORD dwLogonProvider,
+                                win32::HANDLE* phToken,
+                                [[maybe_unused]] void** ppLogonSid,
+                                [[maybe_unused]] void** ppProfileBuffer,
+                                [[maybe_unused]] win32::DWORD* pdwProfileLength,
+                                [[maybe_unused]] void* pQuotaLimits) noexcept {
+    if (phToken) {
+        *phToken = reinterpret_cast<win32::HANDLE>(0x00040002);
+    }
+    return win32::TRUE;
+}
+
+inline win32::DWORD SetEntriesInAclW([[maybe_unused]] uint32_t cCountOfExplicitEntries,
+                                     [[maybe_unused]] void* pListOfExplicitEntries,
+                                     void* OldAcl,
+                                     void** NewAcl) noexcept {
+    if (NewAcl) {
+        *NewAcl = OldAcl;
+    }
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::BOOL SetSecurityDescriptorSacl([[maybe_unused]] void* pSecurityDescriptor,
+                                             [[maybe_unused]] win32::BOOL bSaclPresent,
+                                             [[maybe_unused]] void* pSacl,
+                                             [[maybe_unused]] win32::BOOL bSaclDefaulted) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL SetTokenInformation([[maybe_unused]] win32::HANDLE TokenHandle,
+                                        [[maybe_unused]] int TokenInformationClass,
+                                        [[maybe_unused]] void* TokenInformation,
+                                        [[maybe_unused]] win32::DWORD TokenInformationLength) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL CryptSetProvParam([[maybe_unused]] uintptr_t hProv,
+                                     [[maybe_unused]] win32::DWORD dwParam,
+                                     [[maybe_unused]] const uint8_t* pbData,
+                                     [[maybe_unused]] win32::DWORD dwFlags) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL CryptSignHashA([[maybe_unused]] uintptr_t hHash,
+                                  [[maybe_unused]] win32::DWORD dwKeySpec,
+                                  [[maybe_unused]] const char* sDescription,
+                                  [[maybe_unused]] win32::DWORD dwFlags,
+                                  uint8_t* pbSignature,
+                                  win32::DWORD* pdwSigLen) noexcept {
+    if (!pdwSigLen) return win32::FALSE;
+    if (!pbSignature) {
+        *pdwSigLen = 64;
+        return win32::TRUE;
+    }
+    std::memset(pbSignature, 0xAA, *pdwSigLen);
+    return win32::TRUE;
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("advapi32.dll", "CryptAcquireContextA", reinterpret_cast<void*>(CryptAcquireContextA));
@@ -1249,6 +1382,24 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "RegEnumValueW", reinterpret_cast<void*>(RegEnumValueW));
     ldr.registerExport("advapi32.dll", "RegQueryInfoKeyW", reinterpret_cast<void*>(RegQueryInfoKeyW));
     ldr.registerExport("advapi32.dll", "RegGetValueW", reinterpret_cast<void*>(RegGetValueW));
+
+    // Graduate Security and Crypto APIs
+    ldr.registerExport("advapi32.dll", "CreateWellKnownSid", reinterpret_cast<void*>(CreateWellKnownSid));
+    ldr.registerExport("api-ms-win-security-base-l1-1-0.dll", "CreateWellKnownSid", reinterpret_cast<void*>(CreateWellKnownSid));
+    ldr.registerExport("advapi32.dll", "AllocateLocallyUniqueId", reinterpret_cast<void*>(AllocateLocallyUniqueId));
+    ldr.registerExport("advapi32.dll", "CredReadW", reinterpret_cast<void*>(CredReadW));
+    ldr.registerExport("advapi32.dll", "CredFree", reinterpret_cast<void*>(CredFree));
+    ldr.registerExport("advapi32.dll", "CredWriteW", reinterpret_cast<void*>(CredWriteW));
+    ldr.registerExport("advapi32.dll", "CredDeleteW", reinterpret_cast<void*>(CredDeleteW));
+    ldr.registerExport("advapi32.dll", "DuplicateTokenEx", reinterpret_cast<void*>(DuplicateTokenEx));
+    ldr.registerExport("advapi32.dll", "ImpersonateLoggedOnUser", reinterpret_cast<void*>(ImpersonateLoggedOnUser));
+    ldr.registerExport("advapi32.dll", "RevertToSelf", reinterpret_cast<void*>(RevertToSelf));
+    ldr.registerExport("advapi32.dll", "LogonUserExW", reinterpret_cast<void*>(LogonUserExW));
+    ldr.registerExport("advapi32.dll", "SetEntriesInAclW", reinterpret_cast<void*>(SetEntriesInAclW));
+    ldr.registerExport("advapi32.dll", "SetSecurityDescriptorSacl", reinterpret_cast<void*>(SetSecurityDescriptorSacl));
+    ldr.registerExport("advapi32.dll", "SetTokenInformation", reinterpret_cast<void*>(SetTokenInformation));
+    ldr.registerExport("advapi32.dll", "CryptSetProvParam", reinterpret_cast<void*>(CryptSetProvParam));
+    ldr.registerExport("advapi32.dll", "CryptSignHashA", reinterpret_cast<void*>(CryptSignHashA));
 
     // Initialize SCM daemon
     scm::ServiceControlManager::get().initialize();

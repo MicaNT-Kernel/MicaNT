@@ -2133,6 +2133,55 @@ inline NTSTATUS NCryptImportKey(
     return STATUS_SUCCESS;
 }
 
+inline NTSTATUS NCryptDecrypt(
+    [[maybe_unused]] uintptr_t hKey,
+    const uint8_t* pbInput,
+    uint32_t cbInput,
+    [[maybe_unused]] void* pPaddingInfo,
+    uint8_t* pbOutput,
+    uint32_t cbOutput,
+    uint32_t* pcbResult,
+    [[maybe_unused]] uint32_t dwFlags
+) noexcept {
+    if (pcbResult) *pcbResult = cbInput;
+    if (pbOutput && cbOutput >= cbInput && pbInput) {
+        std::memcpy(pbOutput, pbInput, cbInput);
+    }
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS NCryptGetProperty(
+    [[maybe_unused]] uintptr_t hObject,
+    [[maybe_unused]] const wchar_t* pszProperty,
+    uint8_t* pbOutput,
+    uint32_t cbOutput,
+    uint32_t* pcbResult,
+    [[maybe_unused]] uint32_t dwFlags
+) noexcept {
+    if (pcbResult) *pcbResult = sizeof(uint32_t);
+    if (pbOutput && cbOutput >= sizeof(uint32_t)) {
+        *reinterpret_cast<uint32_t*>(pbOutput) = 2048; // Standard 2048-bit key length
+    }
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS NCryptSignHash(
+    [[maybe_unused]] uintptr_t hKey,
+    [[maybe_unused]] void* pPaddingInfo,
+    [[maybe_unused]] const uint8_t* pbHashValue,
+    [[maybe_unused]] uint32_t cbHashValue,
+    uint8_t* pbSignature,
+    uint32_t cbSignature,
+    uint32_t* pcbResult,
+    [[maybe_unused]] uint32_t dwFlags
+) noexcept {
+    if (pcbResult) *pcbResult = 256;
+    if (pbSignature && cbSignature >= 256) {
+        std::memset(pbSignature, 0x55, 256);
+    }
+    return STATUS_SUCCESS;
+}
+
 // ============================================================================
 // 11. Subsystem Export Registration
 // ============================================================================
@@ -2168,6 +2217,12 @@ inline void InitializeBCryptSubsystemExports() {
     ldr.registerExport("ncrypt.dll", "NCryptDeleteKey", reinterpret_cast<void*>(NCryptDeleteKey));
     ldr.registerExport("ncrypt.dll", "NCryptExportKey", reinterpret_cast<void*>(NCryptExportKey));
     ldr.registerExport("ncrypt.dll", "NCryptImportKey", reinterpret_cast<void*>(NCryptImportKey));
+    ldr.registerExport("ncrypt.dll", "NCryptDecrypt", reinterpret_cast<void*>(NCryptDecrypt));
+    ldr.registerExport("ncrypt.dll", "NCryptGetProperty", reinterpret_cast<void*>(NCryptGetProperty));
+    ldr.registerExport("ncrypt.dll", "NCryptSignHash", reinterpret_cast<void*>(NCryptSignHash));
+    ldr.registerExport("ncrypt.dll", "BCryptOpenAlgorithmProvider", reinterpret_cast<void*>(BCryptOpenAlgorithmProvider));
+    ldr.registerExport("ncrypt.dll", "BCryptCloseAlgorithmProvider", reinterpret_cast<void*>(BCryptCloseAlgorithmProvider));
+    ldr.registerExport("ncrypt.dll", "BCryptGenRandom", reinterpret_cast<void*>(BCryptGenRandom));
 }
 
 } // namespace micant::crypto

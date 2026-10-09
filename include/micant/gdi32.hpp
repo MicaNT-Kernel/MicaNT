@@ -1345,6 +1345,63 @@ inline BOOL RoundRect(HDC hdc, int left, int top, int right, int bottom, int /*w
     return Rectangle(hdc, left, top, right, bottom);
 }
 
+inline HRGN CreatePolygonRgn([[maybe_unused]] const void* lppt,
+                             [[maybe_unused]] int cPoints,
+                             [[maybe_unused]] int fnPolyFillMode) noexcept {
+    return reinterpret_cast<HRGN>(0x00020001);
+}
+
+inline BOOL PolyPolygon([[maybe_unused]] HDC hdc,
+                        [[maybe_unused]] const void* apt,
+                        [[maybe_unused]] const int* asz,
+                        [[maybe_unused]] int csz) noexcept {
+    return TRUE;
+}
+
+inline BOOL EqualRgn(HRGN hSrcRgn1, HRGN hSrcRgn2) noexcept {
+    return (hSrcRgn1 == hSrcRgn2) ? TRUE : FALSE;
+}
+
+inline BOOL PtInRegion([[maybe_unused]] HRGN hrgn,
+                       [[maybe_unused]] int x,
+                       [[maybe_unused]] int y) noexcept {
+    return TRUE;
+}
+
+inline BOOL RectInRegion([[maybe_unused]] HRGN hrgn,
+                         [[maybe_unused]] const void* lprc) noexcept {
+    return TRUE;
+}
+
+inline void* GetEnhMetaFileW([[maybe_unused]] LPCWSTR lpName) noexcept {
+    return reinterpret_cast<void*>(0x00030001);
+}
+
+inline void* SetMetaFileBitsEx([[maybe_unused]] UINT cbBuffer,
+                               [[maybe_unused]] const uint8_t* lpData) noexcept {
+    return reinterpret_cast<void*>(0x00030002);
+}
+
+inline int GetGraphicsMode([[maybe_unused]] HDC hdc) noexcept {
+    return 1; // GM_COMPATIBLE
+}
+
+inline BOOL GetWorldTransform([[maybe_unused]] HDC hdc, void* lpXform) noexcept {
+    if (lpXform) {
+        float* f = reinterpret_cast<float*>(lpXform);
+        f[0] = 1.0f; f[1] = 0.0f; // eM11, eM12
+        f[2] = 0.0f; f[3] = 1.0f; // eM21, eM22
+        f[4] = 0.0f; f[5] = 0.0f; // eDx, eDy
+    }
+    return TRUE;
+}
+
+inline BOOL ModifyWorldTransform([[maybe_unused]] HDC hdc,
+                                 [[maybe_unused]] const void* lpXform,
+                                 [[maybe_unused]] DWORD iMode) noexcept {
+    return TRUE;
+}
+
 // ============================================================================
 // 6. Subsystem Export Registration
 // ============================================================================
@@ -1442,6 +1499,16 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "ExcludeClipRect", reinterpret_cast<void*>(ExcludeClipRect));
     ldr.registerExport("gdi32.dll", "CombineRgn", reinterpret_cast<void*>(CombineRgn));
     ldr.registerExport("gdi32.dll", "RoundRect", reinterpret_cast<void*>(RoundRect));
+    ldr.registerExport("gdi32.dll", "CreatePolygonRgn", reinterpret_cast<void*>(CreatePolygonRgn));
+    ldr.registerExport("gdi32.dll", "PolyPolygon", reinterpret_cast<void*>(PolyPolygon));
+    ldr.registerExport("gdi32.dll", "EqualRgn", reinterpret_cast<void*>(EqualRgn));
+    ldr.registerExport("gdi32.dll", "PtInRegion", reinterpret_cast<void*>(PtInRegion));
+    ldr.registerExport("gdi32.dll", "RectInRegion", reinterpret_cast<void*>(RectInRegion));
+    ldr.registerExport("gdi32.dll", "GetEnhMetaFileW", reinterpret_cast<void*>(GetEnhMetaFileW));
+    ldr.registerExport("gdi32.dll", "SetMetaFileBitsEx", reinterpret_cast<void*>(SetMetaFileBitsEx));
+    ldr.registerExport("gdi32.dll", "GetGraphicsMode", reinterpret_cast<void*>(GetGraphicsMode));
+    ldr.registerExport("gdi32.dll", "GetWorldTransform", reinterpret_cast<void*>(GetWorldTransform));
+    ldr.registerExport("gdi32.dll", "ModifyWorldTransform", reinterpret_cast<void*>(ModifyWorldTransform));
 }
 
 } // namespace micant::gdi32

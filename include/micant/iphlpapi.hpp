@@ -157,10 +157,30 @@ inline uint32_t GetNetworkParams(FIXED_INFO* pFixedInfo, uint32_t* pOutBufLen) n
     return ERROR_SUCCESS;
 }
 
+struct NET_LUID {
+    uint64_t Value;
+};
+using PNET_LUID = NET_LUID*;
+using NETIO_STATUS = uint32_t;
+
+inline NETIO_STATUS ConvertInterfaceGuidToLuid(const GUID* InterfaceGuid, PNET_LUID InterfaceLuid) noexcept {
+    if (!InterfaceGuid || !InterfaceLuid) return 87; // ERROR_INVALID_PARAMETER
+    InterfaceLuid->Value = (static_cast<uint64_t>(InterfaceGuid->Data1)) | 0x0100000000000000ULL;
+    return 0; // NO_ERROR
+}
+
+inline NETIO_STATUS ConvertInterfaceLuidToAlias(const NET_LUID* InterfaceLuid, wchar_t* InterfaceAlias, size_t Length) noexcept {
+    if (!InterfaceLuid || !InterfaceAlias || Length < 5) return 87;
+    std::swprintf(InterfaceAlias, Length, L"eth0");
+    return 0;
+}
+
 inline void InitializeIpHlpApiSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("iphlpapi.dll", "GetAdaptersInfo", reinterpret_cast<void*>(GetAdaptersInfo));
     ldr.registerExport("iphlpapi.dll", "GetNetworkParams", reinterpret_cast<void*>(GetNetworkParams));
+    ldr.registerExport("iphlpapi.dll", "ConvertInterfaceGuidToLuid", reinterpret_cast<void*>(ConvertInterfaceGuidToLuid));
+    ldr.registerExport("iphlpapi.dll", "ConvertInterfaceLuidToAlias", reinterpret_cast<void*>(ConvertInterfaceLuidToAlias));
 }
 
 inline void InitializeIpHelperApi() {

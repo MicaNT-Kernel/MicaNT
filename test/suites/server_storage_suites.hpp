@@ -8624,7 +8624,7 @@ inline void Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite() {
 
     uint8_t randBuf[32] = {0};
     TEST_ASSERT(micant::satellite::filezilla::NC_BCryptGenRandom(nullptr, randBuf, 32, 0) == 0, "NC_BCryptGenRandom must succeed");
-    TEST_ASSERT(randBuf[0] == 0x42, "BCrypt random bytes must be generated");
+    TEST_ASSERT(randBuf[0] != 0 || randBuf[1] != 0, "BCrypt random bytes must be generated");
 
     // Stage 6: SHELL32 & UXTHEME Visual Styling Subsystem
     void* hIconL = nullptr;

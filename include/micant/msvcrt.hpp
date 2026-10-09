@@ -29,6 +29,12 @@
 #include <clocale>
 #include <csignal>
 #include <ctime>
+#include <cmath>
+#include <new>
+#include <exception>
+#include <atomic>
+#include <iostream>
+
 
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
@@ -733,10 +739,546 @@ inline MicaFile* _fdopen(int fd, const char* /*mode*/) noexcept {
 // 7. Dynamic Loader Registration for msvcrt.dll
 // ============================================================================
 
+
+// ============================================================================
+// 7. Consolidated Universal C Runtime & MSVC STL Extensions
+// ============================================================================
+
+// --- Functions migrated from satellite_filezilla.hpp ---
+
+inline double CRT_cosh(double x) noexcept { return std::cosh(x); }
+inline double CRT_sinh(double x) noexcept { return std::sinh(x); }
+inline double CRT_tanh(double x) noexcept { return std::tanh(x); }
+inline double CRT_atof(const char* nptr) noexcept { return std::atof(nptr); }
+inline long   CRT_atol(const char* nptr) noexcept { return std::atol(nptr); }
+inline double CRT_difftime(time_t time1, time_t time0) noexcept { return std::difftime(time1, time0); }
+inline int    CRT_raise(int sig) noexcept { return 0; }
+
+inline wchar_t* CRT_wcsdup(const wchar_t* str) noexcept {
+    if (!str) return nullptr;
+    size_t len = std::wcslen(str);
+    wchar_t* dup = static_cast<wchar_t*>(std::malloc((len + 1) * sizeof(wchar_t)));
+    if (dup) std::wmemcpy(dup, str, len + 1);
+    return dup;
+}
+
+inline wchar_t* CRT_wcsncpy(wchar_t* dest, const wchar_t* src, size_t count) noexcept {
+    return std::wcsncpy(dest, src, count);
+}
+
+inline wchar_t* CRT_wcscat(wchar_t* dest, const wchar_t* src) noexcept {
+    return std::wcscat(dest, src);
+}
+
+inline wchar_t* CRT_wcschr(const wchar_t* str, wchar_t ch) noexcept {
+    return const_cast<wchar_t*>(std::wcschr(str, ch));
+}
+
+inline wchar_t* CRT_wcspbrk(const wchar_t* str, const wchar_t* strCharSet) noexcept {
+    return const_cast<wchar_t*>(std::wcspbrk(str, strCharSet));
+}
+
+inline size_t CRT_wcsspn(const wchar_t* str, const wchar_t* strCharSet) noexcept {
+    return std::wcsspn(str, strCharSet);
+}
+
+inline size_t CRT_wcstombs(char* mbstr, const wchar_t* wcstr, size_t count) noexcept {
+    return std::wcstombs(mbstr, wcstr, count);
+}
+
+inline unsigned long CRT_wcstoul(const wchar_t* str, wchar_t** endptr, int base) noexcept {
+    return std::wcstoul(str, endptr, base);
+}
+
+inline int CRT_wtoi(const wchar_t* str) noexcept {
+    return str ? static_cast<int>(std::wcstol(str, nullptr, 10)) : 0;
+}
+
+inline int CRT_wcsnicmp(const wchar_t* string1, const wchar_t* string2, size_t count) noexcept {
+    if (!string1 || !string2 || count == 0) return 0;
+    for (size_t i = 0; i < count; ++i) {
+        wchar_t c1 = static_cast<wchar_t>(std::towlower(string1[i]));
+        wchar_t c2 = static_cast<wchar_t>(std::towlower(string2[i]));
+        if (c1 != c2) return (c1 < c2) ? -1 : 1;
+        if (c1 == L'\0') break;
+    }
+    return 0;
+}
+
+inline void* CRT_aligned_malloc(size_t size, size_t alignment) noexcept {
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0) return nullptr;
+    size_t total = size + alignment + sizeof(void*);
+    void* raw = std::malloc(total);
+    if (!raw) return nullptr;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(raw) + sizeof(void*);
+    uintptr_t aligned = (addr + alignment - 1) & ~(alignment - 1);
+    reinterpret_cast<void**>(aligned)[-1] = raw;
+    return reinterpret_cast<void*>(aligned);
+}
+
+inline void CRT_aligned_free(void* ptr) noexcept {
+    if (ptr) {
+        void* raw = reinterpret_cast<void**>(ptr)[-1];
+        std::free(raw);
+    }
+}
+
+// Wide filesystem & path functions
+inline int CRT_waccess([[maybe_unused]] const wchar_t* path, [[maybe_unused]] int mode) noexcept {
+    return 0;
+}
+
+inline int CRT_wchdir([[maybe_unused]] const wchar_t* dirname) noexcept {
+    return 0;
+}
+
+inline int CRT_wchmod([[maybe_unused]] const wchar_t* filename, [[maybe_unused]] int pmode) noexcept {
+    return 0;
+}
+
+inline wchar_t* CRT_wfullpath(wchar_t* absPath, const wchar_t* relPath, size_t maxLength) noexcept {
+    if (!absPath && maxLength == 0) {
+        return CRT_wcsdup(relPath ? relPath : L"C:\\");
+    }
+    if (absPath && relPath && maxLength > 0) {
+        size_t len = std::wcslen(relPath);
+        if (len >= maxLength) len = maxLength - 1;
+        std::wmemcpy(absPath, relPath, len);
+        absPath[len] = L'\0';
+        return absPath;
+    }
+    return nullptr;
+}
+
+inline wchar_t* CRT_wgetcwd(wchar_t* buffer, int maxlen) noexcept {
+    const wchar_t cwd[] = L"C:\\MicaNT";
+    if (!buffer) return CRT_wcsdup(cwd);
+    if (maxlen > 0) {
+        size_t len = std::wcslen(cwd);
+        if (static_cast<int>(len) >= maxlen) len = maxlen - 1;
+        std::wmemcpy(buffer, cwd, len);
+        buffer[len] = L'\0';
+        return buffer;
+    }
+    return nullptr;
+}
+
+inline wchar_t* CRT_wgetenv([[maybe_unused]] const wchar_t* varname) noexcept {
+    return nullptr;
+}
+
+inline int CRT_wputenv([[maybe_unused]] const wchar_t* envstring) noexcept {
+    return 0;
+}
+
+inline int CRT_wrename([[maybe_unused]] const wchar_t* oldname, [[maybe_unused]] const wchar_t* newname) noexcept {
+    return 0;
+}
+
+inline int CRT_wutime64([[maybe_unused]] const wchar_t* filename, [[maybe_unused]] void* times) noexcept {
+    return 0;
+}
+
+inline intptr_t CRT_wfindfirst64([[maybe_unused]] const wchar_t* filespec, [[maybe_unused]] void* fileinfo) noexcept {
+    return -1; // No files found
+}
+
+inline int CRT_wfindnext64([[maybe_unused]] intptr_t handle, [[maybe_unused]] void* fileinfo) noexcept {
+    return -1;
+}
+
+inline int CRT_findclose([[maybe_unused]] intptr_t handle) noexcept {
+    return 0;
+}
+
+inline char* CRT_getcwd(char* buffer, int maxlen) noexcept {
+    const char cwd[] = "C:\\MicaNT";
+    if (!buffer) {
+        char* p = static_cast<char*>(std::malloc(sizeof(cwd)));
+        if (p) std::memcpy(p, cwd, sizeof(cwd));
+        return p;
+    }
+    if (maxlen > 0) {
+        size_t len = std::strlen(cwd);
+        if (static_cast<int>(len) >= maxlen) len = maxlen - 1;
+        std::memcpy(buffer, cwd, len);
+        buffer[len] = '\0';
+        return buffer;
+    }
+    return nullptr;
+}
+
+inline int CRT_getdrive() noexcept { return 3; } // Drive C: (1 = A, 2 = B, 3 = C)
+inline int CRT_chdrive([[maybe_unused]] int drive) noexcept { return 0; }
+inline int CRT_mkdir([[maybe_unused]] const char* dirname) noexcept { return 0; }
+inline int CRT_commit([[maybe_unused]] int fd) noexcept { return 0; }
+inline int CRT_dup2([[maybe_unused]] int fd1, [[maybe_unused]] int fd2) noexcept { return fd2; }
+inline int64_t CRT_filelengthi64([[maybe_unused]] int fd) noexcept { return 0; }
+inline int64_t CRT_telli64([[maybe_unused]] int fd) noexcept { return 0; }
+
+// Process & Thread
+inline uintptr_t CRT_beginthread(void (*start_address)(void*),
+                                 [[maybe_unused]] unsigned stack_size,
+                                 void* arglist) noexcept {
+    if (start_address) {
+        // Mock valid thread handle
+        return 0x00050001;
+    }
+    return static_cast<uintptr_t>(-1);
+}
+
+inline void CRT_endthreadex([[maybe_unused]] unsigned retval) noexcept {
+}
+
+// Wide Stdio
+inline wint_t CRT_fgetwc([[maybe_unused]] std::FILE* stream) noexcept { return WEOF; }
+inline int    CRT_fputws([[maybe_unused]] const wchar_t* str, [[maybe_unused]] std::FILE* stream) noexcept { return 0; }
+inline wint_t CRT_getwc([[maybe_unused]] std::FILE* stream) noexcept { return WEOF; }
+inline wint_t CRT_putwc(wchar_t c, [[maybe_unused]] std::FILE* stream) noexcept { return c; }
+inline wint_t CRT_ungetwc(wint_t c, [[maybe_unused]] std::FILE* stream) noexcept { return c; }
+inline int    CRT_putws([[maybe_unused]] const wchar_t* str) noexcept { return 0; }
+inline int    CRT_fseek([[maybe_unused]] std::FILE* stream, [[maybe_unused]] long offset, [[maybe_unused]] int origin) noexcept { return 0; }
+inline long   CRT_ftell([[maybe_unused]] std::FILE* stream) noexcept { return 0; }
+inline int    CRT_fgetpos([[maybe_unused]] std::FILE* stream, fpos_t* pos) noexcept { if (pos) *pos = 0; return 0; }
+inline int    CRT_fsetpos([[maybe_unused]] std::FILE* stream, const fpos_t* pos) noexcept { return 0; }
+inline int    CRT_remove([[maybe_unused]] const char* path) noexcept { return 0; }
+inline int    CRT_setmaxstdio(int newmax) noexcept { return newmax; }
+inline int    CRT_getmaxstdio() noexcept { return 2048; }
+inline void   CRT_wperror([[maybe_unused]] const wchar_t* prefix) noexcept {}
+
+// Character classification
+inline int CRT_isalnum(int c) noexcept { return std::isalnum(c); }
+inline int CRT_isalpha(int c) noexcept { return std::isalpha(c); }
+inline int CRT_isspace(int c) noexcept { return std::isspace(c); }
+inline int CRT_iswalnum(wint_t c) noexcept { return std::iswalnum(c); }
+inline int CRT_iswalpha(wint_t c) noexcept { return std::iswalpha(c); }
+inline int CRT_iswdigit(wint_t c) noexcept { return std::iswdigit(c); }
+inline int CRT_iswprint(wint_t c) noexcept { return std::iswprint(c); }
+inline int CRT_iswpunct(wint_t c) noexcept { return std::iswpunct(c); }
+inline int CRT_iswxdigit(wint_t c) noexcept { return std::iswxdigit(c); }
+
+// Misc CRT
+inline void CRT_assert([[maybe_unused]] const char* expr,
+                       [[maybe_unused]] const char* filename,
+                       [[maybe_unused]] unsigned lineno) noexcept {}
+
+inline int CRT_setjmp([[maybe_unused]] void* env) noexcept { return 0; }
+inline int64_t CRT_strtoi64(const char* nptr, char** endptr, int base) noexcept { return std::strtoll(nptr, endptr, base); }
+inline uint64_t CRT_strtoui64(const char* nptr, char** endptr, int base) noexcept { return std::strtoull(nptr, endptr, base); }
+inline char* CRT_ctime64(const int64_t* timer) noexcept {
+    static char buf[32] = "Thu Jan 01 00:00:00 1970\n";
+    return buf;
+}
+
+// --- Functions migrated from satellite_wireshark.hpp ---
+// 5. Universal C Runtime (UCRT) - Math Subsystem
+// ----------------------------------------------------------------------------
+
+inline double CRT_sin(double x) noexcept { return std::sin(x); }
+inline double CRT_cos(double x) noexcept { return std::cos(x); }
+inline double CRT_tan(double x) noexcept { return std::tan(x); }
+inline double CRT_asin(double x) noexcept { return std::asin(x); }
+inline double CRT_acos(double x) noexcept { return std::acos(x); }
+inline double CRT_atan(double x) noexcept { return std::atan(x); }
+inline double CRT_atan2(double y, double x) noexcept { return std::atan2(y, x); }
+inline double CRT_exp(double x) noexcept { return std::exp(x); }
+inline double CRT_log(double x) noexcept { return std::log(x); }
+inline double CRT_log10(double x) noexcept { return std::log10(x); }
+inline double CRT_log2(double x) noexcept { return std::log2(x); }
+inline double CRT_pow(double x, double y) noexcept { return std::pow(x, y); }
+inline double CRT_sqrt(double x) noexcept { return std::sqrt(x); }
+inline double CRT_cbrt(double x) noexcept { return std::cbrt(x); }
+inline double CRT_ceil(double x) noexcept { return std::ceil(x); }
+inline double CRT_floor(double x) noexcept { return std::floor(x); }
+inline double CRT_round(double x) noexcept { return std::round(x); }
+inline long CRT_lround(double x) noexcept { return std::lround(x); }
+inline double CRT_fmod(double x, double y) noexcept { return std::fmod(x, y); }
+inline double CRT_modf(double x, double* iptr) noexcept { return std::modf(x, iptr); }
+inline double CRT_ldexp(double x, int exp) noexcept { return std::ldexp(x, exp); }
+inline double CRT_copysign(double x, double y) noexcept { return std::copysign(x, y); }
+inline int CRT_dclass(double x) noexcept { return std::fpclassify(x); }
+inline int CRT_dpcomp(double x, double y) noexcept { return (x < y) ? -1 : ((x > y) ? 1 : 0); }
+
+// ----------------------------------------------------------------------------
+// 6. UCRT - String, Memory & Character Subsystem
+// ----------------------------------------------------------------------------
+
+inline int CRT_tolower(int c) noexcept { return std::tolower(c); }
+inline int CRT_toupper(int c) noexcept { return std::toupper(c); }
+inline int CRT_isdigit(int c) noexcept { return std::isdigit(c); }
+inline int CRT_islower(int c) noexcept { return std::islower(c); }
+inline int CRT_isupper(int c) noexcept { return std::isupper(c); }
+inline int CRT_isxdigit(int c) noexcept { return std::isxdigit(c); }
+inline int CRT_iswspace(wint_t wc) noexcept { return std::iswspace(wc); }
+
+inline size_t CRT_strspn(const char* s, const char* accept) noexcept { return std::strspn(s, accept); }
+inline size_t CRT_strcspn(const char* s, const char* reject) noexcept { return std::strcspn(s, reject); }
+inline char* CRT_strpbrk(const char* s, const char* accept) noexcept { return const_cast<char*>(std::strpbrk(s, accept)); }
+inline char* CRT_strtok(char* str, const char* delim) noexcept { return std::strtok(str, delim); }
+inline size_t CRT_strnlen(const char* s, size_t maxlen) noexcept {
+    size_t i = 0;
+    while (i < maxlen && s && s[i]) ++i;
+    return i;
+}
+inline char* CRT_strncat(char* dest, const char* src, size_t n) noexcept { return std::strncat(dest, src, n); }
+inline int CRT_mblen(const char* s, size_t n) noexcept { return std::mblen(s, n); }
+inline int CRT_mbtowc(wchar_t* pwc, const char* s, size_t n) noexcept { return std::mbtowc(pwc, s, n); }
+
+inline errno_t CRT_wcscat_s(wchar_t* dest, size_t destsz, const wchar_t* src) noexcept {
+    if (!dest || !src || destsz == 0) return 22; // EINVAL
+    size_t dlen = std::wcslen(dest);
+    size_t slen = std::wcslen(src);
+    if (dlen + slen + 1 > destsz) return 34; // ERANGE
+    std::wcscpy(dest + dlen, src);
+    return 0;
+}
+
+// ----------------------------------------------------------------------------
+// 7. UCRT - Conversion, Utility & Heap Subsystem
+// ----------------------------------------------------------------------------
+
+inline long CRT_strtol(const char* str, char** endptr, int base) noexcept { return std::strtol(str, endptr, base); }
+inline int CRT_atoi(const char* str) noexcept { return std::atoi(str); }
+
+inline void* CRT_bsearch(const void* key, const void* base, size_t num, size_t size, int (*compar)(const void*, const void*)) noexcept {
+    return std::bsearch(key, base, num, size, compar);
+}
+inline void CRT_qsort(void* base, size_t num, size_t size, int (*compar)(const void*, const void*)) noexcept {
+    std::qsort(base, num, size, compar);
+}
+
+inline int CRT_callnewh(size_t) noexcept { return 0; }
+inline size_t CRT_msize(void* memblock) noexcept {
+    return memblock ? 4096 : 0;
+}
+
+// ----------------------------------------------------------------------------
+// 8. UCRT - Standard I/O Subsystem
+// ----------------------------------------------------------------------------
+
+inline int CRT_set_fmode(int) noexcept { return 0; }
+inline int CRT_open_osfhandle(intptr_t, int) noexcept { return 3; }
+inline int CRT_feof(FILE* stream) noexcept { return stream ? std::feof(stream) : 1; }
+inline int CRT_ferror(FILE* stream) noexcept { return stream ? std::ferror(stream) : 0; }
+inline void CRT_clearerr(FILE* stream) noexcept { if (stream) std::clearerr(stream); }
+inline int CRT_getc(FILE* stream) noexcept { return stream ? std::getc(stream) : -1; }
+inline int CRT_getchar() noexcept { return std::getchar(); }
+inline int CRT_putc(int ch, FILE* stream) noexcept { return stream ? std::putc(ch, stream) : -1; }
+inline char* CRT_fgets(char* str, int count, FILE* stream) noexcept { return stream ? std::fgets(str, count, stream) : nullptr; }
+inline size_t CRT_fread(void* ptr, size_t size, size_t count, FILE* stream) noexcept { return stream ? std::fread(ptr, size, count, stream) : 0; }
+inline void CRT_rewind(FILE* stream) noexcept { if (stream) std::rewind(stream); }
+inline int CRT_ungetc(int ch, FILE* stream) noexcept { return stream ? std::ungetc(ch, stream) : -1; }
+inline int CRT_fgetc_nolock(FILE* stream) noexcept { return stream ? std::getc(stream) : -1; }
+
+inline FILE* CRT_wfopen(const wchar_t*, const wchar_t*) noexcept { return nullptr; }
+inline FILE* CRT_wfreopen(const wchar_t*, const wchar_t*, FILE*) noexcept { return nullptr; }
+inline int CRT_wopen(const wchar_t*, int, ...) noexcept { return -1; }
+inline FILE* CRT_popen(const char*, const char*) noexcept { return nullptr; }
+inline int CRT_pclose(FILE*) noexcept { return 0; }
+
+inline int CRT_stdio_common_vsprintf(uint64_t, char* buffer, size_t max_count, const char* format, void*, va_list argptr) noexcept {
+    if (!buffer || max_count == 0) return 0;
+    return std::vsnprintf(buffer, max_count, format, argptr);
+}
+
+inline int CRT_stdio_common_vswprintf(uint64_t, wchar_t* buffer, size_t max_count, const wchar_t* format, void*, va_list argptr) noexcept {
+    if (!buffer || max_count == 0) return 0;
+    return std::vswprintf(buffer, max_count, format, argptr);
+}
+
+inline int CRT_stdio_common_vsscanf(uint64_t, const char* buffer, size_t, const char* format, void*, va_list argptr) noexcept {
+    return std::vsscanf(buffer, format, argptr);
+}
+
+inline int CRT_stdio_common_vfscanf(uint64_t, FILE* stream, const char* format, void*, va_list argptr) noexcept {
+    return std::vfscanf(stream, format, argptr);
+}
+
+// ----------------------------------------------------------------------------
+// 9. UCRT - Time & Date Subsystem
+// ----------------------------------------------------------------------------
+
+inline long CRT_timezone_val = 0;
+inline char CRT_tzname_std[] = "UTC";
+inline char CRT_tzname_dst[] = "UTC";
+inline char* CRT_tzname_arr[2] = { CRT_tzname_std, CRT_tzname_dst };
+
+inline long* CRT_timezone() noexcept { return &CRT_timezone_val; }
+inline char** CRT_tzname() noexcept { return CRT_tzname_arr; }
+inline void CRT_tzset() noexcept {}
+
+inline tm* CRT_localtime64(const time_t* timer) noexcept { return std::localtime(timer); }
+inline errno_t CRT_localtime64_s(tm* buf, const time_t* timer) noexcept {
+    if (!buf || !timer) return 22;
+    tm* res = std::localtime(timer);
+    if (!res) return 22;
+    *buf = *res;
+    return 0;
+}
+
+inline tm* CRT_gmtime64(const time_t* timer) noexcept { return std::gmtime(timer); }
+inline errno_t CRT_gmtime64_s(tm* buf, const time_t* timer) noexcept {
+    if (!buf || !timer) return 22;
+    tm* res = std::gmtime(timer);
+    if (!res) return 22;
+    *buf = *res;
+    return 0;
+}
+
+inline time_t CRT_mktime64(tm* timeptr) noexcept { return std::mktime(timeptr); }
+inline char* CRT_asctime(const tm* timeptr) noexcept { return std::asctime(timeptr); }
+
+struct timespec64 {
+    int64_t tv_sec;
+    long tv_nsec;
+};
+inline int CRT_timespec64_get(timespec64* ts, int) noexcept {
+    if (ts) {
+        ts->tv_sec = std::time(nullptr);
+        ts->tv_nsec = 0;
+        return 1;
+    }
+    return 0;
+}
+
+// ----------------------------------------------------------------------------
+// 10. UCRT - Filesystem, Process & Runtime Subsystem
+// ----------------------------------------------------------------------------
+
+inline int CRT_wmkdir(const wchar_t*) noexcept { return 0; }
+inline int CRT_wrmdir(const wchar_t*) noexcept { return 0; }
+inline int CRT_wremove(const wchar_t*) noexcept { return 0; }
+inline int CRT_wunlink(const wchar_t*) noexcept { return 0; }
+inline int CRT_wstat64(const wchar_t*, void*) noexcept { return 0; }
+
+inline int CRT_getch() noexcept { return 0; }
+inline intptr_t CRT_cwait(int*, intptr_t, int) noexcept { return 0; }
+
+inline int CRT_doserrno_val = 0;
+inline int* CRT_doserrno() noexcept { return &CRT_doserrno_val; }
+inline unsigned int CRT_fpe_flt_rounds() noexcept { return 1; }
+
+inline wchar_t* CRT_wargv_dummy[] = { const_cast<wchar_t*>(L"micant_app.exe"), nullptr };
+inline wchar_t** CRT_p_wargv() noexcept { return CRT_wargv_dummy; }
+inline int CRT_configure_wide_argv(int) noexcept { return 0; }
+inline int CRT_initialize_wide_environment() noexcept { return 0; }
+inline wchar_t** CRT_get_initial_wide_environment() noexcept { return nullptr; }
+inline char* CRT_get_narrow_winmain_command_line() noexcept { return const_cast<char*>(""); }
+
+inline void CRT_invalid_parameter_noinfo() noexcept {}
+inline void CRT_terminate() noexcept { std::abort(); }
+
+inline int CRT_initialize_onexit_table(void*) noexcept { return 0; }
+inline int CRT_register_onexit_function(void*, void*) noexcept { return 0; }
+inline int CRT_execute_onexit_table(void*) noexcept { return 0; }
+inline int CRT_crt_at_quick_exit(void*) noexcept { return 0; }
+inline int CRT_seh_filter_dll(unsigned long, void*) noexcept { return 0; }
+inline int CRT_register_thread_local_exe_atexit_callback(void*) noexcept { return 0; }
+
+// ----------------------------------------------------------------------------
+// 11. VCRuntime 140 / 140_1 & Exception Handling Subsystem
+// ----------------------------------------------------------------------------
+
+inline void* VCRT_memcpy(void* dest, const void* src, size_t n) noexcept { return std::memcpy(dest, src, n); }
+inline void* VCRT_memset(void* s, int c, size_t n) noexcept { return std::memset(s, c, n); }
+inline void* VCRT_memmove(void* dest, const void* src, size_t n) noexcept { return std::memmove(dest, src, n); }
+inline int VCRT_memcmp(const void* s1, const void* s2, size_t n) noexcept { return std::memcmp(s1, s2, n); }
+inline void* VCRT_memchr(const void* s, int c, size_t n) noexcept { return const_cast<void*>(std::memchr(s, c, n)); }
+
+inline char* VCRT_strchr(const char* s, int c) noexcept { return const_cast<char*>(std::strchr(s, c)); }
+inline char* VCRT_strrchr(const char* s, int c) noexcept { return const_cast<char*>(std::strrchr(s, c)); }
+inline char* VCRT_strstr(const char* haystack, const char* needle) noexcept { return const_cast<char*>(std::strstr(haystack, needle)); }
+
+inline void VCRT_CxxThrowException(void*, void*) noexcept { std::terminate(); }
+inline int VCRT_CxxFrameHandler4() noexcept { return 1; }
+inline int VCRT_C_specific_handler() noexcept { return 1; }
+inline void* VCRT_RTDynamicCast(void* inptr, int32_t, void*, void*, int32_t) noexcept { return inptr; }
+
+inline void* VCRT_current_exception() noexcept { return nullptr; }
+inline void* VCRT_current_exception_context() noexcept { return nullptr; }
+inline int VCRT_intrinsic_setjmp(void*) noexcept { return 0; }
+inline void VCRT_longjmp(void*, int) noexcept {}
+
+inline void VCRT_std_exception_copy(void*, void*) noexcept {}
+inline void VCRT_std_exception_destroy(void*) noexcept {}
+inline void VCRT_std_terminate() noexcept { std::terminate(); }
+inline bool VCRT_std_type_info_compare(const void* lhs, const void* rhs) noexcept { return lhs == rhs; }
+inline void VCRT_std_type_info_destroy_list(void*) noexcept {}
+inline void VCRT_purecall() noexcept { std::terminate(); }
+
+// ----------------------------------------------------------------------------
+// 12. MSVCP140 C++ Standard Library & Concurrency Subsystem
+// ----------------------------------------------------------------------------
+
+inline void MSVC_Xbad_alloc() { throw std::bad_alloc(); }
+inline void MSVC_Xbad_function_call() {}
+inline void MSVC_Throw_Cpp_error(int) {}
+inline void MSVC_Xlength_error(const char*) {}
+inline const char* MSVC_Syserror_map(int) noexcept { return "generic error"; }
+
+inline void MSVC_ExceptionPtrCreate(void*) noexcept {}
+inline void MSVC_ExceptionPtrDestroy(void*) noexcept {}
+inline void MSVC_ExceptionPtrCopy(void*, const void*) noexcept {}
+inline void MSVC_ExceptionPtrCurrentException(void*) noexcept {}
+inline int MSVC_uncaught_exceptions() noexcept { return 0; }
+
+inline void MSVC_Mtx_lock(void*) noexcept {}
+inline int MSVC_Mtx_trylock(void*) noexcept { return 0; }
+inline void MSVC_Mtx_unlock(void*) noexcept {}
+inline void MSVC_Cnd_wait(void*, void*) noexcept {}
+inline void MSVC_Cnd_broadcast(void*) noexcept {}
+
+inline unsigned int MSVC_Random_device() noexcept { return 42; }
+inline const wchar_t* MSVC_W_Getdays() noexcept { return L"Sun:Mon:Tue:Wed:Thu:Fri:Sat"; }
+inline const wchar_t* MSVC_W_Getmonths() noexcept { return L"Jan:Feb:Mar:Apr:May:Jun:Jul:Aug:Sep:Oct:Nov:Dec"; }
+
+struct Cvtvec_Stub {
+    int placeholder;
+};
+inline Cvtvec_Stub MSVC_Getcvt() noexcept { return Cvtvec_Stub{0}; }
+
+// Concurrency runtime helpers
+inline void MSVC_Conc_TaskContinuationContext_Ctor(void*) noexcept {}
+inline long MSVC_Conc_GetCurrentThreadId() noexcept { return 1; }
+inline void MSVC_Conc_ReportUnhandledError(void*) noexcept {}
+inline void MSVC_Conc_CallInContext(void*, void*, bool) noexcept {}
+inline void MSVC_Conc_Capture(void*) noexcept {}
+inline void MSVC_Conc_Reset(void*) noexcept {}
+inline void MSVC_Conc_LogCancelTask(void*) noexcept {}
+inline void MSVC_Conc_LogScheduleTask(void*, bool) noexcept {}
+inline void MSVC_Conc_LogTaskCompleted(void*) noexcept {}
+inline void MSVC_Conc_LogTaskExecutionCompleted(void*) noexcept {}
+inline void MSVC_Conc_LogWorkItemCompleted(void*) noexcept {}
+inline void MSVC_Conc_LogWorkItemStarted(void*) noexcept {}
+inline void MSVC_Conc_Release_chore(void*) noexcept {}
+inline void MSVC_Conc_ReportUnobservedException() noexcept {}
+inline int MSVC_Conc_Schedule_chore(void*) noexcept { return 0; }
+
+// Sovereign iostream stubs
+inline uint8_t MSVC_cin_storage[256] = {0};
+inline uint8_t MSVC_cout_storage[256] = {0};
+
+inline void* MSVC_cout_flush(void* self) noexcept { return self; }
+inline void* MSVC_cout_write(void* self, const char*, int64_t) noexcept { return self; }
+inline void* MSVC_cout_shift(void* self, void* (*)(void*)) noexcept { return self; }
+inline void MSVC_cout_osfx(void*) noexcept {}
+inline char MSVC_ios_fill(const void*) noexcept { return ' '; }
+inline void* MSVC_ios_tie(const void*) noexcept { return nullptr; }
+inline void MSVC_ios_setstate(void*, int, bool) noexcept {}
+inline void* MSVC_ios_rdbuf(const void*) noexcept { return nullptr; }
+inline int MSVC_ios_flags(const void*) noexcept { return 0; }
+inline bool MSVC_ios_good(const void*) noexcept { return true; }
+inline int64_t MSVC_ios_width_get(const void*) noexcept { return 0; }
+inline int64_t MSVC_ios_width_set(void*, int64_t) noexcept { return 0; }
+
+inline int MSVC_streambuf_sputc(void*, char) noexcept { return 0; }
+inline int64_t MSVC_streambuf_sputn(void*, const char*, int64_t count) noexcept { return count; }
+inline int MSVC_istream_peek(void*) noexcept { return -1; }
+
+
 inline void InitializeMsvcrtSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
-    // Standard Streams & I/O
     ldr.registerExport("msvcrt.dll", "__iob_func", reinterpret_cast<void*>(__iob_func));
     ldr.registerExport("msvcrt.dll", "__acrt_iob_func", reinterpret_cast<void*>(__acrt_iob_func));
     ldr.registerExport("msvcrt.dll", "__stdio_common_vfprintf", reinterpret_cast<void*>(__stdio_common_vfprintf));
@@ -750,14 +1292,10 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_vscprintf", reinterpret_cast<void*>(_vscprintf));
     ldr.registerExport("msvcrt.dll", "puts", reinterpret_cast<void*>(puts));
     ldr.registerExport("msvcrt.dll", "putchar", reinterpret_cast<void*>(putchar));
-
-    // Memory Management
     ldr.registerExport("msvcrt.dll", "malloc", reinterpret_cast<void*>(malloc));
     ldr.registerExport("msvcrt.dll", "free", reinterpret_cast<void*>(free));
     ldr.registerExport("msvcrt.dll", "calloc", reinterpret_cast<void*>(calloc));
     ldr.registerExport("msvcrt.dll", "realloc", reinterpret_cast<void*>(realloc));
-
-    // String & Buffer Operations
     ldr.registerExport("msvcrt.dll", "strlen", reinterpret_cast<void*>(strlen));
     ldr.registerExport("msvcrt.dll", "wcslen", reinterpret_cast<void*>(wcslen));
     ldr.registerExport("msvcrt.dll", "strcmp", reinterpret_cast<void*>(strcmp));
@@ -776,8 +1314,6 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "memcmp", reinterpret_cast<void*>(memcmp));
     ldr.registerExport("msvcrt.dll", "memchr", reinterpret_cast<void*>(memchr));
     ldr.registerExport("msvcrt.dll", "_strdup", reinterpret_cast<void*>(_strdup));
-
-    // Process, Environment & Time
     ldr.registerExport("msvcrt.dll", "exit", reinterpret_cast<void*>(exit));
     ldr.registerExport("msvcrt.dll", "_exit", reinterpret_cast<void*>(_exit));
     ldr.registerExport("msvcrt.dll", "abort", reinterpret_cast<void*>(abort));
@@ -791,8 +1327,6 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_isatty", reinterpret_cast<void*>(_isatty));
     ldr.registerExport("msvcrt.dll", "_time64", reinterpret_cast<void*>(_time64));
     ldr.registerExport("msvcrt.dll", "clock", reinterpret_cast<void*>(clock));
-
-    // MSVC CRT Startup
     ldr.registerExport("msvcrt.dll", "__getmainargs", reinterpret_cast<void*>(__getmainargs));
     ldr.registerExport("msvcrt.dll", "_initterm", reinterpret_cast<void*>(_initterm));
     ldr.registerExport("msvcrt.dll", "_initterm_e", reinterpret_cast<void*>(_initterm_e));
@@ -801,8 +1335,6 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_commode", reinterpret_cast<void*>(&g_Commode));
     ldr.registerExport("msvcrt.dll", "_fmode", reinterpret_cast<void*>(&g_Fmode));
     ldr.registerExport("msvcrt.dll", "_environ", reinterpret_cast<void*>(&g_Environ));
-
-    // Universal CRT (UCRT) narrow environment & runtime exports
     ldr.registerExport("msvcrt.dll", "__p___argc", reinterpret_cast<void*>(__p___argc));
     ldr.registerExport("msvcrt.dll", "__p___argv", reinterpret_cast<void*>(__p___argv));
     ldr.registerExport("msvcrt.dll", "__p__commode", reinterpret_cast<void*>(__p__commode));
@@ -817,32 +1349,22 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_configthreadlocale", reinterpret_cast<void*>(_configthreadlocale));
     ldr.registerExport("msvcrt.dll", "_set_new_mode", reinterpret_cast<void*>(_set_new_mode));
     ldr.registerExport("msvcrt.dll", "_crt_atexit", reinterpret_cast<void*>(_crt_atexit));
-
-    // Standard I/O & Filesystem Streams
     ldr.registerExport("msvcrt.dll", "_iob", reinterpret_cast<void*>(_iob));
     ldr.registerExport("msvcrt.dll", "fputc", reinterpret_cast<void*>(fputc));
     ldr.registerExport("msvcrt.dll", "fputs", reinterpret_cast<void*>(fputs));
     ldr.registerExport("msvcrt.dll", "fgetc", reinterpret_cast<void*>(fgetc));
     ldr.registerExport("msvcrt.dll", "_fileno", reinterpret_cast<void*>(_fileno));
-
-    // Wide string extensions
     ldr.registerExport("msvcrt.dll", "wcscmp", reinterpret_cast<void*>(wcscmp));
     ldr.registerExport("msvcrt.dll", "wcsstr", reinterpret_cast<void*>(wcsstr));
-
-    // Environment & Codepages
     ldr.registerExport("msvcrt.dll", "__initenv", reinterpret_cast<void*>(&g_InitEnvPtr));
     ldr.registerExport("msvcrt.dll", "_acmdln", reinterpret_cast<void*>(&g_Acmdln));
     ldr.registerExport("msvcrt.dll", "__p__acmdln", reinterpret_cast<void*>(__p__acmdln));
     ldr.registerExport("msvcrt.dll", "__p___initenv", reinterpret_cast<void*>(__p___initenv));
     ldr.registerExport("msvcrt.dll", "___lc_codepage_func", reinterpret_cast<void*>(___lc_codepage_func));
     ldr.registerExport("msvcrt.dll", "___mb_cur_max_func", reinterpret_cast<void*>(___mb_cur_max_func));
-
-    // Exception handling
     ldr.registerExport("msvcrt.dll", "__C_specific_handler", reinterpret_cast<void*>(__C_specific_handler));
     ldr.registerExport("msvcrt.dll", "_CxxThrowException", reinterpret_cast<void*>(_CxxThrowException));
     ldr.registerExport("msvcrt.dll", "__CxxFrameHandler", reinterpret_cast<void*>(__CxxFrameHandler));
-
-    // 7-Zip & VLC Support Exports
     ldr.registerExport("msvcrt.dll", "_c_exit", reinterpret_cast<void*>(_c_exit));
     ldr.registerExport("msvcrt.dll", "_XcptFilter", reinterpret_cast<void*>(_XcptFilter));
     ldr.registerExport("msvcrt.dll", "_onexit", reinterpret_cast<void*>(_onexit));
@@ -851,8 +1373,6 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "??1type_info@@UEAA@XZ", reinterpret_cast<void*>(type_info_dtor));
     ldr.registerExport("msvcrt.dll", "_beginthreadex", reinterpret_cast<void*>(_beginthreadex));
     ldr.registerExport("msvcrt.dll", "_get_osfhandle", reinterpret_cast<void*>(_get_osfhandle));
-
-    // Additional VLC exports
     ldr.registerExport("msvcrt.dll", "fopen", reinterpret_cast<void*>(fopen));
     ldr.registerExport("msvcrt.dll", "fclose", reinterpret_cast<void*>(fclose));
     ldr.registerExport("msvcrt.dll", "fwrite", reinterpret_cast<void*>(fwrite));
@@ -890,6 +1410,497 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_read", reinterpret_cast<void*>(_read));
     ldr.registerExport("msvcrt.dll", "_write", reinterpret_cast<void*>(_write));
     ldr.registerExport("msvcrt.dll", "_fdopen", reinterpret_cast<void*>(_fdopen));
+
+    // --- Universal CRT, VCRuntime & MSVCP Dynamic Registrations (Wireshark & Modern Apps) ---
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "sin", reinterpret_cast<void*>(CRT_sin));
+    ldr.registerExport("ucrtbase.dll", "sin", reinterpret_cast<void*>(CRT_sin));
+    ldr.registerExport("msvcrt.dll", "sin", reinterpret_cast<void*>(CRT_sin));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "cos", reinterpret_cast<void*>(CRT_cos));
+    ldr.registerExport("ucrtbase.dll", "cos", reinterpret_cast<void*>(CRT_cos));
+    ldr.registerExport("msvcrt.dll", "cos", reinterpret_cast<void*>(CRT_cos));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "tan", reinterpret_cast<void*>(CRT_tan));
+    ldr.registerExport("ucrtbase.dll", "tan", reinterpret_cast<void*>(CRT_tan));
+    ldr.registerExport("msvcrt.dll", "tan", reinterpret_cast<void*>(CRT_tan));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "asin", reinterpret_cast<void*>(CRT_asin));
+    ldr.registerExport("ucrtbase.dll", "asin", reinterpret_cast<void*>(CRT_asin));
+    ldr.registerExport("msvcrt.dll", "asin", reinterpret_cast<void*>(CRT_asin));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "acos", reinterpret_cast<void*>(CRT_acos));
+    ldr.registerExport("ucrtbase.dll", "acos", reinterpret_cast<void*>(CRT_acos));
+    ldr.registerExport("msvcrt.dll", "acos", reinterpret_cast<void*>(CRT_acos));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "atan", reinterpret_cast<void*>(CRT_atan));
+    ldr.registerExport("ucrtbase.dll", "atan", reinterpret_cast<void*>(CRT_atan));
+    ldr.registerExport("msvcrt.dll", "atan", reinterpret_cast<void*>(CRT_atan));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "atan2", reinterpret_cast<void*>(CRT_atan2));
+    ldr.registerExport("ucrtbase.dll", "atan2", reinterpret_cast<void*>(CRT_atan2));
+    ldr.registerExport("msvcrt.dll", "atan2", reinterpret_cast<void*>(CRT_atan2));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "exp", reinterpret_cast<void*>(CRT_exp));
+    ldr.registerExport("ucrtbase.dll", "exp", reinterpret_cast<void*>(CRT_exp));
+    ldr.registerExport("msvcrt.dll", "exp", reinterpret_cast<void*>(CRT_exp));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "log", reinterpret_cast<void*>(CRT_log));
+    ldr.registerExport("ucrtbase.dll", "log", reinterpret_cast<void*>(CRT_log));
+    ldr.registerExport("msvcrt.dll", "log", reinterpret_cast<void*>(CRT_log));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "log10", reinterpret_cast<void*>(CRT_log10));
+    ldr.registerExport("ucrtbase.dll", "log10", reinterpret_cast<void*>(CRT_log10));
+    ldr.registerExport("msvcrt.dll", "log10", reinterpret_cast<void*>(CRT_log10));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "log2", reinterpret_cast<void*>(CRT_log2));
+    ldr.registerExport("ucrtbase.dll", "log2", reinterpret_cast<void*>(CRT_log2));
+    ldr.registerExport("msvcrt.dll", "log2", reinterpret_cast<void*>(CRT_log2));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "pow", reinterpret_cast<void*>(CRT_pow));
+    ldr.registerExport("ucrtbase.dll", "pow", reinterpret_cast<void*>(CRT_pow));
+    ldr.registerExport("msvcrt.dll", "pow", reinterpret_cast<void*>(CRT_pow));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "sqrt", reinterpret_cast<void*>(CRT_sqrt));
+    ldr.registerExport("ucrtbase.dll", "sqrt", reinterpret_cast<void*>(CRT_sqrt));
+    ldr.registerExport("msvcrt.dll", "sqrt", reinterpret_cast<void*>(CRT_sqrt));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "cbrt", reinterpret_cast<void*>(CRT_cbrt));
+    ldr.registerExport("ucrtbase.dll", "cbrt", reinterpret_cast<void*>(CRT_cbrt));
+    ldr.registerExport("msvcrt.dll", "cbrt", reinterpret_cast<void*>(CRT_cbrt));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "ceil", reinterpret_cast<void*>(CRT_ceil));
+    ldr.registerExport("ucrtbase.dll", "ceil", reinterpret_cast<void*>(CRT_ceil));
+    ldr.registerExport("msvcrt.dll", "ceil", reinterpret_cast<void*>(CRT_ceil));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "floor", reinterpret_cast<void*>(CRT_floor));
+    ldr.registerExport("ucrtbase.dll", "floor", reinterpret_cast<void*>(CRT_floor));
+    ldr.registerExport("msvcrt.dll", "floor", reinterpret_cast<void*>(CRT_floor));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "round", reinterpret_cast<void*>(CRT_round));
+    ldr.registerExport("ucrtbase.dll", "round", reinterpret_cast<void*>(CRT_round));
+    ldr.registerExport("msvcrt.dll", "round", reinterpret_cast<void*>(CRT_round));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "lround", reinterpret_cast<void*>(CRT_lround));
+    ldr.registerExport("ucrtbase.dll", "lround", reinterpret_cast<void*>(CRT_lround));
+    ldr.registerExport("msvcrt.dll", "lround", reinterpret_cast<void*>(CRT_lround));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "fmod", reinterpret_cast<void*>(CRT_fmod));
+    ldr.registerExport("ucrtbase.dll", "fmod", reinterpret_cast<void*>(CRT_fmod));
+    ldr.registerExport("msvcrt.dll", "fmod", reinterpret_cast<void*>(CRT_fmod));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "modf", reinterpret_cast<void*>(CRT_modf));
+    ldr.registerExport("ucrtbase.dll", "modf", reinterpret_cast<void*>(CRT_modf));
+    ldr.registerExport("msvcrt.dll", "modf", reinterpret_cast<void*>(CRT_modf));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "ldexp", reinterpret_cast<void*>(CRT_ldexp));
+    ldr.registerExport("ucrtbase.dll", "ldexp", reinterpret_cast<void*>(CRT_ldexp));
+    ldr.registerExport("msvcrt.dll", "ldexp", reinterpret_cast<void*>(CRT_ldexp));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "copysign", reinterpret_cast<void*>(CRT_copysign));
+    ldr.registerExport("ucrtbase.dll", "copysign", reinterpret_cast<void*>(CRT_copysign));
+    ldr.registerExport("msvcrt.dll", "copysign", reinterpret_cast<void*>(CRT_copysign));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_dclass", reinterpret_cast<void*>(CRT_dclass));
+    ldr.registerExport("ucrtbase.dll", "_dclass", reinterpret_cast<void*>(CRT_dclass));
+    ldr.registerExport("msvcrt.dll", "_dclass", reinterpret_cast<void*>(CRT_dclass));
+    ldr.registerExport("api-ms-win-crt-math-l1-1-0.dll", "_dpcomp", reinterpret_cast<void*>(CRT_dpcomp));
+    ldr.registerExport("ucrtbase.dll", "_dpcomp", reinterpret_cast<void*>(CRT_dpcomp));
+    ldr.registerExport("msvcrt.dll", "_dpcomp", reinterpret_cast<void*>(CRT_dpcomp));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "tolower", reinterpret_cast<void*>(CRT_tolower));
+    ldr.registerExport("ucrtbase.dll", "tolower", reinterpret_cast<void*>(CRT_tolower));
+    ldr.registerExport("msvcrt.dll", "tolower", reinterpret_cast<void*>(CRT_tolower));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "toupper", reinterpret_cast<void*>(CRT_toupper));
+    ldr.registerExport("ucrtbase.dll", "toupper", reinterpret_cast<void*>(CRT_toupper));
+    ldr.registerExport("msvcrt.dll", "toupper", reinterpret_cast<void*>(CRT_toupper));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "isdigit", reinterpret_cast<void*>(CRT_isdigit));
+    ldr.registerExport("ucrtbase.dll", "isdigit", reinterpret_cast<void*>(CRT_isdigit));
+    ldr.registerExport("msvcrt.dll", "isdigit", reinterpret_cast<void*>(CRT_isdigit));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "islower", reinterpret_cast<void*>(CRT_islower));
+    ldr.registerExport("ucrtbase.dll", "islower", reinterpret_cast<void*>(CRT_islower));
+    ldr.registerExport("msvcrt.dll", "islower", reinterpret_cast<void*>(CRT_islower));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "isupper", reinterpret_cast<void*>(CRT_isupper));
+    ldr.registerExport("ucrtbase.dll", "isupper", reinterpret_cast<void*>(CRT_isupper));
+    ldr.registerExport("msvcrt.dll", "isupper", reinterpret_cast<void*>(CRT_isupper));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "isxdigit", reinterpret_cast<void*>(CRT_isxdigit));
+    ldr.registerExport("ucrtbase.dll", "isxdigit", reinterpret_cast<void*>(CRT_isxdigit));
+    ldr.registerExport("msvcrt.dll", "isxdigit", reinterpret_cast<void*>(CRT_isxdigit));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "iswspace", reinterpret_cast<void*>(CRT_iswspace));
+    ldr.registerExport("ucrtbase.dll", "iswspace", reinterpret_cast<void*>(CRT_iswspace));
+    ldr.registerExport("msvcrt.dll", "iswspace", reinterpret_cast<void*>(CRT_iswspace));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strspn", reinterpret_cast<void*>(CRT_strspn));
+    ldr.registerExport("ucrtbase.dll", "strspn", reinterpret_cast<void*>(CRT_strspn));
+    ldr.registerExport("msvcrt.dll", "strspn", reinterpret_cast<void*>(CRT_strspn));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strcspn", reinterpret_cast<void*>(CRT_strcspn));
+    ldr.registerExport("ucrtbase.dll", "strcspn", reinterpret_cast<void*>(CRT_strcspn));
+    ldr.registerExport("msvcrt.dll", "strcspn", reinterpret_cast<void*>(CRT_strcspn));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strpbrk", reinterpret_cast<void*>(CRT_strpbrk));
+    ldr.registerExport("ucrtbase.dll", "strpbrk", reinterpret_cast<void*>(CRT_strpbrk));
+    ldr.registerExport("msvcrt.dll", "strpbrk", reinterpret_cast<void*>(CRT_strpbrk));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strtok", reinterpret_cast<void*>(CRT_strtok));
+    ldr.registerExport("ucrtbase.dll", "strtok", reinterpret_cast<void*>(CRT_strtok));
+    ldr.registerExport("msvcrt.dll", "strtok", reinterpret_cast<void*>(CRT_strtok));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strnlen", reinterpret_cast<void*>(CRT_strnlen));
+    ldr.registerExport("ucrtbase.dll", "strnlen", reinterpret_cast<void*>(CRT_strnlen));
+    ldr.registerExport("msvcrt.dll", "strnlen", reinterpret_cast<void*>(CRT_strnlen));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "strncat", reinterpret_cast<void*>(CRT_strncat));
+    ldr.registerExport("ucrtbase.dll", "strncat", reinterpret_cast<void*>(CRT_strncat));
+    ldr.registerExport("msvcrt.dll", "strncat", reinterpret_cast<void*>(CRT_strncat));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "mblen", reinterpret_cast<void*>(CRT_mblen));
+    ldr.registerExport("ucrtbase.dll", "mblen", reinterpret_cast<void*>(CRT_mblen));
+    ldr.registerExport("msvcrt.dll", "mblen", reinterpret_cast<void*>(CRT_mblen));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "mbtowc", reinterpret_cast<void*>(CRT_mbtowc));
+    ldr.registerExport("ucrtbase.dll", "mbtowc", reinterpret_cast<void*>(CRT_mbtowc));
+    ldr.registerExport("msvcrt.dll", "mbtowc", reinterpret_cast<void*>(CRT_mbtowc));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "wcscat_s", reinterpret_cast<void*>(CRT_wcscat_s));
+    ldr.registerExport("ucrtbase.dll", "wcscat_s", reinterpret_cast<void*>(CRT_wcscat_s));
+    ldr.registerExport("msvcrt.dll", "wcscat_s", reinterpret_cast<void*>(CRT_wcscat_s));
+    ldr.registerExport("api-ms-win-crt-convert-l1-1-0.dll", "strtol", reinterpret_cast<void*>(CRT_strtol));
+    ldr.registerExport("ucrtbase.dll", "strtol", reinterpret_cast<void*>(CRT_strtol));
+    ldr.registerExport("msvcrt.dll", "strtol", reinterpret_cast<void*>(CRT_strtol));
+    ldr.registerExport("api-ms-win-crt-convert-l1-1-0.dll", "atoi", reinterpret_cast<void*>(CRT_atoi));
+    ldr.registerExport("ucrtbase.dll", "atoi", reinterpret_cast<void*>(CRT_atoi));
+    ldr.registerExport("msvcrt.dll", "atoi", reinterpret_cast<void*>(CRT_atoi));
+    ldr.registerExport("api-ms-win-crt-utility-l1-1-0.dll", "bsearch", reinterpret_cast<void*>(CRT_bsearch));
+    ldr.registerExport("ucrtbase.dll", "bsearch", reinterpret_cast<void*>(CRT_bsearch));
+    ldr.registerExport("msvcrt.dll", "bsearch", reinterpret_cast<void*>(CRT_bsearch));
+    ldr.registerExport("api-ms-win-crt-utility-l1-1-0.dll", "qsort", reinterpret_cast<void*>(CRT_qsort));
+    ldr.registerExport("ucrtbase.dll", "qsort", reinterpret_cast<void*>(CRT_qsort));
+    ldr.registerExport("msvcrt.dll", "qsort", reinterpret_cast<void*>(CRT_qsort));
+    ldr.registerExport("api-ms-win-crt-heap-l1-1-0.dll", "_callnewh", reinterpret_cast<void*>(CRT_callnewh));
+    ldr.registerExport("ucrtbase.dll", "_callnewh", reinterpret_cast<void*>(CRT_callnewh));
+    ldr.registerExport("msvcrt.dll", "_callnewh", reinterpret_cast<void*>(CRT_callnewh));
+    ldr.registerExport("api-ms-win-crt-heap-l1-1-0.dll", "_msize", reinterpret_cast<void*>(CRT_msize));
+    ldr.registerExport("ucrtbase.dll", "_msize", reinterpret_cast<void*>(CRT_msize));
+    ldr.registerExport("msvcrt.dll", "_msize", reinterpret_cast<void*>(CRT_msize));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_set_fmode", reinterpret_cast<void*>(CRT_set_fmode));
+    ldr.registerExport("ucrtbase.dll", "_set_fmode", reinterpret_cast<void*>(CRT_set_fmode));
+    ldr.registerExport("msvcrt.dll", "_set_fmode", reinterpret_cast<void*>(CRT_set_fmode));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_open_osfhandle", reinterpret_cast<void*>(CRT_open_osfhandle));
+    ldr.registerExport("ucrtbase.dll", "_open_osfhandle", reinterpret_cast<void*>(CRT_open_osfhandle));
+    ldr.registerExport("msvcrt.dll", "_open_osfhandle", reinterpret_cast<void*>(CRT_open_osfhandle));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "feof", reinterpret_cast<void*>(CRT_feof));
+    ldr.registerExport("ucrtbase.dll", "feof", reinterpret_cast<void*>(CRT_feof));
+    ldr.registerExport("msvcrt.dll", "feof", reinterpret_cast<void*>(CRT_feof));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "ferror", reinterpret_cast<void*>(CRT_ferror));
+    ldr.registerExport("ucrtbase.dll", "ferror", reinterpret_cast<void*>(CRT_ferror));
+    ldr.registerExport("msvcrt.dll", "ferror", reinterpret_cast<void*>(CRT_ferror));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "clearerr", reinterpret_cast<void*>(CRT_clearerr));
+    ldr.registerExport("ucrtbase.dll", "clearerr", reinterpret_cast<void*>(CRT_clearerr));
+    ldr.registerExport("msvcrt.dll", "clearerr", reinterpret_cast<void*>(CRT_clearerr));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "getc", reinterpret_cast<void*>(CRT_getc));
+    ldr.registerExport("ucrtbase.dll", "getc", reinterpret_cast<void*>(CRT_getc));
+    ldr.registerExport("msvcrt.dll", "getc", reinterpret_cast<void*>(CRT_getc));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "getchar", reinterpret_cast<void*>(CRT_getchar));
+    ldr.registerExport("ucrtbase.dll", "getchar", reinterpret_cast<void*>(CRT_getchar));
+    ldr.registerExport("msvcrt.dll", "getchar", reinterpret_cast<void*>(CRT_getchar));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "putc", reinterpret_cast<void*>(CRT_putc));
+    ldr.registerExport("ucrtbase.dll", "putc", reinterpret_cast<void*>(CRT_putc));
+    ldr.registerExport("msvcrt.dll", "putc", reinterpret_cast<void*>(CRT_putc));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "fgets", reinterpret_cast<void*>(CRT_fgets));
+    ldr.registerExport("ucrtbase.dll", "fgets", reinterpret_cast<void*>(CRT_fgets));
+    ldr.registerExport("msvcrt.dll", "fgets", reinterpret_cast<void*>(CRT_fgets));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "fread", reinterpret_cast<void*>(CRT_fread));
+    ldr.registerExport("ucrtbase.dll", "fread", reinterpret_cast<void*>(CRT_fread));
+    ldr.registerExport("msvcrt.dll", "fread", reinterpret_cast<void*>(CRT_fread));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "rewind", reinterpret_cast<void*>(CRT_rewind));
+    ldr.registerExport("ucrtbase.dll", "rewind", reinterpret_cast<void*>(CRT_rewind));
+    ldr.registerExport("msvcrt.dll", "rewind", reinterpret_cast<void*>(CRT_rewind));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "ungetc", reinterpret_cast<void*>(CRT_ungetc));
+    ldr.registerExport("ucrtbase.dll", "ungetc", reinterpret_cast<void*>(CRT_ungetc));
+    ldr.registerExport("msvcrt.dll", "ungetc", reinterpret_cast<void*>(CRT_ungetc));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_fgetc_nolock", reinterpret_cast<void*>(CRT_fgetc_nolock));
+    ldr.registerExport("ucrtbase.dll", "_fgetc_nolock", reinterpret_cast<void*>(CRT_fgetc_nolock));
+    ldr.registerExport("msvcrt.dll", "_fgetc_nolock", reinterpret_cast<void*>(CRT_fgetc_nolock));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_wfopen", reinterpret_cast<void*>(CRT_wfopen));
+    ldr.registerExport("ucrtbase.dll", "_wfopen", reinterpret_cast<void*>(CRT_wfopen));
+    ldr.registerExport("msvcrt.dll", "_wfopen", reinterpret_cast<void*>(CRT_wfopen));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_wfreopen", reinterpret_cast<void*>(CRT_wfreopen));
+    ldr.registerExport("ucrtbase.dll", "_wfreopen", reinterpret_cast<void*>(CRT_wfreopen));
+    ldr.registerExport("msvcrt.dll", "_wfreopen", reinterpret_cast<void*>(CRT_wfreopen));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_wopen", reinterpret_cast<void*>(CRT_wopen));
+    ldr.registerExport("ucrtbase.dll", "_wopen", reinterpret_cast<void*>(CRT_wopen));
+    ldr.registerExport("msvcrt.dll", "_wopen", reinterpret_cast<void*>(CRT_wopen));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_popen", reinterpret_cast<void*>(CRT_popen));
+    ldr.registerExport("ucrtbase.dll", "_popen", reinterpret_cast<void*>(CRT_popen));
+    ldr.registerExport("msvcrt.dll", "_popen", reinterpret_cast<void*>(CRT_popen));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "_pclose", reinterpret_cast<void*>(CRT_pclose));
+    ldr.registerExport("ucrtbase.dll", "_pclose", reinterpret_cast<void*>(CRT_pclose));
+    ldr.registerExport("msvcrt.dll", "_pclose", reinterpret_cast<void*>(CRT_pclose));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vsprintf", reinterpret_cast<void*>(CRT_stdio_common_vsprintf));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vsprintf", reinterpret_cast<void*>(CRT_stdio_common_vsprintf));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vsprintf", reinterpret_cast<void*>(CRT_stdio_common_vsprintf));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vswprintf", reinterpret_cast<void*>(CRT_stdio_common_vswprintf));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vswprintf", reinterpret_cast<void*>(CRT_stdio_common_vswprintf));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vswprintf", reinterpret_cast<void*>(CRT_stdio_common_vswprintf));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vsscanf", reinterpret_cast<void*>(CRT_stdio_common_vsscanf));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vsscanf", reinterpret_cast<void*>(CRT_stdio_common_vsscanf));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vsscanf", reinterpret_cast<void*>(CRT_stdio_common_vsscanf));
+    ldr.registerExport("api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vfscanf", reinterpret_cast<void*>(CRT_stdio_common_vfscanf));
+    ldr.registerExport("ucrtbase.dll", "__stdio_common_vfscanf", reinterpret_cast<void*>(CRT_stdio_common_vfscanf));
+    ldr.registerExport("msvcrt.dll", "__stdio_common_vfscanf", reinterpret_cast<void*>(CRT_stdio_common_vfscanf));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "__timezone", reinterpret_cast<void*>(CRT_timezone));
+    ldr.registerExport("ucrtbase.dll", "__timezone", reinterpret_cast<void*>(CRT_timezone));
+    ldr.registerExport("msvcrt.dll", "__timezone", reinterpret_cast<void*>(CRT_timezone));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "__tzname", reinterpret_cast<void*>(CRT_tzname));
+    ldr.registerExport("ucrtbase.dll", "__tzname", reinterpret_cast<void*>(CRT_tzname));
+    ldr.registerExport("msvcrt.dll", "__tzname", reinterpret_cast<void*>(CRT_tzname));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_tzset", reinterpret_cast<void*>(CRT_tzset));
+    ldr.registerExport("ucrtbase.dll", "_tzset", reinterpret_cast<void*>(CRT_tzset));
+    ldr.registerExport("msvcrt.dll", "_tzset", reinterpret_cast<void*>(CRT_tzset));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_localtime64", reinterpret_cast<void*>(CRT_localtime64));
+    ldr.registerExport("ucrtbase.dll", "_localtime64", reinterpret_cast<void*>(CRT_localtime64));
+    ldr.registerExport("msvcrt.dll", "_localtime64", reinterpret_cast<void*>(CRT_localtime64));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_localtime64_s", reinterpret_cast<void*>(CRT_localtime64_s));
+    ldr.registerExport("ucrtbase.dll", "_localtime64_s", reinterpret_cast<void*>(CRT_localtime64_s));
+    ldr.registerExport("msvcrt.dll", "_localtime64_s", reinterpret_cast<void*>(CRT_localtime64_s));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_gmtime64", reinterpret_cast<void*>(CRT_gmtime64));
+    ldr.registerExport("ucrtbase.dll", "_gmtime64", reinterpret_cast<void*>(CRT_gmtime64));
+    ldr.registerExport("msvcrt.dll", "_gmtime64", reinterpret_cast<void*>(CRT_gmtime64));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_gmtime64_s", reinterpret_cast<void*>(CRT_gmtime64_s));
+    ldr.registerExport("ucrtbase.dll", "_gmtime64_s", reinterpret_cast<void*>(CRT_gmtime64_s));
+    ldr.registerExport("msvcrt.dll", "_gmtime64_s", reinterpret_cast<void*>(CRT_gmtime64_s));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_mktime64", reinterpret_cast<void*>(CRT_mktime64));
+    ldr.registerExport("ucrtbase.dll", "_mktime64", reinterpret_cast<void*>(CRT_mktime64));
+    ldr.registerExport("msvcrt.dll", "_mktime64", reinterpret_cast<void*>(CRT_mktime64));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "asctime", reinterpret_cast<void*>(CRT_asctime));
+    ldr.registerExport("ucrtbase.dll", "asctime", reinterpret_cast<void*>(CRT_asctime));
+    ldr.registerExport("msvcrt.dll", "asctime", reinterpret_cast<void*>(CRT_asctime));
+    ldr.registerExport("api-ms-win-crt-time-l1-1-0.dll", "_timespec64_get", reinterpret_cast<void*>(CRT_timespec64_get));
+    ldr.registerExport("ucrtbase.dll", "_timespec64_get", reinterpret_cast<void*>(CRT_timespec64_get));
+    ldr.registerExport("msvcrt.dll", "_timespec64_get", reinterpret_cast<void*>(CRT_timespec64_get));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_wmkdir", reinterpret_cast<void*>(CRT_wmkdir));
+    ldr.registerExport("ucrtbase.dll", "_wmkdir", reinterpret_cast<void*>(CRT_wmkdir));
+    ldr.registerExport("msvcrt.dll", "_wmkdir", reinterpret_cast<void*>(CRT_wmkdir));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_wrmdir", reinterpret_cast<void*>(CRT_wrmdir));
+    ldr.registerExport("ucrtbase.dll", "_wrmdir", reinterpret_cast<void*>(CRT_wrmdir));
+    ldr.registerExport("msvcrt.dll", "_wrmdir", reinterpret_cast<void*>(CRT_wrmdir));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_wremove", reinterpret_cast<void*>(CRT_wremove));
+    ldr.registerExport("ucrtbase.dll", "_wremove", reinterpret_cast<void*>(CRT_wremove));
+    ldr.registerExport("msvcrt.dll", "_wremove", reinterpret_cast<void*>(CRT_wremove));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_wunlink", reinterpret_cast<void*>(CRT_wunlink));
+    ldr.registerExport("ucrtbase.dll", "_wunlink", reinterpret_cast<void*>(CRT_wunlink));
+    ldr.registerExport("msvcrt.dll", "_wunlink", reinterpret_cast<void*>(CRT_wunlink));
+    ldr.registerExport("api-ms-win-crt-filesystem-l1-1-0.dll", "_wstat64", reinterpret_cast<void*>(CRT_wstat64));
+    ldr.registerExport("ucrtbase.dll", "_wstat64", reinterpret_cast<void*>(CRT_wstat64));
+    ldr.registerExport("msvcrt.dll", "_wstat64", reinterpret_cast<void*>(CRT_wstat64));
+    ldr.registerExport("api-ms-win-crt-conio-l1-1-0.dll", "_getch", reinterpret_cast<void*>(CRT_getch));
+    ldr.registerExport("ucrtbase.dll", "_getch", reinterpret_cast<void*>(CRT_getch));
+    ldr.registerExport("msvcrt.dll", "_getch", reinterpret_cast<void*>(CRT_getch));
+    ldr.registerExport("api-ms-win-crt-process-l1-1-0.dll", "_cwait", reinterpret_cast<void*>(CRT_cwait));
+    ldr.registerExport("ucrtbase.dll", "_cwait", reinterpret_cast<void*>(CRT_cwait));
+    ldr.registerExport("msvcrt.dll", "_cwait", reinterpret_cast<void*>(CRT_cwait));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "__doserrno", reinterpret_cast<void*>(CRT_doserrno));
+    ldr.registerExport("ucrtbase.dll", "__doserrno", reinterpret_cast<void*>(CRT_doserrno));
+    ldr.registerExport("msvcrt.dll", "__doserrno", reinterpret_cast<void*>(CRT_doserrno));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "__fpe_flt_rounds", reinterpret_cast<void*>(CRT_fpe_flt_rounds));
+    ldr.registerExport("ucrtbase.dll", "__fpe_flt_rounds", reinterpret_cast<void*>(CRT_fpe_flt_rounds));
+    ldr.registerExport("msvcrt.dll", "__fpe_flt_rounds", reinterpret_cast<void*>(CRT_fpe_flt_rounds));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "__p___wargv", reinterpret_cast<void*>(CRT_p_wargv));
+    ldr.registerExport("ucrtbase.dll", "__p___wargv", reinterpret_cast<void*>(CRT_p_wargv));
+    ldr.registerExport("msvcrt.dll", "__p___wargv", reinterpret_cast<void*>(CRT_p_wargv));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_configure_wide_argv", reinterpret_cast<void*>(CRT_configure_wide_argv));
+    ldr.registerExport("ucrtbase.dll", "_configure_wide_argv", reinterpret_cast<void*>(CRT_configure_wide_argv));
+    ldr.registerExport("msvcrt.dll", "_configure_wide_argv", reinterpret_cast<void*>(CRT_configure_wide_argv));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_initialize_wide_environment", reinterpret_cast<void*>(CRT_initialize_wide_environment));
+    ldr.registerExport("ucrtbase.dll", "_initialize_wide_environment", reinterpret_cast<void*>(CRT_initialize_wide_environment));
+    ldr.registerExport("msvcrt.dll", "_initialize_wide_environment", reinterpret_cast<void*>(CRT_initialize_wide_environment));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_get_initial_wide_environment", reinterpret_cast<void*>(CRT_get_initial_wide_environment));
+    ldr.registerExport("ucrtbase.dll", "_get_initial_wide_environment", reinterpret_cast<void*>(CRT_get_initial_wide_environment));
+    ldr.registerExport("msvcrt.dll", "_get_initial_wide_environment", reinterpret_cast<void*>(CRT_get_initial_wide_environment));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_get_narrow_winmain_command_line", reinterpret_cast<void*>(CRT_get_narrow_winmain_command_line));
+    ldr.registerExport("ucrtbase.dll", "_get_narrow_winmain_command_line", reinterpret_cast<void*>(CRT_get_narrow_winmain_command_line));
+    ldr.registerExport("msvcrt.dll", "_get_narrow_winmain_command_line", reinterpret_cast<void*>(CRT_get_narrow_winmain_command_line));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_invalid_parameter_noinfo", reinterpret_cast<void*>(CRT_invalid_parameter_noinfo));
+    ldr.registerExport("ucrtbase.dll", "_invalid_parameter_noinfo", reinterpret_cast<void*>(CRT_invalid_parameter_noinfo));
+    ldr.registerExport("msvcrt.dll", "_invalid_parameter_noinfo", reinterpret_cast<void*>(CRT_invalid_parameter_noinfo));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "terminate", reinterpret_cast<void*>(CRT_terminate));
+    ldr.registerExport("ucrtbase.dll", "terminate", reinterpret_cast<void*>(CRT_terminate));
+    ldr.registerExport("msvcrt.dll", "terminate", reinterpret_cast<void*>(CRT_terminate));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_initialize_onexit_table", reinterpret_cast<void*>(CRT_initialize_onexit_table));
+    ldr.registerExport("ucrtbase.dll", "_initialize_onexit_table", reinterpret_cast<void*>(CRT_initialize_onexit_table));
+    ldr.registerExport("msvcrt.dll", "_initialize_onexit_table", reinterpret_cast<void*>(CRT_initialize_onexit_table));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_register_onexit_function", reinterpret_cast<void*>(CRT_register_onexit_function));
+    ldr.registerExport("ucrtbase.dll", "_register_onexit_function", reinterpret_cast<void*>(CRT_register_onexit_function));
+    ldr.registerExport("msvcrt.dll", "_register_onexit_function", reinterpret_cast<void*>(CRT_register_onexit_function));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_execute_onexit_table", reinterpret_cast<void*>(CRT_execute_onexit_table));
+    ldr.registerExport("ucrtbase.dll", "_execute_onexit_table", reinterpret_cast<void*>(CRT_execute_onexit_table));
+    ldr.registerExport("msvcrt.dll", "_execute_onexit_table", reinterpret_cast<void*>(CRT_execute_onexit_table));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_crt_at_quick_exit", reinterpret_cast<void*>(CRT_crt_at_quick_exit));
+    ldr.registerExport("ucrtbase.dll", "_crt_at_quick_exit", reinterpret_cast<void*>(CRT_crt_at_quick_exit));
+    ldr.registerExport("msvcrt.dll", "_crt_at_quick_exit", reinterpret_cast<void*>(CRT_crt_at_quick_exit));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_seh_filter_dll", reinterpret_cast<void*>(CRT_seh_filter_dll));
+    ldr.registerExport("ucrtbase.dll", "_seh_filter_dll", reinterpret_cast<void*>(CRT_seh_filter_dll));
+    ldr.registerExport("msvcrt.dll", "_seh_filter_dll", reinterpret_cast<void*>(CRT_seh_filter_dll));
+    ldr.registerExport("api-ms-win-crt-runtime-l1-1-0.dll", "_register_thread_local_exe_atexit_callback", reinterpret_cast<void*>(CRT_register_thread_local_exe_atexit_callback));
+    ldr.registerExport("ucrtbase.dll", "_register_thread_local_exe_atexit_callback", reinterpret_cast<void*>(CRT_register_thread_local_exe_atexit_callback));
+    ldr.registerExport("msvcrt.dll", "_register_thread_local_exe_atexit_callback", reinterpret_cast<void*>(CRT_register_thread_local_exe_atexit_callback));
+    ldr.registerExport("vcruntime140.dll", "memcpy", reinterpret_cast<void*>(VCRT_memcpy));
+    ldr.registerExport("vcruntime140_1.dll", "memcpy", reinterpret_cast<void*>(VCRT_memcpy));
+    ldr.registerExport("msvcrt.dll", "memcpy", reinterpret_cast<void*>(VCRT_memcpy));
+    ldr.registerExport("vcruntime140.dll", "memset", reinterpret_cast<void*>(VCRT_memset));
+    ldr.registerExport("vcruntime140_1.dll", "memset", reinterpret_cast<void*>(VCRT_memset));
+    ldr.registerExport("msvcrt.dll", "memset", reinterpret_cast<void*>(VCRT_memset));
+    ldr.registerExport("vcruntime140.dll", "memmove", reinterpret_cast<void*>(VCRT_memmove));
+    ldr.registerExport("vcruntime140_1.dll", "memmove", reinterpret_cast<void*>(VCRT_memmove));
+    ldr.registerExport("msvcrt.dll", "memmove", reinterpret_cast<void*>(VCRT_memmove));
+    ldr.registerExport("vcruntime140.dll", "memcmp", reinterpret_cast<void*>(VCRT_memcmp));
+    ldr.registerExport("vcruntime140_1.dll", "memcmp", reinterpret_cast<void*>(VCRT_memcmp));
+    ldr.registerExport("msvcrt.dll", "memcmp", reinterpret_cast<void*>(VCRT_memcmp));
+    ldr.registerExport("vcruntime140.dll", "memchr", reinterpret_cast<void*>(VCRT_memchr));
+    ldr.registerExport("vcruntime140_1.dll", "memchr", reinterpret_cast<void*>(VCRT_memchr));
+    ldr.registerExport("msvcrt.dll", "memchr", reinterpret_cast<void*>(VCRT_memchr));
+    ldr.registerExport("vcruntime140.dll", "strchr", reinterpret_cast<void*>(VCRT_strchr));
+    ldr.registerExport("vcruntime140_1.dll", "strchr", reinterpret_cast<void*>(VCRT_strchr));
+    ldr.registerExport("msvcrt.dll", "strchr", reinterpret_cast<void*>(VCRT_strchr));
+    ldr.registerExport("vcruntime140.dll", "strrchr", reinterpret_cast<void*>(VCRT_strrchr));
+    ldr.registerExport("vcruntime140_1.dll", "strrchr", reinterpret_cast<void*>(VCRT_strrchr));
+    ldr.registerExport("msvcrt.dll", "strrchr", reinterpret_cast<void*>(VCRT_strrchr));
+    ldr.registerExport("vcruntime140.dll", "strstr", reinterpret_cast<void*>(VCRT_strstr));
+    ldr.registerExport("vcruntime140_1.dll", "strstr", reinterpret_cast<void*>(VCRT_strstr));
+    ldr.registerExport("msvcrt.dll", "strstr", reinterpret_cast<void*>(VCRT_strstr));
+    ldr.registerExport("vcruntime140.dll", "_CxxThrowException", reinterpret_cast<void*>(VCRT_CxxThrowException));
+    ldr.registerExport("vcruntime140_1.dll", "_CxxThrowException", reinterpret_cast<void*>(VCRT_CxxThrowException));
+    ldr.registerExport("msvcrt.dll", "_CxxThrowException", reinterpret_cast<void*>(VCRT_CxxThrowException));
+    ldr.registerExport("vcruntime140.dll", "__CxxFrameHandler4", reinterpret_cast<void*>(VCRT_CxxFrameHandler4));
+    ldr.registerExport("vcruntime140_1.dll", "__CxxFrameHandler4", reinterpret_cast<void*>(VCRT_CxxFrameHandler4));
+    ldr.registerExport("msvcrt.dll", "__CxxFrameHandler4", reinterpret_cast<void*>(VCRT_CxxFrameHandler4));
+    ldr.registerExport("vcruntime140.dll", "__C_specific_handler", reinterpret_cast<void*>(VCRT_C_specific_handler));
+    ldr.registerExport("vcruntime140_1.dll", "__C_specific_handler", reinterpret_cast<void*>(VCRT_C_specific_handler));
+    ldr.registerExport("msvcrt.dll", "__C_specific_handler", reinterpret_cast<void*>(VCRT_C_specific_handler));
+    ldr.registerExport("vcruntime140.dll", "__RTDynamicCast", reinterpret_cast<void*>(VCRT_RTDynamicCast));
+    ldr.registerExport("vcruntime140_1.dll", "__RTDynamicCast", reinterpret_cast<void*>(VCRT_RTDynamicCast));
+    ldr.registerExport("msvcrt.dll", "__RTDynamicCast", reinterpret_cast<void*>(VCRT_RTDynamicCast));
+    ldr.registerExport("vcruntime140.dll", "__current_exception", reinterpret_cast<void*>(VCRT_current_exception));
+    ldr.registerExport("vcruntime140_1.dll", "__current_exception", reinterpret_cast<void*>(VCRT_current_exception));
+    ldr.registerExport("msvcrt.dll", "__current_exception", reinterpret_cast<void*>(VCRT_current_exception));
+    ldr.registerExport("vcruntime140.dll", "__current_exception_context", reinterpret_cast<void*>(VCRT_current_exception_context));
+    ldr.registerExport("vcruntime140_1.dll", "__current_exception_context", reinterpret_cast<void*>(VCRT_current_exception_context));
+    ldr.registerExport("msvcrt.dll", "__current_exception_context", reinterpret_cast<void*>(VCRT_current_exception_context));
+    ldr.registerExport("vcruntime140.dll", "__intrinsic_setjmp", reinterpret_cast<void*>(VCRT_intrinsic_setjmp));
+    ldr.registerExport("vcruntime140_1.dll", "__intrinsic_setjmp", reinterpret_cast<void*>(VCRT_intrinsic_setjmp));
+    ldr.registerExport("msvcrt.dll", "__intrinsic_setjmp", reinterpret_cast<void*>(VCRT_intrinsic_setjmp));
+    ldr.registerExport("vcruntime140.dll", "longjmp", reinterpret_cast<void*>(VCRT_longjmp));
+    ldr.registerExport("vcruntime140_1.dll", "longjmp", reinterpret_cast<void*>(VCRT_longjmp));
+    ldr.registerExport("msvcrt.dll", "longjmp", reinterpret_cast<void*>(VCRT_longjmp));
+    ldr.registerExport("vcruntime140.dll", "__std_exception_copy", reinterpret_cast<void*>(VCRT_std_exception_copy));
+    ldr.registerExport("vcruntime140_1.dll", "__std_exception_copy", reinterpret_cast<void*>(VCRT_std_exception_copy));
+    ldr.registerExport("msvcrt.dll", "__std_exception_copy", reinterpret_cast<void*>(VCRT_std_exception_copy));
+    ldr.registerExport("vcruntime140.dll", "__std_exception_destroy", reinterpret_cast<void*>(VCRT_std_exception_destroy));
+    ldr.registerExport("vcruntime140_1.dll", "__std_exception_destroy", reinterpret_cast<void*>(VCRT_std_exception_destroy));
+    ldr.registerExport("msvcrt.dll", "__std_exception_destroy", reinterpret_cast<void*>(VCRT_std_exception_destroy));
+    ldr.registerExport("vcruntime140.dll", "__std_terminate", reinterpret_cast<void*>(VCRT_std_terminate));
+    ldr.registerExport("vcruntime140_1.dll", "__std_terminate", reinterpret_cast<void*>(VCRT_std_terminate));
+    ldr.registerExport("msvcrt.dll", "__std_terminate", reinterpret_cast<void*>(VCRT_std_terminate));
+    ldr.registerExport("vcruntime140.dll", "__std_type_info_compare", reinterpret_cast<void*>(VCRT_std_type_info_compare));
+    ldr.registerExport("vcruntime140_1.dll", "__std_type_info_compare", reinterpret_cast<void*>(VCRT_std_type_info_compare));
+    ldr.registerExport("msvcrt.dll", "__std_type_info_compare", reinterpret_cast<void*>(VCRT_std_type_info_compare));
+    ldr.registerExport("vcruntime140.dll", "__std_type_info_destroy_list", reinterpret_cast<void*>(VCRT_std_type_info_destroy_list));
+    ldr.registerExport("vcruntime140_1.dll", "__std_type_info_destroy_list", reinterpret_cast<void*>(VCRT_std_type_info_destroy_list));
+    ldr.registerExport("msvcrt.dll", "__std_type_info_destroy_list", reinterpret_cast<void*>(VCRT_std_type_info_destroy_list));
+    ldr.registerExport("vcruntime140.dll", "_purecall", reinterpret_cast<void*>(VCRT_purecall));
+    ldr.registerExport("vcruntime140_1.dll", "_purecall", reinterpret_cast<void*>(VCRT_purecall));
+    ldr.registerExport("msvcrt.dll", "_purecall", reinterpret_cast<void*>(VCRT_purecall));
+    ldr.registerExport("msvcp140.dll", "?_Xbad_alloc@std@@YAXXZ", reinterpret_cast<void*>(MSVC_Xbad_alloc));
+    ldr.registerExport("msvcp140.dll", "?_Xbad_function_call@std@@YAXXZ", reinterpret_cast<void*>(MSVC_Xbad_function_call));
+    ldr.registerExport("msvcp140.dll", "?_Throw_Cpp_error@std@@YAXH@Z", reinterpret_cast<void*>(MSVC_Throw_Cpp_error));
+    ldr.registerExport("msvcp140.dll", "?_Xlength_error@std@@YAXPEBD@Z", reinterpret_cast<void*>(MSVC_Xlength_error));
+    ldr.registerExport("msvcp140.dll", "?_Syserror_map@std@@YAPEBDH@Z", reinterpret_cast<void*>(MSVC_Syserror_map));
+    ldr.registerExport("msvcp140.dll", "?__ExceptionPtrCreate@@YAXPEAX@Z", reinterpret_cast<void*>(MSVC_ExceptionPtrCreate));
+    ldr.registerExport("msvcp140.dll", "?__ExceptionPtrDestroy@@YAXPEAX@Z", reinterpret_cast<void*>(MSVC_ExceptionPtrDestroy));
+    ldr.registerExport("msvcp140.dll", "?__ExceptionPtrCopy@@YAXPEAXPEBX@Z", reinterpret_cast<void*>(MSVC_ExceptionPtrCopy));
+    ldr.registerExport("msvcp140.dll", "?__ExceptionPtrCurrentException@@YAXPEAX@Z", reinterpret_cast<void*>(MSVC_ExceptionPtrCurrentException));
+    ldr.registerExport("msvcp140.dll", "?uncaught_exceptions@std@@YAHXZ", reinterpret_cast<void*>(MSVC_uncaught_exceptions));
+    ldr.registerExport("msvcp140.dll", "_Mtx_lock", reinterpret_cast<void*>(MSVC_Mtx_lock));
+    ldr.registerExport("msvcp140.dll", "_Mtx_trylock", reinterpret_cast<void*>(MSVC_Mtx_trylock));
+    ldr.registerExport("msvcp140.dll", "_Mtx_unlock", reinterpret_cast<void*>(MSVC_Mtx_unlock));
+    ldr.registerExport("msvcp140.dll", "_Cnd_wait", reinterpret_cast<void*>(MSVC_Cnd_wait));
+    ldr.registerExport("msvcp140.dll", "_Cnd_broadcast", reinterpret_cast<void*>(MSVC_Cnd_broadcast));
+    ldr.registerExport("msvcp140.dll", "?_Random_device@std@@YAIXZ", reinterpret_cast<void*>(MSVC_Random_device));
+    ldr.registerExport("msvcp140.dll", "?_W_Getdays@_Locinfo@std@@QEBAPEBGXZ", reinterpret_cast<void*>(MSVC_W_Getdays));
+    ldr.registerExport("msvcp140.dll", "?_W_Getmonths@_Locinfo@std@@QEBAPEBGXZ", reinterpret_cast<void*>(MSVC_W_Getmonths));
+    ldr.registerExport("msvcp140.dll", "?_Getcvt@_Locinfo@std@@QEBA?AU_Cvtvec@@XZ", reinterpret_cast<void*>(MSVC_Getcvt));
+    ldr.registerExport("msvcp140.dll", "??0task_continuation_context@Concurrency@@AEAA@XZ", reinterpret_cast<void*>(MSVC_Conc_TaskContinuationContext_Ctor));
+    ldr.registerExport("msvcp140.dll", "?GetCurrentThreadId@platform@details@Concurrency@@YAJXZ", reinterpret_cast<void*>(MSVC_Conc_GetCurrentThreadId));
+    ldr.registerExport("msvcp140.dll", "?ReportUnhandledError@_ExceptionHolder@details@Concurrency@@AEAAXXZ", reinterpret_cast<void*>(MSVC_Conc_ReportUnhandledError));
+    ldr.registerExport("msvcp140.dll", "?_CallInContext@_ContextCallback@details@Concurrency@@QEBAXV?$function@$$A6AXXZ@std@@_N@Z", reinterpret_cast<void*>(MSVC_Conc_CallInContext));
+    ldr.registerExport("msvcp140.dll", "?_Capture@_ContextCallback@details@Concurrency@@AEAAXXZ", reinterpret_cast<void*>(MSVC_Conc_Capture));
+    ldr.registerExport("msvcp140.dll", "?_Reset@_ContextCallback@details@Concurrency@@AEAAXXZ", reinterpret_cast<void*>(MSVC_Conc_Reset));
+    ldr.registerExport("msvcp140.dll", "?_LogCancelTask@_TaskEventLogger@details@Concurrency@@QEAAXXZ", reinterpret_cast<void*>(MSVC_Conc_LogCancelTask));
+    ldr.registerExport("msvcp140.dll", "?_LogScheduleTask@_TaskEventLogger@details@Concurrency@@QEAAX_N@Z", reinterpret_cast<void*>(MSVC_Conc_LogScheduleTask));
+    ldr.registerExport("msvcp140.dll", "?_LogTaskCompleted@_TaskEventLogger@details@Concurrency@@QEAAXXZ", reinterpret_cast<void*>(MSVC_Conc_LogTaskCompleted));
+    ldr.registerExport("msvcp140.dll", "?_LogTaskExecutionCompleted@_TaskEventLogger@details@Concurrency@@QEAAXXZ", reinterpret_cast<void*>(MSVC_Conc_LogTaskExecutionCompleted));
+    ldr.registerExport("msvcp140.dll", "?_LogWorkItemCompleted@_TaskEventLogger@details@Concurrency@@QEAAXXZ", reinterpret_cast<void*>(MSVC_Conc_LogWorkItemCompleted));
+    ldr.registerExport("msvcp140.dll", "?_LogWorkItemStarted@_TaskEventLogger@details@Concurrency@@QEAAXXZ", reinterpret_cast<void*>(MSVC_Conc_LogWorkItemStarted));
+    ldr.registerExport("msvcp140.dll", "?_Release_chore@details@Concurrency@@YAXPEAU_Threadpool_chore@12@@Z", reinterpret_cast<void*>(MSVC_Conc_Release_chore));
+    ldr.registerExport("msvcp140.dll", "?_ReportUnobservedException@details@Concurrency@@YAXXZ", reinterpret_cast<void*>(MSVC_Conc_ReportUnobservedException));
+    ldr.registerExport("msvcp140.dll", "?_Schedule_chore@details@Concurrency@@YAHPEAU_Threadpool_chore@12@@Z", reinterpret_cast<void*>(MSVC_Conc_Schedule_chore));
+    ldr.registerExport("msvcp140.dll", "?cin@std@@3V?$basic_istream@DU?$char_traits@D@std@@@1@A", reinterpret_cast<void*>(MSVC_cin_storage));
+    ldr.registerExport("msvcp140.dll", "?cout@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A", reinterpret_cast<void*>(MSVC_cout_storage));
+    ldr.registerExport("msvcp140.dll", "?flush@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@XZ", reinterpret_cast<void*>(MSVC_cout_flush));
+    ldr.registerExport("msvcp140.dll", "?write@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@PEBD_J@Z", reinterpret_cast<void*>(MSVC_cout_write));
+    ldr.registerExport("msvcp140.dll", "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@P6AAEAV01@AEAV01@@Z@Z", reinterpret_cast<void*>(MSVC_cout_shift));
+    ldr.registerExport("msvcp140.dll", "?_Osfx@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAXXZ", reinterpret_cast<void*>(MSVC_cout_osfx));
+    ldr.registerExport("msvcp140.dll", "?fill@?$basic_ios@DU?$char_traits@D@std@@@std@@QEBADXZ", reinterpret_cast<void*>(MSVC_ios_fill));
+    ldr.registerExport("msvcp140.dll", "?tie@?$basic_ios@DU?$char_traits@D@std@@@std@@QEBAPEAV?$basic_ostream@DU?$char_traits@D@std@@@2@XZ", reinterpret_cast<void*>(MSVC_ios_tie));
+    ldr.registerExport("msvcp140.dll", "?setstate@?$basic_ios@DU?$char_traits@D@std@@@std@@QEAAXH_N@Z", reinterpret_cast<void*>(MSVC_ios_setstate));
+    ldr.registerExport("msvcp140.dll", "?rdbuf@?$basic_ios@DU?$char_traits@D@std@@@std@@QEBAPEAV?$basic_streambuf@DU?$char_traits@D@std@@@2@XZ", reinterpret_cast<void*>(MSVC_ios_rdbuf));
+    ldr.registerExport("msvcp140.dll", "?flags@ios_base@std@@QEBAHXZ", reinterpret_cast<void*>(MSVC_ios_flags));
+    ldr.registerExport("msvcp140.dll", "?good@ios_base@std@@QEBA_NXZ", reinterpret_cast<void*>(MSVC_ios_good));
+    ldr.registerExport("msvcp140.dll", "?width@ios_base@std@@QEBA_JXZ", reinterpret_cast<void*>(MSVC_ios_width_get));
+    ldr.registerExport("msvcp140.dll", "?width@ios_base@std@@QEAA_J_J@Z", reinterpret_cast<void*>(MSVC_ios_width_set));
+    ldr.registerExport("msvcp140.dll", "?sputc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAAHD@Z", reinterpret_cast<void*>(MSVC_streambuf_sputc));
+    ldr.registerExport("msvcp140.dll", "?sputn@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAA_JPEBD_J@Z", reinterpret_cast<void*>(MSVC_streambuf_sputn));
+    ldr.registerExport("msvcp140.dll", "?peek@?$basic_istream@DU?$char_traits@D@std@@@std@@QEAAHXZ", reinterpret_cast<void*>(MSVC_istream_peek));
+
+    // --- Additional C Runtime Dynamic Registrations (FileZilla & Standard Unix/Win32) ---
+    ldr.registerExport("msvcrt.dll", "cosh", reinterpret_cast<void*>(CRT_cosh));
+    ldr.registerExport("msvcrt.dll", "sinh", reinterpret_cast<void*>(CRT_sinh));
+    ldr.registerExport("msvcrt.dll", "tanh", reinterpret_cast<void*>(CRT_tanh));
+    ldr.registerExport("msvcrt.dll", "atof", reinterpret_cast<void*>(CRT_atof));
+    ldr.registerExport("msvcrt.dll", "atol", reinterpret_cast<void*>(CRT_atol));
+    ldr.registerExport("msvcrt.dll", "difftime", reinterpret_cast<void*>(CRT_difftime));
+    ldr.registerExport("msvcrt.dll", "raise", reinterpret_cast<void*>(CRT_raise));
+    ldr.registerExport("msvcrt.dll", "_wcsdup", reinterpret_cast<void*>(CRT_wcsdup));
+    ldr.registerExport("msvcrt.dll", "wcsncpy", reinterpret_cast<void*>(CRT_wcsncpy));
+    ldr.registerExport("msvcrt.dll", "wcscat", reinterpret_cast<void*>(CRT_wcscat));
+    ldr.registerExport("msvcrt.dll", "wcschr", reinterpret_cast<void*>(CRT_wcschr));
+    ldr.registerExport("msvcrt.dll", "wcspbrk", reinterpret_cast<void*>(CRT_wcspbrk));
+    ldr.registerExport("msvcrt.dll", "wcsspn", reinterpret_cast<void*>(CRT_wcsspn));
+    ldr.registerExport("msvcrt.dll", "wcstombs", reinterpret_cast<void*>(CRT_wcstombs));
+    ldr.registerExport("msvcrt.dll", "wcstoul", reinterpret_cast<void*>(CRT_wcstoul));
+    ldr.registerExport("msvcrt.dll", "_wtoi", reinterpret_cast<void*>(CRT_wtoi));
+    ldr.registerExport("msvcrt.dll", "_wcsnicmp", reinterpret_cast<void*>(CRT_wcsnicmp));
+    ldr.registerExport("msvcrt.dll", "_aligned_malloc", reinterpret_cast<void*>(CRT_aligned_malloc));
+    ldr.registerExport("msvcrt.dll", "_aligned_free", reinterpret_cast<void*>(CRT_aligned_free));
+    ldr.registerExport("msvcrt.dll", "_waccess", reinterpret_cast<void*>(CRT_waccess));
+    ldr.registerExport("msvcrt.dll", "_wchdir", reinterpret_cast<void*>(CRT_wchdir));
+    ldr.registerExport("msvcrt.dll", "_wchmod", reinterpret_cast<void*>(CRT_wchmod));
+    ldr.registerExport("msvcrt.dll", "_wfullpath", reinterpret_cast<void*>(CRT_wfullpath));
+    ldr.registerExport("msvcrt.dll", "_wgetcwd", reinterpret_cast<void*>(CRT_wgetcwd));
+    ldr.registerExport("msvcrt.dll", "_wgetenv", reinterpret_cast<void*>(CRT_wgetenv));
+    ldr.registerExport("msvcrt.dll", "_wputenv", reinterpret_cast<void*>(CRT_wputenv));
+    ldr.registerExport("msvcrt.dll", "_wrename", reinterpret_cast<void*>(CRT_wrename));
+    ldr.registerExport("msvcrt.dll", "_wutime64", reinterpret_cast<void*>(CRT_wutime64));
+    ldr.registerExport("msvcrt.dll", "_wfindfirst64", reinterpret_cast<void*>(CRT_wfindfirst64));
+    ldr.registerExport("msvcrt.dll", "_wfindnext64", reinterpret_cast<void*>(CRT_wfindnext64));
+    ldr.registerExport("msvcrt.dll", "_findclose", reinterpret_cast<void*>(CRT_findclose));
+    ldr.registerExport("msvcrt.dll", "_getcwd", reinterpret_cast<void*>(CRT_getcwd));
+    ldr.registerExport("msvcrt.dll", "_getdrive", reinterpret_cast<void*>(CRT_getdrive));
+    ldr.registerExport("msvcrt.dll", "_chdrive", reinterpret_cast<void*>(CRT_chdrive));
+    ldr.registerExport("msvcrt.dll", "_mkdir", reinterpret_cast<void*>(CRT_mkdir));
+    ldr.registerExport("msvcrt.dll", "_commit", reinterpret_cast<void*>(CRT_commit));
+    ldr.registerExport("msvcrt.dll", "_dup2", reinterpret_cast<void*>(CRT_dup2));
+    ldr.registerExport("msvcrt.dll", "_filelengthi64", reinterpret_cast<void*>(CRT_filelengthi64));
+    ldr.registerExport("msvcrt.dll", "_telli64", reinterpret_cast<void*>(CRT_telli64));
+    ldr.registerExport("msvcrt.dll", "_beginthread", reinterpret_cast<void*>(CRT_beginthread));
+    ldr.registerExport("msvcrt.dll", "_endthreadex", reinterpret_cast<void*>(CRT_endthreadex));
+    ldr.registerExport("msvcrt.dll", "fgetwc", reinterpret_cast<void*>(CRT_fgetwc));
+    ldr.registerExport("msvcrt.dll", "fputws", reinterpret_cast<void*>(CRT_fputws));
+    ldr.registerExport("msvcrt.dll", "getwc", reinterpret_cast<void*>(CRT_getwc));
+    ldr.registerExport("msvcrt.dll", "putwc", reinterpret_cast<void*>(CRT_putwc));
+    ldr.registerExport("msvcrt.dll", "ungetwc", reinterpret_cast<void*>(CRT_ungetwc));
+    ldr.registerExport("msvcrt.dll", "_putws", reinterpret_cast<void*>(CRT_putws));
+    ldr.registerExport("msvcrt.dll", "fseek", reinterpret_cast<void*>(CRT_fseek));
+    ldr.registerExport("msvcrt.dll", "ftell", reinterpret_cast<void*>(CRT_ftell));
+    ldr.registerExport("msvcrt.dll", "fgetpos", reinterpret_cast<void*>(CRT_fgetpos));
+    ldr.registerExport("msvcrt.dll", "fsetpos", reinterpret_cast<void*>(CRT_fsetpos));
+    ldr.registerExport("msvcrt.dll", "remove", reinterpret_cast<void*>(CRT_remove));
+    ldr.registerExport("msvcrt.dll", "_setmaxstdio", reinterpret_cast<void*>(CRT_setmaxstdio));
+    ldr.registerExport("msvcrt.dll", "_getmaxstdio", reinterpret_cast<void*>(CRT_getmaxstdio));
+    ldr.registerExport("msvcrt.dll", "_wperror", reinterpret_cast<void*>(CRT_wperror));
+    ldr.registerExport("msvcrt.dll", "isalnum", reinterpret_cast<void*>(CRT_isalnum));
+    ldr.registerExport("msvcrt.dll", "isalpha", reinterpret_cast<void*>(CRT_isalpha));
+    ldr.registerExport("msvcrt.dll", "isspace", reinterpret_cast<void*>(CRT_isspace));
+    ldr.registerExport("msvcrt.dll", "iswalnum", reinterpret_cast<void*>(CRT_iswalnum));
+    ldr.registerExport("msvcrt.dll", "iswalpha", reinterpret_cast<void*>(CRT_iswalpha));
+    ldr.registerExport("msvcrt.dll", "iswdigit", reinterpret_cast<void*>(CRT_iswdigit));
+    ldr.registerExport("msvcrt.dll", "iswprint", reinterpret_cast<void*>(CRT_iswprint));
+    ldr.registerExport("msvcrt.dll", "iswpunct", reinterpret_cast<void*>(CRT_iswpunct));
+    ldr.registerExport("msvcrt.dll", "iswxdigit", reinterpret_cast<void*>(CRT_iswxdigit));
+    ldr.registerExport("msvcrt.dll", "_assert", reinterpret_cast<void*>(CRT_assert));
+    ldr.registerExport("msvcrt.dll", "_setjmp", reinterpret_cast<void*>(CRT_setjmp));
+    ldr.registerExport("msvcrt.dll", "_strtoi64", reinterpret_cast<void*>(CRT_strtoi64));
+    ldr.registerExport("msvcrt.dll", "_strtoui64", reinterpret_cast<void*>(CRT_strtoui64));
+    ldr.registerExport("msvcrt.dll", "_ctime64", reinterpret_cast<void*>(CRT_ctime64));
+    ldr.registerExport("msvcrt.dll", "_timezone", reinterpret_cast<void*>(&CRT_timezone_val));
 }
 
 } // namespace micant::msvcrt

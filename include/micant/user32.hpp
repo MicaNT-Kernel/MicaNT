@@ -1322,6 +1322,86 @@ inline int32_t GetWindowTextLengthW(win32::HWND /*hWnd*/) noexcept {
     return 0;
 }
 
+inline win32::BOOL AnimateWindow(win32::HWND /*hWnd*/, win32::DWORD /*dwTime*/, win32::DWORD /*dwFlags*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::LONG ChangeDisplaySettingsExW(win32::LPCWSTR /*lpszDeviceName*/, void* /*lpDevMode*/, win32::HWND /*hwnd*/, win32::DWORD /*dwflags*/, void* /*lParam*/) noexcept {
+    return 0; // DISP_CHANGE_SUCCESSFUL
+}
+
+inline win32::BOOL EnumDisplaySettingsW(win32::LPCWSTR /*lpszDeviceName*/, win32::DWORD iModeNum, void* lpDevMode) noexcept {
+    if (!lpDevMode) return win32::FALSE;
+    if (iModeNum == 0 || iModeNum == static_cast<win32::DWORD>(-1)) {
+        uint8_t* p = reinterpret_cast<uint8_t*>(lpDevMode);
+        std::memset(p, 0, 220); // DEVMODEW size
+        *reinterpret_cast<win32::DWORD*>(p + 108) = 1920; // dmPelsWidth
+        *reinterpret_cast<win32::DWORD*>(p + 112) = 1080; // dmPelsHeight
+        *reinterpret_cast<win32::DWORD*>(p + 104) = 32;   // dmBitsPerPel
+        *reinterpret_cast<win32::DWORD*>(p + 120) = 60;   // dmDisplayFrequency
+        return win32::TRUE;
+    }
+    return win32::FALSE;
+}
+
+inline win32::BOOL DrawStateW(void* /*hdc*/, void* /*hbrFore*/, void* /*qfnCallBack*/, win32::LPARAM /*lData*/, win32::WPARAM /*wData*/, int /*x*/, int /*y*/, int /*cx*/, int /*cy*/, win32::UINT /*uFlags*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL GetProcessDefaultLayout(win32::DWORD* pdwDefaultLayout) noexcept {
+    if (pdwDefaultLayout) {
+        *pdwDefaultLayout = 0; // LAYOUT_LTR
+    }
+    return win32::TRUE;
+}
+
+inline void* LoadCursorFromFileW(win32::LPCWSTR /*lpFileName*/) noexcept {
+    return reinterpret_cast<void*>(0x00010001);
+}
+
+inline win32::BOOL SetCaretBlinkTime(win32::UINT /*uMSeconds*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL ValidateRgn(win32::HWND /*hWnd*/, void* /*hRgn*/) noexcept {
+    return win32::TRUE;
+}
+
+inline int16_t VkKeyScanW(wchar_t ch) noexcept {
+    return static_cast<int16_t>(ch & 0xFF);
+}
+
+inline win32::DWORD WaitForInputIdle(win32::HANDLE /*hProcess*/, win32::DWORD /*dwMilliseconds*/) noexcept {
+    return 0; // WAIT_OBJECT_0
+}
+
+inline void keybd_event(uint8_t /*bVk*/, uint8_t /*bScan*/, win32::DWORD /*dwFlags*/, uintptr_t /*dwExtraInfo*/) noexcept {}
+
+inline void* DdeCreateDataHandle(win32::DWORD /*idInst*/, uint8_t* /*pSrc*/, win32::DWORD /*cb*/, win32::DWORD /*cbOff*/, void* /*hszItem*/, win32::UINT /*wFmt*/, win32::UINT /*afCmd*/) noexcept {
+    return reinterpret_cast<void*>(0xDDED0001);
+}
+
+inline win32::DWORD DdeGetData(void* /*hData*/, uint8_t* /*pDst*/, win32::DWORD /*cbMax*/, win32::DWORD /*cbOff*/) noexcept {
+    return 0;
+}
+
+inline win32::UINT DdeGetLastError(win32::DWORD /*idInst*/) noexcept {
+    return 0; // DMLERR_NO_ERROR
+}
+
+inline void* DdeNameService(win32::DWORD /*idInst*/, void* /*hsz1*/, void* /*hsz2*/, win32::UINT /*afCmd*/) noexcept {
+    return reinterpret_cast<void*>(1);
+}
+
+inline win32::BOOL DdePostAdvise(win32::DWORD /*idInst*/, void* /*hszTopic*/, void* /*hszItem*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::DWORD DdeQueryStringW(win32::DWORD /*idInst*/, void* /*hsz*/, win32::LPWSTR psz, win32::DWORD cchMax, int /*iCodePage*/) noexcept {
+    if (psz && cchMax > 0) psz[0] = L'\0';
+    return 0;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -1388,6 +1468,23 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "SetWindowTextW", reinterpret_cast<void*>(SetWindowTextW));
     ldr.registerExport("user32.dll", "GetWindowTextW", reinterpret_cast<void*>(GetWindowTextW));
     ldr.registerExport("user32.dll", "GetWindowTextLengthW", reinterpret_cast<void*>(GetWindowTextLengthW));
+    ldr.registerExport("user32.dll", "AnimateWindow", reinterpret_cast<void*>(AnimateWindow));
+    ldr.registerExport("user32.dll", "ChangeDisplaySettingsExW", reinterpret_cast<void*>(ChangeDisplaySettingsExW));
+    ldr.registerExport("user32.dll", "EnumDisplaySettingsW", reinterpret_cast<void*>(EnumDisplaySettingsW));
+    ldr.registerExport("user32.dll", "DrawStateW", reinterpret_cast<void*>(DrawStateW));
+    ldr.registerExport("user32.dll", "GetProcessDefaultLayout", reinterpret_cast<void*>(GetProcessDefaultLayout));
+    ldr.registerExport("user32.dll", "LoadCursorFromFileW", reinterpret_cast<void*>(LoadCursorFromFileW));
+    ldr.registerExport("user32.dll", "SetCaretBlinkTime", reinterpret_cast<void*>(SetCaretBlinkTime));
+    ldr.registerExport("user32.dll", "ValidateRgn", reinterpret_cast<void*>(ValidateRgn));
+    ldr.registerExport("user32.dll", "VkKeyScanW", reinterpret_cast<void*>(VkKeyScanW));
+    ldr.registerExport("user32.dll", "WaitForInputIdle", reinterpret_cast<void*>(WaitForInputIdle));
+    ldr.registerExport("user32.dll", "keybd_event", reinterpret_cast<void*>(keybd_event));
+    ldr.registerExport("user32.dll", "DdeCreateDataHandle", reinterpret_cast<void*>(DdeCreateDataHandle));
+    ldr.registerExport("user32.dll", "DdeGetData", reinterpret_cast<void*>(DdeGetData));
+    ldr.registerExport("user32.dll", "DdeGetLastError", reinterpret_cast<void*>(DdeGetLastError));
+    ldr.registerExport("user32.dll", "DdeNameService", reinterpret_cast<void*>(DdeNameService));
+    ldr.registerExport("user32.dll", "DdePostAdvise", reinterpret_cast<void*>(DdePostAdvise));
+    ldr.registerExport("user32.dll", "DdeQueryStringW", reinterpret_cast<void*>(DdeQueryStringW));
 }
 
 } // namespace micant::user32

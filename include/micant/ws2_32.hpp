@@ -361,8 +361,254 @@ inline int WSAAsyncSelect([[maybe_unused]] SOCKET s, [[maybe_unused]] void* hWnd
     return 0;
 }
 
+
+// ============================================================================
+// Extended Winsock 2.0 Primitives & Event Synchronization
+// ============================================================================
+
+inline win32::HANDLE WINAPI WSACreateEvent() noexcept {
+    return win32::CreateEventW(nullptr, 1, 0, nullptr);
+}
+
+inline win32::BOOL WINAPI WSACloseEvent(win32::HANDLE hEvent) noexcept {
+    return win32::CloseHandle(hEvent);
+}
+
+inline win32::BOOL WINAPI WSASetEvent(win32::HANDLE hEvent) noexcept {
+    return win32::SetEvent(hEvent);
+}
+
+inline win32::DWORD WINAPI WSAWaitForMultipleEvents(win32::DWORD cEvents,
+                                                    const win32::HANDLE* lphEvents,
+                                                    win32::BOOL fWaitAll,
+                                                    win32::DWORD dwTimeout,
+                                                    [[maybe_unused]] win32::BOOL fAlertable) noexcept {
+    return win32::WaitForMultipleObjects(cEvents, lphEvents, fWaitAll, dwTimeout);
+}
+
+inline win32::HANDLE WINAPI WSAAsyncGetHostByName([[maybe_unused]] win32::HWND hWnd,
+                                                  [[maybe_unused]] unsigned int wMsg,
+                                                  [[maybe_unused]] const char* name,
+                                                  char* buf,
+                                                  int buflen) noexcept {
+    if (buf && buflen >= 16) {
+        std::memset(buf, 0, 16);
+    }
+    return reinterpret_cast<win32::HANDLE>(0x6001);
+}
+
+inline int WINAPI WSACancelAsyncRequest([[maybe_unused]] win32::HANDLE hAsyncTaskHandle) noexcept {
+    return 0;
+}
+
+inline int WINAPI WSAEnumNetworkEvents([[maybe_unused]] SOCKET s,
+                                       [[maybe_unused]] win32::HANDLE hEventObject,
+                                       void* lpNetworkEvents) noexcept {
+    if (lpNetworkEvents) {
+        std::memset(lpNetworkEvents, 0, 44);
+    }
+    return 0;
+}
+
+inline int WINAPI WSAEventSelect([[maybe_unused]] SOCKET s,
+                                 [[maybe_unused]] win32::HANDLE hEventObject,
+                                 [[maybe_unused]] long lNetworkEvents) noexcept {
+    return 0;
+}
+
+struct MicaServEnt {
+    char* s_name;
+    char** s_aliases;
+    short s_port;
+    char* s_proto;
+};
+
+inline void* WINAPI getservbyname(const char* name, const char* proto) noexcept {
+    static char sName[32] = "ssh";
+    static char sProto[16] = "tcp";
+    static char* sAliases[2] = { nullptr, nullptr };
+    static MicaServEnt se;
+    se.s_name = sName;
+    se.s_aliases = sAliases;
+    se.s_port = 22;
+    se.s_proto = sProto;
+    if (name && std::strcmp(name, "http") == 0) se.s_port = 80;
+    if (proto) std::strncpy(sProto, proto, sizeof(sProto) - 1);
+    return &se;
+}
+
+inline int WINAPI getsockopt([[maybe_unused]] SOCKET s, [[maybe_unused]] int level, [[maybe_unused]] int optname, char* optval, int* optlen) noexcept {
+    if (optval && optlen && *optlen >= 4) {
+        *reinterpret_cast<int32_t*>(optval) = 0;
+    }
+    return 0;
+}
+
+inline int WINAPI ioctlsocket([[maybe_unused]] SOCKET s, [[maybe_unused]] long cmd, [[maybe_unused]] uint32_t* argp) noexcept {
+    return 0;
+}
+
+inline int WINAPI select([[maybe_unused]] int nfds, [[maybe_unused]] void* readfds, [[maybe_unused]] void* writefds, [[maybe_unused]] void* exceptfds, [[maybe_unused]] const void* timeout) noexcept {
+    return 1;
+}
+
+inline int WINAPI __WSAFDIsSet([[maybe_unused]] SOCKET fd, [[maybe_unused]] void* set) noexcept {
+    return 1;
+}
+
+inline const char* WINAPI inet_ntop([[maybe_unused]] int af, [[maybe_unused]] const void* src, char* dst, size_t size) noexcept {
+    const char* loopback = "127.0.0.1";
+    if (dst && size > std::strlen(loopback)) {
+        std::strcpy(dst, loopback);
+        return dst;
+    }
+    return nullptr;
+}
+
+inline int WINAPI inet_pton([[maybe_unused]] int af, const char* src, void* dst) noexcept {
+    if (!src || !dst) return -1;
+    *reinterpret_cast<uint32_t*>(dst) = INADDR_LOOPBACK;
+    return 1;
+}
+
+inline int WINAPI WSAConnect([[maybe_unused]] SOCKET s, const void* /*name*/, int /*namelen*/, void* /*lpCallerData*/, void* /*lpCalleeData*/, void* /*lpSQOS*/, void* /*lpGQOS*/) noexcept {
+    return 0;
+}
+
+inline SOCKET WINAPI WSAAccept([[maybe_unused]] SOCKET s, void* /*addr*/, int* /*addrlen*/, void* /*lpfnCondition*/, uintptr_t /*dwCallbackData*/) noexcept {
+    return static_cast<SOCKET>(0x4101);
+}
+
+inline int WINAPI WSAHtonl([[maybe_unused]] SOCKET s, uint32_t hostlong, uint32_t* lpNetlong) noexcept {
+    if (lpNetlong) *lpNetlong = htonl(hostlong);
+    return 0;
+}
+
+inline int WINAPI WSANtohl([[maybe_unused]] SOCKET s, uint32_t netlong, uint32_t* lpHostlong) noexcept {
+    if (lpHostlong) *lpHostlong = ntohl(netlong);
+    return 0;
+}
+
+inline int WINAPI WSANtohs([[maybe_unused]] SOCKET s, uint16_t netshort, uint16_t* lpHostshort) noexcept {
+    if (lpHostshort) *lpHostshort = ntohs(netshort);
+    return 0;
+}
+
+inline int WINAPI WSASend([[maybe_unused]] SOCKET s, void* /*lpBuffers*/, uint32_t /*dwBufferCount*/, uint32_t* lpNumberOfBytesSent, uint32_t /*dwFlags*/, void* /*lpOverlapped*/, void* /*lpCompletionRoutine*/) noexcept {
+    if (lpNumberOfBytesSent) *lpNumberOfBytesSent = 1024;
+    return 0;
+}
+
+inline int WINAPI WSARecv([[maybe_unused]] SOCKET s, void* /*lpBuffers*/, uint32_t /*dwBufferCount*/, uint32_t* lpNumberOfBytesRecvd, uint32_t* lpFlags, void* /*lpOverlapped*/, void* /*lpCompletionRoutine*/) noexcept {
+    if (lpNumberOfBytesRecvd) *lpNumberOfBytesRecvd = 512;
+    if (lpFlags) *lpFlags = 0;
+    return 0;
+}
+
+inline int WINAPI WSASendTo([[maybe_unused]] SOCKET s, void* /*lpBuffers*/, uint32_t /*dwBufferCount*/, uint32_t* lpNumberOfBytesSent, uint32_t /*dwFlags*/, const void* /*to*/, int /*tolen*/, void* /*lpOverlapped*/, void* /*lpCompletionRoutine*/) noexcept {
+    if (lpNumberOfBytesSent) *lpNumberOfBytesSent = 1024;
+    return 0;
+}
+
+inline int WINAPI WSARecvFrom([[maybe_unused]] SOCKET s, void* /*lpBuffers*/, uint32_t /*dwBufferCount*/, uint32_t* lpNumberOfBytesRecvd, uint32_t* lpFlags, void* /*from*/, int* /*fromlen*/, void* /*lpOverlapped*/, void* /*lpCompletionRoutine*/) noexcept {
+    if (lpNumberOfBytesRecvd) *lpNumberOfBytesRecvd = 512;
+    if (lpFlags) *lpFlags = 0;
+    return 0;
+}
+
+inline int WINAPI WSAIoctl([[maybe_unused]] SOCKET s, uint32_t /*dwIoControlCode*/, void* /*lpvInBuffer*/, uint32_t /*cbInBuffer*/, void* /*lpvOutBuffer*/, uint32_t /*cbOutBuffer*/, uint32_t* lpcbBytesReturned, void* /*lpOverlapped*/, void* /*lpCompletionRoutine*/) noexcept {
+    if (lpcbBytesReturned) *lpcbBytesReturned = 0;
+    return 0;
+}
+
+inline SOCKET WINAPI WSASocketA([[maybe_unused]] int af, [[maybe_unused]] int type, [[maybe_unused]] int protocol, void* /*lpProtocolInfo*/, uint32_t /*g*/, uint32_t /*dwFlags*/) noexcept {
+    return static_cast<SOCKET>(0x4201);
+}
+
+inline SOCKET WINAPI WSASocketW([[maybe_unused]] int af, [[maybe_unused]] int type, [[maybe_unused]] int protocol, void* /*lpProtocolInfo*/, uint32_t /*g*/, uint32_t /*dwFlags*/) noexcept {
+    return static_cast<SOCKET>(0x4202);
+}
+
+struct MicaAddrInfo {
+    int ai_flags;
+    int ai_family;
+    int ai_socktype;
+    int ai_protocol;
+    size_t ai_addrlen;
+    char* ai_canonname;
+    void* ai_addr;
+    struct MicaAddrInfo* ai_next;
+};
+
+inline int WINAPI getaddrinfo([[maybe_unused]] const char* pNodeName, [[maybe_unused]] const char* pServiceName, [[maybe_unused]] const void* pHints, void** ppResult) noexcept {
+    if (!ppResult) return -1;
+    auto* ai = new MicaAddrInfo();
+    ai->ai_flags = 0;
+    ai->ai_family = 2; // AF_INET
+    ai->ai_socktype = 1; // SOCK_STREAM
+    ai->ai_protocol = 6; // IPPROTO_TCP
+    ai->ai_addrlen = 16;
+    ai->ai_canonname = nullptr;
+    ai->ai_addr = new uint8_t[16]();
+    ai->ai_next = nullptr;
+    *ppResult = ai;
+    return 0;
+}
+
+inline void WINAPI freeaddrinfo(void* pAddrInfo) noexcept {
+    if (!pAddrInfo) return;
+    auto* ai = reinterpret_cast<MicaAddrInfo*>(pAddrInfo);
+    while (ai) {
+        auto* next = ai->ai_next;
+        delete[] reinterpret_cast<uint8_t*>(ai->ai_addr);
+        delete ai;
+        ai = next;
+    }
+}
+
+inline int WINAPI getnameinfo([[maybe_unused]] const void* pSockaddr, [[maybe_unused]] int SockaddrLength, char* pNodeBuffer, uint32_t NodeBufferSize, char* pServiceBuffer, uint32_t ServiceBufferSize, [[maybe_unused]] int Flags) noexcept {
+    if (pNodeBuffer && NodeBufferSize > 0) {
+        std::snprintf(pNodeBuffer, NodeBufferSize, "localhost");
+    }
+    if (pServiceBuffer && ServiceBufferSize > 0) {
+        std::snprintf(pServiceBuffer, ServiceBufferSize, "8080");
+    }
+    return 0;
+}
+
+inline int WINAPI WSAStringToAddressW([[maybe_unused]] wchar_t* AddressString, [[maybe_unused]] int AddressFamily, void* /*lpProtocolInfo*/, void* /*lpAddress*/, int* lpAddressLength) noexcept {
+    if (lpAddressLength) *lpAddressLength = 16;
+    return 0;
+}
+
+inline int WINAPI WSAAddressToStringW(void* /*lpsaAddress*/, [[maybe_unused]] uint32_t dwAddressLength, void* /*lpProtocolInfo*/, wchar_t* lpszAddressString, uint32_t* lpdwAddressStringLength) noexcept {
+    const wchar_t* loopback = L"127.0.0.1:8080";
+    size_t len = std::wcslen(loopback);
+    if (lpszAddressString && lpdwAddressStringLength && *lpdwAddressStringLength > len) {
+        std::wcscpy(lpszAddressString, loopback);
+    }
+    if (lpdwAddressStringLength) *lpdwAddressStringLength = static_cast<uint32_t>(len + 1);
+    return 0;
+}
+
+inline win32::BOOL WINAPI AcceptEx([[maybe_unused]] SOCKET sListenSocket, [[maybe_unused]] SOCKET sAcceptSocket, void* /*lpOutputBuffer*/, [[maybe_unused]] uint32_t dwReceiveDataLength, [[maybe_unused]] uint32_t dwLocalAddressLength, [[maybe_unused]] uint32_t dwRemoteAddressLength, uint32_t* lpdwBytesReceived, void* /*lpOverlapped*/) noexcept {
+    if (lpdwBytesReceived) *lpdwBytesReceived = 0;
+    return 1;
+}
+
+inline void WINAPI GetAcceptExSockaddrs(void* /*lpOutputBuffer*/, [[maybe_unused]] uint32_t dwReceiveDataLength, [[maybe_unused]] uint32_t dwLocalAddressLength, [[maybe_unused]] uint32_t dwRemoteAddressLength, void** LocalSockaddr, int* LocalSockaddrLength, void** RemoteSockaddr, int* RemoteSockaddrLength) noexcept {
+    static uint8_t mockLocal[32] = { 0 };
+    static uint8_t mockRemote[32] = { 0 };
+    if (LocalSockaddr) *LocalSockaddr = mockLocal;
+    if (LocalSockaddrLength) *LocalSockaddrLength = sizeof(mockLocal);
+    if (RemoteSockaddr) *RemoteSockaddr = mockRemote;
+    if (RemoteSockaddrLength) *RemoteSockaddrLength = sizeof(mockRemote);
+}
+
 inline void InitializeWs2_32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
+
+    // ws2_32.dll Named Exports
     ldr.registerExport("ws2_32.dll", "WSAStartup", reinterpret_cast<void*>(WSAStartup));
     ldr.registerExport("ws2_32.dll", "WSACleanup", reinterpret_cast<void*>(WSACleanup));
     ldr.registerExport("ws2_32.dll", "WSAGetLastError", reinterpret_cast<void*>(WSAGetLastError));
@@ -390,28 +636,184 @@ inline void InitializeWs2_32SubsystemExports() {
     ldr.registerExport("ws2_32.dll", "shutdown", reinterpret_cast<void*>(shutdown));
     ldr.registerExport("ws2_32.dll", "gethostbyname", reinterpret_cast<void*>(gethostbyname));
     ldr.registerExport("ws2_32.dll", "WSAAsyncSelect", reinterpret_cast<void*>(WSAAsyncSelect));
+    ldr.registerExport("ws2_32.dll", "select", reinterpret_cast<void*>(select));
+    ldr.registerExport("ws2_32.dll", "ioctlsocket", reinterpret_cast<void*>(ioctlsocket));
+    ldr.registerExport("ws2_32.dll", "getsockopt", reinterpret_cast<void*>(getsockopt));
+    ldr.registerExport("ws2_32.dll", "__WSAFDIsSet", reinterpret_cast<void*>(__WSAFDIsSet));
+    ldr.registerExport("ws2_32.dll", "AcceptEx", reinterpret_cast<void*>(AcceptEx));
+    ldr.registerExport("ws2_32.dll", "GetAcceptExSockaddrs", reinterpret_cast<void*>(GetAcceptExSockaddrs));
+    ldr.registerExport("ws2_32.dll", "WSACreateEvent", reinterpret_cast<void*>(WSACreateEvent));
+    ldr.registerExport("ws2_32.dll", "WSACloseEvent", reinterpret_cast<void*>(WSACloseEvent));
+    ldr.registerExport("ws2_32.dll", "WSASetEvent", reinterpret_cast<void*>(WSASetEvent));
+    ldr.registerExport("ws2_32.dll", "WSAWaitForMultipleEvents", reinterpret_cast<void*>(WSAWaitForMultipleEvents));
+    ldr.registerExport("ws2_32.dll", "WSAConnect", reinterpret_cast<void*>(WSAConnect));
+    ldr.registerExport("ws2_32.dll", "WSAAccept", reinterpret_cast<void*>(WSAAccept));
+    ldr.registerExport("ws2_32.dll", "WSAHtonl", reinterpret_cast<void*>(WSAHtonl));
+    ldr.registerExport("ws2_32.dll", "WSANtohl", reinterpret_cast<void*>(WSANtohl));
+    ldr.registerExport("ws2_32.dll", "WSANtohs", reinterpret_cast<void*>(WSANtohs));
+    ldr.registerExport("ws2_32.dll", "WSASend", reinterpret_cast<void*>(WSASend));
+    ldr.registerExport("ws2_32.dll", "WSARecv", reinterpret_cast<void*>(WSARecv));
+    ldr.registerExport("ws2_32.dll", "WSASendTo", reinterpret_cast<void*>(WSASendTo));
+    ldr.registerExport("ws2_32.dll", "WSARecvFrom", reinterpret_cast<void*>(WSARecvFrom));
+    ldr.registerExport("ws2_32.dll", "WSAIoctl", reinterpret_cast<void*>(WSAIoctl));
+    ldr.registerExport("ws2_32.dll", "WSASocketA", reinterpret_cast<void*>(WSASocketA));
+    ldr.registerExport("ws2_32.dll", "WSASocketW", reinterpret_cast<void*>(WSASocketW));
+    ldr.registerExport("ws2_32.dll", "getaddrinfo", reinterpret_cast<void*>(getaddrinfo));
+    ldr.registerExport("ws2_32.dll", "freeaddrinfo", reinterpret_cast<void*>(freeaddrinfo));
+    ldr.registerExport("ws2_32.dll", "getnameinfo", reinterpret_cast<void*>(getnameinfo));
+    ldr.registerExport("ws2_32.dll", "WSAStringToAddressW", reinterpret_cast<void*>(WSAStringToAddressW));
+    ldr.registerExport("ws2_32.dll", "WSAAddressToStringW", reinterpret_cast<void*>(WSAAddressToStringW));
+    ldr.registerExport("ws2_32.dll", "WSAAsyncGetHostByName", reinterpret_cast<void*>(WSAAsyncGetHostByName));
+    ldr.registerExport("ws2_32.dll", "WSACancelAsyncRequest", reinterpret_cast<void*>(WSACancelAsyncRequest));
+    ldr.registerExport("ws2_32.dll", "WSAEnumNetworkEvents", reinterpret_cast<void*>(WSAEnumNetworkEvents));
+    ldr.registerExport("ws2_32.dll", "WSAEventSelect", reinterpret_cast<void*>(WSAEventSelect));
+    ldr.registerExport("ws2_32.dll", "getservbyname", reinterpret_cast<void*>(getservbyname));
+    ldr.registerExport("ws2_32.dll", "inet_ntop", reinterpret_cast<void*>(inet_ntop));
+    ldr.registerExport("ws2_32.dll", "inet_pton", reinterpret_cast<void*>(inet_pton));
 
-    // Standard Winsock 1.1 / 2.0 Numeric Export Ordinals
+    // ws2_32.dll Numeric Ordinal Exports
     ldr.registerExportOrdinal("ws2_32.dll", 1, reinterpret_cast<void*>(accept));
     ldr.registerExportOrdinal("ws2_32.dll", 2, reinterpret_cast<void*>(bind));
     ldr.registerExportOrdinal("ws2_32.dll", 3, reinterpret_cast<void*>(closesocket));
     ldr.registerExportOrdinal("ws2_32.dll", 4, reinterpret_cast<void*>(connect));
     ldr.registerExportOrdinal("ws2_32.dll", 5, reinterpret_cast<void*>(getpeername));
     ldr.registerExportOrdinal("ws2_32.dll", 6, reinterpret_cast<void*>(getsockname));
+    ldr.registerExportOrdinal("ws2_32.dll", 7, reinterpret_cast<void*>(getsockopt));
+    ldr.registerExportOrdinal("ws2_32.dll", 8, reinterpret_cast<void*>(htonl));
     ldr.registerExportOrdinal("ws2_32.dll", 9, reinterpret_cast<void*>(htons));
-    ldr.registerExportOrdinal("ws2_32.dll", 11, reinterpret_cast<void*>(inet_addr));
+    ldr.registerExportOrdinal("ws2_32.dll", 10, reinterpret_cast<void*>(inet_addr));
+    ldr.registerExportOrdinal("ws2_32.dll", 11, reinterpret_cast<void*>(inet_ntoa));
+    ldr.registerExportOrdinal("ws2_32.dll", 12, reinterpret_cast<void*>(ioctlsocket));
     ldr.registerExportOrdinal("ws2_32.dll", 13, reinterpret_cast<void*>(listen));
+    ldr.registerExportOrdinal("ws2_32.dll", 14, reinterpret_cast<void*>(ntohl));
     ldr.registerExportOrdinal("ws2_32.dll", 15, reinterpret_cast<void*>(ntohs));
     ldr.registerExportOrdinal("ws2_32.dll", 16, reinterpret_cast<void*>(recv));
+    ldr.registerExportOrdinal("ws2_32.dll", 17, reinterpret_cast<void*>(recvfrom));
+    ldr.registerExportOrdinal("ws2_32.dll", 18, reinterpret_cast<void*>(select));
     ldr.registerExportOrdinal("ws2_32.dll", 19, reinterpret_cast<void*>(send));
+    ldr.registerExportOrdinal("ws2_32.dll", 20, reinterpret_cast<void*>(sendto));
     ldr.registerExportOrdinal("ws2_32.dll", 21, reinterpret_cast<void*>(setsockopt));
     ldr.registerExportOrdinal("ws2_32.dll", 22, reinterpret_cast<void*>(shutdown));
     ldr.registerExportOrdinal("ws2_32.dll", 23, reinterpret_cast<void*>(socket));
+    ldr.registerExportOrdinal("ws2_32.dll", 51, reinterpret_cast<void*>(gethostbyname));
     ldr.registerExportOrdinal("ws2_32.dll", 52, reinterpret_cast<void*>(gethostbyname));
+    ldr.registerExportOrdinal("ws2_32.dll", 55, reinterpret_cast<void*>(getservbyname));
+    ldr.registerExportOrdinal("ws2_32.dll", 57, reinterpret_cast<void*>(gethostname));
     ldr.registerExportOrdinal("ws2_32.dll", 101, reinterpret_cast<void*>(WSAAsyncSelect));
+    ldr.registerExportOrdinal("ws2_32.dll", 102, reinterpret_cast<void*>(gethostbyname));
+    ldr.registerExportOrdinal("ws2_32.dll", 103, reinterpret_cast<void*>(WSAAsyncGetHostByName));
+    ldr.registerExportOrdinal("ws2_32.dll", 108, reinterpret_cast<void*>(WSACancelAsyncRequest));
     ldr.registerExportOrdinal("ws2_32.dll", 111, reinterpret_cast<void*>(WSAGetLastError));
+    ldr.registerExportOrdinal("ws2_32.dll", 112, reinterpret_cast<void*>(WSASetLastError));
     ldr.registerExportOrdinal("ws2_32.dll", 115, reinterpret_cast<void*>(WSAStartup));
     ldr.registerExportOrdinal("ws2_32.dll", 116, reinterpret_cast<void*>(WSACleanup));
+    ldr.registerExportOrdinal("ws2_32.dll", 151, reinterpret_cast<void*>(__WSAFDIsSet));
+    ldr.registerExportOrdinal("ws2_32.dll", 1141, reinterpret_cast<void*>(WSAIoctl));
+    ldr.registerExportOrdinal("ws2_32.dll", 1142, reinterpret_cast<void*>(WSASocketA));
+
+    // wsock32.dll Named Exports
+    ldr.registerExport("wsock32.dll", "WSAStartup", reinterpret_cast<void*>(WSAStartup));
+    ldr.registerExport("wsock32.dll", "WSACleanup", reinterpret_cast<void*>(WSACleanup));
+    ldr.registerExport("wsock32.dll", "WSAGetLastError", reinterpret_cast<void*>(WSAGetLastError));
+    ldr.registerExport("wsock32.dll", "WSASetLastError", reinterpret_cast<void*>(WSASetLastError));
+    ldr.registerExport("wsock32.dll", "socket", reinterpret_cast<void*>(socket));
+    ldr.registerExport("wsock32.dll", "bind", reinterpret_cast<void*>(bind));
+    ldr.registerExport("wsock32.dll", "listen", reinterpret_cast<void*>(listen));
+    ldr.registerExport("wsock32.dll", "accept", reinterpret_cast<void*>(accept));
+    ldr.registerExport("wsock32.dll", "connect", reinterpret_cast<void*>(connect));
+    ldr.registerExport("wsock32.dll", "send", reinterpret_cast<void*>(send));
+    ldr.registerExport("wsock32.dll", "recv", reinterpret_cast<void*>(recv));
+    ldr.registerExport("wsock32.dll", "sendto", reinterpret_cast<void*>(sendto));
+    ldr.registerExport("wsock32.dll", "recvfrom", reinterpret_cast<void*>(recvfrom));
+    ldr.registerExport("wsock32.dll", "closesocket", reinterpret_cast<void*>(closesocket));
+    ldr.registerExport("wsock32.dll", "gethostname", reinterpret_cast<void*>(gethostname));
+    ldr.registerExport("wsock32.dll", "inet_addr", reinterpret_cast<void*>(inet_addr));
+    ldr.registerExport("wsock32.dll", "inet_ntoa", reinterpret_cast<void*>(inet_ntoa));
+    ldr.registerExport("wsock32.dll", "htons", reinterpret_cast<void*>(htons));
+    ldr.registerExport("wsock32.dll", "ntohs", reinterpret_cast<void*>(ntohs));
+    ldr.registerExport("wsock32.dll", "htonl", reinterpret_cast<void*>(htonl));
+    ldr.registerExport("wsock32.dll", "ntohl", reinterpret_cast<void*>(ntohl));
+    ldr.registerExport("wsock32.dll", "getpeername", reinterpret_cast<void*>(getpeername));
+    ldr.registerExport("wsock32.dll", "getsockname", reinterpret_cast<void*>(getsockname));
+    ldr.registerExport("wsock32.dll", "setsockopt", reinterpret_cast<void*>(setsockopt));
+    ldr.registerExport("wsock32.dll", "shutdown", reinterpret_cast<void*>(shutdown));
+    ldr.registerExport("wsock32.dll", "gethostbyname", reinterpret_cast<void*>(gethostbyname));
+    ldr.registerExport("wsock32.dll", "WSAAsyncSelect", reinterpret_cast<void*>(WSAAsyncSelect));
+    ldr.registerExport("wsock32.dll", "select", reinterpret_cast<void*>(select));
+    ldr.registerExport("wsock32.dll", "ioctlsocket", reinterpret_cast<void*>(ioctlsocket));
+    ldr.registerExport("wsock32.dll", "getsockopt", reinterpret_cast<void*>(getsockopt));
+    ldr.registerExport("wsock32.dll", "__WSAFDIsSet", reinterpret_cast<void*>(__WSAFDIsSet));
+    ldr.registerExport("wsock32.dll", "AcceptEx", reinterpret_cast<void*>(AcceptEx));
+    ldr.registerExport("wsock32.dll", "GetAcceptExSockaddrs", reinterpret_cast<void*>(GetAcceptExSockaddrs));
+    ldr.registerExport("wsock32.dll", "WSACreateEvent", reinterpret_cast<void*>(WSACreateEvent));
+    ldr.registerExport("wsock32.dll", "WSACloseEvent", reinterpret_cast<void*>(WSACloseEvent));
+    ldr.registerExport("wsock32.dll", "WSASetEvent", reinterpret_cast<void*>(WSASetEvent));
+    ldr.registerExport("wsock32.dll", "WSAWaitForMultipleEvents", reinterpret_cast<void*>(WSAWaitForMultipleEvents));
+    ldr.registerExport("wsock32.dll", "WSAConnect", reinterpret_cast<void*>(WSAConnect));
+    ldr.registerExport("wsock32.dll", "WSAAccept", reinterpret_cast<void*>(WSAAccept));
+    ldr.registerExport("wsock32.dll", "WSAHtonl", reinterpret_cast<void*>(WSAHtonl));
+    ldr.registerExport("wsock32.dll", "WSANtohl", reinterpret_cast<void*>(WSANtohl));
+    ldr.registerExport("wsock32.dll", "WSANtohs", reinterpret_cast<void*>(WSANtohs));
+    ldr.registerExport("wsock32.dll", "WSASend", reinterpret_cast<void*>(WSASend));
+    ldr.registerExport("wsock32.dll", "WSARecv", reinterpret_cast<void*>(WSARecv));
+    ldr.registerExport("wsock32.dll", "WSASendTo", reinterpret_cast<void*>(WSASendTo));
+    ldr.registerExport("wsock32.dll", "WSARecvFrom", reinterpret_cast<void*>(WSARecvFrom));
+    ldr.registerExport("wsock32.dll", "WSAIoctl", reinterpret_cast<void*>(WSAIoctl));
+    ldr.registerExport("wsock32.dll", "WSASocketA", reinterpret_cast<void*>(WSASocketA));
+    ldr.registerExport("wsock32.dll", "WSASocketW", reinterpret_cast<void*>(WSASocketW));
+    ldr.registerExport("wsock32.dll", "getaddrinfo", reinterpret_cast<void*>(getaddrinfo));
+    ldr.registerExport("wsock32.dll", "freeaddrinfo", reinterpret_cast<void*>(freeaddrinfo));
+    ldr.registerExport("wsock32.dll", "getnameinfo", reinterpret_cast<void*>(getnameinfo));
+    ldr.registerExport("wsock32.dll", "WSAStringToAddressW", reinterpret_cast<void*>(WSAStringToAddressW));
+    ldr.registerExport("wsock32.dll", "WSAAddressToStringW", reinterpret_cast<void*>(WSAAddressToStringW));
+    ldr.registerExport("wsock32.dll", "WSAAsyncGetHostByName", reinterpret_cast<void*>(WSAAsyncGetHostByName));
+    ldr.registerExport("wsock32.dll", "WSACancelAsyncRequest", reinterpret_cast<void*>(WSACancelAsyncRequest));
+    ldr.registerExport("wsock32.dll", "WSAEnumNetworkEvents", reinterpret_cast<void*>(WSAEnumNetworkEvents));
+    ldr.registerExport("wsock32.dll", "WSAEventSelect", reinterpret_cast<void*>(WSAEventSelect));
+    ldr.registerExport("wsock32.dll", "getservbyname", reinterpret_cast<void*>(getservbyname));
+    ldr.registerExport("wsock32.dll", "inet_ntop", reinterpret_cast<void*>(inet_ntop));
+    ldr.registerExport("wsock32.dll", "inet_pton", reinterpret_cast<void*>(inet_pton));
+
+    // wsock32.dll Numeric Ordinal Exports
+    ldr.registerExportOrdinal("wsock32.dll", 1, reinterpret_cast<void*>(accept));
+    ldr.registerExportOrdinal("wsock32.dll", 2, reinterpret_cast<void*>(bind));
+    ldr.registerExportOrdinal("wsock32.dll", 3, reinterpret_cast<void*>(closesocket));
+    ldr.registerExportOrdinal("wsock32.dll", 4, reinterpret_cast<void*>(connect));
+    ldr.registerExportOrdinal("wsock32.dll", 5, reinterpret_cast<void*>(getpeername));
+    ldr.registerExportOrdinal("wsock32.dll", 6, reinterpret_cast<void*>(getsockname));
+    ldr.registerExportOrdinal("wsock32.dll", 7, reinterpret_cast<void*>(getsockopt));
+    ldr.registerExportOrdinal("wsock32.dll", 8, reinterpret_cast<void*>(htonl));
+    ldr.registerExportOrdinal("wsock32.dll", 9, reinterpret_cast<void*>(htons));
+    ldr.registerExportOrdinal("wsock32.dll", 10, reinterpret_cast<void*>(inet_addr));
+    ldr.registerExportOrdinal("wsock32.dll", 11, reinterpret_cast<void*>(inet_ntoa));
+    ldr.registerExportOrdinal("wsock32.dll", 12, reinterpret_cast<void*>(ioctlsocket));
+    ldr.registerExportOrdinal("wsock32.dll", 13, reinterpret_cast<void*>(listen));
+    ldr.registerExportOrdinal("wsock32.dll", 14, reinterpret_cast<void*>(ntohl));
+    ldr.registerExportOrdinal("wsock32.dll", 15, reinterpret_cast<void*>(ntohs));
+    ldr.registerExportOrdinal("wsock32.dll", 16, reinterpret_cast<void*>(recv));
+    ldr.registerExportOrdinal("wsock32.dll", 17, reinterpret_cast<void*>(recvfrom));
+    ldr.registerExportOrdinal("wsock32.dll", 18, reinterpret_cast<void*>(select));
+    ldr.registerExportOrdinal("wsock32.dll", 19, reinterpret_cast<void*>(send));
+    ldr.registerExportOrdinal("wsock32.dll", 20, reinterpret_cast<void*>(sendto));
+    ldr.registerExportOrdinal("wsock32.dll", 21, reinterpret_cast<void*>(setsockopt));
+    ldr.registerExportOrdinal("wsock32.dll", 22, reinterpret_cast<void*>(shutdown));
+    ldr.registerExportOrdinal("wsock32.dll", 23, reinterpret_cast<void*>(socket));
+    ldr.registerExportOrdinal("wsock32.dll", 51, reinterpret_cast<void*>(gethostbyname));
+    ldr.registerExportOrdinal("wsock32.dll", 52, reinterpret_cast<void*>(gethostbyname));
+    ldr.registerExportOrdinal("wsock32.dll", 55, reinterpret_cast<void*>(getservbyname));
+    ldr.registerExportOrdinal("wsock32.dll", 57, reinterpret_cast<void*>(gethostname));
+    ldr.registerExportOrdinal("wsock32.dll", 101, reinterpret_cast<void*>(WSAAsyncSelect));
+    ldr.registerExportOrdinal("wsock32.dll", 102, reinterpret_cast<void*>(gethostbyname));
+    ldr.registerExportOrdinal("wsock32.dll", 103, reinterpret_cast<void*>(WSAAsyncGetHostByName));
+    ldr.registerExportOrdinal("wsock32.dll", 108, reinterpret_cast<void*>(WSACancelAsyncRequest));
+    ldr.registerExportOrdinal("wsock32.dll", 111, reinterpret_cast<void*>(WSAGetLastError));
+    ldr.registerExportOrdinal("wsock32.dll", 112, reinterpret_cast<void*>(WSASetLastError));
+    ldr.registerExportOrdinal("wsock32.dll", 115, reinterpret_cast<void*>(WSAStartup));
+    ldr.registerExportOrdinal("wsock32.dll", 116, reinterpret_cast<void*>(WSACleanup));
+    ldr.registerExportOrdinal("wsock32.dll", 151, reinterpret_cast<void*>(__WSAFDIsSet));
+    ldr.registerExportOrdinal("wsock32.dll", 1141, reinterpret_cast<void*>(WSAIoctl));
+    ldr.registerExportOrdinal("wsock32.dll", 1142, reinterpret_cast<void*>(WSASocketA));
+
 }
 
 } // namespace micant::ws2_32

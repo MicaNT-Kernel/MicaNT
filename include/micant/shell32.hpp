@@ -1392,6 +1392,16 @@ inline HRESULT ShellOrdinal165(void* /*p1*/, void* /*p2*/, void* /*p3*/, void* /
     return S_OK;
 }
 
+inline HRESULT SHDefExtractIconW(LPCWSTR /*pszIconFile*/, int /*iIndex*/, UINT /*uFlags*/, void** phiconLarge, void** phiconSmall, UINT /*nIconSize*/) noexcept {
+    if (phiconLarge) *phiconLarge = reinterpret_cast<void*>(0x00010001);
+    if (phiconSmall) *phiconSmall = reinterpret_cast<void*>(0x00010002);
+    return S_OK;
+}
+
+inline int SHGetIconOverlayIndexW(LPCWSTR /*pszIconPath*/, int /*iIconIndex*/) noexcept {
+    return 0;
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
@@ -1423,6 +1433,8 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "DragQueryPoint", reinterpret_cast<void*>(DragQueryPoint));
     ldr.registerExport("shell32.dll", "DragQueryFileW", reinterpret_cast<void*>(DragQueryFileW));
     ldr.registerExport("shell32.dll", "DragFinish", reinterpret_cast<void*>(DragFinish));
+    ldr.registerExport("shell32.dll", "SHDefExtractIconW", reinterpret_cast<void*>(SHDefExtractIconW));
+    ldr.registerExport("shell32.dll", "SHGetIconOverlayIndexW", reinterpret_cast<void*>(SHGetIconOverlayIndexW));
     ldr.registerExportOrdinal("shell32.dll", 165, reinterpret_cast<void*>(ShellOrdinal165));
 
     // shlwapi.dll exports

@@ -33,6 +33,8 @@
 #include "micant/cipherksp.hpp"
 #include "micant/tsf.hpp"
 #include "micant/uxtheme.hpp"
+#include "micant/ws2_32.hpp"
+#include "micant/iphlpapi.hpp"
 #include "micant/satellite_win32.hpp"
 #include "micant/user32_extended.hpp"
 
@@ -120,6 +122,8 @@ static void InitializeAllMicaNtExports() {
     crypto::InitializeBCryptSubsystemExports();
     tsf::InitializeTextServicesExports();
     uxtheme::InitializeUxThemeSubsystemExports();
+    ws2_32::InitializeWs2_32SubsystemExports();
+    iphlpapi::InitializeIpHlpApiSubsystemExports();
     satellite::InitializeSatelliteWin32Exports();
     user32::InitializeUser32ExtendedExports();
 }

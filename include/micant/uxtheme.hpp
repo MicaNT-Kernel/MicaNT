@@ -97,6 +97,25 @@ inline win32::HRESULT BufferedPaintStopAllAnimations(win32::HWND /*hwnd*/) noexc
     return 0;
 }
 
+inline win32::HRESULT GetThemeBackgroundExtent(HTHEME /*hTheme*/, void* /*hdc*/, int /*iPartId*/, int /*iStateId*/, const void* pContentRect, void* pExtentRect) noexcept {
+    if (pContentRect && pExtentRect) {
+        std::memcpy(pExtentRect, pContentRect, 16); // RECT copy
+    }
+    return 0; // S_OK
+}
+
+inline win32::DWORD GetThemeSysColor(HTHEME /*hTheme*/, int /*iColorId*/) noexcept {
+    return 0x00FFFFFF; // White
+}
+
+inline win32::HRESULT GetThemeSysFont(HTHEME /*hTheme*/, int /*iFontId*/, void* /*plf*/) noexcept {
+    return 0; // S_OK
+}
+
+inline win32::BOOL IsThemePartDefined(HTHEME /*hTheme*/, int /*iPartId*/, int /*iStateId*/) noexcept {
+    return win32::TRUE;
+}
+
 inline void InitializeUxThemeSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
@@ -116,6 +135,10 @@ inline void InitializeUxThemeSubsystemExports() {
     ldr.registerExport("uxtheme.dll", "EndBufferedAnimation", reinterpret_cast<void*>(EndBufferedAnimation));
     ldr.registerExport("uxtheme.dll", "BufferedPaintRenderAnimation", reinterpret_cast<void*>(BufferedPaintRenderAnimation));
     ldr.registerExport("uxtheme.dll", "BufferedPaintStopAllAnimations", reinterpret_cast<void*>(BufferedPaintStopAllAnimations));
+    ldr.registerExport("uxtheme.dll", "GetThemeBackgroundExtent", reinterpret_cast<void*>(GetThemeBackgroundExtent));
+    ldr.registerExport("uxtheme.dll", "GetThemeSysColor", reinterpret_cast<void*>(GetThemeSysColor));
+    ldr.registerExport("uxtheme.dll", "GetThemeSysFont", reinterpret_cast<void*>(GetThemeSysFont));
+    ldr.registerExport("uxtheme.dll", "IsThemePartDefined", reinterpret_cast<void*>(IsThemePartDefined));
 }
 
 } // namespace micant::uxtheme

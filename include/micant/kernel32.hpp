@@ -3497,6 +3497,145 @@ inline void RtlUnwind(void*, void*, void*, void*) noexcept {}
     ExitThread(code);
 }
 
+struct SYSTEM_POWER_STATUS {
+    uint8_t  ACLineStatus;
+    uint8_t  BatteryFlag;
+    uint8_t  BatteryLifePercent;
+    uint8_t  SystemStatusFlag;
+    uint32_t BatteryLifeTime;
+    uint32_t BatteryFullLifeTime;
+};
+
+inline BOOL WINAPI DisableThreadLibraryCalls([[maybe_unused]] HMODULE hLibModule) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetProcessDEPPolicy([[maybe_unused]] DWORD dwFlags) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetDllDirectoryA([[maybe_unused]] LPCSTR lpPathName) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI GetSystemPowerStatus(SYSTEM_POWER_STATUS* lpSystemPowerStatus) noexcept {
+    if (!lpSystemPowerStatus) return FALSE;
+    lpSystemPowerStatus->ACLineStatus = 1;         // AC Online
+    lpSystemPowerStatus->BatteryFlag = 128;        // No system battery (desktop)
+    lpSystemPowerStatus->BatteryLifePercent = 255; // Unknown
+    lpSystemPowerStatus->SystemStatusFlag = 0;
+    lpSystemPowerStatus->BatteryLifeTime = 0xFFFFFFFF;
+    lpSystemPowerStatus->BatteryFullLifeTime = 0xFFFFFFFF;
+    return TRUE;
+}
+
+inline DWORD WINAPI GetActiveProcessorCount([[maybe_unused]] uint16_t groupNumber) noexcept {
+    return 8; // Sovereign 8-core logical configuration
+}
+
+inline BOOL WINAPI GetHandleInformation([[maybe_unused]] HANDLE hObject, DWORD* lpdwFlags) noexcept {
+    if (lpdwFlags) {
+        *lpdwFlags = 0;
+    }
+    return TRUE;
+}
+
+inline DWORD WINAPI GetProfileStringW([[maybe_unused]] LPCWSTR lpAppName,
+                                      [[maybe_unused]] LPCWSTR lpKeyName,
+                                      LPCWSTR lpDefault,
+                                      LPWSTR lpReturnedString,
+                                      DWORD nSize) noexcept {
+    if (!lpReturnedString || nSize == 0) return 0;
+    if (lpDefault) {
+        size_t len = std::wcslen(lpDefault);
+        if (len >= nSize) len = nSize - 1;
+        std::wmemcpy(lpReturnedString, lpDefault, len);
+        lpReturnedString[len] = L'\0';
+        return static_cast<DWORD>(len);
+    }
+    lpReturnedString[0] = L'\0';
+    return 0;
+}
+
+inline int WINAPI IdnToAscii([[maybe_unused]] DWORD dwFlags,
+                              LPCWSTR lpUnicodeCharStr,
+                              int cchUnicodeChar,
+                              LPWSTR lpASCIICharStr,
+                              int cchASCIIChar) noexcept {
+    if (!lpUnicodeCharStr) return 0;
+    int srcLen = (cchUnicodeChar == -1) ? static_cast<int>(std::wcslen(lpUnicodeCharStr) + 1) : cchUnicodeChar;
+    if (cchASCIIChar == 0) return srcLen;
+    if (!lpASCIICharStr) return 0;
+    int copyLen = (srcLen < cchASCIIChar) ? srcLen : cchASCIIChar;
+    std::wmemcpy(lpASCIICharStr, lpUnicodeCharStr, copyLen);
+    return copyLen;
+}
+
+inline BOOL WINAPI IsBadStringPtrA([[maybe_unused]] LPCSTR lpsz, [[maybe_unused]] size_t ucchMax) noexcept {
+    return FALSE; // Sovereign memory is valid
+}
+
+inline BOOL WINAPI SetProcessPriorityBoost([[maybe_unused]] HANDLE hProcess,
+                                            [[maybe_unused]] BOOL bDisablePriorityBoost) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetThreadContext([[maybe_unused]] HANDLE hThread,
+                                     [[maybe_unused]] const void* lpContext) noexcept {
+    return TRUE;
+}
+
+inline HANDLE WINAPI FindFirstVolumeW(LPWSTR lpszVolumeName, DWORD cchBufferLength) noexcept {
+    if (!lpszVolumeName || cchBufferLength < 50) return nullptr;
+    const wchar_t mockVolume[] = L"\\\\?\\Volume{11111111-2222-3333-4444-555555555555}\\";
+    std::wmemcpy(lpszVolumeName, mockVolume, std::wcslen(mockVolume) + 1);
+    return reinterpret_cast<HANDLE>(0xFEED0001);
+}
+
+inline BOOL WINAPI FindNextVolumeW([[maybe_unused]] HANDLE hFindVolume,
+                                    [[maybe_unused]] LPWSTR lpszVolumeName,
+                                    [[maybe_unused]] DWORD cchBufferLength) noexcept {
+    SetLastError(18); // ERROR_NO_MORE_FILES
+    return FALSE;
+}
+
+inline BOOL WINAPI FindVolumeClose([[maybe_unused]] HANDLE hFindVolume) noexcept {
+    return TRUE;
+}
+
+inline DWORD WINAPI GetFinalPathNameByHandleA([[maybe_unused]] HANDLE hFile,
+                                              char* lpszFilePath,
+                                              DWORD cchFilePath,
+                                              [[maybe_unused]] DWORD dwFlags) noexcept {
+    if (!lpszFilePath || cchFilePath < 16) return 0;
+    const char mockPath[] = "C:\\MicaNT\\Volume";
+    size_t len = std::strlen(mockPath);
+    std::memcpy(lpszFilePath, mockPath, len + 1);
+    return static_cast<DWORD>(len);
+}
+
+inline BOOL WINAPI FillConsoleOutputCharacterW([[maybe_unused]] HANDLE hConsoleOutput,
+                                                [[maybe_unused]] wchar_t cCharacter,
+                                                DWORD nLength,
+                                                [[maybe_unused]] void* dwWriteCoord,
+                                                DWORD* lpNumberOfCharsWritten) noexcept {
+    if (lpNumberOfCharsWritten) {
+        *lpNumberOfCharsWritten = nLength;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI ReadConsoleOutputCharacterA([[maybe_unused]] HANDLE hConsoleOutput,
+                                                [[maybe_unused]] char* lpCharacter,
+                                                [[maybe_unused]] DWORD nLength,
+                                                [[maybe_unused]] void* dwReadCoord,
+                                                DWORD* lpNumberOfCharsRead) noexcept {
+    if (lpNumberOfCharsRead) {
+        *lpNumberOfCharsRead = 0;
+    }
+    return TRUE;
+}
+
 // ============================================================================
 // 18. Win32 Dynamic Subsystem Export Table Initializer
 // ============================================================================
@@ -3806,6 +3945,26 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "ReadConsoleW", reinterpret_cast<void*>(ReadConsoleW));
     ldr.registerExport("kernel32.dll", "RtlUnwind", reinterpret_cast<void*>(RtlUnwind));
     ldr.registerExport("kernel32.dll", "FreeLibraryAndExitThread", reinterpret_cast<void*>(FreeLibraryAndExitThread));
+    ldr.registerExport("kernel32.dll", "DisableThreadLibraryCalls", reinterpret_cast<void*>(DisableThreadLibraryCalls));
+    ldr.registerExport("kernel32.dll", "SetProcessDEPPolicy", reinterpret_cast<void*>(SetProcessDEPPolicy));
+    ldr.registerExport("kernel32.dll", "SetDllDirectoryA", reinterpret_cast<void*>(SetDllDirectoryA));
+    ldr.registerExport("api-ms-win-core-kernel32-legacy-ansi-l1-1-0.dll", "SetDllDirectoryA", reinterpret_cast<void*>(SetDllDirectoryA));
+    ldr.registerExport("kernel32.dll", "GetSystemPowerStatus", reinterpret_cast<void*>(GetSystemPowerStatus));
+    ldr.registerExport("kernel32.dll", "GetActiveProcessorCount", reinterpret_cast<void*>(GetActiveProcessorCount));
+    ldr.registerExport("kernel32.dll", "GetHandleInformation", reinterpret_cast<void*>(GetHandleInformation));
+    ldr.registerExport("api-ms-win-core-handle-l1-1-0.dll", "GetHandleInformation", reinterpret_cast<void*>(GetHandleInformation));
+    ldr.registerExport("kernel32.dll", "GetProfileStringW", reinterpret_cast<void*>(GetProfileStringW));
+    ldr.registerExport("kernel32.dll", "IdnToAscii", reinterpret_cast<void*>(IdnToAscii));
+    ldr.registerExport("api-ms-win-core-normalization-l1-1-0.dll", "IdnToAscii", reinterpret_cast<void*>(IdnToAscii));
+    ldr.registerExport("kernel32.dll", "IsBadStringPtrA", reinterpret_cast<void*>(IsBadStringPtrA));
+    ldr.registerExport("kernel32.dll", "SetProcessPriorityBoost", reinterpret_cast<void*>(SetProcessPriorityBoost));
+    ldr.registerExport("kernel32.dll", "SetThreadContext", reinterpret_cast<void*>(SetThreadContext));
+    ldr.registerExport("kernel32.dll", "FindFirstVolumeW", reinterpret_cast<void*>(FindFirstVolumeW));
+    ldr.registerExport("kernel32.dll", "FindNextVolumeW", reinterpret_cast<void*>(FindNextVolumeW));
+    ldr.registerExport("kernel32.dll", "FindVolumeClose", reinterpret_cast<void*>(FindVolumeClose));
+    ldr.registerExport("kernel32.dll", "GetFinalPathNameByHandleA", reinterpret_cast<void*>(GetFinalPathNameByHandleA));
+    ldr.registerExport("kernel32.dll", "FillConsoleOutputCharacterW", reinterpret_cast<void*>(FillConsoleOutputCharacterW));
+    ldr.registerExport("kernel32.dll", "ReadConsoleOutputCharacterA", reinterpret_cast<void*>(ReadConsoleOutputCharacterA));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

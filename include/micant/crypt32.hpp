@@ -1127,6 +1127,18 @@ inline uint32_t CertNameToStrW(
     return toCopy;
 }
 
+inline win32::BOOL CertDeleteCertificateFromStore(void* /*pCertContext*/) noexcept {
+    return win32::TRUE;
+}
+
+inline void* CertEnumCRLsInStore(void* /*hCertStore*/, void* /*pPrevCrlContext*/) noexcept {
+    return nullptr;
+}
+
+inline win32::BOOL CryptProtectMemory(void* /*pData*/, uint32_t /*cbData*/, uint32_t /*dwFlags*/) noexcept {
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 5. Subsystem Export Registration
 // ============================================================================
@@ -1162,6 +1174,9 @@ inline void InitializeCrypt32SubsystemExports() {
     ldr.registerExport("crypt32.dll", "CryptMsgGetParam", reinterpret_cast<void*>(CryptMsgGetParam));
     ldr.registerExport("crypt32.dll", "CryptMsgClose", reinterpret_cast<void*>(CryptMsgClose));
     ldr.registerExport("crypt32.dll", "CertNameToStrW", reinterpret_cast<void*>(CertNameToStrW));
+    ldr.registerExport("crypt32.dll", "CertDeleteCertificateFromStore", reinterpret_cast<void*>(CertDeleteCertificateFromStore));
+    ldr.registerExport("crypt32.dll", "CertEnumCRLsInStore", reinterpret_cast<void*>(CertEnumCRLsInStore));
+    ldr.registerExport("crypt32.dll", "CryptProtectMemory", reinterpret_cast<void*>(CryptProtectMemory));
 }
 
 } // namespace micant::crypt32
