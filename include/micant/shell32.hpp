@@ -1446,6 +1446,12 @@ inline HRESULT SetProcessDpiAwareness([[maybe_unused]] int value) noexcept {
     return S_OK;
 }
 
+inline HRESULT GetDpiForMonitor([[maybe_unused]] void* hmonitor, [[maybe_unused]] int dpiType, uint32_t* dpiX, uint32_t* dpiY) noexcept {
+    if (dpiX) *dpiX = 96;
+    if (dpiY) *dpiY = 96;
+    return S_OK;
+}
+
 inline void DragFinish(void* /*hDrop*/) noexcept {}
 
 inline HRESULT ShellOrdinal165(void* /*p1*/, void* /*p2*/, void* /*p3*/, void* /*p4*/) noexcept {
@@ -1538,6 +1544,8 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shlwapi.dll", "PathStripPathA", reinterpret_cast<void*>(PathStripPathA));
     ldr.registerExport("shlwapi.dll", "StrRetToStrW", reinterpret_cast<void*>(StrRetToStrW));
     ldr.registerExport("api-ms-win-shcore-scaling-l1-1-1.dll", "SetProcessDpiAwareness", reinterpret_cast<void*>(SetProcessDpiAwareness));
+    ldr.registerExport("api-ms-win-shcore-scaling-l1-1-1.dll", "GetDpiForMonitor", reinterpret_cast<void*>(GetDpiForMonitor));
+    ldr.registerExport("shcore.dll", "GetDpiForMonitor", reinterpret_cast<void*>(GetDpiForMonitor));
     ldr.registerExport("api-ms-win-shcore-obsolete-l1-1-0.dll", "CommandLineToArgvW", reinterpret_cast<void*>(CommandLineToArgvW));
 }
 

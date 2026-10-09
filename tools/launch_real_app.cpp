@@ -40,6 +40,8 @@
 #include "micant/winmm.hpp"
 #include "micant/mpr.hpp"
 #include "micant/cfgmgr32.hpp"
+#include "micant/pointer.hpp"
+#include "micant/d3dcompiler.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -132,6 +134,8 @@ static void InitializeAllMicaNtExports() {
     winmm::InitializeWinMMExports();
     mpr::InitializeMprSubsystemExports();
     cfgmgr32::InitializeCfgMgr32SubsystemExports();
+    pointer::InitializePointerExports();
+    prism_compiler::InitializeDirectXSubsystemExports();
 }
 
 struct AppAuditResult {

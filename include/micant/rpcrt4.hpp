@@ -1237,6 +1237,13 @@ inline void __stdcall NdrServerCall2(RPC_MESSAGE* pRpcMsg) {
     }
 }
 
+inline int32_t __stdcall I_RpcExceptionFilter(uint32_t ExceptionCode) noexcept {
+    if ((ExceptionCode & 0xFFFF0000) == 0xC0020000 || (ExceptionCode & 0xFFFF0000) == 0xC0030000) {
+        return 1;
+    }
+    return 0;
+}
+
 // ============================================================================
 // 9. Dynamic Loader Export Registration
 // ============================================================================
@@ -1298,6 +1305,7 @@ inline void InitializeRpcSubsystemExports() {
     loader.registerExport("rpcrt4.dll", "NdrConformantStringUnmarshall", reinterpret_cast<void*>(&NdrConformantStringUnmarshall));
     loader.registerExport("rpcrt4.dll", "NdrClientCall2", reinterpret_cast<void*>(&NdrClientCall2));
     loader.registerExport("rpcrt4.dll", "NdrServerCall2", reinterpret_cast<void*>(&NdrServerCall2));
+    loader.registerExport("rpcrt4.dll", "I_RpcExceptionFilter", reinterpret_cast<void*>(&I_RpcExceptionFilter));
 }
 
 } // namespace micant::rpc
