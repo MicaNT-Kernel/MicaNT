@@ -215,6 +215,7 @@
 #include "micant/dns_server.hpp"
 #include "micant/dhcp_server.hpp"
 #include "micant/iis_server.hpp"
+#include "micant/wsus_server.hpp"
 #include "unmodified_fixture.hpp"
 
 using namespace micant;
@@ -257,7 +258,11 @@ static int g_FailedTests = 0;
 #include "suites/server_storage_suites.hpp"
 
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite210")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite211")) {
+        RUN_TEST(Test_WindowsServerUpdateServices_WSUS_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite210") {
         RUN_TEST(Test_WindowsEnterpriseIIS_HttpServer_Subsystem);
         return g_FailedTests;
     }
@@ -893,6 +898,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_WindowsEnterpriseDNS_Server_Subsystem);
     RUN_TEST(Test_WindowsEnterpriseDHCP_Server_Subsystem);
     RUN_TEST(Test_WindowsEnterpriseIIS_HttpServer_Subsystem);
+    RUN_TEST(Test_WindowsServerUpdateServices_WSUS_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

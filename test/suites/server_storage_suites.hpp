@@ -5408,3 +5408,160 @@ void Test_WindowsEnterpriseIIS_HttpServer_Subsystem() {
     std::cout << "[TEST] Suite 210: Windows Enterprise IIS & HTTP Server Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 211: Windows Server Update Services (WSUS 10.0 / SUSDB / TitanWSUS) Subsystem
+// ============================================================================
+void Test_WindowsServerUpdateServices_WSUS_Subsystem() {
+    std::cout << "[TEST] Suite 211: Windows Server Update Services (WSUS 10.0 / SUSDB / TitanWSUS) Subsystem...\n";
+
+    auto& wsus = micant::wsus::EnterpriseWsusServer::instance();
+    wsus.initialize();
+
+    // Stage 1: SCM Services Registration Parity (WsusService)
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto sRec = scm.getServiceRecord(L"WsusService");
+    TEST_ASSERT(sRec != nullptr, "WsusService must be registered in Service Control Manager");
+    TEST_ASSERT(sRec->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WsusService must be in SERVICE_RUNNING state");
+    TEST_ASSERT(sRec->startType == micant::scm::SERVICE_AUTO_START, "WsusService must be configured for SERVICE_AUTO_START");
+
+    // Stage 2: Version Database Module Registration Parity
+    auto& verDb = micant::version::VersionDatabase::Instance();
+    const char* expectedModules[] = {
+        "wsusservice.exe",
+        "wsusutil.exe",
+        "susdb.dll",
+        "wuaueng.dll",
+        "microsoft.updateservices.administration.dll"
+    };
+    for (const char* mod : expectedModules) {
+        auto* info = verDb.FindModule(mod);
+        TEST_ASSERT(info != nullptr, std::string("VersionDatabase must contain registered module: ") + mod);
+        TEST_ASSERT(info->stringTable.find("FileVersion") != info->stringTable.end(), "Module must have valid FileVersion resource");
+        TEST_ASSERT(info->stringTable.at("FileVersion") == "10.0.26100.1", "Module FileVersion must match 10.0.26100.1");
+    }
+
+    // Stage 3: SUSDB Repository & Seeded Target Groups
+    TEST_ASSERT(wsus.getTargetGroupCount() >= 4, "SUSDB must contain at least 4 default computer target groups");
+    auto groups = wsus.getAllGroups();
+    bool foundAll = false, foundServers = false, foundPilot = false;
+    for (const auto& g : groups) {
+        if (g.groupId == "GROUP-ALL-COMPUTERS") foundAll = true;
+        if (g.groupId == "GROUP-SERVERS") foundServers = true;
+        if (g.groupId == "GROUP-PILOT") foundPilot = true;
+    }
+    TEST_ASSERT(foundAll && foundServers && foundPilot, "Target groups must include All Computers, Servers, and Pilot Ring");
+
+    // Stage 4: Client Computer Registration & Heartbeat
+    std::string cid1, cid2;
+    bool reg1 = wsus.registerClient("TITAN-DC01.micant.internal", "10.0.0.1", "10.0.26100.1", cid1);
+    bool reg2 = wsus.registerClient("TITAN-APP01.micant.internal", "10.0.0.2", "10.0.26100.1", cid2);
+    TEST_ASSERT(reg1 && !cid1.empty(), "Client TITAN-DC01 must register successfully");
+    TEST_ASSERT(reg2 && !cid2.empty(), "Client TITAN-APP01 must register successfully");
+    TEST_ASSERT(wsus.getClientCount() >= 2, "Client count must be at least 2");
+
+    // Stage 5: Target Group Reassignment & Hierarchy
+    bool assignOk = wsus.assignComputerToGroup(cid1, "GROUP-SERVERS");
+    TEST_ASSERT(assignOk, "TITAN-DC01 must be assignable to Production Servers group");
+    bool assignPilot = wsus.assignComputerToGroup(cid2, "GROUP-PILOT");
+    TEST_ASSERT(assignPilot, "TITAN-APP01 must be assignable to Pilot Ring group");
+
+    // Stage 6: Catalog Inventory Query & Classification Mapping
+    auto updates = wsus.getAllUpdates();
+    TEST_ASSERT(updates.size() >= 3, "Catalog must contain at least 3 seeded updates");
+    bool hasSec = false, hasDef = false, hasSuperseded = false;
+    std::string secUpdateId;
+    for (const auto& u : updates) {
+        if (u.classification == micant::wsus::UpdateClassification::SecurityUpdates && !u.isSuperseded) {
+            hasSec = true;
+            secUpdateId = u.updateId;
+        }
+        if (u.classification == micant::wsus::UpdateClassification::DefinitionUpdates) hasDef = true;
+        if (u.isSuperseded) hasSuperseded = true;
+    }
+    TEST_ASSERT(hasSec, "Catalog must contain SecurityUpdates");
+    TEST_ASSERT(hasDef, "Catalog must contain DefinitionUpdates");
+    TEST_ASSERT(hasSuperseded, "Catalog must contain Superseded update");
+
+    // Stage 7: Upstream Catalog Synchronization
+    uint32_t imported = 0;
+    bool syncOk = wsus.syncCatalog(4, &imported);
+    TEST_ASSERT(syncOk && imported == 4, "syncCatalog must import 4 new patches from upstream catalog");
+    TEST_ASSERT(wsus.getUpdateCount() >= 7, "Total update inventory must increase after catalog sync");
+
+    // Stage 8: Approval Rules & Targeting Workflow
+    bool approveOk = wsus.approveUpdate(secUpdateId, "GROUP-SERVERS", micant::wsus::UpdateApprovalAction::Install, "EnterpriseAdmin");
+    TEST_ASSERT(approveOk, "Security update must be approved for Production Servers");
+
+    // Stage 9: Update Decline & Supersedence Handling
+    bool declineOk = wsus.declineUpdate("1A09E5B7-50A4-48FE-98D7-564AC7C48D2A", "EnterpriseAdmin");
+    TEST_ASSERT(declineOk, "Superseded update must be declinable");
+
+    // Stage 10: Client Update Applicability Detection (SyncUpdates)
+    auto clientSync = wsus.syncUpdatesForClient(cid1);
+    TEST_ASSERT(clientSync.totalApprovedCount > 0, "Client sync must detect approved updates for client's group");
+    bool foundApplicable = false;
+    for (const auto& appU : clientSync.applicableUpdates) {
+        if (appU.updateId == secUpdateId) foundApplicable = true;
+    }
+    TEST_ASSERT(foundApplicable, "Approved security update must be applicable to TITAN-DC01");
+
+    // Stage 11: Installation Status Reporting & Compliance Calculation
+    bool repOk = wsus.reportClientStatus(cid1, secUpdateId, micant::wsus::UpdateInstallationState::Installed);
+    TEST_ASSERT(repOk, "Client installation status must be recorded in SUSDB");
+    double compRate = wsus.calculateOverallComplianceRate();
+    TEST_ASSERT(compRate > 0.0, "Overall compliance rate must be positive after successful installation");
+
+    // Stage 12: IIS Web Application Integration (WsusPool on port 8530 & 8531)
+    auto& iis = micant::iis::EnterpriseWebServer::instance();
+    micant::iis::ApplicationPool wsusPool;
+    bool hasPool = iis.getAppPool("WsusPool", wsusPool);
+    TEST_ASSERT(hasPool, "IIS must have WsusPool provisioned");
+    TEST_ASSERT(wsusPool.state == micant::iis::AppPoolState::Running, "WsusPool must be in Running state");
+    TEST_ASSERT(wsus.getHttpPort() == 8530, "WSUS HTTP port must be 8530");
+    TEST_ASSERT(wsus.getHttpsPort() == 8531, "WSUS HTTPS port must be 8531");
+
+    // Stage 13: Win32 C ABI Parity (MicaWsus*)
+    NTSTATUS abiInit = MicaWsusInitialize();
+    TEST_ASSERT(abiInit == micant::STATUS_SUCCESS, "MicaWsusInitialize must return STATUS_SUCCESS");
+
+    char newCid[64]{};
+    NTSTATUS abiReg = MicaWsusRegisterComputer("TITAN-WORK01.micant.internal", "10.0.0.50", "10.0.26100.1", newCid, sizeof(newCid));
+    TEST_ASSERT(abiReg == micant::STATUS_SUCCESS && std::strlen(newCid) > 0, "MicaWsusRegisterComputer must return valid client ID");
+
+    uint32_t abiImp = 0;
+    NTSTATUS abiSync = MicaWsusSyncCatalog(2, &abiImp);
+    TEST_ASSERT(abiSync == micant::STATUS_SUCCESS && abiImp == 2, "MicaWsusSyncCatalog must succeed via C ABI");
+
+    double abiComp = MicaWsusGetComplianceRate();
+    TEST_ASSERT(abiComp >= 0.0, "MicaWsusGetComplianceRate must return valid double");
+
+    // Stage 14: 120-Operation Concurrent Multithreaded Client Sync Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&wsus, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                std::string compName = "STRESS-NODE-" + std::to_string(t) + "-" + std::to_string(op);
+                std::string cId;
+                bool okR = wsus.registerClient(compName + ".micant.internal", "10.100." + std::to_string(t) + "." + std::to_string(op + 1), "10.0.26100.1", cId);
+                auto syncRes = wsus.syncUpdatesForClient(cId);
+                bool okRep = wsus.reportClientStatus(cId, "9F818C52-79F8-4D2A-98C0-745BD3BC6E21", micant::wsus::UpdateInstallationState::Installed);
+                if (okR && syncRes.totalApprovedCount > 0 && okRep) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded client sync stress test must complete with 100% success");
+
+    std::cout << "[TEST] Suite 211: Windows Server Update Services (WSUS 10.0 / SUSDB / TitanWSUS) Subsystem PASSED.\n";
+}
+
+

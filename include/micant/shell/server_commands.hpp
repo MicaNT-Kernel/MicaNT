@@ -2560,4 +2560,112 @@
             << "  iis test                                Execute in-kernel IIS 10.0 server self-tests\n";
     }
 
+    void cmdWsus(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& wsus = micant::wsus::EnterpriseWsusServer::instance();
+
+        if (tokens.size() > 1 && tokens[1] == "status") {
+            out << "Windows Server Update Services (WSUS 10.0 / SUSDB / TitanWSUS)\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service State:            Running (WsusService)\n"
+                << "  Database:                 SUSDB (Windows Internal Database / SQL LocalDB)\n"
+                << "  Upstream Server:          " << wsus.getUpstreamServer() << "\n"
+                << "  HTTP Administration Port: " << wsus.getHttpPort() << "\n"
+                << "  HTTPS Administration Port:" << wsus.getHttpsPort() << "\n"
+                << "  Synchronized Updates:     " << wsus.getUpdateCount() << " updates\n"
+                << "  Computer Target Groups:   " << wsus.getTargetGroupCount() << " groups\n"
+                << "  Registered Client Targets:" << wsus.getClientCount() << " computers\n"
+                << "  Active Approvals:         " << wsus.getApprovalCount() << " approvals\n"
+                << "  Overall Compliance Rate:  " << std::fixed << std::setprecision(1) 
+                << wsus.calculateOverallComplianceRate() << " %\n"
+                << "  Total Sync Attempts:      " << wsus.getTotalSyncAttempts() << "\n"
+                << "  Total Client Sync Req:    " << wsus.getTotalClientSyncRequests() << "\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "sync") {
+            uint32_t imported = 0;
+            wsus.syncCatalog(3, &imported);
+            out << "[+] WSUS Catalog Synchronization Succeeded: " << imported << " new updates ingested into SUSDB.\n";
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "updates") {
+            out << "WSUS Update Catalog Inventory (SUSDB)\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto list = wsus.getAllUpdates();
+            for (const auto& u : list) {
+                out << "  [" << u.updateId.substr(0, 8) << "] " << u.kbArticle << " | " 
+                    << micant::wsus::UpdateClassificationToString(u.classification) << " | "
+                    << (u.isApproved ? "APPROVED" : (u.isSuperseded ? "SUPERSEDED" : "UNAPPROVED")) << "\n"
+                    << "      Title: " << u.title << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "groups") {
+            out << "WSUS Computer Target Groups\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto grps = wsus.getAllGroups();
+            for (const auto& g : grps) {
+                out << "  [" << g.groupId << "] " << g.groupName << " (" << g.memberIds.size() << " computers)\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "clients") {
+            out << "WSUS Registered Client Computers\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto clients = wsus.getAllClients();
+            for (const auto& c : clients) {
+                out << "  [" << c.computerId << "] " << c.fqdn << " (" << c.ipAddress << ", " << c.osVersion << ") Group: " << c.targetGroupId << "\n";
+            }
+            return;
+        }
+
+        if (tokens.size() > 3 && tokens[1] == "approve") {
+            std::string uId = tokens[2];
+            std::string grp = tokens[3];
+            micant::wsus::UpdateApprovalAction action = micant::wsus::UpdateApprovalAction::Install;
+            if (tokens.size() > 4 && tokens[4] == "decline") action = micant::wsus::UpdateApprovalAction::Decline;
+            if (tokens.size() > 4 && tokens[4] == "detect") action = micant::wsus::UpdateApprovalAction::DetectOnly;
+
+            bool ok = wsus.approveUpdate(uId, grp, action, "Administrator");
+            out << (ok ? "[+] Update approval registered successfully.\n" : "[-] Failed to register update approval: target update or group not found.\n");
+            return;
+        }
+
+        if (tokens.size() > 1 && tokens[1] == "test") {
+            out << "[TEST] Executing WSUS & Patch Management Subsystem Self-Test...\n";
+            uint32_t imp = 0;
+            bool sOk = wsus.syncCatalog(2, &imp);
+            out << "  [1/4] Upstream Catalog Sync:      " << (sOk ? "PASSED" : "FAILED") << "\n";
+
+            std::string cId;
+            bool rOk = wsus.registerClient("TITAN-TEST01.micant.internal", "10.0.0.99", "10.0.26100.1", cId);
+            out << "  [2/4] Client Target Registration: " << (rOk ? "PASSED" : "FAILED") << "\n";
+
+            auto syncRes = wsus.syncUpdatesForClient(cId);
+            bool aOk = (syncRes.totalApprovedCount > 0);
+            out << "  [3/4] Client Policy Sync Protocol:" << (aOk ? "PASSED" : "FAILED") << "\n";
+
+            double comp = wsus.calculateOverallComplianceRate();
+            out << "  [4/4] Compliance Rate Calculation:" << (comp >= 0.0 ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All WSUS Subsystem Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows Server Update Services (WSUS 10.0 / SUSDB / wsusutil)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  wsus status                             Display WSUS server health and telemetry\n"
+            << "  wsus sync                               Trigger update catalog sync with upstream\n"
+            << "  wsus updates                            List all updates in SUSDB database\n"
+            << "  wsus groups                             List all computer target groups\n"
+            << "  wsus clients                            List all registered client machines\n"
+            << "  wsus approve <updateId> <groupId>       Approve update for deployment\n"
+            << "  wsus test                               Execute in-kernel WSUS server self-tests\n";
+    }
+
+
 

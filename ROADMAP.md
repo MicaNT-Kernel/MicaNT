@@ -373,6 +373,8 @@
 │ Phase 182: Windows Enterprise DHCP Server Subsystem (M209)[COMPLETED 100%]│
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 183: Windows Enterprise IIS & HTTP Server (M210)   [COMPLETED 100%]│
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 184: Windows Server Update Services (WSUS M211)    [COMPLETED 100%]│
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3861,6 +3863,28 @@
   - `iis` / `iisreset` / `appcmd` (`status`, `sites`, `apppools`, `start`, `stop`, `restart`, `recycle`, `bindings`, `request`, `test`).
 - [x] **Unit Test Suite 210 (`Test_WindowsEnterpriseIIS_HttpServer_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration, VersionDatabase registration, ApplicationHost configuration, AppPool lifecycle & rapid-fail protection, HTTP/1.1 request wire parsing, static file servicing & MIME mapping, default document resolution, HTTP status codes & custom error pages, Integrated Windows Authentication, TLS SNI binding & certificate validation, Gzip content compression negotiation, W3C Extended logging, Win32 C ABI exports, and concurrent 8-thread multithreaded stress test (120 HTTP requests).
+
+---
+
+### Phase 184: Windows Server Update Services (WSUS 10.0 / SUSDB / TitanWSUS) Subsystem (`wsus_server.hpp`, `WsusService`, `wsusutil.exe`, `susdb.dll`, `wuaueng.dll`) (Milestone 211) [COMPLETED 100%]
+*Goal: Implement clean-room Windows Server Update Services (WSUS 10.0) Subsystem and SUSDB update database engine, featuring SCM update services lifecycle (`WsusService`), IIS 10.0 Administration site integration (port 8530 HTTP / 8531 HTTPS, WsusPool), target group hierarchy (`All Computers`, `Unassigned Computers`, custom enterprise rings), upstream catalog synchronization (Microsoft Update / upstream WSUS server), update approval workflows (Install, Uninstall, Decline, Optional) with deadline enforcement, client sync and reporting web service (`ClientWebService`), update compliance tracking, database maintenance & cleanup (`wsusutil.exe`), Win32 C ABI exports, and interactive shell management (`wsus`, `wsusutil`, `wuauclt`).*
+- [x] **SUSDB Update Database & Content Store (`include/micant/wsus_server.hpp`)**:
+  - `EnterpriseWsusServer`: In-memory metadata and SUSDB database store with zero-telemetry policy, content directory tracking (`C:\WSUS\WsusContent`), and SHA-256 payload integrity hashing.
+  - Target Group Hierarchy: Built-in target groups with inheritance (`All Computers`, `Unassigned Computers`, `Pilot_Ring`, `Production_Servers`), target group membership assignment, and client targeting rules (client-side vs server-side targeting).
+  - Upstream Synchronization Engine: Synchronizes update metadata catalog from upstream source (`Microsoft Update` or parent WSUS server), updates categories (`Operating System`, `Critical Updates`, `Security Updates`, `Drivers`), and records sync status, revision IDs, KB numbers, and MSRC severity ratings (`Critical`, `Important`, `Moderate`, `Low`).
+  - Update Approval Engine: Targeted approvals by computer group with action types (`Install`, `Uninstall`, `Decline`, `Optional`), revision supersedence tracking, and mandatory deadline timestamps.
+  - Client Sync & Reporting: Handles client detection requests, computes applicable updates based on group approvals and client OS architecture, ingests client installation status reports (`Installed`, `Needed`, `Failed`, `NotApplicable`), and calculates group compliance percentages.
+  - WSUS Maintenance & Cleanup: Obsolete update cleanup, declined update purging, unneeded content file deletion, and database re-indexing via `wsusutil.exe` maintenance routines.
+- [x] **IIS & SCM Integration**:
+  - SCM Service registration: `WsusService` (Windows Server Update Services, Auto Start, Running).
+  - IIS 10.0 Integration: Automatically provisions `WsusPool` application pool (Integrated pipeline mode) and `WSUS Administration` web site on ports 8530 (HTTP) and 8531 (HTTPS/TLS) bound to `C:\Program Files\Update Services\WebServices`.
+  - VersionDatabase registration (`10.0.26100.1`): `wsusservice.exe`, `wsusutil.exe`, `susdb.dll`, `wuaueng.dll`, `microsoft.updateservices.administration.dll`.
+  - Win32 C ABI exports: `MicaWsusInitialize`, `MicaWsusRegisterClient`, `MicaWsusApproveUpdate`, `MicaWsusSyncCatalog`, `MicaWsusGetCompliance`, `MicaWsusRunMaintenance`, `MicaWsusShutdown`.
+- [x] **Interactive Shell CLI (`include/micant/shell/server_commands.hpp`)**:
+  - `wsus` / `wsusutil` / `wuauclt` (`status`, `sync`, `updates`, `groups`, `clients`, `approve`, `test`).
+- [x] **Unit Test Suite 211 (`Test_WindowsServerUpdateServices_WSUS_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, IIS site & binding provisioning, target group creation & hierarchy, upstream catalog synchronization, update approval workflow, client registration & inventory, update applicability matching, client installation reporting, compliance rate calculations, WSUS maintenance & cleanup (`wsusutil`), Win32 C ABI exports, shell CLI dispatch verification, and concurrent 8-thread multithreaded client stress test (120 client sync/report cycles).
+
 
 
 
