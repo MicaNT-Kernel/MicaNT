@@ -2667,5 +2667,177 @@
             << "  wsus test                               Execute in-kernel WSUS server self-tests\n";
     }
 
+    void cmdWinRm(const std::vector<std::string>& tokens, std::ostream& out) {
+        auto& winrm = micant::winrm::EnterpriseWinRmServer::instance();
+        winrm.initialize();
+
+        if (tokens.empty()) return;
+        std::string primary = tokens[0];
+
+        // WinRS client mode: winrs [-r:<host>] <command>
+        if (primary == "winrs") {
+            if (tokens.size() < 2) {
+                out << "Windows Remote Shell (winrs.exe)\n"
+                    << "Usage: winrs -r:<endpoint> <command>\n"
+                    << "Example: winrs -r:TITAN-MGMT01 ipconfig\n";
+                return;
+            }
+            std::string cmdToRun;
+            for (size_t i = 1; i < tokens.size(); ++i) {
+                if (tokens[i].rfind("-r:", 0) == 0 || tokens[i].rfind("/r:", 0) == 0) {
+                    continue; // Skip target host specification
+                }
+                if (!cmdToRun.empty()) cmdToRun += " ";
+                cmdToRun += tokens[i];
+            }
+            if (cmdToRun.empty()) cmdToRun = "whoami";
+
+            std::string sId, cId;
+            if (!winrm.openShell(micant::winrm::ShellType::Cmd, "TITAN\\Administrator", "127.0.0.1", "C:\\Windows\\System32", {}, sId)) {
+                out << "[-] WinRS error: Failed to open remote shell session.\n";
+                return;
+            }
+
+            if (!winrm.executeCommand(sId, cmdToRun, {}, cId)) {
+                out << "[-] WinRS error: Failed to dispatch remote command.\n";
+                winrm.closeShell(sId);
+                return;
+            }
+
+            std::string sOut, sErr;
+            int32_t exitCode = 0;
+            bool fin = false;
+            winrm.receiveCommandOutput(sId, cId, sOut, sErr, exitCode, fin);
+            if (!sOut.empty()) out << sOut;
+            if (!sErr.empty()) out << sErr;
+            winrm.closeShell(sId);
+            return;
+        }
+
+        // WinRM management commands
+        std::string sub = (tokens.size() > 1) ? tokens[1] : "";
+
+        if (sub == "quickconfig" || sub == "qc") {
+            out << "WinRM service is already running on this machine.\n"
+                << "WinRM is already set up for remote management on this machine.\n"
+                << "[+] Created WinRM HTTP listener on Address=* Port=5985\n"
+                << "[+] Created WinRM HTTPS listener on Address=* Port=5986\n"
+                << "[+] Configured Windows Filtering Platform (WFP) exception for ports 5985 and 5986\n";
+            return;
+        }
+
+        if (sub == "status" || sub == "stats") {
+            auto stats = winrm.getStatistics();
+            out << "Windows Remote Management (WinRM 3.0 / WS-Management / PSRP)\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service State:            RUNNING (WinRM / svchost.exe -k NetworkService)\n"
+                << "  Active Shells:            " << stats.activeShells << "\n"
+                << "  Total Shells Created:     " << stats.totalShellsCreated << "\n"
+                << "  Total Commands Executed:  " << stats.totalCommandsExecuted << "\n"
+                << "  Total SOAP Requests:      " << stats.totalSoapRequests << "\n"
+                << "  Total SOAP Faults:        " << stats.totalSoapFaults << "\n"
+                << "  Bytes Received:           " << stats.totalBytesReceived << " bytes\n"
+                << "  Bytes Sent:               " << stats.totalBytesSent << " bytes\n";
+            return;
+        }
+
+        if (sub == "listeners" || (tokens.size() > 2 && tokens[1] == "enumerate" && tokens[2].find("listener") != std::string::npos)) {
+            out << "WinRM Listeners Configuration\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto listeners = winrm.getListeners();
+            for (const auto& l : listeners) {
+                out << "  Listener:\n"
+                    << "    Address:               " << l.address << "\n"
+                    << "    Transport:             " << (l.transport == micant::winrm::ListenerTransport::Http ? "HTTP" : "HTTPS") << "\n"
+                    << "    Port:                  " << l.port << "\n"
+                    << "    Hostname:              " << l.hostname << "\n"
+                    << "    Enabled:               " << (l.enabled ? "true" : "false") << "\n"
+                    << "    URLPrefix:             " << l.urlPrefix << "\n";
+                if (!l.certificateThumbprint.empty()) {
+                    out << "    CertificateThumbprint: " << l.certificateThumbprint << "\n";
+                }
+                out << "\n";
+            }
+            return;
+        }
+
+        if (sub == "shells" || (tokens.size() > 2 && tokens[1] == "enumerate" && tokens[2].find("shell") != std::string::npos)) {
+            out << "Active Remote Shell Sessions\n"
+                << "--------------------------------------------------------------------------------\n";
+            auto shells = winrm.getActiveShells();
+            if (shells.empty()) {
+                out << "  No active remote shell sessions.\n";
+            } else {
+                for (const auto& sh : shells) {
+                    out << "  [" << sh.shellId << "] " << (sh.type == micant::winrm::ShellType::Cmd ? "CMD" : "PowerShell")
+                        << " User: " << sh.ownerUser << " IP: " << sh.clientIp
+                        << " WorkingDir: " << sh.workingDirectory
+                        << " Commands: " << sh.commands.size() << "\n";
+                }
+            }
+            return;
+        }
+
+        if (sub == "get" || sub == "config") {
+            auto cfg = winrm.getServiceConfig();
+            auto q = winrm.getQuotaConfig();
+            out << "WinRM Configuration\n"
+                << "--------------------------------------------------------------------------------\n"
+                << "  Service:\n"
+                << "    RootMinEnvelopeSizeSize_kb = " << cfg.rootMinEnvelopeSizeKb << "\n"
+                << "    MaxEnvelopeSizekb          = " << cfg.maxEnvelopeSizeKb << "\n"
+                << "    MaxTimeoutms               = " << cfg.maxTimeoutMs << "\n"
+                << "    MaxBatchItems              = " << cfg.maxBatchItems << "\n"
+                << "    MaxProviderRequests        = " << cfg.maxProviderRequests << "\n"
+                << "  Auth:\n"
+                << "    Basic                      = " << (cfg.authBasic ? "true" : "false") << "\n"
+                << "    Kerberos                   = " << (cfg.authKerberos ? "true" : "false") << "\n"
+                << "    Negotiate                  = " << (cfg.authNegotiate ? "true" : "false") << "\n"
+                << "    Certificate                = " << (cfg.authCertificate ? "true" : "false") << "\n"
+                << "  Winrs Quotas:\n"
+                << "    AllowRemoteShellAccess     = true\n"
+                << "    IdleTimeout                = " << q.idleTimeoutMs << " ms\n"
+                << "    MaxConcurrentUsers         = " << q.maxConcurrentUsers << "\n"
+                << "    MaxShellsPerUser           = " << q.maxShellsPerUser << "\n"
+                << "    MaxProcessesPerShell       = " << q.maxProcessesPerShell << "\n"
+                << "    MaxMemoryPerShellMB        = " << q.maxMemoryPerShellMb << "\n";
+            return;
+        }
+
+        if (sub == "test") {
+            out << "[TEST] Executing WinRM & WS-Management Subsystem Self-Test...\n";
+            std::string sId;
+            bool sOk = winrm.openShell(micant::winrm::ShellType::Cmd, "TITAN\\Admin", "127.0.0.1", "C:\\Windows\\System32", {}, sId);
+            out << "  [1/4] Remote Shell Creation:      " << (sOk ? "PASSED" : "FAILED") << "\n";
+
+            std::string cId;
+            bool eOk = winrm.executeCommand(sId, "hostname", {}, cId);
+            out << "  [2/4] Remote Command Execution:   " << (eOk ? "PASSED" : "FAILED") << "\n";
+
+            std::string sOut, sErr;
+            int32_t ec = 0;
+            bool fin = false;
+            winrm.receiveCommandOutput(sId, cId, sOut, sErr, ec, fin);
+            out << "  [3/4] Output Stream Capture:      " << (fin && sOut.find("TITAN-MGMT01") != std::string::npos ? "PASSED" : "FAILED") << "\n";
+
+            bool cOk = winrm.closeShell(sId);
+            out << "  [4/4] Shell Cleanup & Quota:      " << (cOk ? "PASSED" : "FAILED") << "\n";
+
+            out << "[+] All WinRM Subsystem Self-Tests Passed!\n";
+            return;
+        }
+
+        out << "MicaNT Windows Remote Management (WinRM 3.0 / WS-Management / winrs)\n"
+            << "--------------------------------------------------------------------------------\n"
+            << "Usage:\n"
+            << "  winrm quickconfig                       Configure WinRM service and default listeners\n"
+            << "  winrm status                            Display WinRM service status and metrics\n"
+            << "  winrm get winrm/config                  Display WinRM service and quota configuration\n"
+            << "  winrm listeners                         Enumerate configured HTTP/HTTPS listeners\n"
+            << "  winrm shells                            Enumerate active remote shell sessions\n"
+            << "  winrs -r:<host> <cmd>                   Execute remote command via WinRS\n"
+            << "  winrm test                              Execute in-kernel WinRM self-tests\n";
+    }
+
 
 

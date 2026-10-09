@@ -5564,4 +5564,252 @@ void Test_WindowsServerUpdateServices_WSUS_Subsystem() {
     std::cout << "[TEST] Suite 211: Windows Server Update Services (WSUS 10.0 / SUSDB / TitanWSUS) Subsystem PASSED.\n";
 }
 
+void Test_WindowsRemoteManagement_WinRM_Subsystem() {
+    std::cout << "[TEST] Executing Suite 212: Windows Remote Management (WinRM 3.0 / WS-Management / PSRP) Subsystem...\n";
+
+    // Stage 1: SCM Service Registration (WinRM)
+    auto& winrm = micant::winrm::EnterpriseWinRmServer::instance();
+    TEST_ASSERT(winrm.initialize(), "EnterpriseWinRmServer initialization must succeed");
+
+    auto& scm = micant::scm::ServiceControlManager::get();
+    auto svc = scm.getServiceRecord(L"WinRM");
+    TEST_ASSERT(svc != nullptr, "WinRM service must be registered in SCM");
+    TEST_ASSERT(svc->status.dwCurrentState == micant::scm::SERVICE_RUNNING, "WinRM service must be in running state");
+    TEST_ASSERT(svc->binaryPath.find(L"svchost.exe") != std::wstring::npos, "WinRM must be hosted by svchost.exe");
+
+    // Stage 2: VersionDatabase Registration
+    auto& db = micant::version::VersionDatabase::Instance();
+    TEST_ASSERT(db.FindModule("winrm.cmd") != nullptr, "winrm.cmd must be registered in VersionDatabase");
+    TEST_ASSERT(db.FindModule("winrs.exe") != nullptr, "winrs.exe must be registered in VersionDatabase");
+    TEST_ASSERT(db.FindModule("wsmprovhost.exe") != nullptr, "wsmprovhost.exe must be registered in VersionDatabase");
+    TEST_ASSERT(db.FindModule("wsmsvc.dll") != nullptr, "wsmsvc.dll must be registered in VersionDatabase");
+
+    // Stage 3: Default WinRM Listeners (HTTP 5985 & HTTPS 5986)
+    auto listeners = winrm.getListeners();
+    TEST_ASSERT(listeners.size() >= 2, "WinRM must configure at least 2 default listeners");
+    bool foundHttp = false, foundHttps = false;
+    for (const auto& l : listeners) {
+        if (l.transport == micant::winrm::ListenerTransport::Http && l.port == 5985) foundHttp = true;
+        if (l.transport == micant::winrm::ListenerTransport::Https && l.port == 5986) {
+            foundHttps = true;
+            TEST_ASSERT(!l.certificateThumbprint.empty(), "HTTPS listener must possess TLS certificate thumbprint");
+        }
+    }
+    TEST_ASSERT(foundHttp, "HTTP listener on port 5985 must be present");
+    TEST_ASSERT(foundHttps, "HTTPS listener on port 5986 must be present");
+
+    // Stage 4: Configuration & Quota Parameters
+    auto cfg = winrm.getServiceConfig();
+    TEST_ASSERT(cfg.maxEnvelopeSizeKb == 500, "MaxEnvelopeSizekb must match standard 500 KB");
+    TEST_ASSERT(cfg.authKerberos == true, "Kerberos authentication must be enabled");
+    TEST_ASSERT(cfg.authNegotiate == true, "Negotiate authentication must be enabled");
+
+    auto quotas = winrm.getQuotaConfig();
+    TEST_ASSERT(quotas.maxShellsPerUser == 30, "MaxShellsPerUser must default to 30");
+    TEST_ASSERT(quotas.maxProcessesPerShell == 25, "MaxProcessesPerShell must default to 25");
+
+    // Stage 5: Custom Listener Management
+    micant::winrm::WinRmListener customListener;
+    customListener.transport = micant::winrm::ListenerTransport::Https;
+    customListener.address = "127.0.0.1";
+    customListener.port = 15986;
+    customListener.hostname = "management.internal";
+    customListener.certificateThumbprint = "112233445566778899AABBCCDDEEFF0011223344";
+    winrm.addListener(customListener);
+
+    bool foundCustom = false;
+    for (const auto& l : winrm.getListeners()) {
+        if (l.port == 15986) foundCustom = true;
+    }
+    TEST_ASSERT(foundCustom, "Custom listener on port 15986 must be added successfully");
+    TEST_ASSERT(winrm.removeListener(micant::winrm::ListenerTransport::Https, 15986), "Removing custom listener must succeed");
+
+    // Stage 6: Remote Command Shell Session Creation
+    std::string shellId;
+    bool okShell = winrm.openShell(micant::winrm::ShellType::Cmd, "TITAN\\Administrator", "10.0.0.50", "C:\\Windows\\System32", {}, shellId);
+    TEST_ASSERT(okShell && !shellId.empty(), "Opening remote shell session must succeed and return ShellId");
+
+    micant::winrm::RemoteShell shellObj;
+    TEST_ASSERT(winrm.getShell(shellId, shellObj), "Retrieving remote shell object must succeed");
+    TEST_ASSERT(shellObj.ownerUser == "TITAN\\Administrator", "Shell owner must be TITAN\\Administrator");
+    TEST_ASSERT(shellObj.workingDirectory == "C:\\Windows\\System32", "Working directory must match initial path");
+
+    // Stage 7: Remote Command Execution & Standard Output Capture
+    std::string cmdId;
+    bool okCmd = winrm.executeCommand(shellId, "hostname", {}, cmdId);
+    TEST_ASSERT(okCmd && !cmdId.empty(), "Executing 'hostname' command must succeed");
+
+    std::string sOut, sErr;
+    int32_t ec = -1;
+    bool fin = false;
+    TEST_ASSERT(winrm.receiveCommandOutput(shellId, cmdId, sOut, sErr, ec, fin), "Receiving command output must succeed");
+    TEST_ASSERT(fin, "Command must be marked finished");
+    TEST_ASSERT(ec == 0, "Exit code must be 0");
+    TEST_ASSERT(sOut.find("TITAN-MGMT01") != std::string::npos, "Hostname output must match TITAN-MGMT01");
+
+    // Stage 8: Output Streaming & Exit Codes (whoami & echo)
+    std::string whoamiCmdId;
+    TEST_ASSERT(winrm.executeCommand(shellId, "whoami", {}, whoamiCmdId), "Executing 'whoami' must succeed");
+    winrm.receiveCommandOutput(shellId, whoamiCmdId, sOut, sErr, ec, fin);
+    TEST_ASSERT(fin && ec == 0 && sOut.find("TITAN\\Administrator") != std::string::npos, "whoami must output user identity");
+
+    std::string echoCmdId;
+    TEST_ASSERT(winrm.executeCommand(shellId, "echo Sovereign Kernel WinRM", {}, echoCmdId), "Executing 'echo' must succeed");
+    winrm.receiveCommandOutput(shellId, echoCmdId, sOut, sErr, ec, fin);
+    TEST_ASSERT(fin && ec == 0 && sOut.find("Sovereign Kernel WinRM") != std::string::npos, "echo must return printed string");
+
+    // Stage 9: Signal Delivery & Process Cancellation
+    std::string sigCmdId;
+    TEST_ASSERT(winrm.executeCommand(shellId, "custom_long_running_task.exe", {}, sigCmdId), "Spawning command for cancellation must succeed");
+    bool sigOk = winrm.signalCommand(shellId, sigCmdId, micant::winrm::SIGNAL_CODE_TERMINATE);
+    TEST_ASSERT(sigOk, "Signaling termination to command must succeed");
+    winrm.receiveCommandOutput(shellId, sigCmdId, sOut, sErr, ec, fin);
+    TEST_ASSERT(fin && ec == -1, "Terminated command must have exit code -1");
+    TEST_ASSERT(sErr.find("canceled by signal") != std::string::npos, "Stderr must indicate cancellation by signal");
+
+    // Stage 10: PowerShell Remote Shell & PSRP Runspace Pool
+    std::string psShellId;
+    bool okPs = winrm.openShell(micant::winrm::ShellType::PowerShell, "TITAN\\Operator", "10.0.0.51", "C:\\", {}, psShellId);
+    TEST_ASSERT(okPs, "Opening PowerShell remote shell must succeed");
+
+    micant::winrm::RemoteShell psObj;
+    TEST_ASSERT(winrm.getShell(psShellId, psObj), "Retrieving PowerShell shell must succeed");
+    TEST_ASSERT(psObj.isPsrpPoolOpen, "PSRP runspace pool must be open");
+
+    std::string psCmdId;
+    winrm.executeCommand(psShellId, "Get-Process", {}, psCmdId);
+    winrm.receiveCommandOutput(psShellId, psCmdId, sOut, sErr, ec, fin);
+    TEST_ASSERT(fin && ec == 0 && sOut.find("ProcessName") != std::string::npos, "Get-Process execution must return process list");
+
+    // Stage 11: SOAP WS-Management Wire Processing (Create Shell)
+    std::string createSoap =
+        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+        "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+        "xmlns:wsman=\"http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd\">\r\n"
+        "  <s:Header>\r\n"
+        "    <wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/Create</wsa:Action>\r\n"
+        "    <wsa:MessageID>urn:uuid:11112222-3333-4444-5555-666677778888</wsa:MessageID>\r\n"
+        "    <wsman:ResourceURI>http://schemas.microsoft.com/wbem/wsman/1/windows/shell/cmd</wsman:ResourceURI>\r\n"
+        "  </s:Header>\r\n"
+        "  <s:Body/>\r\n"
+        "</s:Envelope>";
+    std::string createResp;
+    bool okSoapCreate = winrm.processSoapRequest(createSoap, createResp);
+    TEST_ASSERT(okSoapCreate, "processSoapRequest for Create Shell must succeed");
+    TEST_ASSERT(createResp.find("CreateResponse") != std::string::npos, "Response must contain CreateResponse");
+    TEST_ASSERT(createResp.find("<rsp:ShellId>") != std::string::npos, "Response must return ShellId");
+
+    // Stage 12: SOAP WS-Management Command & Receive Protocol
+    // Extract shellId from response
+    size_t idStart = createResp.find("<rsp:ShellId>") + 13;
+    size_t idEnd = createResp.find("</rsp:ShellId>", idStart);
+    std::string wireShellId = createResp.substr(idStart, idEnd - idStart);
+
+    std::string cmdSoap =
+        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+        "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+        "xmlns:wsman=\"http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd\" "
+        "xmlns:rsp=\"http://schemas.microsoft.com/wbem/wsman/1/windows/shell\">\r\n"
+        "  <s:Header>\r\n"
+        "    <wsa:Action>http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Command</wsa:Action>\r\n"
+        "    <wsa:MessageID>urn:uuid:22223333-4444-5555-6666-777788889999</wsa:MessageID>\r\n"
+        "    <wsman:SelectorSet><wsman:Selector Name=\"ShellId\">" + wireShellId + "</wsman:Selector></wsman:SelectorSet>\r\n"
+        "  </s:Header>\r\n"
+        "  <s:Body>\r\n"
+        "    <rsp:CommandLine>hostname</rsp:CommandLine>\r\n"
+        "  </s:Body>\r\n"
+        "</s:Envelope>";
+    std::string cmdResp;
+    TEST_ASSERT(winrm.processSoapRequest(cmdSoap, cmdResp), "SOAP Command request must succeed");
+    TEST_ASSERT(cmdResp.find("CommandResponse") != std::string::npos, "SOAP Response must contain CommandResponse");
+
+    size_t cIdStart = cmdResp.find("<rsp:CommandId>") + 15;
+    size_t cIdEnd = cmdResp.find("</rsp:CommandId>", cIdStart);
+    std::string wireCmdId = cmdResp.substr(cIdStart, cIdEnd - cIdStart);
+
+    std::string recvSoap =
+        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+        "xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+        "xmlns:wsman=\"http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd\" "
+        "xmlns:rsp=\"http://schemas.microsoft.com/wbem/wsman/1/windows/shell\">\r\n"
+        "  <s:Header>\r\n"
+        "    <wsa:Action>http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Receive</wsa:Action>\r\n"
+        "    <wsa:MessageID>urn:uuid:33334444-5555-6666-7777-888899990000</wsa:MessageID>\r\n"
+        "    <wsman:SelectorSet><wsman:Selector Name=\"ShellId\">" + wireShellId + "</wsman:Selector></wsman:SelectorSet>\r\n"
+        "  </s:Header>\r\n"
+        "  <s:Body>\r\n"
+        "    <rsp:Receive><rsp:CommandId>" + wireCmdId + "</rsp:CommandId></rsp:Receive>\r\n"
+        "  </s:Body>\r\n"
+        "</s:Envelope>";
+    std::string recvResp;
+    TEST_ASSERT(winrm.processSoapRequest(recvSoap, recvResp), "SOAP Receive request must succeed");
+    TEST_ASSERT(recvResp.find("ReceiveResponse") != std::string::npos, "SOAP Response must contain ReceiveResponse");
+    TEST_ASSERT(recvResp.find("TITAN-MGMT01") != std::string::npos, "ReceiveResponse must contain stream output");
+    TEST_ASSERT(recvResp.find("CommandState State=\"Done\"") != std::string::npos, "Command state must be Done");
+
+    // Close wire shell
+    winrm.closeShell(wireShellId);
+
+    // Stage 13: Win32 C ABI Parity (MicaWinRm*)
+    NTSTATUS abiInit = MicaWinRmInitialize();
+    TEST_ASSERT(abiInit == micant::STATUS_SUCCESS, "MicaWinRmInitialize must return STATUS_SUCCESS");
+
+    char abiShellId[64]{};
+    NTSTATUS abiOpen = MicaWinRmOpenShell("cmd", "TITAN\\AbiUser", abiShellId, sizeof(abiShellId));
+    TEST_ASSERT(abiOpen == micant::STATUS_SUCCESS && std::strlen(abiShellId) > 0, "MicaWinRmOpenShell must succeed");
+
+    char abiCmdId[64]{};
+    NTSTATUS abiExec = MicaWinRmExecuteCommand(abiShellId, "ver", abiCmdId, sizeof(abiCmdId));
+    TEST_ASSERT(abiExec == micant::STATUS_SUCCESS && std::strlen(abiCmdId) > 0, "MicaWinRmExecuteCommand must succeed");
+
+    char abiStdout[256]{};
+    int32_t abiExitCode = -1;
+    bool abiFinished = false;
+    NTSTATUS abiRecv = MicaWinRmReceiveOutput(abiShellId, abiCmdId, abiStdout, sizeof(abiStdout), &abiExitCode, &abiFinished);
+    TEST_ASSERT(abiRecv == micant::STATUS_SUCCESS && abiFinished && abiExitCode == 0, "MicaWinRmReceiveOutput must succeed");
+    TEST_ASSERT(std::string(abiStdout).find("Version 10.0.26100.1") != std::string::npos, "MicaWinRmReceiveOutput must contain version string");
+
+    NTSTATUS abiClose = MicaWinRmCloseShell(abiShellId);
+    TEST_ASSERT(abiClose == micant::STATUS_SUCCESS, "MicaWinRmCloseShell must return STATUS_SUCCESS");
+
+    uint32_t aShells = 0, tCmds = 0;
+    uint64_t tBytes = 0;
+    MicaWinRmGetStats(&aShells, &tCmds, &tBytes);
+    TEST_ASSERT(tCmds > 0, "MicaWinRmGetStats must report executed commands");
+
+    // Stage 14: 120-Operation Concurrent Multithreaded Remote Shell Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&winrm, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                std::string uName = "TITAN\\StressUser" + std::to_string(t);
+                std::string sId;
+                bool okO = winrm.openShell(micant::winrm::ShellType::Cmd, uName, "10.200." + std::to_string(t) + ".10", "C:\\", {}, sId);
+                std::string cId;
+                bool okE = winrm.executeCommand(sId, "echo StressOp " + std::to_string(op), {}, cId);
+                std::string oS, oE;
+                int32_t ec = 0;
+                bool f = false;
+                bool okR = winrm.receiveCommandOutput(sId, cId, oS, oE, ec, f);
+                bool okC = winrm.closeShell(sId);
+                if (okO && okE && okR && okC && f && ec == 0) {
+                    stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation concurrent multithreaded WinRM stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 212: Windows Remote Management (WinRM 3.0 / WS-Management / PSRP) Subsystem PASSED.\n";
+}
+
+
 

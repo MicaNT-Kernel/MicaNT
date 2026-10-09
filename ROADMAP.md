@@ -375,6 +375,8 @@
 │ Phase 183: Windows Enterprise IIS & HTTP Server (M210)   [COMPLETED 100%]│
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 184: Windows Server Update Services (WSUS M211)    [COMPLETED 100%]│
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 185: Windows Remote Management (WinRM M212)        [COMPLETED 100%]│
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3884,6 +3886,27 @@
   - `wsus` / `wsusutil` / `wuauclt` (`status`, `sync`, `updates`, `groups`, `clients`, `approve`, `test`).
 - [x] **Unit Test Suite 211 (`Test_WindowsServerUpdateServices_WSUS_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration, VersionDatabase registration, IIS site & binding provisioning, target group creation & hierarchy, upstream catalog synchronization, update approval workflow, client registration & inventory, update applicability matching, client installation reporting, compliance rate calculations, WSUS maintenance & cleanup (`wsusutil`), Win32 C ABI exports, shell CLI dispatch verification, and concurrent 8-thread multithreaded client stress test (120 client sync/report cycles).
+
+---
+
+### Phase 185: Windows Remote Management (WinRM 3.0 / WS-Management / PSRP / TitanWinRM) Subsystem (`winrm_server.hpp`, `WinRM`, `winrm.cmd`, `winrs.exe`, `wsmprovhost.exe`, `wsmres.dll`, `wsmsvc.dll`) (Milestone 212) [COMPLETED 100%]
+*Goal: Implement clean-room Windows Remote Management (WinRM 3.0) Subsystem, WS-Management SOAP XML engine, and PowerShell Remoting Protocol (PSRP) runtime, featuring SCM WinRM service lifecycle (`WinRM`), dual default HTTP/HTTPS listeners (port 5985 HTTP / 5986 HTTPS with TLS certificate bindings), remote shell container lifecycle (CMD and PowerShell runspace pools), remote command execution with standard output/error streaming and exit code tracking, process cancellation via WS-Management signal envelopes (`terminate`, `ctrl-c`), SOAP XML envelope parser and router (`wsa:Action`, `wsman:ResourceURI`, `wsman:SelectorSet`), Win32 C ABI exports, and interactive shell management (`winrm`, `winrs`).*
+- [x] **WS-Management & PSRP Core Engine (`include/micant/winrm_server.hpp`)**:
+  - `EnterpriseWinRmServer`: Zero-telemetry WS-Management 1.1 / WinRM 3.0 protocol implementation with SOAP 1.2 envelope serialization and deserialization.
+  - Listener Infrastructure: Configurable listeners over HTTP (5985) and HTTPS (5986) with IP binding (`*` or specific), hostnames, and TLS certificate thumbprints.
+  - Service Configuration & Quotas: `MaxEnvelopeSizekb` (500 KB), `MaxTimeoutms` (60,000 ms), `MaxBatchItems` (32,000), `MaxShellsPerUser` (30), `MaxProcessesPerShell` (25), and user idle timeouts.
+  - Remote Shell Management: Shell session instantiation for Command (`cmd.exe`) and PowerShell Runspace pools with owner SID tracking, working directory, and environment inheritance.
+  - Remote Command Execution & Streaming: Asynchronous process spawning, stdout/stderr chunked buffering, real-time command state management (`Running`, `Completed`, `Terminated`), and exit code delivery.
+  - WS-Management SOAP Wire Processing: Supports WS-Addressing / WS-Transfer actions (`Create`, `Delete`, `Get`, `Command`, `Receive`, `Signal`), selector set routing by `ShellId`, and SOAP fault generation (`wsman:QuotaLimitReached`, `wsman:InvalidEnvelope`).
+- [x] **Win32 & SCM Parity**:
+  - SCM Service registration: `WinRM` ("Windows Remote Management (WS-Management)", Auto Start, Running, `svchost.exe -k NetworkService`).
+  - VersionDatabase registration (`10.0.26100.1`): `winrm.cmd`, `winrs.exe`, `wsmprovhost.exe`, `wsmres.dll`, `wsmagent.dll`, `wsmsvc.dll`.
+  - Win32 C ABI exports: `MicaWinRmInitialize`, `MicaWinRmCreateListener`, `MicaWinRmOpenShell`, `MicaWinRmExecuteCommand`, `MicaWinRmReceiveOutput`, `MicaWinRmCloseShell`, `MicaWinRmGetStats`, `MicaWinRmShutdown`.
+- [x] **Interactive Shell CLI (`include/micant/shell/server_commands.hpp`)**:
+  - `winrm` / `winrs` / `wsman` (`quickconfig`, `status`, `get winrm/config`, `listeners`, `shells`, `winrs -r:<host> <cmd>`, `test`).
+- [x] **Unit Test Suite 212 (`Test_WindowsRemoteManagement_WinRM_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration, VersionDatabase registration, default HTTP/HTTPS listeners, configuration & quotas, custom listener management, CMD remote shell creation, remote command execution & stdout capture (`hostname`), streaming output & exit codes (`whoami`, `echo`), signal delivery & process cancellation (`SIGNAL_CODE_TERMINATE`), PowerShell remote shell & PSRP runspace pool, SOAP Create Shell envelope processing, SOAP Command & Receive output streaming with Done state, Win32 C ABI parity, and 120-operation concurrent multithreaded remote shell stress test (8 threads).
+
 
 
 
