@@ -25,6 +25,7 @@
 #include "satellite_sumatra.hpp"
 #include "satellite_everything.hpp"
 #include "satellite_winmerge.hpp"
+#include "satellite_rufus.hpp"
 
 namespace micant::satellite {
 
@@ -384,6 +385,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // WinMerge 2.16+ Visual Diff & Merge Subsystem Extensions
     winmerge::InitializeWinMergeExports();
+
+    // Rufus 4.x Storage & Low-Level Hardware Subsystem Extensions
+    rufus::InitializeRufusExports();
 
     // MPR 1.0 Network Provider Router Subsystem
     mpr::InitializeMprSubsystemExports();

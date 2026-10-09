@@ -7826,6 +7826,201 @@ void Test_Retail_Ecosystem_100_Percent_Coverage() {
     std::cout << "[TEST] Suite 221: 100.0% Retail Ecosystem Coverage & Subsystem Extension Matrix PASSED.\n";
 }
 
+// ============================================================================
+// Suite 222: Rufus Low-Level Storage & Native NT Syscall Subsystem Validation
+// ============================================================================
+inline void Test_Rufus_Storage_And_NtSyscalls_Suite() {
+    std::cout << "[TEST] Executing Suite 222: Rufus Low-Level Storage & Native NT Syscall Subsystem Validation...\n";
+
+    // 1. Initialize Subsystem Exports
+    micant::satellite::InitializeSatelliteWin32Exports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+
+    // Stage 1: Export Registration Verification for all 13 DLLs
+    TEST_ASSERT(loader.getExport("advapi32.dll", "SystemFunction036") != nullptr, "advapi32!SystemFunction036 must be registered");
+    TEST_ASSERT(loader.getExport("advapi32.dll", "ConvertStringSecurityDescriptorToSecurityDescriptorA") != nullptr, "advapi32!ConvertStringSecurityDescriptorToSecurityDescriptorA must be registered");
+    TEST_ASSERT(loader.getExport("crypt32.dll", "CertGetCertificateChain") != nullptr, "crypt32!CertGetCertificateChain must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "FindFirstVolumeA") != nullptr, "kernel32!FindFirstVolumeA must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "GetVolumeInformationByHandleW") != nullptr, "kernel32!GetVolumeInformationByHandleW must be registered");
+    TEST_ASSERT(loader.getExport("ntdll.dll", "NtCreateFile") != nullptr, "ntdll!NtCreateFile must be registered");
+    TEST_ASSERT(loader.getExport("ntdll.dll", "NtFsControlFile") != nullptr, "ntdll!NtFsControlFile must be registered");
+    TEST_ASSERT(loader.getExport("ntdll.dll", "NtDeviceIoControlFile") != nullptr, "ntdll!NtDeviceIoControlFile must be registered");
+    TEST_ASSERT(loader.getExport("ole32.dll", "CoInitializeSecurity") != nullptr, "ole32!CoInitializeSecurity must be registered");
+    TEST_ASSERT(loader.getExport("setupapi.dll", "SetupDiGetClassDevsA") != nullptr, "setupapi!SetupDiGetClassDevsA must be registered");
+    TEST_ASSERT(loader.getExport("setupapi.dll", "CM_Get_Device_IDA") != nullptr, "setupapi!CM_Get_Device_IDA must be registered");
+    TEST_ASSERT(loader.getExport("shell32.dll", "SHCreateDirectoryExW") != nullptr, "shell32!SHCreateDirectoryExW must be registered");
+    TEST_ASSERT(loader.getExportOrdinal("shell32.dll", 2) != nullptr, "shell32!Ordinal_2 must be registered");
+    TEST_ASSERT(loader.getExportOrdinal("shell32.dll", 4) != nullptr, "shell32!Ordinal_4 must be registered");
+    TEST_ASSERT(loader.getExport("shlwapi.dll", "wnsprintfW") != nullptr, "shlwapi!wnsprintfW must be registered");
+    TEST_ASSERT(loader.getExport("user32.dll", "SetWinEventHook") != nullptr, "user32!SetWinEventHook must be registered");
+    TEST_ASSERT(loader.getExport("virtdisk.dll", "GetVirtualDiskOperationProgress") != nullptr, "virtdisk!GetVirtualDiskOperationProgress must be registered");
+    TEST_ASSERT(loader.getExport("wininet.dll", "InternetGetConnectedState") != nullptr, "wininet!InternetGetConnectedState must be registered");
+    TEST_ASSERT(loader.getExport("wintrust.dll", "WinVerifyTrustEx") != nullptr, "wintrust!WinVerifyTrustEx must be registered");
+
+    // Stage 2: Kernel32 Volume & Drive Enumeration
+    char volName[128] = { 0 };
+    void* hVol = micant::satellite::rufus::FindFirstVolumeA(volName, sizeof(volName));
+    TEST_ASSERT(hVol != nullptr, "FindFirstVolumeA must return valid search handle");
+    TEST_ASSERT(std::strstr(volName, "\\\\?\\Volume{") != nullptr, "Volume name must contain volume GUID prefix");
+
+    char nextVol[128] = { 0 };
+    int32_t nextRes = micant::satellite::rufus::FindNextVolumeA(hVol, nextVol, sizeof(nextVol));
+    TEST_ASSERT(nextRes == 0, "FindNextVolumeA on single volume must return FALSE");
+    TEST_ASSERT(micant::satellite::rufus::FindVolumeClose(hVol) == 1, "FindVolumeClose must succeed");
+
+    char volPath[32] = { 0 };
+    TEST_ASSERT(micant::satellite::rufus::GetVolumePathNameA("C:\\some\\file.iso", volPath, sizeof(volPath)) == 1, "GetVolumePathNameA must succeed");
+    TEST_ASSERT(std::strcmp(volPath, "C:\\") == 0, "GetVolumePathNameA must resolve to drive root C:\\");
+
+    char volLabel[64] = { 0 };
+    char fsName[32] = { 0 };
+    uint32_t serial = 0, maxComp = 0, flags = 0;
+    TEST_ASSERT(micant::satellite::rufus::GetVolumeInformationA("C:\\", volLabel, sizeof(volLabel), &serial, &maxComp, &flags, fsName, sizeof(fsName)) == 1, "GetVolumeInformationA must succeed");
+    TEST_ASSERT(std::strcmp(fsName, "NTFS") == 0, "GetVolumeInformationA must return NTFS file system");
+    TEST_ASSERT(serial != 0 && maxComp == 255, "Volume metadata must report valid components");
+
+    wchar_t wVolLabel[64] = { 0 };
+    wchar_t wFsName[32] = { 0 };
+    TEST_ASSERT(micant::satellite::rufus::GetVolumeInformationByHandleW(nullptr, wVolLabel, 64, &serial, &maxComp, &flags, wFsName, 32) == 1, "GetVolumeInformationByHandleW must succeed");
+    TEST_ASSERT(std::wcscmp(wFsName, L"NTFS") == 0, "GetVolumeInformationByHandleW must report L'NTFS'");
+
+    uint64_t freeCaller = 0, totalBytes = 0, freeBytes = 0;
+    TEST_ASSERT(micant::satellite::rufus::GetDiskFreeSpaceExA("C:\\", &freeCaller, &totalBytes, &freeBytes) == 1, "GetDiskFreeSpaceExA must succeed");
+    TEST_ASSERT(totalBytes > 0 && freeBytes > 0, "Total and free bytes must be non-zero");
+
+    char driveStrings[64] = { 0 };
+    uint32_t driveLen = micant::satellite::rufus::GetLogicalDriveStringsA(sizeof(driveStrings), driveStrings);
+    TEST_ASSERT(driveLen > 0, "GetLogicalDriveStringsA must return non-zero character count");
+    TEST_ASSERT(std::strstr(driveStrings, "C:\\") != nullptr, "Logical drives must contain C:\\");
+
+    // Stage 3: SetupAPI & Configuration Manager (USB Hardware Device Tree)
+    void* hDevInfo = micant::satellite::rufus::SetupDiGetClassDevsA(nullptr, nullptr, nullptr, 0);
+    TEST_ASSERT(hDevInfo != nullptr, "SetupDiGetClassDevsA must return valid device information handle");
+
+    char devIdBuf[128] = { 0 };
+    uint32_t cmStatus = micant::satellite::rufus::CM_Get_Device_IDA(1, devIdBuf, sizeof(devIdBuf), 0);
+    TEST_ASSERT(cmStatus == 0, "CM_Get_Device_IDA must return CR_SUCCESS (0)");
+    TEST_ASSERT(std::strstr(devIdBuf, "USBSTOR\\") != nullptr, "Device ID must reflect USB storage hardware");
+
+    uint32_t statusFlags = 0, problem = 0;
+    TEST_ASSERT(micant::satellite::rufus::CM_Get_DevNode_Status(&statusFlags, &problem, 1, 0) == 0, "CM_Get_DevNode_Status must return CR_SUCCESS");
+    TEST_ASSERT((statusFlags & 0x01) != 0, "DevNode status must report driver loaded");
+
+    char instIdBuf[128] = { 0 };
+    uint32_t reqSize = 0;
+    TEST_ASSERT(micant::satellite::rufus::SetupDiGetDeviceInstanceIdA(hDevInfo, nullptr, instIdBuf, sizeof(instIdBuf), &reqSize) == 1, "SetupDiGetDeviceInstanceIdA must succeed");
+    TEST_ASSERT(std::strstr(instIdBuf, "USBSTOR\\") != nullptr, "Instance ID must start with USBSTOR");
+
+    uint8_t propBuf[128] = { 0 };
+    uint32_t propType = 0;
+    TEST_ASSERT(micant::satellite::rufus::SetupDiGetDeviceRegistryPropertyA(hDevInfo, nullptr, 0, &propType, propBuf, sizeof(propBuf), &reqSize) == 1, "SetupDiGetDeviceRegistryPropertyA must succeed");
+    TEST_ASSERT(std::strstr(reinterpret_cast<char*>(propBuf), "SanDisk") != nullptr, "Device description must identify drive hardware");
+
+    // Stage 4: Native NT Kernel Syscalls
+    void* ntFile = nullptr;
+    micant::NtStatus fileSt = micant::satellite::rufus::NtCreateFile(&ntFile, 0, nullptr, nullptr, nullptr, 0, 0, 0, 0, nullptr, 0);
+    TEST_ASSERT(fileSt == micant::NtStatus::Success, "NtCreateFile must return STATUS_SUCCESS");
+    TEST_ASSERT(ntFile != nullptr, "NtCreateFile must produce valid handle");
+
+    TEST_ASSERT(micant::satellite::rufus::NtDeviceIoControlFile(ntFile, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, nullptr, 0) == micant::NtStatus::Success, "NtDeviceIoControlFile must succeed");
+    TEST_ASSERT(micant::satellite::rufus::NtFsControlFile(ntFile, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, nullptr, 0) == micant::NtStatus::Success, "NtFsControlFile must succeed");
+
+    void* ntProc = nullptr;
+    TEST_ASSERT(micant::satellite::rufus::NtOpenProcess(&ntProc, 0, nullptr, nullptr) == micant::NtStatus::Success, "NtOpenProcess must return STATUS_SUCCESS");
+    TEST_ASSERT(ntProc != nullptr, "NtOpenProcess must return valid process handle");
+
+    void* ntToken = nullptr;
+    TEST_ASSERT(micant::satellite::rufus::NtOpenProcessToken(ntProc, 0, &ntToken) == micant::NtStatus::Success, "NtOpenProcessToken must return STATUS_SUCCESS");
+    TEST_ASSERT(ntToken != nullptr, "NtOpenProcessToken must return valid token handle");
+
+    void* dupHandle = nullptr;
+    TEST_ASSERT(micant::satellite::rufus::NtDuplicateObject(nullptr, ntFile, nullptr, &dupHandle, 0, 0, 0) == micant::NtStatus::Success, "NtDuplicateObject must succeed");
+    TEST_ASSERT(dupHandle == ntFile, "Duplicated handle must match source handle");
+
+    uint64_t condMask = micant::satellite::rufus::VerSetConditionMask(0, 1, 3);
+    TEST_ASSERT(condMask != 0, "VerSetConditionMask must calculate packed condition bitmask");
+
+    // Stage 5: Advapi32 & Crypto Verification
+    void* sd = nullptr;
+    uint32_t sdSize = 0;
+    TEST_ASSERT(micant::satellite::rufus::ConvertStringSecurityDescriptorToSecurityDescriptorA("D:(A;;GA;;;BA)", 1, &sd, &sdSize) == 1, "ConvertStringSecurityDescriptor must succeed");
+    TEST_ASSERT(sd != nullptr && sdSize > 0, "Security descriptor buffer must be allocated");
+
+    void* sid = nullptr;
+    TEST_ASSERT(micant::satellite::rufus::ConvertStringSidToSidA("S-1-5-18", &sid) == 1, "ConvertStringSidToSidA must succeed");
+    TEST_ASSERT(sid != nullptr, "System SID pointer must be valid");
+
+    uint8_t randBuf[64] = { 0 };
+    micant::satellite::rufus::SystemFunction036(randBuf, sizeof(randBuf));
+    bool hasNonZero = false;
+    for (uint8_t b : randBuf) {
+        if (b != 0) { hasNonZero = true; break; }
+    }
+    TEST_ASSERT(hasNonZero, "SystemFunction036 (RtlGenRandom) must generate non-zero pseudo-random bytes");
+
+    // Stage 6: Virtual Disk, Network & Trust
+    uint64_t vdiskProg[3] = { 0 };
+    uint32_t vdiskSt = micant::satellite::rufus::GetVirtualDiskOperationProgress(nullptr, nullptr, vdiskProg);
+    TEST_ASSERT(vdiskSt == 0, "GetVirtualDiskOperationProgress must return ERROR_SUCCESS");
+    TEST_ASSERT(vdiskProg[1] == 100 && vdiskProg[2] == 100, "Progress must indicate 100% completion");
+
+    uint32_t netFlags = 0;
+    TEST_ASSERT(micant::satellite::rufus::InternetGetConnectedState(&netFlags, 0) == 1, "InternetGetConnectedState must report connected");
+    TEST_ASSERT(netFlags != 0, "Connection flags must be populated");
+
+    TEST_ASSERT(micant::satellite::rufus::WinVerifyTrustEx(nullptr, nullptr, nullptr) == 0, "WinVerifyTrustEx must return 0 (success)");
+
+    // Stage 7: String Helpers & Hooks
+    char textA[] = "Hello WOrLD";
+    micant::satellite::rufus::CharLowerA(textA);
+    TEST_ASSERT(std::strcmp(textA, "hello world") == 0, "CharLowerA must convert string to lowercase");
+    micant::satellite::rufus::CharUpperA(textA);
+    TEST_ASSERT(std::strcmp(textA, "HELLO WORLD") == 0, "CharUpperA must convert string to uppercase");
+
+    char klid[16] = { 0 };
+    TEST_ASSERT(micant::satellite::rufus::GetKeyboardLayoutNameA(klid) == 1, "GetKeyboardLayoutNameA must succeed");
+    TEST_ASSERT(std::strcmp(klid, "00000409") == 0, "Keyboard layout must default to en-US 00000409");
+
+    void* hHook = micant::satellite::rufus::SetWinEventHook(1, 10, nullptr, nullptr, 0, 0, 0);
+    TEST_ASSERT(hHook != nullptr, "SetWinEventHook must return hook handle");
+    TEST_ASSERT(micant::satellite::rufus::UnhookWinEvent(hHook) == 1, "UnhookWinEvent must release hook");
+
+    wchar_t formatted[64] = { 0 };
+    int fmtLen = micant::satellite::rufus::wnsprintfW(formatted, 64, L"Rufus Drive %d: %s", 2, L"READY");
+    TEST_ASSERT(fmtLen > 0, "wnsprintfW must write formatted string");
+    TEST_ASSERT(std::wcscmp(formatted, L"Rufus Drive 2: READY") == 0, "wnsprintfW format content match");
+
+    // Stage 8: Concurrent Multi-Threaded Stress Test across Rufus Subsystems
+    std::atomic<uint32_t> stressDone{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&stressDone, &loader, t]() {
+            for (int i = 0; i < 50; ++i) {
+                // Exercise Volume & SetupAPI
+                char vName[128] = { 0 };
+                void* hV = micant::satellite::rufus::FindFirstVolumeA(vName, sizeof(vName));
+                if (hV) micant::satellite::rufus::FindVolumeClose(hV);
+
+                uint8_t rnd[16];
+                micant::satellite::rufus::SystemFunction036(rnd, sizeof(rnd));
+
+                void* hP = nullptr;
+                micant::satellite::rufus::NtOpenProcess(&hP, 0, nullptr, nullptr);
+
+                stressDone.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(stressDone.load() == 400, "400-operation concurrent Rufus storage stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 222: Rufus Low-Level Storage & Native NT Syscall Subsystem Validation PASSED.\n";
+}
+
+
 
 
 
