@@ -377,6 +377,8 @@
 │ Phase 184: Windows Server Update Services (WSUS M211)    [COMPLETED 100%]│
 ├────────────────────────────────────────────────────────────────────────┤
 │ Phase 185: Windows Remote Management (WinRM M212)        [COMPLETED 100%]│
+├────────────────────────────────────────────────────────────────────────┤
+│ Phase 186: Windows Native OpenSSH Subsystem (SSH M213)   [PLANNED]        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3906,6 +3908,38 @@
   - `winrm` / `winrs` / `wsman` (`quickconfig`, `status`, `get winrm/config`, `listeners`, `shells`, `winrs -r:<host> <cmd>`, `test`).
 - [x] **Unit Test Suite 212 (`Test_WindowsRemoteManagement_WinRM_Subsystem`)**:
   - 14-stage validation suite covering SCM service registration, VersionDatabase registration, default HTTP/HTTPS listeners, configuration & quotas, custom listener management, CMD remote shell creation, remote command execution & stdout capture (`hostname`), streaming output & exit codes (`whoami`, `echo`), signal delivery & process cancellation (`SIGNAL_CODE_TERMINATE`), PowerShell remote shell & PSRP runspace pool, SOAP Create Shell envelope processing, SOAP Command & Receive output streaming with Done state, Win32 C ABI parity, and 120-operation concurrent multithreaded remote shell stress test (8 threads).
+
+---
+
+### Phase 186: Windows Native OpenSSH Server & Client Subsystem (`ssh.hpp`, `sshd.exe`, `ssh.exe`, `ssh-keygen.exe`, `ssh-agent.exe`, `sftp-server.exe`, `sshd`, `ssh-agent`, `TitanSSH`) (Milestone 213) [PLANNED]
+*Goal: Implement clean-room Windows Native OpenSSH (OpenSSH for Windows 9.5p1 / 10.0) Subsystem, featuring SCM OpenSSH services (`sshd`, `ssh-agent`), SSH-2 wire transport protocol (RFC 4253) on TCP port 22, host key generation & storage (RSA, Ed25519, ECDSA), multiple authentication mechanisms (public key via `authorized_keys` and `administrators_authorized_keys`, Windows local and domain security tokens, GSSAPI Kerberos), interactive terminal emulation via ConPTY (Pseudo Console) binding, SFTP file transfer subsystem (`sftp-server.exe`, RFC draft), Win32 C ABI exports, and interactive shell management (`ssh`, `sshd`, `ssh-keygen`, `ssh-agent`, `sftp`, `scp`).*
+- [ ] **SSH-2 Protocol & Transport Engine (`include/micant/ssh.hpp`)**:
+  - `EnterpriseSshServer`: SSH-2.0 wire protocol parser and packet framer, cryptographic cipher and MAC negotiation (chacha20-poly1305, aes256-gcm, hmac-sha2-512), and Diffie-Hellman / Curve25519 key exchange.
+  - Port 22 TCP listener: Multi-client listener with socket dispatch, connection pooling, and connection rate limiting.
+  - Host Key Generation & Store (`ssh-keygen.exe`): RSA (2048/4096-bit), Ed25519, and ECDSA host key generation, OpenSSH public key format serialization, and fingerprint calculation (`SHA256:...`).
+  - Authentication Engine:
+    * Public Key authentication: User `~/.ssh/authorized_keys` and enterprise `C:\ProgramData\ssh\administrators_authorized_keys`.
+    * Windows Security Token: Password and logon credential validation via Cutler's SRM / LSASS access tokens.
+    * GSSAPI / Kerberos authentication: Active Directory ticket validation for seamless domain single-sign-on.
+  - Interactive ConPTY Shell Session:
+    * Channel type `session`: PTY request allocation (`pty-req`) with terminal modes (rows, cols, TERM=xterm-256color).
+    * Binds directly to `micant::conpty::PseudoConsole` for ANSI/VT100 escape sequence processing and Windows Command / PowerShell execution.
+  - Subsystems & Protocols:
+    * `sftp`: SFTP v3/v4 packet parser (INIT, OPEN, READ, WRITE, CLOSE, STAT, LSTAT, ODIR, READDIR, REMOVE, RENAME, MKDIR, RMDIR).
+    * `exec`: Remote command single-line execution with stdout/stderr stream multiplexing and exit-status channel requests.
+  - SSH Authentication Agent (`ssh-agent.exe`):
+    * Named pipe IPC interface (`\\.\pipe\openssh-ssh-agent`) for in-memory private key caching and signature requests.
+- [ ] **Win32 & SCM Parity**:
+  - SCM Service registration:
+    * `sshd` ("OpenSSH SSH Server", Auto Start, Running, `C:\Windows\System32\OpenSSH\sshd.exe`).
+    * `ssh-agent` ("OpenSSH Authentication Agent", Demand Start, `C:\Windows\System32\OpenSSH\ssh-agent.exe`).
+  - VersionDatabase registration (`10.0.26100.1`): `ssh.exe`, `sshd.exe`, `ssh-keygen.exe`, `ssh-agent.exe`, `ssh-add.exe`, `sftp.exe`, `sftp-server.exe`, `scp.exe`.
+  - Win32 C ABI exports: `MicaSshInitialize`, `MicaSshStartServer`, `MicaSshStopServer`, `MicaSshGenerateKeyPair`, `MicaSshConnectClient`, `MicaSshExecuteCommand`, `MicaSshGetStats`, `MicaSshShutdown`.
+- [ ] **Interactive Shell CLI (`include/micant/shell/net_commands.hpp` / `server_commands.hpp`)**:
+  - `ssh` (`[user@]hostname [command]`), `sshd` (`status`, `start`, `stop`, `restart`, `config`), `ssh-keygen` (`-t <type> -b <bits> -f <path>`), `ssh-agent` (`status`, `list`), `sftp`, `scp`.
+- [ ] **Unit Test Suite 213 (`Test_WindowsOpenSSH_ServerClient_Subsystem`)**:
+  - 14-stage validation suite covering SCM service registration (`sshd`, `ssh-agent`), VersionDatabase registration, SSH-2 protocol version exchange (`SSH-2.0-MicaNT_OpenSSH_10.0`), host key generation and fingerprinting (RSA & Ed25519), TCP Port 22 listener binding, public key authentication (`authorized_keys`), Windows password/token authentication, ConPTY interactive session allocation and ANSI stream rendering, remote command execution and exit code return, SFTP file transfer protocol operations (upload, read, dir listing), signal delivery & session termination, Win32 C ABI exports, and concurrent 8-thread multithreaded SSH connection stress test (120 client sessions).
+
 
 
 
