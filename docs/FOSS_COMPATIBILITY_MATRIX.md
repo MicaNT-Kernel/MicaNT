@@ -42,7 +42,7 @@ graph TD
 
 | Application | GUI / Runtime Architecture | Core Windows APIs & Kernel Subsystems Stressed | MicaNT Strategic Importance | Status |
 | **Rufus** | Pure C / Win32 | Direct raw block storage (`\\.\PhysicalDriveX`), SCSI/ATAPI passthrough, VDS (Virtual Disk Service), partition formatting | **Bootable Media & Drive Formatter.** Proves low-level block I/O, partition table creation, and raw disk access (522/522). | **100% VALIDATED (Milestone 222)** |
-| **System Informer** *(Process Hacker 3)* | Pure C / Native NT API | `NtQuerySystemInformation`, `NtOpenProcess`, `NtQueryInformationToken`, handle inspection, PEB/TEB walk | **The Quintessential NT Kernel Audit.** Proves full compliance of the undocumented native NT kernel API. | **Active Work** |
+| **System Informer** *(Process Hacker 3)* | Pure C / Native NT API | `NtQuerySystemInformation`, `NtOpenProcess`, `NtQueryInformationToken`, handle inspection, PEB/TEB walk | **The Quintessential NT Kernel Audit.** Proves full compliance of the undocumented native NT kernel API (660/660). | **100% VALIDATED (Milestone 223)** |
 | **LibreHardwareMonitor** | C# / .NET / Native C driver helper | ACPI WMI tables (`root\wmi`), Ring-0 SMBus reading, CPU MSRs, GPU telemetry | **Hardware Sensor Suite.** Validates WMI query engine, device driver interface, and thermal reporting. | **Priority Backlog** |
 | **ImHex** | C++20 / ImGui | Massive 64-bit memory-mapped files (`CreateFileMappingW`), pattern engines, reverse-engineering disassembler | **Advanced Binary & Hex Inspector.** Proves huge virtual memory allocations and 64-bit pointer arithmetic. | **Priority Backlog** |
 

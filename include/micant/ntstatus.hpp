@@ -31,6 +31,7 @@ enum class NtStatus : uint32_t {
     DatatypeMisalignment             = 0x80000002,
     BufferOverflow                   = 0x80000005,
     NoMoreFiles                      = 0x80000006,
+    NoMoreEntries                    = 0x8000001A,
     HandlesClosed                    = 0x8000000A,
 
     // 0xC0000000 - Errors
@@ -92,6 +93,8 @@ enum class NtStatus : uint32_t {
     DeviceError                      = 0xC00000E0,
     FileCorrupted                    = 0xC0000102,
     Cancelled                        = 0xC0000120,
+    VariableNotFound                 = 0xC0000100,
+    ProcessNotInJob                  = 0xC0000123,
 
     // Security, Authentication & SAM Subsystem Codes
     UserExists                       = 0xC0000063,
@@ -212,6 +215,9 @@ inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(
         case NtStatus::DeviceError: return "STATUS_DEVICE_DATA_ERROR";
         case NtStatus::FileCorrupted: return "STATUS_FILE_CORRUPT_ERROR";
         case NtStatus::Cancelled: return "STATUS_CANCELLED";
+        case NtStatus::NoMoreEntries: return "STATUS_NO_MORE_ENTRIES";
+        case NtStatus::VariableNotFound: return "STATUS_VARIABLE_NOT_FOUND";
+        case NtStatus::ProcessNotInJob: return "STATUS_PROCESS_NOT_IN_JOB";
         default: return "STATUS_UNKNOWN";
     }
 }

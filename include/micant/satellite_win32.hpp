@@ -26,6 +26,7 @@
 #include "satellite_everything.hpp"
 #include "satellite_winmerge.hpp"
 #include "satellite_rufus.hpp"
+#include "satellite_system_informer.hpp"
 
 namespace micant::satellite {
 
@@ -388,6 +389,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // Rufus 4.x Storage & Low-Level Hardware Subsystem Extensions
     rufus::InitializeRufusExports();
+
+    // System Informer 4.0 Native NT & Diagnostics Subsystem Extensions
+    system_informer::InitializeSystemInformerExports();
 
     // MPR 1.0 Network Provider Router Subsystem
     mpr::InitializeMprSubsystemExports();

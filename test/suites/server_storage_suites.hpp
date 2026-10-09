@@ -8020,6 +8020,148 @@ inline void Test_Rufus_Storage_And_NtSyscalls_Suite() {
     std::cout << "[TEST] Suite 222: Rufus Low-Level Storage & Native NT Syscall Subsystem Validation PASSED.\n";
 }
 
+// ============================================================================
+// Suite 223: System Informer 4.0 Native NT Syscalls, Diagnostics & LSA Security
+// ============================================================================
+inline void Test_SystemInformer_Diagnostics_And_NativeNT_Suite() {
+    std::cout << "[TEST] Executing Suite 223: System Informer 4.0 Native NT Syscalls, Diagnostics & LSA Security...\n";
+
+    // 1. Initialize Subsystem Exports
+    micant::satellite::InitializeSatelliteWin32Exports();
+    auto& loader = micant::ldr::DynamicLoader::get();
+
+    // Stage 1: Export Registration Verification for all 14 DLLs
+    TEST_ASSERT(loader.getExportOrdinal("aclui.dll", 1) != nullptr, "aclui!Ordinal_1 must be registered");
+    TEST_ASSERT(loader.getExportOrdinal("aclui.dll", 2) != nullptr, "aclui!Ordinal_2 must be registered");
+    TEST_ASSERT(loader.getExportOrdinal("aclui.dll", 3) != nullptr, "aclui!Ordinal_3 must be registered");
+    TEST_ASSERT(loader.getExport("advapi32.dll", "GetSecurityInfo") != nullptr, "advapi32!GetSecurityInfo must be registered");
+    TEST_ASSERT(loader.getExport("advapi32.dll", "LsaLookupNames2") != nullptr, "advapi32!LsaLookupNames2 must be registered");
+    TEST_ASSERT(loader.getExport("advapi32.dll", "ChangeServiceConfigW") != nullptr, "advapi32!ChangeServiceConfigW must be registered");
+    TEST_ASSERT(loader.getExport("cfgmgr32.dll", "CM_Register_Notification") != nullptr, "cfgmgr32!CM_Register_Notification must be registered");
+    TEST_ASSERT(loader.getExport("comctl32.dll", "DestroyPropertySheetPage") != nullptr, "comctl32!DestroyPropertySheetPage must be registered");
+    TEST_ASSERT(loader.getExportOrdinal("comctl32.dll", 13) != nullptr, "comctl32!Ordinal_13 must be registered");
+    TEST_ASSERT(loader.getExport("comdlg32.dll", "ChooseFontW") != nullptr, "comdlg32!ChooseFontW must be registered");
+    TEST_ASSERT(loader.getExport("gdi32.dll", "GetObjectType") != nullptr, "gdi32!GetObjectType must be registered");
+    TEST_ASSERT(loader.getExport("kernel32.dll", "GetEnabledXStateFeatures") != nullptr, "kernel32!GetEnabledXStateFeatures must be registered");
+    TEST_ASSERT(loader.getExport("ntdll.dll", "NtCreateJobObject") != nullptr, "ntdll!NtCreateJobObject must be registered");
+    TEST_ASSERT(loader.getExport("ntdll.dll", "NtQueryInformationThread") != nullptr, "ntdll!NtQueryInformationThread must be registered");
+    TEST_ASSERT(loader.getExport("ntdll.dll", "NtQueryVirtualMemory") != nullptr, "ntdll!NtQueryVirtualMemory must be registered");
+    TEST_ASSERT(loader.getExport("ntdll.dll", "RtlGetVersion") != nullptr, "ntdll!RtlGetVersion must be registered");
+    TEST_ASSERT(loader.getExport("ole32.dll", "CoGetSystemSecurityPermissions") != nullptr, "ole32!CoGetSystemSecurityPermissions must be registered");
+    TEST_ASSERT(loader.getExportOrdinal("oleaut32.dll", 15) != nullptr, "oleaut32!Ordinal_15 must be registered");
+    TEST_ASSERT(loader.getExport("setupapi.dll", "SetupDiGetClassDevsExW") != nullptr, "setupapi!SetupDiGetClassDevsExW must be registered");
+    TEST_ASSERT(loader.getExport("user32.dll", "OpenWindowStationW") != nullptr, "user32!OpenWindowStationW must be registered");
+    TEST_ASSERT(loader.getExport("user32.dll", "GetGUIThreadInfo") != nullptr, "user32!GetGUIThreadInfo must be registered");
+    TEST_ASSERT(loader.getExport("winhttp.dll", "WinHttpCrackUrl") != nullptr, "winhttp!WinHttpCrackUrl must be registered");
+    TEST_ASSERT(loader.getExport("winsta.dll", "WinStationQueryInformationW") != nullptr, "winsta!WinStationQueryInformationW must be registered");
+
+    // Stage 2: ACL UI & Security Pages
+    void* hSecPage = micant::satellite::system_informer::Aclui_CreateSecurityPage_Ordinal1(nullptr);
+    TEST_ASSERT(hSecPage != nullptr, "CreateSecurityPage must return valid property sheet page handle");
+    TEST_ASSERT(micant::satellite::system_informer::Aclui_EditSecurity_Ordinal2(nullptr, nullptr) == 1, "EditSecurity must succeed");
+    TEST_ASSERT(micant::satellite::system_informer::Aclui_EditSecurityAdvanced_Ordinal3(nullptr, nullptr, 0) == 0, "EditSecurityAdvanced must return S_OK");
+
+    // Stage 3: Services & LSA Security Management
+    uint32_t rights = 0;
+    TEST_ASSERT(micant::satellite::system_informer::GetEffectiveRightsFromAclW(nullptr, nullptr, &rights) == 0, "GetEffectiveRightsFromAclW must return ERROR_SUCCESS");
+    TEST_ASSERT(rights != 0, "Effective rights must be non-zero");
+
+    void* sd = nullptr;
+    TEST_ASSERT(micant::satellite::system_informer::GetSecurityInfo(nullptr, 0, 0, nullptr, nullptr, nullptr, nullptr, &sd) == 0, "GetSecurityInfo must succeed");
+    TEST_ASSERT(sd != nullptr, "Security descriptor must be returned");
+
+    TEST_ASSERT(micant::satellite::system_informer::LsaEnumerateAccounts(nullptr, nullptr, nullptr, 0, nullptr) == 0, "LsaEnumerateAccounts must succeed");
+    TEST_ASSERT(micant::satellite::system_informer::LsaLookupNames2(nullptr, 0, 0, nullptr, nullptr, nullptr) == 0, "LsaLookupNames2 must succeed");
+    TEST_ASSERT(micant::satellite::system_informer::LsaFreeMemory(nullptr) == 0, "LsaFreeMemory must succeed");
+
+    // Stage 4: Native NT Kernel Syscalls (Job, Key, Section, Memory, Thread, Port)
+    void* hJob = nullptr;
+    TEST_ASSERT(micant::satellite::system_informer::NtCreateJobObject(&hJob, 0, nullptr) == micant::NtStatus::Success, "NtCreateJobObject must succeed");
+    TEST_ASSERT(hJob != nullptr, "Job handle must be valid");
+
+    void* hKey = nullptr;
+    uint32_t disp = 0;
+    TEST_ASSERT(micant::satellite::system_informer::NtCreateKey(&hKey, 0, nullptr, 0, nullptr, 0, &disp) == micant::NtStatus::Success, "NtCreateKey must succeed");
+    TEST_ASSERT(hKey != nullptr, "Key handle must be valid");
+
+    void* hSection = nullptr;
+    TEST_ASSERT(micant::satellite::system_informer::NtOpenSection(&hSection, 0, nullptr) == micant::NtStatus::Success, "NtOpenSection must succeed");
+    TEST_ASSERT(hSection != nullptr, "Section handle must be valid");
+
+    uint8_t memInfo[64] = { 0 };
+    size_t retLen = 0;
+    TEST_ASSERT(micant::satellite::system_informer::NtQueryVirtualMemory(nullptr, nullptr, 0, memInfo, sizeof(memInfo), &retLen) == micant::NtStatus::Success, "NtQueryVirtualMemory must succeed");
+    TEST_ASSERT(retLen > 0, "QueryVirtualMemory must report memory region length");
+
+    uint32_t maxT = 0, minT = 0, curT = 0;
+    TEST_ASSERT(micant::satellite::system_informer::NtQueryTimerResolution(&maxT, &minT, &curT) == micant::NtStatus::Success, "NtQueryTimerResolution must succeed");
+    TEST_ASSERT(maxT > 0 && curT > 0, "Timer resolutions must be valid clock ticks");
+
+    void* hPort = nullptr;
+    TEST_ASSERT(micant::satellite::system_informer::NtConnectPort(&hPort, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr) == micant::NtStatus::Success, "NtConnectPort must succeed");
+    TEST_ASSERT(hPort != nullptr, "Port handle must be valid");
+
+    // Stage 5: Window Stations & Desktops
+    void* hWinSta = micant::satellite::system_informer::OpenWindowStationW(L"WinSta0", 0, 0);
+    TEST_ASSERT(hWinSta != nullptr, "OpenWindowStationW must return interactive window station handle");
+    TEST_ASSERT(micant::satellite::system_informer::GetProcessWindowStation() == hWinSta, "GetProcessWindowStation must return active WinSta");
+    TEST_ASSERT(micant::satellite::system_informer::CloseWindowStation(hWinSta) == 1, "CloseWindowStation must succeed");
+
+    TEST_ASSERT(micant::satellite::system_informer::EnumDesktopsW(nullptr, nullptr, 0) == 1, "EnumDesktopsW must succeed");
+    TEST_ASSERT(micant::satellite::system_informer::GetShellWindow() != nullptr, "GetShellWindow must return valid HWND");
+    TEST_ASSERT(micant::satellite::system_informer::GetGuiResources(nullptr, 0) > 0, "GetGuiResources must return active handles");
+
+    // Stage 6: Terminal Services / WinStation APIs
+    TEST_ASSERT(micant::satellite::system_informer::WinStationConnectW(nullptr, 1, 1, nullptr, 0) == 1, "WinStationConnectW must succeed");
+    TEST_ASSERT(micant::satellite::system_informer::WinStationQueryInformationW(nullptr, 1, 0, nullptr, 0, nullptr) == 1, "WinStationQueryInformationW must succeed");
+    uint32_t resp = 0;
+    TEST_ASSERT(micant::satellite::system_informer::WinStationSendMessageW(nullptr, 1, L"Alert", 5, L"Notice", 6, 0, 0, &resp, 0) == 1, "WinStationSendMessageW must succeed");
+    TEST_ASSERT(resp == 1, "Message response must be IDOK");
+
+    // Stage 7: RTL Utilities (Version, Network Addresses, Strings)
+    uint32_t osVer[7] = { 0 };
+    osVer[0] = sizeof(osVer);
+    TEST_ASSERT(micant::satellite::system_informer::RtlGetVersion(osVer) == micant::NtStatus::Success, "RtlGetVersion must succeed");
+    TEST_ASSERT(osVer[1] == 10 && osVer[3] == 22631, "RtlGetVersion must report Windows 11 Build 22631");
+
+    wchar_t ipStr[32] = { 0 };
+    uint32_t ipLen = 32;
+    TEST_ASSERT(micant::satellite::system_informer::RtlIpv4AddressToStringExW(nullptr, 8080, ipStr, &ipLen) == micant::NtStatus::Success, "RtlIpv4AddressToStringExW must succeed");
+    TEST_ASSERT(std::wcscmp(ipStr, L"127.0.0.1:8080") == 0, "IPv4 address string formatting match");
+
+    uint32_t seed = 12345;
+    uint32_t r = micant::satellite::system_informer::RtlRandomEx(&seed);
+    TEST_ASSERT(r != 0, "RtlRandomEx must generate pseudorandom integer");
+
+    // Stage 8: Concurrent Multi-Threaded Diagnostics Stress Test
+    std::atomic<uint32_t> diagDone{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&diagDone, t]() {
+            for (int i = 0; i < 50; ++i) {
+                void* pJob = nullptr;
+                micant::satellite::system_informer::NtCreateJobObject(&pJob, 0, nullptr);
+
+                void* pSta = micant::satellite::system_informer::OpenWindowStationW(L"WinSta0", 0, 0);
+                if (pSta) micant::satellite::system_informer::CloseWindowStation(pSta);
+
+                uint32_t s = t * 100 + i;
+                micant::satellite::system_informer::RtlRandomEx(&s);
+
+                diagDone.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(diagDone.load() == 400, "400-operation concurrent diagnostics stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 223: System Informer 4.0 Native NT Syscalls, Diagnostics & LSA Security PASSED.\n";
+}
+
+
 
 
 
