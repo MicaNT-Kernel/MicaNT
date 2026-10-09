@@ -138,6 +138,7 @@ class VirtualFileSystem {
 public:
     static VirtualFileSystem& get() {
         static VirtualFileSystem instance;
+        instance.initialize();
         return instance;
     }
 

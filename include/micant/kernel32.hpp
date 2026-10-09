@@ -39,6 +39,8 @@ inline uintptr_t g_CurrentExecutableBase = 0;
 // ============================================================================
 
 using DWORD   = uint32_t;
+using LPDWORD = uint32_t*;
+using PDWORD  = uint32_t*;
 using UINT    = uint32_t;
 using BOOL    = int32_t;
 using HANDLE  = void*;
@@ -60,10 +62,64 @@ using ULONG_PTR = uintptr_t;
 using LONG_PTR  = intptr_t;
 using LONG      = int32_t;
 using LPLONG    = int32_t*;
+using WCHAR     = wchar_t;
+using PCWSTR    = const wchar_t*;
+using PWSTR     = wchar_t*;
+using LPCWCH    = const wchar_t*;
+using ULONG     = uint32_t;
+using PULONG    = uint32_t*;
+using PBOOL     = int32_t*;
+using LPBOOL    = int32_t*;
+using PVOID     = void*;
+using WORD      = uint16_t;
+using LPWORD    = uint16_t*;
+using BYTE      = uint8_t;
+using LCID      = uint32_t;
+using LPARAM    = intptr_t;
+using WPARAM    = uintptr_t;
+
+struct SRWLOCK {
+    void* Ptr{nullptr};
+};
+using PSRWLOCK = SRWLOCK*;
+
+struct CONDITION_VARIABLE {
+    void* Ptr{nullptr};
+};
+using PCONDITION_VARIABLE = CONDITION_VARIABLE*;
+
+union INIT_ONCE {
+    void* Ptr{nullptr};
+};
+using LPINIT_ONCE = INIT_ONCE*;
+using PINIT_ONCE_FN = BOOL (*)(LPINIT_ONCE, void*, void**);
+
+using PTP_WORK = void*;
+using PTP_WORK_CALLBACK = void (*)(void*, void*, void*);
+using PTP_CALLBACK_ENVIRON = void*;
+using PTP_CALLBACK_INSTANCE = void*;
+
+struct PROCESSENTRY32W {
+    DWORD dwSize{sizeof(PROCESSENTRY32W)};
+    DWORD cntUsage{0};
+    DWORD th32ProcessID{0};
+    ULONG_PTR th32DefaultHeapID{0};
+    DWORD th32ModuleID{0};
+    DWORD cntThreads{1};
+    DWORD th32ParentProcessID{0};
+    LONG pcPriClassBase{0};
+    DWORD dwFlags{0};
+    wchar_t szExeFile[260]{};
+};
+using LPPROCESSENTRY32W = PROCESSENTRY32W*;
+
+using PAPCFUNC = void (*)(ULONG_PTR);
+using LOCALE_ENUMPROCW = BOOL (*)(LPWSTR);
 
 using micant::TRUE;
 using micant::FALSE;
 inline const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1));
+inline bool g_TraceApi = false;
 
 /**
  * @brief Retrieves the calling thread's last-error code value.
@@ -202,6 +258,17 @@ struct SYSTEMTIME {
     uint16_t wSecond{0};
     uint16_t wMilliseconds{0};
 };
+
+struct TIME_ZONE_INFORMATION {
+    LONG Bias{0};
+    wchar_t StandardName[32]{};
+    SYSTEMTIME StandardDate{};
+    LONG StandardBias{0};
+    wchar_t DaylightName[32]{};
+    SYSTEMTIME DaylightDate{};
+    LONG DaylightBias{0};
+};
+using LPTIME_ZONE_INFORMATION = TIME_ZONE_INFORMATION*;
 
 
 // ============================================================================
@@ -342,10 +409,27 @@ inline DWORD GetCurrentThreadId() noexcept {
     return static_cast<DWORD>(teb->clientId.uniqueThread);
 }
 
+using ExitProcessHook_t = void (*)(DWORD uExitCode);
+inline ExitProcessHook_t g_ExitProcessHook = nullptr;
+
+inline void SetExitProcessHook(ExitProcessHook_t hook) noexcept {
+    g_ExitProcessHook = hook;
+}
+
+using ExitThreadHook_t = void (*)(DWORD uExitCode);
+inline ExitThreadHook_t g_ExitThreadHook = nullptr;
+
+inline void SetExitThreadHook(ExitThreadHook_t hook) noexcept {
+    g_ExitThreadHook = hook;
+}
+
 /**
  * @brief Ends the calling process and all its threads.
  */
-[[noreturn]] inline void ExitProcess(DWORD uExitCode) noexcept {
+[[noreturn]] inline void ExitProcess(DWORD uExitCode) noexcept(false) {
+    if (g_ExitProcessHook) {
+        g_ExitProcessHook(uExitCode);
+    }
     DWORD pid = GetCurrentProcessId();
     // Notify CSRSS subsystem
     csrss::CsrSubsystemServer::get().terminateProcess(pid, uExitCode);
@@ -362,6 +446,9 @@ inline DWORD GetCurrentThreadId() noexcept {
  * @brief Retrieves a handle to the specified standard device (input, output, or error).
  */
 inline HANDLE GetStdHandle(DWORD nStdHandle) noexcept {
+    if (g_TraceApi) {
+        std::cout << "[*] [TRACE] GetStdHandle(" << nStdHandle << ")\n";
+    }
     auto* peb = ntdll::RtlGetCurrentPeb();
     if (!peb || peb->processParameters == 0) {
         if (nStdHandle == STD_INPUT_HANDLE) return reinterpret_cast<HANDLE>(0x10);
@@ -468,30 +555,38 @@ inline BOOL WriteConsoleW(
     (void)lpReserved;
     if (!lpBuffer || nNumberOfCharsToWrite == 0) return FALSE;
 
+    if (g_TraceApi) {
+        std::cout << "[*] [TRACE] WriteConsoleW chars=" << nNumberOfCharsToWrite << "\n";
+    }
+
     DWORD pid = GetCurrentProcessId();
     auto session = conhost::ConhostManager::get().getConsole(pid);
     if (session) {
         std::wstring_view sv(reinterpret_cast<const wchar_t*>(lpBuffer), nNumberOfCharsToWrite);
         session->writeOutput(sv);
-        if (lpNumberOfCharsWritten) *lpNumberOfCharsWritten = nNumberOfCharsToWrite;
-        return TRUE;
     }
 
-    // Direct NT write fallback for standard console handle
-    IoStatusBlock iosb{};
-    NtStatus status = ntdll::NtWriteFile(
-        reinterpret_cast<Handle>(hConsoleOutput),
-        0, nullptr, nullptr,
-        &iosb,
-        const_cast<void*>(lpBuffer),
-        nNumberOfCharsToWrite * sizeof(wchar_t),
-        nullptr, nullptr
-    );
+    FILE* targetStream = (hConsoleOutput == GetStdHandle(STD_ERROR_HANDLE) || hConsoleOutput == reinterpret_cast<HANDLE>(0x18)) ? stderr : stdout;
+    const auto* wchars = reinterpret_cast<const wchar_t*>(lpBuffer);
+    for (DWORD i = 0; i < nNumberOfCharsToWrite; ++i) {
+        wchar_t ch = wchars[i];
+        if (ch < 0x80) {
+            std::fputc(static_cast<char>(ch), targetStream);
+        } else if (ch < 0x800) {
+            std::fputc(0xC0 | (ch >> 6), targetStream);
+            std::fputc(0x80 | (ch & 0x3F), targetStream);
+        } else {
+            std::fputc(0xE0 | (ch >> 12), targetStream);
+            std::fputc(0x80 | ((ch >> 6) & 0x3F), targetStream);
+            std::fputc(0x80 | (ch & 0x3F), targetStream);
+        }
+    }
+    std::fflush(targetStream);
 
     if (lpNumberOfCharsWritten) {
-        *lpNumberOfCharsWritten = static_cast<DWORD>(iosb.information / sizeof(wchar_t));
+        *lpNumberOfCharsWritten = nNumberOfCharsToWrite;
     }
-    return NT_SUCCESS(status) ? TRUE : FALSE;
+    return TRUE;
 }
 
 // ============================================================================
@@ -594,6 +689,19 @@ inline BOOL WriteFile(
 ) noexcept {
     (void)lpOverlapped;
     if (!lpBuffer) return FALSE;
+
+    if (g_TraceApi) {
+        std::cout << "[*] [TRACE] WriteFile h=" << hFile << " bytes=" << nNumberOfBytesToWrite << "\n";
+    }
+
+    if (hFile == GetStdHandle(STD_OUTPUT_HANDLE) || hFile == reinterpret_cast<HANDLE>(0x14) || hFile == reinterpret_cast<HANDLE>(1) ||
+        hFile == GetStdHandle(STD_ERROR_HANDLE) || hFile == reinterpret_cast<HANDLE>(0x18) || hFile == reinterpret_cast<HANDLE>(2)) {
+        FILE* stream = (hFile == GetStdHandle(STD_ERROR_HANDLE) || hFile == reinterpret_cast<HANDLE>(0x18) || hFile == reinterpret_cast<HANDLE>(2)) ? stderr : stdout;
+        size_t written = std::fwrite(lpBuffer, 1, nNumberOfBytesToWrite, stream);
+        std::fflush(stream);
+        if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = static_cast<DWORD>(written);
+        return TRUE;
+    }
 
     IoStatusBlock iosb{};
     NtStatus status = ntdll::NtWriteFile(
@@ -1187,6 +1295,9 @@ inline void GetSystemInfo(SYSTEM_INFO* lpSystemInfo) noexcept {
  */
 inline HMODULE LoadLibraryW(LPCWSTR lpLibFileName) noexcept {
     if (!lpLibFileName) return nullptr;
+    if (g_TraceApi) {
+        std::wcout << L"[*] [TRACE] LoadLibraryW: " << lpLibFileName << L"\n";
+    }
     uintptr_t modBase = 0;
     UnicodeString uniPath(lpLibFileName);
     NtStatus status = ntdll::LdrLoadDll(nullptr, 0, &uniPath, &modBase);
@@ -1203,6 +1314,9 @@ inline HMODULE LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE /*hFile*/, DWORD /*d
  */
 inline void* GetProcAddress(HMODULE hModule, LPCSTR lpProcName) noexcept {
     if (!hModule || !lpProcName) return nullptr;
+    if (g_TraceApi) {
+        std::cout << "[*] [TRACE] GetProcAddress: " << (lpProcName ? lpProcName : "<ord>") << "\n";
+    }
     void* procAddr = nullptr;
     NtStatus status = ntdll::LdrGetProcedureAddress(reinterpret_cast<uintptr_t>(hModule), lpProcName, 0, &procAddr);
     if (!NT_SUCCESS(status)) return nullptr;
@@ -1240,11 +1354,21 @@ static std::unordered_map<std::wstring, std::wstring> g_EnvironmentVariables = {
     { L"PROMPT", L"$P$G" }
 };
 static std::wstring g_CurrentDirectory = L"C:\\Windows\\System32";
-static const wchar_t* g_CommandLineW = L"micant.exe";
-static const char* g_CommandLineA = "micant.exe";
+inline std::wstring g_CommandLineStorageW = L"micant.exe";
+inline std::string g_CommandLineStorageA = "micant.exe";
 
-inline LPCSTR GetCommandLineA() noexcept { return g_CommandLineA; }
-inline LPCWSTR GetCommandLineW() noexcept { return g_CommandLineW; }
+inline void SetCurrentCommandLine(const wchar_t* wcmd, const char* acmd) noexcept {
+    if (wcmd) g_CommandLineStorageW = wcmd;
+    if (acmd) g_CommandLineStorageA = acmd;
+}
+
+inline LPCSTR GetCommandLineA() noexcept { return g_CommandLineStorageA.c_str(); }
+inline LPCWSTR GetCommandLineW() noexcept {
+    if (g_TraceApi) {
+        std::wcout << L"[*] [TRACE] GetCommandLineW: " << g_CommandLineStorageW << L"\n";
+    }
+    return g_CommandLineStorageW.c_str();
+}
 
 inline DWORD GetEnvironmentVariableW(LPCWSTR lpName, LPWSTR lpBuffer, DWORD nSize) noexcept {
     if (!lpName) {
@@ -2178,11 +2302,22 @@ inline BOOL TlsFree(DWORD /*dwTlsIndex*/) noexcept {
     return TRUE;
 }
 
-inline void InitializeCriticalSection(void* /*cs*/) noexcept {}
-inline BOOL InitializeCriticalSectionEx(void* /*cs*/, uint32_t /*spin*/, uint32_t /*flags*/) noexcept { return TRUE; }
-inline void EnterCriticalSection(void* /*cs*/) noexcept {}
-inline void LeaveCriticalSection(void* /*cs*/) noexcept {}
-inline void DeleteCriticalSection(void* /*cs*/) noexcept {}
+struct CRITICAL_SECTION {
+    void* DebugInfo{nullptr};
+    LONG LockCount{0};
+    LONG RecursionCount{0};
+    HANDLE OwningThread{nullptr};
+    HANDLE LockSemaphore{nullptr};
+    ULONG_PTR SpinCount{0};
+};
+using LPCRITICAL_SECTION = CRITICAL_SECTION*;
+using PCRITICAL_SECTION  = CRITICAL_SECTION*;
+
+inline void InitializeCriticalSection(LPCRITICAL_SECTION /*cs*/) noexcept {}
+inline BOOL InitializeCriticalSectionEx(LPCRITICAL_SECTION /*cs*/, uint32_t /*spin*/, uint32_t /*flags*/) noexcept { return TRUE; }
+inline void EnterCriticalSection(LPCRITICAL_SECTION /*cs*/) noexcept {}
+inline void LeaveCriticalSection(LPCRITICAL_SECTION /*cs*/) noexcept {}
+inline void DeleteCriticalSection(LPCRITICAL_SECTION /*cs*/) noexcept {}
 
 inline void* EncodePointer(void* ptr) noexcept { return ptr; }
 inline void* DecodePointer(void* ptr) noexcept { return ptr; }
@@ -2324,9 +2459,9 @@ inline BOOL CreateProcessA(
 
 
 inline DWORD GetFileType(HANDLE hFile) noexcept {
-    if (hFile == GetStdHandle(STD_OUTPUT_HANDLE) || 
-        hFile == GetStdHandle(STD_INPUT_HANDLE) || 
-        hFile == GetStdHandle(STD_ERROR_HANDLE)) {
+    if (hFile == GetStdHandle(STD_OUTPUT_HANDLE) || hFile == reinterpret_cast<HANDLE>(0x14) ||
+        hFile == GetStdHandle(STD_INPUT_HANDLE) || hFile == reinterpret_cast<HANDLE>(0x10) ||
+        hFile == GetStdHandle(STD_ERROR_HANDLE) || hFile == reinterpret_cast<HANDLE>(0x18)) {
         return 0x0002; // FILE_TYPE_CHAR
     }
     return 0x0001; // FILE_TYPE_DISK
@@ -2487,7 +2622,880 @@ inline void* RtlPcToFileHeader(void* /*PcValue*/, void** BaseOfImage) noexcept {
     if (BaseOfImage) *BaseOfImage = reinterpret_cast<void*>(base);
     return reinterpret_cast<void*>(base);
 }
-inline void RaiseException(DWORD /*dwExceptionCode*/, DWORD /*dwExceptionFlags*/, DWORD /*nNumberOfArguments*/, const uint64_t* /*lpArguments*/) noexcept {}
+inline void RaiseException(DWORD dwExceptionCode, DWORD dwExceptionFlags, DWORD nNumberOfArguments, const uint64_t* lpArguments) noexcept {
+#ifdef _WIN32
+    using PfnRaise = void (WINAPI*)(DWORD, DWORD, DWORD, const uint64_t*);
+    static auto pfn = reinterpret_cast<PfnRaise>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleA("kernel32.dll"), "RaiseException")));
+    if (pfn && pfn != RaiseException) {
+        pfn(dwExceptionCode, dwExceptionFlags, nNumberOfArguments, lpArguments);
+    }
+#endif
+}
+
+// ============================================================================
+// 17.5. Extended Win32 Subsystem Extensions (7-Zip, VLC, Notepad++)
+// ============================================================================
+
+using PDWORD_PTR = DWORD_PTR*;
+using PDWORD = DWORD*;
+using LPDWORD = DWORD*;
+using WCHAR = wchar_t;
+using PWSTR = wchar_t*;
+using WORD = uint16_t;
+using BYTE = uint8_t;
+using HRESULT = int32_t;
+using LPSYSTEMTIME = SYSTEMTIME*;
+using LPSECURITY_ATTRIBUTES = SECURITY_ATTRIBUTES*;
+using LPOVERLAPPED = void*;
+
+union LARGE_INTEGER {
+    struct {
+        DWORD LowPart;
+        LONG  HighPart;
+    };
+    int64_t QuadPart;
+};
+using PLARGE_INTEGER = LARGE_INTEGER*;
+
+union ULARGE_INTEGER {
+    struct {
+        DWORD LowPart;
+        DWORD HighPart;
+    };
+    uint64_t QuadPart;
+};
+using PULARGE_INTEGER = ULARGE_INTEGER*;
+
+using PHANDLER_ROUTINE = BOOL (*)(DWORD CtrlType);
+
+using LPPROGRESS_ROUTINE = DWORD (*)(
+    LARGE_INTEGER TotalFileSize,
+    LARGE_INTEGER TotalBytesTransferred,
+    LARGE_INTEGER StreamSize,
+    LARGE_INTEGER StreamBytesTransferred,
+    DWORD dwStreamNumber,
+    DWORD dwCallbackReason,
+    HANDLE hSourceFile,
+    HANDLE hDestinationFile,
+    LPVOID lpData
+);
+
+struct MEMORYSTATUSEX {
+    DWORD dwLength;
+    DWORD dwMemoryLoad;
+    uint64_t ullTotalPhys;
+    uint64_t ullAvailPhys;
+    uint64_t ullTotalPageFile;
+    uint64_t ullAvailPageFile;
+    uint64_t ullTotalVirtual;
+    uint64_t ullAvailVirtual;
+    uint64_t ullAvailExtendedVirtual;
+};
+using LPMEMORYSTATUSEX = MEMORYSTATUSEX*;
+
+struct BY_HANDLE_FILE_INFORMATION {
+    DWORD dwFileAttributes;
+    FILETIME ftCreationTime;
+    FILETIME ftLastAccessTime;
+    FILETIME ftLastWriteTime;
+    DWORD dwVolumeSerialNumber;
+    DWORD nFileSizeHigh;
+    DWORD nFileSizeLow;
+    DWORD nNumberOfLinks;
+    DWORD nFileIndexHigh;
+    DWORD nFileIndexLow;
+};
+using LPBY_HANDLE_FILE_INFORMATION = BY_HANDLE_FILE_INFORMATION*;
+
+enum STREAM_INFO_LEVELS {
+    FindStreamInfoStandard = 0,
+    FindStreamInfoMaxInfoLevel
+};
+
+struct OSVERSIONINFOEXW {
+    DWORD dwOSVersionInfoSize;
+    DWORD dwMajorVersion;
+    DWORD dwMinorVersion;
+    DWORD dwBuildNumber;
+    DWORD dwPlatformId;
+    WCHAR szCSDVersion[128];
+    WORD wServicePackMajor;
+    WORD wServicePackMinor;
+    WORD wSuiteMask;
+    BYTE wProductType;
+    BYTE wReserved;
+};
+using LPOSVERSIONINFOEXW = OSVERSIONINFOEXW*;
+
+using HRSRC = void*;
+using HGLOBAL_RES = void*;
+using HGLOBAL = void*;
+
+inline constexpr UINT GMEM_FIXED    = 0x0000;
+inline constexpr UINT GMEM_MOVEABLE = 0x0002;
+inline constexpr UINT GMEM_ZEROINIT = 0x0040;
+inline constexpr UINT GPTR          = 0x0040;
+inline constexpr UINT GHND          = 0x0042;
+
+inline HGLOBAL GlobalAlloc(UINT uFlags, SIZE_T dwBytes) noexcept {
+    DWORD flags = (uFlags & GMEM_ZEROINIT) ? HEAP_ZERO_MEMORY : 0;
+    return HeapAlloc(GetProcessHeap(), flags, dwBytes ? dwBytes : 1);
+}
+
+inline HGLOBAL GlobalFree(HGLOBAL hMem) noexcept {
+    if (hMem) {
+        HeapFree(GetProcessHeap(), 0, hMem);
+    }
+    return nullptr;
+}
+
+inline LPVOID GlobalLock(HGLOBAL hMem) noexcept {
+    return hMem;
+}
+
+inline BOOL GlobalUnlock(HGLOBAL /*hMem*/) noexcept {
+    return FALSE;
+}
+
+inline DWORD GetTickCount() noexcept {
+    return static_cast<DWORD>(GetTickCount64());
+}
+
+inline BOOL SetConsoleCtrlHandler(PHANDLER_ROUTINE /*HandlerRoutine*/, BOOL /*Add*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL GetProcessTimes(
+    HANDLE /*hProcess*/,
+    LPFILETIME lpCreationTime,
+    LPFILETIME lpExitTime,
+    LPFILETIME lpKernelTime,
+    LPFILETIME lpUserTime
+) noexcept {
+    FILETIME ftZero{0, 0};
+    FILETIME ftNow{0, 0};
+    GetSystemTimeAsFileTime(&ftNow);
+    if (lpCreationTime) *lpCreationTime = ftNow;
+    if (lpExitTime) *lpExitTime = ftZero;
+    if (lpKernelTime) { lpKernelTime->dwLowDateTime = 100000; lpKernelTime->dwHighDateTime = 0; }
+    if (lpUserTime) { lpUserTime->dwLowDateTime = 200000; lpUserTime->dwHighDateTime = 0; }
+    return TRUE;
+}
+
+inline BOOL SetProcessAffinityMask(HANDLE /*hProcess*/, DWORD_PTR /*dwProcessAffinityMask*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL GetProcessAffinityMask(HANDLE /*hProcess*/, PDWORD_PTR lpProcessAffinityMask, PDWORD_PTR lpSystemAffinityMask) noexcept {
+    if (lpProcessAffinityMask) *lpProcessAffinityMask = 0xFF;
+    if (lpSystemAffinityMask) *lpSystemAffinityMask = 0xFF;
+    return TRUE;
+}
+
+inline HANDLE OpenEventW(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, LPCWSTR lpName) noexcept {
+    return CreateEventW(nullptr, FALSE, FALSE, lpName);
+}
+
+inline HANDLE OpenFileMappingW(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, LPCWSTR lpName) noexcept {
+    return CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, 4096, lpName);
+}
+
+inline LONG CompareFileTime(const FILETIME* lpFileTime1, const FILETIME* lpFileTime2) noexcept {
+    if (!lpFileTime1 || !lpFileTime2) return 0;
+    uint64_t t1 = (static_cast<uint64_t>(lpFileTime1->dwHighDateTime) << 32) | lpFileTime1->dwLowDateTime;
+    uint64_t t2 = (static_cast<uint64_t>(lpFileTime2->dwHighDateTime) << 32) | lpFileTime2->dwLowDateTime;
+    if (t1 < t2) return -1;
+    if (t1 > t2) return 1;
+    return 0;
+}
+
+inline BOOL FileTimeToSystemTime(const FILETIME* lpFileTime, LPSYSTEMTIME lpSystemTime) noexcept {
+    if (!lpFileTime || !lpSystemTime) return FALSE;
+    uint64_t ft = (static_cast<uint64_t>(lpFileTime->dwHighDateTime) << 32) | lpFileTime->dwLowDateTime;
+    int64_t secs = static_cast<int64_t>(ft / 10000000ULL) - 11644473600ULL;
+    if (secs < 0) secs = 0;
+    std::time_t t = static_cast<std::time_t>(secs);
+    std::tm tmVal{};
+#if defined(_WIN32)
+    gmtime_s(&tmVal, &t);
+#else
+    gmtime_r(&t, &tmVal);
+#endif
+    lpSystemTime->wYear = static_cast<WORD>(tmVal.tm_year + 1900);
+    lpSystemTime->wMonth = static_cast<WORD>(tmVal.tm_mon + 1);
+    lpSystemTime->wDayOfWeek = static_cast<WORD>(tmVal.tm_wday);
+    lpSystemTime->wDay = static_cast<WORD>(tmVal.tm_mday);
+    lpSystemTime->wHour = static_cast<WORD>(tmVal.tm_hour);
+    lpSystemTime->wMinute = static_cast<WORD>(tmVal.tm_min);
+    lpSystemTime->wSecond = static_cast<WORD>(tmVal.tm_sec);
+    lpSystemTime->wMilliseconds = static_cast<WORD>((ft % 10000000ULL) / 10000ULL);
+    return TRUE;
+}
+
+inline BOOL FileTimeToLocalFileTime(const FILETIME* lpFileTime, LPFILETIME lpLocalFileTime) noexcept {
+    if (!lpFileTime || !lpLocalFileTime) return FALSE;
+    *lpLocalFileTime = *lpFileTime;
+    return TRUE;
+}
+
+inline BOOL FileTimeToDosDateTime(const FILETIME* lpFileTime, WORD* lpFatDate, WORD* lpFatTime) noexcept {
+    if (!lpFileTime || !lpFatDate || !lpFatTime) return FALSE;
+    SYSTEMTIME st{};
+    if (!FileTimeToSystemTime(lpFileTime, &st)) return FALSE;
+    if (st.wYear < 1980) st.wYear = 1980;
+    if (st.wYear > 2107) st.wYear = 2107;
+    *lpFatDate = static_cast<WORD>(((st.wYear - 1980) << 9) | (st.wMonth << 5) | st.wDay);
+    *lpFatTime = static_cast<WORD>((st.wHour << 11) | (st.wMinute << 5) | (st.wSecond / 2));
+    return TRUE;
+}
+
+inline BOOL GlobalMemoryStatusEx(LPMEMORYSTATUSEX lpBuffer) noexcept {
+    if (!lpBuffer) return FALSE;
+    lpBuffer->dwLength = sizeof(MEMORYSTATUSEX);
+    lpBuffer->dwMemoryLoad = 12; // 12% in use
+    lpBuffer->ullTotalPhys = 32ULL * 1024 * 1024 * 1024; // 32 GB
+    lpBuffer->ullAvailPhys = 28ULL * 1024 * 1024 * 1024; // 28 GB
+    lpBuffer->ullTotalPageFile = 48ULL * 1024 * 1024 * 1024;
+    lpBuffer->ullAvailPageFile = 44ULL * 1024 * 1024 * 1024;
+    lpBuffer->ullTotalVirtual = 128ULL * 1024 * 1024 * 1024 * 1024; // 128 TB user space
+    lpBuffer->ullAvailVirtual = 127ULL * 1024 * 1024 * 1024 * 1024;
+    lpBuffer->ullAvailExtendedVirtual = 0;
+    return TRUE;
+}
+
+inline BOOL GetDiskFreeSpaceW(
+    LPCWSTR /*lpRootPathName*/,
+    DWORD* lpSectorsPerCluster,
+    DWORD* lpBytesPerSector,
+    DWORD* lpNumberOfFreeClusters,
+    DWORD* lpTotalNumberOfClusters
+) noexcept {
+    if (lpSectorsPerCluster) *lpSectorsPerCluster = 8;
+    if (lpBytesPerSector) *lpBytesPerSector = 512;
+    if (lpNumberOfFreeClusters) *lpNumberOfFreeClusters = 100000000;
+    if (lpTotalNumberOfClusters) *lpTotalNumberOfClusters = 200000000;
+    return TRUE;
+}
+
+inline BOOL GetDiskFreeSpaceExW(
+    LPCWSTR /*lpDirectoryName*/,
+    PULARGE_INTEGER lpFreeBytesAvailableToCaller,
+    PULARGE_INTEGER lpTotalNumberOfBytes,
+    PULARGE_INTEGER lpTotalNumberOfFreeBytes
+) noexcept {
+    constexpr uint64_t freeBytes = 500ULL * 1024 * 1024 * 1024;  // 500 GB
+    constexpr uint64_t totalBytes = 1000ULL * 1024 * 1024 * 1024; // 1 TB
+    if (lpFreeBytesAvailableToCaller) lpFreeBytesAvailableToCaller->QuadPart = freeBytes;
+    if (lpTotalNumberOfBytes) lpTotalNumberOfBytes->QuadPart = totalBytes;
+    if (lpTotalNumberOfFreeBytes) lpTotalNumberOfFreeBytes->QuadPart = freeBytes;
+    return TRUE;
+}
+
+inline BOOL SetEndOfFile(HANDLE /*hFile*/) noexcept {
+    return TRUE;
+}
+
+inline DWORD FormatMessageW(
+    DWORD /*dwFlags*/,
+    LPCVOID /*lpSource*/,
+    DWORD dwMessageId,
+    DWORD /*dwLanguageId*/,
+    LPWSTR lpBuffer,
+    DWORD nSize,
+    va_list* /*Arguments*/
+) noexcept {
+    if (!lpBuffer || nSize == 0) return 0;
+    wchar_t msg[128];
+    int len = std::swprintf(msg, sizeof(msg) / sizeof(wchar_t), L"MicaNT Status: 0x%08X (Success/Informational).\n", dwMessageId);
+    if (len <= 0) return 0;
+    DWORD copyLen = std::min(static_cast<DWORD>(len), nSize - 1);
+    std::wmemcpy(lpBuffer, msg, copyLen);
+    lpBuffer[copyLen] = L'\0';
+    return copyLen;
+}
+
+inline BOOL SetFileTime(
+    HANDLE /*hFile*/,
+    const FILETIME* /*lpCreationTime*/,
+    const FILETIME* /*lpLastAccessTime*/,
+    const FILETIME* /*lpLastWriteTime*/
+) noexcept {
+    return TRUE;
+}
+
+inline BOOL MoveFileWithProgressW(
+    LPCWSTR lpExistingFileName,
+    LPCWSTR lpNewFileName,
+    LPPROGRESS_ROUTINE /*lpProgressRoutine*/,
+    LPVOID /*lpData*/,
+    DWORD dwFlags
+) noexcept {
+    return MoveFileExW(lpExistingFileName, lpNewFileName, dwFlags);
+}
+
+inline BOOL CreateHardLinkW(LPCWSTR /*lpFileName*/, LPCWSTR /*lpExistingFileName*/, LPSECURITY_ATTRIBUTES /*lpSecurityAttributes*/) noexcept {
+    return TRUE;
+}
+
+inline DWORD GetTempPathW(DWORD nBufferLength, LPWSTR lpBuffer) noexcept {
+    const wchar_t tempPath[] = L"C:\\Temp\\";
+    constexpr DWORD len = 8;
+    if (nBufferLength < len + 1) return len + 1;
+    if (!lpBuffer) return 0;
+    std::wmemcpy(lpBuffer, tempPath, len);
+    lpBuffer[len] = L'\0';
+    return len;
+}
+
+inline DWORD GetTempPathA(DWORD nBufferLength, LPSTR lpBuffer) noexcept {
+    const char tempPath[] = "C:\\Temp\\";
+    constexpr DWORD len = 8;
+    if (nBufferLength < len + 1) return len + 1;
+    if (!lpBuffer) return 0;
+    std::memcpy(lpBuffer, tempPath, len);
+    lpBuffer[len] = '\0';
+    return len;
+}
+
+inline BOOL GetFileInformationByHandle(HANDLE /*hFile*/, LPBY_HANDLE_FILE_INFORMATION lpFileInformation) noexcept {
+    if (!lpFileInformation) return FALSE;
+    lpFileInformation->dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+    GetSystemTimeAsFileTime(&lpFileInformation->ftCreationTime);
+    lpFileInformation->ftLastAccessTime = lpFileInformation->ftCreationTime;
+    lpFileInformation->ftLastWriteTime = lpFileInformation->ftCreationTime;
+    lpFileInformation->dwVolumeSerialNumber = 0x20261008;
+    lpFileInformation->nFileSizeHigh = 0;
+    lpFileInformation->nFileSizeLow = 4096;
+    lpFileInformation->nNumberOfLinks = 1;
+    lpFileInformation->nFileIndexHigh = 0;
+    lpFileInformation->nFileIndexLow = 1;
+    return TRUE;
+}
+
+inline HANDLE FindFirstStreamW(
+    LPCWSTR /*lpFileName*/,
+    STREAM_INFO_LEVELS /*InfoLevel*/,
+    LPVOID /*lpFindStreamData*/,
+    DWORD /*dwFlags*/
+) noexcept {
+    SetLastError(38); // ERROR_HANDLE_EOF
+    return INVALID_HANDLE_VALUE;
+}
+
+inline BOOL FindNextStreamW(HANDLE /*hFindStream*/, LPVOID /*lpFindStreamData*/) noexcept {
+    SetLastError(38); // ERROR_HANDLE_EOF
+    return FALSE;
+}
+
+inline DWORD GetLogicalDriveStringsW(DWORD nBufferLength, LPWSTR lpBuffer) noexcept {
+    const wchar_t drives[] = L"C:\\\0D:\\\0";
+    constexpr DWORD len = 8;
+    if (nBufferLength < len + 1) return len + 1;
+    if (!lpBuffer) return 0;
+    std::memcpy(lpBuffer, drives, (len + 1) * sizeof(wchar_t));
+    return len;
+}
+
+inline BOOL DeviceIoControl(
+    HANDLE /*hDevice*/,
+    DWORD /*dwIoControlCode*/,
+    LPVOID /*lpInBuffer*/,
+    DWORD /*nInBufferSize*/,
+    LPVOID /*lpOutBuffer*/,
+    DWORD /*nOutBufferSize*/,
+    LPDWORD lpBytesReturned,
+    LPOVERLAPPED /*lpOverlapped*/
+) noexcept {
+    if (lpBytesReturned) *lpBytesReturned = 0;
+    return TRUE;
+}
+
+inline int lstrcmpiW(LPCWSTR lpString1, LPCWSTR lpString2) noexcept {
+    if (!lpString1 && !lpString2) return 0;
+    if (!lpString1) return -1;
+    if (!lpString2) return 1;
+    while (*lpString1 && *lpString2) {
+        wchar_t c1 = std::towlower(*lpString1);
+        wchar_t c2 = std::towlower(*lpString2);
+        if (c1 != c2) return c1 - c2;
+        ++lpString1;
+        ++lpString2;
+    }
+    return std::towlower(*lpString1) - std::towlower(*lpString2);
+}
+
+inline int lstrcmpiA(LPCSTR lpString1, LPCSTR lpString2) noexcept {
+    if (!lpString1 && !lpString2) return 0;
+    if (!lpString1) return -1;
+    if (!lpString2) return 1;
+    while (*lpString1 && *lpString2) {
+        char c1 = static_cast<char>(std::tolower(static_cast<unsigned char>(*lpString1)));
+        char c2 = static_cast<char>(std::tolower(static_cast<unsigned char>(*lpString2)));
+        if (c1 != c2) return c1 - c2;
+        ++lpString1;
+        ++lpString2;
+    }
+    return std::tolower(static_cast<unsigned char>(*lpString1)) - std::tolower(static_cast<unsigned char>(*lpString2));
+}
+
+inline LPWSTR lstrcpynW(LPWSTR lpString1, LPCWSTR lpString2, int iMaxLength) noexcept {
+    if (!lpString1 || iMaxLength <= 0) return lpString1;
+    if (!lpString2) {
+        lpString1[0] = L'\0';
+        return lpString1;
+    }
+    int i = 0;
+    while (i < iMaxLength - 1 && lpString2[i] != L'\0') {
+        lpString1[i] = lpString2[i];
+        ++i;
+    }
+    lpString1[i] = L'\0';
+    return lpString1;
+}
+
+inline DWORD ExpandEnvironmentStringsW(LPCWSTR lpSrc, LPWSTR lpDst, DWORD nSize) noexcept {
+    if (!lpSrc) return 0;
+    std::wstring result;
+    for (size_t i = 0; lpSrc[i] != L'\0'; ++i) {
+        if (lpSrc[i] == L'%' && lpSrc[i+1] != L'\0') {
+            size_t close = i + 1;
+            while (lpSrc[close] != L'\0' && lpSrc[close] != L'%') ++close;
+            if (lpSrc[close] == L'%') {
+                std::wstring varName(lpSrc + i + 1, close - i - 1);
+                auto it = g_EnvironmentVariables.find(varName);
+                if (it != g_EnvironmentVariables.end()) {
+                    result += it->second;
+                }
+                i = close;
+                continue;
+            }
+        }
+        result.push_back(lpSrc[i]);
+    }
+    DWORD needed = static_cast<DWORD>(result.size() + 1);
+    if (!lpDst || nSize < needed) return needed;
+    std::wmemcpy(lpDst, result.c_str(), result.size());
+    lpDst[result.size()] = L'\0';
+    return needed;
+}
+
+inline int GetDateFormatW(
+    DWORD /*Locale*/,
+    DWORD /*dwFlags*/,
+    const SYSTEMTIME* /*lpDate*/,
+    LPCWSTR /*lpFormat*/,
+    LPWSTR lpDateStr,
+    int cchDate
+) noexcept {
+    const wchar_t d[] = L"2026-10-08";
+    constexpr int len = 11;
+    if (cchDate == 0) return len;
+    if (!lpDateStr || cchDate < len) return 0;
+    std::wmemcpy(lpDateStr, d, len);
+    return len;
+}
+
+inline int GetDateFormatEx(
+    LPCWSTR /*lpLocaleName*/,
+    DWORD /*dwFlags*/,
+    const SYSTEMTIME* /*lpDate*/,
+    LPCWSTR /*lpFormat*/,
+    LPWSTR lpDateStr,
+    int cchDate,
+    LPCWSTR /*lpCalendar*/
+) noexcept {
+    return GetDateFormatW(0, 0, nullptr, nullptr, lpDateStr, cchDate);
+}
+
+inline int GetTimeFormatEx(
+    LPCWSTR /*lpLocaleName*/,
+    DWORD /*dwFlags*/,
+    const SYSTEMTIME* /*lpTime*/,
+    LPCWSTR /*lpFormat*/,
+    LPWSTR lpTimeStr,
+    int cchTime
+) noexcept {
+    const wchar_t t[] = L"19:15:00";
+    constexpr int len = 9;
+    if (cchTime == 0) return len;
+    if (!lpTimeStr || cchTime < len) return 0;
+    std::wmemcpy(lpTimeStr, t, len);
+    return len;
+}
+
+inline constexpr DWORD PRODUCT_ENTERPRISE = 0x00000004;
+inline BOOL GetProductInfo(
+    DWORD /*dwOSMajorVersion*/,
+    DWORD /*dwOSMinorVersion*/,
+    DWORD /*dwSpMajorVersion*/,
+    DWORD /*dwSpMinorVersion*/,
+    PDWORD pdwReturnedProductType
+) noexcept {
+    if (pdwReturnedProductType) *pdwReturnedProductType = PRODUCT_ENTERPRISE;
+    return TRUE;
+}
+
+inline BOOL GetVersionExW(LPOSVERSIONINFOEXW lpVersionInformation) noexcept {
+    if (!lpVersionInformation) return FALSE;
+    lpVersionInformation->dwMajorVersion = 10;
+    lpVersionInformation->dwMinorVersion = 0;
+    lpVersionInformation->dwBuildNumber = 26100;
+    lpVersionInformation->dwPlatformId = 2; // VER_PLATFORM_WIN32_NT
+    std::wmemset(lpVersionInformation->szCSDVersion, 0, 128);
+    lpVersionInformation->wServicePackMajor = 0;
+    lpVersionInformation->wServicePackMinor = 0;
+    lpVersionInformation->wSuiteMask = 0x0100; // VER_SUITE_ENTERPRISE
+    lpVersionInformation->wProductType = 1;     // VER_NT_WORKSTATION
+    return TRUE;
+}
+
+inline HRSRC FindResourceW(HMODULE /*hModule*/, LPCWSTR /*lpName*/, LPCWSTR /*lpType*/) noexcept {
+    return reinterpret_cast<HRSRC>(0x1000);
+}
+
+inline HGLOBAL_RES LoadResource(HMODULE /*hModule*/, HRSRC hResInfo) noexcept {
+    return reinterpret_cast<HGLOBAL_RES>(hResInfo);
+}
+
+inline LPVOID LockResource(HGLOBAL_RES hResData) noexcept {
+    static const uint8_t s_dummyResource[64] = {0};
+    return (hResData != nullptr) ? const_cast<uint8_t*>(s_dummyResource) : nullptr;
+}
+
+inline DWORD SizeofResource(HMODULE /*hModule*/, HRSRC /*hResInfo*/) noexcept {
+    return 64;
+}
+
+inline DWORD GetLongPathNameW(LPCWSTR lpszShortPath, LPWSTR lpszLongPath, DWORD cchBuffer) noexcept {
+    if (!lpszShortPath) return 0;
+    size_t len = std::wcslen(lpszShortPath);
+    if (cchBuffer <= len) return static_cast<DWORD>(len + 1);
+    if (!lpszLongPath) return 0;
+    std::wmemcpy(lpszLongPath, lpszShortPath, len + 1);
+    return static_cast<DWORD>(len);
+}
+
+inline DWORD GetFinalPathNameByHandleW(
+    HANDLE /*hFile*/,
+    LPWSTR lpszFilePath,
+    DWORD cchFilePath,
+    DWORD /*dwFlags*/
+) noexcept {
+    const wchar_t p[] = L"\\\\?\\C:\\Windows\\System32\\micant.exe";
+    constexpr DWORD len = 34;
+    if (cchFilePath <= len) return len + 1;
+    if (!lpszFilePath) return 0;
+    std::wmemcpy(lpszFilePath, p, len + 1);
+    return len;
+}
+
+inline BOOL ReleaseMutex(HANDLE /*hMutex*/) noexcept {
+    return TRUE;
+}
+
+inline HANDLE OpenProcess(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, DWORD dwProcessId) noexcept {
+    return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(dwProcessId ? dwProcessId : 0x100));
+}
+
+inline HRESULT GetApplicationRestartSettings(HANDLE /*hProcess*/, PWSTR /*pwzCommandLine*/, PDWORD pcchSize, PDWORD pdwFlags) noexcept {
+    if (pcchSize) *pcchSize = 0;
+    if (pdwFlags) *pdwFlags = 0;
+    return 1; // S_FALSE
+}
+
+inline HRESULT UnregisterApplicationRestart() noexcept {
+    return 0; // S_OK
+}
+
+inline HRESULT RegisterApplicationRestart(PCWSTR /*pwzCommandLine*/, DWORD /*dwFlags*/) noexcept {
+    return 0; // S_OK
+}
+
+// Slim Reader/Writer (SRW) Locks
+inline void AcquireSRWLockExclusive(PSRWLOCK /*SRWLock*/) noexcept {}
+inline void ReleaseSRWLockExclusive(PSRWLOCK /*SRWLock*/) noexcept {}
+inline BOOL TryAcquireSRWLockExclusive(PSRWLOCK /*SRWLock*/) noexcept { return TRUE; }
+inline void AcquireSRWLockShared(PSRWLOCK /*SRWLock*/) noexcept {}
+inline void ReleaseSRWLockShared(PSRWLOCK /*SRWLock*/) noexcept {}
+inline BOOL TryAcquireSRWLockShared(PSRWLOCK /*SRWLock*/) noexcept { return TRUE; }
+inline void InitializeSRWLock(PSRWLOCK SRWLock) noexcept { if (SRWLock) SRWLock->Ptr = nullptr; }
+
+// Condition Variables
+inline BOOL SleepConditionVariableSRW(PCONDITION_VARIABLE /*ConditionVariable*/, PSRWLOCK /*SRWLock*/, DWORD /*dwMilliseconds*/, ULONG /*Flags*/) noexcept { return TRUE; }
+inline void WakeConditionVariable(PCONDITION_VARIABLE /*ConditionVariable*/) noexcept {}
+inline void WakeAllConditionVariable(PCONDITION_VARIABLE /*ConditionVariable*/) noexcept {}
+inline void InitializeConditionVariable(PCONDITION_VARIABLE ConditionVariable) noexcept { if (ConditionVariable) ConditionVariable->Ptr = nullptr; }
+
+// One-Time Initialization
+inline BOOL InitOnceBeginInitialize(LPINIT_ONCE /*lpInitOnce*/, DWORD /*dwFlags*/, PBOOL fPending, LPVOID* /*lpContext*/) noexcept {
+    if (fPending) *fPending = FALSE;
+    return TRUE;
+}
+inline BOOL InitOnceComplete(LPINIT_ONCE /*lpInitOnce*/, DWORD /*dwFlags*/, LPVOID /*lpContext*/) noexcept { return TRUE; }
+inline BOOL InitOnceExecuteOnce(LPINIT_ONCE InitOnce, PINIT_ONCE_FN InitFn, PVOID Parameter, LPVOID* Context) noexcept {
+    if (InitFn) return InitFn(InitOnce, Parameter, Context);
+    return TRUE;
+}
+
+// Threadpool Work APIs
+inline PTP_WORK CreateThreadpoolWork(PTP_WORK_CALLBACK /*pfnwk*/, PVOID /*pv*/, PTP_CALLBACK_ENVIRON /*pcbe*/) noexcept {
+    static uint64_t dummyWork = 0x1234;
+    return reinterpret_cast<PTP_WORK>(&dummyWork);
+}
+inline void SubmitThreadpoolWork(PTP_WORK /*pwk*/) noexcept {}
+inline void CloseThreadpoolWork(PTP_WORK /*pwk*/) noexcept {}
+inline void FreeLibraryWhenCallbackReturns(PTP_CALLBACK_INSTANCE /*pci*/, HMODULE /*mod*/) noexcept {}
+
+// Integer and String Helper APIs
+inline int MulDiv(int nNumber, int nNumerator, int nDenominator) noexcept {
+    if (nDenominator == 0) return -1;
+    int64_t res = (static_cast<int64_t>(nNumber) * static_cast<int64_t>(nNumerator)) / nDenominator;
+    return static_cast<int>(res);
+}
+
+inline int CompareStringOrdinal(LPCWCH lpString1, int cchCount1, LPCWCH lpString2, int cchCount2, BOOL bIgnoreCase) noexcept {
+    if (!lpString1 && !lpString2) return 2;
+    if (!lpString1) return 1;
+    if (!lpString2) return 3;
+    std::wstring s1(lpString1, (cchCount1 >= 0) ? cchCount1 : wcslen(lpString1));
+    std::wstring s2(lpString2, (cchCount2 >= 0) ? cchCount2 : wcslen(lpString2));
+    if (bIgnoreCase) {
+        for (auto& c : s1) c = towlower(c);
+        for (auto& c : s2) c = towlower(c);
+    }
+    if (s1 < s2) return 1;
+    if (s1 > s2) return 3;
+    return 2;
+}
+
+inline int CompareStringEx(LPCWSTR /*lpLocaleName*/, DWORD dwCmpFlags, LPCWCH lpString1, int cchCount1, LPCWCH lpString2, int cchCount2, LPVOID, LPVOID, LPARAM) noexcept {
+    return CompareStringOrdinal(lpString1, cchCount1, lpString2, cchCount2, (dwCmpFlags & 0x00000001) != 0);
+}
+
+inline int LCMapStringEx(LPCWSTR, DWORD dwMapFlags, LPCWSTR lpSrcStr, int cchSrc, LPWSTR lpDestStr, int cchDest, LPVOID, LPVOID, LPARAM) noexcept {
+    return LCMapStringW(0, dwMapFlags, lpSrcStr, cchSrc, lpDestStr, cchDest);
+}
+
+inline int lstrcmpW(LPCWSTR s1, LPCWSTR s2) noexcept {
+    if (!s1 && !s2) return 0;
+    if (!s1) return -1;
+    if (!s2) return 1;
+    return wcscmp(s1, s2);
+}
+
+inline LPWSTR lstrcpyW(LPWSTR dst, LPCWSTR src) noexcept {
+    if (!dst || !src) return dst;
+    return wcscpy(dst, src);
+}
+
+inline LPSTR lstrcpynA(LPSTR dst, LPCSTR src, int maxLen) noexcept {
+    if (!dst || maxLen <= 0) return dst;
+    if (!src) { *dst = '\0'; return dst; }
+    strncpy(dst, src, maxLen - 1);
+    dst[maxLen - 1] = '\0';
+    return dst;
+}
+
+inline int lstrlenW(LPCWSTR s) noexcept {
+    return s ? static_cast<int>(wcslen(s)) : 0;
+}
+
+inline void GetNativeSystemInfo(SYSTEM_INFO* lpSystemInfo) noexcept {
+    GetSystemInfo(lpSystemInfo);
+}
+
+inline BOOL QueryFullProcessImageNameW(HANDLE /*hProcess*/, DWORD /*dwFlags*/, LPWSTR lpExeName, PDWORD lpdwSize) noexcept {
+    if (!lpExeName || !lpdwSize || *lpdwSize == 0) return FALSE;
+    const wchar_t* p = L"C:\\Program Files\\Notepad++\\notepad++.exe";
+    size_t len = wcslen(p);
+    if (*lpdwSize <= len) { *lpdwSize = static_cast<DWORD>(len + 1); return FALSE; }
+    wcscpy(lpExeName, p);
+    *lpdwSize = static_cast<DWORD>(len);
+    return TRUE;
+}
+
+inline SIZE_T GlobalSize(HANDLE /*hMem*/) noexcept { return 4096; }
+
+inline BOOL CopyFileExW(LPCWSTR src, LPCWSTR dst, LPPROGRESS_ROUTINE, LPVOID, LPBOOL, DWORD) noexcept {
+    return CopyFileW(src, dst, FALSE);
+}
+
+inline BOOL ReplaceFileW(LPCWSTR replaced, LPCWSTR replacement, LPCWSTR backup, DWORD, LPVOID, LPVOID) noexcept {
+    if (backup) CopyFileW(replaced, backup, FALSE);
+    return MoveFileExW(replacement, replaced, 1);
+}
+
+struct WIN32_FILE_ATTRIBUTE_DATA {
+    DWORD dwFileAttributes{0};
+    FILETIME ftCreationTime{};
+    FILETIME ftLastAccessTime{};
+    FILETIME ftLastWriteTime{};
+    DWORD nFileSizeHigh{0};
+    DWORD nFileSizeLow{0};
+};
+
+inline BOOL GetFileAttributesExW(LPCWSTR lpFileName, int /*fInfoLevelId*/, LPVOID lpFileInformation) noexcept {
+    if (!lpFileName || !lpFileInformation) return FALSE;
+    auto* pData = reinterpret_cast<WIN32_FILE_ATTRIBUTE_DATA*>(lpFileInformation);
+    pData->dwFileAttributes = GetFileAttributesW(lpFileName);
+    if (pData->dwFileAttributes == INVALID_FILE_ATTRIBUTES) return FALSE;
+    return TRUE;
+}
+
+inline BOOL GetFileInformationByHandleEx(HANDLE /*hFile*/, int /*FileInformationClass*/, LPVOID lpFileInformation, DWORD dwBufferSize) noexcept {
+    if (lpFileInformation && dwBufferSize > 0) memset(lpFileInformation, 0, dwBufferSize);
+    return TRUE;
+}
+
+inline BOOL AreFileApisANSI() noexcept { return TRUE; }
+
+inline HANDLE CreateToolhelp32Snapshot(DWORD /*dwFlags*/, DWORD /*th32ProcessID*/) noexcept {
+    static uint64_t dummySnapshot = 0x5555;
+    return reinterpret_cast<HANDLE>(&dummySnapshot);
+}
+
+inline BOOL Process32FirstW(HANDLE /*hSnapshot*/, LPPROCESSENTRY32W lppe) noexcept {
+    if (!lppe || lppe->dwSize < sizeof(PROCESSENTRY32W)) return FALSE;
+    lppe->th32ProcessID = 1000;
+    lppe->cntThreads = 1;
+    lppe->th32ParentProcessID = 0;
+    wcscpy(lppe->szExeFile, L"notepad++.exe");
+    return TRUE;
+}
+
+inline BOOL Process32NextW(HANDLE /*hSnapshot*/, LPPROCESSENTRY32W /*lppe*/) noexcept {
+    return FALSE;
+}
+
+inline BOOL ReadDirectoryChangesW(HANDLE, LPVOID, DWORD, BOOL, DWORD, LPDWORD lpBytesReturned, LPOVERLAPPED, void*) noexcept {
+    if (lpBytesReturned) *lpBytesReturned = 0;
+    return TRUE;
+}
+
+inline DWORD SleepEx(DWORD dwMilliseconds, BOOL /*bAlertable*/) noexcept {
+    Sleep(dwMilliseconds);
+    return 0;
+}
+
+inline DWORD WaitForSingleObjectEx(HANDLE hHandle, DWORD dwMilliseconds, BOOL /*bAlertable*/) noexcept {
+    return WaitForSingleObject(hHandle, dwMilliseconds);
+}
+
+inline DWORD QueueUserAPC(PAPCFUNC /*pfnAPC*/, HANDLE /*hThread*/, ULONG_PTR /*dwData*/) noexcept { return 1; }
+inline BOOL CancelIo(HANDLE /*hFile*/) noexcept { return TRUE; }
+
+inline DWORD GetTimeZoneInformation(LPTIME_ZONE_INFORMATION lpTimeZoneInformation) noexcept {
+    if (lpTimeZoneInformation) {
+        memset(lpTimeZoneInformation, 0, sizeof(*lpTimeZoneInformation));
+        lpTimeZoneInformation->Bias = 0;
+        wcscpy(lpTimeZoneInformation->StandardName, L"UTC");
+    }
+    return 1; // TIME_ZONE_ID_STANDARD
+}
+
+inline BOOL SystemTimeToTzSpecificLocalTime(const TIME_ZONE_INFORMATION*, const SYSTEMTIME* u, LPSYSTEMTIME l) noexcept {
+    if (!u || !l) return FALSE;
+    *l = *u;
+    return TRUE;
+}
+
+inline int GetTimeFormatW(DWORD, DWORD, const SYSTEMTIME*, LPCWSTR, LPWSTR lpTimeStr, int cchTime) noexcept {
+    if (cchTime > 0 && lpTimeStr) wcscpy(lpTimeStr, L"12:00:00");
+    return 9;
+}
+
+inline int GetLocaleInfoW(LCID, DWORD, LPWSTR lpLCData, int cchData) noexcept {
+    if (cchData > 0 && lpLCData) lpLCData[0] = L'\0';
+    return 1;
+}
+
+inline int GetLocaleInfoA(LCID, DWORD, LPSTR lpLCData, int cchData) noexcept {
+    if (cchData > 0 && lpLCData) lpLCData[0] = '\0';
+    return 1;
+}
+
+inline int GetLocaleInfoEx(LPCWSTR, DWORD, LPWSTR lpLCData, int cchData) noexcept {
+    if (cchData > 0 && lpLCData) lpLCData[0] = L'\0';
+    return 1;
+}
+
+inline LCID GetUserDefaultLCID() noexcept { return 0x0409; }
+
+inline BOOL GetStringTypeExW(LCID, DWORD, LPCWCH, int, LPWORD lpCharType) noexcept {
+    if (lpCharType) *lpCharType = 0;
+    return TRUE;
+}
+
+inline BOOL GetStringTypeExA(LCID, DWORD, LPCSTR, int, LPWORD lpCharType) noexcept {
+    if (lpCharType) *lpCharType = 0;
+    return TRUE;
+}
+
+inline int LCMapStringA(LCID, DWORD, LPCSTR, int, LPSTR, int) noexcept { return 0; }
+inline BOOL IsValidLocale(LCID, DWORD) noexcept { return TRUE; }
+
+inline BOOL EnumSystemLocalesW(LOCALE_ENUMPROCW p, DWORD) noexcept {
+    if (p) { wchar_t loc[] = L"00000409"; p(loc); }
+    return TRUE;
+}
+
+inline HANDLE CreateMutexW(LPSECURITY_ATTRIBUTES, BOOL, LPCWSTR) noexcept {
+    static uint64_t dummyMutex = 0x6666;
+    return reinterpret_cast<HANDLE>(&dummyMutex);
+}
+
+inline DWORD GetTempPath2W(DWORD nBufferLength, LPWSTR lpBuffer) noexcept {
+    return GetTempPathW(nBufferLength, lpBuffer);
+}
+
+inline DWORD GetTempPath2A(DWORD nBufferLength, LPSTR lpBuffer) noexcept {
+    return GetTempPathA(nBufferLength, lpBuffer);
+}
+
+inline HMODULE LoadLibraryA(LPCSTR lpLibFileName) noexcept {
+    if (!lpLibFileName) return nullptr;
+    std::string s(lpLibFileName);
+    std::wstring ws(s.begin(), s.end());
+    return LoadLibraryW(ws.c_str());
+}
+
+inline HMODULE LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) noexcept {
+    return LoadLibraryA(lpLibFileName);
+}
+
+inline DWORD FormatMessageA(DWORD /*dwFlags*/, LPCVOID /*lpSource*/, DWORD dwMessageId, DWORD /*dwLanguageId*/, LPSTR lpBuffer, DWORD nSize, va_list* /*Arguments*/) noexcept {
+    if (lpBuffer && nSize > 0) {
+        snprintf(lpBuffer, nSize, "MicaNT Error 0x%X", static_cast<unsigned int>(dwMessageId));
+        return static_cast<DWORD>(strlen(lpBuffer));
+    }
+    return 0;
+}
+
+inline BOOL InitializeCriticalSectionAndSpinCount(LPCRITICAL_SECTION lpCriticalSection, DWORD /*dwSpinCount*/) noexcept {
+    InitializeCriticalSection(lpCriticalSection);
+    return TRUE;
+}
+
+inline BOOL ReadConsoleW(HANDLE, LPVOID, DWORD, LPDWORD lpNumberOfCharsRead, LPVOID) noexcept {
+    if (lpNumberOfCharsRead) *lpNumberOfCharsRead = 0;
+    return TRUE;
+}
+
+inline void RtlUnwind(void*, void*, void*, void*) noexcept {}
+
+[[noreturn]] inline void ExitThread(DWORD dwExitCode) noexcept {
+    if (g_ExitThreadHook) {
+        g_ExitThreadHook(dwExitCode);
+    }
+    DWORD pid = GetCurrentProcessId();
+    csrss::CsrSubsystemServer::get().terminateProcess(pid, dwExitCode);
+    std::exit(static_cast<int>(dwExitCode));
+}
+
+[[noreturn]] inline void FreeLibraryAndExitThread(HMODULE hLib, DWORD code) noexcept {
+    FreeLibrary(hLib);
+    ExitThread(code);
+}
 
 // ============================================================================
 // 18. Win32 Dynamic Subsystem Export Table Initializer
@@ -2680,6 +3688,124 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "CreateMailslotW", reinterpret_cast<void*>(CreateMailslotW));
     ldr.registerExport("kernel32.dll", "GetMailslotInfo", reinterpret_cast<void*>(GetMailslotInfo));
     ldr.registerExport("kernel32.dll", "SetMailslotInfo", reinterpret_cast<void*>(SetMailslotInfo));
+
+    // Extended Win32 Subsystem exports (7-Zip, VLC, Notepad++)
+    ldr.registerExport("kernel32.dll", "GetTickCount", reinterpret_cast<void*>(GetTickCount));
+    ldr.registerExport("kernel32.dll", "SetConsoleCtrlHandler", reinterpret_cast<void*>(SetConsoleCtrlHandler));
+    ldr.registerExport("kernel32.dll", "GetProcessTimes", reinterpret_cast<void*>(GetProcessTimes));
+    ldr.registerExport("kernel32.dll", "SetProcessAffinityMask", reinterpret_cast<void*>(SetProcessAffinityMask));
+    ldr.registerExport("kernel32.dll", "GetProcessAffinityMask", reinterpret_cast<void*>(GetProcessAffinityMask));
+    ldr.registerExport("kernel32.dll", "OpenEventW", reinterpret_cast<void*>(OpenEventW));
+    ldr.registerExport("kernel32.dll", "OpenFileMappingW", reinterpret_cast<void*>(OpenFileMappingW));
+    ldr.registerExport("kernel32.dll", "CompareFileTime", reinterpret_cast<void*>(CompareFileTime));
+    ldr.registerExport("kernel32.dll", "FileTimeToSystemTime", reinterpret_cast<void*>(FileTimeToSystemTime));
+    ldr.registerExport("kernel32.dll", "FileTimeToLocalFileTime", reinterpret_cast<void*>(FileTimeToLocalFileTime));
+    ldr.registerExport("kernel32.dll", "FileTimeToDosDateTime", reinterpret_cast<void*>(FileTimeToDosDateTime));
+    ldr.registerExport("kernel32.dll", "GlobalMemoryStatusEx", reinterpret_cast<void*>(GlobalMemoryStatusEx));
+    ldr.registerExport("kernel32.dll", "GetDiskFreeSpaceW", reinterpret_cast<void*>(GetDiskFreeSpaceW));
+    ldr.registerExport("kernel32.dll", "GetDiskFreeSpaceExW", reinterpret_cast<void*>(GetDiskFreeSpaceExW));
+    ldr.registerExport("kernel32.dll", "SetEndOfFile", reinterpret_cast<void*>(SetEndOfFile));
+    ldr.registerExport("kernel32.dll", "FormatMessageW", reinterpret_cast<void*>(FormatMessageW));
+    ldr.registerExport("kernel32.dll", "SetFileTime", reinterpret_cast<void*>(SetFileTime));
+    ldr.registerExport("kernel32.dll", "MoveFileWithProgressW", reinterpret_cast<void*>(MoveFileWithProgressW));
+    ldr.registerExport("kernel32.dll", "CreateHardLinkW", reinterpret_cast<void*>(CreateHardLinkW));
+    ldr.registerExport("kernel32.dll", "GetTempPathW", reinterpret_cast<void*>(GetTempPathW));
+    ldr.registerExport("kernel32.dll", "GetFileInformationByHandle", reinterpret_cast<void*>(GetFileInformationByHandle));
+    ldr.registerExport("kernel32.dll", "FindFirstStreamW", reinterpret_cast<void*>(FindFirstStreamW));
+    ldr.registerExport("kernel32.dll", "FindNextStreamW", reinterpret_cast<void*>(FindNextStreamW));
+    ldr.registerExport("kernel32.dll", "GetLogicalDriveStringsW", reinterpret_cast<void*>(GetLogicalDriveStringsW));
+    ldr.registerExport("kernel32.dll", "DeviceIoControl", reinterpret_cast<void*>(DeviceIoControl));
+
+    // Global memory and string utilities (Notepad++)
+    ldr.registerExport("kernel32.dll", "GlobalAlloc", reinterpret_cast<void*>(GlobalAlloc));
+    ldr.registerExport("kernel32.dll", "GlobalFree", reinterpret_cast<void*>(GlobalFree));
+    ldr.registerExport("kernel32.dll", "GlobalLock", reinterpret_cast<void*>(GlobalLock));
+    ldr.registerExport("kernel32.dll", "GlobalUnlock", reinterpret_cast<void*>(GlobalUnlock));
+    ldr.registerExport("kernel32.dll", "lstrcmpiW", reinterpret_cast<void*>(lstrcmpiW));
+    ldr.registerExport("kernel32.dll", "lstrcmpiA", reinterpret_cast<void*>(lstrcmpiA));
+    ldr.registerExport("kernel32.dll", "lstrcpynW", reinterpret_cast<void*>(lstrcpynW));
+    ldr.registerExport("kernel32.dll", "ExpandEnvironmentStringsW", reinterpret_cast<void*>(ExpandEnvironmentStringsW));
+    ldr.registerExport("kernel32.dll", "GetDateFormatW", reinterpret_cast<void*>(GetDateFormatW));
+    ldr.registerExport("kernel32.dll", "GetDateFormatEx", reinterpret_cast<void*>(GetDateFormatEx));
+    ldr.registerExport("kernel32.dll", "GetTimeFormatEx", reinterpret_cast<void*>(GetTimeFormatEx));
+    ldr.registerExport("kernel32.dll", "GetProductInfo", reinterpret_cast<void*>(GetProductInfo));
+    ldr.registerExport("kernel32.dll", "GetVersionExW", reinterpret_cast<void*>(GetVersionExW));
+    ldr.registerExport("kernel32.dll", "FindResourceW", reinterpret_cast<void*>(FindResourceW));
+    ldr.registerExport("kernel32.dll", "LoadResource", reinterpret_cast<void*>(LoadResource));
+    ldr.registerExport("kernel32.dll", "LockResource", reinterpret_cast<void*>(LockResource));
+    ldr.registerExport("kernel32.dll", "SizeofResource", reinterpret_cast<void*>(SizeofResource));
+    ldr.registerExport("kernel32.dll", "GetLongPathNameW", reinterpret_cast<void*>(GetLongPathNameW));
+    ldr.registerExport("kernel32.dll", "GetFinalPathNameByHandleW", reinterpret_cast<void*>(GetFinalPathNameByHandleW));
+    ldr.registerExport("kernel32.dll", "ReleaseMutex", reinterpret_cast<void*>(ReleaseMutex));
+    ldr.registerExport("kernel32.dll", "OpenProcess", reinterpret_cast<void*>(OpenProcess));
+    ldr.registerExport("kernel32.dll", "GetApplicationRestartSettings", reinterpret_cast<void*>(GetApplicationRestartSettings));
+    ldr.registerExport("kernel32.dll", "UnregisterApplicationRestart", reinterpret_cast<void*>(UnregisterApplicationRestart));
+    ldr.registerExport("kernel32.dll", "ExitThread", reinterpret_cast<void*>(ExitThread));
+    ldr.registerExport("kernel32.dll", "RegisterApplicationRestart", reinterpret_cast<void*>(RegisterApplicationRestart));
+    ldr.registerExport("kernel32.dll", "AcquireSRWLockExclusive", reinterpret_cast<void*>(AcquireSRWLockExclusive));
+    ldr.registerExport("kernel32.dll", "ReleaseSRWLockExclusive", reinterpret_cast<void*>(ReleaseSRWLockExclusive));
+    ldr.registerExport("kernel32.dll", "TryAcquireSRWLockExclusive", reinterpret_cast<void*>(TryAcquireSRWLockExclusive));
+    ldr.registerExport("kernel32.dll", "AcquireSRWLockShared", reinterpret_cast<void*>(AcquireSRWLockShared));
+    ldr.registerExport("kernel32.dll", "ReleaseSRWLockShared", reinterpret_cast<void*>(ReleaseSRWLockShared));
+    ldr.registerExport("kernel32.dll", "TryAcquireSRWLockShared", reinterpret_cast<void*>(TryAcquireSRWLockShared));
+    ldr.registerExport("kernel32.dll", "InitializeSRWLock", reinterpret_cast<void*>(InitializeSRWLock));
+    ldr.registerExport("kernel32.dll", "SleepConditionVariableSRW", reinterpret_cast<void*>(SleepConditionVariableSRW));
+    ldr.registerExport("kernel32.dll", "WakeConditionVariable", reinterpret_cast<void*>(WakeConditionVariable));
+    ldr.registerExport("kernel32.dll", "WakeAllConditionVariable", reinterpret_cast<void*>(WakeAllConditionVariable));
+    ldr.registerExport("kernel32.dll", "InitializeConditionVariable", reinterpret_cast<void*>(InitializeConditionVariable));
+    ldr.registerExport("kernel32.dll", "InitOnceBeginInitialize", reinterpret_cast<void*>(InitOnceBeginInitialize));
+    ldr.registerExport("kernel32.dll", "InitOnceComplete", reinterpret_cast<void*>(InitOnceComplete));
+    ldr.registerExport("kernel32.dll", "InitOnceExecuteOnce", reinterpret_cast<void*>(InitOnceExecuteOnce));
+    ldr.registerExport("kernel32.dll", "CreateThreadpoolWork", reinterpret_cast<void*>(CreateThreadpoolWork));
+    ldr.registerExport("kernel32.dll", "SubmitThreadpoolWork", reinterpret_cast<void*>(SubmitThreadpoolWork));
+    ldr.registerExport("kernel32.dll", "CloseThreadpoolWork", reinterpret_cast<void*>(CloseThreadpoolWork));
+    ldr.registerExport("kernel32.dll", "FreeLibraryWhenCallbackReturns", reinterpret_cast<void*>(FreeLibraryWhenCallbackReturns));
+    ldr.registerExport("kernel32.dll", "MulDiv", reinterpret_cast<void*>(MulDiv));
+    ldr.registerExport("kernel32.dll", "CompareStringOrdinal", reinterpret_cast<void*>(CompareStringOrdinal));
+    ldr.registerExport("kernel32.dll", "CompareStringEx", reinterpret_cast<void*>(CompareStringEx));
+    ldr.registerExport("kernel32.dll", "LCMapStringEx", reinterpret_cast<void*>(LCMapStringEx));
+    ldr.registerExport("kernel32.dll", "lstrcmpW", reinterpret_cast<void*>(lstrcmpW));
+    ldr.registerExport("kernel32.dll", "lstrcpyW", reinterpret_cast<void*>(lstrcpyW));
+    ldr.registerExport("kernel32.dll", "lstrcpynA", reinterpret_cast<void*>(lstrcpynA));
+    ldr.registerExport("kernel32.dll", "lstrlenW", reinterpret_cast<void*>(lstrlenW));
+    ldr.registerExport("kernel32.dll", "GetNativeSystemInfo", reinterpret_cast<void*>(GetNativeSystemInfo));
+    ldr.registerExport("kernel32.dll", "QueryFullProcessImageNameW", reinterpret_cast<void*>(QueryFullProcessImageNameW));
+    ldr.registerExport("kernel32.dll", "GlobalSize", reinterpret_cast<void*>(GlobalSize));
+    ldr.registerExport("kernel32.dll", "CopyFileExW", reinterpret_cast<void*>(CopyFileExW));
+    ldr.registerExport("kernel32.dll", "ReplaceFileW", reinterpret_cast<void*>(ReplaceFileW));
+    ldr.registerExport("kernel32.dll", "GetFileAttributesExW", reinterpret_cast<void*>(GetFileAttributesExW));
+    ldr.registerExport("kernel32.dll", "GetFileInformationByHandleEx", reinterpret_cast<void*>(GetFileInformationByHandleEx));
+    ldr.registerExport("kernel32.dll", "AreFileApisANSI", reinterpret_cast<void*>(AreFileApisANSI));
+    ldr.registerExport("kernel32.dll", "CreateToolhelp32Snapshot", reinterpret_cast<void*>(CreateToolhelp32Snapshot));
+    ldr.registerExport("kernel32.dll", "Process32FirstW", reinterpret_cast<void*>(Process32FirstW));
+    ldr.registerExport("kernel32.dll", "Process32NextW", reinterpret_cast<void*>(Process32NextW));
+    ldr.registerExport("kernel32.dll", "ReadDirectoryChangesW", reinterpret_cast<void*>(ReadDirectoryChangesW));
+    ldr.registerExport("kernel32.dll", "SleepEx", reinterpret_cast<void*>(SleepEx));
+    ldr.registerExport("kernel32.dll", "WaitForSingleObjectEx", reinterpret_cast<void*>(WaitForSingleObjectEx));
+    ldr.registerExport("kernel32.dll", "QueueUserAPC", reinterpret_cast<void*>(QueueUserAPC));
+    ldr.registerExport("kernel32.dll", "CancelIo", reinterpret_cast<void*>(CancelIo));
+    ldr.registerExport("kernel32.dll", "GetTimeZoneInformation", reinterpret_cast<void*>(GetTimeZoneInformation));
+    ldr.registerExport("kernel32.dll", "SystemTimeToTzSpecificLocalTime", reinterpret_cast<void*>(SystemTimeToTzSpecificLocalTime));
+    ldr.registerExport("kernel32.dll", "GetTimeFormatW", reinterpret_cast<void*>(GetTimeFormatW));
+    ldr.registerExport("kernel32.dll", "GetLocaleInfoW", reinterpret_cast<void*>(GetLocaleInfoW));
+    ldr.registerExport("kernel32.dll", "GetLocaleInfoA", reinterpret_cast<void*>(GetLocaleInfoA));
+    ldr.registerExport("kernel32.dll", "GetLocaleInfoEx", reinterpret_cast<void*>(GetLocaleInfoEx));
+    ldr.registerExport("kernel32.dll", "GetUserDefaultLCID", reinterpret_cast<void*>(GetUserDefaultLCID));
+    ldr.registerExport("kernel32.dll", "GetStringTypeExW", reinterpret_cast<void*>(GetStringTypeExW));
+    ldr.registerExport("kernel32.dll", "GetStringTypeExA", reinterpret_cast<void*>(GetStringTypeExA));
+    ldr.registerExport("kernel32.dll", "LCMapStringA", reinterpret_cast<void*>(LCMapStringA));
+    ldr.registerExport("kernel32.dll", "IsValidLocale", reinterpret_cast<void*>(IsValidLocale));
+    ldr.registerExport("kernel32.dll", "EnumSystemLocalesW", reinterpret_cast<void*>(EnumSystemLocalesW));
+    ldr.registerExport("kernel32.dll", "CreateMutexW", reinterpret_cast<void*>(CreateMutexW));
+    ldr.registerExport("kernel32.dll", "GetTempPath2W", reinterpret_cast<void*>(GetTempPath2W));
+    ldr.registerExport("kernel32.dll", "GetTempPath2A", reinterpret_cast<void*>(GetTempPath2A));
+    ldr.registerExport("kernel32.dll", "LoadLibraryA", reinterpret_cast<void*>(LoadLibraryA));
+    ldr.registerExport("kernel32.dll", "LoadLibraryExA", reinterpret_cast<void*>(LoadLibraryExA));
+    ldr.registerExport("kernel32.dll", "FormatMessageA", reinterpret_cast<void*>(FormatMessageA));
+    ldr.registerExport("kernel32.dll", "InitializeCriticalSectionAndSpinCount", reinterpret_cast<void*>(InitializeCriticalSectionAndSpinCount));
+    ldr.registerExport("kernel32.dll", "ReadConsoleW", reinterpret_cast<void*>(ReadConsoleW));
+    ldr.registerExport("kernel32.dll", "RtlUnwind", reinterpret_cast<void*>(RtlUnwind));
+    ldr.registerExport("kernel32.dll", "FreeLibraryAndExitThread", reinterpret_cast<void*>(FreeLibraryAndExitThread));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

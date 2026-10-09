@@ -760,6 +760,35 @@ inline HRESULT VariantCopy(VARIANTARG* pvargDest, const VARIANTARG* pvargSrc) no
 
 namespace micant::ole32 {
 
+inline HRESULT OleInitialize(void* /*pvReserved*/) noexcept {
+    return CoInitialize(nullptr);
+}
+
+inline void OleUninitialize() noexcept {
+    CoUninitialize();
+}
+
+inline HRESULT RegisterDragDrop(win32::HWND /*hwnd*/, void* /*pDropTarget*/) noexcept {
+    return S_OK;
+}
+
+inline HRESULT RevokeDragDrop(win32::HWND /*hwnd*/) noexcept {
+    return S_OK;
+}
+
+inline HRESULT DoDragDrop(void* /*pDataObj*/, void* /*pDropSource*/, uint32_t /*dwOKEffects*/, uint32_t* pdwEffect) noexcept {
+    if (pdwEffect) *pdwEffect = 0;
+    return S_OK;
+}
+
+inline void ReleaseStgMedium(void* /*pmedium*/) noexcept {}
+
+inline HRESULT CLSIDFromProgID(LPCOLESTR lpszProgID, CLSID* lpclsid) noexcept {
+    if (!lpszProgID || !lpclsid) return E_INVALIDARG;
+    *lpclsid = IID_IUnknown;
+    return S_OK;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -783,6 +812,13 @@ inline void InitializeOle32SubsystemExports() {
     ldr.registerExport("ole32.dll", "CLSIDFromString", reinterpret_cast<void*>(CLSIDFromString));
     ldr.registerExport("ole32.dll", "CoCreateGuid", reinterpret_cast<void*>(CoCreateGuid));
     ldr.registerExport("ole32.dll", "CreateStreamOnHGlobal", reinterpret_cast<void*>(CreateStreamOnHGlobal));
+    ldr.registerExport("ole32.dll", "OleInitialize", reinterpret_cast<void*>(OleInitialize));
+    ldr.registerExport("ole32.dll", "OleUninitialize", reinterpret_cast<void*>(OleUninitialize));
+    ldr.registerExport("ole32.dll", "RegisterDragDrop", reinterpret_cast<void*>(RegisterDragDrop));
+    ldr.registerExport("ole32.dll", "RevokeDragDrop", reinterpret_cast<void*>(RevokeDragDrop));
+    ldr.registerExport("ole32.dll", "DoDragDrop", reinterpret_cast<void*>(DoDragDrop));
+    ldr.registerExport("ole32.dll", "ReleaseStgMedium", reinterpret_cast<void*>(ReleaseStgMedium));
+    ldr.registerExport("ole32.dll", "CLSIDFromProgID", reinterpret_cast<void*>(CLSIDFromProgID));
 
     // ole32.dll Structured Storage
     InitializeStructuredStorageSubsystemExports();

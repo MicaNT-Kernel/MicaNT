@@ -24,6 +24,11 @@
 #include <memory>
 #include <algorithm>
 #include <chrono>
+#include <cwchar>
+#include <cwctype>
+#include <clocale>
+#include <csignal>
+#include <ctime>
 
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
@@ -37,26 +42,38 @@ namespace micant::msvcrt {
 // ============================================================================
 
 struct MicaFile {
-    win32::HANDLE handle{nullptr};
-    bool isRead{false};
-    bool isWrite{false};
-    bool isEof{false};
-    bool isError{false};
+    char* _ptr{nullptr};
+    int   _cnt{0};
+    char* _base{nullptr};
+    int   _flag{0};
+    int   _file{0};
+    int   _charbuf{0};
+    int   _bufsiz{0};
+    char* _tmpfname{nullptr};
+
+    win32::HANDLE getHandle() const noexcept {
+        if (_file == 0) return win32::GetStdHandle(win32::STD_INPUT_HANDLE);
+        if (_file == 1) return win32::GetStdHandle(win32::STD_OUTPUT_HANDLE);
+        if (_file == 2) return win32::GetStdHandle(win32::STD_ERROR_HANDLE);
+        return reinterpret_cast<win32::HANDLE>(static_cast<intptr_t>(_file));
+    }
 };
+
+static_assert(sizeof(MicaFile) == 48, "MicaFile must match MSVC CRT FILE structure ABI (48 bytes on x64)");
 
 #ifdef _iob
 #undef _iob
 #endif
 
-inline MicaFile g_StdInFile{reinterpret_cast<win32::HANDLE>(0x10), true, false, false, false};
-inline MicaFile g_StdOutFile{reinterpret_cast<win32::HANDLE>(0x14), false, true, false, false};
-inline MicaFile g_StdErrFile{reinterpret_cast<win32::HANDLE>(0x18), false, true, false, false};
-
 inline MicaFile _iob[3] = {
-    { reinterpret_cast<win32::HANDLE>(0x10), true, false, false, false },
-    { reinterpret_cast<win32::HANDLE>(0x14), false, true, false, false },
-    { reinterpret_cast<win32::HANDLE>(0x18), false, true, false, false }
+    { nullptr, 0, nullptr, 0x0001, 0, 0, 0, nullptr }, // stdin (_IOREAD)
+    { nullptr, 0, nullptr, 0x0002, 1, 0, 0, nullptr }, // stdout (_IOWRT)
+    { nullptr, 0, nullptr, 0x0002, 2, 0, 0, nullptr }  // stderr (_IOWRT)
 };
+
+inline MicaFile& g_StdInFile  = _iob[0];
+inline MicaFile& g_StdOutFile = _iob[1];
+inline MicaFile& g_StdErrFile = _iob[2];
 
 inline MicaFile* g_IobArray[3] = { &_iob[0], &_iob[1], &_iob[2] };
 
@@ -279,7 +296,7 @@ inline int fputc(int c, MicaFile* stream) noexcept {
     if (!stream) return -1;
     char ch = static_cast<char>(c);
     win32::DWORD written = 0;
-    win32::WriteFile(stream->handle, &ch, 1, &written, nullptr);
+    win32::WriteFile(stream->getHandle(), &ch, 1, &written, nullptr);
     return (written == 1) ? static_cast<unsigned char>(ch) : -1;
 }
 
@@ -287,7 +304,7 @@ inline int fputs(const char* str, MicaFile* stream) noexcept {
     if (!str || !stream) return -1;
     size_t len = std::strlen(str);
     win32::DWORD written = 0;
-    win32::WriteFile(stream->handle, str, static_cast<win32::DWORD>(len), &written, nullptr);
+    win32::WriteFile(stream->getHandle(), str, static_cast<win32::DWORD>(len), &written, nullptr);
     return (written == len) ? 0 : -1;
 }
 
@@ -295,17 +312,15 @@ inline int fgetc(MicaFile* stream) noexcept {
     if (!stream) return -1;
     char ch = 0;
     win32::DWORD readBytes = 0;
-    if (win32::ReadFile(stream->handle, &ch, 1, &readBytes, nullptr) && readBytes == 1) {
+    if (win32::ReadFile(stream->getHandle(), &ch, 1, &readBytes, nullptr) && readBytes == 1) {
         return static_cast<unsigned char>(ch);
     }
     return -1;
 }
 
 inline int _fileno(MicaFile* stream) noexcept {
-    if (stream == &_iob[0]) return 0;
-    if (stream == &_iob[1]) return 1;
-    if (stream == &_iob[2]) return 2;
-    return 3;
+    if (!stream) return -1;
+    return stream->_file;
 }
 
 inline int printf(const char* format, ...) noexcept {
@@ -428,6 +443,41 @@ inline int g_Argc = 1;
 inline char** g_Argv = s_DefaultArgv;
 inline char** g_Environ = s_DefaultEnv;
 
+inline std::vector<std::string> g_ArgvStrings;
+inline std::vector<char*> g_ArgvPointers;
+
+inline void SetCommandLineArguments(const std::string& cmdLine) noexcept {
+    g_ArgvStrings.clear();
+    g_ArgvPointers.clear();
+    
+    std::string current;
+    bool inQuote = false;
+    for (size_t i = 0; i < cmdLine.size(); ++i) {
+        char c = cmdLine[i];
+        if (c == '"') {
+            inQuote = !inQuote;
+        } else if (c == ' ' && !inQuote) {
+            if (!current.empty()) {
+                g_ArgvStrings.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) {
+        g_ArgvStrings.push_back(current);
+    }
+    
+    for (auto& s : g_ArgvStrings) {
+        g_ArgvPointers.push_back(s.data());
+    }
+    g_ArgvPointers.push_back(nullptr);
+    
+    g_Argc = static_cast<int>(g_ArgvStrings.size());
+    g_Argv = g_ArgvPointers.data();
+}
+
 inline int* __p___argc() noexcept { return &g_Argc; }
 inline char*** __p___argv() noexcept { return &g_Argv; }
 inline int* __p__commode() noexcept { return &g_Commode; }
@@ -510,6 +560,158 @@ inline void _CxxThrowException(void*, void*) noexcept {}
 
 inline uint64_t __CxxFrameHandler(void*, void*, void*, void*) noexcept {
     return 0;
+}
+
+// 7-Zip & VLC CRT extensions
+inline void _c_exit() noexcept {}
+
+inline int _XcptFilter(unsigned long /*xcptnum*/, void* /*pxcptdata*/) noexcept {
+    return 0; // EXCEPTION_CONTINUE_SEARCH
+}
+
+using _onexit_t = int (*)(void);
+inline _onexit_t _onexit(_onexit_t func) noexcept {
+    return func;
+}
+
+inline _onexit_t __dllonexit(_onexit_t func, void** /*pbegin*/, void** /*pend*/) noexcept {
+    return func;
+}
+
+inline void terminate_wrapper() noexcept {
+    std::abort();
+}
+
+inline void type_info_dtor(void* /*thisPtr*/) noexcept {}
+
+inline uintptr_t _beginthreadex(
+    void* security,
+    unsigned stack_size,
+    unsigned (*start_address)(void*),
+    void* arglist,
+    unsigned initflag,
+    unsigned* thrdaddr
+) noexcept {
+    win32::HANDLE h = win32::CreateThread(
+        security,
+        stack_size,
+        reinterpret_cast<win32::LPTHREAD_START_ROUTINE>(start_address),
+        arglist,
+        initflag,
+        reinterpret_cast<win32::LPDWORD>(thrdaddr)
+    );
+    return reinterpret_cast<uintptr_t>(h);
+}
+
+inline intptr_t _get_osfhandle(int fd) noexcept {
+    if (fd == 0) return reinterpret_cast<intptr_t>(win32::GetStdHandle(win32::STD_INPUT_HANDLE));
+    if (fd == 1) return reinterpret_cast<intptr_t>(win32::GetStdHandle(win32::STD_OUTPUT_HANDLE));
+    if (fd == 2) return reinterpret_cast<intptr_t>(win32::GetStdHandle(win32::STD_ERROR_HANDLE));
+    return -1;
+}
+
+// VLC msvcrt functions
+inline MicaFile* fopen(const char* /*filename*/, const char* /*mode*/) noexcept {
+    static MicaFile s_dummyFile{nullptr, 0, nullptr, 0x0002, 3, 0, 0, nullptr};
+    return &s_dummyFile;
+}
+
+inline int fclose(MicaFile* /*stream*/) noexcept {
+    return 0;
+}
+
+inline size_t fwrite(const void* ptr, size_t size, size_t count, MicaFile* stream) noexcept {
+    if (!ptr || size == 0 || count == 0) return 0;
+    size_t total = size * count;
+    win32::DWORD written = 0;
+    win32::WriteFile(stream ? stream->getHandle() : win32::GetStdHandle(win32::STD_OUTPUT_HANDLE), ptr, static_cast<win32::DWORD>(total), &written, nullptr);
+    return count;
+}
+
+inline wint_t fputwc(wchar_t c, MicaFile* stream) noexcept {
+    char mb[8] = {0};
+    int len = std::wctomb(mb, c);
+    if (len > 0) {
+        fwrite(mb, 1, len, stream);
+    }
+    return c;
+}
+
+inline int vfprintf(MicaFile* stream, const char* format, va_list args) noexcept {
+    char buf[1024];
+    int n = std::vsnprintf(buf, sizeof(buf), format, args);
+    if (n > 0) {
+        fwrite(buf, 1, n, stream);
+    }
+    return n;
+}
+
+inline int fwprintf(MicaFile* stream, const wchar_t* format, ...) noexcept {
+    va_list args;
+    va_start(args, format);
+    wchar_t buf[1024];
+    int n = std::vswprintf(buf, sizeof(buf) / sizeof(wchar_t), format, args);
+    va_end(args);
+    if (n > 0) {
+        for (int i = 0; i < n; ++i) fputwc(buf[i], stream);
+    }
+    return n;
+}
+
+inline int _snwprintf(wchar_t* buffer, size_t count, const wchar_t* format, ...) noexcept {
+    if (!buffer || count == 0) return -1;
+    va_list args;
+    va_start(args, format);
+    int ret = std::vswprintf(buffer, count, format, args);
+    va_end(args);
+    return ret;
+}
+
+inline void _wassert(const wchar_t* /*message*/, const wchar_t* /*filename*/, unsigned /*line*/) noexcept {}
+
+inline void _lock(int /*locknum*/) noexcept {}
+inline void _unlock(int /*locknum*/) noexcept {}
+inline int _setmode(int /*fd*/, int mode) noexcept { return mode; }
+inline int _ismbblead(unsigned int /*c*/) noexcept { return 0; }
+inline int _fstat64(int /*fd*/, void* /*statbuf*/) noexcept { return 0; }
+inline int64_t _lseeki64(int /*fd*/, int64_t offset, int /*origin*/) noexcept { return offset; }
+
+inline int iswctype(wint_t c, wctype_t desc) noexcept { return std::iswctype(c, desc); }
+inline std::lconv* localeconv() noexcept { return std::localeconv(); }
+inline int rand() noexcept { return std::rand(); }
+inline char* setlocale(int category, const char* locale) noexcept { return std::setlocale(category, locale); }
+inline void (*signal(int sig, void (*func)(int)))(int) { return std::signal(sig, func); }
+
+inline int strcoll(const char* s1, const char* s2) noexcept { return std::strcoll(s1, s2); }
+inline char* strerror(int errnum) noexcept { return std::strerror(errnum); }
+inline size_t strftime(char* str, size_t max, const char* format, const struct tm* timeptr) noexcept { return std::strftime(str, max, format, timeptr); }
+inline unsigned long strtoul(const char* str, char** endptr, int base) noexcept { return std::strtoul(str, endptr, base); }
+inline size_t strxfrm(char* dest, const char* src, size_t n) noexcept { return std::strxfrm(dest, src, n); }
+
+inline wint_t towlower(wint_t c) noexcept { return std::towlower(c); }
+inline wint_t towupper(wint_t c) noexcept { return std::towupper(c); }
+
+inline int wcscoll(const wchar_t* s1, const wchar_t* s2) noexcept { return std::wcscoll(s1, s2); }
+inline wchar_t* wcscpy(wchar_t* dest, const wchar_t* src) noexcept { return std::wcscpy(dest, src); }
+inline size_t wcsftime(wchar_t* str, size_t max, const wchar_t* format, const struct tm* timeptr) noexcept { return std::wcsftime(str, max, format, timeptr); }
+inline int wcsncmp(const wchar_t* s1, const wchar_t* s2, size_t n) noexcept { return std::wcsncmp(s1, s2, n); }
+inline long wcstol(const wchar_t* str, wchar_t** endptr, int base) noexcept { return std::wcstol(str, endptr, base); }
+inline size_t wcsxfrm(wchar_t* dest, const wchar_t* src, size_t n) noexcept { return std::wcsxfrm(dest, src, n); }
+
+inline int _open(const char* /*filename*/, int /*oflag*/, ...) noexcept { return 3; }
+inline int _close(int /*fd*/) noexcept { return 0; }
+inline int _read(int /*fd*/, void* /*buffer*/, unsigned int /*count*/) noexcept { return 0; }
+inline int _write(int fd, const void* buffer, unsigned int count) noexcept {
+    win32::HANDLE h = (fd == 1) ? win32::GetStdHandle(win32::STD_OUTPUT_HANDLE) :
+                      (fd == 2) ? win32::GetStdHandle(win32::STD_ERROR_HANDLE) : reinterpret_cast<win32::HANDLE>(0x20);
+    win32::DWORD written = 0;
+    win32::WriteFile(h, buffer, count, &written, nullptr);
+    return static_cast<int>(written);
+}
+inline MicaFile* _fdopen(int fd, const char* /*mode*/) noexcept {
+    static MicaFile s_dummyFd{nullptr, 0, nullptr, 0x0002, 0, 0, 0, nullptr};
+    s_dummyFd._file = fd;
+    return &s_dummyFd;
 }
 
 // ============================================================================
@@ -622,6 +824,55 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "__C_specific_handler", reinterpret_cast<void*>(__C_specific_handler));
     ldr.registerExport("msvcrt.dll", "_CxxThrowException", reinterpret_cast<void*>(_CxxThrowException));
     ldr.registerExport("msvcrt.dll", "__CxxFrameHandler", reinterpret_cast<void*>(__CxxFrameHandler));
+
+    // 7-Zip & VLC Support Exports
+    ldr.registerExport("msvcrt.dll", "_c_exit", reinterpret_cast<void*>(_c_exit));
+    ldr.registerExport("msvcrt.dll", "_XcptFilter", reinterpret_cast<void*>(_XcptFilter));
+    ldr.registerExport("msvcrt.dll", "_onexit", reinterpret_cast<void*>(_onexit));
+    ldr.registerExport("msvcrt.dll", "__dllonexit", reinterpret_cast<void*>(__dllonexit));
+    ldr.registerExport("msvcrt.dll", "?terminate@@YAXXZ", reinterpret_cast<void*>(terminate_wrapper));
+    ldr.registerExport("msvcrt.dll", "??1type_info@@UEAA@XZ", reinterpret_cast<void*>(type_info_dtor));
+    ldr.registerExport("msvcrt.dll", "_beginthreadex", reinterpret_cast<void*>(_beginthreadex));
+    ldr.registerExport("msvcrt.dll", "_get_osfhandle", reinterpret_cast<void*>(_get_osfhandle));
+
+    // Additional VLC exports
+    ldr.registerExport("msvcrt.dll", "fopen", reinterpret_cast<void*>(fopen));
+    ldr.registerExport("msvcrt.dll", "fclose", reinterpret_cast<void*>(fclose));
+    ldr.registerExport("msvcrt.dll", "fwrite", reinterpret_cast<void*>(fwrite));
+    ldr.registerExport("msvcrt.dll", "fputwc", reinterpret_cast<void*>(fputwc));
+    ldr.registerExport("msvcrt.dll", "vfprintf", reinterpret_cast<void*>(vfprintf));
+    ldr.registerExport("msvcrt.dll", "fwprintf", reinterpret_cast<void*>(fwprintf));
+    ldr.registerExport("msvcrt.dll", "_snwprintf", reinterpret_cast<void*>(_snwprintf));
+    ldr.registerExport("msvcrt.dll", "_wassert", reinterpret_cast<void*>(_wassert));
+    ldr.registerExport("msvcrt.dll", "_lock", reinterpret_cast<void*>(_lock));
+    ldr.registerExport("msvcrt.dll", "_unlock", reinterpret_cast<void*>(_unlock));
+    ldr.registerExport("msvcrt.dll", "_setmode", reinterpret_cast<void*>(_setmode));
+    ldr.registerExport("msvcrt.dll", "_ismbblead", reinterpret_cast<void*>(_ismbblead));
+    ldr.registerExport("msvcrt.dll", "_fstat64", reinterpret_cast<void*>(_fstat64));
+    ldr.registerExport("msvcrt.dll", "_lseeki64", reinterpret_cast<void*>(_lseeki64));
+    ldr.registerExport("msvcrt.dll", "iswctype", reinterpret_cast<void*>(iswctype));
+    ldr.registerExport("msvcrt.dll", "localeconv", reinterpret_cast<void*>(localeconv));
+    ldr.registerExport("msvcrt.dll", "rand", reinterpret_cast<void*>(rand));
+    ldr.registerExport("msvcrt.dll", "setlocale", reinterpret_cast<void*>(setlocale));
+    ldr.registerExport("msvcrt.dll", "signal", reinterpret_cast<void*>(signal));
+    ldr.registerExport("msvcrt.dll", "strcoll", reinterpret_cast<void*>(strcoll));
+    ldr.registerExport("msvcrt.dll", "strerror", reinterpret_cast<void*>(strerror));
+    ldr.registerExport("msvcrt.dll", "strftime", reinterpret_cast<void*>(strftime));
+    ldr.registerExport("msvcrt.dll", "strtoul", reinterpret_cast<void*>(strtoul));
+    ldr.registerExport("msvcrt.dll", "strxfrm", reinterpret_cast<void*>(strxfrm));
+    ldr.registerExport("msvcrt.dll", "towlower", reinterpret_cast<void*>(towlower));
+    ldr.registerExport("msvcrt.dll", "towupper", reinterpret_cast<void*>(towupper));
+    ldr.registerExport("msvcrt.dll", "wcscoll", reinterpret_cast<void*>(wcscoll));
+    ldr.registerExport("msvcrt.dll", "wcscpy", reinterpret_cast<void*>(wcscpy));
+    ldr.registerExport("msvcrt.dll", "wcsftime", reinterpret_cast<void*>(wcsftime));
+    ldr.registerExport("msvcrt.dll", "wcsncmp", reinterpret_cast<void*>(wcsncmp));
+    ldr.registerExport("msvcrt.dll", "wcstol", reinterpret_cast<void*>(wcstol));
+    ldr.registerExport("msvcrt.dll", "wcsxfrm", reinterpret_cast<void*>(wcsxfrm));
+    ldr.registerExport("msvcrt.dll", "_open", reinterpret_cast<void*>(_open));
+    ldr.registerExport("msvcrt.dll", "_close", reinterpret_cast<void*>(_close));
+    ldr.registerExport("msvcrt.dll", "_read", reinterpret_cast<void*>(_read));
+    ldr.registerExport("msvcrt.dll", "_write", reinterpret_cast<void*>(_write));
+    ldr.registerExport("msvcrt.dll", "_fdopen", reinterpret_cast<void*>(_fdopen));
 }
 
 } // namespace micant::msvcrt

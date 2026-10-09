@@ -39,6 +39,9 @@ inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_EXCEPTION = 3;
 inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_SECURITY  = 4;
 inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_BASERELOC = 5;
 inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_DEBUG     = 6;
+#ifndef IMAGE_DIRECTORY_ENTRY_TLS
+inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_TLS       = 9;
+#endif
 inline constexpr uint32_t IMAGE_DIRECTORY_ENTRY_IAT       = 12;
 
 // Import Ordinal Flags
@@ -212,6 +215,15 @@ struct ImageImportByName {
 struct ImageBaseRelocation {
     uint32_t virtualAddress;
     uint32_t sizeOfBlock;
+};
+
+struct ImageTlsDirectory64 {
+    uint64_t startAddressOfRawData;
+    uint64_t endAddressOfRawData;
+    uint64_t addressOfIndex;
+    uint64_t addressOfCallBacks;
+    uint32_t sizeOfZeroFill;
+    uint32_t characteristics;
 };
 
 #pragma pack(pop)

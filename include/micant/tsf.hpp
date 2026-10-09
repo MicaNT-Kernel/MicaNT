@@ -1306,6 +1306,18 @@ inline int32_t __stdcall ImmIsIME(HKL) {
     return 1; // Sovereign environment defaults to full modern IME support
 }
 
+inline int32_t __stdcall ImmNotifyIME(HIMC /*hIMC*/, uint32_t /*dwAction*/, uint32_t /*dwIndex*/, uint32_t /*dwValue*/) {
+    return 1;
+}
+
+inline uint32_t __stdcall ImmEscapeW(void* /*hKL*/, HIMC /*hIMC*/, uint32_t /*uEscape*/, void* /*lpData*/) {
+    return 0;
+}
+
+inline int32_t __stdcall ImmSetCompositionFontW(HIMC /*hIMC*/, void* /*lplf*/) {
+    return 1;
+}
+
 // Dynamic Registration Helper
 inline void InitializeTextServicesExports() {
     auto& loader = micant::ldr::DynamicLoader::get();
@@ -1331,6 +1343,9 @@ inline void InitializeTextServicesExports() {
     loader.registerExport("imm32.dll", "ImmSetCandidateWindow", reinterpret_cast<void*>(ImmSetCandidateWindow));
     loader.registerExport("imm32.dll", "ImmSetCompositionWindow", reinterpret_cast<void*>(ImmSetCompositionWindow));
     loader.registerExport("imm32.dll", "ImmIsIME", reinterpret_cast<void*>(ImmIsIME));
+    loader.registerExport("imm32.dll", "ImmNotifyIME", reinterpret_cast<void*>(ImmNotifyIME));
+    loader.registerExport("imm32.dll", "ImmEscapeW", reinterpret_cast<void*>(ImmEscapeW));
+    loader.registerExport("imm32.dll", "ImmSetCompositionFontW", reinterpret_cast<void*>(ImmSetCompositionFontW));
 
     version::VersionDatabase::Instance().RegisterModule(
         "msctf.dll",

@@ -42,6 +42,15 @@ using HBRUSH   = void*;
 using HPEN     = void*;
 using HFONT    = void*;
 using HRGN     = void*;
+using BOOL     = win32::BOOL;
+using DWORD    = win32::DWORD;
+using UINT     = win32::UINT;
+using LPCWSTR  = win32::LPCWSTR;
+using LPCSTR   = win32::LPCSTR;
+using LPARAM   = win32::LPARAM;
+
+inline constexpr BOOL TRUE  = win32::TRUE;
+inline constexpr BOOL FALSE = win32::FALSE;
 
 inline constexpr COLORREF RGB(uint8_t r, uint8_t g, uint8_t b) noexcept {
     return static_cast<COLORREF>(r | (static_cast<uint16_t>(g) << 8) | (static_cast<uint32_t>(b) << 16));
@@ -1111,6 +1120,231 @@ inline win32::BOOL SwapBuffers(HDC hdc) noexcept {
     return win32::TRUE;
 }
 
+using LPLOGFONTW = LOGFONTW*;
+using FONTENUMPROCW = int (*)(const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM);
+
+struct DOCINFOW {
+    int cbSize{sizeof(DOCINFOW)};
+    LPCWSTR lpszDocName{nullptr};
+    LPCWSTR lpszOutput{nullptr};
+    LPCWSTR lpszDatatype{nullptr};
+    DWORD fwType{0};
+};
+
+struct BLENDFUNCTION {
+    uint8_t BlendOp{0};
+    uint8_t BlendFlags{0};
+    uint8_t SourceConstantAlpha{255};
+    uint8_t AlphaFormat{0};
+};
+
+inline HFONT CreateFontW(
+    int cHeight, int cWidth, int cEscapement, int cOrientation, int cWeight,
+    DWORD bItalic, DWORD bUnderline, DWORD bStrikeOut, DWORD iCharSet,
+    DWORD iOutPrecision, DWORD iClipPrecision, DWORD iQuality,
+    DWORD iPitchAndFamily, LPCWSTR pszFaceName
+) noexcept {
+    LOGFONTW lf{};
+    lf.lfHeight = cHeight;
+    lf.lfWidth = cWidth;
+    lf.lfEscapement = cEscapement;
+    lf.lfOrientation = cOrientation;
+    lf.lfWeight = cWeight;
+    lf.lfItalic = static_cast<uint8_t>(bItalic);
+    lf.lfUnderline = static_cast<uint8_t>(bUnderline);
+    lf.lfStrikeOut = static_cast<uint8_t>(bStrikeOut);
+    lf.lfCharSet = static_cast<uint8_t>(iCharSet);
+    lf.lfOutPrecision = static_cast<uint8_t>(iOutPrecision);
+    lf.lfClipPrecision = static_cast<uint8_t>(iClipPrecision);
+    lf.lfQuality = static_cast<uint8_t>(iQuality);
+    lf.lfPitchAndFamily = static_cast<uint8_t>(iPitchAndFamily);
+    if (pszFaceName) wcsncpy(lf.lfFaceName, pszFaceName, 31);
+    static uint64_t dummyFont = 0xF001;
+    return reinterpret_cast<HFONT>(&dummyFont);
+}
+
+inline HFONT CreateFontIndirectW(const LOGFONTW* lplf) noexcept {
+    if (!lplf) return nullptr;
+    static uint64_t dummyFont = 0xF001;
+    return reinterpret_cast<HFONT>(&dummyFont);
+}
+
+inline HBITMAP CreateBitmap(int nWidth, int nHeight, UINT /*nPlanes*/, UINT /*nBitCount*/, const void* /*lpBits*/) noexcept {
+    return CreateCompatibleBitmap(nullptr, nWidth, nHeight);
+}
+
+inline BOOL SetWindowOrgEx(HDC /*hdc*/, int /*x*/, int /*y*/, POINT* lppt) noexcept {
+    if (lppt) { lppt->x = 0; lppt->y = 0; }
+    return TRUE;
+}
+
+inline BOOL OffsetWindowOrgEx(HDC /*hdc*/, int /*x*/, int /*y*/, POINT* lppt) noexcept {
+    if (lppt) { lppt->x = 0; lppt->y = 0; }
+    return TRUE;
+}
+
+inline HBRUSH CreatePatternBrush(HBITMAP /*hbm*/) noexcept {
+    return CreateSolidBrush(RGB(240, 240, 240));
+}
+
+inline BOOL PatBlt(HDC hdc, int x, int y, int w, int h, DWORD /*rop*/) noexcept {
+    RECT rc{x, y, x + w, y + h};
+    FillRect(hdc, &rc, nullptr);
+    return TRUE;
+}
+
+inline BOOL SetBrushOrgEx(HDC /*hdc*/, int /*x*/, int /*y*/, POINT* lppt) noexcept {
+    if (lppt) { lppt->x = 0; lppt->y = 0; }
+    return TRUE;
+}
+
+inline int SetStretchBltMode(HDC /*hdc*/, int /*mode*/) noexcept {
+    return 1;
+}
+
+inline int SetDIBits(HDC /*hdc*/, HBITMAP /*hbm*/, UINT /*start*/, UINT cLines, const void* /*lpBits*/, const BITMAPINFO* /*lpbmi*/, UINT /*ColorUse*/) noexcept {
+    return static_cast<int>(cLines);
+}
+
+inline int GetDIBits(HDC /*hdc*/, HBITMAP /*hbm*/, UINT /*start*/, UINT cLines, void* /*lpBits*/, BITMAPINFO* /*lpbmi*/, UINT /*usage*/) noexcept {
+    return static_cast<int>(cLines);
+}
+
+inline int StretchDIBits(
+    HDC hdc, int xDest, int yDest, int DestWidth, int DestHeight,
+    int /*xSrc*/, int /*ySrc*/, int /*SrcWidth*/, int /*SrcHeight*/,
+    const void* /*lpBits*/, const BITMAPINFO* /*lpbmi*/, UINT /*iUsage*/, DWORD /*rop*/
+) noexcept {
+    RECT rc{xDest, yDest, xDest + DestWidth, yDest + DestHeight};
+    FillRect(hdc, &rc, nullptr);
+    return DestHeight;
+}
+
+inline int EnumFontFamiliesExW(HDC /*hdc*/, LPLOGFONTW /*lpLogfont*/, FONTENUMPROCW lpProc, LPARAM lParam, DWORD /*dwFlags*/) noexcept {
+    if (lpProc) {
+        LOGFONTW lf{};
+        wcscpy(lf.lfFaceName, L"Segoe UI");
+        TEXTMETRICW tm{};
+        lpProc(&lf, &tm, 1, lParam);
+    }
+    return 1;
+}
+
+inline int StartDocW(HDC /*hdc*/, const DOCINFOW* /*lpdi*/) noexcept { return 1; }
+inline int EndDoc(HDC /*hdc*/) noexcept { return 1; }
+inline int StartPage(HDC /*hdc*/) noexcept { return 1; }
+inline int EndPage(HDC /*hdc*/) noexcept { return 1; }
+
+inline BOOL DPtoLP(HDC /*hdc*/, POINT* /*lppt*/, int /*c*/) noexcept { return TRUE; }
+
+inline BOOL ExtTextOutW(
+    HDC hdc, int x, int y, UINT /*options*/, const RECT* /*lprect*/,
+    LPCWSTR lpString, UINT c, const int* /*lpDx*/
+) noexcept {
+    return TextOutW(hdc, x, y, lpString, static_cast<int>(c));
+}
+
+inline BOOL ExtTextOutA(
+    HDC hdc, int x, int y, UINT /*options*/, const RECT* /*lprect*/,
+    LPCSTR lpString, UINT c, const int* /*lpDx*/
+) noexcept {
+    return TextOutA(hdc, x, y, lpString, static_cast<int>(c));
+}
+
+inline UINT SetTextAlign(HDC /*hdc*/, UINT /*align*/) noexcept { return 0; }
+inline BOOL RectVisible(HDC /*hdc*/, const RECT* /*lprect*/) noexcept { return TRUE; }
+
+inline BOOL GetTextExtentPointW(HDC hdc, LPCWSTR lpString, int c, SIZE* lpsz) noexcept {
+    return GetTextExtentPoint32W(hdc, lpString, c, lpsz);
+}
+
+inline BOOL GetTextExtentPoint32A(HDC /*hdc*/, LPCSTR lpString, int c, SIZE* lpsz) noexcept {
+    if (!lpsz) return FALSE;
+    int len = (c < 0 && lpString) ? static_cast<int>(strlen(lpString)) : c;
+    lpsz->cx = len * 8;
+    lpsz->cy = 16;
+    return TRUE;
+}
+
+inline BOOL GetTextExtentExPointW(HDC /*hdc*/, LPCWSTR lpString, int cchString, int nMaxExtent, int* lpnFit, int* alpDx, SIZE* lpSize) noexcept {
+    int len = (cchString < 0 && lpString) ? static_cast<int>(wcslen(lpString)) : cchString;
+    if (lpSize) { lpSize->cx = len * 8; lpSize->cy = 16; }
+    if (lpnFit) *lpnFit = (nMaxExtent > 0) ? std::min(len, nMaxExtent / 8) : len;
+    if (alpDx) {
+        for (int i = 0; i < len; ++i) alpDx[i] = (i + 1) * 8;
+    }
+    return TRUE;
+}
+
+inline BOOL GetTextExtentExPointA(HDC /*hdc*/, LPCSTR lpString, int cchString, int nMaxExtent, int* lpnFit, int* alpDx, SIZE* lpSize) noexcept {
+    int len = (cchString < 0 && lpString) ? static_cast<int>(strlen(lpString)) : cchString;
+    if (lpSize) { lpSize->cx = len * 8; lpSize->cy = 16; }
+    if (lpnFit) *lpnFit = (nMaxExtent > 0) ? std::min(len, nMaxExtent / 8) : len;
+    if (alpDx) {
+        for (int i = 0; i < len; ++i) alpDx[i] = (i + 1) * 8;
+    }
+    return TRUE;
+}
+
+inline HBRUSH CreateHatchBrush(int /*iHatch*/, COLORREF color) noexcept {
+    return CreateSolidBrush(color);
+}
+
+inline BOOL Polygon(HDC /*hdc*/, const POINT* /*apt*/, int /*cpt*/) noexcept { return TRUE; }
+inline BOOL Polyline(HDC /*hdc*/, const POINT* /*apt*/, int /*cpt*/) noexcept { return TRUE; }
+
+inline HPEN ExtCreatePen(DWORD /*iPenStyle*/, DWORD cWidth, const LOGBRUSH* plbrush, DWORD /*cStyle*/, const DWORD* /*pstyle*/) noexcept {
+    COLORREF color = plbrush ? plbrush->lbColor : RGB(0, 0, 0);
+    return CreatePen(PS_SOLID, static_cast<int>(cWidth), color);
+}
+
+inline BOOL GdiAlphaBlend(HDC /*hdcDest*/, int /*xoriginDest*/, int /*yoriginDest*/, int /*wDest*/, int /*hDest*/, HDC /*hdcSrc*/, int /*xoriginSrc*/, int /*yoriginSrc*/, int /*wSrc*/, int /*hSrc*/, BLENDFUNCTION /*ftn*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL GetTextMetricsW(HDC /*hdc*/, TEXTMETRICW* lptm) noexcept {
+    if (!lptm) return FALSE;
+    *lptm = TEXTMETRICW{};
+    lptm->tmHeight = 16;
+    lptm->tmAscent = 13;
+    lptm->tmDescent = 3;
+    lptm->tmAveCharWidth = 8;
+    lptm->tmMaxCharWidth = 16;
+    return TRUE;
+}
+
+inline int SetROP2(HDC /*hdc*/, int rop2) noexcept {
+    static int s_rop2 = 13; // R2_COPYPEN
+    int prev = s_rop2;
+    s_rop2 = rop2;
+    return prev;
+}
+
+inline int GetROP2(HDC /*hdc*/) noexcept { return 13; }
+
+inline int SaveDC(HDC /*hdc*/) noexcept { static int s_dc = 1; return ++s_dc; }
+inline BOOL RestoreDC(HDC /*hdc*/, int /*nSavedDC*/) noexcept { return TRUE; }
+
+inline HRGN CreateRectRgn(int /*x1*/, int /*y1*/, int /*x2*/, int /*y2*/) noexcept {
+    static uint64_t dummyRgn = 0x9999;
+    return reinterpret_cast<HRGN>(&dummyRgn);
+}
+
+inline HRGN CreateRectRgnIndirect(const RECT* /*lprect*/) noexcept {
+    static uint64_t dummyRgn = 0x9999;
+    return reinterpret_cast<HRGN>(&dummyRgn);
+}
+
+inline int SelectClipRgn(HDC /*hdc*/, HRGN /*hrgn*/) noexcept { return 2; /* SIMPLEREGION */ }
+inline int GetClipRgn(HDC /*hdc*/, HRGN /*hrgn*/) noexcept { return 0; /* No clip region */ }
+inline int IntersectClipRect(HDC /*hdc*/, int /*left*/, int /*top*/, int /*right*/, int /*bottom*/) noexcept { return 2; }
+inline int ExcludeClipRect(HDC /*hdc*/, int /*left*/, int /*top*/, int /*right*/, int /*bottom*/) noexcept { return 2; }
+inline int CombineRgn(HRGN /*hrgnDst*/, HRGN /*hrgnSrc1*/, HRGN /*hrgnSrc2*/, int /*iMode*/) noexcept { return 2; }
+
+inline BOOL RoundRect(HDC hdc, int left, int top, int right, int bottom, int /*width*/, int /*height*/) noexcept {
+    return Rectangle(hdc, left, top, right, bottom);
+}
+
 // ============================================================================
 // 6. Subsystem Export Registration
 // ============================================================================
@@ -1164,6 +1398,50 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "SetPixelFormat", reinterpret_cast<void*>(SetPixelFormat));
     ldr.registerExport("gdi32.dll", "DescribePixelFormat", reinterpret_cast<void*>(DescribePixelFormat));
     ldr.registerExport("gdi32.dll", "SwapBuffers", reinterpret_cast<void*>(SwapBuffers));
+    ldr.registerExport("gdi32.dll", "CreateFontW", reinterpret_cast<void*>(CreateFontW));
+    ldr.registerExport("gdi32.dll", "CreateFontIndirectW", reinterpret_cast<void*>(CreateFontIndirectW));
+    ldr.registerExport("gdi32.dll", "CreateBitmap", reinterpret_cast<void*>(CreateBitmap));
+    ldr.registerExport("gdi32.dll", "SetWindowOrgEx", reinterpret_cast<void*>(SetWindowOrgEx));
+    ldr.registerExport("gdi32.dll", "OffsetWindowOrgEx", reinterpret_cast<void*>(OffsetWindowOrgEx));
+    ldr.registerExport("gdi32.dll", "CreatePatternBrush", reinterpret_cast<void*>(CreatePatternBrush));
+    ldr.registerExport("gdi32.dll", "PatBlt", reinterpret_cast<void*>(PatBlt));
+    ldr.registerExport("gdi32.dll", "SetBrushOrgEx", reinterpret_cast<void*>(SetBrushOrgEx));
+    ldr.registerExport("gdi32.dll", "SetStretchBltMode", reinterpret_cast<void*>(SetStretchBltMode));
+    ldr.registerExport("gdi32.dll", "SetDIBits", reinterpret_cast<void*>(SetDIBits));
+    ldr.registerExport("gdi32.dll", "GetDIBits", reinterpret_cast<void*>(GetDIBits));
+    ldr.registerExport("gdi32.dll", "StretchDIBits", reinterpret_cast<void*>(StretchDIBits));
+    ldr.registerExport("gdi32.dll", "EnumFontFamiliesExW", reinterpret_cast<void*>(EnumFontFamiliesExW));
+    ldr.registerExport("gdi32.dll", "StartDocW", reinterpret_cast<void*>(StartDocW));
+    ldr.registerExport("gdi32.dll", "EndDoc", reinterpret_cast<void*>(EndDoc));
+    ldr.registerExport("gdi32.dll", "StartPage", reinterpret_cast<void*>(StartPage));
+    ldr.registerExport("gdi32.dll", "EndPage", reinterpret_cast<void*>(EndPage));
+    ldr.registerExport("gdi32.dll", "DPtoLP", reinterpret_cast<void*>(DPtoLP));
+    ldr.registerExport("gdi32.dll", "ExtTextOutW", reinterpret_cast<void*>(ExtTextOutW));
+    ldr.registerExport("gdi32.dll", "ExtTextOutA", reinterpret_cast<void*>(ExtTextOutA));
+    ldr.registerExport("gdi32.dll", "SetTextAlign", reinterpret_cast<void*>(SetTextAlign));
+    ldr.registerExport("gdi32.dll", "RectVisible", reinterpret_cast<void*>(RectVisible));
+    ldr.registerExport("gdi32.dll", "GetTextExtentPointW", reinterpret_cast<void*>(GetTextExtentPointW));
+    ldr.registerExport("gdi32.dll", "GetTextExtentPoint32A", reinterpret_cast<void*>(GetTextExtentPoint32A));
+    ldr.registerExport("gdi32.dll", "GetTextExtentExPointW", reinterpret_cast<void*>(GetTextExtentExPointW));
+    ldr.registerExport("gdi32.dll", "GetTextExtentExPointA", reinterpret_cast<void*>(GetTextExtentExPointA));
+    ldr.registerExport("gdi32.dll", "CreateHatchBrush", reinterpret_cast<void*>(CreateHatchBrush));
+    ldr.registerExport("gdi32.dll", "Polygon", reinterpret_cast<void*>(Polygon));
+    ldr.registerExport("gdi32.dll", "Polyline", reinterpret_cast<void*>(Polyline));
+    ldr.registerExport("gdi32.dll", "ExtCreatePen", reinterpret_cast<void*>(ExtCreatePen));
+    ldr.registerExport("gdi32.dll", "GdiAlphaBlend", reinterpret_cast<void*>(GdiAlphaBlend));
+    ldr.registerExport("gdi32.dll", "GetTextMetricsW", reinterpret_cast<void*>(GetTextMetricsW));
+    ldr.registerExport("gdi32.dll", "SetROP2", reinterpret_cast<void*>(SetROP2));
+    ldr.registerExport("gdi32.dll", "GetROP2", reinterpret_cast<void*>(GetROP2));
+    ldr.registerExport("gdi32.dll", "SaveDC", reinterpret_cast<void*>(SaveDC));
+    ldr.registerExport("gdi32.dll", "RestoreDC", reinterpret_cast<void*>(RestoreDC));
+    ldr.registerExport("gdi32.dll", "CreateRectRgn", reinterpret_cast<void*>(CreateRectRgn));
+    ldr.registerExport("gdi32.dll", "CreateRectRgnIndirect", reinterpret_cast<void*>(CreateRectRgnIndirect));
+    ldr.registerExport("gdi32.dll", "SelectClipRgn", reinterpret_cast<void*>(SelectClipRgn));
+    ldr.registerExport("gdi32.dll", "GetClipRgn", reinterpret_cast<void*>(GetClipRgn));
+    ldr.registerExport("gdi32.dll", "IntersectClipRect", reinterpret_cast<void*>(IntersectClipRect));
+    ldr.registerExport("gdi32.dll", "ExcludeClipRect", reinterpret_cast<void*>(ExcludeClipRect));
+    ldr.registerExport("gdi32.dll", "CombineRgn", reinterpret_cast<void*>(CombineRgn));
+    ldr.registerExport("gdi32.dll", "RoundRect", reinterpret_cast<void*>(RoundRect));
 }
 
 } // namespace micant::gdi32

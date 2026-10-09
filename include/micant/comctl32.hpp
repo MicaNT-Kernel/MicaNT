@@ -992,6 +992,48 @@ inline void InitCommonControls() noexcept {
     InitCommonControlsEx(&icce);
 }
 
+inline void ImageList_EndDrag() noexcept {}
+inline BOOL ImageList_DragShowNolock(BOOL /*fShow*/) noexcept { return win32::TRUE; }
+inline BOOL ImageList_DragEnter(HWND /*hwndLockWindow*/, int /*x*/, int /*y*/) noexcept { return win32::TRUE; }
+inline BOOL ImageList_DragMove(int /*x*/, int /*y*/) noexcept { return win32::TRUE; }
+inline BOOL ImageList_BeginDrag(HIMAGELIST /*himlTrack*/, int /*iTrack*/, int /*dxHotspot*/, int /*dyHotspot*/) noexcept { return win32::TRUE; }
+inline BOOL ImageList_Remove(HIMAGELIST /*himl*/, int /*i*/) noexcept { return win32::TRUE; }
+inline BOOL ImageList_SetIconSize(HIMAGELIST /*himl*/, int /*cx*/, int /*cy*/) noexcept { return win32::TRUE; }
+inline int ImageList_AddMasked(HIMAGELIST /*himl*/, HBITMAP /*hbmImage*/, DWORD /*crMask*/) noexcept { return 0; }
+inline HICON ImageList_GetIcon(HIMAGELIST /*himl*/, int /*i*/, UINT /*flags*/) noexcept { return reinterpret_cast<HICON>(0x2001); }
+
+struct IMAGEINFO {
+    HBITMAP hbmImage{nullptr};
+    HBITMAP hbmMask{nullptr};
+    int     Unused1{0};
+    int     Unused2{0};
+    user32::RECT rcImage{0, 0, 16, 16};
+};
+
+inline BOOL ImageList_GetImageInfo(HIMAGELIST /*himl*/, int /*i*/, IMAGEINFO* pImageInfo) noexcept {
+    if (pImageInfo) {
+        pImageInfo->hbmImage = nullptr;
+        pImageInfo->hbmMask = nullptr;
+        pImageInfo->rcImage = user32::RECT{0, 0, 16, 16};
+    }
+    return win32::TRUE;
+}
+
+struct TRACKMOUSEEVENT {
+    DWORD cbSize{sizeof(TRACKMOUSEEVENT)};
+    DWORD dwFlags{0};
+    HWND  hwndTrack{nullptr};
+    DWORD dwHoverTime{0};
+};
+
+inline BOOL _TrackMouseEvent(TRACKMOUSEEVENT* /*lpEventTrack*/) noexcept {
+    return win32::TRUE;
+}
+
+inline intptr_t ComCtlOrdinalStub(void* /*p1*/, void* /*p2*/, void* /*p3*/, void* /*p4*/) noexcept {
+    return 0;
+}
+
 inline void InitializeComCtl32SubsystemExports() {
     InitCommonControls();
 
@@ -1010,6 +1052,26 @@ inline void InitializeComCtl32SubsystemExports() {
     ldr.registerExport("comctl32.dll", "CreateStatusWindowW", reinterpret_cast<void*>(CreateStatusWindowW));
     ldr.registerExport("comctl32.dll", "CreateStatusWindowA", reinterpret_cast<void*>(CreateStatusWindowA));
     ldr.registerExport("comctl32.dll", "CreateUpDownControl", reinterpret_cast<void*>(CreateUpDownControl));
+    ldr.registerExport("comctl32.dll", "ImageList_EndDrag", reinterpret_cast<void*>(ImageList_EndDrag));
+    ldr.registerExport("comctl32.dll", "ImageList_DragShowNolock", reinterpret_cast<void*>(ImageList_DragShowNolock));
+    ldr.registerExport("comctl32.dll", "ImageList_DragEnter", reinterpret_cast<void*>(ImageList_DragEnter));
+    ldr.registerExport("comctl32.dll", "ImageList_DragMove", reinterpret_cast<void*>(ImageList_DragMove));
+    ldr.registerExport("comctl32.dll", "ImageList_BeginDrag", reinterpret_cast<void*>(ImageList_BeginDrag));
+    ldr.registerExport("comctl32.dll", "ImageList_Remove", reinterpret_cast<void*>(ImageList_Remove));
+    ldr.registerExport("comctl32.dll", "ImageList_SetIconSize", reinterpret_cast<void*>(ImageList_SetIconSize));
+    ldr.registerExport("comctl32.dll", "ImageList_AddMasked", reinterpret_cast<void*>(ImageList_AddMasked));
+    ldr.registerExport("comctl32.dll", "ImageList_GetIcon", reinterpret_cast<void*>(ImageList_GetIcon));
+    ldr.registerExport("comctl32.dll", "ImageList_GetImageInfo", reinterpret_cast<void*>(ImageList_GetImageInfo));
+    ldr.registerExport("comctl32.dll", "_TrackMouseEvent", reinterpret_cast<void*>(_TrackMouseEvent));
+
+    // Ordinal exports
+    ldr.registerExportOrdinal("comctl32.dll", 17, reinterpret_cast<void*>(ComCtlOrdinalStub));
+    ldr.registerExportOrdinal("comctl32.dll", 345, reinterpret_cast<void*>(ComCtlOrdinalStub));
+    ldr.registerExportOrdinal("comctl32.dll", 381, reinterpret_cast<void*>(ComCtlOrdinalStub));
+    ldr.registerExportOrdinal("comctl32.dll", 410, reinterpret_cast<void*>(ComCtlOrdinalStub));
+    ldr.registerExportOrdinal("comctl32.dll", 411, reinterpret_cast<void*>(ComCtlOrdinalStub));
+    ldr.registerExportOrdinal("comctl32.dll", 412, reinterpret_cast<void*>(ComCtlOrdinalStub));
+    ldr.registerExportOrdinal("comctl32.dll", 413, reinterpret_cast<void*>(ComCtlOrdinalStub));
 }
 
 } // namespace micant::comctl32

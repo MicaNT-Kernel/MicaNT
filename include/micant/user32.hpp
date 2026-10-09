@@ -160,6 +160,10 @@ inline constexpr uint32_t WM_CLOSE           = 0x0010;
 inline constexpr uint32_t WM_QUIT            = 0x0012;
 inline constexpr uint32_t WM_ERASEBKGND      = 0x0014;
 inline constexpr uint32_t WM_SHOWWINDOW      = 0x0018;
+inline constexpr uint32_t WM_GETMINMAXINFO   = 0x0024;
+inline constexpr uint32_t WM_NCCREATE        = 0x0081;
+inline constexpr uint32_t WM_NCDESTROY       = 0x0082;
+inline constexpr uint32_t WM_NCCALCSIZE      = 0x0083;
 inline constexpr uint32_t WM_INPUT           = 0x00FF;
 inline constexpr uint32_t WM_KEYDOWN         = 0x0100;
 inline constexpr uint32_t WM_KEYUP           = 0x0101;
@@ -340,9 +344,17 @@ public:
         if (!lpwcx || !lpwcx->lpszClassName) return 0;
         std::lock_guard<std::recursive_mutex> lock(mutex_);
 
-        std::wstring name = lpwcx->lpszClassName;
+        std::wstring name;
+        if (reinterpret_cast<uintptr_t>(lpwcx->lpszClassName) <= 0xFFFF) {
+            name = L"#atom#" + std::to_wstring(reinterpret_cast<uintptr_t>(lpwcx->lpszClassName));
+        } else {
+            name = lpwcx->lpszClassName;
+        }
+
+        uint16_t atom = static_cast<uint16_t>(0xC000 + classRegistry_.size() + 1);
         classRegistry_[name] = *lpwcx;
-        return static_cast<uint16_t>(classRegistry_.size() & 0xFFFF);
+        atomMap_[atom] = name;
+        return atom;
     }
 
     bool unregisterClass(const wchar_t* lpClassName, HINSTANCE /*hInstance*/) {
@@ -378,7 +390,18 @@ public:
     ) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
 
-        std::wstring clsName = lpClassName ? lpClassName : L"";
+        std::wstring clsName;
+        if (reinterpret_cast<uintptr_t>(lpClassName) <= 0xFFFF) {
+            uint16_t atom = static_cast<uint16_t>(reinterpret_cast<uintptr_t>(lpClassName));
+            auto itA = atomMap_.find(atom);
+            if (itA != atomMap_.end()) {
+                clsName = itA->second;
+            } else {
+                clsName = L"#atom#" + std::to_wstring(atom);
+            }
+        } else if (lpClassName) {
+            clsName = lpClassName;
+        }
         std::wstring winName = lpWindowName ? lpWindowName : L"";
 
         WNDPROC proc = nullptr;
@@ -401,7 +424,7 @@ public:
         windows_[hwnd] = window;
         if (!activeHwnd_) activeHwnd_ = hwnd;
 
-        // Deliver WM_CREATE synchronously
+        // Deliver Win32 creation sequence synchronously: WM_NCCREATE -> WM_NCCALCSIZE -> WM_CREATE
         if (proc) {
             CREATESTRUCTW cs{};
             cs.lpCreateParams = lpParam;
@@ -416,6 +439,11 @@ public:
             cs.lpszClass = lpClassName;
             cs.dwExStyle = dwExStyle;
 
+            // In Win32, WM_NCCREATE is sent first. Applications attach GWLP_USERDATA here.
+            proc(hwnd, WM_NCCREATE, 0, reinterpret_cast<LPARAM>(&cs));
+
+            RECT rcCalc{0, 0, actualW, actualH};
+            proc(hwnd, WM_NCCALCSIZE, 0, reinterpret_cast<LPARAM>(&rcCalc));
             proc(hwnd, WM_CREATE, 0, reinterpret_cast<LPARAM>(&cs));
         }
 
@@ -474,10 +502,26 @@ public:
             if (it != windows_.end()) win = it->second;
         }
 
+        LRESULT res = 0;
         if (win && win->wndProc) {
-            return win->wndProc(hWnd, uMsg, wParam, lParam);
+            res = win->wndProc(hWnd, uMsg, wParam, lParam);
+        } else {
+            res = defWindowProc(hWnd, uMsg, wParam, lParam);
         }
-        return defWindowProc(hWnd, uMsg, wParam, lParam);
+
+        // Scintilla direct dispatch fallbacks if unhandled
+        if (res == 0) {
+            if (uMsg == 2184) { // SCI_GETDIRECTFUNCTION
+                static auto DirectStub = [](void* /*ptr*/, uint32_t /*msg*/, uintptr_t /*w*/, intptr_t /*l*/) -> intptr_t {
+                    return 0;
+                };
+                return reinterpret_cast<LRESULT>(+DirectStub);
+            }
+            if (uMsg == 2185) { // SCI_GETDIRECTPOINTER
+                return reinterpret_cast<LRESULT>(hWnd ? hWnd : reinterpret_cast<win32::HWND>(0x5001));
+            }
+        }
+        return res;
     }
 
     bool peekMessage(MSG* lpMsg, win32::HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg) {
@@ -573,6 +617,8 @@ public:
 
     LRESULT defWindowProc(win32::HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         switch (uMsg) {
+            case WM_NCCREATE:
+                return 1;
             case WM_CLOSE:
                 destroyWindow(hWnd);
                 return 0;
@@ -880,6 +926,7 @@ private:
     win32::HWND focusHwnd_{nullptr};
 
     std::unordered_map<std::wstring, WNDCLASSEXW> classRegistry_;
+    std::unordered_map<uint16_t, std::wstring> atomMap_;
     std::unordered_map<win32::HWND, std::shared_ptr<WindowObject>> windows_;
     std::deque<MSG> messageQueue_;
     std::vector<RAWINPUTDEVICE> registeredRawDevices_;

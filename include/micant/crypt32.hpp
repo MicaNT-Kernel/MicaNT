@@ -1073,6 +1073,60 @@ inline win32::BOOL CertGetCertificateContextProperty(
     return win32::FALSE;
 }
 
+inline win32::BOOL CryptQueryObject(
+    uint32_t /*dwObjectType*/,
+    const void* /*pvObject*/,
+    uint32_t /*dwExpectedContentTypeFlags*/,
+    uint32_t /*dwExpectedFormatTypeFlags*/,
+    uint32_t /*dwFlags*/,
+    uint32_t* /*pdwMsgAndCertEncodingType*/,
+    uint32_t* /*pdwContentType*/,
+    uint32_t* /*pdwFormatType*/,
+    void** /*phCertStore*/,
+    void** phMsg,
+    const void** /*ppvContext*/
+) noexcept {
+    static uint64_t dummyMsg = 0x7777;
+    if (phMsg) *phMsg = &dummyMsg;
+    return win32::TRUE;
+}
+
+inline win32::BOOL CryptMsgGetParam(
+    void* /*hCryptMsg*/,
+    uint32_t /*dwParamType*/,
+    uint32_t /*dwIndex*/,
+    void* pvData,
+    uint32_t* pcbData
+) noexcept {
+    if (!pcbData) return win32::FALSE;
+    if (!pvData) {
+        *pcbData = 32;
+        return win32::TRUE;
+    }
+    std::memset(pvData, 0, std::min(*pcbData, 32U));
+    return win32::TRUE;
+}
+
+inline win32::BOOL CryptMsgClose(void* /*hCryptMsg*/) noexcept {
+    return win32::TRUE;
+}
+
+inline uint32_t CertNameToStrW(
+    uint32_t /*dwCertEncodingType*/,
+    void* /*pName*/,
+    uint32_t /*dwStrType*/,
+    wchar_t* psz,
+    uint32_t csz
+) noexcept {
+    const wchar_t dummyName[] = L"CN=MicaNT Sovereign";
+    constexpr uint32_t len = sizeof(dummyName) / sizeof(wchar_t);
+    if (!psz || csz == 0) return len;
+    uint32_t toCopy = std::min(len, csz);
+    std::wmemcpy(psz, dummyName, toCopy);
+    psz[toCopy - 1] = L'\0';
+    return toCopy;
+}
+
 // ============================================================================
 // 5. Subsystem Export Registration
 // ============================================================================
@@ -1104,6 +1158,10 @@ inline void InitializeCrypt32SubsystemExports() {
     ldr.registerExport("crypt32.dll", "CertGetNameStringA", reinterpret_cast<void*>(CertGetNameStringA));
     ldr.registerExport("crypt32.dll", "CertGetNameStringW", reinterpret_cast<void*>(CertGetNameStringW));
     ldr.registerExport("crypt32.dll", "CertGetCertificateContextProperty", reinterpret_cast<void*>(CertGetCertificateContextProperty));
+    ldr.registerExport("crypt32.dll", "CryptQueryObject", reinterpret_cast<void*>(CryptQueryObject));
+    ldr.registerExport("crypt32.dll", "CryptMsgGetParam", reinterpret_cast<void*>(CryptMsgGetParam));
+    ldr.registerExport("crypt32.dll", "CryptMsgClose", reinterpret_cast<void*>(CryptMsgClose));
+    ldr.registerExport("crypt32.dll", "CertNameToStrW", reinterpret_cast<void*>(CertNameToStrW));
 }
 
 } // namespace micant::crypt32

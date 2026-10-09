@@ -41,6 +41,7 @@ using HKEY    = win32::HKEY;
 using DWORD   = win32::DWORD;
 using BOOL    = win32::BOOL;
 using UINT    = win32::UINT;
+using WORD    = win32::WORD;
 using ULONG   = uint32_t;
 using DWORD_PTR = uintptr_t;
 using ULONG_PTR = uintptr_t;
@@ -717,6 +718,9 @@ inline HRESULT SHGetKnownFolderPath(
 // ============================================================================
 
 inline LPWSTR* CommandLineToArgvW(LPCWSTR lpCmdLine, int* pNumArgs) noexcept {
+    if (win32::g_TraceApi) {
+        std::wcout << L"[*] [TRACE] CommandLineToArgvW: " << (lpCmdLine ? lpCmdLine : L"null") << L"\n";
+    }
     if (!pNumArgs) return nullptr;
     *pNumArgs = 0;
     if (!lpCmdLine) return nullptr;
@@ -773,18 +777,19 @@ inline LPWSTR* CommandLineToArgvW(LPCWSTR lpCmdLine, int* pNumArgs) noexcept {
         totalChars += a.size() + 1;
     }
 
-    size_t totalBytes = (numArgs * sizeof(LPWSTR)) + (totalChars * sizeof(wchar_t));
+    size_t totalBytes = ((numArgs + 1) * sizeof(LPWSTR)) + (totalChars * sizeof(wchar_t));
     uint8_t* block = static_cast<uint8_t*>(kernel32::LocalAlloc(kernel32::LPTR, totalBytes));
     if (!block) return nullptr;
 
     LPWSTR* argv = reinterpret_cast<LPWSTR*>(block);
-    wchar_t* strCursor = reinterpret_cast<wchar_t*>(block + (numArgs * sizeof(LPWSTR)));
+    wchar_t* strCursor = reinterpret_cast<wchar_t*>(block + ((numArgs + 1) * sizeof(LPWSTR)));
 
     for (size_t i = 0; i < numArgs; ++i) {
         argv[i] = strCursor;
         std::memcpy(strCursor, args[i].c_str(), (args[i].size() + 1) * sizeof(wchar_t));
         strCursor += args[i].size() + 1;
     }
+    argv[numArgs] = nullptr;
 
     *pNumArgs = static_cast<int>(numArgs);
     return argv;
@@ -1128,6 +1133,265 @@ inline HICON ExtractIconA(HINSTANCE hInst, LPCSTR lpszExeFileName, UINT nIconInd
     return ExtractIconW(hInst, wFile.c_str(), nIconIndex);
 }
 
+// ----------------------------------------------------------------------------
+// Extended SHLWAPI APIs
+// ----------------------------------------------------------------------------
+
+inline HRESULT PathCreateFromUrlW(PCWSTR pszUrl, PWSTR pszPath, DWORD* pcchPath, DWORD /*dwFlags*/) noexcept {
+    if (!pszUrl || !pszPath || !pcchPath || *pcchPath == 0) return E_INVALIDARG;
+    std::wstring_view url(pszUrl);
+    if (url.starts_with(L"file://localhost/")) {
+        url.remove_prefix(17);
+    } else if (url.starts_with(L"file:///")) {
+        url.remove_prefix(8);
+    } else if (url.starts_with(L"file://")) {
+        url.remove_prefix(7);
+    }
+    if (*pcchPath <= url.size()) {
+        *pcchPath = static_cast<DWORD>(url.size() + 1);
+        return static_cast<HRESULT>(0x8007007A); // ERROR_INSUFFICIENT_BUFFER
+    }
+    size_t i = 0;
+    for (wchar_t c : url) {
+        pszPath[i++] = (c == L'/') ? L'\\' : c;
+    }
+    pszPath[i] = L'\0';
+    *pcchPath = static_cast<DWORD>(i);
+    return S_OK;
+}
+
+inline HRESULT AssocQueryStringW(
+    DWORD /*flags*/,
+    DWORD /*str*/,
+    LPCWSTR /*pszAssoc*/,
+    LPCWSTR /*pszExtra*/,
+    LPWSTR pszOut,
+    DWORD* pcchOut
+) noexcept {
+    if (!pcchOut) return E_INVALIDARG;
+    const wchar_t dummyApp[] = L"C:\\Windows\\System32\\notepad.exe";
+    constexpr DWORD needed = sizeof(dummyApp) / sizeof(wchar_t);
+    if (!pszOut || *pcchOut < needed) {
+        *pcchOut = needed;
+        return static_cast<HRESULT>(0x8007007A);
+    }
+    std::wmemcpy(pszOut, dummyApp, needed);
+    *pcchOut = needed - 1;
+    return S_OK;
+}
+
+inline int PathGetDriveNumberW(LPCWSTR pszPath) noexcept {
+    if (!pszPath) return -1;
+    if (pszPath[0] && pszPath[1] == L':') {
+        wchar_t c = pszPath[0];
+        if (c >= L'a' && c <= L'z') return c - L'a';
+        if (c >= L'A' && c <= L'Z') return c - L'A';
+    }
+    return -1;
+}
+
+inline DWORD ColorAdjustLuma(DWORD clrRGB, int n, BOOL /*fBorder*/) noexcept {
+    int r = clrRGB & 0xFF;
+    int g = (clrRGB >> 8) & 0xFF;
+    int b = (clrRGB >> 16) & 0xFF;
+    if (n > 0) {
+        r += (255 - r) * n / 1000;
+        g += (255 - g) * n / 1000;
+        b += (255 - b) * n / 1000;
+    } else if (n < 0) {
+        r += r * n / 1000;
+        g += g * n / 1000;
+        b += b * n / 1000;
+    }
+    r = std::clamp(r, 0, 255);
+    g = std::clamp(g, 0, 255);
+    b = std::clamp(b, 0, 255);
+    return static_cast<DWORD>(r | (g << 8) | (b << 16));
+}
+
+inline BOOL PathCanonicalizeW(LPWSTR pszBuf, LPCWSTR pszPath) noexcept {
+    if (!pszBuf || !pszPath) return FALSE;
+    std::wstring out;
+    std::wstring cur;
+    for (size_t i = 0; pszPath[i] != L'\0'; ++i) {
+        wchar_t c = (pszPath[i] == L'/') ? L'\\' : pszPath[i];
+        if (c == L'\\') {
+            if (cur == L".") {
+                // skip
+            } else if (cur == L"..") {
+                size_t pos = out.find_last_of(L'\\');
+                if (pos != std::wstring::npos && pos > 2) {
+                    out.resize(pos);
+                }
+            } else {
+                if (!out.empty() && out.back() != L'\\') out.push_back(L'\\');
+                out.append(cur);
+            }
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty()) {
+        if (cur == L"..") {
+            size_t pos = out.find_last_of(L'\\');
+            if (pos != std::wstring::npos && pos > 2) out.resize(pos);
+        } else if (cur != L".") {
+            if (!out.empty() && out.back() != L'\\') out.push_back(L'\\');
+            out.append(cur);
+        }
+    }
+    if (out.empty() && pszPath[0] != L'\0') out = L"\\";
+    std::wmemcpy(pszBuf, out.c_str(), out.size() + 1);
+    return TRUE;
+}
+
+inline BOOL PathAppendW(LPWSTR pszPath, LPCWSTR pszMore) noexcept {
+    if (!pszPath || !pszMore) return FALSE;
+    while (*pszMore == L'\\' || *pszMore == L'/') ++pszMore;
+    size_t len = wcslen(pszPath);
+    if (len > 0 && pszPath[len - 1] != L'\\' && pszPath[len - 1] != L'/') {
+        pszPath[len++] = L'\\';
+        pszPath[len] = L'\0';
+    }
+    wcscat(pszPath, pszMore);
+    return TRUE;
+}
+
+inline BOOL PathMatchSpecW(LPCWSTR pszFile, LPCWSTR pszSpec) noexcept {
+    if (!pszFile || !pszSpec) return FALSE;
+    if (wcscmp(pszSpec, L"*.*") == 0 || wcscmp(pszSpec, L"*") == 0) return TRUE;
+    const wchar_t* pF = pszFile;
+    const wchar_t* pS = pszSpec;
+    const wchar_t* pFStar = nullptr;
+    const wchar_t* pSStar = nullptr;
+    while (*pF) {
+        if (*pS == L'*') {
+            pSStar = ++pS;
+            pFStar = pF;
+        } else if (*pS == L'?' || towlower(*pS) == towlower(*pF)) {
+            ++pS;
+            ++pF;
+        } else if (pSStar) {
+            pS = pSStar;
+            pF = ++pFStar;
+        } else {
+            return FALSE;
+        }
+    }
+    while (*pS == L'*') ++pS;
+    return *pS == L'\0';
+}
+
+inline BOOL PathIsNetworkPathW(LPCWSTR pszPath) noexcept {
+    if (!pszPath) return FALSE;
+    return (pszPath[0] == L'\\' && pszPath[1] == L'\\');
+}
+
+inline BOOL PathCompactPathExW(LPWSTR pszOut, LPCWSTR pszSrc, UINT cchMax, DWORD /*dwFlags*/) noexcept {
+    if (!pszOut || !pszSrc || cchMax == 0) return FALSE;
+    size_t len = wcslen(pszSrc);
+    if (len < cchMax) {
+        wcscpy(pszOut, pszSrc);
+        return TRUE;
+    }
+    if (cchMax <= 4) {
+        for (UINT i = 0; i < cchMax - 1; ++i) pszOut[i] = L'.';
+        pszOut[cchMax - 1] = L'\0';
+        return TRUE;
+    }
+    UINT half = (cchMax - 4) / 2;
+    std::wmemcpy(pszOut, pszSrc, half);
+    pszOut[half] = L'.';
+    pszOut[half + 1] = L'.';
+    pszOut[half + 2] = L'.';
+    std::wmemcpy(pszOut + half + 3, pszSrc + (len - (cchMax - half - 4)), cchMax - half - 4);
+    pszOut[cchMax - 1] = L'\0';
+    return TRUE;
+}
+
+inline DWORD ColorHLSToRGB(WORD /*H*/, WORD L, WORD /*S*/) noexcept {
+    int v = std::clamp(static_cast<int>(L) * 255 / 240, 0, 255);
+    return static_cast<DWORD>(v | (v << 8) | (v << 16));
+}
+
+inline void ColorRGBToHLS(DWORD clrRGB, WORD* pwH, WORD* pwL, WORD* pwS) noexcept {
+    int r = clrRGB & 0xFF;
+    int g = (clrRGB >> 8) & 0xFF;
+    int b = (clrRGB >> 16) & 0xFF;
+    int maxVal = std::max({r, g, b});
+    int minVal = std::min({r, g, b});
+    int l = (maxVal + minVal) * 240 / 510;
+    if (pwH) *pwH = 0;
+    if (pwL) *pwL = static_cast<WORD>(l);
+    if (pwS) *pwS = (maxVal == minVal) ? 0 : 120;
+}
+
+inline void PathStripPathW(LPWSTR pszPath) noexcept {
+    if (!pszPath) return;
+    const wchar_t* lastSlash = wcsrchr(pszPath, L'\\');
+    if (!lastSlash) lastSlash = wcsrchr(pszPath, L'/');
+    if (lastSlash) {
+        std::wstring fn(lastSlash + 1);
+        wcscpy(pszPath, fn.c_str());
+    }
+}
+
+inline void PathRemoveExtensionW(LPWSTR pszPath) noexcept {
+    if (!pszPath) return;
+    wchar_t* lastDot = wcsrchr(pszPath, L'.');
+    wchar_t* lastSlash = wcsrchr(pszPath, L'\\');
+    if (lastDot && (!lastSlash || lastDot > lastSlash)) {
+        *lastDot = L'\0';
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Extended SHELL32 APIs
+// ----------------------------------------------------------------------------
+
+inline HRESULT SHCreateItemFromParsingName(PCWSTR /*pszPath*/, void* /*pbc*/, const micant::GUID& /*riid*/, void** ppv) noexcept {
+    if (ppv) *ppv = nullptr;
+    return S_OK;
+}
+
+inline HRESULT SHParseDisplayName(PCWSTR /*pszName*/, void* /*pbc*/, void** ppidl, DWORD /*sfgaoIn*/, DWORD* psfgaoOut) noexcept {
+    if (ppidl) *ppidl = nullptr;
+    if (psfgaoOut) *psfgaoOut = 0;
+    return S_OK;
+}
+
+inline HRESULT SHOpenFolderAndSelectItems(void* /*pidlFolder*/, UINT /*cidl*/, void* /*apidl*/, DWORD /*dwFlags*/) noexcept {
+    return S_OK;
+}
+
+inline int SHFileOperationW(void* /*lpFileOp*/) noexcept {
+    return 0; // Success
+}
+
+inline BOOL DragQueryPoint(void* /*hDrop*/, void* lppt) noexcept {
+    if (lppt) {
+        auto* pt = reinterpret_cast<micant::prismx::POINT*>(lppt);
+        pt->x = 0;
+        pt->y = 0;
+    }
+    return TRUE;
+}
+
+inline UINT DragQueryFileW(void* /*hDrop*/, UINT iFile, LPWSTR lpszFile, UINT cch) noexcept {
+    if (iFile == 0xFFFFFFFF) {
+        return 0; // 0 files in drop handle
+    }
+    if (lpszFile && cch > 0) lpszFile[0] = L'\0';
+    return 0;
+}
+
+inline void DragFinish(void* /*hDrop*/) noexcept {}
+
+inline HRESULT ShellOrdinal165(void* /*p1*/, void* /*p2*/, void* /*p3*/, void* /*p4*/) noexcept {
+    return S_OK;
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
@@ -1152,6 +1416,14 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "SHGetFileInfoA", reinterpret_cast<void*>(SHGetFileInfoA));
     ldr.registerExport("shell32.dll", "ExtractIconW", reinterpret_cast<void*>(ExtractIconW));
     ldr.registerExport("shell32.dll", "ExtractIconA", reinterpret_cast<void*>(ExtractIconA));
+    ldr.registerExport("shell32.dll", "SHCreateItemFromParsingName", reinterpret_cast<void*>(SHCreateItemFromParsingName));
+    ldr.registerExport("shell32.dll", "SHParseDisplayName", reinterpret_cast<void*>(SHParseDisplayName));
+    ldr.registerExport("shell32.dll", "SHOpenFolderAndSelectItems", reinterpret_cast<void*>(SHOpenFolderAndSelectItems));
+    ldr.registerExport("shell32.dll", "SHFileOperationW", reinterpret_cast<void*>(SHFileOperationW));
+    ldr.registerExport("shell32.dll", "DragQueryPoint", reinterpret_cast<void*>(DragQueryPoint));
+    ldr.registerExport("shell32.dll", "DragQueryFileW", reinterpret_cast<void*>(DragQueryFileW));
+    ldr.registerExport("shell32.dll", "DragFinish", reinterpret_cast<void*>(DragFinish));
+    ldr.registerExportOrdinal("shell32.dll", 165, reinterpret_cast<void*>(ShellOrdinal165));
 
     // shlwapi.dll exports
     ldr.registerExport("shlwapi.dll", "PathFileExistsW", reinterpret_cast<void*>(PathFileExistsW));
@@ -1174,6 +1446,19 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shlwapi.dll", "StrStrIA", reinterpret_cast<void*>(StrStrIA));
     ldr.registerExport("shlwapi.dll", "StrCmpIW", reinterpret_cast<void*>(StrCmpIW));
     ldr.registerExport("shlwapi.dll", "StrCmpIA", reinterpret_cast<void*>(StrCmpIA));
+    ldr.registerExport("shlwapi.dll", "PathCreateFromUrlW", reinterpret_cast<void*>(PathCreateFromUrlW));
+    ldr.registerExport("shlwapi.dll", "AssocQueryStringW", reinterpret_cast<void*>(AssocQueryStringW));
+    ldr.registerExport("shlwapi.dll", "PathGetDriveNumberW", reinterpret_cast<void*>(PathGetDriveNumberW));
+    ldr.registerExport("shlwapi.dll", "ColorAdjustLuma", reinterpret_cast<void*>(ColorAdjustLuma));
+    ldr.registerExport("shlwapi.dll", "PathCanonicalizeW", reinterpret_cast<void*>(PathCanonicalizeW));
+    ldr.registerExport("shlwapi.dll", "PathAppendW", reinterpret_cast<void*>(PathAppendW));
+    ldr.registerExport("shlwapi.dll", "PathMatchSpecW", reinterpret_cast<void*>(PathMatchSpecW));
+    ldr.registerExport("shlwapi.dll", "PathIsNetworkPathW", reinterpret_cast<void*>(PathIsNetworkPathW));
+    ldr.registerExport("shlwapi.dll", "PathCompactPathExW", reinterpret_cast<void*>(PathCompactPathExW));
+    ldr.registerExport("shlwapi.dll", "ColorHLSToRGB", reinterpret_cast<void*>(ColorHLSToRGB));
+    ldr.registerExport("shlwapi.dll", "ColorRGBToHLS", reinterpret_cast<void*>(ColorRGBToHLS));
+    ldr.registerExport("shlwapi.dll", "PathStripPathW", reinterpret_cast<void*>(PathStripPathW));
+    ldr.registerExport("shlwapi.dll", "PathRemoveExtensionW", reinterpret_cast<void*>(PathRemoveExtensionW));
 }
 
 } // namespace micant::shell32

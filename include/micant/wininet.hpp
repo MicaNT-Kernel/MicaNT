@@ -1851,6 +1851,14 @@ inline win32::BOOL __stdcall CommitUrlCacheEntryW(
     );
 }
 
+inline uint32_t InternetSetOptionA(HINTERNET /*hInternet*/, uint32_t /*dwOption*/, void* /*lpBuffer*/, uint32_t /*dwBufferLength*/) {
+    return 1; // TRUE
+}
+
+inline uint32_t InternetSetOptionW(HINTERNET /*hInternet*/, uint32_t /*dwOption*/, void* /*lpBuffer*/, uint32_t /*dwBufferLength*/) {
+    return 1; // TRUE
+}
+
 // ============================================================================
 // 11. Subsystem Export Registration
 // ============================================================================
@@ -1883,6 +1891,8 @@ inline void InitializeWinINetSubsystemExports() {
     ldr.registerExport("wininet.dll", "InternetSetCookieW", reinterpret_cast<void*>(InternetSetCookieW));
     ldr.registerExport("wininet.dll", "InternetGetCookieA", reinterpret_cast<void*>(InternetGetCookieA));
     ldr.registerExport("wininet.dll", "InternetGetCookieW", reinterpret_cast<void*>(InternetGetCookieW));
+    ldr.registerExport("wininet.dll", "InternetSetOptionA", reinterpret_cast<void*>(InternetSetOptionA));
+    ldr.registerExport("wininet.dll", "InternetSetOptionW", reinterpret_cast<void*>(InternetSetOptionW));
     ldr.registerExport("wininet.dll", "CreateUrlCacheEntryA", reinterpret_cast<void*>(CreateUrlCacheEntryA));
     ldr.registerExport("wininet.dll", "CreateUrlCacheEntryW", reinterpret_cast<void*>(CreateUrlCacheEntryW));
     ldr.registerExport("wininet.dll", "CommitUrlCacheEntryA", reinterpret_cast<void*>(CommitUrlCacheEntryA));

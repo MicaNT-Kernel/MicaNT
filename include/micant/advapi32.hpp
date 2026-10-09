@@ -29,6 +29,7 @@ using SC_HANDLE   = void*;
 using HCRYPTPROV  = uintptr_t;
 using HCRYPTHASH  = uintptr_t;
 using HCRYPTKEY   = uintptr_t;
+using LPCWSTR     = const wchar_t*;
 
 inline constexpr uint32_t PROV_RSA_FULL        = 1;
 inline constexpr uint32_t PROV_RSA_AES         = 24;
@@ -1110,6 +1111,82 @@ inline int32_t RegQueryInfoKeyW(HKEY hKey, wchar_t* /*lpClass*/, uint32_t* /*lpc
     return ERROR_SUCCESS;
 }
 
+inline int32_t RegGetValueW(
+    HKEY hkey,
+    LPCWSTR lpSubKey,
+    LPCWSTR lpValue,
+    uint32_t /*dwFlags*/,
+    uint32_t* pdwType,
+    void* pvData,
+    uint32_t* pcbData
+) noexcept {
+    HKEY hSub = hkey;
+    bool opened = false;
+    if (lpSubKey && lpSubKey[0]) {
+        if (RegOpenKeyExW(hkey, lpSubKey, 0, 0x20019, &hSub) != ERROR_SUCCESS) {
+            return ERROR_FILE_NOT_FOUND;
+        }
+        opened = true;
+    }
+    int32_t res = RegQueryValueExW(hSub, lpValue, nullptr, pdwType, reinterpret_cast<uint8_t*>(pvData), pcbData);
+    if (opened) RegCloseKey(hSub);
+    return res;
+}
+
+inline win32::BOOL AllocateAndInitializeSid(
+    void* /*pIdentifierAuthority*/,
+    uint8_t /*nSubAuthorityCount*/,
+    uint32_t /*dwSubAuthority0*/,
+    uint32_t /*dwSubAuthority1*/,
+    uint32_t /*dwSubAuthority2*/,
+    uint32_t /*dwSubAuthority3*/,
+    uint32_t /*dwSubAuthority4*/,
+    uint32_t /*dwSubAuthority5*/,
+    uint32_t /*dwSubAuthority6*/,
+    uint32_t /*dwSubAuthority7*/,
+    void** pSid
+) noexcept {
+    static uint32_t dummySid[8] = { 0x00000101, 0x05000000, 0x00000020, 0x00000220 }; // Administrators SID
+    if (pSid) *pSid = dummySid;
+    return win32::TRUE;
+}
+
+inline void* FreeSid(void* /*pSid*/) noexcept {
+    return nullptr;
+}
+
+inline win32::BOOL CheckTokenMembership(win32::HANDLE /*TokenHandle*/, void* /*SidToCheck*/, win32::BOOL* IsMember) noexcept {
+    if (IsMember) *IsMember = win32::TRUE; // Sovereign admin
+    return win32::TRUE;
+}
+
+inline uint32_t* GetSidSubAuthority(void* pSid, uint32_t nSubAuthority) noexcept {
+    if (!pSid) return nullptr;
+    auto* sub = reinterpret_cast<uint32_t*>(pSid);
+    return &sub[2 + nSubAuthority];
+}
+
+inline uint8_t* GetSidSubAuthorityCount(void* pSid) noexcept {
+    static uint8_t count = 2;
+    if (!pSid) return &count;
+    auto* b = reinterpret_cast<uint8_t*>(pSid);
+    return &b[1];
+}
+
+inline int32_t IsTextUnicode(const void* lpv, int iSize, int* lpiResult) noexcept {
+    if (!lpv || iSize <= 1) {
+        if (lpiResult) *lpiResult = 0;
+        return 0;
+    }
+    const auto* bytes = reinterpret_cast<const uint8_t*>(lpv);
+    bool hasZero = false;
+    for (int i = 1; i < iSize; i += 2) {
+        if (bytes[i] == 0) { hasZero = true; break; }
+    }
+    if (lpiResult) *lpiResult = hasZero ? 1 : 0;
+    return hasZero ? 1 : 0;
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("advapi32.dll", "CryptAcquireContextA", reinterpret_cast<void*>(CryptAcquireContextA));
@@ -1126,6 +1203,12 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "CryptDecrypt", reinterpret_cast<void*>(CryptDecrypt));
     ldr.registerExport("advapi32.dll", "OpenProcessToken", reinterpret_cast<void*>(OpenProcessToken));
     ldr.registerExport("advapi32.dll", "GetTokenInformation", reinterpret_cast<void*>(GetTokenInformation));
+    ldr.registerExport("advapi32.dll", "AllocateAndInitializeSid", reinterpret_cast<void*>(AllocateAndInitializeSid));
+    ldr.registerExport("advapi32.dll", "FreeSid", reinterpret_cast<void*>(FreeSid));
+    ldr.registerExport("advapi32.dll", "CheckTokenMembership", reinterpret_cast<void*>(CheckTokenMembership));
+    ldr.registerExport("advapi32.dll", "GetSidSubAuthority", reinterpret_cast<void*>(GetSidSubAuthority));
+    ldr.registerExport("advapi32.dll", "GetSidSubAuthorityCount", reinterpret_cast<void*>(GetSidSubAuthorityCount));
+    ldr.registerExport("advapi32.dll", "IsTextUnicode", reinterpret_cast<void*>(IsTextUnicode));
 
     // SCM Exports
     ldr.registerExport("advapi32.dll", "OpenSCManagerW", reinterpret_cast<void*>(OpenSCManagerW));
@@ -1165,6 +1248,7 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "RegEnumKeyExW", reinterpret_cast<void*>(RegEnumKeyExW));
     ldr.registerExport("advapi32.dll", "RegEnumValueW", reinterpret_cast<void*>(RegEnumValueW));
     ldr.registerExport("advapi32.dll", "RegQueryInfoKeyW", reinterpret_cast<void*>(RegQueryInfoKeyW));
+    ldr.registerExport("advapi32.dll", "RegGetValueW", reinterpret_cast<void*>(RegGetValueW));
 
     // Initialize SCM daemon
     scm::ServiceControlManager::get().initialize();
