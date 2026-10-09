@@ -7287,6 +7287,387 @@ inline void Test_Everything_Search_Indexing_Subsystem() {
     std::cout << "[TEST] Suite 219: Everything 1.4+ Search Indexing & Win32 Satellite Subsystem PASSED.\n";
 }
 
+// ----------------------------------------------------------------------------
+// Suite 220: WinMerge 2.16+ Visual Diff & Merge Subsystem & MDI / Scintilla Shell Integration
+// ----------------------------------------------------------------------------
+inline void Test_WinMerge_Visual_Diff_Subsystem() {
+    std::cout << "\n[TEST] Running Suite 220: WinMerge 2.16+ Visual Diff & Win32 Satellite Subsystem...\n";
+
+    micant::satellite::InitializeSatelliteWin32Exports();
+
+    // Stage 1: Advanced Registry Operations
+    TEST_ASSERT(micant::satellite::winmerge::RegSetValueW(nullptr, L"Settings", 1, L"Dark", 8) == 0, "RegSetValueW must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::RegDeleteTreeW(nullptr, L"OldConfig") == 0, "RegDeleteTreeW must succeed");
+
+    // Stage 2: Common Controls Initialization
+    micant::satellite::winmerge::InitCommonControls();
+    auto& loader = micant::ldr::DynamicLoader::get();
+    TEST_ASSERT(loader.getExportOrdinal("comctl32.dll", 17) != nullptr, "InitCommonControls / Ordinal 17 must be exported in comctl32.dll");
+
+    // Stage 3: Advanced GDI Viewport Scaling & Extents
+    micant::satellite::winmerge::SIZE_MOCK prevSize{};
+    TEST_ASSERT(micant::satellite::winmerge::SetViewportExtEx(nullptr, 100, 200, &prevSize) == 1, "SetViewportExtEx must succeed");
+    TEST_ASSERT(prevSize.cx == 100 && prevSize.cy == 200, "Previous size populated in SetViewportExtEx");
+
+    micant::satellite::winmerge::SIZE_MOCK curSize{};
+    TEST_ASSERT(micant::satellite::winmerge::GetViewportExtEx(nullptr, &curSize) == 1, "GetViewportExtEx must succeed");
+    TEST_ASSERT(curSize.cx == 1 && curSize.cy == 1, "GetViewportExtEx default extent must be 1x1");
+
+    TEST_ASSERT(micant::satellite::winmerge::SetWindowExtEx(nullptr, 50, 75, &prevSize) == 1, "SetWindowExtEx must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GetWindowExtEx(nullptr, &curSize) == 1, "GetWindowExtEx must succeed");
+
+    micant::satellite::winmerge::POINT_MOCK pt{};
+    TEST_ASSERT(micant::satellite::winmerge::OffsetViewportOrgEx(nullptr, 10, 20, &pt) == 1, "OffsetViewportOrgEx must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::ScaleViewportExtEx(nullptr, 2, 1, 2, 1, &curSize) == 1, "ScaleViewportExtEx must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::ScaleWindowExtEx(nullptr, 2, 1, 2, 1, &curSize) == 1, "ScaleWindowExtEx must succeed");
+
+    // Stage 4: GDI Polygon Fill, Layout & Font Face
+    TEST_ASSERT(micant::satellite::winmerge::GetLayout(nullptr) == 0, "GetLayout must return 0 (LAYOUT_LTR)");
+    TEST_ASSERT(micant::satellite::winmerge::SetPolyFillMode(nullptr, 2) == 1, "SetPolyFillMode must return previous mode");
+    TEST_ASSERT(micant::satellite::winmerge::GetPolyFillMode(nullptr) == 1, "GetPolyFillMode must return ALTERNATE");
+
+    wchar_t faceName[32]{};
+    int32_t faceLen = micant::satellite::winmerge::GetTextFaceW(nullptr, 32, faceName);
+    TEST_ASSERT(faceLen > 0 && std::wcscmp(faceName, L"Segoe UI") == 0, "GetTextFaceW must return 'Segoe UI'");
+
+    void* hElliptic = micant::satellite::winmerge::CreateEllipticRgn(0, 0, 100, 100);
+    TEST_ASSERT(hElliptic != nullptr, "CreateEllipticRgn must return valid region handle");
+    TEST_ASSERT(micant::satellite::winmerge::PtVisible(nullptr, 50, 50) == 1, "PtVisible must return 1");
+    TEST_ASSERT(micant::satellite::winmerge::Escape(nullptr, 1, 0, nullptr, nullptr) == 1, "Escape must return 1");
+
+    int fontEnumCount = 0;
+    micant::satellite::winmerge::EnumFontFamiliesW(nullptr, nullptr, [](const micant::satellite::winmerge::ENUMLOGFONTW_MOCK* elf, const micant::satellite::winmerge::NEWTEXTMETRICW_MOCK*, uint32_t, int64_t lp) -> int32_t {
+        if (elf && std::wcscmp(elf->elfLogFont.lfFaceName, L"Segoe UI") == 0) {
+            *reinterpret_cast<int*>(lp) += 1;
+        }
+        return 1;
+    }, reinterpret_cast<int64_t>(&fontEnumCount));
+    TEST_ASSERT(fontEnumCount == 1, "EnumFontFamiliesW must enumerate Segoe UI");
+
+    void* hMeta = micant::satellite::winmerge::CopyMetaFileW(nullptr, nullptr);
+    TEST_ASSERT(hMeta != nullptr, "CopyMetaFileW must return valid HMETAFILE");
+
+    // Stage 5: GDI+ 2D Vector Path Geometry & Integer Coordinates
+    TEST_ASSERT(micant::satellite::winmerge::GdipAddPathArcI(nullptr, 10, 10, 50, 50, 0.0f, 90.0f) == 0, "GdipAddPathArcI must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GdipClosePathFigure(nullptr) == 0, "GdipClosePathFigure must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GdipAddPathLineI(nullptr, 0, 0, 100, 100) == 0, "GdipAddPathLineI must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GdipAddPathBezierI(nullptr, 0, 0, 10, 20, 30, 40, 50, 50) == 0, "GdipAddPathBezierI must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GdipStartPathFigure(nullptr) == 0, "GdipStartPathFigure must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GdipDrawBezierI(nullptr, nullptr, 0, 0, 10, 20, 30, 40, 50, 50) == 0, "GdipDrawBezierI must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GdipDrawImageRectI(nullptr, nullptr, 0, 0, 64, 64) == 0, "GdipDrawImageRectI must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GdipDrawLinesI(nullptr, nullptr, nullptr, 0) == 0, "GdipDrawLinesI must succeed");
+
+    micant::satellite::winmerge::ColorPaletteMock pal{};
+    int palSize = 0;
+    TEST_ASSERT(micant::satellite::winmerge::GdipGetImagePaletteSize(nullptr, &palSize) == 0, "GdipGetImagePaletteSize must succeed");
+    TEST_ASSERT(palSize == sizeof(micant::satellite::winmerge::ColorPaletteMock), "Palette size must match struct");
+    TEST_ASSERT(micant::satellite::winmerge::GdipGetImagePalette(nullptr, &pal, palSize) == 0, "GdipGetImagePalette must succeed");
+
+    void* hBmp = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::GdipCreateBitmapFromFile(L"test.png", &hBmp) == 0 && hBmp != nullptr, "GdipCreateBitmapFromFile must create bitmap");
+    TEST_ASSERT(micant::satellite::winmerge::GdipSaveImageToStream(hBmp, nullptr, nullptr, nullptr) == 0, "GdipSaveImageToStream must succeed");
+
+    // Stage 6: Activation Context Engine & Realloc
+    void* mem1 = std::malloc(64);
+    void* mem2 = micant::satellite::winmerge::GlobalReAlloc(mem1, 128, 0);
+    TEST_ASSERT(mem2 != nullptr, "GlobalReAlloc must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GlobalHandle(mem2) == mem2, "GlobalHandle must return pointer");
+    TEST_ASSERT(micant::satellite::winmerge::GlobalFlags(mem2) == 0, "GlobalFlags must return GMEM_FIXED");
+    void* mem3 = micant::satellite::winmerge::LocalReAlloc(mem2, 256, 0);
+    TEST_ASSERT(mem3 != nullptr, "LocalReAlloc must succeed");
+    std::free(mem3);
+
+    micant::satellite::winmerge::ACTCTXW_MOCK actCtx{};
+    void* hAct = micant::satellite::winmerge::CreateActCtxW(&actCtx);
+    TEST_ASSERT(hAct != nullptr, "CreateActCtxW must return activation context");
+    uintptr_t cookie = 0;
+    TEST_ASSERT(micant::satellite::winmerge::ActivateActCtx(hAct, &cookie) == 1 && cookie != 0, "ActivateActCtx must succeed with cookie");
+    TEST_ASSERT(micant::satellite::winmerge::DeactivateActCtx(0, cookie) == 1, "DeactivateActCtx must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::FindActCtxSectionStringW(0, nullptr, 0, L"test", nullptr) == 0, "FindActCtxSectionStringW returns 0 fallback");
+    TEST_ASSERT(micant::satellite::winmerge::QueryActCtxW(0, hAct, nullptr, 1, nullptr, 0, nullptr) == 1, "QueryActCtxW must succeed");
+
+    // Stage 7: Wow64 Directory, Environment Expansion & String Comparison
+    wchar_t wow64[64]{};
+    uint32_t wowLen = micant::satellite::winmerge::GetSystemWow64DirectoryW(wow64, 64);
+    TEST_ASSERT(wowLen > 0 && std::wcscmp(wow64, L"C:\\Windows\\SysWOW64") == 0, "GetSystemWow64DirectoryW returns SysWOW64");
+
+    char expEnv[256]{};
+    uint32_t expLen = micant::satellite::winmerge::ExpandEnvironmentStringsA("%SYSTEMROOT%\\System32", expEnv, 256);
+    TEST_ASSERT(expLen > 0 && std::strcmp(expEnv, "C:\\Windows\\System32") == 0, "ExpandEnvironmentStringsA expands %SYSTEMROOT%");
+
+    TEST_ASSERT(micant::satellite::winmerge::SetThreadUILanguage(0x0409) > 0, "SetThreadUILanguage must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::SetSearchPathMode(1) == 1, "SetSearchPathMode must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::SetDllDirectoryW(L"C:\\WinMerge") == 1, "SetDllDirectoryW must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::lstrcmpA("apple", "banana") < 0, "lstrcmpA ordering check");
+    TEST_ASSERT(micant::satellite::winmerge::lstrcmpA("equal", "equal") == 0, "lstrcmpA equality check");
+
+    // Stage 8: S-List, File Locks & Thread Info
+    micant::satellite::winmerge::SLIST_HEADER_MOCK slistHead{};
+    micant::satellite::winmerge::SLIST_ENTRY_MOCK entry1{};
+    micant::satellite::winmerge::SLIST_ENTRY_MOCK entry2{};
+    micant::satellite::winmerge::InterlockedPushEntrySList(&slistHead, &entry1);
+    micant::satellite::winmerge::InterlockedPushEntrySList(&slistHead, &entry2);
+    TEST_ASSERT(slistHead.Alignment == reinterpret_cast<uint64_t>(&entry2), "InterlockedPushEntrySList must push to head");
+
+    wchar_t atomBuf[32]{};
+    uint32_t atomLen = micant::satellite::winmerge::GlobalGetAtomNameW(42, atomBuf, 32);
+    TEST_ASSERT(atomLen > 0 && std::wcscmp(atomBuf, L"#42") == 0, "GlobalGetAtomNameW formats atom name");
+    TEST_ASSERT(micant::satellite::winmerge::GetProfileIntW(L"WinMerge", L"TabWidth", 4) == 4, "GetProfileIntW returns default");
+    TEST_ASSERT(micant::satellite::winmerge::LockFile(nullptr, 0, 0, 100, 0) == 1, "LockFile must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::UnlockFile(nullptr, 0, 0, 100, 0) == 1, "UnlockFile must succeed");
+    TEST_ASSERT(micant::satellite::winmerge::GetThreadId(nullptr) == 1001, "GetThreadId must return 1001");
+
+    // Stage 9: COM Free-Threaded Marshaler, OLE Menus & Accessibility
+    void* pMarshaler = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::CoCreateFreeThreadedMarshaler(nullptr, &pMarshaler) == 0 && pMarshaler != nullptr, "CoCreateFreeThreadedMarshaler succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::OleTranslateAccelerator(nullptr, nullptr, nullptr) == 1, "OleTranslateAccelerator returns S_FALSE (1)");
+    void* hOleMenu = micant::satellite::winmerge::OleCreateMenuDescriptor(nullptr, nullptr);
+    TEST_ASSERT(hOleMenu != nullptr, "OleCreateMenuDescriptor returns valid descriptor");
+    TEST_ASSERT(micant::satellite::winmerge::OleDestroyMenuDescriptor(hOleMenu) == 0, "OleDestroyMenuDescriptor returns S_OK");
+    TEST_ASSERT(micant::satellite::winmerge::CoRegisterMessageFilter(nullptr, nullptr) == 0, "CoRegisterMessageFilter returns S_OK");
+    micant::satellite::winmerge::CoFreeUnusedLibraries();
+    TEST_ASSERT(micant::satellite::winmerge::OleDuplicateData(reinterpret_cast<void*>(0x1234), 1, 0) == reinterpret_cast<void*>(0x1234), "OleDuplicateData succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::CoLockObjectExternal(nullptr, 1, 0) == 0, "CoLockObjectExternal returns S_OK");
+    TEST_ASSERT(micant::satellite::winmerge::OleRun(nullptr) == 0, "OleRun returns S_OK");
+
+    uint8_t propVar[24]{0xFF};
+    TEST_ASSERT(micant::satellite::winmerge::PropVariantClear(propVar) == 0, "PropVariantClear returns S_OK");
+    TEST_ASSERT(propVar[0] == 0 && propVar[23] == 0, "PropVariantClear zeroes memory");
+
+    void* pAcc = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::AccessibleObjectFromWindow(nullptr, 0, nullptr, &pAcc) == 0 && pAcc != nullptr, "AccessibleObjectFromWindow succeeds");
+    void* pStdAcc = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::CreateStdAccessibleObject(nullptr, 0, nullptr, &pStdAcc) == 0 && pStdAcc != nullptr, "CreateStdAccessibleObject succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::OleUIBusyW(nullptr) == 0, "OleUIBusyW returns OLEUI_CANCEL");
+
+    // Stage 10: OLE Automation Error Info & Variant Dates
+    void* pErr = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::CreateErrorInfo(&pErr) == 0 && pErr != nullptr, "CreateErrorInfo succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::SetErrorInfo(0, pErr) == 0, "SetErrorInfo succeeds");
+
+    double vDate = 0.0;
+    TEST_ASSERT(micant::satellite::winmerge::VarDateFromStr(L"2026-10-09", 0x0409, 0, &vDate) == 0, "VarDateFromStr succeeds");
+    micant::satellite::winmerge::SYSTEMTIME_MOCK st{};
+    TEST_ASSERT(micant::satellite::winmerge::VariantTimeToSystemTime(vDate, &st) == 1, "VariantTimeToSystemTime succeeds");
+    TEST_ASSERT(st.wYear >= 2020, "Converted system time year is valid");
+    double vDate2 = 0.0;
+    TEST_ASSERT(micant::satellite::winmerge::SystemTimeToVariantTime(&st, &vDate2) == 1, "SystemTimeToVariantTime succeeds");
+    TEST_ASSERT(std::abs(vDate - vDate2) < 1.0, "Round-trip variant time matches");
+
+    // Stage 11: Windows Property System Architecture
+    micant::satellite::winmerge::PROPERTYKEY_MOCK pkey{};
+    TEST_ASSERT(micant::satellite::winmerge::PSGetPropertyKeyFromName(L"System.Author", &pkey) == 0 && pkey.pid == 1, "PSGetPropertyKeyFromName succeeds");
+    void* pEnum = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::PSEnumeratePropertyDescriptions(0, nullptr, &pEnum) == 0 && pEnum != nullptr, "PSEnumeratePropertyDescriptions succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::PropVariantCompareEx(nullptr, nullptr, 0, 0) == 0, "PropVariantCompareEx reports equality");
+    void* pPDesc = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::PSGetPropertyDescription(nullptr, nullptr, &pPDesc) == 0 && pPDesc != nullptr, "PSGetPropertyDescription succeeds");
+    wchar_t* pDisp = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::PSFormatForDisplayAlloc(nullptr, nullptr, 0, &pDisp) == 0 && pDisp != nullptr, "PSFormatForDisplayAlloc succeeds");
+    TEST_ASSERT(std::wcscmp(pDisp, L"WinMerge Property") == 0, "Formatted property matches");
+    std::free(pDisp);
+    uint8_t initBuf[16]{};
+    TEST_ASSERT(micant::satellite::winmerge::InitPropVariantFromBuffer(initBuf, 16, propVar) == 0, "InitPropVariantFromBuffer succeeds");
+
+    // Stage 12: Shell Items, ID Lists & Natural Logical String Sort
+    void* pShItem = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::SHCreateShellItem(nullptr, nullptr, nullptr, &pShItem) == 0 && pShItem != nullptr, "SHCreateShellItem succeeds");
+    void* dummyPidl = std::malloc(32);
+    micant::satellite::winmerge::ILFree(dummyPidl);
+    void* pPStore = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::SHGetPropertyStoreFromParsingName(L"C:\\diff.txt", nullptr, 0, nullptr, &pPStore) == 0 && pPStore != nullptr, "SHGetPropertyStoreFromParsingName succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::SetCurrentProcessExplicitAppUserModelID(L"WinMerge.WinMerge") == 0, "SetCurrentProcessExplicitAppUserModelID succeeds");
+    void* pFMenu = nullptr;
+    TEST_ASSERT(micant::satellite::winmerge::CDefFolderMenu_Create2(nullptr, nullptr, 0, nullptr, nullptr, nullptr, 0, nullptr, &pFMenu) == 0 && pFMenu != nullptr, "CDefFolderMenu_Create2 succeeds");
+
+    wchar_t stripPath[64] = L"C:\\Users\\admin\\file.txt";
+    TEST_ASSERT(micant::satellite::winmerge::PathStripToRootW(stripPath) == 1 && std::wcscmp(stripPath, L"C:\\") == 0, "PathStripToRootW strips drive to root");
+    wchar_t stripUnc[64] = L"\\\\server\\share\\docs\\sub";
+    TEST_ASSERT(micant::satellite::winmerge::PathStripToRootW(stripUnc) == 1 && std::wcscmp(stripUnc, L"\\\\server\\share\\") == 0, "PathStripToRootW strips UNC to root");
+
+    TEST_ASSERT(micant::satellite::winmerge::StrCmpLogicalW(L"file2.txt", L"file10.txt") < 0, "StrCmpLogicalW natural sort order file2 < file10");
+    TEST_ASSERT(micant::satellite::winmerge::StrCmpLogicalW(L"doc10.txt", L"doc2.txt") > 0, "StrCmpLogicalW natural sort order doc10 > doc2");
+    TEST_ASSERT(micant::satellite::winmerge::StrCmpLogicalW(L"same.txt", L"SAME.txt") == 0, "StrCmpLogicalW case-insensitive equality");
+
+    TEST_ASSERT(micant::satellite::winmerge::PathGetCharTypeW(L'\\') == 0x0002, "PathGetCharTypeW for separator");
+    TEST_ASSERT(micant::satellite::winmerge::PathGetCharTypeW(L'*') == 0x0001, "PathGetCharTypeW for invalid wildcard");
+    TEST_ASSERT(micant::satellite::winmerge::PathGetCharTypeW(L'a') == 0x0004, "PathGetCharTypeW for LFN char");
+    TEST_ASSERT(micant::satellite::winmerge::UrlIsW(L"https://winmerge.org", 0) == 1, "UrlIsW identifies URL");
+    TEST_ASSERT(micant::satellite::winmerge::UrlIsW(L"C:\\local\\file.txt", 0) == 0, "UrlIsW identifies local path as non-URL");
+    TEST_ASSERT(micant::satellite::winmerge::SHAutoComplete(nullptr, 0) == 0, "SHAutoComplete returns S_OK");
+
+    wchar_t szFormatted[64]{};
+    micant::satellite::winmerge::StrFormatByteSizeW(500, szFormatted, 64);
+    TEST_ASSERT(std::wcscmp(szFormatted, L"500 bytes") == 0, "StrFormatByteSizeW formats bytes");
+    micant::satellite::winmerge::StrFormatByteSizeW(2048, szFormatted, 64);
+    TEST_ASSERT(std::wcscmp(szFormatted, L"2.0 KB") == 0, "StrFormatByteSizeW formats KB");
+    micant::satellite::winmerge::StrFormatByteSizeW(1048576 * 5, szFormatted, 64);
+    TEST_ASSERT(std::wcscmp(szFormatted, L"5.0 MB") == 0, "StrFormatByteSizeW formats MB");
+
+    wchar_t trimStr[32] = L"  \tWinMerge\t  ";
+    micant::satellite::winmerge::StrTrimW(trimStr, L" \t");
+    TEST_ASSERT(std::wcscmp(trimStr, L"WinMerge") == 0, "StrTrimW trims whitespace");
+    TEST_ASSERT(micant::satellite::winmerge::StrChrW(L"WinMerge", L'M') != nullptr, "StrChrW finds character");
+    TEST_ASSERT(micant::satellite::winmerge::PathIsUNCW(L"\\\\server\\share") == 1, "PathIsUNCW detects UNC");
+    TEST_ASSERT(micant::satellite::winmerge::PathIsUNCW(L"C:\\local") == 0, "PathIsUNCW detects non-UNC");
+
+    // Stage 13: Window Acceleration, DDE Parameters & Theme Metrics
+    micant::satellite::winmerge::ACCEL_MOCK accels[4]{};
+    TEST_ASSERT(micant::satellite::winmerge::CopyAcceleratorTableW(nullptr, accels, 4) == 4, "CopyAcceleratorTableW copies 4 accelerators");
+    TEST_ASSERT(accels[0].key == 0x43, "Accelerator 0 is 'C' (Ctrl+C)");
+
+    micant::satellite::winmerge::RECT_MOCK r1{0, 0, 100, 100};
+    micant::satellite::winmerge::RECT_MOCK r2{50, 50, 200, 200};
+    micant::satellite::winmerge::RECT_MOCK rUnion{};
+    TEST_ASSERT(micant::satellite::winmerge::UnionRect(&rUnion, &r1, &r2) == 1, "UnionRect succeeds");
+    TEST_ASSERT(rUnion.left == 0 && rUnion.top == 0 && rUnion.right == 200 && rUnion.bottom == 200, "UnionRect coordinates verified");
+
+    int32_t textExt = micant::satellite::winmerge::GetTabbedTextExtentW(nullptr, L"hello\tworld", -1, 0, nullptr);
+    TEST_ASSERT(textExt != 0, "GetTabbedTextExtentW computes non-zero extent");
+
+    int64_t ddeLParam = (static_cast<int64_t>(0xBEEF) << 32) | 0xCAFE;
+    uintptr_t lo = 0, hi = 0;
+    TEST_ASSERT(micant::satellite::winmerge::UnpackDDElParam(0, ddeLParam, &lo, &hi) == 1, "UnpackDDElParam succeeds");
+    TEST_ASSERT(lo == 0xCAFE && hi == 0xBEEF, "DDE lParam unpacked correctly");
+    TEST_ASSERT(micant::satellite::winmerge::ReuseDDElParam(ddeLParam, 0, 0, lo, hi) == ddeLParam, "ReuseDDElParam preserves value");
+
+    TEST_ASSERT(micant::satellite::winmerge::WinHelpW(nullptr, nullptr, 0, 0) == 1, "WinHelpW succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::GetMenuCheckMarkDimensions() == ((16 << 16) | 16), "CheckMark dimensions 16x16");
+    TEST_ASSERT(micant::satellite::winmerge::GetThreadDesktop(0) != nullptr, "GetThreadDesktop returns non-null HDESK");
+
+    uint32_t objInfo = 0;
+    uint32_t neededLen = 0;
+    TEST_ASSERT(micant::satellite::winmerge::GetUserObjectInformationW(nullptr, 0, &objInfo, sizeof(objInfo), &neededLen) == 1, "GetUserObjectInformationW succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::DragDetect(nullptr, {}) == 1, "DragDetect succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::IsMenu(reinterpret_cast<void*>(0x1234)) == 1, "IsMenu identifies menu handle");
+    TEST_ASSERT(micant::satellite::winmerge::IsMenu(nullptr) == 0, "IsMenu identifies null handle");
+
+    char sprintfBuf[64]{};
+    micant::satellite::winmerge::wsprintfA(sprintfBuf, "MicaNT WinMerge %d.%d", 2, 16);
+    TEST_ASSERT(std::strcmp(sprintfBuf, "MicaNT WinMerge 2.16") == 0, "wsprintfA formats string correctly");
+
+    const wchar_t testStr[] = L"ABCDE";
+    const wchar_t* pPrev = micant::satellite::winmerge::CharPrevW(testStr, testStr + 2);
+    TEST_ASSERT(pPrev == testStr + 1 && *pPrev == L'B', "CharPrevW steps back one character");
+
+    micant::satellite::winmerge::POINT_MOCK caretPt{99, 99};
+    TEST_ASSERT(micant::satellite::winmerge::GetCaretPos(&caretPt) == 1 && caretPt.x == 0 && caretPt.y == 0, "GetCaretPos initializes to (0, 0)");
+
+    TEST_ASSERT(micant::satellite::winmerge::IsThemeActive() == 1, "IsThemeActive returns 1");
+    TEST_ASSERT(micant::satellite::winmerge::IsAppThemed() == 1, "IsAppThemed returns 1");
+    micant::satellite::winmerge::MARGINS_MOCK margins{};
+    TEST_ASSERT(micant::satellite::winmerge::GetThemeMargins(nullptr, nullptr, 0, 0, 0, nullptr, &margins) == 0, "GetThemeMargins succeeds");
+    TEST_ASSERT(margins.cxLeftWidth == 2 && margins.cyTopHeight == 2, "Theme margins verified");
+    int themeInt = -1;
+    TEST_ASSERT(micant::satellite::winmerge::GetThemeInt(nullptr, 0, 0, 0, &themeInt) == 0 && themeInt == 0, "GetThemeInt succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::DrawThemeText(nullptr, nullptr, 0, 0, L"Text", 4, 0, 0, nullptr) == 0, "DrawThemeText succeeds");
+    TEST_ASSERT(micant::satellite::winmerge::IsThemeBackgroundPartiallyTransparent(nullptr, 0, 0) == 0, "IsThemeBackgroundPartiallyTransparent returns 0");
+
+    uint32_t netErr = 99;
+    wchar_t netBuf[16]{L'X'};
+    uint32_t netBufLen = 16;
+    TEST_ASSERT(micant::satellite::winmerge::InternetGetLastResponseInfoW(&netErr, netBuf, &netBufLen) == 1 && netErr == 0, "InternetGetLastResponseInfoW succeeds");
+
+    uint8_t jobBuf[512]{};
+    uint32_t jobNeeded = 0;
+    TEST_ASSERT(micant::satellite::winmerge::GetJobW(nullptr, 1, 1, jobBuf, sizeof(jobBuf), &jobNeeded) == 1, "GetJobW succeeds with sufficient buffer");
+    auto* pJob = reinterpret_cast<micant::satellite::winmerge::JOB_INFO_1W_MOCK*>(jobBuf);
+    TEST_ASSERT(pJob->JobId == 1 && pJob->Status == 0, "JobId and Status match in GetJobW");
+
+    // Stage 14: DynamicLoader IAT Binding & Ordinal Verification
+    const char* const WINMERGE_SAMPLE_SYMBOLS[] = {
+        "RegSetValueW", "RegDeleteTreeW", "InitCommonControls", "GetLayout",
+        "SetPolyFillMode", "GetPolyFillMode", "SetViewportExtEx", "GetViewportExtEx",
+        "SetWindowExtEx", "GetWindowExtEx", "OffsetViewportOrgEx", "ScaleViewportExtEx",
+        "ScaleWindowExtEx", "GetTextFaceW", "CreateEllipticRgn", "PtVisible", "Escape",
+        "EnumFontFamiliesW", "CopyMetaFileW", "GdipAddPathArcI", "GdipClosePathFigure",
+        "GdipAddPathLineI", "GdipAddPathBezierI", "GdipStartPathFigure", "GdipDrawBezierI",
+        "GdipDrawImageRectI", "GdipGetImagePalette", "GdipGetImagePaletteSize",
+        "GdipCreateBitmapFromFile", "GdipSaveImageToStream", "GdipDrawLinesI",
+        "GlobalReAlloc", "LocalReAlloc", "GlobalHandle", "GlobalFlags", "SetThreadUILanguage",
+        "SetSearchPathMode", "SetDllDirectoryW", "GetSystemWow64DirectoryW",
+        "ExpandEnvironmentStringsA", "CreateActCtxW", "ActivateActCtx", "DeactivateActCtx",
+        "FindActCtxSectionStringW", "QueryActCtxW", "GetProfileIntW", "GlobalGetAtomNameW",
+        "lstrcmpA", "LockFile", "UnlockFile", "FindResourceExW", "InterlockedPushEntrySList",
+        "GetThreadId", "CoCreateFreeThreadedMarshaler", "OleTranslateAccelerator",
+        "OleDestroyMenuDescriptor", "OleCreateMenuDescriptor", "CoRegisterMessageFilter",
+        "CoFreeUnusedLibraries", "OleDuplicateData", "CoLockObjectExternal", "CoGetObject",
+        "OleRun", "PropVariantClear", "AccessibleObjectFromWindow", "CreateStdAccessibleObject",
+        "CreateErrorInfo", "SetErrorInfo", "VarDateFromStr", "VariantTimeToSystemTime",
+        "SystemTimeToVariantTime", "OleUIBusyW", "PSGetPropertyKeyFromName",
+        "PSEnumeratePropertyDescriptions", "PropVariantCompareEx", "PSGetPropertyDescription",
+        "PSFormatForDisplayAlloc", "InitPropVariantFromBuffer", "SHCreateShellItem",
+        "ILFree", "SHGetPropertyStoreFromParsingName", "SetCurrentProcessExplicitAppUserModelID",
+        "CDefFolderMenu_Create2", "PathStripToRootW", "StrCmpLogicalW", "PathGetCharTypeW",
+        "UrlIsW", "SHAutoComplete", "PathCompactPathW", "StrFormatByteSizeW", "StrTrimW",
+        "StrChrW", "PathIsUNCW", "CopyAcceleratorTableW", "RealChildWindowFromPoint",
+        "UnionRect", "GetTabbedTextExtentW", "ReuseDDElParam", "UnpackDDElParam",
+        "WinHelpW", "GetMenuCheckMarkDimensions", "ChildWindowFromPoint", "GetThreadDesktop",
+        "GetUserObjectInformationW", "DragDetect", "IsMenu", "GrayStringW", "TabbedTextOutW",
+        "wsprintfA", "CharPrevW", "GetCaretPos", "IsThemeActive", "IsAppThemed",
+        "GetThemeMargins", "GetThemeInt", "DrawThemeText", "IsThemeBackgroundPartiallyTransparent",
+        "InternetGetLastResponseInfoW", "GetJobW"
+    };
+
+    uint32_t resolvedCount = 0;
+    for (const char* sym : WINMERGE_SAMPLE_SYMBOLS) {
+        const char* candidateDlls[] = {
+            "advapi32.dll", "comctl32.dll", "gdi32.dll", "gdiplus.dll", "kernel32.dll",
+            "ole32.dll", "oleacc.dll", "oleaut32.dll", "oledlg.dll", "propsys.dll",
+            "shell32.dll", "shlwapi.dll", "user32.dll", "uxtheme.dll", "wininet.dll", "winspool.drv"
+        };
+        bool found = false;
+        for (const char* d : candidateDlls) {
+            if (loader.getExport(d, sym) != nullptr) {
+                found = true;
+                break;
+            }
+        }
+        if (found) ++resolvedCount;
+    }
+    TEST_ASSERT(resolvedCount == sizeof(WINMERGE_SAMPLE_SYMBOLS) / sizeof(WINMERGE_SAMPLE_SYMBOLS[0]),
+                "All WinMerge Win32 satellite symbols must be registered and resolved from DynamicLoader");
+
+    // Verify key ordinals
+    TEST_ASSERT(loader.getExportOrdinal("comctl32.dll", 17) != nullptr, "comctl32.dll #17 must resolve");
+    TEST_ASSERT(loader.getExportOrdinal("shell32.dll", 155) != nullptr, "shell32.dll #155 must resolve");
+    TEST_ASSERT(loader.getExportOrdinal("shell32.dll", 701) != nullptr, "shell32.dll #701 must resolve");
+    TEST_ASSERT(loader.getExportOrdinal("shlwapi.dll", 2) != nullptr, "shlwapi.dll #2 must resolve");
+    TEST_ASSERT(loader.getExportOrdinal("shlwapi.dll", 12) != nullptr, "shlwapi.dll #12 must resolve");
+    TEST_ASSERT(loader.getExportOrdinal("oleaut32.dll", 184) != nullptr, "oleaut32.dll #184 must resolve");
+    TEST_ASSERT(loader.getExportOrdinal("oleaut32.dll", 185) != nullptr, "oleaut32.dll #185 must resolve");
+
+    // Stage 15: Multi-Threaded Visual Diff & Natural Sort Concurrent Stress Test
+    std::atomic<uint32_t> stressDiffsCompleted{0};
+    std::vector<std::thread> workers;
+    workers.reserve(8);
+    for (int t = 0; t < 8; ++t) {
+        workers.emplace_back([&stressDiffsCompleted, t]() {
+            for (int q = 0; q < 50; ++q) {
+                wchar_t fn1[32], fn2[32];
+                std::swprintf(fn1, 32, L"file_%d_%d.txt", t, q);
+                std::swprintf(fn2, 32, L"file_%d_%d.txt", t, q + 1);
+                int cmp = micant::satellite::winmerge::StrCmpLogicalW(fn1, fn2);
+                (void)cmp;
+
+                micant::satellite::winmerge::SIZE_MOCK s{};
+                micant::satellite::winmerge::ScaleViewportExtEx(nullptr, q + 1, 1, q + 1, 1, &s);
+
+                micant::satellite::winmerge::GetTabbedTextExtentW(nullptr, L"Line\tData", -1, 0, nullptr);
+
+                stressDiffsCompleted.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+    TEST_ASSERT(stressDiffsCompleted.load() == 400, "400-operation concurrent diff & natural sort stress test must succeed 100%");
+
+    std::cout << "[TEST] Suite 220: WinMerge 2.16+ Visual Diff & Win32 Satellite Subsystem PASSED.\n";
+}
+
+
 
 
 

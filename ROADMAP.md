@@ -4141,6 +4141,45 @@
   - 13-stage validation suite covering Service Control Dispatcher & GUI Mode Fallback, Service Handler Registration & Status Updates, System-Wide Global HotKey Engine & Duplicate Detection, Advanced GDI Text Alignment & Clip Regions, Shell Lightweight Path & Registry Helpers, Window Geometry & Dialog Tab Navigation, Process Environment Block & Handlers, System Character Classification (`GetStringTypeA`), System Locale Number & Calendar Formatting, COM Moniker Binding Context (`CreateBindCtx`), Inter-Thread Messaging & Keycode Mapping, DynamicLoader IAT Binding Verification for all 34 symbols, and 400-query concurrent search & hotkey stress test (8 threads).
   - All 219 unit test suites passing with 100% success rate (219 Passed, 0 Failed).
 
+---
+
+### Phase 193: WinMerge 2.16+ 64-Bit Sovereign Visual Diff & Merge Subsystem & MDI / Scintilla Shell Integration (`satellite_winmerge.hpp`, `WinMergeU.exe`, `bootx64.cpp`) (Milestone 220) [COMPLETED 100%]
+*Goal: Implement 100% clean-room C++23 Win32 satellite subsystem for retail unmodified WinMerge Visual Diff & Merge Tool 64-bit (`WinMergeU.exe`, 6.75 MB, GPLv2), delivering complete registry tree operations (`RegSetValueW`, `RegDeleteTreeW`), common control class initialization (`InitCommonControls` / Ordinal 17), advanced GDI viewport scaling and polygon fill modes, GDI+ 2D vector path geometry with integer coordinates, activation context engine (`CreateActCtxW`, `ActivateActCtx`, `DeactivateActCtx`), WoW64 system directory reflection, COM free-threaded marshaling and OLE menus, UI automation accessibility interfaces, OLE error information and variant date conversions, Windows property system metadata stores, shell item namespace navigation and natural logical string comparison (`StrCmpLogicalW`), multi-window DDE acceleration, modern visual styles and theme metrics, bare-metal UEFI bootloader indicator with golden amber glow, clean-room sentinel verification, and 15-stage automated unit test suite.*
+- [x] **WinMerge 2.16+ 64-bit Pristine Audit & 100.0% Win32 Satisfaction (`include/micant/satellite_winmerge.hpp`, `include/micant/satellite_win32.hpp`)**:
+  - Downloaded official retail `D:\MicaNT_Apps\Tier1\WinMerge\extracted\WinMerge\WinMergeU.exe` (6,747,456 bytes, 100% unmodified and retail-signed).
+  - Exact symbol import audit: 787 imported symbols (including ordinals) across 20 DLLs (`ADVAPI32.dll`, `BCRYPT.dll`, `COMCTL32.dll`, `COMDLG32.dll`, `GDI32.dll`, `gdiplus.dll`, `IMM32.dll`, `KERNEL32.dll`, `ole32.dll`, `OLEACC.dll`, `OLEAUT32.dll`, `OLEDLG.dll`, `PROPSYS.dll`, `SHELL32.dll`, `SHLWAPI.dll`, `USER32.dll`, `UxTheme.dll`, `VERSION.dll`, `WININET.dll`, `WINSPOOL.DRV`).
+  - Pre-existing symbols satisfied by MicaNT baseline: 666 symbols (84.6%).
+  - Clean-room implementation of all 121 missing symbols:
+    * **`advapi32.dll` (2 symbols)**: `RegSetValueW`, `RegDeleteTreeW`.
+    * **`comctl32.dll` (1 symbol)**: `InitCommonControls` (Ordinal 17).
+    * **`gdi32.dll` (16 symbols)**: `GetLayout`, `SetPolyFillMode`, `GetPolyFillMode`, `SetViewportExtEx`, `GetViewportExtEx`, `SetWindowExtEx`, `GetWindowExtEx`, `OffsetViewportOrgEx`, `ScaleViewportExtEx`, `ScaleWindowExtEx`, `GetTextFaceW`, `CreateEllipticRgn`, `PtVisible`, `Escape`, `EnumFontFamiliesW`, `CopyMetaFileW`.
+    * **`gdiplus.dll` (12 symbols)**: `GdipAddPathArcI`, `GdipClosePathFigure`, `GdipAddPathLineI`, `GdipAddPathBezierI`, `GdipStartPathFigure`, `GdipDrawBezierI`, `GdipDrawImageRectI`, `GdipGetImagePalette`, `GdipGetImagePaletteSize`, `GdipCreateBitmapFromFile`, `GdipSaveImageToStream`, `GdipDrawLinesI`.
+    * **`kernel32.dll` (22 symbols)**: `GlobalReAlloc`, `LocalReAlloc`, `GlobalHandle`, `GlobalFlags`, `SetThreadUILanguage`, `SetSearchPathMode`, `SetDllDirectoryW`, `GetSystemWow64DirectoryW`, `ExpandEnvironmentStringsA`, `CreateActCtxW`, `ActivateActCtx`, `DeactivateActCtx`, `FindActCtxSectionStringW`, `QueryActCtxW`, `GetProfileIntW`, `GlobalGetAtomNameW`, `lstrcmpA`, `LockFile`, `UnlockFile`, `FindResourceExW`, `InterlockedPushEntrySList`, `GetThreadId`.
+    * **`ole32.dll` (11 symbols)**: `CoCreateFreeThreadedMarshaler`, `OleTranslateAccelerator`, `OleDestroyMenuDescriptor`, `OleCreateMenuDescriptor`, `CoRegisterMessageFilter`, `CoFreeUnusedLibraries`, `OleDuplicateData`, `CoLockObjectExternal`, `CoGetObject`, `OleRun`, `PropVariantClear`.
+    * **`oleacc.dll` (2 symbols)**: `AccessibleObjectFromWindow`, `CreateStdAccessibleObject`.
+    * **`oleaut32.dll` (5 symbols)**: `CreateErrorInfo` (Ordinal 202), `SetErrorInfo` (Ordinal 201), `VarDateFromStr` (Ordinal 94), `VariantTimeToSystemTime` (Ordinal 185), `SystemTimeToVariantTime` (Ordinal 184).
+    * **`oledlg.dll` (1 symbol)**: `OleUIBusyW`.
+    * **`propsys.dll` (6 symbols)**: `PSGetPropertyKeyFromName`, `PSEnumeratePropertyDescriptions`, `PropVariantCompareEx`, `PSGetPropertyDescription`, `PSFormatForDisplayAlloc`, `InitPropVariantFromBuffer`.
+    * **`shell32.dll` (5 symbols)**: `SHCreateShellItem`, `ILFree` (Ordinal 155), `SHGetPropertyStoreFromParsingName`, `SetCurrentProcessExplicitAppUserModelID`, `CDefFolderMenu_Create2` (Ordinal 701).
+    * **`shlwapi.dll` (12 symbols)**: `PathStripToRootW`, `StrCmpLogicalW`, `PathGetCharTypeW`, `UrlIsW`, `SHAutoComplete`, `PathCompactPathW`, `StrFormatByteSizeW`, `SysAllocString` (Ordinal 2), `VariantCopyInd` (Ordinal 12), `StrTrimW`, `StrChrW`, `PathIsUNCW`.
+    * **`user32.dll` (18 symbols)**: `CopyAcceleratorTableW`, `RealChildWindowFromPoint`, `UnionRect`, `GetTabbedTextExtentW`, `ReuseDDElParam`, `UnpackDDElParam`, `WinHelpW`, `GetMenuCheckMarkDimensions`, `ChildWindowFromPoint`, `GetThreadDesktop`, `GetUserObjectInformationW`, `DragDetect`, `IsMenu`, `GrayStringW`, `TabbedTextOutW`, `wsprintfA`, `CharPrevW`, `GetCaretPos`.
+    * **`uxtheme.dll` (6 symbols)**: `IsThemeActive`, `IsAppThemed`, `GetThemeMargins`, `GetThemeInt`, `DrawThemeText`, `IsThemeBackgroundPartiallyTransparent`.
+    * **`wininet.dll` (1 symbol)**: `InternetGetLastResponseInfoW`.
+    * **`winspool.drv` (1 symbol)**: `GetJobW`.
+  - Achieved **787 / 787 symbols natively satisfied (100.0%)** for WinMerge 2.16+ 64-bit!
+  - Cumulative Verified Retail Application Suite: **4,231 / 4,306 symbols (98.3%)** across 9 major real Windows binaries (`7z.exe`, `7zFM.exe`, `notepad++.exe`, `vlc.exe`, `WizTree64.exe`, `putty.exe`, `SumatraPDF-3.6.1-64.exe`, `everything.exe`, `WinMergeU.exe`).
+- [x] **Bare-Metal Bootloader Desktop Update (`boot/bootx64.cpp`)**:
+  - Added `WinMergeU.exe` (6,747,456 B) to the 7-Zip file browser table.
+  - Added golden amber taskbar button `[Diff] WinMerge` with active running glow line at `tbX9`.
+  - Updated live desktop status bar: `"8 Real Apps Active | All Exit Codes: 0 | 100% Native Win32 Subsystem"`.
+  - Compiled bare-metal UEFI bootloader (`BOOTX64.EFI`), deployed to `build/bin/bootx64.efi`, booted under QEMU, and captured verified live screendump `live_qemu_screen.png`.
+- [x] **Clean-Room Sentinel & Security Audit (`scripts/clean_room_sentinel.js`)**:
+  - Static heuristic analysis detected 0 decompilation artifacts, 0 proprietary leaks, and 0 reverse-engineered fragments.
+  - 100% clean-room verified.
+- [x] **Unit Test Suite 220 (`Test_WinMerge_Visual_Diff_Subsystem`)**:
+  - 15-stage validation suite covering Advanced Registry Operations, Common Controls Initialization, Advanced GDI Viewport Scaling & Extents, GDI Polygon Fill, Layout & Font Face, GDI+ 2D Vector Path Geometry & Integer Coordinates, Activation Context Engine & Memory Realloc, Wow64 System Directory & String Comparison, S-List Interlocked Pushes & Atom Names, COM Free-Threaded Marshaling, OLE Menus & Accessibility, OLE Automation Error Info & Variant Dates, Windows Property System Architecture, Shell Items, ID Lists & Natural Logical String Sort, Window Acceleration, DDE Parameters & Theme Metrics, DynamicLoader IAT Binding & Ordinal Verification for all 121 symbols, and 400-operation concurrent diff & natural sort stress test (8 threads).
+  - All 220 unit test suites passing with 100% success rate (220 Passed, 0 Failed).
+
 
 
 

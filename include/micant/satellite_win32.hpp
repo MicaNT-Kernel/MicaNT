@@ -23,6 +23,7 @@
 #include "satellite_gdiplus.hpp"
 #include "satellite_sumatra.hpp"
 #include "satellite_everything.hpp"
+#include "satellite_winmerge.hpp"
 
 namespace micant::satellite {
 
@@ -379,6 +380,9 @@ inline void InitializeSatelliteWin32Exports() {
 
     // Everything 1.4+ Search Subsystem Extensions
     everything::InitializeEverythingExports();
+
+    // WinMerge 2.16+ Visual Diff & Merge Subsystem Extensions
+    winmerge::InitializeWinMergeExports();
 }
 
 } // namespace micant::satellite

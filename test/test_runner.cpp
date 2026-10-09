@@ -266,7 +266,11 @@ static int g_FailedTests = 0;
 #include "suites/server_storage_suites.hpp"
 
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite219")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite220")) {
+        RUN_TEST(Test_WinMerge_Visual_Diff_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite219") {
         RUN_TEST(Test_Everything_Search_Indexing_Subsystem);
         return g_FailedTests;
     }
@@ -947,6 +951,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_PuTTYTerminal_AnsiWin32_Subsystem);
     RUN_TEST(Test_SumatraPDF_Gdiplus_Subsystem);
     RUN_TEST(Test_Everything_Search_Indexing_Subsystem);
+    RUN_TEST(Test_WinMerge_Visual_Diff_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
