@@ -56,6 +56,14 @@ inline constexpr EfiGuid ACPI_10_TABLE_GUID = {
     0xeb9d2d30, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d }
 };
 
+inline constexpr EfiGuid EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID = {
+    0x3874286e, 0x9c48, 0x11d2, { 0x8e, 0x4f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b }
+};
+
+inline constexpr EfiGuid EFI_SIMPLE_POINTER_PROTOCOL_GUID = {
+    0x31878c87, 0x0b75, 0x11d5, { 0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d }
+};
+
 /**
  * @brief Standard UEFI Table Header.
  */
@@ -176,6 +184,56 @@ struct EfiSimpleTextOutputProtocol {
 };
 
 /**
+ * @brief UEFI Input Key structure (EFI_INPUT_KEY).
+ */
+struct EfiInputKey {
+    uint16_t scanCode{0};
+    wchar_t  unicodeChar{0};
+};
+
+/**
+ * @brief UEFI Simple Text Input Protocol (EFI_SIMPLE_TEXT_INPUT_PROTOCOL).
+ */
+struct EfiSimpleTextInputProtocol {
+    EfiStatus (*reset)(EfiSimpleTextInputProtocol* self, bool extendedVerification){nullptr};
+    EfiStatus (*readKeyStroke)(EfiSimpleTextInputProtocol* self, EfiInputKey* key){nullptr};
+    void* waitForKey{nullptr};
+};
+
+/**
+ * @brief UEFI Simple Pointer State structure (EFI_SIMPLE_POINTER_STATE).
+ */
+struct EfiSimplePointerState {
+    int32_t relativeMovementX{0};
+    int32_t relativeMovementY{0};
+    int32_t relativeMovementZ{0};
+    bool    leftButton{false};
+    bool    rightButton{false};
+};
+
+/**
+ * @brief UEFI Simple Pointer Mode structure (EFI_SIMPLE_POINTER_MODE).
+ */
+struct EfiSimplePointerMode {
+    uint64_t resolutionX{1};
+    uint64_t resolutionY{1};
+    uint64_t resolutionZ{1};
+    bool     leftButton{false};
+    bool     rightButton{false};
+};
+
+/**
+ * @brief UEFI Simple Pointer Protocol (EFI_SIMPLE_POINTER_PROTOCOL).
+ */
+struct EfiSimplePointerProtocol {
+    EfiStatus (*reset)(EfiSimplePointerProtocol* self, bool extendedVerification){nullptr};
+    EfiStatus (*getState)(EfiSimplePointerProtocol* self, EfiSimplePointerState* state){nullptr};
+    void*                 waitForInput{nullptr};
+    EfiSimplePointerMode* mode{nullptr};
+};
+
+
+/**
  * @brief UEFI Boot Services Table.
  */
 struct EfiBootServices {
@@ -252,7 +310,7 @@ struct EfiSystemTable {
     wchar_t* firmwareVendor;
     uint32_t firmwareRevision;
     EfiHandle consoleInHandle;
-    void* conIn;
+    EfiSimpleTextInputProtocol* conIn;
     EfiHandle consoleOutHandle;
     EfiSimpleTextOutputProtocol* conOut;
     EfiHandle standardErrorHandle;

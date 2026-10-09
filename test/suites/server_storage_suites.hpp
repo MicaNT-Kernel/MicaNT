@@ -6461,6 +6461,222 @@ void Test_InteractiveWindowManager_InputRouting_Subsystem() {
     std::cout << "[TEST] Suite 215: Interactive Window Manager, User32 Input Routing & Message Pump Subsystem PASSED.\n";
 }
 
+void Test_BareMetalEventLoop_WizTreeMFT_Subsystem() {
+    std::cout << "[TEST] Running Suite 216: Bare-Metal UEFI Interactive Event Loop, Software Cursor & WizTree 4.x Sovereign MFT Subsystem...\n";
+
+    // Stage 1: UEFI Input Protocol Structs & Alignment
+    TEST_ASSERT(sizeof(uefi::EfiInputKey) == 4, "EfiInputKey must be exactly 4 bytes in size");
+    TEST_ASSERT(sizeof(uefi::EfiSimplePointerState) >= 12, "EfiSimplePointerState must have valid geometry fields");
+    TEST_ASSERT(uefi::EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID.data1 == 0x3874286e, "EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID must match UEFI 2.10 spec");
+    TEST_ASSERT(uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID.data1 == 0x31878c87, "EFI_SIMPLE_POINTER_PROTOCOL_GUID must match UEFI 2.10 spec");
+
+    // Stage 2: Software Cursor Background Save & Restore Fidelity
+    bootvid::BootVideoDriver vid;
+    TEST_ASSERT(vid.initializeVirtual(1280, 800), "BootVideoDriver virtual initialization must succeed");
+
+    // Paint a distinct background pattern at (100, 100)
+    for (uint32_t y = 100; y < 130; ++y) {
+        for (uint32_t x = 100; x < 120; ++x) {
+            vid.putPixel(x, y, bootvid::Color{static_cast<uint8_t>(x % 255), static_cast<uint8_t>(y % 255), 180});
+        }
+    }
+    bootvid::Color origPixel = vid.getPixel(105, 105);
+
+    micant::bootloader::SoftwareCursor cursor;
+    cursor.render(vid, 100, 100);
+    TEST_ASSERT(cursor.isVisible(), "Software cursor must be visible after rendering");
+    TEST_ASSERT(cursor.getX() == 100 && cursor.getY() == 100, "Cursor coordinates must match rendered point");
+
+    // Cursor tip (0, 0) is black outline
+    bootvid::Color tipPixel = vid.getPixel(100, 100);
+    TEST_ASSERT((tipPixel == bootvid::Color::black()), "Cursor tip pixel must be black outline");
+
+    cursor.restoreBackground(vid);
+    TEST_ASSERT(!cursor.isVisible(), "Cursor must be marked hidden after restoreBackground");
+    bootvid::Color restoredPixel = vid.getPixel(105, 105);
+    TEST_ASSERT(restoredPixel == origPixel, "Background pixels must be restored with 100% fidelity");
+
+    // Stage 3: InteractiveDesktopHost Pointer Movement & Boundary Clamping
+    input::InputRouter& router = input::InputRouter::getInstance();
+    router.initialize(1280, 800);
+    micant::bootloader::InteractiveDesktopHost host(router, vid);
+
+    TEST_ASSERT(host.getCursor().getX() == 640 && host.getCursor().getY() == 400, "Cursor must start at center (640, 400)");
+    host.processPointerMovement(50, -50, false, false);
+    TEST_ASSERT(host.getCursor().getX() == 690 && host.getCursor().getY() == 350, "Relative delta must translate to (690, 350)");
+
+    // Extreme coordinate clamping
+    host.processPointerMovement(10000, 10000, false, false);
+    TEST_ASSERT(host.getCursor().getX() == 1279 && host.getCursor().getY() == 799, "Pointer must clamp to screen boundaries");
+
+    // Stage 4: Mouse Button Transitions (Down, Up, Wheel)
+    host.processPointerMovement(0, 0, true, false); // Left down
+    host.processPointerMovement(0, 0, false, false); // Left up
+    host.processPointerMovement(0, 0, false, true, 120); // Right down + Wheel
+    host.processPointerMovement(0, 0, false, false); // Right up
+
+    TEST_ASSERT(host.getPointerEventsProcessed() >= 5, "Pointer events processed counter must record all transitions");
+    TEST_ASSERT(host.getFramesRendered() >= 5, "Frames rendered counter must track dirty updates");
+
+    // Stage 5: Live Window Dragging State Machine
+    win32::HWND hwndTest = reinterpret_cast<win32::HWND>(0x5501);
+    router.registerWindow(hwndTest, L"Test Window", 200, 100, 600, 400);
+
+    // Hit caption bar at (300, 115) and begin drag
+    host.getCursor().setPosition(300, 115);
+    host.processPointerMovement(0, 0, true, false); // Left down on caption
+    TEST_ASSERT(host.isDragging(), "Clicking on caption bar must initiate window drag");
+    TEST_ASSERT(host.getDraggedWindow() == hwndTest, "Dragged window must match focused test window");
+
+    // Drag by (+50, +30)
+    host.processPointerMovement(50, 30, true, false);
+    input::ManagedWindowBounds bTest{};
+    router.getWindowBounds(hwndTest, bTest);
+    TEST_ASSERT(bTest.x == 250 && bTest.y == 130, "Window coordinates must update dynamically while dragging");
+
+    // Release mouse button
+    host.processPointerMovement(0, 0, false, false);
+    TEST_ASSERT(!host.isDragging(), "Releasing mouse button must terminate dragging");
+
+    // Stage 6: Aero Snap Edge Detection through Host
+    host.getCursor().setPosition(300, 145);
+    host.processPointerMovement(0, 0, true, false); // Start drag
+    host.processPointerMovement(-295, 100, true, false); // Drag to left screen edge (x = 5)
+    host.processPointerMovement(0, 0, false, false); // Drop
+
+    router.getWindowBounds(hwndTest, bTest);
+    TEST_ASSERT(bTest.currentSnap == input::SnapMode::LeftHalf, "Dragging to left screen edge must snap window to LeftHalf");
+    TEST_ASSERT(bTest.x == 0 && bTest.width == 640, "Snapped LeftHalf window must have x=0 and width=640");
+
+    // Stage 7: UEFI Keyboard Input Decoding
+    win32::HWND hwndNpp = reinterpret_cast<win32::HWND>(0x1001);
+    router.registerWindow(hwndNpp, L"Notepad++ 8.6.9", 50, 50, 700, 500);
+    router.setFocusedWindow(hwndNpp);
+
+    host.processKeyboardKey(0x01, 0); // VK_UP
+    host.processKeyboardKey(0x02, 0); // VK_DOWN
+    host.processKeyboardKey(0x17, 0); // VK_ESCAPE
+    TEST_ASSERT(host.getKeyboardEventsProcessed() == 3, "Keyboard events processed counter must record key events");
+
+    // Stage 8: Interactive Notepad++ Scintilla Document Editing via Host
+    host.processKeyboardKey(0, L'M');
+    host.processKeyboardKey(0, L'i');
+    host.processKeyboardKey(0, L'c');
+    host.processKeyboardKey(0, L'a');
+    host.processKeyboardKey(0, L'N');
+    host.processKeyboardKey(0, L'T');
+    host.processKeyboardKey(0, L' ');
+    host.processKeyboardKey(0, L'M');
+    host.processKeyboardKey(0, L'2');
+    host.processKeyboardKey(0, L'1');
+    host.processKeyboardKey(0, L'6');
+
+    TEST_ASSERT(router.getNotepadDocumentText() == L"MicaNT M216", "Notepad++ Scintilla buffer must contain 'MicaNT M216'");
+
+    host.processKeyboardKey(0, 0x08); // Backspace
+    TEST_ASSERT(router.getNotepadDocumentText() == L"MicaNT M21", "Backspace must delete last character");
+
+    // Stage 9: Interactive VLC Media Player Playback Automation via Host
+    win32::HWND hwndVlc = reinterpret_cast<win32::HWND>(0x2001);
+    router.registerWindow(hwndVlc, L"VLC media player", 580, 65, 670, 420);
+    router.setFocusedWindow(hwndVlc);
+
+    TEST_ASSERT(router.getVlcPlaybackState() == input::VlcState::Stopped, "VLC must start in Stopped state");
+    host.processKeyboardKey(0, L' '); // Spacebar
+    TEST_ASSERT(router.getVlcPlaybackState() == input::VlcState::Playing, "Spacebar must toggle VLC to Playing");
+    host.processKeyboardKey(0, L' '); // Spacebar
+    TEST_ASSERT(router.getVlcPlaybackState() == input::VlcState::Paused, "Spacebar must toggle VLC to Paused");
+
+    host.processKeyboardKey(0x01, 0); // VK_UP
+    TEST_ASSERT(router.getVlcVolume() == 85, "VK_UP must increment volume to 85%");
+
+    // Stage 10: Interactive 7-Zip File Manager Command Automation
+    win32::HWND hwnd7z = reinterpret_cast<win32::HWND>(0x3001);
+    router.registerWindow(hwnd7z, L"7-Zip 24.08 (x64)", 50, 480, 800, 270);
+
+    router.dispatch7ZipCommand(hwnd7z, 1001); // Benchmark
+    TEST_ASSERT(router.is7ZipBenchmarkActive(), "Dispatching ID 1001 must start 7-Zip benchmark");
+    router.dispatch7ZipCommand(hwnd7z, 1002); // Extract
+    TEST_ASSERT(router.is7ZipExtractOpened(), "Dispatching ID 1002 must trigger extract dialog");
+
+    // Stage 11: 100.0% Native Win32 Subsystem Satisfaction for WizTree 64-bit
+    micant::satellite::InitializeSatelliteWin32Exports();
+    auto& ldr = ldr::DynamicLoader::get();
+
+    TEST_ASSERT(ldr.getExport("mpr.dll", "WNetGetConnectionW") != nullptr, "WNetGetConnectionW must be exported");
+    TEST_ASSERT(ldr.getExport("oleacc.dll", "LresultFromObject") != nullptr, "LresultFromObject must be exported");
+    TEST_ASSERT(ldr.getExport("winspool.drv", "DocumentPropertiesW") != nullptr, "DocumentPropertiesW must be exported");
+    TEST_ASSERT(ldr.getExport("comdlg32.dll", "FindTextW") != nullptr, "FindTextW must be exported");
+    TEST_ASSERT(ldr.getExport("comctl32.dll", "FlatSB_SetScrollInfo") != nullptr, "FlatSB_SetScrollInfo must be exported");
+    TEST_ASSERT(ldr.getExport("comctl32.dll", "ImageList_GetDragImage") != nullptr, "ImageList_GetDragImage must be exported");
+    TEST_ASSERT(ldr.getExport("shell32.dll", "DragAcceptFiles") != nullptr, "DragAcceptFiles must be exported");
+    TEST_ASSERT(ldr.getExport("shell32.dll", "ILCreateFromPathW") != nullptr, "ILCreateFromPathW must be exported");
+
+    // Stage 12: WinHttp Client Mock Session
+    void* hSession = ldr.getExport("winhttp.dll", "WinHttpOpen");
+    TEST_ASSERT(hSession != nullptr, "WinHttpOpen must be exported");
+    auto pfnOpen = reinterpret_cast<decltype(&micant::satellite::wiztree::WinHttpOpen)>(hSession);
+    void* sessHandle = pfnOpen(L"WizTree/4.22", 0, nullptr, nullptr, 0);
+    TEST_ASSERT(sessHandle != nullptr, "WinHttpOpen must return valid session handle");
+
+    auto pfnConnect = reinterpret_cast<decltype(&micant::satellite::wiztree::WinHttpConnect)>(ldr.getExport("winhttp.dll", "WinHttpConnect"));
+    void* connHandle = pfnConnect(sessHandle, L"diskanalyzer.com", 443, 0);
+    TEST_ASSERT(connHandle != nullptr, "WinHttpConnect must return valid connection handle");
+
+    auto pfnClose = reinterpret_cast<decltype(&micant::satellite::wiztree::WinHttpCloseHandle)>(ldr.getExport("winhttp.dll", "WinHttpCloseHandle"));
+    TEST_ASSERT(pfnClose(connHandle) == 1, "WinHttpCloseHandle on connect must succeed");
+    TEST_ASSERT(pfnClose(sessHandle) == 1, "WinHttpCloseHandle on session must succeed");
+
+    // Stage 13: NTFS MFT Direct Traversal Engine (FSCTL_GET_NTFS_FILE_RECORD)
+    auto ramDisk = std::make_shared<storage::RamDiskDevice>(L"\\Device\\HarddiskWiz", 8 * 1024 * 1024ULL, storage::SECTOR_SIZE_512); // 8 MB
+    ntfs::NtfsFileSystem ntfsFs;
+    NtStatus fmtStatus = ntfsFs.format(*ramDisk, 4096, L"WizTree_Test");
+    TEST_ASSERT(fmtStatus == NtStatus::Success, "NTFS formatting must succeed");
+
+    uint64_t recWiz = 0, recSys = 0;
+    ntfsFs.createFile(L"WizTree64.exe", fs::FILE_ATTRIBUTE_NORMAL, recWiz);
+    ntfsFs.createFile(L"system.mft", fs::FILE_ATTRIBUTE_NORMAL, recSys);
+
+    ntfs::NTFS_FILE_RECORD_OUTPUT_BUFFER recOut{};
+    bool qOk = ntfs::MFTDirectScanner::get().queryFileRecord(ntfsFs, 0, recOut);
+    TEST_ASSERT(qOk, "Querying MFT Record 0 ($MFT) must succeed");
+    TEST_ASSERT(recOut.fileReferenceNumber == 0, "MFT Record reference number must match 0");
+    TEST_ASSERT(std::memcmp(recOut.fileRecordBuffer, "FILE", 4) == 0, "MFT Record buffer must contain FILE magic signature");
+
+    ntfs::MftScanStats scanStats = ntfs::MFTDirectScanner::get().scanVolume(ntfsFs);
+    TEST_ASSERT(scanStats.totalRecords >= 7, "MFT scan must discover at least 7 records");
+    TEST_ASSERT(scanStats.fileCount >= 2, "MFT scan must detect created test files");
+
+    // Stage 14: 120-Operation Multi-Threaded Input & Scanning Concurrency Stress Test
+    std::atomic<uint32_t> stressSuccessCount{0};
+    std::vector<std::thread> stressThreads;
+    stressThreads.reserve(8);
+
+    for (int t = 0; t < 8; ++t) {
+        stressThreads.emplace_back([&host, &ntfsFs, &stressSuccessCount, t]() {
+            for (int op = 0; op < 15; ++op) {
+                int dx = (t % 2 == 0) ? 5 : -5;
+                int dy = (op % 2 == 0) ? 3 : -3;
+                host.processPointerMovement(dx, dy, false, false);
+                host.processKeyboardKey(0, L'a' + (op % 26));
+
+                ntfs::NTFS_FILE_RECORD_OUTPUT_BUFFER buf{};
+                ntfs::MFTDirectScanner::get().queryFileRecord(ntfsFs, 0, buf);
+                stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    for (auto& th : stressThreads) {
+        if (th.joinable()) th.join();
+    }
+
+    TEST_ASSERT(stressSuccessCount.load() == 120, "120-operation multi-threaded input & scanning concurrency stress test must achieve 100% success");
+
+    std::cout << "[TEST] Suite 216: Bare-Metal UEFI Interactive Event Loop, Software Cursor & WizTree 4.x Sovereign MFT Subsystem PASSED.\n";
+}
+
+
 
 
 

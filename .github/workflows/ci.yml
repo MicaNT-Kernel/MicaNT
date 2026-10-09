@@ -21,11 +21,12 @@ jobs:
 
       - name: Compile Test Runner & Fixtures (Clang C++23)
         shell: pwsh
-        run: |
           clang++ -O2 -D_CRT_SECURE_NO_WARNINGS test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
-          clang++ -std=c++23 -O2 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp kernel/dispatcher.cpp kernel/syscalls.cpp -o bin/micant_tests.exe
+          clang++ -c kernel/dispatcher.cpp -o bin/dispatcher.o
+          clang++ -c kernel/syscalls.cpp -o bin/syscalls.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp bin/dispatcher.o bin/syscalls.o -o bin/micant_tests.exe
 
-      - name: Execute Full 215-Suite Test Battery (100% Pass Rate Required)
+      - name: Execute Full 216-Suite Test Battery (100% Pass Rate Required)
         shell: pwsh
         run: |
           .\bin\micant_tests.exe

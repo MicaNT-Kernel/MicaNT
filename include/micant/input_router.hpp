@@ -141,6 +141,10 @@ public:
         return instance;
     }
 
+    static InputRouter& getInstance() noexcept {
+        return get();
+    }
+
     void initialize(int screenWidth = 1280, int screenHeight = 800) {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         m_screenWidth = screenWidth;
@@ -237,6 +241,14 @@ public:
 
     win32::HWND getFocusedWindow() const noexcept {
         return m_focusHwnd;
+    }
+
+    [[nodiscard]] bool isDragging() const noexcept {
+        return m_isDragging;
+    }
+
+    [[nodiscard]] win32::HWND getDraggedWindow() const noexcept {
+        return m_dragHwnd;
     }
 
     void setFocusedWindow(win32::HWND hwnd) {

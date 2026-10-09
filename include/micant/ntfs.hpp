@@ -959,4 +959,85 @@ private:
     std::unordered_map<uint64_t, NtfsFileRecord> records_;
 };
 
+// ============================================================================
+// 6. Direct MFT Record Query & USN Journal Traverser (FSCTL_GET_NTFS_FILE_RECORD)
+// ============================================================================
+
+inline constexpr uint32_t FSCTL_GET_NTFS_FILE_RECORD = 0x00090068;
+inline constexpr uint32_t FSCTL_ENUM_USN_DATA        = 0x000900B3;
+
+#pragma pack(push, 1)
+struct NTFS_FILE_RECORD_INPUT_BUFFER {
+    uint64_t fileReferenceNumber{0};
+};
+
+struct NTFS_FILE_RECORD_OUTPUT_BUFFER {
+    uint64_t fileReferenceNumber{0};
+    uint32_t fileRecordLength{1024};
+    uint8_t  fileRecordBuffer[1024]{};
+};
+#pragma pack(pop)
+
+struct MftScanStats {
+    uint64_t totalRecords{0};
+    uint64_t fileCount{0};
+    uint64_t dirCount{0};
+    uint64_t totalAllocatedBytes{0};
+    uint64_t scanDurationUs{0};
+};
+
+class MFTDirectScanner {
+public:
+    static MFTDirectScanner& get() noexcept {
+        static MFTDirectScanner instance;
+        return instance;
+    }
+
+    bool queryFileRecord(const NtfsFileSystem& fs, uint64_t frn, NTFS_FILE_RECORD_OUTPUT_BUFFER& outBuf) const {
+        const NtfsFileRecord* rec = fs.getRecord(frn);
+        if (!rec) return false;
+
+        outBuf.fileReferenceNumber = frn;
+        outBuf.fileRecordLength = 1024;
+        std::memset(outBuf.fileRecordBuffer, 0, sizeof(outBuf.fileRecordBuffer));
+
+        // Synthesize standard 1024-byte NTFS FILE header
+        std::memcpy(outBuf.fileRecordBuffer, "FILE", 4);
+        *reinterpret_cast<uint16_t*>(&outBuf.fileRecordBuffer[4]) = 48; // Update sequence offset
+        *reinterpret_cast<uint16_t*>(&outBuf.fileRecordBuffer[6]) = 3;  // Update sequence size
+        *reinterpret_cast<uint16_t*>(&outBuf.fileRecordBuffer[22]) = rec->flags;
+        *reinterpret_cast<uint32_t*>(&outBuf.fileRecordBuffer[24]) = 1024; // Real size of record
+        *reinterpret_cast<uint32_t*>(&outBuf.fileRecordBuffer[28]) = 1024; // Allocated size of record
+        *reinterpret_cast<uint64_t*>(&outBuf.fileRecordBuffer[32]) = rec->recordNumber;
+
+        return true;
+    }
+
+    MftScanStats scanVolume(const NtfsFileSystem& fs) const {
+        MftScanStats stats{};
+        auto start = std::chrono::high_resolution_clock::now();
+
+        stats.totalRecords = fs.getRecordCount();
+        for (uint64_t frn = 0; frn < stats.totalRecords + 32; ++frn) {
+            const NtfsFileRecord* rec = fs.getRecord(frn);
+            if (!rec) continue;
+
+            if (rec->flags & MFT_RECORD_DIRECTORY) {
+                stats.dirCount++;
+            } else {
+                stats.fileCount++;
+                stats.totalAllocatedBytes += rec->primaryData.size();
+                for (const auto& [name, stream] : rec->alternateStreams) {
+                    stats.totalAllocatedBytes += stream.size();
+                }
+            }
+        }
+
+        auto end = std::chrono::high_resolution_clock::now();
+        stats.scanDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        return stats;
+    }
+};
+
 } // namespace micant::ntfs
+

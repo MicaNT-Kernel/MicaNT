@@ -18,6 +18,7 @@
 #include "kernel32.hpp"
 #include "user32.hpp"
 #include "ldr.hpp"
+#include "satellite_wiztree.hpp"
 
 namespace micant::satellite {
 
@@ -359,6 +360,9 @@ inline void InitializeSatelliteWin32Exports() {
     // MSVCRT.dll
     ldr.registerExport("msvcrt.dll", "_purecall", reinterpret_cast<void*>(Mica_PureCall));
     ldr.registerExport("msvcrt.dll", "srand", reinterpret_cast<void*>(Mica_Srand));
+
+    // WizTree 4.x Subsystem Extensions
+    wiztree::InitializeWizTreeWin32Exports();
 }
 
 } // namespace micant::satellite

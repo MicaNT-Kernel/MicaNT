@@ -12,6 +12,7 @@
 #include "micant/uefi.hpp"
 #include "micant/boot.hpp"
 #include "micant/bootvid.hpp"
+#include "micant/boot_event_loop.hpp"
 #include <new>
 #include <vector>
 
@@ -419,7 +420,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "3 Real Apps Active | All Exit Codes: 0 | 100% Native Win32 Subsystem",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "4 Real Apps Active | All Exit Codes: 0 | 100% Native Win32 Subsystem",
                                     bootvid::Color{0, 240, 255}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -455,11 +456,20 @@ public:
         m_videoDriver.fillRectangle(tbX4, taskbarY + 28, 110, 2, bootvid::Color{0, 114, 206});
         m_videoDriver.drawString(tbX4 + 8, taskbarY + 12, "[7z] 7-Zip", bootvid::Color{100, 200, 255}, bootvid::Color{16, 28, 44}, 1);
 
+        uint32_t tbX5 = tbX4 + 118;
+        m_videoDriver.fillRectangle(tbX5, taskbarY + 4, 120, 26, bootvid::Color{40, 36, 18});
+        m_videoDriver.fillRectangle(tbX5, taskbarY + 28, 120, 2, bootvid::Color{240, 200, 40});
+        m_videoDriver.drawString(tbX5 + 8, taskbarY + 12, "[Wiz] WizTree", bootvid::Color{255, 230, 120}, bootvid::Color{40, 36, 18}, 1);
+
         // System Tray
         uint32_t trayX = (width > 280) ? (width - 270) : 10;
         m_videoDriver.fillRectangle(trayX, taskbarY + 4, 264, 26, bootvid::Color{18, 24, 38});
         m_videoDriver.drawString(trayX + 10, taskbarY + 12, "4 Cores | 48 C | 0 Telemetry", bootvid::Color{100, 230, 160}, bootvid::Color{18, 24, 38}, 1);
         m_videoDriver.drawString(trayX + 205, taskbarY + 12, "3:42 PM", bootvid::Color{220, 230, 245}, bootvid::Color{18, 24, 38}, 1);
+
+        // 5. Software Cursor Arrow (12x19 Classic Windows Pointer)
+        SoftwareCursor cursor;
+        cursor.render(m_videoDriver, 720, 360);
     }
 
     [[nodiscard]] const boot::LoaderParameterBlock& getLpb() const noexcept { return m_lpb; }
