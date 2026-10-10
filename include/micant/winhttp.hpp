@@ -20,9 +20,14 @@ inline BOOL WINAPI WinHttpGetDefaultProxyConfiguration(void* /*pConfig*/) noexce
     return 0; // FALSE: No system proxy
 }
 
+inline BOOL WINAPI WinHttpCrackUrl(const wchar_t* /*pwszUrl*/, uint32_t /*dwUrlLength*/, uint32_t /*dwFlags*/, void* /*lpUrlComponents*/) noexcept {
+    return 1;
+}
+
 inline void InitializeWinHttpSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("winhttp.dll", "WinHttpGetDefaultProxyConfiguration", reinterpret_cast<void*>(WinHttpGetDefaultProxyConfiguration));
+    ldr.registerExport("winhttp.dll", "WinHttpCrackUrl", reinterpret_cast<void*>(WinHttpCrackUrl));
 }
 
 } // namespace micant::winhttp

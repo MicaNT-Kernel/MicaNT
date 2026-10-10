@@ -1833,6 +1833,18 @@ inline BOOL WINAPI GetCharABCWidthsI(HDC /*hdc*/, uint32_t /*giFirst*/, uint32_t
     return TRUE;
 }
 
+inline uint32_t WINAPI GetObjectType(void* /*h*/) noexcept {
+    return 1; // OBJ_PEN
+}
+
+inline uint32_t WINAPI SetBoundsRect(HDC /*hdc*/, const void* /*lprcBounds*/, uint32_t /*flags*/) noexcept {
+    return 0;
+}
+
+inline uint32_t WINAPI SetDCBrushColor(HDC /*hdc*/, uint32_t /*crColor*/) noexcept {
+    return 0;
+}
+
 // ============================================================================
 // 6. Subsystem Export Registration
 // ============================================================================
@@ -1997,6 +2009,9 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "Escape", reinterpret_cast<void*>(Escape));
     ldr.registerExport("gdi32.dll", "EnumFontFamiliesW", reinterpret_cast<void*>(EnumFontFamiliesW));
     ldr.registerExport("gdi32.dll", "CopyMetaFileW", reinterpret_cast<void*>(CopyMetaFileW));
+    ldr.registerExport("gdi32.dll", "GetObjectType", reinterpret_cast<void*>(GetObjectType));
+    ldr.registerExport("gdi32.dll", "SetBoundsRect", reinterpret_cast<void*>(SetBoundsRect));
+    ldr.registerExport("gdi32.dll", "SetDCBrushColor", reinterpret_cast<void*>(SetDCBrushColor));
 }
 
 } // namespace micant::gdi32

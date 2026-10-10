@@ -2222,6 +2222,67 @@ inline uintptr_t WINAPI SetCoalescableTimer(win32::HWND /*hWnd*/, uintptr_t nIDE
     return nIDEvent ? nIDEvent : 1;
 }
 
+inline void* WINAPI OpenWindowStationW(const wchar_t* /*lpszWinSta*/, win32::BOOL /*fInherit*/, win32::DWORD /*dwDesiredAccess*/) noexcept {
+    return reinterpret_cast<void*>(0x8401);
+}
+
+inline win32::BOOL WINAPI CloseWindowStation(void* /*hWinSta*/) noexcept {
+    return win32::TRUE;
+}
+
+inline void* WINAPI GetProcessWindowStation() noexcept {
+    return reinterpret_cast<void*>(0x8401);
+}
+
+inline win32::BOOL WINAPI EnumDesktopsW(void* /*hwinsta*/, void* /*lpEnumFunc*/, intptr_t /*lParam*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI ExitWindowsEx(uint32_t /*uFlags*/, uint32_t /*dwReason*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI GetGUIThreadInfo(win32::DWORD /*idThread*/, void* /*pgui*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::DWORD WINAPI GetGuiResources(win32::HANDLE /*hProcess*/, win32::DWORD /*uiFlags*/) noexcept {
+    return 10;
+}
+
+inline win32::HWND WINAPI GetShellWindow() noexcept {
+    return reinterpret_cast<win32::HWND>(0x8402);
+}
+
+inline int WINAPI InternalGetWindowText(win32::HWND /*hWnd*/, wchar_t* pString, int cchMaxCount) noexcept {
+    if (pString && cchMaxCount > 0) pString[0] = L'\0';
+    return 0;
+}
+
+inline win32::BOOL WINAPI InvertRect(HDC /*hDC*/, const void* /*lprc*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI IsHungAppWindow(win32::HWND /*hWnd*/) noexcept {
+    return win32::FALSE;
+}
+
+inline HMENU WINAPI LoadMenuIndirectW(const void* /*lpMenuTemplate*/) noexcept {
+    return reinterpret_cast<HMENU>(0x8403);
+}
+
+inline int WINAPI LookupIconIdFromDirectoryEx(uint8_t* /*presbits*/, win32::BOOL /*fIcon*/, int /*cxDesired*/, int /*cyDesired*/, uint32_t /*Flags*/) noexcept {
+    return 1;
+}
+
+inline int WINAPI MenuItemFromPoint(win32::HWND /*hWnd*/, HMENU /*hMenu*/, int /*x*/, int /*y*/) noexcept {
+    return -1;
+}
+
+inline win32::BOOL WINAPI SetWindowDisplayAffinity(win32::HWND /*hWnd*/, win32::DWORD /*dwAffinity*/) noexcept {
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -2435,6 +2496,21 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "HiliteMenuItem", reinterpret_cast<void*>(HiliteMenuItem));
     ldr.registerExport("user32.dll", "CharPrevExA", reinterpret_cast<void*>(CharPrevExA));
     ldr.registerExport("user32.dll", "SetCoalescableTimer", reinterpret_cast<void*>(SetCoalescableTimer));
+    ldr.registerExport("user32.dll", "OpenWindowStationW", reinterpret_cast<void*>(OpenWindowStationW));
+    ldr.registerExport("user32.dll", "CloseWindowStation", reinterpret_cast<void*>(CloseWindowStation));
+    ldr.registerExport("user32.dll", "GetProcessWindowStation", reinterpret_cast<void*>(GetProcessWindowStation));
+    ldr.registerExport("user32.dll", "EnumDesktopsW", reinterpret_cast<void*>(EnumDesktopsW));
+    ldr.registerExport("user32.dll", "ExitWindowsEx", reinterpret_cast<void*>(ExitWindowsEx));
+    ldr.registerExport("user32.dll", "GetGUIThreadInfo", reinterpret_cast<void*>(GetGUIThreadInfo));
+    ldr.registerExport("user32.dll", "GetGuiResources", reinterpret_cast<void*>(GetGuiResources));
+    ldr.registerExport("user32.dll", "GetShellWindow", reinterpret_cast<void*>(GetShellWindow));
+    ldr.registerExport("user32.dll", "InternalGetWindowText", reinterpret_cast<void*>(InternalGetWindowText));
+    ldr.registerExport("user32.dll", "InvertRect", reinterpret_cast<void*>(InvertRect));
+    ldr.registerExport("user32.dll", "IsHungAppWindow", reinterpret_cast<void*>(IsHungAppWindow));
+    ldr.registerExport("user32.dll", "LoadMenuIndirectW", reinterpret_cast<void*>(LoadMenuIndirectW));
+    ldr.registerExport("user32.dll", "LookupIconIdFromDirectoryEx", reinterpret_cast<void*>(LookupIconIdFromDirectoryEx));
+    ldr.registerExport("user32.dll", "MenuItemFromPoint", reinterpret_cast<void*>(MenuItemFromPoint));
+    ldr.registerExport("user32.dll", "SetWindowDisplayAffinity", reinterpret_cast<void*>(SetWindowDisplayAffinity));
 }
 
 } // namespace micant::user32

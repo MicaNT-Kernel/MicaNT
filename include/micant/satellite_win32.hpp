@@ -51,6 +51,8 @@
 #include "wintrust.hpp"
 #include "setupapi.hpp"
 #include "ntdll.hpp"
+#include "aclui.hpp"
+#include "winsta.hpp"
 #include "icuuc.hpp"
 #include "authz.hpp"
 #include "userenv.hpp"
@@ -219,6 +221,8 @@ inline void InitializeSatelliteWin32Exports() {
     wintrust::InitializeWinTrustSubsystemExports();
     setupapi::InitializeSetupApiSubsystemExports();
     ntdll::InitializeNtdllSubsystemExports();
+    aclui::InitializeAcluiSubsystemExports();
+    winsta::InitializeWinStaSubsystemExports();
 }
 
 } // namespace micant::satellite

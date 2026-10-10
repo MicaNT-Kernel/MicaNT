@@ -44,6 +44,7 @@ inline int32_t __stdcall PrintDlgExW([[maybe_unused]] void* pPDEX) noexcept {
 
 inline int32_t __stdcall ChooseColorA([[maybe_unused]] void* lpcc) noexcept { return 1; }
 inline int32_t __stdcall ChooseFontA([[maybe_unused]] void* lpcf) noexcept { return 1; }
+inline int32_t __stdcall ChooseFontW([[maybe_unused]] void* lpcf) noexcept { return 1; }
 inline int32_t __stdcall GetOpenFileNameA([[maybe_unused]] void* lpofn) noexcept { return 1; }
 inline int32_t __stdcall GetSaveFileNameA([[maybe_unused]] void* lpofn) noexcept { return 1; }
 
@@ -54,6 +55,7 @@ inline void InitializeComDlg32SubsystemExports() {
     ldr.registerExport("comdlg32.dll", "ChooseColorW", reinterpret_cast<void*>(ChooseColorW));
     ldr.registerExport("comdlg32.dll", "ChooseColorA", reinterpret_cast<void*>(ChooseColorA));
     ldr.registerExport("comdlg32.dll", "ChooseFontA", reinterpret_cast<void*>(ChooseFontA));
+    ldr.registerExport("comdlg32.dll", "ChooseFontW", reinterpret_cast<void*>(ChooseFontW));
     ldr.registerExport("comdlg32.dll", "GetOpenFileNameW", reinterpret_cast<void*>(GetOpenFileNameW));
     ldr.registerExport("comdlg32.dll", "GetOpenFileNameA", reinterpret_cast<void*>(GetOpenFileNameA));
     ldr.registerExport("comdlg32.dll", "GetSaveFileNameW", reinterpret_cast<void*>(GetSaveFileNameW));

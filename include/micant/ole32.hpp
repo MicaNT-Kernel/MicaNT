@@ -923,6 +923,11 @@ inline uint32_t WINAPI OleUIBusyW(void* /*lpUIBusy*/) noexcept {
     return 0; // OLEUI_CANCEL
 }
 
+inline HRESULT WINAPI CoGetSystemSecurityPermissions(void* /*pSecurityDescriptor*/, uint32_t* pcb) noexcept {
+    if (pcb) *pcb = 32;
+    return S_OK;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -931,6 +936,7 @@ inline void InitializeOle32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
     // ole32.dll COM Core
+    ldr.registerExport("ole32.dll", "CoGetSystemSecurityPermissions", reinterpret_cast<void*>(CoGetSystemSecurityPermissions));
     ldr.registerExport("ole32.dll", "CoInitialize", reinterpret_cast<void*>(CoInitialize));
     ldr.registerExport("ole32.dll", "CoInitializeEx", reinterpret_cast<void*>(CoInitializeEx));
     ldr.registerExport("ole32.dll", "CoInitializeSecurity", reinterpret_cast<void*>(CoInitializeSecurity));

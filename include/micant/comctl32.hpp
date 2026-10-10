@@ -1051,6 +1051,28 @@ inline void* CreatePropertySheetPageW(const void* /*constPropSheetPage*/) noexce
     return reinterpret_cast<void*>(++s_psp);
 }
 
+inline win32::BOOL WINAPI DestroyPropertySheetPage(void* /*hPSPage*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::HRESULT WINAPI ImageList_CoCreateInstance(const GUID* /*rclsid*/, void* /*punkOuter*/, const GUID* /*riid*/, void** ppv) noexcept {
+    if (ppv) *ppv = reinterpret_cast<void*>(0x8301);
+    return 0; // S_OK
+}
+
+inline void* WINAPI ImageList_Read_Ordinal13(void* /*pstm*/) noexcept {
+    return reinterpret_cast<void*>(0x8301);
+}
+
+inline win32::BOOL WINAPI ImageList_Write_Ordinal14(void* /*himl*/, void* /*pstm*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::HRESULT WINAPI ImageList_ReadEx_Ordinal15(uint32_t /*dwFlags*/, void* /*pstm*/, const GUID* /*riid*/, void** ppv) noexcept {
+    if (ppv) *ppv = reinterpret_cast<void*>(0x8301);
+    return 0; // S_OK
+}
+
 inline void InitializeComCtl32SubsystemExports() {
     InitCommonControls();
 
@@ -1094,6 +1116,11 @@ inline void InitializeComCtl32SubsystemExports() {
     ldr.registerExportOrdinal("comctl32.dll", 411, reinterpret_cast<void*>(ComCtlOrdinalStub));
     ldr.registerExportOrdinal("comctl32.dll", 412, reinterpret_cast<void*>(ComCtlOrdinalStub));
     ldr.registerExportOrdinal("comctl32.dll", 413, reinterpret_cast<void*>(ComCtlOrdinalStub));
+    ldr.registerExport("comctl32.dll", "DestroyPropertySheetPage", reinterpret_cast<void*>(DestroyPropertySheetPage));
+    ldr.registerExport("comctl32.dll", "ImageList_CoCreateInstance", reinterpret_cast<void*>(ImageList_CoCreateInstance));
+    ldr.registerExportOrdinal("comctl32.dll", 13, reinterpret_cast<void*>(ImageList_Read_Ordinal13));
+    ldr.registerExportOrdinal("comctl32.dll", 14, reinterpret_cast<void*>(ImageList_Write_Ordinal14));
+    ldr.registerExportOrdinal("comctl32.dll", 15, reinterpret_cast<void*>(ImageList_ReadEx_Ordinal15));
 }
 
 } // namespace micant::comctl32

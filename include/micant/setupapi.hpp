@@ -1334,6 +1334,67 @@ inline win32::HKEY WINAPI SetupDiOpenDevRegKey(
     return reinterpret_cast<win32::HKEY>(0xD001);
 }
 
+inline uint32_t WINAPI CM_Register_Notification(void* /*pFilter*/, void* /*pContext*/, void* /*pCallback*/, void** pRegistrationHandle) noexcept {
+    if (pRegistrationHandle) *pRegistrationHandle = reinterpret_cast<void*>(0x8201);
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_First_Log_Conf(void* /*pLogConf*/, uint32_t /*dnDevInst*/, uint32_t /*ulFlags*/) noexcept {
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_Next_Log_Conf(void* /*pLogConf*/, void* /*LogConf*/, uint32_t /*ulFlags*/) noexcept {
+    return 0x0000001B; // CR_NO_SUCH_LOG_CONF
+}
+
+inline uint32_t WINAPI CM_Free_Log_Conf_Handle(void* /*LogConf*/) noexcept {
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_Next_Res_Des(void* /*pResDes*/, void* /*ResDes*/, uint32_t /*ForResource*/, void* /*pResourceID*/, uint32_t /*ulFlags*/) noexcept {
+    return 0x0000001D; // CR_NO_MORE_RES_DES
+}
+
+inline uint32_t WINAPI CM_Get_Res_Des_Data(void* /*ResDes*/, void* /*Buffer*/, uint32_t /*BufferLen*/, uint32_t /*ulFlags*/) noexcept {
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_Res_Des_Data_Size(uint32_t* pulSize, void* /*ResDes*/, uint32_t /*ulFlags*/) noexcept {
+    if (pulSize) *pulSize = 64;
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Free_Res_Des_Handle(void* /*ResDes*/) noexcept {
+    return 0; // CR_SUCCESS
+}
+
+inline void* WINAPI SetupDiGetClassDevsExW(const GUID* /*ClassGuid*/, const wchar_t* /*Enumerator*/, win32::HWND /*hwndParent*/, uint32_t /*Flags*/, void* /*DeviceInfoSet*/, const wchar_t* /*MachineName*/, void* /*Reserved*/) noexcept {
+    return reinterpret_cast<void*>(0x5002);
+}
+
+inline win32::BOOL WINAPI SetupDiGetClassPropertyW(const GUID* /*ClassGuid*/, const void* /*PropertyKey*/, uint32_t* PropertyType, uint8_t* /*PropertyBuffer*/, uint32_t /*PropertyBufferSize*/, uint32_t* RequiredSize, uint32_t /*Flags*/) noexcept {
+    if (PropertyType) *PropertyType = 1;
+    if (RequiredSize) *RequiredSize = 32;
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI SetupDiGetDeviceInterfacePropertyW(void* /*DeviceInfoSet*/, void* /*DeviceInterfaceData*/, const void* /*PropertyKey*/, uint32_t* PropertyType, uint8_t* /*PropertyBuffer*/, uint32_t /*PropertyBufferSize*/, uint32_t* RequiredSize, uint32_t /*Flags*/) noexcept {
+    if (PropertyType) *PropertyType = 1;
+    if (RequiredSize) *RequiredSize = 32;
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI SetupDiGetDevicePropertyW(void* /*DeviceInfoSet*/, void* /*DeviceInfoData*/, const void* /*PropertyKey*/, uint32_t* PropertyType, uint8_t* /*PropertyBuffer*/, uint32_t /*PropertyBufferSize*/, uint32_t* RequiredSize, uint32_t /*Flags*/) noexcept {
+    if (PropertyType) *PropertyType = 1;
+    if (RequiredSize) *RequiredSize = 32;
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI SetupDiLoadDeviceIcon(void* /*DeviceInfoSet*/, void* /*DeviceInfoData*/, uint32_t /*cxIcon*/, uint32_t /*cyIcon*/, uint32_t /*Flags*/, win32::HICON* phIcon) noexcept {
+    if (phIcon) *phIcon = reinterpret_cast<win32::HICON>(0x6001);
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration (setupapi.dll)
 // ============================================================================
@@ -1384,6 +1445,20 @@ inline void InitializeSetupApiSubsystemExports() {
     ldr.registerExport("setupapi.dll", "SetupDiSetClassInstallParamsW", reinterpret_cast<void*>(SetupDiSetClassInstallParamsW));
     ldr.registerExport("setupapi.dll", "SetupDiOpenDeviceInterfaceW", reinterpret_cast<void*>(SetupDiOpenDeviceInterfaceW));
     ldr.registerExport("setupapi.dll", "SetupDiOpenDevRegKey", reinterpret_cast<void*>(SetupDiOpenDevRegKey));
+    ldr.registerExport("setupapi.dll", "CM_Register_Notification", reinterpret_cast<void*>(CM_Register_Notification));
+    ldr.registerExport("cfgmgr32.dll", "CM_Register_Notification", reinterpret_cast<void*>(CM_Register_Notification));
+    ldr.registerExport("setupapi.dll", "CM_Get_First_Log_Conf", reinterpret_cast<void*>(CM_Get_First_Log_Conf));
+    ldr.registerExport("setupapi.dll", "CM_Get_Next_Log_Conf", reinterpret_cast<void*>(CM_Get_Next_Log_Conf));
+    ldr.registerExport("setupapi.dll", "CM_Free_Log_Conf_Handle", reinterpret_cast<void*>(CM_Free_Log_Conf_Handle));
+    ldr.registerExport("setupapi.dll", "CM_Get_Next_Res_Des", reinterpret_cast<void*>(CM_Get_Next_Res_Des));
+    ldr.registerExport("setupapi.dll", "CM_Get_Res_Des_Data", reinterpret_cast<void*>(CM_Get_Res_Des_Data));
+    ldr.registerExport("setupapi.dll", "CM_Get_Res_Des_Data_Size", reinterpret_cast<void*>(CM_Get_Res_Des_Data_Size));
+    ldr.registerExport("setupapi.dll", "CM_Free_Res_Des_Handle", reinterpret_cast<void*>(CM_Free_Res_Des_Handle));
+    ldr.registerExport("setupapi.dll", "SetupDiGetClassDevsExW", reinterpret_cast<void*>(SetupDiGetClassDevsExW));
+    ldr.registerExport("setupapi.dll", "SetupDiGetClassPropertyW", reinterpret_cast<void*>(SetupDiGetClassPropertyW));
+    ldr.registerExport("setupapi.dll", "SetupDiGetDeviceInterfacePropertyW", reinterpret_cast<void*>(SetupDiGetDeviceInterfacePropertyW));
+    ldr.registerExport("setupapi.dll", "SetupDiGetDevicePropertyW", reinterpret_cast<void*>(SetupDiGetDevicePropertyW));
+    ldr.registerExport("setupapi.dll", "SetupDiLoadDeviceIcon", reinterpret_cast<void*>(SetupDiLoadDeviceIcon));
 }
 
 } // namespace micant::setupapi

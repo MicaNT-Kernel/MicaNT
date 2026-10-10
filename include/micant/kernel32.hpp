@@ -4966,6 +4966,27 @@ inline int32_t WINAPI GetUserDefaultLocaleName(wchar_t* lpLocaleName, int32_t cc
     return 6;
 }
 
+inline uint64_t WINAPI GetEnabledXStateFeatures() noexcept {
+    return 3; // XSTATE_LEGACY_FLOATING_POINT | XSTATE_LEGACY_SSE
+}
+
+inline int WINAPI GetNumberFormatEx(const wchar_t* /*lpLocaleName*/, DWORD /*dwFlags*/, const wchar_t* lpValue, void* /*lpFormat*/, wchar_t* lpNumberStr, int cchNumber) noexcept {
+    if (!lpNumberStr || cchNumber <= 0) return 16;
+    if (lpValue) {
+        std::wcsncpy(lpNumberStr, lpValue, cchNumber);
+        return static_cast<int>(std::wcslen(lpNumberStr));
+    }
+    return 0;
+}
+
+inline BOOL WINAPI SetConsoleCP(uint32_t /*wCodePageID*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetConsoleOutputCP(uint32_t /*wCodePageID*/) noexcept {
+    return TRUE;
+}
+
 inline BOOL WINAPI SetWaitableTimer(HANDLE /*hTimer*/, const void* /*lpDueTime*/, int32_t /*lPeriod*/, void* /*pfnCompletionRoutine*/, void* /*lpArgToCompletionRoutine*/, BOOL /*fResume*/) noexcept {
     return TRUE;
 }
@@ -5513,6 +5534,10 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WaitOnAddress", reinterpret_cast<void*>(WaitOnAddress));
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressSingle", reinterpret_cast<void*>(WakeByAddressSingle));
     ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressAll", reinterpret_cast<void*>(WakeByAddressAll));
+    ldr.registerExport("kernel32.dll", "GetEnabledXStateFeatures", reinterpret_cast<void*>(GetEnabledXStateFeatures));
+    ldr.registerExport("kernel32.dll", "GetNumberFormatEx", reinterpret_cast<void*>(GetNumberFormatEx));
+    ldr.registerExport("kernel32.dll", "SetConsoleCP", reinterpret_cast<void*>(SetConsoleCP));
+    ldr.registerExport("kernel32.dll", "SetConsoleOutputCP", reinterpret_cast<void*>(SetConsoleOutputCP));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

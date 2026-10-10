@@ -1712,6 +1712,132 @@ inline win32::BOOL WINAPI DuplicateToken(void* /*ExistingTokenHandle*/, int32_t 
     return win32::TRUE;
 }
 
+inline win32::BOOL WINAPI ChangeServiceConfig2W(void* /*hService*/, win32::DWORD /*dwInfoLevel*/, void* /*lpInfo*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI ChangeServiceConfigW(void* /*hService*/, win32::DWORD /*dwServiceType*/, win32::DWORD /*dwStartType*/, win32::DWORD /*dwErrorControl*/, const wchar_t* /*lpBinaryPathName*/, const wchar_t* /*lpLoadOrderGroup*/, win32::DWORD* /*lpdwTagId*/, const wchar_t* /*lpDependencies*/, const wchar_t* /*lpServiceStartName*/, const wchar_t* /*lpPassword*/, const wchar_t* /*lpDisplayName*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CreateProcessAsUserW(void* /*hToken*/, const wchar_t* /*lpApplicationName*/, wchar_t* /*lpCommandLine*/, void* /*lpProcessAttributes*/, void* /*lpThreadAttributes*/, win32::BOOL /*bInheritHandles*/, win32::DWORD /*dwCreationFlags*/, void* /*lpEnvironment*/, const wchar_t* /*lpCurrentDirectory*/, void* /*lpStartupInfo*/, void* /*lpProcessInformation*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CreateProcessWithLogonW(const wchar_t* /*lpUsername*/, const wchar_t* /*lpDomain*/, const wchar_t* /*lpPassword*/, win32::DWORD /*dwLogonFlags*/, const wchar_t* /*lpApplicationName*/, wchar_t* /*lpCommandLine*/, win32::DWORD /*dwCreationFlags*/, void* /*lpEnvironment*/, const wchar_t* /*lpCurrentDirectory*/, void* /*lpStartupInfo*/, void* /*lpProcessInformation*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI EnumDependentServicesW(void* /*hService*/, win32::DWORD /*dwServiceState*/, void* /*lpServices*/, win32::DWORD /*cbBufSize*/, win32::DWORD* pcbBytesNeeded, win32::DWORD* lpServicesReturned) noexcept {
+    if (pcbBytesNeeded) *pcbBytesNeeded = 0;
+    if (lpServicesReturned) *lpServicesReturned = 0;
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI EnumServicesStatusExW(void* /*hSCManager*/, int32_t /*InfoLevel*/, win32::DWORD /*dwServiceType*/, win32::DWORD /*dwServiceState*/, uint8_t* /*lpServices*/, win32::DWORD /*cbBufSize*/, win32::DWORD* pcbBytesNeeded, win32::DWORD* lpServicesReturned, win32::DWORD* lpResumeHandle, const wchar_t* /*pszGroupName*/) noexcept {
+    if (pcbBytesNeeded) *pcbBytesNeeded = 0;
+    if (lpServicesReturned) *lpServicesReturned = 0;
+    if (lpResumeHandle) *lpResumeHandle = 0;
+    return win32::TRUE;
+}
+
+inline win32::DWORD WINAPI GetEffectiveRightsFromAclW(void* /*pacl*/, void* /*pTrustee*/, win32::DWORD* pAccessRights) noexcept {
+    if (pAccessRights) *pAccessRights = 0x1F01FF; // STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::DWORD WINAPI GetInheritanceSourceW(wchar_t* /*pObjectName*/, int32_t /*ObjectType*/, win32::DWORD /*SecurityInfo*/, win32::BOOL /*Container*/, const GUID** /*pObjectClassGuids*/, win32::DWORD /*GuidCount*/, void* /*pAcl*/, void* /*pfnArray*/, void* /*pGenericMapping*/, void* /*pInheritArray*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::DWORD WINAPI GetSecurityInfo(void* /*handle*/, int32_t /*ObjectType*/, win32::DWORD /*SecurityInfo*/, void** ppsidOwner, void** ppsidGroup, void** ppDacl, void** ppSacl, void** ppSecurityDescriptor) noexcept {
+    static uint8_t mockSd[64] = { 0 };
+    if (ppSecurityDescriptor) *ppSecurityDescriptor = mockSd;
+    if (ppsidOwner) *ppsidOwner = mockSd;
+    if (ppsidGroup) *ppsidGroup = mockSd;
+    if (ppDacl) *ppDacl = mockSd;
+    if (ppSacl) *ppSacl = nullptr;
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::DWORD WINAPI InitiateShutdownW(wchar_t* /*lpMachineName*/, wchar_t* /*lpMessage*/, win32::DWORD /*dwGracePeriod*/, win32::DWORD /*dwShutdownFlags*/, win32::DWORD /*dwReason*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline int32_t WINAPI LsaEnumerateAccounts(void* /*PolicyHandle*/, void* /*EnumerationContext*/, void** Buffer, win32::DWORD /*PreferredMaximumLength*/, win32::DWORD* CountReturned) noexcept {
+    if (Buffer) *Buffer = nullptr;
+    if (CountReturned) *CountReturned = 0;
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaEnumeratePrivileges(void* /*PolicyHandle*/, void* /*EnumerationContext*/, void** Buffer, win32::DWORD /*PreferredMaximumLength*/, win32::DWORD* CountReturned) noexcept {
+    if (Buffer) *Buffer = nullptr;
+    if (CountReturned) *CountReturned = 0;
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaFreeMemory(void* /*Buffer*/) noexcept {
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaLookupNames2(void* /*PolicyHandle*/, win32::DWORD /*Flags*/, win32::DWORD /*Count*/, void* /*Names*/, void** ReferencedDomains, void** Sids) noexcept {
+    if (ReferencedDomains) *ReferencedDomains = nullptr;
+    if (Sids) *Sids = nullptr;
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaLookupPrivilegeDisplayName(void* /*PolicyHandle*/, void* /*Name*/, void** DisplayName, int16_t* LanguageReturned) noexcept {
+    if (DisplayName) *DisplayName = nullptr;
+    if (LanguageReturned) *LanguageReturned = 0;
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaLookupPrivilegeName(void* /*PolicyHandle*/, void* /*Value*/, void** Name) noexcept {
+    if (Name) *Name = nullptr;
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaLookupPrivilegeValue(void* /*PolicyHandle*/, void* /*Name*/, void* /*Value*/) noexcept {
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaLookupSids(void* /*PolicyHandle*/, win32::DWORD /*Count*/, void** /*Sids*/, void** ReferencedDomains, void** Names) noexcept {
+    if (ReferencedDomains) *ReferencedDomains = nullptr;
+    if (Names) *Names = nullptr;
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaQuerySecurityObject(void* /*PolicyHandle*/, win32::DWORD /*SecurityInformation*/, void** SecurityDescriptor) noexcept {
+    if (SecurityDescriptor) *SecurityDescriptor = nullptr;
+    return 0; // STATUS_SUCCESS
+}
+
+inline int32_t WINAPI LsaSetSecurityObject(void* /*PolicyHandle*/, win32::DWORD /*SecurityInformation*/, void* /*SecurityDescriptor*/) noexcept {
+    return 0; // STATUS_SUCCESS
+}
+
+inline win32::BOOL WINAPI QueryServiceConfig2W(void* /*hService*/, win32::DWORD /*dwInfoLevel*/, uint8_t* /*lpBuffer*/, win32::DWORD /*cbBufSize*/, win32::DWORD* pcbBytesNeeded) noexcept {
+    if (pcbBytesNeeded) *pcbBytesNeeded = 0;
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI QueryServiceObjectSecurity(void* /*hService*/, win32::DWORD /*dwSecurityInformation*/, void* /*lpSecurityDescriptor*/, win32::DWORD /*cbBufSize*/, win32::DWORD* pcbBytesNeeded) noexcept {
+    if (pcbBytesNeeded) *pcbBytesNeeded = 0;
+    return win32::TRUE;
+}
+
+inline void* WINAPI RegisterServiceCtrlHandlerExW(const wchar_t* /*lpServiceName*/, void* /*lpHandlerProc*/, void* /*lpContext*/) noexcept {
+    return reinterpret_cast<void*>(0x8101);
+}
+
+inline win32::DWORD WINAPI SetSecurityInfo(void* /*handle*/, int32_t /*ObjectType*/, win32::DWORD /*SecurityInfo*/, void* /*psidOwner*/, void* /*psidGroup*/, void* /*pDacl*/, void* /*pSacl*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::BOOL WINAPI SetServiceObjectSecurity(void* /*hService*/, win32::DWORD /*dwSecurityInformation*/, void* /*lpSecurityDescriptor*/) noexcept {
+    return win32::TRUE;
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("advapi32.dll", "RegSetKeySecurity", reinterpret_cast<void*>(RegSetKeySecurity));
@@ -1836,6 +1962,31 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "QueryServiceConfigW", reinterpret_cast<void*>(QueryServiceConfigW));
     ldr.registerExport("advapi32.dll", "RegOpenKeyA", reinterpret_cast<void*>(RegOpenKeyA));
     ldr.registerExport("advapi32.dll", "RegQueryValueW", reinterpret_cast<void*>(RegQueryValueW));
+    ldr.registerExport("advapi32.dll", "ChangeServiceConfig2W", reinterpret_cast<void*>(ChangeServiceConfig2W));
+    ldr.registerExport("advapi32.dll", "ChangeServiceConfigW", reinterpret_cast<void*>(ChangeServiceConfigW));
+    ldr.registerExport("advapi32.dll", "CreateProcessAsUserW", reinterpret_cast<void*>(CreateProcessAsUserW));
+    ldr.registerExport("advapi32.dll", "CreateProcessWithLogonW", reinterpret_cast<void*>(CreateProcessWithLogonW));
+    ldr.registerExport("advapi32.dll", "EnumDependentServicesW", reinterpret_cast<void*>(EnumDependentServicesW));
+    ldr.registerExport("advapi32.dll", "EnumServicesStatusExW", reinterpret_cast<void*>(EnumServicesStatusExW));
+    ldr.registerExport("advapi32.dll", "GetEffectiveRightsFromAclW", reinterpret_cast<void*>(GetEffectiveRightsFromAclW));
+    ldr.registerExport("advapi32.dll", "GetInheritanceSourceW", reinterpret_cast<void*>(GetInheritanceSourceW));
+    ldr.registerExport("advapi32.dll", "GetSecurityInfo", reinterpret_cast<void*>(GetSecurityInfo));
+    ldr.registerExport("advapi32.dll", "InitiateShutdownW", reinterpret_cast<void*>(InitiateShutdownW));
+    ldr.registerExport("advapi32.dll", "LsaEnumerateAccounts", reinterpret_cast<void*>(LsaEnumerateAccounts));
+    ldr.registerExport("advapi32.dll", "LsaEnumeratePrivileges", reinterpret_cast<void*>(LsaEnumeratePrivileges));
+    ldr.registerExport("advapi32.dll", "LsaFreeMemory", reinterpret_cast<void*>(LsaFreeMemory));
+    ldr.registerExport("advapi32.dll", "LsaLookupNames2", reinterpret_cast<void*>(LsaLookupNames2));
+    ldr.registerExport("advapi32.dll", "LsaLookupPrivilegeDisplayName", reinterpret_cast<void*>(LsaLookupPrivilegeDisplayName));
+    ldr.registerExport("advapi32.dll", "LsaLookupPrivilegeName", reinterpret_cast<void*>(LsaLookupPrivilegeName));
+    ldr.registerExport("advapi32.dll", "LsaLookupPrivilegeValue", reinterpret_cast<void*>(LsaLookupPrivilegeValue));
+    ldr.registerExport("advapi32.dll", "LsaLookupSids", reinterpret_cast<void*>(LsaLookupSids));
+    ldr.registerExport("advapi32.dll", "LsaQuerySecurityObject", reinterpret_cast<void*>(LsaQuerySecurityObject));
+    ldr.registerExport("advapi32.dll", "LsaSetSecurityObject", reinterpret_cast<void*>(LsaSetSecurityObject));
+    ldr.registerExport("advapi32.dll", "QueryServiceConfig2W", reinterpret_cast<void*>(QueryServiceConfig2W));
+    ldr.registerExport("advapi32.dll", "QueryServiceObjectSecurity", reinterpret_cast<void*>(QueryServiceObjectSecurity));
+    ldr.registerExport("advapi32.dll", "RegisterServiceCtrlHandlerExW", reinterpret_cast<void*>(RegisterServiceCtrlHandlerExW));
+    ldr.registerExport("advapi32.dll", "SetSecurityInfo", reinterpret_cast<void*>(SetSecurityInfo));
+    ldr.registerExport("advapi32.dll", "SetServiceObjectSecurity", reinterpret_cast<void*>(SetServiceObjectSecurity));
 
     // api-ms-win-core-registry-l1-1-0.dll
     ldr.registerExport("api-ms-win-core-registry-l1-1-0.dll", "RegOpenKeyExW", reinterpret_cast<void*>(RegOpenKeyExW));
