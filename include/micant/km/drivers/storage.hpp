@@ -24,6 +24,8 @@
 #include <algorithm>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
+#include "driver.hpp"
+#include "io.hpp"
 
 namespace micant::storage {
 
@@ -46,6 +48,69 @@ inline constexpr uint8_t MBR_TYPE_GPT_PROTECT = 0xEE;
 inline constexpr uint16_t MBR_SIGNATURE       = 0xAA55;
 inline constexpr uint64_t GPT_SIGNATURE       = 0x5452415020494645ULL; // "EFI PART"
 
+// Canonical NT Disk & Storage IOCTL Base Codes
+inline constexpr uint32_t IOCTL_DISK_BASE    = 0x00000007; // FILE_DEVICE_DISK
+inline constexpr uint32_t IOCTL_STORAGE_BASE = 0x0000002D; // FILE_DEVICE_MASS_STORAGE
+
+// Standard NT IOCTL Functions (Matching Windows NT DDK/WDK winioctl.h / ntdddisk.h)
+inline constexpr uint32_t IOCTL_DISK_GET_DRIVE_GEOMETRY =
+    driver::CTL_CODE(IOCTL_DISK_BASE, 0x0000, driver::METHOD_BUFFERED, driver::FILE_ANY_ACCESS); // 0x00070000
+
+inline constexpr uint32_t IOCTL_DISK_GET_PARTITION_INFO =
+    driver::CTL_CODE(IOCTL_DISK_BASE, 0x0001, driver::METHOD_BUFFERED, driver::FILE_READ_ACCESS); // 0x00074004
+
+inline constexpr uint32_t IOCTL_DISK_IS_WRITABLE =
+    driver::CTL_CODE(IOCTL_DISK_BASE, 0x0009, driver::METHOD_BUFFERED, driver::FILE_ANY_ACCESS); // 0x00070024
+
+inline constexpr uint32_t IOCTL_DISK_GET_LENGTH_INFO =
+    driver::CTL_CODE(IOCTL_DISK_BASE, 0x0017, driver::METHOD_BUFFERED, driver::FILE_READ_ACCESS); // 0x0007405C
+
+inline constexpr uint32_t IOCTL_DISK_GET_DRIVE_GEOMETRY_EX =
+    driver::CTL_CODE(IOCTL_DISK_BASE, 0x0028, driver::METHOD_BUFFERED, driver::FILE_ANY_ACCESS); // 0x000700A0
+
+inline constexpr uint32_t IOCTL_STORAGE_GET_DEVICE_NUMBER =
+    driver::CTL_CODE(IOCTL_STORAGE_BASE, 0x0420, driver::METHOD_BUFFERED, driver::FILE_ANY_ACCESS); // 0x002D1080
+
+enum class MEDIA_TYPE : uint32_t {
+    Unknown = 0,
+    F5_1Pt2_512,
+    F3_1Pt44_512,
+    F3_2Pt88_512,
+    F3_20Pt8_512,
+    F3_720_512,
+    F5_360_512,
+    F5_320_512,
+    F5_320_1024,
+    F5_180_512,
+    F5_160_512,
+    RemovableMedia,
+    FixedMedia
+};
+
+struct DISK_GEOMETRY {
+    LargeInteger Cylinders{};
+    MEDIA_TYPE MediaType{MEDIA_TYPE::FixedMedia};
+    uint32_t TracksPerCylinder{255};
+    uint32_t SectorsPerTrack{63};
+    uint32_t BytesPerSector{512};
+};
+
+struct GET_LENGTH_INFORMATION {
+    LargeInteger Length{};
+};
+
+struct DISK_GEOMETRY_EX {
+    DISK_GEOMETRY Geometry{};
+    LargeInteger DiskSize{};
+    uint8_t Data[1]{0};
+};
+
+struct STORAGE_DEVICE_NUMBER {
+    uint32_t DeviceType{IOCTL_DISK_BASE};
+    uint32_t DeviceNumber{0};
+    uint32_t PartitionNumber{0};
+};
+
 /**
  * @brief Abstract Block Device Interface (IBlockDevice).
  */
@@ -61,6 +126,24 @@ public:
         return getTotalBlocks() * getBlockSize();
     }
     [[nodiscard]] virtual const std::wstring& getDeviceName() const noexcept = 0;
+
+    [[nodiscard]] virtual DISK_GEOMETRY getGeometry() const noexcept {
+        uint32_t bytesPerSector = getBlockSize();
+        if (bytesPerSector == 0) bytesPerSector = SECTOR_SIZE_512;
+        uint64_t totalBlocks = getTotalBlocks();
+        uint32_t sectorsPerTrack = 63;
+        uint32_t tracksPerCylinder = 255;
+        uint64_t totalCylinders = (totalBlocks > 0) ? (totalBlocks / (sectorsPerTrack * tracksPerCylinder)) : 0;
+        if (totalCylinders == 0 && totalBlocks > 0) totalCylinders = 1;
+
+        DISK_GEOMETRY geom{};
+        geom.Cylinders.quadPart = static_cast<int64_t>(totalCylinders);
+        geom.MediaType = MEDIA_TYPE::FixedMedia;
+        geom.TracksPerCylinder = tracksPerCylinder;
+        geom.SectorsPerTrack = sectorsPerTrack;
+        geom.BytesPerSector = bytesPerSector;
+        return geom;
+    }
 };
 
 /**
@@ -302,5 +385,137 @@ public:
         return NtStatus::Success;
     }
 };
+
+/**
+ * @brief Dispatch routine for \Driver\Disk.
+ * Implements canonical Windows NT disk.sys IRP handling.
+ */
+inline NtStatus DiskDriverDispatch(io::DeviceObject* dev, io::Irp* irp) {
+    if (!dev || !irp) return NtStatus::InvalidParameter;
+    auto* blockDevice = static_cast<IBlockDevice*>(dev->deviceExtension);
+    if (!blockDevice) return NtStatus::DeviceNotReady;
+
+    switch (irp->majorFunction) {
+        case io::IRP_MJ_CREATE:
+        case io::IRP_MJ_CLOSE: {
+            irp->ioStatus.status = NtStatus::Success;
+            irp->ioStatus.information = 1; // FILE_OPENED
+            return NtStatus::Success;
+        }
+
+        case io::IRP_MJ_READ: {
+            if (!irp->userBuffer) return NtStatus::InvalidParameter;
+            uint32_t blockSize = blockDevice->getBlockSize();
+            if (blockSize == 0) blockSize = SECTOR_SIZE_512;
+            uint64_t lba = static_cast<uint64_t>(irp->byteOffset.quadPart) / blockSize;
+            uint32_t blockCount = irp->length / blockSize;
+            if (blockCount == 0 && irp->length > 0) blockCount = 1;
+
+            NtStatus st = blockDevice->readBlocks(lba, blockCount, irp->userBuffer);
+            irp->ioStatus.status = st;
+            irp->ioStatus.information = NT_SUCCESS(st) ? (blockCount * blockSize) : 0;
+            return st;
+        }
+
+        case io::IRP_MJ_WRITE: {
+            if (!irp->userBuffer) return NtStatus::InvalidParameter;
+            uint32_t blockSize = blockDevice->getBlockSize();
+            if (blockSize == 0) blockSize = SECTOR_SIZE_512;
+            uint64_t lba = static_cast<uint64_t>(irp->byteOffset.quadPart) / blockSize;
+            uint32_t blockCount = irp->length / blockSize;
+            if (blockCount == 0 && irp->length > 0) blockCount = 1;
+
+            NtStatus st = blockDevice->writeBlocks(lba, blockCount, irp->userBuffer);
+            irp->ioStatus.status = st;
+            irp->ioStatus.information = NT_SUCCESS(st) ? (blockCount * blockSize) : 0;
+            return st;
+        }
+
+        case io::IRP_MJ_DEVICE_CONTROL: {
+            uint32_t ioctl = irp->byteOffset.lowPart;
+            switch (ioctl) {
+                case IOCTL_DISK_GET_DRIVE_GEOMETRY: {
+                    if (irp->length < sizeof(DISK_GEOMETRY) || !irp->userBuffer) {
+                        irp->ioStatus.status = NtStatus::BufferTooSmall;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    auto geom = blockDevice->getGeometry();
+                    std::memcpy(irp->userBuffer, &geom, sizeof(DISK_GEOMETRY));
+                    irp->ioStatus.status = NtStatus::Success;
+                    irp->ioStatus.information = sizeof(DISK_GEOMETRY);
+                    return NtStatus::Success;
+                }
+
+                case IOCTL_DISK_GET_DRIVE_GEOMETRY_EX: {
+                    if (irp->length < sizeof(DISK_GEOMETRY_EX) || !irp->userBuffer) {
+                        irp->ioStatus.status = NtStatus::BufferTooSmall;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    DISK_GEOMETRY_EX geomEx{};
+                    geomEx.Geometry = blockDevice->getGeometry();
+                    geomEx.DiskSize.quadPart = static_cast<int64_t>(blockDevice->getTotalBytes());
+                    std::memcpy(irp->userBuffer, &geomEx, sizeof(DISK_GEOMETRY_EX));
+                    irp->ioStatus.status = NtStatus::Success;
+                    irp->ioStatus.information = sizeof(DISK_GEOMETRY_EX);
+                    return NtStatus::Success;
+                }
+
+                case IOCTL_DISK_GET_LENGTH_INFO: {
+                    if (irp->length < sizeof(GET_LENGTH_INFORMATION) || !irp->userBuffer) {
+                        irp->ioStatus.status = NtStatus::BufferTooSmall;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    GET_LENGTH_INFORMATION lenInfo{};
+                    lenInfo.Length.quadPart = static_cast<int64_t>(blockDevice->getTotalBytes());
+                    std::memcpy(irp->userBuffer, &lenInfo, sizeof(GET_LENGTH_INFORMATION));
+                    irp->ioStatus.status = NtStatus::Success;
+                    irp->ioStatus.information = sizeof(GET_LENGTH_INFORMATION);
+                    return NtStatus::Success;
+                }
+
+                case IOCTL_DISK_IS_WRITABLE: {
+                    irp->ioStatus.status = NtStatus::Success;
+                    irp->ioStatus.information = 0;
+                    return NtStatus::Success;
+                }
+
+                case IOCTL_STORAGE_GET_DEVICE_NUMBER: {
+                    if (irp->length < sizeof(STORAGE_DEVICE_NUMBER) || !irp->userBuffer) {
+                        irp->ioStatus.status = NtStatus::BufferTooSmall;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    STORAGE_DEVICE_NUMBER devNum{
+                        .DeviceType = IOCTL_DISK_BASE,
+                        .DeviceNumber = 0,
+                        .PartitionNumber = 0
+                    };
+                    std::memcpy(irp->userBuffer, &devNum, sizeof(STORAGE_DEVICE_NUMBER));
+                    irp->ioStatus.status = NtStatus::Success;
+                    irp->ioStatus.information = sizeof(STORAGE_DEVICE_NUMBER);
+                    return NtStatus::Success;
+                }
+
+                default:
+                    irp->ioStatus.status = NtStatus::InvalidDeviceRequest;
+                    return NtStatus::InvalidDeviceRequest;
+            }
+        }
+
+        default:
+            return NtStatus::InvalidDeviceRequest;
+    }
+}
+
+/**
+ * @brief Initializes a DriverObject with the standard \Driver\Disk dispatch routines.
+ */
+inline void InitializeDiskDriver(io::DriverObject& driver) {
+    driver.driverName = L"\\Driver\\Disk";
+    driver.setDispatch(io::IRP_MJ_CREATE, DiskDriverDispatch);
+    driver.setDispatch(io::IRP_MJ_CLOSE, DiskDriverDispatch);
+    driver.setDispatch(io::IRP_MJ_READ, DiskDriverDispatch);
+    driver.setDispatch(io::IRP_MJ_WRITE, DiskDriverDispatch);
+    driver.setDispatch(io::IRP_MJ_DEVICE_CONTROL, DiskDriverDispatch);
+}
 
 } // namespace micant::storage

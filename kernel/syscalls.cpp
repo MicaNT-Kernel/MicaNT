@@ -356,7 +356,7 @@ NtStatus NtDeviceIoControlFile(
     irp.byteOffset.lowPart = ioControlCode;
     irp.byteOffset.highPart = static_cast<int32_t>(inputBufferLength);
 
-    NtStatus status = fs::IoCallDriver(devObj, &irp);
+    NtStatus status = io::IoCallDriver(devObj, &irp);
 
     if (ioStatusBlock) {
         *ioStatusBlock = irp.ioStatus;

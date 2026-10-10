@@ -100,49 +100,9 @@ inline constexpr GUID GUID_DEVINTERFACE_MOUSE = {
 
 // ============================================================================
 // 3. Layered Device Stack Helper Functions
+// Canonical WDM functions (IoGetAttachedDevice, IoAttachDeviceToDeviceStack,
+// IoDetachDevice, IoCallDriver) are canonically implemented in micant::io.
 // ============================================================================
-
-/**
- * @brief Traverses the attachedDevice chain up to the top of the stack.
- */
-inline DeviceObject* IoGetAttachedDevice(DeviceObject* device) {
-    if (!device) return nullptr;
-    DeviceObject* current = device;
-    while (current->attachedDevice != nullptr) {
-        current = current->attachedDevice;
-    }
-    return current;
-}
-
-/**
- * @brief Attaches sourceDevice to the top of the stack containing targetDevice.
- * @return The device object to which sourceDevice was attached (lower device).
- */
-inline DeviceObject* IoAttachDeviceToDeviceStack(DeviceObject* sourceDevice, DeviceObject* targetDevice) {
-    if (!sourceDevice || !targetDevice) return nullptr;
-
-    DeviceObject* top = IoGetAttachedDevice(targetDevice);
-    top->attachedDevice = sourceDevice;
-    return top;
-}
-
-/**
- * @brief Detaches the sourceDevice from targetDevice's attachment chain.
- */
-inline void IoDetachDevice(DeviceObject* targetDevice) {
-    if (!targetDevice) return;
-    targetDevice->attachedDevice = nullptr;
-}
-
-/**
- * @brief Forwards an IRP down or directly to a target device object.
- */
-inline NtStatus IoCallDriver(DeviceObject* targetDevice, Irp* irp) {
-    if (!targetDevice || !targetDevice->driverObject || !irp) {
-        return NtStatus::InvalidParameter;
-    }
-    return targetDevice->driverObject->dispatch(targetDevice, irp);
-}
 
 // ============================================================================
 // 4. Vanguard PnP Device Node & Interface Registry

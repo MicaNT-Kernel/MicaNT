@@ -132,10 +132,8 @@ int main(int argc, char* argv[]) {
     auto& ioMgr = io::IoManager::get();
     io::DriverObject nullDriver{ .driverName = L"\\Driver\\Null" };
     io::DriverObject diskDriver{ .driverName = L"\\Driver\\Disk" };
+    storage::InitializeDiskDriver(diskDriver);
     auto nullDev = ioMgr.createDevice(&nullDriver, L"\\Device\\Null", io::DeviceType::Null);
-    auto diskDev = ioMgr.createDevice(&diskDriver, L"\\Device\\Harddisk0", io::DeviceType::Disk);
-    std::cout << "[MicaNT Boot] [Io] Created system device nodes: \\Device\\Null, \\Device\\Harddisk0 (Registered: " 
-              << ioMgr.getDeviceCount() << " devices)\n";
 
     // 5.1 Initialize Real Block Storage Subsystem, RamDisk, MBR, and FastFAT Driver
     std::cout << "[MicaNT Boot] [Storage] Initializing \\Device\\Harddisk0 (64 MB Physical Sector Emulation)...\n";
@@ -154,6 +152,13 @@ int main(int argc, char* argv[]) {
         bootPartitions[0].startLba,
         bootPartitions[0].sectorCount
     );
+
+    auto diskDev = ioMgr.createDevice(&diskDriver, L"\\Device\\Harddisk0", io::DeviceType::Disk, bootDisk.get());
+    auto partDev = ioMgr.createDevice(&diskDriver, L"\\Device\\Harddisk0\\Partition1", io::DeviceType::Disk, bootPartition.get());
+    (void)diskDev;
+    (void)partDev;
+    std::cout << "[MicaNT Boot] [Io] Created system device nodes: \\Device\\Null, \\Device\\Harddisk0, \\Device\\Harddisk0\\Partition1 (Registered: " 
+              << ioMgr.getDeviceCount() << " devices)\n";
 
     (void)fat32::Fat32FileSystem::format(*bootPartition, "MICANT_SYS", 8);
 
@@ -381,6 +386,50 @@ int main(int argc, char* argv[]) {
                   << "Polled Hardware Core Temp: " << telemetryResult << " C\n";
     }
     sys::NtClose(devSysHandle);
+
+    // 14.3 Test Ring 3 Storage IOCTL via \DosDevices\PhysicalDrive0
+    std::cout << "[MicaNT Boot] [Test] Simulating Ring 3 Storage IOCTL (\\DosDevices\\PhysicalDrive0 -> IOCTL_DISK_GET_DRIVE_GEOMETRY_EX)...\n";
+    UnicodeString physDrivePath(L"\\DosDevices\\PhysicalDrive0");
+    ObjectAttributes physDriveAttr{};
+    physDriveAttr.objectName = &physDrivePath;
+    Handle physDriveHandle = 0;
+    IoStatusBlock physDriveIosb{};
+
+    sys::SyscallFrame openPhysDriveFrame{
+        .ssn = sys::SSN_NtOpenFile,
+        .arg1 = reinterpret_cast<uint64_t>(&physDriveHandle),
+        .arg2 = fs::FILE_GENERIC_READ,
+        .arg3 = reinterpret_cast<uint64_t>(&physDriveAttr),
+        .arg4 = reinterpret_cast<uint64_t>(&physDriveIosb)
+    };
+    NtStatus openPhysStatus = dispatcher.dispatch(openPhysDriveFrame);
+    if (NT_SUCCESS(openPhysStatus)) {
+        storage::DISK_GEOMETRY_EX diskGeomEx{};
+        uint64_t diskIoctlArgs[6] = {
+            reinterpret_cast<uint64_t>(&physDriveIosb),
+            storage::IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+            0, 0, // No input buffer
+            reinterpret_cast<uint64_t>(&diskGeomEx),
+            sizeof(diskGeomEx)
+        };
+        sys::SyscallFrame geomIoctlFrame{
+            .ssn = sys::SSN_NtDeviceIoControlFile,
+            .arg1 = static_cast<uint64_t>(physDriveHandle),
+            .arg2 = 0,
+            .arg3 = 0,
+            .arg4 = 0,
+            .stackArgs = diskIoctlArgs,
+            .stackArgCount = 6
+        };
+        NtStatus geomStatus = dispatcher.dispatch(geomIoctlFrame);
+        if (NT_SUCCESS(geomStatus)) {
+            std::cout << "[MicaNT Boot] [Test] IOCTL_DISK_GET_DRIVE_GEOMETRY_EX succeeded! "
+                      << "Total Size: " << (diskGeomEx.DiskSize.quadPart / (1024 * 1024)) << " MB, "
+                      << "BytesPerSector: " << diskGeomEx.Geometry.BytesPerSector << ", "
+                      << "SectorsPerTrack: " << diskGeomEx.Geometry.SectorsPerTrack << "\n";
+        }
+        sys::NtClose(physDriveHandle);
+    }
 
     // 15. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
     const char* targetAppPath = "bin/userland_app.exe";

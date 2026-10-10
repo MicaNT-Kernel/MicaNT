@@ -120,17 +120,6 @@ struct VfsEntry {
 };
 
 /**
- * @brief Helper to invoke a device driver with an IRP.
- */
-inline NtStatus IoCallDriver(io::DeviceObject* device, io::Irp* irp) {
-    if (!device || !device->driverObject || !irp) {
-        return NtStatus::InvalidDeviceRequest;
-    }
-    irp->deviceObject = device;
-    return device->driverObject->dispatch(device, irp);
-}
-
-/**
  * @brief Fastfat / Virtual File System Driver
  * Clean-room NT driver supporting mounting, partition navigation, and file operations.
  */
@@ -331,7 +320,11 @@ public:
         }
 
         // 1. Check if path targets a registered device node in \Device
-        auto directDevice = io::IoManager::get().lookupDevice(path);
+        std::wstring resolvedPath = ob::ObjectNamespace::get().resolvePath(path);
+        auto directDevice = io::IoManager::get().lookupDevice(resolvedPath);
+        if (!directDevice) {
+            directDevice = io::IoManager::get().lookupDevice(path);
+        }
         if (directDevice) {
             outFileObj = std::make_shared<FileObject>(directDevice.get(), path, desiredAccess);
             openFiles_[outFileObj.get()] = nullptr; // Device handle
@@ -339,7 +332,7 @@ public:
             io::Irp createIrp{};
             createIrp.majorFunction = io::IRP_MJ_CREATE;
             createIrp.deviceObject = directDevice.get();
-            return IoCallDriver(directDevice.get(), &createIrp);
+            return io::IoCallDriver(directDevice.get(), &createIrp);
         }
 
         std::wstring normalized = normalizePath(path);
@@ -412,6 +405,26 @@ public:
             return st;
         }
 
+        // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
+        if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
+            io::Irp readIrp{};
+            readIrp.majorFunction = io::IRP_MJ_READ;
+            readIrp.deviceObject = fileObj->getDeviceObject();
+            readIrp.userBuffer = buffer;
+            readIrp.length = length;
+            if (byteOffset) {
+                readIrp.byteOffset = *byteOffset;
+            } else {
+                readIrp.byteOffset.quadPart = fileObj->getCurrentByteOffset();
+            }
+            NtStatus st = io::IoCallDriver(fileObj->getDeviceObject(), &readIrp);
+            bytesRead = readIrp.ioStatus.information;
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
         auto it = openFiles_.find(fileObj);
         if (it == openFiles_.end() || !it->second) return NtStatus::InvalidHandle;
 
@@ -464,6 +477,26 @@ public:
             uint64_t ntfsBytes = 0;
             NtStatus st = ntfsFs_->writeFile(itNtfs->second.first, itNtfs->second.second, buffer, length, static_cast<uint64_t>(offset), ntfsBytes);
             bytesWritten = static_cast<uint32_t>(ntfsBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
+        // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
+        if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
+            io::Irp writeIrp{};
+            writeIrp.majorFunction = io::IRP_MJ_WRITE;
+            writeIrp.deviceObject = fileObj->getDeviceObject();
+            writeIrp.userBuffer = const_cast<void*>(buffer);
+            writeIrp.length = length;
+            if (byteOffset) {
+                writeIrp.byteOffset = *byteOffset;
+            } else {
+                writeIrp.byteOffset.quadPart = fileObj->getCurrentByteOffset();
+            }
+            NtStatus st = io::IoCallDriver(fileObj->getDeviceObject(), &writeIrp);
+            bytesWritten = writeIrp.ioStatus.information;
             if (NT_SUCCESS(st) && !byteOffset) {
                 fileObj->advanceByteOffset(bytesWritten);
             }

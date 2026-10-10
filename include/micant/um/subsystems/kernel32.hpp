@@ -3150,16 +3150,29 @@ inline DWORD GetLogicalDriveStringsW(DWORD nBufferLength, LPWSTR lpBuffer) noexc
 }
 
 inline BOOL DeviceIoControl(
-    HANDLE /*hDevice*/,
-    DWORD /*dwIoControlCode*/,
-    LPVOID /*lpInBuffer*/,
-    DWORD /*nInBufferSize*/,
-    LPVOID /*lpOutBuffer*/,
-    DWORD /*nOutBufferSize*/,
+    HANDLE hDevice,
+    DWORD dwIoControlCode,
+    LPVOID lpInBuffer,
+    DWORD nInBufferSize,
+    LPVOID lpOutBuffer,
+    DWORD nOutBufferSize,
     LPDWORD lpBytesReturned,
     LPOVERLAPPED /*lpOverlapped*/
 ) noexcept {
     if (lpBytesReturned) *lpBytesReturned = 0;
+    IoStatusBlock iosb{};
+    NtStatus status = sys::NtDeviceIoControlFile(
+        reinterpret_cast<Handle>(hDevice),
+        0, nullptr, nullptr,
+        &iosb,
+        dwIoControlCode,
+        lpInBuffer, nInBufferSize,
+        lpOutBuffer, nOutBufferSize
+    );
+    if (NT_SUCCESS(status)) {
+        if (lpBytesReturned) *lpBytesReturned = static_cast<DWORD>(iosb.information);
+        return TRUE;
+    }
     return TRUE;
 }
 

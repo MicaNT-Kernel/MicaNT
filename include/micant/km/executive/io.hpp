@@ -85,6 +85,7 @@ struct DeviceObject {
     uint32_t characteristics{0};
     uint32_t flags{0};
     DeviceObject* attachedDevice{nullptr};
+    void* deviceExtension{nullptr};
 };
 
 /**
@@ -174,12 +175,14 @@ public:
     std::shared_ptr<DeviceObject> createDevice(
         DriverObject* driver,
         std::wstring_view deviceName,
-        DeviceType type
+        DeviceType type,
+        void* deviceExtension = nullptr
     ) {
         auto dev = std::make_shared<DeviceObject>();
         dev->driverObject = driver;
         dev->deviceName = std::wstring(deviceName);
         dev->deviceType = type;
+        dev->deviceExtension = deviceExtension;
         devices_[dev->deviceName] = dev;
         return dev;
     }
@@ -196,5 +199,56 @@ private:
     IoManager() = default;
     std::unordered_map<std::wstring, std::shared_ptr<DeviceObject>> devices_;
 };
+
+/**
+ * @brief Canonical Windows NT WDM: Traverses the attachedDevice chain up to the top of the stack.
+ */
+inline DeviceObject* IoGetAttachedDevice(DeviceObject* device) noexcept {
+    if (!device) return nullptr;
+    DeviceObject* current = device;
+    while (current->attachedDevice != nullptr) {
+        current = current->attachedDevice;
+    }
+    return current;
+}
+
+/**
+ * @brief Canonical Windows NT WDM: Forwards an IRP down a layered device stack or directly to target.
+ */
+inline NtStatus IoCallDriver(DeviceObject* device, Irp* irp) {
+    if (!device || !irp) return NtStatus::InvalidParameter;
+    DeviceObject* target = IoGetAttachedDevice(device);
+    if (!target || !target->driverObject) return NtStatus::InvalidDeviceRequest;
+    irp->deviceObject = target;
+    return target->driverObject->dispatch(target, irp);
+}
+
+/**
+ * @brief Canonical Windows NT WDM: Attaches a source device object to the top of target's stack.
+ */
+inline DeviceObject* IoAttachDeviceToDeviceStack(DeviceObject* sourceDevice, DeviceObject* targetDevice) noexcept {
+    if (!sourceDevice || !targetDevice) return nullptr;
+    DeviceObject* top = IoGetAttachedDevice(targetDevice);
+    top->attachedDevice = sourceDevice;
+    return top;
+}
+
+/**
+ * @brief Canonical Windows NT WDM: Detaches a device object from its attached device stack.
+ */
+inline void IoDetachDevice(DeviceObject* targetDevice) noexcept {
+    if (targetDevice) {
+        targetDevice->attachedDevice = nullptr;
+    }
+}
+
+/**
+ * @brief Canonical Windows NT WDM: Signals completion of an in-flight I/O request packet.
+ */
+inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
+    (void)priorityBoost;
+    if (!irp) return NtStatus::InvalidParameter;
+    return irp->ioStatus.status;
+}
 
 } // namespace micant::io
