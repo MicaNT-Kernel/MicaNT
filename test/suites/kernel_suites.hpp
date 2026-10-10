@@ -18,39 +18,110 @@ void Test_ObjectManager_DirectoryAndHandles() {
     obj1->type = &fileType;
     obj1->objectName = L"PhysicalDrive0";
 
-    // Test directory insert & lookup
+    // 1. Directory insert & lookup
     NtStatus insStatus = root.insertObject(L"PhysicalDrive0", obj1.get());
     TEST_ASSERT(NT_SUCCESS(insStatus), "Directory insert should succeed");
     TEST_ASSERT(root.getEntryCount() == 1, "Directory should contain 1 object");
 
-    // Test collision
+    // 2. Collision detection
     NtStatus dupStatus = root.insertObject(L"PhysicalDrive0", obj1.get());
     TEST_ASSERT(dupStatus == NtStatus::ObjectNameCollision, "Duplicate name should return ObjectNameCollision");
 
-    // Test lookup
+    // 3. 37-Bucket Hash Case-Insensitive Lookup
     ob::ObjectHeader* found = root.lookup(L"PhysicalDrive0");
     TEST_ASSERT(found == obj1.get(), "Lookup should return inserted object");
+    ob::ObjectHeader* foundCaseInsensitive = root.lookup(L"physicaldrive0");
+    TEST_ASSERT(foundCaseInsensitive == obj1.get(), "Case-insensitive lookup in 37-bucket hash chain must succeed");
 
-    // Test Handle Table
+    // 4. Handle Table Allocation & 4-byte Stride (NT Standard)
     ob::HandleTable handleTable;
     Handle h1 = 0;
-    NtStatus hStatus = handleTable.createHandle(obj1.get(), h1);
+    NtStatus hStatus = handleTable.createHandle(obj1.get(), h1, ob::GENERIC_READ);
     TEST_ASSERT(NT_SUCCESS(hStatus), "Handle creation should succeed");
     TEST_ASSERT(h1 == 4, "First handle index should be 4 (NT standard)");
+    TEST_ASSERT(handleTable.getActiveHandleCount() == 1, "Active handle count must be 1");
 
-    // Test handle lookup
-    ob::ObjectHeader* fromHandle = handleTable.lookup(h1);
+    // 5. Handle Lookup with Access Mask Verification
+    uint32_t granted = 0;
+    ob::ObjectHeader* fromHandle = handleTable.lookup(h1, &granted);
     TEST_ASSERT(fromHandle == obj1.get(), "Handle lookup should return correct object");
+    TEST_ASSERT(granted == ob::GENERIC_READ, "Granted access mask must match GENERIC_READ");
 
-    // Test handle close
+    // 6. Handle Duplication (Source to Target Table)
+    ob::HandleTable targetTable;
+    Handle hTarget = 0;
+    NtStatus dupHandleStatus = handleTable.duplicateHandle(h1, targetTable, hTarget, ob::GENERIC_ALL, false, 0);
+    TEST_ASSERT(NT_SUCCESS(dupHandleStatus), "Handle duplication must succeed");
+    TEST_ASSERT(hTarget == 4, "First handle in target table must be 4");
+    uint32_t targetAccess = 0;
+    TEST_ASSERT(targetTable.lookup(hTarget, &targetAccess) == obj1.get(), "Duplicated handle must point to original object");
+    TEST_ASSERT(targetAccess == ob::GENERIC_ALL, "Duplicated handle granted access must match GENERIC_ALL");
+
+    // 7. ObReferenceObjectByHandle Type Safety & Access Rights
+    ob::ObjectType eventType{
+        .typeName = L"Event",
+        .typeId = ob::ObjectTypeId::Event
+    };
+
+    ob::ObjectHeader* refObj = nullptr;
+    // Type mismatch must fail
+    NtStatus mismatchSt = ob::ObReferenceObjectByHandle(h1, handleTable, ob::GENERIC_READ, &eventType, &refObj);
+    TEST_ASSERT(mismatchSt == NtStatus::ObjectTypeMismatch, "ObReferenceObjectByHandle with wrong type must return ObjectTypeMismatch");
+
+    // Access denied must fail (requesting WRITE on READ-only handle)
+    NtStatus deniedSt = ob::ObReferenceObjectByHandle(h1, handleTable, ob::GENERIC_WRITE, &fileType, &refObj);
+    TEST_ASSERT(deniedSt == NtStatus::AccessDenied, "ObReferenceObjectByHandle with excessive access rights must return AccessDenied");
+
+    // Valid reference must succeed
+    NtStatus validRef = ob::ObReferenceObjectByHandle(h1, handleTable, ob::GENERIC_READ, &fileType, &refObj);
+    TEST_ASSERT(NT_SUCCESS(validRef), "ObReferenceObjectByHandle with correct type and access must succeed");
+    TEST_ASSERT(refObj == obj1.get(), "Referenced object must match obj1");
+    ob::ObDereferenceObject(refObj);
+
+    // 8. Global Namespace Tree & Hierarchical Resolution (ObpLookupObjectName)
+    auto& obNs = ob::ObjectNamespace::get();
+    obNs.initializeRoot();
+    TEST_ASSERT(obNs.getDirectoryCount() >= 8, "Root namespace must contain standard NT directories");
+
+    // Create nested directory and insert object
+    obNs.createDirectory(L"\\Device\\Harddisk0");
+    auto diskDir = obNs.getDirectory(L"\\Device\\Harddisk0");
+    TEST_ASSERT(diskDir != nullptr, "Created nested directory must be retrievable");
+
+    auto partitionObj = std::make_unique<ob::ObjectHeader>();
+    partitionObj->type = &fileType;
+    partitionObj->objectName = L"Partition1";
+    diskDir->insertObject(L"Partition1", partitionObj.get());
+
+    // Lookup via full path
+    auto* foundPart = obNs.lookupObject(L"\\Device\\Harddisk0\\Partition1");
+    TEST_ASSERT(foundPart == partitionObj.get(), "Hierarchical lookup of \\Device\\Harddisk0\\Partition1 must succeed");
+
+    // 9. Symbolic Link Resolution & Prefix Normalization
+    obNs.createSymbolicLink(L"\\DosDevices\\D:", L"\\Device\\Harddisk0\\Partition1");
+    std::wstring resolved1 = obNs.resolvePath(L"\\DosDevices\\D:\\Windows\\System32");
+    TEST_ASSERT(resolved1 == L"\\Device\\Harddisk0\\Partition1\\Windows\\System32", "Symbolic link prefix replacement must resolve path");
+
+    // DOS device alias normalization (\??\ and \\.\)
+    std::wstring resolved2 = obNs.resolvePath(L"\\??\\D:\\Kernel32.dll");
+    TEST_ASSERT(resolved2 == L"\\Device\\Harddisk0\\Partition1\\Kernel32.dll", "\\??\\ alias normalization must resolve path");
+
+    // 10. Handle Close & Invalid Handle Protection
     NtStatus closeStatus = handleTable.closeHandle(h1);
     TEST_ASSERT(NT_SUCCESS(closeStatus), "Closing valid handle should succeed");
     TEST_ASSERT(handleTable.lookup(h1) == nullptr, "Closed handle must look up as nullptr");
+    TEST_ASSERT(handleTable.getActiveHandleCount() == 0, "Handle table must have 0 active handles");
 
-    // Test invalid handle close
     NtStatus badClose = handleTable.closeHandle(999);
     TEST_ASSERT(badClose == NtStatus::InvalidHandle, "Closing unallocated handle must return InvalidHandle");
+
+    // 11. Object Attributes & Temporary/Permanent Lifecycle
+    obj1->attributes |= ob::OBJ_PERMANENT;
+    TEST_ASSERT(obj1->isPermanent(), "Object must report permanent attribute");
+    ob::ObMakeTemporaryObject(obj1.get());
+    TEST_ASSERT(!obj1->isPermanent(), "ObMakeTemporaryObject must strip permanent attribute");
 }
+
 
 // ============================================================================
 // Suite 2: Virtual Memory Manager Tests (Horizon 1 Clean-Room Architecture)

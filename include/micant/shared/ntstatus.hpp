@@ -59,6 +59,7 @@ enum class NtStatus : uint32_t {
     IllegalInstruction               = 0xC000001D,
     AccessDenied                     = 0xC0000022,
     BufferTooSmall                   = 0xC0000023,
+    ObjectTypeMismatch               = 0xC0000024,
     ObjectNameNotFound               = 0xC0000034,
     ObjectNameCollision              = 0xC0000035,
     ObjectPathNotFound               = 0xC000003A,
@@ -196,6 +197,7 @@ inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(
         case NtStatus::InsufficientResources: return "STATUS_INSUFFICIENT_RESOURCES";
         case NtStatus::AccessDenied: return "STATUS_ACCESS_DENIED";
         case NtStatus::BufferTooSmall: return "STATUS_BUFFER_TOO_SMALL";
+        case NtStatus::ObjectTypeMismatch: return "STATUS_OBJECT_TYPE_MISMATCH";
         case NtStatus::ObjectNameNotFound: return "STATUS_OBJECT_NAME_NOT_FOUND";
         case NtStatus::ObjectNameCollision: return "STATUS_OBJECT_NAME_COLLISION";
         case NtStatus::ObjectPathNotFound: return "STATUS_OBJECT_PATH_NOT_FOUND";
