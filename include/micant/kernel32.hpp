@@ -116,6 +116,70 @@ using LPPROCESSENTRY32W = PROCESSENTRY32W*;
 using PAPCFUNC = void (*)(ULONG_PTR);
 using LOCALE_ENUMPROCW = BOOL (*)(LPWSTR);
 
+struct DCB {
+    DWORD DCBlength{sizeof(DCB)};
+    DWORD BaudRate{115200};
+    DWORD fBinary:1{1};
+    DWORD fParity:1{0};
+    DWORD fOutxCtsFlow:1{0};
+    DWORD fOutxDsrFlow:1{0};
+    DWORD fDtrControl:2{0};
+    DWORD fDsrSensitivity:1{0};
+    DWORD fTXContinueOnXoff:1{0};
+    DWORD fOutX:1{0};
+    DWORD fInX:1{0};
+    DWORD fErrorChar:1{0};
+    DWORD fNull:1{0};
+    DWORD fRtsControl:2{0};
+    DWORD fAbortOnError:1{0};
+    DWORD fDummy2:17{0};
+    WORD  wReserved{0};
+    WORD  XonLim{0};
+    WORD  XoffLim{0};
+    BYTE  ByteSize{8};
+    BYTE  Parity{0};
+    BYTE  StopBits{0};
+    char  XonChar{0};
+    char  XoffChar{0};
+    char  ErrorChar{0};
+    char  EofChar{0};
+    char  EvtChar{0};
+    WORD  wReserved1{0};
+};
+
+struct COMMTIMEOUTS {
+    DWORD ReadIntervalTimeout{0};
+    DWORD ReadTotalTimeoutMultiplier{0};
+    DWORD ReadTotalTimeoutConstant{5000};
+    DWORD WriteTotalTimeoutMultiplier{0};
+    DWORD WriteTotalTimeoutConstant{5000};
+};
+
+struct MEMORYSTATUS {
+    DWORD dwLength{sizeof(MEMORYSTATUS)};
+    DWORD dwMemoryLoad{25};
+    SIZE_T dwTotalPhys{16ULL * 1024 * 1024 * 1024};
+    SIZE_T dwAvailPhys{12ULL * 1024 * 1024 * 1024};
+    SIZE_T dwTotalPageFile{32ULL * 1024 * 1024 * 1024};
+    SIZE_T dwAvailPageFile{28ULL * 1024 * 1024 * 1024};
+    SIZE_T dwTotalVirtual{128ULL * 1024 * 1024 * 1024 * 1024};
+    SIZE_T dwAvailVirtual{127ULL * 1024 * 1024 * 1024 * 1024};
+};
+
+struct OVERLAPPED {
+    ULONG_PTR Internal{0};
+    ULONG_PTR InternalHigh{0};
+    union {
+        __extension__ struct {
+            DWORD Offset;
+            DWORD OffsetHigh;
+        };
+        void* Pointer{nullptr};
+    };
+    HANDLE hEvent{nullptr};
+};
+using LPOVERLAPPED = OVERLAPPED*;
+
 using micant::TRUE;
 using micant::FALSE;
 inline const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1));
@@ -2687,7 +2751,6 @@ using BYTE = uint8_t;
 using HRESULT = int32_t;
 using LPSYSTEMTIME = SYSTEMTIME*;
 using LPSECURITY_ATTRIBUTES = SECURITY_ATTRIBUTES*;
-using LPOVERLAPPED = void*;
 
 union LARGE_INTEGER {
     struct {
@@ -4223,6 +4286,125 @@ inline BOOL WINAPI HeapQueryInformation([[maybe_unused]] HANDLE HeapHandle, [[ma
     return TRUE;
 }
 
+inline BOOL Beep([[maybe_unused]] DWORD dwFreq, [[maybe_unused]] DWORD dwDuration) noexcept {
+    return TRUE;
+}
+
+inline BOOL ClearCommBreak([[maybe_unused]] HANDLE hFile) noexcept { return TRUE; }
+inline BOOL SetCommBreak([[maybe_unused]] HANDLE hFile) noexcept { return TRUE; }
+
+inline BOOL GetCommState([[maybe_unused]] HANDLE hFile, DCB* lpDCB) noexcept {
+    if (!lpDCB) return FALSE;
+    lpDCB->DCBlength = sizeof(DCB);
+    lpDCB->BaudRate = 115200;
+    lpDCB->ByteSize = 8;
+    lpDCB->Parity = 0;
+    lpDCB->StopBits = 0;
+    return TRUE;
+}
+
+inline BOOL SetCommState([[maybe_unused]] HANDLE hFile, [[maybe_unused]] DCB* lpDCB) noexcept { return TRUE; }
+
+inline BOOL SetCommTimeouts([[maybe_unused]] HANDLE hFile, [[maybe_unused]] COMMTIMEOUTS* lpCommTimeouts) noexcept { return TRUE; }
+
+inline BOOL SetHandleInformation([[maybe_unused]] HANDLE hObject, [[maybe_unused]] DWORD dwMask, [[maybe_unused]] DWORD dwFlags) noexcept { return TRUE; }
+
+inline HANDLE CreateEventA([[maybe_unused]] void* lpEventAttributes, [[maybe_unused]] BOOL bManualReset, [[maybe_unused]] BOOL bInitialState, [[maybe_unused]] const char* lpName) noexcept {
+    static uintptr_t s_eventHandle = 0x3000;
+    return reinterpret_cast<HANDLE>(++s_eventHandle);
+}
+
+inline HANDLE CreateMutexA([[maybe_unused]] void* lpMutexAttributes, [[maybe_unused]] BOOL bInitialOwner, [[maybe_unused]] const char* lpName) noexcept {
+    static uintptr_t s_mutexHandle = 0x4000;
+    return reinterpret_cast<HANDLE>(++s_mutexHandle);
+}
+
+inline HANDLE CreateFileMappingA(HANDLE hFile, void* lpAttributes, DWORD flProtect, DWORD dwMaximumSizeHigh, DWORD dwMaximumSizeLow, [[maybe_unused]] const char* lpName) noexcept {
+    return CreateFileMappingW(hFile, lpAttributes, flProtect, dwMaximumSizeHigh, dwMaximumSizeLow, nullptr);
+}
+
+inline HANDLE CreateNamedPipeA(const char* lpName, DWORD dwOpenMode, DWORD dwPipeMode, DWORD nMaxInstances, DWORD nOutBufferSize, DWORD nInBufferSize, DWORD nDefaultTimeOut, void* lpSecurityAttributes) noexcept {
+    std::wstring wName;
+    if (lpName) {
+        while (*lpName) wName.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*lpName++)));
+    }
+    return CreateNamedPipeW(wName.c_str(), dwOpenMode, dwPipeMode, nMaxInstances, nOutBufferSize, nInBufferSize, nDefaultTimeOut, lpSecurityAttributes);
+}
+
+inline BOOL WaitNamedPipeA([[maybe_unused]] const char* lpNamedPipeName, [[maybe_unused]] DWORD nTimeOut) noexcept {
+    return TRUE;
+}
+
+inline BOOL CreatePipe(HANDLE* hReadPipe, HANDLE* hWritePipe, [[maybe_unused]] void* lpPipeAttributes, [[maybe_unused]] DWORD nSize) noexcept {
+    if (!hReadPipe || !hWritePipe) return FALSE;
+    static uintptr_t s_pipeHandle = 0x5000;
+    *hReadPipe = reinterpret_cast<HANDLE>(++s_pipeHandle);
+    *hWritePipe = reinterpret_cast<HANDLE>(++s_pipeHandle);
+    return TRUE;
+}
+
+inline void* FindResourceA(void* hModule, const char* lpName, const char* lpType) noexcept {
+    std::wstring wName, wType;
+    if (lpName) {
+        if (reinterpret_cast<uintptr_t>(lpName) <= 0xFFFF) {
+            wName = reinterpret_cast<const wchar_t*>(lpName);
+        } else {
+            const char* p = lpName;
+            while (*p) wName.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*p++)));
+        }
+    }
+    if (lpType) {
+        if (reinterpret_cast<uintptr_t>(lpType) <= 0xFFFF) {
+            wType = reinterpret_cast<const wchar_t*>(lpType);
+        } else {
+            const char* p = lpType;
+            while (*p) wType.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*p++)));
+        }
+    }
+    return FindResourceW(hModule, wName.c_str(), wType.c_str());
+}
+
+inline BOOL GetOverlappedResult([[maybe_unused]] HANDLE hFile, OVERLAPPED* lpOverlapped, DWORD* lpNumberOfBytesTransferred, [[maybe_unused]] BOOL bWait) noexcept {
+    if (lpNumberOfBytesTransferred) *lpNumberOfBytesTransferred = 0;
+    if (lpOverlapped) lpOverlapped->Internal = 0;
+    return TRUE;
+}
+
+inline UINT GetSystemDirectoryA(char* lpBuffer, UINT uSize) noexcept {
+    static constexpr const char* SYS_DIR = "C:\\Windows\\System32";
+    UINT len = static_cast<UINT>(std::strlen(SYS_DIR));
+    if (!lpBuffer || uSize < len + 1) return len + 1;
+    std::memcpy(lpBuffer, SYS_DIR, len + 1);
+    return len;
+}
+
+inline UINT GetWindowsDirectoryA(char* lpBuffer, UINT uSize) noexcept {
+    static constexpr const char* WIN_DIR = "C:\\Windows";
+    UINT len = static_cast<UINT>(std::strlen(WIN_DIR));
+    if (!lpBuffer || uSize < len + 1) return len + 1;
+    std::memcpy(lpBuffer, WIN_DIR, len + 1);
+    return len;
+}
+
+inline BOOL GetThreadTimes([[maybe_unused]] HANDLE hThread, void* lpCreationTime, void* lpExitTime, void* lpKernelTime, void* lpUserTime) noexcept {
+    if (lpCreationTime) std::memset(lpCreationTime, 0, 8);
+    if (lpExitTime) std::memset(lpExitTime, 0, 8);
+    if (lpKernelTime) std::memset(lpKernelTime, 0, 8);
+    if (lpUserTime) std::memset(lpUserTime, 0, 8);
+    return TRUE;
+}
+
+inline void GlobalMemoryStatus(MEMORYSTATUS* lpBuffer) noexcept {
+    if (!lpBuffer) return;
+    *lpBuffer = MEMORYSTATUS{};
+}
+
+inline BOOL LocalFileTimeToFileTime(const void* lpLocalFileTime, void* lpFileTime) noexcept {
+    if (!lpLocalFileTime || !lpFileTime) return FALSE;
+    std::memcpy(lpFileTime, lpLocalFileTime, 8);
+    return TRUE;
+}
+
 // ============================================================================
 // 18. Win32 Dynamic Subsystem Export Table Initializer
 // ============================================================================
@@ -4629,6 +4811,27 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "AddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
     ldr.registerExport("kernel32.dll", "GetPrivateProfileIntW", reinterpret_cast<void*>(GetPrivateProfileIntW));
     ldr.registerExport("kernel32.dll", "HeapQueryInformation", reinterpret_cast<void*>(HeapQueryInformation));
+    ldr.registerExport("kernel32.dll", "Beep", reinterpret_cast<void*>(Beep));
+    ldr.registerExport("kernel32.dll", "ClearCommBreak", reinterpret_cast<void*>(ClearCommBreak));
+    ldr.registerExport("kernel32.dll", "SetCommBreak", reinterpret_cast<void*>(SetCommBreak));
+    ldr.registerExport("kernel32.dll", "GetCommState", reinterpret_cast<void*>(GetCommState));
+    ldr.registerExport("kernel32.dll", "SetCommState", reinterpret_cast<void*>(SetCommState));
+    ldr.registerExport("kernel32.dll", "SetCommTimeouts", reinterpret_cast<void*>(SetCommTimeouts));
+    ldr.registerExport("kernel32.dll", "SetHandleInformation", reinterpret_cast<void*>(SetHandleInformation));
+    ldr.registerExport("kernel32.dll", "CreateEventA", reinterpret_cast<void*>(CreateEventA));
+    ldr.registerExport("kernel32.dll", "CreateMutexA", reinterpret_cast<void*>(CreateMutexA));
+    ldr.registerExport("kernel32.dll", "CreateFileMappingA", reinterpret_cast<void*>(CreateFileMappingA));
+    ldr.registerExport("kernel32.dll", "CreateNamedPipeA", reinterpret_cast<void*>(CreateNamedPipeA));
+    ldr.registerExport("kernel32.dll", "WaitNamedPipeA", reinterpret_cast<void*>(WaitNamedPipeA));
+    ldr.registerExport("kernel32.dll", "CreatePipe", reinterpret_cast<void*>(CreatePipe));
+    ldr.registerExport("kernel32.dll", "FindResourceA", reinterpret_cast<void*>(FindResourceA));
+    ldr.registerExport("kernel32.dll", "GetOverlappedResult", reinterpret_cast<void*>(GetOverlappedResult));
+    ldr.registerExport("kernel32.dll", "GetSystemDirectoryA", reinterpret_cast<void*>(GetSystemDirectoryA));
+    ldr.registerExport("kernel32.dll", "GetWindowsDirectoryA", reinterpret_cast<void*>(GetWindowsDirectoryA));
+    ldr.registerExport("kernel32.dll", "GetTempPathA", reinterpret_cast<void*>(GetTempPathA));
+    ldr.registerExport("kernel32.dll", "GetThreadTimes", reinterpret_cast<void*>(GetThreadTimes));
+    ldr.registerExport("kernel32.dll", "GlobalMemoryStatus", reinterpret_cast<void*>(GlobalMemoryStatus));
+    ldr.registerExport("kernel32.dll", "LocalFileTimeToFileTime", reinterpret_cast<void*>(LocalFileTimeToFileTime));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

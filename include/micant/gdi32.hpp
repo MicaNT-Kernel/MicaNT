@@ -270,6 +270,61 @@ struct TEXTMETRICW {
     uint8_t tmCharSet{1};
 };
 
+struct LOGFONTA {
+    int32_t lfHeight{14};
+    int32_t lfWidth{0};
+    int32_t lfEscapement{0};
+    int32_t lfOrientation{0};
+    int32_t lfWeight{400};
+    uint8_t lfItalic{0};
+    uint8_t lfUnderline{0};
+    uint8_t lfStrikeOut{0};
+    uint8_t lfCharSet{0};
+    uint8_t lfOutPrecision{0};
+    uint8_t lfClipPrecision{0};
+    uint8_t lfQuality{0};
+    uint8_t lfPitchAndFamily{0};
+    char lfFaceName[32]{"Courier New"};
+};
+
+struct TEXTMETRICA {
+    int32_t tmHeight{14};
+    int32_t tmAscent{11};
+    int32_t tmDescent{3};
+    int32_t tmInternalLeading{0};
+    int32_t tmExternalLeading{0};
+    int32_t tmAveCharWidth{8};
+    int32_t tmMaxCharWidth{16};
+    int32_t tmWeight{400};
+    int32_t tmOverhang{0};
+    int32_t tmDigitizedAspectX{96};
+    int32_t tmDigitizedAspectY{96};
+    uint8_t tmFirstChar{32};
+    uint8_t tmLastChar{126};
+    uint8_t tmDefaultChar{32};
+    uint8_t tmBreakChar{32};
+    uint8_t tmItalic{0};
+    uint8_t tmUnderlined{0};
+    uint8_t tmStruckOut{0};
+    uint8_t tmPitchAndFamily{0};
+    uint8_t tmCharSet{0};
+};
+
+struct ABCFLOAT {
+    float abcfA{0.0f};
+    float abcfB{8.0f};
+    float abcfC{0.0f};
+};
+
+struct CHARSETINFO {
+    uint32_t ciCharset{0};
+    uint32_t ciACP{1252};
+    struct {
+        uint32_t fsUsb[4];
+        uint32_t fsCsb[2];
+    } fs{};
+};
+
 struct PIXELFORMATDESCRIPTOR {
     uint16_t nSize{sizeof(PIXELFORMATDESCRIPTOR)};
     uint16_t nVersion{1};
@@ -1478,6 +1533,90 @@ inline BOOL ModifyWorldTransform([[maybe_unused]] HDC hdc,
     return TRUE;
 }
 
+inline HFONT CreateFontA(int cHeight, int cWidth, int cEscapement, int cOrientation, int cWeight, DWORD bItalic, DWORD bUnderline, DWORD bStrikeOut, DWORD iCharSet, DWORD iOutPrecision, DWORD iClipPrecision, DWORD iQuality, DWORD iPitchAndFamily, const char* pszFaceName) noexcept {
+    wchar_t wFace[64]{};
+    if (pszFaceName) {
+        int i = 0;
+        while (pszFaceName[i] && i < 63) { wFace[i] = static_cast<wchar_t>(pszFaceName[i]); ++i; }
+        wFace[i] = L'\0';
+    }
+    return CreateFontW(cHeight, cWidth, cEscapement, cOrientation, cWeight, bItalic, bUnderline, bStrikeOut, iCharSet, iOutPrecision, iClipPrecision, iQuality, iPitchAndFamily, wFace);
+}
+
+inline HFONT CreateFontIndirectA(const LOGFONTA* lplf) noexcept {
+    if (!lplf) return reinterpret_cast<HFONT>(0x101);
+    return CreateFontA(lplf->lfHeight, lplf->lfWidth, lplf->lfEscapement, lplf->lfOrientation, lplf->lfWeight, lplf->lfItalic, lplf->lfUnderline, lplf->lfStrikeOut, lplf->lfCharSet, lplf->lfOutPrecision, lplf->lfClipPrecision, lplf->lfQuality, lplf->lfPitchAndFamily, lplf->lfFaceName);
+}
+
+inline BOOL GetCharABCWidthsFloatA([[maybe_unused]] HDC hdc, UINT iFirst, UINT iLast, ABCFLOAT* lpABC) noexcept {
+    if (!lpABC || iLast < iFirst) return FALSE;
+    UINT count = iLast - iFirst + 1;
+    for (UINT i = 0; i < count; ++i) {
+        lpABC[i] = ABCFLOAT{0.0f, 8.0f, 0.0f};
+    }
+    return TRUE;
+}
+
+inline BOOL GetCharWidth32A([[maybe_unused]] HDC hdc, UINT iFirst, UINT iLast, int* lpBuffer) noexcept {
+    if (!lpBuffer || iLast < iFirst) return FALSE;
+    UINT count = iLast - iFirst + 1;
+    for (UINT i = 0; i < count; ++i) lpBuffer[i] = 8;
+    return TRUE;
+}
+
+inline BOOL GetCharWidth32W([[maybe_unused]] HDC hdc, UINT iFirst, UINT iLast, int* lpBuffer) noexcept {
+    if (!lpBuffer || iLast < iFirst) return FALSE;
+    UINT count = iLast - iFirst + 1;
+    for (UINT i = 0; i < count; ++i) lpBuffer[i] = 8;
+    return TRUE;
+}
+
+inline BOOL GetCharWidthA(HDC hdc, UINT iFirst, UINT iLast, int* lpBuffer) noexcept {
+    return GetCharWidth32A(hdc, iFirst, iLast, lpBuffer);
+}
+
+inline BOOL GetCharWidthW(HDC hdc, UINT iFirst, UINT iLast, int* lpBuffer) noexcept {
+    return GetCharWidth32W(hdc, iFirst, iLast, lpBuffer);
+}
+
+inline DWORD GetCharacterPlacementW([[maybe_unused]] HDC hdc, [[maybe_unused]] const wchar_t* lpString, int nCount, [[maybe_unused]] int nMexExtent, [[maybe_unused]] void* lpResults, [[maybe_unused]] DWORD dwFlags) noexcept {
+    return static_cast<DWORD>(nCount * 8);
+}
+
+inline int GetObjectA([[maybe_unused]] void* hgdiobj, int cbBuffer, void* lpvObject) noexcept {
+    if (!lpvObject || cbBuffer <= 0) return sizeof(LOGFONTA);
+    std::memset(lpvObject, 0, cbBuffer);
+    return std::min<int>(cbBuffer, sizeof(LOGFONTA));
+}
+
+inline DWORD GetOutlineTextMetricsA([[maybe_unused]] HDC hdc, [[maybe_unused]] UINT cbData, [[maybe_unused]] void* lpOTM) noexcept {
+    return 0;
+}
+
+inline BOOL GetTextExtentPointA([[maybe_unused]] HDC hdc, const char* lpString, int c, void* lpSize) noexcept {
+    if (!lpSize) return FALSE;
+    struct SIZE_WIN32 { int32_t cx; int32_t cy; };
+    auto* s = reinterpret_cast<SIZE_WIN32*>(lpSize);
+    s->cx = (c > 0 && lpString) ? (c * 8) : 0;
+    s->cy = 14;
+    return TRUE;
+}
+
+inline BOOL GetTextMetricsA([[maybe_unused]] HDC hdc, TEXTMETRICA* lptm) noexcept {
+    if (!lptm) return FALSE;
+    *lptm = TEXTMETRICA{};
+    return TRUE;
+}
+
+inline BOOL TranslateCharsetInfo([[maybe_unused]] DWORD* lpSrc, CHARSETINFO* lpCs, [[maybe_unused]] DWORD dwFlags) noexcept {
+    if (!lpCs) return FALSE;
+    lpCs->ciCharset = 0;
+    lpCs->ciACP = 1252;
+    return TRUE;
+}
+
+inline int UpdateColors([[maybe_unused]] HDC hdc) noexcept { return 1; }
+
 // ============================================================================
 // 6. Subsystem Export Registration
 // ============================================================================
@@ -1599,6 +1738,20 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("msimg32.dll", "GradientFill", reinterpret_cast<void*>(GradientFill));
     ldr.registerExport("msimg32.dll", "AlphaBlend", reinterpret_cast<void*>(AlphaBlend));
     ldr.registerExport("gdi32.dll", "AlphaBlend", reinterpret_cast<void*>(AlphaBlend));
+    ldr.registerExport("gdi32.dll", "CreateFontA", reinterpret_cast<void*>(CreateFontA));
+    ldr.registerExport("gdi32.dll", "CreateFontIndirectA", reinterpret_cast<void*>(CreateFontIndirectA));
+    ldr.registerExport("gdi32.dll", "GetCharABCWidthsFloatA", reinterpret_cast<void*>(GetCharABCWidthsFloatA));
+    ldr.registerExport("gdi32.dll", "GetCharWidth32A", reinterpret_cast<void*>(GetCharWidth32A));
+    ldr.registerExport("gdi32.dll", "GetCharWidth32W", reinterpret_cast<void*>(GetCharWidth32W));
+    ldr.registerExport("gdi32.dll", "GetCharWidthA", reinterpret_cast<void*>(GetCharWidthA));
+    ldr.registerExport("gdi32.dll", "GetCharWidthW", reinterpret_cast<void*>(GetCharWidthW));
+    ldr.registerExport("gdi32.dll", "GetCharacterPlacementW", reinterpret_cast<void*>(GetCharacterPlacementW));
+    ldr.registerExport("gdi32.dll", "GetObjectA", reinterpret_cast<void*>(GetObjectA));
+    ldr.registerExport("gdi32.dll", "GetOutlineTextMetricsA", reinterpret_cast<void*>(GetOutlineTextMetricsA));
+    ldr.registerExport("gdi32.dll", "GetTextExtentPointA", reinterpret_cast<void*>(GetTextExtentPointA));
+    ldr.registerExport("gdi32.dll", "GetTextMetricsA", reinterpret_cast<void*>(GetTextMetricsA));
+    ldr.registerExport("gdi32.dll", "TranslateCharsetInfo", reinterpret_cast<void*>(TranslateCharsetInfo));
+    ldr.registerExport("gdi32.dll", "UpdateColors", reinterpret_cast<void*>(UpdateColors));
 }
 
 } // namespace micant::gdi32

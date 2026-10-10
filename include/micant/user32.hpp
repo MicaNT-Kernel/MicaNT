@@ -43,6 +43,7 @@ using HCURSOR   = void*;
 using HBRUSH    = void*;
 using HMENU     = void*;
 using HRAWINPUT = void*;
+using HWND      = win32::HWND;
 
 using WNDPROC = LRESULT (*)(win32::HWND, UINT, WPARAM, LPARAM);
 
@@ -93,6 +94,19 @@ struct WNDCLASSW {
     HBRUSH      hbrBackground{nullptr};
     const wchar_t* lpszMenuName{nullptr};
     const wchar_t* lpszClassName{nullptr};
+};
+
+struct WNDCLASSA {
+    UINT        style{0};
+    void*       lpfnWndProc{nullptr};
+    int         cbClsExtra{0};
+    int         cbWndExtra{0};
+    HINSTANCE   hInstance{nullptr};
+    HICON       hIcon{nullptr};
+    HCURSOR     hCursor{nullptr};
+    HBRUSH      hbrBackground{nullptr};
+    const char* lpszMenuName{nullptr};
+    const char* lpszClassName{nullptr};
 };
 
 struct CREATESTRUCTW {
@@ -1733,6 +1747,154 @@ inline win32::BOOL OemToCharA(const char* lpszSrc, char* lpszDst) noexcept {
     return 1;
 }
 
+inline std::unordered_map<win32::HWND, std::string>& GetWindowTitleMap() {
+    static std::unordered_map<win32::HWND, std::string> s_titles;
+    return s_titles;
+}
+
+inline std::mutex& GetWindowTitleMutex() {
+    static std::mutex s_mtx;
+    return s_mtx;
+}
+
+inline win32::HWND CreateDialogParamA(HINSTANCE /*hInstance*/, const char* /*lpTemplateName*/, win32::HWND /*hWndParent*/, void* /*lpDialogFunc*/, LPARAM /*dwInitParam*/) noexcept {
+    static uintptr_t s_dlg = 0x9000;
+    return reinterpret_cast<win32::HWND>(++s_dlg);
+}
+
+inline LRESULT DefDlgProcA(win32::HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) noexcept {
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+}
+
+inline LRESULT DefWindowProcA(win32::HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) noexcept {
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+}
+
+inline int DialogBoxParamA(HINSTANCE /*hInstance*/, const char* /*lpTemplateName*/, win32::HWND /*hWndParent*/, void* /*lpDialogFunc*/, LPARAM /*dwInitParam*/) noexcept {
+    return 1; // IDOK
+}
+
+inline win32::HWND FindWindowA(const char* /*lpClassName*/, const char* /*lpWindowName*/) noexcept {
+    return reinterpret_cast<win32::HWND>(0x9101);
+}
+
+inline win32::BOOL FlashWindow(win32::HWND /*hWnd*/, win32::BOOL /*bInvert*/) noexcept { return win32::TRUE; }
+
+inline win32::HWND GetClipboardOwner() noexcept { return nullptr; }
+
+inline win32::BOOL GetMessageA(void* lpMsg, win32::HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax) noexcept {
+    return GetMessageW(reinterpret_cast<MSG*>(lpMsg), hWnd, wMsgFilterMin, wMsgFilterMax);
+}
+
+inline uint32_t GetQueueStatus(UINT /*flags*/) noexcept { return 0; }
+
+inline intptr_t GetWindowLongPtrA(win32::HWND hWnd, int nIndex) noexcept {
+    return static_cast<intptr_t>(GetWindowLongPtrW(hWnd, nIndex));
+}
+
+inline int GetWindowTextLengthA(win32::HWND hWnd) noexcept {
+    std::lock_guard<std::mutex> lock(GetWindowTitleMutex());
+    auto& map = GetWindowTitleMap();
+    auto it = map.find(hWnd);
+    return (it != map.end()) ? static_cast<int>(it->second.size()) : 0;
+}
+
+inline int GetWindowTextA(win32::HWND hWnd, char* lpString, int nMaxCount) noexcept {
+    if (!lpString || nMaxCount <= 0) return 0;
+    std::lock_guard<std::mutex> lock(GetWindowTitleMutex());
+    auto& map = GetWindowTitleMap();
+    auto it = map.find(hWnd);
+    if (it != map.end()) {
+        int len = std::min<int>(static_cast<int>(it->second.size()), nMaxCount - 1);
+        std::memcpy(lpString, it->second.c_str(), len);
+        lpString[len] = '\0';
+        return len;
+    }
+    lpString[0] = '\0';
+    return 0;
+}
+
+inline win32::BOOL InsertMenuA(HMENU /*hMenu*/, UINT /*uPosition*/, UINT /*uFlags*/, uintptr_t /*uIDNewItem*/, const char* /*lpNewItem*/) noexcept {
+    return win32::TRUE;
+}
+
+inline HCURSOR LoadCursorA(HINSTANCE /*hInstance*/, const char* /*lpCursorName*/) noexcept {
+    return reinterpret_cast<HCURSOR>(0x10001);
+}
+
+inline HICON LoadIconA(HINSTANCE /*hInstance*/, const char* /*lpIconName*/) noexcept {
+    return reinterpret_cast<HICON>(0x20001);
+}
+
+inline win32::HANDLE LoadImageA(HINSTANCE /*hInst*/, const char* /*name*/, UINT /*type*/, int /*cx*/, int /*cy*/, UINT /*fuLoad*/) noexcept {
+    return reinterpret_cast<win32::HANDLE>(0x30001);
+}
+
+inline int MessageBoxIndirectW(const void* /*lpmbp*/) noexcept {
+    return 1; // IDOK
+}
+
+inline win32::BOOL PostMessageA(win32::HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) noexcept {
+    return PostMessageW(hWnd, Msg, wParam, lParam);
+}
+
+inline uint16_t RegisterClassA(const WNDCLASSA* lpWndClass) noexcept {
+    if (!lpWndClass) return 0;
+    return 0x8001;
+}
+
+inline UINT RegisterClipboardFormatA(const char* /*lpszFormat*/) noexcept {
+    static UINT s_cf = 0xC000;
+    return ++s_cf;
+}
+
+inline UINT RegisterWindowMessageA(const char* /*lpString*/) noexcept {
+    static UINT s_wm = 0xC050;
+    return ++s_wm;
+}
+
+inline LRESULT SendDlgItemMessageA(win32::HWND /*hDlg*/, int /*nIDDlgItem*/, UINT /*Msg*/, WPARAM /*wParam*/, LPARAM /*lParam*/) noexcept {
+    return 0;
+}
+
+inline uintptr_t SetClassLongPtrA(win32::HWND /*hWnd*/, int /*nIndex*/, intptr_t dwNewLong) noexcept {
+    return static_cast<uintptr_t>(dwNewLong);
+}
+
+inline intptr_t SetWindowLongPtrA(win32::HWND hWnd, int nIndex, intptr_t dwNewLong) noexcept {
+    return static_cast<intptr_t>(SetWindowLongPtrW(hWnd, nIndex, static_cast<uintptr_t>(dwNewLong)));
+}
+
+inline win32::BOOL SetWindowTextA(win32::HWND hWnd, const char* lpString) noexcept {
+    std::lock_guard<std::mutex> lock(GetWindowTitleMutex());
+    if (lpString) {
+        GetWindowTitleMap()[hWnd] = lpString;
+    }
+    return win32::TRUE;
+}
+
+inline int ToAsciiEx(UINT uVirtKey, UINT /*uScanCode*/, const uint8_t* lpKeyState, uint16_t* lpChar, UINT /*uFlags*/, void* /*dwhkl*/) noexcept {
+    if (!lpChar) return 0;
+    bool isShift = (lpKeyState && (lpKeyState[0x10] & 0x80));
+    if (uVirtKey >= 'A' && uVirtKey <= 'Z') {
+        *lpChar = static_cast<uint16_t>(isShift ? uVirtKey : (uVirtKey + 32));
+        return 1;
+    }
+    if (uVirtKey >= '0' && uVirtKey <= '9') {
+        *lpChar = static_cast<uint16_t>(uVirtKey);
+        return 1;
+    }
+    if (uVirtKey == 0x20) { // VK_SPACE
+        *lpChar = ' ';
+        return 1;
+    }
+    if (uVirtKey == 0x0D) { // VK_RETURN
+        *lpChar = '\r';
+        return 1;
+    }
+    return 0;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -1868,6 +2030,32 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "DdeClientTransaction", reinterpret_cast<void*>(DdeClientTransaction));
     ldr.registerExport("user32.dll", "DdeFreeDataHandle", reinterpret_cast<void*>(DdeFreeDataHandle));
     ldr.registerExport("user32.dll", "PackDDElParam", reinterpret_cast<void*>(PackDDElParam));
+    ldr.registerExport("user32.dll", "CreateDialogParamA", reinterpret_cast<void*>(CreateDialogParamA));
+    ldr.registerExport("user32.dll", "DefDlgProcA", reinterpret_cast<void*>(DefDlgProcA));
+    ldr.registerExport("user32.dll", "DefWindowProcA", reinterpret_cast<void*>(DefWindowProcA));
+    ldr.registerExport("user32.dll", "DialogBoxParamA", reinterpret_cast<void*>(DialogBoxParamA));
+    ldr.registerExport("user32.dll", "FindWindowA", reinterpret_cast<void*>(FindWindowA));
+    ldr.registerExport("user32.dll", "FlashWindow", reinterpret_cast<void*>(FlashWindow));
+    ldr.registerExport("user32.dll", "GetClipboardOwner", reinterpret_cast<void*>(GetClipboardOwner));
+    ldr.registerExport("user32.dll", "GetMessageA", reinterpret_cast<void*>(GetMessageA));
+    ldr.registerExport("user32.dll", "GetQueueStatus", reinterpret_cast<void*>(GetQueueStatus));
+    ldr.registerExport("user32.dll", "GetWindowLongPtrA", reinterpret_cast<void*>(GetWindowLongPtrA));
+    ldr.registerExport("user32.dll", "GetWindowTextLengthA", reinterpret_cast<void*>(GetWindowTextLengthA));
+    ldr.registerExport("user32.dll", "GetWindowTextA", reinterpret_cast<void*>(GetWindowTextA));
+    ldr.registerExport("user32.dll", "InsertMenuA", reinterpret_cast<void*>(InsertMenuA));
+    ldr.registerExport("user32.dll", "LoadCursorA", reinterpret_cast<void*>(LoadCursorA));
+    ldr.registerExport("user32.dll", "LoadIconA", reinterpret_cast<void*>(LoadIconA));
+    ldr.registerExport("user32.dll", "LoadImageA", reinterpret_cast<void*>(LoadImageA));
+    ldr.registerExport("user32.dll", "MessageBoxIndirectW", reinterpret_cast<void*>(MessageBoxIndirectW));
+    ldr.registerExport("user32.dll", "PostMessageA", reinterpret_cast<void*>(PostMessageA));
+    ldr.registerExport("user32.dll", "RegisterClassA", reinterpret_cast<void*>(RegisterClassA));
+    ldr.registerExport("user32.dll", "RegisterClipboardFormatA", reinterpret_cast<void*>(RegisterClipboardFormatA));
+    ldr.registerExport("user32.dll", "RegisterWindowMessageA", reinterpret_cast<void*>(RegisterWindowMessageA));
+    ldr.registerExport("user32.dll", "SendDlgItemMessageA", reinterpret_cast<void*>(SendDlgItemMessageA));
+    ldr.registerExport("user32.dll", "SetClassLongPtrA", reinterpret_cast<void*>(SetClassLongPtrA));
+    ldr.registerExport("user32.dll", "SetWindowLongPtrA", reinterpret_cast<void*>(SetWindowLongPtrA));
+    ldr.registerExport("user32.dll", "SetWindowTextA", reinterpret_cast<void*>(SetWindowTextA));
+    ldr.registerExport("user32.dll", "ToAsciiEx", reinterpret_cast<void*>(ToAsciiEx));
 }
 
 } // namespace micant::user32

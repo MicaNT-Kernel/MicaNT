@@ -1543,9 +1543,41 @@ inline int32_t RegSetKeySecurity([[maybe_unused]] void* hKey, [[maybe_unused]] u
     return 0; // ERROR_SUCCESS
 }
 
+inline int32_t CopySid(uint32_t nDestinationSidLength, void* pDestinationSid, void* pSourceSid) noexcept {
+    if (!pDestinationSid || !pSourceSid || nDestinationSidLength < 8) return 0;
+    std::memcpy(pDestinationSid, pSourceSid, std::min<uint32_t>(nDestinationSidLength, 68));
+    return 1;
+}
+
+inline int32_t GetUserNameA(char* lpBuffer, uint32_t* pcbBuffer) noexcept {
+    if (!lpBuffer || !pcbBuffer) return 0;
+    static constexpr const char* DEFAULT_USER = "MicaAdmin";
+    uint32_t len = static_cast<uint32_t>(std::strlen(DEFAULT_USER));
+    if (*pcbBuffer < len + 1) {
+        *pcbBuffer = len + 1;
+        return 0;
+    }
+    std::memcpy(lpBuffer, DEFAULT_USER, len + 1);
+    *pcbBuffer = len;
+    return 1;
+}
+
+inline int32_t RegDeleteKeyA([[maybe_unused]] void* hKey, [[maybe_unused]] const char* lpSubKey) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline int32_t RegEnumKeyA([[maybe_unused]] void* hKey, [[maybe_unused]] uint32_t dwIndex, char* lpName, uint32_t cchName) noexcept {
+    if (lpName && cchName > 0) lpName[0] = '\0';
+    return 259; // ERROR_NO_MORE_ITEMS
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("advapi32.dll", "RegSetKeySecurity", reinterpret_cast<void*>(RegSetKeySecurity));
+    ldr.registerExport("advapi32.dll", "CopySid", reinterpret_cast<void*>(CopySid));
+    ldr.registerExport("advapi32.dll", "GetUserNameA", reinterpret_cast<void*>(GetUserNameA));
+    ldr.registerExport("advapi32.dll", "RegDeleteKeyA", reinterpret_cast<void*>(RegDeleteKeyA));
+    ldr.registerExport("advapi32.dll", "RegEnumKeyA", reinterpret_cast<void*>(RegEnumKeyA));
     ldr.registerExport("advapi32.dll", "CryptAcquireContextA", reinterpret_cast<void*>(CryptAcquireContextA));
     ldr.registerExport("advapi32.dll", "CryptAcquireContextW", reinterpret_cast<void*>(CryptAcquireContextW));
     ldr.registerExport("advapi32.dll", "CryptReleaseContext", reinterpret_cast<void*>(CryptReleaseContext));

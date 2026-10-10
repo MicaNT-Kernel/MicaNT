@@ -40,6 +40,7 @@
 #include "wininet.hpp"
 #include "winspool.hpp"
 #include "uiautomation.hpp"
+#include "tsf.hpp"
 #include "ldr.hpp"
 #include "mpr.hpp"
 #include "satellite_wiztree.hpp"
@@ -137,6 +138,7 @@ inline void InitializeSatelliteWin32Exports() {
     wininet::InitializeWinINetSubsystemExports();
     winspool::InitializePrintSpoolerSubsystemExports();
     uiautomation::InitializeUIAutomationSubsystemExports();
+    tsf::InitializeTextServicesExports();
 
     // WizTree 4.x Subsystem Extensions
     wiztree::InitializeWizTreeWin32Exports();

@@ -1318,6 +1318,10 @@ inline int32_t __stdcall ImmSetCompositionFontW(HIMC /*hIMC*/, void* /*lplf*/) {
     return 1;
 }
 
+inline int32_t __stdcall ImmSetCompositionFontA(HIMC /*hIMC*/, void* /*lplf*/) {
+    return 1;
+}
+
 // Dynamic Registration Helper
 inline void InitializeTextServicesExports() {
     auto& loader = micant::ldr::DynamicLoader::get();
@@ -1346,6 +1350,7 @@ inline void InitializeTextServicesExports() {
     loader.registerExport("imm32.dll", "ImmNotifyIME", reinterpret_cast<void*>(ImmNotifyIME));
     loader.registerExport("imm32.dll", "ImmEscapeW", reinterpret_cast<void*>(ImmEscapeW));
     loader.registerExport("imm32.dll", "ImmSetCompositionFontW", reinterpret_cast<void*>(ImmSetCompositionFontW));
+    loader.registerExport("imm32.dll", "ImmSetCompositionFontA", reinterpret_cast<void*>(ImmSetCompositionFontA));
 
     version::VersionDatabase::Instance().RegisterModule(
         "msctf.dll",
