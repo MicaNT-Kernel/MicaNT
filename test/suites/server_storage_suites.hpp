@@ -1,6 +1,53 @@
 #pragma once
 
-#include "legacy_satellite_compat.hpp"
+#include "micant/subsystems.hpp"
+#include "micant/ntdef.hpp"
+#include "micant/ntstatus.hpp"
+#include "micant/kernel32.hpp"
+#include "micant/user32.hpp"
+#include "micant/gdi32.hpp"
+#include "micant/gdiplus.hpp"
+#include "micant/advapi32.hpp"
+#include "micant/shell32.hpp"
+#include "micant/comctl32.hpp"
+#include "micant/comdlg32.hpp"
+#include "micant/msvcrt.hpp"
+#include "micant/crypt32.hpp"
+#include "micant/ws2_32.hpp"
+#include "micant/ole32.hpp"
+#include "micant/oleaut32.hpp"
+#include "micant/uxtheme.hpp"
+#include "micant/propsys.hpp"
+#include "micant/wininet.hpp"
+#include "micant/winspool.hpp"
+#include "micant/uiautomation.hpp"
+#include "micant/tsf.hpp"
+#include "micant/wintrust.hpp"
+#include "micant/setupapi.hpp"
+#include "micant/ntdll.hpp"
+#include "micant/aclui.hpp"
+#include "micant/winsta.hpp"
+#include "micant/icuuc.hpp"
+#include "micant/winhttp.hpp"
+#include "micant/iphlpapi.hpp"
+#include "micant/cipherksp.hpp"
+#include "micant/cfgmgr32.hpp"
+#include "micant/sspi.hpp"
+#include "micant/virtdisk.hpp"
+#include "micant/authz.hpp"
+
+namespace {
+inline std::wstring AnsiToWide(const char* str) {
+    if (!str) return L"";
+    std::wstring result;
+    result.reserve(std::strlen(str));
+    while (*str) {
+        result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*str++)));
+    }
+    return result;
+}
+}
+
 
 /**
  * @file server_storage_suites.hpp
@@ -6418,14 +6465,14 @@ void Test_InteractiveWindowManager_InputRouting_Subsystem() {
     TEST_ASSERT(router.getVlcVolume() == 85, "VK_UP must increment VLC volume to 85%");
 
     // Stage 13: 100.0% Native Win32 Symbol Satisfaction for 7zFM.exe
-    TEST_ASSERT(micant::satellite::GetSystemDefaultLangID() == 0x0409, "GetSystemDefaultLangID must return en-US");
-    TEST_ASSERT(micant::satellite::GetUserDefaultLangID() == 0x0409, "GetUserDefaultLangID must return en-US");
-    TEST_ASSERT(micant::satellite::GetDriveTypeW(L"C:\\") == 3, "GetDriveTypeW must return DRIVE_FIXED");
+    TEST_ASSERT(micant::win32::GetSystemDefaultLangID() == 0x0409, "GetSystemDefaultLangID must return en-US");
+    TEST_ASSERT(micant::win32::GetUserDefaultLangID() == 0x0409, "GetUserDefaultLangID must return en-US");
+    TEST_ASSERT(micant::win32::GetDriveTypeW(L"C:\\") == 3, "GetDriveTypeW must return DRIVE_FIXED");
     wchar_t winDirBuf[260]{};
-    uint32_t wLen = micant::satellite::GetWindowsDirectoryW(winDirBuf, 260);
+    uint32_t wLen = micant::win32::GetWindowsDirectoryW(winDirBuf, 260);
     TEST_ASSERT(wLen > 0 && std::wstring(winDirBuf) == L"C:\\Windows", "GetWindowsDirectoryW must return C:\\Windows");
-    TEST_ASSERT(micant::satellite::GetDialogBaseUnits() > 0, "GetDialogBaseUnits must return valid metrics");
-    TEST_ASSERT(micant::satellite::CommDlgExtendedError() == 0, "CommDlgExtendedError must return 0");
+    TEST_ASSERT(micant::user32::GetDialogBaseUnits() > 0, "GetDialogBaseUnits must return valid metrics");
+    TEST_ASSERT(micant::comdlg32::CommDlgExtendedError() == 0, "CommDlgExtendedError must return 0");
 
     // Stage 14: Win32 C ABI Parity Exports & 120-Operation Concurrent Multithreaded Stress Test
     int32_t abiInit = MicaInputInitialize(1920, 1080);
@@ -6602,7 +6649,7 @@ void Test_BareMetalEventLoop_WizTreeMFT_Subsystem() {
     TEST_ASSERT(router.is7ZipExtractOpened(), "Dispatching ID 1002 must trigger extract dialog");
 
     // Stage 11: 100.0% Native Win32 Subsystem Satisfaction for WizTree 64-bit
-    micant::satellite::InitializeSatelliteWin32Exports();
+    micant::subsystems::InitializeAllSubsystemExports();
     auto& ldr = ldr::DynamicLoader::get();
 
     TEST_ASSERT(ldr.getExport("mpr.dll", "WNetGetConnectionW") != nullptr, "WNetGetConnectionW must be exported");
@@ -6617,15 +6664,15 @@ void Test_BareMetalEventLoop_WizTreeMFT_Subsystem() {
     // Stage 12: WinHttp Client Mock Session
     void* hSession = ldr.getExport("winhttp.dll", "WinHttpOpen");
     TEST_ASSERT(hSession != nullptr, "WinHttpOpen must be exported");
-    auto pfnOpen = reinterpret_cast<decltype(&micant::satellite::wiztree::WinHttpOpen)>(hSession);
+    auto pfnOpen = reinterpret_cast<decltype(&micant::winhttp::WinHttpOpen)>(hSession);
     void* sessHandle = pfnOpen(L"WizTree/4.22", 0, nullptr, nullptr, 0);
     TEST_ASSERT(sessHandle != nullptr, "WinHttpOpen must return valid session handle");
 
-    auto pfnConnect = reinterpret_cast<decltype(&micant::satellite::wiztree::WinHttpConnect)>(ldr.getExport("winhttp.dll", "WinHttpConnect"));
+    auto pfnConnect = reinterpret_cast<decltype(&micant::winhttp::WinHttpConnect)>(ldr.getExport("winhttp.dll", "WinHttpConnect"));
     void* connHandle = pfnConnect(sessHandle, L"diskanalyzer.com", 443, 0);
     TEST_ASSERT(connHandle != nullptr, "WinHttpConnect must return valid connection handle");
 
-    auto pfnClose = reinterpret_cast<decltype(&micant::satellite::wiztree::WinHttpCloseHandle)>(ldr.getExport("winhttp.dll", "WinHttpCloseHandle"));
+    auto pfnClose = reinterpret_cast<decltype(&micant::winhttp::WinHttpCloseHandle)>(ldr.getExport("winhttp.dll", "WinHttpCloseHandle"));
     TEST_ASSERT(pfnClose(connHandle) == 1, "WinHttpCloseHandle on connect must succeed");
     TEST_ASSERT(pfnClose(sessHandle) == 1, "WinHttpCloseHandle on session must succeed");
 
@@ -6679,134 +6726,134 @@ void Test_BareMetalEventLoop_WizTreeMFT_Subsystem() {
 }
 
 void Test_PuTTYTerminal_AnsiWin32_Subsystem() {
-    std::cout << "[TEST] Running Suite 217: PuTTY 0.82+ Sovereign Win32 Satellite Subsystem & ANSI Terminal Engine...\n";
+    std::cout << "[TEST] Running Suite 217: PuTTY 0.82+ Sovereign Win32 Subsystem & ANSI Terminal Engine...\n";
 
     // Stage 1: ANSI String Conversion & Transcoding (AnsiToWide)
-    std::wstring w1 = micant::satellite::putty::AnsiToWide("putty.exe");
+    std::wstring w1 = AnsiToWide("putty.exe");
     TEST_ASSERT(w1 == L"putty.exe", "AnsiToWide must match putty.exe exactly");
-    std::wstring w2 = micant::satellite::putty::AnsiToWide("MicaNT SSH Terminal");
+    std::wstring w2 = AnsiToWide("MicaNT SSH Terminal");
     TEST_ASSERT(w2 == L"MicaNT SSH Terminal", "AnsiToWide must match terminal title");
-    TEST_ASSERT(micant::satellite::putty::AnsiToWide(nullptr).empty(), "Null string must return empty wide string");
+    TEST_ASSERT(AnsiToWide(nullptr).empty(), "Null string must return empty wide string");
 
     // Stage 2: GDI32 Font Metrics & Character Placement
-    micant::satellite::putty::LOGFONTA lf{};
+    micant::gdi32::LOGFONTA lf{};
     std::strcpy(lf.lfFaceName, "Lucida Console");
     lf.lfHeight = 16;
-    void* hFont = micant::satellite::putty::CreateFontIndirectA(&lf);
+    void* hFont = micant::gdi32::CreateFontIndirectA(&lf);
     TEST_ASSERT(hFont != nullptr, "CreateFontIndirectA must return valid non-null HFONT");
 
-    micant::satellite::putty::TEXTMETRICA tm{};
-    TEST_ASSERT(micant::satellite::putty::GetTextMetricsA(nullptr, &tm) == 1, "GetTextMetricsA must succeed");
+    micant::gdi32::TEXTMETRICA tm{};
+    TEST_ASSERT(micant::gdi32::GetTextMetricsA(nullptr, &tm) == 1, "GetTextMetricsA must succeed");
     TEST_ASSERT(tm.tmHeight == 14 && tm.tmAveCharWidth == 8, "TEXTMETRICA default metrics must match 14x8 terminal font");
 
     int charWidths[10] = {0};
-    TEST_ASSERT(micant::satellite::putty::GetCharWidth32A(nullptr, 32, 41, charWidths) == 1, "GetCharWidth32A must succeed");
+    TEST_ASSERT(micant::gdi32::GetCharWidth32A(nullptr, 32, 41, charWidths) == 1, "GetCharWidth32A must succeed");
     for (int w : charWidths) {
         TEST_ASSERT(w == 8, "Monospace terminal character widths must be exactly 8 pixels");
     }
 
-    micant::satellite::putty::ABCFLOAT abc[5]{};
-    TEST_ASSERT(micant::satellite::putty::GetCharABCWidthsFloatA(nullptr, 65, 69, abc) == 1, "GetCharABCWidthsFloatA must succeed");
+    micant::gdi32::ABCFLOAT abc[5]{};
+    TEST_ASSERT(micant::gdi32::GetCharABCWidthsFloatA(nullptr, 65, 69, abc) == 1, "GetCharABCWidthsFloatA must succeed");
     TEST_ASSERT(abc[0].abcfB == 8.0f, "ABCFLOAT width must be 8.0f");
 
-    uint32_t placementLen = micant::satellite::putty::GetCharacterPlacementW(nullptr, L"SSH-2.0-OpenSSH_9.9", 19, 0, nullptr, 0);
+    uint32_t placementLen = micant::gdi32::GetCharacterPlacementW(nullptr, L"SSH-2.0-OpenSSH_9.9", 19, 0, nullptr, 0);
     TEST_ASSERT(placementLen == 19 * 8, "Character placement extent must match character count * 8");
 
     // Stage 3: Serial / COM UART Hardware Communication State Machine
-    micant::satellite::putty::DCB dcb{};
-    TEST_ASSERT(micant::satellite::putty::GetCommState(nullptr, &dcb) == 1, "GetCommState must succeed");
+    micant::win32::DCB dcb{};
+    TEST_ASSERT(micant::win32::GetCommState(nullptr, &dcb) == 1, "GetCommState must succeed");
     TEST_ASSERT(dcb.BaudRate == 115200, "Default serial baud rate must be 115200");
     TEST_ASSERT(dcb.ByteSize == 8, "Default byte size must be 8");
-    TEST_ASSERT(micant::satellite::putty::SetCommState(nullptr, &dcb) == 1, "SetCommState must succeed");
+    TEST_ASSERT(micant::win32::SetCommState(nullptr, &dcb) == 1, "SetCommState must succeed");
 
-    micant::satellite::putty::COMMTIMEOUTS timeouts{};
-    TEST_ASSERT(micant::satellite::putty::SetCommTimeouts(nullptr, &timeouts) == 1, "SetCommTimeouts must succeed");
-    TEST_ASSERT(micant::satellite::putty::SetCommBreak(nullptr) == 1, "SetCommBreak must succeed");
-    TEST_ASSERT(micant::satellite::putty::ClearCommBreak(nullptr) == 1, "ClearCommBreak must succeed");
+    micant::win32::COMMTIMEOUTS timeouts{};
+    TEST_ASSERT(micant::win32::SetCommTimeouts(nullptr, &timeouts) == 1, "SetCommTimeouts must succeed");
+    TEST_ASSERT(micant::win32::SetCommBreak(nullptr) == 1, "SetCommBreak must succeed");
+    TEST_ASSERT(micant::win32::ClearCommBreak(nullptr) == 1, "ClearCommBreak must succeed");
 
     // Stage 4: Anonymous & Named Pipe IPC Primitives
     void* hRead = nullptr;
     void* hWrite = nullptr;
-    TEST_ASSERT(micant::satellite::putty::CreatePipe(&hRead, &hWrite, nullptr, 4096) == 1, "CreatePipe must succeed");
+    TEST_ASSERT(micant::win32::CreatePipe(&hRead, &hWrite, nullptr, 4096) == 1, "CreatePipe must succeed");
     TEST_ASSERT(hRead != nullptr && hWrite != nullptr && hRead != hWrite, "CreatePipe must return distinct valid read/write handles");
-    void* hNamedPipe = micant::satellite::putty::CreateNamedPipeA("\\\\.\\pipe\\putty-pageant", 3, 0, 1, 1024, 1024, 0, nullptr);
+    void* hNamedPipe = micant::win32::CreateNamedPipeA("\\\\.\\pipe\\putty-pageant", 3, 0, 1, 1024, 1024, 0, nullptr);
     TEST_ASSERT(hNamedPipe != nullptr, "CreateNamedPipeA must return valid handle");
-    TEST_ASSERT(micant::satellite::putty::WaitNamedPipeA("\\\\.\\pipe\\putty-pageant", 1000) == 1, "WaitNamedPipeA must succeed");
+    TEST_ASSERT(micant::win32::WaitNamedPipeA("\\\\.\\pipe\\putty-pageant", 1000) == 1, "WaitNamedPipeA must succeed");
 
     // Stage 5: Synchronization & Memory Mapping ANSI Adapters
-    void* hEvt = micant::satellite::putty::CreateEventA(nullptr, 1, 0, "PuttyEvent");
+    void* hEvt = micant::win32::CreateEventA(nullptr, 1, 0, "PuttyEvent");
     TEST_ASSERT(hEvt != nullptr, "CreateEventA must return non-null handle");
-    void* hMtx = micant::satellite::putty::CreateMutexA(nullptr, 0, "PuttyMutex");
+    void* hMtx = micant::win32::CreateMutexA(nullptr, 0, "PuttyMutex");
     TEST_ASSERT(hMtx != nullptr, "CreateMutexA must return non-null handle");
-    void* hMap = micant::satellite::putty::CreateFileMappingA(reinterpret_cast<void*>(~0ULL), nullptr, 4, 0, 65536, "PuttySharedMem");
+    void* hMap = micant::win32::CreateFileMappingA(reinterpret_cast<void*>(~0ULL), nullptr, 4, 0, 65536, "PuttySharedMem");
     TEST_ASSERT(hMap != nullptr, "CreateFileMappingA must return non-null handle");
 
     // Stage 6: System Directories & Environment Paths
     char sysDir[64]{};
-    uint32_t sysLen = micant::satellite::putty::GetSystemDirectoryA(sysDir, sizeof(sysDir));
+    uint32_t sysLen = micant::win32::GetSystemDirectoryA(sysDir, sizeof(sysDir));
     TEST_ASSERT(sysLen > 0 && std::string(sysDir) == "C:\\Windows\\System32", "GetSystemDirectoryA must return C:\\Windows\\System32");
     char winDir[64]{};
-    uint32_t winLen = micant::satellite::putty::GetWindowsDirectoryA(winDir, sizeof(winDir));
+    uint32_t winLen = micant::win32::GetWindowsDirectoryA(winDir, sizeof(winDir));
     TEST_ASSERT(winLen > 0 && std::string(winDir) == "C:\\Windows", "GetWindowsDirectoryA must return C:\\Windows");
     char tmpDir[64]{};
-    uint32_t tmpLen = micant::satellite::putty::GetTempPathA(sizeof(tmpDir), tmpDir);
+    uint32_t tmpLen = micant::win32::GetTempPathA(sizeof(tmpDir), tmpDir);
     TEST_ASSERT(tmpLen > 0 && std::string(tmpDir) == "C:\\Temp\\", "GetTempPathA must return C:\\Temp\\");
 
     // Stage 7: Global Memory Status & 64-Bit Memory Sizing
-    micant::satellite::putty::MEMORYSTATUS mem{};
-    micant::satellite::putty::GlobalMemoryStatus(&mem);
-    TEST_ASSERT(mem.dwLength == sizeof(micant::satellite::putty::MEMORYSTATUS), "dwLength must match structure size");
+    micant::win32::MEMORYSTATUS mem{};
+    micant::win32::GlobalMemoryStatus(&mem);
+    TEST_ASSERT(mem.dwLength == sizeof(micant::win32::MEMORYSTATUS), "dwLength must match structure size");
     TEST_ASSERT(mem.dwTotalPhys >= (1ULL * 1024 * 1024 * 1024), "Physical memory must report at least 1GB");
     TEST_ASSERT(mem.dwTotalVirtual >= (1ULL * 1024 * 1024 * 1024 * 1024), "64-bit virtual memory must report multi-terabyte address space");
 
     // Stage 8: Advapi32 Security Descriptors & SID Duplication
     uint8_t srcSid[68] = { 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x12, 0x00, 0x00, 0x00 }; // S-1-5-18 LocalSystem
     uint8_t destSid[68] = {0};
-    TEST_ASSERT(micant::satellite::putty::CopySid(sizeof(destSid), destSid, srcSid) == 1, "CopySid must succeed");
+    TEST_ASSERT(micant::advapi32::CopySid(sizeof(destSid), destSid, srcSid) == 1, "CopySid must succeed");
     TEST_ASSERT(std::memcmp(destSid, srcSid, 12) == 0, "Copied SID must match source LocalSystem SID");
 
     char userName[64]{};
     uint32_t userLen = sizeof(userName);
-    TEST_ASSERT(micant::satellite::putty::GetUserNameA(userName, &userLen) == 1, "GetUserNameA must succeed");
+    TEST_ASSERT(micant::advapi32::GetUserNameA(userName, &userLen) == 1, "GetUserNameA must succeed");
     TEST_ASSERT(std::string(userName) == "MicaAdmin", "GetUserNameA must return sovereign user name MicaAdmin");
 
     // Stage 9: IMM32 IME Composition & Localization
-    TEST_ASSERT(micant::satellite::putty::ImmSetCompositionFontA(nullptr, &lf) == 1, "ImmSetCompositionFontA must succeed");
+    TEST_ASSERT(micant::tsf::ImmSetCompositionFontA(nullptr, &lf) == 1, "ImmSetCompositionFontA must succeed");
 
     // Stage 10: ComDlg32 Common Dialog Handlers
-    TEST_ASSERT(micant::satellite::putty::ChooseColorA(nullptr) == 1, "ChooseColorA must return 1 (IDOK)");
-    TEST_ASSERT(micant::satellite::putty::ChooseFontA(nullptr) == 1, "ChooseFontA must return 1 (IDOK)");
-    TEST_ASSERT(micant::satellite::putty::GetOpenFileNameA(nullptr) == 1, "GetOpenFileNameA must return 1");
-    TEST_ASSERT(micant::satellite::putty::GetSaveFileNameA(nullptr) == 1, "GetSaveFileNameA must return 1");
+    TEST_ASSERT(micant::comdlg32::ChooseColorA(nullptr) == 1, "ChooseColorA must return 1 (IDOK)");
+    TEST_ASSERT(micant::comdlg32::ChooseFontA(nullptr) == 1, "ChooseFontA must return 1 (IDOK)");
+    TEST_ASSERT(micant::comdlg32::GetOpenFileNameA(nullptr) == 1, "GetOpenFileNameA must return 1");
+    TEST_ASSERT(micant::comdlg32::GetSaveFileNameA(nullptr) == 1, "GetSaveFileNameA must return 1");
 
     // Stage 11: User32 Window Message & Dialog Handlers
-    void* hDlg = micant::satellite::putty::CreateDialogParamA(nullptr, "IDD_PUTTY_CONFIG", nullptr, nullptr, 0);
+    void* hDlg = micant::user32::CreateDialogParamA(nullptr, "IDD_PUTTY_CONFIG", nullptr, nullptr, 0);
     TEST_ASSERT(hDlg != nullptr, "CreateDialogParamA must return valid dialog HWND");
-    TEST_ASSERT(micant::satellite::putty::DialogBoxParamA(nullptr, "IDD_ABOUT", nullptr, nullptr, 0) == 1, "DialogBoxParamA must return 1");
-    TEST_ASSERT(micant::satellite::putty::FlashWindow(hDlg, 1) == 1, "FlashWindow must succeed");
+    TEST_ASSERT(micant::user32::DialogBoxParamA(nullptr, "IDD_ABOUT", nullptr, nullptr, 0) == 1, "DialogBoxParamA must return 1");
+    TEST_ASSERT(micant::user32::FlashWindow(hDlg, 1) == 1, "FlashWindow must succeed");
 
     char winTitle[64] = "PuTTY - (inactive)";
-    micant::satellite::putty::SetWindowTextA(hDlg, winTitle);
+    micant::user32::SetWindowTextA(hDlg, winTitle);
     char readTitle[64]{};
-    int titleLen = micant::satellite::putty::GetWindowTextA(hDlg, readTitle, sizeof(readTitle));
+    int titleLen = micant::user32::GetWindowTextA(hDlg, readTitle, sizeof(readTitle));
     TEST_ASSERT(titleLen > 0 && std::string(readTitle) == "PuTTY - (inactive)", "Window text must be successfully stored and retrieved in ANSI");
 
     // Stage 12: Virtual Key ASCII Translation (ToAsciiEx)
     uint16_t outChar = 0;
     uint8_t keyState[256]{};
     // Test lowercase 'a' (no shift)
-    int asciiCount = micant::satellite::putty::ToAsciiEx('A', 0x1E, keyState, &outChar, 0, nullptr);
+    int asciiCount = micant::user32::ToAsciiEx('A', 0x1E, keyState, &outChar, 0, nullptr);
     TEST_ASSERT(asciiCount == 1 && outChar == 'a', "Virtual key 'A' without shift must translate to 'a'");
     // Test uppercase 'A' (with shift)
     keyState[0x10] = 0x80;
-    asciiCount = micant::satellite::putty::ToAsciiEx('A', 0x1E, keyState, &outChar, 0, nullptr);
+    asciiCount = micant::user32::ToAsciiEx('A', 0x1E, keyState, &outChar, 0, nullptr);
     TEST_ASSERT(asciiCount == 1 && outChar == 'A', "Virtual key 'A' with shift must translate to 'A'");
     // Test Return key
-    asciiCount = micant::satellite::putty::ToAsciiEx(0x0D, 0x1C, keyState, &outChar, 0, nullptr);
+    asciiCount = micant::user32::ToAsciiEx(0x0D, 0x1C, keyState, &outChar, 0, nullptr);
     TEST_ASSERT(asciiCount == 1 && outChar == '\r', "VK_RETURN must translate to '\\r'");
 
     // Stage 13: DynamicLoader IAT Binding & Symbol Satisfaction for PuTTY
-    micant::satellite::InitializeSatelliteWin32Exports();
+    micant::subsystems::InitializeAllSubsystemExports();
     auto& loader = micant::ldr::DynamicLoader::get();
 
     static constexpr const char* PUTTY_TEST_SYMBOLS[] = {
@@ -6858,7 +6905,7 @@ void Test_PuTTYTerminal_AnsiWin32_Subsystem() {
             for (int op = 0; op < 25; ++op) {
                 char buf[32];
                 std::snprintf(buf, sizeof(buf), "TermThread_%d_Op_%d", t, op);
-                std::wstring w = micant::satellite::putty::AnsiToWide(buf);
+                std::wstring w = AnsiToWide(buf);
                 if (!w.empty() && w.length() == std::strlen(buf)) {
                     streamSuccessCount.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -6870,163 +6917,163 @@ void Test_PuTTYTerminal_AnsiWin32_Subsystem() {
     }
     TEST_ASSERT(streamSuccessCount.load() == 200, "200-transaction terminal stream concurrent stress test must succeed 100%");
 
-    std::cout << "[TEST] Suite 217: PuTTY 0.82+ Sovereign Win32 Satellite Subsystem & ANSI Terminal Engine PASSED.\n";
+    std::cout << "[TEST] Suite 217: PuTTY 0.82+ Sovereign Win32 Subsystem & ANSI Terminal Engine PASSED.\n";
 }
 
 void Test_SumatraPDF_Gdiplus_Subsystem() {
     std::cout << "[TEST] Running Suite 218: SumatraPDF 3.6+ Sovereign GDI+ 2D Vector & Document Subsystem...\n";
 
     // Stage 1: GDI+ Memory Allocator & Lifecycle (GdipAlloc, GdipFree)
-    void* mem = micant::satellite::gdiplus::GdipAlloc(256);
+    void* mem = micant::gdiplus::GdipAlloc(256);
     TEST_ASSERT(mem != nullptr, "GdipAlloc must return valid allocated buffer");
     std::memset(mem, 0xAA, 256);
     TEST_ASSERT(reinterpret_cast<uint8_t*>(mem)[0] == 0xAA, "Allocated buffer must be writable");
-    micant::satellite::gdiplus::GdipFree(mem);
+    micant::gdiplus::GdipFree(mem);
 
     // Stage 2: 2D Affine Matrix Engine (scale, rotate, translate, invert, point transform)
-    micant::satellite::gdiplus::GpMatrix* mat = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateMatrix(&mat) == micant::satellite::gdiplus::Ok && mat != nullptr, "GdipCreateMatrix must succeed");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipTranslateMatrix(mat, 10.0f, 20.0f, micant::satellite::gdiplus::MatrixOrderAppend) == micant::satellite::gdiplus::Ok, "TranslateMatrix must succeed");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipScaleMatrix(mat, 2.0f, 2.0f, micant::satellite::gdiplus::MatrixOrderPrepend) == micant::satellite::gdiplus::Ok, "ScaleMatrix must succeed");
+    micant::gdiplus::GpMatrix* mat = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCreateMatrix(&mat) == micant::gdiplus::Ok && mat != nullptr, "GdipCreateMatrix must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipTranslateMatrix(mat, 10.0f, 20.0f, micant::gdiplus::MatrixOrderAppend) == micant::gdiplus::Ok, "TranslateMatrix must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipScaleMatrix(mat, 2.0f, 2.0f, micant::gdiplus::MatrixOrderPrepend) == micant::gdiplus::Ok, "ScaleMatrix must succeed");
 
-    micant::satellite::gdiplus::PointF pt{5.0f, 5.0f};
-    TEST_ASSERT(micant::satellite::gdiplus::GdipTransformMatrixPoints(mat, &pt, 1) == micant::satellite::gdiplus::Ok, "TransformMatrixPoints must succeed");
+    micant::gdiplus::PointF pt{5.0f, 5.0f};
+    TEST_ASSERT(micant::gdiplus::GdipTransformMatrixPoints(mat, &pt, 1) == micant::gdiplus::Ok, "TransformMatrixPoints must succeed");
     // scale(2) then translate(10, 20): 5*2+10 = 20, 5*2+20 = 30
     TEST_ASSERT(pt.X == 20.0f && pt.Y == 30.0f, "Transformed coordinates must match affine matrix equation");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipInvertMatrix(mat) == micant::satellite::gdiplus::Ok, "InvertMatrix must succeed");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipDeleteMatrix(mat) == micant::satellite::gdiplus::Ok, "GdipDeleteMatrix must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipInvertMatrix(mat) == micant::gdiplus::Ok, "InvertMatrix must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipDeleteMatrix(mat) == micant::gdiplus::Ok, "GdipDeleteMatrix must succeed");
 
     // Stage 3: Graphics Path Geometry & Rectangles
-    micant::satellite::gdiplus::GpPath* path = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCreatePath(micant::satellite::gdiplus::FillModeAlternate, &path) == micant::satellite::gdiplus::Ok && path != nullptr, "GdipCreatePath must succeed");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipAddPathRectangleI(path, 10, 10, 200, 100) == micant::satellite::gdiplus::Ok, "AddPathRectangleI must succeed");
+    micant::gdiplus::GpPath* path = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCreatePath(micant::gdiplus::FillModeAlternate, &path) == micant::gdiplus::Ok && path != nullptr, "GdipCreatePath must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipAddPathRectangleI(path, 10, 10, 200, 100) == micant::gdiplus::Ok, "AddPathRectangleI must succeed");
     TEST_ASSERT(path->points.size() == 4, "Rectangle path must contain 4 vertices");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipResetPath(path) == micant::satellite::gdiplus::Ok && path->points.empty(), "ResetPath must clear points");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipDeletePath(path) == micant::satellite::gdiplus::Ok, "DeletePath must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipResetPath(path) == micant::gdiplus::Ok && path->points.empty(), "ResetPath must clear points");
+    TEST_ASSERT(micant::gdiplus::GdipDeletePath(path) == micant::gdiplus::Ok, "DeletePath must succeed");
 
     // Stage 4: Pens, Brushes & Dash Styles
-    micant::satellite::gdiplus::GpBrush solidBrush{};
-    micant::satellite::gdiplus::GdipSetSolidFillColor(&solidBrush, 0xFFFF8000);
+    micant::gdiplus::GpBrush solidBrush{};
+    micant::gdiplus::GdipSetSolidFillColor(&solidBrush, 0xFFFF8000);
     TEST_ASSERT(solidBrush.color == 0xFFFF8000, "Solid brush color must match set ARGB");
 
-    micant::satellite::gdiplus::GpBrush* hatch = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateHatchBrush(1, 0xFF000000, 0xFFFFFFFF, &hatch) == micant::satellite::gdiplus::Ok && hatch != nullptr, "CreateHatchBrush must succeed");
+    micant::gdiplus::GpBrush* hatch = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCreateHatchBrush(1, 0xFF000000, 0xFFFFFFFF, &hatch) == micant::gdiplus::Ok && hatch != nullptr, "CreateHatchBrush must succeed");
     TEST_ASSERT(hatch->type == 1 && hatch->color == 0xFF000000 && hatch->backColor == 0xFFFFFFFF, "Hatch brush properties must match");
 
-    micant::satellite::gdiplus::GpBrush* cloned = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCloneBrush(hatch, &cloned) == micant::satellite::gdiplus::Ok && cloned != nullptr, "CloneBrush must succeed");
+    micant::gdiplus::GpBrush* cloned = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCloneBrush(hatch, &cloned) == micant::gdiplus::Ok && cloned != nullptr, "CloneBrush must succeed");
     delete hatch;
     delete cloned;
 
-    micant::satellite::gdiplus::GpPen* pen = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCreatePen2(&solidBrush, 2.5f, micant::satellite::gdiplus::UnitPixel, &pen) == micant::satellite::gdiplus::Ok && pen != nullptr, "CreatePen2 must succeed");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipSetPenDashStyle(pen, micant::satellite::gdiplus::DashStyleDash) == micant::satellite::gdiplus::Ok, "SetPenDashStyle must succeed");
-    TEST_ASSERT(pen->dashStyle == micant::satellite::gdiplus::DashStyleDash && pen->width == 2.5f, "Pen properties must match");
+    micant::gdiplus::GpPen* pen = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCreatePen2(&solidBrush, 2.5f, micant::gdiplus::UnitPixel, &pen) == micant::gdiplus::Ok && pen != nullptr, "CreatePen2 must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipSetPenDashStyle(pen, micant::gdiplus::DashStyleDash) == micant::gdiplus::Ok, "SetPenDashStyle must succeed");
+    TEST_ASSERT(pen->dashStyle == micant::gdiplus::DashStyleDash && pen->width == 2.5f, "Pen properties must match");
     delete pen;
 
     // Stage 5: Regions & Clipping
-    micant::satellite::gdiplus::GpRegion* rgn = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateRegion(&rgn) == micant::satellite::gdiplus::Ok && rgn != nullptr, "CreateRegion must succeed");
-    micant::satellite::gdiplus::RectF bounds{};
-    TEST_ASSERT(micant::satellite::gdiplus::GdipGetRegionBounds(rgn, nullptr, &bounds) == micant::satellite::gdiplus::Ok, "GetRegionBounds must succeed");
+    micant::gdiplus::GpRegion* rgn = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCreateRegion(&rgn) == micant::gdiplus::Ok && rgn != nullptr, "CreateRegion must succeed");
+    micant::gdiplus::RectF bounds{};
+    TEST_ASSERT(micant::gdiplus::GdipGetRegionBounds(rgn, nullptr, &bounds) == micant::gdiplus::Ok, "GetRegionBounds must succeed");
     TEST_ASSERT(bounds.Width == 1000.0f && bounds.Height == 1000.0f, "Default region bounds must match");
     void* hRgn = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipGetRegionHRgn(rgn, nullptr, &hRgn) == micant::satellite::gdiplus::Ok && hRgn != nullptr, "GetRegionHRgn must return valid handle");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipDeleteRegion(rgn) == micant::satellite::gdiplus::Ok, "DeleteRegion must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipGetRegionHRgn(rgn, nullptr, &hRgn) == micant::gdiplus::Ok && hRgn != nullptr, "GetRegionHRgn must return valid handle");
+    TEST_ASSERT(micant::gdiplus::GdipDeleteRegion(rgn) == micant::gdiplus::Ok, "DeleteRegion must succeed");
 
     // Stage 6: Graphics Context Configuration
-    micant::satellite::gdiplus::GpGraphics gfx{};
-    TEST_ASSERT(micant::satellite::gdiplus::GdipSetSmoothingMode(&gfx, micant::satellite::gdiplus::SmoothingModeAntiAlias) == micant::satellite::gdiplus::Ok, "SetSmoothingMode must succeed");
-    TEST_ASSERT(gfx.smoothing == micant::satellite::gdiplus::SmoothingModeAntiAlias, "Smoothing mode must be AntiAlias");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipSetInterpolationMode(&gfx, micant::satellite::gdiplus::InterpolationModeHighQualityBicubic) == micant::satellite::gdiplus::Ok, "SetInterpolationMode must succeed");
-    TEST_ASSERT(gfx.interpolation == micant::satellite::gdiplus::InterpolationModeHighQualityBicubic, "Interpolation mode must be HighQualityBicubic");
+    micant::gdiplus::GpGraphics gfx{};
+    TEST_ASSERT(micant::gdiplus::GdipSetSmoothingMode(&gfx, micant::gdiplus::SmoothingModeAntiAlias) == micant::gdiplus::Ok, "SetSmoothingMode must succeed");
+    TEST_ASSERT(gfx.smoothing == micant::gdiplus::SmoothingModeAntiAlias, "Smoothing mode must be AntiAlias");
+    TEST_ASSERT(micant::gdiplus::GdipSetInterpolationMode(&gfx, micant::gdiplus::InterpolationModeHighQualityBicubic) == micant::gdiplus::Ok, "SetInterpolationMode must succeed");
+    TEST_ASSERT(gfx.interpolation == micant::gdiplus::InterpolationModeHighQualityBicubic, "Interpolation mode must be HighQualityBicubic");
     void* hdc = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipGetDC(&gfx, &hdc) == micant::satellite::gdiplus::Ok && hdc != nullptr, "GetDC must return valid HDC");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipReleaseDC(&gfx, hdc) == micant::satellite::gdiplus::Ok, "ReleaseDC must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipGetDC(&gfx, &hdc) == micant::gdiplus::Ok && hdc != nullptr, "GetDC must return valid HDC");
+    TEST_ASSERT(micant::gdiplus::GdipReleaseDC(&gfx, hdc) == micant::gdiplus::Ok, "ReleaseDC must succeed");
 
     // Stage 7: Bitmap Creation, Scan0 LockBits/UnlockBits & Dimensions
-    micant::satellite::gdiplus::GpBitmap* bmp = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateBitmapFromGraphics(640, 480, &gfx, &bmp) == micant::satellite::gdiplus::Ok && bmp != nullptr, "CreateBitmapFromGraphics must succeed");
+    micant::gdiplus::GpBitmap* bmp = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCreateBitmapFromGraphics(640, 480, &gfx, &bmp) == micant::gdiplus::Ok && bmp != nullptr, "CreateBitmapFromGraphics must succeed");
     uint32_t bmpW = 0, bmpH = 0;
-    micant::satellite::gdiplus::GdipGetImageWidth(bmp, &bmpW);
-    micant::satellite::gdiplus::GdipGetImageHeight(bmp, &bmpH);
+    micant::gdiplus::GdipGetImageWidth(bmp, &bmpW);
+    micant::gdiplus::GdipGetImageHeight(bmp, &bmpH);
     TEST_ASSERT(bmpW == 640 && bmpH == 480, "Bitmap dimensions must match 640x480");
 
-    micant::satellite::gdiplus::BitmapData bdata{};
-    micant::satellite::gdiplus::Rect lockRect{0, 0, 640, 480};
-    TEST_ASSERT(micant::satellite::gdiplus::GdipBitmapLockBits(bmp, &lockRect, 1, micant::satellite::gdiplus::PixelFormat32bppARGB, &bdata) == micant::satellite::gdiplus::Ok, "BitmapLockBits must succeed");
+    micant::gdiplus::BitmapData bdata{};
+    micant::gdiplus::Rect lockRect{0, 0, 640, 480};
+    TEST_ASSERT(micant::gdiplus::GdipBitmapLockBits(bmp, &lockRect, 1, micant::gdiplus::PixelFormat32bppARGB, &bdata) == micant::gdiplus::Ok, "BitmapLockBits must succeed");
     TEST_ASSERT(bdata.Scan0 != nullptr && bdata.Stride == 640 * 4, "BitmapData scan0 buffer and stride must be valid");
-    TEST_ASSERT(micant::satellite::gdiplus::GdipBitmapUnlockBits(bmp, &bdata) == micant::satellite::gdiplus::Ok, "BitmapUnlockBits must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipBitmapUnlockBits(bmp, &bdata) == micant::gdiplus::Ok, "BitmapUnlockBits must succeed");
     delete bmp;
 
     // Stage 8: Typography, Font Families, Fonts & String Measurement
-    micant::satellite::gdiplus::GpFontFamily* fam = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateFontFamilyFromName(L"Segoe UI", nullptr, &fam) == micant::satellite::gdiplus::Ok && fam != nullptr, "CreateFontFamilyFromName must succeed");
+    micant::gdiplus::GpFontFamily* fam = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCreateFontFamilyFromName(L"Segoe UI", nullptr, &fam) == micant::gdiplus::Ok && fam != nullptr, "CreateFontFamilyFromName must succeed");
     wchar_t famName[32]{};
-    TEST_ASSERT(micant::satellite::gdiplus::GdipGetFamilyName(fam, famName, 0) == micant::satellite::gdiplus::Ok && std::wcscmp(famName, L"Segoe UI") == 0, "Font family name must match Segoe UI");
+    TEST_ASSERT(micant::gdiplus::GdipGetFamilyName(fam, famName, 0) == micant::gdiplus::Ok && std::wcscmp(famName, L"Segoe UI") == 0, "Font family name must match Segoe UI");
 
-    micant::satellite::gdiplus::GpFont* font = nullptr;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipCreateFont(fam, 12.0f, 0, micant::satellite::gdiplus::UnitPoint, &font) == micant::satellite::gdiplus::Ok && font != nullptr, "CreateFont must succeed");
+    micant::gdiplus::GpFont* font = nullptr;
+    TEST_ASSERT(micant::gdiplus::GdipCreateFont(fam, 12.0f, 0, micant::gdiplus::UnitPoint, &font) == micant::gdiplus::Ok && font != nullptr, "CreateFont must succeed");
     float fHeight = 0.0f;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipGetFontHeight(font, nullptr, &fHeight) == micant::satellite::gdiplus::Ok && fHeight > 0.0f, "Font height must be positive");
+    TEST_ASSERT(micant::gdiplus::GdipGetFontHeight(font, nullptr, &fHeight) == micant::gdiplus::Ok && fHeight > 0.0f, "Font height must be positive");
 
-    micant::satellite::gdiplus::RectF strBox{};
+    micant::gdiplus::RectF strBox{};
     int fitted = 0, lines = 0;
-    TEST_ASSERT(micant::satellite::gdiplus::GdipMeasureString(&gfx, L"SumatraPDF Document Canvas", 26, font, nullptr, nullptr, &strBox, &fitted, &lines) == micant::satellite::gdiplus::Ok, "MeasureString must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipMeasureString(&gfx, L"SumatraPDF Document Canvas", 26, font, nullptr, nullptr, &strBox, &fitted, &lines) == micant::gdiplus::Ok, "MeasureString must succeed");
     TEST_ASSERT(strBox.Width > 0.0f && fitted == 26 && lines == 1, "Measured string box and codepoint fit count must be valid");
     delete font;
     delete fam;
 
     // Stage 9: User32 Dynamic Data Exchange (DDE) Single-Instance Subsystem
     uint32_t ddeInst = 0;
-    TEST_ASSERT(micant::satellite::sumatra::DdeInitializeW(&ddeInst, nullptr, 0, 0) == 0 && ddeInst > 0, "DdeInitializeW must succeed with valid instance ID");
-    void* hszService = micant::satellite::sumatra::DdeCreateStringHandleW(ddeInst, L"SUMATRA", 1200);
+    TEST_ASSERT(micant::user32::DdeInitializeW(&ddeInst, nullptr, 0, 0) == 0 && ddeInst > 0, "DdeInitializeW must succeed with valid instance ID");
+    void* hszService = micant::user32::DdeCreateStringHandleW(ddeInst, L"SUMATRA", 1200);
     TEST_ASSERT(hszService != nullptr, "DdeCreateStringHandleW must return valid handle");
-    void* hConv = micant::satellite::sumatra::DdeConnect(ddeInst, hszService, nullptr, nullptr);
+    void* hConv = micant::user32::DdeConnect(ddeInst, hszService, nullptr, nullptr);
     TEST_ASSERT(hConv != nullptr, "DdeConnect must establish conversation handle");
     uint32_t ddeResult = 0;
-    void* hData = micant::satellite::sumatra::DdeClientTransaction(nullptr, 0, hConv, nullptr, 1, 0x0050, 5000, &ddeResult);
+    void* hData = micant::user32::DdeClientTransaction(nullptr, 0, hConv, nullptr, 1, 0x0050, 5000, &ddeResult);
     TEST_ASSERT(hData != nullptr, "DdeClientTransaction must dispatch command");
-    TEST_ASSERT(micant::satellite::sumatra::DdeFreeDataHandle(hData) == 1, "DdeFreeDataHandle must succeed");
-    TEST_ASSERT(micant::satellite::sumatra::DdeDisconnect(hConv) == 1, "DdeDisconnect must succeed");
-    TEST_ASSERT(micant::satellite::sumatra::DdeFreeStringHandle(ddeInst, hszService) == 1, "DdeFreeStringHandle must succeed");
-    TEST_ASSERT(micant::satellite::sumatra::DdeUninitialize(ddeInst) == 1, "DdeUninitialize must succeed");
+    TEST_ASSERT(micant::user32::DdeFreeDataHandle(hData) == 1, "DdeFreeDataHandle must succeed");
+    TEST_ASSERT(micant::user32::DdeDisconnect(hConv) == 1, "DdeDisconnect must succeed");
+    TEST_ASSERT(micant::user32::DdeFreeStringHandle(ddeInst, hszService) == 1, "DdeFreeStringHandle must succeed");
+    TEST_ASSERT(micant::user32::DdeUninitialize(ddeInst) == 1, "DdeUninitialize must succeed");
 
     // Stage 10: Shlwapi Substring & URL Escaping
     const wchar_t* fullUrl = L"https://www.sumatrapdfreader.org/docs/manual.html";
-    const wchar_t* sub = micant::satellite::sumatra::StrStrW(fullUrl, L"manual");
+    const wchar_t* sub = micant::shell32::StrStrW(fullUrl, L"manual");
     TEST_ASSERT(sub != nullptr && std::wcscmp(sub, L"manual.html") == 0, "StrStrW must locate substring exactly");
-    const wchar_t* rsub = micant::satellite::sumatra::StrRStrIW(fullUrl, nullptr, L"DOCS");
+    const wchar_t* rsub = micant::shell32::StrRStrIW(fullUrl, nullptr, L"DOCS");
     TEST_ASSERT(rsub != nullptr && std::wcsncmp(rsub, L"docs", 4) == 0, "StrRStrIW case-insensitive search must succeed");
 
     wchar_t escaped[64]{};
     uint32_t escLen = 64;
-    TEST_ASSERT(micant::satellite::sumatra::UrlEscapeW(L"file://doc.pdf", escaped, &escLen, 0) == 0, "UrlEscapeW must succeed");
+    TEST_ASSERT(micant::shell32::UrlEscapeW(L"file://doc.pdf", escaped, &escLen, 0) == 0, "UrlEscapeW must succeed");
     TEST_ASSERT(std::wcscmp(escaped, L"file://doc.pdf") == 0, "Escaped URL buffer must be populated");
 
     // Stage 11: Kernel32 Time & Directory Helpers
     uint64_t fileTime = 0;
-    TEST_ASSERT(micant::satellite::sumatra::DosDateTimeToFileTime(0x5928, 0x4800, &fileTime) == 1 && fileTime > 0, "DosDateTimeToFileTime must produce valid 64-bit FILETIME");
-    uint32_t drives = micant::satellite::sumatra::GetLogicalDrives();
+    TEST_ASSERT(micant::win32::DosDateTimeToFileTime(0x5928, 0x4800, &fileTime) == 1 && fileTime > 0, "DosDateTimeToFileTime must produce valid 64-bit FILETIME");
+    uint32_t drives = micant::win32::GetLogicalDrives();
     TEST_ASSERT((drives & 0x0C) == 0x0C, "Logical drives bitmask must indicate C: and D: availability");
 
     wchar_t volPath[16]{};
-    TEST_ASSERT(micant::satellite::sumatra::GetVolumePathNameW(L"D:\\MicaNT_Apps\\doc.pdf", volPath, 16) == 1, "GetVolumePathNameW must succeed");
+    TEST_ASSERT(micant::win32::GetVolumePathNameW(L"D:\\MicaNT_Apps\\doc.pdf", volPath, 16) == 1, "GetVolumePathNameW must succeed");
     TEST_ASSERT(std::wcscmp(volPath, L"D:\\") == 0, "Volume path name must resolve to D:\\");
 
     wchar_t tmpPath[260]{};
-    uint32_t tmpId = micant::satellite::sumatra::GetTempFileNameW(L"C:\\Temp\\", L"SMP", 0x1234, tmpPath);
+    uint32_t tmpId = micant::win32::GetTempFileNameW(L"C:\\Temp\\", L"SMP", 0x1234, tmpPath);
     TEST_ASSERT(tmpId == 0x1234 && std::wcsstr(tmpPath, L"SMP1234.tmp") != nullptr, "GetTempFileNameW must format temporary file path");
 
     // Stage 12: UI Automation Core & MsImg32 Graphics
-    TEST_ASSERT(micant::satellite::sumatra::UiaRaiseStructureChangedEvent(nullptr, nullptr, nullptr, 0) == 0, "UiaRaiseStructureChangedEvent must return S_OK");
+    TEST_ASSERT(micant::uiautomation::UiaRaiseStructureChangedEvent(nullptr, nullptr, nullptr, 0) == 0, "UiaRaiseStructureChangedEvent must return S_OK");
     void* hostProv = nullptr;
-    TEST_ASSERT(micant::satellite::sumatra::UiaHostProviderFromHwnd(reinterpret_cast<void*>(0x9001), &hostProv) == 0 && hostProv != nullptr, "UiaHostProviderFromHwnd must return provider pointer");
-    TEST_ASSERT(micant::satellite::sumatra::GradientFill(nullptr, nullptr, 0, nullptr, 0, 0) == 1, "GradientFill must succeed");
-    TEST_ASSERT(micant::satellite::sumatra::PrintDlgExW(nullptr) == 0, "PrintDlgExW must return S_OK");
+    TEST_ASSERT(micant::uiautomation::UiaHostProviderFromHwnd(reinterpret_cast<void*>(0x9001), &hostProv) == 0 && hostProv != nullptr, "UiaHostProviderFromHwnd must return provider pointer");
+    TEST_ASSERT(micant::gdi32::GradientFill(nullptr, nullptr, 0, nullptr, 0, 0) == 1, "GradientFill must succeed");
+    TEST_ASSERT(micant::comdlg32::PrintDlgExW(nullptr) == 0, "PrintDlgExW must return S_OK");
 
     // Stage 13: DynamicLoader IAT Binding & Symbol Satisfaction
-    micant::satellite::InitializeSatelliteWin32Exports();
+    micant::subsystems::InitializeAllSubsystemExports();
     auto& loader = micant::ldr::DynamicLoader::get();
 
     static constexpr const char* SUMATRA_SAMPLE_SYMBOLS[] = {
@@ -7069,15 +7116,15 @@ void Test_SumatraPDF_Gdiplus_Subsystem() {
     for (int t = 0; t < 8; ++t) {
         threads.emplace_back([&stressSuccessCount, t]() {
             for (int op = 0; op < 25; ++op) {
-                micant::satellite::gdiplus::GpMatrix* m = nullptr;
-                if (micant::satellite::gdiplus::GdipCreateMatrix(&m) == micant::satellite::gdiplus::Ok && m) {
-                    micant::satellite::gdiplus::GdipTranslateMatrix(m, static_cast<float>(t), static_cast<float>(op), micant::satellite::gdiplus::MatrixOrderAppend);
-                    micant::satellite::gdiplus::PointF p{10.0f, 10.0f};
-                    micant::satellite::gdiplus::GdipTransformMatrixPoints(m, &p, 1);
+                micant::gdiplus::GpMatrix* m = nullptr;
+                if (micant::gdiplus::GdipCreateMatrix(&m) == micant::gdiplus::Ok && m) {
+                    micant::gdiplus::GdipTranslateMatrix(m, static_cast<float>(t), static_cast<float>(op), micant::gdiplus::MatrixOrderAppend);
+                    micant::gdiplus::PointF p{10.0f, 10.0f};
+                    micant::gdiplus::GdipTransformMatrixPoints(m, &p, 1);
                     if (p.X == 10.0f + t && p.Y == 10.0f + op) {
                         stressSuccessCount.fetch_add(1, std::memory_order_relaxed);
                     }
-                    micant::satellite::gdiplus::GdipDeleteMatrix(m);
+                    micant::gdiplus::GdipDeleteMatrix(m);
                 }
             }
         });
@@ -7091,92 +7138,92 @@ void Test_SumatraPDF_Gdiplus_Subsystem() {
 }
 
 // ============================================================================
-// Suite 219: Everything 1.4+ Search Indexing & Win32 Satellite Subsystem
+// Suite 219: Everything 1.4+ Search Indexing & Win32 Subsystem
 // ============================================================================
 inline void Test_Everything_Search_Indexing_Subsystem() {
-    std::cout << "\n[TEST] Running Suite 219: Everything 1.4+ Search Indexing & Win32 Satellite Subsystem...\n";
+    std::cout << "\n[TEST] Running Suite 219: Everything 1.4+ Search Indexing & Win32 Subsystem...\n";
 
     // Stage 1: Service Control Dispatcher & GUI Mode Fallback
-    micant::satellite::InitializeSatelliteWin32Exports();
+    micant::subsystems::InitializeAllSubsystemExports();
     kernel32::SetLastError(0);
-    int32_t dispatchRes = micant::satellite::everything::StartServiceCtrlDispatcherW(nullptr);
+    int32_t dispatchRes = micant::advapi32::StartServiceCtrlDispatcherW(nullptr);
     TEST_ASSERT(dispatchRes == 0, "StartServiceCtrlDispatcherW must return FALSE in GUI desktop mode");
     TEST_ASSERT(kernel32::GetLastError() == 1063, "StartServiceCtrlDispatcherW must set ERROR_FAILED_SERVICE_CONTROLLER_CONNECT (1063)");
 
     // Stage 2: Service Handler Registration & Status Updates
-    void* hStatus = micant::satellite::everything::RegisterServiceCtrlHandlerW(L"Everything", nullptr);
+    void* hStatus = micant::advapi32::RegisterServiceCtrlHandlerW(L"Everything", nullptr);
     TEST_ASSERT(hStatus != nullptr, "RegisterServiceCtrlHandlerW must return non-null status handle");
 
-    micant::satellite::everything::SERVICE_STATUS_MOCK svcStatus{};
+    micant::scm::SERVICE_STATUS svcStatus{};
     svcStatus.dwServiceType = 0x10;
     svcStatus.dwCurrentState = 4; // SERVICE_RUNNING
     svcStatus.dwControlsAccepted = 1;
-    TEST_ASSERT(micant::satellite::everything::SetServiceStatus(hStatus, &svcStatus) == 1, "SetServiceStatus must return TRUE");
+    TEST_ASSERT(micant::advapi32::SetServiceStatus(hStatus, &svcStatus) == 1, "SetServiceStatus must return TRUE");
 
     uint32_t needed = 0;
     uint8_t cfgBuffer[512]{};
-    TEST_ASSERT(micant::satellite::everything::QueryServiceConfigW(nullptr, cfgBuffer, sizeof(cfgBuffer), &needed) == 1, "QueryServiceConfigW must succeed with sufficient buffer");
+    TEST_ASSERT(micant::advapi32::QueryServiceConfigW(nullptr, cfgBuffer, sizeof(cfgBuffer), &needed) == 1, "QueryServiceConfigW must succeed with sufficient buffer");
     TEST_ASSERT(needed > 0, "QueryServiceConfigW must report required bytes");
 
     // Stage 3: System-Wide Global HotKey Engine
     void* dummyHwnd = reinterpret_cast<void*>(0x8080);
-    TEST_ASSERT(micant::satellite::everything::RegisterHotKey(dummyHwnd, 100, 0x0002 /* MOD_CONTROL */, 0x20 /* VK_SPACE */) == 1, "RegisterHotKey (Ctrl+Space) must succeed");
+    TEST_ASSERT(micant::user32::RegisterHotKey(dummyHwnd, 100, 0x0002 /* MOD_CONTROL */, 0x20 /* VK_SPACE */) == 1, "RegisterHotKey (Ctrl+Space) must succeed");
     // Duplicate registration should fail with error
     kernel32::SetLastError(0);
-    TEST_ASSERT(micant::satellite::everything::RegisterHotKey(dummyHwnd, 101, 0x0002, 0x20) == 0, "Duplicate HotKey registration must fail");
+    TEST_ASSERT(micant::user32::RegisterHotKey(dummyHwnd, 101, 0x0002, 0x20) == 0, "Duplicate HotKey registration must fail");
     TEST_ASSERT(kernel32::GetLastError() == 1409, "Duplicate HotKey must set ERROR_HOTKEY_ALREADY_REGISTERED (1409)");
-    TEST_ASSERT(micant::satellite::everything::UnregisterHotKey(dummyHwnd, 100) == 1, "UnregisterHotKey must succeed");
+    TEST_ASSERT(micant::user32::UnregisterHotKey(dummyHwnd, 100) == 1, "UnregisterHotKey must succeed");
 
     // Stage 4: Advanced GDI Text Alignment & Clip Regions
-    TEST_ASSERT(micant::satellite::everything::GetTextAlign(nullptr) == 0, "GetTextAlign must return TA_LEFT | TA_TOP");
-    TEST_ASSERT(micant::satellite::everything::OffsetClipRgn(nullptr, 10, 20) == 2, "OffsetClipRgn must return SIMPLEREGION (2)");
+    TEST_ASSERT(micant::gdi32::GetTextAlign(nullptr) == 0, "GetTextAlign must return TA_LEFT | TA_TOP");
+    TEST_ASSERT(micant::gdi32::OffsetClipRgn(nullptr, 10, 20) == 2, "OffsetClipRgn must return SIMPLEREGION (2)");
 
-    micant::satellite::everything::POINT_MOCK pt{99, 99};
-    TEST_ASSERT(micant::satellite::everything::GetDCOrgEx(nullptr, &pt) == 1 && pt.x == 0 && pt.y == 0, "GetDCOrgEx must initialize translation origin to (0, 0)");
+    micant::gdi32::POINT pt{99, 99};
+    TEST_ASSERT(micant::gdi32::GetDCOrgEx(nullptr, &pt) == 1 && pt.x == 0 && pt.y == 0, "GetDCOrgEx must initialize translation origin to (0, 0)");
 
-    uint32_t rgnSize = micant::satellite::everything::GetRegionData(nullptr, 0, nullptr);
-    TEST_ASSERT(rgnSize >= sizeof(micant::satellite::everything::RGNDATAHEADER_MOCK), "GetRegionData with null buffer must return required buffer size");
+    uint32_t rgnSize = micant::gdi32::GetRegionData(nullptr, 0, nullptr);
+    TEST_ASSERT(rgnSize >= sizeof(micant::gdi32::RGNDATAHEADER), "GetRegionData with null buffer must return required buffer size");
 
     std::vector<uint8_t> rgnBuf(rgnSize);
-    uint32_t bytesCopied = micant::satellite::everything::GetRegionData(nullptr, rgnSize, rgnBuf.data());
+    uint32_t bytesCopied = micant::gdi32::GetRegionData(nullptr, rgnSize, rgnBuf.data());
     TEST_ASSERT(bytesCopied == rgnSize, "GetRegionData must populate region bytes correctly");
 
-    TEST_ASSERT(micant::satellite::everything::GetNearestColor(nullptr, 0x00FF8800) == 0x00FF8800, "GetNearestColor on true-color display must return exact color");
-    void* hBmp = micant::satellite::everything::CreateBitmapIndirect(nullptr);
+    TEST_ASSERT(micant::gdi32::GetNearestColor(nullptr, 0x00FF8800) == 0x00FF8800, "GetNearestColor on true-color display must return exact color");
+    void* hBmp = micant::gdi32::CreateBitmapIndirect(nullptr);
     TEST_ASSERT(hBmp != nullptr, "CreateBitmapIndirect must return non-null HBITMAP");
 
     // Stage 5: Shell Lightweight Path & Registry Helpers
-    TEST_ASSERT(micant::satellite::everything::PathIsRootW(L"C:\\") == 1, "PathIsRootW must return TRUE for 'C:\\'");
-    TEST_ASSERT(micant::satellite::everything::PathIsRootW(L"D:/") == 1, "PathIsRootW must return TRUE for 'D:/'");
-    TEST_ASSERT(micant::satellite::everything::PathIsRootW(L"\\\\server\\share") == 1, "PathIsRootW must return TRUE for UNC root");
-    TEST_ASSERT(micant::satellite::everything::PathIsRootW(L"C:\\Windows\\System32") == 0, "PathIsRootW must return FALSE for subdirectory");
+    TEST_ASSERT(micant::shell32::PathIsRootW(L"C:\\") == 1, "PathIsRootW must return TRUE for 'C:\\'");
+    TEST_ASSERT(micant::shell32::PathIsRootW(L"D:/") == 1, "PathIsRootW must return TRUE for 'D:/'");
+    TEST_ASSERT(micant::shell32::PathIsRootW(L"\\\\server\\share") == 1, "PathIsRootW must return TRUE for UNC root");
+    TEST_ASSERT(micant::shell32::PathIsRootW(L"C:\\Windows\\System32") == 0, "PathIsRootW must return FALSE for subdirectory");
 
     wchar_t defaultVal[] = L"SearchEngine";
     wchar_t readVal[64]{};
     uint32_t cbRead = sizeof(readVal);
     uint32_t valType = 0;
-    TEST_ASSERT(micant::satellite::everything::SHRegGetUSValueW(L"Software\\Everything", L"AppTitle", &valType, readVal, &cbRead, 0, defaultVal, sizeof(defaultVal)) == 0, "SHRegGetUSValueW must succeed");
+    TEST_ASSERT(micant::shell32::SHRegGetUSValueW(L"Software\\Everything", L"AppTitle", &valType, readVal, &cbRead, 0, defaultVal, sizeof(defaultVal)) == 0, "SHRegGetUSValueW must succeed");
     TEST_ASSERT(std::wcscmp(readVal, L"SearchEngine") == 0, "SHRegGetUSValueW must populate default value");
 
     // Stage 6: Window Geometry & Dialog Tab Navigation
-    micant::satellite::everything::RECT_MOCK srcRc{10, 20, 200, 150};
-    micant::satellite::everything::RECT_MOCK dstRc{0, 0, 0, 0};
-    TEST_ASSERT(micant::satellite::everything::CopyRect(&dstRc, &srcRc) == 1, "CopyRect must return TRUE");
+    micant::gdi32::RECT srcRc{10, 20, 200, 150};
+    micant::gdi32::RECT dstRc{0, 0, 0, 0};
+    TEST_ASSERT(micant::user32::CopyRect(&dstRc, &srcRc) == 1, "CopyRect must return TRUE");
     TEST_ASSERT(dstRc.left == 10 && dstRc.top == 20 && dstRc.right == 200 && dstRc.bottom == 150, "CopyRect coordinates must match source");
 
-    micant::satellite::everything::RECT_MOCK adjRc{100, 100, 500, 400};
-    TEST_ASSERT(micant::satellite::everything::AdjustWindowRect(&adjRc, 0x00C00000 /* WS_CAPTION */, 0) == 1, "AdjustWindowRect must succeed");
+    micant::gdi32::RECT adjRc{100, 100, 500, 400};
+    TEST_ASSERT(micant::user32::AdjustWindowRect(&adjRc, 0x00C00000 /* WS_CAPTION */, 0) == 1, "AdjustWindowRect must succeed");
     TEST_ASSERT(adjRc.top < 100 && adjRc.left < 100 && adjRc.right > 500 && adjRc.bottom > 400, "AdjustWindowRect must expand rect for caption & borders");
 
-    TEST_ASSERT(micant::satellite::everything::OpenIcon(dummyHwnd) == 1, "OpenIcon must return TRUE");
-    TEST_ASSERT(micant::satellite::everything::GetNextDlgTabItem(nullptr, dummyHwnd, 0) == dummyHwnd, "GetNextDlgTabItem must return valid control HWND");
-    TEST_ASSERT(micant::satellite::everything::ReplyMessage(0) == 1, "ReplyMessage must return TRUE");
+    TEST_ASSERT(micant::user32::OpenIcon(dummyHwnd) == 1, "OpenIcon must return TRUE");
+    TEST_ASSERT(micant::user32::GetNextDlgTabItem(nullptr, dummyHwnd, 0) == dummyHwnd, "GetNextDlgTabItem must return valid control HWND");
+    TEST_ASSERT(micant::user32::ReplyMessage(0) == 1, "ReplyMessage must return TRUE");
 
-    micant::satellite::everything::RECT_MOCK updateRc{};
-    TEST_ASSERT(micant::satellite::everything::ScrollWindowEx(dummyHwnd, 0, -20, nullptr, nullptr, nullptr, &updateRc, 0) == 2, "ScrollWindowEx must return SIMPLEREGION (2)");
+    micant::gdi32::RECT updateRc{};
+    TEST_ASSERT(micant::user32::ScrollWindowEx(dummyHwnd, 0, -20, nullptr, nullptr, nullptr, &updateRc, 0) == 2, "ScrollWindowEx must return SIMPLEREGION (2)");
 
     // Stage 7: Process Environment Block & Handlers
-    char* envBlock = micant::satellite::everything::GetEnvironmentStrings();
+    char* envBlock = micant::kernel32::GetEnvironmentStrings();
     bool foundPath = false;
     for (const char* p = envBlock; *p; p += std::strlen(p) + 1) {
         if (std::strstr(p, "Path=") != nullptr) {
@@ -7185,19 +7232,19 @@ inline void Test_Everything_Search_Indexing_Subsystem() {
         }
     }
     TEST_ASSERT(foundPath, "Environment block must contain Path variable");
-    TEST_ASSERT(micant::satellite::everything::FreeEnvironmentStringsA(envBlock) == 1, "FreeEnvironmentStringsA must return TRUE");
-    TEST_ASSERT(micant::satellite::everything::SetHandleCount(2048) == 2048, "SetHandleCount must return requested count");
-    TEST_ASSERT(micant::satellite::everything::__C_specific_handler(nullptr, nullptr, nullptr, nullptr) == 1, "__C_specific_handler must return ExceptionContinueSearch (1)");
+    TEST_ASSERT(micant::kernel32::FreeEnvironmentStringsA(envBlock) == 1, "FreeEnvironmentStringsA must return TRUE");
+    TEST_ASSERT(micant::kernel32::SetHandleCount(2048) == 2048, "SetHandleCount must return requested count");
+    TEST_ASSERT(micant::kernel32::__C_specific_handler(nullptr, nullptr, nullptr, nullptr) == 1, "__C_specific_handler must return ExceptionContinueSearch (1)");
 
-    micant::satellite::everything::OSVERSIONINFOA_MOCK vi{};
+    micant::kernel32::OSVERSIONINFOA vi{};
     vi.dwOSVersionInfoSize = sizeof(vi);
-    TEST_ASSERT(micant::satellite::everything::GetVersionExA(&vi) == 1, "GetVersionExA must return TRUE");
+    TEST_ASSERT(micant::kernel32::GetVersionExA(&vi) == 1, "GetVersionExA must return TRUE");
     TEST_ASSERT(vi.dwMajorVersion == 10 && vi.dwMinorVersion == 0 && vi.dwBuildNumber == 19045, "GetVersionExA must report Windows 10 x64 Sovereign OS");
 
     // Stage 8: System Character Classification (GetStringTypeA)
     const char testStr[] = "MicaNT 2026!";
     uint16_t charTypes[16]{};
-    TEST_ASSERT(micant::satellite::everything::GetStringTypeA(0x0409, 1, testStr, static_cast<int32_t>(std::strlen(testStr)), charTypes) == 1, "GetStringTypeA must succeed");
+    TEST_ASSERT(micant::kernel32::GetStringTypeA(0x0409, 1, testStr, static_cast<int32_t>(std::strlen(testStr)), charTypes) == 1, "GetStringTypeA must succeed");
     TEST_ASSERT((charTypes[0] & 0x0001) != 0, "Character 'M' must have C1_UPPER flag");
     TEST_ASSERT((charTypes[1] & 0x0002) != 0, "Character 'i' must have C1_LOWER flag");
     TEST_ASSERT((charTypes[6] & 0x0008) != 0, "Character ' ' must have C1_SPACE flag");
@@ -7206,29 +7253,29 @@ inline void Test_Everything_Search_Indexing_Subsystem() {
 
     // Stage 9: System Locale Number & Calendar Formatting
     wchar_t numBuf[32]{};
-    int32_t numRes = micant::satellite::everything::GetNumberFormatW(0x0409, 0, L"123456.78", nullptr, numBuf, 32);
+    int32_t numRes = micant::kernel32::GetNumberFormatW(0x0409, 0, L"123456.78", nullptr, numBuf, 32);
     TEST_ASSERT(numRes > 0 && std::wcscmp(numBuf, L"123456.78") == 0, "GetNumberFormatW must format number string");
 
     wchar_t calBuf[16]{};
     uint32_t calVal = 0;
-    TEST_ASSERT(micant::satellite::everything::GetCalendarInfoW(0x0409, 1, 1, calBuf, 16, &calVal) == 1, "GetCalendarInfoW must succeed");
+    TEST_ASSERT(micant::kernel32::GetCalendarInfoW(0x0409, 1, 1, calBuf, 16, &calVal) == 1, "GetCalendarInfoW must succeed");
     TEST_ASSERT(calVal == 1 && std::wcscmp(calBuf, L"1") == 0, "GetCalendarInfoW must return valid calendar value");
 
     // Stage 10: COM Moniker Binding Context (CreateBindCtx)
     void* pbc = nullptr;
-    TEST_ASSERT(micant::satellite::everything::CreateBindCtx(0, &pbc) == 0 && pbc != nullptr, "CreateBindCtx must return S_OK and non-null context");
-    auto* bindCtx = static_cast<micant::satellite::everything::IBindCtx_Mock*>(pbc);
+    TEST_ASSERT(micant::ole32::CreateBindCtx(0, &pbc) == 0 && pbc != nullptr, "CreateBindCtx must return S_OK and non-null context");
+    auto* bindCtx = static_cast<micant::ole32::IBindCtx*>(pbc);
     TEST_ASSERT(bindCtx->lpVtbl != nullptr && bindCtx->lpVtbl->AddRef(pbc) == 1, "IBindCtx::AddRef must succeed");
     TEST_ASSERT(bindCtx->lpVtbl->Release(pbc) == 1, "IBindCtx::Release must succeed");
 
     // Stage 11: Inter-Thread Messaging & Keycode Mapping
-    TEST_ASSERT(micant::satellite::everything::PostThreadMessageW(1001, 0x0400 /* WM_USER */, 12, 34) == 1, "PostThreadMessageW must return TRUE");
+    TEST_ASSERT(micant::user32::PostThreadMessageW(1001, 0x0400 /* WM_USER */, 12, 34) == 1, "PostThreadMessageW must return TRUE");
     uint64_t msgRes = 999;
-    TEST_ASSERT(micant::satellite::everything::SendMessageTimeoutW(dummyHwnd, 0x0010 /* WM_CLOSE */, 0, 0, 0x0002, 1000, &msgRes) == 1 && msgRes == 0, "SendMessageTimeoutW must succeed and set result");
+    TEST_ASSERT(micant::user32::SendMessageTimeoutW(dummyHwnd, 0x0010 /* WM_CLOSE */, 0, 0, 0x0002, 1000, &msgRes) == 1 && msgRes == 0, "SendMessageTimeoutW must succeed and set result");
 
-    TEST_ASSERT(micant::satellite::everything::MapVirtualKeyExW(0x41, 2 /* MAPVK_VK_TO_CHAR */, nullptr) == 'A', "MapVirtualKeyExW for VK_A must translate to 'A'");
-    TEST_ASSERT(micant::satellite::everything::MapVirtualKeyExW(0x30, 2, nullptr) == '0', "MapVirtualKeyExW for VK_0 must translate to '0'");
-    TEST_ASSERT(micant::satellite::everything::MapVirtualKeyExW(0x20, 2, nullptr) == ' ', "MapVirtualKeyExW for VK_SPACE must translate to ' '");
+    TEST_ASSERT(micant::user32::MapVirtualKeyExW(0x41, 2 /* MAPVK_VK_TO_CHAR */, nullptr) == 'A', "MapVirtualKeyExW for VK_A must translate to 'A'");
+    TEST_ASSERT(micant::user32::MapVirtualKeyExW(0x30, 2, nullptr) == '0', "MapVirtualKeyExW for VK_0 must translate to '0'");
+    TEST_ASSERT(micant::user32::MapVirtualKeyExW(0x20, 2, nullptr) == ' ', "MapVirtualKeyExW for VK_SPACE must translate to ' '");
 
     // Stage 12: DynamicLoader IAT Binding Verification for Everything 1.4+
     auto& loader = micant::ldr::DynamicLoader::get();
@@ -7257,7 +7304,7 @@ inline void Test_Everything_Search_Indexing_Subsystem() {
         if (found) ++resolvedCount;
     }
     TEST_ASSERT(resolvedCount == sizeof(EVERYTHING_SAMPLE_SYMBOLS) / sizeof(EVERYTHING_SAMPLE_SYMBOLS[0]),
-                "All 34 Everything Win32 satellite symbols must be registered and resolved from DynamicLoader");
+                "All 34 Everything Win32 symbols must be registered and resolved from DynamicLoader");
 
     // Stage 13: Multi-Threaded Search & HotKey Dispatch Concurrent Stress Test
     std::atomic<uint32_t> stressQueriesCompleted{0};
@@ -7268,14 +7315,14 @@ inline void Test_Everything_Search_Indexing_Subsystem() {
             for (int q = 0; q < 50; ++q) {
                 // Simulate fast MFT index query & hotkey toggling
                 void* hwnd = reinterpret_cast<void*>(static_cast<uintptr_t>(0x5000 + t));
-                micant::satellite::everything::RegisterHotKey(hwnd, q + 1, 0x0001, static_cast<uint32_t>('A' + (q % 26)));
-                micant::satellite::everything::UnregisterHotKey(hwnd, q + 1);
+                micant::user32::RegisterHotKey(hwnd, q + 1, 0x0001, static_cast<uint32_t>('A' + (q % 26)));
+                micant::user32::UnregisterHotKey(hwnd, q + 1);
 
-                micant::satellite::everything::POINT_MOCK pt{};
-                micant::satellite::everything::GetDCOrgEx(nullptr, &pt);
+                micant::gdi32::POINT pt{};
+                micant::gdi32::GetDCOrgEx(nullptr, &pt);
 
                 wchar_t num[16]{};
-                micant::satellite::everything::GetNumberFormatW(0x0409, 0, L"42", nullptr, num, 16);
+                micant::kernel32::GetNumberFormatW(0x0409, 0, L"42", nullptr, num, 16);
 
                 stressQueriesCompleted.fetch_add(1, std::memory_order_relaxed);
             }
@@ -7286,294 +7333,293 @@ inline void Test_Everything_Search_Indexing_Subsystem() {
     }
     TEST_ASSERT(stressQueriesCompleted.load() == 400, "400-query concurrent search & hotkey stress test must succeed 100%");
 
-    std::cout << "[TEST] Suite 219: Everything 1.4+ Search Indexing & Win32 Satellite Subsystem PASSED.\n";
+    std::cout << "[TEST] Suite 219: Everything 1.4+ Search Indexing & Win32 Subsystem PASSED.\n";
 }
 
 // ----------------------------------------------------------------------------
 // Suite 220: WinMerge 2.16+ Visual Diff & Merge Subsystem & MDI / Scintilla Shell Integration
 // ----------------------------------------------------------------------------
 inline void Test_WinMerge_Visual_Diff_Subsystem() {
-    std::cout << "\n[TEST] Running Suite 220: WinMerge 2.16+ Visual Diff & Win32 Satellite Subsystem...\n";
+    std::cout << "\n[TEST] Running Suite 220: WinMerge 2.16+ Visual Diff & Win32 Subsystem...\n";
 
-    micant::satellite::InitializeSatelliteWin32Exports();
-
+    micant::subsystems::InitializeAllSubsystemExports();
     // Stage 1: Advanced Registry Operations
-    TEST_ASSERT(micant::satellite::winmerge::RegSetValueW(nullptr, L"Settings", 1, L"Dark", 8) == 0, "RegSetValueW must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::RegDeleteTreeW(nullptr, L"OldConfig") == 0, "RegDeleteTreeW must succeed");
+    TEST_ASSERT(micant::advapi32::RegSetValueW(nullptr, L"Settings", 1, L"Dark", 8) == 0, "RegSetValueW must succeed");
+    TEST_ASSERT(micant::advapi32::RegDeleteTreeW(nullptr, L"OldConfig") == 0, "RegDeleteTreeW must succeed");
 
     // Stage 2: Common Controls Initialization
-    micant::satellite::winmerge::InitCommonControls();
+    micant::comctl32::InitCommonControls();
     auto& loader = micant::ldr::DynamicLoader::get();
     TEST_ASSERT(loader.getExportOrdinal("comctl32.dll", 17) != nullptr, "InitCommonControls / Ordinal 17 must be exported in comctl32.dll");
 
     // Stage 3: Advanced GDI Viewport Scaling & Extents
-    micant::satellite::winmerge::SIZE_MOCK prevSize{};
-    TEST_ASSERT(micant::satellite::winmerge::SetViewportExtEx(nullptr, 100, 200, &prevSize) == 1, "SetViewportExtEx must succeed");
+    micant::gdi32::SIZE prevSize{};
+    TEST_ASSERT(micant::gdi32::SetViewportExtEx(nullptr, 100, 200, &prevSize) == 1, "SetViewportExtEx must succeed");
     TEST_ASSERT(prevSize.cx == 100 && prevSize.cy == 200, "Previous size populated in SetViewportExtEx");
 
-    micant::satellite::winmerge::SIZE_MOCK curSize{};
-    TEST_ASSERT(micant::satellite::winmerge::GetViewportExtEx(nullptr, &curSize) == 1, "GetViewportExtEx must succeed");
+    micant::gdi32::SIZE curSize{};
+    TEST_ASSERT(micant::gdi32::GetViewportExtEx(nullptr, &curSize) == 1, "GetViewportExtEx must succeed");
     TEST_ASSERT(curSize.cx == 1 && curSize.cy == 1, "GetViewportExtEx default extent must be 1x1");
 
-    TEST_ASSERT(micant::satellite::winmerge::SetWindowExtEx(nullptr, 50, 75, &prevSize) == 1, "SetWindowExtEx must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GetWindowExtEx(nullptr, &curSize) == 1, "GetWindowExtEx must succeed");
+    TEST_ASSERT(micant::gdi32::SetWindowExtEx(nullptr, 50, 75, &prevSize) == 1, "SetWindowExtEx must succeed");
+    TEST_ASSERT(micant::gdi32::GetWindowExtEx(nullptr, &curSize) == 1, "GetWindowExtEx must succeed");
 
-    micant::satellite::winmerge::POINT_MOCK pt{};
-    TEST_ASSERT(micant::satellite::winmerge::OffsetViewportOrgEx(nullptr, 10, 20, &pt) == 1, "OffsetViewportOrgEx must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::ScaleViewportExtEx(nullptr, 2, 1, 2, 1, &curSize) == 1, "ScaleViewportExtEx must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::ScaleWindowExtEx(nullptr, 2, 1, 2, 1, &curSize) == 1, "ScaleWindowExtEx must succeed");
+    micant::gdi32::POINT pt{};
+    TEST_ASSERT(micant::gdi32::OffsetViewportOrgEx(nullptr, 10, 20, &pt) == 1, "OffsetViewportOrgEx must succeed");
+    TEST_ASSERT(micant::gdi32::ScaleViewportExtEx(nullptr, 2, 1, 2, 1, &curSize) == 1, "ScaleViewportExtEx must succeed");
+    TEST_ASSERT(micant::gdi32::ScaleWindowExtEx(nullptr, 2, 1, 2, 1, &curSize) == 1, "ScaleWindowExtEx must succeed");
 
     // Stage 4: GDI Polygon Fill, Layout & Font Face
-    TEST_ASSERT(micant::satellite::winmerge::GetLayout(nullptr) == 0, "GetLayout must return 0 (LAYOUT_LTR)");
-    TEST_ASSERT(micant::satellite::winmerge::SetPolyFillMode(nullptr, 2) == 1, "SetPolyFillMode must return previous mode");
-    TEST_ASSERT(micant::satellite::winmerge::GetPolyFillMode(nullptr) == 1, "GetPolyFillMode must return ALTERNATE");
+    TEST_ASSERT(micant::gdi32::GetLayout(nullptr) == 0, "GetLayout must return 0 (LAYOUT_LTR)");
+    TEST_ASSERT(micant::gdi32::SetPolyFillMode(nullptr, 2) == 1, "SetPolyFillMode must return previous mode");
+    TEST_ASSERT(micant::gdi32::GetPolyFillMode(nullptr) == 1, "GetPolyFillMode must return ALTERNATE");
 
     wchar_t faceName[32]{};
-    int32_t faceLen = micant::satellite::winmerge::GetTextFaceW(nullptr, 32, faceName);
+    int32_t faceLen = micant::gdi32::GetTextFaceW(nullptr, 32, faceName);
     TEST_ASSERT(faceLen > 0 && std::wcscmp(faceName, L"Segoe UI") == 0, "GetTextFaceW must return 'Segoe UI'");
 
-    void* hElliptic = micant::satellite::winmerge::CreateEllipticRgn(0, 0, 100, 100);
+    void* hElliptic = micant::gdi32::CreateEllipticRgn(0, 0, 100, 100);
     TEST_ASSERT(hElliptic != nullptr, "CreateEllipticRgn must return valid region handle");
-    TEST_ASSERT(micant::satellite::winmerge::PtVisible(nullptr, 50, 50) == 1, "PtVisible must return 1");
-    TEST_ASSERT(micant::satellite::winmerge::Escape(nullptr, 1, 0, nullptr, nullptr) == 1, "Escape must return 1");
+    TEST_ASSERT(micant::gdi32::PtVisible(nullptr, 50, 50) == 1, "PtVisible must return 1");
+    TEST_ASSERT(micant::gdi32::Escape(nullptr, 1, 0, nullptr, nullptr) == 1, "Escape must return 1");
 
     int fontEnumCount = 0;
-    micant::satellite::winmerge::EnumFontFamiliesW(nullptr, nullptr, [](const micant::satellite::winmerge::ENUMLOGFONTW_MOCK* elf, const micant::satellite::winmerge::NEWTEXTMETRICW_MOCK*, uint32_t, int64_t lp) -> int32_t {
+    micant::gdi32::EnumFontFamiliesW(nullptr, nullptr, reinterpret_cast<void*>(+[](const micant::gdi32::ENUMLOGFONTW* elf, const micant::gdi32::NEWTEXTMETRICW*, uint32_t, int64_t lp) -> int32_t {
         if (elf && std::wcscmp(elf->elfLogFont.lfFaceName, L"Segoe UI") == 0) {
             *reinterpret_cast<int*>(lp) += 1;
         }
         return 1;
-    }, reinterpret_cast<int64_t>(&fontEnumCount));
+    }), reinterpret_cast<int64_t>(&fontEnumCount));
     TEST_ASSERT(fontEnumCount == 1, "EnumFontFamiliesW must enumerate Segoe UI");
 
-    void* hMeta = micant::satellite::winmerge::CopyMetaFileW(nullptr, nullptr);
+    void* hMeta = micant::gdi32::CopyMetaFileW(nullptr, nullptr);
     TEST_ASSERT(hMeta != nullptr, "CopyMetaFileW must return valid HMETAFILE");
 
     // Stage 5: GDI+ 2D Vector Path Geometry & Integer Coordinates
-    TEST_ASSERT(micant::satellite::winmerge::GdipAddPathArcI(nullptr, 10, 10, 50, 50, 0.0f, 90.0f) == 0, "GdipAddPathArcI must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GdipClosePathFigure(nullptr) == 0, "GdipClosePathFigure must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GdipAddPathLineI(nullptr, 0, 0, 100, 100) == 0, "GdipAddPathLineI must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GdipAddPathBezierI(nullptr, 0, 0, 10, 20, 30, 40, 50, 50) == 0, "GdipAddPathBezierI must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GdipStartPathFigure(nullptr) == 0, "GdipStartPathFigure must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GdipDrawBezierI(nullptr, nullptr, 0, 0, 10, 20, 30, 40, 50, 50) == 0, "GdipDrawBezierI must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GdipDrawImageRectI(nullptr, nullptr, 0, 0, 64, 64) == 0, "GdipDrawImageRectI must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GdipDrawLinesI(nullptr, nullptr, nullptr, 0) == 0, "GdipDrawLinesI must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipAddPathArcI(nullptr, 10, 10, 50, 50, 0.0f, 90.0f) == 0, "GdipAddPathArcI must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipClosePathFigure(nullptr) == 0, "GdipClosePathFigure must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipAddPathLineI(nullptr, 0, 0, 100, 100) == 0, "GdipAddPathLineI must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipAddPathBezierI(nullptr, 0, 0, 10, 20, 30, 40, 50, 50) == 0, "GdipAddPathBezierI must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipStartPathFigure(nullptr) == 0, "GdipStartPathFigure must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipDrawBezierI(nullptr, nullptr, 0, 0, 10, 20, 30, 40, 50, 50) == 0, "GdipDrawBezierI must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipDrawImageRectI(nullptr, nullptr, 0, 0, 64, 64) == 0, "GdipDrawImageRectI must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipDrawLinesI(nullptr, nullptr, nullptr, 0) == 0, "GdipDrawLinesI must succeed");
 
-    micant::satellite::winmerge::ColorPaletteMock pal{};
+    micant::gdiplus::ColorPalette pal{};
     int palSize = 0;
-    TEST_ASSERT(micant::satellite::winmerge::GdipGetImagePaletteSize(nullptr, &palSize) == 0, "GdipGetImagePaletteSize must succeed");
-    TEST_ASSERT(palSize == sizeof(micant::satellite::winmerge::ColorPaletteMock), "Palette size must match struct");
-    TEST_ASSERT(micant::satellite::winmerge::GdipGetImagePalette(nullptr, &pal, palSize) == 0, "GdipGetImagePalette must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipGetImagePaletteSize(nullptr, &palSize) == 0, "GdipGetImagePaletteSize must succeed");
+    TEST_ASSERT(palSize == sizeof(micant::gdiplus::ColorPalette), "Palette size must match struct");
+    TEST_ASSERT(micant::gdiplus::GdipGetImagePalette(nullptr, &pal, palSize) == 0, "GdipGetImagePalette must succeed");
 
     void* hBmp = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::GdipCreateBitmapFromFile(L"test.png", &hBmp) == 0 && hBmp != nullptr, "GdipCreateBitmapFromFile must create bitmap");
-    TEST_ASSERT(micant::satellite::winmerge::GdipSaveImageToStream(hBmp, nullptr, nullptr, nullptr) == 0, "GdipSaveImageToStream must succeed");
+    TEST_ASSERT(micant::gdiplus::GdipCreateBitmapFromFile(L"test.png", &hBmp) == 0 && hBmp != nullptr, "GdipCreateBitmapFromFile must create bitmap");
+    TEST_ASSERT(micant::gdiplus::GdipSaveImageToStream(hBmp, nullptr, nullptr, nullptr) == 0, "GdipSaveImageToStream must succeed");
 
     // Stage 6: Activation Context Engine & Realloc
     void* mem1 = std::malloc(64);
-    void* mem2 = micant::satellite::winmerge::GlobalReAlloc(mem1, 128, 0);
+    void* mem2 = micant::kernel32::GlobalReAlloc(mem1, 128, 0);
     TEST_ASSERT(mem2 != nullptr, "GlobalReAlloc must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GlobalHandle(mem2) == mem2, "GlobalHandle must return pointer");
-    TEST_ASSERT(micant::satellite::winmerge::GlobalFlags(mem2) == 0, "GlobalFlags must return GMEM_FIXED");
-    void* mem3 = micant::satellite::winmerge::LocalReAlloc(mem2, 256, 0);
+    TEST_ASSERT(micant::kernel32::GlobalHandle(mem2) == mem2, "GlobalHandle must return pointer");
+    TEST_ASSERT(micant::kernel32::GlobalFlags(mem2) == 0, "GlobalFlags must return GMEM_FIXED");
+    void* mem3 = micant::kernel32::LocalReAlloc(mem2, 256, 0);
     TEST_ASSERT(mem3 != nullptr, "LocalReAlloc must succeed");
     std::free(mem3);
 
-    micant::satellite::winmerge::ACTCTXW_MOCK actCtx{};
-    void* hAct = micant::satellite::winmerge::CreateActCtxW(&actCtx);
+    micant::kernel32::ACTCTXW actCtx{};
+    void* hAct = micant::kernel32::CreateActCtxW(&actCtx);
     TEST_ASSERT(hAct != nullptr, "CreateActCtxW must return activation context");
     uintptr_t cookie = 0;
-    TEST_ASSERT(micant::satellite::winmerge::ActivateActCtx(hAct, &cookie) == 1 && cookie != 0, "ActivateActCtx must succeed with cookie");
-    TEST_ASSERT(micant::satellite::winmerge::DeactivateActCtx(0, cookie) == 1, "DeactivateActCtx must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::FindActCtxSectionStringW(0, nullptr, 0, L"test", nullptr) == 0, "FindActCtxSectionStringW returns 0 fallback");
-    TEST_ASSERT(micant::satellite::winmerge::QueryActCtxW(0, hAct, nullptr, 1, nullptr, 0, nullptr) == 1, "QueryActCtxW must succeed");
+    TEST_ASSERT(micant::kernel32::ActivateActCtx(hAct, &cookie) == 1 && cookie != 0, "ActivateActCtx must succeed with cookie");
+    TEST_ASSERT(micant::kernel32::DeactivateActCtx(0, cookie) == 1, "DeactivateActCtx must succeed");
+    TEST_ASSERT(micant::kernel32::FindActCtxSectionStringW(0, nullptr, 0, L"test", nullptr) == 0, "FindActCtxSectionStringW returns 0 fallback");
+    TEST_ASSERT(micant::kernel32::QueryActCtxW(0, hAct, nullptr, 1, nullptr, 0, nullptr) == 1, "QueryActCtxW must succeed");
 
     // Stage 7: Wow64 Directory, Environment Expansion & String Comparison
     wchar_t wow64[64]{};
-    uint32_t wowLen = micant::satellite::winmerge::GetSystemWow64DirectoryW(wow64, 64);
+    uint32_t wowLen = micant::kernel32::GetSystemWow64DirectoryW(wow64, 64);
     TEST_ASSERT(wowLen > 0 && std::wcscmp(wow64, L"C:\\Windows\\SysWOW64") == 0, "GetSystemWow64DirectoryW returns SysWOW64");
 
     char expEnv[256]{};
-    uint32_t expLen = micant::satellite::winmerge::ExpandEnvironmentStringsA("%SYSTEMROOT%\\System32", expEnv, 256);
+    uint32_t expLen = micant::kernel32::ExpandEnvironmentStringsA("%SYSTEMROOT%\\System32", expEnv, 256);
     TEST_ASSERT(expLen > 0 && std::strcmp(expEnv, "C:\\Windows\\System32") == 0, "ExpandEnvironmentStringsA expands %SYSTEMROOT%");
 
-    TEST_ASSERT(micant::satellite::winmerge::SetThreadUILanguage(0x0409) > 0, "SetThreadUILanguage must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::SetSearchPathMode(1) == 1, "SetSearchPathMode must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::SetDllDirectoryW(L"C:\\WinMerge") == 1, "SetDllDirectoryW must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::lstrcmpA("apple", "banana") < 0, "lstrcmpA ordering check");
-    TEST_ASSERT(micant::satellite::winmerge::lstrcmpA("equal", "equal") == 0, "lstrcmpA equality check");
+    TEST_ASSERT(micant::kernel32::SetThreadUILanguage(0x0409) > 0, "SetThreadUILanguage must succeed");
+    TEST_ASSERT(micant::kernel32::SetSearchPathMode(1) == 1, "SetSearchPathMode must succeed");
+    TEST_ASSERT(micant::kernel32::SetDllDirectoryW(L"C:\\WinMerge") == 1, "SetDllDirectoryW must succeed");
+    TEST_ASSERT(micant::kernel32::lstrcmpA("apple", "banana") < 0, "lstrcmpA ordering check");
+    TEST_ASSERT(micant::kernel32::lstrcmpA("equal", "equal") == 0, "lstrcmpA equality check");
 
     // Stage 8: S-List, File Locks & Thread Info
-    micant::satellite::winmerge::SLIST_HEADER_MOCK slistHead{};
-    micant::satellite::winmerge::SLIST_ENTRY_MOCK entry1{};
-    micant::satellite::winmerge::SLIST_ENTRY_MOCK entry2{};
-    micant::satellite::winmerge::InterlockedPushEntrySList(&slistHead, &entry1);
-    micant::satellite::winmerge::InterlockedPushEntrySList(&slistHead, &entry2);
+    micant::kernel32::SLIST_HEADER slistHead{};
+    micant::kernel32::SLIST_ENTRY entry1{};
+    micant::kernel32::SLIST_ENTRY entry2{};
+    micant::kernel32::InterlockedPushEntrySList(&slistHead, &entry1);
+    micant::kernel32::InterlockedPushEntrySList(&slistHead, &entry2);
     TEST_ASSERT(slistHead.Alignment == reinterpret_cast<uint64_t>(&entry2), "InterlockedPushEntrySList must push to head");
 
     wchar_t atomBuf[32]{};
-    uint32_t atomLen = micant::satellite::winmerge::GlobalGetAtomNameW(42, atomBuf, 32);
+    uint32_t atomLen = micant::kernel32::GlobalGetAtomNameW(42, atomBuf, 32);
     TEST_ASSERT(atomLen > 0 && std::wcscmp(atomBuf, L"#42") == 0, "GlobalGetAtomNameW formats atom name");
-    TEST_ASSERT(micant::satellite::winmerge::GetProfileIntW(L"WinMerge", L"TabWidth", 4) == 4, "GetProfileIntW returns default");
-    TEST_ASSERT(micant::satellite::winmerge::LockFile(nullptr, 0, 0, 100, 0) == 1, "LockFile must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::UnlockFile(nullptr, 0, 0, 100, 0) == 1, "UnlockFile must succeed");
-    TEST_ASSERT(micant::satellite::winmerge::GetThreadId(nullptr) == 1001, "GetThreadId must return 1001");
+    TEST_ASSERT(micant::kernel32::GetProfileIntW(L"WinMerge", L"TabWidth", 4) == 4, "GetProfileIntW returns default");
+    TEST_ASSERT(micant::kernel32::LockFile(nullptr, 0, 0, 100, 0) == 1, "LockFile must succeed");
+    TEST_ASSERT(micant::kernel32::UnlockFile(nullptr, 0, 0, 100, 0) == 1, "UnlockFile must succeed");
+    TEST_ASSERT(micant::kernel32::GetThreadId(nullptr) == 1001, "GetThreadId must return 1001");
 
     // Stage 9: COM Free-Threaded Marshaler, OLE Menus & Accessibility
     void* pMarshaler = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::CoCreateFreeThreadedMarshaler(nullptr, &pMarshaler) == 0 && pMarshaler != nullptr, "CoCreateFreeThreadedMarshaler succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::OleTranslateAccelerator(nullptr, nullptr, nullptr) == 1, "OleTranslateAccelerator returns S_FALSE (1)");
-    void* hOleMenu = micant::satellite::winmerge::OleCreateMenuDescriptor(nullptr, nullptr);
+    TEST_ASSERT(micant::ole32::CoCreateFreeThreadedMarshaler(nullptr, &pMarshaler) == 0 && pMarshaler != nullptr, "CoCreateFreeThreadedMarshaler succeeds");
+    TEST_ASSERT(micant::ole32::OleTranslateAccelerator(nullptr, nullptr, nullptr) == 1, "OleTranslateAccelerator returns S_FALSE (1)");
+    void* hOleMenu = micant::ole32::OleCreateMenuDescriptor(nullptr, nullptr);
     TEST_ASSERT(hOleMenu != nullptr, "OleCreateMenuDescriptor returns valid descriptor");
-    TEST_ASSERT(micant::satellite::winmerge::OleDestroyMenuDescriptor(hOleMenu) == 0, "OleDestroyMenuDescriptor returns S_OK");
-    TEST_ASSERT(micant::satellite::winmerge::CoRegisterMessageFilter(nullptr, nullptr) == 0, "CoRegisterMessageFilter returns S_OK");
-    micant::satellite::winmerge::CoFreeUnusedLibraries();
-    TEST_ASSERT(micant::satellite::winmerge::OleDuplicateData(reinterpret_cast<void*>(0x1234), 1, 0) == reinterpret_cast<void*>(0x1234), "OleDuplicateData succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::CoLockObjectExternal(nullptr, 1, 0) == 0, "CoLockObjectExternal returns S_OK");
-    TEST_ASSERT(micant::satellite::winmerge::OleRun(nullptr) == 0, "OleRun returns S_OK");
+    TEST_ASSERT(micant::ole32::OleDestroyMenuDescriptor(hOleMenu) == 0, "OleDestroyMenuDescriptor returns S_OK");
+    TEST_ASSERT(micant::ole32::CoRegisterMessageFilter(nullptr, nullptr) == 0, "CoRegisterMessageFilter returns S_OK");
+    micant::ole32::CoFreeUnusedLibraries();
+    TEST_ASSERT(micant::ole32::OleDuplicateData(reinterpret_cast<void*>(0x1234), 1, 0) == reinterpret_cast<void*>(0x1234), "OleDuplicateData succeeds");
+    TEST_ASSERT(micant::ole32::CoLockObjectExternal(nullptr, 1, 0) == 0, "CoLockObjectExternal returns S_OK");
+    TEST_ASSERT(micant::ole32::OleRun(nullptr) == 0, "OleRun returns S_OK");
 
     uint8_t propVar[24]{0xFF};
-    TEST_ASSERT(micant::satellite::winmerge::PropVariantClear(propVar) == 0, "PropVariantClear returns S_OK");
+    TEST_ASSERT(micant::ole32::PropVariantClear(propVar) == 0, "PropVariantClear returns S_OK");
     TEST_ASSERT(propVar[0] == 0 && propVar[23] == 0, "PropVariantClear zeroes memory");
 
     void* pAcc = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::AccessibleObjectFromWindow(nullptr, 0, nullptr, &pAcc) == 0 && pAcc != nullptr, "AccessibleObjectFromWindow succeeds");
+    TEST_ASSERT(micant::uiautomation::AccessibleObjectFromWindow(nullptr, 0, nullptr, &pAcc) == 0 && pAcc != nullptr, "AccessibleObjectFromWindow succeeds");
     void* pStdAcc = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::CreateStdAccessibleObject(nullptr, 0, nullptr, &pStdAcc) == 0 && pStdAcc != nullptr, "CreateStdAccessibleObject succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::OleUIBusyW(nullptr) == 0, "OleUIBusyW returns OLEUI_CANCEL");
+    TEST_ASSERT(micant::uiautomation::CreateStdAccessibleObject(nullptr, 0, nullptr, &pStdAcc) == 0 && pStdAcc != nullptr, "CreateStdAccessibleObject succeeds");
+    TEST_ASSERT(micant::ole32::OleUIBusyW(nullptr) == 0, "OleUIBusyW returns OLEUI_CANCEL");
 
     // Stage 10: OLE Automation Error Info & Variant Dates
     void* pErr = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::CreateErrorInfo(&pErr) == 0 && pErr != nullptr, "CreateErrorInfo succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::SetErrorInfo(0, pErr) == 0, "SetErrorInfo succeeds");
+    TEST_ASSERT(micant::oleaut32::CreateErrorInfo(&pErr) == 0 && pErr != nullptr, "CreateErrorInfo succeeds");
+    TEST_ASSERT(micant::oleaut32::SetErrorInfo(0, pErr) == 0, "SetErrorInfo succeeds");
 
     double vDate = 0.0;
-    TEST_ASSERT(micant::satellite::winmerge::VarDateFromStr(L"2026-10-09", 0x0409, 0, &vDate) == 0, "VarDateFromStr succeeds");
-    micant::satellite::winmerge::SYSTEMTIME_MOCK st{};
-    TEST_ASSERT(micant::satellite::winmerge::VariantTimeToSystemTime(vDate, &st) == 1, "VariantTimeToSystemTime succeeds");
+    TEST_ASSERT(micant::oleaut32::VarDateFromStr(L"2026-10-09", 0x0409, 0, &vDate) == 0, "VarDateFromStr succeeds");
+    micant::kernel32::SYSTEMTIME st{};
+    TEST_ASSERT(micant::oleaut32::VariantTimeToSystemTime(vDate, &st) == 1, "VariantTimeToSystemTime succeeds");
     TEST_ASSERT(st.wYear >= 2020, "Converted system time year is valid");
     double vDate2 = 0.0;
-    TEST_ASSERT(micant::satellite::winmerge::SystemTimeToVariantTime(&st, &vDate2) == 1, "SystemTimeToVariantTime succeeds");
+    TEST_ASSERT(micant::oleaut32::SystemTimeToVariantTime(&st, &vDate2) == 1, "SystemTimeToVariantTime succeeds");
     TEST_ASSERT(std::abs(vDate - vDate2) < 1.0, "Round-trip variant time matches");
 
     // Stage 11: Windows Property System Architecture
-    micant::satellite::winmerge::PROPERTYKEY_MOCK pkey{};
-    TEST_ASSERT(micant::satellite::winmerge::PSGetPropertyKeyFromName(L"System.Author", &pkey) == 0 && pkey.pid == 1, "PSGetPropertyKeyFromName succeeds");
+    micant::propsys::PROPERTYKEY pkey{};
+    TEST_ASSERT(micant::propsys::PSGetPropertyKeyFromName(L"System.Author", &pkey) == 0 && pkey.pid == 1, "PSGetPropertyKeyFromName succeeds");
     void* pEnum = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::PSEnumeratePropertyDescriptions(0, nullptr, &pEnum) == 0 && pEnum != nullptr, "PSEnumeratePropertyDescriptions succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::PropVariantCompareEx(nullptr, nullptr, 0, 0) == 0, "PropVariantCompareEx reports equality");
+    TEST_ASSERT(micant::propsys::PSEnumeratePropertyDescriptions(0, nullptr, &pEnum) == 0 && pEnum != nullptr, "PSEnumeratePropertyDescriptions succeeds");
+    TEST_ASSERT(micant::propsys::PropVariantCompareEx(nullptr, nullptr, 0, 0) == 0, "PropVariantCompareEx reports equality");
     void* pPDesc = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::PSGetPropertyDescription(nullptr, nullptr, &pPDesc) == 0 && pPDesc != nullptr, "PSGetPropertyDescription succeeds");
+    TEST_ASSERT(micant::propsys::PSGetPropertyDescription(nullptr, nullptr, &pPDesc) == 0 && pPDesc != nullptr, "PSGetPropertyDescription succeeds");
     wchar_t* pDisp = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::PSFormatForDisplayAlloc(nullptr, nullptr, 0, &pDisp) == 0 && pDisp != nullptr, "PSFormatForDisplayAlloc succeeds");
+    TEST_ASSERT(micant::propsys::PSFormatForDisplayAlloc(nullptr, nullptr, 0, &pDisp) == 0 && pDisp != nullptr, "PSFormatForDisplayAlloc succeeds");
     TEST_ASSERT(std::wcscmp(pDisp, L"WinMerge Property") == 0, "Formatted property matches");
     std::free(pDisp);
     uint8_t initBuf[16]{};
-    TEST_ASSERT(micant::satellite::winmerge::InitPropVariantFromBuffer(initBuf, 16, propVar) == 0, "InitPropVariantFromBuffer succeeds");
+    TEST_ASSERT(micant::propsys::InitPropVariantFromBuffer(initBuf, 16, propVar) == 0, "InitPropVariantFromBuffer succeeds");
 
     // Stage 12: Shell Items, ID Lists & Natural Logical String Sort
     void* pShItem = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::SHCreateShellItem(nullptr, nullptr, nullptr, &pShItem) == 0 && pShItem != nullptr, "SHCreateShellItem succeeds");
+    TEST_ASSERT(micant::shell32::SHCreateShellItem(nullptr, nullptr, nullptr, &pShItem) == 0 && pShItem != nullptr, "SHCreateShellItem succeeds");
     void* dummyPidl = std::malloc(32);
-    micant::satellite::winmerge::ILFree(dummyPidl);
+    micant::shell32::ILFree(dummyPidl);
     void* pPStore = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::SHGetPropertyStoreFromParsingName(L"C:\\diff.txt", nullptr, 0, nullptr, &pPStore) == 0 && pPStore != nullptr, "SHGetPropertyStoreFromParsingName succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::SetCurrentProcessExplicitAppUserModelID(L"WinMerge.WinMerge") == 0, "SetCurrentProcessExplicitAppUserModelID succeeds");
+    TEST_ASSERT(micant::shell32::SHGetPropertyStoreFromParsingName(L"C:\\diff.txt", nullptr, 0, nullptr, &pPStore) == 0 && pPStore != nullptr, "SHGetPropertyStoreFromParsingName succeeds");
+    TEST_ASSERT(micant::shell32::SetCurrentProcessExplicitAppUserModelID(L"WinMerge.WinMerge") == 0, "SetCurrentProcessExplicitAppUserModelID succeeds");
     void* pFMenu = nullptr;
-    TEST_ASSERT(micant::satellite::winmerge::CDefFolderMenu_Create2(nullptr, nullptr, 0, nullptr, nullptr, nullptr, 0, nullptr, &pFMenu) == 0 && pFMenu != nullptr, "CDefFolderMenu_Create2 succeeds");
+    TEST_ASSERT(micant::shell32::CDefFolderMenu_Create2(nullptr, nullptr, 0, nullptr, nullptr, nullptr, 0, nullptr, &pFMenu) == 0 && pFMenu != nullptr, "CDefFolderMenu_Create2 succeeds");
 
     wchar_t stripPath[64] = L"C:\\Users\\admin\\file.txt";
-    TEST_ASSERT(micant::satellite::winmerge::PathStripToRootW(stripPath) == 1 && std::wcscmp(stripPath, L"C:\\") == 0, "PathStripToRootW strips drive to root");
+    TEST_ASSERT(micant::shell32::PathStripToRootW(stripPath) == 1 && std::wcscmp(stripPath, L"C:\\") == 0, "PathStripToRootW strips drive to root");
     wchar_t stripUnc[64] = L"\\\\server\\share\\docs\\sub";
-    TEST_ASSERT(micant::satellite::winmerge::PathStripToRootW(stripUnc) == 1 && std::wcscmp(stripUnc, L"\\\\server\\share\\") == 0, "PathStripToRootW strips UNC to root");
+    TEST_ASSERT(micant::shell32::PathStripToRootW(stripUnc) == 1 && std::wcscmp(stripUnc, L"\\\\server\\share\\") == 0, "PathStripToRootW strips UNC to root");
 
-    TEST_ASSERT(micant::satellite::winmerge::StrCmpLogicalW(L"file2.txt", L"file10.txt") < 0, "StrCmpLogicalW natural sort order file2 < file10");
-    TEST_ASSERT(micant::satellite::winmerge::StrCmpLogicalW(L"doc10.txt", L"doc2.txt") > 0, "StrCmpLogicalW natural sort order doc10 > doc2");
-    TEST_ASSERT(micant::satellite::winmerge::StrCmpLogicalW(L"same.txt", L"SAME.txt") == 0, "StrCmpLogicalW case-insensitive equality");
+    TEST_ASSERT(micant::shell32::StrCmpLogicalW(L"file2.txt", L"file10.txt") < 0, "StrCmpLogicalW natural sort order file2 < file10");
+    TEST_ASSERT(micant::shell32::StrCmpLogicalW(L"doc10.txt", L"doc2.txt") > 0, "StrCmpLogicalW natural sort order doc10 > doc2");
+    TEST_ASSERT(micant::shell32::StrCmpLogicalW(L"same.txt", L"SAME.txt") == 0, "StrCmpLogicalW case-insensitive equality");
 
-    TEST_ASSERT(micant::satellite::winmerge::PathGetCharTypeW(L'\\') == 0x0002, "PathGetCharTypeW for separator");
-    TEST_ASSERT(micant::satellite::winmerge::PathGetCharTypeW(L'*') == 0x0001, "PathGetCharTypeW for invalid wildcard");
-    TEST_ASSERT(micant::satellite::winmerge::PathGetCharTypeW(L'a') == 0x0004, "PathGetCharTypeW for LFN char");
-    TEST_ASSERT(micant::satellite::winmerge::UrlIsW(L"https://winmerge.org", 0) == 1, "UrlIsW identifies URL");
-    TEST_ASSERT(micant::satellite::winmerge::UrlIsW(L"C:\\local\\file.txt", 0) == 0, "UrlIsW identifies local path as non-URL");
-    TEST_ASSERT(micant::satellite::winmerge::SHAutoComplete(nullptr, 0) == 0, "SHAutoComplete returns S_OK");
+    TEST_ASSERT(micant::shell32::PathGetCharTypeW(L'\\') == 0x0002, "PathGetCharTypeW for separator");
+    TEST_ASSERT(micant::shell32::PathGetCharTypeW(L'*') == 0x0001, "PathGetCharTypeW for invalid wildcard");
+    TEST_ASSERT(micant::shell32::PathGetCharTypeW(L'a') == 0x0004, "PathGetCharTypeW for LFN char");
+    TEST_ASSERT(micant::shell32::UrlIsW(L"https://winmerge.org", 0) == 1, "UrlIsW identifies URL");
+    TEST_ASSERT(micant::shell32::UrlIsW(L"C:\\local\\file.txt", 0) == 0, "UrlIsW identifies local path as non-URL");
+    TEST_ASSERT(micant::shell32::SHAutoComplete(nullptr, 0) == 0, "SHAutoComplete returns S_OK");
 
     wchar_t szFormatted[64]{};
-    micant::satellite::winmerge::StrFormatByteSizeW(500, szFormatted, 64);
+    micant::shell32::StrFormatByteSizeW(500, szFormatted, 64);
     TEST_ASSERT(std::wcscmp(szFormatted, L"500 bytes") == 0, "StrFormatByteSizeW formats bytes");
-    micant::satellite::winmerge::StrFormatByteSizeW(2048, szFormatted, 64);
+    micant::shell32::StrFormatByteSizeW(2048, szFormatted, 64);
     TEST_ASSERT(std::wcscmp(szFormatted, L"2.0 KB") == 0, "StrFormatByteSizeW formats KB");
-    micant::satellite::winmerge::StrFormatByteSizeW(1048576 * 5, szFormatted, 64);
+    micant::shell32::StrFormatByteSizeW(1048576 * 5, szFormatted, 64);
     TEST_ASSERT(std::wcscmp(szFormatted, L"5.0 MB") == 0, "StrFormatByteSizeW formats MB");
 
     wchar_t trimStr[32] = L"  \tWinMerge\t  ";
-    micant::satellite::winmerge::StrTrimW(trimStr, L" \t");
+    micant::shell32::StrTrimW(trimStr, L" \t");
     TEST_ASSERT(std::wcscmp(trimStr, L"WinMerge") == 0, "StrTrimW trims whitespace");
-    TEST_ASSERT(micant::satellite::winmerge::StrChrW(L"WinMerge", L'M') != nullptr, "StrChrW finds character");
-    TEST_ASSERT(micant::satellite::winmerge::PathIsUNCW(L"\\\\server\\share") == 1, "PathIsUNCW detects UNC");
-    TEST_ASSERT(micant::satellite::winmerge::PathIsUNCW(L"C:\\local") == 0, "PathIsUNCW detects non-UNC");
+    TEST_ASSERT(micant::shell32::StrChrW(L"WinMerge", L'M') != nullptr, "StrChrW finds character");
+    TEST_ASSERT(micant::shell32::PathIsUNCW(L"\\\\server\\share") == 1, "PathIsUNCW detects UNC");
+    TEST_ASSERT(micant::shell32::PathIsUNCW(L"C:\\local") == 0, "PathIsUNCW detects non-UNC");
 
     // Stage 13: Window Acceleration, DDE Parameters & Theme Metrics
-    micant::satellite::winmerge::ACCEL_MOCK accels[4]{};
-    TEST_ASSERT(micant::satellite::winmerge::CopyAcceleratorTableW(nullptr, accels, 4) == 4, "CopyAcceleratorTableW copies 4 accelerators");
+    micant::user32::ACCEL accels[4]{};
+    TEST_ASSERT(micant::user32::CopyAcceleratorTableW(nullptr, accels, 4) == 4, "CopyAcceleratorTableW copies 4 accelerators");
     TEST_ASSERT(accels[0].key == 0x43, "Accelerator 0 is 'C' (Ctrl+C)");
 
-    micant::satellite::winmerge::RECT_MOCK r1{0, 0, 100, 100};
-    micant::satellite::winmerge::RECT_MOCK r2{50, 50, 200, 200};
-    micant::satellite::winmerge::RECT_MOCK rUnion{};
-    TEST_ASSERT(micant::satellite::winmerge::UnionRect(&rUnion, &r1, &r2) == 1, "UnionRect succeeds");
+    micant::prismx::RECT r1{0, 0, 100, 100};
+    micant::prismx::RECT r2{50, 50, 200, 200};
+    micant::prismx::RECT rUnion{};
+    TEST_ASSERT(micant::user32::UnionRect(&rUnion, &r1, &r2) == 1, "UnionRect succeeds");
     TEST_ASSERT(rUnion.left == 0 && rUnion.top == 0 && rUnion.right == 200 && rUnion.bottom == 200, "UnionRect coordinates verified");
 
-    int32_t textExt = micant::satellite::winmerge::GetTabbedTextExtentW(nullptr, L"hello\tworld", -1, 0, nullptr);
+    int32_t textExt = micant::user32::GetTabbedTextExtentW(nullptr, L"hello\tworld", -1, 0, nullptr);
     TEST_ASSERT(textExt != 0, "GetTabbedTextExtentW computes non-zero extent");
 
     int64_t ddeLParam = (static_cast<int64_t>(0xBEEF) << 32) | 0xCAFE;
     uintptr_t lo = 0, hi = 0;
-    TEST_ASSERT(micant::satellite::winmerge::UnpackDDElParam(0, ddeLParam, &lo, &hi) == 1, "UnpackDDElParam succeeds");
+    TEST_ASSERT(micant::user32::UnpackDDElParam(0, ddeLParam, &lo, &hi) == 1, "UnpackDDElParam succeeds");
     TEST_ASSERT(lo == 0xCAFE && hi == 0xBEEF, "DDE lParam unpacked correctly");
-    TEST_ASSERT(micant::satellite::winmerge::ReuseDDElParam(ddeLParam, 0, 0, lo, hi) == ddeLParam, "ReuseDDElParam preserves value");
+    TEST_ASSERT(micant::user32::ReuseDDElParam(ddeLParam, 0, 0, lo, hi) == ddeLParam, "ReuseDDElParam preserves value");
 
-    TEST_ASSERT(micant::satellite::winmerge::WinHelpW(nullptr, nullptr, 0, 0) == 1, "WinHelpW succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::GetMenuCheckMarkDimensions() == ((16 << 16) | 16), "CheckMark dimensions 16x16");
-    TEST_ASSERT(micant::satellite::winmerge::GetThreadDesktop(0) != nullptr, "GetThreadDesktop returns non-null HDESK");
+    TEST_ASSERT(micant::user32::WinHelpW(nullptr, nullptr, 0, 0) == 1, "WinHelpW succeeds");
+    TEST_ASSERT(micant::user32::GetMenuCheckMarkDimensions() == ((16 << 16) | 16), "CheckMark dimensions 16x16");
+    TEST_ASSERT(micant::user32::GetThreadDesktop(0) != nullptr, "GetThreadDesktop returns non-null HDESK");
 
     uint32_t objInfo = 0;
     uint32_t neededLen = 0;
-    TEST_ASSERT(micant::satellite::winmerge::GetUserObjectInformationW(nullptr, 0, &objInfo, sizeof(objInfo), &neededLen) == 1, "GetUserObjectInformationW succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::DragDetect(nullptr, {}) == 1, "DragDetect succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::IsMenu(reinterpret_cast<void*>(0x1234)) == 1, "IsMenu identifies menu handle");
-    TEST_ASSERT(micant::satellite::winmerge::IsMenu(nullptr) == 0, "IsMenu identifies null handle");
+    TEST_ASSERT(micant::user32::GetUserObjectInformationW(nullptr, 0, &objInfo, sizeof(objInfo), &neededLen) == 1, "GetUserObjectInformationW succeeds");
+    TEST_ASSERT(micant::user32::DragDetect(nullptr, {}) == 1, "DragDetect succeeds");
+    TEST_ASSERT(micant::user32::IsMenu(reinterpret_cast<void*>(0x1234)) == 1, "IsMenu identifies menu handle");
+    TEST_ASSERT(micant::user32::IsMenu(nullptr) == 0, "IsMenu identifies null handle");
 
     char sprintfBuf[64]{};
-    micant::satellite::winmerge::wsprintfA(sprintfBuf, "MicaNT WinMerge %d.%d", 2, 16);
+    micant::user32::wsprintfA(sprintfBuf, "MicaNT WinMerge %d.%d", 2, 16);
     TEST_ASSERT(std::strcmp(sprintfBuf, "MicaNT WinMerge 2.16") == 0, "wsprintfA formats string correctly");
 
     const wchar_t testStr[] = L"ABCDE";
-    const wchar_t* pPrev = micant::satellite::winmerge::CharPrevW(testStr, testStr + 2);
+    const wchar_t* pPrev = micant::user32::CharPrevW(testStr, testStr + 2);
     TEST_ASSERT(pPrev == testStr + 1 && *pPrev == L'B', "CharPrevW steps back one character");
 
-    micant::satellite::winmerge::POINT_MOCK caretPt{99, 99};
-    TEST_ASSERT(micant::satellite::winmerge::GetCaretPos(&caretPt) == 1 && caretPt.x == 0 && caretPt.y == 0, "GetCaretPos initializes to (0, 0)");
+    micant::prismx::POINT caretPt{99, 99};
+    TEST_ASSERT(micant::user32::GetCaretPos(&caretPt) == 1 && caretPt.x == 0 && caretPt.y == 0, "GetCaretPos initializes to (0, 0)");
 
-    TEST_ASSERT(micant::satellite::winmerge::IsThemeActive() == 1, "IsThemeActive returns 1");
-    TEST_ASSERT(micant::satellite::winmerge::IsAppThemed() == 1, "IsAppThemed returns 1");
-    micant::satellite::winmerge::MARGINS_MOCK margins{};
-    TEST_ASSERT(micant::satellite::winmerge::GetThemeMargins(nullptr, nullptr, 0, 0, 0, nullptr, &margins) == 0, "GetThemeMargins succeeds");
+    TEST_ASSERT(micant::uxtheme::IsThemeActive() == 1, "IsThemeActive returns 1");
+    TEST_ASSERT(micant::uxtheme::IsAppThemed() == 1, "IsAppThemed returns 1");
+    micant::uxtheme::MARGINS margins{};
+    TEST_ASSERT(micant::uxtheme::GetThemeMargins(nullptr, nullptr, 0, 0, 0, nullptr, &margins) == 0, "GetThemeMargins succeeds");
     TEST_ASSERT(margins.cxLeftWidth == 2 && margins.cyTopHeight == 2, "Theme margins verified");
     int themeInt = -1;
-    TEST_ASSERT(micant::satellite::winmerge::GetThemeInt(nullptr, 0, 0, 0, &themeInt) == 0 && themeInt == 0, "GetThemeInt succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::DrawThemeText(nullptr, nullptr, 0, 0, L"Text", 4, 0, 0, nullptr) == 0, "DrawThemeText succeeds");
-    TEST_ASSERT(micant::satellite::winmerge::IsThemeBackgroundPartiallyTransparent(nullptr, 0, 0) == 0, "IsThemeBackgroundPartiallyTransparent returns 0");
+    TEST_ASSERT(micant::uxtheme::GetThemeInt(nullptr, 0, 0, 0, &themeInt) == 0 && themeInt == 0, "GetThemeInt succeeds");
+    TEST_ASSERT(micant::uxtheme::DrawThemeText(nullptr, nullptr, 0, 0, L"Text", 4, 0, 0, nullptr) == 0, "DrawThemeText succeeds");
+    TEST_ASSERT(micant::uxtheme::IsThemeBackgroundPartiallyTransparent(nullptr, 0, 0) == 0, "IsThemeBackgroundPartiallyTransparent returns 0");
 
     uint32_t netErr = 99;
     wchar_t netBuf[16]{L'X'};
     uint32_t netBufLen = 16;
-    TEST_ASSERT(micant::satellite::winmerge::InternetGetLastResponseInfoW(&netErr, netBuf, &netBufLen) == 1 && netErr == 0, "InternetGetLastResponseInfoW succeeds");
+    TEST_ASSERT(micant::wininet::InternetGetLastResponseInfoW(&netErr, netBuf, &netBufLen) == 1 && netErr == 0, "InternetGetLastResponseInfoW succeeds");
 
     uint8_t jobBuf[512]{};
     uint32_t jobNeeded = 0;
-    TEST_ASSERT(micant::satellite::winmerge::GetJobW(nullptr, 1, 1, jobBuf, sizeof(jobBuf), &jobNeeded) == 1, "GetJobW succeeds with sufficient buffer");
-    auto* pJob = reinterpret_cast<micant::satellite::winmerge::JOB_INFO_1W_MOCK*>(jobBuf);
+    TEST_ASSERT(micant::winspool::GetJobW(0, 1, 1, jobBuf, sizeof(jobBuf), &jobNeeded) == 1, "GetJobW succeeds with sufficient buffer");
+    auto* pJob = reinterpret_cast<micant::winspool::JOB_INFO_1W*>(jobBuf);
     TEST_ASSERT(pJob->JobId == 1 && pJob->Status == 0, "JobId and Status match in GetJobW");
 
     // Stage 14: DynamicLoader IAT Binding & Ordinal Verification
@@ -7628,7 +7674,7 @@ inline void Test_WinMerge_Visual_Diff_Subsystem() {
         if (found) ++resolvedCount;
     }
     TEST_ASSERT(resolvedCount == sizeof(WINMERGE_SAMPLE_SYMBOLS) / sizeof(WINMERGE_SAMPLE_SYMBOLS[0]),
-                "All WinMerge Win32 satellite symbols must be registered and resolved from DynamicLoader");
+                "All WinMerge Win32 symbols must be registered and resolved from DynamicLoader");
 
     // Verify key ordinals
     TEST_ASSERT(loader.getExportOrdinal("comctl32.dll", 17) != nullptr, "comctl32.dll #17 must resolve");
@@ -7649,13 +7695,13 @@ inline void Test_WinMerge_Visual_Diff_Subsystem() {
                 wchar_t fn1[32], fn2[32];
                 std::swprintf(fn1, 32, L"file_%d_%d.txt", t, q);
                 std::swprintf(fn2, 32, L"file_%d_%d.txt", t, q + 1);
-                int cmp = micant::satellite::winmerge::StrCmpLogicalW(fn1, fn2);
+                int cmp = micant::shell32::StrCmpLogicalW(fn1, fn2);
                 (void)cmp;
 
-                micant::satellite::winmerge::SIZE_MOCK s{};
-                micant::satellite::winmerge::ScaleViewportExtEx(nullptr, q + 1, 1, q + 1, 1, &s);
+                micant::gdi32::SIZE s{};
+                micant::gdi32::ScaleViewportExtEx(nullptr, q + 1, 1, q + 1, 1, &s);
 
-                micant::satellite::winmerge::GetTabbedTextExtentW(nullptr, L"Line\tData", -1, 0, nullptr);
+                micant::user32::GetTabbedTextExtentW(nullptr, L"Line\tData", -1, 0, nullptr);
 
                 stressDiffsCompleted.fetch_add(1, std::memory_order_relaxed);
             }
@@ -7666,7 +7712,7 @@ inline void Test_WinMerge_Visual_Diff_Subsystem() {
     }
     TEST_ASSERT(stressDiffsCompleted.load() == 400, "400-operation concurrent diff & natural sort stress test must succeed 100%");
 
-    std::cout << "[TEST] Suite 220: WinMerge 2.16+ Visual Diff & Win32 Satellite Subsystem PASSED.\n";
+    std::cout << "[TEST] Suite 220: WinMerge 2.16+ Visual Diff & Win32 Subsystem PASSED.\n";
 }
 
 #include "../../include/micant/mpr.hpp"
@@ -7676,16 +7722,12 @@ void Test_Retail_Ecosystem_100_Percent_Coverage() {
 
     auto& loader = micant::ldr::DynamicLoader::get();
 
-    // Initialize all satellites and subsystems
+    // Initialize all subsystems
     micant::ws2_32::InitializeWs2_32SubsystemExports();
     micant::oleaut32::InitializeOleAut32SubsystemExports();
     micant::winspool::InitializePrintSpoolerSubsystemExports();
     micant::mpr::InitializeMprSubsystemExports();
-    micant::satellite::everything::InitializeEverythingExports();
-    micant::satellite::sumatra::InitializeSumatraWin32Exports();
-    micant::satellite::wiztree::InitializeWizTreeWin32Exports();
-    micant::satellite::winmerge::InitializeWinMergeExports();
-
+    micant::subsystems::InitializeAllSubsystemExports();
     // Stage 1: MPR.dll Network Provider Router Subsystem Verification
     void* hEnum = nullptr;
     uint32_t openRes = micant::mpr::WNetOpenEnumW(0, 0, 0, nullptr, &hEnum);
@@ -7799,7 +7841,7 @@ void Test_Retail_Ecosystem_100_Percent_Coverage() {
     TEST_ASSERT(loader.getExport("dwmapi.dll", "DwmDefWindowProc") != nullptr, "dwmapi!DwmDefWindowProc must resolve");
     TEST_ASSERT(loader.getExport("shfolder.dll", "SHGetFolderPathW") != nullptr, "shfolder!SHGetFolderPathW must resolve");
 
-    // Stage 11: Concurrent Multi-Threaded Stress Test across all 8 satellite modules
+    // Stage 11: Concurrent Multi-Threaded Stress Test across all 8 subsystem modules
     std::atomic<uint32_t> stressCompleted{0};
     std::vector<std::thread> workers;
     workers.reserve(8);
@@ -7823,7 +7865,7 @@ void Test_Retail_Ecosystem_100_Percent_Coverage() {
     for (auto& w : workers) {
         if (w.joinable()) w.join();
     }
-    TEST_ASSERT(stressCompleted.load() == 400, "400-operation concurrent multi-threaded satellite stress test must achieve 100% success");
+    TEST_ASSERT(stressCompleted.load() == 400, "400-operation concurrent multi-threaded subsystem stress test must achieve 100% success");
 
     std::cout << "[TEST] Suite 221: 100.0% Retail Ecosystem Coverage & Subsystem Extension Matrix PASSED.\n";
 }
@@ -7835,7 +7877,7 @@ inline void Test_Rufus_Storage_And_NtSyscalls_Suite() {
     std::cout << "[TEST] Executing Suite 222: Rufus Low-Level Storage & Native NT Syscall Subsystem Validation...\n";
 
     // 1. Initialize Subsystem Exports
-    micant::satellite::InitializeSatelliteWin32Exports();
+    micant::subsystems::InitializeAllSubsystemExports();
     auto& loader = micant::ldr::DynamicLoader::get();
 
     // Stage 1: Export Registration Verification for all 13 DLLs
@@ -7861,99 +7903,99 @@ inline void Test_Rufus_Storage_And_NtSyscalls_Suite() {
 
     // Stage 2: Kernel32 Volume & Drive Enumeration
     char volName[128] = { 0 };
-    void* hVol = micant::satellite::rufus::FindFirstVolumeA(volName, sizeof(volName));
+    void* hVol = micant::win32::FindFirstVolumeA(volName, sizeof(volName));
     TEST_ASSERT(hVol != nullptr, "FindFirstVolumeA must return valid search handle");
     TEST_ASSERT(std::strstr(volName, "\\\\?\\Volume{") != nullptr, "Volume name must contain volume GUID prefix");
 
     char nextVol[128] = { 0 };
-    int32_t nextRes = micant::satellite::rufus::FindNextVolumeA(hVol, nextVol, sizeof(nextVol));
+    int32_t nextRes = micant::win32::FindNextVolumeA(hVol, nextVol, sizeof(nextVol));
     TEST_ASSERT(nextRes == 0, "FindNextVolumeA on single volume must return FALSE");
-    TEST_ASSERT(micant::satellite::rufus::FindVolumeClose(hVol) == 1, "FindVolumeClose must succeed");
+    TEST_ASSERT(micant::win32::FindVolumeClose(hVol) == 1, "FindVolumeClose must succeed");
 
     char volPath[32] = { 0 };
-    TEST_ASSERT(micant::satellite::rufus::GetVolumePathNameA("C:\\some\\file.iso", volPath, sizeof(volPath)) == 1, "GetVolumePathNameA must succeed");
+    TEST_ASSERT(micant::win32::GetVolumePathNameA("C:\\some\\file.iso", volPath, sizeof(volPath)) == 1, "GetVolumePathNameA must succeed");
     TEST_ASSERT(std::strcmp(volPath, "C:\\") == 0, "GetVolumePathNameA must resolve to drive root C:\\");
 
     char volLabel[64] = { 0 };
     char fsName[32] = { 0 };
     uint32_t serial = 0, maxComp = 0, flags = 0;
-    TEST_ASSERT(micant::satellite::rufus::GetVolumeInformationA("C:\\", volLabel, sizeof(volLabel), &serial, &maxComp, &flags, fsName, sizeof(fsName)) == 1, "GetVolumeInformationA must succeed");
+    TEST_ASSERT(micant::win32::GetVolumeInformationA("C:\\", volLabel, sizeof(volLabel), &serial, &maxComp, &flags, fsName, sizeof(fsName)) == 1, "GetVolumeInformationA must succeed");
     TEST_ASSERT(std::strcmp(fsName, "NTFS") == 0, "GetVolumeInformationA must return NTFS file system");
     TEST_ASSERT(serial != 0 && maxComp == 255, "Volume metadata must report valid components");
 
     wchar_t wVolLabel[64] = { 0 };
     wchar_t wFsName[32] = { 0 };
-    TEST_ASSERT(micant::satellite::rufus::GetVolumeInformationByHandleW(nullptr, wVolLabel, 64, &serial, &maxComp, &flags, wFsName, 32) == 1, "GetVolumeInformationByHandleW must succeed");
+    TEST_ASSERT(micant::win32::GetVolumeInformationByHandleW(nullptr, wVolLabel, 64, &serial, &maxComp, &flags, wFsName, 32) == 1, "GetVolumeInformationByHandleW must succeed");
     TEST_ASSERT(std::wcscmp(wFsName, L"NTFS") == 0, "GetVolumeInformationByHandleW must report L'NTFS'");
 
     uint64_t freeCaller = 0, totalBytes = 0, freeBytes = 0;
-    TEST_ASSERT(micant::satellite::rufus::GetDiskFreeSpaceExA("C:\\", &freeCaller, &totalBytes, &freeBytes) == 1, "GetDiskFreeSpaceExA must succeed");
+    TEST_ASSERT(micant::win32::GetDiskFreeSpaceExA("C:\\", &freeCaller, &totalBytes, &freeBytes) == 1, "GetDiskFreeSpaceExA must succeed");
     TEST_ASSERT(totalBytes > 0 && freeBytes > 0, "Total and free bytes must be non-zero");
 
     char driveStrings[64] = { 0 };
-    uint32_t driveLen = micant::satellite::rufus::GetLogicalDriveStringsA(sizeof(driveStrings), driveStrings);
+    uint32_t driveLen = micant::win32::GetLogicalDriveStringsA(sizeof(driveStrings), driveStrings);
     TEST_ASSERT(driveLen > 0, "GetLogicalDriveStringsA must return non-zero character count");
     TEST_ASSERT(std::strstr(driveStrings, "C:\\") != nullptr, "Logical drives must contain C:\\");
 
     // Stage 3: SetupAPI & Configuration Manager (USB Hardware Device Tree)
-    void* hDevInfo = micant::satellite::rufus::SetupDiGetClassDevsA(nullptr, nullptr, nullptr, 0);
+    void* hDevInfo = micant::setupapi::SetupDiGetClassDevsA(nullptr, nullptr, nullptr, 0);
     TEST_ASSERT(hDevInfo != nullptr, "SetupDiGetClassDevsA must return valid device information handle");
 
     char devIdBuf[128] = { 0 };
-    uint32_t cmStatus = micant::satellite::rufus::CM_Get_Device_IDA(1, devIdBuf, sizeof(devIdBuf), 0);
+    uint32_t cmStatus = micant::setupapi::CM_Get_Device_IDA(1, devIdBuf, sizeof(devIdBuf), 0);
     TEST_ASSERT(cmStatus == 0, "CM_Get_Device_IDA must return CR_SUCCESS (0)");
     TEST_ASSERT(std::strstr(devIdBuf, "USBSTOR\\") != nullptr, "Device ID must reflect USB storage hardware");
 
     uint32_t statusFlags = 0, problem = 0;
-    TEST_ASSERT(micant::satellite::rufus::CM_Get_DevNode_Status(&statusFlags, &problem, 1, 0) == 0, "CM_Get_DevNode_Status must return CR_SUCCESS");
+    TEST_ASSERT(micant::setupapi::CM_Get_DevNode_Status(&statusFlags, &problem, 1, 0) == 0, "CM_Get_DevNode_Status must return CR_SUCCESS");
     TEST_ASSERT((statusFlags & 0x01) != 0, "DevNode status must report driver loaded");
 
     char instIdBuf[128] = { 0 };
     uint32_t reqSize = 0;
-    TEST_ASSERT(micant::satellite::rufus::SetupDiGetDeviceInstanceIdA(hDevInfo, nullptr, instIdBuf, sizeof(instIdBuf), &reqSize) == 1, "SetupDiGetDeviceInstanceIdA must succeed");
+    TEST_ASSERT(micant::setupapi::SetupDiGetDeviceInstanceIdA(hDevInfo, nullptr, instIdBuf, sizeof(instIdBuf), &reqSize) == 1, "SetupDiGetDeviceInstanceIdA must succeed");
     TEST_ASSERT(std::strstr(instIdBuf, "USBSTOR\\") != nullptr, "Instance ID must start with USBSTOR");
 
     uint8_t propBuf[128] = { 0 };
     uint32_t propType = 0;
-    TEST_ASSERT(micant::satellite::rufus::SetupDiGetDeviceRegistryPropertyA(hDevInfo, nullptr, 0, &propType, propBuf, sizeof(propBuf), &reqSize) == 1, "SetupDiGetDeviceRegistryPropertyA must succeed");
+    TEST_ASSERT(micant::setupapi::SetupDiGetDeviceRegistryPropertyA(hDevInfo, nullptr, 0, &propType, propBuf, sizeof(propBuf), &reqSize) == 1, "SetupDiGetDeviceRegistryPropertyA must succeed");
     TEST_ASSERT(std::strstr(reinterpret_cast<char*>(propBuf), "SanDisk") != nullptr, "Device description must identify drive hardware");
 
     // Stage 4: Native NT Kernel Syscalls
     void* ntFile = nullptr;
-    micant::NtStatus fileSt = micant::satellite::rufus::NtCreateFile(&ntFile, 0, nullptr, nullptr, nullptr, 0, 0, 0, 0, nullptr, 0);
+    micant::NtStatus fileSt = micant::ntdll::NtCreateFile_Export(&ntFile, 0, nullptr, nullptr, nullptr, 0, 0, 0, 0, nullptr, 0);
     TEST_ASSERT(fileSt == micant::NtStatus::Success, "NtCreateFile must return STATUS_SUCCESS");
     TEST_ASSERT(ntFile != nullptr, "NtCreateFile must produce valid handle");
 
-    TEST_ASSERT(micant::satellite::rufus::NtDeviceIoControlFile(ntFile, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, nullptr, 0) == micant::NtStatus::Success, "NtDeviceIoControlFile must succeed");
-    TEST_ASSERT(micant::satellite::rufus::NtFsControlFile(ntFile, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, nullptr, 0) == micant::NtStatus::Success, "NtFsControlFile must succeed");
+    TEST_ASSERT(micant::ntdll::NtDeviceIoControlFile_Export(ntFile, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, nullptr, 0) == micant::NtStatus::Success, "NtDeviceIoControlFile must succeed");
+    TEST_ASSERT(micant::ntdll::NtFsControlFile(ntFile, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, nullptr, 0) == micant::NtStatus::Success, "NtFsControlFile must succeed");
 
     void* ntProc = nullptr;
-    TEST_ASSERT(micant::satellite::rufus::NtOpenProcess(&ntProc, 0, nullptr, nullptr) == micant::NtStatus::Success, "NtOpenProcess must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::ntdll::NtOpenProcess(&ntProc, 0, nullptr, nullptr) == micant::NtStatus::Success, "NtOpenProcess must return STATUS_SUCCESS");
     TEST_ASSERT(ntProc != nullptr, "NtOpenProcess must return valid process handle");
 
     void* ntToken = nullptr;
-    TEST_ASSERT(micant::satellite::rufus::NtOpenProcessToken(ntProc, 0, &ntToken) == micant::NtStatus::Success, "NtOpenProcessToken must return STATUS_SUCCESS");
+    TEST_ASSERT(micant::ntdll::NtOpenProcessToken_Export(ntProc, 0, &ntToken) == micant::NtStatus::Success, "NtOpenProcessToken must return STATUS_SUCCESS");
     TEST_ASSERT(ntToken != nullptr, "NtOpenProcessToken must return valid token handle");
 
     void* dupHandle = nullptr;
-    TEST_ASSERT(micant::satellite::rufus::NtDuplicateObject(nullptr, ntFile, nullptr, &dupHandle, 0, 0, 0) == micant::NtStatus::Success, "NtDuplicateObject must succeed");
+    TEST_ASSERT(micant::ntdll::NtDuplicateObject(nullptr, ntFile, nullptr, &dupHandle, 0, 0, 0) == micant::NtStatus::Success, "NtDuplicateObject must succeed");
     TEST_ASSERT(dupHandle == ntFile, "Duplicated handle must match source handle");
 
-    uint64_t condMask = micant::satellite::rufus::VerSetConditionMask(0, 1, 3);
+    uint64_t condMask = micant::ntdll::VerSetConditionMask(0, 1, 3);
     TEST_ASSERT(condMask != 0, "VerSetConditionMask must calculate packed condition bitmask");
 
     // Stage 5: Advapi32 & Crypto Verification
     void* sd = nullptr;
     uint32_t sdSize = 0;
-    TEST_ASSERT(micant::satellite::rufus::ConvertStringSecurityDescriptorToSecurityDescriptorA("D:(A;;GA;;;BA)", 1, &sd, &sdSize) == 1, "ConvertStringSecurityDescriptor must succeed");
+    TEST_ASSERT(micant::advapi32::ConvertStringSecurityDescriptorToSecurityDescriptorA("D:(A;;GA;;;BA)", 1, &sd, &sdSize) == 1, "ConvertStringSecurityDescriptor must succeed");
     TEST_ASSERT(sd != nullptr && sdSize > 0, "Security descriptor buffer must be allocated");
 
     void* sid = nullptr;
-    TEST_ASSERT(micant::satellite::rufus::ConvertStringSidToSidA("S-1-5-18", &sid) == 1, "ConvertStringSidToSidA must succeed");
+    TEST_ASSERT(micant::advapi32::ConvertStringSidToSidA("S-1-5-18", &sid) == 1, "ConvertStringSidToSidA must succeed");
     TEST_ASSERT(sid != nullptr, "System SID pointer must be valid");
 
     uint8_t randBuf[64] = { 0 };
-    micant::satellite::rufus::SystemFunction036(randBuf, sizeof(randBuf));
+    micant::advapi32::SystemFunction036(randBuf, sizeof(randBuf));
     bool hasNonZero = false;
     for (uint8_t b : randBuf) {
         if (b != 0) { hasNonZero = true; break; }
@@ -7962,33 +8004,33 @@ inline void Test_Rufus_Storage_And_NtSyscalls_Suite() {
 
     // Stage 6: Virtual Disk, Network & Trust
     uint64_t vdiskProg[3] = { 0 };
-    uint32_t vdiskSt = micant::satellite::rufus::GetVirtualDiskOperationProgress(nullptr, nullptr, vdiskProg);
+    uint32_t vdiskSt = micant::virtdisk::GetVirtualDiskOperationProgress(nullptr, nullptr, vdiskProg);
     TEST_ASSERT(vdiskSt == 0, "GetVirtualDiskOperationProgress must return ERROR_SUCCESS");
     TEST_ASSERT(vdiskProg[1] == 100 && vdiskProg[2] == 100, "Progress must indicate 100% completion");
 
     uint32_t netFlags = 0;
-    TEST_ASSERT(micant::satellite::rufus::InternetGetConnectedState(&netFlags, 0) == 1, "InternetGetConnectedState must report connected");
+    TEST_ASSERT(micant::wininet::InternetGetConnectedState(&netFlags, 0) == 1, "InternetGetConnectedState must report connected");
     TEST_ASSERT(netFlags != 0, "Connection flags must be populated");
 
-    TEST_ASSERT(micant::satellite::rufus::WinVerifyTrustEx(nullptr, nullptr, nullptr) == 0, "WinVerifyTrustEx must return 0 (success)");
+    TEST_ASSERT(micant::wintrust::WinVerifyTrustEx(nullptr, nullptr, nullptr) == 0, "WinVerifyTrustEx must return 0 (success)");
 
     // Stage 7: String Helpers & Hooks
     char textA[] = "Hello WOrLD";
-    micant::satellite::rufus::CharLowerA(textA);
+    micant::user32::CharLowerA(textA);
     TEST_ASSERT(std::strcmp(textA, "hello world") == 0, "CharLowerA must convert string to lowercase");
-    micant::satellite::rufus::CharUpperA(textA);
+    micant::user32::CharUpperA(textA);
     TEST_ASSERT(std::strcmp(textA, "HELLO WORLD") == 0, "CharUpperA must convert string to uppercase");
 
     char klid[16] = { 0 };
-    TEST_ASSERT(micant::satellite::rufus::GetKeyboardLayoutNameA(klid) == 1, "GetKeyboardLayoutNameA must succeed");
+    TEST_ASSERT(micant::user32::GetKeyboardLayoutNameA(klid) == 1, "GetKeyboardLayoutNameA must succeed");
     TEST_ASSERT(std::strcmp(klid, "00000409") == 0, "Keyboard layout must default to en-US 00000409");
 
-    void* hHook = micant::satellite::rufus::SetWinEventHook(1, 10, nullptr, nullptr, 0, 0, 0);
+    void* hHook = micant::user32::SetWinEventHook(1, 10, nullptr, nullptr, 0, 0, 0);
     TEST_ASSERT(hHook != nullptr, "SetWinEventHook must return hook handle");
-    TEST_ASSERT(micant::satellite::rufus::UnhookWinEvent(hHook) == 1, "UnhookWinEvent must release hook");
+    TEST_ASSERT(micant::user32::UnhookWinEvent(hHook) == 1, "UnhookWinEvent must release hook");
 
     wchar_t formatted[64] = { 0 };
-    int fmtLen = micant::satellite::rufus::wnsprintfW(formatted, 64, L"Rufus Drive %d: %s", 2, L"READY");
+    int fmtLen = micant::shell32::wnsprintfW(formatted, 64, L"Rufus Drive %d: %s", 2, L"READY");
     TEST_ASSERT(fmtLen > 0, "wnsprintfW must write formatted string");
     TEST_ASSERT(std::wcscmp(formatted, L"Rufus Drive 2: READY") == 0, "wnsprintfW format content match");
 
@@ -8001,14 +8043,14 @@ inline void Test_Rufus_Storage_And_NtSyscalls_Suite() {
             for (int i = 0; i < 50; ++i) {
                 // Exercise Volume & SetupAPI
                 char vName[128] = { 0 };
-                void* hV = micant::satellite::rufus::FindFirstVolumeA(vName, sizeof(vName));
-                if (hV) micant::satellite::rufus::FindVolumeClose(hV);
+                void* hV = micant::win32::FindFirstVolumeA(vName, sizeof(vName));
+                if (hV) micant::win32::FindVolumeClose(hV);
 
                 uint8_t rnd[16];
-                micant::satellite::rufus::SystemFunction036(rnd, sizeof(rnd));
+                micant::advapi32::SystemFunction036(rnd, sizeof(rnd));
 
                 void* hP = nullptr;
-                micant::satellite::rufus::NtOpenProcess(&hP, 0, nullptr, nullptr);
+                micant::ntdll::NtOpenProcess(&hP, 0, nullptr, nullptr);
 
                 stressDone.fetch_add(1, std::memory_order_relaxed);
             }
@@ -8029,7 +8071,7 @@ inline void Test_SystemInformer_Diagnostics_And_NativeNT_Suite() {
     std::cout << "[TEST] Executing Suite 223: System Informer 4.0 Native NT Syscalls, Diagnostics & LSA Security...\n";
 
     // 1. Initialize Subsystem Exports
-    micant::satellite::InitializeSatelliteWin32Exports();
+    micant::subsystems::InitializeAllSubsystemExports();
     auto& loader = micant::ldr::DynamicLoader::get();
 
     // Stage 1: Export Registration Verification for all 14 DLLs
@@ -8058,81 +8100,81 @@ inline void Test_SystemInformer_Diagnostics_And_NativeNT_Suite() {
     TEST_ASSERT(loader.getExport("winsta.dll", "WinStationQueryInformationW") != nullptr, "winsta!WinStationQueryInformationW must be registered");
 
     // Stage 2: ACL UI & Security Pages
-    void* hSecPage = micant::satellite::system_informer::Aclui_CreateSecurityPage_Ordinal1(nullptr);
+    void* hSecPage = micant::aclui::CreateSecurityPage(nullptr);
     TEST_ASSERT(hSecPage != nullptr, "CreateSecurityPage must return valid property sheet page handle");
-    TEST_ASSERT(micant::satellite::system_informer::Aclui_EditSecurity_Ordinal2(nullptr, nullptr) == 1, "EditSecurity must succeed");
-    TEST_ASSERT(micant::satellite::system_informer::Aclui_EditSecurityAdvanced_Ordinal3(nullptr, nullptr, 0) == 0, "EditSecurityAdvanced must return S_OK");
+    TEST_ASSERT(micant::aclui::EditSecurity(nullptr, nullptr) == 1, "EditSecurity must succeed");
+    TEST_ASSERT(micant::aclui::EditSecurityAdvanced(nullptr, nullptr, 0) == 0, "EditSecurityAdvanced must return S_OK");
 
     // Stage 3: Services & LSA Security Management
     uint32_t rights = 0;
-    TEST_ASSERT(micant::satellite::system_informer::GetEffectiveRightsFromAclW(nullptr, nullptr, &rights) == 0, "GetEffectiveRightsFromAclW must return ERROR_SUCCESS");
+    TEST_ASSERT(micant::advapi32::GetEffectiveRightsFromAclW(nullptr, nullptr, &rights) == 0, "GetEffectiveRightsFromAclW must return ERROR_SUCCESS");
     TEST_ASSERT(rights != 0, "Effective rights must be non-zero");
 
     void* sd = nullptr;
-    TEST_ASSERT(micant::satellite::system_informer::GetSecurityInfo(nullptr, 0, 0, nullptr, nullptr, nullptr, nullptr, &sd) == 0, "GetSecurityInfo must succeed");
+    TEST_ASSERT(micant::advapi32::GetSecurityInfo(nullptr, 0, 0, nullptr, nullptr, nullptr, nullptr, &sd) == 0, "GetSecurityInfo must succeed");
     TEST_ASSERT(sd != nullptr, "Security descriptor must be returned");
 
-    TEST_ASSERT(micant::satellite::system_informer::LsaEnumerateAccounts(nullptr, nullptr, nullptr, 0, nullptr) == 0, "LsaEnumerateAccounts must succeed");
-    TEST_ASSERT(micant::satellite::system_informer::LsaLookupNames2(nullptr, 0, 0, nullptr, nullptr, nullptr) == 0, "LsaLookupNames2 must succeed");
-    TEST_ASSERT(micant::satellite::system_informer::LsaFreeMemory(nullptr) == 0, "LsaFreeMemory must succeed");
+    TEST_ASSERT(micant::advapi32::LsaEnumerateAccounts(nullptr, nullptr, nullptr, 0, nullptr) == 0, "LsaEnumerateAccounts must succeed");
+    TEST_ASSERT(micant::advapi32::LsaLookupNames2(nullptr, 0, 0, nullptr, nullptr, nullptr) == 0, "LsaLookupNames2 must succeed");
+    TEST_ASSERT(micant::advapi32::LsaFreeMemory(nullptr) == 0, "LsaFreeMemory must succeed");
 
     // Stage 4: Native NT Kernel Syscalls (Job, Key, Section, Memory, Thread, Port)
     void* hJob = nullptr;
-    TEST_ASSERT(micant::satellite::system_informer::NtCreateJobObject(&hJob, 0, nullptr) == micant::NtStatus::Success, "NtCreateJobObject must succeed");
+    TEST_ASSERT(micant::ntdll::NtCreateJobObject(&hJob, 0, nullptr) == micant::NtStatus::Success, "NtCreateJobObject must succeed");
     TEST_ASSERT(hJob != nullptr, "Job handle must be valid");
 
     void* hKey = nullptr;
     uint32_t disp = 0;
-    TEST_ASSERT(micant::satellite::system_informer::NtCreateKey(&hKey, 0, nullptr, 0, nullptr, 0, &disp) == micant::NtStatus::Success, "NtCreateKey must succeed");
+    TEST_ASSERT(micant::ntdll::NtCreateKey(&hKey, 0, nullptr, 0, nullptr, 0, &disp) == micant::NtStatus::Success, "NtCreateKey must succeed");
     TEST_ASSERT(hKey != nullptr, "Key handle must be valid");
 
     void* hSection = nullptr;
-    TEST_ASSERT(micant::satellite::system_informer::NtOpenSection(&hSection, 0, nullptr) == micant::NtStatus::Success, "NtOpenSection must succeed");
+    TEST_ASSERT(micant::ntdll::NtOpenSection(&hSection, 0, nullptr) == micant::NtStatus::Success, "NtOpenSection must succeed");
     TEST_ASSERT(hSection != nullptr, "Section handle must be valid");
 
     uint8_t memInfo[64] = { 0 };
     size_t retLen = 0;
-    TEST_ASSERT(micant::satellite::system_informer::NtQueryVirtualMemory(nullptr, nullptr, 0, memInfo, sizeof(memInfo), &retLen) == micant::NtStatus::Success, "NtQueryVirtualMemory must succeed");
+    TEST_ASSERT(micant::ntdll::NtQueryVirtualMemory(nullptr, nullptr, 0, memInfo, sizeof(memInfo), &retLen) == micant::NtStatus::Success, "NtQueryVirtualMemory must succeed");
     TEST_ASSERT(retLen > 0, "QueryVirtualMemory must report memory region length");
 
     uint32_t maxT = 0, minT = 0, curT = 0;
-    TEST_ASSERT(micant::satellite::system_informer::NtQueryTimerResolution(&maxT, &minT, &curT) == micant::NtStatus::Success, "NtQueryTimerResolution must succeed");
+    TEST_ASSERT(micant::ntdll::NtQueryTimerResolution(&maxT, &minT, &curT) == micant::NtStatus::Success, "NtQueryTimerResolution must succeed");
     TEST_ASSERT(maxT > 0 && curT > 0, "Timer resolutions must be valid clock ticks");
 
     void* hPort = nullptr;
-    TEST_ASSERT(micant::satellite::system_informer::NtConnectPort(&hPort, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr) == micant::NtStatus::Success, "NtConnectPort must succeed");
+    TEST_ASSERT(micant::ntdll::NtConnectPort_Export(&hPort, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr) == micant::NtStatus::Success, "NtConnectPort must succeed");
     TEST_ASSERT(hPort != nullptr, "Port handle must be valid");
 
     // Stage 5: Window Stations & Desktops
-    void* hWinSta = micant::satellite::system_informer::OpenWindowStationW(L"WinSta0", 0, 0);
+    void* hWinSta = micant::user32::OpenWindowStationW(L"WinSta0", 0, 0);
     TEST_ASSERT(hWinSta != nullptr, "OpenWindowStationW must return interactive window station handle");
-    TEST_ASSERT(micant::satellite::system_informer::GetProcessWindowStation() == hWinSta, "GetProcessWindowStation must return active WinSta");
-    TEST_ASSERT(micant::satellite::system_informer::CloseWindowStation(hWinSta) == 1, "CloseWindowStation must succeed");
+    TEST_ASSERT(micant::user32::GetProcessWindowStation() == hWinSta, "GetProcessWindowStation must return active WinSta");
+    TEST_ASSERT(micant::user32::CloseWindowStation(hWinSta) == 1, "CloseWindowStation must succeed");
 
-    TEST_ASSERT(micant::satellite::system_informer::EnumDesktopsW(nullptr, nullptr, 0) == 1, "EnumDesktopsW must succeed");
-    TEST_ASSERT(micant::satellite::system_informer::GetShellWindow() != nullptr, "GetShellWindow must return valid HWND");
-    TEST_ASSERT(micant::satellite::system_informer::GetGuiResources(nullptr, 0) > 0, "GetGuiResources must return active handles");
+    TEST_ASSERT(micant::user32::EnumDesktopsW(nullptr, nullptr, 0) == 1, "EnumDesktopsW must succeed");
+    TEST_ASSERT(micant::user32::GetShellWindow() != nullptr, "GetShellWindow must return valid HWND");
+    TEST_ASSERT(micant::user32::GetGuiResources(nullptr, 0) > 0, "GetGuiResources must return active handles");
 
     // Stage 6: Terminal Services / WinStation APIs
-    TEST_ASSERT(micant::satellite::system_informer::WinStationConnectW(nullptr, 1, 1, nullptr, 0) == 1, "WinStationConnectW must succeed");
-    TEST_ASSERT(micant::satellite::system_informer::WinStationQueryInformationW(nullptr, 1, 0, nullptr, 0, nullptr) == 1, "WinStationQueryInformationW must succeed");
+    TEST_ASSERT(micant::winsta::WinStationConnectW(nullptr, 1, 1, nullptr, 0) == 1, "WinStationConnectW must succeed");
+    TEST_ASSERT(micant::winsta::WinStationQueryInformationW(nullptr, 1, 0, nullptr, 0, nullptr) == 1, "WinStationQueryInformationW must succeed");
     uint32_t resp = 0;
-    TEST_ASSERT(micant::satellite::system_informer::WinStationSendMessageW(nullptr, 1, L"Alert", 5, L"Notice", 6, 0, 0, &resp, 0) == 1, "WinStationSendMessageW must succeed");
+    TEST_ASSERT(micant::winsta::WinStationSendMessageW(nullptr, 1, L"Alert", 5, L"Notice", 6, 0, 0, &resp, 0) == 1, "WinStationSendMessageW must succeed");
     TEST_ASSERT(resp == 1, "Message response must be IDOK");
 
     // Stage 7: RTL Utilities (Version, Network Addresses, Strings)
     uint32_t osVer[7] = { 0 };
     osVer[0] = sizeof(osVer);
-    TEST_ASSERT(micant::satellite::system_informer::RtlGetVersion(osVer) == micant::NtStatus::Success, "RtlGetVersion must succeed");
+    TEST_ASSERT(micant::ntdll::RtlGetVersion(osVer) == micant::NtStatus::Success, "RtlGetVersion must succeed");
     TEST_ASSERT(osVer[1] == 10 && osVer[3] == 22631, "RtlGetVersion must report Windows 11 Build 22631");
 
     wchar_t ipStr[32] = { 0 };
     uint32_t ipLen = 32;
-    TEST_ASSERT(micant::satellite::system_informer::RtlIpv4AddressToStringExW(nullptr, 8080, ipStr, &ipLen) == micant::NtStatus::Success, "RtlIpv4AddressToStringExW must succeed");
+    TEST_ASSERT(micant::ntdll::RtlIpv4AddressToStringExW(nullptr, 8080, ipStr, &ipLen) == micant::NtStatus::Success, "RtlIpv4AddressToStringExW must succeed");
     TEST_ASSERT(std::wcscmp(ipStr, L"127.0.0.1:8080") == 0, "IPv4 address string formatting match");
 
     uint32_t seed = 12345;
-    uint32_t r = micant::satellite::system_informer::RtlRandomEx(&seed);
+    uint32_t r = micant::ntdll::RtlRandomEx(&seed);
     TEST_ASSERT(r != 0, "RtlRandomEx must generate pseudorandom integer");
 
     // Stage 8: Concurrent Multi-Threaded Diagnostics Stress Test
@@ -8143,13 +8185,13 @@ inline void Test_SystemInformer_Diagnostics_And_NativeNT_Suite() {
         workers.emplace_back([&diagDone, t]() {
             for (int i = 0; i < 50; ++i) {
                 void* pJob = nullptr;
-                micant::satellite::system_informer::NtCreateJobObject(&pJob, 0, nullptr);
+                micant::ntdll::NtCreateJobObject(&pJob, 0, nullptr);
 
-                void* pSta = micant::satellite::system_informer::OpenWindowStationW(L"WinSta0", 0, 0);
-                if (pSta) micant::satellite::system_informer::CloseWindowStation(pSta);
+                void* pSta = micant::user32::OpenWindowStationW(L"WinSta0", 0, 0);
+                if (pSta) micant::user32::CloseWindowStation(pSta);
 
                 uint32_t s = t * 100 + i;
-                micant::satellite::system_informer::RtlRandomEx(&s);
+                micant::ntdll::RtlRandomEx(&s);
 
                 diagDone.fetch_add(1, std::memory_order_relaxed);
             }
@@ -8169,7 +8211,7 @@ inline void Test_SystemInformer_Diagnostics_And_NativeNT_Suite() {
 inline void Test_qBittorrent_Networking_AsyncIO_And_ICU_Suite() {
     std::cout << "[TEST] Executing Suite 224: qBittorrent 5.2+ Networking, Async I/O & ICU Subsystem...\n";
 
-    micant::satellite::InitializeSatelliteWin32Exports();
+    micant::subsystems::InitializeAllSubsystemExports();
     auto& loader = micant::ldr::DynamicLoader::get();
 
     // Stage 1: Loader Export Verification across 12 critical modules
@@ -8191,84 +8233,84 @@ inline void Test_qBittorrent_Networking_AsyncIO_And_ICU_Suite() {
     TEST_ASSERT(loader.getExport("user32.dll", "UpdateLayeredWindow") != nullptr, "user32!UpdateLayeredWindow must be registered");
 
     // Stage 2: Winsock 1.1 / 2.0 Network Subsystem Lifecycle
-    uint8_t wsaData[400] = { 0 };
-    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_WSAStartup(0x0202, wsaData) == 0, "WSAStartup must succeed");
+    micant::ws2_32::WSADATA wsaData{};
+    TEST_ASSERT(micant::ws2_32::WSAStartup(0x0202, &wsaData) == 0, "WSAStartup must succeed");
     
-    uintptr_t s = micant::satellite::qbittorrent::Wsock_socket(2, 1, 6);
+    uintptr_t s = micant::ws2_32::socket(2, 1, 6);
     TEST_ASSERT(s != 0, "Wsock_socket must return valid socket handle");
     
-    uint16_t netPort = micant::satellite::qbittorrent::Wsock_htons(8080);
-    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_ntohs(netPort) == 8080, "htons / ntohs roundtrip match");
+    uint16_t netPort = micant::ws2_32::htons(8080);
+    TEST_ASSERT(micant::ws2_32::ntohs(netPort) == 8080, "htons / ntohs roundtrip match");
 
-    uint32_t netAddr = micant::satellite::qbittorrent::Wsock_htonl(0x7F000001);
-    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_ntohl(netAddr) == 0x7F000001, "htonl / ntohl roundtrip match");
+    uint32_t netAddr = micant::ws2_32::htonl(0x7F000001);
+    TEST_ASSERT(micant::ws2_32::ntohl(netAddr) == 0x7F000001, "htonl / ntohl roundtrip match");
 
-    TEST_ASSERT(micant::satellite::qbittorrent::Ws2_WSAConnect(s, nullptr, 16, nullptr, nullptr, nullptr, nullptr) == 0, "WSAConnect must succeed");
+    TEST_ASSERT(micant::ws2_32::WSAConnect(s, nullptr, 16, nullptr, nullptr, nullptr, nullptr) == 0, "WSAConnect must succeed");
 
     uint32_t bytesSent = 0;
-    TEST_ASSERT(micant::satellite::qbittorrent::Ws2_WSASend(s, nullptr, 1, &bytesSent, 0, nullptr, nullptr) == 0, "WSASend must succeed");
+    TEST_ASSERT(micant::ws2_32::WSASend(s, nullptr, 1, &bytesSent, 0, nullptr, nullptr) == 0, "WSASend must succeed");
     TEST_ASSERT(bytesSent > 0, "WSASend must report transmitted bytes");
 
     void* pAddr = nullptr;
-    TEST_ASSERT(micant::satellite::qbittorrent::Ws2_getaddrinfo("localhost", "6881", nullptr, &pAddr) == 0, "getaddrinfo must resolve endpoint");
+    TEST_ASSERT(micant::ws2_32::getaddrinfo("localhost", "6881", nullptr, &pAddr) == 0, "getaddrinfo must resolve endpoint");
     TEST_ASSERT(pAddr != nullptr, "Resolved addrinfo list must not be null");
-    micant::satellite::qbittorrent::Ws2_freeaddrinfo(pAddr);
+    micant::ws2_32::freeaddrinfo(pAddr);
 
-    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_closesocket(s) == 0, "closesocket must succeed");
-    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_WSACleanup() == 0, "WSACleanup must succeed");
+    TEST_ASSERT(micant::ws2_32::closesocket(s) == 0, "closesocket must succeed");
+    TEST_ASSERT(micant::ws2_32::WSACleanup() == 0, "WSACleanup must succeed");
 
     // Stage 3: IP Helper Adapter & Network Interface Discovery
     uint32_t bufSize = 0;
-    uint32_t res = micant::satellite::qbittorrent::Iphlp_GetAdaptersAddresses(0, 0, nullptr, nullptr, &bufSize);
+    uint32_t res = micant::iphlpapi::GetAdaptersAddresses(0, 0, nullptr, nullptr, &bufSize);
     TEST_ASSERT(res == 111 && bufSize > 0, "GetAdaptersAddresses must report required buffer size");
 
     std::vector<uint8_t> adapterBuf(bufSize);
-    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_GetAdaptersAddresses(0, 0, nullptr, adapterBuf.data(), &bufSize) == 0, "GetAdaptersAddresses must populate adapters");
+    TEST_ASSERT(micant::iphlpapi::GetAdaptersAddresses(0, 0, nullptr, adapterBuf.data(), &bufSize) == 0, "GetAdaptersAddresses must populate adapters");
 
     uint8_t luid[8] = { 0 };
-    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_ConvertInterfaceNameToLuidW(L"eth0", luid) == 0, "ConvertInterfaceNameToLuidW must succeed");
+    TEST_ASSERT(micant::iphlpapi::ConvertInterfaceNameToLuidW(L"eth0", luid) == 0, "ConvertInterfaceNameToLuidW must succeed");
 
     uint32_t ifIndex = 0;
-    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_ConvertInterfaceLuidToIndex(luid, &ifIndex) == 0, "ConvertInterfaceLuidToIndex must succeed");
+    TEST_ASSERT(micant::iphlpapi::ConvertInterfaceLuidToIndex(luid, &ifIndex) == 0, "ConvertInterfaceLuidToIndex must succeed");
     TEST_ASSERT(ifIndex == 1, "Interface index must be 1");
 
     void* hNotify = nullptr;
-    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_NotifyUnicastIpAddressChange(0, nullptr, nullptr, 0, &hNotify) == 0, "NotifyUnicastIpAddressChange must register callback");
+    TEST_ASSERT(micant::iphlpapi::NotifyUnicastIpAddressChange(0, nullptr, nullptr, 0, &hNotify) == 0, "NotifyUnicastIpAddressChange must register callback");
     TEST_ASSERT(hNotify != nullptr, "Notification handle must be valid");
-    TEST_ASSERT(micant::satellite::qbittorrent::Iphlp_CancelMibChangeNotify2(hNotify) == 0, "CancelMibChangeNotify2 must succeed");
+    TEST_ASSERT(micant::iphlpapi::CancelMibChangeNotify2(hNotify) == 0, "CancelMibChangeNotify2 must succeed");
 
     // Stage 4: High-Throughput I/O Completion Ports & Disk Management
-    void* hIocp = micant::satellite::qbittorrent::K32_CreateIoCompletionPort(nullptr, nullptr, 0x1234, 4);
+    void* hIocp = micant::kernel32::CreateIoCompletionPort(nullptr, nullptr, 0x1234, 4);
     TEST_ASSERT(hIocp != nullptr, "CreateIoCompletionPort must return valid IOCP handle");
 
-    TEST_ASSERT(micant::satellite::qbittorrent::K32_PostQueuedCompletionStatus(hIocp, 16384, 0x1234, nullptr) == 1, "PostQueuedCompletionStatus must succeed");
+    TEST_ASSERT(micant::kernel32::PostQueuedCompletionStatus(hIocp, 16384, 0x1234, nullptr) == 1, "PostQueuedCompletionStatus must succeed");
 
     uint32_t bytesXfer = 0;
     uintptr_t compKey = 0;
     void* pOverlapped = nullptr;
-    TEST_ASSERT(micant::satellite::qbittorrent::K32_GetQueuedCompletionStatus(hIocp, &bytesXfer, &compKey, &pOverlapped, 100) == 1, "GetQueuedCompletionStatus must retrieve packet");
+    TEST_ASSERT(micant::kernel32::GetQueuedCompletionStatus(hIocp, &bytesXfer, &compKey, &pOverlapped, 100) == 1, "GetQueuedCompletionStatus must retrieve packet");
     TEST_ASSERT(bytesXfer > 0 && compKey == 1, "IOCP packet data must be consistent");
 
-    TEST_ASSERT(micant::satellite::qbittorrent::K32_LockFileEx(nullptr, 0, 0, 0, 1024, nullptr) == 1, "LockFileEx must succeed");
-    TEST_ASSERT(micant::satellite::qbittorrent::K32_UnlockFileEx(nullptr, 0, 0, 1024, nullptr) == 1, "UnlockFileEx must succeed");
-    TEST_ASSERT(micant::satellite::qbittorrent::K32_FlushViewOfFile(nullptr, 4096) == 1, "FlushViewOfFile must succeed");
+    TEST_ASSERT(micant::kernel32::LockFileEx(nullptr, 0, 0, 0, 1024, nullptr) == 1, "LockFileEx must succeed");
+    TEST_ASSERT(micant::kernel32::UnlockFileEx(nullptr, 0, 0, 1024, nullptr) == 1, "UnlockFileEx must succeed");
+    TEST_ASSERT(micant::kernel32::FlushViewOfFile(nullptr, 4096) == 1, "FlushViewOfFile must succeed");
 
     // Stage 5: International Components for Unicode (ICU) Subsystem
     int32_t icuErr = 0;
-    void* pCnv = micant::satellite::qbittorrent::Wsock_ucnv_open("utf-8", &icuErr);
+    void* pCnv = micant::icuuc::ucnv_open("utf-8", &icuErr);
     TEST_ASSERT(pCnv != nullptr && icuErr == 0, "ucnv_open must instantiate UTF-8 converter");
-    TEST_ASSERT(std::strcmp(micant::satellite::qbittorrent::Wsock_ucnv_getName(pCnv, &icuErr), "UTF-8") == 0, "ucnv_getName must report UTF-8");
-    TEST_ASSERT(micant::satellite::qbittorrent::Wsock_ucnv_getMaxCharSize(pCnv) == 4, "ucnv_getMaxCharSize must return 4");
-    micant::satellite::qbittorrent::Wsock_ucnv_close(pCnv);
+    TEST_ASSERT(std::strcmp(micant::icuuc::ucnv_getName(pCnv, &icuErr), "UTF-8") == 0, "ucnv_getName must report UTF-8");
+    TEST_ASSERT(micant::icuuc::ucnv_getMaxCharSize(pCnv) == 4, "ucnv_getMaxCharSize must return 4");
+    micant::icuuc::ucnv_close(pCnv);
 
     // Stage 6: Modern Windowing, DPI Awareness & Power Management
-    TEST_ASSERT(micant::satellite::qbittorrent::User32_SetProcessDpiAwarenessContext(reinterpret_cast<void*>(-4)) == 1, "SetProcessDpiAwarenessContext (Per-Monitor V2) must succeed");
-    TEST_ASSERT(micant::satellite::qbittorrent::User32_UpdateLayeredWindow(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 2) == 1, "UpdateLayeredWindow must succeed");
-    TEST_ASSERT(micant::satellite::qbittorrent::User32_RegisterTouchWindow(nullptr, 0) == 1, "RegisterTouchWindow must succeed");
+    TEST_ASSERT(micant::user32::SetProcessDpiAwarenessContext(reinterpret_cast<void*>(-4)) == 1, "SetProcessDpiAwarenessContext (Per-Monitor V2) must succeed");
+    TEST_ASSERT(micant::user32::UpdateLayeredWindow(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 2) == 1, "UpdateLayeredWindow must succeed");
+    TEST_ASSERT(micant::user32::RegisterTouchWindow(nullptr, 0) == 1, "RegisterTouchWindow must succeed");
 
-    void* hPower = micant::satellite::qbittorrent::User32_RegisterPowerSettingNotification(nullptr, nullptr, 0);
+    void* hPower = micant::user32::RegisterPowerSettingNotification(nullptr, nullptr, 0);
     TEST_ASSERT(hPower != nullptr, "RegisterPowerSettingNotification must return notification handle");
-    TEST_ASSERT(micant::satellite::qbittorrent::User32_UnregisterPowerSettingNotification(hPower) == 1, "UnregisterPowerSettingNotification must succeed");
+    TEST_ASSERT(micant::user32::UnregisterPowerSettingNotification(hPower) == 1, "UnregisterPowerSettingNotification must succeed");
 
     // Stage 7: Concurrent Multi-Threaded P2P High-Throughput Stress Test
     std::atomic<uint32_t> opsDone{0};
@@ -8278,16 +8320,16 @@ inline void Test_qBittorrent_Networking_AsyncIO_And_ICU_Suite() {
         workers.emplace_back([&opsDone, t, hIocp]() {
             for (int i = 0; i < 50; ++i) {
                 // 1. Network byte swap
-                uint16_t p = micant::satellite::qbittorrent::Wsock_htons(static_cast<uint16_t>(1024 + t * 50 + i));
-                micant::satellite::qbittorrent::Wsock_ntohs(p);
+                uint16_t p = micant::ws2_32::htons(static_cast<uint16_t>(1024 + t * 50 + i));
+                micant::ws2_32::ntohs(p);
 
                 // 2. Post IOCP packet
-                micant::satellite::qbittorrent::K32_PostQueuedCompletionStatus(hIocp, 16384, t, nullptr);
+                micant::kernel32::PostQueuedCompletionStatus(hIocp, 16384, t, nullptr);
 
                 // 3. Name lookup & release
                 void* ai = nullptr;
-                micant::satellite::qbittorrent::Ws2_getaddrinfo("127.0.0.1", "6881", nullptr, &ai);
-                if (ai) micant::satellite::qbittorrent::Ws2_freeaddrinfo(ai);
+                micant::ws2_32::getaddrinfo("127.0.0.1", "6881", nullptr, &ai);
+                if (ai) micant::ws2_32::freeaddrinfo(ai);
 
                 opsDone.fetch_add(1, std::memory_order_relaxed);
             }
@@ -8307,7 +8349,7 @@ inline void Test_qBittorrent_Networking_AsyncIO_And_ICU_Suite() {
 inline void Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite() {
     std::cout << "[TEST] Executing Suite 225: WinSCP 6.5+ Remote File Management & Async Network...\n";
 
-    micant::satellite::InitializeSatelliteWin32Exports();
+    micant::subsystems::InitializeAllSubsystemExports();
     auto& loader = micant::ldr::DynamicLoader::get();
 
     // Stage 1: Loader Export Verification across 10 critical modules
@@ -8329,62 +8371,62 @@ inline void Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite() {
     TEST_ASSERT(loader.getExport("user32.dll", "DrawCaption") != nullptr, "user32!DrawCaption must be registered");
 
     // Stage 2: Job Object Creation & Process Sandboxing
-    void* hJob = micant::satellite::winscp::K32_CreateJobObjectW(nullptr, L"WinSCPJob");
+    void* hJob = micant::kernel32::CreateJobObjectW(nullptr, L"WinSCPJob");
     TEST_ASSERT(hJob != nullptr, "CreateJobObjectW must return valid job handle");
-    TEST_ASSERT(micant::satellite::winscp::K32_OpenJobObjectW(0x1F001F, 0, L"WinSCPJob") == hJob, "OpenJobObjectW must succeed");
-    TEST_ASSERT(micant::satellite::winscp::K32_AssignProcessToJobObject(hJob, nullptr) == 1, "AssignProcessToJobObject must succeed");
-    TEST_ASSERT(micant::satellite::winscp::K32_SetInformationJobObject(hJob, 4, nullptr, 0) == 1, "SetInformationJobObject must succeed");
+    TEST_ASSERT(micant::kernel32::OpenJobObjectW(0x1F001F, 0, L"WinSCPJob") == hJob, "OpenJobObjectW must succeed");
+    TEST_ASSERT(micant::kernel32::AssignProcessToJobObject(hJob, nullptr) == 1, "AssignProcessToJobObject must succeed");
+    TEST_ASSERT(micant::kernel32::SetInformationJobObject(hJob, 4, nullptr, 0) == 1, "SetInformationJobObject must succeed");
 
     // Stage 3: Winsock 2.0 Async Network Resolution & Events
-    void* hAsync = micant::satellite::winscp::Ws2_WSAAsyncGetHostByName(nullptr, 0x401, "sftp.example.com", nullptr, 0);
+    void* hAsync = micant::ws2_32::WSAAsyncGetHostByName(nullptr, 0x401, "sftp.example.com", nullptr, 0);
     TEST_ASSERT(hAsync != nullptr, "WSAAsyncGetHostByName must return async task handle");
-    TEST_ASSERT(micant::satellite::winscp::Ws2_WSACancelAsyncRequest(hAsync) == 0, "WSACancelAsyncRequest must cancel query");
+    TEST_ASSERT(micant::ws2_32::WSACancelAsyncRequest(hAsync) == 0, "WSACancelAsyncRequest must cancel query");
 
-    TEST_ASSERT(micant::satellite::winscp::Ws2_WSAEventSelect(0x5001, nullptr, 0x01) == 0, "WSAEventSelect must succeed");
+    TEST_ASSERT(micant::ws2_32::WSAEventSelect(0x5001, nullptr, 0x01) == 0, "WSAEventSelect must succeed");
     uint8_t netEvents[44] = { 0 };
-    TEST_ASSERT(micant::satellite::winscp::Ws2_WSAEnumNetworkEvents(0x5001, nullptr, netEvents) == 0, "WSAEnumNetworkEvents must populate events");
+    TEST_ASSERT(micant::ws2_32::WSAEnumNetworkEvents(0x5001, nullptr, netEvents) == 0, "WSAEnumNetworkEvents must populate events");
 
-    auto* seSsh = reinterpret_cast<micant::satellite::winscp::MicaServEnt*>(micant::satellite::winscp::Ws2_getservbyname("ssh", "tcp"));
+    auto* seSsh = reinterpret_cast<micant::ws2_32::MicaServEnt*>(micant::ws2_32::getservbyname("ssh", "tcp"));
     TEST_ASSERT(seSsh != nullptr && seSsh->s_port == 22, "getservbyname must resolve SSH to port 22");
 
-    auto* seHttp = reinterpret_cast<micant::satellite::winscp::MicaServEnt*>(micant::satellite::winscp::Ws2_getservbyname("http", "tcp"));
+    auto* seHttp = reinterpret_cast<micant::ws2_32::MicaServEnt*>(micant::ws2_32::getservbyname("http", "tcp"));
     TEST_ASSERT(seHttp != nullptr && seHttp->s_port == 80, "getservbyname must resolve HTTP to port 80");
 
     char ipStr[32] = { 0 };
     uint32_t rawIp = 0;
-    TEST_ASSERT(micant::satellite::winscp::Ws2_inet_pton(2, "127.0.0.1", &rawIp) == 1, "inet_pton must convert IPv4 string to binary");
-    TEST_ASSERT(micant::satellite::winscp::Ws2_inet_ntop(2, &rawIp, ipStr, sizeof(ipStr)) != nullptr, "inet_ntop must convert binary to IPv4 string");
+    TEST_ASSERT(micant::ws2_32::inet_pton(2, "127.0.0.1", &rawIp) == 1, "inet_pton must convert IPv4 string to binary");
+    TEST_ASSERT(micant::ws2_32::inet_ntop(2, &rawIp, ipStr, sizeof(ipStr)) != nullptr, "inet_ntop must convert binary to IPv4 string");
     TEST_ASSERT(std::strcmp(ipStr, "127.0.0.1") == 0, "inet_ntop / inet_pton roundtrip match");
 
     // Stage 4: Console Input Buffer & Automation Streams
-    TEST_ASSERT(micant::satellite::winscp::K32_FlushConsoleInputBuffer(nullptr) == 1, "FlushConsoleInputBuffer must succeed");
+    TEST_ASSERT(micant::kernel32::FlushConsoleInputBuffer(nullptr) == 1, "FlushConsoleInputBuffer must succeed");
     uint32_t evRead = 0, evWritten = 0;
-    TEST_ASSERT(micant::satellite::winscp::K32_WriteConsoleInputW(nullptr, nullptr, 5, &evWritten) == 1, "WriteConsoleInputW must succeed");
+    TEST_ASSERT(micant::kernel32::WriteConsoleInputW(nullptr, nullptr, 5, &evWritten) == 1, "WriteConsoleInputW must succeed");
     TEST_ASSERT(evWritten == 5, "Written event count must match");
-    TEST_ASSERT(micant::satellite::winscp::K32_PeekConsoleInputW(nullptr, nullptr, 1, &evRead) == 1, "PeekConsoleInputW must succeed");
-    TEST_ASSERT(micant::satellite::winscp::K32_ReadConsoleInputW(nullptr, nullptr, 1, &evRead) == 1, "ReadConsoleInputW must succeed");
+    TEST_ASSERT(micant::kernel32::PeekConsoleInputW(nullptr, nullptr, 1, &evRead) == 1, "PeekConsoleInputW must succeed");
+    TEST_ASSERT(micant::kernel32::ReadConsoleInputW(nullptr, nullptr, 1, &evRead) == 1, "ReadConsoleInputW must succeed");
 
     // Stage 5: Interlocked Atomic Operations
     int32_t atomVal = 100;
-    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedIncrement(&atomVal) == 101, "InterlockedIncrement must increment");
-    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedDecrement(&atomVal) == 100, "InterlockedDecrement must decrement");
-    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedExchangeAdd(&atomVal, 50) == 100 && atomVal == 150, "InterlockedExchangeAdd must add");
-    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedExchange(&atomVal, 200) == 150 && atomVal == 200, "InterlockedExchange must replace");
-    TEST_ASSERT(micant::satellite::winscp::K32_InterlockedCompareExchange(&atomVal, 300, 200) == 200 && atomVal == 300, "InterlockedCompareExchange must exchange on match");
+    TEST_ASSERT(micant::kernel32::InterlockedIncrement(&atomVal) == 101, "InterlockedIncrement must increment");
+    TEST_ASSERT(micant::kernel32::InterlockedDecrement(&atomVal) == 100, "InterlockedDecrement must decrement");
+    TEST_ASSERT(micant::kernel32::InterlockedExchangeAdd(&atomVal, 50) == 100 && atomVal == 150, "InterlockedExchangeAdd must add");
+    TEST_ASSERT(micant::kernel32::InterlockedExchange(&atomVal, 200) == 150 && atomVal == 200, "InterlockedExchange must replace");
+    TEST_ASSERT(micant::kernel32::InterlockedCompareExchange(&atomVal, 300, 200) == 200 && atomVal == 300, "InterlockedCompareExchange must exchange on match");
 
     // Stage 6: Path Processing & Shell / Security Integration
-    const wchar_t* skipped = micant::satellite::winscp::Shlwapi_PathSkipRootW(L"C:\\Users\\admin\\Desktop");
+    const wchar_t* skipped = micant::shell32::PathSkipRootW(L"C:\\Users\\admin\\Desktop");
     TEST_ASSERT(skipped != nullptr && std::wcscmp(skipped, L"Users\\admin\\Desktop") == 0, "PathSkipRootW must strip drive letter");
 
     wchar_t userBuf[32] = { 0 };
     uint32_t userLen = 32;
-    TEST_ASSERT(micant::satellite::winscp::Secur32_GetUserNameExW(2, userBuf, &userLen) == 1, "GetUserNameExW must succeed");
+    TEST_ASSERT(micant::sspi::GetUserNameExW(2, userBuf, &userLen) == 1, "GetUserNameExW must succeed");
     TEST_ASSERT(std::wcscmp(userBuf, L"admin") == 0, "Username must report admin");
 
     void* hEngine = nullptr;
-    TEST_ASSERT(micant::satellite::winscp::Crypt32_CertCreateCertificateChainEngine(nullptr, &hEngine) == 1, "CertCreateCertificateChainEngine must succeed");
+    TEST_ASSERT(micant::crypt32::CertCreateCertificateChainEngine(nullptr, &hEngine) == 1, "CertCreateCertificateChainEngine must succeed");
     TEST_ASSERT(hEngine != nullptr, "Chain engine handle must not be null");
-    micant::satellite::winscp::Crypt32_CertFreeCertificateChainEngine(hEngine);
+    micant::crypt32::CertFreeCertificateChainEngine(hEngine);
 
     // Stage 7: Concurrent Multi-Threaded Remote File Sync Stress Test
     std::atomic<uint32_t> syncOps{0};
@@ -8395,13 +8437,13 @@ inline void Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite() {
             for (int i = 0; i < 50; ++i) {
                 // 1. Interlocked operations
                 int32_t localVal = t * 100 + i;
-                micant::satellite::winscp::K32_InterlockedIncrement(&localVal);
+                micant::kernel32::InterlockedIncrement(&localVal);
 
                 // 2. Service lookup
-                micant::satellite::winscp::Ws2_getservbyname("ssh", "tcp");
+                micant::ws2_32::getservbyname("ssh", "tcp");
 
                 // 3. Path root skipping
-                micant::satellite::winscp::Shlwapi_PathSkipRootW(L"D:\\RemoteSync\\Transfers\\file.dat");
+                micant::shell32::PathSkipRootW(L"D:\\RemoteSync\\Transfers\\file.dat");
 
                 syncOps.fetch_add(1, std::memory_order_relaxed);
             }
@@ -8421,88 +8463,87 @@ inline void Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite() {
 inline void Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite() {
     std::cout << "[TEST] Executing Suite 226: Wireshark 4.6+ / TShark Packet Capture & UCRT/MSVCP Subsystem...\n";
 
-    // Ensure satellites are initialized
-    micant::satellite::InitializeSatelliteWin32Exports();
-
+    // Ensure subsystems are initialized
+    micant::subsystems::InitializeAllSubsystemExports();
     // Stage 1: KERNEL32 Process & DEP Configuration
-    TEST_ASSERT(micant::satellite::wireshark::K32_DisableThreadLibraryCalls(nullptr) == 1, "DisableThreadLibraryCalls must succeed");
-    TEST_ASSERT(micant::satellite::wireshark::K32_SetProcessDEPPolicy(1) == 1, "SetProcessDEPPolicy must succeed");
-    TEST_ASSERT(micant::satellite::wireshark::K32_SetDllDirectoryA("C:\\Program Files\\Wireshark") == 1, "SetDllDirectoryA must succeed");
+    TEST_ASSERT(micant::win32::DisableThreadLibraryCalls(nullptr) == 1, "DisableThreadLibraryCalls must succeed");
+    TEST_ASSERT(micant::win32::SetProcessDEPPolicy(1) == 1, "SetProcessDEPPolicy must succeed");
+    TEST_ASSERT(micant::win32::SetDllDirectoryA("C:\\Program Files\\Wireshark") == 1, "SetDllDirectoryA must succeed");
 
     // Stage 2: IPHLPAPI Interface Identification & LUID resolution
     micant::GUID ifGuid{0x12345678, 0x1234, 0x5678, {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}};
-    micant::satellite::wireshark::NET_LUID ifLuid{0};
-    TEST_ASSERT(micant::satellite::wireshark::Iphlp_ConvertInterfaceGuidToLuid(&ifGuid, &ifLuid) == 0, "ConvertInterfaceGuidToLuid must return NO_ERROR");
+    micant::iphlpapi::NET_LUID ifLuid{0};
+    TEST_ASSERT(micant::iphlpapi::ConvertInterfaceGuidToLuid(&ifGuid, &ifLuid) == 0, "ConvertInterfaceGuidToLuid must return NO_ERROR");
     TEST_ASSERT(ifLuid.Value != 0, "Interface LUID value must be populated");
 
     wchar_t aliasBuf[64] = {0};
-    TEST_ASSERT(micant::satellite::wireshark::Iphlp_ConvertInterfaceLuidToAlias(&ifLuid, aliasBuf, 64) == 0, "ConvertInterfaceLuidToAlias must return NO_ERROR");
+    TEST_ASSERT(micant::iphlpapi::ConvertInterfaceLuidToAlias(&ifLuid, aliasBuf, 64) == 0, "ConvertInterfaceLuidToAlias must return NO_ERROR");
     TEST_ASSERT(std::wcscmp(aliasBuf, L"eth0") == 0, "Interface alias must match expected default adapter");
 
     // Stage 3: Winsock Network Byte Order & Ordinal 18
     uint16_t portHost = 8080;
     uint16_t portNet = (portHost >> 8) | (portHost << 8);
-    TEST_ASSERT(micant::satellite::wireshark::WS2_ntohs(portNet) == portHost, "WS2_ntohs must correctly convert network to host byte order");
+    TEST_ASSERT(micant::ws2_32::ntohs(portNet) == portHost, "WS2_ntohs must correctly convert network to host byte order");
 
     // Stage 4: ADVAPI32 Security & Well-Known SID Generation
     uint8_t sidBuffer[64] = {0};
     uint32_t sidLen = sizeof(sidBuffer);
-    TEST_ASSERT(micant::satellite::wireshark::Advapi_CreateWellKnownSid(18, nullptr, sidBuffer, &sidLen) == 1, "CreateWellKnownSid must succeed");
+    TEST_ASSERT(micant::advapi32::CreateWellKnownSid(18, nullptr, sidBuffer, &sidLen) == 1, "CreateWellKnownSid must succeed");
     TEST_ASSERT(sidBuffer[0] == 1, "SID revision must be 1");
     TEST_ASSERT(sidBuffer[7] == 5, "SID NT Authority must be 5");
 
     // Stage 5: Universal C Runtime (UCRT) Math & Floating Point Subsystem
     double pi = 3.141592653589793;
-    TEST_ASSERT(std::abs(micant::satellite::wireshark::CRT_sin(pi / 2.0) - 1.0) < 1e-9, "CRT_sin(pi/2) must equal 1.0");
-    TEST_ASSERT(std::abs(micant::satellite::wireshark::CRT_cos(0.0) - 1.0) < 1e-9, "CRT_cos(0) must equal 1.0");
-    TEST_ASSERT(std::abs(micant::satellite::wireshark::CRT_sqrt(16.0) - 4.0) < 1e-9, "CRT_sqrt(16) must equal 4.0");
-    TEST_ASSERT(std::abs(micant::satellite::wireshark::CRT_log10(100.0) - 2.0) < 1e-9, "CRT_log10(100) must equal 2.0");
-    TEST_ASSERT(micant::satellite::wireshark::CRT_round(3.7) == 4.0, "CRT_round(3.7) must equal 4.0");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_sin(pi / 2.0) - 1.0) < 1e-9, "CRT_sin(pi/2) must equal 1.0");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_cos(0.0) - 1.0) < 1e-9, "CRT_cos(0) must equal 1.0");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_sqrt(16.0) - 4.0) < 1e-9, "CRT_sqrt(16) must equal 4.0");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_log10(100.0) - 2.0) < 1e-9, "CRT_log10(100) must equal 2.0");
+    TEST_ASSERT(micant::msvcrt::CRT_round(3.7) == 4.0, "CRT_round(3.7) must equal 4.0");
     double intPart = 0.0;
-    double fracPart = micant::satellite::wireshark::CRT_modf(3.25, &intPart);
+    double fracPart = micant::msvcrt::CRT_modf(3.25, &intPart);
     TEST_ASSERT(intPart == 3.0 && std::abs(fracPart - 0.25) < 1e-9, "CRT_modf must decompose float");
 
     // Stage 6: Universal C Runtime String & Character Processing
-    TEST_ASSERT(micant::satellite::wireshark::CRT_tolower('A') == 'a', "CRT_tolower must convert uppercase");
-    TEST_ASSERT(micant::satellite::wireshark::CRT_toupper('b') == 'B', "CRT_toupper must convert lowercase");
-    TEST_ASSERT(micant::satellite::wireshark::CRT_isdigit('9') != 0, "CRT_isdigit must identify digit");
-    TEST_ASSERT(micant::satellite::wireshark::CRT_strspn("12345abc", "0123456789") == 5, "CRT_strspn must measure prefix length");
-    TEST_ASSERT(micant::satellite::wireshark::CRT_strnlen("wireshark", 20) == 9, "CRT_strnlen must report length");
+    TEST_ASSERT(micant::msvcrt::CRT_tolower('A') == 'a', "CRT_tolower must convert uppercase");
+    TEST_ASSERT(micant::msvcrt::CRT_toupper('b') == 'B', "CRT_toupper must convert lowercase");
+    TEST_ASSERT(micant::msvcrt::CRT_isdigit('9') != 0, "CRT_isdigit must identify digit");
+    TEST_ASSERT(micant::msvcrt::CRT_strspn("12345abc", "0123456789") == 5, "CRT_strspn must measure prefix length");
+    TEST_ASSERT(micant::msvcrt::CRT_strnlen("wireshark", 20) == 9, "CRT_strnlen must report length");
 
     wchar_t catDst[32] = L"Wire";
-    TEST_ASSERT(micant::satellite::wireshark::CRT_wcscat_s(catDst, 32, L"shark") == 0, "CRT_wcscat_s must succeed");
+    TEST_ASSERT(micant::msvcrt::CRT_wcscat_s(catDst, 32, L"shark") == 0, "CRT_wcscat_s must succeed");
     TEST_ASSERT(std::wcscmp(catDst, L"Wireshark") == 0, "Concatenated string must match Wireshark");
 
     // Stage 7: Universal C Runtime Time, Date & Filesystem
     time_t rawNow = std::time(nullptr);
     tm localTm{};
-    TEST_ASSERT(micant::satellite::wireshark::CRT_localtime64_s(&localTm, &rawNow) == 0, "CRT_localtime64_s must succeed");
+    TEST_ASSERT(micant::msvcrt::CRT_localtime64_s(&localTm, &rawNow) == 0, "CRT_localtime64_s must succeed");
     TEST_ASSERT(localTm.tm_year > 120, "Local year must be modern");
 
     tm gmTm{};
-    TEST_ASSERT(micant::satellite::wireshark::CRT_gmtime64_s(&gmTm, &rawNow) == 0, "CRT_gmtime64_s must succeed");
+    TEST_ASSERT(micant::msvcrt::CRT_gmtime64_s(&gmTm, &rawNow) == 0, "CRT_gmtime64_s must succeed");
 
-    micant::satellite::wireshark::timespec64 ts{};
-    TEST_ASSERT(micant::satellite::wireshark::CRT_timespec64_get(&ts, 1) == 1, "CRT_timespec64_get must succeed");
+    micant::msvcrt::timespec64 ts{};
+    TEST_ASSERT(micant::msvcrt::CRT_timespec64_get(&ts, 1) == 1, "CRT_timespec64_get must succeed");
     TEST_ASSERT(ts.tv_sec > 1700000000, "Timespec timestamp must be valid");
 
     // Stage 8: VCRuntime Memory Operations
     char memDst[16] = {0};
     const char memSrc[] = "MicaNT_UCRT";
-    micant::satellite::wireshark::VCRT_memcpy(memDst, memSrc, sizeof(memSrc));
-    TEST_ASSERT(micant::satellite::wireshark::VCRT_memcmp(memDst, memSrc, sizeof(memSrc)) == 0, "VCRT_memcmp must confirm copy");
-    TEST_ASSERT(micant::satellite::wireshark::VCRT_memchr(memDst, 'N', sizeof(memSrc)) != nullptr, "VCRT_memchr must locate character");
-    TEST_ASSERT(micant::satellite::wireshark::VCRT_strstr(memDst, "UCRT") != nullptr, "VCRT_strstr must locate substring");
+    micant::msvcrt::VCRT_memcpy(memDst, memSrc, sizeof(memSrc));
+    TEST_ASSERT(micant::msvcrt::VCRT_memcmp(memDst, memSrc, sizeof(memSrc)) == 0, "VCRT_memcmp must confirm copy");
+    TEST_ASSERT(micant::msvcrt::VCRT_memchr(memDst, 'N', sizeof(memSrc)) != nullptr, "VCRT_memchr must locate character");
+    TEST_ASSERT(micant::msvcrt::VCRT_strstr(memDst, "UCRT") != nullptr, "VCRT_strstr must locate substring");
 
     // Stage 9: MSVCP140 Concurrency, Locinfo & Stream Subsystem
     int mtxDummy = 0;
-    micant::satellite::wireshark::MSVC_Mtx_lock(&mtxDummy);
-    micant::satellite::wireshark::MSVC_Mtx_unlock(&mtxDummy);
+    micant::msvcrt::MSVC_Mtx_lock(&mtxDummy);
+    micant::msvcrt::MSVC_Mtx_unlock(&mtxDummy);
     int cndDummy = 0;
-    micant::satellite::wireshark::MSVC_Cnd_broadcast(&cndDummy);
+    micant::msvcrt::MSVC_Cnd_broadcast(&cndDummy);
 
-    TEST_ASSERT(micant::satellite::wireshark::MSVC_Random_device() != 0, "MSVC_Random_device must generate non-zero token");
-    TEST_ASSERT(std::wcsstr(micant::satellite::wireshark::MSVC_W_Getmonths(), L"Oct") != nullptr, "MSVC_W_Getmonths must contain Oct");
+    TEST_ASSERT(micant::msvcrt::MSVC_Random_device() != 0, "MSVC_Random_device must generate non-zero token");
+    TEST_ASSERT(std::wcsstr(micant::msvcrt::MSVC_W_Getmonths(), L"Oct") != nullptr, "MSVC_W_Getmonths must contain Oct");
 
     // Stage 10: Multi-Threaded High-Throughput Packet Dissection & UCRT Computation Stress Test
     std::atomic<uint32_t> packetOps{0};
@@ -8512,15 +8553,15 @@ inline void Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite() {
         workers.emplace_back([&packetOps, t]() {
             for (int i = 0; i < 100; ++i) {
                 // 1. Math computation
-                double val = micant::satellite::wireshark::CRT_sin(static_cast<double>(i) * 0.01);
+                double val = micant::msvcrt::CRT_sin(static_cast<double>(i) * 0.01);
                 (void)val;
 
                 // 2. Port conversion
-                uint16_t p = micant::satellite::wireshark::WS2_ntohs(static_cast<uint16_t>(t * 1000 + i));
+                uint16_t p = micant::ws2_32::ntohs(static_cast<uint16_t>(t * 1000 + i));
                 (void)p;
 
                 // 3. String operation
-                size_t l = micant::satellite::wireshark::CRT_strnlen("packet_payload_dissect", 32);
+                size_t l = micant::msvcrt::CRT_strnlen("packet_payload_dissect", 32);
                 (void)l;
 
                 packetOps.fetch_add(1, std::memory_order_relaxed);
@@ -8541,139 +8582,138 @@ inline void Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite() {
 inline void Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite() {
     std::cout << "[TEST] Executing Suite 227: FileZilla 3.x / Sovereign Networking & Enterprise FTP Subsystem...\n";
 
-    // Ensure satellites are initialized
-    micant::satellite::InitializeSatelliteWin32Exports();
-
+    // Ensure subsystems are initialized
+    micant::subsystems::InitializeAllSubsystemExports();
     // Stage 1: KERNEL32 Power Status, Processor Topology & Volume Resolution
-    micant::satellite::filezilla::SYSTEM_POWER_STATUS pwr{};
-    TEST_ASSERT(micant::satellite::filezilla::K32_GetSystemPowerStatus(&pwr) == 1, "GetSystemPowerStatus must succeed");
+    micant::win32::SYSTEM_POWER_STATUS pwr{};
+    TEST_ASSERT(micant::win32::GetSystemPowerStatus(&pwr) == 1, "GetSystemPowerStatus must succeed");
     TEST_ASSERT(pwr.ACLineStatus == 1, "AC line status must be online");
     TEST_ASSERT(pwr.BatteryFlag == 128, "Battery flag must indicate no battery for sovereign desktop");
-    TEST_ASSERT(micant::satellite::filezilla::K32_GetActiveProcessorCount(0) == 8, "GetActiveProcessorCount must report 8 cores");
+    TEST_ASSERT(micant::win32::GetActiveProcessorCount(0) == 8, "GetActiveProcessorCount must report 8 cores");
 
     wchar_t profileBuf[64] = {0};
-    uint32_t profLen = micant::satellite::filezilla::K32_GetProfileStringW(L"FileZilla", L"Version", L"3.71.1", profileBuf, 64);
+    uint32_t profLen = micant::win32::GetProfileStringW(L"FileZilla", L"Version", L"3.71.1", profileBuf, 64);
     TEST_ASSERT(profLen > 0 && std::wcscmp(profileBuf, L"3.71.1") == 0, "GetProfileStringW must return default version");
 
     wchar_t asciiDomain[64] = {0};
-    int idnLen = micant::satellite::filezilla::K32_IdnToAscii(0, L"filezilla-project.org", -1, asciiDomain, 64);
+    int idnLen = micant::win32::IdnToAscii(0, L"filezilla-project.org", -1, asciiDomain, 64);
     TEST_ASSERT(idnLen > 0 && std::wcscmp(asciiDomain, L"filezilla-project.org") == 0, "IdnToAscii must succeed");
 
     wchar_t volBuf[64] = {0};
-    auto hVol = micant::satellite::filezilla::K32_FindFirstVolumeW(volBuf, 64);
+    auto hVol = micant::win32::FindFirstVolumeW(volBuf, 64);
     TEST_ASSERT(hVol != nullptr && std::wcsstr(volBuf, L"Volume") != nullptr, "FindFirstVolumeW must return volume identifier");
-    micant::satellite::filezilla::K32_FindVolumeClose(hVol);
+    micant::win32::FindVolumeClose(hVol);
 
     char pathBuf[64] = {0};
-    uint32_t pathLen = micant::satellite::filezilla::K32_GetFinalPathNameByHandleA(nullptr, pathBuf, 64, 0);
+    uint32_t pathLen = micant::win32::GetFinalPathNameByHandleA(nullptr, pathBuf, 64, 0);
     TEST_ASSERT(pathLen > 0 && std::strstr(pathBuf, "MicaNT") != nullptr, "GetFinalPathNameByHandleA must succeed");
 
     // Stage 2: USER32 Display Modes, Window Animation & Dynamic Data Exchange (DDE)
     uint8_t devModeBuf[256] = {0};
-    TEST_ASSERT(micant::satellite::filezilla::U32_EnumDisplaySettingsW(nullptr, 0, devModeBuf) == 1, "EnumDisplaySettingsW must succeed");
+    TEST_ASSERT(micant::user32::EnumDisplaySettingsW(nullptr, 0, devModeBuf) == 1, "EnumDisplaySettingsW must succeed");
     uint32_t width = *reinterpret_cast<uint32_t*>(devModeBuf + 108);
     uint32_t height = *reinterpret_cast<uint32_t*>(devModeBuf + 112);
     TEST_ASSERT(width == 1920 && height == 1080, "EnumDisplaySettingsW must report 1080p display mode");
 
-    TEST_ASSERT(micant::satellite::filezilla::U32_AnimateWindow(nullptr, 200, 0) == 1, "AnimateWindow must succeed");
-    void* hDdeData = micant::satellite::filezilla::U32_DdeCreateDataHandle(1, nullptr, 0, 0, nullptr, 1, 0);
+    TEST_ASSERT(micant::user32::AnimateWindow(nullptr, 200, 0) == 1, "AnimateWindow must succeed");
+    void* hDdeData = micant::user32::DdeCreateDataHandle(1, nullptr, 0, 0, nullptr, 1, 0);
     TEST_ASSERT(hDdeData != nullptr, "DdeCreateDataHandle must return valid handle");
-    TEST_ASSERT(micant::satellite::filezilla::U32_DdeGetLastError(1) == 0, "DdeGetLastError must return no error");
+    TEST_ASSERT(micant::user32::DdeGetLastError(1) == 0, "DdeGetLastError must return no error");
 
     // Stage 3: GDI32 Polygons, Region Testing & Coordinate Transforms
-    auto hRgn = micant::satellite::filezilla::GDI_CreatePolygonRgn(nullptr, 4, 1);
+    auto hRgn = micant::gdi32::CreatePolygonRgn(nullptr, 4, 1);
     TEST_ASSERT(hRgn != nullptr, "CreatePolygonRgn must return valid HRGN");
-    TEST_ASSERT(micant::satellite::filezilla::GDI_PtInRegion(hRgn, 100, 100) == 1, "PtInRegion must report true");
-    TEST_ASSERT(micant::satellite::filezilla::GDI_RectInRegion(hRgn, nullptr) == 1, "RectInRegion must report true");
+    TEST_ASSERT(micant::gdi32::PtInRegion(hRgn, 100, 100) == 1, "PtInRegion must report true");
+    TEST_ASSERT(micant::gdi32::RectInRegion(hRgn, nullptr) == 1, "RectInRegion must report true");
 
     float xform[6] = {0};
-    TEST_ASSERT(micant::satellite::filezilla::GDI_GetWorldTransform(nullptr, xform) == 1, "GetWorldTransform must succeed");
+    TEST_ASSERT(micant::gdi32::GetWorldTransform(nullptr, xform) == 1, "GetWorldTransform must succeed");
     TEST_ASSERT(xform[0] == 1.0f && xform[3] == 1.0f, "World transform identity diagonal must be 1.0");
 
     // Stage 4: ADVAPI32 LUID Allocation, Security Tokens & Credentials
     uint32_t luid1[2] = {0}, luid2[2] = {0};
-    TEST_ASSERT(micant::satellite::filezilla::ADV_AllocateLocallyUniqueId(luid1) == 1, "AllocateLocallyUniqueId must succeed");
-    TEST_ASSERT(micant::satellite::filezilla::ADV_AllocateLocallyUniqueId(luid2) == 1, "Second AllocateLocallyUniqueId must succeed");
+    TEST_ASSERT(micant::advapi32::AllocateLocallyUniqueId(luid1) == 1, "AllocateLocallyUniqueId must succeed");
+    TEST_ASSERT(micant::advapi32::AllocateLocallyUniqueId(luid2) == 1, "Second AllocateLocallyUniqueId must succeed");
     TEST_ASSERT(luid2[0] > luid1[0], "LUID counter must monotonically increment");
 
     micant::win32::HANDLE hNewToken = nullptr;
-    TEST_ASSERT(micant::satellite::filezilla::ADV_DuplicateTokenEx(nullptr, 0, nullptr, 2, 1, &hNewToken) == 1, "DuplicateTokenEx must succeed");
+    TEST_ASSERT(micant::advapi32::DuplicateTokenEx(nullptr, 0, nullptr, 2, 1, &hNewToken) == 1, "DuplicateTokenEx must succeed");
     TEST_ASSERT(hNewToken != nullptr, "Duplicated token handle must be valid");
-    TEST_ASSERT(micant::satellite::filezilla::ADV_ImpersonateLoggedOnUser(hNewToken) == 1, "ImpersonateLoggedOnUser must succeed");
-    TEST_ASSERT(micant::satellite::filezilla::ADV_RevertToSelf() == 1, "RevertToSelf must succeed");
+    TEST_ASSERT(micant::advapi32::ImpersonateLoggedOnUser(hNewToken) == 1, "ImpersonateLoggedOnUser must succeed");
+    TEST_ASSERT(micant::advapi32::RevertToSelf() == 1, "RevertToSelf must succeed");
 
     uint8_t sigBuf[64] = {0};
     uint32_t sigLen = sizeof(sigBuf);
-    TEST_ASSERT(micant::satellite::filezilla::ADV_CryptSignHashA(1, 0, nullptr, 0, sigBuf, &sigLen) == 1, "CryptSignHashA must succeed");
+    TEST_ASSERT(micant::advapi32::CryptSignHashA(1, 0, nullptr, 0, sigBuf, &sigLen) == 1, "CryptSignHashA must succeed");
     TEST_ASSERT(sigBuf[0] == 0xAA, "Signature buffer must be signed");
 
     // Stage 5: CRYPT32 & NCRYPT Key Storage Provider (KSP) Cryptography
     const uint8_t plain[16] = {0x01, 0x02, 0x03, 0x04};
     uint8_t cipherOut[16] = {0};
     uint32_t outLen = 0;
-    TEST_ASSERT(micant::satellite::filezilla::NC_NCryptDecrypt(1, plain, 16, nullptr, cipherOut, 16, &outLen, 0) == 0, "NCryptDecrypt must succeed");
+    TEST_ASSERT(micant::crypto::NCryptDecrypt(1, plain, 16, nullptr, cipherOut, 16, &outLen, 0) == 0, "NCryptDecrypt must succeed");
     TEST_ASSERT(outLen == 16 && std::memcmp(plain, cipherOut, 16) == 0, "Decrypted text must match plaintext");
 
     uint32_t keyBits = 0;
     uint32_t propLen = 0;
-    TEST_ASSERT(micant::satellite::filezilla::NC_NCryptGetProperty(1, L"Length", reinterpret_cast<uint8_t*>(&keyBits), sizeof(keyBits), &propLen, 0) == 0, "NCryptGetProperty must succeed");
+    TEST_ASSERT(micant::crypto::NCryptGetProperty(1, L"Length", reinterpret_cast<uint8_t*>(&keyBits), sizeof(keyBits), &propLen, 0) == 0, "NCryptGetProperty must succeed");
     TEST_ASSERT(keyBits == 2048, "NCrypt key length property must be 2048");
 
     uint8_t ncSig[256] = {0};
     uint32_t ncSigLen = 0;
-    TEST_ASSERT(micant::satellite::filezilla::NC_NCryptSignHash(1, nullptr, plain, 16, ncSig, 256, &ncSigLen, 0) == 0, "NCryptSignHash must succeed");
+    TEST_ASSERT(micant::crypto::NCryptSignHash(1, nullptr, plain, 16, ncSig, 256, &ncSigLen, 0) == 0, "NCryptSignHash must succeed");
     TEST_ASSERT(ncSigLen == 256 && ncSig[0] == 0x55, "NCrypt signature must be generated");
 
     uint8_t randBuf[32] = {0};
-    TEST_ASSERT(micant::satellite::filezilla::NC_BCryptGenRandom(nullptr, randBuf, 32, 0) == 0, "NC_BCryptGenRandom must succeed");
+    TEST_ASSERT(micant::crypto::BCryptGenRandom(nullptr, randBuf, 32, 0) == 0, "NC_BCryptGenRandom must succeed");
     TEST_ASSERT(randBuf[0] != 0 || randBuf[1] != 0, "BCrypt random bytes must be generated");
 
     // Stage 6: SHELL32 & UXTHEME Visual Styling Subsystem
     void* hIconL = nullptr;
     void* hIconS = nullptr;
-    TEST_ASSERT(micant::satellite::filezilla::SHL_SHDefExtractIconW(L"filezilla.exe", 0, 0, &hIconL, &hIconS, 32) == 0, "SHDefExtractIconW must succeed");
+    TEST_ASSERT(micant::shell32::SHDefExtractIconW(L"filezilla.exe", 0, 0, &hIconL, &hIconS, 32) == 0, "SHDefExtractIconW must succeed");
     TEST_ASSERT(hIconL != nullptr && hIconS != nullptr, "Extracted icons must be non-null");
-    TEST_ASSERT(micant::satellite::filezilla::SHL_SHGetIconOverlayIndexW(nullptr, 0) == 0, "SHGetIconOverlayIndexW must return 0");
+    TEST_ASSERT(micant::shell32::SHGetIconOverlayIndexW(nullptr, 0) == 0, "SHGetIconOverlayIndexW must return 0");
 
     int32_t contentRc[4] = {0, 0, 100, 100};
     int32_t extentRc[4] = {0, 0, 0, 0};
-    TEST_ASSERT(micant::satellite::filezilla::UXT_GetThemeBackgroundExtent(nullptr, nullptr, 1, 1, contentRc, extentRc) == 0, "GetThemeBackgroundExtent must succeed");
+    TEST_ASSERT(micant::uxtheme::GetThemeBackgroundExtent(nullptr, nullptr, 1, 1, contentRc, extentRc) == 0, "GetThemeBackgroundExtent must succeed");
     TEST_ASSERT(extentRc[2] == 100 && extentRc[3] == 100, "Theme extent rect must match content rect");
-    TEST_ASSERT(micant::satellite::filezilla::UXT_GetThemeSysColor(nullptr, 1) == 0x00FFFFFF, "GetThemeSysColor must return white");
+    TEST_ASSERT(micant::uxtheme::GetThemeSysColor(nullptr, 1) == 0x00FFFFFF, "GetThemeSysColor must return white");
 
     // Stage 7: Winsock 2.0 WSA Event Synchronization
-    auto hWsaEvent = micant::satellite::filezilla::WS2_WSACreateEvent();
+    auto hWsaEvent = micant::ws2_32::WSACreateEvent();
     TEST_ASSERT(hWsaEvent != nullptr, "WSACreateEvent must create event handle");
-    TEST_ASSERT(micant::satellite::filezilla::WS2_WSASetEvent(hWsaEvent) == 1, "WSASetEvent must signal event");
-    uint32_t waitRes = micant::satellite::filezilla::WS2_WSAWaitForMultipleEvents(1, &hWsaEvent, 1, 100, 0);
+    TEST_ASSERT(micant::ws2_32::WSASetEvent(hWsaEvent) == 1, "WSASetEvent must signal event");
+    uint32_t waitRes = micant::ws2_32::WSAWaitForMultipleEvents(1, &hWsaEvent, 1, 100, 0);
     TEST_ASSERT(waitRes == 0, "WSAWaitForMultipleEvents on signaled event must return WAIT_OBJECT_0");
-    TEST_ASSERT(micant::satellite::filezilla::WS2_WSACloseEvent(hWsaEvent) == 1, "WSACloseEvent must close handle");
+    TEST_ASSERT(micant::ws2_32::WSACloseEvent(hWsaEvent) == 1, "WSACloseEvent must close handle");
 
     // Stage 8: Legacy MSVCRT Math, Wide String & Filesystem Subsystem
-    TEST_ASSERT(std::abs(micant::satellite::filezilla::CRT_cosh(0.0) - 1.0) < 1e-9, "CRT_cosh(0) must equal 1.0");
-    TEST_ASSERT(std::abs(micant::satellite::filezilla::CRT_sinh(0.0) - 0.0) < 1e-9, "CRT_sinh(0) must equal 0.0");
-    TEST_ASSERT(std::abs(micant::satellite::filezilla::CRT_tanh(0.0) - 0.0) < 1e-9, "CRT_tanh(0) must equal 0.0");
-    TEST_ASSERT(std::abs(micant::satellite::filezilla::CRT_atof("3.14159") - 3.14159) < 1e-5, "CRT_atof must parse float");
-    TEST_ASSERT(micant::satellite::filezilla::CRT_atol("1234567") == 1234567, "CRT_atol must parse long");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_cosh(0.0) - 1.0) < 1e-9, "CRT_cosh(0) must equal 1.0");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_sinh(0.0) - 0.0) < 1e-9, "CRT_sinh(0) must equal 0.0");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_tanh(0.0) - 0.0) < 1e-9, "CRT_tanh(0) must equal 0.0");
+    TEST_ASSERT(std::abs(micant::msvcrt::CRT_atof("3.14159") - 3.14159) < 1e-5, "CRT_atof must parse float");
+    TEST_ASSERT(micant::msvcrt::CRT_atol("1234567") == 1234567, "CRT_atol must parse long");
 
-    wchar_t* wdup = micant::satellite::filezilla::CRT_wcsdup(L"FileZilla_Client");
+    wchar_t* wdup = micant::msvcrt::CRT_wcsdup(L"FileZilla_Client");
     TEST_ASSERT(wdup != nullptr && std::wcscmp(wdup, L"FileZilla_Client") == 0, "CRT_wcsdup must duplicate string");
     std::free(wdup);
 
     wchar_t wcpyDst[32] = {0};
-    micant::satellite::filezilla::CRT_wcsncpy(wcpyDst, L"SovereignFTP", 12);
+    micant::msvcrt::CRT_wcsncpy(wcpyDst, L"SovereignFTP", 12);
     TEST_ASSERT(std::wcscmp(wcpyDst, L"SovereignFTP") == 0, "CRT_wcsncpy must copy wide string");
-    TEST_ASSERT(micant::satellite::filezilla::CRT_wcsnicmp(L"FTP", L"ftp", 3) == 0, "CRT_wcsnicmp must compare case-insensitively");
+    TEST_ASSERT(micant::msvcrt::CRT_wcsnicmp(L"FTP", L"ftp", 3) == 0, "CRT_wcsnicmp must compare case-insensitively");
 
-    void* alignedMem = micant::satellite::filezilla::CRT_aligned_malloc(1024, 64);
+    void* alignedMem = micant::msvcrt::CRT_aligned_malloc(1024, 64);
     TEST_ASSERT(alignedMem != nullptr, "CRT_aligned_malloc must allocate memory");
     TEST_ASSERT((reinterpret_cast<uintptr_t>(alignedMem) % 64) == 0, "Memory must be 64-byte aligned");
-    micant::satellite::filezilla::CRT_aligned_free(alignedMem);
+    micant::msvcrt::CRT_aligned_free(alignedMem);
 
     wchar_t cwdBuf[64] = {0};
-    wchar_t* cwdRes = micant::satellite::filezilla::CRT_wgetcwd(cwdBuf, 64);
+    wchar_t* cwdRes = micant::msvcrt::CRT_wgetcwd(cwdBuf, 64);
     TEST_ASSERT(cwdRes != nullptr && std::wcscmp(cwdRes, L"C:\\MicaNT") == 0, "CRT_wgetcwd must return C:\\MicaNT");
-    TEST_ASSERT(micant::satellite::filezilla::CRT_getdrive() == 3, "CRT_getdrive must return drive 3 (C:)");
+    TEST_ASSERT(micant::msvcrt::CRT_getdrive() == 3, "CRT_getdrive must return drive 3 (C:)");
 
     // Stage 9: Concurrent Multi-Threaded FTP/SFTP Transfer & Event Synchronization Stress Test
     std::atomic<uint32_t> ftpTransferOps{0};
@@ -8684,19 +8724,19 @@ inline void Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite() {
             for (int i = 0; i < 100; ++i) {
                 // 1. Allocate unique transfer session LUID
                 uint32_t transferLuid[2] = {0};
-                micant::satellite::filezilla::ADV_AllocateLocallyUniqueId(transferLuid);
+                micant::advapi32::AllocateLocallyUniqueId(transferLuid);
 
                 // 2. Create and signal async socket event
-                auto ev = micant::satellite::filezilla::WS2_WSACreateEvent();
-                micant::satellite::filezilla::WS2_WSASetEvent(ev);
-                micant::satellite::filezilla::WS2_WSAWaitForMultipleEvents(1, &ev, 1, 50, 0);
-                micant::satellite::filezilla::WS2_WSACloseEvent(ev);
+                auto ev = micant::ws2_32::WSACreateEvent();
+                micant::ws2_32::WSASetEvent(ev);
+                micant::ws2_32::WSAWaitForMultipleEvents(1, &ev, 1, 50, 0);
+                micant::ws2_32::WSACloseEvent(ev);
 
                 // 3. Perform 64-byte aligned socket buffer operations
-                void* buf = micant::satellite::filezilla::CRT_aligned_malloc(512, 64);
+                void* buf = micant::msvcrt::CRT_aligned_malloc(512, 64);
                 if (buf) {
                     std::memset(buf, static_cast<uint8_t>(t + i), 512);
-                    micant::satellite::filezilla::CRT_aligned_free(buf);
+                    micant::msvcrt::CRT_aligned_free(buf);
                 }
 
                 ftpTransferOps.fetch_add(1, std::memory_order_relaxed);

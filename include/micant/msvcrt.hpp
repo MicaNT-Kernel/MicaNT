@@ -746,7 +746,7 @@ inline MicaFile* _fdopen(int fd, const char* /*mode*/) noexcept {
 // 7. Consolidated Universal C Runtime & MSVC STL Extensions
 // ============================================================================
 
-// --- Functions migrated from satellite_filezilla.hpp ---
+// --- Extended CRT math, string and memory APIs ---
 
 inline double CRT_cosh(double x) noexcept { return std::cosh(x); }
 inline double CRT_sinh(double x) noexcept { return std::sinh(x); }
@@ -972,7 +972,7 @@ inline char* CRT_ctime64(const int64_t* timer) noexcept {
     return buf;
 }
 
-// --- Functions migrated from satellite_wireshark.hpp ---
+// --- Extended CRT time, character and threading APIs ---
 // 5. Universal C Runtime (UCRT) - Math Subsystem
 // ----------------------------------------------------------------------------
 
