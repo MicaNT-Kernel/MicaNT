@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Include Directories
 include_directories(
     include
+    include/micant
 )
 
 # Core Kernel Executable

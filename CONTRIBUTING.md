@@ -53,6 +53,19 @@ Signed-off-by: Jane Doe <janedoe@microsoft.com>
 ## 3. Engineering & Architectural Standards
 
 - **Language Standard**: ISO C++23 (`-std=c++23` or `/std:c++latest`).
+- **Canonical Windows NT Architecture Layout**: To strictly match standard Microsoft Windows NT SDK/WDK design patterns, headers and implementations are organized canonically into:
+  - `include/micant/shared/`: Mode-agnostic types, constants, and status codes (`ntdef.hpp`, `ntstatus.hpp`, `subsystems.hpp`).
+  - `include/micant/km/`: Kernel-Mode (Ring 0) components:
+    - `km/hal/`: Hardware Abstraction Layer (CPU, APIC, PIC, PIT, RTC, PCI, ACPI, UEFI, bootvid).
+    - `km/core/`: Microkernel Core (`ke`, `trap`, `dispatcher`, `timer`, `sync`, `syscalls`).
+    - `km/executive/`: NT Executive Managers (`ob`, `mm`, `ps`, `io`, `se`, `cm`, `lpc`, `po`, `ex`, `heap`, `section`, `etw`, `driver`, `wdf`).
+    - `km/drivers/`: Storage (`storage`, `nvme`), File Systems (`fs`, `fat32`, `ntfs`, `refs`, `npfs`), Network (`ndis`, `tcpip`, `rdma`, `wdi`), Security (`ci`, `sysguard`, `vsm`, `pluton`), and Bus/Hardware accelerators.
+  - `include/micant/um/`: User-Mode (Ring 3) components:
+    - `um/native/`: Native NT API & Image Loaders (`ntdll.hpp`, `pe.hpp`, `ldr.hpp`, `janusldr.hpp`, `wow64.hpp`).
+    - `um/servers/`: Subsystem Servers (`csrss.hpp`, `conhost.hpp`, `smss.hpp`, `lsass.hpp`, `scm.hpp`, `winlogon.hpp`, services).
+    - `um/subsystems/`: Win32 & Extended Client DLLs (`kernel32.hpp`, `user32.hpp`, `gdi32.hpp`, `advapi32.hpp`, `ws2_32.hpp`, `shell32.hpp`, `ole32.hpp`, `gdiplus.hpp`, etc.).
+  - `include/micant/ucrt/`: Universal C Runtime library emulation (`msvcrt.hpp`, `icuuc.hpp`, `daytonamm.hpp`).
+  - Root `include/micant/*.hpp` headers act as transparent backward-compatibility forwarders so legacy includes never break.
 - **Canonical Core NT Subsystems (No Satellite Files)**: All kernel and OS subsystem implementations, fixes, and symbol exports required for application compatibility must be made directly within canonical Core NT headers and subsystems (`kernel32.hpp`, `user32.hpp`, `gdi32.hpp`, `advapi32.hpp`, `ntdll.hpp`, `ws2_32.hpp`, etc.). Creating per-application "satellite" files, wrappers, or shims is strictly prohibited. Application compatibility is achieved exclusively by implementing standard Windows NT / Win32 subsystem APIs at the core level.
 - **Memory Safety & RAII**: Always use RAII, smart pointers (`std::unique_ptr`, `std::shared_ptr`), `std::span`, and atomic primitives. Naked owning pointers and raw un-checked buffers are strictly rejected.
 - **Zero Telemetry**: Under no circumstances will background telemetry, user tracking, or cloud surveillance hooks be accepted into MicaNT.
