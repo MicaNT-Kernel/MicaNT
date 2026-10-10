@@ -2969,6 +2969,45 @@ inline DWORD GetTempPathA(DWORD nBufferLength, LPSTR lpBuffer) noexcept {
     return len;
 }
 
+inline UINT GetWindowsDirectoryW(LPWSTR lpBuffer, UINT uSize) noexcept {
+    const wchar_t winDir[] = L"C:\\Windows";
+    size_t len = std::wcslen(winDir);
+    if (!lpBuffer || uSize <= len) return static_cast<UINT>(len + 1);
+    std::wmemcpy(lpBuffer, winDir, len + 1);
+    return static_cast<UINT>(len);
+}
+
+inline UINT GetDriveTypeW(LPCWSTR /*lpRootPathName*/) noexcept {
+    return 3; // DRIVE_FIXED
+}
+
+inline BOOL GetVolumeInformationW(
+    LPCWSTR /*lpRootPathName*/,
+    LPWSTR lpVolumeNameBuffer,
+    DWORD nVolumeNameSize,
+    LPDWORD lpVolumeSerialNumber,
+    LPDWORD lpMaximumComponentLength,
+    LPDWORD lpFileSystemFlags,
+    LPWSTR lpFileSystemNameBuffer,
+    DWORD nFileSystemNameSize
+) noexcept {
+    if (lpVolumeNameBuffer && nVolumeNameSize > 6) {
+        std::wmemcpy(lpVolumeNameBuffer, L"MicaNT", 7);
+    }
+    if (lpVolumeSerialNumber) *lpVolumeSerialNumber = 0x19851120;
+    if (lpMaximumComponentLength) *lpMaximumComponentLength = 255;
+    if (lpFileSystemFlags) *lpFileSystemFlags = 0x00000003; // CASE_SENSITIVE | CASE_PRESERVED
+    if (lpFileSystemNameBuffer && nFileSystemNameSize > 4) {
+        std::wmemcpy(lpFileSystemNameBuffer, L"NTFS", 5);
+    }
+    return TRUE;
+}
+
+inline DWORD GetCompressedFileSizeW(LPCWSTR /*lpFileName*/, LPDWORD lpFileSizeHigh) noexcept {
+    if (lpFileSizeHigh) *lpFileSizeHigh = 0;
+    return 1024 * 1024;
+}
+
 inline BOOL GetFileInformationByHandle(HANDLE /*hFile*/, LPBY_HANDLE_FILE_INFORMATION lpFileInformation) noexcept {
     if (!lpFileInformation) return FALSE;
     lpFileInformation->dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
@@ -3528,6 +3567,18 @@ inline BOOL ReadDirectoryChangesW(HANDLE, LPVOID, DWORD, BOOL, DWORD, LPDWORD lp
     return TRUE;
 }
 
+inline HANDLE FindFirstChangeNotificationW(LPCWSTR /*lpPathName*/, BOOL /*bWatchSubtree*/, DWORD /*dwNotifyFilter*/) noexcept {
+    return reinterpret_cast<HANDLE>(0x6001);
+}
+
+inline BOOL FindNextChangeNotification(HANDLE /*hChangeHandle*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL FindCloseChangeNotification(HANDLE /*hChangeHandle*/) noexcept {
+    return TRUE;
+}
+
 inline DWORD SleepEx(DWORD dwMilliseconds, BOOL /*bAlertable*/) noexcept {
     Sleep(dwMilliseconds);
     return 0;
@@ -3576,6 +3627,8 @@ inline int GetLocaleInfoEx(LPCWSTR, DWORD, LPWSTR lpLCData, int cchData) noexcep
 }
 
 inline LCID GetUserDefaultLCID() noexcept { return 0x0409; }
+inline WORD GetSystemDefaultLangID() noexcept { return 0x0409; }
+inline WORD GetUserDefaultLangID() noexcept { return 0x0409; }
 
 inline BOOL GetStringTypeExW(LCID, DWORD, LPCWCH, int, LPWORD lpCharType) noexcept {
     if (lpCharType) *lpCharType = 0;
@@ -3733,6 +3786,10 @@ inline BOOL WINAPI IsBadStringPtrA([[maybe_unused]] LPCSTR lpsz, [[maybe_unused]
 
 inline BOOL WINAPI SetProcessPriorityBoost([[maybe_unused]] HANDLE hProcess,
                                             [[maybe_unused]] BOOL bDisablePriorityBoost) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetPriorityClass([[maybe_unused]] HANDLE hProcess, [[maybe_unused]] DWORD dwPriorityClass) noexcept {
     return TRUE;
 }
 
@@ -4139,6 +4196,16 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "UnmapViewOfFileEx", reinterpret_cast<void*>(UnmapViewOfFileEx));
     ldr.registerExport("kernel32.dll", "RemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
     ldr.registerExport("api-ms-win-core-errorhandling-l1-1-1.dll", "RemoveVectoredExceptionHandler", reinterpret_cast<void*>(RemoveVectoredExceptionHandler));
+    ldr.registerExport("kernel32.dll", "GetWindowsDirectoryW", reinterpret_cast<void*>(GetWindowsDirectoryW));
+    ldr.registerExport("kernel32.dll", "GetDriveTypeW", reinterpret_cast<void*>(GetDriveTypeW));
+    ldr.registerExport("kernel32.dll", "GetVolumeInformationW", reinterpret_cast<void*>(GetVolumeInformationW));
+    ldr.registerExport("kernel32.dll", "SetPriorityClass", reinterpret_cast<void*>(SetPriorityClass));
+    ldr.registerExport("kernel32.dll", "GetSystemDefaultLangID", reinterpret_cast<void*>(GetSystemDefaultLangID));
+    ldr.registerExport("kernel32.dll", "GetUserDefaultLangID", reinterpret_cast<void*>(GetUserDefaultLangID));
+    ldr.registerExport("kernel32.dll", "GetCompressedFileSizeW", reinterpret_cast<void*>(GetCompressedFileSizeW));
+    ldr.registerExport("kernel32.dll", "FindFirstChangeNotificationW", reinterpret_cast<void*>(FindFirstChangeNotificationW));
+    ldr.registerExport("kernel32.dll", "FindNextChangeNotification", reinterpret_cast<void*>(FindNextChangeNotification));
+    ldr.registerExport("kernel32.dll", "FindCloseChangeNotification", reinterpret_cast<void*>(FindCloseChangeNotification));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

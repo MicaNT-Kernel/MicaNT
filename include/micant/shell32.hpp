@@ -1468,6 +1468,31 @@ inline int SHGetIconOverlayIndexW(LPCWSTR /*pszIconPath*/, int /*iIconIndex*/) n
     return 0;
 }
 
+inline uint32_t ExtractIconExW([[maybe_unused]] const wchar_t* lpszFile, [[maybe_unused]] int nIconIndex, [[maybe_unused]] void** phiconLarge, [[maybe_unused]] void** phiconSmall, [[maybe_unused]] uint32_t nIcons) noexcept {
+    return 0;
+}
+
+inline int32_t SHGetDesktopFolder(void** ppshf) noexcept {
+    if (ppshf) *ppshf = reinterpret_cast<void*>(0x7001);
+    return 0; // S_OK
+}
+
+inline int32_t SHGetSpecialFolderLocation([[maybe_unused]] void* hwndOwner, [[maybe_unused]] int nFolder, void** ppidl) noexcept {
+    if (ppidl) *ppidl = reinterpret_cast<void*>(0x7002);
+    return 0; // S_OK
+}
+
+inline void SHChangeNotify([[maybe_unused]] int32_t wEventId, [[maybe_unused]] uint32_t uFlags, [[maybe_unused]] const void* dwItem1, [[maybe_unused]] const void* dwItem2) noexcept {}
+
+inline win32::BOOL SHGetPathFromIDListW([[maybe_unused]] const void* pidl, wchar_t* pszPath) noexcept {
+    if (pszPath) wcscpy_s(pszPath, 260, L"C:\\MicaNT");
+    return win32::TRUE;
+}
+
+inline void* SHBrowseForFolderW([[maybe_unused]] void* lpbi) noexcept {
+    return nullptr; // User cancelled
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
@@ -1503,6 +1528,12 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "DragFinish", reinterpret_cast<void*>(DragFinish));
     ldr.registerExport("shell32.dll", "SHDefExtractIconW", reinterpret_cast<void*>(SHDefExtractIconW));
     ldr.registerExport("shell32.dll", "SHGetIconOverlayIndexW", reinterpret_cast<void*>(SHGetIconOverlayIndexW));
+    ldr.registerExport("shell32.dll", "ExtractIconExW", reinterpret_cast<void*>(ExtractIconExW));
+    ldr.registerExport("shell32.dll", "SHGetDesktopFolder", reinterpret_cast<void*>(SHGetDesktopFolder));
+    ldr.registerExport("shell32.dll", "SHGetSpecialFolderLocation", reinterpret_cast<void*>(SHGetSpecialFolderLocation));
+    ldr.registerExport("shell32.dll", "SHChangeNotify", reinterpret_cast<void*>(SHChangeNotify));
+    ldr.registerExport("shell32.dll", "SHGetPathFromIDListW", reinterpret_cast<void*>(SHGetPathFromIDListW));
+    ldr.registerExport("shell32.dll", "SHBrowseForFolderW", reinterpret_cast<void*>(SHBrowseForFolderW));
     ldr.registerExportOrdinal("shell32.dll", 165, reinterpret_cast<void*>(ShellOrdinal165));
 
     // shlwapi.dll exports

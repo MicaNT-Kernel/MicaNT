@@ -701,6 +701,7 @@ inline int64_t _lseeki64(int /*fd*/, int64_t offset, int /*origin*/) noexcept { 
 inline int iswctype(wint_t c, wctype_t desc) noexcept { return std::iswctype(c, desc); }
 inline std::lconv* localeconv() noexcept { return std::localeconv(); }
 inline int rand() noexcept { return std::rand(); }
+inline void srand(unsigned int seed) noexcept { std::srand(seed); }
 inline char* setlocale(int category, const char* locale) noexcept { return std::setlocale(category, locale); }
 inline void (*signal(int sig, void (*func)(int)))(int) { return std::signal(sig, func); }
 
@@ -1773,6 +1774,9 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "iswctype", reinterpret_cast<void*>(iswctype));
     ldr.registerExport("msvcrt.dll", "localeconv", reinterpret_cast<void*>(localeconv));
     ldr.registerExport("msvcrt.dll", "rand", reinterpret_cast<void*>(rand));
+    ldr.registerExport("msvcrt.dll", "srand", reinterpret_cast<void*>(srand));
+    ldr.registerExport("ucrtbase.dll", "srand", reinterpret_cast<void*>(srand));
+    ldr.registerExport("api-ms-win-crt-utility-l1-1-0.dll", "srand", reinterpret_cast<void*>(srand));
     ldr.registerExport("msvcrt.dll", "setlocale", reinterpret_cast<void*>(setlocale));
     ldr.registerExport("msvcrt.dll", "signal", reinterpret_cast<void*>(signal));
     ldr.registerExport("msvcrt.dll", "strcoll", reinterpret_cast<void*>(strcoll));
