@@ -1,12 +1,12 @@
-#include "micant/dispatcher.hpp"
-#include "micant/sync.hpp"
-#include "micant/timer.hpp"
-#include "micant/po.hpp"
-#include "micant/io.hpp"
-#include "micant/cm.hpp"
-#include "micant/se.hpp"
-#include "micant/lpc.hpp"
-#include "micant/ps.hpp"
+#include "micant/km/core/dispatcher.hpp"
+#include "micant/km/core/sync.hpp"
+#include "micant/km/core/timer.hpp"
+#include "micant/km/executive/po.hpp"
+#include "micant/km/executive/io.hpp"
+#include "micant/km/executive/cm.hpp"
+#include "micant/km/executive/se.hpp"
+#include "micant/km/executive/lpc.hpp"
+#include "micant/km/executive/ps.hpp"
 #include <iostream>
 
 namespace micant::sys {

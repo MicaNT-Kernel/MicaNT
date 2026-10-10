@@ -3,44 +3,62 @@
 #include <memory>
 #include <fstream>
 #include <vector>
-#include "micant/ntstatus.hpp"
-#include "micant/ntdef.hpp"
-#include "micant/ob.hpp"
-#include "micant/mm.hpp"
-#include "micant/syscalls.hpp"
-#include "micant/dispatcher.hpp"
-#include "micant/pe.hpp"
-#include "micant/ps.hpp"
-#include "micant/section.hpp"
-#include "micant/sync.hpp"
-#include "micant/io.hpp"
-#include "micant/cm.hpp"
-#include "micant/se.hpp"
-#include "micant/lpc.hpp"
-#include "micant/ke.hpp"
-#include "micant/ex.hpp"
-#include "micant/trap.hpp"
-#include "micant/hal.hpp"
-#include "micant/fs.hpp"
-#include "micant/ex_work.hpp"
-#include "micant/boot.hpp"
-#include "micant/driver.hpp"
-#include "micant/timer.hpp"
-#include "micant/lookaside.hpp"
-#include "micant/po.hpp"
-#include "micant/ntdll.hpp"
-#include "micant/kernel32.hpp"
-#include "micant/wow64.hpp"
-#include "micant/uefi.hpp"
-#include "micant/bootvid.hpp"
-#include "micant/generated_nt_api.hpp"
-#include "micant/storage.hpp"
-#include "micant/fat32.hpp"
-#include "micant/ndis.hpp"
-#include "micant/tcpip.hpp"
-#include "micant/npfs.hpp"
-#include "micant/iphlpapi.hpp"
-#include "micant/shell.hpp"
+// ---------------------------------------------------------------------------
+// Canonical Windows NT Architecture Layout Headers
+// ---------------------------------------------------------------------------
+
+// 1. Mode-Neutral Shared Contracts & Primitives
+#include "micant/shared/ntstatus.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/subsystems.hpp"
+
+// 2. Kernel Mode (Ring 0): Hardware Abstraction Layer
+#include "micant/km/hal/hal.hpp"
+#include "micant/km/hal/boot.hpp"
+#include "micant/km/hal/bootvid.hpp"
+#include "micant/km/hal/uefi.hpp"
+
+// 3. Kernel Mode (Ring 0): Microkernel Core (Ke)
+#include "micant/km/core/ke.hpp"
+#include "micant/km/core/trap.hpp"
+#include "micant/km/core/syscalls.hpp"
+#include "micant/km/core/dispatcher.hpp"
+#include "micant/km/core/sync.hpp"
+#include "micant/km/core/timer.hpp"
+
+// 4. Kernel Mode (Ring 0): NT Executive Managers
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/io.hpp"
+#include "micant/km/executive/cm.hpp"
+#include "micant/km/executive/se.hpp"
+#include "micant/km/executive/lpc.hpp"
+#include "micant/km/executive/po.hpp"
+#include "micant/km/executive/ex.hpp"
+#include "micant/km/executive/ex_work.hpp"
+#include "micant/km/executive/lookaside.hpp"
+#include "micant/km/executive/section.hpp"
+#include "micant/km/executive/driver.hpp"
+
+// 5. Kernel Mode (Ring 0): Device Drivers & Filesystems
+#include "micant/km/drivers/storage.hpp"
+#include "micant/km/drivers/fat32.hpp"
+#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/ndis.hpp"
+#include "micant/km/drivers/tcpip.hpp"
+#include "micant/km/drivers/npfs.hpp"
+
+// 6. User Mode (Ring 3): Native NT Layer & Loaders
+#include "micant/um/native/ntdll.hpp"
+#include "micant/um/native/pe.hpp"
+#include "micant/um/native/wow64.hpp"
+#include "micant/um/native/generated_nt_api.hpp"
+
+// 7. User Mode (Ring 3): Subsystems & Shell
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/iphlpapi.hpp"
+#include "micant/um/subsystems/shell.hpp"
 
 using namespace micant;
 
@@ -101,12 +119,10 @@ int main(int argc, char* argv[]) {
 
     // 3. Initialize Object Manager Root Namespace
     std::cout << "[MicaNT Boot] [Ob] Initializing Object Manager root namespace...\n";
-    ob::DirectoryObject rootDirectory(L"\\");
-    auto devDir = std::make_unique<ob::DirectoryObject>(L"Device");
-    auto dosDir = std::make_unique<ob::DirectoryObject>(L"DosDevices");
-    auto kernDir = std::make_unique<ob::DirectoryObject>(L"KernelObjects");
-    auto baseDir = std::make_unique<ob::DirectoryObject>(L"BaseNamedObjects");
-    std::cout << "[MicaNT Boot] [Ob] Created standard NT namespaces: \\Device, \\DosDevices, \\KernelObjects, \\BaseNamedObjects\n";
+    auto& obNs = ob::ObjectNamespace::get();
+    obNs.initializeRoot();
+    std::cout << "[MicaNT Boot] [Ob] Created standard NT namespaces: \\Device, \\Driver, \\DosDevices, \\KernelObjects, \\BaseNamedObjects, \\RPC Control, \\Sessions ("
+              << obNs.getDirectoryCount() << " directories, " << obNs.getSymbolicLinkCount() << " symlinks)\n";
 
     // 4. Initialize Memory Manager
     std::cout << "[MicaNT Boot] [Mm] Initializing 64-bit Virtual Memory Manager...\n";
@@ -145,6 +161,7 @@ int main(int argc, char* argv[]) {
     auto& vfs = fs::VirtualFileSystem::get();
     vfs.initialize();
     vfs.mountBlockDevice(bootPartition);
+    ob::ObjectNamespace::get().createSymbolicLink(L"\\DosDevices\\C:", L"\\Device\\Harddisk0\\Partition1");
     std::cout << "[MicaNT Boot] [Fastfat & VFS] Mounted \\DosDevices\\C: -> \\Device\\Harddisk0\\Partition1 (Status: MOUNTED, FAT32 4KB Clusters)\n";
 
     // 5.2 Initialize Kernel Hardware Telemetry Driver via DriverEntry
@@ -213,6 +230,15 @@ int main(int argc, char* argv[]) {
         .tid = 0, .basePriority = ke::PRIORITY_IDLE, .currentPriority = ke::PRIORITY_IDLE, .name = "Idle Loop"
     });
     std::cout << "[MicaNT Boot] [Ke] IRQL State: PASSIVE_LEVEL (0). Idle thread queued at Priority 0.\n";
+
+    // 8.0b Initialize Core System Processes (PID 0: Idle, PID 4: System)
+    std::cout << "[MicaNT Boot] [Ps] Initializing Core System Processes (PID 0: Idle, PID 4: System)...\n";
+    auto& procMgr = ps::ProcessManager::get();
+    procMgr.initializeSystemProcesses();
+    std::wcout << L"[MicaNT Boot] [Ps] Registered Core System Processes: PID " 
+               << procMgr.getIdleProcess()->getPid() << L" (" << procMgr.getIdleProcess()->getImageFileName()
+               << L"), PID " << procMgr.getSystemProcess()->getPid() << L" (" 
+               << procMgr.getSystemProcess()->getImageFileName() << L")\n";
 
     // 8.1 Initialize Executive Work Queues (Critical & Delayed)
     std::cout << "[MicaNT Boot] [Ex] Initializing Executive Worker Threads (ExQueueWorkItem)...\n";
@@ -431,7 +457,7 @@ int main(int argc, char* argv[]) {
                 std::vector<pe::ImportedLibrary> appImports;
                 NtStatus impStatus = pe::PeLoader::parseImports(buffer, ntHeaders, sections, appImports);
                 if (NT_SUCCESS(impStatus) && !appImports.empty()) {
-                    win32::InitializeWin32SubsystemExports();
+                    subsystems::InitializeAllSubsystemExports();
                     std::cout << "\n[MicaNT Boot] [PeLoader] Parsed " << appImports.size() << " dynamic import descriptor(s):\n";
                     for (const auto& lib : appImports) {
                         std::cout << "      * Library: " << lib.libraryName << " (" << lib.symbols.size() << " imported symbols)\n";

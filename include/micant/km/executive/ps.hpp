@@ -240,6 +240,32 @@ public:
         return proc;
     }
 
+    void initializeSystemProcesses() {
+        if (initializedSystem_) return;
+        initializedSystem_ = true;
+
+        // 1. PID 0: System Idle Process (Idle)
+        idleProcess_ = std::make_shared<EProcess>(0, L"Idle");
+        auto idleThread = idleProcess_->createThread(0);
+        idleThread->setState(ThreadState::Running);
+        processes_[0] = idleProcess_;
+
+        // 2. PID 4: System Process (System / ntoskrnl.exe)
+        systemProcess_ = std::make_shared<EProcess>(4, L"System");
+        systemProcess_->setToken(se::TokenObject::createSystemToken());
+        auto sysWorkerThread = systemProcess_->createThread(0);
+        sysWorkerThread->setState(ThreadState::Ready);
+        processes_[4] = systemProcess_;
+    }
+
+    [[nodiscard]] std::shared_ptr<EProcess> getIdleProcess() const noexcept {
+        return idleProcess_;
+    }
+
+    [[nodiscard]] std::shared_ptr<EProcess> getSystemProcess() const noexcept {
+        return systemProcess_;
+    }
+
     [[nodiscard]] std::shared_ptr<EProcess> getProcess(Handle pid) const {
         auto it = processes_.find(pid);
         if (it != processes_.end()) return it->second;
@@ -251,8 +277,13 @@ public:
     }
 
 private:
-    ProcessManager() : nextPid_(1000) {}
+    ProcessManager() : nextPid_(1000) {
+        initializeSystemProcesses();
+    }
+    bool initializedSystem_{false};
     uint32_t nextPid_;
+    std::shared_ptr<EProcess> idleProcess_;
+    std::shared_ptr<EProcess> systemProcess_;
     std::unordered_map<Handle, std::shared_ptr<EProcess>> processes_;
 };
 

@@ -156,4 +156,97 @@ private:
     std::vector<ObjectHeader*> table_;
 };
 
+/**
+ * @brief Symbolic Link Object in the NT Object Namespace (\DosDevices\C: -> \Device\HarddiskVolume1).
+ */
+class SymbolicLinkObject {
+public:
+    explicit SymbolicLinkObject(std::wstring targetPath) : targetPath_(std::move(targetPath)) {}
+    [[nodiscard]] const std::wstring& getTargetPath() const noexcept { return targetPath_; }
+    void setTargetPath(std::wstring targetPath) noexcept { targetPath_ = std::move(targetPath); }
+
+private:
+    std::wstring targetPath_;
+};
+
+/**
+ * @brief Global Object Manager Namespace Root & Path Resolution.
+ */
+class ObjectNamespace {
+public:
+    static ObjectNamespace& get() {
+        static ObjectNamespace instance;
+        return instance;
+    }
+
+    void initializeRoot() {
+        if (initialized_) return;
+        initialized_ = true;
+
+        directories_[L"\\"] = std::make_shared<DirectoryObject>(L"\\");
+        createDirectory(L"\\Device");
+        createDirectory(L"\\Driver");
+        createDirectory(L"\\DosDevices");
+        createDirectory(L"\\KernelObjects");
+        createDirectory(L"\\BaseNamedObjects");
+        createDirectory(L"\\RPC Control");
+        createDirectory(L"\\Sessions");
+
+        // Canonical Windows NT Symbolic Links
+        createSymbolicLink(L"\\DosDevices\\NUL", L"\\Device\\Null");
+        createSymbolicLink(L"\\DosDevices\\CON", L"\\Device\\Console");
+        createSymbolicLink(L"\\DosDevices\\PIPE", L"\\Device\\NamedPipe");
+        createSymbolicLink(L"\\DosDevices\\MAILSLOT", L"\\Device\\Mailslot");
+    }
+
+    bool createDirectory(std::wstring_view fullPath) {
+        std::wstring path(fullPath);
+        if (directories_.contains(path)) return true;
+        directories_[path] = std::make_shared<DirectoryObject>(path);
+        return true;
+    }
+
+    bool createSymbolicLink(std::wstring_view linkPath, std::wstring_view targetPath) {
+        symbolicLinks_[std::wstring(linkPath)] = std::make_shared<SymbolicLinkObject>(std::wstring(targetPath));
+        return true;
+    }
+
+    [[nodiscard]] std::shared_ptr<SymbolicLinkObject> getSymbolicLink(std::wstring_view linkPath) const {
+        auto it = symbolicLinks_.find(std::wstring(linkPath));
+        if (it != symbolicLinks_.end()) return it->second;
+        return nullptr;
+    }
+
+    [[nodiscard]] std::wstring resolvePath(std::wstring_view path) const {
+        std::wstring current(path);
+        // Check exact match in symbolic links
+        auto it = symbolicLinks_.find(current);
+        if (it != symbolicLinks_.end()) {
+            return it->second->getTargetPath();
+        }
+        // Check prefix match (e.g. \DosDevices\C:\Windows -> \Device\HarddiskVolume1\Windows)
+        for (const auto& [link, target] : symbolicLinks_) {
+            if (current.starts_with(link)) {
+                return target->getTargetPath() + current.substr(link.length());
+            }
+        }
+        return current;
+    }
+
+    [[nodiscard]] std::shared_ptr<DirectoryObject> getDirectory(std::wstring_view path) const {
+        auto it = directories_.find(std::wstring(path));
+        if (it != directories_.end()) return it->second;
+        return nullptr;
+    }
+
+    [[nodiscard]] size_t getDirectoryCount() const noexcept { return directories_.size(); }
+    [[nodiscard]] size_t getSymbolicLinkCount() const noexcept { return symbolicLinks_.size(); }
+
+private:
+    ObjectNamespace() = default;
+    bool initialized_{false};
+    std::unordered_map<std::wstring, std::shared_ptr<DirectoryObject>> directories_;
+    std::unordered_map<std::wstring, std::shared_ptr<SymbolicLinkObject>> symbolicLinks_;
+};
+
 } // namespace micant::ob
