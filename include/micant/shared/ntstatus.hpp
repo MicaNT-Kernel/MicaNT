@@ -28,6 +28,7 @@ enum class NtStatus : uint32_t {
     Pending                          = 0x00000103,
 
     // 0x80000000 - Warnings / Info
+    GuardPageViolation               = 0x80000001,
     DatatypeMisalignment             = 0x80000002,
     BufferOverflow                   = 0x80000005,
     NoMoreFiles                      = 0x80000006,

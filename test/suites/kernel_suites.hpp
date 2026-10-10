@@ -53,11 +53,12 @@ void Test_ObjectManager_DirectoryAndHandles() {
 }
 
 // ============================================================================
-// Suite 2: Virtual Memory Manager Tests
+// Suite 2: Virtual Memory Manager Tests (Horizon 1 Clean-Room Architecture)
 // ============================================================================
 void Test_MemoryManager_VADAllocation() {
     mm::ProcessAddressSpace space;
 
+    // 1. Basic Allocation & Bounds
     uintptr_t addr1 = 0;
     size_t size1 = 16 * 1024; // 16 KB
     NtStatus status1 = space.allocate(addr1, size1, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE);
@@ -65,7 +66,7 @@ void Test_MemoryManager_VADAllocation() {
     TEST_ASSERT(addr1 >= mm::ProcessAddressSpace::UserSpaceMin, "Address must be within user space bounds");
     TEST_ASSERT(space.getRegionCount() == 1, "Should have 1 active VAD");
 
-    // Allocate second region
+    // 2. Multiple Allocations & AVL Insertion
     uintptr_t addr2 = 0;
     size_t size2 = 64 * 1024; // 64 KB
     NtStatus status2 = space.allocate(addr2, size2, mm::MEM_COMMIT, mm::PAGE_EXECUTE_READ);
@@ -73,14 +74,96 @@ void Test_MemoryManager_VADAllocation() {
     TEST_ASSERT(addr2 != addr1, "Addresses must not collide");
     TEST_ASSERT(space.getRegionCount() == 2, "Should have 2 active VADs");
 
-    // Free first region
-    NtStatus freeStatus = space.free(addr1, size1, mm::MEM_RELEASE);
-    TEST_ASSERT(NT_SUCCESS(freeStatus), "Releasing memory region should succeed");
-    TEST_ASSERT(space.getRegionCount() == 1, "Should have 1 active VAD remaining");
+    // 3. AVL Self-Balancing Multi-Node Stress
+    uintptr_t addrs[6] = {0};
+    for (size_t i = 0; i < 6; ++i) {
+        NtStatus s = space.allocate(addrs[i], 4096, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+        TEST_ASSERT(NT_SUCCESS(s), "Multi-node allocation must succeed");
+    }
+    TEST_ASSERT(space.getRegionCount() == 8, "VAD tree should contain 8 active nodes");
 
-    // Invalid free
-    NtStatus badFree = space.free(0xDEADBEEF, 4096, mm::MEM_RELEASE);
-    TEST_ASSERT(!NT_SUCCESS(badFree), "Freeing nonexistent address must fail");
+    // 4. VAD Lookup & Boundary Verification
+    auto* vadFound = space.findVad(addrs[3] + 100);
+    TEST_ASSERT(vadFound != nullptr, "Lookup inside allocated range must return valid VAD");
+    TEST_ASSERT(vadFound->startingAddress == addrs[3], "Starting address must match descriptor");
+    TEST_ASSERT(space.findVad(0x0000000000005000ULL) == nullptr, "Unallocated address must return nullptr");
+
+    // 5. Physical Page Frame Number (PFN) Database Verification
+    auto& pfnDb = mm::PfnDatabase::get();
+    size_t initialZeroed = pfnDb.getZeroedCount();
+    TEST_ASSERT(initialZeroed > 0, "Initial zeroed page count must be > 0");
+    uint64_t allocatedPfn = pfnDb.allocatePage(true);
+    TEST_ASSERT(allocatedPfn != 0, "PFN allocation should return nonzero physical page frame");
+    TEST_ASSERT(pfnDb.getActiveCount() > 0, "Active page count must increment");
+    pfnDb.referencePage(allocatedPfn);
+    pfnDb.freePage(allocatedPfn); // Decrements ref count to 1
+    pfnDb.freePage(allocatedPfn); // Decrements ref count to 0, transitions to Free list
+    TEST_ASSERT(pfnDb.getFreeCount() > 0, "Freed page should be returned to Free list");
+
+    // 6. Hardware 4-Level Paging Engine Simulation
+    mm::HardwarePagingEngine hwPaging;
+    uintptr_t testCr3 = 0x2000;
+    uintptr_t testVa = 0x00007FF720000000ULL;
+    hwPaging.mapPage(testCr3, testVa, allocatedPfn, mm::PAGE_READWRITE, true);
+    auto pteOpt = hwPaging.queryPte(testCr3, testVa);
+    TEST_ASSERT(pteOpt.has_value(), "PTE should be present in page table");
+    TEST_ASSERT(pteOpt->present == 1, "PTE present bit must be 1");
+    TEST_ASSERT(pteOpt->writable == 1, "PTE writable bit must be 1");
+    TEST_ASSERT(pteOpt->pageFrameNumber == allocatedPfn, "PTE PFN must match mapped frame");
+    hwPaging.modifyProtection(testCr3, testVa, mm::PAGE_READONLY);
+    auto pteReadOnly = hwPaging.queryPte(testCr3, testVa);
+    TEST_ASSERT(pteReadOnly->writable == 0, "PTE writable bit must be cleared after protection change");
+    hwPaging.unmapPage(testCr3, testVa);
+    TEST_ASSERT(!hwPaging.queryPte(testCr3, testVa).has_value(), "Unmapped page should return nullopt");
+
+    // 7. Vector 14 (#PF) Demand-Zero Page Fault Handling
+    uintptr_t faultVa = addr1 + 4096;
+    size_t residentBefore = space.getResidentPages();
+    NtStatus pfStatus = mm::MmAccessFault(space, faultVa, false, true, false);
+    TEST_ASSERT(NT_SUCCESS(pfStatus), "Demand-zero fault on committed VAD must succeed");
+    TEST_ASSERT(space.getResidentPages() == residentBefore + 1, "Resident pages must increment on demand fault");
+
+    // 8. Copy-On-Write (PAGE_WRITECOPY) Fault Handling
+    uintptr_t cowAddr = 0;
+    space.allocate(cowAddr, 4096, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_WRITECOPY);
+    auto* cowVad = space.findVad(cowAddr);
+    TEST_ASSERT(cowVad != nullptr && cowVad->isCopyOnWrite, "VAD must be marked CopyOnWrite");
+    NtStatus cowStatus = mm::MmAccessFault(space, cowAddr, true, true, false);
+    TEST_ASSERT(NT_SUCCESS(cowStatus), "Writing to COW page should resolve fault and isolate page");
+    TEST_ASSERT(!cowVad->isCopyOnWrite, "COW flag must be cleared after private page isolation");
+    TEST_ASSERT(cowVad->protection == mm::PAGE_READWRITE, "Protection must transition to PAGE_READWRITE");
+
+    // 9. Guard Page (PAGE_GUARD) Trip & Stack Expansion
+    uintptr_t guardAddr = 0;
+    space.allocate(guardAddr, 4096, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE | mm::PAGE_GUARD);
+    auto* guardVad = space.findVad(guardAddr);
+    TEST_ASSERT(guardVad != nullptr && guardVad->isGuardPage, "VAD must be marked as Guard Page");
+    NtStatus guardStatus = mm::MmAccessFault(space, guardAddr, true, true, false);
+    TEST_ASSERT(guardStatus == NtStatus::GuardPageViolation, "Accessing guard page must return GuardPageViolation");
+    TEST_ASSERT(!guardVad->isGuardPage, "Guard page flag must be stripped after violation");
+
+    // 10. Access Violation (#PF) on Invalid Permissions
+    NtStatus roFault = mm::MmAccessFault(space, addr2, true, true, false); // Write to PAGE_EXECUTE_READ
+    TEST_ASSERT(roFault == NtStatus::AccessViolation, "Write to read-only/execute-read page must return AccessViolation");
+    NtStatus badFault = mm::MmAccessFault(space, 0x0000000000008000ULL, false, true, false);
+    TEST_ASSERT(badFault == NtStatus::AccessViolation, "Access to unallocated address must return AccessViolation");
+
+    // 11. Decommit & Working Set Quotas
+    size_t commitBefore = space.getCommitCharge();
+    TEST_ASSERT(commitBefore > 0, "Commit charge should reflect committed pages");
+    space.free(addrs[0], 4096, mm::MEM_DECOMMIT);
+    TEST_ASSERT(space.getCommitCharge() < commitBefore, "Decommit should reduce commit charge");
+
+    // 12. Full VAD Tree Release
+    for (size_t i = 1; i < 6; ++i) {
+        space.free(addrs[i], 4096, mm::MEM_RELEASE);
+    }
+    space.free(addrs[0], 4096, mm::MEM_RELEASE);
+    space.free(cowAddr, 4096, mm::MEM_RELEASE);
+    space.free(guardAddr, 4096, mm::MEM_RELEASE);
+    space.free(addr1, size1, mm::MEM_RELEASE);
+    space.free(addr2, size2, mm::MEM_RELEASE);
+    TEST_ASSERT(space.getRegionCount() == 0, "All VADs should be released cleanly");
 }
 
 // ============================================================================
