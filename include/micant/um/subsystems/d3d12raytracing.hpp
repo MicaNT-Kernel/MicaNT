@@ -655,6 +655,10 @@ public:
         if (m_pAdapter) m_pAdapter->Release();
     }
 
+    [[nodiscard]] D3D_FEATURE_LEVEL getFeatureLevel() const noexcept {
+        return m_featureLevel;
+    }
+
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
         if (riid == IID_IUnknown ||

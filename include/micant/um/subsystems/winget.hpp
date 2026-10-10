@@ -385,7 +385,6 @@ public:
         PackageManifest manifest;
         PackageInstaller curInstaller;
         bool inInstallers = false;
-        bool inDependencies = false;
 
         while (std::getline(stream, line)) {
             // Trim leading/trailing whitespace
@@ -443,7 +442,6 @@ public:
                 dep.type = DependencyType::Package;
                 dep.id = val;
                 manifest.dependencies.push_back(dep);
-                inDependencies = true;
             }
         }
 
@@ -1082,7 +1080,7 @@ inline int32_t WINAPI WinGetGetInstalledCount(uint32_t* pCount) {
     return WINGET_S_OK;
 }
 
-inline int WINAPI WinGetMain(int argc, const char** argv) {
+inline int WINAPI WinGetMain(int argc, const char** /*argv*/) {
     if (argc < 2) return 0;
     return 0;
 }

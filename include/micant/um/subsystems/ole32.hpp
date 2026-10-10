@@ -199,6 +199,8 @@ public:
         }
     }
 
+    [[nodiscard]] bool getDeleteOnRelease() const noexcept { return m_deleteOnRelease; }
+
     virtual HRESULT QueryInterface(REFIID riid, void** ppvObject) override {
         if (!ppvObject) return E_POINTER;
         if (riid == IID_IUnknown || riid == IID_ISequentialStream || riid == IID_IStream) {
@@ -328,8 +330,8 @@ inline const IID IID_IEnumConnectionPoints = {
     0xb196b285, 0xbab4, 0x101a, { 0xb6, 0x9c, 0x00, 0xaa, 0x00, 0x34, 0x1d, 0x07 }
 };
 
-struct IConnectionPoint;
-struct IEnumConnectionPoints;
+class IConnectionPoint;
+class IEnumConnectionPoints;
 
 class IConnectionPointContainer : public IUnknown {
 public:

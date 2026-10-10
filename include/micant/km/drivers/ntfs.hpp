@@ -477,7 +477,8 @@ public:
         LogEntry entry{
             .lsn = lastCheckpointLsn_,
             .op = LogOperation::Checkpoint,
-            .recordNumber = MFT_REC_LOGFILE
+            .recordNumber = MFT_REC_LOGFILE,
+            .redoData = {}
         };
         entries_.push_back(std::move(entry));
     }

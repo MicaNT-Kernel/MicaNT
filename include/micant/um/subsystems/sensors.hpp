@@ -459,6 +459,16 @@ public:
         initDefaultSensors();
     }
 
+    void setEventSink(ISensorManagerEvents* sink) noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_managerSink = sink;
+    }
+
+    [[nodiscard]] ISensorManagerEvents* getEventSink() const noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_managerSink;
+    }
+
     std::vector<SensorHardwareRecord> getAllSensors() const {
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_sensors;

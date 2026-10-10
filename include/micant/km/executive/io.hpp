@@ -286,6 +286,10 @@ public:
         return queue_.size();
     }
 
+    [[nodiscard]] uint32_t getMaxConcurrentThreads() const noexcept {
+        return maxConcurrentThreads_;
+    }
+
 private:
     uint32_t maxConcurrentThreads_{0};
     std::queue<CompletionPacket> queue_;

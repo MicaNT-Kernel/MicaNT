@@ -144,7 +144,7 @@ inline SOCKET socket(int af, int type, int protocol) noexcept {
 }
 
 inline int bind(SOCKET s, const sockaddr* name, int namelen) noexcept {
-    if (s == INVALID_SOCKET || !name || namelen < sizeof(sockaddr_in)) {
+    if (s == INVALID_SOCKET || !name || namelen < static_cast<int>(sizeof(sockaddr_in))) {
         g_WsaLastError = WSAEINVAL;
         return SOCKET_ERROR;
     }
@@ -186,19 +186,19 @@ inline SOCKET accept(SOCKET s, sockaddr* addr, int* addrlen) noexcept {
         return INVALID_SOCKET;
     }
 
-    if (addr && addrlen && *addrlen >= sizeof(sockaddr_in)) {
+    if (addr && addrlen && *addrlen >= static_cast<int>(sizeof(sockaddr_in))) {
         auto* in = reinterpret_cast<sockaddr_in*>(addr);
         in->sin_family = AF_INET;
         in->sin_port = htons(remotePort);
         in->sin_addr.S_un.S_addr = remoteIp.addr;
-        *addrlen = sizeof(sockaddr_in);
+        *addrlen = static_cast<int>(sizeof(sockaddr_in));
     }
 
     return static_cast<SOCKET>(clientSock);
 }
 
 inline int connect(SOCKET s, const sockaddr* name, int namelen) noexcept {
-    if (s == INVALID_SOCKET || !name || namelen < sizeof(sockaddr_in)) {
+    if (s == INVALID_SOCKET || !name || namelen < static_cast<int>(sizeof(sockaddr_in))) {
         g_WsaLastError = WSAEINVAL;
         return SOCKET_ERROR;
     }
@@ -241,7 +241,7 @@ inline int recv(SOCKET s, char* buf, int len, int /*flags*/) noexcept {
 }
 
 inline int sendto(SOCKET s, const char* buf, int len, int /*flags*/, const sockaddr* to, int tolen) noexcept {
-    if (s == INVALID_SOCKET || !buf || len < 0 || !to || tolen < sizeof(sockaddr_in)) {
+    if (s == INVALID_SOCKET || !buf || len < 0 || !to || tolen < static_cast<int>(sizeof(sockaddr_in))) {
         g_WsaLastError = WSAEINVAL;
         return SOCKET_ERROR;
     }

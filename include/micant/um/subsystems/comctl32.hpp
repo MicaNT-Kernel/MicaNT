@@ -239,6 +239,7 @@ public:
 
     [[nodiscard]] int getWidth() const noexcept { return m_cx; }
     [[nodiscard]] int getHeight() const noexcept { return m_cy; }
+    [[nodiscard]] UINT getFlags() const noexcept { return m_flags; }
     [[nodiscard]] int getImageCount() const noexcept { return static_cast<int>(m_images.size()); }
 
     int add(HBITMAP hbmImage, HBITMAP /*hbmMask*/) {

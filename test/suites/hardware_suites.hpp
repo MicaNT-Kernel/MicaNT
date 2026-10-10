@@ -2448,6 +2448,7 @@ void Test_NDIS688_HighSpeedNetworking_Subsystem() {
     auto vnetAdp = std::dynamic_pointer_cast<ndis::VirtualNetworkAdapter>(ndisSub.getAdapter(L"vnet0"));
     TEST_ASSERT(vnetAdp != nullptr, "Virtual network adapter (vnet0) must exist");
     auto vnetStats = vnetAdp->getStatistics();
+    (void)vnetStats;
     TEST_ASSERT(vnetAdp->getMtu() == ndis::DEFAULT_MTU, "vnet0 MTU must be 1500");
 
     // Stage 13: Dynamic Loader C ABI Exports (ndis.sys & razzlenet.sys)

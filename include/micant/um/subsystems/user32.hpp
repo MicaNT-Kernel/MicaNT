@@ -644,7 +644,7 @@ public:
         return defWindowProc(lpMsg->hwnd, lpMsg->message, lpMsg->wParam, lpMsg->lParam);
     }
 
-    LRESULT defWindowProc(win32::HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    LRESULT defWindowProc(win32::HWND hWnd, UINT uMsg, WPARAM /*wParam*/, LPARAM /*lParam*/) {
         switch (uMsg) {
             case WM_NCCREATE:
                 return 1;

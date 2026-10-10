@@ -1133,13 +1133,13 @@ public:
         return ole32::S_OK;
     }
 
-    ole32::HRESULT __stdcall VolumeStepUp(const GUID* pguidEventContext) override {
+    ole32::HRESULT __stdcall VolumeStepUp(const GUID* /*pguidEventContext*/) override {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_masterVolume = std::min(1.0f, m_masterVolume + 0.01f);
         return ole32::S_OK;
     }
 
-    ole32::HRESULT __stdcall VolumeStepDown(const GUID* pguidEventContext) override {
+    ole32::HRESULT __stdcall VolumeStepDown(const GUID* /*pguidEventContext*/) override {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_masterVolume = std::max(0.0f, m_masterVolume - 0.01f);
         return ole32::S_OK;

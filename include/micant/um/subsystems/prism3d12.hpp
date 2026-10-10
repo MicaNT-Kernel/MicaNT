@@ -502,6 +502,8 @@ public:
     Prism3D12CommandAllocatorImpl(ID3D12Device* pDev, D3D12_COMMAND_LIST_TYPE type)
         : m_pDevice(pDev), m_type(type) {}
 
+    [[nodiscard]] D3D12_COMMAND_LIST_TYPE GetType() const noexcept { return m_type; }
+
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;
         if (riid == IID_IUnknown || riid == IID_ID3D12Object || riid == IID_ID3D12DeviceChild || riid == IID_ID3D12CommandAllocator) {
@@ -1088,6 +1090,8 @@ public:
     ~Prism3D12DeviceImpl() override {
         if (m_pAdapter) m_pAdapter->Release();
     }
+
+    [[nodiscard]] D3D_FEATURE_LEVEL GetFeatureLevel() const noexcept { return m_featureLevel; }
 
     int32_t QueryInterface(const IID& riid, void** ppv) override {
         if (!ppv) return -1;

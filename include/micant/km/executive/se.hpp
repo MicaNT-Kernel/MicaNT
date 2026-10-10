@@ -268,6 +268,11 @@ public:
     [[nodiscard]] uint32_t getSessionId() const noexcept { return sessionId_; }
     void setSessionId(uint32_t id) noexcept { sessionId_ = id; }
 
+    void setTokenType(TokenType t) noexcept { tokenType_ = t; }
+
+    [[nodiscard]] SecurityImpersonationLevel getImpersonationLevel() const noexcept { return impersonationLevel_; }
+    void setImpersonationLevel(SecurityImpersonationLevel level) noexcept { impersonationLevel_ = level; }
+
     // Factory Helpers
     [[nodiscard]] static std::shared_ptr<TokenObject> createSystemToken() {
         auto token = std::make_shared<TokenObject>(Sid::localSystem());

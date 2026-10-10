@@ -613,7 +613,7 @@ public:
         return s_instance;
     }
 
-    bool createEntry(std::string_view url, uint32_t /*expectedSize*/, std::string_view ext, std::string& outLocalPath) {
+    bool createEntry(std::string_view /*url*/, uint32_t /*expectedSize*/, std::string_view ext, std::string& outLocalPath) {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::string safeExt(ext);
         if (safeExt.empty()) safeExt = "dat";
@@ -1299,7 +1299,7 @@ inline win32::BOOL __stdcall HttpSendRequestA(
 inline win32::BOOL __stdcall HttpSendRequestW(
     HINTERNET      hRequest,
     const wchar_t* lpszHeaders,
-    uint32_t       dwHeadersLength,
+    uint32_t       /*dwHeadersLength*/,
     void*          lpOptional,
     uint32_t       dwOptionalLength
 ) {

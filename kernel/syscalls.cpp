@@ -24,7 +24,7 @@ static Handle g_NextFileHandle = 0x200;
 static Handle g_NextSectionHandle = 0x300;
 
 NtStatus NtAllocateVirtualMemory(
-    Handle processHandle,
+    Handle /*processHandle*/,
     uintptr_t* baseAddress,
     uintptr_t /*zeroBits*/,
     size_t* regionSize,
@@ -44,7 +44,7 @@ NtStatus NtAllocateVirtualMemory(
 }
 
 NtStatus NtFreeVirtualMemory(
-    Handle processHandle,
+    Handle /*processHandle*/,
     uintptr_t* baseAddress,
     size_t* regionSize,
     uint32_t freeType
@@ -58,10 +58,10 @@ NtStatus NtFreeVirtualMemory(
 }
 
 NtStatus NtProtectVirtualMemory(
-    Handle processHandle,
+    Handle /*processHandle*/,
     uintptr_t* baseAddress,
     size_t* regionSize,
-    uint32_t newProtect,
+    uint32_t /*newProtect*/,
     uint32_t* oldProtect
 ) {
     if (!baseAddress || !regionSize) {
@@ -202,7 +202,7 @@ NtStatus NtCreateNamedPipeFile(
 
 NtStatus NtCreateMailslotFile(
     Handle* fileHandle,
-    uint32_t desiredAccess,
+    uint32_t /*desiredAccess*/,
     ObjectAttributes* objectAttributes,
     IoStatusBlock* ioStatusBlock,
     uint32_t /*createOptions*/,
@@ -691,7 +691,7 @@ NtStatus NtCancelTimer(Handle timerHandle, bool* currentSignaledState) {
 }
 
 NtStatus NtQuerySystemInformation(
-    uint32_t systemInformationClass,
+    uint32_t /*systemInformationClass*/,
     void* systemInformation,
     uint32_t systemInformationLength,
     uint32_t* returnLength
@@ -707,7 +707,7 @@ NtStatus NtQuerySystemInformation(
 
 NtStatus NtCreateSection(
     Handle* sectionHandle,
-    uint32_t desiredAccess,
+    uint32_t /*desiredAccess*/,
     ObjectAttributes* /*objectAttributes*/,
     LargeInteger* maximumSize,
     uint32_t sectionPageProtection,

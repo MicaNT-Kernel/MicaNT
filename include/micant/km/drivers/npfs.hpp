@@ -225,6 +225,10 @@ public:
         return totalBytesAvailable_;
     }
 
+    [[nodiscard]] size_t getCapacity() const noexcept {
+        return capacity_;
+    }
+
 private:
     size_t capacity_{4096};
     mutable std::mutex mutex_;

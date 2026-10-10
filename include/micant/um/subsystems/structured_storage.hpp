@@ -571,6 +571,8 @@ public:
         }
     }
 
+    [[nodiscard]] bool getDeleteOnRelease() const noexcept { return m_deleteOnRelease; }
+
     virtual HRESULT QueryInterface(REFIID riid, void** ppvObject) override {
         if (!ppvObject) return E_POINTER;
         if (riid == IID_IUnknown || riid == IID_ILockBytes) {

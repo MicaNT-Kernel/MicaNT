@@ -351,6 +351,7 @@ public:
         if (nt64->signature != pe::IMAGE_NT_SIGNATURE) return false;
 
         bool is64 = (nt64->optionalHeader.magic == pe::IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+        (void)is64;
         uint16_t numSections = nt64->fileHeader.numberOfSections;
         size_t optHdrSize = nt64->fileHeader.sizeOfOptionalHeader;
 

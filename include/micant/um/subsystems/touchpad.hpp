@@ -550,6 +550,12 @@ private:
 public:
     GestureEngine() = default;
 
+    void setGestureLogging(bool enabled) noexcept { m_gestureLogging = enabled; }
+    [[nodiscard]] bool isGestureLogging() const noexcept { return m_gestureLogging; }
+    [[nodiscard]] uint64_t getLastReportTimeUs() const noexcept { return m_lastReportTimeUs; }
+    [[nodiscard]] uint32_t getTapCandidateCount() const noexcept { return m_tapCandidateCount; }
+    [[nodiscard]] uint64_t getTapStartTimeUs() const noexcept { return m_tapStartTimeUs; }
+
     std::vector<GestureEvent> processReport(const PtpReport& report, bool naturalScrolling = true) {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::vector<GestureEvent> events;

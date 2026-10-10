@@ -378,6 +378,10 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_sessions.size();
     }
+
+    [[nodiscard]] uint32_t getNextSessionId() const noexcept {
+        return m_nextSessionId;
+    }
 };
 
 } // namespace micant::conhost

@@ -210,7 +210,7 @@ void Test_WindowsMbbCx_MBIM40_5G_Subsystem() {
     std::atomic<uint32_t> totalPacketsHandled{0};
     std::vector<std::thread> stressThreads;
     for (int t = 0; t < 4; ++t) {
-        stressThreads.emplace_back([primaryAdapter, &totalPacketsHandled, t]() {
+        stressThreads.emplace_back([primaryAdapter, &totalPacketsHandled]() {
             uint32_t thSid = primaryAdapter->establishDataSession(L"stress_apn", "10.200.0.1", "fe80::100");
             for (int p = 0; p < 25; ++p) {
                 if (primaryAdapter->transmitPacket(thSid, 512)) {
@@ -3180,7 +3180,7 @@ void Test_WindowsActiveDirectory_KerberosKDC_Subsystem() {
     stressThreads.reserve(10);
 
     for (int t = 0; t < 10; ++t) {
-        stressThreads.emplace_back([&sys, &stressSuccessCount, t]() {
+        stressThreads.emplace_back([&sys, &stressSuccessCount]() {
             for (int i = 0; i < 10; ++i) {
                 micant::activedirectory::KerberosTicket loopTgt{};
                 bool aOk = sys.authenticateAsReq("Administrator", "micant.internal", loopTgt);
@@ -7846,7 +7846,7 @@ void Test_Retail_Ecosystem_100_Percent_Coverage() {
     std::vector<std::thread> workers;
     workers.reserve(8);
     for (int t = 0; t < 8; ++t) {
-        workers.emplace_back([&stressCompleted, &loader, t]() {
+        workers.emplace_back([&stressCompleted, &loader]() {
             for (int i = 0; i < 50; ++i) {
                 void* p1 = loader.getExportOrdinal("ws2_32.dll", 1 + (i % 23));
                 (void)p1;
@@ -8039,7 +8039,7 @@ inline void Test_Rufus_Storage_And_NtSyscalls_Suite() {
     std::vector<std::thread> workers;
     workers.reserve(8);
     for (int t = 0; t < 8; ++t) {
-        workers.emplace_back([&stressDone, &loader, t]() {
+        workers.emplace_back([&stressDone]() {
             for (int i = 0; i < 50; ++i) {
                 // Exercise Volume & SetupAPI
                 char vName[128] = { 0 };
@@ -8433,7 +8433,7 @@ inline void Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite() {
     std::vector<std::thread> workers;
     workers.reserve(8);
     for (int t = 0; t < 8; ++t) {
-        workers.emplace_back([&syncOps, t, hJob]() {
+        workers.emplace_back([&syncOps, t]() {
             for (int i = 0; i < 50; ++i) {
                 // 1. Interlocked operations
                 int32_t localVal = t * 100 + i;

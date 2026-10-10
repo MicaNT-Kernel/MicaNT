@@ -624,6 +624,7 @@ public:
         m_enabled = enable;
     }
     [[nodiscard]] bool isEnabled() const noexcept { return m_enabled; }
+    [[nodiscard]] void* getHwnd() const noexcept { return m_hwnd; }
 
     void setDefaultAttributes(const DrawingAttributes& attrs) noexcept {
         std::lock_guard<std::mutex> lock(m_mutex);
