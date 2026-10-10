@@ -198,6 +198,9 @@ public:
         createSymbolicLink(L"\\DosDevices\\PIPE", L"\\Device\\NamedPipe");
         createSymbolicLink(L"\\DosDevices\\MAILSLOT", L"\\Device\\Mailslot");
         createSymbolicLink(L"\\DosDevices\\PhysicalDrive0", L"\\Device\\Harddisk0");
+        createSymbolicLink(L"\\Device\\HarddiskVolume1", L"\\Device\\Harddisk0\\Partition1");
+        createSymbolicLink(L"\\??", L"\\DosDevices");
+        createSymbolicLink(L"\\GLOBAL??", L"\\DosDevices");
     }
 
     bool createDirectory(std::wstring_view fullPath) {
@@ -220,9 +223,11 @@ public:
 
     [[nodiscard]] std::wstring resolvePath(std::wstring_view path) const {
         std::wstring current(path);
-        // Canonical NT prefix normalization (\??\ and \\.\ -> \DosDevices\)
+        // Canonical NT prefix normalization (\??\, \GLOBAL??\, and \\.\ -> \DosDevices\)
         if (current.starts_with(L"\\??\\")) {
             current = L"\\DosDevices\\" + current.substr(4);
+        } else if (current.starts_with(L"\\GLOBAL??\\")) {
+            current = L"\\DosDevices\\" + current.substr(10);
         } else if (current.starts_with(L"\\\\.\\")) {
             current = L"\\DosDevices\\" + current.substr(4);
         }

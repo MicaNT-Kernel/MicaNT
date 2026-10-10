@@ -144,6 +144,27 @@ public:
         fastFatDriver_->setDispatch(io::IRP_MJ_READ, &VirtualFileSystem::dispatchRead);
         fastFatDriver_->setDispatch(io::IRP_MJ_WRITE, &VirtualFileSystem::dispatchWrite);
         fastFatDriver_->setDispatch(io::IRP_MJ_CLOSE, &VirtualFileSystem::dispatchClose);
+        fastFatDriver_->setDispatch(io::IRP_MJ_FILE_SYSTEM_CONTROL, &VirtualFileSystem::dispatchFileSystemControl);
+
+        fastIoTable_.fastIoRead = [](void* fileObject, LargeInteger* offset, uint32_t length, bool, void* buffer, IoStatusBlock* ioStatus, io::DeviceObject*) -> bool {
+            if (!fileObject || !buffer || !ioStatus) return false;
+            auto* fileObj = static_cast<FileObject*>(fileObject);
+            uint32_t bytesRead = 0;
+            NtStatus st = VirtualFileSystem::get().readFile(fileObj, buffer, length, offset, bytesRead);
+            ioStatus->status = st;
+            ioStatus->information = bytesRead;
+            return NT_SUCCESS(st);
+        };
+        fastIoTable_.fastIoWrite = [](void* fileObject, LargeInteger* offset, uint32_t length, bool, const void* buffer, IoStatusBlock* ioStatus, io::DeviceObject*) -> bool {
+            if (!fileObject || !buffer || !ioStatus) return false;
+            auto* fileObj = static_cast<FileObject*>(fileObject);
+            uint32_t bytesWritten = 0;
+            NtStatus st = VirtualFileSystem::get().writeFile(fileObj, buffer, length, offset, bytesWritten);
+            ioStatus->status = st;
+            ioStatus->information = bytesWritten;
+            return NT_SUCCESS(st);
+        };
+        fastFatDriver_->fastIoDispatch = &fastIoTable_;
 
         // Create partition device node
         partitionDevice_ = io::IoManager::get().createDevice(
@@ -202,7 +223,24 @@ public:
             mountedDevice_.reset();
             return st;
         }
+
+        // Initialize canonical NT Volume Parameter Block (VPB)
+        vpb_ = std::make_unique<io::Vpb>();
+        vpb_->flags = io::VPB_MOUNTED;
+        vpb_->realDevice = partitionDevice_.get();
+        vpb_->deviceObject = partitionDevice_.get();
+        vpb_->serialNumber = 0x53494D53;
+        std::wcsncpy(vpb_->volumeLabel, L"MICANT_SYS", 31);
+        vpb_->volumeLabelLength = 10 * sizeof(wchar_t);
+        if (partitionDevice_) {
+            partitionDevice_->vpb = vpb_.get();
+        }
+
         return NtStatus::Success;
+    }
+
+    [[nodiscard]] io::Vpb* getVpb() const noexcept {
+        return vpb_.get();
     }
 
     [[nodiscard]] std::shared_ptr<fat32::Fat32FileSystem> getMountedFat32() const noexcept {
@@ -728,6 +766,19 @@ private:
         return NtStatus::Success;
     }
 
+    static NtStatus dispatchFileSystemControl(io::DeviceObject* dev, io::Irp* irp) {
+        (void)dev;
+        if (!irp) return NtStatus::InvalidDeviceRequest;
+        auto* stack = io::IoGetCurrentIrpStackLocation(irp);
+        if (stack && stack->minorFunction == io::IRP_MN_MOUNT_VOLUME) {
+            irp->ioStatus.status = NtStatus::Success;
+            irp->ioStatus.information = 0;
+            return NtStatus::Success;
+        }
+        irp->ioStatus.status = NtStatus::Success;
+        return NtStatus::Success;
+    }
+
     std::wstring normalizePath(std::wstring_view path) const {
         std::wstring res(path);
         // Strip DOS drive prefix like DosDevices/C: or ??/C: or C:
@@ -819,6 +870,8 @@ private:
     std::shared_ptr<fat32::Fat32FileSystem> fat32Fs_;
     std::shared_ptr<ntfs::NtfsFileSystem> ntfsFs_;
     std::unordered_map<FileObject*, std::pair<uint64_t, std::wstring>> openNtfsFiles_;
+    io::FastIoDispatch fastIoTable_{};
+    std::unique_ptr<io::Vpb> vpb_;
 };
 
 } // namespace micant::fs

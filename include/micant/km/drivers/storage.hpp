@@ -71,6 +71,9 @@ inline constexpr uint32_t IOCTL_DISK_GET_DRIVE_GEOMETRY_EX =
 inline constexpr uint32_t IOCTL_STORAGE_GET_DEVICE_NUMBER =
     driver::CTL_CODE(IOCTL_STORAGE_BASE, 0x0420, driver::METHOD_BUFFERED, driver::FILE_ANY_ACCESS); // 0x002D1080
 
+inline constexpr uint32_t IOCTL_DISK_GET_PARTITION_INFO_EX =
+    driver::CTL_CODE(IOCTL_DISK_BASE, 0x0012, driver::METHOD_BUFFERED, driver::FILE_ANY_ACCESS); // 0x00070048
+
 enum class MEDIA_TYPE : uint32_t {
     Unknown = 0,
     F5_1Pt2_512,
@@ -111,6 +114,51 @@ struct STORAGE_DEVICE_NUMBER {
     uint32_t PartitionNumber{0};
 };
 
+enum class PARTITION_STYLE : uint32_t {
+    Mbr = 0,
+    Gpt = 1,
+    Raw = 2
+};
+
+struct PARTITION_INFORMATION {
+    LargeInteger StartingOffset{};
+    LargeInteger PartitionLength{};
+    uint32_t HiddenSectors{0};
+    uint32_t PartitionNumber{0};
+    uint8_t PartitionType{0};
+    bool BootIndicator{false};
+    bool RecognizedPartition{false};
+    bool RewritePartition{false};
+};
+
+struct PARTITION_INFORMATION_MBR {
+    uint8_t PartitionType{0};
+    bool BootIndicator{false};
+    bool RecognizedPartition{false};
+    uint32_t HiddenSectors{0};
+    GUID PartitionId{};
+};
+
+struct PARTITION_INFORMATION_GPT {
+    GUID PartitionType{};
+    GUID PartitionId{};
+    uint64_t Attributes{0};
+    wchar_t Name[36]{0};
+};
+
+struct PARTITION_INFORMATION_EX {
+    PARTITION_STYLE PartitionStyle{PARTITION_STYLE::Mbr};
+    LargeInteger StartingOffset{};
+    LargeInteger PartitionLength{};
+    uint32_t PartitionNumber{0};
+    bool RewritePartition{false};
+    bool IsServicePartition{false};
+    union {
+        PARTITION_INFORMATION_MBR Mbr;
+        PARTITION_INFORMATION_GPT Gpt;
+    };
+};
+
 /**
  * @brief Abstract Block Device Interface (IBlockDevice).
  */
@@ -144,6 +192,10 @@ public:
         geom.BytesPerSector = bytesPerSector;
         return geom;
     }
+
+    [[nodiscard]] virtual uint64_t getStartLba() const noexcept { return 0; }
+    [[nodiscard]] virtual uint32_t getPartitionNumber() const noexcept { return 0; }
+    [[nodiscard]] virtual uint8_t getPartitionType() const noexcept { return 0; }
 };
 
 /**
@@ -229,7 +281,9 @@ public:
     }
 
     [[nodiscard]] uint64_t getTotalBlocks() const noexcept override { return blockCount_; }
-    [[nodiscard]] uint64_t getStartLba() const noexcept { return startLba_; }
+    [[nodiscard]] uint64_t getStartLba() const noexcept override { return startLba_; }
+    [[nodiscard]] uint32_t getPartitionNumber() const noexcept override { return 1; }
+    [[nodiscard]] uint8_t getPartitionType() const noexcept override { return MBR_TYPE_FAT32_LBA; }
     [[nodiscard]] const std::wstring& getDeviceName() const noexcept override { return name_; }
 
 private:
@@ -479,6 +533,49 @@ inline NtStatus DiskDriverDispatch(io::DeviceObject* dev, io::Irp* irp) {
                     return NtStatus::Success;
                 }
 
+                case IOCTL_DISK_GET_PARTITION_INFO: {
+                    if (irp->length < sizeof(PARTITION_INFORMATION) || !irp->userBuffer) {
+                        irp->ioStatus.status = NtStatus::BufferTooSmall;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    PARTITION_INFORMATION partInfo{};
+                    uint64_t startLba = blockDevice->getStartLba();
+                    uint32_t blockSize = blockDevice->getBlockSize();
+                    partInfo.StartingOffset.quadPart = static_cast<int64_t>(startLba * blockSize);
+                    partInfo.PartitionLength.quadPart = static_cast<int64_t>(blockDevice->getTotalBytes());
+                    partInfo.HiddenSectors = static_cast<uint32_t>(startLba);
+                    partInfo.PartitionNumber = blockDevice->getPartitionNumber();
+                    partInfo.PartitionType = blockDevice->getPartitionType();
+                    partInfo.BootIndicator = (partInfo.PartitionNumber == 1);
+                    partInfo.RecognizedPartition = true;
+                    std::memcpy(irp->userBuffer, &partInfo, sizeof(PARTITION_INFORMATION));
+                    irp->ioStatus.status = NtStatus::Success;
+                    irp->ioStatus.information = sizeof(PARTITION_INFORMATION);
+                    return NtStatus::Success;
+                }
+
+                case IOCTL_DISK_GET_PARTITION_INFO_EX: {
+                    if (irp->length < sizeof(PARTITION_INFORMATION_EX) || !irp->userBuffer) {
+                        irp->ioStatus.status = NtStatus::BufferTooSmall;
+                        return NtStatus::BufferTooSmall;
+                    }
+                    PARTITION_INFORMATION_EX partInfoEx{};
+                    partInfoEx.PartitionStyle = PARTITION_STYLE::Mbr;
+                    uint64_t startLba = blockDevice->getStartLba();
+                    uint32_t blockSize = blockDevice->getBlockSize();
+                    partInfoEx.StartingOffset.quadPart = static_cast<int64_t>(startLba * blockSize);
+                    partInfoEx.PartitionLength.quadPart = static_cast<int64_t>(blockDevice->getTotalBytes());
+                    partInfoEx.PartitionNumber = blockDevice->getPartitionNumber();
+                    partInfoEx.Mbr.PartitionType = blockDevice->getPartitionType();
+                    partInfoEx.Mbr.BootIndicator = (partInfoEx.PartitionNumber == 1);
+                    partInfoEx.Mbr.RecognizedPartition = true;
+                    partInfoEx.Mbr.HiddenSectors = static_cast<uint32_t>(startLba);
+                    std::memcpy(irp->userBuffer, &partInfoEx, sizeof(PARTITION_INFORMATION_EX));
+                    irp->ioStatus.status = NtStatus::Success;
+                    irp->ioStatus.information = sizeof(PARTITION_INFORMATION_EX);
+                    return NtStatus::Success;
+                }
+
                 case IOCTL_STORAGE_GET_DEVICE_NUMBER: {
                     if (irp->length < sizeof(STORAGE_DEVICE_NUMBER) || !irp->userBuffer) {
                         irp->ioStatus.status = NtStatus::BufferTooSmall;
@@ -487,7 +584,7 @@ inline NtStatus DiskDriverDispatch(io::DeviceObject* dev, io::Irp* irp) {
                     STORAGE_DEVICE_NUMBER devNum{
                         .DeviceType = IOCTL_DISK_BASE,
                         .DeviceNumber = 0,
-                        .PartitionNumber = 0
+                        .PartitionNumber = blockDevice->getPartitionNumber()
                     };
                     std::memcpy(irp->userBuffer, &devNum, sizeof(STORAGE_DEVICE_NUMBER));
                     irp->ioStatus.status = NtStatus::Success;

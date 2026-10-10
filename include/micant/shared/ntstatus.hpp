@@ -51,6 +51,7 @@ enum class NtStatus : uint32_t {
     NoSuchFile                       = 0xC000000F,
     InvalidDeviceRequest             = 0xC0000010,
     EndOfFile                        = 0xC0000011,
+    MoreProcessingRequired           = 0xC0000016,
     NoMemory                         = 0xC0000017,
     Conflict                         = 0xC0000018,
     InsufficientResources            = 0xC000009A,
