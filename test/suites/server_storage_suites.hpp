@@ -1,5 +1,7 @@
 #pragma once
 
+#include "legacy_satellite_compat.hpp"
+
 /**
  * @file server_storage_suites.hpp
  * @brief Storage Spaces, Clustering, Hyper-V & Enterprise Server Roles (Milestones 186-210)

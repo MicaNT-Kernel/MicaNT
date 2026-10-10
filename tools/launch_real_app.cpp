@@ -35,7 +35,6 @@
 #include "micant/uxtheme.hpp"
 #include "micant/ws2_32.hpp"
 #include "micant/iphlpapi.hpp"
-#include "micant/satellite_win32.hpp"
 #include "micant/user32_extended.hpp"
 #include "micant/winmm.hpp"
 #include "micant/mpr.hpp"
@@ -129,7 +128,6 @@ static void InitializeAllMicaNtExports() {
     uxtheme::InitializeUxThemeSubsystemExports();
     ws2_32::InitializeWs2_32SubsystemExports();
     iphlpapi::InitializeIpHlpApiSubsystemExports();
-    satellite::InitializeSatelliteWin32Exports();
     user32::InitializeUser32ExtendedExports();
     winmm::InitializeWinMMExports();
     mpr::InitializeMprSubsystemExports();
