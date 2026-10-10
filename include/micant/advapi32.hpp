@@ -1539,8 +1539,13 @@ inline int32_t RegDeleteKeyExW([[maybe_unused]] void* hKey, [[maybe_unused]] con
     return 0; // ERROR_SUCCESS
 }
 
+inline int32_t RegSetKeySecurity([[maybe_unused]] void* hKey, [[maybe_unused]] uint32_t SecurityInformation, [[maybe_unused]] void* pSecurityDescriptor) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
+    ldr.registerExport("advapi32.dll", "RegSetKeySecurity", reinterpret_cast<void*>(RegSetKeySecurity));
     ldr.registerExport("advapi32.dll", "CryptAcquireContextA", reinterpret_cast<void*>(CryptAcquireContextA));
     ldr.registerExport("advapi32.dll", "CryptAcquireContextW", reinterpret_cast<void*>(CryptAcquireContextW));
     ldr.registerExport("advapi32.dll", "CryptReleaseContext", reinterpret_cast<void*>(CryptReleaseContext));

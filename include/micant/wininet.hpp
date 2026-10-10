@@ -1859,6 +1859,20 @@ inline uint32_t InternetSetOptionW(HINTERNET /*hInternet*/, uint32_t /*dwOption*
     return 1; // TRUE
 }
 
+inline win32::BOOL __stdcall InternetGetLastResponseInfoA(uint32_t* lpdwError, char* lpszBuffer, uint32_t* lpdwBufferLength) noexcept {
+    if (lpdwError) *lpdwError = 0;
+    if (lpszBuffer && lpdwBufferLength && *lpdwBufferLength > 0) {
+        lpszBuffer[0] = '\0';
+        *lpdwBufferLength = 0;
+    }
+    return 1;
+}
+
+inline HINTERNET __stdcall InternetOpenUrlW(HINTERNET /*hInternet*/, const wchar_t* /*lpszUrl*/, const wchar_t* /*lpszHeaders*/, uint32_t /*dwHeadersLength*/, uint32_t /*dwFlags*/, uintptr_t /*dwContext*/) noexcept {
+    static uintptr_t s_hurl = 0x9200;
+    return reinterpret_cast<HINTERNET>(++s_hurl);
+}
+
 // ============================================================================
 // 11. Subsystem Export Registration
 // ============================================================================
@@ -1897,6 +1911,8 @@ inline void InitializeWinINetSubsystemExports() {
     ldr.registerExport("wininet.dll", "CreateUrlCacheEntryW", reinterpret_cast<void*>(CreateUrlCacheEntryW));
     ldr.registerExport("wininet.dll", "CommitUrlCacheEntryA", reinterpret_cast<void*>(CommitUrlCacheEntryA));
     ldr.registerExport("wininet.dll", "CommitUrlCacheEntryW", reinterpret_cast<void*>(CommitUrlCacheEntryW));
+    ldr.registerExport("wininet.dll", "InternetGetLastResponseInfoA", reinterpret_cast<void*>(InternetGetLastResponseInfoA));
+    ldr.registerExport("wininet.dll", "InternetOpenUrlW", reinterpret_cast<void*>(InternetOpenUrlW));
 }
 
 } // namespace micant::wininet

@@ -1564,6 +1564,67 @@ inline HRESULT SHCreateStreamOnFileW([[maybe_unused]] const wchar_t* pszFile, [[
     return S_OK;
 }
 
+inline void SHAddToRecentDocs([[maybe_unused]] uint32_t uFlags, [[maybe_unused]] const void* pv) noexcept {}
+
+inline void* ShellOrdinal190([[maybe_unused]] const wchar_t* pszPath) noexcept {
+    static uint8_t s_pidl[4] = { 0x02, 0x00, 0x00, 0x00 };
+    return s_pidl;
+}
+
+inline PCWSTR StrStrW(PCWSTR pszFirst, PCWSTR pszSrch) noexcept {
+    if (!pszFirst || !pszSrch) return nullptr;
+    return std::wcsstr(pszFirst, pszSrch);
+}
+
+inline PCWSTR StrRStrIW(PCWSTR pszSource, PCWSTR pszLast, PCWSTR pszSrch) noexcept {
+    if (!pszSource || !pszSrch) return nullptr;
+    size_t srchLen = std::wcslen(pszSrch);
+    if (srchLen == 0) return pszSource;
+    const wchar_t* end = pszLast ? pszLast : (pszSource + std::wcslen(pszSource));
+    if (end < pszSource + srchLen) return nullptr;
+
+    const wchar_t* p = end - srchLen;
+    while (p >= pszSource) {
+        bool match = true;
+        for (size_t i = 0; i < srchLen; ++i) {
+            if (std::towlower(p[i]) != std::towlower(pszSrch[i])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return p;
+        --p;
+    }
+    return nullptr;
+}
+
+inline int32_t SHDeleteValueW([[maybe_unused]] void* hkey, [[maybe_unused]] const wchar_t* pszSubKey, [[maybe_unused]] const wchar_t* pszValue) noexcept { return 0; }
+inline int32_t SHDeleteKeyW([[maybe_unused]] void* hkey, [[maybe_unused]] const wchar_t* pszSubKey) noexcept { return 0; }
+inline int32_t SHSetValueW([[maybe_unused]] void* hkey, [[maybe_unused]] const wchar_t* pszSubKey, [[maybe_unused]] const wchar_t* pszValue, [[maybe_unused]] uint32_t dwType, [[maybe_unused]] const void* pvData, [[maybe_unused]] uint32_t cbData) noexcept { return 0; }
+inline int32_t SHGetValueW([[maybe_unused]] void* hkey, [[maybe_unused]] const wchar_t* pszSubKey, [[maybe_unused]] const wchar_t* pszValue, uint32_t* pdwType, [[maybe_unused]] void* pvData, uint32_t* pcbData) noexcept {
+    if (pdwType) *pdwType = 1; // REG_SZ
+    if (pcbData) *pcbData = 0;
+    return 0;
+}
+
+inline int32_t UrlEscapeW(const wchar_t* pszUrl, wchar_t* pszEscaped, uint32_t* pcchEscaped, [[maybe_unused]] uint32_t dwFlags) noexcept {
+    if (!pszUrl || !pcchEscaped) return -2147024809; // E_INVALIDARG
+    uint32_t len = static_cast<uint32_t>(std::wcslen(pszUrl));
+    if (*pcchEscaped < len + 1 || !pszEscaped) {
+        *pcchEscaped = len + 1;
+        return 1; // S_FALSE / buffer too small
+    }
+    std::wcsncpy(pszEscaped, pszUrl, *pcchEscaped);
+    *pcchEscaped = len;
+    return 0; // S_OK
+}
+
+inline int32_t QISearch(void* that, [[maybe_unused]] const void* pqit, [[maybe_unused]] const void* riid, void** ppv) noexcept {
+    if (!that || !ppv) return -2147467261;
+    *ppv = that;
+    return 0;
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
@@ -1611,6 +1672,8 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "SHFreeNameMappings", reinterpret_cast<void*>(SHFreeNameMappings));
     ldr.registerExportOrdinal("shell32.dll", 644, reinterpret_cast<void*>(ShellOrdinal644));
     ldr.registerExportOrdinal("shell32.dll", 645, reinterpret_cast<void*>(ShellOrdinal645));
+    ldr.registerExport("shell32.dll", "SHAddToRecentDocs", reinterpret_cast<void*>(SHAddToRecentDocs));
+    ldr.registerExportOrdinal("shell32.dll", 190, reinterpret_cast<void*>(ShellOrdinal190));
 
     // shlwapi.dll exports
     ldr.registerExport("shlwapi.dll", "PathSkipRootW", reinterpret_cast<void*>(PathSkipRootW));
@@ -1633,7 +1696,9 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shlwapi.dll", "PathIsRelativeA", reinterpret_cast<void*>(PathIsRelativeA));
     ldr.registerExport("shlwapi.dll", "PathIsDirectoryW", reinterpret_cast<void*>(PathIsDirectoryW));
     ldr.registerExport("shlwapi.dll", "PathIsDirectoryA", reinterpret_cast<void*>(PathIsDirectoryA));
+    ldr.registerExport("shlwapi.dll", "StrStrW", reinterpret_cast<void*>(StrStrW));
     ldr.registerExport("shlwapi.dll", "StrStrIW", reinterpret_cast<void*>(StrStrIW));
+    ldr.registerExport("shlwapi.dll", "StrRStrIW", reinterpret_cast<void*>(StrRStrIW));
     ldr.registerExport("shlwapi.dll", "StrStrIA", reinterpret_cast<void*>(StrStrIA));
     ldr.registerExport("shlwapi.dll", "StrCmpIW", reinterpret_cast<void*>(StrCmpIW));
     ldr.registerExport("shlwapi.dll", "StrCmpIA", reinterpret_cast<void*>(StrCmpIA));
@@ -1654,6 +1719,13 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shlwapi.dll", "PathAppendA", reinterpret_cast<void*>(PathAppendA));
     ldr.registerExport("shlwapi.dll", "PathStripPathA", reinterpret_cast<void*>(PathStripPathA));
     ldr.registerExport("shlwapi.dll", "StrRetToStrW", reinterpret_cast<void*>(StrRetToStrW));
+    ldr.registerExport("shlwapi.dll", "SHDeleteValueW", reinterpret_cast<void*>(SHDeleteValueW));
+    ldr.registerExport("shlwapi.dll", "SHDeleteKeyW", reinterpret_cast<void*>(SHDeleteKeyW));
+    ldr.registerExport("shlwapi.dll", "SHSetValueW", reinterpret_cast<void*>(SHSetValueW));
+    ldr.registerExport("shlwapi.dll", "SHGetValueW", reinterpret_cast<void*>(SHGetValueW));
+    ldr.registerExport("shlwapi.dll", "UrlEscapeW", reinterpret_cast<void*>(UrlEscapeW));
+    ldr.registerExport("shlwapi.dll", "QISearch", reinterpret_cast<void*>(QISearch));
+    ldr.registerExportOrdinal("shlwapi.dll", 219, reinterpret_cast<void*>(QISearch));
     ldr.registerExport("api-ms-win-shcore-scaling-l1-1-1.dll", "SetProcessDpiAwareness", reinterpret_cast<void*>(SetProcessDpiAwareness));
     ldr.registerExport("api-ms-win-shcore-scaling-l1-1-1.dll", "GetDpiForMonitor", reinterpret_cast<void*>(GetDpiForMonitor));
     ldr.registerExport("shcore.dll", "GetDpiForMonitor", reinterpret_cast<void*>(GetDpiForMonitor));

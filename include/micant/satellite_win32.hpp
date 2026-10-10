@@ -35,6 +35,11 @@
 #include "sspi.hpp"
 #include "crypt32.hpp"
 #include "ws2_32.hpp"
+#include "ole32.hpp"
+#include "urlmon.hpp"
+#include "wininet.hpp"
+#include "winspool.hpp"
+#include "uiautomation.hpp"
 #include "ldr.hpp"
 #include "mpr.hpp"
 #include "satellite_wiztree.hpp"
@@ -127,6 +132,11 @@ inline void InitializeSatelliteWin32Exports() {
     sspi::InitializeSspiSubsystemExports();
     crypt32::InitializeCrypt32SubsystemExports();
     ws2_32::InitializeWs2_32SubsystemExports();
+    ole32::InitializeOle32SubsystemExports();
+    urlmon::InitializeUrlMonSubsystemExports();
+    wininet::InitializeWinINetSubsystemExports();
+    winspool::InitializePrintSpoolerSubsystemExports();
+    uiautomation::InitializeUIAutomationSubsystemExports();
 
     // WizTree 4.x Subsystem Extensions
     wiztree::InitializeWizTreeWin32Exports();

@@ -1516,6 +1516,49 @@ inline win32::DWORD DdeQueryStringW(win32::DWORD /*idInst*/, void* /*hsz*/, win3
     return 0;
 }
 
+inline uint32_t DdeInitializeW(uint32_t* pidInst, [[maybe_unused]] void* pfnCallback, [[maybe_unused]] uint32_t afCmd, [[maybe_unused]] uint32_t ulRes) noexcept {
+    if (!pidInst) return 0x4002; // DMLERR_INVALIDPARAMETER
+    static uint32_t s_ddeInst = 0x5000;
+    *pidInst = ++s_ddeInst;
+    return 0; // DMLERR_NO_ERROR
+}
+
+inline win32::BOOL DdeUninitialize([[maybe_unused]] uint32_t idInst) noexcept {
+    return 1;
+}
+
+inline void* DdeCreateStringHandleW([[maybe_unused]] uint32_t idInst, [[maybe_unused]] const wchar_t* psz, [[maybe_unused]] int iCodePage) noexcept {
+    static uintptr_t s_hsz = 0x6000;
+    return reinterpret_cast<void*>(++s_hsz);
+}
+
+inline win32::BOOL DdeFreeStringHandle([[maybe_unused]] uint32_t idInst, [[maybe_unused]] void* hsz) noexcept {
+    return 1;
+}
+
+inline void* DdeConnect([[maybe_unused]] uint32_t idInst, [[maybe_unused]] void* hszService, [[maybe_unused]] void* hszTopic, [[maybe_unused]] void* pCC) noexcept {
+    static uintptr_t s_hconv = 0x7000;
+    return reinterpret_cast<void*>(++s_hconv);
+}
+
+inline win32::BOOL DdeDisconnect([[maybe_unused]] void* hConv) noexcept {
+    return 1;
+}
+
+inline void* DdeClientTransaction([[maybe_unused]] void* pData, [[maybe_unused]] uint32_t cbData, [[maybe_unused]] void* hConv, [[maybe_unused]] void* hszItem, [[maybe_unused]] uint32_t wFmt, [[maybe_unused]] uint32_t wType, [[maybe_unused]] uint32_t wTimeout, uint32_t* pdwResult) noexcept {
+    if (pdwResult) *pdwResult = 1;
+    static uintptr_t s_hdata = 0x8000;
+    return reinterpret_cast<void*>(++s_hdata);
+}
+
+inline win32::BOOL DdeFreeDataHandle([[maybe_unused]] void* hData) noexcept {
+    return 1;
+}
+
+inline int64_t PackDDElParam([[maybe_unused]] uint32_t msg, intptr_t pLo, intptr_t pHi) noexcept {
+    return static_cast<int64_t>((pHi << 32) | (pLo & 0xFFFFFFFF));
+}
+
 inline uintptr_t GetClassLongPtrA([[maybe_unused]] win32::HWND hWnd, [[maybe_unused]] int nIndex) noexcept {
     return 0;
 }
@@ -1617,6 +1660,77 @@ inline win32::BOOL GetClassInfoW(void* hInstance, const wchar_t* lpClassName, vo
         return win32::TRUE;
     }
     return win32::FALSE;
+}
+
+inline win32::HWND WindowFromDC([[maybe_unused]] void* hdc) noexcept {
+    return reinterpret_cast<win32::HWND>(0x9001);
+}
+
+inline win32::BOOL IsCharUpperW(wchar_t ch) noexcept {
+    return (ch >= L'A' && ch <= L'Z') ? 1 : 0;
+}
+
+inline win32::BOOL ShowWindowAsync([[maybe_unused]] win32::HWND hWnd, [[maybe_unused]] int nCmdShow) noexcept {
+    return 1;
+}
+
+inline win32::BOOL SetMenuInfo([[maybe_unused]] void* hmenu, [[maybe_unused]] const void* lpcmi) noexcept { return 1; }
+inline win32::BOOL GetMenuInfo([[maybe_unused]] void* hmenu, [[maybe_unused]] void* lpcmi) noexcept { return 1; }
+inline win32::BOOL SetMenuDefaultItem([[maybe_unused]] void* hMenu, [[maybe_unused]] uint32_t uItem, [[maybe_unused]] uint32_t fByPos) noexcept { return 1; }
+
+inline int16_t VkKeyScanExW(wchar_t ch, [[maybe_unused]] void* dwhkl) noexcept {
+    if (ch >= L'A' && ch <= L'Z') return static_cast<int16_t>((0x01 << 8) | (ch - L'A' + 0x41));
+    if (ch >= L'a' && ch <= L'z') return static_cast<int16_t>(ch - L'a' + 0x41);
+    if (ch >= L'0' && ch <= L'9') return static_cast<int16_t>(ch - L'0' + 0x30);
+    return 0;
+}
+
+inline uint32_t SendInput(uint32_t cInputs, [[maybe_unused]] void* pInputs, [[maybe_unused]] int cbSize) noexcept {
+    return cInputs;
+}
+
+inline win32::BOOL GetWindowInfo([[maybe_unused]] win32::HWND hwnd, void* pwi) noexcept {
+    if (!pwi) return 0;
+    struct WINDOWINFO_MOCK {
+        uint32_t cbSize;
+        int32_t rcWindow[4];
+        int32_t rcClient[4];
+        uint32_t dwStyle;
+        uint32_t dwExStyle;
+        uint32_t dwWindowStatus;
+        uint32_t cxWindowBorders;
+        uint32_t cyWindowBorders;
+        uint16_t atomWindowType;
+        uint16_t wCreatorVersion;
+    };
+    auto* wi = reinterpret_cast<WINDOWINFO_MOCK*>(pwi);
+    wi->cbSize = sizeof(WINDOWINFO_MOCK);
+    wi->rcWindow[0] = 100; wi->rcWindow[1] = 100; wi->rcWindow[2] = 900; wi->rcWindow[3] = 700;
+    wi->rcClient[0] = 100; wi->rcClient[1] = 130; wi->rcClient[2] = 900; wi->rcClient[3] = 700;
+    wi->dwStyle = 0x14CF0000; // WS_OVERLAPPEDWINDOW | WS_VISIBLE
+    wi->dwExStyle = 0;
+    wi->dwWindowStatus = 1; // WS_ACTIVECAPTION
+    wi->cxWindowBorders = 1;
+    wi->cyWindowBorders = 1;
+    return 1;
+}
+
+inline win32::BOOL CharToOemA(const char* lpszSrc, char* lpszDst) noexcept {
+    if (!lpszSrc || !lpszDst) return 0;
+    std::strcpy(lpszDst, lpszSrc);
+    return 1;
+}
+
+inline win32::BOOL OemToCharBuffA(const char* lpszSrc, char* lpszDst, uint32_t cchDstLength) noexcept {
+    if (!lpszSrc || !lpszDst || cchDstLength == 0) return 0;
+    std::strncpy(lpszDst, lpszSrc, cchDstLength);
+    return 1;
+}
+
+inline win32::BOOL OemToCharA(const char* lpszSrc, char* lpszDst) noexcept {
+    if (!lpszSrc || !lpszDst) return 0;
+    std::strcpy(lpszDst, lpszSrc);
+    return 1;
 }
 
 // ============================================================================
@@ -1733,6 +1847,27 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "GetClassLongW", reinterpret_cast<void*>(GetClassLongW));
     ldr.registerExport("user32.dll", "SetClassLongW", reinterpret_cast<void*>(SetClassLongW));
     ldr.registerExport("user32.dll", "SendNotifyMessageW", reinterpret_cast<void*>(SendNotifyMessageW));
+    ldr.registerExport("user32.dll", "WindowFromDC", reinterpret_cast<void*>(WindowFromDC));
+    ldr.registerExport("user32.dll", "IsCharUpperW", reinterpret_cast<void*>(IsCharUpperW));
+    ldr.registerExport("user32.dll", "ShowWindowAsync", reinterpret_cast<void*>(ShowWindowAsync));
+    ldr.registerExport("user32.dll", "SetMenuInfo", reinterpret_cast<void*>(SetMenuInfo));
+    ldr.registerExport("user32.dll", "GetMenuInfo", reinterpret_cast<void*>(GetMenuInfo));
+    ldr.registerExport("user32.dll", "SetMenuDefaultItem", reinterpret_cast<void*>(SetMenuDefaultItem));
+    ldr.registerExport("user32.dll", "VkKeyScanExW", reinterpret_cast<void*>(VkKeyScanExW));
+    ldr.registerExport("user32.dll", "SendInput", reinterpret_cast<void*>(SendInput));
+    ldr.registerExport("user32.dll", "GetWindowInfo", reinterpret_cast<void*>(GetWindowInfo));
+    ldr.registerExport("user32.dll", "CharToOemA", reinterpret_cast<void*>(CharToOemA));
+    ldr.registerExport("user32.dll", "OemToCharBuffA", reinterpret_cast<void*>(OemToCharBuffA));
+    ldr.registerExport("user32.dll", "OemToCharA", reinterpret_cast<void*>(OemToCharA));
+    ldr.registerExport("user32.dll", "DdeInitializeW", reinterpret_cast<void*>(DdeInitializeW));
+    ldr.registerExport("user32.dll", "DdeUninitialize", reinterpret_cast<void*>(DdeUninitialize));
+    ldr.registerExport("user32.dll", "DdeCreateStringHandleW", reinterpret_cast<void*>(DdeCreateStringHandleW));
+    ldr.registerExport("user32.dll", "DdeFreeStringHandle", reinterpret_cast<void*>(DdeFreeStringHandle));
+    ldr.registerExport("user32.dll", "DdeConnect", reinterpret_cast<void*>(DdeConnect));
+    ldr.registerExport("user32.dll", "DdeDisconnect", reinterpret_cast<void*>(DdeDisconnect));
+    ldr.registerExport("user32.dll", "DdeClientTransaction", reinterpret_cast<void*>(DdeClientTransaction));
+    ldr.registerExport("user32.dll", "DdeFreeDataHandle", reinterpret_cast<void*>(DdeFreeDataHandle));
+    ldr.registerExport("user32.dll", "PackDDElParam", reinterpret_cast<void*>(PackDDElParam));
 }
 
 } // namespace micant::user32

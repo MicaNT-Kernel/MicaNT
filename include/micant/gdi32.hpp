@@ -1313,6 +1313,18 @@ inline BOOL Polygon(HDC /*hdc*/, const POINT* /*apt*/, int /*cpt*/) noexcept { r
 inline BOOL Polyline(HDC /*hdc*/, const POINT* /*apt*/, int /*cpt*/) noexcept { return TRUE; }
 inline BOOL PolyPolyline(HDC /*hdc*/, const void* /*apt*/, const DWORD* /*asz*/, DWORD /*csz*/) noexcept { return TRUE; }
 
+inline uint32_t SetLayout(HDC /*hdc*/, uint32_t /*l*/) noexcept {
+    return 0; // LAYOUT_LTR
+}
+
+inline int ExtSelectClipRgn(HDC /*hdc*/, void* /*hrgn*/, int /*mode*/) noexcept {
+    return 1; // SIMPLEREGION
+}
+
+inline BOOL GradientFill(HDC /*hdc*/, void* /*pVertex*/, uint32_t /*nVertex*/, void* /*pMesh*/, uint32_t /*nMesh*/, uint32_t /*ulMode*/) noexcept {
+    return TRUE;
+}
+
 inline HPEN ExtCreatePen(DWORD /*iPenStyle*/, DWORD cWidth, const LOGBRUSH* plbrush, DWORD /*cStyle*/, const DWORD* /*pstyle*/) noexcept {
     COLORREF color = plbrush ? plbrush->lbColor : RGB(0, 0, 0);
     return CreatePen(PS_SOLID, static_cast<int>(cWidth), color);
@@ -1581,6 +1593,10 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "GetRegionData", reinterpret_cast<void*>(GetRegionData));
     ldr.registerExport("gdi32.dll", "GetNearestColor", reinterpret_cast<void*>(GetNearestColor));
     ldr.registerExport("gdi32.dll", "CreateBitmapIndirect", reinterpret_cast<void*>(CreateBitmapIndirect));
+    ldr.registerExport("gdi32.dll", "SetLayout", reinterpret_cast<void*>(SetLayout));
+    ldr.registerExport("gdi32.dll", "ExtSelectClipRgn", reinterpret_cast<void*>(ExtSelectClipRgn));
+    ldr.registerExport("gdi32.dll", "GradientFill", reinterpret_cast<void*>(GradientFill));
+    ldr.registerExport("msimg32.dll", "GradientFill", reinterpret_cast<void*>(GradientFill));
     ldr.registerExport("msimg32.dll", "AlphaBlend", reinterpret_cast<void*>(AlphaBlend));
     ldr.registerExport("gdi32.dll", "AlphaBlend", reinterpret_cast<void*>(AlphaBlend));
 }

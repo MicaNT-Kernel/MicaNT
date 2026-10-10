@@ -4046,6 +4046,183 @@ inline BOOL WINAPI ReadConsoleOutputCharacterA([[maybe_unused]] HANDLE hConsoleO
     return TRUE;
 }
 
+inline BOOL WINAPI GetThreadGroupAffinity([[maybe_unused]] HANDLE hThread, void* GroupAffinity) noexcept {
+    if (!GroupAffinity) return FALSE;
+    struct GROUP_AFFINITY_MOCK {
+        uint64_t Mask{0x0F}; // 4 cores
+        uint16_t Group{0};
+        uint16_t Reserved[3]{0};
+    };
+    *reinterpret_cast<GROUP_AFFINITY_MOCK*>(GroupAffinity) = GROUP_AFFINITY_MOCK{};
+    return TRUE;
+}
+
+inline BOOL WINAPI DosDateTimeToFileTime(uint16_t wFatDate, uint16_t wFatTime, void* lpFileTime) noexcept {
+    if (!lpFileTime) return FALSE;
+    auto* ft = reinterpret_cast<uint64_t*>(lpFileTime);
+    uint32_t year = 1980 + ((wFatDate >> 9) & 0x7F);
+    uint32_t month = (wFatDate >> 5) & 0x0F;
+    uint32_t day = wFatDate & 0x1F;
+    uint32_t hour = (wFatTime >> 11) & 0x1F;
+    uint32_t min = (wFatTime >> 5) & 0x3F;
+    uint32_t sec = (wFatTime & 0x1F) * 2;
+    // Approximate 100-nanosecond intervals since Jan 1, 1601
+    uint64_t totalSeconds = static_cast<uint64_t>(year - 1601) * 31536000ULL +
+                            static_cast<uint64_t>(month * 30 + day) * 86400ULL +
+                            static_cast<uint64_t>(hour * 3600 + min * 60 + sec);
+    *ft = totalSeconds * 10000000ULL;
+    return TRUE;
+}
+
+inline BOOL WINAPI SystemTimeToFileTime(const void* lpSystemTime, void* lpFileTime) noexcept {
+    if (!lpSystemTime || !lpFileTime) return FALSE;
+    auto* st = reinterpret_cast<const uint16_t*>(lpSystemTime);
+    auto* ft = reinterpret_cast<uint64_t*>(lpFileTime);
+    uint16_t year = st[0];
+    uint16_t month = st[1];
+    uint16_t day = st[3];
+    uint16_t hour = st[4];
+    uint16_t min = st[5];
+    uint16_t sec = st[6];
+    uint64_t totalSeconds = static_cast<uint64_t>(year > 1601 ? year - 1601 : 0) * 31536000ULL +
+                            static_cast<uint64_t>(month * 30 + day) * 86400ULL +
+                            static_cast<uint64_t>(hour * 3600 + min * 60 + sec);
+    *ft = totalSeconds * 10000000ULL;
+    return TRUE;
+}
+
+inline BOOL WINAPI TzSpecificLocalTimeToSystemTime([[maybe_unused]] const void* lpTimeZoneInformation, const void* lpLocalTime, void* lpUniversalTime) noexcept {
+    if (!lpLocalTime || !lpUniversalTime) return FALSE;
+    std::memcpy(lpUniversalTime, lpLocalTime, 16);
+    return TRUE;
+}
+
+inline BOOL WINAPI GetFileTime([[maybe_unused]] HANDLE hFile, void* lpCreationTime, void* lpLastAccessTime, void* lpLastWriteTime) noexcept {
+    uint64_t mockTime = 133500000000000000ULL;
+    if (lpCreationTime) *reinterpret_cast<uint64_t*>(lpCreationTime) = mockTime;
+    if (lpLastAccessTime) *reinterpret_cast<uint64_t*>(lpLastAccessTime) = mockTime;
+    if (lpLastWriteTime) *reinterpret_cast<uint64_t*>(lpLastWriteTime) = mockTime;
+    return TRUE;
+}
+
+inline DWORD WINAPI GetLogicalDrives() noexcept {
+    return 0x0000000C; // Bit 2 = C:, Bit 3 = D:
+}
+
+inline BOOL WINAPI GetVolumePathNameW(LPCWSTR lpszFileName, LPWSTR lpszVolumePathName, DWORD cchBufferLength) noexcept {
+    if (!lpszVolumePathName || cchBufferLength < 4) return FALSE;
+    if (lpszFileName && lpszFileName[0] != L'\0' && lpszFileName[1] == L':') {
+        lpszVolumePathName[0] = lpszFileName[0];
+        lpszVolumePathName[1] = L':';
+        lpszVolumePathName[2] = L'\\';
+        lpszVolumePathName[3] = L'\0';
+    } else {
+        std::wcsncpy(lpszVolumePathName, L"C:\\", cchBufferLength);
+    }
+    return TRUE;
+}
+
+inline int WINAPI FoldStringW([[maybe_unused]] DWORD dwMapFlags, LPCWSTR lpSrcStr, int cchSrc, LPWSTR lpDestStr, int cchDest) noexcept {
+    if (!lpSrcStr) return 0;
+    int srcLen = (cchSrc < 0) ? static_cast<int>(std::wcslen(lpSrcStr) + 1) : cchSrc;
+    if (cchDest == 0 || !lpDestStr) return srcLen;
+    int copyLen = std::min<int>(srcLen, cchDest);
+    std::wcsncpy(lpDestStr, lpSrcStr, copyLen);
+    return copyLen;
+}
+
+inline BOOL WINAPI IsDBCSLeadByte([[maybe_unused]] uint8_t TestChar) noexcept {
+    return FALSE; // Pure Unicode / single-byte ASCII baseline
+}
+
+inline BOOL WINAPI Thread32First([[maybe_unused]] HANDLE hSnapshot, void* lpte) noexcept {
+    if (!lpte) return FALSE;
+    struct THREADENTRY32 {
+        uint32_t dwSize;
+        uint32_t cntUsage;
+        uint32_t th32ThreadID;
+        uint32_t th32OwnerProcessID;
+        int32_t  tpBasePri;
+        int32_t  tpDeltaPri;
+        uint32_t dwFlags;
+    };
+    auto* te = reinterpret_cast<THREADENTRY32*>(lpte);
+    te->th32ThreadID = 1001;
+    te->th32OwnerProcessID = 500;
+    return TRUE;
+}
+
+inline BOOL WINAPI Thread32Next([[maybe_unused]] HANDLE hSnapshot, [[maybe_unused]] void* lpte) noexcept {
+    return FALSE; // End of enumeration
+}
+
+inline BOOL WINAPI Module32FirstW([[maybe_unused]] HANDLE hSnapshot, void* lpme) noexcept {
+    if (!lpme) return FALSE;
+    struct MODULEENTRY32W {
+        uint32_t dwSize;
+        uint32_t th32ModuleID;
+        uint32_t th32ProcessID;
+        uint32_t GlblcntUsage;
+        uint32_t ProccntUsage;
+        uint8_t* modBaseAddr;
+        uint32_t modBaseSize;
+        void*    hModule;
+        wchar_t  szModule[256];
+        wchar_t  szExePath[260];
+    };
+    auto* me = reinterpret_cast<MODULEENTRY32W*>(lpme);
+    me->th32ModuleID = 1;
+    me->th32ProcessID = 500;
+    me->modBaseAddr = reinterpret_cast<uint8_t*>(0x140000000);
+    me->modBaseSize = 0x200000;
+    std::wcsncpy(me->szModule, L"SumatraPDF-64.exe", 255);
+    std::wcsncpy(me->szExePath, L"D:\\MicaNT_Apps\\Tier1\\SumatraPDF\\SumatraPDF-3.6.1-64.exe", 259);
+    return TRUE;
+}
+
+inline BOOL WINAPI Module32NextW([[maybe_unused]] HANDLE hSnapshot, [[maybe_unused]] void* lpme) noexcept {
+    return FALSE;
+}
+
+inline BOOL WINAPI AttachConsole([[maybe_unused]] DWORD dwProcessId) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetConsoleScreenBufferSize([[maybe_unused]] HANDLE hConsoleOutput, [[maybe_unused]] uint32_t dwSize) noexcept {
+    return TRUE;
+}
+
+inline DWORD WINAPI GetTempFileNameW(LPCWSTR lpPathName, LPCWSTR lpPrefixString, UINT uUnique, LPWSTR lpTempFileName) noexcept {
+    if (!lpTempFileName) return 0;
+    static uint32_t s_uid = 1;
+    uint32_t id = (uUnique != 0) ? uUnique : s_uid++;
+    const wchar_t* prefix = lpPrefixString ? lpPrefixString : L"TMP";
+    const wchar_t* path = lpPathName ? lpPathName : L"C:\\Temp\\";
+    std::swprintf(lpTempFileName, 260, L"%s%s%04X.tmp", path, prefix, id);
+    return id;
+}
+
+inline void WINAPI OutputDebugStringA([[maybe_unused]] LPCSTR lpOutputString) noexcept {}
+
+inline DWORD WINAPI SetThreadExecutionState(DWORD esFlags) noexcept {
+    return esFlags;
+}
+
+inline void WINAPI DebugBreak() noexcept {}
+
+inline void* WINAPI AddVectoredExceptionHandler([[maybe_unused]] ULONG First, [[maybe_unused]] void* Handler) noexcept {
+    return reinterpret_cast<void*>(0x1000);
+}
+
+inline DWORD WINAPI GetPrivateProfileIntW([[maybe_unused]] LPCWSTR lpAppName, [[maybe_unused]] LPCWSTR lpKeyName, int nDefault, [[maybe_unused]] LPCWSTR lpFileName) noexcept {
+    return static_cast<DWORD>(nDefault);
+}
+
+inline BOOL WINAPI HeapQueryInformation([[maybe_unused]] HANDLE HeapHandle, [[maybe_unused]] int HeapInformationClass, [[maybe_unused]] void* HeapInformation, [[maybe_unused]] size_t HeapInformationLength, size_t* ReturnLength) noexcept {
+    if (ReturnLength) *ReturnLength = 4;
+    return TRUE;
+}
+
 // ============================================================================
 // 18. Win32 Dynamic Subsystem Export Table Initializer
 // ============================================================================
@@ -4430,6 +4607,28 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetDateFormatA", reinterpret_cast<void*>(GetDateFormatA));
     ldr.registerExport("kernel32.dll", "GetModuleHandleExA", reinterpret_cast<void*>(GetModuleHandleExA));
     ldr.registerExport("kernel32.dll", "IsBadWritePtr", reinterpret_cast<void*>(IsBadWritePtr));
+    ldr.registerExport("kernel32.dll", "GetThreadGroupAffinity", reinterpret_cast<void*>(GetThreadGroupAffinity));
+    ldr.registerExport("kernel32.dll", "DosDateTimeToFileTime", reinterpret_cast<void*>(DosDateTimeToFileTime));
+    ldr.registerExport("kernel32.dll", "SystemTimeToFileTime", reinterpret_cast<void*>(SystemTimeToFileTime));
+    ldr.registerExport("kernel32.dll", "TzSpecificLocalTimeToSystemTime", reinterpret_cast<void*>(TzSpecificLocalTimeToSystemTime));
+    ldr.registerExport("kernel32.dll", "GetFileTime", reinterpret_cast<void*>(GetFileTime));
+    ldr.registerExport("kernel32.dll", "GetLogicalDrives", reinterpret_cast<void*>(GetLogicalDrives));
+    ldr.registerExport("kernel32.dll", "GetVolumePathNameW", reinterpret_cast<void*>(GetVolumePathNameW));
+    ldr.registerExport("kernel32.dll", "FoldStringW", reinterpret_cast<void*>(FoldStringW));
+    ldr.registerExport("kernel32.dll", "IsDBCSLeadByte", reinterpret_cast<void*>(IsDBCSLeadByte));
+    ldr.registerExport("kernel32.dll", "Thread32First", reinterpret_cast<void*>(Thread32First));
+    ldr.registerExport("kernel32.dll", "Thread32Next", reinterpret_cast<void*>(Thread32Next));
+    ldr.registerExport("kernel32.dll", "Module32FirstW", reinterpret_cast<void*>(Module32FirstW));
+    ldr.registerExport("kernel32.dll", "Module32NextW", reinterpret_cast<void*>(Module32NextW));
+    ldr.registerExport("kernel32.dll", "AttachConsole", reinterpret_cast<void*>(AttachConsole));
+    ldr.registerExport("kernel32.dll", "SetConsoleScreenBufferSize", reinterpret_cast<void*>(SetConsoleScreenBufferSize));
+    ldr.registerExport("kernel32.dll", "GetTempFileNameW", reinterpret_cast<void*>(GetTempFileNameW));
+    ldr.registerExport("kernel32.dll", "OutputDebugStringA", reinterpret_cast<void*>(OutputDebugStringA));
+    ldr.registerExport("kernel32.dll", "SetThreadExecutionState", reinterpret_cast<void*>(SetThreadExecutionState));
+    ldr.registerExport("kernel32.dll", "DebugBreak", reinterpret_cast<void*>(DebugBreak));
+    ldr.registerExport("kernel32.dll", "AddVectoredExceptionHandler", reinterpret_cast<void*>(AddVectoredExceptionHandler));
+    ldr.registerExport("kernel32.dll", "GetPrivateProfileIntW", reinterpret_cast<void*>(GetPrivateProfileIntW));
+    ldr.registerExport("kernel32.dll", "HeapQueryInformation", reinterpret_cast<void*>(HeapQueryInformation));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

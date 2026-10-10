@@ -836,6 +836,17 @@ inline HRESULT CLSIDFromProgID(LPCOLESTR lpszProgID, CLSID* lpclsid) noexcept {
     return S_OK;
 }
 
+inline HRESULT CoGetMalloc(uint32_t /*dwMemContext*/, void** ppMalloc) noexcept {
+    if (!ppMalloc) return E_POINTER;
+    static uintptr_t s_malloc = 0x9001;
+    *ppMalloc = reinterpret_cast<void*>(s_malloc);
+    return S_OK;
+}
+
+inline HRESULT CoSetProxyBlanket(void* /*pProxy*/, uint32_t /*dwAuthnSvc*/, uint32_t /*dwAuthzSvc*/, void* /*pServerPrincName*/, uint32_t /*dwAuthnLevel*/, uint32_t /*dwImpLevel*/, void* /*pAuthInfo*/, uint32_t /*dwCapabilities*/) noexcept {
+    return S_OK;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -869,6 +880,8 @@ inline void InitializeOle32SubsystemExports() {
     ldr.registerExport("ole32.dll", "ReleaseStgMedium", reinterpret_cast<void*>(ReleaseStgMedium));
     ldr.registerExport("ole32.dll", "CLSIDFromProgID", reinterpret_cast<void*>(CLSIDFromProgID));
     ldr.registerExport("ole32.dll", "CreateBindCtx", reinterpret_cast<void*>(CreateBindCtx));
+    ldr.registerExport("ole32.dll", "CoGetMalloc", reinterpret_cast<void*>(CoGetMalloc));
+    ldr.registerExport("ole32.dll", "CoSetProxyBlanket", reinterpret_cast<void*>(CoSetProxyBlanket));
 
     // ole32.dll Structured Storage
     InitializeStructuredStorageSubsystemExports();

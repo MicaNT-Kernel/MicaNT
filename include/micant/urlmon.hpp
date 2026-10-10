@@ -593,6 +593,12 @@ inline win32::BOOL __stdcall IsValidURL(
     return wininet::ParseUrlComponents(wininet::toNarrow(szURL), p) ? 1 : 0;
 }
 
+inline ole32::HRESULT __stdcall CoInternetGetSession(uint32_t /*dwMode*/, void** ppIInternetSession, uint32_t /*dwReserved*/) noexcept {
+    if (!ppIInternetSession) return ole32::E_POINTER;
+    *ppIInternetSession = reinterpret_cast<void*>(0x9912);
+    return ole32::S_OK;
+}
+
 // ============================================================================
 // 5. Subsystem Export Registration
 // ============================================================================
@@ -612,6 +618,7 @@ inline void InitializeUrlMonSubsystemExports() {
     ldr.registerExport("urlmon.dll", "CreateURLMoniker", reinterpret_cast<void*>(CreateURLMoniker));
     ldr.registerExport("urlmon.dll", "CreateURLMonikerEx", reinterpret_cast<void*>(CreateURLMonikerEx));
     ldr.registerExport("urlmon.dll", "IsValidURL", reinterpret_cast<void*>(IsValidURL));
+    ldr.registerExport("urlmon.dll", "CoInternetGetSession", reinterpret_cast<void*>(CoInternetGetSession));
 }
 
 } // namespace micant::urlmon

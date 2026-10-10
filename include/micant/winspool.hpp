@@ -958,6 +958,10 @@ inline int32_t __stdcall SetJobW(
     return PrintSpoolerManager::get().setJobControl(hPrinter, JobId, Command) ? 1 : 0;
 }
 
+inline int32_t DeviceCapabilitiesW(const wchar_t* /*pDevice*/, const wchar_t* /*pPort*/, uint16_t /*fwCapability*/, wchar_t* /*pOutput*/, const void* /*pDevMode*/) noexcept {
+    return 1;
+}
+
 // ============================================================================
 // 4. Dynamic Loader & SCM Registration
 // ============================================================================
@@ -988,6 +992,7 @@ inline void InitializePrintSpoolerSubsystemExports() {
     ldr.registerExport("winspool.drv", "AbortPrinter", reinterpret_cast<void*>(AbortPrinter));
     ldr.registerExport("winspool.drv", "EnumJobsW", reinterpret_cast<void*>(EnumJobsW));
     ldr.registerExport("winspool.drv", "SetJobW", reinterpret_cast<void*>(SetJobW));
+    ldr.registerExport("winspool.drv", "DeviceCapabilitiesW", reinterpret_cast<void*>(DeviceCapabilitiesW));
 
     // 2. spoolsv.dll exports (Print Spooler Service)
     ldr.registerExport("spoolsv.dll", "ServiceMain", reinterpret_cast<void*>(EnumPrintersW));

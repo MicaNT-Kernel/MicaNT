@@ -1046,6 +1046,11 @@ inline intptr_t PropertySheetW(void* /*lppsph*/) noexcept {
     return 0; // IDOK
 }
 
+inline void* CreatePropertySheetPageW(const void* /*constPropSheetPage*/) noexcept {
+    static uintptr_t s_psp = 0x8890;
+    return reinterpret_cast<void*>(++s_psp);
+}
+
 inline void InitializeComCtl32SubsystemExports() {
     InitCommonControls();
 
@@ -1053,6 +1058,7 @@ inline void InitializeComCtl32SubsystemExports() {
 
     ldr.registerExport("comctl32.dll", "CreateToolbarEx", reinterpret_cast<void*>(CreateToolbarEx));
     ldr.registerExport("comctl32.dll", "PropertySheetW", reinterpret_cast<void*>(PropertySheetW));
+    ldr.registerExport("comctl32.dll", "CreatePropertySheetPageW", reinterpret_cast<void*>(CreatePropertySheetPageW));
 
     ldr.registerExport("comctl32.dll", "InitCommonControls", reinterpret_cast<void*>(InitCommonControls));
     ldr.registerExport("comctl32.dll", "InitCommonControlsEx", reinterpret_cast<void*>(InitCommonControlsEx));

@@ -38,9 +38,14 @@ inline void* __stdcall ReplaceTextW([[maybe_unused]] void* lpfr) noexcept {
     return nullptr;
 }
 
+inline int32_t __stdcall PrintDlgExW([[maybe_unused]] void* pPDEX) noexcept {
+    return 0; // S_OK
+}
+
 inline void InitializeComDlg32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("comdlg32.dll", "PrintDlgW", reinterpret_cast<void*>(PrintDlgW));
+    ldr.registerExport("comdlg32.dll", "PrintDlgExW", reinterpret_cast<void*>(PrintDlgExW));
     ldr.registerExport("comdlg32.dll", "ChooseColorW", reinterpret_cast<void*>(ChooseColorW));
     ldr.registerExport("comdlg32.dll", "GetOpenFileNameW", reinterpret_cast<void*>(GetOpenFileNameW));
     ldr.registerExport("comdlg32.dll", "GetSaveFileNameW", reinterpret_cast<void*>(GetSaveFileNameW));
