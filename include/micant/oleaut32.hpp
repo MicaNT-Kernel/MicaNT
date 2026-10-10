@@ -1208,6 +1208,54 @@ inline HRESULT __stdcall QueryPathOfRegTypeLib(REFGUID guid, uint16_t wVerMajor,
     return TypeLibManager::Instance().queryPath(guid, wVerMajor, wVerMinor, lpbstrPathName);
 }
 
+inline int32_t WINAPI CreateErrorInfo(void** pperrinfo) noexcept {
+    if (pperrinfo) {
+        static uintptr_t s_errInfo = 0xEE00;
+        *pperrinfo = reinterpret_cast<void*>(++s_errInfo);
+    }
+    return S_OK;
+}
+
+inline int32_t WINAPI SetErrorInfo(uint32_t /*dwReserved*/, void* /*perrinfo*/) noexcept {
+    return S_OK;
+}
+
+inline int32_t WINAPI VarDateFromStr(const wchar_t* /*strIn*/, uint32_t /*lcid*/, uint32_t /*dwFlags*/, double* pdateOut) noexcept {
+    if (pdateOut) {
+        *pdateOut = 45000.0;
+    }
+    return S_OK;
+}
+
+inline int32_t WINAPI VariantTimeToSystemTime(double vtime, win32::SYSTEMTIME* lpSystemTime) noexcept {
+    if (!lpSystemTime) {
+        return 0;
+    }
+    int64_t days = static_cast<int64_t>(vtime);
+    lpSystemTime->wYear = static_cast<uint16_t>(1900 + (days / 365));
+    lpSystemTime->wMonth = 1;
+    lpSystemTime->wDay = static_cast<uint16_t>((days % 365) + 1);
+    lpSystemTime->wDayOfWeek = 1;
+    double frac = vtime - days;
+    int32_t secs = static_cast<int32_t>(frac * 86400.0);
+    lpSystemTime->wHour = static_cast<uint16_t>(secs / 3600);
+    lpSystemTime->wMinute = static_cast<uint16_t>((secs % 3600) / 60);
+    lpSystemTime->wSecond = static_cast<uint16_t>(secs % 60);
+    lpSystemTime->wMilliseconds = 0;
+    return 1;
+}
+
+inline int32_t WINAPI SystemTimeToVariantTime(const win32::SYSTEMTIME* lpSystemTime, double* pvtime) noexcept {
+    if (!lpSystemTime || !pvtime) {
+        return 0;
+    }
+    int64_t y = lpSystemTime->wYear - 1900;
+    int64_t days = y * 365 + (lpSystemTime->wDay > 0 ? lpSystemTime->wDay - 1 : 0);
+    double frac = (lpSystemTime->wHour * 3600 + lpSystemTime->wMinute * 60 + lpSystemTime->wSecond) / 86400.0;
+    *pvtime = static_cast<double>(days) + frac;
+    return 1;
+}
+
 // ============================================================================
 // 9. Subsystem Export Registration (oleaut32.dll)
 // ============================================================================
@@ -1274,6 +1322,18 @@ inline void InitializeOleAut32SubsystemExports() {
     ldr.registerExport("oleaut32.dll", "LoadRegTypeLib", reinterpret_cast<void*>(LoadRegTypeLib));
     ldr.registerExport("oleaut32.dll", "RegisterTypeLib", reinterpret_cast<void*>(RegisterTypeLib));
     ldr.registerExport("oleaut32.dll", "QueryPathOfRegTypeLib", reinterpret_cast<void*>(QueryPathOfRegTypeLib));
+
+    // ErrorInfo & Variant Date APIs
+    ldr.registerExport("oleaut32.dll", "CreateErrorInfo", reinterpret_cast<void*>(CreateErrorInfo));
+    ldr.registerExport("oleaut32.dll", "SetErrorInfo", reinterpret_cast<void*>(SetErrorInfo));
+    ldr.registerExport("oleaut32.dll", "VarDateFromStr", reinterpret_cast<void*>(VarDateFromStr));
+    ldr.registerExport("oleaut32.dll", "VariantTimeToSystemTime", reinterpret_cast<void*>(VariantTimeToSystemTime));
+    ldr.registerExport("oleaut32.dll", "SystemTimeToVariantTime", reinterpret_cast<void*>(SystemTimeToVariantTime));
+    ldr.registerExportOrdinal("oleaut32.dll", 202, reinterpret_cast<void*>(CreateErrorInfo));
+    ldr.registerExportOrdinal("oleaut32.dll", 201, reinterpret_cast<void*>(SetErrorInfo));
+    ldr.registerExportOrdinal("oleaut32.dll", 94, reinterpret_cast<void*>(VarDateFromStr));
+    ldr.registerExportOrdinal("oleaut32.dll", 185, reinterpret_cast<void*>(VariantTimeToSystemTime));
+    ldr.registerExportOrdinal("oleaut32.dll", 184, reinterpret_cast<void*>(SystemTimeToVariantTime));
 }
 
 } // namespace micant::oleaut32

@@ -1870,6 +1870,15 @@ inline win32::BOOL __stdcall InternetGetLastResponseInfoA(uint32_t* lpdwError, c
     return 1;
 }
 
+inline win32::BOOL __stdcall InternetGetLastResponseInfoW(uint32_t* lpdwError, wchar_t* lpszBuffer, uint32_t* lpdwBufferLength) noexcept {
+    if (lpdwError) *lpdwError = 0;
+    if (lpszBuffer && lpdwBufferLength && *lpdwBufferLength > 0) {
+        lpszBuffer[0] = L'\0';
+        *lpdwBufferLength = 0;
+    }
+    return 1;
+}
+
 inline HINTERNET __stdcall InternetOpenUrlW(HINTERNET /*hInternet*/, const wchar_t* /*lpszUrl*/, const wchar_t* /*lpszHeaders*/, uint32_t /*dwHeadersLength*/, uint32_t /*dwFlags*/, uintptr_t /*dwContext*/) noexcept {
     static uintptr_t s_hurl = 0x9200;
     return reinterpret_cast<HINTERNET>(++s_hurl);
@@ -1921,6 +1930,7 @@ inline void InitializeWinINetSubsystemExports() {
     ldr.registerExport("wininet.dll", "CommitUrlCacheEntryA", reinterpret_cast<void*>(CommitUrlCacheEntryA));
     ldr.registerExport("wininet.dll", "CommitUrlCacheEntryW", reinterpret_cast<void*>(CommitUrlCacheEntryW));
     ldr.registerExport("wininet.dll", "InternetGetLastResponseInfoA", reinterpret_cast<void*>(InternetGetLastResponseInfoA));
+    ldr.registerExport("wininet.dll", "InternetGetLastResponseInfoW", reinterpret_cast<void*>(InternetGetLastResponseInfoW));
     ldr.registerExport("wininet.dll", "InternetOpenUrlW", reinterpret_cast<void*>(InternetOpenUrlW));
     ldr.registerExport("wininet.dll", "InternetGetConnectedState", reinterpret_cast<void*>(InternetGetConnectedState));
 }

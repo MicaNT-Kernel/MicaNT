@@ -36,6 +36,9 @@
 #include "crypt32.hpp"
 #include "ws2_32.hpp"
 #include "ole32.hpp"
+#include "oleaut32.hpp"
+#include "uxtheme.hpp"
+#include "propsys.hpp"
 #include "urlmon.hpp"
 #include "wininet.hpp"
 #include "winspool.hpp"
@@ -139,6 +142,9 @@ inline void InitializeSatelliteWin32Exports() {
     crypt32::InitializeCrypt32SubsystemExports();
     ws2_32::InitializeWs2_32SubsystemExports();
     ole32::InitializeOle32SubsystemExports();
+    oleaut32::InitializeOleAut32SubsystemExports();
+    propsys::InitializePropSysSubsystemExports();
+    uxtheme::InitializeUxThemeSubsystemExports();
     urlmon::InitializeUrlMonSubsystemExports();
     wininet::InitializeWinINetSubsystemExports();
     winspool::InitializePrintSpoolerSubsystemExports();

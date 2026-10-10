@@ -861,6 +861,68 @@ inline HRESULT WINAPI CoInitializeSecurity(
     return S_OK;
 }
 
+inline HRESULT WINAPI CoCreateFreeThreadedMarshaler(void* /*punkOuter*/, void** ppunkMarshaler) noexcept {
+    if (ppunkMarshaler) {
+        static uintptr_t s_marshaler = 0xBB00;
+        *ppunkMarshaler = reinterpret_cast<void*>(++s_marshaler);
+    }
+    return S_OK;
+}
+
+inline win32::BOOL WINAPI OleTranslateAccelerator(void* /*lpFrame*/, void* /*lpFrameInfo*/, void* /*lpmsg*/) noexcept {
+    return 1; // S_FALSE
+}
+
+inline HRESULT WINAPI OleDestroyMenuDescriptor(void* /*holemenu*/) noexcept {
+    return S_OK;
+}
+
+inline void* WINAPI OleCreateMenuDescriptor(void* /*hmenuCombined*/, void* /*lpMenuWidths*/) noexcept {
+    static uintptr_t s_hmenu = 0xCC00;
+    return reinterpret_cast<void*>(++s_hmenu);
+}
+
+inline HRESULT WINAPI CoRegisterMessageFilter(void* lpMessageFilter, void** lplpMessageFilter) noexcept {
+    static void* s_prevFilter = nullptr;
+    if (lplpMessageFilter) {
+        *lplpMessageFilter = s_prevFilter;
+    }
+    s_prevFilter = lpMessageFilter;
+    return S_OK;
+}
+
+inline void WINAPI CoFreeUnusedLibraries() noexcept {}
+
+inline void* WINAPI OleDuplicateData(void* hSrc, uint16_t /*cfFormat*/, uint32_t /*uiFlags*/) noexcept {
+    return hSrc;
+}
+
+inline HRESULT WINAPI CoLockObjectExternal(void* /*pUnk*/, win32::BOOL /*fLock*/, win32::BOOL /*fLastUnlockReleases*/) noexcept {
+    return S_OK;
+}
+
+inline HRESULT WINAPI CoGetObject(const wchar_t* /*pszName*/, void* /*pBindOptions*/, const void* /*riid*/, void** ppv) noexcept {
+    if (ppv) {
+        *ppv = nullptr;
+    }
+    return E_NOTIMPL;
+}
+
+inline HRESULT WINAPI OleRun(void* /*pUnknown*/) noexcept {
+    return S_OK;
+}
+
+inline HRESULT WINAPI PropVariantClear(void* pvar) noexcept {
+    if (pvar) {
+        std::memset(pvar, 0, 24);
+    }
+    return S_OK;
+}
+
+inline uint32_t WINAPI OleUIBusyW(void* /*lpUIBusy*/) noexcept {
+    return 0; // OLEUI_CANCEL
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -897,6 +959,20 @@ inline void InitializeOle32SubsystemExports() {
     ldr.registerExport("ole32.dll", "CreateBindCtx", reinterpret_cast<void*>(CreateBindCtx));
     ldr.registerExport("ole32.dll", "CoGetMalloc", reinterpret_cast<void*>(CoGetMalloc));
     ldr.registerExport("ole32.dll", "CoSetProxyBlanket", reinterpret_cast<void*>(CoSetProxyBlanket));
+    ldr.registerExport("ole32.dll", "CoCreateFreeThreadedMarshaler", reinterpret_cast<void*>(CoCreateFreeThreadedMarshaler));
+    ldr.registerExport("ole32.dll", "OleTranslateAccelerator", reinterpret_cast<void*>(OleTranslateAccelerator));
+    ldr.registerExport("ole32.dll", "OleDestroyMenuDescriptor", reinterpret_cast<void*>(OleDestroyMenuDescriptor));
+    ldr.registerExport("ole32.dll", "OleCreateMenuDescriptor", reinterpret_cast<void*>(OleCreateMenuDescriptor));
+    ldr.registerExport("ole32.dll", "CoRegisterMessageFilter", reinterpret_cast<void*>(CoRegisterMessageFilter));
+    ldr.registerExport("ole32.dll", "CoFreeUnusedLibraries", reinterpret_cast<void*>(CoFreeUnusedLibraries));
+    ldr.registerExport("ole32.dll", "OleDuplicateData", reinterpret_cast<void*>(OleDuplicateData));
+    ldr.registerExport("ole32.dll", "CoLockObjectExternal", reinterpret_cast<void*>(CoLockObjectExternal));
+    ldr.registerExport("ole32.dll", "CoGetObject", reinterpret_cast<void*>(CoGetObject));
+    ldr.registerExport("ole32.dll", "OleRun", reinterpret_cast<void*>(OleRun));
+    ldr.registerExport("ole32.dll", "PropVariantClear", reinterpret_cast<void*>(PropVariantClear));
+
+    // oledlg.dll
+    ldr.registerExport("oledlg.dll", "OleUIBusyW", reinterpret_cast<void*>(OleUIBusyW));
 
     // ole32.dll Structured Storage
     InitializeStructuredStorageSubsystemExports();

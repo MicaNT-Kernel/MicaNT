@@ -38,6 +38,22 @@ inline int32_t __stdcall UiaHostProviderFromHwnd([[maybe_unused]] void* hwnd, vo
     return 0; // S_OK
 }
 
+inline int32_t __stdcall AccessibleObjectFromWindow(void* /*hwnd*/, uint32_t /*dwId*/, const void* /*riid*/, void** ppvObject) noexcept {
+    if (ppvObject) {
+        static uintptr_t s_acc = 0xDD00;
+        *ppvObject = reinterpret_cast<void*>(++s_acc);
+    }
+    return 0; // S_OK
+}
+
+inline int32_t __stdcall CreateStdAccessibleObject(void* /*hwnd*/, int32_t /*idObject*/, const void* /*riid*/, void** ppvObject) noexcept {
+    if (ppvObject) {
+        static uintptr_t s_accStd = 0xDE00;
+        *ppvObject = reinterpret_cast<void*>(++s_accStd);
+    }
+    return 0; // S_OK
+}
+
 inline void InitializeUIAutomationSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("uiautomationcore.dll", "UiaRaiseStructureChangedEvent", reinterpret_cast<void*>(UiaRaiseStructureChangedEvent));
@@ -45,6 +61,10 @@ inline void InitializeUIAutomationSubsystemExports() {
     ldr.registerExport("uiautomationcore.dll", "UiaRaiseAutomationEvent", reinterpret_cast<void*>(UiaRaiseAutomationEvent));
     ldr.registerExport("uiautomationcore.dll", "UiaReturnRawElementProvider", reinterpret_cast<void*>(UiaReturnRawElementProvider));
     ldr.registerExport("uiautomationcore.dll", "UiaHostProviderFromHwnd", reinterpret_cast<void*>(UiaHostProviderFromHwnd));
+
+    // oleacc.dll exports
+    ldr.registerExport("oleacc.dll", "AccessibleObjectFromWindow", reinterpret_cast<void*>(AccessibleObjectFromWindow));
+    ldr.registerExport("oleacc.dll", "CreateStdAccessibleObject", reinterpret_cast<void*>(CreateStdAccessibleObject));
 }
 
 } // namespace micant::uiautomation

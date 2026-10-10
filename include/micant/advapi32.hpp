@@ -1587,6 +1587,14 @@ inline int32_t RegUnLoadKeyA(HKEY /*hKey*/, const char* /*lpSubKey*/) noexcept {
     return 0; // ERROR_SUCCESS
 }
 
+inline int32_t RegSetValueW(HKEY /*hKey*/, const wchar_t* /*lpSubKey*/, uint32_t /*dwType*/, const wchar_t* /*lpData*/, uint32_t /*cbData*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline int32_t RegDeleteTreeW(HKEY /*hKey*/, const wchar_t* /*lpSubKey*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
 inline win32::BOOL SystemFunction036(void* pbBuffer, uint32_t dwLen) noexcept {
     if (!pbBuffer && dwLen > 0) return win32::FALSE;
     if (dwLen > 0) {
@@ -1744,6 +1752,8 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "RegGetValueA", reinterpret_cast<void*>(RegGetValueA));
     ldr.registerExport("advapi32.dll", "RegLoadKeyA", reinterpret_cast<void*>(RegLoadKeyA));
     ldr.registerExport("advapi32.dll", "RegUnLoadKeyA", reinterpret_cast<void*>(RegUnLoadKeyA));
+    ldr.registerExport("advapi32.dll", "RegSetValueW", reinterpret_cast<void*>(RegSetValueW));
+    ldr.registerExport("advapi32.dll", "RegDeleteTreeW", reinterpret_cast<void*>(RegDeleteTreeW));
     ldr.registerExport("advapi32.dll", "SystemFunction036", reinterpret_cast<void*>(SystemFunction036));
     ldr.registerExport("advapi32.dll", "RegOpenCurrentUser", reinterpret_cast<void*>(RegOpenCurrentUser));
     ldr.registerExport("advapi32.dll", "RegCreateKeyW", reinterpret_cast<void*>(RegCreateKeyW));

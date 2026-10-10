@@ -1338,6 +1338,159 @@ inline BOOL ExtTextOutA(
 inline UINT SetTextAlign(HDC /*hdc*/, UINT /*align*/) noexcept { return 0; }
 inline BOOL RectVisible(HDC /*hdc*/, const RECT* /*lprect*/) noexcept { return TRUE; }
 
+struct ENUMLOGFONTW {
+    LOGFONTW elfLogFont;
+    wchar_t elfFullName[64];
+    wchar_t elfStyle[32];
+};
+
+struct NEWTEXTMETRICW {
+    int32_t tmHeight;
+    int32_t tmAscent;
+    int32_t tmDescent;
+    int32_t tmInternalLeading;
+    int32_t tmExternalLeading;
+    int32_t tmAveCharWidth;
+    int32_t tmMaxCharWidth;
+    int32_t tmWeight;
+    int32_t tmOverhang;
+    int32_t tmDigitizedAspectX;
+    int32_t tmDigitizedAspectY;
+    wchar_t tmFirstChar;
+    wchar_t tmLastChar;
+    wchar_t tmDefaultChar;
+    wchar_t tmBreakChar;
+    uint8_t tmItalic;
+    uint8_t tmUnderlined;
+    uint8_t tmStruckOut;
+    uint8_t tmPitchAndFamily;
+    uint8_t tmCharSet;
+    uint32_t ntmFlags;
+    uint32_t ntmSizeEM;
+    uint32_t ntmCellHeight;
+    uint32_t ntmAvgWidth;
+};
+
+inline uint32_t WINAPI GetLayout(HDC /*hdc*/) noexcept {
+    return 0; // LAYOUT_LTR
+}
+
+inline int32_t WINAPI SetPolyFillMode(HDC /*hdc*/, int32_t /*mode*/) noexcept {
+    return 1; // ALTERNATE
+}
+
+inline int32_t WINAPI GetPolyFillMode(HDC /*hdc*/) noexcept {
+    return 1; // ALTERNATE
+}
+
+inline BOOL WINAPI SetViewportExtEx(HDC /*hdc*/, int32_t x, int32_t y, SIZE* lpsz) noexcept {
+    if (lpsz) {
+        lpsz->cx = x ? x : 1;
+        lpsz->cy = y ? y : 1;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI GetViewportExtEx(HDC /*hdc*/, SIZE* lpsz) noexcept {
+    if (lpsz) {
+        lpsz->cx = 1;
+        lpsz->cy = 1;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI SetWindowExtEx(HDC /*hdc*/, int32_t x, int32_t y, SIZE* lpsz) noexcept {
+    if (lpsz) {
+        lpsz->cx = x ? x : 1;
+        lpsz->cy = y ? y : 1;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI GetWindowExtEx(HDC /*hdc*/, SIZE* lpsz) noexcept {
+    if (lpsz) {
+        lpsz->cx = 1;
+        lpsz->cy = 1;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI OffsetViewportOrgEx(HDC /*hdc*/, int32_t /*x*/, int32_t /*y*/, POINT* lppt) noexcept {
+    if (lppt) {
+        lppt->x = 0;
+        lppt->y = 0;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI ScaleViewportExtEx(HDC /*hdc*/, int32_t /*xn*/, int32_t /*dx*/, int32_t /*yn*/, int32_t /*yd*/, SIZE* lpsz) noexcept {
+    if (lpsz) {
+        lpsz->cx = 1;
+        lpsz->cy = 1;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI ScaleWindowExtEx(HDC /*hdc*/, int32_t /*xn*/, int32_t /*dx*/, int32_t /*yn*/, int32_t /*yd*/, SIZE* lpsz) noexcept {
+    if (lpsz) {
+        lpsz->cx = 1;
+        lpsz->cy = 1;
+    }
+    return TRUE;
+}
+
+inline int32_t WINAPI GetTextFaceW(HDC /*hdc*/, int32_t c, wchar_t* lpName) noexcept {
+    const wchar_t fontName[] = L"Segoe UI";
+    constexpr int32_t len = 8;
+    if (!lpName || c <= 0) {
+        return len + 1;
+    }
+    int32_t toCopy = std::min(c - 1, len);
+    std::wmemcpy(lpName, fontName, toCopy);
+    lpName[toCopy] = L'\0';
+    return toCopy;
+}
+
+inline HRGN WINAPI CreateEllipticRgn(int32_t /*x1*/, int32_t /*y1*/, int32_t /*x2*/, int32_t /*y2*/) noexcept {
+    static uintptr_t s_rgn = 0x8800;
+    return reinterpret_cast<HRGN>(++s_rgn);
+}
+
+inline BOOL WINAPI PtVisible(HDC /*hdc*/, int32_t /*x*/, int32_t /*y*/) noexcept {
+    return TRUE;
+}
+
+inline int32_t WINAPI Escape(HDC /*hdc*/, int32_t /*iEscape*/, int32_t /*cjIn*/, const char* /*pvIn*/, void* /*pvOut*/) noexcept {
+    return 1;
+}
+
+inline int32_t WINAPI EnumFontFamiliesW(HDC /*hdc*/, const wchar_t* /*lpLogfont*/, void* lpProc, LPARAM lParam) noexcept {
+    if (!lpProc) {
+        return 0;
+    }
+    auto fn = reinterpret_cast<int32_t(*)(const ENUMLOGFONTW*, const NEWTEXTMETRICW*, uint32_t, LPARAM)>(lpProc);
+    ENUMLOGFONTW elf{};
+    std::wcsncpy(elf.elfLogFont.lfFaceName, L"Segoe UI", 31);
+    elf.elfLogFont.lfHeight = -12;
+    elf.elfLogFont.lfWeight = 400;
+    elf.elfLogFont.lfCharSet = 1;
+    std::wcsncpy(elf.elfFullName, L"Segoe UI Regular", 63);
+    std::wcsncpy(elf.elfStyle, L"Regular", 31);
+
+    NEWTEXTMETRICW ntm{};
+    ntm.tmHeight = 15;
+    ntm.tmAscent = 12;
+    ntm.tmAveCharWidth = 7;
+    ntm.ntmFlags = 0x00000004;
+
+    return fn(&elf, &ntm, 0x0004, lParam);
+}
+
+inline void* WINAPI CopyMetaFileW(void* /*hmf*/, const wchar_t* /*pszFile*/) noexcept {
+    static uintptr_t s_hmf = 0x9900;
+    return reinterpret_cast<void*>(++s_hmf);
+}
+
 inline BOOL GetTextExtentPointW(HDC hdc, LPCWSTR lpString, int c, SIZE* lpsz) noexcept {
     return GetTextExtentPoint32W(hdc, lpString, c, lpsz);
 }
@@ -1763,6 +1916,22 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "GetTextMetricsA", reinterpret_cast<void*>(GetTextMetricsA));
     ldr.registerExport("gdi32.dll", "TranslateCharsetInfo", reinterpret_cast<void*>(TranslateCharsetInfo));
     ldr.registerExport("gdi32.dll", "UpdateColors", reinterpret_cast<void*>(UpdateColors));
+    ldr.registerExport("gdi32.dll", "GetLayout", reinterpret_cast<void*>(GetLayout));
+    ldr.registerExport("gdi32.dll", "SetPolyFillMode", reinterpret_cast<void*>(SetPolyFillMode));
+    ldr.registerExport("gdi32.dll", "GetPolyFillMode", reinterpret_cast<void*>(GetPolyFillMode));
+    ldr.registerExport("gdi32.dll", "SetViewportExtEx", reinterpret_cast<void*>(SetViewportExtEx));
+    ldr.registerExport("gdi32.dll", "GetViewportExtEx", reinterpret_cast<void*>(GetViewportExtEx));
+    ldr.registerExport("gdi32.dll", "SetWindowExtEx", reinterpret_cast<void*>(SetWindowExtEx));
+    ldr.registerExport("gdi32.dll", "GetWindowExtEx", reinterpret_cast<void*>(GetWindowExtEx));
+    ldr.registerExport("gdi32.dll", "OffsetViewportOrgEx", reinterpret_cast<void*>(OffsetViewportOrgEx));
+    ldr.registerExport("gdi32.dll", "ScaleViewportExtEx", reinterpret_cast<void*>(ScaleViewportExtEx));
+    ldr.registerExport("gdi32.dll", "ScaleWindowExtEx", reinterpret_cast<void*>(ScaleWindowExtEx));
+    ldr.registerExport("gdi32.dll", "GetTextFaceW", reinterpret_cast<void*>(GetTextFaceW));
+    ldr.registerExport("gdi32.dll", "CreateEllipticRgn", reinterpret_cast<void*>(CreateEllipticRgn));
+    ldr.registerExport("gdi32.dll", "PtVisible", reinterpret_cast<void*>(PtVisible));
+    ldr.registerExport("gdi32.dll", "Escape", reinterpret_cast<void*>(Escape));
+    ldr.registerExport("gdi32.dll", "EnumFontFamiliesW", reinterpret_cast<void*>(EnumFontFamiliesW));
+    ldr.registerExport("gdi32.dll", "CopyMetaFileW", reinterpret_cast<void*>(CopyMetaFileW));
 }
 
 } // namespace micant::gdi32

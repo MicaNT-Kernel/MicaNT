@@ -1061,6 +1061,7 @@ inline void InitializeComCtl32SubsystemExports() {
     ldr.registerExport("comctl32.dll", "CreatePropertySheetPageW", reinterpret_cast<void*>(CreatePropertySheetPageW));
 
     ldr.registerExport("comctl32.dll", "InitCommonControls", reinterpret_cast<void*>(InitCommonControls));
+    ldr.registerExportOrdinal("comctl32.dll", 17, reinterpret_cast<void*>(InitCommonControls));
     ldr.registerExport("comctl32.dll", "InitCommonControlsEx", reinterpret_cast<void*>(InitCommonControlsEx));
     ldr.registerExport("comctl32.dll", "ImageList_Create", reinterpret_cast<void*>(ImageList_Create));
     ldr.registerExport("comctl32.dll", "ImageList_Destroy", reinterpret_cast<void*>(ImageList_Destroy));

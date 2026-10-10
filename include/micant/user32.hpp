@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstdarg>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -55,6 +56,14 @@ using WNDPROC = LRESULT (*)(win32::HWND, UINT, WPARAM, LPARAM);
 
 using POINT = micant::prismx::POINT;
 using RECT  = micant::prismx::RECT;
+
+struct ACCEL {
+    uint8_t  fVirt;
+    uint16_t key;
+    uint16_t cmd;
+};
+
+using GRAYSTRINGPROC = win32::BOOL(*)(HDC, int64_t, int32_t);
 
 struct MSG {
     win32::HWND hwnd{nullptr};
@@ -1991,6 +2000,121 @@ inline BOOL WINAPI UnhookWinEvent(HWINEVENTHOOK /*hWinEventHook*/) noexcept {
     return win32::TRUE;
 }
 
+inline int32_t WINAPI CopyAcceleratorTableW(void* /*hAccelSrc*/, ACCEL* lpAccelDst, int32_t cAccelEntries) noexcept {
+    if (!lpAccelDst || cAccelEntries <= 0) {
+        return 4; // 4 standard accelerators (Ctrl+C, Ctrl+V, Ctrl+Z, F5)
+    }
+    lpAccelDst[0] = {0x08 /* FCONTROL */, 0x43 /* 'C' */, 101};
+    lpAccelDst[1] = {0x08, 0x56 /* 'V' */, 102};
+    lpAccelDst[2] = {0x08, 0x5A /* 'Z' */, 103};
+    lpAccelDst[3] = {0x01 /* FVIRTKEY */, 0x74 /* VK_F5 */, 104};
+    return 4;
+}
+
+inline HWND WINAPI RealChildWindowFromPoint(HWND hwndParent, POINT /*pt*/) noexcept {
+    return hwndParent;
+}
+
+inline win32::BOOL WINAPI UnionRect(RECT* lprcDst, const RECT* lprcSrc1, const RECT* lprcSrc2) noexcept {
+    if (!lprcDst || !lprcSrc1 || !lprcSrc2) {
+        return win32::FALSE;
+    }
+    lprcDst->left = std::min(lprcSrc1->left, lprcSrc2->left);
+    lprcDst->top = std::min(lprcSrc1->top, lprcSrc2->top);
+    lprcDst->right = std::max(lprcSrc1->right, lprcSrc2->right);
+    lprcDst->bottom = std::max(lprcSrc1->bottom, lprcSrc2->bottom);
+    return win32::TRUE;
+}
+
+inline int32_t WINAPI GetTabbedTextExtentW(HDC /*hdc*/, const wchar_t* lpString, int32_t chCount, int32_t /*nTabPositions*/, const int32_t* /*lpnTabStopPositions*/) noexcept {
+    int32_t len = (chCount >= 0) ? chCount : (lpString ? static_cast<int32_t>(std::wcslen(lpString)) : 0);
+    int32_t width = len * 8;
+    int32_t height = 16;
+    return (height << 16) | (width & 0xFFFF);
+}
+
+inline int64_t WINAPI ReuseDDElParam(int64_t lParam, uint32_t /*msgIn*/, uint32_t /*msgOut*/, uintptr_t /*uiLo*/, uintptr_t /*uiHi*/) noexcept {
+    return lParam;
+}
+
+inline win32::BOOL WINAPI UnpackDDElParam(uint32_t /*msg*/, int64_t lParam, uintptr_t* puiLo, uintptr_t* puiHi) noexcept {
+    if (puiLo) *puiLo = static_cast<uintptr_t>(lParam & 0xFFFFFFFF);
+    if (puiHi) *puiHi = static_cast<uintptr_t>((lParam >> 32) & 0xFFFFFFFF);
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI WinHelpW(HWND /*hWndMain*/, const wchar_t* /*lpszHelp*/, uint32_t /*uCommand*/, uintptr_t /*dwData*/) noexcept {
+    return win32::TRUE;
+}
+
+inline uint32_t WINAPI GetMenuCheckMarkDimensions() noexcept {
+    return (16 << 16) | 16; // 16x16 check mark
+}
+
+inline HWND WINAPI ChildWindowFromPoint(HWND hWndParent, POINT /*Point*/) noexcept {
+    return hWndParent;
+}
+
+inline void* WINAPI GetThreadDesktop(uint32_t /*dwThreadId*/) noexcept {
+    return reinterpret_cast<void*>(0xDE500001);
+}
+
+inline win32::BOOL WINAPI GetUserObjectInformationW(void* /*hObj*/, int32_t /*nIndex*/, void* pvInfo, uint32_t nLength, uint32_t* lpnLengthNeeded) noexcept {
+    if (lpnLengthNeeded) {
+        *lpnLengthNeeded = sizeof(uint32_t);
+    }
+    if (pvInfo && nLength >= sizeof(uint32_t)) {
+        *static_cast<uint32_t*>(pvInfo) = 0x01; // Desktop / WS flags
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI DragDetect(HWND /*hwnd*/, POINT /*pt*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI IsMenu(HMENU hMenu) noexcept {
+    return hMenu != nullptr ? win32::TRUE : win32::FALSE;
+}
+
+inline win32::BOOL WINAPI GrayStringW(HDC hdc, HBRUSH /*hbr*/, GRAYSTRINGPROC lpOutputFunc, int64_t lpData, int32_t nCount, int32_t /*X*/, int32_t /*Y*/, int32_t /*nWidth*/, int32_t /*nHeight*/) noexcept {
+    if (lpOutputFunc) {
+        return lpOutputFunc(hdc, lpData, nCount);
+    }
+    return win32::TRUE;
+}
+
+inline int32_t WINAPI TabbedTextOutW(HDC /*hdc*/, int32_t /*X*/, int32_t /*Y*/, const wchar_t* lpString, int32_t chCount, int32_t /*nTabPositions*/, const int32_t* /*lpnTabStopPositions*/, int32_t /*nTabOrigin*/) noexcept {
+    int32_t len = (chCount >= 0) ? chCount : (lpString ? static_cast<int32_t>(std::wcslen(lpString)) : 0);
+    int32_t width = len * 8;
+    int32_t height = 16;
+    return (height << 16) | (width & 0xFFFF);
+}
+
+inline int32_t wsprintfA(char* lpOut, const char* lpFmt, ...) noexcept {
+    if (!lpOut || !lpFmt) return 0;
+    std::va_list args;
+    va_start(args, lpFmt);
+    int res = std::vsnprintf(lpOut, 1024, lpFmt, args);
+    va_end(args);
+    return res > 0 ? res : 0;
+}
+
+inline const wchar_t* WINAPI CharPrevW(const wchar_t* lpszStart, const wchar_t* lpszCurrent) noexcept {
+    if (!lpszStart || !lpszCurrent || lpszCurrent <= lpszStart) {
+        return lpszStart;
+    }
+    return lpszCurrent - 1;
+}
+
+inline win32::BOOL WINAPI GetCaretPos(POINT* lpPoint) noexcept {
+    if (lpPoint) {
+        lpPoint->x = 0;
+        lpPoint->y = 0;
+    }
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -2162,6 +2286,24 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "SetProcessDefaultLayout", reinterpret_cast<void*>(SetProcessDefaultLayout));
     ldr.registerExport("user32.dll", "SetWinEventHook", reinterpret_cast<void*>(SetWinEventHook));
     ldr.registerExport("user32.dll", "UnhookWinEvent", reinterpret_cast<void*>(UnhookWinEvent));
+    ldr.registerExport("user32.dll", "CopyAcceleratorTableW", reinterpret_cast<void*>(CopyAcceleratorTableW));
+    ldr.registerExport("user32.dll", "RealChildWindowFromPoint", reinterpret_cast<void*>(RealChildWindowFromPoint));
+    ldr.registerExport("user32.dll", "UnionRect", reinterpret_cast<void*>(UnionRect));
+    ldr.registerExport("user32.dll", "GetTabbedTextExtentW", reinterpret_cast<void*>(GetTabbedTextExtentW));
+    ldr.registerExport("user32.dll", "ReuseDDElParam", reinterpret_cast<void*>(ReuseDDElParam));
+    ldr.registerExport("user32.dll", "UnpackDDElParam", reinterpret_cast<void*>(UnpackDDElParam));
+    ldr.registerExport("user32.dll", "WinHelpW", reinterpret_cast<void*>(WinHelpW));
+    ldr.registerExport("user32.dll", "GetMenuCheckMarkDimensions", reinterpret_cast<void*>(GetMenuCheckMarkDimensions));
+    ldr.registerExport("user32.dll", "ChildWindowFromPoint", reinterpret_cast<void*>(ChildWindowFromPoint));
+    ldr.registerExport("user32.dll", "GetThreadDesktop", reinterpret_cast<void*>(GetThreadDesktop));
+    ldr.registerExport("user32.dll", "GetUserObjectInformationW", reinterpret_cast<void*>(GetUserObjectInformationW));
+    ldr.registerExport("user32.dll", "DragDetect", reinterpret_cast<void*>(DragDetect));
+    ldr.registerExport("user32.dll", "IsMenu", reinterpret_cast<void*>(IsMenu));
+    ldr.registerExport("user32.dll", "GrayStringW", reinterpret_cast<void*>(GrayStringW));
+    ldr.registerExport("user32.dll", "TabbedTextOutW", reinterpret_cast<void*>(TabbedTextOutW));
+    ldr.registerExport("user32.dll", "wsprintfA", reinterpret_cast<void*>(wsprintfA));
+    ldr.registerExport("user32.dll", "CharPrevW", reinterpret_cast<void*>(CharPrevW));
+    ldr.registerExport("user32.dll", "GetCaretPos", reinterpret_cast<void*>(GetCaretPos));
 }
 
 } // namespace micant::user32

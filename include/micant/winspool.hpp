@@ -962,6 +962,30 @@ inline int32_t DeviceCapabilitiesW(const wchar_t* /*pDevice*/, const wchar_t* /*
     return 1;
 }
 
+inline int32_t __stdcall GetJobW(
+    uintptr_t /*hPrinter*/,
+    uint32_t JobId,
+    uint32_t Level,
+    uint8_t* pJob,
+    uint32_t cbBuf,
+    uint32_t* pcbNeeded
+) {
+    if (pcbNeeded) {
+        *pcbNeeded = sizeof(JOB_INFO_1W);
+    }
+    if (Level != 1 || !pJob || cbBuf < sizeof(JOB_INFO_1W)) {
+        return 0; // Buffer too small or unsupported level
+    }
+    std::memset(pJob, 0, sizeof(JOB_INFO_1W));
+    auto* info = reinterpret_cast<JOB_INFO_1W*>(pJob);
+    info->JobId = (JobId > 0) ? JobId : 1;
+    info->Status = 0;
+    info->Priority = 1;
+    info->TotalPages = 1;
+    info->PagesPrinted = 1;
+    return 1;
+}
+
 // ============================================================================
 // 4. Dynamic Loader & SCM Registration
 // ============================================================================
@@ -992,6 +1016,7 @@ inline void InitializePrintSpoolerSubsystemExports() {
     ldr.registerExport("winspool.drv", "AbortPrinter", reinterpret_cast<void*>(AbortPrinter));
     ldr.registerExport("winspool.drv", "EnumJobsW", reinterpret_cast<void*>(EnumJobsW));
     ldr.registerExport("winspool.drv", "SetJobW", reinterpret_cast<void*>(SetJobW));
+    ldr.registerExport("winspool.drv", "GetJobW", reinterpret_cast<void*>(GetJobW));
     ldr.registerExport("winspool.drv", "DeviceCapabilitiesW", reinterpret_cast<void*>(DeviceCapabilitiesW));
 
     // 2. spoolsv.dll exports (Print Spooler Service)

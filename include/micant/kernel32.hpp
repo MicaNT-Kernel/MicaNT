@@ -4626,6 +4626,183 @@ inline DWORD WINAPI K32GetProcessImageFileNameW(
     return 0;
 }
 
+struct SLIST_ENTRY {
+    SLIST_ENTRY* Next;
+};
+
+struct SLIST_HEADER {
+    uint64_t Alignment;
+    uint64_t Region;
+};
+
+struct ACTCTXW {
+    uint32_t cbSize;
+    uint32_t dwFlags;
+    const wchar_t* lpSource;
+    uint16_t wProcessorArchitecture;
+    uint16_t wLangId;
+    const wchar_t* lpAssemblyDirectory;
+    const wchar_t* lpResourceName;
+    const wchar_t* lpApplicationName;
+    void* hModule;
+};
+
+inline void* WINAPI GlobalReAlloc(void* hMem, size_t dwBytes, uint32_t /*uFlags*/) noexcept {
+    if (!hMem) {
+        return std::malloc(dwBytes ? dwBytes : 1);
+    }
+    return std::realloc(hMem, dwBytes ? dwBytes : 1);
+}
+
+inline void* WINAPI LocalReAlloc(void* hMem, size_t uBytes, uint32_t /*uFlags*/) noexcept {
+    if (!hMem) {
+        return std::malloc(uBytes ? uBytes : 1);
+    }
+    return std::realloc(hMem, uBytes ? uBytes : 1);
+}
+
+inline void* WINAPI GlobalHandle(const void* pMem) noexcept {
+    return const_cast<void*>(pMem);
+}
+
+inline uint32_t WINAPI GlobalFlags(void* /*hMem*/) noexcept {
+    return 0; // GMEM_FIXED
+}
+
+inline uint16_t WINAPI SetThreadUILanguage(uint16_t LangId) noexcept {
+    static uint16_t s_lang = 0x0409; // en-US
+    uint16_t prev = s_lang;
+    if (LangId != 0) {
+        s_lang = LangId;
+    }
+    return prev;
+}
+
+inline BOOL WINAPI SetSearchPathMode(uint32_t /*Flags*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetDllDirectoryW(const wchar_t* /*lpPathName*/) noexcept {
+    return TRUE;
+}
+
+inline uint32_t WINAPI GetSystemWow64DirectoryW(wchar_t* lpBuffer, uint32_t uSize) noexcept {
+    const wchar_t sysWow64[] = L"C:\\Windows\\SysWOW64";
+    constexpr uint32_t len = 19;
+    if (!lpBuffer || uSize <= len) {
+        return len + 1;
+    }
+    std::wmemcpy(lpBuffer, sysWow64, len);
+    lpBuffer[len] = L'\0';
+    return len;
+}
+
+inline uint32_t WINAPI ExpandEnvironmentStringsA(const char* lpSrc, char* lpDst, uint32_t nSize) noexcept {
+    if (!lpSrc) {
+        return 0;
+    }
+    std::string src(lpSrc);
+    std::string out;
+    size_t i = 0;
+    while (i < src.size()) {
+        if (src[i] == '%') {
+            size_t end = src.find('%', i + 1);
+            if (end != std::string::npos) {
+                std::string var = src.substr(i + 1, end - i - 1);
+                std::string val;
+                for (char& c : var) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                if (var == "SYSTEMROOT" || var == "WINDIR") val = "C:\\Windows";
+                else if (var == "SYSTEMDRIVE") val = "C:";
+                else if (var == "TEMP" || var == "TMP") val = "C:\\Users\\admin\\AppData\\Local\\Temp";
+                else if (var == "USERPROFILE") val = "C:\\Users\\admin";
+                else if (var == "PROGRAMDATA") val = "C:\\ProgramData";
+                else val = "";
+                out.append(val);
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push_back(src[i++]);
+    }
+    uint32_t req = static_cast<uint32_t>(out.size() + 1);
+    if (!lpDst || nSize < req) {
+        return req;
+    }
+    std::memcpy(lpDst, out.c_str(), req);
+    return req - 1;
+}
+
+inline void* WINAPI CreateActCtxW(const ACTCTXW* /*pActCtx*/) noexcept {
+    return reinterpret_cast<void*>(0xAC1C0001);
+}
+
+inline BOOL WINAPI ActivateActCtx(void* /*hActCtx*/, uintptr_t* lpCookie) noexcept {
+    if (lpCookie) {
+        *lpCookie = 0x12345678;
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI DeactivateActCtx(uint32_t /*dwFlags*/, uintptr_t /*ulCookie*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI FindActCtxSectionStringW(uint32_t /*dwFlags*/, const void* /*lpExtensionGuid*/, uint32_t /*ulSectionId*/, const wchar_t* /*lpStringToFind*/, void* /*PActCtx*/) noexcept {
+    return FALSE;
+}
+
+inline BOOL WINAPI QueryActCtxW(uint32_t /*dwFlags*/, void* /*hActCtx*/, void* /*pvSubInstance*/, uint32_t /*ulInfoClass*/, void* /*pvBuffer*/, size_t /*cbBuffer*/, size_t* pcbWritten) noexcept {
+    if (pcbWritten) {
+        *pcbWritten = 0;
+    }
+    return TRUE;
+}
+
+inline uint32_t WINAPI GetProfileIntW(const wchar_t* /*lpAppName*/, const wchar_t* /*lpKeyName*/, int32_t nDefault) noexcept {
+    return static_cast<uint32_t>(nDefault);
+}
+
+inline uint32_t WINAPI GlobalGetAtomNameW(uint16_t nAtom, wchar_t* lpBuffer, int32_t nSize) noexcept {
+    if (!lpBuffer || nSize <= 0) {
+        return 0;
+    }
+    int written = std::swprintf(lpBuffer, nSize, L"#%u", nAtom);
+    return written > 0 ? static_cast<uint32_t>(written) : 0;
+}
+
+inline int32_t WINAPI lstrcmpA(const char* s1, const char* s2) noexcept {
+    if (!s1 && !s2) return 0;
+    if (!s1) return -1;
+    if (!s2) return 1;
+    return std::strcmp(s1, s2);
+}
+
+inline BOOL WINAPI LockFile(HANDLE /*hFile*/, uint32_t /*dwFileOffsetLow*/, uint32_t /*dwFileOffsetHigh*/, uint32_t /*nNumberOfBytesToLockLow*/, uint32_t /*nNumberOfBytesToLockHigh*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI UnlockFile(HANDLE /*hFile*/, uint32_t /*dwFileOffsetLow*/, uint32_t /*dwFileOffsetHigh*/, uint32_t /*nNumberOfBytesToUnlockLow*/, uint32_t /*nNumberOfBytesToUnlockHigh*/) noexcept {
+    return TRUE;
+}
+
+inline void* WINAPI FindResourceExW(HMODULE hModule, const wchar_t* lpType, const wchar_t* lpName, uint16_t /*wLanguage*/) noexcept {
+    return FindResourceW(hModule, lpName, lpType);
+}
+
+inline SLIST_ENTRY* WINAPI InterlockedPushEntrySList(SLIST_HEADER* ListHead, SLIST_ENTRY* ListEntry) noexcept {
+    if (!ListHead || !ListEntry) {
+        return nullptr;
+    }
+    auto* oldFirst = reinterpret_cast<SLIST_ENTRY*>(ListHead->Alignment);
+    ListEntry->Next = oldFirst;
+    ListHead->Alignment = reinterpret_cast<uint64_t>(ListEntry);
+    return oldFirst;
+}
+
+inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
+    return 1001;
+}
+
 // ============================================================================
 // 18. Win32 Dynamic Subsystem Export Table Initializer
 // ============================================================================
@@ -5081,6 +5258,28 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "VerifyVersionInfoA", reinterpret_cast<void*>(VerifyVersionInfoA));
     ldr.registerExport("kernel32.dll", "K32GetModuleFileNameExW", reinterpret_cast<void*>(K32GetModuleFileNameExW));
     ldr.registerExport("kernel32.dll", "K32GetProcessImageFileNameW", reinterpret_cast<void*>(K32GetProcessImageFileNameW));
+    ldr.registerExport("kernel32.dll", "GlobalReAlloc", reinterpret_cast<void*>(GlobalReAlloc));
+    ldr.registerExport("kernel32.dll", "LocalReAlloc", reinterpret_cast<void*>(LocalReAlloc));
+    ldr.registerExport("kernel32.dll", "GlobalHandle", reinterpret_cast<void*>(GlobalHandle));
+    ldr.registerExport("kernel32.dll", "GlobalFlags", reinterpret_cast<void*>(GlobalFlags));
+    ldr.registerExport("kernel32.dll", "SetThreadUILanguage", reinterpret_cast<void*>(SetThreadUILanguage));
+    ldr.registerExport("kernel32.dll", "SetSearchPathMode", reinterpret_cast<void*>(SetSearchPathMode));
+    ldr.registerExport("kernel32.dll", "SetDllDirectoryW", reinterpret_cast<void*>(SetDllDirectoryW));
+    ldr.registerExport("kernel32.dll", "GetSystemWow64DirectoryW", reinterpret_cast<void*>(GetSystemWow64DirectoryW));
+    ldr.registerExport("kernel32.dll", "ExpandEnvironmentStringsA", reinterpret_cast<void*>(ExpandEnvironmentStringsA));
+    ldr.registerExport("kernel32.dll", "CreateActCtxW", reinterpret_cast<void*>(CreateActCtxW));
+    ldr.registerExport("kernel32.dll", "ActivateActCtx", reinterpret_cast<void*>(ActivateActCtx));
+    ldr.registerExport("kernel32.dll", "DeactivateActCtx", reinterpret_cast<void*>(DeactivateActCtx));
+    ldr.registerExport("kernel32.dll", "FindActCtxSectionStringW", reinterpret_cast<void*>(FindActCtxSectionStringW));
+    ldr.registerExport("kernel32.dll", "QueryActCtxW", reinterpret_cast<void*>(QueryActCtxW));
+    ldr.registerExport("kernel32.dll", "GetProfileIntW", reinterpret_cast<void*>(GetProfileIntW));
+    ldr.registerExport("kernel32.dll", "GlobalGetAtomNameW", reinterpret_cast<void*>(GlobalGetAtomNameW));
+    ldr.registerExport("kernel32.dll", "lstrcmpA", reinterpret_cast<void*>(lstrcmpA));
+    ldr.registerExport("kernel32.dll", "LockFile", reinterpret_cast<void*>(LockFile));
+    ldr.registerExport("kernel32.dll", "UnlockFile", reinterpret_cast<void*>(UnlockFile));
+    ldr.registerExport("kernel32.dll", "FindResourceExW", reinterpret_cast<void*>(FindResourceExW));
+    ldr.registerExport("kernel32.dll", "InterlockedPushEntrySList", reinterpret_cast<void*>(InterlockedPushEntrySList));
+    ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

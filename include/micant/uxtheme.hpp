@@ -112,6 +112,46 @@ inline win32::HRESULT GetThemeSysFont(HTHEME /*hTheme*/, int /*iFontId*/, void* 
     return 0; // S_OK
 }
 
+struct MARGINS {
+    int32_t cxLeftWidth{2};
+    int32_t cxRightWidth{2};
+    int32_t cyTopHeight{2};
+    int32_t cyBottomHeight{2};
+};
+
+inline win32::BOOL IsThemeActive() noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL IsAppThemed() noexcept {
+    return win32::TRUE;
+}
+
+inline win32::HRESULT GetThemeMargins(HTHEME /*hTheme*/, void* /*hdc*/, int /*iPartId*/, int /*iStateId*/, int /*iPropId*/, const void* /*prc*/, MARGINS* pMargins) noexcept {
+    if (pMargins) {
+        pMargins->cxLeftWidth = 2;
+        pMargins->cxRightWidth = 2;
+        pMargins->cyTopHeight = 2;
+        pMargins->cyBottomHeight = 2;
+    }
+    return 0; // S_OK
+}
+
+inline win32::HRESULT GetThemeInt(HTHEME /*hTheme*/, int /*iPartId*/, int /*iStateId*/, int /*iPropId*/, int* piVal) noexcept {
+    if (piVal) {
+        *piVal = 0;
+    }
+    return 0; // S_OK
+}
+
+inline win32::HRESULT DrawThemeText(HTHEME /*hTheme*/, void* /*hdc*/, int /*iPartId*/, int /*iStateId*/, LPCWSTR /*pszText*/, int /*iCharCount*/, win32::DWORD /*dwTextFlags*/, win32::DWORD /*dwTextFlags2*/, const void* /*pRect*/) noexcept {
+    return 0; // S_OK
+}
+
+inline win32::BOOL IsThemeBackgroundPartiallyTransparent(HTHEME /*hTheme*/, int /*iPartId*/, int /*iStateId*/) noexcept {
+    return win32::FALSE;
+}
+
 inline win32::BOOL IsThemePartDefined(HTHEME /*hTheme*/, int /*iPartId*/, int /*iStateId*/) noexcept {
     return win32::TRUE;
 }
@@ -139,6 +179,12 @@ inline void InitializeUxThemeSubsystemExports() {
     ldr.registerExport("uxtheme.dll", "GetThemeSysColor", reinterpret_cast<void*>(GetThemeSysColor));
     ldr.registerExport("uxtheme.dll", "GetThemeSysFont", reinterpret_cast<void*>(GetThemeSysFont));
     ldr.registerExport("uxtheme.dll", "IsThemePartDefined", reinterpret_cast<void*>(IsThemePartDefined));
+    ldr.registerExport("uxtheme.dll", "IsThemeActive", reinterpret_cast<void*>(IsThemeActive));
+    ldr.registerExport("uxtheme.dll", "IsAppThemed", reinterpret_cast<void*>(IsAppThemed));
+    ldr.registerExport("uxtheme.dll", "GetThemeMargins", reinterpret_cast<void*>(GetThemeMargins));
+    ldr.registerExport("uxtheme.dll", "GetThemeInt", reinterpret_cast<void*>(GetThemeInt));
+    ldr.registerExport("uxtheme.dll", "DrawThemeText", reinterpret_cast<void*>(DrawThemeText));
+    ldr.registerExport("uxtheme.dll", "IsThemeBackgroundPartiallyTransparent", reinterpret_cast<void*>(IsThemeBackgroundPartiallyTransparent));
 }
 
 } // namespace micant::uxtheme

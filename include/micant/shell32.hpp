@@ -1658,6 +1658,188 @@ inline int32_t QISearch(void* that, [[maybe_unused]] const void* pqit, [[maybe_u
     return 0;
 }
 
+inline int32_t WINAPI SHCreateShellItem(const void* /*pidlParent*/, void* /*psfParent*/, const void* /*pidl*/, void** ppsi) noexcept {
+    if (ppsi) {
+        static uintptr_t s_shitem = 0x1100;
+        *ppsi = reinterpret_cast<void*>(++s_shitem);
+    }
+    return 0; // S_OK
+}
+
+inline void WINAPI ILFree(void* pidl) noexcept {
+    if (pidl) {
+        std::free(pidl);
+    }
+}
+
+inline int32_t WINAPI SHGetPropertyStoreFromParsingName(const wchar_t* /*pszPath*/, void* /*pbc*/, uint32_t /*flags*/, const void* /*riid*/, void** ppv) noexcept {
+    if (ppv) {
+        static uintptr_t s_pstore = 0x1120;
+        *ppv = reinterpret_cast<void*>(++s_pstore);
+    }
+    return 0; // S_OK
+}
+
+inline int32_t WINAPI SetCurrentProcessExplicitAppUserModelID(const wchar_t* /*AppID*/) noexcept {
+    return 0; // S_OK
+}
+
+inline int32_t WINAPI CDefFolderMenu_Create2(void* /*pidlFolder*/, void* /*hwnd*/, uint32_t /*cidl*/, const void* /*apidl*/, void* /*psf*/, void* /*lpfn*/, uint32_t /*nKeys*/, const void* /*ahkeyClsKeys*/, void** ppv) noexcept {
+    if (ppv) {
+        static uintptr_t s_fmenu = 0x1130;
+        *ppv = reinterpret_cast<void*>(++s_fmenu);
+    }
+    return 0; // S_OK
+}
+
+inline win32::BOOL WINAPI PathStripToRootW(wchar_t* pszPath) noexcept {
+    if (!pszPath) return win32::FALSE;
+    if ((pszPath[0] >= L'A' && pszPath[0] <= L'Z') || (pszPath[0] >= L'a' && pszPath[0] <= L'z')) {
+        if (pszPath[1] == L':') {
+            pszPath[2] = L'\\';
+            pszPath[3] = L'\0';
+            return win32::TRUE;
+        }
+    }
+    if ((pszPath[0] == L'\\' || pszPath[0] == L'/') && (pszPath[1] == L'\\' || pszPath[1] == L'/')) {
+        wchar_t* p = pszPath + 2;
+        while (*p && *p != L'\\' && *p != L'/') p++;
+        if (*p) {
+            p++;
+            while (*p && *p != L'\\' && *p != L'/') p++;
+            if (*p) {
+                *p++ = L'\\';
+                *p = L'\0';
+                return win32::TRUE;
+            }
+        }
+    }
+    return win32::FALSE;
+}
+
+inline int32_t WINAPI StrCmpLogicalW(const wchar_t* psz1, const wchar_t* psz2) noexcept {
+    if (!psz1 && !psz2) return 0;
+    if (!psz1) return -1;
+    if (!psz2) return 1;
+
+    const wchar_t* p1 = psz1;
+    const wchar_t* p2 = psz2;
+
+    while (*p1 && *p2) {
+        if (std::iswdigit(*p1) && std::iswdigit(*p2)) {
+            wchar_t* end1 = nullptr;
+            wchar_t* end2 = nullptr;
+            unsigned long n1 = std::wcstoul(p1, &end1, 10);
+            unsigned long n2 = std::wcstoul(p2, &end2, 10);
+            if (n1 != n2) {
+                return (n1 < n2) ? -1 : 1;
+            }
+            p1 = end1;
+            p2 = end2;
+        } else {
+            wchar_t c1 = std::towlower(*p1);
+            wchar_t c2 = std::towlower(*p2);
+            if (c1 != c2) {
+                return (c1 < c2) ? -1 : 1;
+            }
+            p1++;
+            p2++;
+        }
+    }
+    if (*p1) return 1;
+    if (*p2) return -1;
+    return 0;
+}
+
+inline uint32_t WINAPI PathGetCharTypeW(wchar_t ch) noexcept {
+    if (ch == L'\\' || ch == L'/' || ch == L':') {
+        return 0x0002; // GCT_SEPARATOR
+    }
+    if (ch == L'*' || ch == L'?' || ch == L'<' || ch == L'>' || ch == L'|' || ch == L'\"') {
+        return 0x0001; // GCT_INVALID
+    }
+    return 0x0004; // GCT_LFNCHAR
+}
+
+inline win32::BOOL WINAPI UrlIsW(const wchar_t* pszUrl, int32_t /*UrlIs*/) noexcept {
+    if (!pszUrl) return win32::FALSE;
+    return (std::wcsstr(pszUrl, L"://") != nullptr) ? win32::TRUE : win32::FALSE;
+}
+
+inline int32_t WINAPI SHAutoComplete(void* /*hwndEdit*/, uint32_t /*dwFlags*/) noexcept {
+    return 0; // S_OK
+}
+
+inline win32::BOOL WINAPI PathCompactPathW(void* /*hdc*/, wchar_t* pszPath, uint32_t dx) noexcept {
+    if (!pszPath) return win32::FALSE;
+    size_t len = std::wcslen(pszPath);
+    if (len > 30 && dx < 200) {
+        pszPath[12] = L'.';
+        pszPath[13] = L'.';
+        pszPath[14] = L'.';
+    }
+    return win32::TRUE;
+}
+
+inline wchar_t* WINAPI StrFormatByteSizeW(int64_t qdw, wchar_t* pszBuf, uint32_t cchBuf) noexcept {
+    if (!pszBuf || cchBuf == 0) return pszBuf;
+    if (qdw < 1024) {
+        std::swprintf(pszBuf, cchBuf, L"%lld bytes", qdw);
+    } else if (qdw < 1024 * 1024) {
+        std::swprintf(pszBuf, cchBuf, L"%.1f KB", static_cast<double>(qdw) / 1024.0);
+    } else if (qdw < 1024LL * 1024 * 1024) {
+        std::swprintf(pszBuf, cchBuf, L"%.1f MB", static_cast<double>(qdw) / (1024.0 * 1024.0));
+    } else {
+        std::swprintf(pszBuf, cchBuf, L"%.2f GB", static_cast<double>(qdw) / (1024.0 * 1024.0 * 1024.0));
+    }
+    return pszBuf;
+}
+
+inline win32::BOOL WINAPI StrTrimW(wchar_t* psz, const wchar_t* pszTrimChars) noexcept {
+    if (!psz || !pszTrimChars) return win32::FALSE;
+    size_t start = 0;
+    while (psz[start] && std::wcschr(pszTrimChars, psz[start])) {
+        start++;
+    }
+    if (start > 0) {
+        std::wmemmove(psz, psz + start, std::wcslen(psz + start) + 1);
+    }
+    size_t len = std::wcslen(psz);
+    while (len > 0 && std::wcschr(pszTrimChars, psz[len - 1])) {
+        psz[--len] = L'\0';
+    }
+    return win32::TRUE;
+}
+
+inline wchar_t* WINAPI StrChrW(const wchar_t* pszStart, wchar_t wMatch) noexcept {
+    if (!pszStart) return nullptr;
+    return const_cast<wchar_t*>(std::wcschr(pszStart, wMatch));
+}
+
+inline win32::BOOL WINAPI PathIsUNCW(const wchar_t* pszPath) noexcept {
+    if (!pszPath) return win32::FALSE;
+    return ((pszPath[0] == L'\\' || pszPath[0] == L'/') && (pszPath[1] == L'\\' || pszPath[1] == L'/')) ? win32::TRUE : win32::FALSE;
+}
+
+inline wchar_t* WINAPI SysAllocString_Shlwapi(const wchar_t* psz) noexcept {
+    if (!psz) return nullptr;
+    size_t len = std::wcslen(psz);
+    auto* buf = static_cast<wchar_t*>(std::malloc((len + 1) * sizeof(wchar_t) + 4));
+    if (!buf) return nullptr;
+    *reinterpret_cast<uint32_t*>(buf) = static_cast<uint32_t>(len * sizeof(wchar_t));
+    auto* bstr = reinterpret_cast<wchar_t*>(reinterpret_cast<uint8_t*>(buf) + 4);
+    std::wmemcpy(bstr, psz, len);
+    bstr[len] = L'\0';
+    return bstr;
+}
+
+inline int32_t WINAPI VariantCopyInd_Shlwapi(void* pvarDest, const void* pvargSrc) noexcept {
+    if (pvarDest && pvargSrc) {
+        std::memcpy(pvarDest, pvargSrc, 24);
+    }
+    return 0; // S_OK
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
@@ -1711,6 +1893,13 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "SHCreateDirectoryExW", reinterpret_cast<void*>(SHCreateDirectoryExW));
     ldr.registerExportOrdinal("shell32.dll", 2, reinterpret_cast<void*>(SHChangeNotifyRegister_Ordinal2));
     ldr.registerExportOrdinal("shell32.dll", 4, reinterpret_cast<void*>(SHChangeNotifyDeregister_Ordinal4));
+    ldr.registerExport("shell32.dll", "SHCreateShellItem", reinterpret_cast<void*>(SHCreateShellItem));
+    ldr.registerExport("shell32.dll", "ILFree", reinterpret_cast<void*>(ILFree));
+    ldr.registerExportOrdinal("shell32.dll", 155, reinterpret_cast<void*>(ILFree));
+    ldr.registerExport("shell32.dll", "SHGetPropertyStoreFromParsingName", reinterpret_cast<void*>(SHGetPropertyStoreFromParsingName));
+    ldr.registerExport("shell32.dll", "SetCurrentProcessExplicitAppUserModelID", reinterpret_cast<void*>(SetCurrentProcessExplicitAppUserModelID));
+    ldr.registerExport("shell32.dll", "CDefFolderMenu_Create2", reinterpret_cast<void*>(CDefFolderMenu_Create2));
+    ldr.registerExportOrdinal("shell32.dll", 701, reinterpret_cast<void*>(CDefFolderMenu_Create2));
 
     // shlwapi.dll exports
     ldr.registerExport("shlwapi.dll", "wnsprintfW", reinterpret_cast<void*>(wnsprintfW));
@@ -1764,6 +1953,20 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shlwapi.dll", "UrlEscapeW", reinterpret_cast<void*>(UrlEscapeW));
     ldr.registerExport("shlwapi.dll", "QISearch", reinterpret_cast<void*>(QISearch));
     ldr.registerExportOrdinal("shlwapi.dll", 219, reinterpret_cast<void*>(QISearch));
+    ldr.registerExport("shlwapi.dll", "PathStripToRootW", reinterpret_cast<void*>(PathStripToRootW));
+    ldr.registerExport("shlwapi.dll", "StrCmpLogicalW", reinterpret_cast<void*>(StrCmpLogicalW));
+    ldr.registerExport("shlwapi.dll", "PathGetCharTypeW", reinterpret_cast<void*>(PathGetCharTypeW));
+    ldr.registerExport("shlwapi.dll", "UrlIsW", reinterpret_cast<void*>(UrlIsW));
+    ldr.registerExport("shlwapi.dll", "SHAutoComplete", reinterpret_cast<void*>(SHAutoComplete));
+    ldr.registerExport("shlwapi.dll", "PathCompactPathW", reinterpret_cast<void*>(PathCompactPathW));
+    ldr.registerExport("shlwapi.dll", "StrFormatByteSizeW", reinterpret_cast<void*>(StrFormatByteSizeW));
+    ldr.registerExport("shlwapi.dll", "SysAllocString", reinterpret_cast<void*>(SysAllocString_Shlwapi));
+    ldr.registerExport("shlwapi.dll", "VariantCopyInd", reinterpret_cast<void*>(VariantCopyInd_Shlwapi));
+    ldr.registerExportOrdinal("shlwapi.dll", 2, reinterpret_cast<void*>(SysAllocString_Shlwapi));
+    ldr.registerExportOrdinal("shlwapi.dll", 12, reinterpret_cast<void*>(VariantCopyInd_Shlwapi));
+    ldr.registerExport("shlwapi.dll", "StrTrimW", reinterpret_cast<void*>(StrTrimW));
+    ldr.registerExport("shlwapi.dll", "StrChrW", reinterpret_cast<void*>(StrChrW));
+    ldr.registerExport("shlwapi.dll", "PathIsUNCW", reinterpret_cast<void*>(PathIsUNCW));
     ldr.registerExport("api-ms-win-shcore-scaling-l1-1-1.dll", "SetProcessDpiAwareness", reinterpret_cast<void*>(SetProcessDpiAwareness));
     ldr.registerExport("api-ms-win-shcore-scaling-l1-1-1.dll", "GetDpiForMonitor", reinterpret_cast<void*>(GetDpiForMonitor));
     ldr.registerExport("shcore.dll", "GetDpiForMonitor", reinterpret_cast<void*>(GetDpiForMonitor));

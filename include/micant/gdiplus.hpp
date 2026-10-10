@@ -2450,6 +2450,72 @@ public:
     int32_t __stdcall LockServer(int32_t) override { return ole32::S_OK; }
 };
 
+struct ColorPalette {
+    uint32_t Flags{0};
+    uint32_t Count{0};
+    uint32_t Entries[1]{0};
+};
+
+inline int32_t GdipAddPathArcI(void* /*path*/, int32_t /*x*/, int32_t /*y*/, int32_t /*width*/, int32_t /*height*/, float /*startAngle*/, float /*sweepAngle*/) noexcept {
+    return 0; // Ok
+}
+
+inline int32_t GdipClosePathFigure(void* /*path*/) noexcept {
+    return 0; // Ok
+}
+
+inline int32_t GdipAddPathLineI(void* /*path*/, int32_t /*x1*/, int32_t /*y1*/, int32_t /*x2*/, int32_t /*y2*/) noexcept {
+    return 0; // Ok
+}
+
+inline int32_t GdipAddPathBezierI(void* /*path*/, int32_t /*x1*/, int32_t /*y1*/, int32_t /*x2*/, int32_t /*y2*/, int32_t /*x3*/, int32_t /*y3*/, int32_t /*x4*/, int32_t /*y4*/) noexcept {
+    return 0; // Ok
+}
+
+inline int32_t GdipStartPathFigure(void* /*path*/) noexcept {
+    return 0; // Ok
+}
+
+inline int32_t GdipDrawBezierI(void* /*graphics*/, void* /*pen*/, int32_t /*x1*/, int32_t /*y1*/, int32_t /*x2*/, int32_t /*y2*/, int32_t /*x3*/, int32_t /*y3*/, int32_t /*x4*/, int32_t /*y4*/) noexcept {
+    return 0; // Ok
+}
+
+inline int32_t GdipDrawImageRectI(void* /*graphics*/, void* /*image*/, int32_t /*x*/, int32_t /*y*/, int32_t /*width*/, int32_t /*height*/) noexcept {
+    return 0; // Ok
+}
+
+inline int32_t GdipGetImagePalette(void* /*image*/, ColorPalette* palette, int32_t size) noexcept {
+    if (palette && size >= static_cast<int32_t>(sizeof(ColorPalette))) {
+        palette->Flags = 0;
+        palette->Count = 1;
+        palette->Entries[0] = 0xFF000000;
+    }
+    return 0; // Ok
+}
+
+inline int32_t GdipGetImagePaletteSize(void* /*image*/, int32_t* size) noexcept {
+    if (size) {
+        *size = sizeof(ColorPalette);
+    }
+    return 0; // Ok
+}
+
+inline int32_t GdipCreateBitmapFromFile(const wchar_t* /*filename*/, void** bitmap) noexcept {
+    if (bitmap) {
+        static uintptr_t s_bmp = 0xAA00;
+        *bitmap = reinterpret_cast<void*>(++s_bmp);
+    }
+    return 0; // Ok
+}
+
+inline int32_t GdipSaveImageToStream(void* /*image*/, void* /*stream*/, const void* /*clsidEncoder*/, const void* /*encoderParams*/) noexcept {
+    return 0; // Ok
+}
+
+inline int32_t GdipDrawLinesI(void* /*graphics*/, void* /*pen*/, const void* /*points*/, int32_t /*count*/) noexcept {
+    return 0; // Ok
+}
+
 inline void InitializeGdiPlusExports() {
     auto& loader = ldr::DynamicLoader::get();
 
@@ -2572,6 +2638,18 @@ inline void InitializeGdiPlusExports() {
     loader.registerExport("gdiplus.dll", "GdipMeasureCharacterRanges", reinterpret_cast<void*>(&GdipMeasureCharacterRanges));
     loader.registerExport("gdiplus.dll", "GdipDrawString", reinterpret_cast<void*>(&GdipDrawString));
     loader.registerExport("gdiplus.dll", "GdipMeasureString", reinterpret_cast<void*>(&GdipMeasureString));
+    loader.registerExport("gdiplus.dll", "GdipAddPathArcI", reinterpret_cast<void*>(&GdipAddPathArcI));
+    loader.registerExport("gdiplus.dll", "GdipClosePathFigure", reinterpret_cast<void*>(&GdipClosePathFigure));
+    loader.registerExport("gdiplus.dll", "GdipAddPathLineI", reinterpret_cast<void*>(&GdipAddPathLineI));
+    loader.registerExport("gdiplus.dll", "GdipAddPathBezierI", reinterpret_cast<void*>(&GdipAddPathBezierI));
+    loader.registerExport("gdiplus.dll", "GdipStartPathFigure", reinterpret_cast<void*>(&GdipStartPathFigure));
+    loader.registerExport("gdiplus.dll", "GdipDrawBezierI", reinterpret_cast<void*>(&GdipDrawBezierI));
+    loader.registerExport("gdiplus.dll", "GdipDrawImageRectI", reinterpret_cast<void*>(&GdipDrawImageRectI));
+    loader.registerExport("gdiplus.dll", "GdipGetImagePalette", reinterpret_cast<void*>(&GdipGetImagePalette));
+    loader.registerExport("gdiplus.dll", "GdipGetImagePaletteSize", reinterpret_cast<void*>(&GdipGetImagePaletteSize));
+    loader.registerExport("gdiplus.dll", "GdipCreateBitmapFromFile", reinterpret_cast<void*>(&GdipCreateBitmapFromFile));
+    loader.registerExport("gdiplus.dll", "GdipSaveImageToStream", reinterpret_cast<void*>(&GdipSaveImageToStream));
+    loader.registerExport("gdiplus.dll", "GdipDrawLinesI", reinterpret_cast<void*>(&GdipDrawLinesI));
     loader.registerExport("gdiplus.dll", "DllCanUnloadNow", reinterpret_cast<void*>(&DllCanUnloadNow));
 
     // windowscodecs.dll exports
