@@ -205,6 +205,19 @@ struct BITMAPINFO {
     RGBQUAD          bmiColors[1]{};
 };
 
+struct RGNDATAHEADER {
+    uint32_t dwSize;
+    uint32_t iType;
+    uint32_t nCount;
+    uint32_t nRgnSize;
+    RECT rcBound;
+};
+
+struct RGNDATA {
+    RGNDATAHEADER rdh;
+    char Buffer[1];
+};
+
 struct LOGBRUSH {
     uint32_t  lbStyle{BS_SOLID};
     COLORREF  lbColor{RGB(255, 255, 255)};
@@ -1308,6 +1321,10 @@ inline BOOL GdiAlphaBlend(HDC /*hdcDest*/, int /*xoriginDest*/, int /*yoriginDes
     return TRUE;
 }
 
+inline BOOL AlphaBlend(HDC hdcDest, int xoriginDest, int yoriginDest, int wDest, int hDest, HDC hdcSrc, int xoriginSrc, int yoriginSrc, int wSrc, int hSrc, BLENDFUNCTION ftn) noexcept {
+    return GdiAlphaBlend(hdcDest, xoriginDest, yoriginDest, wDest, hDest, hdcSrc, xoriginSrc, yoriginSrc, wSrc, hSrc, ftn);
+}
+
 inline BOOL GetTextMetricsW(HDC /*hdc*/, TEXTMETRICW* lptm) noexcept {
     if (!lptm) return FALSE;
     *lptm = TEXTMETRICW{};
@@ -1339,6 +1356,46 @@ inline HRGN CreateRectRgn(int /*x1*/, int /*y1*/, int /*x2*/, int /*y2*/) noexce
 inline HRGN CreateRectRgnIndirect(const RECT* /*lprect*/) noexcept {
     static uint64_t dummyRgn = 0x9999;
     return reinterpret_cast<HRGN>(&dummyRgn);
+}
+
+inline UINT GetTextAlign(HDC /*hdc*/) noexcept {
+    return 0; // TA_LEFT | TA_TOP | TA_NOUPDATECP
+}
+
+inline int OffsetClipRgn(HDC /*hdc*/, int /*x*/, int /*y*/) noexcept {
+    return 2; // SIMPLEREGION
+}
+
+inline BOOL GetDCOrgEx(HDC /*hdc*/, POINT* lppt) noexcept {
+    if (!lppt) return FALSE;
+    lppt->x = 0;
+    lppt->y = 0;
+    return TRUE;
+}
+
+inline DWORD GetRegionData(HRGN /*hrgn*/, DWORD dwCount, void* lpRgnData) noexcept {
+    constexpr DWORD totalSize = sizeof(RGNDATAHEADER) + sizeof(RECT);
+    if (!lpRgnData || dwCount < totalSize) {
+        return totalSize;
+    }
+    auto* rgn = static_cast<RGNDATA*>(lpRgnData);
+    rgn->rdh.dwSize = sizeof(RGNDATAHEADER);
+    rgn->rdh.iType = 1; // RDH_RECTANGLES
+    rgn->rdh.nCount = 1;
+    rgn->rdh.nRgnSize = sizeof(RECT);
+    rgn->rdh.rcBound = {0, 0, 1920, 1080};
+    auto* rect = reinterpret_cast<RECT*>(rgn->Buffer);
+    *rect = {0, 0, 1920, 1080};
+    return totalSize;
+}
+
+inline COLORREF GetNearestColor(HDC /*hdc*/, COLORREF color) noexcept {
+    return color;
+}
+
+inline HBITMAP CreateBitmapIndirect(const BITMAP* /*pbm*/) noexcept {
+    static uintptr_t s_hbm = 0xB17A00;
+    return reinterpret_cast<HBITMAP>(++s_hbm);
 }
 
 inline int SelectClipRgn(HDC /*hdc*/, HRGN /*hrgn*/) noexcept { return 2; /* SIMPLEREGION */ }
@@ -1516,6 +1573,14 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "GetGraphicsMode", reinterpret_cast<void*>(GetGraphicsMode));
     ldr.registerExport("gdi32.dll", "GetWorldTransform", reinterpret_cast<void*>(GetWorldTransform));
     ldr.registerExport("gdi32.dll", "ModifyWorldTransform", reinterpret_cast<void*>(ModifyWorldTransform));
+    ldr.registerExport("gdi32.dll", "GetTextAlign", reinterpret_cast<void*>(GetTextAlign));
+    ldr.registerExport("gdi32.dll", "OffsetClipRgn", reinterpret_cast<void*>(OffsetClipRgn));
+    ldr.registerExport("gdi32.dll", "GetDCOrgEx", reinterpret_cast<void*>(GetDCOrgEx));
+    ldr.registerExport("gdi32.dll", "GetRegionData", reinterpret_cast<void*>(GetRegionData));
+    ldr.registerExport("gdi32.dll", "GetNearestColor", reinterpret_cast<void*>(GetNearestColor));
+    ldr.registerExport("gdi32.dll", "CreateBitmapIndirect", reinterpret_cast<void*>(CreateBitmapIndirect));
+    ldr.registerExport("msimg32.dll", "AlphaBlend", reinterpret_cast<void*>(AlphaBlend));
+    ldr.registerExport("gdi32.dll", "AlphaBlend", reinterpret_cast<void*>(AlphaBlend));
 }
 
 } // namespace micant::gdi32

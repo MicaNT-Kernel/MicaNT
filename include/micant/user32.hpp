@@ -1072,6 +1072,43 @@ inline win32::BOOL AdjustWindowRectEx(RECT* lpRect, uint32_t /*dwStyle*/, win32:
     return win32::TRUE;
 }
 
+inline win32::BOOL AdjustWindowRect(RECT* lpRect, uint32_t dwStyle, win32::BOOL bMenu) noexcept {
+    if (!lpRect) return win32::FALSE;
+    int32_t border = 8;
+    int32_t caption = (dwStyle & 0x00C00000) ? 32 : 0; // WS_CAPTION
+    int32_t menu = bMenu ? 20 : 0;
+    lpRect->left -= border;
+    lpRect->right += border;
+    lpRect->top -= (border + caption + menu);
+    lpRect->bottom += border;
+    return win32::TRUE;
+}
+
+inline win32::BOOL CopyRect(RECT* lprcDst, const RECT* lprcSrc) noexcept {
+    if (!lprcDst || !lprcSrc) return win32::FALSE;
+    *lprcDst = *lprcSrc;
+    return win32::TRUE;
+}
+
+inline win32::BOOL OpenIcon(win32::HWND /*hWnd*/) noexcept {
+    return win32::TRUE; // Restored minimized window
+}
+
+inline win32::HWND GetNextDlgTabItem(win32::HWND /*hDlg*/, win32::HWND hCtl, win32::BOOL /*bPrevious*/) noexcept {
+    return hCtl ? hCtl : reinterpret_cast<win32::HWND>(0x1000);
+}
+
+inline win32::BOOL ReplyMessage(LRESULT /*lResult*/) noexcept {
+    return win32::TRUE;
+}
+
+inline int32_t ScrollWindowEx(win32::HWND /*hWnd*/, int32_t /*dx*/, int32_t /*dy*/, const RECT* /*prcScroll*/, const RECT* /*prcClip*/, void* /*hrgnUpdate*/, RECT* prcUpdate, uint32_t /*flags*/) noexcept {
+    if (prcUpdate) {
+        *prcUpdate = RECT{0, 0, 800, 600};
+    }
+    return 2; // SIMPLEREGION
+}
+
 inline win32::BOOL SetWindowPos(win32::HWND hWnd, win32::HWND hWndInsertAfter, int X, int Y, int cx, int cy, UINT uFlags) noexcept {
     return WindowManager::get().setWindowPos(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags) ? win32::TRUE : win32::FALSE;
 }
@@ -1140,6 +1177,66 @@ inline int64_t DispatchMessageA(const MSG* lpMsg) noexcept {
 
 inline void PostQuitMessage(int nExitCode) noexcept {
     WindowManager::get().postQuitMessage(nExitCode);
+}
+
+struct HotKeyEntry {
+    win32::HWND hWnd;
+    int32_t id;
+    uint32_t fsModifiers;
+    uint32_t vk;
+};
+
+inline std::mutex g_hotkey_mutex;
+inline std::vector<HotKeyEntry> g_registered_hotkeys;
+
+inline win32::BOOL RegisterHotKey(win32::HWND hWnd, int32_t id, uint32_t fsModifiers, uint32_t vk) noexcept {
+    std::lock_guard lock(g_hotkey_mutex);
+    for (auto& hk : g_registered_hotkeys) {
+        if (hk.fsModifiers == fsModifiers && hk.vk == vk) {
+            win32::SetLastError(1409); // ERROR_HOTKEY_ALREADY_REGISTERED
+            return win32::FALSE;
+        }
+    }
+    g_registered_hotkeys.push_back({hWnd, id, fsModifiers, vk});
+    return win32::TRUE;
+}
+
+inline win32::BOOL UnregisterHotKey(win32::HWND hWnd, int32_t id) noexcept {
+    std::lock_guard lock(g_hotkey_mutex);
+    auto it = std::remove_if(g_registered_hotkeys.begin(), g_registered_hotkeys.end(),
+        [hWnd, id](const HotKeyEntry& e) {
+            return e.hWnd == hWnd && e.id == id;
+        });
+    if (it != g_registered_hotkeys.end()) {
+        g_registered_hotkeys.erase(it, g_registered_hotkeys.end());
+        return win32::TRUE;
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL PostThreadMessageW(uint32_t /*idThread*/, UINT /*Msg*/, WPARAM /*wParam*/, LPARAM /*lParam*/) noexcept {
+    return win32::TRUE;
+}
+
+inline int64_t SendMessageTimeoutW(win32::HWND /*hWnd*/, UINT /*Msg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, uint32_t /*fuFlags*/, uint32_t /*uTimeout*/, void* lpdwResult) noexcept {
+    if (lpdwResult) {
+        *static_cast<uint64_t*>(lpdwResult) = 0;
+    }
+    return 1;
+}
+
+inline uint32_t MapVirtualKeyExW(uint32_t uCode, uint32_t uMapType, void* /*dwhkl*/) noexcept {
+    switch (uMapType) {
+        case 0: return uCode & 0xFF; // MAPVK_VK_TO_VSC
+        case 1: return uCode & 0xFF; // MAPVK_VSC_TO_VK
+        case 2: // MAPVK_VK_TO_CHAR
+            if (uCode >= 'A' && uCode <= 'Z') return uCode;
+            if (uCode >= '0' && uCode <= '9') return uCode;
+            if (uCode == 0x20) return ' ';
+            return 0;
+        case 3: return uCode & 0xFF; // MAPVK_VSC_TO_VK_EX
+        default: return 0;
+    }
 }
 
 inline LRESULT DefWindowProcW(win32::HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) noexcept {
@@ -1445,6 +1542,66 @@ inline int16_t VkKeyScanExA(char ch, [[maybe_unused]] void* dwhkl) noexcept {
     return static_cast<int16_t>(static_cast<uint8_t>(ch));
 }
 
+inline win32::BOOL MapDialogRect([[maybe_unused]] win32::HWND hDlg, [[maybe_unused]] void* lpRect) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL GetMonitorInfoA([[maybe_unused]] void* hMonitor, void* lpmi) noexcept {
+    if (lpmi) {
+        struct MONITORINFOA { uint32_t cbSize; int32_t rcMonitor[4]; int32_t rcWork[4]; uint32_t dwFlags; };
+        auto* mi = reinterpret_cast<MONITORINFOA*>(lpmi);
+        mi->rcMonitor[0] = 0; mi->rcMonitor[1] = 0; mi->rcMonitor[2] = 1280; mi->rcMonitor[3] = 800;
+        mi->rcWork[0] = 0; mi->rcWork[1] = 0; mi->rcWork[2] = 1280; mi->rcWork[3] = 760;
+        mi->dwFlags = 1; // MONITORINFOF_PRIMARY
+    }
+    return win32::TRUE;
+}
+
+inline int32_t GetDialogBaseUnits() noexcept {
+    return (16 << 16) | 8;
+}
+
+inline win32::BOOL CheckRadioButton([[maybe_unused]] win32::HWND hDlg, [[maybe_unused]] int nIDFirstButton, [[maybe_unused]] int nIDLastButton, [[maybe_unused]] int nIDCheckButton) noexcept {
+    return win32::TRUE;
+}
+
+inline uint32_t IsDlgButtonChecked([[maybe_unused]] win32::HWND hDlg, [[maybe_unused]] int nIDButton) noexcept {
+    return 0; // BST_UNCHECKED
+}
+
+inline win32::BOOL CheckDlgButton([[maybe_unused]] win32::HWND hDlg, [[maybe_unused]] int nIDButton, [[maybe_unused]] uint32_t uCheck) noexcept {
+    return win32::TRUE;
+}
+
+inline void* LoadAcceleratorsW([[maybe_unused]] void* hInstance, [[maybe_unused]] const wchar_t* lpTableName) noexcept {
+    return reinterpret_cast<void*>(0x5501);
+}
+
+inline win32::BOOL GetClassInfoW(void* hInstance, const wchar_t* lpClassName, void* lpWndClass) noexcept {
+    if (!lpClassName || !lpWndClass) return win32::FALSE;
+    WNDCLASSEXW wcx{};
+    if (WindowManager::get().getClassInfo(lpClassName, &wcx)) {
+        struct WNDCLASS_BASIC {
+            uint32_t style; WNDPROC lpfnWndProc; int cbClsExtra; int cbWndExtra;
+            void* hInstance; void* hIcon; void* hCursor; void* hbrBackground;
+            const wchar_t* lpszMenuName; const wchar_t* lpszClassName;
+        };
+        auto* wc = reinterpret_cast<WNDCLASS_BASIC*>(lpWndClass);
+        wc->style = wcx.style;
+        wc->lpfnWndProc = wcx.lpfnWndProc;
+        wc->cbClsExtra = wcx.cbClsExtra;
+        wc->cbWndExtra = wcx.cbWndExtra;
+        wc->hInstance = hInstance;
+        wc->hIcon = wcx.hIcon;
+        wc->hCursor = wcx.hCursor;
+        wc->hbrBackground = wcx.hbrBackground;
+        wc->lpszMenuName = wcx.lpszMenuName;
+        wc->lpszClassName = wcx.lpszClassName;
+        return win32::TRUE;
+    }
+    return win32::FALSE;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -1536,6 +1693,25 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "SetProcessDPIAware", reinterpret_cast<void*>(SetProcessDPIAware));
     ldr.registerExport("user32.dll", "ToUnicodeEx", reinterpret_cast<void*>(ToUnicodeEx));
     ldr.registerExport("user32.dll", "VkKeyScanExA", reinterpret_cast<void*>(VkKeyScanExA));
+    ldr.registerExport("user32.dll", "MapDialogRect", reinterpret_cast<void*>(MapDialogRect));
+    ldr.registerExport("user32.dll", "GetMonitorInfoA", reinterpret_cast<void*>(GetMonitorInfoA));
+    ldr.registerExport("user32.dll", "GetDialogBaseUnits", reinterpret_cast<void*>(GetDialogBaseUnits));
+    ldr.registerExport("user32.dll", "CheckRadioButton", reinterpret_cast<void*>(CheckRadioButton));
+    ldr.registerExport("user32.dll", "IsDlgButtonChecked", reinterpret_cast<void*>(IsDlgButtonChecked));
+    ldr.registerExport("user32.dll", "CheckDlgButton", reinterpret_cast<void*>(CheckDlgButton));
+    ldr.registerExport("user32.dll", "LoadAcceleratorsW", reinterpret_cast<void*>(LoadAcceleratorsW));
+    ldr.registerExport("user32.dll", "GetClassInfoW", reinterpret_cast<void*>(GetClassInfoW));
+    ldr.registerExport("user32.dll", "ScrollWindowEx", reinterpret_cast<void*>(ScrollWindowEx));
+    ldr.registerExport("user32.dll", "AdjustWindowRect", reinterpret_cast<void*>(AdjustWindowRect));
+    ldr.registerExport("user32.dll", "CopyRect", reinterpret_cast<void*>(CopyRect));
+    ldr.registerExport("user32.dll", "OpenIcon", reinterpret_cast<void*>(OpenIcon));
+    ldr.registerExport("user32.dll", "GetNextDlgTabItem", reinterpret_cast<void*>(GetNextDlgTabItem));
+    ldr.registerExport("user32.dll", "ReplyMessage", reinterpret_cast<void*>(ReplyMessage));
+    ldr.registerExport("user32.dll", "RegisterHotKey", reinterpret_cast<void*>(RegisterHotKey));
+    ldr.registerExport("user32.dll", "UnregisterHotKey", reinterpret_cast<void*>(UnregisterHotKey));
+    ldr.registerExport("user32.dll", "PostThreadMessageW", reinterpret_cast<void*>(PostThreadMessageW));
+    ldr.registerExport("user32.dll", "SendMessageTimeoutW", reinterpret_cast<void*>(SendMessageTimeoutW));
+    ldr.registerExport("user32.dll", "MapVirtualKeyExW", reinterpret_cast<void*>(MapVirtualKeyExW));
 }
 
 } // namespace micant::user32

@@ -1493,6 +1493,47 @@ inline void* SHBrowseForFolderW([[maybe_unused]] void* lpbi) noexcept {
     return nullptr; // User cancelled
 }
 
+inline void* ShellOrdinal16(const void* pidl) noexcept {
+    return const_cast<void*>(pidl);
+}
+
+inline win32::BOOL PathIsRootW(const wchar_t* pszPath) noexcept {
+    if (!pszPath) return win32::FALSE;
+    if ((pszPath[0] >= L'A' && pszPath[0] <= L'Z') || (pszPath[0] >= L'a' && pszPath[0] <= L'z')) {
+        if (pszPath[1] == L':') {
+            if ((pszPath[2] == L'\\' || pszPath[2] == L'/') && pszPath[3] == L'\0') {
+                return win32::TRUE;
+            }
+            if (pszPath[2] == L'\0') {
+                return win32::TRUE;
+            }
+        }
+    }
+    if ((pszPath[0] == L'\\' || pszPath[0] == L'/') && pszPath[1] == L'\0') {
+        return win32::TRUE;
+    }
+    if ((pszPath[0] == L'\\' || pszPath[0] == L'/') && (pszPath[1] == L'\\' || pszPath[1] == L'/')) {
+        const wchar_t* p = pszPath + 2;
+        while (*p && *p != L'\\' && *p != L'/') ++p;
+        if (*p) {
+            ++p;
+            while (*p && *p != L'\\' && *p != L'/') ++p;
+            if (*p == L'\0' || (*(p + 1) == L'\0')) return win32::TRUE;
+        }
+    }
+    return win32::FALSE;
+}
+
+inline int32_t SHRegGetUSValueW([[maybe_unused]] const wchar_t* pszSubKey, [[maybe_unused]] const wchar_t* pszValue, uint32_t* pdwType, void* pvData, uint32_t* pcbData, [[maybe_unused]] int32_t fIgnoreHKCU, void* pvDefaultData, uint32_t cbDefaultData) noexcept {
+    if (pvDefaultData && pcbData && *pcbData >= cbDefaultData && pvData) {
+        std::memcpy(pvData, pvDefaultData, cbDefaultData);
+        *pcbData = cbDefaultData;
+        if (pdwType) *pdwType = 1; // REG_SZ
+        return 0; // ERROR_SUCCESS
+    }
+    return 2; // ERROR_FILE_NOT_FOUND
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
@@ -1535,8 +1576,11 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "SHGetPathFromIDListW", reinterpret_cast<void*>(SHGetPathFromIDListW));
     ldr.registerExport("shell32.dll", "SHBrowseForFolderW", reinterpret_cast<void*>(SHBrowseForFolderW));
     ldr.registerExportOrdinal("shell32.dll", 165, reinterpret_cast<void*>(ShellOrdinal165));
+    ldr.registerExportOrdinal("shell32.dll", 16, reinterpret_cast<void*>(ShellOrdinal16));
 
     // shlwapi.dll exports
+    ldr.registerExport("shlwapi.dll", "PathIsRootW", reinterpret_cast<void*>(PathIsRootW));
+    ldr.registerExport("shlwapi.dll", "SHRegGetUSValueW", reinterpret_cast<void*>(SHRegGetUSValueW));
     ldr.registerExport("shlwapi.dll", "PathFileExistsW", reinterpret_cast<void*>(PathFileExistsW));
     ldr.registerExport("shlwapi.dll", "PathFileExistsA", reinterpret_cast<void*>(PathFileExistsA));
     ldr.registerExport("shlwapi.dll", "PathCombineW", reinterpret_cast<void*>(PathCombineW));

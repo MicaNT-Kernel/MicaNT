@@ -662,6 +662,53 @@ inline HRESULT CoCreateInstance(REFCLSID rclsid, IUnknown* pUnkOuter, uint32_t d
     return hr;
 }
 
+struct IBindCtxVtbl {
+    HRESULT (*QueryInterface)(void*, const void*, void**);
+    uint32_t (*AddRef)(void*);
+    uint32_t (*Release)(void*);
+    HRESULT (*RegisterObjectBound)(void*, void*);
+    HRESULT (*RevokeObjectBound)(void*, void*);
+    HRESULT (*ReleaseBoundObjects)(void*);
+    HRESULT (*SetBindOptions)(void*, void*);
+    HRESULT (*GetBindOptions)(void*, void*);
+    HRESULT (*GetRunningObjectTable)(void*, void**);
+    HRESULT (*RegisterObjectParam)(void*, wchar_t*, void*);
+    HRESULT (*GetObjectParam)(void*, wchar_t*, void**);
+    HRESULT (*EnumObjectParam)(void*, void**);
+    HRESULT (*RevokeObjectParam)(void*, wchar_t*);
+};
+
+struct IBindCtx {
+    const IBindCtxVtbl* lpVtbl;
+};
+
+inline HRESULT BindCtx_QI(void* /*thisPtr*/, const void* /*riid*/, void** ppv) noexcept {
+    if (!ppv) return E_POINTER;
+    static const IBindCtxVtbl vtbl = {
+        BindCtx_QI,
+        [](void*) -> uint32_t { return 1; },
+        [](void*) -> uint32_t { return 1; },
+        [](void*, void*) -> HRESULT { return S_OK; },
+        [](void*, void*) -> HRESULT { return S_OK; },
+        [](void*, void*) -> HRESULT { return S_OK; },
+        [](void*, void*) -> HRESULT { return S_OK; },
+        [](void*, void*) -> HRESULT { return S_OK; },
+        [](void*, void**) -> HRESULT { return E_NOTIMPL; },
+        [](void*, wchar_t*, void*) -> HRESULT { return S_OK; },
+        [](void*, wchar_t*, void**) -> HRESULT { return E_FAIL; },
+        [](void*, void**) -> HRESULT { return E_NOTIMPL; },
+        [](void*, wchar_t*) -> HRESULT { return S_OK; }
+    };
+    static IBindCtx s_ctx = { &vtbl };
+    *ppv = &s_ctx;
+    return S_OK;
+}
+
+inline HRESULT CreateBindCtx(DWORD /*reserved*/, void** ppbc) noexcept {
+    if (!ppbc) return E_POINTER;
+    return BindCtx_QI(nullptr, nullptr, ppbc);
+}
+
 // ============================================================================
 // 6. OLEAUT32 C-API Implementation (oleaut32.dll)
 // ============================================================================
@@ -821,6 +868,7 @@ inline void InitializeOle32SubsystemExports() {
     ldr.registerExport("ole32.dll", "DoDragDrop", reinterpret_cast<void*>(DoDragDrop));
     ldr.registerExport("ole32.dll", "ReleaseStgMedium", reinterpret_cast<void*>(ReleaseStgMedium));
     ldr.registerExport("ole32.dll", "CLSIDFromProgID", reinterpret_cast<void*>(CLSIDFromProgID));
+    ldr.registerExport("ole32.dll", "CreateBindCtx", reinterpret_cast<void*>(CreateBindCtx));
 
     // ole32.dll Structured Storage
     InitializeStructuredStorageSubsystemExports();

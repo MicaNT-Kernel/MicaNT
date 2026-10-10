@@ -2583,6 +2583,32 @@ inline BOOL FreeEnvironmentStringsW(LPWCH /*penv*/) noexcept {
     return TRUE;
 }
 
+inline LPSTR GetEnvironmentStrings() noexcept {
+    static const char s_env_block[] =
+        "ALLUSERSPROFILE=C:\\ProgramData\0"
+        "APPDATA=C:\\Users\\admin\\AppData\\Roaming\0"
+        "CommonProgramFiles=C:\\Program Files\\Common Files\0"
+        "LOCALAPPDATA=C:\\Users\\admin\\AppData\\Local\0"
+        "OS=Windows_NT\0"
+        "Path=C:\\Windows\\System32;C:\\Windows;C:\\MicaNT\0"
+        "ProgramData=C:\\ProgramData\0"
+        "ProgramFiles=C:\\Program Files\0"
+        "SystemDrive=C:\0"
+        "SystemRoot=C:\\Windows\0"
+        "TEMP=C:\\Users\\admin\\AppData\\Local\\Temp\0"
+        "TMP=C:\\Users\\admin\\AppData\\Local\\Temp\0"
+        "USERPROFILE=C:\\Users\\admin\0\0";
+    return const_cast<LPSTR>(s_env_block);
+}
+
+inline BOOL FreeEnvironmentStringsA(LPSTR /*penv*/) noexcept {
+    return TRUE;
+}
+
+inline UINT SetHandleCount(UINT uNumber) noexcept {
+    return uNumber;
+}
+
 inline BOOL GetStringTypeW(DWORD /*dwInfoType*/, LPCWSTR /*lpSrcStr*/, int /*cchSrc*/, uint16_t* lpCharType) noexcept {
     if (lpCharType) *lpCharType = 0x0001; // C1_ALPHA
     return TRUE;
@@ -2633,6 +2659,9 @@ inline void* RtlPcToFileHeader(void* /*PcValue*/, void** BaseOfImage) noexcept {
     uintptr_t base = g_CurrentExecutableBase ? g_CurrentExecutableBase : 0x140000000ULL;
     if (BaseOfImage) *BaseOfImage = reinterpret_cast<void*>(base);
     return reinterpret_cast<void*>(base);
+}
+inline int32_t __C_specific_handler(void* /*ExceptionRecord*/, void* /*EstablisherFrame*/, void* /*ContextRecord*/, void* /*DispatcherContext*/) noexcept {
+    return 1; // ExceptionContinueSearch
 }
 inline void RaiseException(DWORD dwExceptionCode, DWORD dwExceptionFlags, DWORD nNumberOfArguments, const uint64_t* lpArguments) noexcept {
 #ifdef _WIN32
@@ -2738,6 +2767,16 @@ struct OSVERSIONINFOEXW {
     BYTE wReserved;
 };
 using LPOSVERSIONINFOEXW = OSVERSIONINFOEXW*;
+
+struct OSVERSIONINFOA {
+    DWORD dwOSVersionInfoSize;
+    DWORD dwMajorVersion;
+    DWORD dwMinorVersion;
+    DWORD dwBuildNumber;
+    DWORD dwPlatformId;
+    CHAR szCSDVersion[128];
+};
+using LPOSVERSIONINFOA = OSVERSIONINFOA*;
 
 using HRSRC = void*;
 using HGLOBAL_RES = void*;
@@ -3200,6 +3239,18 @@ inline BOOL GetVersionExW(LPOSVERSIONINFOEXW lpVersionInformation) noexcept {
     return TRUE;
 }
 
+inline BOOL GetVersionExA(void* lpVersionInformation) noexcept {
+    if (!lpVersionInformation) return FALSE;
+    auto* vi = static_cast<OSVERSIONINFOA*>(lpVersionInformation);
+    vi->dwMajorVersion = 10;
+    vi->dwMinorVersion = 0;
+    vi->dwBuildNumber = 19045;
+    vi->dwPlatformId = 2; // VER_PLATFORM_WIN32_NT
+    std::strncpy(vi->szCSDVersion, "MicaNT Sovereign 64-bit", sizeof(vi->szCSDVersion) - 1);
+    vi->szCSDVersion[sizeof(vi->szCSDVersion) - 1] = '\0';
+    return TRUE;
+}
+
 inline HRSRC FindResourceW(HMODULE /*hModule*/, LPCWSTR /*lpName*/, LPCWSTR /*lpType*/) noexcept {
     return reinterpret_cast<HRSRC>(0x1000);
 }
@@ -3637,6 +3688,50 @@ inline BOOL GetStringTypeExW(LCID, DWORD, LPCWCH, int, LPWORD lpCharType) noexce
 
 inline BOOL GetStringTypeExA(LCID, DWORD, LPCSTR, int, LPWORD lpCharType) noexcept {
     if (lpCharType) *lpCharType = 0;
+    return TRUE;
+}
+
+inline int GetNumberFormatW(LCID /*Locale*/, DWORD /*dwFlags*/, LPCWSTR lpValue, const void* /*lpFormat*/, LPWSTR lpNumberStr, int cchNumber) noexcept {
+    if (!lpValue) return 0;
+    size_t len = std::wcslen(lpValue);
+    if (cchNumber == 0) return static_cast<int>(len + 1);
+    if (lpNumberStr && cchNumber > 0) {
+        size_t copy_len = (std::min)(len, static_cast<size_t>(cchNumber - 1));
+        std::wcsncpy(lpNumberStr, lpValue, copy_len);
+        lpNumberStr[copy_len] = L'\0';
+        return static_cast<int>(copy_len + 1);
+    }
+    return 0;
+}
+
+inline int GetCalendarInfoW(LCID /*Locale*/, uint32_t /*Calendar*/, uint32_t /*CalType*/, LPWSTR lpCalData, int cchData, LPDWORD lpValue) noexcept {
+    if (lpValue) {
+        *lpValue = 1;
+    }
+    if (lpCalData && cchData > 0) {
+        lpCalData[0] = L'1';
+        lpCalData[1] = L'\0';
+        return 1;
+    }
+    return 1;
+}
+
+inline BOOL GetStringTypeA(LCID /*Locale*/, DWORD /*dwInfoType*/, LPCSTR lpSrcStr, int cchSrc, LPWORD lpCharType) noexcept {
+    if (!lpSrcStr || !lpCharType) return FALSE;
+    int len = cchSrc < 0 ? static_cast<int>(std::strlen(lpSrcStr)) : cchSrc;
+    for (int i = 0; i < len; ++i) {
+        unsigned char c = static_cast<unsigned char>(lpSrcStr[i]);
+        uint16_t flags = 0;
+        if (std::isupper(c)) flags |= 0x0001; // C1_UPPER
+        if (std::islower(c)) flags |= 0x0002; // C1_LOWER
+        if (std::isdigit(c)) flags |= 0x0004; // C1_DIGIT
+        if (std::isspace(c)) flags |= 0x0008; // C1_SPACE
+        if (std::ispunct(c)) flags |= 0x0010; // C1_PUNCT
+        if (std::iscntrl(c)) flags |= 0x0020; // C1_CNTRL
+        if (std::isblank(c)) flags |= 0x0040; // C1_BLANK
+        if (std::isxdigit(c)) flags |= 0x0080; // C1_XDIGIT
+        lpCharType[i] = flags;
+    }
     return TRUE;
 }
 
@@ -4206,6 +4301,14 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "FindFirstChangeNotificationW", reinterpret_cast<void*>(FindFirstChangeNotificationW));
     ldr.registerExport("kernel32.dll", "FindNextChangeNotification", reinterpret_cast<void*>(FindNextChangeNotification));
     ldr.registerExport("kernel32.dll", "FindCloseChangeNotification", reinterpret_cast<void*>(FindCloseChangeNotification));
+    ldr.registerExport("kernel32.dll", "__C_specific_handler", reinterpret_cast<void*>(__C_specific_handler));
+    ldr.registerExport("kernel32.dll", "GetVersionExA", reinterpret_cast<void*>(GetVersionExA));
+    ldr.registerExport("kernel32.dll", "GetNumberFormatW", reinterpret_cast<void*>(GetNumberFormatW));
+    ldr.registerExport("kernel32.dll", "GetCalendarInfoW", reinterpret_cast<void*>(GetCalendarInfoW));
+    ldr.registerExport("kernel32.dll", "FreeEnvironmentStringsA", reinterpret_cast<void*>(FreeEnvironmentStringsA));
+    ldr.registerExport("kernel32.dll", "GetEnvironmentStrings", reinterpret_cast<void*>(GetEnvironmentStrings));
+    ldr.registerExport("kernel32.dll", "SetHandleCount", reinterpret_cast<void*>(SetHandleCount));
+    ldr.registerExport("kernel32.dll", "GetStringTypeA", reinterpret_cast<void*>(GetStringTypeA));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

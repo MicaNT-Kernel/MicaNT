@@ -833,6 +833,56 @@ inline win32::BOOL CloseServiceHandle(SC_HANDLE hSCObject) noexcept {
     return win32::TRUE;
 }
 
+struct QUERY_SERVICE_CONFIGW {
+    uint32_t dwServiceType;
+    uint32_t dwStartType;
+    uint32_t dwErrorControl;
+    wchar_t* lpBinaryPathName;
+    wchar_t* lpLoadOrderGroup;
+    uint32_t dwTagId;
+    wchar_t* lpDependencies;
+    wchar_t* lpServiceStartName;
+    wchar_t* lpDisplayName;
+};
+
+inline void* RegisterServiceCtrlHandlerW([[maybe_unused]] const wchar_t* lpServiceName, [[maybe_unused]] void* lpHandlerProc) noexcept {
+    static uintptr_t s_ssh = 0x1000;
+    return reinterpret_cast<void*>(++s_ssh);
+}
+
+inline win32::BOOL StartServiceCtrlDispatcherW([[maybe_unused]] const void* lpServiceStartTable) noexcept {
+    // When applications like Everything are launched in interactive desktop mode,
+    // StartServiceCtrlDispatcherW fails with ERROR_FAILED_SERVICE_CONTROLLER_CONNECT (1063).
+    win32::SetLastError(1063);
+    return win32::FALSE;
+}
+
+inline win32::BOOL SetServiceStatus([[maybe_unused]] void* hServiceStatus, [[maybe_unused]] const void* lpServiceStatus) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL QueryServiceConfigW([[maybe_unused]] void* hService, void* lpServiceConfig, uint32_t cbBufSize, uint32_t* pcbBytesNeeded) noexcept {
+    constexpr uint32_t needed = sizeof(QUERY_SERVICE_CONFIGW) + 256;
+    if (pcbBytesNeeded) {
+        *pcbBytesNeeded = needed;
+    }
+    if (!lpServiceConfig || cbBufSize < sizeof(QUERY_SERVICE_CONFIGW)) {
+        win32::SetLastError(122); // ERROR_INSUFFICIENT_BUFFER
+        return win32::FALSE;
+    }
+    auto* cfg = static_cast<QUERY_SERVICE_CONFIGW*>(lpServiceConfig);
+    cfg->dwServiceType = 0x00000010; // SERVICE_WIN32_OWN_PROCESS
+    cfg->dwStartType = 0x00000002;   // SERVICE_AUTO_START
+    cfg->dwErrorControl = 0x00000001;// SERVICE_ERROR_NORMAL
+    cfg->lpBinaryPathName = nullptr;
+    cfg->lpLoadOrderGroup = nullptr;
+    cfg->dwTagId = 0;
+    cfg->lpDependencies = nullptr;
+    cfg->lpServiceStartName = nullptr;
+    cfg->lpDisplayName = nullptr;
+    return win32::TRUE;
+}
+
 // ============================================================================
 // Clean-Room Win32 Registry APIs (advapi32.dll)
 // ============================================================================
@@ -1034,6 +1084,17 @@ inline int32_t RegCreateKeyExA(HKEY hKey, const char* lpSubKey, uint32_t ulOptio
                                REGSAM samDesired, void* lpSecurityAttributes, PHKEY phkResult, uint32_t* lpdwDisposition) noexcept {
     (void)lpClass; (void)dwOptions; (void)lpSecurityAttributes;
     return RegOpenKeyExA(hKey, lpSubKey, ulOptions, samDesired, phkResult);
+}
+
+inline int32_t RegOpenKeyA(HKEY hKey, const char* lpSubKey, PHKEY phkResult) noexcept {
+    return RegOpenKeyExA(hKey, lpSubKey, 0, 0x20019, phkResult);
+}
+
+inline int32_t RegQueryValueW([[maybe_unused]] HKEY hKey, [[maybe_unused]] const wchar_t* lpSubKey, wchar_t* lpData, int32_t* lpcbData) noexcept {
+    if (lpcbData && *lpcbData > 0 && lpData) {
+        lpData[0] = L'\0';
+    }
+    return ERROR_SUCCESS;
 }
 
 inline int32_t RegSetValueExW(HKEY hKey, const wchar_t* lpValueName, uint32_t /*Reserved*/, uint32_t dwType, const uint8_t* lpData, uint32_t cbData) noexcept {
@@ -1457,6 +1518,27 @@ inline win32::BOOL SystemFunction036(void* pbBuffer, uint32_t dwLen) noexcept {
     return win32::TRUE;
 }
 
+inline int32_t LsaAddAccountRights([[maybe_unused]] void* PolicyHandle, [[maybe_unused]] void* AccountSid, [[maybe_unused]] void* UserRights, [[maybe_unused]] uint32_t CountOfRights) noexcept {
+    return 0; // STATUS_SUCCESS
+}
+
+inline win32::BOOL GetUserNameW(wchar_t* lpBuffer, uint32_t* pcbBuffer) noexcept {
+    if (!lpBuffer || !pcbBuffer) return win32::FALSE;
+    const wchar_t user[] = L"admin";
+    size_t len = wcslen(user);
+    if (*pcbBuffer <= len) {
+        *pcbBuffer = static_cast<uint32_t>(len + 1);
+        return win32::FALSE;
+    }
+    wcscpy_s(lpBuffer, *pcbBuffer, user);
+    *pcbBuffer = static_cast<uint32_t>(len);
+    return win32::TRUE;
+}
+
+inline int32_t RegDeleteKeyExW([[maybe_unused]] void* hKey, [[maybe_unused]] const wchar_t* lpSubKey, [[maybe_unused]] uint32_t samDesired, [[maybe_unused]] uint32_t Reserved) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("advapi32.dll", "CryptAcquireContextA", reinterpret_cast<void*>(CryptAcquireContextA));
@@ -1546,6 +1628,15 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "RegDeleteTreeA", reinterpret_cast<void*>(RegDeleteTreeA));
     ldr.registerExport("advapi32.dll", "RegEnumKeyExA", reinterpret_cast<void*>(RegEnumKeyExA));
     ldr.registerExport("advapi32.dll", "RegEnumValueA", reinterpret_cast<void*>(RegEnumValueA));
+    ldr.registerExport("advapi32.dll", "LsaAddAccountRights", reinterpret_cast<void*>(LsaAddAccountRights));
+    ldr.registerExport("advapi32.dll", "GetUserNameW", reinterpret_cast<void*>(GetUserNameW));
+    ldr.registerExport("advapi32.dll", "RegDeleteKeyExW", reinterpret_cast<void*>(RegDeleteKeyExW));
+    ldr.registerExport("advapi32.dll", "RegisterServiceCtrlHandlerW", reinterpret_cast<void*>(RegisterServiceCtrlHandlerW));
+    ldr.registerExport("advapi32.dll", "StartServiceCtrlDispatcherW", reinterpret_cast<void*>(StartServiceCtrlDispatcherW));
+    ldr.registerExport("advapi32.dll", "SetServiceStatus", reinterpret_cast<void*>(SetServiceStatus));
+    ldr.registerExport("advapi32.dll", "QueryServiceConfigW", reinterpret_cast<void*>(QueryServiceConfigW));
+    ldr.registerExport("advapi32.dll", "RegOpenKeyA", reinterpret_cast<void*>(RegOpenKeyA));
+    ldr.registerExport("advapi32.dll", "RegQueryValueW", reinterpret_cast<void*>(RegQueryValueW));
 
     // api-ms-win-core-registry-l1-1-0.dll
     ldr.registerExport("api-ms-win-core-registry-l1-1-0.dll", "RegOpenKeyExW", reinterpret_cast<void*>(RegOpenKeyExW));
