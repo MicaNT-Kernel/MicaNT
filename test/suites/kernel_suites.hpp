@@ -906,19 +906,22 @@ void Test_TrapEngine_PageFaultAndBugCheck() {
 }
 
 // ============================================================================
-// Suite 14: Hardware Abstraction Layer (HAL) KPCR, KPRCB, and Timers
+// Suite 14: Hardware Abstraction Layer (HAL) APIC/IOAPIC, KPCR, DMA, and Timers
 // ============================================================================
 void Test_HardwareAbstractionLayer_KPCRAndTimers() {
     auto& hal = hal::HardwareAbstractionLayer::get();
-    TEST_ASSERT(hal.getProcessorCount() >= 1, "HAL must detect at least 1 processor core");
+    hal.initialize(4, hal::ProcessorArchitecture::Amd64, 3600);
+    TEST_ASSERT(hal.getProcessorCount() == 4, "HAL must detect 4 processor cores");
 
+    // 1. KPCR and KPRCB Topology
     auto* kpcr0 = hal.getKpcr(0);
     TEST_ASSERT(kpcr0 != nullptr, "KPCR 0 must not be null");
     TEST_ASSERT(kpcr0->self == kpcr0, "KPCR self pointer must point to itself");
     TEST_ASSERT(kpcr0->prcb.cpuId == 0, "CPU ID must be 0");
     TEST_ASSERT(kpcr0->prcb.architecture == hal::ProcessorArchitecture::Amd64, "Architecture must be AMD64");
+    TEST_ASSERT(kpcr0->prcb.coreClockMhz == 3600, "Core clock must be 3600 MHz");
 
-    // Performance counter
+    // 2. High-Precision Performance Counter & Processor Stalling
     LargeInteger c1{};
     LargeInteger c2{};
     LargeInteger freq{};
@@ -929,12 +932,132 @@ void Test_HardwareAbstractionLayer_KPCRAndTimers() {
     hal::KeQueryPerformanceCounter(c2, &freq);
     TEST_ASSERT(c2.quadPart > c1.quadPart, "Performance counter must strictly advance over stall");
 
-    // Clock tick accounting
+    // 3. Clock Tick & LAPIC EOI Dispatch
     uint64_t initialInterrupts = kpcr0->prcb.interruptsServiced;
     hal.dispatchClockTick(0);
     hal.dispatchClockTick(0);
     TEST_ASSERT(kpcr0->prcb.interruptsServiced == initialInterrupts + 2, "Dispatched clock ticks must increment interrupt count");
+
+    // 4. Local APIC (LAPIC) Register Architecture & TPR Mapping
+    auto* lapic0 = hal.getLocalApic(0);
+    TEST_ASSERT(lapic0 != nullptr, "Local APIC 0 must be present");
+    TEST_ASSERT(lapic0->getApicId() == 0, "LAPIC ID must match CPU 0");
+    TEST_ASSERT(lapic0->isEnabled(), "LAPIC must be enabled by default");
+    TEST_ASSERT((lapic0->readRegister(hal::APIC_REG_VERSION) & 0xFF) == 0x14, "LAPIC version must report 0x14 integrated APIC");
+
+    // Task Priority Register (TPR) mapping: IRQL (0..15) -> TPR (IRQL << 4)
+    lapic0->setTaskPriority(0x80); // IRQL 8 (DISPATCH_LEVEL)
+    TEST_ASSERT(lapic0->getTaskPriority() == 0x80, "LAPIC TPR must reflect 0x80 (DISPATCH_LEVEL)");
+    lapic0->setTaskPriority(0x00); // PASSIVE_LEVEL
+
+    // Interrupt Request Register (IRR) and In-Service Register (ISR)
+    uint8_t testVector = 0x62;
+    lapic0->requestInterrupt(testVector);
+    TEST_ASSERT(lapic0->isInterruptPending(testVector), "Requested interrupt must be pending in IRR");
+    TEST_ASSERT(!lapic0->isInterruptInService(testVector), "Pending interrupt must not yet be in ISR");
+
+    lapic0->markInterruptInService(testVector);
+    TEST_ASSERT(!lapic0->isInterruptPending(testVector), "Servicing interrupt must clear IRR");
+    TEST_ASSERT(lapic0->isInterruptInService(testVector), "Servicing interrupt must set ISR");
+
+    lapic0->signalEoi();
+    TEST_ASSERT(!lapic0->isInterruptInService(testVector), "EOI must clear highest in-service interrupt in ISR");
+
+    // 5. I/O APIC Redirection Table & IRQ Routing
+    auto& ioApic = hal.getIoApic();
+    TEST_ASSERT(ioApic.getBaseAddress() == hal::DEFAULT_IOAPIC_BASE, "IO-APIC base address must match 0xFEC00000");
+
+    // Route Keyboard IRQ 1 to Vector 0x31 on Core 0
+    bool routed = ioApic.routeIrq(1, 0x31, 0, hal::InterruptMode::Latched);
+    TEST_ASSERT(routed, "Routing IRQ 1 on IO-APIC must succeed");
+    const auto* redir1 = ioApic.getRedirection(1);
+    TEST_ASSERT(redir1 != nullptr, "Redirection entry 1 must exist");
+    TEST_ASSERT(redir1->vector == 0x31, "Redirection vector must be 0x31");
+    TEST_ASSERT(redir1->destinationApicId == 0, "Destination APIC ID must be 0");
+    TEST_ASSERT(!redir1->masked, "Routed IRQ must be unmasked");
+
+    // Mask IRQ 1
+    ioApic.maskIrq(1, true);
+    TEST_ASSERT(ioApic.getRedirection(1)->masked, "Masking IRQ 1 must update redirection table");
+
+    // 6. System Interrupt Routing & IRQL Elevation Lifecycles
+    bool enabledInt = hal::HalEnableSystemInterrupt(0x50, ke::HIGH_LEVEL, hal::InterruptMode::LevelSensitive);
+    TEST_ASSERT(enabledInt, "HalEnableSystemInterrupt must succeed");
+
+    ke::KIRQL oldIrql = ke::PASSIVE_LEVEL;
+    bool beginOk = hal::HalBeginSystemInterrupt(ke::HIGH_LEVEL, 0x50, &oldIrql);
+    TEST_ASSERT(beginOk, "HalBeginSystemInterrupt must succeed");
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::HIGH_LEVEL, "Current IRQL must be raised to HIGH_LEVEL");
+    TEST_ASSERT(lapic0->isInterruptInService(0x50), "Interrupt 0x50 must be marked in-service in LAPIC");
+
+    hal::HalEndSystemInterrupt(oldIrql, 0x50);
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "Current IRQL must be restored to PASSIVE_LEVEL");
+    TEST_ASSERT(!lapic0->isInterruptInService(0x50), "LAPIC ISR must be cleared after HalEndSystemInterrupt EOI");
+
+    // 7. Inter-Processor Interrupts (IPI) & SMP TLB Shootdown
+    auto* kpcr1 = hal.getKpcr(1);
+    auto* kpcr2 = hal.getKpcr(2);
+    auto* kpcr3 = hal.getKpcr(3);
+    TEST_ASSERT(kpcr1 && kpcr2 && kpcr3, "All 4 SMP processor KPCRs must be valid");
+
+    // Dispatch IPI from CPU 0 to CPU 1
+    bool ipiSent = hal::HalRequestIpi(1, hal::IpiType::Dispatch);
+    TEST_ASSERT(ipiSent, "HalRequestIpi to CPU 1 must succeed");
+    TEST_ASSERT(kpcr0->prcb.ipiSentCount >= 1, "CPU 0 must record sent IPI");
+    TEST_ASSERT(kpcr1->prcb.ipiReceivedCount >= 1, "CPU 1 must record received IPI");
+
+    // Broadcast SMP TLB Shootdown across all secondary cores
+    uint64_t prevTlb1 = kpcr1->prcb.tlbFlushRequests;
+    uint64_t prevTlb2 = kpcr2->prcb.tlbFlushRequests;
+    uint64_t prevTlb3 = kpcr3->prcb.tlbFlushRequests;
+    hal.broadcastTlbFlush(0);
+    TEST_ASSERT(kpcr1->prcb.tlbFlushRequests == prevTlb1 + 1, "CPU 1 must receive TLB flush shootdown");
+    TEST_ASSERT(kpcr2->prcb.tlbFlushRequests == prevTlb2 + 1, "CPU 2 must receive TLB flush shootdown");
+    TEST_ASSERT(kpcr3->prcb.tlbFlushRequests == prevTlb3 + 1, "CPU 3 must receive TLB flush shootdown");
+
+    // 8. Direct Memory Access (DMA) & Scatter-Gather Engine
+    hal::DEVICE_DESCRIPTION devDesc{};
+    devDesc.interfaceType = hal::InterfaceType::PCIBus;
+    devDesc.master = true;
+    devDesc.scatterGather = true;
+    devDesc.dma64BitAddresses = true;
+    devDesc.maximumLength = 64 * 1024; // 64KB max DMA burst
+
+    uint32_t mapRegs = 0;
+    auto dmaAdapter = hal::HalGetAdapter(&devDesc, &mapRegs);
+    TEST_ASSERT(dmaAdapter != nullptr, "HalGetAdapter must return valid DMA adapter");
+    TEST_ASSERT(mapRegs == 16, "64KB DMA transfer must require 16 4KB map registers");
+
+    // Allocate contiguous DMA common buffer
+    uint64_t logicalPhysAddr = 0;
+    void* dmaBuffer = dmaAdapter->allocateCommonBuffer(8192, &logicalPhysAddr, false);
+    TEST_ASSERT(dmaBuffer != nullptr, "DMA common buffer allocation must succeed");
+    TEST_ASSERT(logicalPhysAddr != 0, "DMA logical physical address must be non-zero");
+
+    // Write test pattern and verify physical memory mapping
+    std::memset(dmaBuffer, 0x5A, 8192);
+    TEST_ASSERT(reinterpret_cast<uint8_t*>(dmaBuffer)[0] == 0x5A, "DMA memory contents must match pattern");
+
+    // Generate Scatter-Gather list across multi-page buffer
+    auto sgList = dmaAdapter->buildScatterGatherList(reinterpret_cast<uintptr_t>(dmaBuffer), 8192);
+    TEST_ASSERT(sgList.numberOfElements == 2, "8KB buffer must generate 2 4KB scatter-gather elements");
+    TEST_ASSERT(sgList.elements[0].length == 4096, "First scatter-gather element length must be 4096");
+    TEST_ASSERT(sgList.elements[1].length == 4096, "Second scatter-gather element length must be 4096");
+
+    dmaAdapter->freeCommonBuffer(8192, logicalPhysAddr, dmaBuffer, false);
+
+    // 9. Real-Time Clock (RTC) Subsystem
+    hal::TIME_FIELDS rtcIn{2026, 10, 10, 15, 30, 0, 0, 6};
+    hal::HalSetRealTimeClock(&rtcIn);
+
+    hal::TIME_FIELDS rtcOut{};
+    hal::HalQueryRealTimeClock(&rtcOut);
+    TEST_ASSERT(rtcOut.year == 2026, "RTC year must match 2026");
+    TEST_ASSERT(rtcOut.month == 10, "RTC month must match 10");
+    TEST_ASSERT(rtcOut.hour == 15, "RTC hour must match 15");
+    TEST_ASSERT(rtcOut.minute == 30, "RTC minute must match 30");
 }
+
 
 // ============================================================================
 // Suite 15: Virtual File System & Fastfat Driver Tests
