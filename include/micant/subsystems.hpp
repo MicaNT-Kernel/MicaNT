@@ -50,6 +50,11 @@
 #include "micant/iphlpapi.hpp"
 #include "micant/cipherksp.hpp"
 #include "micant/prism3d12.hpp"
+#include "micant/dwmapi.hpp"
+#include "micant/version.hpp"
+#include "micant/dbghelp.hpp"
+#include "micant/winmm.hpp"
+#include "micant/cfgmgr32.hpp"
 
 namespace micant::subsystems {
 
@@ -95,6 +100,11 @@ inline void InitializeAllSubsystemExports() noexcept {
     ntdll::InitializeNtdllSubsystemExports();
     aclui::InitializeAcluiSubsystemExports();
     winsta::InitializeWinStaSubsystemExports();
+    dwm::InitializeDWMSubsystemExports();
+    version::InitializeVersionExports();
+    dbghelp::InitializeDbgHelpExports();
+    winmm::InitializeWinMMExports();
+    cfgmgr32::InitializeCfgMgr32SubsystemExports();
 }
 
 } // namespace micant::subsystems

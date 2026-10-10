@@ -266,7 +266,34 @@ static int g_FailedTests = 0;
 #include "suites/server_storage_suites.hpp"
 
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite227")) {
+    if (argc > 1 && std::string(argv[1]) == "--apps") {
+        std::cout << "========================================================================\n";
+        std::cout << "   MicaNT Retail Application Subsystems Suite (Suites 215 - 228)\n";
+        std::cout << "========================================================================\n";
+        RUN_TEST(Test_InteractiveWindowManager_InputRouting_Subsystem);
+        RUN_TEST(Test_BareMetalEventLoop_WizTreeMFT_Subsystem);
+        RUN_TEST(Test_PuTTYTerminal_AnsiWin32_Subsystem);
+        RUN_TEST(Test_SumatraPDF_Gdiplus_Subsystem);
+        RUN_TEST(Test_Everything_Search_Indexing_Subsystem);
+        RUN_TEST(Test_WinMerge_Visual_Diff_Subsystem);
+        RUN_TEST(Test_Retail_Ecosystem_100_Percent_Coverage);
+        RUN_TEST(Test_Rufus_Storage_And_NtSyscalls_Suite);
+        RUN_TEST(Test_SystemInformer_Diagnostics_And_NativeNT_Suite);
+        RUN_TEST(Test_qBittorrent_Networking_AsyncIO_And_ICU_Suite);
+        RUN_TEST(Test_WinSCP_RemoteFileManagement_And_AsyncNetwork_Suite);
+        RUN_TEST(Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite);
+        RUN_TEST(Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite);
+        RUN_TEST(Test_Tier4_Multimedia_Creative_Workstation_Ecosystem_Suite);
+        std::cout << "\n------------------------------------------------------------------------\n";
+        std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
+        std::cout << "------------------------------------------------------------------------\n";
+        return g_FailedTests;
+    }
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite228")) {
+        RUN_TEST(Test_Tier4_Multimedia_Creative_Workstation_Ecosystem_Suite);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite227") {
         RUN_TEST(Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite);
         return g_FailedTests;
     }
