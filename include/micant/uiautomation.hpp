@@ -66,6 +66,10 @@ inline int32_t __stdcall UiaRaiseNotificationEvent(void* /*pProvider*/, int32_t 
     return 0; // S_OK
 }
 
+inline int64_t __stdcall LresultFromObject(void* /*riid*/, uint64_t /*wParam*/, void* /*pAcc*/) noexcept {
+    return 1;
+}
+
 inline void InitializeUIAutomationSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("uiautomationcore.dll", "UiaRaiseStructureChangedEvent", reinterpret_cast<void*>(UiaRaiseStructureChangedEvent));
@@ -80,6 +84,7 @@ inline void InitializeUIAutomationSubsystemExports() {
     // oleacc.dll exports
     ldr.registerExport("oleacc.dll", "AccessibleObjectFromWindow", reinterpret_cast<void*>(AccessibleObjectFromWindow));
     ldr.registerExport("oleacc.dll", "CreateStdAccessibleObject", reinterpret_cast<void*>(CreateStdAccessibleObject));
+    ldr.registerExport("oleacc.dll", "LresultFromObject", reinterpret_cast<void*>(LresultFromObject));
 }
 
 } // namespace micant::uiautomation

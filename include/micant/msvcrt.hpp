@@ -2105,6 +2105,7 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("vcruntime140.dll", "memset", reinterpret_cast<void*>(VCRT_memset));
     ldr.registerExport("vcruntime140_1.dll", "memset", reinterpret_cast<void*>(VCRT_memset));
     ldr.registerExport("msvcrt.dll", "memset", reinterpret_cast<void*>(VCRT_memset));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "memset", reinterpret_cast<void*>(VCRT_memset));
     ldr.registerExport("vcruntime140.dll", "memmove", reinterpret_cast<void*>(VCRT_memmove));
     ldr.registerExport("vcruntime140_1.dll", "memmove", reinterpret_cast<void*>(VCRT_memmove));
     ldr.registerExport("msvcrt.dll", "memmove", reinterpret_cast<void*>(VCRT_memmove));

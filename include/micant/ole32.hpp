@@ -928,6 +928,59 @@ inline HRESULT WINAPI CoGetSystemSecurityPermissions(void* /*pSecurityDescriptor
     return S_OK;
 }
 
+inline HRESULT WINAPI CreateDataAdviseHolder(void** ppDAHolder) noexcept {
+    if (ppDAHolder) *ppDAHolder = reinterpret_cast<void*>(0x8800);
+    return S_OK;
+}
+inline HRESULT WINAPI OleRegEnumVerbs(const void* /*clsid*/, void** ppenum) noexcept {
+    if (ppenum) *ppenum = nullptr;
+    return S_OK;
+}
+inline HRESULT WINAPI OleGetClipboard(void** ppDataObj) noexcept {
+    if (ppDataObj) *ppDataObj = reinterpret_cast<void*>(0x8800);
+    return S_OK;
+}
+inline HRESULT WINAPI OleSetClipboard(void* /*pDataObj*/) noexcept {
+    return S_OK;
+}
+inline win32::BOOL WINAPI OleIsEqualGUID_Export(const void* /*a*/, const void* /*b*/) noexcept {
+    return win32::TRUE;
+}
+inline HRESULT WINAPI OleFlushClipboard() noexcept {
+    return S_OK;
+}
+inline HRESULT WINAPI OleIsCurrentClipboard(void* /*pDataObj*/) noexcept {
+    return S_OK;
+}
+inline HRESULT WINAPI OleDraw(void* /*pUnk*/, uint32_t /*dwAspect*/, void* /*hdcDraw*/, const void* /*lprcBounds*/) noexcept {
+    return S_OK;
+}
+inline HRESULT WINAPI StringFromCLSID(const void* /*rclsid*/, wchar_t** lplpsz) noexcept {
+    if (lplpsz) *lplpsz = nullptr;
+    return S_OK;
+}
+inline HRESULT WINAPI CoMarshalInterThreadInterfaceInStream(const void* /*riid*/, void* /*pUnk*/, void** ppStm) noexcept {
+    if (ppStm) *ppStm = reinterpret_cast<void*>(0x8800);
+    return S_OK;
+}
+inline win32::BOOL WINAPI IsAccelerator(void* /*hAccel*/, int /*cAccelEntries*/, void* /*lpMsg*/, uint16_t* /*lpcmd*/) noexcept {
+    return win32::FALSE;
+}
+inline HRESULT WINAPI CoGetInterfaceAndReleaseStream(void* /*pStm*/, const void* /*riid*/, void** ppv) noexcept {
+    if (ppv) *ppv = reinterpret_cast<void*>(0x8800);
+    return S_OK;
+}
+inline HRESULT WINAPI ProgIDFromCLSID(const void* /*clsid*/, wchar_t** lplpszProgID) noexcept {
+    if (lplpszProgID) *lplpszProgID = nullptr;
+    return S_OK;
+}
+inline HRESULT WINAPI CoDisconnectObject(void* /*pUnk*/, uint32_t /*dwReserved*/) noexcept {
+    return S_OK;
+}
+inline HRESULT WINAPI OleSetMenuDescriptor(void* /*holemenu*/, win32::HWND /*hwndFrame*/, win32::HWND /*hwndActiveObject*/, void* /*lpFrame*/, void* /*lpActiveObj*/) noexcept {
+    return S_OK;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -936,6 +989,21 @@ inline void InitializeOle32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
     // ole32.dll COM Core
+    ldr.registerExport("ole32.dll", "CreateDataAdviseHolder", reinterpret_cast<void*>(CreateDataAdviseHolder));
+    ldr.registerExport("ole32.dll", "OleRegEnumVerbs", reinterpret_cast<void*>(OleRegEnumVerbs));
+    ldr.registerExport("ole32.dll", "OleGetClipboard", reinterpret_cast<void*>(OleGetClipboard));
+    ldr.registerExport("ole32.dll", "OleSetClipboard", reinterpret_cast<void*>(OleSetClipboard));
+    ldr.registerExport("ole32.dll", "IsEqualGUID", reinterpret_cast<void*>(OleIsEqualGUID_Export));
+    ldr.registerExport("ole32.dll", "OleFlushClipboard", reinterpret_cast<void*>(OleFlushClipboard));
+    ldr.registerExport("ole32.dll", "OleIsCurrentClipboard", reinterpret_cast<void*>(OleIsCurrentClipboard));
+    ldr.registerExport("ole32.dll", "OleDraw", reinterpret_cast<void*>(OleDraw));
+    ldr.registerExport("ole32.dll", "StringFromCLSID", reinterpret_cast<void*>(StringFromCLSID));
+    ldr.registerExport("ole32.dll", "CoMarshalInterThreadInterfaceInStream", reinterpret_cast<void*>(CoMarshalInterThreadInterfaceInStream));
+    ldr.registerExport("ole32.dll", "IsAccelerator", reinterpret_cast<void*>(IsAccelerator));
+    ldr.registerExport("ole32.dll", "CoGetInterfaceAndReleaseStream", reinterpret_cast<void*>(CoGetInterfaceAndReleaseStream));
+    ldr.registerExport("ole32.dll", "ProgIDFromCLSID", reinterpret_cast<void*>(ProgIDFromCLSID));
+    ldr.registerExport("ole32.dll", "CoDisconnectObject", reinterpret_cast<void*>(CoDisconnectObject));
+    ldr.registerExport("ole32.dll", "OleSetMenuDescriptor", reinterpret_cast<void*>(OleSetMenuDescriptor));
     ldr.registerExport("ole32.dll", "CoGetSystemSecurityPermissions", reinterpret_cast<void*>(CoGetSystemSecurityPermissions));
     ldr.registerExport("ole32.dll", "CoInitialize", reinterpret_cast<void*>(CoInitialize));
     ldr.registerExport("ole32.dll", "CoInitializeEx", reinterpret_cast<void*>(CoInitializeEx));

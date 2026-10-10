@@ -2283,6 +2283,90 @@ inline win32::BOOL WINAPI SetWindowDisplayAffinity(win32::HWND /*hWnd*/, win32::
     return win32::TRUE;
 }
 
+inline void* CopyImage(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL DefFrameProcW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL CharToOemBuffW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL ClipCursor(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SendMessageA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL EnumWindows(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL ShowOwnedPopups(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetActiveWindow(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetKeyboardLayoutList(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetScrollBarInfo(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL CharLowerBuffW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL InvalidateRgn(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetAsyncKeyState(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void EndMenu(void* /*a*/ = nullptr, int32_t /*b*/ = 0) noexcept {}
+inline BOOL CharNextW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL AttachThreadInput(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetTopWindow(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetWindowRgn(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL CharLowerBuffA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL EnumClipboardFormats(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL ScrollDC(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetMessageExtraInfo(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL EnableScrollBar(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetMessagePos(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetKeyNameTextW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetCursorPos(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetRect(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL IsRectEmpty(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
+inline void* GetCursor(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL WaitMessage(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL TranslateMDISysAccel(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetClipboardFormatNameW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetMenuItemRect(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL InsertMenuItemA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline DWORD RegisterDeviceNotificationW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 0; /* ERROR_SUCCESS */ }
+inline void* GetUpdateRect(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL AllowSetForegroundWindow(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL IsWindowUnicode(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
+inline BOOL DefMDIChildProcW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetSystemMenu(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetCursorInfo(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL CharUpperBuffW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetClassLongPtrW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetClassLongPtrW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetForegroundWindow(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL MsgWaitForMultipleObjectsEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* LoadKeyboardLayoutW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetMenuItemInfoA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL ActivateKeyboardLayout(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL DrawIcon(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetKeyboardState(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* CreateIcon(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SubtractRect(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetKeyboardLayoutNameW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL CountClipboardFormats(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL CharUpperBuffA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* CopyIcon(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL IsDialogMessageA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
+inline void* GetMenuDefaultItem(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetGestureConfig(void* /*hwnd*/, uint32_t /*dwReserved*/, uint32_t /*cIDs*/, void* /*pGestureConfig*/, uint32_t /*cbSize*/) noexcept { return 1; }
+inline BOOL CloseGestureInfoHandle(void* /*hGestureInfo*/) noexcept { return 1; }
+inline BOOL GetGestureInfo(void* /*hGestureInfo*/, void* /*pGestureInfo*/) noexcept { return 0; }
+inline BOOL SystemParametersInfoForDpi(uint32_t /*uiAction*/, uint32_t /*uiParam*/, void* /*pvParam*/, uint32_t /*fWinIni*/, uint32_t /*dpi*/) noexcept { return 1; }
+inline BOOL PhysicalToLogicalPoint(void* /*hWnd*/, void* /*lpPoint*/) noexcept { return 1; }
+inline int32_t GetSystemMetricsForDpi(int32_t nIndex, uint32_t dpi) noexcept {
+    int32_t base = 0;
+    switch (nIndex) {
+        case 0: base = 1920; break;
+        case 1: base = 1080; break;
+        case 2: base = 32; break;
+        case 3: base = 32; break;
+        case 4: base = 32; break;
+        default: base = 16; break;
+    }
+    return static_cast<int32_t>(static_cast<uint64_t>(base) * dpi / 96);
+}
+inline uint32_t GetDpiForWindow(void* /*hWnd*/) noexcept { return 96; }
+inline BOOL AreDpiAwarenessContextsEqual(void* a, void* b) noexcept { return a == b ? 1 : 0; }
+inline int32_t GetAwarenessFromDpiAwarenessContext(void* /*value*/) noexcept { return 2; }
+inline void* GetWindowDpiAwarenessContext(void* /*hWnd*/) noexcept { return reinterpret_cast<void*>(static_cast<uintptr_t>(-4)); }
+inline void* GetThreadDpiAwarenessContext() noexcept { return reinterpret_cast<void*>(static_cast<uintptr_t>(-4)); }
+inline void* SetThreadDpiAwarenessContext(void* /*dpiContext*/) noexcept { return reinterpret_cast<void*>(static_cast<uintptr_t>(-4)); }
+inline BOOL AdjustWindowRectExForDpi(void* /*lpRect*/, uint32_t /*dwStyle*/, BOOL /*bMenu*/, uint32_t /*dwExStyle*/, uint32_t /*dpi*/) noexcept { return 1; }
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -2511,6 +2595,79 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "LookupIconIdFromDirectoryEx", reinterpret_cast<void*>(LookupIconIdFromDirectoryEx));
     ldr.registerExport("user32.dll", "MenuItemFromPoint", reinterpret_cast<void*>(MenuItemFromPoint));
     ldr.registerExport("user32.dll", "SetWindowDisplayAffinity", reinterpret_cast<void*>(SetWindowDisplayAffinity));
+
+    ldr.registerExport("user32.dll", "CopyImage", reinterpret_cast<void*>(CopyImage));
+    ldr.registerExport("user32.dll", "DefFrameProcW", reinterpret_cast<void*>(DefFrameProcW));
+    ldr.registerExport("user32.dll", "CharToOemBuffW", reinterpret_cast<void*>(CharToOemBuffW));
+    ldr.registerExport("user32.dll", "ClipCursor", reinterpret_cast<void*>(ClipCursor));
+    ldr.registerExport("user32.dll", "SendMessageA", reinterpret_cast<void*>(SendMessageA));
+    ldr.registerExport("user32.dll", "EnumWindows", reinterpret_cast<void*>(EnumWindows));
+    ldr.registerExport("user32.dll", "ShowOwnedPopups", reinterpret_cast<void*>(ShowOwnedPopups));
+    ldr.registerExport("user32.dll", "SetActiveWindow", reinterpret_cast<void*>(SetActiveWindow));
+    ldr.registerExport("user32.dll", "GetKeyboardLayoutList", reinterpret_cast<void*>(GetKeyboardLayoutList));
+    ldr.registerExport("user32.dll", "GetScrollBarInfo", reinterpret_cast<void*>(GetScrollBarInfo));
+    ldr.registerExport("user32.dll", "CharLowerBuffW", reinterpret_cast<void*>(CharLowerBuffW));
+    ldr.registerExport("user32.dll", "InvalidateRgn", reinterpret_cast<void*>(InvalidateRgn));
+    ldr.registerExport("user32.dll", "GetAsyncKeyState", reinterpret_cast<void*>(GetAsyncKeyState));
+    ldr.registerExport("user32.dll", "EndMenu", reinterpret_cast<void*>(EndMenu));
+    ldr.registerExport("user32.dll", "CharNextW", reinterpret_cast<void*>(CharNextW));
+    ldr.registerExport("user32.dll", "AttachThreadInput", reinterpret_cast<void*>(AttachThreadInput));
+    ldr.registerExport("user32.dll", "GetTopWindow", reinterpret_cast<void*>(GetTopWindow));
+    ldr.registerExport("user32.dll", "SetWindowRgn", reinterpret_cast<void*>(SetWindowRgn));
+    ldr.registerExport("user32.dll", "CharLowerBuffA", reinterpret_cast<void*>(CharLowerBuffA));
+    ldr.registerExport("user32.dll", "EnumClipboardFormats", reinterpret_cast<void*>(EnumClipboardFormats));
+    ldr.registerExport("user32.dll", "ScrollDC", reinterpret_cast<void*>(ScrollDC));
+    ldr.registerExport("user32.dll", "GetMessageExtraInfo", reinterpret_cast<void*>(GetMessageExtraInfo));
+    ldr.registerExport("user32.dll", "EnableScrollBar", reinterpret_cast<void*>(EnableScrollBar));
+    ldr.registerExport("user32.dll", "GetMessagePos", reinterpret_cast<void*>(GetMessagePos));
+    ldr.registerExport("user32.dll", "GetKeyNameTextW", reinterpret_cast<void*>(GetKeyNameTextW));
+    ldr.registerExport("user32.dll", "SetCursorPos", reinterpret_cast<void*>(SetCursorPos));
+    ldr.registerExport("user32.dll", "SetRect", reinterpret_cast<void*>(SetRect));
+    ldr.registerExport("user32.dll", "IsRectEmpty", reinterpret_cast<void*>(IsRectEmpty));
+    ldr.registerExport("user32.dll", "GetCursor", reinterpret_cast<void*>(GetCursor));
+    ldr.registerExport("user32.dll", "WaitMessage", reinterpret_cast<void*>(WaitMessage));
+    ldr.registerExport("user32.dll", "TranslateMDISysAccel", reinterpret_cast<void*>(TranslateMDISysAccel));
+    ldr.registerExport("user32.dll", "GetClipboardFormatNameW", reinterpret_cast<void*>(GetClipboardFormatNameW));
+    ldr.registerExport("user32.dll", "GetMenuItemRect", reinterpret_cast<void*>(GetMenuItemRect));
+    ldr.registerExport("user32.dll", "InsertMenuItemA", reinterpret_cast<void*>(InsertMenuItemA));
+    ldr.registerExport("user32.dll", "RegisterDeviceNotificationW", reinterpret_cast<void*>(RegisterDeviceNotificationW));
+    ldr.registerExport("user32.dll", "GetUpdateRect", reinterpret_cast<void*>(GetUpdateRect));
+    ldr.registerExport("user32.dll", "AllowSetForegroundWindow", reinterpret_cast<void*>(AllowSetForegroundWindow));
+    ldr.registerExport("user32.dll", "IsWindowUnicode", reinterpret_cast<void*>(IsWindowUnicode));
+    ldr.registerExport("user32.dll", "DefMDIChildProcW", reinterpret_cast<void*>(DefMDIChildProcW));
+    ldr.registerExport("user32.dll", "GetSystemMenu", reinterpret_cast<void*>(GetSystemMenu));
+    ldr.registerExport("user32.dll", "GetCursorInfo", reinterpret_cast<void*>(GetCursorInfo));
+    ldr.registerExport("user32.dll", "CharUpperBuffW", reinterpret_cast<void*>(CharUpperBuffW));
+    ldr.registerExport("user32.dll", "SetClassLongPtrW", reinterpret_cast<void*>(SetClassLongPtrW));
+    ldr.registerExport("user32.dll", "GetClassLongPtrW", reinterpret_cast<void*>(GetClassLongPtrW));
+    ldr.registerExport("user32.dll", "GetForegroundWindow", reinterpret_cast<void*>(GetForegroundWindow));
+    ldr.registerExport("user32.dll", "MsgWaitForMultipleObjectsEx", reinterpret_cast<void*>(MsgWaitForMultipleObjectsEx));
+    ldr.registerExport("user32.dll", "LoadKeyboardLayoutW", reinterpret_cast<void*>(LoadKeyboardLayoutW));
+    ldr.registerExport("user32.dll", "GetMenuItemInfoA", reinterpret_cast<void*>(GetMenuItemInfoA));
+    ldr.registerExport("user32.dll", "ActivateKeyboardLayout", reinterpret_cast<void*>(ActivateKeyboardLayout));
+    ldr.registerExport("user32.dll", "DrawIcon", reinterpret_cast<void*>(DrawIcon));
+    ldr.registerExport("user32.dll", "SetKeyboardState", reinterpret_cast<void*>(SetKeyboardState));
+    ldr.registerExport("user32.dll", "CreateIcon", reinterpret_cast<void*>(CreateIcon));
+    ldr.registerExport("user32.dll", "SubtractRect", reinterpret_cast<void*>(SubtractRect));
+    ldr.registerExport("user32.dll", "GetKeyboardLayoutNameW", reinterpret_cast<void*>(GetKeyboardLayoutNameW));
+    ldr.registerExport("user32.dll", "CountClipboardFormats", reinterpret_cast<void*>(CountClipboardFormats));
+    ldr.registerExport("user32.dll", "CharUpperBuffA", reinterpret_cast<void*>(CharUpperBuffA));
+    ldr.registerExport("user32.dll", "CopyIcon", reinterpret_cast<void*>(CopyIcon));
+    ldr.registerExport("user32.dll", "IsDialogMessageA", reinterpret_cast<void*>(IsDialogMessageA));
+    ldr.registerExport("user32.dll", "GetMenuDefaultItem", reinterpret_cast<void*>(GetMenuDefaultItem));
+    ldr.registerExport("user32.dll", "SetGestureConfig", reinterpret_cast<void*>(SetGestureConfig));
+    ldr.registerExport("user32.dll", "CloseGestureInfoHandle", reinterpret_cast<void*>(CloseGestureInfoHandle));
+    ldr.registerExport("user32.dll", "GetGestureInfo", reinterpret_cast<void*>(GetGestureInfo));
+    ldr.registerExport("user32.dll", "SystemParametersInfoForDpi", reinterpret_cast<void*>(SystemParametersInfoForDpi));
+    ldr.registerExport("user32.dll", "PhysicalToLogicalPoint", reinterpret_cast<void*>(PhysicalToLogicalPoint));
+    ldr.registerExport("user32.dll", "GetSystemMetricsForDpi", reinterpret_cast<void*>(GetSystemMetricsForDpi));
+    ldr.registerExport("user32.dll", "GetDpiForWindow", reinterpret_cast<void*>(GetDpiForWindow));
+    ldr.registerExport("user32.dll", "AreDpiAwarenessContextsEqual", reinterpret_cast<void*>(AreDpiAwarenessContextsEqual));
+    ldr.registerExport("user32.dll", "GetAwarenessFromDpiAwarenessContext", reinterpret_cast<void*>(GetAwarenessFromDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "GetWindowDpiAwarenessContext", reinterpret_cast<void*>(GetWindowDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "GetThreadDpiAwarenessContext", reinterpret_cast<void*>(GetThreadDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "SetThreadDpiAwarenessContext", reinterpret_cast<void*>(SetThreadDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "AdjustWindowRectExForDpi", reinterpret_cast<void*>(AdjustWindowRectExForDpi));
 }
 
 } // namespace micant::user32

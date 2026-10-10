@@ -1845,6 +1845,76 @@ inline uint32_t WINAPI SetDCBrushColor(HDC /*hdc*/, uint32_t /*crColor*/) noexce
     return 0;
 }
 
+inline BOOL TransparentBlt(void* /*hdcDest*/, int /*xoriginDest*/, int /*yoriginDest*/, int /*wDest*/, int /*hDest*/, void* /*hdcSrc*/, int /*xoriginSrc*/, int /*yoriginSrc*/, int /*wSrc*/, int /*hSrc*/, uint32_t /*crTransparent*/) noexcept {
+    return 1;
+}
+inline BOOL Pie(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetPaletteEntries(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetRandomRgn(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetEnhMetaFileHeader(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL CloseEnhMetaFile(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL AngleArc(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL ResizePalette(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetAbortProc(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetRectRgn(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetWindowOrgEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetPixelV(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* CreatePalette(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* CreateDCW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* CreateICW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL PolyBezierTo(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL PlayEnhMetaFile(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetBitmapBits(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL AbortDoc(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetSystemPaletteEntries(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetEnhMetaFileBits(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* CreatePenIndirect(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetEnhMetaFilePaletteEntries(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetMapMode(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetMapMode(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL PolyBezier(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL LPtoDP(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetCurrentObject(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetWinMetaFileBits(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetEnhMetaFileDescriptionW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL ArcTo(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* CreateEnhMetaFileW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL Arc(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* SelectPalette(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetGraphicsMode(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL MaskBlt(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL DeleteEnhMetaFile(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL Chord(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetViewportOrgEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetViewportOrgEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL RealizePalette(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetDIBColorTable(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetDIBColorTable(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* CreateBrushIndirect(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetEnhMetaFileBits(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SetWorldTransform(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL FrameRgn(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetClipBox(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetWinMetaFileBits(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* CreateDIBitmap(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetStretchBltMode(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL ExtCreateRegion(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetRgnBox(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL EnumFontsW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* CreateHalftonePalette(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL ExtFloodFill(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL UnrealizeObject(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* CopyEnhMetaFileW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL OffsetRgn(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetMetaFileBitsEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetBrushOrgEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetCurrentPositionEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetDCPenColor(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetNearestPaletteIndex(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* CreateRoundRectRgn(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL GdiFlush(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetPaletteEntries(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+
 // ============================================================================
 // 6. Subsystem Export Registration
 // ============================================================================
@@ -2012,6 +2082,75 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "GetObjectType", reinterpret_cast<void*>(GetObjectType));
     ldr.registerExport("gdi32.dll", "SetBoundsRect", reinterpret_cast<void*>(SetBoundsRect));
     ldr.registerExport("gdi32.dll", "SetDCBrushColor", reinterpret_cast<void*>(SetDCBrushColor));
+
+    ldr.registerExport("gdi32.dll", "TransparentBlt", reinterpret_cast<void*>(TransparentBlt));
+    ldr.registerExport("msimg32.dll", "TransparentBlt", reinterpret_cast<void*>(TransparentBlt));
+    ldr.registerExport("gdi32.dll", "Pie", reinterpret_cast<void*>(Pie));
+    ldr.registerExport("gdi32.dll", "SetPaletteEntries", reinterpret_cast<void*>(SetPaletteEntries));
+    ldr.registerExport("gdi32.dll", "GetRandomRgn", reinterpret_cast<void*>(GetRandomRgn));
+    ldr.registerExport("gdi32.dll", "GetEnhMetaFileHeader", reinterpret_cast<void*>(GetEnhMetaFileHeader));
+    ldr.registerExport("gdi32.dll", "CloseEnhMetaFile", reinterpret_cast<void*>(CloseEnhMetaFile));
+    ldr.registerExport("gdi32.dll", "AngleArc", reinterpret_cast<void*>(AngleArc));
+    ldr.registerExport("gdi32.dll", "ResizePalette", reinterpret_cast<void*>(ResizePalette));
+    ldr.registerExport("gdi32.dll", "SetAbortProc", reinterpret_cast<void*>(SetAbortProc));
+    ldr.registerExport("gdi32.dll", "SetRectRgn", reinterpret_cast<void*>(SetRectRgn));
+    ldr.registerExport("gdi32.dll", "GetWindowOrgEx", reinterpret_cast<void*>(GetWindowOrgEx));
+    ldr.registerExport("gdi32.dll", "SetPixelV", reinterpret_cast<void*>(SetPixelV));
+    ldr.registerExport("gdi32.dll", "CreatePalette", reinterpret_cast<void*>(CreatePalette));
+    ldr.registerExport("gdi32.dll", "CreateDCW", reinterpret_cast<void*>(CreateDCW));
+    ldr.registerExport("gdi32.dll", "CreateICW", reinterpret_cast<void*>(CreateICW));
+    ldr.registerExport("gdi32.dll", "PolyBezierTo", reinterpret_cast<void*>(PolyBezierTo));
+    ldr.registerExport("gdi32.dll", "PlayEnhMetaFile", reinterpret_cast<void*>(PlayEnhMetaFile));
+    ldr.registerExport("gdi32.dll", "GetBitmapBits", reinterpret_cast<void*>(GetBitmapBits));
+    ldr.registerExport("gdi32.dll", "AbortDoc", reinterpret_cast<void*>(AbortDoc));
+    ldr.registerExport("gdi32.dll", "GetSystemPaletteEntries", reinterpret_cast<void*>(GetSystemPaletteEntries));
+    ldr.registerExport("gdi32.dll", "GetEnhMetaFileBits", reinterpret_cast<void*>(GetEnhMetaFileBits));
+    ldr.registerExport("gdi32.dll", "CreatePenIndirect", reinterpret_cast<void*>(CreatePenIndirect));
+    ldr.registerExport("gdi32.dll", "GetEnhMetaFilePaletteEntries", reinterpret_cast<void*>(GetEnhMetaFilePaletteEntries));
+    ldr.registerExport("gdi32.dll", "SetMapMode", reinterpret_cast<void*>(SetMapMode));
+    ldr.registerExport("gdi32.dll", "GetMapMode", reinterpret_cast<void*>(GetMapMode));
+    ldr.registerExport("gdi32.dll", "PolyBezier", reinterpret_cast<void*>(PolyBezier));
+    ldr.registerExport("gdi32.dll", "LPtoDP", reinterpret_cast<void*>(LPtoDP));
+    ldr.registerExport("gdi32.dll", "GetCurrentObject", reinterpret_cast<void*>(GetCurrentObject));
+    ldr.registerExport("gdi32.dll", "GetWinMetaFileBits", reinterpret_cast<void*>(GetWinMetaFileBits));
+    ldr.registerExport("gdi32.dll", "GetEnhMetaFileDescriptionW", reinterpret_cast<void*>(GetEnhMetaFileDescriptionW));
+    ldr.registerExport("gdi32.dll", "ArcTo", reinterpret_cast<void*>(ArcTo));
+    ldr.registerExport("gdi32.dll", "CreateEnhMetaFileW", reinterpret_cast<void*>(CreateEnhMetaFileW));
+    ldr.registerExport("gdi32.dll", "Arc", reinterpret_cast<void*>(Arc));
+    ldr.registerExport("gdi32.dll", "SelectPalette", reinterpret_cast<void*>(SelectPalette));
+    ldr.registerExport("gdi32.dll", "SetGraphicsMode", reinterpret_cast<void*>(SetGraphicsMode));
+    ldr.registerExport("gdi32.dll", "MaskBlt", reinterpret_cast<void*>(MaskBlt));
+    ldr.registerExport("gdi32.dll", "DeleteEnhMetaFile", reinterpret_cast<void*>(DeleteEnhMetaFile));
+    ldr.registerExport("gdi32.dll", "Chord", reinterpret_cast<void*>(Chord));
+    ldr.registerExport("gdi32.dll", "SetViewportOrgEx", reinterpret_cast<void*>(SetViewportOrgEx));
+    ldr.registerExport("gdi32.dll", "GetViewportOrgEx", reinterpret_cast<void*>(GetViewportOrgEx));
+    ldr.registerExport("gdi32.dll", "RealizePalette", reinterpret_cast<void*>(RealizePalette));
+    ldr.registerExport("gdi32.dll", "SetDIBColorTable", reinterpret_cast<void*>(SetDIBColorTable));
+    ldr.registerExport("gdi32.dll", "GetDIBColorTable", reinterpret_cast<void*>(GetDIBColorTable));
+    ldr.registerExport("gdi32.dll", "CreateBrushIndirect", reinterpret_cast<void*>(CreateBrushIndirect));
+    ldr.registerExport("gdi32.dll", "SetEnhMetaFileBits", reinterpret_cast<void*>(SetEnhMetaFileBits));
+    ldr.registerExport("gdi32.dll", "SetWorldTransform", reinterpret_cast<void*>(SetWorldTransform));
+    ldr.registerExport("gdi32.dll", "FrameRgn", reinterpret_cast<void*>(FrameRgn));
+    ldr.registerExport("gdi32.dll", "GetClipBox", reinterpret_cast<void*>(GetClipBox));
+    ldr.registerExport("gdi32.dll", "SetWinMetaFileBits", reinterpret_cast<void*>(SetWinMetaFileBits));
+    ldr.registerExport("gdi32.dll", "CreateDIBitmap", reinterpret_cast<void*>(CreateDIBitmap));
+    ldr.registerExport("gdi32.dll", "GetStretchBltMode", reinterpret_cast<void*>(GetStretchBltMode));
+    ldr.registerExport("gdi32.dll", "ExtCreateRegion", reinterpret_cast<void*>(ExtCreateRegion));
+    ldr.registerExport("gdi32.dll", "GetRgnBox", reinterpret_cast<void*>(GetRgnBox));
+    ldr.registerExport("gdi32.dll", "EnumFontsW", reinterpret_cast<void*>(EnumFontsW));
+    ldr.registerExport("gdi32.dll", "CreateHalftonePalette", reinterpret_cast<void*>(CreateHalftonePalette));
+    ldr.registerExport("gdi32.dll", "ExtFloodFill", reinterpret_cast<void*>(ExtFloodFill));
+    ldr.registerExport("gdi32.dll", "UnrealizeObject", reinterpret_cast<void*>(UnrealizeObject));
+    ldr.registerExport("gdi32.dll", "CopyEnhMetaFileW", reinterpret_cast<void*>(CopyEnhMetaFileW));
+    ldr.registerExport("gdi32.dll", "OffsetRgn", reinterpret_cast<void*>(OffsetRgn));
+    ldr.registerExport("gdi32.dll", "GetMetaFileBitsEx", reinterpret_cast<void*>(GetMetaFileBitsEx));
+    ldr.registerExport("gdi32.dll", "GetBrushOrgEx", reinterpret_cast<void*>(GetBrushOrgEx));
+    ldr.registerExport("gdi32.dll", "GetCurrentPositionEx", reinterpret_cast<void*>(GetCurrentPositionEx));
+    ldr.registerExport("gdi32.dll", "SetDCPenColor", reinterpret_cast<void*>(SetDCPenColor));
+    ldr.registerExport("gdi32.dll", "GetNearestPaletteIndex", reinterpret_cast<void*>(GetNearestPaletteIndex));
+    ldr.registerExport("gdi32.dll", "CreateRoundRectRgn", reinterpret_cast<void*>(CreateRoundRectRgn));
+    ldr.registerExport("gdi32.dll", "GdiFlush", reinterpret_cast<void*>(GdiFlush));
+    ldr.registerExport("gdi32.dll", "GetPaletteEntries", reinterpret_cast<void*>(GetPaletteEntries));
 }
 
 } // namespace micant::gdi32

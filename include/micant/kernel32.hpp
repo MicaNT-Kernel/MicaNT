@@ -5013,6 +5013,82 @@ inline BOOL WINAPI WaitOnAddress(volatile void* /*Address*/, void* /*CompareAddr
 inline void WINAPI WakeByAddressSingle(void* /*Address*/) noexcept {}
 inline void WINAPI WakeByAddressAll(void* /*Address*/) noexcept {}
 
+inline BOOL QueryDosDeviceW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL ReadProcessMemory(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetCPInfoExW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL WriteProcessMemory(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL TryEnterCriticalSection(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
+inline BOOL HeapDestroy(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetDiskFreeSpaceA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* FindFirstFileA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* OpenMutexW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline int lstrlenA(const char* s) noexcept { return s ? static_cast<int>(std::strlen(s)) : 0; }
+inline char* lstrcpyA(char* dst, const char* src) noexcept { return (dst && src) ? std::strcpy(dst, src) : dst; }
+inline void* CreateFileA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL FreeResource(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL GlobalAddAtomW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetExitCodeThread(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL OutputDebugStringW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL IsBadReadPtr(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
+inline void* GetShortPathNameW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL GlobalFindAtomW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL WritePrivateProfileStringW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* FindNextFileA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL GlobalDeleteAtom(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetThreadPriority(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL SetThreadPriority(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SearchPathW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL VerifyVersionInfoW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
+inline BOOL HeapCreate(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL SignalObjectAndWait(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL VerSetConditionMask(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr) noexcept { return 1; }
+inline DWORD GetUserDefaultUILanguage(void* /*a*/ = nullptr) noexcept { return 0x0409; }
+inline DWORD GetConsoleCP(void* /*a*/ = nullptr) noexcept { return 0x0409; }
+inline BOOL CompareStringA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline BOOL EnumResourceNamesW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetSystemDirectoryW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetDriveTypeA(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline void* GetComputerNameW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline DWORD GetSystemDefaultUILanguage(void* /*a*/ = nullptr) noexcept { return 0x0409; }
+inline BOOL EnumCalendarInfoW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline void* GetPrivateProfileStringW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return reinterpret_cast<void*>(0x8800); }
+inline BOOL WaitForMultipleObjectsEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline DWORD GetThreadLocale(void* /*a*/ = nullptr) noexcept { return 0x0409; }
+inline BOOL SetThreadLocale(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return 1; }
+inline uint32_t VerLanguageNameW(uint32_t /*wLang*/, wchar_t* szLang, uint32_t cchLang) noexcept {
+    if (!szLang || cchLang == 0) return 0;
+    const wchar_t desc[] = L"English (United States)";
+    size_t len = std::wcslen(desc);
+    if (len >= cchLang) len = cchLang - 1;
+    std::wcsncpy(szLang, desc, len);
+    szLang[len] = L'\0';
+    return static_cast<uint32_t>(len);
+}
+inline BOOL GetLogicalProcessorInformation(void* /*Buffer*/, uint32_t* ReturnedLength) noexcept {
+    if (ReturnedLength) *ReturnedLength = 0;
+    return 1;
+}
+inline BOOL IsWow64Process(void* /*hProcess*/, BOOL* Wow64Process) noexcept {
+    if (Wow64Process) *Wow64Process = 0;
+    return 1;
+}
+inline BOOL ProcessIdToSessionId(uint32_t /*dwProcessId*/, uint32_t* pSessionId) noexcept {
+    if (pSessionId) *pSessionId = 1;
+    return 1;
+}
+inline uint32_t LocaleNameToLCID(const wchar_t* /*lpName*/, uint32_t /*dwFlags*/) noexcept {
+    return 0x0409;
+}
+inline BOOL GetTimeZoneInformationForYear(uint16_t /*wYear*/, void* /*pDynamicTimeZoneInformation*/, void* /*pTimeZoneInformation*/) noexcept {
+    return 1;
+}
+inline BOOL GetSystemTimes(void* lpIdleTime, void* lpKernelTime, void* lpUserTime) noexcept {
+    if (lpIdleTime) std::memset(lpIdleTime, 0, 8);
+    if (lpKernelTime) std::memset(lpKernelTime, 0, 8);
+    if (lpUserTime) std::memset(lpUserTime, 0, 8);
+    return 1;
+}
+
 // ============================================================================
 // 18. Win32 Dynamic Subsystem Export Table Initializer
 // ============================================================================
@@ -5538,6 +5614,57 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetNumberFormatEx", reinterpret_cast<void*>(GetNumberFormatEx));
     ldr.registerExport("kernel32.dll", "SetConsoleCP", reinterpret_cast<void*>(SetConsoleCP));
     ldr.registerExport("kernel32.dll", "SetConsoleOutputCP", reinterpret_cast<void*>(SetConsoleOutputCP));
+
+    ldr.registerExport("kernel32.dll", "QueryDosDeviceW", reinterpret_cast<void*>(QueryDosDeviceW));
+    ldr.registerExport("kernel32.dll", "ReadProcessMemory", reinterpret_cast<void*>(ReadProcessMemory));
+    ldr.registerExport("kernel32.dll", "GetCPInfoExW", reinterpret_cast<void*>(GetCPInfoExW));
+    ldr.registerExport("kernel32.dll", "WriteProcessMemory", reinterpret_cast<void*>(WriteProcessMemory));
+    ldr.registerExport("kernel32.dll", "TryEnterCriticalSection", reinterpret_cast<void*>(TryEnterCriticalSection));
+    ldr.registerExport("kernel32.dll", "HeapDestroy", reinterpret_cast<void*>(HeapDestroy));
+    ldr.registerExport("kernel32.dll", "GetDiskFreeSpaceA", reinterpret_cast<void*>(GetDiskFreeSpaceA));
+    ldr.registerExport("kernel32.dll", "FindFirstFileA", reinterpret_cast<void*>(FindFirstFileA));
+    ldr.registerExport("kernel32.dll", "OpenMutexW", reinterpret_cast<void*>(OpenMutexW));
+    ldr.registerExport("kernel32.dll", "lstrlenA", reinterpret_cast<void*>(lstrlenA));
+    ldr.registerExport("kernel32.dll", "lstrcpyA", reinterpret_cast<void*>(lstrcpyA));
+    ldr.registerExport("kernel32.dll", "CreateFileA", reinterpret_cast<void*>(CreateFileA));
+    ldr.registerExport("kernel32.dll", "FreeResource", reinterpret_cast<void*>(FreeResource));
+    ldr.registerExport("kernel32.dll", "GlobalAddAtomW", reinterpret_cast<void*>(GlobalAddAtomW));
+    ldr.registerExport("kernel32.dll", "GetExitCodeThread", reinterpret_cast<void*>(GetExitCodeThread));
+    ldr.registerExport("kernel32.dll", "OutputDebugStringW", reinterpret_cast<void*>(OutputDebugStringW));
+    ldr.registerExport("kernel32.dll", "IsBadReadPtr", reinterpret_cast<void*>(IsBadReadPtr));
+    ldr.registerExport("kernel32.dll", "GetShortPathNameW", reinterpret_cast<void*>(GetShortPathNameW));
+    ldr.registerExport("kernel32.dll", "GlobalFindAtomW", reinterpret_cast<void*>(GlobalFindAtomW));
+    ldr.registerExport("kernel32.dll", "WritePrivateProfileStringW", reinterpret_cast<void*>(WritePrivateProfileStringW));
+    ldr.registerExport("kernel32.dll", "FindNextFileA", reinterpret_cast<void*>(FindNextFileA));
+    ldr.registerExport("kernel32.dll", "GlobalDeleteAtom", reinterpret_cast<void*>(GlobalDeleteAtom));
+    ldr.registerExport("kernel32.dll", "GetThreadPriority", reinterpret_cast<void*>(GetThreadPriority));
+    ldr.registerExport("kernel32.dll", "SetThreadPriority", reinterpret_cast<void*>(SetThreadPriority));
+    ldr.registerExport("kernel32.dll", "SearchPathW", reinterpret_cast<void*>(SearchPathW));
+    ldr.registerExport("kernel32.dll", "VerifyVersionInfoW", reinterpret_cast<void*>(VerifyVersionInfoW));
+    ldr.registerExport("kernel32.dll", "HeapCreate", reinterpret_cast<void*>(HeapCreate));
+    ldr.registerExport("kernel32.dll", "SignalObjectAndWait", reinterpret_cast<void*>(SignalObjectAndWait));
+    ldr.registerExport("kernel32.dll", "VerSetConditionMask", reinterpret_cast<void*>(VerSetConditionMask));
+    ldr.registerExport("kernel32.dll", "GetUserDefaultUILanguage", reinterpret_cast<void*>(GetUserDefaultUILanguage));
+    ldr.registerExport("kernel32.dll", "GetConsoleCP", reinterpret_cast<void*>(GetConsoleCP));
+    ldr.registerExport("kernel32.dll", "CompareStringA", reinterpret_cast<void*>(CompareStringA));
+    ldr.registerExport("kernel32.dll", "EnumResourceNamesW", reinterpret_cast<void*>(EnumResourceNamesW));
+    ldr.registerExport("kernel32.dll", "GetSystemDirectoryW", reinterpret_cast<void*>(GetSystemDirectoryW));
+    ldr.registerExport("kernel32.dll", "GetDriveTypeA", reinterpret_cast<void*>(GetDriveTypeA));
+    ldr.registerExport("kernel32.dll", "GetComputerNameW", reinterpret_cast<void*>(GetComputerNameW));
+    ldr.registerExport("kernel32.dll", "GetSystemDefaultUILanguage", reinterpret_cast<void*>(GetSystemDefaultUILanguage));
+    ldr.registerExport("kernel32.dll", "EnumCalendarInfoW", reinterpret_cast<void*>(EnumCalendarInfoW));
+    ldr.registerExport("kernel32.dll", "GetPrivateProfileStringW", reinterpret_cast<void*>(GetPrivateProfileStringW));
+    ldr.registerExport("kernel32.dll", "WaitForMultipleObjectsEx", reinterpret_cast<void*>(WaitForMultipleObjectsEx));
+    ldr.registerExport("kernel32.dll", "GetThreadLocale", reinterpret_cast<void*>(GetThreadLocale));
+    ldr.registerExport("kernel32.dll", "SetThreadLocale", reinterpret_cast<void*>(SetThreadLocale));
+    ldr.registerExport("kernel32.dll", "VerLanguageNameW", reinterpret_cast<void*>(VerLanguageNameW));
+    ldr.registerExport("kernel32.dll", "GetLogicalProcessorInformation", reinterpret_cast<void*>(GetLogicalProcessorInformation));
+    ldr.registerExport("kernel32.dll", "IsWow64Process", reinterpret_cast<void*>(IsWow64Process));
+    ldr.registerExport("kernel32.dll", "ProcessIdToSessionId", reinterpret_cast<void*>(ProcessIdToSessionId));
+    ldr.registerExport("kernel32.dll", "LocaleNameToLCID", reinterpret_cast<void*>(LocaleNameToLCID));
+    ldr.registerExport("kernel32.dll", "GetTimeZoneInformationForYear", reinterpret_cast<void*>(GetTimeZoneInformationForYear));
+    ldr.registerExport("kernel32.dll", "GetSystemTimes", reinterpret_cast<void*>(GetSystemTimes));
+
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

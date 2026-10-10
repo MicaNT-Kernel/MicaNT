@@ -29,11 +29,16 @@ inline HIMC WINAPI ImmAssociateContext(HWND /*hWnd*/, HIMC /*hIMC*/) noexcept {
     return nullptr;
 }
 
+inline int32_t WINAPI ImmAssociateContextEx(HWND /*hWnd*/, HIMC /*hIMC*/, uint32_t /*dwFlags*/) noexcept {
+    return 1;
+}
+
 inline void InitializeImm32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("imm32.dll", "ImmGetVirtualKey", reinterpret_cast<void*>(ImmGetVirtualKey));
     ldr.registerExport("imm32.dll", "ImmGetDefaultIMEWnd", reinterpret_cast<void*>(ImmGetDefaultIMEWnd));
     ldr.registerExport("imm32.dll", "ImmAssociateContext", reinterpret_cast<void*>(ImmAssociateContext));
+    ldr.registerExport("imm32.dll", "ImmAssociateContextEx", reinterpret_cast<void*>(ImmAssociateContextEx));
 }
 
 } // namespace micant::imm32

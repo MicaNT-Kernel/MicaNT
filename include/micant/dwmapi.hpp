@@ -663,6 +663,11 @@ extern "C" inline ole32::HRESULT __stdcall DwmSetPresentParameters(win32::HWND /
 // 6. Dynamic Loader Registration
 // ============================================================================
 
+inline int32_t WINAPI DwmDefWindowProc(void* /*hWnd*/, uint32_t /*msg*/, uint64_t /*wParam*/, int64_t /*lParam*/, int64_t* plResult) noexcept {
+    if (plResult) *plResult = 0;
+    return 0; // FALSE
+}
+
 inline void InitializeDWMSubsystemExports() {
     static std::atomic<bool> s_initialized{false};
     if (s_initialized.exchange(true)) return;
@@ -690,6 +695,7 @@ inline void InitializeDWMSubsystemExports() {
     ldr.registerExport("dwmapi.dll", "DwmDetachMilContent", reinterpret_cast<void*>(&DwmDetachMilContent));
     ldr.registerExport("dwmapi.dll", "DwmModifyPreviousDxFrameDuration", reinterpret_cast<void*>(&DwmModifyPreviousDxFrameDuration));
     ldr.registerExport("dwmapi.dll", "DwmSetPresentParameters", reinterpret_cast<void*>(&DwmSetPresentParameters));
+    ldr.registerExport("dwmapi.dll", "DwmDefWindowProc", reinterpret_cast<void*>(DwmDefWindowProc));
 }
 
 } // namespace micant::dwm

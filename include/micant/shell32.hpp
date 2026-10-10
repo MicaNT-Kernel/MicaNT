@@ -1864,12 +1864,81 @@ inline HRESULT WINAPI Shell_NotifyIconGetRect(const void* /*identifier*/, void* 
     return S_OK;
 }
 
+inline void WINAPI DragAcceptFiles(win32::HWND /*hWnd*/, win32::BOOL /*fAccept*/) noexcept {}
+inline void* WINAPI ILCreateFromPathW(const wchar_t* /*pszPath*/) noexcept {
+    return reinterpret_cast<void*>(0x8800);
+}
+inline int32_t WINAPI SHFileOperationA(void* /*lpFileOp*/) noexcept {
+    return 0; // SUCCESS
+}
+inline HRESULT WINAPI SHMultiFileProperties(void* /*pdtobj*/, uint32_t /*dwFlags*/) noexcept {
+    return S_OK;
+}
+inline uint32_t WINAPI ILGetSize(const void* /*pidl*/) noexcept {
+    return 64;
+}
+inline HRESULT WINAPI SHGetDataFromIDListA(void* /*psf*/, const void* /*pidl*/, int32_t /*nFormat*/, void* /*pv*/, int32_t /*cb*/) noexcept {
+    return S_OK;
+}
+inline HRESULT WINAPI SHGetDataFromIDListW(void* /*psf*/, const void* /*pidl*/, int32_t /*nFormat*/, void* /*pv*/, int32_t /*cb*/) noexcept {
+    return S_OK;
+}
+inline HRESULT WINAPI SHGetMalloc(void** ppMalloc) noexcept {
+    if (ppMalloc) *ppMalloc = reinterpret_cast<void*>(0x8800);
+    return S_OK;
+}
+inline void* WINAPI ILClone(const void* /*pidl*/) noexcept {
+    return reinterpret_cast<void*>(0x8800);
+}
+inline uintptr_t WINAPI SHAppBarMessage(uint32_t /*dwMessage*/, void* /*pData*/) noexcept {
+    return 1;
+}
+inline int32_t WINAPI SHDoDragDrop(win32::HWND /*hwnd*/, void* /*pdtobj*/, void* /*pdsrc*/, uint32_t dwEffect, uint32_t* pdwEffect) noexcept {
+    if (pdwEffect) *pdwEffect = dwEffect;
+    return 0; // DRAGDROP_S_DROP
+}
+inline HRESULT WINAPI SHCreateShellItemArrayFromIDLists(uint32_t /*cidl*/, const void** /*rgpidl*/, void** ppsiItemArray) noexcept {
+    if (ppsiItemArray) *ppsiItemArray = reinterpret_cast<void*>(0x8800);
+    return S_OK;
+}
+inline HRESULT WINAPI GetProcessDpiAwareness(win32::HANDLE /*hprocess*/, int* pvalue) noexcept {
+    if (pvalue) *pvalue = 2; // PROCESS_PER_MONITOR_DPI_AWARE
+    return S_OK;
+}
+inline HRESULT WINAPI GetScaleFactorForMonitor(void* /*hMon*/, int* pScale) noexcept {
+    if (pScale) *pScale = 100;
+    return S_OK;
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
 
 inline void InitializeShell32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
+
+    // shfolder.dll
+    ldr.registerExport("shfolder.dll", "SHGetFolderPathW", reinterpret_cast<void*>(SHGetFolderPathW));
+
+    // shcore.dll
+    ldr.registerExport("shcore.dll", "GetProcessDpiAwareness", reinterpret_cast<void*>(GetProcessDpiAwareness));
+    ldr.registerExport("shcore.dll", "GetScaleFactorForMonitor", reinterpret_cast<void*>(GetScaleFactorForMonitor));
+
+    // shell32.dll additional exports
+    ldr.registerExport("shell32.dll", "DragAcceptFiles", reinterpret_cast<void*>(DragAcceptFiles));
+    ldr.registerExport("shell32.dll", "ILCreateFromPathW", reinterpret_cast<void*>(ILCreateFromPathW));
+    ldr.registerExport("shell32.dll", "SHFileOperationA", reinterpret_cast<void*>(SHFileOperationA));
+    ldr.registerExport("shell32.dll", "SHMultiFileProperties", reinterpret_cast<void*>(SHMultiFileProperties));
+    ldr.registerExport("shell32.dll", "ILGetSize", reinterpret_cast<void*>(ILGetSize));
+    ldr.registerExport("shell32.dll", "SHGetDataFromIDListA", reinterpret_cast<void*>(SHGetDataFromIDListA));
+    ldr.registerExport("shell32.dll", "SHGetDataFromIDListW", reinterpret_cast<void*>(SHGetDataFromIDListW));
+    ldr.registerExport("shell32.dll", "SHGetMalloc", reinterpret_cast<void*>(SHGetMalloc));
+    ldr.registerExport("shell32.dll", "ILClone", reinterpret_cast<void*>(ILClone));
+    ldr.registerExport("shell32.dll", "ILFree", reinterpret_cast<void*>(ILFree));
+    ldr.registerExport("shell32.dll", "SHAppBarMessage", reinterpret_cast<void*>(SHAppBarMessage));
+    ldr.registerExport("shell32.dll", "SHDoDragDrop", reinterpret_cast<void*>(SHDoDragDrop));
+    ldr.registerExport("shell32.dll", "SHCreateShellItemArrayFromIDLists", reinterpret_cast<void*>(SHCreateShellItemArrayFromIDLists));
+    ldr.registerExportOrdinal("shell32.dll", 18, reinterpret_cast<void*>(ILClone));
 
     // shell32.dll exports
     ldr.registerExport("shell32.dll", "SHGetFolderPathW", reinterpret_cast<void*>(SHGetFolderPathW));

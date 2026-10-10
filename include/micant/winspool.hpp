@@ -987,6 +987,11 @@ inline int32_t __stdcall GetJobW(
 }
 
 // ============================================================================
+inline int32_t WINAPI DocumentPropertiesW(void* /*hWnd*/, void* /*hPrinter*/, wchar_t* /*pDeviceName*/, void* /*pDevModeOutput*/, void* /*pDevModeInput*/, uint32_t /*fMode*/) noexcept {
+    return 1;
+}
+
+// ============================================================================
 // 4. Dynamic Loader & SCM Registration
 // ============================================================================
 
@@ -1018,6 +1023,7 @@ inline void InitializePrintSpoolerSubsystemExports() {
     ldr.registerExport("winspool.drv", "SetJobW", reinterpret_cast<void*>(SetJobW));
     ldr.registerExport("winspool.drv", "GetJobW", reinterpret_cast<void*>(GetJobW));
     ldr.registerExport("winspool.drv", "DeviceCapabilitiesW", reinterpret_cast<void*>(DeviceCapabilitiesW));
+    ldr.registerExport("winspool.drv", "DocumentPropertiesW", reinterpret_cast<void*>(DocumentPropertiesW));
 
     // 2. spoolsv.dll exports (Print Spooler Service)
     ldr.registerExport("spoolsv.dll", "ServiceMain", reinterpret_cast<void*>(EnumPrintersW));

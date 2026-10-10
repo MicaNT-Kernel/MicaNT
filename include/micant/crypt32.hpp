@@ -1257,6 +1257,19 @@ inline int32_t WINAPI CertVerifyTimeValidity(void* /*pTimeToVerify*/, void* /*pC
     return 0;
 }
 
+inline int32_t WINAPI CryptDecodeObject(uint32_t /*dwCertEncodingType*/, const char* /*lpszStructType*/, const uint8_t* /*pbEncoded*/, uint32_t /*cbEncoded*/, uint32_t /*dwFlags*/, void* /*pvStructInfo*/, uint32_t* pcbStructInfo) noexcept {
+    if (pcbStructInfo) *pcbStructInfo = 64;
+    return 1;
+}
+
+inline void* WINAPI PFXImportCertStore(void* /*pPFX*/, const wchar_t* /*szPassword*/, uint32_t /*dwFlags*/) noexcept {
+    return reinterpret_cast<void*>(0xCAFE);
+}
+
+inline void* WINAPI CertFindChainInStore(void* /*hCertStore*/, uint32_t /*dwCertEncodingType*/, uint32_t /*dwFindFlags*/, uint32_t /*dwFindType*/, const void* /*pvFindPara*/, void* /*pPrevChainContext*/) noexcept {
+    return nullptr;
+}
+
 // ============================================================================
 // 5. Subsystem Export Registration
 // ============================================================================
@@ -1310,6 +1323,9 @@ inline void InitializeCrypt32SubsystemExports() {
     ldr.registerExport("crypt32.dll", "CertAddStoreToCollection", reinterpret_cast<void*>(CertAddStoreToCollection));
     ldr.registerExport("crypt32.dll", "CryptAcquireCertificatePrivateKey", reinterpret_cast<void*>(CryptAcquireCertificatePrivateKey));
     ldr.registerExport("crypt32.dll", "CertVerifyTimeValidity", reinterpret_cast<void*>(CertVerifyTimeValidity));
+    ldr.registerExport("crypt32.dll", "CryptDecodeObject", reinterpret_cast<void*>(CryptDecodeObject));
+    ldr.registerExport("crypt32.dll", "PFXImportCertStore", reinterpret_cast<void*>(PFXImportCertStore));
+    ldr.registerExport("crypt32.dll", "CertFindChainInStore", reinterpret_cast<void*>(CertFindChainInStore));
 }
 
 } // namespace micant::crypt32

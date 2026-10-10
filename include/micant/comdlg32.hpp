@@ -47,6 +47,7 @@ inline int32_t __stdcall ChooseFontA([[maybe_unused]] void* lpcf) noexcept { ret
 inline int32_t __stdcall ChooseFontW([[maybe_unused]] void* lpcf) noexcept { return 1; }
 inline int32_t __stdcall GetOpenFileNameA([[maybe_unused]] void* lpofn) noexcept { return 1; }
 inline int32_t __stdcall GetSaveFileNameA([[maybe_unused]] void* lpofn) noexcept { return 1; }
+inline void* __stdcall FindTextW([[maybe_unused]] void* lpfr) noexcept { return reinterpret_cast<void*>(0x8800); }
 
 inline void InitializeComDlg32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
@@ -62,6 +63,7 @@ inline void InitializeComDlg32SubsystemExports() {
     ldr.registerExport("comdlg32.dll", "GetSaveFileNameA", reinterpret_cast<void*>(GetSaveFileNameA));
     ldr.registerExport("comdlg32.dll", "CommDlgExtendedError", reinterpret_cast<void*>(CommDlgExtendedError));
     ldr.registerExport("comdlg32.dll", "ReplaceTextW", reinterpret_cast<void*>(ReplaceTextW));
+    ldr.registerExport("comdlg32.dll", "FindTextW", reinterpret_cast<void*>(FindTextW));
 }
 
 } // namespace micant::comdlg32

@@ -2655,6 +2655,10 @@ inline void InitializeGdiPlusExports() {
     // windowscodecs.dll exports
     loader.registerExport("windowscodecs.dll", "WICCreateImagingFactory_Proxy", reinterpret_cast<void*>(&WICCreateImagingFactory_Proxy));
     loader.registerExport("windowscodecs.dll", "DllCanUnloadNow", reinterpret_cast<void*>(&DllCanUnloadNow));
+    loader.registerExport("windowscodecs.dll", "WICConvertBitmapSource", reinterpret_cast<void*>(+[](const void* /*dstFormat*/, void* /*pISrc*/, void** ppIDst) noexcept -> int32_t {
+        if (ppIDst) *ppIDst = reinterpret_cast<void*>(0xCAFE);
+        return 0; // S_OK
+    }));
 
     // COM Class Factory registration for WIC Imaging Factory
     auto& com = ole32::ComRuntime::get();

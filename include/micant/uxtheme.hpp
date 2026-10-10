@@ -187,6 +187,19 @@ inline win32::HRESULT WINAPI GetCurrentThemeName(wchar_t* pszThemeFileName, int3
     return 0; // S_OK
 }
 
+inline win32::HRESULT WINAPI BufferedPaintInit() noexcept { return 0; }
+inline win32::HRESULT WINAPI BufferedPaintUnInit() noexcept { return 0; }
+inline HPAINTBUFFER WINAPI BeginBufferedPaint(void* hdcTarget, const void* /*prcTarget*/, int32_t /*dwFormat*/, void* /*pPaintParams*/, void** phdc) noexcept {
+    if (phdc) *phdc = hdcTarget ? hdcTarget : reinterpret_cast<void*>(0x8800);
+    return reinterpret_cast<HPAINTBUFFER>(0x8801);
+}
+inline win32::HRESULT WINAPI EndBufferedPaint(HPAINTBUFFER /*hBufferedPaint*/, int32_t /*fUpdateTarget*/) noexcept { return 0; }
+inline win32::HRESULT WINAPI BufferedPaintSetAlpha(HPAINTBUFFER /*hBufferedPaint*/, const void* /*prcTarget*/, uint8_t /*alpha*/) noexcept { return 0; }
+inline HTHEME WINAPI OpenThemeDataForDpi(win32::HWND /*hwnd*/, LPCWSTR /*pszClassList*/, uint32_t /*dpi*/) noexcept {
+    static uint64_t dummyDpiTheme = 0x8889;
+    return reinterpret_cast<HTHEME>(&dummyDpiTheme);
+}
+
 inline void InitializeUxThemeSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
@@ -222,6 +235,12 @@ inline void InitializeUxThemeSubsystemExports() {
     ldr.registerExport("uxtheme.dll", "GetThemePropertyOrigin", reinterpret_cast<void*>(GetThemePropertyOrigin));
     ldr.registerExport("uxtheme.dll", "GetThemeEnumValue", reinterpret_cast<void*>(GetThemeEnumValue));
     ldr.registerExport("uxtheme.dll", "GetCurrentThemeName", reinterpret_cast<void*>(GetCurrentThemeName));
+    ldr.registerExport("uxtheme.dll", "BufferedPaintInit", reinterpret_cast<void*>(BufferedPaintInit));
+    ldr.registerExport("uxtheme.dll", "BufferedPaintUnInit", reinterpret_cast<void*>(BufferedPaintUnInit));
+    ldr.registerExport("uxtheme.dll", "BeginBufferedPaint", reinterpret_cast<void*>(BeginBufferedPaint));
+    ldr.registerExport("uxtheme.dll", "EndBufferedPaint", reinterpret_cast<void*>(EndBufferedPaint));
+    ldr.registerExport("uxtheme.dll", "BufferedPaintSetAlpha", reinterpret_cast<void*>(BufferedPaintSetAlpha));
+    ldr.registerExport("uxtheme.dll", "OpenThemeDataForDpi", reinterpret_cast<void*>(OpenThemeDataForDpi));
 }
 
 } // namespace micant::uxtheme

@@ -1838,8 +1838,46 @@ inline win32::BOOL WINAPI SetServiceObjectSecurity(void* /*hService*/, win32::DW
     return win32::TRUE;
 }
 
+inline int32_t WINAPI RegOpenKeyW(HKEY hKey, const wchar_t* lpSubKey, PHKEY phkResult) noexcept {
+    return RegOpenKeyExW(hKey, lpSubKey, 0, 0x20019, phkResult);
+}
+inline int32_t WINAPI RegFlushKey(HKEY /*hKey*/) noexcept {
+    return ERROR_SUCCESS;
+}
+inline int32_t WINAPI RegConnectRegistryW(const wchar_t* /*lpMachineName*/, HKEY hKey, PHKEY phkResult) noexcept {
+    if (phkResult) *phkResult = hKey;
+    return ERROR_SUCCESS;
+}
+inline int32_t WINAPI RegEnumKeyW(HKEY hKey, uint32_t dwIndex, wchar_t* lpName, uint32_t cchName) noexcept {
+    return RegEnumKeyExW(hKey, dwIndex, lpName, &cchName, nullptr, nullptr, nullptr, nullptr);
+}
+inline int32_t WINAPI RegUnLoadKeyW(HKEY /*hKey*/, const wchar_t* /*lpSubKey*/) noexcept {
+    return ERROR_SUCCESS;
+}
+inline int32_t WINAPI RegSaveKeyW(HKEY /*hKey*/, const wchar_t* /*lpFile*/, void* /*lpSecurityAttributes*/) noexcept {
+    return ERROR_SUCCESS;
+}
+inline int32_t WINAPI RegReplaceKeyW(HKEY /*hKey*/, const wchar_t* /*lpSubKey*/, const wchar_t* /*lpNewFile*/, const wchar_t* /*lpOldFile*/) noexcept {
+    return ERROR_SUCCESS;
+}
+inline int32_t WINAPI RegLoadKeyW(HKEY /*hKey*/, const wchar_t* /*lpSubKey*/, const wchar_t* /*lpFile*/) noexcept {
+    return ERROR_SUCCESS;
+}
+inline int32_t WINAPI RegRestoreKeyW(HKEY /*hKey*/, const wchar_t* /*lpFile*/, uint32_t /*dwFlags*/) noexcept {
+    return ERROR_SUCCESS;
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
+    ldr.registerExport("advapi32.dll", "RegConnectRegistryW", reinterpret_cast<void*>(RegConnectRegistryW));
+    ldr.registerExport("advapi32.dll", "RegEnumKeyW", reinterpret_cast<void*>(RegEnumKeyW));
+    ldr.registerExport("advapi32.dll", "RegUnLoadKeyW", reinterpret_cast<void*>(RegUnLoadKeyW));
+    ldr.registerExport("advapi32.dll", "RegSaveKeyW", reinterpret_cast<void*>(RegSaveKeyW));
+    ldr.registerExport("advapi32.dll", "RegOpenKeyW", reinterpret_cast<void*>(RegOpenKeyW));
+    ldr.registerExport("advapi32.dll", "RegReplaceKeyW", reinterpret_cast<void*>(RegReplaceKeyW));
+    ldr.registerExport("advapi32.dll", "RegLoadKeyW", reinterpret_cast<void*>(RegLoadKeyW));
+    ldr.registerExport("advapi32.dll", "RegFlushKey", reinterpret_cast<void*>(RegFlushKey));
+    ldr.registerExport("advapi32.dll", "RegRestoreKeyW", reinterpret_cast<void*>(RegRestoreKeyW));
     ldr.registerExport("advapi32.dll", "RegSetKeySecurity", reinterpret_cast<void*>(RegSetKeySecurity));
     ldr.registerExport("advapi32.dll", "CopySid", reinterpret_cast<void*>(CopySid));
     ldr.registerExport("advapi32.dll", "GetUserNameA", reinterpret_cast<void*>(GetUserNameA));

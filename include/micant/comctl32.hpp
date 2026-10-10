@@ -1073,6 +1073,27 @@ inline win32::HRESULT WINAPI ImageList_ReadEx_Ordinal15(uint32_t /*dwFlags*/, vo
     return 0; // S_OK
 }
 
+inline win32::BOOL FlatSB_SetScrollInfo(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL FlatSB_SetScrollProp(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_GetDragImage(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_DrawEx(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_SetImageCount(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL FlatSB_GetScrollPos(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL FlatSB_SetScrollPos(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL InitializeFlatSB(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_Copy(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL FlatSB_GetScrollInfo(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_Write(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_DrawIndirect(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_SetBkColor(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_GetBkColor(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_Replace(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_SetDragCursorImage(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_Read(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_DragLeave(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_LoadImageW(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+inline win32::BOOL ImageList_SetOverlayImage(void* /*a*/ = nullptr, void* /*b*/ = nullptr, void* /*c*/ = nullptr, void* /*d*/ = nullptr, void* /*e*/ = nullptr, void* /*f*/ = nullptr, void* /*g*/ = nullptr) noexcept { return win32::TRUE; }
+
 inline void InitializeComCtl32SubsystemExports() {
     InitCommonControls();
 
@@ -1107,6 +1128,27 @@ inline void InitializeComCtl32SubsystemExports() {
     ldr.registerExport("comctl32.dll", "ImageList_GetIcon", reinterpret_cast<void*>(ImageList_GetIcon));
     ldr.registerExport("comctl32.dll", "ImageList_GetImageInfo", reinterpret_cast<void*>(ImageList_GetImageInfo));
     ldr.registerExport("comctl32.dll", "_TrackMouseEvent", reinterpret_cast<void*>(_TrackMouseEvent));
+
+    ldr.registerExport("comctl32.dll", "FlatSB_SetScrollInfo", reinterpret_cast<void*>(FlatSB_SetScrollInfo));
+    ldr.registerExport("comctl32.dll", "FlatSB_SetScrollProp", reinterpret_cast<void*>(FlatSB_SetScrollProp));
+    ldr.registerExport("comctl32.dll", "ImageList_GetDragImage", reinterpret_cast<void*>(ImageList_GetDragImage));
+    ldr.registerExport("comctl32.dll", "ImageList_DrawEx", reinterpret_cast<void*>(ImageList_DrawEx));
+    ldr.registerExport("comctl32.dll", "ImageList_SetImageCount", reinterpret_cast<void*>(ImageList_SetImageCount));
+    ldr.registerExport("comctl32.dll", "FlatSB_GetScrollPos", reinterpret_cast<void*>(FlatSB_GetScrollPos));
+    ldr.registerExport("comctl32.dll", "FlatSB_SetScrollPos", reinterpret_cast<void*>(FlatSB_SetScrollPos));
+    ldr.registerExport("comctl32.dll", "InitializeFlatSB", reinterpret_cast<void*>(InitializeFlatSB));
+    ldr.registerExport("comctl32.dll", "ImageList_Copy", reinterpret_cast<void*>(ImageList_Copy));
+    ldr.registerExport("comctl32.dll", "FlatSB_GetScrollInfo", reinterpret_cast<void*>(FlatSB_GetScrollInfo));
+    ldr.registerExport("comctl32.dll", "ImageList_Write", reinterpret_cast<void*>(ImageList_Write));
+    ldr.registerExport("comctl32.dll", "ImageList_DrawIndirect", reinterpret_cast<void*>(ImageList_DrawIndirect));
+    ldr.registerExport("comctl32.dll", "ImageList_SetBkColor", reinterpret_cast<void*>(ImageList_SetBkColor));
+    ldr.registerExport("comctl32.dll", "ImageList_GetBkColor", reinterpret_cast<void*>(ImageList_GetBkColor));
+    ldr.registerExport("comctl32.dll", "ImageList_Replace", reinterpret_cast<void*>(ImageList_Replace));
+    ldr.registerExport("comctl32.dll", "ImageList_SetDragCursorImage", reinterpret_cast<void*>(ImageList_SetDragCursorImage));
+    ldr.registerExport("comctl32.dll", "ImageList_Read", reinterpret_cast<void*>(ImageList_Read));
+    ldr.registerExport("comctl32.dll", "ImageList_DragLeave", reinterpret_cast<void*>(ImageList_DragLeave));
+    ldr.registerExport("comctl32.dll", "ImageList_LoadImageW", reinterpret_cast<void*>(ImageList_LoadImageW));
+    ldr.registerExport("comctl32.dll", "ImageList_SetOverlayImage", reinterpret_cast<void*>(ImageList_SetOverlayImage));
 
     // Ordinal exports
     ldr.registerExportOrdinal("comctl32.dll", 17, reinterpret_cast<void*>(ComCtlOrdinalStub));

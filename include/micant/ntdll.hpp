@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <string_view>
 #include <span>
+#include <cwchar>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 #include "dispatcher.hpp"
@@ -1957,11 +1958,36 @@ inline NtStatus WINAPI LdrLoadDll_Export(const wchar_t* /*DllPath*/, ULONG* /*Dl
 inline BOOLEAN WINAPI LdrUnloadAlternateResourceModule(void* /*AlternateModule*/) noexcept { return 1; }
 inline NtStatus WINAPI LdrUnloadDll(void* /*DllHandle*/) noexcept { return NtStatus::Success; }
 
+inline NtStatus WINAPI NtOpenFile_Export(HANDLE* FileHandle, uint32_t /*DesiredAccess*/, void* /*ObjectAttributes*/, void* /*IoStatusBlock*/, uint32_t /*ShareAccess*/, uint32_t /*OpenOptions*/) noexcept {
+    if (FileHandle) *FileHandle = reinterpret_cast<HANDLE>(0x9005);
+    return NtStatus::Success;
+}
 
+inline void WINAPI RtlInitUnicodeString(void* DestinationString, const wchar_t* SourceString) noexcept {
+    if (!DestinationString) return;
+    struct UNICODE_STRING {
+        uint16_t Length;
+        uint16_t MaximumLength;
+        wchar_t* Buffer;
+    };
+    auto* us = reinterpret_cast<UNICODE_STRING*>(DestinationString);
+    if (SourceString) {
+        size_t len = std::wcslen(SourceString);
+        us->Length = static_cast<uint16_t>(len * sizeof(wchar_t));
+        us->MaximumLength = static_cast<uint16_t>((len + 1) * sizeof(wchar_t));
+        us->Buffer = const_cast<wchar_t*>(SourceString);
+    } else {
+        us->Length = 0;
+        us->MaximumLength = 0;
+        us->Buffer = nullptr;
+    }
+}
 
 inline void InitializeNtdllSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
+    ldr.registerExport("ntdll.dll", "NtOpenFile", reinterpret_cast<void*>(NtOpenFile_Export));
+    ldr.registerExport("ntdll.dll", "RtlInitUnicodeString", reinterpret_cast<void*>(RtlInitUnicodeString));
     ldr.registerExport("ntdll.dll", "NtAdjustPrivilegesToken", reinterpret_cast<void*>(NtAdjustPrivilegesToken));
     ldr.registerExport("ntdll.dll", "NtCreateFile", reinterpret_cast<void*>(NtCreateFile_Export));
     ldr.registerExport("ntdll.dll", "NtDelayExecution", reinterpret_cast<void*>(NtDelayExecution_Export));
