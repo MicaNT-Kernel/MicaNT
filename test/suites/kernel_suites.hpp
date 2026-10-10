@@ -621,7 +621,7 @@ void Test_KernelCore_IrqlSpinLockAndScheduler() {
     TEST_ASSERT(!spinLock.isLocked(), "Spinlock must be unlocked after guard destruction");
     TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "IRQL must be restored to PASSIVE_LEVEL");
 
-    // 3. Deferred Procedure Call (KDPC)
+    // 3. Deferred Procedure Call (KDPC) & Automatic Retirement
     static bool s_DpcExecuted = false;
     static void* s_DpcArg = nullptr;
     ke::KDPC dpc{
@@ -643,33 +643,146 @@ void Test_KernelCore_IrqlSpinLockAndScheduler() {
     TEST_ASSERT(s_DpcArg == reinterpret_cast<void*>(0x1337), "DPC argument must match 0x1337");
     TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "IRQL must return to PASSIVE_LEVEL after DPC drain");
 
-    // 4. 32-Queue Priority Thread Scheduler
+    // Software Interrupt Dispatcher (DPC Retirement at DISPATCH_LEVEL)
+    static bool s_AutoDpcRun = false;
+    ke::KDPC autoDpc{
+        .routine = [](ke::KDPC*, void*, void*, void*) { s_AutoDpcRun = true; },
+        .deferredContext = nullptr
+    };
+    ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    dpcQueue.queueDpc(&autoDpc);
+    ke::KiDispatchSoftwareInterrupt(ke::DISPATCH_LEVEL);
+    ke::KeLowerIrql(ke::PASSIVE_LEVEL);
+    TEST_ASSERT(s_AutoDpcRun, "DPC must be retired when KiDispatchSoftwareInterrupt is invoked at DISPATCH_LEVEL");
+
+
+    // 4. Canonical KTrapFrame Architecture
+    ke::KTrapFrame trapFrame{};
+    trapFrame.rip = 0x00007FF710001000ULL;
+    trapFrame.rsp = 0x000000A010008000ULL;
+    trapFrame.rax = 0x24; // NT Syscall number
+    trapFrame.rcx = 0xDEADBEEF;
+    trapFrame.rdx = 0xCAFEBABE;
+    trapFrame.segCs = 0x33; // Userland 64-bit CS
+    trapFrame.segSs = 0x2B; // Userland 64-bit SS
+    trapFrame.previousMode = 1; // UserMode
+    TEST_ASSERT(trapFrame.rip == 0x00007FF710001000ULL, "TrapFrame RIP must match entry address");
+    TEST_ASSERT(trapFrame.segCs == 0x33, "TrapFrame CS must be UserMode 0x33");
+    TEST_ASSERT(trapFrame.previousMode == 1, "Previous mode must be UserMode (1)");
+
+    // 5. Hardware Context Switcher (KiSwapContext)
+    ke::KThread threadA{};
+    threadA.tid = 1001;
+    threadA.pid = 4;
+    threadA.state = ke::ThreadState::Running;
+    threadA.directoryTableBase = 0x1000;
+    threadA.context.rip = 0x7FF70001;
+    threadA.context.rsp = 0x1008000;
+
+    ke::KThread threadB{};
+    threadB.tid = 1002;
+    threadB.pid = 8;
+    threadB.state = ke::ThreadState::Ready;
+    threadB.directoryTableBase = 0x2000;
+    threadB.context.rip = 0x7FF70002;
+    threadB.context.rsp = 0x2008000;
+
+    ke::g_CurrentCpu.currentThread = &threadA;
+    uint64_t prevSwitches = ke::g_CurrentCpu.contextSwitches;
+
+    // Execute KiSwapContext: switch from threadA to threadB
+    bool switchSuccess = ke::KiSwapContext(&threadA, &threadB);
+    TEST_ASSERT(switchSuccess, "KiSwapContext must complete successfully");
+    TEST_ASSERT(threadA.state == ke::ThreadState::Ready, "Outgoing thread must transition to Ready");
+    TEST_ASSERT(threadB.state == ke::ThreadState::Running, "Incoming thread must transition to Running");
+    TEST_ASSERT(ke::g_CurrentCpu.currentThread == &threadB, "CurrentThread pointer must point to threadB");
+    TEST_ASSERT(ke::g_CurrentCpu.currentCr3 == 0x2000, "Address space CR3 must switch to threadB directoryTableBase");
+    TEST_ASSERT(ke::g_CurrentCpu.contextSwitches == prevSwitches + 1, "Context switch count must increment");
+
+    // 6. Asynchronous Procedure Calls (KAPC Subsystem)
+    static bool s_KernelApcRan = false;
+    static bool s_NormalApcRan = false;
+    static bool s_UserApcRan = false;
+
+    ke::KAPC kernelApc{};
+    ke::KeInitializeApc(
+        &kernelApc,
+        threadB.tid,
+        [](ke::KAPC*, ke::PKNORMAL_ROUTINE*, void**, void**, void**) {
+            s_KernelApcRan = true;
+        },
+        nullptr,
+        [](void*, void*, void*) {
+            s_NormalApcRan = true;
+        },
+        0, // KernelMode
+        nullptr
+    );
+
+    ke::KeInsertQueueApc(&kernelApc);
+    TEST_ASSERT(!threadB.kernelApcList.empty(), "Thread kernel APC list must contain queued APC");
+
+    // Deliver Kernel APC
+    ke::KiDeliverApc(0);
+    TEST_ASSERT(s_KernelApcRan, "Kernel APC routine must execute at APC_LEVEL");
+    TEST_ASSERT(s_NormalApcRan, "Normal APC routine must execute at PASSIVE_LEVEL");
+
+    // User-Mode Alertable APC
+    ke::KAPC userApc{};
+    ke::KeInitializeApc(
+        &userApc,
+        threadB.tid,
+        nullptr,
+        nullptr,
+        [](void*, void*, void*) {
+            s_UserApcRan = true;
+        },
+        1, // UserMode
+        nullptr
+    );
+    threadB.alertable = true;
+    ke::KeInsertQueueApc(&userApc);
+    ke::KiDeliverApc(1); // Deliver user APC
+    TEST_ASSERT(s_UserApcRan, "User APC routine must execute during alertable wait");
+
+    // 7. 32-Queue Priority Thread Scheduler & Anti-Starvation
     auto& scheduler = ke::PriorityScheduler::get();
     ke::ScheduledThreadEntry tIdle{ .tid = 0, .basePriority = ke::PRIORITY_IDLE, .currentPriority = ke::PRIORITY_IDLE, .name = "SystemIdle" };
     ke::ScheduledThreadEntry tNormal{ .tid = 100, .basePriority = ke::PRIORITY_NORMAL, .currentPriority = ke::PRIORITY_NORMAL, .name = "NormalWorker" };
     ke::ScheduledThreadEntry tRealtime{ .tid = 200, .basePriority = 24, .currentPriority = 24, .name = "RealTimeAudio" };
+    ke::ScheduledThreadEntry tLow{ .tid = 300, .basePriority = 2, .currentPriority = 2, .name = "LowPriorityBackground" };
 
     scheduler.readyThread(tIdle);
     scheduler.readyThread(tNormal);
     scheduler.readyThread(tRealtime);
+    scheduler.readyThread(tLow);
 
-    // Highest priority (Realtime 24) must be selected first
+    // Test Starvation Scanner: Low priority thread (2) gets boosted to priority 15
+    size_t boostedCount = scheduler.scanForStarvation();
+    TEST_ASSERT(boostedCount >= 1, "Starvation scan must boost starved low-priority threads");
+
+    // Highest priority (Realtime 24) must still be scheduled first
     auto next1 = scheduler.selectNextThread();
     TEST_ASSERT(next1.has_value(), "Scheduler must select runnable thread");
     TEST_ASSERT(next1->tid == 200, "Real-time thread 200 must be scheduled first");
     TEST_ASSERT(next1->currentPriority == 24, "Priority must be 24");
 
-    // Next must be Normal (8)
+    // Next must be the boosted starved thread (15)
     auto next2 = scheduler.selectNextThread();
-    TEST_ASSERT(next2.has_value() && next2->tid == 100, "Normal thread 100 must be scheduled next");
+    TEST_ASSERT(next2.has_value() && next2->tid == 300, "Boosted thread 300 must be scheduled ahead of normal");
+    TEST_ASSERT(next2->currentPriority == 15, "Boosted priority must be 15");
+
+    // Next must be Normal (8)
+    auto next3 = scheduler.selectNextThread();
+    TEST_ASSERT(next3.has_value() && next3->tid == 100, "Normal thread 100 must be scheduled next");
 
     // Next must be Idle (0)
-    auto next3 = scheduler.selectNextThread();
-    TEST_ASSERT(next3.has_value() && next3->tid == 0, "Idle thread 0 must be scheduled last");
+    auto next4 = scheduler.selectNextThread();
+    TEST_ASSERT(next4.has_value() && next4->tid == 0, "Idle thread 0 must be scheduled last");
 
     // Queue empty
-    auto next4 = scheduler.selectNextThread();
-    TEST_ASSERT(!next4.has_value(), "Run queues must now be empty");
+    auto next5 = scheduler.selectNextThread();
+    TEST_ASSERT(!next5.has_value(), "Run queues must now be empty");
 }
 
 // ============================================================================
