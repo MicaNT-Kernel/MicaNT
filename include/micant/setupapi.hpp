@@ -1316,6 +1316,24 @@ inline win32::BOOL WINAPI SetupDiSetClassInstallParamsW(
     return win32::TRUE;
 }
 
+inline win32::BOOL WINAPI SetupDiOpenDeviceInterfaceW(
+    HDEVINFO /*DeviceInfoSet*/,
+    void* /*DeviceInterfaceData*/,
+    win32::DWORD /*OpenFlags*/,
+    void* /*DeviceInterfaceDetailData*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::HKEY WINAPI SetupDiOpenDevRegKey(
+    HDEVINFO /*DeviceInfoSet*/,
+    void* /*DeviceInfoData*/,
+    win32::DWORD /*Scope*/,
+    win32::DWORD /*HwProfile*/,
+    win32::DWORD /*KeyType*/,
+    win32::DWORD /*samDesired*/) noexcept {
+    return reinterpret_cast<win32::HKEY>(0xD001);
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration (setupapi.dll)
 // ============================================================================
@@ -1364,6 +1382,8 @@ inline void InitializeSetupApiSubsystemExports() {
     ldr.registerExport("setupapi.dll", "SetupDiGetDeviceInterfaceDetailA", reinterpret_cast<void*>(SetupDiGetDeviceInterfaceDetailA));
     ldr.registerExport("setupapi.dll", "SetupDiGetDeviceRegistryPropertyA", reinterpret_cast<void*>(SetupDiGetDeviceRegistryPropertyA));
     ldr.registerExport("setupapi.dll", "SetupDiSetClassInstallParamsW", reinterpret_cast<void*>(SetupDiSetClassInstallParamsW));
+    ldr.registerExport("setupapi.dll", "SetupDiOpenDeviceInterfaceW", reinterpret_cast<void*>(SetupDiOpenDeviceInterfaceW));
+    ldr.registerExport("setupapi.dll", "SetupDiOpenDevRegKey", reinterpret_cast<void*>(SetupDiOpenDevRegKey));
 }
 
 } // namespace micant::setupapi

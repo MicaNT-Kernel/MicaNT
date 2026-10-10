@@ -186,6 +186,50 @@ inline char* __stdcall if_indextoname(uint32_t /*InterfaceIndex*/, char* Interfa
     return InterfaceName;
 }
 
+inline uint32_t WINAPI GetAdaptersAddresses(uint32_t /*Family*/, uint32_t /*Flags*/, void* /*Reserved*/, void* AdapterAddresses, uint32_t* SizePointer) noexcept {
+    if (!SizePointer) return 87; // ERROR_INVALID_PARAMETER
+    if (*SizePointer < 256 || !AdapterAddresses) {
+        *SizePointer = 512;
+        return 111; // ERROR_BUFFER_OVERFLOW
+    }
+    std::memset(AdapterAddresses, 0, *SizePointer);
+    return 0; // NO_ERROR
+}
+
+inline uint32_t WINAPI ConvertInterfaceNameToLuidW(const wchar_t* /*InterfaceName*/, void* InterfaceLuid) noexcept {
+    if (InterfaceLuid) *reinterpret_cast<uint64_t*>(InterfaceLuid) = 0x10001;
+    return 0;
+}
+
+inline uint32_t WINAPI ConvertInterfaceIndexToLuid(uint32_t /*InterfaceIndex*/, void* InterfaceLuid) noexcept {
+    if (InterfaceLuid) *reinterpret_cast<uint64_t*>(InterfaceLuid) = 0x10001;
+    return 0;
+}
+
+inline uint32_t WINAPI ConvertInterfaceLuidToIndex(const void* /*InterfaceLuid*/, uint32_t* InterfaceIndex) noexcept {
+    if (InterfaceIndex) *InterfaceIndex = 1;
+    return 0;
+}
+
+inline uint32_t WINAPI ConvertInterfaceLuidToGuid(const void* /*InterfaceLuid*/, void* InterfaceGuid) noexcept {
+    if (InterfaceGuid) std::memset(InterfaceGuid, 0, 16);
+    return 0;
+}
+
+inline uint32_t WINAPI ConvertInterfaceLuidToNameW(const void* /*InterfaceLuid*/, wchar_t* InterfaceName, size_t Length) noexcept {
+    if (InterfaceName && Length > 4) std::memcpy(InterfaceName, L"eth0", 10);
+    return 0;
+}
+
+inline uint32_t WINAPI NotifyUnicastIpAddressChange(uint16_t /*Family*/, void* /*Callback*/, void* /*CallerContext*/, uint8_t /*InitialNotification*/, void** NotificationHandle) noexcept {
+    if (NotificationHandle) *NotificationHandle = reinterpret_cast<void*>(0x5001);
+    return 0;
+}
+
+inline uint32_t WINAPI CancelMibChangeNotify2(void* /*NotificationHandle*/) noexcept {
+    return 0;
+}
+
 inline void InitializeIpHlpApiSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("iphlpapi.dll", "GetAdaptersInfo", reinterpret_cast<void*>(GetAdaptersInfo));
@@ -194,6 +238,14 @@ inline void InitializeIpHlpApiSubsystemExports() {
     ldr.registerExport("iphlpapi.dll", "ConvertInterfaceLuidToAlias", reinterpret_cast<void*>(ConvertInterfaceLuidToAlias));
     ldr.registerExport("iphlpapi.dll", "if_nametoindex", reinterpret_cast<void*>(if_nametoindex));
     ldr.registerExport("iphlpapi.dll", "if_indextoname", reinterpret_cast<void*>(if_indextoname));
+    ldr.registerExport("iphlpapi.dll", "GetAdaptersAddresses", reinterpret_cast<void*>(GetAdaptersAddresses));
+    ldr.registerExport("iphlpapi.dll", "ConvertInterfaceNameToLuidW", reinterpret_cast<void*>(ConvertInterfaceNameToLuidW));
+    ldr.registerExport("iphlpapi.dll", "ConvertInterfaceIndexToLuid", reinterpret_cast<void*>(ConvertInterfaceIndexToLuid));
+    ldr.registerExport("iphlpapi.dll", "ConvertInterfaceLuidToIndex", reinterpret_cast<void*>(ConvertInterfaceLuidToIndex));
+    ldr.registerExport("iphlpapi.dll", "ConvertInterfaceLuidToGuid", reinterpret_cast<void*>(ConvertInterfaceLuidToGuid));
+    ldr.registerExport("iphlpapi.dll", "ConvertInterfaceLuidToNameW", reinterpret_cast<void*>(ConvertInterfaceLuidToNameW));
+    ldr.registerExport("iphlpapi.dll", "NotifyUnicastIpAddressChange", reinterpret_cast<void*>(NotifyUnicastIpAddressChange));
+    ldr.registerExport("iphlpapi.dll", "CancelMibChangeNotify2", reinterpret_cast<void*>(CancelMibChangeNotify2));
 }
 
 inline void InitializeIpHelperApi() {

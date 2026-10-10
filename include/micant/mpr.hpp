@@ -105,6 +105,12 @@ inline DWORD __stdcall WNetGetConnectionA([[maybe_unused]] const char* lpLocalNa
     return ERROR_NO_NETWORK;
 }
 
+inline DWORD __stdcall WNetGetUniversalNameW(const wchar_t* /*lpLocalPath*/, DWORD /*dwInfoLevel*/, void* lpBuffer, DWORD* lpBufferSize) noexcept {
+    if (lpBufferSize) *lpBufferSize = 256;
+    if (lpBuffer) std::memset(lpBuffer, 0, 256);
+    return 0; // NO_ERROR
+}
+
 inline void InitializeMprSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("mpr.dll", "WNetOpenEnumW", reinterpret_cast<void*>(WNetOpenEnumW));
@@ -115,6 +121,7 @@ inline void InitializeMprSubsystemExports() {
     ldr.registerExport("mpr.dll", "WNetGetResourceInformationW", reinterpret_cast<void*>(WNetGetResourceInformationW));
     ldr.registerExport("mpr.dll", "WNetGetConnectionW", reinterpret_cast<void*>(WNetGetConnectionW));
     ldr.registerExport("mpr.dll", "WNetGetConnectionA", reinterpret_cast<void*>(WNetGetConnectionA));
+    ldr.registerExport("mpr.dll", "WNetGetUniversalNameW", reinterpret_cast<void*>(WNetGetUniversalNameW));
 }
 
 } // namespace micant::mpr

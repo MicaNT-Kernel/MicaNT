@@ -23,6 +23,7 @@
 #include "prismx.hpp"
 #include "prism3d.hpp"
 #include "dxgkrnl.hpp"
+#include "ldr.hpp"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -1184,6 +1185,23 @@ inline int32_t D3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL MinimumFe
     int32_t hr = dev->QueryInterface(riid, ppDevice);
     dev->Release();
     return hr;
+}
+
+inline int32_t WINAPI D3D12_Ordinal101() noexcept { return 0; }
+inline int32_t WINAPI D3D12_Ordinal102() noexcept { return 0; }
+
+inline int32_t WINAPI D3D12SerializeVersionedRootSignature(const void* /*pRootSignatureDesc*/, void** ppBlob, void** ppErrorBlob) noexcept {
+    if (ppBlob) *ppBlob = reinterpret_cast<void*>(0x8001);
+    if (ppErrorBlob) *ppErrorBlob = nullptr;
+    return 0; // S_OK
+}
+
+inline void InitializePrism3D12SubsystemExports() {
+    auto& ldr = ldr::DynamicLoader::get();
+    ldr.registerExport("d3d12.dll", "D3D12CreateDevice", reinterpret_cast<void*>(D3D12CreateDevice));
+    ldr.registerExport("d3d12.dll", "D3D12SerializeVersionedRootSignature", reinterpret_cast<void*>(D3D12SerializeVersionedRootSignature));
+    ldr.registerExportOrdinal("d3d12.dll", 101, reinterpret_cast<void*>(D3D12_Ordinal101));
+    ldr.registerExportOrdinal("d3d12.dll", 102, reinterpret_cast<void*>(D3D12_Ordinal102));
 }
 
 } // namespace micant::prism3d12

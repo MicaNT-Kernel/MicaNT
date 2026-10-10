@@ -1780,6 +1780,59 @@ inline BOOL TranslateCharsetInfo([[maybe_unused]] DWORD* lpSrc, CHARSETINFO* lpC
 
 inline int UpdateColors([[maybe_unused]] HDC hdc) noexcept { return 1; }
 
+inline BOOL WINAPI GetCharABCWidthsW(HDC /*hdc*/, uint32_t /*wFirst*/, uint32_t wLast, void* lpABC) noexcept {
+    if (lpABC) std::memset(lpABC, 0, (wLast + 1) * 12);
+    return TRUE;
+}
+
+inline BOOL WINAPI GetCharABCWidthsFloatW(HDC /*hdc*/, uint32_t /*iFirst*/, uint32_t iLast, void* lpABC) noexcept {
+    if (lpABC) std::memset(lpABC, 0, (iLast + 1) * 12);
+    return TRUE;
+}
+
+inline DWORD WINAPI GetGlyphOutlineW(HDC /*hdc*/, uint32_t /*uChar*/, uint32_t /*fuFormat*/, void* lpgm, uint32_t /*cjBuffer*/, void* /*pvBuffer*/, const void* /*lpmat2*/) noexcept {
+    if (lpgm) std::memset(lpgm, 0, 32);
+    return 1;
+}
+
+inline BOOL WINAPI GetCharWidthI(HDC /*hdc*/, uint32_t /*giFirst*/, uint32_t cgi, uint16_t* /*pgi*/, int32_t* piWidths) noexcept {
+    if (piWidths) {
+        for (uint32_t i = 0; i < cgi; ++i) piWidths[i] = 8;
+    }
+    return TRUE;
+}
+
+inline uint32_t WINAPI GetOutlineTextMetricsW(HDC /*hdc*/, uint32_t /*cjCopy*/, void* potm) noexcept {
+    if (potm) std::memset(potm, 0, 64);
+    return 64;
+}
+
+inline int WINAPI AddFontResourceExW(const wchar_t* /*name*/, DWORD /*fl*/, void* /*res*/) noexcept {
+    return 1;
+}
+
+inline BOOL WINAPI RemoveFontResourceExW(const wchar_t* /*name*/, DWORD /*fl*/, void* /*res*/) noexcept {
+    return TRUE;
+}
+
+inline void* WINAPI AddFontMemResourceEx(void* /*pFileView*/, DWORD /*cjSize*/, void* /*pvResrved*/, DWORD* pNumFonts) noexcept {
+    if (pNumFonts) *pNumFonts = 1;
+    return reinterpret_cast<void*>(0xB001);
+}
+
+inline BOOL WINAPI RemoveFontMemResourceEx(void* /*h*/) noexcept {
+    return TRUE;
+}
+
+inline DWORD WINAPI GetFontData(HDC /*hdc*/, DWORD /*dwTable*/, DWORD /*dwOffset*/, void* /*pvBuffer*/, DWORD /*cjBuffer*/) noexcept {
+    return 0; // GDI_ERROR
+}
+
+inline BOOL WINAPI GetCharABCWidthsI(HDC /*hdc*/, uint32_t /*giFirst*/, uint32_t cgi, uint16_t* /*pgi*/, void* lpabc) noexcept {
+    if (lpabc) std::memset(lpabc, 0, cgi * 12);
+    return TRUE;
+}
+
 // ============================================================================
 // 6. Subsystem Export Registration
 // ============================================================================
@@ -1799,6 +1852,18 @@ inline void InitializeGdi32SubsystemExports() {
     });
 
     auto& ldr = ldr::DynamicLoader::get();
+
+    ldr.registerExport("gdi32.dll", "GetCharABCWidthsW", reinterpret_cast<void*>(GetCharABCWidthsW));
+    ldr.registerExport("gdi32.dll", "GetCharABCWidthsFloatW", reinterpret_cast<void*>(GetCharABCWidthsFloatW));
+    ldr.registerExport("gdi32.dll", "GetGlyphOutlineW", reinterpret_cast<void*>(GetGlyphOutlineW));
+    ldr.registerExport("gdi32.dll", "GetCharWidthI", reinterpret_cast<void*>(GetCharWidthI));
+    ldr.registerExport("gdi32.dll", "GetOutlineTextMetricsW", reinterpret_cast<void*>(GetOutlineTextMetricsW));
+    ldr.registerExport("gdi32.dll", "AddFontResourceExW", reinterpret_cast<void*>(AddFontResourceExW));
+    ldr.registerExport("gdi32.dll", "RemoveFontResourceExW", reinterpret_cast<void*>(RemoveFontResourceExW));
+    ldr.registerExport("gdi32.dll", "AddFontMemResourceEx", reinterpret_cast<void*>(AddFontMemResourceEx));
+    ldr.registerExport("gdi32.dll", "RemoveFontMemResourceEx", reinterpret_cast<void*>(RemoveFontMemResourceEx));
+    ldr.registerExport("gdi32.dll", "GetFontData", reinterpret_cast<void*>(GetFontData));
+    ldr.registerExport("gdi32.dll", "GetCharABCWidthsI", reinterpret_cast<void*>(GetCharABCWidthsI));
 
     ldr.registerExport("gdi32.dll", "CreateCompatibleDC", reinterpret_cast<void*>(CreateCompatibleDC));
     ldr.registerExport("gdi32.dll", "DeleteDC", reinterpret_cast<void*>(DeleteDC));

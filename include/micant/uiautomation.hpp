@@ -54,6 +54,18 @@ inline int32_t __stdcall CreateStdAccessibleObject(void* /*hwnd*/, int32_t /*idO
     return 0; // S_OK
 }
 
+inline int32_t __stdcall UiaRaiseAutomationPropertyChangedEvent(void* /*pProvider*/, int32_t /*id*/, void* /*oldValue*/, void* /*newValue*/) noexcept {
+    return 0; // S_OK
+}
+
+inline int32_t __stdcall UiaClientsAreListening() noexcept {
+    return 0;
+}
+
+inline int32_t __stdcall UiaRaiseNotificationEvent(void* /*pProvider*/, int32_t /*notificationKind*/, int32_t /*notificationProcessing*/, void* /*displayString*/, void* /*activityId*/) noexcept {
+    return 0; // S_OK
+}
+
 inline void InitializeUIAutomationSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("uiautomationcore.dll", "UiaRaiseStructureChangedEvent", reinterpret_cast<void*>(UiaRaiseStructureChangedEvent));
@@ -61,6 +73,9 @@ inline void InitializeUIAutomationSubsystemExports() {
     ldr.registerExport("uiautomationcore.dll", "UiaRaiseAutomationEvent", reinterpret_cast<void*>(UiaRaiseAutomationEvent));
     ldr.registerExport("uiautomationcore.dll", "UiaReturnRawElementProvider", reinterpret_cast<void*>(UiaReturnRawElementProvider));
     ldr.registerExport("uiautomationcore.dll", "UiaHostProviderFromHwnd", reinterpret_cast<void*>(UiaHostProviderFromHwnd));
+    ldr.registerExport("uiautomationcore.dll", "UiaRaiseAutomationPropertyChangedEvent", reinterpret_cast<void*>(UiaRaiseAutomationPropertyChangedEvent));
+    ldr.registerExport("uiautomationcore.dll", "UiaClientsAreListening", reinterpret_cast<void*>(UiaClientsAreListening));
+    ldr.registerExport("uiautomationcore.dll", "UiaRaiseNotificationEvent", reinterpret_cast<void*>(UiaRaiseNotificationEvent));
 
     // oleacc.dll exports
     ldr.registerExport("oleacc.dll", "AccessibleObjectFromWindow", reinterpret_cast<void*>(AccessibleObjectFromWindow));

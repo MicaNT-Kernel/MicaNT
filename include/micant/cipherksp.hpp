@@ -2182,6 +2182,28 @@ inline NTSTATUS NCryptSignHash(
     return STATUS_SUCCESS;
 }
 
+inline void WINAPI BCryptFreeBuffer(void* /*pvBuffer*/) noexcept {}
+
+inline NTSTATUS WINAPI BCryptEnumContextFunctions(
+    uint32_t /*dwTable*/,
+    const wchar_t* /*pszContext*/,
+    uint32_t /*dwInterface*/,
+    uint32_t* pcbBuffer,
+    void** ppBuffer) noexcept {
+    if (pcbBuffer) *pcbBuffer = 0;
+    if (ppBuffer) *ppBuffer = nullptr;
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS WINAPI NCryptSetProperty(
+    void* /*hObject*/,
+    const wchar_t* /*pszProperty*/,
+    void* /*pbInput*/,
+    uint32_t /*cbInput*/,
+    uint32_t /*dwFlags*/) noexcept {
+    return STATUS_SUCCESS;
+}
+
 // ============================================================================
 // 11. Subsystem Export Registration
 // ============================================================================
@@ -2207,6 +2229,8 @@ inline void InitializeBCryptSubsystemExports() {
     ldr.registerExport("bcrypt.dll", "BCryptDeriveKeyPBKDF2", reinterpret_cast<void*>(BCryptDeriveKeyPBKDF2));
     ldr.registerExport("bcrypt.dll", "BCryptExportKey", reinterpret_cast<void*>(BCryptExportKey));
     ldr.registerExport("bcrypt.dll", "BCryptImportKey", reinterpret_cast<void*>(BCryptImportKey));
+    ldr.registerExport("bcrypt.dll", "BCryptFreeBuffer", reinterpret_cast<void*>(BCryptFreeBuffer));
+    ldr.registerExport("bcrypt.dll", "BCryptEnumContextFunctions", reinterpret_cast<void*>(BCryptEnumContextFunctions));
 
     // ncrypt.dll exports
     ldr.registerExport("ncrypt.dll", "NCryptOpenStorageProvider", reinterpret_cast<void*>(NCryptOpenStorageProvider));
@@ -2220,6 +2244,7 @@ inline void InitializeBCryptSubsystemExports() {
     ldr.registerExport("ncrypt.dll", "NCryptDecrypt", reinterpret_cast<void*>(NCryptDecrypt));
     ldr.registerExport("ncrypt.dll", "NCryptGetProperty", reinterpret_cast<void*>(NCryptGetProperty));
     ldr.registerExport("ncrypt.dll", "NCryptSignHash", reinterpret_cast<void*>(NCryptSignHash));
+    ldr.registerExport("ncrypt.dll", "NCryptSetProperty", reinterpret_cast<void*>(NCryptSetProperty));
     ldr.registerExport("ncrypt.dll", "BCryptOpenAlgorithmProvider", reinterpret_cast<void*>(BCryptOpenAlgorithmProvider));
     ldr.registerExport("ncrypt.dll", "BCryptCloseAlgorithmProvider", reinterpret_cast<void*>(BCryptCloseAlgorithmProvider));
     ldr.registerExport("ncrypt.dll", "BCryptGenRandom", reinterpret_cast<void*>(BCryptGenRandom));

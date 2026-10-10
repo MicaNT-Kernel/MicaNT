@@ -1226,6 +1226,37 @@ inline win32::BOOL WINAPI CryptMsgUpdate(
     return win32::TRUE;
 }
 
+inline void WINAPI CertFreeCertificateChain(void* /*pChainContext*/) noexcept {}
+
+inline win32::BOOL WINAPI CertSetCertificateContextProperty(void* /*pCertContext*/, win32::DWORD /*dwPropId*/, win32::DWORD /*dwFlags*/, const void* /*pvData*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptEncodeObject(win32::DWORD /*dwCertEncodingType*/, const char* /*lpszStructType*/, const void* /*pvStructInfo*/, uint8_t* pbEncoded, win32::DWORD* pcbEncoded) noexcept {
+    if (pcbEncoded) *pcbEncoded = 16;
+    if (pbEncoded) std::memset(pbEncoded, 0, 16);
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CertCompareCertificate(win32::DWORD /*dwCertEncodingType*/, void* /*pCertId1*/, void* /*pCertId2*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CertAddStoreToCollection(void* /*hCollectionStore*/, void* /*hSiblingStore*/, win32::DWORD /*dwUpdateFlags*/, win32::DWORD /*dwPriority*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptAcquireCertificatePrivateKey(void* /*pCert*/, win32::DWORD /*dwFlags*/, void* /*pvParameters*/, uintptr_t* phCryptProvOrNCryptKey, win32::DWORD* pdwKeySpec, win32::BOOL* pfCallerFreeProvOrNCryptKey) noexcept {
+    if (phCryptProvOrNCryptKey) *phCryptProvOrNCryptKey = 0x6001;
+    if (pdwKeySpec) *pdwKeySpec = 1;
+    if (pfCallerFreeProvOrNCryptKey) *pfCallerFreeProvOrNCryptKey = 0;
+    return win32::TRUE;
+}
+
+inline int32_t WINAPI CertVerifyTimeValidity(void* /*pTimeToVerify*/, void* /*pCertInfo*/) noexcept {
+    return 0;
+}
+
 // ============================================================================
 // 5. Subsystem Export Registration
 // ============================================================================
@@ -1272,6 +1303,13 @@ inline void InitializeCrypt32SubsystemExports() {
     ldr.registerExport("crypt32.dll", "CryptHashCertificate", reinterpret_cast<void*>(CryptHashCertificate));
     ldr.registerExport("crypt32.dll", "CryptMsgOpenToDecode", reinterpret_cast<void*>(CryptMsgOpenToDecode));
     ldr.registerExport("crypt32.dll", "CryptMsgUpdate", reinterpret_cast<void*>(CryptMsgUpdate));
+    ldr.registerExport("crypt32.dll", "CertFreeCertificateChain", reinterpret_cast<void*>(CertFreeCertificateChain));
+    ldr.registerExport("crypt32.dll", "CertSetCertificateContextProperty", reinterpret_cast<void*>(CertSetCertificateContextProperty));
+    ldr.registerExport("crypt32.dll", "CryptEncodeObject", reinterpret_cast<void*>(CryptEncodeObject));
+    ldr.registerExport("crypt32.dll", "CertCompareCertificate", reinterpret_cast<void*>(CertCompareCertificate));
+    ldr.registerExport("crypt32.dll", "CertAddStoreToCollection", reinterpret_cast<void*>(CertAddStoreToCollection));
+    ldr.registerExport("crypt32.dll", "CryptAcquireCertificatePrivateKey", reinterpret_cast<void*>(CryptAcquireCertificatePrivateKey));
+    ldr.registerExport("crypt32.dll", "CertVerifyTimeValidity", reinterpret_cast<void*>(CertVerifyTimeValidity));
 }
 
 } // namespace micant::crypt32

@@ -51,6 +51,17 @@
 #include "wintrust.hpp"
 #include "setupapi.hpp"
 #include "ntdll.hpp"
+#include "icuuc.hpp"
+#include "authz.hpp"
+#include "userenv.hpp"
+#include "winhttp.hpp"
+#include "imm32.hpp"
+#include "powrprof.hpp"
+#include "dbgeng.hpp"
+#include "winrt.hpp"
+#include "iphlpapi.hpp"
+#include "cipherksp.hpp"
+#include "prism3d12.hpp"
 #include "satellite_wiztree.hpp"
 #include "satellite_putty.hpp"
 #include "satellite_gdiplus.hpp"
@@ -150,6 +161,19 @@ inline void InitializeSatelliteWin32Exports() {
     winspool::InitializePrintSpoolerSubsystemExports();
     uiautomation::InitializeUIAutomationSubsystemExports();
     tsf::InitializeTextServicesExports();
+    mpr::InitializeMprSubsystemExports();
+    setupapi::InitializeSetupApiSubsystemExports();
+    iphlpapi::InitializeIpHlpApiSubsystemExports();
+    crypto::InitializeBCryptSubsystemExports();
+    prism3d12::InitializePrism3D12SubsystemExports();
+    icuuc::InitializeIcuucSubsystemExports();
+    authz::InitializeAuthzSubsystemExports();
+    userenv::InitializeUserenvSubsystemExports();
+    winhttp::InitializeWinHttpSubsystemExports();
+    imm32::InitializeImm32SubsystemExports();
+    powrprof::InitializePowrProfSubsystemExports();
+    dbgeng::InitializeDbgEngSubsystemExports();
+    winrt::InitializeWinRTSubsystemExports();
 
     // WizTree 4.x Subsystem Extensions
     wiztree::InitializeWizTreeWin32Exports();

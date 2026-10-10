@@ -156,6 +156,37 @@ inline win32::BOOL IsThemePartDefined(HTHEME /*hTheme*/, int /*iPartId*/, int /*
     return win32::TRUE;
 }
 
+inline win32::HRESULT WINAPI GetThemeBackgroundRegion(HTHEME /*hTheme*/, void* /*hdc*/, int32_t /*iPartId*/, int32_t /*iStateId*/, const void* /*pRect*/, void** pRegion) noexcept {
+    if (pRegion) *pRegion = reinterpret_cast<void*>(0xF001);
+    return 0; // S_OK
+}
+
+inline win32::BOOL WINAPI ThemeOrdinal47(HTHEME /*hTheme*/, int32_t /*iPartId*/, int32_t /*iStateId*/, void* /*pRect*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::HRESULT WINAPI GetThemeBool(HTHEME /*hTheme*/, int32_t /*iPartId*/, int32_t /*iStateId*/, int32_t /*iPropId*/, win32::BOOL* pfVal) noexcept {
+    if (pfVal) *pfVal = win32::TRUE;
+    return 0; // S_OK
+}
+
+inline win32::HRESULT WINAPI GetThemePropertyOrigin(HTHEME /*hTheme*/, int32_t /*iPartId*/, int32_t /*iStateId*/, int32_t /*iPropId*/, int32_t* pOrigin) noexcept {
+    if (pOrigin) *pOrigin = 1; // PO_PART
+    return 0; // S_OK
+}
+
+inline win32::HRESULT WINAPI GetThemeEnumValue(HTHEME /*hTheme*/, int32_t /*iPartId*/, int32_t /*iStateId*/, int32_t /*iPropId*/, int32_t* piVal) noexcept {
+    if (piVal) *piVal = 0;
+    return 0; // S_OK
+}
+
+inline win32::HRESULT WINAPI GetCurrentThemeName(wchar_t* pszThemeFileName, int32_t cchMaxNameChars, wchar_t* pszColorBuff, int32_t cchMaxColorChars, wchar_t* pszSizeBuff, int32_t cchMaxSizeChars) noexcept {
+    if (pszThemeFileName && cchMaxNameChars > 0) pszThemeFileName[0] = L'\0';
+    if (pszColorBuff && cchMaxColorChars > 0) pszColorBuff[0] = L'\0';
+    if (pszSizeBuff && cchMaxSizeChars > 0) pszSizeBuff[0] = L'\0';
+    return 0; // S_OK
+}
+
 inline void InitializeUxThemeSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
 
@@ -185,6 +216,12 @@ inline void InitializeUxThemeSubsystemExports() {
     ldr.registerExport("uxtheme.dll", "GetThemeInt", reinterpret_cast<void*>(GetThemeInt));
     ldr.registerExport("uxtheme.dll", "DrawThemeText", reinterpret_cast<void*>(DrawThemeText));
     ldr.registerExport("uxtheme.dll", "IsThemeBackgroundPartiallyTransparent", reinterpret_cast<void*>(IsThemeBackgroundPartiallyTransparent));
+    ldr.registerExport("uxtheme.dll", "GetThemeBackgroundRegion", reinterpret_cast<void*>(GetThemeBackgroundRegion));
+    ldr.registerExportOrdinal("uxtheme.dll", 47, reinterpret_cast<void*>(ThemeOrdinal47));
+    ldr.registerExport("uxtheme.dll", "GetThemeBool", reinterpret_cast<void*>(GetThemeBool));
+    ldr.registerExport("uxtheme.dll", "GetThemePropertyOrigin", reinterpret_cast<void*>(GetThemePropertyOrigin));
+    ldr.registerExport("uxtheme.dll", "GetThemeEnumValue", reinterpret_cast<void*>(GetThemeEnumValue));
+    ldr.registerExport("uxtheme.dll", "GetCurrentThemeName", reinterpret_cast<void*>(GetCurrentThemeName));
 }
 
 } // namespace micant::uxtheme

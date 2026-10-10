@@ -2115,6 +2115,113 @@ inline win32::BOOL WINAPI GetCaretPos(POINT* lpPoint) noexcept {
     return win32::TRUE;
 }
 
+inline win32::BOOL WINAPI SetProcessDpiAwarenessContext(void* /*value*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI IsValidDpiAwarenessContext(void* /*value*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI EnableNonClientDpiScaling(win32::HWND /*hwnd*/) noexcept {
+    return win32::TRUE;
+}
+
+inline int32_t WINAPI GetDisplayConfigBufferSizes(uint32_t /*flags*/, uint32_t* numPathArrayElements, uint32_t* numModeInfoArrayElements) noexcept {
+    if (numPathArrayElements) *numPathArrayElements = 1;
+    if (numModeInfoArrayElements) *numModeInfoArrayElements = 1;
+    return 0; // ERROR_SUCCESS
+}
+
+inline int32_t WINAPI QueryDisplayConfig(uint32_t /*flags*/, uint32_t* numPathArrayElements, void* /*pathArray*/, uint32_t* numModeInfoArrayElements, void* /*modeInfoArray*/, void* /*currentTopologyId*/) noexcept {
+    if (numPathArrayElements) *numPathArrayElements = 1;
+    if (numModeInfoArrayElements) *numModeInfoArrayElements = 1;
+    return 0; // ERROR_SUCCESS
+}
+
+inline int32_t WINAPI DisplayConfigGetDeviceInfo(void* requestPacket) noexcept {
+    if (requestPacket) std::memset(requestPacket, 0, 32);
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::BOOL WINAPI UpdateLayeredWindow(win32::HWND /*hWnd*/, HDC /*hdcDst*/, void* /*pptDst*/, void* /*psize*/, HDC /*hdcSrc*/, void* /*pptSrc*/, uint32_t /*crKey*/, void* /*pblend*/, uint32_t /*dwFlags*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI UpdateLayeredWindowIndirect(win32::HWND /*hWnd*/, const void* /*pULWInfo*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI RegisterTouchWindow(win32::HWND /*hwnd*/, uint32_t /*ulFlags*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI UnregisterTouchWindow(win32::HWND /*hwnd*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI IsTouchWindow(win32::HWND /*hwnd*/, uint32_t* /*pulFlags*/) noexcept {
+    return win32::FALSE;
+}
+
+inline win32::BOOL WINAPI GetPointerFrameTouchInfoHistory(uint32_t /*pointerId*/, uint32_t* entriesCount, uint32_t* pointerCount, void* /*touchInfo*/) noexcept {
+    if (entriesCount) *entriesCount = 0;
+    if (pointerCount) *pointerCount = 0;
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI SkipPointerFrameMessages(uint32_t /*pointerId*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI ChangeWindowMessageFilter(uint32_t /*message*/, uint32_t /*dwFlag*/) noexcept {
+    return win32::TRUE;
+}
+
+inline void* WINAPI RegisterPowerSettingNotification(void* /*hRecipient*/, const void* /*PowerSettingGuid*/, uint32_t /*Flags*/) noexcept {
+    return reinterpret_cast<void*>(0x7001);
+}
+
+inline win32::BOOL WINAPI UnregisterPowerSettingNotification(void* /*Handle*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI UnregisterDeviceNotification(void* /*Handle*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI ShutdownBlockReasonCreate(win32::HWND /*hWnd*/, const wchar_t* /*pwszReason*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI ShutdownBlockReasonDestroy(win32::HWND /*hWnd*/) noexcept {
+    return win32::TRUE;
+}
+
+inline HCURSOR WINAPI CreateCursor(void* /*hInst*/, int /*xHotSpot*/, int /*yHotSpot*/, int /*nWidth*/, int /*nHeight*/, const void* /*pvANDPlane*/, const void* /*pvXORPlane*/) noexcept {
+    return reinterpret_cast<HCURSOR>(0x3001);
+}
+
+inline int WINAPI ToUnicode(uint32_t wVirtKey, uint32_t /*wScanCode*/, const uint8_t* /*lpKeyState*/, wchar_t* pwszBuff, int cchBuff, uint32_t /*wFlags*/) noexcept {
+    if (pwszBuff && cchBuff > 0) {
+        pwszBuff[0] = static_cast<wchar_t>(wVirtKey);
+        return 1;
+    }
+    return 0;
+}
+
+inline win32::BOOL WINAPI HiliteMenuItem(win32::HWND /*hWnd*/, HMENU /*hMenu*/, uint32_t /*uIDHiliteItem*/, uint32_t /*uHilite*/) noexcept {
+    return win32::TRUE;
+}
+
+inline char* WINAPI CharPrevExA(uint16_t /*CodePage*/, const char* /*lpStart*/, const char* lpCurrentChar, win32::DWORD /*dwFlags*/) noexcept {
+    return const_cast<char*>(lpCurrentChar > (const char*)1 ? lpCurrentChar - 1 : lpCurrentChar);
+}
+
+inline uintptr_t WINAPI SetCoalescableTimer(win32::HWND /*hWnd*/, uintptr_t nIDEvent, uint32_t /*uElapse*/, void* /*lpTimerFunc*/, uint32_t /*uToleranceDelay*/) noexcept {
+    return nIDEvent ? nIDEvent : 1;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -2304,6 +2411,30 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "wsprintfA", reinterpret_cast<void*>(wsprintfA));
     ldr.registerExport("user32.dll", "CharPrevW", reinterpret_cast<void*>(CharPrevW));
     ldr.registerExport("user32.dll", "GetCaretPos", reinterpret_cast<void*>(GetCaretPos));
+    ldr.registerExport("user32.dll", "SetProcessDpiAwarenessContext", reinterpret_cast<void*>(SetProcessDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "IsValidDpiAwarenessContext", reinterpret_cast<void*>(IsValidDpiAwarenessContext));
+    ldr.registerExport("user32.dll", "EnableNonClientDpiScaling", reinterpret_cast<void*>(EnableNonClientDpiScaling));
+    ldr.registerExport("user32.dll", "GetDisplayConfigBufferSizes", reinterpret_cast<void*>(GetDisplayConfigBufferSizes));
+    ldr.registerExport("user32.dll", "QueryDisplayConfig", reinterpret_cast<void*>(QueryDisplayConfig));
+    ldr.registerExport("user32.dll", "DisplayConfigGetDeviceInfo", reinterpret_cast<void*>(DisplayConfigGetDeviceInfo));
+    ldr.registerExport("user32.dll", "UpdateLayeredWindow", reinterpret_cast<void*>(UpdateLayeredWindow));
+    ldr.registerExport("user32.dll", "UpdateLayeredWindowIndirect", reinterpret_cast<void*>(UpdateLayeredWindowIndirect));
+    ldr.registerExport("user32.dll", "RegisterTouchWindow", reinterpret_cast<void*>(RegisterTouchWindow));
+    ldr.registerExport("user32.dll", "UnregisterTouchWindow", reinterpret_cast<void*>(UnregisterTouchWindow));
+    ldr.registerExport("user32.dll", "IsTouchWindow", reinterpret_cast<void*>(IsTouchWindow));
+    ldr.registerExport("user32.dll", "GetPointerFrameTouchInfoHistory", reinterpret_cast<void*>(GetPointerFrameTouchInfoHistory));
+    ldr.registerExport("user32.dll", "SkipPointerFrameMessages", reinterpret_cast<void*>(SkipPointerFrameMessages));
+    ldr.registerExport("user32.dll", "ChangeWindowMessageFilter", reinterpret_cast<void*>(ChangeWindowMessageFilter));
+    ldr.registerExport("user32.dll", "RegisterPowerSettingNotification", reinterpret_cast<void*>(RegisterPowerSettingNotification));
+    ldr.registerExport("user32.dll", "UnregisterPowerSettingNotification", reinterpret_cast<void*>(UnregisterPowerSettingNotification));
+    ldr.registerExport("user32.dll", "UnregisterDeviceNotification", reinterpret_cast<void*>(UnregisterDeviceNotification));
+    ldr.registerExport("user32.dll", "ShutdownBlockReasonCreate", reinterpret_cast<void*>(ShutdownBlockReasonCreate));
+    ldr.registerExport("user32.dll", "ShutdownBlockReasonDestroy", reinterpret_cast<void*>(ShutdownBlockReasonDestroy));
+    ldr.registerExport("user32.dll", "CreateCursor", reinterpret_cast<void*>(CreateCursor));
+    ldr.registerExport("user32.dll", "ToUnicode", reinterpret_cast<void*>(ToUnicode));
+    ldr.registerExport("user32.dll", "HiliteMenuItem", reinterpret_cast<void*>(HiliteMenuItem));
+    ldr.registerExport("user32.dll", "CharPrevExA", reinterpret_cast<void*>(CharPrevExA));
+    ldr.registerExport("user32.dll", "SetCoalescableTimer", reinterpret_cast<void*>(SetCoalescableTimer));
 }
 
 } // namespace micant::user32

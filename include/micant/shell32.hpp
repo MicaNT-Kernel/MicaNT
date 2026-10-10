@@ -48,6 +48,7 @@ using DWORD_PTR = uintptr_t;
 using ULONG_PTR = uintptr_t;
 using LPCWSTR = const wchar_t*;
 using LPCSTR  = const char*;
+using HANDLE  = win32::HANDLE;
 using LPWSTR  = wchar_t*;
 using LPSTR   = char*;
 using PCWSTR  = const wchar_t*;
@@ -1840,6 +1841,29 @@ inline int32_t WINAPI VariantCopyInd_Shlwapi(void* pvarDest, const void* pvargSr
     return 0; // S_OK
 }
 
+inline HRESULT WINAPI SHGetKnownFolderIDList(const void* /*rfid*/, DWORD /*dwFlags*/, HANDLE /*hToken*/, void** ppidl) noexcept {
+    if (ppidl) *ppidl = reinterpret_cast<void*>(0xE001);
+    return S_OK;
+}
+
+inline HRESULT WINAPI SHCreateItemFromIDList(const void* /*pidl*/, const void* /*riid*/, void** ppv) noexcept {
+    if (ppv) *ppv = reinterpret_cast<void*>(0xE002);
+    return S_OK;
+}
+
+inline BOOL WINAPI ShellOrdinal6() noexcept { return 1; }
+inline BOOL WINAPI ShellOrdinal727() noexcept { return 1; }
+
+inline HRESULT WINAPI SHGetStockIconInfo(uint32_t /*siid*/, uint32_t /*uFlags*/, void* psii) noexcept {
+    if (psii) std::memset(psii, 0, 32);
+    return S_OK;
+}
+
+inline HRESULT WINAPI Shell_NotifyIconGetRect(const void* /*identifier*/, void* iconLocation) noexcept {
+    if (iconLocation) std::memset(iconLocation, 0, 16);
+    return S_OK;
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
@@ -1900,6 +1924,12 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "SetCurrentProcessExplicitAppUserModelID", reinterpret_cast<void*>(SetCurrentProcessExplicitAppUserModelID));
     ldr.registerExport("shell32.dll", "CDefFolderMenu_Create2", reinterpret_cast<void*>(CDefFolderMenu_Create2));
     ldr.registerExportOrdinal("shell32.dll", 701, reinterpret_cast<void*>(CDefFolderMenu_Create2));
+    ldr.registerExport("shell32.dll", "SHGetKnownFolderIDList", reinterpret_cast<void*>(SHGetKnownFolderIDList));
+    ldr.registerExport("shell32.dll", "SHCreateItemFromIDList", reinterpret_cast<void*>(SHCreateItemFromIDList));
+    ldr.registerExportOrdinal("shell32.dll", 6, reinterpret_cast<void*>(ShellOrdinal6));
+    ldr.registerExportOrdinal("shell32.dll", 727, reinterpret_cast<void*>(ShellOrdinal727));
+    ldr.registerExport("shell32.dll", "SHGetStockIconInfo", reinterpret_cast<void*>(SHGetStockIconInfo));
+    ldr.registerExport("shell32.dll", "Shell_NotifyIconGetRect", reinterpret_cast<void*>(Shell_NotifyIconGetRect));
 
     // shlwapi.dll exports
     ldr.registerExport("shlwapi.dll", "wnsprintfW", reinterpret_cast<void*>(wnsprintfW));

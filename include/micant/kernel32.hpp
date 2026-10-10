@@ -4803,6 +4803,195 @@ inline uint32_t WINAPI GetThreadId(HANDLE /*Thread*/) noexcept {
     return 1001;
 }
 
+inline HANDLE WINAPI CreateIoCompletionPort(HANDLE /*FileHandle*/, HANDLE ExistingCompletionPort, ULONG_PTR /*CompletionKey*/, DWORD /*NumberOfConcurrentThreads*/) noexcept {
+    return ExistingCompletionPort ? ExistingCompletionPort : reinterpret_cast<HANDLE>(0x10C01);
+}
+
+inline BOOL WINAPI GetQueuedCompletionStatus(HANDLE /*CompletionPort*/, DWORD* lpNumberOfBytesTransferred, ULONG_PTR* lpCompletionKey, void** lpOverlapped, DWORD /*dwMilliseconds*/) noexcept {
+    if (lpNumberOfBytesTransferred) *lpNumberOfBytesTransferred = 1024;
+    if (lpCompletionKey) *lpCompletionKey = 1;
+    if (lpOverlapped) *lpOverlapped = reinterpret_cast<void*>(0x8102);
+    return TRUE;
+}
+
+inline BOOL WINAPI PostQueuedCompletionStatus(HANDLE /*CompletionPort*/, DWORD /*dwNumberOfBytesTransferred*/, ULONG_PTR /*dwCompletionKey*/, void* /*lpOverlapped*/) noexcept {
+    return TRUE;
+}
+
+inline void* WINAPI CreateFiberEx(size_t /*dwStackCommitSize*/, size_t /*dwStackReserveSize*/, DWORD /*dwFlags*/, void* /*lpStartAddress*/, void* /*lpParameter*/) noexcept {
+    return reinterpret_cast<void*>(0x1F001);
+}
+
+inline void WINAPI SwitchToFiber(void* /*lpFiber*/) noexcept {}
+inline void WINAPI DeleteFiber(void* /*lpFiber*/) noexcept {}
+
+inline void* WINAPI ConvertThreadToFiberEx(void* /*lpParameter*/, DWORD /*dwFlags*/) noexcept {
+    return reinterpret_cast<void*>(0x1F002);
+}
+
+inline BOOL WINAPI ConvertFiberToThread() noexcept { return TRUE; }
+
+inline BOOL WINAPI LockFileEx(HANDLE /*hFile*/, DWORD /*dwFlags*/, DWORD /*dwReserved*/, DWORD /*nNumberOfBytesToLockLow*/, DWORD /*nNumberOfBytesToLockHigh*/, void* /*lpOverlapped*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI UnlockFileEx(HANDLE /*hFile*/, DWORD /*dwReserved*/, DWORD /*nNumberOfBytesToUnlockLow*/, DWORD /*nNumberOfBytesToUnlockHigh*/, void* /*lpOverlapped*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI FlushViewOfFile(const void* /*lpBaseAddress*/, size_t /*dwNumberOfBytesToFlush*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI HeapValidate(HANDLE /*hHeap*/, DWORD /*dwFlags*/, const void* /*lpMem*/) noexcept {
+    return TRUE;
+}
+
+inline size_t WINAPI HeapCompact(HANDLE /*hHeap*/, DWORD /*dwFlags*/) noexcept {
+    return 0;
+}
+
+inline void* WINAPI InterlockedFlushSList(SLIST_HEADER* /*ListHead*/) noexcept {
+    return nullptr;
+}
+
+inline BOOL WINAPI ReadConsoleA(HANDLE /*hConsoleInput*/, void* lpBuffer, DWORD nNumberOfCharsToRead, DWORD* lpNumberOfCharsRead, void* /*pInputControl*/) noexcept {
+    if (lpNumberOfCharsRead) *lpNumberOfCharsRead = 0;
+    if (lpBuffer && nNumberOfCharsToRead > 0) static_cast<char*>(lpBuffer)[0] = '\0';
+    return TRUE;
+}
+
+inline uint16_t WINAPI RtlCaptureStackBackTrace(DWORD /*FramesToSkip*/, DWORD FramesToCapture, void** BackTrace, DWORD* BackTraceHash) noexcept {
+    if (BackTrace && FramesToCapture > 0) BackTrace[0] = reinterpret_cast<void*>(0x140001000ULL);
+    if (BackTraceHash) *BackTraceHash = 0;
+    return BackTrace ? 1 : 0;
+}
+
+inline BOOL WINAPI CheckRemoteDebuggerPresent(HANDLE /*hProcess*/, BOOL* pbDebuggerPresent) noexcept {
+    if (pbDebuggerPresent) *pbDebuggerPresent = 0;
+    return TRUE;
+}
+
+inline DWORD WINAPI WTSGetActiveConsoleSessionId() noexcept {
+    return 1;
+}
+
+inline void WINAPI GetSystemTimePreciseAsFileTime(void* lpSystemTimeAsFileTime) noexcept {
+    if (lpSystemTimeAsFileTime) {
+        auto now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+        uint64_t winTime = (nanos / 100) + 116444736000000000ULL;
+        std::memcpy(lpSystemTimeAsFileTime, &winTime, sizeof(uint64_t));
+    }
+}
+
+inline HANDLE WINAPI CreateFile2(const wchar_t* lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, DWORD dwCreationDisposition, void* /*pCreateExParams*/) noexcept {
+    return CreateFileW(lpFileName, dwDesiredAccess, dwShareMode, nullptr, dwCreationDisposition, 0, nullptr);
+}
+
+inline BOOL WINAPI GetVolumePathNamesForVolumeNameW(const wchar_t* /*lpszVolumeName*/, wchar_t* lpszVolumePathNames, DWORD cchBufferLength, DWORD* lpcchReturnLength) noexcept {
+    if (lpcchReturnLength) *lpcchReturnLength = 4;
+    if (lpszVolumePathNames && cchBufferLength >= 4) {
+        std::memcpy(lpszVolumePathNames, L"C:\\\0", 8);
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI GetVolumeNameForVolumeMountPointW(const wchar_t* /*lpszVolumeMountPoint*/, wchar_t* lpszVolumeName, DWORD cchBufferLength) noexcept {
+    static const wchar_t dummyVol[] = L"\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\";
+    if (lpszVolumeName && cchBufferLength >= 49) {
+        std::memcpy(lpszVolumeName, dummyVol, sizeof(dummyVol));
+        return TRUE;
+    }
+    return FALSE;
+}
+
+inline BOOL WINAPI GetComputerNameExW(int32_t /*NameType*/, wchar_t* lpBuffer, DWORD* nSize) noexcept {
+    static const wchar_t compName[] = L"MicaNT-Host";
+    if (!nSize) return FALSE;
+    if (!lpBuffer || *nSize < 12) {
+        *nSize = 12;
+        return FALSE;
+    }
+    std::memcpy(lpBuffer, compName, sizeof(compName));
+    *nSize = 11;
+    return TRUE;
+}
+
+inline BOOL WINAPI SetThreadInformation(HANDLE /*hThread*/, int32_t /*ThreadInformationClass*/, void* /*ThreadInformation*/, DWORD /*ThreadInformationSize*/) noexcept {
+    return TRUE;
+}
+
+inline HRESULT WINAPI SetThreadDescription(HANDLE /*hThread*/, const wchar_t* /*lpThreadDescription*/) noexcept {
+    return 0; // S_OK
+}
+
+inline BOOL WINAPI SetFileInformationByHandle(HANDLE /*hFile*/, int32_t /*FileInformationClass*/, void* /*lpFileInformation*/, DWORD /*dwBufferSize*/) noexcept {
+    return TRUE;
+}
+
+inline int32_t WINAPI GetUserGeoID(int32_t /*GeoClass*/) noexcept {
+    return 244; // United States
+}
+
+inline int32_t WINAPI GetGeoInfoW(int32_t /*Location*/, int32_t /*GeoType*/, wchar_t* lpGeoData, int32_t cchData, uint16_t /*LangId*/) noexcept {
+    if (lpGeoData && cchData >= 3) {
+        std::memcpy(lpGeoData, L"US\0", 6);
+        return 3;
+    }
+    return 3;
+}
+
+inline int32_t WINAPI GetCurrencyFormatW(uint32_t /*Locale*/, DWORD /*dwFlags*/, const wchar_t* /*lpValue*/, const void* /*lpFormat*/, wchar_t* lpCurrencyStr, int32_t cchCurrency) noexcept {
+    if (lpCurrencyStr && cchCurrency >= 8) {
+        std::memcpy(lpCurrencyStr, L"$0.00\0", 12);
+        return 6;
+    }
+    return 6;
+}
+
+inline BOOL WINAPI GetUserPreferredUILanguages(DWORD /*dwFlags*/, uint32_t* pulNumLanguages, wchar_t* pwszLanguagesBuffer, uint32_t* pcchLanguagesBuffer) noexcept {
+    if (pulNumLanguages) *pulNumLanguages = 1;
+    if (pcchLanguagesBuffer) *pcchLanguagesBuffer = 6;
+    if (pwszLanguagesBuffer) std::memcpy(pwszLanguagesBuffer, L"en-US\0", 12);
+    return TRUE;
+}
+
+inline int32_t WINAPI GetUserDefaultLocaleName(wchar_t* lpLocaleName, int32_t cchLocaleName) noexcept {
+    if (lpLocaleName && cchLocaleName >= 6) {
+        std::memcpy(lpLocaleName, L"en-US", 12);
+        return 6;
+    }
+    return 6;
+}
+
+inline BOOL WINAPI SetWaitableTimer(HANDLE /*hTimer*/, const void* /*lpDueTime*/, int32_t /*lPeriod*/, void* /*pfnCompletionRoutine*/, void* /*lpArgToCompletionRoutine*/, BOOL /*fResume*/) noexcept {
+    return TRUE;
+}
+
+inline HANDLE WINAPI CreateWaitableTimerA(void* /*lpTimerAttributes*/, BOOL /*bManualReset*/, const char* /*lpTimerName*/) noexcept {
+    return reinterpret_cast<HANDLE>(0x12001);
+}
+
+inline HANDLE WINAPI CreateSemaphoreA(void* /*lpSemaphoreAttributes*/, int32_t /*lInitialCount*/, int32_t /*lMaximumCount*/, const char* /*lpName*/) noexcept {
+    return reinterpret_cast<HANDLE>(0x13001);
+}
+
+inline void* WINAPI CreateThreadpoolWait(void* /*pfnwa*/, void* /*pv*/, void* /*pcbe*/) noexcept {
+    return reinterpret_cast<void*>(0x14001);
+}
+
+inline void WINAPI SetThreadpoolWait(void* /*pwa*/, HANDLE /*h*/, void* /*pftTimeout*/) noexcept {}
+inline void WINAPI WaitForThreadpoolWaitCallbacks(void* /*pwa*/, BOOL /*fCancelPendingCallbacks*/) noexcept {}
+inline void WINAPI CloseThreadpoolWait(void* /*pwa*/) noexcept {}
+
+inline BOOL WINAPI WaitOnAddress(volatile void* /*Address*/, void* /*CompareAddress*/, size_t /*AddressSize*/, DWORD /*dwMilliseconds*/) noexcept {
+    return TRUE;
+}
+inline void WINAPI WakeByAddressSingle(void* /*Address*/) noexcept {}
+inline void WINAPI WakeByAddressAll(void* /*Address*/) noexcept {}
+
 // ============================================================================
 // 18. Win32 Dynamic Subsystem Export Table Initializer
 // ============================================================================
@@ -5280,6 +5469,50 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "FindResourceExW", reinterpret_cast<void*>(FindResourceExW));
     ldr.registerExport("kernel32.dll", "InterlockedPushEntrySList", reinterpret_cast<void*>(InterlockedPushEntrySList));
     ldr.registerExport("kernel32.dll", "GetThreadId", reinterpret_cast<void*>(GetThreadId));
+    ldr.registerExport("kernel32.dll", "CreateIoCompletionPort", reinterpret_cast<void*>(CreateIoCompletionPort));
+    ldr.registerExport("kernel32.dll", "GetQueuedCompletionStatus", reinterpret_cast<void*>(GetQueuedCompletionStatus));
+    ldr.registerExport("kernel32.dll", "PostQueuedCompletionStatus", reinterpret_cast<void*>(PostQueuedCompletionStatus));
+    ldr.registerExport("kernel32.dll", "CreateFiberEx", reinterpret_cast<void*>(CreateFiberEx));
+    ldr.registerExport("kernel32.dll", "SwitchToFiber", reinterpret_cast<void*>(SwitchToFiber));
+    ldr.registerExport("kernel32.dll", "DeleteFiber", reinterpret_cast<void*>(DeleteFiber));
+    ldr.registerExport("kernel32.dll", "ConvertThreadToFiberEx", reinterpret_cast<void*>(ConvertThreadToFiberEx));
+    ldr.registerExport("kernel32.dll", "ConvertFiberToThread", reinterpret_cast<void*>(ConvertFiberToThread));
+    ldr.registerExport("kernel32.dll", "LockFileEx", reinterpret_cast<void*>(LockFileEx));
+    ldr.registerExport("kernel32.dll", "UnlockFileEx", reinterpret_cast<void*>(UnlockFileEx));
+    ldr.registerExport("kernel32.dll", "FlushViewOfFile", reinterpret_cast<void*>(FlushViewOfFile));
+    ldr.registerExport("kernel32.dll", "HeapValidate", reinterpret_cast<void*>(HeapValidate));
+    ldr.registerExport("kernel32.dll", "HeapCompact", reinterpret_cast<void*>(HeapCompact));
+    ldr.registerExport("kernel32.dll", "InterlockedFlushSList", reinterpret_cast<void*>(InterlockedFlushSList));
+    ldr.registerExport("kernel32.dll", "ReadConsoleA", reinterpret_cast<void*>(ReadConsoleA));
+    ldr.registerExport("kernel32.dll", "RtlCaptureStackBackTrace", reinterpret_cast<void*>(RtlCaptureStackBackTrace));
+    ldr.registerExport("kernel32.dll", "CheckRemoteDebuggerPresent", reinterpret_cast<void*>(CheckRemoteDebuggerPresent));
+    ldr.registerExport("kernel32.dll", "WTSGetActiveConsoleSessionId", reinterpret_cast<void*>(WTSGetActiveConsoleSessionId));
+    ldr.registerExport("kernel32.dll", "GetSystemTimePreciseAsFileTime", reinterpret_cast<void*>(GetSystemTimePreciseAsFileTime));
+    ldr.registerExport("kernel32.dll", "CreateFile2", reinterpret_cast<void*>(CreateFile2));
+    ldr.registerExport("kernel32.dll", "GetVolumePathNamesForVolumeNameW", reinterpret_cast<void*>(GetVolumePathNamesForVolumeNameW));
+    ldr.registerExport("kernel32.dll", "GetVolumeNameForVolumeMountPointW", reinterpret_cast<void*>(GetVolumeNameForVolumeMountPointW));
+    ldr.registerExport("kernel32.dll", "GetComputerNameExW", reinterpret_cast<void*>(GetComputerNameExW));
+    ldr.registerExport("kernel32.dll", "SetThreadInformation", reinterpret_cast<void*>(SetThreadInformation));
+    ldr.registerExport("kernel32.dll", "SetThreadDescription", reinterpret_cast<void*>(SetThreadDescription));
+    ldr.registerExport("kernel32.dll", "SetFileInformationByHandle", reinterpret_cast<void*>(SetFileInformationByHandle));
+    ldr.registerExport("kernel32.dll", "GetUserGeoID", reinterpret_cast<void*>(GetUserGeoID));
+    ldr.registerExport("kernel32.dll", "GetGeoInfoW", reinterpret_cast<void*>(GetGeoInfoW));
+    ldr.registerExport("kernel32.dll", "GetCurrencyFormatW", reinterpret_cast<void*>(GetCurrencyFormatW));
+    ldr.registerExport("kernel32.dll", "GetUserPreferredUILanguages", reinterpret_cast<void*>(GetUserPreferredUILanguages));
+    ldr.registerExport("kernel32.dll", "GetUserDefaultLocaleName", reinterpret_cast<void*>(GetUserDefaultLocaleName));
+    ldr.registerExport("kernel32.dll", "SetWaitableTimer", reinterpret_cast<void*>(SetWaitableTimer));
+    ldr.registerExport("kernel32.dll", "CreateWaitableTimerA", reinterpret_cast<void*>(CreateWaitableTimerA));
+    ldr.registerExport("kernel32.dll", "CreateSemaphoreA", reinterpret_cast<void*>(CreateSemaphoreA));
+    ldr.registerExport("kernel32.dll", "CreateThreadpoolWait", reinterpret_cast<void*>(CreateThreadpoolWait));
+    ldr.registerExport("kernel32.dll", "SetThreadpoolWait", reinterpret_cast<void*>(SetThreadpoolWait));
+    ldr.registerExport("kernel32.dll", "WaitForThreadpoolWaitCallbacks", reinterpret_cast<void*>(WaitForThreadpoolWaitCallbacks));
+    ldr.registerExport("kernel32.dll", "CloseThreadpoolWait", reinterpret_cast<void*>(CloseThreadpoolWait));
+    ldr.registerExport("kernel32.dll", "WaitOnAddress", reinterpret_cast<void*>(WaitOnAddress));
+    ldr.registerExport("kernel32.dll", "WakeByAddressSingle", reinterpret_cast<void*>(WakeByAddressSingle));
+    ldr.registerExport("kernel32.dll", "WakeByAddressAll", reinterpret_cast<void*>(WakeByAddressAll));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WaitOnAddress", reinterpret_cast<void*>(WaitOnAddress));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressSingle", reinterpret_cast<void*>(WakeByAddressSingle));
+    ldr.registerExport("api-ms-win-core-synch-l1-2-0.dll", "WakeByAddressAll", reinterpret_cast<void*>(WakeByAddressAll));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

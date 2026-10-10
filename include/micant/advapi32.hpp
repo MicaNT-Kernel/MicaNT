@@ -1656,6 +1656,62 @@ inline int32_t RegEnumKeyA([[maybe_unused]] void* hKey, [[maybe_unused]] uint32_
     return 259; // ERROR_NO_MORE_ITEMS
 }
 
+inline win32::BOOL WINAPI CryptGetUserKey(HCRYPTPROV /*hProv*/, uint32_t /*dwKeySpec*/, HCRYPTKEY* phUserKey) noexcept {
+    if (phUserKey) *phUserKey = 0x2001;
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptEnumProvidersW(uint32_t /*dwIndex*/, uint32_t* /*pdwReserved*/, uint32_t /*dwFlags*/, uint32_t* pdwProvType, wchar_t* szProvName, uint32_t* pcbProvName) noexcept {
+    if (pcbProvName) *pcbProvName = 32;
+    if (pdwProvType) *pdwProvType = 1;
+    if (szProvName) std::memcpy(szProvName, L"Microsoft Enhanced RSA", 46);
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptExportKey(HCRYPTKEY /*hKey*/, HCRYPTKEY /*hExpKey*/, uint32_t /*dwBlobType*/, uint32_t /*dwFlags*/, uint8_t* pbData, uint32_t* pdwDataLen) noexcept {
+    if (pdwDataLen) *pdwDataLen = 64;
+    if (pbData) std::memset(pbData, 0xAA, 64);
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptSetHashParam(HCRYPTHASH /*hHash*/, uint32_t /*dwParam*/, const uint8_t* /*pbData*/, uint32_t /*dwFlags*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptSignHashW(HCRYPTHASH /*hHash*/, uint32_t /*dwKeySpec*/, const wchar_t* /*sDescription*/, uint32_t /*dwFlags*/, uint8_t* pbSignature, uint32_t* pdwSigLen) noexcept {
+    if (pdwSigLen) *pdwSigLen = 128;
+    if (pbSignature) std::memset(pbSignature, 0x55, 128);
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptGetProvParam(HCRYPTPROV /*hProv*/, uint32_t /*dwParam*/, uint8_t* pbData, uint32_t* pdwDataLen, uint32_t /*dwFlags*/) noexcept {
+    if (pdwDataLen) *pdwDataLen = 32;
+    if (pbData) std::memset(pbData, 0, 32);
+    return win32::TRUE;
+}
+
+inline int32_t WINAPI RegNotifyChangeKeyValue(void* /*hKey*/, win32::BOOL /*bWatchSubtree*/, uint32_t /*dwNotifyFilter*/, void* /*hEvent*/, win32::BOOL /*fAsynchronous*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::BOOL WINAPI InitiateSystemShutdownW(wchar_t* /*lpMachineName*/, wchar_t* /*lpMessage*/, uint32_t /*dwTimeout*/, win32::BOOL /*bForceAppsClosed*/, win32::BOOL /*bRebootAfterShutdown*/) noexcept {
+    return win32::TRUE;
+}
+
+inline uint32_t WINAPI GetNamedSecurityInfoW(const wchar_t* /*pObjectName*/, int32_t /*ObjectType*/, uint32_t /*SecurityInfo*/, void** ppsidOwner, void** ppsidGroup, void** ppDacl, void** ppSacl, void** ppSecurityDescriptor) noexcept {
+    if (ppSecurityDescriptor) *ppSecurityDescriptor = reinterpret_cast<void*>(0x4001);
+    return 0; // ERROR_SUCCESS
+}
+
+inline win32::BOOL WINAPI AddAccessDeniedAceEx(void* /*pAcl*/, uint32_t /*dwAceRevision*/, uint32_t /*AceFlags*/, uint32_t /*AccessMask*/, void* /*pSid*/) noexcept {
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI DuplicateToken(void* /*ExistingTokenHandle*/, int32_t /*ImpersonationLevel*/, void** DuplicateTokenHandle) noexcept {
+    if (DuplicateTokenHandle) *DuplicateTokenHandle = reinterpret_cast<void*>(0x4002);
+    return win32::TRUE;
+}
+
 inline void InitializeAdvapi32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("advapi32.dll", "RegSetKeySecurity", reinterpret_cast<void*>(RegSetKeySecurity));
@@ -1663,6 +1719,17 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "GetUserNameA", reinterpret_cast<void*>(GetUserNameA));
     ldr.registerExport("advapi32.dll", "RegDeleteKeyA", reinterpret_cast<void*>(RegDeleteKeyA));
     ldr.registerExport("advapi32.dll", "RegEnumKeyA", reinterpret_cast<void*>(RegEnumKeyA));
+    ldr.registerExport("advapi32.dll", "CryptGetUserKey", reinterpret_cast<void*>(CryptGetUserKey));
+    ldr.registerExport("advapi32.dll", "CryptEnumProvidersW", reinterpret_cast<void*>(CryptEnumProvidersW));
+    ldr.registerExport("advapi32.dll", "CryptExportKey", reinterpret_cast<void*>(CryptExportKey));
+    ldr.registerExport("advapi32.dll", "CryptSetHashParam", reinterpret_cast<void*>(CryptSetHashParam));
+    ldr.registerExport("advapi32.dll", "CryptSignHashW", reinterpret_cast<void*>(CryptSignHashW));
+    ldr.registerExport("advapi32.dll", "CryptGetProvParam", reinterpret_cast<void*>(CryptGetProvParam));
+    ldr.registerExport("advapi32.dll", "RegNotifyChangeKeyValue", reinterpret_cast<void*>(RegNotifyChangeKeyValue));
+    ldr.registerExport("advapi32.dll", "InitiateSystemShutdownW", reinterpret_cast<void*>(InitiateSystemShutdownW));
+    ldr.registerExport("advapi32.dll", "GetNamedSecurityInfoW", reinterpret_cast<void*>(GetNamedSecurityInfoW));
+    ldr.registerExport("advapi32.dll", "AddAccessDeniedAceEx", reinterpret_cast<void*>(AddAccessDeniedAceEx));
+    ldr.registerExport("advapi32.dll", "DuplicateToken", reinterpret_cast<void*>(DuplicateToken));
     ldr.registerExport("advapi32.dll", "CryptAcquireContextA", reinterpret_cast<void*>(CryptAcquireContextA));
     ldr.registerExport("advapi32.dll", "CryptAcquireContextW", reinterpret_cast<void*>(CryptAcquireContextW));
     ldr.registerExport("advapi32.dll", "CryptReleaseContext", reinterpret_cast<void*>(CryptReleaseContext));
