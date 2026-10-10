@@ -367,107 +367,143 @@ inline void __stdcall GdiplusShutdown(uintptr_t token) {
 // ============================================================================
 
 class Matrix {
-private:
-    float m_m11{ 1.0f }, m_m12{ 0.0f };
-    float m_m21{ 0.0f }, m_m22{ 1.0f };
-    float m_dx{ 0.0f },  m_dy{ 0.0f };
-
 public:
-    Matrix() = default;
-    Matrix(float m11, float m12, float m21, float m22, float dx, float dy)
-        : m_m11(m11), m_m12(m12), m_m21(m21), m_m22(m22), m_dx(dx), m_dy(dy) {}
+    float m[6]{ 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f }; // m11, m12, m21, m22, dx, dy
 
-    Status GetElements(float* m) const {
-        if (!m) return InvalidParameter;
-        m[0] = m_m11; m[1] = m_m12;
-        m[2] = m_m21; m[3] = m_m22;
-        m[4] = m_dx;  m[5] = m_dy;
+    Matrix() = default;
+    Matrix(float m11, float m12, float m21, float m22, float dx, float dy) {
+        m[0] = m11; m[1] = m12;
+        m[2] = m21; m[3] = m22;
+        m[4] = dx;  m[5] = dy;
+    }
+
+    Status GetElements(float* outM) const {
+        if (!outM) return InvalidParameter;
+        std::memcpy(outM, m, sizeof(m));
         return Ok;
     }
 
     Status SetElements(float m11, float m12, float m21, float m22, float dx, float dy) {
-        m_m11 = m11; m_m12 = m12;
-        m_m21 = m21; m_m22 = m22;
-        m_dx = dx;   m_dy = dy;
+        m[0] = m11; m[1] = m12;
+        m[2] = m21; m[3] = m22;
+        m[4] = dx;  m[5] = dy;
         return Ok;
     }
 
     bool IsIdentity() const {
-        return (m_m11 == 1.0f && m_m12 == 0.0f &&
-                m_m21 == 0.0f && m_m22 == 1.0f &&
-                m_dx == 0.0f  && m_dy == 0.0f);
+        return (m[0] == 1.0f && m[1] == 0.0f &&
+                m[2] == 0.0f && m[3] == 1.0f &&
+                m[4] == 0.0f && m[5] == 0.0f);
     }
 
     Status Reset() {
-        m_m11 = 1.0f; m_m12 = 0.0f;
-        m_m21 = 0.0f; m_m22 = 1.0f;
-        m_dx = 0.0f;  m_dy = 0.0f;
+        m[0] = 1.0f; m[1] = 0.0f;
+        m[2] = 0.0f; m[3] = 1.0f;
+        m[4] = 0.0f; m[5] = 0.0f;
         return Ok;
     }
 
+    void reset() noexcept { Reset(); }
+
     Status Translate(float offsetX, float offsetY, MatrixOrder order = MatrixOrderPrepend) {
-        if (order == MatrixOrderPrepend) {
-            m_dx += offsetX * m_m11 + offsetY * m_m21;
-            m_dy += offsetX * m_m12 + offsetY * m_m22;
-        } else {
-            m_dx += offsetX;
-            m_dy += offsetY;
-        }
+        translate(offsetX, offsetY, order);
         return Ok;
+    }
+
+    void translate(float dx, float dy, MatrixOrder order = MatrixOrderPrepend) noexcept {
+        if (order == MatrixOrderPrepend) {
+            m[4] += dx * m[0] + dy * m[2];
+            m[5] += dx * m[1] + dy * m[3];
+        } else {
+            m[4] += dx;
+            m[5] += dy;
+        }
     }
 
     Status Scale(float scaleX, float scaleY, MatrixOrder order = MatrixOrderPrepend) {
-        if (order == MatrixOrderPrepend) {
-            m_m11 *= scaleX; m_m12 *= scaleX;
-            m_m21 *= scaleY; m_m22 *= scaleY;
-        } else {
-            m_m11 *= scaleX; m_m21 *= scaleX; m_dx *= scaleX;
-            m_m12 *= scaleY; m_m22 *= scaleY; m_dy *= scaleY;
-        }
+        scale(scaleX, scaleY, order);
         return Ok;
     }
 
+    void scale(float sx, float sy, MatrixOrder order = MatrixOrderPrepend) noexcept {
+        m[0] *= sx; m[1] *= sx;
+        m[2] *= sy; m[3] *= sy;
+    }
+
     Status Rotate(float angleDeg, MatrixOrder order = MatrixOrderPrepend) {
-        float rad = angleDeg * 3.14159265358979323846f / 180.0f;
+        rotate(angleDeg, order);
+        return Ok;
+    }
+
+    void rotate(float angle, MatrixOrder order = MatrixOrderPrepend) noexcept {
+        float rad = angle * 3.14159265358979323846f / 180.0f;
         float c = std::cos(rad);
         float s = std::sin(rad);
-        Matrix rot(c, s, -s, c, 0.0f, 0.0f);
-        return Multiply(&rot, order);
+        float nm0 = m[0] * c + m[2] * s;
+        float nm1 = m[1] * c + m[3] * s;
+        float nm2 = m[0] * -s + m[2] * c;
+        float nm3 = m[1] * -s + m[3] * c;
+        m[0] = nm0; m[1] = nm1;
+        m[2] = nm2; m[3] = nm3;
     }
 
     Status Multiply(const Matrix* other, MatrixOrder order = MatrixOrderPrepend) {
         if (!other) return InvalidParameter;
-        float o[6];
-        other->GetElements(o);
+        const float* o = other->m;
         if (order == MatrixOrderPrepend) {
-            float n11 = o[0] * m_m11 + o[1] * m_m21;
-            float n12 = o[0] * m_m12 + o[1] * m_m22;
-            float n21 = o[2] * m_m11 + o[3] * m_m21;
-            float n22 = o[2] * m_m12 + o[3] * m_m22;
-            float ndx = o[4] * m_m11 + o[5] * m_m21 + m_dx;
-            float ndy = o[4] * m_m12 + o[5] * m_m22 + m_dy;
-            m_m11 = n11; m_m12 = n12; m_m21 = n21; m_m22 = n22; m_dx = ndx; m_dy = ndy;
+            float n11 = o[0] * m[0] + o[1] * m[2];
+            float n12 = o[0] * m[1] + o[1] * m[3];
+            float n21 = o[2] * m[0] + o[3] * m[2];
+            float n22 = o[2] * m[1] + o[3] * m[3];
+            float ndx = o[4] * m[0] + o[5] * m[2] + m[4];
+            float ndy = o[4] * m[1] + o[5] * m[3] + m[5];
+            m[0] = n11; m[1] = n12; m[2] = n21; m[3] = n22; m[4] = ndx; m[5] = ndy;
         } else {
-            float n11 = m_m11 * o[0] + m_m12 * o[2];
-            float n12 = m_m11 * o[1] + m_m12 * o[3];
-            float n21 = m_m21 * o[0] + m_m22 * o[2];
-            float n22 = m_m21 * o[1] + m_m22 * o[3];
-            float ndx = m_dx * o[0] + m_dy * o[2] + o[4];
-            float ndy = m_dx * o[1] + m_dy * o[3] + o[5];
-            m_m11 = n11; m_m12 = n12; m_m21 = n21; m_m22 = n22; m_dx = ndx; m_dy = ndy;
+            float n11 = m[0] * o[0] + m[1] * o[2];
+            float n12 = m[0] * o[1] + m[1] * o[3];
+            float n21 = m[2] * o[0] + m[3] * o[2];
+            float n22 = m[2] * o[1] + m[3] * o[3];
+            float ndx = m[4] * o[0] + m[5] * o[2] + o[4];
+            float ndy = m[4] * o[1] + m[5] * o[3] + o[5];
+            m[0] = n11; m[1] = n12; m[2] = n21; m[3] = n22; m[4] = ndx; m[5] = ndy;
         }
         return Ok;
     }
 
+    Status Invert() noexcept {
+        return invert() ? Ok : GenericError;
+    }
+
+    bool invert() noexcept {
+        float det = m[0] * m[3] - m[1] * m[2];
+        if (std::abs(det) < 1e-6f) return false;
+        float invDet = 1.0f / det;
+        float nm0 =  m[3] * invDet;
+        float nm1 = -m[1] * invDet;
+        float nm2 = -m[2] * invDet;
+        float nm3 =  m[0] * invDet;
+        float ndx = (m[2] * m[5] - m[3] * m[4]) * invDet;
+        float ndy = (m[1] * m[4] - m[0] * m[5]) * invDet;
+        m[0] = nm0; m[1] = nm1;
+        m[2] = nm2; m[3] = nm3;
+        m[4] = ndx; m[5] = ndy;
+        return true;
+    }
+
     Status TransformPoints(PointF* pts, int32_t count) const {
         if (!pts || count <= 0) return InvalidParameter;
-        for (int32_t i = 0; i < count; ++i) {
+        transform(pts, count);
+        return Ok;
+    }
+
+    void transform(PointF* pts, int count) const noexcept {
+        if (!pts || count <= 0) return;
+        for (int i = 0; i < count; ++i) {
             float x = pts[i].X;
             float y = pts[i].Y;
-            pts[i].X = x * m_m11 + y * m_m21 + m_dx;
-            pts[i].Y = x * m_m12 + y * m_m22 + m_dy;
+            pts[i].X = x * m[0] + y * m[2] + m[4];
+            pts[i].Y = x * m[1] + y * m[3] + m[5];
         }
-        return Ok;
     }
 };
 
@@ -478,12 +514,18 @@ using GpMatrix = Matrix;
 // ============================================================================
 
 class Brush {
-protected:
+public:
+    int type{0}; // 0 = solid, 1 = hatch
+    ARGB color{0xFF000000};
+    ARGB backColor{0xFFFFFFFF};
+    int hatchStyle{0};
     BrushType m_type{ BrushTypeSolidColor };
 
-public:
+    Brush() = default;
     virtual ~Brush() = default;
-    virtual Brush* Clone() const = 0;
+    virtual Brush* Clone() const {
+        return new Brush(*this);
+    }
     BrushType GetType() const { return m_type; }
 };
 
@@ -494,15 +536,49 @@ private:
     Color m_color{ Color::Black() };
 
 public:
-    SolidBrush() { m_type = BrushTypeSolidColor; }
-    explicit SolidBrush(const Color& c) : m_color(c) { m_type = BrushTypeSolidColor; }
+    SolidBrush() {
+        m_type = BrushTypeSolidColor;
+        type = 0;
+        color = 0xFF000000;
+    }
+    explicit SolidBrush(const Color& c) : m_color(c) {
+        m_type = BrushTypeSolidColor;
+        type = 0;
+        color = c.GetValue();
+    }
 
-    Brush* Clone() const override { return new SolidBrush(m_color); }
+    Brush* Clone() const override {
+        auto* b = new SolidBrush(m_color);
+        b->type = type;
+        b->color = color;
+        b->backColor = backColor;
+        b->hatchStyle = hatchStyle;
+        return b;
+    }
     Status GetColor(Color* c) const { if (!c) return InvalidParameter; *c = m_color; return Ok; }
-    Status SetColor(const Color& c) { m_color = c; return Ok; }
+    Status SetColor(const Color& c) {
+        m_color = c;
+        color = c.GetValue();
+        return Ok;
+    }
 };
 
 using GpSolidFill = SolidBrush;
+
+class HatchBrush : public Brush {
+public:
+    HatchBrush(int style, ARGB fore, ARGB back) {
+        m_type = BrushTypeHatchFill;
+        type = 1;
+        hatchStyle = style;
+        color = fore;
+        backColor = back;
+    }
+    Brush* Clone() const override {
+        auto* b = new HatchBrush(hatchStyle, color, backColor);
+        return b;
+    }
+};
 
 class LinearGradientBrush : public Brush {
 private:
@@ -550,7 +626,7 @@ using GpLineGradient = LinearGradientBrush;
 // ============================================================================
 
 class Pen {
-private:
+public:
     Color m_color{ Color::Black() };
     float m_width{ 1.0f };
     DashStyle m_dashStyle{ DashStyleSolid };
@@ -559,19 +635,28 @@ private:
     LineJoin m_lineJoin{ LineJoinMiter };
     std::unique_ptr<Brush> m_brush;
 
-public:
-    Pen(const Color& color, float width = 1.0f)
-        : m_color(color), m_width(std::max(0.0f, width)) {
+    // Flat C API compatibility fields
+    Brush brush;
+    float width{ 1.0f };
+    Unit unit{ UnitPixel };
+    DashStyle dashStyle{ DashStyleSolid };
+
+    Pen() : Pen(Color::Black(), 1.0f) {}
+
+    Pen(const Color& color, float w = 1.0f)
+        : m_color(color), m_width(std::max(0.0f, w)),
+          width(std::max(0.0f, w)) {
+        brush.color = color.GetValue();
+        brush.type = 0;
         m_brush = std::make_unique<SolidBrush>(color);
     }
 
-    explicit Pen(const Brush* brush, float width = 1.0f)
-        : m_width(std::max(0.0f, width)) {
-        if (brush) {
-            m_brush.reset(brush->Clone());
-            if (brush->GetType() == BrushTypeSolidColor) {
-                static_cast<const SolidBrush*>(brush)->GetColor(&m_color);
-            }
+    explicit Pen(const Brush* b, float w = 1.0f, Unit u = UnitWorld)
+        : m_width(std::max(0.0f, w)), width(std::max(0.0f, w)), unit(u) {
+        if (b) {
+            m_brush.reset(b->Clone());
+            brush = *b;
+            m_color = Color(b->color);
         } else {
             m_brush = std::make_unique<SolidBrush>(Color::Black());
         }
@@ -580,7 +665,8 @@ public:
     Pen(const Pen& other)
         : m_color(other.m_color), m_width(other.m_width),
           m_dashStyle(other.m_dashStyle), m_startCap(other.m_startCap),
-          m_endCap(other.m_endCap), m_lineJoin(other.m_lineJoin) {
+          m_endCap(other.m_endCap), m_lineJoin(other.m_lineJoin),
+          brush(other.brush), width(other.width), unit(other.unit), dashStyle(other.dashStyle) {
         if (other.m_brush) m_brush.reset(other.m_brush->Clone());
     }
 
@@ -592,6 +678,10 @@ public:
             m_startCap = other.m_startCap;
             m_endCap = other.m_endCap;
             m_lineJoin = other.m_lineJoin;
+            brush = other.brush;
+            width = other.width;
+            unit = other.unit;
+            dashStyle = other.dashStyle;
             if (other.m_brush) m_brush.reset(other.m_brush->Clone());
         }
         return *this;
@@ -607,15 +697,24 @@ public:
 
     Status SetColor(const Color& color) {
         m_color = color;
+        this->brush.color = color.GetValue();
         m_brush = std::make_unique<SolidBrush>(color);
         return Ok;
     }
 
-    float GetWidth() const { return m_width; }
-    Status SetWidth(float width) { m_width = std::max(0.0f, width); return Ok; }
+    float GetWidth() const { return width; }
+    Status SetWidth(float w) {
+        m_width = std::max(0.0f, w);
+        this->width = m_width;
+        return Ok;
+    }
 
-    DashStyle GetDashStyle() const { return m_dashStyle; }
-    Status SetDashStyle(DashStyle style) { m_dashStyle = style; return Ok; }
+    DashStyle GetDashStyle() const { return dashStyle; }
+    Status SetDashStyle(DashStyle style) {
+        m_dashStyle = style;
+        this->dashStyle = style;
+        return Ok;
+    }
 
     LineCap GetStartCap() const { return m_startCap; }
     LineCap GetEndCap() const { return m_endCap; }
@@ -648,70 +747,72 @@ enum PathPointType : uint8_t {
 };
 
 class GraphicsPath {
-private:
-    FillMode m_fillMode{ FillModeAlternate };
-    std::vector<PointF> m_points;
-    std::vector<uint8_t> m_types;
-
 public:
-    GraphicsPath(FillMode mode = FillModeAlternate) : m_fillMode(mode) {}
+    FillMode fillMode{ FillModeAlternate };
+    std::vector<PointF> points;
+    std::vector<uint8_t> types;
 
-    GraphicsPath(const PointF* pts, const uint8_t* types, int32_t count, FillMode mode = FillModeAlternate)
-        : m_fillMode(mode) {
-        if (pts && types && count > 0) {
-            m_points.assign(pts, pts + count);
-            m_types.assign(types, types + count);
+    GraphicsPath(FillMode mode = FillModeAlternate) : fillMode(mode) {}
+
+    GraphicsPath(const PointF* pts, const uint8_t* inTypes, int32_t count, FillMode mode = FillModeAlternate)
+        : fillMode(mode) {
+        if (pts && inTypes && count > 0) {
+            points.assign(pts, pts + count);
+            types.assign(inTypes, inTypes + count);
         }
     }
 
     GraphicsPath* Clone() const {
-        auto* p = new GraphicsPath(m_fillMode);
-        p->m_points = m_points;
-        p->m_types = m_types;
+        auto* p = new GraphicsPath(fillMode);
+        p->points = points;
+        p->types = types;
         return p;
     }
 
+    void reset() noexcept {
+        points.clear();
+        types.clear();
+    }
+
     Status Reset() {
-        m_points.clear();
-        m_types.clear();
+        reset();
         return Ok;
     }
 
-    int32_t GetPointCount() const { return static_cast<int32_t>(m_points.size()); }
-    FillMode GetFillMode() const { return m_fillMode; }
-    Status SetFillMode(FillMode mode) { m_fillMode = mode; return Ok; }
+    int32_t GetPointCount() const { return static_cast<int32_t>(points.size()); }
+    FillMode GetFillMode() const { return fillMode; }
+    Status SetFillMode(FillMode mode) { fillMode = mode; return Ok; }
 
     Status GetPathPoints(PointF* pts, int32_t count) const {
-        if (!pts || count < static_cast<int32_t>(m_points.size())) return InvalidParameter;
-        std::copy(m_points.begin(), m_points.end(), pts);
+        if (!pts || count < static_cast<int32_t>(points.size())) return InvalidParameter;
+        std::copy(points.begin(), points.end(), pts);
         return Ok;
     }
 
-    Status GetPathTypes(uint8_t* types, int32_t count) const {
-        if (!types || count < static_cast<int32_t>(m_types.size())) return InvalidParameter;
-        std::copy(m_types.begin(), m_types.end(), types);
+    Status GetPathTypes(uint8_t* outTypes, int32_t count) const {
+        if (!outTypes || count < static_cast<int32_t>(types.size())) return InvalidParameter;
+        std::copy(types.begin(), types.end(), outTypes);
         return Ok;
     }
 
     Status StartFigure() {
-        // Next point added will be PathPointTypeStart
         return Ok;
     }
 
     Status CloseFigure() {
-        if (!m_types.empty()) {
-            m_types.back() |= PathPointTypeCloseSubpath;
+        if (!types.empty()) {
+            types.back() |= PathPointTypeCloseSubpath;
         }
         return Ok;
     }
 
     Status AddLine(float x1, float y1, float x2, float y2) {
-        if (m_points.empty() || (m_types.back() & PathPointTypeCloseSubpath)) {
-            m_points.emplace_back(x1, y1);
-            m_types.push_back(PathPointTypeStart);
+        if (points.empty() || (types.back() & PathPointTypeCloseSubpath)) {
+            points.emplace_back(x1, y1);
+            types.push_back(PathPointTypeStart);
         }
-        m_points.emplace_back(x2, y2);
-        m_types.push_back(PathPointTypeLine);
+        points.emplace_back(x2, y2);
+        types.push_back(PathPointTypeLine);
         return Ok;
     }
 
@@ -725,7 +826,6 @@ public:
     }
 
     Status AddEllipse(float x, float y, float width, float height) {
-        // Approximate ellipse with 8-point polygon for vector geometry
         const int n = 16;
         float rx = width * 0.5f;
         float ry = height * 0.5f;
@@ -736,11 +836,11 @@ public:
             float px = cx + rx * std::cos(rad);
             float py = cy + ry * std::sin(rad);
             if (i == 0) {
-                m_points.emplace_back(px, py);
-                m_types.push_back(PathPointTypeStart);
+                points.emplace_back(px, py);
+                types.push_back(PathPointTypeStart);
             } else if (i < n) {
-                m_points.emplace_back(px, py);
-                m_types.push_back(PathPointTypeLine);
+                points.emplace_back(px, py);
+                types.push_back(PathPointTypeLine);
             }
         }
         CloseFigure();
@@ -749,11 +849,11 @@ public:
 
     Status AddPolygon(const PointF* pts, int32_t count) {
         if (!pts || count < 3) return InvalidParameter;
-        m_points.emplace_back(pts[0]);
-        m_types.push_back(PathPointTypeStart);
+        points.emplace_back(pts[0]);
+        types.push_back(PathPointTypeStart);
         for (int32_t i = 1; i < count; ++i) {
-            m_points.emplace_back(pts[i]);
-            m_types.push_back(PathPointTypeLine);
+            points.emplace_back(pts[i]);
+            types.push_back(PathPointTypeLine);
         }
         CloseFigure();
         return Ok;
@@ -761,29 +861,33 @@ public:
 
     Status Transform(const Matrix* matrix) {
         if (!matrix) return InvalidParameter;
-        return matrix->TransformPoints(m_points.data(), static_cast<int32_t>(m_points.size()));
+        return matrix->TransformPoints(points.data(), static_cast<int32_t>(points.size()));
     }
 };
 
 using GpPath = GraphicsPath;
 
 class Region {
-private:
+public:
+    RectF bounds{ 0.0f, 0.0f, 1000.0f, 1000.0f };
     RectF m_bounds{ 0, 0, 0, 0 };
     bool  m_isInfinite{ true };
 
-public:
-    Region() = default;
-    explicit Region(const RectF& rect) : m_bounds(rect), m_isInfinite(false) {}
+    Region() {
+        m_bounds = bounds;
+        m_isInfinite = false;
+    }
+    explicit Region(const RectF& rect) : bounds(rect), m_bounds(rect), m_isInfinite(false) {}
 
     Region* Clone() const {
         auto* r = new Region(m_bounds);
         r->m_isInfinite = m_isInfinite;
+        r->bounds = bounds;
         return r;
     }
 
-    Status MakeInfinite() { m_isInfinite = true; m_bounds = { 0, 0, 0, 0 }; return Ok; }
-    Status MakeEmpty()    { m_isInfinite = false; m_bounds = { 0, 0, 0, 0 }; return Ok; }
+    Status MakeInfinite() { m_isInfinite = true; m_bounds = { 0, 0, 0, 0 }; bounds = m_bounds; return Ok; }
+    Status MakeEmpty()    { m_isInfinite = false; m_bounds = { 0, 0, 0, 0 }; bounds = m_bounds; return Ok; }
     bool IsInfinite(const Graphics*) const { return m_isInfinite; }
     bool IsEmpty(const Graphics*) const { return (!m_isInfinite && m_bounds.IsEmptyArea()); }
 
@@ -860,16 +964,23 @@ protected:
     GUID        m_rawFormat{ ImageFormatBMP };
 
 public:
+    uint32_t width{ 800 };
+    uint32_t height{ 600 };
+    PixelFormat format{ PixelFormat32bppARGB };
+    float hRes{ 96.0f };
+    float vRes{ 96.0f };
+    std::vector<uint8_t> pixelBuffer;
+
     virtual ~Image() = default;
     virtual Image* Clone() const = 0;
 
     ImageType GetType() const { return m_type; }
-    uint32_t GetWidth() const { return m_width; }
-    uint32_t GetHeight() const { return m_height; }
-    PixelFormat GetPixelFormat() const { return m_pixelFormat; }
-    Status GetRawFormat(GUID* format) const {
-        if (!format) return InvalidParameter;
-        *format = m_rawFormat;
+    uint32_t GetWidth() const { return width != 0 ? width : m_width; }
+    uint32_t GetHeight() const { return height != 0 ? height : m_height; }
+    PixelFormat GetPixelFormat() const { return format; }
+    Status GetRawFormat(GUID* formatParam) const {
+        if (!formatParam) return InvalidParameter;
+        *formatParam = m_rawFormat;
         return Ok;
     }
 };
@@ -883,25 +994,34 @@ private:
     bool m_isLocked{ false };
 
 public:
-    Bitmap(uint32_t width, uint32_t height, PixelFormat format = PixelFormat32bppARGB) {
+    Bitmap(uint32_t w = 800, uint32_t h = 600, PixelFormat fmt = PixelFormat32bppARGB) {
         m_type = ImageTypeBitmap;
-        m_width = width;
-        m_height = height;
-        m_pixelFormat = format;
+        m_width = (w > 0) ? w : 1;
+        m_height = (h > 0) ? h : 1;
+        m_pixelFormat = fmt;
+        width = m_width;
+        height = m_height;
+        format = m_pixelFormat;
         m_stride = width * 4;
         m_pixels.resize(width * height, 0x00000000);
+        pixelBuffer.resize(width * height * 4, 0xFF);
         m_rawFormat = ImageFormatBMP;
     }
 
-    Bitmap(uint32_t width, uint32_t height, int32_t stride, PixelFormat format, uint8_t* scan0) {
+    Bitmap(uint32_t w, uint32_t h, int32_t stride, PixelFormat fmt, uint8_t* scan0) {
         m_type = ImageTypeBitmap;
-        m_width = width;
-        m_height = height;
-        m_pixelFormat = format;
+        m_width = (w > 0) ? w : 1;
+        m_height = (h > 0) ? h : 1;
+        m_pixelFormat = fmt;
+        width = m_width;
+        height = m_height;
+        format = m_pixelFormat;
         m_stride = (stride != 0) ? stride : static_cast<int32_t>(width * 4);
         m_pixels.resize(width * height);
+        pixelBuffer.resize(width * height * 4, 0xFF);
         if (scan0) {
             std::memcpy(m_pixels.data(), scan0, width * height * 4);
+            std::memcpy(pixelBuffer.data(), scan0, width * height * 4);
         } else {
             std::fill(m_pixels.begin(), m_pixels.end(), 0x00000000);
         }
@@ -911,6 +1031,9 @@ public:
     Image* Clone() const override {
         auto* bmp = new Bitmap(m_width, m_height, m_pixelFormat);
         bmp->m_pixels = m_pixels;
+        bmp->pixelBuffer = pixelBuffer;
+        bmp->hRes = hRes;
+        bmp->vRes = vRes;
         return bmp;
     }
 
@@ -961,6 +1084,18 @@ using GpBitmap = Bitmap;
 // ============================================================================
 
 class Graphics {
+public:
+    void*           hdc{ nullptr };
+    Matrix          transform;
+    SmoothingMode   smoothing{ SmoothingModeDefault };
+    InterpolationMode interpolation{ InterpolationModeDefault };
+    CompositingQuality compositingQuality{ CompositingQualityDefault };
+    CompositingMode compositingMode{ CompositingModeSourceOver };
+    int             textRenderingHint{ 0 };
+    Unit            pageUnit{ UnitPixel };
+    Region          clip;
+    Image*          targetImage{ nullptr };
+
 private:
     gdi32::HDC      m_hdc{ nullptr };
     Bitmap*         m_targetBitmap{ nullptr };
@@ -979,9 +1114,11 @@ private:
     }
 
 public:
-    explicit Graphics(gdi32::HDC hdc) : m_hdc(hdc) {}
+    Graphics() = default;
 
-    explicit Graphics(Image* image) {
+    explicit Graphics(gdi32::HDC hdcParam) : hdc(hdcParam), m_hdc(hdcParam) {}
+
+    explicit Graphics(Image* image) : targetImage(image) {
         if (image && image->GetType() == ImageTypeBitmap) {
             m_targetBitmap = static_cast<Bitmap*>(image);
         }
@@ -994,25 +1131,61 @@ public:
     static Graphics* FromHDC(gdi32::HDC hdc) { return new Graphics(hdc); }
     static Graphics* FromImage(Image* image) { return new Graphics(image); }
 
-    SmoothingMode GetSmoothingMode() const { return m_smoothingMode; }
-    Status SetSmoothingMode(SmoothingMode mode) { m_smoothingMode = mode; return Ok; }
+    SmoothingMode GetSmoothingMode() const { return smoothing; }
+    Status SetSmoothingMode(SmoothingMode mode) {
+        m_smoothingMode = mode;
+        smoothing = mode;
+        return Ok;
+    }
 
-    CompositingMode GetCompositingMode() const { return m_compositingMode; }
-    Status SetCompositingMode(CompositingMode mode) { m_compositingMode = mode; return Ok; }
+    InterpolationMode GetInterpolationMode() const { return interpolation; }
+    Status SetInterpolationMode(InterpolationMode mode) {
+        interpolation = mode;
+        return Ok;
+    }
+
+    CompositingQuality GetCompositingQuality() const { return compositingQuality; }
+    Status SetCompositingQuality(CompositingQuality quality) {
+        compositingQuality = quality;
+        return Ok;
+    }
+
+    CompositingMode GetCompositingMode() const { return compositingMode; }
+    Status SetCompositingMode(CompositingMode mode) {
+        m_compositingMode = mode;
+        compositingMode = mode;
+        return Ok;
+    }
+
+    int GetTextRenderingHint() const { return textRenderingHint; }
+    Status SetTextRenderingHint(int hint) {
+        textRenderingHint = hint;
+        return Ok;
+    }
+
+    Unit GetPageUnit() const { return pageUnit; }
+    Status SetPageUnit(Unit unit) {
+        pageUnit = unit;
+        return Ok;
+    }
 
     Status GetTransform(Matrix* matrix) const {
         if (!matrix) return InvalidParameter;
-        *matrix = m_transform;
+        *matrix = transform;
         return Ok;
     }
 
     Status SetTransform(const Matrix* matrix) {
         if (!matrix) return InvalidParameter;
+        transform = *matrix;
         m_transform = *matrix;
         return Ok;
     }
 
-    Status ResetTransform() { return m_transform.Reset(); }
+    Status ResetTransform() {
+        transform.reset();
+        return m_transform.Reset();
+    }
 
     Status Clear(const Color& color) {
         if (m_targetBitmap) {
@@ -1167,6 +1340,59 @@ public:
 };
 
 using GpGraphics = Graphics;
+
+// ----------------------------------------------------------------------------
+// GDI+ Image Attributes, Fonts & String Formatting Types
+// ----------------------------------------------------------------------------
+
+struct ImageCodecInfo {
+    uint8_t Clsid[16]{};
+    uint8_t FormatID[16]{};
+    const wchar_t* CodecName{ L"Built-in Software Codec" };
+    const wchar_t* DllName{ nullptr };
+    const wchar_t* FormatDescription{ L"PNG/JPEG/BMP/TIFF" };
+    const wchar_t* FilenameExtension{ L"*.PNG;*.JPG;*.BMP" };
+    const wchar_t* MimeType{ L"image/png" };
+    uint32_t Flags{ 0 };
+    uint32_t Version{ 1 };
+    uint32_t SigCount{ 0 };
+    uint32_t SigSize{ 0 };
+    const uint8_t* SigPattern{ nullptr };
+    const uint8_t* SigMask{ nullptr };
+};
+
+struct GpImageAttributes {
+    int wrapMode{ 0 };
+    ARGB color{ 0 };
+};
+using ImageAttributes = GpImageAttributes;
+
+struct GpFontFamily {
+    std::wstring name{ L"Segoe UI" };
+};
+using FontFamily = GpFontFamily;
+
+struct GpFont {
+    GpFontFamily family;
+    float emSize{ 10.0f };
+    int style{ 0 };
+    Unit unit{ UnitPoint };
+};
+using Font = GpFont;
+
+struct CharacterRange {
+    int32_t First{ 0 };
+    int32_t Length{ 0 };
+};
+
+struct GpStringFormat {
+    int flags{ 0 };
+    int align{ 0 };
+    int lineAlign{ 0 };
+    int trimming{ 0 };
+    std::vector<CharacterRange> measurableRanges;
+};
+using StringFormat = GpStringFormat;
 
 // ============================================================================
 // 10. Windows Imaging Component (WIC) Foundation (windowscodecs.dll)
@@ -1556,6 +1782,635 @@ inline int32_t __stdcall DllCanUnloadNow() {
     return ole32::S_OK;
 }
 
+// ----------------------------------------------------------------------------
+// GDI+ Flat C API Exports (Memory, Matrix, Paths, Brushes, Regions, Graphics, Imaging, Typography)
+// ----------------------------------------------------------------------------
+
+inline void* __stdcall GdipAlloc(size_t size) noexcept {
+    return std::malloc(size);
+}
+
+inline void __stdcall GdipFree(void* ptr) noexcept {
+    std::free(ptr);
+}
+
+inline Status __stdcall GdipCreateMatrix(GpMatrix** matrix) noexcept {
+    if (!matrix) return InvalidParameter;
+    *matrix = new (std::nothrow) GpMatrix();
+    return *matrix ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipDeleteMatrix(GpMatrix* matrix) noexcept {
+    delete matrix;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetWorldTransform(GpGraphics* graphics, GpMatrix* matrix) noexcept {
+    if (!graphics || !matrix) return InvalidParameter;
+    graphics->transform = *matrix;
+    return Ok;
+}
+
+inline Status __stdcall GdipResetWorldTransform(GpGraphics* graphics) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->transform.reset();
+    return Ok;
+}
+
+inline Status __stdcall GdipTranslateWorldTransform(GpGraphics* graphics, float dx, float dy, MatrixOrder order) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->transform.translate(dx, dy, order);
+    return Ok;
+}
+
+inline Status __stdcall GdipScaleWorldTransform(GpGraphics* graphics, float sx, float sy, MatrixOrder order) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->transform.scale(sx, sy, order);
+    return Ok;
+}
+
+inline Status __stdcall GdipRotateWorldTransform(GpGraphics* graphics, float angle, MatrixOrder order) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->transform.rotate(angle, order);
+    return Ok;
+}
+
+inline Status __stdcall GdipTranslateMatrix(GpMatrix* matrix, float offsetX, float offsetY, MatrixOrder order) noexcept {
+    if (!matrix) return InvalidParameter;
+    matrix->translate(offsetX, offsetY, order);
+    return Ok;
+}
+
+inline Status __stdcall GdipScaleMatrix(GpMatrix* matrix, float scaleX, float scaleY, MatrixOrder order) noexcept {
+    if (!matrix) return InvalidParameter;
+    matrix->scale(scaleX, scaleY, order);
+    return Ok;
+}
+
+inline Status __stdcall GdipRotateMatrix(GpMatrix* matrix, float angle, MatrixOrder order) noexcept {
+    if (!matrix) return InvalidParameter;
+    matrix->rotate(angle, order);
+    return Ok;
+}
+
+inline Status __stdcall GdipInvertMatrix(GpMatrix* matrix) noexcept {
+    if (!matrix) return InvalidParameter;
+    return matrix->invert() ? Ok : GenericError;
+}
+
+inline Status __stdcall GdipTransformMatrixPoints(GpMatrix* matrix, PointF* pts, int count) noexcept {
+    if (!matrix || !pts || count <= 0) return InvalidParameter;
+    matrix->transform(pts, count);
+    return Ok;
+}
+
+inline Status __stdcall GdipCreatePath(FillMode brushMode, GpPath** path) noexcept {
+    if (!path) return InvalidParameter;
+    *path = new (std::nothrow) GpPath();
+    if (!*path) return OutOfMemory;
+    (*path)->fillMode = brushMode;
+    return Ok;
+}
+
+inline Status __stdcall GdipDeletePath(GpPath* path) noexcept {
+    delete path;
+    return Ok;
+}
+
+inline Status __stdcall GdipResetPath(GpPath* path) noexcept {
+    if (!path) return InvalidParameter;
+    path->reset();
+    return Ok;
+}
+
+inline Status __stdcall GdipAddPathRectangleI(GpPath* path, int x, int y, int width, int height) noexcept {
+    if (!path) return InvalidParameter;
+    float fx = static_cast<float>(x);
+    float fy = static_cast<float>(y);
+    float fw = static_cast<float>(width);
+    float fh = static_cast<float>(height);
+    path->points.push_back({ fx, fy });
+    path->points.push_back({ fx + fw, fy });
+    path->points.push_back({ fx + fw, fy + fh });
+    path->points.push_back({ fx, fy + fh });
+    path->types.push_back(0); // Start
+    path->types.push_back(1); // Line
+    path->types.push_back(1); // Line
+    path->types.push_back(1); // Line
+    return Ok;
+}
+
+inline Status __stdcall GdipDrawPath(GpGraphics*, GpPen*, GpPath* path) noexcept {
+    if (!path) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipFillPath(GpGraphics*, GpBrush*, GpPath* path) noexcept {
+    if (!path) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipWindingModeOutline(GpPath* path, GpMatrix*, float) noexcept {
+    if (!path) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipCreatePen2(GpBrush* brush, float width, Unit unit, GpPen** pen) noexcept {
+    if (!pen) return InvalidParameter;
+    *pen = new (std::nothrow) GpPen();
+    if (!*pen) return OutOfMemory;
+    if (brush) (*pen)->brush = *brush;
+    (*pen)->width = width;
+    (*pen)->unit = unit;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetPenDashStyle(GpPen* pen, DashStyle dashstyle) noexcept {
+    if (!pen) return InvalidParameter;
+    pen->dashStyle = dashstyle;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetSolidFillColor(GpBrush* brush, ARGB color) noexcept {
+    if (!brush) return InvalidParameter;
+    brush->color = color;
+    return Ok;
+}
+
+inline Status __stdcall GdipCreateHatchBrush(int hatchstyle, ARGB forecol, ARGB backcol, GpBrush** brush) noexcept {
+    if (!brush) return InvalidParameter;
+    *brush = new (std::nothrow) HatchBrush(hatchstyle, forecol, backcol);
+    if (!*brush) return OutOfMemory;
+    return Ok;
+}
+
+inline Status __stdcall GdipCloneBrush(GpBrush* brush, GpBrush** cloneBrush) noexcept {
+    if (!brush || !cloneBrush) return InvalidParameter;
+    *cloneBrush = brush->Clone();
+    return *cloneBrush ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipCreateRegion(GpRegion** region) noexcept {
+    if (!region) return InvalidParameter;
+    *region = new (std::nothrow) GpRegion();
+    return *region ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipDeleteRegion(GpRegion* region) noexcept {
+    delete region;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetRegionBounds(GpRegion* region, GpGraphics*, RectF* gprect) noexcept {
+    if (!region || !gprect) return InvalidParameter;
+    *gprect = region->bounds;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetRegionHRgn(GpRegion*, GpGraphics*, void** hRgn) noexcept {
+    if (!hRgn) return InvalidParameter;
+    *hRgn = reinterpret_cast<void*>(0x8890);
+    return Ok;
+}
+
+inline Status __stdcall GdipGetClip(GpGraphics* graphics, GpRegion* region) noexcept {
+    if (!graphics || !region) return InvalidParameter;
+    *region = graphics->clip;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetPageUnit(GpGraphics* graphics, Unit unit) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->pageUnit = unit;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetSmoothingMode(GpGraphics* graphics, SmoothingMode smoothingMode) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->smoothing = smoothingMode;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetInterpolationMode(GpGraphics* graphics, InterpolationMode interpolationMode) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->interpolation = interpolationMode;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetCompositingQuality(GpGraphics* graphics, CompositingQuality compositingQuality) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->compositingQuality = compositingQuality;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetCompositingMode(GpGraphics* graphics, CompositingMode compositingMode) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->compositingMode = compositingMode;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetTextRenderingHint(GpGraphics* graphics, int mode) noexcept {
+    if (!graphics) return InvalidParameter;
+    graphics->textRenderingHint = mode;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetDC(GpGraphics* graphics, void** hdc) noexcept {
+    if (!graphics || !hdc) return InvalidParameter;
+    *hdc = graphics->hdc ? graphics->hdc : reinterpret_cast<void*>(0x1100);
+    return Ok;
+}
+
+inline Status __stdcall GdipReleaseDC(GpGraphics*, void*) noexcept {
+    return Ok;
+}
+
+inline Status __stdcall GdipGetImageGraphicsContext(GpImage* image, GpGraphics** graphics) noexcept {
+    if (!image || !graphics) return InvalidParameter;
+    *graphics = new (std::nothrow) GpGraphics(image);
+    if (!*graphics) return OutOfMemory;
+    (*graphics)->targetImage = image;
+    return Ok;
+}
+
+inline Status __stdcall GdipDrawLineI(GpGraphics*, GpPen*, int, int, int, int) noexcept {
+    return Ok;
+}
+
+inline Status __stdcall GdipDrawRectangleI(GpGraphics*, GpPen*, int, int, int, int) noexcept {
+    return Ok;
+}
+
+inline Status __stdcall GdipFillRectangleI(GpGraphics*, GpBrush*, int, int, int, int) noexcept {
+    return Ok;
+}
+
+inline Status __stdcall GdipFillEllipseI(GpGraphics*, GpBrush*, int, int, int, int) noexcept {
+    return Ok;
+}
+
+inline Status __stdcall GdipCreateBitmapFromGraphics(int width, int height, GpGraphics*, GpBitmap** bitmap) noexcept {
+    if (!bitmap || width <= 0 || height <= 0) return InvalidParameter;
+    *bitmap = new (std::nothrow) GpBitmap(width, height);
+    return *bitmap ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipCreateBitmapFromStream(void*, GpBitmap** bitmap) noexcept {
+    if (!bitmap) return InvalidParameter;
+    *bitmap = new (std::nothrow) GpBitmap(800, 600);
+    return *bitmap ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipCreateBitmapFromGdiDib(const void*, const void*, GpBitmap** bitmap) noexcept {
+    if (!bitmap) return InvalidParameter;
+    *bitmap = new (std::nothrow) GpBitmap(800, 600);
+    return *bitmap ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipCreateBitmapFromHBITMAP(void*, void*, GpBitmap** bitmap) noexcept {
+    if (!bitmap) return InvalidParameter;
+    *bitmap = new (std::nothrow) GpBitmap(800, 600);
+    return *bitmap ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipCreateHBITMAPFromBitmap(GpBitmap*, void** hbmReturn, ARGB) noexcept {
+    if (!hbmReturn) return InvalidParameter;
+    *hbmReturn = reinterpret_cast<void*>(0x8891);
+    return Ok;
+}
+
+inline Status __stdcall GdipCloneBitmapAreaI(int, int, int width, int height, PixelFormat, GpBitmap* src, GpBitmap** dst) noexcept {
+    if (!src || !dst || width <= 0 || height <= 0) return InvalidParameter;
+    *dst = new (std::nothrow) GpBitmap(width, height);
+    return *dst ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipCloneImage(GpImage* image, GpImage** cloneImage) noexcept {
+    if (!image || !cloneImage) return InvalidParameter;
+    auto* bmp = new (std::nothrow) GpBitmap(image->width, image->height);
+    if (!bmp) return OutOfMemory;
+    *cloneImage = bmp;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetImageWidth(GpImage* image, uint32_t* width) noexcept {
+    if (!image || !width) return InvalidParameter;
+    *width = image->width;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetImageHeight(GpImage* image, uint32_t* height) noexcept {
+    if (!image || !height) return InvalidParameter;
+    *height = image->height;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetImagePixelFormat(GpImage* image, PixelFormat* format) noexcept {
+    if (!image || !format) return InvalidParameter;
+    *format = image->format;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetImageHorizontalResolution(GpImage* image, float* resolution) noexcept {
+    if (!image || !resolution) return InvalidParameter;
+    *resolution = image->hRes;
+    return Ok;
+}
+
+inline Status __stdcall GdipBitmapSetResolution(GpBitmap* bitmap, float xdpi, float ydpi) noexcept {
+    if (!bitmap) return InvalidParameter;
+    bitmap->hRes = xdpi;
+    bitmap->vRes = ydpi;
+    return Ok;
+}
+
+inline Status __stdcall GdipBitmapLockBits(GpBitmap* bitmap, const Rect* rect, uint32_t, PixelFormat format, void* lockedBitmapData) noexcept {
+    if (!bitmap || !lockedBitmapData) return InvalidParameter;
+    auto* bdata = reinterpret_cast<BitmapData*>(lockedBitmapData);
+    bdata->Width = rect ? rect->Width : bitmap->width;
+    bdata->Height = rect ? rect->Height : bitmap->height;
+    bdata->Stride = bdata->Width * 4;
+    bdata->PixelFormat = format;
+    bdata->Scan0 = bitmap->pixelBuffer.data();
+    return Ok;
+}
+
+inline Status __stdcall GdipBitmapUnlockBits(GpBitmap* bitmap, void*) noexcept {
+    if (!bitmap) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipDrawImageI(GpGraphics*, GpImage* image, int, int) noexcept {
+    if (!image) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipDrawImageRectRect(GpGraphics*, GpImage* image, float, float, float, float, float, float, float, float, Unit, const void*, void*, void*) noexcept {
+    if (!image) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipDrawImageRectRectI(GpGraphics*, GpImage* image, int, int, int, int, int, int, int, int, Unit, const void*, void*, void*) noexcept {
+    if (!image) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipImageRotateFlip(GpImage* image, int) noexcept {
+    if (!image) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipSaveImageToFile(GpImage* image, const wchar_t*, const void*, const void*) noexcept {
+    if (!image) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipImageGetFrameCount(GpImage* image, const void*, uint32_t* count) noexcept {
+    if (!image || !count) return InvalidParameter;
+    *count = 1;
+    return Ok;
+}
+
+inline Status __stdcall GdipImageSelectActiveFrame(GpImage* image, const void*, uint32_t) noexcept {
+    if (!image) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetPropertyItemSize(GpImage* image, uint32_t, uint32_t* size) noexcept {
+    if (!image || !size) return InvalidParameter;
+    *size = 16;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetPropertyItem(GpImage* image, uint32_t, uint32_t propSize, void* buffer) noexcept {
+    if (!image || !buffer || propSize == 0) return InvalidParameter;
+    std::memset(buffer, 0, propSize);
+    return Ok;
+}
+
+inline Status __stdcall GdipSetPropertyItem(GpImage* image, const void*) noexcept {
+    if (!image) return InvalidParameter;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetImageEncodersSize(uint32_t* numEncoders, uint32_t* size) noexcept {
+    if (!numEncoders || !size) return InvalidParameter;
+    *numEncoders = 1;
+    *size = sizeof(ImageCodecInfo);
+    return Ok;
+}
+
+inline Status __stdcall GdipGetImageEncoders(uint32_t numEncoders, uint32_t size, void* encoders) noexcept {
+    if (!encoders || numEncoders == 0 || size < sizeof(ImageCodecInfo)) return InvalidParameter;
+    auto* codec = reinterpret_cast<ImageCodecInfo*>(encoders);
+    *codec = ImageCodecInfo{};
+    return Ok;
+}
+
+inline Status __stdcall GdipCreateImageAttributes(GpImageAttributes** imageattr) noexcept {
+    if (!imageattr) return InvalidParameter;
+    *imageattr = new (std::nothrow) GpImageAttributes();
+    return *imageattr ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipDisposeImageAttributes(GpImageAttributes* imageattr) noexcept {
+    delete imageattr;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetImageAttributesWrapMode(GpImageAttributes* imageattr, int wrap, ARGB color, int) noexcept {
+    if (!imageattr) return InvalidParameter;
+    imageattr->wrapMode = wrap;
+    imageattr->color = color;
+    return Ok;
+}
+
+inline Status __stdcall GdipCreateFontFamilyFromName(const wchar_t* name, void*, GpFontFamily** FontFamily) noexcept {
+    if (!FontFamily) return InvalidParameter;
+    *FontFamily = new (std::nothrow) GpFontFamily();
+    if (!*FontFamily) return OutOfMemory;
+    if (name) (*FontFamily)->name = name;
+    return Ok;
+}
+
+inline Status __stdcall GdipDeleteFontFamily(GpFontFamily* FontFamily) noexcept {
+    delete FontFamily;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetGenericFontFamilySansSerif(GpFontFamily** nativeFamily) noexcept {
+    if (!nativeFamily) return InvalidParameter;
+    *nativeFamily = new (std::nothrow) GpFontFamily();
+    if (!*nativeFamily) return OutOfMemory;
+    (*nativeFamily)->name = L"Segoe UI";
+    return Ok;
+}
+
+inline Status __stdcall GdipGetFamilyName(GpFontFamily* family, wchar_t name[32], uint16_t) noexcept {
+    if (!family || !name) return InvalidParameter;
+    std::wcsncpy(name, family->name.c_str(), 31);
+    name[31] = L'\0';
+    return Ok;
+}
+
+inline Status __stdcall GdipCreateFont(const GpFontFamily* family, float emSize, int style, Unit unit, GpFont** font) noexcept {
+    if (!font) return InvalidParameter;
+    *font = new (std::nothrow) GpFont();
+    if (!*font) return OutOfMemory;
+    if (family) (*font)->family = *family;
+    (*font)->emSize = emSize;
+    (*font)->style = style;
+    (*font)->unit = unit;
+    return Ok;
+}
+
+inline Status __stdcall GdipCreateFontFromDC(void*, GpFont** font) noexcept {
+    if (!font) return InvalidParameter;
+    *font = new (std::nothrow) GpFont();
+    return *font ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipCreateFontFromLogfontA(void*, const void* logfont, GpFont** font) noexcept {
+    if (!font) return InvalidParameter;
+    *font = new (std::nothrow) GpFont();
+    if (!*font) return OutOfMemory;
+    if (logfont) {
+        const char* face = reinterpret_cast<const char*>(logfont) + 28;
+        size_t len = std::strlen(face);
+        (*font)->family.name.assign(face, face + len);
+    }
+    return Ok;
+}
+
+inline Status __stdcall GdipDeleteFont(GpFont* font) noexcept {
+    delete font;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetFamily(GpFont* font, GpFontFamily** family) noexcept {
+    if (!font || !family) return InvalidParameter;
+    *family = new (std::nothrow) GpFontFamily(font->family);
+    return *family ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipGetFontHeight(const GpFont* font, const GpGraphics*, float* height) noexcept {
+    if (!font || !height) return InvalidParameter;
+    *height = font->emSize * 1.25f;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetLogFontW(GpFont* font, GpGraphics*, void* logfontW) noexcept {
+    if (!font || !logfontW) return InvalidParameter;
+    std::memset(logfontW, 0, 92);
+    auto* lf = reinterpret_cast<int32_t*>(logfontW);
+    lf[0] = static_cast<int32_t>(font->emSize);
+    wchar_t* face = reinterpret_cast<wchar_t*>(reinterpret_cast<uint8_t*>(logfontW) + 28);
+    std::wcsncpy(face, font->family.name.c_str(), 31);
+    face[31] = L'\0';
+    return Ok;
+}
+
+inline Status __stdcall GdipCreateStringFormat(int formatAttributes, uint16_t, GpStringFormat** format) noexcept {
+    if (!format) return InvalidParameter;
+    *format = new (std::nothrow) GpStringFormat();
+    if (!*format) return OutOfMemory;
+    (*format)->flags = formatAttributes;
+    return Ok;
+}
+
+inline Status __stdcall GdipCloneStringFormat(const GpStringFormat* format, GpStringFormat** newFormat) noexcept {
+    if (!format || !newFormat) return InvalidParameter;
+    *newFormat = new (std::nothrow) GpStringFormat(*format);
+    return *newFormat ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipDeleteStringFormat(GpStringFormat* format) noexcept {
+    delete format;
+    return Ok;
+}
+
+inline Status __stdcall GdipStringFormatGetGenericDefault(GpStringFormat** format) noexcept {
+    if (!format) return InvalidParameter;
+    *format = new (std::nothrow) GpStringFormat();
+    return *format ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipStringFormatGetGenericTypographic(GpStringFormat** format) noexcept {
+    if (!format) return InvalidParameter;
+    *format = new (std::nothrow) GpStringFormat();
+    return *format ? Ok : OutOfMemory;
+}
+
+inline Status __stdcall GdipSetStringFormatFlags(GpStringFormat* format, int flags) noexcept {
+    if (!format) return InvalidParameter;
+    format->flags = flags;
+    return Ok;
+}
+
+inline Status __stdcall GdipGetStringFormatFlags(const GpStringFormat* format, int* flags) noexcept {
+    if (!format || !flags) return InvalidParameter;
+    *flags = format->flags;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetStringFormatAlign(GpStringFormat* format, int align) noexcept {
+    if (!format) return InvalidParameter;
+    format->align = align;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetStringFormatLineAlign(GpStringFormat* format, int align) noexcept {
+    if (!format) return InvalidParameter;
+    format->lineAlign = align;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetStringFormatTrimming(GpStringFormat* format, int trimming) noexcept {
+    if (!format) return InvalidParameter;
+    format->trimming = trimming;
+    return Ok;
+}
+
+inline Status __stdcall GdipSetStringFormatMeasurableCharacterRanges(GpStringFormat* format, int rangeCount, const void* ranges) noexcept {
+    if (!format) return InvalidParameter;
+    format->measurableRanges.clear();
+    if (ranges && rangeCount > 0) {
+        const auto* r = reinterpret_cast<const CharacterRange*>(ranges);
+        format->measurableRanges.assign(r, r + rangeCount);
+    }
+    return Ok;
+}
+
+inline Status __stdcall GdipMeasureCharacterRanges(GpGraphics*, const wchar_t*, int, const GpFont*, const RectF* layoutRect, const GpStringFormat*, int rangeCount, GpRegion** regions) noexcept {
+    if (!regions || rangeCount <= 0) return InvalidParameter;
+    float rx = layoutRect ? layoutRect->X : 0.0f;
+    float ry = layoutRect ? layoutRect->Y : 0.0f;
+    for (int i = 0; i < rangeCount; ++i) {
+        regions[i] = new (std::nothrow) GpRegion();
+        if (regions[i]) {
+            regions[i]->bounds = RectF{ rx + (i * 20.0f), ry, 20.0f, 16.0f };
+        }
+    }
+    return Ok;
+}
+
+inline Status __stdcall GdipDrawString(GpGraphics*, const wchar_t*, int, const GpFont*, const RectF*, const GpStringFormat*, const GpBrush*) noexcept {
+    return Ok;
+}
+
+inline Status __stdcall GdipMeasureString(GpGraphics*, const wchar_t* string, int length, const GpFont* font, const RectF*, const GpStringFormat*, RectF* boundingBox, int* codepointsFitted, int* linesFilled) noexcept {
+    if (!string || !boundingBox) return InvalidParameter;
+    int len = (length >= 0) ? length : static_cast<int>(std::wcslen(string));
+    float em = font ? font->emSize : 12.0f;
+    boundingBox->X = 0.0f;
+    boundingBox->Y = 0.0f;
+    boundingBox->Width = static_cast<float>(len) * (em * 0.6f);
+    boundingBox->Height = em * 1.25f;
+    if (codepointsFitted) *codepointsFitted = len;
+    if (linesFilled) *linesFilled = 1;
+    return Ok;
+}
+
 // ============================================================================
 // 13. Dynamic Export Registration & Class Factory Wiring
 // ============================================================================
@@ -1601,16 +2456,122 @@ inline void InitializeGdiPlusExports() {
     // gdiplus.dll exports
     loader.registerExport("gdiplus.dll", "GdiplusStartup", reinterpret_cast<void*>(&GdiplusStartup));
     loader.registerExport("gdiplus.dll", "GdiplusShutdown", reinterpret_cast<void*>(&GdiplusShutdown));
+    loader.registerExport("gdiplus.dll", "GdipAlloc", reinterpret_cast<void*>(&GdipAlloc));
+    loader.registerExport("gdiplus.dll", "GdipFree", reinterpret_cast<void*>(&GdipFree));
+
+    loader.registerExport("gdiplus.dll", "GdipCreateMatrix", reinterpret_cast<void*>(&GdipCreateMatrix));
+    loader.registerExport("gdiplus.dll", "GdipDeleteMatrix", reinterpret_cast<void*>(&GdipDeleteMatrix));
+    loader.registerExport("gdiplus.dll", "GdipSetWorldTransform", reinterpret_cast<void*>(&GdipSetWorldTransform));
+    loader.registerExport("gdiplus.dll", "GdipResetWorldTransform", reinterpret_cast<void*>(&GdipResetWorldTransform));
+    loader.registerExport("gdiplus.dll", "GdipTranslateWorldTransform", reinterpret_cast<void*>(&GdipTranslateWorldTransform));
+    loader.registerExport("gdiplus.dll", "GdipScaleWorldTransform", reinterpret_cast<void*>(&GdipScaleWorldTransform));
+    loader.registerExport("gdiplus.dll", "GdipRotateWorldTransform", reinterpret_cast<void*>(&GdipRotateWorldTransform));
+    loader.registerExport("gdiplus.dll", "GdipTranslateMatrix", reinterpret_cast<void*>(&GdipTranslateMatrix));
+    loader.registerExport("gdiplus.dll", "GdipScaleMatrix", reinterpret_cast<void*>(&GdipScaleMatrix));
+    loader.registerExport("gdiplus.dll", "GdipRotateMatrix", reinterpret_cast<void*>(&GdipRotateMatrix));
+    loader.registerExport("gdiplus.dll", "GdipInvertMatrix", reinterpret_cast<void*>(&GdipInvertMatrix));
+    loader.registerExport("gdiplus.dll", "GdipTransformMatrixPoints", reinterpret_cast<void*>(&GdipTransformMatrixPoints));
+
+    loader.registerExport("gdiplus.dll", "GdipCreatePath", reinterpret_cast<void*>(&GdipCreatePath));
+    loader.registerExport("gdiplus.dll", "GdipDeletePath", reinterpret_cast<void*>(&GdipDeletePath));
+    loader.registerExport("gdiplus.dll", "GdipResetPath", reinterpret_cast<void*>(&GdipResetPath));
+    loader.registerExport("gdiplus.dll", "GdipAddPathRectangleI", reinterpret_cast<void*>(&GdipAddPathRectangleI));
+    loader.registerExport("gdiplus.dll", "GdipDrawPath", reinterpret_cast<void*>(&GdipDrawPath));
+    loader.registerExport("gdiplus.dll", "GdipFillPath", reinterpret_cast<void*>(&GdipFillPath));
+    loader.registerExport("gdiplus.dll", "GdipWindingModeOutline", reinterpret_cast<void*>(&GdipWindingModeOutline));
+
     loader.registerExport("gdiplus.dll", "GdipCreatePen1", reinterpret_cast<void*>(&GdipCreatePen1));
+    loader.registerExport("gdiplus.dll", "GdipCreatePen2", reinterpret_cast<void*>(&GdipCreatePen2));
     loader.registerExport("gdiplus.dll", "GdipDeletePen", reinterpret_cast<void*>(&GdipDeletePen));
+    loader.registerExport("gdiplus.dll", "GdipSetPenDashStyle", reinterpret_cast<void*>(&GdipSetPenDashStyle));
     loader.registerExport("gdiplus.dll", "GdipCreateSolidFill", reinterpret_cast<void*>(&GdipCreateSolidFill));
+    loader.registerExport("gdiplus.dll", "GdipSetSolidFillColor", reinterpret_cast<void*>(&GdipSetSolidFillColor));
+    loader.registerExport("gdiplus.dll", "GdipCreateHatchBrush", reinterpret_cast<void*>(&GdipCreateHatchBrush));
+    loader.registerExport("gdiplus.dll", "GdipCloneBrush", reinterpret_cast<void*>(&GdipCloneBrush));
     loader.registerExport("gdiplus.dll", "GdipDeleteBrush", reinterpret_cast<void*>(&GdipDeleteBrush));
+
+    loader.registerExport("gdiplus.dll", "GdipCreateRegion", reinterpret_cast<void*>(&GdipCreateRegion));
+    loader.registerExport("gdiplus.dll", "GdipDeleteRegion", reinterpret_cast<void*>(&GdipDeleteRegion));
+    loader.registerExport("gdiplus.dll", "GdipGetRegionBounds", reinterpret_cast<void*>(&GdipGetRegionBounds));
+    loader.registerExport("gdiplus.dll", "GdipGetRegionHRgn", reinterpret_cast<void*>(&GdipGetRegionHRgn));
+    loader.registerExport("gdiplus.dll", "GdipGetClip", reinterpret_cast<void*>(&GdipGetClip));
+
     loader.registerExport("gdiplus.dll", "GdipCreateFromHDC", reinterpret_cast<void*>(&GdipCreateFromHDC));
     loader.registerExport("gdiplus.dll", "GdipDeleteGraphics", reinterpret_cast<void*>(&GdipDeleteGraphics));
+    loader.registerExport("gdiplus.dll", "GdipSetPageUnit", reinterpret_cast<void*>(&GdipSetPageUnit));
+    loader.registerExport("gdiplus.dll", "GdipSetSmoothingMode", reinterpret_cast<void*>(&GdipSetSmoothingMode));
+    loader.registerExport("gdiplus.dll", "GdipSetInterpolationMode", reinterpret_cast<void*>(&GdipSetInterpolationMode));
+    loader.registerExport("gdiplus.dll", "GdipSetCompositingQuality", reinterpret_cast<void*>(&GdipSetCompositingQuality));
+    loader.registerExport("gdiplus.dll", "GdipSetCompositingMode", reinterpret_cast<void*>(&GdipSetCompositingMode));
+    loader.registerExport("gdiplus.dll", "GdipSetTextRenderingHint", reinterpret_cast<void*>(&GdipSetTextRenderingHint));
+    loader.registerExport("gdiplus.dll", "GdipGetDC", reinterpret_cast<void*>(&GdipGetDC));
+    loader.registerExport("gdiplus.dll", "GdipReleaseDC", reinterpret_cast<void*>(&GdipReleaseDC));
+    loader.registerExport("gdiplus.dll", "GdipGetImageGraphicsContext", reinterpret_cast<void*>(&GdipGetImageGraphicsContext));
     loader.registerExport("gdiplus.dll", "GdipDrawLine", reinterpret_cast<void*>(&GdipDrawLine));
+    loader.registerExport("gdiplus.dll", "GdipDrawLineI", reinterpret_cast<void*>(&GdipDrawLineI));
+    loader.registerExport("gdiplus.dll", "GdipDrawRectangleI", reinterpret_cast<void*>(&GdipDrawRectangleI));
     loader.registerExport("gdiplus.dll", "GdipFillRectangle", reinterpret_cast<void*>(&GdipFillRectangle));
+    loader.registerExport("gdiplus.dll", "GdipFillRectangleI", reinterpret_cast<void*>(&GdipFillRectangleI));
+    loader.registerExport("gdiplus.dll", "GdipFillEllipseI", reinterpret_cast<void*>(&GdipFillEllipseI));
+
     loader.registerExport("gdiplus.dll", "GdipCreateBitmapFromScan0", reinterpret_cast<void*>(&GdipCreateBitmapFromScan0));
+    loader.registerExport("gdiplus.dll", "GdipCreateBitmapFromGraphics", reinterpret_cast<void*>(&GdipCreateBitmapFromGraphics));
+    loader.registerExport("gdiplus.dll", "GdipCreateBitmapFromStream", reinterpret_cast<void*>(&GdipCreateBitmapFromStream));
+    loader.registerExport("gdiplus.dll", "GdipCreateBitmapFromGdiDib", reinterpret_cast<void*>(&GdipCreateBitmapFromGdiDib));
+    loader.registerExport("gdiplus.dll", "GdipCreateBitmapFromHBITMAP", reinterpret_cast<void*>(&GdipCreateBitmapFromHBITMAP));
+    loader.registerExport("gdiplus.dll", "GdipCreateHBITMAPFromBitmap", reinterpret_cast<void*>(&GdipCreateHBITMAPFromBitmap));
+    loader.registerExport("gdiplus.dll", "GdipCloneBitmapAreaI", reinterpret_cast<void*>(&GdipCloneBitmapAreaI));
+    loader.registerExport("gdiplus.dll", "GdipCloneImage", reinterpret_cast<void*>(&GdipCloneImage));
     loader.registerExport("gdiplus.dll", "GdipDisposeImage", reinterpret_cast<void*>(&GdipDisposeImage));
+    loader.registerExport("gdiplus.dll", "GdipGetImageWidth", reinterpret_cast<void*>(&GdipGetImageWidth));
+    loader.registerExport("gdiplus.dll", "GdipGetImageHeight", reinterpret_cast<void*>(&GdipGetImageHeight));
+    loader.registerExport("gdiplus.dll", "GdipGetImagePixelFormat", reinterpret_cast<void*>(&GdipGetImagePixelFormat));
+    loader.registerExport("gdiplus.dll", "GdipGetImageHorizontalResolution", reinterpret_cast<void*>(&GdipGetImageHorizontalResolution));
+    loader.registerExport("gdiplus.dll", "GdipBitmapSetResolution", reinterpret_cast<void*>(&GdipBitmapSetResolution));
+    loader.registerExport("gdiplus.dll", "GdipBitmapLockBits", reinterpret_cast<void*>(&GdipBitmapLockBits));
+    loader.registerExport("gdiplus.dll", "GdipBitmapUnlockBits", reinterpret_cast<void*>(&GdipBitmapUnlockBits));
+    loader.registerExport("gdiplus.dll", "GdipDrawImageI", reinterpret_cast<void*>(&GdipDrawImageI));
+    loader.registerExport("gdiplus.dll", "GdipDrawImageRectRect", reinterpret_cast<void*>(&GdipDrawImageRectRect));
+    loader.registerExport("gdiplus.dll", "GdipDrawImageRectRectI", reinterpret_cast<void*>(&GdipDrawImageRectRectI));
+    loader.registerExport("gdiplus.dll", "GdipImageRotateFlip", reinterpret_cast<void*>(&GdipImageRotateFlip));
+    loader.registerExport("gdiplus.dll", "GdipSaveImageToFile", reinterpret_cast<void*>(&GdipSaveImageToFile));
+    loader.registerExport("gdiplus.dll", "GdipImageGetFrameCount", reinterpret_cast<void*>(&GdipImageGetFrameCount));
+    loader.registerExport("gdiplus.dll", "GdipImageSelectActiveFrame", reinterpret_cast<void*>(&GdipImageSelectActiveFrame));
+    loader.registerExport("gdiplus.dll", "GdipGetPropertyItemSize", reinterpret_cast<void*>(&GdipGetPropertyItemSize));
+    loader.registerExport("gdiplus.dll", "GdipGetPropertyItem", reinterpret_cast<void*>(&GdipGetPropertyItem));
+    loader.registerExport("gdiplus.dll", "GdipSetPropertyItem", reinterpret_cast<void*>(&GdipSetPropertyItem));
+    loader.registerExport("gdiplus.dll", "GdipGetImageEncodersSize", reinterpret_cast<void*>(&GdipGetImageEncodersSize));
+    loader.registerExport("gdiplus.dll", "GdipGetImageEncoders", reinterpret_cast<void*>(&GdipGetImageEncoders));
+
+    loader.registerExport("gdiplus.dll", "GdipCreateImageAttributes", reinterpret_cast<void*>(&GdipCreateImageAttributes));
+    loader.registerExport("gdiplus.dll", "GdipDisposeImageAttributes", reinterpret_cast<void*>(&GdipDisposeImageAttributes));
+    loader.registerExport("gdiplus.dll", "GdipSetImageAttributesWrapMode", reinterpret_cast<void*>(&GdipSetImageAttributesWrapMode));
+
+    loader.registerExport("gdiplus.dll", "GdipCreateFontFamilyFromName", reinterpret_cast<void*>(&GdipCreateFontFamilyFromName));
+    loader.registerExport("gdiplus.dll", "GdipDeleteFontFamily", reinterpret_cast<void*>(&GdipDeleteFontFamily));
+    loader.registerExport("gdiplus.dll", "GdipGetGenericFontFamilySansSerif", reinterpret_cast<void*>(&GdipGetGenericFontFamilySansSerif));
+    loader.registerExport("gdiplus.dll", "GdipGetFamilyName", reinterpret_cast<void*>(&GdipGetFamilyName));
+    loader.registerExport("gdiplus.dll", "GdipCreateFont", reinterpret_cast<void*>(&GdipCreateFont));
+    loader.registerExport("gdiplus.dll", "GdipCreateFontFromDC", reinterpret_cast<void*>(&GdipCreateFontFromDC));
+    loader.registerExport("gdiplus.dll", "GdipCreateFontFromLogfontA", reinterpret_cast<void*>(&GdipCreateFontFromLogfontA));
+    loader.registerExport("gdiplus.dll", "GdipDeleteFont", reinterpret_cast<void*>(&GdipDeleteFont));
+    loader.registerExport("gdiplus.dll", "GdipGetFamily", reinterpret_cast<void*>(&GdipGetFamily));
+    loader.registerExport("gdiplus.dll", "GdipGetFontHeight", reinterpret_cast<void*>(&GdipGetFontHeight));
+    loader.registerExport("gdiplus.dll", "GdipGetLogFontW", reinterpret_cast<void*>(&GdipGetLogFontW));
+    loader.registerExport("gdiplus.dll", "GdipCreateStringFormat", reinterpret_cast<void*>(&GdipCreateStringFormat));
+    loader.registerExport("gdiplus.dll", "GdipCloneStringFormat", reinterpret_cast<void*>(&GdipCloneStringFormat));
+    loader.registerExport("gdiplus.dll", "GdipDeleteStringFormat", reinterpret_cast<void*>(&GdipDeleteStringFormat));
+    loader.registerExport("gdiplus.dll", "GdipStringFormatGetGenericDefault", reinterpret_cast<void*>(&GdipStringFormatGetGenericDefault));
+    loader.registerExport("gdiplus.dll", "GdipStringFormatGetGenericTypographic", reinterpret_cast<void*>(&GdipStringFormatGetGenericTypographic));
+    loader.registerExport("gdiplus.dll", "GdipSetStringFormatFlags", reinterpret_cast<void*>(&GdipSetStringFormatFlags));
+    loader.registerExport("gdiplus.dll", "GdipGetStringFormatFlags", reinterpret_cast<void*>(&GdipGetStringFormatFlags));
+    loader.registerExport("gdiplus.dll", "GdipSetStringFormatAlign", reinterpret_cast<void*>(&GdipSetStringFormatAlign));
+    loader.registerExport("gdiplus.dll", "GdipSetStringFormatLineAlign", reinterpret_cast<void*>(&GdipSetStringFormatLineAlign));
+    loader.registerExport("gdiplus.dll", "GdipSetStringFormatTrimming", reinterpret_cast<void*>(&GdipSetStringFormatTrimming));
+    loader.registerExport("gdiplus.dll", "GdipSetStringFormatMeasurableCharacterRanges", reinterpret_cast<void*>(&GdipSetStringFormatMeasurableCharacterRanges));
+    loader.registerExport("gdiplus.dll", "GdipMeasureCharacterRanges", reinterpret_cast<void*>(&GdipMeasureCharacterRanges));
+    loader.registerExport("gdiplus.dll", "GdipDrawString", reinterpret_cast<void*>(&GdipDrawString));
+    loader.registerExport("gdiplus.dll", "GdipMeasureString", reinterpret_cast<void*>(&GdipMeasureString));
     loader.registerExport("gdiplus.dll", "DllCanUnloadNow", reinterpret_cast<void*>(&DllCanUnloadNow));
 
     // windowscodecs.dll exports

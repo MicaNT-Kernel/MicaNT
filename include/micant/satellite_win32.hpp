@@ -43,6 +43,7 @@
 #include "tsf.hpp"
 #include "ldr.hpp"
 #include "mpr.hpp"
+#include "gdiplus.hpp"
 #include "satellite_wiztree.hpp"
 #include "satellite_putty.hpp"
 #include "satellite_gdiplus.hpp"
@@ -147,7 +148,7 @@ inline void InitializeSatelliteWin32Exports() {
     putty::registerPuTTYExports(ldr);
 
     // GDI+ 2D Vector & Imaging Subsystem
-    gdiplus::InitializeGdiPlusSatelliteExports();
+    micant::gdiplus::InitializeGdiPlusExports();
 
     // SumatraPDF 3.6+ Subsystem Extensions
     sumatra::InitializeSumatraWin32Exports();
