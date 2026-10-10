@@ -53,6 +53,7 @@ Signed-off-by: Jane Doe <janedoe@microsoft.com>
 ## 3. Engineering & Architectural Standards
 
 - **Language Standard**: ISO C++23 (`-std=c++23` or `/std:c++latest`).
+- **Canonical Core NT Subsystems (No Satellite Files)**: All kernel and OS subsystem implementations, fixes, and symbol exports required for application compatibility must be made directly within canonical Core NT headers and subsystems (`kernel32.hpp`, `user32.hpp`, `gdi32.hpp`, `advapi32.hpp`, `ntdll.hpp`, `ws2_32.hpp`, etc.). Creating per-application "satellite" files, wrappers, or shims is strictly prohibited. Application compatibility is achieved exclusively by implementing standard Windows NT / Win32 subsystem APIs at the core level.
 - **Memory Safety & RAII**: Always use RAII, smart pointers (`std::unique_ptr`, `std::shared_ptr`), `std::span`, and atomic primitives. Naked owning pointers and raw un-checked buffers are strictly rejected.
 - **Zero Telemetry**: Under no circumstances will background telemetry, user tracking, or cloud surveillance hooks be accepted into MicaNT.
 - **Freestanding Modularity**: Subsystems must be decoupled, testable, and compile cleanly with both Clang and MSVC.
