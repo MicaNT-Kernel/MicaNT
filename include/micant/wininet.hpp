@@ -47,6 +47,8 @@ namespace micant::wininet {
 
 using HINTERNET = void*;
 using INTERNET_PORT = uint16_t;
+using win32::BOOL;
+using win32::DWORD;
 
 inline constexpr HINTERNET NULL_HINTERNET = nullptr;
 
@@ -1873,6 +1875,13 @@ inline HINTERNET __stdcall InternetOpenUrlW(HINTERNET /*hInternet*/, const wchar
     return reinterpret_cast<HINTERNET>(++s_hurl);
 }
 
+inline BOOL WINAPI InternetGetConnectedState(DWORD* lpdwFlags, DWORD /*dwReserved*/) noexcept {
+    if (lpdwFlags) {
+        *lpdwFlags = 0x01 | 0x02; // INTERNET_CONNECTION_MODEM | INTERNET_CONNECTION_LAN
+    }
+    return 1;
+}
+
 // ============================================================================
 // 11. Subsystem Export Registration
 // ============================================================================
@@ -1913,6 +1922,7 @@ inline void InitializeWinINetSubsystemExports() {
     ldr.registerExport("wininet.dll", "CommitUrlCacheEntryW", reinterpret_cast<void*>(CommitUrlCacheEntryW));
     ldr.registerExport("wininet.dll", "InternetGetLastResponseInfoA", reinterpret_cast<void*>(InternetGetLastResponseInfoA));
     ldr.registerExport("wininet.dll", "InternetOpenUrlW", reinterpret_cast<void*>(InternetOpenUrlW));
+    ldr.registerExport("wininet.dll", "InternetGetConnectedState", reinterpret_cast<void*>(InternetGetConnectedState));
 }
 
 } // namespace micant::wininet

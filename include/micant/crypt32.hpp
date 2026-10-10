@@ -1155,6 +1155,77 @@ inline win32::BOOL CertVerifyCertificateChainPolicy(void* /*pszPolicyOID*/, void
     return win32::TRUE;
 }
 
+inline win32::BOOL WINAPI CertGetCertificateChain(
+    void* /*hChainEngine*/,
+    void* /*pCertContext*/,
+    void* /*pTime*/,
+    void* /*hAdditionalStore*/,
+    void* /*pChainPara*/,
+    uint32_t /*dwFlags*/,
+    void* /*pvReserved*/,
+    void** ppChainContext
+) noexcept {
+    if (ppChainContext) {
+        static uint8_t dummyChain[64] = { 0 };
+        *ppChainContext = dummyChain;
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptDecodeObjectEx(
+    uint32_t /*dwCertEncodingType*/,
+    const char* /*lpszStructType*/,
+    const uint8_t* /*pbEncoded*/,
+    uint32_t /*cbEncoded*/,
+    uint32_t /*dwFlags*/,
+    void* /*pDecodePara*/,
+    void* /*pvStructInfo*/,
+    uint32_t* pcbStructInfo
+) noexcept {
+    if (pcbStructInfo) *pcbStructInfo = 64;
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI CryptHashCertificate(
+    uintptr_t /*hCryptProv*/,
+    uint32_t /*Algid*/,
+    uint32_t /*dwFlags*/,
+    const uint8_t* /*pbEncoded*/,
+    uint32_t /*cbEncoded*/,
+    uint8_t* pbComputedHash,
+    uint32_t* pcbComputedHash
+) noexcept {
+    if (pcbComputedHash) {
+        if (!pbComputedHash) {
+            *pcbComputedHash = 20; // SHA-1 length
+        } else {
+            std::memset(pbComputedHash, 0xAB, 20);
+            *pcbComputedHash = 20;
+        }
+    }
+    return win32::TRUE;
+}
+
+inline void* WINAPI CryptMsgOpenToDecode(
+    uint32_t /*dwMsgEncodingType*/,
+    uint32_t /*dwFlags*/,
+    uint32_t /*dwMsgType*/,
+    uintptr_t /*hCryptProv*/,
+    void* /*pRecipientInfo*/,
+    void* /*pStreamInfo*/
+) noexcept {
+    return reinterpret_cast<void*>(0x2000);
+}
+
+inline win32::BOOL WINAPI CryptMsgUpdate(
+    void* /*hCryptMsg*/,
+    const uint8_t* /*pbData*/,
+    uint32_t /*cbData*/,
+    win32::BOOL /*fFinal*/
+) noexcept {
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 5. Subsystem Export Registration
 // ============================================================================
@@ -1196,6 +1267,11 @@ inline void InitializeCrypt32SubsystemExports() {
     ldr.registerExport("crypt32.dll", "CertCreateCertificateChainEngine", reinterpret_cast<void*>(CertCreateCertificateChainEngine));
     ldr.registerExport("crypt32.dll", "CertFreeCertificateChainEngine", reinterpret_cast<void*>(CertFreeCertificateChainEngine));
     ldr.registerExport("crypt32.dll", "CertVerifyCertificateChainPolicy", reinterpret_cast<void*>(CertVerifyCertificateChainPolicy));
+    ldr.registerExport("crypt32.dll", "CertGetCertificateChain", reinterpret_cast<void*>(CertGetCertificateChain));
+    ldr.registerExport("crypt32.dll", "CryptDecodeObjectEx", reinterpret_cast<void*>(CryptDecodeObjectEx));
+    ldr.registerExport("crypt32.dll", "CryptHashCertificate", reinterpret_cast<void*>(CryptHashCertificate));
+    ldr.registerExport("crypt32.dll", "CryptMsgOpenToDecode", reinterpret_cast<void*>(CryptMsgOpenToDecode));
+    ldr.registerExport("crypt32.dll", "CryptMsgUpdate", reinterpret_cast<void*>(CryptMsgUpdate));
 }
 
 } // namespace micant::crypt32

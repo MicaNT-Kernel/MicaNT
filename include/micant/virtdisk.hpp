@@ -1271,6 +1271,20 @@ inline DWORD WINAPI GetStorageDependencyInformation(
         ObjectHandle, StorageDependencyInfoSize, StorageDependencyInfo, SizeUsed);
 }
 
+inline uint32_t WINAPI GetVirtualDiskOperationProgress(
+    void* /*VirtualDiskHandle*/,
+    void* /*Overlapped*/,
+    void* Progress
+) noexcept {
+    if (Progress) {
+        auto* p = reinterpret_cast<uint64_t*>(Progress);
+        p[0] = 0;   // ERROR_SUCCESS
+        p[1] = 100; // CurrentValue
+        p[2] = 100; // CompletionValue
+    }
+    return 0;
+}
+
 // ============================================================================
 // 5. Subsystem Export Registration Helper
 // ============================================================================
@@ -1297,6 +1311,7 @@ inline void InitializeVirtualDiskSubsystemExports() {
         loader.registerExport("virtdisk.dll", "AddVirtualDiskParent", reinterpret_cast<void*>(&AddVirtualDiskParent));
         loader.registerExport("virtdisk.dll", "MergeVirtualDisk", reinterpret_cast<void*>(&MergeVirtualDisk));
         loader.registerExport("virtdisk.dll", "GetStorageDependencyInformation", reinterpret_cast<void*>(&GetStorageDependencyInformation));
+        loader.registerExport("virtdisk.dll", "GetVirtualDiskOperationProgress", reinterpret_cast<void*>(&GetVirtualDiskOperationProgress));
 
         // 2. Register in VersionDatabase
         version::VersionDatabase::Instance().RegisterModule(

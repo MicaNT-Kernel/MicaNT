@@ -4405,6 +4405,227 @@ inline BOOL LocalFileTimeToFileTime(const void* lpLocalFileTime, void* lpFileTim
     return TRUE;
 }
 
+inline HANDLE WINAPI FindFirstVolumeA(char* lpszVolumeName, DWORD cchBufferLength) noexcept {
+    if (lpszVolumeName && cchBufferLength >= 50) {
+        std::snprintf(lpszVolumeName, cchBufferLength, "\\\\?\\Volume{a0000000-0000-0000-0000-000000000001}\\");
+        return reinterpret_cast<HANDLE>(0x3001);
+    }
+    return nullptr;
+}
+
+inline BOOL WINAPI FindNextVolumeA(HANDLE /*hFindVolume*/, char* /*lpszVolumeName*/, DWORD /*cchBufferLength*/) noexcept {
+    win32::SetLastError(18); // ERROR_NO_MORE_FILES
+    return FALSE;
+}
+
+inline BOOL WINAPI GetVolumeNameForVolumeMountPointA(
+    const char* /*lpszVolumeMountPoint*/,
+    char* lpszVolumeName,
+    DWORD cchBufferLength
+) noexcept {
+    if (lpszVolumeName && cchBufferLength >= 50) {
+        std::snprintf(lpszVolumeName, cchBufferLength, "\\\\?\\Volume{a0000000-0000-0000-0000-000000000001}\\");
+        return TRUE;
+    }
+    return FALSE;
+}
+
+inline BOOL WINAPI GetVolumePathNameA(
+    const char* /*lpszFileName*/,
+    char* lpszVolumePathName,
+    DWORD cchBufferLength
+) noexcept {
+    if (lpszVolumePathName && cchBufferLength >= 4) {
+        std::snprintf(lpszVolumePathName, cchBufferLength, "C:\\");
+        return TRUE;
+    }
+    return FALSE;
+}
+
+inline BOOL WINAPI GetVolumeInformationA(
+    const char* /*lpRootPathName*/,
+    char* lpVolumeNameBuffer,
+    DWORD nVolumeNameSize,
+    DWORD* lpVolumeSerialNumber,
+    DWORD* lpMaximumComponentLength,
+    DWORD* lpFileSystemFlags,
+    char* lpFileSystemNameBuffer,
+    DWORD nFileSystemNameSize
+) noexcept {
+    if (lpVolumeNameBuffer && nVolumeNameSize > 0) {
+        std::snprintf(lpVolumeNameBuffer, nVolumeNameSize, "MicaNT_System");
+    }
+    if (lpVolumeSerialNumber) *lpVolumeSerialNumber = 0x12345678;
+    if (lpMaximumComponentLength) *lpMaximumComponentLength = 255;
+    if (lpFileSystemFlags) *lpFileSystemFlags = 0x00000002 | 0x00000004 | 0x00000008; // CASE_PRESERVED, UNICODE, PERSISTENT_ACLS
+    if (lpFileSystemNameBuffer && nFileSystemNameSize > 0) {
+        std::snprintf(lpFileSystemNameBuffer, nFileSystemNameSize, "NTFS");
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI GetVolumeInformationByHandleW(
+    HANDLE /*hFile*/,
+    wchar_t* lpVolumeNameBuffer,
+    DWORD nVolumeNameSize,
+    DWORD* lpVolumeSerialNumber,
+    DWORD* lpMaximumComponentLength,
+    DWORD* lpFileSystemFlags,
+    wchar_t* lpFileSystemNameBuffer,
+    DWORD nFileSystemNameSize
+) noexcept {
+    if (lpVolumeNameBuffer && nVolumeNameSize > 0) {
+        std::wcsncpy(lpVolumeNameBuffer, L"MicaNT_Drive", nVolumeNameSize);
+    }
+    if (lpVolumeSerialNumber) *lpVolumeSerialNumber = 0x87654321;
+    if (lpMaximumComponentLength) *lpMaximumComponentLength = 255;
+    if (lpFileSystemFlags) *lpFileSystemFlags = 0x00000002 | 0x00000004 | 0x00000008;
+    if (lpFileSystemNameBuffer && nFileSystemNameSize > 0) {
+        std::wcsncpy(lpFileSystemNameBuffer, L"NTFS", nFileSystemNameSize);
+    }
+    return TRUE;
+}
+
+inline BOOL WINAPI SetVolumeMountPointA(const char* /*lpszVolumeMountPoint*/, const char* /*lpszVolumeName*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI DeleteVolumeMountPointA(const char* /*lpszVolumeMountPoint*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetVolumeLabelA(const char* /*lpRootPathName*/, const char* /*lpVolumeName*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI DefineDosDeviceA(DWORD /*dwFlags*/, const char* /*lpDeviceName*/, const char* /*lpTargetPath*/) noexcept {
+    return TRUE;
+}
+
+inline DWORD WINAPI QueryDosDeviceA(const char* /*lpDeviceName*/, char* lpTargetPath, DWORD ucchMax) noexcept {
+    if (lpTargetPath && ucchMax > 16) {
+        std::snprintf(lpTargetPath, ucchMax, "\\Device\\HarddiskVolume1");
+        return static_cast<DWORD>(std::strlen(lpTargetPath));
+    }
+    return 0;
+}
+
+inline BOOL WINAPI GetDiskFreeSpaceExA(
+    const char* /*lpDirectoryName*/,
+    uint64_t* lpFreeBytesAvailableToCaller,
+    uint64_t* lpTotalNumberOfBytes,
+    uint64_t* lpTotalNumberOfFreeBytes
+) noexcept {
+    constexpr uint64_t oneTB = 1099511627776ULL;
+    constexpr uint64_t freeBytes = 858993459200ULL; // 800 GB free
+    if (lpFreeBytesAvailableToCaller) *lpFreeBytesAvailableToCaller = freeBytes;
+    if (lpTotalNumberOfBytes) *lpTotalNumberOfBytes = oneTB;
+    if (lpTotalNumberOfFreeBytes) *lpTotalNumberOfFreeBytes = freeBytes;
+    return TRUE;
+}
+
+inline DWORD WINAPI GetLogicalDriveStringsA(DWORD nBufferLength, char* lpBuffer) noexcept {
+    const char drives[] = "C:\\\0D:\\\0";
+    constexpr DWORD reqSize = sizeof(drives);
+    if (lpBuffer && nBufferLength >= reqSize) {
+        std::memcpy(lpBuffer, drives, reqSize);
+        return reqSize - 1;
+    }
+    return reqSize;
+}
+
+inline BOOL WINAPI CancelIoEx(HANDLE /*hFile*/, void* /*lpOverlapped*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI CancelSynchronousIo(HANDLE /*hThread*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI GetOverlappedResultEx(
+    HANDLE /*hFile*/,
+    void* /*lpOverlapped*/,
+    DWORD* lpNumberOfBytesTransferred,
+    DWORD /*dwMilliseconds*/,
+    BOOL /*bAlertable*/
+) noexcept {
+    if (lpNumberOfBytesTransferred) *lpNumberOfBytesTransferred = 512;
+    return TRUE;
+}
+
+inline BOOL WINAPI SleepConditionVariableCS(
+    void* /*ConditionVariable*/,
+    void* /*CriticalSection*/,
+    DWORD /*dwMilliseconds*/
+) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI CreateSymbolicLinkW(const wchar_t* /*lpSymlinkFileName*/, const wchar_t* /*lpTargetFileName*/, DWORD /*dwFlags*/) noexcept {
+    return TRUE;
+}
+
+inline HWND WINAPI GetConsoleWindow() noexcept {
+    return reinterpret_cast<HWND>(0x1000);
+}
+
+inline BOOL WINAPI EnumUILanguagesW(void* /*lpUILanguageEnumProc*/, DWORD /*dwFlags*/, LONG_PTR /*lParam*/) noexcept {
+    return TRUE;
+}
+
+inline LCID WINAPI GetSystemDefaultLCID() noexcept {
+    return 0x0409; // en-US
+}
+
+inline WORD WINAPI GetThreadUILanguage() noexcept {
+    return 0x0409; // en-US
+}
+
+inline int WINAPI LCIDToLocaleName(LCID /*Locale*/, wchar_t* lpName, int cchName, DWORD /*dwFlags*/) noexcept {
+    if (lpName && cchName >= 6) {
+        std::wcsncpy(lpName, L"en-US", cchName);
+        return 6;
+    }
+    return 0;
+}
+
+inline BOOL WINAPI SetDefaultDllDirectories(DWORD /*DirectoryFlags*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI SetFileAttributesA(const char* /*lpFileName*/, DWORD /*dwFileAttributes*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL WINAPI VerifyVersionInfoA(void* /*lpVersionInformation*/, DWORD /*dwTypeMask*/, uint64_t /*dwlConditionMask*/) noexcept {
+    return TRUE;
+}
+
+inline DWORD WINAPI K32GetModuleFileNameExW(
+    HANDLE /*hProcess*/,
+    void* /*hModule*/,
+    wchar_t* lpFilename,
+    DWORD nSize
+) noexcept {
+    if (lpFilename && nSize > 0) {
+        std::wcsncpy(lpFilename, L"C:\\Program Files\\Rufus\\rufus.exe", nSize);
+        return static_cast<DWORD>(std::wcslen(lpFilename));
+    }
+    return 0;
+}
+
+inline DWORD WINAPI K32GetProcessImageFileNameW(
+    HANDLE /*hProcess*/,
+    wchar_t* lpImageFileName,
+    DWORD nSize
+) noexcept {
+    if (lpImageFileName && nSize > 0) {
+        std::wcsncpy(lpImageFileName, L"\\Device\\HarddiskVolume1\\Program Files\\Rufus\\rufus.exe", nSize);
+        return static_cast<DWORD>(std::wcslen(lpImageFileName));
+    }
+    return 0;
+}
+
 // ============================================================================
 // 18. Win32 Dynamic Subsystem Export Table Initializer
 // ============================================================================
@@ -4832,6 +5053,34 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetThreadTimes", reinterpret_cast<void*>(GetThreadTimes));
     ldr.registerExport("kernel32.dll", "GlobalMemoryStatus", reinterpret_cast<void*>(GlobalMemoryStatus));
     ldr.registerExport("kernel32.dll", "LocalFileTimeToFileTime", reinterpret_cast<void*>(LocalFileTimeToFileTime));
+    ldr.registerExport("kernel32.dll", "FindFirstVolumeA", reinterpret_cast<void*>(FindFirstVolumeA));
+    ldr.registerExport("kernel32.dll", "FindNextVolumeA", reinterpret_cast<void*>(FindNextVolumeA));
+    ldr.registerExport("kernel32.dll", "GetVolumeNameForVolumeMountPointA", reinterpret_cast<void*>(GetVolumeNameForVolumeMountPointA));
+    ldr.registerExport("kernel32.dll", "GetVolumePathNameA", reinterpret_cast<void*>(GetVolumePathNameA));
+    ldr.registerExport("kernel32.dll", "GetVolumeInformationA", reinterpret_cast<void*>(GetVolumeInformationA));
+    ldr.registerExport("kernel32.dll", "GetVolumeInformationByHandleW", reinterpret_cast<void*>(GetVolumeInformationByHandleW));
+    ldr.registerExport("kernel32.dll", "SetVolumeMountPointA", reinterpret_cast<void*>(SetVolumeMountPointA));
+    ldr.registerExport("kernel32.dll", "DeleteVolumeMountPointA", reinterpret_cast<void*>(DeleteVolumeMountPointA));
+    ldr.registerExport("kernel32.dll", "SetVolumeLabelA", reinterpret_cast<void*>(SetVolumeLabelA));
+    ldr.registerExport("kernel32.dll", "DefineDosDeviceA", reinterpret_cast<void*>(DefineDosDeviceA));
+    ldr.registerExport("kernel32.dll", "QueryDosDeviceA", reinterpret_cast<void*>(QueryDosDeviceA));
+    ldr.registerExport("kernel32.dll", "GetDiskFreeSpaceExA", reinterpret_cast<void*>(GetDiskFreeSpaceExA));
+    ldr.registerExport("kernel32.dll", "GetLogicalDriveStringsA", reinterpret_cast<void*>(GetLogicalDriveStringsA));
+    ldr.registerExport("kernel32.dll", "CancelIoEx", reinterpret_cast<void*>(CancelIoEx));
+    ldr.registerExport("kernel32.dll", "CancelSynchronousIo", reinterpret_cast<void*>(CancelSynchronousIo));
+    ldr.registerExport("kernel32.dll", "GetOverlappedResultEx", reinterpret_cast<void*>(GetOverlappedResultEx));
+    ldr.registerExport("kernel32.dll", "SleepConditionVariableCS", reinterpret_cast<void*>(SleepConditionVariableCS));
+    ldr.registerExport("kernel32.dll", "CreateSymbolicLinkW", reinterpret_cast<void*>(CreateSymbolicLinkW));
+    ldr.registerExport("kernel32.dll", "GetConsoleWindow", reinterpret_cast<void*>(GetConsoleWindow));
+    ldr.registerExport("kernel32.dll", "EnumUILanguagesW", reinterpret_cast<void*>(EnumUILanguagesW));
+    ldr.registerExport("kernel32.dll", "GetSystemDefaultLCID", reinterpret_cast<void*>(GetSystemDefaultLCID));
+    ldr.registerExport("kernel32.dll", "GetThreadUILanguage", reinterpret_cast<void*>(GetThreadUILanguage));
+    ldr.registerExport("kernel32.dll", "LCIDToLocaleName", reinterpret_cast<void*>(LCIDToLocaleName));
+    ldr.registerExport("kernel32.dll", "SetDefaultDllDirectories", reinterpret_cast<void*>(SetDefaultDllDirectories));
+    ldr.registerExport("kernel32.dll", "SetFileAttributesA", reinterpret_cast<void*>(SetFileAttributesA));
+    ldr.registerExport("kernel32.dll", "VerifyVersionInfoA", reinterpret_cast<void*>(VerifyVersionInfoA));
+    ldr.registerExport("kernel32.dll", "K32GetModuleFileNameExW", reinterpret_cast<void*>(K32GetModuleFileNameExW));
+    ldr.registerExport("kernel32.dll", "K32GetProcessImageFileNameW", reinterpret_cast<void*>(K32GetProcessImageFileNameW));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

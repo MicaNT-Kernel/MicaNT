@@ -44,6 +44,10 @@
 #include "ldr.hpp"
 #include "mpr.hpp"
 #include "gdiplus.hpp"
+#include "virtdisk.hpp"
+#include "wintrust.hpp"
+#include "setupapi.hpp"
+#include "ntdll.hpp"
 #include "satellite_wiztree.hpp"
 #include "satellite_putty.hpp"
 #include "satellite_gdiplus.hpp"
@@ -179,6 +183,12 @@ inline void InitializeSatelliteWin32Exports() {
 
     // MPR 1.0 Network Provider Router Subsystem
     mpr::InitializeMprSubsystemExports();
+
+    // Storage, Setup, Trust, and Native NT Subsystems
+    virtdisk::InitializeVirtualDiskSubsystemExports();
+    wintrust::InitializeWinTrustSubsystemExports();
+    setupapi::InitializeSetupApiSubsystemExports();
+    ntdll::InitializeNtdllSubsystemExports();
 }
 
 } // namespace micant::satellite

@@ -1041,5 +1041,255 @@ inline NtStatus ZwQueryInformationProcess(Handle p, ProcessInformationClass c, v
     return NtQueryInformationProcess(p, c, i, l, r);
 }
 
+// ============================================================================
+// Userland Win32 ABI Export Implementations & Loader Registration
+// ============================================================================
+
+inline NtStatus WINAPI NtAdjustPrivilegesToken(
+    void* /*TokenHandle*/,
+    BOOLEAN /*DisableAllPrivileges*/,
+    void* /*NewState*/,
+    uint32_t /*BufferLength*/,
+    void* /*PreviousState*/,
+    uint32_t* ReturnLength
+) noexcept {
+    if (ReturnLength) *ReturnLength = 0;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtCreateFile_Export(
+    void** fileHandle,
+    uint32_t /*desiredAccess*/,
+    void* /*objectAttributes*/,
+    void* /*ioStatusBlock*/,
+    void* /*allocationSize*/,
+    uint32_t /*fileAttributes*/,
+    uint32_t /*shareAccess*/,
+    uint32_t /*createDisposition*/,
+    uint32_t /*createOptions*/,
+    void* /*eaBuffer*/,
+    uint32_t /*eaLength*/
+) noexcept {
+    if (fileHandle) *fileHandle = reinterpret_cast<void*>(0x4001);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtDelayExecution_Export(BOOLEAN /*Alertable*/, const int64_t* /*DelayInterval*/) noexcept {
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtDeviceIoControlFile_Export(
+    void* /*FileHandle*/,
+    void* /*Event*/,
+    void* /*ApcRoutine*/,
+    void* /*ApcContext*/,
+    void* /*IoStatusBlock*/,
+    uint32_t /*IoControlCode*/,
+    const void* /*InputBuffer*/,
+    uint32_t /*InputBufferLength*/,
+    void* /*OutputBuffer*/,
+    uint32_t /*OutputBufferLength*/
+) noexcept {
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtDuplicateObject(
+    void* /*SourceProcessHandle*/,
+    void* SourceHandle,
+    void* /*TargetProcessHandle*/,
+    void** TargetHandle,
+    uint32_t /*DesiredAccess*/,
+    uint32_t /*HandleAttributes*/,
+    uint32_t /*Options*/
+) noexcept {
+    if (TargetHandle) *TargetHandle = SourceHandle;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtFlushBuffersFile(void* /*FileHandle*/, void* /*IoStatusBlock*/) noexcept {
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtFsControlFile(
+    void* /*FileHandle*/,
+    void* /*Event*/,
+    void* /*ApcRoutine*/,
+    void* /*ApcContext*/,
+    void* /*IoStatusBlock*/,
+    uint32_t /*FsControlCode*/,
+    const void* /*InputBuffer*/,
+    uint32_t /*InputBufferLength*/,
+    void* /*OutputBuffer*/,
+    uint32_t /*OutputBufferLength*/
+) noexcept {
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtOpenProcess(
+    void** ProcessHandle,
+    uint32_t /*DesiredAccess*/,
+    void* /*ObjectAttributes*/,
+    void* /*ClientId*/
+) noexcept {
+    if (ProcessHandle) *ProcessHandle = reinterpret_cast<void*>(0x1000);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtOpenProcessToken_Export(
+    void* /*ProcessHandle*/,
+    uint32_t /*DesiredAccess*/,
+    void** TokenHandle
+) noexcept {
+    if (TokenHandle) *TokenHandle = reinterpret_cast<void*>(0x2000);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtOpenSymbolicLinkObject(
+    void** LinkHandle,
+    uint32_t /*DesiredAccess*/,
+    void* /*ObjectAttributes*/
+) noexcept {
+    if (LinkHandle) *LinkHandle = reinterpret_cast<void*>(0x3000);
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtQueryEaFile(
+    void* /*FileHandle*/,
+    void* /*IoStatusBlock*/,
+    void* /*Buffer*/,
+    uint32_t /*Length*/,
+    BOOLEAN /*ReturnSingleEntry*/,
+    void* /*EaList*/,
+    uint32_t /*EaListLength*/,
+    uint32_t* /*EaIndex*/,
+    BOOLEAN /*RestartScan*/
+) noexcept {
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtQueryObject(
+    void* /*Handle*/,
+    uint32_t /*ObjectInformationClass*/,
+    void* /*ObjectInformation*/,
+    uint32_t /*Length*/,
+    uint32_t* ReturnLength
+) noexcept {
+    if (ReturnLength) *ReturnLength = 64;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtQuerySecurityObject(
+    void* /*Handle*/,
+    uint32_t /*SecurityInformation*/,
+    void* /*SecurityDescriptor*/,
+    uint32_t /*Length*/,
+    uint32_t* LengthNeeded
+) noexcept {
+    if (LengthNeeded) *LengthNeeded = 32;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtQuerySystemInformation_Export(
+    uint32_t /*SystemInformationClass*/,
+    void* /*SystemInformation*/,
+    uint32_t /*SystemInformationLength*/,
+    uint32_t* ReturnLength
+) noexcept {
+    if (ReturnLength) *ReturnLength = 64;
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtQueryVolumeInformationFile(
+    void* /*FileHandle*/,
+    void* /*IoStatusBlock*/,
+    void* /*FsInformation*/,
+    uint32_t /*Length*/,
+    uint32_t /*FsInformationClass*/
+) noexcept {
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtSetEaFile(
+    void* /*FileHandle*/,
+    void* /*IoStatusBlock*/,
+    void* /*Buffer*/,
+    uint32_t /*Length*/
+) noexcept {
+    return NtStatus::Success;
+}
+
+inline NtStatus WINAPI NtSetSecurityObject(
+    void* /*Handle*/,
+    uint32_t /*SecurityInformation*/,
+    void* /*SecurityDescriptor*/
+) noexcept {
+    return NtStatus::Success;
+}
+
+inline void WINAPI RtlCaptureContext(void* /*ContextRecord*/) noexcept {
+}
+
+inline void* WINAPI RtlLookupFunctionEntry(uint64_t /*ControlPc*/, uint64_t* /*ImageBase*/, void* /*HistoryTable*/) noexcept {
+    return nullptr;
+}
+
+inline void* WINAPI RtlPcToFileHeader(void* /*PcValue*/, void** BaseOfImage) noexcept {
+    if (BaseOfImage) *BaseOfImage = reinterpret_cast<void*>(0x140000000ULL);
+    return reinterpret_cast<void*>(0x140000000ULL);
+}
+
+inline void WINAPI RtlUnwind(void* /*TargetFrame*/, void* /*TargetIp*/, void* /*ExceptionRecord*/, void* /*ReturnValue*/) noexcept {
+}
+
+inline void WINAPI RtlUnwindEx(void* /*TargetFrame*/, void* /*TargetIp*/, void* /*ExceptionRecord*/, void* /*ReturnValue*/, void* /*ContextRecord*/, void* /*HistoryTable*/) noexcept {
+}
+
+inline uint64_t WINAPI RtlVirtualUnwind(
+    uint32_t /*HandlerType*/,
+    uint64_t /*ImageBase*/,
+    uint64_t /*ControlPc*/,
+    void* /*FunctionEntry*/,
+    void* /*ContextRecord*/,
+    void** /*HandlerData*/,
+    uint64_t* /*EstablisherFrame*/,
+    void* /*ContextPointers*/
+) noexcept {
+    return 0;
+}
+
+inline uint64_t WINAPI VerSetConditionMask(uint64_t ConditionMask, uint32_t TypeMask, uint8_t Condition) noexcept {
+    if (TypeMask == 0) return ConditionMask;
+    return ConditionMask | (static_cast<uint64_t>(Condition) << (TypeMask * 3));
+}
+
+inline void InitializeNtdllSubsystemExports() {
+    auto& ldr = ldr::DynamicLoader::get();
+
+    ldr.registerExport("ntdll.dll", "NtAdjustPrivilegesToken", reinterpret_cast<void*>(NtAdjustPrivilegesToken));
+    ldr.registerExport("ntdll.dll", "NtCreateFile", reinterpret_cast<void*>(NtCreateFile_Export));
+    ldr.registerExport("ntdll.dll", "NtDelayExecution", reinterpret_cast<void*>(NtDelayExecution_Export));
+    ldr.registerExport("ntdll.dll", "NtDeviceIoControlFile", reinterpret_cast<void*>(NtDeviceIoControlFile_Export));
+    ldr.registerExport("ntdll.dll", "NtDuplicateObject", reinterpret_cast<void*>(NtDuplicateObject));
+    ldr.registerExport("ntdll.dll", "NtFlushBuffersFile", reinterpret_cast<void*>(NtFlushBuffersFile));
+    ldr.registerExport("ntdll.dll", "NtFsControlFile", reinterpret_cast<void*>(NtFsControlFile));
+    ldr.registerExport("ntdll.dll", "NtOpenProcess", reinterpret_cast<void*>(NtOpenProcess));
+    ldr.registerExport("ntdll.dll", "NtOpenProcessToken", reinterpret_cast<void*>(NtOpenProcessToken_Export));
+    ldr.registerExport("ntdll.dll", "NtOpenSymbolicLinkObject", reinterpret_cast<void*>(NtOpenSymbolicLinkObject));
+    ldr.registerExport("ntdll.dll", "NtQueryEaFile", reinterpret_cast<void*>(NtQueryEaFile));
+    ldr.registerExport("ntdll.dll", "NtQueryObject", reinterpret_cast<void*>(NtQueryObject));
+    ldr.registerExport("ntdll.dll", "NtQuerySecurityObject", reinterpret_cast<void*>(NtQuerySecurityObject));
+    ldr.registerExport("ntdll.dll", "NtQuerySystemInformation", reinterpret_cast<void*>(NtQuerySystemInformation_Export));
+    ldr.registerExport("ntdll.dll", "NtQueryVolumeInformationFile", reinterpret_cast<void*>(NtQueryVolumeInformationFile));
+    ldr.registerExport("ntdll.dll", "NtSetEaFile", reinterpret_cast<void*>(NtSetEaFile));
+    ldr.registerExport("ntdll.dll", "NtSetSecurityObject", reinterpret_cast<void*>(NtSetSecurityObject));
+    ldr.registerExport("ntdll.dll", "RtlCaptureContext", reinterpret_cast<void*>(RtlCaptureContext));
+    ldr.registerExport("ntdll.dll", "RtlLookupFunctionEntry", reinterpret_cast<void*>(RtlLookupFunctionEntry));
+    ldr.registerExport("ntdll.dll", "RtlPcToFileHeader", reinterpret_cast<void*>(RtlPcToFileHeader));
+    ldr.registerExport("ntdll.dll", "RtlUnwind", reinterpret_cast<void*>(RtlUnwind));
+    ldr.registerExport("ntdll.dll", "RtlUnwindEx", reinterpret_cast<void*>(RtlUnwindEx));
+    ldr.registerExport("ntdll.dll", "RtlVirtualUnwind", reinterpret_cast<void*>(RtlVirtualUnwind));
+    ldr.registerExport("ntdll.dll", "VerSetConditionMask", reinterpret_cast<void*>(VerSetConditionMask));
+}
+
 } // namespace micant::ntdll
 

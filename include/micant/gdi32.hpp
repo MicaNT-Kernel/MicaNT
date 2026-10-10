@@ -1304,6 +1304,16 @@ inline int EnumFontFamiliesExW(HDC /*hdc*/, LPLOGFONTW /*lpLogfont*/, FONTENUMPR
     return 1;
 }
 
+inline int WINAPI EnumFontFamiliesExA(
+    HDC /*hdc*/,
+    void* /*lpLogfont*/,
+    void* /*lpProc*/,
+    LPARAM /*lParam*/,
+    DWORD /*dwFlags*/
+) noexcept {
+    return 1;
+}
+
 inline int StartDocW(HDC /*hdc*/, const DOCINFOW* /*lpdi*/) noexcept { return 1; }
 inline int EndDoc(HDC /*hdc*/) noexcept { return 1; }
 inline int StartPage(HDC /*hdc*/) noexcept { return 1; }
@@ -1684,6 +1694,7 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "GetDIBits", reinterpret_cast<void*>(GetDIBits));
     ldr.registerExport("gdi32.dll", "StretchDIBits", reinterpret_cast<void*>(StretchDIBits));
     ldr.registerExport("gdi32.dll", "EnumFontFamiliesExW", reinterpret_cast<void*>(EnumFontFamiliesExW));
+    ldr.registerExport("gdi32.dll", "EnumFontFamiliesExA", reinterpret_cast<void*>(EnumFontFamiliesExA));
     ldr.registerExport("gdi32.dll", "StartDocW", reinterpret_cast<void*>(StartDocW));
     ldr.registerExport("gdi32.dll", "EndDoc", reinterpret_cast<void*>(EndDoc));
     ldr.registerExport("gdi32.dll", "StartPage", reinterpret_cast<void*>(StartPage));

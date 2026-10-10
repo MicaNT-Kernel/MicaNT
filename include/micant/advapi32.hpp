@@ -1510,6 +1510,83 @@ inline win32::BOOL ConvertStringSecurityDescriptorToSecurityDescriptorW(
     return win32::TRUE;
 }
 
+inline win32::BOOL ConvertStringSecurityDescriptorToSecurityDescriptorA(
+    const char* /*StringSecurityDescriptor*/,
+    uint32_t /*StringSDRevision*/,
+    void** SecurityDescriptor,
+    uint32_t* SecurityDescriptorSize
+) noexcept {
+    if (SecurityDescriptor) {
+        static uint8_t dummySD[32] = { 0x01, 0x00, 0x04, 0x80 }; // Revision 1, SE_SELF_RELATIVE
+        *SecurityDescriptor = dummySD;
+    }
+    if (SecurityDescriptorSize) {
+        *SecurityDescriptorSize = 32;
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL ConvertStringSidToSidA(
+    const char* /*StringSid*/,
+    void** Sid
+) noexcept {
+    if (Sid) {
+        // Standard SID: S-1-5-18 (NT AUTHORITY\SYSTEM)
+        static uint8_t systemSid[12] = { 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x12, 0x00, 0x00, 0x00 };
+        *Sid = systemSid;
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL CryptImportKey(
+    uintptr_t /*hProv*/,
+    const uint8_t* /*pbData*/,
+    uint32_t /*dwDataLen*/,
+    uintptr_t /*hPubKey*/,
+    uint32_t /*dwFlags*/,
+    uintptr_t* phKey
+) noexcept {
+    if (phKey) *phKey = 0x1000;
+    return win32::TRUE;
+}
+
+inline win32::BOOL CryptVerifySignatureW(
+    uintptr_t /*hHash*/,
+    const uint8_t* /*pbSignature*/,
+    uint32_t /*dwSigLen*/,
+    uintptr_t /*hPubKey*/,
+    const wchar_t* /*szDescription*/,
+    uint32_t /*dwFlags*/
+) noexcept {
+    return win32::TRUE;
+}
+
+inline int32_t RegDeleteValueA(HKEY /*hKey*/, const char* /*lpValueName*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline int32_t RegGetValueA(
+    HKEY /*hkey*/,
+    const char* /*lpSubKey*/,
+    const char* /*lpValue*/,
+    uint32_t /*dwFlags*/,
+    uint32_t* pdwType,
+    void* /*pvData*/,
+    uint32_t* pcbData
+) noexcept {
+    if (pdwType) *pdwType = 1; // REG_SZ
+    if (pcbData) *pcbData = 0;
+    return 0; // ERROR_SUCCESS
+}
+
+inline int32_t RegLoadKeyA(HKEY /*hKey*/, const char* /*lpSubKey*/, const char* /*lpFile*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline int32_t RegUnLoadKeyA(HKEY /*hKey*/, const char* /*lpSubKey*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
 inline win32::BOOL SystemFunction036(void* pbBuffer, uint32_t dwLen) noexcept {
     if (!pbBuffer && dwLen > 0) return win32::FALSE;
     if (dwLen > 0) {
@@ -1659,6 +1736,14 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "BuildExplicitAccessWithNameW", reinterpret_cast<void*>(BuildExplicitAccessWithNameW));
     ldr.registerExport("advapi32.dll", "BuildSecurityDescriptorW", reinterpret_cast<void*>(BuildSecurityDescriptorW));
     ldr.registerExport("advapi32.dll", "ConvertStringSecurityDescriptorToSecurityDescriptorW", reinterpret_cast<void*>(ConvertStringSecurityDescriptorToSecurityDescriptorW));
+    ldr.registerExport("advapi32.dll", "ConvertStringSecurityDescriptorToSecurityDescriptorA", reinterpret_cast<void*>(ConvertStringSecurityDescriptorToSecurityDescriptorA));
+    ldr.registerExport("advapi32.dll", "ConvertStringSidToSidA", reinterpret_cast<void*>(ConvertStringSidToSidA));
+    ldr.registerExport("advapi32.dll", "CryptImportKey", reinterpret_cast<void*>(CryptImportKey));
+    ldr.registerExport("advapi32.dll", "CryptVerifySignatureW", reinterpret_cast<void*>(CryptVerifySignatureW));
+    ldr.registerExport("advapi32.dll", "RegDeleteValueA", reinterpret_cast<void*>(RegDeleteValueA));
+    ldr.registerExport("advapi32.dll", "RegGetValueA", reinterpret_cast<void*>(RegGetValueA));
+    ldr.registerExport("advapi32.dll", "RegLoadKeyA", reinterpret_cast<void*>(RegLoadKeyA));
+    ldr.registerExport("advapi32.dll", "RegUnLoadKeyA", reinterpret_cast<void*>(RegUnLoadKeyA));
     ldr.registerExport("advapi32.dll", "SystemFunction036", reinterpret_cast<void*>(SystemFunction036));
     ldr.registerExport("advapi32.dll", "RegOpenCurrentUser", reinterpret_cast<void*>(RegOpenCurrentUser));
     ldr.registerExport("advapi32.dll", "RegCreateKeyW", reinterpret_cast<void*>(RegCreateKeyW));

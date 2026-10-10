@@ -847,6 +847,20 @@ inline HRESULT CoSetProxyBlanket(void* /*pProxy*/, uint32_t /*dwAuthnSvc*/, uint
     return S_OK;
 }
 
+inline HRESULT WINAPI CoInitializeSecurity(
+    void* /*pSecDesc*/,
+    int32_t /*cAuthSvc*/,
+    void* /*asAuthSvc*/,
+    void* /*pReserved1*/,
+    uint32_t /*dwAuthnLevel*/,
+    uint32_t /*dwImpLevel*/,
+    void* /*pAuthList*/,
+    uint32_t /*dwCapabilities*/,
+    void* /*pReserved3*/
+) noexcept {
+    return S_OK;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -857,6 +871,7 @@ inline void InitializeOle32SubsystemExports() {
     // ole32.dll COM Core
     ldr.registerExport("ole32.dll", "CoInitialize", reinterpret_cast<void*>(CoInitialize));
     ldr.registerExport("ole32.dll", "CoInitializeEx", reinterpret_cast<void*>(CoInitializeEx));
+    ldr.registerExport("ole32.dll", "CoInitializeSecurity", reinterpret_cast<void*>(CoInitializeSecurity));
     ldr.registerExport("ole32.dll", "CoUninitialize", reinterpret_cast<void*>(CoUninitialize));
     ldr.registerExport("ole32.dll", "CoCreateInstance", reinterpret_cast<void*>(CoCreateInstance));
     ldr.registerExport("ole32.dll", "CoGetClassObject", reinterpret_cast<void*>(CoGetClassObject));

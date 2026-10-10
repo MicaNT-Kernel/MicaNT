@@ -35,6 +35,12 @@ using UINT    = uint32_t;
 using WPARAM  = uintptr_t;
 using LPARAM  = intptr_t;
 using LRESULT = intptr_t;
+using win32::DWORD;
+using win32::WORD;
+using win32::BOOL;
+using win32::LONG;
+using win32::ULONG;
+using win32::BYTE;
 
 using HDC       = void*;
 using HINSTANCE = void*;
@@ -1895,6 +1901,96 @@ inline int ToAsciiEx(UINT uVirtKey, UINT /*uScanCode*/, const uint8_t* lpKeyStat
     return 0;
 }
 
+using HWINEVENTHOOK = void*;
+
+inline win32::BOOL WINAPI ChangeWindowMessageFilterEx(
+    HWND /*hwnd*/,
+    uint32_t /*message*/,
+    DWORD /*action*/,
+    void* /*pChangeFilterStruct*/
+) noexcept {
+    return win32::TRUE;
+}
+
+inline char* WINAPI CharLowerA(char* lpsz) noexcept {
+    if (lpsz) {
+        for (char* p = lpsz; *p; ++p) {
+            if (*p >= 'A' && *p <= 'Z') *p = static_cast<char>(*p + ('a' - 'A'));
+        }
+    }
+    return lpsz;
+}
+
+inline char* WINAPI CharUpperA(char* lpsz) noexcept {
+    if (lpsz) {
+        for (char* p = lpsz; *p; ++p) {
+            if (*p >= 'a' && *p <= 'z') *p = static_cast<char>(*p - ('a' - 'A'));
+        }
+    }
+    return lpsz;
+}
+
+inline HICON WINAPI CreateIconFromResourceEx(
+    BYTE* /*pbIconBits*/,
+    DWORD /*cbIconBits*/,
+    BOOL /*fIcon*/,
+    DWORD /*dwVersion*/,
+    int /*cxDesired*/,
+    int /*cyDesired*/,
+    uint32_t /*uFlags*/
+) noexcept {
+    return reinterpret_cast<HICON>(0x6001);
+}
+
+inline int WINAPI DrawTextExA(
+    HDC /*hdc*/,
+    char* /*lpchText*/,
+    int /*cchText*/,
+    void* /*lprc*/,
+    uint32_t /*format*/,
+    void* /*lpdtp*/
+) noexcept {
+    return 16;
+}
+
+inline BOOL WINAPI GetKeyboardLayoutNameA(char* pwszKLID) noexcept {
+    if (pwszKLID) {
+        std::snprintf(pwszKLID, 9, "00000409");
+        return win32::TRUE;
+    }
+    return win32::FALSE;
+}
+
+inline int WINAPI MessageBoxExW(
+    HWND /*hWnd*/,
+    const wchar_t* /*lpText*/,
+    const wchar_t* /*lpCaption*/,
+    uint32_t /*uType*/,
+    WORD /*wLanguageId*/
+) noexcept {
+    return 1; // IDOK
+}
+
+inline BOOL WINAPI SetProcessDefaultLayout(DWORD /*dwDefaultLayout*/) noexcept {
+    return win32::TRUE;
+}
+
+inline HWINEVENTHOOK WINAPI SetWinEventHook(
+    DWORD /*eventMin*/,
+    DWORD /*eventMax*/,
+    void* /*hmodWinEventProc*/,
+    void* /*pfnWinEventProc*/,
+    DWORD /*idProcess*/,
+    DWORD /*idThread*/,
+    DWORD /*dwFlags*/
+) noexcept {
+    return reinterpret_cast<HWINEVENTHOOK>(0x7001);
+}
+
+inline BOOL WINAPI UnhookWinEvent(HWINEVENTHOOK /*hWinEventHook*/) noexcept {
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
@@ -2056,6 +2152,16 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "SetWindowLongPtrA", reinterpret_cast<void*>(SetWindowLongPtrA));
     ldr.registerExport("user32.dll", "SetWindowTextA", reinterpret_cast<void*>(SetWindowTextA));
     ldr.registerExport("user32.dll", "ToAsciiEx", reinterpret_cast<void*>(ToAsciiEx));
+    ldr.registerExport("user32.dll", "ChangeWindowMessageFilterEx", reinterpret_cast<void*>(ChangeWindowMessageFilterEx));
+    ldr.registerExport("user32.dll", "CharLowerA", reinterpret_cast<void*>(CharLowerA));
+    ldr.registerExport("user32.dll", "CharUpperA", reinterpret_cast<void*>(CharUpperA));
+    ldr.registerExport("user32.dll", "CreateIconFromResourceEx", reinterpret_cast<void*>(CreateIconFromResourceEx));
+    ldr.registerExport("user32.dll", "DrawTextExA", reinterpret_cast<void*>(DrawTextExA));
+    ldr.registerExport("user32.dll", "GetKeyboardLayoutNameA", reinterpret_cast<void*>(GetKeyboardLayoutNameA));
+    ldr.registerExport("user32.dll", "MessageBoxExW", reinterpret_cast<void*>(MessageBoxExW));
+    ldr.registerExport("user32.dll", "SetProcessDefaultLayout", reinterpret_cast<void*>(SetProcessDefaultLayout));
+    ldr.registerExport("user32.dll", "SetWinEventHook", reinterpret_cast<void*>(SetWinEventHook));
+    ldr.registerExport("user32.dll", "UnhookWinEvent", reinterpret_cast<void*>(UnhookWinEvent));
 }
 
 } // namespace micant::user32

@@ -1212,6 +1212,14 @@ inline CRYPTCATMEMBER* CryptCATGetMemberInfo(
     return &member;
 }
 
+inline int32_t WINAPI WinVerifyTrustEx(
+    win32::HWND /*hwnd*/,
+    void* /*pgActionID*/,
+    void* /*pWVTData*/
+) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
 } // extern "C"
 
 // ============================================================================
@@ -1223,6 +1231,7 @@ inline void InitializeWinTrustSubsystemExports() {
 
     // wintrust.dll exports
     ldr.registerExport("wintrust.dll", "WinVerifyTrust", reinterpret_cast<void*>(WinVerifyTrust));
+    ldr.registerExport("wintrust.dll", "WinVerifyTrustEx", reinterpret_cast<void*>(WinVerifyTrustEx));
     ldr.registerExport("wintrust.dll", "WintrustGetRegPolicyFlags", reinterpret_cast<void*>(WintrustGetRegPolicyFlags));
     ldr.registerExport("wintrust.dll", "WintrustSetRegPolicyFlags", reinterpret_cast<void*>(WintrustSetRegPolicyFlags));
     ldr.registerExport("wintrust.dll", "WintrustAddActionID", reinterpret_cast<void*>(WintrustAddActionID));

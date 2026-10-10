@@ -158,6 +158,9 @@ inline const micant::GUID GUID_DEVCLASS_SCSIADAPTER = {
 using HINF      = void*;
 using HDEVINFO  = void*;
 using HSPFILEQ  = void*;
+using ULONG     = uint32_t;
+using DWORD     = uint32_t;
+using win32::BOOL;
 
 struct INFCONTEXT {
     void*    Inf{nullptr};
@@ -1170,6 +1173,149 @@ inline win32::BOOL __stdcall SetupDiBuildDriverInfoList(
     return 1;
 }
 
+inline uint32_t WINAPI CM_Get_Child(ULONG* pdnDevInst, ULONG /*dnDevInst*/, ULONG /*ulFlags*/) noexcept {
+    if (pdnDevInst) *pdnDevInst = 2;
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_DevNode_Registry_PropertyA(
+    ULONG /*dnDevInst*/,
+    ULONG /*ulProperty*/,
+    ULONG* pulRegDataType,
+    void* Buffer,
+    ULONG* pulLength,
+    ULONG /*ulFlags*/
+) noexcept {
+    if (pulRegDataType) *pulRegDataType = 1; // REG_SZ
+    const char desc[] = "Generic USB Flash Disk USB Device";
+    constexpr ULONG len = sizeof(desc);
+    if (Buffer && pulLength && *pulLength >= len) {
+        std::memcpy(Buffer, desc, len);
+        *pulLength = len;
+    } else if (pulLength) {
+        *pulLength = len;
+    }
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_DevNode_Status(ULONG* pulStatus, ULONG* pulProblemNumber, ULONG /*dnDevInst*/, ULONG /*ulFlags*/) noexcept {
+    if (pulStatus) *pulStatus = 0x00000008 | 0x00000001; // DN_STARTED | DN_DRIVER_LOADED
+    if (pulProblemNumber) *pulProblemNumber = 0;
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_Device_IDA(ULONG /*dnDevInst*/, char* Buffer, ULONG BufferLen, ULONG /*ulFlags*/) noexcept {
+    const char devId[] = "USBSTOR\\Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00\\1234567890ABCDEF&0";
+    if (Buffer && BufferLen > 0) {
+        std::snprintf(Buffer, BufferLen, "%s", devId);
+    }
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_Device_ID_ListA(const char* /*pszFilter*/, char* Buffer, ULONG BufferLen, ULONG /*ulFlags*/) noexcept {
+    const char devList[] = "USBSTOR\\Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00\\1234567890ABCDEF&0\0";
+    constexpr ULONG len = sizeof(devList);
+    if (Buffer && BufferLen >= len) {
+        std::memcpy(Buffer, devList, len);
+    }
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_Device_ID_List_SizeA(ULONG* pulLen, const char* /*pszFilter*/, ULONG /*ulFlags*/) noexcept {
+    if (pulLen) *pulLen = 70;
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_Parent(ULONG* pdnDevInst, ULONG /*dnDevInst*/, ULONG /*ulFlags*/) noexcept {
+    if (pdnDevInst) *pdnDevInst = 1;
+    return 0; // CR_SUCCESS
+}
+
+inline uint32_t WINAPI CM_Get_Sibling(ULONG* pdnDevInst, ULONG /*dnDevInst*/, ULONG /*ulFlags*/) noexcept {
+    if (pdnDevInst) *pdnDevInst = 0;
+    return 0x0000001B; // CR_NO_SUCH_DEVNODE (end of list)
+}
+
+inline uint32_t WINAPI CM_Locate_DevNodeA(ULONG* pdnDevInst, const char* /*pDeviceID*/, ULONG /*ulFlags*/) noexcept {
+    if (pdnDevInst) *pdnDevInst = 1;
+    return 0; // CR_SUCCESS
+}
+
+inline win32::BOOL WINAPI SetupDiChangeState(HDEVINFO /*DeviceInfoSet*/, void* /*DeviceInfoData*/) noexcept {
+    return win32::TRUE;
+}
+
+inline HDEVINFO WINAPI SetupDiGetClassDevsA(
+    const void* /*ClassGuid*/,
+    const char* /*Enumerator*/,
+    win32::HWND /*hwndParent*/,
+    uint32_t /*Flags*/
+) noexcept {
+    return reinterpret_cast<HDEVINFO>(0x5001);
+}
+
+inline win32::BOOL WINAPI SetupDiGetDeviceInstanceIdA(
+    HDEVINFO /*DeviceInfoSet*/,
+    void* /*DeviceInfoData*/,
+    char* DeviceInstanceId,
+    uint32_t DeviceInstanceIdSize,
+    uint32_t* RequiredSize
+) noexcept {
+    const char devId[] = "USBSTOR\\Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00\\1234567890ABCDEF&0";
+    constexpr uint32_t len = sizeof(devId);
+    if (RequiredSize) *RequiredSize = len;
+    if (DeviceInstanceId && DeviceInstanceIdSize >= len) {
+        std::snprintf(DeviceInstanceId, DeviceInstanceIdSize, "%s", devId);
+        return win32::TRUE;
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI SetupDiGetDeviceInterfaceDetailA(
+    HDEVINFO /*DeviceInfoSet*/,
+    void* /*DeviceInterfaceData*/,
+    void* DeviceInterfaceDetailData,
+    uint32_t DeviceInterfaceDetailDataSize,
+    uint32_t* RequiredSize,
+    void* /*DeviceInfoData*/
+) noexcept {
+    constexpr uint32_t reqSize = 80;
+    if (RequiredSize) *RequiredSize = reqSize;
+    if (DeviceInterfaceDetailData && DeviceInterfaceDetailDataSize >= reqSize) {
+        auto* path = reinterpret_cast<char*>(DeviceInterfaceDetailData) + sizeof(uint32_t);
+        std::snprintf(path, DeviceInterfaceDetailDataSize - sizeof(uint32_t), "\\\\?\\usbstor#disk&ven_sandisk&prod_ultra#1234#{53f56307-b6bf-11d0-94f2-00a0c91efb8b}");
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI SetupDiGetDeviceRegistryPropertyA(
+    HDEVINFO /*DeviceInfoSet*/,
+    void* /*DeviceInfoData*/,
+    uint32_t /*Property*/,
+    uint32_t* PropertyRegDataType,
+    uint8_t* PropertyBuffer,
+    uint32_t PropertyBufferSize,
+    uint32_t* RequiredSize
+) noexcept {
+    if (PropertyRegDataType) *PropertyRegDataType = 1; // REG_SZ
+    const char desc[] = "SanDisk Ultra USB 3.0";
+    constexpr uint32_t len = sizeof(desc);
+    if (RequiredSize) *RequiredSize = len;
+    if (PropertyBuffer && PropertyBufferSize >= len) {
+        std::memcpy(PropertyBuffer, desc, len);
+    }
+    return win32::TRUE;
+}
+
+inline win32::BOOL WINAPI SetupDiSetClassInstallParamsW(
+    HDEVINFO /*DeviceInfoSet*/,
+    void* /*DeviceInfoData*/,
+    void* /*ClassInstallParams*/,
+    uint32_t /*ClassInstallParamsSize*/
+) noexcept {
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 7. Subsystem Export Registration (setupapi.dll)
 // ============================================================================
@@ -1203,6 +1349,21 @@ inline void InitializeSetupApiSubsystemExports() {
     ldr.registerExport("setupapi.dll", "SetupDiGetClassDescriptionW", reinterpret_cast<void*>(SetupDiGetClassDescriptionW));
     ldr.registerExport("setupapi.dll", "SetupDiClassNameFromGuidW", reinterpret_cast<void*>(SetupDiClassNameFromGuidW));
     ldr.registerExport("setupapi.dll", "SetupDiBuildDriverInfoList", reinterpret_cast<void*>(SetupDiBuildDriverInfoList));
+    ldr.registerExport("setupapi.dll", "CM_Get_Child", reinterpret_cast<void*>(CM_Get_Child));
+    ldr.registerExport("setupapi.dll", "CM_Get_DevNode_Registry_PropertyA", reinterpret_cast<void*>(CM_Get_DevNode_Registry_PropertyA));
+    ldr.registerExport("setupapi.dll", "CM_Get_DevNode_Status", reinterpret_cast<void*>(CM_Get_DevNode_Status));
+    ldr.registerExport("setupapi.dll", "CM_Get_Device_IDA", reinterpret_cast<void*>(CM_Get_Device_IDA));
+    ldr.registerExport("setupapi.dll", "CM_Get_Device_ID_ListA", reinterpret_cast<void*>(CM_Get_Device_ID_ListA));
+    ldr.registerExport("setupapi.dll", "CM_Get_Device_ID_List_SizeA", reinterpret_cast<void*>(CM_Get_Device_ID_List_SizeA));
+    ldr.registerExport("setupapi.dll", "CM_Get_Parent", reinterpret_cast<void*>(CM_Get_Parent));
+    ldr.registerExport("setupapi.dll", "CM_Get_Sibling", reinterpret_cast<void*>(CM_Get_Sibling));
+    ldr.registerExport("setupapi.dll", "CM_Locate_DevNodeA", reinterpret_cast<void*>(CM_Locate_DevNodeA));
+    ldr.registerExport("setupapi.dll", "SetupDiChangeState", reinterpret_cast<void*>(SetupDiChangeState));
+    ldr.registerExport("setupapi.dll", "SetupDiGetClassDevsA", reinterpret_cast<void*>(SetupDiGetClassDevsA));
+    ldr.registerExport("setupapi.dll", "SetupDiGetDeviceInstanceIdA", reinterpret_cast<void*>(SetupDiGetDeviceInstanceIdA));
+    ldr.registerExport("setupapi.dll", "SetupDiGetDeviceInterfaceDetailA", reinterpret_cast<void*>(SetupDiGetDeviceInterfaceDetailA));
+    ldr.registerExport("setupapi.dll", "SetupDiGetDeviceRegistryPropertyA", reinterpret_cast<void*>(SetupDiGetDeviceRegistryPropertyA));
+    ldr.registerExport("setupapi.dll", "SetupDiSetClassInstallParamsW", reinterpret_cast<void*>(SetupDiSetClassInstallParamsW));
 }
 
 } // namespace micant::setupapi

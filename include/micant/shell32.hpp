@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cwchar>
+#include <cstdarg>
 
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
@@ -711,6 +712,38 @@ inline HRESULT SHGetKnownFolderPath(
     std::memcpy(mem, path.c_str(), byteCount);
     *ppszPath = mem;
     return S_OK;
+}
+
+inline int WINAPI SHCreateDirectoryExA(HWND /*hwnd*/, const char* /*pszPath*/, void* /*psa*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline int WINAPI SHCreateDirectoryExW(HWND /*hwnd*/, const wchar_t* /*pszPath*/, void* /*psa*/) noexcept {
+    return 0; // ERROR_SUCCESS
+}
+
+inline ULONG WINAPI SHChangeNotifyRegister_Ordinal2(
+    HWND /*hwnd*/,
+    int /*fSources*/,
+    int32_t /*fEvents*/,
+    uint32_t /*wMsg*/,
+    int /*cItems*/,
+    const void* /*pItems*/
+) noexcept {
+    return 1;
+}
+
+inline BOOL WINAPI SHChangeNotifyDeregister_Ordinal4(ULONG /*ulID*/) noexcept {
+    return win32::TRUE;
+}
+
+inline int wnsprintfW(wchar_t* lpOut, int cchLimitIn, const wchar_t* lpFmt, ...) noexcept {
+    if (!lpOut || cchLimitIn <= 0 || !lpFmt) return -1;
+    va_list args;
+    va_start(args, lpFmt);
+    int written = std::vswprintf(lpOut, static_cast<size_t>(cchLimitIn), lpFmt, args);
+    va_end(args);
+    return written;
 }
 
 // ============================================================================
@@ -1674,8 +1707,13 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExportOrdinal("shell32.dll", 645, reinterpret_cast<void*>(ShellOrdinal645));
     ldr.registerExport("shell32.dll", "SHAddToRecentDocs", reinterpret_cast<void*>(SHAddToRecentDocs));
     ldr.registerExportOrdinal("shell32.dll", 190, reinterpret_cast<void*>(ShellOrdinal190));
+    ldr.registerExport("shell32.dll", "SHCreateDirectoryExA", reinterpret_cast<void*>(SHCreateDirectoryExA));
+    ldr.registerExport("shell32.dll", "SHCreateDirectoryExW", reinterpret_cast<void*>(SHCreateDirectoryExW));
+    ldr.registerExportOrdinal("shell32.dll", 2, reinterpret_cast<void*>(SHChangeNotifyRegister_Ordinal2));
+    ldr.registerExportOrdinal("shell32.dll", 4, reinterpret_cast<void*>(SHChangeNotifyDeregister_Ordinal4));
 
     // shlwapi.dll exports
+    ldr.registerExport("shlwapi.dll", "wnsprintfW", reinterpret_cast<void*>(wnsprintfW));
     ldr.registerExport("shlwapi.dll", "PathSkipRootW", reinterpret_cast<void*>(PathSkipRootW));
     ldr.registerExport("shlwapi.dll", "SHCreateStreamOnFileW", reinterpret_cast<void*>(SHCreateStreamOnFileW));
     ldr.registerExport("shlwapi.dll", "PathIsRootW", reinterpret_cast<void*>(PathIsRootW));
