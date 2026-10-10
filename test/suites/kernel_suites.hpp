@@ -314,23 +314,86 @@ void Test_SyscallDispatcher_DispatchFlow() {
 }
 
 // ============================================================================
-// Suite 5: Process, Thread, and Section Objects Tests
+// Suite 5: Process, Thread, and Section Objects Tests (Horizon 5 Ps Subsystem)
 // ============================================================================
 void Test_ProcessAndSectionManager() {
     auto& pm = ps::ProcessManager::get();
-    auto proc = pm.createProcess(L"TestProcess.exe");
+
+    // 1. Initial System Processes (PID 0 Idle and PID 4 System)
+    auto idleProc = pm.getIdleProcess();
+    TEST_ASSERT(idleProc != nullptr, "System Idle process must be initialized");
+    TEST_ASSERT(idleProc->getPid() == 0, "Idle process PID must be 0");
+    TEST_ASSERT(idleProc->getImageFileName() == L"Idle", "Idle image name must be 'Idle'");
+    TEST_ASSERT(!idleProc->getThreads().empty(), "Idle process must contain at least 1 idle thread");
+    TEST_ASSERT(idleProc->getThreads()[0]->getBasePriority() == 0, "Idle thread base priority must be 0");
+
+    auto sysProc = pm.getSystemProcess();
+    TEST_ASSERT(sysProc != nullptr, "System process must be initialized");
+    TEST_ASSERT(sysProc->getPid() == 4, "System process PID must be 4");
+    TEST_ASSERT(sysProc->getImageFileName() == L"System", "System image name must be 'System'");
+    TEST_ASSERT(sysProc->getToken() != nullptr, "System process must hold SYSTEM security token");
+
+    // 2. Userland Process Creation with Parent PID & CR3 Directory Table Base
+    auto proc = pm.createProcess(L"TestProcess.exe", nullptr, 4); // Spawned by System (PID 4)
     TEST_ASSERT(proc != nullptr, "Process creation must return valid EProcess pointer");
     TEST_ASSERT(proc->getPid() >= 1000, "PID must start in executive range >= 1000");
-    TEST_ASSERT(proc->getPebAddress() != 0, "PEB must be mapped at nonzero address");
+    TEST_ASSERT(proc->getParentPid() == 4, "Parent PID must match 4 (System)");
+    TEST_ASSERT(proc->getDirectoryTableBase() != 0, "CR3 DirectoryTableBase must be non-zero");
+    TEST_ASSERT(proc->getPebAddress() != 0, "PEB must be mapped at non-zero address");
 
-    // Create Thread
+    // Verify PEB structure contents
+    const auto& peb = proc->getPeb();
+    TEST_ASSERT(peb.osBuildNumber == 26100, "PEB OS build number must be 26100");
+    TEST_ASSERT(peb.osMajorVersion == 10, "PEB OS major version must be 10");
+    TEST_ASSERT(peb.numberOfProcessors == 4, "PEB number of processors must be 4");
+
+    // 3. Userland Thread Creation with TEB Allocation
     uintptr_t testEntryPoint = 0x00007FF710001000ULL;
     auto thread = proc->createThread(testEntryPoint);
     TEST_ASSERT(thread != nullptr, "Thread creation must succeed");
     TEST_ASSERT(thread->getContext().rip == testEntryPoint, "Thread RIP must match entry point");
     TEST_ASSERT(thread->getState() == ps::ThreadState::Initialized, "Initial thread state must be Initialized");
+    TEST_ASSERT(thread->getTebAddress() != 0, "Thread must have allocated TEB");
 
-    // Create Section Object
+    // Verify TEB structure contents (GS:[0x30] Self Pointer and ClientId)
+    const auto& teb = thread->getTeb();
+    TEST_ASSERT(teb.ntTib.self == thread->getTebAddress(), "TEB ntTib.self must point to TEB address");
+    TEST_ASSERT(teb.ntTib.stackBase == thread->getStackBase(), "TEB stackBase must match thread stackBase");
+    TEST_ASSERT(teb.ntTib.stackLimit == thread->getStackLimit(), "TEB stackLimit must match thread stackLimit");
+    TEST_ASSERT(teb.clientId.uniqueProcess == proc->getPid(), "TEB ClientId.UniqueProcess must match process PID");
+    TEST_ASSERT(teb.clientId.uniqueThread == thread->getTid(), "TEB ClientId.UniqueThread must match thread TID");
+    TEST_ASSERT(teb.processEnvironmentBlock == proc->getPebAddress(), "TEB processEnvironmentBlock must match PEB address");
+
+
+    // 4. Thread Impersonation Token Subsystem
+    TEST_ASSERT(!thread->isImpersonating(), "Thread should not initially be impersonating");
+    TEST_ASSERT(thread->getActiveToken() == proc->getToken(), "Active token must default to process primary token");
+
+    auto impersonatedToken = se::TokenObject::createSystemToken();
+    thread->impersonateToken(impersonatedToken, ps::SecurityImpersonationLevel::SecurityImpersonation);
+    TEST_ASSERT(thread->isImpersonating(), "Thread must report impersonating state");
+    TEST_ASSERT(thread->getActiveToken() == impersonatedToken, "Active token must match impersonated token");
+    TEST_ASSERT(thread->getImpersonationLevel() == ps::SecurityImpersonationLevel::SecurityImpersonation, "Impersonation level must match");
+
+    thread->revertToSelf();
+    TEST_ASSERT(!thread->isImpersonating(), "Thread must no longer be impersonating after revertToSelf");
+    TEST_ASSERT(thread->getActiveToken() == proc->getToken(), "Active token must return to process primary token");
+
+    // 5. Standard NT Ps* Query APIs
+    std::shared_ptr<ps::EProcess> lookedUpProc;
+    NtStatus lookupSt = ps::PsLookupProcessByProcessId(proc->getPid(), lookedUpProc);
+    TEST_ASSERT(NT_SUCCESS(lookupSt), "PsLookupProcessByProcessId must succeed");
+    TEST_ASSERT(lookedUpProc == proc, "Looked up process must match proc");
+    TEST_ASSERT(ps::PsGetProcessId(proc.get()) == proc->getPid(), "PsGetProcessId must return PID");
+    TEST_ASSERT(ps::PsGetProcessImageFileName(proc.get()) == L"TestProcess.exe", "PsGetProcessImageFileName must match");
+
+    std::shared_ptr<ps::EThread> lookedUpThread;
+    NtStatus lookupThSt = ps::PsLookupThreadByThreadId(thread->getTid(), lookedUpThread);
+    TEST_ASSERT(NT_SUCCESS(lookupThSt), "PsLookupThreadByThreadId must succeed");
+    TEST_ASSERT(lookedUpThread == thread, "Looked up thread must match thread");
+    TEST_ASSERT(ps::PsGetThreadId(thread.get()) == thread->getTid(), "PsGetThreadId must return TID");
+
+    // 6. Create Section Object & Memory Mapping
     auto& sm = section::SectionManager::get();
     Handle secHandle = 0;
     std::shared_ptr<section::SectionObject> secObj;
@@ -364,11 +427,12 @@ void Test_ProcessAndSectionManager() {
     NtStatus unmapStatus = sm.unmapViewOfSection(*proc, viewBase);
     TEST_ASSERT(NT_SUCCESS(unmapStatus), "Unmapping section view must succeed");
 
-    // Terminate Process
+    // 7. Terminate Process
     proc->terminate(NtStatus::Success);
     TEST_ASSERT(proc->isTerminated(), "Process must be marked terminated");
     TEST_ASSERT(thread->getState() == ps::ThreadState::Terminated, "Threads must be transitioned to Terminated");
 }
+
 
 // ============================================================================
 // Suite 6: Synchronization Primitives Tests (KEVENT, KMUTANT, KSEMAPHORE)

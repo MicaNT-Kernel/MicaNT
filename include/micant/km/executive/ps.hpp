@@ -6,6 +6,8 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <unordered_map>
+#include <chrono>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 #include "ob.hpp"
@@ -14,16 +16,25 @@
 
 namespace micant::ps {
 
-/**
- * @brief Thread Execution State.
- */
+// ============================================================================
+// 1. Thread Execution State & Security Impersonation Level
+// ============================================================================
 enum class ThreadState : uint32_t {
     Initialized,
     Ready,
     Running,
     Standby,
     Terminated,
-    Waiting
+    Waiting,
+    Transition,
+    DeferredReady
+};
+
+enum class SecurityImpersonationLevel : uint32_t {
+    SecurityAnonymous     = 0,
+    SecurityIdentification= 1,
+    SecurityImpersonation = 2,
+    SecurityDelegation    = 3
 };
 
 /**
@@ -54,7 +65,7 @@ struct ContextFrame {
 
 /**
  * @brief Process Environment Block (PEB).
- * Standard userland structure pointed to by TEB->ProcessEnvironmentBlock.
+ * Standard userland structure pointed to by TEB->ProcessEnvironmentBlock (GS:[0x60]).
  */
 struct Peb {
     uint8_t  inheritedAddressSpace{0};
@@ -72,12 +83,13 @@ struct Peb {
     uint32_t ntGlobalFlag{0};
     uint16_t osMajorVersion{10};
     uint16_t osMinorVersion{0};
-    uint16_t osBuildNumber{26100}; // Modern Windows 11 base build
+    uint16_t osBuildNumber{26100}; // Windows 11 base build
     uint16_t osCsdVersion{0};
     uint32_t osPlatformId{2};      // VER_PLATFORM_WIN32_NT
     uint32_t imageSubsystem{3};    // IMAGE_SUBSYSTEM_WINDOWS_CUI
     uint32_t imageSubsystemMajorVersion{10};
     uint32_t imageSubsystemMinorVersion{0};
+    uint32_t sessionId{0};
 };
 
 /**
@@ -92,16 +104,17 @@ struct Teb {
         uint64_t subSystemTib{0};
         uint64_t fiberData{0};
         uint64_t arbitraryUserPointer{0};
-        uint64_t self{0}; // Points to TEB itself
+        uint64_t self{0}; // Points to TEB itself (GS:[0x30])
     } ntTib;
 
     uint64_t environmentPointer{0};
     ClientId clientId{};
     uint64_t activeRpcHandle{0};
     uint64_t threadLocalStoragePointer{0};
-    uint64_t processEnvironmentBlock{0}; // Pointer to PEB
+    uint64_t processEnvironmentBlock{0}; // Pointer to PEB (GS:[0x60])
     uint32_t lastErrorValue{0};
     uint32_t countOfOwnedCriticalSections{0};
+    uint32_t hardErrorMode{0};
 };
 
 class EProcess;
@@ -116,6 +129,7 @@ public:
         : tid_(tid), owner_(owner), stackBase_(stackBase), stackLimit_(stackLimit), state_(ThreadState::Initialized) {
         context_.rip = entryPoint;
         context_.rsp = stackBase - 0x28; // Standard 32-byte shadow space + return address align
+        createTime_ = std::chrono::steady_clock::now();
     }
 
     [[nodiscard]] Handle getTid() const noexcept { return tid_; }
@@ -131,6 +145,41 @@ public:
     [[nodiscard]] uintptr_t getTebAddress() const noexcept { return tebAddress_; }
     void setTebAddress(uintptr_t addr) noexcept { tebAddress_ = addr; }
 
+    [[nodiscard]] const Teb& getTeb() const noexcept { return teb_; }
+    [[nodiscard]] Teb& getTeb() noexcept { return teb_; }
+    void setTeb(const Teb& teb) noexcept { teb_ = teb; }
+
+    [[nodiscard]] uint32_t getPriority() const noexcept { return priority_; }
+    void setPriority(uint32_t p) noexcept { priority_ = p; }
+
+
+    [[nodiscard]] uint32_t getBasePriority() const noexcept { return basePriority_; }
+    void setBasePriority(uint32_t p) noexcept { basePriority_ = p; priority_ = p; }
+
+    [[nodiscard]] NtStatus getExitStatus() const noexcept { return exitStatus_; }
+    void setExitStatus(NtStatus status) noexcept { exitStatus_ = status; }
+
+    // Thread Impersonation
+    void impersonateToken(std::shared_ptr<se::TokenObject> token, SecurityImpersonationLevel level) noexcept {
+        impersonationToken_ = std::move(token);
+        impersonationLevel_ = level;
+    }
+
+    void revertToSelf() noexcept {
+        impersonationToken_.reset();
+        impersonationLevel_ = SecurityImpersonationLevel::SecurityAnonymous;
+    }
+
+    [[nodiscard]] bool isImpersonating() const noexcept {
+        return impersonationToken_ != nullptr;
+    }
+
+    [[nodiscard]] std::shared_ptr<se::TokenObject> getActiveToken();
+
+    [[nodiscard]] SecurityImpersonationLevel getImpersonationLevel() const noexcept {
+        return impersonationLevel_;
+    }
+
 private:
     Handle tid_{0};
     EProcess* owner_{nullptr};
@@ -139,22 +188,39 @@ private:
     uintptr_t tebAddress_{0};
     ThreadState state_{ThreadState::Initialized};
     ContextFrame context_{};
+    uint32_t priority_{8};
+    uint32_t basePriority_{8};
+    NtStatus exitStatus_{NtStatus::Success};
+    std::shared_ptr<se::TokenObject> impersonationToken_;
+    SecurityImpersonationLevel impersonationLevel_{SecurityImpersonationLevel::SecurityAnonymous};
+    Teb teb_{};
+    std::chrono::steady_clock::time_point createTime_;
 };
 
 /**
  * @brief Executive Process (EPROCESS).
- * The primary container for address space, handles, and threads.
+ * The primary container for address space, handles, security tokens, and threads.
  */
 class EProcess {
 public:
-    EProcess(Handle pid, std::wstring imageFileName)
-        : pid_(pid), imageFileName_(std::move(imageFileName)), exitStatus_(NtStatus::Success), terminated_(false) {}
+    EProcess(Handle pid, std::wstring imageFileName, Handle parentPid = 0)
+        : pid_(pid), parentPid_(parentPid), imageFileName_(std::move(imageFileName)),
+          directoryTableBase_(0x1000 + (static_cast<uint64_t>(pid) * 0x1000)),
+          exitStatus_(NtStatus::Success), terminated_(false) {
+        createTime_ = std::chrono::steady_clock::now();
+    }
 
     [[nodiscard]] Handle getPid() const noexcept { return pid_; }
+    [[nodiscard]] Handle getParentPid() const noexcept { return parentPid_; }
+    void setParentPid(Handle parent) noexcept { parentPid_ = parent; }
+
     [[nodiscard]] const std::wstring& getImageFileName() const noexcept { return imageFileName_; }
 
     [[nodiscard]] mm::ProcessAddressSpace& getAddressSpace() noexcept { return addressSpace_; }
     [[nodiscard]] ob::HandleTable& getHandleTable() noexcept { return handleTable_; }
+
+    [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return directoryTableBase_; }
+    void setDirectoryTableBase(uintptr_t cr3) noexcept { directoryTableBase_ = cr3; }
 
     [[nodiscard]] uintptr_t getImageBase() const noexcept { return imageBase_; }
     void setImageBase(uintptr_t base) noexcept { imageBase_ = base; }
@@ -165,6 +231,10 @@ public:
     [[nodiscard]] uintptr_t getPebAddress() const noexcept { return pebAddress_; }
     void setPebAddress(uintptr_t addr) noexcept { pebAddress_ = addr; }
 
+    [[nodiscard]] const Peb& getPeb() const noexcept { return peb_; }
+    [[nodiscard]] Peb& getPeb() noexcept { return peb_; }
+    void setPeb(const Peb& peb) noexcept { peb_ = peb; }
+
     [[nodiscard]] bool isTerminated() const noexcept { return terminated_; }
     [[nodiscard]] NtStatus getExitStatus() const noexcept { return exitStatus_; }
 
@@ -173,18 +243,37 @@ public:
         terminated_ = true;
         for (auto& t : threads_) {
             t->setState(ThreadState::Terminated);
+            t->setExitStatus(status);
         }
     }
 
     std::shared_ptr<EThread> createThread(uintptr_t entryPoint, size_t stackSize = 1024 * 1024) {
-        Handle tid = static_cast<Handle>(nextTid_++);
+        static std::atomic<uint32_t> s_GlobalTid{1};
+        Handle tid = static_cast<Handle>(s_GlobalTid.fetch_add(1, std::memory_order_relaxed));
+
         
         // Allocate stack in process address space
         uintptr_t stackBase = 0;
         addressSpace_.allocate(stackBase, stackSize, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
         uintptr_t stackTop = stackBase + stackSize;
 
+        // Allocate and setup TEB in process address space
+        uintptr_t tebAddr = 0;
+        addressSpace_.allocate(tebAddr, sizeof(Teb), mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+
         auto thread = std::make_shared<EThread>(tid, this, entryPoint, stackTop, stackBase);
+        thread->setTebAddress(tebAddr);
+
+        // Populate TEB structure
+        Teb userTeb{};
+        userTeb.ntTib.self = tebAddr;
+        userTeb.ntTib.stackBase = stackTop;
+        userTeb.ntTib.stackLimit = stackBase;
+        userTeb.clientId.uniqueProcess = pid_;
+        userTeb.clientId.uniqueThread = tid;
+        userTeb.processEnvironmentBlock = pebAddress_;
+        thread->setTeb(userTeb);
+
         threads_.push_back(thread);
         return thread;
     }
@@ -196,24 +285,43 @@ public:
         return threads_;
     }
 
+    [[nodiscard]] size_t getActiveThreadCount() const noexcept {
+        size_t count = 0;
+        for (const auto& t : threads_) {
+            if (t->getState() != ThreadState::Terminated) ++count;
+        }
+        return count;
+    }
+
 private:
     Handle pid_{0};
+    Handle parentPid_{0};
     std::wstring imageFileName_;
+    uintptr_t directoryTableBase_{0x1000};
     mm::ProcessAddressSpace addressSpace_;
     ob::HandleTable handleTable_;
     std::shared_ptr<se::TokenObject> token_;
     uintptr_t imageBase_{0};
     uintptr_t entryPoint_{0};
     uintptr_t pebAddress_{0};
+    Peb peb_{};
     NtStatus exitStatus_{NtStatus::Success};
     bool terminated_{false};
-    uint32_t nextTid_{1};
     std::vector<std::shared_ptr<EThread>> threads_;
+    std::chrono::steady_clock::time_point createTime_;
 };
 
-/**
- * @brief Process Manager Factory & Registry.
- */
+
+
+inline std::shared_ptr<se::TokenObject> EThread::getActiveToken() {
+    if (impersonationToken_) return impersonationToken_;
+    if (owner_) return owner_->getToken();
+    return nullptr;
+}
+
+// ============================================================================
+// 2. Process & Thread Manager Engine (Ps Subsystem)
+// ============================================================================
 class ProcessManager {
 public:
     static ProcessManager& get() {
@@ -221,14 +329,29 @@ public:
         return instance;
     }
 
-    std::shared_ptr<EProcess> createProcess(std::wstring_view imageName, std::shared_ptr<se::TokenObject> token = nullptr) {
+    std::shared_ptr<EProcess> createProcess(
+        std::wstring_view imageName,
+        std::shared_ptr<se::TokenObject> token = nullptr,
+        Handle parentPid = 0
+    ) {
         Handle pid = static_cast<Handle>(nextPid_++);
-        auto proc = std::make_shared<EProcess>(pid, std::wstring(imageName));
+        auto proc = std::make_shared<EProcess>(pid, std::wstring(imageName), parentPid);
 
         // Allocate and setup PEB at standard base
-        uintptr_t pebAddr = 0x00007FFDF0000000ULL;
+        uintptr_t pebAddr = 0x00007FFDF0000000ULL + (static_cast<uint64_t>(pid) * 0x10000);
         proc->getAddressSpace().allocate(pebAddr, sizeof(Peb), mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE);
         proc->setPebAddress(pebAddr);
+
+        // Populate PEB defaults
+        Peb userPeb{};
+        userPeb.numberOfProcessors = 4;
+        userPeb.osMajorVersion = 10;
+        userPeb.osMinorVersion = 0;
+        userPeb.osBuildNumber = 26100;
+        userPeb.osPlatformId = 2;
+        userPeb.imageSubsystem = 3;
+        proc->setPeb(userPeb);
+
 
         if (token) {
             proc->setToken(std::move(token));
@@ -248,6 +371,7 @@ public:
         idleProcess_ = std::make_shared<EProcess>(0, L"Idle");
         auto idleThread = idleProcess_->createThread(0);
         idleThread->setState(ThreadState::Running);
+        idleThread->setBasePriority(0);
         processes_[0] = idleProcess_;
 
         // 2. PID 4: System Process (System / ntoskrnl.exe)
@@ -255,6 +379,7 @@ public:
         systemProcess_->setToken(se::TokenObject::createSystemToken());
         auto sysWorkerThread = systemProcess_->createThread(0);
         sysWorkerThread->setState(ThreadState::Ready);
+        sysWorkerThread->setBasePriority(8);
         processes_[4] = systemProcess_;
     }
 
@@ -272,6 +397,15 @@ public:
         return nullptr;
     }
 
+    [[nodiscard]] std::shared_ptr<EThread> getThread(Handle tid) const {
+        for (const auto& [pid, proc] : processes_) {
+            for (const auto& t : proc->getThreads()) {
+                if (t->getTid() == tid) return t;
+            }
+        }
+        return nullptr;
+    }
+
     [[nodiscard]] size_t getActiveProcessCount() const noexcept {
         return processes_.size();
     }
@@ -286,5 +420,36 @@ private:
     std::shared_ptr<EProcess> systemProcess_;
     std::unordered_map<Handle, std::shared_ptr<EProcess>> processes_;
 };
+
+// ============================================================================
+// 3. Standard NT Executive Process/Thread API (Ps*)
+// ============================================================================
+inline NtStatus PsLookupProcessByProcessId(Handle pid, std::shared_ptr<EProcess>& outProcess) {
+    outProcess = ProcessManager::get().getProcess(pid);
+    if (!outProcess) return NtStatus::NoSuchProcess;
+    return NtStatus::Success;
+}
+
+inline NtStatus PsLookupThreadByThreadId(Handle tid, std::shared_ptr<EThread>& outThread) {
+    outThread = ProcessManager::get().getThread(tid);
+    if (!outThread) return NtStatus::InvalidParameter;
+    return NtStatus::Success;
+}
+
+inline Handle PsGetProcessId(const EProcess* process) {
+    return process ? process->getPid() : 0;
+}
+
+inline Handle PsGetThreadId(const EThread* thread) {
+    return thread ? thread->getTid() : 0;
+}
+
+inline std::wstring_view PsGetProcessImageFileName(const EProcess* process) {
+    if (process) {
+        return process->getImageFileName();
+    }
+    return std::wstring_view{};
+}
+
 
 } // namespace micant::ps
