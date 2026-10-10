@@ -2774,7 +2774,7 @@ struct OSVERSIONINFOA {
     DWORD dwMinorVersion;
     DWORD dwBuildNumber;
     DWORD dwPlatformId;
-    CHAR szCSDVersion[128];
+    char szCSDVersion[128];
 };
 using LPOSVERSIONINFOA = OSVERSIONINFOA*;
 
@@ -3756,6 +3756,108 @@ inline DWORD GetTempPath2A(DWORD nBufferLength, LPSTR lpBuffer) noexcept {
     return GetTempPathA(nBufferLength, lpBuffer);
 }
 
+// Job Objects
+inline HANDLE CreateJobObjectW(void* /*lpJobAttributes*/, const wchar_t* /*lpName*/) noexcept {
+    return reinterpret_cast<HANDLE>(0x7101);
+}
+
+inline HANDLE OpenJobObjectW(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, const wchar_t* /*lpName*/) noexcept {
+    return reinterpret_cast<HANDLE>(0x7101);
+}
+
+inline BOOL AssignProcessToJobObject(HANDLE /*hJob*/, HANDLE /*hProcess*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL SetInformationJobObject(HANDLE /*hJob*/, int /*JobObjectInformationClass*/, void* /*lpJobObjectInformation*/, DWORD /*cbJobObjectInformationLength*/) noexcept {
+    return TRUE;
+}
+
+// Memory & File Mapping
+inline HANDLE OpenFileMappingA(DWORD /*dwDesiredAccess*/, BOOL /*bInheritHandle*/, const char* /*lpName*/) noexcept {
+    return reinterpret_cast<HANDLE>(0x7102);
+}
+
+inline BOOL VirtualLock(void* /*lpAddress*/, size_t /*dwSize*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL FlushInstructionCache(HANDLE /*hProcess*/, const void* /*lpBaseAddress*/, size_t /*dwSize*/) noexcept {
+    return TRUE;
+}
+
+// Console Input
+inline BOOL FlushConsoleInputBuffer(HANDLE /*hConsoleInput*/) noexcept {
+    return TRUE;
+}
+
+inline BOOL PeekConsoleInputW(HANDLE /*hConsoleInput*/, void* /*lpBuffer*/, DWORD /*nLength*/, DWORD* lpNumberOfEventsRead) noexcept {
+    if (lpNumberOfEventsRead) *lpNumberOfEventsRead = 0;
+    return TRUE;
+}
+
+inline BOOL ReadConsoleInputW(HANDLE /*hConsoleInput*/, void* /*lpBuffer*/, DWORD /*nLength*/, DWORD* lpNumberOfEventsRead) noexcept {
+    if (lpNumberOfEventsRead) *lpNumberOfEventsRead = 0;
+    return TRUE;
+}
+
+inline BOOL WriteConsoleInputW(HANDLE /*hConsoleInput*/, const void* /*lpBuffer*/, DWORD nLength, DWORD* lpNumberOfEventsWritten) noexcept {
+    if (lpNumberOfEventsWritten) *lpNumberOfEventsWritten = nLength;
+    return TRUE;
+}
+
+// Interlocked Atomics
+inline LONG InterlockedIncrement(volatile LONG* Addend) noexcept {
+    LONG old = *Addend;
+    *Addend = old + 1;
+    return old + 1;
+}
+
+inline LONG InterlockedDecrement(volatile LONG* Addend) noexcept {
+    LONG old = *Addend;
+    *Addend = old - 1;
+    return old - 1;
+}
+
+inline LONG InterlockedExchange(volatile LONG* Target, LONG Value) noexcept {
+    LONG old = *Target;
+    *Target = Value;
+    return old;
+}
+
+inline LONG InterlockedExchangeAdd(volatile LONG* Addend, LONG Value) noexcept {
+    LONG old = *Addend;
+    *Addend += Value;
+    return old;
+}
+
+inline LONG InterlockedCompareExchange(volatile LONG* Destination, LONG Exchange, LONG Comperand) noexcept {
+    LONG old = *Destination;
+    if (old == Comperand) {
+        *Destination = Exchange;
+    }
+    return old;
+}
+
+// Formatting & Module
+inline int GetDateFormatA(LCID /*Locale*/, DWORD /*dwFlags*/, const void* /*lpDate*/, const char* /*lpFormat*/, char* lpDateStr, int cchDate) noexcept {
+    const char* dateStr = "2026-10-09";
+    if (lpDateStr && cchDate > 10) {
+        std::strcpy(lpDateStr, dateStr);
+        return 11;
+    }
+    return 11;
+}
+
+inline BOOL GetModuleHandleExA(DWORD /*dwFlags*/, const char* /*lpModuleName*/, HMODULE* phModule) noexcept {
+    if (phModule) *phModule = reinterpret_cast<HMODULE>(0x7FFE0000);
+    return TRUE;
+}
+
+inline BOOL IsBadWritePtr(void* /*lp*/, size_t /*ucb*/) noexcept {
+    return FALSE;
+}
+
 inline HMODULE LoadLibraryA(LPCSTR lpLibFileName) noexcept {
     if (!lpLibFileName) return nullptr;
     std::string s(lpLibFileName);
@@ -4309,6 +4411,25 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "GetEnvironmentStrings", reinterpret_cast<void*>(GetEnvironmentStrings));
     ldr.registerExport("kernel32.dll", "SetHandleCount", reinterpret_cast<void*>(SetHandleCount));
     ldr.registerExport("kernel32.dll", "GetStringTypeA", reinterpret_cast<void*>(GetStringTypeA));
+    ldr.registerExport("kernel32.dll", "CreateJobObjectW", reinterpret_cast<void*>(CreateJobObjectW));
+    ldr.registerExport("kernel32.dll", "OpenJobObjectW", reinterpret_cast<void*>(OpenJobObjectW));
+    ldr.registerExport("kernel32.dll", "AssignProcessToJobObject", reinterpret_cast<void*>(AssignProcessToJobObject));
+    ldr.registerExport("kernel32.dll", "SetInformationJobObject", reinterpret_cast<void*>(SetInformationJobObject));
+    ldr.registerExport("kernel32.dll", "OpenFileMappingA", reinterpret_cast<void*>(OpenFileMappingA));
+    ldr.registerExport("kernel32.dll", "VirtualLock", reinterpret_cast<void*>(VirtualLock));
+    ldr.registerExport("kernel32.dll", "FlushInstructionCache", reinterpret_cast<void*>(FlushInstructionCache));
+    ldr.registerExport("kernel32.dll", "FlushConsoleInputBuffer", reinterpret_cast<void*>(FlushConsoleInputBuffer));
+    ldr.registerExport("kernel32.dll", "PeekConsoleInputW", reinterpret_cast<void*>(PeekConsoleInputW));
+    ldr.registerExport("kernel32.dll", "ReadConsoleInputW", reinterpret_cast<void*>(ReadConsoleInputW));
+    ldr.registerExport("kernel32.dll", "WriteConsoleInputW", reinterpret_cast<void*>(WriteConsoleInputW));
+    ldr.registerExport("kernel32.dll", "InterlockedIncrement", reinterpret_cast<void*>(InterlockedIncrement));
+    ldr.registerExport("kernel32.dll", "InterlockedDecrement", reinterpret_cast<void*>(InterlockedDecrement));
+    ldr.registerExport("kernel32.dll", "InterlockedExchange", reinterpret_cast<void*>(InterlockedExchange));
+    ldr.registerExport("kernel32.dll", "InterlockedExchangeAdd", reinterpret_cast<void*>(InterlockedExchangeAdd));
+    ldr.registerExport("kernel32.dll", "InterlockedCompareExchange", reinterpret_cast<void*>(InterlockedCompareExchange));
+    ldr.registerExport("kernel32.dll", "GetDateFormatA", reinterpret_cast<void*>(GetDateFormatA));
+    ldr.registerExport("kernel32.dll", "GetModuleHandleExA", reinterpret_cast<void*>(GetModuleHandleExA));
+    ldr.registerExport("kernel32.dll", "IsBadWritePtr", reinterpret_cast<void*>(IsBadWritePtr));
 
     // ntdll.dll exports
     ldr.registerExport("ntdll.dll", "RtlAllocateHeap", reinterpret_cast<void*>(ntdll::RtlAllocateHeap));

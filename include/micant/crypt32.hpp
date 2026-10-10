@@ -1139,6 +1139,22 @@ inline win32::BOOL CryptProtectMemory(void* /*pData*/, uint32_t /*cbData*/, uint
     return win32::TRUE;
 }
 
+inline win32::BOOL CertCreateCertificateChainEngine(void* /*pConfig*/, void** phChainEngine) noexcept {
+    if (phChainEngine) *phChainEngine = reinterpret_cast<void*>(0xCCA0);
+    return win32::TRUE;
+}
+
+inline void CertFreeCertificateChainEngine(void* /*hChainEngine*/) noexcept {}
+
+inline win32::BOOL CertVerifyCertificateChainPolicy(void* /*pszPolicyOID*/, void* /*pChainContext*/, void* /*pPolicyPara*/, void* pPolicyStatus) noexcept {
+    if (pPolicyStatus) {
+        struct CERT_CHAIN_POLICY_STATUS { uint32_t cbSize; uint32_t dwError; void* lpvExtraPolicyStatus; };
+        auto* ps = static_cast<CERT_CHAIN_POLICY_STATUS*>(pPolicyStatus);
+        ps->dwError = 0; // S_OK / Valid chain
+    }
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 5. Subsystem Export Registration
 // ============================================================================
@@ -1177,6 +1193,9 @@ inline void InitializeCrypt32SubsystemExports() {
     ldr.registerExport("crypt32.dll", "CertDeleteCertificateFromStore", reinterpret_cast<void*>(CertDeleteCertificateFromStore));
     ldr.registerExport("crypt32.dll", "CertEnumCRLsInStore", reinterpret_cast<void*>(CertEnumCRLsInStore));
     ldr.registerExport("crypt32.dll", "CryptProtectMemory", reinterpret_cast<void*>(CryptProtectMemory));
+    ldr.registerExport("crypt32.dll", "CertCreateCertificateChainEngine", reinterpret_cast<void*>(CertCreateCertificateChainEngine));
+    ldr.registerExport("crypt32.dll", "CertFreeCertificateChainEngine", reinterpret_cast<void*>(CertFreeCertificateChainEngine));
+    ldr.registerExport("crypt32.dll", "CertVerifyCertificateChainPolicy", reinterpret_cast<void*>(CertVerifyCertificateChainPolicy));
 }
 
 } // namespace micant::crypt32

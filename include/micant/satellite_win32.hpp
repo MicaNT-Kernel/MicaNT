@@ -31,6 +31,10 @@
 #include "comdlg32.hpp"
 #include "sensapi.hpp"
 #include "msvcrt.hpp"
+#include "msi.hpp"
+#include "sspi.hpp"
+#include "crypt32.hpp"
+#include "ws2_32.hpp"
 #include "ldr.hpp"
 #include "mpr.hpp"
 #include "satellite_wiztree.hpp"
@@ -113,12 +117,16 @@ inline void InitializeSatelliteWin32Exports() {
     sensapi::InitializeSensApiSubsystemExports();
     comdlg32::InitializeComDlg32SubsystemExports();
     comctl32::InitializeComCtl32SubsystemExports();
-    gdi32::InitializeGdiSubsystemExports();
-    user32::InitializeUserSubsystemExports();
-    advapi32::InitializeAdvapiSubsystemExports();
+    gdi32::InitializeGdi32SubsystemExports();
+    user32::InitializeUser32SubsystemExports();
+    advapi32::InitializeAdvapi32SubsystemExports();
     shell32::InitializeShell32SubsystemExports();
     win32::InitializeWin32SubsystemExports();
-    msvcrt::InitializeMsvcrtExports();
+    msvcrt::InitializeMsvcrtSubsystemExports();
+    msi::InitializeMsiSubsystemExports();
+    sspi::InitializeSspiSubsystemExports();
+    crypt32::InitializeCrypt32SubsystemExports();
+    ws2_32::InitializeWs2_32SubsystemExports();
 
     // WizTree 4.x Subsystem Extensions
     wiztree::InitializeWizTreeWin32Exports();

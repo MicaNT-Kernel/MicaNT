@@ -1034,10 +1034,25 @@ inline intptr_t ComCtlOrdinalStub(void* /*p1*/, void* /*p2*/, void* /*p3*/, void
     return 0;
 }
 
+inline win32::HWND CreateToolbarEx(
+    win32::HWND /*hwnd*/, uint32_t /*ws*/, uint32_t /*wID*/, int /*nBitmaps*/,
+    void* /*hBMInst*/, uintptr_t /*wBMID*/, void* /*lpButtons*/, int /*iNumButtons*/,
+    int /*dxButton*/, int /*dyButton*/, int /*dxBitmap*/, int /*dyBitmap*/, uint32_t /*uStructSize*/
+) noexcept {
+    return reinterpret_cast<win32::HWND>(0x8001);
+}
+
+inline intptr_t PropertySheetW(void* /*lppsph*/) noexcept {
+    return 0; // IDOK
+}
+
 inline void InitializeComCtl32SubsystemExports() {
     InitCommonControls();
 
     auto& ldr = ldr::DynamicLoader::get();
+
+    ldr.registerExport("comctl32.dll", "CreateToolbarEx", reinterpret_cast<void*>(CreateToolbarEx));
+    ldr.registerExport("comctl32.dll", "PropertySheetW", reinterpret_cast<void*>(PropertySheetW));
 
     ldr.registerExport("comctl32.dll", "InitCommonControls", reinterpret_cast<void*>(InitCommonControls));
     ldr.registerExport("comctl32.dll", "InitCommonControlsEx", reinterpret_cast<void*>(InitCommonControlsEx));

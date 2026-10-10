@@ -1534,6 +1534,36 @@ inline int32_t SHRegGetUSValueW([[maybe_unused]] const wchar_t* pszSubKey, [[may
     return 2; // ERROR_FILE_NOT_FOUND
 }
 
+inline HINSTANCE FindExecutableW([[maybe_unused]] const wchar_t* lpFile, [[maybe_unused]] const wchar_t* lpDirectory, wchar_t* lpResult) noexcept {
+    if (lpResult) {
+        wcscpy_s(lpResult, 260, L"C:\\Windows\\explorer.exe");
+    }
+    return reinterpret_cast<HINSTANCE>(42);
+}
+
+inline void SHFreeNameMappings([[maybe_unused]] void* hNameMappings) noexcept {}
+
+inline HRESULT ShellOrdinal644([[maybe_unused]] void* p1, [[maybe_unused]] void* p2, [[maybe_unused]] void* p3) noexcept {
+    return S_OK;
+}
+
+inline HRESULT ShellOrdinal645([[maybe_unused]] void* p1, [[maybe_unused]] void* p2) noexcept {
+    return S_OK;
+}
+
+inline const wchar_t* PathSkipRootW(const wchar_t* pszPath) noexcept {
+    if (!pszPath) return nullptr;
+    if (pszPath[0] && pszPath[1] == L':' && (pszPath[2] == L'\\' || pszPath[2] == L'/')) {
+        return pszPath + 3;
+    }
+    return pszPath;
+}
+
+inline HRESULT SHCreateStreamOnFileW([[maybe_unused]] const wchar_t* pszFile, [[maybe_unused]] DWORD grfMode, void** ppstm) noexcept {
+    if (ppstm) *ppstm = reinterpret_cast<void*>(0x5731);
+    return S_OK;
+}
+
 // ============================================================================
 // 8. Subsystem Export Registration (shell32.dll & shlwapi.dll)
 // ============================================================================
@@ -1577,8 +1607,14 @@ inline void InitializeShell32SubsystemExports() {
     ldr.registerExport("shell32.dll", "SHBrowseForFolderW", reinterpret_cast<void*>(SHBrowseForFolderW));
     ldr.registerExportOrdinal("shell32.dll", 165, reinterpret_cast<void*>(ShellOrdinal165));
     ldr.registerExportOrdinal("shell32.dll", 16, reinterpret_cast<void*>(ShellOrdinal16));
+    ldr.registerExport("shell32.dll", "FindExecutableW", reinterpret_cast<void*>(FindExecutableW));
+    ldr.registerExport("shell32.dll", "SHFreeNameMappings", reinterpret_cast<void*>(SHFreeNameMappings));
+    ldr.registerExportOrdinal("shell32.dll", 644, reinterpret_cast<void*>(ShellOrdinal644));
+    ldr.registerExportOrdinal("shell32.dll", 645, reinterpret_cast<void*>(ShellOrdinal645));
 
     // shlwapi.dll exports
+    ldr.registerExport("shlwapi.dll", "PathSkipRootW", reinterpret_cast<void*>(PathSkipRootW));
+    ldr.registerExport("shlwapi.dll", "SHCreateStreamOnFileW", reinterpret_cast<void*>(SHCreateStreamOnFileW));
     ldr.registerExport("shlwapi.dll", "PathIsRootW", reinterpret_cast<void*>(PathIsRootW));
     ldr.registerExport("shlwapi.dll", "SHRegGetUSValueW", reinterpret_cast<void*>(SHRegGetUSValueW));
     ldr.registerExport("shlwapi.dll", "PathFileExistsW", reinterpret_cast<void*>(PathFileExistsW));

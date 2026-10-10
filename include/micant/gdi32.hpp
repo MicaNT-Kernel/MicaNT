@@ -1311,6 +1311,7 @@ inline HBRUSH CreateHatchBrush(int /*iHatch*/, COLORREF color) noexcept {
 
 inline BOOL Polygon(HDC /*hdc*/, const POINT* /*apt*/, int /*cpt*/) noexcept { return TRUE; }
 inline BOOL Polyline(HDC /*hdc*/, const POINT* /*apt*/, int /*cpt*/) noexcept { return TRUE; }
+inline BOOL PolyPolyline(HDC /*hdc*/, const void* /*apt*/, const DWORD* /*asz*/, DWORD /*csz*/) noexcept { return TRUE; }
 
 inline HPEN ExtCreatePen(DWORD /*iPenStyle*/, DWORD cWidth, const LOGBRUSH* plbrush, DWORD /*cStyle*/, const DWORD* /*pstyle*/) noexcept {
     COLORREF color = plbrush ? plbrush->lbColor : RGB(0, 0, 0);
@@ -1548,6 +1549,7 @@ inline void InitializeGdi32SubsystemExports() {
     ldr.registerExport("gdi32.dll", "CreateHatchBrush", reinterpret_cast<void*>(CreateHatchBrush));
     ldr.registerExport("gdi32.dll", "Polygon", reinterpret_cast<void*>(Polygon));
     ldr.registerExport("gdi32.dll", "Polyline", reinterpret_cast<void*>(Polyline));
+    ldr.registerExport("gdi32.dll", "PolyPolyline", reinterpret_cast<void*>(PolyPolyline));
     ldr.registerExport("gdi32.dll", "ExtCreatePen", reinterpret_cast<void*>(ExtCreatePen));
     ldr.registerExport("gdi32.dll", "GdiAlphaBlend", reinterpret_cast<void*>(GdiAlphaBlend));
     ldr.registerExport("gdi32.dll", "GetTextMetricsW", reinterpret_cast<void*>(GetTextMetricsW));

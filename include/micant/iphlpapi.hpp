@@ -175,12 +175,25 @@ inline NETIO_STATUS ConvertInterfaceLuidToAlias(const NET_LUID* InterfaceLuid, w
     return 0;
 }
 
+inline uint32_t __stdcall if_nametoindex(const char* /*InterfaceName*/) noexcept {
+    return 1;
+}
+
+inline char* __stdcall if_indextoname(uint32_t /*InterfaceIndex*/, char* InterfaceName) noexcept {
+    if (InterfaceName) {
+        std::strcpy(InterfaceName, "eth0");
+    }
+    return InterfaceName;
+}
+
 inline void InitializeIpHlpApiSubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("iphlpapi.dll", "GetAdaptersInfo", reinterpret_cast<void*>(GetAdaptersInfo));
     ldr.registerExport("iphlpapi.dll", "GetNetworkParams", reinterpret_cast<void*>(GetNetworkParams));
     ldr.registerExport("iphlpapi.dll", "ConvertInterfaceGuidToLuid", reinterpret_cast<void*>(ConvertInterfaceGuidToLuid));
     ldr.registerExport("iphlpapi.dll", "ConvertInterfaceLuidToAlias", reinterpret_cast<void*>(ConvertInterfaceLuidToAlias));
+    ldr.registerExport("iphlpapi.dll", "if_nametoindex", reinterpret_cast<void*>(if_nametoindex));
+    ldr.registerExport("iphlpapi.dll", "if_indextoname", reinterpret_cast<void*>(if_indextoname));
 }
 
 inline void InitializeIpHelperApi() {

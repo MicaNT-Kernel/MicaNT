@@ -690,7 +690,7 @@ inline HRESULT BindCtx_QI(void* /*thisPtr*/, const void* /*riid*/, void** ppv) n
         [](void*) -> uint32_t { return 1; },
         [](void*, void*) -> HRESULT { return S_OK; },
         [](void*, void*) -> HRESULT { return S_OK; },
-        [](void*, void*) -> HRESULT { return S_OK; },
+        [](void*) -> HRESULT { return S_OK; },
         [](void*, void*) -> HRESULT { return S_OK; },
         [](void*, void*) -> HRESULT { return S_OK; },
         [](void*, void**) -> HRESULT { return E_NOTIMPL; },
@@ -704,7 +704,7 @@ inline HRESULT BindCtx_QI(void* /*thisPtr*/, const void* /*riid*/, void** ppv) n
     return S_OK;
 }
 
-inline HRESULT CreateBindCtx(DWORD /*reserved*/, void** ppbc) noexcept {
+inline HRESULT CreateBindCtx(uint32_t /*reserved*/, void** ppbc) noexcept {
     if (!ppbc) return E_POINTER;
     return BindCtx_QI(nullptr, nullptr, ppbc);
 }

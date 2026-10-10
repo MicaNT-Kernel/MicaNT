@@ -1381,6 +1381,19 @@ inline SecurityFunctionTableW* __stdcall InitSecurityInterfaceW() {
     return &s_tableW;
 }
 
+inline uint8_t __stdcall GetUserNameExW([[maybe_unused]] int NameFormat, wchar_t* lpNameBuffer, uint32_t* nSize) noexcept {
+    if (!nSize) return 0;
+    const wchar_t user[] = L"admin";
+    size_t len = wcslen(user);
+    if (*nSize <= len) {
+        *nSize = static_cast<uint32_t>(len + 1);
+        return 0;
+    }
+    wcscpy_s(lpNameBuffer, *nSize, user);
+    *nSize = static_cast<uint32_t>(len);
+    return 1;
+}
+
 // ============================================================================
 // 7. Dynamic Loader Export Registration
 // ============================================================================
@@ -1389,6 +1402,8 @@ inline void InitializeSspiSubsystemExports() {
     auto& loader = ldr::DynamicLoader::get();
 
     // secur32.dll exports
+    loader.registerExport("secur32.dll", "GetUserNameExW", reinterpret_cast<void*>(&GetUserNameExW));
+    loader.registerExport("sspicli.dll", "GetUserNameExW", reinterpret_cast<void*>(&GetUserNameExW));
     loader.registerExport("secur32.dll", "InitSecurityInterfaceA", reinterpret_cast<void*>(&InitSecurityInterfaceA));
     loader.registerExport("secur32.dll", "InitSecurityInterfaceW", reinterpret_cast<void*>(&InitSecurityInterfaceW));
     loader.registerExport("secur32.dll", "EnumerateSecurityPackagesA", reinterpret_cast<void*>(&EnumerateSecurityPackagesA));

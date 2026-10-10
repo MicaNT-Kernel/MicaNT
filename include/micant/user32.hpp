@@ -1072,21 +1072,22 @@ inline win32::BOOL AdjustWindowRectEx(RECT* lpRect, uint32_t /*dwStyle*/, win32:
     return win32::TRUE;
 }
 
-inline win32::BOOL AdjustWindowRect(RECT* lpRect, uint32_t dwStyle, win32::BOOL bMenu) noexcept {
+inline win32::BOOL AdjustWindowRect(void* lpRect, uint32_t dwStyle, win32::BOOL bMenu) noexcept {
     if (!lpRect) return win32::FALSE;
+    auto* rc = static_cast<RECT*>(lpRect);
     int32_t border = 8;
     int32_t caption = (dwStyle & 0x00C00000) ? 32 : 0; // WS_CAPTION
     int32_t menu = bMenu ? 20 : 0;
-    lpRect->left -= border;
-    lpRect->right += border;
-    lpRect->top -= (border + caption + menu);
-    lpRect->bottom += border;
+    rc->left -= border;
+    rc->right += border;
+    rc->top -= (border + caption + menu);
+    rc->bottom += border;
     return win32::TRUE;
 }
 
-inline win32::BOOL CopyRect(RECT* lprcDst, const RECT* lprcSrc) noexcept {
+inline win32::BOOL CopyRect(void* lprcDst, const void* lprcSrc) noexcept {
     if (!lprcDst || !lprcSrc) return win32::FALSE;
-    *lprcDst = *lprcSrc;
+    *static_cast<RECT*>(lprcDst) = *static_cast<const RECT*>(lprcSrc);
     return win32::TRUE;
 }
 
@@ -1102,9 +1103,9 @@ inline win32::BOOL ReplyMessage(LRESULT /*lResult*/) noexcept {
     return win32::TRUE;
 }
 
-inline int32_t ScrollWindowEx(win32::HWND /*hWnd*/, int32_t /*dx*/, int32_t /*dy*/, const RECT* /*prcScroll*/, const RECT* /*prcClip*/, void* /*hrgnUpdate*/, RECT* prcUpdate, uint32_t /*flags*/) noexcept {
+inline int32_t ScrollWindowEx(win32::HWND /*hWnd*/, int32_t /*dx*/, int32_t /*dy*/, const void* /*prcScroll*/, const void* /*prcClip*/, void* /*hrgnUpdate*/, void* prcUpdate, uint32_t /*flags*/) noexcept {
     if (prcUpdate) {
-        *prcUpdate = RECT{0, 0, 800, 600};
+        *static_cast<RECT*>(prcUpdate) = RECT{0, 0, 800, 600};
     }
     return 2; // SIMPLEREGION
 }
@@ -1133,6 +1134,22 @@ inline int32_t SetWindowLongW(win32::HWND hWnd, int nIndex, int32_t dwNewLong) n
 
 inline int32_t GetWindowLongW(win32::HWND hWnd, int nIndex) noexcept {
     return static_cast<int32_t>(WindowManager::get().getWindowLongPtr(hWnd, nIndex));
+}
+
+inline win32::BOOL DrawCaption(win32::HWND /*hwnd*/, HDC /*hdc*/, const void* /*lprect*/, uint32_t /*flags*/) noexcept {
+    return win32::TRUE;
+}
+
+inline uint32_t GetClassLongW(win32::HWND /*hWnd*/, int /*nIndex*/) noexcept {
+    return 0;
+}
+
+inline uint32_t SetClassLongW(win32::HWND /*hWnd*/, int /*nIndex*/, int32_t /*dwNewLong*/) noexcept {
+    return 0;
+}
+
+inline win32::BOOL SendNotifyMessageW(win32::HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) noexcept {
+    return WindowManager::get().postMessage(hWnd, Msg, wParam, lParam) ? win32::TRUE : win32::FALSE;
 }
 
 inline win32::BOOL PostMessageW(win32::HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) noexcept {
@@ -1712,6 +1729,10 @@ inline void InitializeUser32SubsystemExports() {
     ldr.registerExport("user32.dll", "PostThreadMessageW", reinterpret_cast<void*>(PostThreadMessageW));
     ldr.registerExport("user32.dll", "SendMessageTimeoutW", reinterpret_cast<void*>(SendMessageTimeoutW));
     ldr.registerExport("user32.dll", "MapVirtualKeyExW", reinterpret_cast<void*>(MapVirtualKeyExW));
+    ldr.registerExport("user32.dll", "DrawCaption", reinterpret_cast<void*>(DrawCaption));
+    ldr.registerExport("user32.dll", "GetClassLongW", reinterpret_cast<void*>(GetClassLongW));
+    ldr.registerExport("user32.dll", "SetClassLongW", reinterpret_cast<void*>(SetClassLongW));
+    ldr.registerExport("user32.dll", "SendNotifyMessageW", reinterpret_cast<void*>(SendNotifyMessageW));
 }
 
 } // namespace micant::user32

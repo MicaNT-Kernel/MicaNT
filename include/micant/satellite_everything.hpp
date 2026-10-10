@@ -32,6 +32,7 @@
 #include "advapi32.hpp"
 #include "shell32.hpp"
 #include "ole32.hpp"
+#include "scm.hpp"
 #include "ldr.hpp"
 
 namespace micant::satellite::everything {
@@ -53,7 +54,7 @@ struct SERVICE_TABLE_ENTRYW_MOCK {
     void* lpServiceProc;
 };
 
-using SERVICE_STATUS_MOCK = advapi32::scm::SERVICE_STATUS;
+using SERVICE_STATUS_MOCK = scm::SERVICE_STATUS;
 using QUERY_SERVICE_CONFIGW_MOCK = advapi32::QUERY_SERVICE_CONFIGW;
 
 using POINT_MOCK = gdi32::POINT;
@@ -122,12 +123,12 @@ inline void registerEverythingExports(ldr::DynamicLoader& /*ldr*/) {
 }
 
 inline void InitializeEverythingExports() {
-    advapi32::InitializeAdvapiSubsystemExports();
-    gdi32::InitializeGdiSubsystemExports();
-    kernel32::InitializeWin32SubsystemExports();
+    advapi32::InitializeAdvapi32SubsystemExports();
+    gdi32::InitializeGdi32SubsystemExports();
+    win32::InitializeWin32SubsystemExports();
     ole32::InitializeOle32SubsystemExports();
     shell32::InitializeShell32SubsystemExports();
-    user32::InitializeUserSubsystemExports();
+    user32::InitializeUser32SubsystemExports();
 }
 
 } // namespace micant::satellite::everything
