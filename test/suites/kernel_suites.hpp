@@ -790,6 +790,116 @@ void Test_SecurityReferenceMonitor_AccessCheck() {
     NtStatus sOwner = se::SecurityReferenceMonitor::accessCheck(*userToken, ownerSd, se::READ_CONTROL | se::WRITE_DAC, granted);
     TEST_ASSERT(NT_SUCCESS(sOwner), "Owner must be granted READ_CONTROL and WRITE_DAC");
     TEST_ASSERT((granted & (se::READ_CONTROL | se::WRITE_DAC)) == (se::READ_CONTROL | se::WRITE_DAC), "Owner mask must match");
+
+    // 4. Mandatory Integrity Control (MIC) Enforcement
+    se::Sid untrustedSid = se::Sid::integrityUntrusted();
+    se::Sid lowSid = se::Sid::integrityLow();
+    se::Sid medSid = se::Sid::integrityMedium();
+    se::Sid highSid = se::Sid::integrityHigh();
+    se::Sid sysSid = se::Sid::integritySystem();
+    se::Sid ppSid = se::Sid::integrityProtectedProcess();
+
+    TEST_ASSERT(untrustedSid.toString() == L"S-1-16-0", "Untrusted integrity SID must format as S-1-16-0");
+    TEST_ASSERT(lowSid.toString() == L"S-1-16-4096", "Low integrity SID must format as S-1-16-4096");
+    TEST_ASSERT(medSid.toString() == L"S-1-16-8192", "Medium integrity SID must format as S-1-16-8192");
+    TEST_ASSERT(highSid.toString() == L"S-1-16-12288", "High integrity SID must format as S-1-16-12288");
+    TEST_ASSERT(sysSid.toString() == L"S-1-16-16384", "System integrity SID must format as S-1-16-16384");
+    TEST_ASSERT(ppSid.toString() == L"S-1-16-20480", "Protected Process integrity SID must format as S-1-16-20480");
+
+    se::SecurityDescriptor highIntegritySd;
+    se::Acl openDacl;
+    openDacl.addAllowedAce(everyone, se::GENERIC_ALL | se::STANDARD_RIGHTS_ALL | 0xFFFFFFFF);
+    highIntegritySd.setDacl(openDacl);
+    highIntegritySd.setIntegrityLevel(se::SECURITY_MANDATORY_HIGH_RID, se::SYSTEM_MANDATORY_LABEL_NO_WRITE_UP);
+    TEST_ASSERT(highIntegritySd.hasMandatoryLabel(), "Security descriptor must detect mandatory label in SACL");
+    TEST_ASSERT(highIntegritySd.getIntegrityLevel() == se::SECURITY_MANDATORY_HIGH_RID, "Integrity level must match High RID");
+    TEST_ASSERT(highIntegritySd.getIntegrityPolicy() == se::SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, "Integrity policy must match NO_WRITE_UP");
+
+    // Medium integrity user attempting write to High integrity object -> BLOCKED by NO_WRITE_UP despite open DACL
+    uint32_t micGranted = 0;
+    NtStatus stMicWrite = se::SecurityReferenceMonitor::accessCheck(*userToken, highIntegritySd, se::GENERIC_WRITE, micGranted);
+    TEST_ASSERT(stMicWrite == NtStatus::AccessDenied, "Medium token write to High integrity object must be denied by MIC");
+    TEST_ASSERT(micGranted == 0, "Granted access must be 0 on MIC denial");
+
+    // Medium integrity user attempting read to High integrity object -> ALLOWED by NO_WRITE_UP policy
+    NtStatus stMicRead = se::SecurityReferenceMonitor::accessCheck(*userToken, highIntegritySd, se::GENERIC_READ, micGranted);
+    TEST_ASSERT(NT_SUCCESS(stMicRead), "Medium token read to High integrity object must be permitted under NO_WRITE_UP");
+
+    // High integrity admin token attempting write to High integrity object -> ALLOWED
+    auto adminToken = se::TokenObject::createAdminToken(userSid);
+    TEST_ASSERT(adminToken->getIntegrityLevel() == se::SECURITY_MANDATORY_HIGH_RID, "Admin token must have High integrity");
+    NtStatus stAdminWrite = se::SecurityReferenceMonitor::accessCheck(*adminToken, highIntegritySd, se::GENERIC_WRITE, micGranted);
+    TEST_ASSERT(NT_SUCCESS(stAdminWrite), "High token write to High integrity object must be permitted");
+
+    // High integrity object with NO_READ_UP blocks Medium integrity read
+    se::SecurityDescriptor noReadSd;
+    noReadSd.setDacl(openDacl);
+    noReadSd.setIntegrityLevel(se::SECURITY_MANDATORY_HIGH_RID, se::SYSTEM_MANDATORY_LABEL_NO_READ_UP);
+    NtStatus stMicBlockRead = se::SecurityReferenceMonitor::accessCheck(*userToken, noReadSd, se::GENERIC_READ, micGranted);
+    TEST_ASSERT(stMicBlockRead == NtStatus::AccessDenied, "NO_READ_UP policy must deny read access from lower integrity");
+
+    // 5. UAC Token Filtering Simulation & Deny-Only SIDs
+    auto uacFilteredToken = adminToken->filterTokenForUac();
+    TEST_ASSERT(uacFilteredToken != nullptr, "UAC filtered token must be created");
+    TEST_ASSERT(uacFilteredToken->getIntegrityLevel() == se::SECURITY_MANDATORY_MEDIUM_RID, "UAC filtered token must drop to Medium integrity");
+    TEST_ASSERT(!uacFilteredToken->hasPrivilege(se::SE_DEBUG_NAME, false), "Admin privileges must be stripped in UAC token");
+    TEST_ASSERT(!uacFilteredToken->hasPrivilege(se::SE_SHUTDOWN_NAME, false), "SeShutdownPrivilege must be stripped in UAC token");
+
+    // In UAC token, Administrators group is marked SE_GROUP_USE_FOR_DENY_ONLY
+    TEST_ASSERT(uacFilteredToken->hasSid(admins, true), "Deny-only Administrators SID must match for deny checks");
+    TEST_ASSERT(!uacFilteredToken->hasSid(admins, false), "Deny-only Administrators SID must NOT match for allow checks");
+
+    // DACL granting only Administrators
+    se::SecurityDescriptor adminOnlySd;
+    se::Acl adminOnlyDacl;
+    adminOnlyDacl.addAllowedAce(admins, 0x1);
+    adminOnlySd.setDacl(adminOnlyDacl);
+
+    // Full admin token succeeds
+    NtStatus stFullAdmin = se::SecurityReferenceMonitor::accessCheck(*adminToken, adminOnlySd, 0x1, micGranted);
+    TEST_ASSERT(NT_SUCCESS(stFullAdmin), "Full admin token must be granted access on Admin-only DACL");
+
+    // UAC filtered token is denied because Administrators is deny-only
+    NtStatus stFilteredAdmin = se::SecurityReferenceMonitor::accessCheck(*uacFilteredToken, adminOnlySd, 0x1, micGranted);
+    TEST_ASSERT(stFilteredAdmin == NtStatus::AccessDenied, "UAC filtered token must be denied access on Admin-only DACL");
+
+    // 6. Privilege Verification APIs
+    TEST_ASSERT(se::SecurityReferenceMonitor::SeSinglePrivilegeCheck(se::SE_DEBUG_NAME, *sysToken, se::ProcessorMode::UserMode), "SeSinglePrivilegeCheck must pass when privilege enabled");
+    TEST_ASSERT(!se::SecurityReferenceMonitor::SeSinglePrivilegeCheck(se::SE_DEBUG_NAME, *userToken, se::ProcessorMode::UserMode), "SeSinglePrivilegeCheck must fail when privilege absent");
+    TEST_ASSERT(se::SecurityReferenceMonitor::SeSinglePrivilegeCheck(se::SE_DEBUG_NAME, *userToken, se::ProcessorMode::KernelMode), "SeSinglePrivilegeCheck must pass unconditionally for KernelMode");
+
+    std::vector<std::wstring> requiredPrivs = { std::wstring(se::SE_DEBUG_NAME), std::wstring(se::SE_TCB_NAME) };
+    TEST_ASSERT(se::SecurityReferenceMonitor::SePrivilegeCheck(requiredPrivs, *sysToken, true), "SePrivilegeCheck all required must pass on system token");
+    TEST_ASSERT(!se::SecurityReferenceMonitor::SePrivilegeCheck(requiredPrivs, *userToken, true), "SePrivilegeCheck all required must fail on user token");
+    TEST_ASSERT(!se::SecurityReferenceMonitor::SePrivilegeCheck(requiredPrivs, *userToken, false), "SePrivilegeCheck any required must fail on user token");
+
+    // ACCESS_SYSTEM_SECURITY privilege check (requires SeSecurityPrivilege)
+    se::SecurityDescriptor secSd;
+    secSd.setDacl(openDacl);
+    NtStatus stSecWithoutPriv = se::SecurityReferenceMonitor::accessCheck(*userToken, secSd, se::ACCESS_SYSTEM_SECURITY, micGranted);
+    TEST_ASSERT(stSecWithoutPriv == NtStatus::PrivilegeNotHeld, "Requesting ACCESS_SYSTEM_SECURITY without privilege must return PrivilegeNotHeld");
+
+    auto secToken = se::TokenObject::createUserToken(userSid);
+    secToken->addPrivilege(se::SE_SECURITY_NAME, se::SE_PRIVILEGE_ENABLED);
+    NtStatus stSecWithPriv = se::SecurityReferenceMonitor::accessCheck(*secToken, secSd, se::ACCESS_SYSTEM_SECURITY, micGranted);
+    TEST_ASSERT(NT_SUCCESS(stSecWithPriv), "Requesting ACCESS_SYSTEM_SECURITY with privilege must succeed");
+
+    // 7. SACL Auditing
+    se::SecurityReferenceMonitor::clearAuditLog();
+    se::SecurityDescriptor auditSd;
+    auditSd.setDacl(openDacl);
+    se::Acl sacl;
+    sacl.addAuditAce(everyone, 0x1, se::SUCCESSFUL_ACCESS_ACE_FLAG | se::FAILED_ACCESS_ACE_FLAG);
+    auditSd.setSacl(sacl);
+    TEST_ASSERT(auditSd.hasSacl(), "Security descriptor must have SACL");
+    TEST_ASSERT((auditSd.getControl() & se::SE_SACL_PRESENT) != 0, "Control flag SE_SACL_PRESENT must be set");
+
+    NtStatus stAuditSuccess = se::SecurityReferenceMonitor::accessCheck(*userToken, auditSd, 0x1, micGranted, L"TestSecurableObject");
+    TEST_ASSERT(NT_SUCCESS(stAuditSuccess), "Audit access check should succeed");
+    const auto& auditLogs = se::SecurityReferenceMonitor::getAuditLog();
+    TEST_ASSERT(!auditLogs.empty(), "Audit log entry must be generated for SACL audit ACE");
+    TEST_ASSERT(auditLogs.back().accessGranted == true, "Audit record must register successful access");
+    TEST_ASSERT(auditLogs.back().objectName == L"TestSecurableObject", "Audit record object name must match");
 }
 
 // ============================================================================

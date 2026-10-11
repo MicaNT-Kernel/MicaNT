@@ -129,6 +129,7 @@ inline constexpr NTSTATUS STATUS_BUFFER_TOO_SMALL       = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_OBJECT_NAME_NOT_FOUND  = static_cast<NTSTATUS>(0xC0000034);
 inline constexpr NTSTATUS STATUS_OBJECT_NAME_COLLISION  = static_cast<NTSTATUS>(0xC0000035);
 inline constexpr NTSTATUS STATUS_NOT_SUPPORTED          = static_cast<NTSTATUS>(0xC00000BB);
+inline constexpr NTSTATUS STATUS_PRIVILEGE_NOT_HELD      = static_cast<NTSTATUS>(0xC0000061);
 inline constexpr NTSTATUS STATUS_USER_EXISTS            = static_cast<NTSTATUS>(0xC0000063);
 inline constexpr NTSTATUS STATUS_NO_SUCH_USER           = static_cast<NTSTATUS>(0xC0000064);
 inline constexpr NTSTATUS STATUS_WRONG_PASSWORD         = static_cast<NTSTATUS>(0xC000006A);
