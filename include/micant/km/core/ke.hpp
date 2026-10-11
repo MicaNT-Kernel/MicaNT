@@ -94,6 +94,14 @@ inline void KeLowerIrql(KIRQL newIrql) noexcept {
     g_CurrentCpu.currentIrql = newIrql;
 }
 
+[[nodiscard]] inline uint32_t KeGetCurrentProcessorNumber() noexcept {
+    return g_CurrentCpu.processorNumber;
+}
+
+[[nodiscard]] inline KThread* KeGetCurrentThread() noexcept {
+    return g_CurrentCpu.currentThread;
+}
+
 
 // ============================================================================
 // 3. Hardware Trap Frame (KTRAP_FRAME)

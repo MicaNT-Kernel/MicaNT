@@ -1318,7 +1318,7 @@ void Test_KernelCore_IrqlSpinLockAndScheduler() {
 }
 
 // ============================================================================
-// Suite 12: Executive Memory Pools (EX) NonPaged/Paged Pools, Tags, and IRQL
+// Suite 12: Executive Support (EX) Pools, ERESOURCE, FastMutex, PushLock, Lookaside & S-List
 // ============================================================================
 void Test_ExecutivePools_AllocationAndIrql() {
     auto& pool = ex::ExecutivePool::get();
@@ -1358,6 +1358,171 @@ void Test_ExecutivePools_AllocationAndIrql() {
     auto finalMicaStats = pool.getTagStats(ex::TAG_MICA_CORE);
     TEST_ASSERT(finalMicaStats.activeAllocations == 0, "All 'Mica' allocations must be freed");
     TEST_ASSERT(finalMicaStats.activeBytes == 0, "Active 'Mica' bytes must be 0");
+
+    // 5. Executive Resource (ERESOURCE Lite)
+    ex::ERESOURCE res{};
+    ex::ExInitializeResourceLite(&res);
+    TEST_ASSERT(res.activeCount == 0, "Initial active count must be 0");
+
+    // Acquire Exclusive
+    BOOLEAN acqEx1 = ex::ExAcquireResourceExclusiveLite(&res, TRUE);
+    TEST_ASSERT(acqEx1 == TRUE, "Exclusive acquisition should succeed");
+    TEST_ASSERT(res.exclusiveOwners == 1, "Exclusive owners count should be 1");
+    TEST_ASSERT(res.activeCount == 1, "Active count should be 1");
+
+    // Recursive Exclusive Acquire on same thread
+    BOOLEAN acqEx2 = ex::ExAcquireResourceExclusiveLite(&res, TRUE);
+    TEST_ASSERT(acqEx2 == TRUE, "Recursive exclusive acquisition on same thread should succeed");
+    TEST_ASSERT(res.exclusiveOwners == 2, "Exclusive owners count should be 2 for recursion");
+
+    // Convert Exclusive to Shared
+    ex::ExConvertExclusiveToSharedLite(&res);
+    TEST_ASSERT(res.exclusiveOwners == 0, "Exclusive owners count must be 0 after conversion");
+    TEST_ASSERT(res.sharedOwners == 2, "Shared owners count should equal previous exclusive owners");
+    TEST_ASSERT(res.activeCount == 2, "Active count must be 2");
+
+    // Release both shared holds
+    ex::ExReleaseResourceLite(&res);
+    TEST_ASSERT(res.sharedOwners == 1, "Shared owners should be 1 after first release");
+    ex::ExReleaseResourceLite(&res);
+    TEST_ASSERT(res.sharedOwners == 0, "Shared owners should be 0 after second release");
+    TEST_ASSERT(res.activeCount == 0, "Resource activeCount should be 0");
+
+    // Shared acquire and release
+    BOOLEAN acqShared = ex::ExAcquireResourceSharedLite(&res, TRUE);
+    TEST_ASSERT(acqShared == TRUE, "Shared acquisition should succeed");
+    TEST_ASSERT(res.sharedOwners == 1, "Shared owners count should be 1");
+    ex::ExReleaseResourceLite(&res);
+    TEST_ASSERT(res.sharedOwners == 0, "Resource must be free after release");
+    ex::ExDeleteResourceLite(&res);
+
+    // 6. Fast Mutex (FAST_MUTEX) & IRQL transition to APC_LEVEL
+    ex::FAST_MUTEX fastMutex{};
+    ex::ExInitializeFastMutex(&fastMutex);
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "Initial IRQL must be PASSIVE_LEVEL");
+
+    ex::ExAcquireFastMutex(&fastMutex);
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::APC_LEVEL, "ExAcquireFastMutex must raise IRQL to APC_LEVEL");
+    TEST_ASSERT(fastMutex.owner != 0, "Fast mutex owner must be set");
+    TEST_ASSERT(fastMutex.count.load() == 0, "Fast mutex count must be 0 when held");
+
+    ex::ExReleaseFastMutex(&fastMutex);
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "ExReleaseFastMutex must restore IRQL to PASSIVE_LEVEL");
+    TEST_ASSERT(fastMutex.owner == 0, "Fast mutex owner must be cleared");
+    TEST_ASSERT(fastMutex.count.load() == 1, "Fast mutex count must be 1 when unheld");
+
+    BOOLEAN tryAcq = ex::ExTryToAcquireFastMutex(&fastMutex);
+    TEST_ASSERT(tryAcq == TRUE, "ExTryToAcquireFastMutex must succeed on free mutex");
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::APC_LEVEL, "ExTryToAcquireFastMutex must raise IRQL to APC_LEVEL");
+    ex::ExReleaseFastMutex(&fastMutex);
+    TEST_ASSERT(ke::KeGetCurrentIrql() == ke::PASSIVE_LEVEL, "IRQL must be PASSIVE_LEVEL after release");
+
+    // 7. Executive Push Lock (EX_PUSH_LOCK)
+    ex::EX_PUSH_LOCK pushLock{};
+    ex::ExInitializePushLock(&pushLock);
+    TEST_ASSERT(pushLock.value == 0, "Push lock initial value must be 0");
+
+    ex::ExAcquirePushLockShared(&pushLock);
+    TEST_ASSERT(pushLock.shared == 1, "Push lock shared count must be 1");
+    ex::ExAcquirePushLockShared(&pushLock);
+    TEST_ASSERT(pushLock.shared == 2, "Push lock shared count must be 2");
+    ex::ExReleasePushLockShared(&pushLock);
+    TEST_ASSERT(pushLock.shared == 1, "Push lock shared count must decrement to 1");
+    ex::ExReleasePushLockShared(&pushLock);
+    TEST_ASSERT(pushLock.shared == 0, "Push lock shared count must be 0");
+
+    ex::ExAcquirePushLockExclusive(&pushLock);
+    TEST_ASSERT(pushLock.locked == 1, "Push lock locked bit must be set for exclusive");
+    ex::ExReleasePushLockExclusive(&pushLock);
+    TEST_ASSERT(pushLock.locked == 0, "Push lock locked bit must be cleared after exclusive release");
+
+    // 8. Interlocked Singly-Linked Lists (SLIST)
+    ex::SLIST_HEADER slistHead{};
+    ex::InitializeSListHead(&slistHead);
+    TEST_ASSERT(ex::QueryDepthSList(&slistHead) == 0, "Initial SLIST depth must be 0");
+
+    struct TestSListEntry {
+        ex::SLIST_ENTRY slistEntry;
+        uint32_t value;
+    };
+    TestSListEntry entry1{};
+    entry1.value = 100;
+    TestSListEntry entry2{};
+    entry2.value = 200;
+
+    ex::InterlockedPushEntrySList(&slistHead, &entry1.slistEntry);
+    TEST_ASSERT(ex::QueryDepthSList(&slistHead) == 1, "SLIST depth must be 1 after pushing entry1");
+
+    ex::InterlockedPushEntrySList(&slistHead, &entry2.slistEntry);
+    TEST_ASSERT(ex::QueryDepthSList(&slistHead) == 2, "SLIST depth must be 2 after pushing entry2");
+
+    auto* popped = ex::InterlockedPopEntrySList(&slistHead);
+    TEST_ASSERT(popped == &entry2.slistEntry, "LIFO pop must return most recently pushed entry2");
+    TEST_ASSERT(ex::QueryDepthSList(&slistHead) == 1, "SLIST depth must be 1 after pop");
+
+    auto* flushed = ex::InterlockedFlushSList(&slistHead);
+    TEST_ASSERT(flushed == &entry1.slistEntry, "InterlockedFlushSList must return remaining list");
+    TEST_ASSERT(ex::QueryDepthSList(&slistHead) == 0, "SLIST depth must be 0 after flush");
+
+    // 9. NonPaged and Paged Lookaside Lists (NPAGED_LOOKASIDE_LIST, PAGED_LOOKASIDE_LIST)
+    ex::NPAGED_LOOKASIDE_LIST npLookaside{};
+    ex::ExInitializeNPagedLookasideList(
+        &npLookaside,
+        nullptr,
+        nullptr,
+        0,
+        128,
+        ex::TAG_LOOKASIDE,
+        4
+    );
+    TEST_ASSERT(npLookaside.l.depth == 4, "Lookaside list depth must be initialized to 4");
+
+    void* pBlock1 = ex::ExAllocateFromNPagedLookasideList(&npLookaside);
+    TEST_ASSERT(pBlock1 != nullptr, "Allocate from NPaged Lookaside must succeed");
+    TEST_ASSERT(npLookaside.l.totalAllocates == 1, "totalAllocates must increment");
+    TEST_ASSERT(npLookaside.l.allocateMisses == 1, "First allocate should be a miss (empty cache)");
+
+    ex::ExFreeToNPagedLookasideList(&npLookaside, pBlock1);
+    TEST_ASSERT(npLookaside.l.totalFrees == 1, "totalFrees must increment");
+    TEST_ASSERT(ex::QueryDepthSList(&npLookaside.l.listHead) == 1, "Lookaside list depth must be 1 after returning block");
+
+    // Allocate again: should be a cache hit!
+    void* pBlock2 = ex::ExAllocateFromNPagedLookasideList(&npLookaside);
+    TEST_ASSERT(pBlock2 == pBlock1, "Cache hit must reuse returned buffer");
+    TEST_ASSERT(npLookaside.l.totalAllocates == 2, "totalAllocates should now be 2");
+    TEST_ASSERT(npLookaside.l.allocateMisses == 1, "allocateMisses should remain 1 on hit");
+    TEST_ASSERT(ex::QueryDepthSList(&npLookaside.l.listHead) == 0, "Lookaside list depth must be 0 after popping cache");
+
+    ex::ExFreeToNPagedLookasideList(&npLookaside, pBlock2);
+    ex::ExDeleteNPagedLookasideList(&npLookaside);
+
+    // Paged Lookaside List with IRQL Guard Verification
+    ex::PAGED_LOOKASIDE_LIST pagedLookaside{};
+    ex::ExInitializePagedLookasideList(
+        &pagedLookaside,
+        nullptr,
+        nullptr,
+        0,
+        256,
+        ex::TAG_LOOKASIDE,
+        4
+    );
+
+    void* pPagedBlock = ex::ExAllocateFromPagedLookasideList(&pagedLookaside);
+    TEST_ASSERT(pPagedBlock != nullptr, "Paged lookaside allocate at PASSIVE_LEVEL must succeed");
+    ex::ExFreeToPagedLookasideList(&pagedLookaside, pPagedBlock);
+
+    // Attempting Paged Lookaside allocate at DISPATCH_LEVEL must fail
+    ke::KIRQL irqlDpc = ke::KfRaiseIrql(ke::DISPATCH_LEVEL);
+    void* pPagedIllegal = ex::ExAllocateFromPagedLookasideList(&pagedLookaside);
+    TEST_ASSERT(pPagedIllegal == nullptr, "Paged lookaside allocate at DISPATCH_LEVEL must fail and return nullptr");
+    ke::KeLowerIrql(irqlDpc);
+
+    ex::ExDeletePagedLookasideList(&pagedLookaside);
+
+    // 10. System Time Architecture (KeQuerySystemTime)
+    uint64_t sysTime = ex::KeQuerySystemTime();
+    TEST_ASSERT(sysTime > 116444736000000000ULL, "KeQuerySystemTime must return valid NT epoch timestamp > 1601");
 }
 
 // ============================================================================
