@@ -3765,3 +3765,160 @@ inline void Test_Horizon14_ExecutiveWorkQueues_And_IoWorkItems() {
     std::cout << "[TEST] Suite 230: Horizon 14 - Sovereign Executive Worker Queues & IoWorkItems PASSED.\n";
 }
 
+// ============================================================================
+// Suite 231: Horizon 15 - Sovereign Kernel Timers, DPC Wheel & ExTimer Subsystem
+// ============================================================================
+namespace test_timer_h15 {
+    struct TimerDpcContext {
+        std::atomic<uint32_t> callCount{0};
+        void* lastSysArg1{nullptr};
+        void* lastSysArg2{nullptr};
+    };
+
+    inline void TimerDpcRoutine(ke::KDPC*, void* deferredContext, void* sysArg1, void* sysArg2) {
+        auto* ctx = static_cast<TimerDpcContext*>(deferredContext);
+        if (ctx) {
+            ctx->callCount.fetch_add(1, std::memory_order_relaxed);
+            ctx->lastSysArg1 = sysArg1;
+            ctx->lastSysArg2 = sysArg2;
+        }
+    }
+
+    struct ExTimerContext {
+        std::atomic<uint32_t> callbackCount{0};
+        void* recordedContext{nullptr};
+    };
+
+    inline void ExTimerRoutine(timer::EX_TIMER* timer, void* context) {
+        (void)timer;
+        auto* ctx = static_cast<ExTimerContext*>(context);
+        if (ctx) {
+            ctx->callbackCount.fetch_add(1, std::memory_order_relaxed);
+            ctx->recordedContext = context;
+        }
+    }
+}
+
+inline void Test_Horizon15_KernelTimers_DpcWheel_And_ExTimer() {
+    std::cout << "[TEST] Executing Suite 231: Horizon 15 - Sovereign Kernel Timers, DPC Wheel & ExTimer...\n";
+    auto& tm = timer::TimerManager::get();
+    tm.resetForTesting();
+
+    // 1. Notification vs Synchronization Timer Initial States
+    timer::KTIMER notifTimer;
+    timer::KeInitializeTimer(&notifTimer);
+    TEST_ASSERT(!timer::KeReadStateTimer(&notifTimer), "Initial state must be unsignaled");
+    TEST_ASSERT(notifTimer.obj.getType() == timer::TimerType::NotificationTimer,
+                "Timer type must be NotificationTimer");
+
+    timer::KTIMER syncTimer;
+    timer::KeInitializeTimerEx(&syncTimer, timer::TimerType::SynchronizationTimer);
+    TEST_ASSERT(!timer::KeReadStateTimer(&syncTimer), "Initial state must be unsignaled");
+    TEST_ASSERT(syncTimer.obj.getType() == timer::TimerType::SynchronizationTimer,
+                "Timer type must be SynchronizationTimer");
+
+    // 2. Timer Wheel Relative Expiration & Bucket Insertion
+    LargeInteger dueRel{};
+    dueRel.quadPart = -500000LL; // 50ms in 100ns units
+    bool wasInserted = timer::KeSetTimer(&notifTimer, dueRel);
+    TEST_ASSERT(!wasInserted, "Timer was not previously inserted");
+    TEST_ASSERT(notifTimer.obj.isInserted(), "Timer must be marked inserted");
+    TEST_ASSERT(tm.getActiveTimerCount() == 1, "Active timer count must be 1");
+
+    // 3. Timer Cancellation
+    bool cancelOk = timer::KeCancelTimer(&notifTimer);
+    TEST_ASSERT(cancelOk, "KeCancelTimer must return true for active timer");
+    TEST_ASSERT(!notifTimer.obj.isInserted(), "Timer must be marked uninserted after cancel");
+    TEST_ASSERT(tm.getActiveTimerCount() == 0, "Active timer count must be 0 after cancel");
+    TEST_ASSERT(!timer::KeCancelTimer(&notifTimer), "Canceling inactive timer must return false");
+
+    // 4. Periodic Timer & Timer DPC Queueing
+    test_timer_h15::TimerDpcContext dpcCtx{};
+    ke::KDPC timerDpc{};
+    ke::KeInitializeDpc(&timerDpc, test_timer_h15::TimerDpcRoutine, &dpcCtx);
+
+    dueRel.quadPart = -10000LL; // 1ms
+    timer::KeSetTimerEx(&notifTimer, dueRel, 100, &timerDpc); // 100ms periodic
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    size_t expiredCount = tm.processTimers();
+    TEST_ASSERT(expiredCount >= 1, "processTimers must expire due timer");
+    TEST_ASSERT(timer::KeReadStateTimer(&notifTimer), "Expired notification timer must be signaled");
+    TEST_ASSERT(tm.getTotalDpcsQueued() >= 1, "DPC queue count must be >= 1");
+
+    // Drain DPCs at DISPATCH_LEVEL
+    ke::KiRetireDpcList();
+    TEST_ASSERT(dpcCtx.callCount.load() == 1, "Timer DPC routine must have executed exactly once");
+    TEST_ASSERT(dpcCtx.lastSysArg1 == &notifTimer, "systemArgument1 must be pointer to KTIMER");
+    TEST_ASSERT(reinterpret_cast<uintptr_t>(dpcCtx.lastSysArg2) == 100, "systemArgument2 must be periodMs (100)");
+    TEST_ASSERT(tm.getActiveTimerCount() == 1, "Periodic timer must remain active in wheel after expiration");
+
+    timer::KeCancelTimer(&notifTimer);
+
+    // 5. Auto-Reset Synchronization Timer Semantics
+    syncTimer.obj.setSignaled();
+    TEST_ASSERT(syncTimer.obj.isSignaled(), "Sync timer is signaled");
+    bool satisfied = syncTimer.obj.satisfyWait();
+    TEST_ASSERT(satisfied, "satisfyWait must return true for signaled synchronization timer");
+    TEST_ASSERT(!syncTimer.obj.isSignaled(), "Sync timer must auto-reset to unsignaled after satisfyWait");
+
+    // 6. High-Resolution Timer Precision
+    LargeInteger dueHi{};
+    dueHi.quadPart = -1000LL; // 100 microseconds (0.1ms)
+    timer::KTIMER hiTimer;
+    timer::KeInitializeTimer(&hiTimer);
+    tm.setTimer(&hiTimer, dueHi, 0, nullptr, {}, true);
+    TEST_ASSERT(hiTimer.obj.isHighResolution(), "High-resolution flag must be set");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    size_t hiExpired = tm.processTimers();
+    TEST_ASSERT(hiExpired >= 1, "High-resolution timer must expire");
+    TEST_ASSERT(timer::KeReadStateTimer(&hiTimer), "High-resolution timer must be signaled");
+
+    // 7. Modern Executive Timer (EX_TIMER) with Coalescing
+    test_timer_h15::ExTimerContext exCtx{};
+    timer::EX_TIMER* pEx = timer::ExAllocateTimer(
+        test_timer_h15::ExTimerRoutine,
+        &exCtx,
+        timer::EX_TIMER_HIGH_RESOLUTION | timer::EX_TIMER_NOTIFICATION
+    );
+    TEST_ASSERT(pEx != nullptr, "ExAllocateTimer must allocate EX_TIMER");
+
+    LargeInteger exDue{};
+    exDue.quadPart = -1000LL; // 0.1ms
+    LargeInteger tolerableDelay{};
+    tolerableDelay.quadPart = 500LL; // Coalescing delay hint
+
+    bool wasAlreadySet = timer::ExSetTimer(pEx, exDue, 0, tolerableDelay);
+    TEST_ASSERT(!wasAlreadySet, "ExSetTimer must return false when timer was not previously set");
+    TEST_ASSERT(pEx->active.load(), "ExTimer must be active");
+
+    bool rearmed = timer::ExSetTimer(pEx, exDue, 0, tolerableDelay);
+    TEST_ASSERT(rearmed, "ExSetTimer must return true when timer was previously set");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    tm.processTimers();
+    ke::KiRetireDpcList();
+
+    TEST_ASSERT(exCtx.callbackCount.load() >= 1, "ExTimer callback must have executed");
+    TEST_ASSERT(exCtx.recordedContext == &exCtx, "ExTimer context pointer must match");
+
+    timer::ExCancelTimer(pEx);
+    timer::ExDeleteTimer(pEx);
+
+    // 8. DPC Watchdog Diagnostics
+    timer::KDPC_WATCHDOG_INFORMATION wdInfo{};
+    timer::KeQueryDpcWatchdogInformation(&wdInfo);
+    TEST_ASSERT(wdInfo.dpcTimeLimit == 500, "Default DPC time limit must be 500ms");
+    TEST_ASSERT(wdInfo.dpcWatchdogLimit == 1000, "Default cumulative limit must be 1000ms");
+
+    tm.updateDpcWatchdog(250);
+    timer::KeQueryDpcWatchdogInformation(&wdInfo);
+    TEST_ASSERT(wdInfo.dpcTimeCount == 250, "Updated DPC time count must be 250ms");
+    TEST_ASSERT(wdInfo.dpcWatchdogCount == 250, "Updated watchdog count must be 250ms");
+    tm.resetDpcWatchdog();
+
+    tm.resetForTesting();
+    std::cout << "[TEST] Suite 231: Horizon 15 - Sovereign Kernel Timers, DPC Wheel & ExTimer PASSED.\n";
+}
+

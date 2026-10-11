@@ -292,6 +292,18 @@ public:
         return toExecute.size();
     }
 
+    bool removeDpc(KDPC* dpc) {
+        if (!dpc || !dpc->inserted) return false;
+        SpinLockGuard guard(lock_);
+        auto it = std::find(entries_.begin(), entries_.end(), dpc);
+        if (it != entries_.end()) {
+            entries_.erase(it);
+            dpc->inserted = false;
+            return true;
+        }
+        return false;
+    }
+
     [[nodiscard]] size_t getQueuedCount() const {
         return entries_.size();
     }
@@ -306,6 +318,26 @@ inline void KiRetireDpcList() {
     if (!g_CurrentCpu.dpcRoutineActive && DpcQueue::get().getQueuedCount() > 0) {
         DpcQueue::get().drainDpcs();
     }
+}
+
+inline void KeInitializeDpc(KDPC* dpc, PKDEFERRED_ROUTINE routine, void* deferredContext) {
+    if (dpc) {
+        dpc->routine = routine;
+        dpc->deferredContext = deferredContext;
+        dpc->systemArgument1 = nullptr;
+        dpc->systemArgument2 = nullptr;
+        dpc->importance = DpcImportance::Medium;
+        dpc->targetProcessor = 0;
+        dpc->inserted = false;
+    }
+}
+
+inline bool KeInsertQueueDpc(KDPC* dpc, void* systemArgument1 = nullptr, void* systemArgument2 = nullptr) {
+    return DpcQueue::get().queueDpc(dpc, systemArgument1, systemArgument2);
+}
+
+inline bool KeRemoveQueueDpc(KDPC* dpc) {
+    return DpcQueue::get().removeDpc(dpc);
 }
 
 // ============================================================================

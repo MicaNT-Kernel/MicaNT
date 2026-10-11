@@ -1019,6 +1019,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Tier4_Multimedia_Creative_Workstation_Ecosystem_Suite);
     RUN_TEST(Test_Horizon13_SovereignPowerManagement_PoSubsystem);
     RUN_TEST(Test_Horizon14_ExecutiveWorkQueues_And_IoWorkItems);
+    RUN_TEST(Test_Horizon15_KernelTimers_DpcWheel_And_ExTimer);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
