@@ -4536,5 +4536,207 @@ inline void Test_Horizon19_DispatcherDatabase_MultiWait_And_PriorityInheritance(
     std::cout << "[TEST] Suite 235: Horizon 19 - Sovereign Kernel Dispatcher Database, Multi-Wait & Priority Inheritance PASSED.\n";
 }
 
+// ============================================================================
+// Suite 236: Horizon 20 - Sovereign Object Manager Refinement, Lifecycle,
+// Symbolic Link Loop Prevention & Parse Callbacks
+// ============================================================================
+inline void Test_Horizon20_ObjectManager_Lifecycle_Symlinks_And_Callbacks() {
+    std::cout << "[TEST] Running Suite 236: Horizon 20 - Sovereign Object Manager Refinement, Symlinks & Callbacks...\n";
+
+    using namespace micant::ob;
+
+    ObResetTelemetryForTesting();
+
+    // 1. Dave Cutler Object Header Substructures & ObCreateObject
+    struct DeviceBody {
+        uint32_t magic;
+        uint32_t status;
+    };
+
+    static std::atomic<uint32_t> s_OpenCalls{0};
+    static std::atomic<uint32_t> s_CloseCalls{0};
+    static std::atomic<uint32_t> s_DeleteCalls{0};
+    static std::atomic<uint32_t> s_ParseCalls{0};
+
+    s_OpenCalls = 0;
+    s_CloseCalls = 0;
+    s_DeleteCalls = 0;
+    s_ParseCalls = 0;
+
+    ObjectType deviceType{
+        .typeName = L"SovereignDevice",
+        .typeId = ObjectTypeId::Device,
+        .openProcedure = [](ObjectHeader* /*obj*/, uint32_t /*mask*/) -> NtStatus {
+            s_OpenCalls.fetch_add(1);
+            return NtStatus::Success;
+        },
+        .closeProcedure = [](ObjectHeader* /*obj*/, Handle /*h*/) {
+            s_CloseCalls.fetch_add(1);
+        },
+        .deleteProcedure = [](ObjectHeader* /*obj*/) {
+            s_DeleteCalls.fetch_add(1);
+        }
+    };
+
+    UnicodeString devName(L"\\Device\\SovereignDevice0");
+    ObjectAttributes devAttrs{
+        .length = sizeof(ObjectAttributes),
+        .rootDirectory = 0,
+        .objectName = &devName,
+        .attributes = OBJ_CASE_INSENSITIVE
+    };
+
+    void* bodyPtr = nullptr;
+    ObjectHeader* headerPtr = nullptr;
+    NtStatus status = ObCreateObject(
+        KernelMode,
+        &deviceType,
+        &devAttrs,
+        sizeof(DeviceBody),
+        &bodyPtr,
+        &headerPtr
+    );
+    TEST_ASSERT(NT_SUCCESS(status), "ObCreateObject must succeed");
+    TEST_ASSERT(bodyPtr != nullptr, "Object body pointer must not be null");
+    TEST_ASSERT(headerPtr != nullptr, "Object header pointer must not be null");
+
+    auto* devBody = reinterpret_cast<DeviceBody*>(bodyPtr);
+    devBody->magic = 0xBEEFCAFE;
+    devBody->status = 1;
+
+    // Verify Dave Cutler Object Header substructures
+    TEST_ASSERT(headerPtr->nameInfo.name == L"\\Device\\SovereignDevice0", "OBJECT_HEADER_NAME_INFO name must match");
+    TEST_ASSERT(headerPtr->creatorInfo.creatorProcessId == 4, "Creator PID must be 4");
+    TEST_ASSERT(headerPtr->quotaInfo.pagedPoolCharge == sizeof(DeviceBody), "PagedPool charge must equal body size");
+    TEST_ASSERT(headerPtr->quotaInfo.nonPagedPoolCharge == sizeof(ObjectHeader), "NonPagedPool charge must equal header size");
+    TEST_ASSERT(headerPtr->dynamicallyAllocated, "Header must be marked dynamicallyAllocated");
+
+    // 2. Object Insertion & Handle Table Integration
+    HandleTable handleTable;
+    Handle hDevice = 0;
+    status = ObInsertObject(headerPtr, &devAttrs, GENERIC_READ | GENERIC_WRITE, &handleTable, &hDevice);
+    TEST_ASSERT(NT_SUCCESS(status), "ObInsertObject must succeed");
+    TEST_ASSERT(hDevice == 4, "First allocated handle must be 4");
+    TEST_ASSERT(s_OpenCalls.load() == 1, "openProcedure must be called on handle creation");
+    TEST_ASSERT(headerPtr->handleCount.load() == 1, "Handle count must be 1");
+    TEST_ASSERT(headerPtr->pointerCount.load() == 3, "Pointer count must be 3 (1 from alloc, 1 from directory, 1 from handle)");
+
+    // Lookup in ObjectNamespace
+    auto* foundObj = ObjectNamespace::get().lookupObject(L"\\Device\\SovereignDevice0");
+    TEST_ASSERT(foundObj == headerPtr, "ObjectNamespace must find inserted object");
+
+    // 3. Parse Procedure Interception
+    static ObjectHeader s_ParsedChildHeader;
+    s_ParsedChildHeader.pointerCount.store(1);
+    s_ParsedChildHeader.objectName = L"ParsedChildFile";
+
+    ObjectType volumeType{
+        .typeName = L"SovereignVolume",
+        .typeId = ObjectTypeId::Device,
+        .parseProcedure = [](ObjectHeader* /*parseObj*/, const ObjectType* /*expectedType*/, std::wstring_view remainingPath, ObjectHeader** outFound) -> NtStatus {
+            s_ParseCalls.fetch_add(1);
+            if (remainingPath == L"\\Subdir\\TargetFile.txt") {
+                *outFound = &s_ParsedChildHeader;
+                return NtStatus::Success;
+            }
+            return NtStatus::ObjectNameNotFound;
+        }
+    };
+
+    UnicodeString volName(L"\\Device\\SovereignVolume0");
+    ObjectAttributes volAttrs{
+        .length = sizeof(ObjectAttributes),
+        .rootDirectory = 0,
+        .objectName = &volName,
+        .attributes = OBJ_PERMANENT
+    };
+    void* volBody = nullptr;
+    ObjectHeader* volHeader = nullptr;
+    status = ObCreateObject(KernelMode, &volumeType, &volAttrs, 16, &volBody, &volHeader);
+    TEST_ASSERT(NT_SUCCESS(status), "Creating volume object must succeed");
+
+    status = ObInsertObject(volHeader, &volAttrs, GENERIC_READ, nullptr, nullptr);
+    TEST_ASSERT(NT_SUCCESS(status), "Inserting volume object must succeed");
+
+    // Query path through volume parse procedure
+    NtStatus parseLookupStatus = NtStatus::Success;
+    auto* targetFile = ObjectNamespace::get().lookupObject(L"\\Device\\SovereignVolume0\\Subdir\\TargetFile.txt", nullptr, &parseLookupStatus);
+    TEST_ASSERT(NT_SUCCESS(parseLookupStatus), "Parse procedure lookup must succeed");
+    TEST_ASSERT(targetFile == &s_ParsedChildHeader, "Target file returned must match s_ParsedChildHeader");
+    TEST_ASSERT(s_ParseCalls.load() == 1, "parseProcedure must have been called once");
+
+    // 4. Symbolic Link Loop & Boundary Protection (32-hop cap & cycle detection)
+    auto& obNs = ObjectNamespace::get();
+    obNs.createSymbolicLink(L"\\DosDevices\\LoopA", L"\\DosDevices\\LoopB");
+    obNs.createSymbolicLink(L"\\DosDevices\\LoopB", L"\\DosDevices\\LoopC");
+    obNs.createSymbolicLink(L"\\DosDevices\\LoopC", L"\\DosDevices\\LoopA");
+
+    NtStatus symlinkStatus = NtStatus::Success;
+    std::wstring loopResolved = obNs.resolvePath(L"\\DosDevices\\LoopA", &symlinkStatus);
+    TEST_ASSERT(symlinkStatus == NtStatus::CircularReference, "Circular symlink must return STATUS_CIRCULAR_REFERENCE");
+
+    // 5. Security Descriptor & Access Checking
+    static int dummySecDesc = 42;
+    headerPtr->securityDescriptor = &dummySecDesc;
+
+    ObSetAccessCheckProcedure([](void* secDesc, uint32_t desiredAccess, uint32_t* grantedAccess) -> NtStatus {
+        if (!secDesc) return NtStatus::Success;
+        if (desiredAccess & WRITE_DAC) {
+            return NtStatus::AccessDenied;
+        }
+        if (grantedAccess) *grantedAccess = desiredAccess;
+        return NtStatus::Success;
+    });
+
+    Handle hAllowed = 0;
+    status = ObOpenObjectByName(&devAttrs, &deviceType, KernelMode, GENERIC_READ, handleTable, hAllowed);
+    TEST_ASSERT(NT_SUCCESS(status), "Allowed access check must succeed");
+    TEST_ASSERT(hAllowed != 0, "Valid handle must be returned");
+    ObCloseHandle(hAllowed, handleTable);
+
+    Handle hDenied = 0;
+    status = ObOpenObjectByName(&devAttrs, &deviceType, KernelMode, WRITE_DAC, handleTable, hDenied);
+    TEST_ASSERT(status == NtStatus::AccessDenied, "Denied access check must return STATUS_ACCESS_DENIED");
+    TEST_ASSERT(hDenied == 0, "No handle should be returned on access denial");
+
+    ObSetAccessCheckProcedure(nullptr);
+
+    // 6. Temporary Object Lifecycle & Auto-Pruning
+    TEST_ASSERT(!headerPtr->isPermanent(), "Object must not be permanent");
+    status = ObCloseHandle(hDevice, handleTable);
+    TEST_ASSERT(NT_SUCCESS(status), "Closing initial handle must succeed");
+    TEST_ASSERT(s_CloseCalls.load() == 2, "closeProcedure must have been called twice (once for hAllowed, once for hDevice)");
+    TEST_ASSERT(headerPtr->handleCount.load() == 0, "Handle count must now be 0");
+
+    // Because object was temporary and all handles closed, it must be automatically pruned from directory
+    auto* prunedCheck = ObjectNamespace::get().lookupObject(L"\\Device\\SovereignDevice0");
+    TEST_ASSERT(prunedCheck == nullptr, "Temporary object with 0 handles must be automatically pruned from directory");
+
+    // Release remaining reference
+    ObDereferenceObject(headerPtr);
+    TEST_ASSERT(s_DeleteCalls.load() == 1, "deleteProcedure must be called when pointer count reaches 0");
+
+    // Clean up volume object
+    obNs.getDirectory(L"\\Device")->removeObject(L"SovereignVolume0");
+    ObDereferenceObject(volHeader);
+
+    // 7. Telemetry Verification & Teardown
+    auto telemetry = ObQueryTelemetry();
+    TEST_ASSERT(telemetry.totalObjectsCreated >= 2, "totalObjectsCreated must be >= 2");
+    TEST_ASSERT(telemetry.totalHandlesOpened >= 2, "totalHandlesOpened must be >= 2");
+    TEST_ASSERT(telemetry.totalHandlesClosed >= 2, "totalHandlesClosed must be >= 2");
+    TEST_ASSERT(telemetry.totalParseProcedureCalls >= 1, "totalParseProcedureCalls must be >= 1");
+    TEST_ASSERT(telemetry.totalSymlinkRecursionsHit >= 1, "totalSymlinkRecursionsHit must be >= 1");
+    TEST_ASSERT(telemetry.totalSecurityChecksPassed >= 1, "totalSecurityChecksPassed must be >= 1");
+    TEST_ASSERT(telemetry.totalSecurityChecksDenied >= 1, "totalSecurityChecksDenied must be >= 1");
+    TEST_ASSERT(telemetry.totalTemporaryObjectsUnlinked >= 1, "totalTemporaryObjectsUnlinked must be >= 1");
+
+    ObResetTelemetryForTesting();
+    auto resetTelem = ObQueryTelemetry();
+    TEST_ASSERT(resetTelem.totalObjectsCreated == 0, "Telemetry reset must clear counts");
+
+    std::cout << "[TEST] Suite 236: Horizon 20 - Sovereign Object Manager Refinement, Symlinks & Callbacks PASSED.\n";
+}
+
 
 

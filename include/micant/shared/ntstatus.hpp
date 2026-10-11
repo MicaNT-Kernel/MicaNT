@@ -60,10 +60,12 @@ enum class NtStatus : uint32_t {
     AccessDenied                     = 0xC0000022,
     BufferTooSmall                   = 0xC0000023,
     ObjectTypeMismatch               = 0xC0000024,
+    CircularReference                = 0xC000002A,
     ObjectNameNotFound               = 0xC0000034,
     ObjectNameCollision              = 0xC0000035,
     ObjectPathNotFound               = 0xC000003A,
     ObjectPathSyntaxBad              = 0xC000003B,
+    LinkEvaluationCapExceeded        = 0xC00002EB,
     SectionTooBig                    = 0xC0000040,
     PortConnectionRefused            = 0xC0000041,
     ServerNotRunning                 = 0xC0000042,
@@ -131,8 +133,11 @@ inline constexpr NTSTATUS STATUS_INVALID_HANDLE         = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_INVALID_PARAMETER      = static_cast<NTSTATUS>(0xC000000D);
 inline constexpr NTSTATUS STATUS_ACCESS_DENIED          = static_cast<NTSTATUS>(0xC0000022);
 inline constexpr NTSTATUS STATUS_BUFFER_TOO_SMALL       = static_cast<NTSTATUS>(0xC0000023);
+inline constexpr NTSTATUS STATUS_OBJECT_TYPE_MISMATCH   = static_cast<NTSTATUS>(0xC0000024);
+inline constexpr NTSTATUS STATUS_CIRCULAR_REFERENCE     = static_cast<NTSTATUS>(0xC000002A);
 inline constexpr NTSTATUS STATUS_OBJECT_NAME_NOT_FOUND  = static_cast<NTSTATUS>(0xC0000034);
 inline constexpr NTSTATUS STATUS_OBJECT_NAME_COLLISION  = static_cast<NTSTATUS>(0xC0000035);
+inline constexpr NTSTATUS STATUS_LINK_EVALUATION_CAP_EXCEEDED = static_cast<NTSTATUS>(0xC00002EB);
 inline constexpr NTSTATUS STATUS_NOT_SUPPORTED          = static_cast<NTSTATUS>(0xC00000BB);
 inline constexpr NTSTATUS STATUS_PRIVILEGE_NOT_HELD      = static_cast<NTSTATUS>(0xC0000061);
 inline constexpr NTSTATUS STATUS_USER_EXISTS            = static_cast<NTSTATUS>(0xC0000063);
@@ -208,8 +213,10 @@ inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(
         case NtStatus::AccessDenied: return "STATUS_ACCESS_DENIED";
         case NtStatus::BufferTooSmall: return "STATUS_BUFFER_TOO_SMALL";
         case NtStatus::ObjectTypeMismatch: return "STATUS_OBJECT_TYPE_MISMATCH";
+        case NtStatus::CircularReference: return "STATUS_CIRCULAR_REFERENCE";
         case NtStatus::ObjectNameNotFound: return "STATUS_OBJECT_NAME_NOT_FOUND";
         case NtStatus::ObjectNameCollision: return "STATUS_OBJECT_NAME_COLLISION";
+        case NtStatus::LinkEvaluationCapExceeded: return "STATUS_LINK_EVALUATION_CAP_EXCEEDED";
         case NtStatus::ObjectPathNotFound: return "STATUS_OBJECT_PATH_NOT_FOUND";
         case NtStatus::ProcedureNotFound: return "STATUS_PROCEDURE_NOT_FOUND";
         case NtStatus::ProcessIsTerminating: return "STATUS_PROCESS_IS_TERMINATING";

@@ -10,6 +10,8 @@
 #include <atomic>
 #include <functional>
 #include <algorithm>
+#include <chrono>
+#include <mutex>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 
@@ -18,14 +20,14 @@ namespace micant::ob {
 // ============================================================================
 // 1. Standard NT Object Attributes & Access Rights
 // ============================================================================
-inline constexpr uint32_t OBJ_INHERIT             = 0x00000002L;
-inline constexpr uint32_t OBJ_PERMANENT           = 0x00000010L;
-inline constexpr uint32_t OBJ_EXCLUSIVE           = 0x00000020L;
-inline constexpr uint32_t OBJ_CASE_INSENSITIVE   = 0x00000040L;
-inline constexpr uint32_t OBJ_OPENIF             = 0x00000080L;
-inline constexpr uint32_t OBJ_OPENLINK           = 0x00000100L;
-inline constexpr uint32_t OBJ_KERNEL_HANDLE      = 0x00000200L;
-inline constexpr uint32_t OBJ_FORCE_ACCESS_CHECK = 0x00000400L;
+using micant::OBJ_INHERIT;
+using micant::OBJ_PERMANENT;
+using micant::OBJ_EXCLUSIVE;
+using micant::OBJ_CASE_INSENSITIVE;
+using micant::OBJ_OPENIF;
+using micant::OBJ_OPENLINK;
+using micant::OBJ_KERNEL_HANDLE;
+using micant::OBJ_FORCE_ACCESS_CHECK;
 inline constexpr uint32_t OBJ_VALID_ATTRIBUTES   = 0x000007F2L;
 
 // Standard Access Rights (clean-room NT Win32 mapping)
@@ -44,6 +46,15 @@ inline constexpr uint32_t GENERIC_READ            = 0x80000000L;
 inline constexpr uint32_t GENERIC_WRITE           = 0x40000000L;
 inline constexpr uint32_t GENERIC_EXECUTE         = 0x20000000L;
 inline constexpr uint32_t GENERIC_ALL             = 0x10000000L;
+
+using KPROCESSOR_MODE = uint8_t;
+inline constexpr KPROCESSOR_MODE KernelMode = 0;
+inline constexpr KPROCESSOR_MODE UserMode = 1;
+
+using OBJECT_ATTRIBUTES = ObjectAttributes;
+using POBJECT_ATTRIBUTES = ObjectAttributes*;
+
+inline constexpr size_t OB_MAX_SYMLINK_RECURSION = 32;
 
 struct GENERIC_MAPPING {
     uint32_t genericRead{0};
@@ -79,7 +90,86 @@ using OB_DUMP_METHOD = void (*)(ObjectHeader* object);
 using OB_OPEN_METHOD = NtStatus (*)(ObjectHeader* object, uint32_t accessMask);
 using OB_CLOSE_METHOD = void (*)(ObjectHeader* object, Handle handle);
 using OB_DELETE_METHOD = void (*)(ObjectHeader* object);
-using OB_PARSE_METHOD = NtStatus (*)(ObjectHeader* parseObject, const ObjectType* objectType, std::wstring_view remainingPath, ObjectHeader** outFoundObject);
+using OB_PARSE_METHOD = NtStatus (*)(
+    ObjectHeader* parseObject,
+    const ObjectType* objectType,
+    std::wstring_view remainingPath,
+    ObjectHeader** outFoundObject
+);
+
+using OB_ACCESS_CHECK_PROC = NtStatus (*)(
+    void* securityDescriptor,
+    uint32_t desiredAccess,
+    uint32_t* grantedAccess
+);
+
+inline OB_ACCESS_CHECK_PROC g_ObpAccessCheckProcedure = nullptr;
+
+inline void ObSetAccessCheckProcedure(OB_ACCESS_CHECK_PROC proc) noexcept {
+    g_ObpAccessCheckProcedure = proc;
+}
+
+// ============================================================================
+// 2. Dave Cutler Object Header Substructures
+// ============================================================================
+struct OBJECT_HEADER_NAME_INFO {
+    void* directory{nullptr}; // Pointer to DirectoryObject
+    std::wstring name;
+    uint32_t queryReferences{0};
+};
+
+struct OBJECT_HEADER_CREATOR_INFO {
+    uint32_t creatorProcessId{0};
+    uint32_t creatorThreadId{0};
+    uint64_t createTime{0};
+};
+
+struct OBJECT_HEADER_QUOTA_INFO {
+    uint32_t pagedPoolCharge{0};
+    uint32_t nonPagedPoolCharge{0};
+    uint32_t securityDescriptorCharge{0};
+};
+
+struct OBJECT_HEADER_HANDLE_INFO {
+    uint32_t handleCount{0};
+    uint32_t singleHandle{0};
+};
+
+// ============================================================================
+// 3. Object Manager Diagnostic Telemetry
+// ============================================================================
+struct OB_TELEMETRY {
+    size_t totalObjectsCreated{0};
+    size_t totalObjectsDestroyed{0};
+    size_t totalHandlesOpened{0};
+    size_t totalHandlesClosed{0};
+    size_t totalHandlesDuplicated{0};
+    size_t totalSymlinksResolved{0};
+    size_t totalSymlinkRecursionsHit{0};
+    size_t totalSecurityChecksPassed{0};
+    size_t totalSecurityChecksDenied{0};
+    size_t totalDirectoryInserts{0};
+    size_t totalDirectoryLookups{0};
+    size_t totalParseProcedureCalls{0};
+    size_t totalTemporaryObjectsUnlinked{0};
+};
+
+inline OB_TELEMETRY g_ObTelemetry{};
+inline std::mutex g_ObTelemetryMutex{};
+
+inline OB_TELEMETRY ObQueryTelemetry() {
+    std::lock_guard<std::mutex> lk(g_ObTelemetryMutex);
+    return g_ObTelemetry;
+}
+
+inline void ObResetTelemetryForTesting() {
+    std::lock_guard<std::mutex> lk(g_ObTelemetryMutex);
+    g_ObTelemetry = OB_TELEMETRY{};
+}
+
+// ============================================================================
+// 4. Object Type & Object Header
+// ============================================================================
 
 /**
  * @brief Representation of an Object Type in the Object Manager.
@@ -116,6 +206,13 @@ struct ObjectHeader {
     uint32_t attributes{0};
     void* securityDescriptor{nullptr};
 
+    // Dave Cutler Header Info extensions
+    OBJECT_HEADER_NAME_INFO nameInfo{};
+    OBJECT_HEADER_CREATOR_INFO creatorInfo{};
+    OBJECT_HEADER_QUOTA_INFO quotaInfo{};
+    OBJECT_HEADER_HANDLE_INFO handleInfo{};
+    bool dynamicallyAllocated{false};
+
     [[nodiscard]] void* getBody() noexcept {
         return reinterpret_cast<void*>(this + 1);
     }
@@ -143,7 +240,7 @@ struct ObjectHeader {
 };
 
 // ============================================================================
-// 2. Directory Object with NT 37-Bucket Hash Chains
+// 5. Directory Object with NT 37-Bucket Hash Chains
 // ============================================================================
 inline constexpr size_t OB_HASH_BUCKETS = 37;
 
@@ -177,9 +274,17 @@ public:
 
         object->addReference();
         object->objectName = key;
+        object->nameInfo.name = key;
         object->parentDirectory = this;
+        object->nameInfo.directory = this;
         buckets_[bucket].push_back(object);
         allEntries_[key] = object;
+
+        {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalDirectoryInserts++;
+        }
+
         return NtStatus::Success;
     }
 
@@ -190,6 +295,7 @@ public:
         for (auto it = chain.begin(); it != chain.end(); ++it) {
             if (equalCaseInsensitive((*it)->objectName, key)) {
                 (*it)->parentDirectory = nullptr;
+                (*it)->nameInfo.directory = nullptr;
                 (*it)->releaseReference();
                 chain.erase(it);
                 allEntries_.erase(key);
@@ -200,6 +306,10 @@ public:
     }
 
     [[nodiscard]] ObjectHeader* lookup(std::wstring_view name) const {
+        {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalDirectoryLookups++;
+        }
         uint32_t bucket = ObpHashObjectName(name);
         for (auto* obj : buckets_[bucket]) {
             if (equalCaseInsensitive(obj->objectName, name)) {
@@ -232,7 +342,7 @@ private:
 };
 
 // ============================================================================
-// 3. Multi-Level Handle Table Subsystem (EX_HANDLE_TABLE)
+// 6. Multi-Level Handle Table Subsystem (EX_HANDLE_TABLE)
 // ============================================================================
 struct HandleTableEntry {
     ObjectHeader* object{nullptr};
@@ -269,6 +379,7 @@ public:
             if (!table_[i].isValid()) {
                 object->addReference();
                 object->handleCount.fetch_add(1, std::memory_order_relaxed);
+                object->handleInfo.handleCount = static_cast<uint32_t>(object->handleCount.load(std::memory_order_relaxed));
                 if (object->type) {
                     const_cast<ObjectType*>(object->type)->totalNumberOfHandles.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -313,6 +424,7 @@ public:
         table_[index] = HandleTableEntry{};
 
         obj->handleCount.fetch_sub(1, std::memory_order_relaxed);
+        obj->handleInfo.handleCount = static_cast<uint32_t>(obj->handleCount.load(std::memory_order_relaxed));
         if (obj->type) {
             const_cast<ObjectType*>(obj->type)->totalNumberOfHandles.fetch_sub(1, std::memory_order_relaxed);
         }
@@ -355,7 +467,7 @@ private:
 };
 
 // ============================================================================
-// 4. Symbolic Link Object
+// 7. Symbolic Link Object
 // ============================================================================
 class SymbolicLinkObject {
 public:
@@ -368,7 +480,7 @@ private:
 };
 
 // ============================================================================
-// 5. Global Object Namespace & Hierarchical Resolver (ObpLookupObjectName)
+// 8. Global Object Namespace & Hierarchical Resolver (ObpLookupObjectName)
 // ============================================================================
 class ObjectNamespace {
 public:
@@ -479,17 +591,30 @@ public:
     }
 
     /**
-     * @brief Resolves symbolic links recursively with loop detection.
+     * @brief Resolves symbolic links recursively with loop detection and depth bounds.
      */
-    [[nodiscard]] std::wstring resolvePath(std::wstring_view path) const {
+    [[nodiscard]] std::wstring resolvePath(std::wstring_view path, NtStatus* outStatus = nullptr) const {
         std::wstring current = normalizePrefix(path);
-        constexpr size_t MAX_SYMLINK_RECURSION = 32;
+        std::vector<std::wstring> visited;
+        visited.push_back(current);
 
-        for (size_t hop = 0; hop < MAX_SYMLINK_RECURSION; ++hop) {
+        for (size_t hop = 0; hop < OB_MAX_SYMLINK_RECURSION; ++hop) {
             // 1. Exact match
             auto it = symbolicLinks_.find(current);
             if (it != symbolicLinks_.end()) {
-                current = it->second->getTargetPath();
+                std::wstring next = it->second->getTargetPath();
+                {
+                    std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+                    g_ObTelemetry.totalSymlinksResolved++;
+                }
+                if (std::find(visited.begin(), visited.end(), next) != visited.end()) {
+                    if (outStatus) *outStatus = NtStatus::CircularReference;
+                    std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+                    g_ObTelemetry.totalSymlinkRecursionsHit++;
+                    return next;
+                }
+                visited.push_back(next);
+                current = next;
                 continue;
             }
 
@@ -509,11 +634,30 @@ public:
             }
 
             if (matched) {
+                {
+                    std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+                    g_ObTelemetry.totalSymlinksResolved++;
+                }
+                if (std::find(visited.begin(), visited.end(), bestReplacement) != visited.end()) {
+                    if (outStatus) *outStatus = NtStatus::CircularReference;
+                    std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+                    g_ObTelemetry.totalSymlinkRecursionsHit++;
+                    return bestReplacement;
+                }
+                visited.push_back(bestReplacement);
                 current = bestReplacement;
                 continue;
             }
 
             break; // No more symbolic links to resolve
+        }
+
+        if (visited.size() > OB_MAX_SYMLINK_RECURSION) {
+            if (outStatus) *outStatus = NtStatus::LinkEvaluationCapExceeded;
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalSymlinkRecursionsHit++;
+        } else if (outStatus) {
+            *outStatus = NtStatus::Success;
         }
 
         return current;
@@ -526,10 +670,18 @@ public:
     }
 
     /**
-     * @brief Hierarchical object lookup across directories (ObpLookupObjectName).
+     * @brief Hierarchical object lookup across directories (ObpLookupObjectName) with parse procedure support.
      */
-    [[nodiscard]] ObjectHeader* lookupObject(std::wstring_view fullPath) const {
-        std::wstring resolved = resolvePath(fullPath);
+    [[nodiscard]] ObjectHeader* lookupObject(
+        std::wstring_view fullPath,
+        const ObjectType* expectedType = nullptr,
+        NtStatus* outStatus = nullptr
+    ) const {
+        NtStatus st = NtStatus::Success;
+        std::wstring resolved = resolvePath(fullPath, &st);
+        if (outStatus) *outStatus = st;
+        if (!NT_SUCCESS(st)) return nullptr;
+
         size_t lastSlash = resolved.rfind(L'\\');
         if (lastSlash == std::wstring::npos) return nullptr;
 
@@ -537,8 +689,47 @@ public:
         std::wstring objName = resolved.substr(lastSlash + 1);
 
         auto dir = getDirectory(dirPath);
-        if (!dir) return nullptr;
-        return dir->lookup(objName);
+        if (dir) {
+            auto* obj = dir->lookup(objName);
+            if (obj) return obj;
+        }
+
+        // Prefix parseProcedure traversal
+        size_t pos = 1;
+        while (pos < resolved.length()) {
+            size_t nextSlash = resolved.find(L'\\', pos);
+            std::wstring prefix = (nextSlash == std::wstring::npos) ? resolved : resolved.substr(0, nextSlash);
+            size_t pSlash = prefix.rfind(L'\\');
+            std::wstring pDir = (pSlash == 0) ? L"\\" : prefix.substr(0, pSlash);
+            std::wstring pName = prefix.substr(pSlash + 1);
+
+            auto pDirObj = getDirectory(pDir);
+            if (pDirObj) {
+                auto* intermediate = pDirObj->lookup(pName);
+                if (intermediate && intermediate->type && intermediate->type->parseProcedure) {
+                    std::wstring_view remaining = (nextSlash == std::wstring::npos) 
+                        ? std::wstring_view{} 
+                        : std::wstring_view(resolved).substr(nextSlash);
+                    ObjectHeader* foundFromParse = nullptr;
+                    {
+                        std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+                        g_ObTelemetry.totalParseProcedureCalls++;
+                    }
+                    NtStatus parseSt = intermediate->type->parseProcedure(
+                        intermediate, expectedType, remaining, &foundFromParse
+                    );
+                    if (outStatus) *outStatus = parseSt;
+                    if (NT_SUCCESS(parseSt) && foundFromParse) {
+                        return foundFromParse;
+                    }
+                }
+            }
+
+            if (nextSlash == std::wstring::npos) break;
+            pos = nextSlash + 1;
+        }
+
+        return nullptr;
     }
 
     [[nodiscard]] size_t getDirectoryCount() const noexcept { return directories_.size(); }
@@ -554,8 +745,244 @@ private:
 };
 
 // ============================================================================
-// 6. Object Reference & Lifetime Management API (Ob*)
+// 9. Sovereign Object Reference & Lifetime Management API (Ob*)
 // ============================================================================
+
+/**
+ * @brief Canonical Object Creation (ObCreateObject).
+ */
+inline NtStatus ObCreateObject(
+    KPROCESSOR_MODE /*accessMode*/,
+    const ObjectType* objectType,
+    const ObjectAttributes* objectAttributes,
+    size_t bodySize,
+    void** outObjectBody,
+    ObjectHeader** outHeader = nullptr
+) {
+    if (!objectType || !outObjectBody) return NtStatus::InvalidParameter;
+
+    size_t totalSize = sizeof(ObjectHeader) + bodySize;
+    uint8_t* memory = new (std::nothrow) uint8_t[totalSize]();
+    if (!memory) return NtStatus::InsufficientResources;
+
+    auto* header = reinterpret_cast<ObjectHeader*>(memory);
+    header->pointerCount.store(1, std::memory_order_relaxed);
+    header->handleCount.store(0, std::memory_order_relaxed);
+    header->type = objectType;
+    header->dynamicallyAllocated = true;
+
+    if (objectAttributes) {
+        header->attributes = objectAttributes->attributes;
+        if (objectAttributes->objectName) {
+            header->objectName = std::wstring(objectAttributes->objectName->view());
+            header->nameInfo.name = header->objectName;
+        }
+        header->securityDescriptor = objectAttributes->securityDescriptor;
+    }
+
+    header->creatorInfo.createTime = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    header->creatorInfo.creatorProcessId = 4; // System process
+    header->creatorInfo.creatorThreadId = 1;
+
+    header->quotaInfo.pagedPoolCharge = static_cast<uint32_t>(bodySize);
+    header->quotaInfo.nonPagedPoolCharge = static_cast<uint32_t>(sizeof(ObjectHeader));
+
+    const_cast<ObjectType*>(objectType)->totalNumberOfObjects.fetch_add(1, std::memory_order_relaxed);
+
+    {
+        std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+        g_ObTelemetry.totalObjectsCreated++;
+    }
+
+    *outObjectBody = header->getBody();
+    if (outHeader) *outHeader = header;
+    return NtStatus::Success;
+}
+
+/**
+ * @brief Canonical Object Insertion into Directory & Handle Table (ObInsertObject).
+ */
+inline NtStatus ObInsertObject(
+    ObjectHeader* object,
+    const ObjectAttributes* objectAttributes,
+    uint32_t desiredAccess,
+    HandleTable* handleTable,
+    Handle* outHandle
+) {
+    if (!object) return NtStatus::InvalidParameter;
+
+    // Security access check if OBJ_FORCE_ACCESS_CHECK
+    if (objectAttributes && (objectAttributes->attributes & OBJ_FORCE_ACCESS_CHECK)) {
+        if (g_ObpAccessCheckProcedure && object->securityDescriptor) {
+            uint32_t granted = 0;
+            NtStatus chkSt = g_ObpAccessCheckProcedure(object->securityDescriptor, desiredAccess, &granted);
+            if (!NT_SUCCESS(chkSt)) {
+                std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+                g_ObTelemetry.totalSecurityChecksDenied++;
+                return NtStatus::AccessDenied;
+            }
+        }
+        std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+        g_ObTelemetry.totalSecurityChecksPassed++;
+    }
+
+    // Resolve directory and insert
+    if (!object->objectName.empty()) {
+        std::wstring fullPath = object->objectName;
+        size_t lastSlash = fullPath.rfind(L'\\');
+        std::wstring dirPath = (lastSlash == std::wstring::npos || lastSlash == 0) 
+            ? L"\\" 
+            : fullPath.substr(0, lastSlash);
+        std::wstring name = (lastSlash == std::wstring::npos) 
+            ? fullPath 
+            : fullPath.substr(lastSlash + 1);
+
+        auto dir = ObjectNamespace::get().getDirectory(dirPath);
+        if (!dir) {
+            ObjectNamespace::get().createDirectory(dirPath);
+            dir = ObjectNamespace::get().getDirectory(dirPath);
+        }
+
+        if (dir) {
+            NtStatus ins = dir->insertObject(name, object);
+            if (!NT_SUCCESS(ins)) return ins;
+            object->nameInfo.directory = dir.get();
+        }
+    }
+
+    // If handle requested, allocate handle
+    if (handleTable && outHandle) {
+        NtStatus hst = handleTable->createHandle(object, *outHandle, desiredAccess, object->attributes);
+        if (!NT_SUCCESS(hst)) return hst;
+
+        {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalHandlesOpened++;
+        }
+
+        if (object->type && object->type->openProcedure) {
+            object->type->openProcedure(object, desiredAccess);
+        }
+    }
+
+    return NtStatus::Success;
+}
+
+/**
+ * @brief Canonical Object Lookup by Name (ObReferenceObjectByName).
+ */
+inline NtStatus ObReferenceObjectByName(
+    std::wstring_view fullPath,
+    uint32_t /*attributes*/,
+    const ObjectType* expectedType,
+    KPROCESSOR_MODE /*accessMode*/,
+    ObjectHeader** outObject
+) {
+    if (!outObject) return NtStatus::InvalidParameter;
+    *outObject = nullptr;
+
+    NtStatus st = NtStatus::Success;
+    ObjectHeader* obj = ObjectNamespace::get().lookupObject(fullPath, expectedType, &st);
+    if (!obj) {
+        return NT_SUCCESS(st) ? NtStatus::ObjectNameNotFound : st;
+    }
+
+    if (expectedType && obj->type != expectedType) {
+        return NtStatus::ObjectTypeMismatch;
+    }
+
+    obj->addReference();
+    *outObject = obj;
+    return NtStatus::Success;
+}
+
+/**
+ * @brief Canonical Open Object by Name (ObOpenObjectByName).
+ */
+inline NtStatus ObOpenObjectByName(
+    const ObjectAttributes* objectAttributes,
+    const ObjectType* expectedType,
+    KPROCESSOR_MODE /*accessMode*/,
+    uint32_t desiredAccess,
+    HandleTable& handleTable,
+    Handle& outHandle
+) {
+    if (!objectAttributes || !objectAttributes->objectName) {
+        return NtStatus::InvalidParameter;
+    }
+
+    std::wstring path(objectAttributes->objectName->view());
+    NtStatus lookupSt = NtStatus::Success;
+    ObjectHeader* obj = ObjectNamespace::get().lookupObject(path, expectedType, &lookupSt);
+    if (!obj) {
+        return NT_SUCCESS(lookupSt) ? NtStatus::ObjectNameNotFound : lookupSt;
+    }
+
+    if (expectedType && obj->type != expectedType) {
+        return NtStatus::ObjectTypeMismatch;
+    }
+
+    // Access check
+    if (g_ObpAccessCheckProcedure && obj->securityDescriptor) {
+        uint32_t granted = 0;
+        NtStatus chkSt = g_ObpAccessCheckProcedure(obj->securityDescriptor, desiredAccess, &granted);
+        if (!NT_SUCCESS(chkSt)) {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalSecurityChecksDenied++;
+            return NtStatus::AccessDenied;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+        g_ObTelemetry.totalSecurityChecksPassed++;
+    }
+
+    NtStatus st = handleTable.createHandle(obj, outHandle, desiredAccess, objectAttributes->attributes);
+    if (NT_SUCCESS(st)) {
+        {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalHandlesOpened++;
+        }
+        if (obj->type && obj->type->openProcedure) {
+            obj->type->openProcedure(obj, desiredAccess);
+        }
+    }
+    return st;
+}
+
+/**
+ * @brief Canonical Open Object by Pointer (ObOpenObjectByPointer).
+ */
+inline NtStatus ObOpenObjectByPointer(
+    ObjectHeader* object,
+    uint32_t handleAttributes,
+    uint32_t desiredAccess,
+    const ObjectType* expectedType,
+    HandleTable& handleTable,
+    Handle& outHandle
+) {
+    if (!object) return NtStatus::InvalidParameter;
+    if (expectedType && object->type != expectedType) {
+        return NtStatus::ObjectTypeMismatch;
+    }
+
+    NtStatus st = handleTable.createHandle(object, outHandle, desiredAccess, handleAttributes);
+    if (NT_SUCCESS(st)) {
+        {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalHandlesOpened++;
+        }
+        if (object->type && object->type->openProcedure) {
+            object->type->openProcedure(object, desiredAccess);
+        }
+    }
+    return st;
+}
+
+/**
+ * @brief Canonical Reference Object by Handle (ObReferenceObjectByHandle).
+ */
 inline NtStatus ObReferenceObjectByHandle(
     Handle handle,
     const HandleTable& handleTable,
@@ -583,14 +1010,117 @@ inline NtStatus ObReferenceObjectByHandle(
     return NtStatus::Success;
 }
 
+/**
+ * @brief Canonical Dereference Object (ObDereferenceObject).
+ */
 inline void ObDereferenceObject(ObjectHeader* object) {
     if (!object) return;
-    object->releaseReference();
+    if (object->releaseReference()) {
+        if (object->type && object->type->deleteProcedure) {
+            object->type->deleteProcedure(object);
+        }
+        if (object->type) {
+            const_cast<ObjectType*>(object->type)->totalNumberOfObjects.fetch_sub(1, std::memory_order_relaxed);
+        }
+        {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalObjectsDestroyed++;
+        }
+        if (object->dynamicallyAllocated) {
+            delete[] reinterpret_cast<uint8_t*>(object);
+        }
+    }
 }
 
+/**
+ * @brief Canonical Close Handle (ObCloseHandle).
+ */
+inline NtStatus ObCloseHandle(Handle handle, HandleTable& handleTable) {
+    const auto* entry = handleTable.getEntry(handle);
+    if (!entry || !entry->isValid()) return NtStatus::InvalidHandle;
+
+    ObjectHeader* obj = entry->object;
+    if (obj->type && obj->type->closeProcedure) {
+        obj->type->closeProcedure(obj, handle);
+    }
+
+    NtStatus st = handleTable.closeHandle(handle);
+    if (NT_SUCCESS(st)) {
+        {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalHandlesClosed++;
+        }
+
+        // Automatic unlinking of temporary objects when last handle is closed
+        if (obj->handleCount.load(std::memory_order_relaxed) == 0 && !obj->isPermanent()) {
+            if (obj->parentDirectory) {
+                auto* dir = reinterpret_cast<DirectoryObject*>(obj->parentDirectory);
+                dir->removeObject(obj->objectName);
+                obj->parentDirectory = nullptr;
+                obj->nameInfo.directory = nullptr;
+                {
+                    std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+                    g_ObTelemetry.totalTemporaryObjectsUnlinked++;
+                }
+            }
+        }
+
+        if (obj->pointerCount.load(std::memory_order_relaxed) <= 0) {
+            if (obj->type && obj->type->deleteProcedure) {
+                obj->type->deleteProcedure(obj);
+            }
+            if (obj->type) {
+                const_cast<ObjectType*>(obj->type)->totalNumberOfObjects.fetch_sub(1, std::memory_order_relaxed);
+            }
+            {
+                std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+                g_ObTelemetry.totalObjectsDestroyed++;
+            }
+            if (obj->dynamicallyAllocated) {
+                delete[] reinterpret_cast<uint8_t*>(obj);
+            }
+        }
+    }
+    return st;
+}
+
+/**
+ * @brief Canonical Duplicate Handle (ObDuplicateHandle).
+ */
+inline NtStatus ObDuplicateHandle(
+    Handle sourceHandle,
+    HandleTable& sourceTable,
+    HandleTable& targetTable,
+    Handle& targetHandle,
+    uint32_t desiredAccess = 0,
+    bool inherit = false,
+    uint32_t options = 0
+) {
+    NtStatus st = sourceTable.duplicateHandle(sourceHandle, targetTable, targetHandle, desiredAccess, inherit, options);
+    if (NT_SUCCESS(st)) {
+        std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+        g_ObTelemetry.totalHandlesDuplicated++;
+    }
+    return st;
+}
+
+/**
+ * @brief Canonical Make Temporary Object (ObMakeTemporaryObject).
+ */
 inline void ObMakeTemporaryObject(ObjectHeader* object) {
     if (!object) return;
     object->attributes &= ~OBJ_PERMANENT;
+
+    if (object->handleCount.load(std::memory_order_relaxed) == 0 && object->parentDirectory) {
+        auto* dir = reinterpret_cast<DirectoryObject*>(object->parentDirectory);
+        dir->removeObject(object->objectName);
+        object->parentDirectory = nullptr;
+        object->nameInfo.directory = nullptr;
+        {
+            std::lock_guard<std::mutex> tlk(g_ObTelemetryMutex);
+            g_ObTelemetry.totalTemporaryObjectsUnlinked++;
+        }
+    }
 }
 
 } // namespace micant::ob
