@@ -8,13 +8,18 @@
 #include <mutex>
 #include <condition_variable>
 #include <memory>
+#include <cstring>
+#include <atomic>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 #include "ob.hpp"
+#include "ke.hpp"
 
 namespace micant::io {
 
-// Canonical Windows NT IRP Major Function Codes (0x00 - 0x1B)
+// ============================================================================
+// 1. Canonical Windows NT IRP Major Function Codes (0x00 - 0x1B)
+// ============================================================================
 inline constexpr uint8_t IRP_MJ_CREATE                   = 0x00;
 inline constexpr uint8_t IRP_MJ_CREATE_NAMED_PIPE        = 0x01;
 inline constexpr uint8_t IRP_MJ_CLOSE                    = 0x02;
@@ -53,19 +58,38 @@ inline constexpr uint8_t IRP_MN_MOUNT_VOLUME             = 0x01;
 inline constexpr uint8_t IRP_MN_VERIFY_VOLUME            = 0x02;
 inline constexpr uint8_t IRP_MN_LOAD_FILE_SYSTEM         = 0x03;
 
+// Device Object Flags
+inline constexpr uint32_t DO_BUFFERED_IO                 = 0x00000004;
+inline constexpr uint32_t DO_DIRECT_IO                   = 0x00000010;
+inline constexpr uint32_t DO_DEVICE_INITIALIZING         = 0x00000080;
+inline constexpr uint32_t DO_POWER_PAGABLE               = 0x00000020;
+
+// Device Characteristics Flags
+inline constexpr uint32_t FILE_REMOVABLE_MEDIA           = 0x00000001;
+inline constexpr uint32_t FILE_READ_ONLY_DEVICE          = 0x00000002;
+inline constexpr uint32_t FILE_FLOPPY_DISKETTE           = 0x00000004;
+inline constexpr uint32_t FILE_WRITE_ONCE_MEDIA          = 0x00000008;
+inline constexpr uint32_t FILE_REMOTE_DEVICE             = 0x00000010;
+inline constexpr uint32_t FILE_DEVICE_IS_MOUNTED         = 0x00000020;
+inline constexpr uint32_t FILE_VIRTUAL_VOLUME            = 0x00000040;
+inline constexpr uint32_t FILE_DEVICE_SECURE_OPEN        = 0x00000100;
+
 // Device Types
 enum class DeviceType : uint32_t {
-    Disk = 0x00000007,
-    FileSystem = 0x00000009,
-    Null = 0x00000015,
-    Console = 0x00000050,
-    Unknown = 0x00000022
+    Disk        = 0x00000007,
+    FileSystem  = 0x00000009,
+    Null        = 0x00000015,
+    Console     = 0x00000050,
+    Unknown     = 0x00000022
 };
 
 struct DeviceObject;
 struct DriverObject;
 struct Irp;
 struct Vpb;
+
+// Cancel Routine Prototype
+using PDRIVER_CANCEL = void (*)(DeviceObject* device, Irp* irp);
 
 /**
  * @brief Canonical Windows NT Volume Parameter Block (VPB).
@@ -142,7 +166,7 @@ struct IoStackLocation {
     void* context{nullptr};
 };
 
-inline constexpr int8_t IRP_MAX_STACK_LOCATIONS = 4;
+inline constexpr int8_t IRP_MAX_STACK_LOCATIONS = 8;
 
 /**
  * @brief I/O Request Packet (IRP) representing an in-flight I/O operation.
@@ -155,8 +179,14 @@ struct Irp {
     DeviceObject* deviceObject{nullptr};
     void* userBuffer{nullptr};
     void* systemBuffer{nullptr};
+    void* mdlAddress{nullptr};
     uint32_t length{0};
     LargeInteger byteOffset{};
+
+    // Cancellation Subsystem
+    bool cancel{false};
+    ke::KIRQL cancelIrql{ke::PASSIVE_LEVEL};
+    PDRIVER_CANCEL cancelRoutine{nullptr};
 
     // Layered Device Stack Tracking
     int8_t stackCount{IRP_MAX_STACK_LOCATIONS};
@@ -165,7 +195,7 @@ struct Irp {
 
     [[nodiscard]] IoStackLocation* getCurrentStack() noexcept {
         int idx = currentStackLocation - 1;
-        if (idx >= 0 && idx < IRP_MAX_STACK_LOCATIONS) {
+        if (idx >= 0 && idx < stackCount) {
             return &stackLocations[idx];
         }
         return &stackLocations[0];
@@ -192,6 +222,7 @@ struct DriverObject {
     std::wstring driverName;
     DriverDispatchRoutine majorFunction[32]{nullptr};
     FastIoDispatch* fastIoDispatch{nullptr};
+    void (*driverUnload)(DriverObject* driverObject){nullptr};
 
     void setDispatch(uint8_t major, DriverDispatchRoutine fn) noexcept {
         if (major < 32) majorFunction[major] = fn;
@@ -214,14 +245,64 @@ struct DeviceObject {
     std::wstring deviceName;
     uint32_t characteristics{0};
     uint32_t flags{0};
+    int8_t stackSize{1};
     DeviceObject* attachedDevice{nullptr};
     void* deviceExtension{nullptr};
     Vpb* vpb{nullptr};
 };
 
-/**
- * @brief Completion Packet queued to an I/O Completion Port.
- */
+// Global I/O Cancel SpinLock
+inline ke::SpinLock g_IoCancelSpinLock;
+
+inline void IoAcquireCancelSpinLock(ke::KIRQL* oldIrql) noexcept {
+    if (oldIrql) {
+        *oldIrql = g_IoCancelSpinLock.acquire();
+    } else {
+        g_IoCancelSpinLock.acquire();
+    }
+}
+
+inline void IoReleaseCancelSpinLock(ke::KIRQL oldIrql) noexcept {
+    g_IoCancelSpinLock.release(oldIrql);
+}
+
+inline PDRIVER_CANCEL IoSetCancelRoutine(Irp* irp, PDRIVER_CANCEL routine) noexcept {
+    if (!irp) return nullptr;
+    ke::KIRQL oldIrql = ke::PASSIVE_LEVEL;
+    IoAcquireCancelSpinLock(&oldIrql);
+    PDRIVER_CANCEL oldRoutine = irp->cancelRoutine;
+    irp->cancelRoutine = routine;
+    IoReleaseCancelSpinLock(oldIrql);
+    return oldRoutine;
+}
+
+inline bool IoCancelIrp(Irp* irp) noexcept {
+    if (!irp) return false;
+    ke::KIRQL oldIrql = ke::PASSIVE_LEVEL;
+    IoAcquireCancelSpinLock(&oldIrql);
+
+    irp->cancel = true;
+    PDRIVER_CANCEL cancelRoutine = irp->cancelRoutine;
+    irp->cancelRoutine = nullptr;
+
+    if (cancelRoutine) {
+        irp->cancelIrql = oldIrql;
+        cancelRoutine(irp->deviceObject, irp);
+        // Cancel routine is responsible for releasing cancel spinlock in standard NT,
+        // or we release if not released:
+        if (g_IoCancelSpinLock.isLocked()) {
+            IoReleaseCancelSpinLock(oldIrql);
+        }
+        return true;
+    }
+
+    IoReleaseCancelSpinLock(oldIrql);
+    return false;
+}
+
+// ============================================================================
+// 2. I/O Completion Port (IOCP) Subsystem
+// ============================================================================
 struct CompletionPacket {
     uint64_t completionKey{0};
     uintptr_t overlapped{0};
@@ -231,7 +312,7 @@ struct CompletionPacket {
 
 /**
  * @brief I/O Completion Port (IOCP).
- * Dave Cutler's high-concurrency async I/O worker queue.
+ * High-concurrency async I/O worker queue.
  */
 class IoCompletionPort {
 public:
@@ -297,9 +378,9 @@ private:
     std::condition_variable cv_;
 };
 
-/**
- * @brief I/O Manager Central Subsystem.
- */
+// ============================================================================
+// 3. I/O Manager Central Engine
+// ============================================================================
 class IoManager {
 public:
     static IoManager& get() {
@@ -318,8 +399,49 @@ public:
         dev->deviceName = std::wstring(deviceName);
         dev->deviceType = type;
         dev->deviceExtension = deviceExtension;
+        dev->stackSize = 1;
+        dev->flags = DO_DEVICE_INITIALIZING;
+
         devices_[dev->deviceName] = dev;
         return dev;
+    }
+
+    NtStatus createDeviceEx(
+        DriverObject* driver,
+        size_t extensionSize,
+        std::wstring_view deviceName,
+        DeviceType type,
+        uint32_t characteristics,
+        bool exclusive,
+        std::shared_ptr<DeviceObject>& outDev
+    ) {
+        void* ext = nullptr;
+        if (extensionSize > 0) {
+            ext = std::malloc(extensionSize);
+            if (!ext) return NtStatus::NoMemory;
+            std::memset(ext, 0, extensionSize);
+        }
+
+        outDev = createDevice(driver, deviceName, type, ext);
+        if (!outDev) {
+            if (ext) std::free(ext);
+            return NtStatus::InsufficientResources;
+        }
+
+        outDev->characteristics = characteristics;
+        if (exclusive) {
+            outDev->characteristics |= 0x00000200; // Exclusive attribute
+        }
+        return NtStatus::Success;
+    }
+
+    void deleteDevice(DeviceObject* device) {
+        if (!device) return;
+        if (device->deviceExtension) {
+            std::free(device->deviceExtension);
+            device->deviceExtension = nullptr;
+        }
+        devices_.erase(device->deviceName);
     }
 
     [[nodiscard]] std::shared_ptr<DeviceObject> lookupDevice(std::wstring_view name) const {
@@ -335,43 +457,31 @@ private:
     std::unordered_map<std::wstring, std::shared_ptr<DeviceObject>> devices_;
 };
 
-/**
- * @brief Canonical Windows NT WDM: Obtains a pointer to the caller's stack location in the specified IRP.
- */
+// ============================================================================
+// 4. Canonical Windows NT WDM I/O Routines
+// ============================================================================
 inline IoStackLocation* IoGetCurrentIrpStackLocation(Irp* irp) noexcept {
     if (!irp) return nullptr;
     return irp->getCurrentStack();
 }
 
-/**
- * @brief Canonical Windows NT WDM: Obtains a pointer to the next-lower-level driver's stack location in an IRP.
- */
 inline IoStackLocation* IoGetNextIrpStackLocation(Irp* irp) noexcept {
     if (!irp || irp->currentStackLocation <= 1) return nullptr;
     return &irp->stackLocations[irp->currentStackLocation - 2];
 }
 
-/**
- * @brief Canonical Windows NT WDM: Advances current stack location pointer down the stack.
- */
 inline void IoSetNextIrpStackLocation(Irp* irp) noexcept {
     if (irp && irp->currentStackLocation > 1) {
         irp->currentStackLocation--;
     }
 }
 
-/**
- * @brief Canonical Windows NT WDM: Resets current stack location so driver reuses the current location.
- */
 inline void IoSkipCurrentIrpStackLocation(Irp* irp) noexcept {
     if (irp && irp->currentStackLocation < irp->stackCount) {
         irp->currentStackLocation++;
     }
 }
 
-/**
- * @brief Canonical Windows NT WDM: Copies the IRP stack parameters from the current location to the next location.
- */
 inline void IoCopyCurrentIrpStackLocationToNext(Irp* irp) noexcept {
     if (!irp) return;
     auto* current = IoGetCurrentIrpStackLocation(irp);
@@ -381,9 +491,6 @@ inline void IoCopyCurrentIrpStackLocationToNext(Irp* irp) noexcept {
     }
 }
 
-/**
- * @brief Canonical Windows NT WDM: Sets a completion routine to be called when the next-lower-level driver completes request.
- */
 inline void IoSetCompletionRoutine(
     Irp* irp,
     NtStatus (*routine)(DeviceObject*, Irp*, void*),
@@ -402,9 +509,6 @@ inline void IoSetCompletionRoutine(
     if (invokeOnCancel)  next->control |= SL_INVOKE_ON_CANCEL;
 }
 
-/**
- * @brief Canonical Windows NT WDM: Traverses the attachedDevice chain up to the top of the stack.
- */
 inline DeviceObject* IoGetAttachedDevice(DeviceObject* device) noexcept {
     if (!device) return nullptr;
     DeviceObject* current = device;
@@ -414,9 +518,6 @@ inline DeviceObject* IoGetAttachedDevice(DeviceObject* device) noexcept {
     return current;
 }
 
-/**
- * @brief Canonical Windows NT WDM: Forwards an IRP down a layered device stack or directly to target.
- */
 inline NtStatus IoCallDriver(DeviceObject* device, Irp* irp) {
     if (!device || !irp) return NtStatus::InvalidParameter;
     DeviceObject* target = IoGetAttachedDevice(device);
@@ -444,29 +545,20 @@ inline NtStatus IoCallDriver(DeviceObject* device, Irp* irp) {
     return target->driverObject->dispatch(target, irp);
 }
 
-/**
- * @brief Canonical Windows NT WDM: Attaches a source device object to the top of target's stack.
- */
 inline DeviceObject* IoAttachDeviceToDeviceStack(DeviceObject* sourceDevice, DeviceObject* targetDevice) noexcept {
     if (!sourceDevice || !targetDevice) return nullptr;
     DeviceObject* top = IoGetAttachedDevice(targetDevice);
     top->attachedDevice = sourceDevice;
+    sourceDevice->stackSize = static_cast<int8_t>(top->stackSize + 1);
     return top;
 }
 
-/**
- * @brief Canonical Windows NT WDM: Detaches a device object from its attached device stack.
- */
 inline void IoDetachDevice(DeviceObject* targetDevice) noexcept {
     if (targetDevice) {
         targetDevice->attachedDevice = nullptr;
     }
 }
 
-/**
- * @brief Canonical Windows NT WDM: Signals completion of an in-flight I/O request packet.
- * Invokes completion routines upwards through the driver stack.
- */
 inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
     (void)priorityBoost;
     if (!irp) return NtStatus::InvalidParameter;
@@ -493,9 +585,6 @@ inline NtStatus IoCompleteRequest(Irp* irp, int8_t priorityBoost = 0) noexcept {
     return irp->ioStatus.status;
 }
 
-/**
- * @brief Canonical Windows NT WDM: Allocates an IRP from the executive memory pool.
- */
 inline Irp* IoAllocateIrp(int8_t stackSize = IRP_MAX_STACK_LOCATIONS, bool chargeQuota = false) {
     (void)chargeQuota;
     auto* irp = new (std::nothrow) Irp();
@@ -506,11 +595,39 @@ inline Irp* IoAllocateIrp(int8_t stackSize = IRP_MAX_STACK_LOCATIONS, bool charg
     return irp;
 }
 
-/**
- * @brief Canonical Windows NT WDM: Frees a previously allocated IRP.
- */
 inline void IoFreeIrp(Irp* irp) noexcept {
     delete irp;
+}
+
+// Fast I/O Dispatch Invocations
+inline bool IoFastRead(
+    DeviceObject* device,
+    void* fileObject,
+    LargeInteger* offset,
+    uint32_t length,
+    bool wait,
+    void* buffer,
+    IoStatusBlock* ioStatus
+) {
+    if (!device || !device->driverObject || !device->driverObject->fastIoDispatch) return false;
+    auto* fastIo = device->driverObject->fastIoDispatch;
+    if (!fastIo->fastIoRead) return false;
+    return fastIo->fastIoRead(fileObject, offset, length, wait, buffer, ioStatus, device);
+}
+
+inline bool IoFastWrite(
+    DeviceObject* device,
+    void* fileObject,
+    LargeInteger* offset,
+    uint32_t length,
+    bool wait,
+    const void* buffer,
+    IoStatusBlock* ioStatus
+) {
+    if (!device || !device->driverObject || !device->driverObject->fastIoDispatch) return false;
+    auto* fastIo = device->driverObject->fastIoDispatch;
+    if (!fastIo->fastIoWrite) return false;
+    return fastIo->fastIoWrite(fileObject, offset, length, wait, buffer, ioStatus, device);
 }
 
 } // namespace micant::io

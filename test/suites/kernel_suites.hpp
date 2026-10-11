@@ -478,7 +478,7 @@ void Test_SynchronizationPrimitives() {
 }
 
 // ============================================================================
-// Suite 7: I/O Request Packet (IRP) & I/O Completion Port (IOCP) Tests
+// Suite 7: I/O Request Packet (IRP), Device Stacks & IOCP Tests (Horizon 6)
 // ============================================================================
 void Test_IoAndCompletionPorts() {
     auto& ioMgr = io::IoManager::get();
@@ -512,7 +512,130 @@ void Test_IoAndCompletionPorts() {
     TEST_ASSERT(NT_SUCCESS(irpStatus), "Dispatched IRP_MJ_WRITE must succeed");
     TEST_ASSERT(testIrp.ioStatus.information == 1024, "IRP information must report 1024 bytes processed");
 
-    // 2. I/O Completion Port (IOCP)
+    // 2. Layered Device Stacks (PDO -> FDO -> FiDO)
+    io::DriverObject pdoDriver;
+    pdoDriver.driverName = L"\\Driver\\PciBus";
+    auto pdo = ioMgr.createDevice(&pdoDriver, L"\\Device\\PhysicalDisk0", io::DeviceType::Disk);
+    TEST_ASSERT(pdo->stackSize == 1, "Base PDO stack size must be 1");
+
+    io::DriverObject fdoDriver;
+    fdoDriver.driverName = L"\\Driver\\DiskClass";
+    auto fdo = ioMgr.createDevice(&fdoDriver, L"\\Device\\HarddiskVolume0", io::DeviceType::Disk);
+    io::IoAttachDeviceToDeviceStack(fdo.get(), pdo.get());
+    TEST_ASSERT(pdo->attachedDevice == fdo.get(), "FDO must attach on top of PDO");
+    TEST_ASSERT(fdo->stackSize == 2, "FDO stack size must be 2");
+
+    io::DriverObject filterDriver;
+    filterDriver.driverName = L"\\Driver\\DiskFilter";
+    auto fido = ioMgr.createDevice(&filterDriver, L"\\Device\\DiskFilter0", io::DeviceType::Disk);
+    io::IoAttachDeviceToDeviceStack(fido.get(), pdo.get());
+    TEST_ASSERT(io::IoGetAttachedDevice(pdo.get()) == fido.get(), "IoGetAttachedDevice on PDO must return top of stack (FiDO)");
+    TEST_ASSERT(fido->stackSize == 3, "Filter device stack size must be 3");
+
+    // 3. Multi-tier IRP Stack Traversal & Completion Routine Unwinding
+    static bool s_CompletionRoutineRan = false;
+    static void* s_CompletionContext = nullptr;
+
+    auto* multiTierIrp = io::IoAllocateIrp(3);
+    TEST_ASSERT(multiTierIrp != nullptr, "IoAllocateIrp with 3 stack locations must succeed");
+    TEST_ASSERT(multiTierIrp->stackCount == 3, "IRP stackCount must match 3");
+    TEST_ASSERT(multiTierIrp->currentStackLocation == 3, "IRP currentStackLocation must start at 3");
+
+    // Setup completion routine on next stack location
+    io::IoSetCompletionRoutine(
+        multiTierIrp,
+        [](io::DeviceObject*, io::Irp* irp, void* ctx) -> NtStatus {
+            s_CompletionRoutineRan = true;
+            s_CompletionContext = ctx;
+            irp->ioStatus.information = 2048;
+            return NtStatus::Success;
+        },
+        reinterpret_cast<void*>(0xCAFE),
+        true, // onSuccess
+        false,
+        false
+    );
+
+    // Advance stack location for child dispatch
+    io::IoSetNextIrpStackLocation(multiTierIrp);
+    TEST_ASSERT(multiTierIrp->currentStackLocation == 2, "IoSetNextIrpStackLocation must advance down stack");
+
+    // Signal completion upwards through stack
+    multiTierIrp->ioStatus.status = NtStatus::Success;
+    io::IoCompleteRequest(multiTierIrp, 0);
+    TEST_ASSERT(s_CompletionRoutineRan, "Completion routine must have executed during IoCompleteRequest");
+    TEST_ASSERT(s_CompletionContext == reinterpret_cast<void*>(0xCAFE), "Completion context must match 0xCAFE");
+    TEST_ASSERT(multiTierIrp->ioStatus.information == 2048, "Completion routine must have modified IRP information");
+
+    io::IoFreeIrp(multiTierIrp);
+
+    // 4. Fast I/O Dispatch Bypass (Zero-IRP Acceleration)
+    static bool s_FastIoReadRan = false;
+    io::FastIoDispatch fastIo{};
+    fastIo.fastIoRead = [](void*, LargeInteger*, uint32_t length, bool, void* buffer, IoStatusBlock* ioStatus, io::DeviceObject*) -> bool {
+        s_FastIoReadRan = true;
+        if (buffer && length >= 4) {
+            std::memcpy(buffer, "FAST", 4);
+        }
+        if (ioStatus) {
+            ioStatus->status = NtStatus::Success;
+            ioStatus->information = 4;
+        }
+        return true;
+    };
+    nullDriver.fastIoDispatch = &fastIo;
+
+    char fastBuffer[16]{};
+    IoStatusBlock fastIosb{};
+    LargeInteger fastOffset{};
+    bool fastSuccess = io::IoFastRead(nullDev.get(), nullptr, &fastOffset, 4, true, fastBuffer, &fastIosb);
+    TEST_ASSERT(fastSuccess, "IoFastRead must return true for registered fast I/O handler");
+    TEST_ASSERT(s_FastIoReadRan, "Fast I/O read callback must have executed");
+    TEST_ASSERT(std::memcmp(fastBuffer, "FAST", 4) == 0, "Fast I/O buffer content must match 'FAST'");
+    TEST_ASSERT(fastIosb.information == 4, "Fast I/O bytes transferred must be 4");
+
+    // 5. Thread-Safe I/O Request Cancellation Subsystem
+    static bool s_CancelRoutineRan = false;
+    auto* cancelTestIrp = io::IoAllocateIrp(1);
+    cancelTestIrp->deviceObject = nullDev.get();
+
+    io::IoSetCancelRoutine(cancelTestIrp, [](io::DeviceObject*, io::Irp* irp) {
+        s_CancelRoutineRan = true;
+        irp->ioStatus.status = NtStatus::Cancelled;
+        io::IoReleaseCancelSpinLock(irp->cancelIrql);
+    });
+
+    bool cancelResult = io::IoCancelIrp(cancelTestIrp);
+    TEST_ASSERT(cancelResult, "IoCancelIrp must return true when cancel routine is invoked");
+    TEST_ASSERT(s_CancelRoutineRan, "Cancel routine must have executed");
+    TEST_ASSERT(cancelTestIrp->cancel, "IRP cancel flag must be true");
+    TEST_ASSERT(cancelTestIrp->ioStatus.status == NtStatus::Cancelled, "IRP status must be Cancelled");
+    TEST_ASSERT(cancelTestIrp->cancelRoutine == nullptr, "Cancel routine must be cleared after cancellation");
+
+    io::IoFreeIrp(cancelTestIrp);
+
+    // 6. Kernel Driver Manager Lifecycle (DriverEntry & DriverUnload)
+    static bool s_DriverUnloaded = false;
+    auto& drvMgr = driver::DriverManager::get();
+
+    NtStatus loadStatus = drvMgr.loadDriver(
+        L"\\Driver\\TestEchoDriver",
+        [](io::DriverObject* drv, const UnicodeString*) -> NtStatus {
+            drv->driverUnload = [](io::DriverObject*) {
+                s_DriverUnloaded = true;
+            };
+            return NtStatus::Success;
+        }
+    );
+    TEST_ASSERT(NT_SUCCESS(loadStatus), "DriverManager::loadDriver must succeed");
+    TEST_ASSERT(drvMgr.lookupDriver(L"\\Driver\\TestEchoDriver") != nullptr, "Loaded driver must be discoverable");
+
+    NtStatus unloadStatus = drvMgr.unloadDriver(L"\\Driver\\TestEchoDriver");
+    TEST_ASSERT(NT_SUCCESS(unloadStatus), "DriverManager::unloadDriver must succeed");
+    TEST_ASSERT(s_DriverUnloaded, "DriverUnload routine must have executed");
+    TEST_ASSERT(drvMgr.lookupDriver(L"\\Driver\\TestEchoDriver") == nullptr, "Unloaded driver must be removed");
+
+    // 7. I/O Completion Port (IOCP)
     io::IoCompletionPort iocp(4);
     TEST_ASSERT(iocp.getQueuedCount() == 0, "New IOCP must have 0 queued packets");
 
@@ -548,6 +671,7 @@ void Test_IoAndCompletionPorts() {
     NtStatus emptyRem = iocp.removeCompletion(emptyKey, emptyOv, emptyIosb, 0);
     TEST_ASSERT(emptyRem == NtStatus::Timeout, "Removing from empty IOCP must return Timeout");
 }
+
 
 // ============================================================================
 // Suite 8: Configuration Manager (CM) Registry Hive & Path Resolution Tests

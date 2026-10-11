@@ -96,7 +96,24 @@ public:
         return NtStatus::Success;
     }
 
+    NtStatus unloadDriver(std::wstring_view driverName) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::wstring name(driverName);
+        auto it = drivers_.find(name);
+        if (it == drivers_.end()) {
+            return NtStatus::NoSuchDevice;
+        }
+
+        if (it->second->driverUnload) {
+            it->second->driverUnload(it->second.get());
+        }
+
+        drivers_.erase(it);
+        return NtStatus::Success;
+    }
+
     [[nodiscard]] io::DriverObject* lookupDriver(std::wstring_view driverName) const {
+
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = drivers_.find(std::wstring(driverName));
         if (it != drivers_.end()) {
