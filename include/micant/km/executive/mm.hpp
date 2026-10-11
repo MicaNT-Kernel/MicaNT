@@ -146,6 +146,10 @@ public:
 
     void initialize(size_t totalPages) {
         std::lock_guard<std::mutex> lock(mutex_);
+        initializeLocked(totalPages);
+    }
+
+    void initializeLocked(size_t totalPages) {
         entries_.clear();
         entries_.resize(totalPages);
         zeroedList_.clear();
@@ -167,6 +171,71 @@ public:
                 freeList_.push_back(i);
             }
         }
+    }
+
+    [[nodiscard]] uint64_t allocateContiguousPages(size_t pageCount) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (pageCount == 0 || pageCount > entries_.size()) return 0;
+
+        size_t consecutive = 0;
+        uint64_t candidateStart = 0;
+
+        for (uint64_t i = 256; i < entries_.size(); ++i) {
+            if (entries_[i].location == PageLocation::FreePageList ||
+                entries_[i].location == PageLocation::ZeroedPageList) {
+                if (consecutive == 0) {
+                    candidateStart = i;
+                }
+                consecutive++;
+                if (consecutive == pageCount) {
+                    for (uint64_t p = candidateStart; p < candidateStart + pageCount; ++p) {
+                        std::erase(freeList_, p);
+                        std::erase(zeroedList_, p);
+                        entries_[p].location = PageLocation::ActiveAndValid;
+                        entries_[p].referenceCount = 1;
+                        entries_[p].modified = false;
+                        activeCount_++;
+                    }
+                    return candidateStart;
+                }
+            } else {
+                consecutive = 0;
+            }
+        }
+        return 0;
+    }
+
+    void freeContiguousPages(uint64_t startPfn, size_t pageCount) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (uint64_t p = startPfn; p < startPfn + pageCount && p < entries_.size(); ++p) {
+            if (entries_[p].referenceCount > 0) {
+                entries_[p].referenceCount--;
+            }
+            if (entries_[p].referenceCount == 0) {
+                if (activeCount_ > 0) activeCount_--;
+                entries_[p].location = PageLocation::FreePageList;
+                freeList_.push_back(p);
+            }
+        }
+    }
+
+    size_t flushModifiedPages() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        size_t count = modifiedList_.size();
+        while (!modifiedList_.empty()) {
+            uint64_t pfn = modifiedList_.front();
+            modifiedList_.pop_front();
+            if (pfn < entries_.size()) {
+                entries_[pfn].location = PageLocation::StandbyPageList;
+                entries_[pfn].modified = false;
+                standbyList_.push_back(pfn);
+            }
+        }
+        return count;
+    }
+
+    void resetForTesting() {
+        initialize(262144);
     }
 
     [[nodiscard]] uint64_t allocatePage(bool preferZeroed = true) {
@@ -232,6 +301,13 @@ public:
         entries_[pfn].location = PageLocation::ZeroedPageList;
         entries_[pfn].modified = false;
         zeroedList_.push_back(pfn);
+    }
+
+    void setModified(uint64_t pfn, bool modified) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (pfn < entries_.size()) {
+            entries_[pfn].modified = modified;
+        }
     }
 
     [[nodiscard]] size_t getZeroedCount() const noexcept {
@@ -484,6 +560,13 @@ private:
 
 public:
     MmAvlTable() = default;
+
+    [[nodiscard]] std::vector<VirtualAddressDescriptor*> inOrder() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<VirtualAddressDescriptor*> result;
+        collectInOrder(root_.get(), result);
+        return result;
+    }
 
     void insert(std::unique_ptr<VirtualAddressDescriptor> vad) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -873,6 +956,35 @@ public:
     [[nodiscard]] uintptr_t getDirectoryTableBase() const noexcept { return directoryTableBase_; }
     void setDirectoryTableBase(uintptr_t cr3) noexcept { directoryTableBase_ = cr3; }
 
+    size_t trimWorkingSet(size_t targetPages) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        size_t trimmed = 0;
+        auto& pfnDb = PfnDatabase::get();
+
+        std::vector<VirtualAddressDescriptor*> vads = vadTree_.inOrder();
+        for (auto* vad : vads) {
+            if (!vad || vad->physicalPages.empty()) continue;
+
+            for (auto it = vad->physicalPages.begin(); it != vad->physicalPages.end(); ) {
+                if (trimmed >= targetPages) break;
+                uint64_t vpn = it->first;
+                uint64_t pfn = it->second;
+
+                pagingEngine_.unmapPage(directoryTableBase_, vpn << PageShift4KB);
+                pfnDb.freePage(pfn);
+                it = vad->physicalPages.erase(it);
+
+                if (workingSet_.residentPages > 0) {
+                    workingSet_.residentPages--;
+                }
+                trimmed++;
+            }
+            if (trimmed >= targetPages) break;
+        }
+
+        return trimmed;
+    }
+
 private:
     MmAvlTable vadTree_;
     WorkingSetList workingSet_;
@@ -904,11 +1016,274 @@ inline NtStatus MmAccessFault(
  */
 inline NtStatus MmInitSystem(uint32_t phase, const void* /*loaderBlock*/ = nullptr) {
     if (phase == 0) {
-        // Initialize PFN database with 1GB default pool
         PfnDatabase::get().initialize(262144);
         return NtStatus::Success;
     }
     return NtStatus::Success;
+}
+
+// ============================================================================
+// 9. Memory Descriptor Lists (MDL) Architecture & Lifecycle
+// ============================================================================
+enum class LOCK_OPERATION : uint32_t {
+    IoReadAccess   = 0,
+    IoWriteAccess  = 1,
+    IoModifyAccess = 2
+};
+
+enum class MEMORY_CACHING_TYPE : uint32_t {
+    MmNonCached             = 0,
+    MmCached                = 1,
+    MmWriteCombined         = 2,
+    MmHardwareCoherentCached= 3,
+    MmNonCachedUnordered    = 4,
+    MmUSWCCached            = 5,
+    MmMaximumCacheType      = 6
+};
+
+inline constexpr uint8_t KernelMode = 0;
+inline constexpr uint8_t UserMode   = 1;
+using KPROCESSOR_MODE = uint8_t;
+
+inline constexpr int16_t MDL_MAPPED_TO_SYSTEM_VA       = 0x0001;
+inline constexpr int16_t MDL_PAGES_LOCKED              = 0x0002;
+inline constexpr int16_t MDL_SOURCE_IS_NONPAGED_POOL   = 0x0004;
+inline constexpr int16_t MDL_ALLOCATED_FIXED_SIZE      = 0x0008;
+inline constexpr int16_t MDL_PARTIAL                   = 0x0010;
+inline constexpr int16_t MDL_IO_PAGE_READ              = 0x0020;
+inline constexpr int16_t MDL_WRITE_OPERATION           = 0x0040;
+inline constexpr int16_t MDL_PARENT_MAPPED_SYSTEM_VA   = 0x0080;
+inline constexpr int16_t MDL_FREE_EXTRA_PTES           = 0x0100;
+inline constexpr int16_t MDL_DESCRIBES_AWE             = 0x0200;
+inline constexpr int16_t MDL_IO_SPACE                  = 0x0400;
+inline constexpr int16_t MDL_NETWORK_HEADER            = 0x0800;
+inline constexpr int16_t MDL_MAPPING_CAN_FAIL          = 0x1000;
+inline constexpr int16_t MDL_ALLOCATED_MUST_SUCCEED   = 0x2000;
+
+struct MDL {
+    struct MDL* next{nullptr};
+    int16_t size{0};
+    int16_t mdlFlags{0};
+    ProcessAddressSpace* process{nullptr};
+    void* mappedSystemVa{nullptr};
+    void* startVa{nullptr};
+    uint32_t byteOffset{0};
+    uint32_t byteCount{0};
+    std::vector<uint64_t> pages;
+};
+using PMDL = MDL*;
+
+inline PMDL IoAllocateMdl(
+    void* virtualAddress,
+    uint32_t length,
+    bool secondaryBuffer = false,
+    bool chargeQuota = false,
+    void* irp = nullptr
+) {
+    (void)secondaryBuffer;
+    (void)chargeQuota;
+    (void)irp;
+
+    uintptr_t va = reinterpret_cast<uintptr_t>(virtualAddress);
+    uint32_t offset = static_cast<uint32_t>(va & PageMask4KB);
+    uintptr_t startPage = va & ~PageMask4KB;
+    size_t pageCount = (offset + length + PageSize4KB - 1) >> PageShift4KB;
+
+    auto* mdl = new MDL();
+    mdl->size = static_cast<int16_t>(sizeof(MDL) + pageCount * sizeof(uint64_t));
+    mdl->mdlFlags = 0;
+    mdl->startVa = reinterpret_cast<void*>(startPage);
+    mdl->byteOffset = offset;
+    mdl->byteCount = length;
+    mdl->pages.resize(pageCount, 0);
+
+    return mdl;
+}
+
+inline void IoFreeMdl(PMDL mdl) {
+    if (!mdl) return;
+    delete mdl;
+}
+
+inline void MmBuildMdlForNonPagedPool(PMDL mdl) {
+    if (!mdl) return;
+    mdl->mdlFlags |= (MDL_SOURCE_IS_NONPAGED_POOL | MDL_PAGES_LOCKED);
+    mdl->mappedSystemVa = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(mdl->startVa) + mdl->byteOffset
+    );
+
+    auto& pfnDb = PfnDatabase::get();
+    for (size_t i = 0; i < mdl->pages.size(); ++i) {
+        uint64_t pfn = pfnDb.allocatePage(false);
+        mdl->pages[i] = pfn;
+    }
+}
+
+inline NtStatus MmProbeAndLockPages(
+    PMDL mdl,
+    KPROCESSOR_MODE accessMode,
+    LOCK_OPERATION operation
+) {
+    if (!mdl) return NtStatus::InvalidParameter;
+    if (mdl->mdlFlags & MDL_PAGES_LOCKED) return NtStatus::Success;
+
+    (void)accessMode;
+    if (operation == LOCK_OPERATION::IoWriteAccess || operation == LOCK_OPERATION::IoModifyAccess) {
+        mdl->mdlFlags |= MDL_WRITE_OPERATION;
+    }
+
+    auto& pfnDb = PfnDatabase::get();
+    for (size_t i = 0; i < mdl->pages.size(); ++i) {
+        uint64_t pfn = pfnDb.allocatePage(false);
+        mdl->pages[i] = pfn;
+    }
+
+    mdl->mdlFlags |= MDL_PAGES_LOCKED;
+    return NtStatus::Success;
+}
+
+inline void MmUnlockPages(PMDL mdl) {
+    if (!mdl) return;
+    if ((mdl->mdlFlags & MDL_PAGES_LOCKED) == 0) return;
+
+    auto& pfnDb = PfnDatabase::get();
+    for (uint64_t pfn : mdl->pages) {
+        pfnDb.freePage(pfn);
+    }
+    std::fill(mdl->pages.begin(), mdl->pages.end(), 0);
+    mdl->mdlFlags &= ~MDL_PAGES_LOCKED;
+}
+
+inline void* MmMapLockedPagesSpecifyCache(
+    PMDL mdl,
+    KPROCESSOR_MODE accessMode,
+    MEMORY_CACHING_TYPE cacheType,
+    void* requestedAddress,
+    uint32_t bugCheckOnFailure,
+    uint32_t priority
+) {
+    (void)accessMode;
+    (void)cacheType;
+    (void)requestedAddress;
+    (void)bugCheckOnFailure;
+    (void)priority;
+
+    if (!mdl || (mdl->mdlFlags & MDL_PAGES_LOCKED) == 0) return nullptr;
+
+    mdl->mappedSystemVa = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(mdl->startVa) + mdl->byteOffset
+    );
+    mdl->mdlFlags |= MDL_MAPPED_TO_SYSTEM_VA;
+    return mdl->mappedSystemVa;
+}
+
+inline void MmUnmapLockedPages(void* baseAddress, PMDL mdl) {
+    (void)baseAddress;
+    if (!mdl) return;
+    mdl->mappedSystemVa = nullptr;
+    mdl->mdlFlags &= ~MDL_MAPPED_TO_SYSTEM_VA;
+}
+
+inline void* MmGetSystemAddressForMdlSafe(PMDL mdl, uint32_t priority) {
+    if (!mdl) return nullptr;
+    if (mdl->mdlFlags & (MDL_MAPPED_TO_SYSTEM_VA | MDL_SOURCE_IS_NONPAGED_POOL)) {
+        return mdl->mappedSystemVa;
+    }
+    return MmMapLockedPagesSpecifyCache(mdl, KernelMode, MEMORY_CACHING_TYPE::MmCached, nullptr, 0, priority);
+}
+
+inline uint32_t MmGetMdlByteCount(const PMDL mdl) {
+    return mdl ? mdl->byteCount : 0;
+}
+
+inline uint32_t MmGetMdlByteOffset(const PMDL mdl) {
+    return mdl ? mdl->byteOffset : 0;
+}
+
+inline void* MmGetMdlVirtualAddress(const PMDL mdl) {
+    return mdl ? reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mdl->startVa) + mdl->byteOffset) : nullptr;
+}
+
+inline uint64_t* MmGetMdlPfnArray(PMDL mdl) {
+    return mdl && !mdl->pages.empty() ? mdl->pages.data() : nullptr;
+}
+
+// ============================================================================
+// 10. Contiguous Physical Memory Allocator
+// ============================================================================
+inline void* MmAllocateContiguousMemory(size_t numberOfBytes, uintptr_t highestAcceptableAddress) {
+    (void)highestAcceptableAddress;
+    size_t pageCount = (numberOfBytes + PageSize4KB - 1) >> PageShift4KB;
+    uint64_t startPfn = PfnDatabase::get().allocateContiguousPages(pageCount);
+    if (startPfn == 0) return nullptr;
+    return reinterpret_cast<void*>(startPfn << PageShift4KB);
+}
+
+inline void* MmAllocateContiguousMemorySpecifyCache(
+    size_t numberOfBytes,
+    uintptr_t lowestAcceptableAddress,
+    uintptr_t highestAcceptableAddress,
+    uintptr_t boundaryAddressMultiple,
+    MEMORY_CACHING_TYPE cacheType
+) {
+    (void)lowestAcceptableAddress;
+    (void)highestAcceptableAddress;
+    (void)boundaryAddressMultiple;
+    (void)cacheType;
+    return MmAllocateContiguousMemory(numberOfBytes, highestAcceptableAddress);
+}
+
+inline void MmFreeContiguousMemory(void* baseAddress) {
+    if (!baseAddress) return;
+    uint64_t startPfn = reinterpret_cast<uintptr_t>(baseAddress) >> PageShift4KB;
+    PfnDatabase::get().freePage(startPfn);
+}
+
+inline void MmFreeContiguousMemorySpecifyCache(void* baseAddress, size_t numberOfBytes, MEMORY_CACHING_TYPE cacheType) {
+    (void)cacheType;
+    if (!baseAddress || numberOfBytes == 0) return;
+    size_t pageCount = (numberOfBytes + PageSize4KB - 1) >> PageShift4KB;
+    uint64_t startPfn = reinterpret_cast<uintptr_t>(baseAddress) >> PageShift4KB;
+    PfnDatabase::get().freeContiguousPages(startPfn, pageCount);
+}
+
+// ============================================================================
+// 11. Working Set Trimming & Modified Page Writer
+// ============================================================================
+inline size_t MmTrimProcessWorkingSet(ProcessAddressSpace& addressSpace, size_t pagesToTrim) {
+    return addressSpace.trimWorkingSet(pagesToTrim);
+}
+
+inline size_t MmFlushModifiedPageList() {
+    return PfnDatabase::get().flushModifiedPages();
+}
+
+// ============================================================================
+// 12. Memory Manager Telemetry & Diagnostics
+// ============================================================================
+struct MM_SYSTEM_DIAGNOSTICS {
+    size_t totalPhysicalPages{0};
+    size_t activePages{0};
+    size_t zeroedPages{0};
+    size_t freePages{0};
+    size_t standbyPages{0};
+    size_t modifiedPages{0};
+};
+
+inline MM_SYSTEM_DIAGNOSTICS MmQuerySystemMemoryDiagnostics() {
+    auto& pfnDb = PfnDatabase::get();
+    MM_SYSTEM_DIAGNOSTICS diag{};
+    diag.totalPhysicalPages = pfnDb.getTotalPages();
+    diag.activePages = pfnDb.getActiveCount();
+    diag.zeroedPages = pfnDb.getZeroedCount();
+    diag.freePages = pfnDb.getFreeCount();
+    diag.standbyPages = pfnDb.getStandbyCount();
+    diag.modifiedPages = pfnDb.getModifiedCount();
+    return diag;
+}
+
+inline void MmResetDiagnosticsForTesting() {
+    PfnDatabase::get().resetForTesting();
 }
 
 } // namespace micant::mm

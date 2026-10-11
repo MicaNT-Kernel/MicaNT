@@ -1022,6 +1022,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon14_ExecutiveWorkQueues_And_IoWorkItems);
     RUN_TEST(Test_Horizon15_KernelTimers_DpcWheel_And_ExTimer);
     RUN_TEST(Test_Horizon16_InterProcessorInterrupts_SMP_And_Barriers);
+    RUN_TEST(Test_Horizon17_MemoryManager_MDL_ContiguousMemory_And_WorkingSet);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

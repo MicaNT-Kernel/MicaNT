@@ -4022,3 +4022,135 @@ inline void Test_Horizon16_InterProcessorInterrupts_SMP_And_Barriers() {
     std::cout << "[TEST] Suite 232: Horizon 16 - Sovereign IPI, SMP Dispatching & Barriers PASSED.\n";
 }
 
+void Test_Horizon17_MemoryManager_MDL_ContiguousMemory_And_WorkingSet() {
+    // 1. PFN Database Initialization & Diagnostics Telemetry
+    mm::PfnDatabase::get().initialize(262144);
+    auto diag = mm::MmQuerySystemMemoryDiagnostics();
+    TEST_ASSERT(diag.totalPhysicalPages == 262144, "Total physical pages must be 262,144 (1 GB addressable)");
+    TEST_ASSERT(diag.zeroedPages > 0, "Zeroed pages must be > 0");
+    TEST_ASSERT(diag.freePages > 0, "Free pages must be > 0");
+    TEST_ASSERT(diag.activePages == 0, "Initial active pages must be 0");
+
+    // 2. High-Performance Demand Paging & Copy-On-Write (COW)
+    mm::ProcessAddressSpace space;
+    uintptr_t baseAddr = 0;
+    NtStatus st = space.allocate(baseAddr, 16384, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE);
+    TEST_ASSERT(NT_SUCCESS(st), "Allocation of 16KB committed memory must succeed");
+    TEST_ASSERT(space.getResidentPages() == 0, "Initial resident pages before faults must be 0");
+
+    // Demand-zero read fault on page 0
+    st = mm::MmAccessFault(space, baseAddr, false, true, false);
+    TEST_ASSERT(NT_SUCCESS(st), "Demand-zero read fault must succeed");
+    TEST_ASSERT(space.getResidentPages() == 1, "Resident pages must increment to 1 after demand-zero fault");
+
+    // Demand-zero write fault on page 1
+    st = mm::MmAccessFault(space, baseAddr + 4096, true, true, false);
+    TEST_ASSERT(NT_SUCCESS(st), "Demand-zero write fault must succeed");
+    TEST_ASSERT(space.getResidentPages() == 2, "Resident pages must increment to 2 after write fault");
+
+    // Copy-On-Write (PAGE_WRITECOPY) handling
+    uintptr_t cowAddr = 0;
+    st = space.allocate(cowAddr, 4096, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_WRITECOPY);
+    TEST_ASSERT(NT_SUCCESS(st), "COW allocation must succeed");
+    auto* cowVad = space.findVad(cowAddr);
+    TEST_ASSERT(cowVad != nullptr && cowVad->isCopyOnWrite, "VAD must be marked Copy-On-Write");
+
+    // Trigger COW resolution on write
+    st = mm::MmAccessFault(space, cowAddr, true, true, false);
+    TEST_ASSERT(NT_SUCCESS(st), "Write to COW page must resolve fault");
+    TEST_ASSERT(!cowVad->isCopyOnWrite, "COW flag must be cleared after private copy");
+    TEST_ASSERT(cowVad->protection == mm::PAGE_READWRITE, "Protection must transition to PAGE_READWRITE");
+
+    // 3. Memory Descriptor List (MDL) Architecture & Lifecycle
+    void* testBuffer = reinterpret_cast<void*>(0x00007FF710001800ULL);
+    uint32_t bufLen = 8192; // Spans 3 pages: 0x1800..0x1FFF, 0x2000..0x2FFF, 0x3000..0x37FF
+    mm::PMDL mdl = mm::IoAllocateMdl(testBuffer, bufLen, false, false, nullptr);
+    TEST_ASSERT(mdl != nullptr, "IoAllocateMdl must return non-null MDL pointer");
+    TEST_ASSERT(mm::MmGetMdlByteCount(mdl) == bufLen, "MmGetMdlByteCount must match 8192");
+    TEST_ASSERT(mm::MmGetMdlByteOffset(mdl) == 0x800, "MmGetMdlByteOffset must match 0x800");
+    TEST_ASSERT(mm::MmGetMdlVirtualAddress(mdl) == testBuffer, "MmGetMdlVirtualAddress must match original buffer");
+    TEST_ASSERT(mdl->pages.size() == 3, "MDL page vector must contain exactly 3 pages");
+
+    // Probe and lock physical pages
+    st = mm::MmProbeAndLockPages(mdl, mm::KernelMode, mm::LOCK_OPERATION::IoWriteAccess);
+    TEST_ASSERT(NT_SUCCESS(st), "MmProbeAndLockPages must succeed");
+    TEST_ASSERT((mdl->mdlFlags & mm::MDL_PAGES_LOCKED) != 0, "MDL_PAGES_LOCKED flag must be set");
+    TEST_ASSERT((mdl->mdlFlags & mm::MDL_WRITE_OPERATION) != 0, "MDL_WRITE_OPERATION flag must be set");
+
+    uint64_t* pfnArray = mm::MmGetMdlPfnArray(mdl);
+    TEST_ASSERT(pfnArray != nullptr, "MmGetMdlPfnArray must return valid pointer");
+    TEST_ASSERT(pfnArray[0] != 0 && pfnArray[1] != 0 && pfnArray[2] != 0, "Locked PFNs must be valid non-zero");
+
+    // Map locked pages into kernel system VA space
+    void* sysVa = mm::MmGetSystemAddressForMdlSafe(mdl, 16);
+    TEST_ASSERT(sysVa != nullptr, "MmGetSystemAddressForMdlSafe must return system VA");
+    TEST_ASSERT((mdl->mdlFlags & mm::MDL_MAPPED_TO_SYSTEM_VA) != 0, "MDL_MAPPED_TO_SYSTEM_VA flag must be set");
+    TEST_ASSERT(sysVa == mdl->mappedSystemVa, "Mapped VA must match mdl->mappedSystemVa");
+
+    // Unmap and unlock pages
+    mm::MmUnmapLockedPages(sysVa, mdl);
+    TEST_ASSERT((mdl->mdlFlags & mm::MDL_MAPPED_TO_SYSTEM_VA) == 0, "MDL_MAPPED_TO_SYSTEM_VA must be cleared");
+    mm::MmUnlockPages(mdl);
+    TEST_ASSERT((mdl->mdlFlags & mm::MDL_PAGES_LOCKED) == 0, "MDL_PAGES_LOCKED must be cleared");
+    mm::IoFreeMdl(mdl);
+
+    // 4. Non-Paged Pool Fast-Path MDL
+    void* poolBuf = reinterpret_cast<void*>(0xFFFF888000004000ULL);
+    mm::PMDL poolMdl = mm::IoAllocateMdl(poolBuf, 4096);
+    TEST_ASSERT(poolMdl != nullptr, "Nonpaged pool MDL allocation must succeed");
+    mm::MmBuildMdlForNonPagedPool(poolMdl);
+    TEST_ASSERT((poolMdl->mdlFlags & mm::MDL_SOURCE_IS_NONPAGED_POOL) != 0, "MDL_SOURCE_IS_NONPAGED_POOL must be set");
+    TEST_ASSERT((poolMdl->mdlFlags & mm::MDL_PAGES_LOCKED) != 0, "Nonpaged pool MDL pages must be marked locked");
+    TEST_ASSERT(poolMdl->mappedSystemVa == poolBuf, "Nonpaged pool mapped VA must match source VA");
+    void* poolSysVa = mm::MmGetSystemAddressForMdlSafe(poolMdl, 16);
+    TEST_ASSERT(poolSysVa == poolBuf, "MmGetSystemAddressForMdlSafe must return original address for nonpaged pool");
+    mm::MmUnlockPages(poolMdl);
+    mm::IoFreeMdl(poolMdl);
+
+    // 5. Contiguous Physical Memory Allocator
+    size_t contigBytes = 64 * 1024; // 64KB = 16 contiguous 4KB pages
+    void* contigPtr = mm::MmAllocateContiguousMemory(contigBytes, 0xFFFFFFFFFFFFFFFFULL);
+    TEST_ASSERT(contigPtr != nullptr, "MmAllocateContiguousMemory(64KB) must succeed");
+    uintptr_t contigVa = reinterpret_cast<uintptr_t>(contigPtr);
+    TEST_ASSERT((contigVa & mm::PageMask4KB) == 0, "Contiguous memory must be page-aligned");
+    uint64_t contigPfn = contigVa >> mm::PageShift4KB;
+    TEST_ASSERT(contigPfn >= 256, "Contiguous memory must reside outside low 1MB reserved memory");
+    mm::MmFreeContiguousMemorySpecifyCache(contigPtr, contigBytes, mm::MEMORY_CACHING_TYPE::MmCached);
+
+    // 6. Working Set Trimming & Page Aging
+    mm::ProcessAddressSpace trimSpace;
+    uintptr_t trimBase = 0;
+    st = trimSpace.allocate(trimBase, 32 * 1024, mm::MEM_COMMIT | mm::MEM_RESERVE, mm::PAGE_READWRITE); // 8 pages
+    TEST_ASSERT(NT_SUCCESS(st), "Allocating 32KB for trimming test must succeed");
+    for (size_t i = 0; i < 8; ++i) {
+        st = mm::MmAccessFault(trimSpace, trimBase + i * 4096, false, true, false);
+        TEST_ASSERT(NT_SUCCESS(st), "Faulting in page must succeed");
+    }
+    TEST_ASSERT(trimSpace.getResidentPages() == 8, "All 8 pages must be resident in working set");
+    size_t trimmedPages = mm::MmTrimProcessWorkingSet(trimSpace, 5);
+    TEST_ASSERT(trimmedPages == 5, "MmTrimProcessWorkingSet must have trimmed exactly 5 pages");
+    TEST_ASSERT(trimSpace.getResidentPages() == 3, "Resident pages must be reduced from 8 to 3");
+
+    // 7. Modified Page Writer & Flush
+    auto& pfnDb = mm::PfnDatabase::get();
+    uint64_t modPfn = pfnDb.allocatePage(true);
+    TEST_ASSERT(modPfn != 0, "PFN allocation must succeed");
+    pfnDb.setModified(modPfn, true);
+    pfnDb.freePage(modPfn);
+    TEST_ASSERT(pfnDb.getModifiedCount() >= 1, "Modified page count must be >= 1 after freeing modified page");
+
+    size_t flushed = mm::MmFlushModifiedPageList();
+    TEST_ASSERT(flushed >= 1, "MmFlushModifiedPageList must flush modified pages to standby list");
+    TEST_ASSERT(pfnDb.getModifiedCount() == 0, "Modified list must be empty after flush");
+
+    // 8. Telemetry & Diagnostic Reset
+    diag = mm::MmQuerySystemMemoryDiagnostics();
+    TEST_ASSERT(diag.totalPhysicalPages == 262144, "Total physical pages must remain 262,144");
+    mm::MmResetDiagnosticsForTesting();
+    auto diagAfter = mm::MmQuerySystemMemoryDiagnostics();
+    TEST_ASSERT(diagAfter.activePages == 0, "Active pages must be 0 after resetForTesting");
+
+    std::cout << "[TEST] Suite 233: Horizon 17 - Sovereign Memory Manager, MDL Lifecycle, Contiguous Memory & Working Set Trimming PASSED.\n";
+}
+
+
