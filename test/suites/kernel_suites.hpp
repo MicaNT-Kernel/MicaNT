@@ -3922,3 +3922,103 @@ inline void Test_Horizon15_KernelTimers_DpcWheel_And_ExTimer() {
     std::cout << "[TEST] Suite 231: Horizon 15 - Sovereign Kernel Timers, DPC Wheel & ExTimer PASSED.\n";
 }
 
+// ============================================================================
+// Suite 232: Horizon 16 - Inter-Processor Interrupt (IPI), SMP Dispatching & Barriers
+// ============================================================================
+namespace test_ipi_h16 {
+    inline std::atomic<uint32_t> g_WorkerInvocationCount{0};
+
+    inline uintptr_t BroadcastWorker(uintptr_t context) {
+        g_WorkerInvocationCount.fetch_add(1, std::memory_order_relaxed);
+        return context * 2 + 1;
+    }
+}
+
+inline void Test_Horizon16_InterProcessorInterrupts_SMP_And_Barriers() {
+    std::cout << "[TEST] Executing Suite 232: Horizon 16 - Sovereign IPI, SMP Dispatching & Barriers...\n";
+    auto& ipiMgr = ke::IpiManager::get();
+    ipiMgr.resetForTesting();
+
+    // 1. Processor Affinity Mask & Core Enumeration
+    TEST_ASSERT(ke::KeQueryActiveProcessorCount() == 4, "Default active processor count must be 4");
+    ke::KAFFINITY activeMask = 0;
+    uint32_t count = ke::KeQueryActiveProcessorCount(&activeMask);
+    TEST_ASSERT(count == 4, "Active processor count must be 4");
+    TEST_ASSERT(activeMask == 0x0F, "Active affinity mask must be 0x0F for 4 processors");
+    TEST_ASSERT(ke::KeQueryActiveProcessors() == 0x0F, "KeQueryActiveProcessors must return 0x0F");
+
+    // Reconfigure to 8-core SMP configuration
+    ipiMgr.initialize(8);
+    TEST_ASSERT(ke::KeQueryActiveProcessorCount(&activeMask) == 8, "Reconfigured active processor count must be 8");
+    TEST_ASSERT(activeMask == 0xFF, "Active affinity mask must be 0xFF for 8 processors");
+    TEST_ASSERT(ipiMgr.isProcessorOnline(7), "Core 7 must be marked online");
+    TEST_ASSERT(!ipiMgr.isProcessorOnline(8), "Core 8 must be offline");
+
+    // 2. Targeted IPI Transmission & Processing
+    // Send IPI_DPC from CPU 0 to CPU 2 (affinity bit 2 = 0x04)
+    bool ipiSent = ipiMgr.sendIpi(0, 0x04, ke::IPI_DPC);
+    TEST_ASSERT(ipiSent, "sendIpi to valid online processor must return true");
+
+    const auto& cpu0State = ipiMgr.getProcessorState(0);
+    const auto& cpu2State = ipiMgr.getProcessorState(2);
+    TEST_ASSERT(cpu0State.ipiSentCount >= 1, "CPU 0 ipiSentCount must be >= 1");
+    TEST_ASSERT(cpu2State.ipiReceivedCount >= 1, "CPU 2 ipiReceivedCount must be >= 1");
+    TEST_ASSERT((cpu2State.pendingRequests.load() & ke::IPI_DPC) != 0, "CPU 2 must have pending IPI_DPC");
+
+    // Process incoming IPI on CPU 2
+    uint32_t handled = ipiMgr.processIncomingIpis(2);
+    TEST_ASSERT((handled & ke::IPI_DPC) != 0, "processIncomingIpis must return handled IPI_DPC request");
+    TEST_ASSERT(cpu2State.pendingRequests.load() == 0, "Pending requests on CPU 2 must be drained");
+
+    // 3. Synchronized Multiprocessor Generic Call Broadcast
+    test_ipi_h16::g_WorkerInvocationCount.store(0);
+    uintptr_t genericResult = ke::KeIpiGenericCall(test_ipi_h16::BroadcastWorker, 42);
+    TEST_ASSERT(genericResult == 85, "KeIpiGenericCall result must match worker routine (42 * 2 + 1 = 85)");
+    TEST_ASSERT(test_ipi_h16::g_WorkerInvocationCount.load() >= 8,
+                "Broadcast worker must have been executed across all 8 active SMP cores");
+
+    auto stats = ipiMgr.getStatistics();
+    TEST_ASSERT(stats.totalGenericCalls >= 1, "Total generic calls count must be >= 1");
+
+    // 4. SMP Execution Freezing & Thawing
+    TEST_ASSERT(!ipiMgr.isExecutionFrozen(), "Initial execution freeze state must be false");
+    bool freezeOk = ke::KeFreezeExecution();
+    TEST_ASSERT(freezeOk, "KeFreezeExecution must succeed on primary core");
+    TEST_ASSERT(ipiMgr.isExecutionFrozen(), "isExecutionFrozen must report true");
+
+    // Remote cores must be marked frozen
+    TEST_ASSERT(ipiMgr.isProcessorFrozen(1), "Remote processor 1 must be frozen");
+    TEST_ASSERT(ipiMgr.isProcessorFrozen(7), "Remote processor 7 must be frozen");
+
+    // Concurrent freeze attempt should fail
+    bool concurrentFreeze = ipiMgr.freezeExecution(1);
+    TEST_ASSERT(!concurrentFreeze, "Concurrent freeze execution must return false");
+
+    // Thaw cores
+    ke::KeThawExecution(true);
+    TEST_ASSERT(!ipiMgr.isExecutionFrozen(), "isExecutionFrozen must report false after KeThawExecution");
+    TEST_ASSERT(!ipiMgr.isProcessorFrozen(1), "Remote processor 1 must be thawed");
+    TEST_ASSERT(!ipiMgr.isProcessorFrozen(7), "Remote processor 7 must be thawed");
+
+    stats = ipiMgr.getStatistics();
+    TEST_ASSERT(stats.totalFreezeCycles >= 1, "totalFreezeCycles must be >= 1");
+
+    // 5. SMP TLB Shootdown Engine
+    uint64_t tlbBefore = stats.totalTlbFlushes;
+    ke::KeFlushEntireTb(true);
+    stats = ipiMgr.getStatistics();
+    TEST_ASSERT(stats.totalTlbFlushes > tlbBefore, "KeFlushEntireTb must increment totalTlbFlushes");
+
+    void* testVa = reinterpret_cast<void*>(0x7FFE0000);
+    ke::KeFlushSingleTb(testVa, true);
+    stats = ipiMgr.getStatistics();
+    TEST_ASSERT(stats.totalTlbFlushes > tlbBefore + 1, "KeFlushSingleTb must increment totalTlbFlushes");
+
+    ke::KeFlushMultipleTb(16, nullptr, true);
+    stats = ipiMgr.getStatistics();
+    TEST_ASSERT(stats.totalTlbFlushes > tlbBefore + 2, "KeFlushMultipleTb must increment totalTlbFlushes");
+
+    ipiMgr.resetForTesting();
+    std::cout << "[TEST] Suite 232: Horizon 16 - Sovereign IPI, SMP Dispatching & Barriers PASSED.\n";
+}
+

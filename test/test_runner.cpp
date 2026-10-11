@@ -38,6 +38,7 @@
 #include "micant/timer.hpp"
 #include "micant/lookaside.hpp"
 #include "micant/po.hpp"
+#include "micant/ipi.hpp"
 #include "micant/heap.hpp"
 #include "micant/ldr.hpp"
 #include "micant/ntdll.hpp"
@@ -1020,6 +1021,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon13_SovereignPowerManagement_PoSubsystem);
     RUN_TEST(Test_Horizon14_ExecutiveWorkQueues_And_IoWorkItems);
     RUN_TEST(Test_Horizon15_KernelTimers_DpcWheel_And_ExTimer);
+    RUN_TEST(Test_Horizon16_InterProcessorInterrupts_SMP_And_Barriers);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
