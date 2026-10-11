@@ -1024,6 +1024,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon16_InterProcessorInterrupts_SMP_And_Barriers);
     RUN_TEST(Test_Horizon17_MemoryManager_MDL_ContiguousMemory_And_WorkingSet);
     RUN_TEST(Test_Horizon18_SectionObjects_MemoryMappedFiles_And_ControlAreaArchitecture);
+    RUN_TEST(Test_Horizon19_DispatcherDatabase_MultiWait_And_PriorityInheritance);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

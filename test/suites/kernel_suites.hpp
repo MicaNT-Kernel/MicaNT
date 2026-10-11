@@ -4330,5 +4330,211 @@ void Test_Horizon18_SectionObjects_MemoryMappedFiles_And_ControlAreaArchitecture
     std::cout << "[TEST] Suite 234: Horizon 18 - Sovereign Section Objects, Memory Mapped Files & Control Area Architecture PASSED.\n";
 }
 
+// ============================================================================
+// Suite 235: Horizon 19 - Sovereign Kernel Dispatcher Database, KWAIT_BLOCK,
+// Multi-Wait (WaitAll/WaitAny) & Mutex Priority Inheritance
+// ============================================================================
+inline void Test_Horizon19_DispatcherDatabase_MultiWait_And_PriorityInheritance() {
+    std::cout << "[TEST] Running Suite 235: Horizon 19 - Sovereign Kernel Dispatcher Database, Multi-Wait & Priority Inheritance...\n";
+
+    using namespace micant::ke;
+    using namespace micant::sync;
+
+    // Reset telemetry for clean baseline
+    KeResetDispatcherTelemetryForTesting();
+
+    // 1. KEVENT Subsystem (NotificationEvent vs SynchronizationEvent)
+    KEVENT notifEvent;
+    KeInitializeEvent(&notifEvent, DISPATCHER_TYPE::NotificationEvent, false);
+    TEST_ASSERT(notifEvent.header.type == DISPATCHER_TYPE::NotificationEvent, "NotificationEvent type must match");
+    TEST_ASSERT(notifEvent.header.signalState == 0, "Initial signal state must be 0 (unsignaled)");
+
+    int64_t zeroTimeout = 0;
+    NtStatus status = KeWaitForSingleObject(&notifEvent, KWAIT_REASON::Executive, 0, false, &zeroTimeout);
+    TEST_ASSERT(status == NtStatus::Timeout, "Wait on unsignaled NotificationEvent must time out");
+
+    // Signal NotificationEvent
+    int32_t prevSignaled = KeSetEvent(&notifEvent, 0, false);
+    TEST_ASSERT(prevSignaled == 0, "Previous state was unsignaled (0)");
+    TEST_ASSERT(notifEvent.header.signalState == 1, "Signal state must be 1 after KeSetEvent");
+
+    // Wait on signaled NotificationEvent - should succeed AND remain signaled (manual reset)
+    status = KeWaitForSingleObject(&notifEvent, KWAIT_REASON::Executive, 0, false, &zeroTimeout);
+    TEST_ASSERT(status == NtStatus::Success, "Wait on signaled NotificationEvent must succeed");
+    TEST_ASSERT(notifEvent.header.signalState == 1, "NotificationEvent must stay signaled after wait");
+
+    // Reset NotificationEvent
+    int32_t prevBeforeReset = KeResetEvent(&notifEvent);
+    TEST_ASSERT(prevBeforeReset == 1, "Previous state before KeResetEvent was 1");
+    TEST_ASSERT(notifEvent.header.signalState == 0, "State after KeResetEvent must be 0");
+
+    // SynchronizationEvent (Auto-Reset)
+    KEVENT syncEvent;
+    KeInitializeEvent(&syncEvent, DISPATCHER_TYPE::SynchronizationEvent, false);
+    KeSetEvent(&syncEvent, 0, false);
+    TEST_ASSERT(syncEvent.header.signalState == 1, "SynchronizationEvent must be signaled");
+
+    // Wait on SynchronizationEvent - must succeed AND auto-reset to 0
+    status = KeWaitForSingleObject(&syncEvent, KWAIT_REASON::Executive, 0, false, &zeroTimeout);
+    TEST_ASSERT(status == NtStatus::Success, "Wait on signaled SynchronizationEvent must succeed");
+    TEST_ASSERT(syncEvent.header.signalState == 0, "SynchronizationEvent must auto-reset to 0 upon wait satisfaction");
+
+    // PulseEvent test
+    KePulseEvent(&syncEvent, 0, false);
+    TEST_ASSERT(syncEvent.header.signalState == 0, "PulseEvent must leave event in unsignaled state");
+
+    // 2. KSEMAPHORE Subsystem
+    KSEMAPHORE sem;
+    KeInitializeSemaphore(&sem, 2, 3);
+    TEST_ASSERT(sem.header.type == DISPATCHER_TYPE::Semaphore, "Semaphore type must match");
+    TEST_ASSERT(sem.header.signalState == 2, "Initial semaphore count must be 2");
+    TEST_ASSERT(sem.limit == 3, "Semaphore limit must be 3");
+
+    // Consume 1 token
+    status = KeWaitForSingleObject(&sem, KWAIT_REASON::Executive, 0, false, &zeroTimeout);
+    TEST_ASSERT(status == NtStatus::Success, "First wait on semaphore must consume 1 token");
+    TEST_ASSERT(sem.header.signalState == 1, "Semaphore count must be 1");
+
+    // Consume 2nd token
+    status = KeWaitForSingleObject(&sem, KWAIT_REASON::Executive, 0, false, &zeroTimeout);
+    TEST_ASSERT(status == NtStatus::Success, "Second wait on semaphore must consume 1 token");
+    TEST_ASSERT(sem.header.signalState == 0, "Semaphore count must be 0");
+
+    // Third wait must time out
+    status = KeWaitForSingleObject(&sem, KWAIT_REASON::Executive, 0, false, &zeroTimeout);
+    TEST_ASSERT(status == NtStatus::Timeout, "Third wait on semaphore with 0 count must time out");
+
+    // Release 2 tokens
+    int32_t prevCount = KeReleaseSemaphore(&sem, 0, 2, false);
+    TEST_ASSERT(prevCount == 0, "Previous semaphore count was 0");
+    TEST_ASSERT(sem.header.signalState == 2, "Semaphore count after release of 2 must be 2");
+
+    // 3. KMUTANT / KMUTEX & Dave Cutler Priority Inheritance Engine
+    KMUTANT mut;
+    KeInitializeMutant(&mut, false);
+    TEST_ASSERT(mut.header.type == DISPATCHER_TYPE::Mutant, "Mutant type must match");
+    TEST_ASSERT(mut.header.signalState == 1, "Unowned mutant must have signalState = 1");
+    TEST_ASSERT(mut.ownerThread == nullptr, "Unowned mutant has no owner");
+
+    // Create simulated KThread objects
+    KThread lowPrioThread{};
+    lowPrioThread.tid = 1001;
+    lowPrioThread.priority = 8;
+    lowPrioThread.basePriority = 8;
+    lowPrioThread.state = ThreadState::Running;
+
+    KThread highPrioThread{};
+    highPrioThread.tid = 1002;
+    highPrioThread.priority = 14;
+    highPrioThread.basePriority = 14;
+    highPrioThread.state = ThreadState::Ready;
+
+    // Low priority thread acquires mutant
+    status = KeWaitForSingleObject(&mut, KWAIT_REASON::Executive, 0, false, nullptr, &lowPrioThread);
+    TEST_ASSERT(status == NtStatus::Success, "lowPrioThread must acquire mutant");
+    TEST_ASSERT(mut.header.signalState == 0, "Acquired mutant signalState must be 0");
+    TEST_ASSERT(mut.ownerThread == &lowPrioThread, "Owner thread must be lowPrioThread");
+    TEST_ASSERT(mut.ownerThreadId == 1001, "Owner TID must be 1001");
+    TEST_ASSERT(mut.recursionCount == 1, "Recursion count must be 1");
+
+    // Recursive acquisition by same thread
+    status = KeWaitForSingleObject(&mut, KWAIT_REASON::Executive, 0, false, nullptr, &lowPrioThread);
+    TEST_ASSERT(status == NtStatus::Success, "Recursive acquire by owner must succeed");
+    TEST_ASSERT(mut.recursionCount == 2, "Recursion count must be 2");
+
+    // Release one recursion level
+    int32_t oldSig = KeReleaseMutant(&mut, 0, false, false);
+    TEST_ASSERT(oldSig == 0, "Mutant still held after first recursive release");
+    TEST_ASSERT(mut.recursionCount == 1, "Recursion count must decrement to 1");
+
+    // High-priority thread attempts to acquire the mutant in a separate worker thread
+    // Priority Inheritance should boost lowPrioThread's priority from 8 to 14
+    std::atomic<bool> highThreadStarted{false};
+    std::atomic<bool> highThreadAcquired{false};
+
+    std::thread waiterThread([&]() {
+        highThreadStarted = true;
+        int64_t waitTimeout = 1000; // 1000ms
+        NtStatus s = KeWaitForSingleObject(&mut, KWAIT_REASON::Executive, 0, false, &waitTimeout, &highPrioThread);
+        if (s == NtStatus::Success) {
+            highThreadAcquired = true;
+            KeReleaseMutant(&mut, 0, false, false);
+        }
+    });
+
+    while (!highThreadStarted) {
+        std::this_thread::yield();
+    }
+    // Give waiter time to register in waitList and trigger priority inheritance
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Verify Priority Inheritance Boost: lowPrioThread must have inherited priority 14
+    TEST_ASSERT(lowPrioThread.priority == 14, "lowPrioThread must be boosted to priority 14 by Priority Inheritance");
+    TEST_ASSERT(mut.priorityInherited == true, "Mutant priorityInherited flag must be true");
+    TEST_ASSERT(mut.originalPriority == 8, "Mutant originalPriority must be preserved as 8");
+
+    // Low priority thread releases mutant
+    KeReleaseMutant(&mut, 0, false, false);
+
+    // Verify lowPrioThread priority restored to original base priority (8)
+    TEST_ASSERT(lowPrioThread.priority == 8, "lowPrioThread priority must be restored to original 8 upon mutant release");
+
+    waiterThread.join();
+    TEST_ASSERT(highThreadAcquired, "highPrioThread must have successfully acquired mutant once released");
+
+    // 4. KeWaitForMultipleObjects (WaitAny & WaitAll)
+    KEVENT ev0, ev1, ev2;
+    KeInitializeEvent(&ev0, DISPATCHER_TYPE::SynchronizationEvent, false);
+    KeInitializeEvent(&ev1, DISPATCHER_TYPE::SynchronizationEvent, false);
+    KeInitializeEvent(&ev2, DISPATCHER_TYPE::SynchronizationEvent, false);
+
+    void* waitAnyArray[3] = { &ev0, &ev1, &ev2 };
+
+    // Signal middle event (ev1)
+    KeSetEvent(&ev1, 0, false);
+
+    // WaitAny should return STATUS_WAIT_1 immediately
+    status = KeWaitForMultipleObjects(3, waitAnyArray, WAIT_TYPE::WaitAny, KWAIT_REASON::Executive, 0, false, &zeroTimeout);
+    TEST_ASSERT(status == static_cast<NtStatus>(STATUS_WAIT_1), "WaitAny must return STATUS_WAIT_1 for signaled ev1");
+    TEST_ASSERT(ev1.header.signalState == 0, "ev1 (SynchronizationEvent) must auto-reset on satisfaction");
+
+    // WaitAll test
+    KEVENT allEv0, allEv1;
+    KeInitializeEvent(&allEv0, DISPATCHER_TYPE::NotificationEvent, false);
+    KeInitializeEvent(&allEv1, DISPATCHER_TYPE::NotificationEvent, false);
+
+    void* waitAllArray[2] = { &allEv0, &allEv1 };
+
+    // Signal only allEv0
+    KeSetEvent(&allEv0, 0, false);
+    int64_t multiTimeout = 20; // 20ms
+    status = KeWaitForMultipleObjects(2, waitAllArray, WAIT_TYPE::WaitAll, KWAIT_REASON::Executive, 0, false, &multiTimeout);
+    TEST_ASSERT(status == NtStatus::Timeout, "WaitAll must time out if only 1 of 2 events is signaled");
+
+    // Now signal allEv1
+    KeSetEvent(&allEv1, 0, false);
+
+    // WaitAll should now succeed with STATUS_WAIT_0
+    status = KeWaitForMultipleObjects(2, waitAllArray, WAIT_TYPE::WaitAll, KWAIT_REASON::Executive, 0, false, &zeroTimeout);
+    TEST_ASSERT(status == static_cast<NtStatus>(STATUS_WAIT_0), "WaitAll must succeed with STATUS_WAIT_0 when all events are signaled");
+
+    // 5. Telemetry Verification & Teardown
+    auto telemetry = KeQueryDispatcherTelemetry();
+    TEST_ASSERT(telemetry.totalSingleWaits >= 4, "totalSingleWaits telemetry must be >= 4");
+    TEST_ASSERT(telemetry.totalMultiWaitsAny >= 1, "totalMultiWaitsAny telemetry must be >= 1");
+    TEST_ASSERT(telemetry.totalMultiWaitsAll >= 2, "totalMultiWaitsAll telemetry must be >= 2");
+    TEST_ASSERT(telemetry.totalPriorityInheritanceBoosts >= 1, "totalPriorityInheritanceBoosts must be >= 1");
+    TEST_ASSERT(telemetry.totalMutantsAcquired >= 2, "totalMutantsAcquired must be >= 2");
+    TEST_ASSERT(telemetry.totalEventsSet >= 4, "totalEventsSet must be >= 4");
+    TEST_ASSERT(telemetry.totalSemaphoresReleased >= 2, "totalSemaphoresReleased must be >= 2");
+
+    KeResetDispatcherTelemetryForTesting();
+    auto resetTelem = KeQueryDispatcherTelemetry();
+    TEST_ASSERT(resetTelem.totalSingleWaits == 0, "Telemetry reset must clear totalSingleWaits");
+    TEST_ASSERT(resetTelem.totalPriorityInheritanceBoosts == 0, "Telemetry reset must clear totalPriorityInheritanceBoosts");
+
+    std::cout << "[TEST] Suite 235: Horizon 19 - Sovereign Kernel Dispatcher Database, Multi-Wait & Priority Inheritance PASSED.\n";
+}
+
 
 
