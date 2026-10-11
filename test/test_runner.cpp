@@ -1017,6 +1017,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Wireshark_NetworkPacketCapture_And_UCRT_Suite);
     RUN_TEST(Test_FileZilla_FtpSftp_And_SovereignNetworking_Suite);
     RUN_TEST(Test_Tier4_Multimedia_Creative_Workstation_Ecosystem_Suite);
+    RUN_TEST(Test_Horizon13_SovereignPowerManagement_PoSubsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -3326,3 +3326,277 @@ void Test_Kernel32_Win32ApiParity() {
 // ============================================================================
 // Suite 31: WoW64 Subsystem, PEB32/TEB32, and Heaven's Gate Mode Transition
 // ============================================================================
+
+// ============================================================================
+// Suite 229: Horizon 13 - Sovereign Power Management (Po) Subsystem Refinement
+// ============================================================================
+namespace test_po_h13 {
+    inline uint32_t g_DeviceA_IrpCount = 0;
+    inline uint32_t g_DeviceB_IrpCount = 0;
+    inline uint8_t  g_LastMinorA = 0;
+    inline uint8_t  g_LastMinorB = 0;
+    inline bool     g_VetoPowerTransition = false;
+    inline uint32_t g_CallbackInvocations = 0;
+    inline std::string g_LastCallbackGuid{};
+    inline uint32_t g_LastCallbackValue = 0;
+
+    inline NtStatus DeviceADispatch(io::DeviceObject* dev, io::Irp* irp) {
+        if (!dev || !irp) return NtStatus::InvalidParameter;
+        g_DeviceA_IrpCount++;
+        g_LastMinorA = irp->minorFunction;
+        if (irp->minorFunction == po::IRP_MN_QUERY_POWER && g_VetoPowerTransition) {
+            return NtStatus::DeviceBusy;
+        }
+        return NtStatus::Success;
+    }
+
+    inline NtStatus DeviceBDispatch(io::DeviceObject* dev, io::Irp* irp) {
+        if (!dev || !irp) return NtStatus::InvalidParameter;
+        g_DeviceB_IrpCount++;
+        g_LastMinorB = irp->minorFunction;
+        return NtStatus::Success;
+    }
+
+    inline void PowerSettingTestCallback(void* context, const std::string& guid, const void* value, size_t size) {
+        (void)context;
+        g_CallbackInvocations++;
+        g_LastCallbackGuid = guid;
+        if (value && size >= sizeof(uint32_t)) {
+            g_LastCallbackValue = *reinterpret_cast<const uint32_t*>(value);
+        }
+    }
+}
+
+inline void Test_Horizon13_SovereignPowerManagement_PoSubsystem() {
+    std::cout << "[TEST] Executing Suite 229: Horizon 13 - Sovereign Power Management (Po) Subsystem Refinement...\n";
+    auto& pwrMgr = po::PowerManager::get();
+    pwrMgr.resetForTesting();
+
+    // 1. Initial State & Capabilities Verification
+    TEST_ASSERT(pwrMgr.getSystemPowerState() == po::SystemPowerState::PowerSystemWorking,
+                "Initial system power state must be S0 (Working)");
+    TEST_ASSERT(!pwrMgr.isShutdown(), "System must not be marked as shutdown initially");
+    TEST_ASSERT(pwrMgr.getRegisteredDeviceCount() == 0, "Initial device count must be 0");
+
+    auto caps = pwrMgr.getPowerCapabilities();
+    TEST_ASSERT(caps.systemS1 && caps.systemS3 && caps.systemS4 && caps.systemS5,
+                "ACPI S1, S3, S4, S5 states must be supported in system power capabilities");
+    TEST_ASSERT(caps.thermalControl && caps.cpuThrottle, "Thermal control and CPU throttling must be enabled");
+
+    // 2. Multi-Device Registration, Power States & Sequence Counters
+    io::DriverObject driverA{};
+    driverA.driverName = L"\\Driver\\PciBus";
+    driverA.setDispatch(io::IRP_MJ_POWER, test_po_h13::DeviceADispatch);
+
+    io::DeviceObject devA{};
+    devA.driverObject = &driverA;
+    devA.deviceName = L"\\Device\\NVMController0";
+
+    io::DriverObject driverB{};
+    driverB.driverName = L"\\Driver\\HdaudioBus";
+    driverB.setDispatch(io::IRP_MJ_POWER, test_po_h13::DeviceBDispatch);
+
+    io::DeviceObject devB{};
+    devB.driverObject = &driverB;
+    devB.deviceName = L"\\Device\\HDAudioCodec";
+
+    pwrMgr.registerDevice(&devA);
+    pwrMgr.registerDevice(&devB);
+    TEST_ASSERT(pwrMgr.getRegisteredDeviceCount() == 2, "Registered device count must be 2");
+
+    TEST_ASSERT(pwrMgr.getDevicePowerState(&devA) == po::DevicePowerState::PowerDeviceD0,
+                "Initial device A power state must be D0");
+    TEST_ASSERT(pwrMgr.getDevicePowerState(&devB) == po::DevicePowerState::PowerDeviceD0,
+                "Initial device B power state must be D0");
+
+    auto seqA = pwrMgr.getDevicePowerSequence(&devA);
+    TEST_ASSERT(seqA.sequenceD0 == 1 && seqA.sequenceD1 == 0 && seqA.sequenceD2 == 0 && seqA.sequenceD3 == 0,
+                "Initial sequence for D0 must be 1 and other states 0");
+
+    // Transition device A through D1 -> D2 -> D3 -> D0
+    pwrMgr.setDevicePowerState(&devA, po::DevicePowerState::PowerDeviceD1);
+    pwrMgr.setDevicePowerState(&devA, po::DevicePowerState::PowerDeviceD2);
+    pwrMgr.setDevicePowerState(&devA, po::DevicePowerState::PowerDeviceD3);
+    pwrMgr.setDevicePowerState(&devA, po::DevicePowerState::PowerDeviceD0);
+
+    seqA = pwrMgr.getDevicePowerSequence(&devA);
+    TEST_ASSERT(seqA.sequenceD0 == 2, "D0 sequence counter must be 2 after full cycle");
+    TEST_ASSERT(seqA.sequenceD1 == 1, "D1 sequence counter must be 1");
+    TEST_ASSERT(seqA.sequenceD2 == 1, "D2 sequence counter must be 1");
+    TEST_ASSERT(seqA.sequenceD3 == 1, "D3 sequence counter must be 1");
+
+    // 3. Power Setting Callback Registration & Dispatch
+    uintptr_t cbHandle = 0;
+    test_po_h13::g_CallbackInvocations = 0;
+    test_po_h13::g_LastCallbackGuid.clear();
+    test_po_h13::g_LastCallbackValue = 0;
+
+    NtStatus regCbStatus = po::PoRegisterPowerSettingCallback(
+        po::GUID_SYSTEM_POWER_STATE,
+        test_po_h13::PowerSettingTestCallback,
+        nullptr,
+        cbHandle
+    );
+    TEST_ASSERT(NT_SUCCESS(regCbStatus) && cbHandle != 0, "PoRegisterPowerSettingCallback must succeed");
+
+    // 4. Two-Phase Sleep Transition with Device Veto Abort
+    test_po_h13::g_VetoPowerTransition = true;
+    test_po_h13::g_DeviceA_IrpCount = 0;
+    test_po_h13::g_DeviceB_IrpCount = 0;
+
+    NtStatus vetoedStatus = pwrMgr.setSystemPowerState(po::SystemPowerState::PowerSystemSleeping3);
+    TEST_ASSERT(vetoedStatus == NtStatus::DeviceBusy, "Sleep transition must be rejected with STATUS_DEVICE_BUSY");
+    TEST_ASSERT(pwrMgr.getSystemPowerState() == po::SystemPowerState::PowerSystemWorking,
+                "System must remain in S0 after transition rejection");
+    TEST_ASSERT(test_po_h13::g_DeviceA_IrpCount == 1, "Device A must have received query IRP");
+    TEST_ASSERT(test_po_h13::g_LastMinorA == po::IRP_MN_QUERY_POWER, "Minor must be IRP_MN_QUERY_POWER");
+
+    // 5. Successful Coordinated Sleep Transition (S0 -> S3 Standby)
+    test_po_h13::g_VetoPowerTransition = false;
+    test_po_h13::g_DeviceA_IrpCount = 0;
+    test_po_h13::g_DeviceB_IrpCount = 0;
+
+    NtStatus sleepStatus = pwrMgr.setSystemPowerState(po::SystemPowerState::PowerSystemSleeping3);
+    TEST_ASSERT(NT_SUCCESS(sleepStatus), "Transition to S3 Standby must succeed when devices agree");
+    TEST_ASSERT(pwrMgr.getSystemPowerState() == po::SystemPowerState::PowerSystemSleeping3,
+                "System power state must be S3 (Standby)");
+    TEST_ASSERT(pwrMgr.getDevicePowerState(&devA) == po::DevicePowerState::PowerDeviceD3,
+                "Device A must be powered down to D3");
+    TEST_ASSERT(pwrMgr.getDevicePowerState(&devB) == po::DevicePowerState::PowerDeviceD3,
+                "Device B must be powered down to D3");
+    TEST_ASSERT(test_po_h13::g_CallbackInvocations > 0, "Power setting callback must have been notified");
+    TEST_ASSERT(test_po_h13::g_LastCallbackValue == static_cast<uint32_t>(po::SystemPowerState::PowerSystemSleeping3),
+                "Notified power state value must be S3");
+
+    // 6. Device Wait/Wake Arming & System Wake Trigger
+    NtStatus armStatus = pwrMgr.armDeviceWake(&devA, po::SystemPowerState::PowerSystemSleeping3);
+    TEST_ASSERT(NT_SUCCESS(armStatus), "armDeviceWake on Device A must succeed");
+    TEST_ASSERT(pwrMgr.isDeviceWakeArmed(&devA), "Device A must be reported as wake armed");
+
+    // Trigger external wake event from armed device A
+    NtStatus wakeStatus = pwrMgr.triggerDeviceWake(&devA);
+    TEST_ASSERT(NT_SUCCESS(wakeStatus), "triggerDeviceWake must succeed");
+    TEST_ASSERT(pwrMgr.getSystemPowerState() == po::SystemPowerState::PowerSystemWorking,
+                "System must wake back to S0 Working on armed device trigger");
+    TEST_ASSERT(pwrMgr.getDevicePowerState(&devA) == po::DevicePowerState::PowerDeviceD0,
+                "Device A must have transitioned back to D0 on resume");
+    TEST_ASSERT(pwrMgr.getDevicePowerState(&devB) == po::DevicePowerState::PowerDeviceD0,
+                "Device B must have transitioned back to D0 on resume");
+
+    pwrMgr.disarmDeviceWake(&devA);
+    TEST_ASSERT(!pwrMgr.isDeviceWakeArmed(&devA), "Device A must be disarmed");
+
+    // 7. Modern Standby (Connected Standby / AoAc S0 Low Power Idle)
+    TEST_ASSERT(pwrMgr.isConnectedStandbySupported(), "Connected Standby must be supported by default");
+    TEST_ASSERT(!pwrMgr.isConnectedStandbyActive(), "Connected Standby must be inactive initially");
+
+    uintptr_t monCbHandle = 0;
+    pwrMgr.registerPowerSettingCallback(
+        po::GUID_MONITOR_POWER_ON,
+        [](void*, const std::string&, const void*, size_t) {
+            // Monitor callback
+        },
+        nullptr,
+        monCbHandle
+    );
+
+    pwrMgr.enterConnectedStandby();
+    TEST_ASSERT(pwrMgr.isConnectedStandbyActive(), "Connected Standby must be active after enterConnectedStandby");
+    pwrMgr.exitConnectedStandby();
+    TEST_ASSERT(!pwrMgr.isConnectedStandbyActive(), "Connected Standby must be inactive after exitConnectedStandby");
+
+    pwrMgr.unregisterPowerSettingCallback(monCbHandle);
+
+    // 8. ACPI Thermal Zones & Multi-Trip Point Throttling
+    po::ThermalZoneInfo tz{};
+    bool tzFound = pwrMgr.getThermalZone(0, tz);
+    TEST_ASSERT(tzFound, "Thermal Zone 0 must be discovered");
+    TEST_ASSERT(tz.currentTempDeciKelvin == 3031, "Initial temperature must be 303.1 K (30.0 C)");
+
+    // Raise temperature to 68 C (341.1 K) -> Above active fan trip point (65 C)
+    pwrMgr.updateThermalZoneTemperature(0, 3411);
+    TEST_ASSERT(pwrMgr.getThermalZone(0, tz), "getThermalZone at 68 C must succeed");
+    TEST_ASSERT(tz.activeCoolingEngaged, "Active fan cooling must engage at 68 C");
+    TEST_ASSERT(!tz.passiveThrottlingEngaged, "Passive throttling must not engage at 68 C");
+
+    // Raise temperature to 85 C (358.1 K) -> Above passive throttle trip point (80 C)
+    pwrMgr.updateThermalZoneTemperature(0, 3581);
+    TEST_ASSERT(pwrMgr.getThermalZone(0, tz), "getThermalZone at 85 C must succeed");
+    TEST_ASSERT(tz.passiveThrottlingEngaged, "Passive throttling must engage at 85 C");
+    TEST_ASSERT(tz.throttlePercent == 50, "Throttle percent must be 50%");
+    auto cpu = pwrMgr.getProcessorPowerInformation();
+    TEST_ASSERT(cpu.currentMhz == cpu.maxMhz / 2, "CPU clock frequency must be clamped to 50%");
+
+    // Cool down below trip points to 35 C (308.1 K)
+    pwrMgr.updateThermalZoneTemperature(0, 3081);
+    TEST_ASSERT(pwrMgr.getThermalZone(0, tz), "getThermalZone after cooling must succeed");
+    TEST_ASSERT(!tz.activeCoolingEngaged, "Active cooling must disengage after cooling");
+    TEST_ASSERT(!tz.passiveThrottlingEngaged, "Passive throttling must disengage after cooling");
+    cpu = pwrMgr.getProcessorPowerInformation();
+    TEST_ASSERT(cpu.currentMhz == cpu.maxMhz, "CPU clock frequency must be restored to 100%");
+
+    // 9. Battery & AC Power Supply Telemetry
+    pwrMgr.setAcPowerOnline(false); // Switch to DC (Battery)
+    TEST_ASSERT(!pwrMgr.isAcOnline(), "System must report AC is offline (battery mode)");
+    auto bState = pwrMgr.getBatteryState();
+    TEST_ASSERT(bState.discharging && !bState.charging, "Battery must be discharging on DC");
+
+    pwrMgr.setAcPowerOnline(true); // Switch to AC
+    TEST_ASSERT(pwrMgr.isAcOnline(), "System must report AC is online");
+
+    // Test battery percentage
+    po::SystemBatteryState customBatt{};
+    customBatt.acOnLine = false;
+    customBatt.batteryPresent = true;
+    customBatt.maxCapacity = 60000;
+    customBatt.remainingCapacity = 45000; // 75%
+    pwrMgr.updateBatteryState(customBatt);
+    TEST_ASSERT(pwrMgr.getBatteryPercentage() == 75, "Battery percentage must compute to 75%");
+
+    // 10. Power Schemes & Policy Switching
+    TEST_ASSERT(pwrMgr.getActivePowerScheme() == po::GUID_POWERSCHEME_BALANCED,
+                "Default power scheme must be Balanced");
+    auto curPolicy = pwrMgr.getActivePowerPolicy();
+    TEST_ASSERT(curPolicy.coolingPolicy == po::CoolingMode::Active, "Balanced policy cooling must be Active");
+
+    NtStatus switchHighPerf = pwrMgr.setActivePowerScheme(po::GUID_POWERSCHEME_HIGH_PERF);
+    TEST_ASSERT(NT_SUCCESS(switchHighPerf), "Switching to High Performance scheme must succeed");
+    TEST_ASSERT(pwrMgr.getActivePowerScheme() == po::GUID_POWERSCHEME_HIGH_PERF,
+                "Active scheme must be High Performance");
+    curPolicy = pwrMgr.getActivePowerPolicy();
+    TEST_ASSERT(curPolicy.cpuMinThrottlePercent == 100, "High Performance min CPU throttle must be 100%");
+
+    NtStatus switchPowerSaver = pwrMgr.setActivePowerScheme(po::GUID_POWERSCHEME_POWER_SAVER);
+    TEST_ASSERT(NT_SUCCESS(switchPowerSaver), "Switching to Power Saver scheme must succeed");
+    curPolicy = pwrMgr.getActivePowerPolicy();
+    TEST_ASSERT(curPolicy.coolingPolicy == po::CoolingMode::Passive, "Power Saver cooling policy must be Passive");
+
+    // 11. DDK Helper Exports & Serialization Verification
+    io::Irp dummyPwrIrp{};
+    dummyPwrIrp.flags = 0;
+    po::PoStartNextPowerIrp(&dummyPwrIrp);
+    TEST_ASSERT((dummyPwrIrp.flags & 0x00000001) != 0, "PoStartNextPowerIrp must set IRP_POWER_PROCESSED");
+
+    po::PowerState psD1{};
+    psD1.deviceState = po::DevicePowerState::PowerDeviceD1;
+    po::PoSetPowerState(&devB, po::PowerStateType::DevicePowerState, psD1);
+    TEST_ASSERT(pwrMgr.getDevicePowerState(&devB) == po::DevicePowerState::PowerDeviceD1,
+                "PoSetPowerState must update device B state to D1");
+
+    // 12. Critical Thermal Trip Point Emergency Shutdown Simulation
+    // 102 C (375.1 K) -> Exceeds 100 C tripPointCritical
+    pwrMgr.updateThermalZoneTemperature(0, 3751);
+    TEST_ASSERT(pwrMgr.isShutdown(), "Critical thermal trip point must trigger emergency shutdown");
+    TEST_ASSERT(pwrMgr.getSystemPowerState() == po::SystemPowerState::PowerSystemShutdown,
+                "System power state must be PowerSystemShutdown (S5)");
+    TEST_ASSERT(pwrMgr.getLastShutdownAction() == po::ShutdownAction::ShutdownPowerOff,
+                "Shutdown action must be ShutdownPowerOff");
+
+    // Cleanup & Unregister
+    po::PoUnregisterPowerSettingCallback(cbHandle);
+    pwrMgr.unregisterDevice(&devA);
+    pwrMgr.unregisterDevice(&devB);
+    pwrMgr.resetForTesting();
+    std::cout << "[TEST] Suite 229: Horizon 13 - Sovereign Power Management (Po) Subsystem PASSED.\n";
+}
+
