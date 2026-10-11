@@ -1043,6 +1043,91 @@ void Test_Alpc_MessageRendezvous() {
     std::string replyString(reinterpret_cast<char*>(replyData.data()), replyData.size());
     TEST_ASSERT(replyString == "PONG_REPLY_OK", "Reply payload must match PONG_REPLY_OK");
     TEST_ASSERT(replyMsg.u2.type == static_cast<uint16_t>(lpc::PortMessageType::LpcReply), "Message type must be LpcReply");
+
+    // 4. ALPC Port Section & Shared Memory Data View (Large Bulk Data Transfer)
+    uintptr_t secId = serverComm->createSection(64 * 1024); // 64 KB section
+    TEST_ASSERT(secId != 0, "ALPC port section allocation must succeed");
+    auto section = serverComm->getSection(secId);
+    TEST_ASSERT(section != nullptr, "Created ALPC port section must be retrievable");
+    TEST_ASSERT(section->getSize() == 64 * 1024, "ALPC port section size must match 64KB");
+
+    // Populate section memory with test pattern
+    std::vector<uint8_t> bulkData(4096, 0xAA);
+    bool writeOk = section->writeData(1024, bulkData);
+    TEST_ASSERT(writeOk, "Writing to ALPC section must succeed");
+
+    // Map section view for message passing
+    lpc::AlpcDataView dataView{};
+    bool viewOk = serverComm->createDataView(secId, 1024, 4096, dataView);
+    TEST_ASSERT(viewOk, "Creating data view must succeed");
+    TEST_ASSERT(dataView.viewSize == 4096, "Data view size must match 4096");
+    TEST_ASSERT(dataView.sectionOffset == 1024, "Data view offset must match 1024");
+    TEST_ASSERT(dataView.viewBase != nullptr, "Data view base pointer must not be null");
+
+    // Read back through viewBase
+    TEST_ASSERT(*reinterpret_cast<const uint8_t*>(dataView.viewBase) == 0xAA, "Data in view must match written pattern");
+
+    // 5. ALPC Direct Message Attributes (Security, View, and Handle passing)
+    lpc::AlpcMessageAttributes sendAttrs{};
+    sendAttrs.validAttributes = lpc::ALPC_MESSAGE_SECURITY_ATTRIBUTE | lpc::ALPC_MESSAGE_VIEW_ATTRIBUTE | lpc::ALPC_MESSAGE_HANDLE_ATTRIBUTE;
+    sendAttrs.view = dataView;
+    sendAttrs.handle = lpc::AlpcHandleAttribute{ .flags = 0, .handle = 0x1004, .desiredAccess = 0x20001 };
+    sendAttrs.security = lpc::AlpcSecurityAttribute{ 
+        .flags = 0, 
+        .userSid = se::Sid::localSystem(), 
+        .integrityLevel = se::SECURITY_MANDATORY_SYSTEM_RID 
+    };
+
+    lpc::PortMessage attrMsg{};
+    attrMsg.messageId = 42;
+    std::string attrPayload = "BULK_TRANSFER_NOTIFICATION";
+    std::vector<uint8_t> attrBytes(attrPayload.begin(), attrPayload.end());
+
+    NtStatus postStatus = serverComm->sendMessage(attrMsg, attrBytes, &sendAttrs);
+    TEST_ASSERT(NT_SUCCESS(postStatus), "Posting ALPC message with attributes must succeed");
+
+    lpc::PortMessage rcvMsg{};
+    std::vector<uint8_t> rcvPayload;
+    lpc::AlpcMessageAttributes rcvAttrs{};
+    NtStatus rcvStatus = clientComm->receiveMessage(rcvMsg, rcvPayload, 1000, &rcvAttrs);
+    TEST_ASSERT(NT_SUCCESS(rcvStatus), "Receiving ALPC message with attributes must succeed");
+    TEST_ASSERT(rcvAttrs.view.has_value(), "Received attributes must include view attribute");
+    TEST_ASSERT(rcvAttrs.view->viewSize == 4096, "Received view size must match");
+    TEST_ASSERT(rcvAttrs.handle.has_value() && rcvAttrs.handle->handle == 0x1004, "Received handle must match 0x1004");
+    TEST_ASSERT(rcvAttrs.security.has_value() && rcvAttrs.security->userSid == se::Sid::localSystem(), "Received security SID must match LocalSystem");
+
+    // 6. Port Security & Access Check Enforcement
+    se::SecurityDescriptor securePortSd;
+    se::Acl portDacl;
+    portDacl.addAllowedAce(se::Sid::administrators(), se::GENERIC_ALL); // Admins only
+    securePortSd.setDacl(portDacl);
+
+    auto securedPort = portMgr.createPort(L"\\RPC Control\\SecuredAdminPort", securePortSd);
+    TEST_ASSERT(securedPort != nullptr, "Secured port must be created");
+
+    se::Sid userSid(5, {21, 999, 888, 777, 1003});
+    auto standardUserToken = se::TokenObject::createUserToken(userSid);
+    auto adminToken = se::TokenObject::createAdminToken(userSid);
+
+    std::shared_ptr<lpc::PortObject> cPort;
+    std::shared_ptr<lpc::PortObject> sPort;
+
+    // Standard user connection must be denied by port Security Descriptor
+    NtStatus stDenied = portMgr.connectPort(L"SecuredAdminPort", cPort, sPort, standardUserToken.get());
+    TEST_ASSERT(stDenied == NtStatus::AccessDenied, "Standard user must be denied connection to admin-only ALPC port");
+
+    // Admin connection must succeed
+    NtStatus stAllowed = portMgr.connectPort(L"SecuredAdminPort", cPort, sPort, adminToken.get());
+    TEST_ASSERT(NT_SUCCESS(stAllowed), "Administrator connection to secured ALPC port must succeed");
+    TEST_ASSERT(cPort != nullptr && sPort != nullptr, "Admin connection endpoints must be valid");
+
+    // 7. Graceful Disconnection (LpcPortClosed)
+    cPort->disconnect();
+    lpc::PortMessage closedMsg{};
+    std::vector<uint8_t> closedPayload;
+    NtStatus stClosed = sPort->receiveMessage(closedMsg, closedPayload, 1000);
+    TEST_ASSERT(NT_SUCCESS(stClosed), "Server must receive disconnection event");
+    TEST_ASSERT(closedMsg.u2.type == static_cast<uint16_t>(lpc::PortMessageType::LpcPortClosed), "Message type must be LpcPortClosed");
 }
 
 // ============================================================================

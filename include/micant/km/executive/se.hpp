@@ -800,10 +800,24 @@ public:
 
         // 6. Traverse DACL ACEs in order
         for (const auto& ace : daclOpt->getAces()) {
+            uint32_t aceMask = ace.mask;
+            if (aceMask & GENERIC_ALL) {
+                aceMask |= (STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL);
+            }
+            if (aceMask & GENERIC_READ) {
+                aceMask |= (STANDARD_RIGHTS_READ | FILE_READ_DATA);
+            }
+            if (aceMask & GENERIC_WRITE) {
+                aceMask |= (STANDARD_RIGHTS_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA);
+            }
+            if (aceMask & GENERIC_EXECUTE) {
+                aceMask |= (STANDARD_RIGHTS_EXECUTE | FILE_EXECUTE);
+            }
+
             if (ace.type == AceType::AccessDenied) {
                 // Deny ACE: matches if token has SID (even if group is deny-only!)
                 if (token.hasSid(ace.sid, true)) {
-                    if ((remainingDesired & ace.mask) != 0) {
+                    if ((remainingDesired & aceMask) != 0) {
                         grantedAccess = 0;
                         recordAudit(token.getUserSid(), objectName, desiredAccess, 0, false, secDesc);
                         return NtStatus::AccessDenied;
@@ -812,7 +826,7 @@ public:
             } else if (ace.type == AceType::AccessAllowed) {
                 // Allow ACE: matches ONLY IF token has SID AND group is NOT deny-only!
                 if (token.hasSid(ace.sid, false)) {
-                    uint32_t matched = (remainingDesired & ace.mask);
+                    uint32_t matched = (remainingDesired & aceMask);
                     grantedAccess |= matched;
                     remainingDesired &= ~matched;
 
