@@ -720,6 +720,84 @@ void Test_ConfigurationManager_HiveAndValues() {
     // Nonexistent path must return nullptr
     auto badKey = cm.resolvePath(L"\\Registry\\Machine\\NonExistent\\Key");
     TEST_ASSERT(badKey == nullptr, "Nonexistent path must return nullptr");
+
+    // 2. Binary values, enumeration, and deletion
+    std::vector<uint8_t> testBin = { 0xDE, 0xAD, 0xBE, 0xEF, 0x42 };
+    config->setValueBinary(L"SecuritySeed", testBin);
+    const auto* seedVal = config->getValue(L"SecuritySeed");
+    TEST_ASSERT(seedVal != nullptr && seedVal->type == cm::RegType::Binary, "SecuritySeed must be REG_BINARY");
+    TEST_ASSERT(seedVal->data == testBin, "Binary data content must match");
+    auto subkeys = micaCorp->getSubkeyNames();
+    TEST_ASSERT(std::find(subkeys.begin(), subkeys.end(), L"Config") != subkeys.end(), "Subkey list must contain Config");
+    auto values = config->getValueNames();
+    TEST_ASSERT(values.size() == 4, "Config must contain 4 values");
+    config->deleteValue(L"SecuritySeed");
+    TEST_ASSERT(config->getValue(L"SecuritySeed") == nullptr, "Deleted value must no longer exist");
+
+    // 3. On-Disk REGF / HBIN Hive Serialization & Cell Allocator
+    auto exportedHive = cm.exportToHive(*sessionMgr);
+    TEST_ASSERT(exportedHive != nullptr, "Exported hive must be valid");
+    TEST_ASSERT(exportedHive->isConsistent(), "Exported hive must be consistent");
+    const auto& hdr = exportedHive->getHeader();
+    TEST_ASSERT(hdr.signature == cm::REGF_SIGNATURE, "Hive header signature must be 'regf'");
+    TEST_ASSERT(hdr.majorVersion == 1 && hdr.minorVersion == 5, "Hive version must be 1.5");
+    TEST_ASSERT(hdr.sequence1 == 1 && hdr.sequence2 == 1, "Sequence numbers must be 1");
+    TEST_ASSERT(hdr.checksum == cm::ComputeRegfChecksum(hdr), "Checksum must match computed XOR-32");
+    TEST_ASSERT(hdr.rootCellOffset != 0, "Root cell offset must be non-zero");
+
+    // Verify cell allocator data
+    auto* nk = reinterpret_cast<const cm::NkRecordHeader*>(exportedHive->getCellData(hdr.rootCellOffset));
+    TEST_ASSERT(nk != nullptr, "Root cell data must be accessible");
+    TEST_ASSERT(nk->signature == cm::NK_SIGNATURE, "Root cell record signature must be 'nk'");
+    TEST_ASSERT(nk->nameLength > 0, "Root cell name length must be > 0");
+
+    // Test cell allocation and freeing in hive
+    uint32_t cellA = exportedHive->allocateCell(64);
+    uint32_t cellB = exportedHive->allocateCell(128);
+    TEST_ASSERT(cellA != cm::HCELL_NIL && cellB != cm::HCELL_NIL, "Cell allocations must succeed");
+    TEST_ASSERT(cellA != cellB, "Allocated cells must have distinct offsets");
+    exportedHive->freeCell(cellA);
+    exportedHive->freeCell(cellB);
+
+    // 4. Hive Binary Stream Round-Trip
+    std::vector<uint8_t> hiveBytes = exportedHive->serialize();
+    TEST_ASSERT(!hiveBytes.empty(), "Serialized hive bytes must not be empty");
+    TEST_ASSERT(hiveBytes.size() >= sizeof(cm::RegfHeader) + cm::HIVE_BIN_SIZE, "Hive size must be at least header + 1 bin");
+
+    auto deserializedHive = cm::CmHive::deserialize(hiveBytes);
+    TEST_ASSERT(deserializedHive != nullptr, "Deserialized hive must be valid");
+    TEST_ASSERT(deserializedHive->isConsistent(), "Deserialized hive must be consistent");
+    TEST_ASSERT(deserializedHive->getRootCellOffset() == hdr.rootCellOffset, "Root cell offset must match after deserialization");
+
+    // 5. Transactional Registry (TxR) Journal Crash Recovery
+    cm::TxRJournal journal;
+    deserializedHive->setSequence(2, 1); // Simulate interrupted crash during write
+    TEST_ASSERT(!deserializedHive->isConsistent(), "Mismatched sequence numbers must register as inconsistent");
+    journal.recordSectorWrite(0, std::span<const uint8_t>(hiveBytes.data(), 512));
+    bool recovered = journal.recoverHive(*deserializedHive);
+    TEST_ASSERT(recovered, "Crash recovery must execute");
+    TEST_ASSERT(deserializedHive->isConsistent(), "Hive must be consistent after journal recovery");
+    TEST_ASSERT(deserializedHive->getHeader().sequence1 == 2, "Sequence numbers must synchronize after recovery");
+    TEST_ASSERT(deserializedHive->getHeader().sequence2 == 2, "Sequence numbers must synchronize after recovery");
+
+    // 6. Security Descriptor Integration & Key Access Validation
+    se::Sid userSid(5, {21, 555, 666, 777, 1002});
+    auto standardUserToken = se::TokenObject::createUserToken(userSid);
+    auto adminToken = se::TokenObject::createAdminToken(userSid);
+
+    uint32_t grantedAccess = 0;
+    // Standard User query access (KEY_READ) -> Granted
+    NtStatus stUserRead = sessionMgr->checkAccess(*standardUserToken, cm::KEY_READ, grantedAccess);
+    TEST_ASSERT(NT_SUCCESS(stUserRead), "Standard user must have KEY_READ access to Session Manager");
+    TEST_ASSERT((grantedAccess & cm::KEY_QUERY_VALUE) != 0, "Granted access must include KEY_QUERY_VALUE");
+
+    // Standard User write access (KEY_SET_VALUE) -> Denied by DACL & MIC
+    NtStatus stUserWrite = sessionMgr->checkAccess(*standardUserToken, cm::KEY_SET_VALUE, grantedAccess);
+    TEST_ASSERT(stUserWrite == NtStatus::AccessDenied, "Standard user must be denied KEY_SET_VALUE on Session Manager");
+
+    // Admin access (KEY_ALL_ACCESS) -> Granted
+    NtStatus stAdminAll = sessionMgr->checkAccess(*adminToken, cm::KEY_ALL_ACCESS, grantedAccess);
+    TEST_ASSERT(NT_SUCCESS(stAdminAll), "Administrator must have KEY_ALL_ACCESS to Session Manager");
 }
 
 // ============================================================================
