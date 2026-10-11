@@ -3045,6 +3045,83 @@ void Test_BootVid_FramebufferAndSplashRenderer() {
     subsys.vidResetDisplay(true);
     TEST_ASSERT(subsys.getDriver().getPixel(20, 20) == bootvid::Color::black(),
                 "vidResetDisplay must clear screen to black");
+
+    // 10. Inbv (Initialization Boot Video) Subsystem & Display Ownership
+    auto& inbvCtrl = inbv::InbvController::get();
+    bool inbvInit = inbvCtrl.initialize(640, 480);
+    TEST_ASSERT(inbvInit, "InbvController initialization must succeed");
+    TEST_ASSERT(!inbv::InbvCheckDisplayOwnership(), "Display must initially be owned by firmware GOP");
+    TEST_ASSERT(inbvCtrl.getOwnershipState() == inbv::DisplayOwnership::FirmwareGop, "Initial ownership state must be FirmwareGop");
+
+    inbv::InbvEnableBootDriver(TRUE);
+    TEST_ASSERT(inbvCtrl.isBootDriverEnabled(), "Boot driver must be enabled");
+
+    // Firmware GOP to Inbv Hand-off
+    inbv::InbvAcquireDisplayOwnership();
+    TEST_ASSERT(inbv::InbvCheckDisplayOwnership(), "Inbv must hold display ownership after acquire");
+    TEST_ASSERT(inbvCtrl.getOwnershipState() == inbv::DisplayOwnership::InbvDriver, "Ownership state must be InbvDriver");
+
+    // Palette & Solid Color Fill
+    inbv::InbvSolidColorFill(50, 50, 150, 150, inbv::INBV_COLOR_LIGHT_CYAN);
+    bootvid::Color expectedCyan = inbv::InbvGetPaletteColor(inbv::INBV_COLOR_LIGHT_CYAN);
+    TEST_ASSERT(inbvCtrl.getDriver().getPixel(100, 100) == expectedCyan, "InbvSolidColorFill must plot palette light cyan");
+
+    // Text & Progress Bar
+    inbv::InbvSetTextColor(inbv::INBV_COLOR_YELLOW);
+    TEST_ASSERT(inbvCtrl.getTextColor() == inbv::INBV_COLOR_YELLOW, "Text color must match yellow palette index");
+    inbv::InbvDisplayString("MicaNT Kernel Initializing...");
+    inbv::InbvSetProgressBarCoordinates(100, 400);
+    inbv::InbvUpdateProgressBar(65);
+    TEST_ASSERT(inbvCtrl.getProgressPercentage() == 65, "Inbv progress bar must update to 65%");
+
+    // 11. Inbv to Display Driver (WDDM) Hand-off Integration
+    static bool s_OwnershipLostCallbackFired = false;
+    inbvCtrl.registerOwnershipLostCallback([]() {
+        s_OwnershipLostCallbackFired = true;
+    });
+
+    inbv::InbvNotifyDisplayOwnershipLost(TRUE);
+    TEST_ASSERT(s_OwnershipLostCallbackFired, "Ownership lost callback must be invoked during display hand-off");
+    TEST_ASSERT(!inbv::InbvCheckDisplayOwnership(), "Inbv must no longer own display after hand-off");
+    TEST_ASSERT(inbvCtrl.getOwnershipState() == inbv::DisplayOwnership::DisplayDriver, "Ownership state must transition to DisplayDriver");
+
+    // After hand-off, Inbv rendering is protected/blocked
+    inbv::InbvSolidColorFill(50, 50, 150, 150, inbv::INBV_COLOR_LIGHT_RED);
+    TEST_ASSERT(inbvCtrl.getDriver().getPixel(100, 100) == bootvid::Color::black(),
+                "Inbv drawing after display driver hand-off must be a no-op");
+
+    // 12. Framebuffer Pixel Format Conversion & Transcoding Engine
+    bootvid::Color testCol(210, 140, 70); // R=210, G=140, B=70
+
+    // BGRA32 <-> RGBA32 <-> RGB24 <-> RGB565
+    uint32_t bgraVal = inbv::ColorToPixel(testCol, inbv::PixelFormat::Bgra32);
+    uint32_t rgbaVal = inbv::ColorToPixel(testCol, inbv::PixelFormat::Rgba32);
+    uint32_t rgb24Val = inbv::ColorToPixel(testCol, inbv::PixelFormat::Rgb24);
+    uint32_t rgb565Val = inbv::ColorToPixel(testCol, inbv::PixelFormat::Rgb565);
+
+    bootvid::Color fromBgra = inbv::PixelToColor(bgraVal, inbv::PixelFormat::Bgra32);
+    bootvid::Color fromRgba = inbv::PixelToColor(rgbaVal, inbv::PixelFormat::Rgba32);
+    bootvid::Color fromRgb24 = inbv::PixelToColor(rgb24Val, inbv::PixelFormat::Rgb24);
+    bootvid::Color fromRgb565 = inbv::PixelToColor(rgb565Val, inbv::PixelFormat::Rgb565);
+
+    TEST_ASSERT(fromBgra == testCol, "BGRA round-trip must be lossless");
+    TEST_ASSERT(fromRgba == testCol, "RGBA round-trip must be lossless");
+    TEST_ASSERT(fromRgb24 == testCol, "RGB24 round-trip must be lossless");
+    TEST_ASSERT(std::abs(static_cast<int>(fromRgb565.r) - testCol.r) <= 8, "RGB565 red channel must be within 5-bit quant tolerance");
+    TEST_ASSERT(std::abs(static_cast<int>(fromRgb565.g) - testCol.g) <= 4, "RGB565 green channel must be within 6-bit quant tolerance");
+    TEST_ASSERT(std::abs(static_cast<int>(fromRgb565.b) - testCol.b) <= 8, "RGB565 blue channel must be within 5-bit quant tolerance");
+
+    // BlitConvertFramebuffer test
+    std::vector<uint32_t> srcFb(64 * 64, testCol.toBgra32());
+    std::vector<uint32_t> dstFb(64 * 64, 0);
+    bool blitOk = inbv::BlitConvertFramebuffer(
+        srcFb.data(), inbv::PixelFormat::Bgra32, 64,
+        dstFb.data(), inbv::PixelFormat::Rgba32, 64,
+        64, 64
+    );
+    TEST_ASSERT(blitOk, "BlitConvertFramebuffer from BGRA32 to RGBA32 must succeed");
+    bootvid::Color blittedPixel = inbv::PixelToColor(dstFb[10 * 64 + 10], inbv::PixelFormat::Rgba32);
+    TEST_ASSERT(blittedPixel == testCol, "Blitted converted pixel must match source color");
 }
 
 void Test_Csrss_ProcessRegistrationAndAlpc() {

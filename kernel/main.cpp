@@ -16,6 +16,7 @@
 #include "micant/km/hal/hal.hpp"
 #include "micant/km/hal/boot.hpp"
 #include "micant/km/hal/bootvid.hpp"
+#include "micant/km/hal/inbv.hpp"
 #include "micant/km/hal/uefi.hpp"
 
 // 3. Kernel Mode (Ring 0): Microkernel Core (Ke)

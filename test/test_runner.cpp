@@ -43,6 +43,7 @@
 #include "micant/ntdll.hpp"
 #include "micant/uefi.hpp"
 #include "micant/bootvid.hpp"
+#include "micant/inbv.hpp"
 #include "micant/csrss.hpp"
 #include "micant/conhost.hpp"
 #include "micant/kernel32.hpp"
