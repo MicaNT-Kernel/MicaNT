@@ -354,6 +354,9 @@ struct VirtualAddressDescriptor {
     bool      committed{false};
     bool      isCopyOnWrite{false};
     bool      isGuardPage{false};
+    bool      isSectionView{false};
+    void*     sectionContext{nullptr};
+    uint64_t  sectionOffset{0};
     size_t    commitCharge{0};
 
     // AVL Tree Topology
@@ -799,6 +802,68 @@ public:
             workingSet_.commitCharge += vad->commitCharge;
             workingSet_.peakCommitCharge = std::max(workingSet_.peakCommitCharge, workingSet_.commitCharge);
         }
+
+        vadTree_.insert(std::move(vad));
+        baseAddress = targetAddr;
+        return NtStatus::Success;
+    }
+
+    NtStatus mapSectionView(
+        uintptr_t& baseAddress,
+        size_t size,
+        uint32_t protect,
+        const std::unordered_map<size_t, uint64_t>& sharedPfns,
+        void* sectionContext = nullptr,
+        uint64_t sectionOffset = 0
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (size == 0) return NtStatus::InvalidParameter;
+
+        size_t alignedSize = (size + PageMask4KB) & ~PageMask4KB;
+        uintptr_t targetAddr = baseAddress;
+
+        if (targetAddr == 0) {
+            targetAddr = nextFreeAddress_;
+            nextFreeAddress_ += alignedSize + PageSize4KB;
+        } else {
+            if (targetAddr & PageMask4KB) return NtStatus::InvalidParameter;
+            if (vadTree_.find(targetAddr)) return NtStatus::Conflict;
+        }
+
+        auto vad = std::make_unique<VirtualAddressDescriptor>();
+        vad->startingAddress = targetAddr;
+        vad->startingVpn = targetAddr >> PageShift4KB;
+        vad->endingVpn = (targetAddr + alignedSize - 1) >> PageShift4KB;
+        vad->endingAddress = targetAddr + alignedSize - 1;
+        vad->protection = protect;
+        vad->allocationType = MEM_COMMIT;
+        vad->committed = true;
+        vad->isCopyOnWrite = (protect == PAGE_WRITECOPY || protect == PAGE_EXECUTE_WRITECOPY);
+        vad->isGuardPage = false;
+        vad->commitCharge = vad->pageCount();
+        vad->isSectionView = true;
+        vad->sectionContext = sectionContext;
+        vad->sectionOffset = sectionOffset;
+
+        auto& pfnDb = PfnDatabase::get();
+        size_t pageOffset = sectionOffset >> PageShift4KB;
+        size_t numPages = alignedSize >> PageShift4KB;
+
+        for (size_t i = 0; i < numPages; ++i) {
+            uint64_t vpn = vad->startingVpn + i;
+            auto it = sharedPfns.find(pageOffset + i);
+            if (it != sharedPfns.end()) {
+                uint64_t pfn = it->second;
+                vad->physicalPages[vpn] = pfn;
+                pfnDb.referencePage(pfn);
+                pagingEngine_.mapPage(directoryTableBase_, vpn << PageShift4KB, pfn, protect, true);
+                workingSet_.residentPages++;
+            }
+        }
+
+        workingSet_.commitCharge += vad->commitCharge;
+        workingSet_.peakCommitCharge = std::max(workingSet_.peakCommitCharge, workingSet_.commitCharge);
+        workingSet_.peakResidentPages = std::max(workingSet_.peakResidentPages, workingSet_.residentPages);
 
         vadTree_.insert(std::move(vad));
         baseAddress = targetAddr;

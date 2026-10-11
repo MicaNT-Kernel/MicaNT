@@ -4153,4 +4153,182 @@ void Test_Horizon17_MemoryManager_MDL_ContiguousMemory_And_WorkingSet() {
     std::cout << "[TEST] Suite 233: Horizon 17 - Sovereign Memory Manager, MDL Lifecycle, Contiguous Memory & Working Set Trimming PASSED.\n";
 }
 
+void Test_Horizon18_SectionObjects_MemoryMappedFiles_And_ControlAreaArchitecture() {
+    auto& sm = section::SectionManager::get();
+    sm.resetForTesting();
+    auto& pm = ps::ProcessManager::get();
+
+    // 1. Pagefile-Backed Section Creation & Segment/ControlArea Verification
+    ob::HandleTable handleTable;
+    Handle secHandle = 0;
+    std::shared_ptr<section::SectionObject> secObj;
+    NtStatus status = sm.createSection(
+        secHandle,
+        handleTable,
+        64 * 1024, // 64 KB = 16 pages
+        section::SEC_COMMIT,
+        mm::PAGE_READWRITE,
+        secObj,
+        L"\\BaseNamedObjects\\SharedMemoryBlock"
+    );
+    TEST_ASSERT(NT_SUCCESS(status), "Section creation must succeed");
+    TEST_ASSERT(secHandle != 0, "Section handle must be non-zero");
+    TEST_ASSERT(secObj != nullptr, "Section object pointer must be valid");
+    TEST_ASSERT(secObj->getSize() == 64 * 1024, "Section size must match requested 64KB");
+    TEST_ASSERT(secObj->getAllocationAttributes() == section::SEC_COMMIT, "Allocation attributes must match SEC_COMMIT");
+
+    auto controlArea = secObj->getControlArea();
+    TEST_ASSERT(controlArea != nullptr, "Section CONTROL_AREA must not be null");
+    TEST_ASSERT(controlArea->isCommit, "CONTROL_AREA must be marked commit");
+    TEST_ASSERT(!controlArea->isFile, "CONTROL_AREA must not be file-backed");
+    TEST_ASSERT(controlArea->sharedPfnMap.size() == 16, "Shared PFN map must contain exactly 16 pages");
+
+    auto segment = secObj->getSegment();
+    TEST_ASSERT(segment != nullptr, "Section SEGMENT must not be null");
+    TEST_ASSERT(segment->totalNumberOfPtes == 16, "SEGMENT total prototype PTEs must match 16");
+    TEST_ASSERT(segment->prototypePtes.size() == 16, "Prototype PTE vector size must be 16");
+    TEST_ASSERT(segment->prototypePtes[0].valid, "Prototype PTE 0 must be marked valid");
+
+    // 2. Multi-Process Shared Memory Coherency
+    auto procA = pm.createProcess(L"WorkerProcessA.exe");
+    auto procB = pm.createProcess(L"WorkerProcessB.exe");
+    TEST_ASSERT(procA != nullptr && procB != nullptr, "Test processes must be created successfully");
+
+    uintptr_t baseA = 0;
+    size_t sizeA = 64 * 1024;
+    status = sm.mapViewOfSection(secObj, *procA, baseA, sizeA, mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    TEST_ASSERT(NT_SUCCESS(status), "Mapping section view into Process A must succeed");
+    TEST_ASSERT(baseA != 0, "Process A mapped view base must be non-zero");
+
+    uintptr_t baseB = 0;
+    size_t sizeB = 64 * 1024;
+    status = sm.mapViewOfSection(secObj, *procB, baseB, sizeB, mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    TEST_ASSERT(NT_SUCCESS(status), "Mapping section view into Process B must succeed");
+    TEST_ASSERT(baseB != 0, "Process B mapped view base must be non-zero");
+
+    TEST_ASSERT(secObj->getMappedViewCount() == 2, "Section object must register 2 active mapped views");
+
+    // Coherency test: Write from Process A, read from Process B
+    const char testPayload[] = "Dave Cutler MICA Shared Memory IPC";
+    status = sm.writeView(*procA, baseA, 128, testPayload, sizeof(testPayload));
+    TEST_ASSERT(NT_SUCCESS(status), "Process A writeView must succeed");
+
+    char readBuffer[64] = {0};
+    status = sm.readView(*procB, baseB, 128, readBuffer, sizeof(readBuffer));
+    TEST_ASSERT(NT_SUCCESS(status), "Process B readView must succeed");
+    TEST_ASSERT(std::strcmp(readBuffer, testPayload) == 0,
+                "Process B must immediately observe data written by Process A across shared views");
+
+    // 3. Copy-on-Write (PAGE_WRITECOPY) Isolation Test
+    auto procC = pm.createProcess(L"WorkerProcessC.exe");
+    TEST_ASSERT(procC != nullptr, "Process C must be created");
+
+    uintptr_t baseC = 0;
+    size_t sizeC = 64 * 1024;
+    status = sm.mapViewOfSection(secObj, *procC, baseC, sizeC, mm::MEM_COMMIT, mm::PAGE_WRITECOPY);
+    TEST_ASSERT(NT_SUCCESS(status), "Mapping view with PAGE_WRITECOPY must succeed");
+
+    // Process C reads initial shared data
+    char readBufferC[64] = {0};
+    status = sm.readView(*procC, baseC, 128, readBufferC, sizeof(readBufferC));
+    TEST_ASSERT(NT_SUCCESS(status), "Process C readView before write must succeed");
+    TEST_ASSERT(std::strcmp(readBufferC, testPayload) == 0, "Process C must see shared data initially");
+
+    // Process C writes private data (triggers COW decoupling)
+    const char privatePayload[] = "Process C Private Modification";
+    status = sm.writeView(*procC, baseC, 128, privatePayload, sizeof(privatePayload));
+    TEST_ASSERT(NT_SUCCESS(status), "Process C writeView under PAGE_WRITECOPY must succeed");
+
+    // Verify Process C sees private copy
+    std::memset(readBufferC, 0, sizeof(readBufferC));
+    status = sm.readView(*procC, baseC, 128, readBufferC, sizeof(readBufferC));
+    TEST_ASSERT(NT_SUCCESS(status), "Process C readView after COW must succeed");
+    TEST_ASSERT(std::strcmp(readBufferC, privatePayload) == 0, "Process C must see its private modification");
+
+    // Verify Processes A and B STILL see original shared data (unaffected by Process C's write)
+    std::memset(readBuffer, 0, sizeof(readBuffer));
+    status = sm.readView(*procA, baseA, 128, readBuffer, sizeof(readBuffer));
+    TEST_ASSERT(NT_SUCCESS(status), "Process A readView after Process C write must succeed");
+    TEST_ASSERT(std::strcmp(readBuffer, testPayload) == 0,
+                "Shared backing store in Process A must be preserved and untouched by COW write");
+
+    auto telemetry = sm.getTelemetry();
+    TEST_ASSERT(telemetry.totalCowSplits >= 1, "Telemetry must record at least 1 COW split");
+
+    // 4. File-Backed Section (SEC_FILE) Creation
+    Handle fileSecHandle = 0;
+    std::shared_ptr<section::SectionObject> fileSecObj;
+    status = sm.createFileBackedSection(
+        fileSecHandle,
+        handleTable,
+        nullptr,
+        L"\\Device\\Harddisk0\\Partition1\\Windows\\System32\\ntoskrnl.exe",
+        128 * 1024,
+        section::SEC_COMMIT,
+        mm::PAGE_READONLY,
+        fileSecObj,
+        L"\\BaseNamedObjects\\KernelImageFileSection"
+    );
+    TEST_ASSERT(NT_SUCCESS(status), "File-backed section creation must succeed");
+    TEST_ASSERT(fileSecObj->getControlArea()->isFile, "CONTROL_AREA must be marked isFile");
+    TEST_ASSERT(fileSecObj->getControlArea()->backingFilePath == L"\\Device\\Harddisk0\\Partition1\\Windows\\System32\\ntoskrnl.exe",
+                "Backing file path must match specified target");
+
+    // 5. Executable Image Section (SEC_IMAGE) & Subsections
+    Handle imgSecHandle = 0;
+    std::shared_ptr<section::SectionObject> imgSecObj;
+    status = sm.createSection(
+        imgSecHandle,
+        handleTable,
+        1024 * 1024, // 1 MB = 256 pages
+        section::SEC_IMAGE | section::SEC_COMMIT,
+        mm::PAGE_EXECUTE_READWRITE,
+        imgSecObj,
+        L"\\BaseNamedObjects\\TestImageSection"
+    );
+    TEST_ASSERT(NT_SUCCESS(status), "SEC_IMAGE section creation must succeed");
+    TEST_ASSERT(imgSecObj->getControlArea()->isImage, "CONTROL_AREA must be marked isImage");
+
+    const auto& subsections = imgSecObj->getSegment()->subsections;
+    TEST_ASSERT(subsections.size() == 3, "Image section must contain 3 subsections (.text, .rdata, .data)");
+    TEST_ASSERT(subsections[0].subsectionName == ".text", "First subsection must be .text");
+    TEST_ASSERT(subsections[0].protection == mm::PAGE_EXECUTE_READ, ".text protection must be PAGE_EXECUTE_READ");
+    TEST_ASSERT(subsections[1].subsectionName == ".rdata", "Second subsection must be .rdata");
+    TEST_ASSERT(subsections[1].protection == mm::PAGE_READONLY, ".rdata protection must be PAGE_READONLY");
+    TEST_ASSERT(subsections[2].subsectionName == ".data", "Third subsection must be .data");
+    TEST_ASSERT(subsections[2].protection == mm::PAGE_READWRITE, ".data protection must be PAGE_READWRITE");
+
+    const auto& imgInfo = imgSecObj->getImageInformation();
+    TEST_ASSERT(imgInfo.transferAddress != nullptr, "Image transfer address (entry point) must be non-null");
+    TEST_ASSERT(imgInfo.machine == 0x8664, "Target machine architecture must be AMD64");
+
+    // 6. Virtual Memory Flush (MmFlushVirtualMemory)
+    status = section::MmFlushVirtualMemory(*procA, baseA, 64 * 1024);
+    TEST_ASSERT(NT_SUCCESS(status), "MmFlushVirtualMemory must succeed");
+    telemetry = sm.getTelemetry();
+    TEST_ASSERT(telemetry.totalFlushedPages >= 16, "Flushed pages count must be >= 16");
+
+    // 7. View Unmapping & Section Teardown
+    status = sm.unmapViewOfSection(*procA, baseA);
+    TEST_ASSERT(NT_SUCCESS(status), "Unmapping Process A view must succeed");
+    status = sm.unmapViewOfSection(*procB, baseB);
+    TEST_ASSERT(NT_SUCCESS(status), "Unmapping Process B view must succeed");
+    status = sm.unmapViewOfSection(*procC, baseC);
+    TEST_ASSERT(NT_SUCCESS(status), "Unmapping Process C view must succeed");
+    TEST_ASSERT(secObj->getMappedViewCount() == 0, "Active mapped view count must return to 0");
+
+    // Terminate test processes
+    procA->terminate(NtStatus::Success);
+    procB->terminate(NtStatus::Success);
+    procC->terminate(NtStatus::Success);
+
+    // 8. Telemetry & Manager Reset
+    sm.resetForTesting();
+    auto finalTelemetry = sm.getTelemetry();
+    TEST_ASSERT(finalTelemetry.totalActiveSections == 0, "Active sections must be 0 after reset");
+
+    std::cout << "[TEST] Suite 234: Horizon 18 - Sovereign Section Objects, Memory Mapped Files & Control Area Architecture PASSED.\n";
+}
+
+
 
