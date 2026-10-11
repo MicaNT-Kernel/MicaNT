@@ -28,6 +28,7 @@
 #include "micant/ke.hpp"
 #include "micant/ex.hpp"
 #include "micant/trap.hpp"
+#include "micant/kd.hpp"
 #include "micant/hal.hpp"
 #include "micant/fs.hpp"
 #include "micant/ex_work.hpp"

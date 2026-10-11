@@ -1526,7 +1526,7 @@ void Test_ExecutivePools_AllocationAndIrql() {
 }
 
 // ============================================================================
-// Suite 13: Trap & Fault Engine (KE/TRAP) Page Faults, SEH, and BugCheck
+// Suite 13: Trap & Fault Engine, SEH, BugCheck, and Kernel Debugger (KD64/DR0-DR7)
 // ============================================================================
 void Test_TrapEngine_PageFaultAndBugCheck() {
     auto& trap = ke::TrapEngine::get();
@@ -1600,6 +1600,155 @@ void Test_TrapEngine_PageFaultAndBugCheck() {
     TEST_ASSERT(lastBugCheck.bugCheckCode == ke::PAGE_FAULT_IN_NONPAGED_AREA, "BugCheck code must match PAGE_FAULT_IN_NONPAGED_AREA (0x50)");
     TEST_ASSERT(lastBugCheck.param1 == 0x1111, "Param 1 must match");
     TEST_ASSERT(lastBugCheck.param2 == 0x2222, "Param 2 must match");
+
+    // 4. KD64 Packet Framing, Protocol & Checksums
+    auto& kdDbg = kd::KdDebugger::get();
+    kdDbg.initialize(true);
+    TEST_ASSERT(kdDbg.isDebuggerEnabled(), "Kernel debugger must be enabled");
+    TEST_ASSERT(!kdDbg.isDebuggerNotPresent(), "Debugger present flag must be active");
+
+    auto& transport = kdDbg.getTransport();
+    transport.reset();
+
+    // Checksum verification
+    const uint8_t testPayload[] = { 0x10, 0x20, 0x30, 0x40, 0x50 };
+    uint32_t expectedCrc = 0x10 + 0x20 + 0x30 + 0x40 + 0x50; // 0xF0
+    TEST_ASSERT(kd::KdComputeChecksum(testPayload, sizeof(testPayload)) == expectedCrc, "KD checksum calculation must match byte sum");
+
+    // Send packet over transport
+    bool sendOk = transport.sendPacket(kd::PACKET_TYPE_KD_STATE_CHANGE64, testPayload, sizeof(testPayload));
+    TEST_ASSERT(sendOk, "Sending KD packet over transport must succeed");
+    TEST_ASSERT(transport.getOutboundQueueCount() == 1, "Transport outbound queue must contain 1 packet");
+
+    auto rawOutPkt = transport.popOutboundPacket();
+    TEST_ASSERT(rawOutPkt.size() == sizeof(kd::KD_PACKET) + sizeof(testPayload), "Raw packet size must match header + payload");
+    const auto* hdr = reinterpret_cast<const kd::KD_PACKET*>(rawOutPkt.data());
+    TEST_ASSERT(hdr->packetLeader == kd::PACKET_LEADER, "Packet leader must be 0x30303030 ('0000')");
+    TEST_ASSERT(hdr->packetType == kd::PACKET_TYPE_KD_STATE_CHANGE64, "Packet type must be STATE_CHANGE64");
+    TEST_ASSERT(hdr->byteCount == sizeof(testPayload), "Payload byte count must match");
+    TEST_ASSERT(hdr->checksum == expectedCrc, "Header checksum must match payload checksum");
+
+    // Receive packet round-trip
+    transport.deliverInbound(rawOutPkt);
+    kd::KD_PACKET rcvHdr{};
+    std::vector<uint8_t> rcvPayload;
+    bool rcvOk = transport.receivePacket(rcvHdr, rcvPayload);
+    TEST_ASSERT(rcvOk, "Receiving valid packet must succeed");
+    TEST_ASSERT(rcvHdr.packetType == kd::PACKET_TYPE_KD_STATE_CHANGE64, "Received packet type must match");
+    TEST_ASSERT(rcvPayload.size() == sizeof(testPayload), "Received payload size must match");
+    TEST_ASSERT(std::memcmp(rcvPayload.data(), testPayload, sizeof(testPayload)) == 0, "Payload contents must match exactly");
+
+    // Acknowledge packet
+    transport.sendAcknowledge(rcvHdr.packetId);
+    auto ackRaw = transport.popOutboundPacket();
+    const auto* ackHdr = reinterpret_cast<const kd::KD_PACKET*>(ackRaw.data());
+    TEST_ASSERT(ackHdr->packetLeader == kd::CONTROL_PACKET_LEADER, "Control packet leader must be 0x69696969 ('iiii')");
+    TEST_ASSERT(ackHdr->packetType == kd::PACKET_TYPE_KD_ACKNOWLEDGE, "Control packet type must be KD_ACKNOWLEDGE");
+    TEST_ASSERT(ackHdr->packetId == rcvHdr.packetId, "ACK packet ID must match acknowledged packet ID");
+
+    // 5. KD64 State Manipulate Protocol
+    kd::DBGKD_MANIPULATE_STATE64 req{};
+    kd::DBGKD_MANIPULATE_STATE64 reply{};
+    std::vector<uint8_t> reqData;
+    std::vector<uint8_t> replyData;
+
+    // DbgKdGetVersionApi
+    req.apiNumber = kd::DbgKdGetVersionApi;
+    bool verOk = kdDbg.handleStateManipulate(req, reqData, reply, replyData);
+    TEST_ASSERT(verOk, "DbgKdGetVersionApi must succeed");
+    TEST_ASSERT(reply.returnStatus == static_cast<uint32_t>(NtStatus::Success), "Version API status must be Success");
+    TEST_ASSERT(reply.getVersion.majorVersion == 0x000F, "Major version must be 0xF (Free build)");
+    TEST_ASSERT(reply.getVersion.minorVersion == 26100, "Minor version must match 26100");
+    TEST_ASSERT(reply.getVersion.machineType == 0x8664, "Machine type must be AMD64 (0x8664)");
+    TEST_ASSERT(reply.getVersion.kernBase == 0xFFFFF80000000000ULL, "KernBase must be 0xFFFFF80000000000");
+
+    // DbgKdReadVirtualMemoryApi64
+    req.apiNumber = kd::DbgKdReadVirtualMemoryApi64;
+    req.readMemory.targetBaseAddress = 0x140000000;
+    req.readMemory.transferCount = 64;
+    bool readOk = kdDbg.handleStateManipulate(req, reqData, reply, replyData);
+    TEST_ASSERT(readOk, "DbgKdReadVirtualMemoryApi64 must succeed");
+    TEST_ASSERT(reply.readMemory.actualBytesRead == 64, "Actual bytes read must match 64");
+    TEST_ASSERT(replyData.size() == 64, "Reply data size must match 64 bytes");
+
+    // DbgKdWriteBreakPointApi & ContinueApi
+    req.apiNumber = kd::DbgKdWriteBreakPointApi;
+    req.breakPoint.breakPointAddress = 0x140001000;
+    bool bpOk = kdDbg.handleStateManipulate(req, reqData, reply, replyData);
+    TEST_ASSERT(bpOk, "DbgKdWriteBreakPointApi must succeed");
+    TEST_ASSERT(reply.breakPoint.breakPointHandle != 0, "Breakpoint handle must be non-zero");
+
+    req.apiNumber = kd::DbgKdContinueApi;
+    bool contOk = kdDbg.handleStateManipulate(req, reqData, reply, replyData);
+    TEST_ASSERT(contOk, "DbgKdContinueApi must succeed");
+
+    // Poll break-in signaling
+    TEST_ASSERT(!kdDbg.pollBreakIn(), "Initial break-in pending should be false");
+    kdDbg.signalBreakIn();
+    TEST_ASSERT(kdDbg.pollBreakIn(), "Break-in request must be detected by pollBreakIn");
+    TEST_ASSERT(!kdDbg.pollBreakIn(), "Break-in request must be cleared after polling");
+
+    // 6. Hardware Breakpoint Trap Engine (DR0-DR7)
+    auto& hw = kdDbg.getHwBreakpoints();
+
+    // DR0: Execution breakpoint on 0x140005000 (1 byte)
+    bool setDr0 = hw.setBreakpoint(0, 0x140005000, kd::HwBreakpointType::Execute, kd::HwBreakpointLength::Byte1);
+    TEST_ASSERT(setDr0, "Setting DR0 execution breakpoint must succeed");
+    TEST_ASSERT((hw.getRegisters().dr7 & 0x1) == 0x1, "DR7 L0 bit must be set");
+
+    // DR1: Write breakpoint on 0x20001000 (4 bytes)
+    bool setDr1 = hw.setBreakpoint(1, 0x20001000, kd::HwBreakpointType::Write, kd::HwBreakpointLength::Byte4);
+    TEST_ASSERT(setDr1, "Setting DR1 write breakpoint must succeed");
+    TEST_ASSERT((hw.getRegisters().dr7 & 0x4) == 0x4, "DR7 L1 bit must be set");
+
+    // DR2: Read/Write breakpoint on 0x30002000 (8 bytes)
+    bool setDr2 = hw.setBreakpoint(2, 0x30002000, kd::HwBreakpointType::ReadWrite, kd::HwBreakpointLength::Byte8);
+    TEST_ASSERT(setDr2, "Setting DR2 read/write breakpoint must succeed");
+    TEST_ASSERT((hw.getRegisters().dr7 & 0x10) == 0x10, "DR7 L2 bit must be set");
+
+    // Evaluate instruction fetch on DR0 address
+    uint64_t dr6Status = 0;
+    bool hitExec = hw.evaluateAccess(0x140005000, 1, false, true, dr6Status);
+    TEST_ASSERT(hitExec, "Instruction fetch on DR0 address must trigger hardware breakpoint");
+    TEST_ASSERT((dr6Status & 0x1) == 0x1, "DR6 B0 bit must be set for DR0 match");
+
+    // Evaluate read on DR1 (Write-only) -> should NOT trigger
+    bool hitReadOnWriteOnly = hw.evaluateAccess(0x20001000, 4, false, false, dr6Status);
+    TEST_ASSERT(!hitReadOnWriteOnly, "Read access on Write-only breakpoint must NOT trigger");
+
+    // Evaluate write on DR1 (Write-only) -> should trigger
+    bool hitWrite = hw.evaluateAccess(0x20001000, 4, true, false, dr6Status);
+    TEST_ASSERT(hitWrite, "Write access on DR1 address must trigger hardware breakpoint");
+    TEST_ASSERT((dr6Status & 0x2) == 0x2, "DR6 B1 bit must be set for DR1 match");
+
+    // Evaluate read on DR2 (ReadWrite) -> should trigger
+    bool hitReadWrite = hw.evaluateAccess(0x30002000, 8, false, false, dr6Status);
+    TEST_ASSERT(hitReadWrite, "Read access on ReadWrite breakpoint must trigger");
+    TEST_ASSERT((dr6Status & 0x4) == 0x4, "DR6 B2 bit must be set for DR2 match");
+
+    // Evaluate unrelated address -> should NOT trigger
+    bool hitMiss = hw.evaluateAccess(0x99990000, 4, true, false, dr6Status);
+    TEST_ASSERT(!hitMiss, "Unrelated address access must not trigger any hardware breakpoint");
+
+    // Clear DR0
+    bool clrDr0 = hw.clearBreakpoint(0);
+    TEST_ASSERT(clrDr0, "Clearing DR0 must succeed");
+    TEST_ASSERT((hw.getRegisters().dr7 & 0x1) == 0, "DR7 L0 bit must be cleared");
+
+    // 7. DbgPrint and DbgPrintEx Engine
+    auto& ringBuf = kdDbg.getRingBuffer();
+    ringBuf.clear();
+
+    kd::DbgPrint("[MicaNT:Kernel] Subsystem %s initialized at IRQL %d\n", "Microkernel", 0);
+    kd::DbgPrintEx(0, 0, "[MicaNT:HAL] ACPI 6.5 tables detected: 4 CPUs\n");
+
+    auto logs = ringBuf.getLogs();
+    TEST_ASSERT(logs.size() == 2, "Ring buffer must contain 2 logged entries");
+    TEST_ASSERT(logs[0].find("Microkernel") != std::string::npos, "First log must contain 'Microkernel'");
+    TEST_ASSERT(logs[1].find("ACPI 6.5") != std::string::npos, "Second log must contain 'ACPI 6.5'");
+
+    // Verify DbgPrint was forwarded to KD transport as PACKET_TYPE_KD_DEBUG_IO
+    TEST_ASSERT(transport.getOutboundQueueCount() >= 2, "DbgPrint calls must generate KD_DEBUG_IO packets");
 }
 
 // ============================================================================

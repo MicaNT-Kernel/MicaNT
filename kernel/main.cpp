@@ -21,6 +21,7 @@
 // 3. Kernel Mode (Ring 0): Microkernel Core (Ke)
 #include "micant/km/core/ke.hpp"
 #include "micant/km/core/trap.hpp"
+#include "micant/km/core/kd.hpp"
 #include "micant/km/core/syscalls.hpp"
 #include "micant/km/core/dispatcher.hpp"
 #include "micant/km/core/sync.hpp"
