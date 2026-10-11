@@ -3600,3 +3600,168 @@ inline void Test_Horizon13_SovereignPowerManagement_PoSubsystem() {
     std::cout << "[TEST] Suite 229: Horizon 13 - Sovereign Power Management (Po) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 230: Horizon 14 - Sovereign Executive Worker Queues & IoWorkItems
+// ============================================================================
+namespace test_ex_h14 {
+    inline std::atomic<uint32_t> g_OrderCounter{0};
+    inline std::vector<uint32_t> g_ExecutionOrder;
+    inline std::mutex g_OrderMutex;
+
+    struct PriorityContext {
+        uint32_t priorityId;
+    };
+
+    inline void RecordPriorityCallback(void* ctx) {
+        auto* pCtx = static_cast<PriorityContext*>(ctx);
+        if (pCtx) {
+            std::lock_guard<std::mutex> lock(g_OrderMutex);
+            g_ExecutionOrder.push_back(pCtx->priorityId);
+        }
+    }
+
+    struct IoTestContext {
+        io::DeviceObject* expectedDevice{nullptr};
+        bool routineCalled{false};
+        bool routineExCalled{false};
+    };
+
+    inline void IoWorkRoutine(io::DeviceObject* dev, void* ctx) {
+        auto* tCtx = static_cast<IoTestContext*>(ctx);
+        if (tCtx && dev == tCtx->expectedDevice) {
+            tCtx->routineCalled = true;
+        }
+    }
+
+    inline void IoWorkRoutineEx(void* ioObject, void* ctx, ex::IoWorkItem* item) {
+        auto* tCtx = static_cast<IoTestContext*>(ctx);
+        if (tCtx && ioObject == reinterpret_cast<void*>(tCtx->expectedDevice) && item != nullptr) {
+            tCtx->routineExCalled = true;
+        }
+    }
+}
+
+inline void Test_Horizon14_ExecutiveWorkQueues_And_IoWorkItems() {
+    std::cout << "[TEST] Executing Suite 230: Horizon 14 - Sovereign Executive Worker Queues & IoWorkItems...\n";
+    auto& workMgr = ex::ExecutiveWorkQueueManager::get();
+
+    // 1. Initial State & Auto-scaling Setup
+    workMgr.initialize(2, 6);
+    TEST_ASSERT(workMgr.isRunning(), "Executive Work Queue Manager must be running");
+    TEST_ASSERT(workMgr.getActiveWorkerCount() >= 2, "Active worker threads must be >= 2");
+
+    // 2. Strict Priority Queue Ordering Verification
+    {
+        std::lock_guard<std::mutex> lock(test_ex_h14::g_OrderMutex);
+        test_ex_h14::g_ExecutionOrder.clear();
+    }
+
+    test_ex_h14::PriorityContext ctxBg{1};   // Background
+    test_ex_h14::PriorityContext ctxDel{2};  // Delayed
+    test_ex_h14::PriorityContext ctxNorm{3}; // Normal
+    test_ex_h14::PriorityContext ctxCrit{4}; // Critical
+    test_ex_h14::PriorityContext ctxHyp{5};  // HyperCritical
+    test_ex_h14::PriorityContext ctxRt{6};   // RealTime
+
+    ex::WorkQueueItem itemBg{};
+    ex::WorkQueueItem itemDel{};
+    ex::WorkQueueItem itemNorm{};
+    ex::WorkQueueItem itemCrit{};
+    ex::WorkQueueItem itemHyp{};
+    ex::WorkQueueItem itemRt{};
+
+    ex::ExInitializeWorkItem(&itemBg, test_ex_h14::RecordPriorityCallback, &ctxBg);
+    ex::ExInitializeWorkItem(&itemDel, test_ex_h14::RecordPriorityCallback, &ctxDel);
+    ex::ExInitializeWorkItem(&itemNorm, test_ex_h14::RecordPriorityCallback, &ctxNorm);
+    ex::ExInitializeWorkItem(&itemCrit, test_ex_h14::RecordPriorityCallback, &ctxCrit);
+    ex::ExInitializeWorkItem(&itemHyp, test_ex_h14::RecordPriorityCallback, &ctxHyp);
+    ex::ExInitializeWorkItem(&itemRt, test_ex_h14::RecordPriorityCallback, &ctxRt);
+
+    // Queue items across all priority queues
+    ex::ExQueueWorkItem(&itemBg, ex::WorkQueueType::BackgroundWorkQueue);
+    ex::ExQueueWorkItem(&itemDel, ex::WorkQueueType::DelayedWorkQueue);
+    ex::ExQueueWorkItem(&itemNorm, ex::WorkQueueType::NormalWorkQueue);
+    ex::ExQueueWorkItem(&itemCrit, ex::WorkQueueType::CriticalWorkQueue);
+    ex::ExQueueWorkItem(&itemHyp, ex::WorkQueueType::HyperCriticalWorkQueue);
+    ex::ExQueueWorkItem(&itemRt, ex::WorkQueueType::RealTimeWorkQueue);
+
+    // 3. Flush Work Queues
+    bool flushOk = workMgr.flushAll(5000);
+    TEST_ASSERT(flushOk, "flushAll must successfully drain all queues within timeout");
+    TEST_ASSERT(itemRt.completed && itemHyp.completed && itemCrit.completed,
+                "High priority work items must be marked as completed");
+    TEST_ASSERT(itemNorm.completed && itemDel.completed && itemBg.completed,
+                "Lower priority work items must be marked as completed");
+
+    // 4. Synchronous Wait for Individual Item (ExWaitForWorkItem)
+    std::atomic<bool> waitItemRan{false};
+    ex::WorkQueueItem waitItem{};
+    ex::ExInitializeWorkItem(&waitItem, [](void* p) {
+        auto* ran = static_cast<std::atomic<bool>*>(p);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        ran->store(true);
+    }, &waitItemRan);
+
+    ex::ExQueueWorkItem(&waitItem, ex::WorkQueueType::CriticalWorkQueue);
+    bool waitSuccess = ex::ExWaitForWorkItem(&waitItem, 5000);
+    TEST_ASSERT(waitSuccess, "ExWaitForWorkItem must return true before timeout");
+    TEST_ASSERT(waitItemRan.load(), "Work item payload must have completed");
+    TEST_ASSERT(waitItem.completed.load(), "Work item completed flag must be true");
+
+    // 5. Device-bound IoWorkItem Lifecycle
+    io::DeviceObject dummyDev{};
+    dummyDev.deviceName = L"\\Device\\TestDisk0";
+
+    ex::IoWorkItem* pIoItem = ex::IoAllocateWorkItem(&dummyDev);
+    TEST_ASSERT(pIoItem != nullptr, "IoAllocateWorkItem must allocate non-null IoWorkItem");
+    TEST_ASSERT(pIoItem->deviceObject == &dummyDev, "IoWorkItem must bind to the device object");
+
+    test_ex_h14::IoTestContext ioCtx{};
+    ioCtx.expectedDevice = &dummyDev;
+
+    // Standard IoQueueWorkItem
+    ex::IoQueueWorkItem(pIoItem, test_ex_h14::IoWorkRoutine, ex::WorkQueueType::CriticalWorkQueue, &ioCtx);
+    bool ioFlush = ex::ExFlushWorkQueue(ex::WorkQueueType::CriticalWorkQueue, 3000);
+    TEST_ASSERT(ioFlush, "Flushing critical work queue after IoQueueWorkItem must succeed");
+    TEST_ASSERT(ioCtx.routineCalled, "PIO_WORKITEM_ROUTINE must be called with bound device object");
+
+    // Extended IoQueueWorkItemEx
+    ex::IoQueueWorkItemEx(pIoItem, test_ex_h14::IoWorkRoutineEx, ex::WorkQueueType::NormalWorkQueue, &ioCtx);
+    bool ioFlushEx = ex::ExFlushWorkQueue(ex::WorkQueueType::NormalWorkQueue, 3000);
+    TEST_ASSERT(ioFlushEx, "Flushing normal work queue after IoQueueWorkItemEx must succeed");
+    TEST_ASSERT(ioCtx.routineExCalled, "PIO_WORKITEM_ROUTINE_EX must be called with bound device and item pointer");
+
+    ex::IoFreeWorkItem(pIoItem);
+
+    // 6. Exception Containment & IRQL Safety
+    ex::WorkQueueItem errItem{};
+    ex::ExInitializeWorkItem(&errItem, [](void*) {
+        throw std::runtime_error("Simulated unhandled kernel driver worker exception");
+    }, nullptr);
+
+    ex::ExQueueWorkItem(&errItem, ex::WorkQueueType::DelayedWorkQueue);
+    ex::ExFlushWorkQueue(ex::WorkQueueType::DelayedWorkQueue, 3000);
+    TEST_ASSERT(errItem.completed.load(), "Exception-throwing work item must still be marked completed");
+
+    // Verify subsequent item executes normally on the same worker thread pool
+    std::atomic<bool> subsequentItemRan{false};
+    ex::WorkQueueItem subItem{};
+    ex::ExInitializeWorkItem(&subItem, [](void* p) {
+        auto* ran = static_cast<std::atomic<bool>*>(p);
+        ran->store(true);
+    }, &subsequentItemRan);
+
+    ex::ExQueueWorkItem(&subItem, ex::WorkQueueType::DelayedWorkQueue);
+    ex::ExFlushWorkQueue(ex::WorkQueueType::DelayedWorkQueue, 3000);
+    TEST_ASSERT(subsequentItemRan.load(), "Subsequent work item must execute normally after exception");
+
+    // 7. Telemetry & Statistics Verification
+    auto statsCrit = workMgr.getQueueStatistics(ex::WorkQueueType::CriticalWorkQueue);
+    TEST_ASSERT(statsCrit.itemsQueued > 0, "Critical queue itemsQueued must be > 0");
+    TEST_ASSERT(statsCrit.itemsProcessed > 0, "Critical queue itemsProcessed must be > 0");
+    TEST_ASSERT(workMgr.getTotalProcessed() >= 8, "Total processed items must be at least 8");
+    TEST_ASSERT(workMgr.getTotalQueued() >= 8, "Total queued items must be at least 8");
+
+    std::cout << "[TEST] Suite 230: Horizon 14 - Sovereign Executive Worker Queues & IoWorkItems PASSED.\n";
+}
+
