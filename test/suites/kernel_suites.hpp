@@ -5243,5 +5243,412 @@ void Test_Horizon22_ConfigurationManager_HiveRefinement_Coalescing_And_Security(
     std::cout << "[TEST] Suite 238: Horizon 22 - Sovereign Configuration Manager Hive Refinement, Coalescing & Security PASSED.\n";
 }
 
+// ============================================================================
+// Suite 239: Horizon 23 - Sovereign I/O Subsystem FastIo, Buffering & Cancellation
+// ============================================================================
+void Test_Horizon23_IoSubsystem_FastIo_Cancellation_And_BufferingModes() {
+    std::cout << "[TEST] Suite 239: Horizon 23 - Sovereign I/O Subsystem FastIo, Buffering & Cancellation...\n";
+
+    // 0. Reset Telemetry for pristine baseline
+    io::IoResetTelemetryForTesting();
+
+    // 1. Buffering Modes: DO_BUFFERED_IO (Double Buffering)
+    {
+        io::DriverObject drvBuffered;
+        io::DeviceObject devBuffered;
+        devBuffered.flags = io::DO_BUFFERED_IO;
+        devBuffered.stackSize = 1;
+        devBuffered.driverObject = &drvBuffered;
+
+        // Synchronous Write: Copies user buffer into kernel systemBuffer
+        char writePayload[] = "MicaNT Dave Cutler DO_BUFFERED_IO Kernel Payload";
+        uint32_t writeLen = static_cast<uint32_t>(sizeof(writePayload));
+        LargeInteger writeOffset{.quadPart = 0x4000};
+
+        io::Irp* writeIrp = io::IoBuildSynchronousFsdRequest(
+            io::IRP_MJ_WRITE,
+            &devBuffered,
+            writePayload,
+            writeLen,
+            &writeOffset
+        );
+        TEST_ASSERT(writeIrp != nullptr, "IoBuildSynchronousFsdRequest WRITE must succeed");
+        TEST_ASSERT(writeIrp->systemBuffer != nullptr, "DO_BUFFERED_IO WRITE must allocate intermediate systemBuffer");
+        TEST_ASSERT(std::memcmp(writeIrp->systemBuffer, writePayload, writeLen) == 0, "systemBuffer must contain payload");
+        TEST_ASSERT(writeIrp->userBuffer == writePayload, "userBuffer must point to caller buffer");
+
+        writeIrp->ioStatus.status = NtStatus::Success;
+        writeIrp->ioStatus.information = writeLen;
+        NtStatus compSt = io::IoCompleteRequest(writeIrp);
+        TEST_ASSERT(NT_SUCCESS(compSt), "IoCompleteRequest WRITE must succeed");
+        TEST_ASSERT(writeIrp->systemBuffer == nullptr, "systemBuffer must be safely freed and nulled on completion");
+        io::IoFreeIrp(writeIrp);
+
+        // Synchronous Read: Allocates kernel systemBuffer, on completion copies back to userBuffer
+        char readBuf[64]{0};
+        uint32_t readLen = 32;
+        LargeInteger readOffset{.quadPart = 0x8000};
+
+        io::Irp* readIrp = io::IoBuildSynchronousFsdRequest(
+            io::IRP_MJ_READ,
+            &devBuffered,
+            readBuf,
+            readLen,
+            &readOffset
+        );
+        TEST_ASSERT(readIrp != nullptr, "IoBuildSynchronousFsdRequest READ must succeed");
+        TEST_ASSERT(readIrp->systemBuffer != nullptr, "DO_BUFFERED_IO READ must allocate systemBuffer");
+
+        // Driver produces data in systemBuffer
+        const char* mockDiskData = "MicaNT Fast Read Back Data 0123";
+        std::memcpy(readIrp->systemBuffer, mockDiskData, 32);
+        readIrp->ioStatus.status = NtStatus::Success;
+        readIrp->ioStatus.information = 32;
+
+        compSt = io::IoCompleteRequest(readIrp);
+        TEST_ASSERT(NT_SUCCESS(compSt), "IoCompleteRequest READ must succeed");
+        TEST_ASSERT(std::memcmp(readBuf, mockDiskData, 32) == 0, "DO_BUFFERED_IO completion must copy data into userBuffer");
+        TEST_ASSERT(readIrp->systemBuffer == nullptr, "systemBuffer must be freed on completion");
+        io::IoFreeIrp(readIrp);
+
+        // Device Control (IOCTL): METHOD_BUFFERED request
+        char ioctlInput[] = "MicaNT_IOCTL_QUERY";
+        char ioctlOutput[32]{0};
+        uint32_t ioctlCode = 0x00222004;
+
+        io::Irp* ctlIrp = io::IoBuildDeviceIoControlRequest(
+            ioctlCode,
+            &devBuffered,
+            ioctlInput,
+            static_cast<uint32_t>(sizeof(ioctlInput)),
+            ioctlOutput,
+            sizeof(ioctlOutput),
+            false
+        );
+        TEST_ASSERT(ctlIrp != nullptr, "IoBuildDeviceIoControlRequest must succeed");
+        TEST_ASSERT(ctlIrp->systemBuffer != nullptr, "DO_BUFFERED_IO IOCTL must allocate systemBuffer");
+        TEST_ASSERT(std::memcmp(ctlIrp->systemBuffer, ioctlInput, sizeof(ioctlInput)) == 0, "IOCTL input must be in systemBuffer");
+
+        // Driver processes request and writes response into systemBuffer
+        const char* ioctlResponse = "STATUS_QUERY_ACKNOWLEDGED";
+        std::memcpy(ctlIrp->systemBuffer, ioctlResponse, 26);
+        ctlIrp->ioStatus.status = NtStatus::Success;
+        ctlIrp->ioStatus.information = 26;
+
+        compSt = io::IoCompleteRequest(ctlIrp);
+        TEST_ASSERT(NT_SUCCESS(compSt), "IoCompleteRequest IOCTL must succeed");
+        TEST_ASSERT(std::memcmp(ioctlOutput, ioctlResponse, 26) == 0, "IOCTL response must be copied back to userBuffer");
+        TEST_ASSERT(ctlIrp->systemBuffer == nullptr, "IOCTL systemBuffer must be freed on completion");
+        io::IoFreeIrp(ctlIrp);
+    }
+
+    // 2. Buffering Modes: DO_DIRECT_IO (MDL Zero-Copy Direct DMA Model)
+    {
+        io::DriverObject drvDirect;
+        io::DeviceObject devDirect;
+        devDirect.flags = io::DO_DIRECT_IO;
+        devDirect.stackSize = 1;
+        devDirect.driverObject = &drvDirect;
+
+        alignas(4096) char directData[4096];
+        std::memset(directData, 0x5A, sizeof(directData));
+        LargeInteger directOffset{.quadPart = 0x10000};
+
+        io::Irp* directIrp = io::IoBuildSynchronousFsdRequest(
+            io::IRP_MJ_READ,
+            &devDirect,
+            directData,
+            sizeof(directData),
+            &directOffset
+        );
+        TEST_ASSERT(directIrp != nullptr, "IoBuildSynchronousFsdRequest DIRECT_IO must succeed");
+        TEST_ASSERT(directIrp->systemBuffer == nullptr, "DO_DIRECT_IO must not allocate systemBuffer");
+        TEST_ASSERT(directIrp->mdlAddress != nullptr, "DO_DIRECT_IO must allocate and probe/lock MDL");
+
+        auto* mdl = reinterpret_cast<mm::PMDL>(directIrp->mdlAddress);
+        TEST_ASSERT(mdl->byteCount == sizeof(directData), "MDL byte count must match requested length");
+        TEST_ASSERT((mdl->mdlFlags & mm::MDL_PAGES_LOCKED) != 0, "MDL must have MDL_PAGES_LOCKED flag set");
+
+        directIrp->ioStatus.status = NtStatus::Success;
+        directIrp->ioStatus.information = sizeof(directData);
+        NtStatus compSt = io::IoCompleteRequest(directIrp);
+        TEST_ASSERT(NT_SUCCESS(compSt), "IoCompleteRequest DIRECT_IO must succeed");
+        TEST_ASSERT(directIrp->mdlAddress == nullptr, "directIrp mdlAddress must be unlocked and freed on completion");
+        io::IoFreeIrp(directIrp);
+    }
+
+    // 3. Buffering Modes: Neither I/O (Raw User Buffer Pass-Through)
+    {
+        io::DriverObject drvNeither;
+        io::DeviceObject devNeither;
+        devNeither.flags = 0; // neither buffered nor direct
+        devNeither.stackSize = 1;
+        devNeither.driverObject = &drvNeither;
+
+        char neitherBuf[256];
+        std::memset(neitherBuf, 0xCC, sizeof(neitherBuf));
+
+        io::Irp* neitherIrp = io::IoBuildSynchronousFsdRequest(
+            io::IRP_MJ_WRITE,
+            &devNeither,
+            neitherBuf,
+            sizeof(neitherBuf),
+            nullptr
+        );
+        TEST_ASSERT(neitherIrp != nullptr, "Neither I/O IRP must be allocated");
+        TEST_ASSERT(neitherIrp->systemBuffer == nullptr, "Neither I/O must not allocate systemBuffer");
+        TEST_ASSERT(neitherIrp->mdlAddress == nullptr, "Neither I/O must not allocate MDL");
+        TEST_ASSERT(neitherIrp->userBuffer == neitherBuf, "Neither I/O userBuffer must point directly to user buffer");
+
+        neitherIrp->ioStatus.status = NtStatus::Success;
+        neitherIrp->ioStatus.information = sizeof(neitherBuf);
+        NtStatus compSt = io::IoCompleteRequest(neitherIrp);
+        TEST_ASSERT(NT_SUCCESS(compSt), "IoCompleteRequest Neither I/O must succeed");
+        io::IoFreeIrp(neitherIrp);
+    }
+
+    // 4. Fast I/O Dispatch Table & High-Throughput Bypass Architecture
+    {
+        static bool s_FastReadInvoked = false;
+        static bool s_FastWriteInvoked = false;
+        static bool s_FastDeviceControlInvoked = false;
+        static bool s_FastQueryBasicInvoked = false;
+        static bool s_FastQueryStdInvoked = false;
+
+        io::FastIoDispatch fastTable{};
+        fastTable.fastIoRead = [](void*, LargeInteger*, uint32_t length, bool, void* buffer, IoStatusBlock* ioStatus, io::DeviceObject*) -> bool {
+            s_FastReadInvoked = true;
+            if (buffer && length >= 8) {
+                std::memcpy(buffer, "FASTDATA", 8);
+            }
+            ioStatus->status = NtStatus::Success;
+            ioStatus->information = length;
+            return true;
+        };
+
+        fastTable.fastIoWrite = [](void*, LargeInteger*, uint32_t length, bool, const void*, IoStatusBlock* ioStatus, io::DeviceObject*) -> bool {
+            s_FastWriteInvoked = true;
+            ioStatus->status = NtStatus::Success;
+            ioStatus->information = length;
+            return true;
+        };
+
+        fastTable.fastIoDeviceControl = [](void*, bool, void*, uint32_t, void* outBuf, uint32_t outLen, uint32_t, IoStatusBlock* ioStatus, io::DeviceObject*) -> bool {
+            s_FastDeviceControlInvoked = true;
+            if (outBuf && outLen >= 4) {
+                std::memcpy(outBuf, "FCTL", 4);
+            }
+            ioStatus->status = NtStatus::Success;
+            ioStatus->information = outLen;
+            return true;
+        };
+
+        fastTable.fastIoQueryBasicInfo = [](void*, bool, void*, IoStatusBlock* ioStatus, io::DeviceObject*) -> bool {
+            s_FastQueryBasicInvoked = true;
+            ioStatus->status = NtStatus::Success;
+            return true;
+        };
+
+        fastTable.fastIoQueryStandardInfo = [](void*, bool, void*, IoStatusBlock* ioStatus, io::DeviceObject*) -> bool {
+            s_FastQueryStdInvoked = true;
+            ioStatus->status = NtStatus::Success;
+            return true;
+        };
+
+        io::DriverObject fastDrv;
+        fastDrv.fastIoDispatch = &fastTable;
+        io::DeviceObject fastDev;
+        fastDev.driverObject = &fastDrv;
+
+        char fBuf[32]{0};
+        IoStatusBlock fStatus{};
+        LargeInteger fOffset{.quadPart = 0};
+
+        // Test Fast Read
+        bool fr = io::IoFastRead(&fastDev, nullptr, &fOffset, 8, true, fBuf, &fStatus);
+        TEST_ASSERT(fr == true, "IoFastRead must return true on fast path");
+        TEST_ASSERT(s_FastReadInvoked == true, "fastIoRead handler must be invoked");
+        TEST_ASSERT(std::memcmp(fBuf, "FASTDATA", 8) == 0, "Fast read buffer must match payload");
+        TEST_ASSERT(fStatus.status == NtStatus::Success, "Fast read status must be Success");
+
+        // Test Fast Write
+        bool fw = io::IoFastWrite(&fastDev, nullptr, &fOffset, 16, true, "0123456789ABCDEF", &fStatus);
+        TEST_ASSERT(fw == true, "IoFastWrite must return true on fast path");
+        TEST_ASSERT(s_FastWriteInvoked == true, "fastIoWrite handler must be invoked");
+        TEST_ASSERT(fStatus.status == NtStatus::Success, "Fast write status must be Success");
+
+        // Test Fast Device Control
+        char ctlOut[8]{0};
+        bool fc = io::IoFastDeviceControl(&fastDev, nullptr, true, nullptr, 0, ctlOut, 4, 0x101, &fStatus);
+        TEST_ASSERT(fc == true, "IoFastDeviceControl must return true on fast path");
+        TEST_ASSERT(s_FastDeviceControlInvoked == true, "fastIoDeviceControl handler must be invoked");
+        TEST_ASSERT(std::memcmp(ctlOut, "FCTL", 4) == 0, "Fast IOCTL out buffer must match");
+
+        // Test Fast Query Info
+        bool fqb = io::IoFastQueryBasicInfo(&fastDev, nullptr, true, nullptr, &fStatus);
+        TEST_ASSERT(fqb == true, "IoFastQueryBasicInfo must return true");
+        TEST_ASSERT(s_FastQueryBasicInvoked == true, "fastIoQueryBasicInfo handler must be invoked");
+
+        bool fqs = io::IoFastQueryStandardInfo(&fastDev, nullptr, true, nullptr, &fStatus);
+        TEST_ASSERT(fqs == true, "IoFastQueryStandardInfo must return true");
+        TEST_ASSERT(s_FastQueryStdInvoked == true, "fastIoQueryStandardInfo handler must be invoked");
+
+        // Test Fast I/O Bypass / Fallback
+        fastTable.fastIoRead = [](void*, LargeInteger*, uint32_t, bool, void*, IoStatusBlock*, io::DeviceObject*) -> bool {
+            return false; // Cache miss or range lock conflict - signals fallback to standard IRP
+        };
+        bool frBypass = io::IoFastRead(&fastDev, nullptr, &fOffset, 8, true, fBuf, &fStatus);
+        TEST_ASSERT(frBypass == false, "IoFastRead returning false must signal fallback to standard IRP dispatch");
+
+        // Test Fast I/O with device having no FastIoDispatch
+        io::DriverObject noFastDrv;
+        io::DeviceObject noFastDev;
+        noFastDev.driverObject = &noFastDrv;
+        bool frNoFast = io::IoFastRead(&noFastDev, nullptr, &fOffset, 8, true, fBuf, &fStatus);
+        TEST_ASSERT(frNoFast == false, "Device without FastIoDispatch must return false");
+    }
+
+    // 5. Safe IRP Cancellation Race Condition Prevention Engine
+    {
+        static bool s_CancelHandlerInvoked = false;
+        static io::DeviceObject* s_InvokedDev = nullptr;
+        static io::Irp* s_InvokedIrp = nullptr;
+
+        auto cancelHandler = [](io::DeviceObject* dev, io::Irp* irp) {
+            s_CancelHandlerInvoked = true;
+            s_InvokedDev = dev;
+            s_InvokedIrp = irp;
+        };
+
+        io::DeviceObject testDev;
+        testDev.stackSize = 1;
+
+        io::Irp* irpToCancel = io::IoAllocateIrp(1);
+        irpToCancel->deviceObject = &testDev;
+
+        io::PDRIVER_CANCEL prevRoutine = io::IoSetCancelRoutine(irpToCancel, cancelHandler);
+        TEST_ASSERT(prevRoutine == nullptr, "Previous cancel routine must be nullptr");
+        TEST_ASSERT(irpToCancel->cancelRoutine == cancelHandler, "Cancel routine must be set");
+
+        bool cancelRet = io::IoCancelIrp(irpToCancel);
+        TEST_ASSERT(cancelRet == true, "IoCancelIrp must return true when cancel routine was executed");
+        TEST_ASSERT(s_CancelHandlerInvoked == true, "Cancel routine must have executed");
+        TEST_ASSERT(s_InvokedDev == &testDev, "Cancel handler device must match");
+        TEST_ASSERT(s_InvokedIrp == irpToCancel, "Cancel handler IRP must match");
+        TEST_ASSERT(irpToCancel->cancel == true, "irp->cancel flag must be true");
+        TEST_ASSERT(irpToCancel->cancelRoutine == nullptr, "cancelRoutine must be cleared to nullptr");
+
+        // Race Condition Simulation:
+        // Scenario: Driver dequeues IRP, attempts to clear cancel routine under cancel spinlock.
+        io::Irp* raceIrp = io::IoAllocateIrp(1);
+        raceIrp->deviceObject = &testDev;
+        io::IoSetCancelRoutine(raceIrp, cancelHandler);
+
+        // Cancellation runs first (e.g. timeout thread or user cancel)
+        io::IoCancelIrp(raceIrp);
+
+        // Driver dequeues IRP and tries to clear cancel routine
+        ke::KIRQL oldIrql = ke::PASSIVE_LEVEL;
+        io::IoAcquireCancelSpinLock(&oldIrql);
+        io::PDRIVER_CANCEL dpcClearedRoutine = io::IoSetCancelRoutine(raceIrp, nullptr);
+        if (dpcClearedRoutine == nullptr) {
+            // Driver detects cancellation race condition: cancel routine already took ownership!
+            io::IoReleaseCancelSpinLock(oldIrql);
+            TEST_ASSERT(raceIrp->cancel == true, "Race IRP must have cancel flag set to true");
+            // Driver does NOT call IoCompleteRequest; cancel routine owns termination.
+        } else {
+            io::IoReleaseCancelSpinLock(oldIrql);
+            TEST_ASSERT(false, "Cancel routine should already have been cleared by IoCancelIrp");
+        }
+
+        io::IoFreeIrp(irpToCancel);
+        io::IoFreeIrp(raceIrp);
+    }
+
+    // 6. Device Queue Serialization (IoStartPacket & IoStartNextPacket)
+    {
+        static std::vector<io::Irp*> s_ExecutedPackets;
+        s_ExecutedPackets.clear();
+
+        io::DriverObject queueDrv;
+        queueDrv.driverStartIo = [](io::DeviceObject*, io::Irp* irp) {
+            s_ExecutedPackets.push_back(irp);
+        };
+
+        io::DeviceObject queueDev;
+        queueDev.driverObject = &queueDrv;
+        queueDev.stackSize = 1;
+
+        io::Irp* p1 = io::IoAllocateIrp(1);
+        io::Irp* p2 = io::IoAllocateIrp(1);
+        io::Irp* p3 = io::IoAllocateIrp(1);
+
+        // 1st Packet: Device is idle, starts immediately
+        io::IoStartPacket(&queueDev, p1);
+        TEST_ASSERT(queueDev.deviceQueue.busy == true, "Device queue must become busy");
+        TEST_ASSERT(queueDev.currentIrp == p1, "currentIrp must be set to p1");
+        TEST_ASSERT(s_ExecutedPackets.size() == 1 && s_ExecutedPackets[0] == p1, "p1 must be dispatched to driverStartIo");
+
+        // 2nd Packet: Device is busy, should be queued
+        io::IoStartPacket(&queueDev, p2);
+        TEST_ASSERT(queueDev.deviceQueue.queue.size() == 1, "p2 must be placed in device queue");
+        TEST_ASSERT(s_ExecutedPackets.size() == 1, "p2 must not yet be dispatched");
+
+        // 3rd Packet: Device is busy, should be queued
+        io::IoStartPacket(&queueDev, p3);
+        TEST_ASSERT(queueDev.deviceQueue.queue.size() == 2, "p3 must be placed in device queue");
+        TEST_ASSERT(s_ExecutedPackets.size() == 1, "p3 must not yet be dispatched");
+
+        // Driver completes p1 and starts next packet
+        io::IoStartNextPacket(&queueDev);
+        TEST_ASSERT(queueDev.deviceQueue.busy == true, "Queue must remain busy with remaining packets");
+        TEST_ASSERT(queueDev.currentIrp == p2, "currentIrp must advance to p2");
+        TEST_ASSERT(queueDev.deviceQueue.queue.size() == 1, "Queue size must decrease to 1");
+        TEST_ASSERT(s_ExecutedPackets.size() == 2 && s_ExecutedPackets[1] == p2, "p2 must be dispatched to driverStartIo");
+
+        // Driver completes p2 and starts next packet
+        io::IoStartNextPacket(&queueDev);
+        TEST_ASSERT(queueDev.currentIrp == p3, "currentIrp must advance to p3");
+        TEST_ASSERT(queueDev.deviceQueue.queue.empty(), "Queue must now be empty");
+        TEST_ASSERT(s_ExecutedPackets.size() == 3 && s_ExecutedPackets[2] == p3, "p3 must be dispatched to driverStartIo");
+
+        // Driver completes p3 and starts next packet on empty queue
+        io::IoStartNextPacket(&queueDev);
+        TEST_ASSERT(queueDev.deviceQueue.busy == false, "Device queue must be idle when empty");
+        TEST_ASSERT(queueDev.currentIrp == nullptr, "currentIrp must be nullptr when idle");
+
+        io::IoFreeIrp(p1);
+        io::IoFreeIrp(p2);
+        io::IoFreeIrp(p3);
+    }
+
+    // 7. Telemetry Verification & Teardown
+    {
+        auto telem = io::IoQueryTelemetry();
+        TEST_ASSERT(telem.totalIrpsAllocated >= 6, "totalIrpsAllocated must be >= 6");
+        TEST_ASSERT(telem.totalIrpsFreed >= 5, "totalIrpsFreed must be >= 5");
+        TEST_ASSERT(telem.totalIrpsCompleted >= 3, "totalIrpsCompleted must be >= 3");
+        TEST_ASSERT(telem.totalBufferedIoBytes > 0, "totalBufferedIoBytes must be > 0");
+        TEST_ASSERT(telem.totalDirectIoBytes > 0, "totalDirectIoBytes must be > 0");
+        TEST_ASSERT(telem.totalNeitherIoBytes > 0, "totalNeitherIoBytes must be > 0");
+        TEST_ASSERT(telem.totalFastIoReads >= 2, "totalFastIoReads must be >= 2");
+        TEST_ASSERT(telem.totalFastIoWrites >= 1, "totalFastIoWrites must be >= 1");
+        TEST_ASSERT(telem.totalFastIoDeviceControls >= 1, "totalFastIoDeviceControls must be >= 1");
+        TEST_ASSERT(telem.totalFastIoSuccesses >= 3, "totalFastIoSuccesses must be >= 3");
+        TEST_ASSERT(telem.totalFastIoBypasses >= 1, "totalFastIoBypasses must be >= 1");
+        TEST_ASSERT(telem.totalIrpsCancelled >= 2, "totalIrpsCancelled must be >= 2");
+        TEST_ASSERT(telem.totalCancelRoutinesInvoked >= 2, "totalCancelRoutinesInvoked must be >= 2");
+        TEST_ASSERT(telem.totalDeviceQueuePacketsStarted >= 3, "totalDeviceQueuePacketsStarted must be >= 3");
+        TEST_ASSERT(telem.totalDeviceQueuePacketsQueued >= 2, "totalDeviceQueuePacketsQueued must be >= 2");
+
+        io::IoResetTelemetryForTesting();
+        auto telemReset = io::IoQueryTelemetry();
+        TEST_ASSERT(telemReset.totalIrpsAllocated == 0, "IoResetTelemetryForTesting must zero out all counters");
+    }
+
+    std::cout << "[TEST] Suite 239: Horizon 23 - Sovereign I/O Subsystem FastIo, Buffering & Cancellation PASSED.\n";
+}
+
+
 
 

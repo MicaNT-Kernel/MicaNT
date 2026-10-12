@@ -292,7 +292,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite228")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite239")) {
+        RUN_TEST(Test_Horizon23_IoSubsystem_FastIo_Cancellation_And_BufferingModes);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite238") {
+        RUN_TEST(Test_Horizon22_ConfigurationManager_HiveRefinement_Coalescing_And_Security);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite237") {
+        RUN_TEST(Test_Horizon21_ExecutiveLPC_ALPC_ThreeWayHandshake_And_Impersonation);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite228") {
         RUN_TEST(Test_Tier4_Multimedia_Creative_Workstation_Ecosystem_Suite);
         return g_FailedTests;
     }
@@ -1028,6 +1040,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon20_ObjectManager_Lifecycle_Symlinks_And_Callbacks);
     RUN_TEST(Test_Horizon21_ExecutiveLPC_ALPC_ThreeWayHandshake_And_Impersonation);
     RUN_TEST(Test_Horizon22_ConfigurationManager_HiveRefinement_Coalescing_And_Security);
+    RUN_TEST(Test_Horizon23_IoSubsystem_FastIo_Cancellation_And_BufferingModes);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
