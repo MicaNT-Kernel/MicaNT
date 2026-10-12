@@ -34,6 +34,8 @@ struct SyscallDescriptor {
  */
 class SyscallDispatcher {
 public:
+    using ShadowDispatcherFn = std::function<NtStatus(const SyscallFrame&)>;
+
     static SyscallDispatcher& get() {
         static SyscallDispatcher instance;
         return instance;
@@ -48,7 +50,21 @@ public:
         };
     }
 
+    void setShadowDispatcher(ShadowDispatcherFn fn) {
+        shadowDispatcher_ = std::move(fn);
+    }
+
+    [[nodiscard]] bool hasShadowDispatcher() const noexcept {
+        return static_cast<bool>(shadowDispatcher_);
+    }
+
     [[nodiscard]] NtStatus dispatch(const SyscallFrame& frame) const {
+        if (frame.ssn >= 0x1000) {
+            if (shadowDispatcher_) {
+                return shadowDispatcher_(frame);
+            }
+            return NtStatus::InvalidDeviceRequest;
+        }
         auto it = table_.find(frame.ssn);
         if (it == table_.end()) {
             return NtStatus::InvalidDeviceRequest;
@@ -73,6 +89,7 @@ private:
         initializeStandardTable();
     }
     std::unordered_map<uint32_t, SyscallDescriptor> table_;
+    ShadowDispatcherFn shadowDispatcher_{};
 };
 
 } // namespace micant::sys

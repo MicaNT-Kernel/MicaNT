@@ -10552,6 +10552,476 @@ void Test_Horizon35_ACPI_HAL_DeviceTree_And_AML_Interpreter() {
     std::cout << "[TEST] Suite 251: Horizon 35 - ACPI / HAL Device Tree & AML Interpreter PASSED.\n";
 }
 
+// ============================================================================
+// Suite 252: Horizon 36 - Kernel-to-User Subsystem Bridge, Shadow SSDT & Win32k
+// ============================================================================
+
+void Test_Horizon36_KernelToUser_ShadowSSDT_And_Win32k_Subsystem() {
+    std::cout << "[TEST] Running Suite 252: Horizon 36 - Kernel-to-User Subsystem Bridge, Shadow SSDT & Win32k Architecture...\n";
+
+    // ------------------------------------------------------------------------
+    // Phase 1: Win32k & Shadow SSDT Dispatcher Initialization & Table Verification
+    // ------------------------------------------------------------------------
+    {
+        win32k::InitializeWin32kSubsystemExports();
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+        win32kSub.resetForTesting();
+
+        auto& dispatcher = sys::SyscallDispatcher::get();
+        TEST_ASSERT(dispatcher.hasShadowDispatcher(), "SyscallDispatcher must have a registered shadow dispatcher");
+
+        // Verify standard syscalls (ssn < 0x1000) are handled by standard dispatcher
+        sys::SyscallFrame ntFrame{
+            .ssn = sys::SSN_NtYieldExecution,
+            .arg1 = 0, .arg2 = 0, .arg3 = 0, .arg4 = 0,
+            .stackArgs = nullptr, .stackArgCount = 0
+        };
+        NtStatus ntStatus = dispatcher.dispatch(ntFrame);
+        TEST_ASSERT(ntStatus == NtStatus::Success, "Standard NT syscall must dispatch successfully");
+
+        // Verify shadow syscalls (ssn >= 0x1000) route to Shadow SSDT
+        sys::SyscallFrame shadowGetDcFrame{
+            .ssn = win32k::SSN_NTUSER_GETDC,
+            .arg1 = 0, .arg2 = 0, .arg3 = 0, .arg4 = 0,
+            .stackArgs = nullptr, .stackArgCount = 0
+        };
+        NtStatus shadowStatus = dispatcher.dispatch(shadowGetDcFrame);
+        TEST_ASSERT(shadowStatus == NtStatus::Success, "Shadow SSDT SSN_NTUSER_GETDC must succeed");
+
+        // Out-of-range / unhandled shadow syscall
+        sys::SyscallFrame invalidShadowFrame{
+            .ssn = 0x1FFF,
+            .arg1 = 0, .arg2 = 0, .arg3 = 0, .arg4 = 0,
+            .stackArgs = nullptr, .stackArgCount = 0
+        };
+        NtStatus invStatus = dispatcher.dispatch(invalidShadowFrame);
+        TEST_ASSERT(invStatus == NtStatus::InvalidDeviceRequest, "Unhandled shadow syscall must return InvalidDeviceRequest");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 2: WindowStation (WinSta0) & Desktop (Default, Winlogon) Object Hierarchy
+    // ------------------------------------------------------------------------
+    {
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+
+        // 1. Interactive WindowStation WinSta0
+        win32k::HWINSTA hWinSta0 = win32kSub.openWindowStation(L"WinSta0");
+        TEST_ASSERT(hWinSta0 != nullptr, "WinSta0 interactive WindowStation must exist");
+        TEST_ASSERT(win32kSub.getProcessWindowStation() == hWinSta0, "Current process WindowStation must be WinSta0");
+
+        // 2. Default Desktops on WinSta0
+        win32k::HDESK hDeskDefault = win32kSub.openDesktop(L"Default");
+        win32k::HDESK hDeskWinlogon = win32kSub.openDesktop(L"Winlogon");
+        win32k::HDESK hDeskScreenSaver = win32kSub.openDesktop(L"Screen-saver");
+        TEST_ASSERT(hDeskDefault != nullptr, "Default desktop must exist");
+        TEST_ASSERT(hDeskWinlogon != nullptr, "Winlogon desktop must exist");
+        TEST_ASSERT(hDeskScreenSaver != nullptr, "Screen-saver desktop must exist");
+
+        // 3. Desktop Switching FSM
+        auto curDesk = win32kSub.getCurrentDesktop();
+        TEST_ASSERT(curDesk != nullptr && curDesk->getName() == L"Default", "Initial desktop must be Default");
+
+        BOOL swOk = win32k::NtUserSwitchDesktop(hDeskWinlogon);
+        TEST_ASSERT(swOk == win32k::TRUE_VAL, "Switching to Winlogon desktop must succeed");
+        TEST_ASSERT(win32kSub.getCurrentDesktop()->getName() == L"Winlogon", "Active desktop must now be Winlogon");
+
+        // Switch back to Default
+        win32k::NtUserSwitchDesktop(hDeskDefault);
+        TEST_ASSERT(win32kSub.getCurrentDesktop()->getName() == L"Default", "Active desktop must return to Default");
+
+        // 4. Custom Service WindowStation
+        win32k::HWINSTA hSvcSta = win32k::NtUserCreateWindowStation(L"Service-0x0-3e7$", 0, nullptr);
+        TEST_ASSERT(hSvcSta != nullptr, "Service WindowStation creation must succeed");
+
+        BOOL setWsOk = win32k::NtUserSetProcessWindowStation(hSvcSta);
+        TEST_ASSERT(setWsOk == win32k::TRUE_VAL, "Setting process WindowStation must succeed");
+        TEST_ASSERT(win32k::NtUserGetProcessWindowStation() == hSvcSta, "Process WindowStation must match");
+
+        // Restore WinSta0
+        win32k::NtUserSetProcessWindowStation(hWinSta0);
+        TEST_ASSERT(win32k::NtUserGetProcessWindowStation() == hWinSta0, "Process WindowStation must be WinSta0");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: Desktop Heap Allocation, Dual Mapping & Client Read-Only Views
+    // ------------------------------------------------------------------------
+    {
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+        auto desk = win32kSub.getCurrentDesktop();
+        TEST_ASSERT(desk != nullptr, "Current desktop must exist");
+
+        auto heap = desk->getHeap();
+        TEST_ASSERT(heap != nullptr, "Desktop heap must be allocated");
+        TEST_ASSERT(heap->getHeapSize() == 8 * 1024 * 1024, "Desktop heap size must default to 8MB");
+        TEST_ASSERT(heap->getClientBaseAddress() != nullptr, "Desktop heap client base address must be valid");
+
+        // Create a window to allocate CLIENT_WND_INFO in Desktop Heap
+        win32k::HWND hWndTest = win32k::NtUserCreateWindowEx(
+            win32k::WS_EX_APPWINDOW, L"TestWndClass", L"DesktopHeapWindow",
+            win32k::WS_OVERLAPPEDWINDOW | win32k::WS_VISIBLE,
+            50, 60, 640, 480, nullptr, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hWndTest != nullptr, "CreateWindowEx must succeed");
+
+        uint64_t heapOffset = heap->getOffsetForHwnd(hWndTest);
+        TEST_ASSERT(heapOffset > 0, "Window must have an allocated desktop heap offset");
+        TEST_ASSERT((heapOffset & 0x0F) == 0, "Desktop heap allocation must be 16-byte aligned");
+
+        // Direct read-only client view inspection (zero syscall overhead)
+        const win32k::CLIENT_WND_INFO* clientInfo = heap->getClientWnd(heapOffset);
+        TEST_ASSERT(clientInfo != nullptr, "Client window info pointer must be valid");
+        TEST_ASSERT(clientInfo->hwnd == hWndTest, "Client info HWND must match");
+        TEST_ASSERT(clientInfo->rcWindow.left == 50 && clientInfo->rcWindow.top == 60, "Client info window position match");
+        TEST_ASSERT(clientInfo->rcWindow.width() == 640 && clientInfo->rcWindow.height() == 480, "Client info window dimensions match");
+        TEST_ASSERT(clientInfo->isVisible == true, "Client info visibility must match WS_VISIBLE");
+
+        // Update window via ShowWindow(SW_HIDE) and verify client view updates in-place
+        win32k::NtUserShowWindow(hWndTest, win32k::SW_HIDE);
+        TEST_ASSERT(clientInfo->isVisible == false, "Client view visibility must reflect SW_HIDE with zero syscall read overhead");
+
+        // Update window position
+        win32k::NtUserSetWindowPos(hWndTest, nullptr, 100, 120, 800, 600, win32k::SWP_NOZORDER | win32k::SWP_SHOWWINDOW);
+        TEST_ASSERT(clientInfo->isVisible == true, "Client view must reflect SWP_SHOWWINDOW");
+        TEST_ASSERT(clientInfo->rcWindow.left == 100 && clientInfo->rcWindow.top == 120, "Client view must reflect updated position");
+        TEST_ASSERT(clientInfo->rcWindow.width() == 800 && clientInfo->rcWindow.height() == 600, "Client view must reflect updated dimensions");
+
+        win32k::NtUserDestroyWindow(hWndTest);
+        TEST_ASSERT(heap->getOffsetForHwnd(hWndTest) == 0, "Desktop heap block must be released upon window destruction");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: Window Creation (WND), Parent-Child Z-Ordering & Rectangle Geometry
+    // ------------------------------------------------------------------------
+    {
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+
+        // 1. Top-Level Main Window
+        win32k::HWND hWndMain = win32k::NtUserCreateWindowEx(
+            0, L"MainWindowClass", L"Main Application",
+            win32k::WS_OVERLAPPEDWINDOW | win32k::WS_VISIBLE,
+            0, 0, 1024, 768, nullptr, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hWndMain != nullptr, "Main window creation must succeed");
+
+        auto wndMain = win32kSub.getWindow(hWndMain);
+        TEST_ASSERT(wndMain != nullptr, "Window structure must be retrievable from kernel");
+        TEST_ASSERT(wndMain->rcWindow.width() == 1024 && wndMain->rcWindow.height() == 768, "Main window dimensions");
+
+        // 2. Child Window
+        win32k::HWND hWndChild = win32k::NtUserCreateWindowEx(
+            0, L"ChildWindowClass", L"Child View",
+            win32k::WS_CHILD | win32k::WS_VISIBLE,
+            10, 10, 300, 200, hWndMain, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hWndChild != nullptr, "Child window creation must succeed");
+
+        auto wndChild = win32kSub.getWindow(hWndChild);
+        TEST_ASSERT(wndChild != nullptr && wndChild->hwndParent == hWndMain, "Child window parent must be hWndMain");
+        TEST_ASSERT(wndMain->children.size() == 1 && wndMain->children[0] == hWndChild, "Parent children list must contain child");
+
+        // 3. Topmost Window & Z-Order Management
+        win32k::HWND hWndTopmost = win32k::NtUserCreateWindowEx(
+            win32k::WS_EX_TOPMOST, L"TopmostClass", L"Overlay HUD",
+            win32k::WS_POPUP | win32k::WS_VISIBLE,
+            200, 200, 400, 300, nullptr, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hWndTopmost != nullptr, "Topmost window creation must succeed");
+
+        auto desk = win32kSub.getCurrentDesktop();
+        auto zOrder = desk->getZOrder();
+        TEST_ASSERT(!zOrder.empty() && zOrder[0] == hWndTopmost, "Topmost window must be at front of Z-order");
+
+        // Bring main window to top
+        win32k::NtUserSetWindowPos(hWndMain, win32k::HWND_TOP, 0, 0, 0, 0, win32k::SWP_NOMOVE | win32k::SWP_NOSIZE);
+        auto zOrderAfter = desk->getZOrder();
+        TEST_ASSERT(zOrderAfter[0] == hWndMain, "Main window must now be at front of Z-order");
+
+        // Clean up
+        win32k::NtUserDestroyWindow(hWndChild);
+        win32k::NtUserDestroyWindow(hWndMain);
+        win32k::NtUserDestroyWindow(hWndTopmost);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: Thread Message Queue, Priority Scheduling & Message Pump
+    // ------------------------------------------------------------------------
+    {
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+        uint32_t tid = 404;
+
+        win32k::HWND hWndPump = win32kSub.createWindowEx(
+            0, L"PumpClass", L"Pump Window",
+            win32k::WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, nullptr, nullptr, nullptr, nullptr,
+            tid, 4);
+        TEST_ASSERT(hWndPump != nullptr, "Pump window creation must succeed");
+
+        auto queue = win32kSub.getOrCreateThreadQueue(tid);
+        TEST_ASSERT(queue != nullptr, "Thread message queue must be created for GUI thread");
+        TEST_ASSERT(queue->getThreadId() == tid, "Queue TID must match");
+
+        // 1. Post FIFO Messages via NtUserPostMessage
+        win32k::NtUserPostMessage(hWndPump, win32k::WM_USER + 1, 100, 200);
+        win32k::NtUserPostMessage(hWndPump, win32k::WM_USER + 2, 300, 400);
+        win32k::NtUserPostMessage(hWndPump, win32k::WM_USER + 3, 500, 600);
+        TEST_ASSERT(queue->getPostedCount() == 3, "Posted queue must have 3 messages");
+        TEST_ASSERT((queue->getWakeMask() & win32k::QS_POSTMESSAGE) != 0, "Wake mask must include QS_POSTMESSAGE");
+
+        // 2. PeekMessage without removal
+        win32k::MSG peekMsg{};
+        BOOL peekRes = queue->peekMessage(peekMsg, nullptr, 0, 0, win32k::PM_NOREMOVE);
+        TEST_ASSERT(peekRes == true, "PeekMessage PM_NOREMOVE must find message");
+        TEST_ASSERT(peekMsg.message == win32k::WM_USER + 1, "Peeked message must be first posted message");
+        TEST_ASSERT(queue->getPostedCount() == 3, "Count must remain 3 after PM_NOREMOVE");
+
+        // 3. GetMessage FIFO Extraction
+        win32k::MSG getMsg{};
+        BOOL g1 = queue->getMessage(getMsg, nullptr, 0, 0);
+        TEST_ASSERT(g1 == win32k::TRUE_VAL && getMsg.message == win32k::WM_USER + 1, "First message must be WM_USER + 1");
+
+        BOOL g2 = queue->getMessage(getMsg, nullptr, 0, 0);
+        TEST_ASSERT(g2 == win32k::TRUE_VAL && getMsg.message == win32k::WM_USER + 2, "Second message must be WM_USER + 2");
+
+        BOOL g3 = queue->getMessage(getMsg, nullptr, 0, 0);
+        TEST_ASSERT(g3 == win32k::TRUE_VAL && getMsg.message == win32k::WM_USER + 3, "Third message must be WM_USER + 3");
+        TEST_ASSERT(queue->getPostedCount() == 0, "Posted queue must be empty after all retrieved");
+
+        // 4. Timers and Timer Messages
+        queue->setTimer(nullptr, 77, 0, nullptr); // 0ms interval triggers immediately
+        TEST_ASSERT(queue->getTimerCount() == 1, "Timer count must be 1");
+        TEST_ASSERT((queue->getWakeMask() & win32k::QS_TIMER) != 0, "Wake mask must include QS_TIMER");
+
+        BOOL gTmr = queue->getMessage(getMsg, nullptr, 0, 0);
+        TEST_ASSERT(gTmr == win32k::TRUE_VAL && getMsg.message == win32k::WM_TIMER && getMsg.wParam == 77, "WM_TIMER must be generated");
+
+        queue->killTimer(nullptr, 77);
+        TEST_ASSERT(queue->getTimerCount() == 0, "Timer count must be 0 after killTimer");
+
+        // 5. WM_QUIT Message Pump Termination
+        win32k::NtUserPostMessage(hWndPump, win32k::WM_QUIT, 0, 0);
+        BOOL gQuit = queue->getMessage(getMsg, nullptr, 0, 0);
+        TEST_ASSERT(gQuit == win32k::FALSE_VAL && getMsg.message == win32k::WM_QUIT, "WM_QUIT must return FALSE_VAL to exit message pump");
+
+        win32k::NtUserDestroyWindow(hWndPump);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: Inter-Thread Synchronous Messaging (SendMessage) & Wait Completion
+    // ------------------------------------------------------------------------
+    {
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+
+        // Create target window owned by TID 200
+        win32k::HWND hWndTarget = win32kSub.createWindowEx(
+            0, L"TargetClass", L"Target Window",
+            win32k::WS_OVERLAPPEDWINDOW, 0, 0, 200, 200, nullptr, nullptr, nullptr, nullptr,
+            200, 4); // TID 200
+        TEST_ASSERT(hWndTarget != nullptr, "Target window creation must succeed");
+
+        // Thread 1 sends synchronous message to Thread 2
+        win32k::LRESULT result = win32kSub.sendMessage(hWndTarget, win32k::WM_COMMAND, 101, 202, 1);
+        TEST_ASSERT(result == 1, "Synchronous inter-thread SendMessage must return completion result 1");
+
+        win32k::NtUserDestroyWindow(hWndTarget);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: Kernel-to-User Trampoline Engine (KeUserModeCallback & NtCallbackReturn)
+    // ------------------------------------------------------------------------
+    {
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+        auto& cbEngine = win32kSub.getCallbacks();
+
+        // 1. Hook Mock User-Mode Callback Dispatcher (simulates user32.dll!__ClientCallServer)
+        static uint32_t s_lastApiIndex = 0;
+        static std::vector<uint8_t> s_lastPayload;
+
+        cbEngine.registerUserModeDispatcher([](uint32_t apiIndex, const void* args, uint32_t length) -> win32k::LRESULT {
+            s_lastApiIndex = apiIndex;
+            s_lastPayload.clear();
+            if (args && length > 0) {
+                const auto* p = reinterpret_cast<const uint8_t*>(args);
+                s_lastPayload.assign(p, p + length);
+            }
+            // Return handled code 0x1337
+            return 0x1337;
+        });
+
+        TEST_ASSERT(cbEngine.hasDispatcher(), "UserModeCallbackEngine must have registered dispatcher");
+
+        // 2. Invoke Trampoline from Kernel
+        const char testData[] = "MicaNT_Win32k_Callback_Packet";
+        void* outBuf = nullptr;
+        uint32_t outLen = 0;
+        win32k::LRESULT userResult = 0;
+
+        NtStatus cbStatus = cbEngine.invokeUserModeCallback(
+            0x42, testData, sizeof(testData), &outBuf, &outLen, &userResult);
+
+        TEST_ASSERT(cbStatus == NtStatus::Success, "invokeUserModeCallback must return Success");
+        TEST_ASSERT(s_lastApiIndex == 0x42, "User dispatcher must receive API index 0x42");
+        TEST_ASSERT(!s_lastPayload.empty() && std::memcmp(s_lastPayload.data(), testData, sizeof(testData)) == 0, "Payload data must match");
+        TEST_ASSERT(userResult == 0x1337, "UserMode result must be 0x1337");
+
+        // 3. Test KeUserModeCallback Driver Export
+        NtStatus kStatus = win32k::KeUserModeCallback(0x55, testData, sizeof(testData), &outBuf, &outLen);
+        TEST_ASSERT(kStatus == NtStatus::Success, "KeUserModeCallback export must return Success");
+        TEST_ASSERT(s_lastApiIndex == 0x55, "User dispatcher must receive API index 0x55");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: GDI Engine: Memory DCs, Compatible Bitmaps & BitBlt Raster Operations
+    // ------------------------------------------------------------------------
+    {
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+        auto& gdi = win32kSub.getGdi();
+
+        // 1. Screen DC & Dimensions
+        win32k::HDC hScreenDC = win32k::NtUserGetDC(nullptr);
+        TEST_ASSERT(hScreenDC != nullptr, "Screen DC must be retrievable");
+
+        // 2. Memory DC Creation
+        win32k::HDC hMemDCDest = win32k::NtGdiCreateCompatibleDC(hScreenDC);
+        win32k::HDC hMemDCSrc = win32k::NtGdiCreateCompatibleDC(hScreenDC);
+        TEST_ASSERT(hMemDCDest != nullptr && hMemDCSrc != nullptr, "CreateCompatibleDC must succeed for dest and src");
+
+        // 3. Compatible Bitmaps
+        win32k::HBITMAP hBmpDest = win32k::NtGdiCreateCompatibleBitmap(hScreenDC, 32, 32);
+        win32k::HBITMAP hBmpSrc = win32k::NtGdiCreateCompatibleBitmap(hScreenDC, 32, 32);
+        TEST_ASSERT(hBmpDest != nullptr && hBmpSrc != nullptr, "CreateCompatibleBitmap must succeed");
+
+        win32k::NtGdiSelectBitmap(hMemDCDest, hBmpDest);
+        win32k::NtGdiSelectBitmap(hMemDCSrc, hBmpSrc);
+
+        // Populate Source Bitmap with color 0x00FF0000 (Pure Red)
+        auto bmpSrcObj = gdi.getBitmap(hBmpSrc);
+        TEST_ASSERT(bmpSrcObj != nullptr, "Source bitmap object must be accessible");
+        bmpSrcObj->clear(0x00FF0000);
+
+        // 4. BitBlt SRCCOPY
+        BOOL bltCopy = win32k::NtGdiBitBlt(hMemDCDest, 0, 0, 32, 32, hMemDCSrc, 0, 0, win32k::SRCCOPY);
+        TEST_ASSERT(bltCopy == win32k::TRUE_VAL, "BitBlt SRCCOPY must succeed");
+        auto bmpDestObj = gdi.getBitmap(hBmpDest);
+        TEST_ASSERT(bmpDestObj->getPixel(0, 0) == 0x00FF0000, "Dest pixel must match source pixel (0x00FF0000) after SRCCOPY");
+
+        // 5. BitBlt BLACKNESS
+        BOOL bltBlack = win32k::NtGdiBitBlt(hMemDCDest, 0, 0, 32, 32, nullptr, 0, 0, win32k::BLACKNESS);
+        TEST_ASSERT(bltBlack == win32k::TRUE_VAL, "BitBlt BLACKNESS must succeed");
+        TEST_ASSERT(bmpDestObj->getPixel(15, 15) == 0x00000000, "Dest pixel must be 0x00000000 after BLACKNESS");
+
+        // 6. BitBlt WHITENESS
+        BOOL bltWhite = win32k::NtGdiBitBlt(hMemDCDest, 0, 0, 32, 32, nullptr, 0, 0, win32k::WHITENESS);
+        TEST_ASSERT(bltWhite == win32k::TRUE_VAL, "BitBlt WHITENESS must succeed");
+        TEST_ASSERT(bmpDestObj->getPixel(15, 15) == 0x00FFFFFF, "Dest pixel must be 0x00FFFFFF after WHITENESS");
+
+        // 7. BitBlt SRCINVERT
+        bmpSrcObj->clear(0x0000FFFF); // Cyan
+        BOOL bltInv = win32k::NtGdiBitBlt(hMemDCDest, 0, 0, 32, 32, hMemDCSrc, 0, 0, win32k::SRCINVERT);
+        TEST_ASSERT(bltInv == win32k::TRUE_VAL, "BitBlt SRCINVERT must succeed");
+        // 0x00FFFFFF ^ 0x0000FFFF = 0x00FF0000
+        TEST_ASSERT((bmpDestObj->getPixel(15, 15) & 0x00FFFFFF) == 0x00FF0000, "Dest pixel must be inverted correctly");
+
+        // 8. Stock Objects Verification
+        void* pWhiteBrush = win32k::NtGdiGetStockObject(win32k::WHITE_BRUSH);
+        void* pBlackBrush = win32k::NtGdiGetStockObject(win32k::BLACK_BRUSH);
+        void* pSysFont = win32k::NtGdiGetStockObject(win32k::SYSTEM_FONT);
+        TEST_ASSERT(pWhiteBrush != nullptr, "WHITE_BRUSH must exist");
+        TEST_ASSERT(pBlackBrush != nullptr, "BLACK_BRUSH must exist");
+        TEST_ASSERT(pSysFont != nullptr, "SYSTEM_FONT must exist");
+
+        // Clean up
+        win32k::NtGdiDeleteObjectApp(hBmpDest);
+        win32k::NtGdiDeleteObjectApp(hBmpSrc);
+        win32k::NtUserReleaseDC(nullptr, hMemDCDest);
+        win32k::NtUserReleaseDC(nullptr, hMemDCSrc);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: WDDM Integration: Blitting to Primary Display Surface
+    // ------------------------------------------------------------------------
+    {
+        auto& win32kSub = win32k::TitanWin32kSubsystem::Instance();
+        auto& wddmSub = wddm::TitanWddmSubsystem::Instance();
+        wddmSub.initialize();
+
+        auto primaryAdapter = wddmSub.getPrimaryAdapter();
+        TEST_ASSERT(primaryAdapter != nullptr, "WDDM Primary Adapter must be available");
+
+        // Create a memory DC with 1920x1080 surface
+        win32k::HDC hScreen = win32k::NtUserGetDC(nullptr);
+        win32k::HDC hSrcDC = win32k::NtGdiCreateCompatibleDC(hScreen);
+        win32k::HBITMAP hBmp = win32k::NtGdiCreateCompatibleBitmap(hScreen, 1920, 1080);
+        win32k::NtGdiSelectBitmap(hSrcDC, hBmp);
+
+        auto bmp = win32kSub.getGdi().getBitmap(hBmp);
+        TEST_ASSERT(bmp != nullptr, "Bitmap must be retrieved");
+        bmp->clear(0x002A2A2A);
+
+        // Blit GDI surface directly into WDDM Primary
+        bool bltPrimaryOk = win32kSub.blitToWddmPrimary(hSrcDC, 0, 0, 1920, 1080);
+        TEST_ASSERT(bltPrimaryOk == true, "blitToWddmPrimary must succeed");
+
+        win32k::NtGdiDeleteObjectApp(hBmp);
+        win32k::NtUserReleaseDC(nullptr, hSrcDC);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: Dynamic Loader Exports, SCM Service Registration & Win32k Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. JanusLDR Driver Exports Verification
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserCreateWindowEx") != nullptr, "win32k.sys NtUserCreateWindowEx must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserDestroyWindow") != nullptr, "win32k.sys NtUserDestroyWindow must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserShowWindow") != nullptr, "win32k.sys NtUserShowWindow must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserSetWindowPos") != nullptr, "win32k.sys NtUserSetWindowPos must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserPostMessage") != nullptr, "win32k.sys NtUserPostMessage must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserSendMessage") != nullptr, "win32k.sys NtUserSendMessage must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserGetMessage") != nullptr, "win32k.sys NtUserGetMessage must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserPeekMessage") != nullptr, "win32k.sys NtUserPeekMessage must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserCreateWindowStation") != nullptr, "win32k.sys NtUserCreateWindowStation must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserCreateDesktop") != nullptr, "win32k.sys NtUserCreateDesktop must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtUserGetDC") != nullptr, "win32k.sys NtUserGetDC must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtGdiCreateCompatibleDC") != nullptr, "win32k.sys NtGdiCreateCompatibleDC must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtGdiCreateCompatibleBitmap") != nullptr, "win32k.sys NtGdiCreateCompatibleBitmap must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtGdiBitBlt") != nullptr, "win32k.sys NtGdiBitBlt must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "KeUserModeCallback") != nullptr, "win32k.sys KeUserModeCallback must exist");
+        TEST_ASSERT(ldr.getExport("win32k.sys", "NtCallbackReturn") != nullptr, "win32k.sys NtCallbackReturn must exist");
+
+        // Split drivers: win32kbase.sys and win32kfull.sys
+        TEST_ASSERT(ldr.getExport("win32kbase.sys", "NtUserCreateWindowEx") != nullptr, "win32kbase.sys NtUserCreateWindowEx must exist");
+        TEST_ASSERT(ldr.getExport("win32kfull.sys", "NtGdiBitBlt") != nullptr, "win32kfull.sys NtGdiBitBlt must exist");
+
+        // 2. SCM Service Record Verification
+        auto& scmMgr = scm::ServiceControlManager::get();
+        auto win32kSvc = scmMgr.getServiceRecord(L"win32k");
+        TEST_ASSERT(win32kSvc != nullptr, "win32k service record must exist in SCM");
+        TEST_ASSERT(win32kSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "win32k must be a kernel driver");
+        TEST_ASSERT(win32kSvc->startType == scm::SERVICE_SYSTEM_START, "win32k must be system start");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("win32k.sys") != nullptr, "win32k.sys must be registered in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("win32kbase.sys") != nullptr, "win32kbase.sys must be registered in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("win32kfull.sys") != nullptr, "win32kfull.sys must be registered in Version Database");
+
+        // 4. Win32k Diagnostic Telemetry Verification
+        win32k::WIN32K_TELEMETRY telem{};
+        BOOL telemOk = win32k::W32kGetTelemetry(&telem);
+        TEST_ASSERT(telemOk == win32k::TRUE_VAL, "W32kGetTelemetry must succeed");
+        TEST_ASSERT(telem.totalSyscallsHandled >= 1, "totalSyscallsHandled must be >= 1");
+        TEST_ASSERT(telem.totalWindowsCreated >= 3, "totalWindowsCreated must be >= 3");
+        TEST_ASSERT(telem.totalWindowsDestroyed >= 1, "totalWindowsDestroyed must be >= 1");
+        TEST_ASSERT(telem.totalMessagesPosted >= 4, "totalMessagesPosted must be >= 4");
+        TEST_ASSERT(telem.totalMessagesSent >= 1, "totalMessagesSent must be >= 1");
+        TEST_ASSERT(telem.totalCallbacksInvoked >= 1, "totalCallbacksInvoked must be >= 1");
+        TEST_ASSERT(telem.totalBitBltsExecuted >= 4, "totalBitBltsExecuted must be >= 4");
+        TEST_ASSERT(telem.activeDesktopsCount >= 3, "activeDesktopsCount must be >= 3");
+        TEST_ASSERT(telem.activeWindowStationsCount >= 1, "activeWindowStationsCount must be >= 1");
+
+        win32k::WIN32K_TELEMETRY directTelem = win32k::W32kQueryTelemetry();
+        TEST_ASSERT(directTelem.totalBitBltsExecuted == telem.totalBitBltsExecuted, "Direct C++ telemetry query must match");
+    }
+
+    std::cout << "[TEST] Suite 252: Horizon 36 - Kernel-to-User Subsystem Bridge, Shadow SSDT & Win32k Architecture PASSED.\n";
+}
+
+
 
 
 

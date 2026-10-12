@@ -71,6 +71,7 @@
 #include "micant/acpi.hpp"
 #include "micant/hdaudio.hpp"
 #include "micant/wddm.hpp"
+#include "micant/win32k.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -293,7 +294,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite251")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite252")) {
+        RUN_TEST(Test_Horizon36_KernelToUser_ShadowSSDT_And_Win32k_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite251") {
         RUN_TEST(Test_Horizon35_ACPI_HAL_DeviceTree_And_AML_Interpreter);
         return g_FailedTests;
     }
@@ -1102,6 +1107,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon33_WDDM32_Display_Driver_Model_And_Graphics_Subsystem);
     RUN_TEST(Test_Horizon34_NDIS6_NetAdapterCx_Networking_Architecture);
     RUN_TEST(Test_Horizon35_ACPI_HAL_DeviceTree_And_AML_Interpreter);
+    RUN_TEST(Test_Horizon36_KernelToUser_ShadowSSDT_And_Win32k_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
