@@ -819,15 +819,16 @@ public:
 
     [[nodiscard]] uint64_t calibrateTscFrequency(uint64_t tscElapsed, uint64_t hpetTicksElapsed) const noexcept {
         if (hpetTicksElapsed == 0 || periodFemtoseconds_ == 0) return 0;
-        uint64_t totalFemtoseconds = hpetTicksElapsed * periodFemtoseconds_;
-        if (totalFemtoseconds == 0) return 0;
-#if defined(__SIZEOF_INT128__) || defined(__clang__) || defined(__GNUC__)
-        unsigned __int128 num = static_cast<unsigned __int128>(tscElapsed) * 1'000'000'000'000'000ULL;
-        return static_cast<uint64_t>(num / totalFemtoseconds);
-#else
+        constexpr uint64_t fsPerSec = 1'000'000'000'000'000ULL;
+        if (fsPerSec % periodFemtoseconds_ == 0) {
+            uint64_t hpetTicksPerSec = fsPerSec / periodFemtoseconds_;
+            if (tscElapsed <= (UINT64_MAX / hpetTicksPerSec)) {
+                return (tscElapsed * hpetTicksPerSec) / hpetTicksElapsed;
+            }
+        }
         double num = static_cast<double>(tscElapsed) * 1e15;
-        return static_cast<uint64_t>(num / static_cast<double>(totalFemtoseconds));
-#endif
+        double denom = static_cast<double>(hpetTicksElapsed) * static_cast<double>(periodFemtoseconds_);
+        return static_cast<uint64_t>(num / denom);
     }
 
 private:
