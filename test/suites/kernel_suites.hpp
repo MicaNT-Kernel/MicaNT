@@ -5007,5 +5007,241 @@ void Test_Horizon21_ExecutiveLPC_ALPC_ThreeWayHandshake_And_Impersonation() {
     std::cout << "[TEST] Suite 237: Horizon 21 - Sovereign Executive LPC/ALPC Architecture, 3-Way Handshake & Impersonation Engine PASSED.\n";
 }
 
+void Test_Horizon22_ConfigurationManager_HiveRefinement_Coalescing_And_Security() {
+    std::cout << "[TEST] Running Suite 238: Horizon 22 - Sovereign Configuration Manager Hive Refinement, Coalescing & Security...\n";
+
+    // 0. Reset and verify baseline telemetry
+    cm::CmResetTelemetryForTesting();
+    auto initialTelem = cm::CmQueryTelemetry();
+    TEST_ASSERT(initialTelem.totalCellsAllocated == 0, "CM telemetry must start clean");
+
+    // 1. Dave Cutler Free Cell Coalescing Engine (CmpCoalesceFreeSpace)
+    cm::CmHive hive;
+    uint32_t cellA = hive.allocateCell(64);
+    uint32_t cellB = hive.allocateCell(64);
+    uint32_t cellC = hive.allocateCell(64);
+    TEST_ASSERT(cellA != cm::HCELL_NIL && cellB != cm::HCELL_NIL && cellC != cm::HCELL_NIL, "Cells must be allocated");
+
+    // Free cellB in the middle, then cellA adjacent to it
+    hive.freeCell(cellB);
+    hive.freeCell(cellA);
+
+    // Verify coalescing occurred
+    auto postCoalesceTelem = cm::CmQueryTelemetry();
+    TEST_ASSERT(postCoalesceTelem.totalCellsFreed >= 2, "totalCellsFreed must be >= 2");
+    TEST_ASSERT(postCoalesceTelem.totalCellBytesCoalesced > 0, "totalCellBytesCoalesced must be > 0 (Cutler coalescing)");
+
+    // Allocate 128 bytes - should fit into the coalesced free block
+    uint32_t coalescedFit = hive.allocateCell(128);
+    TEST_ASSERT(coalescedFit == cellA, "New allocation must reuse the coalesced free block at cellA offset");
+
+    // Free remaining cells
+    hive.freeCell(coalescedFit);
+    hive.freeCell(cellC);
+
+    // 2. Volatile vs Stable Hive Storage Separation (HCELL_INDEX)
+    uint32_t stableCell = hive.allocateCell(128, false);
+    TEST_ASSERT(!cm::HCELL_IS_VOLATILE(stableCell), "Stable cell must not have volatile bit set");
+
+    uint32_t volatileCell = hive.allocateCell(128, true);
+    TEST_ASSERT(cm::HCELL_IS_VOLATILE(volatileCell), "Volatile cell must have volatile bit 31 set");
+
+    const char* stableData = "STABLE_PERSISTENT_PAYLOAD_DISK";
+    const char* volatileData = "VOLATILE_TRANSIENT_MEMORY_ONLY";
+    std::memcpy(hive.getCellData(stableCell), stableData, std::strlen(stableData) + 1);
+    std::memcpy(hive.getCellData(volatileCell), volatileData, std::strlen(volatileData) + 1);
+
+    TEST_ASSERT(std::string(reinterpret_cast<const char*>(hive.getCellData(stableCell))) == stableData, 
+                "Stable cell content must match");
+    TEST_ASSERT(std::string(reinterpret_cast<const char*>(hive.getCellData(volatileCell))) == volatileData, 
+                "Volatile cell content must match");
+
+    // Serializing hive must omit volatile storage
+    std::vector<uint8_t> stableHiveImage = hive.serialize();
+    auto loadedHive = cm::CmHive::deserialize(stableHiveImage);
+    TEST_ASSERT(loadedHive != nullptr && loadedHive->isConsistent(), "Deserialized hive must be valid and consistent");
+    TEST_ASSERT(loadedHive->getVolatileBinsDataSize() == 0, "Loaded hive from disk must have zero volatile bins");
+
+    // 3. Small Value Inline Optimization (VK_DATA_INLINE)
+    uint32_t smallVal = 0xDEADBEEF;
+    std::vector<uint8_t> smallBytes(sizeof(smallVal));
+    std::memcpy(smallBytes.data(), &smallVal, sizeof(smallVal));
+
+    uint32_t smallVkCell = hive.writeVkRecord("SmallDword", cm::RegType::Dword, smallBytes);
+    const auto* smallVkHdr = reinterpret_cast<const cm::VkRecordHeader*>(hive.getCellData(smallVkCell));
+    TEST_ASSERT((smallVkHdr->dataLength & cm::VK_DATA_INLINE) != 0, 
+                "Small value (<= 4 bytes) must set VK_DATA_INLINE bit 31");
+    TEST_ASSERT(smallVkHdr->dataOffset == smallVal, 
+                "Small value must be stored inline directly in dataOffset field");
+
+    std::string readSmallName;
+    cm::KeyValue readSmallVal;
+    bool readSmallOk = hive.readVkRecord(smallVkCell, readSmallName, readSmallVal);
+    TEST_ASSERT(readSmallOk && readSmallName == "SmallDword", "readVkRecord for inline value must succeed");
+    TEST_ASSERT(readSmallVal.asDword() == smallVal, "Inline value content must match original dword");
+
+    // Large value (> 4 bytes) out-of-line storage
+    std::vector<uint8_t> largeBytes(64, 0xAA);
+    uint32_t largeVkCell = hive.writeVkRecord("LargeBlob", cm::RegType::Binary, largeBytes);
+    const auto* largeVkHdr = reinterpret_cast<const cm::VkRecordHeader*>(hive.getCellData(largeVkCell));
+    TEST_ASSERT((largeVkHdr->dataLength & cm::VK_DATA_INLINE) == 0, 
+                "Large value (> 4 bytes) must not set VK_DATA_INLINE");
+
+    std::string readLargeName;
+    cm::KeyValue readLargeVal;
+    bool readLargeOk = hive.readVkRecord(largeVkCell, readLargeName, readLargeVal);
+    TEST_ASSERT(readLargeOk && readLargeName == "LargeBlob", "readVkRecord for large value must succeed");
+    TEST_ASSERT(readLargeVal.data == largeBytes, "Large value data must match original");
+
+    // 4. Subkey Indexing with LH (Hash Leaf)
+    std::vector<std::pair<std::string, uint32_t>> subkeys = {
+        {"ControlSet001", 0x1000},
+        {"ControlSet002", 0x2000},
+        {"HardwareConfig", 0x3000}
+    };
+    uint32_t lhCell = hive.createLhIndex(subkeys);
+    TEST_ASSERT(lhCell != cm::HCELL_NIL, "createLhIndex must succeed");
+
+    const auto* lhHdr = reinterpret_cast<const cm::LhRecordHeader*>(hive.getCellData(lhCell));
+    TEST_ASSERT(lhHdr->signature == cm::LH_SIGNATURE, "Index signature must be 'lh'");
+    TEST_ASSERT(lhHdr->count == 3, "Index count must be 3");
+
+    // 5. Transactional Registry (TxR) Journal Two-Phase Commit & Crash Recovery
+    cm::TxRJournal journal;
+    journal.beginTransaction(hive);
+    TEST_ASSERT(!hive.isConsistent(), "Hive must be inconsistent during open transaction (sequence1 != sequence2)");
+
+    journal.commitTransaction(hive);
+    TEST_ASSERT(hive.isConsistent(), "Hive must be consistent after commit (sequence1 == sequence2)");
+
+    // Simulate crash and recovery
+    hive.setSequence(5, 4); // Mismatched sequence numbers
+    TEST_ASSERT(!hive.isConsistent(), "Mismatched sequence numbers simulate interrupted crash");
+    bool recovered = journal.recoverHive(hive);
+    TEST_ASSERT(recovered, "recoverHive must succeed on inconsistent hive");
+    TEST_ASSERT(hive.isConsistent(), "Hive must be consistent after crash recovery");
+    TEST_ASSERT(hive.getHeader().sequence1 == 5 && hive.getHeader().sequence2 == 5, 
+                "Sequence numbers must be synchronized to highest commit");
+
+    // 6. Security & Access Checking on Keys
+    auto& cm = cm::ConfigurationManager::get();
+    cm.resetForTesting();
+
+    auto userSid = se::Sid::authenticatedUsers();
+    auto adminSid = se::Sid::administrators();
+
+    se::Acl keyDacl;
+    keyDacl.addAllowedAce(adminSid, cm::KEY_ALL_ACCESS);
+    keyDacl.addAllowedAce(userSid, cm::KEY_READ);
+
+    se::SecurityDescriptor keySd;
+    keySd.setOwner(adminSid);
+    keySd.setGroup(adminSid);
+    keySd.setDacl(std::move(keyDacl));
+
+    std::shared_ptr<cm::KeyObject> secureKey;
+    uint32_t disposition = 0;
+    NtStatus createSt = cm.createKeyEx(
+        L"\\Registry\\Machine\\SecureSubsystem",
+        cm::KEY_ALL_ACCESS,
+        cm::REG_OPTION_NON_VOLATILE,
+        secureKey,
+        &disposition,
+        nullptr,
+        &keySd
+    );
+    TEST_ASSERT(NT_SUCCESS(createSt), "createKeyEx for secure key must succeed");
+    TEST_ASSERT(disposition == cm::REG_CREATED_NEW_KEY, "Disposition must be REG_CREATED_NEW_KEY");
+
+    auto adminToken = se::TokenObject::createAdminToken(adminSid);
+    auto userToken = se::TokenObject::createUserToken(userSid);
+
+    // Admin sets value -> Success
+    uint32_t adminVal = 42;
+    std::span<const uint8_t> adminValBytes(reinterpret_cast<const uint8_t*>(&adminVal), sizeof(adminVal));
+    NtStatus setSt = cm::CmSetValueKey(secureKey, L"AdminParam", cm::RegType::Dword, adminValBytes, adminToken.get());
+    TEST_ASSERT(NT_SUCCESS(setSt), "Admin token must be allowed to set value");
+
+    // User sets value -> Access Denied (user only has KEY_READ)
+    uint32_t userVal = 99;
+    std::span<const uint8_t> userValBytes(reinterpret_cast<const uint8_t*>(&userVal), sizeof(userVal));
+    NtStatus denySt = cm::CmSetValueKey(secureKey, L"UserHackedParam", cm::RegType::Dword, userValBytes, userToken.get());
+    TEST_ASSERT(denySt == NtStatus::AccessDenied, "User token without KEY_SET_VALUE must receive STATUS_ACCESS_DENIED");
+
+    // User queries value -> Success (user has KEY_READ)
+    cm::KeyValue queryVal;
+    NtStatus querySt = cm::CmQueryValueKey(secureKey, L"AdminParam", queryVal, userToken.get());
+    TEST_ASSERT(NT_SUCCESS(querySt), "User token with KEY_READ must be allowed to query value");
+    TEST_ASSERT(queryVal.asDword() == 42, "Queried value must match");
+
+    // 7. Volatile Key Hierarchy
+    std::shared_ptr<cm::KeyObject> volatileKey;
+    createSt = cm.createKeyEx(
+        L"\\Registry\\Machine\\SYSTEM\\VolatileState",
+        cm::KEY_ALL_ACCESS,
+        cm::REG_OPTION_VOLATILE,
+        volatileKey,
+        nullptr
+    );
+    TEST_ASSERT(NT_SUCCESS(createSt), "Creating volatile key must succeed");
+    TEST_ASSERT(volatileKey->isVolatile(), "Key created with REG_OPTION_VOLATILE must report isVolatile() == true");
+
+    auto volatileSubkey = volatileKey->createSubkey(L"SessionData");
+    TEST_ASSERT(volatileSubkey->isVolatile(), "Subkey of volatile key must inherit volatile flag");
+
+    // 8. Symbolic Link Keys & Loop Prevention
+    auto linkKey = cm.createSymbolicLinkKey(
+        L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet",
+        L"\\Registry\\Machine\\SYSTEM\\ControlSet001"
+    );
+    TEST_ASSERT(linkKey != nullptr, "createSymbolicLinkKey must succeed");
+    TEST_ASSERT(linkKey->isSymlink(), "Symlink key must report isSymlink() == true");
+
+    // Create target key with value
+    auto ccs001 = cm.resolvePath(L"\\Registry\\Machine\\SYSTEM\\ControlSet001");
+    if (!ccs001) {
+        auto sysKey = cm.resolvePath(L"\\Registry\\Machine\\SYSTEM");
+        ccs001 = sysKey->createSubkey(L"ControlSet001");
+    }
+    ccs001->setValueString(L"ComputerName", L"MICANT-STATION-01");
+
+    // Resolve path through symlink
+    auto resolvedViaLink = cm.resolvePath(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet");
+    TEST_ASSERT(resolvedViaLink != nullptr, "Path through symlink must resolve to target key");
+    const auto* compVal = resolvedViaLink->getValue(L"ComputerName");
+    TEST_ASSERT(compVal != nullptr && compVal->asString() == L"MICANT-STATION-01", 
+                "Value queried through symlink must match target key value");
+
+    // Test Circular Symbolic Link Loop Detection
+    cm.createSymbolicLinkKey(L"\\Registry\\Machine\\LoopA", L"\\Registry\\Machine\\LoopB");
+    cm.createSymbolicLinkKey(L"\\Registry\\Machine\\LoopB", L"\\Registry\\Machine\\LoopA");
+
+    NtStatus loopStatus = NtStatus::Success;
+    auto loopKey = cm.resolvePath(L"\\Registry\\Machine\\LoopA", true, nullptr, cm::KEY_READ, &loopStatus);
+    TEST_ASSERT(loopKey == nullptr, "Circular symlink must return nullptr");
+    TEST_ASSERT(loopStatus == NtStatus::CircularReference, "Circular symlink must report STATUS_CIRCULAR_REFERENCE");
+
+    // 9. Telemetry Verification & Teardown
+    auto telemetry = cm::CmQueryTelemetry();
+    TEST_ASSERT(telemetry.totalCellsAllocated >= 4, "totalCellsAllocated must be >= 4");
+    TEST_ASSERT(telemetry.totalCellsFreed >= 2, "totalCellsFreed must be >= 2");
+    TEST_ASSERT(telemetry.totalCellBytesCoalesced > 0, "totalCellBytesCoalesced must be > 0");
+    TEST_ASSERT(telemetry.totalKeysCreated >= 3, "totalKeysCreated must be >= 3");
+    TEST_ASSERT(telemetry.totalVolatileKeysCreated >= 1, "totalVolatileKeysCreated must be >= 1");
+    TEST_ASSERT(telemetry.totalTransactionsCommitted >= 1, "totalTransactionsCommitted must be >= 1");
+    TEST_ASSERT(telemetry.totalRecoveriesPerformed >= 1, "totalRecoveriesPerformed must be >= 1");
+    TEST_ASSERT(telemetry.totalSecurityChecksPassed >= 2, "totalSecurityChecksPassed must be >= 2");
+    TEST_ASSERT(telemetry.totalSecurityChecksDenied >= 1, "totalSecurityChecksDenied must be >= 1");
+    TEST_ASSERT(telemetry.totalSymlinksResolved >= 1, "totalSymlinksResolved must be >= 1");
+
+    cm::CmResetTelemetryForTesting();
+    auto resetTelem = cm::CmQueryTelemetry();
+    TEST_ASSERT(resetTelem.totalCellsAllocated == 0, "Telemetry reset must clear all counters to 0");
+
+    cm.resetForTesting();
+
+    std::cout << "[TEST] Suite 238: Horizon 22 - Sovereign Configuration Manager Hive Refinement, Coalescing & Security PASSED.\n";
+}
+
 
 

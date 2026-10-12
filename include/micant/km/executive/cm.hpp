@@ -4,12 +4,15 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <memory>
 #include <variant>
 #include <span>
 #include <cstring>
 #include <algorithm>
+#include <mutex>
+#include <sstream>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 #include "ob.hpp"
@@ -18,7 +21,7 @@
 namespace micant::cm {
 
 // ============================================================================
-// Standard Registry Access Rights (Win32/NT KEY_* rights)
+// 1. Standard Registry Access Rights (Win32/NT KEY_* rights)
 // ============================================================================
 inline constexpr uint32_t KEY_QUERY_VALUE        = 0x0001;
 inline constexpr uint32_t KEY_SET_VALUE          = 0x0002;
@@ -42,6 +45,20 @@ inline constexpr uint32_t KEY_ALL_ACCESS =
     ((se::STANDARD_RIGHTS_ALL | KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_CREATE_SUB_KEY | 
       KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY | KEY_CREATE_LINK) & (~se::SYNCHRONIZE));
 
+// Key Creation Options
+inline constexpr uint32_t REG_OPTION_NON_VOLATILE   = 0x00000000;
+inline constexpr uint32_t REG_OPTION_VOLATILE       = 0x00000001;
+inline constexpr uint32_t REG_OPTION_CREATE_LINK    = 0x00000002;
+inline constexpr uint32_t REG_OPTION_BACKUP_RESTORE = 0x00000004;
+inline constexpr uint32_t REG_OPTION_OPEN_LINK      = 0x00010000;
+
+// Key Disposition Values
+inline constexpr uint32_t REG_CREATED_NEW_KEY       = 0x00000001;
+inline constexpr uint32_t REG_OPENED_EXISTING_KEY   = 0x00000002;
+
+// Maximum symbolic link traversal cap
+inline constexpr size_t CM_MAX_SYMLINK_RECURSION   = 32;
+
 // Standard Registry Value Types
 enum class RegType : uint32_t {
     None           = 0,
@@ -50,7 +67,7 @@ enum class RegType : uint32_t {
     Binary         = 3, // Free form binary
     Dword          = 4, // 32-bit little-endian integer
     DwordBigEndian = 5,
-    Link           = 6,
+    Link           = 6, // Symbolic Link
     MultiSz        = 7,
     Qword          = 11 // 64-bit integer
 };
@@ -60,7 +77,7 @@ struct KeyValue {
     std::vector<uint8_t> data;
 
     [[nodiscard]] std::wstring asString() const {
-        if (type != RegType::Sz || data.empty()) return {};
+        if ((type != RegType::Sz && type != RegType::Link && type != RegType::ExpandSz) || data.empty()) return {};
         return std::wstring(reinterpret_cast<const wchar_t*>(data.data()), data.size() / sizeof(wchar_t));
     }
 
@@ -80,7 +97,43 @@ struct KeyValue {
 };
 
 // ============================================================================
-// NT Registry On-Disk Format Constants & Structures (REGF / HBIN / NK / VK / SK / LH)
+// 2. Diagnostic Telemetry
+// ============================================================================
+struct CM_TELEMETRY {
+    size_t totalHivesLoaded{0};
+    size_t totalHivesSaved{0};
+    size_t totalCellsAllocated{0};
+    size_t totalCellsFreed{0};
+    size_t totalCellBytesCoalesced{0};
+    size_t totalKeysCreated{0};
+    size_t totalKeysOpened{0};
+    size_t totalKeysDeleted{0};
+    size_t totalValuesSet{0};
+    size_t totalValuesQueried{0};
+    size_t totalValuesDeleted{0};
+    size_t totalVolatileKeysCreated{0};
+    size_t totalTransactionsCommitted{0};
+    size_t totalRecoveriesPerformed{0};
+    size_t totalSecurityChecksPassed{0};
+    size_t totalSecurityChecksDenied{0};
+    size_t totalSymlinksResolved{0};
+};
+
+inline CM_TELEMETRY g_CmTelemetry{};
+inline std::mutex g_CmTelemetryMutex{};
+
+inline CM_TELEMETRY CmQueryTelemetry() {
+    std::lock_guard<std::mutex> lock(g_CmTelemetryMutex);
+    return g_CmTelemetry;
+}
+
+inline void CmResetTelemetryForTesting() {
+    std::lock_guard<std::mutex> lock(g_CmTelemetryMutex);
+    g_CmTelemetry = CM_TELEMETRY{};
+}
+
+// ============================================================================
+// 3. NT Registry On-Disk Format Constants & Structures (REGF / HBIN / NK / VK / SK / LH)
 // ============================================================================
 inline constexpr uint32_t REGF_SIGNATURE = 0x66676572; // "regf" in little-endian
 inline constexpr uint32_t HBIN_SIGNATURE = 0x6E696268; // "hbin" in little-endian
@@ -90,8 +143,29 @@ inline constexpr uint16_t SK_SIGNATURE   = 0x6B73;     // "sk"
 inline constexpr uint16_t LH_SIGNATURE   = 0x686C;     // "lh" (hash leaf)
 inline constexpr uint16_t LF_SIGNATURE   = 0x666C;     // "lf" (fast leaf)
 
-inline constexpr uint32_t HCELL_NIL      = 0xFFFFFFFF;
-inline constexpr size_t   HIVE_BIN_SIZE  = 4096;
+inline constexpr uint32_t HCELL_NIL            = 0xFFFFFFFF;
+inline constexpr size_t   HIVE_BIN_SIZE        = 4096;
+inline constexpr uint32_t HCELL_STORAGE_MASK   = 0x80000000;
+inline constexpr uint32_t HCELL_TYPE_STABLE    = 0x00000000;
+inline constexpr uint32_t HCELL_TYPE_VOLATILE  = 0x80000000;
+inline constexpr uint32_t VK_DATA_INLINE       = 0x80000000;
+
+[[nodiscard]] inline constexpr bool HCELL_IS_VOLATILE(uint32_t cellIndex) noexcept {
+    return (cellIndex & HCELL_STORAGE_MASK) != 0;
+}
+
+[[nodiscard]] inline constexpr uint32_t HCELL_OFFSET(uint32_t cellIndex) noexcept {
+    return cellIndex & (~HCELL_STORAGE_MASK);
+}
+
+// NK Record Flags
+inline constexpr uint16_t KEY_IS_VOLATILE   = 0x0001;
+inline constexpr uint16_t KEY_HIVE_EXIT     = 0x0002;
+inline constexpr uint16_t KEY_HIVE_ENTRY    = 0x0004;
+inline constexpr uint16_t KEY_NO_DELETE     = 0x0008;
+inline constexpr uint16_t KEY_SYM_LINK      = 0x0010;
+inline constexpr uint16_t KEY_COMP_NAME     = 0x0020;
+inline constexpr uint16_t KEY_PREDEF_HANDLE = 0x0040;
 
 #pragma pack(push, 1)
 
@@ -108,7 +182,7 @@ struct RegfHeader {
     uint32_t type{0};              // 0 = Primary hive, 1 = Log file
     uint32_t format{1};            // 1 = Direct memory load
     uint32_t rootCellOffset{0};    // Offset to root nk cell relative to first hbin
-    uint32_t binsDataSize{0};      // Cumulative size of all hbins
+    uint32_t binsDataSize{0};      // Cumulative size of all stable hbins
     uint32_t cluster{1};           // 1 block = 4096 bytes
     char     fileName[64]{0};
     uint8_t  reserved1[396]{0};
@@ -228,14 +302,18 @@ struct LhRecordHeader {
     return sum;
 }
 
+// ============================================================================
+// 4. Autonomous Registry Hive File & Cell Allocator Engine
+// ============================================================================
 /**
  * @brief Autonomous Registry Hive File & Cell Allocator Engine.
- * Implements Dave Cutler's NT cell allocation, coalescing, and on-disk REGF/HBIN serialization.
+ * Implements Dave Cutler's NT cell allocation, coalescing, volatile/stable separation,
+ * and on-disk REGF/HBIN serialization.
  */
 class CmHive {
 public:
     CmHive() {
-        // Initialize with default REGF header and one HBIN
+        // Initialize with default REGF header and one stable HBIN
         binsBuffer_.resize(HIVE_BIN_SIZE);
         auto* bin = reinterpret_cast<HbinHeader*>(binsBuffer_.data());
         bin->signature = HBIN_SIGNATURE;
@@ -273,35 +351,55 @@ public:
 
     /**
      * @brief Allocates an on-disk cell of required data size within the hive bins.
+     * Supports both Stable (persisted) and Volatile (in-memory) storage.
      * Aligns total cell size to 8 bytes and marks header negative (-size).
      */
-    [[nodiscard]] uint32_t allocateCell(size_t dataSize) {
+    [[nodiscard]] uint32_t allocateCell(size_t dataSize, bool isVolatile = false) {
         size_t totalSize = sizeof(HcellHeader) + dataSize;
         // Align to 8 bytes
         totalSize = (totalSize + 7) & ~7ULL;
 
+        auto& targetBuffer = isVolatile ? volatileBinsBuffer_ : binsBuffer_;
+
+        if (isVolatile && targetBuffer.empty()) {
+            targetBuffer.resize(HIVE_BIN_SIZE);
+            auto* vbin = reinterpret_cast<HbinHeader*>(targetBuffer.data());
+            vbin->signature = HBIN_SIGNATURE;
+            vbin->fileOffset = 0;
+            vbin->binSize = HIVE_BIN_SIZE;
+            auto* vfree = reinterpret_cast<HcellHeader*>(targetBuffer.data() + sizeof(HbinHeader));
+            vfree->cellSize = static_cast<int32_t>(HIVE_BIN_SIZE - sizeof(HbinHeader));
+        }
+
         // First-fit search across hive bins
         size_t offset = 0;
-        while (offset + sizeof(HbinHeader) < binsBuffer_.size()) {
+        while (offset + sizeof(HbinHeader) < targetBuffer.size()) {
             size_t cellOffset = offset + sizeof(HbinHeader);
             size_t binEnd = offset + HIVE_BIN_SIZE;
 
             while (cellOffset + sizeof(HcellHeader) <= binEnd) {
-                auto* cell = reinterpret_cast<HcellHeader*>(binsBuffer_.data() + cellOffset);
+                auto* cell = reinterpret_cast<HcellHeader*>(targetBuffer.data() + cellOffset);
                 if (cell->cellSize > 0 && static_cast<size_t>(cell->cellSize) >= totalSize) {
                     // Found suitable free cell
                     size_t originalSize = static_cast<size_t>(cell->cellSize);
                     if (originalSize >= totalSize + sizeof(HcellHeader) + 8) {
                         // Split cell
                         cell->cellSize = -static_cast<int32_t>(totalSize);
-                        auto* nextCell = reinterpret_cast<HcellHeader*>(binsBuffer_.data() + cellOffset + totalSize);
+                        auto* nextCell = reinterpret_cast<HcellHeader*>(targetBuffer.data() + cellOffset + totalSize);
                         nextCell->cellSize = static_cast<int32_t>(originalSize - totalSize);
                     } else {
                         // Use entire cell
                         cell->cellSize = -static_cast<int32_t>(originalSize);
                     }
-                    std::memset(binsBuffer_.data() + cellOffset + sizeof(HcellHeader), 0, totalSize - sizeof(HcellHeader));
-                    return static_cast<uint32_t>(cellOffset);
+                    std::memset(targetBuffer.data() + cellOffset + sizeof(HcellHeader), 0, totalSize - sizeof(HcellHeader));
+
+                    {
+                        std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                        g_CmTelemetry.totalCellsAllocated++;
+                    }
+
+                    uint32_t resultOffset = static_cast<uint32_t>(cellOffset);
+                    return isVolatile ? (resultOffset | HCELL_TYPE_VOLATILE) : resultOffset;
                 }
 
                 size_t step = (cell->cellSize < 0) 
@@ -313,49 +411,98 @@ public:
             offset += HIVE_BIN_SIZE;
         }
 
-        // Need to expand with a new HBIN
-        size_t newBinOffset = binsBuffer_.size();
-        binsBuffer_.resize(newBinOffset + HIVE_BIN_SIZE);
-        auto* newBin = reinterpret_cast<HbinHeader*>(binsBuffer_.data() + newBinOffset);
+        // Expand with a new HBIN
+        size_t newBinOffset = targetBuffer.size();
+        targetBuffer.resize(newBinOffset + HIVE_BIN_SIZE);
+        auto* newBin = reinterpret_cast<HbinHeader*>(targetBuffer.data() + newBinOffset);
         newBin->signature = HBIN_SIGNATURE;
         newBin->fileOffset = static_cast<uint32_t>(newBinOffset);
         newBin->binSize = HIVE_BIN_SIZE;
 
-        header_.binsDataSize = static_cast<uint32_t>(binsBuffer_.size());
-        header_.checksum = ComputeRegfChecksum(header_);
+        if (!isVolatile) {
+            header_.binsDataSize = static_cast<uint32_t>(binsBuffer_.size());
+            header_.checksum = ComputeRegfChecksum(header_);
+        }
 
         // Initialize free cell in new bin
-        auto* freeCell = reinterpret_cast<HcellHeader*>(binsBuffer_.data() + newBinOffset + sizeof(HbinHeader));
+        auto* freeCell = reinterpret_cast<HcellHeader*>(targetBuffer.data() + newBinOffset + sizeof(HbinHeader));
         freeCell->cellSize = static_cast<int32_t>(HIVE_BIN_SIZE - sizeof(HbinHeader));
 
         // Re-attempt allocation in newly allocated bin
-        return allocateCell(dataSize);
+        return allocateCell(dataSize, isVolatile);
     }
 
     /**
-     * @brief Frees an allocated cell and coalesces with adjacent free cells.
+     * @brief Frees an allocated cell and executes Dave Cutler's free cell coalescing engine (CmpCoalesceFreeSpace).
      */
-    void freeCell(uint32_t cellOffset) {
-        if (cellOffset + sizeof(HcellHeader) > binsBuffer_.size()) return;
-        auto* cell = reinterpret_cast<HcellHeader*>(binsBuffer_.data() + cellOffset);
+    void freeCell(uint32_t cellIndex) {
+        bool isVolatile = HCELL_IS_VOLATILE(cellIndex);
+        uint32_t cellOffset = HCELL_OFFSET(cellIndex);
+        auto& targetBuffer = isVolatile ? volatileBinsBuffer_ : binsBuffer_;
+
+        if (cellOffset + sizeof(HcellHeader) > targetBuffer.size()) return;
+        auto* cell = reinterpret_cast<HcellHeader*>(targetBuffer.data() + cellOffset);
         if (cell->cellSize < 0) {
             cell->cellSize = -cell->cellSize; // Mark free
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalCellsFreed++;
+            }
+        }
+
+        // Dave Cutler Bin Free Space Coalescing (CmpCoalesceFreeSpace)
+        size_t binStart = (cellOffset / HIVE_BIN_SIZE) * HIVE_BIN_SIZE;
+        size_t binEnd = binStart + HIVE_BIN_SIZE;
+        size_t cur = binStart + sizeof(HbinHeader);
+
+        while (cur + sizeof(HcellHeader) < binEnd) {
+            auto* curCell = reinterpret_cast<HcellHeader*>(targetBuffer.data() + cur);
+            if (curCell->cellSize <= 0) {
+                cur += static_cast<size_t>(-curCell->cellSize);
+                continue;
+            }
+
+            // Free cell encountered: inspect forward adjacent cells to coalesce
+            size_t curLen = static_cast<size_t>(curCell->cellSize);
+            while (cur + curLen + sizeof(HcellHeader) <= binEnd) {
+                auto* nextCell = reinterpret_cast<HcellHeader*>(targetBuffer.data() + cur + curLen);
+                if (nextCell->cellSize <= 0) break; // Next cell is allocated, stop merging
+                
+                // Next cell is free: merge it into curCell
+                size_t nextLen = static_cast<size_t>(nextCell->cellSize);
+                curLen += nextLen;
+                curCell->cellSize = static_cast<int32_t>(curLen);
+                {
+                    std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                    g_CmTelemetry.totalCellBytesCoalesced += nextLen;
+                }
+            }
+            cur += curLen;
         }
     }
 
-    [[nodiscard]] uint8_t* getCellData(uint32_t cellOffset) noexcept {
-        if (cellOffset + sizeof(HcellHeader) > binsBuffer_.size()) return nullptr;
-        return binsBuffer_.data() + cellOffset + sizeof(HcellHeader);
+    [[nodiscard]] uint8_t* getCellData(uint32_t cellIndex) noexcept {
+        bool isVolatile = HCELL_IS_VOLATILE(cellIndex);
+        uint32_t cellOffset = HCELL_OFFSET(cellIndex);
+        auto& targetBuffer = isVolatile ? volatileBinsBuffer_ : binsBuffer_;
+        if (cellOffset + sizeof(HcellHeader) > targetBuffer.size()) return nullptr;
+        return targetBuffer.data() + cellOffset + sizeof(HcellHeader);
     }
 
-    [[nodiscard]] const uint8_t* getCellData(uint32_t cellOffset) const noexcept {
-        if (cellOffset + sizeof(HcellHeader) > binsBuffer_.size()) return nullptr;
-        return binsBuffer_.data() + cellOffset + sizeof(HcellHeader);
+    [[nodiscard]] const uint8_t* getCellData(uint32_t cellIndex) const noexcept {
+        bool isVolatile = HCELL_IS_VOLATILE(cellIndex);
+        uint32_t cellOffset = HCELL_OFFSET(cellIndex);
+        const auto& targetBuffer = isVolatile ? volatileBinsBuffer_ : binsBuffer_;
+        if (cellOffset + sizeof(HcellHeader) > targetBuffer.size()) return nullptr;
+        return targetBuffer.data() + cellOffset + sizeof(HcellHeader);
     }
 
-    [[nodiscard]] size_t getCellDataSize(uint32_t cellOffset) const noexcept {
-        if (cellOffset + sizeof(HcellHeader) > binsBuffer_.size()) return 0;
-        const auto* cell = reinterpret_cast<const HcellHeader*>(binsBuffer_.data() + cellOffset);
+    [[nodiscard]] size_t getCellDataSize(uint32_t cellIndex) const noexcept {
+        bool isVolatile = HCELL_IS_VOLATILE(cellIndex);
+        uint32_t cellOffset = HCELL_OFFSET(cellIndex);
+        const auto& targetBuffer = isVolatile ? volatileBinsBuffer_ : binsBuffer_;
+        if (cellOffset + sizeof(HcellHeader) > targetBuffer.size()) return 0;
+        const auto* cell = reinterpret_cast<const HcellHeader*>(targetBuffer.data() + cellOffset);
         size_t total = (cell->cellSize < 0) ? static_cast<size_t>(-cell->cellSize) : static_cast<size_t>(cell->cellSize);
         return (total > sizeof(HcellHeader)) ? (total - sizeof(HcellHeader)) : 0;
     }
@@ -367,15 +514,130 @@ public:
     }
 
     /**
-     * @brief Serializes the hive into a raw byte vector matching Windows REGF disk image.
+     * @brief Writes a VK (Value Key) Record with NT small-value inline optimization (bit 31 of dataLength).
+     */
+    uint32_t writeVkRecord(std::string_view name, RegType type, std::span<const uint8_t> data, bool isVolatile = false) {
+        size_t vkSize = sizeof(VkRecordHeader) + name.size();
+        uint32_t vkCell = allocateCell(vkSize, isVolatile);
+        auto* vk = reinterpret_cast<VkRecordHeader*>(getCellData(vkCell));
+        vk->signature = VK_SIGNATURE;
+        vk->nameLength = static_cast<uint16_t>(name.size());
+        vk->dataType = static_cast<uint32_t>(type);
+        vk->flags = 0x0001; // Compressed ASCII name
+
+        if (data.size() <= 4) {
+            // NT Small Data Inline Optimization
+            vk->dataLength = static_cast<uint32_t>(data.size()) | VK_DATA_INLINE;
+            uint32_t inlineData = 0;
+            if (!data.empty()) {
+                std::memcpy(&inlineData, data.data(), data.size());
+            }
+            vk->dataOffset = inlineData;
+        } else {
+            // Out-of-line data cell
+            uint32_t dataCell = allocateCell(data.size(), isVolatile);
+            std::memcpy(getCellData(dataCell), data.data(), data.size());
+            vk->dataLength = static_cast<uint32_t>(data.size());
+            vk->dataOffset = dataCell;
+        }
+
+        std::memcpy(reinterpret_cast<uint8_t*>(vk) + sizeof(VkRecordHeader), name.data(), name.size());
+        return vkCell;
+    }
+
+    /**
+     * @brief Reads a VK (Value Key) Record handling inline data and out-of-line cells.
+     */
+    bool readVkRecord(uint32_t vkCell, std::string& outName, KeyValue& outVal) const {
+        const auto* vk = reinterpret_cast<const VkRecordHeader*>(getCellData(vkCell));
+        if (!vk || vk->signature != VK_SIGNATURE) return false;
+
+        const char* namePtr = reinterpret_cast<const char*>(reinterpret_cast<const uint8_t*>(vk) + sizeof(VkRecordHeader));
+        outName.assign(namePtr, vk->nameLength);
+        outVal.type = static_cast<RegType>(vk->dataType);
+
+        if ((vk->dataLength & VK_DATA_INLINE) != 0) {
+            size_t len = vk->dataLength & (~VK_DATA_INLINE);
+            outVal.data.resize(len);
+            if (len > 0) {
+                std::memcpy(outVal.data.data(), &vk->dataOffset, len);
+            }
+        } else {
+            size_t len = vk->dataLength;
+            outVal.data.resize(len);
+            if (len > 0) {
+                const auto* dataPtr = getCellData(vk->dataOffset);
+                if (dataPtr) {
+                    std::memcpy(outVal.data.data(), dataPtr, len);
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * @brief Creates an LH (Hash Leaf) subkey index record.
+     */
+    uint32_t createLhIndex(const std::vector<std::pair<std::string, uint32_t>>& subkeys, bool isVolatile = false) {
+        size_t lhSize = sizeof(LhRecordHeader) + subkeys.size() * sizeof(LhElement);
+        uint32_t lhCell = allocateCell(lhSize, isVolatile);
+        auto* lh = reinterpret_cast<LhRecordHeader*>(getCellData(lhCell));
+        lh->signature = LH_SIGNATURE;
+        lh->count = static_cast<uint16_t>(subkeys.size());
+
+        auto* elements = reinterpret_cast<LhElement*>(reinterpret_cast<uint8_t*>(lh) + sizeof(LhRecordHeader));
+        for (size_t i = 0; i < subkeys.size(); ++i) {
+            elements[i].cellOffset = subkeys[i].second;
+            elements[i].nameHash = ComputeKeyNameHash(subkeys[i].first);
+        }
+        return lhCell;
+    }
+
+    /**
+     * @brief Searches an LH (Hash Leaf) index for a subkey by name.
+     */
+    [[nodiscard]] uint32_t findSubkeyInLh(uint32_t lhCell, std::string_view name) const {
+        const auto* lh = reinterpret_cast<const LhRecordHeader*>(getCellData(lhCell));
+        if (!lh || lh->signature != LH_SIGNATURE) return HCELL_NIL;
+
+        uint32_t targetHash = ComputeKeyNameHash(name);
+        const auto* elements = reinterpret_cast<const LhElement*>(reinterpret_cast<const uint8_t*>(lh) + sizeof(LhRecordHeader));
+
+        for (uint16_t i = 0; i < lh->count; ++i) {
+            if (elements[i].nameHash == targetHash) {
+                const auto* nk = reinterpret_cast<const NkRecordHeader*>(getCellData(elements[i].cellOffset));
+                if (nk && nk->signature == NK_SIGNATURE) {
+                    const char* nkNamePtr = reinterpret_cast<const char*>(reinterpret_cast<const uint8_t*>(nk) + sizeof(NkRecordHeader));
+                    std::string_view nkName(nkNamePtr, nk->nameLength);
+                    if (std::equal(name.begin(), name.end(), nkName.begin(), nkName.end(), [](char a, char b) {
+                        return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+                    })) {
+                        return elements[i].cellOffset;
+                    }
+                }
+            }
+        }
+        return HCELL_NIL;
+    }
+
+    /**
+     * @brief Serializes ONLY stable hive bins into a raw byte vector matching Windows REGF disk image.
+     * Volatile bins are excluded from persistence by architectural design.
      */
     [[nodiscard]] std::vector<uint8_t> serialize() const {
         std::vector<uint8_t> img;
         img.resize(sizeof(RegfHeader) + binsBuffer_.size());
         auto* hdr = reinterpret_cast<RegfHeader*>(img.data());
         *hdr = header_;
+        hdr->binsDataSize = static_cast<uint32_t>(binsBuffer_.size());
         hdr->checksum = ComputeRegfChecksum(*hdr);
         std::memcpy(img.data() + sizeof(RegfHeader), binsBuffer_.data(), binsBuffer_.size());
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalHivesSaved++;
+        }
+
         return img;
     }
 
@@ -389,21 +651,40 @@ public:
 
         auto hive = std::make_shared<CmHive>();
         hive->header_ = *hdr;
-
         hive->binsBuffer_.assign(image.data() + sizeof(RegfHeader), image.data() + image.size());
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalHivesLoaded++;
+        }
+
         return hive;
     }
 
+    bool writeSector(uint32_t byteOffset, std::span<const uint8_t> data) {
+        if (byteOffset < sizeof(RegfHeader)) {
+            if (byteOffset + data.size() > sizeof(RegfHeader)) return false;
+            std::memcpy(reinterpret_cast<uint8_t*>(&header_) + byteOffset, data.data(), data.size());
+            return true;
+        }
+        size_t binOffset = byteOffset - sizeof(RegfHeader);
+        if (binOffset + data.size() > binsBuffer_.size()) return false;
+        std::memcpy(binsBuffer_.data() + binOffset, data.data(), data.size());
+        return true;
+    }
+
     [[nodiscard]] size_t getBinsDataSize() const noexcept { return binsBuffer_.size(); }
+    [[nodiscard]] size_t getVolatileBinsDataSize() const noexcept { return volatileBinsBuffer_.size(); }
 
 private:
     RegfHeader header_;
     std::vector<uint8_t> binsBuffer_;
+    std::vector<uint8_t> volatileBinsBuffer_;
 };
 
-/**
- * @brief Transactional Registry (TxR) Journal / Crash-Recovery Engine.
- */
+// ============================================================================
+// 5. Transactional Registry (TxR) Journal / Crash-Recovery Engine
+// ============================================================================
 class TxRJournal {
 public:
     struct JournalEntry {
@@ -416,6 +697,30 @@ public:
             .sectorOffset = sectorOffset,
             .sectorData = std::vector<uint8_t>(data.begin(), data.end())
         });
+    }
+
+    void beginTransaction(CmHive& hive) {
+        uint32_t seq = hive.getHeader().sequence1 + 1;
+        hive.setSequence(seq, hive.getHeader().sequence2); // Inconsistent state
+    }
+
+    void commitTransaction(CmHive& hive) {
+        uint32_t seq = hive.getHeader().sequence1;
+        hive.setSequence(seq, seq); // Consistent state
+        clear();
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalTransactionsCommitted++;
+        }
+    }
+
+    void rollbackTransaction(CmHive& hive) {
+        for (const auto& entry : entries_) {
+            hive.writeSector(entry.sectorOffset, entry.sectorData);
+        }
+        uint32_t seq = hive.getHeader().sequence2;
+        hive.setSequence(seq, seq);
+        clear();
     }
 
     [[nodiscard]] size_t getEntryCount() const noexcept { return entries_.size(); }
@@ -433,6 +738,11 @@ public:
         uint32_t seq = hive.getHeader().sequence1;
         hive.setSequence(seq, seq); // Re-synchronize sequence numbers
         clear();
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalRecoveriesPerformed++;
+        }
         return true;
     }
 
@@ -440,69 +750,303 @@ private:
     std::vector<JournalEntry> entries_;
 };
 
-/**
- * @brief Registry Key Object.
- * In NT, keys are represented in the Object Manager hierarchy under \Registry.
- */
+// ============================================================================
+// 6. Registry Key Object
+// ============================================================================
 class KeyObject {
 public:
-    explicit KeyObject(std::wstring name) : name_(std::move(name)) {}
+    explicit KeyObject(std::wstring name, bool isVolatile = false)
+        : name_(std::move(name)), isVolatile_(isVolatile) {}
 
     [[nodiscard]] const std::wstring& getName() const noexcept { return name_; }
+    [[nodiscard]] bool isVolatile() const noexcept { return isVolatile_; }
+    void setVolatile(bool v) noexcept { isVolatile_ = v; }
 
-    std::shared_ptr<KeyObject> createSubkey(std::wstring_view name) {
+    [[nodiscard]] bool isSymlink() const noexcept { return isSymlink_; }
+    void setSymlink(std::wstring target) {
+        isSymlink_ = true;
+        symlinkTarget_ = std::move(target);
+    }
+    [[nodiscard]] const std::wstring& getSymlinkTarget() const noexcept { return symlinkTarget_; }
+
+    std::shared_ptr<KeyObject> createSubkey(
+        std::wstring_view name,
+        bool isVolatile = false,
+        const se::TokenObject* callerToken = nullptr
+    ) {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, KEY_CREATE_SUB_KEY, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return nullptr;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
         std::wstring key(name);
         auto it = subkeys_.find(key);
         if (it != subkeys_.end()) return it->second;
 
-        auto sub = std::make_shared<KeyObject>(key);
+        auto sub = std::make_shared<KeyObject>(key, isVolatile || isVolatile_);
         sub->parent_ = this;
         subkeys_[key] = sub;
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalKeysCreated++;
+            if (sub->isVolatile()) {
+                g_CmTelemetry.totalVolatileKeysCreated++;
+            }
+        }
         return sub;
     }
 
-    [[nodiscard]] std::shared_ptr<KeyObject> openSubkey(std::wstring_view name) const {
+    [[nodiscard]] std::shared_ptr<KeyObject> openSubkey(
+        std::wstring_view name,
+        const se::TokenObject* callerToken = nullptr,
+        uint32_t desiredAccess = KEY_READ
+    ) const {
         auto it = subkeys_.find(std::wstring(name));
-        if (it != subkeys_.end()) return it->second;
-        return nullptr;
+        if (it == subkeys_.end()) return nullptr;
+
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = it->second->checkAccess(*callerToken, desiredAccess, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return nullptr;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalKeysOpened++;
+        }
+        return it->second;
     }
 
-    bool deleteSubkey(std::wstring_view name) {
-        return subkeys_.erase(std::wstring(name)) > 0;
+    bool deleteSubkey(std::wstring_view name, const se::TokenObject* callerToken = nullptr) {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, se::DELETE, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return false;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
+        bool erased = subkeys_.erase(std::wstring(name)) > 0;
+        if (erased) {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalKeysDeleted++;
+        }
+        return erased;
     }
 
-    void setValueString(std::wstring_view valName, std::wstring_view val) {
+    NtStatus deleteSubkeyEx(std::wstring_view name, const se::TokenObject* callerToken = nullptr) {
+        return deleteSubkey(name, callerToken) ? NtStatus::Success : NtStatus::ObjectNameNotFound;
+    }
+
+    NtStatus setValueString(std::wstring_view valName, std::wstring_view val, const se::TokenObject* callerToken = nullptr) {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, KEY_SET_VALUE, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return secStatus;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
         std::vector<uint8_t> bytes(val.size() * sizeof(wchar_t));
         std::memcpy(bytes.data(), val.data(), bytes.size());
         values_[std::wstring(valName)] = KeyValue{ .type = RegType::Sz, .data = std::move(bytes) };
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalValuesSet++;
+        }
+        return NtStatus::Success;
     }
 
-    void setValueDword(std::wstring_view valName, uint32_t val) {
+    NtStatus setValueDword(std::wstring_view valName, uint32_t val, const se::TokenObject* callerToken = nullptr) {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, KEY_SET_VALUE, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return secStatus;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
         std::vector<uint8_t> bytes(sizeof(uint32_t));
         std::memcpy(bytes.data(), &val, sizeof(uint32_t));
         values_[std::wstring(valName)] = KeyValue{ .type = RegType::Dword, .data = std::move(bytes) };
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalValuesSet++;
+        }
+        return NtStatus::Success;
     }
 
-    void setValueQword(std::wstring_view valName, uint64_t val) {
+    NtStatus setValueQword(std::wstring_view valName, uint64_t val, const se::TokenObject* callerToken = nullptr) {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, KEY_SET_VALUE, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return secStatus;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
         std::vector<uint8_t> bytes(sizeof(uint64_t));
         std::memcpy(bytes.data(), &val, sizeof(uint64_t));
         values_[std::wstring(valName)] = KeyValue{ .type = RegType::Qword, .data = std::move(bytes) };
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalValuesSet++;
+        }
+        return NtStatus::Success;
     }
 
-    void setValueBinary(std::wstring_view valName, std::span<const uint8_t> val) {
+    NtStatus setValueBinary(std::wstring_view valName, std::span<const uint8_t> val, const se::TokenObject* callerToken = nullptr) {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, KEY_SET_VALUE, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return secStatus;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
         values_[std::wstring(valName)] = KeyValue{ 
             .type = RegType::Binary, 
             .data = std::vector<uint8_t>(val.begin(), val.end()) 
         };
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalValuesSet++;
+        }
+        return NtStatus::Success;
     }
 
-    bool deleteValue(std::wstring_view valName) {
-        return values_.erase(std::wstring(valName)) > 0;
+    NtStatus setValueEx(
+        std::wstring_view valName,
+        RegType type,
+        std::span<const uint8_t> val,
+        const se::TokenObject* callerToken = nullptr
+    ) {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, KEY_SET_VALUE, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return secStatus;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
+        values_[std::wstring(valName)] = KeyValue{
+            .type = type,
+            .data = std::vector<uint8_t>(val.begin(), val.end())
+        };
+
+        {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalValuesSet++;
+        }
+        return NtStatus::Success;
     }
 
-    [[nodiscard]] const KeyValue* getValue(std::wstring_view valName) const {
+    bool deleteValue(std::wstring_view valName, const se::TokenObject* callerToken = nullptr) {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, KEY_SET_VALUE, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return false;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
+        bool erased = values_.erase(std::wstring(valName)) > 0;
+        if (erased) {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalValuesDeleted++;
+        }
+        return erased;
+    }
+
+    NtStatus deleteValueEx(std::wstring_view valName, const se::TokenObject* callerToken = nullptr) {
+        return deleteValue(valName, callerToken) ? NtStatus::Success : NtStatus::ObjectNameNotFound;
+    }
+
+    [[nodiscard]] const KeyValue* getValue(std::wstring_view valName, const se::TokenObject* callerToken = nullptr) const {
+        if (callerToken) {
+            uint32_t granted = 0;
+            NtStatus secStatus = checkAccess(*callerToken, KEY_QUERY_VALUE, granted);
+            if (!NT_SUCCESS(secStatus)) {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksDenied++;
+                return nullptr;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                g_CmTelemetry.totalSecurityChecksPassed++;
+            }
+        }
+
         auto it = values_.find(std::wstring(valName));
-        if (it != values_.end()) return &it->second;
+        if (it != values_.end()) {
+            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+            g_CmTelemetry.totalValuesQueried++;
+            return &it->second;
+        }
         return nullptr;
     }
 
@@ -542,7 +1086,6 @@ public:
         uint32_t& grantedAccess
     ) const noexcept {
         if (!securityDescriptor_) {
-            // Null security descriptor = allow access
             grantedAccess = desiredAccess;
             return NtStatus::Success;
         }
@@ -553,15 +1096,18 @@ public:
 
 private:
     std::wstring name_;
+    bool isVolatile_{false};
+    bool isSymlink_{false};
+    std::wstring symlinkTarget_{};
     KeyObject* parent_{nullptr};
     std::unordered_map<std::wstring, std::shared_ptr<KeyObject>> subkeys_;
     std::unordered_map<std::wstring, KeyValue> values_;
     std::optional<se::SecurityDescriptor> securityDescriptor_;
 };
 
-/**
- * @brief Configuration Manager (CM) Subsystem.
- */
+// ============================================================================
+// 7. Configuration Manager (CM) Subsystem Engine
+// ============================================================================
 class ConfigurationManager {
 public:
     static ConfigurationManager& get() {
@@ -607,34 +1153,188 @@ public:
         session->setSecurityDescriptor(sessionSd);
     }
 
-    std::shared_ptr<KeyObject> resolvePath(std::wstring_view path) {
-        if (path.starts_with(L"\\Registry")) {
-            path.remove_prefix(9); // Strip \Registry
+    void resetForTesting() {
+        mountedHives_.clear();
+        initialize();
+    }
+
+    /**
+     * @brief Resolves hierarchical registry path with symbolic link resolution and recursion loop protection.
+     */
+    std::shared_ptr<KeyObject> resolvePath(
+        std::wstring_view path,
+        bool followSymlinks = true,
+        const se::TokenObject* callerToken = nullptr,
+        uint32_t desiredAccess = KEY_READ,
+        NtStatus* outStatus = nullptr
+    ) {
+        if (outStatus) *outStatus = NtStatus::Success;
+
+        std::wstring currentPath(path);
+        size_t hops = 0;
+        std::unordered_set<std::wstring> visitedSymlinks;
+
+        while (true) {
+            std::wstring_view p = currentPath;
+            if (p.starts_with(L"\\Registry")) {
+                p.remove_prefix(9);
+            }
+            if (p.starts_with(L"\\")) {
+                p.remove_prefix(1);
+            }
+
+            std::shared_ptr<KeyObject> current = rootKey_;
+            size_t start = 0;
+            bool linkEncountered = false;
+
+            while (start < p.size()) {
+                size_t slash = p.find(L'\\', start);
+                std::wstring_view part = (slash == std::wstring_view::npos) 
+                    ? p.substr(start) 
+                    : p.substr(start, slash - start);
+
+                if (!part.empty()) {
+                    current = current->openSubkey(part, callerToken, desiredAccess);
+                    if (!current) {
+                        if (outStatus) *outStatus = NtStatus::ObjectNameNotFound;
+                        return nullptr;
+                    }
+
+                    if (followSymlinks && current->isSymlink()) {
+                        hops++;
+                        if (hops > CM_MAX_SYMLINK_RECURSION) {
+                            if (outStatus) *outStatus = NtStatus::LinkEvaluationCapExceeded;
+                            return nullptr;
+                        }
+
+                        const auto& target = current->getSymlinkTarget();
+                        if (visitedSymlinks.contains(target)) {
+                            if (outStatus) *outStatus = NtStatus::CircularReference;
+                            return nullptr;
+                        }
+                        visitedSymlinks.insert(target);
+
+                        std::wstring remaining(slash != std::wstring_view::npos ? p.substr(slash) : L"");
+                        currentPath = target + remaining;
+                        linkEncountered = true;
+
+                        {
+                            std::lock_guard<std::mutex> lk(g_CmTelemetryMutex);
+                            g_CmTelemetry.totalSymlinksResolved++;
+                        }
+                        break;
+                    }
+                }
+
+                if (slash == std::wstring_view::npos) break;
+                start = slash + 1;
+            }
+
+            if (!linkEncountered) {
+                return current;
+            }
         }
-        if (path.starts_with(L"\\")) {
-            path.remove_prefix(1);
+    }
+
+    [[nodiscard]] std::shared_ptr<KeyObject> getRootKey() const noexcept { return rootKey_; }
+
+    /**
+     * @brief Canonical NtCreateKey / CmCreateKey engine.
+     */
+    NtStatus createKeyEx(
+        std::wstring_view fullPath,
+        uint32_t desiredAccess,
+        uint32_t createOptions,
+        std::shared_ptr<KeyObject>& outKey,
+        uint32_t* disposition = nullptr,
+        const se::TokenObject* callerToken = nullptr,
+        const se::SecurityDescriptor* sd = nullptr
+    ) {
+        if (fullPath.empty()) return NtStatus::InvalidParameter;
+
+        // Check if key already exists
+        auto existing = resolvePath(fullPath, false, callerToken, desiredAccess);
+        if (existing) {
+            outKey = existing;
+            if (disposition) *disposition = REG_OPENED_EXISTING_KEY;
+            return NtStatus::Success;
+        }
+
+        std::wstring_view p = fullPath;
+        if (p.starts_with(L"\\Registry")) {
+            p.remove_prefix(9);
+        }
+        if (p.starts_with(L"\\")) {
+            p.remove_prefix(1);
         }
 
         std::shared_ptr<KeyObject> current = rootKey_;
         size_t start = 0;
-        while (start < path.size()) {
-            size_t slash = path.find(L'\\', start);
+        bool isVolatile = (createOptions & REG_OPTION_VOLATILE) != 0;
+
+        while (start < p.size()) {
+            size_t slash = p.find(L'\\', start);
             std::wstring_view part = (slash == std::wstring_view::npos) 
-                ? path.substr(start) 
-                : path.substr(start, slash - start);
+                ? p.substr(start) 
+                : p.substr(start, slash - start);
 
             if (!part.empty()) {
-                current = current->openSubkey(part);
-                if (!current) return nullptr;
+                auto next = current->openSubkey(part);
+                if (!next) {
+                    // Create subkey
+                    next = current->createSubkey(part, isVolatile, callerToken);
+                    if (!next) {
+                        return NtStatus::AccessDenied;
+                    }
+                }
+                current = next;
             }
 
             if (slash == std::wstring_view::npos) break;
             start = slash + 1;
         }
-        return current;
+
+        if (sd) {
+            current->setSecurityDescriptor(*sd);
+        }
+
+        outKey = current;
+        if (disposition) *disposition = REG_CREATED_NEW_KEY;
+        return NtStatus::Success;
     }
 
-    [[nodiscard]] std::shared_ptr<KeyObject> getRootKey() const noexcept { return rootKey_; }
+    /**
+     * @brief Canonical NtOpenKey / CmOpenKey engine.
+     */
+    NtStatus openKeyEx(
+        std::wstring_view fullPath,
+        uint32_t desiredAccess,
+        std::shared_ptr<KeyObject>& outKey,
+        const se::TokenObject* callerToken = nullptr
+    ) {
+        NtStatus status = NtStatus::Success;
+        outKey = resolvePath(fullPath, true, callerToken, desiredAccess, &status);
+        return outKey ? NtStatus::Success : status;
+    }
+
+    /**
+     * @brief Creates a Registry Symbolic Link (REG_LINK).
+     */
+    std::shared_ptr<KeyObject> createSymbolicLinkKey(
+        std::wstring_view linkPath,
+        std::wstring_view targetPath,
+        const se::SecurityDescriptor* sd = nullptr
+    ) {
+        std::shared_ptr<KeyObject> key;
+        NtStatus st = createKeyEx(linkPath, KEY_ALL_ACCESS, REG_OPTION_CREATE_LINK, key, nullptr, nullptr, sd);
+        if (!NT_SUCCESS(st) || !key) return nullptr;
+
+        key->setSymlink(std::wstring(targetPath));
+        std::vector<uint8_t> targetBytes(targetPath.size() * sizeof(wchar_t));
+        std::memcpy(targetBytes.data(), targetPath.data(), targetBytes.size());
+        key->setValueEx(L"SymbolicLinkValue", RegType::Link, targetBytes);
+        return key;
+    }
 
     /**
      * @brief Exports an in-memory key hierarchy to an on-disk REGF hive structure.
@@ -645,10 +1345,10 @@ public:
 
         // Allocate NK record
         size_t nkSize = sizeof(NkRecordHeader) + asciiName.size();
-        uint32_t rootCell = hive->allocateCell(nkSize);
+        uint32_t rootCell = hive->allocateCell(nkSize, root.isVolatile());
         auto* nk = reinterpret_cast<NkRecordHeader*>(hive->getCellData(rootCell));
         nk->signature = NK_SIGNATURE;
-        nk->flags = 0x20 | 0x04; // Compressed name, hive entry
+        nk->flags = 0x20 | (root.isVolatile() ? KEY_IS_VOLATILE : 0x04);
         nk->nameLength = static_cast<uint16_t>(asciiName.size());
         nk->subkeyCount = static_cast<uint32_t>(root.getSubkeyCount());
         nk->valueCount = static_cast<uint32_t>(root.getValueCount());
@@ -667,7 +1367,6 @@ public:
 
         auto key = resolvePath(mountPath);
         if (!key) {
-            // Create mount point if not present
             key = rootKey_->createSubkey(mountPath);
         }
         mountedHives_[std::wstring(mountPath)] = hive;
@@ -685,5 +1384,77 @@ private:
     std::shared_ptr<KeyObject> rootKey_;
     std::unordered_map<std::wstring, std::shared_ptr<CmHive>> mountedHives_;
 };
+
+// ============================================================================
+// 8. Sovereign Canonical Executive Configuration Manager Functions (Cm*)
+// ============================================================================
+inline NtStatus CmCreateKey(
+    std::wstring_view path,
+    uint32_t desiredAccess,
+    uint32_t createOptions,
+    std::shared_ptr<KeyObject>& outKey,
+    uint32_t* disposition = nullptr,
+    const se::TokenObject* callerToken = nullptr,
+    const se::SecurityDescriptor* sd = nullptr
+) {
+    return ConfigurationManager::get().createKeyEx(path, desiredAccess, createOptions, outKey, disposition, callerToken, sd);
+}
+
+inline NtStatus CmOpenKey(
+    std::wstring_view path,
+    uint32_t desiredAccess,
+    std::shared_ptr<KeyObject>& outKey,
+    const se::TokenObject* callerToken = nullptr
+) {
+    return ConfigurationManager::get().openKeyEx(path, desiredAccess, outKey, callerToken);
+}
+
+inline NtStatus CmSetValueKey(
+    std::shared_ptr<KeyObject> key,
+    std::wstring_view valueName,
+    RegType type,
+    std::span<const uint8_t> data,
+    const se::TokenObject* callerToken = nullptr
+) {
+    if (!key) return NtStatus::InvalidHandle;
+    return key->setValueEx(valueName, type, data, callerToken);
+}
+
+inline NtStatus CmQueryValueKey(
+    std::shared_ptr<KeyObject> key,
+    std::wstring_view valueName,
+    KeyValue& outValue,
+    const se::TokenObject* callerToken = nullptr
+) {
+    if (!key) return NtStatus::InvalidHandle;
+    const auto* val = key->getValue(valueName, callerToken);
+    if (!val) return NtStatus::ObjectNameNotFound;
+    outValue = *val;
+    return NtStatus::Success;
+}
+
+inline NtStatus CmDeleteValueKey(
+    std::shared_ptr<KeyObject> key,
+    std::wstring_view valueName,
+    const se::TokenObject* callerToken = nullptr
+) {
+    if (!key) return NtStatus::InvalidHandle;
+    return key->deleteValueEx(valueName, callerToken);
+}
+
+inline NtStatus CmDeleteKey(
+    std::shared_ptr<KeyObject> key,
+    const se::TokenObject* callerToken = nullptr
+) {
+    if (!key) return NtStatus::InvalidHandle;
+    auto* parent = key->getParent();
+    if (!parent) return NtStatus::AccessDenied;
+    return parent->deleteSubkeyEx(key->getName(), callerToken);
+}
+
+inline NtStatus CmFlushKey(std::shared_ptr<KeyObject> key) {
+    if (!key) return NtStatus::InvalidHandle;
+    return NtStatus::Success;
+}
 
 } // namespace micant::cm
