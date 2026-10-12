@@ -7722,6 +7722,455 @@ void Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces(
     std::cout << "[TEST] Suite 245: Horizon 29 - Plug and Play (PnP) Manager Architecture, DevNode Hierarchy, IRP_MN State Engine & Device Interfaces PASSED.\n";
 }
 
+// ============================================================================
+// Suite 246: Horizon 30 - Sovereign Kernel Debugger Engine (KD64), KDCom
+// Protocol, Breakpoints & KdpTrap Exception Routing
+// ============================================================================
+void Test_Horizon30_KernelDebugger_KD64_Breakpoints_And_KdpTrapExceptionRouting() {
+    kd::KdInitSystem(0);
+    kd::KdResetTelemetryForTesting();
+
+    auto& debugger = kd::KdDebugger::get();
+    debugger.initialize(true);
+
+    // 1. Packet Framing & Arithmetic Checksum Calculation and Validation
+    {
+        const uint8_t sampleData[] = { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10 };
+        uint32_t expectedSum = 0;
+        for (uint8_t b : sampleData) expectedSum += b;
+        uint32_t computed = kd::KdComputeChecksum(sampleData, sizeof(sampleData));
+        TEST_ASSERT(computed == expectedSum, "KdComputeChecksum must compute 32-bit arithmetic byte sum");
+
+        // Transmit packet over KdTransport
+        kd::KdTransport transport;
+        bool okSend = transport.sendPacket(kd::PACKET_TYPE_KD_STATE_MANIPULATE, sampleData, sizeof(sampleData));
+        TEST_ASSERT(okSend, "sendPacket must succeed");
+        TEST_ASSERT(transport.getOutboundQueueCount() == 1, "Outbound queue count must be 1");
+
+        auto rawPkt = transport.popOutboundPacket();
+        TEST_ASSERT(rawPkt.size() == sizeof(kd::KD_PACKET) + sizeof(sampleData), "Packet size must match header + payload");
+
+        // Deliver to inbound queue and receive
+        transport.deliverInbound(rawPkt);
+        kd::KD_PACKET inHdr{};
+        std::vector<uint8_t> inPayload;
+        bool okRecv = transport.receivePacket(inHdr, inPayload);
+        TEST_ASSERT(okRecv, "receivePacket must succeed for valid packet");
+        TEST_ASSERT(inHdr.packetLeader == kd::PACKET_LEADER, "Packet leader must be PACKET_LEADER (0x30303030)");
+        TEST_ASSERT(inHdr.packetType == kd::PACKET_TYPE_KD_STATE_MANIPULATE, "Packet type must match");
+        TEST_ASSERT(inHdr.byteCount == sizeof(sampleData), "Byte count must match payload length");
+        TEST_ASSERT(inHdr.checksum == expectedSum, "Checksum must match expected arithmetic sum");
+        TEST_ASSERT(inPayload.size() == sizeof(sampleData), "Payload size must match");
+        TEST_ASSERT(std::memcmp(inPayload.data(), sampleData, sizeof(sampleData)) == 0, "Payload content must match");
+
+        // Corrupt checksum test
+        auto corruptPkt = rawPkt;
+        auto* hdr = reinterpret_cast<kd::KD_PACKET*>(corruptPkt.data());
+        hdr->checksum ^= 0xFFFFFFFF;
+        transport.deliverInbound(corruptPkt);
+        bool failCrc = transport.receivePacket(inHdr, inPayload);
+        TEST_ASSERT(!failCrc, "receivePacket must reject packet with corrupted checksum");
+
+        // Invalid packet leader test
+        auto badLeaderPkt = rawPkt;
+        auto* badHdr = reinterpret_cast<kd::KD_PACKET*>(badLeaderPkt.data());
+        badHdr->packetLeader = 0x12345678;
+        transport.deliverInbound(badLeaderPkt);
+        bool failLeader = transport.receivePacket(inHdr, inPayload);
+        TEST_ASSERT(!failLeader, "receivePacket must reject packet with invalid leader");
+    }
+
+    // 2. KDCom Transport Handshake, Packet ID Sequencing & ACK Protocol
+    {
+        kd::KdTransport transport;
+        uint32_t startId = transport.getCurrentPacketId();
+        TEST_ASSERT(startId == kd::INITIAL_PACKET_ID, "Initial packet ID must be 0x80800000");
+
+        uint32_t dummy = 0x12345678;
+        transport.sendPacket(kd::PACKET_TYPE_KD_DEBUG_IO, &dummy, sizeof(dummy));
+        TEST_ASSERT(transport.getCurrentPacketId() == startId + 1, "Packet ID must increment after transmission");
+
+        // Send ACK
+        bool ackOk = transport.sendAcknowledge(startId);
+        TEST_ASSERT(ackOk, "sendAcknowledge must succeed");
+
+        auto rawData = transport.popOutboundPacket(); // pop data packet
+        (void)rawData;
+        auto ackPkt = transport.popOutboundPacket();  // pop ACK packet
+        TEST_ASSERT(ackPkt.size() == sizeof(kd::KD_PACKET), "ACK packet size must be sizeof(KD_PACKET)");
+
+        transport.deliverInbound(ackPkt);
+        kd::KD_PACKET inAckHdr{};
+        std::vector<uint8_t> inAckPayload;
+        bool okRecvAck = transport.receivePacket(inAckHdr, inAckPayload);
+        TEST_ASSERT(okRecvAck, "receivePacket must succeed for ACK packet");
+        TEST_ASSERT(inAckHdr.packetLeader == kd::CONTROL_PACKET_LEADER, "ACK leader must be CONTROL_PACKET_LEADER (0x69696969)");
+        TEST_ASSERT(inAckHdr.packetType == kd::PACKET_TYPE_KD_ACKNOWLEDGE, "Packet type must be ACK");
+        TEST_ASSERT(inAckHdr.packetId == startId, "ACK packet ID must match acknowledged packet");
+    }
+
+    // 3. Resend & Reset Control Packet Protocol
+    {
+        kd::KdTransport transport;
+        uint64_t msg = 0xCAFEBABE11223344ULL;
+        transport.sendPacket(kd::PACKET_TYPE_KD_STATE_CHANGE64, &msg, sizeof(msg));
+        auto firstPkt = transport.popOutboundPacket();
+
+        // Host requests RESEND
+        bool resendOk = transport.resendLastPacket();
+        TEST_ASSERT(resendOk, "resendLastPacket must succeed when outbound packet was sent");
+        auto resentPkt = transport.popOutboundPacket();
+        TEST_ASSERT(resentPkt == firstPkt, "Resent packet bytes must be identical to original outbound packet");
+
+        // Transport Reset
+        transport.reset();
+        TEST_ASSERT(transport.getCurrentPacketId() == kd::INITIAL_PACKET_ID, "Reset must restore INITIAL_PACKET_ID");
+        TEST_ASSERT(transport.getOutboundQueueCount() == 0, "Outbound queue must be empty after reset");
+    }
+
+    // 4. Hardware Debug Registers & Watchpoint Engine (AMD64 DR0-DR7)
+    {
+        kd::HardwareBreakpointEngine hw;
+
+        // Set DR0: Execution breakpoint at 0xFFFFF80000401000
+        bool set0 = hw.setBreakpoint(0, 0xFFFFF80000401000ULL, kd::HwBreakpointType::Execute, kd::HwBreakpointLength::Byte1);
+        TEST_ASSERT(set0, "setBreakpoint on DR0 must succeed");
+
+        // Set DR1: Data write watchpoint at 0xFFFF800000200000, 4 bytes
+        bool set1 = hw.setBreakpoint(1, 0xFFFF800000200000ULL, kd::HwBreakpointType::Write, kd::HwBreakpointLength::Byte4);
+        TEST_ASSERT(set1, "setBreakpoint on DR1 must succeed");
+
+        // Set DR2: Data read/write watchpoint at 0xFFFF800000300000, 8 bytes
+        bool set2 = hw.setBreakpoint(2, 0xFFFF800000300000ULL, kd::HwBreakpointType::ReadWrite, kd::HwBreakpointLength::Byte8);
+        TEST_ASSERT(set2, "setBreakpoint on DR2 must succeed");
+
+        const auto& regs = hw.getRegisters();
+        TEST_ASSERT(regs.dr0 == 0xFFFFF80000401000ULL, "DR0 must contain set address");
+        TEST_ASSERT(regs.dr1 == 0xFFFF800000200000ULL, "DR1 must contain set address");
+        TEST_ASSERT(regs.dr2 == 0xFFFF800000300000ULL, "DR2 must contain set address");
+        TEST_ASSERT((regs.dr7 & 0x00000400ULL) != 0, "DR7 bit 10 must be preserved");
+        TEST_ASSERT((regs.dr7 & 0x01) != 0, "DR7 L0 bit must be set");
+        TEST_ASSERT((regs.dr7 & 0x04) != 0, "DR7 L1 bit must be set");
+        TEST_ASSERT((regs.dr7 & 0x10) != 0, "DR7 L2 bit must be set");
+
+        // Evaluate access: Execution match on DR0
+        uint64_t dr6 = 0;
+        bool hitExec = hw.evaluateAccess(0xFFFFF80000401000ULL, 1, false, true, dr6);
+        TEST_ASSERT(hitExec, "evaluateAccess must detect execution breakpoint match on DR0");
+        TEST_ASSERT((dr6 & 0x01) != 0, "DR6 B0 bit must be asserted on DR0 match");
+
+        // Evaluate access: Write match on DR1
+        bool hitWrite = hw.evaluateAccess(0xFFFF800000200002ULL, 2, true, false, dr6);
+        TEST_ASSERT(hitWrite, "evaluateAccess must detect write watchpoint match on DR1");
+        TEST_ASSERT((dr6 & 0x02) != 0, "DR6 B1 bit must be asserted on DR1 match");
+
+        // Evaluate access: Read on write-only watchpoint should NOT hit
+        bool hitReadFail = hw.evaluateAccess(0xFFFF800000200000ULL, 4, false, false, dr6);
+        TEST_ASSERT(!hitReadFail, "Read access on write-only watchpoint must not trigger breakpoint");
+
+        // Evaluate access: Read on R/W watchpoint on DR2 should hit
+        bool hitRw = hw.evaluateAccess(0xFFFF800000300004ULL, 4, false, false, dr6);
+        TEST_ASSERT(hitRw, "Read access on ReadWrite watchpoint must trigger breakpoint");
+        TEST_ASSERT((dr6 & 0x04) != 0, "DR6 B2 bit must be asserted on DR2 match");
+
+        // Single step control
+        hw.setSingleStep(true);
+        TEST_ASSERT((hw.getRegisters().dr6 & (1ULL << 14)) != 0, "DR6 bit 14 (BS) must be set on single-step enable");
+        hw.setSingleStep(false);
+        TEST_ASSERT((hw.getRegisters().dr6 & (1ULL << 14)) == 0, "DR6 bit 14 (BS) must be cleared on single-step disable");
+
+        // Clear breakpoint
+        bool clr0 = hw.clearBreakpoint(0);
+        TEST_ASSERT(clr0, "clearBreakpoint on DR0 must succeed");
+        TEST_ASSERT(hw.getRegisters().dr0 == 0, "DR0 must be 0 after clear");
+        TEST_ASSERT((hw.getRegisters().dr7 & 0x01) == 0, "DR7 L0 bit must be cleared");
+    }
+
+    // 5. Software Breakpoint Table Management & Opcode Patching
+    {
+        uint64_t targetAddr = 0xFFFFF800DEAD0000ULL;
+        uint8_t originalCode[4] = { 0x55, 0x48, 0x89, 0xE5 }; // push rbp; mov rbp, rsp
+        debugger.writeSimulatedMemory(targetAddr, originalCode, sizeof(originalCode));
+
+        uint32_t bpHandle = debugger.writeBreakpoint(targetAddr);
+        TEST_ASSERT(bpHandle > 0, "writeBreakpoint must return a valid non-zero handle");
+        TEST_ASSERT(debugger.getActiveBreakpointCount() == 1, "Active breakpoint count must be 1");
+
+        // Verify simulated memory now has 0xCC (INT 3)
+        uint8_t readBack[4]{};
+        debugger.readSimulatedMemory(targetAddr, readBack, sizeof(readBack));
+        TEST_ASSERT(readBack[0] == 0xCC, "First opcode byte must be patched with 0xCC (INT 3)");
+        TEST_ASSERT(readBack[1] == 0x48, "Subsequent bytes must remain unmodified");
+
+        // Restore breakpoint
+        bool restored = debugger.restoreBreakpoint(bpHandle);
+        TEST_ASSERT(restored, "restoreBreakpoint must succeed");
+        TEST_ASSERT(debugger.getActiveBreakpointCount() == 0, "Active breakpoint count must be 0 after restoration");
+
+        // Verify simulated memory restored to original 0x55
+        debugger.readSimulatedMemory(targetAddr, readBack, sizeof(readBack));
+        TEST_ASSERT(readBack[0] == 0x55, "First opcode byte must be restored to original 0x55");
+
+        // Second restore on same handle must fail
+        bool restoredAgain = debugger.restoreBreakpoint(bpHandle);
+        TEST_ASSERT(!restoredAgain, "Restoring with an already freed handle must fail");
+    }
+
+    // 6. DbgKd State Manipulate Commands
+    {
+        // 6.1 GetVersion
+        kd::DBGKD_MANIPULATE_STATE64 req{};
+        kd::DBGKD_MANIPULATE_STATE64 reply{};
+        std::vector<uint8_t> inData;
+        std::vector<uint8_t> outData;
+
+        req.apiNumber = kd::DbgKdGetVersionApi;
+        bool okVer = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okVer, "handleStateManipulate(DbgKdGetVersionApi) must succeed");
+        TEST_ASSERT(reply.returnStatus == static_cast<uint32_t>(NtStatus::Success), "Status must be Success");
+        TEST_ASSERT(reply.getVersion.majorVersion == 0x000F, "Major version must be 0x000F (Free)");
+        TEST_ASSERT(reply.getVersion.machineType == 0x8664, "Machine type must be IMAGE_FILE_MACHINE_AMD64 (0x8664)");
+        TEST_ASSERT(reply.getVersion.protocolVersion == 6, "Protocol version must be 6");
+
+        // 6.2 Write & Read Virtual Memory
+        const char testStr[] = "MicaNT_KD64_Kernel_Protocol_Verification";
+        size_t strLen = sizeof(testStr);
+
+        req = {};
+        req.apiNumber = kd::DbgKdWriteVirtualMemoryApi64;
+        req.writeMemory.targetBaseAddress = 0xFFFFF800C0000000ULL;
+        req.writeMemory.transferCount = static_cast<uint32_t>(strLen);
+        inData.assign(testStr, testStr + strLen);
+
+        bool okWvm = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okWvm, "DbgKdWriteVirtualMemoryApi64 must succeed");
+        TEST_ASSERT(reply.writeMemory.actualBytesWritten == strLen, "Bytes written must match transfer count");
+
+        req = {};
+        req.apiNumber = kd::DbgKdReadVirtualMemoryApi64;
+        req.readMemory.targetBaseAddress = 0xFFFFF800C0000000ULL;
+        req.readMemory.transferCount = static_cast<uint32_t>(strLen);
+        inData.clear();
+
+        bool okRvm = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okRvm, "DbgKdReadVirtualMemoryApi64 must succeed");
+        TEST_ASSERT(reply.readMemory.actualBytesRead == strLen, "Bytes read must match transfer count");
+        TEST_ASSERT(outData.size() == strLen, "Output data size must match transfer count");
+        TEST_ASSERT(std::memcmp(outData.data(), testStr, strLen) == 0, "Read virtual memory must match written data");
+
+        // 6.3 Write & Read Physical Memory
+        const uint64_t physPattern = 0x1122334455667788ULL;
+        req = {};
+        req.apiNumber = kd::DbgKdWritePhysicalMemoryApi64;
+        req.writePhysicalMemory.targetBaseAddress = 0x200000ULL;
+        req.writePhysicalMemory.transferCount = sizeof(physPattern);
+        inData.resize(sizeof(physPattern));
+        std::memcpy(inData.data(), &physPattern, sizeof(physPattern));
+
+        bool okWpm = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okWpm, "DbgKdWritePhysicalMemoryApi64 must succeed");
+
+        req = {};
+        req.apiNumber = kd::DbgKdReadPhysicalMemoryApi64;
+        req.readPhysicalMemory.targetBaseAddress = 0x200000ULL;
+        req.readPhysicalMemory.transferCount = sizeof(physPattern);
+        inData.clear();
+
+        bool okRpm = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okRpm, "DbgKdReadPhysicalMemoryApi64 must succeed");
+        uint64_t readPhys = 0;
+        std::memcpy(&readPhys, outData.data(), sizeof(readPhys));
+        TEST_ASSERT(readPhys == physPattern, "Read physical memory must match written pattern");
+
+        // 6.4 Read & Write Control Space (CR0, CR3, CR4, CR8)
+        req = {};
+        req.apiNumber = kd::DbgKdReadControlSpaceApi;
+        req.readControlSpace.targetBaseAddress = 0; // CR0
+        req.readControlSpace.transferCount = 8;
+        bool okRcs = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okRcs, "DbgKdReadControlSpaceApi (CR0) must succeed");
+        uint64_t cr0Val = 0;
+        std::memcpy(&cr0Val, outData.data(), sizeof(cr0Val));
+        TEST_ASSERT(cr0Val == 0x80050033ULL, "Default CR0 value must match 0x80050033");
+
+        // Write CR8
+        uint64_t newCr8 = 0xF;
+        req = {};
+        req.apiNumber = kd::DbgKdWriteControlSpaceApi;
+        req.writeControlSpace.targetBaseAddress = 8; // CR8
+        req.writeControlSpace.transferCount = 8;
+        inData.resize(8);
+        std::memcpy(inData.data(), &newCr8, 8);
+        bool okWcs = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okWcs, "DbgKdWriteControlSpaceApi (CR8) must succeed");
+
+        // Read CR8 back
+        req = {};
+        req.apiNumber = kd::DbgKdReadControlSpaceApi;
+        req.readControlSpace.targetBaseAddress = 8; // CR8
+        req.readControlSpace.transferCount = 8;
+        inData.clear();
+        debugger.handleStateManipulate(req, inData, reply, outData);
+        uint64_t readCr8 = 0;
+        std::memcpy(&readCr8, outData.data(), 8);
+        TEST_ASSERT(readCr8 == 0xF, "Read CR8 must match written value 0xF");
+
+        // 6.5 Set & Get Context Frame
+        kd::DBGKD_CONTEXT64 newCtx{};
+        newCtx.rip = 0xFFFFF800DEADBEEFULL;
+        newCtx.rsp = 0xFFFF800012345678ULL;
+        newCtx.rax = 0x1111111122222222ULL;
+        newCtx.rflags = 0x00000246;
+
+        req = {};
+        req.apiNumber = kd::DbgKdSetContextApi;
+        inData.resize(sizeof(newCtx));
+        std::memcpy(inData.data(), &newCtx, sizeof(newCtx));
+        bool okSetCtx = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okSetCtx, "DbgKdSetContextApi must succeed");
+
+        req = {};
+        req.apiNumber = kd::DbgKdGetContextApi;
+        inData.clear();
+        bool okGetCtx = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okGetCtx, "DbgKdGetContextApi must succeed");
+        kd::DBGKD_CONTEXT64 retrievedCtx{};
+        std::memcpy(&retrievedCtx, outData.data(), sizeof(retrievedCtx));
+        TEST_ASSERT(retrievedCtx.rip == 0xFFFFF800DEADBEEFULL, "Retrieved context RIP must match");
+        TEST_ASSERT(retrievedCtx.rsp == 0xFFFF800012345678ULL, "Retrieved context RSP must match");
+        TEST_ASSERT(retrievedCtx.rax == 0x1111111122222222ULL, "Retrieved context RAX must match");
+        TEST_ASSERT(retrievedCtx.rflags == 0x00000246, "Retrieved context RFLAGS must match");
+
+        // 6.6 WriteBreakPoint & RestoreBreakPoint via API
+        req = {};
+        req.apiNumber = kd::DbgKdWriteBreakPointApi;
+        req.breakPoint.breakPointAddress = 0xFFFFF800AAAA0000ULL;
+        bool okWbp = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okWbp, "DbgKdWriteBreakPointApi must succeed");
+        uint32_t apiBpHandle = reply.breakPoint.breakPointHandle;
+        TEST_ASSERT(apiBpHandle > 0, "DbgKdWriteBreakPointApi must return a valid handle");
+
+        req = {};
+        req.apiNumber = kd::DbgKdRestoreBreakPointApi;
+        req.breakPoint.breakPointHandle = apiBpHandle;
+        bool okRbp = debugger.handleStateManipulate(req, inData, reply, outData);
+        TEST_ASSERT(okRbp, "DbgKdRestoreBreakPointApi must succeed");
+    }
+
+    // 7. KdpTrap Exception Interception & DBGKD_WAIT_STATE_CHANGE64 Framing
+    {
+        debugger.getTransport().reset();
+
+        ke::ExceptionRecord record{
+            .exceptionCode = ke::EXCEPTION_BREAKPOINT,
+            .exceptionAddress = reinterpret_cast<void*>(0xFFFFF80000500123ULL),
+            .numberParameters = 1
+        };
+        record.exceptionInformation[0] = 0;
+
+        ps::ContextFrame ctx{};
+        ctx.rip = 0xFFFFF80000500123ULL;
+        ctx.rsp = 0xFFFF800000100000ULL;
+        ctx.rax = 0x42;
+        ctx.rflags = 0x202;
+        ctx.cs = 0x10;
+        ctx.ss = 0x18;
+
+        bool handled = kd::KdpTrap(record, ctx, false);
+        TEST_ASSERT(handled, "KdpTrap must intercept first-chance breakpoint exception");
+
+        // Verify state change packet generated in transport outbound queue
+        TEST_ASSERT(debugger.getTransport().getOutboundQueueCount() == 1, "Transport should contain 1 outbound packet");
+        auto rawPkt = debugger.getTransport().popOutboundPacket();
+        TEST_ASSERT(rawPkt.size() == sizeof(kd::KD_PACKET) + sizeof(kd::DBGKD_WAIT_STATE_CHANGE64), "Packet size must match header + DBGKD_WAIT_STATE_CHANGE64");
+
+        const auto* hdr = reinterpret_cast<const kd::KD_PACKET*>(rawPkt.data());
+        TEST_ASSERT(hdr->packetLeader == kd::PACKET_LEADER, "Packet leader must be PACKET_LEADER");
+        TEST_ASSERT(hdr->packetType == kd::PACKET_TYPE_KD_STATE_CHANGE64, "Packet type must be PACKET_TYPE_KD_STATE_CHANGE64");
+
+        const auto* sc = reinterpret_cast<const kd::DBGKD_WAIT_STATE_CHANGE64*>(rawPkt.data() + sizeof(kd::KD_PACKET));
+        TEST_ASSERT(sc->newStatus == ke::EXCEPTION_BREAKPOINT, "State change status must match exception code");
+        TEST_ASSERT(sc->programCounter == 0xFFFFF80000500123ULL, "State change PC must match RIP");
+        TEST_ASSERT(sc->exception.exceptionCode == ke::EXCEPTION_BREAKPOINT, "Exception record code must match");
+        TEST_ASSERT(sc->exception.exceptionAddress == 0xFFFFF80000500123ULL, "Exception record address must match");
+        TEST_ASSERT(sc->controlReport.segCs == 0x10, "Control report CS must match");
+        TEST_ASSERT(sc->controlReport.eflags == 0x202, "Control report EFLAGS must match");
+    }
+
+    // 8. DbgPrint Ring Buffer & Polling Break-in
+    {
+        debugger.getRingBuffer().clear();
+        kd::DbgPrint("MicaNT Kernel Debugger KD64 Active\n");
+        kd::DbgPrintEx(0, 0, "KDCOM baud rate 115200 initialized\n");
+
+        auto logs = debugger.getRingBuffer().getLogs();
+        TEST_ASSERT(logs.size() == 2, "Ring buffer must contain 2 logged messages");
+        TEST_ASSERT(logs[0].find("MicaNT Kernel Debugger KD64 Active") != std::string::npos, "First log must contain message");
+        TEST_ASSERT(logs[1].find("KDCOM baud rate 115200") != std::string::npos, "Second log must contain message");
+
+        // Polling break-in
+        TEST_ASSERT(!kd::KdPollBreakIn(), "Initial break-in poll must be false");
+        debugger.signalBreakIn();
+        TEST_ASSERT(kd::KdPollBreakIn(), "Break-in poll must return true after break-in signaled");
+        TEST_ASSERT(!kd::KdPollBreakIn(), "Break-in poll must clear pending flag and return false on second poll");
+    }
+
+    // 9. Debugger Enable/Disable State Toggle
+    {
+        debugger.setDebuggerEnabled(false);
+        TEST_ASSERT(!debugger.isDebuggerEnabled(), "Debugger must report disabled");
+        TEST_ASSERT(debugger.isDebuggerNotPresent(), "isDebuggerNotPresent must return true when disabled");
+
+        // KdpTrap should not handle traps when disabled
+        ke::ExceptionRecord record{
+            .exceptionCode = ke::EXCEPTION_BREAKPOINT,
+            .exceptionAddress = reinterpret_cast<void*>(0x1000ULL),
+            .numberParameters = 0
+        };
+        ps::ContextFrame ctx{};
+        bool handledDisabled = kd::KdpTrap(record, ctx, false);
+        TEST_ASSERT(!handledDisabled, "KdpTrap must not intercept when debugger is disabled");
+
+        // Re-enable
+        debugger.setDebuggerEnabled(true);
+        TEST_ASSERT(debugger.isDebuggerEnabled(), "Debugger must report enabled");
+    }
+
+    // 10. KD Diagnostic Telemetry Audit & Testing Reset
+    {
+        kd::KD_TELEMETRY telem = kd::KdQueryTelemetry();
+        TEST_ASSERT(telem.totalPacketsSent > 0, "totalPacketsSent must be > 0");
+        TEST_ASSERT(telem.totalPacketsReceived > 0, "totalPacketsReceived must be > 0");
+        TEST_ASSERT(telem.totalAcksSent > 0, "totalAcksSent must be > 0");
+        TEST_ASSERT(telem.totalAcksReceived > 0, "totalAcksReceived must be > 0");
+        TEST_ASSERT(telem.totalResendsRequested > 0, "totalResendsRequested must be > 0");
+        TEST_ASSERT(telem.totalBreakinsReceived > 0, "totalBreakinsReceived must be > 0");
+        TEST_ASSERT(telem.totalStateChangesDispatched > 0, "totalStateChangesDispatched must be > 0");
+        TEST_ASSERT(telem.totalManipulateRequestsHandled > 0, "totalManipulateRequestsHandled must be > 0");
+        TEST_ASSERT(telem.totalDbgPrintsLogged > 0, "totalDbgPrintsLogged must be > 0");
+        TEST_ASSERT(telem.totalMemoryReads > 0, "totalMemoryReads must be > 0");
+        TEST_ASSERT(telem.totalMemoryWrites > 0, "totalMemoryWrites > 0");
+        TEST_ASSERT(telem.totalPhysicalMemoryReads > 0, "totalPhysicalMemoryReads must be > 0");
+        TEST_ASSERT(telem.totalPhysicalMemoryWrites > 0, "totalPhysicalMemoryWrites must be > 0");
+        TEST_ASSERT(telem.totalSoftwareBreakpointsSet > 0, "totalSoftwareBreakpointsSet must be > 0");
+        TEST_ASSERT(telem.totalSoftwareBreakpointsCleared > 0, "totalSoftwareBreakpointsCleared must be > 0");
+        TEST_ASSERT(telem.totalHardwareBreakpointsHit > 0, "totalHardwareBreakpointsHit must be > 0");
+        TEST_ASSERT(telem.totalContextQueries > 0, "totalContextQueries must be > 0");
+        TEST_ASSERT(telem.totalContextSets > 0, "totalContextSets must be > 0");
+        TEST_ASSERT(telem.totalExceptionsHandledByKd > 0, "totalExceptionsHandledByKd must be > 0");
+
+        // Reset telemetry
+        kd::KdResetTelemetryForTesting();
+        kd::KD_TELEMETRY resetTelem = kd::KdQueryTelemetry();
+        TEST_ASSERT(resetTelem.totalPacketsSent == 0, "totalPacketsSent must be 0 after reset");
+        TEST_ASSERT(resetTelem.totalSoftwareBreakpointsSet == 0, "totalSoftwareBreakpointsSet must be 0 after reset");
+        TEST_ASSERT(resetTelem.totalExceptionsHandledByKd == 0, "totalExceptionsHandledByKd must be 0 after reset");
+    }
+
+    std::cout << "[TEST] Suite 246: Horizon 30 - Kernel Debugger Engine (KD64), KDCom Protocol, Breakpoints & KdpTrap Exception Routing PASSED.\n";
+}
+
+
 
 
 

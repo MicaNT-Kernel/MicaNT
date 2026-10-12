@@ -181,6 +181,10 @@ public:
         debuggerHandler_ = std::move(handler);
     }
 
+    void registerDebuggerHandler(std::function<bool(const ExceptionRecord&, ps::ContextFrame&)> handler) {
+        setDebuggerHandler(std::move(handler));
+    }
+
     void setUserSehHandler(std::function<bool(const ExceptionRecord&, ps::ContextFrame&)> handler) {
         userSehHandler_ = std::move(handler);
     }

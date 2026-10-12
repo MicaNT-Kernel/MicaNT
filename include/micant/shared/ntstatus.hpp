@@ -30,6 +30,8 @@ enum class NtStatus : uint32_t {
     // 0x80000000 - Warnings / Info
     GuardPageViolation               = 0x80000001,
     DatatypeMisalignment             = 0x80000002,
+    Breakpoint                       = 0x80000003,
+    SingleStep                       = 0x80000004,
     BufferOverflow                   = 0x80000005,
     NoMoreFiles                      = 0x80000006,
     NoMoreEntries                    = 0x8000001A,
@@ -131,6 +133,10 @@ enum class NtStatus : uint32_t {
 // ============================================================================
 using NTSTATUS = int32_t;
 inline constexpr NTSTATUS STATUS_SUCCESS                = 0x00000000;
+inline constexpr NTSTATUS DBG_CONTINUE                  = 0x00010002;
+inline constexpr NTSTATUS STATUS_BREAKPOINT             = static_cast<NTSTATUS>(0x80000003);
+inline constexpr NTSTATUS STATUS_SINGLE_STEP            = static_cast<NTSTATUS>(0x80000004);
+inline constexpr NTSTATUS DBG_EXCEPTION_NOT_HANDLED     = static_cast<NTSTATUS>(0x80010001);
 inline constexpr NTSTATUS STATUS_UNSUCCESSFUL           = static_cast<NTSTATUS>(0xC0000001);
 inline constexpr NTSTATUS STATUS_NOT_IMPLEMENTED        = static_cast<NTSTATUS>(0xC0000002);
 inline constexpr NTSTATUS STATUS_INVALID_HANDLE         = static_cast<NTSTATUS>(0xC0000008);
@@ -204,6 +210,8 @@ inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(
         case NtStatus::Success: return "STATUS_SUCCESS";
         case NtStatus::Timeout: return "STATUS_TIMEOUT";
         case NtStatus::Pending: return "STATUS_PENDING";
+        case NtStatus::Breakpoint: return "STATUS_BREAKPOINT";
+        case NtStatus::SingleStep: return "STATUS_SINGLE_STEP";
         case NtStatus::DatatypeMisalignment: return "STATUS_DATATYPE_MISALIGNMENT";
         case NtStatus::BufferOverflow: return "STATUS_BUFFER_OVERFLOW";
         case NtStatus::NoMoreFiles: return "STATUS_NO_MORE_FILES";

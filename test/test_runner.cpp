@@ -293,7 +293,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite245")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite246")) {
+        RUN_TEST(Test_Horizon30_KernelDebugger_KD64_Breakpoints_And_KdpTrapExceptionRouting);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite245") {
         RUN_TEST(Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces);
         return g_FailedTests;
     }
@@ -1072,6 +1076,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon27_ExecutiveSynchronization_ERESOURCE_PushLocks_And_BufferProbing);
     RUN_TEST(Test_Horizon28_HardwareAbstractionLayer_Interrupts_APIC_HPET_And_Timers);
     RUN_TEST(Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces);
+    RUN_TEST(Test_Horizon30_KernelDebugger_KD64_Breakpoints_And_KdpTrapExceptionRouting);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
