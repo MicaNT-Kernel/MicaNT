@@ -5649,6 +5649,243 @@ void Test_Horizon23_IoSubsystem_FastIo_Cancellation_And_BufferingModes() {
     std::cout << "[TEST] Suite 239: Horizon 23 - Sovereign I/O Subsystem FastIo, Buffering & Cancellation PASSED.\n";
 }
 
+// ============================================================================
+// Suite 240: Horizon 24 - Sovereign Process Subsystem Quotas, Jobs & Callbacks
+// ============================================================================
+void Test_Horizon24_ProcessSubsystem_Quotas_JobObjects_Callbacks_And_Affinity() {
+    std::cout << "[TEST] Suite 240: Horizon 24 - Sovereign Process Subsystem Quotas, Jobs & Callbacks...\n" << std::flush;
+
+    auto& pm = ps::ProcessManager::get();
+    pm.resetForTesting();
+    ps::PsResetTelemetryForTesting();
+
+    // 1. Process & Thread Quotas (ProcessQuotaBlock)
+    {
+        auto proc = pm.createProcess(L"QuotaService.exe");
+        TEST_ASSERT(proc != nullptr, "Process creation must succeed");
+
+        auto& qb = proc->getQuotaBlock();
+        qb.pagedPoolLimit = 64 * 1024;      // 64 KB limit
+        qb.nonPagedPoolLimit = 32 * 1024;   // 32 KB limit
+        qb.pagefileLimit = 128 * 1024;      // 128 KB limit
+
+        // Charge within quota
+        NtStatus st1 = qb.chargePagedPool(16 * 1024);
+        TEST_ASSERT(NT_SUCCESS(st1), "Charging 16KB paged pool under 64KB limit must succeed");
+        TEST_ASSERT(qb.pagedPoolUsage == 16 * 1024, "Paged pool usage must be 16KB");
+
+        // Exceed quota
+        NtStatus st2 = qb.chargePagedPool(60 * 1024); // 16KB + 60KB = 76KB > 64KB
+        TEST_ASSERT(st2 == NtStatus::QuotaExceeded, "Exceeding paged pool limit must return STATUS_QUOTA_EXCEEDED");
+        TEST_ASSERT(qb.pagedPoolUsage == 16 * 1024, "Failed charge must not increment usage");
+
+        // Return quota
+        qb.returnPagedPool(16 * 1024);
+        TEST_ASSERT(qb.pagedPoolUsage == 0, "Returned paged pool must reduce usage to 0");
+
+        // Charge pagefile exceeding limit
+        NtStatus st3 = qb.chargePagefile(200 * 1024); // 200KB > 128KB
+        TEST_ASSERT(st3 == NtStatus::PagefileQuotaExceeded, "Exceeding pagefile limit must return STATUS_PAGEFILE_QUOTA_EXCEEDED");
+
+        proc->terminate(NtStatus::Success);
+    }
+
+    // 2. Canonical Windows NT Job Objects (JobObject / EJOB)
+    {
+        auto job = std::make_shared<ps::JobObject>(L"ProductionWorkerJob");
+        TEST_ASSERT(job->getName() == L"ProductionWorkerJob", "Job name must match");
+
+        ps::JobBasicLimitInformation limits{};
+        limits.limitFlags = ps::JOB_OBJECT_LIMIT_ACTIVE_PROCESS | ps::JOB_OBJECT_LIMIT_AFFINITY;
+        limits.activeProcessLimit = 2; // Allow maximum 2 concurrent processes
+        limits.affinity = 0x00000003;  // Cores 0 and 1
+        job->setLimits(limits);
+
+        auto worker1 = pm.createProcess(L"Worker1.exe");
+        auto worker2 = pm.createProcess(L"Worker2.exe");
+        auto worker3 = pm.createProcess(L"Worker3.exe");
+
+        auto w1Thread = worker1->createThread(0x401000);
+        auto w2Thread = worker2->createThread(0x402000);
+
+        // Assign Worker 1
+        NtStatus assignSt1 = job->assignProcess(worker1);
+        TEST_ASSERT(NT_SUCCESS(assignSt1), "Assigning worker1 to job must succeed");
+        TEST_ASSERT(worker1->getJob() == job, "worker1 must reference assigned job");
+        TEST_ASSERT(worker1->getAffinityMask() == 0x03, "worker1 must inherit job affinity mask 0x03");
+        TEST_ASSERT(w1Thread->getAffinityMask() == 0x03, "worker1 threads must inherit job affinity mask 0x03");
+        TEST_ASSERT(job->getAccounting().activeProcesses == 1, "Job activeProcesses must be 1");
+
+        // Assign Worker 2
+        NtStatus assignSt2 = job->assignProcess(worker2);
+        TEST_ASSERT(NT_SUCCESS(assignSt2), "Assigning worker2 to job must succeed");
+        TEST_ASSERT(job->getAccounting().activeProcesses == 2, "Job activeProcesses must be 2");
+
+        // Assign Worker 3 (Should fail due to activeProcessLimit = 2)
+        NtStatus assignSt3 = job->assignProcess(worker3);
+        TEST_ASSERT(assignSt3 == NtStatus::QuotaExceeded, "Assigning worker3 beyond activeProcessLimit must return QuotaExceeded");
+
+        // Terminate Job
+        NtStatus termSt = job->terminateJob(NtStatus::ProcessAborted);
+        TEST_ASSERT(NT_SUCCESS(termSt), "Terminating job must succeed");
+        TEST_ASSERT(worker1->isTerminated(), "worker1 must be terminated by job termination");
+        TEST_ASSERT(worker2->isTerminated(), "worker2 must be terminated by job termination");
+        TEST_ASSERT(worker1->getExitStatus() == NtStatus::ProcessAborted, "Exit status must be STATUS_PROCESS_ABORTED");
+        TEST_ASSERT(job->getAccounting().activeProcesses == 0, "Job activeProcesses must drop to 0");
+        TEST_ASSERT(job->getAccounting().totalTerminatedProcesses == 2, "Job totalTerminatedProcesses must be 2");
+
+        worker3->terminate(NtStatus::Success);
+    }
+
+    // 3. Process & Thread Creation / Exit Notify Callbacks
+    {
+        static std::vector<std::pair<Handle, bool>> s_ProcessEvents;
+        static std::vector<std::pair<Handle, bool>> s_ThreadEvents;
+        s_ProcessEvents.clear();
+        s_ThreadEvents.clear();
+
+        auto procCallback = [](Handle /*parent*/, Handle pid, bool create) {
+            s_ProcessEvents.push_back({pid, create});
+        };
+
+        auto threadCallback = [](Handle /*pid*/, Handle tid, bool create) {
+            s_ThreadEvents.push_back({tid, create});
+        };
+
+        auto procCallbackEx = [](ps::EProcess*, Handle, ps::PS_CREATE_NOTIFY_INFO* info) {
+            if (info && info->imageFileName == L"MalwareBlocked.exe") {
+                info->creationStatus = NtStatus::AccessDenied; // Veto process creation
+            }
+        };
+
+        ps::PsSetCreateProcessNotifyRoutine(procCallback);
+        ps::PsSetCreateThreadNotifyRoutine(threadCallback);
+        ps::PsSetCreateProcessNotifyRoutineEx(procCallbackEx);
+
+        // Test normal process creation
+        std::shared_ptr<ps::EProcess> safeProc;
+        NtStatus safeSt = ps::PsCreateProcessEx(safeProc, L"SafeService.exe");
+        TEST_ASSERT(NT_SUCCESS(safeSt), "PsCreateProcessEx SafeService.exe must succeed");
+        TEST_ASSERT(safeProc != nullptr, "Created process pointer must not be null");
+        TEST_ASSERT(!s_ProcessEvents.empty(), "Process callback must record create event");
+        TEST_ASSERT(s_ProcessEvents.back().first == safeProc->getPid() && s_ProcessEvents.back().second == true, 
+                    "Callback must receive (PID, create=true)");
+
+        // Test thread creation inside SafeService.exe
+        auto safeThread1 = safeProc->createThread(0x500000);
+        auto safeThread2 = safeProc->createThread(0x510000);
+        TEST_ASSERT(safeThread1 != nullptr && safeThread2 != nullptr, "Thread creations must succeed");
+        TEST_ASSERT(s_ThreadEvents.size() == 2, "Thread callback must record both create events");
+        TEST_ASSERT(s_ThreadEvents[0].first == safeThread1->getTid() && s_ThreadEvents[0].second == true,
+                    "Callback must receive (TID1, create=true)");
+        TEST_ASSERT(s_ThreadEvents[1].first == safeThread2->getTid() && s_ThreadEvents[1].second == true,
+                    "Callback must receive (TID2, create=true)");
+
+        // Test thread and process termination notifications
+        safeProc->terminate(NtStatus::Success);
+        TEST_ASSERT(s_ThreadEvents.size() == 4, "Thread callbacks must record exit events for both threads");
+        TEST_ASSERT(s_ThreadEvents[2].second == false && s_ThreadEvents[3].second == false,
+                    "Thread exit callbacks must receive create=false");
+        TEST_ASSERT(s_ProcessEvents.back().second == false, "Process exit callback must receive create=false");
+
+        // Test Veto of MalwareBlocked.exe by registered Ex callback
+        std::shared_ptr<ps::EProcess> blockedProc;
+        NtStatus blockedSt = ps::PsCreateProcessEx(blockedProc, L"MalwareBlocked.exe");
+        TEST_ASSERT(blockedSt == NtStatus::AccessDenied, "MalwareBlocked.exe creation must be denied by Ex callback");
+        TEST_ASSERT(blockedProc == nullptr, "Blocked process pointer must be null");
+
+        // Clean up callbacks
+        ps::PsSetCreateProcessNotifyRoutine(procCallback, true);
+        ps::PsSetCreateThreadNotifyRoutine(threadCallback, true);
+        ps::PsSetCreateProcessNotifyRoutineEx(procCallbackEx, true);
+    }
+
+    // 4. Thread Priority Boosting, Quantum Decay, CPU Affinity & Suspend/Resume
+    {
+        auto testProc = pm.createProcess(L"ThreadPriorityTest.exe");
+        auto dynamicThread = testProc->createThread(0x600000);
+        dynamicThread->setBasePriority(8);
+        TEST_ASSERT(dynamicThread->getPriority() == 8, "Initial priority must match base 8");
+        TEST_ASSERT(dynamicThread->getDynamicPriority() == 8, "Dynamic priority must match base 8");
+
+        // Apply Keyboard I/O Boost (+6)
+        dynamicThread->boostPriority(ps::IO_KEYBOARD_INCREMENT);
+        TEST_ASSERT(dynamicThread->getDynamicPriority() == 14, "Boost (+6) on base 8 must result in priority 14");
+        TEST_ASSERT(dynamicThread->getPriority() == 14, "Effective priority must reflect dynamic priority 14");
+
+        // Apply another Boost (+4), should be clamped at 15 for non-realtime
+        dynamicThread->boostPriority(4);
+        TEST_ASSERT(dynamicThread->getDynamicPriority() == 15, "Dynamic boost must cap at 15 (LOW_REALTIME_PRIORITY - 1)");
+
+        // Test quantum decay over 18 ticks
+        for (int i = 0; i < 18; ++i) {
+            dynamicThread->decayQuantum();
+        }
+        TEST_ASSERT(dynamicThread->getDynamicPriority() == 14, "Exhausting quantum tick cycle must decay dynamic priority by 1");
+
+        // Real-Time thread behavior
+        auto rtThread = testProc->createThread(0x700000);
+        rtThread->setBasePriority(24); // Real-time priority
+        rtThread->boostPriority(ps::IO_MOUSE_INCREMENT);
+        TEST_ASSERT(rtThread->getDynamicPriority() == 24, "Real-time thread must NOT receive dynamic priority boost");
+
+        for (int i = 0; i < 18; ++i) {
+            rtThread->decayQuantum();
+        }
+        TEST_ASSERT(rtThread->getDynamicPriority() == 24, "Real-time thread priority must NOT decay");
+
+        // Suspend and Resume
+        uint32_t prev1 = ps::PsSuspendThread(dynamicThread.get());
+        TEST_ASSERT(prev1 == 0, "First suspend must return previous count 0");
+        TEST_ASSERT(dynamicThread->getState() == ps::ThreadState::Waiting, "Thread must enter Waiting state upon suspension");
+        TEST_ASSERT(dynamicThread->getSuspendCount() == 1, "Suspend count must be 1");
+
+        uint32_t prev2 = ps::PsSuspendThread(dynamicThread.get());
+        TEST_ASSERT(prev2 == 1, "Second suspend must return previous count 1");
+        TEST_ASSERT(dynamicThread->getSuspendCount() == 2, "Suspend count must be 2");
+
+        uint32_t res1 = ps::PsResumeThread(dynamicThread.get());
+        TEST_ASSERT(res1 == 2, "First resume must return previous count 2");
+        TEST_ASSERT(dynamicThread->getState() == ps::ThreadState::Waiting, "Thread must remain Waiting while suspendCount > 0");
+
+        uint32_t res2 = ps::PsResumeThread(dynamicThread.get());
+        TEST_ASSERT(res2 == 1, "Second resume must return previous count 1");
+        TEST_ASSERT(dynamicThread->getState() == ps::ThreadState::Ready, "Thread must return to Ready when suspendCount reaches 0");
+
+        // Kernel Stack Setup
+        dynamicThread->setKernelStack(0xFFFF800000100000ULL, 0xFFFF8000000F8000ULL);
+        TEST_ASSERT(dynamicThread->getKernelStackBase() == 0xFFFF800000100000ULL, "Kernel stack base must match");
+        TEST_ASSERT(dynamicThread->getKernelStackLimit() == 0xFFFF8000000F8000ULL, "Kernel stack limit must match");
+
+        testProc->terminate(NtStatus::Success);
+    }
+
+    // 5. PS Subsystem Telemetry Verification & Teardown
+    {
+        auto telem = ps::PsQueryTelemetry();
+        TEST_ASSERT(telem.totalProcessesCreated >= 4, "totalProcessesCreated must be >= 4");
+        TEST_ASSERT(telem.totalProcessesTerminated >= 2, "totalProcessesTerminated must be >= 2");
+        TEST_ASSERT(telem.totalThreadsCreated >= 4, "totalThreadsCreated must be >= 4");
+        TEST_ASSERT(telem.totalThreadsTerminated >= 2, "totalThreadsTerminated must be >= 2");
+        TEST_ASSERT(telem.totalJobsCreated >= 1, "totalJobsCreated must be >= 1");
+        TEST_ASSERT(telem.totalProcessesAssignedToJobs >= 2, "totalProcessesAssignedToJobs must be >= 2");
+        TEST_ASSERT(telem.totalProcessCallbacksInvoked >= 4, "totalProcessCallbacksInvoked must be >= 4");
+        TEST_ASSERT(telem.totalThreadCallbacksInvoked >= 4, "totalThreadCallbacksInvoked must be >= 4");
+        TEST_ASSERT(telem.totalQuotaViolations >= 2, "totalQuotaViolations must be >= 2");
+        TEST_ASSERT(telem.totalThreadPriorityBoosts >= 2, "totalThreadPriorityBoosts must be >= 2");
+        TEST_ASSERT(telem.totalThreadSuspensions >= 2, "totalThreadSuspensions must be >= 2");
+        TEST_ASSERT(telem.totalThreadResumptions >= 2, "totalThreadResumptions must be >= 2");
+
+        ps::PsResetTelemetryForTesting();
+        auto telemReset = ps::PsQueryTelemetry();
+        TEST_ASSERT(telemReset.totalProcessesCreated == 0, "PsResetTelemetryForTesting must zero out counters");
+    }
+
+    pm.resetForTesting();
+    std::cout << "[TEST] Suite 240: Horizon 24 - Sovereign Process Subsystem Quotas, Jobs & Callbacks PASSED.\n";
+}
+
+
 
 
 

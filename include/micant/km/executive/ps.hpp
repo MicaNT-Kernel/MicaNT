@@ -8,6 +8,8 @@
 #include <atomic>
 #include <unordered_map>
 #include <chrono>
+#include <mutex>
+#include <algorithm>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 #include "ob.hpp"
@@ -31,11 +33,78 @@ enum class ThreadState : uint32_t {
 };
 
 enum class SecurityImpersonationLevel : uint32_t {
-    SecurityAnonymous     = 0,
-    SecurityIdentification= 1,
-    SecurityImpersonation = 2,
-    SecurityDelegation    = 3
+    SecurityAnonymous      = 0,
+    SecurityIdentification = 1,
+    SecurityImpersonation  = 2,
+    SecurityDelegation     = 3
 };
+
+// Canonical Windows NT Priority Levels
+inline constexpr uint32_t LOW_PRIORITY          = 0;
+inline constexpr uint32_t LOW_REALTIME_PRIORITY = 16;
+inline constexpr uint32_t HIGH_PRIORITY         = 31;
+inline constexpr uint32_t MAXIMUM_PRIORITY      = 32;
+
+// Standard Dave Cutler Priority Boost Increments
+inline constexpr uint32_t IO_NO_INCREMENT       = 0;
+inline constexpr uint32_t IO_DISK_INCREMENT     = 1;
+inline constexpr uint32_t IO_NETWORK_INCREMENT  = 2;
+inline constexpr uint32_t IO_KEYBOARD_INCREMENT = 6;
+inline constexpr uint32_t IO_MOUSE_INCREMENT    = 6;
+inline constexpr uint32_t IO_SOUND_INCREMENT    = 8;
+
+// Canonical Windows NT Job Object Limit Flags
+inline constexpr uint32_t JOB_OBJECT_LIMIT_WORKINGSET                 = 0x00000001;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_PROCESS_TIME               = 0x00000002;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_JOB_TIME                   = 0x00000004;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_ACTIVE_PROCESS             = 0x00000008;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_AFFINITY                   = 0x00000010;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_PRIORITY_CLASS             = 0x00000020;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_PRESERVE_JOB_TIME          = 0x00000040;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_SCHEDULING_CLASS           = 0x00000080;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_PROCESS_MEMORY             = 0x00000100;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_JOB_MEMORY                 = 0x00000200;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_BREAKAWAY_OK               = 0x00000800;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK        = 0x00001000;
+inline constexpr uint32_t JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE          = 0x00002000;
+
+// ============================================================================
+// 2. Diagnostic Telemetry Subsystem (PS_TELEMETRY)
+// ============================================================================
+struct PS_TELEMETRY {
+    size_t totalProcessesCreated{0};
+    size_t totalProcessesTerminated{0};
+    size_t totalThreadsCreated{0};
+    size_t totalThreadsTerminated{0};
+    size_t totalJobsCreated{0};
+    size_t totalProcessesAssignedToJobs{0};
+    size_t totalProcessCallbacksInvoked{0};
+    size_t totalThreadCallbacksInvoked{0};
+    size_t totalQuotaViolations{0};
+    size_t totalThreadPriorityBoosts{0};
+    size_t totalThreadSuspensions{0};
+    size_t totalThreadResumptions{0};
+};
+
+inline PS_TELEMETRY g_PsTelemetry{};
+inline std::mutex g_PsTelemetryMutex{};
+
+inline PS_TELEMETRY PsQueryTelemetry() {
+    std::lock_guard<std::mutex> lock(g_PsTelemetryMutex);
+    return g_PsTelemetry;
+}
+
+inline void PsResetTelemetryForTesting() {
+    std::lock_guard<std::mutex> lock(g_PsTelemetryMutex);
+    g_PsTelemetry = PS_TELEMETRY{};
+}
+
+// Forward Declarations
+class ProcessManager;
+class JobObject;
+class EProcess;
+class EThread;
 
 /**
  * @brief x86-64 Machine Architecture Context Frame.
@@ -117,12 +186,96 @@ struct Teb {
     uint32_t hardErrorMode{0};
 };
 
-class EProcess;
+/**
+ * @brief Canonical Windows NT Process Quota Block (EPROCESS_QUOTA_BLOCK).
+ */
+struct ProcessQuotaBlock {
+    size_t pagedPoolLimit{0};    // 0 = unlimited
+    size_t pagedPoolUsage{0};
+    size_t nonPagedPoolLimit{0}; // 0 = unlimited
+    size_t nonPagedPoolUsage{0};
+    size_t pagefileLimit{0};     // 0 = unlimited
+    size_t pagefileUsage{0};
+    size_t workingSetMinimum{20 * 4096};
+    size_t workingSetMaximum{200 * 4096};
+    size_t peakVirtualSize{0};
+    size_t peakWorkingSetSize{0};
+
+    [[nodiscard]] NtStatus chargePagedPool(size_t bytes) noexcept {
+        if (pagedPoolLimit > 0 && pagedPoolUsage + bytes > pagedPoolLimit) {
+            std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+            g_PsTelemetry.totalQuotaViolations++;
+            return NtStatus::QuotaExceeded;
+        }
+        pagedPoolUsage += bytes;
+        return NtStatus::Success;
+    }
+
+    void returnPagedPool(size_t bytes) noexcept {
+        if (bytes <= pagedPoolUsage) pagedPoolUsage -= bytes;
+        else pagedPoolUsage = 0;
+    }
+
+    [[nodiscard]] NtStatus chargeNonPagedPool(size_t bytes) noexcept {
+        if (nonPagedPoolLimit > 0 && nonPagedPoolUsage + bytes > nonPagedPoolLimit) {
+            std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+            g_PsTelemetry.totalQuotaViolations++;
+            return NtStatus::QuotaExceeded;
+        }
+        nonPagedPoolUsage += bytes;
+        return NtStatus::Success;
+    }
+
+    void returnNonPagedPool(size_t bytes) noexcept {
+        if (bytes <= nonPagedPoolUsage) nonPagedPoolUsage -= bytes;
+        else nonPagedPoolUsage = 0;
+    }
+
+    [[nodiscard]] NtStatus chargePagefile(size_t bytes) noexcept {
+        if (pagefileLimit > 0 && pagefileUsage + bytes > pagefileLimit) {
+            std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+            g_PsTelemetry.totalQuotaViolations++;
+            return NtStatus::PagefileQuotaExceeded;
+        }
+        pagefileUsage += bytes;
+        return NtStatus::Success;
+    }
+
+    void returnPagefile(size_t bytes) noexcept {
+        if (bytes <= pagefileUsage) pagefileUsage -= bytes;
+        else pagefileUsage = 0;
+    }
+};
 
 /**
- * @brief Executive Thread (ETHREAD).
- * Represents a single execution thread within a process.
+ * @brief Job Accounting and Limit Structures.
  */
+struct JobBasicAccountingInformation {
+    uint64_t totalUserTime{0};
+    uint64_t totalKernelTime{0};
+    uint64_t thisPeriodTotalUserTime{0};
+    uint64_t thisPeriodTotalKernelTime{0};
+    uint32_t totalPageFaultCount{0};
+    uint32_t totalProcesses{0};
+    uint32_t activeProcesses{0};
+    uint32_t totalTerminatedProcesses{0};
+};
+
+struct JobBasicLimitInformation {
+    int64_t  perProcessUserTimeLimit{0};
+    int64_t  perJobUserTimeLimit{0};
+    uint32_t limitFlags{0};
+    size_t   minimumWorkingSetSize{0};
+    size_t   maximumWorkingSetSize{0};
+    uint32_t activeProcessLimit{0};
+    uint64_t affinity{0};
+    uint32_t priorityClass{0};
+    uint32_t schedulingClass{0};
+};
+
+// ============================================================================
+// 3. Executive Thread (ETHREAD)
+// ============================================================================
 class EThread {
 public:
     EThread(Handle tid, EProcess* owner, uintptr_t entryPoint, uintptr_t stackBase, uintptr_t stackLimit)
@@ -150,11 +303,78 @@ public:
     void setTeb(const Teb& teb) noexcept { teb_ = teb; }
 
     [[nodiscard]] uint32_t getPriority() const noexcept { return priority_; }
-    void setPriority(uint32_t p) noexcept { priority_ = p; }
+    void setPriority(uint32_t p) noexcept { priority_ = p; dynamicPriority_ = p; }
 
+    [[nodiscard]] uint32_t getDynamicPriority() const noexcept { return dynamicPriority_; }
+    void setDynamicPriority(uint32_t p) noexcept { dynamicPriority_ = p; }
 
     [[nodiscard]] uint32_t getBasePriority() const noexcept { return basePriority_; }
-    void setBasePriority(uint32_t p) noexcept { basePriority_ = p; priority_ = p; }
+    void setBasePriority(uint32_t p) noexcept { basePriority_ = p; priority_ = p; dynamicPriority_ = p; }
+
+    void boostPriority(uint32_t increment) noexcept {
+        if (basePriority_ >= LOW_REALTIME_PRIORITY) {
+            return; // Real-time priorities are fixed and non-boostable
+        }
+        uint32_t boosted = dynamicPriority_ + increment;
+        if (boosted >= LOW_REALTIME_PRIORITY) {
+            boosted = LOW_REALTIME_PRIORITY - 1; // Clamped at 15 for dynamic threads
+        }
+        if (boosted > dynamicPriority_) {
+            dynamicPriority_ = boosted;
+            priority_ = boosted;
+        }
+        std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+        g_PsTelemetry.totalThreadPriorityBoosts++;
+    }
+
+    void decayQuantum() noexcept {
+        if (quantum_ > 0) {
+            quantum_--;
+        }
+        if (quantum_ == 0) {
+            quantum_ = 18; // Standard NT thread quantum reset
+            if (dynamicPriority_ > basePriority_ && basePriority_ < LOW_REALTIME_PRIORITY) {
+                dynamicPriority_--;
+                priority_ = dynamicPriority_;
+            }
+        }
+    }
+
+    [[nodiscard]] uint32_t getQuantum() const noexcept { return quantum_; }
+    void setQuantum(uint32_t q) noexcept { quantum_ = q; }
+
+    [[nodiscard]] uint64_t getAffinityMask() const noexcept { return affinityMask_; }
+    void setAffinityMask(uint64_t mask) noexcept { affinityMask_ = mask; }
+
+    [[nodiscard]] int32_t getSuspendCount() const noexcept { return suspendCount_; }
+
+    uint32_t suspend() noexcept {
+        uint32_t prev = static_cast<uint32_t>(suspendCount_++);
+        if (prev == 0 && state_ != ThreadState::Terminated) {
+            state_ = ThreadState::Waiting;
+        }
+        std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+        g_PsTelemetry.totalThreadSuspensions++;
+        return prev;
+    }
+
+    uint32_t resume() noexcept {
+        if (suspendCount_ <= 0) return 0;
+        uint32_t prev = static_cast<uint32_t>(suspendCount_--);
+        if (suspendCount_ == 0 && state_ == ThreadState::Waiting) {
+            state_ = ThreadState::Ready;
+        }
+        std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+        g_PsTelemetry.totalThreadResumptions++;
+        return prev;
+    }
+
+    [[nodiscard]] uintptr_t getKernelStackBase() const noexcept { return kernelStackBase_; }
+    [[nodiscard]] uintptr_t getKernelStackLimit() const noexcept { return kernelStackLimit_; }
+    void setKernelStack(uintptr_t base, uintptr_t limit) noexcept {
+        kernelStackBase_ = base;
+        kernelStackLimit_ = limit;
+    }
 
     [[nodiscard]] NtStatus getExitStatus() const noexcept { return exitStatus_; }
     void setExitStatus(NtStatus status) noexcept { exitStatus_ = status; }
@@ -186,10 +406,16 @@ private:
     uintptr_t stackBase_{0};
     uintptr_t stackLimit_{0};
     uintptr_t tebAddress_{0};
+    uintptr_t kernelStackBase_{0};
+    uintptr_t kernelStackLimit_{0};
     ThreadState state_{ThreadState::Initialized};
     ContextFrame context_{};
     uint32_t priority_{8};
+    uint32_t dynamicPriority_{8};
     uint32_t basePriority_{8};
+    uint32_t quantum_{18};
+    uint64_t affinityMask_{0xFFFFFFFFFFFFFFFFULL};
+    int32_t suspendCount_{0};
     NtStatus exitStatus_{NtStatus::Success};
     std::shared_ptr<se::TokenObject> impersonationToken_;
     SecurityImpersonationLevel impersonationLevel_{SecurityImpersonationLevel::SecurityAnonymous};
@@ -197,10 +423,9 @@ private:
     std::chrono::steady_clock::time_point createTime_;
 };
 
-/**
- * @brief Executive Process (EPROCESS).
- * The primary container for address space, handles, security tokens, and threads.
- */
+// ============================================================================
+// 4. Executive Process (EPROCESS)
+// ============================================================================
 class EProcess {
 public:
     EProcess(Handle pid, std::wstring imageFileName, Handle parentPid = 0)
@@ -235,48 +460,39 @@ public:
     [[nodiscard]] Peb& getPeb() noexcept { return peb_; }
     void setPeb(const Peb& peb) noexcept { peb_ = peb; }
 
-    [[nodiscard]] bool isTerminated() const noexcept { return terminated_; }
-    [[nodiscard]] NtStatus getExitStatus() const noexcept { return exitStatus_; }
+    [[nodiscard]] ProcessQuotaBlock& getQuotaBlock() noexcept { return quotaBlock_; }
+    [[nodiscard]] const ProcessQuotaBlock& getQuotaBlock() const noexcept { return quotaBlock_; }
+    void setQuotaBlock(const ProcessQuotaBlock& qb) noexcept { quotaBlock_ = qb; }
 
-    void terminate(NtStatus status) noexcept {
-        exitStatus_ = status;
-        terminated_ = true;
+    [[nodiscard]] std::shared_ptr<JobObject> getJob() const noexcept;
+    void setJob(std::shared_ptr<JobObject> job) noexcept;
+
+    [[nodiscard]] uint64_t getAffinityMask() const noexcept { return affinityMask_; }
+    void setAffinityMask(uint64_t mask) noexcept {
+        affinityMask_ = mask;
         for (auto& t : threads_) {
-            t->setState(ThreadState::Terminated);
-            t->setExitStatus(status);
+            t->setAffinityMask(mask);
         }
     }
 
-    std::shared_ptr<EThread> createThread(uintptr_t entryPoint, size_t stackSize = 1024 * 1024) {
-        static std::atomic<uint32_t> s_GlobalTid{1};
-        Handle tid = static_cast<Handle>(s_GlobalTid.fetch_add(1, std::memory_order_relaxed));
-
-        
-        // Allocate stack in process address space
-        uintptr_t stackBase = 0;
-        addressSpace_.allocate(stackBase, stackSize, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
-        uintptr_t stackTop = stackBase + stackSize;
-
-        // Allocate and setup TEB in process address space
-        uintptr_t tebAddr = 0;
-        addressSpace_.allocate(tebAddr, sizeof(Teb), mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
-
-        auto thread = std::make_shared<EThread>(tid, this, entryPoint, stackTop, stackBase);
-        thread->setTebAddress(tebAddr);
-
-        // Populate TEB structure
-        Teb userTeb{};
-        userTeb.ntTib.self = tebAddr;
-        userTeb.ntTib.stackBase = stackTop;
-        userTeb.ntTib.stackLimit = stackBase;
-        userTeb.clientId.uniqueProcess = pid_;
-        userTeb.clientId.uniqueThread = tid;
-        userTeb.processEnvironmentBlock = pebAddress_;
-        thread->setTeb(userTeb);
-
-        threads_.push_back(thread);
-        return thread;
+    void suspendProcess() noexcept {
+        for (auto& t : threads_) {
+            t->suspend();
+        }
     }
+
+    void resumeProcess() noexcept {
+        for (auto& t : threads_) {
+            t->resume();
+        }
+    }
+
+    [[nodiscard]] bool isTerminated() const noexcept { return terminated_; }
+    [[nodiscard]] NtStatus getExitStatus() const noexcept { return exitStatus_; }
+
+    void terminate(NtStatus status) noexcept;
+
+    std::shared_ptr<EThread> createThread(uintptr_t entryPoint, size_t stackSize = 1024 * 1024);
 
     [[nodiscard]] std::shared_ptr<se::TokenObject> getToken() const noexcept { return token_; }
     void setToken(std::shared_ptr<se::TokenObject> token) noexcept { token_ = std::move(token); }
@@ -305,13 +521,14 @@ private:
     uintptr_t entryPoint_{0};
     uintptr_t pebAddress_{0};
     Peb peb_{};
+    ProcessQuotaBlock quotaBlock_{};
+    std::weak_ptr<JobObject> job_;
+    uint64_t affinityMask_{0xFFFFFFFFFFFFFFFFULL};
     NtStatus exitStatus_{NtStatus::Success};
     bool terminated_{false};
     std::vector<std::shared_ptr<EThread>> threads_;
     std::chrono::steady_clock::time_point createTime_;
 };
-
-
 
 inline std::shared_ptr<se::TokenObject> EThread::getActiveToken() {
     if (impersonationToken_) return impersonationToken_;
@@ -320,7 +537,77 @@ inline std::shared_ptr<se::TokenObject> EThread::getActiveToken() {
 }
 
 // ============================================================================
-// 2. Process & Thread Manager Engine (Ps Subsystem)
+// 5. Canonical Windows NT Job Object (EJOB)
+// ============================================================================
+class JobObject : public std::enable_shared_from_this<JobObject> {
+public:
+    explicit JobObject(std::wstring name = L"")
+        : name_(std::move(name)) {
+        std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+        g_PsTelemetry.totalJobsCreated++;
+    }
+
+    [[nodiscard]] const std::wstring& getName() const noexcept { return name_; }
+
+    void setLimits(const JobBasicLimitInformation& limits) noexcept {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        limits_ = limits;
+    }
+
+    [[nodiscard]] JobBasicLimitInformation getLimits() const noexcept {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return limits_;
+    }
+
+    [[nodiscard]] JobBasicAccountingInformation getAccounting() const noexcept {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return accounting_;
+    }
+
+    NtStatus assignProcess(std::shared_ptr<EProcess> process);
+
+    NtStatus terminateJob(NtStatus exitStatus);
+
+    [[nodiscard]] std::vector<std::shared_ptr<EProcess>> getAssignedProcesses() const {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return processes_;
+    }
+
+private:
+    std::wstring name_;
+    JobBasicLimitInformation limits_{};
+    JobBasicAccountingInformation accounting_{};
+    std::vector<std::shared_ptr<EProcess>> processes_;
+    mutable std::recursive_mutex mutex_;
+};
+
+inline std::shared_ptr<JobObject> EProcess::getJob() const noexcept {
+    return job_.lock();
+}
+
+inline void EProcess::setJob(std::shared_ptr<JobObject> job) noexcept {
+    job_ = job;
+}
+
+// ============================================================================
+// 6. Process & Thread Notification Callback Types
+// ============================================================================
+using PCREATE_PROCESS_NOTIFY_ROUTINE = void (*)(Handle parentId, Handle processId, bool create);
+using PCREATE_THREAD_NOTIFY_ROUTINE = void (*)(Handle processId, Handle threadId, bool create);
+
+struct PS_CREATE_NOTIFY_INFO {
+    size_t size{sizeof(PS_CREATE_NOTIFY_INFO)};
+    uint32_t flags{0};
+    Handle parentProcessId{0};
+    Handle creatingThreadId{0};
+    std::wstring imageFileName;
+    NtStatus creationStatus{NtStatus::Success};
+};
+
+using PCREATE_PROCESS_NOTIFY_ROUTINE_EX = void (*)(EProcess* process, Handle processId, PS_CREATE_NOTIFY_INFO* createInfo);
+
+// ============================================================================
+// 7. Process & Thread Manager Engine (Ps Subsystem Central Engine)
 // ============================================================================
 class ProcessManager {
 public:
@@ -334,7 +621,29 @@ public:
         std::shared_ptr<se::TokenObject> token = nullptr,
         Handle parentPid = 0
     ) {
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
         Handle pid = static_cast<Handle>(nextPid_++);
+
+        // Check registered notify routines (Ex routines can inspect & veto creation)
+        PS_CREATE_NOTIFY_INFO info{};
+        info.size = sizeof(info);
+        info.parentProcessId = parentPid;
+        info.imageFileName = std::wstring(imageName);
+        info.creationStatus = NtStatus::Success;
+
+        for (auto* routineEx : createProcessNotifyRoutinesEx_) {
+            if (routineEx) {
+                routineEx(nullptr, pid, &info);
+                {
+                    std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+                    g_PsTelemetry.totalProcessCallbacksInvoked++;
+                }
+                if (!NT_SUCCESS(info.creationStatus)) {
+                    return nullptr;
+                }
+            }
+        }
+
         auto proc = std::make_shared<EProcess>(pid, std::wstring(imageName), parentPid);
 
         // Allocate and setup PEB at standard base
@@ -352,7 +661,6 @@ public:
         userPeb.imageSubsystem = 3;
         proc->setPeb(userPeb);
 
-
         if (token) {
             proc->setToken(std::move(token));
         } else {
@@ -360,6 +668,22 @@ public:
         }
 
         processes_[pid] = proc;
+
+        for (auto* routine : createProcessNotifyRoutines_) {
+            if (routine) {
+                routine(parentPid, pid, true);
+                {
+                    std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+                    g_PsTelemetry.totalProcessCallbacksInvoked++;
+                }
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+            g_PsTelemetry.totalProcessesCreated++;
+        }
+
         return proc;
     }
 
@@ -392,12 +716,14 @@ public:
     }
 
     [[nodiscard]] std::shared_ptr<EProcess> getProcess(Handle pid) const {
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
         auto it = processes_.find(pid);
         if (it != processes_.end()) return it->second;
         return nullptr;
     }
 
     [[nodiscard]] std::shared_ptr<EThread> getThread(Handle tid) const {
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
         for (const auto& [pid, proc] : processes_) {
             for (const auto& t : proc->getThreads()) {
                 if (t->getTid() == tid) return t;
@@ -407,22 +733,227 @@ public:
     }
 
     [[nodiscard]] size_t getActiveProcessCount() const noexcept {
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
         return processes_.size();
+    }
+
+    // Callbacks Management
+    NtStatus registerProcessNotifyRoutine(PCREATE_PROCESS_NOTIFY_ROUTINE routine) {
+        if (!routine) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        createProcessNotifyRoutines_.push_back(routine);
+        return NtStatus::Success;
+    }
+
+    NtStatus unregisterProcessNotifyRoutine(PCREATE_PROCESS_NOTIFY_ROUTINE routine) {
+        if (!routine) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        auto it = std::remove(createProcessNotifyRoutines_.begin(), createProcessNotifyRoutines_.end(), routine);
+        if (it == createProcessNotifyRoutines_.end()) return NtStatus::ProcedureNotFound;
+        createProcessNotifyRoutines_.erase(it, createProcessNotifyRoutines_.end());
+        return NtStatus::Success;
+    }
+
+    NtStatus registerProcessNotifyRoutineEx(PCREATE_PROCESS_NOTIFY_ROUTINE_EX routine) {
+        if (!routine) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        createProcessNotifyRoutinesEx_.push_back(routine);
+        return NtStatus::Success;
+    }
+
+    NtStatus unregisterProcessNotifyRoutineEx(PCREATE_PROCESS_NOTIFY_ROUTINE_EX routine) {
+        if (!routine) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        auto it = std::remove(createProcessNotifyRoutinesEx_.begin(), createProcessNotifyRoutinesEx_.end(), routine);
+        if (it == createProcessNotifyRoutinesEx_.end()) return NtStatus::ProcedureNotFound;
+        createProcessNotifyRoutinesEx_.erase(it, createProcessNotifyRoutinesEx_.end());
+        return NtStatus::Success;
+    }
+
+    NtStatus registerThreadNotifyRoutine(PCREATE_THREAD_NOTIFY_ROUTINE routine) {
+        if (!routine) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        createThreadNotifyRoutines_.push_back(routine);
+        return NtStatus::Success;
+    }
+
+    NtStatus unregisterThreadNotifyRoutine(PCREATE_THREAD_NOTIFY_ROUTINE routine) {
+        if (!routine) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        auto it = std::remove(createThreadNotifyRoutines_.begin(), createThreadNotifyRoutines_.end(), routine);
+        if (it == createThreadNotifyRoutines_.end()) return NtStatus::ProcedureNotFound;
+        createThreadNotifyRoutines_.erase(it, createThreadNotifyRoutines_.end());
+        return NtStatus::Success;
+    }
+
+    void notifyProcessExit(Handle parentPid, Handle pid) {
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        for (auto* routine : createProcessNotifyRoutines_) {
+            if (routine) {
+                routine(parentPid, pid, false);
+                std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+                g_PsTelemetry.totalProcessCallbacksInvoked++;
+            }
+        }
+    }
+
+    void notifyThreadCreate(Handle pid, Handle tid) {
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        for (auto* routine : createThreadNotifyRoutines_) {
+            if (routine) {
+                routine(pid, tid, true);
+                std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+                g_PsTelemetry.totalThreadCallbacksInvoked++;
+            }
+        }
+    }
+
+    void notifyThreadExit(Handle pid, Handle tid) {
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        for (auto* routine : createThreadNotifyRoutines_) {
+            if (routine) {
+                routine(pid, tid, false);
+                std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+                g_PsTelemetry.totalThreadCallbacksInvoked++;
+            }
+        }
+    }
+
+    void resetForTesting() {
+        std::lock_guard<std::recursive_mutex> lock(managerMutex_);
+        processes_.clear();
+        createProcessNotifyRoutines_.clear();
+        createProcessNotifyRoutinesEx_.clear();
+        createThreadNotifyRoutines_.clear();
+        nextPid_ = 1000;
+        initializedSystem_ = false;
+        initializeSystemProcesses();
     }
 
 private:
     ProcessManager() : nextPid_(1000) {
         initializeSystemProcesses();
     }
+
+    mutable std::recursive_mutex managerMutex_;
     bool initializedSystem_{false};
     uint32_t nextPid_;
     std::shared_ptr<EProcess> idleProcess_;
     std::shared_ptr<EProcess> systemProcess_;
     std::unordered_map<Handle, std::shared_ptr<EProcess>> processes_;
+    std::vector<PCREATE_PROCESS_NOTIFY_ROUTINE> createProcessNotifyRoutines_;
+    std::vector<PCREATE_PROCESS_NOTIFY_ROUTINE_EX> createProcessNotifyRoutinesEx_;
+    std::vector<PCREATE_THREAD_NOTIFY_ROUTINE> createThreadNotifyRoutines_;
 };
 
+// Out-of-line EProcess thread creation & termination implementations
+inline std::shared_ptr<EThread> EProcess::createThread(uintptr_t entryPoint, size_t stackSize) {
+    static std::atomic<uint32_t> s_GlobalTid{1};
+    Handle tid = static_cast<Handle>(s_GlobalTid.fetch_add(1, std::memory_order_relaxed));
+
+    // Allocate stack in process address space
+    uintptr_t stackBase = 0;
+    addressSpace_.allocate(stackBase, stackSize, mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+    uintptr_t stackTop = stackBase + stackSize;
+
+    // Allocate and setup TEB in process address space
+    uintptr_t tebAddr = 0;
+    addressSpace_.allocate(tebAddr, sizeof(Teb), mm::MEM_RESERVE | mm::MEM_COMMIT, mm::PAGE_READWRITE);
+
+    auto thread = std::make_shared<EThread>(tid, this, entryPoint, stackTop, stackBase);
+    thread->setTebAddress(tebAddr);
+    thread->setAffinityMask(affinityMask_);
+
+    // Populate TEB structure
+    Teb userTeb{};
+    userTeb.ntTib.self = tebAddr;
+    userTeb.ntTib.stackBase = stackTop;
+    userTeb.ntTib.stackLimit = stackBase;
+    userTeb.clientId.uniqueProcess = pid_;
+    userTeb.clientId.uniqueThread = tid;
+    userTeb.processEnvironmentBlock = pebAddress_;
+    thread->setTeb(userTeb);
+
+    threads_.push_back(thread);
+
+    if (pid_ >= 1000) {
+        ProcessManager::get().notifyThreadCreate(pid_, tid);
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+        g_PsTelemetry.totalThreadsCreated++;
+    }
+
+    return thread;
+}
+
+inline void EProcess::terminate(NtStatus status) noexcept {
+    exitStatus_ = status;
+    terminated_ = true;
+    for (auto& t : threads_) {
+        if (t->getState() != ThreadState::Terminated) {
+            t->setState(ThreadState::Terminated);
+            t->setExitStatus(status);
+            if (pid_ >= 1000) {
+                ProcessManager::get().notifyThreadExit(pid_, t->getTid());
+            }
+            std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+            g_PsTelemetry.totalThreadsTerminated++;
+        }
+    }
+    if (pid_ >= 1000) {
+        ProcessManager::get().notifyProcessExit(parentPid_, pid_);
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+        g_PsTelemetry.totalProcessesTerminated++;
+    }
+}
+
+// Out-of-line JobObject implementations
+inline NtStatus JobObject::assignProcess(std::shared_ptr<EProcess> process) {
+    if (!process) return NtStatus::InvalidParameter;
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    if ((limits_.limitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS) && limits_.activeProcessLimit > 0) {
+        if (accounting_.activeProcesses >= limits_.activeProcessLimit) {
+            std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+            g_PsTelemetry.totalQuotaViolations++;
+            return NtStatus::QuotaExceeded;
+        }
+    }
+
+    if (limits_.limitFlags & JOB_OBJECT_LIMIT_AFFINITY) {
+        process->setAffinityMask(limits_.affinity);
+    }
+
+    processes_.push_back(process);
+    process->setJob(shared_from_this());
+    accounting_.totalProcesses++;
+    accounting_.activeProcesses++;
+
+    {
+        std::lock_guard<std::mutex> lk(g_PsTelemetryMutex);
+        g_PsTelemetry.totalProcessesAssignedToJobs++;
+    }
+
+    return NtStatus::Success;
+}
+
+inline NtStatus JobObject::terminateJob(NtStatus exitStatus) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    for (auto& proc : processes_) {
+        if (!proc->isTerminated()) {
+            proc->terminate(exitStatus);
+            if (accounting_.activeProcesses > 0) accounting_.activeProcesses--;
+            accounting_.totalTerminatedProcesses++;
+        }
+    }
+    return NtStatus::Success;
+}
+
 // ============================================================================
-// 3. Standard NT Executive Process/Thread API (Ps*)
+// 8. Standard NT Executive Process & Thread APIs (Ps*)
 // ============================================================================
 inline NtStatus PsLookupProcessByProcessId(Handle pid, std::shared_ptr<EProcess>& outProcess) {
     outProcess = ProcessManager::get().getProcess(pid);
@@ -451,5 +982,51 @@ inline std::wstring_view PsGetProcessImageFileName(const EProcess* process) {
     return std::wstring_view{};
 }
 
+inline NtStatus PsSetCreateProcessNotifyRoutine(PCREATE_PROCESS_NOTIFY_ROUTINE routine, bool remove = false) {
+    if (remove) {
+        return ProcessManager::get().unregisterProcessNotifyRoutine(routine);
+    }
+    return ProcessManager::get().registerProcessNotifyRoutine(routine);
+}
+
+inline NtStatus PsSetCreateProcessNotifyRoutineEx(PCREATE_PROCESS_NOTIFY_ROUTINE_EX routine, bool remove = false) {
+    if (remove) {
+        return ProcessManager::get().unregisterProcessNotifyRoutineEx(routine);
+    }
+    return ProcessManager::get().registerProcessNotifyRoutineEx(routine);
+}
+
+inline NtStatus PsSetCreateThreadNotifyRoutine(PCREATE_THREAD_NOTIFY_ROUTINE routine, bool remove = false) {
+    if (remove) {
+        return ProcessManager::get().unregisterThreadNotifyRoutine(routine);
+    }
+    return ProcessManager::get().registerThreadNotifyRoutine(routine);
+}
+
+inline uint32_t PsSuspendThread(EThread* thread) {
+    return thread ? thread->suspend() : 0;
+}
+
+inline uint32_t PsResumeThread(EThread* thread) {
+    return thread ? thread->resume() : 0;
+}
+
+inline NtStatus PsCreateProcessEx(
+    std::shared_ptr<EProcess>& outProcess,
+    std::wstring_view imageName,
+    std::shared_ptr<se::TokenObject> token = nullptr,
+    Handle parentPid = 0,
+    bool createSuspended = false
+) {
+    auto proc = ProcessManager::get().createProcess(imageName, std::move(token), parentPid);
+    if (!proc) {
+        return NtStatus::AccessDenied;
+    }
+    if (createSuspended) {
+        proc->suspendProcess();
+    }
+    outProcess = proc;
+    return NtStatus::Success;
+}
 
 } // namespace micant::ps

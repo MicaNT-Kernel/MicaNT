@@ -72,7 +72,9 @@ enum class NtStatus : uint32_t {
     SharingViolation                 = 0xC0000043,
     NoSuchProcess                    = 0xC0000043,
     QuotaExceeded                    = 0xC0000044,
+    PagefileQuotaExceeded            = 0xC000006D,
     ProcessIsTerminating             = 0xC000010A,
+    ProcessAborted                   = 0xC000010B,
     PrivilegeNotHeld                 = 0xC0000061,
     ProcedureNotFound                = 0xC000007A,
     FileIsADirectory                 = 0xC00000BA,
@@ -222,6 +224,7 @@ inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(
         case NtStatus::ObjectPathNotFound: return "STATUS_OBJECT_PATH_NOT_FOUND";
         case NtStatus::ProcedureNotFound: return "STATUS_PROCEDURE_NOT_FOUND";
         case NtStatus::ProcessIsTerminating: return "STATUS_PROCESS_IS_TERMINATING";
+        case NtStatus::ProcessAborted: return "STATUS_PROCESS_ABORTED";
         case NtStatus::DeviceNotReady: return "STATUS_DEVICE_NOT_READY";
         case NtStatus::DiskFull: return "STATUS_DISK_FULL";
         case NtStatus::UnrecognizedVolume: return "STATUS_UNRECOGNIZED_VOLUME";

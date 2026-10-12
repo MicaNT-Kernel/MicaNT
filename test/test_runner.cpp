@@ -292,7 +292,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite239")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite240")) {
+        RUN_TEST(Test_Horizon24_ProcessSubsystem_Quotas_JobObjects_Callbacks_And_Affinity);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite239") {
         RUN_TEST(Test_Horizon23_IoSubsystem_FastIo_Cancellation_And_BufferingModes);
         return g_FailedTests;
     }
@@ -1041,6 +1045,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon21_ExecutiveLPC_ALPC_ThreeWayHandshake_And_Impersonation);
     RUN_TEST(Test_Horizon22_ConfigurationManager_HiveRefinement_Coalescing_And_Security);
     RUN_TEST(Test_Horizon23_IoSubsystem_FastIo_Cancellation_And_BufferingModes);
+    RUN_TEST(Test_Horizon24_ProcessSubsystem_Quotas_JobObjects_Callbacks_And_Affinity);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
