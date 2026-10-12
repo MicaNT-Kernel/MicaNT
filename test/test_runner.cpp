@@ -1026,6 +1026,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon18_SectionObjects_MemoryMappedFiles_And_ControlAreaArchitecture);
     RUN_TEST(Test_Horizon19_DispatcherDatabase_MultiWait_And_PriorityInheritance);
     RUN_TEST(Test_Horizon20_ObjectManager_Lifecycle_Symlinks_And_Callbacks);
+    RUN_TEST(Test_Horizon21_ExecutiveLPC_ALPC_ThreeWayHandshake_And_Impersonation);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -137,6 +137,7 @@ inline constexpr NTSTATUS STATUS_OBJECT_TYPE_MISMATCH   = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_CIRCULAR_REFERENCE     = static_cast<NTSTATUS>(0xC000002A);
 inline constexpr NTSTATUS STATUS_OBJECT_NAME_NOT_FOUND  = static_cast<NTSTATUS>(0xC0000034);
 inline constexpr NTSTATUS STATUS_OBJECT_NAME_COLLISION  = static_cast<NTSTATUS>(0xC0000035);
+inline constexpr NTSTATUS STATUS_PORT_CONNECTION_REFUSED = static_cast<NTSTATUS>(0xC0000041);
 inline constexpr NTSTATUS STATUS_LINK_EVALUATION_CAP_EXCEEDED = static_cast<NTSTATUS>(0xC00002EB);
 inline constexpr NTSTATUS STATUS_NOT_SUPPORTED          = static_cast<NTSTATUS>(0xC00000BB);
 inline constexpr NTSTATUS STATUS_PRIVILEGE_NOT_HELD      = static_cast<NTSTATUS>(0xC0000061);
@@ -217,6 +218,7 @@ inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(
         case NtStatus::ObjectNameNotFound: return "STATUS_OBJECT_NAME_NOT_FOUND";
         case NtStatus::ObjectNameCollision: return "STATUS_OBJECT_NAME_COLLISION";
         case NtStatus::LinkEvaluationCapExceeded: return "STATUS_LINK_EVALUATION_CAP_EXCEEDED";
+        case NtStatus::PortConnectionRefused: return "STATUS_PORT_CONNECTION_REFUSED";
         case NtStatus::ObjectPathNotFound: return "STATUS_OBJECT_PATH_NOT_FOUND";
         case NtStatus::ProcedureNotFound: return "STATUS_PROCEDURE_NOT_FOUND";
         case NtStatus::ProcessIsTerminating: return "STATUS_PROCESS_IS_TERMINATING";

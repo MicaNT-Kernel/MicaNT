@@ -4738,5 +4738,274 @@ inline void Test_Horizon20_ObjectManager_Lifecycle_Symlinks_And_Callbacks() {
     std::cout << "[TEST] Suite 236: Horizon 20 - Sovereign Object Manager Refinement, Symlinks & Callbacks PASSED.\n";
 }
 
+void Test_Horizon21_ExecutiveLPC_ALPC_ThreeWayHandshake_And_Impersonation() {
+    std::cout << "[TEST] Running Suite 237: Horizon 21 - Sovereign Executive LPC/ALPC Architecture, 3-Way Handshake & Impersonation Engine...\n";
+
+    // 0. Reset and verify baseline telemetry
+    lpc::LpcResetTelemetryForTesting();
+    auto initialTelem = lpc::LpcQueryTelemetry();
+    TEST_ASSERT(initialTelem.totalConnectionPortsCreated == 0, "Telemetry must start clean");
+
+    auto& portMgr = lpc::PortManager::get();
+    portMgr.resetForTesting();
+
+    // 1. Connection Port Creation with Security Descriptor
+    auto userSid = se::Sid::authenticatedUsers();
+    auto adminSid = se::Sid::administrators();
+
+    se::Acl dacl;
+    dacl.addAllowedAce(userSid, se::GENERIC_READ | se::GENERIC_WRITE);
+    dacl.addAllowedAce(adminSid, se::GENERIC_ALL);
+
+    se::SecurityDescriptor portSd;
+    portSd.setOwner(adminSid);
+    portSd.setGroup(adminSid);
+    portSd.setDacl(std::move(dacl));
+
+    std::shared_ptr<lpc::PortObject> serverConnPort;
+    NtStatus createStatus = lpc::LpcCreatePort(L"\\RPC Control\\Horizon21Port", serverConnPort, std::move(portSd));
+    TEST_ASSERT(NT_SUCCESS(createStatus), "LpcCreatePort must succeed for \\RPC Control\\Horizon21Port");
+    TEST_ASSERT(serverConnPort != nullptr, "Created connection port must be non-null");
+    TEST_ASSERT(serverConnPort->getType() == lpc::PortType::ConnectionPort, "Port type must be ConnectionPort");
+
+    // Duplicate create collision check
+    std::shared_ptr<lpc::PortObject> dupPort;
+    NtStatus dupStatus = lpc::LpcCreatePort(L"\\RPC Control\\Horizon21Port", dupPort);
+    TEST_ASSERT(dupStatus == NtStatus::ObjectNameCollision, "Duplicate LpcCreatePort must return STATUS_OBJECT_NAME_COLLISION");
+
+    // 2. Canonical 3-Way Handshake Connection Protocol (Client connectPortEx -> Server accept)
+    std::shared_ptr<lpc::PortObject> clientCommPort;
+    std::shared_ptr<lpc::PortObject> serverCommPort;
+    std::atomic<bool> handshakeDone{false};
+    std::atomic<NtStatus> clientConnectStatus{NtStatus::Unsuccessful};
+
+    std::string clientHello = "ALPC_CLIENT_HANDSHAKE_V1";
+    std::vector<uint8_t> connectData(clientHello.begin(), clientHello.end());
+
+    lpc::AlpcMessageAttributes clientAttrs{};
+    clientAttrs.validAttributes = lpc::ALPC_MESSAGE_SECURITY_ATTRIBUTE;
+    clientAttrs.security = lpc::AlpcSecurityAttribute{
+        .flags = lpc::ALPC_MESSAGE_SECURITY_ATTRIBUTE,
+        .userSid = userSid,
+        .integrityLevel = se::SECURITY_MANDATORY_MEDIUM_RID
+    };
+
+    auto clientToken = se::TokenObject::createUserToken(userSid);
+
+    std::thread clientThread([&]() {
+        clientConnectStatus = portMgr.connectPortEx(
+            L"\\RPC Control\\Horizon21Port",
+            connectData,
+            clientCommPort,
+            clientToken.get(),
+            &clientAttrs,
+            5000
+        );
+        handshakeDone = true;
+    });
+
+    // Server retrieves pending connection request
+    lpc::PendingConnectRequest pendingReq;
+    bool gotReq = serverConnPort->getNextPendingConnection(pendingReq, 3000);
+    TEST_ASSERT(gotReq, "Server must dequeue pending connection request");
+    TEST_ASSERT(pendingReq.connectionId != 0, "Connection ID must be assigned");
+    TEST_ASSERT(pendingReq.connectMessage.u2.type == static_cast<uint16_t>(lpc::PortMessageType::LpcConnectionRequest), 
+                "Pending message type must be LpcConnectionRequest");
+
+    std::string receivedHello(reinterpret_cast<char*>(pendingReq.connectData.data()), pendingReq.connectData.size());
+    TEST_ASSERT(receivedHello == clientHello, "Server received connection payload must match client hello");
+
+    // Server accepts connection and establishes server communication port
+    serverCommPort = std::make_shared<lpc::PortObject>(
+        L"\\RPC Control\\Horizon21Port:Server:" + std::to_wstring(pendingReq.connectionId),
+        lpc::PortType::ServerCommunicationPort
+    );
+    bool resolved = serverConnPort->resolvePendingConnection(pendingReq.connectionId, true, serverCommPort);
+    TEST_ASSERT(resolved, "resolvePendingConnection with accept=true must succeed");
+
+    clientThread.join();
+    TEST_ASSERT(NT_SUCCESS(clientConnectStatus.load()), "Client connectPortEx must succeed on server acceptance");
+    TEST_ASSERT(clientCommPort != nullptr, "clientCommPort must be valid");
+    TEST_ASSERT(clientCommPort->isConnected(), "clientCommPort must be connected to peer");
+    TEST_ASSERT(serverCommPort->isConnected(), "serverCommPort must be connected to peer");
+
+    // 3. Connection Refusal (Server rejects unauthorized or refused connection)
+    std::shared_ptr<lpc::PortObject> refusedClientCommPort;
+    std::atomic<NtStatus> refusedConnectStatus{NtStatus::Success};
+
+    std::thread refusedClientThread([&]() {
+        std::string untrustedHello = "UNTRUSTED_CLIENT_ATTEMPT";
+        std::vector<uint8_t> untrustedData(untrustedHello.begin(), untrustedHello.end());
+        refusedConnectStatus = portMgr.connectPortEx(
+            L"\\RPC Control\\Horizon21Port",
+            untrustedData,
+            refusedClientCommPort,
+            clientToken.get(),
+            nullptr,
+            5000
+        );
+    });
+
+    lpc::PendingConnectRequest refusedReq;
+    bool gotRefused = serverConnPort->getNextPendingConnection(refusedReq, 3000);
+    TEST_ASSERT(gotRefused, "Server must retrieve second pending connection");
+    bool rejectResolved = serverConnPort->resolvePendingConnection(refusedReq.connectionId, false, nullptr);
+    TEST_ASSERT(rejectResolved, "resolvePendingConnection with accept=false must succeed");
+
+    refusedClientThread.join();
+    TEST_ASSERT(refusedConnectStatus.load() == NtStatus::PortConnectionRefused, 
+                "Refused client connection must return STATUS_PORT_CONNECTION_REFUSED (0xC0000041)");
+    TEST_ASSERT(refusedClientCommPort == nullptr, "Refused client port must remain null");
+
+    // 4. Access Denied on Connection Attempt (Token not in DACL)
+    se::Sid guestSid(5, {32, 546}); // Builtin Guests
+    auto guestToken = std::make_shared<se::TokenObject>(guestSid);
+    std::shared_ptr<lpc::PortObject> deniedPort;
+    NtStatus deniedStatus = portMgr.connectPortEx(
+        L"\\RPC Control\\Horizon21Port",
+        connectData,
+        deniedPort,
+        guestToken.get(),
+        nullptr,
+        1000
+    );
+    TEST_ASSERT(deniedStatus == NtStatus::AccessDenied, "Token without rights in DACL must return STATUS_ACCESS_DENIED");
+    TEST_ASSERT(deniedPort == nullptr, "Denied port must remain null");
+
+    // 5. Canonical System Call Helpers: LpcRequestWaitReplyPort & LpcReplyWaitReceivePort Rendezvous
+    std::atomic<bool> serverReplied{false};
+    std::thread serverWorker([&]() {
+        lpc::PortMessage reqHeader{};
+        std::vector<uint8_t> reqPayload;
+
+        // Server calls LpcReplyWaitReceivePort to wait for client request (no reply to send initially)
+        NtStatus rcvStatus = lpc::LpcReplyWaitReceivePort(
+            serverCommPort,
+            nullptr,
+            {},
+            reqHeader,
+            reqPayload,
+            3000
+        );
+        if (NT_SUCCESS(rcvStatus)) {
+            std::string cmd(reinterpret_cast<char*>(reqPayload.data()), reqPayload.size());
+            if (cmd == "ALPC_QUERY_SYSTEM_TIME") {
+                std::string reply = "SYSTEM_TIME_EPOCH_64";
+                std::vector<uint8_t> replyBytes(reply.begin(), reply.end());
+                lpc::LpcReplyPort(serverCommPort, reqHeader, replyBytes);
+                serverReplied = true;
+            }
+        }
+    });
+
+    lpc::PortMessage clientReqHeader{};
+    clientReqHeader.messageId = 0x7701;
+    std::string clientQuery = "ALPC_QUERY_SYSTEM_TIME";
+    std::vector<uint8_t> queryPayload(clientQuery.begin(), clientQuery.end());
+    lpc::PortMessage clientReplyHeader{};
+    std::vector<uint8_t> clientReplyPayload;
+
+    NtStatus rwrStatus = lpc::LpcRequestWaitReplyPort(
+        clientCommPort,
+        clientReqHeader,
+        queryPayload,
+        clientReplyHeader,
+        clientReplyPayload,
+        5000
+    );
+    TEST_ASSERT(NT_SUCCESS(rwrStatus), "LpcRequestWaitReplyPort must succeed");
+    serverWorker.join();
+    TEST_ASSERT(serverReplied.load(), "Server must have dispatched reply");
+    TEST_ASSERT(clientReplyHeader.messageId == 0x7701, "Reply message ID must match request ID");
+    TEST_ASSERT(clientReplyHeader.u2.type == static_cast<uint16_t>(lpc::PortMessageType::LpcReply), 
+                "Reply message type must be LpcReply");
+    std::string replyStr(reinterpret_cast<char*>(clientReplyPayload.data()), clientReplyPayload.size());
+    TEST_ASSERT(replyStr == "SYSTEM_TIME_EPOCH_64", "Synchronous reply payload must match server reply");
+
+    // 6. Asynchronous Datagram Transmission (LpcRequestPort / sendDatagram)
+    lpc::PortMessage datagramHeader{};
+    datagramHeader.messageId = 0x8802;
+    std::string datagramData = "ASYNC_FIRE_AND_FORGET_EVENT";
+    std::vector<uint8_t> datagramPayload(datagramData.begin(), datagramData.end());
+
+    NtStatus dgStatus = lpc::LpcRequestPort(clientCommPort, datagramHeader, datagramPayload);
+    TEST_ASSERT(NT_SUCCESS(dgStatus), "LpcRequestPort datagram must succeed");
+
+    lpc::PortMessage rcvDgHeader{};
+    std::vector<uint8_t> rcvDgPayload;
+    NtStatus rcvDgStatus = serverCommPort->receiveMessage(rcvDgHeader, rcvDgPayload, 2000);
+    TEST_ASSERT(NT_SUCCESS(rcvDgStatus), "Server must receive datagram message");
+    TEST_ASSERT(rcvDgHeader.u2.type == static_cast<uint16_t>(lpc::PortMessageType::LpcDatagram), 
+                "Datagram message type must be LpcDatagram");
+    std::string receivedDg(reinterpret_cast<char*>(rcvDgPayload.data()), rcvDgPayload.size());
+    TEST_ASSERT(receivedDg == datagramData, "Datagram payload must match client transmission");
+
+    // 7. Client Impersonation Engine (setClientToken, impersonateClient, revertToSelf)
+    TEST_ASSERT(serverCommPort->getClientToken() != nullptr, "Server port must hold client security token");
+    TEST_ASSERT(serverCommPort->getClientToken()->getUserSid() == userSid, "Client token SID must match AuthenticatedUser");
+
+    std::shared_ptr<se::TokenObject> savedServerToken;
+    auto serverCurrentToken = se::TokenObject::createSystemToken();
+    NtStatus impStatus = serverCommPort->impersonateClient(savedServerToken, serverCurrentToken.get());
+    TEST_ASSERT(NT_SUCCESS(impStatus), "impersonateClient must succeed");
+    TEST_ASSERT(savedServerToken != nullptr, "Previous server token must be preserved in savedServerToken");
+    TEST_ASSERT(savedServerToken->getUserSid() == se::Sid::localSystem(), 
+                "Saved token must be LocalSystem");
+
+    serverCommPort->revertToSelf(savedServerToken);
+    TEST_ASSERT(savedServerToken == nullptr, "revertToSelf must clear saved token handle");
+
+    // 8. ALPC Section Management & Large Data View (Shared Memory Transfer)
+    uintptr_t sectionId = clientCommPort->createSection(1024 * 1024); // 1 MB ALPC section
+    TEST_ASSERT(sectionId != 0, "createSection must return non-zero section ID");
+
+    lpc::AlpcDataView dataView{};
+    bool viewCreated = clientCommPort->createDataView(sectionId, 0, 65536, dataView);
+    TEST_ASSERT(viewCreated, "createDataView for 64KB must succeed");
+    TEST_ASSERT(dataView.viewBase != nullptr, "viewBase must be non-null");
+    TEST_ASSERT(dataView.viewSize == 65536, "viewSize must be 65536");
+
+    const char* magicSign = "MICANT_ALPC_ZERO_COPY_SECTION_PAYLOAD";
+    size_t signLen = std::strlen(magicSign);
+    std::memcpy(dataView.viewBase, magicSign, signLen);
+
+    // Verify section content directly
+    auto sectionObj = clientCommPort->getSection(sectionId);
+    TEST_ASSERT(sectionObj != nullptr, "Section object must be retrievable");
+    std::vector<uint8_t> readBack(signLen);
+    bool readOk = sectionObj->readData(0, readBack);
+    TEST_ASSERT(readOk, "readData from section must succeed");
+    std::string readStr(reinterpret_cast<char*>(readBack.data()), readBack.size());
+    TEST_ASSERT(readStr == magicSign, "Data read from section must match written payload");
+
+    bool deletedSec = clientCommPort->deleteSection(sectionId);
+    TEST_ASSERT(deletedSec, "deleteSection must return true");
+
+    // 9. Port Disconnection & Telemetry Validation
+    clientCommPort->disconnect();
+    serverCommPort->disconnect();
+
+    auto telemetry = lpc::LpcQueryTelemetry();
+    TEST_ASSERT(telemetry.totalConnectionPortsCreated >= 1, "totalConnectionPortsCreated must be >= 1");
+    TEST_ASSERT(telemetry.totalConnectionRequests >= 2, "totalConnectionRequests must be >= 2");
+    TEST_ASSERT(telemetry.totalConnectionsAccepted >= 1, "totalConnectionsAccepted must be >= 1");
+    TEST_ASSERT(telemetry.totalConnectionsRejected >= 1, "totalConnectionsRejected must be >= 1");
+    TEST_ASSERT(telemetry.totalSynchronousRequests >= 1, "totalSynchronousRequests must be >= 1");
+    TEST_ASSERT(telemetry.totalRepliesSent >= 1, "totalRepliesSent must be >= 1");
+    TEST_ASSERT(telemetry.totalAsynchronousDatagrams >= 1, "totalAsynchronousDatagrams must be >= 1");
+    TEST_ASSERT(telemetry.totalLargeViewsCreated >= 1, "totalLargeViewsCreated must be >= 1");
+    TEST_ASSERT(telemetry.totalClientImpersonations >= 1, "totalClientImpersonations must be >= 1");
+    TEST_ASSERT(telemetry.totalPortsClosed >= 2, "totalPortsClosed must be >= 2");
+
+    lpc::LpcResetTelemetryForTesting();
+    auto resetTelem = lpc::LpcQueryTelemetry();
+    TEST_ASSERT(resetTelem.totalConnectionPortsCreated == 0, "Telemetry reset must restore counters to 0");
+
+    // Teardown
+    portMgr.resetForTesting();
+
+    std::cout << "[TEST] Suite 237: Horizon 21 - Sovereign Executive LPC/ALPC Architecture, 3-Way Handshake & Impersonation Engine PASSED.\n";
+}
+
 
 

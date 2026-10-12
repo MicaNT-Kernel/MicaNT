@@ -14,6 +14,7 @@
 #include <optional>
 #include <atomic>
 #include <cstring>
+#include <future>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 #include "ob.hpp"
@@ -22,7 +23,7 @@
 namespace micant::lpc {
 
 // ============================================================================
-// Standard NT LPC / ALPC Message Types
+// 1. Standard NT LPC / ALPC Message Types
 // ============================================================================
 enum class PortMessageType : uint16_t {
     LpcRequest           = 1,
@@ -32,7 +33,8 @@ enum class PortMessageType : uint16_t {
     LpcClientDied        = 5,
     LpcPortClosed        = 6,
     LpcErrorEvent        = 7,
-    LpcConnectionReply   = 8
+    LpcConnectionReply   = 8,
+    LpcCanceled          = 9
 };
 
 // ALPC Message Attribute Flags
@@ -115,10 +117,39 @@ enum class PortType : uint32_t {
     ClientCommunicationPort  // Client-side dedicated endpoint
 };
 
-/**
- * @brief ALPC Port Shared Memory Section.
- * Backs zero-copy large data views between client and server processes.
- */
+// ============================================================================
+// 2. ALPC Diagnostic Telemetry
+// ============================================================================
+struct LPC_TELEMETRY {
+    size_t totalConnectionPortsCreated{0};
+    size_t totalCommunicationPortsCreated{0};
+    size_t totalConnectionRequests{0};
+    size_t totalConnectionsAccepted{0};
+    size_t totalConnectionsRejected{0};
+    size_t totalSynchronousRequests{0};
+    size_t totalAsynchronousDatagrams{0};
+    size_t totalRepliesSent{0};
+    size_t totalLargeViewsCreated{0};
+    size_t totalClientImpersonations{0};
+    size_t totalPortsClosed{0};
+};
+
+inline LPC_TELEMETRY g_LpcTelemetry{};
+inline std::mutex g_LpcTelemetryMutex{};
+
+inline LPC_TELEMETRY LpcQueryTelemetry() {
+    std::lock_guard<std::mutex> lk(g_LpcTelemetryMutex);
+    return g_LpcTelemetry;
+}
+
+inline void LpcResetTelemetryForTesting() {
+    std::lock_guard<std::mutex> lk(g_LpcTelemetryMutex);
+    g_LpcTelemetry = LPC_TELEMETRY{};
+}
+
+// ============================================================================
+// 3. ALPC Shared Memory Section & Data View Architecture
+// ============================================================================
 class AlpcPortSection {
 public:
     explicit AlpcPortSection(size_t size) : buffer_(size, 0) {}
@@ -146,10 +177,22 @@ private:
 class PortObject;
 
 /**
- * @brief Advanced Local Procedure Call (ALPC) Port Object.
- * Implements high-throughput, synchronous rendezvous message queues,
- * shared data views, and security validation between NT processes.
+ * @brief Pending Connection Request for 3-way Handshake.
  */
+struct PendingConnectRequest {
+    uint32_t connectionId{0};
+    ClientId clientId{};
+    std::shared_ptr<PortObject> clientPort;
+    PortMessage connectMessage{};
+    std::vector<uint8_t> connectData;
+    std::optional<AlpcMessageAttributes> connectAttributes;
+    std::shared_ptr<std::promise<NtStatus>> resultPromise;
+    std::shared_ptr<PortObject> serverPort;
+};
+
+// ============================================================================
+// 4. Advanced Local Procedure Call (ALPC) Port Object
+// ============================================================================
 class PortObject : public std::enable_shared_from_this<PortObject> {
 public:
     PortObject(std::wstring name, PortType type)
@@ -176,11 +219,44 @@ public:
         return securityDescriptor_;
     }
 
+    // Client Token & Impersonation
+    void setClientToken(std::shared_ptr<se::TokenObject> token) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        clientToken_ = std::move(token);
+    }
+
+    [[nodiscard]] std::shared_ptr<se::TokenObject> getClientToken() const {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return clientToken_;
+    }
+
+    NtStatus impersonateClient(std::shared_ptr<se::TokenObject>& savedToken, const se::TokenObject* serverCurrentToken = nullptr) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (!clientToken_) return NtStatus::Unsuccessful;
+        if (serverCurrentToken) {
+            savedToken = std::make_shared<se::TokenObject>(*serverCurrentToken);
+        }
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalClientImpersonations++;
+        }
+        return NtStatus::Success;
+    }
+
+    void revertToSelf(std::shared_ptr<se::TokenObject>& savedToken) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        savedToken.reset();
+    }
+
     // Section Management (ALPC Large Data Transfer)
     uintptr_t createSection(size_t size) {
         std::unique_lock<std::mutex> lock(mutex_);
         uintptr_t id = nextSectionId_++;
         sections_[id] = std::make_shared<AlpcPortSection>(size);
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalLargeViewsCreated++;
+        }
         return id;
     }
 
@@ -284,7 +360,6 @@ public:
 
     /**
      * @brief Synchronous LPC Request-Wait-Reply Rendezvous.
-     * Posts request to peer communication port and waits for matching reply.
      */
     NtStatus requestWaitReply(
         const PortMessage& reqHeader,
@@ -298,7 +373,6 @@ public:
         auto peer = peerPort_.lock();
         if (!peer) return NtStatus::PortConnectionRefused;
 
-        // Generate sequential message ID if not provided
         PortMessage msg = reqHeader;
         if (msg.messageId == 0) {
             static std::atomic<uint32_t> s_NextMsgId{1};
@@ -306,11 +380,14 @@ public:
         }
         msg.u2.type = static_cast<uint16_t>(PortMessageType::LpcRequest);
 
-        // Send request to server peer
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalSynchronousRequests++;
+        }
+
         NtStatus sendStatus = peer->postMessage(msg, reqPayload, reqAttrs);
         if (!NT_SUCCESS(sendStatus)) return sendStatus;
 
-        // Wait for reply on this port
         auto startTime = std::chrono::steady_clock::now();
         while (true) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -326,7 +403,6 @@ public:
             NtStatus recStatus = receiveMessage(incoming, incomingData, remaining, replyAttrs);
             if (!NT_SUCCESS(recStatus)) return recStatus;
 
-            // Check if this reply matches our messageId
             if (incoming.messageId == msg.messageId && 
                 incoming.u2.type == static_cast<uint16_t>(PortMessageType::LpcReply)) {
                 replyHeader = incoming;
@@ -349,7 +425,110 @@ public:
 
         PortMessage replyMsg = reqHeader;
         replyMsg.u2.type = static_cast<uint16_t>(PortMessageType::LpcReply);
+
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalRepliesSent++;
+        }
+
         return peer->postMessage(replyMsg, replyPayload, replyAttrs);
+    }
+
+    /**
+     * @brief Canonical NtReplyWaitReceivePort: reply to previous message (if any) and wait for next incoming message.
+     */
+    NtStatus replyWaitReceive(
+        const PortMessage* replyHeader,
+        std::span<const uint8_t> replyPayload,
+        PortMessage& outReqHeader,
+        std::vector<uint8_t>& outReqPayload,
+        uint32_t timeoutMs = 0xFFFFFFFF,
+        const AlpcMessageAttributes* replyAttrs = nullptr,
+        AlpcMessageAttributes* outReqAttrs = nullptr
+    ) {
+        if (replyHeader) {
+            NtStatus st = reply(*replyHeader, replyPayload, replyAttrs);
+            if (!NT_SUCCESS(st)) return st;
+        }
+        return receiveMessage(outReqHeader, outReqPayload, timeoutMs, outReqAttrs);
+    }
+
+    /**
+     * @brief Sends an asynchronous datagram (fire-and-forget message).
+     */
+    NtStatus sendDatagram(
+        const PortMessage& header,
+        std::span<const uint8_t> payload,
+        const AlpcMessageAttributes* attrs = nullptr
+    ) {
+        PortMessage msg = header;
+        msg.u2.type = static_cast<uint16_t>(PortMessageType::LpcDatagram);
+
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalAsynchronousDatagrams++;
+        }
+
+        return sendMessage(msg, payload, attrs);
+    }
+
+    /**
+     * @brief Enqueue a pending 3-way handshake connection request.
+     */
+    void enqueuePendingConnection(PendingConnectRequest req) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        uint32_t id = req.connectionId;
+        pendingConnections_[id] = std::move(req);
+        pendingConnectionIds_.push(id);
+        cv_.notify_one();
+    }
+
+    bool getNextPendingConnection(PendingConnectRequest& outReq, uint32_t timeoutMs = 0xFFFFFFFF) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (pendingConnectionIds_.empty()) {
+            if (timeoutMs == 0) return false;
+            if (timeoutMs == 0xFFFFFFFF) {
+                cv_.wait(lock, [this]() { return !pendingConnectionIds_.empty(); });
+            } else {
+                bool ok = cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this]() {
+                    return !pendingConnectionIds_.empty();
+                });
+                if (!ok) return false;
+            }
+        }
+
+        uint32_t id = pendingConnectionIds_.front();
+        pendingConnectionIds_.pop();
+
+        auto it = pendingConnections_.find(id);
+        if (it != pendingConnections_.end()) {
+            outReq = it->second;
+            return true;
+        }
+        return false;
+    }
+
+    bool resolvePendingConnection(uint32_t connectionId, bool accept, std::shared_ptr<PortObject> serverPort) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto it = pendingConnections_.find(connectionId);
+        if (it == pendingConnections_.end()) return false;
+
+        auto req = std::move(it->second);
+        pendingConnections_.erase(it);
+
+        if (accept) {
+            req.serverPort = serverPort;
+            req.clientPort->setPeerPort(serverPort);
+            serverPort->setPeerPort(req.clientPort);
+            if (req.connectAttributes && req.connectAttributes->security) {
+                auto clientSid = req.connectAttributes->security->userSid;
+                serverPort->setClientToken(se::TokenObject::createUserToken(clientSid));
+            }
+            req.resultPromise->set_value(NtStatus::Success);
+        } else {
+            req.resultPromise->set_value(NtStatus::PortConnectionRefused);
+        }
+        return true;
     }
 
     /**
@@ -363,6 +542,11 @@ public:
             peer->postMessage(closedMsg, {});
         }
         peerPort_.reset();
+
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalPortsClosed++;
+        }
     }
 
     [[nodiscard]] size_t getQueuedCount() const {
@@ -370,22 +554,32 @@ public:
         return inboundQueue_.size();
     }
 
+    [[nodiscard]] size_t getPendingConnectionCount() const {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return pendingConnectionIds_.size();
+    }
+
 private:
     std::wstring name_;
     PortType type_;
     std::weak_ptr<PortObject> peerPort_;
     std::optional<se::SecurityDescriptor> securityDescriptor_;
+    std::shared_ptr<se::TokenObject> clientToken_;
     std::unordered_map<uintptr_t, std::shared_ptr<AlpcPortSection>> sections_;
     std::atomic<uintptr_t> nextSectionId_{1};
+
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::queue<PortPacket> inboundQueue_;
+
+    // Pending connection requests for 3-way handshake
+    std::unordered_map<uint32_t, PendingConnectRequest> pendingConnections_;
+    std::queue<uint32_t> pendingConnectionIds_;
 };
 
-/**
- * @brief ALPC Subsystem Manager.
- * Registers, authenticates, and connects message ports under \RPC Control.
- */
+// ============================================================================
+// 5. ALPC Subsystem Manager
+// ============================================================================
 class PortManager {
 public:
     static PortManager& get() {
@@ -411,11 +605,17 @@ public:
             port->setSecurityDescriptor(std::move(*sd));
         }
         namedPorts_[fullName] = port;
+
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalConnectionPortsCreated++;
+        }
+
         return port;
     }
 
     /**
-     * @brief Connect a client to a named connection port, generating paired endpoints.
+     * @brief Direct fast-path connection (creates paired client and server endpoints immediately).
      */
     NtStatus connectPort(
         std::wstring_view name,
@@ -433,7 +633,6 @@ public:
 
         auto targetPort = it->second;
 
-        // Perform security access check if port has security descriptor and caller token provided
         if (callerToken && targetPort->getSecurityDescriptor()) {
             uint32_t granted = 0;
             NtStatus secStatus = se::SecurityReferenceMonitor::accessCheck(
@@ -448,14 +647,114 @@ public:
             }
         }
 
-        // Create paired bidirectional communication endpoints
         clientCommPort = std::make_shared<PortObject>(fullName + L":Client", PortType::ClientCommunicationPort);
         serverCommPort = std::make_shared<PortObject>(fullName + L":Server", PortType::ServerCommunicationPort);
 
         clientCommPort->setPeerPort(serverCommPort);
         serverCommPort->setPeerPort(clientCommPort);
 
+        if (callerToken) {
+            serverCommPort->setClientToken(std::make_shared<se::TokenObject>(*callerToken));
+        }
+
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalCommunicationPortsCreated += 2;
+            g_LpcTelemetry.totalConnectionsAccepted++;
+        }
+
         return NtStatus::Success;
+    }
+
+    /**
+     * @brief Canonical 3-way Handshake Client Connection Initiation (NtConnectPort).
+     */
+    NtStatus connectPortEx(
+        std::wstring_view name,
+        std::span<const uint8_t> connectData,
+        std::shared_ptr<PortObject>& outClientCommPort,
+        const se::TokenObject* callerToken = nullptr,
+        const AlpcMessageAttributes* connectAttrs = nullptr,
+        uint32_t timeoutMs = 5000
+    ) {
+        std::shared_ptr<PortObject> targetPort;
+        std::wstring fullName = normalizePortName(name);
+
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            auto it = namedPorts_.find(fullName);
+            if (it == namedPorts_.end()) {
+                return NtStatus::ObjectNameNotFound;
+            }
+            targetPort = it->second;
+        }
+
+        // Access check
+        if (callerToken && targetPort->getSecurityDescriptor()) {
+            uint32_t granted = 0;
+            NtStatus secStatus = se::SecurityReferenceMonitor::accessCheck(
+                *callerToken,
+                *targetPort->getSecurityDescriptor(),
+                se::GENERIC_READ | se::GENERIC_WRITE,
+                granted,
+                fullName
+            );
+            if (!NT_SUCCESS(secStatus)) {
+                return NtStatus::AccessDenied;
+            }
+        }
+
+        static std::atomic<uint32_t> s_ConnIdGen{1};
+        uint32_t connId = s_ConnIdGen++;
+
+        auto clientComm = std::make_shared<PortObject>(fullName + L":Client:" + std::to_wstring(connId), PortType::ClientCommunicationPort);
+        auto promise = std::make_shared<std::promise<NtStatus>>();
+        auto future = promise->get_future();
+
+        PendingConnectRequest req{
+            .connectionId = connId,
+            .clientId = ClientId{ .uniqueProcess = 1000, .uniqueThread = 1001 },
+            .clientPort = clientComm,
+            .connectMessage = PortMessage{},
+            .connectData = std::vector<uint8_t>(connectData.begin(), connectData.end()),
+            .resultPromise = promise
+        };
+        req.connectMessage.u2.type = static_cast<uint16_t>(PortMessageType::LpcConnectionRequest);
+        req.connectMessage.messageId = connId;
+
+        if (connectAttrs) {
+            req.connectAttributes = *connectAttrs;
+        }
+
+        {
+            std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+            g_LpcTelemetry.totalConnectionRequests++;
+        }
+
+        // Enqueue connection request into target ConnectionPort
+        targetPort->enqueuePendingConnection(std::move(req));
+
+        // Wait on server acceptance/rejection
+        auto waitStatus = future.wait_for(std::chrono::milliseconds(timeoutMs));
+        if (waitStatus == std::future_status::timeout) {
+            return NtStatus::Timeout;
+        }
+
+        NtStatus connResult = future.get();
+        if (NT_SUCCESS(connResult)) {
+            outClientCommPort = clientComm;
+            {
+                std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+                g_LpcTelemetry.totalConnectionsAccepted++;
+                g_LpcTelemetry.totalCommunicationPortsCreated += 2;
+            }
+        } else {
+            {
+                std::lock_guard<std::mutex> tlk(g_LpcTelemetryMutex);
+                g_LpcTelemetry.totalConnectionsRejected++;
+            }
+        }
+        return connResult;
     }
 
     [[nodiscard]] std::shared_ptr<PortObject> lookupPort(std::wstring_view name) const {
@@ -469,6 +768,11 @@ public:
     [[nodiscard]] size_t getPortCount() const {
         std::unique_lock<std::mutex> lock(mutex_);
         return namedPorts_.size();
+    }
+
+    void resetForTesting() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        namedPorts_.clear();
     }
 
 private:
@@ -487,6 +791,75 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<std::wstring, std::shared_ptr<PortObject>> namedPorts_;
 };
+
+// ============================================================================
+// 6. Sovereign Canonical Executive LPC Functions (Lpc*)
+// ============================================================================
+inline NtStatus LpcCreatePort(
+    std::wstring_view portName,
+    std::shared_ptr<PortObject>& outPort,
+    std::optional<se::SecurityDescriptor> sd = std::nullopt
+) {
+    outPort = PortManager::get().createPort(portName, std::move(sd));
+    return outPort ? NtStatus::Success : NtStatus::ObjectNameCollision;
+}
+
+inline NtStatus LpcConnectPort(
+    std::wstring_view portName,
+    std::shared_ptr<PortObject>& clientPort,
+    std::shared_ptr<PortObject>& serverPort,
+    const se::TokenObject* callerToken = nullptr
+) {
+    return PortManager::get().connectPort(portName, clientPort, serverPort, callerToken);
+}
+
+inline NtStatus LpcRequestWaitReplyPort(
+    std::shared_ptr<PortObject> port,
+    const PortMessage& reqHeader,
+    std::span<const uint8_t> reqPayload,
+    PortMessage& replyHeader,
+    std::vector<uint8_t>& replyPayload,
+    uint32_t timeoutMs = 5000,
+    const AlpcMessageAttributes* reqAttrs = nullptr,
+    AlpcMessageAttributes* replyAttrs = nullptr
+) {
+    if (!port) return NtStatus::InvalidHandle;
+    return port->requestWaitReply(reqHeader, reqPayload, replyHeader, replyPayload, timeoutMs, reqAttrs, replyAttrs);
+}
+
+inline NtStatus LpcReplyWaitReceivePort(
+    std::shared_ptr<PortObject> port,
+    const PortMessage* replyHeader,
+    std::span<const uint8_t> replyPayload,
+    PortMessage& outReqHeader,
+    std::vector<uint8_t>& outReqPayload,
+    uint32_t timeoutMs = 0xFFFFFFFF,
+    const AlpcMessageAttributes* replyAttrs = nullptr,
+    AlpcMessageAttributes* outReqAttrs = nullptr
+) {
+    if (!port) return NtStatus::InvalidHandle;
+    return port->replyWaitReceive(replyHeader, replyPayload, outReqHeader, outReqPayload, timeoutMs, replyAttrs, outReqAttrs);
+}
+
+inline NtStatus LpcReplyPort(
+    std::shared_ptr<PortObject> port,
+    const PortMessage& reqHeader,
+    std::span<const uint8_t> replyPayload,
+    const AlpcMessageAttributes* replyAttrs = nullptr
+) {
+    if (!port) return NtStatus::InvalidHandle;
+    return port->reply(reqHeader, replyPayload, replyAttrs);
+}
+
+inline NtStatus LpcRequestPort(
+    std::shared_ptr<PortObject> port,
+    const PortMessage& header,
+    std::span<const uint8_t> payload,
+    const AlpcMessageAttributes* attrs = nullptr
+) {
+    if (!port) return NtStatus::InvalidHandle;
+    return port->sendDatagram(header, payload, attrs);
+}
 
 } // namespace micant::lpc
 
