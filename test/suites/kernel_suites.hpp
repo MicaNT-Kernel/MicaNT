@@ -10002,6 +10002,557 @@ inline void Test_Horizon34_NDIS6_NetAdapterCx_Networking_Architecture() {
     std::cout << "[TEST] Suite 250: Horizon 34 - NDIS 6.x & NetAdapterCx Networking Architecture PASSED.\n";
 }
 
+// ============================================================================
+// Suite 251: Horizon 35 - ACPI / HAL Device Tree & AML Interpreter Subsystem
+// ============================================================================
+
+void Test_Horizon35_ACPI_HAL_DeviceTree_And_AML_Interpreter() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 251: Horizon 35 - ACPI / HAL Device Tree & AML Interpreter      \n";
+    std::cout << "========================================================================\n";
+
+    // Initialize Subsystem
+    acpi::InitializeAcpiSubsystem();
+    auto& acpiSub = acpi::TitanAcpiSubsystem::Instance();
+    TEST_ASSERT(acpiSub.isInitialized(), "TitanACPI subsystem must be initialized");
+
+    // ------------------------------------------------------------------------
+    // Phase 1: Physical ACPI Table Discovery & XSDT/RSDT Traversal
+    // ------------------------------------------------------------------------
+    {
+        const auto& rsdp = acpiSub.getRsdp();
+        TEST_ASSERT(std::memcmp(rsdp.signature, acpi::ACPI_SIG_RSDP, 8) == 0, "RSDP signature must be 'RSD PTR '");
+        TEST_ASSERT(std::memcmp(rsdp.oemId, "MICANT", 6) == 0, "RSDP OEM ID must match MICANT");
+        TEST_ASSERT(rsdp.revision == 2, "RSDP revision must be 2 (ACPI 2.0+)");
+        TEST_ASSERT(acpi::VerifyAcpiChecksum(&rsdp, 20), "ACPI 1.0 RSDP 20-byte checksum must be valid");
+        TEST_ASSERT(acpi::VerifyAcpiChecksum(&rsdp, sizeof(acpi::AcpiRsdp)), "ACPI 2.0+ Extended RSDP checksum must be valid");
+        TEST_ASSERT(rsdp.xsdtAddress != 0, "XSDT 64-bit address must be present");
+        TEST_ASSERT(rsdp.rsdtAddress != 0, "RSDT 32-bit address must be present");
+
+        // Verify physical table map
+        auto tables = acpiSub.getAllTables();
+        TEST_ASSERT(tables.size() >= 10, "Subsystem must discover at least 10 physical tables");
+
+        // Verify XSDT (64-bit pointers)
+        const auto& xsdt = acpiSub.getXsdtHeader();
+        TEST_ASSERT(std::memcmp(xsdt.signature, "XSDT", 4) == 0, "XSDT signature must be 'XSDT'");
+        TEST_ASSERT(xsdt.revision == 1, "XSDT revision must be 1");
+        const auto& xsdtEntries = acpiSub.getXsdtEntries();
+        TEST_ASSERT(xsdtEntries.size() == 7, "XSDT must contain 7 standard 64-bit table pointers");
+
+        // Verify RSDT (32-bit pointers)
+        const auto& rsdt = acpiSub.getRsdtHeader();
+        TEST_ASSERT(std::memcmp(rsdt.signature, "RSDT", 4) == 0, "RSDT signature must be 'RSDT'");
+        TEST_ASSERT(rsdt.revision == 1, "RSDT revision must be 1");
+        const auto& rsdtEntries = acpiSub.getRsdtEntries();
+        TEST_ASSERT(rsdtEntries.size() == 7, "RSDT must contain 7 standard 32-bit table pointers");
+
+        // Verify MADT (APIC)
+        const auto& madtHdr = acpiSub.getMadtHeader();
+        TEST_ASSERT(std::memcmp(madtHdr.header.signature, "APIC", 4) == 0, "MADT signature must be 'APIC'");
+        TEST_ASSERT(madtHdr.localApicAddress == 0xFEE00000, "Local APIC default MMIO must be 0xFEE00000");
+        TEST_ASSERT(acpiSub.getLocalApics().size() == 4, "MADT must enumerate 4 SMP Processor Local APICs");
+        TEST_ASSERT(acpiSub.getIoApics().size() == 1, "MADT must enumerate 1 Primary I/O APIC");
+        TEST_ASSERT(acpiSub.getIoApics()[0].ioApicAddress == 0xFEC00000, "I/O APIC base must be 0xFEC00000");
+        TEST_ASSERT(acpiSub.getIntrOverrides().size() == 2, "MADT must declare 2 Interrupt Source Overrides (IRQ0, IRQ9)");
+
+        // Verify MCFG (PCIe ECAM)
+        const auto& mcfg = acpiSub.getMcfg();
+        TEST_ASSERT(std::memcmp(mcfg.header.signature, "MCFG", 4) == 0, "MCFG signature must be 'MCFG'");
+        TEST_ASSERT(mcfg.allocations[0].baseAddress == 0xE0000000ULL, "PCIe ECAM base must be 0xE0000000");
+        TEST_ASSERT(mcfg.allocations[0].startBusNumber == 0 && mcfg.allocations[0].endBusNumber == 255, "PCIe buses 0-255");
+
+        // Verify DMAR & SRAT
+        const auto& dmar = acpiSub.getDmar();
+        TEST_ASSERT(std::memcmp(dmar.header.signature, "DMAR", 4) == 0, "DMAR signature must be 'DMAR'");
+        TEST_ASSERT(dmar.hostAddressWidth == 39, "DMAR host address width must be 39");
+
+        const auto& srat = acpiSub.getSrat();
+        TEST_ASSERT(std::memcmp(srat.header.signature, "SRAT", 4) == 0, "SRAT signature must be 'SRAT'");
+        TEST_ASSERT(srat.header.revision == 3, "SRAT revision must be 3");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 2: HPET (High Precision Event Timer) & BGRT (Boot Graphics) Table Verification
+    // ------------------------------------------------------------------------
+    {
+        uint64_t hpetAddr = 0;
+        uint32_t hpetLen = 0;
+        BOOL foundHpet = acpi::AcpiFindTable("HPET", &hpetAddr, &hpetLen);
+        TEST_ASSERT(foundHpet == acpi::TRUE, "AcpiFindTable must locate HPET table");
+        TEST_ASSERT(hpetAddr != 0, "HPET physical address must be non-zero");
+        TEST_ASSERT(hpetLen == sizeof(acpi::AcpiHpetTable), "HPET length must equal sizeof(AcpiHpetTable)");
+
+        const auto& hpet = acpiSub.getHpet();
+        TEST_ASSERT(std::memcmp(hpet.header.signature, "HPET", 4) == 0, "HPET signature must match 'HPET'");
+        TEST_ASSERT(hpet.header.revision == 1, "HPET revision must be 1");
+        TEST_ASSERT(acpi::VerifyAcpiChecksum(&hpet, sizeof(acpi::AcpiHpetTable)), "HPET checksum must be valid");
+        TEST_ASSERT(hpet.eventTimerBlockId == 0x8086A001, "HPET Event Timer Block ID must be 0x8086A001");
+        TEST_ASSERT(hpet.baseAddress.addressSpaceId == 0, "HPET GAS AddressSpaceId must be 0 (System Memory)");
+        TEST_ASSERT(hpet.baseAddress.address == 0xFED00000ULL, "HPET Base Address must be 0xFED00000");
+        TEST_ASSERT(hpet.baseAddress.registerBitWidth == 64, "HPET RegisterBitWidth must be 64");
+        TEST_ASSERT(hpet.hpetNumber == 0, "HPET sequence number must be 0");
+        TEST_ASSERT(hpet.mainCounterMinClockTick == 100, "HPET min clock tick must be 100ns (10MHz)");
+
+        uint64_t bgrtAddr = 0;
+        uint32_t bgrtLen = 0;
+        BOOL foundBgrt = acpi::AcpiFindTable("BGRT", &bgrtAddr, &bgrtLen);
+        TEST_ASSERT(foundBgrt == acpi::TRUE, "AcpiFindTable must locate BGRT table");
+        TEST_ASSERT(bgrtAddr != 0, "BGRT physical address must be non-zero");
+        TEST_ASSERT(bgrtLen == sizeof(acpi::AcpiBgrtTable), "BGRT length must equal sizeof(AcpiBgrtTable)");
+
+        const auto& bgrt = acpiSub.getBgrt();
+        TEST_ASSERT(std::memcmp(bgrt.header.signature, "BGRT", 4) == 0, "BGRT signature must match 'BGRT'");
+        TEST_ASSERT(bgrt.header.revision == 1, "BGRT revision must be 1");
+        TEST_ASSERT(acpi::VerifyAcpiChecksum(&bgrt, sizeof(acpi::AcpiBgrtTable)), "BGRT checksum must be valid");
+        TEST_ASSERT(bgrt.version == 1, "BGRT version must be 1");
+        TEST_ASSERT(bgrt.status == 1, "BGRT status must be 1 (Displayed)");
+        TEST_ASSERT(bgrt.imageType == 0, "BGRT imageType must be 0 (Bitmap)");
+        TEST_ASSERT(bgrt.imageAddress == 0x000000007FE00000ULL, "BGRT imageAddress must be 0x7FE00000");
+        TEST_ASSERT(bgrt.imageOffsetX == 384 && bgrt.imageOffsetY == 284, "BGRT offsets must be (384, 284)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: AML Bytecode Stream Execution & Opcode Arithmetic/Logic Engine
+    // ------------------------------------------------------------------------
+    {
+        acpi::AmlBytecodeParser parser;
+
+        // 1. Arithmetic Execution: Store(10, Local0); Store(25, Local1); Add(Local0, Local1, Local2)
+        std::vector<uint8_t> arithCode = {
+            acpi::AML_STORE_OP, acpi::AML_BYTE_PREFIX, 10, acpi::AML_LOCAL0_OP,
+            acpi::AML_STORE_OP, acpi::AML_BYTE_PREFIX, 25, acpi::AML_LOCAL1_OP,
+            acpi::AML_ADD_OP, acpi::AML_LOCAL0_OP, acpi::AML_LOCAL1_OP, acpi::AML_LOCAL2_OP,
+            // Subtract(Local2, 5, Local3)
+            acpi::AML_SUBTRACT_OP, acpi::AML_LOCAL2_OP, acpi::AML_BYTE_PREFIX, 5, acpi::AML_LOCAL3_OP,
+            // Multiply(Local3, 2, Local4)
+            acpi::AML_MULTIPLY_OP, acpi::AML_LOCAL3_OP, acpi::AML_BYTE_PREFIX, 2, acpi::AML_LOCAL4_OP,
+            // Divide(Local4, 7, Local5, Local6) -> Local5=Remainder (4), Local6=Quotient (8)
+            acpi::AML_DIVIDE_OP, acpi::AML_LOCAL4_OP, acpi::AML_BYTE_PREFIX, 7, acpi::AML_LOCAL5_OP, acpi::AML_LOCAL6_OP,
+            // ShiftLeft(Local6, 3, Local7) -> 8 << 3 = 64
+            acpi::AML_SHIFT_LEFT_OP, acpi::AML_LOCAL6_OP, acpi::AML_BYTE_PREFIX, 3, acpi::AML_LOCAL7_OP,
+            // ShiftRight(Local7, 2, Local0) -> 64 >> 2 = 16
+            acpi::AML_SHIFT_RIGHT_OP, acpi::AML_LOCAL7_OP, acpi::AML_BYTE_PREFIX, 2, acpi::AML_LOCAL0_OP
+        };
+        parser.executeBytecode(arithCode);
+        TEST_ASSERT(parser.getLocal(0) == 16, "Local0 must be 16 after ShiftRight");
+        TEST_ASSERT(parser.getLocal(1) == 25, "Local1 must be 25");
+        TEST_ASSERT(parser.getLocal(2) == 35, "Local2 must be 35 after Add(10, 25)");
+        TEST_ASSERT(parser.getLocal(3) == 30, "Local3 must be 30 after Subtract(35, 5)");
+        TEST_ASSERT(parser.getLocal(4) == 60, "Local4 must be 60 after Multiply(30, 2)");
+        TEST_ASSERT(parser.getLocal(5) == 4,  "Local5 must be 4 (Remainder 60 % 7)");
+        TEST_ASSERT(parser.getLocal(6) == 8,  "Local6 must be 8 (Quotient 60 / 7)");
+        TEST_ASSERT(parser.getLocal(7) == 64, "Local7 must be 64 after ShiftLeft(8, 3)");
+
+        // 2. Bitwise Logic: And, Or, Xor, Not
+        std::vector<uint8_t> bitCode = {
+            acpi::AML_AND_OP, acpi::AML_BYTE_PREFIX, 0xFF, acpi::AML_BYTE_PREFIX, 0x0F, acpi::AML_LOCAL1_OP,
+            acpi::AML_OR_OP,  acpi::AML_BYTE_PREFIX, 0xF0, acpi::AML_BYTE_PREFIX, 0x0F, acpi::AML_LOCAL2_OP,
+            acpi::AML_XOR_OP, acpi::AML_BYTE_PREFIX, 0xAA, acpi::AML_BYTE_PREFIX, 0x55, acpi::AML_LOCAL3_OP,
+            acpi::AML_NOT_OP, acpi::AML_BYTE_PREFIX, 0x00, acpi::AML_LOCAL4_OP
+        };
+        parser.executeBytecode(bitCode);
+        TEST_ASSERT(parser.getLocal(1) == 0x0F, "And(0xFF, 0x0F) must be 0x0F");
+        TEST_ASSERT(parser.getLocal(2) == 0xFF, "Or(0xF0, 0x0F) must be 0xFF");
+        TEST_ASSERT(parser.getLocal(3) == 0xFF, "Xor(0xAA, 0x55) must be 0xFF");
+        TEST_ASSERT(parser.getLocal(4) == 0xFFFFFFFFFFFFFFFFULL, "Not(0) must invert all 64 bits");
+
+        // 3. Relational & Logical Operators: LEqual, LGreater, LLess, LAnd, LOr, LNot
+        std::vector<uint8_t> logicCode = {
+            acpi::AML_STORE_OP, acpi::AML_LEQUAL_OP, acpi::AML_BYTE_PREFIX, 42, acpi::AML_BYTE_PREFIX, 42, acpi::AML_LOCAL0_OP,
+            acpi::AML_STORE_OP, acpi::AML_LGREATER_OP, acpi::AML_BYTE_PREFIX, 50, acpi::AML_BYTE_PREFIX, 20, acpi::AML_LOCAL1_OP,
+            acpi::AML_STORE_OP, acpi::AML_LLESS_OP, acpi::AML_BYTE_PREFIX, 10, acpi::AML_BYTE_PREFIX, 30, acpi::AML_LOCAL2_OP,
+            acpi::AML_STORE_OP, acpi::AML_LAND_OP, acpi::AML_LOCAL0_OP, acpi::AML_LOCAL1_OP, acpi::AML_LOCAL3_OP,
+            acpi::AML_STORE_OP, acpi::AML_LNOT_OP, acpi::AML_ZERO_OP, acpi::AML_LOCAL4_OP
+        };
+        parser.executeBytecode(logicCode);
+        TEST_ASSERT(parser.getLocal(0) == 1, "LEqual(42, 42) must be 1");
+        TEST_ASSERT(parser.getLocal(1) == 1, "LGreater(50, 20) must be 1");
+        TEST_ASSERT(parser.getLocal(2) == 1, "LLess(10, 30) must be 1");
+        TEST_ASSERT(parser.getLocal(3) == 1, "LAnd(1, 1) must be 1");
+        TEST_ASSERT(parser.getLocal(4) == 1, "LNot(0) must be 1");
+
+        // 4. Loops & Control Flow: While(Local0 < 5) { Local0 = Local0 + 1 }
+        std::vector<uint8_t> whileCode = {
+            acpi::AML_STORE_OP, acpi::AML_ZERO_OP, acpi::AML_LOCAL0_OP,
+            acpi::AML_WHILE_OP, 9,
+            acpi::AML_LLESS_OP, acpi::AML_LOCAL0_OP, acpi::AML_BYTE_PREFIX, 5,
+            acpi::AML_ADD_OP, acpi::AML_LOCAL0_OP, acpi::AML_ONE_OP, acpi::AML_LOCAL0_OP
+        };
+        parser.executeBytecode(whileCode);
+        TEST_ASSERT(parser.getLocal(0) == 5, "While loop must iterate 5 times and set Local0 = 5");
+
+        // 5. Method with Arguments & Return: Return(Arg0 + Arg1)
+        std::vector<uint8_t> methodCode = {
+            acpi::AML_ADD_OP, acpi::AML_ARG0_OP, acpi::AML_ARG1_OP, acpi::AML_LOCAL0_OP,
+            acpi::AML_RETURN_OP, acpi::AML_LOCAL0_OP
+        };
+        uint64_t retVal = parser.executeBytecode(methodCode, { acpi::AmlValue::MakeInteger(123), acpi::AmlValue::MakeInteger(456) });
+        TEST_ASSERT(retVal == 579, "Method execution with Arg0=123 and Arg1=456 must return 579");
+        TEST_ASSERT(parser.hasReturned() == true, "hasReturned flag must be true");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: ACPI Small & Large Resource Item Descriptor Encoding & Decoding
+    // ------------------------------------------------------------------------
+    {
+        std::vector<acpi::ACPI_RESOURCE> originalList;
+
+        // 1. FixedIoPort: 0x03F8, len 8 (COM1)
+        acpi::ACPI_RESOURCE res1{};
+        res1.type = acpi::AcpiResourceType::FixedIoPort;
+        res1.fixedIo.baseAddress = 0x03F8;
+        res1.fixedIo.length = 8;
+        originalList.push_back(res1);
+
+        // 2. IoPort: 0x01F0..0x01F7, len 8, align 1 (IDE Primary)
+        acpi::ACPI_RESOURCE res2{};
+        res2.type = acpi::AcpiResourceType::IoPort;
+        res2.io.baseAddress = 0x01F0;
+        res2.io.alignment = 1;
+        res2.io.length = 8;
+        originalList.push_back(res2);
+
+        // 3. Irq: IRQ 4
+        acpi::ACPI_RESOURCE res3{};
+        res3.type = acpi::AcpiResourceType::Irq;
+        res3.irq.irqMask = 0x0010;
+        res3.irq.triggering = 0; // Edge
+        res3.irq.polarity = 0;   // High
+        res3.irq.sharable = 0;   // Exclusive
+        originalList.push_back(res3);
+
+        // 4. Dma: Channel 2
+        acpi::ACPI_RESOURCE res4{};
+        res4.type = acpi::AcpiResourceType::Dma;
+        res4.dma.channelMask = 0x04;
+        res4.dma.transferType = 0;
+        originalList.push_back(res4);
+
+        // 5. FixedMemory32: 0xD0000000, 1MB
+        acpi::ACPI_RESOURCE res5{};
+        res5.type = acpi::AcpiResourceType::FixedMemory32;
+        res5.fixedMemory32.baseAddress = 0xD0000000;
+        res5.fixedMemory32.length = 0x00100000;
+        res5.fixedMemory32.writeProtect = 1;
+        originalList.push_back(res5);
+
+        // 6. Memory32: 0xE0000000..0xEFFFFFFF, 16MB
+        acpi::ACPI_RESOURCE res6{};
+        res6.type = acpi::AcpiResourceType::Memory32;
+        res6.memory32.minimumAddress = 0xE0000000;
+        res6.memory32.maximumAddress = 0xEFFFFFFF;
+        res6.memory32.alignment = 0x1000;
+        res6.memory32.length = 0x01000000;
+        res6.memory32.writeProtect = 1;
+        originalList.push_back(res6);
+
+        // 7. ExtendedIrq: GSI 24, Level, Low, Shared
+        acpi::ACPI_RESOURCE res7{};
+        res7.type = acpi::AcpiResourceType::ExtendedIrq;
+        res7.extendedIrq.gsi = 24;
+        res7.extendedIrq.triggering = 1;
+        res7.extendedIrq.polarity = 1;
+        res7.extendedIrq.sharable = 1;
+        originalList.push_back(res7);
+
+        // Encode to byte buffer
+        std::vector<uint8_t> encoded = acpi::EncodeAcpiResources(originalList);
+        TEST_ASSERT(!encoded.empty(), "Encoded ACPI resource buffer must not be empty");
+        TEST_ASSERT(encoded.back() == 0x00 && encoded[encoded.size() - 2] == 0x79, "Buffer must end with End Tag (0x79, 0x00)");
+
+        // Decode from byte buffer
+        std::vector<acpi::ACPI_RESOURCE> decoded = acpi::DecodeAcpiResources(encoded);
+        TEST_ASSERT(decoded.size() == 7, "Decoded resource count must match original count of 7");
+
+        TEST_ASSERT(decoded[0].type == acpi::AcpiResourceType::FixedIoPort, "Item 0 must be FixedIoPort");
+        TEST_ASSERT(decoded[0].fixedIo.baseAddress == 0x03F8 && decoded[0].fixedIo.length == 8, "COM1 IO match");
+
+        TEST_ASSERT(decoded[1].type == acpi::AcpiResourceType::IoPort, "Item 1 must be IoPort");
+        TEST_ASSERT(decoded[1].io.baseAddress == 0x01F0 && decoded[1].io.length == 8, "IDE IO match");
+
+        TEST_ASSERT(decoded[2].type == acpi::AcpiResourceType::Irq, "Item 2 must be Irq");
+        TEST_ASSERT(decoded[2].irq.irqMask == 0x0010, "IRQ 4 mask match");
+
+        TEST_ASSERT(decoded[3].type == acpi::AcpiResourceType::Dma, "Item 3 must be Dma");
+        TEST_ASSERT(decoded[3].dma.channelMask == 0x04, "DMA Channel 2 match");
+
+        TEST_ASSERT(decoded[4].type == acpi::AcpiResourceType::FixedMemory32, "Item 4 must be FixedMemory32");
+        TEST_ASSERT(decoded[4].fixedMemory32.baseAddress == 0xD0000000 && decoded[4].fixedMemory32.length == 0x00100000, "FixedMemory32 match");
+
+        TEST_ASSERT(decoded[5].type == acpi::AcpiResourceType::Memory32, "Item 5 must be Memory32");
+        TEST_ASSERT(decoded[5].memory32.minimumAddress == 0xE0000000 && decoded[5].memory32.length == 0x01000000, "Memory32 match");
+
+        TEST_ASSERT(decoded[6].type == acpi::AcpiResourceType::ExtendedIrq, "Item 6 must be ExtendedIrq");
+        TEST_ASSERT(decoded[6].extendedIrq.gsi == 24 && decoded[6].extendedIrq.triggering == 1, "ExtendedIrq GSI 24 Level match");
+
+        // C ABI AcpiGetDeviceResources test
+        acpi::ACPI_RESOURCE devResources[8];
+        uint32_t count = 0;
+        BOOL resPci = acpi::AcpiGetDeviceResources("\\_SB.PCI0", devResources, 8, &count);
+        TEST_ASSERT(resPci == acpi::TRUE && count >= 2, "AcpiGetDeviceResources for PCI0 must succeed with >= 2 resources");
+
+        BOOL resGfx = acpi::AcpiGetDeviceResources("\\_SB.PCI0.GFX0", devResources, 8, &count);
+        TEST_ASSERT(resGfx == acpi::TRUE && count >= 2, "AcpiGetDeviceResources for GFX0 must succeed with FixedMemory32 and ExtendedIrq");
+        TEST_ASSERT(devResources[0].type == acpi::AcpiResourceType::FixedMemory32, "GFX0 first resource must be FixedMemory32");
+        TEST_ASSERT(devResources[0].fixedMemory32.baseAddress == 0xE1000000, "GFX0 base address must be 0xE1000000");
+        TEST_ASSERT(devResources[1].type == acpi::AcpiResourceType::ExtendedIrq, "GFX0 second resource must be ExtendedIrq");
+        TEST_ASSERT(devResources[1].extendedIrq.gsi == 16, "GFX0 GSI must be 16");
+
+        BOOL resNvme = acpi::AcpiGetDeviceResources("\\_SB.PCI0.NVME", devResources, 8, &count);
+        TEST_ASSERT(resNvme == acpi::TRUE && devResources[1].extendedIrq.gsi == 17, "NVME GSI must be 17");
+
+        BOOL resUsb = acpi::AcpiGetDeviceResources("\\_SB.PCI0.XUSB", devResources, 8, &count);
+        TEST_ASSERT(resUsb == acpi::TRUE && devResources[1].extendedIrq.gsi == 18, "XUSB GSI must be 18");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: PCI Interrupt Routing Table (_PRT) Evaluation & Device GSI Translation
+    // ------------------------------------------------------------------------
+    {
+        auto prtVal = acpiSub.getNamespace().evaluate("\\_SB.PCI0._PRT");
+        TEST_ASSERT(prtVal.type == acpi::AmlObjectType::Package, "_PRT evaluation must return a Package");
+        TEST_ASSERT(prtVal.packageElements.size() == 5, "_PRT package must contain 5 device routing records");
+
+        uint32_t gsi = 0;
+        // GFX0: Device 1 (ADR 0x00010000), Pin 0 (INTA) -> GSI 16
+        BOOL t1 = acpi::AcpiTranslatePciRouting(0x00010000, 0, &gsi);
+        TEST_ASSERT(t1 == acpi::TRUE && gsi == 16, "PCI device 1 pin 0 must translate to GSI 16");
+
+        // NVME: Device 2 (ADR 0x00020000), Pin 0 (INTA) -> GSI 17
+        BOOL t2 = acpi::AcpiTranslatePciRouting(0x00020000, 0, &gsi);
+        TEST_ASSERT(t2 == acpi::TRUE && gsi == 17, "PCI device 2 pin 0 must translate to GSI 17");
+
+        // XUSB: Device 3 (ADR 0x00030000), Pin 0 (INTA) -> GSI 18
+        BOOL t3 = acpi::AcpiTranslatePciRouting(0x00030000, 0, &gsi);
+        TEST_ASSERT(t3 == acpi::TRUE && gsi == 18, "PCI device 3 pin 0 must translate to GSI 18");
+
+        // RazzleNet: Device 4 (ADR 0x00040000), Pin 0 (INTA) -> GSI 19
+        BOOL t4 = acpi::AcpiTranslatePciRouting(0x00040000, 0, &gsi);
+        TEST_ASSERT(t4 == acpi::TRUE && gsi == 19, "PCI device 4 pin 0 must translate to GSI 19");
+
+        // VirtIO: Device 5 (ADR 0x00050000), Pin 0 (INTA) -> GSI 20
+        BOOL t5 = acpi::AcpiTranslatePciRouting(0x00050000, 0, &gsi);
+        TEST_ASSERT(t5 == acpi::TRUE && gsi == 20, "PCI device 5 pin 0 must translate to GSI 20");
+
+        // Unknown device -> failure
+        BOOL t6 = acpi::AcpiTranslatePciRouting(0x00990000, 0, &gsi);
+        TEST_ASSERT(t6 == acpi::FALSE, "Unknown device must fail translation");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: General Purpose Events (GPE 0/1) & System Control Interrupt (SCI) Dispatch
+    // ------------------------------------------------------------------------
+    {
+        auto& gpeCtrl = acpiSub.getGpeController();
+
+        static uint32_t s_gpeFired12 = 0;
+        acpi::AcpiRegisterGpeHandler(12, [](uint32_t gpe) {
+            s_gpeFired12 = gpe;
+        });
+
+        TEST_ASSERT(gpeCtrl.isGpePending(12) == false, "GPE 12 must not be pending initially");
+        gpeCtrl.setGpeStatus(12);
+        TEST_ASSERT(gpeCtrl.isGpePending(12) == true, "GPE 12 must be pending after setGpeStatus");
+
+        BOOL disp1 = acpi::AcpiDispatchGpe(12);
+        TEST_ASSERT(disp1 == acpi::TRUE, "AcpiDispatchGpe(12) must succeed");
+        TEST_ASSERT(s_gpeFired12 == 12, "GPE 12 handler must receive GPE pin 12");
+        TEST_ASSERT(gpeCtrl.isGpePending(12) == false, "Edge-triggered GPE 12 status must be cleared after dispatch");
+
+        // GPE1 (Pin 45) test
+        static uint32_t s_gpeFired45 = 0;
+        acpi::AcpiRegisterGpeHandler(45, [](uint32_t gpe) {
+            s_gpeFired45 = gpe;
+        });
+        gpeCtrl.setGpeStatus(45);
+        uint32_t dispatchedPending = gpeCtrl.dispatchPendingGpes();
+        TEST_ASSERT(dispatchedPending >= 1, "dispatchPendingGpes must dispatch at least 1 pending event");
+        TEST_ASSERT(s_gpeFired45 == 45, "GPE 45 handler must be invoked");
+
+        // Invalid GPE pin
+        BOOL dispBad = acpi::AcpiDispatchGpe(100);
+        TEST_ASSERT(dispBad == acpi::FALSE, "Out of range GPE 100 must fail");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: Device Power Management FSM (D0, D1, D2, D3hot/cold) via _PS0.._PS3
+    // ------------------------------------------------------------------------
+    {
+        uint64_t psc = 99;
+        acpi::AcpiEvaluateObject("\\_SB.PCI0.GFX0._PSC", &psc);
+        TEST_ASSERT(psc == 0, "GFX0 initial device power state must be D0 (0)");
+
+        // Transition to D1
+        BOOL s1 = acpi::AcpiSetDevicePowerState("\\_SB.PCI0.GFX0", 1);
+        TEST_ASSERT(s1 == acpi::TRUE, "SetDevicePowerState D1 must succeed");
+        acpi::AcpiEvaluateObject("\\_SB.PCI0.GFX0._PSC", &psc);
+        TEST_ASSERT(psc == 1, "GFX0 _PSC must report D1");
+        TEST_ASSERT(acpiSub.getDevicePowerState("\\_SB.PCI0.GFX0") == acpi::AcpiDevicePowerState::D1, "Tracking state D1");
+
+        // Transition to D2
+        BOOL s2 = acpi::AcpiSetDevicePowerState("\\_SB.PCI0.GFX0", 2);
+        TEST_ASSERT(s2 == acpi::TRUE, "SetDevicePowerState D2 must succeed");
+        acpi::AcpiEvaluateObject("\\_SB.PCI0.GFX0._PSC", &psc);
+        TEST_ASSERT(psc == 2, "GFX0 _PSC must report D2");
+
+        // Transition to D3hot
+        BOOL s3 = acpi::AcpiSetDevicePowerState("\\_SB.PCI0.GFX0", 3);
+        TEST_ASSERT(s3 == acpi::TRUE, "SetDevicePowerState D3hot must succeed");
+        acpi::AcpiEvaluateObject("\\_SB.PCI0.GFX0._PSC", &psc);
+        TEST_ASSERT(psc == 3, "GFX0 _PSC must report D3hot");
+
+        // Return to D0
+        BOOL s0 = acpi::AcpiSetDevicePowerState("\\_SB.PCI0.GFX0", 0);
+        TEST_ASSERT(s0 == acpi::TRUE, "SetDevicePowerState D0 must succeed");
+        acpi::AcpiEvaluateObject("\\_SB.PCI0.GFX0._PSC", &psc);
+        TEST_ASSERT(psc == 0, "GFX0 _PSC must report D0");
+
+        // Invalid power state
+        BOOL sBad = acpi::AcpiSetDevicePowerState("\\_SB.PCI0.GFX0", 8);
+        TEST_ASSERT(sBad == acpi::FALSE, "Invalid device power state must fail");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: Platform Sleep State FSM (_PTS, _WAK, S0..S5 transitions)
+    // ------------------------------------------------------------------------
+    {
+        uint8_t sleepState = 99;
+        BOOL getPwr = acpi::AcpiGetSystemPowerState(&sleepState);
+        TEST_ASSERT(getPwr == acpi::TRUE && sleepState == 0, "Initial platform sleep state must be S0_Working");
+
+        // Inspect \_S0..\_S5 packages
+        auto valS0 = acpiSub.getNamespace().evaluate("\\_S0");
+        TEST_ASSERT(valS0.type == acpi::AmlObjectType::Package && valS0.packageElements[0].integerVal == 0, "\\_S0 match");
+
+        auto valS3 = acpiSub.getNamespace().evaluate("\\_S3");
+        TEST_ASSERT(valS3.type == acpi::AmlObjectType::Package && valS3.packageElements[0].integerVal == 3, "\\_S3 match");
+
+        auto valS5 = acpiSub.getNamespace().evaluate("\\_S5");
+        TEST_ASSERT(valS5.type == acpi::AmlObjectType::Package && valS5.packageElements[0].integerVal == 5, "\\_S5 match");
+
+        // Transition platform to S3 (simulates prepare-to-sleep and wake)
+        BOOL transS3 = acpi::AcpiSetSystemPowerState(3);
+        TEST_ASSERT(transS3 == acpi::TRUE, "AcpiSetSystemPowerState(3) must succeed");
+        acpi::AcpiGetSystemPowerState(&sleepState);
+        TEST_ASSERT(sleepState == 0, "Platform must return to S0 after wake");
+
+        // Transition platform to S4 (Hibernate)
+        BOOL transS4 = acpi::AcpiSetSystemPowerState(4);
+        TEST_ASSERT(transS4 == acpi::TRUE, "AcpiSetSystemPowerState(4) must succeed");
+
+        // Invalid sleep state
+        BOOL transBad = acpi::AcpiSetSystemPowerState(7);
+        TEST_ASSERT(transBad == acpi::FALSE, "Invalid sleep state 7 must fail");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: Secondary System Description Table (SSDT) Dynamic Loading & Hotplug Unloading
+    // ------------------------------------------------------------------------
+    {
+        std::vector<uint8_t> ssdtBytes(sizeof(acpi::AcpiTableHeader) + 16, 0);
+        auto* hdr = reinterpret_cast<acpi::AcpiTableHeader*>(ssdtBytes.data());
+        std::memcpy(hdr->signature, "SSDT", 4);
+        hdr->length = static_cast<uint32_t>(ssdtBytes.size());
+        hdr->revision = 2;
+        std::memcpy(hdr->oemId, "MICANT", 6);
+        std::memcpy(hdr->oemTableId, "HOTPLUG ", 8);
+        hdr->oemRevision = 1;
+        std::memcpy(hdr->aslCompilerId, "MNT ", 4);
+        hdr->aslCompilerRev = 1;
+        hdr->checksum = 0;
+        hdr->checksum = static_cast<uint8_t>(0x100 - acpi::CalculateAcpiChecksum(ssdtBytes.data(), ssdtBytes.size()));
+
+        uint32_t handle = 0;
+        BOOL loadOk = acpi::AcpiLoadTable(ssdtBytes.data(), static_cast<uint32_t>(ssdtBytes.size()), &handle);
+        TEST_ASSERT(loadOk == acpi::TRUE && handle > 0, "AcpiLoadTable must succeed and return non-zero handle");
+
+        // Verify dynamic node under \_SB
+        std::string hotpDev = "\\_SB.HOTP" + std::to_string(handle);
+        auto devNode = acpiSub.getNamespace().resolvePath(hotpDev);
+        TEST_ASSERT(devNode != nullptr, "Dynamic hotplug device node must exist in namespace");
+
+        auto staVal = acpiSub.getNamespace().evaluate(hotpDev + "._STA");
+        TEST_ASSERT(staVal.integerVal == 0x0F, "Hotplug device _STA must return 0x0F (Present and Enabled)");
+
+        // Unload table
+        BOOL unloadOk = acpi::AcpiUnloadTable(handle);
+        TEST_ASSERT(unloadOk == acpi::TRUE, "AcpiUnloadTable must succeed");
+
+        auto devNodeAfter = acpiSub.getNamespace().resolvePath(hotpDev);
+        TEST_ASSERT(devNodeAfter == nullptr, "Dynamic hotplug device node must be removed after unload");
+
+        // Double unload must fail
+        BOOL unloadAgain = acpi::AcpiUnloadTable(handle);
+        TEST_ASSERT(unloadAgain == acpi::FALSE, "Unloading already unloaded table must fail");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: Dynamic Loader Exports, SCM Services & ACPI Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. JanusLDR Driver Exports Verification
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiFindTable") != nullptr, "acpi.sys AcpiFindTable must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiEvaluateObject") != nullptr, "acpi.sys AcpiEvaluateObject must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetSystemPowerState") != nullptr, "acpi.sys AcpiGetSystemPowerState must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiSetSystemPowerState") != nullptr, "acpi.sys AcpiSetSystemPowerState must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetThermalZoneTemp") != nullptr, "acpi.sys AcpiGetThermalZoneTemp must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetBatteryStatus") != nullptr, "acpi.sys AcpiGetBatteryStatus must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetProcessorCount") != nullptr, "acpi.sys AcpiGetProcessorCount must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiRegisterGpeHandler") != nullptr, "acpi.sys AcpiRegisterGpeHandler must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiDispatchGpe") != nullptr, "acpi.sys AcpiDispatchGpe must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetDeviceResources") != nullptr, "acpi.sys AcpiGetDeviceResources must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiTranslatePciRouting") != nullptr, "acpi.sys AcpiTranslatePciRouting must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiSetDevicePowerState") != nullptr, "acpi.sys AcpiSetDevicePowerState must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiLoadTable") != nullptr, "acpi.sys AcpiLoadTable must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiUnloadTable") != nullptr, "acpi.sys AcpiUnloadTable must exist");
+        TEST_ASSERT(ldr.getExport("acpi.sys", "AcpiGetTelemetry") != nullptr, "acpi.sys AcpiGetTelemetry must exist");
+
+        // hal.dll exports
+        TEST_ASSERT(ldr.getExport("hal.dll", "HalGetBusDataByOffset") != nullptr, "hal.dll HalGetBusDataByOffset must exist");
+        TEST_ASSERT(ldr.getExport("hal.dll", "HalSetBusDataByOffset") != nullptr, "hal.dll HalSetBusDataByOffset must exist");
+
+        // Test HAL Bus Data Access
+        uint32_t pciBuf = 0;
+        ULONG bytesRead = acpi::HalGetBusDataByOffset(PCIConfiguration, 0, (1 << 3), &pciBuf, 0, sizeof(uint32_t));
+        TEST_ASSERT(bytesRead == sizeof(uint32_t), "HalGetBusDataByOffset must read 4 bytes");
+
+        // 2. SCM Service Record Verification
+        auto& scmMgr = scm::ServiceControlManager::get();
+        auto acpiSvc = scmMgr.getServiceRecord(L"acpi");
+        TEST_ASSERT(acpiSvc != nullptr, "acpi service record must exist in SCM");
+        TEST_ASSERT(acpiSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "acpi must be a kernel driver");
+        TEST_ASSERT(acpiSvc->startType == scm::SERVICE_BOOT_START, "acpi must be boot start");
+        TEST_ASSERT(acpiSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "acpi service state must be SERVICE_RUNNING");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("acpi.sys") != nullptr, "acpi.sys must be registered in Version Database");
+
+        // 4. ACPI Diagnostic Telemetry Verification
+        acpi::ACPI_TELEMETRY telem{};
+        BOOL telemOk = acpi::AcpiGetTelemetry(&telem);
+        TEST_ASSERT(telemOk == acpi::TRUE, "AcpiGetTelemetry must succeed");
+        TEST_ASSERT(telem.tablesDiscovered >= 10, "tablesDiscovered must be >= 10");
+        TEST_ASSERT(telem.amlBytecodeOpsExecuted >= 20, "amlBytecodeOpsExecuted must be >= 20");
+        TEST_ASSERT(telem.gpeEventsDispatched >= 2, "gpeEventsDispatched must be >= 2");
+        TEST_ASSERT(telem.powerTransitions >= 2, "powerTransitions must be >= 2");
+        TEST_ASSERT(telem.devicePowerTransitions >= 4, "devicePowerTransitions must be >= 4");
+        TEST_ASSERT(telem.dynamicTablesLoaded >= 1, "dynamicTablesLoaded must be >= 1");
+        TEST_ASSERT(telem.dynamicTablesUnloaded >= 1, "dynamicTablesUnloaded must be >= 1");
+        TEST_ASSERT(telem.resourceDecodes >= 4, "resourceDecodes must be >= 4");
+        TEST_ASSERT(telem.pciRoutingsResolved >= 5, "pciRoutingsResolved must be >= 5");
+
+        acpi::AcpiResetTelemetryForTesting();
+        acpi::ACPI_TELEMETRY telemReset = acpi::AcpiQueryTelemetry();
+        TEST_ASSERT(telemReset.powerTransitions == 0, "powerTransitions must be 0 after reset");
+    }
+
+    std::cout << "[TEST] Suite 251: Horizon 35 - ACPI / HAL Device Tree & AML Interpreter PASSED.\n";
+}
+
+
 
 
 
