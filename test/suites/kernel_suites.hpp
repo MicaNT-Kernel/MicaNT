@@ -9108,6 +9108,407 @@ void Test_Horizon32_StorPort_Nvme_Storage_Architecture_And_Miniport() {
     std::cout << "[TEST] Suite 248: Horizon 32 - StorPort / NVMe Storage Architecture, Scatter-Gather PRPs, Queues & Miniport PASSED.\n";
 }
 
+void Test_Horizon33_WDDM32_Display_Driver_Model_And_Graphics_Subsystem() {
+    std::cout << "\n========================================================================\n";
+    std::cout << "  Suite 249: Horizon 33 - WDDM 3.2 Display Driver Model & DirectX Graphics\n";
+    std::cout << "========================================================================\n";
+
+    // Initialize WDDM Subsystem defensively & reset test telemetry
+    wddm::InitializeWddmSubsystem();
+    auto& wddmSub = wddm::TitanWddmSubsystem::Instance();
+    TEST_ASSERT(wddmSub.isInitialized(), "TitanWddmSubsystem must be initialized");
+    wddmSub.resetForTesting();
+
+    // ------------------------------------------------------------------------
+    // Phase 1: Multi-Vendor Graphics Adapter Discovery & PCIe Resource Configuration
+    // ------------------------------------------------------------------------
+    {
+        const auto& adapters = wddmSub.getAllAdapters();
+        TEST_ASSERT(adapters.size() >= 3, "Subsystem must discover at least 3 multi-vendor graphics adapters");
+        TEST_ASSERT(adapters.count(0x1000) > 0, "Adapter 0x1000 must exist");
+        TEST_ASSERT(adapters.count(0x1001) > 0, "Adapter 0x1001 must exist");
+        TEST_ASSERT(adapters.count(0x1002) > 0, "Adapter 0x1002 must exist");
+
+        // Primary Adapter: NVIDIA / PrismX RTX 4090 Class
+        auto primaryGpu = wddmSub.getPrimaryAdapter();
+        TEST_ASSERT(primaryGpu != nullptr, "Primary WDDM graphics adapter must exist");
+        TEST_ASSERT(primaryGpu->getPciVendorId() == 0x10DE, "Primary GPU vendor ID must be NVIDIA (0x10DE)");
+        TEST_ASSERT(primaryGpu->getPciDeviceId() == 0x2684, "Primary GPU device ID must be RTX 4090 class (0x2684)");
+        TEST_ASSERT(primaryGpu->getWddmVersion() == wddm::WddmVersion::WDDM_3_2, "WDDM version must report 3.2");
+        TEST_ASSERT(primaryGpu->getTotalVram() == 16ULL * 1024 * 1024 * 1024, "Primary GPU must report 16 GB dedicated VRAM");
+        TEST_ASSERT(primaryGpu->getTotalSystemMemory() == 16ULL * 1024 * 1024 * 1024, "Shared system memory must report 16 GB");
+        TEST_ASSERT(primaryGpu->getMiniport() != nullptr, "Primary GPU miniport must be bound");
+        TEST_ASSERT(primaryGpu->getMiniport()->getVendorId() == wddm::GpuVendorId::Nvidia, "Primary miniport vendor must be NVIDIA");
+
+        // Secondary Adapter: AMD Radeon RX 7900 XTX
+        auto amdGpu = adapters.at(0x1001);
+        TEST_ASSERT(amdGpu->getPciVendorId() == 0x1002, "AMD GPU vendor ID must be 0x1002");
+        TEST_ASSERT(amdGpu->getPciDeviceId() == 0x744C, "AMD GPU device ID must be 0x744C");
+        TEST_ASSERT(amdGpu->getMiniport() != nullptr, "AMD miniport driver must be bound");
+        TEST_ASSERT(amdGpu->getMiniport()->getBinaryPath().find("amdkmdag.sys") != std::string::npos, "AMD miniport binary must be amdkmdag.sys");
+
+        // Tertiary Adapter: Intel Arc A770
+        auto intelGpu = adapters.at(0x1002);
+        TEST_ASSERT(intelGpu->getPciVendorId() == 0x8086, "Intel GPU vendor ID must be 0x8086");
+        TEST_ASSERT(intelGpu->getPciDeviceId() == 0x56A0, "Intel GPU device ID must be 0x56A0");
+        TEST_ASSERT(intelGpu->getMiniport() != nullptr, "Intel miniport driver must be bound");
+        TEST_ASSERT(intelGpu->getMiniport()->getBinaryPath().find("igdkmdn64.sys") != std::string::npos, "Intel miniport binary must be igdkmdn64.sys");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 2: VidMm Segments & 48-bit GPU Virtual Addressing (GPUVA)
+    // ------------------------------------------------------------------------
+    auto gpu = wddmSub.getPrimaryAdapter();
+    uint32_t hAllocSdr = 0;
+    uint32_t hAllocHdr = 0;
+    uint32_t hAllocVideo = 0;
+    {
+        const auto& segs = gpu->getSegments();
+        TEST_ASSERT(segs.size() >= 2, "VidMm must report Aperture and Dedicated segments");
+        TEST_ASSERT(segs[0].type == wddm::MemorySegmentType::ApertureSystem, "Segment 1 must be ApertureSystem");
+        TEST_ASSERT(segs[1].type == wddm::MemorySegmentType::LocalDedicated, "Segment 2 must be LocalDedicated");
+        TEST_ASSERT(segs[1].usedBytes == 0, "Initial usedBytes must be 0");
+
+        // Create SDR Desktop Buffer (B8G8R8A8_UNORM, 4K, 3840x2160x4 = ~33MB)
+        uint64_t sdrSize = 3840ULL * 2160 * 4;
+        hAllocSdr = gpu->createAllocation(sdrSize, 2, wddm::PixelFormat::B8G8R8A8_UNORM, 3840, 2160, false);
+        TEST_ASSERT(hAllocSdr != 0, "createAllocation SDR must succeed");
+
+        auto allocSdr = gpu->getAllocation(hAllocSdr);
+        TEST_ASSERT(allocSdr != nullptr, "SDR Allocation record must exist");
+        TEST_ASSERT(allocSdr->gpuVirtualAddress >= 0x00007FF000000000ULL, "48-bit GPUVA must be valid");
+        TEST_ASSERT(allocSdr->format == wddm::PixelFormat::B8G8R8A8_UNORM, "Format must match SDR UNORM");
+        TEST_ASSERT(allocSdr->isResident, "Allocation must default to resident");
+
+        // Create HDR10 Buffer (R10G10B10A2_UNORM, 4K, 3840x2160x4)
+        uint64_t hdrSize = 3840ULL * 2160 * 4;
+        hAllocHdr = gpu->createAllocation(hdrSize, 2, wddm::PixelFormat::R10G10B10A2_UNORM, 3840, 2160, true);
+        TEST_ASSERT(hAllocHdr != 0, "createAllocation HDR10 must succeed");
+        auto allocHdr = gpu->getAllocation(hAllocHdr);
+        TEST_ASSERT(allocHdr != nullptr && allocHdr->isShared, "HDR allocation must be shared");
+
+        // Create NV12 Video Surface (1920x1080x1.5 = ~3.1MB)
+        uint64_t vidSize = (1920ULL * 1080 * 3) / 2;
+        hAllocVideo = gpu->createAllocation(vidSize, 2, wddm::PixelFormat::NV12, 1920, 1080, false);
+        TEST_ASSERT(hAllocVideo != 0, "createAllocation NV12 must succeed");
+
+        // Verify segment usedBytes
+        TEST_ASSERT(gpu->getSegments()[1].usedBytes == (sdrSize + hdrSize + vidSize), "Local segment usedBytes must track allocations");
+
+        // Verify custom GPUVA mapping & unmapping
+        uint64_t customVa = 0x00007FFAA0000000ULL;
+        TEST_ASSERT(gpu->mapGpuVirtualAddress(hAllocSdr, customVa), "mapGpuVirtualAddress must succeed");
+        TEST_ASSERT(gpu->getAllocation(hAllocSdr)->gpuVirtualAddress == customVa, "Mapped GPUVA must match custom address");
+        TEST_ASSERT(gpu->unmapGpuVirtualAddress(hAllocSdr), "unmapGpuVirtualAddress must succeed");
+        TEST_ASSERT(gpu->getAllocation(hAllocSdr)->gpuVirtualAddress == 0, "Unmapped GPUVA must be 0");
+        TEST_ASSERT(gpu->mapGpuVirtualAddress(hAllocSdr, customVa), "Remap GPUVA must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: VidMm Residency & Paging Channel DMA Migration
+    // ------------------------------------------------------------------------
+    {
+        // Eviction & Paging Out
+        TEST_ASSERT(gpu->pageOut(hAllocHdr), "pageOut must succeed");
+        TEST_ASSERT(!gpu->getAllocation(hAllocHdr)->isResident, "Allocation must be evicted/non-resident");
+
+        // Multi-allocation batch eviction
+        TEST_ASSERT(gpu->evict({ hAllocSdr, hAllocVideo }), "evict multi-allocation must succeed");
+        TEST_ASSERT(!gpu->getAllocation(hAllocSdr)->isResident, "SDR alloc must be non-resident");
+        TEST_ASSERT(!gpu->getAllocation(hAllocVideo)->isResident, "Video alloc must be non-resident");
+
+        // Paging In & Make Resident
+        TEST_ASSERT(gpu->pageIn(hAllocHdr), "pageIn must succeed");
+        TEST_ASSERT(gpu->getAllocation(hAllocHdr)->isResident, "Allocation must be resident after pageIn");
+
+        TEST_ASSERT(gpu->makeResident({ hAllocSdr, hAllocVideo }), "makeResident must succeed");
+        TEST_ASSERT(gpu->getAllocation(hAllocSdr)->isResident, "SDR alloc must be resident");
+        TEST_ASSERT(gpu->getAllocation(hAllocVideo)->isResident, "Video alloc must be resident");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: Device & Context Lifecycle Management
+    // ------------------------------------------------------------------------
+    uint32_t hDev1 = 0;
+    uint32_t hDev2 = 0;
+    uint32_t hCtx3D = 0;
+    uint32_t hCtxCompute = 0;
+    {
+        hDev1 = gpu->createDevice(0);
+        TEST_ASSERT(hDev1 != 0, "createDevice 1 must return valid handle");
+        TEST_ASSERT(gpu->getDeviceCount() == 1, "Device count must be 1");
+        TEST_ASSERT(!gpu->isDeviceRemoved(hDev1), "Device must not be removed");
+
+        hDev2 = gpu->createDevice(0);
+        TEST_ASSERT(hDev2 != 0, "createDevice 2 must return valid handle");
+        TEST_ASSERT(gpu->getDeviceCount() == 2, "Device count must be 2");
+
+        // Create Contexts on Dev1
+        hCtx3D = gpu->createContext(hDev1, wddm::GpuEngineType::ThreeD, wddm::HwQueuePriority::Normal);
+        TEST_ASSERT(hCtx3D != 0, "createContext 3D must succeed");
+
+        hCtxCompute = gpu->createContext(hDev1, wddm::GpuEngineType::Compute, wddm::HwQueuePriority::High);
+        TEST_ASSERT(hCtxCompute != 0, "createContext Compute must succeed");
+        TEST_ASSERT(gpu->getContextCount() == 2, "Context count must be 2");
+
+        const auto dev1Rec = gpu->getDevice(hDev1);
+        TEST_ASSERT(dev1Rec != nullptr, "Device record must exist");
+        TEST_ASSERT(dev1Rec->contextHandles.size() == 2, "Device 1 must track 2 contexts");
+
+        const auto ctxRec = gpu->getContext(hCtxCompute);
+        TEST_ASSERT(ctxRec != nullptr, "Context record must exist");
+        TEST_ASSERT(ctxRec->engineType == wddm::GpuEngineType::Compute, "Engine type must match Compute");
+        TEST_ASSERT(ctxRec->priority == wddm::HwQueuePriority::High, "Priority must match High");
+        TEST_ASSERT(!ctxRec->isLost, "Context must not be lost");
+
+        // Context destruction
+        uint32_t tempCtx = gpu->createContext(hDev2, wddm::GpuEngineType::CopyBlt, wddm::HwQueuePriority::Idle);
+        TEST_ASSERT(tempCtx != 0, "tempCtx must be created");
+        TEST_ASSERT(gpu->destroyContext(tempCtx), "destroyContext must succeed");
+        TEST_ASSERT(gpu->getContext(tempCtx) == nullptr, "Destroyed context must not exist");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: Hardware-Accelerated GPU Scheduling (HWS) & Multi-Engine Queues
+    // ------------------------------------------------------------------------
+    uint32_t q3d = 0;
+    uint32_t qCompute = 0;
+    uint32_t qCopy = 0;
+    uint32_t qDecode = 0;
+    {
+        q3d = gpu->createHardwareQueue(hCtx3D, wddm::GpuEngineType::ThreeD, wddm::HwQueuePriority::Normal);
+        TEST_ASSERT(q3d != 0, "createHardwareQueue 3D must succeed");
+
+        qCompute = gpu->createHardwareQueue(hCtxCompute, wddm::GpuEngineType::Compute, wddm::HwQueuePriority::High);
+        TEST_ASSERT(qCompute != 0, "createHardwareQueue Compute must succeed");
+
+        qCopy = gpu->createHardwareQueue(hCtx3D, wddm::GpuEngineType::CopyBlt, wddm::HwQueuePriority::Normal);
+        TEST_ASSERT(qCopy != 0, "createHardwareQueue Copy must succeed");
+
+        qDecode = gpu->createHardwareQueue(hCtx3D, wddm::GpuEngineType::VideoDecode, wddm::HwQueuePriority::Low);
+        TEST_ASSERT(qDecode != 0, "createHardwareQueue VideoDecode must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: 64-bit Monitored Fences & Cross-Engine Timeline Synchronization
+    // ------------------------------------------------------------------------
+    uint32_t fenceRender = 0;
+    uint32_t fenceCompute = 0;
+    {
+        fenceRender = gpu->createMonitoredFence(0);
+        fenceCompute = gpu->createMonitoredFence(0);
+        TEST_ASSERT(fenceRender != 0 && fenceCompute != 0, "createMonitoredFence must return valid handles");
+        TEST_ASSERT(gpu->getFenceValue(fenceRender) == 0, "Initial fence value must be 0");
+
+        // Submit 3D Render command signaling fenceRender to 100
+        uint64_t dmaVa = gpu->getAllocation(hAllocSdr)->gpuVirtualAddress;
+        bool bSub3D = gpu->submitCommandToHwQueue(q3d, dmaVa, 4096, fenceRender, 100);
+        TEST_ASSERT(bSub3D, "3D command submission must succeed");
+        TEST_ASSERT(gpu->getFenceValue(fenceRender) == 100, "Fence must advance to 100 on GPU completion");
+
+        // Compute Queue waits on 3D fence value 100 before dispatching async compute
+        TEST_ASSERT(gpu->waitQueueOnFence(qCompute, fenceRender, 100), "waitQueueOnFence must succeed");
+
+        // Submit Compute command signaling fenceCompute to 200
+        bool bSubComp = gpu->submitCommandToHwQueue(qCompute, dmaVa, 2048, fenceCompute, 200);
+        TEST_ASSERT(bSubComp, "Compute command submission must succeed");
+        TEST_ASSERT(gpu->getFenceValue(fenceCompute) == 200, "Compute fence must advance to 200");
+
+        // CPU synchronization: waitForFenceCpu
+        TEST_ASSERT(gpu->waitForFenceCpu(fenceRender, 100), "waitForFenceCpu must return true when reached");
+        TEST_ASSERT(gpu->waitForFenceCpu(fenceCompute, 200), "waitForFenceCpu must return true for compute fence");
+
+        // CPU-side fence signaling
+        TEST_ASSERT(gpu->signalFenceCpu(fenceRender, 300), "signalFenceCpu must succeed");
+        TEST_ASSERT(gpu->getFenceValue(fenceRender) == 300, "Fence value must reflect CPU signal");
+        TEST_ASSERT(gpu->waitForFenceCpu(fenceRender, 300), "waitForFenceCpu must return true for 300");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: VidPN Topology, Display Modes & HDR/VRR
+    // ------------------------------------------------------------------------
+    {
+        const auto& sources = gpu->getSources();
+        const auto& targets = gpu->getTargets();
+        const auto& paths = gpu->getPaths();
+
+        TEST_ASSERT(sources.size() >= 2, "VidPN must contain Desktop Primary and Extended sources");
+        TEST_ASSERT(targets.size() >= 2, "VidPN must contain DisplayPort and HDMI targets");
+        TEST_ASSERT(paths.size() >= 1, "VidPN must contain active path");
+
+        const auto& dpTarget = targets[0];
+        TEST_ASSERT(dpTarget.connectorType == wddm::VideoConnectorType::DisplayPort, "Target 0 must be DisplayPort");
+        TEST_ASSERT(dpTarget.supportsHdr, "DisplayPort target must support HDR");
+        TEST_ASSERT(dpTarget.supportsVrr, "DisplayPort target must support VRR");
+        TEST_ASSERT(dpTarget.vrrMinHz == 48 && dpTarget.vrrMaxHz == 240, "VRR range must be 48-240 Hz");
+
+        // Test mode change to 8K 60Hz scRGB HDR
+        wddm::DisplayMode mode8k{ 7680, 4320, 60, 1, wddm::PixelFormat::R16G16B16A16_FLOAT, false };
+        TEST_ASSERT(gpu->setTargetMode(dpTarget.targetId, mode8k), "setTargetMode 8K scRGB must succeed");
+        TEST_ASSERT(gpu->getTargets()[0].currentMode.width == 7680, "Active width must be 7680");
+        TEST_ASSERT(gpu->getTargets()[0].currentMode.format == wddm::PixelFormat::R16G16B16A16_FLOAT, "Format must be scRGB");
+
+        // Restore to 4K 120Hz HDR10
+        wddm::DisplayMode mode4k{ 3840, 2160, 120, 1, wddm::PixelFormat::R10G10B10A2_UNORM, false };
+        TEST_ASSERT(gpu->setTargetMode(dpTarget.targetId, mode4k), "setTargetMode 4K HDR10 must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: Multi-Plane Overlay (MPO 3.0) & Presentation Pipeline
+    // ------------------------------------------------------------------------
+    {
+        const auto& mpoPlanes = gpu->getMpoPlanes();
+        TEST_ASSERT(mpoPlanes.size() == 4, "MPO 3.0 must provide 4 planes");
+        TEST_ASSERT(mpoPlanes[0].enabled, "Plane 0 (Desktop) must be enabled");
+
+        // DirectFlip presentation on Plane 0
+        TEST_ASSERT(gpu->presentDirectFlip(0, hAllocHdr), "presentDirectFlip must succeed");
+        TEST_ASSERT(gpu->getSources()[0].primaryAllocationHandle == hAllocHdr, "Source 0 allocation must be updated");
+        TEST_ASSERT(gpu->getPaths()[0].directFlipActive, "Path directFlipActive must be true");
+
+        // Multi-Plane Overlay presentation: Plane 1 (Video) with NV12 hardware scaling
+        TEST_ASSERT(gpu->presentMpo(1, hAllocVideo, 1920, 1080, 100, 100, 1920, 1080, wddm::PixelFormat::NV12), "presentMpo Video must succeed");
+        TEST_ASSERT(gpu->getMpoPlanes()[1].enabled, "Plane 1 must now be enabled");
+        TEST_ASSERT(gpu->getMpoPlanes()[1].allocationHandle == hAllocVideo, "Plane 1 allocation must be hAllocVideo");
+        TEST_ASSERT(gpu->getMpoPlanes()[1].format == wddm::PixelFormat::NV12, "Plane 1 format must be NV12");
+
+        // VBlank interrupt simulation
+        uint32_t scanLineBefore = gpu->getScanLine();
+        gpu->simulateVBlankInterrupt();
+        TEST_ASSERT(gpu->getScanLine() != scanLineBefore, "Scan line must advance on VBlank");
+        TEST_ASSERT(gpu->getTotalVBlanks() >= 1, "VBlank count must increment");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: Timeout Detection and Recovery (TDR) Watchdog & Engine Reset
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(gpu->getTdrState() == wddm::TdrState::Normal, "Initial TDR state must be Normal");
+
+        // Trigger TDR on 3D engine with faulting device hDev2
+        bool tdrOk = gpu->triggerTdrSimulation(wddm::GpuEngineType::ThreeD, hDev2);
+        TEST_ASSERT(tdrOk, "triggerTdrSimulation must succeed");
+        TEST_ASSERT(gpu->getTdrState() == wddm::TdrState::Recovered, "TDR state must report Recovered without kernel crash");
+        TEST_ASSERT(gpu->getTdrRecoveryCount() == 1, "Recovery count must be 1");
+
+        // Faulting device must be marked removed
+        TEST_ASSERT(gpu->isDeviceRemoved(hDev2), "Faulting device must be marked removed");
+
+        // Non-faulting device 1 must still be active and healthy
+        TEST_ASSERT(!gpu->isDeviceRemoved(hDev1), "Healthy device must NOT be marked removed");
+        TEST_ASSERT(!gpu->getContext(hCtx3D)->isLost, "Healthy device context must NOT be lost");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: D3DKMT Syscall Thunks, Dynamic Loader Exports & WDDM Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // Test C ABI Dxgk* functions
+        uint32_t abiDev = 0;
+        int32_t stDev = wddm::DxgkCreateDevice(0x1000, &abiDev);
+        TEST_ASSERT(stDev == 1 && abiDev != 0, "DxgkCreateDevice C ABI must succeed");
+
+        uint32_t abiCtx = 0;
+        int32_t stCtx = wddm::DxgkCreateContext(0x1000, abiDev, static_cast<uint32_t>(wddm::GpuEngineType::ThreeD), static_cast<uint32_t>(wddm::HwQueuePriority::Normal), &abiCtx);
+        TEST_ASSERT(stCtx == 1 && abiCtx != 0, "DxgkCreateContext C ABI must succeed");
+
+        uint32_t abiAlloc = 0;
+        uint64_t abiVa = 0;
+        int32_t stAlloc = wddm::DxgkCreateAllocation(0x1000, 1024 * 1024, 2, &abiAlloc, &abiVa);
+        TEST_ASSERT(stAlloc == 1 && abiAlloc != 0 && abiVa != 0, "DxgkCreateAllocation C ABI must succeed");
+
+        uint32_t abiQueue = 0;
+        int32_t stQ = wddm::DxgkCreateHwQueue(0x1000, abiCtx, static_cast<uint32_t>(wddm::GpuEngineType::ThreeD), static_cast<uint32_t>(wddm::HwQueuePriority::Normal), &abiQueue);
+        TEST_ASSERT(stQ == 1 && abiQueue != 0, "DxgkCreateHwQueue C ABI must succeed");
+
+        uint32_t abiFence = 0;
+        int32_t stFence = wddm::DxgkCreateMonitoredFence(0x1000, 0, &abiFence);
+        TEST_ASSERT(stFence == 1 && abiFence != 0, "DxgkCreateMonitoredFence C ABI must succeed");
+
+        int32_t stSub = wddm::DxgkSubmitCommandHwQueue(0x1000, abiQueue, abiVa, 512, abiFence, 50);
+        TEST_ASSERT(stSub == 1, "DxgkSubmitCommandHwQueue C ABI must succeed");
+
+        int32_t stWait = wddm::DxgkWaitForMonitoredFence(0x1000, abiFence, 50, 1000);
+        TEST_ASSERT(stWait == 1, "DxgkWaitForMonitoredFence C ABI must succeed");
+
+        int32_t stPres = wddm::DxgkPresentFrame(0x1000, 0, abiAlloc);
+        TEST_ASSERT(stPres == 1, "DxgkPresentFrame C ABI must succeed");
+
+        int32_t stTdr = wddm::DxgkTriggerTdr(0x1000);
+        TEST_ASSERT(stTdr == 1, "DxgkTriggerTdr C ABI must succeed");
+
+        // Clean up ABI handles
+        TEST_ASSERT(wddm::DxgkDestroyAllocation(0x1000, abiAlloc) == 1, "DxgkDestroyAllocation C ABI must succeed");
+        TEST_ASSERT(wddm::DxgkDestroyContext(0x1000, abiCtx) == 1, "DxgkDestroyContext C ABI must succeed");
+        TEST_ASSERT(wddm::DxgkDestroyDevice(0x1000, abiDev) == 1, "DxgkDestroyDevice C ABI must succeed");
+
+        // Test D3DKMT Syscall Thunks via dxgkrnl
+        dxgkrnl::D3DKMT_OPENADAPTERFROMHDC openHdc{};
+        TEST_ASSERT(dxgkrnl::NtGdiDdD3DKMTOpenAdapterFromHdc(&openHdc) == NtStatus::Success, "NtGdiDdD3DKMTOpenAdapterFromHdc must succeed");
+        TEST_ASSERT(openHdc.hAdapter != 0, "hAdapter must be non-zero");
+
+        dxgkrnl::D3DKMT_CREATEDEVICE kmtDev{};
+        kmtDev.hAdapter = openHdc.hAdapter;
+        TEST_ASSERT(dxgkrnl::NtGdiDdD3DKMTCreateDevice(&kmtDev) == NtStatus::Success, "NtGdiDdD3DKMTCreateDevice must succeed");
+
+        dxgkrnl::D3DKMT_CREATEALLOCATIONINFO allocInfo{};
+        dxgkrnl::D3DKMT_CREATEALLOCATION kmtAlloc{};
+        kmtAlloc.hDevice = kmtDev.hDevice;
+        kmtAlloc.NumAllocations = 1;
+        kmtAlloc.pAllocationInfo = &allocInfo;
+        TEST_ASSERT(dxgkrnl::NtGdiDdD3DKMTCreateAllocation(&kmtAlloc) == NtStatus::Success, "NtGdiDdD3DKMTCreateAllocation must succeed");
+
+        dxgkrnl::D3DKMT_SUBMITCOMMAND kmtCmd{};
+        kmtCmd.CommandLength = 1024;
+        TEST_ASSERT(dxgkrnl::NtGdiDdD3DKMTSubmitCommand(&kmtCmd) == NtStatus::Success, "NtGdiDdD3DKMTSubmitCommand must succeed");
+
+        dxgkrnl::D3DKMT_PRESENT kmtPresent{};
+        kmtPresent.hDevice = kmtDev.hDevice;
+        TEST_ASSERT(dxgkrnl::NtGdiDdD3DKMTPresent(&kmtPresent) == NtStatus::Success, "NtGdiDdD3DKMTPresent must succeed");
+
+        // Verify DynamicLoader exports
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkInitialize") != nullptr, "DxgkInitialize export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkCreateDevice") != nullptr, "DxgkCreateDevice export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkDestroyDevice") != nullptr, "DxgkDestroyDevice export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkCreateContext") != nullptr, "DxgkCreateContext export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkDestroyContext") != nullptr, "DxgkDestroyContext export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkCreateAllocation") != nullptr, "DxgkCreateAllocation export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkDestroyAllocation") != nullptr, "DxgkDestroyAllocation export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkCreateHwQueue") != nullptr, "DxgkCreateHwQueue export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkSubmitCommandHwQueue") != nullptr, "DxgkSubmitCommandHwQueue export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkCreateMonitoredFence") != nullptr, "DxgkCreateMonitoredFence export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkSignalMonitoredFence") != nullptr, "DxgkSignalMonitoredFence export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkWaitForMonitoredFence") != nullptr, "DxgkWaitForMonitoredFence export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkPresentFrame") != nullptr, "DxgkPresentFrame export must exist");
+        TEST_ASSERT(ldr.getExport("dxgkrnl.sys", "DxgkTriggerTdr") != nullptr, "DxgkTriggerTdr export must exist");
+        TEST_ASSERT(ldr.getExport("displib.sys", "DxgkInitialize") != nullptr, "displib.sys export must exist");
+
+        // Verify WDDM Diagnostic Telemetry
+        auto telem = wddm::WddmQueryTelemetry();
+        TEST_ASSERT(telem.totalAdaptersEnumerated >= 3, "totalAdaptersEnumerated must be >= 3");
+        TEST_ASSERT(telem.totalDevicesCreated >= 3, "totalDevicesCreated must be >= 3");
+        TEST_ASSERT(telem.totalContextsCreated >= 3, "totalContextsCreated must be >= 3");
+        TEST_ASSERT(telem.totalHardwareQueuesCreated >= 4, "totalHardwareQueuesCreated must be >= 4");
+        TEST_ASSERT(telem.totalAllocationsCreated >= 4, "totalAllocationsCreated must be >= 4");
+        TEST_ASSERT(telem.totalPagingOperations >= 2, "totalPagingOperations must be >= 2");
+        TEST_ASSERT(telem.totalCommandsSubmitted >= 3, "totalCommandsSubmitted must be >= 3");
+        TEST_ASSERT(telem.totalFencesSignaled >= 3, "totalFencesSignaled must be >= 3");
+        TEST_ASSERT(telem.totalPresents >= 2, "totalPresents must be >= 2");
+        TEST_ASSERT(telem.totalDirectFlips >= 1, "totalDirectFlips must be >= 1");
+        TEST_ASSERT(telem.totalMpoPresents >= 1, "totalMpoPresents must be >= 1");
+        TEST_ASSERT(telem.totalVBlanks >= 1, "totalVBlanks must be >= 1");
+        TEST_ASSERT(telem.totalTdrTriggers >= 2, "totalTdrTriggers must be >= 2");
+        TEST_ASSERT(telem.totalTdrRecoveries >= 2, "totalTdrRecoveries must be >= 2");
+
+        wddm::WddmResetTelemetryForTesting();
+        auto telemReset = wddm::WddmQueryTelemetry();
+        TEST_ASSERT(telemReset.totalDevicesCreated == 0, "totalDevicesCreated must be 0 after reset");
+    }
+
+    std::cout << "[TEST] Suite 249: Horizon 33 - WDDM 3.2 Display Driver Model & DirectX Graphics Subsystem PASSED.\n";
+}
+
 
 
 

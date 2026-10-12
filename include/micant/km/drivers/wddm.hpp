@@ -243,6 +243,42 @@ struct HardwareQueue {
     bool isActive{true};
 };
 
+struct GpuContextRecord {
+    uint32_t contextHandle{0};
+    uint32_t deviceHandle{0};
+    GpuEngineType engineType{GpuEngineType::ThreeD};
+    HwQueuePriority priority{HwQueuePriority::Normal};
+    bool isLost{false};
+};
+
+struct GpuDeviceRecord {
+    uint32_t deviceHandle{0};
+    uint32_t adapterHandle{0};
+    uint32_t flags{0};
+    bool isRemoved{false};
+    std::vector<uint32_t> contextHandles;
+    std::vector<uint32_t> allocationHandles;
+};
+
+struct WDDM_TELEMETRY {
+    uint64_t totalAdaptersEnumerated{0};
+    uint64_t totalDevicesCreated{0};
+    uint64_t totalContextsCreated{0};
+    uint64_t totalHardwareQueuesCreated{0};
+    uint64_t totalAllocationsCreated{0};
+    uint64_t totalAllocationsDestroyed{0};
+    uint64_t totalBytesAllocated{0};
+    uint64_t totalPagingOperations{0};
+    uint64_t totalCommandsSubmitted{0};
+    uint64_t totalFencesSignaled{0};
+    uint64_t totalPresents{0};
+    uint64_t totalDirectFlips{0};
+    uint64_t totalMpoPresents{0};
+    uint64_t totalVBlanks{0};
+    uint64_t totalTdrTriggers{0};
+    uint64_t totalTdrRecoveries{0};
+};
+
 // ============================================================================
 // 5. Vendor Display Miniport Driver (KMD) Interface
 // ============================================================================
@@ -375,6 +411,11 @@ class WddmGraphicsAdapter {
     std::unordered_map<uint32_t, HardwareQueue> m_hwQueues;
     std::unordered_map<uint32_t, std::shared_ptr<MonitoredFence>> m_fences;
     uint32_t m_nextHandle{0x2000};
+
+    // Devices & Contexts
+    std::unordered_map<uint32_t, GpuDeviceRecord> m_devices;
+    std::unordered_map<uint32_t, GpuContextRecord> m_contexts;
+    WDDM_TELEMETRY m_telemetry{};
 
     // Miniport Binding
     std::shared_ptr<IDisplayMiniportDriver> m_kmdDriver;
@@ -523,6 +564,109 @@ public:
 
     std::shared_ptr<IDisplayMiniportDriver> getMiniport() const { return m_kmdDriver; }
 
+    // Device & Context Management
+    uint32_t createDevice(uint32_t flags = 0) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uint32_t hDevice = m_nextHandle++;
+        GpuDeviceRecord dev;
+        dev.deviceHandle = hDevice;
+        dev.adapterHandle = m_adapterHandle;
+        dev.flags = flags;
+        dev.isRemoved = false;
+        m_devices[hDevice] = dev;
+        m_telemetry.totalDevicesCreated++;
+        return hDevice;
+    }
+
+    bool destroyDevice(uint32_t deviceHandle) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_devices.find(deviceHandle);
+        if (it == m_devices.end()) return false;
+        for (uint32_t ctxHandle : it->second.contextHandles) {
+            m_contexts.erase(ctxHandle);
+        }
+        m_devices.erase(it);
+        return true;
+    }
+
+    uint32_t createContext(uint32_t deviceHandle, GpuEngineType engine = GpuEngineType::ThreeD, HwQueuePriority priority = HwQueuePriority::Normal) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_devices.find(deviceHandle);
+        if (it == m_devices.end() || it->second.isRemoved) return 0;
+
+        uint32_t hContext = m_nextHandle++;
+        GpuContextRecord ctx;
+        ctx.contextHandle = hContext;
+        ctx.deviceHandle = deviceHandle;
+        ctx.engineType = engine;
+        ctx.priority = priority;
+        ctx.isLost = false;
+
+        m_contexts[hContext] = ctx;
+        it->second.contextHandles.push_back(hContext);
+        m_telemetry.totalContextsCreated++;
+        return hContext;
+    }
+
+    bool destroyContext(uint32_t contextHandle) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_contexts.find(contextHandle);
+        if (it == m_contexts.end()) return false;
+
+        auto dIt = m_devices.find(it->second.deviceHandle);
+        if (dIt != m_devices.end()) {
+            auto& vec = dIt->second.contextHandles;
+            vec.erase(std::remove(vec.begin(), vec.end(), contextHandle), vec.end());
+        }
+        m_contexts.erase(it);
+        return true;
+    }
+
+    bool isDeviceRemoved(uint32_t deviceHandle) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_devices.find(deviceHandle);
+        if (it == m_devices.end()) return true;
+        return it->second.isRemoved;
+    }
+
+    void markDeviceRemoved(uint32_t deviceHandle) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_devices.find(deviceHandle);
+        if (it != m_devices.end()) {
+            it->second.isRemoved = true;
+            for (uint32_t ctxHandle : it->second.contextHandles) {
+                auto cIt = m_contexts.find(ctxHandle);
+                if (cIt != m_contexts.end()) {
+                    cIt->second.isLost = true;
+                }
+            }
+        }
+    }
+
+    size_t getDeviceCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_devices.size();
+    }
+
+    size_t getContextCount() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_contexts.size();
+    }
+
+    const GpuDeviceRecord* getDevice(uint32_t deviceHandle) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_devices.find(deviceHandle);
+        if (it != m_devices.end()) return &it->second;
+        return nullptr;
+    }
+
+    const GpuContextRecord* getContext(uint32_t contextHandle) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_contexts.find(contextHandle);
+        if (it != m_contexts.end()) return &it->second;
+        return nullptr;
+    }
+
     // VidMm Allocations
     uint32_t createAllocation(uint64_t sizeBytes, uint32_t segmentId, PixelFormat fmt, uint32_t width, uint32_t height, bool isShared) {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -549,6 +693,8 @@ public:
                 seg.usedBytes += sizeBytes;
             }
         }
+        m_telemetry.totalAllocationsCreated++;
+        m_telemetry.totalBytesAllocated += sizeBytes;
         return hAlloc;
     }
 
@@ -564,6 +710,10 @@ public:
                 seg.usedBytes -= sz;
             }
         }
+        if (m_telemetry.totalBytesAllocated >= sz) {
+            m_telemetry.totalBytesAllocated -= sz;
+        }
+        m_telemetry.totalAllocationsDestroyed++;
         m_allocations.erase(it);
         return true;
     }
@@ -604,6 +754,40 @@ public:
         return true;
     }
 
+    bool pageIn(uint32_t hAlloc) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_allocations.find(hAlloc);
+        if (it == m_allocations.end()) return false;
+        it->second.isResident = true;
+        m_telemetry.totalPagingOperations++;
+        return true;
+    }
+
+    bool pageOut(uint32_t hAlloc) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_allocations.find(hAlloc);
+        if (it == m_allocations.end()) return false;
+        it->second.isResident = false;
+        m_telemetry.totalPagingOperations++;
+        return true;
+    }
+
+    bool mapGpuVirtualAddress(uint32_t hAlloc, uint64_t baseGpuVa) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_allocations.find(hAlloc);
+        if (it == m_allocations.end()) return false;
+        it->second.gpuVirtualAddress = baseGpuVa;
+        return true;
+    }
+
+    bool unmapGpuVirtualAddress(uint32_t hAlloc) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_allocations.find(hAlloc);
+        if (it == m_allocations.end()) return false;
+        it->second.gpuVirtualAddress = 0;
+        return true;
+    }
+
     // VidPN Queries & Manipulation
     const std::vector<VidPnSource>& getSources() const { return m_vidPnSources; }
     const std::vector<VidPnTarget>& getTargets() const { return m_vidPnTargets; }
@@ -634,6 +818,7 @@ public:
         queue.isActive = true;
 
         m_hwQueues[qHandle] = queue;
+        m_telemetry.totalHardwareQueuesCreated++;
         return qHandle;
     }
 
@@ -651,6 +836,7 @@ public:
         it->second.lastFenceHandle = fenceHandle;
         it->second.lastFenceValue = fenceValue;
         m_totalSubmissions++;
+        m_telemetry.totalCommandsSubmitted++;
 
         if (m_kmdDriver) {
             m_kmdDriver->submitCommand(it->second.contextHandle, dmaGpuVa, dmaLength);
@@ -660,6 +846,7 @@ public:
         auto fIt = m_fences.find(fenceHandle);
         if (fIt != m_fences.end() && fIt->second) {
             fIt->second->currentGpuValue.store(fenceValue);
+            m_telemetry.totalFencesSignaled++;
         }
 
         it->second.totalCommandsCompleted++;
@@ -686,6 +873,26 @@ public:
         auto it = m_fences.find(fHandle);
         if (it == m_fences.end() || !it->second) return false;
         it->second->currentCpuValue.store(val);
+        it->second->currentGpuValue.store(val);
+        m_telemetry.totalFencesSignaled++;
+        return true;
+    }
+
+    bool waitForFenceCpu(uint32_t fHandle, uint64_t waitValue, uint32_t timeoutMs = 1000) {
+        (void)timeoutMs;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_fences.find(fHandle);
+        if (it == m_fences.end() || !it->second) return false;
+        return it->second->currentGpuValue.load() >= waitValue;
+    }
+
+    bool waitQueueOnFence(uint32_t qHandle, uint32_t fenceHandle, uint64_t waitValue) {
+        (void)waitValue;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto qIt = m_hwQueues.find(qHandle);
+        if (qIt == m_hwQueues.end()) return false;
+        auto fIt = m_fences.find(fenceHandle);
+        if (fIt == m_fences.end() || !fIt->second) return false;
         return true;
     }
 
@@ -700,14 +907,58 @@ public:
     bool present(uint32_t sourceId, uint32_t hAlloc) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_totalPresents++;
+        m_telemetry.totalPresents++;
         if (m_kmdDriver) {
             m_kmdDriver->presentDisplay(sourceId, hAlloc);
         }
         return true;
     }
 
+    bool presentDirectFlip(uint32_t sourceId, uint32_t hAlloc) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_totalPresents++;
+        m_telemetry.totalPresents++;
+        m_telemetry.totalDirectFlips++;
+
+        if (sourceId < m_vidPnSources.size()) {
+            m_vidPnSources[sourceId].primaryAllocationHandle = hAlloc;
+        }
+        for (auto& path : m_vidPnPaths) {
+            if (path.sourceId == sourceId) {
+                path.directFlipActive = true;
+            }
+        }
+        if (m_kmdDriver) {
+            m_kmdDriver->presentDisplay(sourceId, hAlloc);
+        }
+        return true;
+    }
+
+    bool presentMpo(uint32_t planeIndex, uint32_t hAlloc, uint32_t srcW, uint32_t srcH,
+                    uint32_t dstX, uint32_t dstY, uint32_t dstW, uint32_t dstH, PixelFormat fmt) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (planeIndex >= m_mpoPlanes.size()) return false;
+
+        auto& plane = m_mpoPlanes[planeIndex];
+        plane.enabled = true;
+        plane.allocationHandle = hAlloc;
+        plane.srcWidth = srcW;
+        plane.srcHeight = srcH;
+        plane.dstX = dstX;
+        plane.dstY = dstY;
+        plane.dstWidth = dstW;
+        plane.dstHeight = dstH;
+        plane.format = fmt;
+
+        m_totalPresents++;
+        m_telemetry.totalPresents++;
+        m_telemetry.totalMpoPresents++;
+        return true;
+    }
+
     void simulateVBlankInterrupt() {
         m_totalVBlanks++;
+        m_telemetry.totalVBlanks++;
         m_currentScanLine.store((m_currentScanLine.load() + 100) % 2160);
     }
 
@@ -716,24 +967,39 @@ public:
     }
 
     // Timeout Detection & Recovery (TDR) Watchdog Simulation
-    bool triggerTdrSimulation() {
+    bool triggerTdrSimulation(GpuEngineType engine = GpuEngineType::ThreeD, uint32_t faultingDeviceHandle = 0) {
         std::lock_guard<std::mutex> lock(m_mutex);
+        m_telemetry.totalTdrTriggers++;
         m_tdrState.store(TdrState::TimeoutDetected);
 
         // State Machine progression: Detected -> Prepare -> Reset -> Restart -> Recovered
         m_tdrState.store(TdrState::PreparingReset);
         m_tdrState.store(TdrState::ResettingEngine);
         if (m_kmdDriver) {
-            m_kmdDriver->resetEngine(GpuEngineType::ThreeD);
+            m_kmdDriver->resetEngine(engine);
+        }
+
+        if (faultingDeviceHandle != 0) {
+            auto it = m_devices.find(faultingDeviceHandle);
+            if (it != m_devices.end()) {
+                it->second.isRemoved = true;
+                for (uint32_t ctx : it->second.contextHandles) {
+                    auto cIt = m_contexts.find(ctx);
+                    if (cIt != m_contexts.end()) {
+                        cIt->second.isLost = true;
+                    }
+                }
+            }
         }
 
         m_tdrState.store(TdrState::RestartingEngine);
         if (m_kmdDriver) {
-            m_kmdDriver->restartEngine(GpuEngineType::ThreeD);
+            m_kmdDriver->restartEngine(engine);
         }
 
         m_tdrState.store(TdrState::Recovered);
         m_tdrRecoveryCount++;
+        m_telemetry.totalTdrRecoveries++;
         return true;
     }
 
@@ -742,6 +1008,34 @@ public:
     uint64_t getTotalSubmissions() const { return m_totalSubmissions.load(); }
     uint64_t getTotalPresents() const { return m_totalPresents.load(); }
     uint64_t getTotalVBlanks() const { return m_totalVBlanks.load(); }
+
+    const WDDM_TELEMETRY& getTelemetry() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_telemetry;
+    }
+
+    void resetTelemetry() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_telemetry = WDDM_TELEMETRY{};
+    }
+
+    void resetForTesting() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_devices.clear();
+        m_contexts.clear();
+        m_allocations.clear();
+        m_hwQueues.clear();
+        m_fences.clear();
+        m_telemetry = WDDM_TELEMETRY{};
+        m_totalSubmissions = 0;
+        m_totalPresents = 0;
+        m_totalVBlanks = 0;
+        m_tdrRecoveryCount = 0;
+        m_tdrState = TdrState::Normal;
+        for (auto& seg : m_segments) {
+            seg.usedBytes = 0;
+        }
+    }
 };
 
 // ============================================================================
@@ -834,6 +1128,47 @@ public:
     const std::map<uint32_t, std::shared_ptr<WddmGraphicsAdapter>>& getAllAdapters() const {
         return m_adapters;
     }
+
+    WDDM_TELEMETRY getTelemetry() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        WDDM_TELEMETRY total{};
+        total.totalAdaptersEnumerated = m_adapters.size();
+        for (const auto& [_, adp] : m_adapters) {
+            if (adp) {
+                const auto& t = adp->getTelemetry();
+                total.totalDevicesCreated += t.totalDevicesCreated;
+                total.totalContextsCreated += t.totalContextsCreated;
+                total.totalHardwareQueuesCreated += t.totalHardwareQueuesCreated;
+                total.totalAllocationsCreated += t.totalAllocationsCreated;
+                total.totalAllocationsDestroyed += t.totalAllocationsDestroyed;
+                total.totalBytesAllocated += t.totalBytesAllocated;
+                total.totalPagingOperations += t.totalPagingOperations;
+                total.totalCommandsSubmitted += t.totalCommandsSubmitted;
+                total.totalFencesSignaled += t.totalFencesSignaled;
+                total.totalPresents += t.totalPresents;
+                total.totalDirectFlips += t.totalDirectFlips;
+                total.totalMpoPresents += t.totalMpoPresents;
+                total.totalVBlanks += t.totalVBlanks;
+                total.totalTdrTriggers += t.totalTdrTriggers;
+                total.totalTdrRecoveries += t.totalTdrRecoveries;
+            }
+        }
+        return total;
+    }
+
+    void resetTelemetry() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& [_, adp] : m_adapters) {
+            if (adp) adp->resetTelemetry();
+        }
+    }
+
+    void resetForTesting() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& [_, adp] : m_adapters) {
+            if (adp) adp->resetForTesting();
+        }
+    }
 };
 
 // ============================================================================
@@ -860,8 +1195,48 @@ inline int32_t WINAPI DxgkCreateDevice(uint32_t hAdapter, uint32_t* outDeviceHan
     if (!adp) adp = wddm.getPrimaryAdapter();
     if (!adp) return 0;
 
-    *outDeviceHandle = 0x3000 + (hAdapter & 0xFF);
+    *outDeviceHandle = adp->createDevice(0);
     return 1;
+}
+
+inline int32_t WINAPI DxgkDestroyDevice(uint32_t hAdapter, uint32_t hDevice) {
+    auto& wddm = TitanWddmSubsystem::Instance();
+    if (!wddm.isInitialized()) wddm.initialize();
+
+    auto adp = wddm.getAdapter(hAdapter);
+    if (!adp) adp = wddm.getPrimaryAdapter();
+    if (!adp) return 0;
+
+    return adp->destroyDevice(hDevice) ? 1 : 0;
+}
+
+inline int32_t WINAPI DxgkCreateContext(uint32_t hAdapter, uint32_t hDevice, uint32_t engineType, uint32_t priority, uint32_t* outContextHandle) {
+    if (!outContextHandle) return 0;
+    auto& wddm = TitanWddmSubsystem::Instance();
+    if (!wddm.isInitialized()) wddm.initialize();
+
+    auto adp = wddm.getAdapter(hAdapter);
+    if (!adp) adp = wddm.getPrimaryAdapter();
+    if (!adp) return 0;
+
+    uint32_t hCtx = adp->createContext(
+        hDevice,
+        static_cast<GpuEngineType>(engineType),
+        static_cast<HwQueuePriority>(priority)
+    );
+    *outContextHandle = hCtx;
+    return (hCtx != 0) ? 1 : 0;
+}
+
+inline int32_t WINAPI DxgkDestroyContext(uint32_t hAdapter, uint32_t hContext) {
+    auto& wddm = TitanWddmSubsystem::Instance();
+    if (!wddm.isInitialized()) wddm.initialize();
+
+    auto adp = wddm.getAdapter(hAdapter);
+    if (!adp) adp = wddm.getPrimaryAdapter();
+    if (!adp) return 0;
+
+    return adp->destroyContext(hContext) ? 1 : 0;
 }
 
 inline int32_t WINAPI DxgkCreateAllocation(uint32_t hAdapter, uint64_t sizeBytes, uint32_t segmentId, uint32_t* outAllocHandle, uint64_t* outGpuVa) {
@@ -922,6 +1297,41 @@ inline int32_t WINAPI DxgkSubmitCommandHwQueue(uint32_t hAdapter, uint32_t qHand
     return adp->submitCommandToHwQueue(qHandle, dmaGpuVa, dmaLength, fenceHandle, fenceValue) ? 1 : 0;
 }
 
+inline int32_t WINAPI DxgkCreateMonitoredFence(uint32_t hAdapter, uint64_t initialValue, uint32_t* outFenceHandle) {
+    if (!outFenceHandle) return 0;
+    auto& wddm = TitanWddmSubsystem::Instance();
+    if (!wddm.isInitialized()) wddm.initialize();
+
+    auto adp = wddm.getAdapter(hAdapter);
+    if (!adp) adp = wddm.getPrimaryAdapter();
+    if (!adp) return 0;
+
+    *outFenceHandle = adp->createMonitoredFence(initialValue);
+    return 1;
+}
+
+inline int32_t WINAPI DxgkSignalMonitoredFence(uint32_t hAdapter, uint32_t hFence, uint64_t fenceValue) {
+    auto& wddm = TitanWddmSubsystem::Instance();
+    if (!wddm.isInitialized()) wddm.initialize();
+
+    auto adp = wddm.getAdapter(hAdapter);
+    if (!adp) adp = wddm.getPrimaryAdapter();
+    if (!adp) return 0;
+
+    return adp->signalFenceCpu(hFence, fenceValue) ? 1 : 0;
+}
+
+inline int32_t WINAPI DxgkWaitForMonitoredFence(uint32_t hAdapter, uint32_t hFence, uint64_t fenceValue, uint32_t timeoutMs) {
+    auto& wddm = TitanWddmSubsystem::Instance();
+    if (!wddm.isInitialized()) wddm.initialize();
+
+    auto adp = wddm.getAdapter(hAdapter);
+    if (!adp) adp = wddm.getPrimaryAdapter();
+    if (!adp) return 0;
+
+    return adp->waitForFenceCpu(hFence, fenceValue, timeoutMs) ? 1 : 0;
+}
+
 inline int32_t WINAPI DxgkPresentFrame(uint32_t hAdapter, uint32_t sourceId, uint32_t hAlloc) {
     auto& wddm = TitanWddmSubsystem::Instance();
     if (!wddm.isInitialized()) wddm.initialize();
@@ -946,6 +1356,15 @@ inline int32_t WINAPI DxgkTriggerTdr(uint32_t hAdapter) {
 
 } // extern "C"
 
+// C++ Telemetry query helpers
+inline WDDM_TELEMETRY WddmQueryTelemetry() {
+    return TitanWddmSubsystem::Instance().getTelemetry();
+}
+
+inline void WddmResetTelemetryForTesting() {
+    TitanWddmSubsystem::Instance().resetForTesting();
+}
+
 // ============================================================================
 // 9. Subsystem Initialization & Registration
 // ============================================================================
@@ -958,10 +1377,16 @@ inline void InitializeWddmSubsystem() {
     auto& ldr = ldr::DynamicLoader::get();
     ldr.registerExport("dxgkrnl.sys", "DxgkInitialize", reinterpret_cast<void*>(DxgkInitialize));
     ldr.registerExport("dxgkrnl.sys", "DxgkCreateDevice", reinterpret_cast<void*>(DxgkCreateDevice));
+    ldr.registerExport("dxgkrnl.sys", "DxgkDestroyDevice", reinterpret_cast<void*>(DxgkDestroyDevice));
+    ldr.registerExport("dxgkrnl.sys", "DxgkCreateContext", reinterpret_cast<void*>(DxgkCreateContext));
+    ldr.registerExport("dxgkrnl.sys", "DxgkDestroyContext", reinterpret_cast<void*>(DxgkDestroyContext));
     ldr.registerExport("dxgkrnl.sys", "DxgkCreateAllocation", reinterpret_cast<void*>(DxgkCreateAllocation));
     ldr.registerExport("dxgkrnl.sys", "DxgkDestroyAllocation", reinterpret_cast<void*>(DxgkDestroyAllocation));
     ldr.registerExport("dxgkrnl.sys", "DxgkCreateHwQueue", reinterpret_cast<void*>(DxgkCreateHwQueue));
     ldr.registerExport("dxgkrnl.sys", "DxgkSubmitCommandHwQueue", reinterpret_cast<void*>(DxgkSubmitCommandHwQueue));
+    ldr.registerExport("dxgkrnl.sys", "DxgkCreateMonitoredFence", reinterpret_cast<void*>(DxgkCreateMonitoredFence));
+    ldr.registerExport("dxgkrnl.sys", "DxgkSignalMonitoredFence", reinterpret_cast<void*>(DxgkSignalMonitoredFence));
+    ldr.registerExport("dxgkrnl.sys", "DxgkWaitForMonitoredFence", reinterpret_cast<void*>(DxgkWaitForMonitoredFence));
     ldr.registerExport("dxgkrnl.sys", "DxgkPresentFrame", reinterpret_cast<void*>(DxgkPresentFrame));
     ldr.registerExport("dxgkrnl.sys", "DxgkTriggerTdr", reinterpret_cast<void*>(DxgkTriggerTdr));
 
@@ -1000,3 +1425,31 @@ inline void InitializeWddmSubsystem() {
 }
 
 } // namespace micant::wddm
+
+namespace micant {
+    using wddm::WddmVersion;
+    using wddm::GpuVendorId;
+    using wddm::GpuEngineType;
+    using wddm::HwQueuePriority;
+    using wddm::TdrState;
+    using wddm::PixelFormat;
+    using wddm::VideoConnectorType;
+    using wddm::MemorySegmentType;
+    using wddm::VidMmSegment;
+    using wddm::GpuAllocationRecord;
+    using wddm::DisplayMode;
+    using wddm::VidPnTarget;
+    using wddm::VidPnSource;
+    using wddm::VidPnPath;
+    using wddm::MultiPlaneOverlayInfo;
+    using wddm::MonitoredFence;
+    using wddm::HardwareQueue;
+    using wddm::GpuContextRecord;
+    using wddm::GpuDeviceRecord;
+    using wddm::WDDM_TELEMETRY;
+    using wddm::IDisplayMiniportDriver;
+    using wddm::WddmGraphicsAdapter;
+    using wddm::TitanWddmSubsystem;
+    using wddm::WddmQueryTelemetry;
+    using wddm::WddmResetTelemetryForTesting;
+} // namespace micant
