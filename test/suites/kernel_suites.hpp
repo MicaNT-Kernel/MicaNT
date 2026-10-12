@@ -8170,6 +8170,369 @@ void Test_Horizon30_KernelDebugger_KD64_Breakpoints_And_KdpTrapExceptionRouting(
     std::cout << "[TEST] Suite 246: Horizon 30 - Kernel Debugger Engine (KD64), KDCom Protocol, Breakpoints & KdpTrap Exception Routing PASSED.\n";
 }
 
+// ============================================================================
+// Suite 247: Horizon 31 - Windows Driver Framework (KMDF / UMDF 2.0),
+// Object Tree Lifetimes, PnP & Power State Machines, I/O Queues & Requests
+// ============================================================================
+void Test_Horizon31_WindowsDriverFramework_KMDF_ObjectTree_PnP_Queues_And_Requests() {
+    wdf::TitanWdfEngine::Instance().resetForTesting();
+
+    // 1. WDF Object Model, Parent-Child Hierarchy & Typed Context Space
+    struct SampleDriverContext {
+        uint32_t Magic{0x1337BEEF};
+        char Tag[16]{"KMDF_DRIVER"};
+    };
+
+    uint32_t driverCleanupCalls = 0;
+    uint32_t driverDestroyCalls = 0;
+
+    WDFDRIVER driver = nullptr;
+    {
+        WDF_DRIVER_CONFIG drvConfig{};
+        WDF_DRIVER_CONFIG_INIT(&drvConfig, [](WDFDRIVER, WDFDEVICE_INIT*) -> NTSTATUS {
+            return STATUS_SUCCESS;
+        });
+
+        WDF_OBJECT_ATTRIBUTES drvAttrs{};
+        WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&drvAttrs, SampleDriverContext);
+        drvAttrs.EvtCleanupCallback = [&](WDFOBJECT) { driverCleanupCalls++; };
+        drvAttrs.EvtDestroyCallback = [&](WDFOBJECT) { driverDestroyCalls++; };
+
+        NTSTATUS stDrv = WdfDriverCreate(nullptr, L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\SampleKmdf", &drvAttrs, &drvConfig, &driver);
+        TEST_ASSERT(NT_SUCCESS(stDrv), "WdfDriverCreate must succeed");
+        TEST_ASSERT(driver != nullptr, "Created WDFDRIVER handle must be non-null");
+
+        auto* ctx = WdfObjectGetTypedContext(driver, SampleDriverContext);
+        TEST_ASSERT(ctx != nullptr, "WdfObjectGetTypedContext must return non-null context memory");
+        ctx->Magic = 0x1337BEEF;
+        std::snprintf(ctx->Tag, sizeof(ctx->Tag), "KMDF_DRIVER");
+        TEST_ASSERT(ctx->Magic == 0x1337BEEF, "Typed context initialized properly");
+        TEST_ASSERT(std::string(ctx->Tag) == "KMDF_DRIVER", "Typed context tag matches");
+    }
+
+    // 2. WDFDEVICE Creation, PrepareHardware & Power (D0..D3) State Machine
+    WDFDEVICE device = nullptr;
+    uint32_t prepareHardwareCalls = 0;
+    uint32_t d0EntryCalls = 0;
+    uint32_t d0ExitCalls = 0;
+    uint32_t ioSuspendCalls = 0;
+    uint32_t ioRestartCalls = 0;
+
+    {
+        WDFDEVICE_INIT* devInit = WdfControlDeviceInitAllocate(driver, nullptr);
+        TEST_ASSERT(devInit != nullptr, "WdfControlDeviceInitAllocate must return valid init structure");
+        devInit->DeviceName = "\\Device\\SampleKmdfDevice0";
+        devInit->HardwareId = "PCI\\VEN_1337&DEV_0001";
+
+        WDF_PNPPOWER_EVENT_CALLBACKS pnpCallbacks{};
+        WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
+        pnpCallbacks.EvtDevicePrepareHardware = [&](WDFDEVICE) -> NTSTATUS {
+            prepareHardwareCalls++;
+            return STATUS_SUCCESS;
+        };
+        pnpCallbacks.EvtDeviceD0Entry = [&](WDFDEVICE, WDF_DEVICE_POWER_STATE) -> NTSTATUS {
+            d0EntryCalls++;
+            return STATUS_SUCCESS;
+        };
+        pnpCallbacks.EvtDeviceD0Exit = [&](WDFDEVICE, WDF_DEVICE_POWER_STATE) -> NTSTATUS {
+            d0ExitCalls++;
+            return STATUS_SUCCESS;
+        };
+        pnpCallbacks.EvtDeviceSelfManagedIoSuspend = [&](WDFDEVICE) -> NTSTATUS {
+            ioSuspendCalls++;
+            return STATUS_SUCCESS;
+        };
+        pnpCallbacks.EvtDeviceSelfManagedIoRestart = [&](WDFDEVICE) -> NTSTATUS {
+            ioRestartCalls++;
+            return STATUS_SUCCESS;
+        };
+
+        WdfDeviceInitSetPnpPowerEventCallbacks(devInit, &pnpCallbacks);
+
+        WDF_OBJECT_ATTRIBUTES devAttrs{};
+        WDF_OBJECT_ATTRIBUTES_INIT(&devAttrs);
+        devAttrs.ParentObject = driver;
+
+        NTSTATUS stDev = WdfDeviceCreate(&devInit, &devAttrs, &device);
+        TEST_ASSERT(NT_SUCCESS(stDev), "WdfDeviceCreate must succeed");
+        TEST_ASSERT(device != nullptr, "WDFDEVICE handle must be valid");
+        TEST_ASSERT(devInit == nullptr, "WdfDeviceCreate must invalidate devInit pointer");
+
+        TEST_ASSERT(prepareHardwareCalls == 1, "EvtDevicePrepareHardware must be called once during startup");
+        TEST_ASSERT(d0EntryCalls == 1, "EvtDeviceD0Entry must be called once on initial D0 transition");
+
+        // Power State Transition: D0 -> D3 (Sleep)
+        NTSTATUS stPowerDown = WdfDeviceSetPowerState(device, WdfDevStatePowerD3);
+        TEST_ASSERT(NT_SUCCESS(stPowerDown), "WdfDeviceSetPowerState(D3) must succeed");
+        TEST_ASSERT(d0ExitCalls == 1, "EvtDeviceD0Exit must be invoked when transitioning to D3");
+        TEST_ASSERT(ioSuspendCalls == 1, "EvtDeviceSelfManagedIoSuspend must be called during power down");
+
+        // Power State Transition: D3 -> D0 (Wake)
+        NTSTATUS stPowerUp = WdfDeviceSetPowerState(device, WdfDevStatePowerD0);
+        TEST_ASSERT(NT_SUCCESS(stPowerUp), "WdfDeviceSetPowerState(D0) must succeed");
+        TEST_ASSERT(d0EntryCalls == 2, "EvtDeviceD0Entry must be called again when returning to D0");
+        TEST_ASSERT(ioRestartCalls == 1, "EvtDeviceSelfManagedIoRestart must be called on wake");
+    }
+
+    // 3. Sequential I/O Queue Dispatching & Automatic Serialization Pacing
+    {
+        WDFQUEUE seqQueue = nullptr;
+        WDF_IO_QUEUE_CONFIG qConfig{};
+        WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&qConfig, WdfIoQueueDispatchSequential);
+
+        std::vector<uint32_t> dispatchedOrders;
+        qConfig.EvtIoDeviceControl = [&](WDFQUEUE, WDFREQUEST, size_t, size_t, uint32_t ioctl) {
+            dispatchedOrders.push_back(ioctl);
+        };
+
+        WDF_OBJECT_ATTRIBUTES qAttrs{};
+        WDF_OBJECT_ATTRIBUTES_INIT(&qAttrs);
+        qAttrs.ParentObject = device;
+
+        NTSTATUS stQ = WdfIoQueueCreate(device, &qConfig, &qAttrs, &seqQueue);
+        TEST_ASSERT(NT_SUCCESS(stQ), "WdfIoQueueCreate for sequential queue must succeed");
+        TEST_ASSERT(seqQueue != nullptr, "Sequential queue handle must be valid");
+        TEST_ASSERT(WdfDeviceGetDefaultQueue(device) == seqQueue, "Sequential queue must be registered as default queue");
+
+        // Create 3 requests
+        WDFREQUEST req1 = nullptr;
+        WDFREQUEST req2 = nullptr;
+        WDFREQUEST req3 = nullptr;
+
+        WdfRequestCreate(nullptr, nullptr, &req1);
+        WdfRequestCreate(nullptr, nullptr, &req2);
+        WdfRequestCreate(nullptr, nullptr, &req3);
+
+        WdfRequestSetParameters(req1, WdfRequestTypeDeviceControl, 101, nullptr, 0, nullptr, 0);
+        WdfRequestSetParameters(req2, WdfRequestTypeDeviceControl, 102, nullptr, 0, nullptr, 0);
+        WdfRequestSetParameters(req3, WdfRequestTypeDeviceControl, 103, nullptr, 0, nullptr, 0);
+
+        // Dispatch all 3 requests
+        WdfIoQueueDispatch(seqQueue, req1);
+        WdfIoQueueDispatch(seqQueue, req2);
+        WdfIoQueueDispatch(seqQueue, req3);
+
+        // In Sequential mode, only Req1 should have been delivered!
+        TEST_ASSERT(dispatchedOrders.size() == 1, "Only 1 request must be dispatched immediately in sequential queue");
+        TEST_ASSERT(dispatchedOrders[0] == 101, "First dispatched request must be IOCTL 101");
+        TEST_ASSERT(WdfIoQueueGetInFlightCount(seqQueue) == 1, "In-flight count must be 1");
+        TEST_ASSERT(WdfIoQueueGetPendingCount(seqQueue) == 2, "Pending count must be 2");
+
+        // Complete Req1 -> Req2 should be automatically dispatched
+        WdfRequestComplete(req1, STATUS_SUCCESS);
+        TEST_ASSERT(WdfRequestIsCompleted(req1), "Req1 must report completed");
+        TEST_ASSERT(dispatchedOrders.size() == 2, "Second request must be dispatched automatically after Req1 completes");
+        TEST_ASSERT(dispatchedOrders[1] == 102, "Second dispatched request must be IOCTL 102");
+
+        // Complete Req2 -> Req3 should be automatically dispatched
+        WdfRequestComplete(req2, STATUS_SUCCESS);
+        TEST_ASSERT(dispatchedOrders.size() == 3, "Third request must be dispatched automatically after Req2 completes");
+        TEST_ASSERT(dispatchedOrders[2] == 103, "Third dispatched request must be IOCTL 103");
+
+        // Complete Req3 -> queue should be idle
+        WdfRequestComplete(req3, STATUS_SUCCESS);
+        TEST_ASSERT(WdfIoQueueGetInFlightCount(seqQueue) == 0, "In-flight count must return to 0");
+        TEST_ASSERT(WdfIoQueueGetPendingCount(seqQueue) == 0, "Pending count must be 0");
+    }
+
+    // 4. Parallel I/O Queue Dispatching & High-Throughput Concurrency
+    {
+        WDFQUEUE parQueue = nullptr;
+        WDF_IO_QUEUE_CONFIG qConfig{};
+        WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&qConfig, WdfIoQueueDispatchParallel);
+
+        uint32_t parallelDispatchCount = 0;
+        qConfig.EvtIoWrite = [&](WDFQUEUE, WDFREQUEST, size_t) {
+            parallelDispatchCount++;
+        };
+
+        NTSTATUS stQ = WdfIoQueueCreate(device, &qConfig, nullptr, &parQueue);
+        TEST_ASSERT(NT_SUCCESS(stQ), "WdfIoQueueCreate for parallel queue must succeed");
+
+        WDFREQUEST reqA = nullptr;
+        WDFREQUEST reqB = nullptr;
+        WDFREQUEST reqC = nullptr;
+
+        WdfRequestCreate(nullptr, nullptr, &reqA);
+        WdfRequestCreate(nullptr, nullptr, &reqB);
+        WdfRequestCreate(nullptr, nullptr, &reqC);
+
+        uint8_t buffer[64]{0};
+        WdfRequestSetParameters(reqA, WdfRequestTypeWrite, 0, buffer, sizeof(buffer), nullptr, 0);
+        WdfRequestSetParameters(reqB, WdfRequestTypeWrite, 0, buffer, sizeof(buffer), nullptr, 0);
+        WdfRequestSetParameters(reqC, WdfRequestTypeWrite, 0, buffer, sizeof(buffer), nullptr, 0);
+
+        WdfIoQueueDispatch(parQueue, reqA);
+        WdfIoQueueDispatch(parQueue, reqB);
+        WdfIoQueueDispatch(parQueue, reqC);
+
+        // In Parallel mode, all 3 requests are delivered immediately
+        TEST_ASSERT(parallelDispatchCount == 3, "All 3 requests must be dispatched immediately in parallel queue");
+        TEST_ASSERT(WdfIoQueueGetInFlightCount(parQueue) == 3, "In-flight count must be 3");
+
+        // Complete with information bytes
+        WdfRequestCompleteWithInformation(reqA, STATUS_SUCCESS, 64);
+        WdfRequestCompleteWithInformation(reqB, STATUS_SUCCESS, 64);
+        WdfRequestCompleteWithInformation(reqC, STATUS_SUCCESS, 64);
+
+        TEST_ASSERT(WdfRequestGetStatus(reqA) == STATUS_SUCCESS, "ReqA completion status must be SUCCESS");
+        TEST_ASSERT(WdfRequestGetInformation(reqA) == 64, "ReqA transferred information must be 64 bytes");
+        TEST_ASSERT(WdfIoQueueGetInFlightCount(parQueue) == 0, "In-flight count must return to 0 after all complete");
+    }
+
+    // 5. Manual I/O Queue Dispatching & Explicit Request Retrieval
+    {
+        WDFQUEUE manQueue = nullptr;
+        WDF_IO_QUEUE_CONFIG qConfig{};
+        WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&qConfig, WdfIoQueueDispatchManual);
+
+        NTSTATUS stQ = WdfIoQueueCreate(device, &qConfig, nullptr, &manQueue);
+        TEST_ASSERT(NT_SUCCESS(stQ), "WdfIoQueueCreate for manual queue must succeed");
+
+        WDFREQUEST reqM = nullptr;
+        WdfRequestCreate(nullptr, nullptr, &reqM);
+        WdfRequestSetParameters(reqM, WdfRequestTypeRead, 0, nullptr, 0, nullptr, 128);
+
+        WdfIoQueueDispatch(manQueue, reqM);
+        TEST_ASSERT(WdfIoQueueGetPendingCount(manQueue) == 1, "Manual queue must hold request in pending list");
+
+        WDFREQUEST retrievedReq = nullptr;
+        NTSTATUS stRetr = WdfIoQueueRetrieveNextRequest(manQueue, &retrievedReq);
+        TEST_ASSERT(NT_SUCCESS(stRetr), "WdfIoQueueRetrieveNextRequest must succeed");
+        TEST_ASSERT(retrievedReq == reqM, "Retrieved request must match queued request");
+
+        // Second retrieval on empty manual queue
+        WDFREQUEST secondRetr = nullptr;
+        NTSTATUS stEmpty = WdfIoQueueRetrieveNextRequest(manQueue, &secondRetr);
+        TEST_ASSERT(stEmpty == STATUS_NO_MORE_ENTRIES, "Retrieval from empty queue must return STATUS_NO_MORE_ENTRIES");
+
+        WdfRequestComplete(retrievedReq, STATUS_SUCCESS);
+    }
+
+    // 6. Queue Flow Control: Start, Stop, and Purge
+    {
+        WDFQUEUE ctlQueue = nullptr;
+        WDF_IO_QUEUE_CONFIG qConfig{};
+        WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&qConfig, WdfIoQueueDispatchManual);
+        WdfIoQueueCreate(device, &qConfig, nullptr, &ctlQueue);
+
+        WDFREQUEST pReq1 = nullptr;
+        WDFREQUEST pReq2 = nullptr;
+        WdfRequestCreate(nullptr, nullptr, &pReq1);
+        WdfRequestCreate(nullptr, nullptr, &pReq2);
+
+        WdfIoQueueDispatch(ctlQueue, pReq1);
+        WdfIoQueueDispatch(ctlQueue, pReq2);
+        TEST_ASSERT(WdfIoQueueGetPendingCount(ctlQueue) == 2, "Pending count must be 2 before purge");
+
+        WdfIoQueuePurge(ctlQueue);
+        TEST_ASSERT(WdfIoQueueGetPendingCount(ctlQueue) == 0, "Pending count must be 0 after purge");
+        TEST_ASSERT(WdfRequestGetStatus(pReq1) == STATUS_CANCELLED, "Purged request 1 must be completed with STATUS_CANCELLED");
+        TEST_ASSERT(WdfRequestGetStatus(pReq2) == STATUS_CANCELLED, "Purged request 2 must be completed with STATUS_CANCELLED");
+    }
+
+    // 7. WDFREQUEST Cancellation Handlers
+    {
+        WDFREQUEST cReq = nullptr;
+        WdfRequestCreate(nullptr, nullptr, &cReq);
+
+        bool cancelFired = false;
+        WdfRequestMarkCancelable(cReq, [&](WDFREQUEST req) {
+            cancelFired = true;
+            WdfRequestComplete(req, STATUS_CANCELLED);
+        });
+
+        NTSTATUS stCancel = WdfRequestCancel(cReq);
+        TEST_ASSERT(NT_SUCCESS(stCancel), "WdfRequestCancel must succeed");
+        TEST_ASSERT(cancelFired, "Cancel routine must be invoked");
+        TEST_ASSERT(WdfRequestIsCanceled(cReq), "Request must report canceled");
+        TEST_ASSERT(WdfRequestGetStatus(cReq) == STATUS_CANCELLED, "Completion status must be STATUS_CANCELLED");
+    }
+
+    // 8. WDFMEMORY Allocation, Buffer Mapping & Safe Copy
+    {
+        WDFMEMORY mem = nullptr;
+        void* rawBuf = nullptr;
+        const size_t bufSize = 512;
+
+        NTSTATUS stMem = WdfMemoryCreate(nullptr, 0, 0x4D494341 /* 'MICA' */, bufSize, &mem, &rawBuf);
+        TEST_ASSERT(NT_SUCCESS(stMem), "WdfMemoryCreate must succeed");
+        TEST_ASSERT(mem != nullptr, "WDFMEMORY handle must be non-null");
+        TEST_ASSERT(rawBuf != nullptr, "Raw buffer pointer must be non-null");
+
+        size_t querySize = 0;
+        void* queriedBuf = WdfMemoryGetBuffer(mem, &querySize);
+        TEST_ASSERT(queriedBuf == rawBuf, "WdfMemoryGetBuffer must match allocated pointer");
+        TEST_ASSERT(querySize == bufSize, "WdfMemoryGetBuffer must return 512 bytes");
+
+        const char testString[] = "Sovereign WDF Memory Buffering Engine 2026";
+        size_t strLen = sizeof(testString);
+        NTSTATUS stCopyIn = WdfMemoryCopyFromBuffer(mem, 0, const_cast<char*>(testString), strLen);
+        TEST_ASSERT(NT_SUCCESS(stCopyIn), "WdfMemoryCopyFromBuffer must succeed");
+
+        char readOut[64]{0};
+        NTSTATUS stCopyOut = WdfMemoryCopyToBuffer(mem, 0, readOut, strLen);
+        TEST_ASSERT(NT_SUCCESS(stCopyOut), "WdfMemoryCopyToBuffer must succeed");
+        TEST_ASSERT(std::memcmp(readOut, testString, strLen) == 0, "Copied buffer must match original string");
+
+        // Buffer overflow protection test
+        char overflowBuf[1024];
+        NTSTATUS stOverflow = WdfMemoryCopyFromBuffer(mem, 0, overflowBuf, sizeof(overflowBuf));
+        TEST_ASSERT(stOverflow == STATUS_BUFFER_TOO_SMALL, "Oversized buffer copy must return STATUS_BUFFER_TOO_SMALL");
+    }
+
+    // 9. UMDF 2.0 User-Mode Driver Host Process Isolation & Reflector Recovery
+    {
+        uint32_t umdfPid = 0;
+        NTSTATUS stHost = wdf::TitanWdfEngine::Instance().startUmdfDriver("sensors_hid_umdf.dll", &umdfPid);
+        TEST_ASSERT(NT_SUCCESS(stHost), "startUmdfDriver must succeed");
+        TEST_ASSERT(umdfPid >= 5000, "UMDF host process must be assigned valid PID");
+
+        auto hosts = wdf::TitanWdfEngine::Instance().getUmdfHostsSnapshot();
+        TEST_ASSERT(hosts.find(umdfPid) != hosts.end(), "UMDF host must exist in active snapshot");
+        TEST_ASSERT(hosts[umdfPid].IsHealthy, "UMDF host must start in healthy state");
+
+        // Simulate userland driver crash
+        NTSTATUS stCrash = wdf::TitanWdfEngine::Instance().simulateUmdfCrash(umdfPid, true);
+        TEST_ASSERT(NT_SUCCESS(stCrash), "simulateUmdfCrash with auto-recovery must succeed");
+
+        hosts = wdf::TitanWdfEngine::Instance().getUmdfHostsSnapshot();
+        TEST_ASSERT(hosts[umdfPid].CrashesRecovered == 1, "CrashesRecovered counter must increment to 1");
+        TEST_ASSERT(hosts[umdfPid].IsHealthy, "UMDF host must be restored to healthy status after recovery");
+    }
+
+    // 10. Cascading Lifetime Deletion & WDF Diagnostic Telemetry Audit
+    {
+        // Deleting driver cascades and deletes child device, queues, and requests
+        WdfObjectDelete(driver);
+        TEST_ASSERT(driverCleanupCalls == 1, "EvtCleanupCallback must be invoked upon WdfObjectDelete");
+        TEST_ASSERT(driverDestroyCalls == 1, "EvtDestroyCallback must be invoked upon WdfObjectDelete");
+
+        // Telemetry Audit
+        WDF_TELEMETRY telem = WdfQueryTelemetry();
+        TEST_ASSERT(telem.totalDriversCreated > 0, "totalDriversCreated must be > 0");
+        TEST_ASSERT(telem.totalDevicesCreated > 0, "totalDevicesCreated must be > 0");
+        TEST_ASSERT(telem.totalQueuesCreated > 0, "totalQueuesCreated must be > 0");
+        TEST_ASSERT(telem.totalRequestsCreated > 0, "totalRequestsCreated must be > 0");
+        TEST_ASSERT(telem.totalRequestsDispatched > 0, "totalRequestsDispatched must be > 0");
+        TEST_ASSERT(telem.totalRequestsCompleted > 0, "totalRequestsCompleted must be > 0");
+        TEST_ASSERT(telem.totalMemoriesAllocated > 0, "totalMemoriesAllocated must be > 0");
+        TEST_ASSERT(telem.totalPnpTransitions > 0, "totalPnpTransitions must be > 0");
+        TEST_ASSERT(telem.totalPowerTransitions > 0, "totalPowerTransitions must be > 0");
+        TEST_ASSERT(telem.totalUmdfCrashesRecovered > 0, "totalUmdfCrashesRecovered must be > 0");
+
+        // Reset Telemetry
+        WdfResetTelemetryForTesting();
+        WDF_TELEMETRY resetTelem = WdfQueryTelemetry();
+        TEST_ASSERT(resetTelem.totalDriversCreated == 0, "totalDriversCreated must be 0 after reset");
+        TEST_ASSERT(resetTelem.totalDevicesCreated == 0, "totalDevicesCreated must be 0 after reset");
+        TEST_ASSERT(resetTelem.totalRequestsDispatched == 0, "totalRequestsDispatched must be 0 after reset");
+    }
+
+    std::cout << "[TEST] Suite 247: Horizon 31 - Windows Driver Framework (KMDF / UMDF 2.0), Object Tree, PnP, Queues & Requests PASSED.\n";
+}
+
+
 
 
 

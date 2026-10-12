@@ -166,6 +166,22 @@ inline void WDF_OBJECT_ATTRIBUTES_INIT(WDF_OBJECT_ATTRIBUTES* Attributes) {
     Attributes->ContextSizeOverride = 0;
 }
 
+#define WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(Attributes, Type) \
+    do { \
+        ::micant::wdf::WDF_OBJECT_ATTRIBUTES_INIT(Attributes); \
+        static const ::micant::wdf::WDF_OBJECT_CONTEXT_TYPE_INFO s_TypeInfo_##Type{ \
+            sizeof(::micant::wdf::WDF_OBJECT_CONTEXT_TYPE_INFO), \
+            #Type, \
+            sizeof(Type), \
+            nullptr \
+        }; \
+        (Attributes)->ContextTypeInfo = &s_TypeInfo_##Type; \
+        (Attributes)->ContextSizeOverride = sizeof(Type); \
+    } while (0)
+
+#define WdfObjectGetTypedContext(Handle, Type) \
+    reinterpret_cast<Type*>(::micant::wdf::WdfObjectGetTypedContextWorker((Handle), nullptr))
+
 // Plug & Play and Power Event Callbacks
 struct WDF_PNPPOWER_EVENT_CALLBACKS {
     uint32_t Size;
@@ -319,6 +335,7 @@ struct WdfRequestRecord : public WdfBaseObject {
     uint64_t                    Information{0};
     bool                        IsCompleted{false};
     bool                        IsCanceled{false};
+    std::function<void(WDFREQUEST)> CancelRoutine;
 };
 
 struct WdfQueueRecord : public WdfBaseObject {
@@ -345,13 +362,30 @@ struct UmdfHostProcess {
 };
 
 // ============================================================================
-// 3. TitanWDF Core Engine Manager (Singleton)
+// 3. WDF Diagnostic Telemetry
+// ============================================================================
+struct WDF_TELEMETRY {
+    size_t totalDriversCreated{0};
+    size_t totalDevicesCreated{0};
+    size_t totalQueuesCreated{0};
+    size_t totalRequestsCreated{0};
+    size_t totalRequestsDispatched{0};
+    size_t totalRequestsCompleted{0};
+    size_t totalMemoriesAllocated{0};
+    size_t totalPnpTransitions{0};
+    size_t totalPowerTransitions{0};
+    size_t totalUmdfCrashesRecovered{0};
+};
+
+// ============================================================================
+// 4. TitanWDF Core Engine Manager (Singleton)
 // ============================================================================
 
 class TitanWdfEngine {
 private:
     std::mutex m_mutex;
     uint64_t   m_nextObjectId{1000};
+    WDF_TELEMETRY m_telemetry{};
 
     std::unordered_map<WDFOBJECT, std::unique_ptr<WdfBaseObject>> m_objects;
     std::vector<WdfDriverRecord*>                                 m_drivers;
@@ -395,6 +429,8 @@ public:
         WDFDRIVER handle = reinterpret_cast<WDFDRIVER>(driver.get());
         m_drivers.push_back(driver.get());
         m_objects[handle] = std::move(driver);
+
+        m_telemetry.totalDriversCreated++;
 
         *outDriver = handle;
         return STATUS_SUCCESS;
@@ -445,6 +481,10 @@ public:
         m_devices.push_back(device.get());
         m_objects[handle] = std::move(device);
 
+        m_telemetry.totalDevicesCreated++;
+        m_telemetry.totalPnpTransitions++;
+        m_telemetry.totalPowerTransitions++;
+
         *outDevice = handle;
         return STATUS_SUCCESS;
     }
@@ -480,6 +520,7 @@ public:
         }
 
         dev->PowerState = newState;
+        m_telemetry.totalPowerTransitions++;
         return STATUS_SUCCESS;
     }
 
@@ -518,6 +559,8 @@ public:
         m_queues.push_back(queue.get());
         m_objects[qHandle] = std::move(queue);
 
+        m_telemetry.totalQueuesCreated++;
+
         *outQueue = qHandle;
         return STATUS_SUCCESS;
     }
@@ -540,6 +583,8 @@ public:
 
         WDFREQUEST handle = reinterpret_cast<WDFREQUEST>(req.get());
         m_objects[handle] = std::move(req);
+
+        m_telemetry.totalRequestsCreated++;
 
         *outRequest = handle;
         return STATUS_SUCCESS;
@@ -578,6 +623,7 @@ public:
 
         // Deliver request
         deliverRequestLocked(q, r);
+        m_telemetry.totalRequestsDispatched++;
         return STATUS_SUCCESS;
     }
 
@@ -596,6 +642,7 @@ public:
         r->CompletionStatus = status;
         r->Information = information;
         r->IsCompleted = true;
+        m_telemetry.totalRequestsCompleted++;
 
         if (r->Queue) {
             auto itQ = m_objects.find(r->Queue);
@@ -613,6 +660,7 @@ public:
                         WdfRequestRecord* nextReq = q->PendingRequests.front();
                         q->PendingRequests.pop();
                         deliverRequestLocked(q, nextReq);
+                        m_telemetry.totalRequestsDispatched++;
                     }
                 }
             }
@@ -638,6 +686,7 @@ public:
         q->PendingRequests.pop();
         q->InFlightRequests.push_back(req);
         q->TotalDispatchedRequests++;
+        m_telemetry.totalRequestsDispatched++;
 
         *outRequest = reinterpret_cast<WDFREQUEST>(req);
         return STATUS_SUCCESS;
@@ -668,6 +717,8 @@ public:
 
         WDFMEMORY handle = reinterpret_cast<WDFMEMORY>(mem.get());
         m_objects[handle] = std::move(mem);
+
+        m_telemetry.totalMemoriesAllocated++;
 
         *outMemory = handle;
         return STATUS_SUCCESS;
@@ -707,12 +758,35 @@ public:
             // Sovereign Reflector isolates fault, restarts host process cleanly
             it->second.CrashesRecovered++;
             it->second.IsHealthy = true;
+            m_telemetry.totalUmdfCrashesRecovered++;
         }
 
         return STATUS_SUCCESS;
     }
 
     // Telemetry & Introspection
+    [[nodiscard]] WDF_TELEMETRY getTelemetry() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_telemetry;
+    }
+
+    void resetTelemetry() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_telemetry = WDF_TELEMETRY{};
+    }
+
+    void resetForTesting() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_objects.clear();
+        m_drivers.clear();
+        m_devices.clear();
+        m_queues.clear();
+        m_umdfHosts.clear();
+        m_nextObjectId = 1000;
+        m_nextUmdfPid = 5000;
+        m_telemetry = WDF_TELEMETRY{};
+    }
+
     size_t getDriverCount() {
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_drivers.size();
@@ -992,7 +1066,216 @@ inline NTSTATUS WINAPI WdfDeviceSetPowerState(WDFDEVICE Device, WDF_DEVICE_POWER
     return TitanWdfEngine::Instance().setDevicePowerState(Device, PowerState);
 }
 
+inline WDFQUEUE WINAPI WdfDeviceGetDefaultQueue(WDFDEVICE Device) {
+    if (!Device) return nullptr;
+    auto* dev = reinterpret_cast<WdfDeviceRecord*>(Device);
+    return dev->DefaultQueue;
+}
+
+inline WDFDEVICE_INIT* WINAPI WdfControlDeviceInitAllocate(WDFDRIVER Driver, const void* SDDL) {
+    (void)Driver; (void)SDDL;
+    auto* init = new WDFDEVICE_INIT();
+    init->DeviceName = "\\Device\\WdfControl";
+    return init;
+}
+
+inline void WINAPI WdfDeviceInitFree(WDFDEVICE_INIT* DeviceInit) {
+    delete DeviceInit;
+}
+
+inline void WINAPI WdfDeviceInitSetDeviceType(WDFDEVICE_INIT* DeviceInit, uint32_t DeviceType) {
+    (void)DeviceInit; (void)DeviceType;
+}
+
+inline void WINAPI WdfDeviceInitSetIoType(WDFDEVICE_INIT* DeviceInit, uint32_t IoType) {
+    (void)DeviceInit; (void)IoType;
+}
+
+inline void WINAPI WdfDeviceInitSetPnpPowerEventCallbacks(
+    WDFDEVICE_INIT* DeviceInit,
+    PWDF_PNPPOWER_EVENT_CALLBACKS Callbacks
+) {
+    if (DeviceInit && Callbacks) {
+        DeviceInit->PnpPowerCallbacks = *Callbacks;
+    }
+}
+
+inline NTSTATUS WINAPI WdfIoQueueDispatch(
+    WDFQUEUE Queue,
+    WDFREQUEST Request
+) {
+    return TitanWdfEngine::Instance().dispatchRequest(Queue, Request);
+}
+
+inline void WINAPI WdfIoQueueStart(WDFQUEUE Queue) {
+    if (!Queue) return;
+    auto* q = reinterpret_cast<WdfQueueRecord*>(Queue);
+    q->Started = true;
+}
+
+inline void WINAPI WdfIoQueueStop(WDFQUEUE Queue) {
+    if (!Queue) return;
+    auto* q = reinterpret_cast<WdfQueueRecord*>(Queue);
+    q->Started = false;
+}
+
+inline void WINAPI WdfIoQueuePurge(WDFQUEUE Queue) {
+    if (!Queue) return;
+    auto* q = reinterpret_cast<WdfQueueRecord*>(Queue);
+    q->Started = false;
+    while (!q->PendingRequests.empty()) {
+        auto* req = q->PendingRequests.front();
+        q->PendingRequests.pop();
+        WdfRequestComplete(reinterpret_cast<WDFREQUEST>(req), STATUS_CANCELLED);
+    }
+}
+
+inline size_t WINAPI WdfIoQueueGetPendingCount(WDFQUEUE Queue) {
+    if (!Queue) return 0;
+    auto* q = reinterpret_cast<WdfQueueRecord*>(Queue);
+    return q->PendingRequests.size();
+}
+
+inline size_t WINAPI WdfIoQueueGetInFlightCount(WDFQUEUE Queue) {
+    if (!Queue) return 0;
+    auto* q = reinterpret_cast<WdfQueueRecord*>(Queue);
+    return q->InFlightRequests.size();
+}
+
+inline void WINAPI WdfRequestSetParameters(
+    WDFREQUEST Request,
+    WDF_REQUEST_TYPE Type,
+    uint32_t IoControlCode,
+    const void* InputBuffer,
+    size_t InputBufferLength,
+    void* OutputBuffer,
+    size_t OutputBufferLength
+) {
+    if (!Request) return;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    r->Type = Type;
+    r->IoControlCode = IoControlCode;
+    if (InputBuffer && InputBufferLength > 0) {
+        r->InputBuffer.assign(reinterpret_cast<const uint8_t*>(InputBuffer), reinterpret_cast<const uint8_t*>(InputBuffer) + InputBufferLength);
+    }
+    if (OutputBufferLength > 0) {
+        r->OutputBuffer.resize(OutputBufferLength);
+        if (OutputBuffer) {
+            std::memcpy(r->OutputBuffer.data(), OutputBuffer, OutputBufferLength);
+        }
+    }
+}
+
+inline NTSTATUS WINAPI WdfRequestGetStatus(WDFREQUEST Request) {
+    if (!Request) return STATUS_INVALID_PARAMETER;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    return r->CompletionStatus;
+}
+
+inline uint64_t WINAPI WdfRequestGetInformation(WDFREQUEST Request) {
+    if (!Request) return 0;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    return r->Information;
+}
+
+inline void WINAPI WdfRequestSetInformation(WDFREQUEST Request, uint64_t Information) {
+    if (!Request) return;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    r->Information = Information;
+}
+
+inline BOOLEAN WINAPI WdfRequestIsCompleted(WDFREQUEST Request) {
+    if (!Request) return FALSE;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    return r->IsCompleted ? TRUE : FALSE;
+}
+
+inline BOOLEAN WINAPI WdfRequestIsCanceled(WDFREQUEST Request) {
+    if (!Request) return FALSE;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    return r->IsCanceled ? TRUE : FALSE;
+}
+
+inline NTSTATUS WINAPI WdfRequestCancel(WDFREQUEST Request) {
+    if (!Request) return STATUS_INVALID_PARAMETER;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    if (r->IsCompleted) return STATUS_WDF_REQUEST_INVALID_STATE;
+    r->IsCanceled = true;
+    if (r->CancelRoutine) {
+        r->CancelRoutine(Request);
+    }
+    return STATUS_SUCCESS;
+}
+
+inline void WINAPI WdfRequestMarkCancelable(
+    WDFREQUEST Request,
+    std::function<void(WDFREQUEST)> EvtRequestCancel
+) {
+    if (!Request) return;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    r->CancelRoutine = std::move(EvtRequestCancel);
+}
+
+inline NTSTATUS WINAPI WdfRequestUnmarkCancelable(WDFREQUEST Request) {
+    if (!Request) return STATUS_INVALID_PARAMETER;
+    auto* r = reinterpret_cast<WdfRequestRecord*>(Request);
+    if (!r->CancelRoutine) return STATUS_WDF_REQUEST_INVALID_STATE;
+    r->CancelRoutine = nullptr;
+    return STATUS_SUCCESS;
+}
+
+inline BOOLEAN WINAPI WdfRequestSend(
+    WDFREQUEST Request,
+    WDFIOTARGET Target,
+    void* Options
+) {
+    (void)Target; (void)Options;
+    if (!Request) return FALSE;
+    return TRUE;
+}
+
+inline void* WINAPI WdfMemoryGetBuffer(WDFMEMORY Memory, size_t* BufferSize) {
+    if (!Memory) return nullptr;
+    auto* mem = reinterpret_cast<WdfMemoryRecord*>(Memory);
+    if (BufferSize) *BufferSize = mem->Buffer.size();
+    return mem->Buffer.data();
+}
+
+inline NTSTATUS WINAPI WdfMemoryCopyFromBuffer(
+    WDFMEMORY DestinationMemory,
+    size_t DestinationOffset,
+    void* Buffer,
+    size_t NumBytesToCopyFrom
+) {
+    if (!DestinationMemory || !Buffer) return STATUS_INVALID_PARAMETER;
+    auto* mem = reinterpret_cast<WdfMemoryRecord*>(DestinationMemory);
+    if (DestinationOffset + NumBytesToCopyFrom > mem->Buffer.size()) return STATUS_BUFFER_TOO_SMALL;
+    std::memcpy(mem->Buffer.data() + DestinationOffset, Buffer, NumBytesToCopyFrom);
+    return STATUS_SUCCESS;
+}
+
+inline NTSTATUS WINAPI WdfMemoryCopyToBuffer(
+    WDFMEMORY SourceMemory,
+    size_t SourceOffset,
+    void* Buffer,
+    size_t NumBytesToCopyTo
+) {
+    if (!SourceMemory || !Buffer) return STATUS_INVALID_PARAMETER;
+    auto* mem = reinterpret_cast<WdfMemoryRecord*>(SourceMemory);
+    if (SourceOffset + NumBytesToCopyTo > mem->Buffer.size()) return STATUS_BUFFER_TOO_SMALL;
+    std::memcpy(Buffer, mem->Buffer.data() + SourceOffset, NumBytesToCopyTo);
+    return STATUS_SUCCESS;
+}
+
 } // extern "C"
+
+inline WDF_TELEMETRY WdfQueryTelemetry() {
+    return TitanWdfEngine::Instance().getTelemetry();
+}
+
+inline void WdfResetTelemetryForTesting() {
+    TitanWdfEngine::Instance().resetTelemetry();
+}
 
 // ============================================================================
 // 5. DynamicLoader & Service Control Manager Registration
@@ -1084,3 +1367,87 @@ inline void InitializeWdfSubsystemExports() {
 }
 
 } // namespace micant::wdf
+
+namespace micant {
+    using wdf::WDFOBJECT;
+    using wdf::WDFDRIVER;
+    using wdf::WDFDEVICE;
+    using wdf::WDFQUEUE;
+    using wdf::WDFREQUEST;
+    using wdf::WDFMEMORY;
+    using wdf::WDFIOTARGET;
+    using wdf::WDFCONTEXT;
+    using wdf::WDF_OBJECT_ATTRIBUTES;
+    using wdf::PWDF_OBJECT_ATTRIBUTES;
+    using wdf::PCWDF_OBJECT_ATTRIBUTES;
+    using wdf::WDF_DRIVER_CONFIG;
+    using wdf::PWDF_DRIVER_CONFIG;
+    using wdf::PCWDF_DRIVER_CONFIG;
+    using wdf::WDF_IO_QUEUE_CONFIG;
+    using wdf::PWDF_IO_QUEUE_CONFIG;
+    using wdf::PCWDF_IO_QUEUE_CONFIG;
+    using wdf::WDFDEVICE_INIT;
+    using wdf::PWDFDEVICE_INIT;
+    using wdf::WDF_PNPPOWER_EVENT_CALLBACKS;
+    using wdf::PWDF_PNPPOWER_EVENT_CALLBACKS;
+    using wdf::WDF_IO_QUEUE_DISPATCH_TYPE;
+    using wdf::WdfIoQueueDispatchSequential;
+    using wdf::WdfIoQueueDispatchParallel;
+    using wdf::WdfIoQueueDispatchManual;
+    using wdf::WDF_DEVICE_POWER_STATE;
+    using wdf::WdfDevStatePowerD0;
+    using wdf::WdfDevStatePowerD1;
+    using wdf::WdfDevStatePowerD2;
+    using wdf::WdfDevStatePowerD3;
+    using wdf::WDF_DEVICE_PNP_STATE;
+    using wdf::WdfDevStatePnpInit;
+    using wdf::WdfDevStatePnpStarting;
+    using wdf::WdfDevStatePnpStarted;
+    using wdf::WDF_REQUEST_TYPE;
+    using wdf::WdfRequestTypeCreate;
+    using wdf::WdfRequestTypeClose;
+    using wdf::WdfRequestTypeRead;
+    using wdf::WdfRequestTypeWrite;
+    using wdf::WdfRequestTypeDeviceControl;
+    using wdf::WDF_TELEMETRY;
+    using wdf::WdfQueryTelemetry;
+    using wdf::WdfResetTelemetryForTesting;
+    using wdf::WdfDriverCreate;
+    using wdf::WdfDeviceCreate;
+    using wdf::WdfIoQueueCreate;
+    using wdf::WdfRequestCreate;
+    using wdf::WdfRequestComplete;
+    using wdf::WdfRequestCompleteWithInformation;
+    using wdf::WdfRequestRetrieveInputBuffer;
+    using wdf::WdfRequestRetrieveOutputBuffer;
+    using wdf::WdfIoQueueRetrieveNextRequest;
+    using wdf::WdfIoQueueDispatch;
+    using wdf::WdfMemoryCreate;
+    using wdf::WdfObjectGetTypedContextWorker;
+    using wdf::WdfObjectDelete;
+    using wdf::WdfDeviceSetPowerState;
+    using wdf::WdfDeviceGetDefaultQueue;
+    using wdf::WdfControlDeviceInitAllocate;
+    using wdf::WdfDeviceInitFree;
+    using wdf::WdfDeviceInitSetDeviceType;
+    using wdf::WdfDeviceInitSetIoType;
+    using wdf::WdfDeviceInitSetPnpPowerEventCallbacks;
+    using wdf::WdfRequestSend;
+    using wdf::WdfRequestMarkCancelable;
+    using wdf::WdfRequestUnmarkCancelable;
+    using wdf::WdfRequestGetStatus;
+    using wdf::WdfRequestGetInformation;
+    using wdf::WdfRequestSetInformation;
+    using wdf::WdfRequestIsCompleted;
+    using wdf::WdfRequestIsCanceled;
+    using wdf::WdfRequestCancel;
+    using wdf::WdfRequestSetParameters;
+    using wdf::WdfIoQueueStart;
+    using wdf::WdfIoQueueStop;
+    using wdf::WdfIoQueuePurge;
+    using wdf::WdfIoQueueGetPendingCount;
+    using wdf::WdfIoQueueGetInFlightCount;
+    using wdf::WdfMemoryGetBuffer;
+    using wdf::WdfMemoryCopyFromBuffer;
+    using wdf::WdfMemoryCopyToBuffer;
+}
