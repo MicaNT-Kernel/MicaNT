@@ -293,7 +293,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite249")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite250")) {
+        RUN_TEST(Test_Horizon34_NDIS6_NetAdapterCx_Networking_Architecture);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite249") {
         RUN_TEST(Test_Horizon33_WDDM32_Display_Driver_Model_And_Graphics_Subsystem);
         return g_FailedTests;
     }
@@ -1092,6 +1096,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon31_WindowsDriverFramework_KMDF_ObjectTree_PnP_Queues_And_Requests);
     RUN_TEST(Test_Horizon32_StorPort_Nvme_Storage_Architecture_And_Miniport);
     RUN_TEST(Test_Horizon33_WDDM32_Display_Driver_Model_And_Graphics_Subsystem);
+    RUN_TEST(Test_Horizon34_NDIS6_NetAdapterCx_Networking_Architecture);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -340,6 +340,7 @@ public:
         auto nb = std::make_shared<NetBuffer>(payload);
         nbl->firstNetBuffer = nb;
         activeAllocations_++;
+        totalAllocations_++;
         return nbl;
     }
 
@@ -352,6 +353,7 @@ public:
             pool_.push_back(nbl);
         }
         if (activeAllocations_ > 0) activeAllocations_--;
+        totalFreed_++;
     }
 
     [[nodiscard]] size_t getActiveCount() const noexcept {
@@ -368,9 +370,28 @@ public:
         return capacity_;
     }
 
+    [[nodiscard]] size_t getTotalAllocations() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return totalAllocations_;
+    }
+
+    [[nodiscard]] size_t getTotalFreed() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return totalFreed_;
+    }
+
+    void resetForTesting() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        activeAllocations_ = 0;
+        totalAllocations_ = 0;
+        totalFreed_ = 0;
+    }
+
 private:
     size_t capacity_{256};
     size_t activeAllocations_{0};
+    size_t totalAllocations_{0};
+    size_t totalFreed_{0};
     std::vector<std::shared_ptr<NetBufferList>> pool_;
     mutable std::mutex mutex_;
 };
@@ -645,6 +666,29 @@ public:
         return &vfs_[vfId];
     }
 
+    bool releaseVf(uint32_t vfId) {
+        if (vfId >= MAX_VFS) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        vfs_[vfId].allocated = false;
+        return true;
+    }
+
+    bool recordVfTx(uint32_t vfId, uint64_t bytes) {
+        if (vfId >= MAX_VFS) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        vfs_[vfId].txPackets++;
+        vfs_[vfId].txBytes += bytes;
+        return true;
+    }
+
+    bool recordVfRx(uint32_t vfId, uint64_t bytes) {
+        if (vfId >= MAX_VFS) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        vfs_[vfId].rxPackets++;
+        vfs_[vfId].rxBytes += bytes;
+        return true;
+    }
+
     [[nodiscard]] bool isSriovEnabled() const noexcept { return sriovEnabled_; }
     [[nodiscard]] uint32_t getActiveVfCount() const noexcept { return numActiveVfs_; }
 
@@ -733,6 +777,11 @@ public:
 
     void setLinkState(MediaConnectState state) noexcept {
         linkState_ = state;
+        linkStateChangeCount_++;
+    }
+
+    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept {
+        return linkStateChangeCount_;
     }
 
     void registerReceiveHandler(ReceiveCallback callback) override {
@@ -805,6 +854,7 @@ private:
     uint32_t mtu_{DEFAULT_MTU};
     uint64_t speedBps_{10'000'000'000ULL};
     MediaConnectState linkState_{MediaConnectState::Connected};
+    uint32_t linkStateChangeCount_{0};
     mutable std::mutex mutex_;
     AdapterStatistics stats_{};
     ReceiveCallback rxCallback_;
@@ -882,7 +932,24 @@ public:
 
     void setLinkState(MediaConnectState state) noexcept {
         linkState_ = state;
+        linkStateChangeCount_++;
         writeMmio32(REG_STATUS, (state == MediaConnectState::Connected) ? 0x00000003 : 0x00000000);
+    }
+
+    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept {
+        return linkStateChangeCount_;
+    }
+
+    bool resetHardware() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        resetCount_++;
+        writeMmio32(REG_CTRL, 0x04000000); // Master Reset
+        writeMmio32(REG_STATUS, 0x00000003); // Link Restored
+        return true;
+    }
+
+    [[nodiscard]] uint32_t getResetCount() const noexcept {
+        return resetCount_;
     }
 
     void registerReceiveHandler(ReceiveCallback callback) override {
@@ -1133,8 +1200,386 @@ private:
     std::unique_ptr<SriovManager> sriov_;
     OffloadCapabilities offloads_{};
     RssParameters rss_{};
+    uint32_t resetCount_{0};
+    uint32_t linkStateChangeCount_{0};
 };
 
+// ============================================================================
+// 10A. Intel Gigabit / 2.5GbE Ethernet Miniport Adapter (e1000e.sys)
+// ============================================================================
+
+class IntelE1000eAdapter : public INdisAdapter {
+public:
+    static constexpr uint32_t REG_CTRL   = 0x0000;
+    static constexpr uint32_t REG_STATUS = 0x0008;
+    static constexpr uint32_t REG_EECD   = 0x0010;
+    static constexpr uint32_t REG_IMS    = 0x00D0;
+    static constexpr uint32_t REG_IMC    = 0x00D8;
+    static constexpr uint32_t REG_RDBAL  = 0x2800;
+    static constexpr uint32_t REG_RDBAH  = 0x2804;
+    static constexpr uint32_t REG_RDLEN  = 0x2808;
+    static constexpr uint32_t REG_RDH    = 0x2810;
+    static constexpr uint32_t REG_RDT    = 0x2818;
+    static constexpr uint32_t REG_TDBAL  = 0x3800;
+    static constexpr uint32_t REG_TDBAH  = 0x3804;
+    static constexpr uint32_t REG_TDLEN  = 0x3808;
+    static constexpr uint32_t REG_TDH    = 0x3810;
+    static constexpr uint32_t REG_TDT    = 0x3818;
+
+    explicit IntelE1000eAdapter(
+        std::wstring_view name = L"\\Device\\E1000e0",
+        std::wstring_view friendlyName = L"Intel(R) 82574L Gigabit Network Connection",
+        MacAddress mac = MacAddress(0x00, 0x1B, 0x21, 0xAA, 0xBB, 0xCC),
+        pci::PciAddress pciAddr = pci::PciAddress(0, 3, 0)
+    ) : name_(name),
+        friendlyName_(friendlyName),
+        mac_(mac),
+        pciAddr_(pciAddr),
+        mtu_(DEFAULT_MTU),
+        speedBps_(1'000'000'000ULL), // 1 Gbps default
+        linkState_(MediaConnectState::Connected)
+    {
+        mmioRegisters_.resize(128 * 1024 / 4, 0); // 128 KB MMIO
+        writeMmio32(REG_STATUS, 0x8000000A);     // Full Duplex, 1000Mbps, Link Up
+    }
+
+    [[nodiscard]] const std::wstring& getAdapterName() const noexcept override { return name_; }
+    [[nodiscard]] const std::wstring& getFriendlyName() const noexcept override { return friendlyName_; }
+    [[nodiscard]] MacAddress getMacAddress() const noexcept override { return mac_; }
+    [[nodiscard]] uint32_t getMtu() const noexcept override { return mtu_; }
+    [[nodiscard]] uint64_t getSpeedBps() const noexcept override { return speedBps_; }
+    [[nodiscard]] MediaConnectState getLinkState() const noexcept override { return linkState_; }
+    [[nodiscard]] pci::PciAddress getPciAddress() const noexcept { return pciAddr_; }
+
+    [[nodiscard]] AdapterStatistics getStatistics() const noexcept override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return stats_;
+    }
+
+    void setLinkSpeed(uint64_t speedBps) noexcept { speedBps_ = speedBps; }
+    void setMtu(uint32_t mtu) noexcept { mtu_ = std::clamp(mtu, static_cast<uint32_t>(ETH_MIN_LEN), static_cast<uint32_t>(JUMBO_MTU)); }
+
+    void setLinkState(MediaConnectState state) noexcept {
+        linkState_ = state;
+        linkStateChangeCount_++;
+        writeMmio32(REG_STATUS, (state == MediaConnectState::Connected) ? 0x8000000A : 0x00000000);
+    }
+
+    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept { return linkStateChangeCount_; }
+
+    bool resetHardware() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        resetCount_++;
+        writeMmio32(REG_CTRL, 0x04000000); // Master Device Reset
+        writeMmio32(REG_STATUS, 0x8000000A); // Link back up
+        return true;
+    }
+
+    [[nodiscard]] uint32_t getResetCount() const noexcept { return resetCount_; }
+
+    void registerReceiveHandler(ReceiveCallback callback) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rxCallback_ = std::move(callback);
+    }
+
+    [[nodiscard]] uint32_t readMmio32(uint32_t offset) const noexcept {
+        size_t idx = offset / 4;
+        if (idx < mmioRegisters_.size()) return mmioRegisters_[idx];
+        return 0xFFFFFFFF;
+    }
+
+    void writeMmio32(uint32_t offset, uint32_t value) noexcept {
+        size_t idx = offset / 4;
+        if (idx < mmioRegisters_.size()) mmioRegisters_[idx] = value;
+    }
+
+    [[nodiscard]] NtStatus sendPacket(std::span<const uint8_t> frame) override {
+        if (frame.size() < ETH_HLEN) return NtStatus::InvalidParameter;
+        if (linkState_ != MediaConnectState::Connected) return NtStatus::DeviceNotReady;
+        std::lock_guard<std::mutex> lock(mutex_);
+        stats_.txPackets++;
+        stats_.txBytes += frame.size();
+        return NtStatus::Success;
+    }
+
+    void receivePacket(std::span<const uint8_t> frame) {
+        if (frame.size() < ETH_HLEN) return;
+        ReceiveCallback cb;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stats_.rxPackets++;
+            stats_.rxBytes += frame.size();
+            cb = rxCallback_;
+        }
+        if (cb) cb(frame);
+    }
+
+private:
+    std::wstring name_;
+    std::wstring friendlyName_;
+    MacAddress mac_;
+    pci::PciAddress pciAddr_;
+    uint32_t mtu_{DEFAULT_MTU};
+    uint64_t speedBps_{1'000'000'000ULL};
+    MediaConnectState linkState_{MediaConnectState::Connected};
+    uint32_t linkStateChangeCount_{0};
+    uint32_t resetCount_{0};
+    mutable std::mutex mutex_;
+    AdapterStatistics stats_{};
+    ReceiveCallback rxCallback_;
+    std::vector<uint32_t> mmioRegisters_;
+};
+
+// ============================================================================
+// 10B. VirtIO-Net Paravirtualized Network Adapter (virtio_net.sys)
+// ============================================================================
+
+class VirtIoNetAdapter : public INdisAdapter {
+public:
+    explicit VirtIoNetAdapter(
+        std::wstring_view name = L"\\Device\\VirtIoNet0",
+        std::wstring_view friendlyName = L"Red Hat VirtIO Ethernet Adapter",
+        MacAddress mac = MacAddress(0x52, 0x54, 0x00, 0x12, 0x34, 0x56),
+        pci::PciAddress pciAddr = pci::PciAddress(0, 5, 0)
+    ) : name_(name),
+        friendlyName_(friendlyName),
+        mac_(mac),
+        pciAddr_(pciAddr),
+        mtu_(DEFAULT_MTU),
+        speedBps_(10'000'000'000ULL),
+        linkState_(MediaConnectState::Connected) {}
+
+    [[nodiscard]] const std::wstring& getAdapterName() const noexcept override { return name_; }
+    [[nodiscard]] const std::wstring& getFriendlyName() const noexcept override { return friendlyName_; }
+    [[nodiscard]] MacAddress getMacAddress() const noexcept override { return mac_; }
+    [[nodiscard]] uint32_t getMtu() const noexcept override { return mtu_; }
+    [[nodiscard]] uint64_t getSpeedBps() const noexcept override { return speedBps_; }
+    [[nodiscard]] MediaConnectState getLinkState() const noexcept override { return linkState_; }
+    [[nodiscard]] pci::PciAddress getPciAddress() const noexcept { return pciAddr_; }
+
+    [[nodiscard]] AdapterStatistics getStatistics() const noexcept override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return stats_;
+    }
+
+    void setMtu(uint32_t mtu) noexcept { mtu_ = mtu; }
+    void setLinkState(MediaConnectState state) noexcept {
+        linkState_ = state;
+        linkStateChangeCount_++;
+    }
+    [[nodiscard]] uint32_t getLinkStateChangeCount() const noexcept { return linkStateChangeCount_; }
+
+    void registerReceiveHandler(ReceiveCallback callback) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rxCallback_ = std::move(callback);
+    }
+
+    [[nodiscard]] NtStatus sendPacket(std::span<const uint8_t> frame) override {
+        if (frame.size() < ETH_HLEN) return NtStatus::InvalidParameter;
+        if (linkState_ != MediaConnectState::Connected) return NtStatus::DeviceNotReady;
+        std::lock_guard<std::mutex> lock(mutex_);
+        stats_.txPackets++;
+        stats_.txBytes += frame.size();
+        return NtStatus::Success;
+    }
+
+    void receivePacket(std::span<const uint8_t> frame) {
+        if (frame.size() < ETH_HLEN) return;
+        ReceiveCallback cb;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stats_.rxPackets++;
+            stats_.rxBytes += frame.size();
+            cb = rxCallback_;
+        }
+        if (cb) cb(frame);
+    }
+
+private:
+    std::wstring name_;
+    std::wstring friendlyName_;
+    MacAddress mac_;
+    pci::PciAddress pciAddr_;
+    uint32_t mtu_{DEFAULT_MTU};
+    uint64_t speedBps_{10'000'000'000ULL};
+    MediaConnectState linkState_{MediaConnectState::Connected};
+    uint32_t linkStateChangeCount_{0};
+    mutable std::mutex mutex_;
+    AdapterStatistics stats_{};
+    ReceiveCallback rxCallback_;
+};
+
+// ============================================================================
+// 10C. NetAdapterCx (Network Adapter WDF Class Extension) Definitions
+// ============================================================================
+
+struct NET_FRAGMENT {
+    uint64_t OsReserved1{0};
+    uint64_t OsReserved2{0};
+    uint64_t PhysicalAddress{0};
+    uint32_t Capacity{2048};
+    uint32_t Offset{0};
+    uint32_t ValidLength{0};
+    bool     EndOfPacket{true};
+};
+
+struct NET_PACKET {
+    uint32_t FragmentIndex{0};
+    uint16_t FragmentCount{1};
+    uint16_t LayoutFlags{0};
+    uint32_t Index{0};
+    void*    OsReserved{nullptr};
+};
+
+struct NET_RING_BUFFER {
+    uint32_t ElementSize{0};
+    uint32_t NumberOfElements{256};
+    uint32_t ElementIndexMask{255};
+    uint32_t BeginIndex{0};
+    uint32_t NextIndex{0};
+    uint32_t EndIndex{0};
+    std::vector<NET_PACKET> packets;
+    std::vector<NET_FRAGMENT> fragments;
+
+    explicit NET_RING_BUFFER(uint32_t numElements = 256)
+        : NumberOfElements(numElements), ElementIndexMask(numElements - 1) {
+        packets.resize(numElements);
+        fragments.resize(numElements);
+        for (uint32_t i = 0; i < numElements; ++i) {
+            packets[i].Index = i;
+            packets[i].FragmentIndex = i;
+            packets[i].FragmentCount = 1;
+            fragments[i].Capacity = 2048;
+        }
+    }
+};
+
+class NetTxQueue {
+    uint32_t queueId_{0};
+    std::unique_ptr<NET_RING_BUFFER> ringBuffer_;
+    std::atomic<uint64_t> packetsPosted_{0};
+    std::atomic<uint64_t> packetsCompleted_{0};
+
+public:
+    explicit NetTxQueue(uint32_t queueId, uint32_t ringSize = 256)
+        : queueId_(queueId), ringBuffer_(std::make_unique<NET_RING_BUFFER>(ringSize)) {}
+
+    [[nodiscard]] uint32_t getQueueId() const noexcept { return queueId_; }
+    [[nodiscard]] NET_RING_BUFFER* getRingBuffer() noexcept { return ringBuffer_.get(); }
+    [[nodiscard]] const NET_RING_BUFFER* getRingBuffer() const noexcept { return ringBuffer_.get(); }
+    [[nodiscard]] uint64_t getPacketsPosted() const noexcept { return packetsPosted_.load(); }
+    [[nodiscard]] uint64_t getPacketsCompleted() const noexcept { return packetsCompleted_.load(); }
+
+    void advanceRing(uint32_t count) {
+        packetsPosted_ += count;
+        packetsCompleted_ += count;
+        ringBuffer_->BeginIndex = (ringBuffer_->BeginIndex + count) & ringBuffer_->ElementIndexMask;
+        ringBuffer_->NextIndex = ringBuffer_->BeginIndex;
+        ringBuffer_->EndIndex = (ringBuffer_->EndIndex + count) & ringBuffer_->ElementIndexMask;
+    }
+};
+
+class NetRxQueue {
+    uint32_t queueId_{0};
+    std::unique_ptr<NET_RING_BUFFER> ringBuffer_;
+    std::atomic<uint64_t> packetsReceived_{0};
+
+public:
+    explicit NetRxQueue(uint32_t queueId, uint32_t ringSize = 256)
+        : queueId_(queueId), ringBuffer_(std::make_unique<NET_RING_BUFFER>(ringSize)) {}
+
+    [[nodiscard]] uint32_t getQueueId() const noexcept { return queueId_; }
+    [[nodiscard]] NET_RING_BUFFER* getRingBuffer() noexcept { return ringBuffer_.get(); }
+    [[nodiscard]] const NET_RING_BUFFER* getRingBuffer() const noexcept { return ringBuffer_.get(); }
+    [[nodiscard]] uint64_t getPacketsReceived() const noexcept { return packetsReceived_.load(); }
+
+    void postReceivedPackets(uint32_t count) {
+        packetsReceived_ += count;
+        ringBuffer_->NextIndex = (ringBuffer_->NextIndex + count) & ringBuffer_->ElementIndexMask;
+    }
+};
+
+class NetAdapterContext {
+    uint32_t adapterId_{0};
+    std::wstring name_;
+    MacAddress mac_;
+    uint32_t mtu_{DEFAULT_MTU};
+    uint64_t speedBps_{2'500'000'000ULL}; // 2.5 Gbps default for NetAdapterCx
+    MediaConnectState linkState_{MediaConnectState::Connected};
+    std::vector<std::shared_ptr<NetTxQueue>> txQueues_;
+    std::vector<std::shared_ptr<NetRxQueue>> rxQueues_;
+    mutable std::mutex mutex_;
+
+public:
+    NetAdapterContext(uint32_t id, std::wstring_view name, MacAddress mac)
+        : adapterId_(id), name_(name), mac_(mac) {}
+
+    [[nodiscard]] uint32_t getId() const noexcept { return adapterId_; }
+    [[nodiscard]] const std::wstring& getName() const noexcept { return name_; }
+    [[nodiscard]] MacAddress getMacAddress() const noexcept { return mac_; }
+    [[nodiscard]] uint32_t getMtu() const noexcept { return mtu_; }
+    void setMtu(uint32_t mtu) noexcept { mtu_ = mtu; }
+    [[nodiscard]] uint64_t getSpeedBps() const noexcept { return speedBps_; }
+    void setSpeedBps(uint64_t spd) noexcept { speedBps_ = spd; }
+    [[nodiscard]] MediaConnectState getLinkState() const noexcept { return linkState_; }
+    void setLinkState(MediaConnectState st) noexcept { linkState_ = st; }
+
+    uint32_t createTxQueue(uint32_t ringSize = 256) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        uint32_t qId = static_cast<uint32_t>(txQueues_.size());
+        txQueues_.push_back(std::make_shared<NetTxQueue>(qId, ringSize));
+        return qId;
+    }
+
+    uint32_t createRxQueue(uint32_t ringSize = 256) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        uint32_t qId = static_cast<uint32_t>(rxQueues_.size());
+        rxQueues_.push_back(std::make_shared<NetRxQueue>(qId, ringSize));
+        return qId;
+    }
+
+    std::shared_ptr<NetTxQueue> getTxQueue(uint32_t qId) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (qId < txQueues_.size()) return txQueues_[qId];
+        return nullptr;
+    }
+
+    std::shared_ptr<NetRxQueue> getRxQueue(uint32_t qId) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (qId < rxQueues_.size()) return rxQueues_[qId];
+        return nullptr;
+    }
+
+    [[nodiscard]] size_t getTxQueueCount() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return txQueues_.size();
+    }
+
+    [[nodiscard]] size_t getRxQueueCount() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return rxQueues_.size();
+    }
+};
+
+struct NDIS_TELEMETRY {
+    uint64_t totalAdaptersEnumerated{0};
+    uint64_t totalPacketsTransmitted{0};
+    uint64_t totalBytesTransmitted{0};
+    uint64_t totalPacketsReceived{0};
+    uint64_t totalBytesReceived{0};
+    uint64_t totalLsoSegmentsCreated{0};
+    uint64_t totalRscSegmentsCoalesced{0};
+    uint64_t totalCsumTxOffloaded{0};
+    uint64_t totalCsumRxValidated{0};
+    uint64_t totalNblAllocations{0};
+    uint64_t totalNblFreed{0};
+    uint64_t totalLinkStateChanges{0};
+    uint64_t totalHardwareResets{0};
+    uint64_t totalNetAdapterQueuesCreated{0};
+    uint64_t totalNetPacketsProcessed{0};
+};
+
+// ============================================================================
 // ============================================================================
 // 11. Sovereign TitanNDIS Subsystem (TitanNdisSubsystem)
 // ============================================================================
@@ -1175,12 +1620,41 @@ public:
         );
         adapters_[L"vnet0"] = vnet;
 
+        // 3. Instantiate Intel E1000e Gigabit Ethernet Adapter (00:03.0)
+        auto e1000 = std::make_shared<IntelE1000eAdapter>(
+            L"\\Device\\E1000e0",
+            L"Intel 82574L Gigabit Network Connection",
+            MacAddress(0x00, 0x1B, 0x21, 0xAA, 0xBB, 0xCC),
+            pci::PciAddress(0, 3, 0)
+        );
+        adapters_[L"e1000e0"] = e1000;
+
+        // 4. Instantiate Red Hat VirtIO Ethernet Adapter (00:05.0)
+        auto virtio = std::make_shared<VirtIoNetAdapter>(
+            L"\\Device\\VirtIoNet0",
+            L"Red Hat VirtIO Ethernet Adapter",
+            MacAddress(0x52, 0x54, 0x00, 0x12, 0x34, 0x56),
+            pci::PciAddress(0, 5, 0)
+        );
+        adapters_[L"virtionet0"] = virtio;
+
+        // 5. Instantiate initial NetAdapterCx Context
+        auto netAdp0 = std::make_shared<NetAdapterContext>(
+            nextNetAdapterId_++,
+            L"\\Device\\NetAdapter0",
+            MacAddress(0x00, 0xE0, 0x4C, 0x11, 0x22, 0x33)
+        );
+        netAdp0->createTxQueue(256);
+        netAdp0->createRxQueue(256);
+        netAdapters_[L"netadapter0"] = netAdp0;
+
         initialized_ = true;
     }
 
     void shutdown() {
         std::lock_guard<std::mutex> lock(mutex_);
         adapters_.clear();
+        netAdapters_.clear();
         primaryAdapter_.reset();
         nblPool_.reset();
         initialized_ = false;
@@ -1236,8 +1710,125 @@ public:
         if (!primaryAdapter_) primaryAdapter_ = adapter;
     }
 
+    // NetAdapterCx context management
+    std::shared_ptr<NetAdapterContext> createNetAdapter(
+        std::wstring_view name,
+        MacAddress mac = MacAddress(0x00, 0xE0, 0x4C, 0x11, 0x22, 0x33)
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto adp = std::make_shared<NetAdapterContext>(nextNetAdapterId_++, name, mac);
+        netAdapters_[std::wstring(name)] = adp;
+        return adp;
+    }
+
+    [[nodiscard]] std::shared_ptr<NetAdapterContext> getNetAdapter(std::wstring_view name) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = netAdapters_.find(std::wstring(name));
+        if (it != netAdapters_.end()) return it->second;
+        return nullptr;
+    }
+
+    [[nodiscard]] std::shared_ptr<NetAdapterContext> getNetAdapterById(uint32_t id) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [name, adp] : netAdapters_) {
+            if (adp && adp->getId() == id) return adp;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] size_t getNetAdapterCount() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return netAdapters_.size();
+    }
+
+    [[nodiscard]] std::vector<std::shared_ptr<NetAdapterContext>> getAllNetAdapters() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<std::shared_ptr<NetAdapterContext>> list;
+        list.reserve(netAdapters_.size());
+        for (const auto& [name, adp] : netAdapters_) {
+            list.push_back(adp);
+        }
+        return list;
+    }
+
     [[nodiscard]] NetBufferListPool* getNblPool() const noexcept {
         return nblPool_.get();
+    }
+
+    void recordLsoSegments(uint64_t count) noexcept { totalLsoSegments_ += count; }
+    void recordRscSegments(uint64_t count) noexcept { totalRscSegments_ += count; }
+    void recordCsumTx(uint64_t count) noexcept { totalCsumTx_ += count; }
+    void recordCsumRx(uint64_t count) noexcept { totalCsumRx_ += count; }
+
+    [[nodiscard]] NDIS_TELEMETRY getTelemetry() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        NDIS_TELEMETRY telem{};
+        telem.totalAdaptersEnumerated = adapters_.size() + netAdapters_.size();
+        for (const auto& [name, adp] : adapters_) {
+            if (adp) {
+                auto stats = adp->getStatistics();
+                telem.totalPacketsTransmitted += stats.txPackets;
+                telem.totalBytesTransmitted += stats.txBytes;
+                telem.totalPacketsReceived += stats.rxPackets;
+                telem.totalBytesReceived += stats.rxBytes;
+
+                auto razzle = std::dynamic_pointer_cast<RazzleNetAdapter>(adp);
+                if (razzle) {
+                    telem.totalLinkStateChanges += razzle->getLinkStateChangeCount();
+                    telem.totalHardwareResets += razzle->getResetCount();
+                    telem.totalLsoSegmentsCreated += razzle->getStatistics().lsoPackets;
+                    telem.totalCsumTxOffloaded += razzle->getStatistics().csumOffloadTx;
+                    telem.totalCsumRxValidated += razzle->getStatistics().csumOffloadRx;
+                }
+                auto vnet = std::dynamic_pointer_cast<VirtualNetworkAdapter>(adp);
+                if (vnet) {
+                    telem.totalLinkStateChanges += vnet->getLinkStateChangeCount();
+                }
+                auto virtio = std::dynamic_pointer_cast<VirtIoNetAdapter>(adp);
+                if (virtio) {
+                    telem.totalLinkStateChanges += virtio->getLinkStateChangeCount();
+                }
+                auto e1000 = std::dynamic_pointer_cast<IntelE1000eAdapter>(adp);
+                if (e1000) {
+                    telem.totalLinkStateChanges += e1000->getLinkStateChangeCount();
+                }
+            }
+        }
+        telem.totalLsoSegmentsCreated += totalLsoSegments_.load();
+        telem.totalRscSegmentsCoalesced += totalRscSegments_.load();
+        telem.totalCsumTxOffloaded += totalCsumTx_.load();
+        telem.totalCsumRxValidated += totalCsumRx_.load();
+        if (nblPool_) {
+            telem.totalNblAllocations = nblPool_->getTotalAllocations();
+            telem.totalNblFreed = nblPool_->getTotalFreed();
+        }
+        for (const auto& [name, adp] : netAdapters_) {
+            if (adp) {
+                telem.totalNetAdapterQueuesCreated += (adp->getTxQueueCount() + adp->getRxQueueCount());
+                for (size_t i = 0; i < adp->getTxQueueCount(); ++i) {
+                    auto q = adp->getTxQueue(static_cast<uint32_t>(i));
+                    if (q) telem.totalNetPacketsProcessed += q->getPacketsPosted();
+                }
+                for (size_t i = 0; i < adp->getRxQueueCount(); ++i) {
+                    auto q = adp->getRxQueue(static_cast<uint32_t>(i));
+                    if (q) telem.totalNetPacketsProcessed += q->getPacketsReceived();
+                }
+            }
+        }
+        return telem;
+    }
+
+    void resetTelemetry() noexcept {
+        totalLsoSegments_ = 0;
+        totalRscSegments_ = 0;
+        totalCsumTx_ = 0;
+        totalCsumRx_ = 0;
+    }
+
+    void resetForTesting() {
+        shutdown();
+        initialize();
+        resetTelemetry();
     }
 
 private:
@@ -1250,7 +1841,13 @@ private:
     mutable std::mutex mutex_;
     std::shared_ptr<INdisAdapter> primaryAdapter_;
     std::map<std::wstring, std::shared_ptr<INdisAdapter>> adapters_;
+    std::map<std::wstring, std::shared_ptr<NetAdapterContext>> netAdapters_;
+    uint32_t nextNetAdapterId_{0};
     std::unique_ptr<NetBufferListPool> nblPool_;
+    std::atomic<uint64_t> totalLsoSegments_{0};
+    std::atomic<uint64_t> totalRscSegments_{0};
+    std::atomic<uint64_t> totalCsumTx_{0};
+    std::atomic<uint64_t> totalCsumRx_{0};
 };
 
 // ============================================================================
@@ -1278,7 +1875,7 @@ inline std::vector<uint8_t> buildEthernetFrame(
 }
 
 // ============================================================================
-// 13. NDIS & RazzleNet C ABI Export Thunks (ndis.sys / razzlenet.sys)
+// 13. NDIS & RazzleNet C ABI Export Thunks (ndis.sys / razzlenet.sys / netadaptercx.sys / e1000e.sys)
 // ============================================================================
 
 #define NDIS_EXPORT
@@ -1394,6 +1991,19 @@ inline int32_t WINAPI NdisQueryAdapterInformation(
     return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
 }
 
+inline int32_t WINAPI NdisMResetMiniport(void* /*miniportAdapterHandle*/) {
+    auto& ndis = TitanNdisSubsystem::Instance();
+    if (!ndis.isInitialized()) ndis.initialize();
+    auto adp = ndis.getPrimaryAdapter();
+    if (adp) {
+        auto razzle = std::dynamic_pointer_cast<RazzleNetAdapter>(adp);
+        if (razzle) {
+            razzle->resetHardware();
+        }
+    }
+    return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+}
+
 inline int32_t WINAPI RazzleNetInitializeMiniport(
     void* /*driverObject*/,
     void* /*registryPath*/
@@ -1420,7 +2030,103 @@ inline int32_t WINAPI RazzleNetTransmitPacket(
                                          : static_cast<int32_t>(NDIS_STATUS_FAILURE);
 }
 
+inline int32_t WINAPI NetAdapterCreate(
+    void* /*adapterInit*/,
+    void* /*objectAttributes*/,
+    void** netAdapterHandle
+) {
+    auto& ndis = TitanNdisSubsystem::Instance();
+    if (!ndis.isInitialized()) ndis.initialize();
+    auto adp = ndis.createNetAdapter(L"NetAdapterWdf" + std::to_wstring(ndis.getNetAdapterCount()));
+    if (netAdapterHandle && adp) {
+        *netAdapterHandle = adp.get();
+        return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+    }
+    return static_cast<int32_t>(NDIS_STATUS_FAILURE);
+}
+
+inline int32_t WINAPI NetAdapterStart(void* adapterHandle) {
+    if (!adapterHandle) return static_cast<int32_t>(NDIS_STATUS_INVALID_PARAMETER);
+    auto* adp = reinterpret_cast<NetAdapterContext*>(adapterHandle);
+    adp->setLinkState(MediaConnectState::Connected);
+    return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+}
+
+inline int32_t WINAPI NetAdapterStop(void* adapterHandle) {
+    if (!adapterHandle) return static_cast<int32_t>(NDIS_STATUS_INVALID_PARAMETER);
+    auto* adp = reinterpret_cast<NetAdapterContext*>(adapterHandle);
+    adp->setLinkState(MediaConnectState::Disconnected);
+    return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+}
+
+inline int32_t WINAPI NetTxQueueCreate(
+    void* netAdapterHandle,
+    void* /*queueConfig*/,
+    void* /*objectAttributes*/,
+    void** txQueueHandle
+) {
+    if (!netAdapterHandle || !txQueueHandle) return static_cast<int32_t>(NDIS_STATUS_INVALID_PARAMETER);
+    auto* adp = reinterpret_cast<NetAdapterContext*>(netAdapterHandle);
+    uint32_t qId = adp->createTxQueue();
+    auto queue = adp->getTxQueue(qId);
+    if (queue) {
+        *txQueueHandle = queue.get();
+        return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+    }
+    return static_cast<int32_t>(NDIS_STATUS_FAILURE);
+}
+
+inline int32_t WINAPI NetRxQueueCreate(
+    void* netAdapterHandle,
+    void* /*queueConfig*/,
+    void* /*objectAttributes*/,
+    void** rxQueueHandle
+) {
+    if (!netAdapterHandle || !rxQueueHandle) return static_cast<int32_t>(NDIS_STATUS_INVALID_PARAMETER);
+    auto* adp = reinterpret_cast<NetAdapterContext*>(netAdapterHandle);
+    uint32_t qId = adp->createRxQueue();
+    auto queue = adp->getRxQueue(qId);
+    if (queue) {
+        *rxQueueHandle = queue.get();
+        return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+    }
+    return static_cast<int32_t>(NDIS_STATUS_FAILURE);
+}
+
+inline void WINAPI NetTxQueueNotifyMoreCompletedPacketsAvailable(void* txQueueHandle) {
+    if (!txQueueHandle) return;
+    auto* q = reinterpret_cast<NetTxQueue*>(txQueueHandle);
+    q->advanceRing(1);
+}
+
+inline void WINAPI NetRxQueueNotifyMoreReceivedPacketsAvailable(void* rxQueueHandle) {
+    if (!rxQueueHandle) return;
+    auto* q = reinterpret_cast<NetRxQueue*>(rxQueueHandle);
+    q->postReceivedPackets(1);
+}
+
+inline int32_t WINAPI E1000eInitializeMiniport(
+    void* /*driverObject*/,
+    void* /*registryPath*/
+) {
+    auto& ndis = TitanNdisSubsystem::Instance();
+    if (!ndis.isInitialized()) ndis.initialize();
+    return static_cast<int32_t>(NDIS_STATUS_SUCCESS);
+}
+
 } // extern "C"
+
+// C++ Telemetry helpers outside extern "C"
+inline NDIS_TELEMETRY NdisQueryTelemetry() {
+    auto& ndis = TitanNdisSubsystem::Instance();
+    if (!ndis.isInitialized()) ndis.initialize();
+    return ndis.getTelemetry();
+}
+
+inline void NdisResetTelemetryForTesting() {
+    auto& ndis = TitanNdisSubsystem::Instance();
+    ndis.resetTelemetry();
+}
 
 // ============================================================================
 // 14. Subsystem Initialization & Registration
@@ -1442,9 +2148,20 @@ inline void InitializeNdisSubsystem() {
     ldr.registerExport("ndis.sys", "NdisMIndicateReceiveNetBufferLists", reinterpret_cast<void*>(NdisMIndicateReceiveNetBufferLists));
     ldr.registerExport("ndis.sys", "NdisMSendNetBufferListsComplete", reinterpret_cast<void*>(NdisMSendNetBufferListsComplete));
     ldr.registerExport("ndis.sys", "NdisQueryAdapterInformation", reinterpret_cast<void*>(NdisQueryAdapterInformation));
+    ldr.registerExport("ndis.sys", "NdisMResetMiniport", reinterpret_cast<void*>(NdisMResetMiniport));
 
     ldr.registerExport("razzlenet.sys", "RazzleNetInitializeMiniport", reinterpret_cast<void*>(RazzleNetInitializeMiniport));
     ldr.registerExport("razzlenet.sys", "RazzleNetTransmitPacket", reinterpret_cast<void*>(RazzleNetTransmitPacket));
+
+    ldr.registerExport("netadaptercx.sys", "NetAdapterCreate", reinterpret_cast<void*>(NetAdapterCreate));
+    ldr.registerExport("netadaptercx.sys", "NetAdapterStart", reinterpret_cast<void*>(NetAdapterStart));
+    ldr.registerExport("netadaptercx.sys", "NetAdapterStop", reinterpret_cast<void*>(NetAdapterStop));
+    ldr.registerExport("netadaptercx.sys", "NetTxQueueCreate", reinterpret_cast<void*>(NetTxQueueCreate));
+    ldr.registerExport("netadaptercx.sys", "NetRxQueueCreate", reinterpret_cast<void*>(NetRxQueueCreate));
+    ldr.registerExport("netadaptercx.sys", "NetTxQueueNotifyMoreCompletedPacketsAvailable", reinterpret_cast<void*>(NetTxQueueNotifyMoreCompletedPacketsAvailable));
+    ldr.registerExport("netadaptercx.sys", "NetRxQueueNotifyMoreReceivedPacketsAvailable", reinterpret_cast<void*>(NetRxQueueNotifyMoreReceivedPacketsAvailable));
+
+    ldr.registerExport("e1000e.sys", "E1000eInitializeMiniport", reinterpret_cast<void*>(E1000eInitializeMiniport));
 
     // 3. Register Core Network Drivers in SCM
     auto ndisSvc = std::make_shared<scm::ServiceRecord>();
@@ -1467,10 +2184,51 @@ inline void InitializeNdisSubsystem() {
     razzleSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
     scm::ServiceControlManager::get().registerServiceRecord(razzleSvc);
 
+    auto netadapterSvc = std::make_shared<scm::ServiceRecord>();
+    netadapterSvc->serviceName = L"netadaptercx";
+    netadapterSvc->displayName = L"Network Adapter WDF Class Extension (NetAdapterCx)";
+    netadapterSvc->serviceType = scm::SERVICE_KERNEL_DRIVER;
+    netadapterSvc->startType = scm::SERVICE_BOOT_START;
+    netadapterSvc->errorControl = scm::SERVICE_ERROR_NORMAL;
+    netadapterSvc->binaryPath = L"C:\\Windows\\System32\\drivers\\netadaptercx.sys";
+    netadapterSvc->status.dwCurrentState = scm::SERVICE_RUNNING;
+    scm::ServiceControlManager::get().registerServiceRecord(netadapterSvc);
+
+    auto e1000Svc = std::make_shared<scm::ServiceRecord>();
+    e1000Svc->serviceName = L"e1000e";
+    e1000Svc->displayName = L"Intel PRO/1000 Gigabit PCIe Network Driver";
+    e1000Svc->serviceType = scm::SERVICE_KERNEL_DRIVER;
+    e1000Svc->startType = scm::SERVICE_DEMAND_START;
+    e1000Svc->errorControl = scm::SERVICE_ERROR_NORMAL;
+    e1000Svc->binaryPath = L"C:\\Windows\\System32\\drivers\\e1000e.sys";
+    e1000Svc->status.dwCurrentState = scm::SERVICE_RUNNING;
+    scm::ServiceControlManager::get().registerServiceRecord(e1000Svc);
+
     // 4. Register Version Database Information
     auto& verDb = version::VersionDatabase::Instance();
     verDb.RegisterModule("ndis.sys", "10.0.22621.1", "MicaNT NDIS 6.88 Subsystem Driver");
     verDb.RegisterModule("razzlenet.sys", "10.0.22621.1", "MicaNT RazzleNet 10GbE/100GbE PCIe Miniport Driver");
+    verDb.RegisterModule("netadaptercx.sys", "10.0.22621.1", "MicaNT NetAdapter WDF Class Extension");
+    verDb.RegisterModule("e1000e.sys", "10.0.22621.1", "MicaNT Intel Gigabit PCIe Miniport Driver");
 }
 
 } // namespace micant::ndis
+
+namespace micant {
+using ndis::TitanNdisSubsystem;
+using ndis::INdisAdapter;
+using ndis::VirtualNetworkAdapter;
+using ndis::RazzleNetAdapter;
+using ndis::IntelE1000eAdapter;
+using ndis::VirtIoNetAdapter;
+using ndis::NetAdapterContext;
+using ndis::NetTxQueue;
+using ndis::NetRxQueue;
+using ndis::NET_RING_BUFFER;
+using ndis::NET_PACKET;
+using ndis::NET_FRAGMENT;
+using ndis::NDIS_TELEMETRY;
+using ndis::NdisQueryTelemetry;
+using ndis::NdisResetTelemetryForTesting;
+using ndis::InitializeNdisSubsystem;
+} // namespace micant

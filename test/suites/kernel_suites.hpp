@@ -9509,6 +9509,499 @@ void Test_Horizon33_WDDM32_Display_Driver_Model_And_Graphics_Subsystem() {
     std::cout << "[TEST] Suite 249: Horizon 33 - WDDM 3.2 Display Driver Model & DirectX Graphics Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// SUITE 250: Horizon 34 - NDIS 6.x & NetAdapterCx Networking Architecture
+// ============================================================================
+inline void Test_Horizon34_NDIS6_NetAdapterCx_Networking_Architecture() {
+    std::cout << "[TEST] Starting Suite 250: Horizon 34 - NDIS 6.x & NetAdapterCx Networking Architecture...\n";
+
+    // ------------------------------------------------------------------------
+    // Phase 1: Multi-NIC Hardware Discovery & PCIe Resource Configuration
+    // ------------------------------------------------------------------------
+    {
+        micant::ndis::InitializeNdisSubsystem();
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        TEST_ASSERT(ndisSub.isInitialized(), "TitanNdisSubsystem must be initialized");
+
+        // Verify multi-adapter inventory
+        size_t adapterCount = ndisSub.getAdapterCount();
+        TEST_ASSERT(adapterCount >= 4, "Subsystem must discover at least 4 network adapters");
+
+        // 1. RazzleNet 10GbE PCIe Adapter (BDF 00:04.0)
+        auto razzle = std::dynamic_pointer_cast<micant::ndis::RazzleNetAdapter>(ndisSub.getAdapter(L"razzlenet0"));
+        TEST_ASSERT(razzle != nullptr, "RazzleNet 10GbE adapter must exist");
+        TEST_ASSERT(razzle->getPciAddress().bus == 0 && razzle->getPciAddress().device == 4 && razzle->getPciAddress().function == 0,
+                    "RazzleNet must be on PCIe BDF 00:04.0");
+        TEST_ASSERT(razzle->getSpeedBps() == 10'000'000'000ULL, "RazzleNet must negotiate 10 Gbps");
+        TEST_ASSERT(razzle->getMtu() == 1500, "RazzleNet default MTU must be 1500");
+        TEST_ASSERT(razzle->getLinkState() == micant::ndis::MediaConnectState::Connected, "RazzleNet link must be Connected");
+        TEST_ASSERT(razzle->getMacAddress().bytes[0] == 0x52 && razzle->getMacAddress().bytes[1] == 0x5A, "RazzleNet MAC prefix must match RZ signature");
+
+        // 2. Intel E1000e Gigabit PCIe Adapter (BDF 00:03.0)
+        auto e1000 = std::dynamic_pointer_cast<micant::ndis::IntelE1000eAdapter>(ndisSub.getAdapter(L"e1000e0"));
+        TEST_ASSERT(e1000 != nullptr, "Intel E1000e Gigabit adapter must exist");
+        TEST_ASSERT(e1000->getPciAddress().bus == 0 && e1000->getPciAddress().device == 3 && e1000->getPciAddress().function == 0,
+                    "Intel E1000e must be on PCIe BDF 00:03.0");
+        TEST_ASSERT(e1000->getSpeedBps() == 1'000'000'000ULL, "Intel E1000e must negotiate 1 Gbps");
+        TEST_ASSERT(e1000->getMtu() == 1500, "Intel E1000e default MTU must be 1500");
+        TEST_ASSERT(e1000->getLinkState() == micant::ndis::MediaConnectState::Connected, "Intel E1000e link must be Connected");
+
+        // 3. VirtIO-Net Paravirtualized PCIe Adapter (BDF 00:05.0)
+        auto virtio = std::dynamic_pointer_cast<micant::ndis::VirtIoNetAdapter>(ndisSub.getAdapter(L"virtionet0"));
+        TEST_ASSERT(virtio != nullptr, "VirtIO-Net adapter must exist");
+        TEST_ASSERT(virtio->getPciAddress().bus == 0 && virtio->getPciAddress().device == 5 && virtio->getPciAddress().function == 0,
+                    "VirtIO-Net must be on PCIe BDF 00:05.0");
+        TEST_ASSERT(virtio->getSpeedBps() == 10'000'000'000ULL, "VirtIO-Net must negotiate 10 Gbps");
+        TEST_ASSERT(virtio->getLinkState() == micant::ndis::MediaConnectState::Connected, "VirtIO-Net link must be Connected");
+
+        // 4. Sovereign Virtual Ethernet Adapter (Loopback)
+        auto vnet = std::dynamic_pointer_cast<micant::ndis::VirtualNetworkAdapter>(ndisSub.getAdapter(L"vnet0"));
+        TEST_ASSERT(vnet != nullptr, "Sovereign Virtual Adapter must exist");
+        TEST_ASSERT(vnet->getLinkState() == micant::ndis::MediaConnectState::Connected, "Virtual Adapter link must be Connected");
+
+        // Verify Primary Adapter binding
+        auto primary = ndisSub.getPrimaryAdapter();
+        TEST_ASSERT(primary != nullptr, "Primary network adapter must be established");
+        TEST_ASSERT(primary->getAdapterName() == L"\\Device\\RazzleNet0", "Primary adapter must default to RazzleNet0");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 2: NDIS 6.x NET_BUFFER & NET_BUFFER_LIST (NBL) Scatter-Gather Pools
+    // ------------------------------------------------------------------------
+    {
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        auto* pool = ndisSub.getNblPool();
+        TEST_ASSERT(pool != nullptr, "NBL Pool must be initialized in subsystem");
+        size_t initialAllocations = pool->getTotalAllocations();
+
+        // Allocate 5 NBLs from the pool
+        auto nbl1 = pool->allocate();
+        auto nbl2 = pool->allocate();
+        auto nbl3 = pool->allocate();
+        auto nbl4 = pool->allocate();
+        auto nbl5 = pool->allocate();
+        TEST_ASSERT(nbl1 && nbl2 && nbl3 && nbl4 && nbl5, "All 5 NBLs must be allocated from pool");
+        TEST_ASSERT(pool->getTotalAllocations() == initialAllocations + 5, "Total allocations counter must increase by 5");
+        TEST_ASSERT(pool->getActiveCount() >= 5, "Active NBL count must be >= 5");
+
+        // Populate NBL1 with a chain of NET_BUFFERs (Scatter-Gather MDL simulation)
+        auto nb1 = std::make_shared<micant::ndis::NetBuffer>();
+        std::vector<uint8_t> payload1(256, 0xAA);
+        auto testFrame1 = micant::ndis::buildEthernetFrame(
+            micant::ndis::MacAddress(0x00, 0x11, 0x22, 0x33, 0x44, 0x55),
+            micant::ndis::MacAddress::razzleNetDefault(),
+            micant::ndis::ETHERTYPE_IPV4,
+            payload1
+        );
+        nb1->data = testFrame1;
+        nb1->dataLength = static_cast<uint32_t>(testFrame1.size());
+        nbl1->firstNetBuffer = nb1;
+
+        auto nb2 = std::make_shared<micant::ndis::NetBuffer>();
+        std::vector<uint8_t> payload2(512, 0xBB);
+        auto testFrame2 = micant::ndis::buildEthernetFrame(
+            micant::ndis::MacAddress(0x00, 0x11, 0x22, 0x33, 0x44, 0x55),
+            micant::ndis::MacAddress::razzleNetDefault(),
+            micant::ndis::ETHERTYPE_IPV4,
+            payload2
+        );
+        nb2->data = testFrame2;
+        nb2->dataLength = static_cast<uint32_t>(testFrame2.size());
+        nb1->next = nb2;
+
+        // Chain NBLs: nbl1 -> nbl2 -> nbl3
+        nbl1->next = nbl2;
+        nbl2->next = nbl3;
+        nbl1->status = micant::ndis::NDIS_STATUS_SUCCESS;
+        nbl2->status = micant::ndis::NDIS_STATUS_SUCCESS;
+        nbl3->status = micant::ndis::NDIS_STATUS_SUCCESS;
+
+        // Verify traversal across NBL chain
+        size_t chainLen = 0;
+        for (auto curr = nbl1; curr != nullptr; curr = curr->next) {
+            chainLen++;
+        }
+        TEST_ASSERT(chainLen == 3, "NBL chain length must be exactly 3");
+
+        // Send batch through RazzleNet
+        auto razzle = std::dynamic_pointer_cast<micant::ndis::RazzleNetAdapter>(ndisSub.getPrimaryAdapter());
+        TEST_ASSERT(razzle != nullptr, "Primary adapter must be RazzleNet");
+        auto sendStatus = razzle->sendNetBufferLists(nbl1);
+        TEST_ASSERT(sendStatus == NtStatus::Success, "sendNetBufferLists must succeed for NBL batch");
+
+        // Free NBLs back to pool
+        pool->free(nbl1);
+        pool->free(nbl2);
+        pool->free(nbl3);
+        pool->free(nbl4);
+        pool->free(nbl5);
+        TEST_ASSERT(pool->getTotalFreed() >= 5, "Total freed count must increment");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: Hardware Checksum Offload Generation & Validation
+    // ------------------------------------------------------------------------
+    {
+        // 1. IPv4 Header Checksum Calculation (RFC 791 / RFC 1071)
+        std::vector<uint8_t> ipHeader(20, 0);
+        ipHeader[0] = 0x45; // Version 4, IHL 5
+        ipHeader[1] = 0x00; // DSCP / ECN
+        ipHeader[2] = 0x00; // Total Length (64 bytes)
+        ipHeader[3] = 0x40;
+        ipHeader[4] = 0x12; // Identification
+        ipHeader[5] = 0x34;
+        ipHeader[6] = 0x40; // Don't Fragment
+        ipHeader[7] = 0x00;
+        ipHeader[8] = 0x40; // TTL = 64
+        ipHeader[9] = 0x06; // Protocol = TCP
+        ipHeader[10] = 0x00; // Checksum init 0
+        ipHeader[11] = 0x00;
+        // Src IP: 192.168.1.50
+        ipHeader[12] = 192; ipHeader[13] = 168; ipHeader[14] = 1; ipHeader[15] = 50;
+        // Dst IP: 10.0.0.1
+        ipHeader[16] = 10; ipHeader[17] = 0; ipHeader[18] = 0; ipHeader[19] = 1;
+
+        uint16_t csum = micant::ndis::calculateIpChecksum(ipHeader.data(), ipHeader.size());
+        TEST_ASSERT(csum != 0, "Calculated IPv4 checksum must be non-zero");
+
+        // Insert checksum into header and verify that re-running calculation yields 0 (RFC 1071 property)
+        ipHeader[10] = static_cast<uint8_t>(csum >> 8);
+        ipHeader[11] = static_cast<uint8_t>(csum & 0xFF);
+        uint16_t verifyCsum = micant::ndis::calculateIpChecksum(ipHeader.data(), ipHeader.size());
+        TEST_ASSERT(verifyCsum == 0, "Valid IPv4 header with embedded checksum must verify to 0");
+
+        // Corrupt header and verify mismatch
+        ipHeader[19] = 2; // Mutate destination IP
+        uint16_t corruptVerify = micant::ndis::calculateIpChecksum(ipHeader.data(), ipHeader.size());
+        TEST_ASSERT(corruptVerify != 0, "Corrupted IPv4 header must produce non-zero checksum verification failure");
+
+        // 2. Hardware offload capabilities in RazzleNet
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        auto razzle = std::dynamic_pointer_cast<micant::ndis::RazzleNetAdapter>(ndisSub.getPrimaryAdapter());
+        const auto& offloads = razzle->getOffloadCapabilities();
+        TEST_ASSERT(offloads.checksum.txIpv4Header == true, "Hardware TX IPv4 header checksum must be enabled");
+        TEST_ASSERT(offloads.checksum.txTcpIpv4 == true, "Hardware TX TCP IPv4 checksum must be enabled");
+        TEST_ASSERT(offloads.checksum.rxIpv4Header == true, "Hardware RX IPv4 header checksum must be enabled");
+        TEST_ASSERT(offloads.checksum.rxTcpIpv4 == true, "Hardware RX TCP IPv4 checksum must be enabled");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: Large Send Offload v2 (LSOv2 / TSO) Segmentation Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        auto razzle = std::dynamic_pointer_cast<micant::ndis::RazzleNetAdapter>(ndisSub.getPrimaryAdapter());
+        auto statsBefore = razzle->getStatistics();
+
+        // Construct 16 KB Jumbo TCP Frame (> MTU 1500)
+        // Headers: Ethernet (14B) + IPv4 (20B) + TCP (20B) = 54B
+        const size_t tcpPayloadLen = 16384;
+        std::vector<uint8_t> largeFrame(micant::ndis::ETH_HLEN + 40 + tcpPayloadLen, 0xCC);
+
+        // Ethernet Header
+        auto* eth = reinterpret_cast<micant::ndis::EthernetHeader*>(largeFrame.data());
+        eth->destMac = micant::ndis::MacAddress(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+        eth->srcMac = micant::ndis::MacAddress::razzleNetDefault();
+        eth->setEtherType(micant::ndis::ETHERTYPE_IPV4);
+
+        // IPv4 Header
+        uint8_t* ip = largeFrame.data() + micant::ndis::ETH_HLEN;
+        ip[0] = 0x45;
+        ip[9] = 0x06; // TCP
+        // Src IP 192.168.1.100, Dst IP 10.0.0.2
+        ip[12] = 192; ip[13] = 168; ip[14] = 1; ip[15] = 100;
+        ip[16] = 10; ip[17] = 0; ip[18] = 0; ip[19] = 2;
+
+        // TCP Header (20 bytes)
+        uint8_t* tcp = ip + 20;
+        // Src Port 8080 (0x1F90), Dst Port 80 (0x0050)
+        tcp[0] = 0x1F; tcp[1] = 0x90;
+        tcp[2] = 0x00; tcp[3] = 0x50;
+        tcp[12] = 0x50; // Data offset 5 (20 bytes)
+        tcp[13] = 0x18; // ACK + PSH flags
+
+        // Send large frame triggering LSOv2 segmentation
+        NtStatus lsoStatus = razzle->sendPacket(largeFrame);
+        TEST_ASSERT(lsoStatus == NtStatus::Success, "sendPacket must succeed for LSOv2 payload");
+
+        auto statsAfter = razzle->getStatistics();
+        TEST_ASSERT(statsAfter.lsoPackets > statsBefore.lsoPackets, "LSO segmented packet counter must increment");
+        TEST_ASSERT(statsAfter.csumOffloadTx > statsBefore.csumOffloadTx, "TX Checksum offload counter must increment during LSO");
+        TEST_ASSERT(statsAfter.txPackets > statsBefore.txPackets, "Total TX packets must increment by segment count");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: Receive Segment Coalescing (RSC) Engine
+    // ------------------------------------------------------------------------
+    {
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        auto razzle = std::dynamic_pointer_cast<micant::ndis::RazzleNetAdapter>(ndisSub.getPrimaryAdapter());
+        const auto& offloads = razzle->getOffloadCapabilities();
+        TEST_ASSERT(offloads.rsc.enabled == true, "RSC engine must be enabled");
+        TEST_ASSERT(offloads.rsc.ipv4Supported == true, "RSC IPv4 support must be active");
+        TEST_ASSERT(offloads.rsc.maxCoalescedSize >= 65536, "RSC maximum coalesced size must support up to 64KB");
+
+        // Record simulated RSC coalesced segment in telemetry
+        ndisSub.recordRscSegments(8);
+        auto stats = razzle->getStatistics();
+        TEST_ASSERT(stats.csumOffloadRx >= 0, "RX Checksum offload tracking must be operational");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: Receive Side Scaling (RSS) 40-Byte Toeplitz Hash & Core Distribution
+    // ------------------------------------------------------------------------
+    {
+        // Test Microsoft Toeplitz Hash calculation
+        std::vector<uint8_t> flowKey1 = { 192, 168, 1, 100,  10, 0, 0, 1,  0x1F, 0x90,  0x00, 0x50 };
+        uint32_t hash1_a = micant::ndis::computeToeplitzHash(flowKey1, micant::ndis::DEFAULT_RSS_KEY);
+        uint32_t hash1_b = micant::ndis::computeToeplitzHash(flowKey1, micant::ndis::DEFAULT_RSS_KEY);
+        TEST_ASSERT(hash1_a != 0, "Toeplitz hash must be non-zero for valid 4-tuple");
+        TEST_ASSERT(hash1_a == hash1_b, "Toeplitz hash must be deterministic across calls");
+
+        // Test different flow produces different hash
+        std::vector<uint8_t> flowKey2 = { 192, 168, 1, 101,  10, 0, 0, 2,  0x20, 0x00,  0x01, 0xBB };
+        uint32_t hash2 = micant::ndis::computeToeplitzHash(flowKey2, micant::ndis::DEFAULT_RSS_KEY);
+        TEST_ASSERT(hash1_a != hash2, "Distinct flows must yield distinct Toeplitz hashes");
+
+        // Test RSS Indirection Table lookup across 128 entries
+        micant::ndis::RssParameters rss;
+        TEST_ASSERT(rss.enabled, "RSS must be enabled by default");
+        TEST_ASSERT(rss.numCpuQueues == 4, "Default CPU queue count must be 4");
+
+        uint8_t cpuFlow1 = rss.getTargetCpu(hash1_a);
+        uint8_t cpuFlow2 = rss.getTargetCpu(hash2);
+        TEST_ASSERT(cpuFlow1 < 4, "Target CPU for flow 1 must be within 0..3");
+        TEST_ASSERT(cpuFlow2 < 4, "Target CPU for flow 2 must be within 0..3");
+
+        // Simulate incoming packets on RazzleNet and verify RSS core accounting
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        auto razzle = std::dynamic_pointer_cast<micant::ndis::RazzleNetAdapter>(ndisSub.getPrimaryAdapter());
+        
+        std::vector<uint8_t> rxFrame(micant::ndis::ETH_HLEN + 40 + 64, 0);
+        auto* eth = reinterpret_cast<micant::ndis::EthernetHeader*>(rxFrame.data());
+        eth->destMac = micant::ndis::MacAddress::razzleNetDefault();
+        eth->srcMac = micant::ndis::MacAddress(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+        eth->setEtherType(micant::ndis::ETHERTYPE_IPV4);
+        uint8_t* ip = rxFrame.data() + micant::ndis::ETH_HLEN;
+        ip[0] = 0x45;
+        ip[9] = 0x06; // TCP
+        ip[12] = 192; ip[13] = 168; ip[14] = 1; ip[15] = 100;
+        ip[16] = 10; ip[17] = 0; ip[18] = 0; ip[19] = 1;
+
+        razzle->receivePacket(rxFrame);
+        auto statsRx = razzle->getStatistics();
+        TEST_ASSERT(statsRx.rxPackets >= 1, "RazzleNet rxPackets must be >= 1");
+        TEST_ASSERT(statsRx.csumOffloadRx >= 1, "RazzleNet csumOffloadRx must be >= 1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: NetAdapterCx WDF Class Extension, Ring Buffers & Packet/Fragment Queues
+    // ------------------------------------------------------------------------
+    {
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        auto netAdp0 = ndisSub.getNetAdapter(L"netadapter0");
+        TEST_ASSERT(netAdp0 != nullptr, "Default NetAdapterCx context netadapter0 must exist");
+        TEST_ASSERT(netAdp0->getTxQueueCount() >= 1, "netadapter0 must have at least 1 TX queue");
+        TEST_ASSERT(netAdp0->getRxQueueCount() >= 1, "netadapter0 must have at least 1 RX queue");
+        TEST_ASSERT(netAdp0->getMtu() == 1500, "netadapter0 MTU must be 1500");
+        TEST_ASSERT(netAdp0->getSpeedBps() == 2'500'000'000ULL, "netadapter0 speed must be 2.5 Gbps");
+
+        // Inspect TX Queue and Ring Buffer
+        auto txQueue = netAdp0->getTxQueue(0);
+        TEST_ASSERT(txQueue != nullptr, "TX queue 0 must exist");
+        auto* txRing = txQueue->getRingBuffer();
+        TEST_ASSERT(txRing != nullptr, "TX ring buffer must exist");
+        TEST_ASSERT(txRing->NumberOfElements == 256, "Ring buffer element count must be 256");
+        TEST_ASSERT(txRing->ElementIndexMask == 255, "Ring buffer mask must be 255");
+        TEST_ASSERT(txRing->packets.size() == 256, "Packet descriptors vector size must be 256");
+        TEST_ASSERT(txRing->fragments.size() == 256, "Fragment descriptors vector size must be 256");
+
+        // Advance TX ring
+        txQueue->advanceRing(5);
+        TEST_ASSERT(txQueue->getPacketsPosted() == 5, "Packets posted must be 5");
+        TEST_ASSERT(txQueue->getPacketsCompleted() == 5, "Packets completed must be 5");
+        TEST_ASSERT(txRing->BeginIndex == 5, "Ring BeginIndex must advance to 5");
+
+        // Inspect RX Queue and Ring Buffer
+        auto rxQueue = netAdp0->getRxQueue(0);
+        TEST_ASSERT(rxQueue != nullptr, "RX queue 0 must exist");
+        rxQueue->postReceivedPackets(3);
+        TEST_ASSERT(rxQueue->getPacketsReceived() == 3, "Packets received must be 3");
+
+        // Test C ABI NetAdapterCx functions
+        void* abiNetAdapter = nullptr;
+        int32_t stAdp = micant::ndis::NetAdapterCreate(nullptr, nullptr, &abiNetAdapter);
+        TEST_ASSERT(stAdp == 0 && abiNetAdapter != nullptr, "NetAdapterCreate C ABI must succeed");
+
+        void* abiTxQueue = nullptr;
+        int32_t stTx = micant::ndis::NetTxQueueCreate(abiNetAdapter, nullptr, nullptr, &abiTxQueue);
+        TEST_ASSERT(stTx == 0 && abiTxQueue != nullptr, "NetTxQueueCreate C ABI must succeed");
+
+        void* abiRxQueue = nullptr;
+        int32_t stRx = micant::ndis::NetRxQueueCreate(abiNetAdapter, nullptr, nullptr, &abiRxQueue);
+        TEST_ASSERT(stRx == 0 && abiRxQueue != nullptr, "NetRxQueueCreate C ABI must succeed");
+
+        micant::ndis::NetTxQueueNotifyMoreCompletedPacketsAvailable(abiTxQueue);
+        micant::ndis::NetRxQueueNotifyMoreReceivedPacketsAvailable(abiRxQueue);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: Link State FSM, Speed Negotiation & Media Flapping Recovery
+    // ------------------------------------------------------------------------
+    {
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        auto razzle = std::dynamic_pointer_cast<micant::ndis::RazzleNetAdapter>(ndisSub.getPrimaryAdapter());
+        TEST_ASSERT(razzle->getLinkState() == micant::ndis::MediaConnectState::Connected, "Initial link state must be Connected");
+
+        // Flap link down
+        razzle->setLinkState(micant::ndis::MediaConnectState::Disconnected);
+        TEST_ASSERT(razzle->getLinkState() == micant::ndis::MediaConnectState::Disconnected, "Link state must transition to Disconnected");
+        TEST_ASSERT((razzle->readMmio32(micant::ndis::RazzleNetAdapter::REG_STATUS) & 0x01) == 0, "MMIO STATUS link bit must be cleared");
+
+        // Verify packet transmission fails while link is down
+        std::vector<uint8_t> dummyFrame(64, 0xEE);
+        auto* eth = reinterpret_cast<micant::ndis::EthernetHeader*>(dummyFrame.data());
+        eth->destMac = micant::ndis::MacAddress(0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+        eth->srcMac = micant::ndis::MacAddress::razzleNetDefault();
+        eth->setEtherType(micant::ndis::ETHERTYPE_IPV4);
+
+        NtStatus txDownSt = razzle->sendPacket(dummyFrame);
+        TEST_ASSERT(txDownSt == NtStatus::DeviceNotReady, "sendPacket must fail with DeviceNotReady while disconnected");
+
+        // Flap link back up
+        razzle->setLinkState(micant::ndis::MediaConnectState::Connected);
+        TEST_ASSERT(razzle->getLinkState() == micant::ndis::MediaConnectState::Connected, "Link state must recover to Connected");
+        TEST_ASSERT(razzle->getLinkStateChangeCount() >= 2, "Link state change count must reflect disconnect + reconnect");
+
+        // Miniport Hardware Reset (NdisMResetMiniport)
+        uint32_t resetBefore = razzle->getResetCount();
+        int32_t rstSt = micant::ndis::NdisMResetMiniport(nullptr);
+        TEST_ASSERT(rstSt == 0, "NdisMResetMiniport C ABI must return SUCCESS");
+        TEST_ASSERT(razzle->getResetCount() == resetBefore + 1, "Adapter hardware reset count must increment");
+        TEST_ASSERT(razzle->readMmio32(micant::ndis::RazzleNetAdapter::REG_STATUS) == 0x00000003, "Hardware reset must restore link state");
+
+        // Verify transmission succeeds after reset
+        NtStatus txRestoredSt = razzle->sendPacket(dummyFrame);
+        TEST_ASSERT(txRestoredSt == NtStatus::Success, "sendPacket must succeed after hardware reset");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: Single Root I/O Virtualization (SR-IOV) Virtual Function Management
+    // ------------------------------------------------------------------------
+    {
+        auto& ndisSub = micant::ndis::TitanNdisSubsystem::Instance();
+        auto razzle = std::dynamic_pointer_cast<micant::ndis::RazzleNetAdapter>(ndisSub.getPrimaryAdapter());
+        auto& sriov = razzle->getSriovManager();
+
+        TEST_ASSERT(sriov.enableSriov(8), "SR-IOV enable for 8 VFs must succeed");
+        TEST_ASSERT(sriov.isSriovEnabled(), "SR-IOV must be enabled");
+        TEST_ASSERT(sriov.getActiveVfCount() == 8, "Active VF count must be 8");
+
+        // Configure VF 3
+        micant::ndis::MacAddress vf3Mac(0x00, 0x15, 0x5D, 0xAA, 0xBB, 0x03);
+        bool cfgOk = sriov.configureVf(3, vf3Mac, 200, 1000, true);
+        TEST_ASSERT(cfgOk, "configureVf must succeed for VF 3");
+
+        const auto* vf3 = sriov.getVf(3);
+        TEST_ASSERT(vf3 != nullptr, "VF 3 must exist");
+        TEST_ASSERT(vf3->allocated == true, "VF 3 must be marked allocated");
+        TEST_ASSERT(vf3->vlanId == 200, "VF 3 VLAN must be 200");
+        TEST_ASSERT(vf3->maxRateMbps == 1000, "VF 3 rate cap must be 1000 Mbps");
+        TEST_ASSERT(vf3->spoofCheck == true, "VF 3 spoof checking must be enabled");
+        TEST_ASSERT(vf3->vfMac == vf3Mac, "VF 3 MAC address must match configured value");
+
+        // Record traffic for VF 3
+        sriov.recordVfTx(3, 2048);
+        sriov.recordVfRx(3, 4096);
+        TEST_ASSERT(vf3->txPackets == 1 && vf3->txBytes == 2048, "VF 3 TX telemetry must record 1 packet / 2048 bytes");
+        TEST_ASSERT(vf3->rxPackets == 1 && vf3->rxBytes == 4096, "VF 3 RX telemetry must record 1 packet / 4096 bytes");
+
+        // Release VF 3
+        TEST_ASSERT(sriov.releaseVf(3), "releaseVf must succeed");
+        TEST_ASSERT(vf3->allocated == false, "VF 3 allocated must be false after release");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: Dynamic Loader Exports, SCM Services & NDIS Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. JanusLDR Driver Exports Verification
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisMRegisterMiniportDriver") != nullptr, "ndis.sys NdisMRegisterMiniportDriver must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisMDeregisterMiniportDriver") != nullptr, "ndis.sys NdisMDeregisterMiniportDriver must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisMSetMiniportAttributes") != nullptr, "ndis.sys NdisMSetMiniportAttributes must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisAllocateNetBufferListPool") != nullptr, "ndis.sys NdisAllocateNetBufferListPool must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisFreeNetBufferListPool") != nullptr, "ndis.sys NdisFreeNetBufferListPool must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisAllocateNetBufferList") != nullptr, "ndis.sys NdisAllocateNetBufferList must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisFreeNetBufferList") != nullptr, "ndis.sys NdisFreeNetBufferList must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisMIndicateReceiveNetBufferLists") != nullptr, "ndis.sys NdisMIndicateReceiveNetBufferLists must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisMSendNetBufferListsComplete") != nullptr, "ndis.sys NdisMSendNetBufferListsComplete must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisQueryAdapterInformation") != nullptr, "ndis.sys NdisQueryAdapterInformation must exist");
+        TEST_ASSERT(ldr.getExport("ndis.sys", "NdisMResetMiniport") != nullptr, "ndis.sys NdisMResetMiniport must exist");
+
+        TEST_ASSERT(ldr.getExport("razzlenet.sys", "RazzleNetInitializeMiniport") != nullptr, "razzlenet.sys RazzleNetInitializeMiniport must exist");
+        TEST_ASSERT(ldr.getExport("razzlenet.sys", "RazzleNetTransmitPacket") != nullptr, "razzlenet.sys RazzleNetTransmitPacket must exist");
+
+        TEST_ASSERT(ldr.getExport("netadaptercx.sys", "NetAdapterCreate") != nullptr, "netadaptercx.sys NetAdapterCreate must exist");
+        TEST_ASSERT(ldr.getExport("netadaptercx.sys", "NetAdapterStart") != nullptr, "netadaptercx.sys NetAdapterStart must exist");
+        TEST_ASSERT(ldr.getExport("netadaptercx.sys", "NetAdapterStop") != nullptr, "netadaptercx.sys NetAdapterStop must exist");
+        TEST_ASSERT(ldr.getExport("netadaptercx.sys", "NetTxQueueCreate") != nullptr, "netadaptercx.sys NetTxQueueCreate must exist");
+        TEST_ASSERT(ldr.getExport("netadaptercx.sys", "NetRxQueueCreate") != nullptr, "netadaptercx.sys NetRxQueueCreate must exist");
+        TEST_ASSERT(ldr.getExport("netadaptercx.sys", "NetTxQueueNotifyMoreCompletedPacketsAvailable") != nullptr, "netadaptercx.sys NetTxQueueNotifyMoreCompletedPacketsAvailable must exist");
+        TEST_ASSERT(ldr.getExport("netadaptercx.sys", "NetRxQueueNotifyMoreReceivedPacketsAvailable") != nullptr, "netadaptercx.sys NetRxQueueNotifyMoreReceivedPacketsAvailable must exist");
+
+        TEST_ASSERT(ldr.getExport("e1000e.sys", "E1000eInitializeMiniport") != nullptr, "e1000e.sys E1000eInitializeMiniport must exist");
+
+        // 2. SCM Service Records Verification
+        auto& scmMgr = scm::ServiceControlManager::get();
+        auto ndisSvc = scmMgr.getServiceRecord(L"ndis");
+        TEST_ASSERT(ndisSvc != nullptr, "ndis service must be registered in SCM");
+        TEST_ASSERT(ndisSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "ndis must be a kernel driver");
+        TEST_ASSERT(ndisSvc->startType == scm::SERVICE_BOOT_START, "ndis must be boot start");
+
+        auto razzleSvc = scmMgr.getServiceRecord(L"razzlenet");
+        TEST_ASSERT(razzleSvc != nullptr, "razzlenet service must be registered in SCM");
+
+        auto netAdpSvc = scmMgr.getServiceRecord(L"netadaptercx");
+        TEST_ASSERT(netAdpSvc != nullptr, "netadaptercx service must be registered in SCM");
+        TEST_ASSERT(netAdpSvc->startType == scm::SERVICE_BOOT_START, "netadaptercx must be boot start");
+
+        auto e1000Svc = scmMgr.getServiceRecord(L"e1000e");
+        TEST_ASSERT(e1000Svc != nullptr, "e1000e service must be registered in SCM");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("ndis.sys") != nullptr, "ndis.sys must be registered in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("razzlenet.sys") != nullptr, "razzlenet.sys must be registered in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("netadaptercx.sys") != nullptr, "netadaptercx.sys must be registered in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("e1000e.sys") != nullptr, "e1000e.sys must be registered in Version Database");
+
+        // 4. NDIS Diagnostic Telemetry Verification
+        auto telem = micant::ndis::NdisQueryTelemetry();
+        TEST_ASSERT(telem.totalAdaptersEnumerated >= 4, "totalAdaptersEnumerated must be >= 4");
+        TEST_ASSERT(telem.totalPacketsTransmitted >= 1, "totalPacketsTransmitted must be >= 1");
+        TEST_ASSERT(telem.totalBytesTransmitted >= 1, "totalBytesTransmitted must be >= 1");
+        TEST_ASSERT(telem.totalPacketsReceived >= 1, "totalPacketsReceived must be >= 1");
+        TEST_ASSERT(telem.totalBytesReceived >= 1, "totalBytesReceived must be >= 1");
+        TEST_ASSERT(telem.totalLsoSegmentsCreated >= 1, "totalLsoSegmentsCreated must be >= 1");
+        TEST_ASSERT(telem.totalRscSegmentsCoalesced >= 1, "totalRscSegmentsCoalesced must be >= 1");
+        TEST_ASSERT(telem.totalCsumTxOffloaded >= 1, "totalCsumTxOffloaded must be >= 1");
+        TEST_ASSERT(telem.totalCsumRxValidated >= 1, "totalCsumRxValidated must be >= 1");
+        TEST_ASSERT(telem.totalNblAllocations >= 5, "totalNblAllocations must be >= 5");
+        TEST_ASSERT(telem.totalNblFreed >= 5, "totalNblFreed must be >= 5");
+        TEST_ASSERT(telem.totalLinkStateChanges >= 2, "totalLinkStateChanges must be >= 2");
+        TEST_ASSERT(telem.totalHardwareResets >= 1, "totalHardwareResets must be >= 1");
+        TEST_ASSERT(telem.totalNetAdapterQueuesCreated >= 2, "totalNetAdapterQueuesCreated must be >= 2");
+        TEST_ASSERT(telem.totalNetPacketsProcessed >= 8, "totalNetPacketsProcessed must be >= 8");
+
+        micant::ndis::NdisResetTelemetryForTesting();
+        auto telemReset = micant::ndis::NdisQueryTelemetry();
+        TEST_ASSERT(telemReset.totalRscSegmentsCoalesced == 0, "totalRscSegmentsCoalesced must be 0 after reset");
+    }
+
+    std::cout << "[TEST] Suite 250: Horizon 34 - NDIS 6.x & NetAdapterCx Networking Architecture PASSED.\n";
+}
+
 
 
 

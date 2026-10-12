@@ -56,6 +56,7 @@
 #include "scm.hpp"
 #include "version.hpp"
 #include "pci.hpp"
+#include "ndis.hpp"
 
 #ifndef WINAPI
 #define WINAPI __stdcall
@@ -555,28 +556,6 @@ inline int32_t WINAPI WdiGetAdapterCapabilities(
     return 0;
 }
 
-inline int32_t WINAPI NetAdapterCreate(void* /*adapterInit*/, void** outAdapterHandle) {
-    auto& wifi = TitanWiFiSubsystem::Instance();
-    if (!wifi.isInitialized()) wifi.initialize();
-
-    if (outAdapterHandle) *outAdapterHandle = reinterpret_cast<void*>(0xDEADBEEF);
-    return 0;
-}
-
-inline int32_t WINAPI NetAdapterStart(void* /*adapterHandle*/) {
-    auto& wifi = TitanWiFiSubsystem::Instance();
-    if (!wifi.isInitialized()) wifi.initialize();
-    wifi.setRadioState(true);
-    return 0;
-}
-
-inline int32_t WINAPI NetAdapterStop(void* /*adapterHandle*/) {
-    auto& wifi = TitanWiFiSubsystem::Instance();
-    if (!wifi.isInitialized()) wifi.initialize();
-    wifi.setRadioState(false);
-    return 0;
-}
-
 inline int32_t WINAPI TitanWiFiInitialize(void) {
     auto& wifi = TitanWiFiSubsystem::Instance();
     if (!wifi.isInitialized()) wifi.initialize();
@@ -611,9 +590,9 @@ inline void InitializeWdiWiFiSubsystem() {
     ldr.registerExport("wdiwifi.sys", "WdiIndicateTaskComplete", reinterpret_cast<void*>(WdiIndicateTaskComplete));
     ldr.registerExport("wdiwifi.sys", "WdiGetAdapterCapabilities", reinterpret_cast<void*>(WdiGetAdapterCapabilities));
 
-    ldr.registerExport("netadaptercx.sys", "NetAdapterCreate", reinterpret_cast<void*>(NetAdapterCreate));
-    ldr.registerExport("netadaptercx.sys", "NetAdapterStart", reinterpret_cast<void*>(NetAdapterStart));
-    ldr.registerExport("netadaptercx.sys", "NetAdapterStop", reinterpret_cast<void*>(NetAdapterStop));
+    ldr.registerExport("netadaptercx.sys", "NetAdapterCreate", reinterpret_cast<void*>(micant::ndis::NetAdapterCreate));
+    ldr.registerExport("netadaptercx.sys", "NetAdapterStart", reinterpret_cast<void*>(micant::ndis::NetAdapterStart));
+    ldr.registerExport("netadaptercx.sys", "NetAdapterStop", reinterpret_cast<void*>(micant::ndis::NetAdapterStop));
 
     ldr.registerExport("titanwifi.sys", "TitanWiFiInitialize", reinterpret_cast<void*>(TitanWiFiInitialize));
     ldr.registerExport("titanwifi.sys", "TitanWiFiTransmitFrame", reinterpret_cast<void*>(TitanWiFiTransmitFrame));
