@@ -107,6 +107,7 @@ enum class NtStatus : uint32_t {
     Cancelled                        = 0xC0000120,
     VariableNotFound                 = 0xC0000100,
     NotFound                         = 0xC0000225,
+    NotSupported                     = 0xC00000BB,
     ProcessNotInJob                  = 0xC0000123,
 
     // Security, Authentication & SAM Subsystem Codes
@@ -208,6 +209,7 @@ inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(
         case NtStatus::NoMoreFiles: return "STATUS_NO_MORE_FILES";
         case NtStatus::Unsuccessful: return "STATUS_UNSUCCESSFUL";
         case NtStatus::NotImplemented: return "STATUS_NOT_IMPLEMENTED";
+        case NtStatus::NotSupported: return "STATUS_NOT_SUPPORTED";
         case NtStatus::AccessViolation: return "STATUS_ACCESS_VIOLATION";
         case NtStatus::IllegalInstruction: return "STATUS_ILLEGAL_INSTRUCTION";
         case NtStatus::InvalidHandle: return "STATUS_INVALID_HANDLE";

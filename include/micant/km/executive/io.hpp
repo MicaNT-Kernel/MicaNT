@@ -199,6 +199,11 @@ struct IoStackLocation {
             uint32_t key;
             LargeInteger byteOffset;
         } write;
+
+        struct {
+            uint32_t type;
+            void* argument;
+        } pnp;
     } parameters{};
 
     DeviceObject* deviceObject{nullptr};
@@ -287,6 +292,7 @@ struct DriverObject {
     FastIoDispatch* fastIoDispatch{nullptr};
     void (*driverStartIo)(DeviceObject* device, Irp* irp){nullptr};
     void (*driverUnload)(DriverObject* driverObject){nullptr};
+    NtStatus (*driverAddDevice)(DriverObject* driverObject, DeviceObject* physicalDeviceObject){nullptr};
 
     void setDispatch(uint8_t major, DriverDispatchRoutine fn) noexcept {
         if (major < 32) majorFunction[major] = fn;

@@ -569,6 +569,10 @@ public:
         return true;
     }
 
+    bool removeSymbolicLink(std::wstring_view linkPath) {
+        return symbolicLinks_.erase(std::wstring(linkPath)) > 0;
+    }
+
     [[nodiscard]] std::shared_ptr<SymbolicLinkObject> getSymbolicLink(std::wstring_view linkPath) const {
         auto it = symbolicLinks_.find(std::wstring(linkPath));
         if (it != symbolicLinks_.end()) return it->second;

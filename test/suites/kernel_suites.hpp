@@ -7227,6 +7227,502 @@ inline void Test_Horizon28_HardwareAbstractionLayer_Interrupts_APIC_HPET_And_Tim
     std::cout << "[TEST] Suite 244: Horizon 28 - Sovereign HAL Interrupt Architecture, APIC, HPET & RTC Clocks PASSED.\n";
 }
 
+// ============================================================================
+// Suite 245: Horizon 29 - Plug and Play (PnP) Manager Architecture,
+// DevNode Hierarchy (PDO/FDO/FiDO), IRP_MN PnP State Engine & Device Interfaces
+// ============================================================================
+void Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces() {
+    auto& pnpMgr = pnp::PnpManager::get();
+    pnpMgr.resetForTesting();
+
+    // 1. Device Tree Hierarchy & Root DevNode
+    {
+        auto root = pnpMgr.getRootNode();
+        TEST_ASSERT(root != nullptr, "Root DevNode must exist");
+        TEST_ASSERT(root->getDeviceId() == L"HTREE\\ROOT\\0", "Root DevNode ID must be HTREE\\ROOT\\0");
+        TEST_ASSERT(root->getState() == pnp::PnpDeviceState::Started, "Root DevNode must be in Started state");
+
+        // Create simulated PCI bus root PDO
+        io::DriverObject pciBusDriver{};
+        pciBusDriver.driverName = L"pci.sys";
+
+        io::DeviceObject pciBusPdo{};
+        pciBusPdo.driverObject = &pciBusDriver;
+        pciBusPdo.deviceName = L"\\Device\\PciBus0";
+
+        auto pciBusDevNode = pnpMgr.createDeviceNode(root.get(), &pciBusPdo, L"PCI\\ROOT\\0", L"0");
+        TEST_ASSERT(pciBusDevNode != nullptr, "PCI Bus DevNode creation must succeed");
+        TEST_ASSERT(pciBusDevNode->getParent() == root.get(), "PCI Bus DevNode parent must be root");
+        TEST_ASSERT(pciBusDevNode->getState() == pnp::PnpDeviceState::Initialized, "Newly created DevNode must be Initialized");
+        TEST_ASSERT(root->getChildren().size() == 1, "Root DevNode should have 1 child");
+
+        // Create child device PDO on PCI bus (e.g. e1000 Gigabit NIC)
+        io::DeviceObject nicPdo{};
+        nicPdo.driverObject = &pciBusDriver;
+        nicPdo.deviceName = L"\\Device\\PciNic0";
+
+        auto nicDevNode = pnpMgr.createDeviceNode(pciBusDevNode.get(), &nicPdo, L"PCI\\VEN_8086&DEV_100E&SUBSYS_001E8086&REV_02", L"0000");
+        TEST_ASSERT(nicDevNode != nullptr, "NIC DevNode creation must succeed");
+        TEST_ASSERT(nicDevNode->getParent() == pciBusDevNode.get(), "NIC DevNode parent must be PCI Bus");
+        TEST_ASSERT(pciBusDevNode->getChildren().size() == 1, "PCI Bus must have 1 child");
+
+        nicDevNode->setDeviceDescription(L"Intel(R) PRO/1000 MT Network Connection");
+        nicDevNode->addHardwareId(L"PCI\\VEN_8086&DEV_100E&SUBSYS_001E8086");
+        nicDevNode->addHardwareId(L"PCI\\VEN_8086&DEV_100E");
+        nicDevNode->addCompatibleId(L"PCI\\VEN_8086");
+        nicDevNode->addCompatibleId(L"PCI\\CC_020000");
+
+        TEST_ASSERT(nicDevNode->getHardwareIds().size() == 2, "NIC DevNode must have 2 hardware IDs");
+        TEST_ASSERT(nicDevNode->getCompatibleIds().size() == 2, "NIC DevNode must have 2 compatible IDs");
+    }
+
+    // 2. AddDevice & Layered Driver Stacking (PDO -> FDO -> Upper Filter)
+    io::DriverObject nicDriver{};
+    nicDriver.driverName = L"e1000.sys";
+
+    io::DeviceObject nicFdo{};
+    nicFdo.driverObject = &nicDriver;
+    nicFdo.deviceName = L"\\Device\\NetAdapter0";
+
+    io::DriverObject filterDriver{};
+    filterDriver.driverName = L"pktfilter.sys";
+
+    io::DeviceObject filterFdo{};
+    filterFdo.driverObject = &filterDriver;
+    filterFdo.deviceName = L"\\Device\\PacketFilter0";
+
+    auto root = pnpMgr.getRootNode();
+    auto pciBus = root->getChildren()[0];
+    auto nicNode = pciBus->getChildren()[0];
+
+    // Configure AddDevice routine on function driver
+    nicDriver.driverAddDevice = [](io::DriverObject*, io::DeviceObject* pdo) -> NtStatus {
+        (void)pdo;
+        return NtStatus::Success;
+    };
+
+    NtStatus stAdd = pnpMgr.addDevice(nicNode.get(), &nicDriver);
+    TEST_ASSERT(NT_SUCCESS(stAdd), "addDevice must succeed");
+    TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::DriversAdded, "State must transition to DriversAdded");
+
+    // Attach FDO to PDO stack
+    io::IoAttachDeviceToDeviceStack(&nicFdo, nicNode->getPdo());
+    nicNode->setFdo(&nicFdo);
+    TEST_ASSERT(nicNode->getTopDeviceObject() == &nicFdo, "Top device object must be FDO");
+
+    // Attach upper filter to stack
+    io::IoAttachDeviceToDeviceStack(&filterFdo, nicNode->getPdo());
+    nicNode->addUpperFilter(&filterFdo);
+    TEST_ASSERT(nicNode->getTopDeviceObject() == &filterFdo, "Top device object must now be Upper Filter");
+
+    // 3. PnP IRP State Machine: Start Device & Two-Phase Stop / Rebalancing
+    {
+        static uint32_t s_startCount = 0;
+        static uint32_t s_queryStopCount = 0;
+        static uint32_t s_cancelStopCount = 0;
+        static uint32_t s_stopCount = 0;
+        static bool s_vetoStop = false;
+
+        s_startCount = 0;
+        s_queryStopCount = 0;
+        s_cancelStopCount = 0;
+        s_stopCount = 0;
+        s_vetoStop = false;
+
+        filterDriver.setDispatch(io::IRP_MJ_PNP, [](io::DeviceObject*, io::Irp* irp) -> NtStatus {
+            if (!irp) return NtStatus::InvalidParameter;
+            switch (irp->minorFunction) {
+                case pnp::IRP_MN_START_DEVICE:
+                    s_startCount++;
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+                case pnp::IRP_MN_QUERY_STOP_DEVICE:
+                    s_queryStopCount++;
+                    if (s_vetoStop) {
+                        irp->ioStatus.status = NtStatus::DeviceBusy;
+                        return NtStatus::DeviceBusy;
+                    }
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+                case pnp::IRP_MN_CANCEL_STOP_DEVICE:
+                    s_cancelStopCount++;
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+                case pnp::IRP_MN_STOP_DEVICE:
+                    s_stopCount++;
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+                default:
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+            }
+        });
+
+        // Start Device
+        NtStatus stStart = pnpMgr.startDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stStart), "startDevice must succeed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Started, "State must be Started");
+        TEST_ASSERT(s_startCount == 1, "Start IRP count must be 1");
+
+        // Two-Phase Stop: Step A: Query Stop
+        NtStatus stQueryStop = pnpMgr.queryStopDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stQueryStop), "queryStopDevice must succeed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::QueryStopPending, "State must be QueryStopPending");
+        TEST_ASSERT(s_queryStopCount == 1, "QueryStop IRP count must be 1");
+
+        // Two-Phase Stop: Step B: Cancel Stop
+        NtStatus stCancelStop = pnpMgr.cancelStopDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stCancelStop), "cancelStopDevice must succeed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Started, "State must revert to Started");
+        TEST_ASSERT(s_cancelStopCount == 1, "CancelStop IRP count must be 1");
+
+        // Two-Phase Stop: Step C: Driver Veto on Query Stop
+        s_vetoStop = true;
+        stQueryStop = pnpMgr.queryStopDevice(nicNode.get());
+        TEST_ASSERT(stQueryStop == NtStatus::DeviceBusy, "queryStopDevice must return DeviceBusy when vetoed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Started, "State must remain Started on veto");
+        TEST_ASSERT(s_queryStopCount == 2, "QueryStop IRP count must be 2");
+
+        // Two-Phase Stop: Step D: Successful Stop
+        s_vetoStop = false;
+        stQueryStop = pnpMgr.queryStopDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stQueryStop), "queryStopDevice must succeed when un-vetoed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::QueryStopPending, "State must be QueryStopPending");
+
+        NtStatus stStop = pnpMgr.stopDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stStop), "stopDevice must succeed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Stopped, "State must be Stopped");
+        TEST_ASSERT(s_stopCount == 1, "Stop IRP count must be 1");
+
+        // Re-start after stop rebalance
+        stStart = pnpMgr.startDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stStart), "startDevice after rebalance must succeed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Started, "State must return to Started");
+        TEST_ASSERT(s_startCount == 2, "Start IRP count must be 2");
+    }
+
+    // 4. PnP IRP State Machine: Two-Phase Query-Remove, Veto & Orderly Removal
+    {
+        static uint32_t s_queryRemoveCount = 0;
+        static uint32_t s_cancelRemoveCount = 0;
+        static uint32_t s_removeCount = 0;
+        static bool s_vetoRemove = false;
+
+        s_queryRemoveCount = 0;
+        s_cancelRemoveCount = 0;
+        s_removeCount = 0;
+        s_vetoRemove = false;
+
+        filterDriver.setDispatch(io::IRP_MJ_PNP, [](io::DeviceObject*, io::Irp* irp) -> NtStatus {
+            if (!irp) return NtStatus::InvalidParameter;
+            switch (irp->minorFunction) {
+                case pnp::IRP_MN_QUERY_REMOVE_DEVICE:
+                    s_queryRemoveCount++;
+                    if (s_vetoRemove) {
+                        irp->ioStatus.status = NtStatus::Unsuccessful;
+                        return NtStatus::Unsuccessful;
+                    }
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+                case pnp::IRP_MN_CANCEL_REMOVE_DEVICE:
+                    s_cancelRemoveCount++;
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+                case pnp::IRP_MN_REMOVE_DEVICE:
+                    s_removeCount++;
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+                default:
+                    irp->ioStatus.status = NtStatus::Success;
+                    return NtStatus::Success;
+            }
+        });
+
+        // Veto on Query-Remove
+        s_vetoRemove = true;
+        NtStatus stQueryRem = pnpMgr.queryRemoveDevice(nicNode.get());
+        TEST_ASSERT(stQueryRem == NtStatus::Unsuccessful, "queryRemoveDevice must return error on veto");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Started, "State must remain Started on veto");
+        TEST_ASSERT(s_queryRemoveCount == 1, "QueryRemove IRP count must be 1");
+
+        // Successful Query-Remove
+        s_vetoRemove = false;
+        stQueryRem = pnpMgr.queryRemoveDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stQueryRem), "queryRemoveDevice must succeed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::QueryRemovePending, "State must be QueryRemovePending");
+
+        // Cancel-Remove
+        NtStatus stCancelRem = pnpMgr.cancelRemoveDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stCancelRem), "cancelRemoveDevice must succeed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Started, "State must revert to Started");
+        TEST_ASSERT(s_cancelRemoveCount == 1, "CancelRemove IRP count must be 1");
+
+        // Orderly Remove
+        stQueryRem = pnpMgr.queryRemoveDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stQueryRem), "queryRemoveDevice before remove must succeed");
+
+        NtStatus stRem = pnpMgr.removeDevice(nicNode.get());
+        TEST_ASSERT(NT_SUCCESS(stRem), "removeDevice must succeed");
+        TEST_ASSERT(nicNode->getState() == pnp::PnpDeviceState::Deleted, "DevNode state must be Deleted");
+        TEST_ASSERT(s_removeCount == 1, "Remove IRP count must be 1");
+        TEST_ASSERT(pciBus->getChildren().empty(), "PCI Bus should have 0 children after remove");
+    }
+
+    // 5. Hot-Unplug / Surprise Removal State Transition
+    {
+        static uint32_t s_surpriseCount = 0;
+        static uint32_t s_usbRemoveCount = 0;
+
+        s_surpriseCount = 0;
+        s_usbRemoveCount = 0;
+
+        io::DriverObject usbDriver{};
+        usbDriver.driverName = L"usbhub.sys";
+
+        io::DeviceObject usbPdo{};
+        usbPdo.driverObject = &usbDriver;
+        usbPdo.deviceName = L"\\Device\\UsbPdo0";
+
+        usbDriver.setDispatch(io::IRP_MJ_PNP, [](io::DeviceObject*, io::Irp* irp) -> NtStatus {
+            if (!irp) return NtStatus::InvalidParameter;
+            if (irp->minorFunction == pnp::IRP_MN_SURPRISE_REMOVAL) {
+                s_surpriseCount++;
+            } else if (irp->minorFunction == pnp::IRP_MN_REMOVE_DEVICE) {
+                s_usbRemoveCount++;
+            }
+            irp->ioStatus.status = NtStatus::Success;
+            return NtStatus::Success;
+        });
+
+        auto usbNode = pnpMgr.createDeviceNode(pciBus.get(), &usbPdo, L"USB\\VID_045E&PID_0040", L"0001");
+        TEST_ASSERT(usbNode != nullptr, "USB DevNode creation must succeed");
+        TEST_ASSERT(pciBus->getChildren().size() == 1, "PCI Bus should now have 1 child");
+
+        pnpMgr.startDevice(usbNode.get());
+        TEST_ASSERT(usbNode->getState() == pnp::PnpDeviceState::Started, "USB node must be Started");
+
+        // Surprise Removal (Hot-Unplug)
+        NtStatus stSurprise = pnpMgr.surpriseRemoveDevice(usbNode.get());
+        TEST_ASSERT(NT_SUCCESS(stSurprise), "surpriseRemoveDevice must succeed");
+        TEST_ASSERT(s_surpriseCount == 1, "SurpriseRemoval IRP count must be 1");
+        TEST_ASSERT(s_usbRemoveCount == 1, "Remove IRP count must follow surprise removal");
+        TEST_ASSERT(usbNode->getState() == pnp::PnpDeviceState::Deleted, "USB node state must reach Deleted");
+        TEST_ASSERT(pciBus->getChildren().empty(), "PCI Bus should have 0 children after surprise removal");
+    }
+
+    // 6. Bus Enumeration (IRP_MN_QUERY_DEVICE_RELATIONS - BusRelations)
+    {
+        io::DriverObject busDriver{};
+        busDriver.driverName = L"pcibus.sys";
+
+        io::DeviceObject busPdo{};
+        busPdo.driverObject = &busDriver;
+        busPdo.deviceName = L"\\Device\\PciBusMaster";
+
+        static io::DeviceObject s_childPdo1{};
+        s_childPdo1.driverObject = &busDriver;
+        s_childPdo1.deviceName = L"\\Device\\PciChild1";
+
+        static io::DeviceObject s_childPdo2{};
+        s_childPdo2.driverObject = &busDriver;
+        s_childPdo2.deviceName = L"\\Device\\PciChild2";
+
+        busDriver.setDispatch(io::IRP_MJ_PNP, [](io::DeviceObject* dev, io::Irp* irp) -> NtStatus {
+            if (!irp) return NtStatus::InvalidParameter;
+            if (irp->minorFunction == pnp::IRP_MN_QUERY_DEVICE_RELATIONS) {
+                auto* relations = reinterpret_cast<pnp::DeviceRelationsList*>(irp->userBuffer);
+                if (relations) {
+                    relations->objects.push_back(&s_childPdo1);
+                    relations->objects.push_back(&s_childPdo2);
+                    relations->count = 2;
+                }
+                irp->ioStatus.status = NtStatus::Success;
+                return NtStatus::Success;
+            }
+            if (irp->minorFunction == pnp::IRP_MN_QUERY_ID) {
+                auto* outStr = reinterpret_cast<std::wstring*>(irp->userBuffer);
+                if (outStr) {
+                    auto idType = static_cast<pnp::BUS_QUERY_ID_TYPE>(irp->getCurrentStack()->parameters.pnp.type);
+                    if (idType == pnp::BUS_QUERY_ID_TYPE::BusQueryDeviceID) {
+                        *outStr = (dev == &s_childPdo1) ? L"PCI\\VEN_10DE&DEV_1B80" : L"PCI\\VEN_144D&DEV_A808";
+                    } else if (idType == pnp::BUS_QUERY_ID_TYPE::BusQueryInstanceID) {
+                        *outStr = (dev == &s_childPdo1) ? L"SLOT1" : L"SLOT2";
+                    }
+                }
+                irp->ioStatus.status = NtStatus::Success;
+                return NtStatus::Success;
+            }
+            if (irp->minorFunction == pnp::IRP_MN_QUERY_CAPABILITIES) {
+                auto* caps = reinterpret_cast<pnp::DEVICE_CAPABILITIES*>(irp->userBuffer);
+                if (caps) {
+                    caps->removable = (dev == &s_childPdo1) ? 0 : 1;
+                    caps->surpriseRemovalOK = (dev == &s_childPdo1) ? 0 : 1;
+                }
+                irp->ioStatus.status = NtStatus::Success;
+                return NtStatus::Success;
+            }
+            irp->ioStatus.status = NtStatus::Success;
+            return NtStatus::Success;
+        });
+
+        auto busDevNode = pnpMgr.createDeviceNode(root.get(), &busPdo, L"PCI\\ROOTBUS\\0", L"0");
+        TEST_ASSERT(busDevNode != nullptr, "Bus DevNode creation must succeed");
+
+        std::vector<std::shared_ptr<pnp::PnpDeviceNode>> discovered;
+        NtStatus stEnum = pnpMgr.enumerateBus(busDevNode.get(), discovered);
+        TEST_ASSERT(NT_SUCCESS(stEnum), "enumerateBus must succeed");
+        TEST_ASSERT(discovered.size() == 2, "Discovered children count must be 2");
+        TEST_ASSERT(busDevNode->getChildren().size() == 2, "Bus DevNode children must be 2");
+
+        TEST_ASSERT(discovered[0]->getDeviceId() == L"PCI\\VEN_10DE&DEV_1B80", "Discovered child 0 Device ID must match");
+        TEST_ASSERT(discovered[0]->getInstanceId() == L"SLOT1", "Discovered child 0 Instance ID must match");
+        TEST_ASSERT(discovered[0]->getCapabilities().removable == 0, "Child 0 removable capability must be 0");
+
+        TEST_ASSERT(discovered[1]->getDeviceId() == L"PCI\\VEN_144D&DEV_A808", "Discovered child 1 Device ID must match");
+        TEST_ASSERT(discovered[1]->getInstanceId() == L"SLOT2", "Discovered child 1 Instance ID must match");
+        TEST_ASSERT(discovered[1]->getCapabilities().removable == 1, "Child 1 removable capability must be 1");
+    }
+
+    // 7. Device Interface Classes, Enabling/Disabling & Symbolic Links
+    {
+        io::DeviceObject netPdo{};
+        netPdo.deviceName = L"\\Device\\NetCard0";
+
+        std::wstring symLinkNet;
+        NtStatus stReg = pnp::IoRegisterDeviceInterface(&netPdo, &pnp::GUID_DEVINTERFACE_NET, L"eth0", &symLinkNet);
+        TEST_ASSERT(NT_SUCCESS(stReg), "IoRegisterDeviceInterface must succeed");
+        TEST_ASSERT(symLinkNet.starts_with(L"\\\\?\\NetCard0#"), "Symbolic link prefix must be \\\\?\\NetCard0#");
+        TEST_ASSERT(symLinkNet.ends_with(L"\\eth0"), "Symbolic link suffix must be \\eth0");
+
+        // Interface should not be in ObjectNamespace yet because it is not enabled
+        auto& obNs = ob::ObjectNamespace::get();
+        TEST_ASSERT(obNs.getSymbolicLink(symLinkNet) == nullptr, "Disabled interface must not exist in ObjectNamespace");
+
+        // Enable Interface
+        NtStatus stEn = pnp::IoSetDeviceInterfaceState(symLinkNet, true);
+        TEST_ASSERT(NT_SUCCESS(stEn), "IoSetDeviceInterfaceState(true) must succeed");
+        TEST_ASSERT(obNs.getSymbolicLink(symLinkNet) != nullptr, "Enabled interface must exist in ObjectNamespace");
+        TEST_ASSERT(obNs.getSymbolicLink(symLinkNet)->getTargetPath() == L"\\Device\\NetCard0", "Target path must match PDO");
+
+        // Disable Interface
+        NtStatus stDis = pnp::IoSetDeviceInterfaceState(symLinkNet, false);
+        TEST_ASSERT(NT_SUCCESS(stDis), "IoSetDeviceInterfaceState(false) must succeed");
+        TEST_ASSERT(obNs.getSymbolicLink(symLinkNet) == nullptr, "Disabled interface must be removed from ObjectNamespace");
+    }
+
+    // 8. PnP Notification Callbacks & Synchronous Replay
+    {
+        uint32_t arrivalCount = 0;
+        uint32_t removalCount = 0;
+        std::wstring lastArrivedLink;
+
+        pnp::PDRIVER_NOTIFICATION_CALLBACK_ROUTINE callback = [](void* notifStruct, void* ctx) -> NtStatus {
+            auto* notif = reinterpret_cast<pnp::DEVICE_INTERFACE_CHANGE_NOTIFICATION*>(notifStruct);
+            auto* counts = reinterpret_cast<std::pair<uint32_t*, uint32_t*>*>(ctx);
+            if (notif && counts) {
+                if (notif->event == pnp::GUID_DEVICE_INTERFACE_ARRIVAL) {
+                    (*counts->first)++;
+                } else if (notif->event == pnp::GUID_DEVICE_INTERFACE_REMOVAL) {
+                    (*counts->second)++;
+                }
+            }
+            return NtStatus::Success;
+        };
+
+        std::pair<uint32_t*, uint32_t*> counts{&arrivalCount, &removalCount};
+
+        void* notifHandle = nullptr;
+        GUID diskGuid = pnp::GUID_DEVINTERFACE_DISK;
+        NtStatus stNotif = pnp::IoRegisterPlugPlayNotification(
+            pnp::EventCategory::DeviceInterfaceChange,
+            0,
+            &diskGuid,
+            nullptr,
+            callback,
+            &counts,
+            &notifHandle
+        );
+        TEST_ASSERT(NT_SUCCESS(stNotif), "IoRegisterPlugPlayNotification must succeed");
+        TEST_ASSERT(notifHandle != nullptr, "Notification handle must be non-null");
+
+        // Register Disk PDO and Interface
+        io::DeviceObject diskPdo{};
+        diskPdo.deviceName = L"\\Device\\Harddisk0\\DR0";
+
+        std::wstring diskLink;
+        pnp::IoRegisterDeviceInterface(&diskPdo, &pnp::GUID_DEVINTERFACE_DISK, nullptr, &diskLink);
+
+        // Enable disk interface -> arrival notification should fire
+        pnp::IoSetDeviceInterfaceState(diskLink, true);
+        TEST_ASSERT(arrivalCount == 1, "Arrival notification count must be 1");
+        TEST_ASSERT(removalCount == 0, "Removal notification count must be 0");
+
+        // Disable disk interface -> removal notification should fire
+        pnp::IoSetDeviceInterfaceState(diskLink, false);
+        TEST_ASSERT(arrivalCount == 1, "Arrival notification count must stay 1");
+        TEST_ASSERT(removalCount == 1, "Removal notification count must be 1");
+
+        // Re-enable disk interface
+        pnp::IoSetDeviceInterfaceState(diskLink, true);
+        TEST_ASSERT(arrivalCount == 2, "Arrival notification count must be 2");
+
+        // Register second notification with PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES
+        uint32_t replayArrivalCount = 0;
+        uint32_t replayRemovalCount = 0;
+        std::pair<uint32_t*, uint32_t*> replayCounts{&replayArrivalCount, &replayRemovalCount};
+
+        void* replayHandle = nullptr;
+        NtStatus stReplay = pnp::IoRegisterPlugPlayNotification(
+            pnp::EventCategory::DeviceInterfaceChange,
+            pnp::PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES,
+            &diskGuid,
+            nullptr,
+            callback,
+            &replayCounts,
+            &replayHandle
+        );
+        TEST_ASSERT(NT_SUCCESS(stReplay), "IoRegisterPlugPlayNotification with existing interfaces flag must succeed");
+        TEST_ASSERT(replayArrivalCount == 1, "Existing interface replay must immediately deliver 1 arrival notification");
+
+        // Unregister notifications
+        NtStatus stUnreg1 = pnp::IoUnregisterPlugPlayNotificationEx(notifHandle);
+        TEST_ASSERT(NT_SUCCESS(stUnreg1), "IoUnregisterPlugPlayNotificationEx for notifHandle must succeed");
+
+        NtStatus stUnreg2 = pnp::IoUnregisterPlugPlayNotificationEx(replayHandle);
+        TEST_ASSERT(NT_SUCCESS(stUnreg2), "IoUnregisterPlugPlayNotificationEx for replayHandle must succeed");
+    }
+
+    // 9. PnP Telemetry Audit & Reset
+    {
+        pnp::PNP_TELEMETRY telem = pnp::PnpQueryTelemetry();
+        TEST_ASSERT(telem.totalDeviceNodesCreated > 0, "totalDeviceNodesCreated must be > 0");
+        TEST_ASSERT(telem.totalDeviceNodesRemoved > 0, "totalDeviceNodesRemoved must be > 0");
+        TEST_ASSERT(telem.totalStartDeviceIrpsDispatched > 0, "totalStartDeviceIrpsDispatched must be > 0");
+        TEST_ASSERT(telem.totalStopDeviceIrpsDispatched > 0, "totalStopDeviceIrpsDispatched must be > 0");
+        TEST_ASSERT(telem.totalQueryStopIrpsDispatched > 0, "totalQueryStopIrpsDispatched must be > 0");
+        TEST_ASSERT(telem.totalCancelStopIrpsDispatched > 0, "totalCancelStopIrpsDispatched must be > 0");
+        TEST_ASSERT(telem.totalQueryRemoveIrpsDispatched > 0, "totalQueryRemoveIrpsDispatched must be > 0");
+        TEST_ASSERT(telem.totalCancelRemoveIrpsDispatched > 0, "totalCancelRemoveIrpsDispatched must be > 0");
+        TEST_ASSERT(telem.totalRemoveDeviceIrpsDispatched > 0, "totalRemoveDeviceIrpsDispatched must be > 0");
+        TEST_ASSERT(telem.totalSurpriseRemovalIrpsDispatched > 0, "totalSurpriseRemovalIrpsDispatched must be > 0");
+        TEST_ASSERT(telem.totalBusRelationsEnumerated > 0, "totalBusRelationsEnumerated must be > 0");
+        TEST_ASSERT(telem.totalDeviceInterfacesRegistered > 0, "totalDeviceInterfacesRegistered must be > 0");
+        TEST_ASSERT(telem.totalDeviceInterfacesEnabled > 0, "totalDeviceInterfacesEnabled must be > 0");
+        TEST_ASSERT(telem.totalDeviceInterfacesDisabled > 0, "totalDeviceInterfacesDisabled must be > 0");
+        TEST_ASSERT(telem.totalNotificationsDispatched > 0, "totalNotificationsDispatched must be > 0");
+
+        // Reset telemetry
+        pnp::PnpResetTelemetryForTesting();
+        pnp::PNP_TELEMETRY resetTelem = pnp::PnpQueryTelemetry();
+        TEST_ASSERT(resetTelem.totalDeviceNodesCreated == 0, "totalDeviceNodesCreated must be 0 after reset");
+        TEST_ASSERT(resetTelem.totalStartDeviceIrpsDispatched == 0, "totalStartDeviceIrpsDispatched must be 0 after reset");
+        TEST_ASSERT(resetTelem.totalDeviceInterfacesRegistered == 0, "totalDeviceInterfacesRegistered must be 0 after reset");
+    }
+
+    std::cout << "[TEST] Suite 245: Horizon 29 - Plug and Play (PnP) Manager Architecture, DevNode Hierarchy, IRP_MN State Engine & Device Interfaces PASSED.\n";
+}
+
+
 
 
 
