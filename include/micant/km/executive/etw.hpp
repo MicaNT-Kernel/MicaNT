@@ -94,6 +94,18 @@ inline constexpr uint32_t EVENT_TRACE_FLAG_REGISTRY           = 0x00020000;
 inline constexpr uint32_t EVENT_TRACE_FLAG_SYSTEMCALL         = 0x00080000;
 inline constexpr uint32_t EVENT_TRACE_FLAG_ALPC               = 0x00100000;
 
+// Standard Event Trace Types / Opcodes
+inline constexpr uint8_t EVENT_TRACE_TYPE_INFO                = 0;
+inline constexpr uint8_t EVENT_TRACE_TYPE_START               = 1;
+inline constexpr uint8_t EVENT_TRACE_TYPE_END                 = 2;
+inline constexpr uint8_t EVENT_TRACE_TYPE_DC_START            = 3;
+inline constexpr uint8_t EVENT_TRACE_TYPE_DC_END              = 4;
+
+// Event Header Extended Types & Flags
+inline constexpr uint16_t EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITY_ID = 0x0001;
+inline constexpr uint16_t EVENT_HEADER_FLAG_EXTENDED_INFO           = 0x0001;
+inline constexpr uint16_t EVENT_HEADER_FLAG_CLASSIC_HEADER          = 0x0100;
+
 // ============================================================================
 // 2. ETW Standard Structures (evntrace.h, evntprov.h, evntcons.h)
 // ============================================================================
@@ -249,6 +261,41 @@ inline constexpr GUID StorageProviderGuid = {
     0x3256AEF1, 0xE082, 0x4E90, { 0xB8, 0xB7, 0x91, 0xB6, 0xEC, 0x24, 0x2A, 0x5C }
 };
 
+// NT Kernel Process Trace GUID: {22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}
+inline constexpr GUID ProcessTraceGuid = {
+    0x22FB2CD6, 0x0E7B, 0x422B, { 0xA0, 0xC7, 0x2F, 0xAD, 0x1F, 0xD0, 0xE7, 0x16 }
+};
+
+// NT Kernel Thread Trace GUID: {3D6FA8D1-FE12-462E-A000-F5B03021D18E}
+inline constexpr GUID ThreadTraceGuid = {
+    0x3D6FA8D1, 0xFE12, 0x462E, { 0xA0, 0x00, 0xF5, 0xB0, 0x30, 0x21, 0xD1, 0x8E }
+};
+
+// NT Kernel Disk I/O Trace GUID: {3D6FA8D4-FE12-462E-A000-F5B03021D18E}
+inline constexpr GUID DiskIoTraceGuid = {
+    0x3D6FA8D4, 0xFE12, 0x462E, { 0xA0, 0x00, 0xF5, 0xB0, 0x30, 0x21, 0xD1, 0x8E }
+};
+
+// NT Kernel Page Fault Trace GUID: {3D6FA8D3-FE12-462E-A000-F5B03021D18E}
+inline constexpr GUID PageFaultTraceGuid = {
+    0x3D6FA8D3, 0xFE12, 0x462E, { 0xA0, 0x00, 0xF5, 0xB0, 0x30, 0x21, 0xD1, 0x8E }
+};
+
+// NT Kernel Image Load Trace GUID: {2CB154FD-9B4C-42E4-B0E8-5144E4E1AD5B}
+inline constexpr GUID ImageLoadTraceGuid = {
+    0x2CB154FD, 0x9B4C, 0x42E4, { 0xB0, 0xE8, 0x51, 0x44, 0xE4, 0xE1, 0xAD, 0x5B }
+};
+
+// NT Kernel ALPC Trace GUID: {45D8CCCD-5384-47CE-B4CE-0320138E5144}
+inline constexpr GUID AlpcTraceGuid = {
+    0x45D8CCCD, 0x5384, 0x47CE, { 0xB4, 0xCE, 0x03, 0x20, 0x13, 0x8E, 0x51, 0x44 }
+};
+
+// NT Kernel Registry Trace GUID: {AE53722E-C863-11D2-8659-00C04FA321A1}
+inline constexpr GUID RegistryTraceGuid = {
+    0xAE53722E, 0xC863, 0x11D2, { 0x86, 0x59, 0x00, 0xC0, 0x4F, 0xA3, 0x21, 0xA1 }
+};
+
 // ============================================================================
 // 4. GUID Utilities
 // ============================================================================
@@ -304,13 +351,122 @@ struct GuidLess {
 };
 
 // ============================================================================
-// 5. Internal Recorded Event and Trace Session Structures
+// 5. Internal Recorded Event, Buffer Pool and Trace Session Structures
 // ============================================================================
+
+namespace details {
+inline void safeCopyAnsi(char* dest, size_t destSize, const char* src) noexcept {
+    if (!dest || destSize == 0) return;
+    if (!src) { dest[0] = '\0'; return; }
+    size_t i = 0;
+    while (i + 1 < destSize && src[i] != '\0') {
+        dest[i] = src[i];
+        i++;
+    }
+    dest[i] = '\0';
+}
+
+inline void safeCopyWide(wchar_t* dest, size_t destCount, const wchar_t* src) noexcept {
+    if (!dest || destCount == 0) return;
+    if (!src) { dest[0] = L'\0'; return; }
+    size_t i = 0;
+    while (i + 1 < destCount && src[i] != L'\0') {
+        dest[i] = src[i];
+        i++;
+    }
+    dest[i] = L'\0';
+}
+} // namespace details
+
+#pragma pack(push, 1)
+struct ETW_PROCESS_EVENT {
+    uint32_t ProcessId{0};
+    uint32_t ParentProcessId{0};
+    uint32_t SessionId{0};
+    int32_t  ExitStatus{0};
+    uint64_t DirectoryTableBase{0};
+    char     ImageFileName[16]{0};
+};
+
+struct ETW_THREAD_EVENT {
+    uint32_t ProcessId{0};
+    uint32_t ThreadId{0};
+    uint64_t StackBase{0};
+    uint64_t StackLimit{0};
+    uint64_t Win32StartAddress{0};
+    int32_t  ExitStatus{0};
+};
+
+struct ETW_IMAGE_LOAD_EVENT {
+    uint64_t ImageBase{0};
+    uint64_t ImageSize{0};
+    uint32_t ProcessId{0};
+    uint32_t ImageChecksum{0};
+    uint32_t TimeDateStamp{0};
+    wchar_t  FileName[260]{0};
+};
+
+struct ETW_DISK_IO_EVENT {
+    uint32_t DiskNumber{0};
+    uint32_t IrpFlags{0};
+    uint32_t TransferSize{0};
+    uint32_t Reserved{0};
+    uint64_t ByteOffset{0};
+    uint64_t FileObject{0};
+};
+
+struct ETW_PAGE_FAULT_EVENT {
+    uint64_t VirtualAddress{0};
+    uint64_t ProgramCounter{0};
+    uint32_t ProcessId{0};
+    uint32_t FaultType{0}; // 1 = DemandZero, 2 = Transition, 3 = HardFault
+};
+
+struct ETW_ALPC_EVENT {
+    uint32_t MessageId{0};
+    uint32_t SourceProcessId{0};
+    uint32_t TargetProcessId{0};
+    uint32_t MessageType{0};
+    uint32_t DataLength{0};
+};
+
+struct ETW_REGISTRY_EVENT {
+    uint64_t KeyHandle{0};
+    uint32_t Status{0};
+    uint32_t OpType{0}; // 1 = Create, 2 = Open, 3 = Query, 4 = Set, 5 = Delete
+    wchar_t  KeyName[128]{0};
+};
+
+struct EVENT_HEADER_EXTENDED_DATA_ITEM {
+    uint16_t Reserved1{0};
+    uint16_t ExtType{0};
+    uint16_t Reserved2{0};
+    uint16_t DataSize{0};
+    uint64_t DataPtr{0};
+};
+#pragma pack(pop)
+
+struct ETW_TELEMETRY {
+    uint64_t totalSessionsStarted{0};
+    uint64_t totalSessionsStopped{0};
+    uint64_t totalEventsWritten{0};
+    uint64_t totalEventsDelivered{0};
+    uint64_t totalBuffersFlushed{0};
+    uint64_t totalProvidersRegistered{0};
+    uint64_t totalProvidersUnregistered{0};
+    uint64_t totalCircularBufferWraps{0};
+    uint64_t totalEventsLost{0};
+    uint64_t totalKernelEventsLogged{0};
+};
 
 struct RecordedEtwEvent {
     EVENT_HEADER         header{};
     std::vector<uint8_t> data;
     std::wstring         message;
+    bool                 hasActivityId{false};
+    GUID                 activityId{};
+    bool                 hasRelatedActivityId{false};
+    GUID                 relatedActivityId{};
 };
 
 struct EnabledProviderInfo {
@@ -319,14 +475,76 @@ struct EnabledProviderInfo {
     uint64_t matchAllKeyword{0};
 };
 
+struct ETW_BUFFER_HEADER {
+    uint32_t BufferSequence{0};
+    uint32_t BufferSize{64 * 1024};
+    uint32_t FilledBytes{sizeof(ETW_BUFFER_HEADER)};
+    int64_t  FirstTimeStamp{0};
+    int64_t  LastTimeStamp{0};
+    uint32_t EventsCount{0};
+    uint16_t LoggerId{0};
+    uint8_t  ProcessorNumber{0};
+    uint8_t  Alignment{8};
+    uint32_t State{0}; // 0 = Free, 1 = Active/Filling, 2 = Flushed/Full
+};
+
+struct EtwBuffer {
+    ETW_BUFFER_HEADER header{};
+    std::vector<RecordedEtwEvent> events;
+
+    void reset(uint32_t seq, uint16_t loggerId, uint32_t bufSizeKb) noexcept {
+        header.BufferSequence = seq;
+        header.BufferSize = (bufSizeKb == 0 ? 64 : bufSizeKb) * 1024;
+        header.FilledBytes = sizeof(ETW_BUFFER_HEADER);
+        header.FirstTimeStamp = 0;
+        header.LastTimeStamp = 0;
+        header.EventsCount = 0;
+        header.LoggerId = loggerId;
+        header.ProcessorNumber = 0;
+        header.Alignment = 8;
+        header.State = 0;
+        events.clear();
+    }
+
+    bool canFit(size_t payloadSize) const noexcept {
+        size_t alignedEventSize = (sizeof(EVENT_HEADER) + payloadSize + 7) & ~7ULL;
+        return (header.FilledBytes + alignedEventSize <= header.BufferSize);
+    }
+
+    void appendEvent(const RecordedEtwEvent& ev) {
+        if (events.empty()) {
+            header.FirstTimeStamp = ev.header.TimeStamp;
+        }
+        header.LastTimeStamp = ev.header.TimeStamp;
+        size_t alignedEventSize = (sizeof(EVENT_HEADER) + ev.data.size() + 7) & ~7ULL;
+        header.FilledBytes += static_cast<uint32_t>(alignedEventSize);
+        header.EventsCount++;
+        events.push_back(ev);
+    }
+};
+
 class TraceSession {
 public:
     TraceSession(uint16_t id, std::wstring name, const EVENT_TRACE_PROPERTIES& props, std::wstring logFileName)
         : m_id(id), m_name(std::move(name)), m_props(props), m_logFileName(std::move(logFileName)) {
+        if (m_props.BufferSize == 0) m_props.BufferSize = 64;
         m_props.NumberOfBuffers = std::max(2u, m_props.MinimumBuffers);
+        if (m_props.MaximumBuffers < m_props.NumberOfBuffers) {
+            m_props.MaximumBuffers = std::max(m_props.NumberOfBuffers, 32u);
+        }
         m_props.FreeBuffers = m_props.NumberOfBuffers;
         m_props.BuffersWritten = 0;
         m_props.EventsLost = 0;
+        m_props.RealTimeBuffersLost = 0;
+
+        // Allocate initial active buffer
+        EtwBuffer initialBuf;
+        initialBuf.reset(++m_sequenceCounter, m_id, m_props.BufferSize);
+        initialBuf.header.State = 1; // Active
+        m_buffers.push_back(std::move(initialBuf));
+        m_currentBufferIndex = 0;
+        m_oldestBufferIndex = 0;
+        if (m_props.FreeBuffers > 0) m_props.FreeBuffers--;
     }
 
     uint16_t getId() const noexcept { return m_id; }
@@ -334,6 +552,16 @@ public:
     const std::wstring& getLogFileName() const noexcept { return m_logFileName; }
     const EVENT_TRACE_PROPERTIES& getProperties() const noexcept { return m_props; }
     EVENT_TRACE_PROPERTIES& getProperties() noexcept { return m_props; }
+
+    uint32_t getCircularWraps() const noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_circularWraps;
+    }
+
+    uint32_t getCompletedBuffersCount() const noexcept {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_completedBuffersCount;
+    }
 
     void enableProvider(const GUID& guid, uint8_t level, uint64_t anyKw, uint64_t allKw) {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -356,8 +584,11 @@ public:
         return true;
     }
 
-    void recordEvent(const EVENT_HEADER& hdr, const void* pData, size_t size, std::wstring msg = L"") {
+    bool recordEvent(const EVENT_HEADER& hdr, const void* pData, size_t size, std::wstring msg = L"",
+                     const GUID* pActivityId = nullptr, const GUID* pRelatedActivityId = nullptr,
+                     uint64_t* pWrapsOut = nullptr, uint64_t* pLostOut = nullptr, uint64_t* pFlushedOut = nullptr) {
         std::lock_guard<std::mutex> lock(m_mutex);
+
         RecordedEtwEvent rec{};
         rec.header = hdr;
         if (pData && size > 0) {
@@ -365,24 +596,105 @@ public:
             std::memcpy(rec.data.data(), pData, size);
         }
         rec.message = std::move(msg);
-        m_events.push_back(std::move(rec));
+        if (pActivityId) {
+            rec.hasActivityId = true;
+            rec.activityId = *pActivityId;
+            rec.header.ActivityId = *pActivityId;
+        }
+        if (pRelatedActivityId) {
+            rec.hasRelatedActivityId = true;
+            rec.relatedActivityId = *pRelatedActivityId;
+        }
 
-        m_props.BuffersWritten = static_cast<uint32_t>((m_events.size() / 16) + 1);
+        if (m_buffers.empty()) {
+            EtwBuffer buf;
+            buf.reset(++m_sequenceCounter, m_id, m_props.BufferSize);
+            buf.header.State = 1;
+            m_buffers.push_back(std::move(buf));
+            m_currentBufferIndex = 0;
+            m_oldestBufferIndex = 0;
+        }
+
+        // Check if current buffer can fit the event
+        if (!m_buffers[m_currentBufferIndex].canFit(size)) {
+            // Mark current buffer full
+            m_buffers[m_currentBufferIndex].header.State = 2;
+            m_completedBuffersCount++;
+            m_props.BuffersWritten = m_completedBuffersCount;
+            if (pFlushedOut) (*pFlushedOut)++;
+
+            if (m_buffers.size() < m_props.MaximumBuffers) {
+                EtwBuffer newBuf;
+                newBuf.reset(++m_sequenceCounter, m_id, m_props.BufferSize);
+                newBuf.header.State = 1;
+                m_buffers.push_back(std::move(newBuf));
+                m_currentBufferIndex = m_buffers.size() - 1;
+                m_props.NumberOfBuffers = static_cast<uint32_t>(m_buffers.size());
+                if (m_props.FreeBuffers > 0) m_props.FreeBuffers--;
+            } else {
+                if ((m_props.LogFileMode & EVENT_TRACE_FILE_MODE_CIRCULAR) != 0) {
+                    m_circularWraps++;
+                    if (pWrapsOut) (*pWrapsOut)++;
+
+                    m_currentBufferIndex = m_oldestBufferIndex;
+                    m_oldestBufferIndex = (m_oldestBufferIndex + 1) % m_buffers.size();
+                    m_buffers[m_currentBufferIndex].reset(++m_sequenceCounter, m_id, m_props.BufferSize);
+                    m_buffers[m_currentBufferIndex].header.State = 1;
+                } else {
+                    m_props.EventsLost++;
+                    if (pLostOut) (*pLostOut)++;
+                    return false;
+                }
+            }
+        }
+
+        m_buffers[m_currentBufferIndex].appendEvent(rec);
+        m_props.BuffersWritten = std::max(1u, m_completedBuffersCount + 1);
+        return true;
     }
 
-    std::vector<RecordedEtwEvent> getEvents() {
+    std::vector<RecordedEtwEvent> getEvents() const {
         std::lock_guard<std::mutex> lock(m_mutex);
-        return m_events;
+        std::vector<RecordedEtwEvent> res;
+        if (m_buffers.empty()) return res;
+        size_t count = m_buffers.size();
+        for (size_t i = 0; i < count; ++i) {
+            size_t idx = (m_oldestBufferIndex + i) % count;
+            for (const auto& ev : m_buffers[idx].events) {
+                res.push_back(ev);
+            }
+        }
+        return res;
     }
 
     size_t getEventCount() const {
         std::lock_guard<std::mutex> lock(m_mutex);
-        return m_events.size();
+        size_t total = 0;
+        for (const auto& buf : m_buffers) {
+            total += buf.events.size();
+        }
+        return total;
+    }
+
+    std::vector<EtwBuffer> getBuffersCopy() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::vector<EtwBuffer> res;
+        if (m_buffers.empty()) return res;
+        size_t count = m_buffers.size();
+        for (size_t i = 0; i < count; ++i) {
+            size_t idx = (m_oldestBufferIndex + i) % count;
+            res.push_back(m_buffers[idx]);
+        }
+        return res;
     }
 
     void flush() {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_props.BuffersWritten = static_cast<uint32_t>((m_events.size() / 16) + 1);
+        if (!m_buffers.empty() && m_buffers[m_currentBufferIndex].header.EventsCount > 0) {
+            m_buffers[m_currentBufferIndex].header.State = 2;
+            m_completedBuffersCount++;
+            m_props.BuffersWritten = m_completedBuffersCount;
+        }
     }
 
     std::vector<GUID> getEnabledGuids() {
@@ -397,7 +709,12 @@ private:
     std::wstring m_name;
     EVENT_TRACE_PROPERTIES m_props{};
     std::wstring m_logFileName;
-    std::vector<RecordedEtwEvent> m_events;
+    std::vector<EtwBuffer> m_buffers;
+    size_t m_currentBufferIndex{0};
+    size_t m_oldestBufferIndex{0};
+    uint32_t m_sequenceCounter{0};
+    uint32_t m_circularWraps{0};
+    uint32_t m_completedBuffersCount{0};
     std::map<GUID, EnabledProviderInfo, GuidLess> m_enabledProviders;
     mutable std::mutex m_mutex;
 };
@@ -434,7 +751,18 @@ public:
         m_nextRegHandle = 0x1000;
         m_nextTraceHandle = 0x2000;
         m_nextSessionId = 1;
+        m_telemetry = ETW_TELEMETRY{};
         initializeKernelLoggerUnlocked();
+    }
+
+    ETW_TELEMETRY getTelemetry() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_telemetry;
+    }
+
+    void resetTelemetry() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_telemetry = ETW_TELEMETRY{};
     }
 
     // Provider APIs
@@ -452,6 +780,7 @@ public:
 
         m_providers[h] = prov;
         *outHandle = h;
+        m_telemetry.totalProvidersRegistered++;
 
         // If any active session has already enabled this provider, notify callback
         for (const auto& [_, session] : m_sessions) {
@@ -477,6 +806,7 @@ public:
         }
 
         m_providers.erase(it);
+        m_telemetry.totalProvidersUnregistered++;
         return ERROR_SUCCESS;
     }
 
@@ -507,7 +837,9 @@ public:
         return false;
     }
 
-    uint32_t writeEvent(REGHANDLE handle, const EVENT_DESCRIPTOR* desc, uint32_t userDataCount, const EVENT_DATA_DESCRIPTOR* userData) {
+    uint32_t writeEventTransfer(REGHANDLE handle, const EVENT_DESCRIPTOR* desc,
+                                const GUID* activityId, const GUID* relatedActivityId,
+                                uint32_t userDataCount, const EVENT_DATA_DESCRIPTOR* userData) {
         if (!desc) return ERROR_INVALID_PARAMETER;
 
         std::vector<uint8_t> payload;
@@ -540,17 +872,27 @@ public:
         hdr.EventDescriptor = *desc;
         hdr.ThreadId = 1;
         hdr.ProcessId = 1000;
+        if (activityId) {
+            hdr.ActivityId = *activityId;
+            hdr.Flags |= EVENT_HEADER_FLAG_EXTENDED_INFO;
+        }
 
-        uint32_t dispatchCount = 0;
         for (auto& [_, session] : m_sessions) {
             if (session->isProviderEnabled(it->second.guid, desc->Level, desc->Keyword)) {
-                session->recordEvent(hdr, payload.data(), payload.size());
-                dispatchCount++;
+                uint64_t wraps = 0, lost = 0, flushed = 0;
+                session->recordEvent(hdr, payload.data(), payload.size(), L"", activityId, relatedActivityId, &wraps, &lost, &flushed);
+                m_telemetry.totalCircularBufferWraps += wraps;
+                m_telemetry.totalEventsLost += lost;
+                m_telemetry.totalBuffersFlushed += flushed;
             }
         }
-        (void)dispatchCount;
 
+        m_telemetry.totalEventsWritten++;
         return ERROR_SUCCESS;
+    }
+
+    uint32_t writeEvent(REGHANDLE handle, const EVENT_DESCRIPTOR* desc, uint32_t userDataCount, const EVENT_DATA_DESCRIPTOR* userData) {
+        return writeEventTransfer(handle, desc, nullptr, nullptr, userDataCount, userData);
     }
 
     uint32_t writeString(REGHANDLE handle, uint8_t level, uint64_t keyword, const wchar_t* str) {
@@ -578,10 +920,15 @@ public:
 
         for (auto& [_, session] : m_sessions) {
             if (session->isProviderEnabled(it->second.guid, level, keyword)) {
-                session->recordEvent(hdr, ws.data(), byteLen, ws);
+                uint64_t wraps = 0, lost = 0, flushed = 0;
+                session->recordEvent(hdr, ws.data(), byteLen, ws, nullptr, nullptr, &wraps, &lost, &flushed);
+                m_telemetry.totalCircularBufferWraps += wraps;
+                m_telemetry.totalEventsLost += lost;
+                m_telemetry.totalBuffersFlushed += flushed;
             }
         }
 
+        m_telemetry.totalEventsWritten++;
         return ERROR_SUCCESS;
     }
 
@@ -620,6 +967,7 @@ public:
         props->NumberOfBuffers = session->getProperties().NumberOfBuffers;
         props->FreeBuffers = session->getProperties().FreeBuffers;
 
+        m_telemetry.totalSessionsStarted++;
         return ERROR_SUCCESS;
     }
 
@@ -644,6 +992,7 @@ public:
         m_sessionByName.erase(it->second->getName());
         m_sessions.erase(it);
 
+        m_telemetry.totalSessionsStopped++;
         return ERROR_SUCCESS;
     }
 
@@ -687,6 +1036,7 @@ public:
         if (props->FlushTimer > 0) currentProps.FlushTimer = props->FlushTimer;
         if (props->MaximumBuffers > 0) currentProps.MaximumBuffers = props->MaximumBuffers;
         if (props->LogFileMode > 0) currentProps.LogFileMode = props->LogFileMode;
+        if (props->EnableFlags > 0) currentProps.EnableFlags = props->EnableFlags;
 
         *props = currentProps;
         return ERROR_SUCCESS;
@@ -710,6 +1060,7 @@ public:
             *props = it->second->getProperties();
         }
 
+        m_telemetry.totalBuffersFlushed++;
         return ERROR_SUCCESS;
     }
 
@@ -784,14 +1135,21 @@ public:
             if (it == m_consumers.end()) continue;
 
             auto logfile = it->second;
-            if (!logfile->EventRecordCallback) continue;
+            if (!logfile->EventRecordCallback && !logfile->BufferCallback) continue;
 
             // Find matching session
             std::shared_ptr<TraceSession> targetSession;
-            if (logfile->LoggerName) {
+            if (logfile->LoggerName && logfile->LoggerName[0] != L'\0') {
                 auto sit = m_sessionByName.find(logfile->LoggerName);
                 if (sit != m_sessionByName.end()) {
                     targetSession = m_sessions[sit->second];
+                }
+            } else if (logfile->LogFileName && logfile->LogFileName[0] != L'\0') {
+                for (const auto& [_, s] : m_sessions) {
+                    if (s->getLogFileName() == logfile->LogFileName) {
+                        targetSession = s;
+                        break;
+                    }
                 }
             }
 
@@ -800,16 +1158,43 @@ public:
             }
 
             if (targetSession) {
-                auto events = targetSession->getEvents();
-                for (auto& ev : events) {
-                    EVENT_RECORD rec{};
-                    rec.EventHeader = ev.header;
-                    rec.UserDataLength = static_cast<uint16_t>(ev.data.size());
-                    rec.UserData = ev.data.empty() ? nullptr : ev.data.data();
-                    rec.UserContext = logfile->Context;
+                auto buffers = targetSession->getBuffersCopy();
+                for (auto& buf : buffers) {
+                    if (buf.events.empty()) continue;
 
-                    logfile->EventRecordCallback(&rec);
-                    logfile->BuffersRead++;
+                    logfile->Filled = buf.header.FilledBytes;
+                    logfile->BufferSize = buf.header.BufferSize;
+                    logfile->BufferContext.ProcessorNumber = buf.header.ProcessorNumber;
+                    logfile->BufferContext.Alignment = buf.header.Alignment;
+                    logfile->BufferContext.LoggerId = buf.header.LoggerId;
+
+                    if (logfile->BufferCallback) {
+                        logfile->BufferCallback(logfile.get());
+                    }
+
+                    if (logfile->EventRecordCallback) {
+                        for (auto& ev : buf.events) {
+                            EVENT_RECORD rec{};
+                            rec.EventHeader = ev.header;
+                            rec.BufferContext = logfile->BufferContext;
+                            rec.UserDataLength = static_cast<uint16_t>(ev.data.size());
+                            rec.UserData = ev.data.empty() ? nullptr : ev.data.data();
+                            rec.UserContext = logfile->Context;
+
+                            EVENT_HEADER_EXTENDED_DATA_ITEM extItem{};
+                            if (ev.hasRelatedActivityId) {
+                                extItem.ExtType = EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITY_ID;
+                                extItem.DataSize = sizeof(GUID);
+                                extItem.DataPtr = reinterpret_cast<uint64_t>(&ev.relatedActivityId);
+                                rec.ExtendedDataCount = 1;
+                                rec.ExtendedData = &extItem;
+                            }
+
+                            logfile->EventRecordCallback(&rec);
+                            logfile->BuffersRead++;
+                            m_telemetry.totalEventsDelivered++;
+                        }
+                    }
                 }
             }
         }
@@ -839,6 +1224,198 @@ public:
         return m_sessions[it->second];
     }
 
+    // Sovereign Kernel-Mode Event Tracing Engine & Routing
+    bool isSystemFlagEnabled(uint32_t flag) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& [_, s] : m_sessions) {
+            if ((s->getProperties().EnableFlags & flag) != 0) return true;
+        }
+        return false;
+    }
+
+    void recordKernelEvent(const GUID& guid, uint32_t flag, const EVENT_HEADER& hdr, const void* pData, size_t size, std::wstring msg = L"") {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        bool logged = false;
+        for (auto& [_, session] : m_sessions) {
+            if ((session->getProperties().EnableFlags & flag) != 0 ||
+                session->isProviderEnabled(guid, hdr.EventDescriptor.Level, hdr.EventDescriptor.Keyword) ||
+                session->isProviderEnabled(SystemTraceControlGuid, hdr.EventDescriptor.Level, 0)) {
+                uint64_t wraps = 0, lost = 0, flushed = 0;
+                session->recordEvent(hdr, pData, size, msg, nullptr, nullptr, &wraps, &lost, &flushed);
+                m_telemetry.totalCircularBufferWraps += wraps;
+                m_telemetry.totalEventsLost += lost;
+                m_telemetry.totalBuffersFlushed += flushed;
+                logged = true;
+            }
+        }
+        if (logged) {
+            m_telemetry.totalKernelEventsLogged++;
+            m_telemetry.totalEventsWritten++;
+        }
+    }
+
+    void traceProcess(uint8_t opcode, uint32_t pid, uint32_t parentPid, uint32_t sessionId, int32_t exitStatus, const char* imageName) {
+        ETW_PROCESS_EVENT pe{};
+        pe.ProcessId = pid;
+        pe.ParentProcessId = parentPid;
+        pe.SessionId = sessionId;
+        pe.ExitStatus = exitStatus;
+        pe.DirectoryTableBase = 0x10000000;
+        details::safeCopyAnsi(pe.ImageFileName, sizeof(pe.ImageFileName), imageName ? imageName : "unknown");
+
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        int64_t ts = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+
+        EVENT_HEADER hdr{};
+        hdr.Size = static_cast<uint16_t>(sizeof(EVENT_HEADER) + sizeof(pe));
+        hdr.TimeStamp = ts;
+        hdr.ProviderId = ProcessTraceGuid;
+        hdr.EventDescriptor.Id = 1;
+        hdr.EventDescriptor.Opcode = opcode;
+        hdr.EventDescriptor.Level = TRACE_LEVEL_INFORMATION;
+        hdr.ProcessId = pid;
+        hdr.ThreadId = 1;
+
+        recordKernelEvent(ProcessTraceGuid, EVENT_TRACE_FLAG_PROCESS, hdr, &pe, sizeof(pe));
+    }
+
+    void traceThread(uint8_t opcode, uint32_t pid, uint32_t tid, uint64_t startAddr, int32_t exitStatus) {
+        ETW_THREAD_EVENT te{};
+        te.ProcessId = pid;
+        te.ThreadId = tid;
+        te.Win32StartAddress = startAddr;
+        te.ExitStatus = exitStatus;
+
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        int64_t ts = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+
+        EVENT_HEADER hdr{};
+        hdr.Size = static_cast<uint16_t>(sizeof(EVENT_HEADER) + sizeof(te));
+        hdr.TimeStamp = ts;
+        hdr.ProviderId = ThreadTraceGuid;
+        hdr.EventDescriptor.Id = 2;
+        hdr.EventDescriptor.Opcode = opcode;
+        hdr.EventDescriptor.Level = TRACE_LEVEL_INFORMATION;
+        hdr.ProcessId = pid;
+        hdr.ThreadId = tid;
+
+        recordKernelEvent(ThreadTraceGuid, EVENT_TRACE_FLAG_THREAD, hdr, &te, sizeof(te));
+    }
+
+    void traceImageLoad(uint32_t pid, uint64_t base, uint64_t size, const wchar_t* path) {
+        ETW_IMAGE_LOAD_EVENT ie{};
+        ie.ProcessId = pid;
+        ie.ImageBase = base;
+        ie.ImageSize = size;
+        details::safeCopyWide(ie.FileName, sizeof(ie.FileName) / sizeof(wchar_t), path ? path : L"");
+
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        int64_t ts = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+
+        EVENT_HEADER hdr{};
+        hdr.Size = static_cast<uint16_t>(sizeof(EVENT_HEADER) + sizeof(ie));
+        hdr.TimeStamp = ts;
+        hdr.ProviderId = ImageLoadTraceGuid;
+        hdr.EventDescriptor.Id = 3;
+        hdr.EventDescriptor.Opcode = 10; // Load
+        hdr.EventDescriptor.Level = TRACE_LEVEL_INFORMATION;
+        hdr.ProcessId = pid;
+        hdr.ThreadId = 1;
+
+        recordKernelEvent(ImageLoadTraceGuid, EVENT_TRACE_FLAG_IMAGE_LOAD, hdr, &ie, sizeof(ie));
+    }
+
+    void traceDiskIo(uint8_t opcode, uint32_t diskNumber, uint64_t byteOffset, uint32_t size) {
+        ETW_DISK_IO_EVENT de{};
+        de.DiskNumber = diskNumber;
+        de.ByteOffset = byteOffset;
+        de.TransferSize = size;
+
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        int64_t ts = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+
+        EVENT_HEADER hdr{};
+        hdr.Size = static_cast<uint16_t>(sizeof(EVENT_HEADER) + sizeof(de));
+        hdr.TimeStamp = ts;
+        hdr.ProviderId = DiskIoTraceGuid;
+        hdr.EventDescriptor.Id = 4;
+        hdr.EventDescriptor.Opcode = opcode;
+        hdr.EventDescriptor.Level = TRACE_LEVEL_INFORMATION;
+        hdr.ProcessId = 4; // System
+        hdr.ThreadId = 1;
+
+        recordKernelEvent(DiskIoTraceGuid, EVENT_TRACE_FLAG_DISK_IO, hdr, &de, sizeof(de));
+    }
+
+    void tracePageFault(uint32_t pid, uint64_t virtualAddr, uint64_t pc, uint32_t faultType) {
+        ETW_PAGE_FAULT_EVENT pfe{};
+        pfe.ProcessId = pid;
+        pfe.VirtualAddress = virtualAddr;
+        pfe.ProgramCounter = pc;
+        pfe.FaultType = faultType;
+
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        int64_t ts = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+
+        EVENT_HEADER hdr{};
+        hdr.Size = static_cast<uint16_t>(sizeof(EVENT_HEADER) + sizeof(pfe));
+        hdr.TimeStamp = ts;
+        hdr.ProviderId = PageFaultTraceGuid;
+        hdr.EventDescriptor.Id = 5;
+        hdr.EventDescriptor.Opcode = static_cast<uint8_t>(10 + faultType);
+        hdr.EventDescriptor.Level = TRACE_LEVEL_INFORMATION;
+        hdr.ProcessId = pid;
+        hdr.ThreadId = 1;
+
+        recordKernelEvent(PageFaultTraceGuid, EVENT_TRACE_FLAG_MEMORY_PAGE_FAULTS, hdr, &pfe, sizeof(pfe));
+    }
+
+    void traceAlpc(uint8_t opcode, uint32_t msgId, uint32_t srcPid, uint32_t dstPid, uint32_t msgType) {
+        ETW_ALPC_EVENT ae{};
+        ae.MessageId = msgId;
+        ae.SourceProcessId = srcPid;
+        ae.TargetProcessId = dstPid;
+        ae.MessageType = msgType;
+
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        int64_t ts = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+
+        EVENT_HEADER hdr{};
+        hdr.Size = static_cast<uint16_t>(sizeof(EVENT_HEADER) + sizeof(ae));
+        hdr.TimeStamp = ts;
+        hdr.ProviderId = AlpcTraceGuid;
+        hdr.EventDescriptor.Id = 6;
+        hdr.EventDescriptor.Opcode = opcode;
+        hdr.EventDescriptor.Level = TRACE_LEVEL_INFORMATION;
+        hdr.ProcessId = srcPid;
+        hdr.ThreadId = 1;
+
+        recordKernelEvent(AlpcTraceGuid, EVENT_TRACE_FLAG_ALPC, hdr, &ae, sizeof(ae));
+    }
+
+    void traceRegistry(uint8_t opcode, uint64_t keyHandle, uint32_t opType, const wchar_t* keyName, uint32_t status) {
+        ETW_REGISTRY_EVENT re{};
+        re.KeyHandle = keyHandle;
+        re.OpType = opType;
+        re.Status = status;
+        details::safeCopyWide(re.KeyName, sizeof(re.KeyName) / sizeof(wchar_t), keyName ? keyName : L"");
+
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        int64_t ts = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+
+        EVENT_HEADER hdr{};
+        hdr.Size = static_cast<uint16_t>(sizeof(EVENT_HEADER) + sizeof(re));
+        hdr.TimeStamp = ts;
+        hdr.ProviderId = RegistryTraceGuid;
+        hdr.EventDescriptor.Id = 7;
+        hdr.EventDescriptor.Opcode = opcode;
+        hdr.EventDescriptor.Level = TRACE_LEVEL_INFORMATION;
+        hdr.ProcessId = 1000;
+        hdr.ThreadId = 1;
+
+        recordKernelEvent(RegistryTraceGuid, EVENT_TRACE_FLAG_REGISTRY, hdr, &re, sizeof(re));
+    }
+
 private:
     void initializeKernelLogger() {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -852,7 +1429,9 @@ private:
         props.MinimumBuffers = 4;
         props.MaximumBuffers = 64;
         props.LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
-        props.EnableFlags = EVENT_TRACE_FLAG_PROCESS | EVENT_TRACE_FLAG_THREAD | EVENT_TRACE_FLAG_DISK_IO | EVENT_TRACE_FLAG_NETWORK_TCPIP;
+        props.EnableFlags = EVENT_TRACE_FLAG_PROCESS | EVENT_TRACE_FLAG_THREAD | EVENT_TRACE_FLAG_DISK_IO |
+                            EVENT_TRACE_FLAG_NETWORK_TCPIP | EVENT_TRACE_FLAG_MEMORY_PAGE_FAULTS |
+                            EVENT_TRACE_FLAG_ALPC | EVENT_TRACE_FLAG_REGISTRY;
 
         TRACEHANDLE h = m_nextTraceHandle++;
         uint16_t id = m_nextSessionId++;
@@ -868,6 +1447,7 @@ private:
     std::unordered_map<TRACEHANDLE, std::shared_ptr<TraceSession>> m_sessions;
     std::unordered_map<std::wstring, TRACEHANDLE> m_sessionByName;
     std::unordered_map<TRACEHANDLE, std::shared_ptr<EVENT_TRACE_LOGFILEW>> m_consumers;
+    ETW_TELEMETRY m_telemetry{};
 
     REGHANDLE   m_nextRegHandle{0x1000};
     TRACEHANDLE m_nextTraceHandle{0x2000};
@@ -987,9 +1567,7 @@ inline uint32_t __stdcall EventWriteString(REGHANDLE RegHandle, uint8_t Level, u
 inline uint32_t __stdcall EventWriteTransfer(REGHANDLE RegHandle, const EVENT_DESCRIPTOR* EventDescriptor,
                                              const GUID* ActivityId, const GUID* RelatedActivityId,
                                              uint32_t UserDataCount, const EVENT_DATA_DESCRIPTOR* UserData) {
-    (void)ActivityId;
-    (void)RelatedActivityId;
-    return TraceManager::get().writeEvent(RegHandle, EventDescriptor, UserDataCount, UserData);
+    return TraceManager::get().writeEventTransfer(RegHandle, EventDescriptor, ActivityId, RelatedActivityId, UserDataCount, UserData);
 }
 
 inline TRACEHANDLE __stdcall OpenTraceW(EVENT_TRACE_LOGFILEW* Logfile) {
@@ -1035,10 +1613,48 @@ inline int32_t __stdcall EtwEventWriteString(REGHANDLE RegHandle, uint8_t Level,
 inline int32_t __stdcall EtwEventWriteTransfer(REGHANDLE RegHandle, const EVENT_DESCRIPTOR* EventDescriptor,
                                                const GUID* ActivityId, const GUID* RelatedActivityId,
                                                uint32_t UserDataCount, const EVENT_DATA_DESCRIPTOR* UserData) {
-    (void)ActivityId;
-    (void)RelatedActivityId;
-    uint32_t r = TraceManager::get().writeEvent(RegHandle, EventDescriptor, UserDataCount, UserData);
+    uint32_t r = TraceManager::get().writeEventTransfer(RegHandle, EventDescriptor, ActivityId, RelatedActivityId, UserDataCount, UserData);
     return (r == ERROR_SUCCESS) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+}
+
+// ============================================================================
+// 8b. Sovereign Kernel-Mode System Tracing & Telemetry API
+// ============================================================================
+
+inline void EtwTraceProcess(uint8_t opcode, uint32_t pid, uint32_t parentPid, uint32_t sessionId, int32_t exitStatus, const char* imageName) {
+    TraceManager::get().traceProcess(opcode, pid, parentPid, sessionId, exitStatus, imageName);
+}
+
+inline void EtwTraceThread(uint8_t opcode, uint32_t pid, uint32_t tid, uint64_t startAddr, int32_t exitStatus) {
+    TraceManager::get().traceThread(opcode, pid, tid, startAddr, exitStatus);
+}
+
+inline void EtwTraceImageLoad(uint32_t pid, uint64_t base, uint64_t size, const wchar_t* path) {
+    TraceManager::get().traceImageLoad(pid, base, size, path);
+}
+
+inline void EtwTraceDiskIo(uint8_t opcode, uint32_t diskNumber, uint64_t byteOffset, uint32_t size) {
+    TraceManager::get().traceDiskIo(opcode, diskNumber, byteOffset, size);
+}
+
+inline void EtwTracePageFault(uint32_t pid, uint64_t virtualAddr, uint64_t pc, uint32_t faultType) {
+    TraceManager::get().tracePageFault(pid, virtualAddr, pc, faultType);
+}
+
+inline void EtwTraceAlpc(uint8_t opcode, uint32_t msgId, uint32_t srcPid, uint32_t dstPid, uint32_t msgType) {
+    TraceManager::get().traceAlpc(opcode, msgId, srcPid, dstPid, msgType);
+}
+
+inline void EtwTraceRegistry(uint8_t opcode, uint64_t keyHandle, uint32_t opType, const wchar_t* keyName, uint32_t status) {
+    TraceManager::get().traceRegistry(opcode, keyHandle, opType, keyName, status);
+}
+
+inline ETW_TELEMETRY EtwQueryTelemetry() {
+    return TraceManager::get().getTelemetry();
+}
+
+inline void EtwResetTelemetryForTesting() {
+    TraceManager::get().resetTelemetry();
 }
 
 // ============================================================================

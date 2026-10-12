@@ -6204,6 +6204,309 @@ void Test_Horizon25_SecurityReferenceMonitor_GenericMapping_Inheritance_And_Impe
     std::cout << "[TEST] Suite 241: Horizon 25 - Sovereign Security Reference Monitor (Se) Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 242: Horizon 26 - Sovereign Event Tracing for Windows (Etw) Subsystem
+// ============================================================================
+void Test_Horizon26_EventTracingForWindows_Sessions_CircularBuffers_And_RealtimeDispatch() {
+    std::cout << "[TEST] Suite 242: Horizon 26 - Sovereign Event Tracing for Windows (Etw) Subsystem...\n" << std::flush;
+
+    etw::EtwResetTelemetryForTesting();
+
+    // 1. Initial Telemetry Verification
+    {
+        auto telem = etw::EtwQueryTelemetry();
+        TEST_ASSERT(telem.totalSessionsStarted == 0, "Initial totalSessionsStarted must be 0");
+        TEST_ASSERT(telem.totalEventsWritten == 0, "Initial totalEventsWritten must be 0");
+        TEST_ASSERT(telem.totalCircularBufferWraps == 0, "Initial totalCircularBufferWraps must be 0");
+        TEST_ASSERT(telem.totalEventsLost == 0, "Initial totalEventsLost must be 0");
+    }
+
+    // 2. Circular Trace Session Lifecycle & Properties Configuration
+    etw::TRACEHANDLE hCircSession = 0;
+    {
+        etw::EVENT_TRACE_PROPERTIES props{};
+        props.Wnode.BufferSize = sizeof(etw::EVENT_TRACE_PROPERTIES);
+        props.BufferSize = 1; // 1 KB buffers for deterministic buffer filling
+        props.MinimumBuffers = 2;
+        props.MaximumBuffers = 3;
+        props.LogFileMode = etw::EVENT_TRACE_REAL_TIME_MODE | etw::EVENT_TRACE_FILE_MODE_CIRCULAR;
+        props.FlushTimer = 1;
+        props.EnableFlags = etw::EVENT_TRACE_FLAG_PROCESS;
+
+        uint32_t status = etw::StartTraceW(&hCircSession, L"H26CircularTraceSession", &props);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS && hCircSession != 0, "StartTraceW for circular session must succeed");
+
+        etw::EVENT_TRACE_PROPERTIES qProps{};
+        status = etw::QueryTraceW(hCircSession, nullptr, &qProps);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "QueryTraceW must succeed");
+        TEST_ASSERT(qProps.BufferSize == 1, "Configured BufferSize must be 1 KB");
+        TEST_ASSERT(qProps.MaximumBuffers == 3, "Configured MaximumBuffers must be 3");
+        TEST_ASSERT((qProps.LogFileMode & etw::EVENT_TRACE_FILE_MODE_CIRCULAR) != 0, "LogFileMode must include CIRCULAR");
+    }
+
+    // 3. Provider Registration, Enable Callback & Level/Keyword Filtering
+    etw::REGHANDLE hProvider = 0;
+    GUID h26ProviderGuid = { 0x8899AABB, 0xCCDD, 0xEEFF, { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 } };
+    static bool s_h26CallbackFired = false;
+    static uint32_t s_h26CallbackCode = 0;
+    static uint8_t s_h26Level = 0;
+    static uint64_t s_h26AnyKw = 0;
+    static uint64_t s_h26AllKw = 0;
+
+    {
+        s_h26CallbackFired = false;
+        auto callback = [](const GUID* srcId, uint32_t isEnabled, uint8_t level, uint64_t anyKw, uint64_t allKw, void* filter, void* ctx) {
+            (void)srcId; (void)filter; (void)ctx;
+            s_h26CallbackFired = true;
+            s_h26CallbackCode = isEnabled;
+            s_h26Level = level;
+            s_h26AnyKw = anyKw;
+            s_h26AllKw = allKw;
+        };
+
+        uint32_t status = etw::EventRegister(&h26ProviderGuid, callback, nullptr, &hProvider);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS && hProvider != 0, "EventRegister must succeed");
+
+        // Enable provider with specific Level and Keyword mask
+        status = etw::EnableTraceEx2(hCircSession, &h26ProviderGuid, etw::EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+                                     etw::TRACE_LEVEL_INFORMATION, 0x00FFULL, 0x0001ULL, 0, nullptr);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "EnableTraceEx2 must succeed");
+        TEST_ASSERT(s_h26CallbackFired, "EnableCallback must have fired");
+        TEST_ASSERT(s_h26CallbackCode == etw::EVENT_CONTROL_CODE_ENABLE_PROVIDER, "Callback code must be ENABLE");
+        TEST_ASSERT(s_h26Level == etw::TRACE_LEVEL_INFORMATION, "Callback level must be INFORMATION");
+        TEST_ASSERT(s_h26AnyKw == 0x00FFULL && s_h26AllKw == 0x0001ULL, "Callback keywords must match");
+
+        // Filtering verification:
+        // Level INFORMATION (4), Keyword 0x0001 -> matches
+        TEST_ASSERT(etw::EventProviderEnabled(hProvider, etw::TRACE_LEVEL_INFORMATION, 0x0001) == 1,
+                    "Provider must be enabled for level 4 keyword 0x0001");
+        // Level VERBOSE (5) -> must be filtered out
+        TEST_ASSERT(etw::EventProviderEnabled(hProvider, etw::TRACE_LEVEL_VERBOSE, 0x0001) == 0,
+                    "Provider must be filtered out for level 5 (VERBOSE)");
+        // Keyword without bit 0 (fails allKeyword match) -> filtered out
+        TEST_ASSERT(etw::EventProviderEnabled(hProvider, etw::TRACE_LEVEL_INFORMATION, 0x0002) == 0,
+                    "Provider must be filtered out when matchAllKeyword is not satisfied");
+    }
+
+    // 4. Circular Buffer Wrap Mechanics (EVENT_TRACE_FILE_MODE_CIRCULAR)
+    {
+        auto session = etw::TraceManager::get().getSessionByName(L"H26CircularTraceSession");
+        TEST_ASSERT(session != nullptr, "Session must exist");
+
+        // With BufferSize = 1 KB (1024 bytes), an event payload of 200 bytes (+ 80-byte header = 280 bytes)
+        // allows ~3 events per buffer before full. With MaximumBuffers = 3, writing 15 events will fill
+        // all 3 buffers and wrap around the circular ring, overwriting older buffers.
+        std::vector<uint8_t> payload(200, 0xAA);
+        etw::EVENT_DESCRIPTOR desc{};
+        desc.Id = 1001;
+        desc.Level = etw::TRACE_LEVEL_INFORMATION;
+        desc.Keyword = 0x0001;
+
+        etw::EVENT_DATA_DESCRIPTOR dataDesc{};
+        dataDesc.Ptr = reinterpret_cast<uint64_t>(payload.data());
+        dataDesc.Size = static_cast<uint32_t>(payload.size());
+
+        for (int i = 0; i < 15; ++i) {
+            uint32_t stWrite = etw::EventWrite(hProvider, &desc, 1, &dataDesc);
+            TEST_ASSERT(stWrite == etw::ERROR_SUCCESS, "EventWrite in circular session must succeed");
+        }
+
+        // Circular wraps must have occurred
+        TEST_ASSERT(session->getCircularWraps() >= 1, "Circular buffer wraps must be >= 1");
+        TEST_ASSERT(session->getProperties().EventsLost == 0, "Circular mode must overwrite buffers without losing events");
+        TEST_ASSERT(session->getCompletedBuffersCount() >= 3, "Completed buffers must be >= 3");
+
+        auto telem = etw::EtwQueryTelemetry();
+        TEST_ASSERT(telem.totalCircularBufferWraps >= 1, "Telemetry totalCircularBufferWraps must be >= 1");
+        TEST_ASSERT(telem.totalBuffersFlushed >= 3, "Telemetry totalBuffersFlushed must be >= 3");
+    }
+
+    // 5. Sequential Buffer Mode & Event Loss (EVENT_TRACE_FILE_MODE_SEQUENTIAL)
+    {
+        etw::TRACEHANDLE hSeqSession = 0;
+        etw::EVENT_TRACE_PROPERTIES seqProps{};
+        seqProps.Wnode.BufferSize = sizeof(etw::EVENT_TRACE_PROPERTIES);
+        seqProps.BufferSize = 1; // 1 KB
+        seqProps.MinimumBuffers = 2;
+        seqProps.MaximumBuffers = 2; // Strict limit: 2 buffers
+        seqProps.LogFileMode = etw::EVENT_TRACE_FILE_MODE_SEQUENTIAL;
+
+        uint32_t status = etw::StartTraceW(&hSeqSession, L"H26SequentialTraceSession", &seqProps);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "StartTraceW for sequential session must succeed");
+
+        etw::EnableTraceEx2(hSeqSession, &h26ProviderGuid, etw::EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+                            etw::TRACE_LEVEL_INFORMATION, 0xFFFFFFFFULL, 0, 0, nullptr);
+
+        auto seqSession = etw::TraceManager::get().getSessionByName(L"H26SequentialTraceSession");
+        TEST_ASSERT(seqSession != nullptr, "Sequential session must exist");
+
+        std::vector<uint8_t> payload(200, 0xBB);
+        etw::EVENT_DESCRIPTOR desc{};
+        desc.Id = 2001;
+        desc.Level = etw::TRACE_LEVEL_INFORMATION;
+        desc.Keyword = 0x0001;
+
+        etw::EVENT_DATA_DESCRIPTOR dataDesc{};
+        dataDesc.Ptr = reinterpret_cast<uint64_t>(payload.data());
+        dataDesc.Size = static_cast<uint32_t>(payload.size());
+
+        for (int i = 0; i < 15; ++i) {
+            etw::EventWrite(hProvider, &desc, 1, &dataDesc);
+        }
+
+        // In sequential mode, once both buffers are full, events must be dropped and EventsLost incremented
+        TEST_ASSERT(seqSession->getProperties().EventsLost > 0, "Sequential mode must track lost events when pool exhausted");
+        auto telem = etw::EtwQueryTelemetry();
+        TEST_ASSERT(telem.totalEventsLost > 0, "Telemetry totalEventsLost must be > 0");
+
+        etw::StopTraceW(hSeqSession, nullptr, nullptr);
+    }
+
+    // 6. Transfer Tracing & Activity ID Propagation (EventWriteTransfer)
+    GUID activityId = { 0xAAAA1111, 0x2222, 0x3333, { 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB } };
+    GUID relatedActivityId = { 0xBBBB2222, 0x3333, 0x4444, { 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC } };
+    {
+        etw::EVENT_DESCRIPTOR transferDesc{};
+        transferDesc.Id = 3001;
+        transferDesc.Level = etw::TRACE_LEVEL_INFORMATION;
+        transferDesc.Keyword = 0x0001;
+
+        uint32_t transferPayload = 0x55AA55AA;
+        etw::EVENT_DATA_DESCRIPTOR dataDesc{};
+        dataDesc.Ptr = reinterpret_cast<uint64_t>(&transferPayload);
+        dataDesc.Size = sizeof(transferPayload);
+
+        uint32_t status = etw::EventWriteTransfer(hProvider, &transferDesc, &activityId, &relatedActivityId, 1, &dataDesc);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "EventWriteTransfer must succeed");
+    }
+
+    // 7. Real-Time Consumer Dispatch Engine (OpenTraceW, ProcessTrace, CloseTrace)
+    {
+        static uint32_t s_consumerEventsCount = 0;
+        static uint32_t s_consumerBuffersCount = 0;
+        static bool s_foundTransferEvent = false;
+
+        s_consumerEventsCount = 0;
+        s_consumerBuffersCount = 0;
+        s_foundTransferEvent = false;
+
+        etw::EVENT_TRACE_LOGFILEW logfile{};
+        wchar_t sessionName[] = L"H26CircularTraceSession";
+        logfile.LoggerName = sessionName;
+
+        logfile.BufferCallback = [](void* pLog) -> uint32_t {
+            if (pLog) s_consumerBuffersCount++;
+            return 1;
+        };
+
+        logfile.EventRecordCallback = [](etw::EVENT_RECORD* pRec) {
+            if (!pRec) return;
+            s_consumerEventsCount++;
+
+            TEST_ASSERT(pRec->BufferContext.Alignment == 8, "BufferContext alignment must be 8");
+            TEST_ASSERT(pRec->BufferContext.LoggerId != 0, "BufferContext LoggerId must be valid");
+
+            if (pRec->EventHeader.EventDescriptor.Id == 3001) {
+                // Verify Activity ID and Related Activity ID extended data
+                static const GUID expectedAct = { 0xAAAA1111, 0x2222, 0x3333, { 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB } };
+                static const GUID expectedRel = { 0xBBBB2222, 0x3333, 0x4444, { 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC } };
+                if (std::memcmp(&pRec->EventHeader.ActivityId, &expectedAct, sizeof(GUID)) == 0) {
+                    if (pRec->ExtendedDataCount == 1 && pRec->ExtendedData != nullptr) {
+                        auto* pExt = static_cast<etw::EVENT_HEADER_EXTENDED_DATA_ITEM*>(pRec->ExtendedData);
+                        if (pExt->ExtType == etw::EVENT_HEADER_EXT_TYPE_RELATED_ACTIVITY_ID) {
+                            auto* pGuid = reinterpret_cast<const GUID*>(pExt->DataPtr);
+                            if (pGuid && std::memcmp(pGuid, &expectedRel, sizeof(GUID)) == 0) {
+                                s_foundTransferEvent = true;
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        etw::TRACEHANDLE hConsumer = etw::OpenTraceW(&logfile);
+        TEST_ASSERT(hConsumer != etw::INVALID_PROCESSTRACE_HANDLE, "OpenTraceW must succeed");
+
+        uint32_t status = etw::ProcessTrace(&hConsumer, 1, nullptr, nullptr);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "ProcessTrace must return ERROR_SUCCESS");
+        TEST_ASSERT(s_consumerEventsCount > 0, "ProcessTrace must deliver events to consumer");
+        TEST_ASSERT(s_consumerBuffersCount > 0, "BufferCallback must be invoked for trace buffers");
+        TEST_ASSERT(s_foundTransferEvent, "Consumer must receive EventWriteTransfer with verified ActivityId and RelatedActivityId");
+
+        status = etw::CloseTrace(hConsumer);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "CloseTrace must succeed");
+    }
+
+    // 8. NT Kernel Logger System Event Routing & Subsystem Telemetry
+    {
+        // Emit kernel-mode trace events across multiple subsystems
+        etw::EtwTraceProcess(etw::EVENT_TRACE_TYPE_START, 7001, 1000, 1, 0, "micant_core.exe");
+        etw::EtwTraceThread(etw::EVENT_TRACE_TYPE_START, 7001, 9001, 0x7FFF00100000ULL, 0);
+        etw::EtwTraceDiskIo(10 /* Read */, 0, 0x100000ULL, 16384);
+        etw::EtwTracePageFault(7001, 0x7FFF00200000ULL, 0x7FFF00100040ULL, 1 /* DemandZero */);
+        etw::EtwTraceAlpc(32 /* Send */, 5555, 7001, 1000, 1);
+        etw::EtwTraceRegistry(1 /* Create */, 0x400ULL, 1, L"\\Registry\\Machine\\System\\CurrentControlSet", 0);
+
+        auto telem = etw::EtwQueryTelemetry();
+        TEST_ASSERT(telem.totalKernelEventsLogged >= 6, "totalKernelEventsLogged must be >= 6");
+
+        // Verify NT Kernel Logger real-time consumption
+        static uint32_t s_kernelEventsReceived = 0;
+        s_kernelEventsReceived = 0;
+
+        etw::EVENT_TRACE_LOGFILEW kmLogfile{};
+        wchar_t kmName[] = L"NT Kernel Logger";
+        kmLogfile.LoggerName = kmName;
+        kmLogfile.EventRecordCallback = [](etw::EVENT_RECORD* pRec) {
+            if (!pRec) return;
+            if (pRec->EventHeader.ProviderId == etw::ProcessTraceGuid ||
+                pRec->EventHeader.ProviderId == etw::ThreadTraceGuid ||
+                pRec->EventHeader.ProviderId == etw::DiskIoTraceGuid ||
+                pRec->EventHeader.ProviderId == etw::PageFaultTraceGuid ||
+                pRec->EventHeader.ProviderId == etw::AlpcTraceGuid ||
+                pRec->EventHeader.ProviderId == etw::RegistryTraceGuid) {
+                s_kernelEventsReceived++;
+            }
+        };
+
+        etw::TRACEHANDLE hKmConsumer = etw::OpenTraceW(&kmLogfile);
+        TEST_ASSERT(hKmConsumer != etw::INVALID_PROCESSTRACE_HANDLE, "OpenTraceW on NT Kernel Logger must succeed");
+
+        uint32_t status = etw::ProcessTrace(&hKmConsumer, 1, nullptr, nullptr);
+        TEST_ASSERT(status == etw::ERROR_SUCCESS, "ProcessTrace on NT Kernel Logger must succeed");
+        TEST_ASSERT(s_kernelEventsReceived >= 6, "Consumer must receive all 6 logged kernel events");
+
+        etw::CloseTrace(hKmConsumer);
+    }
+
+    // 9. Comprehensive ETW Telemetry Audit & Reset
+    {
+        auto telem = etw::EtwQueryTelemetry();
+        TEST_ASSERT(telem.totalSessionsStarted >= 2, "totalSessionsStarted must be >= 2");
+        TEST_ASSERT(telem.totalEventsWritten >= 25, "totalEventsWritten must be >= 25");
+        TEST_ASSERT(telem.totalEventsDelivered >= 10, "totalEventsDelivered must be >= 10");
+        TEST_ASSERT(telem.totalBuffersFlushed >= 3, "totalBuffersFlushed must be >= 3");
+        TEST_ASSERT(telem.totalProvidersRegistered >= 1, "totalProvidersRegistered must be >= 1");
+        TEST_ASSERT(telem.totalCircularBufferWraps >= 1, "totalCircularBufferWraps must be >= 1");
+        TEST_ASSERT(telem.totalEventsLost >= 1, "totalEventsLost must be >= 1");
+        TEST_ASSERT(telem.totalKernelEventsLogged >= 6, "totalKernelEventsLogged must be >= 6");
+
+        // Clean up circular test session & provider
+        etw::StopTraceW(hCircSession, nullptr, nullptr);
+        etw::EventUnregister(hProvider);
+
+        etw::EtwResetTelemetryForTesting();
+        auto resetTelem = etw::EtwQueryTelemetry();
+        TEST_ASSERT(resetTelem.totalSessionsStarted == 0, "Telemetry reset must clear totalSessionsStarted");
+        TEST_ASSERT(resetTelem.totalEventsWritten == 0, "Telemetry reset must clear totalEventsWritten");
+        TEST_ASSERT(resetTelem.totalCircularBufferWraps == 0, "Telemetry reset must clear totalCircularBufferWraps");
+        TEST_ASSERT(resetTelem.totalEventsLost == 0, "Telemetry reset must clear totalEventsLost");
+        TEST_ASSERT(resetTelem.totalKernelEventsLogged == 0, "Telemetry reset must clear totalKernelEventsLogged");
+    }
+
+    std::cout << "[TEST] Suite 242: Horizon 26 - Sovereign Event Tracing for Windows (Etw) Subsystem PASSED.\n";
+}
+
 
 
 
