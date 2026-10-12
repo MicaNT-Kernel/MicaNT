@@ -118,6 +118,39 @@ struct UnicodeString {
     }
 };
 
+using UNICODE_STRING = UnicodeString;
+using PUNICODE_STRING = UnicodeString*;
+
+/**
+ * @brief Standard NT counted ANSI string.
+ */
+struct AnsiString {
+    uint16_t length{0};
+    uint16_t maximumLength{0};
+    const char* buffer{nullptr};
+
+    constexpr AnsiString() = default;
+    constexpr AnsiString(const char* str) noexcept
+        : buffer(str) {
+        if (str) {
+            size_t len = 0;
+            while (str[len] != '\0') ++len;
+            length = static_cast<uint16_t>(len);
+            maximumLength = static_cast<uint16_t>(len + 1);
+        }
+    }
+
+    [[nodiscard]] constexpr std::string_view view() const noexcept {
+        if (!buffer || length == 0) return {};
+        return std::string_view(buffer, length);
+    }
+};
+
+using ANSI_STRING = AnsiString;
+using PANSI_STRING = AnsiString*;
+using STRING = AnsiString;
+using PSTRING = AnsiString*;
+
 /**
  * @brief 64-bit QuadPart integer representation.
  */

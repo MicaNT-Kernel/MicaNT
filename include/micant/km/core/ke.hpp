@@ -740,5 +740,65 @@ inline void KiDispatchSoftwareInterrupt(KIRQL targetLevel) {
     }
 }
 
+// ============================================================================
+// 11. Critical and Guarded Region Execution Boundaries
+// ============================================================================
+
+inline thread_local bool t_kernelApcDisable{false};
+inline thread_local bool t_specialApcDisable{false};
+
+/**
+ * @brief Enter a Critical Region (disables normal kernel APCs for current thread).
+ */
+inline void KeEnterCriticalRegion() noexcept {
+    t_kernelApcDisable = true;
+    if (auto* thread = KeGetCurrentThread()) {
+        thread->kernelApcDisable = true;
+    }
+}
+
+/**
+ * @brief Leave a Critical Region (re-enables normal kernel APCs for current thread).
+ */
+inline void KeLeaveCriticalRegion() noexcept {
+    t_kernelApcDisable = false;
+    if (auto* thread = KeGetCurrentThread()) {
+        thread->kernelApcDisable = false;
+    }
+}
+
+/**
+ * @brief Enter a Guarded Region (disables special kernel APCs for current thread).
+ */
+inline void KeEnterGuardedRegion() noexcept {
+    t_specialApcDisable = true;
+    if (auto* thread = KeGetCurrentThread()) {
+        thread->specialApcDisable = true;
+    }
+}
+
+/**
+ * @brief Leave a Guarded Region (re-enables special kernel APCs for current thread).
+ */
+inline void KeLeaveGuardedRegion() noexcept {
+    t_specialApcDisable = false;
+    if (auto* thread = KeGetCurrentThread()) {
+        thread->specialApcDisable = false;
+    }
+}
+
+/**
+ * @brief Check if APC delivery is disabled (Critical/Guarded region or IRQL >= APC_LEVEL).
+ */
+[[nodiscard]] inline bool KeAreApcsDisabled() noexcept {
+    if (KeGetCurrentIrql() >= APC_LEVEL) return true;
+    if (t_kernelApcDisable || t_specialApcDisable) return true;
+    if (auto* thread = KeGetCurrentThread()) {
+        return thread->kernelApcDisable || thread->specialApcDisable;
+    }
+    return false;
+}
+
 } // namespace micant::ke
+
 

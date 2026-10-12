@@ -17,6 +17,7 @@
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 #include "ke.hpp"
+#include "probe.hpp"
 
 namespace micant::ex {
 
@@ -216,9 +217,6 @@ inline void ExFreePoolWithTag(void* p, uint32_t tag) {
 }
 
 inline uint64_t ExGetCurrentThreadId() noexcept {
-    if (auto* t = ke::KeGetCurrentThread(); t != nullptr && t->tid != 0) {
-        return static_cast<uint64_t>(t->tid);
-    }
     return static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
 }
 
@@ -247,6 +245,7 @@ inline void ExAcquireFastMutex(PFAST_MUTEX fastMutex) {
     fastMutex->count.store(0, std::memory_order_relaxed);
     fastMutex->oldIrql = old;
     fastMutex->owner = ExGetCurrentThreadId();
+    GetSyncTelemetry().totalFastMutexAcquisitions++;
 }
 
 inline BOOLEAN ExTryToAcquireFastMutex(PFAST_MUTEX fastMutex) {
@@ -256,6 +255,7 @@ inline BOOLEAN ExTryToAcquireFastMutex(PFAST_MUTEX fastMutex) {
         fastMutex->count.store(0, std::memory_order_relaxed);
         fastMutex->oldIrql = old;
         fastMutex->owner = ExGetCurrentThreadId();
+        GetSyncTelemetry().totalFastMutexAcquisitions++;
         return TRUE;
     }
     ke::KeLowerIrql(old);
@@ -274,6 +274,12 @@ inline void ExReleaseFastMutex(PFAST_MUTEX fastMutex) {
 // ============================================================================
 // Executive Resource (ERESOURCE) - Multi-Reader / Single-Writer Synchronization
 // ============================================================================
+
+struct OWNER_ENTRY {
+    uint64_t ownerThread{0};
+    int32_t ownerCount{0};
+};
+
 struct ERESOURCE {
     mutable std::mutex lock;
     std::condition_variable cv;
@@ -282,16 +288,29 @@ struct ERESOURCE {
     uint32_t exclusiveOwners{0};
     uint64_t exclusiveOwnerThread{0};
     uint32_t waiters{0};
+    uint32_t numberOfSharedWaiters{0};
+    uint32_t numberOfExclusiveWaiters{0};
+    uint16_t flag{0};
+    std::vector<OWNER_ENTRY> ownerTable;
 };
 using PERESOURCE = ERESOURCE*;
 
 inline void ExInitializeResourceLite(PERESOURCE resource) {
     if (!resource) return;
+    std::unique_lock<std::mutex> lk(resource->lock);
     resource->activeCount = 0;
     resource->sharedOwners = 0;
     resource->exclusiveOwners = 0;
     resource->exclusiveOwnerThread = 0;
     resource->waiters = 0;
+    resource->numberOfSharedWaiters = 0;
+    resource->numberOfExclusiveWaiters = 0;
+    resource->flag = 0;
+    resource->ownerTable.clear();
+}
+
+inline void ExReinitializeResourceLite(PERESOURCE resource) {
+    ExInitializeResourceLite(resource);
 }
 
 inline BOOLEAN ExAcquireResourceExclusiveLite(PERESOURCE resource, BOOLEAN wait) {
@@ -299,30 +318,46 @@ inline BOOLEAN ExAcquireResourceExclusiveLite(PERESOURCE resource, BOOLEAN wait)
     uint64_t currentTid = ExGetCurrentThreadId();
     std::unique_lock<std::mutex> lk(resource->lock);
 
+    // 1. Reentrant recursive exclusive acquisition by current owner
     if (resource->exclusiveOwnerThread == currentTid) {
         resource->exclusiveOwners++;
+        GetSyncTelemetry().totalExclusiveAcquisitions++;
         return TRUE;
     }
 
-    if (resource->activeCount == 0 && resource->sharedOwners == 0) {
+    // 2. Uncontended acquisition
+    if (resource->exclusiveOwners == 0 && resource->sharedOwners == 0) {
         resource->exclusiveOwnerThread = currentTid;
         resource->exclusiveOwners = 1;
         resource->activeCount = 1;
+        GetSyncTelemetry().totalExclusiveAcquisitions++;
         return TRUE;
     }
 
-    if (!wait) return FALSE;
+    // 3. Contended non-blocking attempt
+    if (!wait) {
+        GetSyncTelemetry().totalResourceTryAcquireFailures++;
+        return FALSE;
+    }
 
+    // 4. Wait for resource to be completely free
     resource->waiters++;
+    resource->numberOfExclusiveWaiters++;
     resource->cv.wait(lk, [&]() {
-        return resource->activeCount == 0 && resource->sharedOwners == 0;
+        return resource->exclusiveOwners == 0 && resource->sharedOwners == 0;
     });
     resource->waiters--;
+    resource->numberOfExclusiveWaiters--;
 
     resource->exclusiveOwnerThread = currentTid;
     resource->exclusiveOwners = 1;
     resource->activeCount = 1;
+    GetSyncTelemetry().totalExclusiveAcquisitions++;
     return TRUE;
+}
+
+inline BOOLEAN ExTryToAcquireResourceExclusiveLite(PERESOURCE resource) {
+    return ExAcquireResourceExclusiveLite(resource, FALSE);
 }
 
 inline BOOLEAN ExAcquireResourceSharedLite(PERESOURCE resource, BOOLEAN wait) {
@@ -330,34 +365,71 @@ inline BOOLEAN ExAcquireResourceSharedLite(PERESOURCE resource, BOOLEAN wait) {
     uint64_t currentTid = ExGetCurrentThreadId();
     std::unique_lock<std::mutex> lk(resource->lock);
 
+    auto findOwner = [&](uint64_t tid) -> OWNER_ENTRY* {
+        for (auto& entry : resource->ownerTable) {
+            if (entry.ownerThread == tid) return &entry;
+        }
+        return nullptr;
+    };
+
+    // 1. Reentrant acquisition if caller already holds exclusive lock
     if (resource->exclusiveOwnerThread == currentTid) {
         resource->sharedOwners++;
+        resource->activeCount = resource->sharedOwners;
+        GetSyncTelemetry().totalSharedAcquisitions++;
         return TRUE;
     }
 
-    if (resource->exclusiveOwners == 0 && resource->waiters == 0) {
+    // 2. Reentrant acquisition if caller already holds shared lock
+    OWNER_ENTRY* existing = findOwner(currentTid);
+    if (existing != nullptr) {
+        existing->ownerCount++;
         resource->sharedOwners++;
         resource->activeCount = resource->sharedOwners;
+        GetSyncTelemetry().totalSharedAcquisitions++;
         return TRUE;
     }
 
-    if (!wait) return FALSE;
+    // 3. New acquisition - verify no exclusive owner and prevent writer starvation
+    if (resource->exclusiveOwners == 0 && resource->numberOfExclusiveWaiters == 0) {
+        resource->ownerTable.push_back({currentTid, 1});
+        resource->sharedOwners++;
+        resource->activeCount = resource->sharedOwners;
+        GetSyncTelemetry().totalSharedAcquisitions++;
+        return TRUE;
+    }
 
+    if (!wait) {
+        GetSyncTelemetry().totalResourceTryAcquireFailures++;
+        return FALSE;
+    }
+
+    // 4. Wait for exclusive holders and exclusive waiters to clear
+    resource->waiters++;
+    resource->numberOfSharedWaiters++;
     resource->cv.wait(lk, [&]() {
-        return resource->exclusiveOwners == 0;
+        return resource->exclusiveOwners == 0 && resource->numberOfExclusiveWaiters == 0;
     });
+    resource->waiters--;
+    resource->numberOfSharedWaiters--;
 
+    resource->ownerTable.push_back({currentTid, 1});
     resource->sharedOwners++;
     resource->activeCount = resource->sharedOwners;
+    GetSyncTelemetry().totalSharedAcquisitions++;
     return TRUE;
 }
 
-inline void ExReleaseResourceLite(PERESOURCE resource) {
+inline BOOLEAN ExTryToAcquireResourceSharedLite(PERESOURCE resource) {
+    return ExAcquireResourceSharedLite(resource, FALSE);
+}
+
+inline void ExReleaseResourceForThreadLite(PERESOURCE resource, uint64_t threadId) {
     if (!resource) return;
-    uint64_t currentTid = ExGetCurrentThreadId();
     std::unique_lock<std::mutex> lk(resource->lock);
 
-    if (resource->exclusiveOwnerThread == currentTid) {
+    // 1. Exclusive release
+    if (resource->exclusiveOwnerThread == threadId && resource->exclusiveOwners > 0) {
         resource->exclusiveOwners--;
         if (resource->exclusiveOwners == 0) {
             resource->exclusiveOwnerThread = 0;
@@ -367,6 +439,23 @@ inline void ExReleaseResourceLite(PERESOURCE resource) {
         return;
     }
 
+    // 2. Shared release with ownerTable tracking
+    for (auto it = resource->ownerTable.begin(); it != resource->ownerTable.end(); ++it) {
+        if (it->ownerThread == threadId) {
+            it->ownerCount--;
+            if (resource->sharedOwners > 0) resource->sharedOwners--;
+            if (it->ownerCount <= 0) {
+                resource->ownerTable.erase(it);
+            }
+            resource->activeCount = resource->sharedOwners;
+            if (resource->sharedOwners == 0) {
+                resource->cv.notify_all();
+            }
+            return;
+        }
+    }
+
+    // Fallback release if not registered in ownerTable
     if (resource->sharedOwners > 0) {
         resource->sharedOwners--;
         resource->activeCount = resource->sharedOwners;
@@ -376,18 +465,86 @@ inline void ExReleaseResourceLite(PERESOURCE resource) {
     }
 }
 
+inline void ExReleaseResourceLite(PERESOURCE resource) {
+    if (!resource) return;
+    ExReleaseResourceForThreadLite(resource, ExGetCurrentThreadId());
+}
+
 inline void ExConvertExclusiveToSharedLite(PERESOURCE resource) {
     if (!resource) return;
     uint64_t currentTid = ExGetCurrentThreadId();
     std::unique_lock<std::mutex> lk(resource->lock);
 
     if (resource->exclusiveOwnerThread == currentTid && resource->exclusiveOwners > 0) {
-        resource->sharedOwners += resource->exclusiveOwners;
+        uint32_t count = resource->exclusiveOwners;
         resource->exclusiveOwners = 0;
         resource->exclusiveOwnerThread = 0;
+        resource->sharedOwners += count;
         resource->activeCount = resource->sharedOwners;
+        resource->ownerTable.push_back({currentTid, static_cast<int32_t>(count)});
+        GetSyncTelemetry().totalResourceConversions++;
         resource->cv.notify_all();
     }
+}
+
+inline BOOLEAN ExTryConvertSharedToExclusiveLite(PERESOURCE resource) {
+    if (!resource) return FALSE;
+    uint64_t currentTid = ExGetCurrentThreadId();
+    std::unique_lock<std::mutex> lk(resource->lock);
+
+    if (resource->exclusiveOwners != 0) return FALSE;
+
+    int32_t callerCount = 0;
+    auto it = resource->ownerTable.begin();
+    while (it != resource->ownerTable.end()) {
+        if (it->ownerThread == currentTid) {
+            callerCount = it->ownerCount;
+            break;
+        }
+        ++it;
+    }
+
+    if (callerCount > 0 && resource->sharedOwners == static_cast<uint32_t>(callerCount)) {
+        resource->ownerTable.erase(it);
+        resource->sharedOwners = 0;
+        resource->exclusiveOwnerThread = currentTid;
+        resource->exclusiveOwners = static_cast<uint32_t>(callerCount);
+        resource->activeCount = 1;
+        GetSyncTelemetry().totalResourceConversions++;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+inline BOOLEAN ExIsResourceAcquiredExclusiveLite(PERESOURCE resource) {
+    if (!resource) return FALSE;
+    std::unique_lock<std::mutex> lk(resource->lock);
+    return (resource->exclusiveOwnerThread == ExGetCurrentThreadId()) ? TRUE : FALSE;
+}
+
+inline uint32_t ExIsResourceAcquiredSharedLite(PERESOURCE resource) {
+    if (!resource) return 0;
+    uint64_t currentTid = ExGetCurrentThreadId();
+    std::unique_lock<std::mutex> lk(resource->lock);
+    if (resource->exclusiveOwnerThread == currentTid) {
+        return resource->exclusiveOwners + resource->sharedOwners;
+    }
+    for (const auto& entry : resource->ownerTable) {
+        if (entry.ownerThread == currentTid) return static_cast<uint32_t>(entry.ownerCount);
+    }
+    return 0;
+}
+
+inline uint32_t ExGetSharedWaiterCount(PERESOURCE resource) {
+    if (!resource) return 0;
+    std::unique_lock<std::mutex> lk(resource->lock);
+    return resource->numberOfSharedWaiters;
+}
+
+inline uint32_t ExGetExclusiveWaiterCount(PERESOURCE resource) {
+    if (!resource) return 0;
+    std::unique_lock<std::mutex> lk(resource->lock);
+    return resource->numberOfExclusiveWaiters;
 }
 
 inline void ExDeleteResourceLite(PERESOURCE resource) {
@@ -397,7 +554,45 @@ inline void ExDeleteResourceLite(PERESOURCE resource) {
     resource->sharedOwners = 0;
     resource->exclusiveOwners = 0;
     resource->exclusiveOwnerThread = 0;
+    resource->waiters = 0;
+    resource->numberOfSharedWaiters = 0;
+    resource->numberOfExclusiveWaiters = 0;
+    resource->ownerTable.clear();
 }
+
+class ResourceSharedLock {
+public:
+    explicit ResourceSharedLock(PERESOURCE res, BOOLEAN wait = TRUE)
+        : resource_(res) {
+        if (resource_) acquired_ = ExAcquireResourceSharedLite(resource_, wait);
+    }
+    ~ResourceSharedLock() {
+        if (resource_ && acquired_) ExReleaseResourceLite(resource_);
+    }
+    [[nodiscard]] BOOLEAN isAcquired() const noexcept { return acquired_; }
+    ResourceSharedLock(const ResourceSharedLock&) = delete;
+    ResourceSharedLock& operator=(const ResourceSharedLock&) = delete;
+private:
+    PERESOURCE resource_{nullptr};
+    BOOLEAN acquired_{FALSE};
+};
+
+class ResourceExclusiveLock {
+public:
+    explicit ResourceExclusiveLock(PERESOURCE res, BOOLEAN wait = TRUE)
+        : resource_(res) {
+        if (resource_) acquired_ = ExAcquireResourceExclusiveLite(resource_, wait);
+    }
+    ~ResourceExclusiveLock() {
+        if (resource_ && acquired_) ExReleaseResourceLite(resource_);
+    }
+    [[nodiscard]] BOOLEAN isAcquired() const noexcept { return acquired_; }
+    ResourceExclusiveLock(const ResourceExclusiveLock&) = delete;
+    ResourceExclusiveLock& operator=(const ResourceExclusiveLock&) = delete;
+private:
+    PERESOURCE resource_{nullptr};
+    BOOLEAN acquired_{FALSE};
+};
 
 // ============================================================================
 // Executive Push Lock (EX_PUSH_LOCK)
@@ -430,6 +625,18 @@ inline void ExAcquirePushLockExclusive(PEX_PUSH_LOCK pushLock) {
         return (pushLock->locked == 0 && pushLock->shared == 0);
     });
     pushLock->locked = 1;
+    GetSyncTelemetry().totalPushLocksAcquiredExclusive++;
+}
+
+inline BOOLEAN ExTryAcquirePushLockExclusive(PEX_PUSH_LOCK pushLock) {
+    if (!pushLock) return FALSE;
+    std::unique_lock<std::mutex> lk(pushLock->lock);
+    if (pushLock->locked == 0 && pushLock->shared == 0) {
+        pushLock->locked = 1;
+        GetSyncTelemetry().totalPushLocksAcquiredExclusive++;
+        return TRUE;
+    }
+    return FALSE;
 }
 
 inline void ExReleasePushLockExclusive(PEX_PUSH_LOCK pushLock) {
@@ -446,6 +653,29 @@ inline void ExAcquirePushLockShared(PEX_PUSH_LOCK pushLock) {
         return pushLock->locked == 0;
     });
     pushLock->shared++;
+    GetSyncTelemetry().totalPushLocksAcquiredShared++;
+}
+
+inline BOOLEAN ExTryAcquirePushLockShared(PEX_PUSH_LOCK pushLock) {
+    if (!pushLock) return FALSE;
+    std::unique_lock<std::mutex> lk(pushLock->lock);
+    if (pushLock->locked == 0) {
+        pushLock->shared++;
+        GetSyncTelemetry().totalPushLocksAcquiredShared++;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+inline void ExConvertPushLockExclusiveToShared(PEX_PUSH_LOCK pushLock) {
+    if (!pushLock) return;
+    std::unique_lock<std::mutex> lk(pushLock->lock);
+    if (pushLock->locked == 1) {
+        pushLock->locked = 0;
+        pushLock->shared = 1;
+        GetSyncTelemetry().totalPushLockConversions++;
+        pushLock->cv.notify_all();
+    }
 }
 
 inline void ExReleasePushLockShared(PEX_PUSH_LOCK pushLock) {
@@ -458,6 +688,112 @@ inline void ExReleasePushLockShared(PEX_PUSH_LOCK pushLock) {
         }
     }
 }
+
+class PushLockSharedGuard {
+public:
+    explicit PushLockSharedGuard(PEX_PUSH_LOCK lock) : lock_(lock) {
+        if (lock_) ExAcquirePushLockShared(lock_);
+    }
+    ~PushLockSharedGuard() {
+        if (lock_) ExReleasePushLockShared(lock_);
+    }
+    PushLockSharedGuard(const PushLockSharedGuard&) = delete;
+    PushLockSharedGuard& operator=(const PushLockSharedGuard&) = delete;
+private:
+    PEX_PUSH_LOCK lock_{nullptr};
+};
+
+class PushLockExclusiveGuard {
+public:
+    explicit PushLockExclusiveGuard(PEX_PUSH_LOCK lock) : lock_(lock) {
+        if (lock_) ExAcquirePushLockExclusive(lock_);
+    }
+    ~PushLockExclusiveGuard() {
+        if (lock_) ExReleasePushLockExclusive(lock_);
+    }
+    PushLockExclusiveGuard(const PushLockExclusiveGuard&) = delete;
+    PushLockExclusiveGuard& operator=(const PushLockExclusiveGuard&) = delete;
+private:
+    PEX_PUSH_LOCK lock_{nullptr};
+};
+
+// ============================================================================
+// Guarded Mutex (KGUARDED_MUTEX)
+// ============================================================================
+struct KGUARDED_MUTEX {
+    std::atomic<int32_t> count{1};
+    uint64_t owner{0};
+    uint32_t contention{0};
+    std::mutex gateLock;
+};
+using PKGUARDED_MUTEX = KGUARDED_MUTEX*;
+
+inline void KeInitializeGuardedMutex(PKGUARDED_MUTEX mutex) {
+    if (!mutex) return;
+    mutex->count.store(1, std::memory_order_relaxed);
+    mutex->owner = 0;
+    mutex->contention = 0;
+}
+
+inline void KeAcquireGuardedMutex(PKGUARDED_MUTEX mutex) {
+    if (!mutex) return;
+    ke::KeEnterGuardedRegion();
+    mutex->gateLock.lock();
+    mutex->count.store(0, std::memory_order_relaxed);
+    mutex->owner = ExGetCurrentThreadId();
+    GetSyncTelemetry().totalGuardedMutexAcquisitions++;
+}
+
+inline BOOLEAN KeTryAcquireGuardedMutex(PKGUARDED_MUTEX mutex) {
+    if (!mutex) return FALSE;
+    ke::KeEnterGuardedRegion();
+    if (mutex->gateLock.try_lock()) {
+        mutex->count.store(0, std::memory_order_relaxed);
+        mutex->owner = ExGetCurrentThreadId();
+        GetSyncTelemetry().totalGuardedMutexAcquisitions++;
+        return TRUE;
+    }
+    ke::KeLeaveGuardedRegion();
+    return FALSE;
+}
+
+inline void KeReleaseGuardedMutex(PKGUARDED_MUTEX mutex) {
+    if (!mutex) return;
+    mutex->owner = 0;
+    mutex->count.store(1, std::memory_order_relaxed);
+    mutex->gateLock.unlock();
+    ke::KeLeaveGuardedRegion();
+}
+
+inline void KeAcquireGuardedMutexUnsafe(PKGUARDED_MUTEX mutex) {
+    if (!mutex) return;
+    mutex->gateLock.lock();
+    mutex->count.store(0, std::memory_order_relaxed);
+    mutex->owner = ExGetCurrentThreadId();
+    GetSyncTelemetry().totalGuardedMutexAcquisitions++;
+}
+
+inline void KeReleaseGuardedMutexUnsafe(PKGUARDED_MUTEX mutex) {
+    if (!mutex) return;
+    mutex->owner = 0;
+    mutex->count.store(1, std::memory_order_relaxed);
+    mutex->gateLock.unlock();
+}
+
+class GuardedMutexGuard {
+public:
+    explicit GuardedMutexGuard(PKGUARDED_MUTEX mutex) : mutex_(mutex) {
+        if (mutex_) KeAcquireGuardedMutex(mutex_);
+    }
+    ~GuardedMutexGuard() {
+        if (mutex_) KeReleaseGuardedMutex(mutex_);
+    }
+    GuardedMutexGuard(const GuardedMutexGuard&) = delete;
+    GuardedMutexGuard& operator=(const GuardedMutexGuard&) = delete;
+private:
+    PKGUARDED_MUTEX mutex_{nullptr};
+};
+
 
 // ============================================================================
 // Interlocked Singly-Linked Lists (SLIST_HEADER, SLIST_ENTRY)
@@ -573,11 +909,29 @@ inline void ExInitializeNPagedLookasideList(
     lookaside->l.free = free;
 }
 
+inline void ExAdjustLookasideDepth(GENERAL_LOOKASIDE* lookaside) {
+    if (!lookaside) return;
+    if (lookaside->totalAllocates > 0) {
+        if (lookaside->allocateMisses * 2 > lookaside->totalAllocates) {
+            if (lookaside->depth + 4 <= lookaside->maximumDepth) {
+                lookaside->depth += 4;
+            } else {
+                lookaside->depth = lookaside->maximumDepth;
+            }
+        } else if (lookaside->freeMisses * 2 > lookaside->totalFrees && lookaside->depth > 4) {
+            lookaside->depth -= 2;
+        }
+    }
+    GetSyncTelemetry().totalLookasideDynamicAdjustments++;
+}
+
 inline void* ExAllocateFromNPagedLookasideList(PNPAGED_LOOKASIDE_LIST lookaside) {
     if (!lookaside) return nullptr;
     lookaside->l.totalAllocates++;
+    GetSyncTelemetry().totalLookasideAllocations++;
     auto* entry = InterlockedPopEntrySList(&lookaside->l.listHead);
     if (entry) {
+        GetSyncTelemetry().totalLookasideHits++;
         return entry;
     }
     lookaside->l.allocateMisses++;
@@ -590,6 +944,7 @@ inline void* ExAllocateFromNPagedLookasideList(PNPAGED_LOOKASIDE_LIST lookaside)
 inline void ExFreeToNPagedLookasideList(PNPAGED_LOOKASIDE_LIST lookaside, void* entry) {
     if (!lookaside || !entry) return;
     lookaside->l.totalFrees++;
+    GetSyncTelemetry().totalLookasideFrees++;
     if (QueryDepthSList(&lookaside->l.listHead) < lookaside->l.depth) {
         InterlockedPushEntrySList(&lookaside->l.listHead, reinterpret_cast<PSLIST_ENTRY>(entry));
     } else {
@@ -650,8 +1005,10 @@ inline void* ExAllocateFromPagedLookasideList(PPAGED_LOOKASIDE_LIST lookaside) {
         return nullptr;
     }
     lookaside->l.totalAllocates++;
+    GetSyncTelemetry().totalLookasideAllocations++;
     auto* entry = InterlockedPopEntrySList(&lookaside->l.listHead);
     if (entry) {
+        GetSyncTelemetry().totalLookasideHits++;
         return entry;
     }
     lookaside->l.allocateMisses++;
@@ -664,6 +1021,7 @@ inline void* ExAllocateFromPagedLookasideList(PPAGED_LOOKASIDE_LIST lookaside) {
 inline void ExFreeToPagedLookasideList(PPAGED_LOOKASIDE_LIST lookaside, void* entry) {
     if (!lookaside || !entry) return;
     lookaside->l.totalFrees++;
+    GetSyncTelemetry().totalLookasideFrees++;
     if (QueryDepthSList(&lookaside->l.listHead) < lookaside->l.depth) {
         InterlockedPushEntrySList(&lookaside->l.listHead, reinterpret_cast<PSLIST_ENTRY>(entry));
     } else {

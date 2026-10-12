@@ -55,6 +55,7 @@ public:
 
     void* allocate() {
         void* result = nullptr;
+        GetSyncTelemetry().totalLookasideAllocations++;
         {
             ke::SpinLockGuard guard(lock_);
             general_.totalAllocates++;
@@ -64,6 +65,7 @@ public:
                 head_ = entry->next;
                 general_.depth--;
                 result = entry;
+                GetSyncTelemetry().totalLookasideHits++;
             } else {
                 general_.allocateMisses++;
             }
@@ -82,6 +84,7 @@ public:
 
     void free(void* entry) {
         if (!entry) return;
+        GetSyncTelemetry().totalLookasideFrees++;
 
         bool returnedToPool = false;
         {
@@ -103,6 +106,22 @@ public:
         if (returnedToPool) {
             ExecutivePool::get().freePoolWithTag(entry, general_.tag);
         }
+    }
+
+    void adjustDepth() {
+        ke::SpinLockGuard guard(lock_);
+        if (general_.totalAllocates > 0) {
+            if (general_.allocateMisses * 2 > general_.totalAllocates) {
+                if (general_.depth + 4 <= general_.maximumDepth) {
+                    general_.depth += 4;
+                } else {
+                    general_.depth = general_.maximumDepth;
+                }
+            } else if (general_.freeMisses * 2 > general_.totalFrees && general_.depth > 4) {
+                general_.depth -= 2;
+            }
+        }
+        GetSyncTelemetry().totalLookasideDynamicAdjustments++;
     }
 
     void flush() {
@@ -163,6 +182,7 @@ public:
         }
 
         void* result = nullptr;
+        GetSyncTelemetry().totalLookasideAllocations++;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             general_.totalAllocates++;
@@ -171,6 +191,7 @@ public:
                 head_ = entry->next;
                 general_.depth--;
                 result = entry;
+                GetSyncTelemetry().totalLookasideHits++;
             } else {
                 general_.allocateMisses++;
             }
@@ -194,6 +215,7 @@ public:
             return;
         }
 
+        GetSyncTelemetry().totalLookasideFrees++;
         bool returnedToPool = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -212,6 +234,22 @@ public:
         if (returnedToPool) {
             ExecutivePool::get().freePoolWithTag(entry, general_.tag);
         }
+    }
+
+    void adjustDepth() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (general_.totalAllocates > 0) {
+            if (general_.allocateMisses * 2 > general_.totalAllocates) {
+                if (general_.depth + 4 <= general_.maximumDepth) {
+                    general_.depth += 4;
+                } else {
+                    general_.depth = general_.maximumDepth;
+                }
+            } else if (general_.freeMisses * 2 > general_.totalFrees && general_.depth > 4) {
+                general_.depth -= 2;
+            }
+        }
+        GetSyncTelemetry().totalLookasideDynamicAdjustments++;
     }
 
     void flush() {

@@ -1276,6 +1276,7 @@ void Test_KernelCore_IrqlSpinLockAndScheduler() {
     ke::KeInsertQueueApc(&userApc);
     ke::KiDeliverApc(1); // Deliver user APC
     TEST_ASSERT(s_UserApcRan, "User APC routine must execute during alertable wait");
+    ke::g_CurrentCpu.currentThread = nullptr;
 
     // 7. 32-Queue Priority Thread Scheduler & Anti-Starvation
     auto& scheduler = ke::PriorityScheduler::get();
@@ -6506,6 +6507,370 @@ void Test_Horizon26_EventTracingForWindows_Sessions_CircularBuffers_And_Realtime
 
     std::cout << "[TEST] Suite 242: Horizon 26 - Sovereign Event Tracing for Windows (Etw) Subsystem PASSED.\n";
 }
+
+// ============================================================================
+// Suite 243: Horizon 27 - Sovereign Executive Synchronization, ERESOURCE,
+// PushLocks, Guarded Mutexes & Safe User-Buffer Probing Engine
+// ============================================================================
+void Test_Horizon27_ExecutiveSynchronization_ERESOURCE_PushLocks_And_BufferProbing() {
+    std::cout << "[TEST] Suite 243: Horizon 27 - Sovereign Executive Synchronization & Buffer Probing...\n";
+    ex::ExResetSyncTelemetryForTesting();
+
+    // 1. Executive Resource (ERESOURCE) Multi-Reader Shared Reentrancy & Fairness
+    {
+        ex::ERESOURCE res{};
+        ex::ExInitializeResourceLite(&res);
+        TEST_ASSERT(res.activeCount == 0, "Initial activeCount must be 0");
+        TEST_ASSERT(res.sharedOwners == 0, "Initial sharedOwners must be 0");
+        TEST_ASSERT(res.exclusiveOwners == 0, "Initial exclusiveOwners must be 0");
+
+        // Thread 1 acquires shared
+        BOOLEAN acq1 = ex::ExAcquireResourceSharedLite(&res, TRUE);
+        TEST_ASSERT(acq1 == TRUE, "ExAcquireResourceSharedLite must succeed");
+        TEST_ASSERT(res.sharedOwners == 1, "Shared owners count must be 1");
+        TEST_ASSERT(ex::ExIsResourceAcquiredSharedLite(&res) == 1, "Thread shared count must be 1");
+
+        // Reentrant shared acquisition on same thread
+        BOOLEAN acq2 = ex::ExAcquireResourceSharedLite(&res, TRUE);
+        TEST_ASSERT(acq2 == TRUE, "Reentrant shared acquire must succeed");
+        TEST_ASSERT(res.sharedOwners == 2, "Shared owners count must be 2");
+        TEST_ASSERT(ex::ExIsResourceAcquiredSharedLite(&res) == 2, "Thread shared count must be 2");
+
+        // Concurrent reader on another thread
+        std::atomic<bool> thread2Acquired{false};
+        std::thread readerThread([&]() {
+            BOOLEAN ok = ex::ExAcquireResourceSharedLite(&res, TRUE);
+            if (ok) {
+                thread2Acquired.store(true);
+                ex::ExReleaseResourceLite(&res);
+            }
+        });
+        readerThread.join();
+        TEST_ASSERT(thread2Acquired.load() == true, "Concurrent reader must acquire shared access");
+
+        // Non-blocking exclusive attempt while shared is held must fail
+        BOOLEAN tryEx = ex::ExTryToAcquireResourceExclusiveLite(&res);
+        TEST_ASSERT(tryEx == FALSE, "ExTryToAcquireResourceExclusiveLite must fail when shared held");
+
+        // Release first shared recursion
+        ex::ExReleaseResourceLite(&res);
+        TEST_ASSERT(res.sharedOwners == 1, "Shared owners count must decrement to 1");
+        TEST_ASSERT(ex::ExIsResourceAcquiredSharedLite(&res) == 1, "Thread shared count must decrement to 1");
+
+        // Release second shared recursion
+        ex::ExReleaseResourceLite(&res);
+        TEST_ASSERT(res.sharedOwners == 0, "Shared owners must be 0 after releasing all holds");
+        TEST_ASSERT(ex::ExIsResourceAcquiredSharedLite(&res) == 0, "Thread shared count must be 0");
+
+        ex::ExDeleteResourceLite(&res);
+    }
+
+    // 2. Executive Resource Exclusive Reentrancy, Lock Conversion & Sole-Owner Upgrade
+    {
+        ex::ERESOURCE res{};
+        ex::ExInitializeResourceLite(&res);
+
+        // Exclusive acquisition
+        BOOLEAN acqEx = ex::ExAcquireResourceExclusiveLite(&res, TRUE);
+        TEST_ASSERT(acqEx == TRUE, "ExAcquireResourceExclusiveLite must succeed on free resource");
+        TEST_ASSERT(res.exclusiveOwners == 1, "exclusiveOwners must be 1");
+        TEST_ASSERT(ex::ExIsResourceAcquiredExclusiveLite(&res) == TRUE, "Thread must be exclusive owner");
+
+        // Reentrant exclusive acquisition
+        BOOLEAN acqEx2 = ex::ExAcquireResourceExclusiveLite(&res, TRUE);
+        TEST_ASSERT(acqEx2 == TRUE, "Reentrant exclusive acquire must succeed");
+        TEST_ASSERT(res.exclusiveOwners == 2, "exclusiveOwners must be 2");
+
+        // Shared attempt from another thread while exclusive held must fail
+        std::atomic<bool> threadSharedSuccess{true};
+        std::thread contenderThread([&]() {
+            BOOLEAN ok = ex::ExTryToAcquireResourceSharedLite(&res);
+            threadSharedSuccess.store(ok == TRUE);
+        });
+        contenderThread.join();
+        TEST_ASSERT(threadSharedSuccess.load() == false, "TryAcquireShared must fail while exclusive lock held");
+
+        // Atomic lock conversion: Exclusive -> Shared
+        ex::ExConvertExclusiveToSharedLite(&res);
+        TEST_ASSERT(res.exclusiveOwners == 0, "exclusiveOwners must be 0 after conversion");
+        TEST_ASSERT(res.sharedOwners == 2, "sharedOwners must carry forward previous exclusive recursion count");
+        TEST_ASSERT(ex::ExIsResourceAcquiredExclusiveLite(&res) == FALSE, "Resource no longer exclusive");
+        TEST_ASSERT(ex::ExIsResourceAcquiredSharedLite(&res) == 2, "Shared count for thread must be 2");
+
+        // Release 1 shared hold: now shared count is 1
+        ex::ExReleaseResourceLite(&res);
+        TEST_ASSERT(res.sharedOwners == 1, "sharedOwners must decrement to 1");
+
+        // Sole-owner upgrade: Shared -> Exclusive
+        BOOLEAN upgraded = ex::ExTryConvertSharedToExclusiveLite(&res);
+        TEST_ASSERT(upgraded == TRUE, "ExTryConvertSharedToExclusiveLite must succeed for sole shared holder");
+        TEST_ASSERT(res.exclusiveOwners == 1, "exclusiveOwners must be 1 after upgrade");
+        TEST_ASSERT(res.sharedOwners == 0, "sharedOwners must be 0 after upgrade");
+        TEST_ASSERT(ex::ExIsResourceAcquiredExclusiveLite(&res) == TRUE, "Thread must be exclusive owner after upgrade");
+
+        // Release exclusive hold
+        ex::ExReleaseResourceLite(&res);
+        TEST_ASSERT(res.exclusiveOwners == 0, "exclusiveOwners must be 0");
+        TEST_ASSERT(res.activeCount == 0, "activeCount must be 0");
+
+        // Test RAII Resource Guards
+        {
+            ex::ResourceExclusiveLock exGuard(&res);
+            TEST_ASSERT(exGuard.isAcquired() == TRUE, "ResourceExclusiveLock must acquire");
+            TEST_ASSERT(ex::ExIsResourceAcquiredExclusiveLite(&res) == TRUE, "Resource is exclusively held");
+        }
+        TEST_ASSERT(ex::ExIsResourceAcquiredExclusiveLite(&res) == FALSE, "ResourceExclusiveLock dtor must release");
+
+        {
+            ex::ResourceSharedLock shGuard(&res);
+            TEST_ASSERT(shGuard.isAcquired() == TRUE, "ResourceSharedLock must acquire");
+            TEST_ASSERT(ex::ExIsResourceAcquiredSharedLite(&res) == 1, "Resource is held shared");
+        }
+        TEST_ASSERT(ex::ExIsResourceAcquiredSharedLite(&res) == 0, "ResourceSharedLock dtor must release");
+
+        ex::ExDeleteResourceLite(&res);
+    }
+
+    // 3. Executive Push Lock (EX_PUSH_LOCK) Fast Paths, Try-Acquire & Conversion
+    {
+        ex::EX_PUSH_LOCK pushLock{};
+        ex::ExInitializePushLock(&pushLock);
+        TEST_ASSERT(pushLock.value == 0, "Push lock value must be 0");
+
+        // Shared acquisition
+        ex::ExAcquirePushLockShared(&pushLock);
+        TEST_ASSERT(pushLock.shared == 1, "Push lock shared count must be 1");
+
+        // Try acquire shared
+        BOOLEAN trySh = ex::ExTryAcquirePushLockShared(&pushLock);
+        TEST_ASSERT(trySh == TRUE, "ExTryAcquirePushLockShared must succeed");
+        TEST_ASSERT(pushLock.shared == 2, "Push lock shared count must be 2");
+
+        // Try acquire exclusive while shared held must fail
+        BOOLEAN tryEx = ex::ExTryAcquirePushLockExclusive(&pushLock);
+        TEST_ASSERT(tryEx == FALSE, "ExTryAcquirePushLockExclusive must fail while shared held");
+
+        // Release shared holds
+        ex::ExReleasePushLockShared(&pushLock);
+        ex::ExReleasePushLockShared(&pushLock);
+        TEST_ASSERT(pushLock.shared == 0, "Push lock shared count must be 0");
+
+        // Acquire exclusive
+        ex::ExAcquirePushLockExclusive(&pushLock);
+        TEST_ASSERT(pushLock.locked == 1, "Push lock locked bit must be set");
+
+        // Convert exclusive to shared
+        ex::ExConvertPushLockExclusiveToShared(&pushLock);
+        TEST_ASSERT(pushLock.locked == 0, "locked bit must be cleared after conversion");
+        TEST_ASSERT(pushLock.shared == 1, "shared count must be 1 after conversion");
+
+        // Release shared
+        ex::ExReleasePushLockShared(&pushLock);
+        TEST_ASSERT(pushLock.shared == 0, "Push lock must be free");
+
+        // RAII Guards
+        {
+            ex::PushLockExclusiveGuard guard(&pushLock);
+            TEST_ASSERT(pushLock.locked == 1, "PushLockExclusiveGuard must hold exclusive");
+        }
+        TEST_ASSERT(pushLock.locked == 0, "PushLockExclusiveGuard dtor must release");
+
+        {
+            ex::PushLockSharedGuard guard(&pushLock);
+            TEST_ASSERT(pushLock.shared == 1, "PushLockSharedGuard must hold shared");
+        }
+        TEST_ASSERT(pushLock.shared == 0, "PushLockSharedGuard dtor must release");
+    }
+
+    // 4. Guarded Mutex (KGUARDED_MUTEX) & Guarded Region APC Protection
+    {
+        ex::KGUARDED_MUTEX guardedMutex{};
+        ex::KeInitializeGuardedMutex(&guardedMutex);
+        TEST_ASSERT(guardedMutex.count.load() == 1, "Initial count must be 1");
+        TEST_ASSERT(guardedMutex.owner == 0, "Initial owner must be 0");
+
+        // Acquire guarded mutex
+        ex::KeAcquireGuardedMutex(&guardedMutex);
+        TEST_ASSERT(guardedMutex.count.load() == 0, "count must be 0 when held");
+        TEST_ASSERT(guardedMutex.owner != 0, "owner must be set");
+        TEST_ASSERT(ke::KeAreApcsDisabled() == true, "Special APCs must be disabled in guarded region");
+
+        // Release guarded mutex
+        ex::KeReleaseGuardedMutex(&guardedMutex);
+        TEST_ASSERT(guardedMutex.count.load() == 1, "count must be 1 after release");
+        TEST_ASSERT(guardedMutex.owner == 0, "owner must be cleared");
+        TEST_ASSERT(ke::KeAreApcsDisabled() == false, "Special APCs must be restored");
+
+        // Try acquire
+        BOOLEAN ok = ex::KeTryAcquireGuardedMutex(&guardedMutex);
+        TEST_ASSERT(ok == TRUE, "KeTryAcquireGuardedMutex must succeed on free mutex");
+        ex::KeReleaseGuardedMutex(&guardedMutex);
+
+        // GuardedMutexGuard RAII
+        {
+            ex::GuardedMutexGuard guard(&guardedMutex);
+            TEST_ASSERT(guardedMutex.owner != 0, "GuardedMutexGuard must acquire");
+            TEST_ASSERT(ke::KeAreApcsDisabled() == true, "APCs disabled while guard in scope");
+        }
+        TEST_ASSERT(guardedMutex.owner == 0, "GuardedMutexGuard dtor must release");
+        TEST_ASSERT(ke::KeAreApcsDisabled() == false, "APCs restored after guard dtor");
+    }
+
+    // 5. Lookaside List Dynamic Auto-Tuning
+    {
+        ex::NPagedLookasideList lookasideList;
+        lookasideList.initialize(64, micant::ex::makePoolTag('L', 'O', 'O', 'K'), 128);
+
+        void* b1 = lookasideList.allocate();
+        void* b2 = lookasideList.allocate();
+        TEST_ASSERT(b1 != nullptr && b2 != nullptr, "Lookaside allocate must succeed");
+        lookasideList.free(b1);
+        lookasideList.free(b2);
+
+        // Dynamic tuning adjustment invocation
+        lookasideList.adjustDepth();
+
+        // C-style Lookaside
+        ex::NPAGED_LOOKASIDE_LIST cLookaside{};
+        ex::ExInitializeNPagedLookasideList(&cLookaside, nullptr, nullptr, 0, 128, micant::ex::makePoolTag('N', 'P', 'L', 'S'), 4);
+        void* cb1 = ex::ExAllocateFromNPagedLookasideList(&cLookaside);
+        TEST_ASSERT(cb1 != nullptr, "ExAllocateFromNPagedLookasideList must succeed");
+        ex::ExFreeToNPagedLookasideList(&cLookaside, cb1);
+        ex::ExAdjustLookasideDepth(&cLookaside.l);
+        ex::ExDeleteNPagedLookasideList(&cLookaside);
+    }
+
+    // 6. User-Buffer Probing Engine (ProbeForRead & ProbeForWrite)
+    {
+        // Valid user buffer on stack
+        int stackVal = 0x12345678;
+        NtStatus st = mm::ProbeForRead(&stackVal, sizeof(stackVal), alignof(int), mm::UserMode);
+        TEST_ASSERT(NT_SUCCESS(st), "ProbeForRead on valid user stack buffer must succeed");
+
+        st = mm::ProbeForWrite(&stackVal, sizeof(stackVal), alignof(int), mm::UserMode);
+        TEST_ASSERT(NT_SUCCESS(st), "ProbeForWrite on valid user stack buffer must succeed");
+
+        // Null pointer probe
+        st = mm::ProbeForRead(nullptr, 4, 4, mm::UserMode);
+        TEST_ASSERT(st == NtStatus::AccessViolation, "Null pointer probe must return STATUS_ACCESS_VIOLATION");
+
+        // 64KB Null trap boundary (below MM_LOWEST_USER_ADDRESS)
+        void* nullTrapAddr = reinterpret_cast<void*>(0x8000ULL);
+        st = mm::ProbeForRead(nullTrapAddr, 4, 4, mm::UserMode);
+        TEST_ASSERT(st == NtStatus::AccessViolation, "Probe below MM_LOWEST_USER_ADDRESS must return STATUS_ACCESS_VIOLATION");
+
+        // Misaligned pointer
+        uintptr_t unaligned = reinterpret_cast<uintptr_t>(&stackVal) | 1;
+        st = mm::ProbeForRead(reinterpret_cast<void*>(unaligned), 4, 4, mm::UserMode);
+        TEST_ASSERT(st == NtStatus::DatatypeMisalignment, "Unaligned probe must return STATUS_DATATYPE_MISALIGNMENT");
+
+        // Kernel-mode address in UserMode
+        void* kernelAddr = reinterpret_cast<void*>(0xFFFFF80000000000ULL);
+        st = mm::ProbeForRead(kernelAddr, 64, 8, mm::UserMode);
+        TEST_ASSERT(st == NtStatus::AccessViolation, "Kernel space address in UserMode must return STATUS_ACCESS_VIOLATION");
+
+        // Kernel-mode address in KernelMode bypass
+        st = mm::ProbeForRead(kernelAddr, 64, 8, mm::KernelMode);
+        TEST_ASSERT(NT_SUCCESS(st), "Kernel address probe in KernelMode must succeed");
+
+        // Address overflow check
+        void* overflowAddr = reinterpret_cast<void*>(0xFFFFFFFFFFFFFFF0ULL);
+        st = mm::ProbeForRead(overflowAddr, 32, 1, mm::UserMode);
+        TEST_ASSERT(st == NtStatus::AccessViolation, "Address wrap-around overflow must return STATUS_ACCESS_VIOLATION");
+
+        // Synthetic page permission write check
+        uintptr_t mockRoPage = 0x0000000020000000ULL;
+        mm::ProbeMemoryManager::get().setPagePermission(mockRoPage, true, false); // Read-only
+        st = mm::ProbeForWrite(reinterpret_cast<void*>(mockRoPage), 128, 4, mm::UserMode);
+        TEST_ASSERT(st == NtStatus::AccessViolation, "ProbeForWrite to read-only page must return STATUS_ACCESS_VIOLATION");
+        mm::ProbeMemoryManager::get().clearPermissions();
+    }
+
+    // 7. Structured Exception Safe Copy Engine
+    {
+        // Safe copy from user
+        char userSource[32] = "MicaNT Sovereign Executive Sync";
+        char kernelBuffer[32]{};
+        NtStatus st = ex::ExSafeCopyFromUser(kernelBuffer, userSource, sizeof(userSource), mm::UserMode);
+        TEST_ASSERT(NT_SUCCESS(st), "ExSafeCopyFromUser must succeed");
+        TEST_ASSERT(std::memcmp(kernelBuffer, userSource, sizeof(userSource)) == 0, "Copied content must match");
+
+        // Safe copy to user
+        char kernelSource[32] = "Kernel To User Response Data";
+        char userDest[32]{};
+        st = ex::ExSafeCopyToUser(userDest, kernelSource, sizeof(kernelSource), mm::UserMode);
+        TEST_ASSERT(NT_SUCCESS(st), "ExSafeCopyToUser must succeed");
+        TEST_ASSERT(std::memcmp(userDest, kernelSource, sizeof(kernelSource)) == 0, "Dest content must match");
+
+        // Safe copy with null pointer
+        st = ex::ExSafeCopyFromUser(kernelBuffer, nullptr, 16, mm::UserMode);
+        TEST_ASSERT(st == NtStatus::AccessViolation, "Safe copy with null src must return STATUS_ACCESS_VIOLATION");
+
+        // Scalar probe & read
+        uint64_t userVal64 = 0xFEEDFACECAFEBEEFULL;
+        uint64_t readOut64 = 0;
+        st = ex::ExSafeProbeAndRead<uint64_t>(&userVal64, readOut64, mm::UserMode);
+        TEST_ASSERT(NT_SUCCESS(st), "ExSafeProbeAndRead must succeed");
+        TEST_ASSERT(readOut64 == userVal64, "Read scalar value must match");
+
+        // Scalar probe & write
+        uint64_t writeTarget64 = 0;
+        st = ex::ExSafeProbeAndWrite<uint64_t>(&writeTarget64, 0x1122334455667788ULL, mm::UserMode);
+        TEST_ASSERT(NT_SUCCESS(st), "ExSafeProbeAndWrite must succeed");
+        TEST_ASSERT(writeTarget64 == 0x1122334455667788ULL, "Written scalar value must match");
+
+        // Safe read UNICODE_STRING
+        const wchar_t testWide[] = L"\\Device\\HarddiskVolume1\\MicaNT.sys";
+        UnicodeString uStr(testWide);
+        std::wstring outWide;
+        st = ex::ExSafeReadUnicodeString(&uStr, outWide, 1024, mm::UserMode);
+        TEST_ASSERT(NT_SUCCESS(st), "ExSafeReadUnicodeString must succeed");
+        TEST_ASSERT(outWide == testWide, "Read Unicode string must match input");
+
+        // Tampered UNICODE_STRING length > maximumLength
+        UnicodeString tamperedStr = uStr;
+        tamperedStr.length = tamperedStr.maximumLength + 10;
+        st = ex::ExSafeReadUnicodeString(&tamperedStr, outWide, 1024, mm::UserMode);
+        TEST_ASSERT(st == NtStatus::InvalidParameter, "Tampered string with Length > MaximumLength must return STATUS_INVALID_PARAMETER");
+
+        // Safe read ANSI_STRING
+        const char testAnsi[] = "MicaNT Driver Verification Complete";
+        AnsiString aStr(testAnsi);
+        std::string outAnsi;
+        st = ex::ExSafeReadAnsiString(&aStr, outAnsi, 2048, mm::UserMode);
+        TEST_ASSERT(NT_SUCCESS(st), "ExSafeReadAnsiString must succeed");
+        TEST_ASSERT(outAnsi == testAnsi, "Read ANSI string must match input");
+    }
+
+    // 8. Executive Synchronization & Probe Telemetry Audit
+    {
+        auto telem = ex::ExQuerySyncTelemetry();
+        TEST_ASSERT(telem.totalSharedAcquisitions >= 3, "totalSharedAcquisitions must be >= 3");
+        TEST_ASSERT(telem.totalExclusiveAcquisitions >= 2, "totalExclusiveAcquisitions must be >= 2");
+        TEST_ASSERT(telem.totalResourceConversions >= 2, "totalResourceConversions must be >= 2");
+        TEST_ASSERT(telem.totalResourceTryAcquireFailures >= 2, "totalResourceTryAcquireFailures must be >= 2");
+        TEST_ASSERT(telem.totalPushLocksAcquiredExclusive >= 2, "totalPushLocksAcquiredExclusive must be >= 2");
+        TEST_ASSERT(telem.totalPushLocksAcquiredShared >= 3, "totalPushLocksAcquiredShared must be >= 3");
+        TEST_ASSERT(telem.totalPushLockConversions >= 1, "totalPushLockConversions must be >= 1");
+        TEST_ASSERT(telem.totalGuardedMutexAcquisitions >= 2, "totalGuardedMutexAcquisitions must be >= 2");
+        TEST_ASSERT(telem.totalProbesValidated >= 5, "totalProbesValidated must be >= 5");
+        TEST_ASSERT(telem.totalProbeViolationsCaught >= 5, "totalProbeViolationsCaught must be >= 5");
+        TEST_ASSERT(telem.totalSafeCopiesCompleted >= 5, "totalSafeCopiesCompleted must be >= 5");
+        TEST_ASSERT(telem.totalSafeCopyFaultsCaught >= 2, "totalSafeCopyFaultsCaught must be >= 2");
+        TEST_ASSERT(telem.totalLookasideAllocations >= 2, "totalLookasideAllocations must be >= 2");
+        TEST_ASSERT(telem.totalLookasideDynamicAdjustments >= 2, "totalLookasideDynamicAdjustments must be >= 2");
+
+        // Reset telemetry for testing
+        ex::ExResetSyncTelemetryForTesting();
+        auto resetTelem = ex::ExQuerySyncTelemetry();
+        TEST_ASSERT(resetTelem.totalSharedAcquisitions == 0, "totalSharedAcquisitions reset must be 0");
+        TEST_ASSERT(resetTelem.totalExclusiveAcquisitions == 0, "totalExclusiveAcquisitions reset must be 0");
+        TEST_ASSERT(resetTelem.totalProbesValidated == 0, "totalProbesValidated reset must be 0");
+    }
+
+    std::cout << "[TEST] Suite 243: Horizon 27 - Sovereign Executive Synchronization & Buffer Probing PASSED.\n";
+}
+
 
 
 
