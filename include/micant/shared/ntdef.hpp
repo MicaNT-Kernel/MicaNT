@@ -89,6 +89,8 @@ inline constexpr BOOL FALSE = 0;
 #endif
 #endif
 
+using ULONG = uint32_t;
+
 using Handle = intptr_t;
 inline constexpr Handle InvalidHandleValue = -1;
 

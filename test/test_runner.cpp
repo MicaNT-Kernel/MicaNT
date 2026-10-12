@@ -293,7 +293,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite247")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite248")) {
+        RUN_TEST(Test_Horizon32_StorPort_Nvme_Storage_Architecture_And_Miniport);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite247") {
         RUN_TEST(Test_Horizon31_WindowsDriverFramework_KMDF_ObjectTree_PnP_Queues_And_Requests);
         return g_FailedTests;
     }
@@ -1082,6 +1086,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon29_PlugAndPlayManager_DeviceTree_IrpStateEngine_And_Interfaces);
     RUN_TEST(Test_Horizon30_KernelDebugger_KD64_Breakpoints_And_KdpTrapExceptionRouting);
     RUN_TEST(Test_Horizon31_WindowsDriverFramework_KMDF_ObjectTree_PnP_Queues_And_Requests);
+    RUN_TEST(Test_Horizon32_StorPort_Nvme_Storage_Architecture_And_Miniport);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

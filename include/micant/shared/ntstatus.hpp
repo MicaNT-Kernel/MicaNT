@@ -175,6 +175,7 @@ inline constexpr NTSTATUS STATUS_DEVICE_POWER_FAILURE   = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_POWER_STATE_INVALID    = static_cast<NTSTATUS>(0xC00002D3);
 inline constexpr NTSTATUS STATUS_SUSPEND_COUNT_EXCEEDED = static_cast<NTSTATUS>(0xC000004A);
 inline constexpr NTSTATUS STATUS_DEVICE_BUSY            = static_cast<NTSTATUS>(0x80000011);
+inline constexpr NTSTATUS STATUS_DEVICE_NOT_READY       = static_cast<NTSTATUS>(0xC00000A3);
 inline constexpr NTSTATUS STATUS_SYSTEM_SHUTDOWN        = static_cast<NTSTATUS>(0xC000009F);
 inline constexpr NTSTATUS STATUS_INVALID_DEVICE_STATE   = static_cast<NTSTATUS>(0xC0000184);
 inline constexpr NTSTATUS STATUS_NO_SUCH_DEVICE         = static_cast<NTSTATUS>(0xC000000E);

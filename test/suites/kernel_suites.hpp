@@ -8532,6 +8532,582 @@ void Test_Horizon31_WindowsDriverFramework_KMDF_ObjectTree_PnP_Queues_And_Reques
     std::cout << "[TEST] Suite 247: Horizon 31 - Windows Driver Framework (KMDF / UMDF 2.0), Object Tree, PnP, Queues & Requests PASSED.\n";
 }
 
+void Test_Horizon32_StorPort_Nvme_Storage_Architecture_And_Miniport() {
+    using namespace micant;
+    using namespace micant::nvme;
+
+    // Phase 1: BAR0 MMIO Register Map & Controller Initialization / Enable FSM
+    {
+        NvmeController ctrl(NvmeVersion::Version_2_0);
+        uint32_t capLow = ctrl.readReg32(NVME_REG_CAP);
+        uint32_t capHigh = ctrl.readReg32(NVME_REG_CAP + 4);
+        TEST_ASSERT(capLow != 0 || capHigh != 0, "CAP register must be populated");
+
+        uint32_t vs = ctrl.readReg32(NVME_REG_VS);
+        TEST_ASSERT(vs == static_cast<uint32_t>(NvmeVersion::Version_2_0), "VS register must match NVMe 2.0 (0x00020000)");
+
+        // Initial state: not ready
+        TEST_ASSERT(!ctrl.isReady(), "Controller must not be ready before CC.EN is set");
+        TEST_ASSERT((ctrl.readReg32(NVME_REG_CSTS) & NVME_CSTS_RDY) == 0, "CSTS.RDY must be 0 initially");
+
+        // Set AQA, ASQ, ACQ
+        ctrl.writeReg32(NVME_REG_AQA, 0x003F003F); // 64 entries ASQ and ACQ
+        TEST_ASSERT(ctrl.readReg32(NVME_REG_AQA) == 0x003F003F, "AQA must reflect written value");
+
+        ctrl.writeReg32(NVME_REG_ASQ, 0x1000);
+        ctrl.writeReg32(NVME_REG_ASQ + 4, 0x0000);
+        ctrl.writeReg32(NVME_REG_ACQ, 0x2000);
+        ctrl.writeReg32(NVME_REG_ACQ + 4, 0x0000);
+
+        // Enable controller: CC.EN = 1
+        uint32_t ccVal = NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16;
+        ctrl.writeReg32(NVME_REG_CC, ccVal);
+        TEST_ASSERT(ctrl.isReady(), "Controller must report isReady() == true after CC.EN");
+        TEST_ASSERT((ctrl.readReg32(NVME_REG_CSTS) & NVME_CSTS_RDY) != 0, "CSTS.RDY bit must be set");
+
+        // Normal shutdown notification
+        ctrl.writeReg32(NVME_REG_CC, ccVal | NVME_CC_SHN_NORM);
+        TEST_ASSERT((ctrl.readReg32(NVME_REG_CSTS) & NVME_CSTS_SHST_OK) != 0, "CSTS.SHST_OK must be set on normal shutdown");
+
+        // Re-enable
+        ctrl.writeReg32(NVME_REG_CC, ccVal);
+    }
+
+    // Phase 2: Admin Queue & Identify Controller and Namespaces
+    {
+        NvmeController ctrl(NvmeVersion::Version_2_0);
+        ctrl.writeReg32(NVME_REG_CC, NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16);
+
+        // Identify Controller (CNS = 0x01)
+        NvmeIdentifyController idCtrl{};
+        NvmeSqe sqeCtrl{};
+        sqeCtrl.opcode = NVME_ADMIN_IDENTIFY;
+        sqeCtrl.commandId = 101;
+        sqeCtrl.cdw10 = NVME_IDENTIFY_CNS_CTRL;
+
+        NvmeCqe cqeCtrl = ctrl.executeAdminCommand(sqeCtrl, &idCtrl, sizeof(idCtrl));
+        TEST_ASSERT(cqeCtrl.getStatusCode() == NVME_SC_SUCCESS, "Identify Controller must succeed");
+        TEST_ASSERT(cqeCtrl.commandId == 101, "CQE command ID must match SQE");
+        TEST_ASSERT(idCtrl.vid == 0x144D, "Identify Controller VID must match 0x144D");
+        TEST_ASSERT(std::memcmp(idCtrl.mn, "TitanNVMe Sovereign Flash SSD 2TB", 34) == 0, "Identify Controller model name match");
+
+        // Identify Namespace 1 (CNS = 0x00, NSID = 1)
+        NvmeIdentifyNamespace idNs1{};
+        NvmeSqe sqeNs1{};
+        sqeNs1.opcode = NVME_ADMIN_IDENTIFY;
+        sqeNs1.commandId = 102;
+        sqeNs1.nsid = 1;
+        sqeNs1.cdw10 = NVME_IDENTIFY_CNS_NS;
+
+        NvmeCqe cqeNs1 = ctrl.executeAdminCommand(sqeNs1, &idNs1, sizeof(idNs1));
+        TEST_ASSERT(cqeNs1.getStatusCode() == NVME_SC_SUCCESS, "Identify Namespace 1 must succeed");
+        TEST_ASSERT(idNs1.nsze > 0, "Namespace 1 size must be > 0");
+        TEST_ASSERT(idNs1.lbaf[0].lbaDataSizeShift == 9, "Namespace 1 format 0 must be 512B (shift 9)");
+
+        // Identify Namespace 2 (CNS = 0x00, NSID = 2, 4Kn)
+        NvmeIdentifyNamespace idNs2{};
+        NvmeSqe sqeNs2{};
+        sqeNs2.opcode = NVME_ADMIN_IDENTIFY;
+        sqeNs2.commandId = 103;
+        sqeNs2.nsid = 2;
+        sqeNs2.cdw10 = NVME_IDENTIFY_CNS_NS;
+
+        NvmeCqe cqeNs2 = ctrl.executeAdminCommand(sqeNs2, &idNs2, sizeof(idNs2));
+        TEST_ASSERT(cqeNs2.getStatusCode() == NVME_SC_SUCCESS, "Identify Namespace 2 must succeed");
+        TEST_ASSERT(idNs2.flbas == 1, "Namespace 2 must use 4096-byte LBA format (flbas=1)");
+        TEST_ASSERT(idNs2.lbaf[1].lbaDataSizeShift == 12, "Namespace 2 format 1 must be 4096B (shift 12)");
+
+        // Identify Active Namespaces (CNS = 0x02)
+        uint32_t activeList[4]{};
+        NvmeSqe sqeActive{};
+        sqeActive.opcode = NVME_ADMIN_IDENTIFY;
+        sqeActive.commandId = 104;
+        sqeActive.cdw10 = NVME_IDENTIFY_CNS_ACTIVE_NS;
+
+        NvmeCqe cqeActive = ctrl.executeAdminCommand(sqeActive, activeList, sizeof(activeList));
+        TEST_ASSERT(cqeActive.getStatusCode() == NVME_SC_SUCCESS, "Identify Active Namespaces must succeed");
+        TEST_ASSERT(activeList[0] == 1, "First active NSID must be 1");
+        TEST_ASSERT(activeList[1] == 2, "Second active NSID must be 2");
+    }
+
+    // Phase 3: Multi-Queue dynamic allocation, doorbell writes, ring buffer dispatch, phase toggling, MSI-X
+    {
+        NvmeController ctrl(NvmeVersion::Version_2_0);
+        ctrl.writeReg32(NVME_REG_CC, NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16);
+
+        // Create I/O Queue Pair (QID = 1, size = 16 entries)
+        NTSTATUS stCq = ctrl.createIoQueuePair(1, 16, 16, 0x10000, 0x20000);
+        TEST_ASSERT(NT_SUCCESS(stCq), "createIoQueuePair must succeed");
+        TEST_ASSERT(ctrl.getQueueCount() == 2, "Queue count must be 2 (Admin + IO Q1)");
+
+        // Post 4 commands to I/O SQ 1 to test queue dispatch and MSI-X generation
+        for (uint16_t i = 0; i < 4; ++i) {
+            NvmeSqe sqe{};
+            sqe.opcode = NVME_NVM_FLUSH;
+            sqe.commandId = 200 + i;
+            sqe.nsid = 1;
+            NTSTATUS postSt = ctrl.postSqe(1, sqe);
+            TEST_ASSERT(NT_SUCCESS(postSt), "postSqe must succeed");
+        }
+
+        // Ring SQ Doorbell for QID 1 (tail = 4)
+        ctrl.ringDoorbell(1, false, 4);
+
+        // Verify MSI-X interrupt counter incremented for QID 1
+        uint64_t msix = ctrl.getMsixInterrupts(1);
+        TEST_ASSERT(msix == 4, "MSI-X interrupt count must match number of completed commands (4)");
+
+        // Delete I/O Queue
+        NTSTATUS delSt = ctrl.deleteIoQueuePair(1);
+        TEST_ASSERT(NT_SUCCESS(delSt), "deleteIoQueuePair must succeed");
+        TEST_ASSERT(ctrl.getQueueCount() == 1, "Queue count must return to 1");
+    }
+
+    // Phase 4: Physical Region Page (PRP) scatter-gather zero-copy DMA
+    {
+        PrpDmaEngine dma;
+        NvmeController ctrl(NvmeVersion::Version_2_0);
+        ctrl.writeReg32(NVME_REG_CC, NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16);
+        auto ns = ctrl.getNamespace(1);
+        TEST_ASSERT(ns != nullptr, "Namespace 1 must exist");
+
+        // Case A: Single Page (2048 bytes <= 4096) -> prp1 set, prp2 == 0
+        std::vector<uint8_t> hostBufA(2048, 0xAA);
+        uint64_t prp1A = 0, prp2A = 0;
+        std::vector<uint64_t> listA;
+        dma.buildPrpChain(hostBufA.data(), hostBufA.size(), prp1A, prp2A, listA);
+        TEST_ASSERT(prp1A != 0, "prp1 must be non-zero");
+        TEST_ASSERT(prp2A == 0, "prp2 must be 0 for <= 4096 bytes");
+        TEST_ASSERT(listA.empty(), "PRP list must be empty for <= 4096 bytes");
+
+        NvmeSqe writeSqeA{};
+        writeSqeA.opcode = NVME_NVM_WRITE;
+        writeSqeA.commandId = 301;
+        writeSqeA.nsid = 1;
+        writeSqeA.cdw10 = 100; // SLBA = 100
+        writeSqeA.cdw12 = (2048 / 512) - 1; // 4 blocks
+        writeSqeA.prp1 = prp1A;
+        writeSqeA.prp2 = prp2A;
+
+        NvmeCqe cqeA = ctrl.executeIoCommandWithPrp(writeSqeA, dma);
+        TEST_ASSERT(cqeA.getStatusCode() == NVME_SC_SUCCESS, "PRP Write A must succeed");
+
+        // Read back with DMA
+        uint64_t rPrp1A = 0, rPrp2A = 0;
+        std::vector<uint64_t> rListA;
+        dma.buildPrpChain(nullptr, 2048, rPrp1A, rPrp2A, rListA);
+
+        NvmeSqe readSqeA{};
+        readSqeA.opcode = NVME_NVM_READ;
+        readSqeA.commandId = 302;
+        readSqeA.nsid = 1;
+        readSqeA.cdw10 = 100;
+        readSqeA.cdw12 = (2048 / 512) - 1;
+        readSqeA.prp1 = rPrp1A;
+        readSqeA.prp2 = rPrp2A;
+
+        NvmeCqe rCqeA = ctrl.executeIoCommandWithPrp(readSqeA, dma);
+        TEST_ASSERT(rCqeA.getStatusCode() == NVME_SC_SUCCESS, "PRP Read A must succeed");
+
+        std::vector<uint8_t> readBackA(2048, 0);
+        dma.readPhysicalMemory(rPrp1A, readBackA.data(), 2048);
+        TEST_ASSERT(std::memcmp(hostBufA.data(), readBackA.data(), 2048) == 0, "Readback A data must match written data (0xAA)");
+
+        // Case B: Two Pages (6144 bytes > 4096 and <= 8192) -> prp1 set, prp2 points to 2nd page
+        std::vector<uint8_t> hostBufB(6144, 0xBB);
+        uint64_t prp1B = 0, prp2B = 0;
+        std::vector<uint64_t> listB;
+        dma.buildPrpChain(hostBufB.data(), hostBufB.size(), prp1B, prp2B, listB);
+        TEST_ASSERT(prp1B != 0 && prp2B != 0, "prp1 and prp2 must be non-zero for 2 pages");
+        TEST_ASSERT(listB.empty(), "PRP list must be empty for exactly 2 pages");
+
+        NvmeSqe writeSqeB{};
+        writeSqeB.opcode = NVME_NVM_WRITE;
+        writeSqeB.commandId = 303;
+        writeSqeB.nsid = 1;
+        writeSqeB.cdw10 = 200;
+        writeSqeB.cdw12 = (6144 / 512) - 1;
+        writeSqeB.prp1 = prp1B;
+        writeSqeB.prp2 = prp2B;
+
+        NvmeCqe cqeB = ctrl.executeIoCommandWithPrp(writeSqeB, dma);
+        TEST_ASSERT(cqeB.getStatusCode() == NVME_SC_SUCCESS, "PRP Write B must succeed");
+
+        // Case C: Multi-Page PRP List (16384 bytes = 4 pages > 8192) -> prp1 is page 0, prp2 points to PRP List
+        std::vector<uint8_t> hostBufC(16384);
+        for (size_t i = 0; i < hostBufC.size(); ++i) hostBufC[i] = static_cast<uint8_t>(i & 0xFF);
+
+        uint64_t prp1C = 0, prp2C = 0;
+        std::vector<uint64_t> listC;
+        dma.buildPrpChain(hostBufC.data(), hostBufC.size(), prp1C, prp2C, listC);
+        TEST_ASSERT(prp1C != 0 && prp2C != 0, "prp1 and prp2 must be valid");
+        TEST_ASSERT(listC.size() == 3, "PRP list must contain 3 page entries for 4 pages total");
+
+        NvmeSqe writeSqeC{};
+        writeSqeC.opcode = NVME_NVM_WRITE;
+        writeSqeC.commandId = 304;
+        writeSqeC.nsid = 1;
+        writeSqeC.cdw10 = 500;
+        writeSqeC.cdw12 = (16384 / 512) - 1;
+        writeSqeC.prp1 = prp1C;
+        writeSqeC.prp2 = prp2C;
+
+        NvmeCqe cqeC = ctrl.executeIoCommandWithPrp(writeSqeC, dma);
+        TEST_ASSERT(cqeC.getStatusCode() == NVME_SC_SUCCESS, "PRP Write C (PRP List) must succeed");
+
+        // Readback C
+        uint64_t rPrp1C = 0, rPrp2C = 0;
+        std::vector<uint64_t> rListC;
+        dma.buildPrpChain(nullptr, 16384, rPrp1C, rPrp2C, rListC);
+
+        NvmeSqe readSqeC{};
+        readSqeC.opcode = NVME_NVM_READ;
+        readSqeC.commandId = 305;
+        readSqeC.nsid = 1;
+        readSqeC.cdw10 = 500;
+        readSqeC.cdw12 = (16384 / 512) - 1;
+        readSqeC.prp1 = rPrp1C;
+        readSqeC.prp2 = rPrp2C;
+
+        NvmeCqe rCqeC = ctrl.executeIoCommandWithPrp(readSqeC, dma);
+        TEST_ASSERT(rCqeC.getStatusCode() == NVME_SC_SUCCESS, "PRP Read C must succeed");
+
+        std::vector<uint8_t> readBackC(16384, 0);
+        auto resolvedPages = dma.resolvePrpPages(rPrp1C, rPrp2C, 16384);
+        TEST_ASSERT(resolvedPages.size() == 4, "resolvePrpPages must return 4 pages");
+        for (size_t p = 0; p < resolvedPages.size(); ++p) {
+            dma.readPhysicalMemory(resolvedPages[p], readBackC.data() + (p * 4096), 4096);
+        }
+        TEST_ASSERT(std::memcmp(hostBufC.data(), readBackC.data(), 16384) == 0, "PRP List readback must match original data perfectly");
+    }
+
+    // Phase 5: High-throughput NVM I/O commands across namespaces
+    {
+        NvmeController ctrl(NvmeVersion::Version_2_0);
+        ctrl.writeReg32(NVME_REG_CC, NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16);
+
+        // Write on Namespace 1 (512B)
+        uint8_t writePayload[1024];
+        std::memset(writePayload, 0x42, sizeof(writePayload));
+        NvmeSqe sqeW1{};
+        sqeW1.opcode = NVME_NVM_WRITE;
+        sqeW1.commandId = 401;
+        sqeW1.nsid = 1;
+        sqeW1.cdw10 = 1000;
+        sqeW1.cdw12 = 1; // 2 blocks = 1024 bytes
+        NvmeCqe cqeW1 = ctrl.executeIoCommand(sqeW1, writePayload, sizeof(writePayload));
+        TEST_ASSERT(cqeW1.getStatusCode() == NVME_SC_SUCCESS, "NVM Write NS1 must succeed");
+
+        // Read on Namespace 1
+        uint8_t readPayload[1024]{};
+        NvmeSqe sqeR1{};
+        sqeR1.opcode = NVME_NVM_READ;
+        sqeR1.commandId = 402;
+        sqeR1.nsid = 1;
+        sqeR1.cdw10 = 1000;
+        sqeR1.cdw12 = 1;
+        NvmeCqe cqeR1 = ctrl.executeIoCommand(sqeR1, readPayload, sizeof(readPayload));
+        TEST_ASSERT(cqeR1.getStatusCode() == NVME_SC_SUCCESS, "NVM Read NS1 must succeed");
+        TEST_ASSERT(std::memcmp(writePayload, readPayload, 1024) == 0, "Payload read from NS1 must match written data (0x42)");
+
+        // Write Zeroes on Namespace 1
+        NvmeSqe sqeWZ{};
+        sqeWZ.opcode = NVME_NVM_WRITE_ZEROES;
+        sqeWZ.commandId = 403;
+        sqeWZ.nsid = 1;
+        sqeWZ.cdw10 = 1000;
+        sqeWZ.cdw12 = 1;
+        NvmeCqe cqeWZ = ctrl.executeIoCommand(sqeWZ, nullptr, 0);
+        TEST_ASSERT(cqeWZ.getStatusCode() == NVME_SC_SUCCESS, "NVM Write Zeroes must succeed");
+
+        // Verify zero readback
+        std::memset(readPayload, 0xFF, sizeof(readPayload));
+        ctrl.executeIoCommand(sqeR1, readPayload, sizeof(readPayload));
+        bool allZero = true;
+        for (size_t i = 0; i < sizeof(readPayload); ++i) {
+            if (readPayload[i] != 0) { allZero = false; break; }
+        }
+        TEST_ASSERT(allZero, "Read after WriteZeroes must return all zeroes");
+
+        // Flush command
+        NvmeSqe sqeFlush{};
+        sqeFlush.opcode = NVME_NVM_FLUSH;
+        sqeFlush.commandId = 404;
+        sqeFlush.nsid = 1;
+        NvmeCqe cqeFlush = ctrl.executeIoCommand(sqeFlush, nullptr, 0);
+        TEST_ASSERT(cqeFlush.getStatusCode() == NVME_SC_SUCCESS, "NVM Flush must succeed");
+    }
+
+    // Phase 6: Dataset Management (TRIM / Deallocate)
+    {
+        NvmeController ctrl(NvmeVersion::Version_2_0);
+        ctrl.writeReg32(NVME_REG_CC, NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16);
+
+        // Pre-write data at LBA 2000
+        uint8_t data[512];
+        std::memset(data, 0xEE, sizeof(data));
+        NvmeSqe sqeW{};
+        sqeW.opcode = NVME_NVM_WRITE;
+        sqeW.commandId = 501;
+        sqeW.nsid = 1;
+        sqeW.cdw10 = 2000;
+        sqeW.cdw12 = 0;
+        ctrl.executeIoCommand(sqeW, data, sizeof(data));
+
+        // Submit Dataset Management TRIM for 1 range: LBA 2000, 1 block
+        uint8_t dsmBuf[16]{};
+        *reinterpret_cast<uint32_t*>(dsmBuf + 0) = 0; // context attributes
+        *reinterpret_cast<uint32_t*>(dsmBuf + 4) = 1; // length in logical blocks
+        *reinterpret_cast<uint64_t*>(dsmBuf + 8) = 2000; // starting LBA
+
+        NvmeSqe sqeDsm{};
+        sqeDsm.opcode = NVME_NVM_DATASET_MGMT;
+        sqeDsm.commandId = 502;
+        sqeDsm.nsid = 1;
+        sqeDsm.cdw10 = 0; // NR = 0 (1 range)
+        sqeDsm.cdw11 = 0x04; // Attribute - Deallocate
+        NvmeCqe cqeDsm = ctrl.executeIoCommand(sqeDsm, dsmBuf, sizeof(dsmBuf));
+        TEST_ASSERT(cqeDsm.getStatusCode() == NVME_SC_SUCCESS, "DATASET_MGMT Deallocate must succeed");
+
+        // Verify trimmed block reads as zero (dlfeat behavior)
+        uint8_t checkBuf[512]{};
+        std::memset(checkBuf, 0xFF, sizeof(checkBuf));
+        NvmeSqe sqeR{};
+        sqeR.opcode = NVME_NVM_READ;
+        sqeR.commandId = 503;
+        sqeR.nsid = 1;
+        sqeR.cdw10 = 2000;
+        sqeR.cdw12 = 0;
+        ctrl.executeIoCommand(sqeR, checkBuf, sizeof(checkBuf));
+        bool isZero = true;
+        for (int i = 0; i < 512; ++i) {
+            if (checkBuf[i] != 0) { isZero = false; break; }
+        }
+        TEST_ASSERT(isZero, "Deallocated block must return zero on read");
+    }
+
+    // Phase 7: Command Abort Protocol (NVME_ADMIN_ABORT)
+    {
+        NvmeController ctrl(NvmeVersion::Version_2_0);
+        ctrl.writeReg32(NVME_REG_CC, NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16);
+        ctrl.createIoQueuePair(1, 16, 16, 0x10000, 0x20000);
+
+        // Submit Admin Abort command targeting SQID 1, CID 999
+        NvmeSqe sqeAbort{};
+        sqeAbort.opcode = NVME_ADMIN_ABORT;
+        sqeAbort.commandId = 601;
+        sqeAbort.cdw10 = (static_cast<uint32_t>(999) << 16) | 1; // CID 999, SQID 1
+
+        NvmeCqe cqeAbort = ctrl.executeAdminCommand(sqeAbort, nullptr, 0);
+        TEST_ASSERT(cqeAbort.getStatusCode() == NVME_SC_SUCCESS, "Admin Abort command must execute successfully");
+
+        NVME_TELEMETRY telem = ctrl.getTelemetry();
+        TEST_ASSERT(telem.abortedCommands == 1, "Aborted command telemetry count must be 1");
+    }
+
+    // Phase 8: StorPort Miniport Adapter Discovery & Configuration
+    {
+        auto ctrl = std::make_shared<NvmeController>(NvmeVersion::Version_2_0);
+        auto dma = std::make_shared<PrpDmaEngine>();
+        StorNvmeMiniport miniport(ctrl, dma);
+
+        PORT_CONFIGURATION_INFORMATION config{};
+        NTSTATUS stFind = miniport.findAdapter(&config);
+        TEST_ASSERT(NT_SUCCESS(stFind), "findAdapter must succeed");
+        TEST_ASSERT(config.MaximumTransferLength == 2 * 1024 * 1024, "MaximumTransferLength must be 2MB");
+        TEST_ASSERT(config.NumberOfPhysicalBreaks == 512, "NumberOfPhysicalBreaks must be 512");
+        TEST_ASSERT(config.Dma64BitAddresses == 1, "Dma64BitAddresses must be enabled (1)");
+        TEST_ASSERT(config.NumberOfBuses == 1, "NumberOfBuses must be 1");
+        TEST_ASSERT(config.MaximumNumberOfTargets == 4, "MaximumNumberOfTargets must be 4");
+        TEST_ASSERT(config.MaximumNumberOfLogicalUnits == 8, "MaximumNumberOfLogicalUnits must be 8");
+
+        NTSTATUS stInit = miniport.initialize();
+        TEST_ASSERT(NT_SUCCESS(stInit), "Miniport initialize must succeed");
+    }
+
+    // Phase 9: SCSI-to-NVMe SRB Translation Pipeline
+    {
+        auto ctrl = std::make_shared<NvmeController>(NvmeVersion::Version_2_0);
+        auto dma = std::make_shared<PrpDmaEngine>();
+        StorNvmeMiniport miniport(ctrl, dma);
+        miniport.initialize();
+
+        // 1. SCSIOP_INQUIRY
+        SCSI_REQUEST_BLOCK inqSrb{};
+        uint8_t inqBuf[36]{};
+        inqSrb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+        inqSrb.Cdb[0] = SCSIOP_INQUIRY;
+        inqSrb.DataBuffer = inqBuf;
+        inqSrb.DataTransferLength = sizeof(inqBuf);
+        inqSrb.Lun = 0; // NSID 1
+        miniport.startIo(&inqSrb);
+        TEST_ASSERT(inqSrb.SrbStatus == SRB_STATUS_SUCCESS, "SRB INQUIRY status must be SUCCESS");
+        TEST_ASSERT(inqSrb.ScsiStatus == SCSISTAT_GOOD, "SCSI status must be GOOD");
+        TEST_ASSERT(std::memcmp(inqBuf + 8, "MicaNT  ", 8) == 0, "Inquiry vendor ID must match 'MicaNT  '");
+
+        // 2. SCSIOP_READ_CAPACITY16
+        SCSI_REQUEST_BLOCK capSrb{};
+        uint8_t capBuf[32]{};
+        capSrb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+        capSrb.Cdb[0] = SCSIOP_READ_CAPACITY16;
+        capSrb.DataBuffer = capBuf;
+        capSrb.DataTransferLength = sizeof(capBuf);
+        capSrb.Lun = 0;
+        miniport.startIo(&capSrb);
+        TEST_ASSERT(capSrb.SrbStatus == SRB_STATUS_SUCCESS, "SRB READ_CAPACITY16 must succeed");
+        uint32_t blkSize = (static_cast<uint32_t>(capBuf[8]) << 24) |
+                           (static_cast<uint32_t>(capBuf[9]) << 16) |
+                           (static_cast<uint32_t>(capBuf[10]) << 8) |
+                           static_cast<uint32_t>(capBuf[11]);
+        TEST_ASSERT(blkSize == 512, "Reported block size must be 512 for LUN 0 (NSID 1)");
+
+        // 3. SCSIOP_WRITE10 & SCSIOP_READ10
+        SCSI_REQUEST_BLOCK writeSrb{};
+        uint8_t wData[1024];
+        std::memset(wData, 0x77, sizeof(wData));
+        writeSrb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+        writeSrb.Cdb[0] = SCSIOP_WRITE10;
+        writeSrb.Cdb[2] = 0; writeSrb.Cdb[3] = 0; writeSrb.Cdb[4] = 0x01; writeSrb.Cdb[5] = 0x00; // LBA 256
+        writeSrb.Cdb[7] = 0; writeSrb.Cdb[8] = 2; // 2 blocks
+        writeSrb.DataBuffer = wData;
+        writeSrb.DataTransferLength = sizeof(wData);
+        writeSrb.Lun = 0;
+        miniport.startIo(&writeSrb);
+        TEST_ASSERT(writeSrb.SrbStatus == SRB_STATUS_SUCCESS, "SRB WRITE10 must succeed");
+
+        SCSI_REQUEST_BLOCK readSrb{};
+        uint8_t rData[1024]{};
+        readSrb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+        readSrb.Cdb[0] = SCSIOP_READ10;
+        readSrb.Cdb[2] = 0; readSrb.Cdb[3] = 0; readSrb.Cdb[4] = 0x01; readSrb.Cdb[5] = 0x00; // LBA 256
+        readSrb.Cdb[7] = 0; readSrb.Cdb[8] = 2; // 2 blocks
+        readSrb.DataBuffer = rData;
+        readSrb.DataTransferLength = sizeof(rData);
+        readSrb.Lun = 0;
+        miniport.startIo(&readSrb);
+        TEST_ASSERT(readSrb.SrbStatus == SRB_STATUS_SUCCESS, "SRB READ10 must succeed");
+        TEST_ASSERT(std::memcmp(wData, rData, 1024) == 0, "SCSI Read10 data must match Write10 (0x77)");
+
+        // 4. SCSIOP_SYNCHRONIZE_CACHE10
+        SCSI_REQUEST_BLOCK syncSrb{};
+        syncSrb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+        syncSrb.Cdb[0] = SCSIOP_SYNCHRONIZE_CACHE10;
+        syncSrb.Lun = 0;
+        miniport.startIo(&syncSrb);
+        TEST_ASSERT(syncSrb.SrbStatus == SRB_STATUS_SUCCESS, "SYNCHRONIZE_CACHE must succeed");
+
+        // 5. SCSIOP_UNMAP (TRIM)
+        SCSI_REQUEST_BLOCK unmapSrb{};
+        uint8_t unmapBuf[24]{};
+        unmapBuf[0] = 0; unmapBuf[1] = 22; // unmap data length
+        unmapBuf[2] = 0; unmapBuf[3] = 16; // block descriptor data length = 16
+        // Block descriptor: LBA 256, count 2
+        unmapBuf[14] = 0x01; unmapBuf[15] = 0x00; // LBA 256
+        unmapBuf[19] = 2; // count 2
+        unmapSrb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+        unmapSrb.Cdb[0] = SCSIOP_UNMAP;
+        unmapSrb.DataBuffer = unmapBuf;
+        unmapSrb.DataTransferLength = sizeof(unmapBuf);
+        unmapSrb.Lun = 0;
+        miniport.startIo(&unmapSrb);
+        TEST_ASSERT(unmapSrb.SrbStatus == SRB_STATUS_SUCCESS, "SCSI UNMAP must succeed");
+
+        // Verify block reads 0 after UNMAP
+        std::memset(rData, 0xFF, sizeof(rData));
+        miniport.startIo(&readSrb);
+        bool unmappedZero = true;
+        for (int i = 0; i < 1024; ++i) {
+            if (rData[i] != 0) { unmappedZero = false; break; }
+        }
+        TEST_ASSERT(unmappedZero, "Data after SCSI UNMAP must be zeroed");
+
+        // 6. SCSIOP_REPORT_LUNS
+        SCSI_REQUEST_BLOCK lunsSrb{};
+        uint8_t lunsBuf[24]{};
+        lunsSrb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+        lunsSrb.Cdb[0] = SCSIOP_REPORT_LUNS;
+        lunsSrb.DataBuffer = lunsBuf;
+        lunsSrb.DataTransferLength = sizeof(lunsBuf);
+        miniport.startIo(&lunsSrb);
+        TEST_ASSERT(lunsSrb.SrbStatus == SRB_STATUS_SUCCESS, "REPORT_LUNS must succeed");
+        uint32_t lunListLen = (static_cast<uint32_t>(lunsBuf[0]) << 24) |
+                              (static_cast<uint32_t>(lunsBuf[1]) << 16) |
+                              (static_cast<uint32_t>(lunsBuf[2]) << 8)  |
+                              static_cast<uint32_t>(lunsBuf[3]);
+        TEST_ASSERT(lunListLen >= 16, "REPORT_LUNS must report at least 2 LUNs (16 bytes)");
+    }
+
+    // Phase 10: Fatal Error Injection, StorPort resetBus, Controller Recovery & Telemetry Audit
+    {
+        auto ctrl = std::make_shared<NvmeController>(NvmeVersion::Version_2_0);
+        auto dma = std::make_shared<PrpDmaEngine>();
+        StorNvmeMiniport miniport(ctrl, dma);
+        miniport.initialize();
+
+        // 1. Inject fatal hardware status (CSTS.CFS = 1)
+        ctrl->triggerFatalError();
+        TEST_ASSERT((ctrl->readReg32(NVME_REG_CSTS) & NVME_CSTS_CFS) != 0, "CSTS.CFS must be set");
+
+        // I/O commands must be rejected with internal device error
+        NvmeSqe errSqe{};
+        errSqe.opcode = NVME_NVM_READ;
+        errSqe.commandId = 999;
+        errSqe.nsid = 1;
+        NvmeCqe errCqe = ctrl->executeIoCommand(errSqe, nullptr, 0);
+        TEST_ASSERT(errCqe.getStatusCode() == NVME_SC_INTERNAL_DEVICE_ERROR, "Commands during CFS must return NVME_SC_INTERNAL_DEVICE_ERROR");
+
+        // 2. Perform StorPort bus reset recovery (SRB_FUNCTION_RESET_BUS)
+        SCSI_REQUEST_BLOCK resetSrb{};
+        resetSrb.Function = SRB_FUNCTION_RESET_BUS;
+        resetSrb.PathId = 0;
+        miniport.startIo(&resetSrb);
+        TEST_ASSERT(resetSrb.SrbStatus == SRB_STATUS_SUCCESS, "SRB RESET_BUS must succeed");
+
+        // Controller must be recovered and ready again, CFS cleared
+        TEST_ASSERT((ctrl->readReg32(NVME_REG_CSTS) & NVME_CSTS_CFS) == 0, "CSTS.CFS must be cleared after bus reset");
+        TEST_ASSERT(ctrl->isReady(), "Controller must be ready after recovery");
+
+        // 3. Telemetry Audit
+        auto telem = miniport.getTelemetry();
+        TEST_ASSERT(telem.srbDispatched > 0, "srbDispatched must be > 0");
+        TEST_ASSERT(telem.srbCompleted > 0, "srbCompleted must be > 0");
+        TEST_ASSERT(telem.busResets == 1, "busResets must be 1");
+
+        auto ctrlTelem = ctrl->getTelemetry();
+        TEST_ASSERT(ctrlTelem.fatalErrorsInjected == 1, "fatalErrorsInjected must be 1");
+        TEST_ASSERT(ctrlTelem.recoveriesCompleted == 1, "recoveriesCompleted must be 1");
+
+        // 4. Test C ABI Exports via TitanFlashSubsystem
+        InitializeNvmeSubsystem();
+        SCSI_REQUEST_BLOCK abiSrb{};
+        uint8_t abiInqBuf[36]{};
+        abiSrb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+        abiSrb.Cdb[0] = SCSIOP_INQUIRY;
+        abiSrb.DataBuffer = abiInqBuf;
+        abiSrb.DataTransferLength = sizeof(abiInqBuf);
+        abiSrb.Lun = 0;
+        BOOL bSubmitted = StorNvmeSubmitSrb(&abiSrb);
+        TEST_ASSERT(bSubmitted != 0, "StorNvmeSubmitSrb C ABI must succeed");
+        TEST_ASSERT(abiSrb.SrbStatus == SRB_STATUS_SUCCESS, "StorNvmeSubmitSrb status must be SUCCESS");
+
+        STOR_ADDR_BTL8 addr{};
+        ULONG stAddr = StorPortGetLogicalUnitAddress(nullptr, &abiSrb, &addr);
+        TEST_ASSERT(stAddr == 0, "StorPortGetLogicalUnitAddress must succeed");
+        TEST_ASSERT(addr.Lun == 0, "Address Lun must match SRB Lun");
+
+        auto portTelem = StorPortQueryTelemetry();
+        TEST_ASSERT(portTelem.srbDispatched > 0, "StorPortQueryTelemetry must report dispatched SRBs");
+
+        StorPortResetTelemetry();
+        auto resetPortTelem = StorPortQueryTelemetry();
+        TEST_ASSERT(resetPortTelem.srbDispatched == 0, "StorPortResetTelemetry must clear counters");
+
+        TitanFlashSubsystem::Instance().resetForTesting();
+    }
+
+    std::cout << "[TEST] Suite 248: Horizon 32 - StorPort / NVMe Storage Architecture, Scatter-Gather PRPs, Queues & Miniport PASSED.\n";
+}
+
 
 
 

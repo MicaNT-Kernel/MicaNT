@@ -52,15 +52,10 @@
 
 namespace micant::nvme {
 
-using BOOL = int32_t;
-
-#ifndef TRUE
-inline constexpr BOOL TRUE = 1;
-#endif
-
-#ifndef FALSE
-inline constexpr BOOL FALSE = 0;
-#endif
+using micant::BOOL;
+using micant::TRUE;
+using micant::FALSE;
+using micant::ULONG;
 
 // ============================================================================
 // 1. NVMe Multi-Generation Specification Versions & Constants
@@ -496,8 +491,339 @@ public:
 };
 
 // ============================================================================
+// 3.5. SCSI & StorPort Miniport Protocol Definitions
+// ============================================================================
+
+enum SRB_FUNCTION : uint8_t {
+    SRB_FUNCTION_EXECUTE_SCSI          = 0x00,
+    SRB_FUNCTION_CLAIM_DEVICE          = 0x01,
+    SRB_FUNCTION_ABORT_COMMAND         = 0x02,
+    SRB_FUNCTION_RELEASE_DEVICE        = 0x04,
+    SRB_FUNCTION_RESET_BUS             = 0x05,
+    SRB_FUNCTION_RESET_DEVICE          = 0x06,
+    SRB_FUNCTION_TERMINATE_IO          = 0x14,
+    SRB_FUNCTION_FLUSH_QUEUE           = 0x15,
+    SRB_FUNCTION_ATTACH_DEVICE         = 0x16,
+    SRB_FUNCTION_RELEASE_QUEUE         = 0x17,
+    SRB_FUNCTION_RESET_LOGICAL_UNIT    = 0x20,
+    SRB_FUNCTION_STORAGE_REQUEST_BLOCK = 0x30,
+    SRB_FUNCTION_PNP                   = 0x25,
+    SRB_FUNCTION_POWER                 = 0x24
+};
+
+enum SRB_STATUS : uint8_t {
+    SRB_STATUS_PENDING                 = 0x00,
+    SRB_STATUS_SUCCESS                 = 0x01,
+    SRB_STATUS_ABORTED                 = 0x02,
+    SRB_STATUS_ABORT_FAILED            = 0x03,
+    SRB_STATUS_ERROR                   = 0x04,
+    SRB_STATUS_BUSY                    = 0x05,
+    SRB_STATUS_INVALID_REQUEST         = 0x06,
+    SRB_STATUS_INVALID_PATH_ID         = 0x07,
+    SRB_STATUS_NO_DEVICE               = 0x08,
+    SRB_STATUS_TIMEOUT                 = 0x09,
+    SRB_STATUS_SELECTION_TIMEOUT       = 0x0A,
+    SRB_STATUS_COMMAND_TIMEOUT         = 0x0B,
+    SRB_STATUS_DATA_OVERRUN            = 0x12,
+    SRB_STATUS_UNEXPECTED_BUS_FREE     = 0x13,
+    SRB_STATUS_PHASE_SEQUENCE_FAILURE  = 0x14,
+    SRB_STATUS_BAD_SRB_BLOCK_LENGTH    = 0x15,
+    SRB_STATUS_REQUEST_FLUSHED         = 0x16
+};
+
+enum SCSI_STATUS : uint8_t {
+    SCSISTAT_GOOD                      = 0x00,
+    SCSISTAT_CHECK_CONDITION           = 0x02,
+    SCSISTAT_CONDITION_MET             = 0x04,
+    SCSISTAT_BUSY                      = 0x08,
+    SCSISTAT_INTERMEDIATE              = 0x10,
+    SCSISTAT_RESERVATION_CONFLICT      = 0x18,
+    SCSISTAT_COMMAND_TERMINATED        = 0x22,
+    SCSISTAT_QUEUE_FULL                = 0x28
+};
+
+enum SCSI_OPCODE : uint8_t {
+    SCSIOP_TEST_UNIT_READY             = 0x00,
+    SCSIOP_REQUEST_SENSE               = 0x03,
+    SCSIOP_INQUIRY                     = 0x12,
+    SCSIOP_MODE_SELECT                 = 0x15,
+    SCSIOP_RESERVE_UNIT                = 0x16,
+    SCSIOP_RELEASE_UNIT                = 0x17,
+    SCSIOP_MODE_SENSE                  = 0x1A,
+    SCSIOP_START_STOP_UNIT             = 0x1B,
+    SCSIOP_READ_CAPACITY10             = 0x25,
+    SCSIOP_READ10                      = 0x28,
+    SCSIOP_WRITE10                     = 0x2A,
+    SCSIOP_SEEK10                      = 0x2B,
+    SCSIOP_WRITE_VERIFY10              = 0x2E,
+    SCSIOP_VERIFY10                    = 0x2F,
+    SCSIOP_SYNCHRONIZE_CACHE10         = 0x35,
+    SCSIOP_UNMAP                       = 0x42,
+    SCSIOP_MODE_SENSE10                = 0x5A,
+    SCSIOP_READ16                      = 0x88,
+    SCSIOP_WRITE16                     = 0x8A,
+    SCSIOP_SYNCHRONIZE_CACHE16         = 0x91,
+    SCSIOP_READ_CAPACITY16             = 0x9E,
+    SCSIOP_REPORT_LUNS                 = 0xA0
+};
+
+struct SCSI_REQUEST_BLOCK {
+    uint16_t            Length{sizeof(SCSI_REQUEST_BLOCK)};
+    uint8_t             Function{SRB_FUNCTION_EXECUTE_SCSI};
+    uint8_t             SrbStatus{SRB_STATUS_PENDING};
+    uint8_t             ScsiStatus{SCSISTAT_GOOD};
+    uint8_t             PathId{0};
+    uint8_t             TargetId{0};
+    uint8_t             Lun{0};
+    uint8_t             QueueTag{0};
+    uint8_t             QueueAction{0};
+    uint8_t             CdbLength{16};
+    uint8_t             SenseInfoBufferLength{0};
+    uint32_t            SrbFlags{0};
+    uint32_t            DataTransferLength{0};
+    uint32_t            TimeOutValue{30};
+    void*               DataBuffer{nullptr};
+    void*               SenseInfoBuffer{nullptr};
+    SCSI_REQUEST_BLOCK* NextSrb{nullptr};
+    void*               OriginalRequest{nullptr};
+    void*               SrbExtension{nullptr};
+    uint32_t            InternalStatus{0};
+    uint32_t            Reserved{0};
+    uint8_t             Cdb[16]{};
+};
+using PSCSI_REQUEST_BLOCK = SCSI_REQUEST_BLOCK*;
+
+struct STOR_ADDR_BTL8 {
+    uint16_t Type{0};
+    uint16_t Port{0};
+    uint32_t AddressLength{sizeof(STOR_ADDR_BTL8)};
+    uint8_t  Path{0};
+    uint8_t  Target{0};
+    uint8_t  Lun{0};
+    uint8_t  Reserved{0};
+};
+
+struct PORT_CONFIGURATION_INFORMATION {
+    uint32_t Length{sizeof(PORT_CONFIGURATION_INFORMATION)};
+    uint32_t SystemIoBusNumber{0};
+    uint32_t AdapterInterfaceType{0}; // PCI
+    uint32_t BusInterruptLevel{0};
+    uint32_t BusInterruptVector{0};
+    uint32_t InterruptMode{0};
+    uint32_t MaximumTransferLength{2 * 1024 * 1024}; // 2MB
+    uint32_t NumberOfPhysicalBreaks{512};
+    uint32_t Dma64BitAddresses{1};
+    uint32_t BufferAlignmentMask{0x03};
+    uint32_t NumberOfBuses{1};
+    uint32_t MaximumNumberOfTargets{4};
+    uint32_t MaximumNumberOfLogicalUnits{8};
+    uint32_t SynchronizationModel{1};
+};
+
+enum STORPORT_NOTIFICATION_TYPE {
+    RequestComplete           = 0,
+    NextRequest               = 1,
+    NextLuRequest             = 2,
+    ResetDetected             = 3,
+    CallDisableInterrupts     = 4,
+    CallEnableInterrupts      = 5,
+    RequestTimerCall          = 6,
+    BusChangeDetected         = 7,
+    WmiEvent                  = 8,
+    WmiLogEvent               = 9,
+    LinkDown                  = 10,
+    LinkUp                    = 11
+};
+
+enum SC_CONTROL_TYPE {
+    ScsiQuerySupportedControlTypes = 0,
+    ScsiStopAdapter                = 1,
+    ScsiRestartAdapter             = 2,
+    ScsiSetBootConfig              = 3,
+    ScsiSetRunningConfig           = 4,
+    ScsiPowerSettingNotification   = 5
+};
+
+struct HW_INITIALIZATION_DATA {
+    uint32_t HwInitializationDataSize{sizeof(HW_INITIALIZATION_DATA)};
+    uint32_t AdapterInterfaceType{0};
+};
+
+// ============================================================================
+// 3.6. Physical Region Page (PRP) & Scatter-Gather DMA Engine
+// ============================================================================
+
+class PrpDmaEngine {
+private:
+    std::unordered_map<uint64_t, std::vector<uint8_t>> m_physicalPages;
+    uint64_t m_nextPhysAddr{0x10000000ULL}; // 256MB base
+    mutable std::mutex m_mutex;
+
+public:
+    static constexpr size_t PAGE_SIZE = 4096;
+
+    uint64_t allocatePhysicalPage() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uint64_t addr = m_nextPhysAddr;
+        m_nextPhysAddr += PAGE_SIZE;
+        m_physicalPages[addr].assign(PAGE_SIZE, 0);
+        return addr;
+    }
+
+    void writePhysicalMemory(uint64_t physAddr, const void* src, size_t length) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const uint8_t* pSrc = static_cast<const uint8_t*>(src);
+        size_t written = 0;
+        while (written < length) {
+            uint64_t pageBase = physAddr & ~(static_cast<uint64_t>(PAGE_SIZE - 1));
+            size_t pageOffset = physAddr & (PAGE_SIZE - 1);
+            size_t chunk = std::min(length - written, PAGE_SIZE - pageOffset);
+            auto& page = m_physicalPages[pageBase];
+            if (page.size() < PAGE_SIZE) page.resize(PAGE_SIZE, 0);
+            std::memcpy(page.data() + pageOffset, pSrc + written, chunk);
+            physAddr += chunk;
+            written += chunk;
+        }
+    }
+
+    void readPhysicalMemory(uint64_t physAddr, void* dst, size_t length) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uint8_t* pDst = static_cast<uint8_t*>(dst);
+        size_t readBytes = 0;
+        while (readBytes < length) {
+            uint64_t pageBase = physAddr & ~(static_cast<uint64_t>(PAGE_SIZE - 1));
+            size_t pageOffset = physAddr & (PAGE_SIZE - 1);
+            size_t chunk = std::min(length - readBytes, PAGE_SIZE - pageOffset);
+            auto it = m_physicalPages.find(pageBase);
+            if (it != m_physicalPages.end()) {
+                std::memcpy(pDst + readBytes, it->second.data() + pageOffset, chunk);
+            } else {
+                std::memset(pDst + readBytes, 0, chunk);
+            }
+            physAddr += chunk;
+            readBytes += chunk;
+        }
+    }
+
+    void buildPrpChain(
+        const void* hostData,
+        size_t length,
+        uint64_t& outPrp1,
+        uint64_t& outPrp2,
+        std::vector<uint64_t>& outPrpList
+    ) {
+        if (length == 0) {
+            outPrp1 = 0;
+            outPrp2 = 0;
+            return;
+        }
+
+        size_t numPages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+        std::vector<uint64_t> pages;
+        pages.reserve(numPages);
+
+        const uint8_t* pData = static_cast<const uint8_t*>(hostData);
+        for (size_t i = 0; i < numPages; ++i) {
+            uint64_t pageAddr = allocatePhysicalPage();
+            pages.push_back(pageAddr);
+            if (pData) {
+                size_t offset = i * PAGE_SIZE;
+                size_t chunk = std::min(length - offset, PAGE_SIZE);
+                writePhysicalMemory(pageAddr, pData + offset, chunk);
+            }
+        }
+
+        outPrp1 = pages[0];
+        if (numPages == 1) {
+            outPrp2 = 0;
+        } else if (numPages == 2) {
+            outPrp2 = pages[1];
+        } else {
+            uint64_t prpListPageAddr = allocatePhysicalPage();
+            outPrpList.clear();
+            for (size_t i = 1; i < numPages; ++i) {
+                outPrpList.push_back(pages[i]);
+            }
+            writePhysicalMemory(prpListPageAddr, outPrpList.data(), outPrpList.size() * sizeof(uint64_t));
+            outPrp2 = prpListPageAddr;
+        }
+    }
+
+    std::vector<uint64_t> resolvePrpPages(uint64_t prp1, uint64_t prp2, size_t length) const {
+        std::vector<uint64_t> pages;
+        if (length == 0 || prp1 == 0) return pages;
+
+        size_t numPages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+        pages.push_back(prp1);
+
+        if (numPages == 2) {
+            pages.push_back(prp2);
+        } else if (numPages > 2) {
+            size_t remainingPages = numPages - 1;
+            std::vector<uint64_t> listEntries(remainingPages);
+            readPhysicalMemory(prp2, listEntries.data(), remainingPages * sizeof(uint64_t));
+            for (uint64_t addr : listEntries) {
+                pages.push_back(addr);
+            }
+        }
+        return pages;
+    }
+
+    void transferToStorage(
+        uint64_t prp1,
+        uint64_t prp2,
+        size_t length,
+        NvmeNamespace& targetNs,
+        uint64_t startLba,
+        uint32_t blockCount
+    ) {
+        std::vector<uint8_t> buffer(length);
+        auto pages = resolvePrpPages(prp1, prp2, length);
+        size_t copied = 0;
+        for (uint64_t pAddr : pages) {
+            size_t chunk = std::min(length - copied, PAGE_SIZE);
+            readPhysicalMemory(pAddr, buffer.data() + copied, chunk);
+            copied += chunk;
+        }
+        targetNs.writeBlocks(startLba, blockCount, buffer.data());
+    }
+
+    void transferFromStorage(
+        uint64_t prp1,
+        uint64_t prp2,
+        size_t length,
+        NvmeNamespace& sourceNs,
+        uint64_t startLba,
+        uint32_t blockCount
+    ) {
+        std::vector<uint8_t> buffer(length);
+        sourceNs.readBlocks(startLba, blockCount, buffer.data());
+        auto pages = resolvePrpPages(prp1, prp2, length);
+        size_t copied = 0;
+        for (uint64_t pAddr : pages) {
+            size_t chunk = std::min(length - copied, PAGE_SIZE);
+            writePhysicalMemory(pAddr, buffer.data() + copied, chunk);
+            copied += chunk;
+        }
+    }
+};
+
+// ============================================================================
 // 4. NVMe Controller Core Engine
 // ============================================================================
+
+struct NVME_TELEMETRY {
+    uint64_t controllerResets{0};
+    uint64_t doorbellWrites{0};
+    uint64_t adminCommandsExecuted{0};
+    uint64_t ioCommandsExecuted{0};
+    uint64_t prpTransfersExecuted{0};
+    uint64_t dmaBytesTransferred{0};
+    uint64_t abortedCommands{0};
+    uint64_t msixInterruptsGenerated{0};
+    uint64_t fatalErrorsInjected{0};
+    uint64_t recoveriesCompleted{0};
+};
 
 class NvmeController {
     NvmeVersion m_version{NvmeVersion::Version_2_0};
@@ -524,6 +850,7 @@ class NvmeController {
         bool     cqPhase{true};
         std::vector<NvmeSqe> sqRing;
         std::vector<NvmeCqe> cqRing;
+        uint64_t msixCount{0};
     };
 
     QueuePair m_adminQueue;
@@ -532,8 +859,9 @@ class NvmeController {
 
     NvmeIdentifyController m_identCtrl{};
     NvmeSmartLog m_smartLog{};
+    NVME_TELEMETRY m_telemetry{};
 
-    mutable std::mutex m_mutex;
+    mutable std::recursive_mutex m_mutex;
 
 public:
     explicit NvmeController(NvmeVersion ver = NvmeVersion::Version_2_0)
@@ -568,7 +896,7 @@ public:
 
     // MMIO Register Access
     uint32_t readReg32(uint32_t offset) {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
         switch (offset) {
             case NVME_REG_CAP: return static_cast<uint32_t>(m_cap & 0xFFFFFFFF);
             case NVME_REG_CAP + 4: return static_cast<uint32_t>(m_cap >> 32);
@@ -577,6 +905,7 @@ public:
             case NVME_REG_INTMC: return m_intmc;
             case NVME_REG_CC: return m_cc;
             case NVME_REG_CSTS: return m_csts;
+            case NVME_REG_NSSR: return 0;
             case NVME_REG_AQA: return m_aqa;
             case NVME_REG_ASQ: return static_cast<uint32_t>(m_asq & 0xFFFFFFFF);
             case NVME_REG_ASQ + 4: return static_cast<uint32_t>(m_asq >> 32);
@@ -591,7 +920,7 @@ public:
     }
 
     void writeReg32(uint32_t offset, uint32_t val) {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
         switch (offset) {
             case NVME_REG_CC: {
                 m_cc = val;
@@ -599,6 +928,24 @@ public:
                     m_csts |= NVME_CSTS_RDY;
                 } else {
                     m_csts &= ~NVME_CSTS_RDY;
+                }
+                if ((val & NVME_CC_SHN_NORM) || (val & 0x00008000)) {
+                    m_csts |= NVME_CSTS_SHST_OK;
+                }
+                break;
+            }
+            case NVME_REG_NSSR: {
+                if (val == 0x4E564D65) { // "NVMe"
+                    m_telemetry.controllerResets++;
+                    m_csts = 0;
+                    m_cc = 0;
+                    m_adminQueue.sqTail = 0;
+                    m_adminQueue.sqHead = 0;
+                    m_adminQueue.cqHead = 0;
+                    m_adminQueue.cqTail = 0;
+                    m_adminQueue.cqPhase = true;
+                    m_adminQueue.msixCount = 0;
+                    m_ioQueues.clear();
                 }
                 break;
             }
@@ -609,18 +956,26 @@ public:
             case NVME_REG_ACQ + 4: m_acq = (static_cast<uint64_t>(val) << 32) | (m_acq & 0xFFFFFFFFULL); break;
             default:
                 if (offset >= NVME_REG_DBS) {
-                    // Doorbell Write: ring tail or head update
+                    m_telemetry.doorbellWrites++;
                     uint32_t dbIdx = (offset - NVME_REG_DBS) / 4;
                     uint16_t qid = dbIdx / 2;
                     bool isCq = (dbIdx % 2) == 1;
                     if (qid == 0) {
-                        if (!isCq) m_adminQueue.sqTail = static_cast<uint16_t>(val);
-                        else m_adminQueue.cqHead = static_cast<uint16_t>(val);
+                        if (!isCq) {
+                            m_adminQueue.sqTail = static_cast<uint16_t>(val);
+                            processQueueLocked(m_adminQueue);
+                        } else {
+                            m_adminQueue.cqHead = static_cast<uint16_t>(val);
+                        }
                     } else {
                         auto it = m_ioQueues.find(qid);
                         if (it != m_ioQueues.end()) {
-                            if (!isCq) it->second.sqTail = static_cast<uint16_t>(val);
-                            else it->second.cqHead = static_cast<uint16_t>(val);
+                            if (!isCq) {
+                                it->second.sqTail = static_cast<uint16_t>(val);
+                                processQueueLocked(it->second);
+                            } else {
+                                it->second.cqHead = static_cast<uint16_t>(val);
+                            }
                         }
                     }
                 }
@@ -630,7 +985,8 @@ public:
 
     // Direct Command Execution Engine
     NvmeCqe executeAdminCommand(const NvmeSqe& sqe, void* dataBuffer = nullptr, uint32_t bufferLength = 0) {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_telemetry.adminCommandsExecuted++;
         NvmeCqe cqe{};
         cqe.commandId = sqe.commandId;
         cqe.sqId = 0;
@@ -679,6 +1035,7 @@ public:
                 qp.cqBase = sqe.prp1;
                 qp.cqRing.resize(qp.cqSize);
                 qp.cqPhase = true;
+                qp.msixCount = 0;
                 break;
             }
             case NVME_ADMIN_CREATE_IO_SQ: {
@@ -689,6 +1046,32 @@ public:
                 qp.sqSize = qsize + 1;
                 qp.sqBase = sqe.prp1;
                 qp.sqRing.resize(qp.sqSize);
+                break;
+            }
+            case NVME_ADMIN_DELETE_IO_SQ: {
+                uint16_t qid = sqe.cdw10 & 0xFFFF;
+                auto it = m_ioQueues.find(qid);
+                if (it != m_ioQueues.end()) {
+                    it->second.sqRing.clear();
+                    it->second.sqSize = 0;
+                }
+                break;
+            }
+            case NVME_ADMIN_DELETE_IO_CQ: {
+                uint16_t qid = sqe.cdw10 & 0xFFFF;
+                auto it = m_ioQueues.find(qid);
+                if (it != m_ioQueues.end()) {
+                    it->second.cqRing.clear();
+                    it->second.cqSize = 0;
+                    m_ioQueues.erase(it);
+                }
+                break;
+            }
+            case NVME_ADMIN_ABORT: {
+                uint16_t sqid = sqe.cdw10 & 0xFFFF;
+                uint16_t cid = (sqe.cdw10 >> 16) & 0xFFFF;
+                abortCommand(sqid, cid);
+                cqe.commandSpecific = 0;
                 break;
             }
             case NVME_ADMIN_GET_LOG_PAGE: {
@@ -723,11 +1106,17 @@ public:
     }
 
     NvmeCqe executeIoCommand(const NvmeSqe& sqe, void* dataBuffer = nullptr, uint32_t bufferLength = 0) {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_telemetry.ioCommandsExecuted++;
         NvmeCqe cqe{};
         cqe.commandId = sqe.commandId;
         cqe.setPhase(true);
         cqe.setStatusCode(NVME_SC_SUCCESS);
+
+        if (m_csts & NVME_CSTS_CFS) {
+            cqe.setStatusCode(NVME_SC_INTERNAL_DEVICE_ERROR);
+            return cqe;
+        }
 
         auto it = m_namespaces.find(sqe.nsid);
         if (it == m_namespaces.end()) {
@@ -787,21 +1176,226 @@ public:
         return cqe;
     }
 
+    NvmeCqe executeIoCommandWithPrp(const NvmeSqe& sqe, PrpDmaEngine& dma) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        NvmeCqe cqe{};
+        cqe.commandId = sqe.commandId;
+        cqe.setPhase(true);
+        cqe.setStatusCode(NVME_SC_SUCCESS);
+
+        if (m_csts & NVME_CSTS_CFS) {
+            cqe.setStatusCode(NVME_SC_INTERNAL_DEVICE_ERROR);
+            return cqe;
+        }
+
+        auto it = m_namespaces.find(sqe.nsid);
+        if (it == m_namespaces.end()) {
+            cqe.setStatusCode(NVME_SC_INVALID_FIELD);
+            return cqe;
+        }
+        auto ns = it->second;
+
+        uint64_t slba = (static_cast<uint64_t>(sqe.cdw11) << 32) | sqe.cdw10;
+        uint16_t nlb = (sqe.cdw12 & 0xFFFF) + 1;
+        size_t byteLength = static_cast<size_t>(nlb) * ns->getBlockSize();
+
+        if (sqe.opcode == NVME_NVM_WRITE) {
+            dma.transferToStorage(sqe.prp1, sqe.prp2, byteLength, *ns, slba, nlb);
+            m_telemetry.prpTransfersExecuted++;
+            m_telemetry.dmaBytesTransferred += byteLength;
+            m_telemetry.ioCommandsExecuted++;
+            m_smartLog.hostWriteCommands[0]++;
+            m_smartLog.dataUnitsWritten[0] += byteLength / 512;
+        } else if (sqe.opcode == NVME_NVM_READ) {
+            dma.transferFromStorage(sqe.prp1, sqe.prp2, byteLength, *ns, slba, nlb);
+            m_telemetry.prpTransfersExecuted++;
+            m_telemetry.dmaBytesTransferred += byteLength;
+            m_telemetry.ioCommandsExecuted++;
+            m_smartLog.hostReadCommands[0]++;
+            m_smartLog.dataUnitsRead[0] += byteLength / 512;
+        } else {
+            cqe.setStatusCode(NVME_SC_INVALID_OPCODE);
+        }
+
+        return cqe;
+    }
+
+    NTSTATUS createIoQueuePair(uint16_t qid, uint16_t sqSize, uint16_t cqSize, uint64_t sqBase, uint64_t cqBase) {
+        if (qid == 0 || sqSize == 0 || cqSize == 0) return STATUS_INVALID_PARAMETER;
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto& qp = m_ioQueues[qid];
+        qp.qid = qid;
+        qp.sqSize = sqSize;
+        qp.cqSize = cqSize;
+        qp.sqBase = sqBase;
+        qp.cqBase = cqBase;
+        qp.sqTail = 0;
+        qp.sqHead = 0;
+        qp.cqHead = 0;
+        qp.cqTail = 0;
+        qp.cqPhase = true;
+        qp.msixCount = 0;
+        qp.sqRing.resize(sqSize);
+        qp.cqRing.resize(cqSize);
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS deleteIoQueuePair(uint16_t qid) {
+        if (qid == 0) return STATUS_INVALID_PARAMETER;
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it = m_ioQueues.find(qid);
+        if (it == m_ioQueues.end()) return STATUS_NOT_FOUND;
+        m_ioQueues.erase(it);
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS postSqe(uint16_t qid, const NvmeSqe& sqe) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        QueuePair* qp = nullptr;
+        if (qid == 0) qp = &m_adminQueue;
+        else {
+            auto it = m_ioQueues.find(qid);
+            if (it != m_ioQueues.end()) qp = &it->second;
+        }
+        if (!qp) return STATUS_NOT_FOUND;
+
+        qp->sqRing[qp->sqTail] = sqe;
+        qp->sqTail = (qp->sqTail + 1) % qp->sqSize;
+        return STATUS_SUCCESS;
+    }
+
+    void ringDoorbell(uint16_t qid, bool isCq, uint16_t val) {
+        uint32_t offset = NVME_REG_DBS + (qid * 8) + (isCq ? 4 : 0);
+        writeReg32(offset, val);
+    }
+
+    bool abortCommand(uint16_t qid, uint16_t cid) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_telemetry.abortedCommands++;
+        QueuePair* qp = nullptr;
+        if (qid == 0) qp = &m_adminQueue;
+        else {
+            auto it = m_ioQueues.find(qid);
+            if (it != m_ioQueues.end()) qp = &it->second;
+        }
+        if (qp && qp->cqSize > 0) {
+            NvmeCqe cqe{};
+            cqe.commandId = cid;
+            cqe.sqId = qid;
+            cqe.setPhase(qp->cqPhase);
+            cqe.setStatusCode(NVME_SC_ABORTED_BY_REQUEST);
+            qp->cqRing[qp->cqTail] = cqe;
+            qp->cqTail = (qp->cqTail + 1) % qp->cqSize;
+            if (qp->cqTail == 0) qp->cqPhase = !qp->cqPhase;
+            qp->msixCount++;
+            m_telemetry.msixInterruptsGenerated++;
+            return true;
+        }
+        return false;
+    }
+
+    void triggerFatalError() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_csts |= NVME_CSTS_CFS;
+        m_telemetry.fatalErrorsInjected++;
+    }
+
+    void recoverController() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_csts = 0;
+        m_cc = 0;
+        m_adminQueue.sqTail = 0;
+        m_adminQueue.sqHead = 0;
+        m_adminQueue.cqHead = 0;
+        m_adminQueue.cqTail = 0;
+        m_adminQueue.cqPhase = true;
+        m_adminQueue.msixCount = 0;
+        m_ioQueues.clear();
+
+        m_cc = NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16;
+        m_csts = NVME_CSTS_RDY;
+        m_telemetry.recoveriesCompleted++;
+    }
+
+    [[nodiscard]] NVME_TELEMETRY getTelemetry() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        return m_telemetry;
+    }
+
+    void resetTelemetry() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_telemetry = NVME_TELEMETRY{};
+    }
+
+    void resetForTesting() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_csts = NVME_CSTS_RDY;
+        m_cc = NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16;
+        m_adminQueue.sqTail = 0;
+        m_adminQueue.sqHead = 0;
+        m_adminQueue.cqHead = 0;
+        m_adminQueue.cqTail = 0;
+        m_adminQueue.cqPhase = true;
+        m_adminQueue.msixCount = 0;
+        m_ioQueues.clear();
+        m_telemetry = NVME_TELEMETRY{};
+    }
+
+    size_t getQueueCount() {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        return 1 + m_ioQueues.size();
+    }
+
+    uint64_t getMsixInterrupts(uint16_t qid) {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (qid == 0) return m_adminQueue.msixCount;
+        auto it = m_ioQueues.find(qid);
+        if (it != m_ioQueues.end()) return it->second.msixCount;
+        return 0;
+    }
+
     std::shared_ptr<NvmeNamespace> getNamespace(uint32_t nsid) const {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
         auto it = m_namespaces.find(nsid);
         if (it != m_namespaces.end()) return it->second;
         return nullptr;
     }
 
     std::vector<std::shared_ptr<NvmeNamespace>> getAllNamespaces() const {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
         std::vector<std::shared_ptr<NvmeNamespace>> res;
         for (const auto& [nsid, ns] : m_namespaces) res.push_back(ns);
         return res;
     }
 
     const NvmeSmartLog& getSmartLog() const { return m_smartLog; }
+
+private:
+    void processQueueLocked(QueuePair& qp) {
+        if (m_csts & NVME_CSTS_CFS) return;
+        while (qp.sqHead != qp.sqTail) {
+            NvmeSqe sqe = qp.sqRing[qp.sqHead];
+            qp.sqHead = (qp.sqHead + 1) % qp.sqSize;
+
+            NvmeCqe cqe{};
+            if (qp.qid == 0) {
+                cqe = executeAdminCommand(sqe, nullptr, 0);
+            } else {
+                cqe = executeIoCommand(sqe, nullptr, 0);
+            }
+            cqe.sqId = qp.qid;
+            cqe.sqHead = qp.sqHead;
+            cqe.setPhase(qp.cqPhase);
+
+            qp.cqRing[qp.cqTail] = cqe;
+            qp.cqTail = (qp.cqTail + 1) % qp.cqSize;
+            if (qp.cqTail == 0) {
+                qp.cqPhase = !qp.cqPhase;
+            }
+            qp.msixCount++;
+            m_telemetry.msixInterruptsGenerated++;
+        }
+    }
 };
 
 // ============================================================================
@@ -878,11 +1472,329 @@ public:
 };
 
 // ============================================================================
+// 7.5. Windows StorPort NVMe Miniport Engine (stornvme.sys)
+// ============================================================================
+
+struct STORPORT_TELEMETRY {
+    uint64_t srbTotal{0};
+    uint64_t srbDispatched{0};
+    uint64_t srbCompleted{0};
+    uint64_t scsiReads{0};
+    uint64_t scsiWrites{0};
+    uint64_t scsiFlushes{0};
+    uint64_t scsiUnmaps{0};
+    uint64_t scsiInquiries{0};
+    uint64_t scsiReadCapacities{0};
+    uint64_t busResets{0};
+    uint64_t abortedSrbs{0};
+    uint64_t notificationsSent{0};
+};
+
+class StorNvmeMiniport {
+private:
+    std::shared_ptr<NvmeController> m_controller;
+    std::shared_ptr<PrpDmaEngine>   m_dmaEngine;
+    PORT_CONFIGURATION_INFORMATION  m_configInfo{};
+    bool                            m_initialized{false};
+    mutable std::mutex              m_mutex;
+
+public:
+    using STORPORT_TELEMETRY = micant::nvme::STORPORT_TELEMETRY;
+    STORPORT_TELEMETRY m_telemetry{};
+
+    StorNvmeMiniport(std::shared_ptr<NvmeController> ctrl, std::shared_ptr<PrpDmaEngine> dma)
+        : m_controller(std::move(ctrl)), m_dmaEngine(std::move(dma)) {}
+
+    NTSTATUS findAdapter(PORT_CONFIGURATION_INFORMATION* configInfo) {
+        if (!configInfo) return STATUS_INVALID_PARAMETER;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_configInfo = *configInfo;
+        m_configInfo.MaximumTransferLength = 2 * 1024 * 1024; // 2MB
+        m_configInfo.NumberOfPhysicalBreaks = 512;
+        m_configInfo.Dma64BitAddresses = 1;
+        m_configInfo.NumberOfBuses = 1;
+        m_configInfo.MaximumNumberOfTargets = 4;
+        m_configInfo.MaximumNumberOfLogicalUnits = 8;
+        *configInfo = m_configInfo;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS initialize() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_controller) return STATUS_DEVICE_NOT_READY;
+        m_controller->writeReg32(NVME_REG_CC, NVME_CC_EN | NVME_CC_IOSQES_64 | NVME_CC_IOCQES_16);
+        m_initialized = true;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS startIo(SCSI_REQUEST_BLOCK* srb) {
+        if (!srb) return STATUS_INVALID_PARAMETER;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_telemetry.srbTotal++;
+        m_telemetry.srbDispatched++;
+
+        if (srb->Function == SRB_FUNCTION_RESET_LOGICAL_UNIT || srb->Function == SRB_FUNCTION_RESET_DEVICE || srb->Function == SRB_FUNCTION_RESET_BUS) {
+            if (m_controller) {
+                m_controller->recoverController();
+            }
+            m_telemetry.busResets++;
+            srb->SrbStatus = SRB_STATUS_SUCCESS;
+            srb->ScsiStatus = SCSISTAT_GOOD;
+            m_telemetry.srbCompleted++;
+            m_telemetry.notificationsSent += 2;
+            return STATUS_SUCCESS;
+        }
+
+        if (srb->Function == SRB_FUNCTION_ABORT_COMMAND) {
+            m_telemetry.abortedSrbs++;
+            srb->SrbStatus = SRB_STATUS_ABORTED;
+            m_telemetry.srbCompleted++;
+            m_telemetry.notificationsSent += 2;
+            return STATUS_SUCCESS;
+        }
+
+        if (!m_initialized || !m_controller || !m_controller->isReady()) {
+            srb->SrbStatus = SRB_STATUS_BUSY;
+            srb->ScsiStatus = SCSISTAT_BUSY;
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        if (srb->Function != SRB_FUNCTION_EXECUTE_SCSI) {
+            srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        uint8_t opcode = srb->Cdb[0];
+        uint32_t nsid = static_cast<uint32_t>(srb->Lun + 1);
+        if (nsid == 0) nsid = 1;
+        auto ns = m_controller->getNamespace(nsid);
+
+        switch (opcode) {
+            case SCSIOP_INQUIRY: {
+                m_telemetry.scsiInquiries++;
+                if (!srb->DataBuffer || srb->DataTransferLength < 36) {
+                    srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
+                    srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+                    return STATUS_BUFFER_TOO_SMALL;
+                }
+                uint8_t* inq = static_cast<uint8_t*>(srb->DataBuffer);
+                std::memset(inq, 0, srb->DataTransferLength);
+                inq[0] = 0x00; // Direct Access Block Device
+                inq[1] = 0x00; // Non-removable
+                inq[2] = 0x06; // SPC-4 / SCSI compliance
+                inq[3] = 0x02; // Response data format
+                inq[4] = 31;   // Additional length
+                std::memcpy(inq + 8, "MicaNT  ", 8);
+                std::memcpy(inq + 16, "TitanNVMe Flash ", 16);
+                std::memcpy(inq + 32, "2.00", 4);
+                srb->SrbStatus = SRB_STATUS_SUCCESS;
+                srb->ScsiStatus = SCSISTAT_GOOD;
+                break;
+            }
+
+            case SCSIOP_TEST_UNIT_READY: {
+                srb->SrbStatus = SRB_STATUS_SUCCESS;
+                srb->ScsiStatus = SCSISTAT_GOOD;
+                break;
+            }
+
+            case SCSIOP_READ_CAPACITY16: {
+                m_telemetry.scsiReadCapacities++;
+                if (!ns || !srb->DataBuffer || srb->DataTransferLength < 32) {
+                    srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+                    srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+                    return STATUS_NO_SUCH_DEVICE;
+                }
+                uint8_t* cap = static_cast<uint8_t*>(srb->DataBuffer);
+                std::memset(cap, 0, srb->DataTransferLength);
+                uint64_t lastLba = ns->getTotalBlocks() - 1;
+                uint32_t blkSize = ns->getBlockSize();
+                cap[0] = static_cast<uint8_t>((lastLba >> 56) & 0xFF);
+                cap[1] = static_cast<uint8_t>((lastLba >> 48) & 0xFF);
+                cap[2] = static_cast<uint8_t>((lastLba >> 40) & 0xFF);
+                cap[3] = static_cast<uint8_t>((lastLba >> 32) & 0xFF);
+                cap[4] = static_cast<uint8_t>((lastLba >> 24) & 0xFF);
+                cap[5] = static_cast<uint8_t>((lastLba >> 16) & 0xFF);
+                cap[6] = static_cast<uint8_t>((lastLba >> 8) & 0xFF);
+                cap[7] = static_cast<uint8_t>(lastLba & 0xFF);
+                cap[8] = static_cast<uint8_t>((blkSize >> 24) & 0xFF);
+                cap[9] = static_cast<uint8_t>((blkSize >> 16) & 0xFF);
+                cap[10] = static_cast<uint8_t>((blkSize >> 8) & 0xFF);
+                cap[11] = static_cast<uint8_t>(blkSize & 0xFF);
+                srb->SrbStatus = SRB_STATUS_SUCCESS;
+                srb->ScsiStatus = SCSISTAT_GOOD;
+                break;
+            }
+
+            case SCSIOP_READ10: {
+                m_telemetry.scsiReads++;
+                if (!ns || !srb->DataBuffer) {
+                    srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+                    return STATUS_NO_SUCH_DEVICE;
+                }
+                uint64_t lba = (static_cast<uint64_t>(srb->Cdb[2]) << 24) |
+                               (static_cast<uint64_t>(srb->Cdb[3]) << 16) |
+                               (static_cast<uint64_t>(srb->Cdb[4]) << 8)  |
+                               static_cast<uint64_t>(srb->Cdb[5]);
+                uint32_t count = (static_cast<uint32_t>(srb->Cdb[7]) << 8) | static_cast<uint32_t>(srb->Cdb[8]);
+                NtStatus st = ns->readBlocks(lba, count, srb->DataBuffer);
+                srb->SrbStatus = NT_SUCCESS(st) ? SRB_STATUS_SUCCESS : SRB_STATUS_ERROR;
+                srb->ScsiStatus = NT_SUCCESS(st) ? SCSISTAT_GOOD : SCSISTAT_CHECK_CONDITION;
+                break;
+            }
+
+            case SCSIOP_READ16: {
+                m_telemetry.scsiReads++;
+                if (!ns || !srb->DataBuffer) {
+                    srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+                    return STATUS_NO_SUCH_DEVICE;
+                }
+                uint64_t lba = 0;
+                for (int i = 0; i < 8; ++i) {
+                    lba = (lba << 8) | srb->Cdb[2 + i];
+                }
+                uint32_t count = (static_cast<uint32_t>(srb->Cdb[10]) << 24) |
+                                 (static_cast<uint32_t>(srb->Cdb[11]) << 16) |
+                                 (static_cast<uint32_t>(srb->Cdb[12]) << 8)  |
+                                 static_cast<uint32_t>(srb->Cdb[13]);
+                NtStatus st = ns->readBlocks(lba, count, srb->DataBuffer);
+                srb->SrbStatus = NT_SUCCESS(st) ? SRB_STATUS_SUCCESS : SRB_STATUS_ERROR;
+                srb->ScsiStatus = NT_SUCCESS(st) ? SCSISTAT_GOOD : SCSISTAT_CHECK_CONDITION;
+                break;
+            }
+
+            case SCSIOP_WRITE10: {
+                m_telemetry.scsiWrites++;
+                if (!ns || !srb->DataBuffer) {
+                    srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+                    return STATUS_NO_SUCH_DEVICE;
+                }
+                uint64_t lba = (static_cast<uint64_t>(srb->Cdb[2]) << 24) |
+                               (static_cast<uint64_t>(srb->Cdb[3]) << 16) |
+                               (static_cast<uint64_t>(srb->Cdb[4]) << 8)  |
+                               static_cast<uint64_t>(srb->Cdb[5]);
+                uint32_t count = (static_cast<uint32_t>(srb->Cdb[7]) << 8) | static_cast<uint32_t>(srb->Cdb[8]);
+                NtStatus st = ns->writeBlocks(lba, count, srb->DataBuffer);
+                srb->SrbStatus = NT_SUCCESS(st) ? SRB_STATUS_SUCCESS : SRB_STATUS_ERROR;
+                srb->ScsiStatus = NT_SUCCESS(st) ? SCSISTAT_GOOD : SCSISTAT_CHECK_CONDITION;
+                break;
+            }
+
+            case SCSIOP_WRITE16: {
+                m_telemetry.scsiWrites++;
+                if (!ns || !srb->DataBuffer) {
+                    srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+                    return STATUS_NO_SUCH_DEVICE;
+                }
+                uint64_t lba = 0;
+                for (int i = 0; i < 8; ++i) {
+                    lba = (lba << 8) | srb->Cdb[2 + i];
+                }
+                uint32_t count = (static_cast<uint32_t>(srb->Cdb[10]) << 24) |
+                                 (static_cast<uint32_t>(srb->Cdb[11]) << 16) |
+                                 (static_cast<uint32_t>(srb->Cdb[12]) << 8)  |
+                                 static_cast<uint32_t>(srb->Cdb[13]);
+                NtStatus st = ns->writeBlocks(lba, count, srb->DataBuffer);
+                srb->SrbStatus = NT_SUCCESS(st) ? SRB_STATUS_SUCCESS : SRB_STATUS_ERROR;
+                srb->ScsiStatus = NT_SUCCESS(st) ? SCSISTAT_GOOD : SCSISTAT_CHECK_CONDITION;
+                break;
+            }
+
+            case SCSIOP_SYNCHRONIZE_CACHE10:
+            case SCSIOP_SYNCHRONIZE_CACHE16: {
+                m_telemetry.scsiFlushes++;
+                srb->SrbStatus = SRB_STATUS_SUCCESS;
+                srb->ScsiStatus = SCSISTAT_GOOD;
+                break;
+            }
+
+            case SCSIOP_UNMAP: {
+                m_telemetry.scsiUnmaps++;
+                if (ns && srb->DataBuffer && srb->DataTransferLength >= 24) {
+                    const uint8_t* p = static_cast<const uint8_t*>(srb->DataBuffer);
+                    uint16_t bdl = (static_cast<uint16_t>(p[2]) << 8) | p[3];
+                    size_t numDescs = bdl / 16;
+                    for (size_t d = 0; d < numDescs; ++d) {
+                        const uint8_t* desc = p + 8 + (d * 16);
+                        uint64_t slba = 0;
+                        for (int i = 0; i < 8; ++i) slba = (slba << 8) | desc[i];
+                        uint32_t nlb = (static_cast<uint32_t>(desc[8]) << 24) |
+                                       (static_cast<uint32_t>(desc[9]) << 16) |
+                                       (static_cast<uint32_t>(desc[10]) << 8) |
+                                       static_cast<uint32_t>(desc[11]);
+                        ns->trimBlocks(slba, nlb);
+                    }
+                }
+                srb->SrbStatus = SRB_STATUS_SUCCESS;
+                srb->ScsiStatus = SCSISTAT_GOOD;
+                break;
+            }
+
+            case SCSIOP_REPORT_LUNS: {
+                if (srb->DataBuffer && srb->DataTransferLength >= 16) {
+                    uint8_t* p = static_cast<uint8_t*>(srb->DataBuffer);
+                    std::memset(p, 0, srb->DataTransferLength);
+                    auto allNs = m_controller->getAllNamespaces();
+                    uint32_t lunDataLen = static_cast<uint32_t>(allNs.size() * 8);
+                    p[0] = static_cast<uint8_t>((lunDataLen >> 24) & 0xFF);
+                    p[1] = static_cast<uint8_t>((lunDataLen >> 16) & 0xFF);
+                    p[2] = static_cast<uint8_t>((lunDataLen >> 8) & 0xFF);
+                    p[3] = static_cast<uint8_t>(lunDataLen & 0xFF);
+                    for (size_t i = 0; i < allNs.size() && (8 + (i + 1) * 8) <= srb->DataTransferLength; ++i) {
+                        p[8 + i * 8] = static_cast<uint8_t>(i);
+                    }
+                }
+                srb->SrbStatus = SRB_STATUS_SUCCESS;
+                srb->ScsiStatus = SCSISTAT_GOOD;
+                break;
+            }
+
+            default:
+                srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+                srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+                break;
+        }
+
+        m_telemetry.srbCompleted++;
+        m_telemetry.notificationsSent += 2;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS resetBus(uint32_t pathId) {
+        (void)pathId;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_telemetry.busResets++;
+        if (m_controller) {
+            m_controller->recoverController();
+        }
+        return STATUS_SUCCESS;
+    }
+
+    [[nodiscard]] STORPORT_TELEMETRY getTelemetry() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_telemetry;
+    }
+
+    void resetTelemetry() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_telemetry = STORPORT_TELEMETRY{};
+    }
+
+    void resetForTesting() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_initialized = true;
+        m_telemetry = STORPORT_TELEMETRY{};
+    }
+};
+
+// ============================================================================
 // 8. Unified Sovereign Flash Storage Manager (TitanFlash)
 // ============================================================================
 
 class TitanFlashSubsystem {
-    std::shared_ptr<NvmeController> m_nvme;
+    std::shared_ptr<NvmeController>   m_nvme;
+    std::shared_ptr<PrpDmaEngine>     m_dma;
+    std::shared_ptr<StorNvmeMiniport> m_miniport;
     std::shared_ptr<UfsHostController> m_ufs;
     std::shared_ptr<EmmcHostController> m_emmc;
     std::shared_ptr<AhciSataController> m_ahci;
@@ -901,7 +1813,11 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_initialized.load()) return;
 
+        m_dma = std::make_shared<PrpDmaEngine>();
         m_nvme = std::make_shared<NvmeController>(NvmeVersion::Version_2_0);
+        m_miniport = std::make_shared<StorNvmeMiniport>(m_nvme, m_dma);
+        m_miniport->initialize();
+
         m_ufs = std::make_shared<UfsHostController>();
         m_emmc = std::make_shared<EmmcHostController>();
         m_ahci = std::make_shared<AhciSataController>();
@@ -909,7 +1825,15 @@ public:
         m_initialized.store(true);
     }
 
-    std::shared_ptr<NvmeController> getNvme() const { return m_nvme; }
+    void resetForTesting() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_nvme) m_nvme->resetForTesting();
+        if (m_miniport) m_miniport->resetForTesting();
+    }
+
+    std::shared_ptr<NvmeController>   getNvme() const { return m_nvme; }
+    std::shared_ptr<PrpDmaEngine>     getDmaEngine() const { return m_dma; }
+    std::shared_ptr<StorNvmeMiniport> getMiniport() const { return m_miniport; }
     std::shared_ptr<UfsHostController> getUfs() const { return m_ufs; }
     std::shared_ptr<EmmcHostController> getEmmc() const { return m_emmc; }
     std::shared_ptr<AhciSataController> getAhci() const { return m_ahci; }
@@ -980,7 +1904,73 @@ inline BOOL WINAPI NvmeFormatNamespace(uint32_t nsid, uint32_t blockSize) {
     return TRUE;
 }
 
+inline ULONG WINAPI StorPortInitialize(
+    void* Argument1,
+    void* Argument2,
+    PORT_CONFIGURATION_INFORMATION* ConfigInfo,
+    void* HwContext
+) {
+    (void)Argument1;
+    (void)Argument2;
+    (void)HwContext;
+    if (!ConfigInfo) return 1;
+    auto miniport = TitanFlashSubsystem::Instance().getMiniport();
+    if (!miniport) return 1;
+    return NT_SUCCESS(miniport->findAdapter(ConfigInfo)) ? 0 : 1;
+}
+
+inline void WINAPI StorPortNotification(
+    STORPORT_NOTIFICATION_TYPE NotificationType,
+    void* HwDeviceExtension,
+    ...
+) {
+    (void)NotificationType;
+    (void)HwDeviceExtension;
+}
+
+inline ULONG WINAPI StorPortGetLogicalUnitAddress(
+    void* HwDeviceExtension,
+    PSCSI_REQUEST_BLOCK Srb,
+    STOR_ADDR_BTL8* Address
+) {
+    (void)HwDeviceExtension;
+    if (!Srb || !Address) return 1;
+    Address->Path = Srb->PathId;
+    Address->Target = Srb->TargetId;
+    Address->Lun = Srb->Lun;
+    return 0;
+}
+
+inline uint64_t WINAPI StorPortGetPhysicalAddress(
+    void* HwDeviceExtension,
+    PSCSI_REQUEST_BLOCK Srb,
+    void* VirtualAddress,
+    ULONG* Length
+) {
+    (void)HwDeviceExtension;
+    (void)Srb;
+    if (Length) *Length = 4096;
+    return reinterpret_cast<uint64_t>(VirtualAddress);
+}
+
+inline BOOL WINAPI StorNvmeSubmitSrb(SCSI_REQUEST_BLOCK* srb) {
+    auto miniport = TitanFlashSubsystem::Instance().getMiniport();
+    if (!miniport || !srb) return FALSE;
+    return NT_SUCCESS(miniport->startIo(srb)) ? TRUE : FALSE;
+}
+
 } // extern "C"
+
+inline STORPORT_TELEMETRY StorPortQueryTelemetry() {
+    auto miniport = TitanFlashSubsystem::Instance().getMiniport();
+    if (!miniport) return STORPORT_TELEMETRY{};
+    return miniport->getTelemetry();
+}
+
+inline void StorPortResetTelemetry() {
+    auto miniport = TitanFlashSubsystem::Instance().getMiniport();
+    if (miniport) miniport->resetTelemetry();
+}
 
 // ============================================================================
 // 10. Subsystem Initialization & SCM Driver Registration
@@ -1002,6 +1992,12 @@ inline void InitializeNvmeSubsystem() {
     ldr.registerExport("stornvme.sys", "NvmeSubmitIoCommand", reinterpret_cast<void*>(NvmeSubmitIoCommand));
     ldr.registerExport("stornvme.sys", "NvmeGetSmartLog", reinterpret_cast<void*>(NvmeGetSmartLog));
     ldr.registerExport("stornvme.sys", "NvmeFormatNamespace", reinterpret_cast<void*>(NvmeFormatNamespace));
+    ldr.registerExport("stornvme.sys", "StorPortInitialize", reinterpret_cast<void*>(StorPortInitialize));
+    ldr.registerExport("stornvme.sys", "StorPortGetLogicalUnitAddress", reinterpret_cast<void*>(StorPortGetLogicalUnitAddress));
+    ldr.registerExport("stornvme.sys", "StorPortGetPhysicalAddress", reinterpret_cast<void*>(StorPortGetPhysicalAddress));
+    ldr.registerExport("stornvme.sys", "StorNvmeSubmitSrb", reinterpret_cast<void*>(StorNvmeSubmitSrb));
+    ldr.registerExport("stornvme.sys", "StorPortQueryTelemetry", reinterpret_cast<void*>(StorPortQueryTelemetry));
+    ldr.registerExport("stornvme.sys", "StorPortResetTelemetry", reinterpret_cast<void*>(StorPortResetTelemetry));
 
     // 3. Register Storage System Drivers in SCM
     auto nvmeSvc = std::make_shared<scm::ServiceRecord>();
@@ -1053,3 +2049,23 @@ inline void InitializeNvmeSubsystem() {
 }
 
 } // namespace micant::nvme
+
+namespace micant {
+    using nvme::NvmeController;
+    using nvme::NvmeNamespace;
+    using nvme::PrpDmaEngine;
+    using nvme::StorNvmeMiniport;
+    using nvme::SCSI_REQUEST_BLOCK;
+    using nvme::PSCSI_REQUEST_BLOCK;
+    using nvme::PORT_CONFIGURATION_INFORMATION;
+    using nvme::STOR_ADDR_BTL8;
+    using nvme::STORPORT_NOTIFICATION_TYPE;
+    using nvme::SRB_FUNCTION;
+    using nvme::SRB_STATUS;
+    using nvme::SCSI_STATUS;
+    using nvme::SCSI_OPCODE;
+    using nvme::NVME_TELEMETRY;
+    using nvme::STORPORT_TELEMETRY;
+    using nvme::StorPortQueryTelemetry;
+    using nvme::StorPortResetTelemetry;
+}
