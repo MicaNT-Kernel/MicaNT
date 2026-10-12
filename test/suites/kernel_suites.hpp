@@ -6871,6 +6871,362 @@ void Test_Horizon27_ExecutiveSynchronization_ERESOURCE_PushLocks_And_BufferProbi
     std::cout << "[TEST] Suite 243: Horizon 27 - Sovereign Executive Synchronization & Buffer Probing PASSED.\n";
 }
 
+// ============================================================================
+// Suite 244: Horizon 28 - Sovereign HAL Interrupt Architecture, APIC, HPET & RTC Clocks,
+//            CR8/TPR Hardware Masking & TSC Deadline Timer Synchronization
+// ============================================================================
+inline void Test_Horizon28_HardwareAbstractionLayer_Interrupts_APIC_HPET_And_Timers() {
+    std::cout << "[TEST] Suite 244: Running Sovereign HAL Interrupt Architecture, APIC, HPET & RTC Clocks...\n";
+
+    // Initialize HAL
+    hal::HardwareAbstractionLayer::get().initialize(4, hal::ProcessorArchitecture::Amd64, 3600);
+    hal::HalResetTelemetryForTesting();
+
+    auto* lapic0 = hal::HardwareAbstractionLayer::get().getLocalApic(0);
+    TEST_ASSERT(lapic0 != nullptr, "LAPIC for CPU 0 must exist");
+
+    // 1. APIC CR8 / TPR Hardware Masking & Priority Classes
+    {
+        TEST_ASSERT(lapic0->getCr8() == 0, "Initial CR8 must be 0");
+        TEST_ASSERT(lapic0->getTaskPriority() == 0, "Initial TPR must be 0");
+
+        // Priority classes: vector 0x20 is class 2, vector 0x35 is class 3
+        TEST_ASSERT(!lapic0->isVectorMaskedByTpr(0x20), "Vector 0x20 must not be masked at CR8 0");
+        TEST_ASSERT(!lapic0->isVectorMaskedByTpr(0x35), "Vector 0x35 must not be masked at CR8 0");
+
+        // Set CR8 to 2 (TPR = 0x20)
+        hal::HalSetCr8(2, 0);
+        TEST_ASSERT(hal::HalGetCr8(0) == 2, "CR8 must be 2");
+        TEST_ASSERT(lapic0->getTaskPriority() == 0x20, "TPR must be 0x20");
+
+        // Vector 0x20 and 0x2F (class 2) must be masked because class 2 <= TPR class 2
+        TEST_ASSERT(lapic0->isVectorMaskedByTpr(0x20), "Vector 0x20 must be masked when CR8 is 2");
+        TEST_ASSERT(lapic0->isVectorMaskedByTpr(0x2F), "Vector 0x2F must be masked when CR8 is 2");
+        // Vector 0x30 and 0x35 (class 3) must be unmasked because class 3 > TPR class 2
+        TEST_ASSERT(!lapic0->isVectorMaskedByTpr(0x30), "Vector 0x30 must be unmasked when CR8 is 2");
+        TEST_ASSERT(!lapic0->isVectorMaskedByTpr(0x35), "Vector 0x35 must be unmasked when CR8 is 2");
+
+        // Request vectors in IRR
+        TEST_ASSERT(lapic0->getHighestPendingVector() == 0, "Highest pending must be 0 when IRR is empty");
+        lapic0->requestInterrupt(0x20);
+        lapic0->requestInterrupt(0x45);
+        TEST_ASSERT(lapic0->isInterruptPending(0x20), "Vector 0x20 must be pending");
+        TEST_ASSERT(lapic0->isInterruptPending(0x45), "Vector 0x45 must be pending");
+
+        // Highest pending vector is 0x45
+        TEST_ASSERT(lapic0->getHighestPendingVector() == 0x45, "Highest pending vector must be 0x45");
+        // Highest deliverable vector with CR8 = 2 is 0x45 (class 4 > 2)
+        TEST_ASSERT(lapic0->getHighestDeliverableVector() == 0x45, "Highest deliverable vector must be 0x45");
+
+        // Raise CR8 to 4 (TPR = 0x40): 0x45 (class 4) is now masked (4 <= 4)
+        hal::HalSetCr8(4, 0);
+        TEST_ASSERT(lapic0->getHighestPendingVector() == 0x45, "Highest pending vector must still be 0x45");
+        TEST_ASSERT(lapic0->getHighestDeliverableVector() == 0, "Highest deliverable vector must be 0 when masked");
+
+        // Raise CR8 to 15 (0xF = HIGH_LEVEL): masks all interrupt classes
+        hal::HalSetCr8(15, 0);
+        TEST_ASSERT(lapic0->getTaskPriority() == 0xF0, "TPR must be 0xF0 at CR8 15");
+        TEST_ASSERT(lapic0->isVectorMaskedByTpr(0xFF), "Vector 0xFF must be masked at CR8 15");
+
+        // Lower CR8 back to 0 (PASSIVE_LEVEL)
+        hal::HalSetCr8(0, 0);
+        TEST_ASSERT(lapic0->getHighestDeliverableVector() == 0x45, "Vector 0x45 must be deliverable at CR8 0");
+
+        // Service interrupt 0x45
+        lapic0->markInterruptInService(0x45);
+        TEST_ASSERT(lapic0->isInterruptInService(0x45), "Vector 0x45 must be in service");
+        TEST_ASSERT(!lapic0->isInterruptPending(0x45), "Vector 0x45 must no longer be in IRR");
+        lapic0->signalEoi();
+        TEST_ASSERT(!lapic0->isInterruptInService(0x45), "Vector 0x45 must be cleared from ISR on EOI");
+
+        // Service interrupt 0x20
+        lapic0->markInterruptInService(0x20);
+        lapic0->signalEoi();
+        TEST_ASSERT(!lapic0->isInterruptInService(0x20), "Vector 0x20 cleared");
+    }
+
+    // 2. TSC Deadline Timer Synchronization (IA32_TSC_DEADLINE_MSR 0x6E0)
+    {
+        lapic0->setTimerMode(hal::ApicTimerMode::TscDeadline);
+        TEST_ASSERT(lapic0->getTimerMode() == hal::ApicTimerMode::TscDeadline, "Timer mode must be TscDeadline");
+
+        lapic0->setTimerVector(0x55);
+        TEST_ASSERT(lapic0->getTimerVector() == 0x55, "Timer vector must be 0x55");
+        TEST_ASSERT(!lapic0->isTimerMasked(), "Timer must not be masked by default");
+
+        // Arm deadline for TSC = 5,000,000
+        lapic0->writeTscDeadline(5'000'000ULL);
+        TEST_ASSERT(lapic0->readTscDeadline() == 5'000'000ULL, "Deadline must be 5,000,000");
+
+        // Check before deadline: current TSC = 4,999,999
+        bool expired = hal::HalCheckTscDeadline(0, 4'999'999ULL);
+        TEST_ASSERT(!expired, "Deadline must not fire before target count");
+        TEST_ASSERT(lapic0->readTscDeadline() == 5'000'000ULL, "Deadline must remain armed");
+        TEST_ASSERT(!lapic0->isInterruptPending(0x55), "Vector 0x55 must not be pending in IRR");
+
+        // Check at/after deadline: current TSC = 5,000,000
+        expired = hal::HalCheckTscDeadline(0, 5'000'000ULL);
+        TEST_ASSERT(expired, "Deadline must fire when TSC reaches target count");
+        TEST_ASSERT(lapic0->readTscDeadline() == 0, "Deadline must auto-disarm to 0 on expiry");
+        TEST_ASSERT(lapic0->isInterruptPending(0x55), "Vector 0x55 must be pending in IRR");
+
+        // Service vector 0x55
+        lapic0->markInterruptInService(0x55);
+        lapic0->signalEoi();
+
+        // Test masked timer deadline expiry
+        lapic0->setTimerMasked(true);
+        TEST_ASSERT(lapic0->isTimerMasked(), "Timer must be masked");
+        lapic0->writeTscDeadline(8'000'000ULL);
+        expired = hal::HalCheckTscDeadline(0, 8'000'001ULL);
+        TEST_ASSERT(expired, "Masked deadline still disarms upon passage of deadline");
+        TEST_ASSERT(!lapic0->isInterruptPending(0x55), "Masked timer must not set IRR");
+        lapic0->setTimerMasked(false);
+    }
+
+    // 3. HPET Timer, Periodic Stepping & Comparator Routing
+    {
+        auto& hpet = hal::HalGetHpetTimer();
+        hpet.reset();
+        TEST_ASSERT(hpet.getBaseAddress() == hal::DEFAULT_HPET_BASE, "HPET base must be 0xFED00000");
+        TEST_ASSERT(hpet.getPeriodFemtoseconds() == 100'000'000ULL, "HPET period must be 100,000,000 fs");
+        TEST_ASSERT(!hpet.isEnabled(), "HPET must be disabled initially");
+
+        // Comparator 0: non-periodic, match = 1000, vector = 0x60
+        bool cfg0 = hpet.configureComparator(0, 1000, false, 0, 0x60, true);
+        TEST_ASSERT(cfg0, "Configure comparator 0 must succeed");
+
+        // Comparator 1: periodic, match = 400, interval = 400, vector = 0x61
+        bool cfg1 = hpet.configureComparator(1, 400, true, 400, 0x61, true);
+        TEST_ASSERT(cfg1, "Configure comparator 1 must succeed");
+
+        hpet.setEnabled(true);
+        TEST_ASSERT(hpet.isEnabled(), "HPET must be enabled");
+
+        // Step by 300 ticks (counter = 300)
+        uint32_t trig = hal::HalStepHpet(300);
+        TEST_ASSERT(trig == 0, "Neither comparator should trigger at counter 300");
+        TEST_ASSERT(hpet.readCounter() == 300, "Counter must be 300");
+        TEST_ASSERT(!hpet.isComparatorInterruptTriggered(0), "Comp 0 not triggered");
+        TEST_ASSERT(!hpet.isComparatorInterruptTriggered(1), "Comp 1 not triggered");
+
+        // Step by 200 ticks (counter reaches 500)
+        trig = hal::HalStepHpet(200);
+        TEST_ASSERT(trig == 1, "Comparator 1 must trigger at counter 500");
+        TEST_ASSERT(hpet.readCounter() == 500, "Counter must be 500");
+        TEST_ASSERT(!hpet.isComparatorInterruptTriggered(0), "Comp 0 not triggered yet");
+        TEST_ASSERT(hpet.isComparatorInterruptTriggered(1), "Comp 1 triggered");
+        // Comparator 1 periodic accumulator advances match to 800
+        auto* c1 = hpet.getComparator(1);
+        TEST_ASSERT(c1 && c1->comparatorValue == 800, "Comp 1 periodic match value reloaded to 800");
+        hpet.clearComparatorInterrupt(1);
+
+        // Step by 600 ticks (counter reaches 1100): passes 800 (comp 1) and 1000 (comp 0)
+        trig = hal::HalStepHpet(600);
+        TEST_ASSERT(trig == 2, "Both comparators must trigger between 500 and 1100");
+        TEST_ASSERT(hpet.readCounter() == 1100, "Counter must be 1100");
+        TEST_ASSERT(hpet.isComparatorInterruptTriggered(0), "Comp 0 triggered");
+        TEST_ASSERT(hpet.isComparatorInterruptTriggered(1), "Comp 1 triggered");
+
+        // TSC Frequency Calibration via HPET
+        // 100,000 HPET ticks @ 100 ns = 10 ms = 10^13 fs. 36,000,000 TSC ticks -> 3.6 GHz
+        uint64_t calHz = hpet.calibrateTscFrequency(36'000'000ULL, 100'000ULL);
+        TEST_ASSERT(calHz == 3'600'000'000ULL, "TSC calibration must yield 3.6 GHz");
+
+        // 25,000,000 TSC ticks in 100,000 HPET ticks -> 2.5 GHz
+        calHz = hpet.calibrateTscFrequency(25'000'000ULL, 100'000ULL);
+        TEST_ASSERT(calHz == 2'500'000'000ULL, "TSC calibration must yield 2.5 GHz");
+    }
+
+    // 4. MSI Message Encoding & Delivery
+    {
+        auto msi = hal::MsiMessage::create(0, 0x72, hal::IpiDeliveryMode::Fixed, hal::InterruptMode::Latched);
+        TEST_ASSERT(msi.getTargetApicId() == 0, "MSI target APIC ID must be 0");
+        TEST_ASSERT(msi.getVector() == 0x72, "MSI vector must be 0x72");
+        TEST_ASSERT(msi.getDeliveryMode() == hal::IpiDeliveryMode::Fixed, "MSI delivery mode must be Fixed");
+        TEST_ASSERT(msi.getTriggerMode() == hal::InterruptMode::Latched, "MSI trigger mode must be Latched");
+        TEST_ASSERT((msi.address & 0xFFF00000ULL) == 0xFEE00000ULL, "MSI base MMIO address must be FEE00000");
+
+        bool delivered = hal::HalDeliverMsi(msi);
+        TEST_ASSERT(delivered, "HalDeliverMsi must return true");
+        TEST_ASSERT(lapic0->isInterruptPending(0x72), "Vector 0x72 must be pending in LAPIC 0 IRR");
+
+        // Service interrupt
+        lapic0->markInterruptInService(0x72);
+        lapic0->signalEoi();
+        TEST_ASSERT(!lapic0->isInterruptInService(0x72), "Vector 0x72 cleared");
+    }
+
+    // 5. RTC BCD & NT Epoch Bidirectional Conversions
+    {
+        // Leap year checks
+        TEST_ASSERT(hal::HalpIsLeapYear(2024), "2024 is a leap year");
+        TEST_ASSERT(!hal::HalpIsLeapYear(2025), "2025 is not a leap year");
+        TEST_ASSERT(!hal::HalpIsLeapYear(2026), "2026 is not a leap year");
+        TEST_ASSERT(hal::HalpIsLeapYear(2000), "2000 is a leap year (400-year rule)");
+        TEST_ASSERT(!hal::HalpIsLeapYear(1900), "1900 is not a leap year (100-year rule)");
+        TEST_ASSERT(hal::HalpIsLeapYear(2400), "2400 is a leap year");
+
+        // Days in month
+        TEST_ASSERT(hal::HalpDaysInMonth(2024, 2) == 29, "Feb 2024 has 29 days");
+        TEST_ASSERT(hal::HalpDaysInMonth(2025, 2) == 28, "Feb 2025 has 28 days");
+        TEST_ASSERT(hal::HalpDaysInMonth(2026, 4) == 30, "Apr 2026 has 30 days");
+        TEST_ASSERT(hal::HalpDaysInMonth(2026, 10) == 31, "Oct 2026 has 31 days");
+
+        // BCD conversions
+        TEST_ASSERT(hal::RtcBinaryToBcd(15) == 0x15, "15 -> 0x15 BCD");
+        TEST_ASSERT(hal::RtcBcdToBinary(0x15) == 15, "0x15 BCD -> 15");
+        TEST_ASSERT(hal::RtcBinaryToBcd(59) == 0x59, "59 -> 0x59 BCD");
+        TEST_ASSERT(hal::RtcBcdToBinary(0x59) == 59, "0x59 BCD -> 59");
+        TEST_ASSERT(hal::RtcBinaryToBcd(0) == 0x00, "0 -> 0x00 BCD");
+        TEST_ASSERT(hal::RtcBcdToBinary(0x00) == 0, "0x00 BCD -> 0");
+
+        // NT Epoch Origin (1601-01-01 00:00:00.000, Monday)
+        hal::TIME_FIELDS origin{1601, 1, 1, 0, 0, 0, 0, 1};
+        LargeInteger stOrigin{};
+        bool ok = hal::HalTimeFieldsToSystemTime(&origin, &stOrigin);
+        TEST_ASSERT(ok, "HalTimeFieldsToSystemTime for 1601 origin must succeed");
+        TEST_ASSERT(stOrigin.quadPart == 0, "1601 origin quadPart must be exactly 0");
+
+        hal::TIME_FIELDS rtOrigin{};
+        ok = hal::HalSystemTimeToTimeFields(&stOrigin, &rtOrigin);
+        TEST_ASSERT(ok, "HalSystemTimeToTimeFields for 0 must succeed");
+        TEST_ASSERT(rtOrigin.year == 1601 && rtOrigin.month == 1 && rtOrigin.day == 1, "Origin date must match");
+        TEST_ASSERT(rtOrigin.hour == 0 && rtOrigin.minute == 0 && rtOrigin.second == 0 && rtOrigin.milliseconds == 0, "Origin time must be 0");
+        TEST_ASSERT(rtOrigin.weekday == 1, "1601-01-01 was a Monday (weekday=1)");
+
+        // Modern Date Round-Trip (2026-10-10 14:30:45.125, Saturday)
+        hal::TIME_FIELDS modern{2026, 10, 10, 14, 30, 45, 125, 6};
+        LargeInteger stModern{};
+        ok = hal::HalTimeFieldsToSystemTime(&modern, &stModern);
+        TEST_ASSERT(ok, "HalTimeFieldsToSystemTime for modern timestamp must succeed");
+        TEST_ASSERT(stModern.quadPart > 0, "Modern timestamp must be > 0");
+
+        hal::TIME_FIELDS rtModern{};
+        ok = hal::HalSystemTimeToTimeFields(&stModern, &rtModern);
+        TEST_ASSERT(ok, "HalSystemTimeToTimeFields for modern timestamp must succeed");
+        TEST_ASSERT(rtModern.year == 2026 && rtModern.month == 10 && rtModern.day == 10, "Modern year, month, day must match");
+        TEST_ASSERT(rtModern.hour == 14 && rtModern.minute == 30 && rtModern.second == 45, "Modern time must match");
+        TEST_ASSERT(rtModern.milliseconds == 125, "Modern milliseconds must match");
+        TEST_ASSERT(rtModern.weekday == 6, "2026-10-10 must be Saturday (weekday=6)");
+
+        // Leap Day Round-Trip (2024-02-29 23:59:59.999)
+        hal::TIME_FIELDS leapDate{2024, 2, 29, 23, 59, 59, 999, 4};
+        LargeInteger stLeap{};
+        ok = hal::HalTimeFieldsToSystemTime(&leapDate, &stLeap);
+        TEST_ASSERT(ok, "HalTimeFieldsToSystemTime for leap day must succeed");
+
+        hal::TIME_FIELDS rtLeap{};
+        ok = hal::HalSystemTimeToTimeFields(&stLeap, &rtLeap);
+        TEST_ASSERT(ok, "HalSystemTimeToTimeFields for leap day must succeed");
+        TEST_ASSERT(rtLeap.year == 2024 && rtLeap.month == 2 && rtLeap.day == 29, "Leap day must roundtrip");
+        TEST_ASSERT(rtLeap.hour == 23 && rtLeap.minute == 59 && rtLeap.second == 59 && rtLeap.milliseconds == 999, "Time must match");
+
+        // Invalid date rejection
+        hal::TIME_FIELDS invalidFeb{2025, 2, 29, 12, 0, 0, 0, 0};
+        LargeInteger stInv{};
+        TEST_ASSERT(!hal::HalTimeFieldsToSystemTime(&invalidFeb, &stInv), "Feb 29 in non-leap year must be rejected");
+
+        hal::TIME_FIELDS invalidMonth{2026, 13, 1, 0, 0, 0, 0, 0};
+        TEST_ASSERT(!hal::HalTimeFieldsToSystemTime(&invalidMonth, &stInv), "Month 13 must be rejected");
+
+        // Query and set real-time clock
+        hal::TIME_FIELDS rtcQuery{};
+        hal::HalQueryRealTimeClock(&rtcQuery);
+        TEST_ASSERT(rtcQuery.year == 2026, "Default simulated RTC year must be 2026");
+        rtcQuery.year = 2027;
+        hal::HalSetRealTimeClock(&rtcQuery);
+        hal::TIME_FIELDS rtcUpdated{};
+        hal::HalQueryRealTimeClock(&rtcUpdated);
+        TEST_ASSERT(rtcUpdated.year == 2027, "Updated RTC year must be 2027");
+    }
+
+    // 6. KINTERRUPT Chaining & Priority Handling
+    {
+        uint32_t isrCallCountA = 0;
+        uint32_t isrCallCountB = 0;
+
+        hal::KINTERRUPT intA{};
+        intA.vector = 0x85;
+        intA.irql = ke::DIRQL_MIN;
+        intA.synchronizeIrql = ke::DIRQL_MIN + 2;
+        intA.shared = true;
+        intA.isr = [&](hal::KINTERRUPT* self, void* ctx) -> bool {
+            (void)self; (void)ctx;
+            isrCallCountA++;
+            return false; // Handled by second device
+        };
+
+        hal::KINTERRUPT intB{};
+        intB.vector = 0x85;
+        intB.irql = ke::DIRQL_MIN;
+        intB.synchronizeIrql = ke::DIRQL_MIN + 2;
+        intB.shared = true;
+        intB.isr = [&](hal::KINTERRUPT* self, void* ctx) -> bool {
+            (void)self; (void)ctx;
+            isrCallCountB++;
+            return true; // Successfully handled
+        };
+
+        TEST_ASSERT(hal::HalConnectInterrupt(&intA), "HalConnectInterrupt for intA must succeed");
+        TEST_ASSERT(hal::HalConnectInterrupt(&intB), "HalConnectInterrupt for intB must succeed");
+        TEST_ASSERT(!hal::HalConnectInterrupt(&intA), "Reconnecting already connected interrupt must fail");
+
+        // Non-shared interrupt cannot join shared vector
+        hal::KINTERRUPT intC{};
+        intC.vector = 0x85;
+        intC.shared = false;
+        intC.isr = [](hal::KINTERRUPT*, void*) { return true; };
+        TEST_ASSERT(!hal::HalConnectInterrupt(&intC), "Non-shared interrupt cannot join shared vector");
+
+        // Dispatch interrupt 0x85: intA called, returns false -> intB called, returns true
+        bool handled = hal::HalDispatchInterrupt(0x85);
+        TEST_ASSERT(handled, "HalDispatchInterrupt must return true when handled by chained ISR");
+        TEST_ASSERT(isrCallCountA == 1, "ISR A must have been called");
+        TEST_ASSERT(isrCallCountB == 1, "ISR B must have been called");
+        TEST_ASSERT(intA.interruptCount == 1, "intA interruptCount must be 1");
+        TEST_ASSERT(intB.interruptCount == 1, "intB interruptCount must be 1");
+
+        // Disconnect intB: now only intA is registered
+        TEST_ASSERT(hal::HalDisconnectInterrupt(&intB), "HalDisconnectInterrupt for intB must succeed");
+        handled = hal::HalDispatchInterrupt(0x85);
+        TEST_ASSERT(!handled, "HalDispatchInterrupt must return false when ISR returns false");
+        TEST_ASSERT(isrCallCountA == 2, "ISR A called a second time");
+        TEST_ASSERT(isrCallCountB == 1, "ISR B must not have been called after disconnect");
+
+        // Disconnect intA: vector is now empty
+        TEST_ASSERT(hal::HalDisconnectInterrupt(&intA), "HalDisconnectInterrupt for intA must succeed");
+        handled = hal::HalDispatchInterrupt(0x85);
+        TEST_ASSERT(!handled, "HalDispatchInterrupt on empty vector must return false");
+    }
+
+    // 7. HAL Telemetry Audit & Reset
+    {
+        hal::HAL_TELEMETRY telem{};
+        hal::HalQueryTelemetry(&telem);
+        TEST_ASSERT(telem.totalHardwareInterrupts > 0, "totalHardwareInterrupts must be > 0");
+        TEST_ASSERT(telem.totalSpuriousInterrupts > 0, "totalSpuriousInterrupts must be > 0");
+        TEST_ASSERT(telem.totalTscDeadlineExpiries > 0, "totalTscDeadlineExpiries must be > 0");
+        TEST_ASSERT(telem.totalHpetTicks > 0, "totalHpetTicks must be > 0");
+        TEST_ASSERT(telem.totalMsiDelivered > 0, "totalMsiDelivered must be > 0");
+        TEST_ASSERT(telem.totalIrqlRaises > 0, "totalIrqlRaises must be > 0");
+        TEST_ASSERT(telem.totalIrqlLowers > 0, "totalIrqlLowers must be > 0");
+        TEST_ASSERT(telem.totalRtcSyncs > 0, "totalRtcSyncs must be > 0");
+
+        // Reset telemetry
+        hal::HalResetTelemetryForTesting();
+        hal::HAL_TELEMETRY resetTelem{};
+        hal::HalQueryTelemetry(&resetTelem);
+        TEST_ASSERT(resetTelem.totalHardwareInterrupts == 0, "totalHardwareInterrupts must be reset to 0");
+        TEST_ASSERT(resetTelem.totalSpuriousInterrupts == 0, "totalSpuriousInterrupts must be reset to 0");
+        TEST_ASSERT(resetTelem.totalTscDeadlineExpiries == 0, "totalTscDeadlineExpiries must be reset to 0");
+        TEST_ASSERT(resetTelem.totalHpetTicks == 0, "totalHpetTicks must be reset to 0");
+        TEST_ASSERT(resetTelem.totalMsiDelivered == 0, "totalMsiDelivered must be reset to 0");
+    }
+
+    std::cout << "[TEST] Suite 244: Horizon 28 - Sovereign HAL Interrupt Architecture, APIC, HPET & RTC Clocks PASSED.\n";
+}
+
 
 
 
