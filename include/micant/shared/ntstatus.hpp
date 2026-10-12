@@ -86,6 +86,7 @@ enum class NtStatus : uint32_t {
     DeviceBusy                       = 0x80000011,
     SystemShutdown                   = 0xC000009F,
     DeviceNotReady                   = 0xC00000A3,
+    BadImpersonationLevel            = 0xC00000A5,
     DiskFull                         = 0xC000007F,
     UnrecognizedVolume               = 0xC00000DB,
     InvalidParameter1                = 0xC00000EF,
@@ -143,6 +144,7 @@ inline constexpr NTSTATUS STATUS_PORT_CONNECTION_REFUSED = static_cast<NTSTATUS>
 inline constexpr NTSTATUS STATUS_LINK_EVALUATION_CAP_EXCEEDED = static_cast<NTSTATUS>(0xC00002EB);
 inline constexpr NTSTATUS STATUS_NOT_SUPPORTED          = static_cast<NTSTATUS>(0xC00000BB);
 inline constexpr NTSTATUS STATUS_PRIVILEGE_NOT_HELD      = static_cast<NTSTATUS>(0xC0000061);
+inline constexpr NTSTATUS STATUS_BAD_IMPERSONATION_LEVEL = static_cast<NTSTATUS>(0xC00000A5);
 inline constexpr NTSTATUS STATUS_USER_EXISTS            = static_cast<NTSTATUS>(0xC0000063);
 inline constexpr NTSTATUS STATUS_NO_SUCH_USER           = static_cast<NTSTATUS>(0xC0000064);
 inline constexpr NTSTATUS STATUS_WRONG_PASSWORD         = static_cast<NTSTATUS>(0xC000006A);

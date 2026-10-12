@@ -292,7 +292,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite240")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite241")) {
+        RUN_TEST(Test_Horizon25_SecurityReferenceMonitor_GenericMapping_Inheritance_And_Impersonation);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite240") {
         RUN_TEST(Test_Horizon24_ProcessSubsystem_Quotas_JobObjects_Callbacks_And_Affinity);
         return g_FailedTests;
     }
@@ -1046,6 +1050,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon22_ConfigurationManager_HiveRefinement_Coalescing_And_Security);
     RUN_TEST(Test_Horizon23_IoSubsystem_FastIo_Cancellation_And_BufferingModes);
     RUN_TEST(Test_Horizon24_ProcessSubsystem_Quotas_JobObjects_Callbacks_And_Affinity);
+    RUN_TEST(Test_Horizon25_SecurityReferenceMonitor_GenericMapping_Inheritance_And_Impersonation);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

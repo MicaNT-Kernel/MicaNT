@@ -5885,6 +5885,325 @@ void Test_Horizon24_ProcessSubsystem_Quotas_JobObjects_Callbacks_And_Affinity() 
     std::cout << "[TEST] Suite 240: Horizon 24 - Sovereign Process Subsystem Quotas, Jobs & Callbacks PASSED.\n";
 }
 
+// ============================================================================
+// Suite 241: Horizon 25 - Sovereign Security Reference Monitor (Se) Subsystem
+// ============================================================================
+void Test_Horizon25_SecurityReferenceMonitor_GenericMapping_Inheritance_And_Impersonation() {
+    std::cout << "[TEST] Suite 241: Horizon 25 - Sovereign Security Reference Monitor (Se) Subsystem...\n" << std::flush;
+
+    se::SeResetTelemetryForTesting();
+
+    // 1. Generic Rights Mapping
+    {
+        uint32_t genericMask = se::GENERIC_READ | se::GENERIC_WRITE;
+        se::RtlMapGenericMask(genericMask, se::FILE_GENERIC_MAPPING);
+
+        // Generic bits must be stripped
+        TEST_ASSERT((genericMask & (se::GENERIC_READ | se::GENERIC_WRITE | se::GENERIC_EXECUTE | se::GENERIC_ALL)) == 0,
+                    "RtlMapGenericMask must strip high generic bits");
+
+        // Specific and standard rights must be populated
+        TEST_ASSERT((genericMask & se::FILE_READ_DATA) != 0, "Mapped generic read must contain FILE_READ_DATA");
+        TEST_ASSERT((genericMask & se::FILE_WRITE_DATA) != 0, "Mapped generic write must contain FILE_WRITE_DATA");
+        TEST_ASSERT((genericMask & se::STANDARD_RIGHTS_READ) != 0, "Mapped generic read must contain STANDARD_RIGHTS_READ");
+        TEST_ASSERT((genericMask & se::STANDARD_RIGHTS_WRITE) != 0, "Mapped generic write must contain STANDARD_RIGHTS_WRITE");
+        TEST_ASSERT((genericMask & se::SYNCHRONIZE) != 0, "Mapped file rights must include SYNCHRONIZE");
+    }
+
+    // 2. Binary Self-Relative Security Descriptor Serialization & Deserialization
+    {
+        se::SecurityDescriptor sd;
+        sd.setOwner(se::Sid::administrators());
+        sd.setGroup(se::Sid::users());
+
+        se::Acl dacl;
+        dacl.addAllowedAce(se::Sid::users(), se::FILE_READ_DATA);
+        dacl.addDeniedAce(se::Sid::everyone(), se::FILE_WRITE_DATA);
+        sd.setDacl(std::move(dacl));
+
+        sd.setIntegrityLevel(se::SECURITY_MANDATORY_HIGH_RID, se::SYSTEM_MANDATORY_LABEL_NO_WRITE_UP);
+        TEST_ASSERT(se::RtlValidSecurityDescriptor(sd), "Constructed SecurityDescriptor must be valid");
+
+        // Serialize to self-relative binary buffer
+        auto binarySd = sd.makeSelfRelative();
+        TEST_ASSERT(binarySd.size() >= 20, "Self-relative SD binary buffer must be at least header size (20 bytes)");
+        TEST_ASSERT(binarySd[0] == 1, "Self-relative SD revision must be 1");
+        uint16_t control = static_cast<uint16_t>(binarySd[2]) | (static_cast<uint16_t>(binarySd[3]) << 8);
+        TEST_ASSERT((control & se::SE_SELF_RELATIVE) != 0, "Self-relative SD control must have SE_SELF_RELATIVE set");
+        TEST_ASSERT((control & se::SE_DACL_PRESENT) != 0, "Self-relative SD control must have SE_DACL_PRESENT set");
+        TEST_ASSERT((control & se::SE_SACL_PRESENT) != 0, "Self-relative SD control must have SE_SACL_PRESENT set");
+
+        // Deserialize from binary buffer
+        auto roundtripSd = se::SecurityDescriptor::fromSelfRelative(binarySd);
+        TEST_ASSERT(roundtripSd.has_value(), "Deserializing self-relative SD must succeed");
+        TEST_ASSERT(roundtripSd->getOwner().has_value() && *roundtripSd->getOwner() == se::Sid::administrators(),
+                    "Deserialized SD owner must match administrators");
+        TEST_ASSERT(roundtripSd->getGroup().has_value() && *roundtripSd->getGroup() == se::Sid::users(),
+                    "Deserialized SD group must match users");
+        TEST_ASSERT(roundtripSd->hasDacl() && roundtripSd->getDacl()->getAceCount() == 2,
+                    "Deserialized SD DACL must have 2 ACEs");
+        TEST_ASSERT(roundtripSd->hasMandatoryLabel(), "Deserialized SD must have mandatory label");
+        TEST_ASSERT(roundtripSd->getIntegrityLevel() == se::SECURITY_MANDATORY_HIGH_RID,
+                    "Deserialized SD integrity level must be High");
+    }
+
+    // 3. Security Descriptor Inheritance Engine (SeAssignSecurity)
+    {
+        se::SecurityDescriptor parentSd;
+        parentSd.setOwner(se::Sid::administrators());
+        parentSd.setGroup(se::Sid::administrators());
+
+        se::Acl parentDacl;
+        // ACE 1: Inheritable to containers and objects
+        parentDacl.addAllowedAce(se::Sid::administrators(), se::STANDARD_RIGHTS_ALL | se::SPECIFIC_RIGHTS_ALL,
+                                 se::CONTAINER_INHERIT_ACE | se::OBJECT_INHERIT_ACE);
+        // ACE 2: Inheritable only to objects, no propagate
+        parentDacl.addAllowedAce(se::Sid::users(), se::FILE_READ_DATA,
+                                 se::OBJECT_INHERIT_ACE | se::NO_PROPAGATE_INHERIT_ACE);
+        // ACE 3: Deny to Everyone
+        parentDacl.addDeniedAce(se::Sid::everyone(), se::DELETE,
+                                se::CONTAINER_INHERIT_ACE | se::OBJECT_INHERIT_ACE);
+        parentSd.setDacl(std::move(parentDacl));
+
+        auto userToken = se::TokenObject::createUserToken(se::Sid(5, {21, 1001}));
+
+        // Case A: Create child leaf object (file)
+        se::SecurityDescriptor childFileSd;
+        se::SecurityDescriptor explicitFileSd;
+        se::Acl explicitFileDacl;
+        explicitFileDacl.addAllowedAce(se::Sid::localSystem(), se::FILE_READ_DATA | se::FILE_WRITE_DATA);
+        explicitFileSd.setDacl(std::move(explicitFileDacl));
+
+        NtStatus stAssign = se::SeAssignSecurity(
+            &parentSd,
+            &explicitFileSd,
+            false, // isDirectory = false
+            *userToken,
+            se::FILE_GENERIC_MAPPING,
+            childFileSd
+        );
+        TEST_ASSERT(NT_SUCCESS(stAssign), "SeAssignSecurity for child file must succeed");
+        TEST_ASSERT(childFileSd.getOwner().has_value() && *childFileSd.getOwner() == userToken->getUserSid(),
+                    "Child file owner must default to subject token user SID");
+        TEST_ASSERT(childFileSd.hasDacl(), "Child file must have DACL assigned");
+
+        const auto& childDacl = *childFileSd.getDacl();
+        // Child DACL canonical order:
+        // 1. Explicit Deny (none)
+        // 2. Explicit Allow (LocalSystem)
+        // 3. Inherited Deny (Everyone DELETE)
+        // 4. Inherited Allow (Administrators, Users)
+        TEST_ASSERT(childDacl.getAceCount() == 4, "Child file DACL must contain 4 canonical ACEs");
+        TEST_ASSERT(childDacl.getAces()[0].sid == se::Sid::localSystem() && childDacl.getAces()[0].type == se::AceType::AccessAllowed,
+                    "First ACE must be Explicit Allow (LocalSystem)");
+        TEST_ASSERT(childDacl.getAces()[1].sid == se::Sid::everyone() && childDacl.getAces()[1].type == se::AceType::AccessDenied,
+                    "Second ACE must be Inherited Deny (Everyone)");
+        TEST_ASSERT((childDacl.getAces()[1].flags & se::INHERITED_ACE) != 0, "Inherited ACE must have INHERITED_ACE flag");
+        TEST_ASSERT((childDacl.getAces()[2].flags & se::INHERITED_ACE) != 0, "Inherited ACE must have INHERITED_ACE flag");
+        TEST_ASSERT((childDacl.getAces()[3].flags & se::INHERITED_ACE) != 0, "Inherited ACE must have INHERITED_ACE flag");
+
+        // Case B: Create protected child with SE_DACL_PROTECTED
+        se::SecurityDescriptor protectedChildSd;
+        se::SecurityDescriptor explicitProtectedSd;
+        explicitProtectedSd.setControl(se::SE_DACL_PROTECTED);
+        se::Acl protectedDacl;
+        protectedDacl.addAllowedAce(userToken->getUserSid(), se::FILE_READ_DATA);
+        explicitProtectedSd.setDacl(std::move(protectedDacl));
+
+        NtStatus stAssignProt = se::SeAssignSecurity(
+            &parentSd,
+            &explicitProtectedSd,
+            false,
+            *userToken,
+            se::FILE_GENERIC_MAPPING,
+            protectedChildSd
+        );
+        TEST_ASSERT(NT_SUCCESS(stAssignProt), "SeAssignSecurity with SE_DACL_PROTECTED must succeed");
+        TEST_ASSERT(protectedChildSd.getDacl()->getAceCount() == 1,
+                    "Protected child DACL must contain ONLY explicit ACEs, zero inherited");
+        TEST_ASSERT((protectedChildSd.getDacl()->getAces()[0].flags & se::INHERITED_ACE) == 0,
+                    "Explicit ACE must NOT have INHERITED_ACE flag");
+    }
+
+    // 4. Enhanced Access Checking (SeAccessCheck), MAXIMUM_ALLOWED & Privilege Overrides
+    {
+        se::SecurityDescriptor sd;
+        sd.setOwner(se::Sid(5, {21, 5000})); // Special owner SID
+
+        se::Acl dacl;
+        // Allow Users read access
+        dacl.addAllowedAce(se::Sid::users(), se::FILE_READ_DATA);
+        // Explicitly Deny Users write access
+        dacl.addDeniedAce(se::Sid::users(), se::FILE_WRITE_DATA);
+        sd.setDacl(std::move(dacl));
+
+        auto userSid = se::Sid(5, {21, 6000});
+        auto userToken = se::TokenObject::createUserToken(userSid);
+
+        // Standard user requesting MAXIMUM_ALLOWED
+        uint32_t grantedMax = 0;
+        NtStatus stMax = se::SecurityReferenceMonitor::SeAccessCheck(
+            sd,
+            *userToken,
+            se::MAXIMUM_ALLOWED,
+            se::FILE_GENERIC_MAPPING,
+            grantedMax
+        );
+        TEST_ASSERT(NT_SUCCESS(stMax), "SeAccessCheck with MAXIMUM_ALLOWED must succeed");
+        TEST_ASSERT((grantedMax & se::FILE_READ_DATA) != 0, "MAXIMUM_ALLOWED must grant allowed FILE_READ_DATA");
+        TEST_ASSERT((grantedMax & se::FILE_WRITE_DATA) == 0, "MAXIMUM_ALLOWED must NOT grant denied FILE_WRITE_DATA");
+
+        // Owner requesting MAXIMUM_ALLOWED: must also receive READ_CONTROL | WRITE_DAC
+        auto ownerToken = se::TokenObject::createUserToken(se::Sid(5, {21, 5000}));
+        uint32_t ownerGranted = 0;
+        NtStatus stOwnerMax = se::SecurityReferenceMonitor::SeAccessCheck(
+            sd,
+            *ownerToken,
+            se::MAXIMUM_ALLOWED,
+            se::FILE_GENERIC_MAPPING,
+            ownerGranted
+        );
+        TEST_ASSERT(NT_SUCCESS(stOwnerMax), "Owner MAXIMUM_ALLOWED must succeed");
+        TEST_ASSERT((ownerGranted & (se::READ_CONTROL | se::WRITE_DAC)) == (se::READ_CONTROL | se::WRITE_DAC),
+                    "Owner must be granted READ_CONTROL and WRITE_DAC");
+
+        // Privilege Override: SeBackupPrivilege bypassing DACL denial
+        se::SecurityDescriptor backupRestrictedSd;
+        se::Acl denyAllDacl;
+        denyAllDacl.addDeniedAce(se::Sid::everyone(), se::FILE_READ_DATA);
+        backupRestrictedSd.setDacl(std::move(denyAllDacl));
+
+        // Without privilege -> Denied
+        uint32_t readGranted = 0;
+        NtStatus stNoPriv = se::SecurityReferenceMonitor::SeAccessCheck(
+            backupRestrictedSd,
+            *userToken,
+            se::FILE_READ_DATA,
+            se::FILE_GENERIC_MAPPING,
+            readGranted
+        );
+        TEST_ASSERT(stNoPriv == NtStatus::AccessDenied, "Without SeBackupPrivilege, denied read must return AccessDenied");
+
+        // With enabled SeBackupPrivilege -> Overrides denial and succeeds!
+        userToken->addPrivilege(se::SE_BACKUP_NAME, se::SE_PRIVILEGE_ENABLED);
+        NtStatus stWithPriv = se::SecurityReferenceMonitor::SeAccessCheck(
+            backupRestrictedSd,
+            *userToken,
+            se::FILE_READ_DATA,
+            se::FILE_GENERIC_MAPPING,
+            readGranted
+        );
+        TEST_ASSERT(NT_SUCCESS(stWithPriv), "With enabled SeBackupPrivilege, read denial must be bypassed");
+        TEST_ASSERT((readGranted & se::FILE_READ_DATA) != 0, "Granted access must include FILE_READ_DATA");
+
+        // Privilege Override: SeRestorePrivilege bypassing DACL write denial
+        se::SecurityDescriptor restoreRestrictedSd;
+        se::Acl denyWriteDacl;
+        denyWriteDacl.addDeniedAce(se::Sid::everyone(), se::FILE_WRITE_DATA);
+        restoreRestrictedSd.setDacl(std::move(denyWriteDacl));
+
+        userToken->addPrivilege(se::SE_RESTORE_NAME, se::SE_PRIVILEGE_ENABLED);
+        uint32_t writeGranted = 0;
+        NtStatus stRestore = se::SecurityReferenceMonitor::SeAccessCheck(
+            restoreRestrictedSd,
+            *userToken,
+            se::FILE_WRITE_DATA,
+            se::FILE_GENERIC_MAPPING,
+            writeGranted
+        );
+        TEST_ASSERT(NT_SUCCESS(stRestore), "With enabled SeRestorePrivilege, write denial must be bypassed");
+        TEST_ASSERT((writeGranted & se::FILE_WRITE_DATA) != 0, "Granted access must include FILE_WRITE_DATA");
+    }
+
+    // 5. Security Subject Context & Token Impersonation Level Enforcement
+    {
+        auto primaryToken = se::TokenObject::createUserToken(se::Sid(5, {21, 7000}));
+        auto clientToken = se::TokenObject::createAdminToken(se::Sid(5, {21, 8000}));
+
+        se::SecuritySubjectContext ctx;
+        se::SeCaptureSubjectContext(ctx, primaryToken, clientToken);
+        TEST_ASSERT(ctx.isImpersonating(), "Context must be in impersonating state");
+
+        se::SecurityDescriptor adminOnlySd;
+        se::Acl adminDacl;
+        adminDacl.addAllowedAce(se::Sid::administrators(), se::STANDARD_RIGHTS_ALL | se::SPECIFIC_RIGHTS_ALL);
+        adminOnlySd.setDacl(std::move(adminDacl));
+
+        // A. Impersonation Level: Identification (Cannot access securable objects on client's behalf)
+        clientToken->setImpersonationLevel(se::SecurityImpersonationLevel::Identification);
+        ctx.impersonationLevel = se::SecurityImpersonationLevel::Identification;
+
+        uint32_t granted = 0;
+        NtStatus stIdent = se::SecurityReferenceMonitor::SeAccessCheck(
+            adminOnlySd,
+            ctx,
+            se::FILE_READ_DATA,
+            se::FILE_GENERIC_MAPPING,
+            granted
+        );
+        TEST_ASSERT(stIdent == NtStatus::BadImpersonationLevel,
+                    "Access check under SecurityIdentification impersonation must return STATUS_BAD_IMPERSONATION_LEVEL");
+
+        // B. Impersonation Level: Impersonation (Valid for local securable access)
+        clientToken->setImpersonationLevel(se::SecurityImpersonationLevel::Impersonation);
+        ctx.impersonationLevel = se::SecurityImpersonationLevel::Impersonation;
+
+        NtStatus stImpersonate = se::SecurityReferenceMonitor::SeAccessCheck(
+            adminOnlySd,
+            ctx,
+            se::FILE_READ_DATA,
+            se::FILE_GENERIC_MAPPING,
+            granted
+        );
+        TEST_ASSERT(NT_SUCCESS(stImpersonate), "Access check under SecurityImpersonation must succeed for Admin client token");
+        TEST_ASSERT((granted & se::FILE_READ_DATA) != 0, "Granted access must include FILE_READ_DATA");
+
+        se::SeReleaseSubjectContext(ctx);
+        TEST_ASSERT(!ctx.isImpersonating(), "Released context must not be impersonating");
+    }
+
+    // 6. KernelMode Processor Mode Bypass
+    {
+        se::SecurityDescriptor closedSd;
+        se::Acl emptyDacl;
+        closedSd.setDacl(std::move(emptyDacl)); // Empty DACL denies all UserMode callers
+
+        auto userToken = se::TokenObject::createUserToken(se::Sid(5, {21, 9000}));
+        uint32_t grantedKm = 0;
+        NtStatus stKm = se::SecurityReferenceMonitor::SeAccessCheck(
+            closedSd,
+            *userToken,
+            se::FILE_READ_DATA | se::FILE_WRITE_DATA,
+            se::FILE_GENERIC_MAPPING,
+            grantedKm,
+            L"",
+            se::ProcessorMode::KernelMode
+        );
+        TEST_ASSERT(NT_SUCCESS(stKm), "ProcessorMode::KernelMode must unconditionally bypass access check");
+        TEST_ASSERT((grantedKm & (se::FILE_READ_DATA | se::FILE_WRITE_DATA)) == (se::FILE_READ_DATA | se::FILE_WRITE_DATA),
+                    "KernelMode must be granted all requested rights");
+    }
+
+    // 7. Security Reference Monitor Telemetry Verification
+    {
+        auto telem = se::SeQueryTelemetry();
+        TEST_ASSERT(telem.totalAccessChecks >= 5, "totalAccessChecks must be >= 5");
+        TEST_ASSERT(telem.totalAccessChecksGranted >= 3, "totalAccessChecksGranted must be >= 3");
+        TEST_ASSERT(telem.totalAccessChecksDenied >= 1, "totalAccessChecksDenied must be >= 1");
+        TEST_ASSERT(telem.totalMaximumAllowedEvaluations >= 2, "totalMaximumAllowedEvaluations must be >= 2");
+        TEST_ASSERT(telem.totalInheritedAcesPropagated >= 2, "totalInheritedAcesPropagated must be >= 2");
+        TEST_ASSERT(telem.totalSecurityDescriptorsAssigned >= 2, "totalSecurityDescriptorsAssigned must be >= 2");
+        TEST_ASSERT(telem.totalBackupRestoreOverrides >= 2, "totalBackupRestoreOverrides must be >= 2");
+        TEST_ASSERT(telem.totalTokenImpersonations >= 2, "totalTokenImpersonations must be >= 2");
+
+        se::SeResetTelemetryForTesting();
+        auto telemReset = se::SeQueryTelemetry();
+        TEST_ASSERT(telemReset.totalAccessChecks == 0, "SeResetTelemetryForTesting must zero out counters");
+    }
+
+    std::cout << "[TEST] Suite 241: Horizon 25 - Sovereign Security Reference Monitor (Se) Subsystem PASSED.\n";
+}
+
 
 
 

@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <span>
+#include <mutex>
 #include "ntdef.hpp"
 #include "ntstatus.hpp"
 #include "ob.hpp"
@@ -45,6 +46,53 @@ inline constexpr uint32_t GENERIC_READ              = 0x80000000;
 inline constexpr uint32_t GENERIC_WRITE             = 0x40000000;
 inline constexpr uint32_t GENERIC_EXECUTE           = 0x20000000;
 inline constexpr uint32_t GENERIC_ALL               = 0x10000000;
+
+// ============================================================================
+// Generic Rights Mapping (standard NT GENERIC_MAPPING)
+// ============================================================================
+struct GenericMapping {
+    uint32_t genericRead{0};
+    uint32_t genericWrite{0};
+    uint32_t genericExecute{0};
+    uint32_t genericAll{0};
+};
+
+inline void RtlMapGenericMask(uint32_t& accessMask, const GenericMapping& mapping) noexcept {
+    if (accessMask & GENERIC_ALL) {
+        accessMask |= mapping.genericAll;
+    }
+    if (accessMask & GENERIC_READ) {
+        accessMask |= mapping.genericRead;
+    }
+    if (accessMask & GENERIC_WRITE) {
+        accessMask |= mapping.genericWrite;
+    }
+    if (accessMask & GENERIC_EXECUTE) {
+        accessMask |= mapping.genericExecute;
+    }
+    accessMask &= ~(GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL);
+}
+
+inline constexpr GenericMapping FILE_GENERIC_MAPPING{
+    .genericRead = STANDARD_RIGHTS_READ | FILE_READ_DATA | SYNCHRONIZE,
+    .genericWrite = STANDARD_RIGHTS_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA | SYNCHRONIZE,
+    .genericExecute = STANDARD_RIGHTS_EXECUTE | FILE_EXECUTE | SYNCHRONIZE,
+    .genericAll = STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL | SYNCHRONIZE
+};
+
+// Privilege Set & Attributes
+inline constexpr uint32_t PRIVILEGE_SET_ALL_NECESSARY = 1;
+
+struct LuidAndAttributes {
+    Luid luid{0, 0};
+    uint32_t attributes{0};
+};
+
+struct PrivilegeSet {
+    uint32_t privilegeCount{0};
+    uint32_t control{0};
+    std::vector<LuidAndAttributes> privileges;
+};
 
 // Security Descriptor Control Flags
 inline constexpr uint16_t SE_OWNER_DEFAULTED        = 0x0001;
@@ -191,6 +239,47 @@ public:
     [[nodiscard]] static Sid integritySystem() { return fromIntegrityRid(SECURITY_MANDATORY_SYSTEM_RID); }
     [[nodiscard]] static Sid integrityProtectedProcess() { return fromIntegrityRid(SECURITY_MANDATORY_PROTECTED_PROCESS_RID); }
 
+    [[nodiscard]] size_t getBinaryLength() const noexcept {
+        return 8 + subAuthorities_.size() * sizeof(uint32_t);
+    }
+
+    [[nodiscard]] std::vector<uint8_t> serialize() const {
+        std::vector<uint8_t> buffer(getBinaryLength());
+        buffer[0] = revision_;
+        buffer[1] = static_cast<uint8_t>(subAuthorities_.size());
+        std::copy(identifierAuthority_, identifierAuthority_ + 6, buffer.begin() + 2);
+        for (size_t i = 0; i < subAuthorities_.size(); ++i) {
+            uint32_t sa = subAuthorities_[i];
+            size_t offset = 8 + i * 4;
+            buffer[offset] = static_cast<uint8_t>(sa & 0xFF);
+            buffer[offset + 1] = static_cast<uint8_t>((sa >> 8) & 0xFF);
+            buffer[offset + 2] = static_cast<uint8_t>((sa >> 16) & 0xFF);
+            buffer[offset + 3] = static_cast<uint8_t>((sa >> 24) & 0xFF);
+        }
+        return buffer;
+    }
+
+    static std::optional<Sid> deserialize(std::span<const uint8_t> data, size_t& bytesRead) {
+        if (data.size() < 8) return std::nullopt;
+        uint8_t rev = data[0];
+        uint8_t count = data[1];
+        if (data.size() < static_cast<size_t>(8 + count * 4)) return std::nullopt;
+        Sid sid;
+        sid.revision_ = rev;
+        std::copy(data.begin() + 2, data.begin() + 8, sid.identifierAuthority_);
+        sid.subAuthorities_.resize(count);
+        for (size_t i = 0; i < count; ++i) {
+            size_t offset = 8 + i * 4;
+            uint32_t sa = static_cast<uint32_t>(data[offset]) |
+                          (static_cast<uint32_t>(data[offset + 1]) << 8) |
+                          (static_cast<uint32_t>(data[offset + 2]) << 16) |
+                          (static_cast<uint32_t>(data[offset + 3]) << 24);
+            sid.subAuthorities_[i] = sa;
+        }
+        bytesRead = 8 + count * 4;
+        return sid;
+    }
+
 private:
     uint8_t revision_{1};
     uint8_t identifierAuthority_[6]{0};
@@ -248,6 +337,81 @@ public:
     [[nodiscard]] const std::vector<Ace>& getAces() const noexcept { return aces_; }
     [[nodiscard]] std::vector<Ace>& getAces() noexcept { return aces_; }
     void clear() noexcept { aces_.clear(); }
+
+    [[nodiscard]] size_t getBinaryLength() const noexcept {
+        size_t total = 8; // ACL header: revision (1), sbz1 (1), aclSize (2), aceCount (2), sbz2 (2)
+        for (const auto& ace : aces_) {
+            total += 8 + ace.sid.getBinaryLength(); // ACE header (8): type (1), flags (1), size (2), mask (4)
+        }
+        return total;
+    }
+
+    [[nodiscard]] std::vector<uint8_t> serialize() const {
+        size_t totalSize = getBinaryLength();
+        std::vector<uint8_t> buffer(totalSize, 0);
+        buffer[0] = 2; // ACL_REVISION
+        buffer[1] = 0; // Sbz1
+        buffer[2] = static_cast<uint8_t>(totalSize & 0xFF);
+        buffer[3] = static_cast<uint8_t>((totalSize >> 8) & 0xFF);
+        buffer[4] = static_cast<uint8_t>(aces_.size() & 0xFF);
+        buffer[5] = static_cast<uint8_t>((aces_.size() >> 8) & 0xFF);
+        buffer[6] = 0; // Sbz2
+        buffer[7] = 0;
+
+        size_t offset = 8;
+        for (const auto& ace : aces_) {
+            size_t sidLen = ace.sid.getBinaryLength();
+            size_t aceSize = 8 + sidLen;
+            buffer[offset] = static_cast<uint8_t>(ace.type);
+            buffer[offset + 1] = ace.flags;
+            buffer[offset + 2] = static_cast<uint8_t>(aceSize & 0xFF);
+            buffer[offset + 3] = static_cast<uint8_t>((aceSize >> 8) & 0xFF);
+            buffer[offset + 4] = static_cast<uint8_t>(ace.mask & 0xFF);
+            buffer[offset + 5] = static_cast<uint8_t>((ace.mask >> 8) & 0xFF);
+            buffer[offset + 6] = static_cast<uint8_t>((ace.mask >> 16) & 0xFF);
+            buffer[offset + 7] = static_cast<uint8_t>((ace.mask >> 24) & 0xFF);
+
+            auto sidBytes = ace.sid.serialize();
+            std::copy(sidBytes.begin(), sidBytes.end(), buffer.begin() + offset + 8);
+            offset += aceSize;
+        }
+        return buffer;
+    }
+
+    static std::optional<Acl> deserialize(std::span<const uint8_t> data, size_t& bytesRead) {
+        if (data.size() < 8) return std::nullopt;
+        uint16_t aclSize = static_cast<uint16_t>(data[2]) | (static_cast<uint16_t>(data[3]) << 8);
+        uint16_t aceCount = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+        if (data.size() < aclSize || aclSize < 8) return std::nullopt;
+
+        Acl acl;
+        size_t offset = 8;
+        for (uint16_t i = 0; i < aceCount; ++i) {
+            if (offset + 8 > aclSize) return std::nullopt;
+            AceType type = static_cast<AceType>(data[offset]);
+            uint8_t flags = data[offset + 1];
+            uint16_t aceSize = static_cast<uint16_t>(data[offset + 2]) | (static_cast<uint16_t>(data[offset + 3]) << 8);
+            uint32_t mask = static_cast<uint32_t>(data[offset + 4]) |
+                            (static_cast<uint32_t>(data[offset + 5]) << 8) |
+                            (static_cast<uint32_t>(data[offset + 6]) << 16) |
+                            (static_cast<uint32_t>(data[offset + 7]) << 24);
+            if (offset + aceSize > aclSize || aceSize < 8) return std::nullopt;
+
+            size_t sidBytesRead = 0;
+            auto sidOpt = Sid::deserialize(data.subspan(offset + 8, aceSize - 8), sidBytesRead);
+            if (!sidOpt) return std::nullopt;
+
+            acl.aces_.push_back(Ace{
+                .type = type,
+                .flags = flags,
+                .mask = mask,
+                .sid = std::move(*sidOpt)
+            });
+            offset += aceSize;
+        }
+        bytesRead = aclSize;
+        return acl;
+    }
 
 private:
     std::vector<Ace> aces_;
@@ -353,6 +517,124 @@ public:
             }
         }
         return false;
+    }
+
+    [[nodiscard]] std::vector<uint8_t> makeSelfRelative() const {
+        size_t headerSize = 20; // 1 + 1 + 2 + 4 + 4 + 4 + 4
+        size_t ownerSize = owner_ ? owner_->getBinaryLength() : 0;
+        size_t groupSize = group_ ? group_->getBinaryLength() : 0;
+        size_t saclSize = (saclPresent_ && sacl_) ? sacl_->getBinaryLength() : 0;
+        size_t daclSize = (daclPresent_ && dacl_) ? dacl_->getBinaryLength() : 0;
+
+        size_t total = headerSize + ownerSize + groupSize + saclSize + daclSize;
+        std::vector<uint8_t> buffer(total, 0);
+
+        uint16_t ctrl = control_ | SE_SELF_RELATIVE;
+        buffer[0] = 1; // Revision
+        buffer[1] = 0; // Sbz1
+        buffer[2] = static_cast<uint8_t>(ctrl & 0xFF);
+        buffer[3] = static_cast<uint8_t>((ctrl >> 8) & 0xFF);
+
+        size_t currOffset = headerSize;
+        uint32_t ownerOff = 0;
+        if (owner_) {
+            ownerOff = static_cast<uint32_t>(currOffset);
+            auto b = owner_->serialize();
+            std::copy(b.begin(), b.end(), buffer.begin() + currOffset);
+            currOffset += ownerSize;
+        }
+
+        uint32_t groupOff = 0;
+        if (group_) {
+            groupOff = static_cast<uint32_t>(currOffset);
+            auto b = group_->serialize();
+            std::copy(b.begin(), b.end(), buffer.begin() + currOffset);
+            currOffset += groupSize;
+        }
+
+        uint32_t saclOff = 0;
+        if (saclPresent_ && sacl_) {
+            saclOff = static_cast<uint32_t>(currOffset);
+            auto b = sacl_->serialize();
+            std::copy(b.begin(), b.end(), buffer.begin() + currOffset);
+            currOffset += saclSize;
+        }
+
+        uint32_t daclOff = 0;
+        if (daclPresent_ && dacl_) {
+            daclOff = static_cast<uint32_t>(currOffset);
+            auto b = dacl_->serialize();
+            std::copy(b.begin(), b.end(), buffer.begin() + currOffset);
+            currOffset += daclSize;
+        }
+
+        auto writeU32 = [&](size_t off, uint32_t val) {
+            buffer[off] = static_cast<uint8_t>(val & 0xFF);
+            buffer[off + 1] = static_cast<uint8_t>((val >> 8) & 0xFF);
+            buffer[off + 2] = static_cast<uint8_t>((val >> 16) & 0xFF);
+            buffer[off + 3] = static_cast<uint8_t>((val >> 24) & 0xFF);
+        };
+        writeU32(4, ownerOff);
+        writeU32(8, groupOff);
+        writeU32(12, saclOff);
+        writeU32(16, daclOff);
+
+        return buffer;
+    }
+
+    static std::optional<SecurityDescriptor> fromSelfRelative(std::span<const uint8_t> buffer) {
+        if (buffer.size() < 20) return std::nullopt;
+        if (buffer[0] != 1) return std::nullopt; // Revision 1
+        uint16_t ctrl = static_cast<uint16_t>(buffer[2]) | (static_cast<uint16_t>(buffer[3]) << 8);
+
+        auto readU32 = [&](size_t off) -> uint32_t {
+            return static_cast<uint32_t>(buffer[off]) |
+                   (static_cast<uint32_t>(buffer[off + 1]) << 8) |
+                   (static_cast<uint32_t>(buffer[off + 2]) << 16) |
+                   (static_cast<uint32_t>(buffer[off + 3]) << 24);
+        };
+
+        uint32_t ownerOff = readU32(4);
+        uint32_t groupOff = readU32(8);
+        uint32_t saclOff = readU32(12);
+        uint32_t daclOff = readU32(16);
+
+        SecurityDescriptor sd;
+        sd.control_ = ctrl;
+
+        if (ownerOff > 0 && ownerOff < buffer.size()) {
+            size_t bytesRead = 0;
+            auto sid = Sid::deserialize(buffer.subspan(ownerOff), bytesRead);
+            if (sid) sd.owner_ = std::move(sid);
+        }
+
+        if (groupOff > 0 && groupOff < buffer.size()) {
+            size_t bytesRead = 0;
+            auto sid = Sid::deserialize(buffer.subspan(groupOff), bytesRead);
+            if (sid) sd.group_ = std::move(sid);
+        }
+
+        if ((ctrl & SE_SACL_PRESENT) && saclOff > 0 && saclOff < buffer.size()) {
+            size_t bytesRead = 0;
+            auto acl = Acl::deserialize(buffer.subspan(saclOff), bytesRead);
+            if (acl) {
+                sd.sacl_ = std::move(acl);
+                sd.saclPresent_ = true;
+            }
+        }
+
+        if ((ctrl & SE_DACL_PRESENT) && daclOff > 0 && daclOff < buffer.size()) {
+            size_t bytesRead = 0;
+            auto acl = Acl::deserialize(buffer.subspan(daclOff), bytesRead);
+            if (acl) {
+                sd.dacl_ = std::move(acl);
+                sd.daclPresent_ = true;
+            }
+        } else if (ctrl & SE_DACL_PRESENT) {
+            sd.daclPresent_ = true; // Null DACL
+        }
+
+        return sd;
     }
 
 private:
@@ -613,6 +895,74 @@ struct SecurityAuditRecord {
 };
 
 /**
+ * @brief Security Subject Context (SECURITY_SUBJECT_CONTEXT).
+ * Captures process and thread client impersonation tokens for access checking.
+ */
+struct SecuritySubjectContext {
+    std::shared_ptr<TokenObject> processToken;
+    std::shared_ptr<TokenObject> clientToken;
+    SecurityImpersonationLevel impersonationLevel{SecurityImpersonationLevel::Anonymous};
+
+    [[nodiscard]] const std::shared_ptr<TokenObject>& getEffectiveToken() const noexcept {
+        if (clientToken) return clientToken;
+        return processToken;
+    }
+
+    [[nodiscard]] bool isImpersonating() const noexcept {
+        return clientToken != nullptr;
+    }
+};
+
+inline void SeCaptureSubjectContext(
+    SecuritySubjectContext& subjectContext,
+    std::shared_ptr<TokenObject> processToken,
+    std::shared_ptr<TokenObject> clientToken = nullptr
+) noexcept {
+    subjectContext.processToken = std::move(processToken);
+    subjectContext.clientToken = std::move(clientToken);
+    if (subjectContext.clientToken) {
+        subjectContext.impersonationLevel = subjectContext.clientToken->getImpersonationLevel();
+    } else {
+        subjectContext.impersonationLevel = SecurityImpersonationLevel::Anonymous;
+    }
+}
+
+inline void SeReleaseSubjectContext(SecuritySubjectContext& subjectContext) noexcept {
+    subjectContext.processToken.reset();
+    subjectContext.clientToken.reset();
+    subjectContext.impersonationLevel = SecurityImpersonationLevel::Anonymous;
+}
+
+/**
+ * @brief Security Reference Monitor (SRM) Subsystem Telemetry.
+ */
+struct SeTelemetry {
+    uint64_t totalAccessChecks{0};
+    uint64_t totalAccessChecksGranted{0};
+    uint64_t totalAccessChecksDenied{0};
+    uint64_t totalPrivilegeChecks{0};
+    uint64_t totalMaximumAllowedEvaluations{0};
+    uint64_t totalInheritedAcesPropagated{0};
+    uint64_t totalSecurityDescriptorsAssigned{0};
+    uint64_t totalIntegrityViolations{0};
+    uint64_t totalBackupRestoreOverrides{0};
+    uint64_t totalTokenImpersonations{0};
+};
+
+inline SeTelemetry g_SeTelemetry{};
+inline std::mutex g_SeTelemetryMutex;
+
+inline SeTelemetry SeQueryTelemetry() {
+    std::lock_guard<std::mutex> lk(g_SeTelemetryMutex);
+    return g_SeTelemetry;
+}
+
+inline void SeResetTelemetryForTesting() {
+    std::lock_guard<std::mutex> lk(g_SeTelemetryMutex);
+    g_SeTelemetry = SeTelemetry{};
+}
+
+/**
  * @brief Security Reference Monitor (SRM).
  * Performs Dave Cutler's NT access validation algorithm against Security Descriptors,
  * Mandatory Integrity Control (MIC), and SACL Auditing.
@@ -629,6 +979,8 @@ public:
         const TokenObject& token,
         ProcessorMode mode = ProcessorMode::UserMode
     ) noexcept {
+        std::lock_guard<std::mutex> lk(g_SeTelemetryMutex);
+        g_SeTelemetry.totalPrivilegeChecks++;
         if (mode == ProcessorMode::KernelMode) {
             return true;
         }
@@ -641,6 +993,8 @@ public:
         bool allRequired = true,
         ProcessorMode mode = ProcessorMode::UserMode
     ) noexcept {
+        std::lock_guard<std::mutex> lk(g_SeTelemetryMutex);
+        g_SeTelemetry.totalPrivilegeChecks++;
         if (mode == ProcessorMode::KernelMode) {
             return true;
         }
@@ -664,29 +1018,64 @@ public:
         }
     }
 
-    /**
-     * @brief Performs access validation according to standard NT security semantics.
-     *
-     * 1. If desiredAccess is 0, access is granted.
-     * 2. Mandatory Integrity Control (MIC):
-     *    - If object has mandatory label and subject integrity < object integrity:
-     *      - SYSTEM_MANDATORY_LABEL_NO_WRITE_UP blocks any write rights.
-     *      - SYSTEM_MANDATORY_LABEL_NO_READ_UP blocks any read rights.
-     *      - SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP blocks execute rights.
-     * 3. ACCESS_SYSTEM_SECURITY privilege check (requires SeSecurityPrivilege).
-     * 4. WRITE_OWNER privilege check (SeTakeOwnershipPrivilege bypass).
-     * 5. Owner rights: Owner is always granted READ_CONTROL and WRITE_DAC if requested.
-     * 6. If no DACL is present (daclPresent == false), full access is granted to all callers.
-     * 7. If DACL is present but empty (aceCount == 0), all access is denied.
-     * 8. ACEs are traversed in order:
-     *    - If matching SID has an AccessDenied ACE covering requested rights -> ACCESS_DENIED.
-     *      (Deny-only SIDs still match AccessDenied ACEs).
-     *    - If matching SID has an AccessAllowed ACE -> accumulate granted rights.
-     *      (Deny-only SIDs CANNOT match AccessAllowed ACEs).
-     *    - If all desired rights are granted -> STATUS_SUCCESS.
-     * 9. If loop finishes and ungranted rights remain -> ACCESS_DENIED.
-     * 10. SACL SystemAudit ACE evaluation and logging.
-     */
+    [[nodiscard]] static NtStatus SeAccessCheck(
+        const SecurityDescriptor& secDesc,
+        const SecuritySubjectContext& subjectContext,
+        uint32_t desiredAccess,
+        const GenericMapping& genericMapping,
+        uint32_t& grantedAccess,
+        std::wstring_view objectName = L"",
+        ProcessorMode mode = ProcessorMode::UserMode
+    ) noexcept {
+        std::lock_guard<std::mutex> lk(g_SeTelemetryMutex);
+        g_SeTelemetry.totalAccessChecks++;
+
+        grantedAccess = 0;
+        if (mode == ProcessorMode::KernelMode) {
+            grantedAccess = (desiredAccess & MAXIMUM_ALLOWED) ? (STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL) : desiredAccess;
+            g_SeTelemetry.totalAccessChecksGranted++;
+            return NtStatus::Success;
+        }
+
+        if (subjectContext.isImpersonating()) {
+            g_SeTelemetry.totalTokenImpersonations++;
+            if (subjectContext.impersonationLevel < SecurityImpersonationLevel::Impersonation) {
+                g_SeTelemetry.totalAccessChecksDenied++;
+                return NtStatus::BadImpersonationLevel;
+            }
+        }
+
+        const auto& token = subjectContext.getEffectiveToken();
+        if (!token) {
+            g_SeTelemetry.totalAccessChecksDenied++;
+            return NtStatus::AccessDenied;
+        }
+
+        return accessCheckInternal(*token, secDesc, desiredAccess, genericMapping, grantedAccess, objectName);
+    }
+
+    [[nodiscard]] static NtStatus SeAccessCheck(
+        const SecurityDescriptor& secDesc,
+        const TokenObject& token,
+        uint32_t desiredAccess,
+        const GenericMapping& genericMapping,
+        uint32_t& grantedAccess,
+        std::wstring_view objectName = L"",
+        ProcessorMode mode = ProcessorMode::UserMode
+    ) noexcept {
+        std::lock_guard<std::mutex> lk(g_SeTelemetryMutex);
+        g_SeTelemetry.totalAccessChecks++;
+
+        grantedAccess = 0;
+        if (mode == ProcessorMode::KernelMode) {
+            grantedAccess = (desiredAccess & MAXIMUM_ALLOWED) ? (STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL) : desiredAccess;
+            g_SeTelemetry.totalAccessChecksGranted++;
+            return NtStatus::Success;
+        }
+
+        return accessCheckInternal(token, secDesc, desiredAccess, genericMapping, grantedAccess, objectName);
+    }
+
     [[nodiscard]] static NtStatus accessCheck(
         const TokenObject& token,
         const SecurityDescriptor& secDesc,
@@ -694,28 +1083,28 @@ public:
         uint32_t& grantedAccess,
         std::wstring_view objectName = L""
     ) noexcept {
+        return SeAccessCheck(secDesc, token, desiredAccess, FILE_GENERIC_MAPPING, grantedAccess, objectName, ProcessorMode::UserMode);
+    }
+
+private:
+    [[nodiscard]] static NtStatus accessCheckInternal(
+        const TokenObject& token,
+        const SecurityDescriptor& secDesc,
+        uint32_t desiredAccess,
+        const GenericMapping& genericMapping,
+        uint32_t& grantedAccess,
+        std::wstring_view objectName = L""
+    ) noexcept {
         grantedAccess = 0;
         if (desiredAccess == 0) {
+            g_SeTelemetry.totalAccessChecksGranted++;
             return NtStatus::Success;
         }
 
-        // Map generic rights if present
         uint32_t remainingDesired = desiredAccess;
-        if (remainingDesired & GENERIC_ALL) {
-            remainingDesired = STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL;
-        }
-        if (remainingDesired & GENERIC_READ) {
-            remainingDesired |= (STANDARD_RIGHTS_READ | FILE_READ_DATA);
-            remainingDesired &= ~GENERIC_READ;
-        }
-        if (remainingDesired & GENERIC_WRITE) {
-            remainingDesired |= (STANDARD_RIGHTS_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA);
-            remainingDesired &= ~GENERIC_WRITE;
-        }
-        if (remainingDesired & GENERIC_EXECUTE) {
-            remainingDesired |= (STANDARD_RIGHTS_EXECUTE | FILE_EXECUTE);
-            remainingDesired &= ~GENERIC_EXECUTE;
-        }
+        bool isMaximumAllowed = (remainingDesired & MAXIMUM_ALLOWED) != 0;
+        remainingDesired &= ~MAXIMUM_ALLOWED;
+        RtlMapGenericMask(remainingDesired, genericMapping);
 
         // 1. Mandatory Integrity Control (MIC) Check
         if (secDesc.hasMandatoryLabel()) {
@@ -724,10 +1113,12 @@ public:
             uint32_t policy = secDesc.getIntegrityPolicy();
 
             if (subIntegrity < objIntegrity) {
-                // Write access check: generic write, write DAC, write owner, delete, or specific write masks
+                // Write access check
                 constexpr uint32_t WRITE_RIGHTS = GENERIC_WRITE | WRITE_DAC | WRITE_OWNER | DELETE | FILE_WRITE_DATA | FILE_APPEND_DATA;
                 if ((policy & SYSTEM_MANDATORY_LABEL_NO_WRITE_UP) &&
                     ((desiredAccess & (GENERIC_WRITE | GENERIC_ALL)) != 0 || (remainingDesired & WRITE_RIGHTS) != 0)) {
+                    g_SeTelemetry.totalIntegrityViolations++;
+                    g_SeTelemetry.totalAccessChecksDenied++;
                     recordAudit(token.getUserSid(), objectName, desiredAccess, 0, false, secDesc);
                     return NtStatus::AccessDenied;
                 }
@@ -735,6 +1126,8 @@ public:
                 constexpr uint32_t READ_RIGHTS = GENERIC_READ | FILE_READ_DATA;
                 if ((policy & SYSTEM_MANDATORY_LABEL_NO_READ_UP) &&
                     ((desiredAccess & (GENERIC_READ | GENERIC_ALL)) != 0 || (remainingDesired & READ_RIGHTS) != 0)) {
+                    g_SeTelemetry.totalIntegrityViolations++;
+                    g_SeTelemetry.totalAccessChecksDenied++;
                     recordAudit(token.getUserSid(), objectName, desiredAccess, 0, false, secDesc);
                     return NtStatus::AccessDenied;
                 }
@@ -742,51 +1135,140 @@ public:
                 constexpr uint32_t EXEC_RIGHTS = GENERIC_EXECUTE | FILE_EXECUTE;
                 if ((policy & SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP) &&
                     ((desiredAccess & (GENERIC_EXECUTE | GENERIC_ALL)) != 0 || (remainingDesired & EXEC_RIGHTS) != 0)) {
+                    g_SeTelemetry.totalIntegrityViolations++;
+                    g_SeTelemetry.totalAccessChecksDenied++;
                     recordAudit(token.getUserSid(), objectName, desiredAccess, 0, false, secDesc);
                     return NtStatus::AccessDenied;
                 }
             }
         }
 
-        // 2. ACCESS_SYSTEM_SECURITY privilege check
+        // 2. ACCESS_SYSTEM_SECURITY privilege check (requires SeSecurityPrivilege)
         if (remainingDesired & ACCESS_SYSTEM_SECURITY) {
             if (!token.hasPrivilege(SE_SECURITY_NAME, true)) {
+                g_SeTelemetry.totalAccessChecksDenied++;
                 recordAudit(token.getUserSid(), objectName, desiredAccess, 0, false, secDesc);
                 return NtStatus::PrivilegeNotHeld;
             }
             grantedAccess |= ACCESS_SYSTEM_SECURITY;
             remainingDesired &= ~ACCESS_SYSTEM_SECURITY;
-            if (remainingDesired == 0) {
-                recordAudit(token.getUserSid(), objectName, desiredAccess, grantedAccess, true, secDesc);
-                return NtStatus::Success;
-            }
         }
 
         // 3. WRITE_OWNER with SeTakeOwnershipPrivilege
         if ((remainingDesired & WRITE_OWNER) && token.hasPrivilege(SE_TAKE_OWNERSHIP_NAME, true)) {
             grantedAccess |= WRITE_OWNER;
             remainingDesired &= ~WRITE_OWNER;
-            if (remainingDesired == 0) {
-                recordAudit(token.getUserSid(), objectName, desiredAccess, grantedAccess, true, secDesc);
-                return NtStatus::Success;
+        }
+
+        // 4. SeBackupPrivilege / SeRestorePrivilege overrides
+        if (token.hasPrivilege(SE_BACKUP_NAME, true)) {
+            uint32_t backupRights = remainingDesired & (READ_CONTROL | FILE_READ_DATA);
+            if (backupRights != 0) {
+                grantedAccess |= backupRights;
+                remainingDesired &= ~backupRights;
+                g_SeTelemetry.totalBackupRestoreOverrides++;
+            }
+        }
+        if (token.hasPrivilege(SE_RESTORE_NAME, true)) {
+            uint32_t restoreRights = remainingDesired & (WRITE_DAC | WRITE_OWNER | DELETE | FILE_WRITE_DATA | FILE_APPEND_DATA);
+            if (restoreRights != 0) {
+                grantedAccess |= restoreRights;
+                remainingDesired &= ~restoreRights;
+                g_SeTelemetry.totalBackupRestoreOverrides++;
             }
         }
 
-        // 4. Owner privilege: Owner always has READ_CONTROL and WRITE_DAC
+        // 5. Owner privilege: Owner always has READ_CONTROL and WRITE_DAC
         if (secDesc.getOwner() && token.hasSid(*secDesc.getOwner(), false)) {
             uint32_t ownerGrant = remainingDesired & (READ_CONTROL | WRITE_DAC);
             grantedAccess |= ownerGrant;
             remainingDesired &= ~ownerGrant;
-            if (remainingDesired == 0) {
-                recordAudit(token.getUserSid(), objectName, desiredAccess, grantedAccess, true, secDesc);
-                return NtStatus::Success;
-            }
         }
 
-        // 5. Check DACL presence
+        // 6. MAXIMUM_ALLOWED evaluation
+        if (isMaximumAllowed) {
+            g_SeTelemetry.totalMaximumAllowedEvaluations++;
+            uint32_t maxAllowed = grantedAccess;
+
+            if (secDesc.getOwner() && token.hasSid(*secDesc.getOwner(), false)) {
+                maxAllowed |= (READ_CONTROL | WRITE_DAC);
+            }
+            if (token.hasPrivilege(SE_TAKE_OWNERSHIP_NAME, true)) {
+                maxAllowed |= WRITE_OWNER;
+            }
+            if (token.hasPrivilege(SE_SECURITY_NAME, true)) {
+                maxAllowed |= ACCESS_SYSTEM_SECURITY;
+            }
+            if (token.hasPrivilege(SE_BACKUP_NAME, true)) {
+                maxAllowed |= (READ_CONTROL | FILE_READ_DATA);
+            }
+            if (token.hasPrivilege(SE_RESTORE_NAME, true)) {
+                maxAllowed |= (WRITE_DAC | WRITE_OWNER | DELETE | FILE_WRITE_DATA | FILE_APPEND_DATA);
+            }
+
+            if (!secDesc.hasDacl()) {
+                maxAllowed |= (STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL);
+            } else if (secDesc.getDacl() && secDesc.getDacl()->getAceCount() > 0) {
+                uint32_t allowed = 0;
+                uint32_t denied = 0;
+                for (const auto& ace : secDesc.getDacl()->getAces()) {
+                    uint32_t mask = ace.mask;
+                    RtlMapGenericMask(mask, genericMapping);
+                    if (ace.type == AceType::AccessDenied) {
+                        if (token.hasSid(ace.sid, true)) {
+                            denied |= mask;
+                        }
+                    } else if (ace.type == AceType::AccessAllowed) {
+                        if (token.hasSid(ace.sid, false)) {
+                            allowed |= (mask & ~denied);
+                        }
+                    }
+                }
+                maxAllowed |= allowed;
+            }
+
+            // Apply Mandatory Integrity restriction to maxAllowed
+            if (secDesc.hasMandatoryLabel()) {
+                uint32_t objIntegrity = secDesc.getIntegrityLevel();
+                uint32_t subIntegrity = token.getIntegrityLevel();
+                uint32_t policy = secDesc.getIntegrityPolicy();
+                if (subIntegrity < objIntegrity) {
+                    if (policy & SYSTEM_MANDATORY_LABEL_NO_WRITE_UP) {
+                        maxAllowed &= ~(WRITE_DAC | WRITE_OWNER | DELETE | FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE);
+                    }
+                    if (policy & SYSTEM_MANDATORY_LABEL_NO_READ_UP) {
+                        maxAllowed &= ~(READ_CONTROL | FILE_READ_DATA | GENERIC_READ);
+                    }
+                    if (policy & SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP) {
+                        maxAllowed &= ~(FILE_EXECUTE | GENERIC_EXECUTE);
+                    }
+                }
+            }
+
+            if ((remainingDesired & ~maxAllowed) != 0 || maxAllowed == 0) {
+                g_SeTelemetry.totalAccessChecksDenied++;
+                recordAudit(token.getUserSid(), objectName, desiredAccess, 0, false, secDesc);
+                return NtStatus::AccessDenied;
+            }
+
+            grantedAccess = maxAllowed;
+            g_SeTelemetry.totalAccessChecksGranted++;
+            recordAudit(token.getUserSid(), objectName, desiredAccess, grantedAccess, true, secDesc);
+            return NtStatus::Success;
+        }
+
+        // 7. Check if all desired rights already satisfied
+        if (remainingDesired == 0) {
+            g_SeTelemetry.totalAccessChecksGranted++;
+            recordAudit(token.getUserSid(), objectName, desiredAccess, grantedAccess, true, secDesc);
+            return NtStatus::Success;
+        }
+
+        // 8. Check DACL presence
         if (!secDesc.hasDacl()) {
             // Null DACL = Full access granted to everyone
-            grantedAccess = desiredAccess;
+            grantedAccess |= remainingDesired;
+            g_SeTelemetry.totalAccessChecksGranted++;
             recordAudit(token.getUserSid(), objectName, desiredAccess, grantedAccess, true, secDesc);
             return NtStatus::Success;
         }
@@ -794,43 +1276,35 @@ public:
         const auto& daclOpt = secDesc.getDacl();
         if (!daclOpt || daclOpt->getAceCount() == 0) {
             // Empty DACL = Access denied to everyone
+            g_SeTelemetry.totalAccessChecksDenied++;
             recordAudit(token.getUserSid(), objectName, desiredAccess, 0, false, secDesc);
             return NtStatus::AccessDenied;
         }
 
-        // 6. Traverse DACL ACEs in order
+        // 9. Traverse DACL ACEs in canonical order
         for (const auto& ace : daclOpt->getAces()) {
             uint32_t aceMask = ace.mask;
-            if (aceMask & GENERIC_ALL) {
-                aceMask |= (STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL);
-            }
-            if (aceMask & GENERIC_READ) {
-                aceMask |= (STANDARD_RIGHTS_READ | FILE_READ_DATA);
-            }
-            if (aceMask & GENERIC_WRITE) {
-                aceMask |= (STANDARD_RIGHTS_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA);
-            }
-            if (aceMask & GENERIC_EXECUTE) {
-                aceMask |= (STANDARD_RIGHTS_EXECUTE | FILE_EXECUTE);
-            }
+            RtlMapGenericMask(aceMask, genericMapping);
 
             if (ace.type == AceType::AccessDenied) {
-                // Deny ACE: matches if token has SID (even if group is deny-only!)
+                // Deny ACE matches even if group is deny-only
                 if (token.hasSid(ace.sid, true)) {
                     if ((remainingDesired & aceMask) != 0) {
                         grantedAccess = 0;
+                        g_SeTelemetry.totalAccessChecksDenied++;
                         recordAudit(token.getUserSid(), objectName, desiredAccess, 0, false, secDesc);
                         return NtStatus::AccessDenied;
                     }
                 }
             } else if (ace.type == AceType::AccessAllowed) {
-                // Allow ACE: matches ONLY IF token has SID AND group is NOT deny-only!
+                // Allow ACE matches ONLY IF group is NOT deny-only
                 if (token.hasSid(ace.sid, false)) {
                     uint32_t matched = (remainingDesired & aceMask);
                     grantedAccess |= matched;
                     remainingDesired &= ~matched;
 
                     if (remainingDesired == 0) {
+                        g_SeTelemetry.totalAccessChecksGranted++;
                         recordAudit(token.getUserSid(), objectName, desiredAccess, grantedAccess, true, secDesc);
                         return NtStatus::Success;
                     }
@@ -839,11 +1313,15 @@ public:
         }
 
         bool success = (remainingDesired == 0);
+        if (success) {
+            g_SeTelemetry.totalAccessChecksGranted++;
+        } else {
+            g_SeTelemetry.totalAccessChecksDenied++;
+        }
         recordAudit(token.getUserSid(), objectName, desiredAccess, grantedAccess, success, secDesc);
         return success ? NtStatus::Success : NtStatus::AccessDenied;
     }
 
-private:
     static void recordAudit(
         const Sid& sid,
         std::wstring_view objName,
@@ -874,5 +1352,138 @@ private:
         }
     }
 };
+
+/**
+ * @brief Computes inherited security descriptor according to Windows NT inheritance rules (SeAssignSecurity).
+ */
+inline NtStatus SeAssignSecurity(
+    const SecurityDescriptor* parentDescriptor,
+    const SecurityDescriptor* explicitDescriptor,
+    bool isDirectory,
+    const TokenObject& subjectToken,
+    const GenericMapping& genericMapping,
+    SecurityDescriptor& newDescriptor
+) {
+    std::lock_guard<std::mutex> lk(g_SeTelemetryMutex);
+    g_SeTelemetry.totalSecurityDescriptorsAssigned++;
+
+    // 1. Assign Owner
+    if (explicitDescriptor && explicitDescriptor->getOwner()) {
+        newDescriptor.setOwner(*explicitDescriptor->getOwner());
+    } else {
+        newDescriptor.setOwner(subjectToken.getUserSid());
+    }
+
+    // 2. Assign Group
+    if (explicitDescriptor && explicitDescriptor->getGroup()) {
+        newDescriptor.setGroup(*explicitDescriptor->getGroup());
+    } else if (!subjectToken.getGroupSids().empty()) {
+        newDescriptor.setGroup(subjectToken.getGroupSids().front());
+    } else {
+        newDescriptor.setGroup(subjectToken.getUserSid());
+    }
+
+    // 3. Assign SACL & Mandatory Label
+    if (explicitDescriptor && explicitDescriptor->hasSacl() && explicitDescriptor->getSacl()) {
+        newDescriptor.setSacl(*explicitDescriptor->getSacl());
+    } else if (parentDescriptor && parentDescriptor->hasSacl() && parentDescriptor->getSacl()) {
+        Acl newSacl;
+        for (const auto& ace : parentDescriptor->getSacl()->getAces()) {
+            if (ace.type == AceType::SystemMandatoryLabel) {
+                newSacl.addAce(ace);
+            } else {
+                bool shouldInherit = isDirectory ? (ace.flags & (CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE))
+                                                 : (ace.flags & OBJECT_INHERIT_ACE);
+                if (shouldInherit) {
+                    Ace childAce = ace;
+                    childAce.flags |= INHERITED_ACE;
+                    if (ace.flags & NO_PROPAGATE_INHERIT_ACE) {
+                        childAce.flags &= ~(CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE | NO_PROPAGATE_INHERIT_ACE);
+                    }
+                    newSacl.addAce(std::move(childAce));
+                    g_SeTelemetry.totalInheritedAcesPropagated++;
+                }
+            }
+        }
+        if (newSacl.getAceCount() > 0) {
+            newDescriptor.setSacl(std::move(newSacl));
+        }
+    } else {
+        newDescriptor.setIntegrityLevel(subjectToken.getIntegrityLevel());
+    }
+
+    // 4. Assign DACL
+    Acl finalDacl;
+    bool daclProtected = explicitDescriptor && (explicitDescriptor->getControl() & SE_DACL_PROTECTED);
+
+    std::vector<Ace> explicitDeny;
+    std::vector<Ace> explicitAllow;
+    if (explicitDescriptor && explicitDescriptor->hasDacl() && explicitDescriptor->getDacl()) {
+        for (const auto& ace : explicitDescriptor->getDacl()->getAces()) {
+            Ace mappedAce = ace;
+            RtlMapGenericMask(mappedAce.mask, genericMapping);
+            if (mappedAce.type == AceType::AccessDenied) {
+                explicitDeny.push_back(mappedAce);
+            } else if (mappedAce.type == AceType::AccessAllowed) {
+                explicitAllow.push_back(mappedAce);
+            }
+        }
+    }
+
+    std::vector<Ace> inheritedDeny;
+    std::vector<Ace> inheritedAllow;
+    if (!daclProtected && parentDescriptor && parentDescriptor->hasDacl() && parentDescriptor->getDacl()) {
+        for (const auto& ace : parentDescriptor->getDacl()->getAces()) {
+            bool shouldInherit = isDirectory ? (ace.flags & (CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE))
+                                             : (ace.flags & OBJECT_INHERIT_ACE);
+            if (shouldInherit) {
+                Ace childAce = ace;
+                childAce.flags |= INHERITED_ACE;
+                if (ace.flags & NO_PROPAGATE_INHERIT_ACE) {
+                    childAce.flags &= ~(CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE | NO_PROPAGATE_INHERIT_ACE);
+                }
+                childAce.flags &= ~INHERIT_ONLY_ACE;
+                RtlMapGenericMask(childAce.mask, genericMapping);
+
+                if (childAce.type == AceType::AccessDenied) {
+                    inheritedDeny.push_back(childAce);
+                } else if (childAce.type == AceType::AccessAllowed) {
+                    inheritedAllow.push_back(childAce);
+                }
+                g_SeTelemetry.totalInheritedAcesPropagated++;
+            }
+        }
+    }
+
+    // Canonical DACL Order: Explicit Deny -> Explicit Allow -> Inherited Deny -> Inherited Allow
+    for (auto& a : explicitDeny) finalDacl.addAce(std::move(a));
+    for (auto& a : explicitAllow) finalDacl.addAce(std::move(a));
+    for (auto& a : inheritedDeny) finalDacl.addAce(std::move(a));
+    for (auto& a : inheritedAllow) finalDacl.addAce(std::move(a));
+
+    if (finalDacl.getAceCount() > 0 || (explicitDescriptor && explicitDescriptor->hasDacl())) {
+        newDescriptor.setDacl(std::move(finalDacl));
+        uint16_t ctrl = newDescriptor.getControl() | SE_DACL_PRESENT;
+        if (!inheritedDeny.empty() || !inheritedAllow.empty()) {
+            ctrl |= SE_DACL_AUTO_INHERITED;
+        }
+        newDescriptor.setControl(ctrl);
+    }
+
+    return NtStatus::Success;
+}
+
+/**
+ * @brief Validates a security descriptor's structural integrity.
+ */
+inline bool RtlValidSecurityDescriptor(const SecurityDescriptor& sd) noexcept {
+    if (sd.hasDacl() && sd.getDacl().has_value()) {
+        const auto& dacl = *sd.getDacl();
+        for (const auto& ace : dacl.getAces()) {
+            if (ace.sid.getRevision() == 0) return false;
+        }
+    }
+    return true;
+}
 
 } // namespace micant::se
