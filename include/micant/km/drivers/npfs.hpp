@@ -28,9 +28,9 @@
 #include <span>
 #include <optional>
 #include <unordered_map>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "io.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/io.hpp"
 
 namespace micant::npfs {
 

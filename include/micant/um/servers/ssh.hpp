@@ -14,10 +14,10 @@
 #include <cstdint>
 #include <random>
 #include <algorithm>
-#include "ntstatus.hpp"
-#include "scm.hpp"
-#include "version.hpp"
-#include "conpty.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/servers/conpty.hpp"
 
 namespace micant::ssh {
 

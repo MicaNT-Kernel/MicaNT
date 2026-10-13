@@ -37,12 +37,11 @@
 // ============================================================================
 
 #pragma once
-
-#include "ntdef.hpp"
-#include "ole32.hpp"
-#include "bootvid.hpp"
-#include "ldr.hpp"
-#include "version.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/km/hal/bootvid.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 #include <cstdint>
 #include <cstddef>

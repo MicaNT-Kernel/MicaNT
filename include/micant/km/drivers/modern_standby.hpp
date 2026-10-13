@@ -39,12 +39,11 @@
 #include <iomanip>
 #include <algorithm>
 #include <functional>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "po.hpp"
-#include "version.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/po.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::standby {
 

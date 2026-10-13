@@ -8,9 +8,9 @@
 #include <mutex>
 #include <unordered_map>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "bootvid.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/hal/bootvid.hpp"
 
 namespace micant::conhost {
 

@@ -22,10 +22,10 @@
 #include <span>
 #include <cstring>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "driver.hpp"
-#include "io.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/driver.hpp"
+#include "micant/km/executive/io.hpp"
 
 namespace micant::storage {
 

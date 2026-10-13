@@ -22,11 +22,10 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "se.hpp"
-#include "sam.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/se.hpp"
+#include "micant/um/subsystems/sam.hpp"
 
 namespace micant::lsass {
 

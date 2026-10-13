@@ -14,10 +14,10 @@
 #include <chrono>
 #include <deque>
 #include <thread>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ob.hpp"
-#include "ke.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/core/ke.hpp"
 
 namespace micant::sync {
 

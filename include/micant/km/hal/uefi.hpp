@@ -5,9 +5,9 @@
 #include <vector>
 #include <span>
 #include <string>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "boot.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/hal/boot.hpp"
 
 namespace micant::uefi {
 

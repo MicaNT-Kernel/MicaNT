@@ -37,13 +37,12 @@
 #include <sstream>
 #include <cmath>
 #include <cwchar>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "prismaudio.hpp"
-#include "ole32.hpp"
-#include "scm.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/prismaudio.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::wasapi {
 

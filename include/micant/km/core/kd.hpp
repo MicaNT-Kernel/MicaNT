@@ -47,11 +47,10 @@
 #include <cstdarg>
 #include <cstdio>
 #include <span>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ke.hpp"
-#include "trap.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/ke.hpp"
+#include "micant/km/core/trap.hpp"
 
 namespace micant::kd {
 

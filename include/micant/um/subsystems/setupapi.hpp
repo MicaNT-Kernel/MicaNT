@@ -23,13 +23,12 @@
 #include <sstream>
 #include <iomanip>
 #include <atomic>
-
-#include "ntdef.hpp"
-#include "heap.hpp"
-#include "kernel32.hpp"
-#include "ole32.hpp"
-#include "cm.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/km/executive/heap.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/km/executive/cm.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::setupapi {
 

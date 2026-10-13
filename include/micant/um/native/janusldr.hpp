@@ -12,10 +12,10 @@
 #include <mutex>
 #include <cstring>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "pe.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/pe.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::janus {
 

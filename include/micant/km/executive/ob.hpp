@@ -12,8 +12,8 @@
 #include <algorithm>
 #include <chrono>
 #include <mutex>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
 
 namespace micant::ob {
 

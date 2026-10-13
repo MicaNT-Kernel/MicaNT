@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string_view>
 #include <concepts>
-#include "ntstatus.hpp"
+#include "micant/shared/ntstatus.hpp"
 
 // ============================================================================
 // Cross-Platform Calling Conventions & Windows ABI Types

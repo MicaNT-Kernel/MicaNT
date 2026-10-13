@@ -7,11 +7,11 @@
 #include <memory>
 #include <unordered_map>
 #include <string>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ps.hpp"
-#include "heap.hpp"
-#include "dispatcher.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/heap.hpp"
+#include "micant/km/core/dispatcher.hpp"
 
 namespace micant::ldr {
 

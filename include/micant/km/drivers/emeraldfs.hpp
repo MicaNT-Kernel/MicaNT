@@ -9,13 +9,12 @@
 // ============================================================================
 
 #pragma once
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "storage.hpp"
-#include "ntfs.hpp"
-#include "fat32.hpp"
-#include "fs.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/drivers/storage.hpp"
+#include "micant/km/drivers/ntfs.hpp"
+#include "micant/km/drivers/fat32.hpp"
+#include "micant/km/drivers/fs.hpp"
 #include <string>
 #include <string_view>
 #include <vector>

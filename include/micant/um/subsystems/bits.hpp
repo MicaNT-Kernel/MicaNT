@@ -6,12 +6,11 @@
 // ============================================================================
 
 #pragma once
-
-#include "ole32.hpp"
-#include "oleaut32.hpp"
-#include "fs.hpp"
-#include "wininet.hpp"
-#include "janusldr.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/oleaut32.hpp"
+#include "micant/km/drivers/fs.hpp"
+#include "micant/um/subsystems/wininet.hpp"
+#include "micant/um/native/janusldr.hpp"
 
 #include <string>
 #include <vector>

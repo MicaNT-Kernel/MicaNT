@@ -31,13 +31,12 @@
 #include <chrono>
 #include <cstring>
 #include <cwchar>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "ldr.hpp"
-#include "ws2_32.hpp"
-#include "tcpip.hpp"
-#include "sspi.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/ws2_32.hpp"
+#include "micant/km/drivers/tcpip.hpp"
+#include "micant/um/subsystems/sspi.hpp"
 
 namespace micant::wininet {
 

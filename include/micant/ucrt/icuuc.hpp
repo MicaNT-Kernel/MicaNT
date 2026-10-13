@@ -12,8 +12,8 @@
 #include <cstdint>
 #include <cstddef>
 #include <string_view>
-#include "ntdef.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::icuuc {
 

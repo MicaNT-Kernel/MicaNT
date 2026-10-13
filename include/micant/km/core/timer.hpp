@@ -12,11 +12,11 @@
 #include <algorithm>
 #include <memory>
 #include <iostream>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ke.hpp"
-#include "sync.hpp"
-#include "ob.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/ke.hpp"
+#include "micant/km/core/sync.hpp"
+#include "micant/km/executive/ob.hpp"
 
 namespace micant::timer {
 

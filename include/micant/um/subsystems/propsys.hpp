@@ -12,8 +12,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
-#include "ntdef.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::propsys {
 

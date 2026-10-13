@@ -14,10 +14,10 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ke.hpp"
-#include "probe.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/ke.hpp"
+#include "micant/km/executive/probe.hpp"
 
 namespace micant::ex {
 

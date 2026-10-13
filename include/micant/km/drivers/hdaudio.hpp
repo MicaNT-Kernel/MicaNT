@@ -40,14 +40,13 @@
 #include <iomanip>
 #include <algorithm>
 #include <span>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "janusldr.hpp"
-#include "scm.hpp"
-#include "version.hpp"
-#include "pci.hpp"
-#include "prismaudio.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/janusldr.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/km/hal/pci.hpp"
+#include "micant/um/subsystems/prismaudio.hpp"
 
 namespace micant::hda {
 

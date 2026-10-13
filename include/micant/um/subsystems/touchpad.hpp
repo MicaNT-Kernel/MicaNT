@@ -52,12 +52,11 @@
 #include <iomanip>
 #include <algorithm>
 #include <functional>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "pointer.hpp"
-#include "version.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/pointer.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::touchpad {
 

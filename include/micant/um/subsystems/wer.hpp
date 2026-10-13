@@ -29,14 +29,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "polarisdiag.hpp"
-#include "ole32.hpp"
-#include "ldr.hpp"
-#include "fs.hpp"
-#include "cm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/polarisdiag.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/km/drivers/fs.hpp"
+#include "micant/km/executive/cm.hpp"
 
 namespace micant::wer {
 

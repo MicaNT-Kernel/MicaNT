@@ -8,10 +8,9 @@
  *
  * Reference: UEFI Specification 2.10, Sections 4, 7, 12.
  */
-
-#include "micant/uefi.hpp"
-#include "micant/boot.hpp"
-#include "micant/bootvid.hpp"
+#include "micant/km/hal/uefi.hpp"
+#include "micant/km/hal/boot.hpp"
+#include "micant/km/hal/bootvid.hpp"
 #include <new>
 #include <vector>
 
@@ -273,8 +272,8 @@ public:
             const char* codeLines[] = {
                 "// MicaNT: Sovereign Executive Dispatcher (kernel/executive.cpp)",
                 "// Clean-room NT 4.0/10.0 Architecture | Dave Cutler Heritage",
-                "#include <micant/ntstatus.hpp>",
-                "#include <micant/pe.hpp>",
+                "#include <micant/shared/ntstatus.hpp>",
+                "#include <micant/um/native/pe.hpp>",
                 "",
                 "extern \"C\" NTSTATUS KiSystemServiceHandler(uint32_t id, void* a) {",
                 "    if (KeGetCurrentIrql() > DISPATCH_LEVEL) return STATUS_FAIL;",

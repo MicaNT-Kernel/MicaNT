@@ -19,11 +19,11 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
-#include "ntdef.hpp"
-#include "cm.hpp"
-#include "ldr.hpp"
-#include "prismx.hpp"
-#include "prism3d.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/km/executive/cm.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/subsystems/prism3d.hpp"
 
 namespace micant::vulkan {
 

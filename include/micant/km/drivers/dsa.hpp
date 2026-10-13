@@ -63,9 +63,8 @@
 #include <algorithm>
 #include <functional>
 #include <cstring>
-
-#include "scm.hpp"
-#include "version.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 namespace micant::dsa {
 

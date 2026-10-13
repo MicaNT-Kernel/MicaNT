@@ -16,11 +16,10 @@
 #include <algorithm>
 #include <deque>
 #include <span>
-
-#include "ntstatus.hpp"
-#include "scm.hpp"
-#include "version.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::rdp {
 

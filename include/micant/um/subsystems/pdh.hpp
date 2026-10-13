@@ -26,11 +26,10 @@
 #include <cmath>
 #include <sstream>
 #include <iomanip>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ldr.hpp"
-#include "scm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/servers/scm.hpp"
 
 namespace micant::pdh {
 

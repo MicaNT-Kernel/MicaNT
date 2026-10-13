@@ -21,12 +21,11 @@
 #include <fstream>
 #include <cstring>
 #include <cwchar>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "ole32.hpp"
-#include "wininet.hpp"
-#include "fs.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/wininet.hpp"
+#include "micant/km/drivers/fs.hpp"
 
 namespace micant::urlmon {
 

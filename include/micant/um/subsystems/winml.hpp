@@ -41,12 +41,11 @@
 // ============================================================================
 
 #pragma once
-
-#include "prism3d12.hpp"
-#include "directml.hpp"
-#include "ole32.hpp"
-#include "ldr.hpp"
-#include "version.hpp"
+#include "micant/um/subsystems/prism3d12.hpp"
+#include "micant/um/subsystems/directml.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 #include <cstdint>
 #include <cstddef>

@@ -19,8 +19,8 @@
 #include <string_view>
 #include <array>
 #include <cstring>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
 
 namespace micant::cpu {
 

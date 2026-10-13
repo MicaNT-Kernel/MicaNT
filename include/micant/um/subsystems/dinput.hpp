@@ -14,9 +14,9 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
-#include "ntdef.hpp"
-#include "prismx.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::dinput {
 

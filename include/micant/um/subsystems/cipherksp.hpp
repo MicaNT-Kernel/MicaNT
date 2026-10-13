@@ -13,9 +13,9 @@
 #include <cstring>
 #include <array>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::crypto {
 

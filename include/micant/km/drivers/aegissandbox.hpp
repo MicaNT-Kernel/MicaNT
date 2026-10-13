@@ -19,11 +19,11 @@
 #include <mutex>
 #include <atomic>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ob.hpp"
-#include "ps.hpp"
-#include "se.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/se.hpp"
 
 namespace micant::aegis {
 

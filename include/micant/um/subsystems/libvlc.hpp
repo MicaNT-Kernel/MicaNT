@@ -10,7 +10,7 @@
 
 #include <cstdint>
 #include <string_view>
-#include "ldr.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::libvlc {
 

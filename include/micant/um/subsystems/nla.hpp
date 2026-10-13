@@ -26,13 +26,12 @@
 #include <sstream>
 #include <iomanip>
 #include <iostream>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "ole32.hpp"
-#include "oleaut32.hpp"
-#include "scm.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/oleaut32.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::nla {
 

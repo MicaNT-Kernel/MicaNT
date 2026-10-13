@@ -11,14 +11,13 @@
  * Referenced exclusively from Microsoft's MIT-licensed win32metadata / Direct2D specifications.
  * 100% clean-room engineering. Zero proprietary, leaked, or decompiled code.
  */
-
-#include <micant/ntdef.hpp>
-#include <micant/ole32.hpp>
-#include <micant/gdi32.hpp>
-#include <micant/dwrite.hpp>
-#include <micant/gdiplus.hpp>
-#include <micant/version.hpp>
-#include <micant/ldr.hpp>
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/gdi32.hpp"
+#include "micant/um/subsystems/dwrite.hpp"
+#include "micant/um/subsystems/gdiplus.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/native/ldr.hpp"
 
 #include <cstdint>
 #include <cstddef>

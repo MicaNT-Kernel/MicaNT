@@ -19,13 +19,12 @@
 // ============================================================================
 
 #pragma once
-
-#include "mfplat.hpp"
-#include "mfreadwrite.hpp"
-#include "d3d11va.hpp"
-#include "d3d12video.hpp"
-#include "ldr.hpp"
-#include "version.hpp"
+#include "micant/um/subsystems/mfplat.hpp"
+#include "micant/um/subsystems/mfreadwrite.hpp"
+#include "micant/um/subsystems/d3d11va.hpp"
+#include "micant/um/subsystems/d3d12video.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 #include <cstdint>
 #include <string>

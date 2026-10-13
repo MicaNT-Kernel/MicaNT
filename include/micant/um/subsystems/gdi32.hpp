@@ -21,12 +21,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cwchar>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "user32.hpp"
-#include "bootvid.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/user32.hpp"
+#include "micant/km/hal/bootvid.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::gdi32 {
 

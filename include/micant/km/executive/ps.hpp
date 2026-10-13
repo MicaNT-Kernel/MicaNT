@@ -10,11 +10,11 @@
 #include <chrono>
 #include <mutex>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ob.hpp"
-#include "mm.hpp"
-#include "se.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/se.hpp"
 
 namespace micant::ps {
 

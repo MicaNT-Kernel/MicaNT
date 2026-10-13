@@ -14,15 +14,14 @@
 #include <string>
 #include <vector>
 #include <atomic>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "kernel32.hpp"
-#include "ldr.hpp"
-#include "scm.hpp"
-#include "sam.hpp"
-#include "lsass.hpp"
-#include "cipherksp.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/sam.hpp"
+#include "micant/um/servers/lsass.hpp"
+#include "micant/um/subsystems/cipherksp.hpp"
 
 namespace micant::advapi32 {
 

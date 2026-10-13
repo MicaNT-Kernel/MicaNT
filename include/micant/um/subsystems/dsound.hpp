@@ -28,11 +28,10 @@
 #include <mutex>
 #include <algorithm>
 #include <string>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "prismaudio.hpp"
-#include "winmm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/prismaudio.hpp"
+#include "micant/um/subsystems/winmm.hpp"
 
 namespace micant::dsound {
 

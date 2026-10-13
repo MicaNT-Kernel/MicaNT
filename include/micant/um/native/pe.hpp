@@ -6,8 +6,8 @@
 #include <span>
 #include <vector>
 #include <optional>
-#include "ntstatus.hpp"
-#include "mm.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/mm.hpp"
 
 namespace micant::pe {
 

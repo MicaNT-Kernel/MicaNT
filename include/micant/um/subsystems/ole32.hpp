@@ -22,11 +22,10 @@
 #include <cstring>
 #include <cwchar>
 #include <cstdio>
-
-#include "ntdef.hpp"
-#include "heap.hpp"
-#include "kernel32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/km/executive/heap.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::ole32 {
 
@@ -804,8 +803,7 @@ inline HRESULT VariantCopy(VARIANTARG* pvargDest, const VARIANTARG* pvargSrc) no
 }
 
 } // namespace micant::ole32
-
-#include "structured_storage.hpp"
+#include "micant/um/subsystems/structured_storage.hpp"
 
 namespace micant::ole32 {
 

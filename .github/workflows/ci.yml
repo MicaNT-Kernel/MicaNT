@@ -19,13 +19,22 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path bin
 
-      - name: Compile Test Runner & Fixtures (Clang C++23)
+      - name: Compile Modular Kernel Subsystems & Test Runner (Clang C++23)
         shell: pwsh
         run: |
           clang++ -O2 -D_CRT_SECURE_NO_WARNINGS test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude -Iinclude/micant kernel/dispatcher.cpp -o bin/dispatcher.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude -Iinclude/micant kernel/syscalls.cpp -o bin/syscalls.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude -Iinclude/micant test/test_runner.cpp bin/dispatcher.o bin/syscalls.o -o bin/micant_tests.exe
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ke/dispatcher.cpp -o bin/ke_dispatcher.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ke/wait.cpp -o bin/ke_wait.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/mm/virtual.cpp -o bin/mm_virtual.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/io/iomgr.cpp -o bin/io_iomgr.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ob/obref.cpp -o bin/ob_obref.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ps/psmgr.cpp -o bin/ps_psmgr.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/cm/ntreg.cpp -o bin/cm_ntreg.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/se/ntsec.cpp -o bin/se_ntsec.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/lpc/ntlpc.cpp -o bin/lpc_ntlpc.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/cc/ccmgr.cpp -o bin/cc_ccmgr.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp bin/ke_dispatcher.o bin/ke_wait.o bin/mm_virtual.o bin/io_iomgr.o bin/ob_obref.o bin/ps_psmgr.o bin/cm_ntreg.o bin/se_ntsec.o bin/lpc_ntlpc.o bin/cc_ccmgr.o -o bin/micant_kernel.exe
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp bin/ke_dispatcher.o bin/ke_wait.o bin/mm_virtual.o bin/io_iomgr.o bin/ob_obref.o bin/ps_psmgr.o bin/cm_ntreg.o bin/se_ntsec.o bin/lpc_ntlpc.o bin/cc_ccmgr.o -o bin/micant_tests.exe
 
       - name: Execute Full 258-Suite Test Battery (100% Pass Rate Required)
         shell: pwsh

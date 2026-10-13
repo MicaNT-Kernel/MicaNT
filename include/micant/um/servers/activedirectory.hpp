@@ -2,9 +2,9 @@
 
 #include <cstdint>
 #include <cstddef>
-#include "ntstatus.hpp"
-#include "version.hpp"
-#include "scm.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/servers/scm.hpp"
 
 #include <string>
 #include <vector>

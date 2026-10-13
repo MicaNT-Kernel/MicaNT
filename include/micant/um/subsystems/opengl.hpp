@@ -24,11 +24,10 @@
 #include <cmath>
 #include <array>
 #include <iostream>
-
-#include "ntdef.hpp"
-#include "gdi32.hpp"
-#include "user32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/gdi32.hpp"
+#include "micant/um/subsystems/user32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::opengl {
 

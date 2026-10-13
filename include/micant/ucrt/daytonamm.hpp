@@ -10,12 +10,11 @@
 // ============================================================================
 
 #pragma once
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "mm.hpp"
-#include "heap.hpp"
-#include "lookaside.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/mm.hpp"
+#include "micant/km/executive/heap.hpp"
+#include "micant/km/executive/lookaside.hpp"
 #include <cstdint>
 #include <vector>
 #include <deque>

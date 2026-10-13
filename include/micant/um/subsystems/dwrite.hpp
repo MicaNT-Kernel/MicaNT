@@ -27,11 +27,10 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ole32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::dwrite {
 

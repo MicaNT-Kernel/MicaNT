@@ -61,9 +61,8 @@
 #include <algorithm>
 #include <functional>
 #include <unordered_map>
-
-#include "scm.hpp"
-#include "version.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 namespace micant::tee {
 

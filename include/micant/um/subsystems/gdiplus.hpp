@@ -1,12 +1,11 @@
 #pragma once
-
-#include <micant/ntdef.hpp>
-#include <micant/ole32.hpp>
-#include <micant/oleaut32.hpp>
-#include <micant/ldr.hpp>
-#include <micant/version.hpp>
-#include <micant/gdi32.hpp>
-#include <micant/bootvid.hpp>
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/oleaut32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/gdi32.hpp"
+#include "micant/km/hal/bootvid.hpp"
 
 #include <cstdint>
 #include <cstddef>

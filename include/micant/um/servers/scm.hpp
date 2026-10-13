@@ -22,12 +22,11 @@
 #include <algorithm>
 #include <sstream>
 #include <cstring>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "driver.hpp"
-#include "npfs.hpp"
-#include "kernel32.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/driver.hpp"
+#include "micant/km/drivers/npfs.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
 
 namespace micant::scm {
 

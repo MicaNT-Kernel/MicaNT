@@ -12,9 +12,8 @@
 // ============================================================================
 
 #pragma once
-
-#include "prismx.hpp"
-#include "prism3d.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/subsystems/prism3d.hpp"
 #include <cstdint>
 #include <vector>
 #include <array>

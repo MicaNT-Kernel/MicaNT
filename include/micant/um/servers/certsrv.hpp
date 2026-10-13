@@ -14,9 +14,8 @@
 #include <algorithm>
 #include <cstring>
 #include <random>
-
-#include "micant/scm.hpp"
-#include "micant/version.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 namespace micant::certsrv {
 

@@ -9,9 +9,9 @@
 #include <unordered_map>
 #include <span>
 #include <optional>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "lpc.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/lpc.hpp"
 
 namespace micant::csrss {
 

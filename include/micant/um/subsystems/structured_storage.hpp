@@ -26,10 +26,9 @@
 #include <algorithm>
 #include <functional>
 #include <span>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "ole32.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/ole32.hpp"
 
 namespace micant::ole32 {
 

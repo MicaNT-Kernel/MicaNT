@@ -1,6 +1,6 @@
 #include <iostream>
 #include <fstream>
-#include "micant/bootvid.hpp"
+#include "micant/km/hal/bootvid.hpp"
 
 int main() {
     std::cout << "[MicaNT Bootvid] Rendering high-resolution boot splash...\n";

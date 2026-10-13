@@ -29,17 +29,16 @@
 #include <algorithm>
 #include <cstring>
 #include <cwchar>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "ole32.hpp"
-#include "oleaut32.hpp"
-#include "hal.hpp"
-#include "mm.hpp"
-#include "fs.hpp"
-#include "tcpip.hpp"
-#include "scm.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/oleaut32.hpp"
+#include "micant/km/hal/hal.hpp"
+#include "micant/km/executive/mm.hpp"
+#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/tcpip.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::wbem {
 

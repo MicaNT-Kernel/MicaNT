@@ -20,10 +20,10 @@
 #include <memory>
 #include <mutex>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "syscalls.hpp"
-#include "dispatcher.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/syscalls.hpp"
+#include "micant/km/core/dispatcher.hpp"
 
 namespace micant::wow64 {
 

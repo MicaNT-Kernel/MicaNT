@@ -15,12 +15,11 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "se.hpp"
-#include "sam.hpp"
-#include "lsass.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/se.hpp"
+#include "micant/um/subsystems/sam.hpp"
+#include "micant/um/servers/lsass.hpp"
 
 namespace micant::winlogon {
 

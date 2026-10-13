@@ -44,14 +44,13 @@
 #include <optional>
 #include <span>
 #include <algorithm>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "janusldr.hpp"
-#include "scm.hpp"
-#include "version.hpp"
-#include "dispatcher.hpp"
-#include "wddm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/janusldr.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/km/core/dispatcher.hpp"
+#include "micant/km/drivers/wddm.hpp"
 
 namespace micant::win32k {
 

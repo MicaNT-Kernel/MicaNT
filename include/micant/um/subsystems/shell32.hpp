@@ -20,13 +20,12 @@
 #include <cstring>
 #include <cwchar>
 #include <cstdarg>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "kernel32.hpp"
-#include "user32.hpp"
-#include "fs.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/user32.hpp"
+#include "micant/km/drivers/fs.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::shell32 {
 

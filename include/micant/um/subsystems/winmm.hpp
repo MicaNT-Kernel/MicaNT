@@ -32,11 +32,10 @@
 #include <algorithm>
 #include <sstream>
 #include <cmath>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "prismaudio.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/prismaudio.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::winmm {
 

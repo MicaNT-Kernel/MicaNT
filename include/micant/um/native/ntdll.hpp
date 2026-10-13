@@ -5,11 +5,11 @@
 #include <string_view>
 #include <span>
 #include <cwchar>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "dispatcher.hpp"
-#include "heap.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/dispatcher.hpp"
+#include "micant/km/executive/heap.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::ntdll {
 

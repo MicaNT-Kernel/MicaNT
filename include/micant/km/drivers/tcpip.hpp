@@ -30,9 +30,9 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ndis.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/drivers/ndis.hpp"
 
 namespace micant::tcpip {
 

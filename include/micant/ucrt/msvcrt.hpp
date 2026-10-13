@@ -35,12 +35,10 @@
 #include <exception>
 #include <atomic>
 #include <iostream>
-
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "kernel32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::msvcrt {
 

@@ -13,10 +13,10 @@
 #include <algorithm>
 #include <mutex>
 #include <sstream>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ob.hpp"
-#include "se.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/executive/se.hpp"
 
 namespace micant::cm {
 

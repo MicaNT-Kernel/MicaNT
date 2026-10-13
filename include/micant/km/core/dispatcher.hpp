@@ -5,8 +5,8 @@
 #include <unordered_map>
 #include <string_view>
 #include <span>
-#include "ntstatus.hpp"
-#include "syscalls.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/syscalls.hpp"
 
 namespace micant::sys {
 

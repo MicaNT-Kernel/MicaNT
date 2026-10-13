@@ -27,10 +27,9 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::wevtapi {
 

@@ -71,14 +71,13 @@
 // ============================================================================
 
 #pragma once
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "kernel32.hpp"
-#include "ldr.hpp"
-#include "version.hpp"
-#include "ole32.hpp"
-#include "fwpuclnt.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/fwpuclnt.hpp"
 
 #include <cstdint>
 #include <cstddef>

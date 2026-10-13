@@ -9,9 +9,8 @@
 // ============================================================================
 
 #pragma once
-
-#include "prismx.hpp"
-#include "ldr.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/native/ldr.hpp"
 #include <cstdint>
 #include <cstddef>
 #include <cmath>

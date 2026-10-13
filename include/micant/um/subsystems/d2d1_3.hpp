@@ -29,15 +29,14 @@
 // ============================================================================
 
 #pragma once
-
-#include "ntdef.hpp"
-#include "ole32.hpp"
-#include "d2d1.hpp"
-#include "dwrite.hpp"
-#include "wcs.hpp"
-#include "pointer.hpp"
-#include "ldr.hpp"
-#include "version.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/d2d1.hpp"
+#include "micant/um/subsystems/dwrite.hpp"
+#include "micant/um/subsystems/wcs.hpp"
+#include "micant/um/subsystems/pointer.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 #include <cstdint>
 #include <string>

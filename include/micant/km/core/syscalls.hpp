@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
-#include "ntstatus.hpp"
-#include "ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/shared/ntdef.hpp"
 
 namespace micant::fs {
 class FileObject;

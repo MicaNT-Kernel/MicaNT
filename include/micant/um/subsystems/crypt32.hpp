@@ -22,12 +22,11 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "kernel32.hpp"
-#include "cipherksp.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/cipherksp.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::crypt32 {
 

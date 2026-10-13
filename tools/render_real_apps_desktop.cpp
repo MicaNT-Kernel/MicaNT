@@ -5,8 +5,7 @@
 #include <memory>
 #include <cmath>
 #include <algorithm>
-
-#include "micant/bootvid.hpp"
+#include "micant/km/hal/bootvid.hpp"
 
 using namespace micant;
 using namespace micant::bootvid;
@@ -138,9 +137,9 @@ int main() {
             "// Clean-room NT 4.0/10.0 Architecture | Dave Cutler Kernel Taxonomy",
             "// ============================================================================",
             "",
-            "#include <micant/ntstatus.hpp>",
-            "#include <micant/pe.hpp>",
-            "#include <micant/ldr.hpp>",
+            "#include "micant/shared/ntstatus.hpp"",
+            "#include "micant/um/native/pe.hpp"",
+            "#include "micant/um/native/ldr.hpp"",
             "",
             "extern \"C\" NTSTATUS KiSystemServiceHandler(uint32_t syscallId, void* args) {",
             "    // Hardware Privilege Ring 0 Execution Gate",

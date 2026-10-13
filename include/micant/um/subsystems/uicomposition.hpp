@@ -27,11 +27,10 @@
 // ============================================================================
 
 #pragma once
-
-#include "prism3d12.hpp"
-#include "dcomp.hpp"
-#include "ldr.hpp"
-#include "version.hpp"
+#include "micant/um/subsystems/prism3d12.hpp"
+#include "micant/um/subsystems/dcomp.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 #include <cstdint>
 #include <string>

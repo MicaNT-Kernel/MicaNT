@@ -19,11 +19,10 @@
 // ============================================================================
 
 #pragma once
-
-#include "prismx.hpp"
-#include "prism3d.hpp"
-#include "dxgkrnl.hpp"
-#include "ldr.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/subsystems/prism3d.hpp"
+#include "micant/km/drivers/dxgkrnl.hpp"
+#include "micant/um/native/ldr.hpp"
 #include <cstdint>
 #include <string>
 #include <vector>

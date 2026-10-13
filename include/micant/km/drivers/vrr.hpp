@@ -43,11 +43,10 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "version.hpp"
-#include "scm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/servers/scm.hpp"
 
 namespace micant::vrr {
 

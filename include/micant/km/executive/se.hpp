@@ -12,9 +12,9 @@
 #include <algorithm>
 #include <span>
 #include <mutex>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ob.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/ob.hpp"
 
 namespace micant::se {
 

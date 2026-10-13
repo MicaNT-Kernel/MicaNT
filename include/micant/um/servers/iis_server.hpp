@@ -30,11 +30,10 @@
 #include <algorithm>
 #include <functional>
 #include <cstring>
-
-#include "ntdef.hpp"
-#include "ldr.hpp"
-#include "scm.hpp"
-#include "version.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 namespace micant::iis {
 

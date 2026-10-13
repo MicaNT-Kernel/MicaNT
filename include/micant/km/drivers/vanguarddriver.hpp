@@ -9,12 +9,11 @@
 // ============================================================================
 
 #pragma once
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "io.hpp"
-#include "driver.hpp"
-#include "prismx.hpp" // for GUID
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/io.hpp"
+#include "micant/km/executive/driver.hpp"
+#include "micant/um/subsystems/prismx.hpp" // for GUID
 #include <cstdint>
 #include <string>
 #include <string_view>

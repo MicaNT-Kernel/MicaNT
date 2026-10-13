@@ -30,15 +30,14 @@
 #include <sstream>
 #include <cmath>
 #include <cstring>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ole32.hpp"
-#include "gdi32.hpp"
-#include "ldr.hpp"
-#include "mfplat.hpp"
-#include "mfsession.hpp"
-#include "d2d1.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/subsystems/gdi32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/mfplat.hpp"
+#include "micant/um/subsystems/mfsession.hpp"
+#include "micant/um/subsystems/d2d1.hpp"
 
 namespace micant::mf::evr {
 

@@ -31,9 +31,9 @@
 #include <iomanip>
 #include <span>
 #include <unordered_map>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "dispatcher.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/dispatcher.hpp"
 
 namespace micant::arm64 {
 

@@ -13,9 +13,8 @@
 // ============================================================================
 
 #pragma once
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
 #include <string>
 #include <vector>
 #include <unordered_map>

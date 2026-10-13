@@ -30,12 +30,11 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "janusldr.hpp"
-#include "scm.hpp"
-#include "version.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/janusldr.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 #ifndef WINAPI
 #define WINAPI __stdcall

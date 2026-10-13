@@ -28,9 +28,9 @@
 #include <algorithm>
 #include <unordered_map>
 #include <chrono>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "storage.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/drivers/storage.hpp"
 
 namespace micant::ntfs {
 

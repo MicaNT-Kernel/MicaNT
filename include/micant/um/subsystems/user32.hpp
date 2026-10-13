@@ -20,11 +20,11 @@
 #include <deque>
 #include <algorithm>
 #include <cstring>
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "ldr.hpp"
-#include "winlogon.hpp"
-#include "prismx.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/servers/winlogon.hpp"
+#include "micant/um/subsystems/prismx.hpp"
 
 namespace micant::user32 {
 

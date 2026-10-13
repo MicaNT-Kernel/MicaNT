@@ -54,11 +54,10 @@
 // ============================================================================
 
 #pragma once
-
-#include "ntdef.hpp"
-#include "cipherksp.hpp"
-#include "ldr.hpp"
-#include "version.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/cipherksp.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 #include <cstdint>
 #include <cstddef>

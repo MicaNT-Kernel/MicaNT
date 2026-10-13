@@ -24,13 +24,12 @@
 #include <span>
 #include <unordered_map>
 #include <sstream>
-
-#include "ntdef.hpp"
-#include "prismx.hpp"
-#include "prism3d.hpp"
-#include "prism_shader_vm.hpp"
-#include "user32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/subsystems/prism3d.hpp"
+#include "micant/um/subsystems/prism_shader_vm.hpp"
+#include "micant/um/subsystems/user32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::d3d9 {
 

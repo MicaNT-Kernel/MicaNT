@@ -67,11 +67,10 @@
 #include <atomic>
 #include <cstring>
 #include <queue>
-
-#include "ntstatus.hpp"
-#include "version.hpp"
-#include "scm.hpp"
-#include "refs.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/km/drivers/refs.hpp"
 
 namespace micant::csvfs {
 

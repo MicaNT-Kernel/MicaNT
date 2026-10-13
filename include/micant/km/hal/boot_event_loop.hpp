@@ -18,11 +18,10 @@
  * Strict clean-room implementation referencing UEFI Specification 2.10 and win32metadata.
  * Zero proprietary, leaked, or decompiled code.
  */
-
-#include "ntdef.hpp"
-#include "uefi.hpp"
-#include "bootvid.hpp"
-#include "input_router.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/km/hal/uefi.hpp"
+#include "micant/km/hal/bootvid.hpp"
+#include "micant/um/subsystems/input_router.hpp"
 
 #include <cstdint>
 #include <string>

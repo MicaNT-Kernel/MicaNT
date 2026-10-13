@@ -16,10 +16,10 @@
 #include <cstring>
 #include <string>
 #include <vector>
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "ldr.hpp"
-#include "tcpip.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/km/drivers/tcpip.hpp"
 
 namespace micant::iphlpapi {
 

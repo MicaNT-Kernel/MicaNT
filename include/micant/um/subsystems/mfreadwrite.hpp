@@ -20,11 +20,10 @@
 // ============================================================================
 
 #pragma once
-
-#include "mfplat.hpp"
-#include "d3d11va.hpp"
-#include "d3d12video.hpp"
-#include "ldr.hpp"
+#include "micant/um/subsystems/mfplat.hpp"
+#include "micant/um/subsystems/d3d11va.hpp"
+#include "micant/um/subsystems/d3d12video.hpp"
+#include "micant/um/native/ldr.hpp"
 
 #include <cstdint>
 #include <string>

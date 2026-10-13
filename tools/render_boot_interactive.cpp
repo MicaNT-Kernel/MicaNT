@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "micant/bootvid.hpp"
-#include "micant/conhost.hpp"
+#include "micant/km/hal/bootvid.hpp"
+#include "micant/um/servers/conhost.hpp"
 
 using namespace micant;
 

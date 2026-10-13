@@ -6,9 +6,9 @@
 #include <memory>
 #include <unordered_map>
 #include <mutex>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "io.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/io.hpp"
 
 namespace micant::driver {
 

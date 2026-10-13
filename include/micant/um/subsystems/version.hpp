@@ -22,10 +22,9 @@
 #include <map>
 #include <algorithm>
 #include <memory>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::version {
 

@@ -6,14 +6,13 @@
 // ============================================================================
 
 #pragma once
-
-#include "prismx.hpp"
-#include "prism3d.hpp"
-#include "prism3d12.hpp"
-#include "prism_shader_vm.hpp"
-#include "prismaudio.hpp"
-#include "xinput.hpp"
-#include "ldr.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/subsystems/prism3d.hpp"
+#include "micant/um/subsystems/prism3d12.hpp"
+#include "micant/um/subsystems/prism_shader_vm.hpp"
+#include "micant/um/subsystems/prismaudio.hpp"
+#include "micant/um/subsystems/xinput.hpp"
+#include "micant/um/native/ldr.hpp"
 #include <cstdint>
 #include <vector>
 #include <string>

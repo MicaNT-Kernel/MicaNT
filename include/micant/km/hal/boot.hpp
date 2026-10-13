@@ -5,8 +5,8 @@
 #include <string_view>
 #include <vector>
 #include <iostream>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
 
 namespace micant::boot {
 

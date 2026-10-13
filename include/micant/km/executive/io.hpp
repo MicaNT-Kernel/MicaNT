@@ -10,11 +10,11 @@
 #include <memory>
 #include <cstring>
 #include <atomic>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ob.hpp"
-#include "ke.hpp"
-#include "mm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/core/ke.hpp"
+#include "micant/km/executive/mm.hpp"
 
 namespace micant::io {
 

@@ -7,12 +7,11 @@
 // ============================================================================
 
 #pragma once
-
-#include "prismx.hpp"
-#include "prism3d.hpp"
-#include "user32.hpp"
-#include "dinput.hpp"
-#include "xinput.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/subsystems/prism3d.hpp"
+#include "micant/um/subsystems/user32.hpp"
+#include "micant/um/subsystems/dinput.hpp"
+#include "micant/um/subsystems/xinput.hpp"
 #include <vector>
 #include <memory>
 #include <string>

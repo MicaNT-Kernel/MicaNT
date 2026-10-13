@@ -12,10 +12,9 @@
 #include <sstream>
 #include <iomanip>
 #include <cstring>
-
-#include "ntstatus.hpp"
-#include "scm.hpp"
-#include "version.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 namespace micant::wds {
 

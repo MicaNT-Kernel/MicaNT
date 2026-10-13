@@ -13,10 +13,9 @@
 // ============================================================================
 
 #pragma once
-
-#include "prism3d.hpp"
-#include "dxva2.hpp"
-#include "ldr.hpp"
+#include "micant/um/subsystems/prism3d.hpp"
+#include "micant/um/subsystems/dxva2.hpp"
+#include "micant/um/native/ldr.hpp"
 #include <vector>
 #include <memory>
 #include <string>

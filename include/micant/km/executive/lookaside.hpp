@@ -4,10 +4,10 @@
 #include <vector>
 #include <mutex>
 #include <memory>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ke.hpp"
-#include "ex.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/ke.hpp"
+#include "micant/km/executive/ex.hpp"
 
 namespace micant::ex {
 

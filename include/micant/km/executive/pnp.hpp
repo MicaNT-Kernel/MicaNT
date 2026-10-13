@@ -40,11 +40,10 @@
 #include <atomic>
 #include <cwchar>
 #include <cstdio>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "io.hpp"
-#include "ob.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/io.hpp"
+#include "micant/km/executive/ob.hpp"
 
 namespace micant::pnp {
 

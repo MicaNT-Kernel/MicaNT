@@ -25,10 +25,9 @@
 #include <sstream>
 #include <iomanip>
 #include <iostream>
-
-#include "ntdef.hpp"
-#include "ldr.hpp"
-#include "scm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/servers/scm.hpp"
 
 namespace micant::scard {
 

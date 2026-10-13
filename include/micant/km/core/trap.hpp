@@ -8,11 +8,11 @@
 #include <iomanip>
 #include <functional>
 #include <atomic>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ke.hpp"
-#include "ps.hpp"
-#include "mm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/ke.hpp"
+#include "micant/km/executive/ps.hpp"
+#include "micant/km/executive/mm.hpp"
 
 namespace micant::ke {
 

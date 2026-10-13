@@ -14,8 +14,7 @@
 // ============================================================================
 
 #pragma once
-
-#include "prismx.hpp"
+#include "micant/um/subsystems/prismx.hpp"
 #include <vector>
 #include <memory>
 #include <cstring>

@@ -54,14 +54,13 @@
 #include <algorithm>
 #include <optional>
 #include <span>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "janusldr.hpp"
-#include "scm.hpp"
-#include "version.hpp"
-#include "io.hpp"
-#include "mm.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/janusldr.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/km/executive/io.hpp"
+#include "micant/km/executive/mm.hpp"
 
 namespace micant::km::cc {
 

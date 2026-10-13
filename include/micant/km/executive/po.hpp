@@ -10,11 +10,11 @@
 #include <algorithm>
 #include <memory>
 #include <functional>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "io.hpp"
-#include "ex_work.hpp"
-#include "fs.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/io.hpp"
+#include "micant/km/executive/ex_work.hpp"
+#include "micant/km/drivers/fs.hpp"
 
 namespace micant::po {
 

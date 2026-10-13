@@ -27,14 +27,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "kernel32.hpp"
-#include "user32.hpp"
-#include "prismx.hpp"
-#include "ole32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/user32.hpp"
+#include "micant/um/subsystems/prismx.hpp"
+#include "micant/um/subsystems/ole32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::dwm {
 

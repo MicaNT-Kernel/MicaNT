@@ -20,11 +20,10 @@
 // ============================================================================
 
 #pragma once
-
-#include "prism3d12.hpp"
-#include "prism_shader_vm.hpp"
-#include "ldr.hpp"
-#include "version.hpp"
+#include "micant/um/subsystems/prism3d12.hpp"
+#include "micant/um/subsystems/prism_shader_vm.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
 
 #include <cstdint>
 #include <string>

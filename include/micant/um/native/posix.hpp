@@ -30,13 +30,12 @@
 #include <algorithm>
 #include <functional>
 #include <chrono>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "lpc.hpp"
-#include "fs.hpp"
-#include "scm.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/lpc.hpp"
+#include "micant/km/drivers/fs.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::posix {
 

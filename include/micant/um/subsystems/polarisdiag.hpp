@@ -21,11 +21,11 @@
 #include <cstring>
 #include <span>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ps.hpp"
-#include "trap.hpp"
-#include "bootvid.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/ps.hpp"
+#include "micant/km/core/trap.hpp"
+#include "micant/km/hal/bootvid.hpp"
 
 namespace micant::polaris {
 

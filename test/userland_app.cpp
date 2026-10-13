@@ -5,9 +5,9 @@
 
 #include <iostream>
 #include <cstring>
-#include "micant/ntstatus.hpp"
-#include "micant/ntdef.hpp"
-#include "micant/ntdll.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/native/ntdll.hpp"
 
 using namespace micant;
 

@@ -20,12 +20,11 @@
 #include <algorithm>
 #include <cstring>
 #include <cwchar>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "user32.hpp"
-#include "gdi32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/user32.hpp"
+#include "micant/um/subsystems/gdi32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::comctl32 {
 

@@ -35,10 +35,9 @@
 // ============================================================================
 
 #pragma once
-
-#include "ldr.hpp"
-#include "version.hpp"
-#include "scm.hpp"
+#include "micant/um/native/ldr.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/um/servers/scm.hpp"
 
 #include <cstdint>
 #include <string>

@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <optional>
 #include <deque>
-#include "ntdef.hpp"
+#include "micant/shared/ntdef.hpp"
 
 namespace micant::mm {
 

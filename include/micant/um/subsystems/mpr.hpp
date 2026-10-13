@@ -11,8 +11,8 @@
 #include <cstdint>
 #include <cwchar>
 #include <cstring>
-#include "ntdef.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::mpr {
 

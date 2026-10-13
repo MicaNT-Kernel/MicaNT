@@ -41,14 +41,13 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
-
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "janusldr.hpp"
-#include "scm.hpp"
-#include "version.hpp"
-#include "storage.hpp"
-#include "pci.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/um/native/janusldr.hpp"
+#include "micant/um/servers/scm.hpp"
+#include "micant/um/subsystems/version.hpp"
+#include "micant/km/drivers/storage.hpp"
+#include "micant/km/hal/pci.hpp"
 
 namespace micant::nvme {
 

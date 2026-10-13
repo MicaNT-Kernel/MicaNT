@@ -16,11 +16,10 @@
 #include <algorithm>
 #include <string>
 #include <vector>
-
-#include "ntdef.hpp"
-#include "kernel32.hpp"
-#include "user32.hpp"
-#include "ldr.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/user32.hpp"
+#include "micant/um/native/ldr.hpp"
 
 namespace micant::user32 {
 

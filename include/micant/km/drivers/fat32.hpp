@@ -24,9 +24,9 @@
 #include <cstring>
 #include <algorithm>
 #include <cwctype>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "storage.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/drivers/storage.hpp"
 
 namespace micant::fat32 {
 

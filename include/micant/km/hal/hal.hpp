@@ -12,9 +12,9 @@
 #include <algorithm>
 #include <unordered_map>
 #include <functional>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "ke.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/core/ke.hpp"
 
 namespace micant::hal {
 

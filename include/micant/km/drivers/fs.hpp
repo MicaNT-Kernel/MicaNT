@@ -10,14 +10,14 @@
 #include <span>
 #include <cstring>
 #include <algorithm>
-#include "ntdef.hpp"
-#include "ntstatus.hpp"
-#include "io.hpp"
-#include "ob.hpp"
-#include "storage.hpp"
-#include "fat32.hpp"
-#include "npfs.hpp"
-#include "ntfs.hpp"
+#include "micant/shared/ntdef.hpp"
+#include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/io.hpp"
+#include "micant/km/executive/ob.hpp"
+#include "micant/km/drivers/storage.hpp"
+#include "micant/km/drivers/fat32.hpp"
+#include "micant/km/drivers/npfs.hpp"
+#include "micant/km/drivers/ntfs.hpp"
 
 namespace micant::fs {
 
