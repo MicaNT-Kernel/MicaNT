@@ -11333,7 +11333,7 @@ void Test_Horizon37_Ring1_PrivilegedServiceDomain_And_FaultIsolation() {
 // ============================================================================
 
 void Test_Horizon38_FilterManager_Minifilter_Architecture() {
-    std::cout << "[TEST] Running Suite 254: Horizon 38 - I/O Filter Manager & Minifilter Driver Architecture...\n";
+    std::cout << "[TEST] Running Suite 254: Horizon 38 - I/O Filter Manager & Minifilter Driver Architecture...\n" << std::flush;
 
     // ------------------------------------------------------------------------
     // Phase 1: Subsystem Initialization, JanusLDR Exports & SCM/Version DB

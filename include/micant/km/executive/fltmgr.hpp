@@ -24,6 +24,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -47,6 +48,15 @@
 #include "version.hpp"
 
 namespace micant::fltmgr {
+
+inline std::string WideToNarrow(const std::wstring& wstr) {
+    std::string result;
+    result.reserve(wstr.size());
+    for (wchar_t wc : wstr) {
+        result.push_back(static_cast<char>(wc < 128 ? wc : '?'));
+    }
+    return result;
+}
 
 // ============================================================================
 // 1. Basic Win32 / NT Types & Constants
@@ -317,6 +327,7 @@ public:
         m_clientToPortMap.clear();
         m_fileContexts.clear();
         m_streamContexts.clear();
+        m_allocatedContexts.clear();
 
         // Seed Default Exemplar Minifilters
         registerDefaultMinifilters();
@@ -331,6 +342,7 @@ public:
         m_clientToPortMap.clear();
         m_fileContexts.clear();
         m_streamContexts.clear();
+        m_allocatedContexts.clear();
         m_activityLog.clear();
         m_telemetry = FLT_TELEMETRY{};
         m_initialized = false;
@@ -347,9 +359,15 @@ public:
         RegisteredFilter rf{};
         rf.FilterHandle = handle;
         rf.Registration = reg;
-        try {
-            rf.NumericAltitude = std::stod(reg.Altitude);
-        } catch (...) {
+        if (!reg.Altitude.empty()) {
+            char* endPtr = nullptr;
+            double alt = std::strtod(reg.Altitude.c_str(), &endPtr);
+            if (endPtr != reg.Altitude.c_str() && alt > 0.0) {
+                rf.NumericAltitude = alt;
+            } else {
+                rf.NumericAltitude = 300000.0;
+            }
+        } else {
             rf.NumericAltitude = 300000.0;
         }
         rf.IsStarted = false;
@@ -460,7 +478,24 @@ public:
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
         if (m_filters.find(filterHandle) == m_filters.end()) return NtStatus::NotFound;
         outCtx = std::make_shared<FltContext>(type, size, 'CTX1');
-        m_telemetry.activeContextsCount++;
+        m_allocatedContexts[outCtx.get()] = outCtx;
+        m_telemetry.activeContextsCount = static_cast<uint32_t>(m_allocatedContexts.size());
+        return NtStatus::Success;
+    }
+
+    NtStatus releaseContext(void* rawContext) {
+        if (!rawContext) return NtStatus::InvalidParameter;
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        auto it = m_allocatedContexts.find(rawContext);
+        if (it != m_allocatedContexts.end()) {
+            if (it->second->release()) {
+                m_allocatedContexts.erase(it);
+                m_telemetry.activeContextsCount = static_cast<uint32_t>(m_allocatedContexts.size());
+            }
+            return NtStatus::Success;
+        }
+        auto* ctx = reinterpret_cast<FltContext*>(rawContext);
+        ctx->release();
         return NtStatus::Success;
     }
 
@@ -760,7 +795,7 @@ private:
         FLT_OPERATION_REGISTRATION actCreateOp{};
         actCreateOp.MajorFunction = IRP_MJ_CREATE;
         actCreateOp.PreOperation = [this](FLT_CALLBACK_DATA* Data, void**) -> FltPreopCallbackStatus {
-            logActivity("CREATE: " + std::string(Data->Iopb.TargetFilePath.begin(), Data->Iopb.TargetFilePath.end()));
+            logActivity("CREATE: " + WideToNarrow(Data->Iopb.TargetFilePath));
             return FltPreopCallbackStatus::SuccessNoCallback;
         };
 
@@ -792,6 +827,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> m_clientToPortMap; // ClientHandle -> PortId
     std::unordered_map<uint64_t, std::shared_ptr<FltContext>> m_fileContexts;
     std::unordered_map<std::wstring, std::shared_ptr<FltContext>> m_streamContexts;
+    std::unordered_map<void*, std::shared_ptr<FltContext>> m_allocatedContexts;
     std::vector<std::string> m_activityLog;
 
     FLT_TELEMETRY m_telemetry{};
@@ -843,8 +879,7 @@ inline NtStatus WINAPI FltAllocateContext(
 
 inline void WINAPI FltReleaseContext(void* Context) {
     if (Context) {
-        auto* ctx = reinterpret_cast<FltContext*>(Context);
-        ctx->release();
+        TitanFilterManagerSubsystem::Instance().releaseContext(Context);
     }
 }
 
