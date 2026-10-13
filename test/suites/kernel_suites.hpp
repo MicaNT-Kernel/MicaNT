@@ -11328,6 +11328,361 @@ void Test_Horizon37_Ring1_PrivilegedServiceDomain_And_FaultIsolation() {
     std::cout << "[TEST] Suite 253: Horizon 37 - Ring 1 Privileged Service Domain & Fault Isolation PASSED.\n";
 }
 
+// ============================================================================
+// Suite 254: Horizon 38 - I/O Filter Manager & Minifilter Driver Architecture
+// ============================================================================
+
+void Test_Horizon38_FilterManager_Minifilter_Architecture() {
+    std::cout << "[TEST] Running Suite 254: Horizon 38 - I/O Filter Manager & Minifilter Driver Architecture...\n";
+
+    // ------------------------------------------------------------------------
+    // Phase 1: Subsystem Initialization, JanusLDR Exports & SCM/Version DB
+    // ------------------------------------------------------------------------
+    {
+        fltmgr::InitializeFilterManagerSubsystemExports();
+        auto& fltMgr = fltmgr::TitanFilterManagerSubsystem::Instance();
+        fltMgr.resetForTesting();
+
+        // 1. JanusLDR Driver Exports Verification
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltRegisterFilter") != nullptr, "fltmgr.sys FltRegisterFilter must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltStartFiltering") != nullptr, "fltmgr.sys FltStartFiltering must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltUnregisterFilter") != nullptr, "fltmgr.sys FltUnregisterFilter must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltDispatchOperation") != nullptr, "fltmgr.sys FltDispatchOperation must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltAllocateContext") != nullptr, "fltmgr.sys FltAllocateContext must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltReleaseContext") != nullptr, "fltmgr.sys FltReleaseContext must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltCreateCommunicationPort") != nullptr, "fltmgr.sys FltCreateCommunicationPort must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltCloseCommunicationPort") != nullptr, "fltmgr.sys FltCloseCommunicationPort must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FilterConnectCommunicationPort") != nullptr, "fltmgr.sys FilterConnectCommunicationPort must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FilterSendMessage") != nullptr, "fltmgr.sys FilterSendMessage must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FilterClose") != nullptr, "fltmgr.sys FilterClose must exist");
+        TEST_ASSERT(ldr.getExport("fltmgr.sys", "FltGetTelemetry") != nullptr, "fltmgr.sys FltGetTelemetry must exist");
+
+        // 2. SCM Service Record Verification
+        auto& scmMgr = scm::ServiceControlManager::get();
+        auto fltSvc = scmMgr.getServiceRecord(L"fltmgr");
+        TEST_ASSERT(fltSvc != nullptr, "fltmgr service record must exist in SCM");
+        TEST_ASSERT(fltSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "fltmgr must be a kernel driver");
+        TEST_ASSERT(fltSvc->startType == scm::SERVICE_BOOT_START, "fltmgr must be boot start");
+        TEST_ASSERT(fltSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "fltmgr must be running");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("fltmgr.sys") != nullptr, "fltmgr.sys must be registered in Version Database");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 2: Dynamic Minifilter Registration & Altitude Stacking
+    // ------------------------------------------------------------------------
+    uint32_t dynamicFilterHandle = 0;
+    bool unloadCalled = false;
+    {
+        fltmgr::FLT_REGISTRATION dynReg{};
+        dynReg.FilterName = L"SovereignReplicationFlt";
+        dynReg.Altitude = fltmgr::ALTITUDE_REPLICATION; // 265000
+        dynReg.FilterUnloadCallback = [&unloadCalled](uint32_t) -> NtStatus {
+            unloadCalled = true;
+            return NtStatus::Success;
+        };
+
+        // Add dummy operation
+        fltmgr::FLT_OPERATION_REGISTRATION op{};
+        op.MajorFunction = fltmgr::IRP_MJ_READ;
+        op.PreOperation = [](fltmgr::FLT_CALLBACK_DATA*, void**) -> fltmgr::FltPreopCallbackStatus {
+            return fltmgr::FltPreopCallbackStatus::SuccessNoCallback;
+        };
+        dynReg.OperationRegistration.push_back(op);
+
+        NtStatus st = fltmgr::FltRegisterFilter(&dynReg, &dynamicFilterHandle);
+        TEST_ASSERT(st == NtStatus::Success, "FltRegisterFilter must succeed for dynamic filter");
+        TEST_ASSERT(dynamicFilterHandle > 0, "dynamicFilterHandle must be non-zero");
+
+        NtStatus stStart = fltmgr::FltStartFiltering(dynamicFilterHandle);
+        TEST_ASSERT(stStart == NtStatus::Success, "FltStartFiltering must succeed");
+
+        auto telem = fltmgr::FltQueryTelemetry();
+        TEST_ASSERT(telem.activeFiltersCount >= 4, "Active filters count must include 3 default + 1 dynamic");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: Top-Down Pre-Operation Traversal (Altitude Order)
+    // ------------------------------------------------------------------------
+    {
+        std::vector<std::string> traversalOrder;
+
+        fltmgr::FLT_REGISTRATION highReg{};
+        highReg.FilterName = L"HighFilter";
+        highReg.Altitude = "390000";
+        fltmgr::FLT_OPERATION_REGISTRATION highOp{};
+        highOp.MajorFunction = fltmgr::IRP_MJ_QUERY_INFORMATION;
+        highOp.PreOperation = [&traversalOrder](fltmgr::FLT_CALLBACK_DATA*, void**) -> fltmgr::FltPreopCallbackStatus {
+            traversalOrder.push_back("HighFilter");
+            return fltmgr::FltPreopCallbackStatus::SuccessWithCallback;
+        };
+        highOp.PostOperation = [&traversalOrder](fltmgr::FLT_CALLBACK_DATA*, void*, uint32_t) -> fltmgr::FltPostopCallbackStatus {
+            traversalOrder.push_back("Post_HighFilter");
+            return fltmgr::FltPostopCallbackStatus::FinishedProcessing;
+        };
+        highReg.OperationRegistration.push_back(highOp);
+
+        fltmgr::FLT_REGISTRATION lowReg{};
+        lowReg.FilterName = L"LowFilter";
+        lowReg.Altitude = "120000";
+        fltmgr::FLT_OPERATION_REGISTRATION lowOp{};
+        lowOp.MajorFunction = fltmgr::IRP_MJ_QUERY_INFORMATION;
+        lowOp.PreOperation = [&traversalOrder](fltmgr::FLT_CALLBACK_DATA*, void**) -> fltmgr::FltPreopCallbackStatus {
+            traversalOrder.push_back("LowFilter");
+            return fltmgr::FltPreopCallbackStatus::SuccessWithCallback;
+        };
+        lowOp.PostOperation = [&traversalOrder](fltmgr::FLT_CALLBACK_DATA*, void*, uint32_t) -> fltmgr::FltPostopCallbackStatus {
+            traversalOrder.push_back("Post_LowFilter");
+            return fltmgr::FltPostopCallbackStatus::FinishedProcessing;
+        };
+        lowReg.OperationRegistration.push_back(lowOp);
+
+        uint32_t hHigh = 0, hLow = 0;
+        fltmgr::FltRegisterFilter(&highReg, &hHigh);
+        fltmgr::FltStartFiltering(hHigh);
+        fltmgr::FltRegisterFilter(&lowReg, &hLow);
+        fltmgr::FltStartFiltering(hLow);
+
+        fltmgr::FLT_CALLBACK_DATA cbData{};
+        cbData.Iopb.MajorFunction = fltmgr::IRP_MJ_QUERY_INFORMATION;
+        cbData.Iopb.TargetFilePath = L"\\Device\\HarddiskVolume1\\test.dat";
+
+        NtStatus stDisp = fltmgr::FltDispatchOperation(&cbData);
+        TEST_ASSERT(stDisp == NtStatus::Success, "FltDispatchOperation must succeed");
+
+        // Verify Pre-Op ordering: HighFilter (390000) must run BEFORE LowFilter (120000)
+        TEST_ASSERT(traversalOrder.size() == 4, "traversalOrder must contain 4 callback entries");
+        TEST_ASSERT(traversalOrder[0] == "HighFilter", "HighFilter pre-op must execute first");
+        TEST_ASSERT(traversalOrder[1] == "LowFilter", "LowFilter pre-op must execute second");
+
+        // --------------------------------------------------------------------
+        // Phase 4: Bottom-Up Post-Operation Callback Unwinding Order
+        // --------------------------------------------------------------------
+        // Post-op executes in reverse (ascending altitude) order: LowFilter post-op before HighFilter post-op!
+        TEST_ASSERT(traversalOrder[2] == "Post_LowFilter", "LowFilter post-op must execute before HighFilter post-op");
+        TEST_ASSERT(traversalOrder[3] == "Post_HighFilter", "HighFilter post-op must execute last");
+
+        fltmgr::FltUnregisterFilter(hHigh);
+        fltmgr::FltUnregisterFilter(hLow);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: Short-Circuiting I/O with FLT_PREOP_COMPLETE
+    // ------------------------------------------------------------------------
+    {
+        fltmgr::FLT_REGISTRATION blockReg{};
+        blockReg.FilterName = L"BlockingFilter";
+        blockReg.Altitude = "350000";
+        fltmgr::FLT_OPERATION_REGISTRATION blockOp{};
+        blockOp.MajorFunction = fltmgr::IRP_MJ_DEVICE_CONTROL;
+        blockOp.PreOperation = [](fltmgr::FLT_CALLBACK_DATA* Data, void**) -> fltmgr::FltPreopCallbackStatus {
+            Data->IoStatus.Status = NtStatus::AccessDenied;
+            return fltmgr::FltPreopCallbackStatus::Complete; // Short-circuit!
+        };
+        blockReg.OperationRegistration.push_back(blockOp);
+
+        uint32_t hBlock = 0;
+        fltmgr::FltRegisterFilter(&blockReg, &hBlock);
+        fltmgr::FltStartFiltering(hBlock);
+
+        fltmgr::FLT_CALLBACK_DATA cbData{};
+        cbData.Iopb.MajorFunction = fltmgr::IRP_MJ_DEVICE_CONTROL;
+        cbData.IoStatus.Status = NtStatus::Success;
+
+        NtStatus stDisp = fltmgr::FltDispatchOperation(&cbData);
+        TEST_ASSERT(stDisp == NtStatus::AccessDenied, "Operation must be short-circuited with AccessDenied");
+
+        fltmgr::FltUnregisterFilter(hBlock);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: Minifilter Context Management (Stream & File Contexts)
+    // ------------------------------------------------------------------------
+    {
+        auto& fltMgr = fltmgr::TitanFilterManagerSubsystem::Instance();
+        uint32_t filterHandle = fltMgr.getSentinelScanFilterHandle();
+
+        void* rawCtx = nullptr;
+        NtStatus stAlloc = fltmgr::FltAllocateContext(
+            filterHandle,
+            fltmgr::FltContextType::StreamContext,
+            128,
+            0,
+            &rawCtx
+        );
+        TEST_ASSERT(stAlloc == NtStatus::Success, "FltAllocateContext must succeed");
+        TEST_ASSERT(rawCtx != nullptr, "Context pointer must not be null");
+
+        auto* ctx = reinterpret_cast<fltmgr::FltContext*>(rawCtx);
+        TEST_ASSERT(ctx->getType() == fltmgr::FltContextType::StreamContext, "Context type must match");
+        TEST_ASSERT(ctx->getSize() == 128, "Context size must be 128 bytes");
+        TEST_ASSERT(ctx->getRefCount() == 2, "Ref count must be 2 after alloc+caller ref");
+
+        // Write marker into context
+        uint8_t* ctxBuf = reinterpret_cast<uint8_t*>(ctx->getData());
+        ctxBuf[0] = 0xAA;
+        ctxBuf[1] = 0xBB;
+
+        // Associate context with stream
+        std::shared_ptr<fltmgr::FltContext> sharedCtx;
+        fltMgr.allocateContext(filterHandle, fltmgr::FltContextType::FileContext, 64, sharedCtx);
+        TEST_ASSERT(sharedCtx != nullptr, "allocateContext must return valid shared_ptr");
+
+        fltMgr.setFileContext(0xDEADBEEF, sharedCtx);
+
+        std::shared_ptr<fltmgr::FltContext> retrievedCtx;
+        NtStatus stGet = fltMgr.getFileContext(0xDEADBEEF, retrievedCtx);
+        TEST_ASSERT(stGet == NtStatus::Success, "getFileContext must find the attached context");
+        TEST_ASSERT(retrievedCtx == sharedCtx, "Retrieved context must match attached context");
+
+        fltmgr::FltReleaseContext(rawCtx);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: Real-Time Anti-Virus Minifilter (SentinelScanFlt @ 328000)
+    // ------------------------------------------------------------------------
+    {
+        // 1. Intercept malicious file path on CREATE
+        fltmgr::FLT_CALLBACK_DATA badCreateData{};
+        badCreateData.Iopb.MajorFunction = fltmgr::IRP_MJ_CREATE;
+        badCreateData.Iopb.TargetFilePath = L"\\Device\\HarddiskVolume1\\malware.exe";
+
+        NtStatus stMalware = fltmgr::FltDispatchOperation(&badCreateData);
+        TEST_ASSERT(stMalware == NtStatus::AccessDenied, "SentinelScanFlt must block malware.exe with AccessDenied");
+
+        // 2. Allow benign file on CREATE
+        fltmgr::FLT_CALLBACK_DATA goodCreateData{};
+        goodCreateData.Iopb.MajorFunction = fltmgr::IRP_MJ_CREATE;
+        goodCreateData.Iopb.TargetFilePath = L"\\Device\\HarddiskVolume1\\calc.exe";
+
+        NtStatus stGood = fltmgr::FltDispatchOperation(&goodCreateData);
+        TEST_ASSERT(stGood == NtStatus::Success, "SentinelScanFlt must permit benign calc.exe creation");
+
+        // 3. Intercept EICAR threat string on WRITE
+        char threatBuffer[] = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+        fltmgr::FLT_CALLBACK_DATA badWriteData{};
+        badWriteData.Iopb.MajorFunction = fltmgr::IRP_MJ_WRITE;
+        badWriteData.Iopb.TargetFilePath = L"\\Device\\HarddiskVolume1\\test.tmp";
+        badWriteData.Iopb.ReadWrite.Buffer = threatBuffer;
+        badWriteData.Iopb.ReadWrite.Length = sizeof(threatBuffer);
+
+        NtStatus stThreatWrite = fltmgr::FltDispatchOperation(&badWriteData);
+        TEST_ASSERT(stThreatWrite == NtStatus::AccessDenied, "SentinelScanFlt must block EICAR signature write");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: Transparent Cryptographic Minifilter (EmeraldFlt @ 141000)
+    // ------------------------------------------------------------------------
+    {
+        char secretData[] = "Dave Cutler Sovereign MicaNT Clean-Room Kernel 2026!";
+        char originalCopy[sizeof(secretData)];
+        std::memcpy(originalCopy, secretData, sizeof(secretData));
+
+        // 1. WRITE to .efs encrypted file
+        fltmgr::FLT_CALLBACK_DATA writeData{};
+        writeData.Iopb.MajorFunction = fltmgr::IRP_MJ_WRITE;
+        writeData.Iopb.TargetFilePath = L"\\Device\\HarddiskVolume1\\finance.efs";
+        writeData.Iopb.ReadWrite.Buffer = secretData;
+        writeData.Iopb.ReadWrite.Length = sizeof(secretData);
+
+        NtStatus stEncWrite = fltmgr::FltDispatchOperation(&writeData);
+        TEST_ASSERT(stEncWrite == NtStatus::Success, "EmeraldFlt write dispatch must succeed");
+        // Verify that in-transit data was encrypted (XOR 0x5A)
+        TEST_ASSERT(std::memcmp(secretData, originalCopy, sizeof(secretData)) != 0, "Buffer must be encrypted on write");
+
+        // 2. READ from .efs encrypted file -> Post-Op automatically decrypts it back!
+        fltmgr::FLT_CALLBACK_DATA readData{};
+        readData.Iopb.MajorFunction = fltmgr::IRP_MJ_READ;
+        readData.Iopb.TargetFilePath = L"\\Device\\HarddiskVolume1\\finance.efs";
+        readData.Iopb.ReadWrite.Buffer = secretData;
+        readData.Iopb.ReadWrite.Length = sizeof(secretData);
+
+        NtStatus stEncRead = fltmgr::FltDispatchOperation(&readData);
+        TEST_ASSERT(stEncRead == NtStatus::Success, "EmeraldFlt read dispatch must succeed");
+        // Verify that Post-Op successfully decrypted the buffer back to original plaintext
+        TEST_ASSERT(std::memcmp(secretData, originalCopy, sizeof(secretData)) == 0, "Buffer must be restored to original plaintext on read");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: Kernel-to-User Communication Ports (FilterSendMessage)
+    // ------------------------------------------------------------------------
+    {
+        uint32_t clientHandle = 0;
+        NtStatus stConn = fltmgr::FilterConnectCommunicationPort(
+            L"\\SentinelScanPort",
+            0,
+            nullptr,
+            0,
+            &clientHandle
+        );
+        TEST_ASSERT(stConn == NtStatus::Success, "FilterConnectCommunicationPort must connect to \\SentinelScanPort");
+        TEST_ASSERT(clientHandle > 0, "clientHandle must be valid non-zero handle");
+
+        // 1. Send threat payload for evaluation
+        const char msgThreat[] = "SCAN: VIRUS_DROPPER_SAMPLE";
+        uint32_t verdict = 0;
+        uint32_t retLen = 0;
+        NtStatus stMsgThreat = fltmgr::FilterSendMessage(
+            clientHandle,
+            msgThreat,
+            sizeof(msgThreat),
+            &verdict,
+            sizeof(verdict),
+            &retLen
+        );
+        TEST_ASSERT(stMsgThreat == NtStatus::Success, "FilterSendMessage threat scan must succeed");
+        TEST_ASSERT(verdict == 1, "Verdict must indicate 1 (VIRUS detected)");
+        TEST_ASSERT(retLen == sizeof(uint32_t), "Return length must be 4 bytes");
+
+        // 2. Send clean payload
+        const char msgClean[] = "SCAN: SYSTEM_CALCULATOR";
+        uint32_t cleanVerdict = 99;
+        NtStatus stMsgClean = fltmgr::FilterSendMessage(
+            clientHandle,
+            msgClean,
+            sizeof(msgClean),
+            &cleanVerdict,
+            sizeof(cleanVerdict),
+            &retLen
+        );
+        TEST_ASSERT(stMsgClean == NtStatus::Success, "FilterSendMessage clean scan must succeed");
+        TEST_ASSERT(cleanVerdict == 0, "Verdict must indicate 0 (Clean)");
+
+        fltmgr::FilterClose(clientHandle);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: Dynamic Filter Unloading & Subsystem Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // Unregister dynamic filter from Phase 2
+        NtStatus stUnload = fltmgr::FltUnregisterFilter(dynamicFilterHandle);
+        TEST_ASSERT(stUnload == NtStatus::Success, "FltUnregisterFilter must succeed");
+        TEST_ASSERT(unloadCalled == true, "FilterUnloadCallback must have been invoked");
+
+        // Verify Telemetry
+        fltmgr::FLT_TELEMETRY telem{};
+        BOOL telemOk = fltmgr::FltGetTelemetry(&telem);
+        TEST_ASSERT(telemOk == fltmgr::TRUE_VAL, "FltGetTelemetry must succeed");
+        TEST_ASSERT(telem.activeFiltersCount >= 3, "activeFiltersCount must reflect remaining default filters");
+        TEST_ASSERT(telem.totalPreOpsDispatched >= 6, "totalPreOpsDispatched must be >= 6");
+        TEST_ASSERT(telem.totalPostOpsDispatched >= 2, "totalPostOpsDispatched must be >= 2");
+        TEST_ASSERT(telem.totalOpsShortCircuited >= 3, "totalOpsShortCircuited must be >= 3");
+        TEST_ASSERT(telem.totalMalwareBlocked >= 3, "totalMalwareBlocked must be >= 3");
+        TEST_ASSERT(telem.totalCryptoOpsProcessed >= 2, "totalCryptoOpsProcessed must be >= 2");
+        TEST_ASSERT(telem.totalPortMessagesSent >= 2, "totalPortMessagesSent must be >= 2");
+
+        fltmgr::FLT_TELEMETRY directTelem = fltmgr::FltQueryTelemetry();
+        TEST_ASSERT(directTelem.totalMalwareBlocked == telem.totalMalwareBlocked, "Direct telemetry query must match");
+    }
+
+    std::cout << "[TEST] Suite 254: Horizon 38 - I/O Filter Manager & Minifilter Driver Architecture PASSED.\n";
+}
+
+
 
 
 
