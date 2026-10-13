@@ -175,6 +175,14 @@ public:
         std::cerr << "\n*** STOP: 0x" << std::hex << std::setw(8) << std::setfill('0') << bugCheckCode 
                   << " (0x" << p1 << ", 0x" << p2 << ", 0x" << p3 << ", 0x" << p4 << ")\n"
                   << "    Crash dump recorded in memory minidump buffer.\n" << std::dec;
+
+        if (bugCheckHook_) {
+            bugCheckHook_(bugCheckCode, p1, p2, p3, p4);
+        }
+    }
+
+    void setBugCheckHook(std::function<void(uint32_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t)> hook) {
+        bugCheckHook_ = std::move(hook);
     }
 
     void setDebuggerHandler(std::function<bool(const ExceptionRecord&, ps::ContextFrame&)> handler) {
@@ -195,6 +203,7 @@ public:
 
 private:
     TrapEngine() = default;
+    std::function<void(uint32_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t)> bugCheckHook_;
     std::function<bool(const ExceptionRecord&, ps::ContextFrame&)> debuggerHandler_;
     std::function<bool(const ExceptionRecord&, ps::ContextFrame&)> userSehHandler_;
     BugCheckFrame lastBugCheck_{};

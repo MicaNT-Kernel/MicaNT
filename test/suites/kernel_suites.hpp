@@ -11682,6 +11682,280 @@ void Test_Horizon38_FilterManager_Minifilter_Architecture() {
     std::cout << "[TEST] Suite 254: Horizon 38 - I/O Filter Manager & Minifilter Driver Architecture PASSED.\n";
 }
 
+// ============================================================================
+// Suite 255: Horizon 39 - Sovereign Kernel Crash Dump Engine, BugCheck & BSOD
+// ============================================================================
+
+void Test_Horizon39_KernelCrashDumpEngine_BugCheck_And_BSOD() {
+    std::cout << "[TEST] Running Suite 255: Horizon 39 - Sovereign Kernel Crash Dump Engine, BugCheck & BSOD...\n" << std::flush;
+
+    // ------------------------------------------------------------------------
+    // Phase 1: Subsystem Initialization, JanusLDR Driver Exports & SCM/Version DB
+    // ------------------------------------------------------------------------
+    {
+        crashdump::InitializeCrashDumpSubsystemExports();
+        auto& dumpEngine = crashdump::TitanCrashDumpEngine::Instance();
+        dumpEngine.resetForTesting();
+
+        // 1. JanusLDR Exports Verification (ntoskrnl.exe & crashdump.sys)
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "KeBugCheck") != nullptr, "ntoskrnl.exe KeBugCheck must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "KeBugCheckEx") != nullptr, "ntoskrnl.exe KeBugCheckEx must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "KeRegisterBugCheckCallback") != nullptr, "ntoskrnl.exe KeRegisterBugCheckCallback must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "KeDeregisterBugCheckCallback") != nullptr, "ntoskrnl.exe KeDeregisterBugCheckCallback must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "KeRegisterBugCheckReasonCallback") != nullptr, "ntoskrnl.exe KeRegisterBugCheckReasonCallback must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "KeDeregisterBugCheckReasonCallback") != nullptr, "ntoskrnl.exe KeDeregisterBugCheckReasonCallback must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "IoWriteCrashDump") != nullptr, "ntoskrnl.exe IoWriteCrashDump must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "KeGetBugCheckTelemetry") != nullptr, "ntoskrnl.exe KeGetBugCheckTelemetry must exist");
+
+        TEST_ASSERT(ldr.getExport("crashdump.sys", "IoWriteCrashDump") != nullptr, "crashdump.sys IoWriteCrashDump must exist");
+        TEST_ASSERT(ldr.getExport("crashdump.sys", "KeGetBugCheckTelemetry") != nullptr, "crashdump.sys KeGetBugCheckTelemetry must exist");
+
+        // 2. SCM Service Record Verification
+        auto& scmMgr = scm::ServiceControlManager::get();
+        auto crashSvc = scmMgr.getServiceRecord(L"crashdump");
+        TEST_ASSERT(crashSvc != nullptr, "crashdump service record must exist in SCM");
+        TEST_ASSERT(crashSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "crashdump must be a kernel driver");
+        TEST_ASSERT(crashSvc->startType == scm::SERVICE_BOOT_START, "crashdump must be boot start");
+        TEST_ASSERT(crashSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "crashdump must be running");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("crashdump.sys") != nullptr, "crashdump.sys must be registered in Version Database");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 2: BugCheck Stop Code Catalog & Name String Resolution
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(std::string(crashdump::BugCheckCodeToString(crashdump::IRQL_NOT_LESS_OR_EQUAL)) == "IRQL_NOT_LESS_OR_EQUAL", "0x0A must map to IRQL_NOT_LESS_OR_EQUAL");
+        TEST_ASSERT(std::string(crashdump::BugCheckCodeToString(crashdump::PAGE_FAULT_IN_NONPAGED_AREA)) == "PAGE_FAULT_IN_NONPAGED_AREA", "0x50 must map to PAGE_FAULT_IN_NONPAGED_AREA");
+        TEST_ASSERT(std::string(crashdump::BugCheckCodeToString(crashdump::SYSTEM_SERVICE_EXCEPTION)) == "SYSTEM_SERVICE_EXCEPTION", "0x3B must map to SYSTEM_SERVICE_EXCEPTION");
+        TEST_ASSERT(std::string(crashdump::BugCheckCodeToString(crashdump::KMODE_EXCEPTION_NOT_HANDLED)) == "KMODE_EXCEPTION_NOT_HANDLED", "0x1E must map to KMODE_EXCEPTION_NOT_HANDLED");
+        TEST_ASSERT(std::string(crashdump::BugCheckCodeToString(crashdump::CRITICAL_PROCESS_DIED)) == "CRITICAL_PROCESS_DIED", "0xEF must map to CRITICAL_PROCESS_DIED");
+        TEST_ASSERT(std::string(crashdump::BugCheckCodeToString(crashdump::DPC_WATCHDOG_VIOLATION)) == "DPC_WATCHDOG_VIOLATION", "0x133 must map to DPC_WATCHDOG_VIOLATION");
+        TEST_ASSERT(std::string(crashdump::BugCheckCodeToString(crashdump::KERNEL_SECURITY_CHECK_FAILURE)) == "KERNEL_SECURITY_CHECK_FAILURE", "0x139 must map to KERNEL_SECURITY_CHECK_FAILURE");
+        TEST_ASSERT(std::string(crashdump::BugCheckCodeToString(0x12345678)) == "UNKNOWN_BUGCHECK_CODE", "Invalid code must map to UNKNOWN_BUGCHECK_CODE");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: BugCheck Standard Callback Registration & Invocations
+    // ------------------------------------------------------------------------
+    static bool s_cbInvoked = false;
+    static uint32_t s_cbBufferVal = 0;
+    crashdump::KBUGCHECK_CALLBACK_RECORD cbRecord{};
+    uint32_t testBuffer = 0x1337C0DE;
+    {
+        s_cbInvoked = false;
+        s_cbBufferVal = 0;
+        crashdump::PKBUGCHECK_CALLBACK_ROUTINE cbFunc = [](void* buf, uint32_t len) {
+            s_cbInvoked = true;
+            if (buf && len >= sizeof(uint32_t)) {
+                s_cbBufferVal = *reinterpret_cast<uint32_t*>(buf);
+            }
+        };
+
+        BOOL regOk = crashdump::KeRegisterBugCheckCallback(
+            &cbRecord,
+            cbFunc,
+            &testBuffer,
+            sizeof(testBuffer),
+            "StorageMiniportVerifier"
+        );
+        TEST_ASSERT(regOk == crashdump::TRUE_VAL, "KeRegisterBugCheckCallback must succeed");
+        TEST_ASSERT(cbRecord.IsRegistered == true, "cbRecord must be marked registered");
+
+        // Trigger BugCheck
+        crashdump::KeBugCheckEx(crashdump::IRQL_NOT_LESS_OR_EQUAL, 0xDEADBEEF, 2, 1, 0xFFFFF80004010000ULL);
+        TEST_ASSERT(s_cbInvoked == true, "BugCheck callback must be invoked during KeBugCheckEx");
+        TEST_ASSERT(s_cbBufferVal == 0x1337C0DE, "Callback buffer data must be correctly passed");
+        TEST_ASSERT(cbRecord.InvocationCount == 1, "InvocationCount must be 1");
+
+        // Deregister
+        BOOL deregOk = crashdump::KeDeregisterBugCheckCallback(&cbRecord);
+        TEST_ASSERT(deregOk == crashdump::TRUE_VAL, "KeDeregisterBugCheckCallback must succeed");
+        TEST_ASSERT(cbRecord.IsRegistered == false, "cbRecord must be marked unregistered");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: BugCheck Reason Callback Registration & Dispatch
+    // ------------------------------------------------------------------------
+    static bool s_reasonInvoked = false;
+    crashdump::KBUGCHECK_REASON_CALLBACK_RECORD reasonRecord{};
+    {
+        s_reasonInvoked = false;
+        crashdump::PKBUGCHECK_REASON_CALLBACK_ROUTINE reasonFunc = [](
+            crashdump::KBUGCHECK_CALLBACK_REASON reason,
+            crashdump::KBUGCHECK_REASON_CALLBACK_RECORD*,
+            void* reasonBuffer,
+            uint32_t reasonBufferLength
+        ) {
+            s_reasonInvoked = true;
+            if (reason == crashdump::KBUGCHECK_CALLBACK_REASON::KbCallbackSecondaryDumpData && reasonBuffer) {
+                auto* sdd = reinterpret_cast<crashdump::KBUGCHECK_SECONDARY_DUMP_DATA*>(reasonBuffer);
+                sdd->OutBufferLength = 32;
+            }
+            (void)reasonBufferLength;
+        };
+
+        BOOL regReasonOk = crashdump::KeRegisterBugCheckReasonCallback(
+            &reasonRecord,
+            reasonFunc,
+            crashdump::KBUGCHECK_CALLBACK_REASON::KbCallbackSecondaryDumpData,
+            "NetworkFilterDriver"
+        );
+        TEST_ASSERT(regReasonOk == crashdump::TRUE_VAL, "KeRegisterBugCheckReasonCallback must succeed");
+        TEST_ASSERT(reasonRecord.IsRegistered == true, "reasonRecord must be marked registered");
+
+        crashdump::KeBugCheckEx(crashdump::SYSTEM_SERVICE_EXCEPTION, 0xC0000005, 0xFFFFF80004B81000ULL, 0, 0);
+        TEST_ASSERT(s_reasonInvoked == true, "Reason callback must be invoked during KeBugCheckEx");
+        TEST_ASSERT(reasonRecord.InvocationCount == 1, "Reason callback InvocationCount must be 1");
+
+        BOOL deregReasonOk = crashdump::KeDeregisterBugCheckReasonCallback(&reasonRecord);
+        TEST_ASSERT(deregReasonOk == crashdump::TRUE_VAL, "KeDeregisterBugCheckReasonCallback must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: 64-bit Memory Dump Header Integrity & Checksum ('PAGE' / 'DU64')
+    // ------------------------------------------------------------------------
+    {
+        auto& dumpEngine = crashdump::TitanCrashDumpEngine::Instance();
+        const auto& hdr = dumpEngine.getLastDumpHeader();
+
+        TEST_ASSERT(hdr.Signature == crashdump::DUMP_SIGNATURE_PAGE, "Header signature must be 'PAGE'");
+        TEST_ASSERT(hdr.ValidDump == crashdump::DUMP_VALID_DUMP64, "Header ValidDump must be 'DU64'");
+        TEST_ASSERT(hdr.MajorVersion == 0x000F, "MajorVersion must be 0x000F (NT 10.0 / 11)");
+        TEST_ASSERT(hdr.MinorVersion == 26100, "MinorVersion must be 26100 (Windows 11 24H2)");
+        TEST_ASSERT(hdr.MachineImageType == crashdump::DUMP_MACHINE_AMD64, "MachineImageType must be AMD64");
+        TEST_ASSERT(hdr.NumberProcessors >= 1, "NumberProcessors must be >= 1");
+        TEST_ASSERT(hdr.BugCheckCode == crashdump::SYSTEM_SERVICE_EXCEPTION, "BugCheckCode must match last crash");
+        TEST_ASSERT(hdr.BugCheckParameter1 == 0xC0000005, "Param 1 must match 0xC0000005");
+        TEST_ASSERT(hdr.CheckSum != 0, "Dump header CheckSum must be non-zero");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: Machine State Context Capture & AMD64 Register Preservation
+    // ------------------------------------------------------------------------
+    {
+        auto& dumpEngine = crashdump::TitanCrashDumpEngine::Instance();
+        crashdump::CONTEXT_AMD64 customCtx{};
+        customCtx.Rip = 0xFFFFF80004B81234ULL;
+        customCtx.Rsp = 0xFFFFD00010002000ULL;
+        customCtx.Rbp = 0xFFFFD00010002080ULL;
+        customCtx.Rax = 0xCAFEBABE11223344ULL;
+        customCtx.Rbx = 0x5566778899AABBCCULL;
+        customCtx.Rcx = 0x0000000000000001ULL;
+        customCtx.Cr2 = 0x00007FF812345000ULL;
+        customCtx.Cr3 = 0x000000001000ULL;
+        customCtx.Rflags = 0x00000286;
+
+        dumpEngine.executeBugCheck(
+            crashdump::PAGE_FAULT_IN_NONPAGED_AREA,
+            customCtx.Cr2,
+            0,
+            customCtx.Rip,
+            0,
+            &customCtx
+        );
+
+        const auto& hdr = dumpEngine.getLastDumpHeader();
+        TEST_ASSERT(hdr.ContextRecord.Rip == customCtx.Rip, "Dump context RIP must match");
+        TEST_ASSERT(hdr.ContextRecord.Rsp == customCtx.Rsp, "Dump context RSP must match");
+        TEST_ASSERT(hdr.ContextRecord.Rax == customCtx.Rax, "Dump context RAX must match");
+        TEST_ASSERT(hdr.ContextRecord.Rbx == customCtx.Rbx, "Dump context RBX must match");
+        TEST_ASSERT(hdr.ContextRecord.Cr2 == customCtx.Cr2, "Dump context CR2 must match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: Culprit Module Attribution & Callstack Unwinding
+    // ------------------------------------------------------------------------
+    {
+        auto& dumpEngine = crashdump::TitanCrashDumpEngine::Instance();
+        // Fault in culprit_faulty.sys (base 0xFFFFF80005000000)
+        uint64_t faultyRip = 0xFFFFF80005002400ULL;
+        crashdump::CONTEXT_AMD64 culpritCtx{};
+        culpritCtx.Rip = faultyRip;
+        culpritCtx.Rsp = 0xFFFFD00030001000ULL;
+        culpritCtx.Rbp = 0xFFFFD00030001080ULL;
+
+        dumpEngine.executeBugCheck(
+            crashdump::KMODE_EXCEPTION_NOT_HANDLED,
+            0xC0000005,
+            faultyRip,
+            0,
+            0,
+            &culpritCtx
+        );
+
+        auto telem = dumpEngine.getTelemetry();
+        TEST_ASSERT(telem.lastCulpritModule == "culprit_faulty.sys", "Culprit module must be resolved to culprit_faulty.sys");
+
+        const std::string& bsodText = dumpEngine.getLastBsodText();
+        TEST_ASSERT(bsodText.find("WHAT FAILED:   culprit_faulty.sys") != std::string::npos, "BSOD text must display culprit driver name");
+        TEST_ASSERT(bsodText.find("KMODE_EXCEPTION_NOT_HANDLED") != std::string::npos, "BSOD text must display stop code name");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: Blue Screen of Death (BSOD) Text & Framebuffer Raster Rendering
+    // ------------------------------------------------------------------------
+    {
+        auto& dumpEngine = crashdump::TitanCrashDumpEngine::Instance();
+        const std::string& bsod = dumpEngine.getLastBsodText();
+
+        TEST_ASSERT(bsod.find(":(") != std::string::npos, "BSOD text must contain sad face emoticon");
+        TEST_ASSERT(bsod.find("QR DIAGNOSTIC CODE") != std::string::npos, "BSOD text must contain QR diagnostic code");
+        TEST_ASSERT(bsod.find("https://micant.org/stopcode") != std::string::npos, "BSOD text must contain diagnostic URL");
+        TEST_ASSERT(bsod.find("PROCESSOR CONTEXT (AMD64)") != std::string::npos, "BSOD text must render register context");
+        TEST_ASSERT(bsod.find("CALLSTACK UNWINDING TRACE") != std::string::npos, "BSOD text must render callstack trace");
+
+        // Verify Framebuffer raster generation
+        auto raster = crashdump::BsodRenderer::RenderFramebufferRaster(640, 480, 0xFF0078D7);
+        TEST_ASSERT(raster.size() == 640 * 480, "Framebuffer raster size must be 640x480 pixels");
+        TEST_ASSERT(raster[0] == 0xFF0078D7, "Background color must be Microsoft Cobalt Blue (0xFF0078D7)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: Direct Sector Disk Sink & Minidump Image Serialization
+    // ------------------------------------------------------------------------
+    {
+        auto& dumpEngine = crashdump::TitanCrashDumpEngine::Instance();
+        size_t diskBytes = dumpEngine.getSimulatedDiskBytesWritten();
+        TEST_ASSERT(diskBytes > sizeof(crashdump::DUMP_HEADER64), "Direct disk sink must have written minidump sectors to storage");
+
+        // Low-level IoWriteCrashDump API verification
+        uint8_t triageBlock[512];
+        std::memset(triageBlock, 0xEE, sizeof(triageBlock));
+        size_t written = 0;
+        NtStatus stDump = crashdump::IoWriteCrashDump(crashdump::DUMP_TYPE_TRIAGE, triageBlock, sizeof(triageBlock), &written);
+        TEST_ASSERT(stDump == NtStatus::Success, "IoWriteCrashDump direct block write must succeed");
+        TEST_ASSERT(written == sizeof(triageBlock), "IoWriteCrashDump written size must match 512 bytes");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: TrapEngine Hook Integration & Subsystem Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        auto& trap = ke::TrapEngine::get();
+        // Trigger BugCheck through TrapEngine API
+        trap.keBugCheckEx(crashdump::CRITICAL_PROCESS_DIED, 0x1000, 0, 0, 0);
+
+        crashdump::BUGCHECK_TELEMETRY telem{};
+        BOOL telemOk = crashdump::KeGetBugCheckTelemetry(&telem);
+        TEST_ASSERT(telemOk == crashdump::TRUE_VAL, "KeGetBugCheckTelemetry must succeed");
+        TEST_ASSERT(telem.totalBugChecks >= 5, "totalBugChecks must be >= 5 across test suite");
+        TEST_ASSERT(telem.totalMiniDumps >= 5, "totalMiniDumps must be >= 5");
+        TEST_ASSERT(telem.totalCallbacksInvoked >= 1, "totalCallbacksInvoked must be >= 1");
+        TEST_ASSERT(telem.totalReasonCallbacksInvoked >= 1, "totalReasonCallbacksInvoked must be >= 1");
+        TEST_ASSERT(telem.totalBytesDumped > 0, "totalBytesDumped must be > 0");
+        TEST_ASSERT(telem.lastDumpValid == true, "lastDumpValid must be true");
+
+        crashdump::BUGCHECK_TELEMETRY directTelem = crashdump::KeQueryBugCheckTelemetry();
+        TEST_ASSERT(directTelem.totalBugChecks == telem.totalBugChecks, "Direct telemetry query must match");
+    }
+
+    std::cout << "[TEST] Suite 255: Horizon 39 - Sovereign Kernel Crash Dump Engine, BugCheck & BSOD PASSED.\n";
+}
+
 
 
 
