@@ -42,6 +42,9 @@ void CcInitializeExecutiveCache() noexcept;
 // File System Runtime Library Initialization (kernel/fsrtl/fsrtlmgr.cpp)
 void FsRtlInitializeExecutiveSubsystem() noexcept;
 
+// User-Mode Debugging Executive Initialization (kernel/dbgk/dbgkobj.cpp)
+void DbgkInitializeExecutiveSubsystem() noexcept;
+
 // Executive Pool, Sync & Worker Initialization (kernel/ex/exmgr.cpp)
 void ExInitializeExecutiveSubsystem() noexcept;
 

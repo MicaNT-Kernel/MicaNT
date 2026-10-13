@@ -135,7 +135,18 @@ enum class NtStatus : uint32_t {
     LockNotGranted                   = 0xC0000055,
     RangeNotLocked                   = 0xC000007E,
     OplockNotGranted                 = 0xC00000E2,
-    InvalidOplockProtocol            = 0xC00000E3
+    InvalidOplockProtocol            = 0xC00000E3,
+
+    // User-Mode Debugging Executive (Dbgk / DEBUG_OBJECT / DbgUi) Status Codes
+    DbgExceptionHandled              = 0x00010001,
+    DbgContinue                      = 0x00010002,
+    DbgReplyLater                    = 0x40010001,
+    DbgTerminateThread               = 0x40010003,
+    DbgTerminateProcess              = 0x40010004,
+    DbgExceptionNotHandled           = 0x80010001,
+    PortNotSet                       = 0xC0000353,
+    DebuggerInactive                 = 0xC0000354,
+    DebugAttachFailed                = 0xC0000399
 };
 
 // ============================================================================

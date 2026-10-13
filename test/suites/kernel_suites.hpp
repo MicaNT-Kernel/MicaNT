@@ -13531,4 +13531,262 @@ void Test_Horizon43_FileSystemRuntimeLibrary_Mcb_FileLock_Oplock_Notify_And_Tunn
     std::cout << "[TEST] Suite 259: Horizon 43 - Sovereign NT File System Runtime Library (FsRtl*), LARGE_MCB, FILE_LOCK, OPLOCK & Tunnel Cache PASSED.\n";
 }
 
+// ============================================================================
+// Suite 260: Horizon 44 - Sovereign NT User-Mode Debugging Executive (Dbgk*),
+//            DEBUG_OBJECT Architecture, DbgUi* NTDLL Bridge & Win32 Debugging
+// ============================================================================
+
+void Test_Horizon44_UserModeDebuggingExecutive_DebugObject_Dbgk_And_DbgUi() {
+    using namespace micant::km::dbgk;
+
+    TitanDbgkManager::Instance().reset();
+    InitializeDbgkSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Subsystem Registration & Dynamic Export Verification
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtCreateDebugObject") != nullptr, "ntoskrnl.exe NtCreateDebugObject must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtDebugActiveProcess") != nullptr, "ntoskrnl.exe NtDebugActiveProcess must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtRemoveProcessDebug") != nullptr, "ntoskrnl.exe NtRemoveProcessDebug must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtSetInformationDebugObject") != nullptr, "ntoskrnl.exe NtSetInformationDebugObject must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtWaitForDebugEvent") != nullptr, "ntoskrnl.exe NtWaitForDebugEvent must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtDebugContinue") != nullptr, "ntoskrnl.exe NtDebugContinue must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "DbgkCreateThread") != nullptr, "ntoskrnl.exe DbgkCreateThread must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "DbgkForwardException") != nullptr, "ntoskrnl.exe DbgkForwardException must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "DbgkMapViewOfSection") != nullptr, "ntoskrnl.exe DbgkMapViewOfSection must be exported");
+
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "DbgUiConnectToDbg") != nullptr, "ntdll.dll DbgUiConnectToDbg must be exported");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "DbgUiWaitStateChange") != nullptr, "ntdll.dll DbgUiWaitStateChange must be exported");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "DbgUiContinue") != nullptr, "ntdll.dll DbgUiContinue must be exported");
+        TEST_ASSERT(ldr.getExport("ntdll.dll", "DbgUiConvertStateChangeStructure") != nullptr, "ntdll.dll DbgUiConvertStateChangeStructure must be exported");
+
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "DebugActiveProcess") != nullptr, "kernel32.dll DebugActiveProcess must be exported");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "WaitForDebugEventEx") != nullptr, "kernel32.dll WaitForDebugEventEx must be exported");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "ContinueDebugEvent") != nullptr, "kernel32.dll ContinueDebugEvent must be exported");
+        TEST_ASSERT(ldr.getExport("kernel32.dll", "CheckRemoteDebuggerPresent") != nullptr, "kernel32.dll CheckRemoteDebuggerPresent must be exported");
+
+        auto& scm = scm::ServiceControlManager::get();
+        auto svc = scm.getServiceRecord(L"DbgkDebugObject");
+        TEST_ASSERT(svc != nullptr && svc->status.dwCurrentState == scm::SERVICE_RUNNING, "DbgkDebugObject service must be RUNNING");
+
+        auto* mod = version::VersionDatabase::Instance().GetModuleInfo("dbgk_executive");
+        TEST_ASSERT(mod != nullptr, "dbgk_executive module must be registered in VersionDatabase");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: NtCreateDebugObject, NtDebugActiveProcess & Initial Attach Synthesis
+    // ------------------------------------------------------------------------
+    Handle hDbgObj = 0;
+    TEST_ASSERT(NtCreateDebugObject(&hDbgObj, DEBUG_ALL_ACCESS, nullptr, DEBUG_KILL_ON_CLOSE) == NtStatus::Success,
+                "NtCreateDebugObject with DEBUG_KILL_ON_CLOSE must succeed");
+    TEST_ASSERT(hDbgObj != 0, "DebugObject handle must be non-zero");
+
+    const uint64_t targetPid     = 4240;
+    const uint64_t mainTid       = 4244;
+    void*          imageBase     = reinterpret_cast<void*>(0x00007FF710000000ULL);
+    void*          entryPoint    = reinterpret_cast<void*>(0x00007FF710001200ULL);
+    Handle         hTargetProc   = TitanDbgkManager::Instance().registerTargetProcess(
+        targetPid,
+        mainTid,
+        imageBase,
+        entryPoint,
+        L"\\Device\\HarddiskVolume1\\Windows\\System32\\calc.exe"
+    );
+
+    BOOLEAN remotePresent = FALSE_B;
+    TEST_ASSERT(CheckRemoteDebuggerPresentWin32(hTargetProc, &remotePresent) == TRUE_B && remotePresent == FALSE_B,
+                "Before attach, CheckRemoteDebuggerPresent must report FALSE");
+
+    TEST_ASSERT(NtDebugActiveProcess(hTargetProc, hDbgObj) == NtStatus::Success,
+                "NtDebugActiveProcess must attach DEBUG_OBJECT to target process");
+    TEST_ASSERT(TitanDbgkManager::Instance().isProcessBeingDebugged(targetPid),
+                "Target process must have BeingDebugged = true after attach");
+    TEST_ASSERT(CheckRemoteDebuggerPresentWin32(hTargetProc, &remotePresent) == TRUE_B && remotePresent == TRUE_B,
+                "After attach, CheckRemoteDebuggerPresent must report TRUE");
+
+    // Second debugger attempting to attach to the same process must be refused
+    Handle hOtherDbg = 0;
+    NtCreateDebugObject(&hOtherDbg, DEBUG_ALL_ACCESS, nullptr, 0);
+    TEST_ASSERT(NtDebugActiveProcess(hTargetProc, hOtherDbg) == NtStatus::PortConnectionRefused,
+                "Second debugger attach to already-debugged process must return STATUS_PORT_CONNECTION_REFUSED");
+    DbgkCloseDebugObject(hOtherDbg);
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Drain Synthesized Initial Attach Events (CreateProcess, LoadDll x2, Attach Breakpoint)
+    // ------------------------------------------------------------------------
+    {
+        DBGUI_WAIT_STATE_CHANGE state{};
+        WIN32_DEBUG_EVENT       win32Ev{};
+
+        // 1) DbgCreateProcessStateChange -> CREATE_PROCESS_DEBUG_EVENT
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &state) == NtStatus::Success,
+                    "Wait 1 must receive synthesized DbgCreateProcessStateChange");
+        TEST_ASSERT(state.NewState == DbgCreateProcessStateChange, "First attach event must be DbgCreateProcessStateChange");
+        TEST_ASSERT(state.AppClientId.UniqueProcess == targetPid && state.AppClientId.UniqueThread == mainTid,
+                    "CreateProcess ClientId must match target PID and main TID");
+        TEST_ASSERT(state.StateInfo.CreateProcessInfo.NewProcess.BaseOfImage == imageBase,
+                    "CreateProcess BaseOfImage must match target executable base");
+        TEST_ASSERT(DbgUiConvertStateChangeStructure(&state, &win32Ev) == NtStatus::Success &&
+                    win32Ev.dwDebugEventCode == WIN32_CREATE_PROCESS_DEBUG_EVENT,
+                    "DbgUiConvertStateChangeStructure must translate to CREATE_PROCESS_DEBUG_EVENT");
+        TEST_ASSERT(NtDebugContinue(hDbgObj, &state.AppClientId, NtStatus::DbgContinue) == NtStatus::Success,
+                    "NtDebugContinue on CreateProcess must succeed");
+
+        // 2) DbgLoadDllStateChange (ntdll.dll)
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &state) == NtStatus::Success &&
+                    state.NewState == DbgLoadDllStateChange,
+                    "Wait 2 must receive synthesized DbgLoadDllStateChange for ntdll.dll");
+        TEST_ASSERT(NtDebugContinue(hDbgObj, &state.AppClientId, NtStatus::DbgContinue) == NtStatus::Success,
+                    "NtDebugContinue on LoadDll 1 must succeed");
+
+        // 3) DbgLoadDllStateChange (kernel32.dll)
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &state) == NtStatus::Success &&
+                    state.NewState == DbgLoadDllStateChange,
+                    "Wait 3 must receive synthesized DbgLoadDllStateChange for kernel32.dll");
+        TEST_ASSERT(NtDebugContinue(hDbgObj, &state.AppClientId, NtStatus::DbgContinue) == NtStatus::Success,
+                    "NtDebugContinue on LoadDll 2 must succeed");
+
+        // 4) Initial attach DbgBreakpointStateChange (DbgBreakPoint thread)
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &state) == NtStatus::Success &&
+                    state.NewState == DbgBreakpointStateChange,
+                    "Wait 4 must receive synthesized initial attach DbgBreakpointStateChange");
+        TEST_ASSERT(state.StateInfo.Exception.ExceptionRecord.ExceptionCode == NtStatus::Breakpoint,
+                    "Attach breakpoint ExceptionCode must be STATUS_BREAKPOINT");
+        TEST_ASSERT(TitanDbgkManager::Instance().isThreadSuspendedForDebugEvent(targetPid, mainTid),
+                    "Main thread must be suspended while waiting for debugger continuation");
+        TEST_ASSERT(NtDebugContinue(hDbgObj, &state.AppClientId, NtStatus::DbgContinue) == NtStatus::Success,
+                    "NtDebugContinue on attach breakpoint must succeed");
+        TEST_ASSERT(!TitanDbgkManager::Instance().isThreadSuspendedForDebugEvent(targetPid, mainTid),
+                    "Main thread must resume immediately after NtDebugContinue");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Live Kernel Executive Callbacks (DbgkCreateThread, DbgkMapViewOfSection,
+    //          DbgkForwardException First/Second Chance, DbgkExitThread)
+    // ------------------------------------------------------------------------
+    {
+        const uint64_t workerTid  = 4248;
+        void*          workerFunc = reinterpret_cast<void*>(0x00007FF710004000ULL);
+        DbgkCreateThread(targetPid, workerTid, workerFunc);
+
+        void* dllBase = reinterpret_cast<void*>(0x00007FFB60000000ULL);
+        DbgkMapViewOfSection(targetPid, workerTid, dllBase, 0x400, 0x1200, L"\\SystemRoot\\System32\\user32.dll");
+
+        // First-chance SingleStep trap (#DB) followed by First-chance AccessViolation (#PF)
+        DBGKM_EXCEPTION_RECORD64 ssRec{};
+        ssRec.ExceptionCode    = NtStatus::SingleStep;
+        ssRec.ExceptionAddress = 0x00007FF710004012ULL;
+        TEST_ASSERT(DbgkForwardException(targetPid, workerTid, &ssRec, TRUE_B, FALSE_B /* FirstChance */) == TRUE_B,
+                    "DbgkForwardException for SingleStep must route to DEBUG_OBJECT");
+
+        DBGKM_EXCEPTION_RECORD64 avRec{};
+        avRec.ExceptionCode           = NtStatus::AccessViolation;
+        avRec.ExceptionAddress        = 0x00007FF710004088ULL;
+        avRec.NumberParameters        = 2;
+        avRec.ExceptionInformation[0] = 1; // Write violation
+        avRec.ExceptionInformation[1] = 0x00000000DEADBEEFULL;
+        TEST_ASSERT(DbgkForwardException(targetPid, workerTid, &avRec, TRUE_B, FALSE_B /* FirstChance */) == TRUE_B,
+                    "DbgkForwardException for AccessViolation must route to DEBUG_OBJECT");
+
+        DbgkUnMapViewOfSection(targetPid, workerTid, dllBase);
+        DbgkExitThread(targetPid, workerTid, NtStatus::Success);
+
+        DBGUI_WAIT_STATE_CHANGE st{};
+        // 1) Worker thread creation
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &st) == NtStatus::Success &&
+                    st.NewState == DbgCreateThreadStateChange &&
+                    st.StateInfo.CreateThread.NewThread.StartAddress == workerFunc,
+                    "Must receive DbgCreateThreadStateChange for worker thread");
+        NtDebugContinue(hDbgObj, &st.AppClientId, NtStatus::DbgContinue);
+
+        // 2) user32.dll LoadDll
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &st) == NtStatus::Success &&
+                    st.NewState == DbgLoadDllStateChange &&
+                    st.StateInfo.LoadDll.BaseOfDll == dllBase,
+                    "Must receive DbgLoadDllStateChange for user32.dll");
+        NtDebugContinue(hDbgObj, &st.AppClientId, NtStatus::DbgContinue);
+
+        // 3) SingleStep exception
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &st) == NtStatus::Success &&
+                    st.NewState == DbgSingleStepStateChange &&
+                    st.StateInfo.Exception.FirstChance == 1,
+                    "Must receive first-chance DbgSingleStepStateChange");
+        NtDebugContinue(hDbgObj, &st.AppClientId, NtStatus::DbgContinue);
+
+        // 4) AccessViolation exception -> Reply DBG_EXCEPTION_NOT_HANDLED
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &st) == NtStatus::Success &&
+                    st.NewState == DbgExceptionStateChange &&
+                    st.StateInfo.Exception.ExceptionRecord.ExceptionCode == NtStatus::AccessViolation &&
+                    st.StateInfo.Exception.ExceptionRecord.ExceptionInformation[1] == 0x00000000DEADBEEFULL,
+                    "Must receive DbgExceptionStateChange with exact faulting VA 0xDEADBEEF");
+        TEST_ASSERT(NtDebugContinue(hDbgObj, &st.AppClientId, NtStatus::DbgExceptionNotHandled) == NtStatus::Success,
+                    "NtDebugContinue with DBG_EXCEPTION_NOT_HANDLED must succeed");
+
+        // 5) UnloadDll & 6) ExitThread
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &st) == NtStatus::Success &&
+                    st.NewState == DbgUnloadDllStateChange,
+                    "Must receive DbgUnloadDllStateChange");
+        NtDebugContinue(hDbgObj, &st.AppClientId, NtStatus::DbgContinue);
+
+        TEST_ASSERT(NtWaitForDebugEvent(hDbgObj, FALSE_B, nullptr, &st) == NtStatus::Success &&
+                    st.NewState == DbgExitThreadStateChange,
+                    "Must receive DbgExitThreadStateChange");
+        NtDebugContinue(hDbgObj, &st.AppClientId, NtStatus::DbgContinue);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Non-Destructive Detach (NtRemoveProcessDebug) vs Kill-On-Close
+    // ------------------------------------------------------------------------
+    {
+        // Detach from targetPid (4240) cleanly via NtRemoveProcessDebug
+        TEST_ASSERT(NtRemoveProcessDebug(hTargetProc, hDbgObj) == NtStatus::Success,
+                    "NtRemoveProcessDebug must detach cleanly");
+        TEST_ASSERT(!TitanDbgkManager::Instance().isProcessBeingDebugged(targetPid),
+                    "Detached process must have BeingDebugged = false");
+
+        // Now attach a second process (PID 5100) via NTDLL DbgUi* / Win32 DebugActiveProcess
+        const uint64_t victimPid = 5100;
+        TitanDbgkManager::Instance().registerTargetProcess(
+            victimPid,
+            5104,
+            reinterpret_cast<void*>(0x00007FF720000000ULL),
+            reinterpret_cast<void*>(0x00007FF720001000ULL),
+            L"\\Device\\HarddiskVolume1\\Windows\\System32\\victim.exe"
+        );
+        TEST_ASSERT(DebugActiveProcessWin32(static_cast<uint32_t>(victimPid)) == TRUE_B,
+                    "Win32 DebugActiveProcess must connect DbgUi thread debug object and attach");
+
+        WIN32_DEBUG_EVENT w32Ev{};
+        TEST_ASSERT(WaitForDebugEventExWin32(&w32Ev, 100) == TRUE_B &&
+                    w32Ev.dwDebugEventCode == WIN32_CREATE_PROCESS_DEBUG_EVENT &&
+                    w32Ev.dwProcessId == victimPid,
+                    "WaitForDebugEventEx must dequeue WIN32_CREATE_PROCESS_DEBUG_EVENT");
+        TEST_ASSERT(ContinueDebugEventWin32(w32Ev.dwProcessId, w32Ev.dwThreadId, NtStatus::DbgContinue) == TRUE_B,
+                    "ContinueDebugEvent must resume debuggee");
+
+        // Ensure Kill-On-Exit is enabled on the DbgUi DEBUG_OBJECT and close it -> must terminate victimPid!
+        TEST_ASSERT(DebugSetProcessKillOnExitWin32(TRUE_B) == TRUE_B, "DebugSetProcessKillOnExit(TRUE) must succeed");
+        Handle hUiDbg = DbgUiGetThreadDebugObject();
+        TEST_ASSERT(DbgkCloseDebugObject(hUiDbg) == NtStatus::Success, "Closing DbgUi DEBUG_OBJECT must succeed");
+        TEST_ASSERT(TitanDbgkManager::Instance().isProcessTerminatedByKillOnClose(victimPid),
+                    "Closing DEBUG_OBJECT with DEBUG_OBJECT_KILL_ON_CLOSE must terminate attached debuggee");
+
+        DbgkCloseDebugObject(hDbgObj);
+
+        DBGK_TELEMETRY telem{};
+        TEST_ASSERT(DbgkGetTelemetry(&telem) == TRUE_B, "DbgkGetTelemetry must succeed");
+        TEST_ASSERT(telem.TotalDebugObjectsCreated >= 2 && telem.TotalProcessesAttached >= 2,
+                    "DebugObject creation and process attach telemetry must be recorded");
+        TEST_ASSERT(telem.TotalProcessesDetached >= 1 && telem.TotalProcessesKilledOnClose >= 1,
+                    "Detach and Kill-On-Close telemetry must be recorded");
+        TEST_ASSERT(telem.TotalExceptionsForwarded >= 3 && telem.TotalBreakpointTraps >= 1 && telem.TotalSingleStepTraps >= 1,
+                    "Exception routing telemetry must be recorded");
+    }
+
+    std::cout << "[TEST] Suite 260: Horizon 44 - Sovereign NT User-Mode Debugging Executive (Dbgk*), DEBUG_OBJECT & DbgUi* PASSED.\n";
+}
+
+
 
