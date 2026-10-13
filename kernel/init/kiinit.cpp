@@ -295,8 +295,8 @@ int main(int argc, char* argv[]) {
     lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
     std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
 
-    // 12.1 Initialize 16-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc*, Horizon 43 FsRtl* & Horizon 44 Dbgk*
-    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 16 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, ex, hal, pnp, po, init)...\n";
+    // 12.1 Initialize 17-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc*, Horizon 43 FsRtl*, Horizon 44 Dbgk* & Horizon 45 KTM
+    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 17 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, ex, hal, pnp, po, init)...\n";
     sys::internal::HalInitializeExecutiveSubsystem();
     sys::internal::ExInitializeExecutiveSubsystem();
     sys::internal::PnpInitializeExecutiveSubsystem();
@@ -304,12 +304,14 @@ int main(int argc, char* argv[]) {
     sys::internal::CcInitializeExecutiveCache();
     sys::internal::FsRtlInitializeExecutiveSubsystem();
     sys::internal::DbgkInitializeExecutiveSubsystem();
+    sys::internal::KtmInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
               << (km::cc::VACB_MAPPING_GRANULARITY / 1024) << " KB, BCB Pinning & Lazy Writer Active)\n";
     std::cout << "[MicaNT Boot] [FsRtl] Initialized Sovereign File System Runtime Library (LARGE_MCB, FILE_LOCK, OPLOCK, NOTIFY_SYNC, TUNNEL Active)\n";
     std::cout << "[MicaNT Boot] [Dbgk] Initialized Sovereign User-Mode Debugging Executive (DEBUG_OBJECT, NtWaitForDebugEvent, DbgUi* Active)\n";
+    std::cout << "[MicaNT Boot] [Ktm] Initialized Sovereign Kernel Transaction Manager (KTM 2PC/1PC, CLFS Write-Ahead Log, ktmw32.dll Active)\n";
 
     // 13. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";

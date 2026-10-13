@@ -13788,5 +13788,291 @@ void Test_Horizon44_UserModeDebuggingExecutive_DebugObject_Dbgk_And_DbgUi() {
     std::cout << "[TEST] Suite 260: Horizon 44 - Sovereign NT User-Mode Debugging Executive (Dbgk*), DEBUG_OBJECT & DbgUi* PASSED.\n";
 }
 
+// ============================================================================
+// Suite 261: Horizon 45 - Sovereign NT Kernel Transaction Manager (KTM / Tm*),
+//            Two-Phase Commit (2PC), Single-Phase Optimization & CLFS Engine
+// ============================================================================
+
+namespace Horizon45Callbacks {
+    static int g_singlePhaseCalls = 0;
+    static int g_prePrepareCalls  = 0;
+    static int g_prepareCalls     = 0;
+    static int g_commitCalls      = 0;
+    static int g_rollbackCalls    = 0;
+    static bool g_rejectSinglePhase = false;
+
+    inline void reset() noexcept {
+        g_singlePhaseCalls  = 0;
+        g_prePrepareCalls   = 0;
+        g_prepareCalls      = 0;
+        g_commitCalls       = 0;
+        g_rollbackCalls     = 0;
+        g_rejectSinglePhase = false;
+    }
+
+    inline NtStatus RmCallback(
+        Handle         enlistmentHandle,
+        void*          rmContext,
+        void*          transactionContext,
+        uint32_t       notification,
+        LargeInteger*  tmVirtualClock,
+        uint32_t       argLength,
+        void*          arg
+    ) {
+        (void)enlistmentHandle;
+        (void)rmContext;
+        (void)transactionContext;
+        (void)tmVirtualClock;
+        (void)argLength;
+        (void)arg;
+        using namespace micant::km::ktm;
+
+        if ((notification & TRANSACTION_NOTIFY_SINGLE_PHASE_COMMIT) != 0) {
+            g_singlePhaseCalls++;
+            if (g_rejectSinglePhase) {
+                return NtStatus::NotSupported; // Trigger fallback to full 2PC!
+            }
+            return NtStatus::Success;
+        }
+        if ((notification & TRANSACTION_NOTIFY_PREPREPARE) != 0) {
+            g_prePrepareCalls++;
+            return NtStatus::Success;
+        }
+        if ((notification & TRANSACTION_NOTIFY_PREPARE) != 0) {
+            g_prepareCalls++;
+            return NtStatus::Success;
+        }
+        if ((notification & TRANSACTION_NOTIFY_COMMIT) != 0) {
+            g_commitCalls++;
+            return NtStatus::Success;
+        }
+        if ((notification & TRANSACTION_NOTIFY_ROLLBACK) != 0) {
+            g_rollbackCalls++;
+            return NtStatus::Success;
+        }
+        return NtStatus::Success;
+    }
+}
+
+void Test_Horizon45_KernelTransactionManager_TwoPhaseCommit_CLFS_And_Ktmw32() {
+    using namespace micant::km::ktm;
+
+    TitanKtmManager::Instance().reset();
+    Horizon45Callbacks::reset();
+    InitializeKtmSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Subsystem Registration & Dynamic Export Verification
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtCreateTransactionManager") != nullptr, "NtCreateTransactionManager must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtCreateResourceManager") != nullptr, "NtCreateResourceManager must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtCreateTransaction") != nullptr, "NtCreateTransaction must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtCommitTransaction") != nullptr, "NtCommitTransaction must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtRollbackTransaction") != nullptr, "NtRollbackTransaction must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "NtCreateEnlistment") != nullptr, "NtCreateEnlistment must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "TmEnableCallbacks") != nullptr, "TmEnableCallbacks must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "TmPrepareComplete") != nullptr, "TmPrepareComplete must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "TmCommitComplete") != nullptr, "TmCommitComplete must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "TmSinglePhaseReject") != nullptr, "TmSinglePhaseReject must be exported");
+
+        TEST_ASSERT(ldr.getExport("clfsw32.sys", "ClfsCreateLogFile") != nullptr, "clfsw32.sys ClfsCreateLogFile must be exported");
+        TEST_ASSERT(ldr.getExport("clfsw32.sys", "ClfsWriteRestartArea") != nullptr, "clfsw32.sys ClfsWriteRestartArea must be exported");
+        TEST_ASSERT(ldr.getExport("clfsw32.sys", "ClfsReadRestartArea") != nullptr, "clfsw32.sys ClfsReadRestartArea must be exported");
+
+        TEST_ASSERT(ldr.getExport("ktmw32.dll", "CreateTransaction") != nullptr, "ktmw32.dll CreateTransaction must be exported");
+        TEST_ASSERT(ldr.getExport("ktmw32.dll", "CommitTransaction") != nullptr, "ktmw32.dll CommitTransaction must be exported");
+        TEST_ASSERT(ldr.getExport("ktmw32.dll", "RollbackTransaction") != nullptr, "ktmw32.dll RollbackTransaction must be exported");
+
+        auto& scm = scm::ServiceControlManager::get();
+        auto svc = scm.getServiceRecord(L"KtmRm");
+        TEST_ASSERT(svc != nullptr && svc->status.dwCurrentState == scm::SERVICE_RUNNING, "KtmRm service must be RUNNING");
+
+        auto* mod = version::VersionDatabase::Instance().GetModuleInfo("ktm_executive");
+        TEST_ASSERT(mod != nullptr, "ktm_executive module must be registered in VersionDatabase");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Common Log File System (CLFS) LSN Ordering & Restart Area Persistence
+    // ------------------------------------------------------------------------
+    {
+        CLFS_LSN lsnA = CLFS_LSN::make(1, 10, 1);
+        CLFS_LSN lsnB = CLFS_LSN::make(1, 10, 2);
+        CLFS_LSN lsnC = CLFS_LSN::make(2, 1, 1);
+        TEST_ASSERT(ClfsLsnLess(&lsnA, &lsnB) == TRUE_B && ClfsLsnGreater(&lsnC, &lsnB) == TRUE_B,
+                    "CLFS_LSN 64-bit container/block/record ordering must be monotonic");
+
+        Handle hClfs = 0;
+        TEST_ASSERT(ClfsCreateLogFile(&hClfs, L"log:\\SystemVolumeInformation\\TxR.blf", 0, 0, 0) == NtStatus::Success,
+                    "ClfsCreateLogFile must succeed");
+
+        struct CheckpointState {
+            uint64_t checkpointEpoch;
+            uint32_t activeTxCount;
+        };
+        CheckpointState cpOut{ 0x20261013ULL, 4 };
+        CLFS_LSN restartLsn{};
+        TEST_ASSERT(ClfsWriteRestartArea(hClfs, &cpOut, sizeof(cpOut), &restartLsn) == NtStatus::Success,
+                    "ClfsWriteRestartArea must succeed");
+        TEST_ASSERT(restartLsn.ullOffset != 0, "Restart LSN must be non-zero");
+
+        CheckpointState cpIn{};
+        uint32_t bytesRead = 0;
+        CLFS_LSN readLsn{};
+        TEST_ASSERT(ClfsReadRestartArea(hClfs, &cpIn, sizeof(cpIn), &bytesRead, &readLsn) == NtStatus::Success,
+                    "ClfsReadRestartArea must succeed");
+        TEST_ASSERT(cpIn.checkpointEpoch == 0x20261013ULL && cpIn.activeTxCount == 4 && ClfsLsnEqual(&restartLsn, &readLsn) == TRUE_B,
+                    "ClfsReadRestartArea must restore exact checkpoint data and LSN");
+        ClfsCloseLogFileObject(hClfs);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Single-Phase Commit (1PC) Optimization & Fallback to 2PC on Reject
+    // ------------------------------------------------------------------------
+    Handle hTm = 0, hRm1 = 0, hRm2 = 0;
+    TEST_ASSERT(NtCreateTransactionManager(&hTm, TRANSACTIONMANAGER_ALL_ACCESS, nullptr, L"\\??\\C:\\KtmMaster.blf", 0, 0) == NtStatus::Success,
+                "NtCreateTransactionManager must succeed");
+    TEST_ASSERT(NtCreateResourceManager(&hRm1, RESOURCEMANAGER_ALL_ACCESS, hTm, nullptr, nullptr, 0, L"TxF_NTFS_RM") == NtStatus::Success,
+                "Create Resource Manager 1 (TxF) must succeed");
+    TEST_ASSERT(NtCreateResourceManager(&hRm2, RESOURCEMANAGER_ALL_ACCESS, hTm, nullptr, nullptr, 0, L"TxR_Registry_RM") == NtStatus::Success,
+                "Create Resource Manager 2 (TxR) must succeed");
+    TEST_ASSERT(TmEnableCallbacks(hRm1, Horizon45Callbacks::RmCallback, reinterpret_cast<void*>(0x101)) == NtStatus::Success,
+                "TmEnableCallbacks on RM1 must succeed");
+
+    {
+        // 3a. Single enlistment with TRANSACTION_NOTIFY_SINGLE_PHASE_COMMIT -> executes 1PC directly!
+        Horizon45Callbacks::reset();
+        Handle hTx1 = 0, hEnl1 = 0;
+        TEST_ASSERT(NtCreateTransaction(&hTx1, TRANSACTION_ALL_ACCESS, nullptr, nullptr, hTm, 0, 0, 0, nullptr, L"SinglePhaseTx") == NtStatus::Success,
+                    "NtCreateTransaction for 1PC must succeed");
+        uint32_t mask1pc = TRANSACTION_NOTIFY_PREPREPARE | TRANSACTION_NOTIFY_PREPARE |
+                           TRANSACTION_NOTIFY_COMMIT | TRANSACTION_NOTIFY_ROLLBACK |
+                           TRANSACTION_NOTIFY_SINGLE_PHASE_COMMIT;
+        TEST_ASSERT(TmCreateEnlistment(&hEnl1, hRm1, hTx1, nullptr, ENLISTMENT_ALL_ACCESS, 0, mask1pc, reinterpret_cast<void*>(0xE1)) == NtStatus::Success,
+                    "TmCreateEnlistment for 1PC must succeed");
+
+        TEST_ASSERT(NtCommitTransaction(hTx1, TRUE_B) == NtStatus::Success, "1PC NtCommitTransaction must succeed");
+        TEST_ASSERT(Horizon45Callbacks::g_singlePhaseCalls == 1 &&
+                    Horizon45Callbacks::g_prePrepareCalls == 0 &&
+                    Horizon45Callbacks::g_prepareCalls == 0,
+                    "1PC optimization must bypass PrePrepare/Prepare and invoke SINGLE_PHASE_COMMIT directly");
+
+        // 3b. Single enlistment that rejects 1PC -> seamlessly falls back to full 2PC (PrePrepare -> Prepare -> Commit)!
+        Horizon45Callbacks::reset();
+        Horizon45Callbacks::g_rejectSinglePhase = true;
+        Handle hTxFallback = 0, hEnlFb = 0;
+        NtCreateTransaction(&hTxFallback, TRANSACTION_ALL_ACCESS, nullptr, nullptr, hTm, 0, 0, 0, nullptr, L"Fallback2PCTx");
+        TmCreateEnlistment(&hEnlFb, hRm1, hTxFallback, nullptr, ENLISTMENT_ALL_ACCESS, 0, mask1pc, reinterpret_cast<void*>(0xE2));
+
+        TEST_ASSERT(NtCommitTransaction(hTxFallback, TRUE_B) == NtStatus::Success,
+                    "Commit with 1PC rejection must seamlessly succeed via 2PC fallback");
+        TEST_ASSERT(Horizon45Callbacks::g_singlePhaseCalls == 1 &&
+                    Horizon45Callbacks::g_prePrepareCalls == 1 &&
+                    Horizon45Callbacks::g_prepareCalls == 1 &&
+                    Horizon45Callbacks::g_commitCalls == 1,
+                    "1PC rejection must execute PrePrepare -> Prepare -> Commit fallback");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Multi-RM Explicit Two-Phase Commit (TxF + TxR Coordinated 2PC)
+    // ------------------------------------------------------------------------
+    {
+        Horizon45Callbacks::reset();
+        Handle hTx2pc = 0, hEnlRm1 = 0, hEnlRm2 = 0;
+        NtCreateTransaction(&hTx2pc, TRANSACTION_ALL_ACCESS, nullptr, nullptr, hTm, 0, 0, 0, nullptr, L"DistributedTxF_TxR");
+
+        uint32_t mask2pc = TRANSACTION_NOTIFY_PREPREPARE | TRANSACTION_NOTIFY_PREPARE |
+                           TRANSACTION_NOTIFY_COMMIT | TRANSACTION_NOTIFY_ROLLBACK;
+        // RM1 uses synchronous kernel callback; RM2 uses explicit queue polling (NtGetNotificationResourceManager + Tm*Complete)
+        TmCreateEnlistment(&hEnlRm1, hRm1, hTx2pc, nullptr, ENLISTMENT_ALL_ACCESS, 0, mask2pc, reinterpret_cast<void*>(0xAAA1));
+        TmCreateEnlistment(&hEnlRm2, hRm2, hTx2pc, nullptr, ENLISTMENT_ALL_ACCESS, 0, mask2pc, reinterpret_cast<void*>(0xBBB2));
+
+        // Initiate commit -> RM1 auto-completes PrePrepare via callback; RM2 has PrePrepare queued
+        TEST_ASSERT(NtCommitTransaction(hTx2pc, FALSE_B) == NtStatus::Success, "Initiate 2PC commit must succeed");
+
+        TRANSACTION_NOTIFICATION notif{};
+        uint32_t retLen = 0;
+        TEST_ASSERT(NtGetNotificationResourceManager(hRm2, &notif, sizeof(notif), nullptr, &retLen, 0, 0) == NtStatus::Success,
+                    "RM2 must dequeue TRANSACTION_NOTIFY_PREPREPARE");
+        TEST_ASSERT(notif.TransactionNotification == TRANSACTION_NOTIFY_PREPREPARE &&
+                    notif.TransactionKey == reinterpret_cast<void*>(0xBBB2),
+                    "RM2 first notification must be PREPREPARE with matching EnlistmentKey");
+
+        // RM2 completes PrePrepare -> triggers Prepare phase for both RMs!
+        TEST_ASSERT(TmPrePrepareComplete(hEnlRm2, &notif.TmVirtualClock) == NtStatus::Success,
+                    "TmPrePrepareComplete for RM2 must advance transaction to Prepare phase");
+        TEST_ASSERT(Horizon45Callbacks::g_prepareCalls == 1, "RM1 must have received Prepare notification");
+
+        // RM2 dequeues Prepare notification and completes Prepare -> triggers Commit phase for both RMs!
+        TEST_ASSERT(NtGetNotificationResourceManager(hRm2, &notif, sizeof(notif), nullptr, &retLen, 0, 0) == NtStatus::Success &&
+                    notif.TransactionNotification == TRANSACTION_NOTIFY_PREPARE,
+                    "RM2 must dequeue TRANSACTION_NOTIFY_PREPARE");
+        TEST_ASSERT(TmPrepareComplete(hEnlRm2, &notif.TmVirtualClock) == NtStatus::Success,
+                    "TmPrepareComplete for RM2 must finalize 2PC commit");
+
+        // Verify transaction outcome is now TransactionOutcomeCommitted!
+        TRANSACTION_BASIC_INFORMATION basicInfo{};
+        TEST_ASSERT(NtQueryInformationTransaction(hTx2pc, TransactionBasicInformation, &basicInfo, sizeof(basicInfo), nullptr) == NtStatus::Success,
+                    "NtQueryInformationTransaction must succeed");
+        TEST_ASSERT(basicInfo.Outcome == TransactionOutcomeCommitted,
+                    "Transaction outcome must be TransactionOutcomeCommitted after all RMs PrepareComplete");
+
+        // RM2 dequeues Commit notification and calls TmCommitComplete
+        TEST_ASSERT(NtGetNotificationResourceManager(hRm2, &notif, sizeof(notif), nullptr, &retLen, 0, 0) == NtStatus::Success &&
+                    notif.TransactionNotification == TRANSACTION_NOTIFY_COMMIT,
+                    "RM2 must dequeue TRANSACTION_NOTIFY_COMMIT");
+        TEST_ASSERT(TmCommitComplete(hEnlRm2, &notif.TmVirtualClock) == NtStatus::Success,
+                    "TmCommitComplete for RM2 must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Atomic Veto / Rollback Broadcast & Win32 ktmw32.dll Bridge
+    // ------------------------------------------------------------------------
+    {
+        Horizon45Callbacks::reset();
+        Handle hTxAbort = 0, hEnl1 = 0, hEnl2 = 0;
+        NtCreateTransaction(&hTxAbort, TRANSACTION_ALL_ACCESS, nullptr, nullptr, hTm, 0, 0, 0, nullptr, L"AbortedTx");
+        uint32_t mask = TRANSACTION_NOTIFY_PREPREPARE | TRANSACTION_NOTIFY_PREPARE |
+                        TRANSACTION_NOTIFY_COMMIT | TRANSACTION_NOTIFY_ROLLBACK;
+        TmCreateEnlistment(&hEnl1, hRm1, hTxAbort, nullptr, ENLISTMENT_ALL_ACCESS, 0, mask, nullptr);
+        TmCreateEnlistment(&hEnl2, hRm2, hTxAbort, nullptr, ENLISTMENT_ALL_ACCESS, 0, mask, nullptr);
+
+        // RM2 vetoes the transaction via TmRollbackEnlistment -> RM1 must receive TRANSACTION_NOTIFY_ROLLBACK!
+        TEST_ASSERT(TmRollbackEnlistment(hEnl2, nullptr) == NtStatus::Success,
+                    "TmRollbackEnlistment veto must succeed");
+        TEST_ASSERT(Horizon45Callbacks::g_rollbackCalls == 1,
+                    "Veto by RM2 must broadcast TRANSACTION_NOTIFY_ROLLBACK to RM1");
+        TEST_ASSERT(NtCommitTransaction(hTxAbort, TRUE_B) == NtStatus::TransactionAlreadyAborted,
+                    "Attempting to commit an aborted transaction must return STATUS_TRANSACTION_ALREADY_ABORTED");
+
+        // Win32 ktmw32.dll User-Mode Bridge
+        KTM_GUID uow{};
+        Handle hWin32Tx = CreateTransactionWin32(nullptr, nullptr, 0, 0, 0, 5000, L"Win32AppTransaction");
+        TEST_ASSERT(hWin32Tx != static_cast<Handle>(-1), "Win32 CreateTransaction must succeed");
+        TEST_ASSERT(GetTransactionIdWin32(hWin32Tx, &uow) == TRUE_B && uow.Data1 != 0,
+                    "Win32 GetTransactionId must return valid UOW GUID");
+        TEST_ASSERT(CommitTransactionWin32(hWin32Tx) == TRUE_B, "Win32 CommitTransaction must succeed");
+
+        // Recovery check
+        TEST_ASSERT(NtRecoverTransactionManager(hTm) == NtStatus::Success, "NtRecoverTransactionManager must succeed");
+        TEST_ASSERT(NtRecoverResourceManager(hRm2) == NtStatus::Success, "NtRecoverResourceManager must succeed");
+
+        KTM_TELEMETRY telem{};
+        TEST_ASSERT(KtmGetTelemetry(&telem) == TRUE_B, "KtmGetTelemetry must succeed");
+        TEST_ASSERT(telem.TotalTransactionManagersCreated >= 1 && telem.TotalResourceManagersCreated >= 2,
+                    "TM and RM telemetry must be recorded");
+        TEST_ASSERT(telem.TotalSinglePhaseCommits >= 1 && telem.TotalSinglePhaseRejections >= 1 && telem.TotalTwoPhaseCommits >= 2,
+                    "1PC, 1PC-reject, and 2PC telemetry must be recorded");
+        TEST_ASSERT(telem.TotalTransactionsCommitted >= 4 && telem.TotalTransactionsAborted >= 1,
+                    "Commit and Abort telemetry must be recorded");
+        TEST_ASSERT(telem.TotalClfsRecordsAppended >= 8 && telem.TotalClfsRestartWrites >= 1,
+                    "CLFS Write-Ahead Log telemetry must be recorded");
+    }
+
+    std::cout << "[TEST] Suite 261: Horizon 45 - Sovereign NT Kernel Transaction Manager (KTM / Tm*), 2PC & CLFS PASSED.\n";
+}
+
+
 
 

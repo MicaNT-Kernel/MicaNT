@@ -146,7 +146,19 @@ enum class NtStatus : uint32_t {
     DbgExceptionNotHandled           = 0x80010001,
     PortNotSet                       = 0xC0000353,
     DebuggerInactive                 = 0xC0000354,
-    DebugAttachFailed                = 0xC0000399
+    DebugAttachFailed                = 0xC0000399,
+
+    // Kernel Transaction Manager (KTM / Tm* / CLFS) Status Codes (Facility 0x19)
+    TransactionInvalidMarshallBuffer = 0xC0190001,
+    TransactionInvalidType           = 0xC0190002,
+    TransactionNotRequested          = 0xC0190003,
+    TransactionAlreadyAborted        = 0xC0190004,
+    TransactionAlreadyCommitted      = 0xC0190005,
+    TransactionPropagationFailed     = 0xC0190006,
+    TransactionNotJoined             = 0xC0190007,
+    TransactionSuperiorExists        = 0xC0190008,
+    TransactionNotActive             = 0xC0190009,
+    TransactionRequestNotValid       = 0xC019000A
 };
 
 // ============================================================================

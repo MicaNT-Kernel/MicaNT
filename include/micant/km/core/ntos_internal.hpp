@@ -45,6 +45,9 @@ void FsRtlInitializeExecutiveSubsystem() noexcept;
 // User-Mode Debugging Executive Initialization (kernel/dbgk/dbgkobj.cpp)
 void DbgkInitializeExecutiveSubsystem() noexcept;
 
+// Kernel Transaction Manager & CLFS Initialization (kernel/tm/ktmmgr.cpp)
+void KtmInitializeExecutiveSubsystem() noexcept;
+
 // Executive Pool, Sync & Worker Initialization (kernel/ex/exmgr.cpp)
 void ExInitializeExecutiveSubsystem() noexcept;
 

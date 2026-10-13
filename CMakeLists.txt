@@ -24,6 +24,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/cc/ccmgr.cpp
     kernel/fsrtl/fsrtlmgr.cpp
     kernel/dbgk/dbgkobj.cpp
+    kernel/tm/ktmmgr.cpp
     kernel/ex/exmgr.cpp
     kernel/hal/halinit.cpp
     kernel/pnp/pnpmgr.cpp
