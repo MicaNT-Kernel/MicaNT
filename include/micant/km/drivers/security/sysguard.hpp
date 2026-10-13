@@ -52,10 +52,10 @@
 #pragma once
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
-#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/winbase/kernel32.hpp"
 #include "micant/um/native/ldr.hpp"
-#include "micant/um/subsystems/version.hpp"
-#include "micant/um/subsystems/cipherksp.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
+#include "micant/um/subsystems/security/cipherksp.hpp"
 
 #include <cstdint>
 #include <cstddef>

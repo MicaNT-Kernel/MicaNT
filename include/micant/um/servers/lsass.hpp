@@ -25,7 +25,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/se.hpp"
-#include "micant/um/subsystems/sam.hpp"
+#include "micant/um/subsystems/security/sam.hpp"
 
 namespace micant::lsass {
 

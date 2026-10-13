@@ -27,7 +27,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/shared/ntdef.hpp"
 #include "micant/um/servers/scm.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/um/servers/iis_server.hpp"
 
 namespace micant::wsus {

@@ -21,7 +21,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/km/hal/uefi.hpp"
 #include "micant/km/hal/bootvid.hpp"
-#include "micant/um/subsystems/input_router.hpp"
+#include "micant/um/subsystems/winuser/input_router.hpp"
 
 #include <cstdint>
 #include <string>

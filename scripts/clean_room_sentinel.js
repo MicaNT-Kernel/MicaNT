@@ -333,6 +333,8 @@ function verifyDirectoryArchitecture() {
         { dir: path.join(repoRoot, 'include', 'micant'), desc: 'include/micant/ (must reside in shared/, km/, um/, ucrt/, or shell/)' },
         { dir: path.join(repoRoot, 'include', 'micant', 'km'), desc: 'include/micant/km/ (must reside in core/, executive/, hal/, drivers/, or win32k/)' },
         { dir: path.join(repoRoot, 'include', 'micant', 'km', 'drivers'), desc: 'include/micant/km/drivers/ (must reside in WDK class subdir: storage/, fs/, net/, usb/, input/, video/, audio/, bus/, compute/, security/)' },
+        { dir: path.join(repoRoot, 'include', 'micant', 'um'), desc: 'include/micant/um/ (must reside in native/, servers/, or subsystems/)' },
+        { dir: path.join(repoRoot, 'include', 'micant', 'um', 'subsystems'), desc: 'include/micant/um/subsystems/ (must reside in domain subdir: winbase/, winuser/, graphics/, media/, net/, com/, security/, mgmt/)' },
         { dir: path.join(repoRoot, 'kernel'), desc: 'kernel/ (must reside in base/ntos subsystem subdir: init/, ke/, mm/, io/, ob/, ps/, cm/, se/, lpc/, cc/, ex/, hal/, pnp/, po/)' }
     ];
 

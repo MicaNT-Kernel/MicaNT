@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include "micant/shared/ntstatus.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/um/servers/scm.hpp"
 
 #include <string>

@@ -45,7 +45,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/servers/scm.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 
 namespace micant::wdf {
 

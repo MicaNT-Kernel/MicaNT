@@ -62,7 +62,7 @@
 #include <functional>
 #include <unordered_map>
 #include "micant/um/servers/scm.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 
 namespace micant::tee {
 

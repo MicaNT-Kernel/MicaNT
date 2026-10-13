@@ -16,7 +16,7 @@
 #include <cstring>
 #include <functional>
 #include "micant/um/servers/scm.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/um/servers/dns_server.hpp"
 
 namespace micant::dhcp {

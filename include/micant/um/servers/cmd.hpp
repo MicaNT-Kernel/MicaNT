@@ -34,10 +34,10 @@
 #include <chrono>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
-#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/winbase/kernel32.hpp"
 #include "micant/km/drivers/fs/fs.hpp"
 #include "micant/um/servers/conhost.hpp"
-#include "micant/um/subsystems/user32.hpp"
+#include "micant/um/subsystems/winuser/user32.hpp"
 #include "micant/um/servers/csrss.hpp"
 #include "micant/um/native/ldr.hpp"
 

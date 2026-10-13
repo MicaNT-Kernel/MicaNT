@@ -73,9 +73,9 @@
 #include <algorithm>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
-#include "micant/um/subsystems/kernel32.hpp"
+#include "micant/um/subsystems/winbase/kernel32.hpp"
 #include "micant/um/native/ldr.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 
 namespace micant::dma_guard {
 

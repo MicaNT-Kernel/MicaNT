@@ -13,7 +13,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"
 #include "micant/km/executive/driver.hpp"
-#include "micant/um/subsystems/prismx.hpp" // for GUID
+#include "micant/um/subsystems/graphics/prismx.hpp" // for GUID
 #include <cstdint>
 #include <string>
 #include <string_view>

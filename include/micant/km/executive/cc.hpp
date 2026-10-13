@@ -58,7 +58,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/native/janusldr.hpp"
 #include "micant/um/servers/scm.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/km/executive/io.hpp"
 #include "micant/km/executive/mm.hpp"
 

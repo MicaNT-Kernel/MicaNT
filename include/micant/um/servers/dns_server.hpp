@@ -15,7 +15,7 @@
 #include <cstring>
 #include <random>
 #include "micant/um/servers/scm.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 
 namespace micant::dns {
 

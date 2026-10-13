@@ -64,7 +64,7 @@
 #include <atomic>
 #include <cstring>
 #include "micant/shared/ntstatus.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/um/servers/scm.hpp"
 
 namespace micant::hyperv {

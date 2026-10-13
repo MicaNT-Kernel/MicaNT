@@ -58,9 +58,9 @@
 #include "micant/um/native/generated_nt_api.hpp"
 
 // 7. User Mode (Ring 3): Subsystems & Shell
-#include "micant/um/subsystems/kernel32.hpp"
-#include "micant/um/subsystems/iphlpapi.hpp"
-#include "micant/um/subsystems/shell.hpp"
+#include "micant/um/subsystems/winbase/kernel32.hpp"
+#include "micant/um/subsystems/net/iphlpapi.hpp"
+#include "micant/um/subsystems/winuser/shell.hpp"
 
 using namespace micant;
 

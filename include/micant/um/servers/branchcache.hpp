@@ -54,11 +54,11 @@
 #include <atomic>
 #include <cstring>
 #include "micant/shared/ntstatus.hpp"
-#include "micant/um/subsystems/version.hpp"
+#include "micant/um/subsystems/winbase/version.hpp"
 #include "micant/um/servers/scm.hpp"
-#include "micant/um/subsystems/cipherksp.hpp"
+#include "micant/um/subsystems/security/cipherksp.hpp"
 #include "micant/km/drivers/net/tcpip.hpp"
-#include "micant/um/subsystems/nla.hpp"
+#include "micant/um/subsystems/net/nla.hpp"
 
 namespace micant::wan {
 
