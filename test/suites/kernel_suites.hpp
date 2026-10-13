@@ -12349,15 +12349,393 @@ void Test_Horizon40_USB32_xHCI_HostController_And_HubArchitecture() {
     std::cout << "[TEST] Suite 256: Horizon 40 - USB 3.2 xHCI Host Controller Driver, Root Hub & URB Pipeline PASSED.\n";
 }
 
+// ============================================================================
+// Suite 257: Horizon 41 - Human Interface Device (HID) Class Driver, Report Parser & Input Stack
+// ============================================================================
 
+void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
+    using namespace micant::km::hid;
+    std::cout << "[TEST] Running Suite 257: Horizon 41 - HID Class Driver, Report Descriptor Parser & Kernel Input Stack...\n" << std::flush;
 
+    // ------------------------------------------------------------------------
+    // Phase 1: Subsystem Initialization, JanusLDR Exports & SCM/Version DB
+    // ------------------------------------------------------------------------
+    {
+        InitializeHidSubsystemExports();
+        auto& hidSys = TitanHidInputSubsystem::Instance();
+        hidSys.resetForTesting();
 
+        // 1. JanusLDR Exports Verification (hid.dll, hidparse.sys, hidclass.sys, hidusb.sys, kbdclass.sys, mouclass.sys, i8042prt.sys)
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidD_GetHidGuid") != nullptr, "hid.dll HidD_GetHidGuid must exist");
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidD_GetAttributes") != nullptr, "hid.dll HidD_GetAttributes must exist");
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidD_GetPreparsedData") != nullptr, "hid.dll HidD_GetPreparsedData must exist");
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidD_FreePreparsedData") != nullptr, "hid.dll HidD_FreePreparsedData must exist");
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidD_GetFeature") != nullptr, "hid.dll HidD_GetFeature must exist");
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidD_SetFeature") != nullptr, "hid.dll HidD_SetFeature must exist");
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidP_GetCaps") != nullptr, "hid.dll HidP_GetCaps must exist");
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidP_GetUsages") != nullptr, "hid.dll HidP_GetUsages must exist");
+        TEST_ASSERT(ldr.getExport("hid.dll", "HidP_GetUsageValue") != nullptr, "hid.dll HidP_GetUsageValue must exist");
 
+        TEST_ASSERT(ldr.getExport("hidparse.sys", "HidP_GetCaps") != nullptr, "hidparse.sys HidP_GetCaps must exist");
+        TEST_ASSERT(ldr.getExport("hidparse.sys", "HidP_GetButtonCaps") != nullptr, "hidparse.sys HidP_GetButtonCaps must exist");
+        TEST_ASSERT(ldr.getExport("hidparse.sys", "HidP_GetValueCaps") != nullptr, "hidparse.sys HidP_GetValueCaps must exist");
 
+        TEST_ASSERT(ldr.getExport("hidclass.sys", "HidGetTelemetry") != nullptr, "hidclass.sys HidGetTelemetry must exist");
+        TEST_ASSERT(ldr.getExport("hidusb.sys", "HidGetTelemetry") != nullptr, "hidusb.sys HidGetTelemetry must exist");
+        TEST_ASSERT(ldr.getExport("kbdclass.sys", "KeyboardClassServiceCallback") != nullptr, "kbdclass.sys KeyboardClassServiceCallback must exist");
+        TEST_ASSERT(ldr.getExport("mouclass.sys", "MouseClassServiceCallback") != nullptr, "mouclass.sys MouseClassServiceCallback must exist");
+        TEST_ASSERT(ldr.getExport("i8042prt.sys", "I8042ReadPortUchar") != nullptr, "i8042prt.sys I8042ReadPortUchar must exist");
+        TEST_ASSERT(ldr.getExport("i8042prt.sys", "I8042WritePortUchar") != nullptr, "i8042prt.sys I8042WritePortUchar must exist");
 
+        // 2. SCM Service Records Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto hidClassSvc = scm.getServiceRecord(L"hidclass");
+        TEST_ASSERT(hidClassSvc != nullptr, "hidclass service record must exist in SCM");
+        TEST_ASSERT(hidClassSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "hidclass must be a kernel driver");
+        TEST_ASSERT(hidClassSvc->startType == scm::SERVICE_BOOT_START, "hidclass must be boot start");
+        TEST_ASSERT(hidClassSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "hidclass must be running");
 
+        TEST_ASSERT(scm.getServiceRecord(L"hidparse") != nullptr, "hidparse service record must exist");
+        TEST_ASSERT(scm.getServiceRecord(L"hidusb") != nullptr, "hidusb service record must exist");
+        TEST_ASSERT(scm.getServiceRecord(L"kbdclass") != nullptr, "kbdclass service record must exist");
+        TEST_ASSERT(scm.getServiceRecord(L"mouclass") != nullptr, "mouclass service record must exist");
+        TEST_ASSERT(scm.getServiceRecord(L"i8042prt") != nullptr, "i8042prt service record must exist");
 
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("hidclass.sys") != nullptr, "hidclass.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("hidparse.sys") != nullptr, "hidparse.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("hidusb.sys") != nullptr, "hidusb.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("kbdclass.sys") != nullptr, "kbdclass.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("mouclass.sys") != nullptr, "mouclass.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("i8042prt.sys") != nullptr, "i8042prt.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("hid.dll") != nullptr, "hid.dll must be in Version Database");
+    }
 
+    // ------------------------------------------------------------------------
+    // Phase 2: HID Report Descriptor Bytecode Parser (hidparse.sys)
+    // ------------------------------------------------------------------------
+    {
+        // 1. Parse Standard 6KRO Keyboard Report Descriptor
+        win32::HANDLE hKbd = reinterpret_cast<win32::HANDLE>(0x4101);
+        PHIDP_PREPARSED_DATA kbdPreparsed = nullptr;
+        TEST_ASSERT(HidD_GetPreparsedData(hKbd, &kbdPreparsed) == TRUE_B, "HidD_GetPreparsedData on Keyboard must succeed");
+        TEST_ASSERT(kbdPreparsed != nullptr, "Keyboard preparsed data must not be null");
 
+        HIDP_CAPS kbdCaps{};
+        TEST_ASSERT(HidP_GetCaps(kbdPreparsed, &kbdCaps) == HIDP_STATUS_SUCCESS, "HidP_GetCaps on Keyboard must succeed");
+        TEST_ASSERT(kbdCaps.UsagePage == HID_USAGE_PAGE_GENERIC, "Keyboard UsagePage must be Generic Desktop (0x01)");
+        TEST_ASSERT(kbdCaps.Usage == HID_USAGE_GENERIC_KEYBOARD, "Keyboard Usage must be Keyboard (0x06)");
+        TEST_ASSERT(kbdCaps.InputReportByteLength == 9, "Keyboard InputReportByteLength must be 9 (1 ReportID + 8 payload bytes)");
+        TEST_ASSERT(kbdCaps.OutputReportByteLength == 2, "Keyboard OutputReportByteLength must be 2 (1 ReportID + 1 LED byte)");
+        TEST_ASSERT(kbdCaps.NumberInputButtonCaps == 2, "Keyboard must have 2 InputButtonCaps (Modifiers + 6KRO Array)");
+        TEST_ASSERT(kbdCaps.NumberOutputButtonCaps == 1, "Keyboard must have 1 OutputButtonCap (5 LEDs)");
 
+        TEST_ASSERT(HidD_FreePreparsedData(kbdPreparsed) == TRUE_B, "HidD_FreePreparsedData must succeed");
 
+        // 2. Parse High-Precision 16-bit Gaming Mouse Report Descriptor
+        win32::HANDLE hMou = reinterpret_cast<win32::HANDLE>(0x4102);
+        PHIDP_PREPARSED_DATA mouPreparsed = nullptr;
+        TEST_ASSERT(HidD_GetPreparsedData(hMou, &mouPreparsed) == TRUE_B, "HidD_GetPreparsedData on Mouse must succeed");
+
+        HIDP_CAPS mouCaps{};
+        TEST_ASSERT(HidP_GetCaps(mouPreparsed, &mouCaps) == HIDP_STATUS_SUCCESS, "HidP_GetCaps on Mouse must succeed");
+        TEST_ASSERT(mouCaps.UsagePage == HID_USAGE_PAGE_GENERIC, "Mouse UsagePage must be Generic Desktop (0x01)");
+        TEST_ASSERT(mouCaps.Usage == HID_USAGE_GENERIC_MOUSE, "Mouse Usage must be Mouse (0x02)");
+        TEST_ASSERT(mouCaps.InputReportByteLength == 7, "Mouse InputReportByteLength must be 7 (1 ReportID + 6 payload bytes)");
+        TEST_ASSERT(mouCaps.NumberInputButtonCaps == 1, "Mouse must have 1 InputButtonCap (Buttons 1..5)");
+        TEST_ASSERT(mouCaps.NumberInputValueCaps == 3, "Mouse must have 3 InputValueCaps (16-bit X, 16-bit Y, 8-bit Wheel)");
+
+        USHORT vcapLen = mouCaps.NumberInputValueCaps;
+        std::vector<HIDP_VALUE_CAPS> vcaps(vcapLen);
+        TEST_ASSERT(HidP_GetValueCaps(HidP_Input, vcaps.data(), &vcapLen, mouPreparsed) == HIDP_STATUS_SUCCESS,
+                    "HidP_GetValueCaps on Mouse must succeed");
+        TEST_ASSERT(vcaps[0].NotRange.Usage == HID_USAGE_GENERIC_X && vcaps[0].BitSize == 16, "ValueCap 0 must be 16-bit X");
+        TEST_ASSERT(vcaps[0].LogicalMin == -32767 && vcaps[0].LogicalMax == 32767, "X axis must have signed 16-bit logical bounds");
+        TEST_ASSERT(vcaps[1].NotRange.Usage == HID_USAGE_GENERIC_Y && vcaps[1].BitSize == 16, "ValueCap 1 must be 16-bit Y");
+        TEST_ASSERT(vcaps[2].NotRange.Usage == HID_USAGE_GENERIC_WHEEL && vcaps[2].BitSize == 8, "ValueCap 2 must be 8-bit Wheel");
+
+        HidD_FreePreparsedData(mouPreparsed);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: HidP_* Report Extraction & Bitfield Packing Engine
+    // ------------------------------------------------------------------------
+    {
+        // 1. Keyboard Input Report Unpacking & Output LED Packing
+        win32::HANDLE hKbd = reinterpret_cast<win32::HANDLE>(0x4101);
+        PHIDP_PREPARSED_DATA kbdData = nullptr;
+        HidD_GetPreparsedData(hKbd, &kbdData);
+
+        // Craft a 9-byte Keyboard Input Report:
+        // Byte 0: ReportID = 0
+        // Byte 1: Modifiers = 0x05 (Bit 0 LeftCtrl 0xE0 + Bit 2 LeftAlt 0xE2)
+        // Byte 2: Reserved = 0x00
+        // Bytes 3..8: Keycodes = [0x04 ('A'), 0x16 ('S'), 0x07 ('D'), 0, 0, 0]
+        uint8_t kbdReport[9] = {0x00, 0x05, 0x00, 0x04, 0x16, 0x07, 0x00, 0x00, 0x00};
+        USAGE pressedKeys[16]{0};
+        ULONG keyCount = 16;
+        HIDP_STATUS stU = HidP_GetUsages(
+            HidP_Input, HID_USAGE_PAGE_KEYBOARD, 0, pressedKeys, &keyCount,
+            kbdData, reinterpret_cast<PCHAR>(kbdReport), sizeof(kbdReport));
+        TEST_ASSERT(stU == HIDP_STATUS_SUCCESS, "HidP_GetUsages on Keyboard report must succeed");
+        TEST_ASSERT(keyCount == 5, "Must extract 2 modifier keys + 3 array keys = 5 usages");
+        TEST_ASSERT(pressedKeys[0] == 0xE0 && pressedKeys[1] == 0xE2, "Modifiers must be LeftCtrl (0xE0) and LeftAlt (0xE2)");
+        TEST_ASSERT(pressedKeys[2] == 0x04 && pressedKeys[3] == 0x16 && pressedKeys[4] == 0x07, "Key array must match A, S, D");
+
+        // Pack Output LED report (NumLock = 0x01, CapsLock = 0x02)
+        uint8_t ledReport[2] = {0x00, 0x00};
+        USAGE ledsToSet[2] = {0x01, 0x02};
+        ULONG ledCount = 2;
+        HIDP_STATUS stLed = HidP_SetUsages(
+            HidP_Output, HID_USAGE_PAGE_LED, 0, ledsToSet, &ledCount,
+            kbdData, reinterpret_cast<PCHAR>(ledReport), sizeof(ledReport));
+        TEST_ASSERT(stLed == HIDP_STATUS_SUCCESS, "HidP_SetUsages for Keyboard LEDs must succeed");
+        TEST_ASSERT(ledReport[1] == 0x03, "LED Output Report payload byte must have bits 0 and 1 set (0x03)");
+
+        HidD_FreePreparsedData(kbdData);
+
+        // 2. Gaming Mouse 16-bit Signed X/Y & Wheel Extraction + Packing
+        win32::HANDLE hMou = reinterpret_cast<win32::HANDLE>(0x4102);
+        PHIDP_PREPARSED_DATA mouData = nullptr;
+        HidD_GetPreparsedData(hMou, &mouData);
+
+        uint8_t mouReport[7] = {0};
+        USAGE mouseBtns[2] = {1, 3}; // Left + Middle button
+        ULONG btnCount = 2;
+        TEST_ASSERT(HidP_SetUsages(HidP_Input, HID_USAGE_PAGE_BUTTON, 0, mouseBtns, &btnCount,
+                                   mouData, reinterpret_cast<PCHAR>(mouReport), sizeof(mouReport)) == HIDP_STATUS_SUCCESS,
+                    "HidP_SetUsages on Mouse buttons must succeed");
+        TEST_ASSERT(HidP_SetUsageValue(HidP_Input, HID_USAGE_PAGE_GENERIC, 0, HID_USAGE_GENERIC_X, static_cast<ULONG>(450),
+                                       mouData, reinterpret_cast<PCHAR>(mouReport), sizeof(mouReport)) == HIDP_STATUS_SUCCESS,
+                    "HidP_SetUsageValue on Mouse X (+450) must succeed");
+        TEST_ASSERT(HidP_SetUsageValue(HidP_Input, HID_USAGE_PAGE_GENERIC, 0, HID_USAGE_GENERIC_Y, static_cast<ULONG>(static_cast<int32_t>(-125)),
+                                       mouData, reinterpret_cast<PCHAR>(mouReport), sizeof(mouReport)) == HIDP_STATUS_SUCCESS,
+                    "HidP_SetUsageValue on Mouse Y (-125) must succeed");
+        TEST_ASSERT(HidP_SetUsageValue(HidP_Input, HID_USAGE_PAGE_GENERIC, 0, HID_USAGE_GENERIC_WHEEL, static_cast<ULONG>(static_cast<int32_t>(-3)),
+                                       mouData, reinterpret_cast<PCHAR>(mouReport), sizeof(mouReport)) == HIDP_STATUS_SUCCESS,
+                    "HidP_SetUsageValue on Mouse Wheel (-3) must succeed");
+
+        // Now unpack and verify sign extension!
+        ULONG rawX = 0, rawY = 0, rawWheel = 0;
+        TEST_ASSERT(HidP_GetUsageValue(HidP_Input, HID_USAGE_PAGE_GENERIC, 0, HID_USAGE_GENERIC_X, &rawX,
+                                       mouData, reinterpret_cast<PCHAR>(mouReport), sizeof(mouReport)) == HIDP_STATUS_SUCCESS,
+                    "HidP_GetUsageValue for Mouse X must succeed");
+        TEST_ASSERT(HidP_GetUsageValue(HidP_Input, HID_USAGE_PAGE_GENERIC, 0, HID_USAGE_GENERIC_Y, &rawY,
+                                       mouData, reinterpret_cast<PCHAR>(mouReport), sizeof(mouReport)) == HIDP_STATUS_SUCCESS,
+                    "HidP_GetUsageValue for Mouse Y must succeed");
+        TEST_ASSERT(HidP_GetUsageValue(HidP_Input, HID_USAGE_PAGE_GENERIC, 0, HID_USAGE_GENERIC_WHEEL, &rawWheel,
+                                       mouData, reinterpret_cast<PCHAR>(mouReport), sizeof(mouReport)) == HIDP_STATUS_SUCCESS,
+                    "HidP_GetUsageValue for Mouse Wheel must succeed");
+
+        TEST_ASSERT(static_cast<int32_t>(rawX) == 450, "Unpacked Mouse X must equal +450");
+        TEST_ASSERT(static_cast<int32_t>(rawY) == -125, "Unpacked Mouse Y must sign-extend to -125");
+        TEST_ASSERT(static_cast<int32_t>(rawWheel) == -3, "Unpacked Mouse Wheel must sign-extend to -3");
+
+        HidD_FreePreparsedData(mouData);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: USB HID Miniport (hidusb.sys) & Ping-Pong URB Ring over xHCI
+    // ------------------------------------------------------------------------
+    {
+        auto& hidSys = TitanHidInputSubsystem::Instance();
+        win32::HANDLE hMou = reinterpret_cast<win32::HANDLE>(0x4102);
+
+        // Queue an Interrupt IN report via Ping-Pong URB over usbxhci.sys
+        uint8_t sampleMouseInput[7] = {0x00, 0x01, 0x20, 0x00, 0xF0, 0xFF, 0x01};
+        NtStatus stPing = hidSys.submitPingPongInterruptReadUrb(hMou, sampleMouseInput, sizeof(sampleMouseInput));
+        TEST_ASSERT(stPing == NtStatus::Success, "Ping-Pong Interrupt Read URB over xHCI must succeed");
+
+        // Read the queued report via HidD_GetInputReport (GET_REPORT control transfer URB)
+        uint8_t readBuf[7] = {0};
+        BOOLEAN getInOk = HidD_GetInputReport(hMou, readBuf, sizeof(readBuf));
+        TEST_ASSERT(getInOk == TRUE_B, "HidD_GetInputReport must succeed");
+        TEST_ASSERT(readBuf[1] == 0x01 && readBuf[2] == 0x20, "Retrieved input report bytes must match Ping-Pong frame");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: Top-Level Collection (TLC) PDO Enumeration & Device Interfaces
+    // ------------------------------------------------------------------------
+    {
+        auto& hidSys = TitanHidInputSubsystem::Instance();
+        auto collections = hidSys.getAllCollections();
+        TEST_ASSERT(collections.size() == 3, "Must enumerate 3 Top-Level Collections (Keyboard, Mouse, Gamepad)");
+
+        HID_GUID hidGuid{};
+        HidD_GetHidGuid(&hidGuid);
+        TEST_ASSERT(hidGuid == GUID_DEVINTERFACE_HID, "HidD_GetHidGuid must return canonical GUID_DEVINTERFACE_HID");
+
+        // Verify Gamepad Collection (0x4103)
+        win32::HANDLE hPad = reinterpret_cast<win32::HANDLE>(0x4103);
+        HIDD_ATTRIBUTES padAttr{};
+        TEST_ASSERT(HidD_GetAttributes(hPad, &padAttr) == TRUE_B, "HidD_GetAttributes on Gamepad must succeed");
+        TEST_ASSERT(padAttr.VendorID == 0x045E && padAttr.ProductID == 0x0B12, "Gamepad VID/PID must match 045E:0B12");
+
+        HID_COLLECTION_INFORMATION colInfo{};
+        TEST_ASSERT(HidD_GetCollectionInformation(hPad, &colInfo, sizeof(colInfo)) == TRUE_B,
+                    "HidD_GetCollectionInformation must succeed");
+        TEST_ASSERT(colInfo.VendorID == 0x045E && colInfo.ProductID == 0x0B12, "Collection info VID/PID must match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: Keyboard Class Driver (kbdclass.sys) & KEYBOARD_INPUT_DATA Ring
+    // ------------------------------------------------------------------------
+    {
+        auto& hidSys = TitanHidInputSubsystem::Instance();
+
+        KEYBOARD_ATTRIBUTES kbdAttr{};
+        NtStatus stAttr = hidSys.dispatchKeyboardIoctl(IOCTL_KEYBOARD_QUERY_ATTRIBUTES, nullptr, 0, &kbdAttr, sizeof(kbdAttr));
+        TEST_ASSERT(stAttr == NtStatus::Success, "IOCTL_KEYBOARD_QUERY_ATTRIBUTES must succeed");
+        TEST_ASSERT(kbdAttr.NumberOfKeysTotal == 104, "Keyboard must report 104 keys");
+        TEST_ASSERT(kbdAttr.NumberOfFunctionKeys == 12, "Keyboard must report 12 function keys");
+
+        // Set & Query LED Indicators (CapsLock + NumLock)
+        KEYBOARD_INDICATOR_PARAMETERS setInd{0, KEYBOARD_CAPS_LOCK_ON | KEYBOARD_NUM_LOCK_ON};
+        TEST_ASSERT(hidSys.dispatchKeyboardIoctl(IOCTL_KEYBOARD_SET_INDICATORS, &setInd, sizeof(setInd), nullptr, 0) == NtStatus::Success,
+                    "IOCTL_KEYBOARD_SET_INDICATORS must succeed");
+
+        KEYBOARD_INDICATOR_PARAMETERS getInd{};
+        TEST_ASSERT(hidSys.dispatchKeyboardIoctl(IOCTL_KEYBOARD_QUERY_INDICATORS, nullptr, 0, &getInd, sizeof(getInd)) == NtStatus::Success,
+                    "IOCTL_KEYBOARD_QUERY_INDICATORS must succeed");
+        TEST_ASSERT(getInd.LedFlags == (KEYBOARD_CAPS_LOCK_ON | KEYBOARD_NUM_LOCK_ON), "Queried LED indicators must match CapsLock + NumLock");
+
+        // Inject KEYBOARD_INPUT_DATA packets via KeyboardClassServiceCallback
+        KEYBOARD_INPUT_DATA kbdBatch[2]{};
+        kbdBatch[0] = {0, 0x1E, KEY_MAKE, 0, 0};  // 'A' Make
+        kbdBatch[1] = {0, 0x1E, KEY_BREAK, 0, 0}; // 'A' Break
+        ULONG consumed = 0;
+        KeyboardClassServiceCallback(kbdBatch, kbdBatch + 2, &consumed);
+        TEST_ASSERT(consumed == 2, "KeyboardClassServiceCallback must consume 2 packets");
+        TEST_ASSERT(hidSys.getKeyboardQueueDepth() == 2, "Keyboard ring buffer depth must be 2");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: Mouse Class Driver (mouclass.sys) & MOUSE_INPUT_DATA Ring
+    // ------------------------------------------------------------------------
+    {
+        auto& hidSys = TitanHidInputSubsystem::Instance();
+
+        MOUSE_ATTRIBUTES mouAttr{};
+        TEST_ASSERT(hidSys.dispatchMouseIoctl(IOCTL_MOUSE_QUERY_ATTRIBUTES, &mouAttr, sizeof(mouAttr)) == NtStatus::Success,
+                    "IOCTL_MOUSE_QUERY_ATTRIBUTES must succeed");
+        TEST_ASSERT(mouAttr.NumberOfButtons == 5, "Mouse must report 5 buttons");
+        TEST_ASSERT(mouAttr.SampleRate == 1000, "Mouse must report 1000 Hz sample rate");
+
+        MOUSE_INPUT_DATA mouPkt{};
+        mouPkt.UnitId      = 0;
+        mouPkt.Flags       = MOUSE_MOVE_RELATIVE;
+        mouPkt.ButtonFlags = MOUSE_LEFT_BUTTON_DOWN | MOUSE_WHEEL;
+        mouPkt.ButtonData  = 120;
+        mouPkt.LastX       = 64;
+        mouPkt.LastY       = 32;
+
+        ULONG consumed = 0;
+        MouseClassServiceCallback(&mouPkt, &mouPkt + 1, &consumed);
+        TEST_ASSERT(consumed == 1, "MouseClassServiceCallback must consume 1 packet");
+        TEST_ASSERT(hidSys.getMouseQueueDepth() == 1, "Mouse ring buffer depth must be 1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: PS/2 i8042 Controller Port Driver (i8042prt.sys)
+    // ------------------------------------------------------------------------
+    {
+        auto& hidSys = TitanHidInputSubsystem::Instance();
+
+        // 1. Execute i8042 Controller Self-Test (Command 0xAA on Port 0x64 -> 0x55 on Port 0x60)
+        I8042WritePortUchar(I8042_COMMAND_PORT, I8042_CMD_SELF_TEST);
+        uint8_t status = I8042ReadPortUchar(I8042_STATUS_PORT);
+        TEST_ASSERT((status & I8042_STS_OBF) != 0, "i8042 Status Register OBF bit must be 1 after self-test");
+        uint8_t selfTestResult = I8042ReadPortUchar(I8042_DATA_PORT);
+        TEST_ASSERT(selfTestResult == 0x55, "i8042 Self-Test must return 0x55");
+
+        // 2. Inject Extended E0 Scancode via IRQ1 (Right Arrow: 0xE0, 0x4D)
+        hidSys.i8042InjectKeyboardIrq1(0xE0);
+        hidSys.i8042InjectKeyboardIrq1(0x4D);
+        TEST_ASSERT(hidSys.getKeyboardQueueDepth() == 3, "Keyboard queue must now contain 3 packets (2 from Phase 6 + 1 from IRQ1)");
+
+        // 3. Inject PS/2 Mouse IRQ12 4-Byte IntelliMouse Packet
+        hidSys.i8042InjectMouseIrq12Packet(0x09 /* Left button + bit 3 */, 15, -10, 1);
+        TEST_ASSERT(hidSys.getMouseQueueDepth() == 2, "Mouse queue must now contain 2 packets");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: Kernel Raw Input Thread (RIT) -> Win32k Window Message Bridge
+    // ------------------------------------------------------------------------
+    {
+        auto& w32k = win32k::TitanWin32kSubsystem::Instance();
+        w32k.initialize();
+
+        win32k::HWND hwnd = w32k.createWindowEx(
+            0, L"MicaHidTestClass", L"HID Input Test Window",
+            win32k::WS_OVERLAPPEDWINDOW | win32k::WS_VISIBLE,
+            100, 100, 800, 600, nullptr, nullptr, nullptr, nullptr);
+        TEST_ASSERT(hwnd != nullptr, "Creating test window in Win32k must succeed");
+
+        auto& hidSys = TitanHidInputSubsystem::Instance();
+        uint32_t injected = hidSys.pumpRawInputToWin32k(hwnd);
+        TEST_ASSERT(injected >= 5, "Raw Input Thread must inject queued keyboard and mouse messages into Win32k");
+        TEST_ASSERT(hidSys.getKeyboardQueueDepth() == 0, "Keyboard ring buffer must be completely drained");
+        TEST_ASSERT(hidSys.getMouseQueueDepth() == 0, "Mouse ring buffer must be completely drained");
+
+        // Verify message arrival in Win32k thread queue
+        win32k::MSG msg{};
+        BOOL gotMsg = w32k.peekMessage(msg, hwnd, 0, 0, win32k::PM_REMOVE, 1);
+        TEST_ASSERT(gotMsg == 1, "Win32k queue must have received injected input message");
+
+        w32k.destroyWindow(hwnd);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: User-Mode hid.dll Client API & Subsystem Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        win32::HANDLE hKbd = reinterpret_cast<win32::HANDLE>(0x4101);
+        win32::HANDLE hPad = reinterpret_cast<win32::HANDLE>(0x4103);
+
+        wchar_t mfg[64]{0}, prod[64]{0}, serial[64]{0};
+        TEST_ASSERT(HidD_GetManufacturerString(hKbd, mfg, sizeof(mfg)) == TRUE_B, "HidD_GetManufacturerString must succeed");
+        TEST_ASSERT(HidD_GetProductString(hKbd, prod, sizeof(prod)) == TRUE_B, "HidD_GetProductString must succeed");
+        TEST_ASSERT(HidD_GetSerialNumberString(hKbd, serial, sizeof(serial)) == TRUE_B, "HidD_GetSerialNumberString must succeed");
+        TEST_ASSERT(std::wstring(prod) == L"MicaNT Prism Mechanical Keyboard", "Product string must match");
+        TEST_ASSERT(std::wstring(serial) == L"MICA-KBD-0001", "Serial string must match");
+
+        // Set & Get Input Buffer Queue Depth
+        TEST_ASSERT(HidD_SetNumInputBuffers(hKbd, 64) == TRUE_B, "HidD_SetNumInputBuffers(64) must succeed");
+        ULONG numBufs = 0;
+        TEST_ASSERT(HidD_GetNumInputBuffers(hKbd, &numBufs) == TRUE_B && numBufs == 64, "HidD_GetNumInputBuffers must return 64");
+
+        // Set & Get Feature Report on Gamepad
+        uint8_t featSet[5] = {0x00, 0xAA, 0xBB, 0xCC, 0xDD};
+        TEST_ASSERT(HidD_SetFeature(hPad, featSet, sizeof(featSet)) == TRUE_B, "HidD_SetFeature on Gamepad must succeed");
+
+        uint8_t featGet[5] = {0x00, 0, 0, 0, 0};
+        TEST_ASSERT(HidD_GetFeature(hPad, featGet, sizeof(featGet)) == TRUE_B, "HidD_GetFeature on Gamepad must succeed");
+        TEST_ASSERT(featGet[1] == 0xAA && featGet[4] == 0xDD, "Retrieved Feature report payload must match set calibration bytes");
+
+        // Set Output Report on Keyboard
+        uint8_t outRep[2] = {0x00, 0x07};
+        TEST_ASSERT(HidD_SetOutputReport(hKbd, outRep, sizeof(outRep)) == TRUE_B, "HidD_SetOutputReport must succeed");
+
+        // Verify Overall Subsystem Telemetry
+        HID_SUBSYSTEM_TELEMETRY telem{};
+        TEST_ASSERT(HidGetTelemetry(&telem) == TRUE_VAL, "HidGetTelemetry must succeed");
+        TEST_ASSERT(telem.totalDescriptorsParsed >= 3, "totalDescriptorsParsed must be >= 3");
+        TEST_ASSERT(telem.totalHidInputReportsRead >= 2, "totalHidInputReportsRead must be >= 2");
+        TEST_ASSERT(telem.totalHidOutputReportsWritten >= 2, "totalHidOutputReportsWritten must be >= 2");
+        TEST_ASSERT(telem.totalHidFeatureTransfers >= 2, "totalHidFeatureTransfers must be >= 2");
+        TEST_ASSERT(telem.totalPingPongUrbsDispatched >= 4, "totalPingPongUrbsDispatched must be >= 4");
+        TEST_ASSERT(telem.totalKeyboardPacketsQueued >= 3, "totalKeyboardPacketsQueued must be >= 3");
+        TEST_ASSERT(telem.totalMousePacketsQueued >= 2, "totalMousePacketsQueued must be >= 2");
+        TEST_ASSERT(telem.totalI8042InterruptsServiced >= 3, "totalI8042InterruptsServiced must be >= 3");
+        TEST_ASSERT(telem.totalWin32kMessagesInjected >= 5, "totalWin32kMessagesInjected must be >= 5");
+        TEST_ASSERT(telem.activeTopLevelCollections == 3, "activeTopLevelCollections must be 3");
+        TEST_ASSERT(telem.i8042ControllerHealthy == true, "i8042ControllerHealthy must be true");
+
+        HID_SUBSYSTEM_TELEMETRY directTelem = HidQueryTelemetry();
+        TEST_ASSERT(directTelem.totalPingPongUrbsDispatched == telem.totalPingPongUrbsDispatched, "Direct telemetry query must match");
+    }
+
+    std::cout << "[TEST] Suite 257: Horizon 41 - HID Class Driver, Report Descriptor Parser & Kernel Input Stack PASSED.\n";
+}
