@@ -12739,3 +12739,352 @@ void Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack() {
 
     std::cout << "[TEST] Suite 257: Horizon 41 - HID Class Driver, Report Descriptor Parser & Kernel Input Stack PASSED.\n";
 }
+
+// ============================================================================
+// Suite 258: Horizon 42 - Sovereign NT Executive Cache Manager (Cc*), 256KB VACBs, BCB Pinning & Lazy Writer
+// ============================================================================
+
+namespace Horizon42Callbacks {
+    inline uint32_t g_lazyWriteAcquires  = 0;
+    inline uint32_t g_lazyWriteReleases  = 0;
+    inline uint32_t g_readAheadAcquires  = 0;
+    inline uint32_t g_readAheadReleases  = 0;
+    inline int64_t  g_lastFlushedWalLsn  = 0;
+    inline uint32_t g_deferredPostCalls  = 0;
+
+    inline void reset() {
+        g_lazyWriteAcquires = 0;
+        g_lazyWriteReleases = 0;
+        g_readAheadAcquires = 0;
+        g_readAheadReleases = 0;
+        g_lastFlushedWalLsn = 0;
+        g_deferredPostCalls = 0;
+    }
+
+    inline uint8_t AcquireForLazyWrite(void* /*Context*/, uint8_t /*Wait*/) {
+        g_lazyWriteAcquires++;
+        return 1;
+    }
+    inline void ReleaseFromLazyWrite(void* /*Context*/) {
+        g_lazyWriteReleases++;
+    }
+    inline uint8_t AcquireForReadAhead(void* /*Context*/, uint8_t /*Wait*/) {
+        g_readAheadAcquires++;
+        return 1;
+    }
+    inline void ReleaseFromReadAhead(void* /*Context*/) {
+        g_readAheadReleases++;
+    }
+    inline void FlushWalToLsn(void* /*LogHandle*/, micant::LargeInteger lsn) {
+        if (lsn.QuadPart > g_lastFlushedWalLsn) {
+            g_lastFlushedWalLsn = lsn.QuadPart;
+        }
+    }
+    inline void DeferredWritePostCallback(void* ctx1, void* /*ctx2*/) {
+        g_deferredPostCalls++;
+        if (ctx1) {
+            *static_cast<bool*>(ctx1) = true;
+        }
+    }
+} // namespace Horizon42Callbacks
+
+void Test_Horizon42_ExecutiveCacheManager_VACB_LazyWriter_And_Pinning() {
+    using namespace micant::km::cc;
+    std::cout << "[TEST] Running Suite 258: Horizon 42 - Sovereign NT Executive Cache Manager (Cc*), 256KB VACBs & Lazy Writer...\n" << std::flush;
+
+    Horizon42Callbacks::reset();
+
+    // ------------------------------------------------------------------------
+    // Phase 1: Subsystem Initialization, JanusLDR Exports & SCM/Version DB
+    // ------------------------------------------------------------------------
+    {
+        InitializeCcCacheSubsystemExports();
+        auto& ccMgr = TitanCacheManager::Instance();
+        ccMgr.resetForTesting();
+
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcInitializeCacheMap") != nullptr, "ntoskrnl.exe CcInitializeCacheMap must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcUninitializeCacheMap") != nullptr, "ntoskrnl.exe CcUninitializeCacheMap must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcSetFileSizes") != nullptr, "ntoskrnl.exe CcSetFileSizes must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcGetFileSizePointer") != nullptr, "ntoskrnl.exe CcGetFileSizePointer must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcCopyRead") != nullptr, "ntoskrnl.exe CcCopyRead must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcCopyWrite") != nullptr, "ntoskrnl.exe CcCopyWrite must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcFastCopyRead") != nullptr, "ntoskrnl.exe CcFastCopyRead must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcFastCopyWrite") != nullptr, "ntoskrnl.exe CcFastCopyWrite must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcZeroData") != nullptr, "ntoskrnl.exe CcZeroData must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcMdlRead") != nullptr, "ntoskrnl.exe CcMdlRead must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcMdlReadComplete") != nullptr, "ntoskrnl.exe CcMdlReadComplete must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcPrepareMdlWrite") != nullptr, "ntoskrnl.exe CcPrepareMdlWrite must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcMdlWriteComplete") != nullptr, "ntoskrnl.exe CcMdlWriteComplete must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcMapData") != nullptr, "ntoskrnl.exe CcMapData must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcPinMappedData") != nullptr, "ntoskrnl.exe CcPinMappedData must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcPinRead") != nullptr, "ntoskrnl.exe CcPinRead must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcPreparePinWrite") != nullptr, "ntoskrnl.exe CcPreparePinWrite must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcSetDirtyPinnedData") != nullptr, "ntoskrnl.exe CcSetDirtyPinnedData must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcUnpinData") != nullptr, "ntoskrnl.exe CcUnpinData must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcFlushCache") != nullptr, "ntoskrnl.exe CcFlushCache must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcPurgeCacheSection") != nullptr, "ntoskrnl.exe CcPurgeCacheSection must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcCanIWrite") != nullptr, "ntoskrnl.exe CcCanIWrite must exist");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "CcDeferWrite") != nullptr, "ntoskrnl.exe CcDeferWrite must exist");
+
+        auto& scm = scm::ServiceControlManager::get();
+        auto ccSvc = scm.getServiceRecord(L"CcCacheMgr");
+        TEST_ASSERT(ccSvc != nullptr, "CcCacheMgr service record must exist in SCM");
+        TEST_ASSERT(ccSvc->startType == scm::SERVICE_BOOT_START, "CcCacheMgr must be boot start");
+        TEST_ASSERT(ccSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "CcCacheMgr must be running");
+
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("cc_executive") != nullptr, "cc_executive must be in Version Database");
+    }
+
+    CC_FILE_OBJECT fileObj{};
+    fileObj.FileName = L"\\Device\\HarddiskVolume1\\MicaDatabase.db";
+
+    CACHE_MANAGER_CALLBACKS callbacks{};
+    callbacks.AcquireForLazyWrite  = Horizon42Callbacks::AcquireForLazyWrite;
+    callbacks.ReleaseFromLazyWrite = Horizon42Callbacks::ReleaseFromLazyWrite;
+    callbacks.AcquireForReadAhead  = Horizon42Callbacks::AcquireForReadAhead;
+    callbacks.ReleaseFromReadAhead = Horizon42Callbacks::ReleaseFromReadAhead;
+
+    // ------------------------------------------------------------------------
+    // Phase 2 & 3: SHARED_CACHE_MAP, PRIVATE_CACHE_MAP & 256 KB VACB Lifecycle
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(!CcIsFileCached(&fileObj), "FileObject must not be cached before CcInitializeCacheMap");
+
+        CC_FILE_SIZES initialSizes{};
+        initialSizes.AllocationSize.QuadPart  = 512 * 1024; // 512 KB (2 VACBs)
+        initialSizes.FileSize.QuadPart        = 512 * 1024;
+        initialSizes.ValidDataLength.QuadPart = 512 * 1024;
+
+        CcInitializeCacheMap(&fileObj, &initialSizes, TRUE_B, &callbacks, reinterpret_cast<PVOID>(0x1234));
+        TEST_ASSERT(CcIsFileCached(&fileObj), "FileObject must be cached after CcInitializeCacheMap");
+        TEST_ASSERT(fileObj.PrivateCacheMap != nullptr, "PrivateCacheMap must be allocated on FileObject");
+
+        // Bind Write-Ahead Log flush hook
+        CcSetLogHandleForFile(&fileObj, reinterpret_cast<PVOID>(0x9999), Horizon42Callbacks::FlushWalToLsn);
+
+        // Extend file to 1 MB (4 VACBs of 256 KB each) via CcSetFileSizes
+        CC_FILE_SIZES extendedSizes{};
+        extendedSizes.AllocationSize.QuadPart  = 1024 * 1024;
+        extendedSizes.FileSize.QuadPart        = 1024 * 1024;
+        extendedSizes.ValidDataLength.QuadPart = 1024 * 1024;
+        CcSetFileSizes(&fileObj, &extendedSizes);
+
+        PLARGE_INTEGER fsizePtr = CcGetFileSizePointer(&fileObj);
+        TEST_ASSERT(fsizePtr != nullptr && fsizePtr->QuadPart == 1024 * 1024, "CcGetFileSizePointer must reflect 1 MB FileSize");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: Fast Copy I/O Across 256 KB VACB Boundaries & CcZeroData
+    // ------------------------------------------------------------------------
+    {
+        // Write a 1024-byte pattern straddling VACB[0] and VACB[1] at offset 261,632 (256KB - 512)
+        std::vector<uint8_t> writePattern(1024);
+        for (size_t i = 0; i < writePattern.size(); ++i) {
+            writePattern[i] = static_cast<uint8_t>((i * 7 + 0x3C) & 0xFF);
+        }
+
+        LARGE_INTEGER boundaryOffset{};
+        boundaryOffset.QuadPart = VACB_MAPPING_GRANULARITY - 512; // 261,632
+        BOOLEAN wrOk = CcCopyWrite(&fileObj, &boundaryOffset, static_cast<ULONG>(writePattern.size()), TRUE_B, writePattern.data());
+        TEST_ASSERT(wrOk == TRUE_B, "CcCopyWrite across 256 KB VACB boundary must succeed");
+
+        // Read back the 1024-byte span via CcCopyRead (verifying VACB cache hits)
+        std::vector<uint8_t> readBack(1024, 0);
+        IoStatusBlock iosb{};
+        BOOLEAN rdOk = CcCopyRead(&fileObj, &boundaryOffset, static_cast<ULONG>(readBack.size()), TRUE_B, readBack.data(), &iosb);
+        TEST_ASSERT(rdOk == TRUE_B && iosb.Status == NtStatus::Success, "CcCopyRead across 256 KB VACB boundary must succeed");
+        TEST_ASSERT(iosb.Information == 1024, "CcCopyRead must report 1024 bytes read");
+        TEST_ASSERT(std::memcmp(writePattern.data(), readBack.data(), 1024) == 0, "Cross-VACB read data must match written pattern");
+
+        // Exercise CcFastCopyWrite & CcFastCopyRead
+        uint8_t fastPayload[64];
+        std::memset(fastPayload, 0xA5, sizeof(fastPayload));
+        CcFastCopyWrite(&fileObj, 4096, sizeof(fastPayload), fastPayload);
+
+        uint8_t fastVerify[64]{0};
+        CcFastCopyRead(&fileObj, 4096, sizeof(fastVerify), 1, fastVerify, &iosb);
+        TEST_ASSERT(fastVerify[0] == 0xA5 && fastVerify[63] == 0xA5, "CcFastCopyRead must retrieve 0xA5 pattern");
+
+        // Exercise CcZeroData on middle 16 bytes [4112 .. 4128)
+        LARGE_INTEGER zeroStart{}, zeroEnd{};
+        zeroStart.QuadPart = 4112;
+        zeroEnd.QuadPart   = 4128;
+        TEST_ASSERT(CcZeroData(&fileObj, &zeroStart, &zeroEnd, TRUE_B) == TRUE_B, "CcZeroData must succeed");
+
+        CcFastCopyRead(&fileObj, 4096, sizeof(fastVerify), 1, fastVerify, &iosb);
+        TEST_ASSERT(fastVerify[0] == 0xA5 && fastVerify[16] == 0x00 && fastVerify[31] == 0x00 && fastVerify[32] == 0xA5,
+                    "CcZeroData must zero exact sub-range [16..31] while preserving surrounding bytes");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: Zero-Copy MDL Cache Interface (CcMdlRead / CcPrepareMdlWrite)
+    // ------------------------------------------------------------------------
+    {
+        LARGE_INTEGER mdlOffset{};
+        mdlOffset.QuadPart = 65536; // 64 KB offset inside VACB[0]
+        PCC_MDL writeMdl   = nullptr;
+        IoStatusBlock iosb{};
+
+        CcPrepareMdlWrite(&fileObj, &mdlOffset, 256, &writeMdl, &iosb);
+        TEST_ASSERT(writeMdl != nullptr && iosb.Status == NtStatus::Success, "CcPrepareMdlWrite must return valid MDL chain");
+        TEST_ASSERT(writeMdl->MappedSystemVa != nullptr && writeMdl->ByteCount == 256, "Write MDL MappedSystemVa and ByteCount must be valid");
+
+        // Directly DMA-write into the VACB's physical/system memory via MappedSystemVa
+        const char* dmaSignature = "MicaNT Zero-Copy SMB Direct / FastIo MDL Cache Frame";
+        std::memcpy(writeMdl->MappedSystemVa, dmaSignature, std::strlen(dmaSignature) + 1);
+        CcMdlWriteComplete(&fileObj, &mdlOffset, writeMdl);
+
+        // Read back zero-copy via CcMdlRead
+        PCC_MDL readMdl = nullptr;
+        CcMdlRead(&fileObj, &mdlOffset, 256, &readMdl, &iosb);
+        TEST_ASSERT(readMdl != nullptr && iosb.Status == NtStatus::Success, "CcMdlRead must return valid MDL chain");
+        TEST_ASSERT(std::strcmp(static_cast<const char*>(readMdl->MappedSystemVa), dmaSignature) == 0,
+                    "CcMdlRead zero-copy pointer must expose written DMA signature");
+        CcMdlReadComplete(&fileObj, readMdl);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: Metadata Pinning & BCBs (CcMapData, CcPinRead, CcSetDirtyPinnedData)
+    // ------------------------------------------------------------------------
+    {
+        LARGE_INTEGER mftOffset{};
+        mftOffset.QuadPart = 131072; // 128 KB metadata record offset
+        PVOID bcb    = nullptr;
+        PVOID buffer = nullptr;
+
+        // 1. Map metadata via CcMapData, then upgrade to pinned via CcPinMappedData
+        TEST_ASSERT(CcMapData(&fileObj, &mftOffset, 1024, MAP_WAIT, &bcb, &buffer) == TRUE_B, "CcMapData must succeed");
+        TEST_ASSERT(bcb != nullptr && buffer != nullptr, "CcMapData must return valid BCB and buffer pointer");
+
+        auto* pubBcb = static_cast<PUBLIC_BCB*>(bcb);
+        TEST_ASSERT(pubBcb->NodeTypeCode == CC_NTC_BCB, "Public BCB NodeTypeCode must be CC_NTC_BCB (0x02FE)");
+        TEST_ASSERT(pubBcb->MappedLength == 1024, "Public BCB MappedLength must be 1024");
+
+        TEST_ASSERT(CcPinMappedData(&fileObj, &mftOffset, 1024, PIN_WAIT | PIN_EXCLUSIVE, &bcb) == TRUE_B,
+                    "CcPinMappedData upgrade must succeed");
+
+        // Modify metadata in place ("FILE0" MFT signature) and stamp WAL LSN
+        std::memcpy(buffer, "FILE0_MFT_RECORD", 16);
+        LARGE_INTEGER walLsn{};
+        walLsn.QuadPart = 0x0000000100004200LL;
+        CcSetDirtyPinnedData(bcb, &walLsn);
+
+        // Repin and Unpin twice
+        CcRepinBcb(bcb);
+        CcUnpinData(bcb);
+        CcUnpinData(bcb);
+
+        // 2. Verify CcPreparePinWrite with Zero=TRUE
+        LARGE_INTEGER journalOffset{};
+        journalOffset.QuadPart = 140000;
+        PVOID jBcb = nullptr, jBuf = nullptr;
+        TEST_ASSERT(CcPreparePinWrite(&fileObj, &journalOffset, 512, TRUE_B, PIN_WAIT, &jBcb, &jBuf) == TRUE_B,
+                    "CcPreparePinWrite must succeed");
+        TEST_ASSERT(static_cast<uint8_t*>(jBuf)[0] == 0, "CcPreparePinWrite with Zero=TRUE must zero buffer");
+        CcUnpinData(jBcb);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: Intelligent Sequential Read-Ahead Engine (CcScheduleReadAhead)
+    // ------------------------------------------------------------------------
+    {
+        CcSetReadAheadGranularity(&fileObj, 128 * 1024); // 128 KB read-ahead
+
+        uint8_t seqBuf[4096]{0};
+        IoStatusBlock iosb{};
+        LARGE_INTEGER off1{}, off2{};
+        off1.QuadPart = 512 * 1024;        // Start of VACB[2]
+        off2.QuadPart = 512 * 1024 + 4096; // Immediately sequential read
+
+        CcCopyRead(&fileObj, &off1, sizeof(seqBuf), TRUE_B, seqBuf, &iosb);
+        CcCopyRead(&fileObj, &off2, sizeof(seqBuf), TRUE_B, seqBuf, &iosb);
+
+        TEST_ASSERT(Horizon42Callbacks::g_readAheadAcquires >= 1, "Sequential reads must trigger AcquireForReadAhead callback");
+        TEST_ASSERT(Horizon42Callbacks::g_readAheadReleases >= 1, "Sequential reads must trigger ReleaseFromReadAhead callback");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8 & 9: Write Throttling (CcCanIWrite / CcDeferWrite) & Lazy Writer (CcLazyWriteScan)
+    // ------------------------------------------------------------------------
+    {
+        // Set a strict dirty page threshold of 2 pages on fileObj
+        CcSetDirtyPageThreshold(&fileObj, 2);
+
+        // Since fileObj already has dirty pages from Phases 4-6, writing another 16 KB (4 pages) must be throttled!
+        BOOLEAN canWriteNow = CcCanIWrite(&fileObj, 16384, FALSE_B, FALSE_B);
+        TEST_ASSERT(canWriteNow == FALSE_B, "CcCanIWrite must return FALSE when dirty pages exceed DirtyPageThreshold");
+
+        // Queue a deferred write that waits for Lazy Writer to drain dirty pages
+        bool deferredCompleted = false;
+        CcDeferWrite(&fileObj, Horizon42Callbacks::DeferredWritePostCallback, &deferredCompleted, nullptr, 4096, FALSE_B);
+        TEST_ASSERT(deferredCompleted == false, "Deferred write must remain queued while above dirty page threshold");
+
+        // Now run the Lazy Writer background scan (CcLazyWriteScan)!
+        // This must:
+        //  1) AcquireForLazyWrite -> Flush WAL to LSN (0x0000000100004200) -> Flush dirty VACBs to disk -> ReleaseFromLazyWrite
+        //  2) Drain the Deferred Write queue, invoking DeferredWritePostCallback!
+        uint32_t flushedPages = CcLazyWriteScan();
+        TEST_ASSERT(flushedPages > 0, "CcLazyWriteScan must flush dirty pages to backing disk");
+        TEST_ASSERT(Horizon42Callbacks::g_lazyWriteAcquires >= 1, "Lazy Writer must invoke AcquireForLazyWrite");
+        TEST_ASSERT(Horizon42Callbacks::g_lazyWriteReleases >= 1, "Lazy Writer must invoke ReleaseFromLazyWrite");
+        TEST_ASSERT(Horizon42Callbacks::g_lastFlushedWalLsn == 0x0000000100004200LL,
+                    "Write-Ahead Log must be flushed up to newest pinned BCB LSN before dirty data pages");
+        TEST_ASSERT(deferredCompleted == true && Horizon42Callbacks::g_deferredPostCalls == 1,
+                    "Deferred write post routine must automatically fire once Lazy Writer drains dirty pages");
+
+        // Verify CcCanIWrite now permits writing 4 KB (1 page <= threshold 2)
+        TEST_ASSERT(CcCanIWrite(&fileObj, 4096, FALSE_B, FALSE_B) == TRUE_B,
+                    "CcCanIWrite must return TRUE after Lazy Writer flushes dirty pages");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: Cache Purge, Uninitialize & Subsystem Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // Purge cached views and verify data persists on committed disk backing when re-faulted in!
+        TEST_ASSERT(CcPurgeCacheSection(fileObj.SectionObjectPointer, nullptr, 0, FALSE_B) == TRUE_B,
+                    "CcPurgeCacheSection must succeed when no BCBs are pinned");
+
+        // Read back the MFT metadata written in Phase 6 at offset 131,072 (this faults in a fresh VACB from disk backing)
+        LARGE_INTEGER mftOffset{};
+        mftOffset.QuadPart = 131072;
+        char mftVerify[17]{0};
+        IoStatusBlock iosb{};
+        TEST_ASSERT(CcCopyRead(&fileObj, &mftOffset, 16, TRUE_B, mftVerify, &iosb) == TRUE_B,
+                    "Reading from re-faulted VACB after purge must succeed");
+        TEST_ASSERT(std::memcmp(mftVerify, "FILE0_MFT_RECORD", 16) == 0,
+                    "Lazy-written data must persist on backing storage across CcPurgeCacheSection");
+
+        // Uninitialize Cache Map
+        CACHE_UNINITIALIZE_EVENT uninitEvt{};
+        TEST_ASSERT(CcUninitializeCacheMap(&fileObj, nullptr, &uninitEvt) == TRUE_B, "CcUninitializeCacheMap must succeed");
+        TEST_ASSERT(uninitEvt.Signaled == TRUE_B && !CcIsFileCached(&fileObj), "FileObject must be uncached after teardown");
+
+        // Verify Telemetry
+        CC_CACHE_TELEMETRY telem{};
+        TEST_ASSERT(CcGetCacheTelemetry(&telem) == TRUE_VAL, "CcGetCacheTelemetry must succeed");
+        TEST_ASSERT(telem.totalCacheMapsInitialized >= 1, "totalCacheMapsInitialized must be >= 1");
+        TEST_ASSERT(telem.totalCacheMapsUninitialized >= 1, "totalCacheMapsUninitialized must be >= 1");
+        TEST_ASSERT(telem.totalVacbsAllocated >= 4, "totalVacbsAllocated must be >= 4");
+        TEST_ASSERT(telem.totalVacbHits >= 5, "totalVacbHits must be >= 5");
+        TEST_ASSERT(telem.totalVacbMisses >= 4, "totalVacbMisses must be >= 4");
+        TEST_ASSERT(telem.totalCopyReads >= 4, "totalCopyReads must be >= 4");
+        TEST_ASSERT(telem.totalCopyWrites >= 3, "totalCopyWrites must be >= 3");
+        TEST_ASSERT(telem.totalMdlReads >= 1 && telem.totalMdlWrites >= 1, "MDL reads and writes must be >= 1");
+        TEST_ASSERT(telem.totalBcbsMapped >= 2 && telem.totalBcbsPinned >= 2, "BCB map and pin counts must be >= 2");
+        TEST_ASSERT(telem.totalBcbsDirtyLsn >= 1, "totalBcbsDirtyLsn must be >= 1");
+        TEST_ASSERT(telem.totalReadAheadsScheduled >= 1, "totalReadAheadsScheduled must be >= 1");
+        TEST_ASSERT(telem.totalLazyWriteScans >= 1, "totalLazyWriteScans must be >= 1");
+        TEST_ASSERT(telem.totalPagesFlushedToDisk >= 1, "totalPagesFlushedToDisk must be >= 1");
+        TEST_ASSERT(telem.totalDeferredWritesExecuted >= 1, "totalDeferredWritesExecuted must be >= 1");
+        TEST_ASSERT(telem.currentDirtyPages == 0, "currentDirtyPages must be 0 after uninitialize");
+
+        CC_CACHE_TELEMETRY directTelem = CcQueryCacheTelemetry();
+        TEST_ASSERT(directTelem.totalVacbsAllocated == telem.totalVacbsAllocated, "Direct telemetry query must match");
+    }
+
+    std::cout << "[TEST] Suite 258: Horizon 42 - Sovereign NT Executive Cache Manager (Cc*), 256KB VACBs & Lazy Writer PASSED.\n";
+}
+

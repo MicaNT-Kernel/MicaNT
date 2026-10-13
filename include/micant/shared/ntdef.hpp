@@ -162,10 +162,15 @@ union LargeInteger {
         int32_t highPart;
     };
     struct {
+        uint32_t LowPart;
+        int32_t HighPart;
+    };
+    struct {
         uint32_t lowPart;
         int32_t highPart;
     } u;
     int64_t quadPart{0};
+    int64_t QuadPart;
 };
 
 /**
@@ -261,9 +266,14 @@ inline constexpr uint32_t OBJ_FORCE_ACCESS_CHECK   = 0x00000400;
 struct IoStatusBlock {
     union {
         NtStatus status;
+        NtStatus Status;
         void* pointer;
+        void* Pointer;
     };
-    uintptr_t information{0};
+    union {
+        uintptr_t information{0};
+        uintptr_t Information;
+    };
 };
 
 /**
