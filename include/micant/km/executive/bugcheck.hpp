@@ -79,6 +79,25 @@ inline constexpr uint32_t DUMP_TYPE_SMALL          = 3; // Small MiniDump (64-51
 inline constexpr uint32_t DUMP_TYPE_TRIAGE         = 4; // Active memory / Triage dump
 
 // ============================================================================
+// 1b. Sovereign Crash Screen Themes
+// ============================================================================
+
+enum class CrashScreenTheme : uint32_t {
+    MidnightObsidian = 0, // Dark Slate (#0B101B) with Cyan (#38BDF8) - Default, easy on the eyes, OLED safe
+    EmeraldPrism     = 1, // Deep Racing Emerald (#03251E) with Mint (#34D399) - Signature MicaNT theme
+    RoyalNavy        = 2  // Deep Royal Navy (#0A192F) with Ice Blue (#60A5FA) - Classic sapphire
+};
+
+inline const char* CrashScreenThemeToString(CrashScreenTheme theme) noexcept {
+    switch (theme) {
+        case CrashScreenTheme::MidnightObsidian: return "Midnight Obsidian";
+        case CrashScreenTheme::EmeraldPrism:     return "Emerald Prism";
+        case CrashScreenTheme::RoyalNavy:        return "Royal Navy";
+        default:                                 return "Midnight Obsidian";
+    }
+}
+
+// ============================================================================
 // 2. Canonical BugCheck Stop Codes & Human-Readable Translations
 // ============================================================================
 
@@ -273,7 +292,7 @@ struct DUMP_SECONDARY_STREAM {
 };
 
 // ============================================================================
-// 7. Blue Screen of Death (BSOD) Sapphire Display Renderer
+// 7. Blue Screen of Death (BSOD) / Sovereign Crash Display Renderer
 // ============================================================================
 
 class BsodRenderer {
@@ -284,16 +303,25 @@ public:
         const std::string& culpritModule,
         const CONTEXT_AMD64& ctx,
         const std::vector<DUMP_STACK_FRAME>& stackTrace,
-        uint32_t dumpProgressPercent = 100
+        uint32_t dumpProgressPercent = 100,
+        CrashScreenTheme theme = CrashScreenTheme::MidnightObsidian
     ) {
         std::ostringstream ss;
         ss << "\n";
         ss << "================================================================================\n";
-        ss << "               MICANT SOVEREIGN BLUE SCREEN OF DEATH (BSOD)                     \n";
+        ss << "               MICANT SOVEREIGN CRASH SCREEN (";
+        if (theme == CrashScreenTheme::EmeraldPrism) {
+            ss << "EMERALD PRISM";
+        } else if (theme == CrashScreenTheme::RoyalNavy) {
+            ss << "ROYAL NAVY";
+        } else {
+            ss << "MIDNIGHT OBSIDIAN";
+        }
+        ss << ")                     \n";
         ss << "================================================================================\n\n";
-        ss << "  :(  Your PC ran into a problem and needs to restart. We're just\n";
-        ss << "      collecting some error info, and then we'll restart for you.\n\n";
-        ss << "      " << dumpProgressPercent << "% complete\n\n";
+        ss << "  [ ◆ ] A kernel exception occurred and the system halted to protect your data.\n";
+        ss << "        MicaNT captured a crash dump and preserved storage state before halting CPU cores.\n\n";
+        ss << "      " << dumpProgressPercent << "% complete (triage memory dump written to disk)\n\n";
 
         // Ascii QR Code Matrix Simulation
         ss << "      [#]  QR DIAGNOSTIC CODE:\n";
@@ -303,8 +331,8 @@ public:
         ss << "      | [ ] [ ] [X] [X]  [X] [ ] [ ]   |\n";
         ss << "      | [X] [X] [X] [ ]  [X] [X] [X]   |\n";
         ss << "      +--------------------------------+\n";
-        ss << "      For more info on this issue and possible fixes, visit:\n";
-        ss << "      https://micant.org/stopcode\n\n";
+        ss << "      For sovereign diagnostics and triage analysis, visit:\n";
+        ss << "      https://micant.org/kernel/stopcode\n\n";
 
         ss << "  STOP CODE:     " << BugCheckCodeToString(bugCheckCode) 
            << " (0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << bugCheckCode << ")\n";
@@ -342,14 +370,39 @@ public:
         return ss.str();
     }
 
-    // Framebuffer raster generator (1920x1080 32-bpp BGRA in Microsoft Cobalt Blue / Sapphire 0x0078D7)
+    // Framebuffer raster generator supporting configurable theme palettes
     static std::vector<uint32_t> RenderFramebufferRaster(
         uint32_t width = 640,
         uint32_t height = 480,
-        uint32_t bgraColor = 0xFF0078D7 // Classic Windows 10/11 BSOD Cobalt Blue
+        CrashScreenTheme theme = CrashScreenTheme::MidnightObsidian
+    ) {
+        uint32_t bgraColor = 0xFF0B101B;  // Midnight Obsidian default (Dark Slate)
+        uint32_t accentColor = 0xFF38BDF8; // Cyan accent
+        if (theme == CrashScreenTheme::EmeraldPrism) {
+            bgraColor = 0xFF03251E;       // Emerald Prism deep background (Dark Emerald)
+            accentColor = 0xFF34D399;     // Mint accent
+        } else if (theme == CrashScreenTheme::RoyalNavy) {
+            bgraColor = 0xFF0A192F;       // Royal Navy deep background
+            accentColor = 0xFF60A5FA;     // Ice Blue accent
+        }
+
+        std::vector<uint32_t> fb(width * height, bgraColor);
+        // Paint sovereign diamond [ ◆ ] accent block in top-left margin
+        for (uint32_t y = 50; y < 80 && y < height; ++y) {
+            for (uint32_t x = 50; x < 60 && x < width; ++x) {
+                fb[y * width + x] = accentColor;
+            }
+        }
+        return fb;
+    }
+
+    // Overload for direct BGRA color raster generation
+    static std::vector<uint32_t> RenderFramebufferRaster(
+        uint32_t width,
+        uint32_t height,
+        uint32_t bgraColor
     ) {
         std::vector<uint32_t> fb(width * height, bgraColor);
-        // Paint a white rectangle simulating the sad face icon area (width/10 by height/10)
         uint32_t white = 0xFFFFFFFF;
         for (uint32_t y = 50; y < 80 && y < height; ++y) {
             for (uint32_t x = 50; x < 60 && x < width; ++x) {
@@ -399,6 +452,7 @@ public:
         m_simulatedDiskSectors.clear();
         m_lastBsodText.clear();
         m_secondaryStreams.clear();
+        m_theme = CrashScreenTheme::MidnightObsidian;
         m_telemetry = BUGCHECK_TELEMETRY{};
 
         // Seed default loaded kernel modules for stack unwinding & culprit identification
@@ -611,7 +665,7 @@ public:
         m_lastDumpHeader = hdr;
 
         // 7. Render BSOD Display Output
-        m_lastBsodText = BsodRenderer::RenderTextBsod(code, p1, p2, p3, p4, culprit, ctx, stackTrace, 100);
+        m_lastBsodText = BsodRenderer::RenderTextBsod(code, p1, p2, p3, p4, culprit, ctx, stackTrace, 100, m_theme);
 
         // 8. Generate Minidump Payload and simulate direct disk sink
         std::vector<uint8_t> dumpImage;
@@ -682,6 +736,16 @@ public:
 
     // --- Accessors ---
 
+    void setCrashScreenTheme(CrashScreenTheme theme) noexcept {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        m_theme = theme;
+    }
+
+    CrashScreenTheme getCrashScreenTheme() const noexcept {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        return m_theme;
+    }
+
     const DUMP_HEADER64& getLastDumpHeader() const noexcept { return m_lastDumpHeader; }
     const std::string& getLastBsodText() const noexcept { return m_lastBsodText; }
     BUGCHECK_TELEMETRY getTelemetry() const noexcept {
@@ -718,6 +782,7 @@ private:
 
     DUMP_HEADER64 m_lastDumpHeader{};
     std::string m_lastBsodText{};
+    CrashScreenTheme m_theme{CrashScreenTheme::MidnightObsidian};
     BUGCHECK_TELEMETRY m_telemetry{};
 };
 
@@ -795,6 +860,14 @@ inline BOOL WINAPI KeGetBugCheckTelemetry(BUGCHECK_TELEMETRY* outTelemetry) {
     return TRUE_VAL;
 }
 
+inline void WINAPI KeSetCrashScreenTheme(CrashScreenTheme Theme) {
+    TitanCrashDumpEngine::Instance().setCrashScreenTheme(Theme);
+}
+
+inline CrashScreenTheme WINAPI KeGetCrashScreenTheme() {
+    return TitanCrashDumpEngine::Instance().getCrashScreenTheme();
+}
+
 inline void WINAPI KeResetBugCheckSubsystemForTesting() {
     TitanCrashDumpEngine::Instance().resetForTesting();
 }
@@ -822,10 +895,14 @@ inline void InitializeCrashDumpSubsystemExports() {
     ldr.registerExport("ntoskrnl.exe", "KeDeregisterBugCheckReasonCallback", reinterpret_cast<void*>(KeDeregisterBugCheckReasonCallback));
     ldr.registerExport("ntoskrnl.exe", "IoWriteCrashDump", reinterpret_cast<void*>(IoWriteCrashDump));
     ldr.registerExport("ntoskrnl.exe", "KeGetBugCheckTelemetry", reinterpret_cast<void*>(KeGetBugCheckTelemetry));
+    ldr.registerExport("ntoskrnl.exe", "KeSetCrashScreenTheme", reinterpret_cast<void*>(KeSetCrashScreenTheme));
+    ldr.registerExport("ntoskrnl.exe", "KeGetCrashScreenTheme", reinterpret_cast<void*>(KeGetCrashScreenTheme));
 
     // Register crashdump.sys exports
     ldr.registerExport("crashdump.sys", "IoWriteCrashDump", reinterpret_cast<void*>(IoWriteCrashDump));
     ldr.registerExport("crashdump.sys", "KeGetBugCheckTelemetry", reinterpret_cast<void*>(KeGetBugCheckTelemetry));
+    ldr.registerExport("crashdump.sys", "KeSetCrashScreenTheme", reinterpret_cast<void*>(KeSetCrashScreenTheme));
+    ldr.registerExport("crashdump.sys", "KeGetCrashScreenTheme", reinterpret_cast<void*>(KeGetCrashScreenTheme));
 
     // Register Service in SCM
     auto crashSvc = std::make_shared<scm::ServiceRecord>();
@@ -857,6 +934,7 @@ inline void InitializeCrashDumpSubsystemExports() {
 namespace micant {
     using crashdump::TitanCrashDumpEngine;
     using crashdump::BsodRenderer;
+    using crashdump::CrashScreenTheme;
     using crashdump::DUMP_HEADER64;
     using crashdump::CONTEXT_AMD64;
     using crashdump::DUMP_STACK_FRAME;
@@ -866,6 +944,7 @@ namespace micant {
     using crashdump::KBUGCHECK_CALLBACK_REASON;
     using crashdump::BUGCHECK_TELEMETRY;
     using crashdump::BugCheckCodeToString;
+    using crashdump::CrashScreenThemeToString;
     using crashdump::KeBugCheck;
     using crashdump::KeBugCheckEx;
     using crashdump::KeRegisterBugCheckCallback;
@@ -874,6 +953,8 @@ namespace micant {
     using crashdump::KeDeregisterBugCheckReasonCallback;
     using crashdump::IoWriteCrashDump;
     using crashdump::KeGetBugCheckTelemetry;
+    using crashdump::KeSetCrashScreenTheme;
+    using crashdump::KeGetCrashScreenTheme;
     using crashdump::KeQueryBugCheckTelemetry;
     using crashdump::InitializeCrashDumpSubsystemExports;
 } // namespace micant

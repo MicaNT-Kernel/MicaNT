@@ -11896,22 +11896,46 @@ void Test_Horizon39_KernelCrashDumpEngine_BugCheck_And_BSOD() {
     }
 
     // ------------------------------------------------------------------------
-    // Phase 8: Blue Screen of Death (BSOD) Text & Framebuffer Raster Rendering
+    // Phase 8: Blue Screen of Death (BSOD) Text & Sovereign Multi-Theme Rendering
     // ------------------------------------------------------------------------
     {
         auto& dumpEngine = crashdump::TitanCrashDumpEngine::Instance();
         const std::string& bsod = dumpEngine.getLastBsodText();
 
-        TEST_ASSERT(bsod.find(":(") != std::string::npos, "BSOD text must contain sad face emoticon");
+        TEST_ASSERT(bsod.find("[ ◆ ]") != std::string::npos || bsod.find("A kernel exception occurred") != std::string::npos,
+                    "BSOD text must contain sovereign kernel exception notice");
         TEST_ASSERT(bsod.find("QR DIAGNOSTIC CODE") != std::string::npos, "BSOD text must contain QR diagnostic code");
-        TEST_ASSERT(bsod.find("https://micant.org/stopcode") != std::string::npos, "BSOD text must contain diagnostic URL");
+        TEST_ASSERT(bsod.find("https://micant.org/kernel/stopcode") != std::string::npos, "BSOD text must contain diagnostic URL");
         TEST_ASSERT(bsod.find("PROCESSOR CONTEXT (AMD64)") != std::string::npos, "BSOD text must render register context");
         TEST_ASSERT(bsod.find("CALLSTACK UNWINDING TRACE") != std::string::npos, "BSOD text must render callstack trace");
 
-        // Verify Framebuffer raster generation
-        auto raster = crashdump::BsodRenderer::RenderFramebufferRaster(640, 480, 0xFF0078D7);
-        TEST_ASSERT(raster.size() == 640 * 480, "Framebuffer raster size must be 640x480 pixels");
-        TEST_ASSERT(raster[0] == 0xFF0078D7, "Background color must be Microsoft Cobalt Blue (0xFF0078D7)");
+        // Verify Default Theme (Midnight Obsidian #0B101B)
+        TEST_ASSERT(dumpEngine.getCrashScreenTheme() == crashdump::CrashScreenTheme::MidnightObsidian,
+                    "Default crash theme must be Midnight Obsidian");
+        auto midnightRaster = crashdump::BsodRenderer::RenderFramebufferRaster(640, 480, crashdump::CrashScreenTheme::MidnightObsidian);
+        TEST_ASSERT(midnightRaster.size() == 640 * 480, "Framebuffer raster size must be 640x480 pixels");
+        TEST_ASSERT(midnightRaster[0] == 0xFF0B101B, "Midnight Obsidian raster background must be #0B101B");
+
+        // Verify Dynamic Theme Switch to Emerald Prism (#03251E)
+        crashdump::KeSetCrashScreenTheme(crashdump::CrashScreenTheme::EmeraldPrism);
+        TEST_ASSERT(crashdump::KeGetCrashScreenTheme() == crashdump::CrashScreenTheme::EmeraldPrism,
+                    "Crash screen theme must switch to Emerald Prism");
+        auto emeraldRaster = crashdump::BsodRenderer::RenderFramebufferRaster(640, 480, crashdump::CrashScreenTheme::EmeraldPrism);
+        TEST_ASSERT(emeraldRaster[0] == 0xFF03251E, "Emerald Prism raster background must be #03251E");
+
+        // Trigger a crash under Emerald Prism
+        dumpEngine.executeBugCheck(crashdump::CRITICAL_PROCESS_DIED, 0x2000, 0, 0, 0);
+        const std::string& emeraldBsod = dumpEngine.getLastBsodText();
+        TEST_ASSERT(emeraldBsod.find("EMERALD PRISM") != std::string::npos, "Emerald BSOD text must indicate Emerald Prism theme");
+
+        // Verify Royal Navy (#0A192F)
+        auto navyRaster = crashdump::BsodRenderer::RenderFramebufferRaster(640, 480, crashdump::CrashScreenTheme::RoyalNavy);
+        TEST_ASSERT(navyRaster[0] == 0xFF0A192F, "Royal Navy raster background must be #0A192F");
+
+        // Reset theme back to Midnight Obsidian
+        crashdump::KeSetCrashScreenTheme(crashdump::CrashScreenTheme::MidnightObsidian);
+        TEST_ASSERT(crashdump::KeGetCrashScreenTheme() == crashdump::CrashScreenTheme::MidnightObsidian,
+                    "Crash screen theme must reset to Midnight Obsidian");
     }
 
     // ------------------------------------------------------------------------
