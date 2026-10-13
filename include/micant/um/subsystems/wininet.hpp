@@ -35,7 +35,7 @@
 #include "micant/um/subsystems/kernel32.hpp"
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/subsystems/ws2_32.hpp"
-#include "micant/km/drivers/tcpip.hpp"
+#include "micant/km/drivers/net/tcpip.hpp"
 #include "micant/um/subsystems/sspi.hpp"
 
 namespace micant::wininet {

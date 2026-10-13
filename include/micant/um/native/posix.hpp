@@ -33,7 +33,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/lpc.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/native/ldr.hpp"
 

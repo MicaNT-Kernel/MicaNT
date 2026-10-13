@@ -326,8 +326,40 @@ ${report.findings && report.findings.length > 0 ? `#### Findings & Observations\
     }
 }
 
+// 2b. Enforce Canonical NT Kernel Directory Architecture (Zero Flat Folder Drift)
+function verifyDirectoryArchitecture() {
+    const repoRoot = path.resolve(__dirname, '..');
+    const guardedRoots = [
+        { dir: path.join(repoRoot, 'include', 'micant'), desc: 'include/micant/ (must reside in shared/, km/, um/, ucrt/, or shell/)' },
+        { dir: path.join(repoRoot, 'include', 'micant', 'km'), desc: 'include/micant/km/ (must reside in core/, executive/, hal/, drivers/, or win32k/)' },
+        { dir: path.join(repoRoot, 'include', 'micant', 'km', 'drivers'), desc: 'include/micant/km/drivers/ (must reside in WDK class subdir: storage/, fs/, net/, usb/, input/, video/, audio/, bus/, compute/, security/)' },
+        { dir: path.join(repoRoot, 'kernel'), desc: 'kernel/ (must reside in base/ntos subsystem subdir: init/, ke/, mm/, io/, ob/, ps/, cm/, se/, lpc/, cc/, ex/, hal/, pnp/, po/)' }
+    ];
+
+    const violations = [];
+    for (const guard of guardedRoots) {
+        if (!fs.existsSync(guard.dir)) continue;
+        const entries = fs.readdirSync(guard.dir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isFile() && /\.(hpp|h|cpp|c)$/i.test(entry.name)) {
+                violations.push(`Loose file "${entry.name}" found in ${guard.desc}`);
+            }
+        }
+    }
+
+    if (violations.length > 0) {
+        console.error('[Sentinel] ARCHITECTURE VIOLATION: Flat folder drift detected!');
+        for (const v of violations) {
+            console.error(`  - ${v}`);
+        }
+        process.exit(1);
+    }
+    console.log('[Sentinel] NT Directory Architecture Check: PASSED (0 loose files in guarded kernel/header roots).');
+}
+
 // Main execution
 (async () => {
+    verifyDirectoryArchitecture();
     const msInfo = detectMicrosoftContributor();
 
     if (msInfo.bypassActive) {

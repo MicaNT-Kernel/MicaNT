@@ -11,10 +11,10 @@
 #pragma once
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
-#include "micant/km/drivers/storage.hpp"
-#include "micant/km/drivers/ntfs.hpp"
-#include "micant/km/drivers/fat32.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/storage/storage.hpp"
+#include "micant/km/drivers/fs/ntfs.hpp"
+#include "micant/km/drivers/fs/fat32.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 #include <string>
 #include <string_view>
 #include <vector>

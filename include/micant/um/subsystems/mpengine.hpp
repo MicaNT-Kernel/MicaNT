@@ -81,7 +81,7 @@
 #include "micant/um/subsystems/version.hpp"
 #include "micant/um/subsystems/cipherksp.hpp"
 #include "micant/um/native/pe.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 
 #include <cstdint>
 #include <cstddef>

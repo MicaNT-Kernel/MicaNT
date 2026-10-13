@@ -14,7 +14,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"
 #include "micant/km/executive/ex_work.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 
 namespace micant::po {
 

@@ -30,7 +30,7 @@
 #include <chrono>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
-#include "micant/km/drivers/storage.hpp"
+#include "micant/km/drivers/storage/storage.hpp"
 
 namespace micant::ntfs {
 

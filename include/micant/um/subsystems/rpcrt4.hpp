@@ -27,9 +27,9 @@
 #include "micant/um/subsystems/kernel32.hpp"
 #include "micant/um/subsystems/cipherksp.hpp"
 #include "micant/km/executive/lpc.hpp"
-#include "micant/km/drivers/npfs.hpp"
+#include "micant/km/drivers/fs/npfs.hpp"
 #include "micant/um/subsystems/ws2_32.hpp"
-#include "micant/km/drivers/tcpip.hpp"
+#include "micant/km/drivers/net/tcpip.hpp"
 #include "micant/um/native/ldr.hpp"
 
 namespace micant::rpc {

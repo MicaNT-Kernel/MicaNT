@@ -22,6 +22,10 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/se/ntsec.cpp
     kernel/lpc/ntlpc.cpp
     kernel/cc/ccmgr.cpp
+    kernel/ex/exmgr.cpp
+    kernel/hal/halinit.cpp
+    kernel/pnp/pnpmgr.cpp
+    kernel/po/pomgr.cpp
 )
 
 add_library(ntoskrnl_core STATIC

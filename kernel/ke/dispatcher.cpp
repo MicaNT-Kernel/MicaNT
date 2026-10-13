@@ -6,6 +6,10 @@
 namespace micant::sys {
 
 void SyscallDispatcher::initializeStandardTable() {
+    internal::HalInitializeExecutiveSubsystem();
+    internal::ExInitializeExecutiveSubsystem();
+    internal::PnpInitializeExecutiveSubsystem();
+    internal::PoInitializeExecutiveSubsystem();
     internal::CcInitializeExecutiveCache();
 
     // 1. NtAllocateVirtualMemory (SSN: 0x0018)

@@ -34,7 +34,7 @@
 #include "micant/um/subsystems/polarisdiag.hpp"
 #include "micant/um/subsystems/ole32.hpp"
 #include "micant/um/native/ldr.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 #include "micant/km/executive/cm.hpp"
 
 namespace micant::wer {

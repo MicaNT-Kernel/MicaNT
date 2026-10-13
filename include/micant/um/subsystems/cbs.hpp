@@ -33,7 +33,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/servers/scm.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 
 namespace micant::cbs {
 

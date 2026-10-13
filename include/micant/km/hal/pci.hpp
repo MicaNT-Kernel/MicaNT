@@ -43,7 +43,7 @@
 #include "micant/um/native/janusldr.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/version.hpp"
-#include "micant/km/drivers/vanguarddriver.hpp"
+#include "micant/km/drivers/security/vanguarddriver.hpp"
 
 #ifndef WINAPI
 #define WINAPI __stdcall

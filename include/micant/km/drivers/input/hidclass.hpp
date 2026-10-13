@@ -53,7 +53,7 @@
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/version.hpp"
 #include "micant/km/executive/io.hpp"
-#include "micant/km/drivers/xhci.hpp"
+#include "micant/km/drivers/usb/xhci.hpp"
 #include "micant/km/win32k/win32k.hpp"
 
 namespace micant::km::hid {

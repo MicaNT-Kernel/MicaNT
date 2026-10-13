@@ -32,7 +32,7 @@
 #include <algorithm>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
-#include "micant/km/drivers/ndis.hpp"
+#include "micant/km/drivers/net/ndis.hpp"
 
 namespace micant::tcpip {
 

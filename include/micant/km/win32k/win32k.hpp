@@ -50,7 +50,7 @@
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/version.hpp"
 #include "micant/km/core/dispatcher.hpp"
-#include "micant/km/drivers/wddm.hpp"
+#include "micant/km/drivers/video/wddm.hpp"
 
 namespace micant::win32k {
 

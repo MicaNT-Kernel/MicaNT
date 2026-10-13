@@ -24,7 +24,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/subsystems/kernel32.hpp"
 #include "micant/um/subsystems/user32.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 #include "micant/um/native/ldr.hpp"
 
 namespace micant::shell32 {

@@ -44,12 +44,12 @@
 #include "micant/km/executive/driver.hpp"
 
 // 5. Kernel Mode (Ring 0): Device Drivers & Filesystems
-#include "micant/km/drivers/storage.hpp"
-#include "micant/km/drivers/fat32.hpp"
-#include "micant/km/drivers/fs.hpp"
-#include "micant/km/drivers/ndis.hpp"
-#include "micant/km/drivers/tcpip.hpp"
-#include "micant/km/drivers/npfs.hpp"
+#include "micant/km/drivers/storage/storage.hpp"
+#include "micant/km/drivers/fs/fat32.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
+#include "micant/km/drivers/net/ndis.hpp"
+#include "micant/km/drivers/net/tcpip.hpp"
+#include "micant/km/drivers/fs/npfs.hpp"
 
 // 6. User Mode (Ring 3): Native NT Layer & Loaders
 #include "micant/um/native/ntdll.hpp"

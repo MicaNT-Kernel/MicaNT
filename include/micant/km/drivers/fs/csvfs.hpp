@@ -70,7 +70,7 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/subsystems/version.hpp"
 #include "micant/um/servers/scm.hpp"
-#include "micant/km/drivers/refs.hpp"
+#include "micant/km/drivers/fs/refs.hpp"
 
 namespace micant::csvfs {
 

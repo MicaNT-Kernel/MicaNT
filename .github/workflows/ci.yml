@@ -33,10 +33,15 @@ jobs:
           clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/se/ntsec.cpp -o bin/se_ntsec.o
           clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/lpc/ntlpc.cpp -o bin/lpc_ntlpc.o
           clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/cc/ccmgr.cpp -o bin/cc_ccmgr.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp bin/ke_dispatcher.o bin/ke_wait.o bin/mm_virtual.o bin/io_iomgr.o bin/ob_obref.o bin/ps_psmgr.o bin/cm_ntreg.o bin/se_ntsec.o bin/lpc_ntlpc.o bin/cc_ccmgr.o -o bin/micant_kernel.exe
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp bin/ke_dispatcher.o bin/ke_wait.o bin/mm_virtual.o bin/io_iomgr.o bin/ob_obref.o bin/ps_psmgr.o bin/cm_ntreg.o bin/se_ntsec.o bin/lpc_ntlpc.o bin/cc_ccmgr.o -o bin/micant_tests.exe
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ex/exmgr.cpp -o bin/ex_exmgr.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/hal/halinit.cpp -o bin/hal_halinit.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/pnp/pnpmgr.cpp -o bin/pnp_pnpmgr.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/po/pomgr.cpp -o bin/po_pomgr.o
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp bin/ke_dispatcher.o bin/ke_wait.o bin/mm_virtual.o bin/io_iomgr.o bin/ob_obref.o bin/ps_psmgr.o bin/cm_ntreg.o bin/se_ntsec.o bin/lpc_ntlpc.o bin/cc_ccmgr.o bin/ex_exmgr.o bin/hal_halinit.o bin/pnp_pnpmgr.o bin/po_pomgr.o -o bin/micant_kernel.exe
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp bin/ke_dispatcher.o bin/ke_wait.o bin/mm_virtual.o bin/io_iomgr.o bin/ob_obref.o bin/ps_psmgr.o bin/cm_ntreg.o bin/se_ntsec.o bin/lpc_ntlpc.o bin/cc_ccmgr.o bin/ex_exmgr.o bin/hal_halinit.o bin/pnp_pnpmgr.o bin/po_pomgr.o -o bin/micant_tests.exe
 
-      - name: Execute Full 258-Suite Test Battery (100% Pass Rate Required)
+      - name: Execute Full 258-Suite Test Battery & Clean-Room Sentinel
         shell: pwsh
         run: |
           .\bin\micant_tests.exe
+          node scripts/clean_room_sentinel.js

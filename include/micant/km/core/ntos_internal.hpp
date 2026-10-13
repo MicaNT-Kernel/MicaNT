@@ -39,4 +39,16 @@ NtStatus NtRequestWaitReplyPortSys(const SyscallFrame& f);
 // Cache Manager Executive Initialization & Scan (kernel/cc/ccmgr.cpp)
 void CcInitializeExecutiveCache() noexcept;
 
+// Executive Pool, Sync & Worker Initialization (kernel/ex/exmgr.cpp)
+void ExInitializeExecutiveSubsystem() noexcept;
+
+// Hardware Abstraction Layer Initialization (kernel/hal/halinit.cpp)
+void HalInitializeExecutiveSubsystem() noexcept;
+
+// Plug and Play Manager Initialization (kernel/pnp/pnpmgr.cpp)
+void PnpInitializeExecutiveSubsystem() noexcept;
+
+// Power Manager Initialization (kernel/po/pomgr.cpp)
+void PoInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

@@ -14,10 +14,10 @@
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/executive/io.hpp"
 #include "micant/km/executive/ob.hpp"
-#include "micant/km/drivers/storage.hpp"
-#include "micant/km/drivers/fat32.hpp"
-#include "micant/km/drivers/npfs.hpp"
-#include "micant/km/drivers/ntfs.hpp"
+#include "micant/km/drivers/storage/storage.hpp"
+#include "micant/km/drivers/fs/fat32.hpp"
+#include "micant/km/drivers/fs/npfs.hpp"
+#include "micant/km/drivers/fs/ntfs.hpp"
 
 namespace micant::fs {
 

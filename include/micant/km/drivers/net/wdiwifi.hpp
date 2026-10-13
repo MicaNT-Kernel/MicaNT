@@ -55,7 +55,7 @@
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/version.hpp"
 #include "micant/km/hal/pci.hpp"
-#include "micant/km/drivers/ndis.hpp"
+#include "micant/km/drivers/net/ndis.hpp"
 
 #ifndef WINAPI
 #define WINAPI __stdcall

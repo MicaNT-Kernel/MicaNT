@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/mm.hpp"
 
 namespace micant::ex {
 

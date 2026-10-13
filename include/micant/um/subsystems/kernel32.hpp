@@ -27,8 +27,8 @@
 #include "micant/um/servers/csrss.hpp"
 #include "micant/um/servers/conhost.hpp"
 #include "micant/km/hal/hal.hpp"
-#include "micant/km/drivers/npfs.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/npfs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 
 namespace micant::win32 {
 

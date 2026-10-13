@@ -1,7 +1,7 @@
 #include "micant/km/core/ntos_internal.hpp"
 #include "micant/km/executive/io.hpp"
-#include "micant/km/drivers/fs.hpp"
-#include "micant/km/drivers/npfs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
+#include "micant/km/drivers/fs/npfs.hpp"
 #include <unordered_map>
 #include <memory>
 #include <vector>

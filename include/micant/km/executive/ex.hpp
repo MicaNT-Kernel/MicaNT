@@ -14,6 +14,7 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
+#include <thread>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/core/ke.hpp"

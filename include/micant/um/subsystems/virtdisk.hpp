@@ -48,7 +48,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/um/native/ldr.hpp"
 #include "micant/um/subsystems/version.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 
 #include <cstdint>
 #include <cstddef>

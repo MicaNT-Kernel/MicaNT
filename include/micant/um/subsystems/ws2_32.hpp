@@ -20,7 +20,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/um/subsystems/kernel32.hpp"
 #include "micant/um/native/ldr.hpp"
-#include "micant/km/drivers/tcpip.hpp"
+#include "micant/km/drivers/net/tcpip.hpp"
 
 namespace micant::ws2_32 {
 

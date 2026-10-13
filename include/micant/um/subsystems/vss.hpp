@@ -9,7 +9,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/um/subsystems/ole32.hpp"
 #include "micant/um/subsystems/oleaut32.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 #include "micant/um/native/janusldr.hpp"
 
 #include <string>

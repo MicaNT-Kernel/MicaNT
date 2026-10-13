@@ -25,7 +25,7 @@
 #include "micant/um/subsystems/kernel32.hpp"
 #include "micant/um/subsystems/ole32.hpp"
 #include "micant/um/subsystems/wininet.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 
 namespace micant::urlmon {
 

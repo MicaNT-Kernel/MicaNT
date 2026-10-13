@@ -35,7 +35,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/subsystems/kernel32.hpp"
-#include "micant/km/drivers/fs.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
 #include "micant/um/servers/conhost.hpp"
 #include "micant/um/subsystems/user32.hpp"
 #include "micant/um/servers/csrss.hpp"

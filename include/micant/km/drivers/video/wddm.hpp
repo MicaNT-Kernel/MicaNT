@@ -47,7 +47,7 @@
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/version.hpp"
 #include "micant/km/hal/pci.hpp"
-#include "micant/km/drivers/dxgkrnl.hpp"
+#include "micant/km/drivers/video/dxgkrnl.hpp"
 
 namespace micant::wddm {
 

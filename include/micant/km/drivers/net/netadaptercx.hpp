@@ -10,4 +10,4 @@
 // ============================================================================
 
 #pragma once
-#include "micant/km/drivers/ndis.hpp"
+#include "micant/km/drivers/net/ndis.hpp"

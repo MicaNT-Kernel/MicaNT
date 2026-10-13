@@ -35,8 +35,8 @@
 #include "micant/um/subsystems/oleaut32.hpp"
 #include "micant/km/hal/hal.hpp"
 #include "micant/km/executive/mm.hpp"
-#include "micant/km/drivers/fs.hpp"
-#include "micant/km/drivers/tcpip.hpp"
+#include "micant/km/drivers/fs/fs.hpp"
+#include "micant/km/drivers/net/tcpip.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/native/ldr.hpp"
 

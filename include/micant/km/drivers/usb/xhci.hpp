@@ -48,7 +48,7 @@
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/version.hpp"
 #include "micant/km/executive/io.hpp"
-#include "micant/km/drivers/usb.hpp"
+#include "micant/km/drivers/usb/usb.hpp"
 
 namespace micant::km::xhci {
 

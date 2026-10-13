@@ -57,7 +57,7 @@
 #include "micant/um/subsystems/version.hpp"
 #include "micant/um/servers/scm.hpp"
 #include "micant/um/subsystems/cipherksp.hpp"
-#include "micant/km/drivers/tcpip.hpp"
+#include "micant/km/drivers/net/tcpip.hpp"
 #include "micant/um/subsystems/nla.hpp"
 
 namespace micant::wan {
