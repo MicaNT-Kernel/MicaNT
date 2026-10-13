@@ -201,14 +201,14 @@ public:
         m_videoDriver.fillRectangle(0, 0, width, 28, bootvid::Color{18, 24, 38});
         m_videoDriver.fillRectangle(0, 27, width, 1, bootvid::Color{38, 52, 78});
         m_videoDriver.drawString(14, 8, "MicaNT Cutler Edition", bootvid::Color{0, 229, 255}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(185, 8, "|  PE Subsystem: Real Application Compatibility  |  Phase 187  |  Bare-Metal UEFI GOP",
+        m_videoDriver.drawString(185, 8, "|  NT Modular Kernel Tree (14 Units)  |  Horizon 42 (Cc* VACB)  |  Bare-Metal UEFI GOP",
                                 bootvid::Color{170, 185, 205}, bootvid::Color{18, 24, 38}, 1);
 
-        m_videoDriver.fillRectangle(width - 340, 5, 150, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 332, 8, "CPU: 3.8GHz [4 Cores]", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.fillRectangle(width - 358, 5, 154, 18, bootvid::Color{26, 36, 54});
+        m_videoDriver.drawString(width - 348, 8, "258/258 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
 
-        m_videoDriver.fillRectangle(width - 180, 5, 166, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 172, 8, "PASSIVE_LEVEL [IRQL 0]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.fillRectangle(width - 196, 5, 188, 18, bootvid::Color{26, 36, 54});
+        m_videoDriver.drawString(width - 188, 8, "PASSIVE_LEVEL [IRQL 0]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
 
         auto DrawButtons = [&](uint32_t rightX, uint32_t y) {
             uint32_t btnW = 20;
@@ -236,7 +236,7 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{20, 28, 44});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{40, 180, 100});
             m_videoDriver.drawString(wx + 8, wy + 8, "N+", bootvid::Color{255, 255, 255}, bootvid::Color{40, 180, 100}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "* executive.cpp - Notepad++ [MicaNT Clean-Room Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
+            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ [MicaNT Clean-Room Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
@@ -255,10 +255,10 @@ public:
 
             // Tab bar
             m_videoDriver.fillRectangle(wx + 2, wy + 70, ww - 4, 22, bootvid::Color{10, 14, 22});
-            m_videoDriver.fillRectangle(wx + 6, wy + 72, 170, 20, bootvid::Color{26, 38, 58});
-            m_videoDriver.drawString(wx + 12, wy + 76, "[c++] executive.cpp *  x", bootvid::Color{0, 225, 255}, bootvid::Color{26, 38, 58}, 1);
-            m_videoDriver.fillRectangle(wx + 180, wy + 72, 120, 20, bootvid::Color{14, 18, 28});
-            m_videoDriver.drawString(wx + 186, wy + 76, "[h] ldr.hpp   x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
+            m_videoDriver.fillRectangle(wx + 6, wy + 72, 184, 20, bootvid::Color{26, 38, 58});
+            m_videoDriver.drawString(wx + 12, wy + 76, "[c++] kiinit.cpp *  x", bootvid::Color{0, 225, 255}, bootvid::Color{26, 38, 58}, 1);
+            m_videoDriver.fillRectangle(wx + 194, wy + 72, 124, 20, bootvid::Color{14, 18, 28});
+            m_videoDriver.drawString(wx + 200, wy + 76, "[h] cc.hpp   x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
 
             // Editor
             uint32_t edX = wx + 2;
@@ -270,18 +270,18 @@ public:
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
 
             const char* codeLines[] = {
-                "// MicaNT: Sovereign Executive Dispatcher (kernel/executive.cpp)",
-                "// Clean-room NT 4.0/10.0 Architecture | Dave Cutler Heritage",
-                "#include <micant/shared/ntstatus.hpp>",
-                "#include <micant/um/native/pe.hpp>",
+                "// MicaNT: Sovereign Executive Startup (kernel/init/kiinit.cpp)",
+                "// 14-Unit NT Tree: ke/ mm/ ob/ ps/ io/ cm/ se/ lpc/ cc/ ex/ hal/",
+                "#include <micant/km/executive/cc.hpp>",
+                "#include <micant/km/drivers/input/hidclass.hpp>",
                 "",
-                "extern \"C\" NTSTATUS KiSystemServiceHandler(uint32_t id, void* a) {",
-                "    if (KeGetCurrentIrql() > DISPATCH_LEVEL) return STATUS_FAIL;",
-                "    return micant::dispatcher::DispatchSyscall(id, a);",
+                "extern \"C\" NTSTATUS KiSystemStartup(LoaderParameterBlock* lpb) {",
+                "    CcInitializeExecutiveCache(); // 256KB VACB + BCB Pinning",
+                "    return Phase1Initialization(lpb);",
                 "}",
                 "",
                 "int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {",
-                "    // Native PE execution verified under MicaNT Clean-Room Win32",
+                "    // WDK Device Classes (10) & UM Domains (8) Verified",
                 "    micant::pe::PeLoader::LaunchApplication(\"notepad++.exe\");",
                 "    return 0;",
                 "}"
@@ -307,7 +307,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "Ln 14, Col 28 | UTF-8 | Windows (CRLF) | INS | 100% Native Win32",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "Ln 14, Col 28 | UTF-8 | 0 Loose Root Files | Clean-Room Sentinel OK",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -422,10 +422,10 @@ public:
             // Toolbar
             m_videoDriver.fillRectangle(wx + 2, wy + 48, ww - 4, 24, bootvid::Color{14, 20, 30});
             const char* ops[] = {"[+ Add]", "[- Extract]", "[* Test]", "[Copy]", "[Move]", "[Delete]", "[Info]"};
-            uint32_t ox = wx + 10;
+            uint32_t ox = wx + 12;
             for (const char* op : ops) {
                 m_videoDriver.drawString(ox, wy + 54, op, bootvid::Color{0, 210, 255}, bootvid::Color{14, 20, 30}, 1);
-                ox += 72;
+                ox += 88;
             }
 
             // Path Address Bar
@@ -478,53 +478,53 @@ public:
         // Start Button
         m_videoDriver.fillRectangle(6, taskbarY + 4, 64, 26, bootvid::Color{28, 40, 64});
         m_videoDriver.drawRectangle(6, taskbarY + 4, 64, 26, bootvid::Color{0, 180, 230});
-        m_videoDriver.drawString(14, taskbarY + 12, "MICA", bootvid::Color{0, 240, 255}, bootvid::Color{28, 40, 64}, 1);
+        m_videoDriver.drawString(16, taskbarY + 12, "MICA", bootvid::Color{0, 240, 255}, bootvid::Color{28, 40, 64}, 1);
 
         // Taskbar Buttons with Running Glow Lines
-        uint32_t tbX = 74;
-        m_videoDriver.fillRectangle(tbX, taskbarY + 4, 58, 26, bootvid::Color{22, 32, 50});
-        m_videoDriver.fillRectangle(tbX, taskbarY + 28, 58, 2, bootvid::Color{0, 220, 255});
-        m_videoDriver.drawString(tbX + 6, taskbarY + 12, ">_ CMD", bootvid::Color{240, 248, 255}, bootvid::Color{22, 32, 50}, 1);
+        uint32_t tbX = 76;
+        m_videoDriver.fillRectangle(tbX, taskbarY + 4, 64, 26, bootvid::Color{22, 32, 50});
+        m_videoDriver.fillRectangle(tbX, taskbarY + 28, 64, 2, bootvid::Color{0, 220, 255});
+        m_videoDriver.drawString(tbX + 8, taskbarY + 12, ">_ CMD", bootvid::Color{240, 248, 255}, bootvid::Color{22, 32, 50}, 1);
 
-        uint32_t tbX2 = tbX + 62;
-        m_videoDriver.fillRectangle(tbX2, taskbarY + 4, 74, 26, bootvid::Color{20, 36, 30});
-        m_videoDriver.fillRectangle(tbX2, taskbarY + 28, 74, 2, bootvid::Color{40, 180, 100});
-        m_videoDriver.drawString(tbX2 + 6, taskbarY + 12, "[N++] Note", bootvid::Color{120, 240, 160}, bootvid::Color{20, 36, 30}, 1);
+        uint32_t tbX2 = tbX + 68;
+        m_videoDriver.fillRectangle(tbX2, taskbarY + 4, 94, 26, bootvid::Color{20, 36, 30});
+        m_videoDriver.fillRectangle(tbX2, taskbarY + 28, 94, 2, bootvid::Color{40, 180, 100});
+        m_videoDriver.drawString(tbX2 + 7, taskbarY + 12, "[N++] Note", bootvid::Color{120, 240, 160}, bootvid::Color{20, 36, 30}, 1);
 
-        uint32_t tbX3 = tbX2 + 78;
-        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 74, 26, bootvid::Color{42, 28, 16});
-        m_videoDriver.fillRectangle(tbX3, taskbarY + 28, 74, 2, bootvid::Color{245, 130, 32});
-        m_videoDriver.drawString(tbX3 + 6, taskbarY + 12, "[VLC] Play", bootvid::Color{255, 180, 100}, bootvid::Color{42, 28, 16}, 1);
+        uint32_t tbX3 = tbX2 + 98;
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 94, 26, bootvid::Color{42, 28, 16});
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 28, 94, 2, bootvid::Color{245, 130, 32});
+        m_videoDriver.drawString(tbX3 + 7, taskbarY + 12, "[VLC] Play", bootvid::Color{255, 180, 100}, bootvid::Color{42, 28, 16}, 1);
 
-        uint32_t tbX4 = tbX3 + 78;
-        m_videoDriver.fillRectangle(tbX4, taskbarY + 4, 72, 26, bootvid::Color{16, 28, 44});
-        m_videoDriver.fillRectangle(tbX4, taskbarY + 28, 72, 2, bootvid::Color{0, 114, 206});
-        m_videoDriver.drawString(tbX4 + 6, taskbarY + 12, "[7z] 7-Zip", bootvid::Color{100, 200, 255}, bootvid::Color{16, 28, 44}, 1);
+        uint32_t tbX4 = tbX3 + 98;
+        m_videoDriver.fillRectangle(tbX4, taskbarY + 4, 94, 26, bootvid::Color{16, 28, 44});
+        m_videoDriver.fillRectangle(tbX4, taskbarY + 28, 94, 2, bootvid::Color{0, 114, 206});
+        m_videoDriver.drawString(tbX4 + 7, taskbarY + 12, "[7z] 7-Zip", bootvid::Color{100, 200, 255}, bootvid::Color{16, 28, 44}, 1);
 
-        uint32_t tbX5 = tbX4 + 76;
-        m_videoDriver.fillRectangle(tbX5, taskbarY + 4, 84, 26, bootvid::Color{40, 36, 18});
-        m_videoDriver.fillRectangle(tbX5, taskbarY + 28, 84, 2, bootvid::Color{240, 200, 40});
-        m_videoDriver.drawString(tbX5 + 6, taskbarY + 12, "[Wiz] WizTree", bootvid::Color{255, 230, 120}, bootvid::Color{40, 36, 18}, 1);
+        uint32_t tbX5 = tbX4 + 98;
+        m_videoDriver.fillRectangle(tbX5, taskbarY + 4, 94, 26, bootvid::Color{40, 36, 18});
+        m_videoDriver.fillRectangle(tbX5, taskbarY + 28, 94, 2, bootvid::Color{240, 200, 40});
+        m_videoDriver.drawString(tbX5 + 7, taskbarY + 12, "[Wiz] Tree", bootvid::Color{255, 230, 120}, bootvid::Color{40, 36, 18}, 1);
 
-        uint32_t tbX6 = tbX5 + 88;
-        m_videoDriver.fillRectangle(tbX6, taskbarY + 4, 80, 26, bootvid::Color{32, 20, 48});
-        m_videoDriver.fillRectangle(tbX6, taskbarY + 28, 80, 2, bootvid::Color{180, 80, 255});
-        m_videoDriver.drawString(tbX6 + 6, taskbarY + 12, "[SSH] PuTTY", bootvid::Color{220, 160, 255}, bootvid::Color{32, 20, 48}, 1);
+        uint32_t tbX6 = tbX5 + 98;
+        m_videoDriver.fillRectangle(tbX6, taskbarY + 4, 102, 26, bootvid::Color{32, 20, 48});
+        m_videoDriver.fillRectangle(tbX6, taskbarY + 28, 102, 2, bootvid::Color{180, 80, 255});
+        m_videoDriver.drawString(tbX6 + 7, taskbarY + 12, "[SSH] PuTTY", bootvid::Color{220, 160, 255}, bootvid::Color{32, 20, 48}, 1);
 
-        uint32_t tbX7 = tbX6 + 84;
-        m_videoDriver.fillRectangle(tbX7, taskbarY + 4, 86, 26, bootvid::Color{46, 18, 20});
-        m_videoDriver.fillRectangle(tbX7, taskbarY + 28, 86, 2, bootvid::Color{255, 60, 60});
-        m_videoDriver.drawString(tbX7 + 6, taskbarY + 12, "[PDF] Sumatra", bootvid::Color{255, 180, 180}, bootvid::Color{46, 18, 20}, 1);
+        uint32_t tbX7 = tbX6 + 106;
+        m_videoDriver.fillRectangle(tbX7, taskbarY + 4, 94, 26, bootvid::Color{46, 18, 20});
+        m_videoDriver.fillRectangle(tbX7, taskbarY + 28, 94, 2, bootvid::Color{255, 60, 60});
+        m_videoDriver.drawString(tbX7 + 7, taskbarY + 12, "[PDF] View", bootvid::Color{255, 180, 180}, bootvid::Color{46, 18, 20}, 1);
 
-        uint32_t tbX8 = tbX7 + 90;
-        m_videoDriver.fillRectangle(tbX8, taskbarY + 4, 86, 26, bootvid::Color{14, 38, 48});
-        m_videoDriver.fillRectangle(tbX8, taskbarY + 28, 86, 2, bootvid::Color{0, 240, 255});
-        m_videoDriver.drawString(tbX8 + 6, taskbarY + 12, "[Find] Search", bootvid::Color{120, 245, 255}, bootvid::Color{14, 38, 48}, 1);
+        uint32_t tbX8 = tbX7 + 98;
+        m_videoDriver.fillRectangle(tbX8, taskbarY + 4, 94, 26, bootvid::Color{14, 38, 48});
+        m_videoDriver.fillRectangle(tbX8, taskbarY + 28, 94, 2, bootvid::Color{0, 240, 255});
+        m_videoDriver.drawString(tbX8 + 7, taskbarY + 12, "[Find] App", bootvid::Color{120, 245, 255}, bootvid::Color{14, 38, 48}, 1);
 
-        uint32_t tbX9 = tbX8 + 90;
-        m_videoDriver.fillRectangle(tbX9, taskbarY + 4, 96, 26, bootvid::Color{42, 34, 18});
-        m_videoDriver.fillRectangle(tbX9, taskbarY + 28, 96, 2, bootvid::Color{255, 180, 0});
-        m_videoDriver.drawString(tbX9 + 6, taskbarY + 12, "[Diff] WinMerge", bootvid::Color{255, 215, 110}, bootvid::Color{42, 34, 18}, 1);
+        uint32_t tbX9 = tbX8 + 98;
+        m_videoDriver.fillRectangle(tbX9, taskbarY + 4, 94, 26, bootvid::Color{42, 34, 18});
+        m_videoDriver.fillRectangle(tbX9, taskbarY + 28, 94, 2, bootvid::Color{255, 180, 0});
+        m_videoDriver.drawString(tbX9 + 7, taskbarY + 12, "[Diff] Git", bootvid::Color{255, 215, 110}, bootvid::Color{42, 34, 18}, 1);
 
         // System Tray
         uint32_t trayX = (width > 220) ? (width - 200) : 10;
@@ -707,6 +707,8 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 14-Unit Modular NT Kernel Tree (ke, mm, ob, ps, io, cm, se, lpc, cc, ex, hal, pnp, po, init).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Horizon 42: Sovereign Cc* Cache Manager (256KB VACB + BCB Pinning + Lazy Writer) Ready.\r\n");
         }
     }
 

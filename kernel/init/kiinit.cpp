@@ -42,6 +42,8 @@
 #include "micant/km/executive/lookaside.hpp"
 #include "micant/km/executive/section.hpp"
 #include "micant/km/executive/driver.hpp"
+#include "micant/km/executive/cc.hpp"
+#include "micant/km/core/ntos_internal.hpp"
 
 // 5. Kernel Mode (Ring 0): Device Drivers & Filesystems
 #include "micant/km/drivers/storage/storage.hpp"
@@ -50,6 +52,7 @@
 #include "micant/km/drivers/net/ndis.hpp"
 #include "micant/km/drivers/net/tcpip.hpp"
 #include "micant/km/drivers/fs/npfs.hpp"
+#include "micant/km/drivers/input/hidclass.hpp"
 
 // 6. User Mode (Ring 3): Native NT Layer & Loaders
 #include "micant/um/native/ntdll.hpp"
@@ -290,6 +293,18 @@ int main(int argc, char* argv[]) {
     std::shared_ptr<lpc::PortObject> serverEndpoint;
     lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
     std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
+
+    // 12.1 Initialize 14-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack & Horizon 42 Cc* Cache Manager
+    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 14 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, ex, hal, pnp, po, init)...\n";
+    sys::internal::HalInitializeExecutiveSubsystem();
+    sys::internal::ExInitializeExecutiveSubsystem();
+    sys::internal::PnpInitializeExecutiveSubsystem();
+    sys::internal::PoInitializeExecutiveSubsystem();
+    sys::internal::CcInitializeExecutiveCache();
+    km::hid::InitializeHidSubsystemExports();
+    std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
+    std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
+              << (km::cc::VACB_MAPPING_GRANULARITY / 1024) << " KB, BCB Pinning & Lazy Writer Active)\n";
 
     // 13. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";
