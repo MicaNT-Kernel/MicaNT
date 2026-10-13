@@ -305,19 +305,22 @@ struct EfiBootServices {
 /**
  * @brief UEFI Time structure (EFI_TIME) returned by RuntimeServices->GetTime.
  */
+#ifndef MICANT_UEFI_EFI_TIME_DEFINED
+#define MICANT_UEFI_EFI_TIME_DEFINED
 struct EfiTime {
-    uint16_t year{2026};
-    uint8_t  month{10};
-    uint8_t  day{13};
-    uint8_t  hour{12};
-    uint8_t  minute{0};
-    uint8_t  second{0};
-    uint8_t  pad1{0};
-    uint32_t nanosecond{0};
-    int16_t  timeZone{0};
-    uint8_t  daylight{0};
-    uint8_t  pad2{0};
+    uint16_t Year{2026};
+    uint8_t  Month{10};
+    uint8_t  Day{13};
+    uint8_t  Hour{12};
+    uint8_t  Minute{0};
+    uint8_t  Second{0};
+    uint8_t  Pad1{0};
+    uint32_t Nanosecond{0};
+    int16_t  TimeZone{0};
+    uint8_t  Daylight{0};
+    uint8_t  Pad2{0};
 };
+#endif
 
 struct EfiTimeCapabilities {
     uint32_t resolution{1};

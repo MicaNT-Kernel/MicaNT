@@ -540,8 +540,8 @@ public:
 
         char clockBuf[12] = "12:55 PM";
         if (m_hasBootTime) {
-            uint8_t h24 = m_bootTime.hour % 24;
-            uint8_t m60 = m_bootTime.minute % 60;
+            uint8_t h24 = m_bootTime.Hour % 24;
+            uint8_t m60 = m_bootTime.Minute % 60;
             bool isPm = (h24 >= 12);
             uint8_t h12 = h24 % 12;
             if (h12 == 0) h12 = 12;

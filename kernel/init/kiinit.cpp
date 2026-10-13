@@ -43,6 +43,7 @@
 #include "micant/km/executive/section.hpp"
 #include "micant/km/executive/driver.hpp"
 #include "micant/km/executive/cc.hpp"
+#include "micant/km/executive/fsrtl.hpp"
 #include "micant/km/core/ntos_internal.hpp"
 
 // 5. Kernel Mode (Ring 0): Device Drivers & Filesystems
@@ -294,17 +295,19 @@ int main(int argc, char* argv[]) {
     lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
     std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
 
-    // 12.1 Initialize 14-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack & Horizon 42 Cc* Cache Manager
-    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 14 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, ex, hal, pnp, po, init)...\n";
+    // 12.1 Initialize 15-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc* Cache Manager & Horizon 43 FsRtl* Runtime
+    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 15 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, ex, hal, pnp, po, init)...\n";
     sys::internal::HalInitializeExecutiveSubsystem();
     sys::internal::ExInitializeExecutiveSubsystem();
     sys::internal::PnpInitializeExecutiveSubsystem();
     sys::internal::PoInitializeExecutiveSubsystem();
     sys::internal::CcInitializeExecutiveCache();
+    sys::internal::FsRtlInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
               << (km::cc::VACB_MAPPING_GRANULARITY / 1024) << " KB, BCB Pinning & Lazy Writer Active)\n";
+    std::cout << "[MicaNT Boot] [FsRtl] Initialized Sovereign File System Runtime Library (LARGE_MCB, FILE_LOCK, OPLOCK, NOTIFY_SYNC, TUNNEL Active)\n";
 
     // 13. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";

@@ -13088,3 +13088,447 @@ void Test_Horizon42_ExecutiveCacheManager_VACB_LazyWriter_And_Pinning() {
     std::cout << "[TEST] Suite 258: Horizon 42 - Sovereign NT Executive Cache Manager (Cc*), 256KB VACBs & Lazy Writer PASSED.\n";
 }
 
+// ============================================================================
+// Suite 259: Horizon 43 - Sovereign NT File System Runtime Library (FsRtl*),
+//            LARGE_MCB, FILE_LOCK, OPLOCK, NOTIFY_SYNC & Tunnel Cache
+// ============================================================================
+
+namespace Horizon43Callbacks {
+    static int g_streamCtxFreedCount = 0;
+    static int g_unlockRoutineCalls  = 0;
+    static int64_t g_lastUnlockedOffset = -1;
+
+    inline void StreamContextFreeCallback(void* ctx) {
+        (void)ctx;
+        g_streamCtxFreedCount++;
+    }
+
+    inline void UnlockCallback(void* context, micant::km::fsrtl::FILE_LOCK_INFO* lockInfo) {
+        (void)context;
+        g_unlockRoutineCalls++;
+        if (lockInfo) {
+            g_lastUnlockedOffset = lockInfo->StartingByte.quadPart;
+        }
+    }
+}
+
+void Test_Horizon43_FileSystemRuntimeLibrary_Mcb_FileLock_Oplock_Notify_And_Tunnel() {
+    using namespace micant::km::fsrtl;
+
+    TitanFsRtlManager::Instance().reset();
+    TitanCacheManager::Instance().resetForTesting();
+    InitializeCcCacheSubsystemExports();
+    InitializeFsRtlSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Subsystem Registration & Dynamic Export Verification
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlSetupAdvancedHeader") != nullptr, "FsRtlSetupAdvancedHeader must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlInitializeLargeMcb") != nullptr, "FsRtlInitializeLargeMcb must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlAddLargeMcbEntry") != nullptr, "FsRtlAddLargeMcbEntry must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlLookupLargeMcbEntry") != nullptr, "FsRtlLookupLargeMcbEntry must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlSplitLargeMcb") != nullptr, "FsRtlSplitLargeMcb must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlFastLock") != nullptr, "FsRtlFastLock must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlFastUnlockSingle") != nullptr, "FsRtlFastUnlockSingle must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlOplockFsctrlEx") != nullptr, "FsRtlOplockFsctrlEx must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlCheckOplockEx") != nullptr, "FsRtlCheckOplockEx must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlNotifyFullChangeDirectory") != nullptr, "FsRtlNotifyFullChangeDirectory must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlNotifyFullReportChange") != nullptr, "FsRtlNotifyFullReportChange must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlAddToTunnelCache") != nullptr, "FsRtlAddToTunnelCache must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlFindInTunnelCache") != nullptr, "FsRtlFindInTunnelCache must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlIsNameInExpression") != nullptr, "FsRtlIsNameInExpression must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlCopyRead") != nullptr, "FsRtlCopyRead must be exported");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "FsRtlCopyWrite") != nullptr, "FsRtlCopyWrite must be exported");
+
+        auto& scm = scm::ServiceControlManager::get();
+        auto svc = scm.getServiceRecord(L"FsRtlRuntime");
+        TEST_ASSERT(svc != nullptr && svc->status.dwCurrentState == scm::SERVICE_RUNNING, "FsRtlRuntime kernel service must be RUNNING");
+
+        auto* mod = version::VersionDatabase::Instance().GetModuleInfo("fsrtl_executive");
+        TEST_ASSERT(mod != nullptr, "fsrtl_executive module must be registered in VersionDatabase");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Advanced FCB Header & Per-Stream / Per-FileObject Filter Contexts
+    // ------------------------------------------------------------------------
+    {
+        Horizon43Callbacks::g_streamCtxFreedCount = 0;
+        FSRTL_ADVANCED_FCB_HEADER fcbHdr{};
+        uint64_t dummyMutex = 0;
+        FsRtlSetupAdvancedHeader(&fcbHdr, &dummyMutex);
+        TEST_ASSERT((fcbHdr.Flags & FSRTL_FLAG_ADVANCED_HEADER) != 0, "FSRTL_FLAG_ADVANCED_HEADER must be set");
+        TEST_ASSERT(fcbHdr.Version == FSRTL_FCB_HEADER_V2, "FCB Header version must be V2");
+
+        void* ownerA = reinterpret_cast<void*>(0x1111);
+        void* ownerB = reinterpret_cast<void*>(0x2222);
+        void* inst1  = reinterpret_cast<void*>(0xAAAA);
+        void* inst2  = reinterpret_cast<void*>(0xBBBB);
+
+        FSRTL_PER_STREAM_CONTEXT ctx1{ ownerA, inst1, Horizon43Callbacks::StreamContextFreeCallback };
+        FSRTL_PER_STREAM_CONTEXT ctx2{ ownerB, inst2, Horizon43Callbacks::StreamContextFreeCallback };
+
+        TEST_ASSERT(FsRtlInsertPerStreamContext(&fcbHdr, &ctx1) == NtStatus::Success, "Insert stream context 1 must succeed");
+        TEST_ASSERT(FsRtlInsertPerStreamContext(&fcbHdr, &ctx2) == NtStatus::Success, "Insert stream context 2 must succeed");
+
+        auto* found1 = FsRtlLookupPerStreamContextInternal(&fcbHdr, ownerA, inst1);
+        TEST_ASSERT(found1 == &ctx1, "Lookup stream context 1 must return exact pointer");
+
+        auto* removed1 = FsRtlRemovePerStreamContext(&fcbHdr, ownerA, inst1);
+        TEST_ASSERT(removed1 == &ctx1, "Remove stream context 1 must return removed pointer");
+        TEST_ASSERT(FsRtlLookupPerStreamContextInternal(&fcbHdr, ownerA, inst1) == nullptr, "Removed stream context must no longer be found");
+
+        // Teardown remaining stream contexts (ctx2) -> must invoke FreeCallback
+        FsRtlTeardownPerStreamContexts(&fcbHdr);
+        TEST_ASSERT(Horizon43Callbacks::g_streamCtxFreedCount == 1, "Teardown must invoke FreeCallback on remaining stream context");
+
+        // Per-FileObject Contexts
+        void* fakeFo = reinterpret_cast<void*>(0xF0001234);
+        FSRTL_PER_FILEOBJECT_CONTEXT foCtx{ ownerA, inst1, nullptr };
+        TEST_ASSERT(FsRtlInsertPerFileObjectContext(fakeFo, &foCtx) == NtStatus::Success, "Insert PerFileObjectContext must succeed");
+        TEST_ASSERT(FsRtlLookupPerFileObjectContext(fakeFo, ownerA, inst1) == &foCtx, "Lookup PerFileObjectContext must match");
+        TEST_ASSERT(FsRtlRemovePerFileObjectContext(fakeFo, ownerA, inst1) == &foCtx, "Remove PerFileObjectContext must match");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Large Map Control Block (LARGE_MCB) Extent Coalescing, Holes & Splitting
+    // ------------------------------------------------------------------------
+    {
+        LARGE_MCB mcb{};
+        FsRtlInitializeLargeMcb(&mcb, 0);
+
+        // Add two contiguous runs: VBN [0..10) -> LBN [1000..1010) and VBN [10..25) -> LBN [1010..1025)
+        TEST_ASSERT(FsRtlAddLargeMcbEntry(&mcb, 0, 1000, 10) == TRUE_B, "Add run 1 must succeed");
+        TEST_ASSERT(FsRtlAddLargeMcbEntry(&mcb, 10, 1010, 15) == TRUE_B, "Add contiguous run 2 must succeed");
+        TEST_ASSERT(FsRtlNumberOfRunsInLargeMcb(&mcb) == 1, "Contiguous VBN+LBN runs must coalesce into 1 run");
+
+        LONGLONG lbn = 0, remSectors = 0, startLbn = 0, runCount = 0;
+        ULONG runIdx = 99;
+        TEST_ASSERT(FsRtlLookupLargeMcbEntry(&mcb, 12, &lbn, &remSectors, &startLbn, &runCount, &runIdx) == TRUE_B,
+                    "Lookup VBN 12 must succeed");
+        TEST_ASSERT(lbn == 1012 && remSectors == 13 && startLbn == 1000 && runCount == 25 && runIdx == 0,
+                    "Coalesced run lookup at VBN 12 must return LBN 1012 and 13 remaining sectors");
+
+        // Add non-contiguous extent at VBN [40..50) -> LBN [2000..2010), creating a sparse hole at VBN [25..40)
+        TEST_ASSERT(FsRtlAddLargeMcbEntry(&mcb, 40, 2000, 10) == TRUE_B, "Add non-contiguous run at VBN 40 must succeed");
+        TEST_ASSERT(FsRtlNumberOfRunsInLargeMcb(&mcb) == 3, "MCB must now have 3 runs (extent 0..25, hole 25..40, extent 40..50)");
+
+        // Lookup inside sparse hole at VBN 30
+        TEST_ASSERT(FsRtlLookupLargeMcbEntry(&mcb, 30, &lbn, &remSectors, nullptr, nullptr, &runIdx) == TRUE_B,
+                    "Lookup inside sparse hole at VBN 30 must return TRUE");
+        TEST_ASSERT(lbn == FSRTL_UNUSED_LBN && remSectors == 10 && runIdx == 1,
+                    "Sparse hole lookup must return FSRTL_UNUSED_LBN (-1)");
+
+        // Split MCB at VBN 10 by 5 sectors -> shifts VBN >= 10 upward by 5
+        TEST_ASSERT(FsRtlSplitLargeMcb(&mcb, 10, 5) == TRUE_B, "FsRtlSplitLargeMcb at VBN 10 by 5 sectors must succeed");
+        // Now VBN 45 (formerly VBN 40) must map to LBN 2000!
+        TEST_ASSERT(FsRtlLookupLargeMcbEntry(&mcb, 45, &lbn, &remSectors, nullptr, nullptr, nullptr) == TRUE_B,
+                    "Shifted VBN 45 must resolve");
+        TEST_ASSERT(lbn == 2000 && remSectors == 10, "Shifted VBN 45 must map to LBN 2000");
+
+        // Lookup last entry (VBN 54 -> LBN 2009)
+        LONGLONG lastVbn = 0, lastLbn = 0;
+        TEST_ASSERT(FsRtlLookupLastLargeMcbEntry(&mcb, &lastVbn, &lastLbn) == TRUE_B, "LookupLastLargeMcbEntry must succeed");
+        TEST_ASSERT(lastVbn == 54 && lastLbn == 2009, "Last MCB entry must be VBN 54 -> LBN 2009");
+
+        // Truncate MCB at VBN 10 -> leaves only VBN [0..10) -> LBN [1000..1010)
+        FsRtlTruncateLargeMcb(&mcb, 10);
+        TEST_ASSERT(FsRtlNumberOfRunsInLargeMcb(&mcb) == 1, "Truncated MCB at VBN 10 must have 1 run");
+        FsRtlUninitializeLargeMcb(&mcb);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Byte-Range File Locking (FILE_LOCK — Shared vs Exclusive & FastCheck)
+    // ------------------------------------------------------------------------
+    {
+        Horizon43Callbacks::g_unlockRoutineCalls = 0;
+        Horizon43Callbacks::g_lastUnlockedOffset = -1;
+
+        FILE_LOCK fileLock{};
+        FsRtlInitializeFileLock(&fileLock, nullptr, Horizon43Callbacks::UnlockCallback);
+
+        void* fo1   = reinterpret_cast<void*>(0xF001);
+        void* fo2   = reinterpret_cast<void*>(0xF002);
+        void* procA = reinterpret_cast<void*>(0x1000);
+        void* procB = reinterpret_cast<void*>(0x2000);
+        IoStatusBlock iosb{};
+
+        // Two overlapping Shared locks: [100, 200) and [150, 300)
+        LARGE_INTEGER off1{}, len1{}, off2{}, len2{};
+        off1.quadPart = 100; len1.quadPart = 100;
+        off2.quadPart = 150; len2.quadPart = 150;
+
+        TEST_ASSERT(FsRtlFastLock(&fileLock, fo1, &off1, &len1, procA, 1, TRUE_B, FALSE_B /* Shared */, &iosb, nullptr, FALSE_B) == TRUE_B,
+                    "Shared lock 1 must succeed");
+        TEST_ASSERT(FsRtlFastLock(&fileLock, fo2, &off2, &len2, procB, 2, TRUE_B, FALSE_B /* Shared */, &iosb, nullptr, FALSE_B) == TRUE_B,
+                    "Overlapping shared lock 2 must succeed");
+
+        // Exclusive lock overlapping [180, 220) must conflict!
+        LARGE_INTEGER exOff{}, exLen{};
+        exOff.quadPart = 180; exLen.quadPart = 40;
+        TEST_ASSERT(FsRtlFastLock(&fileLock, fo1, &exOff, &exLen, procA, 1, TRUE_B, TRUE_B /* Exclusive */, &iosb, nullptr, FALSE_B) == FALSE_B,
+                    "Exclusive lock overlapping active shared locks must fail");
+        TEST_ASSERT(iosb.status == NtStatus::FileLockConflict, "Conflict status must be STATUS_FILE_LOCK_CONFLICT");
+
+        // Unlock shared locks and verify UnlockCallback
+        TEST_ASSERT(FsRtlFastUnlockSingle(&fileLock, fo1, &off1, &len1, procA, 1, nullptr, FALSE_B) == NtStatus::Success,
+                    "Unlock shared lock 1 must succeed");
+        TEST_ASSERT(Horizon43Callbacks::g_unlockRoutineCalls == 1 && Horizon43Callbacks::g_lastUnlockedOffset == 100,
+                    "UnlockCallback must fire with StartingByte 100");
+        TEST_ASSERT(FsRtlFastUnlockAllByKey(&fileLock, fo2, procB, 2, nullptr) == NtStatus::Success,
+                    "FastUnlockAllByKey for shared lock 2 must succeed");
+
+        // Now grant Exclusive lock [100, 500) to (fo1, procA, key=0x42)
+        LARGE_INTEGER holdOff{}, holdLen{};
+        holdOff.quadPart = 100; holdLen.quadPart = 400;
+        TEST_ASSERT(FsRtlFastLock(&fileLock, fo1, &holdOff, &holdLen, procA, 0x42, TRUE_B, TRUE_B, &iosb, nullptr, FALSE_B) == TRUE_B,
+                    "Exclusive lock on [100, 500) must succeed once shared locks are released");
+
+        // Owner (fo1, procA, key=0x42) can read and write [200, 300), while procB is denied!
+        LARGE_INTEGER ioOff{}, ioLen{};
+        ioOff.quadPart = 200; ioLen.quadPart = 100;
+        TEST_ASSERT(FsRtlFastCheckLockForRead(&fileLock, &ioOff, &ioLen, 0x42, fo1, procA) == TRUE_B,
+                    "Exclusive lock owner must pass FastCheckLockForRead");
+        TEST_ASSERT(FsRtlFastCheckLockForWrite(&fileLock, &ioOff, &ioLen, 0x42, fo1, procA) == TRUE_B,
+                    "Exclusive lock owner must pass FastCheckLockForWrite");
+        TEST_ASSERT(FsRtlFastCheckLockForRead(&fileLock, &ioOff, &ioLen, 0x99, fo2, procB) == FALSE_B,
+                    "Foreign process must fail FastCheckLockForRead on exclusively locked range");
+        TEST_ASSERT(FsRtlFastCheckLockForWrite(&fileLock, &ioOff, &ioLen, 0x99, fo2, procB) == FALSE_B,
+                    "Foreign process must fail FastCheckLockForWrite on exclusively locked range");
+
+        // Enumerate active lock via FsRtlGetNextFileLock
+        auto* enumLock = FsRtlGetNextFileLock(&fileLock, TRUE_B);
+        TEST_ASSERT(enumLock != nullptr && enumLock->StartingByte.quadPart == 100 && enumLock->ExclusiveLock == TRUE_B,
+                    "FsRtlGetNextFileLock must enumerate active exclusive lock");
+        FsRtlUninitializeFileLock(&fileLock);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Opportunistic Locks (OPLOCK — Atomic RWH -> RH -> NONE State Machine)
+    // ------------------------------------------------------------------------
+    {
+        OPLOCK oplock = nullptr;
+        FsRtlInitializeOplock(&oplock);
+        void* client1Fo = reinterpret_cast<void*>(0xC100);
+        uint64_t key1   = 0xAAA11111ULL;
+        uint64_t key2   = 0xBBB22222ULL;
+
+        REQUEST_OPLOCK_INPUT_BUFFER reqIn{};
+        reqIn.RequestedOplockLevel = OPLOCK_LEVEL_RWH;
+        reqIn.Flags                = REQUEST_OPLOCK_INPUT_FLAG_REQUEST;
+        REQUEST_OPLOCK_OUTPUT_BUFFER reqOut{};
+
+        // Grant RWH oplock to Client 1
+        NtStatus stGrant = FsRtlOplockFsctrlEx(&oplock, client1Fo, key1, FSCTL_REQUEST_OPLOCK, &reqIn, &reqOut);
+        TEST_ASSERT(stGrant == NtStatus::Pending, "Granted FSCTL_REQUEST_OPLOCK (RWH) must return STATUS_PENDING");
+        TEST_ASSERT(FsRtlCurrentOplock(&oplock) == TRUE_B && FsRtlCurrentOplockH(&oplock) == TRUE_B,
+                    "RWH oplock must report active Read and Handle caching");
+
+        // Same OplockKey (key1) writing to the file must NOT trigger a break!
+        REQUEST_OPLOCK_OUTPUT_BUFFER breakNotify{};
+        TEST_ASSERT(FsRtlCheckOplockEx(&oplock, key1, io::IRP_MJ_WRITE, FALSE_B, &breakNotify) == NtStatus::Success,
+                    "Same-OplockKey write must not break its own RWH oplock");
+
+        // Client 2 (key2) opens the file for reading (IRP_MJ_CREATE) -> breaks RWH down to RH!
+        NtStatus stBreak1 = FsRtlCheckOplockEx(&oplock, key2, io::IRP_MJ_CREATE, FALSE_B, &breakNotify);
+        TEST_ASSERT(stBreak1 == NtStatus::OplockBreakInProgress, "Foreign create must initiate RWH -> RH oplock break");
+        TEST_ASSERT(breakNotify.OriginalOplockLevel == OPLOCK_LEVEL_RWH && breakNotify.NewOplockLevel == OPLOCK_LEVEL_RH,
+                    "Break notification must transition Original=RWH to New=RH");
+        TEST_ASSERT((breakNotify.Flags & REQUEST_OPLOCK_OUTPUT_FLAG_ACK_REQUIRED) != 0,
+                    "Break from RWH must require client acknowledgement");
+        TEST_ASSERT(FsRtlOplockIsFastIoPossible(&oplock) == FALSE_B,
+                    "Fast I/O must be disabled while oplock break is in progress");
+
+        // Client 1 acknowledges the RWH -> RH break
+        REQUEST_OPLOCK_INPUT_BUFFER ackIn{};
+        ackIn.Flags = REQUEST_OPLOCK_INPUT_FLAG_ACK;
+        TEST_ASSERT(FsRtlOplockFsctrlEx(&oplock, client1Fo, key1, FSCTL_REQUEST_OPLOCK, &ackIn, &reqOut) == NtStatus::Success,
+                    "Oplock break acknowledgement must succeed");
+        TEST_ASSERT(FsRtlOplockIsFastIoPossible(&oplock) == TRUE_B,
+                    "Fast I/O must be re-enabled once RWH -> RH break is acknowledged");
+
+        // Client 2 now writes to the file (IRP_MJ_WRITE) -> breaks RH down to NONE!
+        NtStatus stBreak2 = FsRtlCheckOplockEx(&oplock, key2, io::IRP_MJ_WRITE, FALSE_B, &breakNotify);
+        TEST_ASSERT(stBreak2 == NtStatus::OplockBreakInProgress && breakNotify.NewOplockLevel == OPLOCK_LEVEL_NONE,
+                    "Foreign write must break RH oplock down to OPLOCK_LEVEL_NONE");
+        TEST_ASSERT(FsRtlOplockBreakToNone(&oplock) == NtStatus::Success, "FsRtlOplockBreakToNone must clear oplock");
+        TEST_ASSERT(FsRtlCurrentOplock(&oplock) == FALSE_B, "Oplock must be NONE after break to none");
+        FsRtlUninitializeOplock(&oplock);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: Directory Change Notification Engine (NOTIFY_SYNC)
+    // ------------------------------------------------------------------------
+    {
+        PNOTIFY_SYNC notifySync = nullptr;
+        FsRtlNotifyInitializeSync(&notifySync);
+        TEST_ASSERT(notifySync != nullptr, "FsRtlNotifyInitializeSync must allocate sync object");
+
+        alignas(4) uint8_t notifyBuf[512]{0};
+        void* notifyCtx = reinterpret_cast<void*>(0xCCB001);
+        void* dirFcb    = reinterpret_cast<void*>(0xFCB001);
+
+        FsRtlNotifyFullChangeDirectory(
+            notifySync,
+            notifyCtx,
+            dirFcb,
+            L"\\DosDevices\\C:\\Projects",
+            TRUE_B /* WatchTree */,
+            FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE,
+            notifyBuf,
+            sizeof(notifyBuf)
+        );
+
+        // Report creation of a nested file inside the watched tree
+        FsRtlNotifyFullReportChange(
+            notifySync,
+            L"\\DosDevices\\C:\\Projects\\MicaNT\\kiinit.cpp",
+            0,
+            FILE_NOTIFY_CHANGE_FILE_NAME,
+            FILE_ACTION_ADDED
+        );
+
+        auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(notifyBuf);
+        TEST_ASSERT(info->Action == FILE_ACTION_ADDED, "Packed FILE_NOTIFY_INFORMATION Action must be FILE_ACTION_ADDED");
+        std::wstring reportedRelName(info->FileName, info->FileNameLength / sizeof(wchar_t));
+        TEST_ASSERT(reportedRelName == L"MicaNT\\kiinit.cpp",
+                    "WatchTree notification must report relative path 'MicaNT\\kiinit.cpp'");
+
+        FsRtlNotifyCleanup(notifySync, notifyCtx);
+        FsRtlNotifyUninitializeSync(&notifySync);
+        TEST_ASSERT(notifySync == nullptr, "FsRtlNotifyUninitializeSync must clear pointer");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 7: File Name Tunnel Cache (TUNNEL — 15s Safe-Save Preservation)
+    // ------------------------------------------------------------------------
+    {
+        TUNNEL tunnel{};
+        FsRtlInitializeTunnelCache(&tunnel);
+
+        struct SavedCreationMeta {
+            uint64_t creationFileTime;
+            uint32_t objectId;
+        };
+        SavedCreationMeta origMeta{ 0x01DB1E00AABBCCDDULL, 0x42420001u };
+
+        // Editor renames/deletes kiinit.cpp -> caches short name KIINIT~1.CPP & creation time under DirKey 0x9001
+        FsRtlAddToTunnelCache(&tunnel, 0x9001ULL, L"KIINIT~1.CPP", L"kiinit.cpp", FALSE_B, sizeof(origMeta), &origMeta);
+
+        // Editor immediately creates new kiinit.cpp within 15s -> tunnel hit restores short name & creation metadata!
+        std::wstring restoredShort, restoredLong;
+        SavedCreationMeta restoredMeta{};
+        ULONG metaLen = sizeof(restoredMeta);
+        BOOLEAN hit = FsRtlFindInTunnelCache(&tunnel, 0x9001ULL, L"KIINIT.CPP", &restoredShort, &restoredLong, &metaLen, &restoredMeta);
+        TEST_ASSERT(hit == TRUE_B, "Case-insensitive recreation within 15s must hit Tunnel Cache");
+        TEST_ASSERT(restoredShort == L"KIINIT~1.CPP" && restoredLong == L"kiinit.cpp", "Tunnel Cache must restore short & long names");
+        TEST_ASSERT(restoredMeta.creationFileTime == origMeta.creationFileTime && restoredMeta.objectId == 0x42420001u,
+                    "Tunnel Cache must restore creation timestamp & metadata");
+
+        // Add another entry, advance clock by 20,000 ms (> 15,000 ms timeout), and verify automatic expiration!
+        FsRtlAddToTunnelCache(&tunnel, 0x9001ULL, L"OLD~1.TXT", L"old_draft.txt", FALSE_B, sizeof(origMeta), &origMeta);
+        TitanFsRtlManager::Instance().advanceSimulatedClockMs(20000);
+        metaLen = sizeof(restoredMeta);
+        TEST_ASSERT(FsRtlFindInTunnelCache(&tunnel, 0x9001ULL, L"old_draft.txt", &restoredShort, &restoredLong, &metaLen, &restoredMeta) == FALSE_B,
+                    "Tunnel entry older than 15s must expire automatically");
+
+        FsRtlDeleteTunnelCache(&tunnel);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 8: Wildcard Expression Engine (DOS_STAR, DOS_QM, DOS_DOT) & Path Dissection
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(FsRtlDoesNameContainWildCards(L"ki*.cpp") == TRUE_B, "Must detect '*' wildcard");
+        TEST_ASSERT(FsRtlDoesNameContainWildCards(L"kiinit<.cpp") == TRUE_B, "Must detect DOS_STAR '<' wildcard");
+        TEST_ASSERT(FsRtlDoesNameContainWildCards(L"kiinit.cpp") == FALSE_B, "Literal name has no wildcards");
+
+        TEST_ASSERT(FsRtlIsNameInExpression(L"*.CPP", L"kiinit.cpp", TRUE_B, nullptr) == TRUE_B,
+                    "Case-insensitive *.CPP must match kiinit.cpp");
+        TEST_ASSERT(FsRtlIsNameInExpression(L"*.CPP", L"kiinit.cpp", FALSE_B, nullptr) == FALSE_B,
+                    "Case-sensitive *.CPP must not match kiinit.cpp");
+
+        // DOS_STAR ('<') matches 0+ chars up to last dot, DOS_DOT ('"') matches '.' or end-of-name, DOS_QM ('>') matches 1 non-dot or 0 at dot/end
+        std::wstring dosPattern{ DOS_STAR, DOS_DOT, L'C', L'P', L'P' };
+        TEST_ASSERT(FsRtlIsNameInExpression(dosPattern.c_str(), L"kiinit.v2.cpp", TRUE_B, nullptr) == TRUE_B,
+                    "DOS_STAR + DOS_DOT + CPP must match multi-dot filename kiinit.v2.cpp");
+
+        std::wstring dos83Pattern{ DOS_QM, DOS_QM, DOS_QM, DOS_QM, DOS_QM, DOS_QM, DOS_QM, DOS_QM, DOS_DOT, DOS_QM, DOS_QM, DOS_QM };
+        TEST_ASSERT(FsRtlIsNameInExpression(dos83Pattern.c_str(), L"boot.efi", TRUE_B, nullptr) == TRUE_B,
+                    "8.3 DOS_QM/DOS_DOT pattern must match short name boot.efi");
+        TEST_ASSERT(FsRtlIsNameInExpression(dos83Pattern.c_str(), L"README", TRUE_B, nullptr) == TRUE_B,
+                    "8.3 DOS_QM/DOS_DOT pattern must match extensionless name README");
+
+        // Path dissection
+        std::wstring_view firstComp, remComp;
+        TitanFsRtlManager::dissectName(L"\\Windows\\System32\\drivers\\ntfs.sys", firstComp, remComp);
+        TEST_ASSERT(firstComp == L"Windows" && remComp == L"System32\\drivers\\ntfs.sys",
+                    "FsRtlDissectName must split leading component and remaining path");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 9: Fast I/O Copy Bridge (FsRtlCopyWrite / FsRtlCopyRead -> Cc*)
+    // ------------------------------------------------------------------------
+    {
+        FSRTL_ADVANCED_FCB_HEADER fcbHdr{};
+        FsRtlSetupAdvancedHeader(&fcbHdr, nullptr);
+
+        micant::km::cc::SECTION_OBJECT_POINTERS secPtrs{};
+        CC_FILE_OBJECT fileObj{};
+        fileObj.FileName             = L"\\SystemRoot\\System32\\config\\SAM";
+        fileObj.FsContext            = &fcbHdr;
+        fileObj.SectionObjectPointer = &secPtrs;
+
+        CC_FILE_SIZES sizes{};
+        sizes.AllocationSize.QuadPart  = 65536;
+        sizes.FileSize.QuadPart        = 32768;
+        sizes.ValidDataLength.QuadPart = 32768;
+        CACHE_MANAGER_CALLBACKS callbacks{};
+        CcInitializeCacheMap(&fileObj, &sizes, FALSE_B, &callbacks, &fcbHdr);
+
+        FILE_LOCK fileLock{};
+        FsRtlInitializeFileLock(&fileLock, nullptr, nullptr);
+        void* ownerProc = reinterpret_cast<void*>(0x5001);
+        void* otherProc = reinterpret_cast<void*>(0x5002);
+
+        // Lock bytes [0, 4096) exclusively for (fileObj, ownerProc, key=77)
+        LARGE_INTEGER lockOff{}, lockLen{};
+        lockOff.quadPart = 0; lockLen.quadPart = 4096;
+        IoStatusBlock iosb{};
+        TEST_ASSERT(FsRtlFastLock(&fileLock, &fileObj, &lockOff, &lockLen, ownerProc, 77, TRUE_B, TRUE_B, &iosb, nullptr, FALSE_B) == TRUE_B,
+                    "Lock [0, 4096) for Fast I/O verification must succeed");
+
+        const char payload[] = "MICANT_FSRTL_FASTIO_BRIDGE_VERIFIED_2026";
+        // Foreign process attempting FsRtlCopyWrite with wrong key must be rejected by FILE_LOCK check!
+        TEST_ASSERT(FsRtlCopyWrite(&fileObj, &lockOff, sizeof(payload), TRUE_B, 99 /* wrong key */, payload, &iosb, nullptr, &fileLock, otherProc) == FALSE_B,
+                    "FsRtlCopyWrite must reject write that violates active FILE_LOCK");
+
+        // Owner process with key=77 succeeds via Fast I/O -> CcCopyWrite!
+        TEST_ASSERT(FsRtlCopyWrite(&fileObj, &lockOff, sizeof(payload), TRUE_B, 77, payload, &iosb, nullptr, &fileLock, ownerProc) == TRUE_B,
+                    "FsRtlCopyWrite by lock owner must succeed");
+
+        char readBack[sizeof(payload)] = {0};
+        TEST_ASSERT(FsRtlCopyRead(&fileObj, &lockOff, sizeof(payload), TRUE_B, 77, readBack, &iosb, nullptr, &fileLock, ownerProc) == TRUE_B,
+                    "FsRtlCopyRead by lock owner must succeed");
+        TEST_ASSERT(std::memcmp(readBack, payload, sizeof(payload)) == 0,
+                    "FsRtlCopyRead must return exact bytes written through Cc* VACB view");
+
+        CcUninitializeCacheMap(&fileObj, nullptr, nullptr);
+        FsRtlUninitializeFileLock(&fileLock);
+
+        FSRTL_TELEMETRY telem{};
+        TEST_ASSERT(FsRtlGetTelemetry(&telem) == TRUE_B, "FsRtlGetTelemetry must succeed");
+        TEST_ASSERT(telem.TotalMcbRunsAdded >= 3 && telem.TotalMcbSplits >= 1, "MCB telemetry must be recorded");
+        TEST_ASSERT(telem.TotalByteRangeLocksGranted >= 4 && telem.TotalByteRangeLockConflicts >= 1, "FILE_LOCK telemetry must be recorded");
+        TEST_ASSERT(telem.TotalOplockRequests >= 1 && telem.TotalOplockBreaks >= 2, "OPLOCK telemetry must be recorded");
+        TEST_ASSERT(telem.TotalNotifyWatchersRegistered >= 1 && telem.TotalNotifyEventsReported >= 1, "NOTIFY_SYNC telemetry must be recorded");
+        TEST_ASSERT(telem.TotalTunnelEntriesAdded >= 2 && telem.TotalTunnelCacheHits >= 1, "TUNNEL telemetry must be recorded");
+        TEST_ASSERT(telem.TotalWildcardEvaluations >= 5, "Wildcard telemetry must be recorded");
+        TEST_ASSERT(telem.TotalFastIoReads >= 1 && telem.TotalFastIoWrites >= 1, "Fast I/O bridge telemetry must be recorded");
+    }
+
+    std::cout << "[TEST] Suite 259: Horizon 43 - Sovereign NT File System Runtime Library (FsRtl*), LARGE_MCB, FILE_LOCK, OPLOCK & Tunnel Cache PASSED.\n";
+}
+
+

@@ -125,7 +125,17 @@ enum class NtStatus : uint32_t {
     MemberNotInAlias                 = 0xC0000076,
     NoSuchLogonSession               = 0xC00000EE,
     LogonTypeNotGranted              = 0xC000015B,
-    AccountLockedOut                 = 0xC0000234
+    AccountLockedOut                 = 0xC0000234,
+
+    // File System Runtime Library (FsRtl) Locking, Oplock & Notification Codes
+    OplockBreakInProgress            = 0x00000108,
+    NotifyCleanup                    = 0x0000010B,
+    NotifyEnumDir                    = 0x0000010C,
+    FileLockConflict                 = 0xC0000054,
+    LockNotGranted                   = 0xC0000055,
+    RangeNotLocked                   = 0xC000007E,
+    OplockNotGranted                 = 0xC00000E2,
+    InvalidOplockProtocol            = 0xC00000E3
 };
 
 // ============================================================================

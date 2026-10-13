@@ -143,6 +143,8 @@ constexpr uint32_t CAPSULE_FLAGS_INITIATE_RESET         = 0x00040000;
 // Structures
 // ============================================================================
 
+#ifndef MICANT_UEFI_EFI_TIME_DEFINED
+#define MICANT_UEFI_EFI_TIME_DEFINED
 struct EfiTime {
     uint16_t Year{2026};
     uint8_t  Month{10};
@@ -156,6 +158,7 @@ struct EfiTime {
     uint8_t  Daylight{0};
     uint8_t  Pad2{0};
 };
+#endif
 
 struct EfiVariable {
     std::string Name;

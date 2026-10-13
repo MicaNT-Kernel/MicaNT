@@ -39,6 +39,9 @@ NtStatus NtRequestWaitReplyPortSys(const SyscallFrame& f);
 // Cache Manager Executive Initialization & Scan (kernel/cc/ccmgr.cpp)
 void CcInitializeExecutiveCache() noexcept;
 
+// File System Runtime Library Initialization (kernel/fsrtl/fsrtlmgr.cpp)
+void FsRtlInitializeExecutiveSubsystem() noexcept;
+
 // Executive Pool, Sync & Worker Initialization (kernel/ex/exmgr.cpp)
 void ExInitializeExecutiveSubsystem() noexcept;
 

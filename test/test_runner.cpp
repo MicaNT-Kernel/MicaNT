@@ -78,6 +78,7 @@
 #include "micant/km/drivers/usb/xhci.hpp"
 #include "micant/km/drivers/input/hidclass.hpp"
 #include "micant/km/executive/cc.hpp"
+#include "micant/km/executive/fsrtl.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -300,7 +301,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite258")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite259")) {
+        RUN_TEST(Test_Horizon43_FileSystemRuntimeLibrary_Mcb_FileLock_Oplock_Notify_And_Tunnel);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite258") {
         RUN_TEST(Test_Horizon42_ExecutiveCacheManager_VACB_LazyWriter_And_Pinning);
         return g_FailedTests;
     }
@@ -1144,6 +1149,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon40_USB32_xHCI_HostController_And_HubArchitecture);
     RUN_TEST(Test_Horizon41_HIDClass_ReportParser_And_KernelInputStack);
     RUN_TEST(Test_Horizon42_ExecutiveCacheManager_VACB_LazyWriter_And_Pinning);
+    RUN_TEST(Test_Horizon43_FileSystemRuntimeLibrary_Mcb_FileLock_Oplock_Notify_And_Tunnel);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
