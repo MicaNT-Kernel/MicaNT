@@ -288,37 +288,78 @@ MicaNT is a clean-room reimplementation created strictly for software interopera
 
 ---
 
-## 6. Building & Running
+## 6. Repository Directory Layout & Building
+
+### Canonical NT Source Tree Layout
+MicaNT follows a strict, modular `base/ntos` and `WDK` directory hierarchy enforced on every commit by [`scripts/clean_room_sentinel.js`](scripts/clean_room_sentinel.js):
+
+```text
+MicaNT/
+├── boot/
+│   └── bootx64.cpp             # Freestanding UEFI GOP bootloader & Ring-0 handover
+├── kernel/                     # Modular NT Executive & Microkernel (.cpp units -> ntoskrnl_core)
+│   ├── init/kiinit.cpp         # KiSystemStartup, LPB ingestion & Phase 0/1 executive init
+│   ├── ke/                     # dispatcher.cpp (SSDT), wait.cpp (Wait blocks, Timers, Delays)
+│   ├── mm/                     # virtual.cpp (VAD virtual memory & Section objects)
+│   ├── io/                     # iomgr.cpp (IRP dispatch, File/Device I/O, Named Pipes, IOCP)
+│   ├── ob/                     # obref.cpp (Executive Handle Table & cross-subsystem NtClose)
+│   ├── ps/                     # psmgr.cpp (EPROCESS/ETHREAD lifecycle & system info)
+│   ├── cm/                     # ntreg.cpp (\Registry Hive & Key system services)
+│   ├── se/                     # ntsec.cpp (Security Reference Monitor, Tokens & AccessCheck)
+│   ├── lpc/                    # ntlpc.cpp (ALPC/LPC Port rendezvous)
+│   ├── cc/                     # ccmgr.cpp (Executive Virtual Block Cache Manager, 256KB VACBs)
+│   ├── ex/                     # exmgr.cpp (NonPaged/Paged Pools, ERESOURCE, PushLocks, Workers)
+│   ├── hal/                    # halinit.cpp (KPCR/KPRCB, APIC/HPET, ACPI, PCI, BootVid)
+│   ├── pnp/                    # pnpmgr.cpp (Plug and Play device tree & IRP state engine)
+│   └── po/                     # pomgr.cpp (Power & Thermal state engine)
+├── include/micant/
+│   ├── shared/                 # Mode-neutral NT ABI contracts (ntdef.hpp, ntstatus.hpp)
+│   ├── km/
+│   │   ├── core/               # Microkernel headers (ke, trap, kd, ipi, sync, timer, dispatcher)
+│   │   ├── executive/          # Executive headers (ob, mm, ps, io, cc, cm, se, ex, fltmgr, wdf, bugcheck)
+│   │   ├── hal/                # HAL headers (hal, acpi, pci, iommu, uefi, bootvid, arm64)
+│   │   ├── drivers/            # WDK Device Classes: storage/, fs/, net/, usb/, input/, video/, audio/, bus/, compute/, security/
+│   │   └── win32k/             # Ring-0/Ring-1 Windowing & Shadow SSDT (win32k.hpp)
+│   ├── um/
+│   │   ├── native/             # Ring-3 Native NT (ntdll, pe, wow64, janusldr)
+│   │   ├── servers/            # System Daemons (smss, csrss, lsass, scm, svchost)
+│   │   └── subsystems/         # Win32 Domains: winbase/, winuser/, graphics/, media/, net/, com/, security/, mgmt/
+│   └── ucrt/                   # Sovereign Universal C/C++ Runtime & SEH unwind engine
+└── test/
+    ├── test_runner.cpp         # 258-Suite Verification Runner
+    └── suites/                 # Modular verification suites (kernel, drivers, subsystems, apps)
+```
 
 ### Prerequisites
-- Modern C++23 compiler: **Visual Studio 2022/2026** (MSVC `/std:c++latest`), **LLVM Clang 17+**, or **GCC 13+**
-- **CMake 3.25+**
-- Optional: **Node.js** (for running the metadata code generator in `tools/codegen` and the sentinel auditor)
+- Modern C++23 compiler: **LLVM Clang 17+**, **Visual Studio 2022/2026** (MSVC `/std:c++latest`), or **GCC 13+**
+- **CMake 3.25+** (or Ninja)
+- **Node.js** (for `tools/codegen/generate_syscalls.js` and `scripts/clean_room_sentinel.js`)
 
-### Generate Metadata Headers
+### Build with CMake (Recommended)
 ```bash
-node tools/codegen/generate_syscalls.js
+cmake -B build -G Ninja
+cmake --build build
 ```
 
-### Build & Run Unit Test Suite (164 Suites, 100% Passing)
-```bash
-# With MSVC Developer Prompt:
-cl /std:c++latest /EHsc /W4 /wd4201 /wd4100 /Iinclude test\test_runner.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_tests.exe
+### Run the 258-Suite Verification Battery & Clean-Room Sentinel
+```powershell
+# Run all 258 Test Suites (100% Pass Rate Required):
+.\build\bin\micant_tests.exe
 
-# Run all 164 Test Suites:
-.\bin\micant_tests.exe
+# Run the latest Horizon suite only:
+.\build\bin\micant_tests.exe --last
+
+# Run Clean-Room & Directory Architecture Sentinel Audit:
+node scripts/clean_room_sentinel.js
 ```
 
-### Build Host Kernel Simulator & Boot
-```bash
-# With MSVC Developer Prompt:
-cl /std:c++latest /EHsc /W4 /Iinclude kernel\main.cpp kernel\dispatcher.cpp kernel\syscalls.cpp /Fe:bin\micant_kernel.exe
-
-# Run the Executive:
-.\bin\micant_kernel.exe
+### Boot the Executive & Interactive Shell
+```powershell
+# Boot the MicaNT Executive:
+.\build\bin\micant_kernel.exe
 
 # Or boot directly into the interactive MicaNT Command Prompt Shell:
-.\bin\micant_kernel.exe --shell
+.\build\bin\micant_kernel.exe --shell
 ```
 
 ---
