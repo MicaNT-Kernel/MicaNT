@@ -11021,6 +11021,314 @@ void Test_Horizon36_KernelToUser_ShadowSSDT_And_Win32k_Subsystem() {
     std::cout << "[TEST] Suite 252: Horizon 36 - Kernel-to-User Subsystem Bridge, Shadow SSDT & Win32k Architecture PASSED.\n";
 }
 
+// ============================================================================
+// Suite 253: Horizon 37 - Ring 1 Privileged Service Domain, Fault-Isolated
+//                         Driver Shims & Hardware Callgate Architecture
+// ============================================================================
+
+void Test_Horizon37_Ring1_PrivilegedServiceDomain_And_FaultIsolation() {
+    std::cout << "[TEST] Running Suite 253: Horizon 37 - Ring 1 Privileged Service Domain & Fault Isolation...\n";
+
+    // ------------------------------------------------------------------------
+    // Phase 1: GDT Ring 1 Segment Descriptors, DPL/RPL Calculation & TSS RSP1 Stack Verification
+    // ------------------------------------------------------------------------
+    {
+        ring1::InitializeRing1SubsystemExports();
+        auto& r1Sub = ring1::TitanRing1Subsystem::Instance();
+        r1Sub.resetForTesting();
+
+        // 1. Selector RPL verification: lower 2 bits must be 0b01 (RPL=1)
+        TEST_ASSERT((ring1::GDT_SELECTOR_RING1_CODE64 & 0x03) == 1, "GDT_SELECTOR_RING1_CODE64 RPL must be 1");
+        TEST_ASSERT((ring1::GDT_SELECTOR_RING1_DATA64 & 0x03) == 1, "GDT_SELECTOR_RING1_DATA64 RPL must be 1");
+
+        // Ring 0 and Ring 3 for comparison
+        TEST_ASSERT((ring1::GDT_SELECTOR_RING0_CODE64 & 0x03) == 0, "GDT_SELECTOR_RING0_CODE64 RPL must be 0");
+        TEST_ASSERT((ring1::GDT_SELECTOR_RING3_CODE64 & 0x03) == 3, "GDT_SELECTOR_RING3_CODE64 RPL must be 3");
+
+        // 2. Task State Segment (TSS64) Stack Configuration
+        const auto& tss = r1Sub.getTss();
+        TEST_ASSERT(tss.rsp0 == 0xFFFF800000100000ULL, "TSS RSP0 must point to Ring 0 stack");
+        TEST_ASSERT(tss.rsp1 == 0xFFFF800000200000ULL, "TSS RSP1 must point to isolated Ring 1 stack");
+        TEST_ASSERT(tss.rsp1 != tss.rsp0, "Ring 1 stack must be physically isolated from Ring 0 stack");
+        TEST_ASSERT(tss.ioMapBase == 104, "TSS I/O Map Base must be 104 bytes");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 2: 64-bit Hardware Call Gate Configuration & Privilege Boundary Validation
+    // ------------------------------------------------------------------------
+    {
+        auto& r1Sub = ring1::TitanRing1Subsystem::Instance();
+
+        // Gate 1: Ring 3 User to Ring 1 Driver Shim (DPL = 3)
+        const auto* gate1 = r1Sub.getCallGate(1);
+        TEST_ASSERT(gate1 != nullptr, "Call Gate 1 must exist");
+        TEST_ASSERT(gate1->isPresent(), "Call Gate 1 must be Present");
+        TEST_ASSERT(gate1->getDpl() == 3, "Call Gate 1 DPL must be 3 (accessible from Ring 3)");
+        TEST_ASSERT(gate1->targetSelector == ring1::GDT_SELECTOR_RING1_CODE64, "Call Gate 1 target selector must be Ring 1 Code");
+
+        // Gate 0: Ring 1 to Ring 0 Kernel (DPL = 1)
+        const auto* gate0 = r1Sub.getCallGate(0);
+        TEST_ASSERT(gate0 != nullptr, "Call Gate 0 must exist");
+        TEST_ASSERT(gate0->isPresent(), "Call Gate 0 must be Present");
+        TEST_ASSERT(gate0->getDpl() == 1, "Call Gate 0 DPL must be 1 (accessible from Ring 1 only)");
+        TEST_ASSERT(gate0->targetSelector == ring1::GDT_SELECTOR_RING0_CODE64, "Call Gate 0 target selector must be Ring 0 Code");
+
+        // 1. Invoke Gate 1 from Ring 3 (User) -> Should SUCCEED
+        uint64_t targetRip = 0, newRsp = 0;
+        uint16_t targetCs = 0;
+        NtStatus st1 = r1Sub.invokeCallGate(1, ring1::CpuPrivilegeRing::Ring3_User, &targetRip, &targetCs, &newRsp);
+        TEST_ASSERT(st1 == NtStatus::Success, "Ring 3 caller must successfully traverse Gate 1 into Ring 1");
+        TEST_ASSERT((targetCs & 0x03) == 1, "Target CS must have RPL=1");
+        TEST_ASSERT(newRsp == r1Sub.getTss().rsp1, "Transition into Ring 1 must load TSS RSP1 stack");
+
+        // 2. Invoke Gate 0 from Ring 3 (User) -> Should FAIL with AccessDenied (#GP)
+        NtStatus stFail = r1Sub.invokeCallGate(0, ring1::CpuPrivilegeRing::Ring3_User, &targetRip, &targetCs, &newRsp);
+        TEST_ASSERT(stFail == NtStatus::AccessDenied, "Ring 3 caller must be rejected by Gate 0 (DPL=1 violation)");
+
+        // 3. Invoke Gate 0 from Ring 1 (Driver Shim) -> Should SUCCEED
+        NtStatus st0 = r1Sub.invokeCallGate(0, ring1::CpuPrivilegeRing::Ring1_DriverShim, &targetRip, &targetCs, &newRsp);
+        TEST_ASSERT(st0 == NtStatus::Success, "Ring 1 caller must successfully traverse Gate 0 into Ring 0");
+        TEST_ASSERT((targetCs & 0x03) == 0, "Target CS must have RPL=0");
+        TEST_ASSERT(newRsp == r1Sub.getTss().rsp0, "Transition into Ring 0 must load TSS RSP0 stack");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: Ring 1 Driver Hosting Lifecycle (Loading, Dispatching, Unloading)
+    // ------------------------------------------------------------------------
+    {
+        auto& r1Sub = ring1::TitanRing1Subsystem::Instance();
+
+        // 1. Create Driver Host in Ring 1
+        uint32_t driverId = ring1::Ring1CreateDriverHost(L"SovereignAudioShim", 0xFFFF800010000000ULL, 0x40000);
+        TEST_ASSERT(driverId > 0, "Ring1CreateDriverHost must return valid driver ID");
+
+        auto host = r1Sub.getDriverHost(driverId);
+        TEST_ASSERT(host != nullptr, "Driver host structure must exist");
+        TEST_ASSERT(host->getStatus() == ring1::Ring1DriverStatus::Loaded, "Initial driver status must be Loaded");
+
+        // 2. Set Entry Point and Dispatch Call
+        static uint32_t s_lastIoctl = 0;
+        host->setEntryPoint([](uint32_t ioControlCode, const void* inBuf, size_t inLen,
+                               void* outBuf, size_t outLen, size_t* outWritten) -> NtStatus {
+            (void)inBuf; (void)inLen;
+            s_lastIoctl = ioControlCode;
+            if (outBuf && outLen >= sizeof(uint32_t)) {
+                *reinterpret_cast<uint32_t*>(outBuf) = 0xAA55AA55;
+                if (outWritten) *outWritten = sizeof(uint32_t);
+            }
+            return NtStatus::Success;
+        });
+        TEST_ASSERT(host->getStatus() == ring1::Ring1DriverStatus::Running, "Driver status must transition to Running");
+
+        uint32_t resp = 0;
+        size_t written = 0;
+        NtStatus callSt = ring1::Ring1InvokeDriverCall(driverId, 0x80002000, nullptr, 0, &resp, sizeof(resp), &written);
+        TEST_ASSERT(callSt == NtStatus::Success, "Ring1InvokeDriverCall must succeed");
+        TEST_ASSERT(s_lastIoctl == 0x80002000, "Driver must receive IOCTL 0x80002000");
+        TEST_ASSERT(resp == 0xAA55AA55, "Driver output response must match expected payload");
+        TEST_ASSERT(written == sizeof(uint32_t), "Output bytes written must match");
+
+        // Clean up
+        BOOL destOk = ring1::Ring1DestroyDriverHost(driverId);
+        TEST_ASSERT(destOk == ring1::TRUE_VAL, "Ring1DestroyDriverHost must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: Zero-BSOD Fault Containment & Automatic Driver Crash Recovery
+    // ------------------------------------------------------------------------
+    {
+        auto& r1Sub = ring1::TitanRing1Subsystem::Instance();
+
+        uint32_t driverId = ring1::Ring1CreateDriverHost(L"VolatileStorageFilter", 0xFFFF800020000000ULL, 0x20000);
+        TEST_ASSERT(driverId > 0, "Driver creation must succeed");
+
+        auto host = r1Sub.getDriverHost(driverId);
+        TEST_ASSERT(host->getFaultCount() == 0, "Fault count must be 0 initially");
+
+        // Simulate a driver crash in Ring 1 (e.g. NULL pointer dereference / #GP at 0xFFFF800020001234)
+        BOOL recOk = ring1::Ring1SimulateFaultRecovery(
+            driverId, NtStatus::AccessViolation, 0xFFFF800020001234ULL, L"Null pointer read in driver dispatch");
+        TEST_ASSERT(recOk == ring1::TRUE_VAL, "Fault recovery must succeed without BSOD");
+
+        TEST_ASSERT(host->getFaultCount() == 1, "Fault count must be incremented to 1");
+        TEST_ASSERT(host->getRecoveriesCount() == 1, "Recoveries count must be 1");
+        TEST_ASSERT(host->getStatus() == ring1::Ring1DriverStatus::Recovered, "Driver status must transition to Recovered");
+
+        const auto& crashHistory = host->getCrashHistory();
+        TEST_ASSERT(crashHistory.size() == 1, "Crash history must record 1 dump");
+        TEST_ASSERT(crashHistory[0].faultRip == 0xFFFF800020001234ULL, "Fault RIP must be accurately recorded");
+        TEST_ASSERT(crashHistory[0].faultCode == NtStatus::AccessViolation, "Fault code must be recorded");
+
+        // Simulate second crash
+        ring1::Ring1SimulateFaultRecovery(
+            driverId, NtStatus::IllegalInstruction, 0xFFFF800020005678ULL, L"UD2 opcode encountered in driver body");
+        TEST_ASSERT(host->getFaultCount() == 2, "Fault count must be 2 after second incident");
+        TEST_ASSERT(host->getRecoveriesCount() == 2, "Recoveries count must be 2");
+
+        ring1::Ring1DestroyDriverHost(driverId);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: Hardware I/O Privilege Level (IOPL=1) & Port Bitmap Access Control
+    // ------------------------------------------------------------------------
+    {
+        // 1. Port 0x03F8 (COM1) is allowed by default for Ring 1
+        BOOL com1Allowed = ring1::Ring1CheckIoPortAccess(0x03F8, 1); // Ring 1
+        TEST_ASSERT(com1Allowed == ring1::TRUE_VAL, "COM1 port 0x03F8 must be allowed for Ring 1");
+
+        // 2. Port 0x0064 (PS/2 Keyboard) is denied by default for Ring 1
+        BOOL ps2Allowed = ring1::Ring1CheckIoPortAccess(0x0064, 1); // Ring 1
+        TEST_ASSERT(ps2Allowed == ring1::FALSE_VAL, "Port 0x0064 must be denied by default for Ring 1");
+
+        // 3. Grant Port 0x0064 and re-verify
+        ring1::Ring1SetIoPortAccess(0x0064, ring1::TRUE_VAL);
+        BOOL ps2Granted = ring1::Ring1CheckIoPortAccess(0x0064, 1);
+        TEST_ASSERT(ps2Granted == ring1::TRUE_VAL, "Port 0x0064 must be allowed after Ring1SetIoPortAccess");
+
+        // 4. Revoke Port 0x0064 and re-verify
+        ring1::Ring1SetIoPortAccess(0x0064, ring1::FALSE_VAL);
+        BOOL ps2Revoked = ring1::Ring1CheckIoPortAccess(0x0064, 1);
+        TEST_ASSERT(ps2Revoked == ring1::FALSE_VAL, "Port 0x0064 must be denied after revocation");
+
+        // 5. Ring 0 always has full access regardless of bitmap
+        BOOL r0Access = ring1::Ring1CheckIoPortAccess(0x0064, 0); // Ring 0
+        TEST_ASSERT(r0Access == ring1::TRUE_VAL, "Ring 0 must unconditionally have access to all I/O ports");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: VTL 1 Secure Partitioning & Secret Vault Isolation
+    // ------------------------------------------------------------------------
+    {
+        auto& r1Sub = ring1::TitanRing1Subsystem::Instance();
+        auto& vtl1 = r1Sub.getVtl1();
+
+        std::vector<uint8_t> masterKey = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
+
+        // 1. Write from VTL 1 -> Must SUCCEED
+        bool setOk = vtl1.setSecret("BitLockerVMK", masterKey, 1); // VTL 1
+        TEST_ASSERT(setOk == true, "VTL 1 caller must successfully write to secret vault");
+
+        // 2. Read from VTL 1 -> Must SUCCEED
+        std::vector<uint8_t> readKey;
+        bool getOk = vtl1.getSecret("BitLockerVMK", readKey, 1); // VTL 1
+        TEST_ASSERT(getOk == true, "VTL 1 caller must successfully read from secret vault");
+        TEST_ASSERT(readKey == masterKey, "Read key payload must match original master key");
+
+        // 3. Write from VTL 0 (Non-Secure Kernel) -> Must FAIL
+        std::vector<uint8_t> rogueKey = {0xFF, 0xFF, 0xFF, 0xFF};
+        bool rogueSet = vtl1.setSecret("RogueSecret", rogueKey, 0); // VTL 0
+        TEST_ASSERT(rogueSet == false, "VTL 0 caller must be rejected when writing to VTL 1 vault");
+
+        // 4. Read from VTL 0 -> Must FAIL
+        std::vector<uint8_t> leakedKey;
+        bool rogueGet = vtl1.getSecret("BitLockerVMK", leakedKey, 0); // VTL 0
+        TEST_ASSERT(rogueGet == false, "VTL 0 caller must be locked out from reading VTL 1 secrets");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: Secure Hypercall Dispatching (VtlCall) & Crypto Isolation
+    // ------------------------------------------------------------------------
+    {
+        // 1. Query VTL Version
+        uint32_t vtlVer = 0;
+        size_t written = 0;
+        NtStatus stVer = ring1::Ring1VtlCall(ring1::VTL_HYPERCALL_QUERY_VERSION, nullptr, 0, &vtlVer, sizeof(vtlVer), &written);
+        TEST_ASSERT(stVer == NtStatus::Success, "VTL_HYPERCALL_QUERY_VERSION must succeed");
+        TEST_ASSERT(vtlVer == 0x00010000, "VTL version must report 1.0 (0x00010000)");
+
+        // 2. Seal Secret Payload via Hypercall
+        const char secretPayload[] = "SovereignSecureKernelKey2026";
+        NtStatus stSeal = ring1::Ring1VtlCall(
+            ring1::VTL_HYPERCALL_SEAL_SECRET, secretPayload, sizeof(secretPayload), nullptr, 0, &written);
+        TEST_ASSERT(stSeal == NtStatus::Success, "VTL_HYPERCALL_SEAL_SECRET must succeed");
+
+        // 3. Unseal Secret Payload via Hypercall
+        char unsealed[64]{};
+        NtStatus stUnseal = ring1::Ring1VtlCall(
+            ring1::VTL_HYPERCALL_UNSEAL_SECRET, nullptr, 0, unsealed, sizeof(unsealed), &written);
+        TEST_ASSERT(stUnseal == NtStatus::Success, "VTL_HYPERCALL_UNSEAL_SECRET must succeed");
+        TEST_ASSERT(std::strcmp(unsealed, secretPayload) == 0, "Unsealed secret must match original sealed string");
+
+        // 4. Code Integrity Verification Hypercall (skci.dll)
+        uint32_t ciResult = 0;
+        NtStatus stCi = ring1::Ring1VtlCall(
+            ring1::VTL_HYPERCALL_VERIFY_PAGE_CI, nullptr, 0, &ciResult, sizeof(ciResult), &written);
+        TEST_ASSERT(stCi == NtStatus::Success, "VTL_HYPERCALL_VERIFY_PAGE_CI must succeed");
+        TEST_ASSERT(ciResult == 1, "CI verification must return 1 (Valid)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: Inter-Ring Communication (Dynamic Call Gate Registration)
+    // ------------------------------------------------------------------------
+    {
+        auto& r1Sub = ring1::TitanRing1Subsystem::Instance();
+
+        // Register Dynamic Gate 2: User Mode to Custom Service Handler
+        BOOL regOk = ring1::Ring1RegisterCallGate(2, ring1::GDT_SELECTOR_RING1_CODE64, 0xFFFF800000204000ULL, 3);
+        TEST_ASSERT(regOk == ring1::TRUE_VAL, "Ring1RegisterCallGate must succeed");
+
+        uint64_t targetRip = 0, newRsp = 0;
+        uint16_t targetCs = 0;
+        NtStatus stGate = ring1::Ring1InvokeCallGate(2, 3, &targetRip, &targetCs, &newRsp); // Caller Ring 3
+        TEST_ASSERT(stGate == NtStatus::Success, "Ring1InvokeCallGate for dynamic gate must succeed");
+        TEST_ASSERT(targetRip == 0xFFFF800000204000ULL, "Dynamic gate target RIP must match");
+        TEST_ASSERT(newRsp == r1Sub.getTss().rsp1, "Dynamic gate must switch to Ring 1 stack");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: Dynamic Loader Exports, SCM Service Record & Version Database
+    // ------------------------------------------------------------------------
+    {
+        // 1. JanusLDR Driver Exports Verification
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1CreateDriverHost") != nullptr, "ring1shim.sys Ring1CreateDriverHost must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1DestroyDriverHost") != nullptr, "ring1shim.sys Ring1DestroyDriverHost must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1InvokeDriverCall") != nullptr, "ring1shim.sys Ring1InvokeDriverCall must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1RegisterCallGate") != nullptr, "ring1shim.sys Ring1RegisterCallGate must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1InvokeCallGate") != nullptr, "ring1shim.sys Ring1InvokeCallGate must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1VtlCall") != nullptr, "ring1shim.sys Ring1VtlCall must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1SetIoPortAccess") != nullptr, "ring1shim.sys Ring1SetIoPortAccess must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1CheckIoPortAccess") != nullptr, "ring1shim.sys Ring1CheckIoPortAccess must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1SimulateFaultRecovery") != nullptr, "ring1shim.sys Ring1SimulateFaultRecovery must exist");
+        TEST_ASSERT(ldr.getExport("ring1shim.sys", "Ring1GetTelemetry") != nullptr, "ring1shim.sys Ring1GetTelemetry must exist");
+
+        // 2. SCM Service Record Verification
+        auto& scmMgr = scm::ServiceControlManager::get();
+        auto r1Svc = scmMgr.getServiceRecord(L"ring1shim");
+        TEST_ASSERT(r1Svc != nullptr, "ring1shim service record must exist in SCM");
+        TEST_ASSERT(r1Svc->serviceType == scm::SERVICE_KERNEL_DRIVER, "ring1shim must be a kernel driver");
+        TEST_ASSERT(r1Svc->startType == scm::SERVICE_BOOT_START, "ring1shim must be boot start");
+        TEST_ASSERT(r1Svc->status.dwCurrentState == scm::SERVICE_RUNNING, "ring1shim must be running");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("ring1shim.sys") != nullptr, "ring1shim.sys must be registered in Version Database");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: Subsystem Diagnostic Telemetry & Metric Verification
+    // ------------------------------------------------------------------------
+    {
+        ring1::RING1_TELEMETRY telem{};
+        BOOL telemOk = ring1::Ring1GetTelemetry(&telem);
+        TEST_ASSERT(telemOk == ring1::TRUE_VAL, "Ring1GetTelemetry must succeed");
+        TEST_ASSERT(telem.totalCallGateTransitions >= 3, "totalCallGateTransitions must be >= 3");
+        TEST_ASSERT(telem.totalDriverInvocations >= 1, "totalDriverInvocations must be >= 1");
+        TEST_ASSERT(telem.totalFaultsContained >= 2, "totalFaultsContained must be >= 2");
+        TEST_ASSERT(telem.totalRecoveriesExecuted >= 2, "totalRecoveriesExecuted must be >= 2");
+        TEST_ASSERT(telem.totalVtlCallsExecuted >= 4, "totalVtlCallsExecuted must be >= 4");
+        TEST_ASSERT(telem.totalIoPortAccesses >= 5, "totalIoPortAccesses must be >= 5");
+        TEST_ASSERT(telem.activeCallGatesCount >= 2, "activeCallGatesCount must be >= 2");
+        TEST_ASSERT(telem.vtl1SecretsCount >= 1, "vtl1SecretsCount must be >= 1");
+
+        ring1::RING1_TELEMETRY directTelem = ring1::Ring1QueryTelemetry();
+        TEST_ASSERT(directTelem.totalFaultsContained == telem.totalFaultsContained, "Direct C++ telemetry query must match");
+    }
+
+    std::cout << "[TEST] Suite 253: Horizon 37 - Ring 1 Privileged Service Domain & Fault Isolation PASSED.\n";
+}
+
+
 
 
 
