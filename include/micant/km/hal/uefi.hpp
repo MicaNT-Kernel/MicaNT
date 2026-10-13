@@ -303,6 +303,55 @@ struct EfiBootServices {
 };
 
 /**
+ * @brief UEFI Time structure (EFI_TIME) returned by RuntimeServices->GetTime.
+ */
+struct EfiTime {
+    uint16_t year{2026};
+    uint8_t  month{10};
+    uint8_t  day{13};
+    uint8_t  hour{12};
+    uint8_t  minute{0};
+    uint8_t  second{0};
+    uint8_t  pad1{0};
+    uint32_t nanosecond{0};
+    int16_t  timeZone{0};
+    uint8_t  daylight{0};
+    uint8_t  pad2{0};
+};
+
+struct EfiTimeCapabilities {
+    uint32_t resolution{1};
+    uint32_t accuracy{0};
+    bool     setsToZero{false};
+};
+
+/**
+ * @brief UEFI Runtime Services Table (EFI_RUNTIME_SERVICES).
+ */
+struct EfiRuntimeServices {
+    EfiTableHeader hdr;
+
+    // Time Services
+    EfiStatus (*getTime)(EfiTime* time, EfiTimeCapabilities* capabilities){nullptr};
+    EfiStatus (*setTime)(EfiTime* time){nullptr};
+    void* getWakeupTime{nullptr};
+    void* setWakeupTime{nullptr};
+
+    // Virtual Memory Services
+    void* setVirtualAddressMap{nullptr};
+    void* convertPointer{nullptr};
+
+    // Variable Services
+    void* getVariable{nullptr};
+    void* getNextVariableName{nullptr};
+    void* setVariable{nullptr};
+
+    // Miscellaneous Runtime Services
+    void* getNextHighMonotonicCount{nullptr};
+    void (*resetSystem)(uint32_t resetType, EfiStatus resetStatus, uint64_t dataSize, void* resetData){nullptr};
+};
+
+/**
  * @brief UEFI System Table (primary pointer passed into EFI application entry point).
  */
 struct EfiSystemTable {
@@ -315,7 +364,7 @@ struct EfiSystemTable {
     EfiSimpleTextOutputProtocol* conOut;
     EfiHandle standardErrorHandle;
     EfiSimpleTextOutputProtocol* stdErr;
-    void* runtimeServices;
+    EfiRuntimeServices* runtimeServices;
     EfiBootServices* bootServices;
     uint64_t numberOfTableEntries;
     EfiConfigurationTable* configurationTable;

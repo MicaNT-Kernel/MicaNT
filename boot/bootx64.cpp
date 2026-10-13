@@ -70,6 +70,8 @@ private:
     uefi::EfiGraphicsOutputProtocol* m_gop{nullptr};
     boot::LoaderParameterBlock m_lpb{};
     bootvid::BootVideoDriver m_videoDriver{};
+    uefi::EfiTime m_bootTime{};
+    bool m_hasBootTime{false};
     bool m_bootServicesExited{false};
 
 public:
@@ -77,9 +79,14 @@ public:
         : m_imageHandle(imageHandle), m_systemTable(systemTable) {}
 
     /**
-     * @brief Stage 1: Firmware Console Handshake
+     * @brief Stage 1: Firmware Console Handshake & Hardware RTC Query
      */
     bool initConsole() {
+        if (m_systemTable && m_systemTable->runtimeServices && m_systemTable->runtimeServices->getTime) {
+            if (m_systemTable->runtimeServices->getTime(&m_bootTime, nullptr) == uefi::EFI_SUCCESS) {
+                m_hasBootTime = true;
+            }
+        }
         if (!m_systemTable || !m_systemTable->conOut) {
             return false;
         }
@@ -526,11 +533,35 @@ public:
         m_videoDriver.fillRectangle(tbX9, taskbarY + 28, 94, 2, bootvid::Color{255, 180, 0});
         m_videoDriver.drawString(tbX9 + 7, taskbarY + 12, "[Diff] Git", bootvid::Color{255, 215, 110}, bootvid::Color{42, 34, 18}, 1);
 
-        // System Tray
+        // System Tray (Live Hardware RTC Clock via UEFI GetTime)
         uint32_t trayX = (width > 220) ? (width - 200) : 10;
         m_videoDriver.fillRectangle(trayX, taskbarY + 4, 194, 26, bootvid::Color{18, 24, 38});
         m_videoDriver.drawString(trayX + 8, taskbarY + 12, "0 Telemetry", bootvid::Color{100, 230, 160}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(trayX + 125, taskbarY + 12, "3:42 PM", bootvid::Color{220, 230, 245}, bootvid::Color{18, 24, 38}, 1);
+
+        char clockBuf[12] = "12:55 PM";
+        if (m_hasBootTime) {
+            uint8_t h24 = m_bootTime.hour % 24;
+            uint8_t m60 = m_bootTime.minute % 60;
+            bool isPm = (h24 >= 12);
+            uint8_t h12 = h24 % 12;
+            if (h12 == 0) h12 = 12;
+            size_t pos = 0;
+            if (h12 >= 10) {
+                clockBuf[pos++] = '1';
+                clockBuf[pos++] = static_cast<char>('0' + (h12 - 10));
+            } else {
+                clockBuf[pos++] = ' ';
+                clockBuf[pos++] = static_cast<char>('0' + h12);
+            }
+            clockBuf[pos++] = ':';
+            clockBuf[pos++] = static_cast<char>('0' + (m60 / 10));
+            clockBuf[pos++] = static_cast<char>('0' + (m60 % 10));
+            clockBuf[pos++] = ' ';
+            clockBuf[pos++] = isPm ? 'P' : 'A';
+            clockBuf[pos++] = 'M';
+            clockBuf[pos]   = '\0';
+        }
+        m_videoDriver.drawString(trayX + 120, taskbarY + 12, clockBuf, bootvid::Color{220, 230, 245}, bootvid::Color{18, 24, 38}, 1);
 
         // 5. Software Cursor Arrow (12x19 Classic Windows Pointer)
         SoftwareCursor cursor;
