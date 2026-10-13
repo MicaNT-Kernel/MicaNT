@@ -11980,6 +11980,375 @@ void Test_Horizon39_KernelCrashDumpEngine_BugCheck_And_BSOD() {
     std::cout << "[TEST] Suite 255: Horizon 39 - Sovereign Kernel Crash Dump Engine, BugCheck & BSOD PASSED.\n";
 }
 
+// ============================================================================
+// Suite 256: Horizon 40 - USB 3.2 xHCI Host Controller Driver, Root Hub & URB Pipeline
+// ============================================================================
+
+void Test_Horizon40_USB32_xHCI_HostController_And_HubArchitecture() {
+    using namespace micant::usb;
+    std::cout << "[TEST] Running Suite 256: Horizon 40 - USB 3.2 xHCI Host Controller Driver, Root Hub & URB Pipeline...\n" << std::flush;
+
+    // ------------------------------------------------------------------------
+    // Phase 1: Subsystem Initialization, JanusLDR Driver Exports & SCM/Version DB
+    // ------------------------------------------------------------------------
+    {
+        km::xhci::InitializeXhciSubsystemExports();
+        auto& xhciDriver = km::xhci::TitanXhciControllerDriver::Instance();
+        xhciDriver.resetForTesting();
+
+        // 1. JanusLDR Exports Verification (usbxhci.sys, usbd.sys, usbhub3.sys, winusb.dll)
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("usbxhci.sys", "XhciSubmitUrb") != nullptr, "usbxhci.sys XhciSubmitUrb must exist");
+        TEST_ASSERT(ldr.getExport("usbxhci.sys", "XhciGetTelemetry") != nullptr, "usbxhci.sys XhciGetTelemetry must exist");
+
+        TEST_ASSERT(ldr.getExport("usbd.sys", "USBD_UrbAllocate") != nullptr, "usbd.sys USBD_UrbAllocate must exist");
+        TEST_ASSERT(ldr.getExport("usbd.sys", "USBD_UrbFree") != nullptr, "usbd.sys USBD_UrbFree must exist");
+        TEST_ASSERT(ldr.getExport("usbd.sys", "USBD_CreateConfigurationRequestEx") != nullptr, "usbd.sys USBD_CreateConfigurationRequestEx must exist");
+        TEST_ASSERT(ldr.getExport("usbd.sys", "USBD_ParseConfigurationDescriptorEx") != nullptr, "usbd.sys USBD_ParseConfigurationDescriptorEx must exist");
+        TEST_ASSERT(ldr.getExport("usbd.sys", "USBD_CalculateUsbBandwidth") != nullptr, "usbd.sys USBD_CalculateUsbBandwidth must exist");
+        TEST_ASSERT(ldr.getExport("usbd.sys", "USBD_QueryBusTime") != nullptr, "usbd.sys USBD_QueryBusTime must exist");
+
+        TEST_ASSERT(ldr.getExport("usbhub3.sys", "XhciSubmitUrb") != nullptr, "usbhub3.sys XhciSubmitUrb must exist");
+        TEST_ASSERT(ldr.getExport("usbhub3.sys", "XhciGetTelemetry") != nullptr, "usbhub3.sys XhciGetTelemetry must exist");
+
+        TEST_ASSERT(ldr.getExport("winusb.dll", "WinUsb_Initialize") != nullptr, "winusb.dll WinUsb_Initialize must exist");
+        TEST_ASSERT(ldr.getExport("winusb.dll", "WinUsb_Free") != nullptr, "winusb.dll WinUsb_Free must exist");
+
+        // 2. SCM Service Records Verification
+        auto& scm = scm::ServiceControlManager::get();
+        auto xhciSvc = scm.getServiceRecord(L"usbxhci");
+        TEST_ASSERT(xhciSvc != nullptr, "usbxhci service record must exist in SCM");
+        TEST_ASSERT(xhciSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "usbxhci must be a kernel driver");
+        TEST_ASSERT(xhciSvc->startType == scm::SERVICE_BOOT_START, "usbxhci must be boot start");
+        TEST_ASSERT(xhciSvc->status.dwCurrentState == scm::SERVICE_RUNNING, "usbxhci must be running");
+
+        auto hubSvc = scm.getServiceRecord(L"usbhub3");
+        TEST_ASSERT(hubSvc != nullptr, "usbhub3 service record must exist in SCM");
+        TEST_ASSERT(hubSvc->serviceType == scm::SERVICE_KERNEL_DRIVER, "usbhub3 must be a kernel driver");
+
+        // 3. Version Database Verification
+        auto& verDb = version::VersionDatabase::Instance();
+        TEST_ASSERT(verDb.GetModuleInfo("usbxhci.sys") != nullptr, "usbxhci.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("usbhub3.sys") != nullptr, "usbhub3.sys must be in Version Database");
+        TEST_ASSERT(verDb.GetModuleInfo("usbd.sys") != nullptr, "usbd.sys must be in Version Database");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 2: xHCI MMIO Capability, Operational & Runtime Registers
+    // ------------------------------------------------------------------------
+    {
+        auto& xhciDriver = km::xhci::TitanXhciControllerDriver::Instance();
+        const auto& caps = xhciDriver.getCapabilityRegisters();
+        TEST_ASSERT(caps.CapLength == 0x20, "Capability length must be 32 bytes (0x20)");
+        TEST_ASSERT(caps.HciVersion == 0x0120, "xHCI version must be 1.2 (0x0120)");
+        TEST_ASSERT((caps.HcsParams1 & 0xFF) == 32, "MaxSlots must be 32");
+        TEST_ASSERT(((caps.HcsParams1 >> 24) & 0xFF) == 8, "MaxPorts must be 8");
+        TEST_ASSERT(caps.Dboff == 0x1000, "Doorbell offset must be 0x1000");
+        TEST_ASSERT(caps.Rtsoff == 0x2000, "Runtime registers offset must be 0x2000");
+
+        const auto& op = xhciDriver.getOperationalRegisters();
+        TEST_ASSERT((op.UsbCmd & 0x01) != 0, "USBCMD Run/Stop bit must be 1 (Controller Running)");
+        TEST_ASSERT((op.UsbSts & 0x01) == 0, "USBSTS HCHalted bit must be 0");
+        TEST_ASSERT(op.PageSize == 1, "PageSize bit 0 must be 1 (4KB pages)");
+        TEST_ASSERT(op.Config == 32, "CONFIG MaxSlotsEn must be 32");
+
+        const auto& intr = xhciDriver.getRuntimeInterrupter();
+        TEST_ASSERT((intr.Iman & 0x01) != 0, "Interrupter Pending (IP) must be 1");
+        TEST_ASSERT((intr.Iman & 0x02) != 0, "Interrupter Enable (IE) must be 1");
+        TEST_ASSERT(intr.ErstSz == 16, "ERST Size must be 16");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 3: Command Ring, Event Ring & Interrupter Management
+    // ------------------------------------------------------------------------
+    {
+        auto primaryHc = usb::TitanUsbSubsystem::Instance().getPrimaryController();
+        TEST_ASSERT(primaryHc != nullptr, "Primary xHCI Host Controller must exist");
+
+        // Submit EnableSlotCmd to allocate a slot
+        usb::xhci::TRB enableCmd{};
+        enableCmd.setType(usb::xhci::TrbType::EnableSlotCmd);
+        usb::xhci::TRB compEvent{};
+        bool cmdOk = primaryHc->submitCommand(enableCmd, compEvent);
+        TEST_ASSERT(cmdOk, "Submitting EnableSlotCmd must succeed");
+        TEST_ASSERT(compEvent.getType() == usb::xhci::TrbType::CommandCompletionEvent, "Must emit CommandCompletionEvent");
+        TEST_ASSERT(compEvent.getCompletionCode() == usb::xhci::CompCode::Success, "CompletionCode must be Success (1)");
+        uint8_t slotId = compEvent.getSlotId();
+        TEST_ASSERT(slotId > 0 && slotId <= 32, "Allocated slot ID must be in range 1..32");
+
+        // Submit AddressDeviceCmd on attached device (Slot 1)
+        usb::xhci::TRB addrCmd{};
+        addrCmd.setType(usb::xhci::TrbType::AddressDeviceCmd);
+        addrCmd.setSlotId(1);
+        cmdOk = primaryHc->submitCommand(addrCmd, compEvent);
+        TEST_ASSERT(cmdOk && compEvent.getCompletionCode() == usb::xhci::CompCode::Success, "AddressDeviceCmd must complete successfully");
+
+        // Submit ConfigureEndpointCmd on attached device (Slot 1)
+        usb::xhci::TRB cfgCmd{};
+        cfgCmd.setType(usb::xhci::TrbType::ConfigureEndpointCmd);
+        cfgCmd.setSlotId(1);
+        cmdOk = primaryHc->submitCommand(cfgCmd, compEvent);
+        TEST_ASSERT(cmdOk && compEvent.getCompletionCode() == usb::xhci::CompCode::Success, "ConfigureEndpointCmd must complete successfully");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 4: Device Context Base Address Array (DCBAA), Slot & Endpoint Contexts
+    // ------------------------------------------------------------------------
+    {
+        usb::xhci::SlotContext slotCtx{};
+        slotCtx.setSpeed(4); // SuperSpeed (5 Gbps)
+        slotCtx.setRootHubPort(1);
+        slotCtx.setDeviceAddress(1);
+        slotCtx.setSlotState(3); // Configured state
+
+        TEST_ASSERT(slotCtx.getSpeed() == 4, "SlotContext speed must be SuperSpeed");
+        TEST_ASSERT(slotCtx.getRootHubPort() == 1, "SlotContext RootHubPort must be 1");
+        TEST_ASSERT(slotCtx.getDeviceAddress() == 1, "SlotContext device address must be 1");
+        TEST_ASSERT(slotCtx.getSlotState() == 3, "SlotContext slot state must be Configured");
+
+        usb::xhci::EndpointContext ep0Ctx{};
+        ep0Ctx.setEpState(1); // Running
+        ep0Ctx.setEpType(4);  // Control Bi-directional
+        ep0Ctx.setMaxPacketSize(512);
+
+        TEST_ASSERT(ep0Ctx.getEpState() == 1, "EP0 state must be Running");
+        TEST_ASSERT(ep0Ctx.getEpType() == 4, "EP0 type must be Control Bi-directional");
+        TEST_ASSERT(ep0Ctx.getMaxPacketSize() == 512, "EP0 max packet size must be 512");
+
+        usb::xhci::DeviceContext devCtx{};
+        devCtx.slot = slotCtx;
+        devCtx.endpoints[0] = ep0Ctx;
+        TEST_ASSERT(sizeof(usb::xhci::DeviceContext) == 32 * 32, "DeviceContext must be exactly 1024 bytes (32 * 32-byte contexts)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 5: Root Hub Topology, Port Status FSM & Speed Negotiation
+    // ------------------------------------------------------------------------
+    {
+        auto& xhciDriver = km::xhci::TitanXhciControllerDriver::Instance();
+        uint32_t port0 = xhciDriver.readPortSC(0);
+        TEST_ASSERT((port0 & 0x01) != 0, "Port 0 Current Connect Status (CCS) must be 1 (Connected)");
+        TEST_ASSERT((port0 & 0x02) != 0, "Port 0 Port Enabled/Disabled (PED) must be 1 (Enabled)");
+        TEST_ASSERT((port0 & 0x200) != 0, "Port 0 Port Power (PP) must be 1 (Powered)");
+
+        // Trigger Root Hub Port Reset
+        bool resetOk = xhciDriver.resetPort(0);
+        TEST_ASSERT(resetOk, "Resetting Root Hub Port 0 must succeed");
+
+        auto telem = xhciDriver.getTelemetry();
+        TEST_ASSERT(telem.totalPortResets >= 1, "totalPortResets must be >= 1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 6: USB Request Block (URB) Architecture & IOCTL Dispatch Pipeline
+    // ------------------------------------------------------------------------
+    {
+        auto& xhciDriver = km::xhci::TitanXhciControllerDriver::Instance();
+
+        // 1. Control Transfer URB: GET_STATUS
+        km::xhci::URB* urbControl = km::xhci::USBD_UrbAllocate();
+        TEST_ASSERT(urbControl != nullptr, "USBD_UrbAllocate must return valid URB pointer");
+
+        urbControl->UrbHeader.Function = km::xhci::URB_FUNCTION_CONTROL_TRANSFER_EX;
+        uint8_t statusBuf[2]{0};
+        auto* ct = &urbControl->UrbControlTransferEx;
+        ct->TransferBuffer = statusBuf;
+        ct->TransferBufferLength = sizeof(statusBuf);
+
+        usb::USB_DEFAULT_PIPE_SETUP_PACKET setup{};
+        setup.bmRequestType = usb::RequestType::Standard | usb::RequestType::RecipientDevice | usb::RequestType::DirectionIn;
+        setup.bRequest = usb::StandardRequest::GET_STATUS;
+        setup.wLength = 2;
+        std::memcpy(ct->SetupPacket, &setup, sizeof(setup));
+
+        NtStatus stUrb = km::xhci::XhciSubmitUrb(urbControl, 1);
+        TEST_ASSERT(stUrb == NtStatus::Success, "Submitting Control Transfer URB must succeed");
+        TEST_ASSERT(urbControl->UrbHeader.Status == km::xhci::USBD_STATUS_SUCCESS, "URB status must be USBD_STATUS_SUCCESS");
+        TEST_ASSERT(ct->TransferBufferLength == 2, "Transferred length must be 2 bytes");
+        TEST_ASSERT((statusBuf[0] & 0x01) != 0, "Device must report self-powered status");
+
+        km::xhci::USBD_UrbFree(urbControl);
+
+        // 2. Bulk Transfer URB: SCSI INQUIRY on Mass Storage (Slot 1)
+        km::xhci::URB* urbBulkInq = km::xhci::USBD_UrbAllocate();
+        TEST_ASSERT(urbBulkInq != nullptr, "USBD_UrbAllocate must succeed");
+
+        urbBulkInq->UrbHeader.Function = km::xhci::URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER;
+        uint8_t inqCbw[31]{};
+        *reinterpret_cast<uint32_t*>(inqCbw) = 0x43425355; // 'USBC'
+        *reinterpret_cast<uint32_t*>(inqCbw + 4) = 0x11223344;
+        *reinterpret_cast<uint32_t*>(inqCbw + 8) = 36;
+        inqCbw[12] = 0x80; // Data IN
+        inqCbw[14] = 6;
+        inqCbw[15] = 0x12; // INQUIRY
+        inqCbw[19] = 36;
+
+        auto* bi = &urbBulkInq->UrbBulkOrInterruptTransfer;
+        bi->TransferBuffer = inqCbw;
+        bi->TransferBufferLength = sizeof(inqCbw);
+        bi->TransferFlags = km::xhci::USBD_TRANSFER_DIRECTION_OUT;
+
+        stUrb = km::xhci::XhciSubmitUrb(urbBulkInq, 1);
+        TEST_ASSERT(stUrb == NtStatus::Success, "Submitting SCSI INQUIRY CBW URB must succeed");
+        TEST_ASSERT(bi->TransferBufferLength == 31, "CBW transferred length must be 31 bytes");
+
+        // Read Inquiry Response
+        uint8_t inqData[36]{};
+        bi->TransferBuffer = inqData;
+        bi->TransferBufferLength = sizeof(inqData);
+        bi->TransferFlags = km::xhci::USBD_TRANSFER_DIRECTION_IN;
+
+        stUrb = km::xhci::XhciSubmitUrb(urbBulkInq, 1);
+        TEST_ASSERT(stUrb == NtStatus::Success, "Reading SCSI INQUIRY Data URB must succeed");
+        TEST_ASSERT(bi->TransferBufferLength == 36, "Inquiry data length must be 36 bytes");
+        TEST_ASSERT(std::memcmp(&inqData[8], "SanDisk ", 8) == 0, "SCSI Vendor identification must match SanDisk");
+
+        km::xhci::USBD_UrbFree(urbBulkInq);
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 7: Scatter-Gather Chained TRBs & Multi-Page DMA Buffer Fragments
+    // ------------------------------------------------------------------------
+    {
+        std::vector<km::xhci::SCATTER_GATHER_ELEMENT> sgList = {
+            {0x10001000ULL, 4096}, // Page 0
+            {0x10002000ULL, 4096}, // Page 1
+            {0x10003000ULL, 2048}  // Partial Page 2
+        };
+
+        auto trbs = km::xhci::XhciScatterGatherBuilder::BuildChainedTransferTrbs(sgList, false, true);
+        TEST_ASSERT(trbs.size() == 3, "Chained TRB count must match scatter-gather entries (3)");
+
+        // First two TRBs must have Chain bit (CH=1) set
+        TEST_ASSERT((trbs[0].control & 0x10) != 0, "First TRB must have Chain bit (CH=1)");
+        TEST_ASSERT(trbs[0].getTransferLength() == 4096, "First TRB length must be 4096");
+        TEST_ASSERT(trbs[0].getIoc() == false, "Intermediate TRB must not have IOC set");
+
+        TEST_ASSERT((trbs[1].control & 0x10) != 0, "Second TRB must have Chain bit (CH=1)");
+        TEST_ASSERT(trbs[1].getTransferLength() == 4096, "Second TRB length must be 4096");
+
+        // Terminal TRB must NOT have Chain bit and MUST have IOC bit
+        TEST_ASSERT((trbs[2].control & 0x10) == 0, "Terminal TRB must not have Chain bit set");
+        TEST_ASSERT(trbs[2].getTransferLength() == 2048, "Terminal TRB length must be 2048");
+        TEST_ASSERT(trbs[2].getIoc() == true, "Terminal TRB must have IOC=1 for interrupt dispatch");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 8: PnP DevNode Hierarchy, Enumeration & Hardware IDs
+    // ------------------------------------------------------------------------
+    {
+        auto& xhciDriver = km::xhci::TitanXhciControllerDriver::Instance();
+        const auto& nodes = xhciDriver.getDevNodes();
+        TEST_ASSERT(nodes.size() >= 5, "DevNode tree must contain Controller, RootHub, and at least 3 child devices");
+
+        // Verify PCI Controller Node
+        TEST_ASSERT(nodes[0].DeviceName == "\\Device\\USBPDO-0", "Node 0 must be PCI Host Controller");
+        TEST_ASSERT(nodes[0].HardwareId.find(L"PCI\\VEN_8086&DEV_02ED") != std::wstring::npos, "PCI HWID must match Intel xHCI");
+
+        // Verify Root Hub Node
+        TEST_ASSERT(nodes[1].DeviceName == "\\Device\\USBRH0", "Node 1 must be Root Hub FDO");
+        TEST_ASSERT(nodes[1].IsRootHub == true, "Node 1 IsRootHub must be true");
+        TEST_ASSERT(nodes[1].HardwareId == L"USB\\ROOT_HUB30", "Root Hub HWID must be USB\\ROOT_HUB30");
+
+        // Verify Child Downstream Devices
+        auto flashNode = xhciDriver.findDevNodeBySlot(1);
+        TEST_ASSERT(flashNode.has_value(), "Slot 1 DevNode must exist");
+        TEST_ASSERT(flashNode->HardwareId.find(L"USB\\VID_0781&PID_5583") != std::wstring::npos, "Slot 1 must be SanDisk Flash Drive");
+
+        auto mouseNode = xhciDriver.findDevNodeBySlot(2);
+        TEST_ASSERT(mouseNode.has_value(), "Slot 2 DevNode must exist");
+        TEST_ASSERT(mouseNode->HardwareId.find(L"USB\\VID_046D&PID_C077") != std::wstring::npos, "Slot 2 must be Logitech Mouse");
+
+        auto serialNode = xhciDriver.findDevNodeBySlot(3);
+        TEST_ASSERT(serialNode.has_value(), "Slot 3 DevNode must exist");
+        TEST_ASSERT(serialNode->HardwareId.find(L"USB\\VID_10C4&PID_EA60") != std::wstring::npos, "Slot 3 must be Silicon Labs Serial");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 9: Selective Suspend, Device Power FSM (D0 <-> D2 <-> D3) & Remote Wakeup
+    // ------------------------------------------------------------------------
+    {
+        auto& xhciDriver = km::xhci::TitanXhciControllerDriver::Instance();
+
+        // 1. Transition Slot 1 to D2 (Selective Suspend / U3)
+        bool pwrOk = xhciDriver.setDevicePowerState(1, km::xhci::XhciDevicePowerState::PowerDeviceD2);
+        TEST_ASSERT(pwrOk, "Setting Slot 1 to D2 Selective Suspend must succeed");
+
+        auto nodeOpt = xhciDriver.findDevNodeBySlot(1);
+        TEST_ASSERT(nodeOpt.has_value() && nodeOpt->PowerState == km::xhci::XhciDevicePowerState::PowerDeviceD2, "Slot 1 power state must be D2");
+
+        uint32_t port0Sc = xhciDriver.readPortSC(0);
+        uint8_t pls = static_cast<uint8_t>((port0Sc >> 5) & 0x0F);
+        TEST_ASSERT(pls == 3, "Port Link State (PLS) must be 3 (U3 Suspended)");
+
+        // 2. Trigger Remote Wakeup on Slot 1
+        bool wakeOk = xhciDriver.triggerRemoteWakeup(1);
+        TEST_ASSERT(wakeOk, "Remote Wakeup from D2 must succeed");
+
+        nodeOpt = xhciDriver.findDevNodeBySlot(1);
+        TEST_ASSERT(nodeOpt.has_value() && nodeOpt->PowerState == km::xhci::XhciDevicePowerState::PowerDeviceD0, "Slot 1 power state must return to D0");
+
+        auto telem = xhciDriver.getTelemetry();
+        TEST_ASSERT(telem.totalSelectiveSuspends >= 1, "totalSelectiveSuspends must be >= 1");
+        TEST_ASSERT(telem.totalRemoteWakeups >= 1, "totalRemoteWakeups must be >= 1");
+    }
+
+    // ------------------------------------------------------------------------
+    // Phase 10: USBD Helper APIs, WinUSB Client & Subsystem Diagnostic Telemetry
+    // ------------------------------------------------------------------------
+    {
+        // 1. USBD Bandwidth Calculation
+        uint32_t bwIsoch = km::xhci::USBD_CalculateUsbBandwidth(1024, 1, km::xhci::FALSE_VAL);
+        TEST_ASSERT(bwIsoch > 1024 * 8, "Isochronous bandwidth must include protocol overhead");
+
+        // 2. USBD Query Bus Time
+        uint32_t frameNum = 0;
+        uint32_t qRes = km::xhci::USBD_QueryBusTime(nullptr, &frameNum);
+        TEST_ASSERT(qRes == 0, "USBD_QueryBusTime must return 0 (Success)");
+        TEST_ASSERT(frameNum > 0, "Current frame number must be non-zero");
+
+        // 3. WinUSB Userland Client API Integration
+        WINUSB_INTERFACE_HANDLE winusbHandle = nullptr;
+        BOOL initOk = WinUsb_Initialize(reinterpret_cast<win32::HANDLE>(1), &winusbHandle);
+        TEST_ASSERT(initOk == TRUE, "WinUsb_Initialize on Slot 1 device must succeed");
+        TEST_ASSERT(winusbHandle != nullptr, "Valid WinUSB interface handle must be returned");
+
+        // Query Pipe 0
+        WINUSB_PIPE_INFORMATION pipeInfo{};
+        BOOL pipeOk = WinUsb_QueryPipe(winusbHandle, 0, 0, &pipeInfo);
+        TEST_ASSERT(pipeOk == TRUE, "WinUsb_QueryPipe must succeed");
+        TEST_ASSERT(pipeInfo.MaximumPacketSize == 512, "Pipe max packet size must be 512 for SuperSpeed");
+
+        // Set & Get Pipe Policy
+        uint32_t timeout = 5000;
+        BOOL setPolOk = WinUsb_SetPipePolicy(winusbHandle, pipeInfo.PipeId, WinUsbPolicy::PIPE_TRANSFER_TIMEOUT, sizeof(timeout), &timeout);
+        TEST_ASSERT(setPolOk == TRUE, "WinUsb_SetPipePolicy must succeed");
+
+        uint32_t readTimeout = 0;
+        ULONG lenOut = sizeof(readTimeout);
+        BOOL getPolOk = WinUsb_GetPipePolicy(winusbHandle, pipeInfo.PipeId, WinUsbPolicy::PIPE_TRANSFER_TIMEOUT, &lenOut, &readTimeout);
+        TEST_ASSERT(getPolOk == TRUE && readTimeout == 5000, "WinUsb_GetPipePolicy must retrieve set timeout 5000");
+
+        WinUsb_Free(winusbHandle);
+
+        // 4. Overall Subsystem Telemetry Validation
+        km::xhci::XHCI_TELEMETRY telem{};
+        BOOL telemOk = km::xhci::XhciGetTelemetry(&telem);
+        TEST_ASSERT(telemOk == km::xhci::TRUE_VAL, "XhciGetTelemetry must succeed");
+        TEST_ASSERT(telem.totalUrbsSubmitted >= 3, "totalUrbsSubmitted must be >= 3");
+        TEST_ASSERT(telem.totalUrbsCompleted >= 3, "totalUrbsCompleted must be >= 3");
+        TEST_ASSERT(telem.totalControlTransfers >= 1, "totalControlTransfers must be >= 1");
+        TEST_ASSERT(telem.totalBulkTransfers >= 2, "totalBulkTransfers must be >= 2");
+        TEST_ASSERT(telem.totalBytesTransferred > 0, "totalBytesTransferred must be > 0");
+        TEST_ASSERT(telem.hostControllerRunning == true, "hostControllerRunning must be true");
+
+        km::xhci::XHCI_TELEMETRY directTelem = km::xhci::XhciQueryTelemetry();
+        TEST_ASSERT(directTelem.totalUrbsSubmitted == telem.totalUrbsSubmitted, "Direct telemetry query must match");
+    }
+
+    std::cout << "[TEST] Suite 256: Horizon 40 - USB 3.2 xHCI Host Controller Driver, Root Hub & URB Pipeline PASSED.\n";
+}
+
 
 
 

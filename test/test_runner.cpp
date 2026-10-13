@@ -75,6 +75,7 @@
 #include "micant/ring1_isolation.hpp"
 #include "micant/fltmgr.hpp"
 #include "micant/bugcheck.hpp"
+#include "micant/xhci.hpp"
 #include "micant/storage.hpp"
 #include "micant/fat32.hpp"
 #include "micant/ndis.hpp"
@@ -297,7 +298,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite255")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite256")) {
+        RUN_TEST(Test_Horizon40_USB32_xHCI_HostController_And_HubArchitecture);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite255") {
         RUN_TEST(Test_Horizon39_KernelCrashDumpEngine_BugCheck_And_BSOD);
         return g_FailedTests;
     }
@@ -1126,6 +1131,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon37_Ring1_PrivilegedServiceDomain_And_FaultIsolation);
     RUN_TEST(Test_Horizon38_FilterManager_Minifilter_Architecture);
     RUN_TEST(Test_Horizon39_KernelCrashDumpEngine_BugCheck_And_BSOD);
+    RUN_TEST(Test_Horizon40_USB32_xHCI_HostController_And_HubArchitecture);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
