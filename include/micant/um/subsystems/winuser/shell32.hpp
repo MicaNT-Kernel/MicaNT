@@ -739,9 +739,18 @@ inline BOOL WINAPI SHChangeNotifyDeregister_Ordinal4(ULONG /*ulID*/) noexcept {
 
 inline int wnsprintfW(wchar_t* lpOut, int cchLimitIn, const wchar_t* lpFmt, ...) noexcept {
     if (!lpOut || cchLimitIn <= 0 || !lpFmt) return -1;
+    std::wstring normFmt;
+    for (size_t i = 0; lpFmt[i] != L'\0'; ++i) {
+        if (lpFmt[i] == L'%' && lpFmt[i + 1] == L's') {
+            normFmt += L"%ls";
+            ++i;
+        } else {
+            normFmt += lpFmt[i];
+        }
+    }
     va_list args;
     va_start(args, lpFmt);
-    int written = std::vswprintf(lpOut, static_cast<size_t>(cchLimitIn), lpFmt, args);
+    int written = std::vswprintf(lpOut, static_cast<size_t>(cchLimitIn), normFmt.c_str(), args);
     va_end(args);
     return written;
 }

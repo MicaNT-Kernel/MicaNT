@@ -449,6 +449,14 @@ public:
                 }
             }
 
+            // If matching hardware IS physically present on the scanned bus for a BOOT_START driver,
+            // PnP clears any stale host-VM StartOverride demotion so the boot driver loads in Phase 0.
+            // StartOverride\0 = 3 only remains in effect when item.hwPresent == false (e.g. nvstor).
+            if (item.hwPresent && item.cfg.ConfiguredStart == NT_SERVICE_BOOT_START) {
+                item.cfg.HasStartOverride = false;
+                item.cfg.EffectiveStart   = NT_SERVICE_BOOT_START;
+            }
+
             // Classify boot phase according to EffectiveStart (Start + StartOverride) and live hardware presence
             if (!item.hwPresent || item.cfg.EffectiveStart == NT_SERVICE_DISABLED) {
                 item.phase = NT_BOOT_LOAD_PHASE::PhaseSkipped_NoHardwareOrOverride;

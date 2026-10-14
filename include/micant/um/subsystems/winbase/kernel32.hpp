@@ -4274,7 +4274,7 @@ inline DWORD WINAPI GetTempFileNameW(LPCWSTR lpPathName, LPCWSTR lpPrefixString,
     uint32_t id = (uUnique != 0) ? uUnique : s_uid++;
     const wchar_t* prefix = lpPrefixString ? lpPrefixString : L"TMP";
     const wchar_t* path = lpPathName ? lpPathName : L"C:\\Temp\\";
-    std::swprintf(lpTempFileName, 260, L"%s%s%04X.tmp", path, prefix, id);
+    std::swprintf(lpTempFileName, 260, L"%ls%ls%04X.tmp", path, prefix, id);
     return id;
 }
 
