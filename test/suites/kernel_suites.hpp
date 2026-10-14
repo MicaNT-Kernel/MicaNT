@@ -15769,9 +15769,145 @@ void Test_Horizon53_ZeroBsodGuard_DpcWatchdog_PowerIrp_HighIrqlFault_And_SafeLis
     std::cout << "[TEST] Suite 269: Horizon 53 - Sovereign NT Zero-BSOD Self-Healing Kernel Guard PASSED.\n";
 }
 
+// ============================================================================
+// Suite 270: Horizon 54 — Sovereign NT Zero-Downtime Live Driver Hot-Swap,
+//            Self-Healing Paging & Storage I/O (0x7A / 0xF4 Killer) &
+//            Hardware Intel VT-d IOMMU Per-Device DMA Firewall
+//            (base/ntos/io/livepatch_storheal)
+// ============================================================================
+inline void Test_Horizon54_LiveDriverHotSwap_InpageStorageHealer_And_VtDIommuDmaFirewall() {
+    std::cout << "\n[TEST] Suite 270: Horizon 54 - Sovereign NT Live Driver Hot-Swap, 0x7A/0xF4 Inpage Healer & Intel VT-d DMA Firewall...\n";
 
+    InitializeLiveHotSwapStorHealExports();
+    auto& mgr = TitanLiveHotSwapStorHealManager::get();
+    mgr.resetForTest();
 
+    // ------------------------------------------------------------------------
+    // 1. Zero-Downtime Live .sys Driver Hot-Swap (IoHotSwapDriver*)
+    //    Upgrade e1000e_ndis6.sys (v1 -> v2) in 3ms with 142 open file handles
+    //    and 64 active TCP sockets preserved without a system reboot, plus
+    //    verify instant atomic revert if a faulty candidate v3 crashes!
+    // ------------------------------------------------------------------------
+    mgr.registerLiveDriverForHotSwap(
+        "PCI\\VEN_8086&DEV_10D3\\0001",
+        "e1000e_ndis6_v1.sys",
+        0x000A000065F40001ULL,
+        142, // open FILE_OBJECT handles
+        64,  // active TCP sockets
+        0xFEBC0000ULL,
+        5,
+        4096
+    );
 
+    auto hotSwapOk = mgr.executeZeroDowntimeDriverHotSwap(
+        "PCI\\VEN_8086&DEV_10D3\\0001",
+        "e1000e_ndis6_v2.sys",
+        0x000A000065F40002ULL,
+        28,  // in-flight IRPs paused in Kernel Bridge Queue & replayed
+        false
+    );
 
+    auto hotSwapRevert = mgr.executeZeroDowntimeDriverHotSwap(
+        "PCI\\VEN_8086&DEV_10D3\\0001",
+        "e1000e_ndis6_buggy_v3.sys",
+        0x000A000065F40003ULL,
+        19,
+        true // simulate candidate v3 fault during KSR state handover
+    );
 
+    std::cout << "  [Horizon 54 Zero-Downtime Live .sys Driver Hot-Swap (IoHotSwapDriver*)]\n"
+              << "    Upgrade v1->v2: Active=" << hotSwapOk.FinalActiveDriverBinary
+              << " | Pause=" << hotSwapOk.BridgePauseDurationMs << " ms"
+              << " | ReplayedIRPs=" << hotSwapOk.QuiescedAndReplayedIrpCount
+              << " | Handles=" << hotSwapOk.OpenFileHandlesPreserved << " (Dropped=" << hotSwapOk.OpenFileHandlesDropped << ")"
+              << " | Sockets=" << hotSwapOk.ActiveSocketsPreserved << " (Dropped=" << hotSwapOk.ActiveSocketsDropped << ")"
+              << " | Reboot=" << (hotSwapOk.SystemRebootRequired ? "Yes" : "No") << "\n"
+              << "    Faulty v2->v3 : RevertedTo=" << hotSwapRevert.FinalActiveDriverBinary
+              << " | AtomicRevert=" << (hotSwapRevert.CandidateFaultedAndRevertedToPrevious ? "Yes" : "No") << "\n";
 
+    TEST_ASSERT(hotSwapOk.MajorFunctionTableFlippedAtomically &&
+                hotSwapOk.HardwareStateSerializedViaKsr &&
+                hotSwapOk.FinalActiveDriverBinary == "e1000e_ndis6_v2.sys" &&
+                hotSwapOk.BridgePauseDurationMs == 3 &&
+                hotSwapOk.QuiescedAndReplayedIrpCount == 28 &&
+                hotSwapOk.OpenFileHandlesPreserved == 142 &&
+                hotSwapOk.OpenFileHandlesDropped == 0 &&
+                hotSwapOk.ActiveSocketsPreserved == 64 &&
+                hotSwapOk.ActiveSocketsDropped == 0 &&
+                !hotSwapOk.SystemRebootRequired,
+                "Live .sys driver hot-swap must upgrade v1->v2 in 3ms with 0 dropped handles/sockets and 0 reboot");
+
+    TEST_ASSERT(hotSwapRevert.CandidateFaultedAndRevertedToPrevious &&
+                !hotSwapRevert.MajorFunctionTableFlippedAtomically &&
+                hotSwapRevert.FinalActiveDriverBinary == "e1000e_ndis6_v2.sys",
+                "Faulting v3 candidate must atomically revert to v2 without dropping handles or crashing");
+
+    // ------------------------------------------------------------------------
+    // 2. Self-Healing Paging & Storage I/O (Eliminates 0x7A & 0xF4 BSODs)
+    // ------------------------------------------------------------------------
+    auto inpageHeal = mgr.healCriticalInpageDiskError(
+        "csrss.exe",
+        "stornvme.sys",
+        0x00007FF7A1204000ULL,
+        0x000000000048A920ULL
+    );
+
+    std::cout << "  [Horizon 54 Self-Healing Paging & Storage I/O (Eliminates 0x7A & 0xF4 BSOD)]\n"
+              << "    Process=" << inpageHeal.CriticalProcessName
+              << " | QueueReset=" << (inpageHeal.StorPortQueueResetIssued ? "Yes" : "No")
+              << " | Retries=" << inpageHeal.ExponentialBackoffRetries
+              << " | StandbyRamReconstructed=" << (inpageHeal.ReconstructedFromStandbyRamAndPeCache ? "Yes" : "No")
+              << " | BadLbaRemapped=" << (inpageHeal.BadSectorRemappedInDriveBbt ? "Yes" : "No")
+              << " | BSOD(0x7A/0xF4)=" << ((inpageHeal.BugCheck0x7ATriggered || inpageHeal.BugCheck0xF4Triggered) ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(inpageHeal.StorPortQueueResetIssued &&
+                inpageHeal.ExponentialBackoffRetries == 3 &&
+                inpageHeal.ReconstructedFromStandbyRamAndPeCache &&
+                inpageHeal.BadSectorRemappedInDriveBbt &&
+                inpageHeal.CriticalProcessSurvivedIntact &&
+                !inpageHeal.BugCheck0x7ATriggered &&
+                !inpageHeal.BugCheck0xF4Triggered,
+                "Critical in-page error in csrss.exe must be healed from Standby RAM / PE cache with zero 0x7A or 0xF4 BSOD");
+
+    // ------------------------------------------------------------------------
+    // 3. Hardware Intel VT-d / IOMMU Per-Device DMA Firewall (Eliminates 0xE6)
+    // ------------------------------------------------------------------------
+    mgr.configureIommuDeviceMdlAperture(
+        "0000:04:00.0",
+        17,
+        0x00104000ULL, // Allowed MDL Start PFN (phys 0x104000000)
+        0x001040FFULL  // Allowed MDL End PFN   (phys 0x1040FFFFF)
+    );
+
+    auto validDma = mgr.evaluateAndGuardPcieDmaTransfer(
+        "0000:04:00.0",
+        0x0000000104025000ULL // Inside MDL PFN 0x104025
+    );
+
+    auto rogueDma = mgr.evaluateAndGuardPcieDmaTransfer(
+        "0000:04:00.0",
+        0x0000000000200000ULL // Rogue DMA targeting ntoskrnl physical PFN 0x200!
+    );
+
+    std::cout << "  [Horizon 54 Intel VT-d IOMMU Per-Device DMA Firewall (Eliminates 0xE6 BSOD)]\n"
+              << "    Valid MDL DMA (PFN 0x" << std::hex << validDma.AttemptedTargetPfn << std::dec << "): Allowed="
+              << (validDma.AddressWithinAllowedMdlRange ? "Yes" : "No") << "\n"
+              << "    Rogue Kernel DMA (PFN 0x" << std::hex << rogueDma.AttemptedTargetPfn << std::dec << "): BlockedByVTd="
+              << (rogueDma.RogueTlpBlockedByVtDHardware ? "Yes" : "No")
+              << " | NtosProtected=" << (rogueDma.KernelNtosMemoryProtected ? "Yes" : "No")
+              << " | BSOD(0xE6)=" << (rogueDma.BugCheck0xE6Triggered ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(validDma.AddressWithinAllowedMdlRange &&
+                !validDma.RogueTlpBlockedByVtDHardware &&
+                !validDma.BugCheck0xE6Triggered,
+                "DMA transfer inside the active IRP MDL PFN range must be permitted by Intel VT-d SLPT");
+
+    TEST_ASSERT(!rogueDma.AddressWithinAllowedMdlRange &&
+                rogueDma.RogueTlpBlockedByVtDHardware &&
+                rogueDma.KernelNtosMemoryProtected &&
+                rogueDma.DmaAdapterRingResynced &&
+                !rogueDma.BugCheck0xE6Triggered,
+                "Rogue PCIe DMA write targeting ntoskrnl physical memory must be blocked in hardware by Intel VT-d with zero 0xE6 BSOD");
+
+    std::cout << "[TEST] Suite 270: Horizon 54 - Sovereign NT Live Driver Hot-Swap, 0x7A/0xF4 Inpage Healer & Intel VT-d DMA Firewall PASSED.\n";
+}

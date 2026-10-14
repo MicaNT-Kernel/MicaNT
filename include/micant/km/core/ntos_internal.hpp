@@ -84,4 +84,7 @@ void UmdfMsixInitializeExecutiveSubsystem() noexcept;
 // Zero-BSOD Self-Healing Kernel Guard Initialization (kernel/ke/zerobsod.cpp)
 void ZeroBsodInitializeExecutiveSubsystem() noexcept;
 
+// Zero-Downtime Live Driver Hot-Swap, 0x7A/0xF4 Inpage Healer & Intel VT-d DMA Firewall (kernel/io/livehotswap.cpp)
+void LiveHotSwapInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

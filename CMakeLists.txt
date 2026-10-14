@@ -37,6 +37,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/po/pofx_whea.cpp
     kernel/io/umdf_msix.cpp
     kernel/ke/zerobsod.cpp
+    kernel/io/livehotswap.cpp
 )
 
 add_library(ntoskrnl_core STATIC
