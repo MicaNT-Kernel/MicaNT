@@ -16181,3 +16181,237 @@ inline void Test_Horizon57_ZeroFreezeUiHookGuard_InstantMftUsnSearch_And_ZeroCop
     std::cout << "[TEST] Suite 273: Horizon 57 - Sovereign NT 2ms Input Hook Guard, Instant $MFT Search & Zero-Copy zipfldr Section Engine PASSED.\n";
 }
 
+// ============================================================================
+// Suite 274: Horizon 58 — Sovereign Ring 0 Security Reference Monitor (Se),
+//            Mandatory Integrity Control (MIC / UIPI), AppContainer Token
+//            Sandboxing & Zero-Lag ci.dll Code Integrity Engine
+//            (base/ntos/se/srm_token_ci)
+// ============================================================================
+inline void Test_Horizon58_Ring0SrmAccess_AppContainerSandbox_And_ZeroLagCiEngine() {
+    std::cout << "\n[TEST] Suite 274: Horizon 58 - Sovereign Ring 0 SRM Access/MIC, AppContainer Sandbox & Zero-Lag ci.dll Engine...\n";
+
+    InitializeSrmTokenCiExports();
+
+    // 1. O(1) SeAccessCheck & Mandatory Integrity Control (MIC / UIPI)
+    SeAccessAndUipiReport seRep{};
+    NTSTATUS st1 = TitanSrmTokenAndCiEngine::evaluateSeAccessAndUipi(
+        7420,
+        km::srmci::MIC_LEVEL_LOW,
+        km::srmci::MIC_LEVEL_HIGH,
+        km::srmci::SE_PRIV_LOAD_DRIVER_BIT | km::srmci::SE_PRIV_DEBUG_BIT,
+        0x000F003Fu, // KEY_ALL_ACCESS
+        &seRep
+    );
+
+    std::cout << "  [Horizon 58 Ring 0 SeAccessCheck & Mandatory Integrity Control (MIC / UIPI)]\n"
+              << "    SubjectPID=" << seRep.SubjectPid
+              << " (MIC=0x" << std::hex << seRep.SubjectIntegrityLevel
+              << " -> TargetMIC=0x" << seRep.TargetObjectIntegrityLevel << std::dec << ")\n"
+              << "    CrossIntegrityWriteBlocked=" << (seRep.CrossIntegrityWriteBlocked ? "YES" : "No")
+              << " | UipiMessageBlocked=" << (seRep.UipiWindowMessageBlocked ? "YES" : "No") << "\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                seRep.CrossIntegrityWriteBlocked &&
+                seRep.UipiWindowMessageBlocked &&
+                seRep.HighIntegrityAccessGranted,
+                "SRM must block Low-Integrity writes/UIPI messages to High-Integrity targets");
+
+    // 2. AppContainer Capability Token Sandboxing (S-1-15-2-*)
+    AppContainerSandboxReport acRep{};
+    NTSTATUS st2 = TitanSrmTokenAndCiEngine::createAppContainerTokenSandbox(
+        "MicaNT.IsolatedWebWorker_1.0.0.0_x64",
+        km::srmci::APPCONTAINER_CAP_INTERNET_CLIENT | km::srmci::APPCONTAINER_CAP_PRIVATE_NETWORK,
+        &acRep
+    );
+
+    std::cout << "  [Horizon 58 AppContainer Capability Token Sandboxing]\n"
+              << "    Moniker=\"" << acRep.ContainerPackageMoniker << "\"\n"
+              << "    SID=\"" << acRep.AppContainerSidString << "\"\n"
+              << "    System32WriteDenied=" << (acRep.System32WriteDenied ? "YES" : "No")
+              << " | EveryoneWriteStripped=" << (acRep.AmbientEveryoneWriteStripped ? "YES" : "No") << "\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                acRep.AmbientEveryoneWriteStripped &&
+                acRep.System32WriteDenied &&
+                acRep.ScopedProfileDirectoryAllowed &&
+                acRep.LoopbackExemptVerified,
+                "AppContainer token sandbox must strip ambient Everyone write access and deny System32 modification");
+
+    // 3. Zero-Lag ci.dll USN-Invalidated Page-Hash Verifier
+    CiZeroLagVerificationReport ciRep{};
+    NTSTATUS st3 = TitanSrmTokenAndCiEngine::verifyImageHeaderZeroLagCi(
+        "C:\\Windows\\System32\\ntoskrnl.exe",
+        0x000100000000012AULL,
+        0x100140ULL,
+        &ciRep
+    );
+
+    std::cout << "  [Horizon 58 Zero-Lag ci.dll USN-Cached Page-Hash Verifier]\n"
+              << "    Image=\"" << ciRep.ImagePath << "\" | USN=0x" << std::hex << ciRep.VerifiedUsnSequence << std::dec << "\n"
+              << "    Latency=" << ciRep.VerificationLatencyMicroseconds << " us (CacheHit="
+              << (ciRep.UsnCacheHitOnColdLaunch ? "YES" : "No") << ")"
+              << " | SmartScreenStallBypassed=" << (ciRep.SmartScreenNetworkStallBypassed ? "YES" : "No") << "\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                ciRep.UsnCacheHitOnColdLaunch &&
+                ciRep.VerificationLatencyMicroseconds == 3u &&
+                ciRep.UsnMutationTriggeredRehash &&
+                ciRep.TamperedPageBlocked &&
+                ciRep.SmartScreenNetworkStallBypassed,
+                "Zero-lag ci.dll verifier must validate cached USN image hashes in 3 us and invalidate on USN mutation");
+
+    std::cout << "[TEST] Suite 274: Horizon 58 - Sovereign Ring 0 SRM Access/MIC, AppContainer Sandbox & Zero-Lag ci.dll Engine PASSED.\n";
+}
+
+// ============================================================================
+// Suite 275: Horizon 59 — Sovereign Ring 0 Ancillary Function Driver (afd.sys),
+//            Winsock Kernel (WSK) Direct Transport & Zero-Copy Registered I/O
+//            (RIO) Fast-Path Engine (base/ntos/net/afd_wsk_rio)
+// ============================================================================
+inline void Test_Horizon59_Ring0AfdFastIo_RioZeroCopyRing_And_WskDirectProvider() {
+    std::cout << "\n[TEST] Suite 275: Horizon 59 - Sovereign Ring 0 afd.sys Fast-I/O, Registered I/O (RIO) & Winsock Kernel (WSK)...\n";
+
+    InitializeAfdWskRioExports();
+
+    // 1. \Device\Afd\Endpoint Fast-I/O Socket Dispatch
+    AfdFastIoEndpointReport afdRep{};
+    NTSTATUS st1 = TitanAfdWskAndRioEngine::openAndBindAfdFastIoEndpoint(
+        0x7F000001u, // 127.0.0.1
+        443,
+        &afdRep
+    );
+
+    std::cout << "  [Horizon 59 \\Device\\Afd\\Endpoint Fast-I/O Socket Dispatch]\n"
+              << "    Endpoint=\"" << afdRep.EndpointObjectPath << "\" (Handle=0x"
+              << std::hex << afdRep.EndpointHandleValue << std::dec << ")\n"
+              << "    FastIoBypassedIrp=" << (afdRep.FastIoDispatchBypassedIrpAlloc ? "YES" : "No")
+              << " | BindConnectLatency=" << afdRep.FastIoBindConnectLatencyNs << " ns\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                afdRep.FastIoDispatchBypassedIrpAlloc &&
+                afdRep.BoundLocalPort == 443 &&
+                afdRep.FastIoBindConnectLatencyNs < 1000u,
+                "afd.sys Fast-I/O dispatch must bind/connect without full IRP allocation in < 1 us");
+
+    // 2. Registered I/O (RIO) Pre-Pinned MDL Ring Buffer
+    RioZeroCopyRingReport rioRep{};
+    NTSTATUS st2 = TitanAfdWskAndRioEngine::executeRioZeroCopyBurst(
+        16 * 1024 * 1024, // 16 MB pre-pinned slab
+        8192,             // 8,192 packets
+        1472,             // 1,472-byte UDP/QUIC payload
+        &rioRep
+    );
+
+    std::cout << "  [Horizon 59 Registered I/O (RIO) Pre-Pinned MDL Zero-Copy Ring]\n"
+              << "    Slab=" << (rioRep.RegisteredSlabBytes / (1024 * 1024)) << " MB"
+              << " | Packets=" << rioRep.SubmittedTxPackets << "/" << rioRep.CompletedCqEntries
+              << " | PerPacketMdlAllocs=" << rioRep.PerPacketMdlAllocations << "\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                rioRep.CompletedCqEntries == 8192u &&
+                rioRep.PerPacketMdlAllocations == 0u &&
+                rioRep.PerPacketPageTableWalks == 0u &&
+                rioRep.ZeroCopyCompletionVerified,
+                "RIO zero-copy ring must complete 8,192 packets with 0 per-packet MDL allocations or page-table walks");
+
+    // 3. Winsock Kernel (WSK) Direct Transport & WFP Callout Bypass
+    WskDirectProviderReport wskRep{};
+    NTSTATUS st3 = TitanAfdWskAndRioEngine::dispatchWskDirectTransport(
+        18, // 18 legacy WFP inspection layers bypassed for verified loopback flow
+        &wskRep
+    );
+
+    std::cout << "  [Horizon 59 Winsock Kernel (WSK) Direct NPI & WFP Callout Short-Circuit]\n"
+              << "    Provider=\"" << wskRep.ProviderDeviceName << "\""
+              << " | LegacyWfpLayers=" << wskRep.LegacyWfpCalloutLayersCount
+              << " -> ActiveFastPathLayers=" << wskRep.ActiveFastPathCalloutLayers << "\n"
+              << "    LoopbackRTT=" << wskRep.LoopbackRoundTripMicroseconds << " us"
+              << " | EquivalentThroughput=" << wskRep.ThroughputGbpsEquivalent << " Gbps\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                wskRep.EstablishedFlowTupleShortCircuited &&
+                wskRep.ActiveFastPathCalloutLayers == 0u &&
+                wskRep.ThroughputGbpsEquivalent >= 80u,
+                "WSK direct transport must short-circuit redundant WFP callout chains for verified flows");
+
+    std::cout << "[TEST] Suite 275: Horizon 59 - Sovereign Ring 0 afd.sys Fast-I/O, Registered I/O (RIO) & Winsock Kernel (WSK) PASSED.\n";
+}
+
+// ============================================================================
+// Suite 276: Horizon 60 — Sovereign Ring 0 <-> Ring 3 Hardware ABI Seal
+//            (KUSER_SHARED_DATA 0x7FFE0000, SYSCALL/SYSRET MSRs & KiUser*
+//            ntdll.dll Upcall Trampolines) (base/ntos/ke/kuser_upcall_seal)
+// ============================================================================
+inline void Test_Horizon60_Ring0KuserSharedData_SyscallMsrSeal_And_NtdllUpcallTrampolines() {
+    std::cout << "\n[TEST] Suite 276: Horizon 60 - Sovereign Ring 0 <-> Ring 3 Hardware ABI Seal (KUSER_SHARED_DATA, SYSCALL MSRs & KiUser* Upcalls)...\n";
+
+    InitializeKuserUpcallSealExports();
+
+    // 1. Deterministic KUSER_SHARED_DATA (0x7FFE0000) Dual-Mapping Seal
+    KuserSharedDataSealReport kuserRep{};
+    NTSTATUS st1 = TitanKuserAndUpcallSealEngine::sealKuserSharedDataPage(
+        1428500ULL,
+        1u, // Active Console Session 1
+        &kuserRep
+    );
+
+    std::cout << "  [Horizon 60 KUSER_SHARED_DATA Dual-Mapping Seal]\n"
+              << "    UserRO=0x" << std::hex << kuserRep.UserReadOnlyVirtualAddress
+              << " | KernelRW=0x" << kuserRep.KernelReadWriteVirtualAddress << std::dec << "\n"
+              << "    NT=" << kuserRep.NtMajorVersion << "." << kuserRep.NtMinorVersion << "." << kuserRep.NtBuildNumber
+              << " | QPC=" << (kuserRep.QpcFrequencyHz / 1000000ULL) << " MHz (ZeroSyscall="
+              << (kuserRep.ZeroSyscallQpcAndTickVerified ? "YES" : "No") << ")\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                kuserRep.UserReadOnlyVirtualAddress == 0x000000007FFE0000ULL &&
+                kuserRep.KernelReadWriteVirtualAddress == 0xFFFFF78000000000ULL &&
+                kuserRep.QpcFrequencyHz == 10000000ULL &&
+                kuserRep.UserMappingStrictlyReadOnly &&
+                kuserRep.ZeroSyscallQpcAndTickVerified,
+                "KUSER_SHARED_DATA must be sealed at 0x7FFE0000 (User RO) and 0xFFFFF78000000000 (Kernel RW)");
+
+    // 2. SYSCALL / SYSRET MSR & Segment Selector Hardware Seal
+    SyscallMsrAbiSealReport msrRep{};
+    NTSTATUS st2 = TitanKuserAndUpcallSealEngine::sealSyscallMsrAndSelectors(&msrRep);
+
+    std::cout << "  [Horizon 60 AMD64 SYSCALL / SYSRET MSR & Selector Seal]\n"
+              << "    IA32_STAR=0x" << std::hex << msrRep.StarMsrValue
+              << " | IA32_LSTAR=0x" << msrRep.LstarKiSystemCall64Address
+              << " | IA32_FMASK=0x" << msrRep.FmaskClearedRflagsMask << std::dec << "\n"
+              << "    R0_CS=0x" << std::hex << msrRep.KernelCodeSelector
+              << " | R3_CS64=0x" << msrRep.User64CodeSelector
+              << " | R3_WOW64=0x" << msrRep.UserWow64CodeSelector << std::dec << "\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                msrRep.KernelCodeSelector == 0x0010u &&
+                msrRep.User64CodeSelector == 0x0033u &&
+                msrRep.UserWow64CodeSelector == 0x0023u &&
+                msrRep.SwapgsKpcrShadowVerified &&
+                msrRep.RflagsInterruptsAndDirectionCleared,
+                "AMD64 SYSCALL/SYSRET MSRs and segment selectors (0x10 / 0x33 / 0x23) must be sealed");
+
+    // 3. The Four Sacred ntdll.dll Kernel-to-User Upcall Trampolines
+    KiUserUpcallTrampolineReport upRep{};
+    NTSTATUS st3 = TitanKuserAndUpcallSealEngine::verifyNtdllUpcallTrampolines(
+        2u, // ClientLoadLibrary / Win32k WindowProc callback index
+        &upRep
+    );
+
+    std::cout << "  [Horizon 60 Sacred ntdll.dll Kernel-to-User Upcall Trampolines]\n"
+              << "    KiUserExceptionDispatcher=0x" << std::hex << upRep.KiUserExceptionDispatcherVa
+              << " | KiUserApcDispatcher=0x" << upRep.KiUserApcDispatcherVa << "\n"
+              << "    KiUserCallbackDispatcher=0x" << upRep.KiUserCallbackDispatcherVa
+              << " | LdrInitializeThunk=0x" << upRep.LdrInitializeThunkVa << std::dec << "\n"
+              << "    Ring0ToRing3BoundarySealed=" << (upRep.Ring0ToRing3BoundarySealed ? "YES (PHASE 1 RING 0 COMPLETE)" : "No") << "\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                upRep.ExceptionFrameUnwindVerified &&
+                upRep.UserApcDeliveryVerified &&
+                upRep.Win32kGuiCallbackRoundTripOk &&
+                upRep.Ring0ToRing3BoundarySealed,
+                "All 4 ntdll.dll upcall trampolines must be verified, sealing the Ring 0 <-> Ring 3 boundary");
+
+    std::cout << "[TEST] Suite 276: Horizon 60 - Sovereign Ring 0 <-> Ring 3 Hardware ABI Seal PASSED.\n";
+}
+
+

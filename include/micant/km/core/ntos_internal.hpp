@@ -96,4 +96,13 @@ void QuotaGovInitializeExecutiveSubsystem() noexcept;
 // Sovereign Zero-Freeze 2ms Input Hook Guard, Instant $MFT Search & Zero-Copy zipfldr Section Engine (kernel/fsrtl/mftzipui.cpp)
 void MftZipUiInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Ring 0 Security Reference Monitor, MIC/UIPI, AppContainer & Zero-Lag ci.dll Engine (kernel/se/srm_ci.cpp)
+void SrmCiInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 0 afd.sys Fast-I/O, Winsock Kernel (WSK) & Registered I/O (RIO) Engine (kernel/io/afd_wsk.cpp)
+void AfdWskInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 0 <-> Ring 3 Hardware ABI Seal (KUSER_SHARED_DATA, SYSCALL MSRs & KiUser* Trampolines) (kernel/ke/kuser_seal.cpp)
+void KuserSealInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

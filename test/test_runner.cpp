@@ -93,6 +93,9 @@
 #include "micant/km/executive/sysinfo_taskmgr.hpp"
 #include "micant/km/executive/quota_svchost_primes.hpp"
 #include "micant/km/fs/mftsearch_uiguard_zipfldr.hpp"
+#include "micant/km/executive/srm_token_ci.hpp"
+#include "micant/km/drivers/net/afd_wsk_rio.hpp"
+#include "micant/km/core/kuser_upcall_seal.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -315,7 +318,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite273")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite276")) {
+        RUN_TEST(Test_Horizon60_Ring0KuserSharedData_SyscallMsrSeal_And_NtdllUpcallTrampolines);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite275") {
+        RUN_TEST(Test_Horizon59_Ring0AfdFastIo_RioZeroCopyRing_And_WskDirectProvider);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite274") {
+        RUN_TEST(Test_Horizon58_Ring0SrmAccess_AppContainerSandbox_And_ZeroLagCiEngine);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite273") {
         RUN_TEST(Test_Horizon57_ZeroFreezeUiHookGuard_InstantMftUsnSearch_And_ZeroCopyZipfldrSection);
         return g_FailedTests;
     }
@@ -1234,6 +1249,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon55_NtQuerySystemInformation_TaskmgrKernelTimes_And_MmcssSmpScheduler);
     RUN_TEST(Test_Horizon56_AntiBloatGdiLeakGovernor_SvchostSpinHealer_And_PrimesDragRace);
     RUN_TEST(Test_Horizon57_ZeroFreezeUiHookGuard_InstantMftUsnSearch_And_ZeroCopyZipfldrSection);
+    RUN_TEST(Test_Horizon58_Ring0SrmAccess_AppContainerSandbox_And_ZeroLagCiEngine);
+    RUN_TEST(Test_Horizon59_Ring0AfdFastIo_RioZeroCopyRing_And_WskDirectProvider);
+    RUN_TEST(Test_Horizon60_Ring0KuserSharedData_SyscallMsrSeal_And_NtdllUpcallTrampolines);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

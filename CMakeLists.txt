@@ -41,6 +41,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ex/sysinfo_taskmgr.cpp
     kernel/ps/quotagov.cpp
     kernel/fsrtl/mftzipui.cpp
+    kernel/se/srm_ci.cpp
+    kernel/io/afd_wsk.cpp
+    kernel/ke/kuser_seal.cpp
 )
 
 add_library(ntoskrnl_core STATIC
