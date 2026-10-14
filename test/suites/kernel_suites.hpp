@@ -16081,3 +16081,103 @@ inline void Test_Horizon56_AntiBloatGdiLeakGovernor_SvchostSpinHealer_And_Primes
 
     std::cout << "[TEST] Suite 272: Horizon 56 - Sovereign NT Anti-Bloat GDI/WS Governor, Runaway svchost Healer & Primes Drag-Race PASSED.\n";
 }
+
+// ============================================================================
+// Suite 273: Horizon 57 — Sovereign NT Zero-Freeze 2ms Input Hook Guard,
+//            Kernel-Native $MFT / $UsnJrnl Instant File Search & Zero-Copy
+//            NtMapViewOfSection zipfldr.dll Archive Bridge
+//            (base/ntos/fsrtl/mftsearch_uiguard_zipfldr)
+// ============================================================================
+inline void Test_Horizon57_ZeroFreezeUiHookGuard_InstantMftUsnSearch_And_ZeroCopyZipfldrSection() {
+    std::cout << "\n[TEST] Suite 273: Horizon 57 - Sovereign NT 2ms Input Hook Guard, Instant $MFT Search & Zero-Copy zipfldr Section Engine...\n";
+
+    InitializeMftZipUiExports();
+
+    // ------------------------------------------------------------------------
+    // 1. Zero-Freeze win32k Input Hook Deadline (2ms Guard) & Shell UNC Proxy
+    // ------------------------------------------------------------------------
+    UiFreezeAndUncGuardReport uiRep{};
+    NTSTATUS st1 = TitanMftSearchUiGuardAndZipfldrEngine::guardInputHooksAndUncShellStall(
+        "OverlayHookHelper.exe",
+        6140,
+        6144,
+        185000, // 185 ms stall in legacy WH_MOUSE_LL hook
+        "\\\\10.240.99.254\\OfflineArchive\\Media",
+        &uiRep
+    );
+
+    std::cout << "  [Horizon 57 Zero-Freeze win32k Input Hook & Non-Blocking Shell/UNC Guard]\n"
+              << "    Process=" << uiRep.HungProcessName << " (PID " << uiRep.HungProcessId << ")\n"
+              << "    WH_MOUSE_LL Stall=" << uiRep.ObservedHookStallUs << " us -> EnforcedDeadline="
+              << uiRep.EnforcedHookDeadlineUs << " us (Bypassed=" << (uiRep.SlowLowLevelHookBypassed ? "YES" : "No") << ")\n"
+              << "    RawMouse=" << uiRep.RawMousePollingRateHz << " Hz (Dropped=" << uiRep.DroppedMouseSamples << ")"
+              << " | GhostProxy=" << uiRep.GhostPromotionLatencyMs << " ms"
+              << " | UncIocpOffload=" << (uiRep.UncProbeOffloadedToIocp ? "YES" : "No") << "\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                uiRep.SlowLowLevelHookBypassed &&
+                uiRep.EnforcedHookDeadlineUs == 2000u &&
+                uiRep.DroppedMouseSamples == 0u &&
+                uiRep.GhostWindowProxyPromoted &&
+                uiRep.GhostPromotionLatencyMs == 16u &&
+                uiRep.UncProbeOffloadedToIocp &&
+                uiRep.ExplorerTaskbarResponsive,
+                "2ms WH_MOUSE_LL guard must bypass stalled hooks with 0 dropped mouse samples and offload dead UNC share probes");
+
+    // ------------------------------------------------------------------------
+    // 2. Kernel-Native $MFT & $UsnJrnl Instant File Search Engine
+    // ------------------------------------------------------------------------
+    InstantMftSearchReport mftRep{};
+    NTSTATUS st2 = TitanMftSearchUiGuardAndZipfldrEngine::executeInstantMftUsnSearch(
+        "zipfldr.dll",
+        &mftRep
+    );
+
+    std::cout << "  [Horizon 57 Kernel-Native $MFT & $UsnJrnl Instant File Search]\n"
+              << "    FSCTL=0x" << std::hex << mftRep.FsctlControlCodeUsed << std::dec
+              << " | IndexedMftRecords=" << mftRep.TotalIndexedMftRecords
+              << " | Query=\"" << mftRep.QuerySubstring << "\"\n"
+              << "    TopMatch=\"" << mftRep.TopMatchFullPath << "\" (Ref=0x"
+              << std::hex << mftRep.TopMatchFileRefNumber << std::dec << ")"
+              << " | Latency=" << mftRep.SearchElapsedMicroseconds << " us"
+              << " | DiskThrash=" << mftRep.BackgroundDiskThrashPercent << "%\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                mftRep.TotalIndexedMftRecords == 1048576u &&
+                mftRep.MatchedRecordCount >= 1u &&
+                std::strcmp(mftRep.TopMatchFullPath, "C:\\Windows\\System32\\zipfldr.dll") == 0 &&
+                mftRep.BackgroundDiskThrashPercent == 0u &&
+                mftRep.BingWebSearchTelemetryDisabled &&
+                mftRep.SubMillisecondLookup,
+                "Instant $MFT / $UsnJrnl search must resolve C:\\Windows\\System32\\zipfldr.dll in < 1ms with 0% disk thrash");
+
+    // ------------------------------------------------------------------------
+    // 3. Zero-Copy NtMapViewOfSection Compressed Folder (zipfldr.dll) VFS Bridge
+    // ------------------------------------------------------------------------
+    ZeroCopyZipfldrReport zipRep{};
+    NTSTATUS st3 = TitanMftSearchUiGuardAndZipfldrEngine::parseZeroCopyZipSection(
+        "C:\\Builds\\MicaNT_Sovereign_SDK.zip",
+        &zipRep
+    );
+
+    std::cout << "  [Horizon 57 Zero-Copy NtMapViewOfSection Compressed Folder (zipfldr.dll) Bridge]\n"
+              << "    Archive=\"" << zipRep.ArchiveVirtualPath << "\" (" << zipRep.ArchiveTotalBytes << " bytes)\n"
+              << "    EOCD=0x" << std::hex << zipRep.EocdSignatureVerified << std::dec
+              << " | Entries=" << zipRep.CentralDirectoryEntryCount
+              << " | Target=\"" << zipRep.ExtractedTargetFileName << "\"\n"
+              << "    CRC32=0x" << std::hex << zipRep.ComputedCrc32 << std::dec
+              << " (Verified=" << (zipRep.Crc32IntegrityVerified ? "YES" : "No") << ")"
+              << " | TempDiskWrites=" << (zipRep.ZeroTempFolderDiskWrites ? "ZERO" : "Yes") << "\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                zipRep.EocdSignatureVerified == 0x06054B50u &&
+                zipRep.CentralDirectoryEntryCount == 4u &&
+                std::strcmp(zipRep.ExtractedTargetFileName, "system32/zipfldr.dll") == 0 &&
+                zipRep.Crc32IntegrityVerified &&
+                zipRep.ComputedCrc32 == zipRep.ExpectedCrc32 &&
+                zipRep.ZeroTempFolderDiskWrites,
+                "Zero-copy zipfldr section parser must verify EOCD 0x06054B50, 4 Central Directory entries, and exact IEEE CRC-32");
+
+    std::cout << "[TEST] Suite 273: Horizon 57 - Sovereign NT 2ms Input Hook Guard, Instant $MFT Search & Zero-Copy zipfldr Section Engine PASSED.\n";
+}
+

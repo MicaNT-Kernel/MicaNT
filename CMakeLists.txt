@@ -40,6 +40,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/livehotswap.cpp
     kernel/ex/sysinfo_taskmgr.cpp
     kernel/ps/quotagov.cpp
+    kernel/fsrtl/mftzipui.cpp
 )
 
 add_library(ntoskrnl_core STATIC

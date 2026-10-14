@@ -93,4 +93,7 @@ void SysInfoTaskmgrInitializeExecutiveSubsystem() noexcept;
 // Sovereign Anti-Bloat Process/GDI Leak Governor, Runaway svchost Healer & Primes Drag-Race Engine (kernel/ps/quotagov.cpp)
 void QuotaGovInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Zero-Freeze 2ms Input Hook Guard, Instant $MFT Search & Zero-Copy zipfldr Section Engine (kernel/fsrtl/mftzipui.cpp)
+void MftZipUiInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
