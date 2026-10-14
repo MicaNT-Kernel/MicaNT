@@ -27,6 +27,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/tm/ktmmgr.cpp
     kernel/verifier/vfmgr.cpp
     kernel/arb/arbmgr.cpp
+    kernel/wmi/wmimgr.cpp
     kernel/ex/exmgr.cpp
     kernel/hal/halinit.cpp
     kernel/pnp/pnpmgr.cpp

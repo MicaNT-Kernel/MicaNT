@@ -295,8 +295,8 @@ int main(int argc, char* argv[]) {
     lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
     std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
 
-    // 12.1 Initialize 19-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc*, Horizon 43 FsRtl*, Horizon 44 Dbgk*, Horizon 45 KTM, Horizon 46 Verifier & Horizon 47 Arbiter
-    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 19 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, ex, hal, pnp, po, init)...\n";
+    // 12.1 Initialize 20-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc*, Horizon 43 FsRtl*, Horizon 44 Dbgk*, Horizon 45 KTM, Horizon 46 Verifier, Horizon 47 Arbiter & Horizon 48 WMI/Vendor .sys
+    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 20 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, wmi, ex, hal, pnp, po, init)...\n";
     sys::internal::HalInitializeExecutiveSubsystem();
     sys::internal::ExInitializeExecutiveSubsystem();
     sys::internal::PnpInitializeExecutiveSubsystem();
@@ -307,6 +307,7 @@ int main(int argc, char* argv[]) {
     sys::internal::KtmInitializeExecutiveSubsystem();
     sys::internal::VfInitializeExecutiveSubsystem();
     sys::internal::ArbInitializeExecutiveSubsystem();
+    sys::internal::WmiInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
@@ -316,6 +317,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Ktm] Initialized Sovereign Kernel Transaction Manager (KTM 2PC/1PC, CLFS Write-Ahead Log, ktmw32.dll Active)\n";
     std::cout << "[MicaNT Boot] [Verifier] Initialized Sovereign Driver Verifier (Special Pool, IRQL/SpinLock, IRP, Deadlock Graph & DMA Active)\n";
     std::cout << "[MicaNT Boot] [Arb] Initialized Sovereign Hardware Resource Arbiter & WDK .sys Loader (RTL_RANGE_LIST, PCI BAR/MSI-X & .inf DriverStore Active)\n";
+    std::cout << "[MicaNT Boot] [Wmi] Initialized Sovereign Kernel WMI/WPP Recorder, Real NVIDIA/Intel .sys IAT Loader & Open-GPU GSP-RM Active\n";
 
     // 13. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";

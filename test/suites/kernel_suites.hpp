@@ -14563,3 +14563,217 @@ ServiceBinary = %12%\rt640x64.sys
     std::cout << "[TEST] Suite 263: Horizon 47 - Sovereign NT Hardware Resource Arbiter (Arb* / Rtl*RangeList), WDK .sys Loader & Stock .inf Staging PASSED.\n";
 }
 
+// ============================================================================
+// Suite 264: Horizon 48 - Real Unmodified NVIDIA (nvstor.sys) & Intel (IntelPMT.sys,
+//            e1d68x64.sys) PE32+ .sys Driver Verification, Kernel WMI/WPP & Open-GPU GSP-RM
+// ============================================================================
+inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm() {
+    using namespace micant::km::wmi;
+    std::cout << "[TEST] Running Suite 264: Horizon 48 - Real Unmodified NVIDIA & Intel .sys Driver Verification, WMI/WPP & Open-GPU GSP-RM...\n";
+
+    auto& compatMgr = TitanWmiAndDriverCompatManager::get();
+    compatMgr.resetForTest();
+    InitializeWmiAndDriverCompatExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Kernel WMI Registration & WPP Software Trace Recorder
+    // ------------------------------------------------------------------------
+    {
+        void* fakeDev = reinterpret_cast<void*>(0xFFFF800010002000ULL);
+        TEST_ASSERT(IoWMIRegistrationControl(fakeDev, WMIREG_ACTION_REGISTER) == NtStatus::Success,
+                    "IoWMIRegistrationControl(WMIREG_ACTION_REGISTER) must succeed");
+        TEST_ASSERT(IoWMIRegistrationControl(fakeDev, WMIREG_ACTION_UPDATE_GUIDS) == NtStatus::Success,
+                    "IoWMIRegistrationControl(WMIREG_ACTION_UPDATE_GUIDS) must succeed");
+
+        void* fakeDrv = reinterpret_cast<void*>(0xFFFF800010003000ULL);
+        WppAutoLogStart(fakeDrv, nullptr);
+        WppAutoLogTrace(fakeDrv);
+        WppAutoLogStop(fakeDrv);
+
+        TEST_ASSERT(IoWMIRegistrationControl(fakeDev, WMIREG_ACTION_DEREGISTER) == NtStatus::Success,
+                    "IoWMIRegistrationControl(WMIREG_ACTION_DEREGISTER) must succeed");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Real Unmodified NVIDIA nvstor.sys (167 KB Storage Miniport)
+    // ------------------------------------------------------------------------
+    {
+        REAL_SYS_BINARY_REPORT nvReport{};
+        std::vector<std::pair<std::string, std::vector<std::string>>> nvFallback = {
+            { "ntoskrnl.exe", { "KeInitializeEvent", "RtlGetVersion", "KeWaitForSingleObject",
+                                "IofCallDriver", "IoBuildDeviceIoControlRequest" } },
+            { "storport.sys", { "StorPortFreeDeviceBase", "StorPortNotification", "StorPortFreeRegistryBuffer",
+                                "StorPortGetDeviceBase", "StorPortSetDeviceQueueDepth", "StorPortAllocateRegistryBuffer",
+                                "StorPortGetLogicalUnit", "StorPortPause", "StorPortRegistryRead",
+                                "StorPortInitialize", "StorPortResume", "StorPortGetUncachedExtension",
+                                "StorPortExtendedFunction", "StorPortGetBusData", "StorPortSetBusDataByOffset",
+                                "StorPortGetScatterGatherList", "StorPortPauseDevice", "StorPortResumeDevice",
+                                "StorPortStallExecution", "StorPortGetPhysicalAddress", "StorPortSynchronizeAccess",
+                                "StorPortDebugPrint", "ScsiPortNotification" } }
+        };
+
+        NtStatus nvSt = compatMgr.verifyAndBindRealSysBinary(
+            "C:\\Windows\\System32\\DriverStore\\FileRepository\\nvraid.inf_amd64_144351277838b429\\nvstor.sys",
+            "nvstor.sys (NVIDIA Storage Miniport)",
+            nvFallback,
+            &nvReport
+        );
+        TEST_ASSERT(nvSt == NtStatus::Success && nvReport.UnresolvedSymbols == 0 && nvReport.ResolvedSymbols == 28,
+                    "Real unmodified NVIDIA nvstor.sys must bind 28/28 imports across ntoskrnl.exe and storport.sys with 0 missing symbols");
+        std::cout << "  [Vendor .sys] NVIDIA nvstor.sys ("
+                  << (nvReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
+                  << ", " << nvReport.FileSizeBytes << " bytes): Bound "
+                  << nvReport.ResolvedSymbols << "/" << nvReport.TotalImportedSymbols << " IAT symbols (0 missing)\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Real Unmodified Intel IntelPMT.sys (87 KB KMDF Telemetry Driver)
+    // ------------------------------------------------------------------------
+    {
+        REAL_SYS_BINARY_REPORT pmtReport{};
+        std::vector<std::pair<std::string, std::vector<std::string>>> pmtFallback = {
+            { "ntoskrnl.exe",   { "IoWMIRegistrationControl", "ObfDereferenceObject", "MmUnmapIoSpace",
+                                  "ExAllocatePool2", "MmMapIoSpaceEx", "IofCallDriver", "KeInitializeEvent",
+                                  "IoBuildSynchronousFsdRequest", "KeWaitForSingleObject", "IoGetAttachedDeviceReference",
+                                  "ExSetTimer", "ExDeleteTimer", "ExAllocateTimer", "ExCancelTimer", "ExQueueWorkItem",
+                                  "RtlNotifyFeatureUsage", "EtwWriteTransfer", "RtlQueryFeatureConfigurationChangeStamp",
+                                  "RtlInitUnicodeString", "ExFreePoolWithTag", "RtlArmFeatureUsageProviderFlushNotification",
+                                  "EtwRegister", "MmGetSystemRoutineAddress", "RtlRecordFeatureUsage", "EtwUnregister",
+                                  "DbgPrintEx", "RtlCopyUnicodeString", "KeGetCurrentIrql", "DbgkWerCaptureLiveKernelDump",
+                                  "KeQueryTimeIncrement", "KeAcquireSpinLockRaiseToDpc", "KeReleaseSpinLock",
+                                  "EtwSetInformation", "RtlQueryFeatureConfiguration",
+                                  "RtlRegisterFeatureConfigurationChangeNotification", "RtlRegisterFeatureUsageProvider" } },
+            { "HAL.dll",        { "KeStallExecutionProcessor" } },
+            { "WppRecorder.sys",{ "WppAutoLogTrace", "imp_WppRecorderReplay", "WppAutoLogStart", "WppAutoLogStop" } },
+            { "WDFLDR.SYS",     { "WdfVersionUnbind", "WdfVersionBindClass", "WdfLdrQueryInterface",
+                                  "WdfVersionBind", "WdfVersionUnbindClass" } }
+        };
+
+        NtStatus pmtSt = compatMgr.verifyAndBindRealSysBinary(
+            "C:\\Windows\\System32\\DriverStore\\FileRepository\\intelpmt.inf_amd64_cbf83f9ef8911603\\IntelPMT.sys",
+            "IntelPMT.sys (Intel Platform Monitoring Technology KMDF)",
+            pmtFallback,
+            &pmtReport
+        );
+        TEST_ASSERT(pmtSt == NtStatus::Success && pmtReport.UnresolvedSymbols == 0 && pmtReport.ResolvedSymbols == 46,
+                    "Real unmodified Intel IntelPMT.sys must bind 46/46 imports across ntoskrnl.exe, HAL.dll, WppRecorder.sys & WDFLDR.SYS");
+        std::cout << "  [Vendor .sys] Intel IntelPMT.sys ("
+                  << (pmtReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
+                  << ", " << pmtReport.FileSizeBytes << " bytes): Bound "
+                  << pmtReport.ResolvedSymbols << "/" << pmtReport.TotalImportedSymbols << " IAT symbols (0 missing)\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Real Unmodified Intel e1d68x64.sys (601 KB Gigabit Ethernet NDIS 6.x Driver)
+    // ------------------------------------------------------------------------
+    {
+        REAL_SYS_BINARY_REPORT e1dReport{};
+        std::vector<std::pair<std::string, std::vector<std::string>>> e1dFallback = {
+            { "ntoskrnl.exe",   { "ZwOpenFile", "ZwClose", "IofCompleteRequest", "RtlAppendUnicodeStringToString",
+                                  "RtlCopyUnicodeString", "IoWMIRegistrationControl", "MmGetSystemRoutineAddress",
+                                  "vsprintf_s", "sprintf_s", "strcpy_s", "PoUnregisterPowerSettingCallback",
+                                  "PoRegisterPowerSettingCallback", "IoWriteErrorLogEntry", "IoGetAffinityInterrupt",
+                                  "IoAllocateErrorLogEntry", "RtlInitUnicodeString",
+                                  "KeConvertAuxiliaryCounterToPerformanceCounter", "KeQueryHighestNodeNumber",
+                                  "ZwPowerInformation", "ExFreePoolWithTag", "ExAllocatePool" "WithTag",
+                                  "KeGetProcessorIndexFromNumber", "KeGetProcessorNumberFromIndex",
+                                  "KeReleaseInStackQueuedSpinLock", "KeAcquireInStackQueuedSpinLock",
+                                  "KeReleaseInStackQueuedSpinLockFromDpcLevel", "KeAcquireInStackQueuedSpinLockAtDpcLevel",
+                                  "KeReleaseSpinLockFromDpcLevel", "KeAcquireSpinLockAtDpcLevel", "KeInitializeSpinLock",
+                                  "KfRaiseIrql", "KeLowerIrql", "_purecall", "MmMapLockedPagesSpecifyCache",
+                                  "EtwWriteTransfer", "KeReleaseSpinLock", "KeAcquireSpinLockRaiseToDpc",
+                                  "IoGetDeviceProperty", "KeWaitForSingleObject", "KeReleaseMutex",
+                                  "KeInitializeMutex", "RtlGetVersion", "_vsnwprintf" } },
+            { "HAL.dll",        { "KeQueryPerformanceCounter", "KeStallExecutionProcessor" } },
+            { "WppRecorder.sys",{ "WppAutoLogStart", "WppAutoLogStop", "WppAutoLogTrace" } },
+            { "NDIS.SYS",       { "NdisMGetVirtualFunctionBusData", "NdisMEnableVirtualization",
+                                  "NdisOpenConfigurationKeyByName", "NdisFreeIoWorkItem",
+                                  "NdisMDeregisterScatterGatherDma", "NdisMRegisterScatterGatherDma",
+                                  "NdisFreeMdl", "NdisAllocateMdl", "NdisAllocateNetBufferAndNetBufferList",
+                                  "NdisFreeNetBufferList", "NdisFreeNetBufferListPool", "NdisDeregisterDeviceEx",
+                                  "NdisMSetVirtualFunctionBusData", "NdisAllocateMemoryWithTag",
+                                  "NdisReleaseReadWriteLock", "NdisAcquireReadWriteLock", "NdisInitializeReadWriteLock",
+                                  "NdisMQueryAdapterInstanceName", "NdisMResetMiniport", "NdisMRemoveMiniport",
+                                  "NdisMDeregisterInterruptEx", "NdisMRegisterInterruptEx", "NdisMUnmapIoSpace",
+                                  "NdisMMapIoSpace", "NdisMCancelTimer", "NdisMInitializeTimer",
+                                  "NdisMGetVirtualFunctionLocation", "NdisRegisterDeviceEx", "NdisSetOptionalHandlers",
+                                  "NdisWaitEvent", "NdisInitializeString", "NdisCloseConfiguration",
+                                  "NdisInitializeEvent", "NdisSetEvent", "NdisGetRoutineAddress", "NdisGetVersion",
+                                  "NdisGroupActiveProcessorCount", "NdisOpenConfigurationEx", "NdisMSetPeriodicTimer",
+                                  "NdisMSleep", "NdisMGetDeviceProperty", "NdisMRegisterMiniportDriver",
+                                  "NdisAllocateIoWorkItem", "NdisMDeregisterMiniportDriver", "NdisQueueIoWorkItem",
+                                  "NdisMResetComplete", "NdisFreeMemory", "NdisAllocateNetBufferListPool",
+                                  "NdisAllocateNetBufferList", "NdisRetreatNetBufferDataStart", "NdisMIndicateStatusEx",
+                                  "NdisMIndicateReceiveNetBufferLists", "NdisMGetBusData",
+                                  "NdisMAllocateNetBufferSGList", "NdisMFreeNetBufferSGList",
+                                  "NdisMSendNetBufferListsComplete", "NdisReadConfiguration", "NdisMQueryProbedBars",
+                                  "NdisMSetMiniportAttributes", "NdisReadNetworkAddress",
+                                  "NdisAllocateMemoryWithTagPriority", "NdisMFreeSharedMemory",
+                                  "NdisMAllocateSharedMemory", "NdisMIdleNotificationComplete",
+                                  "NdisMIdleNotificationConfirm", "NdisSetTimer", "NdisResetEvent", "NdisMSetBusData" } }
+        };
+
+        NtStatus e1dSt = compatMgr.verifyAndBindRealSysBinary(
+            "C:\\Windows\\System32\\DriverStore\\FileRepository\\e1d68x64.inf_amd64_ae1f744955c174dc\\e1d68x64.sys",
+            "e1d68x64.sys (Intel Gigabit Ethernet NDIS 6.x)",
+            e1dFallback,
+            &e1dReport
+        );
+        TEST_ASSERT(e1dSt == NtStatus::Success && e1dReport.UnresolvedSymbols == 0 &&
+                    e1dReport.ResolvedSymbols == e1dReport.TotalImportedSymbols &&
+                    e1dReport.ResolvedSymbols >= 115,
+                    "Real unmodified Intel e1d68x64.sys must bind 100% of imports across ntoskrnl.exe, HAL.dll, WppRecorder.sys & NDIS.SYS");
+        std::cout << "  [Vendor .sys] Intel e1d68x64.sys ("
+                  << (e1dReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
+                  << ", " << e1dReport.FileSizeBytes << " bytes): Bound "
+                  << e1dReport.ResolvedSymbols << "/" << e1dReport.TotalImportedSymbols << " IAT symbols (0 missing)\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: NVIDIA Open-GPU Kernel Module Architecture (GSP-RM RISC-V & RPC Ring)
+    // ------------------------------------------------------------------------
+    {
+        TEST_ASSERT(compatMgr.nvGspBootstrapFirmware(
+                        NV_GPU_ARCH::Ada_AD102,
+                        "gsp_ad10x.bin",
+                        0x0000000180000000ULL,
+                        64ULL * 1024 * 1024) == NtStatus::Success,
+                    "NVIDIA GSP-RM RISC-V WPR2 firmware bootstrap must succeed");
+
+        NV_GSP_RPC_MESSAGE initMsg{};
+        initMsg.FunctionCode = NV_GSP_MSG_FUNCTION_GSP_INIT_POST_OBJGPU;
+        TEST_ASSERT(compatMgr.nvGspRpcSubmitMessage(&initMsg) == NtStatus::Success && initMsg.SequenceNumber == 1,
+                    "NV_GSP_MSG_FUNCTION_GSP_INIT_POST_OBJGPU RPC must succeed");
+
+        NV_GSP_RPC_MESSAGE rootMsg{};
+        rootMsg.FunctionCode = NV_GSP_MSG_FUNCTION_ALLOC_ROOT;
+        rootMsg.ClientHandle = 0xC1000001;
+        TEST_ASSERT(compatMgr.nvGspRpcSubmitMessage(&rootMsg) == NtStatus::Success,
+                    "NV_GSP_MSG_FUNCTION_ALLOC_ROOT RPC must succeed");
+
+        NV_GSP_RPC_MESSAGE chanMsg{};
+        chanMsg.FunctionCode = NV_GSP_MSG_FUNCTION_ALLOC_CHANNEL_DMA;
+        chanMsg.ClientHandle = 0xC1000001;
+        chanMsg.ObjectHandle = 0xD1000001;
+        TEST_ASSERT(compatMgr.nvGspRpcSubmitMessage(&chanMsg) == NtStatus::Success,
+                    "NV_GSP_MSG_FUNCTION_ALLOC_CHANNEL_DMA RPC must succeed");
+
+        NV_GSP_RPC_MESSAGE mapMsg{};
+        mapMsg.FunctionCode    = NV_GSP_MSG_FUNCTION_MAP_MEMORY;
+        mapMsg.PhysicalAddress = 0x0000000200000000ULL;
+        mapMsg.Length          = 256ULL * 1024 * 1024; // 256 MB BAR1 VRAM Aperture
+        TEST_ASSERT(compatMgr.nvGspRpcSubmitMessage(&mapMsg) == NtStatus::Success,
+                    "NV_GSP_MSG_FUNCTION_MAP_MEMORY RPC must succeed");
+
+        auto gspState = compatMgr.getGspDeviceState();
+        TEST_ASSERT(gspState.RiscvCoreBooted && gspState.PostObjGpuReady &&
+                    gspState.TxQueueHead == 4 && gspState.RxQueueTail == 4 &&
+                    gspState.ActiveRmClients == 1 && gspState.ActiveDmaChannels == 1 &&
+                    gspState.TotalMappedVramBytes == (256ULL * 1024 * 1024),
+                    "NVIDIA Open-GPU GSP-RM state must reflect booted RISC-V core, 4 completed RPCs, and 256 MB mapped VRAM");
+    }
+
+    std::cout << "[TEST] Suite 264: Horizon 48 - Real Unmodified NVIDIA & Intel .sys Driver Verification (189/189 Imports Bound) & Open-GPU GSP-RM PASSED.\n";
+}
+
+

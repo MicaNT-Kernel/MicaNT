@@ -66,4 +66,7 @@ void VfInitializeExecutiveSubsystem() noexcept;
 // Hardware Resource Arbiter & WDK .sys Loader Initialization (kernel/arb/arbmgr.cpp)
 void ArbInitializeExecutiveSubsystem() noexcept;
 
+// Kernel WMI, WPP Recorder & Real Vendor .sys Compatibility Initialization (kernel/wmi/wmimgr.cpp)
+void WmiInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
