@@ -91,6 +91,7 @@
 #include "micant/km/core/zero_bsod_guard.hpp"
 #include "micant/km/io/live_hotswap_storheal.hpp"
 #include "micant/km/executive/sysinfo_taskmgr.hpp"
+#include "micant/km/executive/quota_svchost_primes.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -313,7 +314,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite271")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite272")) {
+        RUN_TEST(Test_Horizon56_AntiBloatGdiLeakGovernor_SvchostSpinHealer_And_PrimesDragRace);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite271") {
         RUN_TEST(Test_Horizon55_NtQuerySystemInformation_TaskmgrKernelTimes_And_MmcssSmpScheduler);
         return g_FailedTests;
     }
@@ -1222,6 +1227,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon53_ZeroBsodGuard_DpcWatchdog_PowerIrp_HighIrqlFault_And_SafeListRepair);
     RUN_TEST(Test_Horizon54_LiveDriverHotSwap_InpageStorageHealer_And_VtDIommuDmaFirewall);
     RUN_TEST(Test_Horizon55_NtQuerySystemInformation_TaskmgrKernelTimes_And_MmcssSmpScheduler);
+    RUN_TEST(Test_Horizon56_AntiBloatGdiLeakGovernor_SvchostSpinHealer_And_PrimesDragRace);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

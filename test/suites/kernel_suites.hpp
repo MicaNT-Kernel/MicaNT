@@ -15988,3 +15988,96 @@ inline void Test_Horizon55_NtQuerySystemInformation_TaskmgrKernelTimes_And_Mmcss
 
     std::cout << "[TEST] Suite 271: Horizon 55 - Sovereign NT Kernel Telemetry, Taskmgr Kernel Times & MMCSS SMP Scheduler PASSED.\n";
 }
+
+// ============================================================================
+// Suite 272: Horizon 56 — Sovereign NT Anti-Bloat Process/GDI Leak Governor,
+//            Runaway svchost Service Healer & Native ApiSetSchema / Primes.exe
+//            Drag-Race Engine (base/ntos/ps/quota_svchost_primes)
+// ============================================================================
+inline void Test_Horizon56_AntiBloatGdiLeakGovernor_SvchostSpinHealer_And_PrimesDragRace() {
+    std::cout << "\n[TEST] Suite 272: Horizon 56 - Sovereign NT Anti-Bloat GDI/WS Governor, Runaway svchost Healer & Primes Drag-Race...\n";
+
+    InitializeQuotaSvchostPrimesExports();
+    auto& eng = TitanQuotaSvchostAndPrimesEngine::get();
+    eng.resetForTest();
+
+    // ------------------------------------------------------------------------
+    // 1. Anti-Bloat Working-Set & win32k GDI/USER Leak Governor
+    //    Reclaim the 2,754,500 KB (2.75 GB) bloated XAML Taskmgr memory & GDI leak
+    // ------------------------------------------------------------------------
+    auto bloatRep = eng.reclaimLeakedWorkingSetAndGdiHandles(
+        "Taskmgr_XamlBloated.exe",
+        5224,
+        2754500ULL, // 2,754.5 MB Working Set
+        9850u       // 9,850 leaked HBITMAP / HDC handles
+    );
+
+    std::cout << "  [Horizon 56 Anti-Bloat Working-Set & win32k GDI/USER Leak Governor]\n"
+              << "    Process=" << bloatRep.ProcessName << " (PID " << bloatRep.ProcessId << ")\n"
+              << "    WorkingSet: " << bloatRep.InitialWorkingSetKB << " KB -> " << bloatRep.TrimmedWorkingSetKB
+              << " KB (Reclaimed=" << bloatRep.ReclaimedRamKB << " KB / 2.67 GB)\n"
+              << "    GDI Handles: " << bloatRep.InitialGdiHandleCount << " -> " << bloatRep.FinalActiveGdiHandles
+              << " (Reclaimed=" << bloatRep.ReclaimedOrphanGdiHandles << " orphan handles)\n";
+
+    TEST_ASSERT(bloatRep.TrimmedWorkingSetKB == 18432ULL &&
+                bloatRep.ReclaimedRamKB == (2754500ULL - 18432ULL) &&
+                bloatRep.FinalActiveGdiHandles == 140u &&
+                bloatRep.ReclaimedOrphanGdiHandles == 9710u &&
+                bloatRep.HardWorkingSetQuotaEnforced &&
+                bloatRep.ProcessremainedResponsive,
+                "Anti-bloat governor must reclaim 2.67 GB of leaked Working Set and 9,710 orphaned GDI handles");
+
+    // ------------------------------------------------------------------------
+    // 2. Runaway svchost.exe (iphlpsvc PID 3732) Livelock Spin Healer
+    // ------------------------------------------------------------------------
+    auto svchostRep = eng.healRunawaySvchostServiceSpin(
+        "iphlpsvc",
+        "svchost.exe",
+        3732,
+        291620ULL, // 81 hours of cumulative CPU burn
+        44,        // 44% active CPU spin
+        0          // 0 useful I/O completions
+    );
+
+    std::cout << "  [Horizon 56 Runaway svchost.exe / Background Service CPU Spin Healer]\n"
+              << "    Service=" << svchostRep.ServiceName << " (" << svchostRep.HostExecutable << " PID " << svchostRep.OriginalPid << ")\n"
+              << "    Before=" << svchostRep.CpuLoadPercentBeforeHeal << "% CPU (" << svchostRep.CumulativeCpuSecondsBurned << "s burned)"
+              << " -> HardCap=" << svchostRep.HardCapCpuRatePercent << "%"
+              << " -> MicroRestart=" << svchostRep.MicroRestartLatencyMs << " ms"
+              << " -> After=" << svchostRep.CpuLoadPercentAfterHeal << "% CPU\n";
+
+    TEST_ASSERT(svchostRep.LivelockSpinDetected &&
+                svchostRep.IsolatedIntoDedicatedContainer &&
+                svchostRep.StatePreservingMicroRestartOk &&
+                svchostRep.MicroRestartLatencyMs == 4 &&
+                svchostRep.CpuLoadPercentAfterHeal == 0,
+                "Runaway svchost.exe (iphlpsvc) must be isolated and micro-restarted in 4ms to 0% idle CPU");
+
+    // ------------------------------------------------------------------------
+    // 3. PEB ApiSetSchema v6 Resolver & Real Multi-Core Primes.exe Drag-Race
+    // ------------------------------------------------------------------------
+    auto primesRep = eng.resolveApiSetAndExecutePrimesDragRace(
+        1000000u, // N = 1,000,000 (Dave Plummer's standard Primes drag-race limit)
+        4u,       // 4 SMP worker threads
+        5u        // 5 passes per thread = 20 total passes
+    );
+
+    std::cout << "  [Horizon 56 PEB ApiSetSchema v6 & Real Multi-Core Primes.exe Drag-Race]\n"
+              << "    ApiSet: synch->" << primesRep.SampleResolvedSynchHost
+              << " | crt->" << primesRep.SampleResolvedCrtHost
+              << " | ntuser->" << primesRep.SampleResolvedWin32kHost << "\n"
+              << "    Primes Sieve (N=" << primesRep.SieveLimitN << "): Threads=" << primesRep.WorkerThreadCount
+              << " | Passes=" << primesRep.PassesCompleted
+              << " | VerifiedPrimes=" << primesRep.VerifiedPrimeCount
+              << " | PlummerValid=" << (primesRep.DavePlummerPrimeCountValidated ? "YES" : "No") << "\n";
+
+    TEST_ASSERT(primesRep.SampleResolvedSynchHost == "kernelbase.dll" &&
+                primesRep.SampleResolvedCrtHost == "ucrtbase.dll" &&
+                primesRep.SampleResolvedWin32kHost == "user32.dll" &&
+                primesRep.PassesCompleted == 20u &&
+                primesRep.VerifiedPrimeCount == 78498u &&
+                primesRep.DavePlummerPrimeCountValidated,
+                "Multi-core Primes drag-race must complete 20 passes and verify exactly 78,498 primes <= 1,000,000");
+
+    std::cout << "[TEST] Suite 272: Horizon 56 - Sovereign NT Anti-Bloat GDI/WS Governor, Runaway svchost Healer & Primes Drag-Race PASSED.\n";
+}

@@ -39,6 +39,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ke/zerobsod.cpp
     kernel/io/livehotswap.cpp
     kernel/ex/sysinfo_taskmgr.cpp
+    kernel/ps/quotagov.cpp
 )
 
 add_library(ntoskrnl_core STATIC

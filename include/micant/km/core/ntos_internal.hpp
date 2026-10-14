@@ -90,4 +90,7 @@ void LiveHotSwapInitializeExecutiveSubsystem() noexcept;
 // Sovereign Kernel Telemetry (NtQuerySystemInformation), Taskmgr Kernel Times & MMCSS SMP Scheduler (kernel/ex/sysinfo_taskmgr.cpp)
 void SysInfoTaskmgrInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Anti-Bloat Process/GDI Leak Governor, Runaway svchost Healer & Primes Drag-Race Engine (kernel/ps/quotagov.cpp)
+void QuotaGovInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
