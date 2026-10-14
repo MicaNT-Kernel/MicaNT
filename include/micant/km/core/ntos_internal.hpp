@@ -81,4 +81,7 @@ void PoFxWheaInitializeExecutiveSubsystem() noexcept;
 // UMDF 2.0 Kernel Reflector (Wudfrd.sys), Anti-CrowdStrike SafeChannel & MSI-X Router (kernel/io/umdf_msix.cpp)
 void UmdfMsixInitializeExecutiveSubsystem() noexcept;
 
+// Zero-BSOD Self-Healing Kernel Guard Initialization (kernel/ke/zerobsod.cpp)
+void ZeroBsodInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

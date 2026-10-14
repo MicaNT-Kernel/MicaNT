@@ -88,6 +88,7 @@
 #include "micant/km/io/driver_resilience.hpp"
 #include "micant/km/executive/pofx_whea.hpp"
 #include "micant/km/io/umdf_msix_guard.hpp"
+#include "micant/km/core/zero_bsod_guard.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -310,7 +311,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite268")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite269")) {
+        RUN_TEST(Test_Horizon53_ZeroBsodGuard_DpcWatchdog_PowerIrp_HighIrqlFault_And_SafeListRepair);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite268") {
         RUN_TEST(Test_Horizon52_Umdf2Reflector_SafeChannelCrowdStrikeGuard_And_XeonMsixRouter);
         return g_FailedTests;
     }
@@ -1204,6 +1209,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon50_AntiVistaMeDriverResilience_PnpRank_LastKnownGood_And_Tdr);
     RUN_TEST(Test_Horizon51_RuntimePoFx_LiveHotplugRebalance_And_WheaHardwareErrorEngine);
     RUN_TEST(Test_Horizon52_Umdf2Reflector_SafeChannelCrowdStrikeGuard_And_XeonMsixRouter);
+    RUN_TEST(Test_Horizon53_ZeroBsodGuard_DpcWatchdog_PowerIrp_HighIrqlFault_And_SafeListRepair);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

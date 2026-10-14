@@ -295,8 +295,8 @@ int main(int argc, char* argv[]) {
     lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
     std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
 
-    // 12.1 Initialize 24-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc*, Horizon 43 FsRtl*, Horizon 44 Dbgk*, Horizon 45 KTM, Horizon 46 Verifier, Horizon 47 Arbiter, Horizon 48 WMI/Vendor .sys, Horizon 49 PnP Boot Scheduler, Horizon 50 Driver Resilience, Horizon 51 PoFx/Hot-Plug/WHEA & Horizon 52 UMDF/SafeChannel/MSI-X
-    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 24 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, wmi, pnpboot, pnpresilience, pofx_whea, umdf_msix, ex, hal, pnp, po, init)...\n";
+    // 12.1 Initialize 25-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc*, Horizon 43 FsRtl*, Horizon 44 Dbgk*, Horizon 45 KTM, Horizon 46 Verifier, Horizon 47 Arbiter, Horizon 48 WMI/Vendor .sys, Horizon 49 PnP Boot Scheduler, Horizon 50 Driver Resilience, Horizon 51 PoFx/Hot-Plug/WHEA, Horizon 52 UMDF/SafeChannel/MSI-X & Horizon 53 Zero-BSOD Guard
+    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 25 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, wmi, pnpboot, pnpresilience, pofx_whea, umdf_msix, zerobsod, ex, hal, pnp, po, init)...\n";
     sys::internal::HalInitializeExecutiveSubsystem();
     sys::internal::ExInitializeExecutiveSubsystem();
     sys::internal::PnpInitializeExecutiveSubsystem();
@@ -312,6 +312,7 @@ int main(int argc, char* argv[]) {
     sys::internal::PnpResilienceInitializeExecutiveSubsystem();
     sys::internal::PoFxWheaInitializeExecutiveSubsystem();
     sys::internal::UmdfMsixInitializeExecutiveSubsystem();
+    sys::internal::ZeroBsodInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
@@ -326,6 +327,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Resilience] Initialized Sovereign Anti-Vista/ME Driver Resilience Engine (4-Part Rank 0x00SSFFHH, LastKnownGood Rollback & Zero-BSOD TDR Active)\n";
     std::cout << "[MicaNT Boot] [PoFx/WHEA] Initialized Sovereign Runtime Power Framework (PoFx*), Live PnP Hot-Plug/BAR Rebalance & WHEA Hardware Error Engine Active\n";
     std::cout << "[MicaNT Boot] [UMDF/SafeChannel/MSI-X] Initialized Sovereign UMDF 2.0 Reflector (Wudfrd.sys), Anti-CrowdStrike Channel Guard & Live Xeon MSI-X Router Active\n";
+    std::cout << "[MicaNT Boot] [ZeroBsod] Initialized Sovereign Zero-BSOD Self-Healing Kernel Guard (0x133 DPC, 0x9F Power, 0xD1 High-IRQL & 0xC2/0x139 Pool/List Healer Active)\n";
 
     // 13. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";

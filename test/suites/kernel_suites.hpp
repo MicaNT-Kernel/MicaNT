@@ -15655,6 +15655,121 @@ void Test_Horizon52_Umdf2Reflector_SafeChannelCrowdStrikeGuard_And_XeonMsixRoute
     std::cout << "[TEST] Suite 268: Horizon 52 - Sovereign NT UMDF 2.0 Reflector, SafeChannel Guard & Live Xeon MSI-X Router PASSED.\n";
 }
 
+// ============================================================================
+// Suite 269: Horizon 53 - Sovereign NT Zero-BSOD Self-Healing Kernel Guard
+//            (0x133 DPC, 0x9F Power IRP, 0xD1/0x0A High-IRQL & 0xC2/0x139 Pool/List)
+// ============================================================================
+void Test_Horizon53_ZeroBsodGuard_DpcWatchdog_PowerIrp_HighIrqlFault_And_SafeListRepair() {
+    using namespace micant::km::zerobsod;
+
+    auto& guard = TitanZeroBsodKernelGuard::get();
+    guard.resetForTest();
+
+    // ------------------------------------------------------------------------
+    // 1A. DPC Watchdog Self-Healing (Eliminates 0x133 DPC_WATCHDOG_VIOLATION)
+    // ------------------------------------------------------------------------
+    auto dpcHeal = guard.monitorAndHealRunawayDpc("rt640x64_legacy.sys", 3, 185);
+    std::cout << "  [Horizon 53 DPC Watchdog Self-Healer (Eliminates 0x133 BSOD)]\n"
+              << "    Driver=" << dpcHeal.DriverBinaryName << " (CPU " << dpcHeal.LogicalProcessorId
+              << ", Duration=" << dpcHeal.ObservedDpcDurationMs << " ms)\n"
+              << "    Preempted=" << (dpcHeal.RunawayDpcPreempted ? "Yes" : "No")
+              << " | DemotedToThreadedDPC=" << (dpcHeal.DemotedToPreemptibleThreadedDpc ? "Yes" : "No")
+              << " | RestoredIRQL=" << static_cast<int>(dpcHeal.RestoredIrql)
+              << " | BSOD(0x133)=" << (dpcHeal.BugCheck0x133Triggered ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(dpcHeal.RunawayDpcPreempted &&
+                dpcHeal.DemotedToPreemptibleThreadedDpc &&
+                dpcHeal.RestoredIrql == 0 &&
+                dpcHeal.CapturedLiveDump0x19E &&
+                !dpcHeal.BugCheck0x133Triggered,
+                "Runaway 185ms KDPC must be preempted, demoted to a Threaded DPC, and lower IRQL to 0 with zero 0x133 BSOD");
+
+    // ------------------------------------------------------------------------
+    // 1B. Power IRP Watchdog Self-Healing (Eliminates 0x9F DRIVER_POWER_STATE_FAILURE)
+    // ------------------------------------------------------------------------
+    auto powerHeal = guard.monitorAndHealStalledPowerIrp(
+        "PCI\\VEN_10EC&DEV_8168\\LEGACY_NIC",
+        "rt640x64_legacy.sys",
+        4200
+    );
+    std::cout << "  [Horizon 53 Power IRP Watchdog Self-Healer (Eliminates 0x9F BSOD)]\n"
+              << "    Device=" << powerHeal.DeviceInstancePath << " (Stall=" << powerHeal.ObservedPowerIrpStallMs << " ms)\n"
+              << "    ForceCompletedIRP=" << (powerHeal.StalledPowerIrpForceCompleted ? "Yes" : "No")
+              << " | SlotGatedD3Cold=" << (powerHeal.PcieSlotForceGatedToD3Cold ? "Yes" : "No")
+              << " | BSOD(0x9F)=" << (powerHeal.BugCheck0x9FTriggered ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(powerHeal.StalledPowerIrpForceCompleted &&
+                powerHeal.PcieSlotForceGatedToD3Cold &&
+                powerHeal.DriverMarkedForSoftResetOnWake &&
+                !powerHeal.BugCheck0x9FTriggered,
+                "Stalled 4200ms IRP_MJ_POWER must be force-completed and gated to D3Cold with zero 0x9F BSOD");
+
+    // ------------------------------------------------------------------------
+    // 2. High-IRQL Page-Fault Healer (Eliminates 0xD1 / 0x0A DRIVER_IRQL_NOT_LESS_OR_EQUAL)
+    // ------------------------------------------------------------------------
+    // Case A: Driver touches valid PagedPool buffer at DISPATCH_LEVEL (IRQL = 2)
+    auto irqlShadowHeal = guard.interceptAndHealHighIrqlPageFault(
+        "hdaudbus_legacy.sys",
+        0xFFFFF88004201000ULL,
+        2,
+        HIGH_IRQL_FAULT_TYPE::PagedPoolOrCodeTouchedAtDispatch
+    );
+    // Case B: Driver dereferences NULL pointer at DISPATCH_LEVEL (IRQL = 2)
+    auto irqlNullHeal = guard.interceptAndHealHighIrqlPageFault(
+        "hdaudbus_legacy.sys",
+        0x0000000000000018ULL,
+        2,
+        HIGH_IRQL_FAULT_TYPE::NullOrDanglingPointerDereference
+    );
+
+    std::cout << "  [Horizon 53 High-IRQL Page-Fault Healer (Eliminates 0xD1 / 0x0A BSOD)]\n"
+              << "    Case A (PagedPool @ IRQL 2): ShadowCacheResolved=" << (irqlShadowHeal.ResolvedViaNonPagedShadowCache ? "Yes" : "No")
+              << " | BSOD(0xD1)=" << (irqlShadowHeal.BugCheck0xD1Or0x0ATriggered ? "Yes" : "No") << "\n"
+              << "    Case B (NULL Ptr  @ IRQL 2): KernelSEHUnwound=" << (irqlNullHeal.UnwoundDriverIrpFrameViaKernelSeh ? "Yes" : "No")
+              << " | RestoredIRQL=" << static_cast<int>(irqlNullHeal.IrqlRestoredAfterSehUnwind)
+              << " | BSOD(0xD1)=" << (irqlNullHeal.BugCheck0xD1Or0x0ATriggered ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(irqlShadowHeal.ResolvedViaNonPagedShadowCache &&
+                irqlShadowHeal.ReturnedIrpStatus == NtStatus::Success &&
+                !irqlShadowHeal.BugCheck0xD1Or0x0ATriggered,
+                "PagedPool access at DISPATCH_LEVEL must be satisfied via NonPaged Shadow Cache with zero 0xD1 BSOD");
+
+    TEST_ASSERT(irqlNullHeal.UnwoundDriverIrpFrameViaKernelSeh &&
+                irqlNullHeal.IrqlRestoredAfterSehUnwind == 0 &&
+                irqlNullHeal.ReturnedIrpStatus == static_cast<NtStatus>(0xC0000149u) &&
+                !irqlNullHeal.BugCheck0xD1Or0x0ATriggered,
+                "NULL dereference at DISPATCH_LEVEL must unwind the driver IRP via Kernel SEH and restore IRQL=0 with zero 0xD1 BSOD");
+
+    // ------------------------------------------------------------------------
+    // 3. Safe Pool Double-Free (0xC2) & LIST_ENTRY Corruption (0x139) Healer
+    // ------------------------------------------------------------------------
+    auto poolListHeal = guard.healDoubleFreeAndCorruptListEntry(
+        "usbfilter_3rdparty.sys",
+        0x55534246u, // 'USBF'
+        0xFFFFFA8012340000ULL,
+        8
+    );
+
+    std::cout << "  [Horizon 53 Safe Pool & LIST_ENTRY Healer (Eliminates 0xC2 & 0x139 BSOD)]\n"
+              << "    DoubleFreeAbsorbed=" << (poolListHeal.DoubleFreeDetectedAndAbsorbed ? "Yes" : "No")
+              << " | ListEntryRepaired=" << (poolListHeal.ListEntryFlinkBlinkRepairedInPlace ? "Yes" : "No")
+              << " | RemainingNodes=" << poolListHeal.ValidRemainingListNodes
+              << " | BSOD(0xC2/0x139)=" << ((poolListHeal.BugCheck0xC2Triggered || poolListHeal.BugCheck0x139Triggered) ? "Yes" : "No")
+              << " | TotalPreventedBSODs=" << guard.getTotalPreventedBugChecks() << "\n";
+
+    TEST_ASSERT(poolListHeal.DoubleFreeDetectedAndAbsorbed &&
+                poolListHeal.CorruptListEntryDetected &&
+                poolListHeal.ListEntryFlinkBlinkRepairedInPlace &&
+                poolListHeal.ValidRemainingListNodes == 7 &&
+                !poolListHeal.BugCheck0xC2Triggered &&
+                !poolListHeal.BugCheck0x139Triggered &&
+                guard.getTotalPreventedBugChecks() == 6,
+                "Double-free (0xC2) and corrupt LIST_ENTRY (0x139) must be healed in place with 6 total prevented BSODs");
+
+    std::cout << "[TEST] Suite 269: Horizon 53 - Sovereign NT Zero-BSOD Self-Healing Kernel Guard PASSED.\n";
+}
+
+
 
 
 
