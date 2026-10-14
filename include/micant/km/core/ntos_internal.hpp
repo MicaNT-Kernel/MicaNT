@@ -60,4 +60,7 @@ void PnpInitializeExecutiveSubsystem() noexcept;
 // Power Manager Initialization (kernel/po/pomgr.cpp)
 void PoInitializeExecutiveSubsystem() noexcept;
 
+// Driver Verifier Executive Initialization (kernel/verifier/vfmgr.cpp)
+void VfInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

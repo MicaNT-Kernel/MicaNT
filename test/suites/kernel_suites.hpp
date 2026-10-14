@@ -14073,6 +14073,256 @@ void Test_Horizon45_KernelTransactionManager_TwoPhaseCommit_CLFS_And_Ktmw32() {
     std::cout << "[TEST] Suite 261: Horizon 45 - Sovereign NT Kernel Transaction Manager (KTM / Tm*), 2PC & CLFS PASSED.\n";
 }
 
+// ============================================================================
+// Suite 262: Horizon 46 - Sovereign NT Kernel Driver Verifier (Vf* / Vi*),
+//            Special Pool, IRQL/SpinLock, IRP Verifier, Deadlock & DMA Engine
+// ============================================================================
+inline void Test_Horizon46_DriverVerifier_SpecialPool_IrpVerification_And_FaultInjection() {
+    using namespace micant::km::verifier;
+    std::cout << "[TEST] Running Suite 262: Horizon 46 - Sovereign NT Kernel Driver Verifier (Vf* / Special Pool / IRP / Deadlock / DMA)...\n";
 
+    auto& vf = TitanDriverVerifier::get();
+    vf.resetForTest();
+    InitializeVerifierSubsystemExports();
 
+    // ------------------------------------------------------------------------
+    // Stage 1: Target Driver Registration, Thunk Table & Exports
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "VfAllocatePoolWithTag") != nullptr,
+                    "ntoskrnl.exe must export VfAllocatePoolWithTag");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "MmAllocateSpecialPool") != nullptr,
+                    "ntoskrnl.exe must export MmAllocateSpecialPool");
+        TEST_ASSERT(ldr.getExport("verifier.dll", "VfIoCallDriver") != nullptr,
+                    "verifier.dll must export VfIoCallDriver");
+        TEST_ASSERT(ldr.getExport("verifier.dll", "VfDeadlockAcquireResource") != nullptr,
+                    "verifier.dll must export VfDeadlockAcquireResource");
 
+        TEST_ASSERT(VfRegisterTargetDriver(L"faulty_miniport.sys", 0xFFFFF80020000000ULL, 0x20000) == NtStatus::Success,
+                    "VfRegisterTargetDriver must succeed");
+        TEST_ASSERT(MmAddVerifierThunks(L"faulty_miniport.sys", 24) == NtStatus::Success,
+                    "MmAddVerifierThunks must succeed");
+        TEST_ASSERT(MmIsDriverVerifying(L"faulty_miniport.sys") == TRUE_B,
+                    "MmIsDriverVerifying must return TRUE for registered driver");
+        TEST_ASSERT(MmIsDriverVerifying(L"unverified_audio.sys") == FALSE_B,
+                    "MmIsDriverVerifying must return FALSE for unregistered driver");
+        TEST_ASSERT(MmIsDriverVerifyingByAddress(reinterpret_cast<const void*>(0xFFFFF80020004500ULL)) == TRUE_B,
+                    "MmIsDriverVerifyingByAddress must identify code address inside verified driver section");
+        TEST_ASSERT(VfIsVerificationEnabled(VF_OBJECT_TYPE::VfObjTypeDriver, L"faulty_miniport.sys") == TRUE_B,
+                    "VfIsVerificationEnabled must return TRUE");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Special Pool Guard-Page Allocator, Overrun/Underrun & Leak Check
+    // ------------------------------------------------------------------------
+    {
+        vf.clearViolations();
+        constexpr uint32_t kTag = 0x54534554; // 'TSET'
+
+        // 1. Clean Special Pool allocation and verification
+        auto* cleanBuf = static_cast<uint8_t*>(
+            VfAllocatePoolWithTag(VF_POOL_TYPE::NonPagedPool, 128, kTag, L"faulty_miniport.sys"));
+        TEST_ASSERT(cleanBuf != nullptr, "VfAllocatePoolWithTag must allocate Special Pool block");
+        std::memset(cleanBuf, 0x42, 128);
+        TEST_ASSERT(vf.verifySpecialPoolBlockIntegrity(cleanBuf, L"faulty_miniport.sys"),
+                    "Clean Special Pool block must pass guard zone verification");
+        VfFreePoolWithTag(cleanBuf, kTag, L"faulty_miniport.sys");
+        TEST_ASSERT(cleanBuf[0] == SPECIAL_POOL_FREED_PATTERN,
+                    "Freed Special Pool payload must be poisoned with 0xDD");
+        TEST_ASSERT(vf.getViolations().empty(), "Clean allocate/free cycle must produce zero violations");
+
+        // 2. Double-Free detection (0xD5 DRIVER_PAGE_FAULT_IN_FREED_SPECIAL_POOL)
+        VfFreePoolWithTag(cleanBuf, kTag, L"faulty_miniport.sys");
+        auto violations = vf.getViolations();
+        TEST_ASSERT(violations.size() == 1 &&
+                    violations[0].BugCheckCode == BUGCHECK_DRIVER_PAGE_FAULT_IN_FREED_SPECIAL_POOL,
+                    "Double-free must record BUGCHECK_DRIVER_PAGE_FAULT_IN_FREED_SPECIAL_POOL (0xD5)");
+
+        // 3. Buffer Overrun into trailing guard zone (0x5A) & Pool Tag Mismatch
+        vf.clearViolations();
+        auto* overrunBuf = static_cast<uint8_t*>(
+            MmAllocateSpecialPool(64, kTag, VF_POOL_TYPE::NonPagedPool, L"faulty_miniport.sys"));
+        TEST_ASSERT(overrunBuf != nullptr, "MmAllocateSpecialPool must succeed");
+        overrunBuf[64] = 0xFF; // 1-byte buffer overrun past the 64-byte payload!
+        VfFreePoolWithTag(overrunBuf, 0x42414421 /* wrong tag */, L"faulty_miniport.sys");
+
+        violations = vf.getViolations();
+        TEST_ASSERT(violations.size() == 2,
+                    "Freeing corrupted block with wrong tag must record both tag mismatch and overrun violations");
+        TEST_ASSERT(violations[0].Parameter1 == VF_C4_POOL_TAG_MISMATCH_ON_FREE,
+                    "First violation must be VF_C4_POOL_TAG_MISMATCH_ON_FREE (0x53)");
+        TEST_ASSERT(violations[1].Parameter1 == VF_C4_SPECIAL_POOL_OVERRUN_CORRUPTION,
+                    "Second violation must be VF_C4_SPECIAL_POOL_OVERRUN_CORRUPTION (0x52)");
+
+        // 4. DriverUnload Pool Leak Detection (Subcode 0x62)
+        vf.clearViolations();
+        TEST_ASSERT(VfRegisterTargetDriver(L"leaky_filter.sys", 0xFFFFF80030000000ULL, 0x10000) == NtStatus::Success,
+                    "Register leaky_filter.sys must succeed");
+        void* leakedBlock = VfAllocatePoolWithTag(VF_POOL_TYPE::NonPagedPool, 256, kTag, L"leaky_filter.sys");
+        TEST_ASSERT(leakedBlock != nullptr, "Leaked block allocation must succeed");
+        TEST_ASSERT(VfNotifyDriverUnload(L"leaky_filter.sys") == NtStatus::Unsuccessful,
+                    "Unloading driver with active pool allocations must fail verification");
+        violations = vf.getViolations();
+        TEST_ASSERT(violations.size() == 1 &&
+                    violations[0].Parameter1 == VF_C4_DRIVER_UNLOAD_WITH_POOL_LEAKS,
+                    "DriverUnload leak must trigger BugCheck 0xC4 Subcode 0x62");
+        VfFreePoolWithTag(leakedBlock, kTag, L"leaky_filter.sys");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: IRQL, SpinLock & Pageable Memory Enforcement
+    // ------------------------------------------------------------------------
+    {
+        vf.clearViolations();
+        uint64_t dummySpinLock = 0;
+        KIRQL oldIrql = VfAcquireSpinLock(&dummySpinLock, L"faulty_miniport.sys");
+        TEST_ASSERT(oldIrql == VF_PASSIVE_LEVEL && vf.getCurrentIrql() == VF_DISPATCH_LEVEL,
+                    "VfAcquireSpinLock must raise IRQL from PASSIVE_LEVEL to DISPATCH_LEVEL");
+
+        // Attempting to allocate PagedPool at DISPATCH_LEVEL must be caught!
+        void* badPaged = VfAllocatePoolWithTag(VF_POOL_TYPE::PagedPool, 512, 0x50414745, L"faulty_miniport.sys");
+        TEST_ASSERT(badPaged == nullptr, "PagedPool allocation at DISPATCH_LEVEL must be blocked");
+
+        // Attempting to touch pageable code/data at DISPATCH_LEVEL must be caught!
+        TEST_ASSERT(VfCheckPageableAccess(reinterpret_cast<const void*>(0xFFFFF80020008000ULL), L"faulty_miniport.sys") == FALSE_B,
+                    "VfCheckPageableAccess at DISPATCH_LEVEL must return FALSE");
+
+        // Releasing SpinLock with mismatched IRQL (APC_LEVEL instead of PASSIVE_LEVEL) must be caught!
+        VfReleaseSpinLock(&dummySpinLock, VF_APC_LEVEL, L"faulty_miniport.sys");
+        VfLowerIrql(VF_PASSIVE_LEVEL, L"faulty_miniport.sys");
+
+        auto violations = vf.getViolations();
+        TEST_ASSERT(violations.size() == 3, "All 3 IRQL/SpinLock violations must be recorded");
+        TEST_ASSERT(violations[0].Parameter1 == VF_C4_ALLOCATE_PAGED_POOL_AT_DISPATCH,
+                    "Violation 0 must be VF_C4_ALLOCATE_PAGED_POOL_AT_DISPATCH");
+        TEST_ASSERT(violations[1].Parameter1 == VF_C4_PAGEABLE_MEMORY_AT_HIGH_IRQL,
+                    "Violation 1 must be VF_C4_PAGEABLE_MEMORY_AT_HIGH_IRQL");
+        TEST_ASSERT(violations[2].Parameter1 == VF_C4_SPINLOCK_IRQL_MISMATCH,
+                    "Violation 2 must be VF_C4_SPINLOCK_IRQL_MISMATCH");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: I/O Manager IRP Verification (0xC9 DRIVER_VERIFIER_IOMANAGER_VIOLATION)
+    // ------------------------------------------------------------------------
+    {
+        vf.clearViolations();
+        PVF_IRP irp = VfIoAllocateIrp(2, L"faulty_miniport.sys");
+        TEST_ASSERT(irp != nullptr && irp->IoStatus == NtStatus::NotSupported,
+                    "VfIoAllocateIrp must initialize IoStatus to STATUS_NOT_SUPPORTED (0xC00000BB)");
+
+        // 1. Dispatch routine returns STATUS_PENDING without calling VfIoMarkIrpPending
+        NtStatus dispatchRes = VfIoCallDriver(
+            nullptr,
+            irp,
+            [](void*, PVF_IRP) -> NtStatus {
+                return NtStatus::Pending; // Bug: forgot VfIoMarkIrpPending!
+            },
+            L"faulty_miniport.sys"
+        );
+        TEST_ASSERT(dispatchRes == NtStatus::Pending, "Dispatch returned STATUS_PENDING");
+        TEST_ASSERT(vf.getViolations().size() == 1 &&
+                    vf.getViolations()[0].BugCheckCode == BUGCHECK_DRIVER_VERIFIER_IOMANAGER_VIOLATION &&
+                    vf.getViolations()[0].Parameter1 == VF_C9_IRP_PENDING_RETURNED_NOT_MARKED,
+                    "Returning STATUS_PENDING without IoMarkIrpPending must trigger 0xC9 Subcode 0x204");
+
+        // 2. Properly mark pending, then test completing with STATUS_PENDING and Double-Completion
+        vf.clearViolations();
+        VfIoMarkIrpPending(irp);
+        irp->IoStatus = NtStatus::Pending;
+        VfIoCompleteRequest(irp, L"faulty_miniport.sys");
+        TEST_ASSERT(vf.getViolations().size() == 1 &&
+                    vf.getViolations()[0].Parameter1 == VF_C9_IRP_COMPLETED_WITH_PENDING_STATUS,
+                    "Completing IRP with STATUS_PENDING must trigger 0xC9 Subcode 0x202");
+
+        // Second completion of the same IRP -> Double-Completion violation!
+        VfIoCompleteRequest(irp, L"faulty_miniport.sys");
+        TEST_ASSERT(vf.getViolations().size() == 2 &&
+                    vf.getViolations()[1].Parameter1 == VF_C9_IRP_DOUBLE_COMPLETION,
+                    "Second VfIoCompleteRequest on same IRP must trigger 0xC9 Subcode 0x201");
+
+        VfIoFreeIrp(irp, L"faulty_miniport.sys");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Lock-Order Graph Deadlock Detection (Transitive Cycle A -> B -> C -> A)
+    // ------------------------------------------------------------------------
+    {
+        vf.clearViolations();
+        uint64_t lockA = 1, lockB = 2, lockC = 3;
+        VfDeadlockInitializeResource(&lockA, VF_DEADLOCK_RESOURCE_TYPE::SpinLock, L"faulty_miniport.sys");
+        VfDeadlockInitializeResource(&lockB, VF_DEADLOCK_RESOURCE_TYPE::SpinLock, L"faulty_miniport.sys");
+        VfDeadlockInitializeResource(&lockC, VF_DEADLOCK_RESOURCE_TYPE::SpinLock, L"faulty_miniport.sys");
+
+        // Thread 100 establishes valid lock order: LockA -> LockB -> LockC
+        TEST_ASSERT(VfDeadlockAcquireResource(&lockA, 100, L"faulty_miniport.sys") == TRUE_B, "Acquire LockA must succeed");
+        TEST_ASSERT(VfDeadlockAcquireResource(&lockB, 100, L"faulty_miniport.sys") == TRUE_B, "Acquire LockB after LockA must succeed");
+        TEST_ASSERT(VfDeadlockAcquireResource(&lockC, 100, L"faulty_miniport.sys") == TRUE_B, "Acquire LockC after LockB must succeed");
+        VfDeadlockReleaseResource(&lockC, 100);
+        VfDeadlockReleaseResource(&lockB, 100);
+        VfDeadlockReleaseResource(&lockA, 100);
+        TEST_ASSERT(vf.getViolations().empty(), "Consistent lock order A -> B -> C must produce zero violations");
+
+        // Thread 200 acquires LockC first, then attempts to acquire LockA -> Cycle A -> B -> C -> A!
+        TEST_ASSERT(VfDeadlockAcquireResource(&lockC, 200, L"faulty_miniport.sys") == TRUE_B, "Thread 200 acquire LockC must succeed");
+        TEST_ASSERT(VfDeadlockAcquireResource(&lockA, 200, L"faulty_miniport.sys") == FALSE_B,
+                    "Acquiring LockA while holding LockC must detect transitive AB-BA cycle (A -> B -> C -> A)");
+        VfDeadlockReleaseResource(&lockC, 200);
+
+        TEST_ASSERT(vf.getViolations().size() == 1 &&
+                    vf.getViolations()[0].Parameter1 == VF_C4_DEADLOCK_LOCK_ORDER_CYCLE,
+                    "Deadlock detector must record VF_C4_DEADLOCK_LOCK_ORDER_CYCLE (0x1000)");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 6: DMA Adapter Verification, Fault Injection & SystemVerifierInformation
+    // ------------------------------------------------------------------------
+    {
+        vf.clearViolations();
+        PVF_DMA_ADAPTER dma = VfGetDmaAdapter(8, L"faulty_miniport.sys");
+        TEST_ASSERT(dma != nullptr, "VfGetDmaAdapter must allocate verified DMA adapter");
+
+        uint64_t logicalAddr = 0;
+        void* commonBuf = VfAllocateCommonBuffer(dma, 4096, &logicalAddr);
+        TEST_ASSERT(commonBuf != nullptr && logicalAddr != 0, "VfAllocateCommonBuffer must succeed");
+
+        TEST_ASSERT(VfMapTransfer(dma, 6, L"faulty_miniport.sys") == NtStatus::Success,
+                    "Mapping 6 of 8 DMA map registers must succeed");
+        TEST_ASSERT(VfMapTransfer(dma, 4, L"faulty_miniport.sys") == NtStatus::InsufficientResources,
+                    "Mapping 4 more registers (10 > 8 max) must trigger DMA overrun violation");
+        TEST_ASSERT(vf.getViolations().size() == 1 &&
+                    vf.getViolations()[0].BugCheckCode == BUGCHECK_DRIVER_VERIFIER_DMA_VIOLATION &&
+                    vf.getViolations()[0].Parameter1 == VF_E6_DMA_MAP_REGISTER_OVERRUN,
+                    "DMA map register overrun must record 0xE6 Subcode 0x1A");
+
+        // Flush all 6 map registers and free common buffer cleanly before PutDmaAdapter
+        TEST_ASSERT(VfFlushAdapterBuffers(dma, 6) == NtStatus::Success, "VfFlushAdapterBuffers must succeed");
+        VfFreeCommonBuffer(dma, 4096, commonBuf, L"faulty_miniport.sys");
+        TEST_ASSERT(VfPutDmaAdapter(dma, L"faulty_miniport.sys") == NtStatus::Success,
+                    "VfPutDmaAdapter after flushing registers and freeing common buffers must succeed cleanly");
+
+        // Deterministic Fault Injection test (fail every 2nd allocation)
+        vf.setVerifierFlags(DRIVER_VERIFIER_STANDARD_FLAGS | DRIVER_VERIFIER_INJECT_ALLOCATION_FAILURES);
+        VfSetFaultInjectionPolicy(TRUE_B, 2);
+        void* p1 = VfAllocatePoolWithTag(VF_POOL_TYPE::NonPagedPool, 64, 0x46494E4A, L"faulty_miniport.sys");
+        void* p2 = VfAllocatePoolWithTag(VF_POOL_TYPE::NonPagedPool, 64, 0x46494E4A, L"faulty_miniport.sys");
+        TEST_ASSERT(p1 != nullptr && p2 == nullptr,
+                    "Deterministic fault injection (every 2nd allocation) must allow 1st and fail 2nd");
+        VfSetFaultInjectionPolicy(FALSE_B, 1);
+        VfFreePoolWithTag(p1, 0x46494E4A, L"faulty_miniport.sys");
+
+        // Query SystemVerifierInformation (0x33)
+        SYSTEM_VERIFIER_INFORMATION sysInfo{};
+        TEST_ASSERT(VfQuerySystemVerifierInformation(&sysInfo) == NtStatus::Success,
+                    "VfQuerySystemVerifierInformation must succeed");
+        TEST_ASSERT(sysInfo.NumberOfTrackedDrivers >= 2 &&
+                    sysInfo.SpecialPoolAllocations >= 4 &&
+                    sysInfo.AllocatedIrps >= 1 &&
+                    sysInfo.CompletedIrps >= 1 &&
+                    sysInfo.FaultsInjected >= 1 &&
+                    sysInfo.DeadlockNodesTracked == 3,
+                    "SYSTEM_VERIFIER_INFORMATION telemetry counters must reflect all verified operations");
+    }
+
+    std::cout << "[TEST] Suite 262: Horizon 46 - Sovereign NT Kernel Driver Verifier (Vf* / Special Pool / IRP / Deadlock / DMA) PASSED.\n";
+}
