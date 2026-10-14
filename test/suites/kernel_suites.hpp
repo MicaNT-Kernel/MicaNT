@@ -15518,6 +15518,144 @@ void Test_Horizon51_RuntimePoFx_LiveHotplugRebalance_And_WheaHardwareErrorEngine
     std::cout << "[TEST] Suite 267: Horizon 51 - Sovereign NT Runtime Power (PoFx*), Live PnP Hot-Plug & WHEA Hardware Error Engine PASSED.\n";
 }
 
+// ============================================================================
+// Suite 268: Horizon 52 - Sovereign NT UMDF 2.0 Reflector (Wudfrd.sys),
+//            Anti-CrowdStrike SafeChannel Guard & Live Xeon MSI-X Router
+// ============================================================================
+void Test_Horizon52_Umdf2Reflector_SafeChannelCrowdStrikeGuard_And_XeonMsixRouter() {
+    using namespace micant::km::umdf_msix;
+
+    auto& mgr = TitanUmdfSafeChannelMsixManager::get();
+    mgr.resetForTest();
+
+    // ------------------------------------------------------------------------
+    // 1. User-Mode Driver Framework 2.0 (UMDF 2.0 — Wudfrd.sys & WUDFHost.exe)
+    //    Verifies Ring 3 driver crash isolation and sub-10ms WUDFHost respawn
+    // ------------------------------------------------------------------------
+    const std::string sensorDevicePath = "USB\\VID_045E&PID_0920\\BIOMETRIC_SENSOR_UMDF2";
+    NtStatus regSt = mgr.registerUmdf2DeviceStack(sensorDevicePath, " WinBioSensorUmdf2.dll", 4820);
+    TEST_ASSERT(regSt == NtStatus::Success,
+                "registerUmdf2DeviceStack must bind Wudfrd.sys reflector to initial WUDFHost.exe PID 4820");
+
+    // Normal reflected IOCTL #1
+    UMDF_REFLECTOR_DEVICE_STACK snap1{};
+    NtStatus ioSt1 = mgr.dispatchReflectedIrpToUmdfHost(sensorDevicePath, 0x00440004, 512, false, &snap1);
+    TEST_ASSERT(ioSt1 == NtStatus::Success &&
+                snap1.TotalReflectedIrps == 1 &&
+                snap1.ActiveWudfHostPid == 4820 &&
+                snap1.TotalRing3FaultsCaught == 0 &&
+                !snap1.Ring0MemoryTouchedOnCrash &&
+                !snap1.SystemBsodTriggered,
+                "Normal UMDF 2.0 reflected IOCTL must complete in WUDFHost.exe PID 4820 with zero faults");
+
+    // Reflected IOCTL #2: Third-party UMDF driver dereferences NULL pointer (0xC0000005) in Ring 3
+    UMDF_REFLECTOR_DEVICE_STACK snap2{};
+    NtStatus ioSt2 = mgr.dispatchReflectedIrpToUmdfHost(sensorDevicePath, 0x00440008, 1024, true, &snap2);
+    std::cout << "  [Horizon 52 UMDF 2.0 Kernel Reflector (Wudfrd.sys / WUDFHost.exe Sandbox)]\n"
+              << "    Device=" << snap2.DeviceInstancePath << " | Reflector=" << snap2.ReflectorDriverName << "\n"
+              << "    Ring 3 Faults Caught=" << snap2.TotalRing3FaultsCaught
+              << " | Respawned Host PID=" << snap2.ActiveWudfHostPid
+              << " | Respawn Latency=" << snap2.LastRespawnLatencyMs << " ms"
+              << " | Ring 0 Touched=" << (snap2.Ring0MemoryTouchedOnCrash ? "Yes" : "No")
+              << " | BSOD=" << (snap2.SystemBsodTriggered ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(ioSt2 == NtStatus::Success &&
+                snap2.TotalRing3FaultsCaught == 1 &&
+                snap2.TotalHostRespawns == 1 &&
+                snap2.ActiveWudfHostPid == 4920 &&
+                snap2.LastRespawnLatencyMs <= 10 &&
+                !snap2.Ring0MemoryTouchedOnCrash &&
+                !snap2.SystemBsodTriggered &&
+                snap2.HostStatus == UMDF_HOST_STATUS::RespawnedAfterRing3Crash,
+                "Wudfrd.sys must catch Ring 3 0xC0000005 in WUDFHost.exe, respawn a fresh host (PID 4920) in 7ms, and replay the IRP with zero BSOD");
+
+    // ------------------------------------------------------------------------
+    // 2. Anti-CrowdStrike Kernel Channel & Dynamic Definition Guard (SafeChannel*)
+    //    Catches the exact Channel 291 (21 fields vs 20 parser array) mismatch
+    // ------------------------------------------------------------------------
+    mgr.registerKnownGoodChannelFile(
+        "csagent",
+        291,
+        "C-00000291-00000000-00000031.sys",
+        31,
+        20 // Parser array supports at most 20 template fields
+    );
+
+    // Push malformed Channel 291 update v32 containing 21 fields and an invalid wildcard pointer offset
+    auto csReport = mgr.validateAndLoadChannelUpdate(
+        "csagent",
+        291,
+        "C-00000291-00000000-00000032.sys",
+        32,
+        21,   // 21 fields -> overflows 20-element parser array!
+        true  // Contains null/out-of-bounds wildcard pointer offset
+    );
+
+    std::cout << "  [Horizon 52 Anti-CrowdStrike SafeChannel* Pre-Parse Guard]\n"
+              << "    Driver=" << csReport.DriverServiceName << " (Channel " << csReport.ChannelNumber << ")\n"
+              << "    Quarantined Bad Update=" << csReport.CandidateFileName
+              << " (Fields=" << csReport.CandidateActualFields << " > Max=" << csReport.ExpectedMaxFields << ")\n"
+              << "    Active Channel After Check=" << csReport.ActiveChannelFileAfterCheck
+              << " | DriverRunning=" << (csReport.DriverRemainedRunningHealthy ? "Yes" : "No")
+              << " | BootLoopPrevented=" << (csReport.SystemBootLoopPrevented ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(csReport.SchemaMismatchDetected &&
+                csReport.NullPointerWildcardDetected &&
+                csReport.CorruptedUpdateQuarantined &&
+                csReport.RolledBackToKnownGoodChannel &&
+                csReport.ActiveChannelFileAfterCheck == "C-00000291-00000000-00000031.sys" &&
+                csReport.DriverRemainedRunningHealthy &&
+                csReport.SystemBootLoopPrevented,
+                "SafeChannel* must block & quarantine the 21-field Channel 291 update and keep csagent running on v31 LKG without a boot loop");
+
+    // Verify a valid 20-field Channel 291 update v33 loads cleanly
+    auto csValidReport = mgr.validateAndLoadChannelUpdate(
+        "csagent",
+        291,
+        "C-00000291-00000000-00000033.sys",
+        33,
+        20,
+        false
+    );
+    TEST_ASSERT(!csValidReport.CorruptedUpdateQuarantined &&
+                csValidReport.ActiveChannelFileAfterCheck == "C-00000291-00000000-00000033.sys",
+                "Valid 20-field Channel 291 update v33 must pass SafeChannel* pre-parse verification and become active");
+
+    // ------------------------------------------------------------------------
+    // 3. Live Hardware MSI-X Multi-Core Interrupt Affinity Router
+    //    Distributes 12 MSI-X vectors across the live Intel Xeon E-2236 cores
+    // ------------------------------------------------------------------------
+    auto msixReport = mgr.allocateAndRouteMsixVectors(
+        "PCI\\VEN_8086&DEV_15BB&SUBSYS_089C1028&REV_10",
+        "e1d68x64.sys",
+        12
+    );
+
+    std::cout << "  [Horizon 52 Live Hardware MSI-X Multi-Core Interrupt Affinity Router]\n"
+              << "    Device=" << msixReport.DeviceInstancePath << " (" << msixReport.DriverBinaryName << ")\n"
+              << "    Live Host Logical CPUs=" << msixReport.LiveHostLogicalProcessorCount
+              << " | MSI-X Vectors=" << msixReport.AllocatedVectorCount
+              << " | Unique Cores Steered=" << msixReport.UniqueCoresUtilized
+              << " | ZeroCPU0Bottleneck=" << (msixReport.ZeroCpu0Bottleneck ? "Yes" : "No") << "\n"
+              << "    Vector[0] -> CPU " << msixReport.MsixTable[0].TargetLogicalProcessor
+              << " (Addr=0x" << std::hex << msixReport.MsixTable[0].MessageAddressLow
+              << ", Data=0x" << msixReport.MsixTable[0].MessageData << ")\n"
+              << "    Vector[11]-> CPU " << std::dec << msixReport.MsixTable[11].TargetLogicalProcessor
+              << " (Addr=0x" << std::hex << msixReport.MsixTable[11].MessageAddressLow
+              << ", Data=0x" << msixReport.MsixTable[11].MessageData << std::dec << ")\n";
+
+    TEST_ASSERT(msixReport.LiveHostLogicalProcessorCount >= 2 &&
+                msixReport.AllocatedVectorCount == 12 &&
+                msixReport.UniqueCoresUtilized == std::min(12u, msixReport.LiveHostLogicalProcessorCount) &&
+                msixReport.ZeroCpu0Bottleneck &&
+                msixReport.MsixTable[0].MessageAddressLow == 0xFEE00000u &&
+                !msixReport.MsixTable[0].VectorMasked,
+                "MSI-X Affinity Router must program 0xFEE00000 APIC MSI vectors across all live Xeon logical processors");
+
+    std::cout << "[TEST] Suite 268: Horizon 52 - Sovereign NT UMDF 2.0 Reflector, SafeChannel Guard & Live Xeon MSI-X Router PASSED.\n";
+}
+
+
 
 
 

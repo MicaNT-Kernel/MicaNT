@@ -35,6 +35,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/pnp/pnpmgr.cpp
     kernel/po/pomgr.cpp
     kernel/po/pofx_whea.cpp
+    kernel/io/umdf_msix.cpp
 )
 
 add_library(ntoskrnl_core STATIC

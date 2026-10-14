@@ -78,4 +78,7 @@ void PnpResilienceInitializeExecutiveSubsystem() noexcept;
 // Runtime Power Management (PoFx*), Live PnP Hot-Plug & WHEA Initialization (kernel/po/pofx_whea.cpp)
 void PoFxWheaInitializeExecutiveSubsystem() noexcept;
 
+// UMDF 2.0 Kernel Reflector (Wudfrd.sys), Anti-CrowdStrike SafeChannel & MSI-X Router (kernel/io/umdf_msix.cpp)
+void UmdfMsixInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
