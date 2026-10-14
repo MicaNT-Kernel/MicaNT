@@ -15146,4 +15146,208 @@ inline void Test_Horizon49_BootDriverScheduler_ServiceGroupOrder_StartOverride_A
     std::cout << "[TEST] Suite 265: Horizon 49 - Sovereign NT Boot-Time Driver Scheduler & Live Hardware Bus Scanner PASSED.\n";
 }
 
+// ============================================================================
+// Suite 266: Horizon 50 - Sovereign NT Anti-Vista/ME Driver Resilience Engine
+// ============================================================================
+void Test_Horizon50_AntiVistaMeDriverResilience_PnpRank_LastKnownGood_And_Tdr() {
+    using namespace micant::km::resilience;
+
+    auto& engine = TitanDriverResilienceManager::get();
+    engine.resetForTest();
+
+    // ------------------------------------------------------------------------
+    // 1. 4-Part NT PnP Driver Rank Scorer (0x00SSFFHH)
+    //    Eliminates the Windows ME wrong-driver / generic-INF collision debacle
+    // ------------------------------------------------------------------------
+    PNP_DEVICE_ID_LIST i219Device{};
+    i219Device.HardwareIds = {
+        "PCI\\VEN_8086&DEV_15BB&SUBSYS_089C1028&REV_10", // Index 0: 4-part + Rev exact
+        "PCI\\VEN_8086&DEV_15BB&SUBSYS_089C1028",        // Index 1: 4-part Subsys
+        "PCI\\VEN_8086&DEV_15BB&CC_020000",              // Index 2: 2-part + Class
+        "PCI\\VEN_8086&DEV_15BB"                         // Index 3: 2-part Vendor+Device
+    };
+    i219Device.CompatibleIds = {
+        "PCI\\VEN_8086&CC_020000",                       // Index 0: Vendor + Class
+        "PCI\\CC_020000"                                 // Index 1: Generic PCI Ethernet Class
+    };
+
+    std::vector<INF_DRIVER_CANDIDATE> candidates = {
+        // Candidate A: Unsigned generic class driver (Windows ME style loose match)
+        {
+            "oem_winme_generic.inf",
+            "ne2000_compat.sys",
+            DRIVER_SIGNATURE_TIER::UnsignedOrUnverified,
+            0xFF,
+            20000601,
+            0x0004000000000000ULL, // 4.0.0.0
+            {},
+            {"PCI\\CC_020000"}
+        },
+        // Candidate B: Authenticode-signed generic Intel Ethernet driver
+        {
+            "net_intel_generic.inf",
+            "e1d_generic.sys",
+            DRIVER_SIGNATURE_TIER::VendorAuthenticode,
+            0x80,
+            20211115,
+            ((uint64_t)12 << 48) | ((uint64_t)18 << 32) | ((uint64_t)0 << 16) | 10,
+            {"PCI\\VEN_8086&DEV_15BB"},
+            {"PCI\\VEN_8086&CC_020000"}
+        },
+        // Candidate C: Older WHQL-signed Dell OEM 4-part Subsys match
+        {
+            "oem14_e1d_2022.inf",
+            "e1d68x64_2022.sys",
+            DRIVER_SIGNATURE_TIER::WhqlPremiumSigned,
+            0x01,
+            20220518,
+            ((uint64_t)12 << 48) | ((uint64_t)19 << 32) | ((uint64_t)1 << 16) | 37,
+            {"PCI\\VEN_8086&DEV_15BB&SUBSYS_089C1028"},
+            {}
+        },
+        // Candidate D: Latest WHQL-signed Exact 4-part + Revision match (e1d68x64.sys)
+        {
+            "oem28.inf",
+            "e1d68x64.sys",
+            DRIVER_SIGNATURE_TIER::WhqlPremiumSigned,
+            0x01,
+            20240815,
+            ((uint64_t)12 << 48) | ((uint64_t)19 << 32) | ((uint64_t)2 << 16) | 56,
+            {"PCI\\VEN_8086&DEV_15BB&SUBSYS_089C1028&REV_10"},
+            {}
+        }
+    };
+
+    auto ranked = engine.rankAndSortDriverCandidates(i219Device, candidates);
+    TEST_ASSERT(ranked.size() == 4, "All 4 driver candidates must be evaluated by the PnP Rank Scorer");
+
+    std::cout << "  [Horizon 50 PnP Driver Rank Scorer (0x00SSFFHH) for Intel(R) Ethernet Connection (7) I219-LM]\n";
+    for (size_t i = 0; i < ranked.size(); ++i) {
+        const auto& r = ranked[i];
+        std::cout << "    #" << (i + 1) << " Rank=0x" << std::hex << r.RankValue << std::dec
+                  << " | Package=" << r.PackageName
+                  << " | Binary=" << r.SysBinaryName
+                  << " | Matched=" << r.MatchedIdString
+                  << " | Winner=" << (i == 0 ? "YES" : "No") << "\n";
+    }
+
+    // Winner must be Candidate D (oem28.inf / e1d68x64.sys) with Rank 0x00000100
+    TEST_ASSERT(ranked[0].SysBinaryName == "e1d68x64.sys" &&
+                ranked[0].RankValue == 0x00000100U &&
+                ranked[0].Matched,
+                "Exact 4-part + Revision WHQL match (e1d68x64.sys) must win with Rank 0x00000100");
+
+    // #2 must be Candidate C (oem14_e1d_2022.inf) with Rank 0x00000101
+    TEST_ASSERT(ranked[1].SysBinaryName == "e1d68x64_2022.sys" &&
+                ranked[1].RankValue == 0x00000101U,
+                "4-part Subsys WHQL match (e1d68x64_2022.sys) must rank #2 with Rank 0x00000101");
+
+    // #3 must be Candidate B (net_intel_generic.inf) with Rank 0x000D8003
+    TEST_ASSERT(ranked[2].SysBinaryName == "e1d_generic.sys" &&
+                ranked[2].RankValue == 0x000D8003U,
+                "Authenticode 2-part match (e1d_generic.sys) must rank #3 with Rank 0x000D8003");
+
+    // #4 must be Candidate A (unsigned generic class match) with Rank 0x0080FF31
+    TEST_ASSERT(ranked[3].SysBinaryName == "ne2000_compat.sys" &&
+                ranked[3].RankValue == 0x0080FF31U &&
+                ranked[3].SignatureByte == 0x80U,
+                "Unsigned CompatibleID class match (ne2000_compat.sys) must rank last (0x0080FF31)");
+
+    // ------------------------------------------------------------------------
+    // 2. Transactional Boot-Crash Quarantine & LastKnownGood Rollback
+    //    Eliminates the Windows ME / Vista Boot-Loop BSOD debacle
+    // ------------------------------------------------------------------------
+    engine.registerKnownGoodDriverBinding(
+        "e1dexpress",
+        "oem14_e1d_2022.inf",
+        "e1d68x64_lkg.sys",
+        ((uint64_t)12 << 48) | ((uint64_t)19 << 32) | ((uint64_t)1 << 16) | 37,
+        3 // DEMAND_START
+    );
+
+    // Stage a buggy beta driver update in ControlSet001 (Current) that faults during DriverEntry
+    engine.stageUpdatedDriverInCurrentControlSet(
+        "e1dexpress",
+        "oem99_e1d_vista_beta.inf",
+        "e1d68x64_buggy_beta.sys",
+        ((uint64_t)12 << 48) | ((uint64_t)20 << 32) | ((uint64_t)0 << 16) | 1
+    );
+
+    CONTROL_SET_DRIVER_BINDING activeBinding{};
+    NtStatus loadSt = engine.executeResilientBootDriverLoad("e1dexpress", true, &activeBinding);
+    auto bootTelemetry = engine.getBootResilienceTelemetry();
+
+    std::cout << "  [Horizon 50 Boot-Crash Quarantine & LastKnownGood Rollback]\n"
+              << "    Quarantined Package      : " << bootTelemetry.QuarantinedDriverPackage << " (Faults=" << bootTelemetry.TotalBootDriverFaults << ")\n"
+              << "    Switched ControlSet      : ControlSet00" << bootTelemetry.ActiveControlSet << " (Rollbacks=" << bootTelemetry.TotalLastKnownGoodRollbacks << ")\n"
+              << "    Recovered Active Binary  : " << activeBinding.SysBinaryPath << " (" << activeBinding.PackageName << ")\n";
+
+    TEST_ASSERT(loadSt == NtStatus::Success &&
+                bootTelemetry.TotalBootDriverFaults == 1 &&
+                bootTelemetry.TotalQuarantinedDrivers == 1 &&
+                bootTelemetry.TotalLastKnownGoodRollbacks == 1 &&
+                bootTelemetry.ActiveControlSet == 2 &&
+                bootTelemetry.QuarantinedDriverPackage == "oem99_e1d_vista_beta.inf" &&
+                activeBinding.SysBinaryPath == "e1d68x64_lkg.sys",
+                "Faulting ControlSet001 driver must be quarantined (StartOverride=4) and atomically rolled back to ControlSet002 LastKnownGood without a boot loop");
+
+    // ------------------------------------------------------------------------
+    // 3. WDDM / Hardware Bus Timeout Detection & Recovery (TDR)
+    //    Eliminates the Windows Vista 0x116 VIDEO_TDR_FAILURE BSOD debacle
+    // ------------------------------------------------------------------------
+    const std::string gpuHwId = "PCI\\VEN_8086&DEV_3E92";
+    engine.initializeTdrWatchdog(gpuHwId, "igdkmd64.sys", 2000);
+
+    // Fence #1: Normal 14ms command buffer execution
+    TDR_ENGINE_STATE tdrNormal{};
+    NtStatus tdrSt1 = engine.submitHardwareFenceAndMonitorTdr(gpuHwId, 1, 14, &tdrNormal);
+    TEST_ASSERT(tdrSt1 == NtStatus::Success &&
+                tdrNormal.CompletedFenceId == 1 &&
+                tdrNormal.TotalTdrDetections == 0 &&
+                !tdrNormal.SystemBsodTriggered,
+                "14ms WDDM fence must complete normally with zero TDR events");
+
+    // Fence #2: Hung shader / DMA ring buffer taking 2450ms (>= 2000ms threshold)
+    TDR_ENGINE_STATE tdrRecovered{};
+    NtStatus tdrSt2 = engine.submitHardwareFenceAndMonitorTdr(gpuHwId, 2, 2450, &tdrRecovered);
+    std::cout << "  [Horizon 50 WDDM / PCIe Hardware Bus TDR Watchdog]\n"
+              << "    Fence #2 Execution (2450ms) : TDRs=" << tdrRecovered.TotalTdrDetections
+              << " | LiveDump(0x141)=" << tdrRecovered.TotalLiveDumpsCaptured0x141
+              << " | PCIe FLR=" << tdrRecovered.TotalPcieFlrResetsIssued
+              << " | EngineResets=" << tdrRecovered.TotalSuccessfulEngineResets
+              << " | BSOD(0x116)=" << (tdrRecovered.SystemBsodTriggered ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(tdrSt2 == NtStatus::Success &&
+                tdrRecovered.TotalTdrDetections == 1 &&
+                tdrRecovered.TotalLiveDumpsCaptured0x141 == 1 &&
+                tdrRecovered.TotalPcieFlrResetsIssued == 1 &&
+                tdrRecovered.TotalSuccessfulEngineResets == 1 &&
+                tdrRecovered.CompletedFenceId == 2 &&
+                !tdrRecovered.FallbackToBasicDisplayActive &&
+                !tdrRecovered.SystemBsodTriggered,
+                "Hung 2450ms WDDM fence must be recovered via PCIe FLR + DxgkDdiResetFromTimeout without a 0x116 BSOD");
+
+    // Fences #3, #4, #5, #6: 4 additional consecutive hangs (5 consecutive TDRs total)
+    TDR_ENGINE_STATE tdrFallback{};
+    engine.submitHardwareFenceAndMonitorTdr(gpuHwId, 3, 2500, &tdrFallback);
+    engine.submitHardwareFenceAndMonitorTdr(gpuHwId, 4, 2500, &tdrFallback);
+    engine.submitHardwareFenceAndMonitorTdr(gpuHwId, 5, 2500, &tdrFallback);
+    NtStatus tdrSt6 = engine.submitHardwareFenceAndMonitorTdr(gpuHwId, 6, 2500, &tdrFallback);
+
+    std::cout << "    5-Strike Consecutive Hang   : ActiveDriver=" << tdrFallback.ActiveDriverName
+              << " | FallbackActive=" << (tdrFallback.FallbackToBasicDisplayActive ? "Yes" : "No")
+              << " | BSOD(0x116)=" << (tdrFallback.SystemBsodTriggered ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(tdrSt6 == NtStatus::Success &&
+                tdrFallback.TotalTdrDetections == 5 &&
+                tdrFallback.FallbackToBasicDisplayActive &&
+                tdrFallback.ActiveDriverName == "BasicDisplay.sys (Sovereign GOP Safe Fallback)" &&
+                !tdrFallback.SystemBsodTriggered,
+                "5 consecutive GPU hangs must gracefully transition to BasicDisplay.sys instead of crashing with Vista 0x116 VIDEO_TDR_FAILURE");
+
+    std::cout << "[TEST] Suite 266: Horizon 50 - Sovereign NT Anti-Vista/ME Driver Resilience Engine PASSED.\n";
+}
+
+
+
 

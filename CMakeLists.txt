@@ -29,6 +29,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/arb/arbmgr.cpp
     kernel/wmi/wmimgr.cpp
     kernel/io/pnpboot.cpp
+    kernel/io/pnpresilience.cpp
     kernel/ex/exmgr.cpp
     kernel/hal/halinit.cpp
     kernel/pnp/pnpmgr.cpp

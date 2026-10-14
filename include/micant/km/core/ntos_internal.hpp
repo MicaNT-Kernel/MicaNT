@@ -72,4 +72,7 @@ void WmiInitializeExecutiveSubsystem() noexcept;
 // Boot-Time Driver Scheduler & Live Hardware Bus Scanner Initialization (kernel/io/pnpboot.cpp)
 void PnpBootInitializeExecutiveSubsystem() noexcept;
 
+// Anti-Vista/ME Driver Resilience Engine Initialization (kernel/io/pnpresilience.cpp)
+void PnpResilienceInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
