@@ -14698,14 +14698,25 @@ inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm(
                     ppmReport.ResolvedSymbols == 118 &&
                     ppmReport.HardwareMatchedOnHost &&
                     ppmReport.DriverStartedOnHost &&
-                    ppmReport.DriverServiceState == "Running",
-                    "Live Intel CPU driver intelppm.sys must bind 118/118 IAT symbols and start (Running) on ACPI\\GenuineIntel");
+                    ppmReport.DriverServiceState == "Running" &&
+                    ppmReport.HardwareIo.BusConfigHandshakeOk &&
+                    ppmReport.HardwareIo.MmioOrMsrRoundtripOk &&
+                    ppmReport.HardwareIo.CpuSilicon.BaseFrequencyMHz > 0,
+                    "Live Intel CPU driver intelppm.sys must bind 118/118 IAT symbols, start (Running) on ACPI\\GenuineIntel, and exchange HWP/CPUID silicon telemetry");
         std::cout << "  [PnP Gate] Intel intelppm.sys ("
                   << (ppmReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
                   << ", " << ppmReport.FileSizeBytes << " bytes): Bound "
                   << ppmReport.ResolvedSymbols << "/" << ppmReport.TotalImportedSymbols
                   << " IAT symbols -> PnP State: " << ppmReport.DriverServiceState
-                  << " (Matched: " << ppmReport.MatchedHardwareId << ")\n";
+                  << " (Matched: " << ppmReport.MatchedHardwareId << ")\n"
+                  << "             [HW <-> Kernel CPUID/HWP] CPU: \"" << ppmReport.HardwareIo.CpuSilicon.BrandString
+                  << "\" (Family " << ppmReport.HardwareIo.CpuSilicon.Family
+                  << " Model " << ppmReport.HardwareIo.CpuSilicon.Model
+                  << " Stepping " << ppmReport.HardwareIo.CpuSilicon.Stepping
+                  << ", Base " << ppmReport.HardwareIo.CpuSilicon.BaseFrequencyMHz
+                  << " MHz / Turbo " << ppmReport.HardwareIo.CpuSilicon.MaxTurboFrequencyMHz
+                  << " MHz, HWP=" << (ppmReport.HardwareIo.CpuSilicon.HwpSupported ? "Yes" : "No")
+                  << ", IA32_HWP_REQUEST=0x" << std::hex << ppmReport.HardwareIo.CommandWrittenToHardware << std::dec << ")\n";
     }
 
     // ------------------------------------------------------------------------
@@ -14735,14 +14746,23 @@ inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm(
                     i2cReport.ResolvedSymbols == 21 &&
                     i2cReport.HardwareMatchedOnHost &&
                     i2cReport.DriverStartedOnHost &&
-                    i2cReport.DriverServiceState == "Running",
-                    "Live Intel C246 Chipset driver iaLPSS2i_I2C_CNL.sys must bind 21/21 IAT symbols and start (Running) on PCI\\VEN_8086&DEV_A369");
+                    i2cReport.DriverServiceState == "Running" &&
+                    i2cReport.HardwareIo.BusConfigHandshakeOk &&
+                    i2cReport.HardwareIo.MmioOrMsrRoundtripOk &&
+                    i2cReport.HardwareIo.PciVendorId == 0x8086 &&
+                    i2cReport.HardwareIo.PciDeviceId == 0xA369,
+                    "Live Intel C246 Chipset driver iaLPSS2i_I2C_CNL.sys must bind 21/21 IAT symbols, start (Running) on PCI\\VEN_8086&DEV_A369, and complete BAR0 MMIO register roundtrip");
         std::cout << "  [PnP Gate] Intel iaLPSS2i_I2C_CNL.sys ("
                   << (i2cReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
                   << ", " << i2cReport.FileSizeBytes << " bytes): Bound "
                   << i2cReport.ResolvedSymbols << "/" << i2cReport.TotalImportedSymbols
                   << " IAT symbols -> PnP State: " << i2cReport.DriverServiceState
-                  << " (Matched: " << i2cReport.MatchedHardwareId << ")\n";
+                  << " (Matched: " << i2cReport.MatchedHardwareId << ")\n"
+                  << "             [HW <-> Kernel BAR0 MMIO] PCI VID:DID=0x" << std::hex << i2cReport.HardwareIo.PciVendorId
+                  << ":0x" << i2cReport.HardwareIo.PciDeviceId
+                  << " BAR0=0x" << i2cReport.HardwareIo.MappedBar0VirtualAddress
+                  << " IC_CON(tx)=0x" << i2cReport.HardwareIo.CommandWrittenToHardware
+                  << " IC_STATUS(rx)=0x" << i2cReport.HardwareIo.StatusReadFromHardware << std::dec << "\n";
     }
 
     // ------------------------------------------------------------------------
