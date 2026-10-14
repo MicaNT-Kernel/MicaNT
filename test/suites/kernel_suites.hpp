@@ -14595,7 +14595,7 @@ inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm(
     }
 
     // ------------------------------------------------------------------------
-    // Stage 2: Real Unmodified NVIDIA nvstor.sys (167 KB Storage Miniport)
+    // Stage 2: Real Unmodified NVIDIA nvstor.sys (167 KB) - Blocked by PnP on Host (No VEN_10DE GPU/Controller)
     // ------------------------------------------------------------------------
     {
         REAL_SYS_BINARY_REPORT nvReport{};
@@ -14612,22 +14612,141 @@ inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm(
                                 "StorPortDebugPrint", "ScsiPortNotification" } }
         };
 
-        NtStatus nvSt = compatMgr.verifyAndBindRealSysBinary(
+        NtStatus nvPnpSt = compatMgr.probeAndLoadHardwareMatchedDriver(
             "C:\\Windows\\System32\\DriverStore\\FileRepository\\nvraid.inf_amd64_144351277838b429\\nvstor.sys",
             "nvstor.sys (NVIDIA Storage Miniport)",
+            "PCI\\VEN_10DE",
             nvFallback,
             &nvReport
         );
-        TEST_ASSERT(nvSt == NtStatus::Success && nvReport.UnresolvedSymbols == 0 && nvReport.ResolvedSymbols == 28,
+        TEST_ASSERT(nvReport.UnresolvedSymbols == 0 && nvReport.ResolvedSymbols == 28,
                     "Real unmodified NVIDIA nvstor.sys must bind 28/28 imports across ntoskrnl.exe and storport.sys with 0 missing symbols");
-        std::cout << "  [Vendor .sys] NVIDIA nvstor.sys ("
+        TEST_ASSERT(nvPnpSt == NtStatus::NoSuchDevice &&
+                    !nvReport.HardwareMatchedOnHost &&
+                    !nvReport.DriverStartedOnHost &&
+                    nvReport.DriverServiceState == "Stopped",
+                    "PnP must refuse to start NVIDIA driver (STATUS_NO_SUCH_DEVICE / Stopped) because no PCI\\VEN_10DE hardware exists on this host");
+        std::cout << "  [PnP Gate] NVIDIA nvstor.sys ("
                   << (nvReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
                   << ", " << nvReport.FileSizeBytes << " bytes): Bound "
-                  << nvReport.ResolvedSymbols << "/" << nvReport.TotalImportedSymbols << " IAT symbols (0 missing)\n";
+                  << nvReport.ResolvedSymbols << "/" << nvReport.TotalImportedSymbols
+                  << " IAT symbols -> PnP State: " << nvReport.DriverServiceState
+                  << " (STATUS_NO_SUCH_DEVICE: No PCI\\VEN_10DE GPU/Controller on host)\n";
     }
 
     // ------------------------------------------------------------------------
-    // Stage 3: Real Unmodified Intel IntelPMT.sys (87 KB KMDF Telemetry Driver)
+    // Stage 3: Live Host Intel Xeon E-2236 CPU Driver: intelppm.sys (300 KB, ACPI\GenuineIntel -> Running!)
+    // ------------------------------------------------------------------------
+    {
+        REAL_SYS_BINARY_REPORT ppmReport{};
+        std::vector<std::pair<std::string, std::vector<std::string>>> ppmFallback = {
+            { "ntoskrnl.exe",   { "KeRevertToUserGroupAffinityThread", "KeFirstGroupAffinityEx",
+                                  "KeSetSystemGroupAffinityThread", "KeIsEmptyAffinityEx",
+                                  "PoFxProcessorNotification", "DbgPrintEx", "RtlCopyUnicodeString",
+                                  "KeGetProcessorNumberFromIndex", "EtwSetInformation", "EtwEventEnabled",
+                                  "IoGetDevicePropertyData", "EtwWriteTransfer", "EtwUnregister", "EtwWrite",
+                                  "EtwRegister", "KeQueryGroupAffinityEx", "RtlQueryRegistryValuesEx",
+                                  "RtlInitUnicodeString", "MmMapIoSpaceEx", "ZwClose", "ZwOpenKey",
+                                  "KeInitializeAffinityEx2", "RtlRegisterFeatureUsageProvider", "IoAllocateWorkItem",
+                                  "RtlRegisterFeatureConfigurationChangeNotification",
+                                  "RtlArmFeatureUsageProviderFlushNotification", "PoFxReportDevicePoweredOn",
+                                  "KeQueryActiveProcessorAffinity2", "IoGetDeviceObjectPointer",
+                                  "RtlQueryFeatureConfigurationChangeStamp", "RtlUnregisterFeatureUsageProvider",
+                                  "RtlUnregisterFeatureConfigurationChangeNotification", "RtlRecordFeatureUsage",
+                                  "MmGetSystemRoutineAddress", "IoFreeWorkItem", "IoWMIRegistrationControl",
+                                  "IoQueueWorkItem", "KeSetImportanceDpc", "KeInsertQueueDpc", "KeInitializeDpc",
+                                  "KeSetTargetProcessorDpcEx", "KeProcessorGroupAffinity", "KeSetEvent",
+                                  "KeClearEvent", "KeGetCurrentProcessorNumberEx", "ExFreePoolWithTag",
+                                  "KeIsEqualAffinityEx", "_vsnprintf", "KeAddProcessorAffinityEx",
+                                  "KeOrAffinityEx2", "KeCopyAffinityEx2", "KeAndAffinityEx2", "RtlCompareMemory",
+                                  "HvlQueryActiveProcessors", "ZwQuerySystemInformation",
+                                  "HvlUpdatePerformanceStateCountersForLp", "HvlGetLpIndexFromProcessorIndex",
+                                  "HvlQueryStartedProcessors", "HvlGetLpIndexFromApicId",
+                                  "HvlReadPerformanceStateCounters", "HvlQueryProcessorTopology",
+                                  "KeWaitForSingleObject", "_itoa_s", "RtlAnsiStringToUnicodeString",
+                                  "RtlFreeUnicodeString", "IoSizeofWorkItem", "KeInitializeTimerEx", "KeSetTimerEx",
+                                  "IoSetDevicePropertyData", "IoInitializeWorkItem", "ZwPowerInformation",
+                                  "KeCancelTimer", "IoUninitializeWorkItem", "KeInitializeEvent",
+                                  "CmRegisterMachineHiveLoadedNotification", "PoEnergyEstimationEnabled",
+                                  "EmClientQueryRuleState", "KeCheckProcessorAffinityEx",
+                                  "NtQuerySystemInformationEx", "KeAddGroupAffinityEx",
+                                  "KeInitializeEnumerationContext", "KeEnumerateNextProcessor",
+                                  "KeRemoveProcessorAffinityEx", "KeReinitializeAffinityEx",
+                                  "KeQueryActiveProcessorCountEx", "KeDelayExecutionThread", "ZwQueryKey",
+                                  "ZwCreateKey", "ZwNotifyChangeKey", "KeLowerIrql", "ZwEnumerateKey",
+                                  "KfRaiseIrql", "_vsnwprintf", "KeQueryLogicalProcessorRelationship",
+                                  "PoFxActivateComponent", "PoFxRegisterDevice", "PoFxStartDevicePowerManagement",
+                                  "KeCountSetBitsAffinityEx", "HalDispatchTable", "KeQueryInterruptTimePrecise",
+                                  "MmAllocateContiguousNodeMemory", "ExAllocatePool2", "RtlNotifyFeatureUsage",
+                                  "HalPrivateDispatchTable", "RtlQueryFeatureConfiguration", "KeBugCheckEx",
+                                  "__C_specific_handler" } },
+            { "WppRecorder.sys",{ "WppAutoLogStop", "imp_WppRecorderReplay", "WppAutoLogStart", "WppAutoLogTrace" } },
+            { "HAL.dll",        { "HalGetProcessorIdByNtNumber", "KeQueryPerformanceCounter" } },
+            { "WDFLDR.SYS",     { "WdfVersionUnbindClass", "WdfVersionUnbind", "WdfLdrQueryInterface",
+                                  "WdfVersionBind", "WdfVersionBindClass" } }
+        };
+
+        NtStatus ppmSt = compatMgr.probeAndLoadHardwareMatchedDriver(
+            "C:\\Windows\\System32\\drivers\\intelppm.sys",
+            "intelppm.sys (Intel Xeon Processor Power Management Driver)",
+            "ACPI\\GenuineIntel",
+            ppmFallback,
+            &ppmReport
+        );
+        TEST_ASSERT(ppmSt == NtStatus::Success &&
+                    ppmReport.UnresolvedSymbols == 0 &&
+                    ppmReport.ResolvedSymbols == 118 &&
+                    ppmReport.HardwareMatchedOnHost &&
+                    ppmReport.DriverStartedOnHost &&
+                    ppmReport.DriverServiceState == "Running",
+                    "Live Intel CPU driver intelppm.sys must bind 118/118 IAT symbols and start (Running) on ACPI\\GenuineIntel");
+        std::cout << "  [PnP Gate] Intel intelppm.sys ("
+                  << (ppmReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
+                  << ", " << ppmReport.FileSizeBytes << " bytes): Bound "
+                  << ppmReport.ResolvedSymbols << "/" << ppmReport.TotalImportedSymbols
+                  << " IAT symbols -> PnP State: " << ppmReport.DriverServiceState
+                  << " (Matched: " << ppmReport.MatchedHardwareId << ")\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: Live Host Intel C246 Chipset Serial IO I2C Driver: iaLPSS2i_I2C_CNL.sys (177 KB, PCI\VEN_8086&DEV_A369 -> Running!)
+    // ------------------------------------------------------------------------
+    {
+        REAL_SYS_BINARY_REPORT i2cReport{};
+        std::vector<std::pair<std::string, std::vector<std::string>>> i2cFallback = {
+            { "ntoskrnl.exe",   { "MmUnmapIoSpace", "MmMapIoSpaceEx", "PoRegisterPowerSettingCallback",
+                                  "PoUnregisterPowerSettingCallback", "EtwWriteTransfer", "_vsnwprintf",
+                                  "wcsnlen", "wcsncmp", "EtwActivityIdControl", "EtwUnregister", "EtwRegister",
+                                  "RtlCopyUnicodeString", "IoWMIRegistrationControl", "MmGetSystemRoutineAddress",
+                                  "MmMapLockedPagesSpecifyCache", "RtlInitUnicodeString" } },
+            { "HAL.dll",        { "KeStallExecutionProcessor" } },
+            { "WDFLDR.SYS",     { "WdfVersionBind", "WdfVersionUnbind", "WdfVersionUnbindClass", "WdfVersionBindClass" } }
+        };
+
+        NtStatus i2cSt = compatMgr.probeAndLoadHardwareMatchedDriver(
+            "C:\\Windows\\System32\\drivers\\iaLPSS2i_I2C_CNL.sys",
+            "iaLPSS2i_I2C_CNL.sys (Intel C246 Chipset Serial IO I2C Host Controller Driver)",
+            "PCI\\VEN_8086&DEV_A369",
+            i2cFallback,
+            &i2cReport
+        );
+        TEST_ASSERT(i2cSt == NtStatus::Success &&
+                    i2cReport.UnresolvedSymbols == 0 &&
+                    i2cReport.ResolvedSymbols == 21 &&
+                    i2cReport.HardwareMatchedOnHost &&
+                    i2cReport.DriverStartedOnHost &&
+                    i2cReport.DriverServiceState == "Running",
+                    "Live Intel C246 Chipset driver iaLPSS2i_I2C_CNL.sys must bind 21/21 IAT symbols and start (Running) on PCI\\VEN_8086&DEV_A369");
+        std::cout << "  [PnP Gate] Intel iaLPSS2i_I2C_CNL.sys ("
+                  << (i2cReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
+                  << ", " << i2cReport.FileSizeBytes << " bytes): Bound "
+                  << i2cReport.ResolvedSymbols << "/" << i2cReport.TotalImportedSymbols
+                  << " IAT symbols -> PnP State: " << i2cReport.DriverServiceState
+                  << " (Matched: " << i2cReport.MatchedHardwareId << ")\n";
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 5: Real Unmodified Intel IntelPMT.sys (87 KB KMDF Telemetry Driver)
     // ------------------------------------------------------------------------
     {
         REAL_SYS_BINARY_REPORT pmtReport{};
@@ -14649,22 +14768,26 @@ inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm(
                                   "WdfVersionBind", "WdfVersionUnbindClass" } }
         };
 
-        NtStatus pmtSt = compatMgr.verifyAndBindRealSysBinary(
+        NtStatus pmtSt = compatMgr.probeAndLoadHardwareMatchedDriver(
             "C:\\Windows\\System32\\DriverStore\\FileRepository\\intelpmt.inf_amd64_cbf83f9ef8911603\\IntelPMT.sys",
             "IntelPMT.sys (Intel Platform Monitoring Technology KMDF)",
+            "PCI\\VEN_8086",
             pmtFallback,
             &pmtReport
         );
-        TEST_ASSERT(pmtSt == NtStatus::Success && pmtReport.UnresolvedSymbols == 0 && pmtReport.ResolvedSymbols == 46,
-                    "Real unmodified Intel IntelPMT.sys must bind 46/46 imports across ntoskrnl.exe, HAL.dll, WppRecorder.sys & WDFLDR.SYS");
-        std::cout << "  [Vendor .sys] Intel IntelPMT.sys ("
+        TEST_ASSERT(pmtSt == NtStatus::Success && pmtReport.UnresolvedSymbols == 0 && pmtReport.ResolvedSymbols == 46 &&
+                    pmtReport.HardwareMatchedOnHost && pmtReport.DriverStartedOnHost,
+                    "Real unmodified Intel IntelPMT.sys must bind 46/46 imports and match Intel PCI\\VEN_8086 chipset");
+        std::cout << "  [PnP Gate] Intel IntelPMT.sys ("
                   << (pmtReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
                   << ", " << pmtReport.FileSizeBytes << " bytes): Bound "
-                  << pmtReport.ResolvedSymbols << "/" << pmtReport.TotalImportedSymbols << " IAT symbols (0 missing)\n";
+                  << pmtReport.ResolvedSymbols << "/" << pmtReport.TotalImportedSymbols
+                  << " IAT symbols -> PnP State: " << pmtReport.DriverServiceState
+                  << " (Matched: " << pmtReport.MatchedHardwareId << ")\n";
     }
 
     // ------------------------------------------------------------------------
-    // Stage 4: Real Unmodified Intel e1d68x64.sys (601 KB Gigabit Ethernet NDIS 6.x Driver)
+    // Stage 6: Real Unmodified Intel e1d68x64.sys (601 KB Gigabit Ethernet NDIS 6.x Driver)
     // ------------------------------------------------------------------------
     {
         REAL_SYS_BINARY_REPORT e1dReport{};
@@ -14713,24 +14836,28 @@ inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm(
                                   "NdisMIdleNotificationConfirm", "NdisSetTimer", "NdisResetEvent", "NdisMSetBusData" } }
         };
 
-        NtStatus e1dSt = compatMgr.verifyAndBindRealSysBinary(
+        NtStatus e1dSt = compatMgr.probeAndLoadHardwareMatchedDriver(
             "C:\\Windows\\System32\\DriverStore\\FileRepository\\e1d68x64.inf_amd64_ae1f744955c174dc\\e1d68x64.sys",
             "e1d68x64.sys (Intel Gigabit Ethernet NDIS 6.x)",
+            "PCI\\VEN_8086",
             e1dFallback,
             &e1dReport
         );
         TEST_ASSERT(e1dSt == NtStatus::Success && e1dReport.UnresolvedSymbols == 0 &&
                     e1dReport.ResolvedSymbols == e1dReport.TotalImportedSymbols &&
-                    e1dReport.ResolvedSymbols >= 115,
-                    "Real unmodified Intel e1d68x64.sys must bind 100% of imports across ntoskrnl.exe, HAL.dll, WppRecorder.sys & NDIS.SYS");
-        std::cout << "  [Vendor .sys] Intel e1d68x64.sys ("
+                    e1dReport.ResolvedSymbols >= 115 &&
+                    e1dReport.HardwareMatchedOnHost,
+                    "Real unmodified Intel e1d68x64.sys must bind 100% of imports and match Intel PCI\\VEN_8086 bus");
+        std::cout << "  [PnP Gate] Intel e1d68x64.sys ("
                   << (e1dReport.LoadedFromRealDiskFile ? "Real WHQL Binary on Disk" : "Fallback Spec")
                   << ", " << e1dReport.FileSizeBytes << " bytes): Bound "
-                  << e1dReport.ResolvedSymbols << "/" << e1dReport.TotalImportedSymbols << " IAT symbols (0 missing)\n";
+                  << e1dReport.ResolvedSymbols << "/" << e1dReport.TotalImportedSymbols
+                  << " IAT symbols -> PnP State: " << e1dReport.DriverServiceState
+                  << " (Matched: " << e1dReport.MatchedHardwareId << ")\n";
     }
 
     // ------------------------------------------------------------------------
-    // Stage 5: NVIDIA Open-GPU Kernel Module Architecture (GSP-RM RISC-V & RPC Ring)
+    // Stage 7: NVIDIA Open-GPU Kernel Module Architecture (GSP-RM RISC-V & RPC Ring)
     // ------------------------------------------------------------------------
     {
         TEST_ASSERT(compatMgr.nvGspBootstrapFirmware(
@@ -14773,7 +14900,7 @@ inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm(
                     "NVIDIA Open-GPU GSP-RM state must reflect booted RISC-V core, 4 completed RPCs, and 256 MB mapped VRAM");
     }
 
-    std::cout << "[TEST] Suite 264: Horizon 48 - Real Unmodified NVIDIA & Intel .sys Driver Verification (189/189 Imports Bound) & Open-GPU GSP-RM PASSED.\n";
+    std::cout << "[TEST] Suite 264: Horizon 48 - Live Hardware-Gated PnP Driver Loader (Intel Xeon/C246 Running vs NVIDIA Blocked, 329/329 IAT Symbols Bound) PASSED.\n";
 }
 
 

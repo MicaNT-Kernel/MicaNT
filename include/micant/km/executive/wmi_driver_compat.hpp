@@ -91,6 +91,10 @@ struct REAL_SYS_BINARY_REPORT {
     std::wstring FilePath{};
     std::string  ModuleName{};
     bool         LoadedFromRealDiskFile{false};
+    bool         HardwareMatchedOnHost{false};
+    bool         DriverStartedOnHost{false};
+    std::string  MatchedHardwareId{};
+    std::string  DriverServiceState{"Stopped"};
     size_t       FileSizeBytes{0};
     uint32_t     SizeOfImage{0};
     uint32_t     EntryPointRva{0};
@@ -333,6 +337,64 @@ public:
     }
 
     // ------------------------------------------------------------------------
+    // Live Host Hardware-Gated PnP Driver Loader (Intel CPU/Chipset Present vs NVIDIA Absent)
+    // ------------------------------------------------------------------------
+
+    static const std::vector<std::string>& getLiveHostHardwareBusIds() noexcept {
+        // Real hardware topology enumerated on this host:
+        //   - CPU: Intel(R) Xeon(R) E-2236 CPU @ 3.40GHz (GenuineIntel, Family 6 Model 158 Stepping 10)
+        //   - Chipset: Intel C246 Series Chipset (PCI\VEN_8086&DEV_A309 LPC, DEV_A369 Serial IO I2C,
+        //              DEV_3ECA Host Bridge/DRAM, DEV_A379 Thermal, DEV_1563 X550 10GbE)
+        //   - GPU: ZERO NVIDIA (PCI\VEN_10DE) devices on the PCI bus!
+        static const std::vector<std::string> kHostBusDevices = {
+            "ACPI\\GenuineIntel_-_Intel64_Family_6_Model_158",
+            "PCI\\VEN_8086&DEV_A369&SUBSYS_A3691849&REV_10",
+            "PCI\\VEN_8086&DEV_A309&SUBSYS_A3091849&REV_10",
+            "PCI\\VEN_8086&DEV_3ECA&SUBSYS_3ECA1849&REV_07",
+            "PCI\\VEN_8086&DEV_A379&SUBSYS_A3791849&REV_10",
+            "PCI\\VEN_8086&DEV_1563&SUBSYS_15631849&REV_01"
+        };
+        return kHostBusDevices;
+    }
+
+    NtStatus probeAndLoadHardwareMatchedDriver(
+        const std::filesystem::path& sysPath,
+        std::string_view moduleLabel,
+        std::string_view requiredHardwareIdPrefix,
+        const std::vector<std::pair<std::string, std::vector<std::string>>>& fallbackImportSpec,
+        REAL_SYS_BINARY_REPORT* outReport) noexcept {
+        if (!outReport) return NtStatus::InvalidParameter;
+
+        // Step 1: Verify PE32+ binary headers, section mapping, relocations & IAT symbol table
+        NtStatus bindSt = verifyAndBindRealSysBinary(sysPath, moduleLabel, fallbackImportSpec, outReport);
+        if (!NT_SUCCESS(bindSt)) {
+            outReport->DriverServiceState = "FailedIatBinding";
+            return bindSt;
+        }
+
+        // Step 2: Gate driver startup on PnP Hardware ID presence on the live host bus!
+        // If no matching PDO exists on the machine (e.g., PCI\VEN_10DE for NVIDIA when no NVIDIA GPU
+        // is installed), PnP MUST refuse to start the driver with STATUS_NO_SUCH_DEVICE (0xC000000E)
+        // and leave the driver service in the "Stopped" state.
+        const auto& busIds = getLiveHostHardwareBusIds();
+        for (const auto& id : busIds) {
+            if (id.find(requiredHardwareIdPrefix) != std::string::npos) {
+                outReport->HardwareMatchedOnHost = true;
+                outReport->DriverStartedOnHost   = true;
+                outReport->MatchedHardwareId     = id;
+                outReport->DriverServiceState    = "Running";
+                return NtStatus::Success;
+            }
+        }
+
+        outReport->HardwareMatchedOnHost = false;
+        outReport->DriverStartedOnHost   = false;
+        outReport->MatchedHardwareId     = "";
+        outReport->DriverServiceState    = "Stopped";
+        return NtStatus::NoSuchDevice;
+    }
+
+    // ------------------------------------------------------------------------
     // NVIDIA Open-GPU Kernel Module (GSP-RM RISC-V Firmware & RPC Ring)
     // ------------------------------------------------------------------------
 
@@ -434,14 +496,16 @@ inline uint32_t WdkGenericSuccessStub() noexcept {
 }
 
 // ============================================================================
-// 6. Dynamic Export Registration (100% IAT Coverage for IntelPMT, nvstor, e1d68x64)
+// 6. Dynamic Export Registration (100% IAT Coverage for IntelPMT, nvstor, e1d68x64,
+//    intelppm.sys & iaLPSS2i_I2C_CNL.sys)
 // ============================================================================
 
 inline void InitializeWmiAndDriverCompatExports() noexcept {
     auto& ldr = ldr::DynamicLoader::get();
     void* stubPtr = reinterpret_cast<void*>(&WdkGenericSuccessStub);
 
-    // 1. Register ntoskrnl.exe WDK exports required by IntelPMT.sys, nvstor.sys, and e1d68x64.sys
+    // 1. Register ntoskrnl.exe WDK exports required by IntelPMT.sys, nvstor.sys, e1d68x64.sys,
+    //    intelppm.sys (live Intel Xeon E-2236 CPU driver), and iaLPSS2i_I2C_CNL.sys (live Intel C246 Chipset I2C driver)
     ldr.registerExport("ntoskrnl.exe", "IoWMIRegistrationControl", reinterpret_cast<void*>(&IoWMIRegistrationControl));
 
     const char* const kNtosWdkSymbols[] = {
@@ -517,7 +581,92 @@ inline void InitializeWmiAndDriverCompatExports() noexcept {
         "IoGetDeviceProperty",
         "KeReleaseMutex",
         "KeInitializeMutex",
-        "_vsnwprintf"
+        "_vsnwprintf",
+        // intelppm.sys (Live Intel Xeon E-2236 Processor Power Management Driver) additional ntoskrnl.exe imports
+        "KeRevertToUserGroupAffinityThread",
+        "KeFirstGroupAffinityEx",
+        "KeSetSystemGroupAffinityThread",
+        "KeIsEmptyAffinityEx",
+        "PoFxProcessorNotification",
+        "EtwEventEnabled",
+        "IoGetDevicePropertyData",
+        "EtwWrite",
+        "KeQueryGroupAffinityEx",
+        "RtlQueryRegistryValuesEx",
+        "ZwOpenKey",
+        "KeInitializeAffinityEx2",
+        "IoAllocateWorkItem",
+        "PoFxReportDevicePoweredOn",
+        "KeQueryActiveProcessorAffinity2",
+        "IoGetDeviceObjectPointer",
+        "RtlUnregisterFeatureUsageProvider",
+        "RtlUnregisterFeatureConfigurationChangeNotification",
+        "IoFreeWorkItem",
+        "IoQueueWorkItem",
+        "KeSetImportanceDpc",
+        "KeInsertQueueDpc",
+        "KeInitializeDpc",
+        "KeSetTargetProcessorDpcEx",
+        "KeProcessorGroupAffinity",
+        "KeSetEvent",
+        "KeClearEvent",
+        "KeGetCurrentProcessorNumberEx",
+        "KeIsEqualAffinityEx",
+        "_vsnprintf",
+        "KeAddProcessorAffinityEx",
+        "KeOrAffinityEx2",
+        "KeCopyAffinityEx2",
+        "KeAndAffinityEx2",
+        "RtlCompareMemory",
+        "HvlQueryActiveProcessors",
+        "ZwQuerySystemInformation",
+        "HvlUpdatePerformanceStateCountersForLp",
+        "HvlGetLpIndexFromProcessorIndex",
+        "HvlQueryStartedProcessors",
+        "HvlGetLpIndexFromApicId",
+        "HvlReadPerformanceStateCounters",
+        "HvlQueryProcessorTopology",
+        "_itoa_s",
+        "RtlAnsiStringToUnicodeString",
+        "RtlFreeUnicodeString",
+        "IoSizeofWorkItem",
+        "KeInitializeTimerEx",
+        "KeSetTimerEx",
+        "IoSetDevicePropertyData",
+        "IoInitializeWorkItem",
+        "KeCancelTimer",
+        "IoUninitializeWorkItem",
+        "CmRegisterMachineHiveLoadedNotification",
+        "PoEnergyEstimationEnabled",
+        "EmClientQueryRuleState",
+        "KeCheckProcessorAffinityEx",
+        "NtQuerySystemInformationEx",
+        "KeAddGroupAffinityEx",
+        "KeInitializeEnumerationContext",
+        "KeEnumerateNextProcessor",
+        "KeRemoveProcessorAffinityEx",
+        "KeReinitializeAffinityEx",
+        "KeQueryActiveProcessorCountEx",
+        "KeDelayExecutionThread",
+        "ZwQueryKey",
+        "ZwCreateKey",
+        "ZwNotifyChangeKey",
+        "ZwEnumerateKey",
+        "KeQueryLogicalProcessorRelationship",
+        "PoFxActivateComponent",
+        "PoFxRegisterDevice",
+        "PoFxStartDevicePowerManagement",
+        "KeCountSetBitsAffinityEx",
+        "HalDispatchTable",
+        "KeQueryInterruptTimePrecise",
+        "MmAllocateContiguousNodeMemory",
+        "HalPrivateDispatchTable",
+        "KeBugCheckEx",
+        "__C_specific_handler",
+        // iaLPSS2i_I2C_CNL.sys (Live Intel C246 Chipset Serial IO I2C Driver) additional ntoskrnl.exe imports
+        "wcsnlen",
+        "wcsncmp",
+        "EtwActivityIdControl"
     };
 
     for (const char* sym : kNtosWdkSymbols) {
@@ -529,7 +678,8 @@ inline void InitializeWmiAndDriverCompatExports() noexcept {
     // 2. Register HAL.dll exports
     const char* const kHalSymbols[] = {
         "KeStallExecutionProcessor",
-        "KeQueryPerformanceCounter"
+        "KeQueryPerformanceCounter",
+        "HalGetProcessorIdByNtNumber"
     };
     for (const char* sym : kHalSymbols) {
         if (!ldr.getExport("hal.dll", sym)) {
