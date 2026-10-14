@@ -48,6 +48,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/ring1_dxgk.cpp
     kernel/io/ring1_audio.cpp
     kernel/ps/ring1_smss.cpp
+    kernel/io/ring2_wudf.cpp
+    kernel/se/ring2_lsa.cpp
+    kernel/ps/ring2_scm.cpp
 )
 
 add_library(ntoskrnl_core STATIC

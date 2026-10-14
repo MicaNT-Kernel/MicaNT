@@ -100,6 +100,9 @@
 #include "micant/km/win32k/ring1_dxgkrnl_flip_plane.hpp"
 #include "micant/km/drivers/audio/ring1_wavert_audio_dma.hpp"
 #include "micant/km/executive/ring1_smss_csrss_bootstrap.hpp"
+#include "micant/km/io/ring2_wudf_fontdrv_host.hpp"
+#include "micant/km/drivers/security/ring2_lsa_vault_keyiso.hpp"
+#include "micant/km/executive/ring2_scm_services_broker.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -322,7 +325,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite280")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite283")) {
+        RUN_TEST(Test_Horizon67_Ring2ParallelScm_RpcSsDcomLaunch_And_Ring3HandoverGate);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite282") {
+        RUN_TEST(Test_Horizon66_Ring2LsaLogonBroker_LsaIsoCredentialVault_And_KeyIsoDpapi);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite281") {
+        RUN_TEST(Test_Horizon65_Ring2WudfDeviceHostPool_FontDrvSandbox_And_SyscallGuard);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite280") {
         RUN_TEST(Test_Horizon64_Ring1SmssBootstrap_KnownDllsPreMap_And_CsrssSuperServer);
         return g_FailedTests;
     }
@@ -1276,6 +1291,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon62_Ring1Win32kSandbox_DirectFlipMpo_And_540HzCursorPlane);
     RUN_TEST(Test_Horizon63_Ring1WaveRtCyclicDma_Sub2msWasapi_And_ApoDspGuard);
     RUN_TEST(Test_Horizon64_Ring1SmssBootstrap_KnownDllsPreMap_And_CsrssSuperServer);
+    RUN_TEST(Test_Horizon65_Ring2WudfDeviceHostPool_FontDrvSandbox_And_SyscallGuard);
+    RUN_TEST(Test_Horizon66_Ring2LsaLogonBroker_LsaIsoCredentialVault_And_KeyIsoDpapi);
+    RUN_TEST(Test_Horizon67_Ring2ParallelScm_RpcSsDcomLaunch_And_Ring3HandoverGate);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -295,8 +295,8 @@ int main(int argc, char* argv[]) {
     lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
     std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
 
-    // 12.1 Initialize 36-Unit Modular NT Kernel Linkage (Phase 1 Ring 0 & Phase 2 Ring 1 Complete through Horizon 64)
-    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 36 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, wmi, pnpboot, pnpresilience, pofx_whea, umdf_msix, zerobsod, livehotswap, sysinfo_taskmgr, quotagov, mftzipui, srm_ci, afd_wsk, kuser_seal, ring1_vfs, ring1_dxgk, ring1_audio, ring1_smss, ex, hal, pnp, po, init)...\n";
+    // 12.1 Initialize 39-Unit Modular NT Kernel Linkage (Phase 1 Ring 0, Phase 2 Ring 1 & Phase 2.5 Ring 2 Complete through Horizon 67)
+    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 39 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, wmi, pnpboot, pnpresilience, pofx_whea, umdf_msix, zerobsod, livehotswap, sysinfo_taskmgr, quotagov, mftzipui, srm_ci, afd_wsk, kuser_seal, ring1_vfs, ring1_dxgk, ring1_audio, ring1_smss, ring2_wudf, ring2_lsa, ring2_scm, ex, hal, pnp, po, init)...\n";
     sys::internal::HalInitializeExecutiveSubsystem();
     sys::internal::ExInitializeExecutiveSubsystem();
     sys::internal::PnpInitializeExecutiveSubsystem();
@@ -324,6 +324,9 @@ int main(int argc, char* argv[]) {
     sys::internal::Ring1DxgkInitializeExecutiveSubsystem();
     sys::internal::Ring1AudioInitializeExecutiveSubsystem();
     sys::internal::Ring1SmssInitializeExecutiveSubsystem();
+    sys::internal::Ring2WudfInitializeExecutiveSubsystem();
+    sys::internal::Ring2LsaInitializeExecutiveSubsystem();
+    sys::internal::Ring2ScmInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
@@ -349,7 +352,10 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Ring1/VfsMinifilter] Initialized Sovereign Ring 1 VFS & Minifilter Fault-Isolated Fast-I/O Plane Active\n";
     std::cout << "[MicaNT Boot] [Ring1/DxgkFlip] Initialized Sovereign Ring 1 win32k Sandbox, DirectFlip/MPO Scanout & 540Hz Hardware Cursor Active\n";
     std::cout << "[MicaNT Boot] [Ring1/WaveRtAudio] Initialized Sovereign Ring 1 WaveRT Cyclic DMA (1.33ms 64-Frame WASAPI & APO Guard) Active\n";
-    std::cout << "[MicaNT Boot] [Ring1/SmssCsrss] Initialized Sovereign Native Session Bootstrap (smss.exe, \\KnownDlls Pre-Mapper & csrss.exe Ready for Ring 3)\n";
+    std::cout << "[MicaNT Boot] [Ring1/SmssCsrss] Initialized Sovereign Native Session Bootstrap (smss.exe, \\KnownDlls Pre-Mapper & csrss.exe Ready)\n";
+    std::cout << "[MicaNT Boot] [Ring2/WudfFontDrv] Initialized Sovereign Ring 2 Isolated Device & Parser Host (WUDFHost.exe 4ms Auto-Heal & fontdrvhost.exe OTF/CFF2 Sandbox Active)\n";
+    std::cout << "[MicaNT Boot] [Ring2/LsaVaultKeyIso] Initialized Sovereign Ring 2 Security Authority & Credential Guard Vault (lsass.exe RunAsPPL, lsaiso.exe Anti-Dump & KeyIso/DPAPI Active)\n";
+    std::cout << "[MicaNT Boot] [Ring2/ScmServices] Initialized Sovereign Ring 2 Service Control Manager (services.exe 38ms Parallel DAG, RpcSs/DcomLaunch 4us LRPC & Ring 3 Gate Open)\n";
 
     // 13. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";

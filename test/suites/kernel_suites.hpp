@@ -16690,5 +16690,219 @@ inline void Test_Horizon64_Ring1SmssBootstrap_KnownDllsPreMap_And_CsrssSuperServ
     std::cout << "[TEST] Suite 280: Horizon 64 - Sovereign Native Session Bootstrap (smss.exe, \\KnownDlls & csrss.exe) PASSED.\n";
 }
 
+// ============================================================================
+// Suite 281: Horizon 65 — Sovereign Ring 2 Isolated Device & Parser Host
+//            (WUDFHost.exe UMDF 2.0 Device Pool, fontdrvhost.exe Untrusted
+//            OTF/TTF/CFF2 Glyph Sandbox & Ring 2 Syscall/Job Containment Guard)
+//            (base/ntos/io/ring2_wudf_fontdrv_host)
+// ============================================================================
+inline void Test_Horizon65_Ring2WudfDeviceHostPool_FontDrvSandbox_And_SyscallGuard() {
+    using namespace micant::km::ring2wudf;
+    std::cout << "\n[TEST] Suite 281: Horizon 65 - Sovereign Ring 2 Isolated Device & Parser Host (WUDFHost.exe & fontdrvhost.exe)...\n";
+
+    InitializeRing2WudfFontDrvExports();
+
+    // 1. WUDFHost.exe UMDF 2.0 Device Pool & 4ms Crash Auto-Restart
+    WudfDeviceHostPoolReport wudfRep{};
+    NTSTATUS st1 = TitanRing2WudfAndFontDrvHostEngine::spawnAndVerifyWudfDeviceHostPool(
+        "faulty_usb_rgb_umdf2.dll",
+        &wudfRep
+    );
+
+    std::cout << "  [Horizon 65 WUDFHost.exe UMDF 2.0 Isolated Device Host Pool]\n"
+              << "    UsbHidHostPID=" << wudfRep.UsbHidHostPid
+              << " | BiometricHostPID=" << wudfRep.BiometricSmartCardHostPid
+              << " | ActiveStacks=" << wudfRep.ActiveUmdfDeviceStacks << "\n"
+              << "    FaultedDriver=\"" << wudfRep.InjectedFaultDriverName
+              << "\" (0x" << std::hex << wudfRep.FaultExceptionCode << std::dec << ")"
+              << " -> Restarted in " << wudfRep.HostProcessRestartLatencyMs << " ms (0 BSOD)\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                wudfRep.UsbHidHostPid == 412u &&
+                wudfRep.AlpcZeroCopyIoctlLatencyUs <= 10u &&
+                wudfRep.HostProcessRestartLatencyMs <= 5u &&
+                !wudfRep.SystemBsodTriggered &&
+                wudfRep.Ring0AndRing1Unscathed,
+                "WUDFHost.exe pool must isolate UMDF 2.0 driver crashes and auto-restart in <= 5ms with 0 BSODs");
+
+    // 2. fontdrvhost.exe Untrusted OTF/TTF/CFF2 Glyph Parser Sandbox
+    FontDrvHostSandboxReport fontRep{};
+    NTSTATUS st2 = TitanRing2WudfAndFontDrvHostEngine::sandboxUntrustedFontGlyphParser(
+        4096,
+        true,
+        &fontRep
+    );
+
+    std::cout << "  [Horizon 65 fontdrvhost.exe Untrusted OTF/TTF/CFF2 Glyph Sandbox]\n"
+              << "    SID=\"" << fontRep.SandboxAccountSid << "\" (PID=" << fontRep.FontDrvHostPid << ")\n"
+              << "    GlyphsRasterized=" << fontRep.RasterizedGlyphCount
+              << " (" << fontRep.GlyphRasterizeLatencyUs << " us)"
+              << " | Cff2ExploitBlocked=" << (fontRep.MalformedCff2ExploitBlocked ? "YES" : "No") << "\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                fontRep.FontDrvHostPid == 444u &&
+                fontRep.RasterizedGlyphCount == 4096u &&
+                fontRep.MalformedCff2ExploitBlocked &&
+                fontRep.Win32kRing1MemoryProtected,
+                "fontdrvhost.exe sandbox must block malformed CFF2 glyph exploits outside Ring 0/Ring 1");
+
+    // 3. Ring 2 Host Syscall Filter & Job Containment Guard
+    Ring2HostContainmentReport jobRep{};
+    NTSTATUS st3 = TitanRing2WudfAndFontDrvHostEngine::auditRing2HostSyscallIsolation(&jobRep);
+
+    std::cout << "  [Horizon 65 Ring 2 Syscall Filter & Job Containment Guard]\n"
+              << "    ContainedHosts=" << jobRep.ContainedRing2HostCount
+              << " | Win32kFilter=ON | ChildSpawnBlocked=YES | MaxWS="
+              << jobRep.MaxHostWorkingSetQuotaMb << " MB\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                jobRep.ContainedRing2HostCount == 3u &&
+                jobRep.Win32kSyscallFilterEnabled &&
+                jobRep.ChildProcessSpawnBlocked &&
+                jobRep.KernelHandleEscalationBlocked,
+                "Ring 2 host containment must enforce syscall filters and block child process spawning");
+
+    std::cout << "[TEST] Suite 281: Horizon 65 - Sovereign Ring 2 Isolated Device & Parser Host (WUDFHost.exe & fontdrvhost.exe) PASSED.\n";
+}
+
+// ============================================================================
+// Suite 282: Horizon 66 — Sovereign Ring 2 Security Authority & Isolated
+//            Credential Vault (lsass.exe \SeLsaCommandPort Broker, lsaiso.exe
+//            Anti-Mimikatz PPL Credential Guard & KeyIso/DPAPI Zero-Key-Exposure)
+//            (base/ntos/se/ring2_lsa_vault_keyiso)
+// ============================================================================
+inline void Test_Horizon66_Ring2LsaLogonBroker_LsaIsoCredentialVault_And_KeyIsoDpapi() {
+    using namespace micant::km::ring2lsa;
+    std::cout << "\n[TEST] Suite 282: Horizon 66 - Sovereign Ring 2 Security Authority & Isolated Credential Vault (lsass.exe, lsaiso.exe & KeyIso)...\n";
+
+    InitializeRing2LsaVaultExports();
+
+    // 1. lsass.exe \SeLsaCommandPort Logon Broker & Token Minting
+    LsaLogonBrokerReport lsaRep{};
+    NTSTATUS st1 = TitanRing2LsaVaultAndKeyIsoEngine::brokerLsaLogonSession(
+        "Msv1_0,Kerberos,Negotiate,CloudAP",
+        &lsaRep
+    );
+
+    std::cout << "  [Horizon 66 lsass.exe \\SeLsaCommandPort Logon Broker]\n"
+              << "    Port=\"" << lsaRep.LsaAlpcPortPath << "\" (PID=" << lsaRep.LsassProcessId
+              << ", RunAsPPL=ACTIVE)\n"
+              << "    Packages=\"" << lsaRep.ActiveAuthPackages
+              << "\" | LogonLUID=0x" << std::hex << lsaRep.MintedLogonLuid << std::dec
+              << " (" << lsaRep.LogonTokenMintLatencyUs << " us)\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                lsaRep.LsassProcessId == 548u &&
+                lsaRep.ProtectedProcessLightActive &&
+                lsaRep.LogonTokenMintLatencyUs <= 150u,
+                "lsass.exe logon broker must run as PPL and mint primary tokens in <= 150 us");
+
+    // 2. lsaiso.exe Credential Guard Vault & Anti-Mimikatz Memory Dump Block
+    CredentialGuardVaultReport isoRep{};
+    NTSTATUS st2 = TitanRing2LsaVaultAndKeyIsoEngine::verifyCredentialGuardVault(
+        0x0010u, // PROCESS_VM_READ
+        &isoRep
+    );
+
+    std::cout << "  [Horizon 66 lsaiso.exe Hardware-Isolated Credential Guard Vault]\n"
+              << "    LsaIsoPID=" << isoRep.LsaIsoProcessId
+              << " | IsolatedSecrets=" << isoRep.IsolatedNtlmAndKerberosSecrets
+              << " | RawHashesInLsass=" << (isoRep.RawNtlmHashesInLsassMemory ? "YES" : "NONE (0)") << "\n"
+              << "    PROCESS_VM_READ DumpAttempt=0x" << std::hex << static_cast<uint32_t>(isoRep.MemoryDumpAttemptStatus) << std::dec
+              << " (STATUS_ACCESS_DENIED) | AuthProof=" << isoRep.AlpcAuthProofLatencyUs << " us\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                isoRep.MemoryDumpAttemptStatus == STATUS_ACCESS_DENIED &&
+                isoRep.CredentialDumpAttackBlocked &&
+                !isoRep.RawNtlmHashesInLsassMemory,
+                "lsaiso.exe Credential Guard must deny PROCESS_VM_READ dumps and keep 0 raw NTLM hashes in lsass.exe");
+
+    // 3. CNG Key Isolation (KeyIso) & DPAPI MasterKey Zero-Exposure Engine
+    KeyIsoDpapiOperationReport keyRep{};
+    NTSTATUS st3 = TitanRing2LsaVaultAndKeyIsoEngine::executeKeyIsoAndDpapiProtect(
+        512,
+        &keyRep
+    );
+
+    std::cout << "  [Horizon 66 CNG KeyIso & DPAPI Zero-Key-Exposure Engine]\n"
+              << "    Provider=\"" << keyRep.ProviderName << "\" (" << keyRep.AlgorithmName << ")\n"
+              << "    ProtectedBytes=" << keyRep.ProtectedBlobBytes
+              << " (" << keyRep.CryptoSignAndProtectLatencyUs << " us)"
+              << " | RawKeyInRing3App=" << (keyRep.RawPrivateKeyMappedInRing3App ? "YES" : "NO (ISOLATED)") << "\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                keyRep.ProtectedBlobBytes == 576u &&
+                !keyRep.RawPrivateKeyMappedInRing3App &&
+                keyRep.DpapiMasterKeyBoundToLsaIso,
+                "KeyIso/DPAPI must sign/protect payloads without exposing raw private keys in Ring 3");
+
+    std::cout << "[TEST] Suite 282: Horizon 66 - Sovereign Ring 2 Security Authority & Isolated Credential Vault (lsass.exe, lsaiso.exe & KeyIso) PASSED.\n";
+}
+
+// ============================================================================
+// Suite 283: Horizon 67 — Sovereign Ring 2 Service Control Manager (services.exe
+//            38ms Parallel Dependency-DAG Launcher), Core System Daemons (RpcSs
+//            & DcomLaunch OXID Resolver) & Ring 3 Handover Gate
+//            (base/ntos/ps/ring2_scm_services_broker)
+// ============================================================================
+inline void Test_Horizon67_Ring2ParallelScm_RpcSsDcomLaunch_And_Ring3HandoverGate() {
+    using namespace micant::km::ring2scm;
+    std::cout << "\n[TEST] Suite 283: Horizon 67 - Sovereign Ring 2 Service Control Manager (services.exe, RpcSs/DcomLaunch & Ring 3 Gate)...\n";
+
+    InitializeRing2ScmBrokerExports();
+
+    // 1. Parallel Dependency-DAG Service Control Manager (services.exe)
+    ScmParallelBootReport scmRep{};
+    NTSTATUS st1 = TitanRing2ScmAndServicesBrokerEngine::launchParallelScmServiceGraph(&scmRep);
+
+    std::cout << "  [Horizon 67 Parallel Dependency-DAG Service Control Manager (services.exe)]\n"
+              << "    Endpoint=\"" << scmRep.ScmPipeAndPortEndpoint << "\" (PID=" << scmRep.ServicesExePid << ")\n"
+              << "    DagWaves=" << scmRep.TopologicalDagWaveCount
+              << " | ActiveCoreServices=" << scmRep.ActiveCoreRing2Services
+              << " | TotalGraphBootTime=" << scmRep.TotalServiceGraphBootTimeMs << " ms\n"
+              << "    StrippedTelemetryBloatServices=" << scmRep.StrippedTelemetryBloatServices << " (0 Running)\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                scmRep.ServicesExePid == 612u &&
+                scmRep.TotalServiceGraphBootTimeMs <= 50u &&
+                scmRep.StrippedTelemetryBloatServices >= 40u,
+                "Parallel DAG SCM must launch all core Ring 2 services in <= 50ms with 0 telemetry bloat services");
+
+    // 2. RpcSs Endpoint Mapper (\RPC Control\epmapper) & DcomLaunch OXID Resolver
+    RpcSsAndDcomLaunchReport rpcRep{};
+    NTSTATUS st2 = TitanRing2ScmAndServicesBrokerEngine::initializeRpcSsAndDcomLaunch(&rpcRep);
+
+    std::cout << "  [Horizon 67 RpcSs Endpoint Mapper & DcomLaunch OXID Resolver]\n"
+              << "    Port=\"" << rpcRep.EndpointMapperPort << "\" (DcomLaunch PID=" << rpcRep.DcomLaunchHostPid
+              << ", RpcSs PID=" << rpcRep.RpcSsHostPid << ")\n"
+              << "    Classes=" << rpcRep.RegisteredComAndWinRtClasses
+              << " | LocalLrpcLatency=" << rpcRep.LocalAlpcLrpcCallLatencyUs << " us (Zero-Copy OXID)\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                rpcRep.LocalAlpcLrpcCallLatencyUs <= 5u &&
+                rpcRep.OxidResolverZeroCopyActive &&
+                rpcRep.RegisteredComAndWinRtClasses >= 128u,
+                "RpcSs and DcomLaunch must provide <= 5us zero-copy ALPC LRPC resolution");
+
+    // 3. Sovereign Service Crash-Recovery Policy & Ring 3 Handover Gate
+    ScmRecoveryAndRing3GateReport gateRep{};
+    NTSTATUS st3 = TitanRing2ScmAndServicesBrokerEngine::sealRing2AndVerifyServiceRecovery(&gateRep);
+
+    std::cout << "  [Horizon 67 Service Auto-Recovery & Ring 3 Userspace Handover Gate]\n"
+              << "    Group=\"" << gateRep.MonitoredServiceGroup
+              << "\" | RestartBudget=" << gateRep.ServiceRestartRecoveryBudgetMs << " ms\n"
+              << "    Ring0+Ring1+Ring2Sealed=" << (gateRep.AllRing0Ring1Ring2PlanesSealed ? "YES" : "No")
+              << " | ReadyForRing3UserspaceBuild=" << (gateRep.ReadyForRing3UserspaceBuild ? "YES (RING 2 COMPLETE)" : "No") << "\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                gateRep.ServiceRestartRecoveryBudgetMs <= 10u &&
+                gateRep.PerServiceIsolatedSvchostToken &&
+                gateRep.AllRing0Ring1Ring2PlanesSealed &&
+                gateRep.ReadyForRing3UserspaceBuild,
+                "Ring 2 SCM must seal Ring 0 + Ring 1 + Ring 2 and open the gate for Ring 3 Userspace");
+
+    std::cout << "[TEST] Suite 283: Horizon 67 - Sovereign Ring 2 Service Control Manager (services.exe, RpcSs/DcomLaunch & Ring 3 Gate) PASSED.\n";
+}
+
 
 

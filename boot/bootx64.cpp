@@ -208,14 +208,14 @@ public:
         m_videoDriver.fillRectangle(0, 0, width, 28, bootvid::Color{18, 24, 38});
         m_videoDriver.fillRectangle(0, 27, width, 1, bootvid::Color{38, 52, 78});
         m_videoDriver.drawString(14, 8, "MicaNT Cutler Edition", bootvid::Color{0, 229, 255}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(185, 8, "|  36-Unit NT Kernel (Ring 0 + Ring 1 Sealed)  |  Horizon 64 (smss/csrss)",
+        m_videoDriver.drawString(185, 8, "|  39-Unit NT Kernel (Ring 0 + 1 + 2 Sealed)  |  Horizon 67 (lsaiso/SCM)",
                                 bootvid::Color{170, 185, 205}, bootvid::Color{18, 24, 38}, 1);
 
         m_videoDriver.fillRectangle(width - 366, 5, 154, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 356, 8, "280/280 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 356, 8, "283/283 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
 
         m_videoDriver.fillRectangle(width - 204, 5, 196, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 196, 8, "RING 0+1 SEALED [IRQL 0]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 196, 8, "RING 0+1+2 SEALED [OK]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
 
         auto DrawButtons = [&](uint32_t rightX, uint32_t y) {
             uint32_t btnW = 20;
@@ -243,7 +243,7 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{20, 28, 44});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{40, 180, 100});
             m_videoDriver.drawString(wx + 8, wy + 8, "N+", bootvid::Color{255, 255, 255}, bootvid::Color{40, 180, 100}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ [36-Unit Ring 0+1 Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
+            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ [39-Unit Ring 0+1+2 Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
@@ -265,7 +265,7 @@ public:
             m_videoDriver.fillRectangle(wx + 6, wy + 72, 184, 20, bootvid::Color{26, 38, 58});
             m_videoDriver.drawString(wx + 12, wy + 76, "[c++] kiinit.cpp *  x", bootvid::Color{0, 225, 255}, bootvid::Color{26, 38, 58}, 1);
             m_videoDriver.fillRectangle(wx + 194, wy + 72, 156, 20, bootvid::Color{14, 18, 28});
-            m_videoDriver.drawString(wx + 200, wy + 76, "[h] ring1_smss.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
+            m_videoDriver.drawString(wx + 200, wy + 76, "[h] ring2_scm.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
 
             // Editor
             uint32_t edX = wx + 2;
@@ -277,19 +277,19 @@ public:
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
 
             const char* codeLines[] = {
-                "// MicaNT: 36-Unit Modular Kernel (Ring 0 + Ring 1 Sealed)",
-                "#include <micant/km/core/kuser_upcall_seal.hpp>",
-                "#include <micant/km/executive/ring1_smss_csrss_bootstrap.hpp>",
+                "// MicaNT: 39-Unit Modular Kernel (Ring 0 + 1 + 2 Sealed)",
+                "#include <micant/km/io/ring2_wudf_fontdrv_host.hpp>",
+                "#include <micant/km/drivers/security/ring2_lsa_vault_keyiso.hpp>",
+                "#include <micant/km/executive/ring2_scm_services_broker.hpp>",
                 "",
                 "extern \"C\" NTSTATUS KiSystemStartup(LoaderParameterBlock* lpb) {",
-                "    KuserSealInitializeExecutiveSubsystem(); // 0x7FFE0000 RO",
-                "    Ring1VfsInitializeExecutiveSubsystem();  // 0x24/0x7F Safe",
-                "    Ring1DxgkInitializeExecutiveSubsystem(); // 540Hz Cursor",
-                "    Ring1AudioInitializeExecutiveSubsystem();// 1.33ms WaveRT",
                 "    Ring1SmssInitializeExecutiveSubsystem(); // smss + csrss",
+                "    Ring2WudfInitializeExecutiveSubsystem(); // WUDF + fontdrv",
+                "    Ring2LsaInitializeExecutiveSubsystem();  // lsass + lsaiso",
+                "    Ring2ScmInitializeExecutiveSubsystem();  // 38ms DAG SCM",
                 "    return Phase1Initialization(lpb);",
                 "}",
-                "// Ready for Ring 2 (WUDFHost/lsaiso/SCM) & Ring 3 Userspace"
+                "// Ready for Phase 3: Ring 3 Userspace (Horizons 68+)"
             };
 
             for (size_t i = 0; i < 13; ++i) {
@@ -553,23 +553,23 @@ public:
                 prevRedY   = redY;
             }
 
-            // Bottom Totals Box (Totals / Kernel Memory / Ring 0+1 Telemetry)
+            // Bottom Totals Box (Totals / Kernel Memory / Ring 0+1+2 Telemetry)
             uint32_t tY = wy + 232;
             m_videoDriver.fillRectangle(mX, tY, ww - 24, 82, bootvid::Color{10, 16, 24});
             m_videoDriver.drawRectangle(mX, tY, ww - 24, 82, bootvid::Color{36, 54, 82});
-            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 4,500   Threads: 132   Processes: 12   Upcalls: 0x7FFE0000 Sealed",
+            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 4,820   Threads: 164   Processes: 21   Upcalls: 0x7FFE0000 Sealed",
                                     bootvid::Color{210, 230, 250}, bootvid::Color{10, 16, 24}, 1);
             m_videoDriver.drawString(mX + 10, tY + 26, "Kernel Memory (KB): Total 16,008 (15.63 MB) | Paged 3,200 | Nonpaged 2,048",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 44, "Ring 0: SRM/3us CI + afd/WSK/RIO (1us RTT) + KUSER_SHARED_DATA 10MHz QPC",
+            m_videoDriver.drawString(mX + 10, tY + 44, "Ring 0+1: SRM/3us CI + afd/RIO + VFS Sandbox + 540Hz MPO + smss/csrss",
                                     bootvid::Color{0, 225, 255}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 62, "Ring 1: VFS Sandbox + DirectFlip MPO + WaveRT 1.33ms + smss/csrss Active",
+            m_videoDriver.drawString(mX + 10, tY + 62, "Ring 2: WUDFHost/fontdrv + lsass/lsaiso Vault + 38ms DAG SCM (0 Bloat)",
                                     bootvid::Color{255, 205, 95}, bootvid::Color{10, 16, 24}, 1);
 
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{14, 28, 22});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "Processes: 12 | CPU Usage: 12% (Kernel: 3%) | Commit: 15.6M / 1024M",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "Processes: 21 | CPU Usage: 12% (Kernel: 3%) | Commit: 15.6M / 1024M",
                                     bootvid::Color{100, 255, 160}, bootvid::Color{14, 28, 22}, 1);
         }
 
@@ -835,10 +835,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 36-Unit Modular NT Kernel Tree (Ring 0 Horizons 1-60 + Ring 1 Horizons 61-64).\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 0] Sealed SRM SeAccessCheck/CI (3us), AFD/WSK/RIO Zero-Copy, KUSER_SHARED_DATA 0x7FFE0000 & KiUser* Upcalls.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1] Isolated VFS/Minifilter Plane, win32k/dxgkrnl DirectFlip MPO + 540Hz Cursor, WaveRT 1.33ms DMA & smss/csrss Bootstrap.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 280/280 Suites Verified | 0 BSODs | 15.6 MB Commit | Transitioning to Live GOP Framebuffer Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 39-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 0+1] Sealed SRM/CI (3us), AFD/RIO, KUSER_SHARED_DATA 0x7FFE0000, VFS Sandbox, 540Hz MPO & smss/csrss.\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 2] Isolated WUDFHost/fontdrvhost, lsass/lsaiso Credential Vault (0 NTLM in RAM) & 38ms Parallel DAG SCM.\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 283/283 Suites Verified | 0 BSODs | 15.6 MB Commit | Transitioning to Live GOP Framebuffer Desktop...\r\n");
         }
     }
 

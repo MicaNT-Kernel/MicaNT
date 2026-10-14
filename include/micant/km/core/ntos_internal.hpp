@@ -117,4 +117,13 @@ void Ring1AudioInitializeExecutiveSubsystem() noexcept;
 // Sovereign Ring 1 Native Session Bootstrap (smss.exe, \KnownDlls & csrss.exe) (kernel/ps/ring1_smss.cpp)
 void Ring1SmssInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Ring 2 Isolated Device & Parser Host (WUDFHost.exe & fontdrvhost.exe) (kernel/io/ring2_wudf.cpp)
+void Ring2WudfInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 2 Security Authority & Isolated Credential Vault (lsass.exe, lsaiso.exe & KeyIso) (kernel/se/ring2_lsa.cpp)
+void Ring2LsaInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 2 Service Control Manager & Core System Daemons (services.exe, RpcSs & DcomLaunch) (kernel/ps/ring2_scm.cpp)
+void Ring2ScmInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
