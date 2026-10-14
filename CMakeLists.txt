@@ -44,6 +44,10 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/se/srm_ci.cpp
     kernel/io/afd_wsk.cpp
     kernel/ke/kuser_seal.cpp
+    kernel/fsrtl/ring1_vfs.cpp
+    kernel/io/ring1_dxgk.cpp
+    kernel/io/ring1_audio.cpp
+    kernel/ps/ring1_smss.cpp
 )
 
 add_library(ntoskrnl_core STATIC

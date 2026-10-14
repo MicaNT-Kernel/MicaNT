@@ -105,4 +105,16 @@ void AfdWskInitializeExecutiveSubsystem() noexcept;
 // Sovereign Ring 0 <-> Ring 3 Hardware ABI Seal (KUSER_SHARED_DATA, SYSCALL MSRs & KiUser* Trampolines) (kernel/ke/kuser_seal.cpp)
 void KuserSealInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Ring 1 VFS & Minifilter Fault-Isolated Fast-I/O Plane (kernel/fsrtl/ring1_vfs.cpp)
+void Ring1VfsInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 1 Graphics & Display Scanout Bridge (kernel/io/ring1_dxgk.cpp)
+void Ring1DxgkInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 1 Real-Time WaveRT Audio & Multimedia DMA Engine (kernel/io/ring1_audio.cpp)
+void Ring1AudioInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 1 Native Session Bootstrap (smss.exe, \KnownDlls & csrss.exe) (kernel/ps/ring1_smss.cpp)
+void Ring1SmssInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

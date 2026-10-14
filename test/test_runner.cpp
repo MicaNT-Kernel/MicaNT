@@ -96,6 +96,10 @@
 #include "micant/km/executive/srm_token_ci.hpp"
 #include "micant/km/drivers/net/afd_wsk_rio.hpp"
 #include "micant/km/core/kuser_upcall_seal.hpp"
+#include "micant/km/fs/ring1_vfs_minifilter_plane.hpp"
+#include "micant/km/win32k/ring1_dxgkrnl_flip_plane.hpp"
+#include "micant/km/drivers/audio/ring1_wavert_audio_dma.hpp"
+#include "micant/km/executive/ring1_smss_csrss_bootstrap.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -318,7 +322,23 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite276")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite280")) {
+        RUN_TEST(Test_Horizon64_Ring1SmssBootstrap_KnownDllsPreMap_And_CsrssSuperServer);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite279") {
+        RUN_TEST(Test_Horizon63_Ring1WaveRtCyclicDma_Sub2msWasapi_And_ApoDspGuard);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite278") {
+        RUN_TEST(Test_Horizon62_Ring1Win32kSandbox_DirectFlipMpo_And_540HzCursorPlane);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite277") {
+        RUN_TEST(Test_Horizon61_Ring1VfsMinifilterSandbox_BtreeWof_And_ZeroCopyFastIo);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite276") {
         RUN_TEST(Test_Horizon60_Ring0KuserSharedData_SyscallMsrSeal_And_NtdllUpcallTrampolines);
         return g_FailedTests;
     }
@@ -1252,6 +1272,10 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon58_Ring0SrmAccess_AppContainerSandbox_And_ZeroLagCiEngine);
     RUN_TEST(Test_Horizon59_Ring0AfdFastIo_RioZeroCopyRing_And_WskDirectProvider);
     RUN_TEST(Test_Horizon60_Ring0KuserSharedData_SyscallMsrSeal_And_NtdllUpcallTrampolines);
+    RUN_TEST(Test_Horizon61_Ring1VfsMinifilterSandbox_BtreeWof_And_ZeroCopyFastIo);
+    RUN_TEST(Test_Horizon62_Ring1Win32kSandbox_DirectFlipMpo_And_540HzCursorPlane);
+    RUN_TEST(Test_Horizon63_Ring1WaveRtCyclicDma_Sub2msWasapi_And_ApoDspGuard);
+    RUN_TEST(Test_Horizon64_Ring1SmssBootstrap_KnownDllsPreMap_And_CsrssSuperServer);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -16414,4 +16414,281 @@ inline void Test_Horizon60_Ring0KuserSharedData_SyscallMsrSeal_And_NtdllUpcallTr
     std::cout << "[TEST] Suite 276: Horizon 60 - Sovereign Ring 0 <-> Ring 3 Hardware ABI Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 277: Horizon 61 — Sovereign Ring 1 VFS & Minifilter Fault-Isolated
+//            Fast-I/O Plane (FltMgr Callback Sandbox, NTFS/ReFS B+Tree &
+//            XPRESS4K Decompression, Zero-Copy VACB Scatter-Gather)
+//            (base/ntos/fsrtl/ring1_vfs_minifilter_plane)
+// ============================================================================
+inline void Test_Horizon61_Ring1VfsMinifilterSandbox_BtreeWof_And_ZeroCopyFastIo() {
+    std::cout << "\n[TEST] Suite 277: Horizon 61 - Sovereign Ring 1 VFS & Minifilter Fault-Isolated Fast-I/O Plane...\n";
+
+    InitializeRing1VfsMinifilterExports();
+
+    // 1. Ring 1 Minifilter Altitude Callback Fault Sandbox
+    Ring1MinifilterSandboxReport fltRep{};
+    NTSTATUS st1 = TitanRing1VfsAndMinifilterEngine::executeSandboxedMinifilterPreCreate(
+        "LegacyAvFilter_385200.sys",
+        km::ring1vfs::FLT_ALTITUDE_ANTIVIRUS_TOP,
+        true,
+        &fltRep
+    );
+
+    std::cout << "  [Horizon 61 Ring 1 Minifilter Callback Fault Sandbox]\n"
+              << "    Filter=\"" << fltRep.FilterDriverName << "\" (Altitude=" << fltRep.FilterAltitude
+              << ", Ring=" << fltRep.ExecutionPrivilegeRing << ")\n"
+              << "    CaughtInRing1=" << (fltRep.FaultCaughtInRing1Domain ? "YES" : "No")
+              << " | Recovery=" << fltRep.RecoveryLatencyNanoseconds << " ns"
+              << " | BSOD(0x24)=NO\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                fltRep.ExecutionPrivilegeRing == 1u &&
+                fltRep.FaultCaughtInRing1Domain &&
+                fltRep.AutoBypassedFaultingFilterCallback &&
+                fltRep.Ring0KernelPoolUntouched &&
+                fltRep.BugCheck0x24Prevented,
+                "Ring 1 minifilter sandbox must isolate filter faults without touching Ring 0 pool or triggering 0x24 BSOD");
+
+    // 2. Ring 1 B+Tree ($INDEX_ALLOCATION) & WOF XPRESS4K Decompression
+    Ring1BtreeAndWofDecompressReport btreeRep{};
+    NTSTATUS st2 = TitanRing1VfsAndMinifilterEngine::traverseBtreeAndDecompressXpress4k(
+        1536,
+        4096,
+        &btreeRep
+    );
+
+    std::cout << "  [Horizon 61 Ring 1 NTFS/ReFS B+Tree & WOF XPRESS4K Fast-Plane]\n"
+              << "    INDX=0x" << std::hex << btreeRep.VerifiedIndxSignature << std::dec
+              << " | Ring0Stack=" << btreeRep.Ring0KernelStackBytesUsed << " B"
+              << " | Ring1Stack=" << btreeRep.Ring1IsolatedStackBytesUsed << " B"
+              << " | BSOD(0x7F)=NO\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                btreeRep.VerifiedIndxSignature == 0x58444E49u &&
+                btreeRep.Ring0KernelStackBytesUsed <= 512u &&
+                btreeRep.DoubleFault0x7FStackOverflowEliminated,
+                "Ring 1 B+Tree and XPRESS4K decompression must eliminate Ring 0 0x7F stack overflow risk");
+
+    // 3. Zero-Copy VFS FastIoRead / MDL Scatter-Gather Bridge
+    Ring1ZeroCopyFastIoReport zcRep{};
+    NTSTATUS st3 = TitanRing1VfsAndMinifilterEngine::mapZeroCopyVacbScatterGather(
+        16,
+        262144ULL, // 256 KB VACB views
+        &zcRep
+    );
+
+    std::cout << "  [Horizon 61 Zero-Copy VFS FastIoRead / MDL Scatter-Gather Bridge]\n"
+              << "    MappedBytes=" << (zcRep.TotalBytesMappedZeroCopy / (1024 * 1024)) << " MB"
+              << " | Ring0Copies=" << zcRep.IntermediateRing0BufferCopies
+              << " | Bandwidth=" << zcRep.EffectiveBandwidthMBps << " MB/s\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                zcRep.IntermediateRing0BufferCopies == 0u &&
+                zcRep.TotalBytesMappedZeroCopy == 4194304ULL &&
+                zcRep.EffectiveBandwidthMBps >= 10000u,
+                "Zero-copy VFS FastIoRead must map VACB views with 0 intermediate Ring 0 buffer copies");
+
+    std::cout << "[TEST] Suite 277: Horizon 61 - Sovereign Ring 1 VFS & Minifilter Fault-Isolated Fast-I/O Plane PASSED.\n";
+}
+
+// ============================================================================
+// Suite 278: Horizon 62 — Sovereign Ring 1 Graphics & Display Scanout Bridge
+//            (win32k Font/Surface Privilege Sandbox, Zero-Copy DirectFlip / MPO
+//            Scanout & 540Hz Async Hardware Cursor Plane)
+//            (base/ntos/win32k/ring1_dxgkrnl_flip_plane)
+// ============================================================================
+inline void Test_Horizon62_Ring1Win32kSandbox_DirectFlipMpo_And_540HzCursorPlane() {
+    std::cout << "\n[TEST] Suite 278: Horizon 62 - Sovereign Ring 1 win32k Sandbox, DirectFlip/MPO Scanout & 540Hz Cursor Plane...\n";
+
+    InitializeRing1DxgkrnlFlipExports();
+
+    // 1. Ring 1 win32k Surface & Font Rasterizer Privilege Isolation
+    Ring1Win32kSandboxReport w32Rep{};
+    NTSTATUS st1 = TitanRing1DxgkrnlAndFlipEngine::isolateWin32kSurfaceAndFontParser(
+        "UntrustedWebOpenType_CFF2.otf",
+        128,
+        &w32Rep
+    );
+
+    std::cout << "  [Horizon 62 Ring 1 win32k Surface & Font Rasterizer Sandbox]\n"
+              << "    Payload=\"" << w32Rep.FontOrSurfacePayloadName << "\" (Ring=" << w32Rep.ExecutionPrivilegeRing << ")\n"
+              << "    MalformedGlyphContained=" << (w32Rep.MalformedGlyphTableContained ? "YES" : "No")
+              << " | Ring0EoPBlocked=" << (w32Rep.Ring0EoPExploitBlocked ? "YES" : "No") << "\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                w32Rep.ExecutionPrivilegeRing == 1u &&
+                w32Rep.MalformedGlyphTableContained &&
+                w32Rep.Ring0EoPExploitBlocked,
+                "Ring 1 win32k sandbox must contain malformed font/surface parsing and block Ring 0 EoP exploits");
+
+    // 2. Zero-Copy DirectFlip (iFlip) & MPO Scanout Engine
+    Ring1DirectFlipMpoReport flipRep{};
+    NTSTATUS st2 = TitanRing1DxgkrnlAndFlipEngine::presentIndependentFlipMpo(
+        0xFFFF980080000000ULL,
+        3,
+        &flipRep
+    );
+
+    std::cout << "  [Horizon 62 Zero-Copy DirectFlip (iFlip) & MPO Scanout Engine]\n"
+              << "    MPOPlanes=" << flipRep.ActiveMpoHardwarePlanes
+              << " | DwmCopies=" << flipRep.DwmIntermediateCopyCount
+              << " | PresentToScanout=" << flipRep.PresentToScanoutLatencyMicroseconds << " us\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                flipRep.DwmIntermediateCopyCount == 0u &&
+                flipRep.IndependentFlipActive &&
+                flipRep.VrrGsyncFreeSyncLocked &&
+                flipRep.PresentToScanoutLatencyMicroseconds <= 100u,
+                "DirectFlip/MPO scanout must bypass DWM intermediate copies with <= 100 us scanout latency");
+
+    // 3. Dedicated 540 Hz Asynchronous Hardware Cursor Scanout Plane
+    Ring1HardwareCursorPlaneReport curRep{};
+    NTSTATUS st3 = TitanRing1DxgkrnlAndFlipEngine::updateAsyncHardwareCursorPlane(
+        1280,
+        720,
+        25, // 25 ms heavy GPU shader load
+        &curRep
+    );
+
+    std::cout << "  [Horizon 62 Dedicated 540 Hz Async Hardware Cursor Plane]\n"
+              << "    Rate=" << curRep.CursorUpdateRateHz << " Hz"
+              << " | GpuShaderLoad=" << curRep.SimulatedGpuShaderLoadMs << " ms"
+              << " | DroppedCursorFrames=" << curRep.CursorDroppedFramesDuringGpuStall << "\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                curRep.CursorUpdateRateHz == 540u &&
+                curRep.CursorDroppedFramesDuringGpuStall == 0u &&
+                curRep.AsyncHardwareRegisterProgrammed,
+                "Async 540Hz hardware cursor plane must drop 0 frames even during a 25ms GPU shader load");
+
+    std::cout << "[TEST] Suite 278: Horizon 62 - Sovereign Ring 1 win32k Sandbox, DirectFlip/MPO Scanout & 540Hz Cursor Plane PASSED.\n";
+}
+
+// ============================================================================
+// Suite 279: Horizon 63 — Sovereign Ring 1 Real-Time WaveRT Audio & Multimedia
+//            DMA Engine (Direct Cyclic DMA Ring Buffer, 1.33ms 64-Frame
+//            Event-Driven WASAPI & Fault-Isolated APO DSP Guard)
+//            (base/ntos/io/ring1_wavert_audio_dma)
+// ============================================================================
+inline void Test_Horizon63_Ring1WaveRtCyclicDma_Sub2msWasapi_And_ApoDspGuard() {
+    std::cout << "\n[TEST] Suite 279: Horizon 63 - Sovereign Ring 1 Real-Time WaveRT Audio & Sub-2ms DMA Engine...\n";
+
+    InitializeRing1WaveRtAudioExports();
+
+    // 1. WaveRT Cyclic DMA Ring & Sub-2ms Event-Driven WASAPI
+    WaveRtCyclicDmaReport dmaRep{};
+    NTSTATUS st1 = TitanRing1WaveRtAudioEngine::mapWaveRtCyclicDmaStream(
+        "\\Device\\WaveRT_HDAudio_PrimaryOut0",
+        48000,
+        64, // 64 frames @ 48 kHz = 1,333 us (1.33 ms)
+        &dmaRep
+    );
+
+    std::cout << "  [Horizon 63 WaveRT Cyclic DMA Ring & Sub-2ms WASAPI]\n"
+              << "    Endpoint=\"" << dmaRep.EndpointDeviceName << "\"\n"
+              << "    Format=" << dmaRep.SampleRateHz << " Hz / " << dmaRep.BitsPerSample << "-bit"
+              << " | Period=" << dmaRep.PeriodFrames << " frames (" << dmaRep.PeriodMicroseconds << " us)\n"
+              << "    KernelCopies=" << dmaRep.KernelAudioBufferCopies
+              << " | Underruns=" << dmaRep.UnderrunGlitchCount << "\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                dmaRep.PeriodMicroseconds == 1333u &&
+                dmaRep.KernelAudioBufferCopies == 0u &&
+                dmaRep.UnderrunGlitchCount == 0u &&
+                dmaRep.MmcssProAudioPriority25Locked,
+                "WaveRT cyclic DMA must run at 1.33ms (64 frames @ 48kHz) with 0 kernel buffer copies and 0 underruns");
+
+    // 2. Ring 1 APO Fault-Isolated DSP Watchdog & NaN Scrubber
+    Ring1ApoDspGuardReport apoRep{};
+    NTSTATUS st2 = TitanRing1WaveRtAudioEngine::guardRing1ApoDspPipeline(
+        "VendorSpatialBassBoostAPO.dll",
+        1800, // 1.8 ms APO stall (> 150 us deadline)
+        &apoRep
+    );
+
+    std::cout << "  [Horizon 63 Ring 1 APO Fault-Isolated DSP Watchdog]\n"
+              << "    APO=\"" << apoRep.FaultingApoModuleName << "\" (Stall=" << apoRep.ObservedApoProcessingUs
+              << " us > Deadline=" << apoRep.EnforcedApoDeadlineUs << " us)\n"
+              << "    BypassedToCleanPcm=" << (apoRep.FaultingApoBypassedToCleanPcm ? "YES" : "No")
+              << " | ZeroPopClick=" << (apoRep.ZeroAudiblePopClickVerified ? "YES" : "No") << "\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                apoRep.NanOrDenormalSamplesScrubbed &&
+                apoRep.FaultingApoBypassedToCleanPcm &&
+                apoRep.ZeroAudiblePopClickVerified,
+                "Ring 1 APO guard must scrub NaN samples and bypass stalled third-party APOs with 0 pops/clicks");
+
+    std::cout << "[TEST] Suite 279: Horizon 63 - Sovereign Ring 1 Real-Time WaveRT Audio & Sub-2ms DMA Engine PASSED.\n";
+}
+
+// ============================================================================
+// Suite 280: Horizon 64 — Sovereign Native NT Session Bootstrap (smss.exe
+//            Session Manager, \KnownDlls Pre-Mapped Copy-On-Write Sections &
+//            csrss.exe ALPC Super-Server Bridge)
+//            (base/ntos/ps/ring1_smss_csrss_bootstrap)
+// ============================================================================
+inline void Test_Horizon64_Ring1SmssBootstrap_KnownDllsPreMap_And_CsrssSuperServer() {
+    std::cout << "\n[TEST] Suite 280: Horizon 64 - Sovereign Native Session Bootstrap (smss.exe, \\KnownDlls & csrss.exe)...\n";
+
+    InitializeRing1SmssCsrssExports();
+
+    // 1. smss.exe Native Bootstrap & Session Namespace Creation
+    SmssNativeBootstrapReport smssRep{};
+    NTSTATUS st1 = TitanRing1SmssAndCsrssBootstrapEngine::bootstrapSmssAndSessionNamespaces(&smssRep);
+
+    std::cout << "  [Horizon 64 smss.exe Native Bootstrap & Session Namespaces]\n"
+              << "    Image=\"" << smssRep.SmssImagePath << "\" (PID=" << smssRep.SmssProcessId
+              << ", Subsystem=NATIVE)\n"
+              << "    Session0(Services)=" << smssRep.ServicesSessionId
+              << " | Session1(Console)=" << smssRep.InteractiveConsoleSessionId
+              << " | BaseNamedObjects=READY\n";
+
+    TEST_ASSERT(st1 == STATUS_SUCCESS &&
+                smssRep.ImageSubsystemType == 1u &&
+                smssRep.InteractiveConsoleSessionId == 1u &&
+                smssRep.BaseNamedObjectsDirectoryReady &&
+                smssRep.DosDevicesGlobalSymlinksReady,
+                "smss.exe native bootstrap must initialize Session 0, Session 1, and BaseNamedObjects");
+
+    // 2. \KnownDlls Copy-On-Write SEC_IMAGE Pre-Mapper
+    KnownDllsPreMapReport kdRep{};
+    NTSTATUS st2 = TitanRing1SmssAndCsrssBootstrapEngine::preMapKnownDllsSectionDirectory(&kdRep);
+
+    std::cout << "  [Horizon 64 \\KnownDlls Copy-On-Write SEC_IMAGE Pre-Mapper]\n"
+              << "    Dir=\"" << kdRep.ObjectDirectoryPath << "\" | Count=" << kdRep.PreMappedSystemDllCount
+              << " (" << kdRep.PrimaryMappedDllsSummary << ")\n"
+              << "    NewProcessMapLatency=" << kdRep.NewProcessDllMapLatencyUs << " us"
+              << " | DiskReadsPerSpawn=" << kdRep.RedundantDiskReadsPerSpawn << "\n";
+
+    TEST_ASSERT(st2 == STATUS_SUCCESS &&
+                kdRep.PreMappedSystemDllCount == 10u &&
+                kdRep.NewProcessDllMapLatencyUs == 180u &&
+                kdRep.RedundantDiskReadsPerSpawn == 0u &&
+                kdRep.CopyOnWritePageSharingActive,
+                "\\KnownDlls pre-mapper must map 10 core DLLs in 180 us with 0 disk reads per process spawn");
+
+    // 3. csrss.exe (\Sessions\1\Windows\ApiPort) Shared-Section Server Bridge
+    CsrssAlpcSuperServerReport csrRep{};
+    NTSTATUS st3 = TitanRing1SmssAndCsrssBootstrapEngine::initializeCsrssAlpcSuperServer(
+        12,
+        96,
+        &csrRep
+    );
+
+    std::cout << "  [Horizon 64 csrss.exe ALPC Super-Server & Shared Section Bridge]\n"
+              << "    Port=\"" << csrRep.CsrssPortPath << "\" (PID=" << csrRep.CsrssProcessId << ")\n"
+              << "    CsrSharedRO=0x" << std::hex << csrRep.CsrSharedReadOnlySectionBaseVa << std::dec
+              << " | RegistrationLatency=" << csrRep.ProcessRegistrationLatencyUs << " us\n"
+              << "    ReadyForRing3UserspaceEntry=" << (csrRep.ReadyForRing3UserspaceEntry ? "YES (PHASE 2 RING 1 COMPLETE)" : "No") << "\n";
+
+    TEST_ASSERT(st3 == STATUS_SUCCESS &&
+                csrRep.ConDrvPseudoConsoleReady &&
+                csrRep.ProcessRegistrationLatencyUs <= 10u &&
+                csrRep.ReadyForRing3UserspaceEntry,
+                "csrss.exe ALPC super-server must be ready for Phase 3 Ring 3 Userspace entry");
+
+    std::cout << "[TEST] Suite 280: Horizon 64 - Sovereign Native Session Bootstrap (smss.exe, \\KnownDlls & csrss.exe) PASSED.\n";
+}
+
+
 
