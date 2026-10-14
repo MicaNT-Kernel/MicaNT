@@ -14923,4 +14923,227 @@ inline void Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm(
     std::cout << "[TEST] Suite 264: Horizon 48 - Live Hardware-Gated PnP Driver Loader (Intel Xeon/C246 Running vs NVIDIA Blocked, 329/329 IAT Symbols Bound) PASSED.\n";
 }
 
+// ============================================================================
+// Suite 265: Horizon 49 - Sovereign NT Boot-Time Driver Scheduler
+//            (IopInitializeBootDrivers, ServiceGroupOrder, StartOverride) &
+//            Live Hardware Bus Scanner (base/ntos/io/pnpboot)
+// ============================================================================
+inline void Test_Horizon49_BootDriverScheduler_ServiceGroupOrder_StartOverride_And_LiveBusScan() {
+    using namespace micant::km::pnpboot;
+    using namespace micant::km::wmi;
+    std::cout << "[TEST] Running Suite 265: Horizon 49 - Sovereign NT Boot-Time Driver Scheduler & Live Hardware Bus Scanner...\n";
+
+    InitializeWmiAndDriverCompatExports();
+    InitializePnpBootSchedulerExports();
+
+    auto& scheduler = TitanPnpBootScheduler::get();
+    scheduler.resetForTest();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: Live System Hardware Bus Scan (CPUID + PCI Enum\...\Control)
+    // ------------------------------------------------------------------------
+    auto liveNodes = scheduler.scanLiveSystemHardwareBus();
+    TEST_ASSERT(liveNodes.size() >= 5,
+                "Live hardware bus scanner must discover ACPI CPU + live PCI motherboard devices");
+
+    bool foundCpu = false;
+    bool foundC246Lpc = false;
+    bool foundAhci = false;
+    bool foundI2c = false;
+    bool foundNvidia = false;
+    for (const auto& n : liveNodes) {
+        if (n.HardwareId.find("ACPI\\GenuineIntel") != std::string::npos) foundCpu = true;
+        if (n.HardwareId.find("PCI\\VEN_8086&DEV_A309") != std::string::npos || n.AssignedService == "msisadrv") foundC246Lpc = true;
+        if (n.HardwareId.find("PCI\\VEN_8086&DEV_A352") != std::string::npos) foundAhci = true;
+        if (n.HardwareId.find("PCI\\VEN_8086&DEV_A369") != std::string::npos) foundI2c = true;
+        if (n.HardwareId.find("PCI\\VEN_10DE") != std::string::npos) foundNvidia = true;
+    }
+    TEST_ASSERT(foundCpu && foundAhci && foundI2c && !foundNvidia,
+                "Live hardware scan must detect Intel Xeon CPU, SATA AHCI (DEV_A352), Serial IO I2C (DEV_A369), and zero NVIDIA (VEN_10DE) devices");
+    std::cout << "  [Live Bus Scan] Discovered " << liveNodes.size()
+              << " active hardware nodes on motherboard (CPU: GenuineIntel Xeon, Chipset: Intel C246 VEN_8086, NVIDIA VEN_10DE: 0)\n";
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Scrambled Candidate List -> Deterministic Multi-Phase Boot Schedule
+    // ------------------------------------------------------------------------
+    std::vector<TitanPnpBootScheduler::DRIVER_CANDIDATE_SPEC> candidates = {
+        // 1. NVIDIA nvstor.sys: Configured Start=0 (BOOT_START), but StartOverride\0 = 3 (DEMAND_START) and no VEN_10DE hardware!
+        {
+            "nvstor",
+            "C:\\Windows\\System32\\DriverStore\\FileRepository\\nvraid.inf_amd64_144351277838b429\\nvstor.sys",
+            "PCI\\VEN_10DE",
+            NT_SERVICE_BOOT_START,
+            "SCSI Miniport",
+            19,
+            true,
+            NT_SERVICE_DEMAND_START,
+            {
+                { "ntoskrnl.exe", { "KeInitializeEvent", "RtlGetVersion", "KeWaitForSingleObject",
+                                    "IofCallDriver", "IoBuildDeviceIoControlRequest" } },
+                { "storport.sys", { "StorPortFreeDeviceBase", "StorPortNotification", "StorPortFreeRegistryBuffer",
+                                    "StorPortGetDeviceBase", "StorPortSetDeviceQueueDepth", "StorPortAllocateRegistryBuffer",
+                                    "StorPortGetLogicalUnit", "StorPortPause", "StorPortRegistryRead",
+                                    "StorPortInitialize", "StorPortResume", "StorPortGetUncachedExtension",
+                                    "StorPortExtendedFunction", "StorPortGetBusData", "StorPortSetBusDataByOffset",
+                                    "StorPortGetScatterGatherList", "StorPortPauseDevice", "StorPortResumeDevice",
+                                    "StorPortStallExecution", "StorPortGetPhysicalAddress", "StorPortSynchronizeAccess",
+                                    "StorPortDebugPrint", "ScsiPortNotification" } }
+            }
+        },
+        // 2. Intel e1d68x64.sys: Start=3 (DEMAND_START), Group="NDIS", Tag=15 (Phase 2 PnP)
+        {
+            "e1dexpress",
+            "C:\\Windows\\System32\\DriverStore\\FileRepository\\e1d68x64.inf_amd64_ae1f744955c174dc\\e1d68x64.sys",
+            "PCI\\VEN_8086",
+            NT_SERVICE_DEMAND_START,
+            "NDIS",
+            15,
+            false,
+            NT_SERVICE_DEMAND_START,
+            {
+                { "ntoskrnl.exe", { "IoWMIRegistrationControl", "RtlCopyUnicodeString", "MmGetSystemRoutineAddress" } },
+                { "NDIS.SYS",     { "NdisMRegisterMiniportDriver", "NdisMDeregisterMiniportDriver" } }
+            }
+        },
+        // 3. Intel intelppm.sys: Start=3 (DEMAND_START), Group="Extended Base", Tag=6 (Phase 2 PnP)
+        {
+            "intelppm",
+            "C:\\Windows\\System32\\drivers\\intelppm.sys",
+            "ACPI\\GenuineIntel",
+            NT_SERVICE_DEMAND_START,
+            "Extended Base",
+            6,
+            false,
+            NT_SERVICE_DEMAND_START,
+            {
+                { "ntoskrnl.exe",   { "PoFxRegisterDevice", "PoFxProcessorNotification", "IoWMIRegistrationControl" } },
+                { "WppRecorder.sys",{ "WppAutoLogStart", "WppAutoLogStop", "WppAutoLogTrace", "imp_WppRecorderReplay" } },
+                { "HAL.dll",        { "HalGetProcessorIdByNtNumber", "KeQueryPerformanceCounter" } },
+                { "WDFLDR.SYS",     { "WdfVersionBind", "WdfVersionUnbind", "WdfVersionBindClass", "WdfVersionUnbindClass", "WdfLdrQueryInterface" } }
+            }
+        },
+        // 4. Intel storahci.sys: Start=0 (BOOT_START), Group="SCSI Miniport", Tag=32 (Phase 0 Boot Storage)
+        {
+            "storahci",
+            "C:\\Windows\\System32\\drivers\\storahci.sys",
+            "PCI\\VEN_8086&DEV_A352",
+            NT_SERVICE_BOOT_START,
+            "SCSI Miniport",
+            32,
+            false,
+            NT_SERVICE_BOOT_START,
+            {
+                { "storport.sys", { "StorPortGetScatterGatherList", "StorPortQuerySystemTime",
+                                    "StorPortGetUncachedExtension", "StorPortNotification",
+                                    "StorPortInitialize", "StorPortGetBusData", "StorPortExtendedFunction",
+                                    "StorPortGetPhysicalAddress", "StorPortStallExecution",
+                                    "StorPortRegistryRead", "StorPortFreeRegistryBuffer",
+                                    "StorPortAllocateRegistryBuffer", "StorPortGetDeviceBase",
+                                    "StorPortDeviceBusy", "StorPortSetDeviceQueueDepth" } }
+            }
+        },
+        // 5. Intel iaLPSS2i_I2C_CNL.sys: Start=3 (DEMAND_START), Group="Base", Tag=20 (Phase 2 PnP)
+        {
+            "iaLPSS2i_I2C_CNL",
+            "C:\\Windows\\System32\\drivers\\iaLPSS2i_I2C_CNL.sys",
+            "PCI\\VEN_8086&DEV_A369",
+            NT_SERVICE_DEMAND_START,
+            "Base",
+            20,
+            false,
+            NT_SERVICE_DEMAND_START,
+            {
+                { "ntoskrnl.exe", { "MmUnmapIoSpace", "MmMapIoSpaceEx", "PoRegisterPowerSettingCallback",
+                                    "PoUnregisterPowerSettingCallback", "IoWMIRegistrationControl" } },
+                { "HAL.dll",      { "KeStallExecutionProcessor" } },
+                { "WDFLDR.SYS",   { "WdfVersionBind", "WdfVersionUnbind", "WdfVersionBindClass", "WdfVersionUnbindClass" } }
+            }
+        },
+        // 6. Microsoft/Intel msisadrv.sys: Start=0 (BOOT_START), Group="Boot Bus Extender", Tag=2 (Phase 0 Early Bus)
+        {
+            "msisadrv",
+            "C:\\Windows\\System32\\drivers\\msisadrv.sys",
+            "PCI\\VEN_8086",
+            NT_SERVICE_BOOT_START,
+            "Boot Bus Extender",
+            2,
+            false,
+            NT_SERVICE_BOOT_START,
+            {
+                { "ntoskrnl.exe", { "KeInitializeEvent", "IofCompleteRequest", "RtlFindClearBitsAndSet",
+                                    "RtlInitializeBitMap", "RtlClearAllBits", "KeLeaveCriticalRegion",
+                                    "HalDispatchTable", "DbgPrintEx", "RtlCopyUnicodeString",
+                                    "RtlClearBits", "ExAllocatePool2", "KeSetEvent",
+                                    "KeWaitForSingleObject", "KeEnterCriticalRegion" } },
+                { "WDFLDR.SYS",   { "WdfVersionBind", "WdfLdrQueryInterface", "WdfVersionUnbind",
+                                    "WdfVersionBindClass", "WdfVersionUnbindClass" } }
+            }
+        }
+    };
+
+    auto timeline = scheduler.executeBootAndPnpDriverSchedule(candidates);
+    TEST_ASSERT(timeline.size() == 6, "Boot timeline must evaluate all 6 driver candidates");
+
+    for (const auto& e : timeline) {
+        std::cout << "  [Boot Schedule #" << e.LoadSequenceOrder << " | T+" << e.BootTimeOffsetMs << "ms] "
+                  << e.Config.ServiceName << " (Start=" << e.Config.ConfiguredStart
+                  << (e.Config.HasStartOverride ? ", StartOverride=3" : "")
+                  << ", Group=\"" << e.Config.GroupName << "\", Tag=" << e.Config.GroupTag
+                  << ") -> Bound " << e.BinaryReport.ResolvedSymbols << "/" << e.BinaryReport.TotalImportedSymbols
+                  << " IAT symbols | State: " << e.FinalServiceState
+                  << (e.HardwarePresentOnBus ? (" [" + e.MatchedHardwareId + "]") : " [Skipped: No VEN_10DE Hardware]")
+                  << "\n";
+    }
+
+    // Verify exact chronological boot order:
+    // #1: msisadrv (Phase 0 BOOT_START, Boot Bus Extender, Tag 2)
+    // #2: storahci (Phase 0 BOOT_START, SCSI Miniport, Tag 32)
+    // #3: iaLPSS2i_I2C_CNL (Phase 2 PnP DEMAND_START, Base, Tag 20)
+    // #4: intelppm (Phase 2 PnP DEMAND_START, Extended Base, Tag 6)
+    // #5: e1dexpress (Phase 2 PnP DEMAND_START, NDIS, Tag 15)
+    // Skipped (#0): nvstor (Configured Start=0, demoted by StartOverride=3 & 0 VEN_10DE devices -> Stopped)
+    TEST_ASSERT(timeline[0].Config.ServiceName == "msisadrv" &&
+                timeline[0].BootPhase == NT_BOOT_LOAD_PHASE::Phase0_BootStart_PreMount &&
+                timeline[0].LoadSequenceOrder == 1 &&
+                timeline[0].DriverLoadedAndStarted &&
+                timeline[0].BinaryReport.UnresolvedSymbols == 0,
+                "Load #1 at T+5ms must be msisadrv.sys (Phase 0 BOOT_START, Boot Bus Extender, 19/19 IAT bound)");
+
+    TEST_ASSERT(timeline[1].Config.ServiceName == "storahci" &&
+                timeline[1].BootPhase == NT_BOOT_LOAD_PHASE::Phase0_BootStart_PreMount &&
+                timeline[1].LoadSequenceOrder == 2 &&
+                timeline[1].DriverLoadedAndStarted &&
+                timeline[1].BinaryReport.UnresolvedSymbols == 0,
+                "Load #2 at T+10ms must be storahci.sys (Phase 0 BOOT_START, SCSI Miniport, 15/15 IAT bound)");
+
+    TEST_ASSERT(timeline[2].Config.ServiceName == "iaLPSS2i_I2C_CNL" &&
+                timeline[2].BootPhase == NT_BOOT_LOAD_PHASE::Phase2_PnpEnumeration_OnDemand &&
+                timeline[2].LoadSequenceOrder == 3 &&
+                timeline[2].DriverLoadedAndStarted,
+                "Load #3 at T+54ms must be iaLPSS2i_I2C_CNL.sys (Phase 2 PnP, Base group)");
+
+    TEST_ASSERT(timeline[3].Config.ServiceName == "intelppm" &&
+                timeline[3].BootPhase == NT_BOOT_LOAD_PHASE::Phase2_PnpEnumeration_OnDemand &&
+                timeline[3].LoadSequenceOrder == 4 &&
+                timeline[3].DriverLoadedAndStarted,
+                "Load #4 at T+62ms must be intelppm.sys (Phase 2 PnP, Extended Base group)");
+
+    TEST_ASSERT(timeline[4].Config.ServiceName == "e1dexpress" &&
+                timeline[4].BootPhase == NT_BOOT_LOAD_PHASE::Phase2_PnpEnumeration_OnDemand &&
+                timeline[4].LoadSequenceOrder == 5 &&
+                timeline[4].DriverLoadedAndStarted,
+                "Load #5 at T+70ms must be e1d68x64.sys (Phase 2 PnP, NDIS group)");
+
+    TEST_ASSERT(timeline[5].Config.ServiceName == "nvstor" &&
+                timeline[5].BootPhase == NT_BOOT_LOAD_PHASE::PhaseSkipped_NoHardwareOrOverride &&
+                timeline[5].Config.ConfiguredStart == NT_SERVICE_BOOT_START &&
+                timeline[5].Config.HasStartOverride &&
+                timeline[5].Config.EffectiveStart == NT_SERVICE_DEMAND_START &&
+                !timeline[5].DriverLoadedAndStarted &&
+                timeline[5].FinalServiceState == "Stopped",
+                "nvstor.sys (Start=0, StartOverride=3) must be demoted out of Phase 0 and remain Stopped due to absent VEN_10DE hardware");
+
+    std::cout << "[TEST] Suite 265: Horizon 49 - Sovereign NT Boot-Time Driver Scheduler & Live Hardware Bus Scanner PASSED.\n";
+}
+
 

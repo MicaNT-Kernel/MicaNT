@@ -69,4 +69,7 @@ void ArbInitializeExecutiveSubsystem() noexcept;
 // Kernel WMI, WPP Recorder & Real Vendor .sys Compatibility Initialization (kernel/wmi/wmimgr.cpp)
 void WmiInitializeExecutiveSubsystem() noexcept;
 
+// Boot-Time Driver Scheduler & Live Hardware Bus Scanner Initialization (kernel/io/pnpboot.cpp)
+void PnpBootInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

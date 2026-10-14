@@ -805,7 +805,14 @@ inline void InitializeWmiAndDriverCompatExports() noexcept {
         // iaLPSS2i_I2C_CNL.sys (Live Intel C246 Chipset Serial IO I2C Driver) additional ntoskrnl.exe imports
         "wcsnlen",
         "wcsncmp",
-        "EtwActivityIdControl"
+        "EtwActivityIdControl",
+        // msisadrv.sys (Live Intel C246 Chipset LPC Controller BOOT_START Driver) additional ntoskrnl.exe imports
+        "RtlFindClearBitsAndSet",
+        "RtlInitializeBitMap",
+        "RtlClearAllBits",
+        "KeLeaveCriticalRegion",
+        "RtlClearBits",
+        "KeEnterCriticalRegion"
     };
 
     for (const char* sym : kNtosWdkSymbols) {
@@ -832,7 +839,7 @@ inline void InitializeWmiAndDriverCompatExports() noexcept {
     ldr.registerExport("wpprecorder.sys", "WppAutoLogTrace",      reinterpret_cast<void*>(&WppAutoLogTrace));
     ldr.registerExport("wpprecorder.sys", "imp_WppRecorderReplay", stubPtr);
 
-    // 4. Register WDFLDR.SYS exports (used by IntelPMT.sys and all KMDF drivers)
+    // 4. Register WDFLDR.SYS exports (used by IntelPMT.sys, msisadrv.sys and all KMDF drivers)
     const char* const kWdfLdrSymbols[] = {
         "WdfVersionBind",
         "WdfVersionUnbind",
@@ -844,7 +851,7 @@ inline void InitializeWmiAndDriverCompatExports() noexcept {
         ldr.registerExport("wdfldr.sys", sym, stubPtr);
     }
 
-    // 5. Register storport.sys exports (used by NVIDIA nvstor.sys)
+    // 5. Register storport.sys exports (used by NVIDIA nvstor.sys and Intel storahci.sys BOOT_START AHCI driver)
     const char* const kStorPortSymbols[] = {
         "StorPortFreeDeviceBase",
         "StorPortNotification",
@@ -868,7 +875,9 @@ inline void InitializeWmiAndDriverCompatExports() noexcept {
         "StorPortGetPhysicalAddress",
         "StorPortSynchronizeAccess",
         "StorPortDebugPrint",
-        "ScsiPortNotification"
+        "ScsiPortNotification",
+        "StorPortQuerySystemTime",
+        "StorPortDeviceBusy"
     };
     for (const char* sym : kStorPortSymbols) {
         if (!ldr.getExport("storport.sys", sym)) {
