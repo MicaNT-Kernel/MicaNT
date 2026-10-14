@@ -552,7 +552,7 @@ public:
                 static_cast<uint64_t>(poolType),
                 numberOfBytes,
                 driverName,
-                "ExAllocatePoolWithTag(PagedPool) called at IRQL >= DISPATCH_LEVEL"
+                "VfAllocatePoolWithTag(PagedPool) called at IRQL >= DISPATCH_LEVEL"
             );
             return nullptr;
         }

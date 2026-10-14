@@ -158,7 +158,11 @@ enum class NtStatus : uint32_t {
     TransactionNotJoined             = 0xC0190007,
     TransactionSuperiorExists        = 0xC0190008,
     TransactionNotActive             = 0xC0190009,
-    TransactionRequestNotValid       = 0xC019000A
+    TransactionRequestNotValid       = 0xC019000A,
+
+    // Hardware Resource Arbiter (Arb* / Rtl*RangeList) & WDK .sys Loader Status Codes
+    InvalidImageFormat               = 0xC000007B,
+    RangeListConflict                = 0xC000034F
 };
 
 // ============================================================================

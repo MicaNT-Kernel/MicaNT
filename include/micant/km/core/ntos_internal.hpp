@@ -63,4 +63,7 @@ void PoInitializeExecutiveSubsystem() noexcept;
 // Driver Verifier Executive Initialization (kernel/verifier/vfmgr.cpp)
 void VfInitializeExecutiveSubsystem() noexcept;
 
+// Hardware Resource Arbiter & WDK .sys Loader Initialization (kernel/arb/arbmgr.cpp)
+void ArbInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

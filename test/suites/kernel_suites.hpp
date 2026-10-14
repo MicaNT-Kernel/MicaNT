@@ -14326,3 +14326,240 @@ inline void Test_Horizon46_DriverVerifier_SpecialPool_IrpVerification_And_FaultI
 
     std::cout << "[TEST] Suite 262: Horizon 46 - Sovereign NT Kernel Driver Verifier (Vf* / Special Pool / IRP / Deadlock / DMA) PASSED.\n";
 }
+
+// ============================================================================
+// Suite 263: Horizon 47 - Sovereign NT Hardware Resource Arbiter (Arb* / Rtl*RangeList),
+//            WDK Binary .sys Kernel Loader (MmLoadSystemImage) & Stock .inf Staging
+// ============================================================================
+inline void Test_Horizon47_HardwareResourceArbiter_WdkSysLoader_And_InfDriverStaging() {
+    using namespace micant::km::arb;
+    std::cout << "[TEST] Running Suite 263: Horizon 47 - Sovereign NT Hardware Resource Arbiter (Arb* / Rtl*RangeList), WDK .sys Loader & Stock .inf Staging...\n";
+
+    auto& arbMgr = TitanResourceArbiterManager::get();
+    arbMgr.resetForTest();
+    km::verifier::InitializeVerifierSubsystemExports();
+    InitializeArbiterSubsystemExports();
+
+    // ------------------------------------------------------------------------
+    // Stage 1: RTL_RANGE_LIST Engine (RtlInitializeRangeList, RtlAddRange, RtlFindRange, Conflict & Sharing)
+    // ------------------------------------------------------------------------
+    {
+        auto& ldr = ldr::DynamicLoader::get();
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "RtlInitializeRangeList") != nullptr,
+                    "ntoskrnl.exe must export RtlInitializeRangeList");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "ArbTestAllocation") != nullptr,
+                    "ntoskrnl.exe must export ArbTestAllocation");
+        TEST_ASSERT(ldr.getExport("ntoskrnl.exe", "MmLoadSystemImage") != nullptr,
+                    "ntoskrnl.exe must export MmLoadSystemImage");
+
+        RTL_RANGE_LIST rangeList{};
+        RtlInitializeRangeList(&rangeList);
+        void* pdoA = reinterpret_cast<void*>(0x1001);
+        void* pdoB = reinterpret_cast<void*>(0x1002);
+
+        // Add exclusive PCI BAR0 range [0xE0000000, 0xE000FFFF] (64 KB) for PDO A
+        TEST_ASSERT(RtlAddRange(&rangeList, 0xE0000000ULL, 0xE000FFFFULL, 0, 0, nullptr, pdoA) == NtStatus::Success,
+                    "RtlAddRange exclusive BAR0 for PDO A must succeed");
+
+        // Overlapping exclusive range [0xE0008000, 0xE0017FFF] must fail with conflict!
+        TEST_ASSERT(RtlAddRange(&rangeList, 0xE0008000ULL, 0xE0017FFFULL, 0, 0, nullptr, pdoB) == NtStatus::Unsuccessful,
+                    "Overlapping exclusive RtlAddRange must detect conflict");
+
+        // Find next available 64 KB aligned range in [0xE0000000, 0xE0100000] -> must skip 0xE0000000 and pick 0xE0010000!
+        uint64_t foundStart = 0;
+        TEST_ASSERT(RtlFindRange(&rangeList, 0xE0000000ULL, 0xE0100000ULL, 0x10000, 0x10000,
+                                 0, 0, nullptr, nullptr, &foundStart) == NtStatus::Success &&
+                    foundStart == 0xE0010000ULL,
+                    "RtlFindRange must allocate next 64KB-aligned non-conflicting aperture at 0xE0010000");
+
+        // Shared range support (e.g., shared PCIe Legacy INTx line 16)
+        TEST_ASSERT(RtlAddRange(&rangeList, 16, 16, 0, RTL_RANGE_LIST_ADD_SHARED, nullptr, pdoA) == NtStatus::Success,
+                    "Adding first shared IRQ 16 range must succeed");
+        TEST_ASSERT(RtlAddRange(&rangeList, 16, 16, 0, RTL_RANGE_LIST_ADD_SHARED, nullptr, pdoB) == NtStatus::Success,
+                    "Adding second shared IRQ 16 range with RTL_RANGE_LIST_ADD_SHARED must succeed");
+
+        // Delete PDO A's ranges and verify 0xE0000000 is available again
+        TEST_ASSERT(RtlDeleteOwnersRanges(&rangeList, pdoA) == NtStatus::Success,
+                    "RtlDeleteOwnersRanges must succeed");
+        BOOLEAN avail = FALSE_B;
+        TEST_ASSERT(RtlIsRangeAvailable(&rangeList, 0xE0000000ULL, 0xE000FFFFULL, 0, 0, nullptr, nullptr, &avail) == NtStatus::Success &&
+                    avail == TRUE_B,
+                    "0xE0000000-0xE000FFFF must be available after deleting PDO A ranges");
+        RtlFreeRangeList(&rangeList);
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 2: Two-Phase Root Arbiter Transaction (ArbTestAllocation -> ArbRollbackAllocation / ArbCommitAllocation)
+    // ------------------------------------------------------------------------
+    {
+        PARBITER_INSTANCE memArb = arbMgr.getRootMemoryArbiter();
+        IO_RESOURCE_REQUIREMENTS_LIST reqs{};
+        IO_RESOURCE_DESCRIPTOR barReq{};
+        barReq.Type             = CM_RESOURCE_TYPE::CmResourceTypeMemory;
+        barReq.ShareDisposition = CM_SHARE_DISPOSITION::CmResourceShareDeviceExclusive;
+        barReq.Flags            = CM_RESOURCE_MEMORY_READ_WRITE | CM_RESOURCE_MEMORY_BAR;
+        barReq.MinimumAddress   = 0xF0000000ULL;
+        barReq.MaximumAddress   = 0xF0FFFFFFULL;
+        barReq.Length           = 0x20000; // 128 KB
+        barReq.Alignment        = 0x20000;
+        reqs.Descriptors.push_back(barReq);
+
+        std::vector<RTL_RANGE> candidates;
+        void* testPdo = reinterpret_cast<void*>(0x2001);
+        TEST_ASSERT(ArbTestAllocation(memArb, &reqs, testPdo, &candidates) == NtStatus::Success &&
+                    candidates.size() == 1 && candidates[0].Start == 0xF0000000ULL,
+                    "ArbTestAllocation must propose 0xF0000000 candidate range");
+
+        // Rollback candidate allocation and verify it was not committed
+        TEST_ASSERT(ArbRollbackAllocation(memArb) == NtStatus::Success,
+                    "ArbRollbackAllocation must succeed");
+        BOOLEAN avail = FALSE_B;
+        RtlIsRangeAvailable(&memArb->Allocation, 0xF0000000ULL, 0xF001FFFFULL, 0, 0, nullptr, nullptr, &avail);
+        TEST_ASSERT(avail == TRUE_B, "Rolled-back range must still be free in committed Allocation list");
+
+        // Now Test + Commit!
+        TEST_ASSERT(ArbTestAllocation(memArb, &reqs, testPdo, &candidates) == NtStatus::Success,
+                    "Second ArbTestAllocation must succeed");
+        TEST_ASSERT(ArbCommitAllocation(memArb) == NtStatus::Success,
+                    "ArbCommitAllocation must commit candidate ranges");
+        RtlIsRangeAvailable(&memArb->Allocation, 0xF0000000ULL, 0xF001FFFFULL, 0, 0, nullptr, nullptr, &avail);
+        TEST_ASSERT(avail == FALSE_B, "Committed range 0xF0000000-0xF001FFFF must now be marked allocated");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 3: Unmodified WDK .sys PE32+ Kernel Image Loader (MmLoadSystemImage)
+    // ------------------------------------------------------------------------
+    {
+        auto sysBytes = TitanResourceArbiterManager::buildSyntheticWdkSysBinary(0x18000, 0x1200);
+        std::vector<std::pair<std::string, std::string>> imports = {
+            { "ntoskrnl.exe", "VfAllocatePoolWithTag" },
+            { "ntoskrnl.exe", "RtlInitializeRangeList" }
+        };
+
+        PKLDR_DATA_TABLE_ENTRY ldrEntry = nullptr;
+        TEST_ASSERT(MmLoadSystemImage(
+                        L"\\SystemRoot\\System32\\drivers\\rt640x64.sys",
+                        sysBytes,
+                        imports,
+                        &ldrEntry) == NtStatus::Success && ldrEntry != nullptr,
+                    "MmLoadSystemImage must validate PE32+ IMAGE_SUBSYSTEM_NATIVE (.sys) and bind IAT imports");
+        TEST_ASSERT(ldrEntry->BaseDllName == L"rt640x64.sys" &&
+                    ldrEntry->EntryPoint == (ldrEntry->DllBase + 0x1200) &&
+                    ldrEntry->BoundImports.size() == 2,
+                    "KLDR_DATA_TABLE_ENTRY must record kernel base, EntryPoint, and bound imports");
+        TEST_ASSERT(MmUnloadSystemImage(ldrEntry) == NtStatus::Success,
+                    "MmUnloadSystemImage must cleanly unload driver module");
+    }
+
+    // ------------------------------------------------------------------------
+    // Stage 4: End-to-End Stock .inf Driver Package Staging -> SCM -> DriverEntry -> IRP_MN_START_DEVICE
+    // ------------------------------------------------------------------------
+    {
+        constexpr std::string_view kStockInfManifest = R"INF(
+; Stock Vendor WDK Network Adapter Driver Installation Manifest
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Net
+ClassGuid   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = "Realtek Semiconductor Corp."
+CatalogFile = rt640x64.cat
+DriverVer   = 10/13/2026,10.068.0520.2026
+
+[DDInstall.NTamd64.Services]
+AddService  = rt640x64, 0x00000002, Rt640_Service_Inst
+
+[Rt640_Service_Inst]
+DisplayName   = "Realtek PCIe 2.5GbE Family Controller (Unmodified WDK .sys)"
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\rt640x64.sys
+)INF";
+
+        auto sysBinary = TitanResourceArbiterManager::buildSyntheticWdkSysBinary(0x20000, 0x1000);
+        std::vector<std::pair<std::string, std::string>> imports = {
+            { "ntoskrnl.exe", "VfAllocatePoolWithTag" },
+            { "ntoskrnl.exe", "ArbArbitrateAndTranslateResources" }
+        };
+
+        // Hardware requirements: 64 KB BAR0 MMIO + 256-byte I/O Port + 1 MSI-X Interrupt
+        IO_RESOURCE_REQUIREMENTS_LIST hwReqs{};
+        hwReqs.InterfaceType = 5; // PCIBus
+        hwReqs.BusNumber     = 3;
+
+        IO_RESOURCE_DESCRIPTOR memDesc{};
+        memDesc.Type             = CM_RESOURCE_TYPE::CmResourceTypeMemory;
+        memDesc.ShareDisposition = CM_SHARE_DISPOSITION::CmResourceShareDeviceExclusive;
+        memDesc.Flags            = CM_RESOURCE_MEMORY_READ_WRITE | CM_RESOURCE_MEMORY_BAR;
+        memDesc.MinimumAddress   = 0xF8000000ULL;
+        memDesc.MaximumAddress   = 0xF8FFFFFFULL;
+        memDesc.Length           = 0x10000;
+        memDesc.Alignment        = 0x10000;
+        hwReqs.Descriptors.push_back(memDesc);
+
+        IO_RESOURCE_DESCRIPTOR portDesc{};
+        portDesc.Type             = CM_RESOURCE_TYPE::CmResourceTypePort;
+        portDesc.ShareDisposition = CM_SHARE_DISPOSITION::CmResourceShareDeviceExclusive;
+        portDesc.Flags            = CM_RESOURCE_PORT_IO;
+        portDesc.MinimumAddress   = 0x3000ULL;
+        portDesc.MaximumAddress   = 0x3FFFULL;
+        portDesc.Length           = 0x100;
+        portDesc.Alignment        = 0x100;
+        hwReqs.Descriptors.push_back(portDesc);
+
+        IO_RESOURCE_DESCRIPTOR irqDesc{};
+        irqDesc.Type             = CM_RESOURCE_TYPE::CmResourceTypeInterrupt;
+        irqDesc.ShareDisposition = CM_SHARE_DISPOSITION::CmResourceShareDeviceExclusive;
+        irqDesc.Flags            = CM_RESOURCE_INTERRUPT_LATCHED | CM_RESOURCE_INTERRUPT_MESSAGE;
+        irqDesc.MinimumAddress   = 16;
+        irqDesc.MaximumAddress   = 31;
+        irqDesc.Length           = 1;
+        irqDesc.Alignment        = 1;
+        hwReqs.Descriptors.push_back(irqDesc);
+
+        INF_DRIVER_PACKAGE_INFO pkgInfo{};
+        WDK_DRIVER_START_CONTEXT* drvCtx = nullptr;
+
+        NtStatus installSt = PnpStageAndInstallInfDriverPackage(
+            L"rt640x64.inf",
+            kStockInfManifest,
+            sysBinary,
+            imports,
+            &hwReqs,
+            [](WDK_DRIVER_START_CONTEXT* ctx, const wchar_t* regPath) -> NtStatus {
+                return (ctx && regPath && std::wcslen(regPath) > 0) ? NtStatus::Success : NtStatus::InvalidParameter;
+            },
+            [](WDK_DRIVER_START_CONTEXT* ctx, void* pdo) -> NtStatus {
+                return (ctx && pdo) ? NtStatus::Success : NtStatus::InvalidParameter;
+            },
+            [](WDK_DRIVER_START_CONTEXT* ctx,
+               const CM_RESOURCE_LIST* raw,
+               const CM_RESOURCE_LIST* trans) -> NtStatus {
+                if (!ctx || !raw || !trans) return NtStatus::InvalidParameter;
+                if (raw->Descriptors.size() != 3 || trans->Descriptors.size() != 3) {
+                    return NtStatus::Unsuccessful;
+                }
+                return NtStatus::Success;
+            },
+            &pkgInfo,
+            &drvCtx
+        );
+
+        TEST_ASSERT(installSt == NtStatus::Success && drvCtx != nullptr,
+                    "PnpStageAndInstallInfDriverPackage must stage .inf, register SCM service, load .sys, and start device");
+        TEST_ASSERT(pkgInfo.ServiceName == L"rt640x64" &&
+                    pkgInfo.ClassName == L"Net" &&
+                    pkgInfo.SysBinaryName == L"rt640x64.sys",
+                    "Parsed .inf metadata must match stock Realtek Net manifest");
+        TEST_ASSERT(drvCtx->DriverEntryCalled && drvCtx->AddDeviceCalled && drvCtx->StartDeviceCalled,
+                    "Unmodified WDK driver lifecycle (DriverEntry -> AddDevice -> IRP_MN_START_DEVICE) must complete");
+        TEST_ASSERT(drvCtx->AllocatedResourcesTranslated.Descriptors[0].u.Memory.Start == 0xF8000000ULL &&
+                    drvCtx->AllocatedResourcesTranslated.Descriptors[1].u.Port.Start == 0x3000ULL &&
+                    drvCtx->AllocatedResourcesTranslated.Descriptors[2].u.Interrupt.Vector >= 0x60 &&
+                    drvCtx->AllocatedResourcesTranslated.Descriptors[2].u.Interrupt.Level >= 9,
+                    "Translated CM_RESOURCE_LIST must provide BAR0 MMIO, I/O Port, and translated MSI-X IDT Vector + DIRQL");
+    }
+
+    std::cout << "[TEST] Suite 263: Horizon 47 - Sovereign NT Hardware Resource Arbiter (Arb* / Rtl*RangeList), WDK .sys Loader & Stock .inf Staging PASSED.\n";
+}
+
