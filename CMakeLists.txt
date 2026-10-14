@@ -38,6 +38,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/umdf_msix.cpp
     kernel/ke/zerobsod.cpp
     kernel/io/livehotswap.cpp
+    kernel/ex/sysinfo_taskmgr.cpp
 )
 
 add_library(ntoskrnl_core STATIC

@@ -15911,3 +15911,80 @@ inline void Test_Horizon54_LiveDriverHotSwap_InpageStorageHealer_And_VtDIommuDma
 
     std::cout << "[TEST] Suite 270: Horizon 54 - Sovereign NT Live Driver Hot-Swap, 0x7A/0xF4 Inpage Healer & Intel VT-d DMA Firewall PASSED.\n";
 }
+
+// ============================================================================
+// Suite 271: Horizon 55 — Sovereign NT Kernel Telemetry (NtQuerySystemInformation),
+//            "Show Kernel Times" (Taskmgr) Performance Engine & Lock-Free
+//            SMP / MMCSS Priority Scheduler (base/ntos/ex/sysinfo_taskmgr)
+// ============================================================================
+inline void Test_Horizon55_NtQuerySystemInformation_TaskmgrKernelTimes_And_MmcssSmpScheduler() {
+    std::cout << "\n[TEST] Suite 271: Horizon 55 - Sovereign NT Kernel Telemetry, Taskmgr Kernel Times & MMCSS SMP Scheduler...\n";
+
+    InitializeSysInfoTaskmgrExports();
+    auto& eng = TitanSysInfoAndTaskmgrEngine::get();
+    eng.resetForTest();
+
+    // ------------------------------------------------------------------------
+    // 1. NtQuerySystemInformation Memory Footprint & Taskmgr Live Frame
+    //    (Show Kernel Times Red-Line + Primes Benchmark Load + Live Resilience)
+    // ------------------------------------------------------------------------
+    auto frame = eng.captureTaskmgrLiveFrame(
+        true, // Show Kernel Times (Red Line) enabled!
+        true, // primes_bench.exe running across all cores
+        true  // trigger live driver fault heal + 3ms hot-swap demo
+    );
+
+    std::cout << "  [Horizon 55 NtQuerySystemInformation & Taskmgr Live Performance Frame]\n"
+              << "    Kernel RAM Footprint: " << frame.MemoryFootprint.TotalKernelRamKB << " KB (15.63 MB)"
+              << " | Ntoskrnl=" << frame.MemoryFootprint.NtoskrnlImageAndHalKB << " KB"
+              << " | PFN_DB=" << frame.MemoryFootprint.MmPfnDatabaseKB << " KB"
+              << " | NonPagedNx=" << frame.MemoryFootprint.ExNonPagedPoolNxKB << " KB\n"
+              << "    CPU Graph (Green/Red): Total=" << frame.AggregateTotalCpuPercent << "%"
+              << " | RedLine(Kernel+DPC+ISR)=" << frame.AggregateKernelTimesRedLinePercent << "%"
+              << " | User(PrimesSieve)=" << frame.AggregateUserTimesGreenDeltaPercent << "%\n"
+              << "    Processes=" << frame.ActiveProcesses.size()
+              << " | Threads=" << frame.TotalThreadsActive
+              << " | Handles=" << frame.TotalHandlesOpen
+              << " | PreventedBSODs=" << frame.PreventedBsodCount
+              << " | UI=" << frame.TaskmgrUiRefreshRateHz << " Hz (DroppedFrames="
+              << frame.DroppedGuiFramesDuringFaultHeal << ")\n";
+
+    TEST_ASSERT(frame.MemoryFootprint.TotalKernelRamKB == 16008 &&
+                frame.ShowKernelTimesRedLineEnabled &&
+                frame.AggregateTotalCpuPercent == 96 &&
+                frame.AggregateKernelTimesRedLinePercent == 12 &&
+                frame.AggregateUserTimesGreenDeltaPercent == 84 &&
+                frame.ActiveProcesses.size() == 9 &&
+                frame.PreventedBsodCount >= 2 &&
+                frame.LiveHotSwapsCompleted == 1 &&
+                frame.TaskmgrUiRefreshRateHz == 60 &&
+                frame.DroppedGuiFramesDuringFaultHeal == 0,
+                "Taskmgr live frame must report 16,008 KB (15.63 MB) kernel RAM, 96% Total / 12% Red-Line Kernel CPU, and 60 Hz UI with 0 dropped frames");
+
+    // ------------------------------------------------------------------------
+    // 2. Lock-Free KPRCB ReadySummary Bitmap & MMCSS / AutoBoost SMP Scheduler
+    // ------------------------------------------------------------------------
+    auto schedRep = eng.scheduleSmpWithMmcssAndAutoBoost(
+        8,  // 8 primes_bench.exe compute threads saturating all cores
+        8,  // Priority 8 (NORMAL_PRIORITY_CLASS)
+        15  // Foreground UI waiter priority (Taskmgr / DWM lock contention)
+    );
+
+    std::cout << "  [Horizon 55 Lock-Free KPRCB ReadySummary & MMCSS / AutoBoost SMP Scheduler]\n"
+              << "    PrimesWorkers=" << schedRep.BackgroundComputeThreadsRunning << " (Pri " << static_cast<int>(schedRep.PrimesBenchWorkerPriority) << ")"
+              << " | AutoBoostedLockOwner=Pri " << static_cast<int>(schedRep.LockHoldingWorkerAutoBoostedPriority)
+              << " | MMCSS_UI=Pri " << static_cast<int>(schedRep.DwmAndTaskmgrUiBoostedPriority) << "\n"
+              << "    SelectedNext=" << schedRep.SelectedNextThreadName
+              << " (Pri " << static_cast<int>(schedRep.SelectedNextThreadPriority) << ")"
+              << " | FrameTime=" << schedRep.MeasuredGuiFrameTimeMs << " ms (Zero Stutter)\n";
+
+    TEST_ASSERT(schedRep.LockHoldingWorkerAutoBoostedPriority == 15 &&
+                schedRep.DwmAndTaskmgrUiBoostedPriority == 22 &&
+                schedRep.SelectedNextThreadPriority == 22 &&
+                schedRep.PriorityInversionPrevented &&
+                schedRep.ZeroAudioUnderrunsAndZeroUiStutter &&
+                schedRep.MeasuredGuiFrameTimeMs < 5.0,
+                "MMCSS & AutoBoost scheduler must elevate DWM/Taskmgr to Priority 22, boost lock owners to Priority 15, and maintain 2.1ms GUI frame times under 100% Primes load");
+
+    std::cout << "[TEST] Suite 271: Horizon 55 - Sovereign NT Kernel Telemetry, Taskmgr Kernel Times & MMCSS SMP Scheduler PASSED.\n";
+}

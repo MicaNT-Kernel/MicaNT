@@ -87,4 +87,7 @@ void ZeroBsodInitializeExecutiveSubsystem() noexcept;
 // Zero-Downtime Live Driver Hot-Swap, 0x7A/0xF4 Inpage Healer & Intel VT-d DMA Firewall (kernel/io/livehotswap.cpp)
 void LiveHotSwapInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Kernel Telemetry (NtQuerySystemInformation), Taskmgr Kernel Times & MMCSS SMP Scheduler (kernel/ex/sysinfo_taskmgr.cpp)
+void SysInfoTaskmgrInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
