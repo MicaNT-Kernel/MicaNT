@@ -22,26 +22,37 @@ jobs:
       - name: Compile Modular Kernel Subsystems & Test Runner (Clang C++23)
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           clang++ -O2 -D_CRT_SECURE_NO_WARNINGS test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ke/dispatcher.cpp -o bin/ke_dispatcher.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ke/wait.cpp -o bin/ke_wait.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/mm/virtual.cpp -o bin/mm_virtual.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/io/iomgr.cpp -o bin/io_iomgr.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ob/obref.cpp -o bin/ob_obref.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ps/psmgr.cpp -o bin/ps_psmgr.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/cm/ntreg.cpp -o bin/cm_ntreg.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/se/ntsec.cpp -o bin/se_ntsec.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/lpc/ntlpc.cpp -o bin/lpc_ntlpc.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/cc/ccmgr.cpp -o bin/cc_ccmgr.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/ex/exmgr.cpp -o bin/ex_exmgr.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/hal/halinit.cpp -o bin/hal_halinit.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/pnp/pnpmgr.cpp -o bin/pnp_pnpmgr.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude kernel/po/pomgr.cpp -o bin/po_pomgr.o
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp bin/ke_dispatcher.o bin/ke_wait.o bin/mm_virtual.o bin/io_iomgr.o bin/ob_obref.o bin/ps_psmgr.o bin/cm_ntreg.o bin/se_ntsec.o bin/lpc_ntlpc.o bin/cc_ccmgr.o bin/ex_exmgr.o bin/hal_halinit.o bin/pnp_pnpmgr.o bin/po_pomgr.o -o bin/micant_kernel.exe
-          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp bin/ke_dispatcher.o bin/ke_wait.o bin/mm_virtual.o bin/io_iomgr.o bin/ob_obref.o bin/ps_psmgr.o bin/cm_ntreg.o bin/se_ntsec.o bin/lpc_ntlpc.o bin/cc_ccmgr.o bin/ex_exmgr.o bin/hal_halinit.o bin/pnp_pnpmgr.o bin/po_pomgr.o -o bin/micant_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Execute Full 258-Suite Test Battery & Clean-Room Sentinel
+          $kernelUnits = Get-ChildItem -Recurse kernel -Filter *.cpp | Where-Object { $_.Name -ne "kiinit.cpp" } | Sort-Object FullName
+          $objFiles = @()
+          foreach ($unit in $kernelUnits) {
+              $subsys = $unit.Directory.Name
+              $base   = [System.IO.Path]::GetFileNameWithoutExtension($unit.Name)
+              $objOut = "bin/${subsys}_${base}.o"
+              Write-Host "[CI] Compiling $($unit.FullName) -> $objOut"
+              clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -c -Iinclude $unit.FullName -o $objOut
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $objFiles += $objOut
+          }
+
+          Write-Host "[CI] Linking bin/micant_kernel.exe ($($objFiles.Count) modular kernel object units)..."
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp @objFiles -o bin/micant_kernel.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Write-Host "[CI] Linking bin/micant_tests.exe ($($objFiles.Count) modular kernel object units)..."
+          clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp @objFiles -o bin/micant_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Execute Full Test Battery, Kernel Boot Self-Test & Clean-Room Sentinel
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          .\bin\micant_kernel.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\bin\micant_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/clean_room_sentinel.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
