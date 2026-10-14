@@ -34,6 +34,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/hal/halinit.cpp
     kernel/pnp/pnpmgr.cpp
     kernel/po/pomgr.cpp
+    kernel/po/pofx_whea.cpp
 )
 
 add_library(ntoskrnl_core STATIC

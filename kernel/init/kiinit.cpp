@@ -295,8 +295,8 @@ int main(int argc, char* argv[]) {
     lpcMgr.connectPort(L"MicaCsrPort", clientEndpoint, serverEndpoint);
     std::cout << "[MicaNT Boot] [Lpc] Created system rendezvous endpoint: \\RPC Control\\MicaCsrPort (Status: READY)\n";
 
-    // 12.1 Initialize 22-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc*, Horizon 43 FsRtl*, Horizon 44 Dbgk*, Horizon 45 KTM, Horizon 46 Verifier, Horizon 47 Arbiter, Horizon 48 WMI/Vendor .sys, Horizon 49 PnP Boot Scheduler & Horizon 50 Driver Resilience
-    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 22 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, wmi, pnpboot, pnpresilience, ex, hal, pnp, po, init)...\n";
+    // 12.1 Initialize 23-Unit Modular NT Kernel Linkage, Horizon 41 HID Input Stack, Horizon 42 Cc*, Horizon 43 FsRtl*, Horizon 44 Dbgk*, Horizon 45 KTM, Horizon 46 Verifier, Horizon 47 Arbiter, Horizon 48 WMI/Vendor .sys, Horizon 49 PnP Boot Scheduler, Horizon 50 Driver Resilience & Horizon 51 PoFx/Hot-Plug/WHEA
+    std::cout << "[MicaNT Boot] [Ntoskrnl] Linking 23 Modular NT Kernel Subsystems (ke, mm, ob, ps, io, cm, se, lpc, cc, fsrtl, dbgk, tm, verifier, arb, wmi, pnpboot, pnpresilience, pofx_whea, ex, hal, pnp, po, init)...\n";
     sys::internal::HalInitializeExecutiveSubsystem();
     sys::internal::ExInitializeExecutiveSubsystem();
     sys::internal::PnpInitializeExecutiveSubsystem();
@@ -310,6 +310,7 @@ int main(int argc, char* argv[]) {
     sys::internal::WmiInitializeExecutiveSubsystem();
     sys::internal::PnpBootInitializeExecutiveSubsystem();
     sys::internal::PnpResilienceInitializeExecutiveSubsystem();
+    sys::internal::PoFxWheaInitializeExecutiveSubsystem();
     km::hid::InitializeHidSubsystemExports();
     std::cout << "[MicaNT Boot] [HidClass] Registered HIDCLASS.SYS / KBDCLASS.SYS (\\Device\\KeyboardClass0) / MOUCLASS.SYS (\\Device\\PointerClass0)\n";
     std::cout << "[MicaNT Boot] [Cc] Initialized Sovereign Executive Cache Manager (VACB Granularity: "
@@ -322,6 +323,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [Wmi] Initialized Sovereign Kernel WMI/WPP Recorder, Real NVIDIA/Intel .sys IAT Loader & Open-GPU GSP-RM Active\n";
     std::cout << "[MicaNT Boot] [PnpBoot] Initialized Sovereign Boot-Time Driver Scheduler & Live Hardware Bus Scanner (ServiceGroupOrder, StartOverride & Multi-Phase Timeline Active)\n";
     std::cout << "[MicaNT Boot] [Resilience] Initialized Sovereign Anti-Vista/ME Driver Resilience Engine (4-Part Rank 0x00SSFFHH, LastKnownGood Rollback & Zero-BSOD TDR Active)\n";
+    std::cout << "[MicaNT Boot] [PoFx/WHEA] Initialized Sovereign Runtime Power Framework (PoFx*), Live PnP Hot-Plug/BAR Rebalance & WHEA Hardware Error Engine Active\n";
 
     // 13. Initialize KiSystemCall64 Central Dispatcher Table
     std::cout << "[MicaNT Boot] [KiSystemCall64] Initializing Syscall Dispatcher Table...\n";

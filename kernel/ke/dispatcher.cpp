@@ -19,6 +19,7 @@ void SyscallDispatcher::initializeStandardTable() {
     internal::WmiInitializeExecutiveSubsystem();
     internal::PnpBootInitializeExecutiveSubsystem();
     internal::PnpResilienceInitializeExecutiveSubsystem();
+    internal::PoFxWheaInitializeExecutiveSubsystem();
 
     // 1. NtAllocateVirtualMemory (SSN: 0x0018)
     registerSyscall(SSN_NtAllocateVirtualMemory, "NtAllocateVirtualMemory", 6, [](const SyscallFrame& f) -> NtStatus {

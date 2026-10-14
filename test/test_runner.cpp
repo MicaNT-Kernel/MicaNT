@@ -86,6 +86,7 @@
 #include "micant/km/executive/wmi_driver_compat.hpp"
 #include "micant/km/io/pnp_boot_scheduler.hpp"
 #include "micant/km/io/driver_resilience.hpp"
+#include "micant/km/executive/pofx_whea.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -308,7 +309,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite266")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite267")) {
+        RUN_TEST(Test_Horizon51_RuntimePoFx_LiveHotplugRebalance_And_WheaHardwareErrorEngine);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite266") {
         RUN_TEST(Test_Horizon50_AntiVistaMeDriverResilience_PnpRank_LastKnownGood_And_Tdr);
         return g_FailedTests;
     }
@@ -1192,6 +1197,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon48_RealNvidiaAndIntelSysDrivers_WmiWpp_And_OpenGpuGspRm);
     RUN_TEST(Test_Horizon49_BootDriverScheduler_ServiceGroupOrder_StartOverride_And_LiveBusScan);
     RUN_TEST(Test_Horizon50_AntiVistaMeDriverResilience_PnpRank_LastKnownGood_And_Tdr);
+    RUN_TEST(Test_Horizon51_RuntimePoFx_LiveHotplugRebalance_And_WheaHardwareErrorEngine);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

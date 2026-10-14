@@ -75,4 +75,7 @@ void PnpBootInitializeExecutiveSubsystem() noexcept;
 // Anti-Vista/ME Driver Resilience Engine Initialization (kernel/io/pnpresilience.cpp)
 void PnpResilienceInitializeExecutiveSubsystem() noexcept;
 
+// Runtime Power Management (PoFx*), Live PnP Hot-Plug & WHEA Initialization (kernel/po/pofx_whea.cpp)
+void PoFxWheaInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

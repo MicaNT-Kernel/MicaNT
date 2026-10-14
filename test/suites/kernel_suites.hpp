@@ -15348,6 +15348,177 @@ void Test_Horizon50_AntiVistaMeDriverResilience_PnpRank_LastKnownGood_And_Tdr() 
     std::cout << "[TEST] Suite 266: Horizon 50 - Sovereign NT Anti-Vista/ME Driver Resilience Engine PASSED.\n";
 }
 
+// ============================================================================
+// Suite 267: Horizon 51 - Sovereign NT Runtime Power Framework (PoFx*),
+//            Live PnP Hot-Plug / BAR Rebalancing & WHEA Hardware Error Engine
+// ============================================================================
+void Test_Horizon51_RuntimePoFx_LiveHotplugRebalance_And_WheaHardwareErrorEngine() {
+    using namespace micant::km::pofx;
+
+    auto& mgr = TitanPoFxHotplugWheaManager::get();
+    mgr.resetForTest();
+
+    // ------------------------------------------------------------------------
+    // 1. Runtime Power Management Framework (PoFx* — F-States, D-States & DFx)
+    //    Verifies WDK PoFx* lifecycle used by iaLPSS2i_I2C_CNL.sys & intelppm.sys
+    // ------------------------------------------------------------------------
+    PO_FX_COMPONENT_STATE i2cControllerComp{};
+    i2cControllerComp.ComponentId   = 0;
+    i2cControllerComp.ComponentName = "Intel C246 Serial IO I2C0 Engine";
+    i2cControllerComp.FStates = {
+        {0,   0,    0, 450}, // F0: Active (0 us latency, 450 mW)
+        {1,  15,   50, 120}, // F1: Clock-Gated Idle (15 us latency, 120 mW)
+        {2, 120,  500,  15}, // F2: Rail Retention Idle (120 us latency, 15 mW)
+        {3, 450, 2000,   1}  // F3: Deep Power-Gated Idle (450 us latency, 1 mW)
+    };
+
+    POHANDLE poHandle = 0;
+    NtStatus regSt = mgr.poFxRegisterDevice(
+        "PCI\\VEN_8086&DEV_A369&SUBSYS_A3691849&REV_10",
+        "iaLPSS2i_I2C_CNL.sys",
+        {i2cControllerComp},
+        &poHandle
+    );
+    TEST_ASSERT(regSt == NtStatus::Success && poHandle != 0,
+                "PoFxRegisterDevice must register Intel C246 Serial IO I2C0 and return a valid POHANDLE");
+
+    NtStatus startSt = mgr.poFxStartDevicePowerManagement(poHandle);
+    TEST_ASSERT(startSt == NtStatus::Success,
+                "PoFxStartDevicePowerManagement must activate Component 0 in F0 / D0_Working");
+
+    // Transition Component 0 to idle (F2) -> since all components are idle, device saves BAR/MSI-X and enters D3Hot
+    NtStatus idleSt = mgr.poFxIdleComponent(poHandle, 0, 2);
+    PO_FX_DEVICE_ENTRY snapIdle{};
+    mgr.getPoFxDeviceState(poHandle, &snapIdle);
+    TEST_ASSERT(idleSt == NtStatus::Success &&
+                !snapIdle.Components[0].IsActive &&
+                snapIdle.Components[0].CurrentFState == 2 &&
+                snapIdle.CurrentDState == PO_FX_DEVICE_POWER_STATE::D3Hot_BusPowered &&
+                snapIdle.BarAndMsiContextSaved,
+                "PoFxIdleComponent must transition component to F2, save PCI BAR0/MSI-X context, and enter D3Hot");
+
+    // Wake Component 0 via PoFxActivateComponent -> wakes device to D0, restores BAR0/MSI-X, returns component to F0
+    NtStatus wakeSt = mgr.poFxActivateComponent(poHandle, 0);
+    PO_FX_DEVICE_ENTRY snapWake{};
+    mgr.getPoFxDeviceState(poHandle, &snapWake);
+    TEST_ASSERT(wakeSt == NtStatus::Success &&
+                snapWake.Components[0].IsActive &&
+                snapWake.Components[0].CurrentFState == 0 &&
+                snapWake.CurrentDState == PO_FX_DEVICE_POWER_STATE::D0_Working &&
+                snapWake.BarAndMsiContextRestoredOnWake,
+                "PoFxActivateComponent must wake device from D3Hot to D0, restore BAR0/MSI-X registers, and return to F0");
+
+    // Execute full Directed PoFx (DFx) Modern Standby (S0ix DRIPS -> D3Cold -> Wake to D0/F0)
+    PO_FX_DEVICE_ENTRY snapDfx{};
+    NtStatus dfxSt = mgr.poFxExecuteDirectedModernStandbyCycle(poHandle, &snapDfx);
+    std::cout << "  [Horizon 51 Runtime Power Framework (PoFx* / Directed Modern Standby)]\n"
+              << "    Device=" << snapDfx.DeviceInstancePath << " (" << snapDfx.DriverBinaryName << ")\n"
+              << "    F-State Transitions=" << snapDfx.TotalFStateTransitions
+              << " | D-State Transitions=" << snapDfx.TotalDStateTransitions
+              << " | S0ix DRIPS Cycles=" << snapDfx.TotalDirectedDripsCycles
+              << " | BAR/MSI-X Restored=" << (snapDfx.BarAndMsiContextRestoredOnWake ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(dfxSt == NtStatus::Success &&
+                snapDfx.TotalDirectedDripsCycles == 1 &&
+                snapDfx.CurrentDState == PO_FX_DEVICE_POWER_STATE::D0_Working &&
+                snapDfx.BarAndMsiContextRestoredOnWake,
+                "Directed PoFx S0ix cycle must cleanly enter D3Cold/F3 and restore BAR0/MSI-X registers on wake");
+
+    // ------------------------------------------------------------------------
+    // 2. Live PnP Hot-Plug, Surprise Removal & Dynamic PCIe BAR Rebalancing
+    //    Eliminates dangling MMIO crashes on yank and supports non-stop BAR growth
+    // ------------------------------------------------------------------------
+    auto yankReport = mgr.executeSafeSurpriseRemoval(
+        "PCI\\VEN_8086&DEV_15EC\\TB3_HOTPLUG_ENDPOINT",
+        "nhi_thunderbolt.sys",
+        6 // 6 active in-flight DMA/IOCTL IRPs at the exact instant the cable is yanked
+    );
+
+    std::cout << "  [Horizon 51 Live PnP Surprise Removal (IRP_MN_SURPRISE_REMOVAL + IO_REMOVE_LOCK)]\n"
+              << "    Yanked Device=" << yankReport.DeviceInstancePath
+              << " | InFlightIRPs=" << yankReport.InFlightIrpsAtYankTime
+              << " | Canceled&Drained=" << yankReport.DrainedAndCanceledIrps
+              << " | RemoveLockZero=" << (yankReport.RemoveLockDrainedToZero ? "Yes" : "No")
+              << " | CrashOnYank=" << (yankReport.SystemCrashedOnYank ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(yankReport.InFlightIrpsAtYankTime == 6 &&
+                yankReport.DrainedAndCanceledIrps == 6 &&
+                yankReport.NewIoRejectedWithDeletePending &&
+                yankReport.RemoveLockDrainedToZero &&
+                yankReport.MmioBarsUnmappedSafely &&
+                !yankReport.SystemCrashedOnYank &&
+                yankReport.FinalNodeState == PNP_HOTPLUG_NODE_STATE::RemovedCleanly,
+                "Surprise Removal must reject new I/O, drain all 6 in-flight IRPs via IoReleaseRemoveLockAndWait, and unmap MMIO cleanly");
+
+    auto rebalanceReport = mgr.executeDynamicPcieBarRebalance(
+        "PCI\\VEN_8086&DEV_15EC\\TB3_HOTPLUG_ENDPOINT",
+        "PCI\\VEN_8086&DEV_15BB\\I219_NEIGHBOR",
+        64ULL * 1024 * 1024,  // 64 MB initial bridge aperture
+        256ULL * 1024 * 1024, // 256 MB requested hot-plug BAR aperture
+        4                     // 4 in-flight IRPs paused & replayed across QUERY_STOP -> STOP -> START
+    );
+
+    std::cout << "  [Horizon 51 Non-Stop PnP Dynamic PCIe BAR Rebalancing]\n"
+              << "    Old Bridge Window=" << (rebalanceReport.OldBridgeWindowSize / (1024 * 1024)) << " MB"
+              << " -> Expanded Window=" << (rebalanceReport.NewBridgeWindowSize / (1024 * 1024)) << " MB"
+              << " | Replayed IRPs=" << rebalanceReport.PausedAndReplayedIrpCount
+              << " | ZeroDrops=" << (rebalanceReport.RebalanceSucceededZeroDrops ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(rebalanceReport.NewBridgeWindowSize == 512ULL * 1024 * 1024 &&
+                rebalanceReport.PausedAndReplayedIrpCount == 4 &&
+                rebalanceReport.RebalanceSucceededZeroDrops &&
+                rebalanceReport.FinalNodeState == PNP_HOTPLUG_NODE_STATE::StartedAndActive,
+                "Dynamic PCIe BAR Rebalancing must expand bridge aperture to 512 MB and replay all 4 paused IRPs without drops");
+
+    // ------------------------------------------------------------------------
+    // 3. Windows Hardware Error Architecture (WHEA — Xeon MCA ECC & PCIe AER)
+    //    Logs UEFI CPER records, retires bad physical RAM pages, and retrains PCIe links
+    // ------------------------------------------------------------------------
+    const uint64_t faultyPhysAddr = 0x000000024A8F3000ULL;
+    const uint64_t expectedPfn    = faultyPhysAddr >> 12;
+
+    auto eccRecord = mgr.reportAndHealHardwareError(
+        WHEA_ERROR_SOURCE_TYPE::MemoryController_Ecc,
+        WHEA_ERROR_SEVERITY::Corrected,
+        "Intel(R) Xeon(R) E-2236 IMC Bank 7 Single-Bit ECC Scrub",
+        faultyPhysAddr
+    );
+
+    auto aerRecord = mgr.reportAndHealHardwareError(
+        WHEA_ERROR_SOURCE_TYPE::PciExpress_Aer,
+        WHEA_ERROR_SEVERITY::Recoverable,
+        "Intel C246 PCIe Root Port #5 AER Replay Timer Timeout",
+        0x00001000ULL, // Replay Timer Timeout status bit
+        "PCI\\VEN_8086&DEV_A33C"
+    );
+
+    std::cout << "  [Horizon 51 Windows Hardware Error Architecture (WHEA — Xeon MCA & PCIe AER)]\n"
+              << "    CPER #1 (" << eccRecord.HardwareSourceDescription << "): Retired PFN=0x"
+              << std::hex << eccRecord.RetiredPageFrameNumber << std::dec
+              << " | PageOfflined=" << (eccRecord.PhysicalPageOfflinedByMm ? "Yes" : "No")
+              << " | BSOD(0x124)=" << (eccRecord.SystemBugChecked0x124 ? "Yes" : "No") << "\n"
+              << "    CPER #2 (" << aerRecord.HardwareSourceDescription << "): LinkRetrained="
+              << (aerRecord.PcieLinkRetrainedByHal ? "Yes" : "No")
+              << " | BSOD(0x124)=" << (aerRecord.SystemBugChecked0x124 ? "Yes" : "No") << "\n";
+
+    TEST_ASSERT(eccRecord.Signature == WHEA_CPER_SIGNATURE &&
+                eccRecord.PhysicalPageOfflinedByMm &&
+                eccRecord.RetiredPageFrameNumber == expectedPfn &&
+                mgr.isPhysicalPageRetired(expectedPfn) &&
+                !eccRecord.SystemBugChecked0x124,
+                "WHEA ECC handler must generate a valid CPER record and offline PFN 0x24A8F3 without a 0x124 BSOD");
+
+    TEST_ASSERT(aerRecord.Signature == WHEA_CPER_SIGNATURE &&
+                aerRecord.PcieLinkRetrainedByHal &&
+                aerRecord.LoggedToWheaEtwChannel &&
+                !aerRecord.SystemBugChecked0x124 &&
+                mgr.getCperRecordCount() == 2,
+                "WHEA PCIe AER handler must retrain the C246 Root Port link and log to ETW without a 0x124 BSOD");
+
+    std::cout << "[TEST] Suite 267: Horizon 51 - Sovereign NT Runtime Power (PoFx*), Live PnP Hot-Plug & WHEA Hardware Error Engine PASSED.\n";
+}
+
+
 
 
 
