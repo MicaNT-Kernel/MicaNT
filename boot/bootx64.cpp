@@ -312,7 +312,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "36 Kernel Units | Ring 0+1 Sealed | 0 BSODs | Clean-Room Sentinel OK",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "39 Kernel Units | Ring 0+1+2 Sealed | 0 BSODs | Clean-Room Sentinel OK",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -430,13 +430,13 @@ public:
             // Table Entries
             struct FileEntry { const char* name; const char* sz; const char* psz; bool sel; };
             FileEntry entries[] = {
-                { "ntoskrnl.exe",    "684,032 B",   "Ring 0 (36 Units)", true },
-                { "smss.exe",         "98,304 B",   "PID 348 (NATIVE)",  true },
-                { "csrss.exe",       "131,072 B",   "PID 512 (ApiPort)", true },
-                { "ntdll.dll",     "2,097,152 B",   "\\KnownDlls (180us)",true },
-                { "zipfldr.dll",     "147,456 B",   "Zero-Copy Section", true },
-                { "primes.exe",       "81,920 B",   "78,498 Primes OK",  true },
-                { "taskmgr.exe",     "196,608 B",   "Kernel Times Active",false }
+                { "ntoskrnl.exe",    "684,032 B",   "Ring 0 (39 Units)", true },
+                { "smss.exe",         "98,304 B",   "PID 348 (Ring 1)",  true },
+                { "csrss.exe",       "131,072 B",   "PID 512 (Ring 1)",  true },
+                { "WUDFHost.exe",    "114,688 B",   "PID 412 (Ring 2)",  true },
+                { "lsaiso.exe",      "106,496 B",   "PID 564 (Vault)",   true },
+                { "services.exe",    "163,840 B",   "PID 612 (38ms DAG)",true },
+                { "ntdll.dll",     "2,097,152 B",   "\\KnownDlls (180us)",false }
             };
 
             for (size_t i = 0; i < 7; ++i) {
@@ -478,7 +478,7 @@ public:
 
             // Tabs
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 22, bootvid::Color{14, 20, 30});
-            m_videoDriver.drawString(wx + 12, wy + 33, "[Performance]   Processes (12)   Services (Ring 1/2)   Primes Drag-Race",
+            m_videoDriver.drawString(wx + 12, wy + 33, "[Performance]   Processes (21)   Services (8 DAG / 0 Bloat)   Ring 0+1+2",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{14, 20, 30}, 1);
 
             // Left Meter Box: CPU Usage LED Bar (12%) & MEM Usage LED Bar (15.63 MB)
@@ -616,19 +616,19 @@ public:
         m_videoDriver.drawString(tbX6 + 7, taskbarY + 12, "[Primes] 78k", bootvid::Color{255, 230, 120}, bootvid::Color{40, 36, 18}, 1);
 
         uint32_t tbX7 = tbX6 + 106;
-        m_videoDriver.fillRectangle(tbX7, taskbarY + 4, 94, 26, bootvid::Color{32, 20, 48});
-        m_videoDriver.fillRectangle(tbX7, taskbarY + 28, 94, 2, bootvid::Color{180, 80, 255});
-        m_videoDriver.drawString(tbX7 + 7, taskbarY + 12, "[smss] R1", bootvid::Color{220, 160, 255}, bootvid::Color{32, 20, 48}, 1);
+        m_videoDriver.fillRectangle(tbX7, taskbarY + 4, 94, 26, bootvid::Color{14, 38, 48});
+        m_videoDriver.fillRectangle(tbX7, taskbarY + 28, 94, 2, bootvid::Color{0, 240, 255});
+        m_videoDriver.drawString(tbX7 + 7, taskbarY + 12, "[KUSER] R0", bootvid::Color{120, 245, 255}, bootvid::Color{14, 38, 48}, 1);
 
         uint32_t tbX8 = tbX7 + 98;
-        m_videoDriver.fillRectangle(tbX8, taskbarY + 4, 94, 26, bootvid::Color{14, 38, 48});
-        m_videoDriver.fillRectangle(tbX8, taskbarY + 28, 94, 2, bootvid::Color{0, 240, 255});
-        m_videoDriver.drawString(tbX8 + 7, taskbarY + 12, "[KUSER] R0", bootvid::Color{120, 245, 255}, bootvid::Color{14, 38, 48}, 1);
+        m_videoDriver.fillRectangle(tbX8, taskbarY + 4, 94, 26, bootvid::Color{32, 20, 48});
+        m_videoDriver.fillRectangle(tbX8, taskbarY + 28, 94, 2, bootvid::Color{180, 80, 255});
+        m_videoDriver.drawString(tbX8 + 7, taskbarY + 12, "[smss] R1", bootvid::Color{220, 160, 255}, bootvid::Color{32, 20, 48}, 1);
 
         uint32_t tbX9 = tbX8 + 98;
         m_videoDriver.fillRectangle(tbX9, taskbarY + 4, 94, 26, bootvid::Color{42, 34, 18});
         m_videoDriver.fillRectangle(tbX9, taskbarY + 28, 94, 2, bootvid::Color{255, 180, 0});
-        m_videoDriver.drawString(tbX9 + 7, taskbarY + 12, "[MFT] 6us", bootvid::Color{255, 215, 110}, bootvid::Color{42, 34, 18}, 1);
+        m_videoDriver.drawString(tbX9 + 7, taskbarY + 12, "[SCM] R2", bootvid::Color{255, 215, 110}, bootvid::Color{42, 34, 18}, 1);
 
         // System Tray (Live Hardware RTC Clock via UEFI GetTime)
         uint32_t trayX = (width > 220) ? (width - 200) : 10;
