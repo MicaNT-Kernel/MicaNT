@@ -231,6 +231,7 @@ public:
 
     // Packet Data Sessions
     uint32_t establishDataSession(const std::wstring& apn, const std::string& ipV4, const std::string& ipV6) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         uint32_t sid = m_nextSessionId++;
         DataSession s{};
         s.sessionId = sid;
@@ -246,6 +247,7 @@ public:
     }
 
     bool closeDataSession(uint32_t sessionId) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_sessions.find(sessionId);
         if (it != m_sessions.end()) {
             m_sessions.erase(it);
@@ -255,12 +257,14 @@ public:
     }
 
     DataSession* getDataSession(uint32_t sessionId) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_sessions.find(sessionId);
         if (it != m_sessions.end()) return &it->second;
         return nullptr;
     }
 
     std::vector<DataSession> getAllSessions() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
         std::vector<DataSession> list;
         for (const auto& pair : m_sessions) {
             list.push_back(pair.second);
@@ -269,6 +273,7 @@ public:
     }
 
     bool transmitPacket(uint32_t sessionId, uint32_t byteCount) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_sessions.find(sessionId);
         if (it != m_sessions.end() && it->second.isConnected) {
             it->second.txPackets++;
@@ -279,6 +284,7 @@ public:
     }
 
     bool receivePacket(uint32_t sessionId, uint32_t byteCount) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_sessions.find(sessionId);
         if (it != m_sessions.end() && it->second.isConnected) {
             it->second.rxPackets++;
@@ -289,6 +295,7 @@ public:
     }
 
 private:
+    mutable std::mutex m_mutex;
     uint32_t m_adapterId{1};
     std::wstring m_adapterName;
     std::string m_imei;
