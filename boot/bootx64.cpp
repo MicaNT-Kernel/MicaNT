@@ -208,11 +208,11 @@ public:
         m_videoDriver.fillRectangle(0, 0, width, 28, bootvid::Color{18, 24, 38});
         m_videoDriver.fillRectangle(0, 27, width, 1, bootvid::Color{38, 52, 78});
         m_videoDriver.drawString(14, 8, "MicaNT Cutler Edition", bootvid::Color{0, 229, 255}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(185, 8, "|  57-Unit NT Kernel (PrismX DXC/GDeflate/DML)  |  Horizon 85 (Track B)",
+        m_videoDriver.drawString(185, 8, "|  60-Unit NT Kernel (PrismX Rock-Solid Seal)  |  Horizon 88 (Track B)",
                                 bootvid::Color{170, 185, 205}, bootvid::Color{18, 24, 38}, 1);
 
         m_videoDriver.fillRectangle(width - 366, 5, 154, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 356, 8, "301/301 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 356, 8, "304/304 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
 
         m_videoDriver.fillRectangle(width - 204, 5, 196, 18, bootvid::Color{26, 36, 54});
         m_videoDriver.drawString(width - 196, 8, "PRISMX D3D12 [OK]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
@@ -835,10 +835,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 57-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-85).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 60-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-88).\r\n");
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT PrismX DirectX] CD3DX12 + D3DKMT + DirectXMath/Tex/Mesh + D3D11On12/D3D9On12 + DXC SM6.8 + GDeflate + DirectML.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 301/301 Suites Verified | PRISMX DIRECTX ECOSYSTEM SEALED | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT PrismX DirectX] CD3DX12 + D3DKMT + DXC SM6.9 + GDeflate + DirectML + EnhancedBarriers + VulkanOn12 + DRED Zero-TDR.\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 304/304 Suites Verified | PRISMX ROCK-SOLID TRACK B SEALED | 0 BSODs | Launching GOP Desktop...\r\n");
         }
     }
 

@@ -180,5 +180,14 @@ void PrismXGDeflateGpuInitializeExecutiveSubsystem() noexcept;
 // Sovereign PrismX + Microsoft DirectML (DirectMLX.h DMLCalcBufferTensorSize & DirectMLSuperResolution 1080p->4K Neural Upscaling) (kernel/io/prismx_directml_superres.cpp)
 void PrismXDirectMLSuperResInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX + Microsoft DirectX-Specs Enhanced Barriers, GPU Upload Heaps (ReBAR), Work Graphs & SM 6.9 WaveMatrix (kernel/io/prismx_enhanced_barriers_workgraphs.cpp)
+void PrismXEnhancedBarriersWorkGraphsInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX + Microsoft DirectX-Specs VulkanOn12 HLK Conformance & D3D12 Video AV1/HEVC Hardware Encoder (kernel/io/prismx_vulkanon12_video_av1.cpp)
+void PrismXVulkanOn12VideoAv1InitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX + Microsoft DeviceRemovedExtendedData (DRED 1.2), Persistent PSO Cache & Ring 1 Zero-TDR GPU Guard (kernel/io/prismx_dred_shadercache_zerotdr.cpp)
+void PrismXDredShaderCacheZeroTdrInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
 

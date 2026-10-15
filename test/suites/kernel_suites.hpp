@@ -17684,3 +17684,113 @@ static void Test_Horizon85_PrismX_DirectML_DirectMLX_And_SuperResolution4K_Neura
     std::cout << "[TEST] Suite 301: Horizon 85 - Sovereign PrismX + DirectML (DirectMLX.h & 1080p->4K SuperResolution) PASSED.\n";
 }
 
+// ============================================================================
+// Suite 302: Horizon 86 - Sovereign PrismX + Official Microsoft DirectX-Specs
+// (D3D12EnhancedBarriers.md, D3D12GPUUploadHeaps.md, WorkGraphs.md & HLSL_ShaderModel6_9.md)
+// ============================================================================
+static void Test_Horizon86_PrismX_EnhancedBarriers_GpuUploadHeaps_WorkGraphs_And_SM69_WaveMatrix() {
+    std::cout << "\n[TEST] Suite 302: Horizon 86 - Sovereign PrismX + Enhanced Barriers, GPU Upload Heaps, Work Graphs & SM 6.9 WaveMatrix...\n";
+
+    micant::um::prismx_agility_specs::InitializePrismXEnhancedBarriersWorkGraphsExports();
+    const auto& t = micant::um::prismx_agility_specs::SovereignPrismXEnhancedBarriersWorkGraphsManager::get().telemetry();
+
+    std::cout << "  [Horizon 86 D3D12EnhancedBarriers.md & D3D12GPUUploadHeaps.md (ReBAR Zero-Copy VRAM)]" << "\n"
+              << "    Enhanced Barriers=" << (t.enhancedTextureAndBufferBarriersVerified ? "VERIFIED" : "NO")
+              << " (" << t.splitSyncAndAccessTransitionsExecuted << " transitions)"
+              << " | GPU_UPLOAD ReBAR=" << (t.gpuUploadHeapReBarZeroCopyActive ? "ACTIVE" : "NO")
+              << " (" << (t.gpuUploadHeapMappedVramBytes / (1024ULL * 1024ULL)) << " MB)\n";
+    TEST_ASSERT(t.enhancedTextureAndBufferBarriersVerified &&
+                t.splitSyncAndAccessTransitionsExecuted == 16u &&
+                t.gpuUploadHeapReBarZeroCopyActive &&
+                t.gpuUploadHeapMappedVramBytes == 268435456ULL,
+                "ID3D12GraphicsCommandList7::Barrier and D3D12_HEAP_TYPE_GPU_UPLOAD ReBAR zero-copy must verify cleanly");
+
+    std::cout << "  [Horizon 86 WorkGraphs.md GPU-Driven DispatchGraph & HLSL_ShaderModel6_9.md WaveMatrix MMA]\n"
+              << "    Work Graphs=" << (t.workGraphsBackingMemoryInitialized ? "READY" : "NO")
+              << " (" << t.workGraphsGpuSpawnedChildRecords << " GPU-spawned records)"
+              << " | SM 6.9 WaveMatrix=" << (t.shaderModel69WaveMatrixMmaVerified ? "VERIFIED" : "NO")
+              << " | Sealed=" << (t.agilitySpecsPipelineSealed ? "YES" : "NO") << "\n";
+    TEST_ASSERT(t.workGraphsBackingMemoryInitialized &&
+                t.workGraphsGpuSpawnedChildRecords == 4096u &&
+                t.shaderModel69WaveMatrixMmaVerified &&
+                t.agilitySpecsPipelineSealed,
+                "GPU-driven Work Graphs and Shader Model 6.9 WaveMatrix MMA must seal cleanly");
+
+    std::cout << "[TEST] Suite 302: Horizon 86 - Sovereign PrismX + Enhanced Barriers, GPU Upload Heaps, Work Graphs & SM 6.9 WaveMatrix PASSED.\n";
+}
+
+// ============================================================================
+// Suite 303: Horizon 87 - Sovereign PrismX + Official Microsoft DirectX-Specs
+// (VulkanOn12.md HLK Conformance, TranslationLayerResourceInterop.md & D3D12 Video AV1/HEVC)
+// ============================================================================
+static void Test_Horizon87_PrismX_VulkanOn12_Conformance_And_D3D12Video_AV1_HEVC_HardwareEncoder() {
+    std::cout << "\n[TEST] Suite 303: Horizon 87 - Sovereign PrismX + VulkanOn12 Conformance & D3D12 Video AV1/HEVC Encoder...\n";
+
+    micant::um::prismx_vulkanon12_video::InitializePrismXVulkanOn12AndVideoExports();
+    const auto& t = micant::um::prismx_vulkanon12_video::SovereignPrismXVulkanOn12AndVideoManager::get().telemetry();
+
+    std::cout << "  [Horizon 87 VulkanOn12.md HLK Conformance & Cross-API Shared NT Timeline Semaphores]\n"
+              << "    FormatListCasting=" << (t.vulkanOn12RelaxedFormatListCasting ? "YES" : "NO")
+              << " | UnrestrictedPitch=" << (t.vulkanOn12UnrestrictedPitchOffsetCopy ? "YES" : "NO")
+              << " | Copy3Dto2D=" << (t.vulkanOn12CrossDimensionCopy3Dto2D ? "YES" : "NO")
+              << " | TimelineInterop=" << (t.crossApiSharedNtTimelineSemaphore ? "YES" : "NO") << "\n";
+    TEST_ASSERT(t.vulkanOn12RelaxedFormatListCasting &&
+                t.vulkanOn12UnrestrictedPitchOffsetCopy &&
+                t.vulkanOn12CrossDimensionCopy3Dto2D &&
+                t.vulkanOn12DynamicDepthBiasAndStripCut &&
+                t.crossApiSharedNtTimelineSemaphore,
+                "VulkanOn12 HLK conformance features and cross-API shared NT timeline semaphores must verify cleanly");
+
+    std::cout << "  [Horizon 87 D3D12_Video_Encoding_AV1.md & HEVC 4:4:4 Hardware Encoder]\n"
+              << "    AV1 Encoder=" << (t.d3d12VideoAv1EncoderActive ? "ACTIVE" : "NO")
+              << " | HEVC 4:4:4=" << (t.d3d12VideoHevc444EncoderActive ? "ACTIVE" : "NO")
+              << " | 4K60 Bitstream=" << t.encoded4K60Av1FrameBytes << " B"
+              << " | Motion Macroblocks=" << t.videoMotionEstimationMacroblocks << "\n";
+    TEST_ASSERT(t.d3d12VideoAv1EncoderActive &&
+                t.d3d12VideoHevc444EncoderActive &&
+                t.encoded4K60Av1FrameBytes == 259200u &&
+                t.videoMotionEstimationMacroblocks == 32400u &&
+                t.vulkanOn12AndVideoPipelineSealed,
+                "D3D12 Video AV1/HEVC hardware encoder and optical flow motion estimation must seal cleanly");
+
+    std::cout << "[TEST] Suite 303: Horizon 87 - Sovereign PrismX + VulkanOn12 Conformance & D3D12 Video AV1/HEVC Encoder PASSED.\n";
+}
+
+// ============================================================================
+// Suite 304: Horizon 88 (Milestone 60th Kernel Unit!) - Sovereign PrismX +
+// DeviceRemovedExtendedData.md (DRED 1.2), ShaderCache.md & Ring 1 Zero-TDR GPU Guard
+// ============================================================================
+static void Test_Horizon88_PrismX_DRED12_PersistentShaderCache_And_Ring1_ZeroTdr_RockSolidSeal() {
+    std::cout << "\n[TEST] Suite 304: Horizon 88 - Sovereign PrismX + DRED 1.2, Persistent ShaderCache & Ring 1 Zero-TDR Seal...\n";
+
+    micant::um::prismx_dred_zerotdr::InitializePrismXDredShaderCacheZeroTdrExports();
+    const auto& t = micant::um::prismx_dred_zerotdr::SovereignPrismXDredShaderCacheZeroTdrManager::get().telemetry();
+
+    std::cout << "  [Horizon 88 DeviceRemovedExtendedData.md (DRED 1.2) & ShaderCache.md (Zero-Stutter PSO Cache)]\n"
+              << "    DRED 1.2 Breadcrumbs=" << (t.dred12AutoBreadcrumbsActive ? "ACTIVE" : "NO")
+              << " (Ring=" << t.dredBreadcrumbRingCapacity << ", LastOp=" << t.dredLastCompletedOpIndex << ")"
+              << " | Fault VA=0x" << std::hex << t.interceptedFaultGpuVa << std::dec
+              << " | Cached PSOs=" << t.cachedDxilPsoCount << "\n";
+    TEST_ASSERT(t.dred12AutoBreadcrumbsActive &&
+                t.dredBreadcrumbRingCapacity == 65536u &&
+                t.dredPageFaultVaAttributionActive &&
+                t.persistentShaderCachePreWarmed &&
+                t.cachedDxilPsoCount == 512u,
+                "DRED 1.2 64K auto-breadcrumb ring, GPU page-fault VA attribution, and 512-PSO shader cache must verify cleanly");
+
+    std::cout << "  [Horizon 88 Ring 1 dxgkrnl.sys Zero-TDR Sub-Millisecond Recovery & 60-Unit Kernel Seal]\n"
+              << "    DummyGuardRemap=" << (t.dxgkrnlDummyGuardPageRemapped ? "YES" : "NO")
+              << " | NodeReset=" << t.subMillisecondNodeResetLatencyUs << " us (0.42 ms)"
+              << " | Replay=" << (t.survivingCommandListsReplayed ? "YES" : "NO")
+              << " | Rock-Solid Track B=" << (t.rockSolidTrackBGraphicsSealed ? "SEALED (60 UNITS / 304 SUITES)" : "NO") << "\n";
+    TEST_ASSERT(t.dxgkrnlDummyGuardPageRemapped &&
+                t.subMillisecondNodeResetLatencyUs == 420u &&
+                t.survivingCommandListsReplayed &&
+                t.totalCompiledKernelUnits == 60u &&
+                t.totalVerifiedTestSuites == 304u &&
+                t.rockSolidTrackBGraphicsSealed,
+                "Ring 1 dxgkrnl.sys Zero-TDR sub-millisecond recovery and all 60 modular kernel units (304 suites) must seal cleanly");
+
+    std::cout << "[TEST] Suite 304: Horizon 88 - Sovereign PrismX + DRED 1.2, Persistent ShaderCache & Ring 1 Zero-TDR Seal PASSED.\n";
+}
+

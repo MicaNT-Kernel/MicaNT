@@ -121,6 +121,9 @@
 #include "micant/um/subsystems/graphics/prismx_dxc_sm68_pix_runtime.hpp"
 #include "micant/um/subsystems/graphics/prismx_directstorage_gdeflate_gpu.hpp"
 #include "micant/um/subsystems/graphics/prismx_directml_superres_graph.hpp"
+#include "micant/um/subsystems/graphics/prismx_enhanced_barriers_workgraphs_sm69.hpp"
+#include "micant/um/subsystems/graphics/prismx_vulkanon12_video_av1_hevc.hpp"
+#include "micant/um/subsystems/graphics/prismx_dred_shadercache_zerotdr_seal.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -343,7 +346,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite301")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite304")) {
+        RUN_TEST(Test_Horizon88_PrismX_DRED12_PersistentShaderCache_And_Ring1_ZeroTdr_RockSolidSeal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite303") {
+        RUN_TEST(Test_Horizon87_PrismX_VulkanOn12_Conformance_And_D3D12Video_AV1_HEVC_HardwareEncoder);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite302") {
+        RUN_TEST(Test_Horizon86_PrismX_EnhancedBarriers_GpuUploadHeaps_WorkGraphs_And_SM69_WaveMatrix);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite301") {
         RUN_TEST(Test_Horizon85_PrismX_DirectML_DirectMLX_And_SuperResolution4K_NeuralGraph);
         return g_FailedTests;
     }
@@ -1402,6 +1417,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon83_PrismX_DirectXShaderCompiler_SM68_WorkGraphs_And_PixRuntime);
     RUN_TEST(Test_Horizon84_PrismX_DirectStorage_GDeflateTileStream_And_Wave32GpuDecompression);
     RUN_TEST(Test_Horizon85_PrismX_DirectML_DirectMLX_And_SuperResolution4K_NeuralGraph);
+    RUN_TEST(Test_Horizon86_PrismX_EnhancedBarriers_GpuUploadHeaps_WorkGraphs_And_SM69_WaveMatrix);
+    RUN_TEST(Test_Horizon87_PrismX_VulkanOn12_Conformance_And_D3D12Video_AV1_HEVC_HardwareEncoder);
+    RUN_TEST(Test_Horizon88_PrismX_DRED12_PersistentShaderCache_And_Ring1_ZeroTdr_RockSolidSeal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

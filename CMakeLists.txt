@@ -69,6 +69,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_dxc_sm68_pix.cpp
     kernel/io/prismx_directstorage_gdeflate.cpp
     kernel/io/prismx_directml_superres.cpp
+    kernel/io/prismx_enhanced_barriers_workgraphs.cpp
+    kernel/io/prismx_vulkanon12_video_av1.cpp
+    kernel/io/prismx_dred_shadercache_zerotdr.cpp
 )
 
 add_library(ntoskrnl_core STATIC
