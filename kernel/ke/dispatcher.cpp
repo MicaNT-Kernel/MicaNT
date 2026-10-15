@@ -69,6 +69,10 @@ void SyscallDispatcher::initializeStandardTable() {
     internal::Ring0AntiCheatEacBattlEyeCallbacksInitializeExecutiveSubsystem();
     internal::Ring0VanguardRicochetHvciIommuShieldInitializeExecutiveSubsystem();
     internal::Horizon100GamingDrmHwidVaultSealInitializeExecutiveSubsystem();
+    internal::PrismXDxgi16ComHierarchyInitializeExecutiveSubsystem();
+    internal::PrismXD3D12VTableOptions21InitializeExecutiveSubsystem();
+    internal::PrismXDirectXSystem32DllRouterInitializeExecutiveSubsystem();
+
 
 
 

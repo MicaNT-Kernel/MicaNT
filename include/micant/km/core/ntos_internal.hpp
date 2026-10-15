@@ -225,7 +225,17 @@ void Ring0VanguardRicochetHvciIommuShieldInitializeExecutiveSubsystem() noexcept
 // Historic Horizon 100: Sovereign Gaming DRM Compatibility (Denuvo/VMProtect), Per-Game Salted HWID Privacy Vault & 100-Horizon Seal (kernel/se/horizon100_gaming_drm_hwid_vault_seal.cpp)
 void Horizon100GamingDrmHwidVaultSealInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX Official Microsoft DXGI 1.0-1.6 COM Hierarchy & Exact Binary IID GUIDs (kernel/io/prism_dxgi16_com_hierarchy.cpp)
+void PrismXDxgi16ComHierarchyInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX Official 44-Slot ID3D12Device14 COM VTable Layout, CheckFeatureSupport OPTIONS..OPTIONS21 & Agility SDK (kernel/io/prism_d3d12_vtable_options21.cpp)
+void PrismXD3D12VTableOptions21InitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX System32 PE32+ DirectX Shared Library Export Router & Cross-Hierarchy D3D11-to-DXGI COM Bridge (kernel/io/prism_directx_system32_dll_router.cpp)
+void PrismXDirectXSystem32DllRouterInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
+
 
 
 

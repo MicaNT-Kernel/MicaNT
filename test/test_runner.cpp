@@ -136,6 +136,10 @@
 #include "micant/km/drivers/security/ring0_anticheat_eac_battleye_callbacks.hpp"
 #include "micant/km/drivers/security/ring0_vanguard_ricochet_hvci_iommu_shield.hpp"
 #include "micant/km/drivers/security/horizon100_gaming_drm_hwid_vault_seal.hpp"
+#include "micant/um/subsystems/graphics/prism_dxgi16_com_hierarchy.hpp"
+#include "micant/um/subsystems/graphics/prism_d3d12_vtable_options21.hpp"
+#include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
+
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -358,7 +362,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite316")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite319")) {
+        RUN_TEST(Test_Horizon103_PrismX_System32_DirectX_DLL_Router_And_CrossHierarchy_COM_Seal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite318") {
+        RUN_TEST(Test_Horizon102_PrismX_Official_D3D12_44Slot_COM_VTable_And_Options21);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite317") {
+        RUN_TEST(Test_Horizon101_PrismX_Official_DXGI16_COM_Hierarchy_And_Binary_IIDs);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite316") {
         RUN_TEST(Test_Horizon100_Sovereign_GamingDRM_Denuvo_SaltedHwidVault_And_100Horizon_Seal);
         return g_FailedTests;
     }
@@ -1492,6 +1508,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon98_Ring0_AntiCheat_EAC_BattlEye_ObCallbacks_And_SwapChainGuard);
     RUN_TEST(Test_Horizon99_Ring0_Vanguard_Ricochet_HVCI_TPM20_And_IOMMU_VramShield);
     RUN_TEST(Test_Horizon100_Sovereign_GamingDRM_Denuvo_SaltedHwidVault_And_100Horizon_Seal);
+    RUN_TEST(Test_Horizon101_PrismX_Official_DXGI16_COM_Hierarchy_And_Binary_IIDs);
+    RUN_TEST(Test_Horizon102_PrismX_Official_D3D12_44Slot_COM_VTable_And_Options21);
+    RUN_TEST(Test_Horizon103_PrismX_System32_DirectX_DLL_Router_And_CrossHierarchy_COM_Seal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

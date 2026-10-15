@@ -18183,6 +18183,108 @@ static void Test_Horizon100_Sovereign_GamingDRM_Denuvo_SaltedHwidVault_And_100Ho
     std::cout << "[TEST] Suite 316: Horizon 100 - Historic 100-Horizon Gaming DRM, Salted HWID Privacy Vault & Architecture Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 317: Horizon 101 (Kernel Unit #73) - Sovereign PrismX Official
+// Microsoft DXGI 1.0 - 1.6 COM Hierarchy, Exact Binary IID GUIDs & 540Hz Tearing
+// ============================================================================
+static void Test_Horizon101_PrismX_Official_DXGI16_COM_Hierarchy_And_Binary_IIDs() {
+    std::cout << "\n[TEST] Suite 317: Horizon 101 - Sovereign PrismX Official Microsoft DXGI 1.0 - 1.6 COM Hierarchy & Binary IIDs...\n";
+
+    micant::um::prism_dxgi16::InitializePrismDxgi16ComHierarchyExports();
+    const auto& t = micant::um::prism_dxgi16::SovereignPrismDxgi16ComManager::get().telemetry();
+
+    std::cout << "  [Horizon 101 Official DXGI 1.0-1.6 COM Hierarchy: IDXGIFactory..7 / IDXGIAdapter..4 / IDXGISwapChain..4 / IDXGIDevice..4]\n"
+              << "    Factories=" << t.factoryInterfacesQueriedCount
+              << " | Adapters=" << t.adapterInterfacesQueriedCount
+              << " | SwapChains=" << t.swapChainInterfacesQueriedCount
+              << " | Devices=" << t.deviceInterfacesQueriedCount
+              << " | VRR Tearing=" << (t.allowTearing540HzVrrSupported ? "540Hz OK" : "NO")
+              << " | VRAM=" << t.highPerfAdapterDedicatedVramGB << " GB\n";
+    TEST_ASSERT(t.initialized &&
+                t.officialBinaryGuidsVerified &&
+                t.factoryInterfacesQueriedCount == 7u &&
+                t.adapterInterfacesQueriedCount == 5u &&
+                t.swapChainInterfacesQueriedCount == 5u &&
+                t.deviceInterfacesQueriedCount == 5u &&
+                t.allowTearing540HzVrrSupported &&
+                t.highPerfAdapterDedicatedVramGB == 16ULL &&
+                t.swapChainForHwndBackBufferRotationVerified &&
+                t.adapterGetParentFactoryNavigationVerified,
+                "Official Microsoft DXGI 1.0-1.6 COM hierarchy and binary IID GUIDs must verify cleanly");
+
+    std::cout << "[TEST] Suite 317: Horizon 101 - Sovereign PrismX Official Microsoft DXGI 1.0 - 1.6 COM Hierarchy & Binary IIDs PASSED.\n";
+}
+
+// ============================================================================
+// Suite 318: Horizon 102 (Kernel Unit #74) - Sovereign PrismX Official 44-Slot
+// ID3D12Device -> ID3D12Device14 COM VTable, CheckFeatureSupport OPTIONS..OPTIONS21
+// & Agility SDK D3D12GetInterface
+// ============================================================================
+static void Test_Horizon102_PrismX_Official_D3D12_44Slot_COM_VTable_And_Options21() {
+    std::cout << "\n[TEST] Suite 318: Horizon 102 - Sovereign PrismX Official 44-Slot ID3D12Device14 COM VTable & OPTIONS21...\n";
+
+    micant::um::prism_d3d12_abi::InitializePrismD3D12VTableOptions21Exports();
+    const auto& t = micant::um::prism_d3d12_abi::SovereignPrismD3D12VTableManager::get().telemetry();
+
+    std::cout << "  [Horizon 102 Canonical 44-Slot ID3D12Device14 COM VTable + CheckFeatureSupport OPTIONS..OPTIONS21 + Agility SDK]\n"
+              << "    VTableSlots=" << t.canonicalId3d12DeviceVtableSlotCount
+              << " | AgilitySDK=1." << t.agilitySdkVersionConfigured
+              << " | SM=0x" << std::hex << t.highestShaderModelReported << std::dec
+              << " | RootSig=1.2 | Bindless=Tier " << t.resourceBindingTier
+              << " | WorkGraphs/ExecuteIndirect=Tier 1.1\n";
+    TEST_ASSERT(t.initialized &&
+                t.canonicalId3d12DeviceVtableSlotCount == 44u &&
+                t.officialId3d12DeviceToDevice14GuidsVerified &&
+                t.agilitySdkVersionConfigured == 614u &&
+                t.highestShaderModelReported == 0x69u &&
+                t.highestRootSignatureVersionReported == 0x3u &&
+                t.resourceBindingTier == 3u &&
+                t.tiledResourcesTier == 4u &&
+                t.raytracingTier == 11u &&
+                t.variableShadingRateTier == 2u &&
+                t.meshShaderTier == 10u &&
+                t.enhancedBarriersAndGpuUploadHeapSupported &&
+                t.workGraphsAndExecuteIndirectTier == 11u,
+                "Canonical 44-slot ID3D12Device14 COM vtable and CheckFeatureSupport OPTIONS..OPTIONS21 must verify cleanly");
+
+    std::cout << "[TEST] Suite 318: Horizon 102 - Sovereign PrismX Official 44-Slot ID3D12Device14 COM VTable & OPTIONS21 PASSED.\n";
+}
+
+// ============================================================================
+// Suite 319: Horizon 103 (Kernel Unit #75) - Sovereign PrismX System32 PE32+
+// DirectX Shared Library Export Router, Cross-Hierarchy D3D11-to-DXGI COM Bridge
+// & 103-Horizon / 75-Unit / 319-Suite DirectX ABI Seal
+// ============================================================================
+static void Test_Horizon103_PrismX_System32_DirectX_DLL_Router_And_CrossHierarchy_COM_Seal() {
+    std::cout << "\n[TEST] Suite 319: Horizon 103 - Sovereign PrismX System32 PE32+ DirectX DLL Export Router & Cross-Hierarchy COM Seal...\n";
+
+    micant::um::prism_system32_router::InitializePrismDirectXSystem32RouterExports();
+    const auto& t = micant::um::prism_system32_router::SovereignPrismDirectXSystem32Router::get().telemetry();
+
+    std::cout << "  [Horizon 103 System32 PE32+ DLLs: d3d12.dll, dxgi.dll, d3d11.dll, d3dcompiler_47.dll, xinput1_4.dll + Cross-Hierarchy COM]\n"
+              << "    PE32+ DLLs=" << t.compiledPe32PlusSystem32DllCount
+              << " | Exports=" << t.exportedDirectXEntryPointsResolved
+              << " | D3D11->DXGIDevice4->Factory7=" << (t.d3d11ToDxgiDevice4ToFactory7ChainVerified ? "OK" : "NO")
+              << " | Horizons=" << t.totalCompletedHorizons
+              << " | Units=" << t.totalCompiledKernelUnits
+              << " | Suites=" << t.totalVerifiedMicaNtSuites << " (+PrismX " << t.totalVerifiedPrismXSuites << "/33)\n";
+    TEST_ASSERT(t.initialized &&
+                t.compiledPe32PlusSystem32DllCount == 5u &&
+                t.exportedDirectXEntryPointsResolved == 19u &&
+                t.agilitySdkD3d12CoreRedirectionActive &&
+                t.d3d11ToDxgiDevice4ToFactory7ChainVerified &&
+                t.liveWin32LoadLibraryAndGetProcAddressVerified &&
+                t.totalCompletedHorizons == 103u &&
+                t.totalCompiledKernelUnits == 75u &&
+                t.totalVerifiedMicaNtSuites == 319u &&
+                t.totalVerifiedPrismXSuites == 33u &&
+                t.directxBinaryAndComAbi100PercentSealed,
+                "Sovereign PrismX System32 PE32+ DirectX DLL Export Router and Cross-Hierarchy COM Bridge must seal cleanly");
+
+    std::cout << "[TEST] Suite 319: Horizon 103 - Sovereign PrismX System32 PE32+ DirectX DLL Export Router & Cross-Hierarchy COM Seal PASSED.\n";
+}
+
+
 
 
 

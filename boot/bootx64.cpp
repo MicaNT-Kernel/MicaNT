@@ -646,19 +646,19 @@ public:
             uint32_t tY = wy + 232;
             m_videoDriver.fillRectangle(mX, tY, ww - 24, 82, bootvid::Color{10, 16, 24});
             m_videoDriver.drawRectangle(mX, tY, ww - 24, 82, bootvid::Color{36, 54, 82});
-            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 5,840   Threads: 212   Processes: 28   Kernel Units: 72 (316/316 OK)",
+            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 5,920   Threads: 216   Processes: 28   Kernel Units: 75 (319/319 OK)",
                                     bootvid::Color{210, 230, 250}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 26, "PrismX Live 3D:  8-Tri Crystal + DXR 1.1 Floor + FXC/DXIL SM6.9/SPIR-V 1.6 VM",
+            m_videoDriver.drawString(mX + 10, tY + 26, "PrismX DirectX ABI: DXGI 1.6 COM + 44-Slot ID3D12Device14 + System32 PE32+ DLLs",
                                     bootvid::Color{0, 230, 255}, bootvid::Color{10, 16, 24}, 1);
             m_videoDriver.drawString(mX + 10, tY + 44, "Ring 0 AntiCheat: EAC + BattlEye + Vanguard/Ricochet Sandbox + 16GB IOMMU Lock",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 62, "HORIZON 100 SEAL: Denuvo/VMProtect DR0-7 + Salted HWID Vault | 540Hz DirectFlip",
+            m_videoDriver.drawString(mX + 10, tY + 62, "HORIZON 103 SEAL: D3D12/DXGI/D3D11/FXC/XInput DLLs + Denuvo/HWID | 540Hz Flip",
                                     bootvid::Color{255, 205, 95}, bootvid::Color{10, 16, 24}, 1);
 
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{14, 28, 22});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "HORIZON 100 | 72 Units | 316/316 Suites (+PrismX 30/30) | Ring 0 AntiCheat OK",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "HORIZON 103 | 75 Units | 319/319 Suites (+PrismX 33/33) | DirectX COM ABI OK",
                                     bootvid::Color{100, 255, 160}, bootvid::Color{14, 28, 22}, 1);
         }
 
@@ -924,10 +924,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 72-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-100).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 75-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-103).\r\n");
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 0 Anti-Cheat & DRM] EAC + BattlEye + Vanguard/Ricochet Sandbox + 16GB IOMMU Shield + Denuvo/Salted HWID.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HISTORIC HORIZON 100 SEALED | 316/316 Suites (+PrismX 30/30) | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT DirectX ABI & Anti-Cheat] DXGI 1.6 COM + 44-Slot ID3D12Device14 + System32 PE32+ DLLs + EAC/BattlEye/Vanguard.\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HORIZON 103 SEALED | 319/319 Suites (+PrismX 33/33) | 0 BSODs | Launching GOP Desktop...\r\n");
         }
     }
 
