@@ -6,7 +6,7 @@
  */
 
 #include "micant/km/core/ntos_internal.hpp"
-#include "micant/km/io/live_hotswap_storheal.hpp"
+#include "micant/km/executive/live_hotswap_storheal.hpp"
 
 namespace micant::sys::internal {
 

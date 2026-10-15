@@ -326,16 +326,40 @@ ${report.findings && report.findings.length > 0 ? `#### Findings & Observations\
     }
 }
 
-// 2b. Enforce Canonical NT Kernel Directory Architecture (Zero Flat Folder Drift)
+// 2b. Enforce Canonical NT Kernel Directory Architecture (Zero Flat Folder Drift & Strict Subdirectory Allowlist)
 function verifyDirectoryArchitecture() {
     const repoRoot = path.resolve(__dirname, '..');
     const guardedRoots = [
-        { dir: path.join(repoRoot, 'include', 'micant'), desc: 'include/micant/ (must reside in shared/, km/, um/, ucrt/, or shell/)' },
-        { dir: path.join(repoRoot, 'include', 'micant', 'km'), desc: 'include/micant/km/ (must reside in core/, executive/, hal/, drivers/, or win32k/)' },
-        { dir: path.join(repoRoot, 'include', 'micant', 'km', 'drivers'), desc: 'include/micant/km/drivers/ (must reside in WDK class subdir: storage/, fs/, net/, usb/, input/, video/, audio/, bus/, compute/, security/)' },
-        { dir: path.join(repoRoot, 'include', 'micant', 'um'), desc: 'include/micant/um/ (must reside in native/, servers/, or subsystems/)' },
-        { dir: path.join(repoRoot, 'include', 'micant', 'um', 'subsystems'), desc: 'include/micant/um/subsystems/ (must reside in domain subdir: winbase/, winuser/, graphics/, media/, net/, com/, security/, mgmt/)' },
-        { dir: path.join(repoRoot, 'kernel'), desc: 'kernel/ (must reside in base/ntos subsystem subdir: init/, ke/, mm/, io/, ob/, ps/, cm/, se/, lpc/, cc/, ex/, hal/, pnp/, po/)' }
+        {
+            dir: path.join(repoRoot, 'include', 'micant'),
+            desc: 'include/micant/ (must reside in shared/, km/, um/, ucrt/, or shell/)',
+            allowedDirs: new Set(['shared', 'km', 'um', 'ucrt', 'shell'])
+        },
+        {
+            dir: path.join(repoRoot, 'include', 'micant', 'km'),
+            desc: 'include/micant/km/ (must reside in core/, executive/, hal/, drivers/, or win32k/)',
+            allowedDirs: new Set(['core', 'executive', 'hal', 'drivers', 'win32k'])
+        },
+        {
+            dir: path.join(repoRoot, 'include', 'micant', 'km', 'drivers'),
+            desc: 'include/micant/km/drivers/ (must reside in WDK class subdir: storage/, fs/, net/, usb/, input/, video/, audio/, bus/, compute/, security/)',
+            allowedDirs: new Set(['storage', 'fs', 'net', 'usb', 'input', 'video', 'audio', 'bus', 'compute', 'security'])
+        },
+        {
+            dir: path.join(repoRoot, 'include', 'micant', 'um'),
+            desc: 'include/micant/um/ (must reside in native/, servers/, or subsystems/)',
+            allowedDirs: new Set(['native', 'servers', 'subsystems'])
+        },
+        {
+            dir: path.join(repoRoot, 'include', 'micant', 'um', 'subsystems'),
+            desc: 'include/micant/um/subsystems/ (must reside in domain subdir: winbase/, winuser/, graphics/, media/, net/, com/, security/, mgmt/)',
+            allowedDirs: new Set(['winbase', 'winuser', 'graphics', 'media', 'net', 'com', 'security', 'mgmt'])
+        },
+        {
+            dir: path.join(repoRoot, 'kernel'),
+            desc: 'kernel/ (must reside in base/ntos subsystem subdir: init/, ke/, mm/, io/, ob/, ps/, cm/, se/, lpc/, cc/, ex/, hal/, pnp/, po/, arb/, dbgk/, fsrtl/, tm/, verifier/, wmi/)',
+            allowedDirs: new Set(['init', 'ke', 'mm', 'io', 'ob', 'ps', 'cm', 'se', 'lpc', 'cc', 'ex', 'hal', 'pnp', 'po', 'arb', 'dbgk', 'fsrtl', 'tm', 'verifier', 'wmi'])
+        }
     ];
 
     const violations = [];
@@ -345,18 +369,20 @@ function verifyDirectoryArchitecture() {
         for (const entry of entries) {
             if (entry.isFile() && /\.(hpp|h|cpp|c)$/i.test(entry.name)) {
                 violations.push(`Loose file "${entry.name}" found in ${guard.desc}`);
+            } else if (entry.isDirectory() && guard.allowedDirs && !guard.allowedDirs.has(entry.name)) {
+                violations.push(`Non-canonical directory "${entry.name}/" found in ${guard.desc}`);
             }
         }
     }
 
     if (violations.length > 0) {
-        console.error('[Sentinel] ARCHITECTURE VIOLATION: Flat folder drift detected!');
+        console.error('[Sentinel] ARCHITECTURE VIOLATION: Directory drift detected!');
         for (const v of violations) {
             console.error(`  - ${v}`);
         }
         process.exit(1);
     }
-    console.log('[Sentinel] NT Directory Architecture Check: PASSED (0 loose files in guarded kernel/header roots).');
+    console.log('[Sentinel] NT Directory Architecture Check: PASSED (0 loose files & 0 non-canonical subdirs across all 4 Rings).');
 }
 
 // Main execution

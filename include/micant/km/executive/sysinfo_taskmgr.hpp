@@ -42,7 +42,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/core/zero_bsod_guard.hpp"
-#include "micant/km/io/live_hotswap_storheal.hpp"
+#include "micant/km/executive/live_hotswap_storheal.hpp"
 #include "micant/um/subsystems/winbase/version.hpp"
 
 namespace micant::km::sysinfo {

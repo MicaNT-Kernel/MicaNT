@@ -5,7 +5,7 @@
  */
 
 #include "micant/km/core/ntos_internal.hpp"
-#include "micant/km/fs/ring1_vfs_minifilter_plane.hpp"
+#include "micant/km/drivers/fs/ring1_vfs_minifilter_plane.hpp"
 
 namespace micant::sys::internal {
 

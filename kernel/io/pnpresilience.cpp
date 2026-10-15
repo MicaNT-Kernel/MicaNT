@@ -1,5 +1,5 @@
 #include "micant/km/core/ntos_internal.hpp"
-#include "micant/km/io/driver_resilience.hpp"
+#include "micant/km/executive/driver_resilience.hpp"
 
 namespace micant::sys::internal {
 

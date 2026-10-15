@@ -6,7 +6,7 @@
  */
 
 #include "micant/km/core/ntos_internal.hpp"
-#include "micant/km/io/umdf_msix_guard.hpp"
+#include "micant/km/executive/umdf_msix_guard.hpp"
 
 namespace micant::sys::internal {
 
