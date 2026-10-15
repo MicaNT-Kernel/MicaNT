@@ -54,6 +54,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ps/ring3_win32_base.cpp
     kernel/ps/ring3_desktop_shell.cpp
     kernel/ps/ring3_real_apps.cpp
+    kernel/io/ring3_prismx_3d12.cpp
+    kernel/io/ring3_directstorage_d2d.cpp
+    kernel/io/ring3_prismaudio_mf.cpp
 )
 
 add_library(ntoskrnl_core STATIC

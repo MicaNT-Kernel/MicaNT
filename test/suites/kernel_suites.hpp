@@ -17125,6 +17125,120 @@ inline void Test_Horizon70_Ring3RealAppsTriad_NotepadPlusPlus_Vlc_7Zip_And_FourR
     std::cout << "[TEST] Suite 286: Horizon 70 - Sovereign Ring 3 Real-World App Triad Roll-In (Notepad++, VLC, 7-Zip & 4-Ring Seal) PASSED.\n";
 }
 
+// ============================================================================
+// Suite 287: Horizon 71 - Sovereign Ring 3 PrismX Presentation, Prism3D12, PrismShaderVM & PrismViewer Tunnel
+// ============================================================================
+static void Test_Horizon71_Ring3PrismX_Prism3D12_ShaderVM_And_DirectFlipMpoTunnel() {
+    std::cout << "\n[TEST] Suite 287: Horizon 71 - Sovereign Ring 3 PrismX Presentation, Prism3D12, PrismShaderVM & PrismViewer Tunnel...\n";
 
+    micant::um::prismx_tunnel::InitializeRing3PrismX3D12TunnelExports();
+    const auto& t = micant::um::prismx_tunnel::SovereignPrismX3D12ShaderTunnelManager::get().telemetry();
 
+    std::cout << "  [Horizon 71 PrismX DXGI & Prism3D12 Explicit GPU Pipeline]\n"
+              << "    Adapter=\"" << t.primaryAdapterName << "\" | VRAM=" << (t.dedicatedVideoMemoryBytes / (1024 * 1024))
+              << " MB | FeatureLevel=0x" << std::hex << t.d3d12FeatureLevel << std::dec
+              << " | CmdLists=" << t.executedCommandLists << " | Fence=" << t.completedFenceValue << "\n";
+    TEST_ASSERT(t.dedicatedVideoMemoryBytes == (4ULL * 1024 * 1024 * 1024) &&
+                t.executedCommandLists == 1u &&
+                t.completedFenceValue == 71ULL,
+                "PrismX Adapter 0 (4GB VRAM) and Prism3D12 CommandQueue/CommandList/Fence must execute cleanly");
 
+    std::cout << "  [Horizon 71 PrismShaderVM RISC SIMD Bytecode & PrismViewer 3D Crystal]\n"
+              << "    ShaderVM Instructions=" << t.shaderVmExecutedInstructions
+              << " | OutColor=(" << t.shaderVmOutputColorR << ", " << t.shaderVmOutputColorG << ", " << t.shaderVmOutputColorB << ")\n"
+              << "    ViewerFrames=" << t.viewerRenderedFrames
+              << " | CrystalTris=" << t.viewerCrystalTriangles << " | TorusTris=" << t.viewerTorusTriangles << "\n";
+    TEST_ASSERT(t.shaderVmExecutedInstructions == 3u &&
+                t.shaderVmOutputColorR > 0.20f &&
+                t.viewerRenderedFrames == 6u &&
+                t.viewerCrystalTriangles == 32u &&
+                t.viewerTorusTriangles == 384u,
+                "PrismShaderVM and PrismViewer 3D Crystal/Torus/Cube session must render 6 frames cleanly");
+
+    std::cout << "  [Horizon 71 Ring 3 PrismX -> Ring 1 540 Hz DirectFlip MPO -> Ring 0 dxgkrnl Tunnel]\n"
+              << "    Refresh=" << t.ring1DirectFlipRefreshHz << " Hz | Scanout=" << t.ring1ScanoutLatencyUs
+              << " us | DwmCopies=" << t.ring1DwmCopies
+              << " | SLAT Aperture Guard=" << (t.ring1SlatGpuApertureIsolated ? "ON" : "OFF") << "\n";
+    TEST_ASSERT(t.ring1DirectFlipRefreshHz == 540u &&
+                t.ring1ScanoutLatencyUs == 80u &&
+                t.ring1DwmCopies == 0u &&
+                t.ring1SlatGpuApertureIsolated &&
+                t.ring0DxgkrnlBound,
+                "PrismX SwapChain must tunnel through Ring 1 540Hz DirectFlip MPO with 0 DWM copies");
+
+    std::cout << "[TEST] Suite 287: Horizon 71 - Sovereign Ring 3 PrismX Presentation, Prism3D12, PrismShaderVM & PrismViewer Tunnel PASSED.\n";
+}
+
+// ============================================================================
+// Suite 288: Horizon 72 - Sovereign Ring 3 DirectStorage 1.2 GDeflate, Direct2D/DirectWrite & Vulkan/DirectML Tunnel
+// ============================================================================
+static void Test_Horizon72_Ring3DirectStorage_GDeflateBypassIo_And_Ring2FontWicSandbox() {
+    std::cout << "\n[TEST] Suite 288: Horizon 72 - Sovereign Ring 3 DirectStorage 1.2 GDeflate, Direct2D/DirectWrite & Vulkan/DirectML Tunnel...\n";
+
+    micant::um::dstorage_tunnel::InitializeRing3DirectStorageD2DTunnelExports();
+    const auto& t = micant::um::dstorage_tunnel::SovereignDirectStorageD2DVulkanTunnelManager::get().telemetry();
+
+    std::cout << "  [Horizon 72 DirectStorage 1.2 GDeflate GPU Decompression -> Ring 0 NVMe BypassIO]\n"
+              << "    Archive=\"" << t.assetArchivePath << "\" | Queued=" << (t.compressedBytesQueued / 1024)
+              << " KB -> Decompressed=" << (t.gpuDecompressedBytes / 1024) << " KB VRAM\n"
+              << "    NVMe BypassIO=" << t.nvmeBypassIoThroughputMBps << " MB/s | CPU Copies=" << t.cpuDecompressionCopies << "\n";
+    TEST_ASSERT(t.compressedBytesQueued == 65536u &&
+                t.gpuDecompressedBytes == 262144u &&
+                t.completedStatusArrayEntries == 1u &&
+                t.nvmeBypassIoThroughputMBps >= 14200u &&
+                t.cpuDecompressionCopies == 0u &&
+                t.bypassIoTunnelVerified,
+                "DirectStorage 1.2 GDeflate queue must stream from NVMe BypassIO into Prism3D12 VRAM with 0 CPU copies");
+
+    std::cout << "  [Horizon 72 Direct2D/DirectWrite/WIC -> Ring 2 fontdrvhost & WUDFHost Sandbox]\n"
+              << "    Glyphs=" << t.ring2FontGlyphBatchCount << " | FontRasterLatency=" << t.ring2FontRasterLatencyUs
+              << " us | Vulkan1.3=" << (t.vulkan13InteropReady ? "READY" : "NO")
+              << " | DirectML=" << (t.directMlTensorEngineReady ? "READY" : "NO") << "\n";
+    TEST_ASSERT(t.ring2FontGlyphBatchCount == 512u &&
+                t.ring2FontRasterLatencyUs == 42u &&
+                t.ring2WicColorProfileSanitized == 1u &&
+                t.vulkan13InteropReady &&
+                t.directMlTensorEngineReady,
+                "DirectWrite/WIC must sanitize fonts and color profiles inside Ring 2 fontdrvhost/WUDFHost");
+
+    std::cout << "[TEST] Suite 288: Horizon 72 - Sovereign Ring 3 DirectStorage 1.2 GDeflate, Direct2D/DirectWrite & Vulkan/DirectML Tunnel PASSED.\n";
+}
+
+// ============================================================================
+// Suite 289: Horizon 73 - Sovereign Ring 3 PrismAudio XAudio2 3D Spatial, WASAPI & Media Foundation Tunnel
+// ============================================================================
+static void Test_Horizon73_Ring3PrismAudio_XAudio2Spatial_WasapiMf_And_WaveRtTunnel() {
+    std::cout << "\n[TEST] Suite 289: Horizon 73 - Sovereign Ring 3 PrismAudio XAudio2 3D Spatial, WASAPI & Media Foundation Tunnel...\n";
+
+    micant::um::prismaudio_tunnel::InitializeRing3PrismAudioMfTunnelExports();
+    const auto& t = micant::um::prismaudio_tunnel::SovereignPrismAudioWasapiMfTunnelManager::get().telemetry();
+
+    std::cout << "  [Horizon 73 PrismAudio XAudio2 48kHz Synthesizer & 3D Spatial Panning]\n"
+              << "    SampleRate=" << t.sampleRateHz << " Hz | Channels=" << t.channelCount
+              << " | SynthesizedPCM=" << t.synthesizedPcmBytes << " B | SamplesPlayed=" << t.samplesPlayed << "\n"
+              << "    3D Spatial: VolFactor=" << t.spatialVolumeFactor
+              << " | PanLeft=" << t.spatialPanLeft << " | PanRight=" << t.spatialPanRight << "\n";
+    TEST_ASSERT(t.sampleRateHz == 48000u &&
+                t.channelCount == 2u &&
+                t.synthesizedPcmBytes == 1920u &&
+                t.samplesPlayed > 0u &&
+                t.spatialVolumeFactor > 0.35f &&
+                t.spatialPanRight > t.spatialPanLeft,
+                "PrismAudio XAudio2 must synthesize 48kHz PCM and compute 3D spatial stereo panning");
+
+    std::cout << "  [Horizon 73 Ring 3 PrismAudio -> Ring 2 APO Guard -> Ring 1 1.33ms WaveRT -> Ring 0 MMCSS]\n"
+              << "    R1 WaveRT=" << t.ring1WaveRtLatencyUs << " us (" << t.ring1QuantumFrames
+              << " frames) | R2 APO Budget=" << t.ring2ApoBudgetUs << " us | R0 MMCSS Prio=" << t.ring0MmcssPriority
+              << " | Underruns=" << t.audioGlitchesOrUnderruns << "\n";
+    TEST_ASSERT(t.ring1WaveRtLatencyUs == 1333u &&
+                t.ring1QuantumFrames == 64u &&
+                t.ring2ApoBudgetUs == 150u &&
+                t.ring0MmcssPriority == 27u &&
+                t.audioGlitchesOrUnderruns == 0u &&
+                t.xaudio2MasteringVoiceActive &&
+                t.mediaFoundationPipelineReady &&
+                t.wave3AGraphicsMediaTunnelSealed,
+                "PrismAudio/WASAPI/MF must stream through Ring 1 1.33ms WaveRT DMA and Ring 0 MMCSS with 0 underruns");
+
+    std::cout << "[TEST] Suite 289: Horizon 73 - Sovereign Ring 3 PrismAudio XAudio2 3D Spatial, WASAPI & Media Foundation Tunnel PASSED.\n";
+}

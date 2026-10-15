@@ -66,9 +66,12 @@ try {
         @{ Src = "kernel/io/ring2_wudf.cpp";          Obj = "io_ring2_wudf.o" },
         @{ Src = "kernel/se/ring2_lsa.cpp";           Obj = "se_ring2_lsa.o" },
         @{ Src = "kernel/ps/ring2_scm.cpp";           Obj = "ps_ring2_scm.o" },
-        @{ Src = "kernel/ps/ring3_win32_base.cpp";    Obj = "ps_ring3_win32_base.o" },
-        @{ Src = "kernel/ps/ring3_desktop_shell.cpp"; Obj = "ps_ring3_desktop_shell.o" },
-        @{ Src = "kernel/ps/ring3_real_apps.cpp";     Obj = "ps_ring3_real_apps.o" }
+        @{ Src = "kernel/ps/ring3_win32_base.cpp";       Obj = "ps_ring3_win32_base.o" },
+        @{ Src = "kernel/ps/ring3_desktop_shell.cpp";    Obj = "ps_ring3_desktop_shell.o" },
+        @{ Src = "kernel/ps/ring3_real_apps.cpp";        Obj = "ps_ring3_real_apps.o" },
+        @{ Src = "kernel/io/ring3_prismx_3d12.cpp";      Obj = "io_ring3_prismx_3d12.o" },
+        @{ Src = "kernel/io/ring3_directstorage_d2d.cpp";Obj = "io_ring3_directstorage_d2d.o" },
+        @{ Src = "kernel/io/ring3_prismaudio_mf.cpp";    Obj = "io_ring3_prismaudio_mf.o" }
     )
 
     $staleUnits = @()

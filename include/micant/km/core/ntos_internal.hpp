@@ -135,4 +135,13 @@ void Ring3ShellInitializeExecutiveSubsystem() noexcept;
 // Sovereign Ring 3 Real-World Application Triad Roll-In (Notepad++, VLC, 7-Zip & TaskMgr/Primes) (kernel/ps/ring3_real_apps.cpp)
 void Ring3AppsInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Ring 3 PrismX Presentation, Prism3D12, PrismShaderVM & PrismViewer Tunnel (kernel/io/ring3_prismx_3d12.cpp)
+void Ring3PrismX3D12InitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 3 DirectStorage 1.2 GDeflate, Direct2D/DirectWrite & Vulkan/DirectML Tunnel (kernel/io/ring3_directstorage_d2d.cpp)
+void Ring3DirectStorageD2DInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 3 PrismAudio XAudio2 3D Spatial, WASAPI & Media Foundation Tunnel (kernel/io/ring3_prismaudio_mf.cpp)
+void Ring3PrismAudioMfInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal

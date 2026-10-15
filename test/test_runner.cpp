@@ -106,6 +106,9 @@
 #include "micant/um/native/ring3_win32_base_bridge.hpp"
 #include "micant/um/servers/ring3_winlogon_explorer_dwm.hpp"
 #include "micant/um/subsystems/winuser/ring3_real_apps_triad.hpp"
+#include "micant/um/subsystems/graphics/ring3_prismx_3d12_shader_tunnel.hpp"
+#include "micant/um/subsystems/graphics/ring3_directstorage_d2d_vulkan_tunnel.hpp"
+#include "micant/um/subsystems/media/ring3_prismaudio_wasapi_mf_tunnel.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -328,7 +331,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite286")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite289")) {
+        RUN_TEST(Test_Horizon73_Ring3PrismAudio_XAudio2Spatial_WasapiMf_And_WaveRtTunnel);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite288") {
+        RUN_TEST(Test_Horizon72_Ring3DirectStorage_GDeflateBypassIo_And_Ring2FontWicSandbox);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite287") {
+        RUN_TEST(Test_Horizon71_Ring3PrismX_Prism3D12_ShaderVM_And_DirectFlipMpoTunnel);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite286") {
         RUN_TEST(Test_Horizon70_Ring3RealAppsTriad_NotepadPlusPlus_Vlc_7Zip_And_FourRingSeal);
         return g_FailedTests;
     }
@@ -1312,6 +1327,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon68_Ring3Win32BaseDlls_KnownDllsIat_And_ZeroSyscallKuser);
     RUN_TEST(Test_Horizon69_Ring3WinlogonSession_ZeroWebView2Explorer_And_DirectFlipDwm);
     RUN_TEST(Test_Horizon70_Ring3RealAppsTriad_NotepadPlusPlus_Vlc_7Zip_And_FourRingSeal);
+    RUN_TEST(Test_Horizon71_Ring3PrismX_Prism3D12_ShaderVM_And_DirectFlipMpoTunnel);
+    RUN_TEST(Test_Horizon72_Ring3DirectStorage_GDeflateBypassIo_And_Ring2FontWicSandbox);
+    RUN_TEST(Test_Horizon73_Ring3PrismAudio_XAudio2Spatial_WasapiMf_And_WaveRtTunnel);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
