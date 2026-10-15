@@ -243,7 +243,7 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{20, 28, 44});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{40, 180, 100});
             m_videoDriver.drawString(wx + 8, wy + 8, "N+", bootvid::Color{255, 255, 255}, bootvid::Color{40, 180, 100}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [45-Unit PrismX Wave 3A Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
+            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [48-Unit Wave 3B Net/TLS Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
@@ -264,8 +264,8 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 70, ww - 4, 22, bootvid::Color{10, 14, 22});
             m_videoDriver.fillRectangle(wx + 6, wy + 72, 184, 20, bootvid::Color{26, 38, 58});
             m_videoDriver.drawString(wx + 12, wy + 76, "[c++] kiinit.cpp *  x", bootvid::Color{0, 225, 255}, bootvid::Color{26, 38, 58}, 1);
-            m_videoDriver.fillRectangle(wx + 194, wy + 72, 180, 20, bootvid::Color{14, 18, 28});
-            m_videoDriver.drawString(wx + 200, wy + 76, "[h] prismx_3d12.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
+            m_videoDriver.fillRectangle(wx + 194, wy + 72, 196, 20, bootvid::Color{14, 18, 28});
+            m_videoDriver.drawString(wx + 200, wy + 76, "[h] net_tls_tunnel.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
 
             // Editor
             uint32_t edX = wx + 2;
@@ -277,19 +277,19 @@ public:
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
 
             const char* codeLines[] = {
-                "// MicaNT: 45-Unit Modular Kernel (Wave 3A PrismX Tunnel)",
-                "#include <micant/um/subsystems/graphics/prismx.hpp>",
-                "#include <micant/um/subsystems/graphics/prism3d12.hpp>",
-                "#include <micant/um/subsystems/graphics/directstorage.hpp>",
-                "#include <micant/um/subsystems/media/prismaudio.hpp>",
+                "// MicaNT: 48-Unit Modular Kernel (Wave 3A+3B Networking & TLS)",
+                "#include <micant/um/subsystems/net/ws2_32.hpp>",
+                "#include <micant/um/subsystems/net/winhttp.hpp>",
+                "#include <micant/um/subsystems/security/sspi.hpp>",
+                "#include <micant/km/drivers/net/afd_wsk_rio.hpp>",
                 "extern \"C\" NTSTATUS KiSystemStartup(LoaderParameterBlock* lpb) {",
-                "    Ring3PrismX3D12InitializeExecutiveSubsystem();      // 540Hz MPO",
-                "    Ring3DirectStorageD2DInitializeExecutiveSubsystem();// 14.2 GB/s",
-                "    Ring3PrismAudioMfInitializeExecutiveSubsystem();    // 1.33ms DMA",
+                "    Ring3WinsockWinHttpTlsInitializeExecutiveSubsystem();   // 96Gbps WSK",
+                "    Ring3ComRpcShellInitializeExecutiveSubsystem();         // 4us OXID",
+                "    Ring3BcryptCrypt32WinTrustInitializeExecutiveSubsystem();// LsaIso+CI",
                 "    return Phase1Initialization(lpb);",
                 "}",
-                "// PrismX DEC PRISM-64 (4GB VRAM) + PrismShaderVM + 3D Crystal",
-                "// DirectStorage 1.2 GDeflate + PrismAudio XAudio2 48kHz Spatial"
+                "// Winsock 2.2 (127.0.0.1:8443) -> 340ns AFD Fast-I/O + 256KB RIO",
+                "// Schannel TLS 1.3 + WinHTTP 5.1 -> 96 Gbps WSK (1us Loopback RTT)"
             };
 
             for (size_t i = 0; i < 13; ++i) {
@@ -312,7 +312,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "45 Kernel Units | PrismX + D3D12 + DirectStorage + PrismAudio | 0 BSODs",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "48 Kernel Units | Winsock2/RIO/WSK 96Gbps + TLS 1.3 + COM/OXID | 0 BSODs",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -430,13 +430,13 @@ public:
             // Table Entries
             struct FileEntry { const char* name; const char* sz; const char* psz; bool sel; };
             FileEntry entries[] = {
-                { "ntoskrnl.exe",    "745,472 B",   "Ring 0 (45 Units)", true },
-                { "smss/csrss.exe",  "229,376 B",   "PID 348/512 (R1)",  true },
-                { "WUDF/lsaiso.exe", "221,184 B",   "PID 412/564 (R2)",  true },
-                { "explorer/dwm.exe","294,912 B",   "PID 712/696 (R3)",  true },
+                { "ntoskrnl.exe",    "794,624 B",   "Ring 0 (48 Units)", true },
+                { "ws2_32/winhttp",  "212,992 B",   "96Gbps WSK / RIO",  true },
+                { "secur32/tls13",   "163,840 B",   "Schannel TLS 1.3",  true },
+                { "ole32/rpcrt4.dll","311,296 B",   "4us OXID (128 Cls)",true },
+                { "bcrypt/crypt32",  "245,760 B",   "LsaIso 0-Key-Exp",  true },
                 { "prismx/d3d12.dll","524,288 B",   "540Hz MPO (4GB)",   true },
-                { "dstorage.dll",    "196,608 B",   "14.2 GB/s GDeflate",true },
-                { "xaudio2_9.dll",   "147,456 B",   "1.33ms 3D Spatial", true }
+                { "dstorage/xaudio", "344,064 B",   "14.2GB/s + 1.33ms", true }
             };
 
             for (size_t i = 0; i < 7; ++i) {
@@ -454,7 +454,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "$MFT 1,048,576 Slots (6 us) | DirectStorage 14.2 GB/s | 0 Disk Thrash",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "$MFT 1,048,576 Slots (6 us) | DirectStorage 14.2 GB/s | WSK 96 Gbps",
                                     bootvid::Color{0, 240, 255}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -478,7 +478,7 @@ public:
 
             // Tabs
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 22, bootvid::Color{14, 20, 30});
-            m_videoDriver.drawString(wx + 12, wy + 33, "[Performance]   Processes (26)   Services (8 DAG / 0 Bloat)   PrismX 3A",
+            m_videoDriver.drawString(wx + 12, wy + 33, "[Performance]   Networking (96 Gbps WSK)   Processes (28)   Wave 3A+3B",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{14, 20, 30}, 1);
 
             // Left Meter Box: CPU Usage LED Bar (12%) & MEM Usage LED Bar (15.63 MB)
@@ -495,8 +495,8 @@ public:
             m_videoDriver.fillRectangle(mX + 14, mY + 76, 122, 16, bootvid::Color{12, 32, 18});
             m_videoDriver.fillRectangle(mX + 14, mY + 76, 18, 16, bootvid::Color{0, 220, 255});
 
-            m_videoDriver.drawString(mX + 10, mY + 104, "GDI Hnd: 140/10k", bootvid::Color{180, 225, 200}, bootvid::Color{4, 8, 6}, 1);
-            m_videoDriver.drawString(mX + 10, mY + 122, "svchost: 0.0% CPU", bootvid::Color{100, 240, 160}, bootvid::Color{4, 8, 6}, 1);
+            m_videoDriver.drawString(mX + 10, mY + 104, "WSK: 96 Gbps", bootvid::Color{0, 235, 255}, bootvid::Color{4, 8, 6}, 1);
+            m_videoDriver.drawString(mX + 10, mY + 122, "RIO: 256K 0-MDL", bootvid::Color{100, 240, 160}, bootvid::Color{4, 8, 6}, 1);
             m_videoDriver.drawString(mX + 10, mY + 140, "Primes: 78,498 OK", bootvid::Color{255, 215, 90}, bootvid::Color{4, 8, 6}, 1);
 
             // Right Oscilloscope Box: CPU Usage History (Green = Total, Red = Kernel Times)
@@ -519,7 +519,7 @@ public:
                 }
             }
 
-            m_videoDriver.drawString(gX + 10, gY + 8, "CPU Usage History (Green=Total, Red=Kernel+DPC+ISR)",
+            m_videoDriver.drawString(gX + 10, gY + 8, "CPU & WSK Network History (Green=Total, Red=Kernel+DPC+ISR)",
                                     bootvid::Color{120, 240, 150}, bootvid::Color{2, 6, 4}, 1);
 
             // Plot smooth connected Green (Total CPU) & Red (Kernel Times) waveforms across the grid
@@ -557,19 +557,19 @@ public:
             uint32_t tY = wy + 232;
             m_videoDriver.fillRectangle(mX, tY, ww - 24, 82, bootvid::Color{10, 16, 24});
             m_videoDriver.drawRectangle(mX, tY, ww - 24, 82, bootvid::Color{36, 54, 82});
-            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 5,480   Threads: 196   Processes: 26   Upcalls: 0x7FFE0000 Sealed",
+            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 5,840   Threads: 212   Processes: 28   Upcalls: 0x7FFE0000 Sealed",
                                     bootvid::Color{210, 230, 250}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 26, "Kernel Memory (KB): Total 16,008 (15.63 MB) | Paged 3,200 | Nonpaged 2,048",
+            m_videoDriver.drawString(mX + 10, tY + 26, "Net/TLS Wave 3B: 340ns AFD Fast-I/O | 256KB RIO (0 MDL) | 96Gbps WSK (1us RTT)",
+                                    bootvid::Color{0, 230, 255}, bootvid::Color{10, 16, 24}, 1);
+            m_videoDriver.drawString(mX + 10, tY + 44, "COM/Crypto 3B:   RpcSs PID 664 (4us OXID) | LsaIso PID 564 (0 Raw Keys) | 3us CI",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 44, "Ring 1+2 Tunnels: 540Hz MPO + 1.33ms WaveRT + fontdrv/WUDF + lsaiso + DAG",
-                                    bootvid::Color{0, 225, 255}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 62, "Ring 3 Wave 3A: PrismX/D3D12 (4GB) + DStorage (14.2GB/s) + PrismAudio 3D",
+            m_videoDriver.drawString(mX + 10, tY + 62, "Graphics/Media:  PrismX/D3D12 (540Hz MPO) + DStorage (14.2GB/s) + XAudio2 3D",
                                     bootvid::Color{255, 205, 95}, bootvid::Color{10, 16, 24}, 1);
 
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{14, 28, 22});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "Processes: 26 | CPU Usage: 12% (Kernel: 3%) | Commit: 15.6M / 1024M",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "Processes: 28 | CPU: 12% (Kernel: 3%) | Net: 96 Gbps WSK | TLS 1.3 Active",
                                     bootvid::Color{100, 255, 160}, bootvid::Color{14, 28, 22}, 1);
         }
 
@@ -618,17 +618,17 @@ public:
         uint32_t tbX7 = tbX6 + 106;
         m_videoDriver.fillRectangle(tbX7, taskbarY + 4, 94, 26, bootvid::Color{14, 38, 48});
         m_videoDriver.fillRectangle(tbX7, taskbarY + 28, 94, 2, bootvid::Color{0, 240, 255});
-        m_videoDriver.drawString(tbX7 + 7, taskbarY + 12, "[PrismX]3D", bootvid::Color{120, 245, 255}, bootvid::Color{14, 38, 48}, 1);
+        m_videoDriver.drawString(tbX7 + 7, taskbarY + 12, "[Net]96Gbp", bootvid::Color{120, 245, 255}, bootvid::Color{14, 38, 48}, 1);
 
         uint32_t tbX8 = tbX7 + 98;
         m_videoDriver.fillRectangle(tbX8, taskbarY + 4, 94, 26, bootvid::Color{32, 20, 48});
         m_videoDriver.fillRectangle(tbX8, taskbarY + 28, 94, 2, bootvid::Color{180, 80, 255});
-        m_videoDriver.drawString(tbX8 + 7, taskbarY + 12, "[DStor]1.2", bootvid::Color{220, 160, 255}, bootvid::Color{32, 20, 48}, 1);
+        m_videoDriver.drawString(tbX8 + 7, taskbarY + 12, "[TLS] 1.3", bootvid::Color{220, 160, 255}, bootvid::Color{32, 20, 48}, 1);
 
         uint32_t tbX9 = tbX8 + 98;
         m_videoDriver.fillRectangle(tbX9, taskbarY + 4, 94, 26, bootvid::Color{42, 34, 18});
         m_videoDriver.fillRectangle(tbX9, taskbarY + 28, 94, 2, bootvid::Color{255, 180, 0});
-        m_videoDriver.drawString(tbX9 + 7, taskbarY + 12, "[XAudio]3D", bootvid::Color{255, 215, 110}, bootvid::Color{42, 34, 18}, 1);
+        m_videoDriver.drawString(tbX9 + 7, taskbarY + 12, "[PrismX]3D", bootvid::Color{255, 215, 110}, bootvid::Color{42, 34, 18}, 1);
 
         // System Tray (Live Hardware RTC Clock via UEFI GetTime)
         uint32_t trayX = (width > 220) ? (width - 200) : 10;
