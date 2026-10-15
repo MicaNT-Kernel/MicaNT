@@ -181,10 +181,9 @@ public:
 
     bool initialize() {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
-        if (m_initialized) return true;
-
         registerScmServices();
         registerVersionDatabase();
+        if (m_initialized) return true;
 
         // Generate default host keys if missing
         if (m_hostKeys.find(KeyType::Ed25519) == m_hostKeys.end()) {

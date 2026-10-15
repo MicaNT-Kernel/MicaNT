@@ -718,9 +718,7 @@ public:
         return getAllPartitions();
     }
 
-private:
-    void initializeSubsystem() {
-        // Register SCM service record for vmcompute ("Hyper-V Host Compute Service")
+    void ensureScmServiceRegistered() {
         auto& scm = scm::ServiceControlManager::get();
         if (!scm.getServiceRecord(L"vmcompute")) {
             auto svc = std::make_shared<scm::ServiceRecord>();
@@ -734,6 +732,12 @@ private:
             svc->status.dwProcessId = 1184;
             scm.registerServiceRecord(svc);
         }
+    }
+
+private:
+    void initializeSubsystem() {
+        // Register SCM service record for vmcompute ("Hyper-V Host Compute Service")
+        ensureScmServiceRegistered();
 
         // Register default host partition
         auto defaultVm = std::make_shared<WhpPartition>(1, "DefaultSovereignContainer");
@@ -1161,7 +1165,7 @@ inline uint32_t HviQueryPartitionCount() {
 
 inline void InitializeWhpSubsystemExports() {
     // Ensure subsystem manager and SCM service records are initialized
-    WhpManager::get();
+    WhpManager::get().ensureScmServiceRegistered();
 
     auto& ldr = ldr::DynamicLoader::get();
 

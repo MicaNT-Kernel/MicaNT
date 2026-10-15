@@ -64,6 +64,9 @@ public:
             m_telemetry.allocatedBstrCharLen = micant::ole32::SysStringLen(bstr);
             micant::ole32::SysFreeString(bstr);
         }
+        if (hr == micant::ole32::S_OK) {
+            micant::ole32::CoUninitialize();
+        }
 
         // 3. Generate Sequential/Random UUID via rpcrt4.dll (UuidCreate)
         micant::GUID rpcUuid{};

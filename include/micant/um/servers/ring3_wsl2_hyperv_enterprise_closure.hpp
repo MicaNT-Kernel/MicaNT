@@ -82,6 +82,9 @@ public:
         uint32_t rdpSid = MicaRdpCreateSession("10.0.2.15", "OVH-FIBER-WORKSTATION", L"admin", L"MICANT");
         m_telemetry.rdpServerBoundPort  = micant::rdp::RDP_DEFAULT_PORT;
         m_telemetry.rdpCreatedSessionId = rdpSid;
+        if (rdpSid != 0u) {
+            (void)MicaRdpLogoffSession(rdpSid);
+        }
 
         // 4. Seal All 51 Modular Kernel Units & 295 Test Suites Across Ring 0, Ring 1, Ring 2 & Ring 3
         m_telemetry.totalCompiledKernelUnits = 51;
