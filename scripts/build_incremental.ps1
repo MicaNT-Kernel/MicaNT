@@ -92,7 +92,10 @@ try {
         @{ Src = "kernel/io/prismx_game_benchmark_proton_seal.cpp";   Obj = "io_prismx_game_benchmark_proton_seal.o" },
         @{ Src = "kernel/io/prismx_directsr_vrs_rebar_gaming.cpp";    Obj = "io_prismx_directsr_vrs_rebar_gaming.o" },
         @{ Src = "kernel/io/prismx_execute_indirect_sampler_feedback.cpp"; Obj = "io_prismx_execute_indirect_sampler_feedback.o" },
-        @{ Src = "kernel/io/prismx_gameinput_pix_classic_gaming_seal.cpp"; Obj = "io_prismx_gameinput_pix_classic_gaming_seal.o" }
+        @{ Src = "kernel/io/prismx_gameinput_pix_classic_gaming_seal.cpp"; Obj = "io_prismx_gameinput_pix_classic_gaming_seal.o" },
+        @{ Src = "kernel/io/prismx_hlsl_fxc_dxbc_reflection_compiler.cpp"; Obj = "io_prismx_hlsl_fxc_dxbc_reflection_compiler.o" },
+        @{ Src = "kernel/io/prismx_dxil_sm69_wave32_simd_vm.cpp";           Obj = "io_prismx_dxil_sm69_wave32_simd_vm.o" },
+        @{ Src = "kernel/io/prismx_spirv16_dxil_cross_translator_seal.cpp"; Obj = "io_prismx_spirv16_dxil_cross_translator_seal.o" }
     )
 
     $staleUnits = @()

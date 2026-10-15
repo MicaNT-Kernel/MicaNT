@@ -17982,4 +17982,108 @@ static void Test_Horizon94_PrismX_GameInput8000Hz_StateObjectDB_PIX_And_ClassicD
     std::cout << "[TEST] Suite 310: Horizon 94 - Sovereign PrismX GameInput 8000Hz, StateObjectDB, PIX & Classic Gaming Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 311: Horizon 95 (Kernel Unit #67) - Sovereign PrismX Native HLSL
+// Source-to-DXBC Compiler (D3DCompile2 / fxc.exe SM 2.0-5.1) & ID3D12ShaderReflection
+// ============================================================================
+static void Test_Horizon95_PrismX_HLSL_FXC_DXBC_Compiler_And_D3D12ShaderReflection() {
+    std::cout << "\n[TEST] Suite 311: Horizon 95 - Sovereign PrismX Native HLSL FXC DXBC Compiler & ID3D12ShaderReflection...\n";
+
+    micant::um::prismx_fxc_dxbc::InitializePrismXHlslFxcDxbcCompilerExports();
+    const auto& t = micant::um::prismx_fxc_dxbc::SovereignPrismXHlslFxcDxbcCompilerManager::get().telemetry();
+
+    std::cout << "  [Horizon 95 D3DCompile2 (fxc.exe SM 5.1 ps_5_1) + ISGN/OSGN/SHDR DXBC Container + ID3D12ShaderReflection]\n"
+              << "    SM=0x" << std::hex << t.targetShaderModelVersion << std::dec
+              << " | DXBC=" << t.dxbcContainerByteSize << " bytes (" << t.emittedPrismVmInstructions << " VM instructions)"
+              << " | Reflection Bound=" << t.reflectedBoundResourcesCount << " (b0, t0, s0)"
+              << " | OutPixel=0x" << std::hex << t.outputPixelRgba8Pack << std::dec << "\n";
+    TEST_ASSERT(t.initialized &&
+                t.hlslFxcCompilerD3DCompile2Active &&
+                t.targetShaderModelVersion == 0x00000501u &&
+                t.parsedCbufferBindingsCount == 1u &&
+                t.parsedTexture2DBindingsCount == 1u &&
+                t.parsedSamplerStateBindingsCount == 1u &&
+                t.dxbcContainerHeaderValid &&
+                t.dxbcContainerByteSize == 212u &&
+                t.emittedPrismVmInstructions == 6u &&
+                t.d3d12ShaderReflectionActive &&
+                t.reflectedBoundResourcesCount == 3u &&
+                t.reflectedInputParametersCount == 3u &&
+                t.reflectedOutputParametersCount == 1u &&
+                t.executedOnPrismShaderVmVerified &&
+                t.outputPixelRgba8Pack == 0xFFFAECCFu,
+                "Native HLSL FXC DXBC Compiler (SM 5.1), ID3D12ShaderReflection, and PrismShaderVM execution must verify cleanly");
+
+    std::cout << "[TEST] Suite 311: Horizon 95 - Sovereign PrismX Native HLSL FXC DXBC Compiler & ID3D12ShaderReflection PASSED.\n";
+}
+
+// ============================================================================
+// Suite 312: Horizon 96 (Kernel Unit #68) - Sovereign PrismX + Microsoft
+// DirectXShaderCompiler (DxilContainer.h & HlslIntrinsicOp.h) SM 6.0-6.9
+// DXIL Container Parser & PrismWave32ShaderVM 32-Lane SIMD Engine
+// ============================================================================
+static void Test_Horizon96_PrismX_DXIL_SM69_Container_And_Wave32_SIMD_VM() {
+    std::cout << "\n[TEST] Suite 312: Horizon 96 - Sovereign PrismX DXIL SM 6.9 Container & Wave32 32-Lane SIMD VM...\n";
+
+    micant::um::prismx_dxil_wave32::InitializePrismXDxilSm69Wave32SimdVmExports();
+    const auto& t = micant::um::prismx_dxil_wave32::SovereignPrismXDxilSm69Wave32SimdVmManager::get().telemetry();
+
+    std::cout << "  [Horizon 96 DxilContainer.h (SFI0/PSV0/HASH/DXIL 'BC\\xC0\\xDE') + HlslIntrinsicOp.h Wave32 SIMD VM]\n"
+              << "    DXIL SM=" << t.dxilVersionMajor << "." << t.dxilVersionMinor
+              << " | BitcodeMagic=0x" << std::hex << t.llvm37BitcodeMagic << std::dec
+              << " | BindlessHeap[" << t.bindlessHeapIndexLoaded << "]"
+              << " | Wave32 Ballot=0x" << std::hex << t.waveActiveBallotMask << std::dec
+              << " | WaveSum=" << t.waveActiveSumIntEquivalent
+              << " | PrefixSum[31]=" << t.wavePrefixSumLane31Equivalent << "\n";
+    TEST_ASSERT(t.initialized &&
+                t.dxilContainerFourPartsValid &&
+                t.dxilVersionMajor == 6u &&
+                t.dxilVersionMinor == 9u &&
+                t.llvm37BitcodeMagic == 0xDEC04342u &&
+                t.sm66ResourceDescriptorHeapActive &&
+                t.bindlessHeapIndexLoaded == 42u &&
+                t.waveLaneCount == 32u &&
+                t.waveActiveBallotMask == 0xFFFFFFFFULL &&
+                t.waveActiveSumIntEquivalent == 528u &&
+                t.wavePrefixSumLane31Equivalent == 496u &&
+                t.waveActiveMaxEquivalent == 32u &&
+                t.quadReadAcrossXSwapVerified,
+                "DXIL SM 6.9 Container (SFI0/PSV0/HASH/DXIL) and 32-lane PrismWave32ShaderVM intrinsics must verify cleanly");
+
+    std::cout << "[TEST] Suite 312: Horizon 96 - Sovereign PrismX DXIL SM 6.9 Container & Wave32 32-Lane SIMD VM PASSED.\n";
+}
+
+// ============================================================================
+// Suite 313: Horizon 97 (Kernel Unit #69) - Sovereign PrismX Bidirectional
+// SPIR-V 1.6 <-> DXIL SM 6.9 / DXBC SM 5.1 Cross-Translator, Vulkan DescriptorSet
+// -> D3D12 RootSignature Remapper & Unified Shader Toolchain Seal
+// ============================================================================
+static void Test_Horizon97_PrismX_SPIRV16_DXIL_CrossTranslator_And_Toolchain_Seal() {
+    std::cout << "\n[TEST] Suite 313: Horizon 97 - Sovereign PrismX SPIR-V 1.6 <-> DXIL SM 6.9 Cross-Translator & Toolchain Seal...\n";
+
+    micant::um::prismx_spirv_seal::InitializePrismXSpirv16DxilCrossTranslatorExports();
+    const auto& t = micant::um::prismx_spirv_seal::SovereignPrismXSpirv16DxilCrossTranslatorManager::get().telemetry();
+
+    std::cout << "  [Horizon 97 SPIR-V 1.6 (0x07230203) <-> DXIL SM 6.9 + Vulkan DescriptorSet -> D3D12 RootSignature Remap]\n"
+              << "    SPIR-V Magic=0x" << std::hex << t.spirvMagicNumber << " (v0x" << t.spirvVersionWord << ")" << std::dec
+              << " | RemappedBindings=" << t.remappedDescriptorBindingsCount << " (b0/s0, t2/s0, s3/s0, u1/s1)"
+              << " | Seal=" << t.totalCompiledKernelUnits << " Units / " << t.totalVerifiedTestSuites << " Suites\n";
+    TEST_ASSERT(t.initialized &&
+                t.spirv16ModuleHeaderValid &&
+                t.spirvMagicNumber == 0x07230203u &&
+                t.spirvVersionWord == 0x00010600u &&
+                t.vulkanToD3D12RootSignatureRemapActive &&
+                t.remappedDescriptorBindingsCount == 4u &&
+                t.subgroupBallotAndAddLoweredToWave32 &&
+                t.crossCompiledToDxilSm69Verified &&
+                t.executedOnPrismShaderVmAndWave32Vm &&
+                t.totalCompiledKernelUnits == 69u &&
+                t.totalVerifiedTestSuites == 313u &&
+                t.unifiedHlslDxbcDxilSpirvToolchainSealed,
+                "SPIR-V 1.6 <-> DXIL SM 6.9 Cross-Translator, RootSignature remapper, and 69-unit / 313-suite seal must verify cleanly");
+
+    std::cout << "[TEST] Suite 313: Horizon 97 - Sovereign PrismX SPIR-V 1.6 <-> DXIL SM 6.9 Cross-Translator & Toolchain Seal PASSED.\n";
+}
+
+
 

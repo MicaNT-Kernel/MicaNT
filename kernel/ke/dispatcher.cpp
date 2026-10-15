@@ -63,6 +63,9 @@ void SyscallDispatcher::initializeStandardTable() {
     internal::PrismXDirectSrVrsReBarGamingInitializeExecutiveSubsystem();
     internal::PrismXExecuteIndirectSamplerFeedbackInitializeExecutiveSubsystem();
     internal::PrismXGameInputPixClassicGamingSealInitializeExecutiveSubsystem();
+    internal::PrismXHlslFxcDxbcReflectionCompilerInitializeExecutiveSubsystem();
+    internal::PrismXDxilSm69Wave32SimdVmInitializeExecutiveSubsystem();
+    internal::PrismXSpirv16DxilCrossTranslatorSealInitializeExecutiveSubsystem();
 
 
 

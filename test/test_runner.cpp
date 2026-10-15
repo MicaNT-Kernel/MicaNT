@@ -130,6 +130,9 @@
 #include "micant/um/subsystems/graphics/prismx_directsr_vrs_rebar_gaming.hpp"
 #include "micant/um/subsystems/graphics/prismx_execute_indirect_sampler_feedback.hpp"
 #include "micant/um/subsystems/graphics/prismx_gameinput_pix_classic_gaming_seal.hpp"
+#include "micant/um/subsystems/graphics/prismx_hlsl_fxc_dxbc_reflection_compiler.hpp"
+#include "micant/um/subsystems/graphics/prismx_dxil_sm69_wave32_simd_vm.hpp"
+#include "micant/um/subsystems/graphics/prismx_spirv16_dxil_cross_translator_seal.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -352,7 +355,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite310")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite313")) {
+        RUN_TEST(Test_Horizon97_PrismX_SPIRV16_DXIL_CrossTranslator_And_Toolchain_Seal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite312") {
+        RUN_TEST(Test_Horizon96_PrismX_DXIL_SM69_Container_And_Wave32_SIMD_VM);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite311") {
+        RUN_TEST(Test_Horizon95_PrismX_HLSL_FXC_DXBC_Compiler_And_D3D12ShaderReflection);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite310") {
         RUN_TEST(Test_Horizon94_PrismX_GameInput8000Hz_StateObjectDB_PIX_And_ClassicDDraw7_D3D8_Seal);
         return g_FailedTests;
     }
@@ -1456,6 +1471,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon92_PrismX_DirectSR_VRS_Tier2_And_ResizableBAR_GpuUploadHeap);
     RUN_TEST(Test_Horizon93_PrismX_ExecuteIndirect_NaniteCulling_And_SamplerFeedback_TiledTier4);
     RUN_TEST(Test_Horizon94_PrismX_GameInput8000Hz_StateObjectDB_PIX_And_ClassicDDraw7_D3D8_Seal);
+    RUN_TEST(Test_Horizon95_PrismX_HLSL_FXC_DXBC_Compiler_And_D3D12ShaderReflection);
+    RUN_TEST(Test_Horizon96_PrismX_DXIL_SM69_Container_And_Wave32_SIMD_VM);
+    RUN_TEST(Test_Horizon97_PrismX_SPIRV16_DXIL_CrossTranslator_And_Toolchain_Seal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

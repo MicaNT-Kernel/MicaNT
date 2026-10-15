@@ -207,6 +207,15 @@ void PrismXExecuteIndirectSamplerFeedbackInitializeExecutiveSubsystem() noexcept
 // Sovereign PrismX Complete Gaming Runtime Seal: GameInput 8000Hz, StateObjectDatabase, PIX Profiler & Classic DDraw7/D3D8 Bridge (kernel/io/prismx_gameinput_pix_classic_gaming_seal.cpp)
 void PrismXGameInputPixClassicGamingSealInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX Native HLSL Source-to-DXBC Compiler (D3DCompile2 / fxc.exe SM 2.0-5.1) & ID3D12ShaderReflection Engine (kernel/io/prismx_hlsl_fxc_dxbc_reflection_compiler.cpp)
+void PrismXHlslFxcDxbcReflectionCompilerInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX + Microsoft DirectXShaderCompiler (DxilContainer.h & HlslIntrinsicOp.h) SM 6.0-6.9 DXIL Container Parser & PrismWave32ShaderVM 32-Lane SIMD Engine (kernel/io/prismx_dxil_sm69_wave32_simd_vm.cpp)
+void PrismXDxilSm69Wave32SimdVmInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX Bidirectional SPIR-V 1.6 <-> DXIL SM 6.9 / DXBC SM 5.1 Cross-Translator, Vulkan DescriptorSet -> D3D12 RootSignature Remapper & Seal (kernel/io/prismx_spirv16_dxil_cross_translator_seal.cpp)
+void PrismXSpirv16DxilCrossTranslatorSealInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
 
 
