@@ -95,7 +95,10 @@ try {
         @{ Src = "kernel/io/prismx_gameinput_pix_classic_gaming_seal.cpp"; Obj = "io_prismx_gameinput_pix_classic_gaming_seal.o" },
         @{ Src = "kernel/io/prismx_hlsl_fxc_dxbc_reflection_compiler.cpp"; Obj = "io_prismx_hlsl_fxc_dxbc_reflection_compiler.o" },
         @{ Src = "kernel/io/prismx_dxil_sm69_wave32_simd_vm.cpp";           Obj = "io_prismx_dxil_sm69_wave32_simd_vm.o" },
-        @{ Src = "kernel/io/prismx_spirv16_dxil_cross_translator_seal.cpp"; Obj = "io_prismx_spirv16_dxil_cross_translator_seal.o" }
+        @{ Src = "kernel/io/prismx_spirv16_dxil_cross_translator_seal.cpp"; Obj = "io_prismx_spirv16_dxil_cross_translator_seal.o" },
+        @{ Src = "kernel/se/ring0_anticheat_eac_battleye_callbacks.cpp";    Obj = "se_ring0_anticheat_eac_battleye_callbacks.o" },
+        @{ Src = "kernel/se/ring0_vanguard_ricochet_hvci_iommu_shield.cpp"; Obj = "se_ring0_vanguard_ricochet_hvci_iommu_shield.o" },
+        @{ Src = "kernel/se/horizon100_gaming_drm_hwid_vault_seal.cpp";     Obj = "se_horizon100_gaming_drm_hwid_vault_seal.o" }
     )
 
     $staleUnits = @()

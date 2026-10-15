@@ -216,6 +216,15 @@ void PrismXDxilSm69Wave32SimdVmInitializeExecutiveSubsystem() noexcept;
 // Sovereign PrismX Bidirectional SPIR-V 1.6 <-> DXIL SM 6.9 / DXBC SM 5.1 Cross-Translator, Vulkan DescriptorSet -> D3D12 RootSignature Remapper & Seal (kernel/io/prismx_spirv16_dxil_cross_translator_seal.cpp)
 void PrismXSpirv16DxilCrossTranslatorSealInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Ring 0 Kernel-Mode Anti-Cheat Callbacks (EasyAntiCheat_EOS.sys / BEDaisy.sys ObRegisterCallbacks) & SwapChain Guard (kernel/se/ring0_anticheat_eac_battleye_callbacks.cpp)
+void Ring0AntiCheatEacBattlEyeCallbacksInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Boot-Start Anti-Cheat Container (vgk.sys / randgrid.sys), HVCI / TPM 2.0 Attestation & IOMMU PCIe DMA VRAM Shield (kernel/se/ring0_vanguard_ricochet_hvci_iommu_shield.cpp)
+void Ring0VanguardRicochetHvciIommuShieldInitializeExecutiveSubsystem() noexcept;
+
+// Historic Horizon 100: Sovereign Gaming DRM Compatibility (Denuvo/VMProtect), Per-Game Salted HWID Privacy Vault & 100-Horizon Seal (kernel/se/horizon100_gaming_drm_hwid_vault_seal.cpp)
+void Horizon100GamingDrmHwidVaultSealInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
 
 

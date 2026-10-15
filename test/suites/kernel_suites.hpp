@@ -18085,5 +18085,104 @@ static void Test_Horizon97_PrismX_SPIRV16_DXIL_CrossTranslator_And_Toolchain_Sea
     std::cout << "[TEST] Suite 313: Horizon 97 - Sovereign PrismX SPIR-V 1.6 <-> DXIL SM 6.9 Cross-Translator & Toolchain Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 314: Horizon 98 (Kernel Unit #70) - Sovereign Ring 0 Kernel-Mode
+// Anti-Cheat Callbacks (EasyAntiCheat_EOS.sys / BEDaisy.sys ObRegisterCallbacks)
+// & PrismX IDXGISwapChain::Present Overlay Integrity Guard
+// ============================================================================
+static void Test_Horizon98_Ring0_AntiCheat_EAC_BattlEye_ObCallbacks_And_SwapChainGuard() {
+    std::cout << "\n[TEST] Suite 314: Horizon 98 - Sovereign Ring 0 Anti-Cheat (EAC / BattlEye ObRegisterCallbacks) & SwapChain Guard...\n";
+
+    micant::km::anticheat_eac_be::InitializeRing0AntiCheatCallbacksExports();
+    const auto& t = micant::km::anticheat_eac_be::SovereignRing0AntiCheatCallbacksManager::get().telemetry();
+
+    std::cout << "  [Horizon 98 ObRegisterCallbacks (Altitude " << t.filterAltitude << ") + PsSetLoadImageNotifyRoutineEx + SwapChain Guard]\n"
+              << "    StrippedHandles=" << t.unauthorizedVmWriteAndReadBitsStripped << "/" << t.externalHandleOpenAttemptsIntercepted
+              << " (csrss Query=0x" << std::hex << t.preservedCsrssAndTaskmgrQueryAccess << std::dec << ")"
+              << " | BlockedRemoteThreads=" << t.blockedUnsignedRemoteThreadInjections
+              << " | Overlays=" << t.whitelistedSignedOverlaysAllowed << " Signed (" << t.unauthorizedInlineJmpHooksHealed << " Hook Healed)\n";
+    TEST_ASSERT(t.initialized &&
+                t.obRegisterCallbacksActive &&
+                t.filterAltitude == 328000u &&
+                t.unauthorizedVmWriteAndReadBitsStripped == 2u &&
+                t.preservedCsrssAndTaskmgrQueryAccess == 0x1000u &&
+                t.processThreadImageNotifyRoutinesActive &&
+                t.verifiedSignedGameAndDriverImagesCount == 6u &&
+                t.blockedUnsignedRemoteThreadInjections == 2u &&
+                t.prismxSwapChainPresentVtableProtected &&
+                t.whitelistedSignedOverlaysAllowed == 3u &&
+                t.unauthorizedInlineJmpHooksHealed == 1u,
+                "Ring 0 ObRegisterCallbacks handle stripping (EAC/BattlEye) and PrismX SwapChain overlay guard must verify cleanly");
+
+    std::cout << "[TEST] Suite 314: Horizon 98 - Sovereign Ring 0 Anti-Cheat (EAC / BattlEye ObRegisterCallbacks) & SwapChain Guard PASSED.\n";
+}
+
+// ============================================================================
+// Suite 315: Horizon 99 (Kernel Unit #71) - Sovereign Boot-Start Anti-Cheat
+// Container (vgk.sys / randgrid.sys), HVCI / TPM 2.0 DRTM Attestation &
+// IOMMU (Intel VT-d / AMD-Vi) PCIe DMA Firewall for 16 GB PrismX ReBAR VRAM
+// ============================================================================
+static void Test_Horizon99_Ring0_Vanguard_Ricochet_HVCI_TPM20_And_IOMMU_VramShield() {
+    std::cout << "\n[TEST] Suite 315: Horizon 99 - Sovereign Boot-Start Vanguard/Ricochet Sandbox, HVCI/TPM 2.0 & IOMMU VRAM Shield...\n";
+
+    micant::km::vanguard_iommu::InitializeRing0VanguardRicochetIommuExports();
+    const auto& t = micant::km::vanguard_iommu::SovereignRing0VanguardRicochetIommuManager::get().telemetry();
+
+    std::cout << "  [Horizon 99 Boot-Start vgk.sys/randgrid.sys Ring 1 Sandbox + InfoClass 0x67 HVCI + VT-d/AMD-Vi IOMMU SLPT Lock]\n"
+              << "    CI Options=0x" << std::hex << t.codeIntegrityOptionsReported << std::dec
+              << " | TPM 2.0 PCR[0..7]=" << (t.tpm20AndPlutonPcr0To7QuoteValid ? "VALID" : "NO")
+              << " | LockedReBAR=" << t.lockedPrismXReBarVramApertureGB << " GB"
+              << " | BlockedPcieDma=" << t.blockedRogueFpgaPcieDmaReads
+              << " | HealedFaults=" << t.thirdPartyDriverProbeFaultsHealed << " (0 BSOD)\n";
+    TEST_ASSERT(t.initialized &&
+                t.bootStartVgkAndRandgridOnline &&
+                t.ring1AntiCrowdStrikeZeroBsodSandboxActive &&
+                t.thirdPartyDriverProbeFaultsHealed == 1u &&
+                t.codeIntegrityOptionsReported == 0x00001D01u &&
+                t.tpm20AndPlutonPcr0To7QuoteValid &&
+                t.uefiSecureBootStateEnabled &&
+                t.iommuVtdAmdViDmaRemappingActive &&
+                t.lockedPrismXReBarVramApertureGB == 16ULL &&
+                t.blockedRogueFpgaPcieDmaReads == 4u,
+                "Boot-start vgk.sys/randgrid.sys Ring 1 sandbox, HVCI/TPM 2.0 attestation, and 16GB IOMMU PCIe DMA VRAM shield must verify cleanly");
+
+    std::cout << "[TEST] Suite 315: Horizon 99 - Sovereign Boot-Start Vanguard/Ricochet Sandbox, HVCI/TPM 2.0 & IOMMU VRAM Shield PASSED.\n";
+}
+
+// ============================================================================
+// Suite 316: Horizon 100 (Kernel Unit #72 — Historic 100-Horizon Milestone) -
+// Sovereign Gaming DRM Compatibility (Denuvo / VMProtect / SteamStub),
+// Per-Game Salted HWID Privacy Vault & 100-Horizon / 72-Unit / 316-Suite Seal
+// ============================================================================
+static void Test_Horizon100_Sovereign_GamingDRM_Denuvo_SaltedHwidVault_And_100Horizon_Seal() {
+    std::cout << "\n[TEST] Suite 316: Horizon 100 - Historic 100-Horizon Gaming DRM, Salted HWID Privacy Vault & Architecture Seal...\n";
+
+    micant::km::horizon100_seal::InitializeHorizon100GamingDrmAndHwidSealExports();
+    const auto& t = micant::km::horizon100_seal::SovereignHorizon100GamingDrmAndHwidManager::get().telemetry();
+
+    std::cout << "  [HISTORIC HORIZON 100 SEAL: Denuvo/VMProtect DR0-DR7 + Salted HWID Privacy Vault + 72 Units / 316 Suites / 30 PrismX]\n"
+              << "    DR0-DR7 Switches=" << t.hardwareDebugRegisterContextSwitches
+              << " | SaltedHWID_A=0x" << std::hex << t.saltedHwidGameAlpha
+              << " != SaltedHWID_B=0x" << t.saltedHwidGameBravo << std::dec
+              << " | Horizons=" << t.totalCompletedHorizons
+              << " | Units=" << t.totalCompiledKernelUnits
+              << " | Suites=" << t.totalVerifiedMicaNtSuites << " (+PrismX " << t.totalVerifiedPrismXSuites << "/30)\n";
+    TEST_ASSERT(t.initialized &&
+                t.denuvoVmProtectSingleStepDispatcherActive &&
+                t.hardwareDebugRegisterContextSwitches == 64u &&
+                t.invariantRdtscAndCpuidLeafConsistencyActive &&
+                t.perGameSaltedHwidPrivacyVaultActive &&
+                t.crossGameTrackingPreventedAndDeterministic &&
+                t.totalCompletedHorizons == 100u &&
+                t.totalCompiledKernelUnits == 72u &&
+                t.totalVerifiedMicaNtSuites == 316u &&
+                t.totalVerifiedPrismXSuites == 30u &&
+                t.historicHorizon100SovereignGamingOsSealed,
+                "Historic Horizon 100 Gaming DRM, Per-Game Salted HWID Privacy Vault, 72 Kernel Units, and 316 Suites must seal cleanly");
+
+    std::cout << "[TEST] Suite 316: Horizon 100 - Historic 100-Horizon Gaming DRM, Salted HWID Privacy Vault & Architecture Seal PASSED.\n";
+}
+
+
 
 
