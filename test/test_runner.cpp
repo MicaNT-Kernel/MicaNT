@@ -118,6 +118,9 @@
 #include "micant/um/subsystems/graphics/prismx_directx_headers_kmt_runtime.hpp"
 #include "micant/um/subsystems/graphics/prismx_dxmath_dxtex_dxmesh_tk12.hpp"
 #include "micant/um/subsystems/graphics/prismx_d3d12_translation_layer_on12.hpp"
+#include "micant/um/subsystems/graphics/prismx_dxc_sm68_pix_runtime.hpp"
+#include "micant/um/subsystems/graphics/prismx_directstorage_gdeflate_gpu.hpp"
+#include "micant/um/subsystems/graphics/prismx_directml_superres_graph.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -340,7 +343,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite298")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite301")) {
+        RUN_TEST(Test_Horizon85_PrismX_DirectML_DirectMLX_And_SuperResolution4K_NeuralGraph);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite300") {
+        RUN_TEST(Test_Horizon84_PrismX_DirectStorage_GDeflateTileStream_And_Wave32GpuDecompression);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite299") {
+        RUN_TEST(Test_Horizon83_PrismX_DirectXShaderCompiler_SM68_WorkGraphs_And_PixRuntime);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite298") {
         RUN_TEST(Test_Horizon82_PrismX_D3D12TranslationLayer_D3D11On12_And_D3D9On12_UnifiedFunnel);
         return g_FailedTests;
     }
@@ -1384,6 +1399,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon80_PrismX_DirectXHeaders_DXCore_And_WddmD3DKMTScanoutRuntime);
     RUN_TEST(Test_Horizon81_PrismX_DirectXMath_DirectXTex_DirectXMesh_And_DirectXTK12);
     RUN_TEST(Test_Horizon82_PrismX_D3D12TranslationLayer_D3D11On12_And_D3D9On12_UnifiedFunnel);
+    RUN_TEST(Test_Horizon83_PrismX_DirectXShaderCompiler_SM68_WorkGraphs_And_PixRuntime);
+    RUN_TEST(Test_Horizon84_PrismX_DirectStorage_GDeflateTileStream_And_Wave32GpuDecompression);
+    RUN_TEST(Test_Horizon85_PrismX_DirectML_DirectMLX_And_SuperResolution4K_NeuralGraph);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

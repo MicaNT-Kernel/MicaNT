@@ -171,5 +171,14 @@ void PrismXDxMathTexMeshInitializeExecutiveSubsystem() noexcept;
 // Sovereign PrismX + Microsoft D3D12TranslationLayer, D3D11On12 & D3D9On12 Unified Graphics Funnel (kernel/io/prismx_d3d12_translation_on12.cpp)
 void PrismXD3D12TranslationOn12InitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX + Microsoft DirectXShaderCompiler (IDxcCompiler3 SM 6.8 Work Graphs / Mesh Shaders & PIX Runtime) (kernel/io/prismx_dxc_sm68_pix.cpp)
+void PrismXDxcSm68PixInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX + Microsoft DirectStorage GDeflate::TileStream (8-Byte Header, 64KB Tiles & 32-Way GPU Compute Decompression) (kernel/io/prismx_directstorage_gdeflate.cpp)
+void PrismXGDeflateGpuInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX + Microsoft DirectML (DirectMLX.h DMLCalcBufferTensorSize & DirectMLSuperResolution 1080p->4K Neural Upscaling) (kernel/io/prismx_directml_superres.cpp)
+void PrismXDirectMLSuperResInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
 

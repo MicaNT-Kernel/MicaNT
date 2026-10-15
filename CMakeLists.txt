@@ -66,6 +66,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_directx_headers_kmt.cpp
     kernel/io/prismx_dxmath_dxtex_dxmesh.cpp
     kernel/io/prismx_d3d12_translation_on12.cpp
+    kernel/io/prismx_dxc_sm68_pix.cpp
+    kernel/io/prismx_directstorage_gdeflate.cpp
+    kernel/io/prismx_directml_superres.cpp
 )
 
 add_library(ntoskrnl_core STATIC

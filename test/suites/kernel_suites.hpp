@@ -17575,3 +17575,112 @@ static void Test_Horizon82_PrismX_D3D12TranslationLayer_D3D11On12_And_D3D9On12_U
     std::cout << "[TEST] Suite 298: Horizon 82 - Sovereign PrismX + D3D12TranslationLayer, D3D11On12 & D3D9On12 Unified Funnel PASSED.\n";
 }
 
+// ============================================================================
+// Suite 299: Horizon 83 - Sovereign PrismX + Official Microsoft DirectXShaderCompiler
+// (include/dxc/dxcapi.h IDxcCompiler3, Shader Model 6.8 Work Graphs / Mesh Shaders & PIX Runtime)
+// ============================================================================
+static void Test_Horizon83_PrismX_DirectXShaderCompiler_SM68_WorkGraphs_And_PixRuntime() {
+    std::cout << "\n[TEST] Suite 299: Horizon 83 - Sovereign PrismX + DirectXShaderCompiler (SM 6.8 Work Graphs/Mesh Shaders) & PIX Runtime...\n";
+
+    micant::um::prismx_dxc_sm68::InitializePrismXDxcSm68PixExports();
+    const auto& t = micant::um::prismx_dxc_sm68::SovereignPrismXDxcSm68PixManager::get().telemetry();
+
+    std::cout << "  [Horizon 83 DirectXShaderCompiler IDxcCompiler3 Shader Model 6.8 (lib_6_8 Work Graphs & ms_6_8 Mesh Shaders)]\n"
+              << "    IDxcCompiler3=" << (t.dxcCompiler3Initialized ? "READY" : "NO")
+              << " | FourCC=0x" << std::hex << t.dxilContainerFourCC << std::dec
+              << " | SM=" << t.shaderModelMajor << "." << t.shaderModelMinor
+              << " | WorkGraphs(lib_6_8)=" << (t.workGraphsLib68Compiled ? "COMPILED" : "NO")
+              << " | MeshShader(ms_6_8)=" << (t.meshAndAmpSm68Compiled ? "COMPILED" : "NO") << "\n";
+    TEST_ASSERT(t.dxcCompiler3Initialized &&
+                t.dxilContainerFourCC == 0x4C495844u &&
+                t.shaderModelMajor == 6u &&
+                t.shaderModelMinor == 8u &&
+                t.workGraphsLib68Compiled &&
+                t.meshAndAmpSm68Compiled &&
+                t.retailDxilHashVerified,
+                "DirectXShaderCompiler IDxcCompiler3 must compile Shader Model 6.8 Work Graphs and Mesh Shaders with valid 128-bit DXIL hashes");
+
+    std::cout << "  [Horizon 83 dxcpix.h PIX GPU Event Runtime Instrumentation]\n"
+              << "    Scoped GPU Events=" << t.pixCompletedEventScopes
+              << " | GPU Markers=" << t.pixGpuMarkersRecorded
+              << " | Sealed=" << (t.dxcSm68AndPixPipelineSealed ? "YES" : "NO") << "\n";
+    TEST_ASSERT(t.pixCompletedEventScopes == 4u &&
+                t.pixGpuMarkersRecorded == 8u &&
+                t.dxcSm68AndPixPipelineSealed,
+                "dxcpix.h PIX GPU Event Runtime scopes and markers must seal cleanly");
+
+    std::cout << "[TEST] Suite 299: Horizon 83 - Sovereign PrismX + DirectXShaderCompiler (SM 6.8 Work Graphs/Mesh Shaders) & PIX Runtime PASSED.\n";
+}
+
+// ============================================================================
+// Suite 300 (Milestone 300th Suite!): Horizon 84 - Sovereign PrismX + Official Microsoft
+// DirectStorage GDeflate::TileStream (8-Byte Header, 64KB Tiles, 32-Way Wave32 GPU Compute Decompression)
+// ============================================================================
+static void Test_Horizon84_PrismX_DirectStorage_GDeflateTileStream_And_Wave32GpuDecompression() {
+    std::cout << "\n[TEST] Suite 300: Horizon 84 - Sovereign PrismX + DirectStorage GDeflate::TileStream & Wave32 GPU Decompression...\n";
+
+    micant::um::prismx_gdeflate_gpu::InitializePrismXGDeflateGpuExports();
+    const auto& t = micant::um::prismx_gdeflate_gpu::SovereignPrismXGDeflateGpuDecompressManager::get().telemetry();
+
+    std::cout << "  [Horizon 84 Microsoft DirectStorage GDeflate::TileStream 8-Byte Header & 64KB Tile Partitioning]\n"
+              << "    8-Byte Header=" << (t.tileStreamHeader8ByteValid ? "VALID" : "NO")
+              << " | CodecId=" << static_cast<uint32_t>(t.codecId)
+              << " | Magic=0x" << std::hex << static_cast<uint32_t>(t.codecMagic) << std::dec
+              << " | 64KB Tiles=" << t.tileCount64KB
+              << " | Uncompressed=" << t.uncompressedAssetBytes << " bytes\n";
+    TEST_ASSERT(t.tileStreamHeader8ByteValid &&
+                t.codecId == 4u &&
+                t.codecMagic == 0xFBu &&
+                t.tileCount64KB == 64u &&
+                t.uncompressedAssetBytes == 4194304u,
+                "GDeflate::TileStream 8-byte header must validate codecId=4, magic=0xFB, and 64 x 64KB tiles (4 MB)");
+
+    std::cout << "  [Horizon 84 GDeflate.hlsl 32-Way Wave32 GPU Compute Decompression -> Default VRAM]\n"
+              << "    Wave32 Groups=" << t.wave32ComputeGroupsDispatched
+              << " | Throughput=" << t.throughputMBps << " MB/s"
+              << " | Sealed=" << (t.gdeflateNvmeToVramSealed ? "YES (SUITE 300 MILESTONE!)" : "NO") << "\n";
+    TEST_ASSERT(t.wave32ComputeGroupsDispatched == 64u &&
+                t.throughputMBps >= 14000u &&
+                t.gdeflateNvmeToVramSealed,
+                "GDeflate 32-way Wave32 GPU compute decompression must stream NVMe tiles directly into Default VRAM");
+
+    std::cout << "[TEST] Suite 300: Horizon 84 - Sovereign PrismX + DirectStorage GDeflate::TileStream & Wave32 GPU Decompression PASSED.\n";
+}
+
+// ============================================================================
+// Suite 301: Horizon 85 - Sovereign PrismX + Official Microsoft DirectML
+// (DirectMLX.h DMLCalcBufferTensorSize, dml::Graph & DirectMLSuperResolution 1080p -> 4K)
+// ============================================================================
+static void Test_Horizon85_PrismX_DirectML_DirectMLX_And_SuperResolution4K_NeuralGraph() {
+    std::cout << "\n[TEST] Suite 301: Horizon 85 - Sovereign PrismX + DirectML (DirectMLX.h & 1080p->4K SuperResolution)...\n";
+
+    micant::um::prismx_directml_sr::InitializePrismXDirectMLSuperResExports();
+    const auto& t = micant::um::prismx_directml_sr::SovereignPrismXDirectMLSuperResManager::get().telemetry();
+
+    std::cout << "  [Horizon 85 DirectMLX.h DMLCalcBufferTensorSize & NHWC Tensor Stride Engine]\n"
+              << "    IDMLDevice1=" << (t.dmlDevice1Created ? "ACTIVE" : "NO")
+              << " | Input=" << t.inputResolutionWidth << "x" << t.inputResolutionHeight
+              << " (" << t.inputTensorBytesFP16 << " B FP16)"
+              << " | Output=" << t.outputResolutionWidth << "x" << t.outputResolutionHeight
+              << " (" << t.outputTensorBytesFP16 << " B FP16)\n";
+    TEST_ASSERT(t.dmlDevice1Created &&
+                t.inputResolutionWidth == 1920u &&
+                t.inputResolutionHeight == 1080u &&
+                t.outputResolutionWidth == 3840u &&
+                t.outputResolutionHeight == 2160u &&
+                t.inputTensorBytesFP16 == 12441600ULL &&
+                t.outputTensorBytesFP16 == 49766400ULL,
+                "DMLCalcBufferTensorSize must compute exact DWORD-aligned FP16 tensor sizes for 1080p -> 4K SuperResolution");
+
+    std::cout << "  [Horizon 85 DirectMLSuperResolution 7-Node Graph & IDMLCommandRecorder Dispatch]\n"
+              << "    Graph Nodes=" << t.dmlGraphNodeCount
+              << " | Persistent Weights=" << t.persistentResourceBytes << " B"
+              << " | Sealed=" << (t.directMLSuperResSealed ? "YES (57 UNITS / 301 SUITES)" : "NO") << "\n";
+    TEST_ASSERT(t.dmlGraphNodeCount == 7u &&
+                t.commandRecorderDispatched &&
+                t.directMLSuperResSealed,
+                "DirectMLSuperResolution 7-node neural upscaling graph must record and dispatch onto Prism3D12 cleanly");
+
+    std::cout << "[TEST] Suite 301: Horizon 85 - Sovereign PrismX + DirectML (DirectMLX.h & 1080p->4K SuperResolution) PASSED.\n";
+}
+

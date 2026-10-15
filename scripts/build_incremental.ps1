@@ -80,7 +80,10 @@ try {
         @{ Src = "kernel/ps/ring3_wsl2_hyperv_closure.cpp";        Obj = "ps_ring3_wsl2_hyperv_closure.o" },
         @{ Src = "kernel/io/prismx_directx_headers_kmt.cpp";       Obj = "io_prismx_directx_headers_kmt.o" },
         @{ Src = "kernel/io/prismx_dxmath_dxtex_dxmesh.cpp";       Obj = "io_prismx_dxmath_dxtex_dxmesh.o" },
-        @{ Src = "kernel/io/prismx_d3d12_translation_on12.cpp";    Obj = "io_prismx_d3d12_translation_on12.o" }
+        @{ Src = "kernel/io/prismx_d3d12_translation_on12.cpp";    Obj = "io_prismx_d3d12_translation_on12.o" },
+        @{ Src = "kernel/io/prismx_dxc_sm68_pix.cpp";              Obj = "io_prismx_dxc_sm68_pix.o" },
+        @{ Src = "kernel/io/prismx_directstorage_gdeflate.cpp";    Obj = "io_prismx_directstorage_gdeflate.o" },
+        @{ Src = "kernel/io/prismx_directml_superres.cpp";         Obj = "io_prismx_directml_superres.o" }
     )
 
     $staleUnits = @()
