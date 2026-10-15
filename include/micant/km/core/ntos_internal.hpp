@@ -234,6 +234,15 @@ void PrismXD3D12VTableOptions21InitializeExecutiveSubsystem() noexcept;
 // Sovereign PrismX System32 PE32+ DirectX Shared Library Export Router & Cross-Hierarchy D3D11-to-DXGI COM Bridge (kernel/io/prism_directx_system32_dll_router.cpp)
 void PrismXDirectXSystem32DllRouterInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX Official Microsoft Direct3D 9 / 9Ex (d3d9.h / d3d9.dll) 21-Slot COM VTable & D3D9On12 Bridge (kernel/io/prism_d3d9ex_com_vtable_abi.cpp)
+void PrismXD3D9ExComVTableAbiInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX Official Microsoft XAudio2 2.9 (xaudio2_9.dll) & DirectInput8 (dinput8.dll) COM VTable ABI (kernel/io/prism_xaudio2_dinput8_com_abi.cpp)
+void PrismXXAudio2AndDirectInput8ComAbiInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX Official Microsoft Direct2D 1.3 (d2d1.dll), DirectWrite (dwrite.dll), DirectComposition (dcomp.dll) COM ABI & 11-DLL System32 Seal (kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp)
+void PrismXD2D1DWriteDCompElevenDllSealInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
 
 

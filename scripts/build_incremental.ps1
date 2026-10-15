@@ -101,7 +101,10 @@ try {
         @{ Src = "kernel/se/horizon100_gaming_drm_hwid_vault_seal.cpp";     Obj = "se_horizon100_gaming_drm_hwid_vault_seal.o" },
         @{ Src = "kernel/io/prism_dxgi16_com_hierarchy.cpp";                Obj = "io_prism_dxgi16_com_hierarchy.o" },
         @{ Src = "kernel/io/prism_d3d12_vtable_options21.cpp";              Obj = "io_prism_d3d12_vtable_options21.o" },
-        @{ Src = "kernel/io/prism_directx_system32_dll_router.cpp";         Obj = "io_prism_directx_system32_dll_router.o" }
+        @{ Src = "kernel/io/prism_directx_system32_dll_router.cpp";         Obj = "io_prism_directx_system32_dll_router.o" },
+        @{ Src = "kernel/io/prism_d3d9ex_com_vtable_abi.cpp";               Obj = "io_prism_d3d9ex_com_vtable_abi.o" },
+        @{ Src = "kernel/io/prism_xaudio2_dinput8_com_abi.cpp";             Obj = "io_prism_xaudio2_dinput8_com_abi.o" },
+        @{ Src = "kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp";        Obj = "io_prism_d2d1_dwrite_dcomp_11dll_seal.o" }
     )
 
     $staleUnits = @()

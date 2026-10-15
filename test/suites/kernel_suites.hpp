@@ -18284,6 +18284,100 @@ static void Test_Horizon103_PrismX_System32_DirectX_DLL_Router_And_CrossHierarch
     std::cout << "[TEST] Suite 319: Horizon 103 - Sovereign PrismX System32 PE32+ DirectX DLL Export Router & Cross-Hierarchy COM Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 320: Horizon 104 (Kernel Unit #76) - Sovereign PrismX Official Microsoft
+// Direct3D 9 / 9Ex (<d3d9.h> / d3d9.dll) 21-Slot COM VTable & D3D9On12 Bridge
+// ============================================================================
+static void Test_Horizon104_PrismX_Official_D3D9Ex_21Slot_COM_VTable_And_D3D9On12() {
+    std::cout << "\n[TEST] Suite 320: Horizon 104 - Sovereign PrismX Official Direct3D 9 / 9Ex (d3d9.dll) 21-Slot COM VTable & D3D9On12...\n";
+
+    micant::um::prism_d3d9_abi::InitializePrismD3D9ExComAbiExports();
+    const auto& t = micant::um::prism_d3d9_abi::SovereignPrismD3D9ExComAbiManager::get().telemetry();
+
+    std::cout << "  [Horizon 104 Official d3d9.h / d3d9.dll: IDirect3D9Ex (21 Slots) + IDirect3DDevice9Ex (31 Slots) + D3D9On12]\n"
+              << "    FactorySlots=" << t.d3d9FactoryVTableSlotCount
+              << " | DeviceSlots=" << t.d3d9DeviceExVTableSlotCount
+              << " | SM=vs_3_0/ps_3_0"
+              << " | FlipEx=" << (t.flipExSwapEffectSupported ? "OK" : "NO")
+              << " | VTableHookCompatible=" << (t.standardUserModeVTableHookCompatible ? "YES" : "NO") << "\n";
+    TEST_ASSERT(t.initialized &&
+                t.d3d9FactoryVTableSlotCount == 21u &&
+                t.d3d9DeviceExVTableSlotCount == 31u &&
+                t.d3dSdkVersion == 32u &&
+                t.vertexShaderVersion == 0xFFFE0300u &&
+                t.pixelShaderVersion == 0xFFFF0300u &&
+                t.availableTextureMemCapBytes == 0xFFF00000u &&
+                t.hardwareTransformAndLightEnabled &&
+                t.flipExSwapEffectSupported &&
+                t.standardUserModeVTableHookCompatible,
+                "Official Direct3D 9 / 9Ex 21-slot COM vtable and D3D9On12 bridge must verify cleanly");
+
+    std::cout << "[TEST] Suite 320: Horizon 104 - Sovereign PrismX Official Direct3D 9 / 9Ex (d3d9.dll) 21-Slot COM VTable & D3D9On12 PASSED.\n";
+}
+
+// ============================================================================
+// Suite 321: Horizon 105 (Kernel Unit #77) - Sovereign PrismX Official Microsoft
+// XAudio2 2.9 (xaudio2_9.dll) & DirectInput8 (dinput8.dll) COM VTable ABI
+// ============================================================================
+static void Test_Horizon105_PrismX_Official_XAudio2_9_And_DirectInput8_COM_VTables() {
+    std::cout << "\n[TEST] Suite 321: Horizon 105 - Sovereign PrismX Official XAudio2 2.9 (xaudio2_9.dll) & DirectInput8 (dinput8.dll) COM ABI...\n";
+
+    micant::um::prism_xaudio2_dinput8_abi::InitializePrismXAudio2AndDirectInput8Exports();
+    const auto& t = micant::um::prism_xaudio2_dinput8_abi::SovereignPrismXAudio2AndDirectInput8Manager::get().telemetry();
+
+    std::cout << "  [Horizon 105 Official xaudio2.h (13-Slot IXAudio2) + dinput.h (11-Slot IDirectInput8W / 27-Slot Device8W)]\n"
+              << "    XAudio2Slots=" << t.xaudio2VTableSlotCount
+              << " | 7.1Mask=0x" << std::hex << t.masteringVoiceChannelMask << std::dec
+              << " | Latency=" << t.audioHardwareLatencySamples << " samples (0 Glitches)"
+              << " | DI8Slots=" << t.directInput8VTableSlotCount << "/" << t.directInputDevice8VTableSlotCount << "\n";
+    TEST_ASSERT(t.initialized &&
+                t.xaudio2VTableSlotCount == 13u &&
+                t.masteringVoiceChannelMask == 0x63Fu &&
+                t.audioQuantumSampleRateHz == 48000u &&
+                t.audioHardwareLatencySamples == 128u &&
+                t.audioGlitchesSinceStart == 0u &&
+                t.directInput8VTableSlotCount == 11u &&
+                t.directInputDevice8VTableSlotCount == 27u &&
+                t.sysKeyboardMouseJoystickAcquired,
+                "Official XAudio2 2.9 and DirectInput8 COM vtable hierarchies must verify cleanly");
+
+    std::cout << "[TEST] Suite 321: Horizon 105 - Sovereign PrismX Official XAudio2 2.9 (xaudio2_9.dll) & DirectInput8 (dinput8.dll) COM ABI PASSED.\n";
+}
+
+// ============================================================================
+// Suite 322: Horizon 106 (Kernel Unit #78) - Sovereign PrismX Official Microsoft
+// Direct2D 1.3 (d2d1.dll), DirectWrite (dwrite.dll), DirectComposition (dcomp.dll)
+// COM ABI & 11-DLL System32 PE32+ Shared Library Seal
+// ============================================================================
+static void Test_Horizon106_PrismX_Official_D2D1_DWrite_DComp_And_11_System32_DLL_Seal() {
+    std::cout << "\n[TEST] Suite 322: Horizon 106 - Sovereign PrismX Official D2D1 / DWrite / DComp COM ABI & 11-DLL System32 Seal...\n";
+
+    micant::um::prism_d2d1_dwrite_dcomp_seal::InitializePrismSystem32ElevenDllSealExports();
+    const auto& t = micant::um::prism_d2d1_dwrite_dcomp_seal::SovereignPrismSystem32ElevenDllSealManager::get().telemetry();
+
+    std::cout << "  [Horizon 106 11 System32 PE32+ DLLs: dxgi, d3d12, d3d11, d3d9, d3dcompiler_47, xinput1_4, xaudio2_9, dinput8, d2d1, dwrite, dcomp]\n"
+              << "    PE32+ DLLs=" << t.totalCompiledSystem32Pe32PlusDlls
+              << " | Exports=" << t.totalExportedSystem32Functions
+              << " | PureWinNT=" << (t.zeroCustomLauncherHacksPureWinNtStandardApis ? "YES" : "NO")
+              << " | Horizons=" << t.totalCompletedHorizons
+              << " | Units=" << t.totalCompiledKernelUnits
+              << " | Suites=" << t.totalVerifiedMicaNtSuites << " (+PrismX " << t.totalVerifiedPrismXSuites << "/36)\n";
+    TEST_ASSERT(t.initialized &&
+                t.totalCompiledSystem32Pe32PlusDlls == 11u &&
+                t.totalExportedSystem32Functions == 40u &&
+                t.dxgiToD2D1ToDCompVisualTreeVerified &&
+                t.zeroCustomLauncherHacksPureWinNtStandardApis &&
+                t.totalCompletedHorizons == 106u &&
+                t.totalCompiledKernelUnits == 78u &&
+                t.totalVerifiedMicaNtSuites == 322u &&
+                t.totalVerifiedPrismXSuites == 36u &&
+                t.elevenDllDirectXSystem32ArchitectureSealed,
+                "Sovereign PrismX 11-DLL System32 PE32+ DirectX & Multimedia COM ABI must seal cleanly");
+
+    std::cout << "[TEST] Suite 322: Horizon 106 - Sovereign PrismX Official D2D1 / DWrite / DComp COM ABI & 11-DLL System32 Seal PASSED.\n";
+}
+
+
 
 
 

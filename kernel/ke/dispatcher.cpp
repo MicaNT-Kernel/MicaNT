@@ -72,6 +72,10 @@ void SyscallDispatcher::initializeStandardTable() {
     internal::PrismXDxgi16ComHierarchyInitializeExecutiveSubsystem();
     internal::PrismXD3D12VTableOptions21InitializeExecutiveSubsystem();
     internal::PrismXDirectXSystem32DllRouterInitializeExecutiveSubsystem();
+    internal::PrismXD3D9ExComVTableAbiInitializeExecutiveSubsystem();
+    internal::PrismXXAudio2AndDirectInput8ComAbiInitializeExecutiveSubsystem();
+    internal::PrismXD2D1DWriteDCompElevenDllSealInitializeExecutiveSubsystem();
+
 
 
 

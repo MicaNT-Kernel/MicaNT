@@ -139,6 +139,10 @@
 #include "micant/um/subsystems/graphics/prism_dxgi16_com_hierarchy.hpp"
 #include "micant/um/subsystems/graphics/prism_d3d12_vtable_options21.hpp"
 #include "micant/um/subsystems/graphics/prism_directx_system32_dll_router.hpp"
+#include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
+#include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
+#include "micant/um/subsystems/graphics/prism_d2d1_dwrite_dcomp_11dll_seal.hpp"
+
 
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
@@ -362,7 +366,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite319")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite322")) {
+        RUN_TEST(Test_Horizon106_PrismX_Official_D2D1_DWrite_DComp_And_11_System32_DLL_Seal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite321") {
+        RUN_TEST(Test_Horizon105_PrismX_Official_XAudio2_9_And_DirectInput8_COM_VTables);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite320") {
+        RUN_TEST(Test_Horizon104_PrismX_Official_D3D9Ex_21Slot_COM_VTable_And_D3D9On12);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite319") {
         RUN_TEST(Test_Horizon103_PrismX_System32_DirectX_DLL_Router_And_CrossHierarchy_COM_Seal);
         return g_FailedTests;
     }
@@ -1511,6 +1527,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon101_PrismX_Official_DXGI16_COM_Hierarchy_And_Binary_IIDs);
     RUN_TEST(Test_Horizon102_PrismX_Official_D3D12_44Slot_COM_VTable_And_Options21);
     RUN_TEST(Test_Horizon103_PrismX_System32_DirectX_DLL_Router_And_CrossHierarchy_COM_Seal);
+    RUN_TEST(Test_Horizon104_PrismX_Official_D3D9Ex_21Slot_COM_VTable_And_D3D9On12);
+    RUN_TEST(Test_Horizon105_PrismX_Official_XAudio2_9_And_DirectInput8_COM_VTables);
+    RUN_TEST(Test_Horizon106_PrismX_Official_D2D1_DWrite_DComp_And_11_System32_DLL_Seal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
