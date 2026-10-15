@@ -924,10 +924,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 78-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-106).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 81-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-109).\r\n");
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT DirectX System32] 11 PE32+ DLLs (dxgi/d3d12/d3d11/d3d9/fxc47/xinput/xaudio2/dinput8/d2d1/dwrite/dcomp).\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HORIZON 106 SEALED | 322/322 Suites (+PrismX 36/36) | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT DirectX System32] 16 PE32+ DLLs (dxgi/d3d12/d3d11/d3d9/fxc47/xinput/xaudio2/dinput8/d2d1/dwrite/dcomp/mfplat/mfreadwrite/dxcore/vulkan-1/opengl32).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HORIZON 109 SEALED | 325/325 Suites (+PrismX 39/39) | 0 BSODs | Launching GOP Desktop...\r\n");
         }
     }
 

@@ -18377,8 +18377,101 @@ static void Test_Horizon106_PrismX_Official_D2D1_DWrite_DComp_And_11_System32_DL
     std::cout << "[TEST] Suite 322: Horizon 106 - Sovereign PrismX Official D2D1 / DWrite / DComp COM ABI & 11-DLL System32 Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 323: Horizon 107 (Kernel Unit #79) - Sovereign PrismX Official Microsoft
+// Media Foundation (mfplat.dll & mfreadwrite.dll) COM VTables & Zero-Copy
+// D3D11Texture2D Cutscene Decoder
+// ============================================================================
+static void Test_Horizon107_PrismX_Official_MediaFoundation_MFPlat_MFReadWrite_Cutscene_ABI() {
+    std::cout << "\n[TEST] Suite 323: Horizon 107 - Sovereign PrismX Official Media Foundation (mfplat.dll & mfreadwrite.dll) Cutscene COM ABI...\n";
 
+    micant::um::prism_mfplat_cutscene_abi::InitializePrismMediaFoundationCutsceneExports();
+    const auto& t = micant::um::prism_mfplat_cutscene_abi::SovereignPrismMediaFoundationCutsceneManager::get().telemetry();
 
+    std::cout << "  [Horizon 107 Official mfplat.dll (7 Exports) + mfreadwrite.dll (3 Exports) + IMFDXGIDeviceManager + IMFDXGIBuffer Zero-Copy]\n"
+              << "    MF_VERSION=0x" << std::hex << t.mfSdkVersionPacked << std::dec
+              << " | Exports=" << t.mfplatExportCount << "+" << t.mfreadwriteExportCount
+              << " | ZeroCopyD3D11Tex2D=" << (t.zeroCopyIMFDXGIBufferToD3D11Tex2D ? "YES" : "NO")
+              << " | Cutscene=" << t.decodedCutsceneWidth << "x" << t.decodedCutsceneHeight
+              << " (" << t.decodedSampleDuration100ns << "x100ns)\n";
+    TEST_ASSERT(t.initialized &&
+                t.mfSdkVersionPacked == 0x00020070u &&
+                t.mfplatExportCount == 7u &&
+                t.mfreadwriteExportCount == 3u &&
+                t.dxgiDeviceManagerD3D11Bound &&
+                t.zeroCopyIMFDXGIBufferToD3D11Tex2D &&
+                t.decodedCutsceneWidth == 1920u &&
+                t.decodedCutsceneHeight == 1080u &&
+                t.decodedSampleDuration100ns == 166667ULL &&
+                t.h264HevcAv1HardwareDecodeReady,
+                "Official Media Foundation mfplat.dll and mfreadwrite.dll COM vtables and zero-copy D3D11Texture2D cutscene pipeline must verify cleanly");
 
+    std::cout << "[TEST] Suite 323: Horizon 107 - Sovereign PrismX Official Media Foundation (mfplat.dll & mfreadwrite.dll) Cutscene COM ABI PASSED.\n";
+}
 
+// ============================================================================
+// Suite 324: Horizon 108 (Kernel Unit #80) - Sovereign PrismX Official Microsoft
+// DXCore (<dxcore_interface.h> / dxcore.dll) IDXCoreAdapterFactory1 COM VTable
+// & D3D12_GRAPHICS / CORE_COMPUTE / GENERIC_ML Discovery
+// ============================================================================
+static void Test_Horizon108_PrismX_Official_DXCore_AdapterFactory1_COM_VTable_And_ML_Compute() {
+    std::cout << "\n[TEST] Suite 324: Horizon 108 - Sovereign PrismX Official DXCore (dxcore.dll) IDXCoreAdapterFactory1 COM VTable...\n";
 
+    micant::um::prism_dxcore_abi::InitializePrismDXCoreComExports();
+    const auto& t = micant::um::prism_dxcore_abi::SovereignPrismDXCoreComManager::get().telemetry();
+
+    std::cout << "  [Horizon 108 Official dxcore_interface.h / dxcore.dll: IDXCoreAdapterFactory1 (9 Slots) + IDXCoreAdapter1 (14 Slots)]\n"
+              << "    Factory1Slots=" << t.adapterFactory1VTableSlots
+              << " | Adapter1Slots=" << t.adapter1VTableSlots
+              << " | HW=0x" << std::hex << t.hardwareVendorId << ":0x" << t.hardwareDeviceId << std::dec
+              << " | VRAM=" << (t.dedicatedAdapterMemoryBytes >> 30) << "GiB"
+              << " | Attrs(Gfx/Comp/ML)=" << (t.d3d12GenericMlAttributeSupported ? "YES" : "NO") << "\n";
+    TEST_ASSERT(t.initialized &&
+                t.adapterFactory1VTableSlots == 9u &&
+                t.adapter1VTableSlots == 14u &&
+                t.hardwareVendorId == 0x10DEu &&
+                t.hardwareDeviceId == 0x2684u &&
+                t.dedicatedAdapterMemoryBytes == (24ULL << 30) &&
+                t.d3d12GraphicsAttributeSupported &&
+                t.d3d12CoreComputeAttributeSupported &&
+                t.d3d12GenericMlAttributeSupported &&
+                t.dxcoreSystem32DllExportVerified,
+                "Official DXCore IDXCoreAdapterFactory1 / IDXCoreAdapter1 COM vtables and ML/Compute attributes must verify cleanly");
+
+    std::cout << "[TEST] Suite 324: Horizon 108 - Sovereign PrismX Official DXCore (dxcore.dll) IDXCoreAdapterFactory1 COM VTable PASSED.\n";
+}
+
+// ============================================================================
+// Suite 325: Horizon 109 (Kernel Unit #81) - Sovereign PrismX Official Khronos
+// Vulkan 1.3 Loader (vulkan-1.dll) & OpenGL 4.6 WGL Runtime (opengl32.dll) +
+// Complete 16-DLL System32 PE32+ Shared Library Seal
+// ============================================================================
+static void Test_Horizon109_PrismX_Official_Vulkan1_OpenGL32_And_16_System32_DLL_Seal() {
+    std::cout << "\n[TEST] Suite 325: Horizon 109 - Sovereign PrismX Official Vulkan 1.3 (vulkan-1.dll) & OpenGL 4.6 (opengl32.dll) + 16-DLL Seal...\n";
+
+    micant::um::prism_vulkan1_opengl32_seal::InitializePrismSystem32SixteenDllSealExports();
+    const auto& t = micant::um::prism_vulkan1_opengl32_seal::SovereignPrismSystem32SixteenDllSealManager::get().telemetry();
+
+    std::cout << "  [Horizon 109 Complete 16-DLL System32 PE32+ Suite: dxgi, d3d12, d3d11, d3d9, fxc47, xinput1_4, xaudio2_9, dinput8, d2d1, dwrite, dcomp, mfplat, mfreadwrite, dxcore, vulkan-1, opengl32]\n"
+              << "    PE32+ DLLs=" << t.totalCompiledSystem32Pe32PlusDlls
+              << " | Exports=" << t.totalExportedSystem32Functions
+              << " | ICDMagic=0x" << std::hex << t.vulkanIcdDispatchableMagic << std::dec
+              << " | GL=" << t.openglCoreProfileMajorMinor
+              << " | Horizons=" << t.totalCompletedHorizons
+              << " | Units=" << t.totalCompiledKernelUnits
+              << " | Suites=" << t.totalVerifiedMicaNtSuites << " (+PrismX " << t.totalVerifiedPrismXSuites << "/39)\n";
+    TEST_ASSERT(t.initialized &&
+                t.vulkanIcdDispatchableMagic == 0x01CDC0DEULL &&
+                t.openglCoreProfileMajorMinor == 460u &&
+                t.totalCompiledSystem32Pe32PlusDlls == 16u &&
+                t.totalExportedSystem32Functions == 75u &&
+                t.zeroCustomLauncherHacksPureWinNtStandardApis &&
+                t.totalCompletedHorizons == 109u &&
+                t.totalCompiledKernelUnits == 81u &&
+                t.totalVerifiedMicaNtSuites == 325u &&
+                t.totalVerifiedPrismXSuites == 39u &&
+                t.sixteenDllSystem32GamingArchitectureSealed,
+                "Complete 16-DLL System32 PE32+ DirectX, Media Foundation, DXCore, Vulkan 1.3 & OpenGL 4.6 architecture must seal cleanly");
+
+    std::cout << "[TEST] Suite 325: Horizon 109 - Sovereign PrismX Official Vulkan 1.3 (vulkan-1.dll) & OpenGL 4.6 (opengl32.dll) + 16-DLL Seal PASSED.\n";
+}

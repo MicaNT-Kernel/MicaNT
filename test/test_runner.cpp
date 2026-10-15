@@ -142,7 +142,9 @@
 #include "micant/um/subsystems/graphics/prism_d3d9ex_com_vtable_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_xaudio2_dinput8_com_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_d2d1_dwrite_dcomp_11dll_seal.hpp"
-
+#include "micant/um/subsystems/graphics/prism_mfplat_mfreadwrite_cutscene_abi.hpp"
+#include "micant/um/subsystems/graphics/prism_dxcore_adapter_factory_com_abi.hpp"
+#include "micant/um/subsystems/graphics/prism_vulkan1_opengl32_16dll_seal.hpp"
 
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
@@ -366,7 +368,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite322")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite325")) {
+        RUN_TEST(Test_Horizon109_PrismX_Official_Vulkan1_OpenGL32_And_16_System32_DLL_Seal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite324") {
+        RUN_TEST(Test_Horizon108_PrismX_Official_DXCore_AdapterFactory1_COM_VTable_And_ML_Compute);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite323") {
+        RUN_TEST(Test_Horizon107_PrismX_Official_MediaFoundation_MFPlat_MFReadWrite_Cutscene_ABI);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite322") {
         RUN_TEST(Test_Horizon106_PrismX_Official_D2D1_DWrite_DComp_And_11_System32_DLL_Seal);
         return g_FailedTests;
     }
@@ -1530,6 +1544,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon104_PrismX_Official_D3D9Ex_21Slot_COM_VTable_And_D3D9On12);
     RUN_TEST(Test_Horizon105_PrismX_Official_XAudio2_9_And_DirectInput8_COM_VTables);
     RUN_TEST(Test_Horizon106_PrismX_Official_D2D1_DWrite_DComp_And_11_System32_DLL_Seal);
+    RUN_TEST(Test_Horizon107_PrismX_Official_MediaFoundation_MFPlat_MFReadWrite_Cutscene_ABI);
+    RUN_TEST(Test_Horizon108_PrismX_Official_DXCore_AdapterFactory1_COM_VTable_And_ML_Compute);
+    RUN_TEST(Test_Horizon109_PrismX_Official_Vulkan1_OpenGL32_And_16_System32_DLL_Seal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
@@ -1537,5 +1554,3 @@ int main(int argc, char* argv[]) {
 
     return (g_FailedTests == 0) ? 0 : 1;
 }
-
-

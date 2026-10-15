@@ -243,8 +243,13 @@ void PrismXXAudio2AndDirectInput8ComAbiInitializeExecutiveSubsystem() noexcept;
 // Sovereign PrismX Official Microsoft Direct2D 1.3 (d2d1.dll), DirectWrite (dwrite.dll), DirectComposition (dcomp.dll) COM ABI & 11-DLL System32 Seal (kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp)
 void PrismXD2D1DWriteDCompElevenDllSealInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX Official Microsoft Media Foundation (mfplat.dll & mfreadwrite.dll) COM VTables & Zero-Copy D3D11Texture2D Cutscene Decoder (kernel/io/prism_mfplat_mfreadwrite_cutscene_abi.cpp)
+void PrismXMediaFoundationCutsceneAbiInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX Official Microsoft DXCore (dxcore_interface.h / dxcore.dll) IDXCoreAdapterFactory1 COM VTable & ML/Compute Discovery (kernel/io/prism_dxcore_adapter_factory_com_abi.cpp)
+void PrismXDXCoreComAbiInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX Official Khronos Vulkan 1.3 Loader (vulkan-1.dll) & OpenGL 4.6 WGL Runtime (opengl32.dll) + 16-DLL System32 Seal (kernel/io/prism_vulkan1_opengl32_16dll_seal.cpp)
+void PrismXVulkan1OpenGL32SixteenDllSealInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
-
-
-
-

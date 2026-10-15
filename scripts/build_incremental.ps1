@@ -104,7 +104,10 @@ try {
         @{ Src = "kernel/io/prism_directx_system32_dll_router.cpp";         Obj = "io_prism_directx_system32_dll_router.o" },
         @{ Src = "kernel/io/prism_d3d9ex_com_vtable_abi.cpp";               Obj = "io_prism_d3d9ex_com_vtable_abi.o" },
         @{ Src = "kernel/io/prism_xaudio2_dinput8_com_abi.cpp";             Obj = "io_prism_xaudio2_dinput8_com_abi.o" },
-        @{ Src = "kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp";        Obj = "io_prism_d2d1_dwrite_dcomp_11dll_seal.o" }
+        @{ Src = "kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp";        Obj = "io_prism_d2d1_dwrite_dcomp_11dll_seal.o" },
+        @{ Src = "kernel/io/prism_mfplat_mfreadwrite_cutscene_abi.cpp";     Obj = "io_prism_mfplat_mfreadwrite_cutscene_abi.o" },
+        @{ Src = "kernel/io/prism_dxcore_adapter_factory_com_abi.cpp";      Obj = "io_prism_dxcore_adapter_factory_com_abi.o" },
+        @{ Src = "kernel/io/prism_vulkan1_opengl32_16dll_seal.cpp";         Obj = "io_prism_vulkan1_opengl32_16dll_seal.o" }
     )
 
     $staleUnits = @()
