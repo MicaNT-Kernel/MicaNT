@@ -51,6 +51,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/ring2_wudf.cpp
     kernel/se/ring2_lsa.cpp
     kernel/ps/ring2_scm.cpp
+    kernel/ps/ring3_win32_base.cpp
+    kernel/ps/ring3_desktop_shell.cpp
+    kernel/ps/ring3_real_apps.cpp
 )
 
 add_library(ntoskrnl_core STATIC

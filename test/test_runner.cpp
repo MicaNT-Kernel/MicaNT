@@ -103,6 +103,9 @@
 #include "micant/km/io/ring2_wudf_fontdrv_host.hpp"
 #include "micant/km/drivers/security/ring2_lsa_vault_keyiso.hpp"
 #include "micant/km/executive/ring2_scm_services_broker.hpp"
+#include "micant/um/native/ring3_win32_base_bridge.hpp"
+#include "micant/um/servers/ring3_winlogon_explorer_dwm.hpp"
+#include "micant/um/subsystems/winuser/ring3_real_apps_triad.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -325,7 +328,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite283")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite286")) {
+        RUN_TEST(Test_Horizon70_Ring3RealAppsTriad_NotepadPlusPlus_Vlc_7Zip_And_FourRingSeal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite285") {
+        RUN_TEST(Test_Horizon69_Ring3WinlogonSession_ZeroWebView2Explorer_And_DirectFlipDwm);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite284") {
+        RUN_TEST(Test_Horizon68_Ring3Win32BaseDlls_KnownDllsIat_And_ZeroSyscallKuser);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite283") {
         RUN_TEST(Test_Horizon67_Ring2ParallelScm_RpcSsDcomLaunch_And_Ring3HandoverGate);
         return g_FailedTests;
     }
@@ -1294,6 +1309,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon65_Ring2WudfDeviceHostPool_FontDrvSandbox_And_SyscallGuard);
     RUN_TEST(Test_Horizon66_Ring2LsaLogonBroker_LsaIsoCredentialVault_And_KeyIsoDpapi);
     RUN_TEST(Test_Horizon67_Ring2ParallelScm_RpcSsDcomLaunch_And_Ring3HandoverGate);
+    RUN_TEST(Test_Horizon68_Ring3Win32BaseDlls_KnownDllsIat_And_ZeroSyscallKuser);
+    RUN_TEST(Test_Horizon69_Ring3WinlogonSession_ZeroWebView2Explorer_And_DirectFlipDwm);
+    RUN_TEST(Test_Horizon70_Ring3RealAppsTriad_NotepadPlusPlus_Vlc_7Zip_And_FourRingSeal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
