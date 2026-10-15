@@ -198,6 +198,16 @@ void PrismXGopScanoutFramePacingInitializeExecutiveSubsystem() noexcept;
 // Sovereign PrismX Game Engine Benchmark & Wine/Proton DX12/VulkanOn12 Zero-Overhead Seal (kernel/io/prismx_game_benchmark_proton_seal.cpp)
 void PrismXGameBenchmarkProtonSealInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX Gaming Core: DirectSR, Variable Rate Shading Tier 2 & Resizable BAR GPU Upload Heaps (kernel/io/prismx_directsr_vrs_rebar_gaming.cpp)
+void PrismXDirectSrVrsReBarGamingInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX GPU-Driven Rendering (ExecuteIndirect Tier 1.1) & Sampler Feedback 1.0 / Tiled Resources Tier 4 (kernel/io/prismx_execute_indirect_sampler_feedback.cpp)
+void PrismXExecuteIndirectSamplerFeedbackInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX Complete Gaming Runtime Seal: GameInput 8000Hz, StateObjectDatabase, PIX Profiler & Classic DDraw7/D3D8 Bridge (kernel/io/prismx_gameinput_pix_classic_gaming_seal.cpp)
+void PrismXGameInputPixClassicGamingSealInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
+
 
 

@@ -60,6 +60,10 @@ void SyscallDispatcher::initializeStandardTable() {
     internal::PrismXLive3DSceneFrameGraphInitializeExecutiveSubsystem();
     internal::PrismXGopScanoutFramePacingInitializeExecutiveSubsystem();
     internal::PrismXGameBenchmarkProtonSealInitializeExecutiveSubsystem();
+    internal::PrismXDirectSrVrsReBarGamingInitializeExecutiveSubsystem();
+    internal::PrismXExecuteIndirectSamplerFeedbackInitializeExecutiveSubsystem();
+    internal::PrismXGameInputPixClassicGamingSealInitializeExecutiveSubsystem();
+
 
 
     // 1. NtAllocateVirtualMemory (SSN: 0x0018)

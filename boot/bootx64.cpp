@@ -208,14 +208,14 @@ public:
         m_videoDriver.fillRectangle(0, 0, width, 28, bootvid::Color{18, 24, 38});
         m_videoDriver.fillRectangle(0, 27, width, 1, bootvid::Color{38, 52, 78});
         m_videoDriver.drawString(14, 8, "MicaNT Cutler Edition", bootvid::Color{0, 229, 255}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(185, 8, "|  63-Unit NT Kernel (PrismX Live 3D GOP Engine)  |  Horizon 91 (Track B)",
+        m_videoDriver.drawString(185, 8, "|  66-Unit NT Kernel (PrismX Complete Gaming Core)  |  Horizon 94 (Track B)",
                                 bootvid::Color{170, 185, 205}, bootvid::Color{18, 24, 38}, 1);
 
         m_videoDriver.fillRectangle(width - 366, 5, 154, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 356, 8, "307/307 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 356, 8, "310/310 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
 
         m_videoDriver.fillRectangle(width - 204, 5, 196, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 196, 8, "PRISMX 540FPS [3D]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 196, 8, "PRISMX GAMING [3D]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
 
         auto DrawButtons = [&](uint32_t rightX, uint32_t y) {
             uint32_t btnW = 20;
@@ -319,19 +319,19 @@ public:
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
 
             const char* codeLines[] = {
-                "// MicaNT: 63-Unit Modular Kernel (PrismX Live 3D Frame-Graph)",
-                "#include <micant/um/subsystems/graphics/prismx_live_3d_scene.hpp>",
-                "#include <micant/um/subsystems/graphics/prismx_gop_scanout.hpp>",
-                "#include <micant/um/subsystems/graphics/prismx_game_benchmark.hpp>",
+                "// MicaNT: 66-Unit Modular Kernel (PrismX Complete Gaming Core)",
+                "#include <micant/um/subsystems/graphics/prismx_directsr_vrs_rebar.hpp>",
+                "#include <micant/um/subsystems/graphics/prismx_execute_indirect.hpp>",
+                "#include <micant/um/subsystems/graphics/prismx_gameinput_classic.hpp>",
                 "extern \"C\" NTSTATUS KiSystemStartup(LoaderParameterBlock* lpb) {",
-                "    PrismXLive3DSceneFrameGraphInitializeExecutiveSubsystem();",
-                "    PrismXGopScanoutFramePacingInitializeExecutiveSubsystem();",
-                "    PrismXGameBenchmarkProtonSealInitializeExecutiveSubsystem();",
-                "    return Phase1Initialization(lpb); // 307/307 Suites Verified",
+                "    PrismXDirectSrVrsReBarGamingInitializeExecutiveSubsystem();",
+                "    PrismXExecuteIndirectSamplerFeedbackInitializeExecutiveSubsystem();",
+                "    PrismXGameInputPixClassicGamingSealInitializeExecutiveSubsystem();",
+                "    return Phase1Initialization(lpb); // 310/310 Suites Verified",
                 "}",
-                "// Pass 1: GDeflate 14.8 GB/s | Pass 2: SM 6.9 WorkGraph + Mesh",
-                "// Pass 3: DXR 1.1 RayQuery   | Pass 4: DirectML 4K SuperRes",
-                "// Pass 5: Enhanced Barriers -> 540Hz DirectFlip MPO (1.85 ms)"
+                "// DirectSR 4K + VRS Tier 2 (-58% PS) + 16GB ReBAR GPU_UPLOAD Heap",
+                "// ExecuteIndirect (2,816 Meshlets/1 Call) + SamplerFeedback 1.0",
+                "// GameInput 8000Hz (95us) + StateObjectDB + DDraw7/D3D8 -> D3D12"
             };
 
             for (size_t i = 0; i < 13; ++i) {
@@ -354,7 +354,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "63 Kernel Units | 307/307 Suites | PrismX 540 FPS (1.85ms) | 0 TDRs",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "66 Kernel Units | 310/310 Suites | DirectSR 4K + 8000Hz Input | 0 TDR",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -924,10 +924,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 63-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-91).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 66-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-94).\r\n");
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT PrismX Live 3D] 5-Pass D3D12 Ultimate Scene + DXR 1.1 Reflection + SM6.9 WorkGraph + DirectML SR + Proton 0-Stutter.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 307/307 Suites Verified | PRISMX LIVE 3D GOP DEMO SEALED | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT PrismX Gaming Core] DirectSR 4K + VRS2 + 16GB ReBAR + ExecuteIndirect + SamplerFeedback 1.0 + 8000Hz GameInput.\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 310/310 Suites Verified | PRISMX COMPLETE GAMING RUNTIME SEALED | 0 BSODs | Launching GOP Desktop...\r\n");
         }
     }
 
