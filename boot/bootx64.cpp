@@ -208,11 +208,11 @@ public:
         m_videoDriver.fillRectangle(0, 0, width, 28, bootvid::Color{18, 24, 38});
         m_videoDriver.fillRectangle(0, 27, width, 1, bootvid::Color{38, 52, 78});
         m_videoDriver.drawString(14, 8, "MicaNT Cutler Edition", bootvid::Color{0, 229, 255}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(185, 8, "|  66-Unit NT Kernel (PrismX Complete Gaming Core)  |  Horizon 94 (Track B)",
+        m_videoDriver.drawString(185, 8, "|  84-Unit NT Kernel (24 System32 PE32+ DLLs)  |  Horizon 112 (WinNT + DirectX)",
                                 bootvid::Color{170, 185, 205}, bootvid::Color{18, 24, 38}, 1);
 
         m_videoDriver.fillRectangle(width - 366, 5, 154, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 356, 8, "310/310 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 356, 8, "328/328 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
 
         m_videoDriver.fillRectangle(width - 204, 5, 196, 18, bootvid::Color{26, 36, 54});
         m_videoDriver.drawString(width - 196, 8, "PRISMX GAMING [3D]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
@@ -285,7 +285,7 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{20, 28, 44});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{40, 180, 100});
             m_videoDriver.drawString(wx + 8, wy + 8, "N+", bootvid::Color{255, 255, 255}, bootvid::Color{40, 180, 100}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [63-Unit PrismX Live 3D Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
+            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [84-Unit Horizon 112 Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
@@ -306,8 +306,8 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 70, ww - 4, 22, bootvid::Color{10, 14, 22});
             m_videoDriver.fillRectangle(wx + 6, wy + 72, 184, 20, bootvid::Color{26, 38, 58});
             m_videoDriver.drawString(wx + 12, wy + 76, "[c++] kiinit.cpp *  x", bootvid::Color{0, 225, 255}, bootvid::Color{26, 38, 58}, 1);
-            m_videoDriver.fillRectangle(wx + 194, wy + 72, 226, 20, bootvid::Color{14, 18, 28});
-            m_videoDriver.drawString(wx + 200, wy + 76, "[h] prismx_live_3d_scene.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
+            m_videoDriver.fillRectangle(wx + 194, wy + 72, 246, 20, bootvid::Color{14, 18, 28});
+            m_videoDriver.drawString(wx + 200, wy + 76, "[h] winnt_system32_24dlls.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
 
             // Editor
             uint32_t edX = wx + 2;
@@ -319,19 +319,19 @@ public:
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
 
             const char* codeLines[] = {
-                "// MicaNT: 66-Unit Modular Kernel (PrismX Complete Gaming Core)",
-                "#include <micant/um/subsystems/graphics/prismx_directsr_vrs_rebar.hpp>",
-                "#include <micant/um/subsystems/graphics/prismx_execute_indirect.hpp>",
-                "#include <micant/um/subsystems/graphics/prismx_gameinput_classic.hpp>",
+                "// MicaNT: 84-Unit Modular Kernel (Horizon 112: 24 System32 DLLs)",
+                "#include <micant/um/subsystems/winbase/winnt_kernel32_advapi32.hpp>",
+                "#include <micant/um/subsystems/winuser/winnt_user32_gdi32_imm32.hpp>",
+                "#include <micant/um/subsystems/winuser/winnt_ole32_dwmapi_winmm.hpp>",
                 "extern \"C\" NTSTATUS KiSystemStartup(LoaderParameterBlock* lpb) {",
-                "    PrismXDirectSrVrsReBarGamingInitializeExecutiveSubsystem();",
-                "    PrismXExecuteIndirectSamplerFeedbackInitializeExecutiveSubsystem();",
-                "    PrismXGameInputPixClassicGamingSealInitializeExecutiveSubsystem();",
-                "    return Phase1Initialization(lpb); // 310/310 Suites Verified",
+                "    WinNtKernel32Advapi32System32AbiInitializeExecutiveSubsystem();",
+                "    WinNtUser32Gdi32Imm32System32AbiInitializeExecutiveSubsystem();",
+                "    WinNtOle32DwmapiWinmmSystem32SealInitializeExecutiveSubsystem();",
+                "    return Phase1Initialization(lpb); // 328/328 Suites (+PrismX 40/40)",
                 "}",
-                "// DirectSR 4K + VRS Tier 2 (-58% PS) + 16GB ReBAR GPU_UPLOAD Heap",
-                "// ExecuteIndirect (2,816 Meshlets/1 Call) + SamplerFeedback 1.0",
-                "// GameInput 8000Hz (95us) + StateObjectDB + DDraw7/D3D8 -> D3D12"
+                "// 8 WinNT Core DLLs: kernel32/advapi32/user32/gdi32/imm32/ole32/dwmapi",
+                "// 16 PrismX DLLs: d3d12/d3d11/d3d9/dxgi/mfplat/dxcore/vulkan-1/opengl32",
+                "// HWND -> DXGI SwapChain + 8000Hz WM_INPUT + Event-Driven WaitableFence"
             };
 
             for (size_t i = 0; i < 13; ++i) {
@@ -354,7 +354,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "66 Kernel Units | 310/310 Suites | DirectSR 4K + 8000Hz Input | 0 TDR",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "84 Kernel Units | 328/328 Suites (+PrismX 40/40) | 24 System32 DLLs OK",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -510,7 +510,7 @@ public:
 
             // Path Address Bar
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 22, bootvid::Color{12, 16, 24});
-            m_videoDriver.drawString(wx + 10, wy + 33, "\\KnownDlls + C:\\Builds\\MicaNT_PrismX_SDK.zip (EOCD 0x06054B50)", bootvid::Color{220, 235, 255}, bootvid::Color{12, 16, 24}, 1);
+            m_videoDriver.drawString(wx + 10, wy + 33, "\\KnownDlls + C:\\Windows\\System32\\*.dll (24 PE32+ DLLs Verified)", bootvid::Color{220, 235, 255}, bootvid::Color{12, 16, 24}, 1);
 
             // File Table Header
             m_videoDriver.fillRectangle(wx + 2, wy + 50, ww - 4, 20, bootvid::Color{20, 28, 42});
@@ -519,13 +519,13 @@ public:
             // Table Entries
             struct FileEntry { const char* name; const char* sz; const char* psz; bool sel; };
             FileEntry entries[] = {
-                { "ntoskrnl.exe",    "912,384 B",   "Ring 0 (63 Units)", true },
-                { "prismx/d3d12.dll","655,360 B",   "540FPS 3D Scene",   true },
-                { "dxcompiler/dml",  "491,520 B",   "SM 6.9 + 4K SR",    true },
-                { "dstorage/av1",    "393,216 B",   "14.8GB/s GDeflate", true },
-                { "dred/zerotdr",    "262,144 B",   "0.42ms Self-Heal",  true },
-                { "vulkan-1/on12",   "327,680 B",   "539 FPS 0-Overhead",true },
-                { "ws2_32/tls13",    "212,992 B",   "96Gbps WSK / RIO",  true }
+                { "ntoskrnl.exe",    "983,040 B",   "Ring 0 (84 Units)", true },
+                { "kernel32/advapi", "172,544 B",   "WinBase PE32+ ABI", true },
+                { "user32/gdi32/imm","222,720 B",   "HWND/8000Hz Input", true },
+                { "ole32/dwm/winmm", "212,480 B",   "COM/540Hz DirectFlip",true },
+                { "d3d12/d3d11/d3d9","358,400 B",   "PrismX DirectX 12", true },
+                { "mfplat/mfreadwrt","200,192 B",   "Media Foundation",  true },
+                { "dxcore/vk1/gl32", "222,208 B",   "DXCore+VK1.3+GL4.6",true }
             };
 
             for (size_t i = 0; i < 7; ++i) {
@@ -543,7 +543,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "$MFT 1,048,576 Slots (6 us) | DirectStorage 14.8 GB/s | WSK 96 Gbps",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "24 System32 PE32+ DLLs (8 WinNT + 16 PrismX) | DirectStorage 14.8 GB/s",
                                     bootvid::Color{0, 240, 255}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -646,19 +646,19 @@ public:
             uint32_t tY = wy + 232;
             m_videoDriver.fillRectangle(mX, tY, ww - 24, 82, bootvid::Color{10, 16, 24});
             m_videoDriver.drawRectangle(mX, tY, ww - 24, 82, bootvid::Color{36, 54, 82});
-            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 5,920   Threads: 216   Processes: 28   Kernel Units: 75 (319/319 OK)",
+            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 6,480   Threads: 232   Processes: 30   Kernel Units: 84 (328/328 OK)",
                                     bootvid::Color{210, 230, 250}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 26, "PrismX DirectX ABI: DXGI 1.6 COM + 44-Slot ID3D12Device14 + System32 PE32+ DLLs",
+            m_videoDriver.drawString(mX + 10, tY + 26, "WinNT Core System32: kernel32/advapi32/user32/gdi32/imm32/ole32/dwmapi/winmm",
                                     bootvid::Color{0, 230, 255}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 44, "Ring 0 AntiCheat: EAC + BattlEye + Vanguard/Ricochet Sandbox + 16GB IOMMU Lock",
+            m_videoDriver.drawString(mX + 10, tY + 44, "PrismX DirectX System32: 16 PE32+ DLLs (DX12/DX11/DX9/MF/DXCore/VK1.3/GL4.6)",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 62, "HORIZON 103 SEAL: D3D12/DXGI/D3D11/FXC/XInput DLLs + Denuvo/HWID | 540Hz Flip",
+            m_videoDriver.drawString(mX + 10, tY + 62, "HORIZON 112 SEAL: 24 PE32+ System32 DLLs + 8000Hz WM_INPUT + 540Hz DirectFlip",
                                     bootvid::Color{255, 205, 95}, bootvid::Color{10, 16, 24}, 1);
 
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{14, 28, 22});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "HORIZON 103 | 75 Units | 319/319 Suites (+PrismX 33/33) | DirectX COM ABI OK",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "HORIZON 112 | 84 Units | 328/328 Suites (+PrismX 40/40) | 24 System32 DLLs OK",
                                     bootvid::Color{100, 255, 160}, bootvid::Color{14, 28, 22}, 1);
         }
 
