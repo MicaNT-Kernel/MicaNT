@@ -77,7 +77,10 @@ try {
         @{ Src = "kernel/se/ring3_bcrypt_crypt32_wintrust.cpp";    Obj = "se_ring3_bcrypt_crypt32_wintrust.o" },
         @{ Src = "kernel/io/ring3_fiber_net_apps.cpp";             Obj = "io_ring3_fiber_net_apps.o" },
         @{ Src = "kernel/ps/ring3_workstation_apps.cpp";           Obj = "ps_ring3_workstation_apps.o" },
-        @{ Src = "kernel/ps/ring3_wsl2_hyperv_closure.cpp";        Obj = "ps_ring3_wsl2_hyperv_closure.o" }
+        @{ Src = "kernel/ps/ring3_wsl2_hyperv_closure.cpp";        Obj = "ps_ring3_wsl2_hyperv_closure.o" },
+        @{ Src = "kernel/io/prismx_directx_headers_kmt.cpp";       Obj = "io_prismx_directx_headers_kmt.o" },
+        @{ Src = "kernel/io/prismx_dxmath_dxtex_dxmesh.cpp";       Obj = "io_prismx_dxmath_dxtex_dxmesh.o" },
+        @{ Src = "kernel/io/prismx_d3d12_translation_on12.cpp";    Obj = "io_prismx_d3d12_translation_on12.o" }
     )
 
     $staleUnits = @()

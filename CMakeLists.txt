@@ -63,6 +63,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/ring3_fiber_net_apps.cpp
     kernel/ps/ring3_workstation_apps.cpp
     kernel/ps/ring3_wsl2_hyperv_closure.cpp
+    kernel/io/prismx_directx_headers_kmt.cpp
+    kernel/io/prismx_dxmath_dxtex_dxmesh.cpp
+    kernel/io/prismx_d3d12_translation_on12.cpp
 )
 
 add_library(ntoskrnl_core STATIC

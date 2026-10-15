@@ -115,6 +115,9 @@
 #include "micant/um/subsystems/net/ring3_fiber_net_apps_tunnel.hpp"
 #include "micant/um/subsystems/winuser/ring3_workstation_apps_tunnel.hpp"
 #include "micant/um/servers/ring3_wsl2_hyperv_enterprise_closure.hpp"
+#include "micant/um/subsystems/graphics/prismx_directx_headers_kmt_runtime.hpp"
+#include "micant/um/subsystems/graphics/prismx_dxmath_dxtex_dxmesh_tk12.hpp"
+#include "micant/um/subsystems/graphics/prismx_d3d12_translation_layer_on12.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -337,7 +340,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite295")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite298")) {
+        RUN_TEST(Test_Horizon82_PrismX_D3D12TranslationLayer_D3D11On12_And_D3D9On12_UnifiedFunnel);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite297") {
+        RUN_TEST(Test_Horizon81_PrismX_DirectXMath_DirectXTex_DirectXMesh_And_DirectXTK12);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite296") {
+        RUN_TEST(Test_Horizon80_PrismX_DirectXHeaders_DXCore_And_WddmD3DKMTScanoutRuntime);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite295") {
         RUN_TEST(Test_Horizon79_Ring3Wsl2Lxss_WhpHypervisor_EnterpriseRdp_And_Complete51UnitClosure);
         return g_FailedTests;
     }
@@ -1366,6 +1381,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon77_Ring3FiberNetApps_PuTTY_Wireshark_qBittorrent_WinSCP_And_FileZilla);
     RUN_TEST(Test_Horizon78_Ring3WorkstationApps_SystemInformer_Everything_Rufus_SumatraPDF_And_WinMerge);
     RUN_TEST(Test_Horizon79_Ring3Wsl2Lxss_WhpHypervisor_EnterpriseRdp_And_Complete51UnitClosure);
+    RUN_TEST(Test_Horizon80_PrismX_DirectXHeaders_DXCore_And_WddmD3DKMTScanoutRuntime);
+    RUN_TEST(Test_Horizon81_PrismX_DirectXMath_DirectXTex_DirectXMesh_And_DirectXTK12);
+    RUN_TEST(Test_Horizon82_PrismX_D3D12TranslationLayer_D3D11On12_And_D3D9On12_UnifiedFunnel);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

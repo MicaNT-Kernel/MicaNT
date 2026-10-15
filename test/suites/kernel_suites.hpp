@@ -17475,3 +17475,103 @@ static void Test_Horizon79_Ring3Wsl2Lxss_WhpHypervisor_EnterpriseRdp_And_Complet
     std::cout << "[TEST] Suite 295: Horizon 79 - Sovereign Ring 3 WSL2/LXSS, WHP Hypervisor, Enterprise RDP & 51-Unit 4-Ring OS Closure PASSED.\n";
 }
 
+// ============================================================================
+// Suite 296: Horizon 80 - Sovereign PrismX + Microsoft DirectX-Headers (CD3DX12 / DXCore)
+// & WDDM 3.2 D3DKMT* Kernel-Mode Thunk Scanout Runtime (Solving the WineHQ/Proton Gap)
+// ============================================================================
+static void Test_Horizon80_PrismX_DirectXHeaders_DXCore_And_WddmD3DKMTScanoutRuntime() {
+    std::cout << "\n[TEST] Suite 296: Horizon 80 - Sovereign PrismX + DirectX-Headers (CD3DX12/DXCore) & WDDM 3.2 D3DKMT Scanout Runtime...\n";
+
+    micant::um::prismx_kmt_runtime::InitializePrismXDirectXHeadersKmtRuntimeExports();
+    const auto& t = micant::um::prismx_kmt_runtime::SovereignPrismXDirectXHeadersKmtManager::get().telemetry();
+
+    std::cout << "  [Horizon 80 DirectX-Headers CD3DX12 + DXCore Adapter Enumeration + WDDM 3.2 D3DKMT Thunks]\n"
+              << "    CD3DX12 Verified=" << (t.cd3dx12BarrierAndDescVerified ? "YES" : "NO")
+              << " | DXCore Adapters=" << t.dxcoreHardwareAdapterCount
+              << " | KMT hDevice=0x" << std::hex << t.kmtDeviceHandle
+              << " | Shared NT Section=0x" << t.sharedNtVramSectionHandle
+              << " | GPU VA=0x" << t.allocatedGpuVirtualAddress << std::dec << "\n";
+    TEST_ASSERT(t.cd3dx12BarrierAndDescVerified &&
+                t.dxcoreHardwareAdapterCount >= 2u &&
+                t.kmtDeviceHandle == 0x0000D312u &&
+                t.sharedNtVramSectionHandle == 0x00000D12u &&
+                t.allocatedGpuVirtualAddress != 0ULL,
+                "PrismX CD3DX12 helpers, DXCore adapters, and WDDM 3.2 D3DKMT device/VRAM thunks must initialize cleanly");
+
+    std::cout << "  [Horizon 80 Ring 1 dxgkrnl 540Hz DirectFlip MPO Scanout & WineHQ/Proton Kernel Gap Closure]\n"
+              << "    Fence=" << t.monitoredFenceCompletedValue
+              << " | Refresh=" << t.scanoutRefreshRateHz << " Hz"
+              << " | CenterPixel=0x" << std::hex << t.scanoutCenterPixelBgra << std::dec
+              << " | Wine/Proton Gap Closed=" << (t.wineProtonKernelGapClosed ? "YES" : "NO") << "\n";
+    TEST_ASSERT(t.monitoredFenceCompletedValue == 64ULL &&
+                t.scanoutRefreshRateHz == 540u &&
+                t.scanoutCenterPixelBgra == 0xFF00E5FFu &&
+                t.wineProtonKernelGapClosed,
+                "D3DKMTPresent must engage Ring 1 540Hz DirectFlip MPO scanout and close the WineHQ/Proton kernel gap");
+
+    std::cout << "[TEST] Suite 296: Horizon 80 - Sovereign PrismX + DirectX-Headers (CD3DX12/DXCore) & WDDM 3.2 D3DKMT Scanout Runtime PASSED.\n";
+}
+
+// ============================================================================
+// Suite 297: Horizon 81 - Sovereign PrismX + Official Microsoft DirectXMath (SIMD 4x4),
+// DirectXTex (BC7/DDS), DirectXMesh (D3D12 Meshlets) & DirectXTK12 Roll-In
+// ============================================================================
+static void Test_Horizon81_PrismX_DirectXMath_DirectXTex_DirectXMesh_And_DirectXTK12() {
+    std::cout << "\n[TEST] Suite 297: Horizon 81 - Sovereign PrismX + DirectXMath, DirectXTex, DirectXMesh & DirectXTK12 Roll-In...\n";
+
+    micant::um::prismx_dx_assets::InitializePrismXDxMathTexMeshTk12Exports();
+    const auto& t = micant::um::prismx_dx_assets::SovereignPrismXDxMathTexMeshTk12Manager::get().telemetry();
+
+    std::cout << "  [Horizon 81 DirectXMath SIMD 4x4 MVP & DirectXMesh ComputeMeshlets (D3D12 Mesh Shaders)]\n"
+              << "    SIMD MVP=" << (t.directXMathSimdMvpVerified ? "VERIFIED" : "NO")
+              << " | Meshlets=" << t.directXMeshGeneratedMeshlets
+              << " (" << t.directXMeshTotalTriangles << " triangles partitioned)\n";
+    TEST_ASSERT(t.directXMathSimdMvpVerified &&
+                t.directXMeshGeneratedMeshlets == 2u &&
+                t.directXMeshTotalTriangles == 252u,
+                "DirectXMath SIMD 4x4 projection and DirectXMesh D3D12 meshlet partitioning must verify cleanly");
+
+    std::cout << "  [Horizon 81 DirectXTex BC7_UNORM Block Compression & DirectXTK12 SpriteBatch/PrimitiveBatch]\n"
+              << "    BC7 Blocks=" << t.directXTexBc7BlockCount
+              << " | Mode 6 Header=" << (t.directXTexBc7Mode6Valid ? "VALID" : "NO")
+              << " | DirectXTK12 Draws=" << t.directXTk12SpriteBatchDraws << "\n";
+    TEST_ASSERT(t.directXTexBc7BlockCount == 16u &&
+                t.directXTexBc7Mode6Valid &&
+                t.directXTk12SpriteBatchDraws == 64u &&
+                t.assetAndMathPipelineSealed,
+                "DirectXTex BC7_UNORM block compression and DirectXTK12 batch draws must seal cleanly");
+
+    std::cout << "[TEST] Suite 297: Horizon 81 - Sovereign PrismX + DirectXMath, DirectXTex, DirectXMesh & DirectXTK12 Roll-In PASSED.\n";
+}
+
+// ============================================================================
+// Suite 298: Horizon 82 - Sovereign PrismX + Microsoft D3D12TranslationLayer,
+// D3D11On12 & D3D9On12 Unified Graphics Funnel
+// ============================================================================
+static void Test_Horizon82_PrismX_D3D12TranslationLayer_D3D11On12_And_D3D9On12_UnifiedFunnel() {
+    std::cout << "\n[TEST] Suite 298: Horizon 82 - Sovereign PrismX + D3D12TranslationLayer, D3D11On12 & D3D9On12 Unified Funnel...\n";
+
+    micant::um::prismx_on12_funnel::InitializePrismXD3D12TranslationLayerOn12Exports();
+    const auto& t = micant::um::prismx_on12_funnel::SovereignPrismXD3D12TranslationLayerManager::get().telemetry();
+
+    std::cout << "  [Horizon 82 D3D11On12 & D3D9On12 Translation Layer -> Unified Prism3D12 Command Queue]\n"
+              << "    D3D11On12=" << (t.d3d11On12DeviceCreated ? "ACTIVE" : "NO")
+              << " | Wrapped Resource Ops=" << t.d3d11TranslatedCommandListOps
+              << " | D3D9On12=" << (t.d3d9On12DeviceCreated ? "ACTIVE" : "NO")
+              << " (" << t.d3d9TranslatedDrawCalls << " translated draws)\n"
+              << "    D2D1 Interop=" << (t.d2d1On12SharedSurfaceBound ? "BOUND" : "NO")
+              << " | Unified Prism3D12 Fence=" << t.unifiedPrism3D12FenceValue
+              << " | Funnel Sealed=" << (t.unifiedDirectXFunnelSealed ? "YES (54 UNITS / 298 SUITES)" : "NO") << "\n";
+    TEST_ASSERT(t.d3d11On12DeviceCreated &&
+                t.d3d11WrappedResourceAcquiredAndReleased &&
+                t.d3d11TranslatedCommandListOps == 3u &&
+                t.d3d9On12DeviceCreated &&
+                t.d3d9TranslatedDrawCalls == 12u &&
+                t.d2d1On12SharedSurfaceBound &&
+                t.unifiedPrism3D12FenceValue == 100ULL &&
+                t.unifiedDirectXFunnelSealed,
+                "D3D11On12, D3D9On12, and Direct2D must funnel cleanly into Prism3D12 via D3D12TranslationLayer");
+
+    std::cout << "[TEST] Suite 298: Horizon 82 - Sovereign PrismX + D3D12TranslationLayer, D3D11On12 & D3D9On12 Unified Funnel PASSED.\n";
+}
+

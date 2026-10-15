@@ -162,5 +162,14 @@ void Ring3WorkstationAppsInitializeExecutiveSubsystem() noexcept;
 // Sovereign Ring 3 WSL2/LXSS Pico Process, Windows Hypervisor Platform (WHP) & Enterprise RDP Closure (kernel/ps/ring3_wsl2_hyperv_closure.cpp)
 void Ring3Wsl2HyperVClosureInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX + Microsoft DirectX-Headers (CD3DX12 / DXCore) & WDDM 3.2 D3DKMT Scanout Runtime (kernel/io/prismx_directx_headers_kmt.cpp)
+void PrismXDirectXHeadersKmtInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX + Microsoft DirectXMath (SIMD), DirectXTex (BC7/DDS), DirectXMesh (Meshlets) & DirectXTK12 (kernel/io/prismx_dxmath_dxtex_dxmesh.cpp)
+void PrismXDxMathTexMeshInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX + Microsoft D3D12TranslationLayer, D3D11On12 & D3D9On12 Unified Graphics Funnel (kernel/io/prismx_d3d12_translation_on12.cpp)
+void PrismXD3D12TranslationOn12InitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
 
