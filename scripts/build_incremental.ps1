@@ -107,7 +107,10 @@ try {
         @{ Src = "kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp";        Obj = "io_prism_d2d1_dwrite_dcomp_11dll_seal.o" },
         @{ Src = "kernel/io/prism_mfplat_mfreadwrite_cutscene_abi.cpp";     Obj = "io_prism_mfplat_mfreadwrite_cutscene_abi.o" },
         @{ Src = "kernel/io/prism_dxcore_adapter_factory_com_abi.cpp";      Obj = "io_prism_dxcore_adapter_factory_com_abi.o" },
-        @{ Src = "kernel/io/prism_vulkan1_opengl32_16dll_seal.cpp";         Obj = "io_prism_vulkan1_opengl32_16dll_seal.o" }
+        @{ Src = "kernel/io/prism_vulkan1_opengl32_16dll_seal.cpp";         Obj = "io_prism_vulkan1_opengl32_16dll_seal.o" },
+        @{ Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";      Obj = "ps_winnt_kernel32_advapi32_system32_abi.o" },
+        @{ Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";     Obj = "ps_winnt_user32_gdi32_imm32_system32_abi.o" },
+        @{ Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";    Obj = "ps_winnt_ole32_dwmapi_winmm_system32_seal.o" }
     )
 
     $staleUnits = @()
@@ -132,6 +135,27 @@ try {
         & clang++ -std=c++23 -O2 -Iinclude -Wno-unused-parameter -c $src -o $obj
         if ($LASTEXITCODE -ne 0) {
             throw "Failed compiling $src"
+        }
+    }
+
+    $sys32Dir = Join-Path $binDir "system32"
+    New-Item -ItemType Directory -Force -Path $sys32Dir | Out-Null
+    $sys32Dlls = @(
+        @{ Name = "kernel32.dll"; Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";   Def = "BUILD_SYSTEM32_KERNEL32_DLL" },
+        @{ Name = "advapi32.dll"; Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";   Def = "BUILD_SYSTEM32_ADVAPI32_DLL" },
+        @{ Name = "user32.dll";   Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";  Def = "BUILD_SYSTEM32_USER32_DLL" },
+        @{ Name = "gdi32.dll";    Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";  Def = "BUILD_SYSTEM32_GDI32_DLL" },
+        @{ Name = "imm32.dll";    Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";  Def = "BUILD_SYSTEM32_IMM32_DLL" },
+        @{ Name = "ole32.dll";    Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp"; Def = "BUILD_SYSTEM32_OLE32_DLL" },
+        @{ Name = "dwmapi.dll";   Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp"; Def = "BUILD_SYSTEM32_DWMAPI_DLL" },
+        @{ Name = "winmm.dll";    Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp"; Def = "BUILD_SYSTEM32_WINMM_DLL" }
+    )
+    foreach ($dll in $sys32Dlls) {
+        $dllPath = Join-Path $sys32Dir $dll.Name
+        $srcPath = Join-Path $repoRoot $dll.Src
+        if ($Force -or -not (Test-Path $dllPath) -or ((Get-Item $srcPath).LastWriteTimeUtc -gt (Get-Item $dllPath).LastWriteTimeUtc)) {
+            & clang++ -std=c++23 -O2 -Iinclude -shared "-Wl,--allow-multiple-definition" "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src -o $dllPath
+            if ($LASTEXITCODE -ne 0) { throw "Failed building System32 PE32+ DLL $($dll.Name)" }
         }
     }
 

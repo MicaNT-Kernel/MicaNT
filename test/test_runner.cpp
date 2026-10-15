@@ -145,6 +145,9 @@
 #include "micant/um/subsystems/graphics/prism_mfplat_mfreadwrite_cutscene_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_dxcore_adapter_factory_com_abi.hpp"
 #include "micant/um/subsystems/graphics/prism_vulkan1_opengl32_16dll_seal.hpp"
+#include "micant/um/subsystems/winbase/winnt_kernel32_advapi32_system32_abi.hpp"
+#include "micant/um/subsystems/winuser/winnt_user32_gdi32_imm32_system32_abi.hpp"
+#include "micant/um/subsystems/winuser/winnt_ole32_dwmapi_winmm_system32_seal.hpp"
 
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
@@ -1547,6 +1550,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon107_PrismX_Official_MediaFoundation_MFPlat_MFReadWrite_Cutscene_ABI);
     RUN_TEST(Test_Horizon108_PrismX_Official_DXCore_AdapterFactory1_COM_VTable_And_ML_Compute);
     RUN_TEST(Test_Horizon109_PrismX_Official_Vulkan1_OpenGL32_And_16_System32_DLL_Seal);
+    RUN_TEST(Test_Horizon110_WinNT_Kernel32_And_Advapi32_System32_PE32Plus_DLL_ABI);
+    RUN_TEST(Test_Horizon111_WinNT_User32_Gdi32_And_Imm32_System32_PE32Plus_DLL_ABI);
+    RUN_TEST(Test_Horizon112_WinNT_Ole32_Dwmapi_WinMM_And_24_System32_DLL_Seal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

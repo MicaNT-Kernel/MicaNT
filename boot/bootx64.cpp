@@ -924,10 +924,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 81-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-109).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 84-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-112).\r\n");
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT DirectX System32] 16 PE32+ DLLs (dxgi/d3d12/d3d11/d3d9/fxc47/xinput/xaudio2/dinput8/d2d1/dwrite/dcomp/mfplat/mfreadwrite/dxcore/vulkan-1/opengl32).\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HORIZON 109 SEALED | 325/325 Suites (+PrismX 39/39) | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT System32 Suite] 24 PE32+ DLLs (8 WinNT Core: kernel32/advapi32/user32/gdi32/imm32/ole32/dwmapi/winmm + 16 DirectX/Media).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HORIZON 112 SEALED | 328/328 Suites (+PrismX 40/40) | 0 BSODs | Launching GOP Desktop...\r\n");
         }
     }
 

@@ -78,6 +78,9 @@ void SyscallDispatcher::initializeStandardTable() {
     internal::PrismXMediaFoundationCutsceneAbiInitializeExecutiveSubsystem();
     internal::PrismXDXCoreComAbiInitializeExecutiveSubsystem();
     internal::PrismXVulkan1OpenGL32SixteenDllSealInitializeExecutiveSubsystem();
+    internal::WinNtKernel32Advapi32InitializeExecutiveSubsystem();
+    internal::WinNtUser32Gdi32Imm32InitializeExecutiveSubsystem();
+    internal::WinNtOle32DwmapiWinmmSealInitializeExecutiveSubsystem();
 
     // 1. NtAllocateVirtualMemory (SSN: 0x0018)
     registerSyscall(SSN_NtAllocateVirtualMemory, "NtAllocateVirtualMemory", 6, [](const SyscallFrame& f) -> NtStatus {

@@ -18475,3 +18475,141 @@ static void Test_Horizon109_PrismX_Official_Vulkan1_OpenGL32_And_16_System32_DLL
 
     std::cout << "[TEST] Suite 325: Horizon 109 - Sovereign PrismX Official Vulkan 1.3 (vulkan-1.dll) & OpenGL 4.6 (opengl32.dll) + 16-DLL Seal PASSED.\n";
 }
+
+// ============================================================================
+// Suite 326: Horizon 110 (Kernel Unit #82) - Sovereign WinNT Core User-Mode
+// System32 DLLs (kernel32.dll & advapi32.dll) Official PE32+ Exports,
+// KUSER_SHARED_DATA 10MHz QPC, D3D12Fence Event Sync, and Cm Registry
+// ============================================================================
+static void Test_Horizon110_WinNT_Kernel32_And_Advapi32_System32_PE32Plus_DLL_ABI() {
+    std::cout << "\n[TEST] Suite 326: Horizon 110 - Sovereign WinNT Core System32 DLLs (kernel32.dll & advapi32.dll) Official PE32+ Exports...\n";
+
+    micant::um::winnt_kernel32_advapi32_abi::InitializeWinNtKernel32Advapi32Subsystem();
+    const auto rep = micant::um::winnt_kernel32_advapi32_abi::WinNtKernel32Advapi32Coordinator::instance().runKernel32Advapi32Audit();
+
+    std::cout << "  [Horizon 110 WinNT Core System32: kernel32.dll (24 Exports) + advapi32.dll (8 Exports) + 10MHz QPC + D3D12Fence Event]\n"
+              << "    K32Exports=" << rep.kernel32ExportCount
+              << " | Advapi32Exports=" << rep.advapi32ExportCount
+              << " | QPC=" << (rep.qpcFrequencyHz / 1'000'000) << "MHz"
+              << " | EventSync=" << (rep.eventCreateSetWaitVerified ? "YES" : "NO")
+              << " | RegRoundTrip=" << (rep.registryRoundTripVerified ? "YES" : "NO") << "\n";
+    TEST_ASSERT(rep.kernel32ExportCount == 24u &&
+                rep.advapi32ExportCount == 8u &&
+                rep.qpcFrequencyHz == 10'000'000LL &&
+                rep.qpcCounterValue > 100'000'000LL &&
+                rep.tickCount64Ms > 10'000ULL &&
+                rep.eventCreateSetWaitVerified &&
+                rep.virtualAllocFreeVerified &&
+                rep.registryRoundTripVerified &&
+                rep.rtlGenRandomVerified,
+                "WinNT kernel32.dll and advapi32.dll System32 PE32+ exports, QPC, event sync, and registry must verify cleanly");
+
+    std::cout << "[TEST] Suite 326: Horizon 110 - Sovereign WinNT Core System32 DLLs (kernel32.dll & advapi32.dll) Official PE32+ Exports PASSED.\n";
+}
+
+// ============================================================================
+// Suite 327: Horizon 111 (Kernel Unit #83) - Sovereign WinNT Core User-Mode
+// System32 DLLs (user32.dll, gdi32.dll & imm32.dll) Official PE32+ Exports,
+// Win32 HWND/HDC/HMONITOR, PeekMessageW Game Loop, 8000Hz WM_INPUT & IMM32
+// ============================================================================
+static void Test_Horizon111_WinNT_User32_Gdi32_And_Imm32_System32_PE32Plus_DLL_ABI() {
+    std::cout << "\n[TEST] Suite 327: Horizon 111 - Sovereign WinNT Core System32 DLLs (user32.dll, gdi32.dll & imm32.dll) Official PE32+ Exports...\n";
+
+    micant::um::winnt_user32_gdi32_imm32_abi::InitializeWinNtUser32Gdi32Imm32Subsystem();
+    const auto rep = micant::um::winnt_user32_gdi32_imm32_abi::WinNtUser32Gdi32Imm32Coordinator::instance().runUser32Gdi32Imm32Audit();
+
+    std::cout << "  [Horizon 111 WinNT Core System32: user32.dll (26 Exports) + gdi32.dll (14 Exports) + imm32.dll (8 Exports) + 8000Hz WM_INPUT]\n"
+              << "    HWND=0x" << std::hex << reinterpret_cast<uintptr_t>(rep.createdHwnd)
+              << " | HMONITOR=0x" << reinterpret_cast<uintptr_t>(rep.associatedHMonitor) << std::dec
+              << " | Client=" << rep.clientWidth << "x" << rep.clientHeight
+              << " | RawInput8kHz=" << (rep.rawInput8000HzMouseVerified ? "YES" : "NO")
+              << " | IMEGuard=" << (rep.imm32GameImeDisableVerified ? "YES" : "NO") << "\n";
+    TEST_ASSERT(rep.user32ExportCount == 26u &&
+                rep.gdi32ExportCount == 14u &&
+                rep.imm32ExportCount == 8u &&
+                rep.createdHwnd != nullptr &&
+                rep.createdHdc != nullptr &&
+                rep.associatedHMonitor == reinterpret_cast<void*>(static_cast<uintptr_t>(0x00010001ULL)) &&
+                rep.clientWidth == 3840 &&
+                rep.clientHeight == 2160 &&
+                rep.peekMessagePumpVerified &&
+                rep.rawInput8000HzMouseVerified &&
+                rep.gdiPixelFormatSwapBuffersVerified &&
+                rep.imm32GameImeDisableVerified,
+                "WinNT user32.dll, gdi32.dll, and imm32.dll System32 PE32+ exports, HWND/HDC/HMONITOR, and 8000Hz WM_INPUT must verify cleanly");
+
+    std::cout << "[TEST] Suite 327: Horizon 111 - Sovereign WinNT Core System32 DLLs (user32.dll, gdi32.dll & imm32.dll) Official PE32+ Exports PASSED.\n";
+}
+
+// ============================================================================
+// Suite 328: Horizon 112 (Kernel Unit #84) - Sovereign WinNT Core User-Mode
+// System32 DLLs (ole32.dll, dwmapi.dll & winmm.dll) Official PE32+ Exports +
+// Complete 24-DLL System32 Ecosystem Seal (8 WinNT Core + 16 DirectX/Media)
+// ============================================================================
+static void Test_Horizon112_WinNT_Ole32_Dwmapi_WinMM_And_24_System32_DLL_Seal() {
+    std::cout << "\n[TEST] Suite 328: Horizon 112 - Sovereign WinNT Core System32 DLLs (ole32/dwmapi/winmm) & Complete 24-DLL System32 Seal...\n";
+
+    micant::um::winnt_ole32_dwmapi_winmm_seal::InitializeWinNtOle32DwmapiWinmmSealSubsystem();
+    const auto rep = micant::um::winnt_ole32_dwmapi_winmm_seal::WinNtOle32DwmapiWinmmSealCoordinator::instance().runComplete24DllSealAudit();
+
+    // Verify all 8 compiled WinNT Core System32 PE32+ .dll binaries exist on disk with valid MZ + PE\0\0 headers
+    const char* coreDllPaths[8] = {
+        "bin/system32/kernel32.dll",
+        "bin/system32/advapi32.dll",
+        "bin/system32/user32.dll",
+        "bin/system32/gdi32.dll",
+        "bin/system32/imm32.dll",
+        "bin/system32/ole32.dll",
+        "bin/system32/dwmapi.dll",
+        "bin/system32/winmm.dll"
+    };
+    uint32_t verifiedDiskDlls = 0;
+    for (const char* relPath : coreDllPaths) {
+        std::ifstream ifs(relPath, std::ios::binary);
+        if (ifs.good()) {
+            uint8_t hdr[512]{};
+            ifs.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
+            if (ifs.gcount() >= 256 && hdr[0] == 'M' && hdr[1] == 'Z') {
+                uint32_t lfanew = 0;
+                std::memcpy(&lfanew, hdr + 0x3C, sizeof(uint32_t));
+                if (lfanew + 26 <= sizeof(hdr) &&
+                    hdr[lfanew] == 'P' && hdr[lfanew + 1] == 'E' && hdr[lfanew + 2] == 0 && hdr[lfanew + 3] == 0) {
+                    uint16_t optMagic = 0;
+                    std::memcpy(&optMagic, hdr + lfanew + 24, sizeof(uint16_t));
+                    if (optMagic == 0x020BU) { // IMAGE_NT_OPTIONAL_HDR64_MAGIC (PE32+)
+                        verifiedDiskDlls++;
+                    }
+                }
+            }
+        }
+    }
+
+    std::cout << "  [Horizon 112 Complete 24-DLL System32 Ecosystem: 8 WinNT Core PE32+ DLLs + 16 DirectX/Multimedia PE32+ DLLs]\n"
+              << "    WinNTCoreDLLs=" << verifiedDiskDlls << "/" << rep.winntCoreSystem32DllCount
+              << " | DirectXDLLs=" << rep.prismxDirectXSystem32DllCount
+              << " | TotalSystem32DLLs=" << rep.totalSystem32PeDllCount
+              << " | CoreExports=" << rep.totalWinNtCoreExports
+              << " | Horizons=" << rep.totalHorizons
+              << " | Units=" << rep.totalKernelUnits
+              << " | Suites=" << rep.totalTestSuites << " (+PrismX " << rep.prismxStandaloneSuites << "/40)\n";
+    TEST_ASSERT(verifiedDiskDlls == 8u &&
+                rep.ole32ExportCount == 9u &&
+                rep.dwmapiExportCount == 7u &&
+                rep.winmmExportCount == 8u &&
+                rep.winntCoreSystem32DllCount == 8u &&
+                rep.prismxDirectXSystem32DllCount == 16u &&
+                rep.totalSystem32PeDllCount == 24u &&
+                rep.totalWinNtCoreExports == 104u &&
+                rep.totalHorizons == 112u &&
+                rep.totalKernelUnits == 84u &&
+                rep.totalTestSuites == 328u &&
+                rep.prismxStandaloneSuites == 40u &&
+                rep.comApartmentAndInstanceVerified &&
+                rep.dwmCompositionAndFlushVerified &&
+                rep.winmm1msTimerResolutionVerified &&
+                rep.all24System32DllsSealed,
+                "Complete 24-DLL System32 PE32+ Ecosystem (8 WinNT Core DLLs + 16 DirectX/Media DLLs) must seal cleanly");
+
+    std::cout << "[TEST] Suite 328: Horizon 112 - Sovereign WinNT Core System32 DLLs (ole32/dwmapi/winmm) & Complete 24-DLL System32 Seal PASSED.\n";
+}
+
