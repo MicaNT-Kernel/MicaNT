@@ -17359,3 +17359,119 @@ static void Test_Horizon76_Ring3BcryptCrypt32WinTrust_LsaIsoVault_And_ZeroLagCiT
     std::cout << "[TEST] Suite 292: Horizon 76 - Sovereign Ring 3 BCrypt/NCrypt, Crypt32 DPAPI/Certs & WinTrust Authenticode Tunnel PASSED.\n";
 }
 
+// ============================================================================
+// Suite 293: Horizon 77 - Sovereign Ring 3 High-Speed Fiber Networking & Sysadmin Apps Roll-In
+// (PuTTY SSH-2.0, Wireshark NDIS 6.88 Capture, qBittorrent RIO/IOCP, WinSCP & FileZilla)
+// ============================================================================
+static void Test_Horizon77_Ring3FiberNetApps_PuTTY_Wireshark_qBittorrent_WinSCP_And_FileZilla() {
+    std::cout << "\n[TEST] Suite 293: Horizon 77 - Sovereign Ring 3 High-Speed Fiber Networking & Sysadmin Apps Roll-In...\n";
+
+    micant::um::fiber_net_apps::InitializeRing3FiberNetAppsTunnelExports();
+    const auto& t = micant::um::fiber_net_apps::SovereignFiberNetAppsTunnelManager::get().telemetry();
+
+    std::cout << "  [Horizon 77 PuTTY SSH-2.0 Ed25519 Session & WinSCP/FileZilla SFTP -> Ring 0 WSK / Ring 2 KeyIso]\n"
+              << "    Fingerprint=\"" << t.puttySshFingerprint << "\"\n"
+              << "    Stdout=\"" << t.puttyCommandStdout << "\" (Exit=" << t.puttyExitCode << ")"
+              << " | WinSCP/FileZilla SFTP=" << (t.winscpAndFilezillaSftpReady ? "READY" : "NO") << "\n";
+    TEST_ASSERT(t.puttyEd25519SessionVerified &&
+                t.puttyExitCode == 0 &&
+                t.winscpAndFilezillaSftpReady,
+                "PuTTY SSH-2.0 Ed25519 session and WinSCP/FileZilla SFTP must verify cleanly");
+
+    std::cout << "  [Horizon 77 Wireshark NDIS 6.88 RazzleNet 100GbE Capture & qBittorrent RIO Zero-Copy Swarm]\n"
+              << "    NDIS=0x" << std::hex << t.wiresharkNdisVersionHex << std::dec
+              << " (" << t.wiresharkRazzleNetSpeedGbps << " Gbps RazzleNet)"
+              << " | Captured=" << t.wiresharkCapturedPromiscuousFrames << " frames\n"
+              << "    qBittorrent RIO Bytes=" << t.qbittorrentRioSwarmBytesTransferred
+              << " | Per-Packet MDL Allocs=" << t.qbittorrentRioZeroMdlAllocs
+              << " | Xeon MSI-X Queues=" << t.xeonMsixNicQueuesSteered << " (Cross-Core IPIs=" << t.xeonCrossCoreIpiCount << ")\n";
+    TEST_ASSERT(t.wiresharkNdisVersionHex == 0x0688u &&
+                t.wiresharkRazzleNetSpeedGbps == 100u &&
+                t.qbittorrentRioSwarmBytesTransferred == 1048576ULL &&
+                t.qbittorrentRioZeroMdlAllocs == 0u &&
+                t.xeonMsixNicQueuesSteered == 16u &&
+                t.xeonCrossCoreIpiCount == 0u &&
+                t.fiberNetAppsTunnelSealed,
+                "Wireshark NDIS 6.88, qBittorrent RIO zero-copy swarm, and Xeon MSI-X routing must seal cleanly");
+
+    std::cout << "[TEST] Suite 293: Horizon 77 - Sovereign Ring 3 High-Speed Fiber Networking & Sysadmin Apps Roll-In PASSED.\n";
+}
+
+// ============================================================================
+// Suite 294: Horizon 78 - Sovereign Ring 3 Power-User Workstation Apps Roll-In
+// (SystemInformer Native NT, Everything 6-us $MFT, Rufus VHDX/Block, SumatraPDF & WinMerge)
+// ============================================================================
+static void Test_Horizon78_Ring3WorkstationApps_SystemInformer_Everything_Rufus_SumatraPDF_And_WinMerge() {
+    std::cout << "\n[TEST] Suite 294: Horizon 78 - Sovereign Ring 3 Power-User Workstation Apps Roll-In...\n";
+
+    micant::um::workstation_apps::InitializeRing3WorkstationAppsTunnelExports();
+    const auto& t = micant::um::workstation_apps::SovereignWorkstationAppsTunnelManager::get().telemetry();
+
+    std::cout << "  [Horizon 78 SystemInformer Native NT Telemetry & Rufus VHDX/Raw Block Storage]\n"
+              << "    SystemInformer Procs=" << t.systemInformerActiveProcesses
+              << " | Logical Cores=" << t.systemInformerLogicalCores
+              << " | Commit=" << (t.systemInformerKernelCommitBytes / (1024 * 1024)) << " MB\n"
+              << "    Rufus virtdisk.dll=" << (t.rufusVirtDiskExportReady ? "READY" : "NO")
+              << " | Direct Block Throughput=" << t.rufusDirectBlockThroughputMBps << " MB/s\n";
+    TEST_ASSERT(t.systemInformerActiveProcesses > 0u &&
+                t.systemInformerLogicalCores >= 4u &&
+                t.rufusVirtDiskExportReady &&
+                t.rufusDirectBlockThroughputMBps == 7400ULL,
+                "SystemInformer native NT telemetry and Rufus virtdisk.dll block engine must initialize cleanly");
+
+    std::cout << "  [Horizon 78 Everything 6-us $MFT Instant Search + SumatraPDF & WinMerge Ring 2 Sandbox]\n"
+              << "    Everything $MFT Records=" << t.everythingIndexedMftRecords
+              << " | Query Latency=" << t.everythingQueryLatencyUs << " us"
+              << " | Matched .sys=" << t.everythingMatchedSystemFiles << "\n"
+              << "    SumatraPDF Glyphs=" << t.sumatraPdfSandboxedGlyphs
+              << " (" << t.sumatraPdfRasterLatencyUs << " us in Ring 2 fontdrvhost)"
+              << " | WinMerge Diff=" << (t.winMergeZeroCopyDiffReady ? "READY" : "NO") << "\n";
+    TEST_ASSERT(t.everythingIndexedMftRecords == 1048576u &&
+                t.everythingQueryLatencyUs <= 10u &&
+                t.everythingMatchedSystemFiles >= 2u &&
+                t.sumatraPdfSandboxedGlyphs == 1024u &&
+                t.winMergeZeroCopyDiffReady &&
+                t.workstationAppsTunnelSealed,
+                "Everything 6-us $MFT search, SumatraPDF Ring 2 font sandbox, and WinMerge zero-copy diff must seal cleanly");
+
+    std::cout << "[TEST] Suite 294: Horizon 78 - Sovereign Ring 3 Power-User Workstation Apps Roll-In PASSED.\n";
+}
+
+// ============================================================================
+// Suite 295: Horizon 79 - Sovereign Ring 3 WSL2/LXSS Pico Process, Windows Hypervisor Platform (WHP),
+// Enterprise RDP Server & Complete 51-Unit 4-Ring OS Closure
+// ============================================================================
+static void Test_Horizon79_Ring3Wsl2Lxss_WhpHypervisor_EnterpriseRdp_And_Complete51UnitClosure() {
+    std::cout << "\n[TEST] Suite 295: Horizon 79 - Sovereign Ring 3 WSL2/LXSS, WHP Hypervisor, Enterprise RDP & 51-Unit 4-Ring OS Closure...\n";
+
+    micant::um::enterprise_closure::InitializeRing3Wsl2HyperVEnterpriseClosureExports();
+    const auto& t = micant::um::enterprise_closure::SovereignWsl2HyperVEnterpriseClosureManager::get().telemetry();
+
+    std::cout << "  [Horizon 79 WSL2/LXSS Pico Process (lxcore.sys) & Windows Hypervisor Platform (WinHvPlatform.dll)]\n"
+              << "    WSL Pico PID=" << t.wslPicoProcessPid
+              << " | SYS_getpid=" << t.wslDispatchedGetPidResult
+              << " | Active Pico Procs=" << t.wslActivePicoProcesses << "\n"
+              << "    WHP Partition Setup=" << (t.whpPartitionCreatedAndSetup ? "VERIFIED (4 vCPUs)" : "NO")
+              << " | Hypervisor Features=0x" << std::hex << t.whpHypervisorFeaturesMask << std::dec << "\n";
+    TEST_ASSERT(t.wslPicoProcessPid != 0u &&
+                t.wslDispatchedGetPidResult == static_cast<int64_t>(t.wslPicoProcessPid) &&
+                t.whpPartitionCreatedAndSetup &&
+                t.whpHypervisorFeaturesMask != 0u,
+                "WSL2/LXSS Pico Process syscall bridge and WHP hypervisor partition must verify cleanly");
+
+    std::cout << "  [Horizon 79 Enterprise RDP Server (TermService:3389) & Complete 51-Unit 4-Ring OS Closure]\n"
+              << "    RDP Port=" << t.rdpServerBoundPort
+              << " | Session ID=" << t.rdpCreatedSessionId
+              << " | Kernel Units=" << t.totalCompiledKernelUnits
+              << " | Verified Suites=" << t.totalVerifiedTestSuites
+              << " | 4-Ring OS Sealed=" << (t.completeFourRingOsArchitectureSealed ? "YES (51 UNITS / 295 SUITES)" : "NO") << "\n";
+    TEST_ASSERT(t.rdpServerBoundPort == 3389u &&
+                t.rdpCreatedSessionId != 0u &&
+                t.totalCompiledKernelUnits == 51u &&
+                t.totalVerifiedTestSuites == 295u &&
+                t.completeFourRingOsArchitectureSealed,
+                "Enterprise RDP server and all 51 modular kernel units across Ring 0, Ring 1, Ring 2, and Ring 3 must seal cleanly");
+
+    std::cout << "[TEST] Suite 295: Horizon 79 - Sovereign Ring 3 WSL2/LXSS, WHP Hypervisor, Enterprise RDP & 51-Unit 4-Ring OS Closure PASSED.\n";
+}
+

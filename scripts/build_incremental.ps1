@@ -74,7 +74,10 @@ try {
         @{ Src = "kernel/io/ring3_prismaudio_mf.cpp";              Obj = "io_ring3_prismaudio_mf.o" },
         @{ Src = "kernel/io/ring3_winsock_winhttp_tls.cpp";        Obj = "io_ring3_winsock_winhttp_tls.o" },
         @{ Src = "kernel/lpc/ring3_com_rpc_shell.cpp";             Obj = "lpc_ring3_com_rpc_shell.o" },
-        @{ Src = "kernel/se/ring3_bcrypt_crypt32_wintrust.cpp";    Obj = "se_ring3_bcrypt_crypt32_wintrust.o" }
+        @{ Src = "kernel/se/ring3_bcrypt_crypt32_wintrust.cpp";    Obj = "se_ring3_bcrypt_crypt32_wintrust.o" },
+        @{ Src = "kernel/io/ring3_fiber_net_apps.cpp";             Obj = "io_ring3_fiber_net_apps.o" },
+        @{ Src = "kernel/ps/ring3_workstation_apps.cpp";           Obj = "ps_ring3_workstation_apps.o" },
+        @{ Src = "kernel/ps/ring3_wsl2_hyperv_closure.cpp";        Obj = "ps_ring3_wsl2_hyperv_closure.o" }
     )
 
     $staleUnits = @()

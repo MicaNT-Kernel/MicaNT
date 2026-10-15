@@ -60,6 +60,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/ring3_winsock_winhttp_tls.cpp
     kernel/lpc/ring3_com_rpc_shell.cpp
     kernel/se/ring3_bcrypt_crypt32_wintrust.cpp
+    kernel/io/ring3_fiber_net_apps.cpp
+    kernel/ps/ring3_workstation_apps.cpp
+    kernel/ps/ring3_wsl2_hyperv_closure.cpp
 )
 
 add_library(ntoskrnl_core STATIC

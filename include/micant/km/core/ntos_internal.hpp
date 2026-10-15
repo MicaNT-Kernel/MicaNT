@@ -153,5 +153,14 @@ void Ring3ComRpcShellInitializeExecutiveSubsystem() noexcept;
 // Sovereign Ring 3 BCrypt/NCrypt, Crypt32 DPAPI/Certs & WinTrust Authenticode Tunnel (kernel/se/ring3_bcrypt_crypt32_wintrust.cpp)
 void Ring3BcryptCrypt32WinTrustInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Ring 3 High-Speed Fiber Networking & Sysadmin Apps Roll-In (PuTTY, Wireshark, qBittorrent, WinSCP & FileZilla) (kernel/io/ring3_fiber_net_apps.cpp)
+void Ring3FiberNetAppsInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 3 Power-User Workstation Apps Roll-In (SystemInformer, Everything, Rufus, SumatraPDF & WinMerge) (kernel/ps/ring3_workstation_apps.cpp)
+void Ring3WorkstationAppsInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 3 WSL2/LXSS Pico Process, Windows Hypervisor Platform (WHP) & Enterprise RDP Closure (kernel/ps/ring3_wsl2_hyperv_closure.cpp)
+void Ring3Wsl2HyperVClosureInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
 
