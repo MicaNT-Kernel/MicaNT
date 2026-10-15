@@ -18613,3 +18613,160 @@ static void Test_Horizon112_WinNT_Ole32_Dwmapi_WinMM_And_24_System32_DLL_Seal() 
     std::cout << "[TEST] Suite 328: Horizon 112 - Sovereign WinNT Core System32 DLLs (ole32/dwmapi/winmm) & Complete 24-DLL System32 Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 329: Horizon 113 (Kernel Unit #85) - Sovereign WinNT Core User-Mode
+// System32 DLLs (ntdll.dll, ws2_32.dll, iphlpapi.dll & winhttp.dll) Official
+// PE32+ Exports, Ring 3 LdrLoadDll / CriticalSection / Heap, Winsock 2.2,
+// IP Helper Adapter Enumeration & WinHTTP HTTPS Session ABI
+// ============================================================================
+static void Test_Horizon113_WinNT_Ntdll_Ws2_Iphlpapi_And_WinHttp_System32_PE32Plus_ABI() {
+    std::cout << "\n[TEST] Suite 329: Horizon 113 - Sovereign WinNT Core System32 DLLs (ntdll.dll, ws2_32.dll, iphlpapi.dll & winhttp.dll) Official PE32+ Exports...\n";
+
+    micant::um::winnt_ntdll_ws2_iphlpapi_winhttp_abi::InitializeWinNtNtdllWs2IphlpapiWinHttpSubsystem();
+    const auto rep = micant::um::winnt_ntdll_ws2_iphlpapi_winhttp_abi::WinNtNtdllWs2IphlpapiWinHttpCoordinator::instance().runNtdllWs2IphlpapiWinHttpAudit();
+
+    std::cout << "  [Horizon 113 WinNT Core System32: ntdll.dll (18 Exports) + ws2_32.dll (18 Exports) + iphlpapi.dll (6 Exports) + winhttp.dll (10 Exports)]\n"
+              << "    NtdllExports=" << rep.ntdllExportCount
+              << " | Ws2Exports=" << rep.ws2ExportCount
+              << " | IphlpapiExports=" << rep.iphlpapiExportCount
+              << " | WinHttpExports=" << rep.winhttpExportCount
+              << " | Build=" << rep.buildNumberReported
+              << " | Winsock22=" << (rep.winsock22TcpRoundTripVerified ? "YES" : "NO")
+              << " | WinHTTP=" << (rep.winhttpHttpsRequestVerified ? "YES" : "NO") << "\n";
+    TEST_ASSERT(rep.ntdllExportCount == 18u &&
+                rep.ws2ExportCount == 18u &&
+                rep.iphlpapiExportCount == 6u &&
+                rep.winhttpExportCount == 10u &&
+                rep.buildNumberReported == 26100u &&
+                rep.ntdllCriticalSectionAndHeapVerified &&
+                rep.winsock22TcpRoundTripVerified &&
+                rep.iphlpapiAdapterQueryVerified &&
+                rep.winhttpHttpsRequestVerified,
+                "WinNT ntdll.dll, ws2_32.dll, iphlpapi.dll, and winhttp.dll System32 PE32+ exports and networking round-trips must verify cleanly");
+
+    std::cout << "[TEST] Suite 329: Horizon 113 - Sovereign WinNT Core System32 DLLs (ntdll.dll, ws2_32.dll, iphlpapi.dll & winhttp.dll) Official PE32+ Exports PASSED.\n";
+}
+
+// ============================================================================
+// Suite 330: Horizon 114 (Kernel Unit #86) - Sovereign WinNT Core User-Mode
+// System32 DLLs (bcrypt.dll, crypt32.dll, secur32.dll & wintrust.dll) Official
+// PE32+ Exports, CNG Entropy & SHA-256 / AES-GCM, X.509 Cert Store & DPAPI,
+// SSPI SChannel TLS 1.3 Security Contexts & Authenticode PE Signature Trust
+// ============================================================================
+static void Test_Horizon114_WinNT_BCrypt_Crypt32_Secur32_And_WinTrust_System32_PE32Plus_ABI() {
+    std::cout << "\n[TEST] Suite 330: Horizon 114 - Sovereign WinNT Core System32 DLLs (bcrypt.dll, crypt32.dll, secur32.dll & wintrust.dll) Official PE32+ Exports...\n";
+
+    micant::um::winnt_bcrypt_crypt32_secur32_wintrust_abi::InitializeWinNtBCryptCrypt32Secur32WintrustSubsystem();
+    const auto rep = micant::um::winnt_bcrypt_crypt32_secur32_wintrust_abi::WinNtBCryptCrypt32Secur32WintrustCoordinator::instance().runCryptoSecurityAudit();
+
+    std::cout << "  [Horizon 114 WinNT Core System32: bcrypt.dll (10 Exports) + crypt32.dll (10 Exports) + secur32.dll (8 Exports) + wintrust.dll (4 Exports)]\n"
+              << "    BCryptExports=" << rep.bcryptExportCount
+              << " | Crypt32Exports=" << rep.crypt32ExportCount
+              << " | Secur32Exports=" << rep.secur32ExportCount
+              << " | WinTrustExports=" << rep.wintrustExportCount
+              << " | CNG=" << (rep.bcryptRngAndHashVerified ? "YES" : "NO")
+              << " | DPAPI=" << (rep.crypt32CertStoreAndDpapiVerified ? "YES" : "NO")
+              << " | SChannel=" << (rep.secur32SchannelContextVerified ? "YES" : "NO")
+              << " | Authenticode=" << (rep.wintrustAuthenticodeVerified ? "YES" : "NO") << "\n";
+    TEST_ASSERT(rep.bcryptExportCount == 10u &&
+                rep.crypt32ExportCount == 10u &&
+                rep.secur32ExportCount == 8u &&
+                rep.wintrustExportCount == 4u &&
+                rep.bcryptRngAndHashVerified &&
+                rep.crypt32CertStoreAndDpapiVerified &&
+                rep.secur32SchannelContextVerified &&
+                rep.wintrustAuthenticodeVerified,
+                "WinNT bcrypt.dll, crypt32.dll, secur32.dll, and wintrust.dll System32 PE32+ exports, CNG, DPAPI, SChannel, and Authenticode must verify cleanly");
+
+    std::cout << "[TEST] Suite 330: Horizon 114 - Sovereign WinNT Core System32 DLLs (bcrypt.dll, crypt32.dll, secur32.dll & wintrust.dll) Official PE32+ Exports PASSED.\n";
+}
+
+// ============================================================================
+// Suite 331: Horizon 115 (Kernel Unit #87) - Sovereign WinNT Core User-Mode
+// System32 DLLs (shell32.dll, shlwapi.dll, dbghelp.dll & version.dll) Official
+// PE32+ Exports, Standard PE32+ .exe IMAGE_IMPORT_DESCRIPTOR / IAT Snapper,
+// and Complete 40-DLL System32 Ecosystem Seal (20 WinNT Core + 20 DirectX/Media)
+// ============================================================================
+static void Test_Horizon115_WinNT_Shell32_DbgHelp_Version_PE32Plus_IAT_Loader_And_40_DLL_Seal() {
+    std::cout << "\n[TEST] Suite 331: Horizon 115 - Sovereign WinNT Core System32 DLLs (shell32/shlwapi/dbghelp/version), PE32+ .exe IAT Snapper & Complete 40-DLL System32 Seal...\n";
+
+    micant::um::winnt_shell32_dbghelp_version_40dll_seal::InitializeWinNtShell32DbgHelpVersion40DllSealSubsystem();
+    const auto rep = micant::um::winnt_shell32_dbghelp_version_40dll_seal::WinNtShell32DbgHelpVersion40DllSealCoordinator::instance().runComplete40DllIatSealAudit();
+
+    // Verify all 20 compiled WinNT Core System32 PE32+ .dll binaries exist on disk with valid MZ + PE\0\0 headers
+    const char* coreDllPaths[20] = {
+        "bin/system32/kernel32.dll",
+        "bin/system32/advapi32.dll",
+        "bin/system32/user32.dll",
+        "bin/system32/gdi32.dll",
+        "bin/system32/imm32.dll",
+        "bin/system32/ole32.dll",
+        "bin/system32/dwmapi.dll",
+        "bin/system32/winmm.dll",
+        "bin/system32/ntdll.dll",
+        "bin/system32/ws2_32.dll",
+        "bin/system32/iphlpapi.dll",
+        "bin/system32/winhttp.dll",
+        "bin/system32/bcrypt.dll",
+        "bin/system32/crypt32.dll",
+        "bin/system32/secur32.dll",
+        "bin/system32/wintrust.dll",
+        "bin/system32/shell32.dll",
+        "bin/system32/shlwapi.dll",
+        "bin/system32/dbghelp.dll",
+        "bin/system32/version.dll"
+    };
+    uint32_t verifiedDiskDlls = 0;
+    for (const char* relPath : coreDllPaths) {
+        std::ifstream ifs(relPath, std::ios::binary);
+        if (ifs.good()) {
+            uint8_t hdr[512]{};
+            ifs.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
+            if (ifs.gcount() >= 256 && hdr[0] == 'M' && hdr[1] == 'Z') {
+                uint32_t lfanew = 0;
+                std::memcpy(&lfanew, hdr + 0x3C, sizeof(uint32_t));
+                if (lfanew + 26 <= sizeof(hdr) &&
+                    hdr[lfanew] == 'P' && hdr[lfanew + 1] == 'E' && hdr[lfanew + 2] == 0 && hdr[lfanew + 3] == 0) {
+                    uint16_t optMagic = 0;
+                    std::memcpy(&optMagic, hdr + lfanew + 24, sizeof(uint16_t));
+                    if (optMagic == 0x020BU) { // IMAGE_NT_OPTIONAL_HDR64_MAGIC (PE32+)
+                        verifiedDiskDlls++;
+                    }
+                }
+            }
+        }
+    }
+
+    std::cout << "  [Horizon 115 Complete 40-DLL System32 Ecosystem: 20 WinNT Core PE32+ DLLs + 20 DirectX/Multimedia PE32+ DLLs + PE32+ .exe IAT Loader]\n"
+              << "    WinNTCoreDLLs=" << verifiedDiskDlls << "/" << rep.winntCoreSystem32DllCount
+              << " | DirectXDLLs=" << rep.prismxDirectXSystem32DllCount
+              << " | TotalSystem32DLLs=" << rep.totalSystem32PeDllCount
+              << " | CoreExports=" << rep.totalWinNtCoreExports
+              << " | SnappedIAT=" << rep.snappedPe32PlusIatEntries
+              << " | Horizons=" << rep.totalHorizons
+              << " | Units=" << rep.totalKernelUnits
+              << " | Suites=" << rep.totalTestSuites << " (+PrismX " << rep.prismxStandaloneSuites << "/41)\n";
+    TEST_ASSERT(verifiedDiskDlls == 20u &&
+                rep.shell32ExportCount == 8u &&
+                rep.shlwapiExportCount == 8u &&
+                rep.dbghelpExportCount == 8u &&
+                rep.versionExportCount == 5u &&
+                rep.winntCoreSystem32DllCount == 20u &&
+                rep.prismxDirectXSystem32DllCount == 20u &&
+                rep.totalSystem32PeDllCount == 40u &&
+                rep.totalWinNtCoreExports == 217u &&
+                rep.snappedPe32PlusIatEntries == 6u &&
+                rep.totalHorizons == 115u &&
+                rep.totalKernelUnits == 87u &&
+                rep.totalTestSuites == 331u &&
+                rep.prismxStandaloneSuites == 41u &&
+                rep.shellKnownFolderAndPathVerified &&
+                rep.dbghelpSymbolAndVersionVerified &&
+                rep.pe32PlusExecutableIatSnappedAndExecuted &&
+                rep.all40System32DllsSealed,
+                "Complete 40-DLL System32 PE32+ Ecosystem (20 WinNT Core DLLs + 20 DirectX/Media DLLs + PE32+ .exe IAT Snapper) must seal cleanly");
+
+    std::cout << "[TEST] Suite 331: Horizon 115 - Sovereign WinNT Core System32 DLLs (shell32/shlwapi/dbghelp/version), PE32+ .exe IAT Snapper & Complete 40-DLL System32 Seal PASSED.\n";
+}
+
+

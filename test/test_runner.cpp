@@ -148,6 +148,9 @@
 #include "micant/um/subsystems/winbase/winnt_kernel32_advapi32_system32_abi.hpp"
 #include "micant/um/subsystems/winuser/winnt_user32_gdi32_imm32_system32_abi.hpp"
 #include "micant/um/subsystems/winuser/winnt_ole32_dwmapi_winmm_system32_seal.hpp"
+#include "micant/um/subsystems/winbase/winnt_ntdll_ws2_iphlpapi_winhttp_abi.hpp"
+#include "micant/um/subsystems/winbase/winnt_bcrypt_crypt32_secur32_wintrust_abi.hpp"
+#include "micant/um/subsystems/winuser/winnt_shell32_dbghelp_version_40dll_iat_seal.hpp"
 
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
@@ -371,7 +374,31 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite325")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite331")) {
+        RUN_TEST(Test_Horizon115_WinNT_Shell32_DbgHelp_Version_PE32Plus_IAT_Loader_And_40_DLL_Seal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite330") {
+        RUN_TEST(Test_Horizon114_WinNT_BCrypt_Crypt32_Secur32_And_WinTrust_System32_PE32Plus_ABI);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite329") {
+        RUN_TEST(Test_Horizon113_WinNT_Ntdll_Ws2_Iphlpapi_And_WinHttp_System32_PE32Plus_ABI);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite328") {
+        RUN_TEST(Test_Horizon112_WinNT_Ole32_Dwmapi_WinMM_And_24_System32_DLL_Seal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite327") {
+        RUN_TEST(Test_Horizon111_WinNT_User32_Gdi32_And_Imm32_System32_PE32Plus_DLL_ABI);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite326") {
+        RUN_TEST(Test_Horizon110_WinNT_Kernel32_And_Advapi32_System32_PE32Plus_DLL_ABI);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite325") {
         RUN_TEST(Test_Horizon109_PrismX_Official_Vulkan1_OpenGL32_And_16_System32_DLL_Seal);
         return g_FailedTests;
     }
@@ -1553,6 +1580,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon110_WinNT_Kernel32_And_Advapi32_System32_PE32Plus_DLL_ABI);
     RUN_TEST(Test_Horizon111_WinNT_User32_Gdi32_And_Imm32_System32_PE32Plus_DLL_ABI);
     RUN_TEST(Test_Horizon112_WinNT_Ole32_Dwmapi_WinMM_And_24_System32_DLL_Seal);
+    RUN_TEST(Test_Horizon113_WinNT_Ntdll_Ws2_Iphlpapi_And_WinHttp_System32_PE32Plus_ABI);
+    RUN_TEST(Test_Horizon114_WinNT_BCrypt_Crypt32_Secur32_And_WinTrust_System32_PE32Plus_ABI);
+    RUN_TEST(Test_Horizon115_WinNT_Shell32_DbgHelp_Version_PE32Plus_IAT_Loader_And_40_DLL_Seal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

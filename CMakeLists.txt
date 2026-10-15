@@ -72,6 +72,33 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/io/prismx_enhanced_barriers_workgraphs.cpp
     kernel/io/prismx_vulkanon12_video_av1.cpp
     kernel/io/prismx_dred_shadercache_zerotdr.cpp
+    kernel/io/prismx_live_3d_scene_framegraph.cpp
+    kernel/io/prismx_gop_scanout_frame_pacing.cpp
+    kernel/io/prismx_game_benchmark_proton_seal.cpp
+    kernel/io/prismx_directsr_vrs_rebar_gaming.cpp
+    kernel/io/prismx_execute_indirect_sampler_feedback.cpp
+    kernel/io/prismx_gameinput_pix_classic_gaming_seal.cpp
+    kernel/io/prismx_hlsl_fxc_dxbc_reflection_compiler.cpp
+    kernel/io/prismx_dxil_sm69_wave32_simd_vm.cpp
+    kernel/io/prismx_spirv16_dxil_cross_translator_seal.cpp
+    kernel/se/ring0_anticheat_eac_battleye_callbacks.cpp
+    kernel/se/ring0_vanguard_ricochet_hvci_iommu_shield.cpp
+    kernel/se/horizon100_gaming_drm_hwid_vault_seal.cpp
+    kernel/io/prism_dxgi16_com_hierarchy.cpp
+    kernel/io/prism_d3d12_vtable_options21.cpp
+    kernel/io/prism_directx_system32_dll_router.cpp
+    kernel/io/prism_d3d9ex_com_vtable_abi.cpp
+    kernel/io/prism_xaudio2_dinput8_com_abi.cpp
+    kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp
+    kernel/io/prism_mfplat_mfreadwrite_cutscene_abi.cpp
+    kernel/io/prism_dxcore_adapter_factory_com_abi.cpp
+    kernel/io/prism_vulkan1_opengl32_16dll_seal.cpp
+    kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp
+    kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp
+    kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp
+    kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp
+    kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp
+    kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp
 )
 
 add_library(ntoskrnl_core STATIC
