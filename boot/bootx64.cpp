@@ -208,14 +208,14 @@ public:
         m_videoDriver.fillRectangle(0, 0, width, 28, bootvid::Color{18, 24, 38});
         m_videoDriver.fillRectangle(0, 27, width, 1, bootvid::Color{38, 52, 78});
         m_videoDriver.drawString(14, 8, "MicaNT Cutler Edition", bootvid::Color{0, 229, 255}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(185, 8, "|  45-Unit NT Kernel (Ring 0+1+2+3 + PrismX)  |  Horizon 73 (Wave 3A)",
+        m_videoDriver.drawString(185, 8, "|  48-Unit NT Kernel (Ring 0+1+2+3 Wave 3A+3B)  |  Horizon 76 (Wave 3B)",
                                 bootvid::Color{170, 185, 205}, bootvid::Color{18, 24, 38}, 1);
 
         m_videoDriver.fillRectangle(width - 366, 5, 154, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 356, 8, "289/289 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 356, 8, "292/292 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
 
         m_videoDriver.fillRectangle(width - 204, 5, 196, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 196, 8, "PRISMX 4-RING [OK]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 196, 8, "WAVE 3B 4-RING [OK]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
 
         auto DrawButtons = [&](uint32_t rightX, uint32_t y) {
             uint32_t btnW = 20;
@@ -835,10 +835,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 45-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-73).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 48-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-76).\r\n");
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 3 Wave 3A] Rolled in PrismX/Prism3D12 (4GB VRAM), DirectStorage 1.2 (14.2 GB/s) & PrismAudio XAudio2 3D.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 289/289 Suites Verified | PRISMX 4-RING TUNNEL SEALED | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 3 Wave 3A+3B] PrismX/D3D12/DStorage/XAudio2 + Winsock/WinHTTP/TLS + COM/RPC/Shell + BCrypt/DPAPI/WinTrust.\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 292/292 Suites Verified | WAVE 3B 4-RING TUNNEL SEALED | 0 BSODs | Launching GOP Desktop...\r\n");
         }
     }
 

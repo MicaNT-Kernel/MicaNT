@@ -144,4 +144,14 @@ void Ring3DirectStorageD2DInitializeExecutiveSubsystem() noexcept;
 // Sovereign Ring 3 PrismAudio XAudio2 3D Spatial, WASAPI & Media Foundation Tunnel (kernel/io/ring3_prismaudio_mf.cpp)
 void Ring3PrismAudioMfInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign Ring 3 Winsock2 (ws2_32), WinHTTP & Schannel TLS 1.3 Tunnel (kernel/io/ring3_winsock_winhttp_tls.cpp)
+void Ring3WinsockWinHttpTlsInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 3 COM/OLE (ole32/oleaut32), RPC (rpcrt4) & Shell (shell32/shlwapi) Tunnel (kernel/lpc/ring3_com_rpc_shell.cpp)
+void Ring3ComRpcShellInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign Ring 3 BCrypt/NCrypt, Crypt32 DPAPI/Certs & WinTrust Authenticode Tunnel (kernel/se/ring3_bcrypt_crypt32_wintrust.cpp)
+void Ring3BcryptCrypt32WinTrustInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
+

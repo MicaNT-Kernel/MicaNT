@@ -109,6 +109,9 @@
 #include "micant/um/subsystems/graphics/ring3_prismx_3d12_shader_tunnel.hpp"
 #include "micant/um/subsystems/graphics/ring3_directstorage_d2d_vulkan_tunnel.hpp"
 #include "micant/um/subsystems/media/ring3_prismaudio_wasapi_mf_tunnel.hpp"
+#include "micant/um/subsystems/net/ring3_winsock_winhttp_tls_tunnel.hpp"
+#include "micant/um/subsystems/com/ring3_com_rpc_shell_controls_tunnel.hpp"
+#include "micant/um/subsystems/security/ring3_bcrypt_crypt32_wintrust_tunnel.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -331,7 +334,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite289")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite292")) {
+        RUN_TEST(Test_Horizon76_Ring3BcryptCrypt32WinTrust_LsaIsoVault_And_ZeroLagCiTunnel);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite291") {
+        RUN_TEST(Test_Horizon75_Ring3ComOleRpcShell_RpcSsOxid_And_MftNamespaceTunnel);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite290") {
+        RUN_TEST(Test_Horizon74_Ring3WinsockWinHttpTls_AfdFastIo_Rio_And_WskTunnel);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite289") {
         RUN_TEST(Test_Horizon73_Ring3PrismAudio_XAudio2Spatial_WasapiMf_And_WaveRtTunnel);
         return g_FailedTests;
     }
@@ -1330,6 +1345,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon71_Ring3PrismX_Prism3D12_ShaderVM_And_DirectFlipMpoTunnel);
     RUN_TEST(Test_Horizon72_Ring3DirectStorage_GDeflateBypassIo_And_Ring2FontWicSandbox);
     RUN_TEST(Test_Horizon73_Ring3PrismAudio_XAudio2Spatial_WasapiMf_And_WaveRtTunnel);
+    RUN_TEST(Test_Horizon74_Ring3WinsockWinHttpTls_AfdFastIo_Rio_And_WskTunnel);
+    RUN_TEST(Test_Horizon75_Ring3ComOleRpcShell_RpcSsOxid_And_MftNamespaceTunnel);
+    RUN_TEST(Test_Horizon76_Ring3BcryptCrypt32WinTrust_LsaIsoVault_And_ZeroLagCiTunnel);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

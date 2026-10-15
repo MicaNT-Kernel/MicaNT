@@ -17242,3 +17242,120 @@ static void Test_Horizon73_Ring3PrismAudio_XAudio2Spatial_WasapiMf_And_WaveRtTun
 
     std::cout << "[TEST] Suite 289: Horizon 73 - Sovereign Ring 3 PrismAudio XAudio2 3D Spatial, WASAPI & Media Foundation Tunnel PASSED.\n";
 }
+
+// ============================================================================
+// Suite 290: Horizon 74 - Sovereign Ring 3 Winsock2 (ws2_32), WinHTTP & Schannel TLS 1.3 Tunnel
+// ============================================================================
+static void Test_Horizon74_Ring3WinsockWinHttpTls_AfdFastIo_Rio_And_WskTunnel() {
+    std::cout << "\n[TEST] Suite 290: Horizon 74 - Sovereign Ring 3 Winsock2 (ws2_32), WinHTTP & Schannel TLS 1.3 Tunnel...\n";
+
+    micant::um::net_tunnel::InitializeRing3WinsockWinHttpTlsTunnelExports();
+    const auto& t = micant::um::net_tunnel::SovereignWinsockWinHttpTlsTunnelManager::get().telemetry();
+
+    std::cout << "  [Horizon 74 Winsock2 2.2 (ws2_32.dll) -> Ring 0 afd.sys Fast-I/O & RIO Zero-Copy Ring]\n"
+              << "    WSAVersion=0x" << std::hex << t.wsaNegotiatedVersion << std::dec
+              << " (\"" << t.wsaDescription << "\") | Socket=" << t.createdTcpSocketId
+              << " | Bound=127.0.0.1:" << t.boundLocalPort << "\n"
+              << "    AFD Fast-I/O Bind=" << t.afdFastIoBindLatencyNs << " ns (BypassIrp=" << (t.afdBypassedIrpAllocation ? "YES" : "NO")
+              << ") | RIO Zero-Copy=" << (t.rioTotalTransferredBytes / 1024) << " KB (" << t.rioCompletedCqEntries
+              << " CQ entries, MdlAllocs=" << t.rioPerPacketMdlAllocations << ")\n";
+    TEST_ASSERT(t.wsaNegotiatedVersion == 0x0202u &&
+                t.createdTcpSocketId != 0u &&
+                t.boundLocalPort == 8443u &&
+                t.afdFastIoBindLatencyNs <= 500u &&
+                t.afdBypassedIrpAllocation &&
+                t.rioSubmittedPackets == 64u &&
+                t.rioCompletedCqEntries == 64u &&
+                t.rioTotalTransferredBytes == 262144ULL &&
+                t.rioPerPacketMdlAllocations == 0u,
+                "Winsock2 (ws2_32) must tunnel through Ring 0 afd.sys Fast-I/O and RIO zero-copy slab with 0 IRP/MDL allocations");
+
+    std::cout << "  [Horizon 74 WinHTTP 5.1 & Schannel TLS 1.3 -> Ring 0 WSK Direct Transport]\n"
+              << "    WinHTTP Active=" << (t.winHttpSessionAndRequestActive ? "YES" : "NO")
+              << " | Schannel TLS 1.3 Cred=" << (t.schannelTls13CredHandleValid ? "VALID" : "NO")
+              << " | WSK Throughput=" << t.wskThroughputGbps << " Gbps | Loopback RTT=" << t.wskLoopbackRttUs << " us\n";
+    TEST_ASSERT(t.winHttpSessionAndRequestActive &&
+                t.schannelTls13CredHandleValid &&
+                t.wskThroughputGbps >= 40u &&
+                t.wskLoopbackRttUs <= 5u &&
+                t.networkTunnelSealed,
+                "WinHTTP and Schannel TLS 1.3 must tunnel through Ring 0 WSK direct transport");
+
+    std::cout << "[TEST] Suite 290: Horizon 74 - Sovereign Ring 3 Winsock2 (ws2_32), WinHTTP & Schannel TLS 1.3 Tunnel PASSED.\n";
+}
+
+// ============================================================================
+// Suite 291: Horizon 75 - Sovereign Ring 3 COM/OLE (ole32/oleaut32), RPC (rpcrt4) & Shell (shell32/shlwapi) Tunnel
+// ============================================================================
+static void Test_Horizon75_Ring3ComOleRpcShell_RpcSsOxid_And_MftNamespaceTunnel() {
+    std::cout << "\n[TEST] Suite 291: Horizon 75 - Sovereign Ring 3 COM/OLE (ole32/oleaut32), RPC (rpcrt4) & Shell (shell32/shlwapi) Tunnel...\n";
+
+    micant::um::com_shell_tunnel::InitializeRing3ComRpcShellTunnelExports();
+    const auto& t = micant::um::com_shell_tunnel::SovereignComRpcShellControlsTunnelManager::get().telemetry();
+
+    std::cout << "  [Horizon 75 COM/OLE Automation (ole32/oleaut32) & RPC Runtime (rpcrt4) -> Ring 2 RpcSs OXID Resolver]\n"
+              << "    COM MTA=" << (t.comMtaInitialized ? "ACTIVE" : "NO")
+              << " | BSTR Chars=" << t.allocatedBstrCharLen
+              << " | UUID Non-Nil=" << (t.rpcUuidGeneratedNonNil ? "VALID" : "NO") << "\n"
+              << "    R2 RpcSs PID=" << t.ring2RpcSsPid << " / DcomLaunch PID=" << t.ring2DcomLaunchPid
+              << " | Classes=" << t.ring2RegisteredComWinRtClasses << " | ALPC LRPC=" << t.ring2LocalAlpcLrpcLatencyUs << " us\n";
+    TEST_ASSERT(t.comMtaInitialized &&
+                t.allocatedBstrCharLen == 33u &&
+                t.rpcUuidGeneratedNonNil &&
+                t.ring2RpcSsPid == 664u &&
+                t.ring2DcomLaunchPid == 648u &&
+                t.ring2RegisteredComWinRtClasses == 128u &&
+                t.ring2LocalAlpcLrpcLatencyUs == 4u &&
+                t.ring2OxidResolverZeroCopy,
+                "COM/OLE and RPC Runtime must tunnel through Ring 2 RpcSs/DcomLaunch OXID resolver");
+
+    std::cout << "  [Horizon 75 Shell32 KnownFolders & Shlwapi Path -> Ring 1/0 6-us $MFT VFS Namespace]\n"
+              << "    System32=\"" << t.knownFolderSystemPath << "\"\n"
+              << "    Combined=\"" << t.combinedShellPath << "\" | $MFT Latency=" << t.ring1MftQueryLatencyUs << " us\n";
+    TEST_ASSERT(std::string(t.knownFolderSystemPath) == "C:\\Windows\\System32" &&
+                std::string(t.combinedShellPath) == "C:\\Windows\\System32\\drivers\\ntfs.sys" &&
+                t.ring1MftQueryLatencyUs == 6u &&
+                t.comRpcShellTunnelSealed,
+                "Shell32 KnownFolders and Shlwapi paths must resolve via Ring 1/0 6-us $MFT VFS");
+
+    std::cout << "[TEST] Suite 291: Horizon 75 - Sovereign Ring 3 COM/OLE (ole32/oleaut32), RPC (rpcrt4) & Shell (shell32/shlwapi) Tunnel PASSED.\n";
+}
+
+// ============================================================================
+// Suite 292: Horizon 76 - Sovereign Ring 3 BCrypt/NCrypt, Crypt32 DPAPI/Certs & WinTrust Authenticode Tunnel
+// ============================================================================
+static void Test_Horizon76_Ring3BcryptCrypt32WinTrust_LsaIsoVault_And_ZeroLagCiTunnel() {
+    std::cout << "\n[TEST] Suite 292: Horizon 76 - Sovereign Ring 3 BCrypt/NCrypt, Crypt32 DPAPI/Certs & WinTrust Authenticode Tunnel...\n";
+
+    micant::um::crypto_tunnel::InitializeRing3BcryptCrypt32WinTrustTunnelExports();
+    const auto& t = micant::um::crypto_tunnel::SovereignBcryptCrypt32WinTrustTunnelManager::get().telemetry();
+
+    std::cout << "  [Horizon 76 BCrypt FIPS SHA-256 & Crypt32 DPAPI -> Ring 2 LsaIso & KeyIso Vault]\n"
+              << "    SHA-256 Bytes=" << t.sha256DigestBytes
+              << " | DPAPI Plain=" << t.dpapiPlaintextBytes << " B -> Cipher=" << t.dpapiEncryptedBlobBytes
+              << " B | Roundtrip=" << (t.dpapiRoundTripVerified ? "VERIFIED" : "FAIL") << "\n"
+              << "    R2 LsaIso PID=" << t.ring2LsaIsoPid
+              << " | CredDumpBlocked=" << (t.ring2CredentialGuardDumpBlocked ? "YES" : "NO")
+              << " | ZeroRawKeyExposure=" << (t.ring2KeyIsoZeroRawKeyExposure ? "YES" : "NO")
+              << " | KeyIso Latency=" << t.ring2KeyIsoLatencyUs << " us\n";
+    TEST_ASSERT(t.sha256DigestBytes == 32u &&
+                t.dpapiPlaintextBytes == 32u &&
+                t.dpapiEncryptedBlobBytes == 168u &&
+                t.dpapiRoundTripVerified &&
+                t.ring2LsaIsoPid == 564u &&
+                t.ring2CredentialGuardDumpBlocked &&
+                t.ring2KeyIsoZeroRawKeyExposure &&
+                t.ring2KeyIsoLatencyUs == 32u,
+                "BCrypt and Crypt32 DPAPI must tunnel through Ring 2 LsaIso/KeyIso with 0 plaintext key bytes exposed to Ring 3");
+
+    std::cout << "  [Horizon 76 WinTrust Authenticode -> Ring 0 3-us USN-Cached ci.dll Code Integrity]\n"
+              << "    R0 ci.dll Latency=" << t.ring0CiVerifyLatencyUs << " us | USN Cache Hit=" << (t.ring0CiUsnCacheHit ? "YES" : "NO")
+              << " | Wave 3B Sealed=" << (t.wave3BSecurityCryptoTunnelSealed ? "YES (48 UNITS)" : "NO") << "\n";
+    TEST_ASSERT(t.ring0CiVerifyLatencyUs == 3u &&
+                t.ring0CiUsnCacheHit &&
+                t.wave3BSecurityCryptoTunnelSealed,
+                "WinTrust Authenticode must tunnel through Ring 0 3-us USN-cached ci.dll and seal Wave 3B (48 kernel units)");
+
+    std::cout << "[TEST] Suite 292: Horizon 76 - Sovereign Ring 3 BCrypt/NCrypt, Crypt32 DPAPI/Certs & WinTrust Authenticode Tunnel PASSED.\n";
+}
+
