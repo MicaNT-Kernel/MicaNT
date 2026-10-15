@@ -124,6 +124,9 @@
 #include "micant/um/subsystems/graphics/prismx_enhanced_barriers_workgraphs_sm69.hpp"
 #include "micant/um/subsystems/graphics/prismx_vulkanon12_video_av1_hevc.hpp"
 #include "micant/um/subsystems/graphics/prismx_dred_shadercache_zerotdr_seal.hpp"
+#include "micant/um/subsystems/graphics/prismx_live_3d_scene_framegraph.hpp"
+#include "micant/um/subsystems/graphics/prismx_gop_scanout_frame_pacing.hpp"
+#include "micant/um/subsystems/graphics/prismx_game_benchmark_proton_seal.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/net/ndis.hpp"
@@ -346,7 +349,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite304")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite307")) {
+        RUN_TEST(Test_Horizon91_PrismX_MultiApi_GameEngine_Benchmark_And_WineProton_ZeroOverhead_Seal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite306") {
+        RUN_TEST(Test_Horizon90_PrismX_Wddm32_GopZeroCopyScanout_And_540Hz_FramePacing_Engine);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite305") {
+        RUN_TEST(Test_Horizon89_PrismX_Live3DScene_MeshShader_And_DXR11_PlanarReflection_FrameGraph);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite304") {
         RUN_TEST(Test_Horizon88_PrismX_DRED12_PersistentShaderCache_And_Ring1_ZeroTdr_RockSolidSeal);
         return g_FailedTests;
     }
@@ -1420,6 +1435,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon86_PrismX_EnhancedBarriers_GpuUploadHeaps_WorkGraphs_And_SM69_WaveMatrix);
     RUN_TEST(Test_Horizon87_PrismX_VulkanOn12_Conformance_And_D3D12Video_AV1_HEVC_HardwareEncoder);
     RUN_TEST(Test_Horizon88_PrismX_DRED12_PersistentShaderCache_And_Ring1_ZeroTdr_RockSolidSeal);
+    RUN_TEST(Test_Horizon89_PrismX_Live3DScene_MeshShader_And_DXR11_PlanarReflection_FrameGraph);
+    RUN_TEST(Test_Horizon90_PrismX_Wddm32_GopZeroCopyScanout_And_540Hz_FramePacing_Engine);
+    RUN_TEST(Test_Horizon91_PrismX_MultiApi_GameEngine_Benchmark_And_WineProton_ZeroOverhead_Seal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

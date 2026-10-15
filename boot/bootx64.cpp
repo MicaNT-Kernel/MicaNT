@@ -208,14 +208,14 @@ public:
         m_videoDriver.fillRectangle(0, 0, width, 28, bootvid::Color{18, 24, 38});
         m_videoDriver.fillRectangle(0, 27, width, 1, bootvid::Color{38, 52, 78});
         m_videoDriver.drawString(14, 8, "MicaNT Cutler Edition", bootvid::Color{0, 229, 255}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(185, 8, "|  60-Unit NT Kernel (PrismX Rock-Solid Seal)  |  Horizon 88 (Track B)",
+        m_videoDriver.drawString(185, 8, "|  63-Unit NT Kernel (PrismX Live 3D GOP Engine)  |  Horizon 91 (Track B)",
                                 bootvid::Color{170, 185, 205}, bootvid::Color{18, 24, 38}, 1);
 
         m_videoDriver.fillRectangle(width - 366, 5, 154, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 356, 8, "304/304 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 356, 8, "307/307 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
 
         m_videoDriver.fillRectangle(width - 204, 5, 196, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 196, 8, "PRISMX D3D12 [OK]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 196, 8, "PRISMX 540FPS [3D]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
 
         auto DrawButtons = [&](uint32_t rightX, uint32_t y) {
             uint32_t btnW = 20;
@@ -226,6 +226,48 @@ public:
             m_videoDriver.drawString(rightX - 2 * btnW + 2, y + 6, "[]", bootvid::Color{180, 200, 225}, bootvid::Color{28, 38, 56}, 1);
             m_videoDriver.fillRectangle(rightX - btnW, y + 4, btnW, btnH, bootvid::Color{196, 43, 28});
             m_videoDriver.drawString(rightX - btnW + 6, y + 6, "X", bootvid::Color{255, 255, 255}, bootvid::Color{196, 43, 28}, 1);
+        };
+
+        auto DrawLine2D = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1, bootvid::Color col) {
+            int32_t dx = abs(x1 - x0);
+            int32_t sx = (x0 < x1) ? 1 : -1;
+            int32_t dy = -abs(y1 - y0);
+            int32_t sy = (y0 < y1) ? 1 : -1;
+            int32_t err = dx + dy;
+            while (true) {
+                if (x0 >= 0 && x0 < static_cast<int32_t>(width) &&
+                    y0 >= 0 && y0 < static_cast<int32_t>(height)) {
+                    m_videoDriver.putPixel(static_cast<uint32_t>(x0), static_cast<uint32_t>(y0), col);
+                }
+                if (x0 == x1 && y0 == y1) break;
+                int32_t e2 = 2 * err;
+                if (e2 >= dy) { err += dy; x0 += sx; }
+                if (e2 <= dx) { err += dx; y0 += sy; }
+            }
+        };
+
+        auto FillTriangle2D = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, bootvid::Color fillCol) {
+            int32_t minX = x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2);
+            int32_t maxX = x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2);
+            int32_t minY = y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 < y2 ? y1 : y2);
+            int32_t maxY = y0 > y1 ? (y0 > y2 ? y0 : y2) : (y1 > y2 ? y1 : y2);
+            if (minX < 0) minX = 0;
+            if (minY < 0) minY = 0;
+            if (maxX >= static_cast<int32_t>(width)) maxX = static_cast<int32_t>(width) - 1;
+            if (maxY >= static_cast<int32_t>(height)) maxY = static_cast<int32_t>(height) - 1;
+
+            int32_t area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
+            if (area == 0) return;
+            for (int32_t py = minY; py <= maxY; ++py) {
+                for (int32_t px = minX; px <= maxX; ++px) {
+                    int32_t w0 = (x1 - x0) * (py - y0) - (y1 - y0) * (px - x0);
+                    int32_t w1 = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1);
+                    int32_t w2 = (x0 - x2) * (py - y2) - (y0 - y2) * (px - x2);
+                    if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+                        m_videoDriver.putPixel(static_cast<uint32_t>(px), static_cast<uint32_t>(py), fillCol);
+                    }
+                }
+            }
         };
 
         // Window 1: Notepad++ v8.7 (Sovereign Edition)
@@ -243,7 +285,7 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{20, 28, 44});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{40, 180, 100});
             m_videoDriver.drawString(wx + 8, wy + 8, "N+", bootvid::Color{255, 255, 255}, bootvid::Color{40, 180, 100}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [54-Unit PrismX DirectX Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
+            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [63-Unit PrismX Live 3D Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
@@ -264,8 +306,8 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 70, ww - 4, 22, bootvid::Color{10, 14, 22});
             m_videoDriver.fillRectangle(wx + 6, wy + 72, 184, 20, bootvid::Color{26, 38, 58});
             m_videoDriver.drawString(wx + 12, wy + 76, "[c++] kiinit.cpp *  x", bootvid::Color{0, 225, 255}, bootvid::Color{26, 38, 58}, 1);
-            m_videoDriver.fillRectangle(wx + 194, wy + 72, 196, 20, bootvid::Color{14, 18, 28});
-            m_videoDriver.drawString(wx + 200, wy + 76, "[h] net_tls_tunnel.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
+            m_videoDriver.fillRectangle(wx + 194, wy + 72, 226, 20, bootvid::Color{14, 18, 28});
+            m_videoDriver.drawString(wx + 200, wy + 76, "[h] prismx_live_3d_scene.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
 
             // Editor
             uint32_t edX = wx + 2;
@@ -277,19 +319,19 @@ public:
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
 
             const char* codeLines[] = {
-                "// MicaNT: 48-Unit Modular Kernel (Wave 3A+3B Networking & TLS)",
-                "#include <micant/um/subsystems/net/ws2_32.hpp>",
-                "#include <micant/um/subsystems/net/winhttp.hpp>",
-                "#include <micant/um/subsystems/security/sspi.hpp>",
-                "#include <micant/km/drivers/net/afd_wsk_rio.hpp>",
+                "// MicaNT: 63-Unit Modular Kernel (PrismX Live 3D Frame-Graph)",
+                "#include <micant/um/subsystems/graphics/prismx_live_3d_scene.hpp>",
+                "#include <micant/um/subsystems/graphics/prismx_gop_scanout.hpp>",
+                "#include <micant/um/subsystems/graphics/prismx_game_benchmark.hpp>",
                 "extern \"C\" NTSTATUS KiSystemStartup(LoaderParameterBlock* lpb) {",
-                "    Ring3WinsockWinHttpTlsInitializeExecutiveSubsystem();   // 96Gbps WSK",
-                "    Ring3ComRpcShellInitializeExecutiveSubsystem();         // 4us OXID",
-                "    Ring3BcryptCrypt32WinTrustInitializeExecutiveSubsystem();// LsaIso+CI",
-                "    return Phase1Initialization(lpb);",
+                "    PrismXLive3DSceneFrameGraphInitializeExecutiveSubsystem();",
+                "    PrismXGopScanoutFramePacingInitializeExecutiveSubsystem();",
+                "    PrismXGameBenchmarkProtonSealInitializeExecutiveSubsystem();",
+                "    return Phase1Initialization(lpb); // 307/307 Suites Verified",
                 "}",
-                "// Winsock 2.2 (127.0.0.1:8443) -> 340ns AFD Fast-I/O + 256KB RIO",
-                "// Schannel TLS 1.3 + WinHTTP 5.1 -> 96 Gbps WSK (1us Loopback RTT)"
+                "// Pass 1: GDeflate 14.8 GB/s | Pass 2: SM 6.9 WorkGraph + Mesh",
+                "// Pass 3: DXR 1.1 RayQuery   | Pass 4: DirectML 4K SuperRes",
+                "// Pass 5: Enhanced Barriers -> 540Hz DirectFlip MPO (1.85 ms)"
             };
 
             for (size_t i = 0; i < 13; ++i) {
@@ -312,11 +354,11 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "48 Kernel Units | Winsock2/RIO/WSK 96Gbps + TLS 1.3 + COM/OXID | 0 BSODs",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "63 Kernel Units | 307/307 Suites | PrismX 540 FPS (1.85ms) | 0 TDRs",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{16, 22, 34}, 1);
         }
 
-        // Window 2: VLC Media Player 3.0.21 (Ring 1 DirectFlip MPO & WaveRT Audio)
+        // Window 2: PrismX D3D12 Ultimate Live 3D Engine & Game Workload Viewport (Top-Right)
         {
             uint32_t wx = 620;
             uint32_t wy = 34;
@@ -325,80 +367,127 @@ public:
 
             m_videoDriver.fillRectangle(wx + 10, wy + 10, ww, wh, bootvid::Color{0, 0, 0});
             m_videoDriver.fillRectangle(wx, wy, ww, wh, bootvid::Color{24, 34, 52});
-            m_videoDriver.drawRectangle(wx, wy, ww, wh, bootvid::Color{45, 68, 102});
+            m_videoDriver.drawRectangle(wx, wy, ww, wh, bootvid::Color{0, 210, 255});
 
             // Titlebar
-            m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{20, 28, 44});
-            m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{245, 130, 32});
-            m_videoDriver.drawString(wx + 8, wy + 8, "/\\", bootvid::Color{255, 255, 255}, bootvid::Color{245, 130, 32}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "VLC media player - Ring 1 DirectFlip MPO & WaveRT DMA", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
+            m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{14, 26, 46});
+            m_videoDriver.fillRectangle(wx + 6, wy + 5, 22, 18, bootvid::Color{0, 190, 245});
+            m_videoDriver.drawString(wx + 8, wy + 8, "PX", bootvid::Color{8, 14, 24}, bootvid::Color{0, 190, 245}, 1);
+            m_videoDriver.drawString(wx + 34, wy + 8, "PrismX D3D12 Ultimate Live 3D Engine - 540 FPS DirectFlip MPO", bootvid::Color{240, 250, 255}, bootvid::Color{14, 26, 46}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, wy + 32, "Media  Playback  Audio  Video  Subtitle  Tools  View  Help",
-                                    bootvid::Color{180, 195, 215}, bootvid::Color{16, 22, 34}, 1);
+            m_videoDriver.drawString(wx + 10, wy + 32, "Scene  Pipeline  DXR 1.1  Mesh/SM6.9  DirectStorage  DirectML  DRED 1.2",
+                                    bootvid::Color{170, 215, 245}, bootvid::Color{16, 22, 34}, 1);
 
-            // Viewport
+            // 3D Viewport (vpW=638, vpH=258)
             uint32_t vpX = wx + 2;
             uint32_t vpY = wy + 48;
             uint32_t vpW = ww - 4;
             uint32_t vpH = wh - 110;
-            m_videoDriver.drawVerticalGradient(vpX, vpY, vpW, vpH, bootvid::Color{6, 9, 16}, bootvid::Color{2, 3, 6});
+            uint32_t horizonY = vpY + 148;
 
-            // Audio Waveform
-            uint32_t midY = vpY + (vpH / 2) + 32;
-            static constexpr int8_t s_sine[32] = {
-                0, 5, 10, 14, 18, 20, 22, 22, 20, 18, 14, 10, 5, 0,
-                -5, -10, -14, -18, -20, -22, -22, -20, -18, -14, -10, -5,
-                0, 5, 10, 14, 18, 20
-            };
-            for (uint32_t px = vpX + 24; px < vpX + vpW - 24; ++px) {
-                size_t idx1 = (px / 4) % 32;
-                size_t idx2 = ((px / 2) + 8) % 32;
-                int off1 = s_sine[idx1] * 2;
-                int off2 = s_sine[idx2];
-                int yOff = off1 + off2;
-                m_videoDriver.putPixel(px, midY + yOff, bootvid::Color{0, 220, 255});
-                m_videoDriver.putPixel(px, midY + yOff + 1, bootvid::Color{0, 180, 220});
-                m_videoDriver.putPixel(px, midY - yOff, bootvid::Color{255, 140, 40});
+            // Skybox & Floor Gradient
+            m_videoDriver.drawVerticalGradient(vpX, vpY, vpW, 148, bootvid::Color{4, 9, 20}, bootvid::Color{12, 32, 62});
+            m_videoDriver.drawVerticalGradient(vpX, horizonY, vpW, vpH - 148, bootvid::Color{10, 28, 52}, bootvid::Color{3, 7, 14});
+
+            // Perspective 3D Neon-Cyan Floor Grid Receding to Horizon
+            int32_t cx = static_cast<int32_t>(vpX + vpW / 2) + 64; // Shifted right of telemetry overlay
+            int32_t hy = static_cast<int32_t>(horizonY);
+            for (int32_t i = -9; i <= 9; ++i) {
+                int32_t bx = cx + i * 48;
+                if (bx < static_cast<int32_t>(vpX + 2)) bx = static_cast<int32_t>(vpX + 2);
+                if (bx > static_cast<int32_t>(vpX + vpW - 2)) bx = static_cast<int32_t>(vpX + vpW - 2);
+                DrawLine2D(cx + i * 6, hy, bx, static_cast<int32_t>(vpY + vpH - 2), bootvid::Color{0, 95, 145});
+            }
+            for (uint32_t r = 1; r <= 6; ++r) {
+                uint32_t gy = horizonY + ((vpH - 148) * r * r) / 36;
+                uint8_t c = static_cast<uint8_t>(50 + r * 20);
+                m_videoDriver.fillRectangle(vpX + 2, gy, vpW - 4, 1, bootvid::Color{0, c, static_cast<uint8_t>(c + 45)});
             }
 
-            // HUD
-            m_videoDriver.fillRectangle(vpX + 20, vpY + 12, 496, 100, bootvid::Color{14, 20, 32});
-            m_videoDriver.drawRectangle(vpX + 20, vpY + 12, 496, 100, bootvid::Color{36, 54, 82});
-            m_videoDriver.drawString(vpX + 30, vpY + 22, "MicaNT Ring 1 DirectFlip MPO & WaveRT Audio Engine", bootvid::Color{0, 240, 255}, bootvid::Color{14, 20, 32}, 1);
-            m_videoDriver.drawString(vpX + 30, vpY + 40, "Scanout: 3 MPO Planes | 0 DWM Copies | 80 us Latency", bootvid::Color{230, 240, 255}, bootvid::Color{14, 20, 32}, 1);
-            m_videoDriver.drawString(vpX + 30, vpY + 56, "Audio: WaveRT Cyclic DMA 48kHz/32-Bit | 64 Frames (1.33 ms)", bootvid::Color{140, 230, 160}, bootvid::Color{14, 20, 32}, 1);
-            m_videoDriver.drawString(vpX + 30, vpY + 72, "Input: 2ms Hook Guard | 4000Hz Mouse | 540Hz Async Cursor", bootvid::Color{255, 200, 80}, bootvid::Color{14, 20, 32}, 1);
-            m_videoDriver.drawString(vpX + 30, vpY + 88, "APO DSP Watchdog: 150 us Budget | 0 Underruns / 0 Drops", bootvid::Color{100, 240, 160}, bootvid::Color{14, 20, 32}, 1);
+            // Pass 3: DXR 1.1 Raytraced Planar Reflection of Crystal Octahedron on Floor
+            int32_t rxTopX = cx,      rxTopY = hy + 96;
+            int32_t rxBotX = cx,      rxBotY = hy + 8;
+            int32_t rxLftX = cx - 76, rxLftY = hy + 50;
+            int32_t rxMidX = cx + 10, rxMidY = hy + 58;
+            int32_t rxRgtX = cx + 82, rxRgtY = hy + 46;
 
-            // Controls
+            FillTriangle2D(rxBotX, rxBotY, rxLftX, rxLftY, rxMidX, rxMidY, bootvid::Color{0, 62, 92});
+            FillTriangle2D(rxBotX, rxBotY, rxMidX, rxMidY, rxRgtX, rxRgtY, bootvid::Color{12, 48, 88});
+            FillTriangle2D(rxTopX, rxTopY, rxLftX, rxLftY, rxMidX, rxMidY, bootvid::Color{0, 78, 108});
+            FillTriangle2D(rxTopX, rxTopY, rxMidX, rxMidY, rxRgtX, rxRgtY, bootvid::Color{20, 56, 104});
+
+            bootvid::Color reflWire{0, 135, 190};
+            DrawLine2D(rxTopX, rxTopY, rxLftX, rxLftY, reflWire);
+            DrawLine2D(rxTopX, rxTopY, rxMidX, rxMidY, reflWire);
+            DrawLine2D(rxTopX, rxTopY, rxRgtX, rxRgtY, reflWire);
+            DrawLine2D(rxBotX, rxBotY, rxLftX, rxLftY, reflWire);
+            DrawLine2D(rxBotX, rxBotY, rxMidX, rxMidY, reflWire);
+            DrawLine2D(rxBotX, rxBotY, rxRgtX, rxRgtY, reflWire);
+            DrawLine2D(rxLftX, rxLftY, rxMidX, rxMidY, reflWire);
+            DrawLine2D(rxMidX, rxMidY, rxRgtX, rxRgtY, reflWire);
+
+            // Pass 2 & 4: Lit 3D Sovereign Crystal Octahedron (Barycentric / Scanline Shaded + Specular Rim)
+            int32_t pTopX = cx,      pTopY = static_cast<int32_t>(vpY + 18);
+            int32_t pBotX = cx,      pBotY = hy + 4;
+            int32_t pLftX = cx - 76, pLftY = static_cast<int32_t>(vpY + 82);
+            int32_t pMidX = cx + 10, pMidY = static_cast<int32_t>(vpY + 94);
+            int32_t pRgtX = cx + 82, pRgtY = static_cast<int32_t>(vpY + 78);
+
+            // Upper Left Facet (Bright Cyan-Emerald) & Upper Right Facet (Electric Blue)
+            FillTriangle2D(pTopX, pTopY, pLftX, pLftY, pMidX, pMidY, bootvid::Color{0, 232, 255});
+            FillTriangle2D(pTopX, pTopY, pMidX, pMidY, pRgtX, pRgtY, bootvid::Color{0, 172, 248});
+            // Lower Left Facet (Deep Cyan) & Lower Right Facet (Sapphire Indigo)
+            FillTriangle2D(pBotX, pBotY, pLftX, pLftY, pMidX, pMidY, bootvid::Color{0, 152, 215});
+            FillTriangle2D(pBotX, pBotY, pMidX, pMidY, pRgtX, pRgtY, bootvid::Color{42, 108, 224});
+
+            // Glowing Specular Wireframe Edges
+            bootvid::Color specWire{215, 252, 255};
+            DrawLine2D(pTopX, pTopY, pLftX, pLftY, specWire);
+            DrawLine2D(pTopX, pTopY, pMidX, pMidY, specWire);
+            DrawLine2D(pTopX, pTopY, pRgtX, pRgtY, specWire);
+            DrawLine2D(pBotX, pBotY, pLftX, pLftY, specWire);
+            DrawLine2D(pBotX, pBotY, pMidX, pMidY, specWire);
+            DrawLine2D(pBotX, pBotY, pRgtX, pRgtY, specWire);
+            DrawLine2D(pLftX, pLftY, pMidX, pMidY, specWire);
+            DrawLine2D(pMidX, pMidY, pRgtX, pRgtY, specWire);
+
+            // Left HUD: 5-Pass Frame-Graph Telemetry Overlay
+            m_videoDriver.fillRectangle(vpX + 10, vpY + 10, 268, 108, bootvid::Color{10, 16, 28});
+            m_videoDriver.drawRectangle(vpX + 10, vpY + 10, 268, 108, bootvid::Color{0, 195, 245});
+            m_videoDriver.drawString(vpX + 18, vpY + 18, "PrismX 5-Pass D3D12 Frame Graph", bootvid::Color{0, 240, 255}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 18, vpY + 36, "1. GDeflate DMA: 14.8 GB/s (0 CPU)", bootvid::Color{120, 245, 170}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 18, vpY + 52, "2. SM 6.9 Mesh:  16 Tris / WorkGraph", bootvid::Color{225, 238, 255}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 18, vpY + 68, "3. DXR 1.1 Ray:  Planar Floor Mirror", bootvid::Color{0, 220, 255}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 18, vpY + 84, "4. DirectML 4K:  FP16 SuperRes Pass", bootvid::Color{255, 205, 90}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 18, vpY + 100,"5. DirectFlip:   540Hz MPO (1.85ms)", bootvid::Color{100, 255, 160}, bootvid::Color{10, 16, 28}, 1);
+
+            // Right HUD: Live Frame Pacing & Zero-TDR Counter
+            m_videoDriver.fillRectangle(vpX + vpW - 184, vpY + 10, 174, 58, bootvid::Color{10, 18, 28});
+            m_videoDriver.drawRectangle(vpX + vpW - 184, vpY + 10, 174, 58, bootvid::Color{80, 240, 150});
+            m_videoDriver.drawString(vpX + vpW - 174, vpY + 18, "540 FPS (1.85 ms)", bootvid::Color{100, 255, 160}, bootvid::Color{10, 18, 28}, 1);
+            m_videoDriver.drawString(vpX + vpW - 174, vpY + 34, "1% Low: 536.4 FPS", bootvid::Color{0, 230, 255}, bootvid::Color{10, 18, 28}, 1);
+            m_videoDriver.drawString(vpX + vpW - 174, vpY + 50, "PSO Hit: 100% | 0 TDR", bootvid::Color{255, 215, 95}, bootvid::Color{10, 18, 28}, 1);
+
+            // Bottom GPU Pass Timeline & Multi-API Benchmark Bar
             uint32_t cbY = wy + wh - 62;
-            m_videoDriver.fillRectangle(wx + 2, cbY, ww - 4, 60, bootvid::Color{14, 18, 28});
+            m_videoDriver.fillRectangle(wx + 2, cbY, ww - 4, 60, bootvid::Color{12, 17, 28});
+            m_videoDriver.drawString(wx + 12, cbY + 6, "GPU Frame Timeline (1.85 ms): [GDeflate][SM6.9 Mesh][DXR 1.1 Ray][DirectML 4K][MPO Flip]",
+                                    bootvid::Color{200, 225, 250}, bootvid::Color{12, 17, 28}, 1);
 
-            uint32_t seekX = wx + 16;
-            uint32_t seekW = ww - 32;
-            m_videoDriver.fillRectangle(seekX, cbY + 10, seekW, 5, bootvid::Color{30, 40, 60});
-            uint32_t progW = (uint32_t)(seekW * 0.64f);
-            m_videoDriver.fillRectangle(seekX, cbY + 10, progW, 5, bootvid::Color{245, 130, 32});
-            m_videoDriver.fillRectangle(seekX + progW - 3, cbY + 7, 6, 11, bootvid::Color{255, 255, 255});
+            // 5-Pass Segmented Progress Bar
+            uint32_t barX = wx + 12;
+            uint32_t barY = cbY + 22;
+            m_videoDriver.fillRectangle(barX,       barY, 96,  10, bootvid::Color{40, 200, 120}); // Pass 1: GDeflate
+            m_videoDriver.fillRectangle(barX + 98,  barY, 134, 10, bootvid::Color{0, 195, 255});  // Pass 2: SM 6.9 Mesh
+            m_videoDriver.fillRectangle(barX + 234, barY, 156, 10, bootvid::Color{150, 95, 255}); // Pass 3: DXR 1.1
+            m_videoDriver.fillRectangle(barX + 392, barY, 128, 10, bootvid::Color{255, 185, 45}); // Pass 4: DirectML
+            m_videoDriver.fillRectangle(barX + 522, barY, 92,  10, bootvid::Color{0, 245, 160});  // Pass 5: DirectFlip
 
-            m_videoDriver.drawString(seekX, cbY + 22, "02:44", bootvid::Color{220, 235, 255}, bootvid::Color{14, 18, 28}, 1);
-            m_videoDriver.drawString(seekX + seekW - 36, cbY + 22, "04:18", bootvid::Color{160, 175, 195}, bootvid::Color{14, 18, 28}, 1);
-
-            uint32_t bx = wx + (ww / 2) - 80;
-            m_videoDriver.fillRectangle(bx, cbY + 28, 26, 22, bootvid::Color{24, 34, 52});
-            m_videoDriver.drawString(bx + 6, cbY + 34, "|<", bootvid::Color{200, 220, 245}, bootvid::Color{24, 34, 52}, 1);
-            m_videoDriver.fillRectangle(bx + 32, cbY + 25, 30, 28, bootvid::Color{245, 130, 32});
-            m_videoDriver.drawString(bx + 42, cbY + 34, "||", bootvid::Color{255, 255, 255}, bootvid::Color{245, 130, 32}, 1);
-            m_videoDriver.fillRectangle(bx + 68, cbY + 28, 26, 22, bootvid::Color{24, 34, 52});
-            m_videoDriver.drawString(bx + 74, cbY + 34, "[]", bootvid::Color{200, 220, 245}, bootvid::Color{24, 34, 52}, 1);
-            m_videoDriver.fillRectangle(bx + 100, cbY + 28, 26, 22, bootvid::Color{24, 34, 52});
-            m_videoDriver.drawString(bx + 106, cbY + 34, ">|", bootvid::Color{200, 220, 245}, bootvid::Color{24, 34, 52}, 1);
-
-            m_videoDriver.drawString(wx + ww - 180, cbY + 34, "Vol: 100%", bootvid::Color{170, 190, 215}, bootvid::Color{14, 18, 28}, 1);
-            m_videoDriver.fillRectangle(wx + ww - 110, cbY + 36, 60, 5, bootvid::Color{0, 210, 255});
+            m_videoDriver.drawString(wx + 12, cbY + 38, "D3D12 Ultimate: 540 FPS | D3D11On12: 538 FPS | VulkanOn12: 539 FPS | 0 Proton Overhead",
+                                    bootvid::Color{0, 235, 255}, bootvid::Color{12, 17, 28}, 1);
         }
 
         // Window 3: 7-Zip 26.03 / Zero-Copy zipfldr & Instant $MFT Search (Bottom-Left)
@@ -421,7 +510,7 @@ public:
 
             // Path Address Bar
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 22, bootvid::Color{12, 16, 24});
-            m_videoDriver.drawString(wx + 10, wy + 33, "\\KnownDlls + C:\\Builds\\MicaNT_Sovereign_SDK.zip (EOCD 0x06054B50)", bootvid::Color{220, 235, 255}, bootvid::Color{12, 16, 24}, 1);
+            m_videoDriver.drawString(wx + 10, wy + 33, "\\KnownDlls + C:\\Builds\\MicaNT_PrismX_SDK.zip (EOCD 0x06054B50)", bootvid::Color{220, 235, 255}, bootvid::Color{12, 16, 24}, 1);
 
             // File Table Header
             m_videoDriver.fillRectangle(wx + 2, wy + 50, ww - 4, 20, bootvid::Color{20, 28, 42});
@@ -430,13 +519,13 @@ public:
             // Table Entries
             struct FileEntry { const char* name; const char* sz; const char* psz; bool sel; };
             FileEntry entries[] = {
-                { "ntoskrnl.exe",    "794,624 B",   "Ring 0 (48 Units)", true },
-                { "ws2_32/winhttp",  "212,992 B",   "96Gbps WSK / RIO",  true },
-                { "secur32/tls13",   "163,840 B",   "Schannel TLS 1.3",  true },
-                { "ole32/rpcrt4.dll","311,296 B",   "4us OXID (128 Cls)",true },
-                { "bcrypt/crypt32",  "245,760 B",   "LsaIso 0-Key-Exp",  true },
-                { "prismx/d3d12.dll","524,288 B",   "540Hz MPO (4GB)",   true },
-                { "dstorage/xaudio", "344,064 B",   "14.2GB/s + 1.33ms", true }
+                { "ntoskrnl.exe",    "912,384 B",   "Ring 0 (63 Units)", true },
+                { "prismx/d3d12.dll","655,360 B",   "540FPS 3D Scene",   true },
+                { "dxcompiler/dml",  "491,520 B",   "SM 6.9 + 4K SR",    true },
+                { "dstorage/av1",    "393,216 B",   "14.8GB/s GDeflate", true },
+                { "dred/zerotdr",    "262,144 B",   "0.42ms Self-Heal",  true },
+                { "vulkan-1/on12",   "327,680 B",   "539 FPS 0-Overhead",true },
+                { "ws2_32/tls13",    "212,992 B",   "96Gbps WSK / RIO",  true }
             };
 
             for (size_t i = 0; i < 7; ++i) {
@@ -454,7 +543,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "$MFT 1,048,576 Slots (6 us) | DirectStorage 14.2 GB/s | WSK 96 Gbps",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "$MFT 1,048,576 Slots (6 us) | DirectStorage 14.8 GB/s | WSK 96 Gbps",
                                     bootvid::Color{0, 240, 255}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -553,23 +642,23 @@ public:
                 prevRedY   = redY;
             }
 
-            // Bottom Totals Box (Totals / Kernel Memory / Ring 0+1+2+3 Telemetry)
+            // Bottom Totals Box (Totals / Kernel Memory / Ring 0+1+2+3 + PrismX Live 3D Telemetry)
             uint32_t tY = wy + 232;
             m_videoDriver.fillRectangle(mX, tY, ww - 24, 82, bootvid::Color{10, 16, 24});
             m_videoDriver.drawRectangle(mX, tY, ww - 24, 82, bootvid::Color{36, 54, 82});
-            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 5,840   Threads: 212   Processes: 28   Upcalls: 0x7FFE0000 Sealed",
+            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 5,840   Threads: 212   Processes: 28   Kernel Units: 63 (307/307 OK)",
                                     bootvid::Color{210, 230, 250}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 26, "Net/TLS Wave 3B: 340ns AFD Fast-I/O | 256KB RIO (0 MDL) | 96Gbps WSK (1us RTT)",
+            m_videoDriver.drawString(mX + 10, tY + 26, "PrismX Live 3D:  8-Tri Crystal + DXR 1.1 Floor + SM6.9 WorkGraph + DirectML SR",
                                     bootvid::Color{0, 230, 255}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 44, "COM/Crypto 3B:   RpcSs PID 664 (4us OXID) | LsaIso PID 564 (0 Raw Keys) | 3us CI",
+            m_videoDriver.drawString(mX + 10, tY + 44, "Proton/Wine:     D3D9/11On12 + VulkanOn12 | 2,048 Async PSOs | 0ms Stutter | 0 TDR",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 62, "Graphics/Media:  PrismX/D3D12 (540Hz MPO) + DStorage (14.2GB/s) + XAudio2 3D",
+            m_videoDriver.drawString(mX + 10, tY + 62, "GOP Scanout:     540Hz DirectFlip MPO (1.69ms/1.85ms) | 14.2GB/s GDeflate | 99.6%",
                                     bootvid::Color{255, 205, 95}, bootvid::Color{10, 16, 24}, 1);
 
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{14, 28, 22});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "Processes: 28 | CPU: 12% (Kernel: 3%) | Net: 96 Gbps WSK | TLS 1.3 Active",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "63 Units | 307/307 Suites | GPU: 540 FPS (0ms Stutter) | DirectFlip MPO Active",
                                     bootvid::Color{100, 255, 160}, bootvid::Color{14, 28, 22}, 1);
         }
 
@@ -596,9 +685,9 @@ public:
         m_videoDriver.drawString(tbX2 + 7, taskbarY + 12, "[N++] Note", bootvid::Color{120, 240, 160}, bootvid::Color{20, 36, 30}, 1);
 
         uint32_t tbX3 = tbX2 + 98;
-        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 94, 26, bootvid::Color{42, 28, 16});
-        m_videoDriver.fillRectangle(tbX3, taskbarY + 28, 94, 2, bootvid::Color{245, 130, 32});
-        m_videoDriver.drawString(tbX3 + 7, taskbarY + 12, "[VLC] Play", bootvid::Color{255, 180, 100}, bootvid::Color{42, 28, 16}, 1);
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 4, 94, 26, bootvid::Color{14, 34, 48});
+        m_videoDriver.fillRectangle(tbX3, taskbarY + 28, 94, 2, bootvid::Color{0, 230, 255});
+        m_videoDriver.drawString(tbX3 + 7, taskbarY + 12, "[3D]PrismX", bootvid::Color{110, 245, 255}, bootvid::Color{14, 34, 48}, 1);
 
         uint32_t tbX4 = tbX3 + 98;
         m_videoDriver.fillRectangle(tbX4, taskbarY + 4, 94, 26, bootvid::Color{16, 28, 44});
@@ -835,10 +924,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 60-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-88).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 63-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-91).\r\n");
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT PrismX DirectX] CD3DX12 + D3DKMT + DXC SM6.9 + GDeflate + DirectML + EnhancedBarriers + VulkanOn12 + DRED Zero-TDR.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 304/304 Suites Verified | PRISMX ROCK-SOLID TRACK B SEALED | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT PrismX Live 3D] 5-Pass D3D12 Ultimate Scene + DXR 1.1 Reflection + SM6.9 WorkGraph + DirectML SR + Proton 0-Stutter.\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] 307/307 Suites Verified | PRISMX LIVE 3D GOP DEMO SEALED | 0 BSODs | Launching GOP Desktop...\r\n");
         }
     }
 

@@ -86,7 +86,10 @@ try {
         @{ Src = "kernel/io/prismx_directml_superres.cpp";         Obj = "io_prismx_directml_superres.o" },
         @{ Src = "kernel/io/prismx_enhanced_barriers_workgraphs.cpp"; Obj = "io_prismx_enhanced_barriers_workgraphs.o" },
         @{ Src = "kernel/io/prismx_vulkanon12_video_av1.cpp";         Obj = "io_prismx_vulkanon12_video_av1.o" },
-        @{ Src = "kernel/io/prismx_dred_shadercache_zerotdr.cpp";     Obj = "io_prismx_dred_shadercache_zerotdr.o" }
+        @{ Src = "kernel/io/prismx_dred_shadercache_zerotdr.cpp";     Obj = "io_prismx_dred_shadercache_zerotdr.o" },
+        @{ Src = "kernel/io/prismx_live_3d_scene_framegraph.cpp";     Obj = "io_prismx_live_3d_scene_framegraph.o" },
+        @{ Src = "kernel/io/prismx_gop_scanout_frame_pacing.cpp";     Obj = "io_prismx_gop_scanout_frame_pacing.o" },
+        @{ Src = "kernel/io/prismx_game_benchmark_proton_seal.cpp";   Obj = "io_prismx_game_benchmark_proton_seal.o" }
     )
 
     $staleUnits = @()

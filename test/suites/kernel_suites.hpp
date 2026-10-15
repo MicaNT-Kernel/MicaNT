@@ -17794,3 +17794,97 @@ static void Test_Horizon88_PrismX_DRED12_PersistentShaderCache_And_Ring1_ZeroTdr
     std::cout << "[TEST] Suite 304: Horizon 88 - Sovereign PrismX + DRED 1.2, Persistent ShaderCache & Ring 1 Zero-TDR Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 305: Horizon 89 (Kernel Unit #61) - Sovereign PrismX Live 3D Scene
+// Frame-Graph (5-Pass D3D12 Ultimate: GDeflate -> SM 6.9 WorkGraph/Mesh -> DXR 1.1 -> DirectML -> DirectFlip)
+// ============================================================================
+static void Test_Horizon89_PrismX_Live3DScene_MeshShader_And_DXR11_PlanarReflection_FrameGraph() {
+    std::cout << "\n[TEST] Suite 305: Horizon 89 - Sovereign PrismX Live 3D Scene 5-Pass Frame-Graph & DXR 1.1 Reflection...\n";
+
+    micant::um::prismx_live_scene::InitializePrismXLive3DSceneFrameGraphExports();
+    const auto& t = micant::um::prismx_live_scene::PrismXLive3DSceneFrameGraphEngine::get().getTelemetry();
+
+    std::cout << "  [Horizon 89 5-Pass D3D12 Ultimate Frame-Graph & 3D Crystal Octahedron Rasterizer]\n"
+              << "    Viewport=" << t.viewportWidth << "x" << t.viewportHeight
+              << " | AmplifiedTris=" << t.meshAmplifiedTriangles
+              << " | VisibleTris=" << t.visibleRasterizedTriangles
+              << " | LitCrystalPx=" << t.litCrystalPixels
+              << " | ReflectionPx=" << t.planarReflectionPixels
+              << " | GridPx=" << t.horizonGridPixels << "\n";
+    TEST_ASSERT(t.initialized &&
+                t.pass1GDeflateStreamOk &&
+                t.pass2Sm69WorkGraphMeshOk &&
+                t.pass3Dxr11RayQueryReflectionOk &&
+                t.pass4DirectMlSuperResOk &&
+                t.pass5EnhancedBarrierDirectFlipOk &&
+                t.meshAmplifiedTriangles == 16u &&
+                t.reflectionRaysHit == 8u &&
+                t.litCrystalPixels > 200u &&
+                t.planarReflectionPixels > 50u &&
+                t.horizonGridPixels > 100u &&
+                t.centerCrystalPixelBGRA != 0u,
+                "5-Pass D3D12 Ultimate Frame Graph must rasterize 3D Crystal Octahedron, DXR planar reflection, and perspective grid cleanly");
+
+    std::cout << "[TEST] Suite 305: Horizon 89 - Sovereign PrismX Live 3D Scene 5-Pass Frame-Graph & DXR 1.1 Reflection PASSED.\n";
+}
+
+// ============================================================================
+// Suite 306: Horizon 90 (Kernel Unit #62) - Sovereign PrismX WDDM 3.2 GOP /
+// Primary Surface Zero-Copy Scanout & 540Hz VRR Frame-Pacing Engine
+// ============================================================================
+static void Test_Horizon90_PrismX_Wddm32_GopZeroCopyScanout_And_540Hz_FramePacing_Engine() {
+    std::cout << "\n[TEST] Suite 306: Horizon 90 - Sovereign PrismX WDDM 3.2 GOP Zero-Copy Scanout & 540Hz Frame Pacing...\n";
+
+    micant::um::prismx_gop_scanout::InitializePrismXGopScanoutFramePacingExports();
+    const auto& t = micant::um::prismx_gop_scanout::PrismXGopScanoutFramePacingEngine::get().getTelemetry();
+
+    std::cout << "  [Horizon 90 UEFI GOP / Ring 1 DxgkRNL MPO Plane 0 Zero-Copy Scanout & 540Hz Pacing]\n"
+              << "    Scanout=" << t.scanoutWidth << "x" << t.scanoutHeight << " @ " << t.refreshRateHz << "Hz"
+              << " | Frames=" << t.totalFramesPresented
+              << " | Dropped=" << t.droppedFrames
+              << " | AvgFrame=" << t.averageFrameTimeMs << " ms"
+              << " | 1%Low=" << t.onePercentLowFps << " FPS\n";
+    TEST_ASSERT(t.initialized &&
+                t.gopLinearFramebufferMapped &&
+                t.directFlipMpoPlane0Engaged &&
+                t.vrrTearingAllowActive &&
+                t.refreshRateHz == 540u &&
+                t.totalFramesPresented >= 4ULL &&
+                t.droppedFrames == 0ULL &&
+                t.sampledScanoutPixelBGRA != 0u,
+                "WDDM 3.2 GOP Zero-Copy Scanout must sustain 540Hz DirectFlip MPO presentation with 0 dropped frames");
+
+    std::cout << "[TEST] Suite 306: Horizon 90 - Sovereign PrismX WDDM 3.2 GOP Zero-Copy Scanout & 540Hz Frame Pacing PASSED.\n";
+}
+
+// ============================================================================
+// Suite 307: Horizon 91 (Kernel Unit #63) - Sovereign PrismX Multi-API Game
+// Engine Benchmark & WineHQ/Proton Zero-Overhead Seal
+// ============================================================================
+static void Test_Horizon91_PrismX_MultiApi_GameEngine_Benchmark_And_WineProton_ZeroOverhead_Seal() {
+    std::cout << "\n[TEST] Suite 307: Horizon 91 - Sovereign PrismX Multi-API Game Benchmark & Wine/Proton Zero-Overhead Seal...\n";
+
+    micant::um::prismx_game_benchmark::InitializePrismXGameBenchmarkExports();
+    const auto& r = micant::um::prismx_game_benchmark::PrismXGameBenchmarkEngine::get().getReport();
+
+    std::cout << "  [Horizon 91 Multi-API Game Benchmark (D3D12 Ultimate / D3D11On12 / VulkanOn12) Over Ring 0 dxgkrnl.sys]\n"
+              << "    D3D12 Ultimate=" << r.d3d12UltimateAvgFps << " FPS"
+              << " | D3D11On12=" << r.d3d11On12AvgFps << " FPS"
+              << " | VulkanOn12=" << r.vulkanOn12AvgFps << " FPS"
+              << " | D3DKMT Thunk=" << r.ring0D3dKmtDirectThunkLatencyNs << " ns"
+              << " | PSO Hit=" << r.psoDiskCacheHitRatePercent << "%\n";
+    TEST_ASSERT(r.initialized &&
+                r.d3d12UltimateWorkloadPassed &&
+                r.d3d11On12LegacyWorkloadPassed &&
+                r.vulkanOn12WorkloadPassed &&
+                r.zeroWineProtonTranslationOverhead &&
+                r.zeroPsoShaderCompilationStutter &&
+                r.d3d12UltimateAvgFps == 540u &&
+                r.psoDiskCacheHitRatePercent == 100u &&
+                r.totalBenchmarkFramesVerified >= 6u,
+                "Multi-API Game Engine Benchmark must verify D3D12 Ultimate, D3D11On12, and VulkanOn12 with 0 translation overhead and 100% PSO cache hit rate");
+
+    std::cout << "[TEST] Suite 307: Horizon 91 - Sovereign PrismX Multi-API Game Benchmark & Wine/Proton Zero-Overhead Seal PASSED.\n";
+}
+
+

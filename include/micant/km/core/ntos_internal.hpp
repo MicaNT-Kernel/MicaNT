@@ -189,5 +189,15 @@ void PrismXVulkanOn12VideoAv1InitializeExecutiveSubsystem() noexcept;
 // Sovereign PrismX + Microsoft DeviceRemovedExtendedData (DRED 1.2), Persistent PSO Cache & Ring 1 Zero-TDR GPU Guard (kernel/io/prismx_dred_shadercache_zerotdr.cpp)
 void PrismXDredShaderCacheZeroTdrInitializeExecutiveSubsystem() noexcept;
 
+// Sovereign PrismX Live 3D Mesh Shader & DXR 1.1 Inline Raytracing Frame Graph (kernel/io/prismx_live_3d_scene_framegraph.cpp)
+void PrismXLive3DSceneFrameGraphInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX WDDM 3.2 GOP / Primary Surface Zero-Copy Scanout & 540Hz Frame Pacing Engine (kernel/io/prismx_gop_scanout_frame_pacing.cpp)
+void PrismXGopScanoutFramePacingInitializeExecutiveSubsystem() noexcept;
+
+// Sovereign PrismX Game Engine Benchmark & Wine/Proton DX12/VulkanOn12 Zero-Overhead Seal (kernel/io/prismx_game_benchmark_proton_seal.cpp)
+void PrismXGameBenchmarkProtonSealInitializeExecutiveSubsystem() noexcept;
+
 } // namespace micant::sys::internal
+
 
