@@ -1034,7 +1034,7 @@ public:
                 "    return Phase1Init(lpb); // 334 Suites OK",
                 "}",
                 "// 24 WinNT Core/CRT + 20 PrismX DirectX DLLs",
-                "// Live Interactive Bare-Metal Silicon Testing",
+                "// Live Bare-Metal Silicon | Press [ESC] to Reboot",
                 "// PE32+ SEH Unwinder + UCRT Runtime + 540Hz Flip"
             };
 
@@ -2325,11 +2325,19 @@ public:
                 uefi::EfiInputKey key{};
                 while (input->readKeyStroke(input, &key) == uefi::EFI_SUCCESS) {
                     interactiveBonus = 25; // CPU load spikes dynamically on user interaction!
+                    if (key.scanCode == 0x17 || key.unicodeChar == 0x1B) { // Escape key
+                        UartSerial::print("[MicaNT Keyboard] ESC pressed! Hardware reset requested...\r\n");
+                        outb(0xCF9, 0x06);
+                    }
                     if (key.unicodeChar == 0x08) { // Backspace
                         if (typedLen > 0) {
                             userTypedText[--typedLen] = '\0';
                         }
                     } else if (key.unicodeChar == 0x0D) { // Enter / Return
+                        if (typedLen >= 6 && userTypedText[0] == 'r' && userTypedText[1] == 'e' && userTypedText[2] == 'b' && userTypedText[3] == 'o' && userTypedText[4] == 'o' && userTypedText[5] == 't') {
+                            UartSerial::print("[MicaNT Keyboard] 'reboot' command detected! Resetting CPU...\r\n");
+                            outb(0xCF9, 0x06);
+                        }
                         typedLen = 0;
                         userTypedText[0] = '\0';
                     } else if (key.unicodeChar >= 0x20 && key.unicodeChar <= 0x7E) {
@@ -2572,9 +2580,17 @@ public:
                         ps2Shift = false;
                     } else if (!(data & 0x80)) {
                         interactiveBonus = 25;
+                        if (data == 0x01) { // PS/2 ESC make code
+                            UartSerial::print("[MicaNT PS/2] ESC pressed! Hardware reset requested...\r\n");
+                            outb(0xCF9, 0x06);
+                        }
                         if (data == 0x0E) { // Backspace
                             if (typedLen > 0) userTypedText[--typedLen] = '\0';
                         } else if (data == 0x1C) { // Enter
+                            if (typedLen >= 6 && userTypedText[0] == 'r' && userTypedText[1] == 'e' && userTypedText[2] == 'b' && userTypedText[3] == 'o' && userTypedText[4] == 'o' && userTypedText[5] == 't') {
+                                UartSerial::print("[MicaNT PS/2] 'reboot' command detected! Resetting CPU...\r\n");
+                                outb(0xCF9, 0x06);
+                            }
                             typedLen = 0; userTypedText[0] = '\0';
                         } else if (data < 128) {
                             char c = ps2Shift ? PS2_SET1_UPPER[data] : PS2_SET1_LOWER[data];
