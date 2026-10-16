@@ -83,8 +83,14 @@ echo   MicaNT Cutler Edition: 90 Kernel Units, 44 System32 DLLs (334 Suites OK)
 echo   Boot Server: barrer.net
 echo ============================================================================
 
-echo [MicaNT] Chainloading UEFI PE32+ Bootloader from http://barrer.net/ipxe/BOOTX64.EFI...
-chain --autofree http://barrer.net/ipxe/BOOTX64.EFI || chain --autofree http://40.160.53.129/ipxe/BOOTX64.EFI || goto boot_err
+echo [1/2] Ensuring network routes for OVH bare-metal...
+set net0/ip 147.135.1.229
+set net0/netmask 255.255.255.0
+set net0/gateway 147.135.1.254
+set dns 8.8.8.8
+
+echo [2/2] Chainloading latest MicaNT UEFI Bootloader...
+chain http://40.160.53.129/ipxe/BOOTX64.EFI || chain http://barrer.net/ipxe/BOOTX64.EFI || goto boot_err
 
 :boot_err
 echo [ERROR] Failed to chainload BOOTX64.EFI from barrer.net.
