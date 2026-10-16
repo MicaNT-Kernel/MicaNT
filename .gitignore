@@ -27,3 +27,5 @@ secrets*
 server_config*
 *.local.*
 scratch/
+telemetry/*.png
+telemetry/*.jsonl
