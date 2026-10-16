@@ -2326,7 +2326,10 @@ public:
                 while (input->readKeyStroke(input, &key) == uefi::EFI_SUCCESS) {
                     interactiveBonus = 25; // CPU load spikes dynamically on user interaction!
                     if (key.scanCode == 0x17 || key.unicodeChar == 0x1B) { // Escape key
-                        UartSerial::print("[MicaNT Keyboard] ESC pressed! Hardware reset requested...\r\n");
+                        UartSerial::print("[MicaNT Keyboard] ESC pressed! Clean UEFI firmware reset...\r\n");
+                        if (m_systemTable && m_systemTable->runtimeServices && m_systemTable->runtimeServices->resetSystem) {
+                            m_systemTable->runtimeServices->resetSystem(0, uefi::EFI_SUCCESS, 0, nullptr);
+                        }
                         outb(0xCF9, 0x06);
                     }
                     if (key.unicodeChar == 0x08) { // Backspace
@@ -2335,7 +2338,10 @@ public:
                         }
                     } else if (key.unicodeChar == 0x0D) { // Enter / Return
                         if (typedLen >= 6 && userTypedText[0] == 'r' && userTypedText[1] == 'e' && userTypedText[2] == 'b' && userTypedText[3] == 'o' && userTypedText[4] == 'o' && userTypedText[5] == 't') {
-                            UartSerial::print("[MicaNT Keyboard] 'reboot' command detected! Resetting CPU...\r\n");
+                            UartSerial::print("[MicaNT Keyboard] 'reboot' command detected! Clean UEFI reset...\r\n");
+                            if (m_systemTable && m_systemTable->runtimeServices && m_systemTable->runtimeServices->resetSystem) {
+                                m_systemTable->runtimeServices->resetSystem(0, uefi::EFI_SUCCESS, 0, nullptr);
+                            }
                             outb(0xCF9, 0x06);
                         }
                         typedLen = 0;
@@ -2440,8 +2446,11 @@ public:
                             interactiveBonus = 70;
                             UartSerial::print("[MicaNT COM1] Silicon workload stressed (+70% load spike)\r\n");
                         } else if (serialCmdBuf[0] == 'r' && serialCmdBuf[1] == 'e' && serialCmdBuf[2] == 'b' && serialCmdBuf[3] == 'o' && serialCmdBuf[4] == 'o' && serialCmdBuf[5] == 't') {
-                            UartSerial::print("[MicaNT COM1] Hardware reset requested! Resetting CPU...\r\n");
-                            outb(0xCF9, 0x06); // Standard PCI hard reset
+                            UartSerial::print("[MicaNT COM1] Hardware reset requested! Clean UEFI reset...\r\n");
+                            if (m_systemTable && m_systemTable->runtimeServices && m_systemTable->runtimeServices->resetSystem) {
+                                m_systemTable->runtimeServices->resetSystem(0, uefi::EFI_SUCCESS, 0, nullptr);
+                            }
+                            outb(0xCF9, 0x06); // Standard PCI hard reset fallback
                         } else {
                             UartSerial::print("[MicaNT COM1] Unknown command. Available: 'ping', 'status', 'devices'/'hw', 'type <msg>', 'mouse <x> <y>', 'stress', 'reboot'\r\n");
                         }
