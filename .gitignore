@@ -24,4 +24,6 @@ scripts/deploy_*.sh
 *.key
 credentials*
 secrets*
+server_config*
+*.local.*
 scratch/

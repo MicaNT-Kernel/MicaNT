@@ -3,12 +3,15 @@ import sys
 import os
 import paramiko
 
-HOST = "147.135.1.229"
-PORT = 22
-USER = "root"
-PASS = os.environ.get("RESCUE_PASS", "6rpPo9J3YDuRbnpkg")
+HOST = os.environ.get("MICANT_SERVER_HOST", "")
+PORT = int(os.environ.get("MICANT_SERVER_PORT", "22"))
+USER = os.environ.get("MICANT_SERVER_USER", "root")
+PASS = os.environ.get("MICANT_SERVER_PASS", "")
 
 def run_remote(cmd):
+    if not HOST:
+        print("[ERROR] MICANT_SERVER_HOST environment variable not set.", file=sys.stderr)
+        return 1
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:

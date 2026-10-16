@@ -2,7 +2,7 @@
 """
 MicaNT Remote Testing & Telemetry Harness.
 Listens for live bare-metal silicon beacons on UDP port 9999,
-monitors IIS access logs for netboot/telemetry HTTP hits from 147.135.1.229,
+monitors IIS access logs for netboot/telemetry HTTP hits,
 and provides remote control injection (mouse, keyboard, commands).
 """
 import sys
@@ -12,7 +12,7 @@ import json
 import time
 import threading
 
-SERVER_IP = "147.135.1.229"
+SERVER_IP = os.environ.get("MICANT_SERVER_IP", "")
 BIND_IP = "0.0.0.0"
 UDP_PORT = 9999
 IIS_LOG_DIR = r"C:\inetpub\logs\LogFiles\W3SVC1"
