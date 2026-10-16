@@ -510,7 +510,7 @@ public:
 
             // Path Address Bar
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 22, bootvid::Color{12, 16, 24});
-            m_videoDriver.drawString(wx + 10, wy + 33, "\\KnownDlls + C:\\Windows\\System32\\*.dll (24 PE32+ DLLs Verified)", bootvid::Color{220, 235, 255}, bootvid::Color{12, 16, 24}, 1);
+            m_videoDriver.drawString(wx + 10, wy + 33, "\\KnownDlls + C:\\Windows\\System32\\*.dll (44 PE32+ DLLs Verified)", bootvid::Color{220, 235, 255}, bootvid::Color{12, 16, 24}, 1);
 
             // File Table Header
             m_videoDriver.fillRectangle(wx + 2, wy + 50, ww - 4, 20, bootvid::Color{20, 28, 42});
@@ -519,10 +519,10 @@ public:
             // Table Entries
             struct FileEntry { const char* name; const char* sz; const char* psz; bool sel; };
             FileEntry entries[] = {
-                { "ntoskrnl.exe",    "983,040 B",   "Ring 0 (84 Units)", true },
+                { "ntoskrnl.exe",    "983,040 B",   "Ring 0 (90 Units)", true },
                 { "kernel32/advapi", "172,544 B",   "WinBase PE32+ ABI", true },
                 { "user32/gdi32/imm","222,720 B",   "HWND/8000Hz Input", true },
-                { "ole32/dwm/winmm", "212,480 B",   "COM/540Hz DirectFlip",true },
+                { "ucrt/vcruntime",  "210,432 B",   "UCRT/MSVC C++ ABI", true },
                 { "d3d12/d3d11/d3d9","358,400 B",   "PrismX DirectX 12", true },
                 { "mfplat/mfreadwrt","200,192 B",   "Media Foundation",  true },
                 { "dxcore/vk1/gl32", "222,208 B",   "DXCore+VK1.3+GL4.6",true }
@@ -543,7 +543,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "40 System32 PE32+ DLLs (20 WinNT + 20 PrismX) | DirectStorage 14.8 GB/s",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "44 System32 PE32+ DLLs (24 WinNT + 20 PrismX) | DirectStorage 14.8 GB/s",
                                     bootvid::Color{0, 240, 255}, bootvid::Color{16, 22, 34}, 1);
         }
 
