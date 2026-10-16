@@ -84,7 +84,7 @@ echo   Boot Server: barrer.net
 echo ============================================================================
 
 echo [MicaNT] Chainloading latest MicaNT UEFI Bootloader...
-chain --autofree http://40.160.53.129/ipxe/BOOTX64.EFI || chain --autofree http://barrer.net/ipxe/BOOTX64.EFI || goto boot_err
+chain http://barrer.net/ipxe/BOOTX64.EFI || chain http://40.160.53.129/ipxe/BOOTX64.EFI || goto boot_err
 
 :boot_err
 echo [ERROR] Failed to chainload BOOTX64.EFI from barrer.net.
