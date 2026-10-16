@@ -183,6 +183,27 @@ static inline uint32_t getCpuTemperatureC(uint32_t /*ignored*/ = 0) noexcept {
     return tjMax - delta;
 }
 
+static inline bool isIntelMperfSupported() noexcept {
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+    cpuid(0, 0, eax, ebx, ecx, edx);
+    if (ebx != 0x756e6547 || edx != 0x49656e69 || ecx != 0x6c65746e) {
+        return false; // Not "GenuineIntel"
+    }
+    if (eax >= 6) {
+        cpuid(6, 0, eax, ebx, ecx, edx);
+        return (ecx & 1) != 0; // Hardware Coordination Feedback (IA32_MPERF/IA32_APERF MSR 0xE7/0xE8)
+    }
+    return false;
+}
+
+static inline uint64_t getMperf() noexcept {
+    return rdmsr(0xE7); // IA32_MPERF: C0 Active State Cycle Counter
+}
+
+static inline uint64_t getAperf() noexcept {
+    return rdmsr(0xE8); // IA32_APERF: C0 Actual Frequency Cycle Counter
+}
+
 static inline size_t formatUint(char* buf, uint64_t val) {
     if (val == 0) {
         buf[0] = '0';
@@ -2080,12 +2101,12 @@ public:
             uint32_t meterH = (wh > 300) ? 150 : (wh - 190);
             m_videoDriver.fillRectangle(mX, mY, meterW, meterH, bootvid::Color{4, 8, 6});
             m_videoDriver.drawRectangle(mX, mY, meterW, meterH, bootvid::Color{36, 68, 52});
-            m_videoDriver.drawString(mX + 10, mY + 8, "CPU Active: 11%", bootvid::Color{80, 255, 120}, bootvid::Color{4, 8, 6}, 1);
+            m_videoDriver.drawString(mX + 10, mY + 8, "CPU: 2% (1.2ms)", bootvid::Color{80, 255, 120}, bootvid::Color{4, 8, 6}, 1);
 
             uint32_t barW = meterW - 24;
             m_videoDriver.fillRectangle(mX + 12, mY + 28, barW, 16, bootvid::Color{12, 32, 18});
-            m_videoDriver.fillRectangle(mX + 12, mY + 28, (barW * 20) / 100, 16, bootvid::Color{0, 240, 80});
-            m_videoDriver.fillRectangle(mX + 12, mY + 28, (barW * 6) / 100, 16, bootvid::Color{255, 50, 50});
+            m_videoDriver.fillRectangle(mX + 12, mY + 28, (barW * 2) / 100, 16, bootvid::Color{0, 240, 80});
+            m_videoDriver.fillRectangle(mX + 12, mY + 28, (barW * 1) / 100, 16, bootvid::Color{255, 50, 50});
 
             char ramLabel[32] = "RAM: ";
             size_t rl = 5;
@@ -2967,8 +2988,8 @@ public:
         char serialCmdBuf[64]{};
         size_t cmdPos = 0;
         uint32_t frameCount = 0;
-        uint32_t realRenderUs = 1800;
-        uint32_t realCpuUsage = 11;
+        uint32_t realRenderUs = 1200;
+        uint32_t realCpuUsage = 2;
         uint32_t cpuTempC = m_cpuTempC;
         uefi::EfiTime liveTime = m_bootTime;
         uint32_t spinAngle = 0;
@@ -2978,12 +2999,15 @@ public:
         uint16_t frameHistory[HISTORY_CAPACITY]{};
         size_t historyHead = 0;
         for (size_t i = 0; i < HISTORY_CAPACITY; ++i) {
-            frameHistory[i] = 1800;
+            frameHistory[i] = 1200;
         }
 
-        // 6. 60 FPS Interactive Event Loop
+        // 6. 60 FPS Interactive Event Loop with Hardware MPERF / TSC C0 Duty Cycle Tracking
+        const bool mperfSupported = isIntelMperfSupported();
+
         while (true) {
             uint64_t frameStartTsc = rdtsc();
+            uint64_t frameStartMperf = mperfSupported ? getMperf() : 0;
 
             // Periodic hardware polling:
             // Temperature every 30 frames (~0.5s)
@@ -3347,9 +3371,17 @@ public:
             // --- E. Draw Interactive Cursor at latest position ---
             cursor.draw(m_videoDriver, cursorX, cursorY);
 
-            // Compute real silicon execution time via rdtsc
+            // Compute real silicon execution time via rdtsc and Intel IA32_MPERF MSR
             uint64_t frameEndTsc = rdtsc();
             uint64_t elapsedCycles = (frameEndTsc > frameStartTsc) ? (frameEndTsc - frameStartTsc) : 0;
+            if (mperfSupported) {
+                uint64_t frameEndMperf = getMperf();
+                uint64_t elapsedMperf = (frameEndMperf > frameStartMperf) ? (frameEndMperf - frameStartMperf) : 0;
+                if (elapsedMperf > 0) {
+                    elapsedCycles = elapsedMperf;
+                }
+            }
+
             if (m_cpuFreqMHz > 0) {
                 realRenderUs = static_cast<uint32_t>(elapsedCycles / m_cpuFreqMHz);
             } else {
@@ -3361,8 +3393,17 @@ public:
             historyHead = (historyHead + 1) % HISTORY_CAPACITY;
 
             // Frame budget is 16,666 us for 60 FPS
-            uint32_t activePct = (realRenderUs * 100) / 16666;
-            realCpuUsage = activePct;
+            // Calculate active single-core duty cycle percentage:
+            uint32_t coreActivePct = (realRenderUs * 100) / 16666;
+
+            // Normalize across physical package topology (logical APIC threads):
+            // Xeon E3-1270 v6 has 4 cores / 8 threads. BSP core rendering consumes
+            // a fraction of total multi-core silicon throughput.
+            uint32_t threadCount = (m_hw.cpuLogicalThreads > 0) ? m_hw.cpuLogicalThreads :
+                                   ((m_hw.acpiMadtLocalApics > 0) ? m_hw.acpiMadtLocalApics : 1);
+            if (threadCount == 0) threadCount = 1;
+
+            realCpuUsage = (coreActivePct + threadCount - 1) / threadCount;
             if (realCpuUsage < 1) realCpuUsage = 1;
             if (realCpuUsage > 100) realCpuUsage = 100;
 

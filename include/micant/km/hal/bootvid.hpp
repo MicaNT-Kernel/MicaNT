@@ -611,10 +611,19 @@ public:
         if (!m_framebuffer || x >= m_width || y >= m_height) return;
         uint32_t xEnd = std::min(x + width, m_width);
         uint32_t yEnd = std::min(y + height, m_height);
+        if (xEnd <= x || yEnd <= y) return;
 
-        for (uint32_t cy = y; cy < yEnd; ++cy) {
-            for (uint32_t cx = x; cx < xEnd; ++cx) {
-                putPixel(cx, cy, color);
+        if (color.a == 255) {
+            uint32_t val = (m_pixelFormat == 0) ? color.toRgba32() : color.toBgra32();
+            uint32_t count = xEnd - x;
+            for (uint32_t cy = y; cy < yEnd; ++cy) {
+                std::fill_n(&m_framebuffer[cy * m_pixelsPerScanLine + x], count, val);
+            }
+        } else if (color.a > 0) {
+            for (uint32_t cy = y; cy < yEnd; ++cy) {
+                for (uint32_t cx = x; cx < xEnd; ++cx) {
+                    putPixel(cx, cy, color);
+                }
             }
         }
     }
