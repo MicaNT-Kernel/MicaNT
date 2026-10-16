@@ -42,6 +42,10 @@ jobs:
           }
 
           Write-Host "[CI] Compiling 24 WinNT Core/CRT System32 PE32+ Standalone DLLs..."
+          $isMsvc = (clang++ -v 2>&1 | Select-String "Target:.*msvc") -ne $null
+          $forceFlag = if ($isMsvc) { "-Wl,/FORCE:MULTIPLE" } else { "-Wl,--allow-multiple-definition" }
+          Write-Host "[CI] Linker target is MSVC=$isMsvc, using force flag: $forceFlag"
+
           $sys32Dlls = @(
               @{ Name = "kernel32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_KERNEL32_DLL" },
               @{ Name = "advapi32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_ADVAPI32_DLL" },
@@ -72,7 +76,7 @@ jobs:
               $dllPath = "bin/system32/$($dll.Name)"
               $extraArgs = @()
               if ($dll.DefFile) { $extraArgs += $dll.DefFile }
-              clang++ -std=c++23 -O2 -Iinclude -shared "-Wl,--allow-multiple-definition" "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
+              clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 

@@ -172,6 +172,8 @@ try {
         @{ Name = "vcruntime140_1.dll"; Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";             Def = "BUILD_SYSTEM32_VCRUNTIME140_1_DLL" },
         @{ Name = "msvcp140.dll";       Src = "kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp"; Def = "BUILD_SYSTEM32_MSVCP140_DLL" }
     )
+    $isMsvc = (clang++ -v 2>&1 | Select-String "Target:.*msvc") -ne $null
+    $forceFlag = if ($isMsvc) { "-Wl,/FORCE:MULTIPLE" } else { "-Wl,--allow-multiple-definition" }
     foreach ($dll in $sys32Dlls) {
         $dllPath = Join-Path $sys32Dir $dll.Name
         $srcPath = Join-Path $repoRoot $dll.Src
@@ -180,7 +182,7 @@ try {
             if ($dll.DefFile) {
                 $extraArgs += (Join-Path $repoRoot $dll.DefFile)
             }
-            & clang++ -std=c++23 -O2 -Iinclude -shared "-Wl,--allow-multiple-definition" "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
+            & clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
             if ($LASTEXITCODE -ne 0) { throw "Failed building System32 PE32+ DLL $($dll.Name)" }
         }
     }
