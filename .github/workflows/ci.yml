@@ -15,11 +15,14 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Create Output Directory
+      - name: Create Output Directories
         shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path bin
+        run: |
+          New-Item -ItemType Directory -Force -Path bin
+          New-Item -ItemType Directory -Force -Path bin/system32
+          New-Item -ItemType Directory -Force -Path build/esp/EFI/BOOT
 
-      - name: Compile Modular Kernel Subsystems & Test Runner (Clang C++23)
+      - name: Compile Modular Kernel Subsystems, System32 DLLs & Bootloader (Clang C++23)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -38,12 +41,51 @@ jobs:
               $objFiles += $objOut
           }
 
+          Write-Host "[CI] Compiling 24 WinNT Core/CRT System32 PE32+ Standalone DLLs..."
+          $sys32Dlls = @(
+              @{ Name = "kernel32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_KERNEL32_DLL" },
+              @{ Name = "advapi32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_ADVAPI32_DLL" },
+              @{ Name = "user32.dll";         Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_USER32_DLL" },
+              @{ Name = "gdi32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_GDI32_DLL" },
+              @{ Name = "imm32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_IMM32_DLL" },
+              @{ Name = "ole32.dll";          Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_OLE32_DLL" },
+              @{ Name = "dwmapi.dll";         Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_DWMAPI_DLL" },
+              @{ Name = "winmm.dll";          Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_WINMM_DLL" },
+              @{ Name = "ntdll.dll";          Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_NTDLL_DLL" },
+              @{ Name = "ws2_32.dll";         Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_WS2_32_DLL" },
+              @{ Name = "iphlpapi.dll";       Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_IPHLPAPI_DLL" },
+              @{ Name = "winhttp.dll";        Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_WINHTTP_DLL" },
+              @{ Name = "bcrypt.dll";         Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_BCRYPT_DLL" },
+              @{ Name = "crypt32.dll";        Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_CRYPT32_DLL" },
+              @{ Name = "secur32.dll";        Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_SECUR32_DLL" },
+              @{ Name = "wintrust.dll";       Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_WINTRUST_DLL" },
+              @{ Name = "shell32.dll";        Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_SHELL32_DLL" },
+              @{ Name = "shlwapi.dll";        Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_SHLWAPI_DLL" },
+              @{ Name = "dbghelp.dll";        Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_DBGHELP_DLL" },
+              @{ Name = "version.dll";        Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_VERSION_DLL" },
+              @{ Name = "ucrtbase.dll";       Src = "kernel/ps/winnt_ucrtbase_runtime_abi.cpp";            Def = "BUILD_SYSTEM32_UCRTBASE_DLL";      DefFile = "kernel/ps/ucrtbase.def" },
+              @{ Name = "vcruntime140.dll";   Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";             Def = "BUILD_SYSTEM32_VCRUNTIME140_DLL";  DefFile = "kernel/ps/vcruntime140.def" },
+              @{ Name = "vcruntime140_1.dll"; Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";             Def = "BUILD_SYSTEM32_VCRUNTIME140_1_DLL" },
+              @{ Name = "msvcp140.dll";       Src = "kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp"; Def = "BUILD_SYSTEM32_MSVCP140_DLL" }
+          )
+          foreach ($dll in $sys32Dlls) {
+              $dllPath = "bin/system32/$($dll.Name)"
+              $extraArgs = @()
+              if ($dll.DefFile) { $extraArgs += $dll.DefFile }
+              clang++ -std=c++23 -O2 -Iinclude -shared "-Wl,--allow-multiple-definition" "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
           Write-Host "[CI] Linking bin/micant_kernel.exe ($($objFiles.Count) modular kernel object units)..."
           clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude kernel/init/kiinit.cpp @objFiles -o bin/micant_kernel.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           Write-Host "[CI] Linking bin/micant_tests.exe ($($objFiles.Count) modular kernel object units)..."
           clang++ -std=c++23 -D_CRT_SECURE_NO_WARNINGS -Iinclude test/test_runner.cpp @objFiles -o bin/micant_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Write-Host "[CI] Compiling Bare-Metal UEFI PE32+ Bootloader (build/esp/EFI/BOOT/BOOTX64.EFI)..."
+          clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,efi_application" "-Wl,-e,EfiMain" -nostdlib boot/bootx64.cpp -o build/esp/EFI/BOOT/BOOTX64.EFI
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Execute Full Test Battery, Kernel Boot Self-Test & Clean-Room Sentinel
