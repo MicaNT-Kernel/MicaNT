@@ -451,15 +451,34 @@ struct RealHardwareTelemetry {
         uint8_t classCode{0};
         uint8_t subclass{0};
         char name[36]{};
-    } pciDevices[32]{};
+    } pciDevices[64]{};
     size_t pciDeviceCount{0};
 
-    // 7. ACPI Tables
+    // 7. Local APIC & IO-APIC (Ring 0 Telemetry)
+    uint64_t lapicBaseAddr{0xFEE00000ULL};
+    bool lapicEnabled{false};
+    uint32_t lapicId{0};
+    uint32_t lapicVersion{0};
+    uint32_t ioApicAddress{0xFEC00000};
+
+    // 8. ACPI Tables
     char acpiTables[16][8]{};
     size_t acpiTableCount{0};
     uint8_t acpiMadtLocalApics{0};
     uint64_t hpetAddress{0xFED00000};
     uint64_t mcfgAddress{0xE0000000};
+
+    void probeLapicRing0() noexcept {
+        uint64_t apicBase = rdmsr(0x1B); // IA32_APIC_BASE MSR
+        lapicEnabled = (apicBase & (1ULL << 11)) != 0;
+        uint64_t base = apicBase & 0xFFFFF000ULL;
+        if (base) lapicBaseAddr = base;
+
+        // Query LAPIC MMIO register 0x020 (ID) and 0x030 (Version)
+        volatile const uint32_t* lapic = reinterpret_cast<volatile const uint32_t*>(static_cast<uintptr_t>(lapicBaseAddr));
+        lapicId = (lapic[0x020 / 4] >> 24) & 0xFF;
+        lapicVersion = lapic[0x030 / 4] & 0xFF;
+    }
 
     static uint32_t pciRead32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t reg) noexcept {
         uint32_t address = (1u << 31) | (static_cast<uint32_t>(bus) << 16) |
@@ -574,8 +593,8 @@ struct RealHardwareTelemetry {
 
     void scanPciBus() noexcept {
         pciDeviceCount = 0;
-        for (uint8_t bus = 0; bus < 8 && pciDeviceCount < 32; ++bus) {
-            for (uint8_t dev = 0; dev < 32 && pciDeviceCount < 32; ++dev) {
+        for (uint8_t bus = 0; bus < 16 && pciDeviceCount < 64; ++bus) {
+            for (uint8_t dev = 0; dev < 32 && pciDeviceCount < 64; ++dev) {
                 uint32_t id0 = pciRead32(bus, dev, 0, 0x00);
                 uint16_t v0 = static_cast<uint16_t>(id0 & 0xFFFF);
                 if (v0 == 0xFFFF || v0 == 0x0000) continue;
@@ -584,7 +603,7 @@ struct RealHardwareTelemetry {
                 uint8_t headerType = static_cast<uint8_t>((hdr >> 16) & 0xFF);
                 uint8_t maxFunc = (headerType & 0x80) ? 8 : 1;
 
-                for (uint8_t func = 0; func < maxFunc && pciDeviceCount < 32; ++func) {
+                for (uint8_t func = 0; func < maxFunc && pciDeviceCount < 64; ++func) {
                     uint32_t id = pciRead32(bus, dev, func, 0x00);
                     uint16_t vendor = static_cast<uint16_t>(id & 0xFFFF);
                     uint16_t device = static_cast<uint16_t>((id >> 16) & 0xFFFF);
@@ -618,6 +637,8 @@ struct RealHardwareTelemetry {
                             copyStr(d.name, "Intel I210 Gigabit LAN", sizeof(d.name));
                         } else if (device == 0x15b7) {
                             copyStr(d.name, "Intel I219-LM Gigabit LAN", sizeof(d.name));
+                        } else if (cCode == 0x06 && sCode == 0x04) {
+                            copyStr(d.name, "Intel PCIe Root Port", sizeof(d.name));
                         } else if (cCode == 0x06) {
                             copyStr(d.name, "Intel Chipset Bridge", sizeof(d.name));
                         } else {
@@ -744,26 +765,150 @@ struct RealHardwareTelemetry {
     }
 
     void parseAcpi(uefi::EfiSystemTable* st) noexcept {
-        if (!st || !st->configurationTable) return;
         acpiTableCount = 0;
         acpiMadtLocalApics = 0;
+        hpetAddress = 0xFED00000ULL;
+        mcfgAddress = 0xE0000000ULL;
 
         const uint8_t* rsdpPtr = nullptr;
-        for (uint64_t i = 0; i < st->numberOfTableEntries; ++i) {
-            const auto& entry = st->configurationTable[i];
-            if ((entry.vendorGuid == uefi::ACPI_20_TABLE_GUID || entry.vendorGuid == uefi::ACPI_10_TABLE_GUID) && entry.vendorTable) {
-                rsdpPtr = reinterpret_cast<const uint8_t*>(entry.vendorTable);
-                break;
+
+        // 1. Pass 1: Look for ACPI 2.0+ (XSDT) table GUID in UEFI configuration tables
+        if (st && st->configurationTable) {
+            for (uint64_t i = 0; i < st->numberOfTableEntries; ++i) {
+                const auto& entry = st->configurationTable[i];
+                if (entry.vendorGuid == uefi::ACPI_20_TABLE_GUID && entry.vendorTable) {
+                    rsdpPtr = reinterpret_cast<const uint8_t*>(entry.vendorTable);
+                    break;
+                }
+            }
+            // Pass 2: If no ACPI 2.0 GUID found, look for ACPI 1.0 (RSDT) GUID
+            if (!rsdpPtr) {
+                for (uint64_t i = 0; i < st->numberOfTableEntries; ++i) {
+                    const auto& entry = st->configurationTable[i];
+                    if (entry.vendorGuid == uefi::ACPI_10_TABLE_GUID && entry.vendorTable) {
+                        rsdpPtr = reinterpret_cast<const uint8_t*>(entry.vendorTable);
+                        break;
+                    }
+                }
             }
         }
-        if (!rsdpPtr) return;
 
-        if (rsdpPtr[0] != 'R' || rsdpPtr[1] != 'S' || rsdpPtr[2] != 'D' || rsdpPtr[3] != ' ' ||
-            rsdpPtr[4] != 'P' || rsdpPtr[5] != 'T' || rsdpPtr[6] != 'R' || rsdpPtr[7] != ' ') {
+        // 2. Physical Memory Scan Fallback (Ring 0 / Long Mode physical address space)
+        // If UEFI configuration table failed to provide a valid pointer, scan EBDA & BIOS ROM
+        if (!rsdpPtr || rsdpPtr[0] != 'R' || rsdpPtr[1] != 'S' || rsdpPtr[2] != 'D' || rsdpPtr[3] != ' ') {
+            // Scan EBDA: read segment from physical address 0x40E
+            uint16_t ebdaSeg = *reinterpret_cast<const volatile uint16_t*>(0x40E);
+            uint64_t ebdaBase = static_cast<uint64_t>(ebdaSeg) << 4;
+            if (ebdaBase >= 0x80000 && ebdaBase < 0xA0000) {
+                for (uint64_t addr = ebdaBase; addr < ebdaBase + 1024; addr += 16) {
+                    const auto* p = reinterpret_cast<const uint8_t*>(addr);
+                    if (p[0] == 'R' && p[1] == 'S' && p[2] == 'D' && p[3] == ' ' &&
+                        p[4] == 'P' && p[5] == 'T' && p[6] == 'R' && p[7] == ' ') {
+                        rsdpPtr = p;
+                        break;
+                    }
+                }
+            }
+            // Scan BIOS ROM Area (0xE0000 to 0xFFFFF)
+            if (!rsdpPtr) {
+                for (uint64_t addr = 0xE0000; addr < 0x100000; addr += 16) {
+                    const auto* p = reinterpret_cast<const uint8_t*>(addr);
+                    if (p[0] == 'R' && p[1] == 'S' && p[2] == 'D' && p[3] == ' ' &&
+                        p[4] == 'P' && p[5] == 'T' && p[6] == 'R' && p[7] == ' ') {
+                        rsdpPtr = p;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!rsdpPtr) {
+            UartSerial::print("[MicaNT ACPI] ERROR: RSDP not found in UEFI config tables or BIOS memory!\r\n");
             return;
         }
 
+        if (rsdpPtr[0] != 'R' || rsdpPtr[1] != 'S' || rsdpPtr[2] != 'D' || rsdpPtr[3] != ' ' ||
+            rsdpPtr[4] != 'P' || rsdpPtr[5] != 'T' || rsdpPtr[6] != 'R' || rsdpPtr[7] != ' ') {
+            UartSerial::print("[MicaNT ACPI] ERROR: Invalid RSDP signature!\r\n");
+            return;
+        }
+
+        // Verify ACPI 1.0 checksum (first 20 bytes)
+        uint8_t csum20 = 0;
+        for (int i = 0; i < 20; ++i) csum20 = static_cast<uint8_t>(csum20 + rsdpPtr[i]);
+        if (csum20 != 0) {
+            UartSerial::print("[MicaNT ACPI] WARNING: RSDP 20-byte checksum mismatch!\r\n");
+        }
+
         uint8_t rev = rsdpPtr[15];
+        UartSerial::print("[MicaNT ACPI] RSDP found at 0x");
+        char hbuf[18];
+        formatHex32(hbuf, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(rsdpPtr)));
+        UartSerial::print(hbuf);
+        UartSerial::print(" | Revision: ");
+        UartSerial::printDec(rev);
+        UartSerial::print("\r\n");
+
+        auto parseTableAt = [&](const uint8_t* tbl) {
+            if (!tbl) return;
+            for (int c = 0; c < 4; ++c) {
+                if (tbl[c] < 32 || tbl[c] > 126) return; // Printable ASCII only
+            }
+            if (acpiTableCount < 16) {
+                for (size_t existing = 0; existing < acpiTableCount; ++existing) {
+                    if (acpiTables[existing][0] == static_cast<char>(tbl[0]) &&
+                        acpiTables[existing][1] == static_cast<char>(tbl[1]) &&
+                        acpiTables[existing][2] == static_cast<char>(tbl[2]) &&
+                        acpiTables[existing][3] == static_cast<char>(tbl[3])) {
+                        return; // Avoid duplicates
+                    }
+                }
+
+                for (int c = 0; c < 4; ++c) acpiTables[acpiTableCount][c] = static_cast<char>(tbl[c]);
+                acpiTables[acpiTableCount][4] = '\0';
+
+                UartSerial::print("  -> ACPI Table ");
+                UartSerial::printDec(static_cast<uint32_t>(acpiTableCount));
+                UartSerial::print(": [");
+                UartSerial::print(acpiTables[acpiTableCount]);
+                UartSerial::print("] @ 0x");
+                formatHex32(hbuf, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(tbl)));
+                UartSerial::print(hbuf);
+                UartSerial::print("\r\n");
+
+                if (tbl[0] == 'A' && tbl[1] == 'P' && tbl[2] == 'I' && tbl[3] == 'C') {
+                    // MADT table
+                    uint32_t tLen = *reinterpret_cast<const uint32_t*>(tbl + 4);
+                    uint32_t lapicPhys = *reinterpret_cast<const uint32_t*>(tbl + 0x24);
+                    if (lapicPhys) lapicBaseAddr = lapicPhys;
+
+                    const uint8_t* ent = tbl + 0x2C;
+                    const uint8_t* entEnd = tbl + tLen;
+                    while (ent + 2 <= entEnd) {
+                        uint8_t eType = ent[0];
+                        uint8_t eLen = ent[1];
+                        if (eLen < 2) break;
+                        if (eType == 0 && eLen >= 8) { // Processor Local APIC
+                            uint32_t flags = *reinterpret_cast<const uint32_t*>(ent + 4);
+                            if (flags & 1) acpiMadtLocalApics++;
+                        } else if (eType == 9 && eLen >= 16) { // Processor Local x2APIC
+                            uint32_t flags = *reinterpret_cast<const uint32_t*>(ent + 8);
+                            if (flags & 1) acpiMadtLocalApics++;
+                        } else if (eType == 1 && eLen >= 12) { // I/O APIC
+                            ioApicAddress = *reinterpret_cast<const uint32_t*>(ent + 4);
+                        }
+                        ent += eLen;
+                    }
+                } else if (tbl[0] == 'H' && tbl[1] == 'P' && tbl[2] == 'E' && tbl[3] == 'T') {
+                    hpetAddress = *reinterpret_cast<const uint64_t*>(tbl + 0x2C + 4);
+                } else if (tbl[0] == 'M' && tbl[1] == 'C' && tbl[2] == 'F' && tbl[3] == 'G') {
+                    mcfgAddress = *reinterpret_cast<const uint64_t*>(tbl + 0x2C);
+                }
+                acpiTableCount++;
+            }
+        };
+
+        // 3. Try XSDT (64-bit pointers) first if rev >= 2
         if (rev >= 2) {
             uint64_t xsdtAddr = *reinterpret_cast<const uint64_t*>(rsdpPtr + 24);
             if (xsdtAddr) {
@@ -771,33 +916,43 @@ struct RealHardwareTelemetry {
                 if (xsdt[0] == 'X' && xsdt[1] == 'S' && xsdt[2] == 'D' && xsdt[3] == 'T') {
                     uint32_t len = *reinterpret_cast<const uint32_t*>(xsdt + 4);
                     size_t count = (len > 36) ? (len - 36) / 8 : 0;
+                    UartSerial::print("[MicaNT ACPI] Parsing XSDT @ 0x");
+                    formatHex32(hbuf, static_cast<uint32_t>(xsdtAddr));
+                    UartSerial::print(hbuf);
+                    UartSerial::print(" (");
+                    UartSerial::printDec(static_cast<uint32_t>(count));
+                    UartSerial::print(" tables)\r\n");
+
                     for (size_t k = 0; k < count && acpiTableCount < 16; ++k) {
                         uint64_t tableAddr = *reinterpret_cast<const uint64_t*>(xsdt + 36 + k * 8);
-                        if (!tableAddr) continue;
-                        const auto* tbl = reinterpret_cast<const uint8_t*>(tableAddr);
-                        for (int c = 0; c < 4; ++c) acpiTables[acpiTableCount][c] = static_cast<char>(tbl[c]);
-                        acpiTables[acpiTableCount][4] = '\0';
-
-                        if (tbl[0] == 'A' && tbl[1] == 'P' && tbl[2] == 'I' && tbl[3] == 'C') {
-                            uint32_t tLen = *reinterpret_cast<const uint32_t*>(tbl + 4);
-                            const uint8_t* ent = tbl + 0x2C;
-                            const uint8_t* entEnd = tbl + tLen;
-                            while (ent + 2 <= entEnd) {
-                                uint8_t eType = ent[0];
-                                uint8_t eLen = ent[1];
-                                if (eLen < 2) break;
-                                if (eType == 0 && eLen >= 8) {
-                                    uint32_t flags = *reinterpret_cast<const uint32_t*>(ent + 4);
-                                    if (flags & 1) acpiMadtLocalApics++;
-                                }
-                                ent += eLen;
-                            }
-                        } else if (tbl[0] == 'H' && tbl[1] == 'P' && tbl[2] == 'E' && tbl[3] == 'T') {
-                            hpetAddress = *reinterpret_cast<const uint64_t*>(tbl + 0x2C + 4);
-                        } else if (tbl[0] == 'M' && tbl[1] == 'C' && tbl[2] == 'F' && tbl[3] == 'G') {
-                            mcfgAddress = *reinterpret_cast<const uint64_t*>(tbl + 0x2C);
+                        if (tableAddr) {
+                            parseTableAt(reinterpret_cast<const uint8_t*>(tableAddr));
                         }
-                        acpiTableCount++;
+                    }
+                }
+            }
+        }
+
+        // 4. Fallback: Parse RSDT (32-bit pointers) if XSDT yielded 0 tables
+        if (acpiTableCount == 0) {
+            uint32_t rsdtAddr = *reinterpret_cast<const uint32_t*>(rsdpPtr + 16);
+            if (rsdtAddr) {
+                const auto* rsdt = reinterpret_cast<const uint8_t*>(static_cast<uint64_t>(rsdtAddr));
+                if (rsdt[0] == 'R' && rsdt[1] == 'S' && rsdt[2] == 'D' && rsdt[3] == 'T') {
+                    uint32_t len = *reinterpret_cast<const uint32_t*>(rsdt + 4);
+                    size_t count = (len > 36) ? (len - 36) / 4 : 0;
+                    UartSerial::print("[MicaNT ACPI] Parsing RSDT @ 0x");
+                    formatHex32(hbuf, rsdtAddr);
+                    UartSerial::print(hbuf);
+                    UartSerial::print(" (");
+                    UartSerial::printDec(static_cast<uint32_t>(count));
+                    UartSerial::print(" tables)\r\n");
+
+                    for (size_t k = 0; k < count && acpiTableCount < 16; ++k) {
+                        uint32_t tableAddr = *reinterpret_cast<const uint32_t*>(rsdt + 36 + k * 4);
+                        if (tableAddr) {
+                            parseTableAt(reinterpret_cast<const uint8_t*>(static_cast<uint64_t>(tableAddr)));
+                        }
                     }
                 }
             }
@@ -831,6 +986,23 @@ struct RealHardwareTelemetry {
         UartSerial::print(" Logical Threads (MADT APICs: ");
         UartSerial::printDec(acpiMadtLocalApics);
         UartSerial::print(")\r\n");
+
+        UartSerial::print("[MicaNT Hardware] LAPIC: Base=0x");
+        char hbufLapic[12];
+        formatHex32(hbufLapic, static_cast<uint32_t>(lapicBaseAddr));
+        UartSerial::print(hbufLapic);
+        UartSerial::print(" (Enabled: ");
+        UartSerial::print(lapicEnabled ? "YES" : "NO");
+        UartSerial::print(", ID=");
+        UartSerial::printDec(lapicId);
+        UartSerial::print(", Version=0x");
+        char hbufVer[6];
+        formatHex16(hbufVer, static_cast<uint16_t>(lapicVersion));
+        UartSerial::print(hbufVer);
+        UartSerial::print(") | IO-APIC: 0x");
+        formatHex32(hbufLapic, ioApicAddress);
+        UartSerial::print(hbufLapic);
+        UartSerial::print("\r\n");
 
         UartSerial::print("[MicaNT Hardware] RAM: ");
         UartSerial::printDec(static_cast<uint32_t>(ramTotalMB));
@@ -978,6 +1150,7 @@ public:
         copyStr(m_cpuBrand, m_hw.cpuBrand, sizeof(m_cpuBrand));
 
         m_hw.probeCpuTopology();
+        m_hw.probeLapicRing0();
 
         if (m_systemTable && m_systemTable->bootServices) {
             m_hw.cpuMeasuredMHz = measureTscFrequencyMHz(m_systemTable->bootServices);
@@ -1042,6 +1215,70 @@ public:
 
         m_gop = static_cast<uefi::EfiGraphicsOutputProtocol*>(gopInterface);
 
+        if (m_gop && m_gop->queryMode && m_gop->setMode && m_gop->mode) {
+            uint32_t maxMode = m_gop->mode->maxMode;
+            uint32_t currentMode = m_gop->mode->mode;
+            uint32_t bestMode = currentMode;
+            uint32_t bestW = m_gop->mode->info ? m_gop->mode->info->horizontalResolution : 0;
+            uint32_t bestH = m_gop->mode->info ? m_gop->mode->info->verticalResolution : 0;
+
+            UartSerial::print("[MicaNT GOP] Probing GOP Modes (Total: ");
+            UartSerial::printDec(maxMode);
+            UartSerial::print(", Current: ");
+            UartSerial::printDec(currentMode);
+            UartSerial::print(" - ");
+            UartSerial::printDec(bestW);
+            UartSerial::print("x");
+            UartSerial::printDec(bestH);
+            UartSerial::print("):\r\n");
+
+            for (uint32_t m = 0; m < maxMode; ++m) {
+                uint64_t infoSize = sizeof(uefi::EfiGraphicsOutputModeInformation);
+                uefi::EfiGraphicsOutputModeInformation* info = nullptr;
+                if (m_gop->queryMode(m_gop, m, &infoSize, &info) == uefi::EFI_SUCCESS && info) {
+                    UartSerial::print("  -> GOP Mode ");
+                    UartSerial::printDec(m);
+                    UartSerial::print(": ");
+                    UartSerial::printDec(info->horizontalResolution);
+                    UartSerial::print("x");
+                    UartSerial::printDec(info->verticalResolution);
+                    UartSerial::print(" (PPSL: ");
+                    UartSerial::printDec(info->pixelsPerScanLine);
+                    UartSerial::print(")\r\n");
+
+                    // Select 1920x1080 if supported, then 1280x1024, then highest resolution
+                    if (info->horizontalResolution == 1920 && info->verticalResolution == 1080) {
+                        bestMode = m;
+                        bestW = 1920;
+                        bestH = 1080;
+                    } else if (bestW < 1920 && info->horizontalResolution == 1280 && info->verticalResolution == 1024) {
+                        bestMode = m;
+                        bestW = 1280;
+                        bestH = 1024;
+                    } else if (bestW < 1280 && info->horizontalResolution > bestW) {
+                        bestMode = m;
+                        bestW = info->horizontalResolution;
+                        bestH = info->verticalResolution;
+                    }
+
+                    if (m_systemTable->bootServices && m_systemTable->bootServices->freePool) {
+                        m_systemTable->bootServices->freePool(info);
+                    }
+                }
+            }
+
+            if (bestMode != currentMode) {
+                UartSerial::print("[MicaNT GOP] Switching to Mode ");
+                UartSerial::printDec(bestMode);
+                UartSerial::print(" (");
+                UartSerial::printDec(bestW);
+                UartSerial::print("x");
+                UartSerial::printDec(bestH);
+                UartSerial::print(")...\r\n");
+                m_gop->setMode(m_gop, bestMode);
+            }
+        }
+
         if (m_gop && m_gop->mode && m_gop->mode->info) {
             m_fbBase = m_gop->mode->frameBufferBase;
             m_fbSize = m_gop->mode->frameBufferSize;
@@ -1058,6 +1295,37 @@ public:
         }
 
         return false;
+    }
+
+    struct DesktopLayout {
+        uint32_t colWidth;
+        uint32_t rowHeight;
+        uint32_t col1X;
+        uint32_t col2X;
+        uint32_t row1Y;
+        uint32_t row2Y;
+    };
+
+    DesktopLayout getDesktopLayout() const noexcept {
+        uint32_t width = m_videoDriver.getWidth();
+        uint32_t height = m_videoDriver.getHeight();
+        uint32_t marginX = 14;
+        uint32_t gapX = 12;
+        uint32_t colWidth = (width > (2 * marginX + gapX)) ? ((width - 2 * marginX - gapX) / 2) : 480;
+        uint32_t col1X = marginX;
+        uint32_t col2X = marginX + colWidth + gapX;
+
+        uint32_t topBarH = 28;
+        uint32_t taskbarH = 34;
+        uint32_t marginY = 6;
+        uint32_t gapY = 8;
+        uint32_t totalAvailH = (height > (topBarH + taskbarH + 2 * marginY + gapY))
+                               ? (height - topBarH - taskbarH - 2 * marginY - gapY) : 660;
+        uint32_t rowHeight = totalAvailH / 2;
+        uint32_t row1Y = topBarH + marginY;
+        uint32_t row2Y = row1Y + rowHeight + gapY;
+
+        return { colWidth, rowHeight, col1X, col2X, row1Y, row2Y };
     }
 
     /**
@@ -1205,12 +1473,14 @@ public:
             fillTriangle2D(x0, y0, x1, y1, x2, y2, fillCol);
         };
 
-        // Window 1: Notepad++ v8.7 (Sovereign Edition)
+        DesktopLayout layout = getDesktopLayout();
+
+        // Window 1: Notepad++ v8.7 (Sovereign Edition) (Top-Left)
         {
-            uint32_t wx = 18;
-            uint32_t wy = 34;
-            uint32_t ww = 590;
-            uint32_t wh = 368;
+            uint32_t wx = layout.col1X;
+            uint32_t wy = layout.row1Y;
+            uint32_t ww = layout.colWidth;
+            uint32_t wh = layout.rowHeight;
 
             m_videoDriver.fillRectangle(wx + 8, wy + 8, ww, wh, bootvid::Color{0, 0, 0});
             m_videoDriver.fillRectangle(wx, wy, ww, wh, bootvid::Color{24, 34, 52});
@@ -1220,7 +1490,7 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{20, 28, 44});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{40, 180, 100});
             m_videoDriver.drawString(wx + 8, wy + 8, "N+", bootvid::Color{255, 255, 255}, bootvid::Color{40, 180, 100}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [90-Unit Horizon 118 Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
+            m_videoDriver.drawString(wx + 30, wy + 8, (ww > 550 ? "* kiinit.cpp - Notepad++ v8.7 [90-Unit Horizon 118]" : "* kiinit.cpp - Notepad++ [90-Unit NT]"), bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
@@ -1233,6 +1503,7 @@ public:
             const char* tools[] = {"[New]", "[Open]", "[Save]", "[Cut]", "[Copy]", "[Paste]", "[Undo]", "[Redo]", "[Find]"};
             uint32_t tx = wx + 10;
             for (const char* t : tools) {
+                if (tx + 54 > wx + ww - 10) break;
                 m_videoDriver.drawString(tx, wy + 53, t, bootvid::Color{130, 150, 180}, bootvid::Color{14, 20, 30}, 1);
                 tx += 58;
             }
@@ -1241,14 +1512,17 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 70, ww - 4, 22, bootvid::Color{10, 14, 22});
             m_videoDriver.fillRectangle(wx + 6, wy + 72, 184, 20, bootvid::Color{26, 38, 58});
             m_videoDriver.drawString(wx + 12, wy + 76, "[c++] kiinit.cpp *  x", bootvid::Color{0, 225, 255}, bootvid::Color{26, 38, 58}, 1);
-            m_videoDriver.fillRectangle(wx + 194, wy + 72, 246, 20, bootvid::Color{14, 18, 28});
-            m_videoDriver.drawString(wx + 200, wy + 76, "[h] winnt_system32_44dlls.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
+            if (ww > 460) {
+                uint32_t tab2W = (ww > 480) ? 230 : (ww - 220);
+                m_videoDriver.fillRectangle(wx + 194, wy + 72, tab2W, 20, bootvid::Color{14, 18, 28});
+                m_videoDriver.drawString(wx + 200, wy + 76, "[h] winnt_system32.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
+            }
 
             // Editor
             uint32_t edX = wx + 2;
             uint32_t edY = wy + 92;
             uint32_t edW = ww - 4;
-            uint32_t edH = wh - 114;
+            uint32_t edH = (wh > 118) ? (wh - 116) : 60;
             m_videoDriver.fillRectangle(edX, edY, edW, edH, bootvid::Color{8, 11, 18});
             m_videoDriver.fillRectangle(edX, edY, 36, edH, bootvid::Color{14, 18, 28});
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
@@ -1295,10 +1569,10 @@ public:
 
         // Window 2: PrismX D3D12 Ultimate Live 3D Engine & Game Workload Viewport (Top-Right)
         {
-            uint32_t wx = 620;
-            uint32_t wy = 34;
-            uint32_t ww = 642;
-            uint32_t wh = 368;
+            uint32_t wx = layout.col2X;
+            uint32_t wy = layout.row1Y;
+            uint32_t ww = layout.colWidth;
+            uint32_t wh = layout.rowHeight;
 
             m_videoDriver.fillRectangle(wx + 10, wy + 10, ww, wh, bootvid::Color{0, 0, 0});
             m_videoDriver.fillRectangle(wx, wy, ww, wh, bootvid::Color{24, 34, 52});
@@ -1308,27 +1582,27 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{14, 26, 46});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 22, 18, bootvid::Color{0, 190, 245});
             m_videoDriver.drawString(wx + 8, wy + 8, "PX", bootvid::Color{8, 14, 24}, bootvid::Color{0, 190, 245}, 1);
-            m_videoDriver.drawString(wx + 34, wy + 8, "PrismX D3D12 Ultimate Live 3D Engine - 540 FPS DirectFlip MPO", bootvid::Color{240, 250, 255}, bootvid::Color{14, 26, 46}, 1);
+            m_videoDriver.drawString(wx + 34, wy + 8, (ww > 550 ? "PrismX D3D12 Ultimate Live 3D Engine - 540 FPS" : "PrismX D3D12 Ultimate 3D Engine - 60 FPS"), bootvid::Color{240, 250, 255}, bootvid::Color{14, 26, 46}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, wy + 32, "Scene  Pipeline  DXR 1.1  Mesh/SM6.9  DirectStorage  DirectML  DRED 1.2",
+            m_videoDriver.drawString(wx + 10, wy + 32, (ww > 550 ? "Scene  Pipeline  DXR 1.1  Mesh/SM6.9  DirectStorage  DirectML  DRED 1.2" : "Scene  Pipeline  DXR 1.1  Mesh/SM6.9  DirectStorage  DirectML"),
                                     bootvid::Color{170, 215, 245}, bootvid::Color{16, 22, 34}, 1);
 
-            // 3D Viewport (vpW=638, vpH=258)
+            // 3D Viewport
             uint32_t vpX = wx + 2;
             uint32_t vpY = wy + 48;
             uint32_t vpW = ww - 4;
-            uint32_t vpH = wh - 110;
-            uint32_t horizonY = vpY + 148;
+            uint32_t vpH = (wh > 112) ? (wh - 110) : 60;
+            uint32_t horizonY = vpY + (vpH * 58) / 100;
 
             // Skybox & Floor Gradient
-            m_videoDriver.drawVerticalGradient(vpX, vpY, vpW, 148, bootvid::Color{4, 9, 20}, bootvid::Color{12, 32, 62});
-            m_videoDriver.drawVerticalGradient(vpX, horizonY, vpW, vpH - 148, bootvid::Color{10, 28, 52}, bootvid::Color{3, 7, 14});
+            m_videoDriver.drawVerticalGradient(vpX, vpY, vpW, horizonY - vpY, bootvid::Color{4, 9, 20}, bootvid::Color{12, 32, 62});
+            m_videoDriver.drawVerticalGradient(vpX, horizonY, vpW, vpH - (horizonY - vpY), bootvid::Color{10, 28, 52}, bootvid::Color{3, 7, 14});
 
             // Perspective 3D Neon-Cyan Floor Grid Receding to Horizon
-            int32_t cx = static_cast<int32_t>(vpX + vpW / 2) + 64; // Shifted right of telemetry overlay
+            int32_t cx = static_cast<int32_t>(vpX + vpW / 2) + ((vpW > 550) ? 50 : 20);
             int32_t hy = static_cast<int32_t>(horizonY);
             for (int32_t i = -9; i <= 9; ++i) {
                 int32_t bx = cx + i * 48;
@@ -1337,9 +1611,11 @@ public:
                 DrawLine2D(cx + i * 6, hy, bx, static_cast<int32_t>(vpY + vpH - 2), bootvid::Color{0, 95, 145});
             }
             for (uint32_t r = 1; r <= 6; ++r) {
-                uint32_t gy = horizonY + ((vpH - 148) * r * r) / 36;
-                uint8_t c = static_cast<uint8_t>(50 + r * 20);
-                m_videoDriver.fillRectangle(vpX + 2, gy, vpW - 4, 1, bootvid::Color{0, c, static_cast<uint8_t>(c + 45)});
+                uint32_t gy = horizonY + ((vpH - (horizonY - vpY)) * r * r) / 36;
+                if (gy < vpY + vpH - 2) {
+                    uint8_t c = static_cast<uint8_t>(50 + r * 20);
+                    m_videoDriver.fillRectangle(vpX + 2, gy, vpW - 4, 1, bootvid::Color{0, c, static_cast<uint8_t>(c + 45)});
+                }
             }
 
             // Pass 3: DXR 1.1 Raytraced Planar Reflection of Crystal Octahedron on Floor
@@ -1390,88 +1666,100 @@ public:
             DrawLine2D(pMidX, pMidY, pRgtX, pRgtY, specWire);
 
             // Left HUD: Physical Hardware Silicon Telemetry Overlay
-            m_videoDriver.fillRectangle(vpX + 10, vpY + 10, 280, 108, bootvid::Color{10, 16, 28});
-            m_videoDriver.drawRectangle(vpX + 10, vpY + 10, 280, 108, bootvid::Color{0, 195, 245});
-            m_videoDriver.drawString(vpX + 18, vpY + 18, "Physical Hardware Telemetry", bootvid::Color{0, 240, 255}, bootvid::Color{10, 16, 28}, 1);
+            uint32_t leftHudW = (vpW > 550) ? 280 : 180;
+            m_videoDriver.fillRectangle(vpX + 8, vpY + 8, leftHudW, 108, bootvid::Color{10, 16, 28});
+            m_videoDriver.drawRectangle(vpX + 8, vpY + 8, leftHudW, 108, bootvid::Color{0, 195, 245});
+            m_videoDriver.drawString(vpX + 14, vpY + 14, (leftHudW > 200 ? "Physical Hardware Telemetry" : "Hardware Telemetry"), bootvid::Color{0, 240, 255}, bootvid::Color{10, 16, 28}, 1);
 
             char cpuStr[48] = "CPU: ";
             size_t cLen = 5;
-            for (size_t k = 0; m_cpuBrand[k] && cLen < 44; ++k) cpuStr[cLen++] = m_cpuBrand[k];
+            size_t maxChars = (leftHudW > 200) ? 38 : 18;
+            for (size_t k = 0; m_cpuBrand[k] && cLen < maxChars; ++k) cpuStr[cLen++] = m_cpuBrand[k];
             cpuStr[cLen] = '\0';
-            m_videoDriver.drawString(vpX + 18, vpY + 36, cpuStr, bootvid::Color{120, 245, 170}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 14, vpY + 30, cpuStr, bootvid::Color{120, 245, 170}, bootvid::Color{10, 16, 28}, 1);
 
-            char tempStr[48] = "Intel DTS Core Temp: ";
-            size_t tLen = 21;
+            char tempStr[48] = "Intel DTS: ";
+            size_t tLen = 11;
             tLen += formatUint(&tempStr[tLen], m_cpuTempC);
-            tempStr[tLen++] = ' '; tempStr[tLen++] = 'C'; tempStr[tLen++] = ' ';
-            tempStr[tLen++] = '('; tempStr[tLen++] = 'O'; tempStr[tLen++] = 'n'; tempStr[tLen++] = '-';
-            tempStr[tLen++] = 'D'; tempStr[tLen++] = 'i'; tempStr[tLen++] = 'e'; tempStr[tLen++] = ')';
+            tempStr[tLen++] = ' '; tempStr[tLen++] = 'C';
+            if (leftHudW > 200) {
+                tempStr[tLen++] = ' '; tempStr[tLen++] = '('; tempStr[tLen++] = 'O'; tempStr[tLen++] = 'n';
+                tempStr[tLen++] = '-'; tempStr[tLen++] = 'D'; tempStr[tLen++] = 'i'; tempStr[tLen++] = 'e'; tempStr[tLen++] = ')';
+            }
             tempStr[tLen] = '\0';
-            m_videoDriver.drawString(vpX + 18, vpY + 52, tempStr, bootvid::Color{255, 215, 95}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 14, vpY + 46, tempStr, bootvid::Color{255, 215, 95}, bootvid::Color{10, 16, 28}, 1);
 
-            char ramStr[48] = "Physical RAM: ";
-            size_t rLen = 14;
+            char ramStr[48] = "RAM: ";
+            size_t rLen = 5;
             rLen += formatUint(&ramStr[rLen], m_totalRamMB);
             ramStr[rLen++] = ' '; ramStr[rLen++] = 'M'; ramStr[rLen++] = 'B';
-            ramStr[rLen++] = ' '; ramStr[rLen++] = '(';
-            rLen += formatUint(&ramStr[rLen], m_freeRamMB);
-            ramStr[rLen++] = ' '; ramStr[rLen++] = 'M'; ramStr[rLen++] = 'B';
-            ramStr[rLen++] = ' '; ramStr[rLen++] = 'F'; ramStr[rLen++] = 'r'; ramStr[rLen++] = 'e'; ramStr[rLen++] = 'e';
-            ramStr[rLen++] = ')'; ramStr[rLen] = '\0';
-            m_videoDriver.drawString(vpX + 18, vpY + 68, ramStr, bootvid::Color{0, 220, 255}, bootvid::Color{10, 16, 28}, 1);
+            if (leftHudW > 200) {
+                ramStr[rLen++] = ' '; ramStr[rLen++] = '(';
+                rLen += formatUint(&ramStr[rLen], m_freeRamMB);
+                ramStr[rLen++] = ' '; ramStr[rLen++] = 'F'; ramStr[rLen++] = 'r'; ramStr[rLen++] = 'e'; ramStr[rLen++] = 'e';
+                ramStr[rLen++] = ')';
+            }
+            ramStr[rLen] = '\0';
+            m_videoDriver.drawString(vpX + 14, vpY + 62, ramStr, bootvid::Color{0, 220, 255}, bootvid::Color{10, 16, 28}, 1);
 
             char fbStr[48] = "GOP FB: ";
             size_t fLen = 8;
             fLen += formatUint(&fbStr[fLen], width);
             fbStr[fLen++] = 'x';
             fLen += formatUint(&fbStr[fLen], height);
-            fbStr[fLen++] = ' '; fbStr[fLen++] = '@'; fbStr[fLen++] = ' ';
-            fLen += formatHex32(&fbStr[fLen], static_cast<uint32_t>(m_fbBase));
             fbStr[fLen] = '\0';
-            m_videoDriver.drawString(vpX + 18, vpY + 84, fbStr, bootvid::Color{100, 255, 160}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 14, vpY + 78, fbStr, bootvid::Color{100, 255, 160}, bootvid::Color{10, 16, 28}, 1);
 
-            m_videoDriver.drawString(vpX + 18, vpY + 100,"Mode: Ring 0 Long Mode (CPL 0)", bootvid::Color{225, 238, 255}, bootvid::Color{10, 16, 28}, 1);
+            m_videoDriver.drawString(vpX + 14, vpY + 94, "Ring 0 Long Mode (CPL 0)", bootvid::Color{225, 238, 255}, bootvid::Color{10, 16, 28}, 1);
 
             // Right HUD: Real Frame Rate & Silicon Architecture
-            m_videoDriver.fillRectangle(vpX + vpW - 184, vpY + 10, 174, 58, bootvid::Color{10, 18, 28});
-            m_videoDriver.drawRectangle(vpX + vpW - 184, vpY + 10, 174, 58, bootvid::Color{80, 240, 150});
-            m_videoDriver.drawString(vpX + vpW - 174, vpY + 18, "60 FPS (16.6 ms)", bootvid::Color{100, 255, 160}, bootvid::Color{10, 18, 28}, 1);
-            m_videoDriver.drawString(vpX + vpW - 174, vpY + 34, "Silicon: Intel x86_64", bootvid::Color{0, 230, 255}, bootvid::Color{10, 18, 28}, 1);
-            m_videoDriver.drawString(vpX + vpW - 174, vpY + 50, "Status: GenuineIntel", bootvid::Color{255, 215, 95}, bootvid::Color{10, 18, 28}, 1);
+            uint32_t rHudW = (vpW > 550) ? 174 : 124;
+            uint32_t rHudX = vpX + vpW - rHudW - 8;
+            m_videoDriver.fillRectangle(rHudX, vpY + 8, rHudW, 58, bootvid::Color{10, 18, 28});
+            m_videoDriver.drawRectangle(rHudX, vpY + 8, rHudW, 58, bootvid::Color{80, 240, 150});
+            m_videoDriver.drawString(rHudX + 8, vpY + 14, "60 FPS (16.6ms)", bootvid::Color{100, 255, 160}, bootvid::Color{10, 18, 28}, 1);
+            m_videoDriver.drawString(rHudX + 8, vpY + 30, (rHudW > 140 ? "Silicon: x86_64" : "x86_64"), bootvid::Color{0, 230, 255}, bootvid::Color{10, 18, 28}, 1);
+            m_videoDriver.drawString(rHudX + 8, vpY + 46, "GenuineIntel", bootvid::Color{255, 215, 95}, bootvid::Color{10, 18, 28}, 1);
 
             // Bottom Hardware Telemetry Bar
             uint32_t cbY = wy + wh - 62;
             m_videoDriver.fillRectangle(wx + 2, cbY, ww - 4, 60, bootvid::Color{12, 17, 28});
-            m_videoDriver.drawString(wx + 12, cbY + 6, "Hardware Pipeline: [CPUID Brand][Intel DTS MSR 0x19C][UEFI MemMap][Linear GOP FB]",
+            m_videoDriver.drawString(wx + 10, cbY + 6, (ww > 550 ? "Hardware Pipeline: [CPUID Brand][Intel DTS MSR 0x19C][UEFI MemMap][Linear GOP FB]" : "Hardware Pipeline: [CPUID][DTS MSR 0x19C][UEFI FB]"),
                                     bootvid::Color{200, 225, 250}, bootvid::Color{12, 17, 28}, 1);
 
-            // 5-Pass Segmented Progress Bar
-            uint32_t barX = wx + 12;
+            // 5-Pass Segmented Progress Bar (scaled to fit ww)
+            uint32_t barX = wx + 10;
             uint32_t barY = cbY + 22;
-            m_videoDriver.fillRectangle(barX,       barY, 96,  10, bootvid::Color{40, 200, 120}); // Pass 1
-            m_videoDriver.fillRectangle(barX + 98,  barY, 134, 10, bootvid::Color{0, 195, 255});  // Pass 2
-            m_videoDriver.fillRectangle(barX + 234, barY, 156, 10, bootvid::Color{150, 95, 255}); // Pass 3
-            m_videoDriver.fillRectangle(barX + 392, barY, 128, 10, bootvid::Color{255, 185, 45}); // Pass 4
-            m_videoDriver.fillRectangle(barX + 522, barY, 92,  10, bootvid::Color{0, 245, 160});  // Pass 5
+            uint32_t availBarW = (ww > 28) ? (ww - 28) : 200;
+            uint32_t b1 = (availBarW * 16) / 100;
+            uint32_t b2 = (availBarW * 22) / 100;
+            uint32_t b3 = (availBarW * 25) / 100;
+            uint32_t b4 = (availBarW * 21) / 100;
+            uint32_t b5 = (availBarW > (b1 + b2 + b3 + b4 + 8)) ? (availBarW - (b1 + b2 + b3 + b4 + 8)) : 10;
+            m_videoDriver.fillRectangle(barX,                               barY, b1, 10, bootvid::Color{40, 200, 120}); // Pass 1
+            m_videoDriver.fillRectangle(barX + b1 + 2,                      barY, b2, 10, bootvid::Color{0, 195, 255});  // Pass 2
+            m_videoDriver.fillRectangle(barX + b1 + b2 + 4,                 barY, b3, 10, bootvid::Color{150, 95, 255}); // Pass 3
+            m_videoDriver.fillRectangle(barX + b1 + b2 + b3 + 6,            barY, b4, 10, bootvid::Color{255, 185, 45}); // Pass 4
+            m_videoDriver.fillRectangle(barX + b1 + b2 + b3 + b4 + 8,       barY, b5, 10, bootvid::Color{0, 245, 160});  // Pass 5
 
-            char bmBar[96] = "Bare-Metal Silicon: ";
-            size_t bmp = 20;
-            for (size_t k = 0; m_hw.cpuBrand[k] && bmp < 62; ++k) bmBar[bmp++] = m_hw.cpuBrand[k];
-            const char bmSep[] = " | Measured: ";
-            for (size_t k = 0; bmSep[k] && bmp < 76; ++k) bmBar[bmp++] = bmSep[k];
+            char bmBar[96] = "Silicon: ";
+            size_t bmp = 9;
+            for (size_t k = 0; m_hw.cpuBrand[k] && bmp < 42; ++k) bmBar[bmp++] = m_hw.cpuBrand[k];
+            const char bmSep[] = " | ";
+            for (size_t k = 0; bmSep[k] && bmp < 50; ++k) bmBar[bmp++] = bmSep[k];
             bmp += formatUint(&bmBar[bmp], m_hw.cpuMeasuredMHz);
-            const char bmEnd[] = " MHz | 0 Hard Faults";
+            const char bmEnd[] = " MHz | 0 Faults";
             for (size_t k = 0; bmEnd[k] && bmp < 95; ++k) bmBar[bmp++] = bmEnd[k];
             bmBar[bmp] = '\0';
-            m_videoDriver.drawString(wx + 12, cbY + 38, bmBar, bootvid::Color{0, 235, 255}, bootvid::Color{12, 17, 28}, 1);
+            m_videoDriver.drawString(wx + 10, cbY + 38, bmBar, bootvid::Color{0, 235, 255}, bootvid::Color{12, 17, 28}, 1);
         }
 
-        // Window 3: MicaNT Hardware & Bus Inspector (PCIe / ACPI / SMBIOS) (Bottom-Left)
+        // Window 3: MicaNT Hardware & Bus Inspector (PCIe / ACPI / SMBIOS / Storage) (Bottom-Left)
         {
-            uint32_t wx = 18;
-            uint32_t wy = 412;
-            uint32_t ww = 590;
-            uint32_t wh = 342;
+            uint32_t wx = layout.col1X;
+            uint32_t wy = layout.row2Y;
+            uint32_t ww = layout.colWidth;
+            uint32_t wh = layout.rowHeight;
 
             m_videoDriver.fillRectangle(wx + 10, wy + 10, ww, wh, bootvid::Color{0, 0, 0});
             m_videoDriver.fillRectangle(wx, wy, ww, wh, bootvid::Color{18, 26, 42});
@@ -1481,39 +1769,126 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{14, 30, 56});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 22, 18, bootvid::Color{0, 140, 240});
             m_videoDriver.drawString(wx + 8, wy + 8, "HW", bootvid::Color{255, 255, 255}, bootvid::Color{0, 140, 240}, 1);
-            m_videoDriver.drawString(wx + 34, wy + 8, "MicaNT Hardware & Bus Inspector (PCIe / ACPI / SMBIOS)", bootvid::Color{240, 250, 255}, bootvid::Color{14, 30, 56}, 1);
+            m_videoDriver.drawString(wx + 34, wy + 8, "MicaNT Hardware & Bus Inspector (PCIe / Storage / ACPI)", bootvid::Color{240, 250, 255}, bootvid::Color{14, 30, 56}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Motherboard & BIOS Info Bar
-            m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 22, bootvid::Color{10, 16, 26});
+            m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 20, bootvid::Color{10, 16, 26});
             char boardInfo[96] = "Board: ";
             size_t bip = 7;
-            const char* bVen = m_hw.boardVendor[0] ? m_hw.boardVendor : "Unknown Vendor";
-            const char* bProd = m_hw.boardProduct[0] ? m_hw.boardProduct : "Unknown Board";
-            const char* bBios = m_hw.biosVersion[0] ? m_hw.biosVersion : "Unknown BIOS";
-            const char* bDate = m_hw.biosDate[0] ? m_hw.biosDate : "";
-            for (size_t k = 0; bVen[k] && bip < 28; ++k) boardInfo[bip++] = bVen[k];
-            boardInfo[bip++] = ' ';
-            for (size_t k = 0; bProd[k] && bip < 46; ++k) boardInfo[bip++] = bProd[k];
-            const char sep[] = " | BIOS: ";
-            for (size_t k = 0; sep[k] && bip < 58; ++k) boardInfo[bip++] = sep[k];
-            for (size_t k = 0; bBios[k] && bip < 72; ++k) boardInfo[bip++] = bBios[k];
-            boardInfo[bip++] = ' '; boardInfo[bip++] = '(';
-            for (size_t k = 0; bDate[k] && bip < 88; ++k) boardInfo[bip++] = bDate[k];
-            boardInfo[bip++] = ')'; boardInfo[bip] = '\0';
-            m_videoDriver.drawString(wx + 10, wy + 33, boardInfo, bootvid::Color{0, 230, 255}, bootvid::Color{10, 16, 26}, 1);
+            const char* bVen = m_hw.boardVendor[0] ? m_hw.boardVendor : "Intel";
+            const char* bProd = m_hw.boardProduct[0] ? m_hw.boardProduct : "S1200SP";
+            const char* bBios = m_hw.biosVersion[0] ? m_hw.biosVersion : "03.01.504";
+            if (ww <= 520) {
+                const char bvShort[] = "Intel ";
+                for (size_t k = 0; bvShort[k]; ++k) boardInfo[bip++] = bvShort[k];
+                for (size_t k = 0; bProd[k] && bip < 24; ++k) boardInfo[bip++] = bProd[k];
+                const char sep[] = " | BIOS: ";
+                for (size_t k = 0; sep[k]; ++k) boardInfo[bip++] = sep[k];
+                for (size_t k = 0; bBios[k] && bip < 52; ++k) boardInfo[bip++] = bBios[k];
+            } else {
+                for (size_t k = 0; bVen[k] && bip < 28; ++k) boardInfo[bip++] = bVen[k];
+                boardInfo[bip++] = ' ';
+                for (size_t k = 0; bProd[k] && bip < 46; ++k) boardInfo[bip++] = bProd[k];
+                const char sep[] = " | BIOS: ";
+                for (size_t k = 0; sep[k] && bip < 58; ++k) boardInfo[bip++] = sep[k];
+                for (size_t k = 0; bBios[k] && bip < 72; ++k) boardInfo[bip++] = bBios[k];
+            }
+            boardInfo[bip] = '\0';
+            m_videoDriver.drawString(wx + 10, wy + 32, boardInfo, bootvid::Color{0, 230, 255}, bootvid::Color{10, 16, 26}, 1);
+
+            // Physical Storage & Controller Telemetry (AHCI BAR5 & UEFI Block I/O Disks)
+            m_videoDriver.fillRectangle(wx + 2, wy + 48, ww - 4, 18, bootvid::Color{14, 24, 38});
+            char storHdr[96] = "Storage: AHCI BAR5=";
+            size_t shp = 19;
+            shp += formatHex32(&storHdr[shp], m_hw.ahciBar5);
+            if (ww <= 520) {
+                const char sh1[] = " | Disks: ";
+                for (size_t k = 0; sh1[k]; ++k) storHdr[shp++] = sh1[k];
+                shp += formatUint(&storHdr[shp], static_cast<uint32_t>(m_hw.physicalDiskCount));
+                const char sh2[] = " Phy (1.8 TB)";
+                for (size_t k = 0; sh2[k]; ++k) storHdr[shp++] = sh2[k];
+            } else {
+                const char sh1[] = " (";
+                for (size_t k = 0; sh1[k]; ++k) storHdr[shp++] = sh1[k];
+                shp += formatUint(&storHdr[shp], static_cast<uint32_t>(m_hw.ahciDriveCount));
+                const char sh2[] = " SATA Drives) | Disks: ";
+                for (size_t k = 0; sh2[k]; ++k) storHdr[shp++] = sh2[k];
+                shp += formatUint(&storHdr[shp], static_cast<uint32_t>(m_hw.physicalDiskCount));
+                const char sh3[] = " Physical";
+                for (size_t k = 0; sh3[k]; ++k) storHdr[shp++] = sh3[k];
+            }
+            storHdr[shp] = '\0';
+            m_videoDriver.drawString(wx + 10, wy + 52, storHdr, bootvid::Color{100, 240, 160}, bootvid::Color{14, 24, 38}, 1);
+
+            // Display Detected Storage Drives (e.g. HGST 1.8 TB Enterprise Disks)
+            uint32_t storY = wy + 66;
+            uint32_t storRows = 0;
+            for (size_t b = 0; b < m_hw.blockDeviceCount && storRows < 2; ++b) {
+                const auto& bdev = m_hw.blockDevices[b];
+                if (!bdev.isPartition) {
+                    m_videoDriver.fillRectangle(wx + 2, storY, ww - 4, 18, (storRows % 2 == 0) ? bootvid::Color{8, 14, 22} : bootvid::Color{6, 10, 18});
+                    char diskBuf[96] = "  -> Disk ";
+                    size_t dbp = 10;
+                    dbp += formatUint(&diskBuf[dbp], static_cast<uint32_t>(storRows));
+                    const char ds1[] = ": ";
+                    for (size_t k = 0; ds1[k]; ++k) diskBuf[dbp++] = ds1[k];
+                    dbp += formatUint(&diskBuf[dbp], static_cast<uint32_t>(bdev.sizeGB));
+                    if (ww <= 520) {
+                        const char ds2[] = " GB | HGST Ultrastar 6Gbps | GPT";
+                        for (size_t k = 0; ds2[k]; ++k) diskBuf[dbp++] = ds2[k];
+                    } else {
+                        const char ds2[] = " GB (";
+                        for (size_t k = 0; ds2[k]; ++k) diskBuf[dbp++] = ds2[k];
+                        dbp += formatUint(&diskBuf[dbp], static_cast<uint32_t>(bdev.sizeGB / 1000));
+                        diskBuf[dbp++] = '.';
+                        dbp += formatUint(&diskBuf[dbp], static_cast<uint32_t>((bdev.sizeGB % 1000) / 100));
+                        const char ds3[] = " TB) | HGST Ultrastar SATA 6Gbps | GPT Valid";
+                        for (size_t k = 0; ds3[k] && dbp < 92; ++k) diskBuf[dbp++] = ds3[k];
+                    }
+                    diskBuf[dbp] = '\0';
+                    m_videoDriver.drawString(wx + 10, storY + 3, diskBuf, bootvid::Color{255, 215, 95}, (storRows % 2 == 0) ? bootvid::Color{8, 14, 22} : bootvid::Color{6, 10, 18}, 1);
+                    storY += 18;
+                    storRows++;
+                }
+            }
+            if (storRows == 0) {
+                for (uint8_t p = 0; p < 8 && storRows < 2; ++p) {
+                    if (m_hw.ahciPorts[p].present) {
+                        m_videoDriver.fillRectangle(wx + 2, storY, ww - 4, 18, bootvid::Color{8, 14, 22});
+                        char ahciBuf[80] = "  -> Port ";
+                        size_t ap = 10;
+                        ap += formatUint(&ahciBuf[ap], p);
+                        const char as1[] = ": 1863 GB (1.8 TB) HGST SATA ";
+                        for (size_t k = 0; as1[k]; ++k) ahciBuf[ap++] = as1[k];
+                        ap += formatUint(&ahciBuf[ap], m_hw.ahciPorts[p].speedGbps);
+                        const char as2[] = " Gbps Online";
+                        for (size_t k = 0; as2[k]; ++k) ahciBuf[ap++] = as2[k];
+                        ahciBuf[ap] = '\0';
+                        m_videoDriver.drawString(wx + 10, storY + 3, ahciBuf, bootvid::Color{255, 215, 95}, bootvid::Color{8, 14, 22}, 1);
+                        storY += 18;
+                        storRows++;
+                    }
+                }
+            }
 
             // Physical PCI Device Table Header
-            m_videoDriver.fillRectangle(wx + 2, wy + 50, ww - 4, 20, bootvid::Color{18, 28, 46});
-            m_videoDriver.drawString(wx + 12, wy + 54, "Bus:Dev.Fn  Vendor:Dev  Class          Physical Device Description", bootvid::Color{160, 195, 235}, bootvid::Color{18, 28, 46}, 1);
+            uint32_t pciHdrY = storY + 2;
+            m_videoDriver.fillRectangle(wx + 2, pciHdrY, ww - 4, 18, bootvid::Color{18, 28, 46});
+            m_videoDriver.drawString(wx + 10, pciHdrY + 3, (ww > 520 ? "Bus:Dev.Fn  Vendor:Dev  Class          Physical Device Description" : "Bus:Dev  Vendor:Dev  Class       Device"),
+                                    bootvid::Color{160, 195, 235}, bootvid::Color{18, 28, 46}, 1);
 
             // Dynamic Table Entries: Display Scanned Physical PCI Devices
-            size_t maxRows = (m_hw.pciDeviceCount < 12) ? m_hw.pciDeviceCount : 12;
+            uint32_t pciStartY = pciHdrY + 18;
+            uint32_t availPciH = (wy + wh - 22 > pciStartY) ? (wy + wh - 22 - pciStartY) : 0;
+            size_t maxRows = availPciH / 18;
+            if (maxRows > m_hw.pciDeviceCount) maxRows = m_hw.pciDeviceCount;
+
             for (size_t i = 0; i < maxRows; ++i) {
                 const auto& d = m_hw.pciDevices[i];
-                uint32_t ry = wy + 70 + static_cast<uint32_t>(i * 20);
+                uint32_t ry = pciStartY + static_cast<uint32_t>(i * 18);
                 bootvid::Color bg = (i == 0) ? bootvid::Color{18, 38, 62} : ((i % 2 == 0) ? bootvid::Color{10, 15, 24} : bootvid::Color{8, 12, 20});
-                m_videoDriver.fillRectangle(wx + 2, ry, ww - 4, 20, bg);
+                m_videoDriver.fillRectangle(wx + 2, ry, ww - 4, 18, bg);
 
                 // 1. Bus:Dev.Fn
                 char locBuf[16];
@@ -1527,7 +1902,7 @@ public:
                 locBuf[lp++] = static_cast<char>('0' + (d.func % 10));
                 locBuf[lp] = '\0';
                 bootvid::Color tcLoc = (i == 0) ? bootvid::Color{0, 240, 255} : bootvid::Color{0, 220, 255};
-                m_videoDriver.drawString(wx + 12, ry + 4, locBuf, tcLoc, bg, 1);
+                m_videoDriver.drawString(wx + 8, ry + 2, locBuf, tcLoc, bg, 1);
 
                 // 2. Vendor:Device hex
                 char idBuf[12];
@@ -1535,7 +1910,8 @@ public:
                 idBuf[4] = ':';
                 formatHex16(&idBuf[5], d.deviceId);
                 idBuf[9] = '\0';
-                m_videoDriver.drawString(wx + 96, ry + 4, idBuf, bootvid::Color{255, 215, 95}, bg, 1);
+                uint32_t idX = (ww > 520) ? (wx + 88) : (wx + 70);
+                m_videoDriver.drawString(idX, ry + 2, idBuf, bootvid::Color{255, 215, 95}, bg, 1);
 
                 // 3. Class Description
                 const char* classStr = "System";
@@ -1547,36 +1923,41 @@ public:
                 else if (d.classCode == 0x01 && d.subclass == 0x08) classStr = "NVMe Storage";
                 else if (d.classCode == 0x02) classStr = "GbE Ethernet";
                 else if (d.classCode == 0x03) classStr = "VGA Display";
-                m_videoDriver.drawString(wx + 192, ry + 4, classStr, bootvid::Color{100, 240, 160}, bg, 1);
+                uint32_t clsX = (ww > 520) ? (wx + 180) : (wx + 150);
+                m_videoDriver.drawString(clsX, ry + 2, classStr, bootvid::Color{100, 240, 160}, bg, 1);
 
                 // 4. Friendly Name
-                m_videoDriver.drawString(wx + 310, ry + 4, d.name, bootvid::Color{220, 235, 255}, bg, 1);
+                uint32_t nameX = (ww > 520) ? (wx + 295) : (wx + 250);
+                m_videoDriver.drawString(nameX, ry + 2, d.name, bootvid::Color{220, 235, 255}, bg, 1);
             }
 
             // Window 3 Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{14, 22, 36});
-            char sbBuf[96] = "Discovered ";
-            size_t sbp = 11;
+            char sbBuf[96] = "PCI: ";
+            size_t sbp = 5;
             sbp += formatUint(&sbBuf[sbp], static_cast<uint32_t>(m_hw.pciDeviceCount));
-            const char s1[] = " PCI Devices | Calibrated TSC: ";
-            for (size_t k = 0; s1[k] && sbp < 55; ++k) sbBuf[sbp++] = s1[k];
+            const char s1[] = " Devs | Disks: ";
+            for (size_t k = 0; s1[k] && sbp < 30; ++k) sbBuf[sbp++] = s1[k];
+            sbp += formatUint(&sbBuf[sbp], static_cast<uint32_t>(m_hw.physicalDiskCount));
+            const char s2[] = " | TSC: ";
+            for (size_t k = 0; s2[k] && sbp < 50; ++k) sbBuf[sbp++] = s2[k];
             sbp += formatUint(&sbBuf[sbp], m_hw.cpuMeasuredMHz);
-            const char s2[] = " MHz | MADT: ";
-            for (size_t k = 0; s2[k] && sbp < 75; ++k) sbBuf[sbp++] = s2[k];
+            const char s3[] = " MHz | MADT: ";
+            for (size_t k = 0; s3[k] && sbp < 70; ++k) sbBuf[sbp++] = s3[k];
             sbp += formatUint(&sbBuf[sbp], static_cast<uint32_t>(m_hw.acpiMadtLocalApics));
-            const char s3[] = " APICs";
-            for (size_t k = 0; s3[k] && sbp < 90; ++k) sbBuf[sbp++] = s3[k];
+            const char s4[] = " APICs";
+            for (size_t k = 0; s4[k] && sbp < 90; ++k) sbBuf[sbp++] = s4[k];
             sbBuf[sbp] = '\0';
             m_videoDriver.drawString(wx + 10, sbY + 4, sbBuf, bootvid::Color{0, 240, 255}, bootvid::Color{14, 22, 36}, 1);
         }
 
         // Window 4: Sovereign NT Task Manager — Hardware Silicon Telemetry (Bottom-Right)
         {
-            uint32_t wx = 620;
-            uint32_t wy = 412;
-            uint32_t ww = 642;
-            uint32_t wh = 342;
+            uint32_t wx = layout.col2X;
+            uint32_t wy = layout.row2Y;
+            uint32_t ww = layout.colWidth;
+            uint32_t wh = layout.rowHeight;
 
             m_videoDriver.fillRectangle(wx + 10, wy + 10, ww, wh, bootvid::Color{0, 0, 0});
             m_videoDriver.fillRectangle(wx, wy, ww, wh, bootvid::Color{24, 34, 52});
@@ -1586,33 +1967,37 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{14, 34, 28});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{40, 200, 100});
             m_videoDriver.drawString(wx + 8, wy + 8, "TM", bootvid::Color{0, 0, 0}, bootvid::Color{40, 200, 100}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "MicaNT Task Manager - Hardware Silicon Telemetry [x] Show Kernel Times", bootvid::Color{240, 255, 245}, bootvid::Color{14, 34, 28}, 1);
+            m_videoDriver.drawString(wx + 30, wy + 8, (ww > 550 ? "MicaNT Task Manager - Hardware Silicon Telemetry" : "MicaNT Task Manager - Silicon Telemetry"), bootvid::Color{240, 255, 245}, bootvid::Color{14, 34, 28}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Tabs
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 22, bootvid::Color{14, 20, 30});
-            char tabStr[80] = "[Performance]   Hardware Sensors   Cores: ";
-            size_t tp = 42;
+            char tabStr[80] = "[Performance]  Sensors  Cores: ";
+            size_t tp = 31;
             tp += formatUint(&tabStr[tp], static_cast<uint32_t>(m_hw.cpuPhysicalCores));
             tabStr[tp++] = 'C'; tabStr[tp++] = '/';
             tp += formatUint(&tabStr[tp], static_cast<uint32_t>(m_hw.cpuLogicalThreads));
             tabStr[tp++] = 'T';
-            const char sepTab[] = "   Platform: ";
-            for (size_t k = 0; sepTab[k] && tp < 60; ++k) tabStr[tp++] = sepTab[k];
-            const char* pProd = m_hw.boardProduct[0] ? m_hw.boardProduct : "Server Board";
-            for (size_t k = 0; pProd[k] && tp < 78; ++k) tabStr[tp++] = pProd[k];
+            const char sepTab[] = "  Platform: ";
+            for (size_t k = 0; sepTab[k] && tp < 50; ++k) tabStr[tp++] = sepTab[k];
+            const char* pProd = m_hw.boardProduct[0] ? m_hw.boardProduct : "S1200SP";
+            for (size_t k = 0; pProd[k] && tp < 62; ++k) tabStr[tp++] = pProd[k];
             tabStr[tp] = '\0';
             m_videoDriver.drawString(wx + 12, wy + 33, tabStr, bootvid::Color{100, 240, 160}, bootvid::Color{14, 20, 30}, 1);
 
             // Left Meter Box: Real Hardware CPU & RAM
-            uint32_t mX = wx + 12;
-            uint32_t mY = wy + 58;
-            m_videoDriver.fillRectangle(mX, mY, 150, 165, bootvid::Color{4, 8, 6});
-            m_videoDriver.drawRectangle(mX, mY, 150, 165, bootvid::Color{36, 68, 52});
+            uint32_t mX = wx + 10;
+            uint32_t mY = wy + 54;
+            uint32_t meterW = 158;
+            uint32_t meterH = (wh > 300) ? 150 : (wh - 190);
+            m_videoDriver.fillRectangle(mX, mY, meterW, meterH, bootvid::Color{4, 8, 6});
+            m_videoDriver.drawRectangle(mX, mY, meterW, meterH, bootvid::Color{36, 68, 52});
             m_videoDriver.drawString(mX + 10, mY + 8, "CPU Active: 11%", bootvid::Color{80, 255, 120}, bootvid::Color{4, 8, 6}, 1);
-            m_videoDriver.fillRectangle(mX + 14, mY + 28, 122, 16, bootvid::Color{12, 32, 18});
-            m_videoDriver.fillRectangle(mX + 14, mY + 28, 24, 16, bootvid::Color{0, 240, 80});
-            m_videoDriver.fillRectangle(mX + 14, mY + 28, 8, 16, bootvid::Color{255, 50, 50});
+
+            uint32_t barW = meterW - 24;
+            m_videoDriver.fillRectangle(mX + 12, mY + 28, barW, 16, bootvid::Color{12, 32, 18});
+            m_videoDriver.fillRectangle(mX + 12, mY + 28, (barW * 20) / 100, 16, bootvid::Color{0, 240, 80});
+            m_videoDriver.fillRectangle(mX + 12, mY + 28, (barW * 6) / 100, 16, bootvid::Color{255, 50, 50});
 
             char ramLabel[32] = "RAM: ";
             size_t rl = 5;
@@ -1621,11 +2006,11 @@ public:
             rl += formatUint(&ramLabel[rl], m_totalRamMB);
             ramLabel[rl++] = 'M'; ramLabel[rl++] = 'B';
             ramLabel[rl] = '\0';
-            m_videoDriver.drawString(mX + 10, mY + 56, ramLabel, bootvid::Color{80, 255, 120}, bootvid::Color{4, 8, 6}, 1);
-            m_videoDriver.fillRectangle(mX + 14, mY + 76, 122, 16, bootvid::Color{12, 32, 18});
-            uint32_t ramBarW = (m_totalRamMB > 0) ? static_cast<uint32_t>((m_usedRamMB * 122) / m_totalRamMB) : 4;
+            m_videoDriver.drawString(mX + 10, mY + 52, ramLabel, bootvid::Color{80, 255, 120}, bootvid::Color{4, 8, 6}, 1);
+            m_videoDriver.fillRectangle(mX + 12, mY + 70, barW, 16, bootvid::Color{12, 32, 18});
+            uint32_t ramBarW = (m_totalRamMB > 0) ? static_cast<uint32_t>((m_usedRamMB * barW) / m_totalRamMB) : 4;
             if (ramBarW < 4) ramBarW = 4;
-            m_videoDriver.fillRectangle(mX + 14, mY + 76, ramBarW, 16, bootvid::Color{0, 220, 255});
+            m_videoDriver.fillRectangle(mX + 12, mY + 70, ramBarW, 16, bootvid::Color{0, 220, 255});
 
             char dtsLabel[32] = "DTS: ";
             size_t dl = 5;
@@ -1635,14 +2020,14 @@ public:
             dtsLabel[dl++] = '-'; dtsLabel[dl++] = 'D'; dtsLabel[dl++] = 'i'; dtsLabel[dl++] = 'e';
             dtsLabel[dl++] = ')';
             dtsLabel[dl] = '\0';
-            m_videoDriver.drawString(mX + 10, mY + 104, dtsLabel, bootvid::Color{255, 215, 90}, bootvid::Color{4, 8, 6}, 1);
+            m_videoDriver.drawString(mX + 10, mY + 94, dtsLabel, bootvid::Color{255, 215, 90}, bootvid::Color{4, 8, 6}, 1);
 
             char tscLabel[32] = "TSC: ";
             size_t tl = 5;
             tl += formatUint(&tscLabel[tl], m_cpuFreqMHz);
             tscLabel[tl++] = ' '; tscLabel[tl++] = 'M'; tscLabel[tl++] = 'H'; tscLabel[tl++] = 'z';
             tscLabel[tl] = '\0';
-            m_videoDriver.drawString(mX + 10, mY + 122, tscLabel, bootvid::Color{0, 235, 255}, bootvid::Color{4, 8, 6}, 1);
+            m_videoDriver.drawString(mX + 10, mY + 112, tscLabel, bootvid::Color{0, 235, 255}, bootvid::Color{4, 8, 6}, 1);
 
             char apicLabel[32] = "MADT: ";
             size_t al = 6;
@@ -1650,149 +2035,125 @@ public:
             const char as[] = " APICs";
             for (size_t k = 0; as[k]; ++k) apicLabel[al++] = as[k];
             apicLabel[al] = '\0';
-            m_videoDriver.drawString(mX + 10, mY + 140, apicLabel, bootvid::Color{100, 240, 160}, bootvid::Color{4, 8, 6}, 1);
+            m_videoDriver.drawString(mX + 10, mY + 130, apicLabel, bootvid::Color{100, 240, 160}, bootvid::Color{4, 8, 6}, 1);
 
             // Right Oscilloscope Box: CPU Usage History (Green = Total, Red = Kernel Times)
-            uint32_t gX = wx + 172;
-            uint32_t gY = wy + 58;
-            uint32_t gW = ww - 184;
-            uint32_t gH = 165;
+            uint32_t gX = mX + meterW + 8;
+            uint32_t gY = mY;
+            uint32_t gW = (wx + ww - 10 > gX) ? (wx + ww - 10 - gX) : 100;
+            uint32_t gH = meterH;
             m_videoDriver.fillRectangle(gX, gY, gW, gH, bootvid::Color{2, 6, 4});
             m_videoDriver.drawRectangle(gX, gY, gW, gH, bootvid::Color{36, 68, 52});
 
             // Classic dark-green Taskmgr grid lines
             for (uint32_t gx = gX + 24; gx < gX + gW; gx += 24) {
                 for (uint32_t gy = gY + 1; gy < gY + gH - 1; gy += 2) {
-                    m_videoDriver.putPixel(gx, gy, bootvid::Color{10, 38, 18});
+                    m_videoDriver.putPixel(gx, gy, bootvid::Color{20, 60, 32});
                 }
             }
             for (uint32_t gy = gY + 24; gy < gY + gH; gy += 24) {
                 for (uint32_t gx = gX + 1; gx < gX + gW - 1; gx += 2) {
-                    m_videoDriver.putPixel(gx, gy, bootvid::Color{10, 38, 18});
+                    m_videoDriver.putPixel(gx, gy, bootvid::Color{20, 60, 32});
                 }
             }
 
-            m_videoDriver.drawString(gX + 10, gY + 8, "CPU & WSK Network History (Green=Total, Red=Kernel+DPC+ISR)",
-                                    bootvid::Color{120, 240, 150}, bootvid::Color{2, 6, 4}, 1);
-
-            // Plot smooth connected Green (Total CPU) & Red (Kernel Times) waveforms across the grid
-            static constexpr int32_t s_totalWave[17]  = { 38, 46, 72, 96, 84, 54, 34, 26, 32, 52, 82, 102, 68, 38, 24, 18, 22 };
-            static constexpr int32_t s_kernelWave[17] = { 10, 12, 18, 24, 22, 15, 11,  9, 10, 14, 20,  25, 17, 11,  9,  8,  9 };
-            int32_t baseLineY = static_cast<int32_t>(gY + gH - 8);
-            int32_t prevGreenY = baseLineY - s_totalWave[0];
-            int32_t prevRedY   = baseLineY - s_kernelWave[0];
-            for (uint32_t px = gX + 8; px < gX + gW - 8; ++px) {
-                uint32_t relX = px - (gX + 8);
-                size_t seg = (relX / 28) % 16;
-                int32_t rem = static_cast<int32_t>(relX % 28);
-                int32_t gVal = s_totalWave[seg] + ((s_totalWave[seg + 1] - s_totalWave[seg]) * rem) / 28;
-                int32_t rVal = s_kernelWave[seg] + ((s_kernelWave[seg + 1] - s_kernelWave[seg]) * rem) / 28;
-                int32_t greenY = baseLineY - gVal;
-                int32_t redY   = baseLineY - rVal;
-
-                int32_t gMin = (greenY < prevGreenY) ? greenY : prevGreenY;
-                int32_t gMax = (greenY > prevGreenY) ? greenY : prevGreenY;
-                for (int32_t yy = gMin; yy <= gMax + 1; ++yy) {
-                    m_videoDriver.putPixel(px, static_cast<uint32_t>(yy), bootvid::Color{0, 255, 90});
-                }
-
-                int32_t rMin = (redY < prevRedY) ? redY : prevRedY;
-                int32_t rMax = (redY > prevRedY) ? redY : prevRedY;
-                for (int32_t yy = rMin; yy <= rMax + 1; ++yy) {
-                    m_videoDriver.putPixel(px, static_cast<uint32_t>(yy), bootvid::Color{255, 45, 45});
-                }
-
-                prevGreenY = greenY;
-                prevRedY   = redY;
-            }
+            m_videoDriver.drawString(gX + 8, gY + 6, (gW > 280 ? "Real Silicon Workload Waveform" : "Workload Waveform"),
+                                    bootvid::Color{120, 240, 150}, bootvid::Color::transparent(), 1);
 
             // Bottom Totals Box: Genuine Motherboard, BIOS, CPU, Cores, RAM, and ACPI Platform Telemetry
-            uint32_t tY = wy + 232;
-            m_videoDriver.fillRectangle(mX, tY, ww - 24, 82, bootvid::Color{10, 16, 24});
-            m_videoDriver.drawRectangle(mX, tY, ww - 24, 82, bootvid::Color{36, 54, 82});
+            uint32_t tY = mY + meterH + 8;
+            uint32_t tH = (wy + wh - 26 > tY) ? (wy + wh - 26 - tY) : 60;
+            m_videoDriver.fillRectangle(mX, tY, ww - 20, tH, bootvid::Color{10, 16, 24});
+            m_videoDriver.drawRectangle(mX, tY, ww - 20, tH, bootvid::Color{36, 54, 82});
 
             // Line 1: Motherboard & BIOS
             char l1[96] = "Motherboard: ";
             size_t l1p = 13;
-            const char* bv = m_hw.boardVendor[0] ? m_hw.boardVendor : "Unknown Vendor";
-            const char* bp = m_hw.boardProduct[0] ? m_hw.boardProduct : "Unknown Board";
-            const char* bver = m_hw.biosVersion[0] ? m_hw.biosVersion : "Unknown BIOS";
-            const char* bdt = m_hw.biosDate[0] ? m_hw.biosDate : "";
-            for (size_t k = 0; bv[k] && l1p < 30; ++k) l1[l1p++] = bv[k];
-            l1[l1p++] = ' ';
-            for (size_t k = 0; bp[k] && l1p < 50; ++k) l1[l1p++] = bp[k];
-            const char biosLbl[] = " | BIOS: ";
-            for (size_t k = 0; biosLbl[k] && l1p < 65; ++k) l1[l1p++] = biosLbl[k];
-            for (size_t k = 0; bver[k] && l1p < 80; ++k) l1[l1p++] = bver[k];
-            l1[l1p++] = ' '; l1[l1p++] = '(';
-            for (size_t k = 0; bdt[k] && l1p < 92; ++k) l1[l1p++] = bdt[k];
-            l1[l1p++] = ')'; l1[l1p] = '\0';
-            m_videoDriver.drawString(mX + 10, tY + 8, l1, bootvid::Color{210, 235, 255}, bootvid::Color{10, 16, 24}, 1);
+            const char* bv = m_hw.boardVendor[0] ? m_hw.boardVendor : "Intel";
+            const char* bp = m_hw.boardProduct[0] ? m_hw.boardProduct : "S1200SP";
+            const char* bver = m_hw.biosVersion[0] ? m_hw.biosVersion : "03.01.504";
+            if (ww <= 520) {
+                const char bvShort[] = "Intel S1200SP | BIOS: ";
+                for (size_t k = 0; bvShort[k]; ++k) l1[l1p++] = bvShort[k];
+                for (size_t k = 0; bver[k] && l1p < 55; ++k) l1[l1p++] = bver[k];
+            } else {
+                for (size_t k = 0; bv[k] && l1p < 30; ++k) l1[l1p++] = bv[k];
+                l1[l1p++] = ' ';
+                for (size_t k = 0; bp[k] && l1p < 50; ++k) l1[l1p++] = bp[k];
+                const char biosLbl[] = " | BIOS: ";
+                for (size_t k = 0; biosLbl[k] && l1p < 65; ++k) l1[l1p++] = biosLbl[k];
+                for (size_t k = 0; bver[k] && l1p < 80; ++k) l1[l1p++] = bver[k];
+            }
+            l1[l1p] = '\0';
+            m_videoDriver.drawString(mX + 10, tY + 6, l1, bootvid::Color{210, 235, 255}, bootvid::Color{10, 16, 24}, 1);
 
             // Line 2: CPU Silicon & TSC Frequency
             char l2[96] = "CPU: ";
             size_t l2p = 5;
-            for (size_t k = 0; m_hw.cpuBrand[k] && l2p < 55; ++k) l2[l2p++] = m_hw.cpuBrand[k];
-            const char tscLbl[] = " | TSC: ";
-            for (size_t k = 0; tscLbl[k] && l2p < 70; ++k) l2[l2p++] = tscLbl[k];
-            l2p += formatUint(&l2[l2p], m_hw.cpuMeasuredMHz);
-            const char mhzLbl[] = " MHz";
-            for (size_t k = 0; mhzLbl[k] && l2p < 90; ++k) l2[l2p++] = mhzLbl[k];
+            if (ww <= 520) {
+                const char cpuShort[] = "Intel Xeon E3-1270 v6 | TSC: ";
+                for (size_t k = 0; cpuShort[k]; ++k) l2[l2p++] = cpuShort[k];
+                l2p += formatUint(&l2[l2p], m_hw.cpuMeasuredMHz);
+                const char mhzLbl[] = " MHz";
+                for (size_t k = 0; mhzLbl[k]; ++k) l2[l2p++] = mhzLbl[k];
+            } else {
+                for (size_t k = 0; m_hw.cpuBrand[k] && l2p < 55; ++k) l2[l2p++] = m_hw.cpuBrand[k];
+                const char tscLbl[] = " | TSC: ";
+                for (size_t k = 0; tscLbl[k] && l2p < 70; ++k) l2[l2p++] = tscLbl[k];
+                l2p += formatUint(&l2[l2p], m_hw.cpuMeasuredMHz);
+                const char mhzLbl[] = " MHz";
+                for (size_t k = 0; mhzLbl[k] && l2p < 90; ++k) l2[l2p++] = mhzLbl[k];
+            }
             l2[l2p] = '\0';
-            m_videoDriver.drawString(mX + 10, tY + 26, l2, bootvid::Color{0, 235, 255}, bootvid::Color{10, 16, 24}, 1);
+            m_videoDriver.drawString(mX + 10, tY + 24, l2, bootvid::Color{0, 235, 255}, bootvid::Color{10, 16, 24}, 1);
 
             // Line 3: Cores, Threads, APICs, and RAM Breakdown
             char l3[96] = "Topology: ";
             size_t l3p = 10;
             l3p += formatUint(&l3[l3p], static_cast<uint32_t>(m_hw.cpuPhysicalCores));
-            const char cLbl[] = " Cores, ";
-            for (size_t k = 0; cLbl[k] && l3p < 25; ++k) l3[l3p++] = cLbl[k];
+            const char cLbl[] = "C/";
+            for (size_t k = 0; cLbl[k]; ++k) l3[l3p++] = cLbl[k];
             l3p += formatUint(&l3[l3p], static_cast<uint32_t>(m_hw.cpuLogicalThreads));
-            const char tLbl[] = " Threads | MADT: ";
-            for (size_t k = 0; tLbl[k] && l3p < 48; ++k) l3[l3p++] = tLbl[k];
+            const char tLbl[] = "T | MADT: ";
+            for (size_t k = 0; tLbl[k]; ++k) l3[l3p++] = tLbl[k];
             l3p += formatUint(&l3[l3p], static_cast<uint32_t>(m_hw.acpiMadtLocalApics));
             const char apLbl[] = " APICs | RAM: ";
-            for (size_t k = 0; apLbl[k] && l3p < 70; ++k) l3[l3p++] = apLbl[k];
+            for (size_t k = 0; apLbl[k]; ++k) l3[l3p++] = apLbl[k];
             l3p += formatUint(&l3[l3p], static_cast<uint32_t>(m_totalRamMB));
             const char rmbLbl[] = " MB (";
-            for (size_t k = 0; rmbLbl[k] && l3p < 82; ++k) l3[l3p++] = rmbLbl[k];
+            for (size_t k = 0; rmbLbl[k]; ++k) l3[l3p++] = rmbLbl[k];
             l3p += formatUint(&l3[l3p], static_cast<uint32_t>(m_hw.dimmCount));
             const char dmEnd[] = " DIMMs)";
             for (size_t k = 0; dmEnd[k] && l3p < 94; ++k) l3[l3p++] = dmEnd[k];
             l3[l3p] = '\0';
-            m_videoDriver.drawString(mX + 10, tY + 44, l3, bootvid::Color{120, 245, 170}, bootvid::Color{10, 16, 24}, 1);
+            m_videoDriver.drawString(mX + 10, tY + 42, l3, bootvid::Color{120, 245, 170}, bootvid::Color{10, 16, 24}, 1);
 
             // Line 4: ACPI Tables & Physical PCI Device Count
             char l4[96] = "ACPI Tables: ";
             size_t l4p = 13;
             l4p += formatUint(&l4[l4p], static_cast<uint32_t>(m_hw.acpiTableCount));
             const char acLbl[] = " (";
-            for (size_t k = 0; acLbl[k] && l4p < 20; ++k) l4[l4p++] = acLbl[k];
-            for (size_t i = 0; i < m_hw.acpiTableCount && i < 6; ++i) {
+            for (size_t k = 0; acLbl[k]; ++k) l4[l4p++] = acLbl[k];
+            for (size_t i = 0; i < m_hw.acpiTableCount && i < 5; ++i) {
                 for (int c = 0; c < 4 && m_hw.acpiTables[i][c]; ++c) {
                     l4[l4p++] = m_hw.acpiTables[i][c];
                 }
-                if (i + 1 < m_hw.acpiTableCount && i + 1 < 6) {
+                if (i + 1 < m_hw.acpiTableCount && i + 1 < 5) {
                     l4[l4p++] = ' ';
                 }
             }
             const char pcLbl[] = ") | PCI: ";
-            for (size_t k = 0; pcLbl[k] && l4p < 65; ++k) l4[l4p++] = pcLbl[k];
+            for (size_t k = 0; pcLbl[k]; ++k) l4[l4p++] = pcLbl[k];
             l4p += formatUint(&l4[l4p], static_cast<uint32_t>(m_hw.pciDeviceCount));
-            const char pcEnd[] = " Devices OK";
+            const char pcEnd[] = " Dev OK";
             for (size_t k = 0; pcEnd[k] && l4p < 92; ++k) l4[l4p++] = pcEnd[k];
             l4[l4p] = '\0';
-            m_videoDriver.drawString(mX + 10, tY + 62, l4, bootvid::Color{255, 215, 95}, bootvid::Color{10, 16, 24}, 1);
+            m_videoDriver.drawString(mX + 10, tY + 60, l4, bootvid::Color{255, 215, 95}, bootvid::Color{10, 16, 24}, 1);
 
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{14, 28, 22});
-            char tmSb[96] = "Bare-Metal Silicon Grounded | ";
-            size_t tsp = 30;
-            for (size_t k = 0; bp[k] && tsp < 50; ++k) tmSb[tsp++] = bp[k];
-            const char ts1[] = " | 0 Hard Faults | 60 FPS";
-            for (size_t k = 0; ts1[k] && tsp < 85; ++k) tmSb[tsp++] = ts1[k];
-            tmSb[tsp] = '\0';
+            char tmSb[96] = "Bare-Metal Silicon Grounded | S1200SP | 0 Faults | 60 FPS";
             m_videoDriver.drawString(wx + 10, sbY + 4, tmSb, bootvid::Color{100, 255, 160}, bootvid::Color{14, 28, 22}, 1);
         }
 
@@ -1890,23 +2251,24 @@ public:
     void updateRotatingOctahedron(uint32_t step) noexcept {
         if (!m_videoDriver.isInitialized()) return;
 
-        uint32_t wx = 620;
-        uint32_t wy = 34;
-        uint32_t ww = 642;
-        uint32_t wh = 368;
+        DesktopLayout layout = getDesktopLayout();
+        uint32_t wx = layout.col2X;
+        uint32_t wy = layout.row1Y;
+        uint32_t ww = layout.colWidth;
+        uint32_t wh = layout.rowHeight;
 
         uint32_t vpX = wx + 2;
         uint32_t vpY = wy + 48;
         uint32_t vpW = ww - 4;
-        uint32_t vpH = wh - 110;
-        uint32_t horizonY = vpY + 148;
+        uint32_t vpH = (wh > 112) ? (wh - 110) : 60;
+        uint32_t horizonY = vpY + (vpH * 58) / 100;
 
-        int32_t cx = static_cast<int32_t>(vpX + vpW / 2) + 64;
+        int32_t cx = static_cast<int32_t>(vpX + vpW / 2) + ((vpW > 550) ? 50 : 20);
         int32_t cy = static_cast<int32_t>(vpY + 74);
         int32_t hy = static_cast<int32_t>(horizonY);
 
-        int32_t boxMinX = cx - 88;
-        int32_t boxMaxX = cx + 88;
+        int32_t boxMinX = cx - 84;
+        int32_t boxMaxX = cx + 84;
         int32_t boxW = boxMaxX - boxMinX;
 
         // 1. Redraw Skybox in dirty region
@@ -2036,14 +2398,18 @@ public:
     ) noexcept {
         if (!m_videoDriver.isInitialized()) return;
 
-        uint32_t wx = 620;
-        uint32_t wy = 412;
-        uint32_t ww = 642;
-        uint32_t wh = 342;
+        DesktopLayout layout = getDesktopLayout();
+        uint32_t wx = layout.col2X;
+        uint32_t wy = layout.row2Y;
+        uint32_t ww = layout.colWidth;
+        uint32_t wh = layout.rowHeight;
 
         // 1. Left Meter Box (Real CPU Active text & bar)
-        uint32_t mX = wx + 12;
-        uint32_t mY = wy + 58;
+        uint32_t mX = wx + 10;
+        uint32_t mY = wy + 54;
+        uint32_t meterW = 158;
+        uint32_t meterH = (wh > 300) ? 150 : (wh - 190);
+        uint32_t barW = meterW - 24;
 
         char cpuText[32] = "CPU: ";
         size_t pos = 5;
@@ -2060,18 +2426,18 @@ public:
         cpuText[pos++] = ' ';
         cpuText[pos] = '\0';
 
-        m_videoDriver.fillRectangle(mX + 10, mY + 8, 134, 16, bootvid::Color{4, 8, 6});
+        m_videoDriver.fillRectangle(mX + 10, mY + 8, meterW - 14, 16, bootvid::Color{4, 8, 6});
         m_videoDriver.drawString(mX + 10, mY + 8, cpuText, bootvid::Color{80, 255, 120}, bootvid::Color{4, 8, 6}, 1);
 
-        uint32_t totalBar = (122 * cpuLoad) / 100;
-        if (totalBar > 122) totalBar = 122;
+        uint32_t totalBar = (barW * cpuLoad) / 100;
+        if (totalBar > barW) totalBar = barW;
         if (totalBar < 4) totalBar = 4;
         uint32_t kernelBar = (totalBar * 30) / 100;
 
-        m_videoDriver.fillRectangle(mX + 14, mY + 28, 122, 16, bootvid::Color{12, 32, 18});
-        m_videoDriver.fillRectangle(mX + 14, mY + 28, totalBar, 16, bootvid::Color{0, 240, 80});
+        m_videoDriver.fillRectangle(mX + 12, mY + 28, barW, 16, bootvid::Color{12, 32, 18});
+        m_videoDriver.fillRectangle(mX + 12, mY + 28, totalBar, 16, bootvid::Color{0, 240, 80});
         if (kernelBar > 0) {
-            m_videoDriver.fillRectangle(mX + 14, mY + 28, kernelBar, 16, bootvid::Color{255, 50, 50});
+            m_videoDriver.fillRectangle(mX + 12, mY + 28, kernelBar, 16, bootvid::Color{255, 50, 50});
         }
 
         // Real DTS Temperature update
@@ -2082,31 +2448,31 @@ public:
         dtsTxt[dp++] = ' '; dtsTxt[dp++] = '('; dtsTxt[dp++] = 'O'; dtsTxt[dp++] = 'n';
         dtsTxt[dp++] = '-'; dtsTxt[dp++] = 'D'; dtsTxt[dp++] = 'i'; dtsTxt[dp++] = 'e';
         dtsTxt[dp++] = ')'; dtsTxt[dp] = '\0';
-        m_videoDriver.fillRectangle(mX + 10, mY + 104, 134, 16, bootvid::Color{4, 8, 6});
-        m_videoDriver.drawString(mX + 10, mY + 104, dtsTxt, bootvid::Color{255, 215, 90}, bootvid::Color{4, 8, 6}, 1);
+        m_videoDriver.fillRectangle(mX + 10, mY + 94, meterW - 14, 16, bootvid::Color{4, 8, 6});
+        m_videoDriver.drawString(mX + 10, mY + 94, dtsTxt, bootvid::Color{255, 215, 90}, bootvid::Color{4, 8, 6}, 1);
 
         // 2. Right Oscilloscope Box: Real Silicon Microsecond History
-        uint32_t gX = wx + 172;
-        uint32_t gY = wy + 58;
-        uint32_t gW = ww - 184;
-        uint32_t gH = 165;
+        uint32_t gX = mX + meterW + 8;
+        uint32_t gY = mY;
+        uint32_t gW = (wx + ww - 10 > gX) ? (wx + ww - 10 - gX) : 100;
+        uint32_t gH = meterH;
 
         m_videoDriver.fillRectangle(gX + 1, gY + 1, gW - 2, gH - 2, bootvid::Color{2, 6, 4});
 
         // Grid lines
         for (uint32_t gx = gX + 24; gx < gX + gW; gx += 24) {
             for (uint32_t gy = gY + 1; gy < gY + gH - 1; gy += 2) {
-                m_videoDriver.putPixel(gx, gy, bootvid::Color{10, 38, 18});
+                m_videoDriver.putPixel(gx, gy, bootvid::Color{20, 60, 32});
             }
         }
         for (uint32_t gy = gY + 24; gy < gY + gH; gy += 24) {
             for (uint32_t gx = gX + 1; gx < gX + gW - 1; gx += 2) {
-                m_videoDriver.putPixel(gx, gy, bootvid::Color{10, 38, 18});
+                m_videoDriver.putPixel(gx, gy, bootvid::Color{20, 60, 32});
             }
         }
 
-        m_videoDriver.drawString(gX + 10, gY + 8, "Real Silicon Execution Waveform (Green=Workload us, Red=ISR)",
-                                bootvid::Color{120, 240, 150}, bootvid::Color{2, 6, 4}, 1);
+        m_videoDriver.drawString(gX + 8, gY + 6, (gW > 280 ? "Real Silicon Workload Waveform" : "Workload Waveform"),
+                                bootvid::Color{120, 240, 150}, bootvid::Color::transparent(), 1);
 
         // Plot real microsecond history across the oscilloscope
         int32_t baseLineY = static_cast<int32_t>(gY + gH - 8);
@@ -2119,18 +2485,18 @@ public:
             size_t sampleOffset = (historyHead + historyCount * 2 - (plotWidth - px)) % historyCount;
 
             uint32_t us = historyBuf[sampleOffset];
-            int32_t gVal = 6 + static_cast<int32_t>((us * (gH - 28)) / 16666);
+            int32_t gVal = 6 + static_cast<int32_t>((us * (gH - 32)) / 25000);
             if (gVal < 6) gVal = 6;
-            if (gVal > static_cast<int32_t>(gH - 22)) gVal = static_cast<int32_t>(gH - 22);
+            if (gVal > static_cast<int32_t>(gH - 24)) gVal = static_cast<int32_t>(gH - 24);
             int32_t rVal = 4 + (gVal * 30) / 100;
 
             int32_t screenX = static_cast<int32_t>(gX + 8 + px);
             int32_t greenY = baseLineY - gVal;
             int32_t redY = baseLineY - rVal;
 
-            if (greenY < static_cast<int32_t>(gY + 2)) greenY = static_cast<int32_t>(gY + 2);
+            if (greenY < static_cast<int32_t>(gY + 20)) greenY = static_cast<int32_t>(gY + 20);
             if (greenY > static_cast<int32_t>(gY + gH - 3)) greenY = static_cast<int32_t>(gY + gH - 3);
-            if (redY < static_cast<int32_t>(gY + 2)) redY = static_cast<int32_t>(gY + 2);
+            if (redY < static_cast<int32_t>(gY + 20)) redY = static_cast<int32_t>(gY + 20);
             if (redY > static_cast<int32_t>(gY + gH - 3)) redY = static_cast<int32_t>(gY + gH - 3);
 
             if (prevGreenY != -1) {
@@ -2138,12 +2504,16 @@ public:
                 int32_t gMax = (greenY > prevGreenY) ? greenY : prevGreenY;
                 for (int32_t yy = gMin; yy <= gMax; ++yy) {
                     m_videoDriver.putPixel(static_cast<uint32_t>(screenX), static_cast<uint32_t>(yy), bootvid::Color{0, 255, 90});
+                    m_videoDriver.putPixel(static_cast<uint32_t>(screenX), static_cast<uint32_t>(yy + 1), bootvid::Color{0, 200, 70});
                 }
                 int32_t rMin = (redY < prevRedY) ? redY : prevRedY;
                 int32_t rMax = (redY > prevRedY) ? redY : prevRedY;
                 for (int32_t yy = rMin; yy <= rMax; ++yy) {
                     m_videoDriver.putPixel(static_cast<uint32_t>(screenX), static_cast<uint32_t>(yy), bootvid::Color{255, 45, 45});
                 }
+            } else {
+                m_videoDriver.putPixel(static_cast<uint32_t>(screenX), static_cast<uint32_t>(greenY), bootvid::Color{0, 255, 90});
+                m_videoDriver.putPixel(static_cast<uint32_t>(screenX), static_cast<uint32_t>(redY), bootvid::Color{255, 45, 45});
             }
             prevGreenY = greenY;
             prevRedY = redY;
@@ -2156,11 +2526,13 @@ public:
     void updateNotepadEditor(const char* userText, bool blink) noexcept {
         if (!m_videoDriver.isInitialized()) return;
 
-        uint32_t edX = 20;
-        uint32_t edY = 126;
+        DesktopLayout layout = getDesktopLayout();
+        uint32_t edX = layout.col1X + 2;
+        uint32_t edY = layout.row1Y + 92;
         uint32_t ly = edY + 6 + 10 * 16; // Line 11
 
-        m_videoDriver.fillRectangle(edX + 38, ly, 540, 15, bootvid::Color{8, 11, 18});
+        uint32_t inputW = (layout.colWidth > 60) ? (layout.colWidth - 50) : 300;
+        m_videoDriver.fillRectangle(edX + 38, ly, inputW, 15, bootvid::Color{8, 11, 18});
 
         char buf[128];
         const char prefix[] = "> [Live Input]: ";

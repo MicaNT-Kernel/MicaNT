@@ -131,8 +131,16 @@ struct EfiGraphicsOutputProtocolMode {
  * @brief Graphics Output Protocol (GOP) Interface.
  */
 struct EfiGraphicsOutputProtocol {
-    void* queryMode{nullptr};
-    void* setMode{nullptr};
+    EfiStatus (*queryMode)(
+        EfiGraphicsOutputProtocol* self,
+        uint32_t modeNumber,
+        uint64_t* sizeOfInfo,
+        EfiGraphicsOutputModeInformation** info
+    ){nullptr};
+    EfiStatus (*setMode)(
+        EfiGraphicsOutputProtocol* self,
+        uint32_t modeNumber
+    ){nullptr};
     void* blt{nullptr};
     EfiGraphicsOutputProtocolMode* mode{nullptr};
 };
@@ -522,9 +530,18 @@ inline boot::LoaderParameterBlock BuildLpbFromUefi(
     if (systemTable && systemTable->configurationTable) {
         for (uint64_t i = 0; i < systemTable->numberOfTableEntries; ++i) {
             const auto& entry = systemTable->configurationTable[i];
-            if (entry.vendorGuid == ACPI_20_TABLE_GUID || entry.vendorGuid == ACPI_10_TABLE_GUID) {
+            if (entry.vendorGuid == ACPI_20_TABLE_GUID) {
                 lpb.acpiTablePhysicalAddress = reinterpret_cast<uint64_t>(entry.vendorTable);
                 break;
+            }
+        }
+        if (lpb.acpiTablePhysicalAddress == 0) {
+            for (uint64_t i = 0; i < systemTable->numberOfTableEntries; ++i) {
+                const auto& entry = systemTable->configurationTable[i];
+                if (entry.vendorGuid == ACPI_10_TABLE_GUID) {
+                    lpb.acpiTablePhysicalAddress = reinterpret_cast<uint64_t>(entry.vendorTable);
+                    break;
+                }
             }
         }
     }
