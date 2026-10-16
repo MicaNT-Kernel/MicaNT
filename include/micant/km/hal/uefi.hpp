@@ -72,6 +72,10 @@ inline constexpr EfiGuid EFI_SIMPLE_POINTER_PROTOCOL_GUID = {
     0x31878c87, 0x0b75, 0x11d5, { 0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d }
 };
 
+inline constexpr EfiGuid EFI_BLOCK_IO_PROTOCOL_GUID = {
+    0x964e5b21, 0x6459, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b }
+};
+
 /**
  * @brief Standard UEFI Table Header.
  */
@@ -271,6 +275,47 @@ struct EfiAbsolutePointerProtocol {
     EfiAbsolutePointerMode* mode{nullptr};
 };
 
+/**
+ * @brief UEFI Block I/O Media structure (EFI_BLOCK_IO_MEDIA).
+ */
+struct EfiBlockIoMedia {
+    uint32_t mediaId{0};
+    bool     removableMedia{false};
+    bool     mediaPresent{true};
+    bool     logicalPartition{false};
+    bool     readOnly{false};
+    bool     writeCaching{false};
+    uint32_t blockSize{512};
+    uint32_t ioAlign{0};
+    uint64_t lastBlock{0};
+    uint64_t lowestAlignedLba{0};
+    uint32_t logicalBlocksPerPhysicalBlock{1};
+    uint32_t optimalTransferLengthGranularity{0};
+};
+
+/**
+ * @brief UEFI Block I/O Protocol (EFI_BLOCK_IO_PROTOCOL) for raw physical disk and partition access.
+ */
+struct EfiBlockIoProtocol {
+    uint64_t revision{0x00010000};
+    EfiBlockIoMedia* media{nullptr};
+    EfiStatus (*reset)(EfiBlockIoProtocol* self, bool extendedVerification){nullptr};
+    EfiStatus (*readBlocks)(
+        EfiBlockIoProtocol* self,
+        uint32_t mediaId,
+        uint64_t lba,
+        uint64_t bufferSize,
+        void* buffer
+    ){nullptr};
+    EfiStatus (*writeBlocks)(
+        EfiBlockIoProtocol* self,
+        uint32_t mediaId,
+        uint64_t lba,
+        uint64_t bufferSize,
+        const void* buffer
+    ){nullptr};
+    EfiStatus (*flushBlocks)(EfiBlockIoProtocol* self){nullptr};
+};
 
 /**
  * @brief UEFI Boot Services Table.
@@ -293,7 +338,7 @@ struct EfiBootServices {
         uint32_t* descriptorVersion
     );
     void* allocatePool;
-    void* freePool;
+    EfiStatus (*freePool)(void* buffer);
 
     // Event & Timer Services
     void* createEvent;
@@ -307,7 +352,7 @@ struct EfiBootServices {
     void* installProtocolInterface;
     void* reinstallProtocolInterface;
     void* uninstallProtocolInterface;
-    void* handleProtocol;
+    EfiStatus (*handleProtocol)(EfiHandle handle, const EfiGuid* protocol, void** interface);
     void* reserved;
     void* registerProtocolNotify;
     void* locateHandle;
@@ -337,7 +382,13 @@ struct EfiBootServices {
 
     // Library Services
     void* protocolsPerHandle;
-    void* locateHandleBuffer;
+    EfiStatus (*locateHandleBuffer)(
+        uint32_t searchType,
+        const EfiGuid* protocol,
+        void* searchKey,
+        uint64_t* noHandles,
+        EfiHandle** buffer
+    );
     EfiStatus (*locateProtocol)(const EfiGuid* protocol, void* registration, void** interface);
 };
 

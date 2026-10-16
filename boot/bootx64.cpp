@@ -51,6 +51,14 @@ static inline uint64_t rdtsc() noexcept {
     return (static_cast<uint64_t>(high) << 32) | low;
 }
 
+static inline uint64_t rdmsr(uint32_t msr) noexcept {
+    uint32_t low = 0, high = 0;
+#if defined(__x86_64__)
+    __asm__ __volatile__("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+#endif
+    return (static_cast<uint64_t>(high) << 32) | low;
+}
+
 static inline void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t& eax, uint32_t& ebx, uint32_t& ecx, uint32_t& edx) noexcept {
 #if defined(__x86_64__)
     __asm__ __volatile__(
@@ -79,11 +87,33 @@ static inline void getCpuBrandString(char brand[49]) noexcept {
     }
 }
 
-static inline uint32_t getCpuTemperatureC(uint32_t cpuLoad = 11) noexcept {
-    // Dynamic silicon thermal profile derived safely without privileged MSRs (prevents UEFI #GP faults)
-    uint32_t temp = 37 + (cpuLoad * 22) / 100;
-    if (temp > 85) temp = 85;
-    return temp;
+static inline bool isIntelDtsSupported() noexcept {
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+    cpuid(0, 0, eax, ebx, ecx, edx);
+    if (ebx != 0x756e6547 || edx != 0x49656e69 || ecx != 0x6c65746e) {
+        return false; // Not "GenuineIntel"
+    }
+    if (eax >= 6) {
+        cpuid(6, 0, eax, ebx, ecx, edx);
+        return (eax & 1) != 0; // Digital thermal sensor capability
+    }
+    return false;
+}
+
+static inline uint32_t getCpuTemperatureC(uint32_t /*ignored*/ = 0) noexcept {
+    // Sovereign Real Physical Silicon Reading from Intel Xeon DTS (Digital Thermal Sensor)
+    if (!isIntelDtsSupported()) return 0;
+    uint64_t target = rdmsr(0x1A2); // IA32_TEMPERATURE_TARGET
+    uint32_t tjMax = static_cast<uint32_t>((target >> 16) & 0xFF);
+    if (tjMax == 0 || tjMax > 125) tjMax = 100;
+
+    uint64_t therm = rdmsr(0x19C); // IA32_THERM_STATUS
+    if (!(therm & (1ULL << 31))) { // Bit 31: Reading Valid
+        return 0;
+    }
+    uint32_t delta = static_cast<uint32_t>((therm >> 16) & 0x7F);
+    if (delta >= tjMax) return 0;
+    return tjMax - delta;
 }
 
 static inline size_t formatUint(char* buf, uint64_t val) {
@@ -357,18 +387,19 @@ static inline void trimTrailingSpaces(char* s) noexcept {
  */
 struct RealHardwareTelemetry {
     // 1. CPU
-    char cpuBrand[49]{"Generic x86_64 CPU"};
+    char cpuBrand[49]{};
     uint32_t cpuMeasuredMHz{0};
-    uint8_t cpuPhysicalCores{4};
-    uint8_t cpuLogicalThreads{8};
-    char cpuSocket[16]{"LGA1151"};
+    uint8_t cpuPhysicalCores{0};
+    uint8_t cpuLogicalThreads{0};
+    char cpuSocket[16]{};
+    uint32_t cpuTempC{0};
 
     // 2. Motherboard & BIOS (from SMBIOS)
-    char boardVendor[32]{"Intel/Server"};
-    char boardProduct[32]{"Server Motherboard"};
-    char biosVendor[32]{"AMI Aptio V"};
-    char biosVersion[24]{"P2.10"};
-    char biosDate[16]{"2019"};
+    char boardVendor[32]{};
+    char boardProduct[32]{};
+    char biosVendor[32]{};
+    char biosVersion[40]{};
+    char biosDate[16]{};
 
     // 3. Memory
     uint64_t ramTotalMB{0};
@@ -382,7 +413,35 @@ struct RealHardwareTelemetry {
     } dimms[4]{};
     size_t dimmCount{0};
 
-    // 4. Physical PCI Devices (from ports 0xCF8/0xCFC)
+    // 4. Physical Storage: Intel C230/C236 SATA AHCI Controller & Ports
+    struct AhciPortInfo {
+        bool present{false};
+        uint8_t speedGbps{0}; // 1.5, 3.0, 6.0
+        uint32_t signature{0};
+        char type[16]{};
+    };
+    bool ahciFound{false};
+    uint32_t ahciBar5{0};
+    uint32_t ahciVersion{0};
+    uint32_t ahciPortsImplemented{0};
+    AhciPortInfo ahciPorts[8]{};
+    size_t ahciDriveCount{0};
+
+    // 5. Physical Storage: UEFI Block I/O Drives & Sectors
+    struct BlockDeviceInfo {
+        uint32_t mediaId{0};
+        bool isPartition{false};
+        uint32_t blockSize{512};
+        uint64_t totalBlocks{0};
+        uint64_t sizeGB{0};
+        bool gptValid{false};
+        uint8_t gptGuid[16]{};
+    };
+    BlockDeviceInfo blockDevices[8]{};
+    size_t blockDeviceCount{0};
+    size_t physicalDiskCount{0};
+
+    // 6. Physical PCI Devices (from ports 0xCF8/0xCFC)
     struct PciDev {
         uint8_t bus{0};
         uint8_t dev{0};
@@ -395,7 +454,7 @@ struct RealHardwareTelemetry {
     } pciDevices[32]{};
     size_t pciDeviceCount{0};
 
-    // 5. ACPI Tables
+    // 7. ACPI Tables
     char acpiTables[16][8]{};
     size_t acpiTableCount{0};
     uint8_t acpiMadtLocalApics{0};
@@ -408,6 +467,109 @@ struct RealHardwareTelemetry {
                            (static_cast<uint32_t>(func) << 8) | (reg & 0xFC);
         outl(0xCF8, address);
         return inl(0xCFC);
+    }
+
+    void probeCpuTopology() noexcept {
+        uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+        cpuid(1, 0, eax, ebx, ecx, edx);
+        uint8_t logical = static_cast<uint8_t>((ebx >> 16) & 0xFF);
+        if (logical > 0) cpuLogicalThreads = logical;
+
+        cpuid(4, 0, eax, ebx, ecx, edx);
+        uint8_t physical = static_cast<uint8_t>(((eax >> 26) & 0x3F) + 1);
+        if (physical > 0) cpuPhysicalCores = physical;
+    }
+
+    void probeAhci(uint8_t bus, uint8_t dev, uint8_t func) noexcept {
+        uint32_t bar5 = pciRead32(bus, dev, func, 0x24);
+        if ((bar5 & 1) != 0) return; // Must be memory-mapped BAR
+        uint32_t abarAddr = bar5 & ~0xFULL;
+        if (abarAddr == 0) return;
+
+        ahciFound = true;
+        ahciBar5 = abarAddr;
+
+        volatile const uint32_t* abar = reinterpret_cast<volatile const uint32_t*>(static_cast<uintptr_t>(abarAddr));
+        ahciVersion = abar[4]; // Offset 0x10 = VS
+        ahciPortsImplemented = abar[3]; // Offset 0x0C = PI
+        ahciDriveCount = 0;
+
+        for (uint8_t p = 0; p < 8; ++p) {
+            if (ahciPortsImplemented & (1u << p)) {
+                volatile const uint32_t* pRegs = reinterpret_cast<volatile const uint32_t*>(
+                    reinterpret_cast<uintptr_t>(abar) + 0x100 + p * 0x80
+                );
+                uint32_t sig = pRegs[9];   // Offset 0x24 (SIG)
+                uint32_t ssts = pRegs[10]; // Offset 0x28 (SSTS)
+                uint8_t det = static_cast<uint8_t>(ssts & 0x0F);
+                uint8_t spd = static_cast<uint8_t>((ssts >> 4) & 0x0F);
+
+                if (det == 3) {
+                    auto& port = ahciPorts[p];
+                    port.present = true;
+                    port.speedGbps = (spd == 3) ? 6 : (spd == 2 ? 3 : (spd == 1 ? 1 : 0));
+                    port.signature = sig;
+                    if (sig == 0x00000101) {
+                        copyStr(port.type, "SATA HDD", sizeof(port.type));
+                    } else if (sig == 0xEB140101) {
+                        copyStr(port.type, "SATAPI", sizeof(port.type));
+                    } else {
+                        copyStr(port.type, "SATA Dev", sizeof(port.type));
+                    }
+                    ahciDriveCount++;
+                }
+            }
+        }
+    }
+
+    void probeBlockIo(uefi::EfiBootServices* bs) noexcept {
+        if (!bs || !bs->locateHandleBuffer || !bs->handleProtocol) return;
+        blockDeviceCount = 0;
+        physicalDiskCount = 0;
+        uint64_t handleCount = 0;
+        uefi::EfiHandle* handles = nullptr;
+        uefi::EfiStatus status = bs->locateHandleBuffer(
+            2, // ByProtocol
+            &uefi::EFI_BLOCK_IO_PROTOCOL_GUID,
+            nullptr,
+            &handleCount,
+            &handles
+        );
+        if (status != uefi::EFI_SUCCESS || !handles || handleCount == 0) return;
+
+        alignas(512) static uint8_t sectorBuf[512];
+
+        for (uint64_t i = 0; i < handleCount && blockDeviceCount < 8; ++i) {
+            uefi::EfiBlockIoProtocol* bio = nullptr;
+            if (bs->handleProtocol(handles[i], &uefi::EFI_BLOCK_IO_PROTOCOL_GUID, reinterpret_cast<void**>(&bio)) == uefi::EFI_SUCCESS && bio && bio->media) {
+                auto& dev = blockDevices[blockDeviceCount++];
+                dev.mediaId = bio->media->mediaId;
+                dev.isPartition = bio->media->logicalPartition;
+                dev.blockSize = bio->media->blockSize ? bio->media->blockSize : 512;
+                dev.totalBlocks = bio->media->lastBlock + 1;
+                dev.sizeGB = (dev.totalBlocks * dev.blockSize) / (1000ULL * 1000 * 1000);
+
+                if (!dev.isPartition) {
+                    physicalDiskCount++;
+                    // Probe LBA 1 (GPT Header)
+                    if (bio->readBlocks && dev.totalBlocks > 1 && dev.blockSize == 512) {
+                        for (size_t b = 0; b < 512; ++b) sectorBuf[b] = 0;
+                        if (bio->readBlocks(bio, dev.mediaId, 1, 512, sectorBuf) == uefi::EFI_SUCCESS) {
+                            if (sectorBuf[0] == 'E' && sectorBuf[1] == 'F' && sectorBuf[2] == 'I' && sectorBuf[3] == ' ' &&
+                                sectorBuf[4] == 'P' && sectorBuf[5] == 'A' && sectorBuf[6] == 'R' && sectorBuf[7] == 'T') {
+                                dev.gptValid = true;
+                                for (int g = 0; g < 16; ++g) {
+                                    dev.gptGuid[g] = sectorBuf[56 + g];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (bs->freePool) {
+            bs->freePool(handles);
+        }
     }
 
     void scanPciBus() noexcept {
@@ -436,6 +598,10 @@ struct RealHardwareTelemetry {
                     d.bus = bus; d.dev = dev; d.func = func;
                     d.vendorId = vendor; d.deviceId = device;
                     d.classCode = cCode; d.subclass = sCode;
+
+                    if (cCode == 0x01 && sCode == 0x06) {
+                        probeAhci(bus, dev, func);
+                    }
 
                     if (vendor == 0x8086) {
                         if (device == 0x5918 || device == 0x1918 || device == 0x190f) {
@@ -537,11 +703,11 @@ struct RealHardwareTelemetry {
                 trimTrailingSpaces(boardVendor);
                 trimTrailingSpaces(boardProduct);
             } else if (type == 2 && len >= 0x08) {
-                if (boardVendor[0] == '\0' || boardVendor[0] == 'I') {
+                if (boardVendor[0] == '\0') {
                     copyStr(boardVendor, getSmbiosString(p, p[4]), sizeof(boardVendor));
                     trimTrailingSpaces(boardVendor);
                 }
-                if (boardProduct[0] == '\0' || boardProduct[0] == 'S') {
+                if (boardProduct[0] == '\0') {
                     copyStr(boardProduct, getSmbiosString(p, p[5]), sizeof(boardProduct));
                     trimTrailingSpaces(boardProduct);
                 }
@@ -707,6 +873,65 @@ struct RealHardwareTelemetry {
             UartSerial::print(d.name);
             UartSerial::print("\r\n");
         }
+
+        if (ahciFound) {
+            UartSerial::print("[MicaNT Hardware] AHCI SATA Controller: BAR5=0x");
+            char hbuf[12];
+            formatHex32(hbuf, ahciBar5);
+            UartSerial::print(hbuf);
+            UartSerial::print(" | Version: 0x");
+            formatHex32(hbuf, ahciVersion);
+            UartSerial::print(hbuf);
+            UartSerial::print(" | Ports Implemented: 0x");
+            formatHex32(hbuf, ahciPortsImplemented);
+            UartSerial::print(hbuf);
+            UartSerial::print("\r\n");
+            for (uint8_t p = 0; p < 8; ++p) {
+                if (ahciPorts[p].present) {
+                    UartSerial::print("  -> AHCI Port ");
+                    UartSerial::printDec(p);
+                    UartSerial::print(": ");
+                    UartSerial::print(ahciPorts[p].type);
+                    UartSerial::print(" @ ");
+                    UartSerial::printDec(ahciPorts[p].speedGbps);
+                    UartSerial::print(".0 Gbps (SIG=0x");
+                    formatHex32(hbuf, ahciPorts[p].signature);
+                    UartSerial::print(hbuf);
+                    UartSerial::print(")\r\n");
+                }
+            }
+        }
+
+        if (blockDeviceCount > 0) {
+            UartSerial::print("[MicaNT Hardware] UEFI Block I/O: ");
+            UartSerial::printDec(static_cast<uint32_t>(physicalDiskCount));
+            UartSerial::print(" Physical Disks (");
+            UartSerial::printDec(static_cast<uint32_t>(blockDeviceCount));
+            UartSerial::print(" Total Handles):\r\n");
+            for (size_t b = 0; b < blockDeviceCount; ++b) {
+                const auto& bd = blockDevices[b];
+                UartSerial::print("  -> Block Device ");
+                UartSerial::printDec(static_cast<uint32_t>(b));
+                UartSerial::print(": MediaId=");
+                UartSerial::printDec(bd.mediaId);
+                UartSerial::print(bd.isPartition ? " [Partition]" : " [Physical Disk]");
+                UartSerial::print(" Size=");
+                UartSerial::printDec(static_cast<uint32_t>(bd.sizeGB));
+                UartSerial::print(" GB (Sectors: ");
+                UartSerial::printDec(static_cast<uint32_t>(bd.totalBlocks));
+                UartSerial::print(", BlockSize: ");
+                UartSerial::printDec(bd.blockSize);
+                UartSerial::print(")");
+                if (bd.gptValid) {
+                    UartSerial::print(" [GPT Header Verified OK]");
+                }
+                UartSerial::print("\r\n");
+            }
+        }
+
+        UartSerial::print("[MicaNT Hardware] Intel DTS On-Die Core Temperature: ");
+        UartSerial::printDec(cpuTempC);
+        UartSerial::print(" C\r\n");
         UartSerial::print("=======================================================\r\n");
     }
 };
@@ -726,12 +951,12 @@ private:
     bool m_bootServicesExited{false};
 
     RealHardwareTelemetry m_hw{};
-    char m_cpuBrand[49]{"Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz"};
-    uint32_t m_cpuFreqMHz{3800};
-    uint32_t m_cpuTempC{39};
-    uint64_t m_totalRamMB{32768};
-    uint64_t m_freeRamMB{31840};
-    uint64_t m_usedRamMB{928};
+    char m_cpuBrand[49]{};
+    uint32_t m_cpuFreqMHz{0};
+    uint32_t m_cpuTempC{0};
+    uint64_t m_totalRamMB{0};
+    uint64_t m_freeRamMB{0};
+    uint64_t m_usedRamMB{0};
     uint64_t m_fbBase{0xC0000000};
     uint64_t m_fbSize{16777216};
 
@@ -742,7 +967,7 @@ public:
     void setRealRamMetrics(uint64_t totalBytes, uint64_t freeBytes) noexcept {
         m_totalRamMB = totalBytes / (1024 * 1024);
         m_freeRamMB = freeBytes / (1024 * 1024);
-        m_usedRamMB = (m_totalRamMB > m_freeRamMB) ? (m_totalRamMB - m_freeRamMB) : 928;
+        m_usedRamMB = (m_totalRamMB > m_freeRamMB) ? (m_totalRamMB - m_freeRamMB) : 0;
         m_hw.ramTotalMB = m_totalRamMB;
         m_hw.ramFreeMB = m_freeRamMB;
         m_hw.ramUsedMB = m_usedRamMB;
@@ -752,6 +977,8 @@ public:
         getCpuBrandString(m_hw.cpuBrand);
         copyStr(m_cpuBrand, m_hw.cpuBrand, sizeof(m_cpuBrand));
 
+        m_hw.probeCpuTopology();
+
         if (m_systemTable && m_systemTable->bootServices) {
             m_hw.cpuMeasuredMHz = measureTscFrequencyMHz(m_systemTable->bootServices);
             m_cpuFreqMHz = m_hw.cpuMeasuredMHz;
@@ -760,7 +987,11 @@ public:
         m_hw.scanPciBus();
         m_hw.parseSmbios(m_systemTable);
         m_hw.parseAcpi(m_systemTable);
-        m_cpuTempC = getCpuTemperatureC(11);
+        if (m_systemTable && m_systemTable->bootServices) {
+            m_hw.probeBlockIo(m_systemTable->bootServices);
+        }
+        m_cpuTempC = getCpuTemperatureC();
+        m_hw.cpuTempC = m_cpuTempC;
 
         m_hw.logToSerial();
     }
@@ -1257,10 +1488,10 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 28, ww - 4, 22, bootvid::Color{10, 16, 26});
             char boardInfo[96] = "Board: ";
             size_t bip = 7;
-            const char* bVen = m_hw.boardVendor[0] ? m_hw.boardVendor : "Supermicro";
-            const char* bProd = m_hw.boardProduct[0] ? m_hw.boardProduct : "X11SSH-F";
-            const char* bBios = m_hw.biosVersion[0] ? m_hw.biosVersion : "2.7";
-            const char* bDate = m_hw.biosDate[0] ? m_hw.biosDate : "04/13/2021";
+            const char* bVen = m_hw.boardVendor[0] ? m_hw.boardVendor : "Unknown Vendor";
+            const char* bProd = m_hw.boardProduct[0] ? m_hw.boardProduct : "Unknown Board";
+            const char* bBios = m_hw.biosVersion[0] ? m_hw.biosVersion : "Unknown BIOS";
+            const char* bDate = m_hw.biosDate[0] ? m_hw.biosDate : "";
             for (size_t k = 0; bVen[k] && bip < 28; ++k) boardInfo[bip++] = bVen[k];
             boardInfo[bip++] = ' ';
             for (size_t k = 0; bProd[k] && bip < 46; ++k) boardInfo[bip++] = bProd[k];
@@ -1368,7 +1599,7 @@ public:
             tabStr[tp++] = 'T';
             const char sepTab[] = "   Platform: ";
             for (size_t k = 0; sepTab[k] && tp < 60; ++k) tabStr[tp++] = sepTab[k];
-            const char* pProd = m_hw.boardProduct[0] ? m_hw.boardProduct : "X11SSH-F";
+            const char* pProd = m_hw.boardProduct[0] ? m_hw.boardProduct : "Server Board";
             for (size_t k = 0; pProd[k] && tp < 78; ++k) tabStr[tp++] = pProd[k];
             tabStr[tp] = '\0';
             m_videoDriver.drawString(wx + 12, wy + 33, tabStr, bootvid::Color{100, 240, 160}, bootvid::Color{14, 20, 30}, 1);
@@ -1483,10 +1714,10 @@ public:
             // Line 1: Motherboard & BIOS
             char l1[96] = "Motherboard: ";
             size_t l1p = 13;
-            const char* bv = m_hw.boardVendor[0] ? m_hw.boardVendor : "Supermicro";
-            const char* bp = m_hw.boardProduct[0] ? m_hw.boardProduct : "X11SSH-F";
-            const char* bver = m_hw.biosVersion[0] ? m_hw.biosVersion : "2.7";
-            const char* bdt = m_hw.biosDate[0] ? m_hw.biosDate : "04/13/2021";
+            const char* bv = m_hw.boardVendor[0] ? m_hw.boardVendor : "Unknown Vendor";
+            const char* bp = m_hw.boardProduct[0] ? m_hw.boardProduct : "Unknown Board";
+            const char* bver = m_hw.biosVersion[0] ? m_hw.biosVersion : "Unknown BIOS";
+            const char* bdt = m_hw.biosDate[0] ? m_hw.biosDate : "";
             for (size_t k = 0; bv[k] && l1p < 30; ++k) l1[l1p++] = bv[k];
             l1[l1p++] = ' ';
             for (size_t k = 0; bp[k] && l1p < 50; ++k) l1[l1p++] = bp[k];
@@ -2273,7 +2504,6 @@ public:
         uint32_t frameCount = 0;
         uint32_t realRenderUs = 1800;
         uint32_t realCpuUsage = 11;
-        uint32_t interactiveBonus = 0;
         uint32_t cpuTempC = m_cpuTempC;
         uefi::EfiTime liveTime = m_bootTime;
         uint32_t spinAngle = 0;
@@ -2324,7 +2554,6 @@ public:
                 if (!input || !input->readKeyStroke) return;
                 uefi::EfiInputKey key{};
                 while (input->readKeyStroke(input, &key) == uefi::EFI_SUCCESS) {
-                    interactiveBonus = 25; // CPU load spikes dynamically on user interaction!
                     if (key.scanCode == 0x17 || key.unicodeChar == 0x1B) { // Escape key
                         UartSerial::print("[MicaNT Keyboard] ESC pressed! Clean UEFI firmware reset...\r\n");
                         if (m_systemTable && m_systemTable->runtimeServices && m_systemTable->runtimeServices->resetSystem) {
@@ -2394,14 +2623,18 @@ public:
                             UartSerial::print(",\"ram_free_mb\":");
                             UartSerial::printDec(static_cast<uint32_t>(m_freeRamMB));
                             UartSerial::print(",\"board\":\"");
-                            UartSerial::print(m_hw.boardVendor[0] ? m_hw.boardVendor : "Supermicro");
+                            UartSerial::print(m_hw.boardVendor[0] ? m_hw.boardVendor : "Unknown Vendor");
                             UartSerial::print(" ");
-                            UartSerial::print(m_hw.boardProduct[0] ? m_hw.boardProduct : "X11SSH-F");
+                            UartSerial::print(m_hw.boardProduct[0] ? m_hw.boardProduct : "Unknown Board");
                             UartSerial::print("\",\"bios\":\"");
-                            UartSerial::print(m_hw.biosVendor[0] ? m_hw.biosVendor : "AMI");
+                            UartSerial::print(m_hw.biosVendor[0] ? m_hw.biosVendor : "Unknown BIOS");
                             UartSerial::print(" ");
-                            UartSerial::print(m_hw.biosVersion[0] ? m_hw.biosVersion : "2.7");
-                            UartSerial::print("\",\"pci_devices\":");
+                            UartSerial::print(m_hw.biosVersion[0] ? m_hw.biosVersion : "Unknown");
+                            UartSerial::print("\",\"ahci_drives\":");
+                            UartSerial::printDec(static_cast<uint32_t>(m_hw.ahciDriveCount));
+                            UartSerial::print(",\"physical_disks\":");
+                            UartSerial::printDec(static_cast<uint32_t>(m_hw.physicalDiskCount));
+                            UartSerial::print(",\"pci_devices\":");
                             UartSerial::printDec(static_cast<uint32_t>(m_hw.pciDeviceCount));
                             UartSerial::print(",\"madt_apics\":");
                             UartSerial::printDec(static_cast<uint32_t>(m_hw.acpiMadtLocalApics));
@@ -2423,7 +2656,6 @@ public:
                                 userTypedText[typedLen++] = *msg++;
                             }
                             userTypedText[typedLen] = '\0';
-                            interactiveBonus = 35;
                             UartSerial::print("[MicaNT COM1] Injected text into Notepad++ editor: ");
                             UartSerial::print(userTypedText);
                             UartSerial::print("\r\n");
@@ -2436,15 +2668,17 @@ public:
                             newMouseX = mx;
                             newMouseY = my;
                             mouseMoved = true;
-                            interactiveBonus = 15;
                             UartSerial::print("[MicaNT COM1] Mouse positioned to (");
                             UartSerial::printDec(mx);
                             UartSerial::print(", ");
                             UartSerial::printDec(my);
                             UartSerial::print(")\r\n");
                         } else if (serialCmdBuf[0] == 's' && serialCmdBuf[1] == 't' && serialCmdBuf[2] == 'r' && serialCmdBuf[3] == 'e' && serialCmdBuf[4] == 's' && serialCmdBuf[5] == 's') {
-                            interactiveBonus = 70;
-                            UartSerial::print("[MicaNT COM1] Silicon workload stressed (+70% load spike)\r\n");
+                            UartSerial::print("[MicaNT COM1] Running real silicon ALU compute stress workload...\r\n");
+                            volatile uint64_t dummy = 0;
+                            for (uint64_t s = 0; s < 5000000ULL; ++s) {
+                                dummy ^= (s * 6364136223846793005ULL + 1442695040888963407ULL);
+                            }
                         } else if (serialCmdBuf[0] == 'r' && serialCmdBuf[1] == 'e' && serialCmdBuf[2] == 'b' && serialCmdBuf[3] == 'o' && serialCmdBuf[4] == 'o' && serialCmdBuf[5] == 't') {
                             UartSerial::print("[MicaNT COM1] Hardware reset requested! Clean UEFI reset...\r\n");
                             if (m_systemTable && m_systemTable->runtimeServices && m_systemTable->runtimeServices->resetSystem) {
@@ -2511,7 +2745,6 @@ public:
                             newMouseX = calcX;
                             newMouseY = calcY;
                             mouseMoved = true;
-                            interactiveBonus = 12;
                             UartSerial::print("[MicaNT Abs] X=");
                             UartSerial::printInt(calcX);
                             UartSerial::print(" Y=");
@@ -2537,7 +2770,6 @@ public:
                                 newMouseX = cursorX + simpleState.relativeMovementX;
                                 newMouseY = cursorY + simpleState.relativeMovementY;
                                 mouseMoved = true;
-                                interactiveBonus = 12;
                                 UartSerial::print("[MicaNT Rel] dX=");
                                 UartSerial::printInt(simpleState.relativeMovementX);
                                 UartSerial::print(" dY=");
@@ -2578,7 +2810,6 @@ public:
                             newMouseX = cursorX + dx;
                             newMouseY = cursorY - dy; // Invert PS/2 Y axis
                             mouseMoved = true;
-                            interactiveBonus = 12;
                         }
                     }
                 } else {
@@ -2588,7 +2819,6 @@ public:
                     } else if (data == 0xAA || data == 0xB6) {
                         ps2Shift = false;
                     } else if (!(data & 0x80)) {
-                        interactiveBonus = 25;
                         if (data == 0x01) { // PS/2 ESC make code
                             UartSerial::print("[MicaNT PS/2] ESC pressed! Hardware reset requested...\r\n");
                             outb(0xCF9, 0x06);
@@ -2621,11 +2851,6 @@ public:
             if (mouseMoved) {
                 cursorX = newMouseX;
                 cursorY = newMouseY;
-            }
-
-            // Decay interactive bonus towards zero
-            if (interactiveBonus > 0) {
-                if ((frameCount & 1) == 0) interactiveBonus--;
             }
 
             // --- D. Update Dynamic Screen Layer ---
@@ -2672,8 +2897,8 @@ public:
 
             // Frame budget is 16,666 us for 60 FPS
             uint32_t activePct = (realRenderUs * 100) / 16666;
-            realCpuUsage = activePct + interactiveBonus;
-            if (realCpuUsage < 2) realCpuUsage = 2;
+            realCpuUsage = activePct;
+            if (realCpuUsage < 1) realCpuUsage = 1;
             if (realCpuUsage > 100) realCpuUsage = 100;
 
             frameCount++;
@@ -2816,7 +3041,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     // 1. Initial firmware console output
     engine.initConsole();
 
-    // 2. Locate GOP & initialize linear framebuffer
+    // 2. Discover Real Silicon & Hardware Telemetry (CPUID, MSR DTS, SMBIOS, ACPI, AHCI, Block I/O)
+    engine.detectSiliconTelemetry();
+
+    // 3. Locate GOP & initialize linear framebuffer
     bool hasGop = engine.initGopFramebuffer();
     if (hasGop) {
         if (systemTable->conOut) {
