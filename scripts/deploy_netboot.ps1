@@ -80,14 +80,14 @@ $ipxeContent = @'
 
 echo ============================================================================
 echo   MicaNT Cutler Edition: 90 Kernel Units, 44 System32 DLLs (334 Suites OK)
-echo   Boot Server: barrer.net
+echo   Boot Server: 40.160.53.129
 echo ============================================================================
 
-echo [MicaNT] Chainloading latest MicaNT UEFI Bootloader...
-chain http://barrer.net/ipxe/BOOTX64.EFI || chain http://40.160.53.129/ipxe/BOOTX64.EFI || goto boot_err
+echo [MicaNT] Chainloading latest MicaNT UEFI Bootloader (126.5KB)...
+chain http://40.160.53.129/ipxe/BOOTX64.EFI || goto boot_err
 
 :boot_err
-echo [ERROR] Failed to chainload BOOTX64.EFI from barrer.net.
+echo [ERROR] Failed to chainload BOOTX64.EFI from 40.160.53.129.
 echo [MicaNT] Falling back to local offline kernel...
 chain \EFI\MicaNT\BOOTX64.EFI || shell
 '@
