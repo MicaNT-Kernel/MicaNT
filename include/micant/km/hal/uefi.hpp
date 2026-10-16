@@ -232,6 +232,37 @@ struct EfiSimplePointerProtocol {
     EfiSimplePointerMode* mode{nullptr};
 };
 
+/**
+ * @brief UEFI Absolute Pointer Protocol (EFI_ABSOLUTE_POINTER_PROTOCOL) for IPMI / KVM virtual USB touch/tablet.
+ */
+inline constexpr EfiGuid EFI_ABSOLUTE_POINTER_PROTOCOL_GUID = {
+    0x8d59d32b, 0xc655, 0x4ae9, { 0x9b, 0x15, 0xf2, 0x59, 0x04, 0x99, 0x2a, 0x43 }
+};
+
+struct EfiAbsolutePointerMode {
+    uint64_t absoluteMinX{0};
+    uint64_t absoluteMinY{0};
+    uint64_t absoluteMinZ{0};
+    uint64_t absoluteMaxX{0};
+    uint64_t absoluteMaxY{0};
+    uint64_t absoluteMaxZ{0};
+    uint32_t attributes{0};
+};
+
+struct EfiAbsolutePointerState {
+    uint64_t currentX{0};
+    uint64_t currentY{0};
+    uint64_t currentZ{0};
+    uint32_t activeButtons{0};
+};
+
+struct EfiAbsolutePointerProtocol {
+    EfiStatus (*reset)(EfiAbsolutePointerProtocol* self, bool extendedVerification){nullptr};
+    EfiStatus (*getState)(EfiAbsolutePointerProtocol* self, EfiAbsolutePointerState* state){nullptr};
+    void*                   waitForInput{nullptr};
+    EfiAbsolutePointerMode* mode{nullptr};
+};
+
 
 /**
  * @brief UEFI Boot Services Table.
@@ -284,7 +315,7 @@ struct EfiBootServices {
 
     // Miscellaneous Services
     void* getNextMonotonicCount;
-    void* stall;
+    EfiStatus (*stall)(uint64_t microseconds);
     void* setWatchdogTimer;
 
     // Driver Support Services
