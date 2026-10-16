@@ -122,8 +122,8 @@ __declspec(dllexport) void _CxxThrowException(void* p, void* t) { micant::ucrt::
 __declspec(dllexport) void __telemetry_main_invoke_trigger(void* r) { micant::ucrt::winnt_vcruntime140_abi::Vc_telemetry_main_invoke_trigger(r); }
 __declspec(dllexport) void __telemetry_main_return_trigger(void* r) { micant::ucrt::winnt_vcruntime140_abi::Vc_telemetry_main_return_trigger(r); }
 __declspec(dllexport) void __std_type_info_destroy_list(void* n) { micant::ucrt::winnt_vcruntime140_abi::Vc_std_type_info_destroy_list(n); }
-__declspec(dllexport) int32_t _setjmp(void* env) { return micant::ucrt::winnt_vcruntime140_abi::Vc_setjmp(env); }
-__declspec(dllexport) void longjmp(void* env, int32_t val) { micant::ucrt::winnt_vcruntime140_abi::Vc_longjmp(env, val); }
+__declspec(dllexport) int32_t vc_setjmp(void* env) { return micant::ucrt::winnt_vcruntime140_abi::Vc_setjmp(env); }
+__declspec(dllexport) void vc_longjmp(void* env, int32_t val) { micant::ucrt::winnt_vcruntime140_abi::Vc_longjmp(env, val); }
 __declspec(dllexport) void* vc_memcpy(void* d, const void* s, size_t c) { return micant::ucrt::winnt_vcruntime140_abi::Vc_memcpy(d, s, c); }
 __declspec(dllexport) void* vc_memmove(void* d, const void* s, size_t c) { return micant::ucrt::winnt_vcruntime140_abi::Vc_memmove(d, s, c); }
 __declspec(dllexport) void* vc_memset(void* d, int32_t val, size_t c) { return micant::ucrt::winnt_vcruntime140_abi::Vc_memset(d, val, c); }

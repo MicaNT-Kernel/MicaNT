@@ -5,8 +5,8 @@ EXPORTS
     __telemetry_main_invoke_trigger
     __telemetry_main_return_trigger
     __std_type_info_destroy_list
-    _setjmp
-    longjmp
+    _setjmp = vc_setjmp
+    longjmp = vc_longjmp
     memcpy = vc_memcpy
     memmove = vc_memmove
     memset = vc_memset
