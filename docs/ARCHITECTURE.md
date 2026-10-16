@@ -37,4 +37,11 @@ MicaNT enforces a strict separation between **Kernel-Mode (`km`)**, **User-Mode 
 
 ## 3. Verification Battery (`test/test_runner.cpp`)
 
-MicaNT ships with a **258-suite automated verification battery** covering all microkernel, executive, HAL, driver, user-mode subsystem, and real-world FOSS application compatibility horizons, paired with `scripts/clean_room_sentinel.js` for continuous clean-room provenance and directory architecture enforcement.
+MicaNT ships with a **334-suite automated verification battery** (118 Horizons, 90 Units, 44 PE32+ System32 DLLs) covering all microkernel, executive, HAL, driver, user-mode subsystem, and real-world FOSS application compatibility horizons, paired with `scripts/clean_room_sentinel.js` for continuous clean-room provenance and directory architecture enforcement.
+
+---
+
+## 4. Bare-Metal Silicon Hardware Verification
+
+MicaNT is validated on real physical hardware (Intel Xeon E3-1270 v6, Supermicro X11SSH-F / Intel S1200SP, ASPEED AST2400 GOP framebuffer). For complete architectural details on hardware MSR cycle counters (`IA32_MPERF` MSR `0xE7`), ACPI MADT multi-core APIC topology normalization, and vectorized GOP MMIO burst fills, see [`docs/BAREMETAL_TELEMETRY.md`](BAREMETAL_TELEMETRY.md).
+

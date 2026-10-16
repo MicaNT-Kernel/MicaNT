@@ -450,6 +450,9 @@
 - [x] **ACPI RSDP Discovery**: Extract ACPI 2.0 / 1.0 root system pointer from `EFI_CONFIGURATION_TABLE`.
 - [x] **UEFI Memory Map Translation**: Map Conventional, LoaderCode, BootServices, ACPIReclaim to NT `LoaderMemoryType` descriptors.
 - [x] **ExitBootServices Handoff**: Terminate UEFI services, build `LOADER_PARAMETER_BLOCK`, and handoff to kernel.
+- [x] **ASPEED AST2400 GOP Burst Vectorization**: Replaced scalar per-pixel MMIO loops with `std::fill_n` continuous quadword burst writes, resolving uncached PCIe Gen1 bus stalls.
+- [x] **Intel IA32_MPERF Hardware Performance Counters**: Integrated CPUID Leaf 6 ECX[0] capability detection and MSR `0xE7` sampling to measure genuine active C0 execution cycles.
+- [x] **ACPI MADT Multi-Core Topology Normalization**: Normalized single-thread BSP render load across all 8 APIC threads discovered in the ACPI MADT table, eliminating the 100% false-positive CPU meter trap on physical Xeon E3-1270 v6 hardware.
 - [x] **Test Suite 26**: `Test_UefiBootloader_GopAndMemoryMap` verified.
 
 ---
