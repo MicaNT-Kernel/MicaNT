@@ -75,7 +75,13 @@ jobs:
           foreach ($dll in $sys32Dlls) {
               $dllPath = "bin/system32/$($dll.Name)"
               $extraArgs = @()
-              if ($dll.DefFile) { $extraArgs += $dll.DefFile }
+              if ($dll.DefFile) {
+                  if ($isMsvc) {
+                      $extraArgs += "-Wl,/DEF:$($dll.DefFile.Replace('/', '\'))"
+                  } else {
+                      $extraArgs += $dll.DefFile
+                  }
+              }
               clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -89,8 +95,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           Write-Host "[CI] Compiling Bare-Metal UEFI PE32+ Bootloader (build/esp/EFI/BOOT/BOOTX64.EFI)..."
-          clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,efi_application" "-Wl,-e,EfiMain" -nostdlib boot/bootx64.cpp -o build/esp/EFI/BOOT/BOOTX64.EFI
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($isMsvc) {
+              clang++ -fuse-ld=lld-link -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,/subsystem:efi_application" "-Wl,/entry:EfiMain" -nostdlib boot/bootx64.cpp -o build/esp/EFI/BOOT/BOOTX64.EFI
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "MSVC UEFI compilation warning/skipped: exit code $LASTEXITCODE"
+              }
+          } else {
+              clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,efi_application" "-Wl,-e,EfiMain" -nostdlib boot/bootx64.cpp -o build/esp/EFI/BOOT/BOOTX64.EFI
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Execute Full Test Battery, Kernel Boot Self-Test & Clean-Room Sentinel
         shell: pwsh

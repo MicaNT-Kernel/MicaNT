@@ -180,7 +180,11 @@ try {
         if ($Force -or -not (Test-Path $dllPath) -or ((Get-Item $srcPath).LastWriteTimeUtc -gt (Get-Item $dllPath).LastWriteTimeUtc)) {
             $extraArgs = @()
             if ($dll.DefFile) {
-                $extraArgs += (Join-Path $repoRoot $dll.DefFile)
+                if ($isMsvc) {
+                    $extraArgs += "-Wl,/DEF:$((Join-Path $repoRoot $dll.DefFile).Replace('/', '\'))"
+                } else {
+                    $extraArgs += (Join-Path $repoRoot $dll.DefFile)
+                }
             }
             & clang++ -std=c++23 -O2 -Iinclude -shared $forceFlag "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
             if ($LASTEXITCODE -ne 0) { throw "Failed building System32 PE32+ DLL $($dll.Name)" }
