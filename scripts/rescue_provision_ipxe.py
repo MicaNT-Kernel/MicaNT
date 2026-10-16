@@ -44,8 +44,9 @@ def provision():
     print("[MicaNT Provision] SSH connection established.")
 
     commands = [
-        ("Mounting ESP /dev/sda1", "mkdir -p /mnt/esp && mount /dev/sda1 /mnt/esp"),
+        ("Mounting ESP /dev/sda1", "mkdir -p /mnt/esp && (mountpoint -q /mnt/esp || mount /dev/sda1 /mnt/esp)"),
         ("Updating local cached BOOTX64.EFI from barrer.net", "curl -sSf http://barrer.net/ipxe/BOOTX64.EFI -o /mnt/esp/EFI/MicaNT/BOOTX64.EFI && ls -lh /mnt/esp/EFI/MicaNT/BOOTX64.EFI"),
+        ("Installing build dependencies & cloning iPXE", "apt-get update && apt-get install -y gcc binutils make perl liblzma-dev mtools git efibootmgr && [ -d /root/ipxe ] || git clone --depth 1 https://github.com/ipxe/ipxe.git /root/ipxe"),
         ("Writing static-IP embed.ipxe script", f"cat << 'EOF' > /root/ipxe/src/embed.ipxe\n{EMBED_IPXE_SCRIPT}\nEOF\n"),
         ("Compiling x86_64 UEFI iPXE with static IP support", "cd /root/ipxe/src && make -j8 bin-x86_64-efi/ipxe.efi EMBED=embed.ipxe && ls -lh bin-x86_64-efi/ipxe.efi"),
         ("Installing new ipxe.efi to /mnt/esp/EFI/BOOT/BOOTX64.EFI", "cp /root/ipxe/src/bin-x86_64-efi/ipxe.efi /mnt/esp/EFI/BOOT/BOOTX64.EFI && ls -lh /mnt/esp/EFI/BOOT/BOOTX64.EFI"),

@@ -78,27 +78,18 @@ $ipxeContent = @'
 #  Target: Intel Xeon E3-1270 v6 (OVH Eco / Bare Metal)
 # ============================================================================
 
-prompt --key 0x02 --timeout 2000 Press Ctrl-B for the iPXE commandline... || goto boot_micant
-
-:boot_micant
 echo ============================================================================
 echo   MicaNT Cutler Edition: 90 Kernel Units, 44 System32 DLLs (334 Suites OK)
 echo   Boot Server: barrer.net
 echo ============================================================================
 
-echo [1/2] Configuring DHCP networking...
-dhcp || goto net_err
-
-echo [2/2] Chainloading UEFI PE32+ Bootloader from http://barrer.net/ipxe/BOOTX64.EFI...
-chain http://barrer.net/ipxe/BOOTX64.EFI || goto boot_err
-
-:net_err
-echo [ERROR] DHCP network configuration failed.
-shell
+echo [MicaNT] Chainloading UEFI PE32+ Bootloader from http://barrer.net/ipxe/BOOTX64.EFI...
+chain --autofree http://barrer.net/ipxe/BOOTX64.EFI || chain --autofree http://40.160.53.129/ipxe/BOOTX64.EFI || goto boot_err
 
 :boot_err
 echo [ERROR] Failed to chainload BOOTX64.EFI from barrer.net.
-shell
+echo [MicaNT] Falling back to local offline kernel...
+chain \EFI\MicaNT\BOOTX64.EFI || shell
 '@
 Set-Content -Path (Join-Path $webRoot "boot.ipxe") -Value $ipxeContent -Encoding UTF8
 Write-Host "[MicaNT Netboot] Updated boot.ipxe in $webRoot" -ForegroundColor Green

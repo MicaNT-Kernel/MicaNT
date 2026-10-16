@@ -1233,25 +1233,91 @@ public:
         // 1. Initial Desktop Background & Window Frame Layout
         renderRealAppsDesktop();
 
-        // 2. Discover UEFI Mouse Protocols:
-        // Try Absolute Pointer first (used by ASPEED / JViewer KVM USB tablet)
-        uefi::EfiAbsolutePointerProtocol* absPointer = nullptr;
-        void* absInterface = nullptr;
-        if (m_systemTable->bootServices->locateProtocol(&uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, nullptr, &absInterface) == uefi::EFI_SUCCESS) {
-            absPointer = static_cast<uefi::EfiAbsolutePointerProtocol*>(absInterface);
-            if (absPointer && absPointer->reset) {
-                absPointer->reset(absPointer, false);
+        // Discover ALL UEFI Mouse and Keyboard Protocols (multi-handle enumeration)
+        constexpr size_t MAX_DEVICES = 8;
+        uefi::EfiAbsolutePointerProtocol* absPointers[MAX_DEVICES]{};
+        size_t absPointerCount = 0;
+
+        uefi::EfiSimplePointerProtocol* simplePointers[MAX_DEVICES]{};
+        size_t simplePointerCount = 0;
+
+        uefi::EfiSimpleTextInputProtocol* keyPointers[MAX_DEVICES]{};
+        size_t keyPointerCount = 0;
+
+        auto locateHandleBuffer = reinterpret_cast<uefi::EfiStatus (*)(
+            uint32_t searchType,
+            const uefi::EfiGuid* protocol,
+            void* searchKey,
+            uint64_t* noHandles,
+            uefi::EfiHandle** buffer
+        )>(m_systemTable->bootServices->locateHandleBuffer);
+
+        auto handleProtocol = reinterpret_cast<uefi::EfiStatus (*)(
+            uefi::EfiHandle handle,
+            const uefi::EfiGuid* protocol,
+            void** interface
+        )>(m_systemTable->bootServices->handleProtocol);
+
+        auto freePool = reinterpret_cast<uefi::EfiStatus (*)(void* buffer)>(
+            m_systemTable->bootServices->freePool
+        );
+
+        if (locateHandleBuffer && handleProtocol) {
+            // Absolute Pointers (Virtual KVM USB Tablet)
+            uint64_t numAbs = 0;
+            uefi::EfiHandle* absBuf = nullptr;
+            if (locateHandleBuffer(2, &uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, nullptr, &numAbs, &absBuf) == uefi::EFI_SUCCESS && absBuf) {
+                for (uint64_t i = 0; i < numAbs && absPointerCount < MAX_DEVICES; ++i) {
+                    void* iface = nullptr;
+                    if (handleProtocol(absBuf[i], &uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
+                        absPointers[absPointerCount++] = static_cast<uefi::EfiAbsolutePointerProtocol*>(iface);
+                    }
+                }
+                if (freePool) freePool(absBuf);
+            }
+
+            // Simple Pointers (Virtual KVM USB Mouse / Relative Mouse)
+            uint64_t numSimp = 0;
+            uefi::EfiHandle* simpBuf = nullptr;
+            if (locateHandleBuffer(2, &uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, nullptr, &numSimp, &simpBuf) == uefi::EFI_SUCCESS && simpBuf) {
+                for (uint64_t i = 0; i < numSimp && simplePointerCount < MAX_DEVICES; ++i) {
+                    void* iface = nullptr;
+                    if (handleProtocol(simpBuf[i], &uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
+                        simplePointers[simplePointerCount++] = static_cast<uefi::EfiSimplePointerProtocol*>(iface);
+                    }
+                }
+                if (freePool) freePool(simpBuf);
+            }
+
+            // Text Input Keyboards
+            uint64_t numKeys = 0;
+            uefi::EfiHandle* keyBuf = nullptr;
+            if (locateHandleBuffer(2, &uefi::EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID, nullptr, &numKeys, &keyBuf) == uefi::EFI_SUCCESS && keyBuf) {
+                for (uint64_t i = 0; i < numKeys && keyPointerCount < MAX_DEVICES; ++i) {
+                    void* iface = nullptr;
+                    if (handleProtocol(keyBuf[i], &uefi::EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
+                        keyPointers[keyPointerCount++] = static_cast<uefi::EfiSimpleTextInputProtocol*>(iface);
+                    }
+                }
+                if (freePool) freePool(keyBuf);
             }
         }
 
-        // Also locate Simple Pointer Protocol (standard relative USB mouse)
-        uefi::EfiSimplePointerProtocol* simplePointer = nullptr;
-        void* simpleInterface = nullptr;
-        if (m_systemTable->bootServices->locateProtocol(&uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, nullptr, &simpleInterface) == uefi::EFI_SUCCESS) {
-            simplePointer = static_cast<uefi::EfiSimplePointerProtocol*>(simpleInterface);
-            if (simplePointer && simplePointer->reset) {
-                simplePointer->reset(simplePointer, false);
+        // Fallbacks if locateHandleBuffer did not find devices
+        if (absPointerCount == 0) {
+            void* absInterface = nullptr;
+            if (m_systemTable->bootServices->locateProtocol(&uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, nullptr, &absInterface) == uefi::EFI_SUCCESS && absInterface) {
+                absPointers[absPointerCount++] = static_cast<uefi::EfiAbsolutePointerProtocol*>(absInterface);
             }
+        }
+        if (simplePointerCount == 0) {
+            void* simpleInterface = nullptr;
+            if (m_systemTable->bootServices->locateProtocol(&uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, nullptr, &simpleInterface) == uefi::EFI_SUCCESS && simpleInterface) {
+                simplePointers[simplePointerCount++] = static_cast<uefi::EfiSimplePointerProtocol*>(simpleInterface);
+            }
+        }
+        if (keyPointerCount == 0 && m_systemTable->conIn) {
+            keyPointers[keyPointerCount++] = m_systemTable->conIn;
         }
 
         // 3. Initialize Interactive Cursor at center
@@ -1267,10 +1333,39 @@ public:
         UartSerial::print("[MicaNT COM1] Physical Intel Xeon E3-1270 v6 @ 3.80 GHz\r\n");
         UartSerial::print("[MicaNT COM1] 90 Kernel Units | 44 PE32+ DLLs | 334/334 Suites OK\r\n");
         UartSerial::print("[MicaNT COM1] Interactive 60 FPS Event Loop Active\r\n");
-        UartSerial::print("[MicaNT COM1] Commands: 'ping', 'status', 'type <msg>', 'stress', 'reboot'\r\n");
+        UartSerial::print("[MicaNT COM1] Commands: 'ping', 'status', 'type <msg>', 'mouse <x> <y>', 'stress', 'reboot'\r\n");
         UartSerial::print("=======================================================\r\n");
 
-        // 4. Live interactive state buffers
+        // 4. PS/2 8042 Hardware Controller Scancode Tables & State
+        static constexpr char PS2_SET1_LOWER[128] = {
+            0,   27,  '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+            '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+            0,   'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',
+            0,   '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0,
+            '*', 0,   ' ', 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+            0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+            0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+            0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+            0,   0,   0,   0,   0,   0,   0,   0
+        };
+
+        static constexpr char PS2_SET1_UPPER[128] = {
+            0,   27,  '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
+            '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
+            0,   'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~',
+            0,   '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0,
+            '*', 0,   ' ', 0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+            0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+            0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+            0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+            0,   0,   0,   0,   0,   0,   0,   0
+        };
+
+        bool ps2Shift = false;
+        uint8_t ps2MouseBuf[3]{};
+        uint8_t ps2MouseIdx = 0;
+
+        // 5. Live interactive state buffers
         char userTypedText[64] = "Bare-Metal Silicon Live Testing OK";
         size_t typedLen = 34;
         char serialCmdBuf[64]{};
@@ -1281,12 +1376,13 @@ public:
         uint32_t waveOffset = 0;
         uint32_t spinAngle = 0;
 
-        // 5. 60 FPS Interactive Event Loop
+        // 6. 60 FPS Interactive Event Loop
         while (true) {
-            // --- A. Poll Keyboard Input (UEFI conIn) ---
-            if (m_systemTable->conIn && m_systemTable->conIn->readKeyStroke) {
+            // --- A. Non-blocking KeyStroke Poll (UEFI conIn + all enumerated keyboards) ---
+            auto pollKeyInput = [&](uefi::EfiSimpleTextInputProtocol* input) {
+                if (!input || !input->readKeyStroke) return;
                 uefi::EfiInputKey key{};
-                while (m_systemTable->conIn->readKeyStroke(m_systemTable->conIn, &key) == uefi::EFI_SUCCESS) {
+                while (input->readKeyStroke(input, &key) == uefi::EFI_SUCCESS) {
                     targetCpuLoad = 38; // CPU load spikes dynamically on user interaction!
                     if (key.unicodeChar == 0x08) { // Backspace
                         if (typedLen > 0) {
@@ -1302,10 +1398,21 @@ public:
                         }
                     }
                 }
+            };
+
+            if (m_systemTable->conIn) pollKeyInput(m_systemTable->conIn);
+            for (size_t i = 0; i < keyPointerCount; ++i) {
+                if (keyPointers[i] != m_systemTable->conIn) {
+                    pollKeyInput(keyPointers[i]);
+                }
             }
 
             // --- B. Poll COM1 Serial Remote Input (IPMI SOL / UART) ---
             char sChar = 0;
+            bool mouseMoved = false;
+            int32_t newMouseX = cursorX;
+            int32_t newMouseY = cursorY;
+
             while (UartSerial::tryGetChar(sChar)) {
                 if (sChar == '\r' || sChar == '\n') {
                     if (cmdPos > 0) {
@@ -1337,6 +1444,21 @@ public:
                             UartSerial::print("[MicaNT COM1] Injected text into Notepad++ editor: ");
                             UartSerial::print(userTypedText);
                             UartSerial::print("\r\n");
+                        } else if (serialCmdBuf[0] == 'm' && serialCmdBuf[1] == 'o' && serialCmdBuf[2] == 'u' && serialCmdBuf[3] == 's' && serialCmdBuf[4] == 'e' && serialCmdBuf[5] == ' ') {
+                            const char* p = &serialCmdBuf[6];
+                            int32_t mx = 0, my = 0;
+                            while (*p >= '0' && *p <= '9') mx = mx * 10 + (*p++ - '0');
+                            while (*p == ' ') p++;
+                            while (*p >= '0' && *p <= '9') my = my * 10 + (*p++ - '0');
+                            newMouseX = mx;
+                            newMouseY = my;
+                            mouseMoved = true;
+                            targetCpuLoad = 25;
+                            UartSerial::print("[MicaNT COM1] Mouse positioned to (");
+                            UartSerial::printDec(mx);
+                            UartSerial::print(", ");
+                            UartSerial::printDec(my);
+                            UartSerial::print(")\r\n");
                         } else if (serialCmdBuf[0] == 's' && serialCmdBuf[1] == 't' && serialCmdBuf[2] == 'r' && serialCmdBuf[3] == 'e' && serialCmdBuf[4] == 's' && serialCmdBuf[5] == 's') {
                             targetCpuLoad = 88;
                             cpuLoad = 88;
@@ -1345,7 +1467,7 @@ public:
                             UartSerial::print("[MicaNT COM1] Hardware reset requested! Resetting CPU...\r\n");
                             outb(0xCF9, 0x06); // Standard PCI hard reset
                         } else {
-                            UartSerial::print("[MicaNT COM1] Unknown command. Available: 'ping', 'status', 'type <msg>', 'stress', 'reboot'\r\n");
+                            UartSerial::print("[MicaNT COM1] Unknown command. Available: 'ping', 'status', 'type <msg>', 'mouse <x> <y>', 'stress', 'reboot'\r\n");
                         }
                         cmdPos = 0;
                     }
@@ -1371,31 +1493,95 @@ public:
                 UartSerial::print("\"\r\n");
             }
 
-            // --- C. Poll Mouse Input (Absolute Pointer or Simple Pointer) ---
-            bool mouseMoved = false;
-            int32_t newMouseX = cursorX;
-            int32_t newMouseY = cursorY;
-
-            if (absPointer && absPointer->getState && absPointer->mode &&
-                absPointer->mode->absoluteMaxX > 0 && absPointer->mode->absoluteMaxY > 0) {
-                uefi::EfiAbsolutePointerState absState{};
-                if (absPointer->getState(absPointer, &absState) == uefi::EFI_SUCCESS) {
-                    newMouseX = static_cast<int32_t>((absState.currentX * width) / absPointer->mode->absoluteMaxX);
-                    newMouseY = static_cast<int32_t>((absState.currentY * height) / absPointer->mode->absoluteMaxY);
-                    mouseMoved = true;
-                    targetCpuLoad = 22;
-                }
-            } else if (simplePointer && simplePointer->getState) {
-                uefi::EfiSimplePointerState simpleState{};
-                if (simplePointer->getState(simplePointer, &simpleState) == uefi::EFI_SUCCESS) {
-                    if (simpleState.relativeMovementX != 0 || simpleState.relativeMovementY != 0) {
-                        newMouseX = cursorX + (simpleState.relativeMovementX / 4);
-                        newMouseY = cursorY + (simpleState.relativeMovementY / 4);
+            // --- C. Poll Mouse Input (Absolute Pointers, Simple Pointers, and 8042 PS/2) ---
+            // 1. Check all Absolute Pointer devices (Virtual KVM USB Tablet)
+            for (size_t i = 0; i < absPointerCount; ++i) {
+                auto* p = absPointers[i];
+                if (p && p->getState && p->mode && p->mode->absoluteMaxX > 0 && p->mode->absoluteMaxY > 0) {
+                    uefi::EfiAbsolutePointerState absState{};
+                    if (p->getState(p, &absState) == uefi::EFI_SUCCESS) {
+                        newMouseX = static_cast<int32_t>((absState.currentX * width) / p->mode->absoluteMaxX);
+                        newMouseY = static_cast<int32_t>((absState.currentY * height) / p->mode->absoluteMaxY);
                         mouseMoved = true;
                         targetCpuLoad = 22;
+                        break;
                     }
                 }
             }
+
+            // 2. Check all Simple Pointer devices (Virtual KVM Relative Mouse)
+            if (!mouseMoved) {
+                for (size_t i = 0; i < simplePointerCount; ++i) {
+                    auto* p = simplePointers[i];
+                    if (p && p->getState) {
+                        uefi::EfiSimplePointerState simpleState{};
+                        if (p->getState(p, &simpleState) == uefi::EFI_SUCCESS) {
+                            if (simpleState.relativeMovementX != 0 || simpleState.relativeMovementY != 0) {
+                                newMouseX = cursorX + simpleState.relativeMovementX;
+                                newMouseY = cursorY + simpleState.relativeMovementY;
+                                mouseMoved = true;
+                                targetCpuLoad = 22;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Hardware 8042 Controller Polling (PS/2 keyboard scancodes + mouse packets)
+            while ((inb(0x64) & 0x01) != 0) {
+                uint8_t status = inb(0x64);
+                uint8_t data = inb(0x60);
+                if (status & 0x20) {
+                    // PS/2 mouse byte
+                    if (ps2MouseIdx == 0) {
+                        if (data & 0x08) {
+                            ps2MouseBuf[0] = data;
+                            ps2MouseIdx = 1;
+                        }
+                    } else if (ps2MouseIdx == 1) {
+                        ps2MouseBuf[1] = data;
+                        ps2MouseIdx = 2;
+                    } else if (ps2MouseIdx == 2) {
+                        ps2MouseBuf[2] = data;
+                        ps2MouseIdx = 0;
+                        int32_t dx = static_cast<int8_t>(ps2MouseBuf[1]);
+                        int32_t dy = static_cast<int8_t>(ps2MouseBuf[2]);
+                        if (dx != 0 || dy != 0) {
+                            newMouseX = cursorX + dx;
+                            newMouseY = cursorY - dy; // Invert PS/2 Y axis
+                            mouseMoved = true;
+                            targetCpuLoad = 22;
+                        }
+                    }
+                } else {
+                    // PS/2 keyboard scancode
+                    if (data == 0x2A || data == 0x36) {
+                        ps2Shift = true;
+                    } else if (data == 0xAA || data == 0xB6) {
+                        ps2Shift = false;
+                    } else if (!(data & 0x80)) {
+                        targetCpuLoad = 38;
+                        if (data == 0x0E) { // Backspace
+                            if (typedLen > 0) userTypedText[--typedLen] = '\0';
+                        } else if (data == 0x1C) { // Enter
+                            typedLen = 0; userTypedText[0] = '\0';
+                        } else if (data < 128) {
+                            char c = ps2Shift ? PS2_SET1_UPPER[data] : PS2_SET1_LOWER[data];
+                            if (c >= 0x20 && c <= 0x7E && typedLen < sizeof(userTypedText) - 1) {
+                                userTypedText[typedLen++] = c;
+                                userTypedText[typedLen] = '\0';
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Clamp mouse cursor to screen boundaries
+            if (newMouseX < 0) newMouseX = 0;
+            if (newMouseX > static_cast<int32_t>(width - 12)) newMouseX = static_cast<int32_t>(width - 12);
+            if (newMouseY < 0) newMouseY = 0;
+            if (newMouseY > static_cast<int32_t>(height - 19)) newMouseY = static_cast<int32_t>(height - 19);
 
             // --- C. Smoothly decay CPU load towards idle ---
             if (cpuLoad < static_cast<uint32_t>(targetCpuLoad)) {
@@ -1570,6 +1756,17 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     if (!systemTable) {
         return micant::uefi::EFI_INVALID_PARAMETER;
     }
+
+    // 0. Disable UEFI firmware watchdog timer so long-running test harness never reboots
+    if (systemTable->bootServices && systemTable->bootServices->setWatchdogTimer) {
+        auto setWd = reinterpret_cast<micant::uefi::EfiStatus (*)(uint64_t, uint64_t, uint64_t, const wchar_t*)>(
+            systemTable->bootServices->setWatchdogTimer
+        );
+        setWd(0, 0, 0, nullptr);
+    }
+
+    micant::bootloader::UartSerial::init();
+    micant::bootloader::UartSerial::print("\r\n[MicaNT COM1] EfiMain reached on physical x86_64 silicon!\r\n");
 
     micant::bootloader::UefiBootEngine engine(imageHandle, systemTable);
 
