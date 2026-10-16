@@ -80,14 +80,20 @@ $ipxeContent = @'
 
 echo ============================================================================
 echo   MicaNT Cutler Edition: 90 Kernel Units, 44 System32 DLLs (334 Suites OK)
-echo   Boot Server: 40.160.53.129
+echo   Boot Server: 40.160.53.129 (MTU 1200 Clamped)
 echo ============================================================================
 
-echo [MicaNT] Chainloading latest MicaNT UEFI Bootloader (126.5KB)...
-chain http://40.160.53.129/ipxe/BOOTX64.EFI || goto boot_err
+echo [1/3] Clamping MTU to 1200 to prevent PMTU black holes...
+set net0/mtu 1200
+
+echo [2/3] Fetching 126.5KB UEFI Bootloader...
+imgfetch http://40.160.53.129/ipxe/BOOTX64.EFI || goto boot_err
+
+echo [3/3] Executing MicaNT UEFI PE32+ Bootloader...
+boot BOOTX64.EFI || goto boot_err
 
 :boot_err
-echo [ERROR] Failed to chainload BOOTX64.EFI from 40.160.53.129.
+echo [ERROR] Failed to fetch or boot BOOTX64.EFI from 40.160.53.129.
 echo [MicaNT] Falling back to local offline kernel...
 chain \EFI\MicaNT\BOOTX64.EFI || shell
 '@
