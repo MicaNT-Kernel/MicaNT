@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import sys
+import os
 import paramiko
 
 HOST = "147.135.1.229"
 PORT = 22
 USER = "root"
-PASS = "6rpPo9J3YDuRbnpkg"
+PASS = os.environ.get("RESCUE_PASS", "6rpPo9J3YDuRbnpkg")
 
 def run_remote(cmd):
     client = paramiko.SSHClient()
