@@ -12,7 +12,6 @@
 #include "micant/km/hal/boot.hpp"
 #include "micant/km/hal/bootvid.hpp"
 #include <new>
-#include <vector>
 
 namespace micant::bootloader {
 
@@ -780,10 +779,7 @@ public:
         }
         m_systemTable->conOut->outputString(
             m_systemTable->conOut,
-            L"========================================================================\r\n"
-            L"        MicaNT Bare-Metal UEFI Bootloader (x86_64) - Project MICA       \r\n"
-            L"        Clean-Room Firmware Handover Architecture (ISO C++23)           \r\n"
-            L"========================================================================\r\n"
+            L"[MicaNT Boot] Bare-Metal UEFI Bootloader (ISO C++23)\r\n"
         );
         return true;
     }
@@ -1027,19 +1023,19 @@ public:
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
 
             const char* codeLines[] = {
-                "// MicaNT: 90-Unit Modular Kernel (Horizon 118: 44 System32 DLLs)",
-                "#include <micant/um/subsystems/winbase/winnt_kernel32_advapi32.hpp>",
-                "#include <micant/um/subsystems/winuser/winnt_user32_gdi32_imm32.hpp>",
-                "#include <micant/ucrt/winnt_ucrtbase_runtime_abi.hpp>",
-                "extern \"C\" NTSTATUS KiSystemStartup(LoaderParameterBlock* lpb) {",
-                "    WinNtKernel32Advapi32System32AbiInitializeExecutiveSubsystem();",
-                "    WinNtUser32Gdi32Imm32System32AbiInitializeExecutiveSubsystem();",
-                "    WinNtUcrtbaseInitializeExecutiveSubsystem();",
-                "    return Phase1Initialization(lpb); // 334/334 Suites (+PrismX 41/41)",
+                "// MicaNT: 90-Unit Kernel (44 System32 DLLs)",
+                "#include <micant/ntbase.hpp>",
+                "#include <micant/winuser.hpp>",
+                "#include <micant/ucrtbase.hpp>",
+                "extern \"C\" NTSTATUS KiSystemStartup(LPB* lpb) {",
+                "    WinNtKernel32InitSubsystem();",
+                "    WinNtUser32Gdi32InitSubsystem();",
+                "    WinNtUcrtbaseInitSubsystem();",
+                "    return Phase1Init(lpb); // 334 Suites OK",
                 "}",
-                "// 24 WinNT Core/CRT DLLs: kernel32/advapi32/user32/ucrtbase/vcruntime140",
-                "// 20 PrismX DLLs: d3d12/d3d11/d3d9/dxgi/mfplat/dxcore/vulkan-1/opengl32",
-                "// PE32+ .pdata/.xdata SEH Unwinder + UCRT stdio/heap/onexit + 540Hz Flip"
+                "// 24 WinNT Core/CRT + 20 PrismX DirectX DLLs",
+                "// Live Interactive Bare-Metal Silicon Testing",
+                "// PE32+ SEH Unwinder + UCRT Runtime + 540Hz Flip"
             };
 
             for (size_t i = 0; i < 13; ++i) {
@@ -2835,15 +2831,15 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (descriptorSize >= sizeof(micant::uefi::EfiMemoryDescriptor)) {
             size_t descCount = memoryMapSize / descriptorSize;
-            std::vector<micant::uefi::EfiMemoryDescriptor> normalizedMap;
-            normalizedMap.reserve(descCount);
+            alignas(16) static micant::uefi::EfiMemoryDescriptor s_normalizedMap[512];
+            size_t validCount = (descCount < 512) ? descCount : 512;
             uint64_t totalRamBytes = 0;
             uint64_t freeRamBytes = 0;
-            for (size_t i = 0; i < descCount; ++i) {
+            for (size_t i = 0; i < validCount; ++i) {
                 const auto* descPtr = reinterpret_cast<const micant::uefi::EfiMemoryDescriptor*>(
                     s_memoryMapBuffer + (i * descriptorSize)
                 );
-                normalizedMap.push_back(*descPtr);
+                s_normalizedMap[i] = *descPtr;
                 uint64_t bytes = descPtr->numberOfPages * 4096;
                 if (descPtr->type == 7) { // EfiConventionalMemory (Free RAM)
                     freeRamBytes += bytes;
@@ -2854,15 +2850,11 @@ extern "C" micant::uefi::EfiStatus EfiMain(
             }
             engine.setRealRamMetrics(totalRamBytes, freeRamBytes);
             engine.detectSiliconTelemetry();
-            engine.buildLoaderParameterBlock(normalizedMap);
+            engine.buildLoaderParameterBlock(std::span{s_normalizedMap, validCount});
         }
 
         if (systemTable->conOut) {
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 90-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-118).\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT System32 Suite] 44 PE32+ DLLs (24 WinNT Core/CRT + 20 DirectX/Media + x64 SEH Unwinder).\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HORIZON 118 SEALED | 334/334 Suites (+PrismX 41/41) | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] LPB Built OK. Launching Desktop...\r\n");
         }
     }
 
