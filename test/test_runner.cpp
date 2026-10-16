@@ -151,6 +151,9 @@
 #include "micant/um/subsystems/winbase/winnt_ntdll_ws2_iphlpapi_winhttp_abi.hpp"
 #include "micant/um/subsystems/winbase/winnt_bcrypt_crypt32_secur32_wintrust_abi.hpp"
 #include "micant/um/subsystems/winuser/winnt_shell32_dbghelp_version_40dll_iat_seal.hpp"
+#include "micant/ucrt/winnt_ucrtbase_runtime_abi.hpp"
+#include "micant/ucrt/winnt_vcruntime140_eh_abi.hpp"
+#include "micant/ucrt/winnt_msvcp140_pdata_unwind_44dll_seal.hpp"
 
 #include "micant/km/drivers/storage/storage.hpp"
 #include "micant/km/drivers/fs/fat32.hpp"
@@ -374,7 +377,19 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite331")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite334")) {
+        RUN_TEST(Test_Horizon118_WinNT_Msvcp140_Pdata_SEH_Unwind_And_44_DLL_Seal);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite333") {
+        RUN_TEST(Test_Horizon117_WinNT_Vcruntime140_And_Vcruntime140_1_System32_PE32Plus_ABI);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite332") {
+        RUN_TEST(Test_Horizon116_WinNT_Ucrtbase_C_Runtime_System32_PE32Plus_ABI);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite331") {
         RUN_TEST(Test_Horizon115_WinNT_Shell32_DbgHelp_Version_PE32Plus_IAT_Loader_And_40_DLL_Seal);
         return g_FailedTests;
     }
@@ -1583,6 +1598,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon113_WinNT_Ntdll_Ws2_Iphlpapi_And_WinHttp_System32_PE32Plus_ABI);
     RUN_TEST(Test_Horizon114_WinNT_BCrypt_Crypt32_Secur32_And_WinTrust_System32_PE32Plus_ABI);
     RUN_TEST(Test_Horizon115_WinNT_Shell32_DbgHelp_Version_PE32Plus_IAT_Loader_And_40_DLL_Seal);
+    RUN_TEST(Test_Horizon116_WinNT_Ucrtbase_C_Runtime_System32_PE32Plus_ABI);
+    RUN_TEST(Test_Horizon117_WinNT_Vcruntime140_And_Vcruntime140_1_System32_PE32Plus_ABI);
+    RUN_TEST(Test_Horizon118_WinNT_Msvcp140_Pdata_SEH_Unwind_And_44_DLL_Seal);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

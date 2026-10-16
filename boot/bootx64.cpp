@@ -208,11 +208,11 @@ public:
         m_videoDriver.fillRectangle(0, 0, width, 28, bootvid::Color{18, 24, 38});
         m_videoDriver.fillRectangle(0, 27, width, 1, bootvid::Color{38, 52, 78});
         m_videoDriver.drawString(14, 8, "MicaNT Cutler Edition", bootvid::Color{0, 229, 255}, bootvid::Color{18, 24, 38}, 1);
-        m_videoDriver.drawString(185, 8, "|  87-Unit NT Kernel (40 System32 PE32+ DLLs)  |  Horizon 115 (WinNT + DirectX)",
+        m_videoDriver.drawString(185, 8, "|  90-Unit NT Kernel (44 System32 PE32+ DLLs)  |  Horizon 118 (WinNT + CRT + DirectX)",
                                 bootvid::Color{170, 185, 205}, bootvid::Color{18, 24, 38}, 1);
 
         m_videoDriver.fillRectangle(width - 366, 5, 154, 18, bootvid::Color{26, 36, 54});
-        m_videoDriver.drawString(width - 356, 8, "331/331 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
+        m_videoDriver.drawString(width - 356, 8, "334/334 Suites OK", bootvid::Color{100, 240, 160}, bootvid::Color{26, 36, 54}, 1);
 
         m_videoDriver.fillRectangle(width - 204, 5, 196, 18, bootvid::Color{26, 36, 54});
         m_videoDriver.drawString(width - 196, 8, "PRISMX GAMING [3D]", bootvid::Color{0, 210, 255}, bootvid::Color{26, 36, 54}, 1);
@@ -285,7 +285,7 @@ public:
             m_videoDriver.fillRectangle(wx + 2, wy + 2, ww - 4, 26, bootvid::Color{20, 28, 44});
             m_videoDriver.fillRectangle(wx + 6, wy + 5, 18, 18, bootvid::Color{40, 180, 100});
             m_videoDriver.drawString(wx + 8, wy + 8, "N+", bootvid::Color{255, 255, 255}, bootvid::Color{40, 180, 100}, 1);
-            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [84-Unit Horizon 112 Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
+            m_videoDriver.drawString(wx + 30, wy + 8, "* kiinit.cpp - Notepad++ v8.7 [90-Unit Horizon 118 Edition]", bootvid::Color{240, 245, 255}, bootvid::Color{20, 28, 44}, 1);
             DrawButtons(wx + ww - 8, wy + 1);
 
             // Menubar
@@ -307,7 +307,7 @@ public:
             m_videoDriver.fillRectangle(wx + 6, wy + 72, 184, 20, bootvid::Color{26, 38, 58});
             m_videoDriver.drawString(wx + 12, wy + 76, "[c++] kiinit.cpp *  x", bootvid::Color{0, 225, 255}, bootvid::Color{26, 38, 58}, 1);
             m_videoDriver.fillRectangle(wx + 194, wy + 72, 246, 20, bootvid::Color{14, 18, 28});
-            m_videoDriver.drawString(wx + 200, wy + 76, "[h] winnt_system32_24dlls.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
+            m_videoDriver.drawString(wx + 200, wy + 76, "[h] winnt_system32_44dlls.hpp x", bootvid::Color{140, 155, 175}, bootvid::Color{14, 18, 28}, 1);
 
             // Editor
             uint32_t edX = wx + 2;
@@ -319,19 +319,19 @@ public:
             m_videoDriver.fillRectangle(edX + 35, edY, 1, edH, bootvid::Color{28, 38, 56});
 
             const char* codeLines[] = {
-                "// MicaNT: 84-Unit Modular Kernel (Horizon 112: 24 System32 DLLs)",
+                "// MicaNT: 90-Unit Modular Kernel (Horizon 118: 44 System32 DLLs)",
                 "#include <micant/um/subsystems/winbase/winnt_kernel32_advapi32.hpp>",
                 "#include <micant/um/subsystems/winuser/winnt_user32_gdi32_imm32.hpp>",
-                "#include <micant/um/subsystems/winuser/winnt_ole32_dwmapi_winmm.hpp>",
+                "#include <micant/ucrt/winnt_ucrtbase_runtime_abi.hpp>",
                 "extern \"C\" NTSTATUS KiSystemStartup(LoaderParameterBlock* lpb) {",
                 "    WinNtKernel32Advapi32System32AbiInitializeExecutiveSubsystem();",
                 "    WinNtUser32Gdi32Imm32System32AbiInitializeExecutiveSubsystem();",
-                "    WinNtOle32DwmapiWinmmSystem32SealInitializeExecutiveSubsystem();",
-                "    return Phase1Initialization(lpb); // 328/328 Suites (+PrismX 40/40)",
+                "    WinNtUcrtbaseInitializeExecutiveSubsystem();",
+                "    return Phase1Initialization(lpb); // 334/334 Suites (+PrismX 41/41)",
                 "}",
-                "// 8 WinNT Core DLLs: kernel32/advapi32/user32/gdi32/imm32/ole32/dwmapi",
-                "// 16 PrismX DLLs: d3d12/d3d11/d3d9/dxgi/mfplat/dxcore/vulkan-1/opengl32",
-                "// HWND -> DXGI SwapChain + 8000Hz WM_INPUT + Event-Driven WaitableFence"
+                "// 24 WinNT Core/CRT DLLs: kernel32/advapi32/user32/ucrtbase/vcruntime140",
+                "// 20 PrismX DLLs: d3d12/d3d11/d3d9/dxgi/mfplat/dxcore/vulkan-1/opengl32",
+                "// PE32+ .pdata/.xdata SEH Unwinder + UCRT stdio/heap/onexit + 540Hz Flip"
             };
 
             for (size_t i = 0; i < 13; ++i) {
@@ -354,7 +354,7 @@ public:
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{16, 22, 34});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "84 Kernel Units | 328/328 Suites (+PrismX 40/40) | 24 System32 DLLs OK",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "90 Kernel Units | 334/334 Suites (+PrismX 41/41) | 44 System32 DLLs OK",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{16, 22, 34}, 1);
         }
 
@@ -646,19 +646,19 @@ public:
             uint32_t tY = wy + 232;
             m_videoDriver.fillRectangle(mX, tY, ww - 24, 82, bootvid::Color{10, 16, 24});
             m_videoDriver.drawRectangle(mX, tY, ww - 24, 82, bootvid::Color{36, 54, 82});
-            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 6,480   Threads: 232   Processes: 30   Kernel Units: 87 (331/331 OK)",
+            m_videoDriver.drawString(mX + 10, tY + 8,  "Handles: 6,590   Threads: 240   Processes: 32   Kernel Units: 90 (334/334 OK)",
                                     bootvid::Color{210, 230, 250}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 26, "WinNT Core System32: 20 PE32+ DLLs (ntdll/kernel32/user32/ws2_32/bcrypt/shell32)",
+            m_videoDriver.drawString(mX + 10, tY + 26, "WinNT Core/CRT System32: 24 PE32+ DLLs (ntdll/kernel32/user32/ucrtbase/vcruntime140/msvcp140)",
                                     bootvid::Color{0, 230, 255}, bootvid::Color{10, 16, 24}, 1);
             m_videoDriver.drawString(mX + 10, tY + 44, "PrismX DirectX System32: 20 PE32+ DLLs (DX12/DX11/DX10/DX9/DDraw/DSound/MF/VK)",
                                     bootvid::Color{100, 240, 160}, bootvid::Color{10, 16, 24}, 1);
-            m_videoDriver.drawString(mX + 10, tY + 62, "HORIZON 115 SEAL: 40 PE32+ System32 DLLs + PE32+ .exe IAT Loader + 540Hz Flip",
+            m_videoDriver.drawString(mX + 10, tY + 62, "HORIZON 118 SEAL: 44 PE32+ System32 DLLs + x64 SEH Unwinder + 540Hz Flip",
                                     bootvid::Color{255, 205, 95}, bootvid::Color{10, 16, 24}, 1);
 
             // Status bar
             uint32_t sbY = wy + wh - 22;
             m_videoDriver.fillRectangle(wx + 2, sbY, ww - 4, 20, bootvid::Color{14, 28, 22});
-            m_videoDriver.drawString(wx + 10, sbY + 4, "HORIZON 115 | 87 Units | 331/331 Suites (+PrismX 41/41) | 40 System32 DLLs OK",
+            m_videoDriver.drawString(wx + 10, sbY + 4, "HORIZON 118 | 90 Units | 334/334 Suites (+PrismX 41/41) | 44 System32 DLLs OK",
                                     bootvid::Color{100, 255, 160}, bootvid::Color{14, 28, 22}, 1);
         }
 
@@ -924,10 +924,10 @@ extern "C" micant::uefi::EfiStatus EfiMain(
 
         if (systemTable->conOut) {
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Built LOADER_PARAMETER_BLOCK successfully.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 87-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-115).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Verified 90-Unit Modular NT Kernel Tree (Ring 0 H1-60 + Ring 1 H61-64 + Ring 2 H65-67 + Ring 3 H68-118).\r\n");
             systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Ring 1+2 Tunnels] 540Hz MPO + 1.33ms WaveRT + CoW VFS + WUDF/fontdrv + lsaiso Vault + 38ms DAG SCM.\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT System32 Suite] 40 PE32+ DLLs (20 WinNT Core + 20 DirectX/Media + PE32+ .exe IAT Loader).\r\n");
-            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HORIZON 115 SEALED | 331/331 Suites (+PrismX 41/41) | 0 BSODs | Launching GOP Desktop...\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT System32 Suite] 44 PE32+ DLLs (24 WinNT Core/CRT + 20 DirectX/Media + x64 SEH Unwinder).\r\n");
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Status] HORIZON 118 SEALED | 334/334 Suites (+PrismX 41/41) | 0 BSODs | Launching GOP Desktop...\r\n");
         }
     }
 

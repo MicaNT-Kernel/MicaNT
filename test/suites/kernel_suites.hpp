@@ -18769,4 +18769,149 @@ static void Test_Horizon115_WinNT_Shell32_DbgHelp_Version_PE32Plus_IAT_Loader_An
     std::cout << "[TEST] Suite 331: Horizon 115 - Sovereign WinNT Core System32 DLLs (shell32/shlwapi/dbghelp/version), PE32+ .exe IAT Snapper & Complete 40-DLL System32 Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 332: Horizon 116 (Kernel Unit #88) - Sovereign WinNT Universal C Runtime
+// (ucrtbase.dll) Official PE32+ Exports, OnExit Table Dispatch, Heap Allocator,
+// Stdio Formatted Output, and C-Runtime Startup Sequences
+// ============================================================================
+static void Test_Horizon116_WinNT_Ucrtbase_C_Runtime_System32_PE32Plus_ABI() {
+    std::cout << "\n[TEST] Suite 332: Horizon 116 - Sovereign WinNT Universal C Runtime (ucrtbase.dll) Official PE32+ Exports...\n";
+
+    micant::ucrt::winnt_ucrtbase_abi::InitializeWinNtUcrtbaseSubsystem();
+    const auto rep = micant::ucrt::winnt_ucrtbase_abi::WinNtUcrtbaseCoordinator::instance().runUcrtbaseAudit();
+
+    std::cout << "  [Horizon 116 UCRT System32: ucrtbase.dll (26 Exports) + OnExit Table + Heap + Stdio]\n"
+              << "    UcrtExports=" << rep.ucrtbaseExportCount
+              << " | OnExit=" << (rep.onExitTableDispatchVerified ? "YES" : "NO")
+              << " | Initterm=" << (rep.inittermExecutionVerified ? "YES" : "NO")
+              << " | Heap=" << (rep.heapAllocReallocFreeVerified ? "YES" : "NO")
+              << " | Stdio=" << (rep.stdioFormatAndStreamsVerified ? "YES" : "NO")
+              << " | Math=" << (rep.mathAndErrnoVerified ? "YES" : "NO") << "\n";
+    TEST_ASSERT(rep.ucrtbaseExportCount == 26u &&
+                rep.onExitTableDispatchVerified &&
+                rep.inittermExecutionVerified &&
+                rep.heapAllocReallocFreeVerified &&
+                rep.stdioFormatAndStreamsVerified &&
+                rep.mathAndErrnoVerified,
+                "Universal C Runtime (ucrtbase.dll) System32 PE32+ exports and runtime services must verify cleanly");
+
+    std::cout << "[TEST] Suite 332: Horizon 116 - Sovereign WinNT Universal C Runtime (ucrtbase.dll) Official PE32+ Exports PASSED.\n";
+}
+
+// ============================================================================
+// Suite 333: Horizon 117 (Kernel Unit #89) - Sovereign WinNT MSVC Exception
+// Handling Runtimes (vcruntime140.dll & vcruntime140_1.dll) Official PE32+ Exports,
+// __C_specific_handler SEH, and __CxxFrameHandler4 x64 C++ EH State Unwind ABI
+// ============================================================================
+static void Test_Horizon117_WinNT_Vcruntime140_And_Vcruntime140_1_System32_PE32Plus_ABI() {
+    std::cout << "\n[TEST] Suite 333: Horizon 117 - Sovereign WinNT MSVC Exception Handling (vcruntime140.dll & vcruntime140_1.dll) Official PE32+ Exports...\n";
+
+    micant::ucrt::winnt_vcruntime140_abi::InitializeWinNtVcruntime140Subsystem();
+    const auto rep = micant::ucrt::winnt_vcruntime140_abi::WinNtVcruntime140Coordinator::instance().runVcruntimeAudit();
+
+    std::cout << "  [Horizon 117 VCRuntime System32: vcruntime140.dll (12 Exports) + vcruntime140_1.dll (1 Export)]\n"
+              << "    Vc140Exports=" << rep.vcruntime140ExportCount
+              << " | Vc140_1Exports=" << rep.vcruntime140_1ExportCount
+              << " | C_specific_handler=" << (rep.cSpecificHandlerVerified ? "YES" : "NO")
+              << " | CxxFrameHandler4=" << (rep.cxxFrameHandler4Verified ? "YES" : "NO")
+              << " | MemStr=" << (rep.memoryAndStringPrimitivesVerified ? "YES" : "NO")
+              << " | Telemetry=" << (rep.telemetryTriggersVerified ? "YES" : "NO") << "\n";
+    TEST_ASSERT(rep.vcruntime140ExportCount == 12u &&
+                rep.vcruntime140_1ExportCount == 1u &&
+                rep.cSpecificHandlerVerified &&
+                rep.cxxFrameHandler4Verified &&
+                rep.memoryAndStringPrimitivesVerified &&
+                rep.telemetryTriggersVerified,
+                "MSVC Exception Handling (vcruntime140.dll / vcruntime140_1.dll) System32 PE32+ exports must verify cleanly");
+
+    std::cout << "[TEST] Suite 333: Horizon 117 - Sovereign WinNT MSVC Exception Handling (vcruntime140.dll & vcruntime140_1.dll) Official PE32+ Exports PASSED.\n";
+}
+
+// ============================================================================
+// Suite 334: Horizon 118 (Kernel Unit #90) - Sovereign WinNT C++ Standard Library
+// (msvcp140.dll), PE32+ .pdata / .xdata Runtime Function Table, x64 SEH Virtual
+// Stack Unwinder, and Complete 44-DLL System32 Ecosystem Seal (24 WinNT Core/CRT + 20 DirectX)
+// ============================================================================
+static void Test_Horizon118_WinNT_Msvcp140_Pdata_SEH_Unwind_And_44_DLL_Seal() {
+    std::cout << "\n[TEST] Suite 334: Horizon 118 - Sovereign WinNT C++ Standard Library (msvcp140.dll), PE32+ .pdata SEH Unwinder & Complete 44-DLL Seal...\n";
+
+    micant::ucrt::winnt_msvcp140_pdata_seal::InitializeWinNtMsvcp140PdataSealSubsystem();
+    const auto rep = micant::ucrt::winnt_msvcp140_pdata_seal::WinNtMsvcp140PdataSealCoordinator::instance().runComplete44DllSealAudit();
+
+    // Verify all 24 compiled WinNT Core/CRT System32 PE32+ .dll binaries exist on disk with valid MZ + PE\0\0 headers
+    const char* coreAndCrtDllPaths[24] = {
+        "bin/system32/kernel32.dll",
+        "bin/system32/advapi32.dll",
+        "bin/system32/user32.dll",
+        "bin/system32/gdi32.dll",
+        "bin/system32/imm32.dll",
+        "bin/system32/ole32.dll",
+        "bin/system32/dwmapi.dll",
+        "bin/system32/winmm.dll",
+        "bin/system32/ntdll.dll",
+        "bin/system32/ws2_32.dll",
+        "bin/system32/iphlpapi.dll",
+        "bin/system32/winhttp.dll",
+        "bin/system32/bcrypt.dll",
+        "bin/system32/crypt32.dll",
+        "bin/system32/secur32.dll",
+        "bin/system32/wintrust.dll",
+        "bin/system32/shell32.dll",
+        "bin/system32/shlwapi.dll",
+        "bin/system32/dbghelp.dll",
+        "bin/system32/version.dll",
+        "bin/system32/ucrtbase.dll",
+        "bin/system32/vcruntime140.dll",
+        "bin/system32/vcruntime140_1.dll",
+        "bin/system32/msvcp140.dll"
+    };
+    uint32_t verifiedDiskDlls = 0;
+    for (const char* relPath : coreAndCrtDllPaths) {
+        std::ifstream ifs(relPath, std::ios::binary);
+        if (ifs.good()) {
+            uint8_t hdr[512]{};
+            ifs.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
+            if (ifs.gcount() >= 256 && hdr[0] == 'M' && hdr[1] == 'Z') {
+                uint32_t lfanew = 0;
+                std::memcpy(&lfanew, hdr + 0x3C, sizeof(uint32_t));
+                if (lfanew + 26 <= sizeof(hdr) &&
+                    hdr[lfanew] == 'P' && hdr[lfanew + 1] == 'E' && hdr[lfanew + 2] == 0 && hdr[lfanew + 3] == 0) {
+                    uint16_t optMagic = 0;
+                    std::memcpy(&optMagic, hdr + lfanew + 24, sizeof(uint16_t));
+                    if (optMagic == 0x020BU) { // IMAGE_NT_OPTIONAL_HDR64_MAGIC (PE32+)
+                        verifiedDiskDlls++;
+                    }
+                }
+            }
+        }
+    }
+
+    std::cout << "  [Horizon 118 Complete 44-DLL System32 Ecosystem: 24 WinNT Core/CRT PE32+ DLLs + 20 DirectX/Multimedia PE32+ DLLs]\n"
+              << "    WinNTCoreCrtDLLs=" << verifiedDiskDlls << "/" << rep.winntCoreAndCrtSystem32DllCount
+              << " | DirectXDLLs=" << rep.prismxDirectXSystem32DllCount
+              << " | TotalSystem32DLLs=" << rep.totalSystem32PeDllCount
+              << " | CoreExports=" << rep.totalWinNtAndCrtExports
+              << " | Horizons=" << rep.totalHorizons
+              << " | Units=" << rep.totalKernelUnits
+              << " | Suites=" << rep.totalTestSuites << " (+PrismX " << rep.prismxStandaloneSuites << "/41)\n";
+    TEST_ASSERT(verifiedDiskDlls == 24u &&
+                rep.msvcpExportCount == 7u &&
+                rep.winntCoreAndCrtSystem32DllCount == 24u &&
+                rep.prismxDirectXSystem32DllCount == 20u &&
+                rep.totalSystem32PeDllCount == 44u &&
+                rep.totalWinNtAndCrtExports == 263u &&
+                rep.totalHorizons == 118u &&
+                rep.totalKernelUnits == 90u &&
+                rep.totalTestSuites == 334u &&
+                rep.prismxStandaloneSuites == 41u &&
+                rep.msvcpExceptionMappingVerified &&
+                rep.pdataRuntimeFunctionLookupVerified &&
+                rep.virtualStackUnwindVerified &&
+                rep.all44System32DllsSealed,
+                "Complete 44-DLL System32 PE32+ Ecosystem (24 WinNT Core/CRT DLLs + 20 DirectX/Media DLLs + x64 SEH Unwinder) must seal cleanly");
+
+    std::cout << "[TEST] Suite 334: Horizon 118 - Sovereign WinNT C++ Standard Library (msvcp140.dll), PE32+ .pdata SEH Unwinder & Complete 44-DLL Seal PASSED.\n";
+}
+
+
 

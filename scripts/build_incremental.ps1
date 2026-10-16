@@ -113,7 +113,10 @@ try {
         @{ Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";    Obj = "ps_winnt_ole32_dwmapi_winmm_system32_seal.o" },
         @{ Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";      Obj = "ps_winnt_ntdll_ws2_iphlpapi_winhttp_abi.o" },
         @{ Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp"; Obj = "se_winnt_bcrypt_crypt32_secur32_wintrust_abi.o" },
-        @{ Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Obj = "ps_winnt_shell32_dbghelp_version_40dll_iat_seal.o" }
+        @{ Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Obj = "ps_winnt_shell32_dbghelp_version_40dll_iat_seal.o" },
+        @{ Src = "kernel/ps/winnt_ucrtbase_runtime_abi.cpp";           Obj = "ps_winnt_ucrtbase_runtime_abi.o" },
+        @{ Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";            Obj = "ps_winnt_vcruntime140_eh_abi.o" },
+        @{ Src = "kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp"; Obj = "ps_winnt_msvcp140_pdata_unwind_44dll_seal.o" }
     )
 
     $staleUnits = @()
@@ -144,32 +147,40 @@ try {
     $sys32Dir = Join-Path $binDir "system32"
     New-Item -ItemType Directory -Force -Path $sys32Dir | Out-Null
     $sys32Dlls = @(
-        @{ Name = "kernel32.dll"; Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_KERNEL32_DLL" },
-        @{ Name = "advapi32.dll"; Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_ADVAPI32_DLL" },
-        @{ Name = "user32.dll";   Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_USER32_DLL" },
-        @{ Name = "gdi32.dll";    Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_GDI32_DLL" },
-        @{ Name = "imm32.dll";    Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_IMM32_DLL" },
-        @{ Name = "ole32.dll";    Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_OLE32_DLL" },
-        @{ Name = "dwmapi.dll";   Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_DWMAPI_DLL" },
-        @{ Name = "winmm.dll";    Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_WINMM_DLL" },
-        @{ Name = "ntdll.dll";    Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_NTDLL_DLL" },
-        @{ Name = "ws2_32.dll";   Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_WS2_32_DLL" },
-        @{ Name = "iphlpapi.dll"; Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_IPHLPAPI_DLL" },
-        @{ Name = "winhttp.dll";  Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_WINHTTP_DLL" },
-        @{ Name = "bcrypt.dll";   Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_BCRYPT_DLL" },
-        @{ Name = "crypt32.dll";  Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_CRYPT32_DLL" },
-        @{ Name = "secur32.dll";  Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_SECUR32_DLL" },
-        @{ Name = "wintrust.dll"; Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_WINTRUST_DLL" },
-        @{ Name = "shell32.dll";  Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_SHELL32_DLL" },
-        @{ Name = "shlwapi.dll";  Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_SHLWAPI_DLL" },
-        @{ Name = "dbghelp.dll";  Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_DBGHELP_DLL" },
-        @{ Name = "version.dll";  Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_VERSION_DLL" }
+        @{ Name = "kernel32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_KERNEL32_DLL" },
+        @{ Name = "advapi32.dll";       Src = "kernel/ps/winnt_kernel32_advapi32_system32_abi.cpp";         Def = "BUILD_SYSTEM32_ADVAPI32_DLL" },
+        @{ Name = "user32.dll";         Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_USER32_DLL" },
+        @{ Name = "gdi32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_GDI32_DLL" },
+        @{ Name = "imm32.dll";          Src = "kernel/ps/winnt_user32_gdi32_imm32_system32_abi.cpp";        Def = "BUILD_SYSTEM32_IMM32_DLL" },
+        @{ Name = "ole32.dll";          Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_OLE32_DLL" },
+        @{ Name = "dwmapi.dll";         Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_DWMAPI_DLL" },
+        @{ Name = "winmm.dll";          Src = "kernel/ps/winnt_ole32_dwmapi_winmm_system32_seal.cpp";       Def = "BUILD_SYSTEM32_WINMM_DLL" },
+        @{ Name = "ntdll.dll";          Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_NTDLL_DLL" },
+        @{ Name = "ws2_32.dll";         Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_WS2_32_DLL" },
+        @{ Name = "iphlpapi.dll";       Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_IPHLPAPI_DLL" },
+        @{ Name = "winhttp.dll";        Src = "kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp";         Def = "BUILD_SYSTEM32_WINHTTP_DLL" },
+        @{ Name = "bcrypt.dll";         Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_BCRYPT_DLL" },
+        @{ Name = "crypt32.dll";        Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_CRYPT32_DLL" },
+        @{ Name = "secur32.dll";        Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_SECUR32_DLL" },
+        @{ Name = "wintrust.dll";       Src = "kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp";    Def = "BUILD_SYSTEM32_WINTRUST_DLL" },
+        @{ Name = "shell32.dll";        Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_SHELL32_DLL" },
+        @{ Name = "shlwapi.dll";        Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_SHLWAPI_DLL" },
+        @{ Name = "dbghelp.dll";        Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_DBGHELP_DLL" },
+        @{ Name = "version.dll";        Src = "kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp"; Def = "BUILD_SYSTEM32_VERSION_DLL" },
+        @{ Name = "ucrtbase.dll";       Src = "kernel/ps/winnt_ucrtbase_runtime_abi.cpp";            Def = "BUILD_SYSTEM32_UCRTBASE_DLL";      DefFile = "kernel/ps/ucrtbase.def" },
+        @{ Name = "vcruntime140.dll";   Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";             Def = "BUILD_SYSTEM32_VCRUNTIME140_DLL";  DefFile = "kernel/ps/vcruntime140.def" },
+        @{ Name = "vcruntime140_1.dll"; Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";             Def = "BUILD_SYSTEM32_VCRUNTIME140_1_DLL" },
+        @{ Name = "msvcp140.dll";       Src = "kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp"; Def = "BUILD_SYSTEM32_MSVCP140_DLL" }
     )
     foreach ($dll in $sys32Dlls) {
         $dllPath = Join-Path $sys32Dir $dll.Name
         $srcPath = Join-Path $repoRoot $dll.Src
         if ($Force -or -not (Test-Path $dllPath) -or ((Get-Item $srcPath).LastWriteTimeUtc -gt (Get-Item $dllPath).LastWriteTimeUtc)) {
-            & clang++ -std=c++23 -O2 -Iinclude -shared "-Wl,--allow-multiple-definition" "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src -o $dllPath
+            $extraArgs = @()
+            if ($dll.DefFile) {
+                $extraArgs += (Join-Path $repoRoot $dll.DefFile)
+            }
+            & clang++ -std=c++23 -O2 -Iinclude -shared "-Wl,--allow-multiple-definition" "-DBUILD_SYSTEM32_STANDALONE_DLL" "-D$($dll.Def)" $dll.Src @extraArgs -o $dllPath
             if ($LASTEXITCODE -ne 0) { throw "Failed building System32 PE32+ DLL $($dll.Name)" }
         }
     }

@@ -99,6 +99,9 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/ps/winnt_ntdll_ws2_iphlpapi_winhttp_abi.cpp
     kernel/se/winnt_bcrypt_crypt32_secur32_wintrust_abi.cpp
     kernel/ps/winnt_shell32_dbghelp_version_40dll_iat_seal.cpp
+    kernel/ps/winnt_ucrtbase_runtime_abi.cpp
+    kernel/ps/winnt_vcruntime140_eh_abi.cpp
+    kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp
 )
 
 add_library(ntoskrnl_core STATIC

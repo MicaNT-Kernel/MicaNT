@@ -1,0 +1,14 @@
+LIBRARY vcruntime140.dll
+EXPORTS
+    __C_specific_handler
+    _CxxThrowException
+    __telemetry_main_invoke_trigger
+    __telemetry_main_return_trigger
+    __std_type_info_destroy_list
+    _setjmp
+    longjmp
+    memcpy = vc_memcpy
+    memmove = vc_memmove
+    memset = vc_memset
+    memcmp = vc_memcmp
+    strstr = vc_strstr

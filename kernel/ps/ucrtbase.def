@@ -1,0 +1,28 @@
+LIBRARY ucrtbase.dll
+EXPORTS
+    _initialize_onexit_table
+    _register_onexit_function
+    _execute_onexit_table
+    _crt_atexit
+    _seh_filter_exe
+    _set_app_type
+    _configure_narrow_argv
+    _initialize_narrow_environment
+    _get_initial_narrow_environment
+    _initterm
+    _initterm_e
+    malloc = ucrt_malloc
+    calloc = ucrt_calloc
+    realloc = ucrt_realloc
+    free = ucrt_free
+    __acrt_iob_func = ucrt_acrt_iob_func
+    puts = ucrt_puts
+    __stdio_common_vsprintf = ucrt_stdio_common_vsprintf
+    _errno = ucrt_errno
+    exit = ucrt_exit
+    quick_exit = ucrt_quick_exit
+    abort = ucrt_abort
+    sin = ucrt_sin
+    cos = ucrt_cos
+    sqrt = ucrt_sqrt
+    pow = ucrt_pow
