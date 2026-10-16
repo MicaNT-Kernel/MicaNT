@@ -164,6 +164,15 @@ struct UartSerial {
         }
     }
 
+    static void printInt(int32_t val) noexcept {
+        if (val < 0) {
+            putChar('-');
+            printDec(static_cast<uint32_t>(-val));
+        } else {
+            printDec(static_cast<uint32_t>(val));
+        }
+    }
+
     static bool hasChar() noexcept {
         return (inb(COM1 + 5) & 0x01) != 0;
     }
@@ -1381,18 +1390,46 @@ public:
     /**
      * @brief Dynamic Pass: Live Taskbar Telemetry with Real RTC Clock and Silicon Core Temp.
      */
-    void updateTaskbarTelemetry(uint32_t frameCount, uint32_t cpuLoad, uint32_t cpuTempC, const uefi::EfiTime* time) noexcept {
+    void updateTaskbarTelemetry(
+        uint32_t frameCount,
+        uint32_t cpuLoad,
+        uint32_t cpuTempC,
+        const uefi::EfiTime* time,
+        uint32_t absCount,
+        uint32_t simpCount,
+        int32_t curX,
+        int32_t curY
+    ) noexcept {
         (void)cpuLoad;
         if (!m_videoDriver.isInitialized()) return;
 
         uint32_t width = m_videoDriver.getWidth();
         uint32_t height = m_videoDriver.getHeight();
         uint32_t taskbarY = height - 34;
-        uint32_t trayW = 260;
+        uint32_t trayW = 360;
         uint32_t trayX = (width > trayW + 20) ? (width - trayW - 10) : 10;
 
-        char telem[64];
+        char telem[96];
         size_t pos = 0;
+
+        // Pointer diagnostics: Abs and Simp device counts and current coordinates
+        telem[pos++] = 'M';
+        telem[pos++] = ':';
+        telem[pos++] = 'A';
+        pos += formatUint(&telem[pos], absCount);
+        telem[pos++] = ' ';
+        telem[pos++] = 'S';
+        pos += formatUint(&telem[pos], simpCount);
+        telem[pos++] = ' ';
+        telem[pos++] = '(';
+        pos += formatUint(&telem[pos], curX < 0 ? 0 : curX);
+        telem[pos++] = ',';
+        pos += formatUint(&telem[pos], curY < 0 ? 0 : curY);
+        telem[pos++] = ')';
+        telem[pos++] = ' ';
+        telem[pos++] = '|';
+        telem[pos++] = ' ';
+
         if (time && time->Hour <= 24) {
             telem[pos++] = static_cast<char>('0' + (time->Hour / 10));
             telem[pos++] = static_cast<char>('0' + (time->Hour % 10));
@@ -1413,8 +1450,6 @@ public:
         telem[pos++] = '|';
         telem[pos++] = ' ';
 
-        telem[pos++] = '6'; telem[pos++] = '0'; telem[pos++] = 'F'; telem[pos++] = 'P'; telem[pos++] = 'S';
-        telem[pos++] = ' '; telem[pos++] = '|'; telem[pos++] = ' ';
         telem[pos++] = '#';
         uint32_t fc = frameCount % 100000;
         if (fc >= 10000) { telem[pos++] = static_cast<char>('0' + (fc / 10000) % 10); }
@@ -1446,7 +1481,17 @@ public:
         // 1. Initial Desktop Background & Window Frame Layout
         renderRealAppsDesktop();
 
-        // Discover ALL UEFI Mouse and Keyboard Protocols (multi-handle enumeration)
+        // 1. Initialize COM1 Hardware UART Serial immediately for feedback & diagnostics
+        UartSerial::init();
+        UartSerial::print("\r\n=======================================================\r\n");
+        UartSerial::print("[MicaNT COM1] Bare-Metal Silicon Feedback Harness Online\r\n");
+        UartSerial::print("[MicaNT COM1] Physical Intel Xeon E3-1270 v6 @ 3.80 GHz\r\n");
+        UartSerial::print("[MicaNT COM1] 90 Kernel Units | 44 PE32+ DLLs | 334/334 Suites OK\r\n");
+        UartSerial::print("[MicaNT COM1] Interactive 60 FPS Event Loop Active\r\n");
+        UartSerial::print("[MicaNT COM1] Commands: 'ping', 'status', 'type <msg>', 'mouse <x> <y>', 'stress', 'devices', 'reboot'\r\n");
+        UartSerial::print("=======================================================\r\n");
+
+        // 2. Discover ALL UEFI Mouse and Keyboard Protocols (multi-handle enumeration)
         constexpr size_t MAX_DEVICES = 8;
         uefi::EfiAbsolutePointerProtocol* absPointers[MAX_DEVICES]{};
         size_t absPointerCount = 0;
@@ -1493,79 +1538,142 @@ public:
             }
         }
 
-        if (locateHandleBuffer && handleProtocol) {
-            // Absolute Pointers (Virtual KVM USB Tablet)
-            uint64_t numAbs = 0;
-            uefi::EfiHandle* absBuf = nullptr;
-            if (locateHandleBuffer(2, &uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, nullptr, &numAbs, &absBuf) == uefi::EFI_SUCCESS && absBuf) {
-                for (uint64_t i = 0; i < numAbs && absPointerCount < MAX_DEVICES; ++i) {
-                    void* iface = nullptr;
-                    if (handleProtocol(absBuf[i], &uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
-                        absPointers[absPointerCount++] = static_cast<uefi::EfiAbsolutePointerProtocol*>(iface);
+        // Give USB HID devices 20ms to complete bus enumeration
+        if (m_systemTable->bootServices->stall) {
+            m_systemTable->bootServices->stall(20000);
+        }
+
+        auto discoverPointers = [&]() {
+            if (locateHandleBuffer && handleProtocol) {
+                // Absolute Pointers (Virtual KVM USB Tablet)
+                uint64_t numAbs = 0;
+                uefi::EfiHandle* absBuf = nullptr;
+                if (locateHandleBuffer(2, &uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, nullptr, &numAbs, &absBuf) == uefi::EFI_SUCCESS && absBuf) {
+                    for (uint64_t i = 0; i < numAbs && absPointerCount < MAX_DEVICES; ++i) {
+                        void* iface = nullptr;
+                        if (handleProtocol(absBuf[i], &uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
+                            bool dup = false;
+                            for (size_t d = 0; d < absPointerCount; ++d) { if (absPointers[d] == iface) dup = true; }
+                            if (!dup) absPointers[absPointerCount++] = static_cast<uefi::EfiAbsolutePointerProtocol*>(iface);
+                        }
                     }
+                    if (freePool) freePool(absBuf);
                 }
-                if (freePool) freePool(absBuf);
-            }
 
-            // Simple Pointers (Virtual KVM USB Mouse / Relative Mouse)
-            uint64_t numSimp = 0;
-            uefi::EfiHandle* simpBuf = nullptr;
-            if (locateHandleBuffer(2, &uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, nullptr, &numSimp, &simpBuf) == uefi::EFI_SUCCESS && simpBuf) {
-                for (uint64_t i = 0; i < numSimp && simplePointerCount < MAX_DEVICES; ++i) {
-                    void* iface = nullptr;
-                    if (handleProtocol(simpBuf[i], &uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
-                        simplePointers[simplePointerCount++] = static_cast<uefi::EfiSimplePointerProtocol*>(iface);
+                // Simple Pointers (Virtual KVM USB Mouse / Relative Mouse)
+                uint64_t numSimp = 0;
+                uefi::EfiHandle* simpBuf = nullptr;
+                if (locateHandleBuffer(2, &uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, nullptr, &numSimp, &simpBuf) == uefi::EFI_SUCCESS && simpBuf) {
+                    for (uint64_t i = 0; i < numSimp && simplePointerCount < MAX_DEVICES; ++i) {
+                        void* iface = nullptr;
+                        if (handleProtocol(simpBuf[i], &uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
+                            bool dup = false;
+                            for (size_t d = 0; d < simplePointerCount; ++d) { if (simplePointers[d] == iface) dup = true; }
+                            if (!dup) simplePointers[simplePointerCount++] = static_cast<uefi::EfiSimplePointerProtocol*>(iface);
+                        }
                     }
+                    if (freePool) freePool(simpBuf);
                 }
-                if (freePool) freePool(simpBuf);
-            }
 
-            // Text Input Keyboards
-            uint64_t numKeys = 0;
-            uefi::EfiHandle* keyBuf = nullptr;
-            if (locateHandleBuffer(2, &uefi::EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID, nullptr, &numKeys, &keyBuf) == uefi::EFI_SUCCESS && keyBuf) {
-                for (uint64_t i = 0; i < numKeys && keyPointerCount < MAX_DEVICES; ++i) {
-                    void* iface = nullptr;
-                    if (handleProtocol(keyBuf[i], &uefi::EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
-                        keyPointers[keyPointerCount++] = static_cast<uefi::EfiSimpleTextInputProtocol*>(iface);
+                // Text Input Keyboards
+                uint64_t numKeys = 0;
+                uefi::EfiHandle* keyBuf = nullptr;
+                if (locateHandleBuffer(2, &uefi::EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID, nullptr, &numKeys, &keyBuf) == uefi::EFI_SUCCESS && keyBuf) {
+                    for (uint64_t i = 0; i < numKeys && keyPointerCount < MAX_DEVICES; ++i) {
+                        void* iface = nullptr;
+                        if (handleProtocol(keyBuf[i], &uefi::EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID, &iface) == uefi::EFI_SUCCESS && iface) {
+                            bool dup = false;
+                            for (size_t d = 0; d < keyPointerCount; ++d) { if (keyPointers[d] == iface) dup = true; }
+                            if (!dup) keyPointers[keyPointerCount++] = static_cast<uefi::EfiSimpleTextInputProtocol*>(iface);
+                        }
                     }
+                    if (freePool) freePool(keyBuf);
                 }
-                if (freePool) freePool(keyBuf);
+            }
+
+            // Fallbacks: Check locateProtocol
+            if (absPointerCount < MAX_DEVICES && m_systemTable->bootServices->locateProtocol) {
+                void* absInterface = nullptr;
+                if (m_systemTable->bootServices->locateProtocol(&uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, nullptr, &absInterface) == uefi::EFI_SUCCESS && absInterface) {
+                    bool dup = false;
+                    for (size_t d = 0; d < absPointerCount; ++d) { if (absPointers[d] == absInterface) dup = true; }
+                    if (!dup) absPointers[absPointerCount++] = static_cast<uefi::EfiAbsolutePointerProtocol*>(absInterface);
+                }
+            }
+            if (simplePointerCount < MAX_DEVICES && m_systemTable->bootServices->locateProtocol) {
+                void* simpleInterface = nullptr;
+                if (m_systemTable->bootServices->locateProtocol(&uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, nullptr, &simpleInterface) == uefi::EFI_SUCCESS && simpleInterface) {
+                    bool dup = false;
+                    for (size_t d = 0; d < simplePointerCount; ++d) { if (simplePointers[d] == simpleInterface) dup = true; }
+                    if (!dup) simplePointers[simplePointerCount++] = static_cast<uefi::EfiSimplePointerProtocol*>(simpleInterface);
+                }
+            }
+            if (keyPointerCount == 0 && m_systemTable->conIn) {
+                keyPointers[keyPointerCount++] = m_systemTable->conIn;
+            }
+        };
+
+        discoverPointers();
+
+        // 3. Drain stale events in pointer queues
+        for (size_t i = 0; i < absPointerCount; ++i) {
+            auto* p = absPointers[i];
+            if (p && p->getState) {
+                uefi::EfiAbsolutePointerState dummy{};
+                while (p->getState(p, &dummy) == uefi::EFI_SUCCESS) {}
+            }
+        }
+        for (size_t i = 0; i < simplePointerCount; ++i) {
+            auto* p = simplePointers[i];
+            if (p && p->getState) {
+                uefi::EfiSimplePointerState dummy{};
+                while (p->getState(p, &dummy) == uefi::EFI_SUCCESS) {}
             }
         }
 
-        // Fallbacks if locateHandleBuffer did not find devices
-        if (absPointerCount == 0) {
-            void* absInterface = nullptr;
-            if (m_systemTable->bootServices->locateProtocol(&uefi::EFI_ABSOLUTE_POINTER_PROTOCOL_GUID, nullptr, &absInterface) == uefi::EFI_SUCCESS && absInterface) {
-                absPointers[absPointerCount++] = static_cast<uefi::EfiAbsolutePointerProtocol*>(absInterface);
+        // Print initial discovery report to COM1
+        UartSerial::print("[MicaNT Boot] Discovered Devices: Abs=");
+        UartSerial::printDec(static_cast<uint32_t>(absPointerCount));
+        UartSerial::print(" Simp=");
+        UartSerial::printDec(static_cast<uint32_t>(simplePointerCount));
+        UartSerial::print(" Keyboards=");
+        UartSerial::printDec(static_cast<uint32_t>(keyPointerCount));
+        UartSerial::print("\r\n");
+
+        for (size_t i = 0; i < absPointerCount; ++i) {
+            auto* p = absPointers[i];
+            if (p) {
+                UartSerial::print("  -> Abs[");
+                UartSerial::printDec(static_cast<uint32_t>(i));
+                UartSerial::print("]: minX=");
+                UartSerial::printDec(p->mode ? static_cast<uint32_t>(p->mode->absoluteMinX) : 0);
+                UartSerial::print(" maxX=");
+                UartSerial::printDec(p->mode ? static_cast<uint32_t>(p->mode->absoluteMaxX) : 0);
+                UartSerial::print(" minY=");
+                UartSerial::printDec(p->mode ? static_cast<uint32_t>(p->mode->absoluteMinY) : 0);
+                UartSerial::print(" maxY=");
+                UartSerial::printDec(p->mode ? static_cast<uint32_t>(p->mode->absoluteMaxY) : 0);
+                UartSerial::print("\r\n");
             }
         }
-        if (simplePointerCount == 0) {
-            void* simpleInterface = nullptr;
-            if (m_systemTable->bootServices->locateProtocol(&uefi::EFI_SIMPLE_POINTER_PROTOCOL_GUID, nullptr, &simpleInterface) == uefi::EFI_SUCCESS && simpleInterface) {
-                simplePointers[simplePointerCount++] = static_cast<uefi::EfiSimplePointerProtocol*>(simpleInterface);
+        for (size_t i = 0; i < simplePointerCount; ++i) {
+            auto* p = simplePointers[i];
+            if (p) {
+                UartSerial::print("  -> Simp[");
+                UartSerial::printDec(static_cast<uint32_t>(i));
+                UartSerial::print("]: resX=");
+                UartSerial::printDec(p->mode ? static_cast<uint32_t>(p->mode->resolutionX) : 0);
+                UartSerial::print(" resY=");
+                UartSerial::printDec(p->mode ? static_cast<uint32_t>(p->mode->resolutionY) : 0);
+                UartSerial::print("\r\n");
             }
-        }
-        if (keyPointerCount == 0 && m_systemTable->conIn) {
-            keyPointers[keyPointerCount++] = m_systemTable->conIn;
         }
 
-        // 3. Initialize Interactive Cursor at center
+        // 4. Initialize Interactive Cursor at center
         InteractiveCursor cursor;
         int32_t cursorX = static_cast<int32_t>(width / 2);
         int32_t cursorY = static_cast<int32_t>(height / 2);
         cursor.draw(m_videoDriver, cursorX, cursorY);
-
-        // 3b. Initialize COM1 Hardware UART Serial for Remote Control & Feedback Loop
-        UartSerial::init();
-        UartSerial::print("\r\n=======================================================\r\n");
-        UartSerial::print("[MicaNT COM1] Bare-Metal Silicon Feedback Harness Online\r\n");
-        UartSerial::print("[MicaNT COM1] Physical Intel Xeon E3-1270 v6 @ 3.80 GHz\r\n");
-        UartSerial::print("[MicaNT COM1] 90 Kernel Units | 44 PE32+ DLLs | 334/334 Suites OK\r\n");
-        UartSerial::print("[MicaNT COM1] Interactive 60 FPS Event Loop Active\r\n");
-        UartSerial::print("[MicaNT COM1] Commands: 'ping', 'status', 'type <msg>', 'mouse <x> <y>', 'stress', 'reboot'\r\n");
-        UartSerial::print("=======================================================\r\n");
 
         // 4. PS/2 8042 Hardware Controller Scancode Tables & State
         static constexpr char PS2_SET1_LOWER[128] = {
@@ -1633,6 +1741,20 @@ public:
                 if (m_systemTable->runtimeServices->getTime(&t, nullptr) == uefi::EFI_SUCCESS) {
                     liveTime = t;
                     m_hasBootTime = true;
+                }
+            }
+
+            // Hotplug check: if either pointer type is missing, re-probe every 60 frames (~1.0s)
+            if ((frameCount % 60) == 0 && (absPointerCount == 0 || simplePointerCount == 0)) {
+                size_t oldAbs = absPointerCount;
+                size_t oldSimp = simplePointerCount;
+                discoverPointers();
+                if (absPointerCount > oldAbs || simplePointerCount > oldSimp) {
+                    UartSerial::print("[MicaNT Hotplug] Pointers updated: Abs=");
+                    UartSerial::printDec(static_cast<uint32_t>(absPointerCount));
+                    UartSerial::print(" Simp=");
+                    UartSerial::printDec(static_cast<uint32_t>(simplePointerCount));
+                    UartSerial::print("\r\n");
                 }
             }
 
@@ -1774,16 +1896,35 @@ public:
             // 1. Check all Absolute Pointer devices (Virtual KVM USB Tablet)
             for (size_t i = 0; i < absPointerCount; ++i) {
                 auto* p = absPointers[i];
-                if (p && p->getState && p->mode && p->mode->absoluteMaxX > 0 && p->mode->absoluteMaxY > 0) {
+                if (p && p->getState) {
                     uefi::EfiAbsolutePointerState absState{};
                     if (p->getState(p, &absState) == uefi::EFI_SUCCESS) {
-                        int32_t calcX = static_cast<int32_t>((absState.currentX * width) / p->mode->absoluteMaxX);
-                        int32_t calcY = static_cast<int32_t>((absState.currentY * height) / p->mode->absoluteMaxY);
-                        if (calcX != cursorX || calcY != cursorY) {
+                        uint64_t minX = (p->mode) ? p->mode->absoluteMinX : 0;
+                        uint64_t maxX = (p->mode && p->mode->absoluteMaxX > minX) ? p->mode->absoluteMaxX : 32767;
+                        uint64_t minY = (p->mode) ? p->mode->absoluteMinY : 0;
+                        uint64_t maxY = (p->mode && p->mode->absoluteMaxY > minY) ? p->mode->absoluteMaxY : 32767;
+
+                        uint64_t rangeX = (maxX > minX) ? (maxX - minX) : 1;
+                        uint64_t rangeY = (maxY > minY) ? (maxY - minY) : 1;
+
+                        uint64_t curX = (absState.currentX >= minX) ? (absState.currentX - minX) : 0;
+                        uint64_t curY = (absState.currentY >= minY) ? (absState.currentY - minY) : 0;
+
+                        int32_t calcX = static_cast<int32_t>((curX * width) / rangeX);
+                        int32_t calcY = static_cast<int32_t>((curY * height) / rangeY);
+
+                        if (calcX != cursorX || calcY != cursorY || absState.activeButtons != 0) {
                             newMouseX = calcX;
                             newMouseY = calcY;
                             mouseMoved = true;
                             interactiveBonus = 12;
+                            UartSerial::print("[MicaNT Abs] X=");
+                            UartSerial::printInt(calcX);
+                            UartSerial::print(" Y=");
+                            UartSerial::printInt(calcY);
+                            UartSerial::print(" Btn=");
+                            UartSerial::printDec(absState.activeButtons);
+                            UartSerial::print("\r\n");
                             break;
                         }
                     }
@@ -1797,11 +1938,21 @@ public:
                     if (p && p->getState) {
                         uefi::EfiSimplePointerState simpleState{};
                         if (p->getState(p, &simpleState) == uefi::EFI_SUCCESS) {
-                            if (simpleState.relativeMovementX != 0 || simpleState.relativeMovementY != 0) {
+                            if (simpleState.relativeMovementX != 0 || simpleState.relativeMovementY != 0 ||
+                                simpleState.leftButton || simpleState.rightButton) {
                                 newMouseX = cursorX + simpleState.relativeMovementX;
                                 newMouseY = cursorY + simpleState.relativeMovementY;
                                 mouseMoved = true;
                                 interactiveBonus = 12;
+                                UartSerial::print("[MicaNT Rel] dX=");
+                                UartSerial::printInt(simpleState.relativeMovementX);
+                                UartSerial::print(" dY=");
+                                UartSerial::printInt(simpleState.relativeMovementY);
+                                UartSerial::print(" L=");
+                                UartSerial::printDec(simpleState.leftButton ? 1 : 0);
+                                UartSerial::print(" R=");
+                                UartSerial::printDec(simpleState.rightButton ? 1 : 0);
+                                UartSerial::print("\r\n");
                                 break;
                             }
                         }
@@ -1812,7 +1963,7 @@ public:
             // 3. Hardware 8042 Controller Polling (PS/2 keyboard scancodes + mouse packets)
             for (int k = 0; k < 16; ++k) {
                 uint8_t status = inb(0x64);
-                if (!(status & 0x01)) break;
+                if (status == 0xFF || !(status & 0x01)) break;
                 uint8_t data = inb(0x60);
                 if (status & 0x20) {
                     // PS/2 mouse byte
@@ -1865,55 +2016,44 @@ public:
             if (newMouseY < 0) newMouseY = 0;
             if (newMouseY > static_cast<int32_t>(height - 19)) newMouseY = static_cast<int32_t>(height - 19);
 
+            if (mouseMoved) {
+                cursorX = newMouseX;
+                cursorY = newMouseY;
+            }
+
             // Decay interactive bonus towards zero
             if (interactiveBonus > 0) {
                 if ((frameCount & 1) == 0) interactiveBonus--;
             }
 
-            // Helper to check if cursor overlaps a rectangular dirty region
-            auto overlaps = [&](int32_t rx, int32_t ry, int32_t rw, int32_t rh) {
-                return (cursorX + 12 >= rx && cursorX <= rx + rw &&
-                        cursorY + 19 >= ry && cursorY <= ry + rh);
-            };
+            // --- D. Update Dynamic Screen Layer ---
+            // Erase cursor from previous position before redrawing dynamic regions
+            cursor.erase(m_videoDriver);
 
-            // --- D. Update Dynamic Window Regions ---
             // 1. PrismX 3D Viewport (Rotating Octahedron)
-            bool curInPrism = overlaps(915, 85, 180, 255);
-            if (curInPrism) cursor.erase(m_videoDriver);
             updateRotatingOctahedron(spinAngle);
-            if (curInPrism) cursor.draw(m_videoDriver, cursorX, cursorY);
             spinAngle = (spinAngle + 1) & 63;
 
             // 2. Task Manager Waveform & CPU Meter
-            bool curInTm = overlaps(620, 412, 642, 342);
-            if (curInTm) cursor.erase(m_videoDriver);
             updateTaskManagerWave(realCpuUsage, cpuTempC, realRenderUs, frameHistory, HISTORY_CAPACITY, historyHead);
-            if (curInTm) cursor.draw(m_videoDriver, cursorX, cursorY);
 
             // 3. Notepad++ Live Caret & User Typed Text
-            bool curInNp = overlaps(20, 285, 570, 25);
-            if (curInNp) cursor.erase(m_videoDriver);
             bool blink = ((frameCount / 25) % 2) == 0;
             updateNotepadEditor(userTypedText, blink);
-            if (curInNp) cursor.draw(m_videoDriver, cursorX, cursorY);
 
-            // 4. Update Taskbar Live Telemetry (Clock, Temp, Frame Counter & 60 FPS indicator)
+            // 4. Update Taskbar Live Telemetry (Clock, Temp, Frame Counter & Device Status)
             if ((frameCount & 3) == 0) {
-                uint32_t trayW = 260;
-                int32_t trX = static_cast<int32_t>(width > trayW + 20 ? width - trayW - 10 : 10);
-                int32_t trY = static_cast<int32_t>(height - 34);
-                bool curInTray = overlaps(trX, trY, static_cast<int32_t>(trayW), 28);
-                if (curInTray) cursor.erase(m_videoDriver);
-                updateTaskbarTelemetry(frameCount, realCpuUsage, cpuTempC, m_hasBootTime ? &liveTime : nullptr);
-                if (curInTray) cursor.draw(m_videoDriver, cursorX, cursorY);
+                updateTaskbarTelemetry(
+                    frameCount, realCpuUsage, cpuTempC,
+                    m_hasBootTime ? &liveTime : nullptr,
+                    static_cast<uint32_t>(absPointerCount),
+                    static_cast<uint32_t>(simplePointerCount),
+                    cursorX, cursorY
+                );
             }
 
-            // --- E. Update Mouse Cursor if moved ---
-            if (mouseMoved) {
-                cursor.draw(m_videoDriver, newMouseX, newMouseY);
-                cursorX = cursor.currentX;
-                cursorY = cursor.currentY;
-            }
+            // --- E. Draw Interactive Cursor at latest position ---
+            cursor.draw(m_videoDriver, cursorX, cursorY);
 
             // Compute real silicon execution time via rdtsc
             uint64_t frameEndTsc = rdtsc();
