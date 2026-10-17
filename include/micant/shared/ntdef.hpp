@@ -11,6 +11,8 @@
 #ifndef _WIN32
   #include <cstring>
   #include <cwchar>
+  #include <cstdio>
+  #include <utility>
   #include <strings.h>
   #include <wchar.h>
   #ifndef __stdcall
@@ -94,6 +96,31 @@
       }
       dest[n] = L'\0';
       return 0;
+  }
+
+  template <size_t N>
+  inline int wcscpy_s(wchar_t (&dest)[N], const wchar_t* src) {
+      return wcscpy_s(dest, N, src);
+  }
+
+  template <typename... Args>
+  inline int swprintf_s(wchar_t* dest, size_t destsz, const wchar_t* fmt, Args&&... args) {
+      return ::swprintf(dest, destsz, fmt, std::forward<Args>(args)...);
+  }
+
+  template <size_t N, typename... Args>
+  inline int swprintf_s(wchar_t (&dest)[N], const wchar_t* fmt, Args&&... args) {
+      return ::swprintf(dest, N, fmt, std::forward<Args>(args)...);
+  }
+
+  template <typename... Args>
+  inline int sprintf_s(char* dest, size_t destsz, const char* fmt, Args&&... args) {
+      return std::snprintf(dest, destsz, fmt, std::forward<Args>(args)...);
+  }
+
+  template <size_t N, typename... Args>
+  inline int sprintf_s(char (&dest)[N], const char* fmt, Args&&... args) {
+      return std::snprintf(dest, N, fmt, std::forward<Args>(args)...);
   }
 
   inline int _stricmp(const char* s1, const char* s2) {
