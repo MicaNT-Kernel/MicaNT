@@ -694,6 +694,8 @@ struct KD_BREAKPOINT_ENTRY {
     bool active{false};
 };
 
+using KdOutputSink = void(*)(const char* text, size_t length);
+
 // ============================================================================
 // 8. Kernel Debugger Subsystem Coordinator (KdDebugger)
 // ============================================================================
@@ -702,6 +704,10 @@ public:
     static KdDebugger& get() {
         static KdDebugger instance;
         return instance;
+    }
+
+    void registerOutputSink(KdOutputSink sink) noexcept {
+        outputSink_ = sink;
     }
 
     void initialize(bool enabled = true) {
@@ -758,6 +764,12 @@ public:
 
     void logPrint(std::string_view msg) {
         ringBuffer_.append(msg);
+        if (outputSink_) {
+            outputSink_(msg.data(), msg.size());
+        } else {
+            std::fwrite(msg.data(), 1, msg.size(), stdout);
+            std::fflush(stdout);
+        }
         if (isDebuggerEnabled()) {
             DBGKD_DEBUG_IO ioHdr{};
             ioHdr.stringLength = static_cast<uint16_t>(msg.size());
@@ -1097,6 +1109,7 @@ private:
     KdTransport transport_;
     KdPrintRingBuffer ringBuffer_;
     HardwareBreakpointEngine hwBreakpoints_;
+    KdOutputSink outputSink_{nullptr};
     std::unordered_map<uint32_t, KD_BREAKPOINT_ENTRY> breakpoints_;
     std::unordered_map<uint64_t, uint8_t> simulatedMemory_;
     std::unordered_map<uint32_t, uint64_t> controlSpace_;
@@ -1106,6 +1119,10 @@ private:
 // ============================================================================
 // 9. Kernel DbgPrint & Debugger Trap APIs
 // ============================================================================
+inline void KdRegisterOutputSink(KdOutputSink sink) noexcept {
+    KdDebugger::get().registerOutputSink(sink);
+}
+
 inline void DbgPrintEx(uint32_t /*componentId*/, uint32_t /*level*/, const char* format, ...) {
     char buffer[1024];
     va_list args;
@@ -1172,6 +1189,8 @@ inline void KdInitSystem(uint32_t phase) {
 namespace micant {
     using kd::DbgPrint;
     using kd::DbgPrintEx;
+    using kd::KdRegisterOutputSink;
+    using kd::KdOutputSink;
     using kd::KdPollBreakIn;
     using kd::KdpTrap;
     using kd::KdBreakPoint;

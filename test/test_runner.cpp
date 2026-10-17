@@ -170,6 +170,7 @@
 #include "micant/km/drivers/video/dxgkrnl.hpp"
 #include "micant/um/subsystems/graphics/vulkan.hpp"
 #include "micant/km/drivers/fs/emeraldfs.hpp"
+#include "micant/km/drivers/fs/extfs.hpp"
 #include "micant/ucrt/daytonamm.hpp"
 #include "micant/um/subsystems/graphics/d3dcompiler.hpp"
 #include "micant/um/subsystems/media/prismaudio.hpp"
@@ -1601,6 +1602,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon116_WinNT_Ucrtbase_C_Runtime_System32_PE32Plus_ABI);
     RUN_TEST(Test_Horizon117_WinNT_Vcruntime140_And_Vcruntime140_1_System32_PE32Plus_ABI);
     RUN_TEST(Test_Horizon118_WinNT_Msvcp140_Pdata_SEH_Unwind_And_44_DLL_Seal);
+    RUN_TEST(Test_Horizon119_ExtFs_Linux_Ext2_Ext3_Ext4_ReadOnly_VFS_Subsystem);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

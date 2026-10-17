@@ -87,6 +87,7 @@ enum class NtStatus : uint32_t {
     SuspendCountExceeded             = 0xC000004A,
     DeviceBusy                       = 0x80000011,
     SystemShutdown                   = 0xC000009F,
+    MediaWriteProtected              = 0xC00000A2,
     DeviceNotReady                   = 0xC00000A3,
     BadImpersonationLevel            = 0xC00000A5,
     DiskFull                         = 0xC000007F,
@@ -218,6 +219,13 @@ inline constexpr NTSTATUS STATUS_INVALID_DEVICE_STATE   = static_cast<NTSTATUS>(
 inline constexpr NTSTATUS STATUS_NO_SUCH_DEVICE         = static_cast<NTSTATUS>(0xC000000E);
 inline constexpr NTSTATUS STATUS_TIMEOUT                = static_cast<NTSTATUS>(0x00000102);
 inline constexpr NTSTATUS STATUS_CANCELLED              = static_cast<NTSTATUS>(0xC0000120);
+inline constexpr NTSTATUS STATUS_MEDIA_WRITE_PROTECTED  = static_cast<NTSTATUS>(0xC00000A2);
+inline constexpr NTSTATUS STATUS_UNRECOGNIZED_VOLUME    = static_cast<NTSTATUS>(0xC00000DB);
+inline constexpr NTSTATUS STATUS_NO_SUCH_FILE           = static_cast<NTSTATUS>(0xC000000F);
+inline constexpr NTSTATUS STATUS_END_OF_FILE            = static_cast<NTSTATUS>(0xC0000011);
+inline constexpr NTSTATUS STATUS_NOT_A_DIRECTORY        = static_cast<NTSTATUS>(0xC0000103);
+inline constexpr NTSTATUS STATUS_DISK_CORRUPT_ERROR     = static_cast<NTSTATUS>(0xC0000032);
+inline constexpr NTSTATUS STATUS_DEVICE_DATA_ERROR      = static_cast<NTSTATUS>(0xC00000E0);
 
 [[nodiscard]] constexpr NtStatus STATUS_WAIT_N(uint32_t index) noexcept {
     return static_cast<NtStatus>(static_cast<uint32_t>(NtStatus::Wait0) + index);

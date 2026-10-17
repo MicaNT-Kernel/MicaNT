@@ -18913,5 +18913,233 @@ static void Test_Horizon118_WinNT_Msvcp140_Pdata_SEH_Unwind_And_44_DLL_Seal() {
     std::cout << "[TEST] Suite 334: Horizon 118 - Sovereign WinNT C++ Standard Library (msvcp140.dll), PE32+ .pdata SEH Unwinder & Complete 44-DLL Seal PASSED.\n";
 }
 
+// ============================================================================
+// Suite 335: Horizon 119 (Track C / Kernel Unit #91 / Horizons 87-90) -
+// Sovereign Cross-Platform Storage & Linux Ext2/Ext3/Ext4 Read-Only VFS Subsystem
+// (extfs.sys / ext4vfs): Superblock (0xEF53), Extent Trees (0xF30A),
+// Block Group Descriptors, Inode Tables, Win32 Path Resolution, Fast Symlinks,
+// and STATUS_MEDIA_WRITE_PROTECTED Guardrails
+// ============================================================================
+static void Test_Horizon119_ExtFs_Linux_Ext2_Ext3_Ext4_ReadOnly_VFS_Subsystem() {
+    std::cout << "\n[TEST] Suite 335: Horizon 119 - Sovereign Linux Ext2/Ext3/Ext4 Read-Only VFS Subsystem...\n";
+
+    using namespace micant::fs::ext;
+
+    // 1. Synthesize a clean-room Ext4 Filesystem in a Memory Block Device (4096-byte blocks)
+    constexpr uint32_t BLOCK_SIZE = 4096;
+    constexpr uint32_t TOTAL_BLOCKS = 32;
+    std::vector<uint8_t> diskData(TOTAL_BLOCKS * BLOCK_SIZE, 0);
+
+    // Populate Superblock (Block 0, Offset 1024)
+    ExtSuperblock* sb = reinterpret_cast<ExtSuperblock*>(diskData.data() + EXT_SUPERBLOCK_OFFSET);
+    sb->s_inodes_count = 64;
+    sb->s_blocks_count_lo = TOTAL_BLOCKS;
+    sb->s_free_blocks_count_lo = TOTAL_BLOCKS - 13;
+    sb->s_free_inodes_count = 60;
+    sb->s_first_data_block = 0; // 0 for 4096-byte blocks
+    sb->s_log_block_size = 2;   // 1024 << 2 = 4096 bytes
+    sb->s_blocks_per_group = TOTAL_BLOCKS;
+    sb->s_inodes_per_group = 64;
+    sb->s_magic = EXT_SUPER_MAGIC; // 0xEF53
+    sb->s_state = 1;               // Cleanly unmounted
+    sb->s_rev_level = 1;           // Dynamic revision
+    sb->s_first_ino = 11;
+    sb->s_inode_size = 256;
+    sb->s_feature_compat = EXT2_FEATURE_COMPAT_DIR_INDEX;
+    sb->s_feature_incompat = EXT4_FEATURE_INCOMPAT_EXTENTS | EXT4_FEATURE_INCOMPAT_64BIT | EXT2_FEATURE_INCOMPAT_FILETYPE;
+    sb->s_feature_ro_compat = EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER | EXT4_FEATURE_RO_COMPAT_EXTRA_ISIZE;
+    sb->s_desc_size = 64;
+    std::memcpy(sb->s_volume_name, "UBUNTU_ROOT", 11);
+
+    // Populate Block Group Descriptor (Block 1)
+    ExtBlockGroupDescriptor* gdt = reinterpret_cast<ExtBlockGroupDescriptor*>(diskData.data() + (1 * BLOCK_SIZE));
+    gdt->bg_block_bitmap_lo = 2;
+    gdt->bg_inode_bitmap_lo = 2;
+    gdt->bg_inode_table_lo = 3; // Inode table at Block 3
+    gdt->bg_free_blocks_count_lo = TOTAL_BLOCKS - 13;
+    gdt->bg_free_inodes_count_lo = 60;
+    gdt->bg_used_dirs_count_lo = 2;
+
+    // Helper lambda to get inode pointer in Block 3
+    auto getInodePtr = [&](uint32_t ino) -> ExtInode* {
+        uint64_t offset = (3 * BLOCK_SIZE) + ((ino - 1) * 256);
+        return reinterpret_cast<ExtInode*>(diskData.data() + offset);
+    };
+
+    // Inode 2: Root Directory "/"
+    ExtInode* rootInode = getInodePtr(EXT_ROOT_INO);
+    rootInode->i_mode = EXT_S_IFDIR | 0755;
+    rootInode->i_size_lo = BLOCK_SIZE;
+    rootInode->i_links_count = 3;
+    rootInode->i_flags = EXT4_EXTENTS_FL;
+    Ext4ExtentHeader* ehRoot = reinterpret_cast<Ext4ExtentHeader*>(rootInode->i_block);
+    ehRoot->eh_magic = EXT4_EXT_MAGIC;
+    ehRoot->eh_entries = 1;
+    ehRoot->eh_max = 4;
+    ehRoot->eh_depth = 0; // Leaf
+    Ext4Extent* eeRoot = reinterpret_cast<Ext4Extent*>(rootInode->i_block + (sizeof(Ext4ExtentHeader) / sizeof(uint32_t)));
+    eeRoot->ee_block = 0;
+    eeRoot->ee_len = 1;
+    eeRoot->ee_start_lo = 10; // Block 10 has root directory data
+
+    // Inode 12: Regular File "/etc/os-release"
+    const std::string osReleaseData = "NAME=\"Ubuntu\"\nVERSION=\"24.04 LTS (Noble Numbat)\"\nID=ubuntu\nVERSION_ID=\"24.04\"\n";
+    ExtInode* osReleaseInode = getInodePtr(12);
+    osReleaseInode->i_mode = EXT_S_IFREG | 0644;
+    osReleaseInode->i_size_lo = static_cast<uint32_t>(osReleaseData.size());
+    osReleaseInode->i_links_count = 1;
+    osReleaseInode->i_flags = EXT4_EXTENTS_FL;
+    osReleaseInode->i_ctime = 1713945600; // April 2024
+    osReleaseInode->i_mtime = 1713945600;
+    Ext4ExtentHeader* ehOs = reinterpret_cast<Ext4ExtentHeader*>(osReleaseInode->i_block);
+    ehOs->eh_magic = EXT4_EXT_MAGIC;
+    ehOs->eh_entries = 1;
+    ehOs->eh_max = 4;
+    ehOs->eh_depth = 0;
+    Ext4Extent* eeOs = reinterpret_cast<Ext4Extent*>(osReleaseInode->i_block + (sizeof(Ext4ExtentHeader) / sizeof(uint32_t)));
+    eeOs->ee_block = 0;
+    eeOs->ee_len = 1;
+    eeOs->ee_start_lo = 11; // Block 11 has file data
+    std::memcpy(diskData.data() + (11 * BLOCK_SIZE), osReleaseData.data(), osReleaseData.size());
+
+    // Inode 13: Fast Inline Symlink "/sh -> bash" (< 60 bytes, in i_block)
+    const std::string symlinkTarget = "bash";
+    ExtInode* symlinkInode = getInodePtr(13);
+    symlinkInode->i_mode = EXT_S_IFLNK | 0777;
+    symlinkInode->i_size_lo = static_cast<uint32_t>(symlinkTarget.size());
+    symlinkInode->i_links_count = 1;
+    std::memcpy(symlinkInode->i_block, symlinkTarget.data(), symlinkTarget.size());
+
+    // Inode 14: Subdirectory "/etc"
+    ExtInode* etcInode = getInodePtr(14);
+    etcInode->i_mode = EXT_S_IFDIR | 0755;
+    etcInode->i_size_lo = BLOCK_SIZE;
+    etcInode->i_links_count = 2;
+    etcInode->i_flags = EXT4_EXTENTS_FL;
+    Ext4ExtentHeader* ehEtc = reinterpret_cast<Ext4ExtentHeader*>(etcInode->i_block);
+    ehEtc->eh_magic = EXT4_EXT_MAGIC;
+    ehEtc->eh_entries = 1;
+    ehEtc->eh_max = 4;
+    ehEtc->eh_depth = 0;
+    Ext4Extent* eeEtc = reinterpret_cast<Ext4Extent*>(etcInode->i_block + (sizeof(Ext4ExtentHeader) / sizeof(uint32_t)));
+    eeEtc->ee_block = 0;
+    eeEtc->ee_len = 1;
+    eeEtc->ee_start_lo = 12; // Block 12 has etc directory data
+
+    // Helper to format directory entries
+    auto writeDirEntry = [](uint8_t* ptr, uint32_t ino, uint16_t recLen, uint8_t ft, std::string_view name) {
+        Ext4DirEntry2* de = reinterpret_cast<Ext4DirEntry2*>(ptr);
+        de->inode = ino;
+        de->rec_len = recLen;
+        de->name_len = static_cast<uint8_t>(name.size());
+        de->file_type = ft;
+        std::memcpy(de->name, name.data(), name.size());
+    };
+
+    // Populate Root Directory Block 10:
+    uint8_t* b10 = diskData.data() + (10 * BLOCK_SIZE);
+    writeDirEntry(b10 + 0,  2,  12, EXT4_FT_DIR, ".");
+    writeDirEntry(b10 + 12, 2,  12, EXT4_FT_DIR, "..");
+    writeDirEntry(b10 + 24, 14, 16, EXT4_FT_DIR, "etc");
+    writeDirEntry(b10 + 40, 13, 4056, EXT4_FT_SYMLINK, "sh");
+
+    // Populate /etc Directory Block 12:
+    uint8_t* b12 = diskData.data() + (12 * BLOCK_SIZE);
+    writeDirEntry(b12 + 0,  14, 12, EXT4_FT_DIR, ".");
+    writeDirEntry(b12 + 12, 2,  12, EXT4_FT_DIR, "..");
+    writeDirEntry(b12 + 24, 12, 4072, EXT4_FT_REG_FILE, "os-release");
+
+    // 2. Mount and Test ExtFileSystem Engine
+    auto memDevice = std::make_shared<MemoryExtBlockDevice>(std::move(diskData));
+    auto extFs = std::make_shared<ExtFileSystem>();
+
+    NTSTATUS mountStatus = extFs->mount(memDevice);
+    TEST_ASSERT(NT_SUCCESS(mountStatus), "Ext4 mount must succeed with valid 0xEF53 superblock");
+    TEST_ASSERT(extFs->isMounted(), "Filesystem state must be mounted");
+    TEST_ASSERT(extFs->getBlockSize() == 4096, "Block size must equal 4096");
+    TEST_ASSERT(extFs->getInodeSize() == 256, "Inode size must equal 256");
+    TEST_ASSERT(extFs->getVolumeLabel() == "UBUNTU_ROOT", "Volume label must match UBUNTU_ROOT");
+
+    // 3. Test Inode Reading
+    ExtInode readRoot{};
+    TEST_ASSERT(NT_SUCCESS(extFs->readInode(EXT_ROOT_INO, readRoot)), "Reading root inode 2 must succeed");
+    TEST_ASSERT((readRoot.i_mode & EXT_S_IFMT) == EXT_S_IFDIR, "Root inode must be a directory");
+    TEST_ASSERT(readRoot.i_size_lo == 4096, "Root directory size must equal 4096");
+
+    // 4. Test Directory Listing
+    std::vector<ExtFsDirEntry> rootEntries;
+    TEST_ASSERT(NT_SUCCESS(extFs->listDirectory(EXT_ROOT_INO, rootEntries)), "Listing root directory must succeed");
+    TEST_ASSERT(rootEntries.size() == 4, "Root directory must have 4 entries (., .., etc, sh)");
+
+    bool foundEtc = false;
+    bool foundSh = false;
+    for (const auto& ent : rootEntries) {
+        if (ent.name == "etc" && ent.inode == 14 && ent.isDirectory) foundEtc = true;
+        if (ent.name == "sh" && ent.inode == 13 && ent.isSymlink) foundSh = true;
+    }
+    TEST_ASSERT(foundEtc, "Root directory must contain directory 'etc' with inode 14");
+    TEST_ASSERT(foundSh, "Root directory must contain symlink 'sh' with inode 13");
+
+    // 5. Test Path Resolution & Extent Traversal
+    uint32_t resolvedIno = 0;
+    ExtInode resolvedInode{};
+    TEST_ASSERT(NT_SUCCESS(extFs->resolvePath("/etc/os-release", resolvedIno, &resolvedInode)), "Resolving /etc/os-release must succeed");
+    TEST_ASSERT(resolvedIno == 12, "Resolved inode must be 12");
+    TEST_ASSERT((resolvedInode.i_mode & EXT_S_IFMT) == EXT_S_IFREG, "/etc/os-release must be regular file");
+
+    // Test Win32 Case-Insensitive Lookup
+    uint32_t win32Ino = 0;
+    TEST_ASSERT(NT_SUCCESS(extFs->resolveWin32Path(L"E:\\ETC\\OS-RELEASE", win32Ino)), "Case-insensitive Win32 path resolution must succeed");
+    TEST_ASSERT(win32Ino == 12, "Case-insensitive lookup must resolve to inode 12");
+
+    // 6. Test File Reading through Extent Tree
+    std::string fileContent(resolvedInode.i_size_lo, '\0');
+    size_t bytesRead = 0;
+    TEST_ASSERT(NT_SUCCESS(extFs->readFileBytes(resolvedInode, 0, resolvedInode.i_size_lo, fileContent.data(), &bytesRead)), "Reading /etc/os-release data via extent tree must succeed");
+    TEST_ASSERT(bytesRead == osReleaseData.size(), "Bytes read must match original file size");
+    TEST_ASSERT(fileContent == osReleaseData, "File content must match exact Ubuntu os-release text");
+
+    // 7. Test Fast Symlink Reading (< 60 bytes)
+    ExtInode shInode{};
+    TEST_ASSERT(NT_SUCCESS(extFs->readInode(13, shInode)), "Reading symlink inode 13 must succeed");
+    std::string symlinkTargetOut;
+    TEST_ASSERT(NT_SUCCESS(extFs->readSymlink(shInode, symlinkTargetOut)), "Reading fast inline symlink must succeed");
+    TEST_ASSERT(symlinkTargetOut == "bash", "Symlink target must equal 'bash'");
+
+    // 8. Test IFS Driver Registration & Sovereign Read-Only Guardrails
+    auto& extDriver = ExtFsDriver::get();
+    extDriver.initialize();
+    TEST_ASSERT(extDriver.isInitialized(), "ExtFsDriver must initialize");
+    TEST_ASSERT(NT_SUCCESS(extDriver.mountDrive(L"E:", extFs)), "Mounting extFs onto drive E: must succeed");
+    TEST_ASSERT(extDriver.getFileSystem(L"E:") == extFs, "getFileSystem(E:) must return mounted filesystem");
+
+    // Verify Read-Only Guardrails:
+    io::Irp writeIrp{};
+    writeIrp.majorFunction = io::IRP_MJ_WRITE;
+    NtStatus writeStatus = ExtFsDriver::dispatchWrite(nullptr, &writeIrp);
+    TEST_ASSERT(writeStatus == NtStatus::MediaWriteProtected, "ExtFsDriver::dispatchWrite must reject writes with MediaWriteProtected");
+    TEST_ASSERT(writeIrp.ioStatus.status == NtStatus::MediaWriteProtected, "writeIrp.ioStatus.status must be MediaWriteProtected");
+
+    io::Irp createWriteIrp{};
+    createWriteIrp.majorFunction = io::IRP_MJ_CREATE;
+    createWriteIrp.ioStatus.information = micant::fs::FILE_WRITE_DATA;
+    NtStatus createWriteStatus = ExtFsDriver::dispatchCreate(nullptr, &createWriteIrp);
+    TEST_ASSERT(createWriteStatus == NtStatus::MediaWriteProtected, "ExtFsDriver::dispatchCreate must reject write access requests");
+
+    io::Irp createReadIrp{};
+    createReadIrp.majorFunction = io::IRP_MJ_CREATE;
+    createReadIrp.ioStatus.information = micant::fs::FILE_READ_DATA;
+    NtStatus createReadStatus = ExtFsDriver::dispatchCreate(nullptr, &createReadIrp);
+    TEST_ASSERT(createReadStatus == NtStatus::Success, "ExtFsDriver::dispatchCreate must grant read-only access");
+
+    std::cout << "  [Horizon 119 Track C Ext2/Ext3/Ext4 VFS Subsystem (extfs.sys / ext4vfs)]\n"
+              << "    Superblock=0xEF53 | ExtentTree=0xF30A | BlockSize=4096 | InodeSize=256\n"
+              << "    VolumeLabel=" << extFs->getVolumeLabel() << " | RootIno=2 | /etc/os-release Ino=12 (" << bytesRead << "B)\n"
+              << "    FastSymlink=/bin/sh->" << symlinkTargetOut << " | Win32CaseInsensitive=YES | ReadOnlyGuardrail=ENFORCED\n";
+
+    std::cout << "[TEST] Suite 335: Horizon 119 - Sovereign Linux Ext2/Ext3/Ext4 Read-Only VFS Subsystem PASSED.\n";
+}
+
+
 
 
