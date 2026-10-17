@@ -46,6 +46,10 @@
     typedef int errno_t;
   #endif
 
+  #ifndef _TRUNCATE
+    #define _TRUNCATE ((size_t)-1)
+  #endif
+
   #ifndef _BOOL_DEFINED
     #define _BOOL_DEFINED
     using BOOL = int32_t;

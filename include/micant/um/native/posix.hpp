@@ -134,6 +134,13 @@ inline const sighandler_t PSX_SIG_DFL = reinterpret_cast<sighandler_t>(0);
 inline const sighandler_t PSX_SIG_IGN = reinterpret_cast<sighandler_t>(1);
 inline const sighandler_t PSX_SIG_ERR = reinterpret_cast<sighandler_t>(-1);
 
+#ifdef sa_handler
+#undef sa_handler
+#endif
+#ifdef sa_sigaction
+#undef sa_sigaction
+#endif
+
 struct sigaction_t {
     sighandler_t sa_handler{PSX_SIG_DFL};
     uint32_t     sa_mask{0};
