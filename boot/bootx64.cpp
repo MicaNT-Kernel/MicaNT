@@ -388,12 +388,16 @@ struct InteractiveCursor {
     int32_t currentX{720};
     int32_t currentY{360};
     bool isDrawn{false};
-    bootvid::Color savedPixels[CURSOR_HEIGHT][CURSOR_WIDTH]{};
+    uint32_t savedDwords[CURSOR_HEIGHT][CURSOR_WIDTH]{};
 
     void erase(bootvid::BootVideoDriver& driver) {
         if (!isDrawn) return;
+        uint32_t* fb = driver.getRawBuffer();
+        if (!fb) return;
         uint32_t w = driver.getWidth();
         uint32_t h = driver.getHeight();
+        uint32_t pitch = driver.getPitch();
+
         for (uint32_t r = 0; r < CURSOR_HEIGHT; ++r) {
             int32_t py = currentY + static_cast<int32_t>(r);
             if (py < 0 || py >= static_cast<int32_t>(h)) continue;
@@ -401,7 +405,7 @@ struct InteractiveCursor {
                 int32_t px = currentX + static_cast<int32_t>(c);
                 if (px < 0 || px >= static_cast<int32_t>(w)) continue;
                 if (CURSOR_BITMAP[r][c] != ' ') {
-                    driver.putPixel(static_cast<uint32_t>(px), static_cast<uint32_t>(py), savedPixels[r][c]);
+                    fb[py * pitch + px] = savedDwords[r][c];
                 }
             }
         }
@@ -410,8 +414,11 @@ struct InteractiveCursor {
 
     void draw(bootvid::BootVideoDriver& driver, int32_t newX, int32_t newY) {
         if (isDrawn) erase(driver);
+        uint32_t* fb = driver.getRawBuffer();
+        if (!fb) return;
         uint32_t w = driver.getWidth();
         uint32_t h = driver.getHeight();
+        uint32_t pitch = driver.getPitch();
 
         if (newX < 0) newX = 0;
         if (newY < 0) newY = 0;
@@ -424,21 +431,22 @@ struct InteractiveCursor {
         currentX = newX;
         currentY = newY;
 
-        bootvid::Color white{255, 255, 255};
-        bootvid::Color black{0, 0, 0};
-
-        // 1. Save underlying pixels
+        // 1. Save underlying raw dwords directly
         for (uint32_t r = 0; r < CURSOR_HEIGHT; ++r) {
             int32_t py = currentY + static_cast<int32_t>(r);
+            if (py < 0 || py >= static_cast<int32_t>(h)) continue;
             for (uint32_t c = 0; c < CURSOR_WIDTH; ++c) {
                 int32_t px = currentX + static_cast<int32_t>(c);
-                if (px >= 0 && px < static_cast<int32_t>(w) && py >= 0 && py < static_cast<int32_t>(h)) {
-                    savedPixels[r][c] = driver.getPixel(static_cast<uint32_t>(px), static_cast<uint32_t>(py));
+                if (px >= 0 && px < static_cast<int32_t>(w)) {
+                    savedDwords[r][c] = fb[py * pitch + px];
                 }
             }
         }
 
-        // 2. Render cursor arrow bitmap
+        // 2. Render cursor arrow bitmap directly as 32-bit dwords
+        constexpr uint32_t BLACK_PIXEL = 0xFF000000;
+        constexpr uint32_t WHITE_PIXEL = 0xFFFFFFFF;
+
         for (uint32_t r = 0; r < CURSOR_HEIGHT; ++r) {
             int32_t py = currentY + static_cast<int32_t>(r);
             if (py < 0 || py >= static_cast<int32_t>(h)) continue;
@@ -447,9 +455,9 @@ struct InteractiveCursor {
                 if (px < 0 || px >= static_cast<int32_t>(w)) continue;
                 char ch = CURSOR_BITMAP[r][c];
                 if (ch == 'X') {
-                    driver.putPixel(static_cast<uint32_t>(px), static_cast<uint32_t>(py), black);
+                    fb[py * pitch + px] = BLACK_PIXEL;
                 } else if (ch == '.') {
-                    driver.putPixel(static_cast<uint32_t>(px), static_cast<uint32_t>(py), white);
+                    fb[py * pitch + px] = WHITE_PIXEL;
                 }
             }
         }
