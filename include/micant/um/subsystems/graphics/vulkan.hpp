@@ -619,7 +619,7 @@ inline void vkGetPhysicalDeviceProperties(
     pProperties->deviceID = physicalDevice->deviceId;
     pProperties->deviceType = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
     
-    strncpy_s(pProperties->deviceName, physicalDevice->name.c_str(), sizeof(pProperties->deviceName) - 1);
+    strncpy_s(pProperties->deviceName, sizeof(pProperties->deviceName), physicalDevice->name.c_str(), sizeof(pProperties->deviceName) - 1);
 
     pProperties->limits.maxImageDimension2D = 16384;
     pProperties->limits.maxPushConstantsSize = 256;

@@ -66,6 +66,16 @@
       return 0;
   }
 
+  template <size_t N>
+  inline int strncpy_s(char (&dest)[N], const char* src, size_t count) {
+      return strncpy_s(dest, N, src, count);
+  }
+
+  template <size_t N>
+  inline int strcpy_s(char (&dest)[N], const char* src) {
+      return strncpy_s(dest, N, src, N - 1);
+  }
+
   inline int wcscpy_s(wchar_t* dest, size_t destsz, const wchar_t* src) {
       if (!dest || destsz == 0) return 22;
       if (!src) {
