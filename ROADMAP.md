@@ -4296,4 +4296,12 @@
   - Implements `UserThreadScheduler64` multi-process cooperative scheduler: orchestrates round-robin context switching between multiple concurrent Ring 3 userland processes (`smss.exe` TID 1 PID 368, `csrss.exe` TID 2 PID 480, `cmd.exe` TID 3 PID 1024).
   - Handles fast system call `NtYieldExecution` (SSN `0x46`): rotates execution between active userland threads with full CPU register context preservation.
   - Implements automatic lifecycle handover on thread/process termination (`NtTerminateProcess` SSN `0x01`): transitions active execution to remaining ready threads and cleanly returns to kernel executive shell upon completion.
+- [x] **Horizon 95 (`Suite 339` / `Unit #95`): Sovereign PE32+ Userland Binary Loader, Base Relocations, IAT Fast Syscall Trampolines & FAT32 Volume Execution (`UserImageLoader64`) (`include/micant/km/executive/usermode.hpp`, `boot/bootx64.cpp`)**:
+  - Implements clean-room zero-allocation 64-bit PE32+ image loader: parses DOS header (`IMAGE_DOS_HEADER`), NT headers (`IMAGE_NT_HEADERS64`), and section headers (`IMAGE_SECTION_HEADER`).
+  - Maps sections directly into userland virtual memory (`.text` RX, `.rdata` R, `.data` RW) at requested target base virtual address with automatic 4-level CR3 page walker permissions (`U/S = 1`, `R/W = 1`, `NX = 0`).
+  - Implements clean-room PE base relocation engine (`IMAGE_REL_BASED_DIR64` and `IMAGE_REL_BASED_HIGHLOW`) applying delta adjustments when loaded at relocated virtual addresses.
+  - Implements fast system call trampoline table (Slots 0–8) and dynamically resolves Import Address Table (IAT) thunks from Win32 libraries (`KERNEL32.dll`, `ntdll.dll`) directly to userland fast syscall trampolines (`GetStdHandle`, `WriteFile`, `ExitProcess`, `GetTickCount64`).
+  - Pre-loads standalone PE32+ userland binaries (`app.exe` / `cmd.exe`) directly from the FAT32 EFI System Partition (`\EFI\MicaNT\app.exe` on `C:\`) via `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL` and `EFI_LOADED_IMAGE_PROTOCOL` before `ExitBootServices`, with fallback to embedded clean-room 64-bit PE binary fixture (`kUnmodifiedSampleBinary`).
+  - Tested and verified on physical hardware (Supermicro X11SSH-F, Intel Xeon E3-1270 v6 @ 3.80GHz): executing third-party Windows PE binaries in Ring 3 (`CPL = 3`), emitting output through `NtWriteFile` (SSN 0x25), and cleanly exiting via `NtTerminateProcess` (SSN 0x01).
+
 

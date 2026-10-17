@@ -76,6 +76,14 @@ inline constexpr EfiGuid EFI_BLOCK_IO_PROTOCOL_GUID = {
     0x964e5b21, 0x6459, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b }
 };
 
+inline constexpr EfiGuid EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID = {
+    0x964e5b22, 0x6459, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b }
+};
+
+inline constexpr EfiGuid EFI_LOADED_IMAGE_PROTOCOL_GUID = {
+    0x5b1b4a61, 0x69a6, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b }
+};
+
 /**
  * @brief Standard UEFI Table Header.
  */
@@ -324,6 +332,59 @@ struct EfiBlockIoProtocol {
     ){nullptr};
     EfiStatus (*flushBlocks)(EfiBlockIoProtocol* self){nullptr};
 };
+
+// UEFI File Open Modes
+inline constexpr uint64_t EFI_FILE_MODE_READ   = 0x0000000000000001ULL;
+inline constexpr uint64_t EFI_FILE_MODE_WRITE  = 0x0000000000000002ULL;
+inline constexpr uint64_t EFI_FILE_MODE_CREATE = 0x8000000000000000ULL;
+
+struct EfiFileProtocol;
+struct EfiSystemTable;
+
+/**
+ * @brief UEFI File Protocol (EFI_FILE_PROTOCOL) for reading/writing files on FAT32/EFI volumes.
+ */
+struct EfiFileProtocol {
+    uint64_t revision{0x00010000};
+    EfiStatus (*open)(EfiFileProtocol* self, EfiFileProtocol** newHandle, const wchar_t* fileName, uint64_t openMode, uint64_t attributes){nullptr};
+    EfiStatus (*close)(EfiFileProtocol* self){nullptr};
+    EfiStatus (*deleteFile)(EfiFileProtocol* self){nullptr};
+    EfiStatus (*read)(EfiFileProtocol* self, uint64_t* bufferSize, void* buffer){nullptr};
+    EfiStatus (*write)(EfiFileProtocol* self, uint64_t* bufferSize, const void* buffer){nullptr};
+    EfiStatus (*getPosition)(EfiFileProtocol* self, uint64_t* position){nullptr};
+    EfiStatus (*setPosition)(EfiFileProtocol* self, uint64_t position){nullptr};
+    EfiStatus (*getInfo)(EfiFileProtocol* self, const EfiGuid* informationType, uint64_t* bufferSize, void* buffer){nullptr};
+    EfiStatus (*setInfo)(EfiFileProtocol* self, const EfiGuid* informationType, uint64_t bufferSize, const void* buffer){nullptr};
+    EfiStatus (*flush)(EfiFileProtocol* self){nullptr};
+};
+
+/**
+ * @brief UEFI Simple File System Protocol (EFI_SIMPLE_FILE_SYSTEM_PROTOCOL).
+ */
+struct EfiSimpleFileSystemProtocol {
+    uint64_t revision{0x00010000};
+    EfiStatus (*openVolume)(EfiSimpleFileSystemProtocol* self, EfiFileProtocol** root){nullptr};
+};
+
+/**
+ * @brief UEFI Loaded Image Protocol (EFI_LOADED_IMAGE_PROTOCOL).
+ */
+struct EfiLoadedImageProtocol {
+    uint32_t revision{0x00010000};
+    EfiHandle parentHandle{nullptr};
+    EfiSystemTable* systemTable{nullptr};
+    EfiHandle deviceHandle{nullptr};
+    void* filePath{nullptr};
+    void* reserved{nullptr};
+    uint32_t loadOptionsSize{0};
+    void* loadOptions{nullptr};
+    void* imageBase{nullptr};
+    uint64_t imageSize{0};
+    EfiMemoryType imageCodeType{EfiMemoryType::EfiLoaderCode};
+    EfiMemoryType imageDataType{EfiMemoryType::EfiLoaderData};
+    EfiStatus (*unload)(EfiHandle imageHandle){nullptr};
+};
+
 
 /**
  * @brief UEFI Boot Services Table.

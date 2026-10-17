@@ -19476,3 +19476,182 @@ inline void Test_Horizon122_Ring3_Thread_Context_Switching_And_Scheduler() {
     std::cout << "[TEST] Suite 338: Horizon 122 - Ring 3 Thread Context Switching & Scheduler PASSED.\n";
 }
 
+// ============================================================================
+// Suite 339: Horizon 123 — Sovereign PE32+ Userland Binary Loader & Executive Bridge (Unit #95)
+// ============================================================================
+inline void Test_Horizon123_UserMode_PE32Plus_Binary_Loader_And_Execution() {
+    std::cout << "\n[TEST] Suite 339: Horizon 123 - PE32+ Userland Binary Loader & Execution...\n";
+
+    using namespace micant::um;
+
+    // 1. Verify Error Handling on Corrupted/Truncated Inputs
+    UserLoadedImageInfo badInfo{};
+    uint8_t dummyDest[4096]{};
+    uint8_t dummyTramp[512]{};
+
+    // 1a. Too small buffer (< sizeof(ImageDosHeader))
+    uint8_t tinyBytes[16]{ 0x4D, 0x5A };
+    micant::NtStatus stSmall = UserImageLoader64::loadAndMapImage(
+        tinyBytes, dummyDest, sizeof(dummyDest), 0x7FF600000000ULL,
+        dummyTramp, sizeof(dummyTramp), 0x7FFD00000000ULL,
+        0xE000100000ULL, 65536, 0x7FFD00010000ULL, 0x7FFD00020000ULL,
+        100, 4, "bad.exe", badInfo
+    );
+    TEST_ASSERT(!NT_SUCCESS(stSmall), "Truncated image buffer must be rejected");
+
+    // 1b. Invalid DOS magic
+    uint8_t badMagicBytes[sizeof(pe::ImageDosHeader)]{ 0x00, 0x00 };
+    micant::NtStatus stMagic = UserImageLoader64::loadAndMapImage(
+        badMagicBytes, dummyDest, sizeof(dummyDest), 0x7FF600000000ULL,
+        dummyTramp, sizeof(dummyTramp), 0x7FFD00000000ULL,
+        0xE000100000ULL, 65536, 0x7FFD00010000ULL, 0x7FFD00020000ULL,
+        101, 4, "bad.exe", badInfo
+    );
+    TEST_ASSERT(!NT_SUCCESS(stMagic), "Invalid DOS magic must be rejected");
+
+    // 2. Load Valid Freestanding PE32+ Binary (kUnmodifiedSampleBinary)
+    std::span<const uint8_t> peBytes(kUnmodifiedSampleBinary, sizeof(kUnmodifiedSampleBinary));
+    TEST_ASSERT(peBytes.size() > 512, "Fixture PE binary must be non-empty");
+
+    // Allocate user destination buffer and trampoline page
+    constexpr size_t USER_IMAGE_BUF_SIZE = 64 * 1024;
+    alignas(4096) static uint8_t userImageBuffer[USER_IMAGE_BUF_SIZE];
+    alignas(4096) static uint8_t userTrampolineBuffer[4096];
+
+    uint64_t targetBaseVa     = 0x00007FF610000000ULL; // Rebased virtual address
+    uint64_t trampolineBaseVa = 0x00007FFD00000000ULL;
+    uint64_t userStackTopVa   = 0x000000E000100000ULL;
+    uint64_t pebVa            = 0x00007FFD00010000ULL;
+    uint64_t tebVa            = 0x00007FFD00020000ULL;
+    uint32_t testPid          = 1024;
+    uint32_t parentPid        = 480;
+
+    auto& pm = UserProcessManager64::get();
+    pm.reset();
+    auto& sched = UserThreadScheduler64::get();
+    sched.reset();
+
+    UserLoadedImageInfo loadedInfo{};
+    micant::NtStatus stLoad = UserImageLoader64::loadAndMapImage(
+        peBytes,
+        userImageBuffer, sizeof(userImageBuffer),
+        targetBaseVa,
+        userTrampolineBuffer, sizeof(userTrampolineBuffer),
+        trampolineBaseVa,
+        userStackTopVa, 65536,
+        pebVa, tebVa,
+        testPid, parentPid,
+        "app.exe",
+        loadedInfo
+    );
+    TEST_ASSERT(NT_SUCCESS(stLoad), "UserImageLoader64::loadAndMapImage must succeed on valid PE binary");
+    TEST_ASSERT(loadedInfo.headersValid, "PE headers must be marked valid");
+    TEST_ASSERT(loadedInfo.sectionsMapped, "Sections must be marked mapped");
+    TEST_ASSERT(loadedInfo.numberOfSections >= 3, "Image must have at least 3 sections (.text, .rdata, .pdata)");
+    TEST_ASSERT(loadedInfo.sizeOfImage >= 0x3000, "Image size must be at least 0x3000 bytes");
+    TEST_ASSERT(loadedInfo.imageBaseVa == targetBaseVa, "Image base VA must match requested targetBaseVa");
+    TEST_ASSERT(loadedInfo.entryPointVa == targetBaseVa + 0x1000, "Entry point VA must be targetBaseVa + 0x1000");
+
+    // 3. Verify Base Relocations handling
+    TEST_ASSERT(loadedInfo.isRelocated, "Binary loaded at non-preferred base must be marked relocated");
+
+    // 3b. Verify Relocation Application on PE Image containing .reloc directory
+    std::vector<uint8_t> relocPeBytes(0x2000, 0);
+    auto* rDos = reinterpret_cast<pe::ImageDosHeader*>(relocPeBytes.data());
+    rDos->e_magic = pe::DOS_MAGIC;
+    rDos->e_lfanew = 0x80;
+    auto* rNt = reinterpret_cast<pe::ImageNtHeaders64*>(relocPeBytes.data() + 0x80);
+    rNt->signature = pe::NT_SIGNATURE;
+    rNt->fileHeader.machine = pe::MACHINE_AMD64;
+    rNt->fileHeader.numberOfSections = 1;
+    rNt->fileHeader.sizeOfOptionalHeader = sizeof(pe::ImageOptionalHeader64);
+    rNt->optionalHeader.magic = pe::PE32PLUS_MAGIC;
+    rNt->optionalHeader.imageBase = 0x0000000140000000ULL;
+    rNt->optionalHeader.sizeOfImage = 0x4000;
+    rNt->optionalHeader.sizeOfHeaders = 0x400;
+    rNt->optionalHeader.numberOfRvaAndSizes = pe::IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+    rNt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_BASERELOC].virtualAddress = 0x1000;
+    rNt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_BASERELOC].size = sizeof(pe::ImageBaseRelocation) + sizeof(uint16_t);
+
+    auto* rSec = reinterpret_cast<pe::ImageSectionHeader*>(relocPeBytes.data() + 0x80 + sizeof(uint32_t) + sizeof(pe::ImageFileHeader) + sizeof(pe::ImageOptionalHeader64));
+    rSec[0].virtualAddress = 0x1000;
+    rSec[0].sizeOfRawData = 0x400;
+    rSec[0].pointerToRawData = 0x400;
+
+    auto* rBlock = reinterpret_cast<pe::ImageBaseRelocation*>(relocPeBytes.data() + 0x400);
+    rBlock->virtualAddress = 0x1000;
+    rBlock->sizeOfBlock = sizeof(pe::ImageBaseRelocation) + sizeof(uint16_t);
+    auto* rEntries = reinterpret_cast<uint16_t*>(rBlock + 1);
+    rEntries[0] = (pe::IMAGE_REL_BASED_DIR64 << 12) | 0x0010; // RVA 0x1010
+
+    UserLoadedImageInfo relocInfo{};
+    uint8_t relocDest[0x4000]{};
+    micant::NtStatus stR = UserImageLoader64::loadAndMapImage(
+        relocPeBytes, relocDest, sizeof(relocDest), 0x0000000240000000ULL,
+        dummyTramp, sizeof(dummyTramp), trampolineBaseVa,
+        userStackTopVa, 65536, pebVa, tebVa, 2048, 480, "reloc_app.exe", relocInfo
+    );
+    TEST_ASSERT(NT_SUCCESS(stR), "Relocatable image load must succeed");
+    TEST_ASSERT(relocInfo.isRelocated, "Relocatable image must be marked relocated");
+    TEST_ASSERT(relocInfo.relocationsAppliedCount == 1, "Relocations count must equal 1");
+
+    // 4. Verify IAT Import Binding to Fast Syscall Trampolines
+    TEST_ASSERT(loadedInfo.boundImportsCount == 4, "Must have bound all 4 symbols from KERNEL32.dll");
+
+    // Check trampoline opcodes in userTrampolineBuffer
+    // Slot 0 (ExitProcess): B8 01 00 00 00 (SSN 0x01)
+    TEST_ASSERT(userTrampolineBuffer[0x00 + 3] == 0xB8 && userTrampolineBuffer[0x00 + 4] == 0x01, "Slot 0 must have SSN 0x01");
+    // Slot 1 (NtQuerySystemInformation): B8 11 00 00 00 (SSN 0x11)
+    TEST_ASSERT(userTrampolineBuffer[0x20] == 0xB8 && userTrampolineBuffer[0x21] == 0x11, "Slot 1 must have SSN 0x11");
+    // Slot 3 (WriteFile): B8 25 00 00 00 (SSN 0x25)
+    TEST_ASSERT(userTrampolineBuffer[0x60] == 0xB8 && userTrampolineBuffer[0x61] == 0x25, "Slot 3 must have SSN 0x25");
+    // Slot 7 (GetStdHandle): B8 01 00 00 00 C3 (returns 1)
+    TEST_ASSERT(userTrampolineBuffer[0xE0] == 0xB8 && userTrampolineBuffer[0xE1] == 0x01, "Slot 7 must return 1");
+
+    // 5. Verify Process and PEB Configuration in UserProcessManager64
+    TEST_ASSERT(pm.getProcessCount() == 2, "UserProcessManager must register both loaded processes");
+    auto* proc = pm.findProcess(testPid);
+    TEST_ASSERT(proc != nullptr, "Process 1024 must be found in process manager");
+    TEST_ASSERT(proc->peb.imageBaseAddress == targetBaseVa, "PEB imageBaseAddress must equal targetBaseVa");
+    TEST_ASSERT(proc->peb.osMajorVersion == 10, "PEB OS Major Version must be 10");
+    TEST_ASSERT(proc->peb.osBuildNumber == 26100, "PEB OS Build Number must be 26100");
+    TEST_ASSERT(proc->teb.uniqueProcessId == testPid, "TEB PID must match process PID");
+    TEST_ASSERT(proc->state == UserProcessState::Ready, "Initial process state must be Ready");
+
+    // 6. Verify Initial Thread Context in UserThreadScheduler64
+    TEST_ASSERT(sched.getThreadCount() == 2, "Scheduler must have 2 initial threads");
+    auto* thread = sched.findThread(testPid);
+    TEST_ASSERT(thread != nullptr, "Thread 1024 must be found in scheduler");
+    TEST_ASSERT(thread->trapFrame.rip == loadedInfo.entryPointVa, "Thread RIP must point to PE entry point");
+    TEST_ASSERT(thread->trapFrame.cs == 0x0033, "Thread CS must be 0x0033 (User Code 64)");
+    TEST_ASSERT(thread->trapFrame.ss == 0x002B, "Thread SS must be 0x002B (User Data 64)");
+    TEST_ASSERT(thread->trapFrame.rsp == userStackTopVa, "Thread RSP must point to user stack top");
+    TEST_ASSERT(thread->trapFrame.userGsBase == tebVa, "Thread userGsBase must point to TEB VA");
+    TEST_ASSERT(thread->state == UserThreadState::Running, "Initial thread must be Running");
+
+    // 7. Simulate Userland Execution & Syscall Dispatch
+    // Execute WriteFile syscall (SSN 0x25)
+    pm.setActivePid(testPid);
+    micant::NtStatus stSys1 = pm.dispatchSyscall(0x0025, 0x534D53535F4F4B, 7, 0, 0, 3, 0x0033);
+    TEST_ASSERT(NT_SUCCESS(stSys1), "NtWriteFile syscall must succeed");
+    TEST_ASSERT(proc->syscallCount == 1, "Process syscall count must increment");
+    TEST_ASSERT(proc->verifiedCpl == 3, "Verified CPL must be 3");
+
+    // Execute TerminateProcess syscall (SSN 0x01)
+    micant::NtStatus stSys2 = pm.dispatchSyscall(0x0001, 0, 0, 0, 0, 3, 0x0033);
+    TEST_ASSERT(NT_SUCCESS(stSys2), "NtTerminateProcess syscall must succeed");
+    TEST_ASSERT(proc->state == UserProcessState::Terminated, "Process state must be Terminated after exit syscall");
+    TEST_ASSERT(proc->exitStatus == micant::NtStatus::Success, "Process exit status must be STATUS_SUCCESS");
+    TEST_ASSERT(pm.getTotalProcessesTerminated() == 1, "Total terminated processes must be 1");
+
+    std::cout << "  [Horizon 123 Track D PE32+ Userland Binary Loader & Executive Bridge (Unit #95)]\n"
+              << "    ImageBase: 0x" << std::hex << loadedInfo.imageBaseVa << " | EntryPoint: 0x" << loadedInfo.entryPointVa << std::dec << "\n"
+              << "    Sections: " << loadedInfo.numberOfSections << " mapped | ImageSize: " << loadedInfo.sizeOfImage << " B\n"
+              << "    Base Relocations: " << loadedInfo.relocationsAppliedCount << " fixups applied (Rebased: YES)\n"
+              << "    IAT Imports Bound: " << loadedInfo.boundImportsCount << " (WriteFile/ExitProcess/GetStdHandle/GetTickCount64)\n"
+              << "    Ring 3 Execution: PID " << testPid << " | CPL=3 Verified | Clean Exit STATUS_SUCCESS\n";
+
+    std::cout << "[TEST] Suite 339: Horizon 123 - PE32+ Userland Binary Loader & Execution PASSED.\n";
+}
+
+

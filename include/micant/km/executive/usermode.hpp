@@ -26,6 +26,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/hal/cpu.hpp"
+#include "micant/um/native/pe.hpp"
 
 namespace micant::um {
 
@@ -728,6 +729,330 @@ public:
 
         m_activeTid = 0;
         return true;
+    }
+};
+
+// ============================================================================
+// 5. Horizon 123: Sovereign PE32+ Userland Binary Loader & Executive Bridge (Unit #95)
+// ============================================================================
+
+struct UserLoadedImageInfo {
+    uint64_t imageBaseVa{0};
+    uint64_t entryPointVa{0};
+    uint64_t sizeOfImage{0};
+    uint32_t numberOfSections{0};
+    uint32_t boundImportsCount{0};
+    uint32_t relocationsAppliedCount{0};
+    uint32_t pid{0};
+    uint32_t tid{0};
+    char     imageName[32]{};
+    bool     isRelocated{false};
+    bool     headersValid{false};
+    bool     sectionsMapped{false};
+};
+
+class UserImageLoader64 {
+private:
+    static inline bool streq(const char* a, const char* b) noexcept {
+        if (!a || !b) return false;
+        while (*a && *b) {
+            if (*a != *b) return false;
+            a++; b++;
+        }
+        return (*a == *b);
+    }
+
+    static inline bool strcaseeq(const char* a, const char* b) noexcept {
+        if (!a || !b) return false;
+        while (*a && *b) {
+            char ca = (*a >= 'A' && *a <= 'Z') ? static_cast<char>(*a + ('a' - 'A')) : *a;
+            char cb = (*b >= 'A' && *b <= 'Z') ? static_cast<char>(*b + ('a' - 'A')) : *b;
+            if (ca != cb) return false;
+            a++; b++;
+        }
+        return (*a == *b);
+    }
+
+public:
+    static micant::NtStatus loadAndMapImage(
+        std::span<const uint8_t> rawPeBytes,
+        uint8_t* destinationBuffer,
+        size_t destinationBufferSize,
+        uint64_t targetBaseVa,
+        uint8_t* trampolineBuffer,
+        size_t trampolineBufferSize,
+        uint64_t trampolineBaseVa,
+        uint64_t userStackTopVa,
+        size_t userStackSize,
+        uint64_t pebVa,
+        uint64_t tebVa,
+        uint32_t pid,
+        uint32_t parentPid,
+        const char* imageName,
+        UserLoadedImageInfo& outInfo
+    ) noexcept {
+        outInfo = UserLoadedImageInfo{};
+        outInfo.pid = pid;
+        outInfo.tid = pid;
+        if (imageName) {
+            size_t n = 0;
+            while (imageName[n] && n < sizeof(outInfo.imageName) - 1) {
+                outInfo.imageName[n] = imageName[n];
+                n++;
+            }
+            outInfo.imageName[n] = '\0';
+        }
+
+        // 1. Inspect DOS Header
+        if (rawPeBytes.size() < sizeof(pe::ImageDosHeader)) {
+            return micant::NtStatus::InvalidParameter;
+        }
+        const auto* dos = reinterpret_cast<const pe::ImageDosHeader*>(rawPeBytes.data());
+        if (dos->e_magic != pe::DOS_MAGIC) {
+            return micant::NtStatus::InvalidImageFormat;
+        }
+        if (dos->e_lfanew <= 0 || static_cast<size_t>(dos->e_lfanew) + sizeof(pe::ImageNtHeaders64) > rawPeBytes.size()) {
+            return micant::NtStatus::InvalidImageFormat;
+        }
+
+        // 2. Inspect NT Headers (PE32+ 64-bit AMD64)
+        const auto* nt = reinterpret_cast<const pe::ImageNtHeaders64*>(rawPeBytes.data() + dos->e_lfanew);
+        if (nt->signature != pe::NT_SIGNATURE ||
+            nt->fileHeader.machine != pe::MACHINE_AMD64 ||
+            nt->optionalHeader.magic != pe::PE32PLUS_MAGIC) {
+            return micant::NtStatus::InvalidImageFormat;
+        }
+
+        outInfo.headersValid = true;
+        outInfo.sizeOfImage = nt->optionalHeader.sizeOfImage;
+        outInfo.numberOfSections = nt->fileHeader.numberOfSections;
+
+        // 3. Verify Destination Buffer
+        if (!destinationBuffer || destinationBufferSize < nt->optionalHeader.sizeOfImage) {
+            return micant::NtStatus::BufferTooSmall;
+        }
+        std::memset(destinationBuffer, 0, destinationBufferSize);
+
+        // 4. Map Headers
+        if (nt->optionalHeader.sizeOfHeaders > rawPeBytes.size() ||
+            nt->optionalHeader.sizeOfHeaders > destinationBufferSize) {
+            return micant::NtStatus::InvalidImageFormat;
+        }
+        std::memcpy(destinationBuffer, rawPeBytes.data(), nt->optionalHeader.sizeOfHeaders);
+
+        // 5. Map Sections
+        const auto* sections = reinterpret_cast<const pe::ImageSectionHeader*>(
+            rawPeBytes.data() + dos->e_lfanew + sizeof(uint32_t) + sizeof(pe::ImageFileHeader) + nt->fileHeader.sizeOfOptionalHeader
+        );
+
+        for (uint16_t i = 0; i < nt->fileHeader.numberOfSections; ++i) {
+            const auto& sec = sections[i];
+            if (sec.virtualAddress + sec.sizeOfRawData > destinationBufferSize) {
+                return micant::NtStatus::InvalidImageFormat;
+            }
+            if (sec.pointerToRawData + sec.sizeOfRawData > rawPeBytes.size()) {
+                return micant::NtStatus::InvalidImageFormat;
+            }
+            if (sec.sizeOfRawData > 0) {
+                std::memcpy(destinationBuffer + sec.virtualAddress,
+                            rawPeBytes.data() + sec.pointerToRawData,
+                            sec.sizeOfRawData);
+            }
+        }
+        outInfo.sectionsMapped = true;
+
+        // 6. Base Relocations
+        int64_t delta = static_cast<int64_t>(targetBaseVa) - static_cast<int64_t>(nt->optionalHeader.imageBase);
+        if (delta != 0) {
+            outInfo.isRelocated = true;
+            if (nt->optionalHeader.numberOfRvaAndSizes > pe::IMAGE_DIRECTORY_ENTRY_BASERELOC) {
+                const auto& relocDir = nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_BASERELOC];
+                if (relocDir.virtualAddress != 0 && relocDir.size != 0 &&
+                    relocDir.virtualAddress + relocDir.size <= destinationBufferSize) {
+                    uint32_t offset = relocDir.virtualAddress;
+                    uint32_t endOffset = relocDir.virtualAddress + relocDir.size;
+                    while (offset < endOffset) {
+                        const auto* block = reinterpret_cast<const pe::ImageBaseRelocation*>(destinationBuffer + offset);
+                        if (block->sizeOfBlock < sizeof(pe::ImageBaseRelocation)) break;
+                        uint32_t count = (block->sizeOfBlock - sizeof(pe::ImageBaseRelocation)) / sizeof(uint16_t);
+                        const auto* entries = reinterpret_cast<const uint16_t*>(block + 1);
+                        for (uint32_t e = 0; e < count; ++e) {
+                            uint16_t type = entries[e] >> 12;
+                            uint16_t off = entries[e] & 0x0FFF;
+                            uint32_t rva = block->virtualAddress + off;
+                            if (type == pe::IMAGE_REL_BASED_DIR64 && rva + sizeof(uint64_t) <= destinationBufferSize) {
+                                *reinterpret_cast<uint64_t*>(destinationBuffer + rva) += delta;
+                                outInfo.relocationsAppliedCount++;
+                            } else if (type == pe::IMAGE_REL_BASED_HIGHLOW && rva + sizeof(uint32_t) <= destinationBufferSize) {
+                                *reinterpret_cast<uint32_t*>(destinationBuffer + rva) += static_cast<uint32_t>(delta);
+                                outInfo.relocationsAppliedCount++;
+                            }
+                        }
+                        offset += block->sizeOfBlock;
+                    }
+                }
+            }
+        }
+
+        // 7. Setup Fast Syscall Trampolines
+        // Slot 0 (0x00): NtTerminateProcess / ExitProcess (SSN 0x01)
+        // Slot 1 (0x20): NtQuerySystemInformation (SSN 0x11)
+        // Slot 2 (0x40): NtReadFile / ReadFile (SSN 0x23)
+        // Slot 3 (0x60): NtWriteFile / WriteFile (SSN 0x25)
+        // Slot 4 (0x80): NtYieldExecution (SSN 0x46)
+        // Slot 5 (0xA0): NtAllocateVirtualMemory (SSN 0x55)
+        // Slot 6 (0xC0): NtClose / CloseHandle (SSN 0x1E)
+        // Slot 7 (0xE0): GetStdHandle (returns 1 in RAX)
+        // Slot 8 (0x100): GetTickCount64 (rdtsc + shl + or)
+        if (trampolineBuffer && trampolineBufferSize >= 512) {
+            std::memset(trampolineBuffer, 0xCC, trampolineBufferSize); // fill with INT3 break stubs
+
+            // Slot 0 (0x00): ExitProcess / NtTerminateProcess (SSN 0x01)
+            // 48 89 CA          mov %rcx, %rdx
+            // B8 01 00 00 00    mov $0x01, %eax
+            // 0F 05             syscall
+            // C3                ret
+            const uint8_t s0[] = { 0x48, 0x89, 0xCA, 0xB8, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x00, s0, sizeof(s0));
+
+            // Slot 1 (0x20): NtQuerySystemInformation (SSN 0x11)
+            // B8 11 00 00 00    mov $0x11, %eax
+            // 0F 05             syscall
+            // C3                ret
+            const uint8_t s1[] = { 0xB8, 0x11, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x20, s1, sizeof(s1));
+
+            // Slot 2 (0x40): NtReadFile / ReadFile (SSN 0x23)
+            // B8 23 00 00 00    mov $0x23, %eax
+            // 0F 05             syscall
+            // C3                ret
+            const uint8_t s2[] = { 0xB8, 0x23, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x40, s2, sizeof(s2));
+
+            // Slot 3 (0x60): NtWriteFile / WriteFile (SSN 0x25)
+            // B8 25 00 00 00    mov $0x25, %eax
+            // 0F 05             syscall
+            // C3                ret
+            const uint8_t s3[] = { 0xB8, 0x25, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x60, s3, sizeof(s3));
+
+            // Slot 4 (0x80): NtYieldExecution (SSN 0x46)
+            // B8 46 00 00 00    mov $0x46, %eax
+            // 0F 05             syscall
+            // C3                ret
+            const uint8_t s4[] = { 0xB8, 0x46, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x80, s4, sizeof(s4));
+
+            // Slot 5 (0xA0): NtAllocateVirtualMemory (SSN 0x55)
+            // B8 55 00 00 00    mov $0x55, %eax
+            // 0F 05             syscall
+            // C3                ret
+            const uint8_t s5[] = { 0xB8, 0x55, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xC3 };
+            std::memcpy(trampolineBuffer + 0xA0, s5, sizeof(s5));
+
+            // Slot 6 (0xC0): NtClose / CloseHandle (SSN 0x1E)
+            // B8 1E 00 00 00    mov $0x1E, %eax
+            // 0F 05             syscall
+            // C3                ret
+            const uint8_t s6[] = { 0xB8, 0x1E, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xC3 };
+            std::memcpy(trampolineBuffer + 0xC0, s6, sizeof(s6));
+
+            // Slot 7 (0xE0): GetStdHandle (returns 1 in RAX)
+            // B8 01 00 00 00    mov $1, %eax
+            // C3                ret
+            const uint8_t s7[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0xE0, s7, sizeof(s7));
+
+            // Slot 8 (0x100): GetTickCount64 (rdtsc + shl + or)
+            // 0F 31             rdtsc
+            // 48 C1 E2 20       shl $32, %rdx
+            // 48 09 D0          or %rdx, %rax
+            // C3                ret
+            const uint8_t s8[] = { 0x0F, 0x31, 0x48, 0xC1, 0xE2, 0x20, 0x48, 0x09, 0xD0, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x100, s8, sizeof(s8));
+        }
+
+        // 8. Parse and Bind Imports
+        if (nt->optionalHeader.numberOfRvaAndSizes > pe::IMAGE_DIRECTORY_ENTRY_IMPORT) {
+            const auto& importDir = nt->optionalHeader.dataDirectory[pe::IMAGE_DIRECTORY_ENTRY_IMPORT];
+            if (importDir.virtualAddress != 0 && importDir.size != 0 &&
+                importDir.virtualAddress + importDir.size <= destinationBufferSize) {
+                const auto* desc = reinterpret_cast<const pe::ImageImportDescriptor*>(destinationBuffer + importDir.virtualAddress);
+                while (desc->name != 0 && desc->firstThunk != 0 &&
+                       desc->name < destinationBufferSize && desc->firstThunk < destinationBufferSize) {
+                    uint32_t thunkRva = desc->originalFirstThunk ? desc->originalFirstThunk : desc->firstThunk;
+                    if (thunkRva >= destinationBufferSize) break;
+
+                    const auto* thunkArray = reinterpret_cast<const uint64_t*>(destinationBuffer + thunkRva);
+                    size_t idx = 0;
+                    while (thunkRva + (idx + 1) * sizeof(uint64_t) <= destinationBufferSize && thunkArray[idx] != 0) {
+                        uint64_t val = thunkArray[idx];
+                        uint32_t iatRva = desc->firstThunk + static_cast<uint32_t>(idx * sizeof(uint64_t));
+                        if (iatRva + sizeof(uint64_t) > destinationBufferSize) break;
+
+                        uint64_t targetTrampoline = trampolineBaseVa + 0x00; // default to ExitProcess
+
+                        if (!(val & pe::IMAGE_ORDINAL_FLAG64)) {
+                            uint32_t nameRva = static_cast<uint32_t>(val & 0xFFFFFFFF);
+                            if (nameRva + 2 < destinationBufferSize) {
+                                const auto* ibn = reinterpret_cast<const pe::ImageImportByName*>(destinationBuffer + nameRva);
+                                const char* symName = ibn->name;
+
+                                if (streq(symName, "ExitProcess") || streq(symName, "NtTerminateProcess")) {
+                                    targetTrampoline = trampolineBaseVa + 0x00;
+                                } else if (streq(symName, "NtQuerySystemInformation")) {
+                                    targetTrampoline = trampolineBaseVa + 0x20;
+                                } else if (streq(symName, "ReadFile") || streq(symName, "NtReadFile")) {
+                                    targetTrampoline = trampolineBaseVa + 0x40;
+                                } else if (streq(symName, "WriteFile") || streq(symName, "NtWriteFile")) {
+                                    targetTrampoline = trampolineBaseVa + 0x60;
+                                } else if (streq(symName, "NtYieldExecution")) {
+                                    targetTrampoline = trampolineBaseVa + 0x80;
+                                } else if (streq(symName, "NtAllocateVirtualMemory")) {
+                                    targetTrampoline = trampolineBaseVa + 0xA0;
+                                } else if (streq(symName, "CloseHandle") || streq(symName, "NtClose")) {
+                                    targetTrampoline = trampolineBaseVa + 0xC0;
+                                } else if (streq(symName, "GetStdHandle")) {
+                                    targetTrampoline = trampolineBaseVa + 0xE0;
+                                } else if (streq(symName, "GetTickCount64") || streq(symName, "GetTickCount")) {
+                                    targetTrampoline = trampolineBaseVa + 0x100;
+                                }
+                            }
+                        }
+
+                        *reinterpret_cast<uint64_t*>(destinationBuffer + iatRva) = targetTrampoline;
+                        outInfo.boundImportsCount++;
+                        idx++;
+                    }
+                    desc++;
+                }
+            }
+        }
+
+        // 9. Register Process & Initial Thread Context
+        uint64_t entryPointVa = targetBaseVa + nt->optionalHeader.addressOfEntryPoint;
+        outInfo.imageBaseVa = targetBaseVa;
+        outInfo.entryPointVa = entryPointVa;
+
+        auto& pm = UserProcessManager64::get();
+        auto* proc = pm.createProcess(imageName, pid, parentPid,
+                                      targetBaseVa, nt->optionalHeader.sizeOfImage,
+                                      userStackTopVa, userStackSize,
+                                      pebVa, tebVa);
+        if (proc) {
+            proc->peb.imageBaseAddress = targetBaseVa;
+            proc->peb.imageSubsystem = nt->optionalHeader.subsystem;
+            proc->peb.imageSubsystemMajorVersion = nt->optionalHeader.majorSubsystemVersion;
+            proc->peb.imageSubsystemMinorVersion = nt->optionalHeader.minorSubsystemVersion;
+            proc->peb.osMajorVersion = 10;
+            proc->peb.osMinorVersion = 0;
+            proc->peb.osBuildNumber = 26100;
+        }
+
+        auto& sched = UserThreadScheduler64::get();
+        sched.createThread(pid, pid, 16, entryPointVa, userStackTopVa, tebVa, imageName);
+
+        return micant::NtStatus::Success;
     }
 };
 

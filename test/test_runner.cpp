@@ -1623,6 +1623,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon120_CpuHardware_Gdt_Tss64_Msr_And_Ring3_Transition_Engine);
     RUN_TEST(Test_Horizon121_UserMode_Peb_Teb_Ssdt_And_Process_Management);
     RUN_TEST(Test_Horizon122_Ring3_Thread_Context_Switching_And_Scheduler);
+    RUN_TEST(Test_Horizon123_UserMode_PE32Plus_Binary_Loader_And_Execution);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
