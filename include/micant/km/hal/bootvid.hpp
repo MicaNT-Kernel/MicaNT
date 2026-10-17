@@ -558,6 +558,22 @@ public:
     [[nodiscard]] uint32_t getHeight() const noexcept { return m_height; }
     [[nodiscard]] uint32_t getPitch() const noexcept { return m_pixelsPerScanLine; }
     [[nodiscard]] const uint32_t* getRawBuffer() const noexcept { return m_framebuffer; }
+    [[nodiscard]] uint32_t* getRawBuffer() noexcept { return m_framebuffer; }
+    [[nodiscard]] uint32_t getPixelFormat() const noexcept { return m_pixelFormat; }
+
+    /**
+     * @brief High-speed scanline burst blit from an in-memory backbuffer to the physical VRAM framebuffer.
+     */
+    void blit(uint32_t dstX, uint32_t dstY, uint32_t width, uint32_t height, const uint32_t* srcBuffer, uint32_t srcPitch = 0) noexcept {
+        if (!m_framebuffer || !srcBuffer || dstX >= m_width || dstY >= m_height) return;
+        uint32_t copyW = std::min(width, m_width - dstX);
+        uint32_t copyH = std::min(height, m_height - dstY);
+        if (copyW == 0 || copyH == 0) return;
+        uint32_t sp = (srcPitch > 0) ? srcPitch : width;
+        for (uint32_t y = 0; y < copyH; ++y) {
+            std::memcpy(&m_framebuffer[(dstY + y) * m_pixelsPerScanLine + dstX], &srcBuffer[y * sp], copyW * sizeof(uint32_t));
+        }
+    }
 
     // ------------------------------------------------------------------------
     // Drawing Primitives

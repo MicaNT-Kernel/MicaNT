@@ -2362,6 +2362,9 @@ public:
     /**
      * @brief Dynamic Pass: Rotate the Lit 3D Sovereign Crystal Octahedron at 60 FPS.
      */
+    /**
+     * @brief Dynamic Pass: Rotate the Lit 3D Sovereign Crystal Octahedron at 60 FPS (Flicker-Free L2-Cached Double-Buffer).
+     */
     void updateRotatingOctahedron(uint32_t step) noexcept {
         if (!m_videoDriver.isInitialized()) return;
 
@@ -2383,34 +2386,103 @@ public:
 
         int32_t boxMinX = cx - 84;
         int32_t boxMaxX = cx + 84;
-        int32_t boxW = boxMaxX - boxMinX;
+        int32_t boxW = boxMaxX - boxMinX; // 168
+        uint32_t dirtyStartY = vpY + 6;
+        uint32_t dirtyEndY = vpY + vpH - 2;
+        if (dirtyEndY <= dirtyStartY) return;
+        uint32_t boxH = dirtyEndY - dirtyStartY;
 
-        // 1. Redraw Skybox in dirty region
-        m_videoDriver.drawVerticalGradient(
-            static_cast<uint32_t>(boxMinX), vpY + 6,
-            static_cast<uint32_t>(boxW), horizonY - (vpY + 6),
-            bootvid::Color{4, 9, 20}, bootvid::Color{12, 32, 62}
-        );
+        constexpr uint32_t PRISM_MAX_W = 192;
+        constexpr uint32_t PRISM_MAX_H = 260;
+        static uint32_t s_prismBackbuffer[PRISM_MAX_W * PRISM_MAX_H];
 
-        // 2. Redraw Floor in dirty region
-        m_videoDriver.drawVerticalGradient(
-            static_cast<uint32_t>(boxMinX), horizonY,
-            static_cast<uint32_t>(boxW), (vpY + vpH - 2) - horizonY,
-            bootvid::Color{10, 28, 52}, bootvid::Color{3, 7, 14}
-        );
+        uint32_t renderW = static_cast<uint32_t>(boxW);
+        uint32_t renderH = std::min(boxH, PRISM_MAX_H);
+        if (renderW > PRISM_MAX_W) renderW = PRISM_MAX_W;
 
-        // 3. Perspective grid lines intersecting the dirty region
-        for (int32_t i = -9; i <= 9; ++i) {
-            int32_t bx = cx + i * 48;
-            if (bx >= boxMinX - 24 && bx <= boxMaxX + 24) {
-                drawLine2D(cx + i * 6, hy, bx, static_cast<int32_t>(vpY + vpH - 2), bootvid::Color{0, 95, 145});
+        int32_t localCx = cx - boxMinX;
+        int32_t localCy = cy - static_cast<int32_t>(dirtyStartY);
+        int32_t localHy = hy - static_cast<int32_t>(dirtyStartY);
+        uint32_t pixelFmt = m_videoDriver.getPixelFormat();
+
+        auto putBufPixel = [&](int32_t x, int32_t y, bootvid::Color col) noexcept {
+            if (x >= 0 && x < static_cast<int32_t>(renderW) && y >= 0 && y < static_cast<int32_t>(renderH)) {
+                uint32_t pixelValue = (pixelFmt == 0) ? col.toRgba32() : col.toBgra32();
+                s_prismBackbuffer[y * renderW + x] = pixelValue;
             }
+        };
+
+        auto drawBufLine = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1, bootvid::Color col) noexcept {
+            int32_t dx = std::abs(x1 - x0);
+            int32_t sx = (x0 < x1) ? 1 : -1;
+            int32_t dy = -std::abs(y1 - y0);
+            int32_t sy = (y0 < y1) ? 1 : -1;
+            int32_t err = dx + dy;
+            while (true) {
+                putBufPixel(x0, y0, col);
+                if (x0 == x1 && y0 == y1) break;
+                int32_t e2 = 2 * err;
+                if (e2 >= dy) { err += dy; x0 += sx; }
+                if (e2 <= dx) { err += dx; y0 += sy; }
+            }
+        };
+
+        auto fillBufTriangle = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, bootvid::Color fillCol) noexcept {
+            int32_t minX = std::max(0, std::min({x0, x1, x2}));
+            int32_t maxX = std::min(static_cast<int32_t>(renderW - 1), std::max({x0, x1, x2}));
+            int32_t minY = std::max(0, std::min({y0, y1, y2}));
+            int32_t maxY = std::min(static_cast<int32_t>(renderH - 1), std::max({y0, y1, y2}));
+            if (minX > maxX || minY > maxY) return;
+
+            int32_t denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+            if (denom == 0) return;
+            float invDenom = 1.0f / static_cast<float>(denom);
+            uint32_t pixelVal = (pixelFmt == 0) ? fillCol.toRgba32() : fillCol.toBgra32();
+
+            for (int32_t py = minY; py <= maxY; ++py) {
+                for (int32_t px = minX; px <= maxX; ++px) {
+                    float w0 = static_cast<float>((y1 - y2) * (px - x2) + (x2 - x1) * (py - y2)) * invDenom;
+                    float w1 = static_cast<float>((y2 - y0) * (px - x2) + (x0 - x2) * (py - y2)) * invDenom;
+                    float w2 = 1.0f - w0 - w1;
+                    if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
+                        s_prismBackbuffer[py * renderW + px] = pixelVal;
+                    }
+                }
+            }
+        };
+
+        // 1. Skybox in backbuffer
+        int32_t skyH = std::max(0, std::min(localHy, static_cast<int32_t>(renderH)));
+        for (int32_t y = 0; y < skyH; ++y) {
+            float t = (skyH > 0) ? (static_cast<float>(y) / static_cast<float>(skyH)) : 0.0f;
+            bootvid::Color rowColor = bootvid::Color::lerp(bootvid::Color{4, 9, 20}, bootvid::Color{12, 32, 62}, t);
+            uint32_t pixelVal = (pixelFmt == 0) ? rowColor.toRgba32() : rowColor.toBgra32();
+            std::fill_n(&s_prismBackbuffer[y * renderW], renderW, pixelVal);
+        }
+
+        // 2. Floor in backbuffer
+        int32_t floorH = static_cast<int32_t>(renderH) - skyH;
+        for (int32_t y = skyH; y < static_cast<int32_t>(renderH); ++y) {
+            float t = (floorH > 0) ? (static_cast<float>(y - skyH) / static_cast<float>(floorH)) : 0.0f;
+            bootvid::Color rowColor = bootvid::Color::lerp(bootvid::Color{10, 28, 52}, bootvid::Color{3, 7, 14}, t);
+            uint32_t pixelVal = (pixelFmt == 0) ? rowColor.toRgba32() : rowColor.toBgra32();
+            std::fill_n(&s_prismBackbuffer[y * renderW], renderW, pixelVal);
+        }
+
+        // 3. Perspective grid lines
+        for (int32_t i = -9; i <= 9; ++i) {
+            int32_t bx = (cx + i * 48) - boxMinX;
+            int32_t tx = (cx + i * 6) - boxMinX;
+            drawBufLine(tx, localHy, bx, static_cast<int32_t>(renderH - 1), bootvid::Color{0, 95, 145});
         }
         for (uint32_t r = 1; r <= 6; ++r) {
             uint32_t gy = horizonY + ((vpH - 148) * r * r) / 36;
-            if (gy < vpY + vpH - 2) {
+            if (gy >= dirtyStartY && gy < dirtyStartY + renderH) {
+                uint32_t localGy = gy - dirtyStartY;
                 uint8_t c = static_cast<uint8_t>(50 + r * 20);
-                m_videoDriver.fillRectangle(static_cast<uint32_t>(boxMinX), gy, static_cast<uint32_t>(boxW), 1, bootvid::Color{0, c, static_cast<uint8_t>(c + 45)});
+                bootvid::Color lineCol{0, c, static_cast<uint8_t>(c + 45)};
+                uint32_t pixelVal = (pixelFmt == 0) ? lineCol.toRgba32() : lineCol.toBgra32();
+                std::fill_n(&s_prismBackbuffer[localGy * renderW], renderW, pixelVal);
             }
         }
 
@@ -2418,10 +2490,10 @@ public:
         constexpr int32_t R = 76;
         constexpr int32_t H = 54;
 
-        int32_t pTopX = cx;
-        int32_t pTopY = cy - H;
-        int32_t pBotX = cx;
-        int32_t pBotY = cy + H;
+        int32_t pTopX = localCx;
+        int32_t pTopY = localCy - H;
+        int32_t pBotX = localCx;
+        int32_t pBotY = localCy + H;
 
         int32_t eqX[4];
         int32_t eqY[4];
@@ -2431,31 +2503,31 @@ public:
             uint32_t a = (step + k * 16) & 63;
             int32_t X = (R * fastCos(a)) / 127;
             int32_t Z = (R * fastSin(a)) / 127;
-            eqX[k] = cx + X;
-            eqY[k] = cy + (Z * 22) / 100;
+            eqX[k] = localCx + X;
+            eqY[k] = localCy + (Z * 22) / 100;
             eqZ[k] = Z;
         }
 
         // 5. Raytraced Planar Reflection on floor
-        int32_t rfTopX = cx;
-        int32_t rfTopY = hy + 86;
-        int32_t rfBotX = cx;
-        int32_t rfBotY = hy + 12;
+        int32_t rfTopX = localCx;
+        int32_t rfTopY = localHy + 86;
+        int32_t rfBotX = localCx;
+        int32_t rfBotY = localHy + 12;
 
         int32_t rfeqX[4];
         int32_t rfeqY[4];
         for (uint32_t k = 0; k < 4; ++k) {
             rfeqX[k] = eqX[k];
-            rfeqY[k] = hy + 48 - (eqZ[k] * 12) / 100;
+            rfeqY[k] = localHy + 48 - (eqZ[k] * 12) / 100;
         }
 
         for (uint32_t k = 0; k < 4; ++k) {
             uint32_t next = (k + 1) % 4;
-            fillTriangle2D(rfBotX, rfBotY, rfeqX[k], rfeqY[k], rfeqX[next], rfeqY[next], bootvid::Color{0, 50, 75});
-            fillTriangle2D(rfTopX, rfTopY, rfeqX[k], rfeqY[k], rfeqX[next], rfeqY[next], bootvid::Color{12, 42, 80});
-            drawLine2D(rfeqX[k], rfeqY[k], rfeqX[next], rfeqY[next], bootvid::Color{0, 110, 160});
-            drawLine2D(rfBotX, rfBotY, rfeqX[k], rfeqY[k], bootvid::Color{0, 90, 140});
-            drawLine2D(rfTopX, rfTopY, rfeqX[k], rfeqY[k], bootvid::Color{0, 90, 140});
+            fillBufTriangle(rfBotX, rfBotY, rfeqX[k], rfeqY[k], rfeqX[next], rfeqY[next], bootvid::Color{0, 50, 75});
+            fillBufTriangle(rfTopX, rfTopY, rfeqX[k], rfeqY[k], rfeqX[next], rfeqY[next], bootvid::Color{12, 42, 80});
+            drawBufLine(rfeqX[k], rfeqY[k], rfeqX[next], rfeqY[next], bootvid::Color{0, 110, 160});
+            drawBufLine(rfBotX, rfBotY, rfeqX[k], rfeqY[k], bootvid::Color{0, 90, 140});
+            drawBufLine(rfTopX, rfTopY, rfeqX[k], rfeqY[k], bootvid::Color{0, 90, 140});
         }
 
         // 6. Render Lit 3D Sovereign Crystal Octahedron
@@ -2471,7 +2543,7 @@ public:
             uint32_t next = (k + 1) % 4;
             int32_t cross = (eqX[k] - pTopX) * (eqY[next] - pTopY) - (eqY[k] - pTopY) * (eqX[next] - pTopX);
             if (cross > 0) {
-                fillTriangle2D(pTopX, pTopY, eqX[k], eqY[k], eqX[next], eqY[next], FACET_COLORS[k]);
+                fillBufTriangle(pTopX, pTopY, eqX[k], eqY[k], eqX[next], eqY[next], FACET_COLORS[k]);
             }
         }
 
@@ -2485,7 +2557,7 @@ public:
                     static_cast<uint8_t>(FACET_COLORS[k].g / 2),
                     static_cast<uint8_t>(FACET_COLORS[k].b / 2)
                 };
-                fillTriangle2D(pBotX, pBotY, eqX[k], eqY[k], eqX[next], eqY[next], col);
+                fillBufTriangle(pBotX, pBotY, eqX[k], eqY[k], eqX[next], eqY[next], col);
             }
         }
 
@@ -2493,10 +2565,13 @@ public:
         bootvid::Color specWire{215, 252, 255};
         for (uint32_t k = 0; k < 4; ++k) {
             uint32_t next = (k + 1) % 4;
-            drawLine2D(pTopX, pTopY, eqX[k], eqY[k], specWire);
-            drawLine2D(pBotX, pBotY, eqX[k], eqY[k], specWire);
-            drawLine2D(eqX[k], eqY[k], eqX[next], eqY[next], specWire);
+            drawBufLine(pTopX, pTopY, eqX[k], eqY[k], specWire);
+            drawBufLine(pBotX, pBotY, eqX[k], eqY[k], specWire);
+            drawBufLine(eqX[k], eqY[k], eqX[next], eqY[next], specWire);
         }
+
+        // 7. Atomic Burst Blit to VRAM: zero intermediate erase states, zero flicker!
+        m_videoDriver.blit(static_cast<uint32_t>(boxMinX), dirtyStartY, renderW, renderH, s_prismBackbuffer, renderW);
     }
 
     /**

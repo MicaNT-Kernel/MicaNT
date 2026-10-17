@@ -39,6 +39,11 @@
     typedef void VOID;
   #endif
 
+  #ifndef _ERRNO_T_DEFINED
+    #define _ERRNO_T_DEFINED
+    typedef int errno_t;
+  #endif
+
   #ifndef _BOOL_DEFINED
     #define _BOOL_DEFINED
     using BOOL = int32_t;

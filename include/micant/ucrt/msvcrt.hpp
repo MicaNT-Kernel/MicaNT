@@ -1413,7 +1413,11 @@ inline errno_t CRT_strncat_s(char* dest, size_t destsz, const char* src, size_t 
     return 0;
 }
 inline char* CRT_strtok_s(char* str, const char* delim, char** context) noexcept {
+#ifdef _WIN32
     return strtok_s(str, delim, context);
+#else
+    return strtok_r(str, delim, context);
+#endif
 }
 inline errno_t CRT_wcscpy_s(wchar_t* dest, size_t destsz, const wchar_t* src) noexcept {
     if (!dest || !src || destsz == 0) return 22;
