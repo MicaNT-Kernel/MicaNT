@@ -84,12 +84,22 @@ void PrintBanner() {
     std::cout << "========================================================================\n\n";
 }
 
-int main(int argc, char* argv[]) {
+extern "C" NtStatus KiSystemStartup(
+    micant::boot::LoaderParameterBlock* lpbPtr,
+    const char* execCmd,
+    bool launchInteractive
+) {
     PrintBanner();
+
+    micant::boot::LoaderParameterBlock fallbackLpb;
+    if (!lpbPtr) {
+        fallbackLpb = boot::createDefaultUefiBootBlock();
+        lpbPtr = &fallbackLpb;
+    }
+    const auto& lpb = *lpbPtr;
 
     // 0. Firmware Boot Handover & Loader Parameter Block (LPB) Ingestion
     std::cout << "[MicaNT Boot] [Firmware] Ingesting UEFI Loader Parameter Block (LPB)...\n";
-    auto lpb = boot::createDefaultUefiBootBlock();
     std::wcout << L"[MicaNT Boot] [Firmware] ARC Boot Device: " << lpb.arcBootDeviceName << L"\n";
     std::cout << "[MicaNT Boot] [Firmware] Kernel Load Options: " << lpb.loadOptions << "\n";
     std::cout << "[MicaNT Boot] [Firmware] Physical RAM: " << (lpb.getTotalMemoryBytes() / (1024 * 1024)) 
@@ -502,8 +512,8 @@ int main(int argc, char* argv[]) {
     // 15. Inspect and Load Ring 3 Binary (bin/userland_app.exe or self)
     const char* targetAppPath = "bin/userland_app.exe";
     std::ifstream testCheck(targetAppPath, std::ios::binary);
-    if (!testCheck.is_open() && argc > 0 && argv[0]) {
-        targetAppPath = argv[0];
+    if (!testCheck.is_open()) {
+        targetAppPath = "bin/micant_kernel.exe";
     }
     testCheck.close();
 
@@ -662,18 +672,8 @@ int main(int argc, char* argv[]) {
     std::cout << "[MicaNT Boot] [WoW64] Registry Virtualization: \\Registry\\Machine\\Software -> WOW6432Node ACTIVE\n";
 
     // 21c. MicaNT Interactive Shell Launch Check
-    bool launchShell = false;
-    std::string execCommand;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg(argv[i]);
-        if (arg == "--shell" || arg == "-i" || arg == "--cmd" || arg == "/shell") {
-            launchShell = true;
-            break;
-        } else if ((arg == "--exec" || arg == "-c" || arg == "/c") && i + 1 < argc) {
-            execCommand = argv[++i];
-            break;
-        }
-    }
+    bool launchShell = launchInteractive;
+    std::string execCommand = (execCmd ? execCmd : "");
 
     if (!execCommand.empty()) {
         std::cout << "\n[MicaNT Executive] Boot complete. Executing: " << execCommand << "\n";
@@ -700,5 +700,25 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\n[MicaNT Executive] Subsystem self-test PASSED. Ready for Ring 3 binaries.\n\n";
 
-    return 0;
+    return NtStatus::Success;
 }
+
+int main(int argc, char* argv[]) {
+    auto defaultLpb = boot::createDefaultUefiBootBlock();
+    bool launchShell = false;
+    const char* execCommand = nullptr;
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg(argv[i]);
+        if (arg == "--shell" || arg == "-i" || arg == "--cmd" || arg == "/shell") {
+            launchShell = true;
+            break;
+        } else if ((arg == "--exec" || arg == "-c" || arg == "/c") && i + 1 < argc) {
+            execCommand = argv[++i];
+            break;
+        }
+    }
+
+    NtStatus status = KiSystemStartup(&defaultLpb, execCommand, launchShell);
+    return NT_SUCCESS(status) ? 0 : 1;
+}
+

@@ -180,3 +180,9 @@ inline LoaderParameterBlock createDefaultUefiBootBlock() {
 }
 
 } // namespace micant::boot
+
+extern "C" micant::NtStatus KiSystemStartup(
+    micant::boot::LoaderParameterBlock* lpb,
+    const char* execCmd = nullptr,
+    bool launchInteractive = false
+);
