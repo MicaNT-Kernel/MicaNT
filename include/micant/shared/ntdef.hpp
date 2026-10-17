@@ -103,6 +103,26 @@
       return wcscpy_s(dest, N, src);
   }
 
+  inline int wcsncpy_s(wchar_t* dest, size_t destsz, const wchar_t* src, size_t count) {
+      if (!dest || destsz == 0) return 22; // EINVAL
+      if (!src) {
+          dest[0] = L'\0';
+          return 22;
+      }
+      size_t n = 0;
+      while (n < count && n < destsz - 1 && src[n] != L'\0') {
+          dest[n] = src[n];
+          n++;
+      }
+      dest[n] = L'\0';
+      return 0;
+  }
+
+  template <size_t N>
+  inline int wcsncpy_s(wchar_t (&dest)[N], const wchar_t* src, size_t count) {
+      return wcsncpy_s(dest, N, src, count);
+  }
+
   template <typename... Args>
   inline int swprintf_s(wchar_t* dest, size_t destsz, const wchar_t* fmt, Args&&... args) {
       return ::swprintf(dest, destsz, fmt, std::forward<Args>(args)...);
