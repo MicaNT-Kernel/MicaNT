@@ -34,8 +34,9 @@
   #ifndef APIENTRY
     #define APIENTRY
   #endif
-  #ifndef VOID
-    #define VOID void
+  #ifndef _VOID_DEFINED
+    #define _VOID_DEFINED
+    typedef void VOID;
   #endif
 
   #ifndef _BOOL_DEFINED

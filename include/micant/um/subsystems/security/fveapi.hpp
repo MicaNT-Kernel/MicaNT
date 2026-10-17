@@ -80,7 +80,9 @@ namespace micant::fve {
 using DWORD     = uint32_t;
 using LONG      = int32_t;
 using BOOL      = int32_t;
+#ifndef VOID
 using VOID      = void;
+#endif
 using BYTE      = uint8_t;
 using UCHAR     = uint8_t;
 using USHORT    = uint16_t;

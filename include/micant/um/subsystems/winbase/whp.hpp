@@ -41,7 +41,9 @@ namespace micant::whp {
 // ============================================================================
 
 using HRESULT = int32_t;
+#ifndef VOID
 using VOID = void;
+#endif
 using UINT32 = uint32_t;
 using UINT64 = uint64_t;
 using BOOL = int32_t;
