@@ -4257,3 +4257,23 @@
   - Connect `C:\Users\admin\source\D3D12TranslationLayer` (and `microsoft/D3D11On12` + `microsoft/D3D9On12`) to `PrismX`'s D3D12 backend so D3D9, D3D11, and Direct2D workloads all funnel through a single working `PrismX` D3D12 execution pipeline.
 - [ ] **Horizon 86 (`Suite 302`): `DirectXShaderCompiler` (`DXC`) / `PrismShaderVM` & Live Framebuffer Scanout**:
   - Integrate HLSL/DXIL/DXBC shader compilation and execution (`DirectXShaderCompiler` + `PrismShaderVM`) with live `PrismX` raster/compute output directly into the MicaNT GOP / WDDM 3.2 desktop framebuffer.
+
+### Track C: Sovereign Cross-Platform Storage & Linux Ext2/Ext3/Ext4 Read-Only VFS Subsystem (`extfs.sys` / `ext4vfs`) (`Horizons 87–90`)
+> **Vision ("Sovereign Multi-OS Interoperability"):**
+> While traditional Windows displays unformatted/raw drive warnings when connecting Linux volumes, MicaNT's clean-room Installable File System (IFS) architecture treats Linux partitions as first-class read-only citizens. Dual-boot servers and external storage drives formatted with ext2, ext3, or ext4 mount seamlessly as standard Windows NT drives (`D:\`, `E:\`), allowing native Win32 applications (Command Shell, Notepad++, 7-Zip, Everything) to traverse and read Linux data structures with zero virtualization overhead.
+
+- [ ] **Horizon 87 (`Suite 303`): Superblock, Block Group Descriptors & Inode Table Engine (`extfs.sys` / `include/micant/km/drivers/fs/extfs.hpp`)**:
+  - Magic `0xEF53` superblock signature detection at LBA offset 1024, parsing 1024-byte superblock structures, block sizes (1 KB to 64 KB), and feature compatibility flags (`INCOMPAT_EXTENTS`, `INCOMPAT_64BIT`, `INCOMPAT_FLEX_BG`).
+  - Inode allocation bitmap and Inode Table reader supporting both 128-byte (legacy ext2/3) and 256-byte (modern ext4) inodes, POSIX file permissions (`S_IFDIR`, `S_IFREG`, `S_IFLNK`), UID/GID translation to NT SIDs, and nanosecond timestamps (`i_ctime_extra`, `i_mtime_extra`).
+- [ ] **Horizon 88 (`Suite 304`): Ext4 Extent Tree Traversal & Direct LBA Sector Mapping**:
+  - Parse `ext4_extent_header` (magic `0xF30A`), internal branch nodes (`ext4_extent_idx`), and leaf extents (`ext4_extent`).
+  - Direct O(log N) translation from logical file block offsets to physical disk LBA sectors, enabling multi-megabyte contiguous DMA transfers directly through the AHCI SATA storage driver into the NT Cache Manager (`ccmgr`).
+- [ ] **Horizon 89 (`Suite 305`): Directory Parsing (`ext4_dir_entry_2`), HTree B-Tree Indexing & Win32 Namespace Bridging**:
+  - Linear directory scanning and hash tree (htree / `dx_root`) indexing for massive Linux directories.
+  - Transparent case-insensitive Win32 lookups mapped to POSIX case-sensitive filesystem filenames.
+  - Symlink resolution supporting both fast inline symlinks (< 60 bytes stored directly in `i_block`) and extent-backed symlinks.
+- [ ] **Horizon 90 (`Suite 306`): NT Installable File System (IFS) Registration & Read-Only Volume Mounting (`\Device\ExtFs`)**:
+  - Register `\FileSystem\ExtFs` as a sovereign NT IFS driver handling `IRP_MJ_CREATE`, `IRP_MJ_READ`, `IRP_MJ_QUERY_INFORMATION`, and `IRP_MJ_DIRECTORY_CONTROL`.
+  - Automatic detection of Linux partitions in the GPT partition table on physical AHCI SATA disks (e.g., Ubuntu partition `/dev/sda2` on the Supermicro server) and mounting them seamlessly as read-only NT volumes (`\Device\Harddisk0\Partition2` -> `E:\`).
+  - Read-only enforcement guardrails: strict prohibition of raw writes or metadata alterations, guaranteeing absolute data safety for underlying Linux installations.
+
