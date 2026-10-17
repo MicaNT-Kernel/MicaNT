@@ -9,6 +9,10 @@
 // Cross-Platform Calling Conventions & Windows ABI Types
 // ============================================================================
 #ifndef _WIN32
+  #include <cstring>
+  #include <cwchar>
+  #include <strings.h>
+  #include <wchar.h>
   #ifndef __stdcall
     #define __stdcall
   #endif
@@ -59,6 +63,37 @@
       }
       dest[n] = '\0';
       return 0;
+  }
+
+  inline int wcscpy_s(wchar_t* dest, size_t destsz, const wchar_t* src) {
+      if (!dest || destsz == 0) return 22;
+      if (!src) {
+          dest[0] = L'\0';
+          return 22;
+      }
+      size_t n = 0;
+      while (n < destsz - 1 && src[n] != L'\0') {
+          dest[n] = src[n];
+          n++;
+      }
+      dest[n] = L'\0';
+      return 0;
+  }
+
+  inline int _stricmp(const char* s1, const char* s2) {
+      return (s1 && s2) ? ::strcasecmp(s1, s2) : (s1 ? 1 : (s2 ? -1 : 0));
+  }
+
+  inline int _strnicmp(const char* s1, const char* s2, size_t n) {
+      return (s1 && s2) ? ::strncasecmp(s1, s2, n) : (s1 ? 1 : (s2 ? -1 : 0));
+  }
+
+  inline int _wcsicmp(const wchar_t* s1, const wchar_t* s2) {
+      return (s1 && s2) ? ::wcscasecmp(s1, s2) : (s1 ? 1 : (s2 ? -1 : 0));
+  }
+
+  inline int _wcsnicmp(const wchar_t* s1, const wchar_t* s2, size_t n) {
+      return (s1 && s2) ? ::wcsncasecmp(s1, s2, n) : (s1 ? 1 : (s2 ? -1 : 0));
   }
 #else
   #ifndef WINAPI
