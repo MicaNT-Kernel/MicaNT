@@ -19,6 +19,10 @@
 #include <fstream>
 #include <atomic>
 #include <cmath>
+#include <thread>
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/um/subsystems/winbase/kernel32.hpp"
@@ -209,11 +213,39 @@
 namespace micant::shell {
 
 namespace host_thread {
+#ifdef _WIN32
     extern "C" void*    __stdcall CreateThread(void* lpThreadAttributes, size_t dwStackSize, uint32_t (__stdcall *lpStartAddress)(void*), void* lpParameter, uint32_t dwCreationFlags, uint32_t* lpThreadId);
     extern "C" uint32_t __stdcall WaitForSingleObject(void* hHandle, uint32_t dwMilliseconds);
     extern "C" int      __stdcall GetExitCodeThread(void* hThread, uint32_t* lpExitCode);
     extern "C" int      __stdcall CloseHandle(void* hObject);
     extern "C" void     __stdcall ExitThread(uint32_t dwExitCode);
+#else
+    inline void* CreateThread(void*, size_t, uint32_t (__stdcall *lpStartAddress)(void*), void* lpParameter, uint32_t, uint32_t*) {
+        auto* th = new std::thread([lpStartAddress, lpParameter]() {
+            if (lpStartAddress) lpStartAddress(lpParameter);
+        });
+        return reinterpret_cast<void*>(th);
+    }
+    inline uint32_t WaitForSingleObject(void* hHandle, uint32_t) {
+        if (hHandle) {
+            auto* th = reinterpret_cast<std::thread*>(hHandle);
+            if (th->joinable()) th->join();
+        }
+        return 0;
+    }
+    inline int GetExitCodeThread(void*, uint32_t* lpExitCode) {
+        if (lpExitCode) *lpExitCode = 0;
+        return 1;
+    }
+    inline int CloseHandle(void* hObject) {
+        if (hObject) {
+            auto* th = reinterpret_cast<std::thread*>(hObject);
+            delete th;
+        }
+        return 1;
+    }
+    inline void ExitThread(uint32_t) {}
+#endif
 }
 
 inline std::atomic<uint32_t> s_LastBinaryExitCode{0};
@@ -234,8 +266,18 @@ inline std::atomic<bool> s_LastBinaryExited{false};
 }
 
 namespace host_mem {
+#ifdef _WIN32
     extern "C" void* __stdcall VirtualAlloc(void* lpAddress, size_t dwSize, uint32_t flAllocationType, uint32_t flProtect);
     extern "C" int   __stdcall VirtualFree(void* lpAddress, size_t dwSize, uint32_t dwFreeType);
+#else
+    inline void* VirtualAlloc(void* lpAddress, size_t dwSize, uint32_t /*flAllocationType*/, uint32_t /*flProtect*/) {
+        void* p = ::mmap(lpAddress, dwSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        return (p == MAP_FAILED) ? nullptr : p;
+    }
+    inline int VirtualFree(void* lpAddress, size_t dwSize, uint32_t /*dwFreeType*/) {
+        return (::munmap(lpAddress, dwSize) == 0) ? 1 : 0;
+    }
+#endif
 }
 
 class CommandShell {
