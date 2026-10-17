@@ -939,7 +939,7 @@ inline wint_t CRT_ungetwc(wint_t c, [[maybe_unused]] std::FILE* stream) noexcept
 inline int    CRT_putws([[maybe_unused]] const wchar_t* str) noexcept { return 0; }
 inline int    CRT_fseek([[maybe_unused]] std::FILE* stream, [[maybe_unused]] long offset, [[maybe_unused]] int origin) noexcept { return 0; }
 inline long   CRT_ftell([[maybe_unused]] std::FILE* stream) noexcept { return 0; }
-inline int    CRT_fgetpos([[maybe_unused]] std::FILE* stream, fpos_t* pos) noexcept { if (pos) *pos = 0; return 0; }
+inline int    CRT_fgetpos([[maybe_unused]] std::FILE* stream, fpos_t* pos) noexcept { if (pos) std::memset(pos, 0, sizeof(fpos_t)); return 0; }
 inline int    CRT_fsetpos([[maybe_unused]] std::FILE* stream, const fpos_t* pos) noexcept { return 0; }
 inline int    CRT_remove([[maybe_unused]] const char* path) noexcept { return 0; }
 inline int    CRT_setmaxstdio(int newmax) noexcept { return newmax; }
@@ -1562,7 +1562,15 @@ inline errno_t CRT_freopen_s(FILE** pFile, const char* filename, const char* mod
 }
 inline errno_t CRT_wfopen_s(FILE** pFile, const wchar_t* filename, const wchar_t* mode) noexcept {
     if (!pFile || !filename || !mode) return 22;
+#ifdef _WIN32
     *pFile = _wfopen(filename, mode);
+#else
+    char fnBuf[512]{};
+    char mBuf[16]{};
+    std::wcstombs(fnBuf, filename, sizeof(fnBuf) - 1);
+    std::wcstombs(mBuf, mode, sizeof(mBuf) - 1);
+    *pFile = std::fopen(fnBuf, mBuf);
+#endif
     return *pFile ? 0 : errno;
 }
 inline int CRT_sopen_dispatch(const char* /*filename*/, int /*oflag*/, int /*shflag*/, int /*pmode*/, int* pfh, int /*bSecure*/) noexcept {
