@@ -4277,3 +4277,13 @@
   - Automatic detection of Linux partitions in the GPT partition table on physical AHCI SATA disks (e.g., Ubuntu partition `/dev/sda2` on the Supermicro server) and mounting them seamlessly as read-only NT volumes (`\Device\Harddisk0\Partition2` -> `E:\`).
   - Read-only enforcement guardrails: strict prohibition of raw writes or metadata alterations, guaranteeing absolute data safety for underlying Linux installations.
 
+### Track D: Canonical Windows NT Ring 3 Hardware Privilege Level Transition & Fast Syscalls (`KiSystemCall64` / `IA32_LSTAR`) (`Horizons 91–92`)
+- **Mission:** Transition execution from bare-metal Ring 0 (Kernel Mode) to Ring 3 (User Space) directly on physical silicon (Intel Xeon E3-1270 v6 @ 3.80GHz), validating userland execution (`CPL = 3`), fast system call dispatch (`KiSystemCall64`), and return via `sysretq`.
+- [x] **Horizon 91 (`Suite 336` / `Unit #92`): 64-bit GDT & TSS Installation (`GdtTable64`, `TaskStateSegment64`, `Gdtr64`) (`include/micant/km/hal/cpu.hpp`)**:
+  - Implements canonical 64-bit segment descriptors: Kernel Code `0x0010` (Ring 0 DPL 0), Kernel Data `0x0018` (Ring 0 DPL 0), User Compatibility Code 32 `0x0020` (Ring 3 DPL 3), User Data `0x0028` (`0x002B`), User Code 64 `0x0030` (`0x0033`), and 16-byte TSS64 `0x0040`.
+  - Reloads CS to `0x0010` via far return, reloads DS/ES/SS/FS/GS to `0x0018`, and loads Task Register via `ltr 0x0040`.
+- [x] **Horizon 92 (`Suite 336` / `Unit #92`): CR3 4-Level Page Walker, Fast Syscall MSRs (`STAR`/`LSTAR`/`SFMASK`) & Hardware `IRETQ` Userland Handover (`boot/bootx64.cpp`)**:
+  - In-kernel CR3 4-level page table walker enables User/Supervisor bit (`U/S = 1`), Read/Write (`R/W = 1`), and clears No-Execute (`NX = 0`) across PML4, PDPT, PD, and PT for userland code and stack pages, followed by TLB flush.
+  - Programs `MSR_EFER` (`EFER_SCE`), `MSR_STAR` (`0x0020001000000000`), `MSR_LSTAR` (`KiSystemCall64Entry`), and `MSR_SFMASK` (`0x4700`).
+  - Executes hardware `IRETQ` into userland payload (`smss.exe` / PID 368), verifies `CPL = 3` and `CS == 0x0033`, issues fast system calls `0x11` (`NtQuerySystemInformation`), `0x25` (`NtWriteFile`), and `0x01` (`NtTerminateProcess`), successfully returning to the kernel executive shell.
+

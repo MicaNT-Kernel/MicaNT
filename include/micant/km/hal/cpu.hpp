@@ -108,13 +108,15 @@ struct TaskStateSegment64 {
 };
 
 struct GdtTable64 {
-    SegmentDescriptor64 nullDesc{};      // 0x00: Null
-    SegmentDescriptor64 kernelCode{};    // 0x10: Kernel Code 64
-    SegmentDescriptor64 kernelData{};    // 0x18: Kernel Data 64
-    SegmentDescriptor64 userCmCode{};    // 0x20: User Code 32 (WoW64)
-    SegmentDescriptor64 userData{};      // 0x28: User Data
-    SegmentDescriptor64 userCode{};      // 0x30: User Code 64
-    TssDescriptor64     tssDesc{};       // 0x40: 64-bit TSS (16 bytes)
+    SegmentDescriptor64 nullDesc{};      // 0x00: Null (Index 0)
+    SegmentDescriptor64 reserved1{};     // 0x08: Reserved (Index 1)
+    SegmentDescriptor64 kernelCode{};    // 0x10: Kernel Code 64 (Index 2)
+    SegmentDescriptor64 kernelData{};    // 0x18: Kernel Data 64 (Index 3)
+    SegmentDescriptor64 userCmCode{};    // 0x20: User Code 32 (WoW64, Index 4)
+    SegmentDescriptor64 userData{};      // 0x28: User Data (Index 5)
+    SegmentDescriptor64 userCode{};      // 0x30: User Code 64 (Index 6)
+    SegmentDescriptor64 reserved2{};     // 0x38: Reserved (Index 7)
+    TssDescriptor64     tssDesc{};       // 0x40: 64-bit TSS (Index 8 & 9, 16 bytes)
 };
 
 struct Gdtr64 {

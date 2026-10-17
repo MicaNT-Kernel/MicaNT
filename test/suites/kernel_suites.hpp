@@ -19140,6 +19140,108 @@ static void Test_Horizon119_ExtFs_Linux_Ext2_Ext3_Ext4_ReadOnly_VFS_Subsystem() 
     std::cout << "[TEST] Suite 335: Horizon 119 - Sovereign Linux Ext2/Ext3/Ext4 Read-Only VFS Subsystem PASSED.\n";
 }
 
+// ============================================================================
+// Suite 336: Horizon 120 — Sovereign x86-64 Hardware Architecture, 64-bit GDT/TSS,
+//            Fast System Call MSRs (STAR/LSTAR/SFMASK) & Ring 3 User-Space Transition
+//            (base/ntos/hal/cpu) (Unit #92)
+// ============================================================================
+inline void Test_Horizon120_CpuHardware_Gdt_Tss64_Msr_And_Ring3_Transition_Engine() {
+    std::cout << "\n[TEST] Suite 336: Horizon 120 - Sovereign x86-64 Hardware Architecture, GDT/TSS64 & Ring 3 Transition...\n";
+
+    using namespace micant::cpu;
+
+    // 1. Verify Standard Windows NT 64-bit Segment Selectors
+    TEST_ASSERT(KGDT64_R0_CODE == 0x0010, "Kernel Code 64 selector must be 0x0010");
+    TEST_ASSERT(KGDT64_R0_DATA == 0x0018, "Kernel Data 64 selector must be 0x0018");
+    TEST_ASSERT(KGDT64_R3_CMCODE == 0x0020, "User Compatibility Code 32 selector must be 0x0020");
+    TEST_ASSERT(KGDT64_R3_DATA == 0x0028, "User Data selector must be 0x0028");
+    TEST_ASSERT(KGDT64_R3_CODE == 0x0030, "User Code 64 selector must be 0x0030");
+    TEST_ASSERT(KGDT64_SYS_TSS == 0x0040, "TSS64 selector must be 0x0040");
+
+    TEST_ASSERT(SELECTOR_KCODE64 == 0x0010, "SELECTOR_KCODE64 must be 0x0010");
+    TEST_ASSERT(SELECTOR_KDATA64 == 0x0018, "SELECTOR_KDATA64 must be 0x0018");
+    TEST_ASSERT(SELECTOR_UDATA64 == 0x002B, "SELECTOR_UDATA64 (RPL 3) must be 0x002B");
+    TEST_ASSERT(SELECTOR_UCODE64 == 0x0033, "SELECTOR_UCODE64 (RPL 3) must be 0x0033");
+    TEST_ASSERT(SELECTOR_UCODE32 == 0x0023, "SELECTOR_UCODE32 (RPL 3) must be 0x0023");
+    TEST_ASSERT(SELECTOR_TSS64 == 0x0040, "SELECTOR_TSS64 must be 0x0040");
+
+    // 2. Verify Hardware Register Constants (MSRs)
+    TEST_ASSERT(MSR_EFER == 0xC0000080, "MSR_EFER must be 0xC0000080");
+    TEST_ASSERT(MSR_STAR == 0xC0000081, "MSR_STAR must be 0xC0000081");
+    TEST_ASSERT(MSR_LSTAR == 0xC0000082, "MSR_LSTAR must be 0xC0000082");
+    TEST_ASSERT(MSR_SFMASK == 0xC0000084, "MSR_SFMASK must be 0xC0000084");
+    TEST_ASSERT(SFMASK_DEFAULT == 0x00004700ULL, "SFMASK_DEFAULT must clear IF, TF, DF, NT (0x4700)");
+
+    // 3. Verify Hardware Structure Sizes & Alignments
+    TEST_ASSERT(sizeof(SegmentDescriptor64) == 8, "SegmentDescriptor64 must be 8 bytes");
+    TEST_ASSERT(sizeof(TssDescriptor64) == 16, "TssDescriptor64 must be 16 bytes (128 bits)");
+    TEST_ASSERT(sizeof(micant::cpu::TaskStateSegment64) == 104, "TaskStateSegment64 must be 104 bytes");
+    TEST_ASSERT(sizeof(GdtTable64) == 80, "GdtTable64 must be 80 bytes (8 descriptors + 16-byte TSS)");
+    TEST_ASSERT(sizeof(Gdtr64) == 10, "Gdtr64 must be 10 bytes (packed)");
+    TEST_ASSERT(sizeof(IretFrame64) == 40, "IretFrame64 must be 40 bytes (5x 64-bit qwords)");
+
+    // Verify exact byte offsets in GDT table
+    TEST_ASSERT(offsetof(GdtTable64, nullDesc) == 0x00, "nullDesc must be at offset 0x00");
+    TEST_ASSERT(offsetof(GdtTable64, kernelCode) == 0x10, "kernelCode must be at offset 0x10");
+    TEST_ASSERT(offsetof(GdtTable64, kernelData) == 0x18, "kernelData must be at offset 0x18");
+    TEST_ASSERT(offsetof(GdtTable64, userCmCode) == 0x20, "userCmCode must be at offset 0x20");
+    TEST_ASSERT(offsetof(GdtTable64, userData) == 0x28, "userData must be at offset 0x28");
+    TEST_ASSERT(offsetof(GdtTable64, userCode) == 0x30, "userCode must be at offset 0x30");
+    TEST_ASSERT(offsetof(GdtTable64, tssDesc) == 0x40, "tssDesc must be at offset 0x40");
+
+    // 4. Test CpuHardwareEngine Initialization
+    auto& engine = CpuHardwareEngine::get();
+    constexpr uint64_t dummyKernelStackTop = 0xFFFF800000100000ULL;
+    constexpr uint64_t dummyLstar = 0xFFFFF80000200000ULL;
+    engine.initialize(dummyKernelStackTop, dummyLstar);
+
+    TEST_ASSERT(engine.isInitialized(), "CpuHardwareEngine must be marked initialized");
+
+    const auto& gdt = engine.getGdt();
+    TEST_ASSERT(gdt.kernelCode.access == 0x9A, "Kernel Code access byte must be 0x9A (Execute/Read, DPL 0)");
+    TEST_ASSERT((gdt.kernelCode.limitHighAndFlags & 0x20) != 0, "Kernel Code must have Long Mode bit (L=1) set");
+    TEST_ASSERT(gdt.kernelData.access == 0x92, "Kernel Data access byte must be 0x92 (Read/Write, DPL 0)");
+    TEST_ASSERT(gdt.userCode.access == 0xFA, "User Code access byte must be 0xFA (Execute/Read, DPL 3)");
+    TEST_ASSERT((gdt.userCode.limitHighAndFlags & 0x20) != 0, "User Code must have Long Mode bit (L=1) set");
+    TEST_ASSERT(gdt.userData.access == 0xF2, "User Data access byte must be 0xF2 (Read/Write, DPL 3)");
+    TEST_ASSERT(gdt.tssDesc.access == 0x89, "TSS64 access byte must be 0x89 (Available 64-bit TSS)");
+
+    const auto& tss = engine.getTss();
+    TEST_ASSERT(tss.rsp0 == dummyKernelStackTop, "TSS.rsp0 must match kernel stack top");
+    TEST_ASSERT(tss.ist1 == dummyKernelStackTop, "TSS.ist1 must match kernel stack top");
+    TEST_ASSERT(tss.ioMapBase == sizeof(micant::cpu::TaskStateSegment64), "TSS.ioMapBase must point past end of TSS");
+
+    // 5. Verify Fast System Call MSR Calculation
+    uint64_t expectedStar = (static_cast<uint64_t>(KGDT64_R3_CMCODE) << 48) |
+                            (static_cast<uint64_t>(KGDT64_R0_CODE) << 32);
+    TEST_ASSERT(engine.getMsrStar() == expectedStar, "MSR_STAR must combine User CS/SS base and Kernel CS");
+    TEST_ASSERT(engine.getMsrLstar() == dummyLstar, "MSR_LSTAR must match KiSystemCall64 address");
+    TEST_ASSERT(engine.getMsrSfmask() == SFMASK_DEFAULT, "MSR_SFMASK must match SFMASK_DEFAULT");
+    TEST_ASSERT((engine.getMsrEfer() & EFER_SCE) != 0, "EFER.SCE bit must be set");
+
+    // 6. Test IRETQ Ring 3 Entry Frame Construction
+    constexpr uint64_t dummyUserRip = 0x00007FF600001000ULL;
+    constexpr uint64_t dummyUserRsp = 0x000000E000100000ULL;
+    IretFrame64 frame = engine.createRing3EntryFrame(dummyUserRip, dummyUserRsp);
+    TEST_ASSERT(frame.rip == dummyUserRip, "IretFrame.rip must equal user entry point");
+    TEST_ASSERT(frame.cs == SELECTOR_UCODE64, "IretFrame.cs must equal 0x0033 (Ring 3 Code 64)");
+    TEST_ASSERT((frame.cs & 3) == 3, "IretFrame.cs RPL must be 3 (Userland Privilege Level)");
+    TEST_ASSERT(frame.rflags == 0x0202ULL, "IretFrame.rflags must have IF=1 and IOPL=0");
+    TEST_ASSERT(frame.rsp == dummyUserRsp, "IretFrame.rsp must equal user stack pointer");
+    TEST_ASSERT(frame.ss == SELECTOR_UDATA64, "IretFrame.ss must equal 0x002B (Ring 3 Data 64)");
+    TEST_ASSERT((frame.ss & 3) == 3, "IretFrame.ss RPL must be 3 (Userland Privilege Level)");
+
+    std::cout << "  [Horizon 120 Track D x86-64 Hardware Architecture & Ring 3 Transition (Unit #92)]\n"
+              << "    GDT: 80B | KCode=0x0010 (DPL 0 L=1) | KData=0x0018 | UCode=0x0033 (DPL 3) | UData=0x002B\n"
+              << "    TSS64: 104B @ 0x0040 (Desc 16B) | RSP0=0x" << std::hex << tss.rsp0 << std::dec << " | IST1 Active\n"
+              << "    MSRs: STAR=0x" << std::hex << expectedStar << " | LSTAR=0x" << dummyLstar << std::dec << " | SFMASK=0x4700 | EFER.SCE=1\n"
+              << "    IRETQ Frame: RIP=0x" << std::hex << frame.rip << " | CS=0x" << frame.cs << " | RSP=0x" << frame.rsp << " | SS=0x" << frame.ss << std::dec << "\n"
+              << "    Privilege Transitions: Ring 0 -> IRETQ -> Ring 3 (CPL=3) -> SYSCALL -> KiSystemCall64 -> SYSRETQ -> Ring 3\n";
+
+    std::cout << "[TEST] Suite 336: Horizon 120 - Sovereign x86-64 Hardware Architecture, GDT/TSS64 & Ring 3 Transition PASSED.\n";
+}
+
+
 
 
 

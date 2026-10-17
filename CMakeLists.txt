@@ -23,6 +23,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/lpc/ntlpc.cpp
     kernel/cc/ccmgr.cpp
     kernel/fsrtl/fsrtlmgr.cpp
+    kernel/fsrtl/extfs.cpp
     kernel/dbgk/dbgkobj.cpp
     kernel/tm/ktmmgr.cpp
     kernel/verifier/vfmgr.cpp

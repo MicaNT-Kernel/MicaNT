@@ -378,7 +378,15 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite334")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite336")) {
+        RUN_TEST(Test_Horizon120_CpuHardware_Gdt_Tss64_Msr_And_Ring3_Transition_Engine);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite335") {
+        RUN_TEST(Test_Horizon119_ExtFs_Linux_Ext2_Ext3_Ext4_ReadOnly_VFS_Subsystem);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite334") {
         RUN_TEST(Test_Horizon118_WinNT_Msvcp140_Pdata_SEH_Unwind_And_44_DLL_Seal);
         return g_FailedTests;
     }
@@ -1603,6 +1611,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon117_WinNT_Vcruntime140_And_Vcruntime140_1_System32_PE32Plus_ABI);
     RUN_TEST(Test_Horizon118_WinNT_Msvcp140_Pdata_SEH_Unwind_And_44_DLL_Seal);
     RUN_TEST(Test_Horizon119_ExtFs_Linux_Ext2_Ext3_Ext4_ReadOnly_VFS_Subsystem);
+    RUN_TEST(Test_Horizon120_CpuHardware_Gdt_Tss64_Msr_And_Ring3_Transition_Engine);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
