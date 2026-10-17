@@ -12,7 +12,8 @@ import subprocess
 from datetime import datetime, timezone
 
 BASE_DIR = r"C:\Users\admin\source\MicaNT"
-PYTHON_EXE = sys.executable
+REAL_PYTHON = r"C:\Users\admin\AppData\Local\Python\pythoncore-3.14-64\python.exe"
+PYTHON_EXE = REAL_PYTHON if os.path.exists(REAL_PYTHON) else sys.executable
 
 def log(msg):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

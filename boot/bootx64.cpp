@@ -3026,6 +3026,8 @@ public:
         InteractiveCursor cursor;
         int32_t cursorX = static_cast<int32_t>(width / 2);
         int32_t cursorY = static_cast<int32_t>(height / 2);
+        uint32_t prevAbsButtons{0};
+        uint8_t prevRelButtons{0};
         cursor.draw(m_videoDriver, cursorX, cursorY);
 
         // 4. PS/2 8042 Hardware Controller Scancode Tables & State
@@ -3309,13 +3311,12 @@ public:
                             newMouseX = calcX;
                             newMouseY = calcY;
                             mouseMoved = true;
-                            UartSerial::print("[MicaNT Abs] X=");
-                            UartSerial::printInt(calcX);
-                            UartSerial::print(" Y=");
-                            UartSerial::printInt(calcY);
-                            UartSerial::print(" Btn=");
-                            UartSerial::printDec(absState.activeButtons);
-                            UartSerial::print("\r\n");
+                            if (absState.activeButtons != prevAbsButtons) {
+                                prevAbsButtons = absState.activeButtons;
+                                UartSerial::print("[MicaNT Abs Btn] ");
+                                UartSerial::printDec(absState.activeButtons);
+                                UartSerial::print("\r\n");
+                            }
                             break;
                         }
                     }
@@ -3334,15 +3335,13 @@ public:
                                 newMouseX = cursorX + simpleState.relativeMovementX;
                                 newMouseY = cursorY + simpleState.relativeMovementY;
                                 mouseMoved = true;
-                                UartSerial::print("[MicaNT Rel] dX=");
-                                UartSerial::printInt(simpleState.relativeMovementX);
-                                UartSerial::print(" dY=");
-                                UartSerial::printInt(simpleState.relativeMovementY);
-                                UartSerial::print(" L=");
-                                UartSerial::printDec(simpleState.leftButton ? 1 : 0);
-                                UartSerial::print(" R=");
-                                UartSerial::printDec(simpleState.rightButton ? 1 : 0);
-                                UartSerial::print("\r\n");
+                                uint8_t curButtons = (simpleState.leftButton ? 1 : 0) | (simpleState.rightButton ? 2 : 0);
+                                if (curButtons != prevRelButtons) {
+                                    prevRelButtons = curButtons;
+                                    UartSerial::print("[MicaNT Rel Btn] ");
+                                    UartSerial::printDec(curButtons);
+                                    UartSerial::print("\r\n");
+                                }
                                 break;
                             }
                         }
