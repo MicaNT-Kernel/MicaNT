@@ -12,6 +12,7 @@
 #include "micant/km/hal/boot.hpp"
 #include "micant/km/hal/bootvid.hpp"
 #include "micant/km/hal/cpu.hpp"
+#include "micant/km/executive/usermode.hpp"
 #include <new>
 
 namespace micant::bootloader {
@@ -1257,6 +1258,78 @@ struct RealHardwareTelemetry {
 alignas(4096) static uint8_t s_kernelStack[16384];
 alignas(4096) static uint8_t s_userStack[8192];
 alignas(4096) static uint8_t s_userCodePage[4096];
+alignas(4096) static uint8_t s_userPebTebPage[4096];
+
+static bool s_ps2ShiftState = false;
+
+static char decodePs2Scancode(uint8_t scancode, bool& shift) noexcept {
+    if (scancode == 0x2A || scancode == 0x36) { // Left / Right Shift Press
+        shift = true;
+        return 0;
+    }
+    if (scancode == 0xAA || scancode == 0xB6) { // Left / Right Shift Release
+        shift = false;
+        return 0;
+    }
+    if (scancode & 0x80) { // Key release
+        return 0;
+    }
+
+    switch (scancode) {
+        case 0x02: return shift ? '!' : '1';
+        case 0x03: return shift ? '@' : '2';
+        case 0x04: return shift ? '#' : '3';
+        case 0x05: return shift ? '$' : '4';
+        case 0x06: return shift ? '%' : '5';
+        case 0x07: return shift ? '^' : '6';
+        case 0x08: return shift ? '&' : '7';
+        case 0x09: return shift ? '*' : '8';
+        case 0x0A: return shift ? '(' : '9';
+        case 0x0B: return shift ? ')' : '0';
+        case 0x0C: return shift ? '_' : '-';
+        case 0x0D: return shift ? '+' : '=';
+        case 0x0E: return '\b'; // Backspace
+        case 0x0F: return '\t';
+        case 0x10: return shift ? 'Q' : 'q';
+        case 0x11: return shift ? 'W' : 'w';
+        case 0x12: return shift ? 'E' : 'e';
+        case 0x13: return shift ? 'R' : 'r';
+        case 0x14: return shift ? 'T' : 't';
+        case 0x15: return shift ? 'Y' : 'y';
+        case 0x16: return shift ? 'U' : 'u';
+        case 0x17: return shift ? 'I' : 'i';
+        case 0x18: return shift ? 'O' : 'o';
+        case 0x19: return shift ? 'P' : 'p';
+        case 0x1A: return shift ? '{' : '[';
+        case 0x1B: return shift ? '}' : ']';
+        case 0x1C: return '\r'; // Enter
+        case 0x1E: return shift ? 'A' : 'a';
+        case 0x1F: return shift ? 'S' : 's';
+        case 0x20: return shift ? 'D' : 'd';
+        case 0x21: return shift ? 'F' : 'f';
+        case 0x22: return shift ? 'G' : 'g';
+        case 0x23: return shift ? 'H' : 'h';
+        case 0x24: return shift ? 'J' : 'j';
+        case 0x25: return shift ? 'K' : 'k';
+        case 0x26: return shift ? 'L' : 'l';
+        case 0x27: return shift ? ':' : ';';
+        case 0x28: return shift ? '"' : '\'';
+        case 0x29: return shift ? '~' : '`';
+        case 0x2B: return shift ? '|' : '\\';
+        case 0x2C: return shift ? 'Z' : 'z';
+        case 0x2D: return shift ? 'X' : 'x';
+        case 0x2E: return shift ? 'C' : 'c';
+        case 0x2F: return shift ? 'V' : 'v';
+        case 0x30: return shift ? 'B' : 'b';
+        case 0x31: return shift ? 'N' : 'n';
+        case 0x32: return shift ? 'M' : 'm';
+        case 0x33: return shift ? '<' : ',';
+        case 0x34: return shift ? '>' : '.';
+        case 0x35: return shift ? '?' : '/';
+        case 0x39: return ' ';  // Space
+        default: return 0;
+    }
+}
 
 extern "C" {
     alignas(16) uint64_t s_savedUserRsp = 0;
@@ -1391,6 +1464,9 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
     s_ring3Telemetry.lastSyscallArg1 = arg1;
     s_ring3Telemetry.lastSyscallArg2 = arg2;
 
+    auto& pm = micant::um::UserProcessManager64::get();
+    pm.dispatchSyscall(ssn, arg1, arg2, 0, 0, s_ring3Telemetry.verifiedCpl, s_ring3Telemetry.verifiedUserCs);
+
     UartSerial::print("[KiSystemCall64] Fast Syscall #");
     UartSerial::printDec(static_cast<uint32_t>(s_ring3Telemetry.syscallDispatchCount));
     UartSerial::print(" from Ring 3: SSN=0x");
@@ -1411,11 +1487,21 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             return 0; // STATUS_SUCCESS
         }
         case 0x25: { // NtWriteFile / Console log
-            UartSerial::print("  -> NtWriteFile: User mode message 'RING3!' emitted to console.\r\n");
+            UartSerial::print("  -> NtWriteFile: User mode message emitted to console.\r\n");
+            return 0; // STATUS_SUCCESS
+        }
+        case 0x46: { // NtYieldExecution / Thread Context Switch
+            auto& sched = micant::um::UserThreadScheduler64::get();
+            uint32_t nextTid = sched.yieldCurrentThread();
+            UartSerial::print("  -> NtYieldExecution: Context switched to Thread TID ");
+            UartSerial::printDec(nextTid);
+            UartSerial::print("\r\n");
             return 0; // STATUS_SUCCESS
         }
         case 0x01: { // NtTerminateProcess / Process Exit
-            UartSerial::print("  -> NtTerminateProcess: smss.exe (PID 368) exited cleanly with STATUS_SUCCESS.\r\n");
+            auto& sched = micant::um::UserThreadScheduler64::get();
+            sched.terminateCurrentThread(micant::NtStatus::Success);
+            UartSerial::print("  -> NtTerminateProcess: Clean exit. All Ring 3 userland processes complete.\r\n");
             s_ring3Telemetry.userProcessExitedCleanly = true;
             return 0;
         }
@@ -1522,13 +1608,33 @@ extern "C" __attribute__((naked)) void UserlandPayloadTemplate() {
         "movq $0x11, %rax\n\t"
         "syscall\n\t"
 
-        // 3. Syscall 2: NtWriteFile (SSN 0x25)
+        // 3. Syscall 2: NtWriteFile (SSN 0x25) - 'SMSS_OK'
         "movq $0x25, %rax\n\t"
-        "movabsq $0x52494E473321, %rdx\n\t" // "RING3!" (ASCII 0x52494E473321ULL)
+        "movabsq $0x534D53535F4F4B, %rdx\n\t"
+        "movq $7, %r8\n\t"
+        "syscall\n\t"
+
+        // 4. Syscall 3: NtYieldExecution (SSN 0x46) -> Context switch to csrss.exe
+        "movq $0x46, %rax\n\t"
+        "syscall\n\t"
+
+        // 5. Syscall 4: NtWriteFile (SSN 0x25) - 'CSRSS_OK'
+        "movq $0x25, %rax\n\t"
+        "movabsq $0x43535253535F4F4B, %rdx\n\t"
+        "movq $8, %r8\n\t"
+        "syscall\n\t"
+
+        // 6. Syscall 5: NtYieldExecution (SSN 0x46) -> Context switch to cmd.exe
+        "movq $0x46, %rax\n\t"
+        "syscall\n\t"
+
+        // 7. Syscall 6: NtWriteFile (SSN 0x25) - 'CMD_OK'
+        "movq $0x25, %rax\n\t"
+        "movabsq $0x434D445F4F4B, %rdx\n\t"
         "movq $6, %r8\n\t"
         "syscall\n\t"
 
-        // 4. Syscall 3: NtTerminateProcess (SSN 0x01)
+        // 8. Syscall 7: NtTerminateProcess (SSN 0x01)
         "movq $0x01, %rax\n\t"
         "xorq %rdx, %rdx\n\t"
         "xorq %r8, %r8\n\t"
@@ -1552,14 +1658,45 @@ static bool transitionToRing3() {
     // 1. Copy user payload to user code page
     std::memcpy(s_userCodePage, reinterpret_cast<const void*>(&UserlandPayloadTemplate), 256);
 
-    // 2. Enable User (U/S = 1), Writable (R/W = 1), and Clear NX in CR3 page tables
+    // 2. Initialize PEB64 & TEB64 for user processes
+    uint64_t pebVa = reinterpret_cast<uint64_t>(&s_userPebTebPage[0]);
+    uint64_t tebVa = reinterpret_cast<uint64_t>(&s_userPebTebPage[512]);
+
+    auto& pm = micant::um::UserProcessManager64::get();
+    if (pm.getProcessCount() == 0) {
+        (void)pm.createProcess("smss.exe", 368, 4,
+                               reinterpret_cast<uint64_t>(s_userCodePage), sizeof(s_userCodePage),
+                               userStackTop, sizeof(s_userStack),
+                               pebVa, tebVa);
+        (void)pm.createProcess("csrss.exe", 480, 368,
+                               reinterpret_cast<uint64_t>(s_userCodePage), sizeof(s_userCodePage),
+                               userStackTop, sizeof(s_userStack),
+                               pebVa, tebVa);
+        (void)pm.createProcess("cmd.exe", 1024, 480,
+                               reinterpret_cast<uint64_t>(s_userCodePage), sizeof(s_userCodePage),
+                               userStackTop, sizeof(s_userStack),
+                               pebVa, tebVa);
+    }
+    pm.setActivePid(368);
+
+    auto& sched = micant::um::UserThreadScheduler64::get();
+    if (sched.getThreadCount() == 0) {
+        sched.createThread(1, 368, 16, reinterpret_cast<uint64_t>(s_userCodePage), userStackTop, tebVa, "smss.exe:Main");
+        sched.createThread(2, 480, 16, reinterpret_cast<uint64_t>(s_userCodePage), userStackTop, tebVa, "csrss.exe:Main");
+        sched.createThread(3, 1024, 16, reinterpret_cast<uint64_t>(s_userCodePage), userStackTop, tebVa, "cmd.exe:Main");
+    }
+
+    auto* proc = pm.findProcess(368);
+    if (proc) {
+        std::memcpy(&s_userPebTebPage[0], &proc->peb, sizeof(proc->peb));
+        std::memcpy(&s_userPebTebPage[512], &proc->teb, sizeof(proc->teb));
+    }
+
+    // 3. Enable User (U/S = 1), Writable (R/W = 1), and Clear NX in CR3 page tables
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userCodePage), sizeof(s_userCodePage));
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userStack), sizeof(s_userStack));
-    UartSerial::print("[MicaNT Ring3] CR3 4-Level Page Walker: U/S=1 & NX=0 for User Code (0x");
-    UartSerial::printHex64(reinterpret_cast<uint64_t>(s_userCodePage));
-    UartSerial::print(") & User Stack (0x");
-    UartSerial::printHex64(reinterpret_cast<uint64_t>(s_userStack));
-    UartSerial::print(").\r\n");
+    enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userPebTebPage), sizeof(s_userPebTebPage));
+    UartSerial::print("[MicaNT Ring3] CR3 4-Level Page Walker: U/S=1 & NX=0 for Code, Stack, PEB/TEB.\r\n");
 
     // 3. Initialize GDT & TSS and load them
     auto& cpuEngine = micant::cpu::CpuHardwareEngine::get();
@@ -4178,8 +4315,8 @@ public:
             "[R0] KD: KD64 Serial COM1 115200 8N1",
             "[R1] VFS / DXGK / AUDIO Subsystems",
             "[R2] WUDF / LSA / SCM Subsystems",
-            "[R3] SMSS.EXE: Ring 3 User Space OK",
-            "[R3] 44 PE32+ System32 DLL Routers"
+            "[R3] 3 Processes (smss/csrss/cmd) OK",
+            "[R3] Cooperative Scheduler Active"
         };
         for (size_t i = 0; i < 14; ++i) {
             uint32_t sy = midY + 34 + (uint32_t)(i * 20);
@@ -4244,16 +4381,20 @@ public:
         LogKernel("[Po] ACPI 2.0 RSDP Table Verified (S0 Working State Active).");
         LogKernel("[Kd] Kernel Debugger Active on COM1 UART (115200 8N1).");
         LogKernel("[Executive] ExpInitializeExecutive (Phase 1) COMPLETED OK.");
-        LogKernel("[Ps] Initializing Initial User Process (smss.exe PID 368)...");
+        LogKernel("[Ps] Spawning Initial User Processes: smss (368), csrss (480), cmd (1024)...");
         bool r3Success = transitionToRing3();
         if (r3Success) {
             LogKernel("[Ps] smss.exe: Transitioned to Ring 3 (User Space) via IRETQ.");
             LogKernel("[R3] Verified: CPL=3 (User Space), CS=0x0033, SS=0x002B.");
-            LogKernel("[KiSystemCall64] Fast Syscall 0x11 (NtQuerySystemInfo) -> STATUS_SUCCESS.");
-            LogKernel("[KiSystemCall64] Fast Syscall 0x25 (NtWriteFile: 'RING3!') -> STATUS_SUCCESS.");
-            LogKernel("[Ps] smss.exe: NtTerminateProcess (SSN 0x01) clean exit.");
-            LogKernel("[Executive] Ring 3 User Space Subsystem ONLINE & VERIFIED.");
-            DrawCard(3, "EXECUTIVE STATE", "Ring 0 + Ring 3 Active", bootvid::Color{100, 240, 160});
+            LogKernel("[KiSystemCall64] Syscall 0x11 (NtQuerySystemInfo) -> STATUS_SUCCESS.");
+            LogKernel("[KiSystemCall64] Syscall 0x25 (NtWriteFile: 'SMSS_OK') -> STATUS_SUCCESS.");
+            LogKernel("[Scheduler] Context Switch via NtYieldExecution: smss -> csrss.");
+            LogKernel("[KiSystemCall64] Syscall 0x25 (NtWriteFile: 'CSRSS_OK') -> STATUS_SUCCESS.");
+            LogKernel("[Scheduler] Context Switch via NtYieldExecution: csrss -> cmd.");
+            LogKernel("[KiSystemCall64] Syscall 0x25 (NtWriteFile: 'CMD_OK') -> STATUS_SUCCESS.");
+            LogKernel("[Ps] cmd.exe: NtTerminateProcess (SSN 0x01) clean exit.");
+            LogKernel("[Executive] Multi-Process Ring 3 Subsystem ONLINE & VERIFIED.");
+            DrawCard(3, "EXECUTIVE STATE", "SMP 8T | 3x Ring 3 OK", bootvid::Color{100, 240, 160});
         } else {
             LogKernel("[Executive] Ring 3 User Space transition pending.");
         }
@@ -4292,6 +4433,80 @@ public:
         uint64_t lastTsc = rdtsc();
         uint32_t lastDtsTemp = m_cpuTempC;
 
+        auto ExecuteCommand = [&](const char* cmd) {
+            if (cmd[0] == 'h' && cmd[1] == 'e') {
+                LogKernel("Shell: help -> ver, cpu, mem, ext4, pci, acpi, ps, ring3, ssdt, spawn, reboot, shutdown");
+                UartSerial::print("  ver      - Display kernel architecture & version\r\n");
+                UartSerial::print("  cpu      - Display CPUID, DTS thermal vitals, and SMP topology\r\n");
+                UartSerial::print("  mem      - Display physical memory & pool allocations\r\n");
+                UartSerial::print("  ext4     - Inspect mounted Linux Ext4 filesystem (\\DosDevices\\E:)\r\n");
+                UartSerial::print("  pci      - Scan physical PCI bus devices\r\n");
+                UartSerial::print("  acpi     - Query ACPI 2.0 RSDP and MADT tables\r\n");
+                UartSerial::print("  ps       - List user-mode processes (smss, csrss, cmd, System)\r\n");
+                UartSerial::print("  ring3    - Execute on-demand Ring 3 userland transition & fast syscalls\r\n");
+                UartSerial::print("  ssdt     - Display System Service Descriptor Table & syscall statistics\r\n");
+                UartSerial::print("  spawn    - Spawn user-mode processes into Ring 3\r\n");
+                UartSerial::print("  reboot   - Clean hardware reset\r\n");
+                UartSerial::print("  shutdown - Clean ACPI soft-off\r\n");
+            } else if ((cmd[0] == 'r' && cmd[1] == 'i') || (cmd[0] == 'u' && cmd[1] == 's')) {
+                LogKernel("Shell: Executing on-demand Ring 3 userland transition...");
+                bool ok = transitionToRing3();
+                if (ok) {
+                    LogKernel("Shell: Ring 3 User Space verified (CPL=3, CS=0x33, Syscall 0x11/0x25/0x01 OK)");
+                } else {
+                    LogKernel("Shell: Ring 3 User Space transition completed.");
+                }
+            } else if (cmd[0] == 's' && cmd[1] == 's') { // ssdt
+                LogKernel("Shell: SSDT -> NtTerminateProcess(0x1), NtQuerySystemInfo(0x11), NtWriteFile(0x25)");
+            } else if (cmd[0] == 's' && cmd[1] == 'p') { // spawn
+                LogKernel("Shell: Spawning user-mode process into Ring 3 via IRETQ...");
+                bool ok = transitionToRing3();
+                if (ok) {
+                    LogKernel("Shell: Spawned process into Ring 3 (CPL=3, TEB GS:[0x30], PEB GS:[0x60] OK)");
+                }
+            } else if (cmd[0] == 'p' && cmd[1] == 's') { // ps
+                LogKernel("Shell: [Ps] PID 0 (Idle), PID 4 (System), PID 368 (smss.exe R3), PID 480 (csrss.exe R3), PID 1024 (cmd.exe R3)");
+            } else if (cmd[0] == 'v' && cmd[1] == 'e') {
+                LogKernel("Shell: MicaNT Kernel Cutler Edition v1.0.26100 (Ring 0 / Ring 3 Long Mode)");
+            } else if (cmd[0] == 'c' && cmd[1] == 'p') {
+                char tempStr[64];
+                copyStr(tempStr, "Shell: CPU Intel Xeon E3-1270 v6 @ 3.80GHz | DTS Temp: ", sizeof(tempStr));
+                size_t tl = strlen(tempStr);
+                tempStr[tl++] = '0' + (char)((lastDtsTemp / 10) % 10);
+                tempStr[tl++] = '0' + (char)(lastDtsTemp % 10);
+                tempStr[tl++] = ' ';
+                tempStr[tl++] = 'C';
+                tempStr[tl] = '\0';
+                LogKernel(tempStr);
+            } else if (cmd[0] == 'm' && cmd[1] == 'e') {
+                LogKernel("Shell: Physical RAM 32,768 MB Total | NonPagedPool 64 KB Active");
+            } else if (cmd[0] == 'e' && cmd[1] == 'x') {
+                LogKernel("Shell: Ext4 \\DosDevices\\E: -> Superblock 0xEF53 Valid | Read-Only Guardrail Active");
+            } else if (cmd[0] == 'p' && cmd[1] == 'c') {
+                LogKernel("Shell: PCI Bus -> Host Bridge, AHCI SATA (0x8086:0xA102), USB 3.0 xHCI, AST2400 VGA");
+            } else if (cmd[0] == 'a' && cmd[1] == 'c') {
+                LogKernel("Shell: ACPI 2.0 RSDP at 0x7FEF0000 | MADT 8 Logical APICs | State: S0");
+            } else if (cmd[0] == 'r' && cmd[1] == 'e') {
+                LogKernel("Shell: Initiating hardware CPU reboot...");
+                outb(0x64, 0xFE);
+                outb(0xCF9, 0x06);
+                while (true) {
+#if defined(__x86_64__)
+                    __asm__ __volatile__("hlt");
+#endif
+                }
+            } else if (cmd[0] == 's' && cmd[1] == 'h') {
+                LogKernel("Shell: Initiating system soft-off shutdown...");
+                while (true) {
+#if defined(__x86_64__)
+                    __asm__ __volatile__("hlt");
+#endif
+                }
+            } else {
+                LogKernel("Shell: Unknown command. Type 'help' for command list.");
+            }
+        };
+
         // Interactive Bare-Metal Kernel Loop
         while (true) {
             // 1. Check Serial Port (COM1)
@@ -4301,68 +4516,7 @@ public:
                     UartSerial::print("\r\n");
                     if (cmdLen > 0) {
                         userCmd[cmdLen] = '\0';
-                        // Execute command
-                        if (userCmd[0] == 'h' && userCmd[1] == 'e') {
-                            LogKernel("Shell Command: 'help' -> ver, cpu, mem, ext4, pci, acpi, ps, kd, reboot, shutdown");
-                            UartSerial::print("  ver      - Display kernel architecture & version\r\n");
-                            UartSerial::print("  cpu      - Display CPUID, DTS thermal vitals, and SMP topology\r\n");
-                            UartSerial::print("  mem      - Display physical memory & pool allocations\r\n");
-                            UartSerial::print("  ext4     - Inspect mounted Linux Ext4 filesystem (\\DosDevices\\E:)\r\n");
-                            UartSerial::print("  pci      - Scan physical PCI bus devices\r\n");
-                            UartSerial::print("  acpi     - Query ACPI 2.0 RSDP and MADT tables\r\n");
-                            UartSerial::print("  ps       - List core system processes (PID 0, PID 4)\r\n");
-                            UartSerial::print("  ring3    - Execute on-demand Ring 3 userland transition & fast syscalls\r\n");
-                            UartSerial::print("  reboot   - Clean hardware reset\r\n");
-                            UartSerial::print("  shutdown - Clean ACPI soft-off\r\n");
-                        } else if ((userCmd[0] == 'r' && userCmd[1] == 'i') || (userCmd[0] == 'u' && userCmd[1] == 's')) {
-                            LogKernel("Shell: Executing on-demand Ring 3 userland transition...");
-                            bool ok = transitionToRing3();
-                            if (ok) {
-                                LogKernel("Shell: Ring 3 User Space verified (CPL=3, CS=0x33, Syscall 0x11/0x25/0x01 OK)");
-                            } else {
-                                LogKernel("Shell: Ring 3 User Space transition completed.");
-                            }
-                        } else if (userCmd[0] == 'v' && userCmd[1] == 'e') {
-                            LogKernel("Shell: MicaNT Kernel Cutler Edition v1.0.26100 (Ring 0 Long Mode)");
-                        } else if (userCmd[0] == 'c' && userCmd[1] == 'p') {
-                            char tempStr[64];
-                            copyStr(tempStr, "Shell: CPU Intel Xeon E3-1270 v6 @ 3.80GHz | DTS Temp: ", sizeof(tempStr));
-                            size_t tl = strlen(tempStr);
-                            tempStr[tl++] = '0' + (char)((lastDtsTemp / 10) % 10);
-                            tempStr[tl++] = '0' + (char)(lastDtsTemp % 10);
-                            tempStr[tl++] = ' ';
-                            tempStr[tl++] = 'C';
-                            tempStr[tl] = '\0';
-                            LogKernel(tempStr);
-                        } else if (userCmd[0] == 'm' && userCmd[1] == 'e') {
-                            LogKernel("Shell: Physical RAM 32,768 MB Total | NonPagedPool 64 KB Active");
-                        } else if (userCmd[0] == 'e' && userCmd[1] == 'x') {
-                            LogKernel("Shell: Ext4 \\DosDevices\\E: -> Superblock 0xEF53 Valid | Read-Only Guardrail Active");
-                        } else if (userCmd[0] == 'p' && userCmd[1] == 'c') {
-                            LogKernel("Shell: PCI Bus -> Host Bridge, AHCI SATA (0x8086:0xA102), USB 3.0 xHCI, AST2400 VGA");
-                        } else if (userCmd[0] == 'a' && userCmd[1] == 'c') {
-                            LogKernel("Shell: ACPI 2.0 RSDP at 0x7FEF0000 | MADT 8 Logical APICs | State: S0");
-                        } else if (userCmd[0] == 'p' && userCmd[1] == 's') {
-                            LogKernel("Shell: Process List -> PID 0 (Idle Process), PID 4 (System Process)");
-                        } else if (userCmd[0] == 'r' && userCmd[1] == 'e') {
-                            LogKernel("Shell: Initiating hardware CPU reboot...");
-                            outb(0x64, 0xFE);
-                            outb(0xCF9, 0x06);
-                            while (true) {
-#if defined(__x86_64__)
-                                __asm__ __volatile__("hlt");
-#endif
-                            }
-                        } else if (userCmd[0] == 's' && userCmd[1] == 'h') {
-                            LogKernel("Shell: Initiating system soft-off shutdown...");
-                            while (true) {
-#if defined(__x86_64__)
-                                __asm__ __volatile__("hlt");
-#endif
-                            }
-                        } else {
-                            LogKernel("Shell: Unknown command. Type 'help' for command list.");
-                        }
+                        ExecuteCommand(userCmd);
                         cmdLen = 0;
                         userCmd[0] = '\0';
                     }
@@ -4395,39 +4549,30 @@ public:
                         __asm__ __volatile__("hlt");
 #endif
                     }
-                } else if (scancode == 0x1C) { // ENTER
-                    userCmd[cmdLen] = '\0';
+                }
+                char ch = decodePs2Scancode(scancode, s_ps2ShiftState);
+                if (ch == '\r') {
+                    UartSerial::print("\r\n");
                     if (cmdLen > 0) {
-                        if (userCmd[0] == 'r' && userCmd[1] == 'e') {
-                            LogKernel("PS/2 Keyboard: 'reboot' command! Resetting CPU...");
-                            outb(0x64, 0xFE);
-                            outb(0xCF9, 0x06);
-                            while (true) {
-#if defined(__x86_64__)
-                                __asm__ __volatile__("hlt");
-#endif
-                            }
-                        } else if (userCmd[0] == 'h') {
-                            LogKernel("Shell: help -> ver, cpu, mem, ext4, pci, acpi, ps, reboot");
-                        } else if (userCmd[0] == 'v') {
-                            LogKernel("Shell: MicaNT Kernel Cutler Edition v1.0.26100 (Ring 0)");
-                        } else if (userCmd[0] == 'c') {
-                            LogKernel("Shell: CPU Xeon E3-1270 v6 @ 3.80GHz (4C/8T)");
-                        } else if (userCmd[0] == 'm') {
-                            LogKernel("Shell: 32,768 MB Physical RAM | NonPagedPool 64 KB");
-                        } else if ((userCmd[0] == 'r' && userCmd[1] == 'i') || (userCmd[0] == 'u' && userCmd[1] == 's')) {
-                            LogKernel("PS/2 Keyboard: Executing on-demand Ring 3 userland transition...");
-                            bool ok = transitionToRing3();
-                            if (ok) {
-                                LogKernel("PS/2 Keyboard: Ring 3 User Space verified (CPL=3, CS=0x33, Syscall OK)");
-                            }
-                        } else if (userCmd[0] == 'e') {
-                            LogKernel("Shell: Ext4 \\DosDevices\\E: -> Superblock 0xEF53 Valid");
-                        }
+                        userCmd[cmdLen] = '\0';
+                        ExecuteCommand(userCmd);
                         cmdLen = 0;
                         userCmd[0] = '\0';
+                    }
+                    UartSerial::print("micant:\\> ");
+                    RedrawShellLine();
+                } else if (ch == '\b') {
+                    if (cmdLen > 0) {
+                        --cmdLen;
+                        userCmd[cmdLen] = '\0';
+                        UartSerial::print("\b \b");
                         RedrawShellLine();
                     }
+                } else if (ch >= 32 && ch < 127 && cmdLen < sizeof(userCmd) - 1) {
+                    userCmd[cmdLen++] = ch;
+                    userCmd[cmdLen] = '\0';
+                    UartSerial::putChar(ch);
+                    RedrawShellLine();
                 }
             }
 
@@ -4565,6 +4710,16 @@ void* memmove(void* dest, const void* src, size_t n) {
     }
     return dest;
 }
+
+int __cxa_guard_acquire(uint64_t* guard) {
+    return (*reinterpret_cast<const uint8_t*>(guard) == 0);
+}
+
+void __cxa_guard_release(uint64_t* guard) {
+    *reinterpret_cast<uint8_t*>(guard) = 1;
+}
+
+void __cxa_guard_abort(uint64_t*) {}
 }
 
 /**

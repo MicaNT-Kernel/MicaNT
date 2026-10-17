@@ -50,6 +50,7 @@
 #include "micant/um/subsystems/winbase/kernel32.hpp"
 #include "micant/um/native/wow64.hpp"
 #include "micant/km/hal/cpu.hpp"
+#include "micant/km/executive/usermode.hpp"
 #include "micant/ucrt/msvcrt.hpp"
 #include "micant/um/subsystems/winbase/advapi32.hpp"
 #include "micant/um/subsystems/winuser/user32.hpp"
@@ -378,7 +379,15 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite336")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite338")) {
+        RUN_TEST(Test_Horizon122_Ring3_Thread_Context_Switching_And_Scheduler);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite337") {
+        RUN_TEST(Test_Horizon121_UserMode_Peb_Teb_Ssdt_And_Process_Management);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite336") {
         RUN_TEST(Test_Horizon120_CpuHardware_Gdt_Tss64_Msr_And_Ring3_Transition_Engine);
         return g_FailedTests;
     }
@@ -1612,6 +1621,8 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon118_WinNT_Msvcp140_Pdata_SEH_Unwind_And_44_DLL_Seal);
     RUN_TEST(Test_Horizon119_ExtFs_Linux_Ext2_Ext3_Ext4_ReadOnly_VFS_Subsystem);
     RUN_TEST(Test_Horizon120_CpuHardware_Gdt_Tss64_Msr_And_Ring3_Transition_Engine);
+    RUN_TEST(Test_Horizon121_UserMode_Peb_Teb_Ssdt_And_Process_Management);
+    RUN_TEST(Test_Horizon122_Ring3_Thread_Context_Switching_And_Scheduler);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

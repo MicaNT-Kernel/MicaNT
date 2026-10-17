@@ -19241,7 +19241,238 @@ inline void Test_Horizon120_CpuHardware_Gdt_Tss64_Msr_And_Ring3_Transition_Engin
     std::cout << "[TEST] Suite 336: Horizon 120 - Sovereign x86-64 Hardware Architecture, GDT/TSS64 & Ring 3 Transition PASSED.\n";
 }
 
+// ============================================================================
+// Suite 337: Horizon 121 — Sovereign User-Mode Process & Thread Management,
+//            PEB/TEB Architecture, MSR_GS_BASE/SWAPGS Privilege Bridge &
+//            System Service Dispatch Table (SSDT) (base/ntos/um/usermode) (Unit #93)
+// ============================================================================
+inline void Test_Horizon121_UserMode_Peb_Teb_Ssdt_And_Process_Management() {
+    std::cout << "\n[TEST] Suite 337: Horizon 121 - Sovereign User-Mode Process, PEB/TEB & SSDT...\n";
 
+    using namespace micant::um;
 
+    // 1. Verify Canonical Windows NT 64-bit Structure Sizes & Field Offsets
+    TEST_ASSERT(sizeof(Peb64) > 100, "Peb64 must be populated with standard fields");
+    TEST_ASSERT(offsetof(Teb64, self) == 0x30, "Teb64.self must be at canonical offset 0x30 (GS:[0x30])");
+    TEST_ASSERT(offsetof(Teb64, processEnvironmentBlock) == 0x60, "Teb64.processEnvironmentBlock must be at canonical offset 0x60 (GS:[0x60])");
+    TEST_ASSERT(offsetof(Teb64, lastErrorValue) == 0x68, "Teb64.lastErrorValue must be at canonical offset 0x68 (GS:[0x68])");
 
+    // 2. Test UserProcessManager64 Initialization & Process Spawning
+    auto& pm = UserProcessManager64::get();
+    pm.reset();
+    TEST_ASSERT(pm.getProcessCount() == 0, "Initial process count must be 0");
+    TEST_ASSERT(pm.getTotalSyscallsDispatched() == 0, "Initial syscall count must be 0");
+
+    // Spawn Initial User Process (smss.exe PID 368)
+    constexpr uint64_t smssCodeVa = 0x00007FF600001000ULL;
+    constexpr uint64_t smssStackTop = 0x000000E000100000ULL;
+    constexpr uint64_t smssPebVa = 0x00007FFD00000000ULL;
+    constexpr uint64_t smssTebVa = 0x00007FFD00010000ULL;
+
+    UserProcessContext64* smss = pm.createProcess(
+        "smss.exe", 368, 4,
+        smssCodeVa, 4096,
+        smssStackTop, 8192,
+        smssPebVa, smssTebVa
+    );
+
+    TEST_ASSERT(smss != nullptr, "smss.exe must be successfully registered");
+    TEST_ASSERT(smss->pid == 368, "smss PID must be 368");
+    TEST_ASSERT(smss->parentPid == 4, "smss parent PID must be 4 (System)");
+    TEST_ASSERT(smss->state == UserProcessState::Ready, "Initial state must be Ready");
+    TEST_ASSERT(smss->peb.osMajorVersion == 10, "PEB OS Major Version must be 10");
+    TEST_ASSERT(smss->peb.osMinorVersion == 0, "PEB OS Minor Version must be 0");
+    TEST_ASSERT(smss->peb.osBuildNumber == 26100, "PEB OS Build Number must be 26100 (Windows 11 baseline)");
+    TEST_ASSERT(smss->peb.numberOfProcessors == 8, "PEB NumberOfProcessors must be 8");
+    TEST_ASSERT(smss->teb.self == smssTebVa, "TEB.self must match tebVa (GS:[0x30])");
+    TEST_ASSERT(smss->teb.processEnvironmentBlock == smssPebVa, "TEB.PEB must match pebVa (GS:[0x60])");
+    TEST_ASSERT(smss->teb.uniqueProcessId == 368, "TEB.uniqueProcessId must be 368");
+
+    // 3. Spawn Win32 Subsystem Server (csrss.exe PID 480) & Interactive Shell (cmd.exe PID 1024)
+    UserProcessContext64* csrss = pm.createProcess(
+        "csrss.exe", 480, 368,
+        0x00007FF610001000ULL, 4096,
+        0x000000E010100000ULL, 8192,
+        0x00007FFD10000000ULL, 0x00007FFD10010000ULL
+    );
+    TEST_ASSERT(csrss != nullptr && csrss->pid == 480, "csrss.exe process creation must succeed");
+
+    UserProcessContext64* cmd = pm.createProcess(
+        "cmd.exe", 1024, 480,
+        0x00007FF620001000ULL, 4096,
+        0x000000E020100000ULL, 8192,
+        0x00007FFD20000000ULL, 0x00007FFD20010000ULL
+    );
+    TEST_ASSERT(cmd != nullptr && cmd->pid == 1024, "cmd.exe process creation must succeed");
+    TEST_ASSERT(pm.getProcessCount() == 3, "Process count must equal 3");
+
+    // 4. Test System Service Descriptor Table (SSDT)
+    const auto& ssdt = pm.getSsdt();
+    TEST_ASSERT(ssdt.find(SSN_NT_QUERY_SYSTEM_INFORMATION) != nullptr, "SSDT must include NtQuerySystemInformation");
+    TEST_ASSERT(ssdt.find(SSN_NT_WRITE_FILE) != nullptr, "SSDT must include NtWriteFile");
+    TEST_ASSERT(ssdt.find(SSN_NT_TERMINATE_PROCESS) != nullptr, "SSDT must include NtTerminateProcess");
+
+    // 5. Simulate Fast Syscall Dispatch with CPL=3 Validation
+    pm.setActivePid(368);
+
+    // Call 1: NtQuerySystemInformation (0x0011)
+    micant::NtStatus stat1 = pm.dispatchSyscall(
+        SSN_NT_QUERY_SYSTEM_INFORMATION,
+        0x0001, // SystemBasicInformation
+        0,      // Buffer (null)
+        0,
+        0,
+        3,      // CPL = 3
+        0x0033  // CS = 0x0033
+    );
+    TEST_ASSERT(stat1 == micant::NtStatus::Success, "NtQuerySystemInformation syscall must return STATUS_SUCCESS");
+    TEST_ASSERT(smss->state == UserProcessState::Running, "Process state must be Running");
+    TEST_ASSERT(smss->verifiedCpl == 3, "Verified CPL must be 3");
+    TEST_ASSERT(smss->verifiedUserCs == 0x0033, "Verified CS must be 0x0033");
+    TEST_ASSERT(smss->pebVerifiedByR3, "PEB must be verified by userland");
+    TEST_ASSERT(smss->tebVerifiedByR3, "TEB must be verified by userland");
+
+    // Call 2: NtWriteFile (0x0025)
+    char userMsg[] = "HELLO RING3!";
+    micant::NtStatus stat2 = pm.dispatchSyscall(
+        SSN_NT_WRITE_FILE,
+        1, // stdout
+        reinterpret_cast<uint64_t>(userMsg),
+        sizeof(userMsg),
+        0,
+        3,
+        0x0033
+    );
+    TEST_ASSERT(stat2 == micant::NtStatus::Success, "NtWriteFile syscall must return STATUS_SUCCESS");
+
+    // Call 3: Out-of-bounds user pointer must be trapped by ProbeForRead
+    micant::NtStatus badProbeStat = pm.dispatchSyscall(
+        SSN_NT_WRITE_FILE,
+        1,
+        0xFFFF800000000000ULL, // Kernel space address
+        64,
+        0,
+        3,
+        0x0033
+    );
+    TEST_ASSERT(badProbeStat == micant::NtStatus::AccessViolation, "Kernel address probe from userland must return STATUS_ACCESS_VIOLATION");
+
+    // Call 4: NtTerminateProcess (0x0001)
+    micant::NtStatus stat3 = pm.dispatchSyscall(
+        SSN_NT_TERMINATE_PROCESS,
+        0, // Current process
+        0, // Exit status (STATUS_SUCCESS)
+        0,
+        0,
+        3,
+        0x0033
+    );
+    TEST_ASSERT(stat3 == micant::NtStatus::Success, "NtTerminateProcess must succeed");
+    TEST_ASSERT(smss->state == UserProcessState::Terminated, "smss.exe must be Terminated");
+    TEST_ASSERT(smss->exitStatus == micant::NtStatus::Success, "smss exit status must be STATUS_SUCCESS");
+    TEST_ASSERT(pm.getTotalProcessesTerminated() == 1, "Total terminated processes must be 1");
+
+    std::cout << "  [Horizon 121 Track D User-Mode Executive & SSDT (Unit #93)]\n"
+              << "    PEB64: ImageBase=0x" << std::hex << smss->peb.imageBaseAddress << " | Windows 11 Build " << std::dec << smss->peb.osBuildNumber << " | 8 SMP Processors\n"
+              << "    TEB64: GS:[0x30]=0x" << std::hex << smss->teb.self << " | GS:[0x60]=0x" << smss->teb.processEnvironmentBlock << std::dec << " | LastError=0\n"
+              << "    SSDT: " << ssdt.getCount() << " Native Services (NtQuerySystemInfo, NtWriteFile, NtTerminateProcess)\n"
+              << "    Memory Probing: ProbeForRead / ProbeForWrite guards kernel boundary [0x00007FFF'FFFF0000, 0xFFFF8000'00000000]\n"
+              << "    Multi-Process: smss.exe (PID 368), csrss.exe (PID 480), cmd.exe (PID 1024) Managed\n";
+
+    std::cout << "[TEST] Suite 337: Horizon 121 - Sovereign User-Mode Process, PEB/TEB & SSDT PASSED.\n";
+}
+
+// ============================================================================
+// Suite 338: Horizon 122 — Sovereign Ring 3 Thread Context Switching,
+//            Multi-Process Cooperative Scheduler & Userland Trap Frame (Unit #94)
+// ============================================================================
+inline void Test_Horizon122_Ring3_Thread_Context_Switching_And_Scheduler() {
+    std::cout << "\n[TEST] Suite 338: Horizon 122 - Ring 3 Thread Context Switching & Scheduler...\n";
+
+    using namespace micant::um;
+
+    // 1. Verify UserTrapFrame64 Layout and Register Alignment
+    TEST_ASSERT(sizeof(UserTrapFrame64) >= 160, "UserTrapFrame64 must encompass all GPRs, IRETQ frame, and segment bases");
+    UserTrapFrame64 frame{};
+    frame.rip = 0x00007FF600001000ULL;
+    frame.cs  = 0x0033;
+    frame.rflags = 0x0202;
+    frame.rsp = 0x000000E000100000ULL;
+    frame.ss  = 0x002B;
+    frame.userGsBase = 0x00007FFD00010000ULL;
+    TEST_ASSERT(frame.cs == 0x0033, "User CS must be 0x0033 (Ring 3 DPL 3)");
+    TEST_ASSERT(frame.ss == 0x002B, "User SS must be 0x002B (Ring 3 DPL 3)");
+
+    // 2. Initialize and Test UserThreadScheduler64
+    auto& sched = UserThreadScheduler64::get();
+    sched.reset();
+    TEST_ASSERT(sched.getThreadCount() == 0, "Initial thread count must be 0");
+    TEST_ASSERT(sched.getActiveTid() == 0, "Initial active TID must be 0");
+    TEST_ASSERT(sched.getTotalContextSwitches() == 0, "Initial context switch count must be 0");
+
+    // 3. Register Ring 3 Threads for Multi-Process Workload
+    // Thread 1: smss.exe (TID 1, PID 368)
+    bool t1Ok = sched.createThread(1, 368, 16, 0x00007FF600001000ULL, 0x000000E000100000ULL, 0x00007FFD00010000ULL, "smss.exe:Main");
+    TEST_ASSERT(t1Ok, "smss thread creation must succeed");
+
+    // Thread 2: csrss.exe (TID 2, PID 480)
+    bool t2Ok = sched.createThread(2, 480, 16, 0x00007FF600002000ULL, 0x000000E000200000ULL, 0x00007FFD00020000ULL, "csrss.exe:Main");
+    TEST_ASSERT(t2Ok, "csrss thread creation must succeed");
+
+    // Thread 3: cmd.exe (TID 3, PID 1024)
+    bool t3Ok = sched.createThread(3, 1024, 16, 0x00007FF600003000ULL, 0x000000E000300000ULL, 0x00007FFD00030000ULL, "cmd.exe:Main");
+    TEST_ASSERT(t3Ok, "cmd thread creation must succeed");
+
+    TEST_ASSERT(sched.getThreadCount() == 3, "Thread count must be 3");
+    TEST_ASSERT(sched.getActiveTid() == 1, "First thread must become active (TID 1)");
+
+    auto* thread1 = sched.findThread(1);
+    auto* thread2 = sched.findThread(2);
+    auto* thread3 = sched.findThread(3);
+    TEST_ASSERT(thread1 && thread2 && thread3, "All 3 threads must be discoverable by TID");
+    TEST_ASSERT(thread1->state == UserThreadState::Running, "Thread 1 must initially be Running");
+    TEST_ASSERT(thread2->state == UserThreadState::Ready, "Thread 2 must initially be Ready");
+    TEST_ASSERT(thread3->state == UserThreadState::Ready, "Thread 3 must initially be Ready");
+
+    // 4. Test Round-Robin Cooperative Yields (simulating NtYieldExecution SSN 0x46)
+    // smss.exe (TID 1) yields execution -> should switch to csrss.exe (TID 2)
+    uint32_t nextTid = sched.yieldCurrentThread();
+    TEST_ASSERT(nextTid == 2, "Yield from TID 1 must switch to TID 2");
+    TEST_ASSERT(sched.getActiveTid() == 2, "Active TID must be 2");
+    TEST_ASSERT(thread1->state == UserThreadState::Yielded, "Thread 1 state must be Yielded");
+    TEST_ASSERT(thread2->state == UserThreadState::Running, "Thread 2 state must be Running");
+    TEST_ASSERT(thread2->contextSwitches == 1, "Thread 2 context switch count must be 1");
+    TEST_ASSERT(sched.getTotalContextSwitches() == 1, "Total context switches must be 1");
+
+    // csrss.exe (TID 2) yields execution -> should switch to cmd.exe (TID 3)
+    nextTid = sched.yieldCurrentThread();
+    TEST_ASSERT(nextTid == 3, "Yield from TID 2 must switch to TID 3");
+    TEST_ASSERT(sched.getActiveTid() == 3, "Active TID must be 3");
+    TEST_ASSERT(thread2->state == UserThreadState::Yielded, "Thread 2 state must be Yielded");
+    TEST_ASSERT(thread3->state == UserThreadState::Running, "Thread 3 state must be Running");
+    TEST_ASSERT(thread3->contextSwitches == 1, "Thread 3 context switch count must be 1");
+    TEST_ASSERT(sched.getTotalContextSwitches() == 2, "Total context switches must be 2");
+
+    // cmd.exe (TID 3) yields execution -> should rotate back to smss.exe (TID 1)
+    nextTid = sched.yieldCurrentThread();
+    TEST_ASSERT(nextTid == 1, "Yield from TID 3 must rotate back to TID 1");
+    TEST_ASSERT(sched.getActiveTid() == 1, "Active TID must be 1");
+    TEST_ASSERT(thread1->state == UserThreadState::Running, "Thread 1 state must return to Running");
+    TEST_ASSERT(sched.getTotalContextSwitches() == 3, "Total context switches must be 3");
+
+    // 5. Test Thread Termination and Automatic Schedule Handover
+    bool termOk = sched.terminateCurrentThread(micant::NtStatus::Success);
+    TEST_ASSERT(termOk, "Thread 1 termination must succeed");
+    TEST_ASSERT(thread1->state == UserThreadState::Terminated, "Thread 1 must be Terminated");
+    TEST_ASSERT(sched.getActiveTid() == 2, "Terminating TID 1 must automatically hand over to TID 2");
+    TEST_ASSERT(thread2->state == UserThreadState::Running, "Thread 2 must now be Running");
+
+    std::cout << "  [Horizon 122 Track D User-Mode Thread Context Switcher & Scheduler (Unit #94)]\n"
+              << "    TrapFrame64: CS=0x" << std::hex << frame.cs << " | SS=0x" << frame.ss << " | RFLAGS=0x" << frame.rflags << std::dec << "\n"
+              << "    Scheduler: 3 Userland Threads (smss.exe TID 1, csrss.exe TID 2, cmd.exe TID 3)\n"
+              << "    Context Switching: 3 Cooperative Rotations via NtYieldExecution (SSN 0x46)\n"
+              << "    Lifecycle Handover: Clean Terminate -> Automatic Thread Switch Verified\n";
+
+    std::cout << "[TEST] Suite 338: Horizon 122 - Ring 3 Thread Context Switching & Scheduler PASSED.\n";
+}
 
