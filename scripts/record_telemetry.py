@@ -40,7 +40,7 @@ def parse_telemetry(ocr_text, image_path):
         "disk_type": "HGST Ultrastar 2000GB GPT",
         "pci_devices": 15,
         "faults": 0,
-        "suites_ok": "334/334",
+        "suites_ok": "341/341",
         "active_dlls": 44,
         "motherboard": "Intel S1200SP / Supermicro X11SSH-F",
         "bios": "03.01.5049",

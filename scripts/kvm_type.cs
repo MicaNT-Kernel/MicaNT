@@ -87,11 +87,21 @@ class Program {
             return;
         }
 
-        ShowWindow(jviewerHwnd, 9); // SW_RESTORE
-        SetForegroundWindow(jviewerHwnd);
-        Thread.Sleep(100);
+        bool doMaximize = false;
+        bool doScroll = false;
+        if (text.Contains("--maximize")) {
+            doMaximize = true;
+            text = text.Replace("--maximize", "").Trim();
+        }
+        if (text.Contains("--scroll")) {
+            doScroll = true;
+            text = text.Replace("--scroll", "").Trim();
+        }
 
-        // Click in the console area to ensure keyboard focus
+        ShowWindow(jviewerHwnd, doMaximize ? 3 : 9); // 3 = SW_MAXIMIZE
+        SetForegroundWindow(jviewerHwnd);
+        Thread.Sleep(200);
+
         RECT r;
         GetWindowRect(jviewerHwnd, out r);
         int clickX = r.Left + 500;
@@ -102,16 +112,35 @@ class Program {
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
         Thread.Sleep(150);
 
-        Console.WriteLine("Typing: " + text);
+        if (doScroll) {
+            // Scroll down in console area
+            for (int i = 0; i < 5; ++i) {
+                mouse_event(0x0800, 0, 0, unchecked((uint)-120), 0); // MOUSEEVENTF_WHEEL -120
+                Thread.Sleep(50);
+            }
+        }
+
+        if (string.IsNullOrEmpty(text)) {
+            Console.WriteLine("Window manipulated successfully.");
+            return;
+        }
+
+        // Replace literal \r, \n, \enter with actual control chars
+        text = text.Replace("\\r\\n", "\r").Replace("\\n", "\r").Replace("\\r", "\r");
+        if (!text.EndsWith("\r") && !text.EndsWith("\n")) {
+            text += "\r";
+        }
+
+        Console.WriteLine("Typing: " + text.TrimEnd());
 
         foreach (char c in text) {
             if (c == '\r' || c == '\n') {
                 byte vk = 0x0D; // VK_RETURN
                 byte scan = (byte)MapVirtualKey(vk, 0);
                 keybd_event(vk, scan, 0, 0);
-                Thread.Sleep(40);
+                Thread.Sleep(50);
                 keybd_event(vk, scan, KEYEVENTF_KEYUP, 0);
-                Thread.Sleep(80);
+                Thread.Sleep(100);
                 continue;
             }
 

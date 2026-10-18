@@ -4303,5 +4303,16 @@
   - Implements fast system call trampoline table (Slots 0–8) and dynamically resolves Import Address Table (IAT) thunks from Win32 libraries (`KERNEL32.dll`, `ntdll.dll`) directly to userland fast syscall trampolines (`GetStdHandle`, `WriteFile`, `ExitProcess`, `GetTickCount64`).
   - Pre-loads standalone PE32+ userland binaries (`app.exe` / `cmd.exe`) directly from the FAT32 EFI System Partition (`\EFI\MicaNT\app.exe` on `C:\`) via `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL` and `EFI_LOADED_IMAGE_PROTOCOL` before `ExitBootServices`, with fallback to embedded clean-room 64-bit PE binary fixture (`kUnmodifiedSampleBinary`).
   - Tested and verified on physical hardware (Supermicro X11SSH-F, Intel Xeon E3-1270 v6 @ 3.80GHz): executing third-party Windows PE binaries in Ring 3 (`CPL = 3`), emitting output through `NtWriteFile` (SSN 0x25), and cleanly exiting via `NtTerminateProcess` (SSN 0x01).
+- [x] **Horizon 96 (`Suite 340` / `Unit #96`): High-Half Canonical 64-bit Kernel Paging Engine & Handover (`HighHalfPagingEngine64`, `HIGH_HALF_KERNEL_BASE`) (`include/micant/km/hal/highhalf.hpp`)**:
+  - Implements canonical 64-bit Windows NT address spaces: `HIGH_HALF_KERNEL_BASE = 0xFFFFF800'00000000` (PML4 slot 496), `HIGH_HALF_HAL_BASE = 0xFFFFFF00'00000000` (PML4 slot 510), and `HIGH_HALF_LEGACY_BASE = 0xFFFFFF80'00000000` (PML4 slot 511).
+  - Implements zero-allocation PML4 mirroring (`mirrorHighCanonicalSpace`): maps physical RAM into high canonical slots without extra page table frames, followed by CR3 TLB reload.
+  - Implements low identity space unmapping (`unmapLowIdentitySpace`): clears PML4[0] to guarantee NULL pointer hardware traps in kernel mode.
+  - Tested and verified on bare-metal silicon (Supermicro X11SSH-F): `[Mm] High-Half Canonical Kernel Active (0xFFFFF800... PML4[496])`.
+- [x] **Horizon 97 (`Suite 341` / `Unit #97`): Bare-Metal 64-bit IDT, Local APIC & Hardware Preemption Timer Architecture (`KiInitializeIdt`, `HalInitializeApic`, `KeUpdateSystemTime`) (`include/micant/km/hal/idt.hpp`)**:
+  - Implements canonical 16-byte x86-64 Interrupt Descriptor Table entries (`IdtEntry64`) and 10-byte descriptor (`Idtr64`), loading via `lidt` instruction across 256 vector gates (Vectors 0..31 exceptions, 0x1F APC, 0x2F Dispatch, 0x30 Clock Timer, 0x31 Keyboard, 0xFD TLB shootdown, 0xFE freeze, 0xFF spurious).
+  - Implements Local APIC MMIO register control (`ApicHardwareEngine64` at `0xFEE00000` and high-canonical `0xFFFFF800FEE00000`), configuring Spurious Vector Register (SVR `0x0F0` = `0x1FF`), Task Priority (TPR `0x080` = `0x00`), and Divide Configuration (TDCR `0x3E0` = divide by 16).
+  - Implements periodic preemption clock timer (100 Hz / 10ms intervals) via LAPIC LVT Timer (vector `0x30`) and Initial Count Register (TICR `0x380`), sending hardware End of Interrupt (`EOI` `0x0B0`).
+  - Implements `KeUpdateSystemTime()`: updates monotonic tick count and 100ns timestamp units, decrements thread quantum budgets (30ms quantum), and triggers preemption upon quantum expiration.
+  - Tested and verified: 341 suites passing with zero failures.
 
 

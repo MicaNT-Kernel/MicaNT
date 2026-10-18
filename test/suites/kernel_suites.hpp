@@ -19654,4 +19654,265 @@ inline void Test_Horizon123_UserMode_PE32Plus_Binary_Loader_And_Execution() {
     std::cout << "[TEST] Suite 339: Horizon 123 - PE32+ Userland Binary Loader & Execution PASSED.\n";
 }
 
+void Test_Horizon124_HighHalf_Canonical_Kernel_Paging_And_Handover() {
+    using namespace micant::hal::highhalf;
+
+    std::cout << "\n[TEST] Suite 340: Horizon 124 - High-Half Canonical Kernel Paging Engine & Handover...\n";
+
+    // 1. Verify Canonical NT 64-bit Virtual Address Constants & PML4 Slot Alignments
+    TEST_ASSERT(HIGH_HALF_KERNEL_BASE == 0xFFFFF80000000000ULL, "HIGH_HALF_KERNEL_BASE must be 0xFFFFF800'00000000 (NTOSKRNL/HAL)");
+    TEST_ASSERT(HIGH_HALF_HAL_BASE == 0xFFFFFF0000000000ULL, "HIGH_HALF_HAL_BASE must be 0xFFFFFF00'00000000 (PML4[510])");
+    TEST_ASSERT(PML4_INDEX_KERNEL_BASE == 496, "PML4 index for HIGH_HALF_KERNEL_BASE must be 496");
+    TEST_ASSERT(PML4_INDEX_HAL == 510, "PML4 index for HIGH_HALF_HAL_BASE must be 510");
+    TEST_ASSERT(PML4_INDEX_LEGACY == 511, "PML4 index for HIGH_HALF_LEGACY_BASE must be 511");
+    TEST_ASSERT(PML4_INDEX_USER_BASE == 0, "PML4 index for userland/identity base must be 0");
+
+    // 2. Verify Canonical Address Bounds Verification
+    TEST_ASSERT(isHighCanonical(HIGH_HALF_KERNEL_BASE), "HIGH_HALF_KERNEL_BASE must be recognized as high canonical");
+    TEST_ASSERT(isHighCanonical(HIGH_HALF_HAL_BASE), "HIGH_HALF_HAL_BASE must be recognized as high canonical");
+    TEST_ASSERT(isHighCanonical(HIGH_HALF_LEGACY_BASE), "HIGH_HALF_LEGACY_BASE must be recognized as high canonical");
+    TEST_ASSERT(isHighCanonical(0xFFFFF80012345678ULL), "Kernel offset address must be recognized as high canonical");
+    TEST_ASSERT(!isHighCanonical(0x0000000010000000ULL), "Low physical address must NOT be high canonical");
+    TEST_ASSERT(!isHighCanonical(0x00007FFFFFFFFFFFULL), "User maximum address must NOT be high canonical");
+    TEST_ASSERT(!isHighCanonical(0x0000800000000000ULL), "Non-canonical hole address must NOT be high canonical");
+
+    // 3. Verify 4-Level Page Table 9-bit Index Extraction
+    TEST_ASSERT(getPml4Index(HIGH_HALF_KERNEL_BASE) == 496, "getPml4Index must return 496 for NT kernel base");
+    TEST_ASSERT(getPml4Index(HIGH_HALF_HAL_BASE) == 510, "getPml4Index must return 510 for HAL base");
+    TEST_ASSERT(getPml4Index(HIGH_HALF_LEGACY_BASE) == 511, "getPml4Index must return 511 for legacy base");
+    TEST_ASSERT(getPml4Index(0x0000000000000000ULL) == 0, "getPml4Index must return 0 for NULL address");
+
+    // Test multi-level breakdown with explicit bit fields
+    // PML4=496 (0x1F0), PDPT=12 (0x00C), PD=34 (0x022), PT=56 (0x038), Offset=0x789
+    uint64_t testVa = (496ULL << 39) | (12ULL << 30) | (34ULL << 21) | (56ULL << 12) | 0x789ULL;
+    testVa |= 0xFFFF000000000000ULL;
+    TEST_ASSERT(getPml4Index(testVa) == 496, "getPml4Index on testVa must yield 496");
+    TEST_ASSERT(getPdptIndex(testVa) == 12, "getPdptIndex on testVa must yield 12");
+    TEST_ASSERT(getPdIndex(testVa) == 34, "getPdIndex on testVa must yield 34");
+    TEST_ASSERT(getPtIndex(testVa) == 56, "getPtIndex on testVa must yield 56");
+
+    // 4. Verify Bi-directional Address Translation
+    uint64_t testPhys1 = 0x0000000000200000ULL; // 2MB
+    uint64_t testHighVa1 = toHighCanonical(testPhys1);
+    TEST_ASSERT(testHighVa1 == 0xFFFFF80000200000ULL, "toHighCanonical(2MB) must match 0xFFFFF80000200000");
+    TEST_ASSERT(toPhysical(testHighVa1) == testPhys1, "toPhysical must restore original 2MB physical address");
+
+    uint64_t testPhys2 = 0x00000007FFFF0000ULL; // ~32GB physical RAM frame
+    uint64_t testHighVa2 = toHighCanonical(testPhys2);
+    TEST_ASSERT(testHighVa2 == (HIGH_HALF_KERNEL_BASE | testPhys2), "toHighCanonical(32GB frame) must match offset");
+    TEST_ASSERT(toPhysical(testHighVa2) == testPhys2, "toPhysical must restore original 32GB physical address");
+
+    // 5. Verify High-Half Paging Mirroring Engine (Zero-Allocation Mirroring)
+    uint64_t fakePml4[512]{};
+    auto& engine = HighHalfPagingEngine64::get();
+    engine.reset();
+
+    // Mirroring should fail if low identity entry is not present
+    TEST_ASSERT(!engine.mirrorHighCanonicalSpace(fakePml4), "Mirroring should fail when PML4[0] is absent");
+
+    // Populate low identity entry with simulated PDPT reference (Present | Writable = 0x3)
+    fakePml4[PML4_INDEX_USER_BASE] = 0x0000000000105003ULL;
+    bool mirrorOk = engine.mirrorHighCanonicalSpace(fakePml4);
+    TEST_ASSERT(mirrorOk, "Mirroring must succeed when PML4[0] is present");
+
+    // Verify slots 496, 510, 511 are mapped to the exact same PDPT
+    TEST_ASSERT(fakePml4[PML4_INDEX_KERNEL_BASE] == fakePml4[PML4_INDEX_USER_BASE], "PML4[496] must match PML4[0]");
+    TEST_ASSERT(fakePml4[PML4_INDEX_HAL] == fakePml4[PML4_INDEX_USER_BASE], "PML4[510] must match PML4[0]");
+    TEST_ASSERT(fakePml4[PML4_INDEX_LEGACY] == fakePml4[PML4_INDEX_USER_BASE], "PML4[511] must match PML4[0]");
+    TEST_ASSERT(engine.getContext().highCanonicalActive, "Handover context must show high canonical active");
+
+    // 6. Verify Handover Context Frame Preparation
+    uint64_t kernelRipPhys = 0x0000000000100000ULL;
+    uint64_t kernelStackPhys = 0x0000000000800000ULL;
+    uint64_t lpbPhys = 0x0000000000500000ULL;
+    uint64_t cr3Val = 0x0000000000100000ULL;
+
+    bool prepOk = engine.prepareHandover(kernelRipPhys, kernelStackPhys, lpbPhys, cr3Val);
+    TEST_ASSERT(prepOk, "prepareHandover must succeed");
+
+    const auto& ctx = engine.getContext();
+    TEST_ASSERT(ctx.entryRip == toHighCanonical(kernelRipPhys), "Context entryRip must be high-canonical");
+    TEST_ASSERT(ctx.kernelStackTop == toHighCanonical(kernelStackPhys), "Context kernelStackTop must be high-canonical");
+    TEST_ASSERT(ctx.lpbHighVa == toHighCanonical(lpbPhys), "Context lpbHighVa must be high-canonical");
+    TEST_ASSERT(ctx.cr3Value == cr3Val, "Context cr3Value must match cr3");
+    TEST_ASSERT(ctx.transitionCount == 1, "Context transitionCount must equal 1");
+
+    // 7. Verify Low Identity Space Unmapping for Strict Trapping
+    bool unmapOk = engine.unmapLowIdentitySpace(fakePml4);
+    TEST_ASSERT(unmapOk, "unmapLowIdentitySpace must succeed");
+    TEST_ASSERT(fakePml4[PML4_INDEX_USER_BASE] == 0, "PML4[0] must be cleared for null-pointer guard");
+    TEST_ASSERT(engine.getContext().identityUnmapped, "Context must record identityUnmapped == true");
+    // High-half kernel entries must remain intact!
+    TEST_ASSERT(fakePml4[PML4_INDEX_KERNEL_BASE] == 0x0000000000105003ULL, "PML4[496] must remain intact after low unmap");
+    TEST_ASSERT(fakePml4[PML4_INDEX_HAL] == 0x0000000000105003ULL, "PML4[510] must remain intact after low unmap");
+
+    std::cout << "  [Horizon 124 Track D High-Half Canonical Kernel Paging Engine & Handover (Unit #96)]\n"
+              << "    Canonical Kernel Base: 0x" << std::hex << HIGH_HALF_KERNEL_BASE << " (PML4 Slot 496)\n"
+              << "    Canonical HAL Base:    0x" << HIGH_HALF_HAL_BASE << " (PML4 Slot 510)\n"
+              << "    Legacy High Base:      0x" << HIGH_HALF_LEGACY_BASE << " (PML4 Slot 511)\n"
+              << "    PML4 Mirroring: Slot 0 -> Slots [496, 510, 511] Zero-Allocation Active\n"
+              << "    Handover Context: Entry RIP=0x" << ctx.entryRip << " | Stack=0x" << ctx.kernelStackTop << "\n"
+              << "    Low Identity Unmap: PML4[0]=0 | High Canonical Inviolability Enforced OK\n"
+              << std::dec;
+
+    std::cout << "[TEST] Suite 340: Horizon 124 - High-Half Canonical Kernel Paging Engine & Handover PASSED.\n";
+}
+
+void Test_Horizon125_BareMetal_Idt_LocalApic_And_HardwarePreemptionTimer() {
+    using namespace micant::hal::idt;
+
+    std::cout << "\n[TEST] Suite 341: Horizon 125 - Bare-Metal IDT, Local APIC & Hardware Preemption Timer...\n";
+
+    // 1. Verify Canonical Vector Numbers
+    TEST_ASSERT(VECTOR_DIVIDE_BY_ZERO == 0x00, "VECTOR_DIVIDE_BY_ZERO must be 0x00");
+    TEST_ASSERT(VECTOR_DEBUG_EXCEPTION == 0x01, "VECTOR_DEBUG_EXCEPTION must be 0x01");
+    TEST_ASSERT(VECTOR_NMI == 0x02, "VECTOR_NMI must be 0x02");
+    TEST_ASSERT(VECTOR_BREAKPOINT == 0x03, "VECTOR_BREAKPOINT must be 0x03");
+    TEST_ASSERT(VECTOR_OVERFLOW == 0x04, "VECTOR_OVERFLOW must be 0x04");
+    TEST_ASSERT(VECTOR_DOUBLE_FAULT == 0x08, "VECTOR_DOUBLE_FAULT must be 0x08");
+    TEST_ASSERT(VECTOR_GENERAL_PROTECTION == 0x0D, "VECTOR_GENERAL_PROTECTION must be 0x0D");
+    TEST_ASSERT(VECTOR_PAGE_FAULT == 0x0E, "VECTOR_PAGE_FAULT must be 0x0E");
+    TEST_ASSERT(VECTOR_MACHINE_CHECK == 0x12, "VECTOR_MACHINE_CHECK must be 0x12");
+
+    TEST_ASSERT(VECTOR_APC == 0x1F, "VECTOR_APC must be 0x1F");
+    TEST_ASSERT(VECTOR_DISPATCH == 0x2F, "VECTOR_DISPATCH must be 0x2F");
+    TEST_ASSERT(VECTOR_CLOCK_TIMER == 0x30, "VECTOR_CLOCK_TIMER must be 0x30 (100 Hz Preemption)");
+    TEST_ASSERT(VECTOR_KEYBOARD == 0x31, "VECTOR_KEYBOARD must be 0x31 (PS/2 Hardware IRQ)");
+    TEST_ASSERT(VECTOR_TLB_SHOOTDOWN == 0xFD, "VECTOR_TLB_SHOOTDOWN must be 0xFD");
+    TEST_ASSERT(VECTOR_FREEZE == 0xFE, "VECTOR_FREEZE must be 0xFE");
+    TEST_ASSERT(VECTOR_SPURIOUS == 0xFF, "VECTOR_SPURIOUS must be 0xFF");
+
+    // 2. Verify 16-byte Hardware Gate Structure
+    TEST_ASSERT(sizeof(IdtEntry64) == 16, "IdtEntry64 must be exactly 16 bytes for x86-64 long mode");
+    TEST_ASSERT(sizeof(Idtr64) == 10, "Idtr64 must be exactly 10 bytes (2-byte limit + 8-byte base)");
+
+    IdtEntry64 gate{};
+    uint64_t handlerAddr = 0xFFFFF80000204060ULL;
+    gate.setGate(handlerAddr, 0x0010, 1, 0, false); // Kernel interrupt gate, IST 1
+
+    TEST_ASSERT(gate.isPresent(), "Gate must be present");
+    TEST_ASSERT(gate.getDpl() == 0, "Gate DPL must be 0");
+    TEST_ASSERT(!gate.isTrapGate(), "Gate must be Interrupt Gate (clears IF)");
+    TEST_ASSERT(gate.ist == 1, "Gate IST index must be 1");
+    TEST_ASSERT(gate.selector == 0x0010, "Gate selector must be 0x0010 (Ring 0 Code)");
+    TEST_ASSERT(gate.getHandlerRip() == handlerAddr, "Gate reconstructed RIP must match handler address");
+
+    // User-mode trap gate (e.g. INT 3 breakpoint)
+    IdtEntry64 trapGate{};
+    uint64_t trapAddr = 0xFFFFF80000305070ULL;
+    trapGate.setGate(trapAddr, 0x0010, 0, 3, true); // Ring 3 accessible trap gate
+    TEST_ASSERT(trapGate.isPresent(), "Trap gate must be present");
+    TEST_ASSERT(trapGate.getDpl() == 3, "Trap gate DPL must be 3 for user mode INT3 invocation");
+    TEST_ASSERT(trapGate.isTrapGate(), "Trap gate must be Trap Gate type");
+    TEST_ASSERT(trapGate.getHandlerRip() == trapAddr, "Trap gate RIP must match handler address");
+
+    // 3. Verify IDTR Configuration and Table Initialization
+    auto& engine = InterruptEngine64::get();
+    engine.reset();
+
+    uint64_t stubRip = 0xFFFFF80000100000ULL;
+    bool idtInitOk = engine.initializeIdt(stubRip);
+    TEST_ASSERT(idtInitOk, "initializeIdt must return true");
+    TEST_ASSERT(engine.isIdtLoaded(), "isIdtLoaded must return true");
+
+    const auto& idtr = engine.getIdtr();
+    TEST_ASSERT(idtr.limit == sizeof(IdtEntry64) * 256 - 1, "IDTR limit must cover all 256 gates (4095 bytes)");
+    TEST_ASSERT(idtr.base != 0, "IDTR base must point to valid IDT table memory");
+
+    // Verify all 256 entries are populated
+    for (size_t i = 0; i < 256; ++i) {
+        const auto& g = engine.getGate(static_cast<uint8_t>(i));
+        TEST_ASSERT(g.isPresent(), "All 256 gates must be present after initializeIdt");
+        TEST_ASSERT(g.getHandlerRip() == stubRip, "Default stub RIP must be mapped across all gates");
+        if (i == VECTOR_DOUBLE_FAULT) {
+            TEST_ASSERT(g.ist == 1, "Vector 8 (#DF) must use IST1");
+        } else if (i == VECTOR_BREAKPOINT || i == VECTOR_OVERFLOW) {
+            TEST_ASSERT(g.getDpl() == 3, "Vectors 3 and 4 must have DPL 3");
+        }
+    }
+
+    // 4. Verify Local APIC MMIO Base Addresses & Register Invariants
+    TEST_ASSERT(LAPIC_DEFAULT_PHYSICAL_BASE == 0xFEE00000ULL, "Default LAPIC physical base must be 0xFEE00000");
+    TEST_ASSERT(LAPIC_HIGH_CANONICAL_BASE == 0xFFFFF800FEE00000ULL, "LAPIC high canonical base must be 0xFFFFF800FEE00000");
+
+    // Test with simulated MMIO buffer
+    alignas(16) uint32_t fakeLapicRegs[1024]{};
+    uint64_t fakeLapicBase = reinterpret_cast<uint64_t>(fakeLapicRegs);
+
+    bool apicInitOk = engine.initializeLocalApic(fakeLapicBase);
+    TEST_ASSERT(apicInitOk, "initializeLocalApic must succeed");
+    TEST_ASSERT(engine.isApicInitialized(), "isApicInitialized must return true");
+    TEST_ASSERT(engine.getLapicBase() == fakeLapicBase, "getLapicBase must match configured address");
+
+    // Check SVR (Spurious Vector Register 0x0F0): bit 8 enable (0x100) + vector 0xFF
+    TEST_ASSERT((fakeLapicRegs[LAPIC_REG_SVR / 4] & 0x1FF) == 0x1FF, "SVR must have bit 8 (APIC enable) and vector 0xFF set");
+    // Check TPR (0x080): 0
+    TEST_ASSERT(fakeLapicRegs[LAPIC_REG_TPR / 4] == 0, "TPR must be 0 to accept all interrupt priorities");
+
+    // 5. Verify Periodic Preemption Timer (100 Hz = 10ms quantum)
+    bool timerOk = engine.configureTimer(100, 100000000); // 100 Hz with 100MHz bus clock
+    TEST_ASSERT(timerOk, "configureTimer must return true");
+    TEST_ASSERT(engine.isTimerActive(), "isTimerActive must return true");
+
+    // Check TDCR (0x3E0): divide by 16 = 0x03
+    TEST_ASSERT(fakeLapicRegs[LAPIC_REG_TDCR / 4] == 0x03, "TDCR must be configured to divide by 16 (0x03)");
+    // Check LVT Timer (0x320): Periodic bit 17 = 1, unmasked bit 16 = 0, vector = 0x30
+    uint32_t expectedLvt = (1U << 17) | VECTOR_CLOCK_TIMER;
+    TEST_ASSERT(fakeLapicRegs[LAPIC_REG_LVT_TIMER / 4] == expectedLvt, "LVT Timer must be Periodic and mapped to Vector 0x30");
+    // Initial count: (100,000,000 / 16) / 100 = 62,500
+    TEST_ASSERT(fakeLapicRegs[LAPIC_REG_TICR / 4] == 62500, "TICR must be programmed with 62,500 for 100 Hz @ 100MHz");
+
+    // 6. Verify EOI Transmission
+    fakeLapicRegs[LAPIC_REG_EOI / 4] = 0xDEADBEEF;
+    engine.sendEoi();
+    TEST_ASSERT(fakeLapicRegs[LAPIC_REG_EOI / 4] == 0, "sendEoi must write 0 to LAPIC EOI register (0x0B0)");
+
+    // 7. Verify KeUpdateSystemTime Preemptive Quantum Accounting
+    const auto& timeAcct = engine.getTimeAccounting();
+    TEST_ASSERT(timeAcct.tickCount == 0, "Initial tick count must be 0");
+    TEST_ASSERT(timeAcct.threadQuantumRemaining == 3, "Default thread quantum must be 3 ticks (30ms)");
+
+    // Tick 1 (10ms)
+    bool resched1 = engine.updateSystemTime();
+    TEST_ASSERT(!resched1, "Tick 1 must not trigger rescheduling (quantum remaining = 2)");
+    TEST_ASSERT(timeAcct.tickCount == 1, "Tick count must be 1");
+    TEST_ASSERT(timeAcct.systemTime100ns == 100000, "100ns time must be 100,000 (10ms)");
+    TEST_ASSERT(timeAcct.threadQuantumRemaining == 2, "Thread quantum must decrement to 2");
+
+    // Tick 2 (20ms)
+    bool resched2 = engine.updateSystemTime();
+    TEST_ASSERT(!resched2, "Tick 2 must not trigger rescheduling (quantum remaining = 1)");
+    TEST_ASSERT(timeAcct.tickCount == 2, "Tick count must be 2");
+    TEST_ASSERT(timeAcct.systemTime100ns == 200000, "100ns time must be 200,000 (20ms)");
+    TEST_ASSERT(timeAcct.threadQuantumRemaining == 1, "Thread quantum must decrement to 1");
+
+    // Tick 3 (30ms) -> Quantum Expired! Preemption triggered!
+    bool resched3 = engine.updateSystemTime();
+    TEST_ASSERT(resched3, "Tick 3 must trigger preemptive rescheduling (quantum expired)");
+    TEST_ASSERT(timeAcct.tickCount == 3, "Tick count must be 3");
+    TEST_ASSERT(timeAcct.systemTime100ns == 300000, "100ns time must be 300,000 (30ms)");
+    TEST_ASSERT(timeAcct.threadQuantumRemaining == 3, "Thread quantum must reset to 3 ticks");
+    TEST_ASSERT(timeAcct.contextSwitchesTriggered == 1, "Context switch count must increment to 1");
+
+    // 8. Verify Hardware IRQ Telemetry Counters
+    engine.recordKeyboardInterrupt();
+    engine.recordKeyboardInterrupt();
+    engine.recordSpuriousInterrupt();
+    TEST_ASSERT(timeAcct.clockInterruptCount == 3, "Clock interrupt count must be 3");
+    TEST_ASSERT(timeAcct.keyboardInterruptCount == 2, "Keyboard interrupt count must be 2");
+    TEST_ASSERT(timeAcct.spuriousInterruptCount == 1, "Spurious interrupt count must be 1");
+    TEST_ASSERT(timeAcct.totalInterruptCount == 6, "Total interrupt count must be 6 (3 clock + 2 kb + 1 spur)");
+
+    std::cout << "  [Horizon 125 Track D Bare-Metal IDT, Local APIC & Preemption Timer (Unit #97)]\n"
+              << "    IDTR Descriptor: Base=0x" << std::hex << idtr.base << " | Limit=" << std::dec << idtr.limit << " (256 Gates)\n"
+              << "    Local APIC MMIO: Base=0x" << std::hex << engine.getLapicBase() << " (SVR=0x1FF, TPR=0x00)\n"
+              << "    Preemption Timer: 100 Hz Periodic (Vector 0x30, InitialCount=62500, TDCR=Div16)\n"
+              << "    Time Accounting: Uptime=" << std::dec << (timeAcct.tickCount * 10) << "ms | Quantum=30ms | Switches=" << timeAcct.contextSwitchesTriggered << "\n"
+              << "    Hardware IRQs: Clock=" << timeAcct.clockInterruptCount << " | Keyboard=" << timeAcct.keyboardInterruptCount << " | Spurious=" << timeAcct.spuriousInterruptCount << "\n";
+
+    std::cout << "[TEST] Suite 341: Horizon 125 - Bare-Metal IDT, Local APIC & Hardware Preemption Timer PASSED.\n";
+}
+
+
+
 
