@@ -89,6 +89,7 @@ class Program {
 
         bool doMaximize = false;
         bool doScroll = false;
+        bool doTab = false;
         if (text.Contains("--maximize")) {
             doMaximize = true;
             text = text.Replace("--maximize", "").Trim();
@@ -96,6 +97,10 @@ class Program {
         if (text.Contains("--scroll")) {
             doScroll = true;
             text = text.Replace("--scroll", "").Trim();
+        }
+        if (text.Contains("--tab")) {
+            doTab = true;
+            text = text.Replace("--tab", "").Trim();
         }
 
         ShowWindow(jviewerHwnd, doMaximize ? 3 : 9); // 3 = SW_MAXIMIZE
@@ -118,6 +123,17 @@ class Program {
                 mouse_event(0x0800, 0, 0, unchecked((uint)-120), 0); // MOUSEEVENTF_WHEEL -120
                 Thread.Sleep(50);
             }
+        }
+
+        if (doTab) {
+            byte vk = 0x09; // VK_TAB
+            byte scan = 0x0F;
+            keybd_event(vk, scan, 0, 0);
+            Thread.Sleep(50);
+            keybd_event(vk, scan, KEYEVENTF_KEYUP, 0);
+            Thread.Sleep(100);
+            Console.WriteLine("Sent TAB key to JViewer.");
+            if (string.IsNullOrEmpty(text)) return;
         }
 
         if (string.IsNullOrEmpty(text)) {
