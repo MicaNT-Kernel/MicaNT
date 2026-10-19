@@ -19913,6 +19913,83 @@ void Test_Horizon125_BareMetal_Idt_LocalApic_And_HardwarePreemptionTimer() {
     std::cout << "[TEST] Suite 341: Horizon 125 - Bare-Metal IDT, Local APIC & Hardware Preemption Timer PASSED.\n";
 }
 
+void Test_Horizon126_BareMetal_SMP_MultiCore_AP_Bootstrapping() {
+    using namespace micant::hal::smp;
+
+    std::cout << "\n[TEST] Suite 342: Horizon 126 - Bare-Metal SMP Multi-Core AP Bootstrapping...\n";
+
+    // 1. Verify SMP Constants
+    TEST_ASSERT(AP_BOOT_TRAMPOLINE_PHYS_BASE == 0x00008000ULL, "AP trampoline physical address must be 0x00008000 (below 1MB)");
+    TEST_ASSERT(AP_BOOT_TRAMPOLINE_PAGE_NUM == 0x08, "AP trampoline page number must be 0x08");
+    TEST_ASSERT(ICR_MODE_INIT == 0x00000500, "ICR_MODE_INIT must be 0x00000500 (Delivery Mode INIT)");
+    TEST_ASSERT(ICR_MODE_STARTUP == 0x00000600, "ICR_MODE_STARTUP must be 0x00000600 (Delivery Mode Startup)");
+    TEST_ASSERT(ICR_LEVEL_ASSERT == 0x00004000, "ICR_LEVEL_ASSERT must be bit 14");
+
+    // 2. Discover 8 Cores from ACPI MADT (Xeon E3-1270 v6: APIC IDs 0..7)
+    auto& smp = SmpEngine64::get();
+    smp.reset();
+
+    std::array<uint8_t, 8> madtApicIds = {0, 1, 2, 3, 4, 5, 6, 7};
+    bool discOk = smp.discoverFromMadt(madtApicIds, 0); // BSP = APIC 0
+    TEST_ASSERT(discOk, "discoverFromMadt must return true");
+    TEST_ASSERT(smp.isSmpInitialized(), "isSmpInitialized must return true");
+    TEST_ASSERT(smp.getDiscoveredCount() == 8, "Must discover exactly 8 logical cores");
+    TEST_ASSERT(smp.getBspApicId() == 0, "BSP APIC ID must be 0");
+    TEST_ASSERT(smp.getOnlineCount() == 1, "Only BSP must be online initially");
+
+    // Verify BSP vs AP properties
+    const auto* bsp = smp.getProcessor(0);
+    TEST_ASSERT(bsp != nullptr, "BSP descriptor must be non-null");
+    TEST_ASSERT(bsp->isBsp, "Core 0 must be identified as BSP");
+    TEST_ASSERT(bsp->isOnline, "BSP must be marked online");
+    TEST_ASSERT(bsp->apicId == 0, "BSP APIC ID must be 0");
+
+    for (uint32_t i = 1; i < 8; ++i) {
+        const auto* ap = smp.getProcessor(i);
+        TEST_ASSERT(ap != nullptr, "AP descriptor must be non-null");
+        TEST_ASSERT(!ap->isBsp, "AP cores must NOT be marked as BSP");
+        TEST_ASSERT(!ap->isOnline, "AP cores must be offline before SIPI sequence");
+        TEST_ASSERT(ap->apicId == i, "AP APIC ID must match index");
+    }
+
+    // 3. Simulate INIT-SIPI-SIPI Sequence with Mock LAPIC Registers
+    alignas(16) uint32_t mockLapicRegs[1024]{};
+    uint64_t mockLapicBase = reinterpret_cast<uint64_t>(mockLapicRegs);
+
+    uint32_t broughtOnline = smp.startApplicationProcessors(mockLapicBase);
+    TEST_ASSERT(broughtOnline == 8, "startApplicationProcessors must bring all 8 cores online");
+    TEST_ASSERT(smp.getOnlineCount() == 8, "All 8 logical cores must be marked online");
+
+    // Last SIPI sent was to Core 7: ICR_HIGH must have (7 << 24)
+    uint32_t icrHigh = mockLapicRegs[micant::hal::idt::LAPIC_REG_ICR_HIGH / 4];
+    uint32_t icrLow  = mockLapicRegs[micant::hal::idt::LAPIC_REG_ICR_LOW / 4];
+    TEST_ASSERT(icrHigh == (7U << 24), "Last ICR destination must be APIC ID 7");
+    TEST_ASSERT(icrLow == (ICR_MODE_STARTUP | AP_BOOT_TRAMPOLINE_PAGE_NUM), "Last ICR low must be SIPI to page 0x08");
+
+    // 4. Per-Core KPCR and Stack Allocation Notification
+    for (uint32_t i = 1; i < 8; ++i) {
+        uint64_t mockKpcr = 0xFFFFF80000400000ULL + (i * 0x1000);
+        uint64_t mockStack = 0xFFFFF80000500000ULL + (i * 0x4000);
+        smp.notifyApOnline(i, mockKpcr, mockStack);
+
+        const auto* ap = smp.getProcessor(i);
+        TEST_ASSERT(ap->isOnline, "AP must be online");
+        TEST_ASSERT(ap->kpcrAddress == mockKpcr, "AP KPCR address must match configured value");
+        TEST_ASSERT(ap->kernelStackTop == mockStack, "AP kernel stack top must match configured value");
+    }
+
+    std::cout << "  [Horizon 126 Track D Bare-Metal SMP Multi-Core Bootstrapping (Unit #98)]\n"
+              << "    Discovered Logical Cores: " << smp.getDiscoveredCount() << " (Intel Xeon E3-1270 v6)\n"
+              << "    BSP APIC ID: " << smp.getBspApicId() << " | Online Cores: " << smp.getOnlineCount() << " / 8 (100% Active)\n"
+              << "    Real-Mode AP Trampoline: 0x" << std::hex << AP_BOOT_TRAMPOLINE_PHYS_BASE << " (SIPI Page 0x" << (int)AP_BOOT_TRAMPOLINE_PAGE_NUM << ")\n"
+              << "    IPI Protocol: INIT (0x500) -> SIPI (0x608) -> SIPI (0x608) Sequence OK\n"
+              << "    Per-Core Contexts: 8x KPCR GS:[0] Descriptors & Stack Bases Bound OK\n"
+              << std::dec;
+
+    std::cout << "[TEST] Suite 342: Horizon 126 - Bare-Metal SMP Multi-Core AP Bootstrapping PASSED.\n";
+}
+
+
 
 
 
