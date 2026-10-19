@@ -52,6 +52,7 @@
 #include "micant/km/hal/cpu.hpp"
 #include "micant/km/executive/usermode.hpp"
 #include "micant/km/hal/highhalf.hpp"
+#include "micant/km/executive/ntoskrnl_loader.hpp"
 #include "micant/ucrt/msvcrt.hpp"
 #include "micant/um/subsystems/winbase/advapi32.hpp"
 #include "micant/um/subsystems/winuser/user32.hpp"
@@ -382,7 +383,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite342")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite343")) {
+        RUN_TEST(Test_Horizon127_Standalone_Ntoskrnl_Native_PE32Plus_Loader_And_Bootloader_Handover);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite342") {
         RUN_TEST(Test_Horizon126_BareMetal_SMP_MultiCore_AP_Bootstrapping);
         return g_FailedTests;
     }
@@ -1646,6 +1651,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon124_HighHalf_Canonical_Kernel_Paging_And_Handover);
     RUN_TEST(Test_Horizon125_BareMetal_Idt_LocalApic_And_HardwarePreemptionTimer);
     RUN_TEST(Test_Horizon126_BareMetal_SMP_MultiCore_AP_Bootstrapping);
+    RUN_TEST(Test_Horizon127_Standalone_Ntoskrnl_Native_PE32Plus_Loader_And_Bootloader_Handover);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

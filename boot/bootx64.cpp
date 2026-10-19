@@ -16,6 +16,7 @@
 #include "micant/km/hal/highhalf.hpp"
 #include "micant/km/hal/idt.hpp"
 #include "micant/km/hal/smp.hpp"
+#include "micant/km/executive/ntoskrnl_loader.hpp"
 #include "../test/unmodified_fixture.hpp"
 #include <new>
 
@@ -1297,6 +1298,14 @@ alignas(4096) static uint8_t s_userPeFileBuffer[65536];
 static size_t s_userPeFileSize = 0;
 static bool s_userPeFileFromDisk = false;
 static micant::um::UserLoadedImageInfo s_loadedPeInfo{};
+
+// Standalone NT Kernel Executive (ntoskrnl.exe) Handover State
+alignas(4096) static uint8_t s_ntoskrnlFileBuffer[524288];
+alignas(4096) static uint8_t s_ntoskrnlImageBuffer[1048576];
+static size_t s_ntoskrnlFileSize = 0;
+static bool s_ntoskrnlLoadedFromDisk = false;
+static uint64_t s_ntoskrnlEntryPoint = 0;
+static micant::km::executive::NtoskrnlLoadedImageInfo s_loadedNtoskrnlInfo{};
 
 static bool s_ps2ShiftState = false;
 
@@ -5143,6 +5152,59 @@ extern "C" micant::uefi::EfiStatus EfiMain(
         }
     }
 
+    // 4a. Pre-load standalone NT Kernel Executive (ntoskrnl.exe) from FAT32 EFI System Partition
+    if (systemTable->bootServices) {
+        if (systemTable->conOut) {
+            systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Probing FAT32 volume for \\EFI\\MicaNT\\ntoskrnl.exe...\r\n");
+        }
+        micant::bootloader::UartSerial::print("[MicaNT Boot] Probing FAT32 volume for \\EFI\\MicaNT\\ntoskrnl.exe...\r\n");
+
+        size_t krnlBytes = loadFileFromEfiSystemPartition(
+            imageHandle,
+            systemTable->bootServices,
+            L"\\EFI\\MicaNT\\ntoskrnl.exe",
+            micant::bootloader::s_ntoskrnlFileBuffer,
+            sizeof(micant::bootloader::s_ntoskrnlFileBuffer)
+        );
+
+        if (krnlBytes == 0) {
+            krnlBytes = loadFileFromEfiSystemPartition(
+                imageHandle,
+                systemTable->bootServices,
+                L"EFI\\MicaNT\\ntoskrnl.exe",
+                micant::bootloader::s_ntoskrnlFileBuffer,
+                sizeof(micant::bootloader::s_ntoskrnlFileBuffer)
+            );
+        }
+
+        if (krnlBytes > 0) {
+            micant::bootloader::s_ntoskrnlFileSize = krnlBytes;
+            std::span<const uint8_t> rawKrnl(micant::bootloader::s_ntoskrnlFileBuffer, krnlBytes);
+            uint64_t targetBase = reinterpret_cast<uint64_t>(micant::bootloader::s_ntoskrnlImageBuffer);
+
+            micant::NtStatus st = micant::km::executive::NtoskrnlImageLoader64::loadAndMapKernelImage(
+                rawKrnl,
+                micant::bootloader::s_ntoskrnlImageBuffer,
+                sizeof(micant::bootloader::s_ntoskrnlImageBuffer),
+                targetBase,
+                micant::bootloader::s_loadedNtoskrnlInfo
+            );
+
+            if (st == micant::NtStatus::Success && micant::bootloader::s_loadedNtoskrnlInfo.headersValid) {
+                micant::bootloader::s_ntoskrnlEntryPoint = micant::bootloader::s_loadedNtoskrnlInfo.entryPointVa;
+                micant::bootloader::s_ntoskrnlLoadedFromDisk = true;
+                if (systemTable->conOut) {
+                    systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] Standalone ntoskrnl.exe loaded & mapped successfully!\r\n");
+                }
+                micant::bootloader::UartSerial::print("[MicaNT Boot] Preloaded \\EFI\\MicaNT\\ntoskrnl.exe from FAT32 ESP volume: ");
+                micant::bootloader::UartSerial::printDec(static_cast<uint32_t>(krnlBytes));
+                micant::bootloader::UartSerial::print(" bytes. EntryPoint: 0x");
+                micant::bootloader::UartSerial::printHex64(micant::bootloader::s_ntoskrnlEntryPoint);
+                micant::bootloader::UartSerial::print("\r\n");
+            }
+        }
+    }
+
     // 4b. Pre-load standalone PE32+ userland binary (app.exe) from FAT32 EFI System Partition
     if (systemTable->bootServices) {
         if (systemTable->conOut) {
@@ -5244,10 +5306,23 @@ extern "C" micant::uefi::EfiStatus EfiMain(
     }
 
     micant::bootloader::UartSerial::print("[MicaNT Boot] ExitBootServices SUCCESS! CPU now in pure 64-bit Long Mode.\r\n");
-    micant::bootloader::UartSerial::print("[MicaNT Boot] Handing execution to KiSystemStartup(&LPB) on bare silicon...\r\n\r\n");
 
-    // 7. True Bare-Metal Kernel Execution!
-    KiSystemStartup(const_cast<micant::boot::LoaderParameterBlock*>(&engine.getLpb()), nullptr, false);
+    if (micant::bootloader::s_ntoskrnlLoadedFromDisk && micant::bootloader::s_ntoskrnlEntryPoint != 0) {
+        micant::bootloader::UartSerial::print("[MicaNT Boot] Handing silicon control to ntoskrnl.exe!KiSystemStartup at 0x");
+        micant::bootloader::UartSerial::printHex64(micant::bootloader::s_ntoskrnlEntryPoint);
+        micant::bootloader::UartSerial::print("...\r\n\r\n");
+
+        using PfnKiSystemStartup = micant::NtStatus (*)(
+            micant::boot::LoaderParameterBlock* lpb,
+            const char* execCmd,
+            bool launchInteractive
+        );
+        auto pfnKernel = reinterpret_cast<PfnKiSystemStartup>(micant::bootloader::s_ntoskrnlEntryPoint);
+        pfnKernel(const_cast<micant::boot::LoaderParameterBlock*>(&engine.getLpb()), nullptr, false);
+    } else {
+        micant::bootloader::UartSerial::print("[MicaNT Boot] Fallback: Handing execution to KiSystemStartup(&LPB) on bare silicon...\r\n\r\n");
+        KiSystemStartup(const_cast<micant::boot::LoaderParameterBlock*>(&engine.getLpb()), nullptr, false);
+    }
 
     while (true) {
 #if defined(__x86_64__)

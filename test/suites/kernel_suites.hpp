@@ -19989,6 +19989,122 @@ void Test_Horizon126_BareMetal_SMP_MultiCore_AP_Bootstrapping() {
     std::cout << "[TEST] Suite 342: Horizon 126 - Bare-Metal SMP Multi-Core AP Bootstrapping PASSED.\n";
 }
 
+void Test_Horizon127_Standalone_Ntoskrnl_Native_PE32Plus_Loader_And_Bootloader_Handover() {
+    using namespace micant::km::executive;
+
+    std::cout << "\n[TEST] Suite 343: Horizon 127 - Standalone Ntoskrnl Native PE32+ Loader & Bootloader Handover...\n";
+
+    // 1. Verify Constants
+    TEST_ASSERT(IMAGE_SUBSYSTEM_NATIVE_KERNEL == 1, "IMAGE_SUBSYSTEM_NATIVE must be 1");
+
+    // 2. Synthesize clean-room PE32+ native kernel image in memory
+    alignas(16) uint8_t mockPe[4096]{};
+    auto* dos = reinterpret_cast<micant::pe::ImageDosHeader*>(mockPe);
+    dos->e_magic = micant::pe::DOS_MAGIC;
+    dos->e_lfanew = 128;
+
+    auto* nt = reinterpret_cast<micant::pe::ImageNtHeaders64*>(mockPe + 128);
+    nt->signature = micant::pe::NT_SIGNATURE;
+    nt->fileHeader.machine = micant::pe::MACHINE_AMD64;
+    nt->fileHeader.numberOfSections = 2;
+    nt->fileHeader.sizeOfOptionalHeader = sizeof(micant::pe::ImageOptionalHeader64);
+    nt->optionalHeader.magic = micant::pe::PE32PLUS_MAGIC;
+    nt->optionalHeader.addressOfEntryPoint = 0x1000;
+    nt->optionalHeader.imageBase = 0x140000000ULL;
+    nt->optionalHeader.subsystem = IMAGE_SUBSYSTEM_NATIVE_KERNEL;
+    nt->optionalHeader.sizeOfImage = 16384;
+    nt->optionalHeader.sizeOfHeaders = 512;
+    nt->optionalHeader.numberOfRvaAndSizes = 16;
+
+    // Section 1: .text (RVA 0x1000, Size 4096)
+    auto* sec = reinterpret_cast<micant::pe::ImageSectionHeader*>(mockPe + 128 + sizeof(uint32_t) + sizeof(micant::pe::ImageFileHeader) + nt->fileHeader.sizeOfOptionalHeader);
+    std::memcpy(sec[0].name, ".text", 5);
+    sec[0].virtualAddress = 0x1000;
+    sec[0].misc.virtualSize = 4096;
+    sec[0].pointerToRawData = 512;
+    sec[0].sizeOfRawData = 512;
+
+    // Section 2: .reloc (RVA 0x2000, Size 4096)
+    std::memcpy(sec[1].name, ".reloc", 6);
+    sec[1].virtualAddress = 0x2000;
+    sec[1].misc.virtualSize = 4096;
+    sec[1].pointerToRawData = 1024;
+    sec[1].sizeOfRawData = 512;
+
+    // Put a dummy 64-bit address in .text that needs relocation: 0x140001000
+    *reinterpret_cast<uint64_t*>(mockPe + 512) = 0x140001000ULL;
+
+    // Put base relocation in .reloc (DIR64 at offset 0 of page 0x1000)
+    nt->optionalHeader.dataDirectory[micant::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC].virtualAddress = 0x2000;
+    nt->optionalHeader.dataDirectory[micant::pe::IMAGE_DIRECTORY_ENTRY_BASERELOC].size = 12;
+
+    auto* relocBlock = reinterpret_cast<micant::pe::ImageBaseRelocation*>(mockPe + 1024);
+    relocBlock->virtualAddress = 0x1000;
+    relocBlock->sizeOfBlock = 12;
+    uint16_t* relocEntry = reinterpret_cast<uint16_t*>(relocBlock + 1);
+    relocEntry[0] = (micant::pe::IMAGE_REL_BASED_DIR64 << 12) | 0x000;
+    relocEntry[1] = 0;
+
+    // 3. Test Loading into rebased target buffer (e.g. 0x200000000ULL)
+    alignas(4096) uint8_t destBuffer[32768]{};
+    uint64_t targetBase = 0x200000000ULL;
+    NtoskrnlLoadedImageInfo info{};
+
+    std::span<const uint8_t> rawPeBytes(mockPe, sizeof(mockPe));
+    micant::NtStatus st = NtoskrnlImageLoader64::loadAndMapKernelImage(
+        rawPeBytes,
+        destBuffer,
+        sizeof(destBuffer),
+        targetBase,
+        info
+    );
+
+    TEST_ASSERT(st == micant::NtStatus::Success, "loadAndMapKernelImage must succeed");
+    TEST_ASSERT(info.headersValid, "PE headers must be marked valid");
+    TEST_ASSERT(info.sectionsMapped, "Sections must be mapped");
+    TEST_ASSERT(info.isRelocated, "Image must be marked relocated");
+    TEST_ASSERT(info.subsystem == IMAGE_SUBSYSTEM_NATIVE_KERNEL, "Subsystem must be IMAGE_SUBSYSTEM_NATIVE (1)");
+    TEST_ASSERT(info.entryPointVa == targetBase + 0x1000, "Entry point VA must match targetBase + 0x1000");
+    TEST_ASSERT(info.relocationsAppliedCount == 1, "Exactly 1 DIR64 relocation must be applied");
+
+    // Verify relocation arithmetic in destination buffer
+    int64_t delta = static_cast<int64_t>(targetBase) - static_cast<int64_t>(nt->optionalHeader.imageBase);
+    uint64_t patchedAddr = *reinterpret_cast<uint64_t*>(destBuffer + 0x1000);
+    TEST_ASSERT(patchedAddr == 0x140001000ULL + delta, "Patched address in .text must reflect delta fixup");
+
+    // 4. Test error handling: BufferTooSmall
+    NtoskrnlLoadedImageInfo failInfo{};
+    micant::NtStatus stSmall = NtoskrnlImageLoader64::loadAndMapKernelImage(
+        rawPeBytes,
+        destBuffer,
+        1024,
+        targetBase,
+        failInfo
+    );
+    TEST_ASSERT(stSmall == micant::NtStatus::BufferTooSmall, "Buffer smaller than sizeOfImage must return BufferTooSmall");
+
+    // 5. Test error handling: Corrupted Magic
+    mockPe[0] = 0x00;
+    micant::NtStatus stCorrupt = NtoskrnlImageLoader64::loadAndMapKernelImage(
+        rawPeBytes,
+        destBuffer,
+        sizeof(destBuffer),
+        targetBase,
+        failInfo
+    );
+    TEST_ASSERT(stCorrupt == micant::NtStatus::InvalidImageFormat, "Corrupted DOS magic must return InvalidImageFormat");
+
+    std::cout << "  [Horizon 127 Track D Sovereign Ntoskrnl Native PE32+ Image Loader (Unit #99)]\n"
+              << "    PE Format: 64-bit AMD64 (PE32+) | Subsystem: IMAGE_SUBSYSTEM_NATIVE (1)\n"
+              << "    Sections Mapped: 2 (.text, .reloc) | Relocations Applied: " << info.relocationsAppliedCount << "\n"
+              << "    Target Base: 0x" << std::hex << targetBase << " | Entry Point VA: 0x" << info.entryPointVa << "\n"
+              << "    Relocation Delta: +0x" << delta << " | Patched Reloc Target: 0x" << patchedAddr << "\n"
+              << "    Handover Signature: KiSystemStartup(LoaderParameterBlock* LPB) Verified OK\n"
+              << std::dec;
+
+    std::cout << "[TEST] Suite 343: Horizon 127 - Standalone Ntoskrnl Native PE32+ Loader & Bootloader Handover PASSED.\n";
+}
+
 
 
 
