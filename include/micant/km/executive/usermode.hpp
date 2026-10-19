@@ -26,6 +26,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/hal/cpu.hpp"
+#include "micant/km/hal/bootvid.hpp"
 #include "micant/um/native/pe.hpp"
 
 namespace micant::um {
@@ -196,6 +197,31 @@ struct UserProcessContext64 {
     bool             tebVerifiedByR3{false};
 };
 
+// ----------------------------------------------------------------------------
+// Win32k GDI / Framebuffer Graphics System Service Structures (Ring 3 <-> Ring 0)
+// ----------------------------------------------------------------------------
+#pragma pack(push, 1)
+struct UserVideoInfo64 {
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t pitch{0};        // In pixels
+    uint32_t bpp{32};         // 32-bit color
+    uint32_t pixelFormat{1};  // 1 = BGRA, 0 = RGBA
+    uint32_t reserved{0};     // 64-bit alignment padding
+    uint64_t physicalBase{0}; // Physical or mapped VRAM base
+};
+
+struct UserPresentSurfaceParams64 {
+    uint64_t surfaceBufferVa{0}; // Userland 32-bpp BGRA buffer pointer
+    uint32_t dstX{0};
+    uint32_t dstY{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t pitch{0};           // Userland buffer pitch in pixels (0 = width)
+    uint32_t reserved{0};        // 64-bit alignment padding
+};
+#pragma pack(pop)
+
 // ============================================================================
 // 3. System Service Descriptor Table (SSDT) & Fast Syscall Engine
 // ============================================================================
@@ -207,6 +233,8 @@ inline constexpr uint32_t SSN_NT_WRITE_FILE               = 0x0025; // Console /
 inline constexpr uint32_t SSN_NT_ALLOCATE_VIRTUAL_MEMORY  = 0x0055; // Userland Heap / Stack expansion
 inline constexpr uint32_t SSN_NT_CLOSE                    = 0x001E; // Handle close
 inline constexpr uint32_t SSN_NT_YIELD_EXECUTION          = 0x0046; // Cooperative CPU yield
+inline constexpr uint32_t SSN_NT_GDI_GET_VIDEO_INFO       = 0x0080; // Query screen dimensions & framebuffer format
+inline constexpr uint32_t SSN_NT_GDI_PRESENT_SURFACE      = 0x0081; // Scanline burst blit to physical VRAM
 
 struct SsdtEntry {
     uint32_t    ssn{0};
@@ -217,7 +245,7 @@ struct SsdtEntry {
 
 class SsdtTable {
 private:
-    std::array<SsdtEntry, 16> m_entries{};
+    std::array<SsdtEntry, 32> m_entries{};
     size_t m_entryCount{0};
 
 public:
@@ -229,6 +257,8 @@ public:
         addEntry(SSN_NT_ALLOCATE_VIRTUAL_MEMORY, "NtAllocateVirtualMemory", 6);
         addEntry(SSN_NT_CLOSE, "NtClose", 1);
         addEntry(SSN_NT_YIELD_EXECUTION, "NtYieldExecution", 0);
+        addEntry(SSN_NT_GDI_GET_VIDEO_INFO, "NtGdiGetVideoInfo", 1);
+        addEntry(SSN_NT_GDI_PRESENT_SURFACE, "NtGdiPresentSurface", 1);
     }
 
     constexpr void addEntry(uint32_t ssn, const char* name, uint32_t argCount) noexcept {
@@ -273,6 +303,9 @@ private:
     uint64_t  m_totalSyscallsDispatched{0};
     uint64_t  m_totalProcessesSpawned{0};
     uint64_t  m_totalProcessesTerminated{0};
+    bootvid::BootVideoDriver* m_videoDriver{nullptr};
+    uint64_t  m_totalFramesPresented{0};
+    uint64_t  m_totalPixelsBlitted{0};
 
 public:
     static UserProcessManager64& get() noexcept {
@@ -291,6 +324,8 @@ public:
         m_totalSyscallsDispatched = 0;
         m_totalProcessesSpawned = 0;
         m_totalProcessesTerminated = 0;
+        m_totalFramesPresented = 0;
+        m_totalPixelsBlitted = 0;
     }
 
     [[nodiscard]] UserProcessContext64* createProcess(
@@ -453,10 +488,71 @@ public:
                 return micant::NtStatus::Success;
             }
 
+            case SSN_NT_GDI_GET_VIDEO_INFO: {
+                // arg1: pointer to UserVideoInfo64
+                if (arg1 == 0) return micant::NtStatus::InvalidParameter;
+                micant::NtStatus probe = ProbeUserMemory(reinterpret_cast<void*>(arg1), sizeof(UserVideoInfo64), sizeof(uint32_t));
+                if (probe != micant::NtStatus::Success) return probe;
+
+                auto* info = reinterpret_cast<UserVideoInfo64*>(arg1);
+                if (m_videoDriver && m_videoDriver->isInitialized()) {
+                    info->width = m_videoDriver->getWidth();
+                    info->height = m_videoDriver->getHeight();
+                    info->pitch = m_videoDriver->getPitch();
+                    info->bpp = 32;
+                    info->pixelFormat = m_videoDriver->getPixelFormat();
+                    info->physicalBase = reinterpret_cast<uint64_t>(m_videoDriver->getRawBuffer());
+                } else {
+                    info->width = 1024;
+                    info->height = 768;
+                    info->pitch = 1024;
+                    info->bpp = 32;
+                    info->pixelFormat = 1;
+                    info->physicalBase = 0;
+                }
+                return micant::NtStatus::Success;
+            }
+
+            case SSN_NT_GDI_PRESENT_SURFACE: {
+                // arg1: pointer to UserPresentSurfaceParams64
+                if (arg1 == 0) return micant::NtStatus::InvalidParameter;
+                micant::NtStatus probe = ProbeUserMemory(reinterpret_cast<void*>(arg1), sizeof(UserPresentSurfaceParams64), sizeof(uint32_t));
+                if (probe != micant::NtStatus::Success) return probe;
+
+                auto* params = reinterpret_cast<UserPresentSurfaceParams64*>(arg1);
+                if (params->surfaceBufferVa == 0 || params->width == 0 || params->height == 0) {
+                    return micant::NtStatus::InvalidParameter;
+                }
+
+                uint32_t sp = (params->pitch > 0) ? params->pitch : params->width;
+                size_t bufferBytes = static_cast<size_t>(sp) * params->height * sizeof(uint32_t);
+                micant::NtStatus bufProbe = ProbeUserMemory(reinterpret_cast<void*>(params->surfaceBufferVa), bufferBytes, sizeof(uint32_t));
+                if (bufProbe != micant::NtStatus::Success) return bufProbe;
+
+                if (m_videoDriver && m_videoDriver->isInitialized()) {
+                    m_videoDriver->blit(
+                        params->dstX,
+                        params->dstY,
+                        params->width,
+                        params->height,
+                        reinterpret_cast<const uint32_t*>(params->surfaceBufferVa),
+                        params->pitch
+                    );
+                }
+                m_totalFramesPresented++;
+                m_totalPixelsBlitted += (static_cast<uint64_t>(params->width) * params->height);
+                return micant::NtStatus::Success;
+            }
+
             default:
                 return micant::NtStatus::NotImplemented;
         }
     }
+
+    void setVideoDriver(bootvid::BootVideoDriver* driver) noexcept { m_videoDriver = driver; }
+    [[nodiscard]] bootvid::BootVideoDriver* getVideoDriver() const noexcept { return m_videoDriver; }
+    [[nodiscard]] uint64_t getTotalFramesPresented() const noexcept { return m_totalFramesPresented; }
+    [[nodiscard]] uint64_t getTotalPixelsBlitted() const noexcept { return m_totalPixelsBlitted; }
 
     [[nodiscard]] const SsdtTable& getSsdt() const noexcept { return m_ssdt; }
     [[nodiscard]] uint64_t getTotalSyscallsDispatched() const noexcept { return m_totalSyscallsDispatched; }

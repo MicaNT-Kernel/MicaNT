@@ -20105,6 +20105,157 @@ void Test_Horizon127_Standalone_Ntoskrnl_Native_PE32Plus_Loader_And_Bootloader_H
     std::cout << "[TEST] Suite 343: Horizon 127 - Standalone Ntoskrnl Native PE32+ Loader & Bootloader Handover PASSED.\n";
 }
 
+inline void Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter_And_GdiPresentPipeline() {
+    std::cout << "\n[TEST] Suite 344: Horizon 128 - Kernel Graphics GOP Framebuffer, Userland Blitter & GDI Present (Unit #100)...\n";
+
+    using namespace micant::um;
+    using namespace micant::bootvid;
+
+    // 1. Structure Sizes and Alignment
+    TEST_ASSERT(sizeof(UserVideoInfo64) == 32, "UserVideoInfo64 size must be 32 bytes");
+    TEST_ASSERT(sizeof(UserPresentSurfaceParams64) == 32, "UserPresentSurfaceParams64 size must be 32 bytes");
+
+    // 2. Setup Virtual GOP Linear Framebuffer (1024x768 @ 32-bpp BGRA)
+    BootVideoDriver videoDriver;
+    bool initOk = videoDriver.initializeVirtual(1024, 768);
+    TEST_ASSERT(initOk, "BootVideoDriver virtual 1024x768 initialization must succeed");
+    TEST_ASSERT(videoDriver.getWidth() == 1024, "Width must be 1024");
+    TEST_ASSERT(videoDriver.getHeight() == 768, "Height must be 768");
+    TEST_ASSERT(videoDriver.getPitch() == 1024, "Pitch must be 1024");
+    TEST_ASSERT(videoDriver.getPixelFormat() == 1, "Pixel format must be BGRA (1)");
+
+    // Initial clear with dark slate background
+    videoDriver.clear(Color{14, 20, 32});
+    Color c0 = videoDriver.getPixel(100, 100);
+    TEST_ASSERT(c0.r == 14 && c0.g == 20 && c0.b == 32, "Virtual VRAM must match initial clear color");
+
+    // 3. Bind Video Driver to UserProcessManager64
+    auto& pm = UserProcessManager64::get();
+    pm.reset();
+    pm.setVideoDriver(&videoDriver);
+    TEST_ASSERT(pm.getVideoDriver() == &videoDriver, "UserProcessManager64 must hold active videoDriver pointer");
+    TEST_ASSERT(pm.getTotalFramesPresented() == 0, "Initial frames presented count must be 0");
+    TEST_ASSERT(pm.getTotalPixelsBlitted() == 0, "Initial pixels blitted count must be 0");
+
+    // Register active user process (e.g. surshell.exe PID 1100)
+    UserProcessContext64* shellProc = pm.createProcess(
+        "surshell.exe", 1100, 680,
+        0x00007FF640001000ULL, 65536,
+        0x000000E040100000ULL, 65536,
+        0x00007FFD40000000ULL, 0x00007FFD40010000ULL
+    );
+    TEST_ASSERT(shellProc != nullptr, "surshell.exe user process creation must succeed");
+    pm.setActivePid(1100);
+
+    // 4. Test SSDT Entries for Win32k GDI Subsystem
+    const auto& ssdt = pm.getSsdt();
+    TEST_ASSERT(ssdt.find(SSN_NT_GDI_GET_VIDEO_INFO) != nullptr, "SSDT must include NtGdiGetVideoInfo (0x0080)");
+    TEST_ASSERT(ssdt.find(SSN_NT_GDI_PRESENT_SURFACE) != nullptr, "SSDT must include NtGdiPresentSurface (0x0081)");
+
+    // 5. Test NtGdiGetVideoInfo Syscall (SSN 0x0080)
+    UserVideoInfo64 videoInfo{};
+    micant::NtStatus infoStat = pm.dispatchSyscall(
+        SSN_NT_GDI_GET_VIDEO_INFO,
+        reinterpret_cast<uint64_t>(&videoInfo),
+        0, 0, 0,
+        3, 0x0033
+    );
+    TEST_ASSERT(infoStat == micant::NtStatus::Success, "NtGdiGetVideoInfo must return STATUS_SUCCESS");
+    TEST_ASSERT(videoInfo.width == 1024, "Queried width must match 1024");
+    TEST_ASSERT(videoInfo.height == 768, "Queried height must match 768");
+    TEST_ASSERT(videoInfo.pitch == 1024, "Queried pitch must match 1024");
+    TEST_ASSERT(videoInfo.bpp == 32, "Queried bpp must be 32");
+    TEST_ASSERT(videoInfo.pixelFormat == 1, "Queried pixelFormat must be 1 (BGRA)");
+
+    // 6. Test NtGdiPresentSurface Syscall (SSN 0x0081) - Render SurShell Island Dock
+    // Create offscreen 32-bpp BGRA userland surface: 400x48 pixels
+    constexpr uint32_t surfW = 400;
+    constexpr uint32_t surfH = 48;
+    std::vector<uint32_t> userSurface(surfW * surfH);
+
+    // Fill surface with SurShell Island Dock background (#121928, BGRA: B=0x28, G=0x19, R=0x12, A=0xFF)
+    uint32_t dockBgra = (0xFFU << 24) | (0x12U << 16) | (0x19U << 8) | 0x28U;
+    std::fill(userSurface.begin(), userSurface.end(), dockBgra);
+
+    // Draw Barrer Cyan start emblem (#00D4FF, BGRA: B=0xFF, G=0xD4, R=0x00, A=0xFF) on first 32x32 block
+    uint32_t cyanBgra = (0xFFU << 24) | (0x00U << 16) | (0xD4U << 8) | 0xFFU;
+    for (uint32_t y = 8; y < 40; ++y) {
+        for (uint32_t x = 8; x < 40; ++x) {
+            userSurface[y * surfW + x] = cyanBgra;
+        }
+    }
+
+    // Present surface onto display at centered coordinates (dstX=312, dstY=700)
+    UserPresentSurfaceParams64 presentParams{};
+    presentParams.surfaceBufferVa = reinterpret_cast<uint64_t>(userSurface.data());
+    presentParams.dstX = 312;
+    presentParams.dstY = 700;
+    presentParams.width = surfW;
+    presentParams.height = surfH;
+    presentParams.pitch = surfW;
+
+    micant::NtStatus presentStat = pm.dispatchSyscall(
+        SSN_NT_GDI_PRESENT_SURFACE,
+        reinterpret_cast<uint64_t>(&presentParams),
+        0, 0, 0,
+        3, 0x0033
+    );
+    TEST_ASSERT(presentStat == micant::NtStatus::Success, "NtGdiPresentSurface must return STATUS_SUCCESS");
+    TEST_ASSERT(pm.getTotalFramesPresented() == 1, "Total frames presented must be 1");
+    TEST_ASSERT(pm.getTotalPixelsBlitted() == (surfW * surfH), "Total pixels blitted must equal surfW * surfH");
+
+    // 7. Verify Bit-Exact Pixels in Virtual VRAM
+    // Dock body pixel check at (312 + 100, 700 + 20)
+    Color dockPix = videoDriver.getPixel(412, 720);
+    TEST_ASSERT(dockPix.r == 0x12 && dockPix.g == 0x19 && dockPix.b == 0x28, "VRAM pixel must match SurShell Island Dock color");
+
+    // Cyan Start Button pixel check at (312 + 20, 700 + 20)
+    Color cyanPix = videoDriver.getPixel(332, 720);
+    TEST_ASSERT(cyanPix.r == 0x00 && cyanPix.g == 0xD4 && cyanPix.b == 0xFF, "VRAM pixel must match Barrer Cyan Start Button color");
+
+    // Outside dock region pixel check (untouched background)
+    Color bgPix = videoDriver.getPixel(100, 100);
+    TEST_ASSERT(bgPix.r == 14 && bgPix.g == 20 && bgPix.b == 32, "Outside VRAM region must remain unmodified");
+
+    // 8. Memory Probing and Security Traps
+    // Invalid/Null param pointer trap
+    micant::NtStatus nullParamStat = pm.dispatchSyscall(
+        SSN_NT_GDI_PRESENT_SURFACE,
+        0,
+        0, 0, 0, 3, 0x0033
+    );
+    TEST_ASSERT(nullParamStat == micant::NtStatus::InvalidParameter, "Null params pointer must return InvalidParameter");
+
+    // Null surface buffer trap
+    UserPresentSurfaceParams64 badBufParams = presentParams;
+    badBufParams.surfaceBufferVa = 0;
+    micant::NtStatus badBufStat = pm.dispatchSyscall(
+        SSN_NT_GDI_PRESENT_SURFACE,
+        reinterpret_cast<uint64_t>(&badBufParams),
+        0, 0, 0, 3, 0x0033
+    );
+    TEST_ASSERT(badBufStat == micant::NtStatus::InvalidParameter, "Null surface buffer VA must return InvalidParameter");
+
+    // Out-of-bounds kernel memory probe trap (userland attempting to read kernel address 0xFFFFF800'00000000)
+    UserPresentSurfaceParams64 probeAttackParams = presentParams;
+    probeAttackParams.surfaceBufferVa = 0xFFFFF80000000000ULL;
+    micant::NtStatus probeAttackStat = pm.dispatchSyscall(
+        SSN_NT_GDI_PRESENT_SURFACE,
+        reinterpret_cast<uint64_t>(&probeAttackParams),
+        0, 0, 0, 3, 0x0033
+    );
+    TEST_ASSERT(probeAttackStat == micant::NtStatus::AccessViolation, "Userland passing kernel VA must return AccessViolation trap");
+
+    std::cout << "  [Horizon 128 Track D Sovereign GDI Framebuffer Handover & Present Pipeline (Unit #100)]\n"
+              << "    GOP Resolution: " << videoInfo.width << "x" << videoInfo.height << " (" << videoInfo.bpp << "-bpp BGRA)\n"
+              << "    SSDT System Services: NtGdiGetVideoInfo (0x0080), NtGdiPresentSurface (0x0081)\n"
+              << "    SurShell Floating Dock Blitted: " << surfW << "x" << surfH << " @ (" << presentParams.dstX << ", " << presentParams.dstY << ")\n"
+              << "    Hardware Color Fidelity: Barrer Cyan (#00D4FF) & Carbon Slate (#121928) Bit-Exact Verified\n"
+              << "    Security Probes: NullPointer & Kernel Space Probe Traps Verified OK\n";
+
+    std::cout << "[TEST] Suite 344: Horizon 128 - Kernel Graphics GOP Framebuffer, Userland Blitter & GDI Present PASSED.\n";
+}
+
 
 
 

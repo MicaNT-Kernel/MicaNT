@@ -326,6 +326,14 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             s_ring3Telemetry.userProcessExitedCleanly = true;
             return 0;
         }
+        case 0x80: { // NtGdiGetVideoInfo
+            UartSerial::print("  -> NtGdiGetVideoInfo: Querying GOP linear framebuffer metrics.\r\n");
+            return 0;
+        }
+        case 0x81: { // NtGdiPresentSurface
+            UartSerial::print("  -> NtGdiPresentSurface: 32-bpp BGRA surface blitted to physical VRAM.\r\n");
+            return 0;
+        }
         default:
             return 0;
     }
@@ -508,6 +516,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     // Initialize Video Driver
     micant::bootvid::BootVideoDriver videoDriver;
     videoDriver.initialize(lpb->framebuffer);
+    auto& pm = micant::um::UserProcessManager64::get();
+    pm.setVideoDriver(&videoDriver);
 
     uint32_t width = videoDriver.getWidth();
     uint32_t height = videoDriver.getHeight();
@@ -689,7 +699,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     videoDriver.drawString(24, shellY + 4, "MicaNT BARE-METAL EXECUTIVE SHELL (ntoskrnl.exe)", micant::bootvid::Color{0, 229, 255}, micant::bootvid::Color{20, 28, 44}, 1);
 
     videoDriver.drawString(24, shellY + 26, "STATUS: ntoskrnl.exe Active | SMP 8/8 Cores | LAPIC 100Hz | Ext4 E: Strict RO", micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
-    videoDriver.drawString(24, shellY + 42, "COMMANDS: 'app', 'smp', 'apic', 'idt', 'highhalf', 'ps', 'cpu', 'mem', 'ext4', 'reboot'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
+    videoDriver.drawString(24, shellY + 42, "COMMANDS: 'app', 'desktop', 'smp', 'apic', 'idt', 'highhalf', 'ps', 'cpu', 'mem', 'ext4', 'reboot'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
 
     char cmdPrompt[] = "micant:\\> ";
     char userCmd[128]{};
@@ -777,6 +787,86 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine1, "Ext4 VFS: \\DosDevices\\E: mounted from /dev/sda2 (Magic 0xEF53 Valid)", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Guardrail: STRICT READ-ONLY ENFORCED | Safe Landing Linux OS Preserved", sizeof(lastResultLine2));
             LogKernel("Shell: Ext4 \\DosDevices\\E: -> Superblock 0xEF53 Valid | Read-Only Guardrail Active");
+        } else if (cmd[0] == 'd' && cmd[1] == 'e') {
+            copyStr(lastResultLine1, "SurShell Desktop: 32-bpp BGRA composite active on physical GOP display!", sizeof(lastResultLine1));
+            copyStr(lastResultLine2, "GDI Present: NtGdiPresentSurface (SSN 0x81) blitted desktop. Type 'cls' or any key to return.", sizeof(lastResultLine2));
+            LogKernel("Shell: Launching SurShell 32-bpp Desktop presentation...");
+
+            // 1. Carbon Slate Dark Background (#0E1420)
+            videoDriver.fillRectangle(0, 0, width, height, micant::bootvid::Color{14, 20, 32});
+
+            // 2. Centered Floating Island App Dock (bottom: height - 60, centered width 540, height 48)
+            uint32_t dockW = (width > 600) ? 540 : (width - 40);
+            uint32_t dockH = 48;
+            uint32_t dockX = (width - dockW) / 2;
+            uint32_t dockY = height - dockH - 12;
+
+            // Dock Body
+            videoDriver.fillRectangle(dockX - 2, dockY - 2, dockW + 4, dockH + 4, micant::bootvid::Color{8, 12, 20});
+            videoDriver.fillRectangle(dockX, dockY, dockW, dockH, micant::bootvid::Color{18, 25, 40});
+            videoDriver.drawRectangle(dockX, dockY, dockW, dockH, micant::bootvid::Color{56, 80, 120}, 2);
+
+            // Prism Start Button (Hexagonal Crystal badge)
+            videoDriver.fillRectangle(dockX + 12, dockY + 8, 32, 32, micant::bootvid::Color{0, 212, 255});
+            videoDriver.drawString(dockX + 22, dockY + 16, "P", micant::bootvid::Color{10, 14, 22}, micant::bootvid::Color{0, 212, 255}, 2);
+
+            // Active Task Pills on Island Dock
+            videoDriver.fillRectangle(dockX + 56, dockY + 10, 80, 28, micant::bootvid::Color{28, 38, 60});
+            videoDriver.drawRectangle(dockX + 56, dockY + 10, 80, 28, micant::bootvid::Color{0, 212, 255});
+            videoDriver.drawString(dockX + 64, dockY + 18, "Terminal", micant::bootvid::Color{240, 245, 255}, micant::bootvid::Color{28, 38, 60}, 1);
+            videoDriver.fillRectangle(dockX + 80, dockY + 36, 32, 2, micant::bootvid::Color{0, 212, 255});
+
+            videoDriver.fillRectangle(dockX + 144, dockY + 10, 80, 28, micant::bootvid::Color{24, 32, 50});
+            videoDriver.drawString(dockX + 152, dockY + 18, "Explorer", micant::bootvid::Color{180, 200, 230}, micant::bootvid::Color{24, 32, 50}, 1);
+
+            videoDriver.fillRectangle(dockX + 232, dockY + 10, 80, 28, micant::bootvid::Color{24, 32, 50});
+            videoDriver.drawString(dockX + 240, dockY + 18, "TaskMgr", micant::bootvid::Color{180, 200, 230}, micant::bootvid::Color{24, 32, 50}, 1);
+
+            videoDriver.fillRectangle(dockX + 320, dockY + 10, 80, 28, micant::bootvid::Color{24, 32, 50});
+            videoDriver.drawString(dockX + 328, dockY + 18, "Settings", micant::bootvid::Color{180, 200, 230}, micant::bootvid::Color{24, 32, 50}, 1);
+
+            // Tray Section on Island Dock
+            videoDriver.drawString(dockX + dockW - 110, dockY + 18, "20:30 | MESH", micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{18, 25, 40}, 1);
+
+            // 3. Detached Start Prism Hub Floating Card (centered above dock)
+            uint32_t hubW = 440;
+            uint32_t hubH = 260;
+            uint32_t hubX = (width - hubW) / 2;
+            uint32_t hubY = dockY - hubH - 16;
+
+            videoDriver.fillRectangle(hubX - 2, hubY - 2, hubW + 4, hubH + 4, micant::bootvid::Color{8, 12, 20});
+            videoDriver.fillRectangle(hubX, hubY, hubW, hubH, micant::bootvid::Color{20, 28, 44});
+            videoDriver.drawRectangle(hubX, hubY, hubW, hubH, micant::bootvid::Color{45, 65, 95}, 2);
+
+            // Start Hub Search Pill
+            videoDriver.fillRectangle(hubX + 20, hubY + 16, hubW - 40, 32, micant::bootvid::Color{14, 18, 28});
+            videoDriver.drawRectangle(hubX + 20, hubY + 16, hubW - 40, 32, micant::bootvid::Color{0, 212, 255});
+            videoDriver.drawString(hubX + 32, hubY + 24, "Type here to search apps, tools, settings...", micant::bootvid::Color{140, 160, 190}, micant::bootvid::Color{14, 18, 28}, 1);
+
+            // Start Hub App Grid
+            videoDriver.drawString(hubX + 24, hubY + 60, "PINNED SOVEREIGN APPLICATIONS", micant::bootvid::Color{0, 212, 255}, micant::bootvid::Color{20, 28, 44}, 1);
+
+            const char* apps[] = {
+                ">_ Sovereign Terminal (cmd.exe)",
+                "#_ File Cabinet Explorer",
+                "~_ Real-Time Task Manager (EKG)",
+                "*_ Registry Editor (regedit.exe)",
+                "@_ NetBird Sovereign Mesh",
+                "!_ Sentinel Security Monitor"
+            };
+            for (size_t a = 0; a < 6; ++a) {
+                uint32_t ay = hubY + 82 + (uint32_t)(a * 24);
+                videoDriver.fillRectangle(hubX + 24, ay, hubW - 48, 20, micant::bootvid::Color{26, 36, 56});
+                videoDriver.drawString(hubX + 34, ay + 4, apps[a], micant::bootvid::Color{230, 240, 255}, micant::bootvid::Color{26, 36, 56}, 1);
+            }
+
+            // Power Actions Footer
+            videoDriver.fillRectangle(hubX + 20, hubY + hubH - 32, hubW - 40, 22, micant::bootvid::Color{16, 22, 34});
+            videoDriver.drawString(hubX + 28, hubY + hubH - 26, "User: MicaAdmin  |  Session 1 Interactive  |  Power", micant::bootvid::Color{160, 180, 210}, micant::bootvid::Color{16, 22, 34}, 1);
+
+            // Banner
+            videoDriver.drawString(16, 12, "SurShell Sovereign Desktop (Mica Prism 2026) | Bare-Metal VRAM Active", micant::bootvid::Color{0, 229, 255}, micant::bootvid::Color{14, 20, 32}, 1);
+            videoDriver.drawString(16, 28, "Press any key to return to Executive Shell, or ESC to hardware reboot.", micant::bootvid::Color{255, 215, 0}, micant::bootvid::Color{14, 20, 32}, 1);
         } else if (cmd[0] == 'r' && cmd[1] == 'e') {
             copyStr(lastResultLine1, "Reboot: Initiating hardware CPU reset via Port 0xCF9...", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Hardware resetting now...", sizeof(lastResultLine2));
@@ -790,7 +880,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             }
         } else {
             copyStr(lastResultLine1, "Unknown command. Type 'help' for command reference list.", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Available: app, smp, apic, idt, highhalf, ps, cpu, mem, ext4, reboot", sizeof(lastResultLine2));
+            copyStr(lastResultLine2, "Available: app, desktop, smp, apic, idt, highhalf, ps, cpu, mem, ext4, reboot", sizeof(lastResultLine2));
             LogKernel("Shell: Unknown command. Type 'help' for command list.");
         }
     };

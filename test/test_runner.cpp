@@ -383,7 +383,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite343")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite344")) {
+        RUN_TEST(Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter_And_GdiPresentPipeline);
+        return g_FailedTests;
+    }
+    if (argc > 1 && std::string(argv[1]) == "--suite343") {
         RUN_TEST(Test_Horizon127_Standalone_Ntoskrnl_Native_PE32Plus_Loader_And_Bootloader_Handover);
         return g_FailedTests;
     }
@@ -1652,6 +1656,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon125_BareMetal_Idt_LocalApic_And_HardwarePreemptionTimer);
     RUN_TEST(Test_Horizon126_BareMetal_SMP_MultiCore_AP_Bootstrapping);
     RUN_TEST(Test_Horizon127_Standalone_Ntoskrnl_Native_PE32Plus_Loader_And_Bootloader_Handover);
+    RUN_TEST(Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter_And_GdiPresentPipeline);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
