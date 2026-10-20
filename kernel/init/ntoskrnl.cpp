@@ -38,6 +38,7 @@
 #include "micant/km/drivers/usb/xhci_baremetal.hpp"
 #include "micant/km/drivers/storage/ahci_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
+#include "micant/km/executive/ob_baremetal.hpp"
 #include "../test/unmodified_fixture.hpp"
 
 extern "C" void ___chkstk_ms() {}
@@ -618,6 +619,39 @@ extern "C" __attribute__((naked)) void KiResilientExceptionStub() {
         "movq s_kernelReturnRspVal(%rip), %rsp\n\t"
         "movq s_kernelReturnRipVal(%rip), %rax\n\t"
         "jmpq *%rax\n\t"
+    );
+#endif
+}
+
+extern "C" void KiClockInterruptHandler() {
+    auto& intEngine = micant::hal::idt::InterruptEngine64::get();
+    intEngine.updateSystemTime();
+    intEngine.sendEoi();
+}
+
+extern "C" __attribute__((naked)) void KiClockInterruptStub() {
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "pushq %rax\n\t"
+        "pushq %rcx\n\t"
+        "pushq %rdx\n\t"
+        "pushq %rsi\n\t"
+        "pushq %rdi\n\t"
+        "pushq %r8\n\t"
+        "pushq %r9\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "call KiClockInterruptHandler\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %r9\n\t"
+        "popq %r8\n\t"
+        "popq %rdi\n\t"
+        "popq %rsi\n\t"
+        "popq %rdx\n\t"
+        "popq %rcx\n\t"
+        "popq %rax\n\t"
+        "iretq\n\t"
     );
 #endif
 }
@@ -1211,6 +1245,9 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             "Commands:\r\n"
             "  dir [path]    - Enumerate directory on active drive via AHCI DMA\r\n"
             "  drives        - List mounted storage volumes (C: 128G, D: 1.7T, E: Linux RO)\r\n"
+            "  objdir        - Dump canonical NT object directory namespace (\\Device, \\DosDevices)\r\n"
+            "  ps            - Enumerate active NT processes and subsystems\r\n"
+            "  uptime        - Query high-precision APIC timer uptime and tick accounting\r\n"
             "  c: / d:       - Switch active storage volume\r\n"
             "  type <file>   - Read file from disk via AHCI DMA\r\n"
             "  write <f> <t> - Write text to file on disk via AHCI DMA\r\n"
@@ -1232,6 +1269,73 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
                        "  C: [MICA_SYS]  128 GB FAT32 (sdb2, LBA 2,099,200) - OS System Root\r\n"
                        "  D: [MICA_DATA] 1.7 TB FAT32 (sdb3, LBA 270,534,656) - High-Capacity Volume\r\n"
                        "  E: [EXT4]       20 GB Ext4  (sda2 RO) - Safe Landing Linux Fallback\r\n", maxReply);
+    } else if ((cmd[0] == 'o' && cmd[1] == 'b' && cmd[2] == 'j') || (cmd[0] == 'o' && cmd[1] == 'b' && (cmd[2] == '\0' || cmd[2] == ' ' || cmd[2] == '\r'))) {
+        auto& ob = micant::km::ob_baremetal::BareMetalObjectManager::get();
+        ob.dumpNamespace(reply, maxReply);
+    } else if (cmd[0] == 'p' && cmd[1] == 's') {
+        auto& pm = micant::um::UserProcessManager64::get();
+        copyStr(reply, "Active NT Processes & Subsystems:\r\n", maxReply);
+        for (size_t i = 0; i < pm.getProcessCount(); ++i) {
+            const auto* p = pm.getProcess(i);
+            if (!p) continue;
+            concatStr(reply, "  PID ", maxReply);
+            char pidBuf[12];
+            uint32_t val = p->pid;
+            int pIdx = 0;
+            if (val == 0) { pidBuf[pIdx++] = '0'; }
+            else {
+                char rev[12]; int rp = 0;
+                while (val > 0) { rev[rp++] = '0' + (val % 10); val /= 10; }
+                while (rp > 0) { pidBuf[pIdx++] = rev[--rp]; }
+            }
+            pidBuf[pIdx] = '\0';
+            concatStr(reply, pidBuf, maxReply);
+            concatStr(reply, ": ", maxReply);
+            concatStr(reply, p->imageName, maxReply);
+            concatStr(reply, " [", maxReply);
+            concatStr(reply, (p->state == micant::um::UserProcessState::Running) ? "RUNNING" :
+                             (p->state == micant::um::UserProcessState::Terminated) ? "TERMINATED" : "READY", maxReply);
+            concatStr(reply, "]\r\n", maxReply);
+        }
+    } else if ((cmd[0] == 'u' && cmd[1] == 'p') || (cmd[0] == 't' && cmd[1] == 'i' && cmd[2] == 'm' && cmd[3] == 'e')) {
+        auto& intEngine = micant::hal::idt::InterruptEngine64::get();
+        const auto& t = intEngine.getTimeAccounting();
+        copyStr(reply, "MicaNT Executive Uptime & Chronometry:\r\n"
+                       "  Local APIC Timer: 100 Hz Periodic (Vector 0x30)\r\n  Total Ticks:      ", maxReply);
+        char num[32];
+        uint64_t ticks = t.tickCount;
+        int p = 0;
+        if (ticks == 0) { num[p++] = '0'; }
+        else {
+            char rev[32]; int rp = 0;
+            while (ticks > 0) { rev[rp++] = '0' + (ticks % 10); ticks /= 10; }
+            while (rp > 0) { num[p++] = rev[--rp]; }
+        }
+        num[p] = '\0';
+        concatStr(reply, num, maxReply);
+        concatStr(reply, " (", maxReply);
+        uint64_t sec = t.tickCount / 100;
+        p = 0;
+        if (sec == 0) { num[p++] = '0'; }
+        else {
+            char rev[32]; int rp = 0;
+            while (sec > 0) { rev[rp++] = '0' + (sec % 10); sec /= 10; }
+            while (rp > 0) { num[p++] = rev[--rp]; }
+        }
+        num[p] = '\0';
+        concatStr(reply, num, maxReply);
+        concatStr(reply, " seconds)\r\n  Total Interrupts: ", maxReply);
+        uint64_t ints = t.totalInterruptCount;
+        p = 0;
+        if (ints == 0) { num[p++] = '0'; }
+        else {
+            char rev[32]; int rp = 0;
+            while (ints > 0) { rev[rp++] = '0' + (ints % 10); ints /= 10; }
+            while (rp > 0) { num[p++] = rev[--rp]; }
+        }
+        num[p] = '\0';
+        concatStr(reply, num, maxReply);
+        concatStr(reply, "\r\n", maxReply);
     } else if ((cmd[0] == 'c' || cmd[0] == 'C') && (cmd[1] == ':' || (cmd[1] == '\r' || cmd[1] == '\0'))) {
         s_currentDrive = 'C';
         copyStr(reply, "Switched active volume to C: (MICA_SYS 128 GB OS Root)\r\n", maxReply);
@@ -1587,6 +1691,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     LogKernel("[Hal] Phase 0: 4-Core / 8-Thread SMP Topology Active (KPCR GS:[0]).");
     LogKernel("[Mm] Phase 0: PFN Database Initialized (32,768 MB ECC RAM).");
     LogKernel("[Ex] NonPagedPool 64 KB Tag 'Mica' allocated at physical memory.");
+    auto& ob = micant::km::ob_baremetal::BareMetalObjectManager::get();
+    ob.initialize();
     LogKernel("[Ob] Phase 0: Object Root Initialized (\\Device, \\Driver, \\DosDevices).");
     LogKernel("[Ps] Phase 0: Initialized PID 0 (Idle) and PID 4 (System Process).");
 
@@ -1656,6 +1762,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     intEngine.initializeIdt();
     intEngine.setGate(micant::hal::idt::VECTOR_GENERAL_PROTECTION, reinterpret_cast<uint64_t>(&KiResilientExceptionStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
     intEngine.setGate(micant::hal::idt::VECTOR_PAGE_FAULT, reinterpret_cast<uint64_t>(&KiResilientExceptionStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
+    intEngine.setGate(micant::hal::idt::VECTOR_CLOCK_TIMER, reinterpret_cast<uint64_t>(&KiClockInterruptStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
     intEngine.loadIdtr();
     LogKernel("[Hal] 64-bit IDT Prepared (256 vectors configured, Resilient Trap Active, LIDT executed).");
     intEngine.initializeLocalApic(micant::hal::idt::LAPIC_DEFAULT_PHYSICAL_BASE);
@@ -1663,6 +1770,10 @@ extern "C" micant::NtStatus KiSystemStartup(
         LogKernel("[Hal] Local APIC Discovered (x2APIC Active | MSR 0x80F SVR=0x1FF | MSR 0x808 TPR=0x00).");
     } else {
         LogKernel("[Hal] Local APIC Discovered (xAPIC MMIO 0xFEE00000 | SVR=0x1FF | TPR=0x00).");
+    }
+    bool timerOk = intEngine.configureTimer(100);
+    if (timerOk) {
+        LogKernel("[Hal] Local APIC 100Hz Periodic Preemption Timer Initialized (Vector 0x30).");
     }
 
     // Initialize SMP Multi-Core AP Discovery (Horizon 98 / Suite 342)
@@ -1911,8 +2022,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     auto ExecuteCommandImpl = [&](auto& self, const char* cmd) -> void {
         if (cmd[0] == 'h' && cmd[1] == 'e') {
             copyStr(lastResultLine1, "Storage: dir [p], cd [p], mkdir <d>, edit <f>, type <f>, write <f> <t>, copy, del", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "System:  boot [ubuntu|micant], net [ping <ip>], smp, bench, app, prism, reboot", sizeof(lastResultLine2));
-            LogKernel("Shell: help -> boot, net, dir, cd, mkdir, edit, type, write, copy, del, bench, app, reboot");
+            copyStr(lastResultLine2, "System:  boot [u|m], net [ping], objdir, ps, uptime, smp, bench, app, prism, reboot", sizeof(lastResultLine2));
+            LogKernel("Shell: help -> boot, net, objdir, ps, uptime, dir, cd, mkdir, edit, type, write, copy, del, bench, app, reboot");
         } else if (cmd[0] == 'v' && cmd[1] == 'e') {
             copyStr(lastResultLine1, "MicaNT Cutler Edition Version 10.0 (Build 2026.10 BareMetal)", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Sovereign 64-Bit Operating System running on Supermicro X11SSH-F", sizeof(lastResultLine2));
@@ -2202,10 +2313,95 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine1, "High-Half Canonical Paging: PML4[496]=0xFFFFF800... | PML4[510]=0xFFFFFF00...", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "PML4[511]=0xFFFFFF80... | CR3 Mirrored OK | Zero Physical Allocations", sizeof(lastResultLine2));
             LogKernel("Shell: High-Half Canonical: Base=0xFFFFF800'00000000 (PML4[496]) | CR3 Mirrored OK");
+        } else if ((cmd[0] == 'o' && cmd[1] == 'b' && cmd[2] == 'j') || (cmd[0] == 'o' && cmd[1] == 'b' && (cmd[2] == '\0' || cmd[2] == ' '))) {
+            char obBuf[2048]{};
+            auto& ob = micant::km::ob_baremetal::BareMetalObjectManager::get();
+            ob.dumpNamespace(obBuf, sizeof(obBuf));
+            UartSerial::print("\r\n");
+            UartSerial::print(obBuf);
+            copyStr(lastResultLine1, "Canonical NT Object Directory dumped to COM1 UART console.", sizeof(lastResultLine1));
+            copyStr(lastResultLine2, "Directories: \\Device, \\DosDevices, \\Driver, \\BaseNamedObjects", sizeof(lastResultLine2));
+            LogKernel("Shell: objdir -> Dumped canonical NT object directory namespace.");
+        } else if ((cmd[0] == 'u' && cmd[1] == 'p') || (cmd[0] == 't' && cmd[1] == 'i' && cmd[2] == 'm' && cmd[3] == 'e')) {
+            auto& intEngine = micant::hal::idt::InterruptEngine64::get();
+            const auto& t = intEngine.getTimeAccounting();
+            UartSerial::print("\r\n[Hal] System Uptime & Chronometry:\r\n");
+            UartSerial::print("  Local APIC Timer: 100 Hz Periodic (Vector 0x30)\r\n");
+            UartSerial::print("  Total Ticks:      ");
+            UartSerial::printDec(static_cast<uint32_t>(t.tickCount));
+            UartSerial::print(" (");
+            UartSerial::printDec(static_cast<uint32_t>(t.tickCount / 100));
+            UartSerial::print(" seconds)\r\n  Total Interrupts: ");
+            UartSerial::printDec(static_cast<uint32_t>(t.totalInterruptCount));
+            UartSerial::print("\r\n  Clock Interrupts: ");
+            UartSerial::printDec(static_cast<uint32_t>(t.clockInterruptCount));
+            UartSerial::print("\r\n");
+            char upMsg[64];
+            copyStr(upMsg, "Uptime: ", sizeof(upMsg));
+            uint32_t sec = static_cast<uint32_t>(t.tickCount / 100);
+            char sBuf[16];
+            int sp = 0;
+            if (sec == 0) { sBuf[sp++] = '0'; }
+            else {
+                char rev[16]; int rp = 0;
+                while (sec > 0) { rev[rp++] = '0' + (sec % 10); sec /= 10; }
+                while (rp > 0) { sBuf[sp++] = rev[--rp]; }
+            }
+            sBuf[sp] = '\0';
+            concatStr(upMsg, sBuf, sizeof(upMsg));
+            concatStr(upMsg, "s | 100Hz Local APIC Timer (Vector 0x30)", sizeof(upMsg));
+            copyStr(lastResultLine1, upMsg, sizeof(lastResultLine1));
+            copyStr(lastResultLine2, "Accounting: 10ms quantum, 100,000 x 100ns units per tick", sizeof(lastResultLine2));
+            LogKernel("Shell: uptime displayed.");
         } else if (cmd[0] == 'p' && cmd[1] == 's') {
-            copyStr(lastResultLine1, "Process List: PID 0 (Idle), PID 4 (System), PID 368 (smss.exe), PID 480 (csrss.exe)", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "User Mode: PID 1024 (surshell.exe) | Sovereign Userland Context Switches OK", sizeof(lastResultLine2));
-            LogKernel("Shell: [Ps] PID 0 (Idle), PID 4 (System), PID 368 (smss.exe), PID 480 (csrss.exe), PID 1024 (surshell.exe)");
+            auto& pm = micant::um::UserProcessManager64::get();
+            auto& sched = micant::um::UserThreadScheduler64::get();
+            UartSerial::print("\r\n=== Active NT Executive Processes ===\r\n");
+            UartSerial::print("PID     Image Name            State         Base VA             Syscalls\r\n");
+            UartSerial::print("------------------------------------------------------------------------\r\n");
+            for (size_t i = 0; i < pm.getProcessCount(); ++i) {
+                const auto* p = pm.getProcess(i);
+                if (!p) continue;
+                UartSerial::printDec(p->pid);
+                if (p->pid < 10) UartSerial::print("       ");
+                else if (p->pid < 1000) UartSerial::print("     ");
+                else UartSerial::print("    ");
+                UartSerial::print(p->imageName);
+                for (size_t s = strLen(p->imageName); s < 22; ++s) UartSerial::print(" ");
+                UartSerial::print((p->state == micant::um::UserProcessState::Running) ? "RUNNING       " :
+                                  (p->state == micant::um::UserProcessState::Terminated) ? "TERMINATED    " : "READY         ");
+                UartSerial::print("0x");
+                UartSerial::printHex64(p->codeBaseVa);
+                UartSerial::print("  ");
+                UartSerial::printDec(static_cast<uint32_t>(p->syscallCount));
+                UartSerial::print("\r\n");
+            }
+            UartSerial::print("\r\n=== Active NT Threads (Ready Queues) ===\r\n");
+            UartSerial::print("TID     PID     Pri   Quantum   ContextSwitches   Name\r\n");
+            UartSerial::print("------------------------------------------------------------------------\r\n");
+            for (size_t i = 0; i < sched.getThreadCount(); ++i) {
+                const auto* t = sched.getThread(i);
+                if (!t) continue;
+                UartSerial::printDec(t->tid);
+                if (t->tid < 10) UartSerial::print("       ");
+                else if (t->tid < 1000) UartSerial::print("     ");
+                else UartSerial::print("    ");
+                UartSerial::printDec(t->parentPid);
+                if (t->parentPid < 10) UartSerial::print("       ");
+                else if (t->parentPid < 1000) UartSerial::print("     ");
+                else UartSerial::print("    ");
+                UartSerial::printDec(static_cast<uint32_t>(t->priority));
+                UartSerial::print("     ");
+                UartSerial::printDec(static_cast<uint32_t>(t->quantumRemaining));
+                UartSerial::print("         ");
+                UartSerial::printDec(static_cast<uint32_t>(t->contextSwitches));
+                UartSerial::print("                 ");
+                UartSerial::print(t->name);
+                UartSerial::print("\r\n");
+            }
+            copyStr(lastResultLine1, "Process & Thread Tables dumped to serial: smss, csrss, surshell", sizeof(lastResultLine1));
+            copyStr(lastResultLine2, "Scheduler: Preemptive 100Hz Local APIC Timer Ready Queues Active", sizeof(lastResultLine2));
+            LogKernel("Shell: [Ps] Active NT processes and threads enumerated.");
         } else if (cmd[0] == 'c' && cmd[1] == 'p') {
             char tempStr[64];
             copyStr(tempStr, "CPU Intel Xeon E3-1270 v6 @ 3.80GHz | DTS Temp: ", sizeof(tempStr));
