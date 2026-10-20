@@ -146,6 +146,13 @@ add_executable(win32_app
 )
 target_link_libraries(win32_app PRIVATE ntoskrnl_core)
 
+# Standalone PrismX 3D & Vulkan / Direct3D 12 Hardware Verification Harness
+add_executable(prismx_3d_cube_app
+    test/prismx_3d_cube_app.cpp
+)
+target_link_libraries(prismx_3d_cube_app PRIVATE ntoskrnl_core)
+target_link_options(prismx_3d_cube_app PRIVATE -static)
+
 # Standalone Unmodified Third-Party Windows Test Application (Zero MicaNT headers)
 if (MSVC)
     add_executable(unmodified_sample
@@ -190,5 +197,8 @@ set_target_properties(userland_app PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 set_target_properties(win32_app PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+set_target_properties(prismx_3d_cube_app PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

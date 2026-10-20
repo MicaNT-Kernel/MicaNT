@@ -6,6 +6,30 @@ build/
 *.ilk
 *.exe
 *.bmp
+*.ppm
+
+# Scratch and temporary scripts
+scripts/add_tcp_*.py
+scripts/apply_*.py
+scripts/crop_*.py
+scripts/diagnose_*.py
+scripts/patch_*.py
+scripts/update_*.py
+scripts/check_*.py
+scripts/inspect_*.py
+scripts/debug_*.py
+scripts/find_hwnd.py
+scripts/fix_*.py
+scripts/fdisk_*.py
+scripts/reboot_to_menu.py
+scripts/search_*.py
+scripts/sync_grub_cfg.py
+scripts/test_*.py
+prismx_3d_render_cube.*
+
+# Python cache
+__pycache__/
+*.pyc
 
 # IDE / Editor
 .vscode/

@@ -389,6 +389,10 @@ struct EfiLoadedImageProtocol {
 /**
  * @brief UEFI Boot Services Table.
  */
+inline constexpr uint32_t BY_ALL_HANDLES = 0;
+inline constexpr uint32_t BY_REGISTER_NOTIFY = 1;
+inline constexpr uint32_t BY_PROTOCOL = 2;
+
 struct EfiBootServices {
     EfiTableHeader hdr;
 
@@ -429,8 +433,19 @@ struct EfiBootServices {
     void* installConfigurationTable;
 
     // Image Services
-    void* loadImage;
-    void* startImage;
+    EfiStatus (*loadImage)(
+        uint8_t bootPolicy,
+        EfiHandle parentImageHandle,
+        void* devicePath,
+        void* sourceBuffer,
+        uint64_t sourceSize,
+        EfiHandle* imageHandle
+    );
+    EfiStatus (*startImage)(
+        EfiHandle imageHandle,
+        uint64_t* exitDataSize,
+        wchar_t** exitData
+    );
     void* exit;
     void* unloadImage;
     EfiStatus (*exitBootServices)(EfiHandle imageHandle, uint64_t mapKey);

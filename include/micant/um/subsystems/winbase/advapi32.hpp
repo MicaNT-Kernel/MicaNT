@@ -664,6 +664,21 @@ inline SC_HANDLE OpenSCManagerW(
     return reinterpret_cast<SC_HANDLE>(handle);
 }
 
+inline SC_HANDLE OpenSCManagerA(
+    const char* lpMachineName,
+    const char* lpDatabaseName,
+    uint32_t dwDesiredAccess
+) noexcept {
+    std::wstring machine = lpMachineName ? std::wstring(lpMachineName, lpMachineName + std::strlen(lpMachineName)) : L"";
+    std::wstring db = lpDatabaseName ? std::wstring(lpDatabaseName, lpDatabaseName + std::strlen(lpDatabaseName)) : L"";
+    return OpenSCManagerW(machine.c_str(), db.c_str(), dwDesiredAccess);
+}
+
+inline int32_t WINAPI RegLoadMUIStringA(void* /*hKey*/, const char* /*pszValue*/, char* /*pszOutBuf*/, uint32_t /*cbOutBuf*/, uint32_t* pcbData, uint32_t /*Flags*/, const char* /*pszDirectory*/) noexcept {
+    if (pcbData) *pcbData = 0;
+    return 0; // ERROR_SUCCESS
+}
+
 inline SC_HANDLE CreateServiceW(
     SC_HANDLE hSCManager,
     const wchar_t* lpServiceName,
@@ -1740,6 +1755,13 @@ inline win32::BOOL WINAPI EnumServicesStatusExW(void* /*hSCManager*/, int32_t /*
     return win32::TRUE;
 }
 
+inline win32::BOOL WINAPI EnumServicesStatusExA(void* /*hSCManager*/, int32_t /*InfoLevel*/, win32::DWORD /*dwServiceType*/, win32::DWORD /*dwServiceState*/, uint8_t* /*lpServices*/, win32::DWORD /*cbBufSize*/, win32::DWORD* pcbBytesNeeded, win32::DWORD* lpServicesReturned, win32::DWORD* lpResumeHandle, const char* /*pszGroupName*/) noexcept {
+    if (pcbBytesNeeded) *pcbBytesNeeded = 0;
+    if (lpServicesReturned) *lpServicesReturned = 0;
+    if (lpResumeHandle) *lpResumeHandle = 0;
+    return win32::TRUE;
+}
+
 inline win32::DWORD WINAPI GetEffectiveRightsFromAclW(void* /*pacl*/, void* /*pTrustee*/, win32::DWORD* pAccessRights) noexcept {
     if (pAccessRights) *pAccessRights = 0x1F01FF; // STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL
     return 0; // ERROR_SUCCESS
@@ -1916,6 +1938,8 @@ inline void InitializeAdvapi32SubsystemExports() {
 
     // SCM Exports
     ldr.registerExport("advapi32.dll", "OpenSCManagerW", reinterpret_cast<void*>(OpenSCManagerW));
+    ldr.registerExport("advapi32.dll", "OpenSCManagerA", reinterpret_cast<void*>(OpenSCManagerA));
+    ldr.registerExport("advapi32.dll", "RegLoadMUIStringA", reinterpret_cast<void*>(RegLoadMUIStringA));
     ldr.registerExport("advapi32.dll", "CreateServiceW", reinterpret_cast<void*>(CreateServiceW));
     ldr.registerExport("advapi32.dll", "OpenServiceW", reinterpret_cast<void*>(OpenServiceW));
     ldr.registerExport("advapi32.dll", "StartServiceW", reinterpret_cast<void*>(StartServiceW));
@@ -2005,6 +2029,7 @@ inline void InitializeAdvapi32SubsystemExports() {
     ldr.registerExport("advapi32.dll", "CreateProcessWithLogonW", reinterpret_cast<void*>(CreateProcessWithLogonW));
     ldr.registerExport("advapi32.dll", "EnumDependentServicesW", reinterpret_cast<void*>(EnumDependentServicesW));
     ldr.registerExport("advapi32.dll", "EnumServicesStatusExW", reinterpret_cast<void*>(EnumServicesStatusExW));
+    ldr.registerExport("advapi32.dll", "EnumServicesStatusExA", reinterpret_cast<void*>(EnumServicesStatusExA));
     ldr.registerExport("advapi32.dll", "GetEffectiveRightsFromAclW", reinterpret_cast<void*>(GetEffectiveRightsFromAclW));
     ldr.registerExport("advapi32.dll", "GetInheritanceSourceW", reinterpret_cast<void*>(GetInheritanceSourceW));
     ldr.registerExport("advapi32.dll", "GetSecurityInfo", reinterpret_cast<void*>(GetSecurityInfo));

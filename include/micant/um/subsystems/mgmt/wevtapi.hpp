@@ -826,6 +826,18 @@ inline win32::BOOL GetOldestEventLogRecord(void* hEventLog, uint32_t* OldestReco
     return win32::TRUE;
 }
 
+inline win32::BOOL ReadEventLogA(void* /*hEventLog*/, uint32_t /*dwReadFlags*/, uint32_t /*dwRecordOffset*/, void* /*lpBuffer*/, uint32_t /*nNumberOfBytesToRead*/, uint32_t* pnBytesRead, uint32_t* pnMinNumberOfBytesNeeded) {
+    if (pnBytesRead) *pnBytesRead = 0;
+    if (pnMinNumberOfBytesNeeded) *pnMinNumberOfBytesNeeded = 0;
+    return win32::TRUE;
+}
+
+inline win32::BOOL ReadEventLogW(void* /*hEventLog*/, uint32_t /*dwReadFlags*/, uint32_t /*dwRecordOffset*/, void* /*lpBuffer*/, uint32_t /*nNumberOfBytesToRead*/, uint32_t* pnBytesRead, uint32_t* pnMinNumberOfBytesNeeded) {
+    if (pnBytesRead) *pnBytesRead = 0;
+    if (pnMinNumberOfBytesNeeded) *pnMinNumberOfBytesNeeded = 0;
+    return win32::TRUE;
+}
+
 // ============================================================================
 // 7. Dynamic Loader Export Registration
 // ============================================================================
@@ -867,6 +879,8 @@ inline void InitializeWevtApiSubsystemExports() {
     ldr.registerExport("advapi32.dll", "ClearEventLogW", reinterpret_cast<void*>(ClearEventLogW));
     ldr.registerExport("advapi32.dll", "GetNumberOfEventLogRecords", reinterpret_cast<void*>(GetNumberOfEventLogRecords));
     ldr.registerExport("advapi32.dll", "GetOldestEventLogRecord", reinterpret_cast<void*>(GetOldestEventLogRecord));
+    ldr.registerExport("advapi32.dll", "ReadEventLogA", reinterpret_cast<void*>(ReadEventLogA));
+    ldr.registerExport("advapi32.dll", "ReadEventLogW", reinterpret_cast<void*>(ReadEventLogW));
 }
 
 } // namespace micant::wevtapi

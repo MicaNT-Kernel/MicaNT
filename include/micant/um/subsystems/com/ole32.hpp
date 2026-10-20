@@ -981,12 +981,39 @@ inline HRESULT WINAPI OleSetMenuDescriptor(void* /*holemenu*/, win32::HWND /*hwn
     return S_OK;
 }
 
+// WinRT Core Stubs (conforming to win32metadata)
+inline HRESULT WINAPI RoInitialize(uint32_t /*initType*/) noexcept { return S_OK; }
+inline void WINAPI RoUninitialize() noexcept {}
+inline HRESULT WINAPI RoGetActivationFactory(void* /*activatableClassId*/, const IID& /*iid*/, void** factory) noexcept {
+    if (factory) *factory = nullptr;
+    return static_cast<HRESULT>(0x80040154); // REGDB_E_CLASSNOTREG
+}
+inline HRESULT WINAPI RoOriginateLanguageException(HRESULT error, void* /*message*/, void* /*languageException*/) noexcept {
+    return error;
+}
+inline HRESULT WINAPI WindowsCreateStringReference(const wchar_t* /*sourceString*/, uint32_t /*length*/, void* /*hstringHeader*/, void** string) noexcept {
+    if (string) *string = reinterpret_cast<void*>(0x57525401);
+    return S_OK;
+}
+inline HRESULT WINAPI WindowsDeleteString(void* /*string*/) noexcept { return S_OK; }
+
 // ============================================================================
 // 7. Subsystem Export Registration
 // ============================================================================
 
 inline void InitializeOle32SubsystemExports() {
     auto& ldr = ldr::DynamicLoader::get();
+
+    // WinRT exports
+    ldr.registerExport("api-ms-win-core-winrt-error-l1-1-1.dll", "RoOriginateLanguageException", reinterpret_cast<void*>(RoOriginateLanguageException));
+    ldr.registerExport("api-ms-win-core-winrt-l1-1-0.dll", "RoGetActivationFactory", reinterpret_cast<void*>(RoGetActivationFactory));
+    ldr.registerExport("api-ms-win-core-winrt-l1-1-0.dll", "RoInitialize", reinterpret_cast<void*>(RoInitialize));
+    ldr.registerExport("api-ms-win-core-winrt-l1-1-0.dll", "RoUninitialize", reinterpret_cast<void*>(RoUninitialize));
+    ldr.registerExport("api-ms-win-core-winrt-string-l1-1-0.dll", "WindowsCreateStringReference", reinterpret_cast<void*>(WindowsCreateStringReference));
+    ldr.registerExport("api-ms-win-core-winrt-string-l1-1-0.dll", "WindowsDeleteString", reinterpret_cast<void*>(WindowsDeleteString));
+    ldr.registerExport("combase.dll", "RoGetActivationFactory", reinterpret_cast<void*>(RoGetActivationFactory));
+    ldr.registerExport("combase.dll", "RoOriginateLanguageException", reinterpret_cast<void*>(RoOriginateLanguageException));
+    ldr.registerExport("combase.dll", "WindowsCreateStringReference", reinterpret_cast<void*>(WindowsCreateStringReference));
 
     // ole32.dll COM Core
     ldr.registerExport("ole32.dll", "CreateDataAdviseHolder", reinterpret_cast<void*>(CreateDataAdviseHolder));

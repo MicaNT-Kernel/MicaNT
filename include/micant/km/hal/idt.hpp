@@ -144,6 +144,23 @@ struct SystemTimeAccounting64 {
     uint64_t spuriousInterruptCount{0};
 };
 
+extern "C" __attribute__((naked)) inline void KiDefaultInterruptStub() {
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "iretq\n\t"
+    );
+#endif
+}
+
+extern "C" __attribute__((naked)) inline void KiDefaultExceptionWithErrorCodeStub() {
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "addq $8, %rsp\n\t"
+        "iretq\n\t"
+    );
+#endif
+}
+
 // ============================================================================
 // 5. Sovereign 64-bit IDT & Interrupt Engine (Unit #97)
 // ============================================================================
@@ -156,6 +173,7 @@ private:
     bool                   m_idtLoaded{false};
     bool                   m_apicInitialized{false};
     bool                   m_timerActive{false};
+    bool                   m_isX2Apic{false};
 
     InterruptEngine64() = default;
 
@@ -173,6 +191,7 @@ public:
         m_idtLoaded = false;
         m_apicInitialized = false;
         m_timerActive = false;
+        m_isX2Apic = false;
     }
 
     /**
@@ -197,17 +216,28 @@ public:
         m_idtr.limit = static_cast<uint16_t>(sizeof(m_idtTable) - 1);
         m_idtr.base  = reinterpret_cast<uint64_t>(m_idtTable.data());
 
-        // Fill all 256 gates with default handler if provided
-        if (defaultStubHandlerRip != 0) {
-            for (size_t i = 0; i < IDT_ENTRY_COUNT; ++i) {
-                m_idtTable[i].setGate(
-                    defaultStubHandlerRip,
-                    micant::cpu::SELECTOR_KCODE64,
-                    (i == VECTOR_DOUBLE_FAULT) ? 1 : 0, // Use IST1 for #DF
-                    (i == VECTOR_BREAKPOINT || i == VECTOR_OVERFLOW) ? 3 : 0, // DPL 3 for INT3/INTO
-                    false
-                );
-            }
+        // Fill all 256 gates with proper default handlers
+        for (size_t i = 0; i < IDT_ENTRY_COUNT; ++i) {
+            bool hasErrorCode = (i == VECTOR_DOUBLE_FAULT ||
+                                 i == VECTOR_INVALID_TSS ||
+                                 i == VECTOR_SEGMENT_NOT_PRESENT ||
+                                 i == VECTOR_STACK_FAULT ||
+                                 i == VECTOR_GENERAL_PROTECTION ||
+                                 i == VECTOR_PAGE_FAULT ||
+                                 i == VECTOR_ALIGNMENT_CHECK ||
+                                 i == 21 || i == 29 || i == 30);
+
+            uint64_t handler = (defaultStubHandlerRip != 0) ? defaultStubHandlerRip :
+                (hasErrorCode ? reinterpret_cast<uint64_t>(&KiDefaultExceptionWithErrorCodeStub)
+                              : reinterpret_cast<uint64_t>(&KiDefaultInterruptStub));
+
+            m_idtTable[i].setGate(
+                handler,
+                micant::cpu::SELECTOR_KCODE64,
+                (i == VECTOR_DOUBLE_FAULT) ? 1 : 0, // Use IST1 for #DF
+                (i == VECTOR_BREAKPOINT || i == VECTOR_OVERFLOW) ? 3 : 0, // DPL 3 for INT3/INTO
+                false
+            );
         }
 
         m_idtLoaded = true;
@@ -224,25 +254,46 @@ public:
     }
 
     /**
-     * @brief Initializes Local APIC MMIO registers (at physical or high-canonical address).
+     * @brief Initializes Local APIC registers (supporting both x2APIC MSR and legacy xAPIC MMIO).
      */
     bool initializeLocalApic(uint64_t lapicBaseAddress = LAPIC_DEFAULT_PHYSICAL_BASE) noexcept {
         m_lapicVirtualBase = lapicBaseAddress;
 
-        // In bare-metal environment, write directly to MMIO registers
-        auto* lapic = reinterpret_cast<volatile uint32_t*>(m_lapicVirtualBase);
-        if (lapic) {
-            // SVR: Enable APIC (bit 8 = 1) and set spurious vector to 0xFF
-            lapic[LAPIC_REG_SVR / 4] = 0x100 | VECTOR_SPURIOUS;
+        // Query IA32_APIC_BASE MSR (0x1B)
+        uint64_t apicBase = micant::cpu::cpuRdmsr(micant::cpu::MSR_IA32_APIC_BASE);
+        // Bit 10 = x2APIC Mode Enable (EXTD)
+        m_isX2Apic = (apicBase & (1ULL << 10)) != 0;
+
+        if (m_isX2Apic) {
+            // x2APIC Architecture: all accesses via MSRs 0x800-0x8FF
+            // SVR: Enable APIC (bit 8 = 1) and set spurious vector to 0xFF (Vector 255)
+            micant::cpu::cpuWrmsr(micant::cpu::MSR_X2APIC_SVR, 0x100 | VECTOR_SPURIOUS);
 
             // TPR: Set Task Priority to 0 (accept all interrupts)
-            lapic[LAPIC_REG_TPR / 4] = 0x00;
+            micant::cpu::cpuWrmsr(micant::cpu::MSR_X2APIC_TPR, 0x00);
 
-            // DFR: Flat model (0xFFFFFFFF)
-            lapic[LAPIC_REG_DFR / 4] = 0xFFFFFFFF;
+            // In x2APIC mode, DFR does not exist (flat/clustered is fixed) and LDR is hardware-assigned read-only.
+        } else {
+            // Legacy xAPIC Architecture: memory-mapped I/O at base address
+            uint64_t hwBase = apicBase & 0xFFFFF000ULL;
+            if (hwBase != 0) {
+                m_lapicVirtualBase = hwBase;
+            }
 
-            // LDR: All logical APICs set to cluster 1
-            lapic[LAPIC_REG_LDR / 4] = (lapic[LAPIC_REG_LDR / 4] & 0x00FFFFFF) | 1;
+            auto* lapic = reinterpret_cast<volatile uint32_t*>(m_lapicVirtualBase);
+            if (lapic) {
+                // SVR: Enable APIC (bit 8 = 1) and set spurious vector to 0xFF
+                lapic[LAPIC_REG_SVR / 4] = 0x100 | VECTOR_SPURIOUS;
+
+                // TPR: Set Task Priority to 0 (accept all interrupts)
+                lapic[LAPIC_REG_TPR / 4] = 0x00;
+
+                // DFR: Flat model (0xFFFFFFFF)
+                lapic[LAPIC_REG_DFR / 4] = 0xFFFFFFFF;
+
+                // LDR: All logical APICs set to cluster 1
+                lapic[LAPIC_REG_LDR / 4] = (lapic[LAPIC_REG_LDR / 4] & 0x00FFFFFF) | 1;
+            }
         }
 
         m_apicInitialized = true;
@@ -257,19 +308,29 @@ public:
     bool configureTimer(uint32_t targetHz = 100, uint32_t busFrequencyHz = 100000000) noexcept {
         if (!m_apicInitialized || targetHz == 0) return false;
 
-        auto* lapic = reinterpret_cast<volatile uint32_t*>(m_lapicVirtualBase);
-        if (lapic) {
-            // TDCR: Divide by 16 (0x03)
-            lapic[LAPIC_REG_TDCR / 4] = 0x03;
+        uint32_t timerCount = (busFrequencyHz / 16) / targetHz;
 
-            // Calculate Initial Count: (BusFrequency / 16) / TargetHz
-            uint32_t timerCount = (busFrequencyHz / 16) / targetHz;
+        if (m_isX2Apic) {
+            // TDCR: Divide by 16 (0x03)
+            micant::cpu::cpuWrmsr(micant::cpu::MSR_X2APIC_TDCR, 0x03);
 
             // LVT Timer: Periodic mode (bit 17 = 1), unmasked (bit 16 = 0), Vector 0x30
-            lapic[LAPIC_REG_LVT_TIMER / 4] = (1U << 17) | VECTOR_CLOCK_TIMER;
+            micant::cpu::cpuWrmsr(micant::cpu::MSR_X2APIC_LVT_TIMER, (1U << 17) | VECTOR_CLOCK_TIMER);
 
             // TICR: Write Initial Count to start the timer
-            lapic[LAPIC_REG_TICR / 4] = timerCount;
+            micant::cpu::cpuWrmsr(micant::cpu::MSR_X2APIC_TICR, timerCount);
+        } else {
+            auto* lapic = reinterpret_cast<volatile uint32_t*>(m_lapicVirtualBase);
+            if (lapic) {
+                // TDCR: Divide by 16 (0x03)
+                lapic[LAPIC_REG_TDCR / 4] = 0x03;
+
+                // LVT Timer: Periodic mode (bit 17 = 1), unmasked (bit 16 = 0), Vector 0x30
+                lapic[LAPIC_REG_LVT_TIMER / 4] = (1U << 17) | VECTOR_CLOCK_TIMER;
+
+                // TICR: Write Initial Count to start the timer
+                lapic[LAPIC_REG_TICR / 4] = timerCount;
+            }
         }
 
         m_timerActive = true;
@@ -280,9 +341,13 @@ public:
      * @brief Sends End of Interrupt (EOI) to the Local APIC.
      */
     void sendEoi() noexcept {
-        auto* lapic = reinterpret_cast<volatile uint32_t*>(m_lapicVirtualBase);
-        if (lapic) {
-            lapic[LAPIC_REG_EOI / 4] = 0;
+        if (m_isX2Apic) {
+            micant::cpu::cpuWrmsr(micant::cpu::MSR_X2APIC_EOI, 0);
+        } else {
+            auto* lapic = reinterpret_cast<volatile uint32_t*>(m_lapicVirtualBase);
+            if (lapic) {
+                lapic[LAPIC_REG_EOI / 4] = 0;
+            }
         }
     }
 
@@ -344,6 +409,7 @@ public:
     [[nodiscard]] bool isIdtLoaded() const noexcept { return m_idtLoaded; }
     [[nodiscard]] bool isApicInitialized() const noexcept { return m_apicInitialized; }
     [[nodiscard]] bool isTimerActive() const noexcept { return m_timerActive; }
+    [[nodiscard]] bool isX2Apic() const noexcept { return m_isX2Apic; }
     [[nodiscard]] uint64_t getLapicBase() const noexcept { return m_lapicVirtualBase; }
 };
 

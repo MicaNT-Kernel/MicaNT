@@ -1033,6 +1033,57 @@ inline errno_t CRT_wcscat_s(wchar_t* dest, size_t destsz, const wchar_t* src) no
     return 0;
 }
 
+inline int CRT_iswalpha_l(wint_t c, void* /*loc*/) noexcept { return std::iswalpha(c); }
+inline int CRT_iswcntrl_l(wint_t c, void* /*loc*/) noexcept { return std::iswcntrl(c); }
+inline int CRT_iswdigit_l(wint_t c, void* /*loc*/) noexcept { return std::iswdigit(c); }
+inline int CRT_iswlower_l(wint_t c, void* /*loc*/) noexcept { return std::iswlower(c); }
+inline int CRT_iswprint_l(wint_t c, void* /*loc*/) noexcept { return std::iswprint(c); }
+inline int CRT_iswpunct_l(wint_t c, void* /*loc*/) noexcept { return std::iswpunct(c); }
+inline int CRT_iswspace_l(wint_t c, void* /*loc*/) noexcept { return std::iswspace(c); }
+inline int CRT_iswupper_l(wint_t c, void* /*loc*/) noexcept { return std::iswupper(c); }
+inline int CRT_iswxdigit_l(wint_t c, void* /*loc*/) noexcept { return std::iswxdigit(c); }
+inline int CRT_tolower_l(int c, void* /*loc*/) noexcept { return std::tolower(c); }
+inline int CRT_toupper_l(int c, void* /*loc*/) noexcept { return std::toupper(c); }
+inline wint_t CRT_towlower_l(wint_t c, void* /*loc*/) noexcept { return std::towlower(c); }
+inline wint_t CRT_towupper_l(wint_t c, void* /*loc*/) noexcept { return std::towupper(c); }
+inline int CRT_strcoll_l(const char* s1, const char* s2, void* /*loc*/) noexcept { return std::strcmp(s1, s2); }
+inline size_t CRT_strxfrm_l(char* d, const char* s, size_t n, void* /*loc*/) noexcept { return std::strxfrm(d, s, n); }
+inline int CRT_wcscoll_l(const wchar_t* s1, const wchar_t* s2, void* /*loc*/) noexcept { return std::wcscmp(s1, s2); }
+inline size_t CRT_wcsxfrm_l(wchar_t* d, const wchar_t* s, size_t n, void* /*loc*/) noexcept { return std::wcsxfrm(d, s, n); }
+inline size_t CRT_wcsnlen(const wchar_t* s, size_t maxlen) noexcept {
+    size_t i = 0;
+    while (i < maxlen && s && s[i]) ++i;
+    return i;
+}
+inline size_t CRT_mbrlen(const char* s, size_t n, void* /*ps*/) noexcept {
+    if (!s) return 0;
+    return (n > 0 && *s) ? 1 : 0;
+}
+inline void* CRT_create_locale(int /*cat*/, const char* /*loc*/) noexcept { return reinterpret_cast<void*>(0x10c0); }
+inline void CRT_free_locale(void* /*loc*/) noexcept {}
+inline void CRT_setbuf(MicaFile* /*stream*/, char* /*buffer*/) noexcept {}
+inline size_t CRT_strftime_l(char* s, size_t max, const char* fmt, const struct tm* tm, void* /*loc*/) noexcept { return std::strftime(s, max, fmt, tm); }
+inline const unsigned short* CRT_pctype_func() noexcept {
+    static const unsigned short s_pctype[256] = {0};
+    return s_pctype;
+}
+inline int CRT_sys_nerr = 43;
+
+inline int CRT_mbtowc_l(wchar_t* pwc, const char* s, size_t n, void* /*loc*/) noexcept { return std::mbtowc(pwc, s, n); }
+inline double CRT_strtod_l(const char* str, char** endptr, void* /*loc*/) noexcept { return std::strtod(str, endptr); }
+inline size_t CRT_mbrtowc(wchar_t* pwc, const char* s, size_t n, void* /*ps*/) noexcept { return std::mbrtowc(pwc, s, n, nullptr); }
+inline size_t CRT_mbsrtowcs(wchar_t* dst, const char** src, size_t len, void* /*ps*/) noexcept { return std::mbsrtowcs(dst, src, len, nullptr); }
+inline size_t CRT_wcrtomb(char* s, wchar_t wc, void* /*ps*/) noexcept { return std::wcrtomb(s, wc, nullptr); }
+inline errno_t CRT_wcrtomb_s(size_t* retval, char* s, size_t sz, wchar_t wc, void* /*ps*/) noexcept {
+    (void)sz;
+    size_t res = std::wcrtomb(s, wc, nullptr);
+    if (retval) *retval = res;
+    return 0;
+}
+inline double CRT_wcstod(const wchar_t* str, wchar_t** endptr) noexcept { return std::wcstod(str, endptr); }
+inline long long CRT_wcstoll(const wchar_t* str, wchar_t** endptr, int base) noexcept { return std::wcstoll(str, endptr, base); }
+inline unsigned long long CRT_wcstoull(const wchar_t* str, wchar_t** endptr, int base) noexcept { return std::wcstoull(str, endptr, base); }
+
 // ----------------------------------------------------------------------------
 // 7. UCRT - Conversion, Utility & Heap Subsystem
 // ----------------------------------------------------------------------------
@@ -1929,6 +1980,40 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "wcscat_s", reinterpret_cast<void*>(CRT_wcscat_s));
     ldr.registerExport("ucrtbase.dll", "wcscat_s", reinterpret_cast<void*>(CRT_wcscat_s));
     ldr.registerExport("msvcrt.dll", "wcscat_s", reinterpret_cast<void*>(CRT_wcscat_s));
+    ldr.registerExport("msvcrt.dll", "_iswalpha_l", reinterpret_cast<void*>(CRT_iswalpha_l));
+    ldr.registerExport("msvcrt.dll", "_iswcntrl_l", reinterpret_cast<void*>(CRT_iswcntrl_l));
+    ldr.registerExport("msvcrt.dll", "_iswdigit_l", reinterpret_cast<void*>(CRT_iswdigit_l));
+    ldr.registerExport("msvcrt.dll", "_iswlower_l", reinterpret_cast<void*>(CRT_iswlower_l));
+    ldr.registerExport("msvcrt.dll", "_iswprint_l", reinterpret_cast<void*>(CRT_iswprint_l));
+    ldr.registerExport("msvcrt.dll", "_iswpunct_l", reinterpret_cast<void*>(CRT_iswpunct_l));
+    ldr.registerExport("msvcrt.dll", "_iswspace_l", reinterpret_cast<void*>(CRT_iswspace_l));
+    ldr.registerExport("msvcrt.dll", "_iswupper_l", reinterpret_cast<void*>(CRT_iswupper_l));
+    ldr.registerExport("msvcrt.dll", "_iswxdigit_l", reinterpret_cast<void*>(CRT_iswxdigit_l));
+    ldr.registerExport("msvcrt.dll", "_tolower_l", reinterpret_cast<void*>(CRT_tolower_l));
+    ldr.registerExport("msvcrt.dll", "_toupper_l", reinterpret_cast<void*>(CRT_toupper_l));
+    ldr.registerExport("msvcrt.dll", "_towlower_l", reinterpret_cast<void*>(CRT_towlower_l));
+    ldr.registerExport("msvcrt.dll", "_towupper_l", reinterpret_cast<void*>(CRT_towupper_l));
+    ldr.registerExport("msvcrt.dll", "_strcoll_l", reinterpret_cast<void*>(CRT_strcoll_l));
+    ldr.registerExport("msvcrt.dll", "_strxfrm_l", reinterpret_cast<void*>(CRT_strxfrm_l));
+    ldr.registerExport("msvcrt.dll", "_wcscoll_l", reinterpret_cast<void*>(CRT_wcscoll_l));
+    ldr.registerExport("msvcrt.dll", "_wcsxfrm_l", reinterpret_cast<void*>(CRT_wcsxfrm_l));
+    ldr.registerExport("msvcrt.dll", "wcsnlen", reinterpret_cast<void*>(CRT_wcsnlen));
+    ldr.registerExport("msvcrt.dll", "mbrlen", reinterpret_cast<void*>(CRT_mbrlen));
+    ldr.registerExport("msvcrt.dll", "_create_locale", reinterpret_cast<void*>(CRT_create_locale));
+    ldr.registerExport("msvcrt.dll", "_free_locale", reinterpret_cast<void*>(CRT_free_locale));
+    ldr.registerExport("msvcrt.dll", "setbuf", reinterpret_cast<void*>(CRT_setbuf));
+    ldr.registerExport("msvcrt.dll", "_strftime_l", reinterpret_cast<void*>(CRT_strftime_l));
+    ldr.registerExport("msvcrt.dll", "__pctype_func", reinterpret_cast<void*>(CRT_pctype_func));
+    ldr.registerExport("msvcrt.dll", "__sys_nerr", reinterpret_cast<void*>(&CRT_sys_nerr));
+    ldr.registerExport("msvcrt.dll", "_mbtowc_l", reinterpret_cast<void*>(CRT_mbtowc_l));
+    ldr.registerExport("msvcrt.dll", "_strtod_l", reinterpret_cast<void*>(CRT_strtod_l));
+    ldr.registerExport("msvcrt.dll", "mbrtowc", reinterpret_cast<void*>(CRT_mbrtowc));
+    ldr.registerExport("msvcrt.dll", "mbsrtowcs", reinterpret_cast<void*>(CRT_mbsrtowcs));
+    ldr.registerExport("msvcrt.dll", "wcrtomb", reinterpret_cast<void*>(CRT_wcrtomb));
+    ldr.registerExport("msvcrt.dll", "wcrtomb_s", reinterpret_cast<void*>(CRT_wcrtomb_s));
+    ldr.registerExport("msvcrt.dll", "wcstod", reinterpret_cast<void*>(CRT_wcstod));
+    ldr.registerExport("msvcrt.dll", "wcstoll", reinterpret_cast<void*>(CRT_wcstoll));
+    ldr.registerExport("msvcrt.dll", "wcstoull", reinterpret_cast<void*>(CRT_wcstoull));
     ldr.registerExport("api-ms-win-crt-convert-l1-1-0.dll", "strtol", reinterpret_cast<void*>(CRT_strtol));
     ldr.registerExport("ucrtbase.dll", "strtol", reinterpret_cast<void*>(CRT_strtol));
     ldr.registerExport("msvcrt.dll", "strtol", reinterpret_cast<void*>(CRT_strtol));
@@ -2247,7 +2332,11 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_wtoi", reinterpret_cast<void*>(CRT_wtoi));
     ldr.registerExport("msvcrt.dll", "_wcsnicmp", reinterpret_cast<void*>(CRT_wcsnicmp));
     ldr.registerExport("msvcrt.dll", "_aligned_malloc", reinterpret_cast<void*>(CRT_aligned_malloc));
+    ldr.registerExport("ucrtbase.dll", "_aligned_malloc", reinterpret_cast<void*>(CRT_aligned_malloc));
+    ldr.registerExport("api-ms-win-crt-heap-l1-1-0.dll", "_aligned_malloc", reinterpret_cast<void*>(CRT_aligned_malloc));
     ldr.registerExport("msvcrt.dll", "_aligned_free", reinterpret_cast<void*>(CRT_aligned_free));
+    ldr.registerExport("ucrtbase.dll", "_aligned_free", reinterpret_cast<void*>(CRT_aligned_free));
+    ldr.registerExport("api-ms-win-crt-heap-l1-1-0.dll", "_aligned_free", reinterpret_cast<void*>(CRT_aligned_free));
     ldr.registerExport("msvcrt.dll", "_waccess", reinterpret_cast<void*>(CRT_waccess));
     ldr.registerExport("msvcrt.dll", "_wchdir", reinterpret_cast<void*>(CRT_wchdir));
     ldr.registerExport("msvcrt.dll", "_wchmod", reinterpret_cast<void*>(CRT_wchmod));
@@ -2285,8 +2374,14 @@ inline void InitializeMsvcrtSubsystemExports() {
     ldr.registerExport("msvcrt.dll", "_getmaxstdio", reinterpret_cast<void*>(CRT_getmaxstdio));
     ldr.registerExport("msvcrt.dll", "_wperror", reinterpret_cast<void*>(CRT_wperror));
     ldr.registerExport("msvcrt.dll", "isalnum", reinterpret_cast<void*>(CRT_isalnum));
+    ldr.registerExport("ucrtbase.dll", "isalnum", reinterpret_cast<void*>(CRT_isalnum));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "isalnum", reinterpret_cast<void*>(CRT_isalnum));
     ldr.registerExport("msvcrt.dll", "isalpha", reinterpret_cast<void*>(CRT_isalpha));
+    ldr.registerExport("ucrtbase.dll", "isalpha", reinterpret_cast<void*>(CRT_isalpha));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "isalpha", reinterpret_cast<void*>(CRT_isalpha));
     ldr.registerExport("msvcrt.dll", "isspace", reinterpret_cast<void*>(CRT_isspace));
+    ldr.registerExport("ucrtbase.dll", "isspace", reinterpret_cast<void*>(CRT_isspace));
+    ldr.registerExport("api-ms-win-crt-string-l1-1-0.dll", "isspace", reinterpret_cast<void*>(CRT_isspace));
     ldr.registerExport("msvcrt.dll", "iswalnum", reinterpret_cast<void*>(CRT_iswalnum));
     ldr.registerExport("msvcrt.dll", "iswalpha", reinterpret_cast<void*>(CRT_iswalpha));
     ldr.registerExport("msvcrt.dll", "iswdigit", reinterpret_cast<void*>(CRT_iswdigit));

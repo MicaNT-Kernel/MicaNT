@@ -470,6 +470,15 @@ inline DWORD GetCurrentProcessId() noexcept {
 }
 
 /**
+ * @brief Retrieves the package full name for the current process.
+ * Conforms to win32metadata / appmodel.h specifications.
+ */
+inline uint32_t WINAPI GetCurrentPackageFullName(uint32_t* packageFullNameLength, wchar_t* /*packageFullName*/) noexcept {
+    if (packageFullNameLength) *packageFullNameLength = 0;
+    return 15700; // APPMODEL_ERROR_NO_PACKAGE
+}
+
+/**
  * @brief Retrieves a pseudo handle for the current thread.
  */
 inline HANDLE GetCurrentThread() noexcept {
@@ -2711,6 +2720,7 @@ inline SIZE_T VirtualQueryEx(HANDLE /*hProcess*/, LPCVOID lpAddress, void* lpBuf
 }
 
 inline void RtlCaptureContext(void* /*ContextRecord*/) noexcept {}
+inline void RtlRestoreContext(void* /*ContextRecord*/, void* /*ExceptionRecord*/) noexcept {}
 inline void* RtlLookupFunctionEntry(uint64_t /*ControlPc*/, uint64_t* ImageBase, void* /*HistoryTable*/) noexcept {
     if (ImageBase) *ImageBase = g_CurrentExecutableBase ? g_CurrentExecutableBase : 0x140000000ULL;
     return nullptr;
@@ -5128,6 +5138,7 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "VirtualFree", reinterpret_cast<void*>(VirtualFree));
     ldr.registerExport("kernel32.dll", "GetCurrentProcess", reinterpret_cast<void*>(GetCurrentProcess));
     ldr.registerExport("kernel32.dll", "GetCurrentProcessId", reinterpret_cast<void*>(GetCurrentProcessId));
+    ldr.registerExport("kernel32.dll", "GetCurrentPackageFullName", reinterpret_cast<void*>(GetCurrentPackageFullName));
     ldr.registerExport("kernel32.dll", "GetCurrentThread", reinterpret_cast<void*>(GetCurrentThread));
     ldr.registerExport("kernel32.dll", "GetCurrentThreadId", reinterpret_cast<void*>(GetCurrentThreadId));
     ldr.registerExport("kernel32.dll", "ExitProcess", reinterpret_cast<void*>(ExitProcess));
@@ -5271,6 +5282,7 @@ inline void InitializeWin32SubsystemExports() {
     ldr.registerExport("kernel32.dll", "TlsSetValue", reinterpret_cast<void*>(TlsSetValue));
     ldr.registerExport("kernel32.dll", "TlsFree", reinterpret_cast<void*>(TlsFree));
     ldr.registerExport("kernel32.dll", "RtlCaptureContext", reinterpret_cast<void*>(RtlCaptureContext));
+    ldr.registerExport("kernel32.dll", "RtlRestoreContext", reinterpret_cast<void*>(RtlRestoreContext));
     ldr.registerExport("kernel32.dll", "RtlLookupFunctionEntry", reinterpret_cast<void*>(RtlLookupFunctionEntry));
     ldr.registerExport("kernel32.dll", "RtlVirtualUnwind", reinterpret_cast<void*>(RtlVirtualUnwind));
     ldr.registerExport("kernel32.dll", "RtlUnwindEx", reinterpret_cast<void*>(RtlUnwindEx));

@@ -1060,12 +1060,105 @@ public:
             std::memcpy(trampolineBuffer + 0xE0, s7, sizeof(s7));
 
             // Slot 8 (0x100): GetTickCount64 (rdtsc + shl + or)
-            // 0F 31             rdtsc
-            // 48 C1 E2 20       shl $32, %rdx
-            // 48 09 D0          or %rdx, %rax
-            // C3                ret
             const uint8_t s8[] = { 0x0F, 0x31, 0x48, 0xC1, 0xE2, 0x20, 0x48, 0x09, 0xD0, 0xC3 };
             std::memcpy(trampolineBuffer + 0x100, s8, sizeof(s8));
+
+            // Slot 9 (0x120): QueryPerformanceCounter
+            const uint8_t s9[] = { 0x0F, 0x31, 0x48, 0xC1, 0xE2, 0x20, 0x48, 0x09, 0xD0, 0x48, 0x85, 0xC9, 0x74, 0x03, 0x48, 0x89, 0x01, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x120, s9, sizeof(s9));
+
+            // Slot 10 (0x140): QueryPerformanceFrequency (10 MHz)
+            const uint8_t s10[] = { 0x48, 0xB8, 0x80, 0x96, 0x98, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC9, 0x74, 0x03, 0x48, 0x89, 0x01, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x140, s10, sizeof(s10));
+
+            // Slot 11 (0x160): GetCurrentProcessId / GetCurrentThreadId (returns 1024)
+            const uint8_t s11[] = { 0xB8, 0x00, 0x04, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x160, s11, sizeof(s11));
+
+            // Slot 12 (0x180): GetLastError (returns 0)
+            const uint8_t s12[] = { 0x31, 0xC0, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x180, s12, sizeof(s12));
+
+            // Slot 13 (0x1A0): UniversalNoop / SetLastError / CritSec (ret)
+            const uint8_t s13[] = { 0xC3 };
+            std::memcpy(trampolineBuffer + 0x1A0, s13, sizeof(s13));
+
+            // Slot 14 (0x1C0): GetModuleHandleW / GetModuleHandleA (returns 0x140000000 on NULL rcx)
+            const uint8_t s14[] = { 0x48, 0x85, 0xC9, 0x75, 0x0B, 0x48, 0xB8, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00, 0xC3, 0x31, 0xC0, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x1C0, s14, sizeof(s14));
+
+            // Slot 15 (0x1E0): UniversalTrue / VirtualFree / SetEvent / ResetEvent (returns 1)
+            const uint8_t s15[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x1E0, s15, sizeof(s15));
+
+            // Slot 16 (0x200): UniversalSuccess / UniversalNull (returns 0 / S_OK)
+            const uint8_t s16[] = { 0x31, 0xC0, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x200, s16, sizeof(s16));
+
+            // Slot 17 (0x220): GetCurrentPackageFullName (writes 0, returns 15700)
+            const uint8_t s17[] = { 0x48, 0x85, 0xC9, 0x74, 0x06, 0xC7, 0x01, 0x00, 0x00, 0x00, 0x00, 0xB8, 0x4C, 0x3D, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x220, s17, sizeof(s17));
+
+            // Slot 18 (0x240): CreateEventW / CreateEventA (returns dummy handle 0x1000)
+            const uint8_t s18[] = { 0xB8, 0x00, 0x10, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x240, s18, sizeof(s18));
+
+            // Slot 19 (0x260): GetSystemTimeAsFileTime (writes timestamp to [rcx])
+            const uint8_t s19[] = { 0x48, 0x85, 0xC9, 0x74, 0x0E, 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xD9, 0x01, 0x48, 0x89, 0x01, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x260, s19, sizeof(s19));
+
+            // Slot 20 (0x280): GetProcessHeap (returns non-null handle 0x10000)
+            const uint8_t s20[] = { 0x48, 0xB8, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x280, s20, sizeof(s20));
+
+            // Slot 21 (0x2A0): HeapAlloc (lock xadd bump pointer at 0x3F8)
+            uint64_t bumpAddr = trampolineBaseVa + 0x3F8;
+            uint8_t s21[27] = {
+                0x49, 0x89, 0xC0,                         // mov %r8, %rax
+                0x48, 0x83, 0xC0, 0x0F,                   // add $15, %rax
+                0x48, 0x83, 0xE0, 0xF0,                   // and $-16, %rax
+                0x48, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $bumpAddr, %rdx
+                0xF0, 0x48, 0x0F, 0xC1, 0x02,             // lock xadd %rax, (%rdx)
+                0xC3                                      // ret
+            };
+            std::memcpy(s21 + 10, &bumpAddr, sizeof(bumpAddr));
+            std::memcpy(trampolineBuffer + 0x2A0, s21, sizeof(s21));
+
+            // Slot 22 (0x2C0): GetCommandLineW (returns pointer to wide string at 0x3A0)
+            uint64_t wcmdAddr = trampolineBaseVa + 0x3A0;
+            uint8_t s22[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(s22 + 2, &wcmdAddr, sizeof(wcmdAddr));
+            std::memcpy(trampolineBuffer + 0x2C0, s22, sizeof(s22));
+
+            // Slot 23 (0x2E0): GetCommandLineA (returns pointer to ascii string at 0x360)
+            uint64_t acmdAddr = trampolineBaseVa + 0x360;
+            uint8_t s23[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(s23 + 2, &acmdAddr, sizeof(acmdAddr));
+            std::memcpy(trampolineBuffer + 0x2E0, s23, sizeof(s23));
+
+            // Slot 24 (0x300): GetFileType (returns FILE_TYPE_CHAR = 2)
+            const uint8_t s24[] = { 0xB8, 0x02, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x300, s24, sizeof(s24));
+
+            // Slot 25 (0x320): GetConsoleMode (writes 0x07 to [rdx] if non-null, returns 1)
+            const uint8_t s25[] = { 0x48, 0x85, 0xD2, 0x74, 0x06, 0xC7, 0x02, 0x07, 0x00, 0x00, 0x00, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x320, s25, sizeof(s25));
+
+            // Slot 26 (0x340): TlsAlloc (returns 1)
+            const uint8_t s26[] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x340, s26, sizeof(s26));
+
+            // 0x360: ASCII command line string
+            const char asciiCmd[] = "surshell_app.exe";
+            std::memcpy(trampolineBuffer + 0x360, asciiCmd, sizeof(asciiCmd));
+
+            // 0x3A0: Wide command line string
+            const char16_t wideCmd[] = u"surshell_app.exe";
+            std::memcpy(trampolineBuffer + 0x3A0, wideCmd, sizeof(wideCmd));
+
+            // 0x3F8: Initial bump pointer address (4MB into user buffer if 0x140000000, else 0x800)
+            uint64_t initialBump = (targetBaseVa == 0x140000000ULL) ? (targetBaseVa + 0x400000ULL) : (trampolineBaseVa + 0x800ULL);
+            std::memcpy(trampolineBuffer + 0x3F8, &initialBump, sizeof(initialBump));
         }
 
         // 8. Parse and Bind Imports
@@ -1086,7 +1179,7 @@ public:
                         uint32_t iatRva = desc->firstThunk + static_cast<uint32_t>(idx * sizeof(uint64_t));
                         if (iatRva + sizeof(uint64_t) > destinationBufferSize) break;
 
-                        uint64_t targetTrampoline = trampolineBaseVa + 0x00; // default to ExitProcess
+                        uint64_t targetTrampoline = trampolineBaseVa + 0x200; // default to UniversalSuccess (returns 0/S_OK)
 
                         if (!(val & pe::IMAGE_ORDINAL_FLAG64)) {
                             uint32_t nameRva = static_cast<uint32_t>(val & 0xFFFFFFFF);
@@ -1094,7 +1187,7 @@ public:
                                 const auto* ibn = reinterpret_cast<const pe::ImageImportByName*>(destinationBuffer + nameRva);
                                 const char* symName = ibn->name;
 
-                                if (streq(symName, "ExitProcess") || streq(symName, "NtTerminateProcess")) {
+                                if (streq(symName, "ExitProcess") || streq(symName, "NtTerminateProcess") || streq(symName, "abort") || streq(symName, "_exit")) {
                                     targetTrampoline = trampolineBaseVa + 0x00;
                                 } else if (streq(symName, "NtQuerySystemInformation")) {
                                     targetTrampoline = trampolineBaseVa + 0x20;
@@ -1102,9 +1195,9 @@ public:
                                     targetTrampoline = trampolineBaseVa + 0x40;
                                 } else if (streq(symName, "WriteFile") || streq(symName, "NtWriteFile")) {
                                     targetTrampoline = trampolineBaseVa + 0x60;
-                                } else if (streq(symName, "NtYieldExecution")) {
+                                } else if (streq(symName, "NtYieldExecution") || streq(symName, "SwitchToThread") || streq(symName, "Sleep")) {
                                     targetTrampoline = trampolineBaseVa + 0x80;
-                                } else if (streq(symName, "NtAllocateVirtualMemory")) {
+                                } else if (streq(symName, "NtAllocateVirtualMemory") || streq(symName, "VirtualAlloc")) {
                                     targetTrampoline = trampolineBaseVa + 0xA0;
                                 } else if (streq(symName, "CloseHandle") || streq(symName, "NtClose")) {
                                     targetTrampoline = trampolineBaseVa + 0xC0;
@@ -1112,6 +1205,48 @@ public:
                                     targetTrampoline = trampolineBaseVa + 0xE0;
                                 } else if (streq(symName, "GetTickCount64") || streq(symName, "GetTickCount")) {
                                     targetTrampoline = trampolineBaseVa + 0x100;
+                                } else if (streq(symName, "QueryPerformanceCounter")) {
+                                    targetTrampoline = trampolineBaseVa + 0x120;
+                                } else if (streq(symName, "QueryPerformanceFrequency")) {
+                                    targetTrampoline = trampolineBaseVa + 0x140;
+                                } else if (streq(symName, "GetCurrentProcessId") || streq(symName, "GetCurrentThreadId")) {
+                                    targetTrampoline = trampolineBaseVa + 0x160;
+                                } else if (streq(symName, "GetLastError")) {
+                                    targetTrampoline = trampolineBaseVa + 0x180;
+                                } else if (streq(symName, "SetLastError") || streq(symName, "InitializeCriticalSection") ||
+                                           streq(symName, "DeleteCriticalSection") || streq(symName, "EnterCriticalSection") ||
+                                           streq(symName, "LeaveCriticalSection") || streq(symName, "InitializeCriticalSectionAndSpinCount") ||
+                                           streq(symName, "InitializeCriticalSectionEx")) {
+                                    targetTrampoline = trampolineBaseVa + 0x1A0;
+                                } else if (streq(symName, "GetModuleHandleW") || streq(symName, "GetModuleHandleA") || streq(symName, "GetModuleHandleExW")) {
+                                    targetTrampoline = trampolineBaseVa + 0x1C0;
+                                } else if (streq(symName, "VirtualFree") || streq(symName, "SetEvent") || streq(symName, "ResetEvent") ||
+                                           streq(symName, "TlsSetValue") || streq(symName, "TlsFree") || streq(symName, "IsNetworkAlive") ||
+                                           streq(symName, "IsDestinationReachableW") || streq(symName, "IsProcessorFeaturePresent") ||
+                                           streq(symName, "HeapFree")) {
+                                    targetTrampoline = trampolineBaseVa + 0x1E0;
+                                } else if (streq(symName, "GetCurrentPackageFullName")) {
+                                    targetTrampoline = trampolineBaseVa + 0x220;
+                                } else if (streq(symName, "CreateEventW") || streq(symName, "CreateEventA") || streq(symName, "CreateEventExW")) {
+                                    targetTrampoline = trampolineBaseVa + 0x240;
+                                } else if (streq(symName, "GetSystemTimeAsFileTime")) {
+                                    targetTrampoline = trampolineBaseVa + 0x260;
+                                } else if (streq(symName, "GetProcessHeap")) {
+                                    targetTrampoline = trampolineBaseVa + 0x280;
+                                } else if (streq(symName, "HeapAlloc") || streq(symName, "HeapReAlloc")) {
+                                    targetTrampoline = trampolineBaseVa + 0x2A0;
+                                } else if (streq(symName, "GetCommandLineW")) {
+                                    targetTrampoline = trampolineBaseVa + 0x2C0;
+                                } else if (streq(symName, "GetCommandLineA")) {
+                                    targetTrampoline = trampolineBaseVa + 0x2E0;
+                                } else if (streq(symName, "GetFileType")) {
+                                    targetTrampoline = trampolineBaseVa + 0x300;
+                                } else if (streq(symName, "GetConsoleMode") || streq(symName, "GetConsoleCP") || streq(symName, "GetConsoleOutputCP")) {
+                                    targetTrampoline = trampolineBaseVa + 0x320;
+                                } else if (streq(symName, "TlsAlloc")) {
+                                    targetTrampoline = trampolineBaseVa + 0x340;
+                                } else if (streq(symName, "TlsGetValue") || streq(symName, "IsDebuggerPresent")) {
+                                    targetTrampoline = trampolineBaseVa + 0x200;
                                 }
                             }
                         }

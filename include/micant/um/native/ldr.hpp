@@ -160,17 +160,115 @@ public:
             modLower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
         }
 
-        if (modLower.starts_with("api-ms-win-crt-") || modLower == "ucrtbase.dll" || modLower == "ucrtbase") {
+        // 1. C Runtime (UCRT / MSVCRT / VCRuntime)
+        if (modLower.starts_with("api-ms-win-crt-") || modLower == "ucrtbase.dll" || modLower == "ucrtbase" ||
+            modLower.starts_with("vcruntime140") || modLower.starts_with("msvcp140")) {
             auto itCrt = exportRegistry_.find(normalizeKey("msvcrt.dll", functionName));
-            if (itCrt != exportRegistry_.end()) {
-                return itCrt->second;
-            }
-        } else if (modLower.starts_with("api-ms-win-core-") || modLower == "kernelbase.dll" || modLower == "kernelbase") {
-            auto itK32 = exportRegistry_.find(normalizeKey("kernel32.dll", functionName));
-            if (itK32 != exportRegistry_.end()) {
-                return itK32->second;
-            }
+            if (itCrt != exportRegistry_.end()) return itCrt->second;
         }
+        // 2. Kernel Base & Core OS Services
+        else if (modLower.starts_with("api-ms-win-core-") || modLower == "kernelbase.dll" || modLower == "kernelbase") {
+            auto itK32 = exportRegistry_.find(normalizeKey("kernel32.dll", functionName));
+            if (itK32 != exportRegistry_.end()) return itK32->second;
+        }
+        // 3. Security, Cryptography & Eventing
+        else if (modLower.starts_with("api-ms-win-security-") || modLower.starts_with("api-ms-win-eventing-") ||
+                 modLower == "advapi32.dll" || modLower == "advapi32" || modLower == "bcrypt.dll" || modLower == "crypt32.dll") {
+            auto itAdv = exportRegistry_.find(normalizeKey("advapi32.dll", functionName));
+            if (itAdv != exportRegistry_.end()) return itAdv->second;
+            auto itCrypt = exportRegistry_.find(normalizeKey("crypt32.dll", functionName));
+            if (itCrypt != exportRegistry_.end()) return itCrypt->second;
+        }
+        // 4. Shell, UI Navigation & Lightweight Shell APIs
+        else if (modLower.starts_with("api-ms-win-shcore-") || modLower.starts_with("api-ms-win-shell-") ||
+                 modLower == "shell32.dll" || modLower == "shell32" || modLower == "shlwapi.dll" || modLower == "shlwapi") {
+            auto itSh = exportRegistry_.find(normalizeKey("shell32.dll", functionName));
+            if (itSh != exportRegistry_.end()) return itSh->second;
+        }
+        // 5. GDI & 2D Graphics Engine
+        else if (modLower.starts_with("api-ms-win-gdi-") || modLower.starts_with("ext-ms-win-gdi-") ||
+                 modLower == "gdi32.dll" || modLower == "gdi32") {
+            auto itGdi = exportRegistry_.find(normalizeKey("gdi32.dll", functionName));
+            if (itGdi != exportRegistry_.end()) return itGdi->second;
+        }
+        // 6. User32, Windows & Desktop Messages
+        else if (modLower.starts_with("api-ms-win-rtcore-ntuser-") || modLower.starts_with("api-ms-win-ntuser-") ||
+                 modLower == "user32.dll" || modLower == "user32") {
+            auto itUsr = exportRegistry_.find(normalizeKey("user32.dll", functionName));
+            if (itUsr != exportRegistry_.end()) return itUsr->second;
+        }
+        // 7. Desktop Window Manager & Compositing
+        else if (modLower.starts_with("ext-ms-win-dwmapi-") || modLower == "dwmapi.dll" || modLower == "dwmapi") {
+            auto itDwm = exportRegistry_.find(normalizeKey("dwmapi.dll", functionName));
+            if (itDwm != exportRegistry_.end()) return itDwm->second;
+        }
+        // 8. Winsock & Network IP Helper APIs
+        else if (modLower.starts_with("api-ms-win-core-network-") || modLower == "ws2_32.dll" || modLower == "ws2_32" ||
+                 modLower == "iphlpapi.dll" || modLower == "iphlpapi") {
+            auto itWs = exportRegistry_.find(normalizeKey("ws2_32.dll", functionName));
+            if (itWs != exportRegistry_.end()) return itWs->second;
+            auto itIp = exportRegistry_.find(normalizeKey("iphlpapi.dll", functionName));
+            if (itIp != exportRegistry_.end()) return itIp->second;
+        }
+        // 9. COM, WinRT & OLE Automation
+        else if (modLower.starts_with("api-ms-win-core-winrt-") || modLower.starts_with("api-ms-win-core-com-") ||
+                 modLower == "combase.dll" || modLower == "combase") {
+            auto itOle = exportRegistry_.find(normalizeKey("ole32.dll", functionName));
+            if (itOle != exportRegistry_.end()) return itOle->second;
+            auto itAut = exportRegistry_.find(normalizeKey("oleaut32.dll", functionName));
+            if (itAut != exportRegistry_.end()) return itAut->second;
+        }
+        // 10. SSPI & Security Client (sspicli.dll -> secur32.dll)
+        else if (modLower == "sspicli.dll" || modLower == "sspicli") {
+            auto itSec = exportRegistry_.find(normalizeKey("secur32.dll", functionName));
+            if (itSec != exportRegistry_.end()) return itSec->second;
+        }
+        // 11. DirectX, Vulkan, Multimedia & Gaming APIs
+        else if (modLower.starts_with("xinput")) {
+            auto itXi = exportRegistry_.find(normalizeKey("xinput1_4.dll", functionName));
+            if (itXi != exportRegistry_.end()) return itXi->second;
+        }
+        else if (modLower.starts_with("xaudio2")) {
+            auto itXa = exportRegistry_.find(normalizeKey("xaudio2_9.dll", functionName));
+            if (itXa != exportRegistry_.end()) return itXa->second;
+        }
+        else if (modLower.starts_with("d3d11")) {
+            auto itD11 = exportRegistry_.find(normalizeKey("d3d11.dll", functionName));
+            if (itD11 != exportRegistry_.end()) return itD11->second;
+        }
+        else if (modLower.starts_with("d3d12")) {
+            auto itD12 = exportRegistry_.find(normalizeKey("d3d12.dll", functionName));
+            if (itD12 != exportRegistry_.end()) return itD12->second;
+        }
+        else if (modLower.starts_with("dxgi")) {
+            auto itDxgi = exportRegistry_.find(normalizeKey("dxgi.dll", functionName));
+            if (itDxgi != exportRegistry_.end()) return itDxgi->second;
+        }
+        else if (modLower.starts_with("mf") || modLower.starts_with("mfplat")) {
+            auto itMf = exportRegistry_.find(normalizeKey("mfplat.dll", functionName));
+            if (itMf != exportRegistry_.end()) return itMf->second;
+        }
+        else if (modLower.starts_with("d2d1")) {
+            auto itD2d = exportRegistry_.find(normalizeKey("d2d1.dll", functionName));
+            if (itD2d != exportRegistry_.end()) return itD2d->second;
+        }
+        else if (modLower.starts_with("dwrite")) {
+            auto itDw = exportRegistry_.find(normalizeKey("dwrite.dll", functionName));
+            if (itDw != exportRegistry_.end()) return itDw->second;
+        }
+        else if (modLower.starts_with("vulkan")) {
+            auto itVk = exportRegistry_.find(normalizeKey("vulkan-1.dll", functionName));
+            if (itVk != exportRegistry_.end()) return itVk->second;
+        }
+        else if (modLower.starts_with("opengl") || modLower.starts_with("glu32")) {
+            auto itGl = exportRegistry_.find(normalizeKey("opengl32.dll", functionName));
+            if (itGl != exportRegistry_.end()) return itGl->second;
+        }
+
+        // 12. Universal Fallback: Search all registered subsystem exports across the ecosystem
+        void* fallback = findExport(functionName);
+        if (fallback) return fallback;
+
         return nullptr;
     }
 

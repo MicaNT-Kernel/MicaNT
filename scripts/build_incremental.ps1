@@ -11,7 +11,8 @@
 param(
     [switch]$Force,
     [switch]$SkipTests,
-    [switch]$BuildEfi
+    [switch]$BuildEfi,
+    [switch]$BuildKernel
 )
 
 $ErrorActionPreference = "Continue"
@@ -171,7 +172,23 @@ try {
         @{ Name = "ucrtbase.dll";       Src = "kernel/ps/winnt_ucrtbase_runtime_abi.cpp";            Def = "BUILD_SYSTEM32_UCRTBASE_DLL";      DefFile = "kernel/ps/ucrtbase.def" },
         @{ Name = "vcruntime140.dll";   Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";             Def = "BUILD_SYSTEM32_VCRUNTIME140_DLL";  DefFile = "kernel/ps/vcruntime140.def" },
         @{ Name = "vcruntime140_1.dll"; Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";             Def = "BUILD_SYSTEM32_VCRUNTIME140_1_DLL" },
-        @{ Name = "msvcp140.dll";       Src = "kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp"; Def = "BUILD_SYSTEM32_MSVCP140_DLL" }
+        @{ Name = "msvcp140.dll";       Src = "kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp"; Def = "BUILD_SYSTEM32_MSVCP140_DLL" },
+        @{ Name = "dxgi.dll";           Src = "kernel/io/prism_directx_system32_dll_router.cpp";       Def = "BUILD_SYSTEM32_DXGI_DLL" },
+        @{ Name = "d3d12.dll";          Src = "kernel/io/prism_directx_system32_dll_router.cpp";       Def = "BUILD_SYSTEM32_D3D12_DLL" },
+        @{ Name = "d3d11.dll";          Src = "kernel/io/prism_directx_system32_dll_router.cpp";       Def = "BUILD_SYSTEM32_D3D11_DLL" },
+        @{ Name = "d3dcompiler_47.dll"; Src = "kernel/io/prism_directx_system32_dll_router.cpp";       Def = "BUILD_SYSTEM32_D3DCOMPILER_47_DLL" },
+        @{ Name = "xinput1_4.dll";      Src = "kernel/io/prism_directx_system32_dll_router.cpp";       Def = "BUILD_SYSTEM32_XINPUT1_4_DLL" },
+        @{ Name = "d3d9.dll";           Src = "kernel/io/prism_d3d9ex_com_vtable_abi.cpp";             Def = "BUILD_SYSTEM32_D3D9_DLL" },
+        @{ Name = "xaudio2_9.dll";      Src = "kernel/io/prism_xaudio2_dinput8_com_abi.cpp";           Def = "BUILD_SYSTEM32_XAUDIO2_9_DLL" },
+        @{ Name = "dinput8.dll";        Src = "kernel/io/prism_xaudio2_dinput8_com_abi.cpp";           Def = "BUILD_SYSTEM32_DINPUT8_DLL" },
+        @{ Name = "d2d1.dll";           Src = "kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp";      Def = "BUILD_SYSTEM32_D2D1_DLL" },
+        @{ Name = "dwrite.dll";         Src = "kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp";      Def = "BUILD_SYSTEM32_DWRITE_DLL" },
+        @{ Name = "dcomp.dll";          Src = "kernel/io/prism_d2d1_dwrite_dcomp_11dll_seal.cpp";      Def = "BUILD_SYSTEM32_DCOMP_DLL" },
+        @{ Name = "mfplat.dll";         Src = "kernel/io/prism_mfplat_mfreadwrite_cutscene_abi.cpp";   Def = "BUILD_SYSTEM32_MFPLAT_DLL" },
+        @{ Name = "mfreadwrite.dll";    Src = "kernel/io/prism_mfplat_mfreadwrite_cutscene_abi.cpp";   Def = "BUILD_SYSTEM32_MFREADWRITE_DLL" },
+        @{ Name = "dxcore.dll";         Src = "kernel/io/prism_dxcore_adapter_factory_com_abi.cpp";    Def = "BUILD_SYSTEM32_DXCORE_DLL" },
+        @{ Name = "vulkan-1.dll";       Src = "kernel/io/prism_vulkan1_opengl32_16dll_seal.cpp";       Def = "BUILD_SYSTEM32_VULKAN_1_DLL" },
+        @{ Name = "opengl32.dll";       Src = "kernel/io/prism_vulkan1_opengl32_16dll_seal.cpp";       Def = "BUILD_SYSTEM32_OPENGL32_DLL" }
     )
     $isMsvc = (clang++ -v 2>&1 | Select-String "Target:.*msvc") -ne $null
     $forceFlag = if ($isMsvc) { "-Wl,/FORCE:MULTIPLE" } else { "-Wl,--allow-multiple-definition" }
@@ -202,6 +219,12 @@ try {
         Write-Host "[MicaNT Build] Linking bin/micant_tests.exe..."
         & clang++ -std=c++23 -O2 -Iinclude -I. test/test_runner.cpp @allObjs -o bin/micant_tests.exe
         if ($LASTEXITCODE -ne 0) { throw "Failed linking bin/micant_tests.exe" }
+    }
+
+    if ($BuildKernel -or $BuildEfi) {
+        Write-Host "[MicaNT Build] Building Standalone PE32+ Kernel (build/ntoskrnl.exe)..."
+        & clang++ -target x86_64-w64-mingw32 -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,native" "-Wl,-e,KiSystemStartup" -nostdlib kernel/init/ntoskrnl.cpp -o build/ntoskrnl.exe
+        if ($LASTEXITCODE -ne 0) { throw "Failed building ntoskrnl.exe" }
     }
 
     if ($BuildEfi) {

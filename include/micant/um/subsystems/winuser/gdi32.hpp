@@ -1285,11 +1285,66 @@ inline int GetDIBits(HDC /*hdc*/, HBITMAP /*hbm*/, UINT /*start*/, UINT cLines, 
 
 inline int StretchDIBits(
     HDC hdc, int xDest, int yDest, int DestWidth, int DestHeight,
-    int /*xSrc*/, int /*ySrc*/, int /*SrcWidth*/, int /*SrcHeight*/,
-    const void* /*lpBits*/, const BITMAPINFO* /*lpbmi*/, UINT /*iUsage*/, DWORD /*rop*/
+    int xSrc, int ySrc, int SrcWidth, int SrcHeight,
+    const void* lpBits, const BITMAPINFO* lpbmi, UINT /*iUsage*/, DWORD /*rop*/
 ) noexcept {
-    RECT rc{xDest, yDest, xDest + DestWidth, yDest + DestHeight};
-    FillRect(hdc, &rc, nullptr);
+    if (!hdc || DestWidth <= 0 || DestHeight <= 0) return 0;
+    auto dc = GdiEngine::get().getDc(hdc);
+    if (!dc) return 0;
+
+    auto* dstBmp = dc->GetBitmap();
+    if (!dstBmp || !lpBits || !lpbmi) {
+        RECT rc{xDest, yDest, xDest + DestWidth, yDest + DestHeight};
+        FillRect(hdc, &rc, nullptr);
+        return DestHeight;
+    }
+
+    int dibWidth = lpbmi->bmiHeader.biWidth;
+    int dibHeight = lpbmi->bmiHeader.biHeight;
+    bool topDown = (dibHeight < 0);
+    int absDibHeight = std::abs(dibHeight);
+    uint16_t bpp = lpbmi->bmiHeader.biBitCount;
+
+    if (SrcWidth <= 0) SrcWidth = dibWidth;
+    if (SrcHeight <= 0) SrcHeight = absDibHeight;
+
+    const uint8_t* srcBytes = reinterpret_cast<const uint8_t*>(lpBits);
+    size_t stride = ((static_cast<size_t>(dibWidth) * bpp + 31) / 32) * 4;
+
+    float scaleX = static_cast<float>(SrcWidth) / DestWidth;
+    float scaleY = static_cast<float>(SrcHeight) / DestHeight;
+
+    for (int dy = 0; dy < DestHeight; ++dy) {
+        int targetY = yDest + dy;
+        if (targetY < 0 || targetY >= static_cast<int>(dstBmp->GetHeight())) continue;
+
+        int sy = ySrc + static_cast<int>(dy * scaleY);
+        if (sy < 0 || sy >= absDibHeight) continue;
+
+        int rowInDIB = topDown ? sy : (absDibHeight - 1 - sy);
+        const uint8_t* rowPtr = srcBytes + rowInDIB * stride;
+
+        for (int dx = 0; dx < DestWidth; ++dx) {
+            int targetX = xDest + dx;
+            if (targetX < 0 || targetX >= static_cast<int>(dstBmp->GetWidth())) continue;
+
+            int sx = xSrc + static_cast<int>(dx * scaleX);
+            if (sx < 0 || sx >= dibWidth) continue;
+
+            uint32_t bgra = 0xFF000000;
+            if (bpp == 32) {
+                const auto* pPix = reinterpret_cast<const uint32_t*>(rowPtr + sx * 4);
+                bgra = *pPix;
+            } else if (bpp == 24) {
+                const uint8_t* pPix = rowPtr + sx * 3;
+                bgra = 0xFF000000 | (static_cast<uint32_t>(pPix[2]) << 16) | (static_cast<uint32_t>(pPix[1]) << 8) | pPix[0];
+            }
+
+            dstBmp->SetPixel(static_cast<uint32_t>(targetX), static_cast<uint32_t>(targetY), bgra);
+        }
+    }
+
+    dc->FlushIfWindow();
     return DestHeight;
 }
 

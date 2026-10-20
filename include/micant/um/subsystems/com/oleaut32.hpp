@@ -1345,6 +1345,10 @@ inline void InitializeOleAut32SubsystemExports() {
     ldr.registerExport("oleaut32.dll", "SystemTimeToVariantTime", reinterpret_cast<void*>(SystemTimeToVariantTime));
     ldr.registerExportOrdinal("oleaut32.dll", 202, reinterpret_cast<void*>(CreateErrorInfo));
     ldr.registerExportOrdinal("oleaut32.dll", 201, reinterpret_cast<void*>(SetErrorInfo));
+    ldr.registerExportOrdinal("oleaut32.dll", 200, reinterpret_cast<void*>(+[](uint32_t /*dwReserved*/, void** pperrinfo) noexcept -> HRESULT {
+        if (pperrinfo) *pperrinfo = nullptr;
+        return 1;
+    }));
     ldr.registerExportOrdinal("oleaut32.dll", 94, reinterpret_cast<void*>(VarDateFromStr));
     ldr.registerExportOrdinal("oleaut32.dll", 185, reinterpret_cast<void*>(VariantTimeToSystemTime));
     ldr.registerExportOrdinal("oleaut32.dll", 184, reinterpret_cast<void*>(SystemTimeToVariantTime));

@@ -1,20 +1,20 @@
 import ctypes
-from ctypes import wintypes
 
 user32 = ctypes.windll.user32
-WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 
-def enum_cb(hwnd, extra):
+class RECT(ctypes.Structure):
+    _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long), ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
+WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+def enum_cb(hwnd, lparam):
     if user32.IsWindowVisible(hwnd):
-        length = user32.GetWindowTextLengthW(hwnd)
-        if length > 0:
-            buff = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buff, length + 1)
-            title = buff.value
-            if any(k in title.lower() for k in ["jviewer", "51.81", "kvm", "ipmi", "supermicro"]):
-                print(f"MATCH: {hwnd}: {title}")
-                user32.ShowWindow(hwnd, 9)
-                user32.SetForegroundWindow(hwnd)
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, buf, 256)
+        title = buf.value
+        if title:
+            r = RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            print(f"HWND: {hwnd:#x}, Title: '{title}', Rect: ({r.left}, {r.top}, {r.right}, {r.bottom})")
     return True
 
 user32.EnumWindows(WNDENUMPROC(enum_cb), 0)

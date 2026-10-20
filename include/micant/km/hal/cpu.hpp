@@ -63,6 +63,39 @@ inline constexpr uint64_t EFER_LME            = (1ULL << 8);  // Long Mode Enabl
 inline constexpr uint64_t EFER_LMA            = (1ULL << 10); // Long Mode Active
 inline constexpr uint64_t EFER_NXE            = (1ULL << 11); // No-Execute Enable
 
+// Local APIC & x2APIC MSRs (Intel SDM Vol 3A Chap 10)
+inline constexpr uint32_t MSR_IA32_APIC_BASE          = 0x0000001B;
+inline constexpr uint32_t MSR_X2APIC_ID               = 0x00000802;
+inline constexpr uint32_t MSR_X2APIC_VERSION          = 0x00000803;
+inline constexpr uint32_t MSR_X2APIC_TPR              = 0x00000808;
+inline constexpr uint32_t MSR_X2APIC_EOI              = 0x0000080B;
+inline constexpr uint32_t MSR_X2APIC_LDR              = 0x0000080D;
+inline constexpr uint32_t MSR_X2APIC_SVR              = 0x0000080F;
+inline constexpr uint32_t MSR_X2APIC_ESR              = 0x00000828;
+inline constexpr uint32_t MSR_X2APIC_ICR              = 0x00000830;
+inline constexpr uint32_t MSR_X2APIC_LVT_TIMER         = 0x00000832;
+inline constexpr uint32_t MSR_X2APIC_TICR              = 0x00000838;
+inline constexpr uint32_t MSR_X2APIC_TCCR              = 0x00000839;
+inline constexpr uint32_t MSR_X2APIC_TDCR              = 0x0000083E;
+
+static inline uint64_t cpuRdmsr(uint32_t msr) noexcept {
+#if defined(__x86_64__)
+    uint32_t low = 0, high = 0;
+    __asm__ __volatile__("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+    return (static_cast<uint64_t>(high) << 32) | low;
+#else
+    return 0;
+#endif
+}
+
+static inline void cpuWrmsr(uint32_t msr, uint64_t val) noexcept {
+#if defined(__x86_64__)
+    uint32_t low = static_cast<uint32_t>(val & 0xFFFFFFFF);
+    uint32_t high = static_cast<uint32_t>((val >> 32) & 0xFFFFFFFF);
+    __asm__ __volatile__("wrmsr" : : "c"(msr), "a"(low), "d"(high));
+#endif
+}
+
 #pragma pack(push, 1)
 
 // ============================================================================

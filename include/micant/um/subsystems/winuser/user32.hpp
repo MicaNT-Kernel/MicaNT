@@ -361,10 +361,15 @@ public:
 
 class WindowManager {
 public:
+    using PhysicalDisplayPresenterCallback = void (*)(int32_t x, int32_t y, uint32_t width, uint32_t height, const uint32_t* pixels, uint32_t pitch);
+
     static WindowManager& get() {
         static WindowManager instance;
         return instance;
     }
+
+    void setPhysicalPresenter(PhysicalDisplayPresenterCallback cb) noexcept { m_physicalPresenter = cb; }
+    [[nodiscard]] PhysicalDisplayPresenterCallback getPhysicalPresenter() const noexcept { return m_physicalPresenter; }
 
     // ------------------------------------------------------------------------
     // Window Class Registry
@@ -781,6 +786,10 @@ public:
         }
 
         win->dirty = false;
+
+        if (m_physicalPresenter && win->visible) {
+            m_physicalPresenter(win->x, win->y, copyW, copyH, win->surfacePixels.data(), win->width);
+        }
     }
 
     const uint32_t* getWindowPixelBuffer(win32::HWND hWnd, uint32_t* pWidth, uint32_t* pHeight) {
@@ -960,6 +969,7 @@ private:
     std::deque<MSG> messageQueue_;
     std::vector<RAWINPUTDEVICE> registeredRawDevices_;
     std::unordered_map<HRAWINPUT, RAWINPUT> rawInputBuffer_;
+    PhysicalDisplayPresenterCallback m_physicalPresenter{nullptr};
 };
 
 // ============================================================================

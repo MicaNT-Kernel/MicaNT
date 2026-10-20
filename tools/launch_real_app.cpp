@@ -40,12 +40,40 @@
 #include "micant/um/subsystems/winbase/cfgmgr32.hpp"
 #include "micant/um/subsystems/winuser/pointer.hpp"
 #include "micant/um/subsystems/graphics/d3dcompiler.hpp"
+#include "micant/um/subsystems/winuser/comdlg32.hpp"
+#include "micant/um/subsystems/winuser/winspool.hpp"
+#include "micant/um/subsystems/net/winhttp.hpp"
+#include "micant/um/subsystems/security/acl.hpp"
+#include "micant/um/servers/termsrv.hpp"
+#include "micant/um/subsystems/winuser/uiautomation.hpp"
+#include "micant/um/native/ntdll.hpp"
+#include "micant/um/subsystems/mgmt/wevtapi.hpp"
+#include "micant/um/subsystems/net/sensapi.hpp"
+#include "micant/um/subsystems/mgmt/userenv.hpp"
+#include "micant/um/subsystems/security/authz.hpp"
+#include "micant/um/subsystems/graphics/dwrite.hpp"
+#include "micant/um/subsystems/security/sspi.hpp"
+#include "micant/um/subsystems/winbase/setupapi.hpp"
+#include "micant/um/subsystems/winuser/imm32.hpp"
+#include "micant/um/subsystems/graphics/prism3d12.hpp"
+#include "micant/um/subsystems/winbase/powrprof.hpp"
+#include "micant/um/subsystems/net/netapi32.hpp"
+#include "micant/um/subsystems/mgmt/dbgeng.hpp"
+#include "micant/ucrt/icuuc.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 using namespace micant;
+
+namespace micant::sys {
+    fs::FileObject* LookupKernelFileObject(Handle) { return nullptr; }
+    NtStatus NtDeviceIoControlFile(Handle, Handle, void*, void*, IoStatusBlock*, uint32_t, const void*, uint32_t, void*, uint32_t) {
+        return NtStatus::Success;
+    }
+    void SyscallDispatcher::initializeStandardTable() {}
+}
 
 static uint64_t UniversalStubHandler() {
     return 0; // Return 0 / S_OK / FALSE / NULL
@@ -133,6 +161,26 @@ static void InitializeAllMicaNtExports() {
     cfgmgr32::InitializeCfgMgr32SubsystemExports();
     pointer::InitializePointerExports();
     prism_compiler::InitializeDirectXSubsystemExports();
+    comdlg32::InitializeComDlg32SubsystemExports();
+    winspool::InitializePrintSpoolerSubsystemExports();
+    winhttp::InitializeWinHttpSubsystemExports();
+    acl::InitializeAclSubsystemExports();
+    termsrv::InitializeTerminalServicesSubsystemExports();
+    uiautomation::InitializeUIAutomationSubsystemExports();
+    ntdll::InitializeNtdllSubsystemExports();
+    wevtapi::InitializeWevtApiSubsystemExports();
+    sensapi::InitializeSensApiSubsystemExports();
+    userenv::InitializeUserenvSubsystemExports();
+    authz::InitializeAuthzSubsystemExports();
+    dwrite::InitializeDirectWriteExports();
+    sspi::InitializeSspiSubsystemExports();
+    setupapi::InitializeSetupApiSubsystemExports();
+    imm32::InitializeImm32SubsystemExports();
+    prism3d12::InitializePrism3D12SubsystemExports();
+    powrprof::InitializePowrProfSubsystemExports();
+    netapi::InitializeNetApiSubsystemExports();
+    dbgeng::InitializeDbgEngSubsystemExports();
+    icuuc::InitializeIcuucSubsystemExports();
 }
 
 struct AppAuditResult {

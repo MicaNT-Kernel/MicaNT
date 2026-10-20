@@ -146,6 +146,14 @@ inline win32::BOOL EnumDisplayMonitors(HDC /*hdc*/, const RECT* /*lprcClip*/, vo
     return win32::TRUE;
 }
 
+inline win32::BOOL EnumDisplayDevicesA(const char* /*lpDevice*/, win32::DWORD /*iDevNum*/, void* /*lpDisplayDevice*/, win32::DWORD /*dwFlags*/) noexcept {
+    return win32::FALSE;
+}
+
+inline win32::BOOL EnumDisplayDevicesW(const wchar_t* /*lpDevice*/, win32::DWORD /*iDevNum*/, void* /*lpDisplayDevice*/, win32::DWORD /*dwFlags*/) noexcept {
+    return win32::FALSE;
+}
+
 // ----------------------------------------------------------------------------
 // 2. Dialogs & Controls
 // ----------------------------------------------------------------------------
@@ -524,10 +532,7 @@ inline int GetClassNameA(win32::HWND /*hWnd*/, char* lpClassName, int nMaxCount)
     lpClassName[len] = '\0';
     return len;
 }
-inline int GetWindowTextA(win32::HWND /*hWnd*/, char* lpString, int nMaxCount) noexcept {
-    if (lpString && nMaxCount > 0) lpString[0] = '\0';
-    return 0;
-}
+
 inline int wsprintfW(wchar_t* buffer, const wchar_t* format, ...) noexcept {
     if (!buffer || !format) return 0;
     va_list args;
@@ -572,6 +577,8 @@ inline void InitializeUser32ExtendedExports() {
     ldr.registerExport("user32.dll", "GetMonitorInfoW", reinterpret_cast<void*>(GetMonitorInfoW));
     ldr.registerExport("api-ms-win-ntuser-sysparams-l1-1-0.dll", "GetMonitorInfoW", reinterpret_cast<void*>(GetMonitorInfoW));
     ldr.registerExport("user32.dll", "EnumDisplayMonitors", reinterpret_cast<void*>(EnumDisplayMonitors));
+    ldr.registerExport("user32.dll", "EnumDisplayDevicesA", reinterpret_cast<void*>(EnumDisplayDevicesA));
+    ldr.registerExport("user32.dll", "EnumDisplayDevicesW", reinterpret_cast<void*>(EnumDisplayDevicesW));
     ldr.registerExport("user32.dll", "CreateDialogParamW", reinterpret_cast<void*>(CreateDialogParamW));
     ldr.registerExport("user32.dll", "CreateDialogIndirectParamW", reinterpret_cast<void*>(CreateDialogIndirectParamW));
     ldr.registerExport("user32.dll", "DialogBoxParamW", reinterpret_cast<void*>(DialogBoxParamW));
