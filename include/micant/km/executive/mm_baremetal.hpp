@@ -200,7 +200,7 @@ public:
             uint64_t lowFlags = pdpt[pdptIdx] & 0xFFFULL;
             uint64_t nxFlag = pdpt[pdptIdx] & PTE_NO_EXECUTE;
             for (uint64_t i = 0; i < 512; ++i) {
-                newPd[i] = (base1Gb + (i * 0x200000ULL)) | lowFlags | nxFlag;
+                newPd[i] = (base1Gb + (i * 0x200000ULL)) | lowFlags | nxFlag | PTE_LARGE_PAGE;
             }
             pdpt[pdptIdx] = newPdPhys | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
         } else {
@@ -237,9 +237,14 @@ public:
         // Map target leaf PTE
         pt[ptIdx] = physAddr | flags | PTE_PRESENT;
 
-        // Invalidate TLB for this virtual address
+        // Invalidate TLB for this virtual address and reload CR3 to flush paging-structure caches
 #if defined(__x86_64__)
         __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
+        uint64_t currentCr3 = 0;
+        __asm__ __volatile__("mov %%cr3, %0" : "=r"(currentCr3));
+        if ((currentCr3 & PTE_PHYS_MASK) == cr3Phys) {
+            __asm__ __volatile__("mov %0, %%cr3" : : "r"(currentCr3) : "memory");
+        }
 #endif
         return true;
     }
@@ -443,8 +448,8 @@ public:
 
         if (!vad) return NtStatus::InsufficientResources;
 
-        // If MEM_COMMIT requested and not already backed by heap pool, allocate physical pages
-        if ((allocationType & MEM_COMMIT) && !fromHeapPool) {
+        // If MEM_COMMIT requested:
+        if (allocationType & MEM_COMMIT) {
             uint64_t pteFlags = PTE_USER | PTE_PRESENT;
             if (protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) {
                 pteFlags |= PTE_WRITABLE;
@@ -453,11 +458,18 @@ public:
                 pteFlags |= PTE_NO_EXECUTE;
             }
 
-            for (uint64_t va = targetVa; va < targetVa + alignedSize; va += PAGE_SIZE_4KB) {
-                uint64_t phys = BareMetalPfnAllocator::get().allocatePage();
-                if (!phys) return NtStatus::InsufficientResources;
-                if (!BareMetalPaging::mapVirtualPage(cr3Phys, va, phys, pteFlags)) {
-                    return NtStatus::InsufficientResources;
+            if (fromHeapPool) {
+                // Ensure backing pages in heap pool have user/write access mapped
+                for (uint64_t va = targetVa; va < targetVa + alignedSize; va += PAGE_SIZE_4KB) {
+                    BareMetalPaging::mapVirtualPage(cr3Phys, va, va, pteFlags);
+                }
+            } else {
+                for (uint64_t va = targetVa; va < targetVa + alignedSize; va += PAGE_SIZE_4KB) {
+                    uint64_t phys = BareMetalPfnAllocator::get().allocatePage();
+                    if (!phys) return NtStatus::InsufficientResources;
+                    if (!BareMetalPaging::mapVirtualPage(cr3Phys, va, phys, pteFlags)) {
+                        return NtStatus::InsufficientResources;
+                    }
                 }
             }
             vad->allocationType |= MEM_COMMIT;
@@ -589,6 +601,24 @@ public:
         m_telemetry.pageFaultCount++;
         m_telemetry.lastFaultVa = faultVa;
         m_telemetry.lastFaultRip = faultRip;
+
+        // Anti-spin guard: detect infinite page fault loops at the same instruction
+        static uint64_t s_consecutiveFaults = 0;
+        static uint64_t s_lastFaultVa = 0;
+        static uint64_t s_lastFaultRip = 0;
+
+        if (faultVa == s_lastFaultVa && faultRip == s_lastFaultRip) {
+            s_consecutiveFaults++;
+            if (s_consecutiveFaults > 3) {
+                m_telemetry.accessViolations++;
+                s_consecutiveFaults = 0;
+                return false; // Break infinite loop, route to resilient exception / process cleanup
+            }
+        } else {
+            s_consecutiveFaults = 1;
+            s_lastFaultVa = faultVa;
+            s_lastFaultRip = faultRip;
+        }
 
         // Check for canonical NULL pointer trap (first 64KB)
         if (faultVa < USER_SPACE_MIN) {

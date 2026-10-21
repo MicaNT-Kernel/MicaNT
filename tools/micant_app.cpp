@@ -69,6 +69,7 @@ extern "C" __attribute__((naked)) void _start() {
         "xorq %rdx, %rdx\n\t"
         "xorq %r8, %r8\n\t"
         "syscall\n\t"
+        "jmp 3f\n\t"
 
         "2:\n\t"
         // Error exit: 'MEM_FAIL' (0x4C4941465F4D454D)
@@ -81,6 +82,11 @@ extern "C" __attribute__((naked)) void _start() {
         "xorq %r8, %r8\n\t"
         "syscall\n\t"
 
+        "3:\n\t"
+        "movq $0x01, %rax\n\t"
+        "xorq %rdx, %rdx\n\t"
+        "xorq %r8, %r8\n\t"
+        "syscall\n\t"
         "1: pause\n\t"
         "jmp 1b\n\t"
     );

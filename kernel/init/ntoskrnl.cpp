@@ -368,6 +368,42 @@ static Ring3Telemetry s_ring3Telemetry{};
 static micant::um::UserLoadedImageInfo s_loadedPeInfo{};
 static bool s_ps2ShiftState = false;
 
+static micant::bootvid::BootVideoDriver* s_globalVideoDriver = nullptr;
+static uint32_t s_logRightX = 0, s_logMidY = 0, s_logRightW = 0, s_logMidH = 0;
+static constexpr size_t KERNEL_LOG_LINES = 16;
+static char s_kernelLogBuffer[KERNEL_LOG_LINES][128]{};
+static size_t s_kernelLogCount = 0;
+
+static void LogKernel(const char* msg) {
+    if (s_kernelLogCount < KERNEL_LOG_LINES) {
+        copyStr(s_kernelLogBuffer[s_kernelLogCount++], msg, 128);
+    } else {
+        for (size_t i = 0; i < KERNEL_LOG_LINES - 1; ++i) {
+            copyStr(s_kernelLogBuffer[i], s_kernelLogBuffer[i + 1], 128);
+        }
+        copyStr(s_kernelLogBuffer[KERNEL_LOG_LINES - 1], msg, 128);
+    }
+
+    if (s_globalVideoDriver && s_logRightW > 0 && s_logMidH > 0) {
+        s_globalVideoDriver->fillRectangle(s_logRightX + 2, s_logMidY + 26, s_logRightW - 4, s_logMidH - 28, micant::bootvid::Color{12, 16, 24});
+        for (size_t i = 0; i < s_kernelLogCount; ++i) {
+            uint32_t ly = s_logMidY + 30 + (uint32_t)(i * 17);
+            if (ly + 15 > s_logMidY + s_logMidH) break;
+            micant::bootvid::Color col{200, 220, 245};
+            if (s_kernelLogBuffer[i][0] == '[') {
+                if (s_kernelLogBuffer[i][1] == 'F' || s_kernelLogBuffer[i][1] == 'E' || s_kernelLogBuffer[i][1] == 'S') col = micant::bootvid::Color{100, 240, 160};
+                else if (s_kernelLogBuffer[i][1] == 'H') col = micant::bootvid::Color{0, 210, 255};
+                else if (s_kernelLogBuffer[i][1] == 'O' || s_kernelLogBuffer[i][1] == 'P' || s_kernelLogBuffer[i][1] == 'R') col = micant::bootvid::Color{255, 215, 80};
+            }
+            s_globalVideoDriver->drawString(s_logRightX + 10, ly, s_kernelLogBuffer[i], col, micant::bootvid::Color{12, 16, 24}, 1);
+        }
+    }
+
+    UartSerial::print("[ntoskrnl.exe] ");
+    UartSerial::print(msg);
+    UartSerial::print("\r\n");
+}
+
 // Fast Syscall Dispatcher
 extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64_t arg2) {
     s_ring3Telemetry.syscallDispatchCount++;
@@ -395,6 +431,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(" | CPL=");
             UartSerial::printDec(static_cast<uint32_t>(arg2));
             UartSerial::print(" -> STATUS_SUCCESS\r\n");
+            LogKernel("[Syscall] NtQuerySystemInfo (0x11) Ring 3 CPL=3 OK");
             return 0;
         }
         case 0x18:
@@ -414,7 +451,12 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(" Status=0x");
             UartSerial::printHex32(static_cast<uint32_t>(st));
             UartSerial::print("\r\n");
-            return baseVa; // Return allocated base VA
+            if (NT_SUCCESS(st)) {
+                LogKernel("[Syscall] NtAllocateVirtualMemory: 4KB User Heap Committed");
+            } else {
+                LogKernel("[Syscall] NtAllocateVirtualMemory: FAILED");
+            }
+            return NT_SUCCESS(st) ? baseVa : 0; // Return allocated base VA on success, 0 on error
         }
         case 0x1E:
         case 0x1B: { // NtFreeVirtualMemory (Release Userland Heap)
@@ -427,6 +469,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(" Status=0x");
             UartSerial::printHex32(static_cast<uint32_t>(st));
             UartSerial::print("\r\n");
+            LogKernel("[Syscall] NtFreeVirtualMemory: User Heap Released");
             return static_cast<uint64_t>(st);
         }
         case 0x23: { // NtQueryVirtualMemory
@@ -478,6 +521,9 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                 UartSerial::print("OK");
             }
             UartSerial::print("\r\n");
+            char dispLog[64] = "[User Msg] ";
+            concatStr(dispLog, idx > 0 ? msgBuf : "OK", sizeof(dispLog));
+            LogKernel(dispLog);
             return 0;
         }
         case 0x46: { // NtYieldExecution
@@ -486,12 +532,14 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print("  -> NtYieldExecution: Context switched to TID ");
             UartSerial::printDec(nextTid);
             UartSerial::print("\r\n");
+            LogKernel("[Syscall] NtYieldExecution (0x46) Thread Yielded");
             return 0;
         }
         case 0x01: { // NtTerminateProcess
             auto& sched = micant::um::UserThreadScheduler64::get();
             sched.terminateCurrentThread(micant::NtStatus::Success);
             UartSerial::print("  -> NtTerminateProcess: Clean exit. Ring 3 userland complete.\r\n");
+            LogKernel("[Syscall] NtTerminateProcess: Ring 3 Clean Exit");
             s_ring3Telemetry.userProcessExitedCleanly = true;
             return 0;
         }
@@ -508,6 +556,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             } else {
                 UartSerial::print("OK\r\n");
             }
+            LogKernel("[Syscall] NtGdiGetVideoInfo (0x80) OK");
             return 0;
         }
         case 0x81: { // NtGdiPresentSurface
@@ -530,6 +579,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(" | Total Pixels: ");
             UartSerial::printDec(static_cast<uint32_t>(pm.getTotalPixelsBlitted()));
             UartSerial::print("] -> STATUS_SUCCESS\r\n");
+            LogKernel("[Syscall] NtGdiPresentSurface (0x81) Surface Blitted");
             return 0;
         }
         default:
@@ -542,6 +592,7 @@ extern "C" __attribute__((naked)) void KiSystemCall64Entry() {
     __asm__ __volatile__(
         "movq %rsp, s_savedUserRsp(%rip)\n\t"
         "movq s_kernelStackTopVal(%rip), %rsp\n\t"
+        "pushq s_savedUserRsp(%rip)\n\t"
         "pushq %r11\n\t"
         "pushq %rcx\n\t"
         "pushq %rbx\n\t"
@@ -576,8 +627,14 @@ extern "C" __attribute__((naked)) void KiSystemCall64Entry() {
         "popq %rbx\n\t"
         "popq %rcx\n\t"
         "popq %r11\n\t"
-        "movq s_savedUserRsp(%rip), %rsp\n\t"
-        "sysretq\n\t"
+        "movq (%rsp), %rax\n\t"
+        "movq $0x002B, (%rsp)\n\t"
+        "pushq %rax\n\t"
+        "pushq %r11\n\t"
+        "pushq $0x0033\n\t"
+        "pushq %rcx\n\t"
+        "xorq %rax, %rax\n\t"
+        "iretq\n\t"
         "2:\n\t"
         "movq %rax, %rcx\n\t"
         "subq $40, %rsp\n\t"
@@ -671,19 +728,52 @@ extern "C" __attribute__((naked)) void UserlandPayloadTemplate() {
 #endif
 }
 
+extern "C" void OnResilientFault(uint64_t faultRip, uint64_t faultCs, uint64_t errorCode, uint64_t faultRsp) {
+    char buf[128] = "[Fault] RIP=0x";
+    const char hex[] = "0123456789ABCDEF";
+    char hexStr[19] = "0000000000000000";
+    for (int i = 60, idx = 0; i >= 0; i -= 4, ++idx) hexStr[idx] = hex[(faultRip >> i) & 0xF];
+    hexStr[16] = '\0';
+    concatStr(buf, hexStr, sizeof(buf));
+    concatStr(buf, " CS=0x", sizeof(buf));
+    char csStr[5] = {hex[(faultCs >> 12) & 0xF], hex[(faultCs >> 8) & 0xF], hex[(faultCs >> 4) & 0xF], hex[faultCs & 0xF], '\0'};
+    concatStr(buf, csStr, sizeof(buf));
+    concatStr(buf, " Err=0x", sizeof(buf));
+    char errStr[9] = {hex[(errorCode >> 28) & 0xF], hex[(errorCode >> 24) & 0xF], hex[(errorCode >> 20) & 0xF], hex[(errorCode >> 16) & 0xF],
+                      hex[(errorCode >> 12) & 0xF], hex[(errorCode >> 8) & 0xF], hex[(errorCode >> 4) & 0xF], hex[errorCode & 0xF], '\0'};
+    concatStr(buf, errStr, sizeof(buf));
+    LogKernel(buf);
+}
+
 extern "C" __attribute__((naked)) void KiResilientExceptionStub() {
 #if defined(__x86_64__)
     __asm__ __volatile__(
         "pushq %rax\n\t"
-        "movq 24(%rsp), %rax\n\t" // Load saved CS (at rsp + 16 + 8 because of pushed rax)
-        "testq $3, %rax\n\t"      // User mode fault? (CS & 3 == 3)
-        "jnz 1f\n\t"
+        "pushq %rcx\n\t"
+        "pushq %rdx\n\t"
+        "pushq %rsi\n\t"
+        "pushq %rdi\n\t"
+        "pushq %r8\n\t"
+        "pushq %r9\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "movq 80(%rsp), %rcx\n\t"
+        "movq 88(%rsp), %rdx\n\t"
+        "movq 72(%rsp), %r8\n\t"
+        "movq 104(%rsp), %r9\n\t"
+        "subq $40, %rsp\n\t"
+        "callq OnResilientFault\n\t"
+        "addq $40, %rsp\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %r9\n\t"
+        "popq %r8\n\t"
+        "popq %rdi\n\t"
+        "popq %rsi\n\t"
+        "popq %rdx\n\t"
+        "popq %rcx\n\t"
         "popq %rax\n\t"
-        "addq $8, %rsp\n\t"       // Discard error code
-        "2: hlt\n\t"
-        "jmp 2b\n\t"
-        "1:\n\t"
-        // User mode fault recovery: cleanly return to kernel
+        "addq $8, %rsp\n\t"
         "movq 0*8+s_kernelSavedGprs(%rip), %rbx\n\t"
         "movq 1*8+s_kernelSavedGprs(%rip), %rbp\n\t"
         "movq 2*8+s_kernelSavedGprs(%rip), %rdi\n\t"
@@ -694,7 +784,11 @@ extern "C" __attribute__((naked)) void KiResilientExceptionStub() {
         "movq 7*8+s_kernelSavedGprs(%rip), %r15\n\t"
         "movq s_kernelReturnRspVal(%rip), %rsp\n\t"
         "movq s_kernelReturnRipVal(%rip), %rax\n\t"
+        "testq %rax, %rax\n\t"
+        "jz 2f\n\t"
         "jmpq *%rax\n\t"
+        "2: hlt\n\t"
+        "jmp 2b\n\t"
     );
 #endif
 }
@@ -1315,6 +1409,13 @@ static bool transitionToRing3(
         "movw $0x002B, %%ax\n\t"
         "movw %%ax, %%ds\n\t"
         "movw %%ax, %%es\n\t"
+        "movw %%ax, %%fs\n\t"
+        "movw %%ax, %%gs\n\t"
+        "movl $0xC0000101, %%ecx\n\t"
+        "movq %2, %%rax\n\t"
+        "movq %2, %%rdx\n\t"
+        "shrq $32, %%rdx\n\t"
+        "wrmsr\n\t"
         "pushq $0x002B\n\t"
         "pushq %1\n\t"
         "pushq $0x0002\n\t"
@@ -1323,7 +1424,7 @@ static bool transitionToRing3(
         "iretq\n\t"
         "1:\n\t"
         :
-        : "r"(entryRip), "r"(userStackTop)
+        : "r"(entryRip), "r"(userStackTop), "r"(tebVa)
         : "rax", "rcx", "rdx", "memory"
     );
 #endif
@@ -1825,37 +1926,11 @@ extern "C" micant::NtStatus KiSystemStartup(
     videoDriver.fillRectangle(rightX, midY, rightW, 24, micant::bootvid::Color{20, 28, 42});
     videoDriver.drawString(rightX + 10, midY + 5, "KERNEL EXECUTIVE EVENT STREAM & LIVE COM1 SINK", micant::bootvid::Color{255, 215, 0}, micant::bootvid::Color{20, 28, 42}, 1);
 
-    static constexpr size_t LOG_LINES = 16;
-    char logBuffer[LOG_LINES][128]{};
-    size_t logCount = 0;
-
-    auto LogKernel = [&](const char* msg) {
-        if (logCount < LOG_LINES) {
-            copyStr(logBuffer[logCount++], msg, 128);
-        } else {
-            for (size_t i = 0; i < LOG_LINES - 1; ++i) {
-                copyStr(logBuffer[i], logBuffer[i + 1], 128);
-            }
-            copyStr(logBuffer[LOG_LINES - 1], msg, 128);
-        }
-
-        videoDriver.fillRectangle(rightX + 2, midY + 26, rightW - 4, midH - 28, micant::bootvid::Color{12, 16, 24});
-        for (size_t i = 0; i < logCount; ++i) {
-            uint32_t ly = midY + 30 + (uint32_t)(i * 17);
-            if (ly + 15 > midY + midH) break;
-            micant::bootvid::Color col{200, 220, 245};
-            if (logBuffer[i][0] == '[') {
-                if (logBuffer[i][1] == 'F' || logBuffer[i][1] == 'E' || logBuffer[i][1] == 'S') col = micant::bootvid::Color{100, 240, 160};
-                else if (logBuffer[i][1] == 'H') col = micant::bootvid::Color{0, 210, 255};
-                else if (logBuffer[i][1] == 'O' || logBuffer[i][1] == 'P' || logBuffer[i][1] == 'R') col = micant::bootvid::Color{255, 215, 80};
-            }
-            videoDriver.drawString(rightX + 10, ly, logBuffer[i], col, micant::bootvid::Color{12, 16, 24}, 1);
-        }
-
-        UartSerial::print("[ntoskrnl.exe] ");
-        UartSerial::print(msg);
-        UartSerial::print("\r\n");
-    };
+    s_globalVideoDriver = &videoDriver;
+    s_logRightX = rightX;
+    s_logMidY = midY;
+    s_logRightW = rightW;
+    s_logMidH = midH;
 
     LogKernel("KiSystemStartup: Ingested LPB from BOOTX64.EFI handover.");
     LogKernel("[ntoskrnl.exe] Standalone PE32+ Native Kernel Image Active.");
@@ -2157,16 +2232,16 @@ extern "C" micant::NtStatus KiSystemStartup(
         videoDriver.fillRectangle(rightX, midY, rightW, 24, micant::bootvid::Color{20, 28, 42});
         videoDriver.drawString(rightX + 10, midY + 5, "KERNEL EXECUTIVE EVENT STREAM & LIVE COM1 SINK", micant::bootvid::Color{255, 215, 0}, micant::bootvid::Color{20, 28, 42}, 1);
 
-        for (size_t i = 0; i < logCount; ++i) {
+        for (size_t i = 0; i < s_kernelLogCount; ++i) {
             uint32_t ly = midY + 30 + (uint32_t)(i * 17);
             if (ly + 15 > midY + midH) break;
             micant::bootvid::Color col{200, 220, 245};
-            if (logBuffer[i][0] == '[') {
-                if (logBuffer[i][1] == 'F' || logBuffer[i][1] == 'E' || logBuffer[i][1] == 'S') col = micant::bootvid::Color{100, 240, 160};
-                else if (logBuffer[i][1] == 'H') col = micant::bootvid::Color{0, 210, 255};
-                else if (logBuffer[i][1] == 'O' || logBuffer[i][1] == 'P' || logBuffer[i][1] == 'R') col = micant::bootvid::Color{255, 215, 80};
+            if (s_kernelLogBuffer[i][0] == '[') {
+                if (s_kernelLogBuffer[i][1] == 'F' || s_kernelLogBuffer[i][1] == 'E' || s_kernelLogBuffer[i][1] == 'S') col = micant::bootvid::Color{100, 240, 160};
+                else if (s_kernelLogBuffer[i][1] == 'H') col = micant::bootvid::Color{0, 210, 255};
+                else if (s_kernelLogBuffer[i][1] == 'O' || s_kernelLogBuffer[i][1] == 'P' || s_kernelLogBuffer[i][1] == 'R') col = micant::bootvid::Color{255, 215, 80};
             }
-            videoDriver.drawString(rightX + 10, ly, logBuffer[i], col, micant::bootvid::Color{12, 16, 24}, 1);
+            videoDriver.drawString(rightX + 10, ly, s_kernelLogBuffer[i], col, micant::bootvid::Color{12, 16, 24}, 1);
         }
 
         // Shell Window

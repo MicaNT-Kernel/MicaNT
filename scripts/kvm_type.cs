@@ -55,6 +55,21 @@ class Program {
     [DllImport("user32.dll")]
     static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr lpdwProcessId);
+
+    [DllImport("user32.dll")]
+    static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll")]
+    static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentThreadId();
+
     const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     const uint MOUSEEVENTF_LEFTUP   = 0x0004;
     const uint KEYEVENTF_KEYUP      = 0x0002;
@@ -86,8 +101,27 @@ class Program {
     }
 
     static void FocusCanvas(IntPtr jviewerHwnd) {
-        ShowWindow(jviewerHwnd, 9);
-        SetForegroundWindow(jviewerHwnd);
+        IntPtr fgHwnd = GetForegroundWindow();
+        if (fgHwnd != jviewerHwnd && fgHwnd != IntPtr.Zero) {
+            uint fgThread = GetWindowThreadProcessId(fgHwnd, IntPtr.Zero);
+            uint curThread = GetCurrentThreadId();
+            keybd_event(0x12, 0, 0, 0); // VK_MENU down
+            keybd_event(0x12, 0, 2, 0); // VK_MENU up
+            if (fgThread != curThread && fgThread != 0) {
+                AttachThreadInput(curThread, fgThread, true);
+            }
+            ShowWindow(jviewerHwnd, 9);
+            SetForegroundWindow(jviewerHwnd);
+            BringWindowToTop(jviewerHwnd);
+            if (fgThread != curThread && fgThread != 0) {
+                AttachThreadInput(curThread, fgThread, false);
+            }
+            Thread.Sleep(100);
+        } else {
+            ShowWindow(jviewerHwnd, 9);
+            SetForegroundWindow(jviewerHwnd);
+        }
+
         Thread.Sleep(100);
         RECT r;
         GetWindowRect(jviewerHwnd, out r);
@@ -335,8 +369,8 @@ class Program {
             Thread.Sleep(200);
             RECT wr;
             GetWindowRect(jviewerHwnd, out wr);
-            int cadX = wr.Right - 110;
-            int cadY = wr.Top + 52;
+            int cadX = wr.Left + 1410;
+            int cadY = wr.Top + 60;
             SetCursorPos(cadX, cadY);
             Thread.Sleep(100);
             mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
@@ -513,8 +547,9 @@ class Program {
             byte vk = 0x1B; // VK_ESCAPE
             byte scan = 0x01;
             SendCleanKey(vk, scan);
+            PostKeyToTree(jviewerHwnd, vk, scan);
             Thread.Sleep(100);
-            Console.WriteLine("Sent ESC key to JViewer via SendCleanKey.");
+            Console.WriteLine("Sent ESC key to JViewer via SendCleanKey and PostKeyToTree.");
             if (string.IsNullOrEmpty(text)) return;
         }
 
@@ -532,8 +567,8 @@ class Program {
             FocusCanvas(jviewerHwnd);
             byte vk = 0x0D; // VK_RETURN
             byte scan = 0x1C;
-            PostKeyToTree(jviewerHwnd, vk, scan);
-            Console.WriteLine("Sent ENTER key to JViewer via PostKeyToTree.");
+            SendCleanKey(vk, scan);
+            Console.WriteLine("Sent ENTER key to JViewer via SendCleanKey.");
             if (string.IsNullOrEmpty(text)) return;
         }
 
@@ -595,7 +630,7 @@ class Program {
             if (c == '\r' || c == '\n') {
                 byte vk = 0x0D; // VK_RETURN
                 byte scan = 0x1C;
-                PostKeyToTree(jviewerHwnd, vk, scan);
+                SendCleanKey(vk, scan);
                 Thread.Sleep(80);
                 continue;
             }
@@ -628,7 +663,7 @@ class Program {
                 Thread.Sleep(20);
             }
 
-            PostKeyToTree(jviewerHwnd, virtualKey, scanCode);
+            SendCleanKey(virtualKey, scanCode);
             Thread.Sleep(50);
 
             if ((shiftState & 1) != 0) {

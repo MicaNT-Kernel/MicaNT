@@ -85,7 +85,13 @@ extern "C" __attribute__((naked)) void _start() {
         "xorq %rdx, %rdx\n\t"
         "xorq %r8, %r8\n\t"
         "syscall\n\t"
+        "jmp 3f\n\t"
 
+        "3:\n\t"
+        "movq $0x01, %rax\n\t"
+        "xorq %rdx, %rdx\n\t"
+        "xorq %r8, %r8\n\t"
+        "syscall\n\t"
         "2: pause\n\t"
         "jmp 2b\n\t"
     );
