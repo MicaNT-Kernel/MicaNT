@@ -19259,7 +19259,7 @@ inline void Test_Horizon121_UserMode_Peb_Teb_Ssdt_And_Process_Management() {
 
     // 2. Test UserProcessManager64 Initialization & Process Spawning
     auto& pm = UserProcessManager64::get();
-    pm.reset();
+    pm.reset(false);
     TEST_ASSERT(pm.getProcessCount() == 0, "Initial process count must be 0");
     TEST_ASSERT(pm.getTotalSyscallsDispatched() == 0, "Initial syscall count must be 0");
 
@@ -19405,7 +19405,7 @@ inline void Test_Horizon122_Ring3_Thread_Context_Switching_And_Scheduler() {
 
     // 2. Initialize and Test UserThreadScheduler64
     auto& sched = UserThreadScheduler64::get();
-    sched.reset();
+    sched.reset(false);
     TEST_ASSERT(sched.getThreadCount() == 0, "Initial thread count must be 0");
     TEST_ASSERT(sched.getActiveTid() == 0, "Initial active TID must be 0");
     TEST_ASSERT(sched.getTotalContextSwitches() == 0, "Initial context switch count must be 0");
@@ -19527,9 +19527,9 @@ inline void Test_Horizon123_UserMode_PE32Plus_Binary_Loader_And_Execution() {
     uint32_t parentPid        = 480;
 
     auto& pm = UserProcessManager64::get();
-    pm.reset();
+    pm.reset(false);
     auto& sched = UserThreadScheduler64::get();
-    sched.reset();
+    sched.reset(false);
 
     UserLoadedImageInfo loadedInfo{};
     micant::NtStatus stLoad = UserImageLoader64::loadAndMapImage(

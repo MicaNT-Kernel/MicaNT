@@ -317,19 +317,21 @@ public:
         reset();
     }
 
-    void reset() noexcept {
+    void reset(bool populateSystem = true) noexcept {
         m_processes.fill(UserProcessContext64{});
         m_processCount = 0;
-        m_activePid = 4;
+        m_activePid = populateSystem ? 4 : 0;
         m_totalSyscallsDispatched = 0;
         m_totalProcessesSpawned = 0;
         m_totalProcessesTerminated = 0;
         m_totalFramesPresented = 0;
         m_totalPixelsBlitted = 0;
 
-        // Core NT Executive Processes
-        (void)createProcess("System Idle", 0, 0, 0, 0, 0, 0, 0, 0);
-        (void)createProcess("System", 4, 0, 0xFFFFF80000000000ULL, 0x100000, 0, 0, 0, 0);
+        if (populateSystem) {
+            // Core NT Executive Processes
+            (void)createProcess("System Idle", 0, 0, 0, 0, 0, 0, 0, 0);
+            (void)createProcess("System", 4, 0, 0xFFFFF80000000000ULL, 0x100000, 0, 0, 0, 0);
+        }
     }
 
     [[nodiscard]] UserProcessContext64* createProcess(
@@ -667,16 +669,18 @@ public:
         return instance;
     }
 
-    void reset() noexcept {
+    void reset(bool populateSystem = true) noexcept {
         m_threadCount = 0;
-        m_activeTid = 4;
+        m_activeTid = populateSystem ? 4 : 0;
         m_totalContextSwitches = 0;
         m_totalYields = 0;
         for (size_t i = 0; i < MAX_USER_THREADS; ++i) {
             m_threads[i] = UserThreadContext64{};
         }
-        createThread(0, 0, 0, 0, 0, 0, "IdleThread");
-        createThread(4, 4, 16, 0xFFFFF80000000000ULL, 0, 0, "SystemWorker");
+        if (populateSystem) {
+            createThread(0, 0, 0, 0, 0, 0, "IdleThread");
+            createThread(4, 4, 16, 0xFFFFF80000000000ULL, 0, 0, "SystemWorker");
+        }
     }
 
     bool createThread(
