@@ -34,9 +34,9 @@ static inline void outb(uint16_t port, uint8_t val) noexcept {
 [[noreturn]] static inline void HalpColdResetServer() noexcept {
     outb(0x64, 0xFE);
     outb(0xCF9, 0x02);
-    for (volatile int i = 0; i < 50000; ++i) { __asm__ __volatile__("pause"); }
+    for (int i = 0; i < 50000; ++i) { __asm__ __volatile__("pause"); }
     outb(0xCF9, 0x06);
-    for (volatile int i = 0; i < 50000; ++i) { __asm__ __volatile__("pause"); }
+    for (int i = 0; i < 50000; ++i) { __asm__ __volatile__("pause"); }
     outb(0xCF9, 0x0E);
     while (true) {
 #if defined(__x86_64__)

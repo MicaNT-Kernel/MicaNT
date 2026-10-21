@@ -532,8 +532,8 @@ class Program {
             FocusCanvas(jviewerHwnd);
             byte vk = 0x0D; // VK_RETURN
             byte scan = 0x1C;
-            SendCleanKey(vk, scan);
-            Console.WriteLine("Sent ENTER key to JViewer via SendCleanKey.");
+            PostKeyToTree(jviewerHwnd, vk, scan);
+            Console.WriteLine("Sent ENTER key to JViewer via PostKeyToTree.");
             if (string.IsNullOrEmpty(text)) return;
         }
 
@@ -595,7 +595,7 @@ class Program {
             if (c == '\r' || c == '\n') {
                 byte vk = 0x0D; // VK_RETURN
                 byte scan = 0x1C;
-                SendCleanKey(vk, scan);
+                PostKeyToTree(jviewerHwnd, vk, scan);
                 Thread.Sleep(80);
                 continue;
             }
@@ -628,7 +628,7 @@ class Program {
                 Thread.Sleep(20);
             }
 
-            SendCleanKey(virtualKey, scanCode);
+            PostKeyToTree(jviewerHwnd, virtualKey, scanCode);
             Thread.Sleep(50);
 
             if ((shiftState & 1) != 0) {

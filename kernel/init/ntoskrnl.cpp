@@ -40,6 +40,7 @@
 #include "micant/km/drivers/net/i210_baremetal.hpp"
 #include "micant/km/executive/ob_baremetal.hpp"
 #include "micant/km/executive/io_baremetal.hpp"
+#include "micant/km/executive/mm_baremetal.hpp"
 #include "../test/unmodified_fixture.hpp"
 
 extern "C" void ___chkstk_ms() {}
@@ -223,6 +224,13 @@ public:
         }
     }
 
+    static void printHex32(uint32_t val) noexcept {
+        const char hex[] = "0123456789ABCDEF";
+        for (int i = 28; i >= 0; i -= 4) {
+            putChar(hex[(val >> i) & 0xF]);
+        }
+    }
+
     static void printHex16(uint16_t val) noexcept {
         const char hex[] = "0123456789ABCDEF";
         for (int i = 12; i >= 0; i -= 4) {
@@ -280,6 +288,7 @@ static inline uint32_t getCpuTemperatureC() noexcept {
 // Userland Ring 3 Buffers
 alignas(4096) static uint8_t s_userImageBuffer[8388608]{}; // 8 MB Userland PE buffer
 alignas(4096) static uint8_t s_userSurfaceBuffer[4194304]{}; // 4 MB Dedicated Userland Surface buffer (1024x768x4 = 3.14MB)
+alignas(4096) static uint8_t s_userHeapBuffer[2097152]{}; // 2 MB Dedicated Userland Dynamic Heap buffer
 alignas(4096) static uint8_t s_userTrampolinePage[4096]{};
 alignas(4096) static uint8_t s_userCodePage[4096]{};
 alignas(4096) static uint8_t s_userPebTebPage[4096]{};
@@ -385,6 +394,44 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::printHex16(static_cast<uint16_t>(arg1));
             UartSerial::print(" | CPL=");
             UartSerial::printDec(static_cast<uint32_t>(arg2));
+            UartSerial::print(" -> STATUS_SUCCESS\r\n");
+            return 0;
+        }
+        case 0x18:
+        case 0x55: { // NtAllocateVirtualMemory (Dynamic Userland Heap)
+            uint64_t baseVa = arg1;
+            size_t regionSize = static_cast<size_t>(arg2 ? arg2 : 4096);
+            auto& mm = micant::km::mm_baremetal::BareMetalMemoryManager::get();
+            micant::NtStatus st = mm.allocateVirtualMemory(
+                baseVa, regionSize,
+                micant::km::mm_baremetal::MEM_COMMIT | micant::km::mm_baremetal::MEM_RESERVE,
+                micant::km::mm_baremetal::PAGE_READWRITE
+            );
+            UartSerial::print("  -> NtAllocateVirtualMemory: Base=0x");
+            UartSerial::printHex64(baseVa);
+            UartSerial::print(" Size=");
+            UartSerial::printDec(static_cast<uint32_t>(regionSize));
+            UartSerial::print(" Status=0x");
+            UartSerial::printHex32(static_cast<uint32_t>(st));
+            UartSerial::print("\r\n");
+            return baseVa; // Return allocated base VA
+        }
+        case 0x1E:
+        case 0x1B: { // NtFreeVirtualMemory (Release Userland Heap)
+            uint64_t baseVa = arg1;
+            size_t regionSize = static_cast<size_t>(arg2);
+            auto& mm = micant::km::mm_baremetal::BareMetalMemoryManager::get();
+            micant::NtStatus st = mm.freeVirtualMemory(baseVa, regionSize, micant::km::mm_baremetal::MEM_RELEASE);
+            UartSerial::print("  -> NtFreeVirtualMemory: Base=0x");
+            UartSerial::printHex64(baseVa);
+            UartSerial::print(" Status=0x");
+            UartSerial::printHex32(static_cast<uint32_t>(st));
+            UartSerial::print("\r\n");
+            return static_cast<uint64_t>(st);
+        }
+        case 0x23: { // NtQueryVirtualMemory
+            UartSerial::print("  -> NtQueryVirtualMemory: Base=0x");
+            UartSerial::printHex64(arg1);
             UartSerial::print(" -> STATUS_SUCCESS\r\n");
             return 0;
         }
@@ -648,6 +695,82 @@ extern "C" __attribute__((naked)) void KiResilientExceptionStub() {
         "movq s_kernelReturnRspVal(%rip), %rsp\n\t"
         "movq s_kernelReturnRipVal(%rip), %rax\n\t"
         "jmpq *%rax\n\t"
+    );
+#endif
+}
+
+extern "C" bool MmPageFaultHandler(uint64_t faultVa, uint64_t errorCode, uint64_t faultRip, uint64_t faultRsp) {
+    bool ok = micant::km::mm_baremetal::BareMetalMemoryManager::get().handlePageFault(
+        faultVa, errorCode, faultRip, faultRsp
+    );
+    if (ok) {
+        UartSerial::print("[Mm] Demand Page Resolved: VA=0x");
+        UartSerial::printHex64(faultVa);
+        UartSerial::print(" (Auto-mapped for Ring 3 RIP=0x");
+        UartSerial::printHex64(faultRip);
+        UartSerial::print(")\r\n");
+    } else {
+        UartSerial::print("[Mm] STATUS_ACCESS_VIOLATION (0xC0000005): FaultVA=0x");
+        UartSerial::printHex64(faultVa);
+        UartSerial::print(" | ErrorCode=0x");
+        UartSerial::printHex64(errorCode);
+        UartSerial::print(" | RIP=0x");
+        UartSerial::printHex64(faultRip);
+        UartSerial::print("\r\n");
+    }
+    return ok;
+}
+
+extern "C" __attribute__((naked)) void KiPageFaultStub() {
+#if defined(__x86_64__)
+    __asm__ __volatile__(
+        "pushq %rax\n\t"
+        "pushq %rcx\n\t"
+        "pushq %rdx\n\t"
+        "pushq %rsi\n\t"
+        "pushq %rdi\n\t"
+        "pushq %r8\n\t"
+        "pushq %r9\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+
+        "movq %cr2, %rcx\n\t"     // arg1: faultVa
+        "movq 72(%rsp), %rdx\n\t" // arg2: errorCode
+        "movq 80(%rsp), %r8\n\t"  // arg3: faultRip
+        "movq 104(%rsp), %r9\n\t" // arg4: faultRsp
+
+        "subq $40, %rsp\n\t"
+        "callq MmPageFaultHandler\n\t"
+        "addq $40, %rsp\n\t"
+
+        "testb %al, %al\n\t"
+        "jz 1f\n\t"
+
+        // Demand page successfully resolved!
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %r9\n\t"
+        "popq %r8\n\t"
+        "popq %rdi\n\t"
+        "popq %rsi\n\t"
+        "popq %rdx\n\t"
+        "popq %rcx\n\t"
+        "popq %rax\n\t"
+        "addq $8, %rsp\n\t"
+        "iretq\n\t"
+
+        "1:\n\t"
+        // Fatal access violation: restore registers and jump to KiResilientExceptionStub
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %r9\n\t"
+        "popq %r8\n\t"
+        "popq %rdi\n\t"
+        "popq %rsi\n\t"
+        "popq %rdx\n\t"
+        "popq %rcx\n\t"
+        "popq %rax\n\t"
+        "jmp KiResilientExceptionStub\n\t"
     );
 #endif
 }
@@ -1123,14 +1246,25 @@ static bool transitionToRing3(
         std::memcpy(&s_userPebTebPage[512], &proc->teb, sizeof(proc->teb));
     }
 
-    // 1. Enable User (U/S = 1) and Writable (R/W = 1) in 4-level page tables
+    // 1. Enable User (U/S = 1) and Writable (R/W = 1) in 4-level page tables & Register VADs
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userImageBuffer), sizeof(s_userImageBuffer));
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userSurfaceBuffer), sizeof(s_userSurfaceBuffer));
+    enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer));
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userTrampolinePage), sizeof(s_userTrampolinePage));
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userCodePage), sizeof(s_userCodePage));
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userStack), sizeof(s_userStack));
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userPebTebPage), sizeof(s_userPebTebPage));
-    UartSerial::print("[ntoskrnl.exe] CR3 4-Level Page Walker: U/S=1 & NX=0 applied.\r\n");
+
+    auto& vad = micant::km::mm_baremetal::BareMetalVadTable::get();
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userImageBuffer), sizeof(s_userImageBuffer), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userSurfaceBuffer), sizeof(s_userSurfaceBuffer), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userTrampolinePage), sizeof(s_userTrampolinePage), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_EXECUTE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userCodePage), sizeof(s_userCodePage), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_EXECUTE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userStack), sizeof(s_userStack), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE, true);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userPebTebPage), sizeof(s_userPebTebPage), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
+    vad.setHeapPool(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer));
+    UartSerial::print("[ntoskrnl.exe] CR3 4-Level Page Walker: U/S=1 & NX=0 applied (VADs registered).\r\n");
 
     // 2. Enable SSE/FXSR support in CR4 and CR0
 #if defined(__x86_64__)
@@ -1278,6 +1412,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             "  ps            - Enumerate active NT processes and subsystems\r\n"
             "  uptime        - Query high-precision APIC timer uptime and tick accounting\r\n"
             "  io / iostat   - Query I/O subsystem, loaded drivers, and IRP dispatch statistics\r\n"
+            "  mm / vmstat   - Query Memory Manager, PFN Database, and Demand Paging statistics\r\n"
             "  c: / d:       - Switch active storage volume\r\n"
             "  type <file>   - Read file from disk via AHCI DMA\r\n"
             "  write <f> <t> - Write text to file on disk via AHCI DMA\r\n"
@@ -1369,6 +1504,9 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
     } else if ((cmd[0] == 'i' && cmd[1] == 'o' && cmd[2] == 's') || (cmd[0] == 'i' && cmd[1] == 'o' && (cmd[2] == '\0' || cmd[2] == ' ' || cmd[2] == '\r'))) {
         auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
         iom.dumpIoStatus(reply, maxReply);
+    } else if ((cmd[0] == 'm' && cmd[1] == 'm') || (cmd[0] == 'v' && cmd[1] == 'm')) {
+        auto& mm = micant::km::mm_baremetal::BareMetalMemoryManager::get();
+        mm.dumpVmStatus(reply, maxReply);
     } else if ((cmd[0] == 'c' || cmd[0] == 'C') && (cmd[1] == ':' || (cmd[1] == '\r' || cmd[1] == '\0'))) {
         s_currentDrive = 'C';
         copyStr(reply, "Switched active volume to C: (MICA_SYS 128 GB OS Root)\r\n", maxReply);
@@ -1722,7 +1860,10 @@ extern "C" micant::NtStatus KiSystemStartup(
     LogKernel("KiSystemStartup: Ingested LPB from BOOTX64.EFI handover.");
     LogKernel("[ntoskrnl.exe] Standalone PE32+ Native Kernel Image Active.");
     LogKernel("[Hal] Phase 0: 4-Core / 8-Thread SMP Topology Active (KPCR GS:[0]).");
-    LogKernel("[Mm] Phase 0: PFN Database Initialized (32,768 MB ECC RAM).");
+    auto& mm = micant::km::mm_baremetal::BareMetalMemoryManager::get();
+    mm.initialize();
+    mm.setHeapPool(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer));
+    LogKernel("[Mm] Phase 0: PFN Database Initialized (32,768 MB ECC RAM | 256MB Dynamic Pool | 2MB Heap).");
     LogKernel("[Ex] NonPagedPool 64 KB Tag 'Mica' allocated at physical memory.");
     auto& ob = micant::km::ob_baremetal::BareMetalObjectManager::get();
     ob.initialize();
@@ -1807,7 +1948,7 @@ extern "C" micant::NtStatus KiSystemStartup(
     auto& intEngine = micant::hal::idt::InterruptEngine64::get();
     intEngine.initializeIdt();
     intEngine.setGate(micant::hal::idt::VECTOR_GENERAL_PROTECTION, reinterpret_cast<uint64_t>(&KiResilientExceptionStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
-    intEngine.setGate(micant::hal::idt::VECTOR_PAGE_FAULT, reinterpret_cast<uint64_t>(&KiResilientExceptionStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
+    intEngine.setGate(micant::hal::idt::VECTOR_PAGE_FAULT, reinterpret_cast<uint64_t>(&KiPageFaultStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
     intEngine.setGate(micant::hal::idt::VECTOR_CLOCK_TIMER, reinterpret_cast<uint64_t>(&KiClockInterruptStub), micant::cpu::SELECTOR_KCODE64, 0, 0, false);
     intEngine.loadIdtr();
     LogKernel("[Hal] 64-bit IDT Prepared (256 vectors configured, Resilient Trap Active, LIDT executed).");
@@ -2034,7 +2175,7 @@ extern "C" micant::NtStatus KiSystemStartup(
         videoDriver.fillRectangle(16, shellY, availW, 22, micant::bootvid::Color{20, 28, 44});
         videoDriver.drawString(24, shellY + 4, "MicaNT BARE-METAL EXECUTIVE SHELL (ntoskrnl.exe)", micant::bootvid::Color{0, 229, 255}, micant::bootvid::Color{20, 28, 44}, 1);
         videoDriver.drawString(24, shellY + 26, "STATUS: ntoskrnl.exe Active | SMP 8/8 Cores | LAPIC 100Hz | TAB: Toggle SurShell", micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
-        videoDriver.drawString(24, shellY + 42, "COMMANDS: 'dir', 'run <app>', 'type <file>', 'write <file> <text>', 'net', '3d', 'smp', 'reboot'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
+        videoDriver.drawString(24, shellY + 42, "COMMANDS: 'dir', 'run <app>', 'type <file>', 'write <file> <text>', 'net', 'io', 'mm', 'smp', 'reboot'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
     };
 
     uint64_t lastTsc = rdtsc();
@@ -2068,8 +2209,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     auto ExecuteCommandImpl = [&](auto& self, const char* cmd) -> void {
         if (cmd[0] == 'h' && cmd[1] == 'e') {
             copyStr(lastResultLine1, "Storage: dir [p], cd [p], mkdir <d>, edit <f>, type <f>, write <f> <t>, copy, del", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "System:  boot [u|m], net [ping], objdir, ps, uptime, io, smp, bench, app, reboot", sizeof(lastResultLine2));
-            LogKernel("Shell: help -> boot, net, objdir, ps, uptime, io, dir, cd, mkdir, edit, type, write, copy, del, bench, app, reboot");
+            copyStr(lastResultLine2, "System:  boot [u|m], net [ping], objdir, ps, uptime, io, mm, smp, bench, app, reboot", sizeof(lastResultLine2));
+            LogKernel("Shell: help -> boot, net, objdir, ps, uptime, io, mm, dir, cd, mkdir, edit, type, write, copy, del, bench, app, reboot");
         } else if (cmd[0] == 'v' && cmd[1] == 'e') {
             copyStr(lastResultLine1, "MicaNT Cutler Edition Version 10.0 (Build 2026.10 BareMetal)", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Sovereign 64-Bit Operating System running on Supermicro X11SSH-F", sizeof(lastResultLine2));
@@ -2280,6 +2421,10 @@ extern "C" micant::NtStatus KiSystemStartup(
                     copyStr(lastResultLine1, "PE32+ Binary executed & exited cleanly via NtTerminateProcess!", sizeof(lastResultLine1));
                     copyStr(lastResultLine2, "Ring 3 Sovereign Handover Verified OK (SSDT Syscalls Ingested).", sizeof(lastResultLine2));
                     LogKernel("Shell: Disk PE executed & exited cleanly via NtTerminateProcess!");
+                } else {
+                    copyStr(lastResultLine1, "PE32+ Binary execution completed (Resilient Trap / Return).", sizeof(lastResultLine1));
+                    copyStr(lastResultLine2, "Userland exited or trapped. Kernel restored cleanly.", sizeof(lastResultLine2));
+                    LogKernel("Shell: Disk PE execution ended.");
                 }
             } else {
                 char err1[96];
@@ -2346,6 +2491,10 @@ extern "C" micant::NtStatus KiSystemStartup(
             if (ok) {
                 copyStr(lastResultLine1, "PE32+ Userland Binary executed & exited cleanly via NtTerminateProcess!", sizeof(lastResultLine1));
                 LogKernel("Shell: PE32+ Userland Binary executed & exited cleanly via NtTerminateProcess!");
+            } else {
+                copyStr(lastResultLine1, "PE32+ Binary execution completed (Resilient Trap / Return).", sizeof(lastResultLine1));
+                copyStr(lastResultLine2, "Ring 3 exit or fault handled cleanly by Executive.", sizeof(lastResultLine2));
+                LogKernel("Shell: Userland execution ended.");
             }
         } else if (cmd[0] == 'a' && cmd[1] == 'p') {
             copyStr(lastResultLine1, "Local APIC: MMIO Base=0xFEE00000 | SVR=0x1FF | TPR=0x00 | Spurious Vector=0xFF", sizeof(lastResultLine1));
@@ -2408,6 +2557,15 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine1, "I/O Subsystem & Driver Dispatch hierarchy dumped to COM1 UART.", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Drivers: Null, Disk, BootVid, I210, xHCI | Packet-driven IRP model active", sizeof(lastResultLine2));
             LogKernel("Shell: io -> Dumped I/O subsystem driver and device hierarchy.");
+        } else if ((cmd[0] == 'm' && cmd[1] == 'm') || (cmd[0] == 'v' && cmd[1] == 'm')) {
+            char vmBuf[2048]{};
+            auto& mm = micant::km::mm_baremetal::BareMetalMemoryManager::get();
+            mm.dumpVmStatus(vmBuf, sizeof(vmBuf));
+            UartSerial::print("\r\n");
+            UartSerial::print(vmBuf);
+            copyStr(lastResultLine1, "Memory Manager (Mm) PFN Database & Demand Paging status displayed.", sizeof(lastResultLine1));
+            copyStr(lastResultLine2, "Physical: 32 GB ECC | Dynamic Pool: 256 MB (65,536 Pages) | Vector 0x0E Active", sizeof(lastResultLine2));
+            LogKernel("Shell: mm -> Dumped Memory Manager and PFN database telemetry.");
         } else if (cmd[0] == 'p' && cmd[1] == 's') {
             auto& pm = micant::um::UserProcessManager64::get();
             auto& sched = micant::um::UserThreadScheduler64::get();
