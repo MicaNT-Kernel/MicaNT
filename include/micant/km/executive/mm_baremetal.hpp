@@ -22,6 +22,7 @@
 #include <cstring>
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
+#include "micant/km/executive/hmb_pagefile.hpp"
 
 namespace micant::km::mm_baremetal {
 
@@ -576,8 +577,13 @@ public:
     void initialize() noexcept {
         BareMetalPfnAllocator::get().initialize();
         BareMetalVadTable::get().initialize();
+        hmb_pagefile::HmbPagefileManager::get().initialize();
         m_telemetry = MmTelemetry{};
         m_initialized = true;
+    }
+
+    [[nodiscard]] hmb_pagefile::HmbPagefileManager& getPagefile() noexcept {
+        return hmb_pagefile::HmbPagefileManager::get();
     }
 
     void setHeapPool(uint64_t baseVa, size_t size) noexcept {
