@@ -305,6 +305,11 @@ private:
     uint64_t m_tcpBytesSent{0};
     uint64_t m_tcpPacketsRecv{0};
     uint32_t m_lastIcmpSrcIp{0};
+    uint32_t m_lastPingReplySrcIp{0};
+    uint64_t m_icmpEchoRepliesRecv{0};
+    uint32_t m_synTimeoutShell{0};
+    uint32_t m_synTimeoutHttp{0};
+    uint16_t m_shellActivePort{2323};
     uint32_t m_lastTcpSrcIp{0};
     uint16_t m_lastTcpDstPort{0};
 
@@ -347,6 +352,9 @@ public:
     [[nodiscard]] uint64_t getTcpBytesSent() const noexcept { return m_tcpBytesSent; }
     [[nodiscard]] uint64_t getTcpPacketsRecv() const noexcept { return m_tcpPacketsRecv; }
     [[nodiscard]] uint32_t getLastIcmpSrcIp() const noexcept { return m_lastIcmpSrcIp; }
+    [[nodiscard]] uint32_t getLastPingReplySrcIp() const noexcept { return m_lastPingReplySrcIp; }
+    [[nodiscard]] uint64_t getIcmpEchoReplies() const noexcept { return m_icmpEchoRepliesRecv; }
+    [[nodiscard]] uint16_t getShellActivePort() const noexcept { return m_shellActivePort; }
     [[nodiscard]] uint32_t getLastTcpSrcIp() const noexcept { return m_lastTcpSrcIp; }
     [[nodiscard]] uint16_t getLastTcpDstPort() const noexcept { return m_lastTcpDstPort; }
 
@@ -677,6 +685,26 @@ public:
         // Maintain continuous ARP keepalive with Cisco HSRP Gateway
         sendGratuitousArp();
         probeGateway();
+
+        // Expire half-open SYN states if remote client did not complete 3-way handshake within ~5 seconds
+        if (m_sockShell.state == TcpState::SynReceived) {
+            if (++m_synTimeoutShell > 5) {
+                m_sockShell.state = TcpState::Listen;
+                m_sockShell.rxLineLen = 0;
+                m_synTimeoutShell = 0;
+            }
+        } else {
+            m_synTimeoutShell = 0;
+        }
+
+        if (m_sockHttp.state == TcpState::SynReceived) {
+            if (++m_synTimeoutHttp > 5) {
+                m_sockHttp.state = TcpState::Listen;
+                m_synTimeoutHttp = 0;
+            }
+        } else {
+            m_synTimeoutHttp = 0;
+        }
     }
 
     /**
@@ -795,11 +823,8 @@ private:
                     m_arpRepliesSent++;
                 }
             } else if (op == 2) { // ARP Reply
-                // If reply is from Gateway 147.135.1.254, update gateway MAC
-                uint32_t gwIp = 0xFE018793;
-                if (std::memcmp(&arp->senderIp, &gwIp, 4) == 0) {
-                    std::memcpy(m_gatewayMac, arp->senderMac, 6);
-                }
+                // Note: OVH Datacenter switch fabric requires the static Cisco HSRP Virtual MAC
+                // (00:00:0c:9f:f0:01). Never overwrite m_gatewayMac with router physical interface MACs.
             }
         } else if (etherType == 0x0800 && len >= sizeof(EthernetHeader) + sizeof(Ipv4Header)) {
             // --- IPv4 (RFC 791) ---
@@ -851,22 +876,27 @@ private:
                             sendPacket(replyBuf, txLen);
                             m_icmpRepliesSent++;
                         }
+                    } else if (icmp->type == 0) { // Echo Reply
+                        m_icmpEchoRepliesRecv++;
+                        m_lastPingReplySrcIp = ip->srcIp;
                     }
                 }
-            } else if (ip->protocol == 6) { // TCP (RFC 793) Port 2323 Remote Shell & Port 80 HTTP
+            } else if (ip->protocol == 6) { // TCP (RFC 793) Port 2323/22/23 Remote Shell & Port 80 HTTP
                 const uint8_t* tcpPtr = ipPtr + ihl;
                 uint16_t tcpSegLen = len - (sizeof(EthernetHeader) + ihl);
                 if (tcpSegLen < sizeof(TcpHeader)) return;
                 const auto* tcp = reinterpret_cast<const TcpHeader*>(tcpPtr);
 
                 uint16_t dstPort = ntohs(tcp->dstPort);
+                if (dstPort != 2323 && dstPort != 22 && dstPort != 23 && dstPort != 80) return; // Support Port 2323, 22, 23 & 80
+
                 m_lastTcpSrcIp = ip->srcIp;
                 m_lastTcpDstPort = dstPort;
-
-                if (dstPort != 2323 && dstPort != 80) return; // Support Port 2323 (Telnet) & Port 80 (HTTP)
-
                 m_tcpPacketsRecv++;
                 TcpSocket& sock = (dstPort == 80) ? m_sockHttp : m_sockShell;
+                if (dstPort != 80) {
+                    m_shellActivePort = dstPort;
+                }
 
                 uint8_t flags = tcp->flags;
                 uint32_t seq = ntohl(tcp->seqNumber);
@@ -912,19 +942,20 @@ private:
                 // Handle Handshake ACK
                 if (sock.state == TcpState::SynReceived && (flags & 0x10)) {
                     sock.state = TcpState::Established;
-                    if (dstPort == 2323) {
+                    if (dstPort == 2323 || dstPort == 22 || dstPort == 23) {
                         const char* banner =
                             "\r\n=======================================================\r\n"
-                            "  MicaNT Cutler Edition - Bare-Metal Kernel Executive\r\n"
+                            "  MicaNT Cutler Edition - Sovereign Kernel Executive\r\n"
                             "  Intel Xeon E3-1270 v6 @ 3.80GHz | 32 GB ECC RAM\r\n"
                             "  AHCI SATA 2.0 TB HGST Ultrastar (C: 128G, D: 1.7T)\r\n"
                             "  Intel I210 Gigabit Ethernet (8086:1533 at PCIe 02:00.0)\r\n"
+                            "  Standard NT I/O Subsystem (Dave Cutler Packet IRP Model)\r\n"
                             "=======================================================\r\n"
                             "Connected to Sovereign Remote Kernel Shell on bare-metal silicon.\r\n"
                             "Commands: 'dir', 'drives', 'c:', 'd:', 'type <file>', 'write <file> <text>',\r\n"
-                            "          'copy <src> <dst>', 'del <file>', 'net', 'smp', 'mem', 'reboot'\r\n\r\n"
+                            "          'copy <src> <dst>', 'del <file>', 'net', 'io', 'smp', 'uptime', 'reboot'\r\n\r\n"
                             "micant:\\> ";
-                        sendTcpData(banner, 2323);
+                        sendTcpData(banner, dstPort);
                         return;
                     }
                 }
@@ -959,11 +990,11 @@ private:
                     return;
                 }
 
-                // Handle Established Telnet Remote Shell
-                if (dstPort == 2323 && sock.state == TcpState::Established) {
+                // Handle Established Telnet/SSH Remote Shell
+                if ((dstPort == 2323 || dstPort == 22 || dstPort == 23) && sock.state == TcpState::Established) {
                     if (flags & 0x01) { // FIN
                         sock.remoteSeq = seq + 1;
-                        sendTcpPacket(sock, 0x11 /* FIN | ACK */, nullptr, 0, 2323);
+                        sendTcpPacket(sock, 0x11 /* FIN | ACK */, nullptr, 0, dstPort);
                         sock.state = TcpState::Listen;
                         sock.rxLineLen = 0;
                         return;
@@ -971,7 +1002,7 @@ private:
 
                     if (payloadLen > 0) {
                         sock.remoteSeq = seq + payloadLen;
-                        sendTcpPacket(sock, 0x10 /* ACK */, nullptr, 0, 2323);
+                        sendTcpPacket(sock, 0x10 /* ACK */, nullptr, 0, dstPort);
 
                         for (uint16_t i = 0; i < payloadLen; ++i) {
                             char c = static_cast<char>(payload[i]);
@@ -982,24 +1013,24 @@ private:
                             if (c == '\r' || c == '\n') {
                                 if (sock.rxLineLen > 0) {
                                     sock.rxLine[sock.rxLineLen] = '\0';
-                                    sendTcpData("\r\n", 2323);
+                                    sendTcpData("\r\n", dstPort);
                                     if (m_shellCb) {
                                         char reply[512]{};
                                         m_shellCb(sock.rxLine, reply, sizeof(reply));
-                                        sendTcpData(reply, 2323);
+                                        sendTcpData(reply, dstPort);
                                     }
                                     sock.rxLineLen = 0;
                                 }
-                                sendTcpData("\r\nmicant:\\> ", 2323);
+                                sendTcpData("\r\nmicant:\\> ", dstPort);
                             } else if (c == '\b' || c == 0x7F) {
                                 if (sock.rxLineLen > 0) {
                                     sock.rxLineLen--;
-                                    sendTcpData("\b \b", 2323);
+                                    sendTcpData("\b \b", dstPort);
                                 }
                             } else if (sock.rxLineLen + 1 < sizeof(sock.rxLine) && c >= 32 && c <= 126) {
                                 sock.rxLine[sock.rxLineLen++] = c;
                                 char echoBuf[2] = {c, '\0'};
-                                sendTcpData(echoBuf, 2323);
+                                sendTcpData(echoBuf, dstPort);
                             }
                         }
                     }

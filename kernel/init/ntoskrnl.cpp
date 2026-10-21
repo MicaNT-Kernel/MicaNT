@@ -39,6 +39,7 @@
 #include "micant/km/drivers/storage/ahci_baremetal.hpp"
 #include "micant/km/drivers/net/i210_baremetal.hpp"
 #include "micant/km/executive/ob_baremetal.hpp"
+#include "micant/km/executive/io_baremetal.hpp"
 #include "../test/unmodified_fixture.hpp"
 
 extern "C" void ___chkstk_ms() {}
@@ -387,8 +388,36 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             UartSerial::print(" -> STATUS_SUCCESS\r\n");
             return 0;
         }
-        case 0x25: { // NtWriteFile / Console log
-            UartSerial::print("  -> NtWriteFile: User message: ");
+        case 0x24: { // NtReadFile (Dispatches IRP_MJ_READ to \Device\Harddisk0\Partition2 via Dave Cutler I/O subsystem)
+            auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
+            auto* dev = iom.findDevice("\\Device\\Harddisk0\\Partition2");
+            if (dev) {
+                auto* irp = iom.allocateIrp(micant::km::io_baremetal::IRP_MJ_READ, dev);
+                if (irp) {
+                    auto* sp = irp->getCurrentStack();
+                    sp->parameters.read.byteOffset = arg1;
+                    sp->parameters.read.length = static_cast<uint32_t>(arg2 ? arg2 : 512);
+                    irp->userBuffer = reinterpret_cast<void*>(arg1);
+                    iom.callDriver(dev, irp);
+                }
+            }
+            UartSerial::print("  -> NtReadFile [IRP_MJ_READ Dispatched to \\Device\\Harddisk0\\Partition2]\r\n");
+            return 0;
+        }
+        case 0x25: { // NtWriteFile / Disk Write & Console Log via IRP
+            auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
+            auto* dev = iom.findDevice("\\Device\\Harddisk0\\Partition2");
+            if (!dev) dev = iom.findDevice("\\Device\\Null");
+            if (dev) {
+                auto* irp = iom.allocateIrp(micant::km::io_baremetal::IRP_MJ_WRITE, dev);
+                if (irp) {
+                    auto* sp = irp->getCurrentStack();
+                    sp->parameters.write.byteOffset = 0;
+                    sp->parameters.write.length = 8;
+                    iom.callDriver(dev, irp);
+                }
+            }
+            UartSerial::print("  -> NtWriteFile [IRP_MJ_WRITE Dispatched]: User message: ");
             char msgBuf[9] = {0};
             uint64_t val = arg1;
             int idx = 0;
@@ -1248,6 +1277,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             "  objdir        - Dump canonical NT object directory namespace (\\Device, \\DosDevices)\r\n"
             "  ps            - Enumerate active NT processes and subsystems\r\n"
             "  uptime        - Query high-precision APIC timer uptime and tick accounting\r\n"
+            "  io / iostat   - Query I/O subsystem, loaded drivers, and IRP dispatch statistics\r\n"
             "  c: / d:       - Switch active storage volume\r\n"
             "  type <file>   - Read file from disk via AHCI DMA\r\n"
             "  write <f> <t> - Write text to file on disk via AHCI DMA\r\n"
@@ -1336,6 +1366,9 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
         num[p] = '\0';
         concatStr(reply, num, maxReply);
         concatStr(reply, "\r\n", maxReply);
+    } else if ((cmd[0] == 'i' && cmd[1] == 'o' && cmd[2] == 's') || (cmd[0] == 'i' && cmd[1] == 'o' && (cmd[2] == '\0' || cmd[2] == ' ' || cmd[2] == '\r'))) {
+        auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
+        iom.dumpIoStatus(reply, maxReply);
     } else if ((cmd[0] == 'c' || cmd[0] == 'C') && (cmd[1] == ':' || (cmd[1] == '\r' || cmd[1] == '\0'))) {
         s_currentDrive = 'C';
         copyStr(reply, "Switched active volume to C: (MICA_SYS 128 GB OS Root)\r\n", maxReply);
@@ -1471,7 +1504,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
         auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
         copyStr(reply, "Intel I210 Gigabit Ethernet (8086:1533 at PCIe 02:00.0)\r\n"
                        "Link: UP (1000 Mbps) | IP: 147.135.1.229/24 | MAC: a4:bf:01:1e:a3:be\r\n"
-                       "TCP Remote Shell: Port 2323 Active | DMA Rings: 64 RX / 64 TX\r\n", maxReply);
+                       "TCP Remote Shell: Port 22 / 23 / 2323 Active | DMA Rings: 64 RX / 64 TX\r\n", maxReply);
     } else if (cmd[0] == 'r' && cmd[1] == 'u' && cmd[2] == 'n') { // run <app>
         const char* arg = cmd + 3;
         while (*arg == ' ') ++arg;
@@ -1695,6 +1728,9 @@ extern "C" micant::NtStatus KiSystemStartup(
     ob.initialize();
     LogKernel("[Ob] Phase 0: Object Root Initialized (\\Device, \\Driver, \\DosDevices).");
     LogKernel("[Ps] Phase 0: Initialized PID 0 (Idle) and PID 4 (System Process).");
+    auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
+    iom.initialize();
+    LogKernel("[Io] Phase 0: Packet-Driven I/O Subsystem Initialized (IRP Stack, Drivers, Devices).");
 
     // Real Bare-Metal AHCI SATA Controller & Port 1 Storage Engine (/dev/sdb)
     auto& ahci = micant::km::ahci_baremetal::BareMetalAhciController::get();
@@ -1705,6 +1741,16 @@ extern "C" micant::NtStatus KiSystemStartup(
         concatStr(diskLog, ahci.getDiskModel(), sizeof(diskLog));
         concatStr(diskLog, " 2.0 TB SATA Gen3 6Gbps", sizeof(diskLog));
         LogKernel(diskLog);
+
+        iom.setDiskIoHandler([](uint64_t lba, uint32_t count, void* buf, bool isWrite) -> bool {
+            auto& c = micant::km::ahci_baremetal::BareMetalAhciController::get();
+            if (isWrite) {
+                return c.writeSectors(lba, static_cast<uint16_t>(count), buf);
+            } else {
+                return c.readSectors(lba, static_cast<uint16_t>(count), buf);
+            }
+        });
+        LogKernel("[Io] \\Driver\\Disk Connected to AHCI DMA Storage Engine.");
 
         auto probe = probeMicaSysVolume(ahci);
         if (probe.valid) {
@@ -2022,8 +2068,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     auto ExecuteCommandImpl = [&](auto& self, const char* cmd) -> void {
         if (cmd[0] == 'h' && cmd[1] == 'e') {
             copyStr(lastResultLine1, "Storage: dir [p], cd [p], mkdir <d>, edit <f>, type <f>, write <f> <t>, copy, del", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "System:  boot [u|m], net [ping], objdir, ps, uptime, smp, bench, app, prism, reboot", sizeof(lastResultLine2));
-            LogKernel("Shell: help -> boot, net, objdir, ps, uptime, dir, cd, mkdir, edit, type, write, copy, del, bench, app, reboot");
+            copyStr(lastResultLine2, "System:  boot [u|m], net [ping], objdir, ps, uptime, io, smp, bench, app, reboot", sizeof(lastResultLine2));
+            LogKernel("Shell: help -> boot, net, objdir, ps, uptime, io, dir, cd, mkdir, edit, type, write, copy, del, bench, app, reboot");
         } else if (cmd[0] == 'v' && cmd[1] == 'e') {
             copyStr(lastResultLine1, "MicaNT Cutler Edition Version 10.0 (Build 2026.10 BareMetal)", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Sovereign 64-Bit Operating System running on Supermicro X11SSH-F", sizeof(lastResultLine2));
@@ -2353,6 +2399,15 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine1, upMsg, sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Accounting: 10ms quantum, 100,000 x 100ns units per tick", sizeof(lastResultLine2));
             LogKernel("Shell: uptime displayed.");
+        } else if ((cmd[0] == 'i' && cmd[1] == 'o' && cmd[2] == 's') || (cmd[0] == 'i' && cmd[1] == 'o' && (cmd[2] == '\0' || cmd[2] == ' '))) {
+            char ioBuf[2048]{};
+            auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
+            iom.dumpIoStatus(ioBuf, sizeof(ioBuf));
+            UartSerial::print("\r\n");
+            UartSerial::print(ioBuf);
+            copyStr(lastResultLine1, "I/O Subsystem & Driver Dispatch hierarchy dumped to COM1 UART.", sizeof(lastResultLine1));
+            copyStr(lastResultLine2, "Drivers: Null, Disk, BootVid, I210, xHCI | Packet-driven IRP model active", sizeof(lastResultLine2));
+            LogKernel("Shell: io -> Dumped I/O subsystem driver and device hierarchy.");
         } else if (cmd[0] == 'p' && cmd[1] == 's') {
             auto& pm = micant::um::UserProcessManager64::get();
             auto& sched = micant::um::UserThreadScheduler64::get();
@@ -2494,12 +2549,14 @@ extern "C" micant::NtStatus KiSystemStartup(
                 concatStr(n1, " | RX:", sizeof(n1));
                 size_t n1l = strLen(n1);
                 uint64_t rxp = nic.getRxPackets();
+                if (rxp >= 100) n1[n1l++] = '0' + (char)((rxp / 100) % 10);
                 if (rxp >= 10) n1[n1l++] = '0' + (char)((rxp / 10) % 10);
                 n1[n1l++] = '0' + (char)(rxp % 10);
                 n1[n1l] = '\0';
                 concatStr(n1, " TX:", sizeof(n1));
                 n1l = strLen(n1);
                 uint64_t txp = nic.getTxPackets();
+                if (txp >= 1000) n1[n1l++] = '0' + (char)((txp / 1000) % 10);
                 if (txp >= 100) n1[n1l++] = '0' + (char)((txp / 100) % 10);
                 if (txp >= 10) n1[n1l++] = '0' + (char)((txp / 10) % 10);
                 n1[n1l++] = '0' + (char)(txp % 10);
@@ -2507,20 +2564,28 @@ extern "C" micant::NtStatus KiSystemStartup(
                 concatStr(n1, " ICMP:", sizeof(n1));
                 n1l = strLen(n1);
                 uint64_t icmp = nic.getIcmpReplies();
+                if (icmp >= 100) n1[n1l++] = '0' + (char)((icmp / 100) % 10);
                 if (icmp >= 10) n1[n1l++] = '0' + (char)((icmp / 10) % 10);
                 n1[n1l++] = '0' + (char)(icmp % 10);
+                n1[n1l] = '\0';
+                concatStr(n1, " (Echo:", sizeof(n1));
+                n1l = strLen(n1);
+                uint64_t echoRecv = nic.getIcmpEchoReplies();
+                if (echoRecv >= 10) n1[n1l++] = '0' + (char)((echoRecv / 10) % 10);
+                n1[n1l++] = '0' + (char)(echoRecv % 10);
+                n1[n1l++] = ')';
                 n1[n1l] = '\0';
                 copyStr(lastResultLine1, n1, sizeof(lastResultLine1));
 
                 char n2[96];
                 char pingIp[20];
                 char tcpIp[20];
-                formatIpStr(pingIp, nic.getLastIcmpSrcIp(), sizeof(pingIp));
+                formatIpStr(pingIp, (nic.getLastPingReplySrcIp() != 0) ? nic.getLastPingReplySrcIp() : nic.getLastIcmpSrcIp(), sizeof(pingIp));
                 formatIpStr(tcpIp, nic.getLastTcpSrcIp(), sizeof(tcpIp));
 
-                copyStr(n2, "PingSrc: ", sizeof(n2));
+                copyStr(n2, "Ping: ", sizeof(n2));
                 concatStr(n2, pingIp, sizeof(n2));
-                concatStr(n2, " | TCPSrc: ", sizeof(n2));
+                concatStr(n2, " | TCP:", sizeof(n2));
                 concatStr(n2, tcpIp, sizeof(n2));
                 concatStr(n2, ":", sizeof(n2));
                 size_t n2l = strLen(n2);
@@ -2530,6 +2595,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                 if (tp >= 10) n2[n2l++] = '0' + (char)((tp / 10) % 10);
                 n2[n2l++] = '0' + (char)(tp % 10);
                 n2[n2l] = '\0';
+                concatStr(n2, " (Shell: 22/2323)", sizeof(n2));
                 copyStr(lastResultLine2, n2, sizeof(lastResultLine2));
                 LogKernel("Shell: Network status and hardware diagnostics queried.");
             }
