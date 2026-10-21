@@ -456,7 +456,13 @@ public:
                 pteFlags |= PTE_WRITABLE;
             }
             if (!(protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
-                pteFlags |= PTE_NO_EXECUTE;
+#if defined(__x86_64__)
+                uint32_t eferLo = 0, eferHi = 0;
+                __asm__ __volatile__("rdmsr" : "=a"(eferLo), "=d"(eferHi) : "c"(0xC0000080));
+                if (eferLo & (1u << 11)) { // Only set NX bit if EFER.NXE is enabled in MSR
+                    pteFlags |= PTE_NO_EXECUTE;
+                }
+#endif
             }
 
             if (fromHeapPool) {
@@ -665,7 +671,13 @@ public:
                 pteFlags |= PTE_WRITABLE;
             }
             if (!(vad->protection & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
-                pteFlags |= PTE_NO_EXECUTE;
+#if defined(__x86_64__)
+                uint32_t eferLo = 0, eferHi = 0;
+                __asm__ __volatile__("rdmsr" : "=a"(eferLo), "=d"(eferHi) : "c"(0xC0000080));
+                if (eferLo & (1u << 11)) {
+                    pteFlags |= PTE_NO_EXECUTE;
+                }
+#endif
             }
 
             bool mapped = BareMetalPaging::mapVirtualPage(cr3Phys, faultVa, phys, pteFlags);

@@ -1390,9 +1390,9 @@ static bool transitionToRing3(
     cpuEngine.initialize(s_kernelStackTopVal, reinterpret_cast<uint64_t>(&KiSystemCall64Entry));
     loadGdtAndTss(cpuEngine.getGdtr(), micant::cpu::SELECTOR_TSS64);
 
-    // 4. Configure fast syscall MSRs
+    // 4. Configure fast syscall MSRs & NXE
     uint64_t efer = rdmsr(micant::cpu::MSR_EFER);
-    wrmsr(micant::cpu::MSR_EFER, efer | micant::cpu::EFER_SCE);
+    wrmsr(micant::cpu::MSR_EFER, efer | micant::cpu::EFER_SCE | micant::cpu::EFER_NXE);
     uint64_t star = (static_cast<uint64_t>(micant::cpu::KGDT64_R3_CMCODE) << 48) |
                     (static_cast<uint64_t>(micant::cpu::KGDT64_R0_CODE) << 32);
     wrmsr(micant::cpu::MSR_STAR, star);
@@ -1845,6 +1845,8 @@ extern "C" micant::NtStatus KiSystemStartup(
 
     using namespace micant::kernel;
     UartSerial::init();
+    uint64_t eferEarly = rdmsr(micant::cpu::MSR_EFER);
+    wrmsr(micant::cpu::MSR_EFER, eferEarly | micant::cpu::EFER_NXE | micant::cpu::EFER_SCE);
     UartSerial::print("\r\n=======================================================\r\n");
     UartSerial::print("[ntoskrnl.exe] KiSystemStartup reached in Ring 0!\r\n");
     UartSerial::print("[ntoskrnl.exe] Standalone PE32+ Native Kernel Image Active.\r\n");
@@ -2479,20 +2481,27 @@ extern "C" micant::NtStatus KiSystemStartup(
             }
 
             // Construct search paths: 1) \MicaNT\System32\<name>, 2) \<name>
+            char cleanTarget[64]{};
+            copyStr(cleanTarget, targetName, sizeof(cleanTarget));
+            size_t tl = strLen(cleanTarget);
+            if (tl < 4 || (cleanTarget[tl - 4] != '.')) {
+                concatStr(cleanTarget, ".exe", sizeof(cleanTarget));
+            }
+
             char pathBuf[128];
-            if (targetName[0] != '\\' && targetName[0] != '/') {
+            if (cleanTarget[0] != '\\' && cleanTarget[0] != '/') {
                 copyStr(pathBuf, "\\MicaNT\\System32\\", sizeof(pathBuf));
-                concatStr(pathBuf, targetName, sizeof(pathBuf));
+                concatStr(pathBuf, cleanTarget, sizeof(pathBuf));
             } else {
-                copyStr(pathBuf, targetName, sizeof(pathBuf));
+                copyStr(pathBuf, cleanTarget, sizeof(pathBuf));
             }
 
             size_t bytesRead = 0;
             bool readOk = fs.readFile(pathBuf, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
-            if (!readOk && targetName[0] != '\\' && targetName[0] != '/') {
+            if (!readOk && cleanTarget[0] != '\\' && cleanTarget[0] != '/') {
                 char altPath[128];
                 copyStr(altPath, "\\", sizeof(altPath));
-                concatStr(altPath, targetName, sizeof(altPath));
+                concatStr(altPath, cleanTarget, sizeof(altPath));
                 readOk = fs.readFile(altPath, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
             }
 
