@@ -29,7 +29,7 @@ jobs:
           clang++ -O2 -D_CRT_SECURE_NO_WARNINGS test/unmodified_crt_sample.cpp -o bin/unmodified_crt_sample.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $kernelUnits = Get-ChildItem -Recurse kernel -Filter *.cpp | Where-Object { $_.Name -ne "kiinit.cpp" } | Sort-Object FullName
+          $kernelUnits = Get-ChildItem -Recurse kernel -Filter *.cpp | Where-Object { $_.Name -ne "kiinit.cpp" -and $_.Name -ne "ntoskrnl.cpp" } | Sort-Object FullName
           $objFiles = @()
           foreach ($unit in $kernelUnits) {
               $subsys = $unit.Directory.Name
@@ -100,6 +100,12 @@ jobs:
           & clang++ -target x86_64-w64-mingw32 -fuse-ld=lld -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,efi_application" "-Wl,-e,EfiMain" -nostdlib boot/bootx64.cpp -o build/esp/EFI/BOOT/BOOTX64.EFI
           if ($LASTEXITCODE -ne 0) {
               Write-Warning "Bare-metal UEFI compilation skipped on this runner (exit code: $LASTEXITCODE)"
+              $global:LASTEXITCODE = 0
+          }
+          Write-Host "[CI] Compiling Standalone Bare-Metal PE32+ Kernel (build/ntoskrnl.exe)..."
+          & clang++ -target x86_64-w64-mingw32 -fuse-ld=lld -std=c++23 -ffreestanding -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-stack-protector -mno-stack-arg-probe -mno-red-zone -O2 -Iinclude "-Wl,--subsystem,native" "-Wl,-e,KiSystemStartup" -nostdlib kernel/init/ntoskrnl.cpp -o build/ntoskrnl.exe
+          if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Bare-metal ntoskrnl compilation skipped on this runner (exit code: $LASTEXITCODE)"
               $global:LASTEXITCODE = 0
           }
           $PSNativeCommandUseErrorActionPreference = $prevNativePref

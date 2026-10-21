@@ -46,12 +46,14 @@
 extern "C" void ___chkstk_ms() {}
 extern "C" void __chkstk() {}
 extern "C" int abs(int x) { return x < 0 ? -x : x; }
-extern "C" size_t wcslen(const wchar_t* s) {
+#if !defined(__UCRT__) && !defined(_UCRT) && !defined(_MSC_VER)
+extern "C" [[gnu::weak]] size_t wcslen(const wchar_t* s) {
     if (!s) return 0;
     size_t len = 0;
     while (s[len]) ++len;
     return len;
 }
+#endif
 extern "C" void __libcpp_verbose_abort(const char*, ...) {
     while (true) {
 #if defined(__x86_64__)
