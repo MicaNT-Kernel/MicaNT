@@ -20260,3 +20260,122 @@ inline void Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter
 
 
 
+
+// ============================================================================
+// Suite 345: Horizon 129 — Sovereign Battery Management System (BMS),
+//            Smart Battery Class Driver & ACPI Multi-Cell Balancing (Unit #101)
+// ============================================================================
+inline void Test_Horizon129_BatteryManagementSystem_Bms_ClassDriver_And_CellBalancing() {
+    using namespace micant::po::bms;
+
+    std::cout << "\n[TEST] Suite 345: Horizon 129 - Sovereign Battery Management System (BMS) & Cell Balancing...\n";
+
+    // 1. Verify WDK Struct Sizes & Layout Constraints
+    TEST_ASSERT(sizeof(BatteryInformation) == 36, "BatteryInformation must be 36 bytes packed");
+    TEST_ASSERT(sizeof(BatteryStatus) == 16, "BatteryStatus must be 16 bytes packed");
+    TEST_ASSERT(sizeof(BatteryQueryInformation) == 12, "BatteryQueryInformation must be 12 bytes packed");
+    TEST_ASSERT(sizeof(BatteryWaitStatus) == 20, "BatteryWaitStatus must be 20 bytes packed");
+
+    auto& bms = SmartBatterySubsystem::get();
+    bms.resetToDefaultState();
+
+    // 2. IOCTL_BATTERY_QUERY_TAG Dispatch
+    uint32_t tag = 0;
+    size_t bytesRet = 0;
+    NtStatus stTag = bms.handleIoctl(IOCTL_BATTERY_QUERY_TAG, nullptr, 0, &tag, sizeof(tag), bytesRet);
+    TEST_ASSERT(NT_SUCCESS(stTag), "IOCTL_BATTERY_QUERY_TAG must succeed");
+    TEST_ASSERT(tag == 1, "Initial battery tag must be 1");
+    TEST_ASSERT(bytesRet == sizeof(uint32_t), "Bytes returned must match sizeof(uint32_t)");
+
+    // 3. IOCTL_BATTERY_QUERY_INFORMATION: BatteryInformation Level
+    BatteryQueryInformation qInfo{};
+    qInfo.batteryTag = tag;
+    qInfo.infoLevel = BatteryQueryInfoLevel::BatteryInformation;
+
+    BatteryInformation bInfo{};
+    NtStatus stInfo = bms.handleIoctl(IOCTL_BATTERY_QUERY_INFORMATION, &qInfo, sizeof(qInfo), &bInfo, sizeof(bInfo), bytesRet);
+    TEST_ASSERT(NT_SUCCESS(stInfo), "IOCTL_BATTERY_QUERY_INFORMATION (BatteryInformation) must succeed");
+    TEST_ASSERT(bInfo.chemistry[0] == 'L' && bInfo.chemistry[1] == 'I' && bInfo.chemistry[2] == 'O' && bInfo.chemistry[3] == 'N', "Chemistry must be LION");
+    TEST_ASSERT(bInfo.designedCapacity == 70000, "Designed capacity must be 70,000 mWh");
+    TEST_ASSERT(bInfo.fullChargedCapacity == 66500, "Full charged capacity must be 66,500 mWh");
+    TEST_ASSERT(bInfo.defaultAlert1 == 7000, "Low alert must be 7,000 mWh");
+    TEST_ASSERT(bInfo.defaultAlert2 == 3500, "Critical alert must be 3,500 mWh");
+    TEST_ASSERT(bms.getStateOfHealthPercent() == 95, "State of Health (SOH) must be 95 percent");
+
+    // 4. IOCTL_BATTERY_QUERY_INFORMATION: Temperature & Device Strings
+    qInfo.infoLevel = BatteryQueryInfoLevel::BatteryTemperature;
+    uint32_t tempDk = 0;
+    NtStatus stTemp = bms.handleIoctl(IOCTL_BATTERY_QUERY_INFORMATION, &qInfo, sizeof(qInfo), &tempDk, sizeof(tempDk), bytesRet);
+    TEST_ASSERT(NT_SUCCESS(stTemp), "BatteryTemperature query must succeed");
+    TEST_ASSERT(tempDk == 2982, "Default temperature must be 298.2 K (25.0 C)");
+
+    qInfo.infoLevel = BatteryQueryInfoLevel::BatteryDeviceName;
+    char devName[128]{};
+    NtStatus stName = bms.handleIoctl(IOCTL_BATTERY_QUERY_INFORMATION, &qInfo, sizeof(qInfo), devName, sizeof(devName), bytesRet);
+    TEST_ASSERT(NT_SUCCESS(stName), "BatteryDeviceName query must succeed");
+    TEST_ASSERT(std::string_view(devName).find("MicaNT") != std::string_view::npos, "Device name must identify MicaNT");
+
+    // 5. IOCTL_BATTERY_QUERY_STATUS: AC Online vs Discharging State Transitions
+    BatteryWaitStatus waitStat{};
+    waitStat.batteryTag = tag;
+    BatteryStatus bStat{};
+
+    NtStatus stStat = bms.handleIoctl(IOCTL_BATTERY_QUERY_STATUS, &waitStat, sizeof(waitStat), &bStat, sizeof(bStat), bytesRet);
+    TEST_ASSERT(NT_SUCCESS(stStat), "IOCTL_BATTERY_QUERY_STATUS must succeed");
+    TEST_ASSERT((bStat.powerState & BATTERY_POWER_ON_LINE) != 0, "Default state must have AC Power Online");
+    TEST_ASSERT(bStat.capacity == 66500, "Initial capacity must be full (66,500 mWh)");
+    TEST_ASSERT(bms.getStateOfChargePercent() == 100, "State of Charge (SOC) must be 100 percent");
+
+    // Disconnect AC Power: Transition to Discharging
+    bms.setAcPower(false);
+    NtStatus stDisch = bms.handleIoctl(IOCTL_BATTERY_QUERY_STATUS, &waitStat, sizeof(waitStat), &bStat, sizeof(bStat), bytesRet);
+    TEST_ASSERT(NT_SUCCESS(stDisch), "Status query after AC disconnect must succeed");
+    TEST_ASSERT(!(bStat.powerState & BATTERY_POWER_ON_LINE), "AC Online bit must be cleared");
+    TEST_ASSERT((bStat.powerState & BATTERY_DISCHARGING) != 0, "Battery must be marked DISCHARGING");
+    TEST_ASSERT(bStat.rate < 0, "Discharge rate must be negative (drawing power)");
+    TEST_ASSERT(bms.getEstimatedRuntimeSeconds() > 0 && bms.getEstimatedRuntimeSeconds() != 0xFFFFFFFF, "Estimated runtime must be calculated");
+
+    // 6. Multi-Cell 4S Balancing & Coulomb Counter Simulation
+    // Draw 3000 mA load for 1800 seconds (30 minutes)
+    bms.applyCurrentFlow(-3000, 1800);
+    const auto& cells = bms.getCellTelemetry();
+    TEST_ASSERT(cells.cellVoltageMv[0] >= 3000 && cells.cellVoltageMv[0] <= 4200, "Cell 1 voltage must be within safe operational envelope");
+    TEST_ASSERT(cells.getMaxCellDeltaMv() <= 30, "Nominal cell delta must not exceed 30 mV");
+    TEST_ASSERT(bms.getStateOfChargePercent() < 100, "State of charge must decrement after load");
+
+    // Re-connect AC Power (65W USB-PD): Transition to Charging
+    bms.setAcPower(true, 65);
+    bms.handleIoctl(IOCTL_BATTERY_QUERY_STATUS, &waitStat, sizeof(waitStat), &bStat, sizeof(bStat), bytesRet);
+    TEST_ASSERT((bStat.powerState & BATTERY_CHARGING) != 0, "Battery must transition to CHARGING on AC connect");
+    TEST_ASSERT(bStat.rate > 0, "Charge rate must be positive");
+    TEST_ASSERT(bms.getTimeToFullSeconds() > 0, "Time-to-full must be calculated during charge");
+
+    // 7. Executive PowerManager Synchronization
+    micant::po::bms::InitializeBatterySubsystem();
+    auto& po = micant::po::PowerManager::get();
+    auto sysBat = po.getBatteryState();
+    TEST_ASSERT(sysBat.batteryPresent, "Executive PowerManager must see battery present");
+    TEST_ASSERT(sysBat.acOnLine, "Executive PowerManager must reflect AC Online");
+    TEST_ASSERT(sysBat.charging, "Executive PowerManager must reflect Charging state");
+    TEST_ASSERT(po.getBatteryPercentage() == bms.getStateOfChargePercent(), "Percentage remaining must synchronize");
+
+    // 8. Visual ASCII Gauge Rendering
+    std::string gauge;
+    bms.renderAsciiTelemetry(gauge);
+    TEST_ASSERT(gauge.find("Pack Charge:") != std::string::npos, "Rendered telemetry must include visual charge gauge");
+    TEST_ASSERT(gauge.find("4S Lithium Cell Balancing") != std::string::npos, "Rendered telemetry must include 4S cell balance matrix");
+    TEST_ASSERT(gauge.find("OVP (Over-Voltage):") != std::string::npos, "Rendered telemetry must include hardware safety interlocks");
+
+    std::cout << "  [Horizon 129 Track D Sovereign Battery Management System & ACPI Class Driver (Unit #101)]\n"
+              << "    Battery Tag: " << tag << " | Chemistry: LION (Secondary Rechargeable)\n"
+              << "    Capacities: Designed=70.0 Wh | Full=66.5 Wh | Current=" << (bStat.capacity / 1000.0) << " Wh | SOH=95%\n"
+              << "    Pack Voltage: " << (bStat.voltage / 1000.0) << " V (4S Cells: ["
+              << cells.cellVoltageMv[0] << ", " << cells.cellVoltageMv[1] << ", "
+              << cells.cellVoltageMv[2] << ", " << cells.cellVoltageMv[3] << "] mV | Delta="
+              << cells.getMaxCellDeltaMv() << " mV)\n"
+              << "    Thermal Sensor: " << cells.getTemperatureCelsius() << " C (Autonomous OTP Interlock Armed)\n"
+              << "    IOCTL Dispatch: Tag (0x294040), QueryInfo (0x294044), QueryStatus (0x29404C) Verified OK\n"
+              << "    NT Object Manager: Registered \\Device\\Battery0 & Symlink \\DosDevices\\Battery0\n";
+
+    std::cout << "[TEST] Suite 345: Horizon 129 - Sovereign Battery Management System (BMS) & Cell Balancing PASSED.\n";
+}

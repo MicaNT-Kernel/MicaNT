@@ -86,6 +86,7 @@ enum class DeviceType : uint32_t {
     FileSystem  = 0x00000009,
     Null        = 0x00000015,
     Console     = 0x00000050,
+    Battery     = 0x00000029,
     Unknown     = 0x00000022
 };
 

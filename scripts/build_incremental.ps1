@@ -51,6 +51,7 @@ try {
         @{ Src = "kernel/io/pnpboot.cpp";             Obj = "io_pnpboot.o" },
         @{ Src = "kernel/io/pnpresilience.cpp";       Obj = "io_pnpresilience.o" },
         @{ Src = "kernel/po/pofx_whea.cpp";           Obj = "po_pofx_whea.o" },
+        @{ Src = "kernel/po/bms.cpp";                 Obj = "po_bms.o" },
         @{ Src = "kernel/io/umdf_msix.cpp";           Obj = "io_umdf_msix.o" },
         @{ Src = "kernel/ke/zerobsod.cpp";            Obj = "ke_zerobsod.o" },
         @{ Src = "kernel/io/livehotswap.cpp";         Obj = "io_livehotswap.o" },

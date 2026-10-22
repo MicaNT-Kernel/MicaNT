@@ -171,6 +171,7 @@
 #include "micant/km/hal/iommu.hpp"
 #include "micant/km/hal/uefi_rt.hpp"
 #include "micant/km/drivers/compute/modern_standby.hpp"
+#include "micant/km/executive/bms.hpp"
 #include "micant/um/subsystems/com/wsa.hpp"
 #include "micant/um/subsystems/winuser/touchpad.hpp"
 #include "micant/um/subsystems/winuser/ink.hpp"
@@ -560,6 +561,7 @@ public:
             if (cmd == "fwupdate" || cmd == "capsule" || cmd == "uefi" || cmd == "esrt") { cmdFwUpdate(tokens, out); return 0; }
             if (cmd == "standby" || cmd == "modernstandby" || cmd == "pep" || cmd == "sleepstudy") { cmdModernStandby(tokens, out); return 0; }
             if (cmd == "powercfg") { cmdPowerCfg(tokens, out); return 0; }
+            if (cmd == "battery" || cmd == "bms") { cmdBms(tokens, out); return 0; }
             if (cmd == "wsa" || cmd == "android" || cmd == "aosp" || cmd == "titanwsa" || cmd == "aegiswsa") { cmdWsa(tokens, out); return 0; }
             if (cmd == "touch" || cmd == "touchpad" || cmd == "ptp" || cmd == "directmanipulation" || cmd == "haptics") { cmdTouchpad(tokens, out); return 0; }
             if (cmd == "ink" || cmd == "stylus" || cmd == "pen" || cmd == "wisptis" || cmd == "handwriting") { cmdInk(tokens, out); return 0; }
