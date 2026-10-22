@@ -2223,6 +2223,26 @@ extern "C" micant::uefi::EfiStatus EfiMain(
             krnlBytes = loadFileFromEfiSystemPartition(
                 imageHandle,
                 systemTable->bootServices,
+                L"\\ntoskrnl.exe",
+                micant::bootloader::s_ntoskrnlFileBuffer,
+                sizeof(micant::bootloader::s_ntoskrnlFileBuffer)
+            );
+        }
+
+        if (krnlBytes == 0) {
+            krnlBytes = loadFileFromEfiSystemPartition(
+                imageHandle,
+                systemTable->bootServices,
+                L"ntoskrnl.exe",
+                micant::bootloader::s_ntoskrnlFileBuffer,
+                sizeof(micant::bootloader::s_ntoskrnlFileBuffer)
+            );
+        }
+
+        if (krnlBytes == 0) {
+            krnlBytes = loadFileFromEfiSystemPartition(
+                imageHandle,
+                systemTable->bootServices,
                 L"\\MicaNT\\System32\\ntoskrnl.exe",
                 micant::bootloader::s_ntoskrnlFileBuffer,
                 sizeof(micant::bootloader::s_ntoskrnlFileBuffer)

@@ -522,11 +522,13 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                 }
             }
             UartSerial::print("  -> NtWriteFile [IRP_MJ_WRITE Dispatched]: User message: ");
-            if (arg1 >= 0x10000ULL && arg1 < 0xFFFF800000000000ULL) {
+            const auto* vadEntry = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (vadEntry != nullptr && (vadEntry->protection & (micant::km::mm_baremetal::PAGE_READONLY | micant::km::mm_baremetal::PAGE_READWRITE | micant::km::mm_baremetal::PAGE_EXECUTE_READ | micant::km::mm_baremetal::PAGE_EXECUTE_READWRITE))) {
                 const char* str = reinterpret_cast<const char*>(arg1);
-                size_t len = (arg2 > 0 && arg2 < 4096) ? arg2 : 0;
+                size_t maxPossible = static_cast<size_t>(vadEntry->endVa - arg1);
+                size_t len = (arg2 > 0 && arg2 <= maxPossible) ? arg2 : 0;
                 if (len == 0) {
-                    while (len < 256 && str[len] != '\0') len++;
+                    while (len < 256 && len < maxPossible && str[len] != '\0') len++;
                 }
                 char printBuf[128]{};
                 size_t cpy = (len < sizeof(printBuf) - 1) ? len : (sizeof(printBuf) - 1);
@@ -586,8 +588,9 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
         }
         case 0x80: { // NtGdiGetVideoInfo
             UartSerial::print("  -> NtGdiGetVideoInfo: Querying GOP linear framebuffer metrics: ");
-            auto* info = reinterpret_cast<micant::um::UserVideoInfo64*>(arg1);
-            if (info) {
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (vad != nullptr && arg1 != 0) {
+                auto* info = reinterpret_cast<micant::um::UserVideoInfo64*>(arg1);
                 UartSerial::printDec(info->width);
                 UartSerial::print("x");
                 UartSerial::printDec(info->height);
@@ -602,8 +605,9 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
         }
         case 0x81: { // NtGdiPresentSurface
             UartSerial::print("  -> NtGdiPresentSurface: 32-bpp BGRA surface blitted to physical VRAM: ");
-            auto* p = reinterpret_cast<micant::um::UserPresentSurfaceParams64*>(arg1);
-            if (p) {
+            const auto* vad = micant::km::mm_baremetal::BareMetalVadTable::get().findVad(arg1);
+            if (vad != nullptr && arg1 != 0) {
+                auto* p = reinterpret_cast<micant::um::UserPresentSurfaceParams64*>(arg1);
                 UartSerial::printDec(p->width);
                 UartSerial::print("x");
                 UartSerial::printDec(p->height);

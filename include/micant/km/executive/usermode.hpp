@@ -1391,11 +1391,17 @@ public:
             patchMovRax(s38, sizeof(s38), argvAddr);
             std::memcpy(trampolineBuffer + 0x6C0, s38, sizeof(s38));
 
-            // Slot 39 (0x6E0): __p__commode / __p__fmode / __p__environ / _errno / __sys_nerr
-            uint64_t dataAddr = trampolineBaseVa + 0x720;
+            // Slot 39 (0x6E0): __p__environ / __p___initenv (returns pointer to environ pointer at 0x720)
+            uint64_t envDataAddr = trampolineBaseVa + 0x720;
             uint8_t s39[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
-            patchMovRax(s39, sizeof(s39), dataAddr);
+            patchMovRax(s39, sizeof(s39), envDataAddr);
             std::memcpy(trampolineBuffer + 0x6E0, s39, sizeof(s39));
+
+            // Slot 39b (0x6F0): __p__commode / __p__fmode / _errno / __sys_nerr (returns pointer to int=0 at 0x728)
+            uint64_t commodeDataAddr = trampolineBaseVa + 0x728;
+            uint8_t s39b[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+            patchMovRax(s39b, sizeof(s39b), commodeDataAddr);
+            std::memcpy(trampolineBuffer + 0x6F0, s39b, sizeof(s39b));
 
             // Slot 40 (0x740): __acrt_iob_func (RCX = index)
             uint64_t streamsAddr = trampolineBaseVa + 0xD80;
@@ -1437,6 +1443,20 @@ public:
                 0xC3                                      // ret
             };
             std::memcpy(trampolineBuffer + 0x800, s43, sizeof(s43));
+
+            // Slot 43b (0x820): tanf / tan
+            const uint8_t s43b[] = {
+                0x48, 0x83, 0xEC, 0x08,                   // sub $8, %rsp
+                0xF3, 0x0F, 0x11, 0x04, 0x24,             // movss %xmm0, (%rsp)
+                0xD9, 0x04, 0x24,                         // flds (%rsp)
+                0xD9, 0xF2,                               // fptan (pushes 1.0, then tan)
+                0xDD, 0xD8,                               // fstp %st(0) (pop 1.0)
+                0xD9, 0x1C, 0x24,                         // fstps (%rsp)
+                0xF3, 0x0F, 0x10, 0x04, 0x24,             // movss (%rsp), %xmm0
+                0x48, 0x83, 0xC4, 0x08,                   // add $8, %rsp
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x820, s43b, sizeof(s43b));
 
             // Slot 44 (0x840): round / roundf
             const uint8_t s44[] = { 0x66, 0x0F, 0x3A, 0x0A, 0xC0, 0x00, 0xC3 };
@@ -1589,12 +1609,20 @@ public:
             std::memcpy(trampolineBuffer + 0x708, &arg0Ptr, sizeof(arg0Ptr));
             std::memcpy(trampolineBuffer + 0x710, &arg1Null, sizeof(arg1Null));
 
+            // 0x720: __p__environ returns &environ. *(&environ) = 0x710 (pointer to NULL pointer)
+            uint64_t envArrayPtr = trampolineBaseVa + 0x710;
+            std::memcpy(trampolineBuffer + 0x720, &envArrayPtr, sizeof(envArrayPtr));
+
+            // 0x728: __p__commode, __p__fmode, _errno point here (int = 0)
             int initZero = 0;
-            std::memcpy(trampolineBuffer + 0x720, &initZero, sizeof(initZero));
-            std::memcpy(trampolineBuffer + 0x724, &initZero, sizeof(initZero));
             std::memcpy(trampolineBuffer + 0x728, &initZero, sizeof(initZero));
             std::memcpy(trampolineBuffer + 0x72C, &initZero, sizeof(initZero));
             std::memcpy(trampolineBuffer + 0x730, &initZero, sizeof(initZero));
+
+            // Zero-initialize stdio FILE streams at 0xD80 (3 * 64 bytes = 192 bytes, up to 0xE40)
+            if (trampolineBufferSize >= 0xE40) {
+                std::memset(trampolineBuffer + 0xD80, 0, 3 * 64);
+            }
         }
 
         // 8. Parse and Bind Imports
@@ -1663,7 +1691,7 @@ public:
                                            streq(symName, "TlsSetValue") || streq(symName, "TlsFree") || streq(symName, "IsNetworkAlive") ||
                                            streq(symName, "IsDestinationReachableW") || streq(symName, "IsProcessorFeaturePresent") ||
                                            streq(symName, "HeapFree") || streq(symName, "free") || streq(symName, "_aligned_free") ||
-                                           streq(symName, "LocalFree")) {
+                                           streq(symName, "LocalFree") || streq(symName, "VirtualProtect")) {
                                     targetTrampoline = trampolineBaseVa + 0x1E0;
                                 } else if (streq(symName, "GetCurrentPackageFullName")) {
                                     targetTrampoline = trampolineBaseVa + 0x220;
@@ -1709,9 +1737,11 @@ public:
                                     targetTrampoline = trampolineBaseVa + 0x680;
                                 } else if (streq(symName, "__p___argv") || streq(symName, "__p___wargv")) {
                                     targetTrampoline = trampolineBaseVa + 0x6C0;
-                                } else if (streq(symName, "__p__commode") || streq(symName, "__p__fmode") || streq(symName, "__p__environ") ||
-                                           streq(symName, "__p___initenv") || streq(symName, "_errno") || streq(symName, "__sys_nerr")) {
+                                } else if (streq(symName, "__p__environ") || streq(symName, "__p___initenv")) {
                                     targetTrampoline = trampolineBaseVa + 0x6E0;
+                                } else if (streq(symName, "__p__commode") || streq(symName, "__p__fmode") ||
+                                           streq(symName, "_errno") || streq(symName, "__sys_nerr")) {
+                                    targetTrampoline = trampolineBaseVa + 0x6F0;
                                 } else if (streq(symName, "__acrt_iob_func")) {
                                     targetTrampoline = trampolineBaseVa + 0x740;
                                 } else if (streq(symName, "sqrtf") || streq(symName, "sqrt")) {
@@ -1720,6 +1750,8 @@ public:
                                     targetTrampoline = trampolineBaseVa + 0x7C0;
                                 } else if (streq(symName, "cosf") || streq(symName, "cos")) {
                                     targetTrampoline = trampolineBaseVa + 0x800;
+                                } else if (streq(symName, "tanf") || streq(symName, "tan")) {
+                                    targetTrampoline = trampolineBaseVa + 0x820;
                                 } else if (streq(symName, "round") || streq(symName, "roundf")) {
                                     targetTrampoline = trampolineBaseVa + 0x840;
                                 } else if (streq(symName, "floorf") || streq(symName, "floor") || streq(symName, "ceilf") || streq(symName, "ceil")) {
