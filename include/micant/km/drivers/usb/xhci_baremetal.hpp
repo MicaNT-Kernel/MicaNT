@@ -645,15 +645,15 @@ public:
             }
         }
 
-        // Wait 100ms for power stabilization and device pull-up debounce
-        delayMs(100);
+        // Wait 200ms for power stabilization and device pull-up debounce
+        delayMs(200);
 
         uint32_t targetPort = 0;
         uint64_t targetPortAddr = 0;
         uint32_t targetPortSC = 0;
 
-        // Scan ports for connected device (CCS bit 0 == 1)
-        for (int retry = 0; retry < 8 && targetPort == 0; ++retry) {
+        // Scan ports for connected device (CCS bit 0 == 1) with up to 2.0s timeout
+        for (int retry = 0; retry < 40 && targetPort == 0; ++retry) {
             if (retry > 0) delayMs(50);
             for (uint32_t p = 1; p <= maxPorts; ++p) {
                 uint64_t pAddr = m_opBase + 0x400 + (static_cast<uint64_t>(p - 1) * 0x10);
@@ -859,7 +859,15 @@ public:
         outEsc = false;
         outEnter = false;
 
-        if (!m_keyboardReady) return false;
+        if (!m_keyboardReady) {
+            static uint64_t s_lastInitRetryTsc = 0;
+            uint64_t now = rdtsc();
+            if (now - s_lastInitRetryTsc > 2000ULL * 3800000ULL) {
+                s_lastInitRetryTsc = now;
+                initialize();
+            }
+            return false;
+        }
 
         volatile XhciTrb* trb = &s_evtRing[m_evtDequeue];
         uint32_t ctrl = trb->control;

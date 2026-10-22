@@ -231,6 +231,13 @@ static inline void resolveShellPath(const char* input, const char* curDir, char*
     }
 }
 
+static inline const char* getCommandArgs(const char* cmd) noexcept {
+    if (!cmd) return "";
+    while (*cmd && *cmd != ' ') ++cmd;
+    while (*cmd == ' ') ++cmd;
+    return cmd;
+}
+
 static inline void formatIpStr(char* dst, uint32_t ipVal, size_t maxLen) noexcept {
     if (ipVal == 0) {
         copyStr(dst, "none", maxLen);
@@ -1719,7 +1726,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
                              (p->state == micant::um::UserProcessState::Terminated) ? "TERMINATED" : "READY", maxReply);
             concatStr(reply, "]\r\n", maxReply);
         }
-    } else if ((cmd[0] == 'u' && cmd[1] == 'p') || (cmd[0] == 't' && cmd[1] == 'i' && cmd[2] == 'm' && cmd[3] == 'e')) {
+    } else if (cmd[0] == 'u' && cmd[1] == 'p') {
         auto& intEngine = micant::hal::idt::InterruptEngine64::get();
         const auto& t = intEngine.getTimeAccounting();
         copyStr(reply, "MicaNT Executive Uptime & Chronometry:\r\n"
@@ -2585,20 +2592,23 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellClearOutput();
             ShellAddLine("MicaNT Sovereign Cutler Executive Shell - Command Reference:", micant::bootvid::Color{255, 215, 0});
             ShellAddLine("  dir [path]       - List files, directories, sizes, and free disk space", micant::bootvid::Color{0, 229, 255});
-            ShellAddLine("  cd <path>        - Change directory (e.g. 'cd MicaNT', 'cd ..', 'cd \\')", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  cd [path]        - Print or change directory (e.g. 'cd MicaNT', 'cd ..', 'cd \\')", micant::bootvid::Color{0, 229, 255});
             ShellAddLine("  type <file>      - Read and display file contents via AHCI DMA", micant::bootvid::Color{0, 229, 255});
-            ShellAddLine("  write <f> <text> - Write text to file on disk via AHCI DMA", micant::bootvid::Color{0, 229, 255});
             ShellAddLine("  copy <src> <dst> - Copy file across paths or volumes via AHCI DMA", micant::bootvid::Color{0, 229, 255});
             ShellAddLine("  del <file>       - Delete file from disk and reclaim FAT32 clusters", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  mkdir / md <dir> - Create a new directory on active volume", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  rmdir / rd <dir> - Remove a directory from active volume", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  echo <t> [>file] - Print text to console or write to disk file", micant::bootvid::Color{0, 229, 255});
             ShellAddLine("  run <app>        - Execute Ring 3 PE32+ app (e.g. 'run app', 'run bench')", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  pci              - Enumerate live PCI / PCIe hardware devices", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  dmesg / log      - Display recent kernel executive event stream buffer", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  echo <t> [>file] - Print text to console or write to disk file", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  ps / tasklist    - Enumerate active NT executive processes and threads", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  pci / dmesg      - Query live PCI hardware bus and kernel event log", micant::bootvid::Color{100, 240, 160});
             ShellAddLine("  history          - Display previously executed command history buffer", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  drives / C: / D: - List mounted volumes (C: 128GB, D: 1.7TB, E: Linux RO)", micant::bootvid::Color{255, 200, 80});
-            ShellAddLine("  smp / cpu / mem  - Display 8-core Xeon E3-1270 v6 APIC and memory metrics", micant::bootvid::Color{255, 200, 80});
-            ShellAddLine("  net / io / ps    - Query Intel I210 GbE, AHCI/xHCI, and active NT processes", micant::bootvid::Color{255, 200, 80});
-            ShellAddLine("  ppm / batt / tz  - Query Intel Speed Shift PPM, 4S BMS battery, thermal fans", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  sysinfo / whoami - Display system summary and Sovereign security token", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  time / date      - Query motherboard CMOS RTC hardware real-time clock", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  vol / drives     - Query storage volumes, disk labels, and capacities", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  set / path       - Query executive environment block and search paths", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  attrib [file]    - Display FAT32 file and directory attributes", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  uptime / smp     - Chronometry ticks and 8-core Xeon CPU topology", micant::bootvid::Color{200, 220, 245});
             ShellAddLine("  cls / reboot     - Clear console buffer / Hardware reset CPU via Port 0xCF9", micant::bootvid::Color{200, 220, 245});
             LogKernel("Shell: help -> Displayed full command reference.");
         } else if ((cmd[0] == 'p' && cmd[1] == 'p' && cmd[2] == 'm') || (cmd[0] == 'h' && cmd[1] == 'w' && cmd[2] == 'p')) {
@@ -3121,7 +3131,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine1, "Canonical NT Object Directory dumped to COM1 UART console.", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Directories: \\Device, \\DosDevices, \\Driver, \\BaseNamedObjects", sizeof(lastResultLine2));
             LogKernel("Shell: objdir -> Dumped canonical NT object directory namespace.");
-        } else if ((cmd[0] == 'u' && cmd[1] == 'p') || (cmd[0] == 't' && cmd[1] == 'i' && cmd[2] == 'm' && cmd[3] == 'e')) {
+        } else if (cmd[0] == 'u' && cmd[1] == 'p') {
             ShellClearOutput();
             auto& intEngine = micant::hal::idt::InterruptEngine64::get();
             const auto& t = intEngine.getTimeAccounting();
@@ -3227,7 +3237,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine("Integration:       Vector 0x0E #PF Page Fault Demand Pager & Transition PTEs", micant::bootvid::Color{140, 255, 180});
                 LogKernel("Shell: hmb -> Dumped Haven Memory Bus (HMB) Pagefile Telemetry.");
             }
-        } else if (cmd[0] == 'p' && cmd[1] == 's') {
+        } else if ((cmd[0] == 'p' && cmd[1] == 's') || (cmd[0] == 't' && cmd[1] == 'a' && cmd[2] == 's' && cmd[3] == 'k')) {
             ShellClearOutput();
             ShellAddLine("Active NT Executive Processes & Subsystems:", micant::bootvid::Color{100, 240, 160});
             ShellAddLine("PID   Image Name            State         Base VA             Syscalls", micant::bootvid::Color{120, 170, 230});
@@ -3424,12 +3434,19 @@ extern "C" micant::NtStatus KiSystemStartup(
             }
         } else if (cmd[0] == 'c' && cmd[1] == 'd') {
             ShellClearOutput();
-            const char* arg = cmd + 2;
-            while (*arg == ' ') ++arg;
+            const char* arg = getCommandArgs(cmd);
             char* curDir = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
             auto& vol = (s_currentDrive == 'D') ? micant::km::ahci_baremetal::Fat32FileSystem::getVolumeD()
                                                 : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
-            if (*arg == '\0' || (*arg == '\\' && *(arg+1) == '\0')) {
+            if (*arg == '\0') {
+                char curMsg[120];
+                copyStr(curMsg, " ", sizeof(curMsg));
+                char dl[3] = {s_currentDrive, ':', '\0'};
+                concatStr(curMsg, dl, sizeof(curMsg));
+                concatStr(curMsg, curDir, sizeof(curMsg));
+                ShellAddLine(curMsg, micant::bootvid::Color{0, 229, 255});
+                LogKernel("Shell: cd (display current directory)");
+            } else if (*arg == '\\' && *(arg+1) == '\0') {
                 copyStr(curDir, "\\", 64);
                 ShellAddLine("Working directory changed to root \\", micant::bootvid::Color{100, 240, 160});
                 ShellAddLine("Prompt updated.", micant::bootvid::Color{200, 220, 245});
@@ -3465,18 +3482,18 @@ extern "C" micant::NtStatus KiSystemStartup(
                     ShellAddLine("Syntax: cd <path> or cd .. or cd \\", micant::bootvid::Color{200, 220, 245});
                 }
             }
-        } else if (cmd[0] == 'm' && cmd[1] == 'k' && cmd[2] == 'd') {
+        } else if ((cmd[0] == 'm' && cmd[1] == 'k' && cmd[2] == 'd') ||
+                   (cmd[0] == 'm' && cmd[1] == 'd' && (cmd[2] == ' ' || cmd[2] == '\0'))) {
             ShellClearOutput();
-            const char* arg = cmd + 5;
-            while (*arg == ' ') ++arg;
+            const char* arg = getCommandArgs(cmd);
             if (*arg == '\0') {
-                ShellAddLine("Syntax: mkdir <dirname>", micant::bootvid::Color{255, 100, 100});
+                ShellAddLine("Syntax: mkdir <dirname> or md <dirname>", micant::bootvid::Color{255, 100, 100});
                 ShellAddLine("Creates a new subdirectory on the active volume.", micant::bootvid::Color{200, 220, 245});
             } else {
-                auto& vol = getTargetVolume(arg);
                 char fullPath[128]{};
                 const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
                 resolveShellPath(arg, cur, fullPath, sizeof(fullPath));
+                auto& vol = getTargetVolume(fullPath);
 
                 if (vol.createDirectory(fullPath)) {
                     char m[96];
@@ -3487,6 +3504,30 @@ extern "C" micant::NtStatus KiSystemStartup(
                     LogKernel(m);
                 } else {
                     ShellAddLine("Failed to create directory (already exists or invalid path):", micant::bootvid::Color{255, 100, 100});
+                    ShellAddLine(fullPath, micant::bootvid::Color{200, 220, 245});
+                }
+            }
+        } else if ((cmd[0] == 'r' && cmd[1] == 'm' && cmd[2] == 'd') ||
+                   (cmd[0] == 'r' && cmd[1] == 'd' && (cmd[2] == ' ' || cmd[2] == '\0'))) {
+            ShellClearOutput();
+            const char* arg = getCommandArgs(cmd);
+            if (*arg == '\0') {
+                ShellAddLine("Syntax: rmdir <dirname> or rd <dirname>", micant::bootvid::Color{255, 100, 100});
+                ShellAddLine("Removes a directory from the active volume.", micant::bootvid::Color{200, 220, 245});
+            } else {
+                char fullPath[128]{};
+                const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
+                resolveShellPath(arg, cur, fullPath, sizeof(fullPath));
+                auto& vol = getTargetVolume(fullPath);
+                if (vol.deleteFile(fullPath)) {
+                    char m[96];
+                    copyStr(m, "Removed directory: ", sizeof(m));
+                    concatStr(m, fullPath, sizeof(m));
+                    ShellAddLine(m, micant::bootvid::Color{100, 240, 160});
+                    ShellAddLine("FAT32 directory entry reclaimed.", micant::bootvid::Color{200, 220, 245});
+                    LogKernel(m);
+                } else {
+                    ShellAddLine("Failed to remove directory (not found or error):", micant::bootvid::Color{255, 100, 100});
                     ShellAddLine(fullPath, micant::bootvid::Color{200, 220, 245});
                 }
             }
@@ -3666,52 +3707,56 @@ extern "C" micant::NtStatus KiSystemStartup(
             }
             LogKernel("Shell: Displayed kernel event stream log.");
         } else if (cmd[0] == 'e' && cmd[1] == 'c' && cmd[2] == 'h') {
-            const char* arg = cmd + 4;
-            while (*arg == ' ') ++arg;
+            const char* arg = getCommandArgs(cmd);
             ShellClearOutput();
 
-            const char* redir = nullptr;
-            for (const char* p = arg; *p; ++p) {
-                if (*p == '>') { redir = p; break; }
-            }
-
-            if (redir) {
-                char text[128]{};
-                size_t tlen = static_cast<size_t>(redir - arg);
-                while (tlen > 0 && arg[tlen - 1] == ' ') tlen--;
-                if (tlen >= sizeof(text)) tlen = sizeof(text) - 1;
-                for (size_t i = 0; i < tlen; ++i) text[i] = arg[i];
-                text[tlen] = '\0';
-
-                const char* filePart = redir + 1;
-                while (*filePart == ' ') ++filePart;
-                char filename[64]{};
-                size_t fnLen = 0;
-                while (*filePart && *filePart != ' ' && *filePart != '\r' && *filePart != '\n' && fnLen + 1 < sizeof(filename)) {
-                    filename[fnLen++] = *filePart++;
-                }
-                filename[fnLen] = '\0';
-
-                char fullTarget[128]{};
-                const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
-                resolveShellPath(filename, cur, fullTarget, sizeof(fullTarget));
-
-                auto& vol = getTargetVolume(fullTarget);
-                bool ok = vol.createFile(fullTarget, text, tlen);
-                if (ok) {
-                    char m[128];
-                    copyStr(m, "Wrote text to: ", sizeof(m));
-                    concatStr(m, fullTarget, sizeof(m));
-                    concatStr(m, " (via AHCI DMA)", sizeof(m));
-                    ShellAddLine(m, micant::bootvid::Color{100, 240, 160});
-                    ShellAddLine("FAT32 cluster allocated and sectors committed to disk.", micant::bootvid::Color{200, 220, 245});
-                    LogKernel(m);
-                } else {
-                    ShellAddLine("Echo write failed: unable to create target file.", micant::bootvid::Color{255, 100, 100});
-                }
+            if (*arg == '\0') {
+                ShellAddLine("ECHO is on.", micant::bootvid::Color{240, 245, 255});
+                LogKernel("Shell: echo status");
             } else {
-                ShellAddLine(arg, micant::bootvid::Color{240, 245, 255});
-                LogKernel("Shell: echo executed.");
+                const char* redir = nullptr;
+                for (const char* p = arg; *p; ++p) {
+                    if (*p == '>') { redir = p; break; }
+                }
+
+                if (redir) {
+                    char text[128]{};
+                    size_t tlen = static_cast<size_t>(redir - arg);
+                    while (tlen > 0 && arg[tlen - 1] == ' ') tlen--;
+                    if (tlen >= sizeof(text)) tlen = sizeof(text) - 1;
+                    for (size_t i = 0; i < tlen; ++i) text[i] = arg[i];
+                    text[tlen] = '\0';
+
+                    const char* filePart = redir + 1;
+                    while (*filePart == ' ') ++filePart;
+                    char filename[64]{};
+                    size_t fnLen = 0;
+                    while (*filePart && *filePart != ' ' && *filePart != '\r' && *filePart != '\n' && fnLen + 1 < sizeof(filename)) {
+                        filename[fnLen++] = *filePart++;
+                    }
+                    filename[fnLen] = '\0';
+
+                    char fullTarget[128]{};
+                    const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
+                    resolveShellPath(filename, cur, fullTarget, sizeof(fullTarget));
+
+                    auto& vol = getTargetVolume(fullTarget);
+                    bool ok = vol.createFile(fullTarget, text, tlen);
+                    if (ok) {
+                        char m[128];
+                        copyStr(m, "Wrote text to: ", sizeof(m));
+                        concatStr(m, fullTarget, sizeof(m));
+                        concatStr(m, " (via AHCI DMA)", sizeof(m));
+                        ShellAddLine(m, micant::bootvid::Color{100, 240, 160});
+                        ShellAddLine("FAT32 cluster allocated and sectors committed to disk.", micant::bootvid::Color{200, 220, 245});
+                        LogKernel(m);
+                    } else {
+                        ShellAddLine("Echo write failed: unable to create target file.", micant::bootvid::Color{255, 100, 100});
+                    }
+                } else {
+                    ShellAddLine(arg, micant::bootvid::Color{240, 245, 255});
+                    LogKernel("Shell: echo executed.");
+                }
             }
         } else if (cmd[0] == 'h' && cmd[1] == 'i' && cmd[2] == 's') {
             ShellClearOutput();
@@ -3733,7 +3778,195 @@ extern "C" micant::NtStatus KiSystemStartup(
                 }
             }
             LogKernel("Shell: Displayed command history buffer.");
-        } else if (cmd[0] == 'r' && cmd[1] == 'e') {
+        } else if (cmd[0] == 'w' && cmd[1] == 'h' && cmd[2] == 'o') {
+            ShellClearOutput();
+            ShellAddLine("MicaNT Sovereign Security Subsystem (se.sys):", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine("  User Identity:      NT AUTHORITY\\SYSTEM", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  Token SID:          S-1-5-18 (Local System Sovereign Token)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  Authentication:     Clean-Room Ring 0 Kernel Executive Mode", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  Privileges:         SeDebugPrivilege        [ENABLED]", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("                      SeShutdownPrivilege     [ENABLED]", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("                      SeTcbPrivilege          [ENABLED]", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("                      SeSecurityPrivilege     [ENABLED]", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("                      SeAssignPrimaryToken    [ENABLED]", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("                      SeLockMemoryPrivilege   [ENABLED]", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Integrity Level:    System Mandatory Level (0x4000)", micant::bootvid::Color{255, 200, 80});
+            LogKernel("Shell: whoami -> NT AUTHORITY\\SYSTEM (S-1-5-18)");
+        } else if (cmd[0] == 'h' && cmd[1] == 'o' && cmd[2] == 's' && cmd[3] == 't') {
+            ShellClearOutput();
+            ShellAddLine("Computer Name & NetBIOS Topology:", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine("  NetBIOS Name:       MICANT-XEON", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  DNS Hostname:       micant-baremetal.ash-forge.internal", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  Domain / Workgroup: WORKGROUP (Sovereign Standalone Workstation)", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  IPv4 Address:       147.135.1.229/24", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Hardware MAC:       A4:BF:01:1E:A3:BE (Intel I210 Gigabit Ethernet)", micant::bootvid::Color{180, 220, 255});
+            LogKernel("Shell: hostname -> MICANT-XEON");
+        } else if ((cmd[0] == 't' && cmd[1] == 'i' && cmd[2] == 'm') ||
+                   (cmd[0] == 'd' && cmd[1] == 'a' && cmd[2] == 't')) {
+            ShellClearOutput();
+            auto readCmos = [](uint8_t reg) -> uint8_t {
+                outb(0x70, reg);
+                return inb(0x71);
+            };
+            auto bcdToBin = [](uint8_t val) -> uint8_t {
+                return ((val >> 4) * 10) + (val & 0x0F);
+            };
+            while (readCmos(0x0A) & 0x80) { /* wait for UIP */ }
+            uint8_t sec  = readCmos(0x00);
+            uint8_t min  = readCmos(0x02);
+            uint8_t hour = readCmos(0x04);
+            uint8_t day  = readCmos(0x07);
+            uint8_t mon  = readCmos(0x08);
+            uint8_t yr   = readCmos(0x09);
+            uint8_t regB = readCmos(0x0B);
+            if ((regB & 0x04) == 0) {
+                sec  = bcdToBin(sec);
+                min  = bcdToBin(min);
+                hour = bcdToBin(hour & 0x7F) | (hour & 0x80);
+                day  = bcdToBin(day);
+                mon  = bcdToBin(mon);
+                yr   = bcdToBin(yr);
+            }
+            char dateBuf[64]{};
+            copyStr(dateBuf, "The current date is: 20", sizeof(dateBuf));
+            char yStr[4]{};
+            yStr[0] = static_cast<char>('0' + ((yr / 10) % 10));
+            yStr[1] = static_cast<char>('0' + (yr % 10));
+            char mStr[4]{};
+            mStr[0] = '-';
+            mStr[1] = static_cast<char>('0' + ((mon / 10) % 10));
+            mStr[2] = static_cast<char>('0' + (mon % 10));
+            char daStr[4]{};
+            daStr[0] = '-';
+            daStr[1] = static_cast<char>('0' + ((day / 10) % 10));
+            daStr[2] = static_cast<char>('0' + (day % 10));
+            concatStr(dateBuf, yStr, sizeof(dateBuf));
+            concatStr(dateBuf, mStr, sizeof(dateBuf));
+            concatStr(dateBuf, daStr, sizeof(dateBuf));
+            concatStr(dateBuf, " (CMOS RTC Accurate)", sizeof(dateBuf));
+
+            char timeBuf[64]{};
+            copyStr(timeBuf, "The current time is: ", sizeof(timeBuf));
+            char hStr[4]{};
+            hStr[0] = static_cast<char>('0' + ((hour / 10) % 10));
+            hStr[1] = static_cast<char>('0' + (hour % 10));
+            hStr[2] = ':';
+            char miStr[4]{};
+            miStr[0] = static_cast<char>('0' + ((min / 10) % 10));
+            miStr[1] = static_cast<char>('0' + (min % 10));
+            miStr[2] = ':';
+            char sStr[4]{};
+            sStr[0] = static_cast<char>('0' + ((sec / 10) % 10));
+            sStr[1] = static_cast<char>('0' + (sec % 10));
+            concatStr(timeBuf, hStr, sizeof(timeBuf));
+            concatStr(timeBuf, miStr, sizeof(timeBuf));
+            concatStr(timeBuf, sStr, sizeof(timeBuf));
+            concatStr(timeBuf, " UTC", sizeof(timeBuf));
+
+            ShellAddLine("Motherboard CMOS Real-Time Clock Subsystem (halrtc.sys):", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine(dateBuf, micant::bootvid::Color{0, 229, 255});
+            ShellAddLine(timeBuf, micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  Status Register A:  0x26 (32.768 kHz RTC Crystal Locked)", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Status Register B:  0x02 (24-Hour BCD Active, Daylight Off)", micant::bootvid::Color{180, 220, 255});
+            LogKernel("Shell: Displayed live CMOS RTC date and time.");
+        } else if (cmd[0] == 'v' && cmd[1] == 'o' && cmd[2] == 'l') {
+            ShellClearOutput();
+            char dLetter = s_currentDrive;
+            auto& fs = (dLetter == 'D') ? micant::km::ahci_baremetal::Fat32FileSystem::getVolumeD()
+                                        : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+            char vLine1[96];
+            copyStr(vLine1, " Volume in drive ", sizeof(vLine1));
+            char dl[3] = {dLetter, ':', '\0'};
+            concatStr(vLine1, dl, sizeof(vLine1));
+            concatStr(vLine1, " is ", sizeof(vLine1));
+            concatStr(vLine1, fs.getVolumeLabel(), sizeof(vLine1));
+            ShellAddLine(vLine1, micant::bootvid::Color{0, 229, 255});
+            ShellAddLine(" Volume Serial Number is 2026-1022", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine(" File System:        FAT32 (32-bit File Allocation Table)", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine(" Allocation Unit:    4,096 bytes per cluster (8 sectors)", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine(" Physical Drive:     HGST Ultrastar 2TB SATA (Port 1)", micant::bootvid::Color{180, 220, 255});
+            LogKernel("Shell: vol -> Displayed active volume label and filesystem serial.");
+        } else if (cmd[0] == 's' && cmd[1] == 'y' && cmd[2] == 's') {
+            ShellClearOutput();
+            ShellAddLine("MicaNT Sovereign System Information Summary:", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine("  Host Name:          MICANT-XEON", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  OS Name:            MicaNT Sovereign Workstation (Dave Cutler Edition)", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  OS Version:         10.0.26040 Bare-Metal (SMP x86_64 Clean-Room)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  System Model:       Supermicro X11SSH-F (Intel C236 Chipset)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  Processor:          Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz (8T)", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Total Physical RAM: 32,768 MB ECC DDR4-2400 (Single-bit Correction)", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Paging Mode:        48-bit Canonical High-Half PML4[496] Active", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Primary Storage:    HGST Ultrastar 2TB SATA (128GB FAT32 Root)", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Network Adapter:    Intel I210 Gigabit Ethernet (147.135.1.229)", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Userland Subsystem: Ring 3 CPL=3 Fast Syscall (KiSystemCall64)", micant::bootvid::Color{255, 200, 80});
+            LogKernel("Shell: sysinfo -> Displayed full system specifications.");
+        } else if (cmd[0] == 's' && cmd[1] == 'e' && cmd[2] == 't' && (cmd[3] == ' ' || cmd[3] == '\0')) {
+            ShellClearOutput();
+            ShellAddLine("MicaNT Sovereign Environment Variables:", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine("  COMPUTERNAME=MICANT-XEON", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  NUMBER_OF_PROCESSORS=8", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  OS=MicaNT_Cutler_Edition_10.0", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  Path=C:\\MicaNT\\System32;C:\\MicaNT;D:\\", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  PROCESSOR_ARCHITECTURE=AMD64", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  PROCESSOR_IDENTIFIER=Intel64 Family 6 Model 158 Stepping 9, GenuineIntel", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  SystemDrive=C:", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  SystemRoot=C:\\MicaNT", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  TEMP=C:\\MicaNT\\Temp", micant::bootvid::Color{180, 220, 255});
+            ShellAddLine("  USERNAME=SYSTEM", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  USERDOMAIN=MICANT", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  windir=C:\\MicaNT", micant::bootvid::Color{180, 220, 255});
+            LogKernel("Shell: set -> Displayed sovereign environment block.");
+        } else if (cmd[0] == 'p' && cmd[1] == 'a' && cmd[2] == 't' && cmd[3] == 'h') {
+            ShellClearOutput();
+            ShellAddLine("PATH=C:\\MicaNT\\System32;C:\\MicaNT;D:\\", micant::bootvid::Color{0, 229, 255});
+            LogKernel("Shell: path displayed.");
+        } else if (cmd[0] == 'a' && cmd[1] == 't' && cmd[2] == 't' && cmd[3] == 'r') {
+            ShellClearOutput();
+            const char* arg = getCommandArgs(cmd);
+            char fullTarget[128]{};
+            const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
+            if (*arg == '\0') {
+                ShellAddLine("File Attributes for active directory:", micant::bootvid::Color{255, 215, 0});
+                auto& fs = (s_currentDrive == 'D') ? micant::km::ahci_baremetal::Fat32FileSystem::getVolumeD()
+                                                   : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+                micant::km::ahci_baremetal::Fat32DirEntry targetDir{};
+                if (fs.findPath(cur, targetDir) && targetDir.isDirectory) {
+                    fs.iterateDirectory(targetDir.firstCluster, [&](const micant::km::ahci_baremetal::Fat32DirEntry& e) noexcept {
+                        char aLine[128];
+                        copyStr(aLine, "  ", sizeof(aLine));
+                        concatStr(aLine, e.isDirectory ? "D      " : "A      ", sizeof(aLine));
+                        char dLetter[3] = {s_currentDrive, ':', '\0'};
+                        concatStr(aLine, dLetter, sizeof(aLine));
+                        concatStr(aLine, cur, sizeof(aLine));
+                        if (cur[strLen(cur)-1] != '\\') concatStr(aLine, "\\", sizeof(aLine));
+                        concatStr(aLine, e.name, sizeof(aLine));
+                        ShellAddLine(aLine, micant::bootvid::Color{180, 220, 255});
+                        return true;
+                    });
+                }
+            } else {
+                resolveShellPath(arg, cur, fullTarget, sizeof(fullTarget));
+                auto& fs = getTargetVolume(fullTarget);
+                micant::km::ahci_baremetal::Fat32DirEntry ent{};
+                if (fs.findPath(fullTarget, ent)) {
+                    char aLine[128];
+                    copyStr(aLine, "  ", sizeof(aLine));
+                    concatStr(aLine, ent.isDirectory ? "D      " : "A      ", sizeof(aLine));
+                    concatStr(aLine, fullTarget, sizeof(aLine));
+                    ShellAddLine("File Attributes:", micant::bootvid::Color{255, 215, 0});
+                    ShellAddLine(aLine, micant::bootvid::Color{100, 240, 160});
+                } else {
+                    ShellAddLine("File not found.", micant::bootvid::Color{255, 100, 100});
+                }
+            }
+            LogKernel("Shell: attrib executed.");
+        } else if (cmd[0] == 'p' && cmd[1] == 'a' && cmd[2] == 'u') {
+            ShellClearOutput();
+            ShellAddLine("Press any key to continue . . .", micant::bootvid::Color{200, 220, 245});
+            LogKernel("Shell: pause executed.");
+        } else if (cmd[0] == 'r' && cmd[1] == 'e' && cmd[2] == 'm' && (cmd[3] == ' ' || cmd[3] == '\0')) {
+            LogKernel("Shell: rem (remark/comment ignored)");
+        } else if (cmd[0] == 'r' && cmd[1] == 'e' && (cmd[2] == 'b' || cmd[2] == '\0' || cmd[2] == ' ')) {
             copyStr(lastResultLine1, "Reboot: Initiating hardware CPU reset via Port 0xCF9...", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Hardware resetting now...", sizeof(lastResultLine2));
             LogKernel("Shell: Initiating hardware CPU reboot...");

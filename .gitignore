@@ -43,6 +43,10 @@ node_modules/
 # Local deployment scripts & secrets
 scripts/deploy_*.py
 scripts/deploy_*.sh
+scripts/boot_double.py
+scripts/find_*
+scripts/ocr_*
+scripts/scan_*
 *.env
 *.pem
 *.key
