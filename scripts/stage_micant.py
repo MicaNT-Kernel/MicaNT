@@ -122,6 +122,31 @@ def run_local_build():
     sz_b = os.path.getsize(BENCH_SOURCE)
     print(f"      bench.exe Compiled OK ({sz_b:,} bytes)")
 
+    os.makedirs(os.path.join(REPO_ROOT, "build", "bin"), exist_ok=True)
+    cmd_cube = [
+        "clang++",
+        "-target", "x86_64-w64-mingw32",
+        "-std=c++23",
+        "-ffreestanding",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-fno-stack-protector",
+        "-mno-red-zone",
+        "-mno-stack-arg-probe",
+        "-O2",
+        "-Wl,--subsystem,console",
+        "-Wl,-e,_start",
+        "-nostdlib",
+        "tools/prismx_3d_cube_app.cpp",
+        "-o", "build/bin/prismx_3d_cube_app.exe"
+    ]
+    res_c = subprocess.run(cmd_cube, cwd=REPO_ROOT, capture_output=True, text=True)
+    if res_c.returncode != 0:
+        print(f"[FATAL] prismx_3d_cube_app.exe build failed:\n{res_c.stderr}")
+        sys.exit(1)
+    sz_c = os.path.getsize(os.path.join(REPO_ROOT, "build", "bin", "prismx_3d_cube_app.exe"))
+    print(f"      prismx_3d_cube_app.exe Compiled OK ({sz_c:,} bytes)")
+
 def get_ssh():
     k = paramiko.RSAKey.from_private_key_file(KEY_PATH)
     for _ in range(20):
