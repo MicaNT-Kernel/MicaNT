@@ -30,6 +30,14 @@ DISKPART_SOURCE = os.path.join(REPO_ROOT, r"build\diskpart.exe")
 ARP_SOURCE = os.path.join(REPO_ROOT, r"build\arp.exe")
 ROUTE_SOURCE = os.path.join(REPO_ROOT, r"build\route.exe")
 REG_SOURCE = os.path.join(REPO_ROOT, r"build\reg.exe")
+SC_SOURCE = os.path.join(REPO_ROOT, r"build\sc.exe")
+DRIVERQUERY_SOURCE = os.path.join(REPO_ROOT, r"build\driverquery.exe")
+TYPE_SOURCE = os.path.join(REPO_ROOT, r"build\type.exe")
+FIND_SOURCE = os.path.join(REPO_ROOT, r"build\find.exe")
+FC_SOURCE = os.path.join(REPO_ROOT, r"build\fc.exe")
+ATTRIB_SOURCE = os.path.join(REPO_ROOT, r"build\attrib.exe")
+MORE_SOURCE = os.path.join(REPO_ROOT, r"build\more.exe")
+FORMAT_SOURCE = os.path.join(REPO_ROOT, r"build\format.exe")
 HOST = os.environ.get("MICANT_TARGET_HOST", "147.135.1.229")
 USER = os.environ.get("MICANT_TARGET_USER", "ubuntu")
 KEY_PATH = os.environ.get("MICANT_SSH_KEY", r"C:\Users\admin\.ssh\micant_ci_key")
@@ -175,6 +183,14 @@ def run_local_build():
         ("tools/arp_app.cpp", "build/arp.exe", "arp.exe"),
         ("tools/route_app.cpp", "build/route.exe", "route.exe"),
         ("tools/reg_app.cpp", "build/reg.exe", "reg.exe"),
+        ("tools/sc_app.cpp", "build/sc.exe", "sc.exe"),
+        ("tools/driverquery_app.cpp", "build/driverquery.exe", "driverquery.exe"),
+        ("tools/type_app.cpp", "build/type.exe", "type.exe"),
+        ("tools/find_app.cpp", "build/find.exe", "find.exe"),
+        ("tools/fc_app.cpp", "build/fc.exe", "fc.exe"),
+        ("tools/attrib_app.cpp", "build/attrib.exe", "attrib.exe"),
+        ("tools/more_app.cpp", "build/more.exe", "more.exe"),
+        ("tools/format_app.cpp", "build/format.exe", "format.exe"),
     ]
     for src, out_path, name in system32_tools:
         c_cmd = [
@@ -273,6 +289,22 @@ def main():
         sftp.put(ROUTE_SOURCE, "/tmp/route.exe")
     if os.path.exists(REG_SOURCE):
         sftp.put(REG_SOURCE, "/tmp/reg.exe")
+    if os.path.exists(SC_SOURCE):
+        sftp.put(SC_SOURCE, "/tmp/sc.exe")
+    if os.path.exists(DRIVERQUERY_SOURCE):
+        sftp.put(DRIVERQUERY_SOURCE, "/tmp/driverquery.exe")
+    if os.path.exists(TYPE_SOURCE):
+        sftp.put(TYPE_SOURCE, "/tmp/type.exe")
+    if os.path.exists(FIND_SOURCE):
+        sftp.put(FIND_SOURCE, "/tmp/find.exe")
+    if os.path.exists(FC_SOURCE):
+        sftp.put(FC_SOURCE, "/tmp/fc.exe")
+    if os.path.exists(ATTRIB_SOURCE):
+        sftp.put(ATTRIB_SOURCE, "/tmp/attrib.exe")
+    if os.path.exists(MORE_SOURCE):
+        sftp.put(MORE_SOURCE, "/tmp/more.exe")
+    if os.path.exists(FORMAT_SOURCE):
+        sftp.put(FORMAT_SOURCE, "/tmp/format.exe")
     sftp.close()
 
     print("      Staging binaries strictly to sovereign MicaNT partitions by PARTUUID...")
@@ -303,6 +335,14 @@ def main():
         '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/arp.exe /mnt/micasys/ || true); '
         '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/route.exe /mnt/micasys/ || true); '
         '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/reg.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/sc.exe ] && cp -v /tmp/sc.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/sc.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/driverquery.exe ] && cp -v /tmp/driverquery.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/driverquery.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/type.exe ] && cp -v /tmp/type.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/type.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/find.exe ] && cp -v /tmp/find.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/find.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/fc.exe ] && cp -v /tmp/fc.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/fc.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/attrib.exe ] && cp -v /tmp/attrib.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/attrib.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/more.exe ] && cp -v /tmp/more.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/more.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/format.exe ] && cp -v /tmp/format.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/format.exe /mnt/micasys/ || true); '
         'mkdir -p /mnt/micaesp/EFI/BOOT /mnt/micaesp/EFI/MicaNT && '
         'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/BOOT/BOOTX64.EFI && '
         'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/MicaNT/BOOTX64.EFI && '
@@ -324,6 +364,14 @@ def main():
         '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /mnt/micaesp/EFI/MicaNT/ || true); '
         '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /mnt/micaesp/EFI/MicaNT/ || true); '
         '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/sc.exe ] && cp -v /tmp/sc.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/driverquery.exe ] && cp -v /tmp/driverquery.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/type.exe ] && cp -v /tmp/type.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/find.exe ] && cp -v /tmp/find.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/fc.exe ] && cp -v /tmp/fc.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/attrib.exe ] && cp -v /tmp/attrib.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/more.exe ] && cp -v /tmp/more.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/format.exe ] && cp -v /tmp/format.exe /mnt/micaesp/EFI/MicaNT/ || true); '
         'rm -f /mnt/micaesp/EFI/MicaNT/boot.ini /mnt/micaesp/boot.ini /mnt/micasys/boot.ini /mnt/micasys/EFI/MicaNT/boot.ini 2>/dev/null || true; '
         'mkdir -p /boot/efi/EFI/MicaNT && '
         'cp -v /tmp/BOOTX64.EFI /boot/efi/EFI/MicaNT/BOOTX64.EFI && '
@@ -345,6 +393,14 @@ def main():
         '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /boot/efi/EFI/MicaNT/ || true); '
         '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /boot/efi/EFI/MicaNT/ || true); '
         '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/sc.exe ] && cp -v /tmp/sc.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/driverquery.exe ] && cp -v /tmp/driverquery.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/type.exe ] && cp -v /tmp/type.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/find.exe ] && cp -v /tmp/find.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/fc.exe ] && cp -v /tmp/fc.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/attrib.exe ] && cp -v /tmp/attrib.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/more.exe ] && cp -v /tmp/more.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/format.exe ] && cp -v /tmp/format.exe /boot/efi/EFI/MicaNT/ || true); '
         'rm -f /boot/efi/EFI/MicaNT/boot.ini /boot/efi/boot.ini 2>/dev/null || true; '
         'sync && umount /mnt/micasys /mnt/micaesp'
     )
