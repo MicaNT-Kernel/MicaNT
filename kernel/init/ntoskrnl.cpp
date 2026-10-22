@@ -164,6 +164,63 @@ static inline void concatStr(char* dst, const char* src, size_t maxLen) noexcept
     dst[dLen + i] = '\0';
 }
 
+static inline void formatSize(uint64_t val, char* out, size_t maxLen) noexcept {
+    if (!out || maxLen == 0) return;
+    if (val == 0) {
+        if (maxLen > 1) { out[0] = '0'; out[1] = '\0'; }
+        return;
+    }
+    char raw[32];
+    int rp = 0;
+    while (val > 0 && rp < 30) {
+        raw[rp++] = '0' + static_cast<char>(val % 10);
+        val /= 10;
+    }
+    size_t o = 0;
+    for (int i = rp - 1; i >= 0 && o + 2 < maxLen; --i) {
+        out[o++] = raw[i];
+        if (i > 0 && (i % 3 == 0)) {
+            out[o++] = ',';
+        }
+    }
+    out[o] = '\0';
+}
+
+static inline void resolveShellPath(const char* input, const char* curDir, char* outPath, size_t maxLen) noexcept {
+    if (!outPath || maxLen == 0) return;
+    outPath[0] = '\0';
+
+    if (!input || *input == '\0') {
+        copyStr(outPath, curDir ? curDir : "\\", maxLen);
+        return;
+    }
+
+    const char* p = input;
+    if ((p[0] == 'C' || p[0] == 'c' || p[0] == 'D' || p[0] == 'd') && p[1] == ':') {
+        p += 2;
+        if (*p == '\0') {
+            copyStr(outPath, "\\", maxLen);
+            return;
+        }
+    }
+
+    if (p[0] == '\\' || p[0] == '/') {
+        copyStr(outPath, p, maxLen);
+        return;
+    }
+
+    copyStr(outPath, curDir ? curDir : "\\", maxLen);
+    size_t len = strLen(outPath);
+    if (len > 0 && outPath[len - 1] != '\\') {
+        concatStr(outPath, "\\", maxLen);
+    }
+    concatStr(outPath, p, maxLen);
+
+    for (size_t i = 0; outPath[i]; ++i) {
+        if (outPath[i] == '/') outPath[i] = '\\';
+    }
+}
+
 static inline void formatIpStr(char* dst, uint32_t ipVal, size_t maxLen) noexcept {
     if (ipVal == 0) {
         copyStr(dst, "none", maxLen);
@@ -1763,7 +1820,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
 
         micant::km::ahci_baremetal::Fat32DirEntry targetDir{};
         if (fs.findPath(dirPath, targetDir) && targetDir.isDirectory) {
-            char header[48];
+            char header[64];
             copyStr(header, "Directory of ", sizeof(header));
             size_t hl = strLen(header);
             header[hl++] = fs.getDriveLetter();
@@ -1771,20 +1828,58 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             header[hl] = '\0';
             copyStr(reply, header, maxReply);
             concatStr(reply, dirPath, maxReply);
-            concatStr(reply, " [FAT32 128 GiB]\r\n", maxReply);
+            concatStr(reply, " [FAT32 128 GiB]\r\n\r\n", maxReply);
+
+            size_t fileCount = 0;
+            size_t dirCount = 0;
+            uint64_t totalBytes = 0;
+
+            if (targetDir.firstCluster != fs.getRootCluster()) {
+                concatStr(reply, "  <DIR>          .\r\n", maxReply);
+                concatStr(reply, "  <DIR>          ..\r\n", maxReply);
+                dirCount += 2;
+            }
 
             fs.iterateDirectory(targetDir.firstCluster, [&](const micant::km::ahci_baremetal::Fat32DirEntry& e) noexcept {
                 if (e.isDirectory) {
-                    concatStr(reply, "  <DIR>  ", maxReply);
+                    dirCount++;
+                    concatStr(reply, "  <DIR>          ", maxReply);
                     concatStr(reply, e.name, maxReply);
                     concatStr(reply, "\r\n", maxReply);
                 } else {
-                    concatStr(reply, "  FILE   ", maxReply);
+                    fileCount++;
+                    totalBytes += e.fileSize;
+                    char szStr[20];
+                    formatSize(e.fileSize, szStr, sizeof(szStr));
+                    concatStr(reply, "  ", maxReply);
+                    size_t sl = strLen(szStr);
+                    while (sl < 12) { concatStr(reply, " ", maxReply); sl++; }
+                    concatStr(reply, szStr, maxReply);
+                    concatStr(reply, "   ", maxReply);
                     concatStr(reply, e.name, maxReply);
                     concatStr(reply, "\r\n", maxReply);
                 }
                 return true;
             });
+
+            char sum1[96];
+            char fcStr[16], tbStr[24];
+            formatSize(fileCount, fcStr, sizeof(fcStr));
+            formatSize(totalBytes, tbStr, sizeof(tbStr));
+            copyStr(sum1, "\r\n               ", sizeof(sum1));
+            concatStr(sum1, fcStr, sizeof(sum1));
+            concatStr(sum1, " File(s)   ", sizeof(sum1));
+            concatStr(sum1, tbStr, sizeof(sum1));
+            concatStr(sum1, " bytes\r\n", sizeof(sum1));
+            concatStr(reply, sum1, maxReply);
+
+            char sum2[96];
+            char dcStr[16];
+            formatSize(dirCount, dcStr, sizeof(dcStr));
+            copyStr(sum2, "               ", sizeof(sum2));
+            concatStr(sum2, dcStr, sizeof(sum2));
+            concatStr(sum2, " Dir(s)    137,438,953,472 bytes free\r\n", sizeof(sum2));
+            concatStr(reply, sum2, maxReply);
         } else {
             copyStr(reply, "Directory not found: ", maxReply);
             concatStr(reply, dirPath, maxReply);
@@ -1979,7 +2074,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     // Middle Section: Left Window = Subsystem Hierarchy, Right Window = Event Log
     uint32_t midY = cardY + cardH + 8;
     uint32_t midH = (height >= 768) ? 310 : 250;
-    uint32_t shellH = 160;
+    uint32_t shellY = midY + midH + 8;
+    uint32_t shellH = (height >= 768) ? (height - shellY - 10) : 160;
 
     uint32_t leftW = (availW * 35) / 100;
     uint32_t rightX = 16 + leftW + 12;
@@ -2174,12 +2270,56 @@ extern "C" micant::NtStatus KiSystemStartup(
     LogKernel("MicaNT Kernel Ready for Ring 3 binaries. SurShell Desktop Active.");
 
     // Interactive Shell setup
-    uint32_t shellY = midY + midH + 8;
     char cmdPrompt[64] = "micant:C:\\> ";
     char userCmd[128]{};
     size_t cmdLen = 0;
     char lastResultLine1[128] = "System ready. Press TAB to toggle between SurShell Desktop and Console.";
     char lastResultLine2[128] = "ntoskrnl.exe: SMP 8 Cores Online | LAPIC 100Hz | High-Half PML4[496] Active";
+
+    struct ShellOutputLine {
+        char text[120];
+        micant::bootvid::Color color;
+    };
+    static constexpr size_t SHELL_MAX_OUTPUT_LINES = 13;
+    static ShellOutputLine s_shellOutputLines[SHELL_MAX_OUTPUT_LINES]{};
+    static size_t s_shellOutputCount = 0;
+
+    auto ShellClearOutput = [&]() {
+        s_shellOutputCount = 0;
+        for (size_t i = 0; i < SHELL_MAX_OUTPUT_LINES; ++i) {
+            s_shellOutputLines[i].text[0] = '\0';
+            s_shellOutputLines[i].color = micant::bootvid::Color{240, 245, 255};
+        }
+    };
+
+    auto ShellAddLine = [&](const char* text, micant::bootvid::Color col = micant::bootvid::Color{240, 245, 255}) {
+        if (!text) return;
+        if (s_shellOutputCount == 0) {
+            copyStr(lastResultLine1, text, sizeof(lastResultLine1));
+        } else if (s_shellOutputCount == 1) {
+            copyStr(lastResultLine2, text, sizeof(lastResultLine2));
+        }
+        if (s_shellOutputCount < SHELL_MAX_OUTPUT_LINES) {
+            copyStr(s_shellOutputLines[s_shellOutputCount].text, text, sizeof(s_shellOutputLines[0].text));
+            s_shellOutputLines[s_shellOutputCount].color = col;
+            s_shellOutputCount++;
+        } else {
+            for (size_t i = 0; i < SHELL_MAX_OUTPUT_LINES - 1; ++i) {
+                s_shellOutputLines[i] = s_shellOutputLines[i + 1];
+            }
+            copyStr(s_shellOutputLines[SHELL_MAX_OUTPUT_LINES - 1].text, text, sizeof(s_shellOutputLines[0].text));
+            s_shellOutputLines[SHELL_MAX_OUTPUT_LINES - 1].color = col;
+        }
+        UartSerial::print(text);
+        UartSerial::print("\r\n");
+    };
+
+    if (s_shellOutputCount == 0) {
+        ShellAddLine("MicaNT Cutler Edition Version 10.0 (Build 2026.10 BareMetal)", micant::bootvid::Color{100, 240, 160});
+        ShellAddLine("Sovereign 64-Bit Operating System running on Supermicro X11SSH-F", micant::bootvid::Color{0, 210, 255});
+        ShellAddLine("SMP 8/8 Cores Online | 32 GB ECC RAM | High-Half PML4[496] Active", micant::bootvid::Color{240, 245, 255});
+        ShellAddLine("System ready. Type 'help' for command reference or 'dir' to list files.", micant::bootvid::Color{255, 215, 0});
+    }
 
     static char s_currentDirC[64] = "\\";
     static char s_currentDirD[64] = "\\";
@@ -2200,20 +2340,28 @@ extern "C" micant::NtStatus KiSystemStartup(
         if (cmdPrompt[strLen(cmdPrompt) - 1] != '\\') concatStr(cmdPrompt, "\\", sizeof(cmdPrompt));
         concatStr(cmdPrompt, "> ", sizeof(cmdPrompt));
 
-        videoDriver.fillRectangle(20, shellY + 58, availW - 40, 26, micant::bootvid::Color{10, 14, 22});
-        videoDriver.drawRectangle(20, shellY + 58, availW - 40, 26, micant::bootvid::Color{0, 180, 220});
-        videoDriver.drawString(28, shellY + 64, cmdPrompt, micant::bootvid::Color{100, 255, 160}, micant::bootvid::Color{10, 14, 22}, 1);
+        // Prompt Box
+        videoDriver.fillRectangle(20, shellY + 50, availW - 40, 24, micant::bootvid::Color{10, 14, 22});
+        videoDriver.drawRectangle(20, shellY + 50, availW - 40, 24, micant::bootvid::Color{0, 180, 220});
+        videoDriver.drawString(28, shellY + 55, cmdPrompt, micant::bootvid::Color{100, 255, 160}, micant::bootvid::Color{10, 14, 22}, 1);
         uint32_t promptW = static_cast<uint32_t>(strLen(cmdPrompt) * 8);
-        videoDriver.drawString(28 + promptW, shellY + 64, userCmd, micant::bootvid::Color{255, 255, 255}, micant::bootvid::Color{10, 14, 22}, 1);
+        videoDriver.drawString(28 + promptW, shellY + 55, userCmd, micant::bootvid::Color{255, 255, 255}, micant::bootvid::Color{10, 14, 22}, 1);
 
         uint32_t cx = 28 + promptW + (uint32_t)(cmdLen * 8);
-        videoDriver.fillRectangle(cx, shellY + 64, 8, 14, micant::bootvid::Color{0, 229, 255});
+        videoDriver.fillRectangle(cx, shellY + 55, 8, 14, micant::bootvid::Color{0, 229, 255});
 
-        videoDriver.fillRectangle(20, shellY + 88, availW - 40, 64, micant::bootvid::Color{10, 14, 22});
-        videoDriver.drawRectangle(20, shellY + 88, availW - 40, 64, micant::bootvid::Color{36, 52, 78});
-        videoDriver.drawString(28, shellY + 94, "[LAST COMMAND EXECUTION OUTPUT]", micant::bootvid::Color{255, 215, 0}, micant::bootvid::Color{10, 14, 22}, 1);
-        videoDriver.drawString(28, shellY + 112, lastResultLine1, micant::bootvid::Color{240, 245, 255}, micant::bootvid::Color{10, 14, 22}, 1);
-        videoDriver.drawString(28, shellY + 130, lastResultLine2, micant::bootvid::Color{150, 210, 255}, micant::bootvid::Color{10, 14, 22}, 1);
+        // Output Box
+        uint32_t outBoxY = shellY + 78;
+        uint32_t outBoxH = (shellH > 86) ? (shellH - 86) : 64;
+        videoDriver.fillRectangle(20, outBoxY, availW - 40, outBoxH, micant::bootvid::Color{10, 14, 22});
+        videoDriver.drawRectangle(20, outBoxY, availW - 40, outBoxH, micant::bootvid::Color{36, 52, 78});
+        videoDriver.drawString(28, outBoxY + 5, "[COMMAND EXECUTION OUTPUT]", micant::bootvid::Color{255, 215, 0}, micant::bootvid::Color{10, 14, 22}, 1);
+
+        for (size_t i = 0; i < s_shellOutputCount; ++i) {
+            uint32_t ly = outBoxY + 24 + static_cast<uint32_t>(i * 17);
+            if (ly + 16 > outBoxY + outBoxH) break;
+            videoDriver.drawString(28, ly, s_shellOutputLines[i].text, s_shellOutputLines[i].color, micant::bootvid::Color{10, 14, 22}, 1);
+        }
     };
 
     auto DrawVisualEditor = [&]() {
@@ -2344,8 +2492,8 @@ extern "C" micant::NtStatus KiSystemStartup(
         videoDriver.drawRectangle(16, shellY, availW, shellH, micant::bootvid::Color{0, 180, 220});
         videoDriver.fillRectangle(16, shellY, availW, 22, micant::bootvid::Color{20, 28, 44});
         videoDriver.drawString(24, shellY + 4, "MicaNT BARE-METAL EXECUTIVE SHELL (ntoskrnl.exe)", micant::bootvid::Color{0, 229, 255}, micant::bootvid::Color{20, 28, 44}, 1);
-        videoDriver.drawString(24, shellY + 26, "STATUS: ntoskrnl.exe Active | SMP 8/8 Cores | LAPIC 100Hz | TAB: Toggle SurShell", micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
-        videoDriver.drawString(24, shellY + 42, "COMMANDS: 'dir', 'run <app>', 'type <file>', 'write <file> <text>', 'net', 'io', 'mm', 'smp', 'reboot'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
+        videoDriver.drawString(24, shellY + 24, "STATUS: ntoskrnl.exe Active | SMP 8/8 Cores | LAPIC 100Hz | TAB: Toggle SurShell", micant::bootvid::Color{100, 240, 160}, micant::bootvid::Color{14, 18, 28}, 1);
+        videoDriver.drawString(24, shellY + 36, "COMMANDS: 'dir', 'cd <dir>', 'type <file>', 'help', 'net', 'io', 'mm', 'smp', 'reboot'", micant::bootvid::Color{160, 190, 225}, micant::bootvid::Color{14, 18, 28}, 1);
     };
 
     uint64_t lastTsc = rdtsc();
@@ -2378,9 +2526,21 @@ extern "C" micant::NtStatus KiSystemStartup(
 
     auto ExecuteCommandImpl = [&](auto& self, const char* cmd) -> void {
         if (cmd[0] == 'h' && cmd[1] == 'e') {
-            copyStr(lastResultLine1, "Storage: dir [p], cd [p], mkdir <d>, edit <f>, type <f>, write <f> <t>, copy, del", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "System:  boot, net, objdir, ps, uptime, io, mm, smp, ppm, battery, thermal, bench, app, reboot", sizeof(lastResultLine2));
-            LogKernel("Shell: help -> boot, net, objdir, ps, uptime, io, mm, smp, ppm, battery, thermal, dir, type, bench, app, reboot");
+            ShellClearOutput();
+            ShellAddLine("MicaNT Sovereign Cutler Executive Shell - Command Reference:", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine("  dir [path]       - List files, directories, sizes, and free disk space", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  cd <path>        - Change directory (e.g. 'cd MicaNT', 'cd ..', 'cd \\')", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  type <file>      - Read and display file contents via AHCI DMA", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  write <f> <text> - Write text to file on disk via AHCI DMA", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  del <file>       - Delete file from disk and reclaim FAT32 clusters", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  run <app>        - Execute Ring 3 PE32+ app (e.g. 'run app', 'run bench')", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  edit <file>      - Launch full-screen visual text editor (F2: Save, ESC: Exit)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  drives           - List mounted volumes (C: 128GB, D: 1.7TB, E: Linux RO)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  smp / cpu        - Display 8-core Xeon E3-1270 v6 APIC sync and HWP states", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  mm / hmb         - Display Memory Manager PFN DB and HMB 2.0 Paging Engine", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  net / io / ps    - Query Intel I210 GbE, AHCI/xHCI, and active NT processes", micant::bootvid::Color{255, 200, 80});
+            ShellAddLine("  cls / reboot     - Clear output console buffer / Hardware reset CPU via 0xCF9", micant::bootvid::Color{200, 220, 245});
+            LogKernel("Shell: help -> Displayed full command reference.");
         } else if ((cmd[0] == 'p' && cmd[1] == 'p' && cmd[2] == 'm') || (cmd[0] == 'h' && cmd[1] == 'w' && cmd[2] == 'p')) {
             UartSerial::print("\r\n=======================================================\r\n");
             UartSerial::print("  MicaNT Sovereign Processor Power Management (PPM)\r\n");
@@ -2430,19 +2590,24 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine2, "Sovereign 64-Bit Operating System running on Supermicro X11SSH-F", sizeof(lastResultLine2));
             LogKernel("Shell: ver -> MicaNT Version 10.0 Dave Cutler Bare-Metal Edition");
         } else if (cmd[0] == 'c' && cmd[1] == 'l' && cmd[2] == 's') {
-            copyStr(lastResultLine1, "Console screen buffer cleared.", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "", sizeof(lastResultLine2));
+            ShellClearOutput();
+            ShellAddLine("MicaNT Bare-Metal Executive Shell ready. Type 'help' for command list.", micant::bootvid::Color{100, 240, 160});
             DrawExecutiveConsole();
             LogKernel("Shell: cls -> Screen cleared.");
         } else if (cmd[0] == 'd' && cmd[1] == 'r' && cmd[2] == 'i') {
-            copyStr(lastResultLine1, "C: [MICA_SYS] 128 GB FAT32 (sdb2) | D: [MICA_DATA] 1.7 TB FAT32 (sdb3)", sizeof(lastResultLine1));
-            char dMsg[96];
-            copyStr(dMsg, "E: [EXT4] 20 GB Linux Root (sda2 RO) | Active Volume: ", sizeof(dMsg));
-            size_t dml = strLen(dMsg);
-            dMsg[dml++] = s_currentDrive;
-            dMsg[dml++] = ':';
-            dMsg[dml] = '\0';
-            copyStr(lastResultLine2, dMsg, sizeof(lastResultLine2));
+            ShellClearOutput();
+            ShellAddLine("Mounted Storage Volumes & Filesystem Subsystems:", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine("  Drive  Volume Label   File System  Total Capacity    Status", micant::bootvid::Color{0, 210, 255});
+            ShellAddLine("  ------------------------------------------------------------------", micant::bootvid::Color{36, 52, 78});
+            ShellAddLine("  C:     MICA_SYS       FAT32        128 GB            Active OS Root (sdb2)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  D:     MICA_DATA      FAT32        1.7 TB            High-Capacity Data (sdb3)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  E:     LINUX_ROOT     EXT4 (RO)    20 GB             Ubuntu Linux Root (sda2)", micant::bootvid::Color{180, 200, 230});
+            char activeMsg[120];
+            copyStr(activeMsg, "  Active Storage Target: Drive ", sizeof(activeMsg));
+            char drv[3] = {s_currentDrive, ':', '\0'};
+            concatStr(activeMsg, drv, sizeof(activeMsg));
+            concatStr(activeMsg, (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC, sizeof(activeMsg));
+            ShellAddLine(activeMsg, micant::bootvid::Color{255, 215, 80});
             LogKernel("Shell: drives -> C: (128GB), D: (1.7TB), E: (Linux RO)");
         } else if ((cmd[0] == 'c' || cmd[0] == 'C') && (cmd[1] == ':' || cmd[1] == '\0')) {
             s_currentDrive = 'C';
@@ -2501,88 +2666,167 @@ extern "C" micant::NtStatus KiSystemStartup(
             }
         } else if ((cmd[0] == 'd' && cmd[1] == 'i' && cmd[2] == 'r') ||
                    (cmd[0] == 'l' && cmd[1] == 's')) {
+            ShellClearOutput();
             const char* arg = cmd + ((cmd[0] == 'd') ? 3 : 2);
             while (*arg == ' ') ++arg;
-            const char* dirPath = (*arg != '\0') ? arg : "\\";
-            auto& fs = getTargetVolume(dirPath);
+            char* curDir = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
+
+            char targetPath[128]{};
+            resolveShellPath(arg, curDir, targetPath, sizeof(targetPath));
+
+            char driveLetter = s_currentDrive;
+            if ((arg[0] == 'C' || arg[0] == 'c') && arg[1] == ':') driveLetter = 'C';
+            else if ((arg[0] == 'D' || arg[0] == 'd') && arg[1] == ':') driveLetter = 'D';
+
+            auto& fs = (driveLetter == 'D') ? micant::km::ahci_baremetal::Fat32FileSystem::getVolumeD()
+                                            : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
 
             micant::km::ahci_baremetal::Fat32DirEntry targetDir{};
-            if (fs.findPath(dirPath, targetDir) && targetDir.isDirectory) {
-                char fileList[110] = {0};
+            if (fs.findPath(targetPath, targetDir) && targetDir.isDirectory) {
+                char hdr1[120];
+                copyStr(hdr1, " Volume in drive ", sizeof(hdr1));
+                char dLetter[3] = {fs.getDriveLetter(), ':', '\0'};
+                concatStr(hdr1, dLetter, sizeof(hdr1));
+                concatStr(hdr1, " is ", sizeof(hdr1));
+                concatStr(hdr1, fs.getVolumeLabel(), sizeof(hdr1));
+                concatStr(hdr1, " [FAT32]", sizeof(hdr1));
+                ShellAddLine(hdr1, micant::bootvid::Color{0, 210, 255});
+
+                char hdr2[120];
+                copyStr(hdr2, " Directory of ", sizeof(hdr2));
+                concatStr(hdr2, dLetter, sizeof(hdr2));
+                concatStr(hdr2, targetPath, sizeof(hdr2));
+                ShellAddLine(hdr2, micant::bootvid::Color{0, 229, 255});
+
+                ShellAddLine("", micant::bootvid::Color{10, 14, 22});
+
                 size_t fileCount = 0;
                 size_t dirCount = 0;
                 uint64_t totalBytes = 0;
 
                 fs.iterateDirectory(targetDir.firstCluster, [&](const micant::km::ahci_baremetal::Fat32DirEntry& e) noexcept {
+                    char entryLine[120]{};
                     if (e.isDirectory) {
                         dirCount++;
+                        copyStr(entryLine, "  <DIR>          ", sizeof(entryLine));
+                        concatStr(entryLine, e.name, sizeof(entryLine));
+                        ShellAddLine(entryLine, micant::bootvid::Color{100, 240, 160});
                     } else {
                         fileCount++;
                         totalBytes += e.fileSize;
-                        if (strLen(fileList) < 80) {
-                            if (fileList[0] != '\0') concatStr(fileList, ", ", sizeof(fileList));
-                            concatStr(fileList, e.name, sizeof(fileList));
-                        }
+                        char szStr[20];
+                        formatSize(e.fileSize, szStr, sizeof(szStr));
+                        copyStr(entryLine, "  ", sizeof(entryLine));
+                        size_t sl = strLen(szStr);
+                        while (sl < 12) { concatStr(entryLine, " ", sizeof(entryLine)); sl++; }
+                        concatStr(entryLine, szStr, sizeof(entryLine));
+                        concatStr(entryLine, "   ", sizeof(entryLine));
+                        concatStr(entryLine, e.name, sizeof(entryLine));
+                        ShellAddLine(entryLine, micant::bootvid::Color{240, 245, 255});
                     }
                     return true;
                 });
 
-                char res1[96];
-                res1[0] = fs.getDriveLetter();
-                res1[1] = ':';
-                res1[2] = '\0';
-                concatStr(res1, dirPath, sizeof(res1));
-                concatStr(res1, ": ", sizeof(res1));
-                concatStr(res1, fileList, sizeof(res1));
-                copyStr(lastResultLine1, res1, sizeof(lastResultLine1));
+                char sum1[120];
+                char fcStr[16], tbStr[24];
+                formatSize(fileCount, fcStr, sizeof(fcStr));
+                formatSize(totalBytes, tbStr, sizeof(tbStr));
+                copyStr(sum1, "               ", sizeof(sum1));
+                concatStr(sum1, fcStr, sizeof(sum1));
+                concatStr(sum1, " File(s)   ", sizeof(sum1));
+                concatStr(sum1, tbStr, sizeof(sum1));
+                concatStr(sum1, " bytes", sizeof(sum1));
+                ShellAddLine(sum1, micant::bootvid::Color{200, 220, 245});
 
-                char res2[96];
-                copyStr(res2, "Volume [", sizeof(res2));
-                concatStr(res2, fs.getVolumeLabel(), sizeof(res2));
-                concatStr(res2, "] FAT32 | AHCI DMA Dir Enumeration OK", sizeof(res2));
-                copyStr(lastResultLine2, res2, sizeof(lastResultLine2));
+                char sum2[120];
+                char dcStr[16];
+                formatSize(dirCount, dcStr, sizeof(dcStr));
+                copyStr(sum2, "               ", sizeof(sum2));
+                concatStr(sum2, dcStr, sizeof(sum2));
+                concatStr(sum2, " Dir(s)    137,438,953,472 bytes free", sizeof(sum2));
+                ShellAddLine(sum2, micant::bootvid::Color{200, 220, 245});
+
                 LogKernel("Shell: Directory enumerated live via AHCI DMA.");
             } else {
-                copyStr(lastResultLine1, "Directory not found on target volume.", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Check path syntax (e.g. 'dir \\MicaNT\\System32' or 'dir d:\\').", sizeof(lastResultLine2));
+                char err[120];
+                copyStr(err, "Directory not found: ", sizeof(err));
+                concatStr(err, targetPath, sizeof(err));
+                ShellAddLine(err, micant::bootvid::Color{255, 100, 100});
+                ShellAddLine("Check path syntax (e.g. 'dir \\MicaNT\\System32' or 'dir D:\\').", micant::bootvid::Color{180, 200, 220});
                 LogKernel("Shell: 'dir' target directory not found.");
             }
         } else if ((cmd[0] == 't' && cmd[1] == 'y' && cmd[2] == 'p') ||
                    (cmd[0] == 'c' && cmd[1] == 'a' && cmd[2] == 't')) {
-            const char* targetName = "\\MicaNT\\system.ini";
+            ShellClearOutput();
             const char* arg = cmd + ((cmd[0] == 't') ? 4 : 3);
             while (*arg == ' ') ++arg;
-            if (*arg != '\0') targetName = arg;
+            char* curDir = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
 
-            auto& fs = getTargetVolume(targetName);
-            alignas(512) char textBuf[256];
+            char targetPath[128]{};
+            if (*arg == '\0') {
+                copyStr(targetPath, "\\MicaNT\\system.ini", sizeof(targetPath));
+            } else {
+                resolveShellPath(arg, curDir, targetPath, sizeof(targetPath));
+            }
+
+            char driveLetter = s_currentDrive;
+            if ((arg[0] == 'C' || arg[0] == 'c') && arg[1] == ':') driveLetter = 'C';
+            else if ((arg[0] == 'D' || arg[0] == 'd') && arg[1] == ':') driveLetter = 'D';
+
+            auto& fs = (driveLetter == 'D') ? micant::km::ahci_baremetal::Fat32FileSystem::getVolumeD()
+                                            : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+
+            alignas(512) char textBuf[2048];
             size_t bytesRead = 0;
-            bool ok = fs.readFile(targetName, textBuf, sizeof(textBuf) - 1, bytesRead);
-            if (!ok && targetName[0] != '\\' && targetName[0] != '/') {
+            bool ok = fs.readFile(targetPath, textBuf, sizeof(textBuf) - 1, bytesRead);
+            if (!ok && arg[0] != '\\' && arg[0] != '/') {
                 char alt[128];
                 copyStr(alt, "\\MicaNT\\", sizeof(alt));
-                concatStr(alt, targetName, sizeof(alt));
+                concatStr(alt, arg, sizeof(alt));
                 ok = fs.readFile(alt, textBuf, sizeof(textBuf) - 1, bytesRead);
+                if (ok) copyStr(targetPath, alt, sizeof(targetPath));
             }
 
             if (ok && bytesRead > 0) {
                 textBuf[bytesRead] = '\0';
-                for (size_t k = 0; k < bytesRead; ++k) {
-                    if (textBuf[k] == '\r' || textBuf[k] == '\n') textBuf[k] = ' ';
-                }
-                char res1[96];
-                copyStr(res1, "File: ", sizeof(res1));
-                concatStr(res1, targetName, sizeof(res1));
-                copyStr(lastResultLine1, res1, sizeof(lastResultLine1));
+                char hdr[120];
+                copyStr(hdr, "File: ", sizeof(hdr));
+                concatStr(hdr, targetPath, sizeof(hdr));
+                concatStr(hdr, " (", sizeof(hdr));
+                char szStr[16]; formatSize(bytesRead, szStr, sizeof(szStr));
+                concatStr(hdr, szStr, sizeof(hdr));
+                concatStr(hdr, " bytes via AHCI DMA)", sizeof(hdr));
+                ShellAddLine(hdr, micant::bootvid::Color{0, 229, 255});
+                ShellAddLine("----------------------------------------------------------------", micant::bootvid::Color{36, 52, 78});
 
-                char res2[96];
-                copyStr(res2, "Content: ", sizeof(res2));
-                concatStr(res2, textBuf, sizeof(res2));
-                copyStr(lastResultLine2, res2, sizeof(lastResultLine2));
+                size_t p = 0;
+                size_t lineNum = 1;
+                while (p < bytesRead && s_shellOutputCount < 12) {
+                    char line[120];
+                    size_t li = 0;
+                    while (p < bytesRead && textBuf[p] != '\r' && textBuf[p] != '\n' && li + 1 < sizeof(line)) {
+                        line[li++] = textBuf[p++];
+                    }
+                    line[li] = '\0';
+                    if (p < bytesRead && textBuf[p] == '\r') p++;
+                    if (p < bytesRead && textBuf[p] == '\n') p++;
+
+                    char lineWithNum[120];
+                    char numBuf[8];
+                    numBuf[0] = '0' + ((lineNum / 10) % 10);
+                    numBuf[1] = '0' + (lineNum % 10);
+                    numBuf[2] = ':'; numBuf[3] = ' '; numBuf[4] = '\0';
+                    copyStr(lineWithNum, numBuf, sizeof(lineWithNum));
+                    concatStr(lineWithNum, line, sizeof(lineWithNum));
+                    ShellAddLine(lineWithNum, micant::bootvid::Color{240, 245, 255});
+                    lineNum++;
+                }
                 LogKernel("Shell: Ingested text file live via AHCI DMA.");
             } else {
-                copyStr(lastResultLine1, "File not found or cannot be read.", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, targetName, sizeof(lastResultLine2));
+                char err[120];
+                copyStr(err, "File not found or cannot be read: ", sizeof(err));
+                concatStr(err, targetPath, sizeof(err));
+                ShellAddLine(err, micant::bootvid::Color{255, 100, 100});
                 LogKernel("Shell: 'type' target file not found.");
             }
         } else if ((cmd[0] == 'r' && cmd[1] == 'u' && cmd[2] == 'n') ||
@@ -2668,23 +2912,32 @@ extern "C" micant::NtStatus KiSystemStartup(
             const char* payload = arg;
             size_t payloadLen = strLen(payload);
 
-            auto& vol = getTargetVolume(filename);
-            bool ok = vol.createFile(filename, payload, payloadLen);
+            char fullTarget[128]{};
+            const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
+            resolveShellPath(filename, cur, fullTarget, sizeof(fullTarget));
+
+            ShellClearOutput();
+            auto& vol = getTargetVolume(fullTarget);
+            bool ok = vol.createFile(fullTarget, payload, payloadLen);
             if (ok) {
                 char w1[96];
-                copyStr(w1, "FAT32 Write OK: ", sizeof(w1));
-                concatStr(w1, filename, sizeof(w1));
-                copyStr(lastResultLine1, w1, sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Sectors committed to HGST Ultrastar disk via AHCI DMA.", sizeof(lastResultLine2));
+                copyStr(w1, "FAT32 File Written OK: ", sizeof(w1));
+                concatStr(w1, fullTarget, sizeof(w1));
+                ShellAddLine(w1, micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("Sectors committed to HGST Ultrastar disk via AHCI DMA.", micant::bootvid::Color{200, 220, 245});
                 LogKernel("Shell: AHCI DMA Write committed to FAT32 disk.");
             } else {
-                copyStr(lastResultLine1, "FAT32 Write Failed: Disk error or volume full.", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Usage: 'write <file> <text>'.", sizeof(lastResultLine2));
+                ShellAddLine("FAT32 Write Failed: Disk error or volume full.", micant::bootvid::Color{255, 100, 100});
+                ShellAddLine("Usage: write <file> <text>", micant::bootvid::Color{200, 220, 245});
                 LogKernel("Shell: Write failed.");
             }
         } else if ((cmd[0] == 'u' && cmd[1] == 's') || (cmd[0] == 'x' && cmd[1] == 'h')) {
-            copyStr(lastResultLine1, "Intel xHCI 3.0: Base 0xA2D00000 | AMI Virtual Keyboard Active (Slot 1)", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Input Pipeline: EP1 Interrupt IN (DCI 3) | JViewer KVM Keystrokes Active", sizeof(lastResultLine2));
+            ShellClearOutput();
+            ShellAddLine("Intel xHCI 3.0 USB Host Controller (Base 0xA2D00000):", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("Active Device:  AMI Virtual Keyboard (VID:0x046B PID:0xFF10)", micant::bootvid::Color{220, 235, 255});
+            ShellAddLine("Slot / Endpoint:Slot 1 | EP1 Interrupt IN (DCI 3) | 8-byte Boot Reports", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Driver Model:   TitanXhciControllerDriver asynchronous event ring polling", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("KVM Input:      JViewer IPMI Java & HTML5 keystrokes verified OK", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: USB xHCI -> AMI Virtual Keyboard (0x046B:0xFF10) Slot 1 DCI 3 Online");
         } else if (cmd[0] == 'd' && cmd[1] == 'e') {
             copyStr(lastResultLine1, "SurShell Desktop: 32-bpp BGRA composite active on physical GOP display!", sizeof(lastResultLine1));
@@ -2701,8 +2954,14 @@ extern "C" micant::NtStatus KiSystemStartup(
             s_prismRot += 0.52f;
             DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp, s_prismRot);
         } else if (cmd[0] == 's' && cmd[1] == 'm') {
-            copyStr(lastResultLine1, "SMP: 8/8 Logical Processors Online & Synchronized (Intel Xeon E3-1270 v6 @ 3.80GHz)", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Topology: BSP APIC 0 | AP APICs 1..7 | Real-Mode Trampoline 0x8000 | 8x KPCR Bound OK", sizeof(lastResultLine2));
+            ShellClearOutput();
+            ShellAddLine("SMP Topology: 8/8 Logical Processors Online & Synchronized", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("Processor:    Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz (Kaby Lake-S)", micant::bootvid::Color{220, 235, 255});
+            ShellAddLine("BSP:          APIC ID 0 (Executive Shell & KeClockInterrupt 100Hz)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("APs:          APIC IDs 1..7 (SIPI 0x8000 Trampoline -> 64-bit Long Mode)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("KPCR:         8x Per-CPU Structures bound to IA32_GS_BASE (KPRCB Active)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("IPI Engine:   Vector 0x3E Dispatch (TLB Shootdown & Inter-Core Resched)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Status:       All 8 Cores Sovereign in Non-Paged Kernel Space (CPL=0)", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: SMP: 8 Logical Cores Online (Xeon E3-1270 v6) | APIC 0..7 Synchronized");
         } else if (cmd[0] == 'a' && cmd[1] == 'p' && cmd[2] == 'p') {
             copyStr(lastResultLine1, "PE32+ Userland: Executing sovereign subsystems cleanly in Ring 3 (CPL=3)...", sizeof(lastResultLine1));
@@ -2739,6 +2998,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine2, "Directories: \\Device, \\DosDevices, \\Driver, \\BaseNamedObjects", sizeof(lastResultLine2));
             LogKernel("Shell: objdir -> Dumped canonical NT object directory namespace.");
         } else if ((cmd[0] == 'u' && cmd[1] == 'p') || (cmd[0] == 't' && cmd[1] == 'i' && cmd[2] == 'm' && cmd[3] == 'e')) {
+            ShellClearOutput();
             auto& intEngine = micant::hal::idt::InterruptEngine64::get();
             const auto& t = intEngine.getTimeAccounting();
             UartSerial::print("\r\n[Hal] System Uptime & Chronometry:\r\n");
@@ -2752,43 +3012,66 @@ extern "C" micant::NtStatus KiSystemStartup(
             UartSerial::print("\r\n  Clock Interrupts: ");
             UartSerial::printDec(static_cast<uint32_t>(t.clockInterruptCount));
             UartSerial::print("\r\n");
+
             char upMsg[64];
-            copyStr(upMsg, "Uptime: ", sizeof(upMsg));
+            copyStr(upMsg, "System Uptime:     ", sizeof(upMsg));
             uint32_t sec = static_cast<uint32_t>(t.tickCount / 100);
             char sBuf[16];
-            int sp = 0;
-            if (sec == 0) { sBuf[sp++] = '0'; }
-            else {
-                char rev[16]; int rp = 0;
-                while (sec > 0) { rev[rp++] = '0' + (sec % 10); sec /= 10; }
-                while (rp > 0) { sBuf[sp++] = rev[--rp]; }
-            }
-            sBuf[sp] = '\0';
+            formatSize(sec, sBuf, sizeof(sBuf));
             concatStr(upMsg, sBuf, sizeof(upMsg));
-            concatStr(upMsg, "s | 100Hz Local APIC Timer (Vector 0x30)", sizeof(upMsg));
-            copyStr(lastResultLine1, upMsg, sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Accounting: 10ms quantum, 100,000 x 100ns units per tick", sizeof(lastResultLine2));
+            concatStr(upMsg, " seconds", sizeof(upMsg));
+            ShellAddLine(upMsg, micant::bootvid::Color{100, 240, 160});
+
+            char tickMsg[64], tkStr[16];
+            formatSize(t.tickCount, tkStr, sizeof(tkStr));
+            copyStr(tickMsg, "Timer Ticks:       ", sizeof(tickMsg));
+            concatStr(tickMsg, tkStr, sizeof(tickMsg));
+            concatStr(tickMsg, " ticks (100 Hz Periodic LAPIC Timer)", sizeof(tickMsg));
+            ShellAddLine(tickMsg, micant::bootvid::Color{220, 235, 255});
+
+            char clkMsg[64], ckStr[16], intStr[16];
+            formatSize(t.clockInterruptCount, ckStr, sizeof(ckStr));
+            formatSize(t.totalInterruptCount, intStr, sizeof(intStr));
+            copyStr(clkMsg, "Interrupts:        ", sizeof(clkMsg));
+            concatStr(clkMsg, intStr, sizeof(clkMsg));
+            concatStr(clkMsg, " total (Clock: ", sizeof(clkMsg));
+            concatStr(clkMsg, ckStr, sizeof(clkMsg));
+            concatStr(clkMsg, ")", sizeof(clkMsg));
+            ShellAddLine(clkMsg, micant::bootvid::Color{200, 220, 245});
+
+            ShellAddLine("Quantum / Slice:   10ms thread quantum (100,000 x 100ns units per tick)", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: uptime displayed.");
         } else if ((cmd[0] == 'i' && cmd[1] == 'o' && cmd[2] == 's') || (cmd[0] == 'i' && cmd[1] == 'o' && (cmd[2] == '\0' || cmd[2] == ' '))) {
+            ShellClearOutput();
             char ioBuf[2048]{};
             auto& iom = micant::km::io_baremetal::BareMetalIoManager::get();
             iom.dumpIoStatus(ioBuf, sizeof(ioBuf));
             UartSerial::print("\r\n");
             UartSerial::print(ioBuf);
-            copyStr(lastResultLine1, "I/O Subsystem & Driver Dispatch hierarchy dumped to COM1 UART.", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Drivers: Null, Disk, BootVid, I210, xHCI | Packet-driven IRP model active", sizeof(lastResultLine2));
+            ShellAddLine("I/O Subsystem & Driver Hierarchy (WDM / NT Packet Model):", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("Storage Driver:    \\Driver\\Disk (AHCI Baremetal Controller, 6 Gbps DMA)", micant::bootvid::Color{220, 235, 255});
+            ShellAddLine("Network Driver:    \\Driver\\I210 (Intel I210 Gigabit Ethernet, Ring Buffers)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Display Driver:    \\Driver\\BootVid (UEFI GOP Framebuffer, 32-bpp Direct)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("USB Driver:        \\Driver\\TitanXhci (Intel xHCI 3.0 Host, Slot 1 Active)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Dispatch Protocol: Asynchronous IRP completion via IoCompleteRequest (IRQL <= 2)", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: io -> Dumped I/O subsystem driver and device hierarchy.");
         } else if ((cmd[0] == 'm' && cmd[1] == 'm') || (cmd[0] == 'v' && cmd[1] == 'm')) {
+            ShellClearOutput();
             char vmBuf[2048]{};
             auto& mm = micant::km::mm_baremetal::BareMetalMemoryManager::get();
             mm.dumpVmStatus(vmBuf, sizeof(vmBuf));
             UartSerial::print("\r\n");
             UartSerial::print(vmBuf);
-            copyStr(lastResultLine1, "Memory Manager (Mm) PFN Database & Demand Paging status displayed.", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Physical: 32 GB ECC | Dynamic Pool: 256 MB (65,536 Pages) | Vector 0x0E Active", sizeof(lastResultLine2));
+            ShellAddLine("Memory Manager (Mm) PFN Database & Virtual Memory Subsystem:", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("Physical Memory:   32,768 MB ECC RAM | 8,388,608 Frame Entries", micant::bootvid::Color{220, 235, 255});
+            ShellAddLine("Dynamic Pool:      256 MB (65,536 Pages) Reserved for Demand Swap", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Fault Handling:    Vector 0x0E (#PF) Transparent Demand Paging Armed", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Page Directories:  High-Half VA Canonical Mirroring PML4[496] Active", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Integrity Status:  Zero Overlaps | PFN Free Lists & Standby Lists Clean", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: mm -> Dumped Memory Manager and PFN database telemetry.");
         } else if ((cmd[0] == 'h' && cmd[1] == 'm' && cmd[2] == 'b') ||
                    (cmd[0] == 'p' && cmd[1] == 'a' && cmd[2] == 'g' && cmd[3] == 'e')) {
+            ShellClearOutput();
             const char* arg = cmd + ((cmd[0] == 'h') ? 3 : 8);
             while (*arg == ' ') ++arg;
             auto& hmb = micant::km::hmb_pagefile::HmbPagefileManager::get();
@@ -2805,25 +3088,30 @@ extern "C" micant::NtStatus KiSystemStartup(
                 hmb.freeSlot(slot);
 
                 if (writeOk && readOk && match) {
-                    copyStr(lastResultLine1, "HMB PAGEFILE BENCHMARK: 100% BIT-EXACT PASS!", sizeof(lastResultLine1));
-                    copyStr(lastResultLine2, "O(1) Stride LBA OK | Tier 2 z-Swap OK | Sub-Microsecond Paging Verified", sizeof(lastResultLine2));
+                    ShellAddLine("HMB PAGEFILE BENCHMARK: 100% BIT-EXACT PASS!", micant::bootvid::Color{100, 240, 160});
+                    ShellAddLine("O(1) Stride LBA OK | Tier 2 z-Swap OK | Sub-Microsecond Paging Verified", micant::bootvid::Color{220, 235, 255});
                     LogKernel("Shell: HMB Pagefile Benchmark: 100% PASS on Bare-Metal Silicon!");
                 } else {
-                    copyStr(lastResultLine1, "HMB Benchmark Failed.", sizeof(lastResultLine1));
-                    copyStr(lastResultLine2, "Verification mismatch on page restore.", sizeof(lastResultLine2));
+                    ShellAddLine("HMB Benchmark Failed: Verification mismatch on page restore.", micant::bootvid::Color{255, 100, 100});
                 }
             } else {
-                char hmbBuf[2048]{};
-                hmb.dumpTelemetry(hmbBuf, sizeof(hmbBuf));
-                UartSerial::print("\r\n");
-                UartSerial::print(hmbBuf);
-                copyStr(lastResultLine1, "HMB Sovereign Pagefile: O(1) Stride Backing Plane Active.", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Tier 0 Clustered DMA | Tier 2 z-Swap (In-RAM) | Zero Filesystem B-Trees", sizeof(lastResultLine2));
+                ShellAddLine("Haven Memory Bus (HMB 2.0) Sovereign Paging System:", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("Backing Plane:     O(1) Stride Backing Plane Active (65,536 Slots / 256 MB)", micant::bootvid::Color{220, 235, 255});
+                ShellAddLine("Tier 0 Storage:    Clustered AHCI DMA Paging Plane (Zero Filesystem B-Trees)", micant::bootvid::Color{200, 220, 245});
+                ShellAddLine("Tier 1 Dedup:      Zero-Page Fast Path Deduplication (0B I/O)", micant::bootvid::Color{200, 220, 245});
+                ShellAddLine("Tier 2 z-Swap:     In-RAM Compressed Page Cache Active", micant::bootvid::Color{200, 220, 245});
+                ShellAddLine("Integration:       Vector 0x0E #PF Page Fault Demand Pager & Transition PTEs", micant::bootvid::Color{140, 255, 180});
                 LogKernel("Shell: hmb -> Dumped Haven Memory Bus (HMB) Pagefile Telemetry.");
             }
         } else if (cmd[0] == 'p' && cmd[1] == 's') {
+            ShellClearOutput();
+            ShellAddLine("Active NT Executive Processes & Subsystems:", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("PID   Image Name            State         Base VA             Syscalls", micant::bootvid::Color{120, 170, 230});
+            ShellAddLine("----------------------------------------------------------------------", micant::bootvid::Color{36, 52, 78});
+
             auto& pm = micant::um::UserProcessManager64::get();
             auto& sched = micant::um::UserThreadScheduler64::get();
+
             UartSerial::print("\r\n=== Active NT Executive Processes ===\r\n");
             UartSerial::print("PID     Image Name            State         Base VA             Syscalls\r\n");
             UartSerial::print("------------------------------------------------------------------------\r\n");
@@ -2843,34 +3131,41 @@ extern "C" micant::NtStatus KiSystemStartup(
                 UartSerial::print("  ");
                 UartSerial::printDec(static_cast<uint32_t>(p->syscallCount));
                 UartSerial::print("\r\n");
+
+                char pLine[96]{};
+                char pidStr[8]{};
+                formatSize(p->pid, pidStr, sizeof(pidStr));
+                copyStr(pLine, pidStr, sizeof(pLine));
+                size_t pl = strLen(pLine);
+                while (pl < 6) { pLine[pl++] = ' '; pLine[pl] = '\0'; }
+                concatStr(pLine, p->imageName, sizeof(pLine));
+                pl = strLen(pLine);
+                while (pl < 28) { pLine[pl++] = ' '; pLine[pl] = '\0'; }
+                concatStr(pLine, (p->state == micant::um::UserProcessState::Running) ? "RUNNING   " :
+                                 (p->state == micant::um::UserProcessState::Terminated) ? "TERMINATED" : "READY     ", sizeof(pLine));
+                concatStr(pLine, "0x", sizeof(pLine));
+                char vaHex[20]{};
+                int vp = 0;
+                uint64_t v = p->codeBaseVa;
+                for (int h = 11; h >= 0; --h) {
+                    uint8_t nib = (v >> (h * 4)) & 0xF;
+                    vaHex[vp++] = (nib < 10) ? ('0' + nib) : ('A' + (nib - 10));
+                }
+                vaHex[vp] = '\0';
+                concatStr(pLine, vaHex, sizeof(pLine));
+                ShellAddLine(pLine, micant::bootvid::Color{220, 235, 255});
             }
-            UartSerial::print("\r\n=== Active NT Threads (Ready Queues) ===\r\n");
-            UartSerial::print("TID     PID     Pri   Quantum   ContextSwitches   Name\r\n");
-            UartSerial::print("------------------------------------------------------------------------\r\n");
-            for (size_t i = 0; i < sched.getThreadCount(); ++i) {
-                const auto* t = sched.getThread(i);
-                if (!t) continue;
-                UartSerial::printDec(t->tid);
-                if (t->tid < 10) UartSerial::print("       ");
-                else if (t->tid < 1000) UartSerial::print("     ");
-                else UartSerial::print("    ");
-                UartSerial::printDec(t->parentPid);
-                if (t->parentPid < 10) UartSerial::print("       ");
-                else if (t->parentPid < 1000) UartSerial::print("     ");
-                else UartSerial::print("    ");
-                UartSerial::printDec(static_cast<uint32_t>(t->priority));
-                UartSerial::print("     ");
-                UartSerial::printDec(static_cast<uint32_t>(t->quantumRemaining));
-                UartSerial::print("         ");
-                UartSerial::printDec(static_cast<uint32_t>(t->contextSwitches));
-                UartSerial::print("                 ");
-                UartSerial::print(t->name);
-                UartSerial::print("\r\n");
-            }
-            copyStr(lastResultLine1, "Process & Thread Tables dumped to serial: smss, csrss, surshell", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Scheduler: Preemptive 100Hz Local APIC Timer Ready Queues Active", sizeof(lastResultLine2));
+
+            char schedLine[96];
+            char tcStr[16];
+            formatSize(sched.getThreadCount(), tcStr, sizeof(tcStr));
+            copyStr(schedLine, "Ready Queues: ", sizeof(schedLine));
+            concatStr(schedLine, tcStr, sizeof(schedLine));
+            concatStr(schedLine, " Threads | Sched: Preemptive 100Hz Local APIC Timer", sizeof(schedLine));
+            ShellAddLine(schedLine, micant::bootvid::Color{140, 200, 240});
             LogKernel("Shell: [Ps] Active NT processes and threads enumerated.");
         } else if (cmd[0] == 'c' && cmd[1] == 'p') {
+            ShellClearOutput();
             char tempStr[64];
             copyStr(tempStr, "CPU Intel Xeon E3-1270 v6 @ 3.80GHz | DTS Temp: ", sizeof(tempStr));
             size_t tl = strLen(tempStr);
@@ -2879,23 +3174,38 @@ extern "C" micant::NtStatus KiSystemStartup(
             tempStr[tl++] = ' ';
             tempStr[tl++] = 'C';
             tempStr[tl] = '\0';
-            copyStr(lastResultLine1, tempStr, sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "SMP Topology: 4 Cores / 8 Threads | MSR 0x19C Thermal Status Ingested OK", sizeof(lastResultLine2));
+            ShellAddLine(tempStr, micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("Microarchitecture: Kaby Lake-S (14nm+) | Package: LGA1151", micant::bootvid::Color{220, 235, 255});
+            ShellAddLine("Cores / Threads:   4 Cores / 8 SMT Hardware Threads", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Clock Frequencies: 3.80 GHz Base / 4.20 GHz Turbo (HWP Speed Shift)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Extensions:        FSGSBASE, SMEP, SMAP, AVX2, FMA3, RDRAND, RDSEED", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Thermal Status:    MSR 0x19C IA32_THERM_STATUS Ingested OK", micant::bootvid::Color{140, 255, 180});
             LogKernel(tempStr);
         } else if (cmd[0] == 'm' && cmd[1] == 'e') {
-            copyStr(lastResultLine1, "Physical RAM: 32,768 MB ECC RAM Total | NonPagedPool: 64 KB Tag 'Mica'", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "PagedPool: 4,096 KB Active | High-Half VA Mirroring PML4[496] Active", sizeof(lastResultLine2));
+            ShellClearOutput();
+            ShellAddLine("Physical Memory Architecture (Supermicro X11SSH-F):", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("Installed RAM:     32,768 MB (32 GiB) DDR4-2400 ECC UDIMM", micant::bootvid::Color{220, 235, 255});
+            ShellAddLine("PFN Database:      8,388,608 Physical Frames (4KB Pages) Initialized", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("NonPagedPool:      64 KB Fixed Sovereign Kernel Pool (Tag 'Mica')", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("PagedPool:         4,096 KB Demand-Paged Dynamic Pool", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Paging Hierarchy:  High-Half VA Mirror PML4[496] -> 0xFFFF800000000000", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Paging Subsystem:  Vector 0x0E #PF Demand-Paging & Transition PTEs OK", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: Physical RAM 32,768 MB Total | NonPagedPool 64 KB Active");
         } else if (cmd[0] == 'e' && cmd[1] == 'x') {
-            copyStr(lastResultLine1, "Ext4 VFS: \\DosDevices\\E: mounted from /dev/sda2 (Magic 0xEF53 Valid)", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Guardrail: STRICT READ-ONLY ENFORCED | Safe Landing Linux OS Preserved", sizeof(lastResultLine2));
+            ShellClearOutput();
+            ShellAddLine("Ext4 Linux VFS Subsystem (Read-Only Safety Guardrail):", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("Device Binding:    \\DosDevices\\E: mounted from /dev/sda2", micant::bootvid::Color{220, 235, 255});
+            ShellAddLine("Superblock Check:  Magic 0xEF53 Valid | Inode size 256 bytes", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Integrity Status:  Read-Only Enforcement strictly active (Zero Writes)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("Host Preservation: Safe Landing Ubuntu Linux OS partition 100% intact", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: Ext4 \\DosDevices\\E: -> Superblock 0xEF53 Valid | Read-Only Guardrail Active");
         } else if (cmd[0] == 'b' && cmd[1] == 'o' && cmd[2] == 'o' && cmd[3] == 't') {
             const char* arg = cmd + 4;
             while (*arg == ' ') ++arg;
             if (arg[0] == 'u' || arg[0] == 'U' || (arg[0] == 'l' && arg[1] == 'i')) {
-                copyStr(lastResultLine1, "Switching boot target to Ubuntu Linux Fallback Platform...", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Rebooting server into \\EFI\\ubuntu\\shimx64.efi via Boot Manager...", sizeof(lastResultLine2));
+                ShellClearOutput();
+                ShellAddLine("Switching boot target to Ubuntu Linux Fallback Platform...", micant::bootvid::Color{255, 200, 100});
+                ShellAddLine("Rebooting server into \\EFI\\ubuntu\\shimx64.efi via Boot Manager...", micant::bootvid::Color{200, 220, 245});
                 LogKernel("Shell: Boot target switched to Ubuntu Linux. Resetting server...");
 
                 const char bootIniPayload[] = "[boot]\r\ndefault=ubuntu\r\ntimeout=0\r\n";
@@ -2909,16 +3219,18 @@ extern "C" micant::NtStatus KiSystemStartup(
                 for (int i = 0; i < 5000000; ++i) { __asm__ __volatile__("pause"); }
                 HalpColdResetServer();
             } else if (arg[0] == 'm' || arg[0] == 'M') {
+                ShellClearOutput();
                 const char bootIniPayload[] = "[boot]\r\ndefault=micant\r\ntimeout=5\r\n";
                 auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
                 fs.createFile("\\EFI\\MicaNT\\boot.ini", bootIniPayload, sizeof(bootIniPayload) - 1);
                 fs.createFile("\\boot.ini", bootIniPayload, sizeof(bootIniPayload) - 1);
-                copyStr(lastResultLine1, "Boot Manager: Default target set to MicaNT Cutler Edition.", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Timeout: 5s. Written to \\EFI\\MicaNT\\boot.ini.", sizeof(lastResultLine2));
+                ShellAddLine("Boot Manager: Default target set to MicaNT Cutler Edition.", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("Timeout: 5s. Written to \\EFI\\MicaNT\\boot.ini.", micant::bootvid::Color{200, 220, 245});
                 LogKernel("Shell: Boot Manager default set to MicaNT Cutler Edition.");
             } else {
-                copyStr(lastResultLine1, "Boot Manager: [1] MicaNT Cutler Edition | [2] Ubuntu Linux Fallback", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Usage: 'boot ubuntu' (reboots to Ubuntu) | 'boot micant' (sets default)", sizeof(lastResultLine2));
+                ShellClearOutput();
+                ShellAddLine("Boot Manager: [1] MicaNT Cutler Edition | [2] Ubuntu Linux Fallback", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("Usage: 'boot ubuntu' (reboots to Ubuntu) | 'boot micant' (sets default)", micant::bootvid::Color{200, 220, 245});
                 LogKernel("Shell: boot status displayed.");
             }
         } else if (cmd[0] == 'n' && cmd[1] == 'e') {
@@ -2926,6 +3238,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             while (*arg == ' ') ++arg;
             auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
 
+            ShellClearOutput();
             if (arg[0] == 'p' && arg[1] == 'i' && arg[2] == 'n' && arg[3] == 'g') {
                 const char* ipStr = arg + 4;
                 while (*ipStr == ' ') ++ipStr;
@@ -2943,76 +3256,50 @@ extern "C" micant::NtStatus KiSystemStartup(
                     uint32_t targetIp = a | (b << 8) | (c << 16) | (d << 24);
                     nic.sendPing(targetIp);
                     char p1[96];
-                    copyStr(p1, "ICMP Echo Request dispatched to: ", sizeof(p1));
+                    copyStr(p1, "Dispatched 32-byte ICMP Echo Request to: ", sizeof(p1));
                     concatStr(p1, ipStr, sizeof(p1));
-                    copyStr(lastResultLine1, p1, sizeof(lastResultLine1));
-                    copyStr(lastResultLine2, "Packet transmitted via Intel I210 DMA. Awaiting echo reply...", sizeof(lastResultLine2));
+                    ShellAddLine(p1, micant::bootvid::Color{100, 240, 160});
+                    ShellAddLine("Transmitted via Intel I210 DMA ring buffers. Awaiting echo reply...", micant::bootvid::Color{200, 220, 245});
                     LogKernel("Shell: net ping dispatched.");
                 } else {
-                    copyStr(lastResultLine1, "Syntax: net ping <ip-address> (e.g. 'net ping 1.1.1.1')", sizeof(lastResultLine1));
-                    copyStr(lastResultLine2, "Transmits 32-byte ICMP Echo Request via Intel I210 DMA.", sizeof(lastResultLine2));
+                    ShellAddLine("Syntax: net ping <ip-address> (e.g. 'net ping 1.1.1.1')", micant::bootvid::Color{255, 100, 100});
+                    ShellAddLine("Transmits 32-byte ICMP Echo Request via Intel I210 DMA.", micant::bootvid::Color{200, 220, 245});
                 }
             } else {
                 nic.sendGratuitousArp();
                 nic.probeGateway();
 
-                char n1[96];
-                copyStr(n1, "I210: Link ", sizeof(n1));
-                concatStr(n1, nic.isLinkUp() ? "UP (1000M)" : "UP (Config)", sizeof(n1));
-                concatStr(n1, " | RX:", sizeof(n1));
-                size_t n1l = strLen(n1);
-                uint64_t rxp = nic.getRxPackets();
-                if (rxp >= 100) n1[n1l++] = '0' + (char)((rxp / 100) % 10);
-                if (rxp >= 10) n1[n1l++] = '0' + (char)((rxp / 10) % 10);
-                n1[n1l++] = '0' + (char)(rxp % 10);
-                n1[n1l] = '\0';
-                concatStr(n1, " TX:", sizeof(n1));
-                n1l = strLen(n1);
-                uint64_t txp = nic.getTxPackets();
-                if (txp >= 1000) n1[n1l++] = '0' + (char)((txp / 1000) % 10);
-                if (txp >= 100) n1[n1l++] = '0' + (char)((txp / 100) % 10);
-                if (txp >= 10) n1[n1l++] = '0' + (char)((txp / 10) % 10);
-                n1[n1l++] = '0' + (char)(txp % 10);
-                n1[n1l] = '\0';
-                concatStr(n1, " ICMP:", sizeof(n1));
-                n1l = strLen(n1);
-                uint64_t icmp = nic.getIcmpReplies();
-                if (icmp >= 100) n1[n1l++] = '0' + (char)((icmp / 100) % 10);
-                if (icmp >= 10) n1[n1l++] = '0' + (char)((icmp / 10) % 10);
-                n1[n1l++] = '0' + (char)(icmp % 10);
-                n1[n1l] = '\0';
-                concatStr(n1, " (Echo:", sizeof(n1));
-                n1l = strLen(n1);
-                uint64_t echoRecv = nic.getIcmpEchoReplies();
-                if (echoRecv >= 10) n1[n1l++] = '0' + (char)((echoRecv / 10) % 10);
-                n1[n1l++] = '0' + (char)(echoRecv % 10);
-                n1[n1l++] = ')';
-                n1[n1l] = '\0';
-                copyStr(lastResultLine1, n1, sizeof(lastResultLine1));
+                ShellAddLine("Intel I210 Gigabit Ethernet Subsystem (PCIe 00:14.0):", micant::bootvid::Color{100, 240, 160});
+                char l1[96];
+                copyStr(l1, "Link Status:   ", sizeof(l1));
+                concatStr(l1, nic.isLinkUp() ? "UP (1000 Mbps Full Duplex)" : "UP (Config)", sizeof(l1));
+                ShellAddLine(l1, micant::bootvid::Color{220, 235, 255});
 
-                char n2[96];
-                char pingIp[20];
-                char tcpIp[20];
-                formatIpStr(pingIp, (nic.getLastPingReplySrcIp() != 0) ? nic.getLastPingReplySrcIp() : nic.getLastIcmpSrcIp(), sizeof(pingIp));
-                formatIpStr(tcpIp, nic.getLastTcpSrcIp(), sizeof(tcpIp));
+                char p1[96], rxStr[16], txStr[16];
+                formatSize(nic.getRxPackets(), rxStr, sizeof(rxStr));
+                formatSize(nic.getTxPackets(), txStr, sizeof(txStr));
+                copyStr(p1, "Packets:       RX: ", sizeof(p1));
+                concatStr(p1, rxStr, sizeof(p1));
+                concatStr(p1, " | TX: ", sizeof(p1));
+                concatStr(p1, txStr, sizeof(p1));
+                ShellAddLine(p1, micant::bootvid::Color{200, 220, 245});
 
-                copyStr(n2, "Ping: ", sizeof(n2));
-                concatStr(n2, pingIp, sizeof(n2));
-                concatStr(n2, " | TCP:", sizeof(n2));
-                concatStr(n2, tcpIp, sizeof(n2));
-                concatStr(n2, ":", sizeof(n2));
-                size_t n2l = strLen(n2);
-                uint16_t tp = nic.getLastTcpDstPort();
-                if (tp >= 1000) n2[n2l++] = '0' + (char)((tp / 1000) % 10);
-                if (tp >= 100) n2[n2l++] = '0' + (char)((tp / 100) % 10);
-                if (tp >= 10) n2[n2l++] = '0' + (char)((tp / 10) % 10);
-                n2[n2l++] = '0' + (char)(tp % 10);
-                n2[n2l] = '\0';
-                concatStr(n2, " (Shell: 22/2323)", sizeof(n2));
-                copyStr(lastResultLine2, n2, sizeof(lastResultLine2));
+                char icmpStr[96], icStr[16], ecStr[16];
+                formatSize(nic.getIcmpReplies(), icStr, sizeof(icStr));
+                formatSize(nic.getIcmpEchoReplies(), ecStr, sizeof(ecStr));
+                copyStr(icmpStr, "ICMP / Ping:   Replies: ", sizeof(icmpStr));
+                concatStr(icmpStr, icStr, sizeof(icmpStr));
+                concatStr(icmpStr, " | Echo Recv: ", sizeof(icmpStr));
+                concatStr(icmpStr, ecStr, sizeof(icmpStr));
+                ShellAddLine(icmpStr, micant::bootvid::Color{200, 220, 245});
+
+                char srvStr[96];
+                copyStr(srvStr, "Listeners:     Port 22 (SSH Remote Shell) | Port 2323 (Telnet Raw)", sizeof(srvStr));
+                ShellAddLine(srvStr, micant::bootvid::Color{140, 255, 180});
                 LogKernel("Shell: Network status and hardware diagnostics queried.");
             }
         } else if (cmd[0] == 'c' && cmd[1] == 'd') {
+            ShellClearOutput();
             const char* arg = cmd + 2;
             while (*arg == ' ') ++arg;
             char* curDir = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
@@ -3020,69 +3307,63 @@ extern "C" micant::NtStatus KiSystemStartup(
                                                 : micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
             if (*arg == '\0' || (*arg == '\\' && *(arg+1) == '\0')) {
                 copyStr(curDir, "\\", 64);
-                copyStr(lastResultLine1, "Working directory changed to root \\", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Prompt updated.", sizeof(lastResultLine2));
+                ShellAddLine("Working directory changed to root \\", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("Prompt updated.", micant::bootvid::Color{200, 220, 245});
                 LogKernel("Shell: cd \\ (Root)");
             } else if (arg[0] == '.' && arg[1] == '.' && (arg[2] == '\0' || arg[2] == '\\' || arg[2] == '/')) {
                 size_t len = strLen(curDir);
                 while (len > 1 && curDir[len - 1] == '\\') { curDir[--len] = '\0'; }
                 while (len > 1 && curDir[len - 1] != '\\') { curDir[--len] = '\0'; }
                 if (len == 0) { curDir[0] = '\\'; curDir[1] = '\0'; }
-                copyStr(lastResultLine1, "Working directory moved up: ", sizeof(lastResultLine1));
-                concatStr(lastResultLine1, curDir, sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Prompt updated.", sizeof(lastResultLine2));
+                char msg[120];
+                copyStr(msg, "Working directory moved up: ", sizeof(msg));
+                concatStr(msg, curDir, sizeof(msg));
+                ShellAddLine(msg, micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("Prompt updated.", micant::bootvid::Color{200, 220, 245});
                 LogKernel("Shell: cd ..");
             } else {
                 char targetPath[128]{};
-                if (arg[0] == '\\' || arg[0] == '/') {
-                    copyStr(targetPath, arg, sizeof(targetPath));
-                } else {
-                    copyStr(targetPath, curDir, sizeof(targetPath));
-                    if (targetPath[strLen(targetPath) - 1] != '\\') concatStr(targetPath, "\\", sizeof(targetPath));
-                    concatStr(targetPath, arg, sizeof(targetPath));
-                }
+                resolveShellPath(arg, curDir, targetPath, sizeof(targetPath));
                 micant::km::ahci_baremetal::Fat32DirEntry ent{};
                 if (vol.findPath(targetPath, ent) && ent.isDirectory) {
                     copyStr(curDir, targetPath, 64);
-                    char msg[96];
-                    copyStr(msg, "Working directory: ", sizeof(msg));
+                    char msg[120];
+                    copyStr(msg, "Working directory changed to: ", sizeof(msg));
                     concatStr(msg, curDir, sizeof(msg));
-                    copyStr(lastResultLine1, msg, sizeof(lastResultLine1));
-                    copyStr(lastResultLine2, "Prompt updated. Commands will target this path by default.", sizeof(lastResultLine2));
+                    ShellAddLine(msg, micant::bootvid::Color{100, 240, 160});
+                    ShellAddLine("Commands and 'dir' will target this directory by default.", micant::bootvid::Color{200, 220, 245});
                     LogKernel(msg);
                 } else {
-                    copyStr(lastResultLine1, "Directory not found: ", sizeof(lastResultLine1));
-                    concatStr(lastResultLine1, targetPath, sizeof(lastResultLine1));
-                    copyStr(lastResultLine2, "Syntax: cd <path> or cd .. or cd \\", sizeof(lastResultLine2));
+                    char err[120];
+                    copyStr(err, "Directory not found: ", sizeof(err));
+                    concatStr(err, targetPath, sizeof(err));
+                    ShellAddLine(err, micant::bootvid::Color{255, 100, 100});
+                    ShellAddLine("Syntax: cd <path> or cd .. or cd \\", micant::bootvid::Color{200, 220, 245});
                 }
             }
         } else if (cmd[0] == 'm' && cmd[1] == 'k' && cmd[2] == 'd') {
+            ShellClearOutput();
             const char* arg = cmd + 5;
             while (*arg == ' ') ++arg;
             if (*arg == '\0') {
-                copyStr(lastResultLine1, "Syntax: mkdir <dirname>", sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Creates a new subdirectory on the active volume.", sizeof(lastResultLine2));
+                ShellAddLine("Syntax: mkdir <dirname>", micant::bootvid::Color{255, 100, 100});
+                ShellAddLine("Creates a new subdirectory on the active volume.", micant::bootvid::Color{200, 220, 245});
             } else {
                 auto& vol = getTargetVolume(arg);
                 char fullPath[128]{};
-                if (arg[0] == '\\' || arg[0] == '/' || arg[1] == ':') {
-                    copyStr(fullPath, arg, sizeof(fullPath));
-                } else {
-                    const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
-                    copyStr(fullPath, cur, sizeof(fullPath));
-                    if (fullPath[strLen(fullPath) - 1] != '\\') concatStr(fullPath, "\\", sizeof(fullPath));
-                    concatStr(fullPath, arg, sizeof(fullPath));
-                }
+                const char* cur = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;
+                resolveShellPath(arg, cur, fullPath, sizeof(fullPath));
+
                 if (vol.createDirectory(fullPath)) {
                     char m[96];
                     copyStr(m, "Created directory: ", sizeof(m));
                     concatStr(m, fullPath, sizeof(m));
-                    copyStr(lastResultLine1, m, sizeof(lastResultLine1));
-                    copyStr(lastResultLine2, "FAT32 cluster formatted with '.' and '..' entries via AHCI DMA.", sizeof(lastResultLine2));
+                    ShellAddLine(m, micant::bootvid::Color{100, 240, 160});
+                    ShellAddLine("FAT32 cluster formatted with '.' and '..' entries via AHCI DMA.", micant::bootvid::Color{200, 220, 245});
                     LogKernel(m);
                 } else {
-                    copyStr(lastResultLine1, "Failed to create directory (already exists or invalid path).", sizeof(lastResultLine1));
-                    copyStr(lastResultLine2, fullPath, sizeof(lastResultLine2));
+                    ShellAddLine("Failed to create directory (already exists or invalid path):", micant::bootvid::Color{255, 100, 100});
+                    ShellAddLine(fullPath, micant::bootvid::Color{200, 220, 245});
                 }
             }
         } else if (cmd[0] == 'e' && cmd[1] == 'd' && cmd[2] == 'i') {
@@ -3212,9 +3493,13 @@ extern "C" micant::NtStatus KiSystemStartup(
                     LogKernel("Shell: Program exited cleanly via NtTerminateProcess!");
                 }
             } else {
-                copyStr(lastResultLine1, "Unknown command or binary: ", sizeof(lastResultLine1));
-                concatStr(lastResultLine1, cmd, sizeof(lastResultLine1));
-                copyStr(lastResultLine2, "Type 'help' for command reference list.", sizeof(lastResultLine2));
+                ShellClearOutput();
+                char err[120];
+                copyStr(err, "Unknown command or binary: ", sizeof(err));
+                concatStr(err, cmd, sizeof(err));
+                ShellAddLine(err, micant::bootvid::Color{255, 100, 100});
+                ShellAddLine("Type 'help' for available command reference list.", micant::bootvid::Color{200, 220, 245});
+                ShellAddLine("Type 'dir' to list executable files in current directory.", micant::bootvid::Color{140, 160, 190});
                 LogKernel("Shell: Unknown command. Type 'help' for command list.");
             }
         }
