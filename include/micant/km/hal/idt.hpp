@@ -248,7 +248,7 @@ public:
      * @brief Executes the LIDT instruction on physical hardware.
      */
     void loadIdtr() noexcept {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         __asm__ __volatile__("lidt %0" : : "m"(m_idtr) : "memory");
 #endif
     }
