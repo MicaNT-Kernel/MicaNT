@@ -17,6 +17,11 @@ BENCH_SOURCE = os.path.join(REPO_ROOT, r"build\bench.exe")
 CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\bin\prismx_3d_cube_app.exe")
 if not os.path.exists(CUBE_SOURCE):
     CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\prismx_3d_cube_app.exe")
+IPCONFIG_SOURCE = os.path.join(REPO_ROOT, r"build\ipconfig.exe")
+WHOAMI_SOURCE = os.path.join(REPO_ROOT, r"build\whoami.exe")
+TASKLIST_SOURCE = os.path.join(REPO_ROOT, r"build\tasklist.exe")
+PING_SOURCE = os.path.join(REPO_ROOT, r"build\ping.exe")
+CMD_SOURCE = os.path.join(REPO_ROOT, r"build\cmd.exe")
 HOST = os.environ.get("MICANT_TARGET_HOST", "147.135.1.229")
 USER = os.environ.get("MICANT_TARGET_USER", "ubuntu")
 KEY_PATH = os.environ.get("MICANT_SSH_KEY", r"C:\Users\admin\.ssh\micant_ci_key")
@@ -147,6 +152,39 @@ def run_local_build():
     sz_c = os.path.getsize(os.path.join(REPO_ROOT, "build", "bin", "prismx_3d_cube_app.exe"))
     print(f"      prismx_3d_cube_app.exe Compiled OK ({sz_c:,} bytes)")
 
+    # Compile System32 Standalone Ring 3 Utilities
+    system32_tools = [
+        ("tools/ipconfig_app.cpp", "build/ipconfig.exe", "ipconfig.exe"),
+        ("tools/whoami_app.cpp", "build/whoami.exe", "whoami.exe"),
+        ("tools/tasklist_app.cpp", "build/tasklist.exe", "tasklist.exe"),
+        ("tools/ping_app.cpp", "build/ping.exe", "ping.exe"),
+        ("tools/cmd_app.cpp", "build/cmd.exe", "cmd.exe"),
+    ]
+    for src, out_path, name in system32_tools:
+        c_cmd = [
+            "clang++",
+            "-target", "x86_64-w64-mingw32",
+            "-std=c++23",
+            "-ffreestanding",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-fno-stack-protector",
+            "-mno-red-zone",
+            "-mno-stack-arg-probe",
+            "-O2",
+            "-Wl,--subsystem,console",
+            "-Wl,-e,_start",
+            "-nostdlib",
+            src,
+            "-o", out_path
+        ]
+        r = subprocess.run(c_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"[FATAL] {name} build failed:\n{r.stderr}")
+            sys.exit(1)
+        sz = os.path.getsize(os.path.join(REPO_ROOT, out_path))
+        print(f"      {name} Compiled OK ({sz:,} bytes)")
+
 def get_ssh():
     k = paramiko.RSAKey.from_private_key_file(KEY_PATH)
     for _ in range(20):
@@ -193,6 +231,16 @@ def main():
     sftp.put(BENCH_SOURCE, "/tmp/bench.exe")
     if os.path.exists(CUBE_SOURCE):
         sftp.put(CUBE_SOURCE, "/tmp/prismx_3d_cube_app.exe")
+    if os.path.exists(IPCONFIG_SOURCE):
+        sftp.put(IPCONFIG_SOURCE, "/tmp/ipconfig.exe")
+    if os.path.exists(WHOAMI_SOURCE):
+        sftp.put(WHOAMI_SOURCE, "/tmp/whoami.exe")
+    if os.path.exists(TASKLIST_SOURCE):
+        sftp.put(TASKLIST_SOURCE, "/tmp/tasklist.exe")
+    if os.path.exists(PING_SOURCE):
+        sftp.put(PING_SOURCE, "/tmp/ping.exe")
+    if os.path.exists(CMD_SOURCE):
+        sftp.put(CMD_SOURCE, "/tmp/cmd.exe")
     sftp.close()
 
     print("      Staging binaries strictly to sovereign MicaNT partitions by PARTUUID...")
@@ -210,6 +258,11 @@ def main():
         'cp -v /tmp/app.exe /mnt/micasys/MicaNT/System32/ && '
         'cp -v /tmp/bench.exe /mnt/micasys/MicaNT/System32/ && '
         '([ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/ipconfig.exe ] && cp -v /tmp/ipconfig.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/ipconfig.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/whoami.exe ] && cp -v /tmp/whoami.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/whoami.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/tasklist.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/ping.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/cmd.exe /mnt/micasys/ || true); '
         'mkdir -p /mnt/micaesp/EFI/BOOT /mnt/micaesp/EFI/MicaNT && '
         'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/BOOT/BOOTX64.EFI && '
         'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/MicaNT/BOOTX64.EFI && '
@@ -218,6 +271,11 @@ def main():
         'cp -v /tmp/app.exe /mnt/micaesp/EFI/MicaNT/ && '
         'cp -v /tmp/bench.exe /mnt/micaesp/EFI/MicaNT/ && '
         '([ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/ipconfig.exe ] && cp -v /tmp/ipconfig.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/whoami.exe ] && cp -v /tmp/whoami.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /mnt/micaesp/EFI/MicaNT/ || true); '
         'rm -f /mnt/micaesp/EFI/MicaNT/boot.ini /mnt/micaesp/boot.ini /mnt/micasys/boot.ini /mnt/micasys/EFI/MicaNT/boot.ini 2>/dev/null || true; '
         'mkdir -p /boot/efi/EFI/MicaNT && '
         'cp -v /tmp/BOOTX64.EFI /boot/efi/EFI/MicaNT/BOOTX64.EFI && '
@@ -226,6 +284,11 @@ def main():
         'cp -v /tmp/app.exe /boot/efi/EFI/MicaNT/ && '
         'cp -v /tmp/bench.exe /boot/efi/EFI/MicaNT/ && '
         '([ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/ipconfig.exe ] && cp -v /tmp/ipconfig.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/whoami.exe ] && cp -v /tmp/whoami.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /boot/efi/EFI/MicaNT/ || true); '
         'rm -f /boot/efi/EFI/MicaNT/boot.ini /boot/efi/boot.ini 2>/dev/null || true; '
         'sync && umount /mnt/micasys /mnt/micaesp'
     )

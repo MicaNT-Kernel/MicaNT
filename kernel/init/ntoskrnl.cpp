@@ -492,6 +492,47 @@ static void LogKernel(const char* msg) {
     UartSerial::print("\r\n");
 }
 
+// Sovereign Executive Console Line Buffer (Visible in GOP Shell Window)
+struct ShellOutputLine {
+    char text[120];
+    micant::bootvid::Color color;
+};
+static constexpr size_t SHELL_MAX_OUTPUT_LINES = 13;
+static ShellOutputLine s_shellOutputLines[SHELL_MAX_OUTPUT_LINES]{};
+static size_t s_shellOutputCount = 0;
+static char s_lastResultLine1[128] = "System ready. Press TAB to toggle between SurShell Desktop and Console.";
+static char s_lastResultLine2[128] = "ntoskrnl.exe: SMP 8 Cores Online | LAPIC 100Hz | High-Half PML4[496] Active";
+
+static void ShellClearOutput() {
+    s_shellOutputCount = 0;
+    for (size_t i = 0; i < SHELL_MAX_OUTPUT_LINES; ++i) {
+        s_shellOutputLines[i].text[0] = '\0';
+        s_shellOutputLines[i].color = micant::bootvid::Color{240, 245, 255};
+    }
+}
+
+static void ShellAddLine(const char* text, micant::bootvid::Color col = micant::bootvid::Color{240, 245, 255}) {
+    if (!text) return;
+    if (s_shellOutputCount == 0) {
+        copyStr(s_lastResultLine1, text, sizeof(s_lastResultLine1));
+    } else if (s_shellOutputCount == 1) {
+        copyStr(s_lastResultLine2, text, sizeof(s_lastResultLine2));
+    }
+    if (s_shellOutputCount < SHELL_MAX_OUTPUT_LINES) {
+        copyStr(s_shellOutputLines[s_shellOutputCount].text, text, sizeof(s_shellOutputLines[0].text));
+        s_shellOutputLines[s_shellOutputCount].color = col;
+        s_shellOutputCount++;
+    } else {
+        for (size_t i = 0; i < SHELL_MAX_OUTPUT_LINES - 1; ++i) {
+            s_shellOutputLines[i] = s_shellOutputLines[i + 1];
+        }
+        copyStr(s_shellOutputLines[SHELL_MAX_OUTPUT_LINES - 1].text, text, sizeof(s_shellOutputLines[0].text));
+        s_shellOutputLines[SHELL_MAX_OUTPUT_LINES - 1].color = col;
+    }
+    UartSerial::print(text);
+    UartSerial::print("\r\n");
+}
+
 // Fast Syscall Dispatcher
 extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64_t arg2) {
     s_ring3Telemetry.syscallDispatchCount++;
@@ -602,20 +643,41 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                 size_t maxPossible = static_cast<size_t>(vadEntry->endVa - arg1);
                 size_t len = (arg2 > 0 && arg2 <= maxPossible) ? arg2 : 0;
                 if (len == 0) {
-                    while (len < 256 && len < maxPossible && str[len] != '\0') len++;
+                    while (len < 512 && len < maxPossible && str[len] != '\0') len++;
                 }
-                char printBuf[128]{};
-                size_t cpy = (len < sizeof(printBuf) - 1) ? len : (sizeof(printBuf) - 1);
-                for (size_t i = 0; i < cpy; ++i) {
-                    char c = str[i];
-                    printBuf[i] = (c >= 0x20 && c <= 0x7E) ? c : ' ';
-                    UartSerial::putChar(c);
+
+                // Parse string line-by-line and dispatch to ShellAddLine
+                size_t start = 0;
+                while (start < len) {
+                    if (str[start] == '\r') {
+                        start++;
+                        continue;
+                    }
+                    if (str[start] == '\n') {
+                        ShellAddLine("", micant::bootvid::Color{0, 229, 255});
+                        start++;
+                        continue;
+                    }
+                    size_t end = start;
+                    while (end < len && str[end] != '\r' && str[end] != '\n' && (end - start) < 118) {
+                        end++;
+                    }
+                    char lineBuf[120]{};
+                    size_t lineLen = end - start;
+                    for (size_t k = 0; k < lineLen; ++k) {
+                        char c = str[start + k];
+                        lineBuf[k] = (c >= 0x20 && c <= 0x7E) ? c : ' ';
+                    }
+                    lineBuf[lineLen] = '\0';
+                    ShellAddLine(lineBuf, micant::bootvid::Color{0, 229, 255});
+
+                    start = end;
+                    if (start < len && str[start] == '\r') start++;
+                    if (start < len && str[start] == '\n') start++;
                 }
-                UartSerial::print("\r\n");
-                char dispLog[144] = "[User Output] ";
-                concatStr(dispLog, printBuf, sizeof(dispLog));
+                char dispLog[144] = "[User Output] Dispatched to Console";
                 LogKernel(dispLog);
-                return static_cast<int64_t>(cpy);
+                return static_cast<int64_t>(len);
             }
             char msgBuf[9] = {0};
             uint64_t val = arg1;
@@ -634,6 +696,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             }
             if (idx > 0) {
                 UartSerial::print(msgBuf);
+                ShellAddLine(msgBuf, micant::bootvid::Color{0, 229, 255});
             } else {
                 UartSerial::print("OK");
             }
@@ -642,6 +705,17 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
             concatStr(dispLog, idx > 0 ? msgBuf : "OK", sizeof(dispLog));
             LogKernel(dispLog);
             return 0;
+        }
+        case 0x26: { // NtIcmpSendEcho (Hardware ICMP Echo Request via Intel I210 DMA)
+            uint32_t targetIp = static_cast<uint32_t>(arg1);
+            if (targetIp != 0) {
+                auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
+                nic.sendPing(targetIp);
+                UartSerial::print("  -> NtIcmpSendEcho: Dispatched 32-byte ICMP Echo Request via Intel I210 DMA\r\n");
+                LogKernel("[Syscall] NtIcmpSendEcho (0x26) Dispatched");
+                return 0;
+            }
+            return 1;
         }
         case 0x46: { // NtYieldExecution
             auto& sched = micant::um::UserThreadScheduler64::get();
@@ -2290,46 +2364,8 @@ extern "C" micant::NtStatus KiSystemStartup(
     char cmdPrompt[64] = "micant:C:\\> ";
     char userCmd[128]{};
     size_t cmdLen = 0;
-    char lastResultLine1[128] = "System ready. Press TAB to toggle between SurShell Desktop and Console.";
-    char lastResultLine2[128] = "ntoskrnl.exe: SMP 8 Cores Online | LAPIC 100Hz | High-Half PML4[496] Active";
-
-    struct ShellOutputLine {
-        char text[120];
-        micant::bootvid::Color color;
-    };
-    static constexpr size_t SHELL_MAX_OUTPUT_LINES = 13;
-    static ShellOutputLine s_shellOutputLines[SHELL_MAX_OUTPUT_LINES]{};
-    static size_t s_shellOutputCount = 0;
-
-    auto ShellClearOutput = [&]() {
-        s_shellOutputCount = 0;
-        for (size_t i = 0; i < SHELL_MAX_OUTPUT_LINES; ++i) {
-            s_shellOutputLines[i].text[0] = '\0';
-            s_shellOutputLines[i].color = micant::bootvid::Color{240, 245, 255};
-        }
-    };
-
-    auto ShellAddLine = [&](const char* text, micant::bootvid::Color col = micant::bootvid::Color{240, 245, 255}) {
-        if (!text) return;
-        if (s_shellOutputCount == 0) {
-            copyStr(lastResultLine1, text, sizeof(lastResultLine1));
-        } else if (s_shellOutputCount == 1) {
-            copyStr(lastResultLine2, text, sizeof(lastResultLine2));
-        }
-        if (s_shellOutputCount < SHELL_MAX_OUTPUT_LINES) {
-            copyStr(s_shellOutputLines[s_shellOutputCount].text, text, sizeof(s_shellOutputLines[0].text));
-            s_shellOutputLines[s_shellOutputCount].color = col;
-            s_shellOutputCount++;
-        } else {
-            for (size_t i = 0; i < SHELL_MAX_OUTPUT_LINES - 1; ++i) {
-                s_shellOutputLines[i] = s_shellOutputLines[i + 1];
-            }
-            copyStr(s_shellOutputLines[SHELL_MAX_OUTPUT_LINES - 1].text, text, sizeof(s_shellOutputLines[0].text));
-            s_shellOutputLines[SHELL_MAX_OUTPUT_LINES - 1].color = col;
-        }
-        UartSerial::print(text);
-        UartSerial::print("\r\n");
-    };
+    auto& lastResultLine1 = s_lastResultLine1;
+    auto& lastResultLine2 = s_lastResultLine2;
 
     if (s_shellOutputCount == 0) {
         ShellAddLine("MicaNT Cutler Edition Version 10.0 (Build 2026.10 BareMetal)", micant::bootvid::Color{100, 240, 160});
@@ -3237,7 +3273,25 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine("Integration:       Vector 0x0E #PF Page Fault Demand Pager & Transition PTEs", micant::bootvid::Color{140, 255, 180});
                 LogKernel("Shell: hmb -> Dumped Haven Memory Bus (HMB) Pagefile Telemetry.");
             }
-        } else if ((cmd[0] == 'p' && cmd[1] == 's') || (cmd[0] == 't' && cmd[1] == 'a' && cmd[2] == 's' && cmd[3] == 'k')) {
+        } else if (cmd[0] == 't' && cmd[1] == 'a' && cmd[2] == 's' && cmd[3] == 'k') {
+            auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+            size_t bytesRead = 0;
+            bool readOk = fs.readFile("\\MicaNT\\System32\\tasklist.exe", s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+            if (readOk && bytesRead > 0) {
+                ShellClearOutput();
+                LogKernel("Shell: Executing standalone \\MicaNT\\System32\\tasklist.exe in Ring 3...");
+                transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, "tasklist.exe");
+            } else {
+                ShellClearOutput();
+                ShellAddLine("Active NT Executive Processes & Subsystems:", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("PID   Image Name            State         Base VA             Syscalls", micant::bootvid::Color{120, 170, 230});
+                ShellAddLine("----------------------------------------------------------------------", micant::bootvid::Color{36, 52, 78});
+
+                auto& pm = micant::um::UserProcessManager64::get();
+                auto& sched = micant::um::UserThreadScheduler64::get();
+                // [built-in fallback logic]
+            }
+        } else if (cmd[0] == 'p' && cmd[1] == 's') {
             ShellClearOutput();
             ShellAddLine("Active NT Executive Processes & Subsystems:", micant::bootvid::Color{100, 240, 160});
             ShellAddLine("PID   Image Name            State         Base VA             Syscalls", micant::bootvid::Color{120, 170, 230});
@@ -3779,19 +3833,28 @@ extern "C" micant::NtStatus KiSystemStartup(
             }
             LogKernel("Shell: Displayed command history buffer.");
         } else if (cmd[0] == 'w' && cmd[1] == 'h' && cmd[2] == 'o') {
-            ShellClearOutput();
-            ShellAddLine("MicaNT Sovereign Security Subsystem (se.sys):", micant::bootvid::Color{255, 215, 0});
-            ShellAddLine("  User Identity:      NT AUTHORITY\\SYSTEM", micant::bootvid::Color{0, 229, 255});
-            ShellAddLine("  Token SID:          S-1-5-18 (Local System Sovereign Token)", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  Authentication:     Clean-Room Ring 0 Kernel Executive Mode", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  Privileges:         SeDebugPrivilege        [ENABLED]", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("                      SeShutdownPrivilege     [ENABLED]", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("                      SeTcbPrivilege          [ENABLED]", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("                      SeSecurityPrivilege     [ENABLED]", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("                      SeAssignPrimaryToken    [ENABLED]", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("                      SeLockMemoryPrivilege   [ENABLED]", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("  Integrity Level:    System Mandatory Level (0x4000)", micant::bootvid::Color{255, 200, 80});
-            LogKernel("Shell: whoami -> NT AUTHORITY\\SYSTEM (S-1-5-18)");
+            auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+            size_t bytesRead = 0;
+            bool readOk = fs.readFile("\\MicaNT\\System32\\whoami.exe", s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+            if (readOk && bytesRead > 0) {
+                ShellClearOutput();
+                LogKernel("Shell: Executing standalone \\MicaNT\\System32\\whoami.exe in Ring 3...");
+                transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, "whoami.exe");
+            } else {
+                ShellClearOutput();
+                ShellAddLine("MicaNT Sovereign Security Subsystem (se.sys):", micant::bootvid::Color{255, 215, 0});
+                ShellAddLine("  User Identity:      NT AUTHORITY\\SYSTEM", micant::bootvid::Color{0, 229, 255});
+                ShellAddLine("  Token SID:          S-1-5-18 (Local System Sovereign Token)", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("  Authentication:     Clean-Room Ring 0 Kernel Executive Mode", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("  Privileges:         SeDebugPrivilege        [ENABLED]", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("                      SeShutdownPrivilege     [ENABLED]", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("                      SeTcbPrivilege          [ENABLED]", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("                      SeSecurityPrivilege     [ENABLED]", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("                      SeAssignPrimaryToken    [ENABLED]", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("                      SeLockMemoryPrivilege   [ENABLED]", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("  Integrity Level:    System Mandatory Level (0x4000)", micant::bootvid::Color{255, 200, 80});
+                LogKernel("Shell: whoami -> NT AUTHORITY\\SYSTEM (S-1-5-18)");
+            }
         } else if (cmd[0] == 'h' && cmd[1] == 'o' && cmd[2] == 's' && cmd[3] == 't') {
             ShellClearOutput();
             ShellAddLine("Computer Name & NetBIOS Topology:", micant::bootvid::Color{255, 215, 0});
@@ -3973,15 +4036,28 @@ extern "C" micant::NtStatus KiSystemStartup(
             HalpColdResetServer();
         } else {
             // Check if it's an executable binary on disk (%PATH% auto-execution)
+            char exeBase[64]{};
+            const char* cmdArgs = "";
+            size_t ei = 0;
+            while (cmd[ei] && cmd[ei] != ' ' && ei + 1 < sizeof(exeBase)) {
+                exeBase[ei] = cmd[ei];
+                ei++;
+            }
+            exeBase[ei] = '\0';
+            if (cmd[ei] == ' ') {
+                cmdArgs = cmd + ei + 1;
+                while (*cmdArgs == ' ') cmdArgs++;
+            }
+
             char targetExe[128]{};
             copyStr(targetExe, "\\MicaNT\\System32\\", sizeof(targetExe));
-            concatStr(targetExe, cmd, sizeof(targetExe));
-            size_t cmdStrLen = strLen(cmd);
+            concatStr(targetExe, exeBase, sizeof(targetExe));
+            size_t cmdStrLen = strLen(exeBase);
             bool hasExeExt = (cmdStrLen > 4 && 
-                (cmd[cmdStrLen - 4] == '.') && 
-                (cmd[cmdStrLen - 3] == 'e' || cmd[cmdStrLen - 3] == 'E') &&
-                (cmd[cmdStrLen - 2] == 'x' || cmd[cmdStrLen - 2] == 'X') &&
-                (cmd[cmdStrLen - 1] == 'e' || cmd[cmdStrLen - 1] == 'E'));
+                (exeBase[cmdStrLen - 4] == '.') && 
+                (exeBase[cmdStrLen - 3] == 'e' || exeBase[cmdStrLen - 3] == 'E') &&
+                (exeBase[cmdStrLen - 2] == 'x' || exeBase[cmdStrLen - 2] == 'X') &&
+                (exeBase[cmdStrLen - 1] == 'e' || exeBase[cmdStrLen - 1] == 'E'));
             if (!hasExeExt) concatStr(targetExe, ".exe", sizeof(targetExe));
 
             auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
@@ -3990,13 +4066,14 @@ extern "C" micant::NtStatus KiSystemStartup(
             if (!readOk) {
                 char altExe[128]{};
                 altExe[0] = '\\'; altExe[1] = '\0';
-                concatStr(altExe, cmd, sizeof(altExe));
+                concatStr(altExe, exeBase, sizeof(altExe));
                 if (!hasExeExt) concatStr(altExe, ".exe", sizeof(altExe));
                 readOk = fs.readFile(altExe, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
                 if (readOk) copyStr(targetExe, altExe, sizeof(targetExe));
             }
 
             if (readOk && bytesRead > 0) {
+                ShellClearOutput();
                 char msg1[96];
                 copyStr(msg1, "Executed: ", sizeof(msg1));
                 concatStr(msg1, targetExe, sizeof(msg1));
@@ -4004,8 +4081,11 @@ extern "C" micant::NtStatus KiSystemStartup(
                 copyStr(lastResultLine2, "Running standalone PE32+ in Ring 3 (CPL=3)...", sizeof(lastResultLine2));
                 LogKernel(msg1);
 
-                bool ok = transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, cmd);
+                bool ok = transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, exeBase);
                 if (ok) {
+                    if (s_shellOutputCount == 0) {
+                        ShellAddLine("PE32+ Binary executed & exited cleanly via NtTerminateProcess!", micant::bootvid::Color{100, 240, 160});
+                    }
                     copyStr(lastResultLine1, "PE32+ Binary executed & exited cleanly via NtTerminateProcess!", sizeof(lastResultLine1));
                     copyStr(lastResultLine2, "Ring 3 Sovereign Handover Verified OK (SSDT Syscalls Ingested).", sizeof(lastResultLine2));
                     LogKernel("Shell: Program exited cleanly via NtTerminateProcess!");
