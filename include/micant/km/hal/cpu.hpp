@@ -79,7 +79,7 @@ inline constexpr uint32_t MSR_X2APIC_TCCR              = 0x00000839;
 inline constexpr uint32_t MSR_X2APIC_TDCR              = 0x0000083E;
 
 static inline uint64_t cpuRdmsr(uint32_t msr) noexcept {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
     uint32_t low = 0, high = 0;
     __asm__ __volatile__("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
     return (static_cast<uint64_t>(high) << 32) | low;
@@ -89,7 +89,7 @@ static inline uint64_t cpuRdmsr(uint32_t msr) noexcept {
 }
 
 static inline void cpuWrmsr(uint32_t msr, uint64_t val) noexcept {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
     uint32_t low = static_cast<uint32_t>(val & 0xFFFFFFFF);
     uint32_t high = static_cast<uint32_t>((val >> 32) & 0xFFFFFFFF);
     __asm__ __volatile__("wrmsr" : : "c"(msr), "a"(low), "d"(high));

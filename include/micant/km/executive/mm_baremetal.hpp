@@ -239,7 +239,7 @@ public:
         pt[ptIdx] = physAddr | flags | PTE_PRESENT;
 
         // Invalidate TLB for this virtual address and reload CR3 to flush paging-structure caches
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
         uint64_t currentCr3 = 0;
         __asm__ __volatile__("mov %%cr3, %0" : "=r"(currentCr3));
@@ -281,7 +281,7 @@ public:
             BareMetalPfnAllocator::get().freePage(physAddr);
         }
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
 #endif
         return true;
@@ -456,7 +456,7 @@ public:
                 pteFlags |= PTE_WRITABLE;
             }
             if (!(protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
                 uint32_t eferLo = 0, eferHi = 0;
                 __asm__ __volatile__("rdmsr" : "=a"(eferLo), "=d"(eferHi) : "c"(0xC0000080));
                 if (eferLo & (1u << 11)) { // Only set NX bit if EFER.NXE is enabled in MSR
@@ -647,7 +647,7 @@ public:
 
         // Fetch current CR3
         uint64_t cr3 = 0;
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
 #endif
         uint64_t cr3Phys = cr3 & PTE_PHYS_MASK;
@@ -671,7 +671,7 @@ public:
                 pteFlags |= PTE_WRITABLE;
             }
             if (!(vad->protection & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
                 uint32_t eferLo = 0, eferHi = 0;
                 __asm__ __volatile__("rdmsr" : "=a"(eferLo), "=d"(eferHi) : "c"(0xC0000080));
                 if (eferLo & (1u << 11)) {
@@ -716,7 +716,7 @@ public:
      */
     NtStatus allocateVirtualMemory(uint64_t& baseAddress, size_t size, uint32_t allocType, uint32_t protect) noexcept {
         uint64_t cr3 = 0;
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
 #endif
         uint64_t cr3Phys = cr3 & PTE_PHYS_MASK;
@@ -733,7 +733,7 @@ public:
      */
     NtStatus freeVirtualMemory(uint64_t baseAddress, size_t size, uint32_t freeType) noexcept {
         uint64_t cr3 = 0;
-#if defined(__x86_64__)
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
         __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
 #endif
         uint64_t cr3Phys = cr3 & PTE_PHYS_MASK;
