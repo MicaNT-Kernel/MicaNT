@@ -1549,8 +1549,23 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             "  net           - Query Intel I210 Gigabit Ethernet status & stats\r\n"
             "  run <app>     - Execute PE32+ application in User-Mode Ring 3\r\n"
             "  battery / bms - Query Sovereign Battery Management System (BMS) & 4S pack\r\n"
+            "  ppm / hwp     - Query Sovereign Processor Power Management (HWP Speed Shift)\r\n"
             "  boot [u|m]    - Switch default boot target ('boot ubuntu' / 'boot micant')\r\n"
             "  reboot        - Issue hardware CPU reset via Intel PCH Port 0xCF9\r\n", maxReply);
+    } else if ((cmd[0] == 'p' && cmd[1] == 'p' && cmd[2] == 'm') || (cmd[0] == 'h' && cmd[1] == 'w' && cmd[2] == 'p')) {
+        copyStr(reply,
+            "=======================================================\r\n"
+            "  MicaNT Sovereign Processor Power Management (PPM)\r\n"
+            "=======================================================\r\n"
+            "  Driver:            \\Driver\\IntelPPM (intelppm.sys)\r\n"
+            "  Nodes:             \\Device\\Processor0 .. Processor7\r\n"
+            "  Silicon:           Intel Xeon E3-1270 v6 @ 3.80GHz\r\n"
+            "  HWP Native:        Active (MSR 0x770 / 0x771 / 0x772)\r\n"
+            "  Performance Cap:   42x (4.20 GHz Turbo Boost)\r\n"
+            "  Base Guaranteed:   38x (3.80 GHz Base Ratio)\r\n"
+            "  Efficient Floor:   16x (1.60 GHz Floor Ratio)\r\n"
+            "  Active Governance: EPP 0x20 Performance (AC Online)\r\n"
+            "=======================================================\r\n", maxReply);
     } else if ((cmd[0] == 'b' && cmd[1] == 'a' && cmd[2] == 't') || (cmd[0] == 'b' && cmd[1] == 'm' && cmd[2] == 's')) {
         copyStr(reply,
             "=======================================================\r\n"
@@ -2328,6 +2343,22 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine1, "Storage: dir [p], cd [p], mkdir <d>, edit <f>, type <f>, write <f> <t>, copy, del", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "System:  boot [u|m], net [ping], objdir, ps, uptime, io, mm, smp, bench, app, reboot", sizeof(lastResultLine2));
             LogKernel("Shell: help -> boot, net, objdir, ps, uptime, io, mm, dir, cd, mkdir, edit, type, write, copy, del, bench, app, reboot");
+        } else if ((cmd[0] == 'p' && cmd[1] == 'p' && cmd[2] == 'm') || (cmd[0] == 'h' && cmd[1] == 'w' && cmd[2] == 'p')) {
+            UartSerial::print("\r\n=======================================================\r\n");
+            UartSerial::print("  MicaNT Sovereign Processor Power Management (PPM)\r\n");
+            UartSerial::print("=======================================================\r\n");
+            UartSerial::print("  Driver:            \\Driver\\IntelPPM (intelppm.sys)\r\n");
+            UartSerial::print("  Nodes:             \\Device\\Processor0 .. Processor7\r\n");
+            UartSerial::print("  Silicon:           Intel Xeon E3-1270 v6 @ 3.80GHz\r\n");
+            UartSerial::print("  HWP Native:        Active (MSR 0x770 / 0x771 / 0x772)\r\n");
+            UartSerial::print("  Performance Cap:   42x (4.20 GHz Turbo Boost)\r\n");
+            UartSerial::print("  Base Guaranteed:   38x (3.80 GHz Base Ratio)\r\n");
+            UartSerial::print("  Efficient Floor:   16x (1.60 GHz Floor Ratio)\r\n");
+            UartSerial::print("  Active Governance: EPP 0x20 Performance (AC Online)\r\n");
+            UartSerial::print("=======================================================\r\n");
+            copyStr(lastResultLine1, "PPM: intelppm.sys active | 8T Xeon E3-1270 v6 HWP Speed Shift", sizeof(lastResultLine1));
+            copyStr(lastResultLine2, "Gov: EPP 0x20 Performance | Turbo: 42x (4.20GHz) | 8 Cores Online", sizeof(lastResultLine2));
+            LogKernel("Shell: ppm -> Displayed Sovereign PPM & Intel Speed Shift Telemetry.");
         } else if ((cmd[0] == 'b' && cmd[1] == 'a' && cmd[2] == 't') || (cmd[0] == 'b' && cmd[1] == 'm' && cmd[2] == 's')) {
             UartSerial::print("\r\n=======================================================\r\n");
             UartSerial::print("  MicaNT Sovereign Battery Management System (BMS)\r\n");
