@@ -14,7 +14,9 @@ EFI_SOURCE = os.path.join(REPO_ROOT, r"build\esp\EFI\BOOT\BOOTX64.EFI")
 KRNL_SOURCE = os.path.join(REPO_ROOT, r"build\ntoskrnl.exe")
 APP_SOURCE = os.path.join(REPO_ROOT, r"build\app.exe")
 BENCH_SOURCE = os.path.join(REPO_ROOT, r"build\bench.exe")
-CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\prismx_3d_cube_app.exe")
+CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\bin\prismx_3d_cube_app.exe")
+if not os.path.exists(CUBE_SOURCE):
+    CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\prismx_3d_cube_app.exe")
 HOST = os.environ.get("MICANT_TARGET_HOST", "147.135.1.229")
 USER = os.environ.get("MICANT_TARGET_USER", "ubuntu")
 KEY_PATH = os.environ.get("MICANT_SSH_KEY", r"C:\Users\admin\.ssh\micant_ci_key")
@@ -122,16 +124,17 @@ def run_local_build():
 
 def get_ssh():
     k = paramiko.RSAKey.from_private_key_file(KEY_PATH)
-    for _ in range(10):
+    for _ in range(20):
         try:
             s = socket.socket()
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            port = random.randint(53000, 64000)
+            port = random.randint(49152, 65535)
             s.bind(('0.0.0.0', port))
+            s.settimeout(5.0)
             s.connect((HOST, 22))
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(HOST, 22, USER, pkey=k, sock=s)
+            client.connect(HOST, 22, USER, pkey=k, sock=s, timeout=5)
             return client
         except OSError:
             pass

@@ -533,7 +533,7 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
                 for (size_t i = 0; i < cpy; ++i) {
                     char c = str[i];
                     printBuf[i] = (c >= 0x20 && c <= 0x7E) ? c : ' ';
-                    UartSerial::putc(c);
+                    UartSerial::putChar(c);
                 }
                 UartSerial::print("\r\n");
                 char dispLog[144] = "[User Output] ";
@@ -1394,7 +1394,7 @@ static bool transitionToRing3(
     enableUserPagingForRange(reinterpret_cast<uint64_t>(s_userPebTebPage), sizeof(s_userPebTebPage));
 
     auto& vad = micant::km::mm_baremetal::BareMetalVadTable::get();
-    vad.registerRegion(reinterpret_cast<uint64_t>(s_userImageBuffer), sizeof(s_userImageBuffer), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
+    vad.registerRegion(reinterpret_cast<uint64_t>(s_userImageBuffer), sizeof(s_userImageBuffer), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_EXECUTE_READWRITE);
     vad.registerRegion(reinterpret_cast<uint64_t>(s_userSurfaceBuffer), sizeof(s_userSurfaceBuffer), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
     vad.registerRegion(reinterpret_cast<uint64_t>(s_userHeapBuffer), sizeof(s_userHeapBuffer), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
     vad.registerRegion(reinterpret_cast<uint64_t>(s_userTrampolinePage), sizeof(s_userTrampolinePage), micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_EXECUTE_READWRITE);

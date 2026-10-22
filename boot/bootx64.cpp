@@ -1302,13 +1302,13 @@ struct RealHardwareTelemetry {
 // ============================================================================
 // Pre-loaded System Images & FAT32 Staging Buffers
 // ============================================================================
-alignas(4096) static uint8_t s_userPeFileBuffer[8388608]; // 8 MB
+alignas(4096) static uint8_t s_userPeFileBuffer[16777216]; // 16 MB
 static size_t s_userPeFileSize = 0;
 static bool s_userPeFileFromDisk = false;
 static micant::um::UserLoadedImageInfo s_loadedPeInfo{};
 
-alignas(4096) static uint8_t s_ntoskrnlFileBuffer[4194304];
-alignas(4096) static uint8_t s_ntoskrnlImageBuffer[33554432]; // 32 MB Kernel Image Buffer
+alignas(4096) static uint8_t s_ntoskrnlFileBuffer[16777216]; // 16 MB
+alignas(4096) static uint8_t s_ntoskrnlImageBuffer[67108864]; // 64 MB Kernel Image Buffer
 static size_t s_ntoskrnlFileSize = 0;
 static bool s_ntoskrnlLoadedFromDisk = false;
 static uint64_t s_ntoskrnlEntryPoint = 0;
@@ -2253,6 +2253,13 @@ extern "C" micant::uefi::EfiStatus EfiMain(
                 micant::bootloader::UartSerial::print(" bytes. EntryPoint: 0x");
                 micant::bootloader::UartSerial::printHex64(micant::bootloader::s_ntoskrnlEntryPoint);
                 micant::bootloader::UartSerial::print("\r\n");
+            } else {
+                micant::bootloader::UartSerial::print("[MicaNT Boot] ERROR: loadAndMapKernelImage failed with status 0x");
+                micant::bootloader::UartSerial::printHex32(static_cast<uint32_t>(st));
+                micant::bootloader::UartSerial::print("\r\n");
+                if (systemTable->conOut) {
+                    systemTable->conOut->outputString(systemTable->conOut, L"[MicaNT Boot] ERROR: loadAndMapKernelImage failed!\r\n");
+                }
             }
         }
     }

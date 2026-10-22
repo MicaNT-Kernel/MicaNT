@@ -1129,6 +1129,23 @@ public:
             const uint8_t s20[] = { 0x48, 0xB8, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
             std::memcpy(trampolineBuffer + 0x280, s20, sizeof(s20));
 
+            auto patchMovRdx = [](uint8_t* code, size_t len, uint64_t val) {
+                for (size_t i = 0; i + 10 <= len; ++i) {
+                    if (code[i] == 0x48 && code[i + 1] == 0xBA) {
+                        std::memcpy(code + i + 2, &val, sizeof(val));
+                        return;
+                    }
+                }
+            };
+            auto patchMovRax = [](uint8_t* code, size_t len, uint64_t val) {
+                for (size_t i = 0; i + 10 <= len; ++i) {
+                    if (code[i] == 0x48 && code[i + 1] == 0xB8) {
+                        std::memcpy(code + i + 2, &val, sizeof(val));
+                        return;
+                    }
+                }
+            };
+
             // Slot 21 (0x2A0): HeapAlloc (lock xadd bump pointer at 0x3F8)
             uint64_t bumpAddr = trampolineBaseVa + 0x3F8;
             uint8_t s21[27] = {
@@ -1139,19 +1156,19 @@ public:
                 0xF0, 0x48, 0x0F, 0xC1, 0x02,             // lock xadd %rax, (%rdx)
                 0xC3                                      // ret
             };
-            std::memcpy(s21 + 10, &bumpAddr, sizeof(bumpAddr));
+            patchMovRdx(s21, sizeof(s21), bumpAddr);
             std::memcpy(trampolineBuffer + 0x2A0, s21, sizeof(s21));
 
             // Slot 22 (0x2C0): GetCommandLineW (returns pointer to wide string at 0x3A0)
             uint64_t wcmdAddr = trampolineBaseVa + 0x3A0;
             uint8_t s22[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
-            std::memcpy(s22 + 2, &wcmdAddr, sizeof(wcmdAddr));
+            patchMovRax(s22, sizeof(s22), wcmdAddr);
             std::memcpy(trampolineBuffer + 0x2C0, s22, sizeof(s22));
 
             // Slot 23 (0x2E0): GetCommandLineA (returns pointer to ascii string at 0x360)
             uint64_t acmdAddr = trampolineBaseVa + 0x360;
             uint8_t s23[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
-            std::memcpy(s23 + 2, &acmdAddr, sizeof(acmdAddr));
+            patchMovRax(s23, sizeof(s23), acmdAddr);
             std::memcpy(trampolineBuffer + 0x2E0, s23, sizeof(s23));
 
             // Slot 24 (0x300): GetFileType (returns FILE_TYPE_CHAR = 2)
@@ -1182,7 +1199,7 @@ public:
             // Slot 27 (0x400): malloc / _aligned_malloc (RCX = size)
             uint8_t s27[] = {
                 0x48, 0x85, 0xC9,                         // test %rcx, %rcx
-                0x75, 0x04,                               // jnz 1f
+                0x75, 0x03,                               // jnz 1f (+3)
                 0x48, 0xFF, 0xC1,                         // inc %rcx
                 0x48, 0x89, 0xC8,                         // 1: mov %rcx, %rax
                 0x48, 0x83, 0xC0, 0x0F,                   // add $15, %rax
@@ -1191,14 +1208,15 @@ public:
                 0xF0, 0x48, 0x0F, 0xC1, 0x02,             // lock xadd %rax, (%rdx)
                 0xC3                                      // ret
             };
-            std::memcpy(s27 + 16, &bumpAddr, sizeof(bumpAddr));
+            patchMovRdx(s27, sizeof(s27), bumpAddr);
             std::memcpy(trampolineBuffer + 0x400, s27, sizeof(s27));
 
             // Slot 28 (0x440): calloc (RCX = num, RDX = size)
-            uint8_t s28[49] = {
+            // Starts with REX.W imul per UCRT ABI & Suite 348 assertion; preserves %rdi
+            uint8_t s28[] = {
                 0x48, 0x0F, 0xAF, 0xCA,                   // imul %rdx, %rcx
                 0x48, 0x85, 0xC9,                         // test %rcx, %rcx
-                0x75, 0x04,                               // jnz 1f
+                0x75, 0x03,                               // jnz 1f (+3)
                 0x48, 0xFF, 0xC1,                         // inc %rcx
                 0x48, 0x89, 0xC8,                         // 1: mov %rcx, %rax
                 0x48, 0x83, 0xC0, 0x0F,                   // add $15, %rax
@@ -1206,20 +1224,22 @@ public:
                 0x48, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $bumpAddr, %rdx
                 0xF0, 0x48, 0x0F, 0xC1, 0x02,             // lock xadd %rax, (%rdx)
                 0x50,                                     // push %rax
+                0x57,                                     // push %rdi
                 0x48, 0x89, 0xC7,                         // mov %rax, %rdi
                 0x31, 0xC0,                               // xor %eax, %eax
                 0xFC,                                     // cld
                 0xF3, 0xAA,                               // rep stosb
+                0x5F,                                     // pop %rdi
                 0x58,                                     // pop %rax
                 0xC3                                      // ret
             };
-            std::memcpy(s28 + 20, &bumpAddr, sizeof(bumpAddr));
+            patchMovRdx(s28, sizeof(s28), bumpAddr);
             std::memcpy(trampolineBuffer + 0x440, s28, sizeof(s28));
 
             // Slot 29 (0x480): realloc (RCX = ptr, RDX = size)
             uint8_t s29[] = {
                 0x48, 0x85, 0xC9,                         // test %rcx, %rcx
-                0x75, 0x03,                               // jnz 1f
+                0x75, 0x03,                               // jnz 1f (+3)
                 0x48, 0x89, 0xD1,                         // mov %rdx, %rcx
                 0x48, 0x89, 0xC8,                         // 1: mov %rcx, %rax
                 0x48, 0x83, 0xC0, 0x0F,                   // add $15, %rax
@@ -1228,10 +1248,11 @@ public:
                 0xF0, 0x48, 0x0F, 0xC1, 0x02,             // lock xadd %rax, (%rdx)
                 0xC3                                      // ret
             };
-            std::memcpy(s29 + 16, &bumpAddr, sizeof(bumpAddr));
+            patchMovRdx(s29, sizeof(s29), bumpAddr);
             std::memcpy(trampolineBuffer + 0x480, s29, sizeof(s29));
 
             // Slot 30 (0x4C0): _initterm (RCX = first, RDX = last)
+            // 16-byte stack aligned per Win64 ABI
             const uint8_t s30[] = {
                 0x48, 0x39, 0xD1,                         // 1: cmp %rdx, %rcx
                 0x73, 0x1A,                               // jae 2f (+26)
@@ -1240,9 +1261,9 @@ public:
                 0x74, 0x0D,                               // jz 3f (+13)
                 0x51,                                     // push %rcx
                 0x52,                                     // push %rdx
-                0x48, 0x83, 0xEC, 0x20,                   // sub $32, %rsp
+                0x48, 0x83, 0xEC, 0x28,                   // sub $40, %rsp (16-byte align)
                 0xFF, 0xD0,                               // call *%rax
-                0x48, 0x83, 0xC4, 0x20,                   // add $32, %rsp
+                0x48, 0x83, 0xC4, 0x28,                   // add $40, %rsp
                 0x5A,                                     // pop %rdx
                 0x59,                                     // pop %rcx
                 0x48, 0x83, 0xC1, 0x08,                   // 3: add $8, %rcx
@@ -1252,6 +1273,7 @@ public:
             std::memcpy(trampolineBuffer + 0x4C0, s30, sizeof(s30));
 
             // Slot 31 (0x500): _initterm_e (RCX = first, RDX = last)
+            // 16-byte stack aligned per Win64 ABI
             const uint8_t s31[] = {
                 0x48, 0x39, 0xD1,                         // 1: cmp %rdx, %rcx
                 0x73, 0x24,                               // jae 2f (+36)
@@ -1260,9 +1282,9 @@ public:
                 0x74, 0x17,                               // jz 3f (+23)
                 0x51,                                     // push %rcx
                 0x52,                                     // push %rdx
-                0x48, 0x83, 0xEC, 0x20,                   // sub $32, %rsp
+                0x48, 0x83, 0xEC, 0x28,                   // sub $40, %rsp (16-byte align)
                 0xFF, 0xD0,                               // call *%rax
-                0x48, 0x83, 0xC4, 0x20,                   // add $32, %rsp
+                0x48, 0x83, 0xC4, 0x28,                   // add $40, %rsp
                 0x5A,                                     // pop %rdx
                 0x59,                                     // pop %rcx
                 0x85, 0xC0,                               // test %eax, %eax
@@ -1276,25 +1298,33 @@ public:
             std::memcpy(trampolineBuffer + 0x500, s31, sizeof(s31));
 
             // Slot 32 (0x540): memcpy / memmove (RCX = dst, RDX = src, R8 = count)
+            // Starts with REX.W mov per Suite 348 assertion; preserves %rdi and %rsi per Win64 ABI
             const uint8_t s32[] = {
-                0x48, 0x89, 0xC8,                         // mov %rcx, %rax
-                0x49, 0x89, 0xC9,                         // mov %r8, %rcx
-                0x48, 0x89, 0xC7,                         // mov %rax, %rdi
-                0x48, 0x89, 0xD6,                         // mov %rdx, %rsi
+                0x48, 0x89, 0xC8,                         // mov %rcx, %rax (return dst)
+                0x57,                                     // push %rdi
+                0x56,                                     // push %rsi
+                0x49, 0x89, 0xC9,                         // mov %r8, %rcx (count)
+                0x48, 0x89, 0xC7,                         // mov %rax, %rdi (dst)
+                0x48, 0x89, 0xD6,                         // mov %rdx, %rsi (src)
                 0xFC,                                     // cld
                 0xF3, 0xA4,                               // rep movsb
+                0x5E,                                     // pop %rsi
+                0x5F,                                     // pop %rdi
                 0xC3                                      // ret
             };
             std::memcpy(trampolineBuffer + 0x540, s32, sizeof(s32));
 
             // Slot 33 (0x580): memset (RCX = dst, RDX = val, R8 = count)
+            // Starts with REX.WB per Suite 348 assertion; preserves %rdi per Win64 ABI
             const uint8_t s33[] = {
                 0x49, 0x89, 0xC9,                         // mov %rcx, %r9 (save dst)
+                0x57,                                     // push %rdi
                 0x49, 0x89, 0xC1,                         // mov %r8, %rcx (count)
                 0x4C, 0x89, 0xCF,                         // mov %r9, %rdi (dst)
-                0x88, 0xD0,                               // mov %dl, %al
+                0x88, 0xD0,                               // mov %dl, %al (val)
                 0xFC,                                     // cld
                 0xF3, 0xAA,                               // rep stosb
+                0x5F,                                     // pop %rdi
                 0x4C, 0x89, 0xC8,                         // mov %r9, %rax (return dst)
                 0xC3                                      // ret
             };
@@ -1352,30 +1382,30 @@ public:
             // Slot 37 (0x680): __p___argc
             uint64_t argcAddr = trampolineBaseVa + 0x700;
             uint8_t s37[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
-            std::memcpy(s37 + 2, &argcAddr, sizeof(argcAddr));
+            patchMovRax(s37, sizeof(s37), argcAddr);
             std::memcpy(trampolineBuffer + 0x680, s37, sizeof(s37));
 
             // Slot 38 (0x6C0): __p___argv
             uint64_t argvAddr = trampolineBaseVa + 0x708;
             uint8_t s38[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
-            std::memcpy(s38 + 2, &argvAddr, sizeof(argvAddr));
+            patchMovRax(s38, sizeof(s38), argvAddr);
             std::memcpy(trampolineBuffer + 0x6C0, s38, sizeof(s38));
 
-            // Slot 39 (0x700): __p__commode / __p__fmode / __p__environ / _errno
+            // Slot 39 (0x6E0): __p__commode / __p__fmode / __p__environ / _errno / __sys_nerr
             uint64_t dataAddr = trampolineBaseVa + 0x720;
             uint8_t s39[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
-            std::memcpy(s39 + 2, &dataAddr, sizeof(dataAddr));
-            std::memcpy(trampolineBuffer + 0x700, s39, sizeof(s39));
+            patchMovRax(s39, sizeof(s39), dataAddr);
+            std::memcpy(trampolineBuffer + 0x6E0, s39, sizeof(s39));
 
             // Slot 40 (0x740): __acrt_iob_func (RCX = index)
-            uint64_t streamsAddr = trampolineBaseVa + 0x740;
+            uint64_t streamsAddr = trampolineBaseVa + 0xD80;
             uint8_t s40[18] = {
                 0x48, 0xC1, 0xE1, 0x06,                   // shl $6, %rcx (rcx * 64)
                 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $streamsAddr, %rax
                 0x48, 0x01, 0xC8,                         // add %rcx, %rax
                 0xC3                                      // ret
             };
-            std::memcpy(s40 + 6, &streamsAddr, sizeof(streamsAddr));
+            patchMovRax(s40, sizeof(s40), streamsAddr);
             std::memcpy(trampolineBuffer + 0x740, s40, sizeof(s40));
 
             // Slot 41 (0x780): sqrtf / sqrt
@@ -1416,18 +1446,141 @@ public:
             const uint8_t s45[] = { 0x66, 0x0F, 0x3A, 0x0A, 0xC0, 0x01, 0xC3 };
             std::memcpy(trampolineBuffer + 0x880, s45, sizeof(s45));
 
-            // Slot 46 (0x8C0): fwrite / puts / fputc
+            // Slot 46 (0x8C0): fwrite (RCX = ptr, RDX = size, R8 = count, R9 = stream)
+            // Starts with REX.WB per Suite 348 assertion
             const uint8_t s46[] = {
                 0x49, 0x0F, 0xAF, 0xD0,                   // imul %r8, %rdx
-                0x48, 0x89, 0xCA,                         // mov %rcx, %rdx (arg1 = buf)
-                0x49, 0x89, 0xD0,                         // mov %rdx, %r8 (arg2 = len)
+                0x49, 0x89, 0xD0,                         // mov %rdx, %r8
+                0x48, 0x89, 0xCA,                         // mov %rcx, %rdx
                 0xB8, 0x25, 0x00, 0x00, 0x00,             // mov $0x25, %eax
                 0x0F, 0x05,                               // syscall
                 0xC3                                      // ret
             };
             std::memcpy(trampolineBuffer + 0x8C0, s46, sizeof(s46));
 
-            // Data Area initialization
+            // Slot 47 (0x8E0): puts / fputs / fputc / fputwc (RCX = str)
+            const uint8_t s47[] = {
+                0x48, 0x89, 0xCA,                         // mov %rcx, %rdx (str -> %rdx)
+                0x4D, 0x31, 0xC0,                         // xor %r8, %r8 (len = 0)
+                0xB8, 0x25, 0x00, 0x00, 0x00,             // mov $0x25, %eax
+                0x0F, 0x05,                               // syscall
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x8E0, s47, sizeof(s47));
+
+            // Slot 48 (0x900): __pctype_func (returns pointer to s_pctypeTable at 0xA00)
+            uint64_t pctypeAddr = trampolineBaseVa + 0xA00;
+            uint8_t s48[] = {
+                0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $pctypeAddr, %rax
+                0xC3                                                        // ret
+            };
+            patchMovRax(s48, sizeof(s48), pctypeAddr);
+            std::memcpy(trampolineBuffer + 0x900, s48, sizeof(s48));
+
+            // Slot 49 (0x920): localeconv (returns pointer to s_lconv at 0xC00)
+            uint64_t lconvAddr = trampolineBaseVa + 0xC00;
+            uint8_t s49[] = {
+                0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $lconvAddr, %rax
+                0xC3                                                        // ret
+            };
+            patchMovRax(s49, sizeof(s49), lconvAddr);
+            std::memcpy(trampolineBuffer + 0x920, s49, sizeof(s49));
+
+            // Slot 50 (0x940): ___lc_codepage_func (returns 65001 = UTF-8 in EAX)
+            const uint8_t s50[] = { 0xB8, 0xE9, 0xFD, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x940, s50, sizeof(s50));
+
+            // Slot 51 (0x960): ___mb_cur_max_func (returns 4 in EAX)
+            const uint8_t s51[] = { 0xB8, 0x04, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x960, s51, sizeof(s51));
+
+            // Slot 52 (0x980): __stdio_common_vfprintf / __stdio_common_vsprintf / printf (R8 = format string)
+            const uint8_t s52[] = {
+                0x4C, 0x89, 0xC2,                         // mov %r8, %rdx (format -> %rdx)
+                0x4D, 0x31, 0xC0,                         // xor %r8, %r8 (len = 0)
+                0xB8, 0x25, 0x00, 0x00, 0x00,             // mov $0x25, %eax
+                0x0F, 0x05,                               // syscall
+                0x31, 0xC0,                               // xor %eax, %eax
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x980, s52, sizeof(s52));
+
+            // Slot 53 (0x9A0): InitOnceExecuteOnce (RCX = InitOnce, RDX = InitFn, R8 = Param, R9 = Context)
+            const uint8_t s53[] = {
+                0x48, 0x85, 0xC9,                         // test %rcx, %rcx
+                0x74, 0x37,                               // jz fail (+55)
+                0x48, 0x83, 0x39, 0x01,                   // cmpq $1, (%rcx)
+                0x74, 0x2B,                               // je success (+43)
+                0x48, 0x85, 0xD2,                         // test %rdx, %rdx
+                0x74, 0x2C,                               // jz fail (+44)
+                0x53,                                     // push %rbx
+                0x56,                                     // push %rsi
+                0x57,                                     // push %rdi
+                0x51,                                     // push %rcx
+                0x48, 0x83, 0xEC, 0x28,                   // sub $0x28, %rsp
+                0x48, 0x89, 0xD0,                         // mov %rdx, %rax
+                0x49, 0x89, 0xC2,                         // mov %r8, %rdx
+                0x4D, 0x89, 0xC8,                         // mov %r9, %r8
+                0xFF, 0xD0,                               // call *%rax
+                0x48, 0x83, 0xC4, 0x28,                   // add $0x28, %rsp
+                0x59,                                     // pop %rcx
+                0x5F,                                     // pop %rdi
+                0x5E,                                     // pop %rsi
+                0x5B,                                     // pop %rbx
+                0x85, 0xC0,                               // test %eax, %eax
+                0x74, 0x0D,                               // jz fail (+13)
+                0x48, 0xC7, 0x01, 0x01, 0x00, 0x00, 0x00, // movq $1, (%rcx)
+                0xB8, 0x01, 0x00, 0x00, 0x00,             // mov $1, %eax
+                0xC3,                                     // ret
+                0x31, 0xC0,                               // xor %eax, %eax
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x9A0, s53, sizeof(s53));
+
+            // Populate pctype table at 0xA00 (256 uint16_t entries)
+            uint16_t* pctype = reinterpret_cast<uint16_t*>(trampolineBuffer + 0xA00);
+            for (int c = 0; c < 256; ++c) {
+                uint16_t mask = 0;
+                if (c >= 0x00 && c <= 0x1F) mask |= 0x20; // _CONTROL
+                if (c == ' ' || (c >= 0x09 && c <= 0x0D)) mask |= 0x08; // _SPACE
+                if (c == ' ') mask |= 0x40; // _BLANK
+                if (c >= '0' && c <= '9') mask |= 0x04 | 0x80; // _DIGIT | _HEX
+                if (c >= 'a' && c <= 'f') mask |= 0x02 | 0x80 | 0x0100; // _LOWER | _HEX | _ALPHA
+                else if (c >= 'a' && c <= 'z') mask |= 0x02 | 0x0100; // _LOWER | _ALPHA
+                if (c >= 'A' && c <= 'F') mask |= 0x01 | 0x80 | 0x0100; // _UPPER | _HEX | _ALPHA
+                else if (c >= 'A' && c <= 'Z') mask |= 0x01 | 0x0100; // _UPPER | _ALPHA
+                if ((c >= 0x21 && c <= 0x2F) || (c >= 0x3A && c <= 0x40) ||
+                    (c >= 0x5B && c <= 0x60) || (c >= 0x7B && c <= 0x7E)) mask |= 0x10; // _PUNCT
+                pctype[c] = mask;
+            }
+
+            // Populate struct lconv and static string literals at 0xC00
+            const char strDot[] = ".";
+            const char strEmpty[] = "";
+            const char16_t wstrDot[] = u".";
+            const char16_t wstrEmpty[] = u"";
+            std::memcpy(trampolineBuffer + 0xCA0, strDot, sizeof(strDot));
+            std::memcpy(trampolineBuffer + 0xCA8, strEmpty, sizeof(strEmpty));
+            std::memcpy(trampolineBuffer + 0xCB0, wstrDot, sizeof(wstrDot));
+            std::memcpy(trampolineBuffer + 0xCB8, wstrEmpty, sizeof(wstrEmpty));
+
+            uint64_t dotVa = trampolineBaseVa + 0xCA0;
+            uint64_t emptyVa = trampolineBaseVa + 0xCA8;
+            uint64_t wdotVa = trampolineBaseVa + 0xCB0;
+            uint64_t wemptyVa = trampolineBaseVa + 0xCB8;
+
+            std::memcpy(trampolineBuffer + 0xC00 + 0, &dotVa, sizeof(dotVa));
+            std::memcpy(trampolineBuffer + 0xC00 + 8, &emptyVa, sizeof(emptyVa));
+            for (size_t off = 16; off <= 72; off += 8) {
+                std::memcpy(trampolineBuffer + 0xC00 + off, &emptyVa, sizeof(emptyVa));
+            }
+            std::memcpy(trampolineBuffer + 0xC00 + 88, &wdotVa, sizeof(wdotVa));
+            std::memcpy(trampolineBuffer + 0xC00 + 96, &wemptyVa, sizeof(wemptyVa));
+            for (size_t off = 104; off <= 144; off += 8) {
+                std::memcpy(trampolineBuffer + 0xC00 + off, &wemptyVa, sizeof(wemptyVa));
+            }
+
+            // Runtime Data Area at 0x700
             int initArgc = 1;
             std::memcpy(trampolineBuffer + 0x700, &initArgc, sizeof(initArgc));
 
@@ -1440,6 +1593,8 @@ public:
             std::memcpy(trampolineBuffer + 0x720, &initZero, sizeof(initZero));
             std::memcpy(trampolineBuffer + 0x724, &initZero, sizeof(initZero));
             std::memcpy(trampolineBuffer + 0x728, &initZero, sizeof(initZero));
+            std::memcpy(trampolineBuffer + 0x72C, &initZero, sizeof(initZero));
+            std::memcpy(trampolineBuffer + 0x730, &initZero, sizeof(initZero));
         }
 
         // 8. Parse and Bind Imports
@@ -1556,7 +1711,7 @@ public:
                                     targetTrampoline = trampolineBaseVa + 0x6C0;
                                 } else if (streq(symName, "__p__commode") || streq(symName, "__p__fmode") || streq(symName, "__p__environ") ||
                                            streq(symName, "__p___initenv") || streq(symName, "_errno") || streq(symName, "__sys_nerr")) {
-                                    targetTrampoline = trampolineBaseVa + 0x700;
+                                    targetTrampoline = trampolineBaseVa + 0x6E0;
                                 } else if (streq(symName, "__acrt_iob_func")) {
                                     targetTrampoline = trampolineBaseVa + 0x740;
                                 } else if (streq(symName, "sqrtf") || streq(symName, "sqrt")) {
@@ -1569,8 +1724,27 @@ public:
                                     targetTrampoline = trampolineBaseVa + 0x840;
                                 } else if (streq(symName, "floorf") || streq(symName, "floor") || streq(symName, "ceilf") || streq(symName, "ceil")) {
                                     targetTrampoline = trampolineBaseVa + 0x880;
-                                } else if (streq(symName, "fwrite") || streq(symName, "puts") || streq(symName, "fputc") || streq(symName, "fputwc")) {
+                                } else if (streq(symName, "fwrite")) {
                                     targetTrampoline = trampolineBaseVa + 0x8C0;
+                                } else if (streq(symName, "puts") || streq(symName, "fputs") || streq(symName, "fputc") || streq(symName, "fputwc")) {
+                                    targetTrampoline = trampolineBaseVa + 0x8E0;
+                                } else if (streq(symName, "__pctype_func")) {
+                                    targetTrampoline = trampolineBaseVa + 0x900;
+                                } else if (streq(symName, "localeconv")) {
+                                    targetTrampoline = trampolineBaseVa + 0x920;
+                                } else if (streq(symName, "___lc_codepage_func")) {
+                                    targetTrampoline = trampolineBaseVa + 0x940;
+                                } else if (streq(symName, "___mb_cur_max_func")) {
+                                    targetTrampoline = trampolineBaseVa + 0x960;
+                                } else if (streq(symName, "__stdio_common_vfprintf") || streq(symName, "__stdio_common_vsprintf") ||
+                                           streq(symName, "__stdio_common_vfwprintf") || streq(symName, "vfprintf") ||
+                                           streq(symName, "printf")) {
+                                    targetTrampoline = trampolineBaseVa + 0x980;
+                                } else if (streq(symName, "InitOnceExecuteOnce")) {
+                                    targetTrampoline = trampolineBaseVa + 0x9A0;
+                                } else if (streq(symName, "GetActiveProcessorCount") || streq(symName, "_fileno") ||
+                                           streq(symName, "TryAcquireSRWLockExclusive") || streq(symName, "TryEnterCriticalSection")) {
+                                    targetTrampoline = trampolineBaseVa + 0x1E0;
                                 } else if (streq(symName, "TlsGetValue") || streq(symName, "FlsGetValue") || streq(symName, "IsDebuggerPresent") ||
                                            streq(symName, "_set_app_type") || streq(symName, "_configure_narrow_argv") ||
                                            streq(symName, "_initialize_narrow_environment") || streq(symName, "_seh_filter_exe") ||
@@ -1579,7 +1753,9 @@ public:
                                            streq(symName, "setbuf") || streq(symName, "fflush") || streq(symName, "fclose") ||
                                            streq(symName, "_lock_file") || streq(symName, "_unlock_file") ||
                                            streq(symName, "SetUnhandledExceptionFilter") || streq(symName, "VirtualProtect") ||
-                                           streq(symName, "VirtualQuery") || streq(symName, "InitOnceExecuteOnce")) {
+                                           streq(symName, "VirtualQuery") || streq(symName, "setlocale") ||
+                                           streq(symName, "_configthreadlocale") || streq(symName, "_create_locale") ||
+                                           streq(symName, "_free_locale")) {
                                     targetTrampoline = trampolineBaseVa + 0x200;
                                 }
                             }
