@@ -17,30 +17,86 @@ BENCH_SOURCE = os.path.join(REPO_ROOT, r"build\bench.exe")
 CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\bin\prismx_3d_cube_app.exe")
 if not os.path.exists(CUBE_SOURCE):
     CUBE_SOURCE = os.path.join(REPO_ROOT, r"build\prismx_3d_cube_app.exe")
-IPCONFIG_SOURCE = os.path.join(REPO_ROOT, r"build\ipconfig.exe")
-WHOAMI_SOURCE = os.path.join(REPO_ROOT, r"build\whoami.exe")
-TASKLIST_SOURCE = os.path.join(REPO_ROOT, r"build\tasklist.exe")
-PING_SOURCE = os.path.join(REPO_ROOT, r"build\ping.exe")
-CMD_SOURCE = os.path.join(REPO_ROOT, r"build\cmd.exe")
-HOSTNAME_SOURCE = os.path.join(REPO_ROOT, r"build\hostname.exe")
-SYSTEMINFO_SOURCE = os.path.join(REPO_ROOT, r"build\systeminfo.exe")
-NETSTAT_SOURCE = os.path.join(REPO_ROOT, r"build\netstat.exe")
-CHKDSK_SOURCE = os.path.join(REPO_ROOT, r"build\chkdsk.exe")
-DISKPART_SOURCE = os.path.join(REPO_ROOT, r"build\diskpart.exe")
-ARP_SOURCE = os.path.join(REPO_ROOT, r"build\arp.exe")
-ROUTE_SOURCE = os.path.join(REPO_ROOT, r"build\route.exe")
-REG_SOURCE = os.path.join(REPO_ROOT, r"build\reg.exe")
-SC_SOURCE = os.path.join(REPO_ROOT, r"build\sc.exe")
-DRIVERQUERY_SOURCE = os.path.join(REPO_ROOT, r"build\driverquery.exe")
-TYPE_SOURCE = os.path.join(REPO_ROOT, r"build\type.exe")
-FIND_SOURCE = os.path.join(REPO_ROOT, r"build\find.exe")
-FC_SOURCE = os.path.join(REPO_ROOT, r"build\fc.exe")
-ATTRIB_SOURCE = os.path.join(REPO_ROOT, r"build\attrib.exe")
-MORE_SOURCE = os.path.join(REPO_ROOT, r"build\more.exe")
-FORMAT_SOURCE = os.path.join(REPO_ROOT, r"build\format.exe")
+
 HOST = os.environ.get("MICANT_TARGET_HOST", "147.135.1.229")
 USER = os.environ.get("MICANT_TARGET_USER", "ubuntu")
 KEY_PATH = os.environ.get("MICANT_SSH_KEY", r"C:\Users\admin\.ssh\micant_ci_key")
+
+SYSTEM32_TOOLS = [
+    ("tools/ipconfig_app.cpp", "build/ipconfig.exe", "ipconfig.exe"),
+    ("tools/whoami_app.cpp", "build/whoami.exe", "whoami.exe"),
+    ("tools/tasklist_app.cpp", "build/tasklist.exe", "tasklist.exe"),
+    ("tools/ping_app.cpp", "build/ping.exe", "ping.exe"),
+    ("tools/cmd_app.cpp", "build/cmd.exe", "cmd.exe"),
+    ("tools/hostname_app.cpp", "build/hostname.exe", "hostname.exe"),
+    ("tools/systeminfo_app.cpp", "build/systeminfo.exe", "systeminfo.exe"),
+    ("tools/netstat_app.cpp", "build/netstat.exe", "netstat.exe"),
+    ("tools/chkdsk_app.cpp", "build/chkdsk.exe", "chkdsk.exe"),
+    ("tools/diskpart_app.cpp", "build/diskpart.exe", "diskpart.exe"),
+    ("tools/arp_app.cpp", "build/arp.exe", "arp.exe"),
+    ("tools/route_app.cpp", "build/route.exe", "route.exe"),
+    ("tools/reg_app.cpp", "build/reg.exe", "reg.exe"),
+    ("tools/sc_app.cpp", "build/sc.exe", "sc.exe"),
+    ("tools/driverquery_app.cpp", "build/driverquery.exe", "driverquery.exe"),
+    ("tools/type_app.cpp", "build/type.exe", "type.exe"),
+    ("tools/find_app.cpp", "build/find.exe", "find.exe"),
+    ("tools/fc_app.cpp", "build/fc.exe", "fc.exe"),
+    ("tools/attrib_app.cpp", "build/attrib.exe", "attrib.exe"),
+    ("tools/more_app.cpp", "build/more.exe", "more.exe"),
+    ("tools/format_app.cpp", "build/format.exe", "format.exe"),
+]
+
+SYSTEM32_SERVICES = [
+    ("tools/smss_app.cpp", "build/smss.exe", "smss.exe"),
+    ("tools/csrss_app.cpp", "build/csrss.exe", "csrss.exe"),
+    ("tools/winlogon_app.cpp", "build/winlogon.exe", "winlogon.exe"),
+    ("tools/services_app.cpp", "build/services.exe", "services.exe"),
+    ("tools/lsass_app.cpp", "build/lsass.exe", "lsass.exe"),
+    ("tools/svchost_app.cpp", "build/svchost.exe", "svchost.exe"),
+    ("tools/conhost_app.cpp", "build/conhost.exe", "conhost.exe"),
+]
+
+KNOWN_DLLS = [
+    ("tools/dlls/ntdll.cpp", "build/ntdll.dll", "ntdll.dll"),
+    ("tools/dlls/kernel32.cpp", "build/kernel32.dll", "kernel32.dll"),
+    ("tools/dlls/kernelbase.cpp", "build/kernelbase.dll", "kernelbase.dll"),
+    ("tools/dlls/user32.cpp", "build/user32.dll", "user32.dll"),
+    ("tools/dlls/gdi32.cpp", "build/gdi32.dll", "gdi32.dll"),
+    ("tools/dlls/advapi32.cpp", "build/advapi32.dll", "advapi32.dll"),
+    ("tools/dlls/comctl32.cpp", "build/comctl32.dll", "comctl32.dll"),
+    ("tools/dlls/comdlg32.cpp", "build/comdlg32.dll", "comdlg32.dll"),
+    ("tools/dlls/shell32.cpp", "build/shell32.dll", "shell32.dll"),
+    ("tools/dlls/shlwapi.cpp", "build/shlwapi.dll", "shlwapi.dll"),
+    ("tools/dlls/ole32.cpp", "build/ole32.dll", "ole32.dll"),
+    ("tools/dlls/ucrtbase.cpp", "build/ucrtbase.dll", "ucrtbase.dll"),
+]
+
+DRIVER_STUBS = [
+    ("tools/drivers/driver_template.cpp", "build/ahci.sys", "ahci.sys"),
+    ("tools/drivers/driver_template.cpp", "build/i210.sys", "i210.sys"),
+    ("tools/drivers/driver_template.cpp", "build/tcpip.sys", "tcpip.sys"),
+    ("tools/drivers/driver_template.cpp", "build/fltmgr.sys", "fltmgr.sys"),
+    ("tools/drivers/driver_template.cpp", "build/xhci.sys", "xhci.sys"),
+    ("tools/drivers/driver_template.cpp", "build/usbhub.sys", "usbhub.sys"),
+    ("tools/drivers/driver_template.cpp", "build/extfs.sys", "extfs.sys"),
+    ("tools/drivers/driver_template.cpp", "build/null.sys", "null.sys"),
+    ("tools/drivers/driver_template.cpp", "build/beep.sys", "beep.sys"),
+]
+
+NETWORK_FILES = [
+    ("tools/etc/hosts", "hosts"),
+    ("tools/etc/services", "services"),
+    ("tools/etc/networks", "networks"),
+    ("tools/etc/protocol", "protocol"),
+]
+
+REGISTRY_HIVES = [
+    ("tools/config/SYSTEM", "SYSTEM"),
+    ("tools/config/SOFTWARE", "SOFTWARE"),
+    ("tools/config/SAM", "SAM"),
+    ("tools/config/SECURITY", "SECURITY"),
+    ("tools/config/DEFAULT", "DEFAULT"),
+]
 
 def run_local_build():
     print("[1/5] Compiling clean-room freestanding BOOTX64.EFI, ntoskrnl.exe, app.exe, and bench.exe...")
@@ -100,6 +156,7 @@ def run_local_build():
     cmd_app = [
         "clang++",
         "-target", "x86_64-w64-mingw32",
+        "-std=c++23",
         "-ffreestanding",
         "-fno-exceptions",
         "-fno-rtti",
@@ -123,6 +180,7 @@ def run_local_build():
     cmd_bench = [
         "clang++",
         "-target", "x86_64-w64-mingw32",
+        "-std=c++23",
         "-ffreestanding",
         "-fno-exceptions",
         "-fno-rtti",
@@ -143,56 +201,9 @@ def run_local_build():
     sz_b = os.path.getsize(BENCH_SOURCE)
     print(f"      bench.exe Compiled OK ({sz_b:,} bytes)")
 
-    os.makedirs(os.path.join(REPO_ROOT, "build", "bin"), exist_ok=True)
-    cmd_cube = [
-        "clang++",
-        "-target", "x86_64-w64-mingw32",
-        "-std=c++23",
-        "-ffreestanding",
-        "-fno-exceptions",
-        "-fno-rtti",
-        "-fno-stack-protector",
-        "-mno-red-zone",
-        "-mno-stack-arg-probe",
-        "-O2",
-        "-Wl,--subsystem,console",
-        "-Wl,-e,_start",
-        "-nostdlib",
-        "tools/prismx_3d_cube_app.cpp",
-        "-o", "build/bin/prismx_3d_cube_app.exe"
-    ]
-    res_c = subprocess.run(cmd_cube, cwd=REPO_ROOT, capture_output=True, text=True)
-    if res_c.returncode != 0:
-        print(f"[FATAL] prismx_3d_cube_app.exe build failed:\n{res_c.stderr}")
-        sys.exit(1)
-    sz_c = os.path.getsize(os.path.join(REPO_ROOT, "build", "bin", "prismx_3d_cube_app.exe"))
-    print(f"      prismx_3d_cube_app.exe Compiled OK ({sz_c:,} bytes)")
-
     # Compile System32 Standalone Ring 3 Utilities
-    system32_tools = [
-        ("tools/ipconfig_app.cpp", "build/ipconfig.exe", "ipconfig.exe"),
-        ("tools/whoami_app.cpp", "build/whoami.exe", "whoami.exe"),
-        ("tools/tasklist_app.cpp", "build/tasklist.exe", "tasklist.exe"),
-        ("tools/ping_app.cpp", "build/ping.exe", "ping.exe"),
-        ("tools/cmd_app.cpp", "build/cmd.exe", "cmd.exe"),
-        ("tools/hostname_app.cpp", "build/hostname.exe", "hostname.exe"),
-        ("tools/systeminfo_app.cpp", "build/systeminfo.exe", "systeminfo.exe"),
-        ("tools/netstat_app.cpp", "build/netstat.exe", "netstat.exe"),
-        ("tools/chkdsk_app.cpp", "build/chkdsk.exe", "chkdsk.exe"),
-        ("tools/diskpart_app.cpp", "build/diskpart.exe", "diskpart.exe"),
-        ("tools/arp_app.cpp", "build/arp.exe", "arp.exe"),
-        ("tools/route_app.cpp", "build/route.exe", "route.exe"),
-        ("tools/reg_app.cpp", "build/reg.exe", "reg.exe"),
-        ("tools/sc_app.cpp", "build/sc.exe", "sc.exe"),
-        ("tools/driverquery_app.cpp", "build/driverquery.exe", "driverquery.exe"),
-        ("tools/type_app.cpp", "build/type.exe", "type.exe"),
-        ("tools/find_app.cpp", "build/find.exe", "find.exe"),
-        ("tools/fc_app.cpp", "build/fc.exe", "fc.exe"),
-        ("tools/attrib_app.cpp", "build/attrib.exe", "attrib.exe"),
-        ("tools/more_app.cpp", "build/more.exe", "more.exe"),
-        ("tools/format_app.cpp", "build/format.exe", "format.exe"),
-    ]
-    for src, out_path, name in system32_tools:
+    print("      Compiling 21 System32 Utilities...")
+    for src, out_path, name in SYSTEM32_TOOLS:
         c_cmd = [
             "clang++",
             "-target", "x86_64-w64-mingw32",
@@ -214,8 +225,75 @@ def run_local_build():
         if r.returncode != 0:
             print(f"[FATAL] {name} build failed:\n{r.stderr}")
             sys.exit(1)
-        sz = os.path.getsize(os.path.join(REPO_ROOT, out_path))
-        print(f"      {name} Compiled OK ({sz:,} bytes)")
+
+    # Compile System32 Subsystem Services
+    print("      Compiling 7 System32 Subsystem Services...")
+    for src, out_path, name in SYSTEM32_SERVICES:
+        c_cmd = [
+            "clang++",
+            "-target", "x86_64-w64-mingw32",
+            "-std=c++23",
+            "-ffreestanding",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-fno-stack-protector",
+            "-mno-red-zone",
+            "-mno-stack-arg-probe",
+            "-O2",
+            "-Wl,--subsystem,console",
+            "-Wl,-e,_start",
+            "-nostdlib",
+            src,
+            "-o", out_path
+        ]
+        r = subprocess.run(c_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"[FATAL] {name} build failed:\n{r.stderr}")
+            sys.exit(1)
+
+    # Compile 12 Known DLLs (PE32+ Shared Libraries)
+    print("      Compiling 12 Known DLLs...")
+    for src, out_path, name in KNOWN_DLLS:
+        c_cmd = [
+            "clang++",
+            "-target", "x86_64-w64-mingw32",
+            "-shared",
+            "-nostdlib",
+            "-Wl,-e,DllMain",
+            "-Wl,--subsystem,native",
+            "-O2",
+            src,
+            "-o", out_path
+        ]
+        r = subprocess.run(c_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"[FATAL] {name} build failed:\n{r.stderr}")
+            sys.exit(1)
+
+    # Compile Kernel Driver Stubs (PE32+ Native Drivers)
+    print("      Compiling 9 Kernel Driver Stubs (.sys)...")
+    for src, out_path, name in DRIVER_STUBS:
+        c_cmd = [
+            "clang++",
+            "-target", "x86_64-w64-mingw32",
+            "-nostdlib",
+            "-Wl,-e,DriverEntry",
+            "-Wl,--subsystem,native",
+            "-O2",
+            src,
+            "-o", out_path
+        ]
+        r = subprocess.run(c_cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"[FATAL] {name} build failed:\n{r.stderr}")
+            sys.exit(1)
+
+    # Generate Registry Hives if needed
+    hives_script = os.path.join(REPO_ROOT, "tools", "config", "gen_hives.py")
+    if os.path.exists(hives_script):
+        subprocess.run(["python", hives_script], cwd=REPO_ROOT, check=True)
+
+    print("      Local build completed successfully!")
 
 def get_ssh():
     k = paramiko.RSAKey.from_private_key_file(KEY_PATH)
@@ -255,7 +333,7 @@ def main():
     ssh = get_ssh()
     print("      Connected as 'ubuntu'.")
 
-    print("[3/5] Uploading binaries via SFTP...")
+    print("[3/5] Uploading binaries and configuration files via SFTP...")
     sftp = ssh.open_sftp()
     sftp.put(EFI_SOURCE, "/tmp/BOOTX64.EFI")
     sftp.put(KRNL_SOURCE, "/tmp/ntoskrnl.exe")
@@ -263,51 +341,40 @@ def main():
     sftp.put(BENCH_SOURCE, "/tmp/bench.exe")
     if os.path.exists(CUBE_SOURCE):
         sftp.put(CUBE_SOURCE, "/tmp/prismx_3d_cube_app.exe")
-    if os.path.exists(IPCONFIG_SOURCE):
-        sftp.put(IPCONFIG_SOURCE, "/tmp/ipconfig.exe")
-    if os.path.exists(WHOAMI_SOURCE):
-        sftp.put(WHOAMI_SOURCE, "/tmp/whoami.exe")
-    if os.path.exists(TASKLIST_SOURCE):
-        sftp.put(TASKLIST_SOURCE, "/tmp/tasklist.exe")
-    if os.path.exists(PING_SOURCE):
-        sftp.put(PING_SOURCE, "/tmp/ping.exe")
-    if os.path.exists(CMD_SOURCE):
-        sftp.put(CMD_SOURCE, "/tmp/cmd.exe")
-    if os.path.exists(HOSTNAME_SOURCE):
-        sftp.put(HOSTNAME_SOURCE, "/tmp/hostname.exe")
-    if os.path.exists(SYSTEMINFO_SOURCE):
-        sftp.put(SYSTEMINFO_SOURCE, "/tmp/systeminfo.exe")
-    if os.path.exists(NETSTAT_SOURCE):
-        sftp.put(NETSTAT_SOURCE, "/tmp/netstat.exe")
-    if os.path.exists(CHKDSK_SOURCE):
-        sftp.put(CHKDSK_SOURCE, "/tmp/chkdsk.exe")
-    if os.path.exists(DISKPART_SOURCE):
-        sftp.put(DISKPART_SOURCE, "/tmp/diskpart.exe")
-    if os.path.exists(ARP_SOURCE):
-        sftp.put(ARP_SOURCE, "/tmp/arp.exe")
-    if os.path.exists(ROUTE_SOURCE):
-        sftp.put(ROUTE_SOURCE, "/tmp/route.exe")
-    if os.path.exists(REG_SOURCE):
-        sftp.put(REG_SOURCE, "/tmp/reg.exe")
-    if os.path.exists(SC_SOURCE):
-        sftp.put(SC_SOURCE, "/tmp/sc.exe")
-    if os.path.exists(DRIVERQUERY_SOURCE):
-        sftp.put(DRIVERQUERY_SOURCE, "/tmp/driverquery.exe")
-    if os.path.exists(TYPE_SOURCE):
-        sftp.put(TYPE_SOURCE, "/tmp/type.exe")
-    if os.path.exists(FIND_SOURCE):
-        sftp.put(FIND_SOURCE, "/tmp/find.exe")
-    if os.path.exists(FC_SOURCE):
-        sftp.put(FC_SOURCE, "/tmp/fc.exe")
-    if os.path.exists(ATTRIB_SOURCE):
-        sftp.put(ATTRIB_SOURCE, "/tmp/attrib.exe")
-    if os.path.exists(MORE_SOURCE):
-        sftp.put(MORE_SOURCE, "/tmp/more.exe")
-    if os.path.exists(FORMAT_SOURCE):
-        sftp.put(FORMAT_SOURCE, "/tmp/format.exe")
+
+    for _, out_path, name in SYSTEM32_TOOLS:
+        p = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(p):
+            sftp.put(p, f"/tmp/{name}")
+
+    for _, out_path, name in SYSTEM32_SERVICES:
+        p = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(p):
+            sftp.put(p, f"/tmp/{name}")
+
+    for _, out_path, name in KNOWN_DLLS:
+        p = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(p):
+            sftp.put(p, f"/tmp/{name}")
+
+    for _, out_path, name in DRIVER_STUBS:
+        p = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(p):
+            sftp.put(p, f"/tmp/{name}")
+
+    for src_rel, name in NETWORK_FILES:
+        p = os.path.join(REPO_ROOT, src_rel)
+        if os.path.exists(p):
+            sftp.put(p, f"/tmp/{name}")
+
+    for src_rel, name in REGISTRY_HIVES:
+        p = os.path.join(REPO_ROOT, src_rel)
+        if os.path.exists(p):
+            sftp.put(p, f"/tmp/{name}")
+
     sftp.close()
 
-    print("      Staging binaries strictly to sovereign MicaNT partitions by PARTUUID...")
+    print("      Staging files strictly to sovereign MicaNT partitions by PARTUUID...")
     # PARTUUID 0fb58002-611e-491c-829d-1d7c669fdef2 = MICA_ESP (1 GB FAT32)
     # PARTUUID b6457ee0-ed3e-4d78-b82c-a08971cc1b52 = MICA_SYS (128 GB FAT32)
     stage_cmd = (
@@ -316,91 +383,29 @@ def main():
         'umount /mnt/micaesp 2>/dev/null || true; '
         'mount /dev/disk/by-partuuid/b6457ee0-ed3e-4d78-b82c-a08971cc1b52 /mnt/micasys && '
         'mount /dev/disk/by-partuuid/0fb58002-611e-491c-829d-1d7c669fdef2 /mnt/micaesp && '
-        'mkdir -p /mnt/micasys/MicaNT/System32 && '
+        'mkdir -p /mnt/micasys/MicaNT/System32/drivers/etc '
+        '/mnt/micasys/MicaNT/System32/config '
+        '/mnt/micasys/MicaNT/System32/LogFiles && '
         'cp -v /tmp/ntoskrnl.exe /mnt/micasys/MicaNT/System32/ && '
         'cp -v /tmp/ntoskrnl.exe /mnt/micasys/ && '
         'cp -v /tmp/app.exe /mnt/micasys/MicaNT/System32/ && '
         'cp -v /tmp/bench.exe /mnt/micasys/MicaNT/System32/ && '
         '([ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/ipconfig.exe ] && cp -v /tmp/ipconfig.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/ipconfig.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/whoami.exe ] && cp -v /tmp/whoami.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/whoami.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/tasklist.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/ping.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/cmd.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/hostname.exe ] && cp -v /tmp/hostname.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/hostname.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/systeminfo.exe ] && cp -v /tmp/systeminfo.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/systeminfo.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/netstat.exe ] && cp -v /tmp/netstat.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/netstat.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/chkdsk.exe ] && cp -v /tmp/chkdsk.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/chkdsk.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/diskpart.exe ] && cp -v /tmp/diskpart.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/diskpart.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/arp.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/route.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/reg.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/sc.exe ] && cp -v /tmp/sc.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/sc.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/driverquery.exe ] && cp -v /tmp/driverquery.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/driverquery.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/type.exe ] && cp -v /tmp/type.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/type.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/find.exe ] && cp -v /tmp/find.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/find.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/fc.exe ] && cp -v /tmp/fc.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/fc.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/attrib.exe ] && cp -v /tmp/attrib.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/attrib.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/more.exe ] && cp -v /tmp/more.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/more.exe /mnt/micasys/ || true); '
-        '([ -f /tmp/format.exe ] && cp -v /tmp/format.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/format.exe /mnt/micasys/ || true); '
+        'for f in /tmp/*.exe; do [ -f "$f" ] && cp -v "$f" /mnt/micasys/MicaNT/System32/ && cp -v "$f" /mnt/micasys/; done; '
+        'for f in /tmp/*.dll; do [ -f "$f" ] && cp -v "$f" /mnt/micasys/MicaNT/System32/; done; '
+        'for f in /tmp/*.sys; do [ -f "$f" ] && cp -v "$f" /mnt/micasys/MicaNT/System32/drivers/; done; '
+        'for f in hosts services networks protocol; do [ -f "/tmp/$f" ] && cp -v "/tmp/$f" /mnt/micasys/MicaNT/System32/drivers/etc/; done; '
+        'for f in SYSTEM SOFTWARE SAM SECURITY DEFAULT; do [ -f "/tmp/$f" ] && cp -v "/tmp/$f" /mnt/micasys/MicaNT/System32/config/; done; '
         'mkdir -p /mnt/micaesp/EFI/BOOT /mnt/micaesp/EFI/MicaNT && '
         'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/BOOT/BOOTX64.EFI && '
         'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/MicaNT/BOOTX64.EFI && '
         'cp -v /tmp/ntoskrnl.exe /mnt/micaesp/EFI/MicaNT/ && '
         'cp -v /tmp/ntoskrnl.exe /mnt/micaesp/ && '
-        'cp -v /tmp/app.exe /mnt/micaesp/EFI/MicaNT/ && '
-        'cp -v /tmp/bench.exe /mnt/micaesp/EFI/MicaNT/ && '
-        '([ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/ipconfig.exe ] && cp -v /tmp/ipconfig.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/whoami.exe ] && cp -v /tmp/whoami.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/hostname.exe ] && cp -v /tmp/hostname.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/systeminfo.exe ] && cp -v /tmp/systeminfo.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/netstat.exe ] && cp -v /tmp/netstat.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/chkdsk.exe ] && cp -v /tmp/chkdsk.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/diskpart.exe ] && cp -v /tmp/diskpart.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/sc.exe ] && cp -v /tmp/sc.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/driverquery.exe ] && cp -v /tmp/driverquery.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/type.exe ] && cp -v /tmp/type.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/find.exe ] && cp -v /tmp/find.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/fc.exe ] && cp -v /tmp/fc.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/attrib.exe ] && cp -v /tmp/attrib.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/more.exe ] && cp -v /tmp/more.exe /mnt/micaesp/EFI/MicaNT/ || true); '
-        '([ -f /tmp/format.exe ] && cp -v /tmp/format.exe /mnt/micaesp/EFI/MicaNT/ || true); '
         'rm -f /mnt/micaesp/EFI/MicaNT/boot.ini /mnt/micaesp/boot.ini /mnt/micasys/boot.ini /mnt/micasys/EFI/MicaNT/boot.ini 2>/dev/null || true; '
         'mkdir -p /boot/efi/EFI/MicaNT && '
         'cp -v /tmp/BOOTX64.EFI /boot/efi/EFI/MicaNT/BOOTX64.EFI && '
         'cp -v /tmp/ntoskrnl.exe /boot/efi/EFI/MicaNT/ && '
         'cp -v /tmp/ntoskrnl.exe /boot/efi/ && '
-        'cp -v /tmp/app.exe /boot/efi/EFI/MicaNT/ && '
-        'cp -v /tmp/bench.exe /boot/efi/EFI/MicaNT/ && '
-        '([ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/ipconfig.exe ] && cp -v /tmp/ipconfig.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/whoami.exe ] && cp -v /tmp/whoami.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/hostname.exe ] && cp -v /tmp/hostname.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/systeminfo.exe ] && cp -v /tmp/systeminfo.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/netstat.exe ] && cp -v /tmp/netstat.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/chkdsk.exe ] && cp -v /tmp/chkdsk.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/diskpart.exe ] && cp -v /tmp/diskpart.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/sc.exe ] && cp -v /tmp/sc.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/driverquery.exe ] && cp -v /tmp/driverquery.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/type.exe ] && cp -v /tmp/type.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/find.exe ] && cp -v /tmp/find.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/fc.exe ] && cp -v /tmp/fc.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/attrib.exe ] && cp -v /tmp/attrib.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/more.exe ] && cp -v /tmp/more.exe /boot/efi/EFI/MicaNT/ || true); '
-        '([ -f /tmp/format.exe ] && cp -v /tmp/format.exe /boot/efi/EFI/MicaNT/ || true); '
         'rm -f /boot/efi/EFI/MicaNT/boot.ini /boot/efi/boot.ini 2>/dev/null || true; '
         'sync && umount /mnt/micasys /mnt/micaesp'
     )
@@ -415,8 +420,14 @@ def main():
         'mkdir -p /mnt/micasys /mnt/micaesp && '
         'mount /dev/disk/by-partuuid/b6457ee0-ed3e-4d78-b82c-a08971cc1b52 /mnt/micasys && '
         'mount /dev/disk/by-partuuid/0fb58002-611e-491c-829d-1d7c669fdef2 /mnt/micaesp && '
-        'echo "=== /mnt/micasys/MicaNT/System32/ ===" && '
+        'echo "=== /mnt/micasys/MicaNT/System32/ (Executables & DLLs) ===" && '
         'ls -la /mnt/micasys/MicaNT/System32/ && '
+        'echo "=== /mnt/micasys/MicaNT/System32/drivers/ (Kernel Drivers) ===" && '
+        'ls -la /mnt/micasys/MicaNT/System32/drivers/ && '
+        'echo "=== /mnt/micasys/MicaNT/System32/drivers/etc/ (Network Tables) ===" && '
+        'ls -la /mnt/micasys/MicaNT/System32/drivers/etc/ && '
+        'echo "=== /mnt/micasys/MicaNT/System32/config/ (Registry Hives) ===" && '
+        'ls -la /mnt/micasys/MicaNT/System32/config/ && '
         'echo "=== /mnt/micaesp/EFI/MicaNT/ ===" && '
         'ls -la /mnt/micaesp/EFI/MicaNT/ && '
         'umount /mnt/micasys /mnt/micaesp && '

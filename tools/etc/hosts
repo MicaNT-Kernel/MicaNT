@@ -1,0 +1,13 @@
+# Copyright (c) 1993-2009 Microsoft Corp.
+# MicaNT Sovereign System32 Network Resolution
+#
+# This file contains the mappings of IP addresses to host names. Each
+# entry should be kept on an individual line. The IP address should
+# be placed in the first column followed by the corresponding host name.
+# The IP address and the host name should be separated by at least one
+# space.
+
+127.0.0.1       localhost
+::1             localhost
+147.135.1.229   micant-node01.sovereign.local
+192.168.1.1     gateway.local

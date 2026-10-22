@@ -1,0 +1,19 @@
+# Network services, Internet style
+#
+# Format: service-name  port/protocol  [aliases ...]   [#comment]
+#
+echo                7/tcp
+echo                7/udp
+discard             9/tcp    sink null
+discard             9/udp    sink null
+ftp                21/tcp
+ssh                22/tcp
+telnet             23/tcp
+smtp               25/tcp    mail
+domain             53/tcp
+domain             53/udp
+http               80/tcp    www www-http
+pop3              110/tcp    postoffice
+ntp               123/udp
+https             443/tcp
+microsoft-ds      445/tcp

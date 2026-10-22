@@ -1773,7 +1773,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
     } else if (cmd[0] == 'v' && cmd[1] == 'e') { // ver
         copyStr(reply, "MicaNT Cutler Edition Version 10.0 (Build 2026.10 BareMetal)\r\n"
                        "Sovereign 64-Bit Operating System running on Supermicro X11SSH-F\r\n", maxReply);
-    } else if (cmd[0] == 'd' && cmd[1] == 'r' && cmd[2] == 'i') { // drives
+    } else if (cmd[0] == 'd' && cmd[1] == 'r' && cmd[2] == 'i' && cmd[3] == 'v' && cmd[4] == 'e' && (cmd[5] == 's' || cmd[5] == '\0' || cmd[5] == ' ' || cmd[5] == '\r')) { // drives
         copyStr(reply, "Mounted Storage Volumes:\r\n"
                        "  C: [MICA_SYS]  128 GB FAT32 (sdb2, LBA 2,099,200) - OS System Root\r\n"
                        "  D: [MICA_DATA] 1.7 TB FAT32 (sdb3, LBA 270,534,656) - High-Capacity Volume\r\n"
@@ -1982,7 +1982,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             concatStr(reply, dirPath, maxReply);
             concatStr(reply, "\r\n", maxReply);
         }
-    } else if (cmd[0] == 't' && cmd[1] == 'y') { // type <file>
+    } else if (cmd[0] == 't' && cmd[1] == 'y' && cmd[2] == 'p' && cmd[3] == 'e' && (cmd[4] == ' ' || cmd[4] == '\0' || cmd[4] == '\r')) { // type <file>
         const char* arg = cmd + 4;
         while (*arg == ' ') ++arg;
         char pathBuf[128];
@@ -2708,7 +2708,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("MicaNT Bare-Metal Executive Shell ready. Type 'help' for command list.", micant::bootvid::Color{100, 240, 160});
             DrawExecutiveConsole();
             LogKernel("Shell: cls -> Screen cleared.");
-        } else if (cmd[0] == 'd' && cmd[1] == 'r' && cmd[2] == 'i') {
+        } else if (cmd[0] == 'd' && cmd[1] == 'r' && cmd[2] == 'i' && cmd[3] == 'v' && cmd[4] == 'e' && (cmd[5] == 's' || cmd[5] == '\0' || cmd[5] == ' ')) {
             ShellClearOutput();
             ShellAddLine("Mounted Storage Volumes & Filesystem Subsystems:", micant::bootvid::Color{255, 215, 0});
             ShellAddLine("  Drive  Volume Label   File System  Total Capacity    Status", micant::bootvid::Color{0, 210, 255});
@@ -2913,8 +2913,8 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine("Check path syntax (e.g. 'dir \\MicaNT\\System32' or 'dir D:\\').", micant::bootvid::Color{180, 200, 220});
                 LogKernel("Shell: 'dir' target directory not found.");
             }
-        } else if ((cmd[0] == 't' && cmd[1] == 'y' && cmd[2] == 'p') ||
-                   (cmd[0] == 'c' && cmd[1] == 'a' && cmd[2] == 't')) {
+        } else if (((cmd[0] == 't' && cmd[1] == 'y' && cmd[2] == 'p' && cmd[3] == 'e' && (cmd[4] == ' ' || cmd[4] == '\0')) ||
+                   (cmd[0] == 'c' && cmd[1] == 'a' && cmd[2] == 't' && (cmd[3] == ' ' || cmd[3] == '\0')))) {
             ShellClearOutput();
             const char* arg = cmd + ((cmd[0] == 't') ? 4 : 3);
             while (*arg == ' ') ++arg;
@@ -4019,7 +4019,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellClearOutput();
             ShellAddLine("PATH=C:\\MicaNT\\System32;C:\\MicaNT;D:\\", micant::bootvid::Color{0, 229, 255});
             LogKernel("Shell: path displayed.");
-        } else if (cmd[0] == 'a' && cmd[1] == 't' && cmd[2] == 't' && cmd[3] == 'r') {
+        } else if (cmd[0] == 'a' && cmd[1] == 't' && cmd[2] == 't' && cmd[3] == 'r' && cmd[4] == 'i' && cmd[5] == 'b' && (cmd[6] == ' ' || cmd[6] == '\0')) {
             ShellClearOutput();
             const char* arg = getCommandArgs(cmd);
             char fullTarget[128]{};
