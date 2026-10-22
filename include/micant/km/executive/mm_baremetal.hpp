@@ -57,8 +57,11 @@ inline constexpr uint64_t PTE_ACCESSED    = 1ULL << 5;
 inline constexpr uint64_t PTE_DIRTY       = 1ULL << 6;
 inline constexpr uint64_t PTE_LARGE_PAGE  = 1ULL << 7;
 inline constexpr uint64_t PTE_GLOBAL      = 1ULL << 8;
+inline constexpr uint64_t PTE_TRANSITION  = 1ULL << 11; // Software transition bit for HMB 2.0 swap
 inline constexpr uint64_t PTE_NO_EXECUTE  = 1ULL << 63;
 inline constexpr uint64_t PTE_PHYS_MASK   = 0x000FFFFFFFFFF000ULL;
+inline constexpr uint64_t PTE_SLOT_MASK   = 0x00000000FFFFF000ULL;
+inline constexpr uint32_t PTE_SLOT_SHIFT  = 12;
 
 // User Address Space Boundaries
 inline constexpr uint64_t USER_SPACE_MIN  = 0x0000000000010000ULL; // 64KB Null Allocation Trap
@@ -316,6 +319,59 @@ public:
         if (!(pt[ptIdx] & PTE_PRESENT)) return 0;
 
         return (pt[ptIdx] & PTE_PHYS_MASK) | (va & PAGE_MASK_4KB);
+    }
+
+    /**
+     * @brief Retrieve raw 64-bit PTE entry for a virtual address (present or transition).
+     */
+    static uint64_t getRawPte(uint64_t cr3Phys, uint64_t va) noexcept {
+        if (cr3Phys == 0) return 0;
+        uint64_t pml4Idx = (va >> 39) & 0x1FF;
+        uint64_t pdptIdx = (va >> 30) & 0x1FF;
+        uint64_t pdIdx   = (va >> 21) & 0x1FF;
+        uint64_t ptIdx   = (va >> 12) & 0x1FF;
+
+        auto* pml4 = reinterpret_cast<uint64_t*>(cr3Phys);
+        if (!(pml4[pml4Idx] & PTE_PRESENT)) return 0;
+
+        auto* pdpt = reinterpret_cast<uint64_t*>(pml4[pml4Idx] & PTE_PHYS_MASK);
+        if (!(pdpt[pdptIdx] & PTE_PRESENT)) return 0;
+        if (pdpt[pdptIdx] & PTE_LARGE_PAGE) return pdpt[pdptIdx];
+
+        auto* pd = reinterpret_cast<uint64_t*>(pdpt[pdptIdx] & PTE_PHYS_MASK);
+        if (!(pd[pdIdx] & PTE_PRESENT)) return 0;
+        if (pd[pdIdx] & PTE_LARGE_PAGE) return pd[pdIdx];
+
+        auto* pt = reinterpret_cast<uint64_t*>(pd[pdIdx] & PTE_PHYS_MASK);
+        return pt[ptIdx];
+    }
+
+    /**
+     * @brief Encode an HMB 2.0 Transition PTE (P=0, Transition=1, SlotId embedded).
+     */
+    static bool setTransitionPte(uint64_t cr3Phys, uint64_t va, uint32_t slotId) noexcept {
+        if (cr3Phys == 0) return false;
+        uint64_t pml4Idx = (va >> 39) & 0x1FF;
+        uint64_t pdptIdx = (va >> 30) & 0x1FF;
+        uint64_t pdIdx   = (va >> 21) & 0x1FF;
+        uint64_t ptIdx   = (va >> 12) & 0x1FF;
+
+        auto* pml4 = reinterpret_cast<uint64_t*>(cr3Phys);
+        if (!(pml4[pml4Idx] & PTE_PRESENT)) return false;
+
+        auto* pdpt = reinterpret_cast<uint64_t*>(pml4[pml4Idx] & PTE_PHYS_MASK);
+        if (!(pdpt[pdptIdx] & PTE_PRESENT)) return false;
+
+        auto* pd = reinterpret_cast<uint64_t*>(pdpt[pdptIdx] & PTE_PHYS_MASK);
+        if (!(pd[pdIdx] & PTE_PRESENT)) return false;
+
+        auto* pt = reinterpret_cast<uint64_t*>(pd[pdIdx] & PTE_PHYS_MASK);
+        pt[ptIdx] = (static_cast<uint64_t>(slotId) << PTE_SLOT_SHIFT) | PTE_TRANSITION | PTE_USER;
+
+#if defined(__x86_64__) && (!defined(__STDC_HOSTED__) || __STDC_HOSTED__ == 0)
+        __asm__ __volatile__("invlpg (%0)" : : "r"(va) : "memory");
+#endif
+        return true;
     }
 };
 
@@ -592,6 +648,28 @@ public:
         m_initialized = true;
     }
 
+    /**
+     * @brief Page out an active virtual page to the Haven Memory Bus (HMB 2.0) pagefile.
+     */
+    bool pageOutVirtualAddress(uint64_t cr3Phys, uint64_t va) noexcept {
+        uint64_t phys = BareMetalPaging::getPhysicalAddress(cr3Phys, va);
+        if (phys == 0) return false;
+
+        auto& hmb = hmb_pagefile::HmbPagefileManager::get();
+        uint64_t slot = hmb.allocateSlot(hmb_pagefile::HmbTier::DirtyHeap);
+        if (slot == UINT64_MAX) return false;
+
+        bool writeOk = hmb.writePage(slot, reinterpret_cast<const void*>(phys), hmb_pagefile::HmbTier::DirtyHeap);
+        if (!writeOk) {
+            hmb.freeSlot(slot);
+            return false;
+        }
+
+        BareMetalPaging::setTransitionPte(cr3Phys, va, static_cast<uint32_t>(slot));
+        BareMetalPfnAllocator::get().freePage(phys);
+        return true;
+    }
+
     [[nodiscard]] hmb_pagefile::HmbPagefileManager& getPagefile() noexcept {
         return hmb_pagefile::HmbPagefileManager::get();
     }
@@ -707,9 +785,23 @@ public:
                     phys = faultVa & PTE_PHYS_MASK;
                 }
             } else {
-                // Demand-Zero Paging: Allocate physical page from PFN DB and map
-                phys = BareMetalPfnAllocator::get().allocatePage();
-                if (!phys) return false; // Out of memory
+                // Check if this is an HMB 2.0 Transition PTE (P=0, Transition=1, Slot!=0)
+                uint64_t rawPte = BareMetalPaging::getRawPte(cr3Phys, faultVa);
+                if (!(rawPte & PTE_PRESENT) && (rawPte & PTE_TRANSITION)) {
+                    uint32_t slotId = static_cast<uint32_t>((rawPte & PTE_SLOT_MASK) >> PTE_SLOT_SHIFT);
+                    phys = BareMetalPfnAllocator::get().allocatePage();
+                    if (!phys) return false;
+
+                    bool readOk = micant::km::hmb_pagefile::HmbPagefileManager::get().readPage(slotId, reinterpret_cast<void*>(phys));
+                    if (!readOk) {
+                        std::memset(reinterpret_cast<void*>(phys), 0, PAGE_SIZE_4KB);
+                    }
+                    micant::km::hmb_pagefile::HmbPagefileManager::get().freeSlot(slotId);
+                } else {
+                    // Demand-Zero Paging: Allocate physical page from PFN DB and map
+                    phys = BareMetalPfnAllocator::get().allocatePage();
+                    if (!phys) return false; // Out of memory
+                }
             }
 
             bool mapped = BareMetalPaging::mapVirtualPage(cr3Phys, faultVa, phys, pteFlags);
