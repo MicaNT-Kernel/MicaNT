@@ -2024,7 +2024,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
         copyStr(reply, "Physical Memory: 32,768 MB ECC DDR4-2400 Total\r\n"
                        "Paging: High-Half Canonical PML4[496] base 0xFFFFF800'00000000\r\n"
                        "Pools: NonPagedPool 64 KB Active | PagedPool 4,096 KB Active\r\n", maxReply);
-    } else if (cmd[0] == 'n' && cmd[1] == 'e') { // net
+    } else if (cmd[0] == 'n' && cmd[1] == 'e' && cmd[2] == 't' && (cmd[3] == ' ' || cmd[3] == '\0' || cmd[3] == '\r' || cmd[3] == '\n')) { // net
         auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
         copyStr(reply, "Intel I210 Gigabit Ethernet (8086:1533 at PCIe 02:00.0)\r\n"
                        "Link: UP (1000 Mbps) | IP: 147.135.1.229/24 | MAC: a4:bf:01:1e:a3:be\r\n"
@@ -3427,7 +3427,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine("Usage: 'boot ubuntu' (reboots to Ubuntu) | 'boot micant' (sets default)", micant::bootvid::Color{200, 220, 245});
                 LogKernel("Shell: boot status displayed.");
             }
-        } else if (cmd[0] == 'n' && cmd[1] == 'e') {
+        } else if (cmd[0] == 'n' && cmd[1] == 'e' && cmd[2] == 't' && (cmd[3] == ' ' || cmd[3] == '\0')) {
             const char* arg = cmd + 3;
             while (*arg == ' ') ++arg;
             auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
