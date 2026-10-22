@@ -40,6 +40,7 @@
 #include "micant/km/executive/po.hpp"
 #include "micant/km/executive/bms.hpp"
 #include "micant/km/executive/ppm.hpp"
+#include "micant/km/executive/thermal.hpp"
 #include "micant/km/core/ipi.hpp"
 #include "micant/km/executive/heap.hpp"
 #include "micant/um/native/ldr.hpp"
@@ -385,10 +386,11 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite344")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite347")) {
         RUN_TEST(Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter_And_GdiPresentPipeline);
-    RUN_TEST(Test_Horizon129_BatteryManagementSystem_Bms_ClassDriver_And_CellBalancing);
-    RUN_TEST(Test_Horizon130_ProcessorPowerManagement_IntelSpeedShift_Hwp_And_CoreParking);
+        RUN_TEST(Test_Horizon129_BatteryManagementSystem_Bms_ClassDriver_And_CellBalancing);
+        RUN_TEST(Test_Horizon130_ProcessorPowerManagement_IntelSpeedShift_Hwp_And_CoreParking);
+        RUN_TEST(Test_Horizon131_ThermalManagement_AcpiThermalZone_And_DynamicFanControl);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1661,6 +1663,9 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon126_BareMetal_SMP_MultiCore_AP_Bootstrapping);
     RUN_TEST(Test_Horizon127_Standalone_Ntoskrnl_Native_PE32Plus_Loader_And_Bootloader_Handover);
     RUN_TEST(Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter_And_GdiPresentPipeline);
+    RUN_TEST(Test_Horizon129_BatteryManagementSystem_Bms_ClassDriver_And_CellBalancing);
+    RUN_TEST(Test_Horizon130_ProcessorPowerManagement_IntelSpeedShift_Hwp_And_CoreParking);
+    RUN_TEST(Test_Horizon131_ThermalManagement_AcpiThermalZone_And_DynamicFanControl);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

@@ -53,6 +53,7 @@ try {
         @{ Src = "kernel/po/pofx_whea.cpp";           Obj = "po_pofx_whea.o" },
         @{ Src = "kernel/po/bms.cpp";                 Obj = "po_bms.o" },
         @{ Src = "kernel/po/ppm.cpp";                 Obj = "po_ppm.o" },
+        @{ Src = "kernel/po/thermal.cpp";             Obj = "po_thermal.o" },
         @{ Src = "kernel/io/umdf_msix.cpp";           Obj = "io_umdf_msix.o" },
         @{ Src = "kernel/ke/zerobsod.cpp";            Obj = "ke_zerobsod.o" },
         @{ Src = "kernel/io/livehotswap.cpp";         Obj = "io_livehotswap.o" },

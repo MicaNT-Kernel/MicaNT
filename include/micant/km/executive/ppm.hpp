@@ -268,10 +268,32 @@ public:
                 m_cores[i].currentFrequencyMhz = 1600;
                 m_powerInfo[i].currentMhz = 1600;
             }
+        } else if (packageTempCelsius >= 70) {
+            // ACPI Passive Cooling: Clamp Turbo boost to guaranteed base ratio (38x / 3800 MHz)
+            m_hwpRequest.maximumRatio = m_caps.guaranteedPerformanceRatio;
+            m_hwpRequest.energyPerformancePreference = EPP_BALANCED_POWER;
+            for (size_t i = 0; i < MAX_PROCESSORS; ++i) {
+                if (m_cores[i].currentFrequencyMhz > 3800) {
+                    m_cores[i].currentFrequencyMhz = 3800;
+                    m_cores[i].currentRatio = 38;
+                    m_powerInfo[i].currentMhz = 3800;
+                }
+            }
         } else if (packageTempCelsius < 70) {
             // Thermal recovery
             for (size_t i = 0; i < MAX_PROCESSORS; ++i) {
                 m_cores[i].isThermalThrottled = false;
+            }
+            if (m_activePolicy == ProcessorPolicy::Performance) {
+                m_hwpRequest.maximumRatio = m_caps.highestPerformanceRatio;
+                m_hwpRequest.energyPerformancePreference = EPP_HIGH_PERFORMANCE;
+                for (size_t i = 0; i < MAX_PROCESSORS; ++i) {
+                    if (!m_cores[i].isParked) {
+                        m_cores[i].currentRatio = m_caps.highestPerformanceRatio;
+                        m_cores[i].currentFrequencyMhz = 4200;
+                        m_powerInfo[i].currentMhz = 4200;
+                    }
+                }
             }
         }
         applyHwpHardwareMsrs();
@@ -358,6 +380,11 @@ public:
     [[nodiscard]] ProcessorPolicy getActivePolicy() const noexcept {
         std::lock_guard<std::mutex> lock(m_lock);
         return m_activePolicy;
+    }
+
+    [[nodiscard]] uint32_t getPackageTemperatureCelsius() const noexcept {
+        std::lock_guard<std::mutex> lock(m_lock);
+        return m_packageTemperatureCelsius;
     }
 
     // ASCII Telemetry Visualizer for Executive Console

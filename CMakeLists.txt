@@ -38,6 +38,7 @@ set(NTOSKRNL_SUBSYSTEM_SOURCES
     kernel/po/pofx_whea.cpp
     kernel/po/bms.cpp
     kernel/po/ppm.cpp
+    kernel/po/thermal.cpp
     kernel/io/umdf_msix.cpp
     kernel/ke/zerobsod.cpp
     kernel/io/livehotswap.cpp

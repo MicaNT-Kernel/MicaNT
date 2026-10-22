@@ -173,6 +173,7 @@
 #include "micant/km/drivers/compute/modern_standby.hpp"
 #include "micant/km/executive/bms.hpp"
 #include "micant/km/executive/ppm.hpp"
+#include "micant/km/executive/thermal.hpp"
 #include "micant/um/subsystems/com/wsa.hpp"
 #include "micant/um/subsystems/winuser/touchpad.hpp"
 #include "micant/um/subsystems/winuser/ink.hpp"
@@ -564,6 +565,7 @@ public:
             if (cmd == "powercfg") { cmdPowerCfg(tokens, out); return 0; }
             if (cmd == "battery" || cmd == "bms") { cmdBms(tokens, out); return 0; }
             if (cmd == "ppm" || cmd == "speedshift" || cmd == "hwp") { cmdPpm(tokens, out); return 0; }
+            if (cmd == "thermal" || cmd == "fan" || cmd == "acpitz" || cmd == "tz") { cmdThermal(tokens, out); return 0; }
             if (cmd == "wsa" || cmd == "android" || cmd == "aosp" || cmd == "titanwsa" || cmd == "aegiswsa") { cmdWsa(tokens, out); return 0; }
             if (cmd == "touch" || cmd == "touchpad" || cmd == "ptp" || cmd == "directmanipulation" || cmd == "haptics") { cmdTouchpad(tokens, out); return 0; }
             if (cmd == "ink" || cmd == "stylus" || cmd == "pen" || cmd == "wisptis" || cmd == "handwriting") { cmdInk(tokens, out); return 0; }

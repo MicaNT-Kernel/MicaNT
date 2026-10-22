@@ -1550,6 +1550,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             "  run <app>     - Execute PE32+ application in User-Mode Ring 3\r\n"
             "  battery / bms - Query Sovereign Battery Management System (BMS) & 4S pack\r\n"
             "  ppm / hwp     - Query Sovereign Processor Power Management (HWP Speed Shift)\r\n"
+            "  thermal / fan - Query Sovereign ACPI Thermal Zone (thermal.sys) & Fans\r\n"
             "  boot [u|m]    - Switch default boot target ('boot ubuntu' / 'boot micant')\r\n"
             "  reboot        - Issue hardware CPU reset via Intel PCH Port 0xCF9\r\n", maxReply);
     } else if ((cmd[0] == 'p' && cmd[1] == 'p' && cmd[2] == 'm') || (cmd[0] == 'h' && cmd[1] == 'w' && cmd[2] == 'p')) {
@@ -1565,6 +1566,18 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
             "  Base Guaranteed:   38x (3.80 GHz Base Ratio)\r\n"
             "  Efficient Floor:   16x (1.60 GHz Floor Ratio)\r\n"
             "  Active Governance: EPP 0x20 Performance (AC Online)\r\n"
+            "=======================================================\r\n", maxReply);
+        } else if ((cmd[0] == 't' && cmd[1] == 'h' && cmd[2] == 'e' && cmd[3] == 'r') || (cmd[0] == 'f' && cmd[1] == 'a' && cmd[2] == 'n') || (cmd[0] == 't' && cmd[1] == 'z')) {
+        copyStr(reply,
+            "=======================================================\r\n"
+            "  MicaNT Sovereign ACPI Thermal Zone Subsystem (acpitz)\r\n"
+            "=======================================================\r\n"
+            "  Class Driver:      \\Device\\ThermalZone0 (thermal.sys)\r\n"
+            "  Current Temp:      45.0 C (318.2 K) [Nominal Passive]\r\n"
+            "  Trip Points:       _CRT: 100.0 C | _PSV: 70.0 C\r\n"
+            "                     _AC0:  65.0 C | _AC1: 55.0 C | _AC2: 45.0 C\r\n"
+            "  Cooling Fans:      3 PWM Channels (CPU: 1800 RPM @ 40% PWM)\r\n"
+            "  Algorithm:         ACPI TC1=2 / TC2=3 / TSP=10 (Coupled to PPM)\r\n"
             "=======================================================\r\n", maxReply);
     } else if ((cmd[0] == 'b' && cmd[1] == 'a' && cmd[2] == 't') || (cmd[0] == 'b' && cmd[1] == 'm' && cmd[2] == 's')) {
         copyStr(reply,
