@@ -1429,7 +1429,8 @@ static bool transitionToRing3(
     size_t peSize,
     bool fromDisk,
     micant::bootvid::BootVideoDriver* videoDriver = nullptr,
-    const char* appName = "app.exe"
+    const char* appName = "app.exe",
+    const char* cmdArgs = ""
 ) {
     UartSerial::print("\r\n[ntoskrnl.exe] Preparing Ring 3 privilege transition...\r\n");
 
@@ -1441,6 +1442,9 @@ static bool transitionToRing3(
     uint64_t tebVa = reinterpret_cast<uint64_t>(&s_userPebTebPage[512]);
     uint64_t entryRip = 0;
     uint32_t activePid = 1024;
+
+    char* userCmdLine = reinterpret_cast<char*>(&s_userPebTebPage[2048]);
+    copyStr(userCmdLine, (cmdArgs && *cmdArgs) ? cmdArgs : "", 256);
 
     s_userVideoInfoVa = pebVa + 1024;
     s_userPresentParamsVa = pebVa + 1024 + sizeof(micant::um::UserVideoInfo64);
@@ -1612,6 +1616,8 @@ static bool transitionToRing3(
         "movq %2, %%rdx\n\t"
         "shrq $32, %%rdx\n\t"
         "wrmsr\n\t"
+        "movq %3, %%rcx\n\t"
+        "movq %3, %%rdi\n\t"
         "pushq $0x002B\n\t"
         "pushq %1\n\t"
         "pushq $0x0002\n\t"
@@ -1620,8 +1626,8 @@ static bool transitionToRing3(
         "iretq\n\t"
         "1:\n\t"
         :
-        : "r"(entryRip), "r"(userStackTop), "r"(tebVa)
-        : "rax", "rcx", "rdx", "memory"
+        : "r"(entryRip), "r"(userStackTop), "r"(tebVa), "r"(reinterpret_cast<uint64_t>(userCmdLine))
+        : "rax", "rcx", "rdx", "rdi", "memory"
     );
 #endif
 
@@ -3839,7 +3845,11 @@ extern "C" micant::NtStatus KiSystemStartup(
             if (readOk && bytesRead > 0) {
                 ShellClearOutput();
                 LogKernel("Shell: Executing standalone \\MicaNT\\System32\\whoami.exe in Ring 3...");
-                transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, "whoami.exe");
+                const char* wArgs = "";
+                size_t wi = 0;
+                while (cmd[wi] && cmd[wi] != ' ') wi++;
+                if (cmd[wi] == ' ') { wArgs = cmd + wi + 1; while (*wArgs == ' ') wArgs++; }
+                transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, "whoami.exe", wArgs);
             } else {
                 ShellClearOutput();
                 ShellAddLine("MicaNT Sovereign Security Subsystem (se.sys):", micant::bootvid::Color{255, 215, 0});
@@ -3856,14 +3866,27 @@ extern "C" micant::NtStatus KiSystemStartup(
                 LogKernel("Shell: whoami -> NT AUTHORITY\\SYSTEM (S-1-5-18)");
             }
         } else if (cmd[0] == 'h' && cmd[1] == 'o' && cmd[2] == 's' && cmd[3] == 't') {
-            ShellClearOutput();
-            ShellAddLine("Computer Name & NetBIOS Topology:", micant::bootvid::Color{255, 215, 0});
-            ShellAddLine("  NetBIOS Name:       MICANT-XEON", micant::bootvid::Color{0, 229, 255});
-            ShellAddLine("  DNS Hostname:       micant-baremetal.ash-forge.internal", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  Domain / Workgroup: WORKGROUP (Sovereign Standalone Workstation)", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("  IPv4 Address:       147.135.1.229/24", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("  Hardware MAC:       A4:BF:01:1E:A3:BE (Intel I210 Gigabit Ethernet)", micant::bootvid::Color{180, 220, 255});
-            LogKernel("Shell: hostname -> MICANT-XEON");
+            auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+            size_t bytesRead = 0;
+            bool readOk = fs.readFile("\\MicaNT\\System32\\hostname.exe", s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+            if (readOk && bytesRead > 0) {
+                ShellClearOutput();
+                LogKernel("Shell: Executing standalone \\MicaNT\\System32\\hostname.exe in Ring 3...");
+                const char* hArgs = "";
+                size_t hi = 0;
+                while (cmd[hi] && cmd[hi] != ' ') hi++;
+                if (cmd[hi] == ' ') { hArgs = cmd + hi + 1; while (*hArgs == ' ') hArgs++; }
+                transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, "hostname.exe", hArgs);
+            } else {
+                ShellClearOutput();
+                ShellAddLine("Computer Name & NetBIOS Topology:", micant::bootvid::Color{255, 215, 0});
+                ShellAddLine("  NetBIOS Name:       MICANT-XEON", micant::bootvid::Color{0, 229, 255});
+                ShellAddLine("  DNS Hostname:       micant-baremetal.ash-forge.internal", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("  Domain / Workgroup: WORKGROUP (Sovereign Standalone Workstation)", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("  IPv4 Address:       147.135.1.229/24", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("  Hardware MAC:       A4:BF:01:1E:A3:BE (Intel I210 Gigabit Ethernet)", micant::bootvid::Color{180, 220, 255});
+                LogKernel("Shell: hostname -> MICANT-XEON");
+            }
         } else if ((cmd[0] == 't' && cmd[1] == 'i' && cmd[2] == 'm') ||
                    (cmd[0] == 'd' && cmd[1] == 'a' && cmd[2] == 't')) {
             ShellClearOutput();
@@ -3950,19 +3973,32 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine(" Physical Drive:     HGST Ultrastar 2TB SATA (Port 1)", micant::bootvid::Color{180, 220, 255});
             LogKernel("Shell: vol -> Displayed active volume label and filesystem serial.");
         } else if (cmd[0] == 's' && cmd[1] == 'y' && cmd[2] == 's') {
-            ShellClearOutput();
-            ShellAddLine("MicaNT Sovereign System Information Summary:", micant::bootvid::Color{255, 215, 0});
-            ShellAddLine("  Host Name:          MICANT-XEON", micant::bootvid::Color{0, 229, 255});
-            ShellAddLine("  OS Name:            MicaNT Sovereign Workstation (Dave Cutler Edition)", micant::bootvid::Color{0, 229, 255});
-            ShellAddLine("  OS Version:         10.0.26040 Bare-Metal (SMP x86_64 Clean-Room)", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  System Model:       Supermicro X11SSH-F (Intel C236 Chipset)", micant::bootvid::Color{100, 240, 160});
-            ShellAddLine("  Processor:          Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz (8T)", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("  Total Physical RAM: 32,768 MB ECC DDR4-2400 (Single-bit Correction)", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("  Paging Mode:        48-bit Canonical High-Half PML4[496] Active", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("  Primary Storage:    HGST Ultrastar 2TB SATA (128GB FAT32 Root)", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("  Network Adapter:    Intel I210 Gigabit Ethernet (147.135.1.229)", micant::bootvid::Color{180, 220, 255});
-            ShellAddLine("  Userland Subsystem: Ring 3 CPL=3 Fast Syscall (KiSystemCall64)", micant::bootvid::Color{255, 200, 80});
-            LogKernel("Shell: sysinfo -> Displayed full system specifications.");
+            auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+            size_t bytesRead = 0;
+            bool readOk = fs.readFile("\\MicaNT\\System32\\systeminfo.exe", s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+            if (readOk && bytesRead > 0) {
+                ShellClearOutput();
+                LogKernel("Shell: Executing standalone \\MicaNT\\System32\\systeminfo.exe in Ring 3...");
+                const char* sArgs = "";
+                size_t si = 0;
+                while (cmd[si] && cmd[si] != ' ') si++;
+                if (cmd[si] == ' ') { sArgs = cmd + si + 1; while (*sArgs == ' ') sArgs++; }
+                transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, "systeminfo.exe", sArgs);
+            } else {
+                ShellClearOutput();
+                ShellAddLine("MicaNT Sovereign System Information Summary:", micant::bootvid::Color{255, 215, 0});
+                ShellAddLine("  Host Name:          MICANT-XEON", micant::bootvid::Color{0, 229, 255});
+                ShellAddLine("  OS Name:            MicaNT Sovereign Workstation (Dave Cutler Edition)", micant::bootvid::Color{0, 229, 255});
+                ShellAddLine("  OS Version:         10.0.26040 Bare-Metal (SMP x86_64 Clean-Room)", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("  System Model:       Supermicro X11SSH-F (Intel C236 Chipset)", micant::bootvid::Color{100, 240, 160});
+                ShellAddLine("  Processor:          Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz (8T)", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("  Total Physical RAM: 32,768 MB ECC DDR4-2400 (Single-bit Correction)", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("  Paging Mode:        48-bit Canonical High-Half PML4[496] Active", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("  Primary Storage:    HGST Ultrastar 2TB SATA (128GB FAT32 Root)", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("  Network Adapter:    Intel I210 Gigabit Ethernet (147.135.1.229)", micant::bootvid::Color{180, 220, 255});
+                ShellAddLine("  Userland Subsystem: Ring 3 CPL=3 Fast Syscall (KiSystemCall64)", micant::bootvid::Color{255, 200, 80});
+                LogKernel("Shell: sysinfo -> Displayed full system specifications.");
+            }
         } else if (cmd[0] == 's' && cmd[1] == 'e' && cmd[2] == 't' && (cmd[3] == ' ' || cmd[3] == '\0')) {
             ShellClearOutput();
             ShellAddLine("MicaNT Sovereign Environment Variables:", micant::bootvid::Color{255, 215, 0});
@@ -4081,7 +4117,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                 copyStr(lastResultLine2, "Running standalone PE32+ in Ring 3 (CPL=3)...", sizeof(lastResultLine2));
                 LogKernel(msg1);
 
-                bool ok = transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, exeBase);
+                bool ok = transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, exeBase, cmdArgs);
                 if (ok) {
                     if (s_shellOutputCount == 0) {
                         ShellAddLine("PE32+ Binary executed & exited cleanly via NtTerminateProcess!", micant::bootvid::Color{100, 240, 160});

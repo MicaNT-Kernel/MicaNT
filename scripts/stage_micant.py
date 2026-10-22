@@ -22,6 +22,14 @@ WHOAMI_SOURCE = os.path.join(REPO_ROOT, r"build\whoami.exe")
 TASKLIST_SOURCE = os.path.join(REPO_ROOT, r"build\tasklist.exe")
 PING_SOURCE = os.path.join(REPO_ROOT, r"build\ping.exe")
 CMD_SOURCE = os.path.join(REPO_ROOT, r"build\cmd.exe")
+HOSTNAME_SOURCE = os.path.join(REPO_ROOT, r"build\hostname.exe")
+SYSTEMINFO_SOURCE = os.path.join(REPO_ROOT, r"build\systeminfo.exe")
+NETSTAT_SOURCE = os.path.join(REPO_ROOT, r"build\netstat.exe")
+CHKDSK_SOURCE = os.path.join(REPO_ROOT, r"build\chkdsk.exe")
+DISKPART_SOURCE = os.path.join(REPO_ROOT, r"build\diskpart.exe")
+ARP_SOURCE = os.path.join(REPO_ROOT, r"build\arp.exe")
+ROUTE_SOURCE = os.path.join(REPO_ROOT, r"build\route.exe")
+REG_SOURCE = os.path.join(REPO_ROOT, r"build\reg.exe")
 HOST = os.environ.get("MICANT_TARGET_HOST", "147.135.1.229")
 USER = os.environ.get("MICANT_TARGET_USER", "ubuntu")
 KEY_PATH = os.environ.get("MICANT_SSH_KEY", r"C:\Users\admin\.ssh\micant_ci_key")
@@ -159,6 +167,14 @@ def run_local_build():
         ("tools/tasklist_app.cpp", "build/tasklist.exe", "tasklist.exe"),
         ("tools/ping_app.cpp", "build/ping.exe", "ping.exe"),
         ("tools/cmd_app.cpp", "build/cmd.exe", "cmd.exe"),
+        ("tools/hostname_app.cpp", "build/hostname.exe", "hostname.exe"),
+        ("tools/systeminfo_app.cpp", "build/systeminfo.exe", "systeminfo.exe"),
+        ("tools/netstat_app.cpp", "build/netstat.exe", "netstat.exe"),
+        ("tools/chkdsk_app.cpp", "build/chkdsk.exe", "chkdsk.exe"),
+        ("tools/diskpart_app.cpp", "build/diskpart.exe", "diskpart.exe"),
+        ("tools/arp_app.cpp", "build/arp.exe", "arp.exe"),
+        ("tools/route_app.cpp", "build/route.exe", "route.exe"),
+        ("tools/reg_app.cpp", "build/reg.exe", "reg.exe"),
     ]
     for src, out_path, name in system32_tools:
         c_cmd = [
@@ -241,6 +257,22 @@ def main():
         sftp.put(PING_SOURCE, "/tmp/ping.exe")
     if os.path.exists(CMD_SOURCE):
         sftp.put(CMD_SOURCE, "/tmp/cmd.exe")
+    if os.path.exists(HOSTNAME_SOURCE):
+        sftp.put(HOSTNAME_SOURCE, "/tmp/hostname.exe")
+    if os.path.exists(SYSTEMINFO_SOURCE):
+        sftp.put(SYSTEMINFO_SOURCE, "/tmp/systeminfo.exe")
+    if os.path.exists(NETSTAT_SOURCE):
+        sftp.put(NETSTAT_SOURCE, "/tmp/netstat.exe")
+    if os.path.exists(CHKDSK_SOURCE):
+        sftp.put(CHKDSK_SOURCE, "/tmp/chkdsk.exe")
+    if os.path.exists(DISKPART_SOURCE):
+        sftp.put(DISKPART_SOURCE, "/tmp/diskpart.exe")
+    if os.path.exists(ARP_SOURCE):
+        sftp.put(ARP_SOURCE, "/tmp/arp.exe")
+    if os.path.exists(ROUTE_SOURCE):
+        sftp.put(ROUTE_SOURCE, "/tmp/route.exe")
+    if os.path.exists(REG_SOURCE):
+        sftp.put(REG_SOURCE, "/tmp/reg.exe")
     sftp.close()
 
     print("      Staging binaries strictly to sovereign MicaNT partitions by PARTUUID...")
@@ -263,6 +295,14 @@ def main():
         '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/tasklist.exe /mnt/micasys/ || true); '
         '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/ping.exe /mnt/micasys/ || true); '
         '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/cmd.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/hostname.exe ] && cp -v /tmp/hostname.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/hostname.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/systeminfo.exe ] && cp -v /tmp/systeminfo.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/systeminfo.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/netstat.exe ] && cp -v /tmp/netstat.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/netstat.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/chkdsk.exe ] && cp -v /tmp/chkdsk.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/chkdsk.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/diskpart.exe ] && cp -v /tmp/diskpart.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/diskpart.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/arp.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/route.exe /mnt/micasys/ || true); '
+        '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/reg.exe /mnt/micasys/ || true); '
         'mkdir -p /mnt/micaesp/EFI/BOOT /mnt/micaesp/EFI/MicaNT && '
         'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/BOOT/BOOTX64.EFI && '
         'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/MicaNT/BOOTX64.EFI && '
@@ -276,6 +316,14 @@ def main():
         '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /mnt/micaesp/EFI/MicaNT/ || true); '
         '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /mnt/micaesp/EFI/MicaNT/ || true); '
         '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/hostname.exe ] && cp -v /tmp/hostname.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/systeminfo.exe ] && cp -v /tmp/systeminfo.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/netstat.exe ] && cp -v /tmp/netstat.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/chkdsk.exe ] && cp -v /tmp/chkdsk.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/diskpart.exe ] && cp -v /tmp/diskpart.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /mnt/micaesp/EFI/MicaNT/ || true); '
+        '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /mnt/micaesp/EFI/MicaNT/ || true); '
         'rm -f /mnt/micaesp/EFI/MicaNT/boot.ini /mnt/micaesp/boot.ini /mnt/micasys/boot.ini /mnt/micasys/EFI/MicaNT/boot.ini 2>/dev/null || true; '
         'mkdir -p /boot/efi/EFI/MicaNT && '
         'cp -v /tmp/BOOTX64.EFI /boot/efi/EFI/MicaNT/BOOTX64.EFI && '
@@ -289,6 +337,14 @@ def main():
         '([ -f /tmp/tasklist.exe ] && cp -v /tmp/tasklist.exe /boot/efi/EFI/MicaNT/ || true); '
         '([ -f /tmp/ping.exe ] && cp -v /tmp/ping.exe /boot/efi/EFI/MicaNT/ || true); '
         '([ -f /tmp/cmd.exe ] && cp -v /tmp/cmd.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/hostname.exe ] && cp -v /tmp/hostname.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/systeminfo.exe ] && cp -v /tmp/systeminfo.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/netstat.exe ] && cp -v /tmp/netstat.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/chkdsk.exe ] && cp -v /tmp/chkdsk.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/diskpart.exe ] && cp -v /tmp/diskpart.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/arp.exe ] && cp -v /tmp/arp.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/route.exe ] && cp -v /tmp/route.exe /boot/efi/EFI/MicaNT/ || true); '
+        '([ -f /tmp/reg.exe ] && cp -v /tmp/reg.exe /boot/efi/EFI/MicaNT/ || true); '
         'rm -f /boot/efi/EFI/MicaNT/boot.ini /boot/efi/boot.ini 2>/dev/null || true; '
         'sync && umount /mnt/micasys /mnt/micaesp'
     )
@@ -300,10 +356,15 @@ def main():
 
     print("[4/5] Verifying staged files...")
     verify_cmd = (
-        'mkdir -p /mnt/micaesp && '
+        'mkdir -p /mnt/micasys /mnt/micaesp && '
+        'mount /dev/disk/by-partuuid/b6457ee0-ed3e-4d78-b82c-a08971cc1b52 /mnt/micasys && '
         'mount /dev/disk/by-partuuid/0fb58002-611e-491c-829d-1d7c669fdef2 /mnt/micaesp && '
+        'echo "=== /mnt/micasys/MicaNT/System32/ ===" && '
+        'ls -la /mnt/micasys/MicaNT/System32/ && '
+        'echo "=== /mnt/micaesp/EFI/MicaNT/ ===" && '
         'ls -la /mnt/micaesp/EFI/MicaNT/ && '
-        'umount /mnt/micaesp && '
+        'umount /mnt/micasys /mnt/micaesp && '
+        'echo "=== /boot/efi/EFI/MicaNT/ ===" && '
         'ls -la /boot/efi/EFI/MicaNT/'
     )
     rc, out, err = exec_sudo(ssh, verify_cmd)
