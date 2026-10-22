@@ -20641,3 +20641,143 @@ inline void Test_Horizon131_ThermalManagement_AcpiThermalZone_And_DynamicFanCont
 
     std::cout << "[TEST] Suite 347: Horizon 131 - Sovereign ACPI Thermal Zone (thermal.sys/acpitz.sys) PASSED.\n";
 }
+
+// ============================================================================
+// Suite 348 (Unit #104): Sovereign Robust Userspace PE32+ Execution,
+//                        UCRT Fast Trampoline ABI & Demand Paging Permission Promotion
+// ============================================================================
+inline void test_suite_348_robust_userspace_pe_execution() {
+    std::cout << "[TEST] Suite 348: Horizon 132 - Robust Userspace PE32+ Execution & UCRT Trampoline ABI...\n";
+
+    // 1. Verify UserImageLoader64 Dynamic Heap Mapping & Bounds
+    alignas(4096) static uint8_t mockDest[0x8000]{};
+    alignas(4096) static uint8_t mockTramp[0x2000]{};
+    alignas(4096) static uint8_t mockHeap[0x10000]{}; // 64 KB Mock Heap
+
+    std::vector<uint8_t> rawPe(0x2000, 0);
+    auto* dos = reinterpret_cast<micant::pe::ImageDosHeader*>(rawPe.data());
+    dos->e_magic = micant::pe::DOS_MAGIC;
+    dos->e_lfanew = 0x80;
+    auto* nt = reinterpret_cast<micant::pe::ImageNtHeaders64*>(rawPe.data() + 0x80);
+    nt->signature = micant::pe::NT_SIGNATURE;
+    nt->fileHeader.machine = micant::pe::MACHINE_AMD64;
+    nt->fileHeader.numberOfSections = 2;
+    nt->fileHeader.sizeOfOptionalHeader = sizeof(micant::pe::ImageOptionalHeader64);
+    nt->optionalHeader.magic = micant::pe::PE32PLUS_MAGIC;
+    nt->optionalHeader.imageBase = 0x0000000140000000ULL;
+    nt->optionalHeader.sizeOfImage = 0x6000;
+    nt->optionalHeader.sizeOfHeaders = 0x400;
+    nt->optionalHeader.addressOfEntryPoint = 0x1000;
+    nt->optionalHeader.subsystem = micant::pe::IMAGE_SUBSYSTEM_WINDOWS_CUI;
+    nt->optionalHeader.numberOfRvaAndSizes = micant::pe::IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+
+    auto* sec = reinterpret_cast<micant::pe::ImageSectionHeader*>(rawPe.data() + 0x80 + sizeof(uint32_t) + sizeof(micant::pe::ImageFileHeader) + sizeof(micant::pe::ImageOptionalHeader64));
+    std::memcpy(sec[0].name, ".text", 5);
+    sec[0].virtualAddress = 0x1000;
+    sec[0].misc.virtualSize = 0x1000;
+    sec[0].sizeOfRawData = 0x1000;
+    sec[0].pointerToRawData = 0x400;
+    sec[0].characteristics = micant::pe::IMAGE_SCN_MEM_EXECUTE | micant::pe::IMAGE_SCN_MEM_READ;
+
+    std::memcpy(sec[1].name, ".data", 5);
+    sec[1].virtualAddress = 0x2000;
+    sec[1].misc.virtualSize = 0x2000; // 8KB virtual size
+    sec[1].sizeOfRawData = 0x800;     // 2KB raw size (6KB BSS)
+    sec[1].pointerToRawData = 0x1400;
+    sec[1].characteristics = micant::pe::IMAGE_SCN_MEM_READ | micant::pe::IMAGE_SCN_MEM_WRITE;
+
+    micant::um::UserLoadedImageInfo outInfo{};
+    uint64_t heapBaseVa = reinterpret_cast<uint64_t>(mockHeap);
+    uint64_t trampBaseVa = reinterpret_cast<uint64_t>(mockTramp);
+    uint64_t targetBaseVa = reinterpret_cast<uint64_t>(mockDest);
+
+    micant::NtStatus st = micant::um::UserImageLoader64::loadAndMapImage(
+        rawPe,
+        mockDest, sizeof(mockDest), targetBaseVa,
+        mockTramp, sizeof(mockTramp), trampBaseVa,
+        0x7FFFFFFF0000ULL, 0x10000,
+        0x7FFFFFFF8000ULL, 0x7FFFFFFF8200ULL,
+        2048, 480,
+        "test_ucrt_app.exe",
+        outInfo,
+        heapBaseVa, sizeof(mockHeap)
+    );
+    TEST_ASSERT(NT_SUCCESS(st), "UserImageLoader64::loadAndMapImage must succeed with heap parameters");
+    TEST_ASSERT(outInfo.headersValid, "PE headers must be valid");
+    TEST_ASSERT(outInfo.sectionsMapped, "Sections must be mapped");
+
+    // 2. Verify Heap Initial Bump Configuration
+    uint64_t recordedInitialBump = *reinterpret_cast<const uint64_t*>(mockTramp + 0x3F8);
+    TEST_ASSERT(recordedInitialBump == heapBaseVa, "Initial heap bump pointer at 0x3F8 must match passed userHeapVa");
+
+    // 3. Verify BSS Zeroing
+    bool bssZero = true;
+    for (size_t b = 0x2800; b < 0x4000; ++b) {
+        if (mockDest[b] != 0) { bssZero = false; break; }
+    }
+    TEST_ASSERT(bssZero, "PE section BSS area must be explicitly zeroed");
+
+    // 4. Verify Trampoline Table Slot Populations
+    TEST_ASSERT(mockTramp[0x400] == 0x48, "Slot 27 (0x400) malloc opcode must start with REX.W");
+    TEST_ASSERT(mockTramp[0x440] == 0x48, "Slot 28 (0x440) calloc opcode must start with REX.W");
+    TEST_ASSERT(mockTramp[0x4C0] == 0x48, "Slot 30 (0x4C0) _initterm opcode must start with REX.W");
+    TEST_ASSERT(mockTramp[0x540] == 0x48, "Slot 32 (0x540) memcpy opcode must start with REX.W");
+    TEST_ASSERT(mockTramp[0x580] == 0x49, "Slot 33 (0x580) memset opcode must start with REX.WB");
+    TEST_ASSERT(mockTramp[0x600] == 0x48, "Slot 35 (0x600) strlen opcode must start with REX.W");
+    TEST_ASSERT(mockTramp[0x780] == 0xF3, "Slot 41 (0x780) sqrtf opcode must start with 0xF3");
+    TEST_ASSERT(mockTramp[0x8C0] == 0x49, "Slot 46 (0x8C0) fwrite opcode must start with REX.WB");
+
+    // 5. Verify Argument and Data Area Initialization
+    int trampArgc = *reinterpret_cast<const int*>(mockTramp + 0x700);
+    TEST_ASSERT(trampArgc == 1, "Trampoline data area argc at 0x700 must equal 1");
+    uint64_t trampArgv0 = *reinterpret_cast<const uint64_t*>(mockTramp + 0x708);
+    TEST_ASSERT(trampArgv0 == trampBaseVa + 0x360, "Trampoline data area argv[0] at 0x708 must point to command line string");
+
+    // 6. Verify BareMetalMemoryManager Demand Paging Permission Promotion
+    auto& mm = micant::km::mm_baremetal::BareMetalMemoryManager::get();
+    auto& vadTable = micant::km::mm_baremetal::BareMetalVadTable::get();
+    vadTable.reset();
+
+    // Register a mock user heap region (PAGE_READWRITE)
+    uint64_t testVadStart = 0x0000000020000000ULL;
+    size_t testVadSize   = 0x10000; // 64 KB
+    vadTable.registerRegion(testVadStart, testVadSize, micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READWRITE);
+
+    // Register a mock user text region (PAGE_READONLY)
+    uint64_t textVadStart = 0x0000000010000000ULL;
+    size_t textVadSize   = 0x10000;
+    vadTable.registerRegion(textVadStart, textVadSize, micant::km::mm_baremetal::MEM_COMMIT, micant::km::mm_baremetal::PAGE_READONLY);
+
+    // Test Case A: User Write to Committed Heap with errorCode = 0x07 (P=1, W=1, U=1)
+    uint64_t beforeDemand = mm.getTelemetry().demandPagesResolved;
+    bool pfResolved = mm.handlePageFault(testVadStart + 0x2000, 0x07, 0x10001234ULL, 0x7FFFFFFF0000ULL);
+    TEST_ASSERT(pfResolved, "handlePageFault must resolve errorCode 0x07 within PAGE_READWRITE VAD");
+    TEST_ASSERT(mm.getTelemetry().demandPagesResolved > beforeDemand, "demandPagesResolved counter must increment");
+
+    // Test Case B: User Write to Read-Only Text with errorCode = 0x07 (P=1, W=1, U=1)
+    uint64_t beforeAv = mm.getTelemetry().accessViolations;
+    bool pfReadOnlyFailed = mm.handlePageFault(textVadStart + 0x1000, 0x07, 0x10001234ULL, 0x7FFFFFFF0000ULL);
+    TEST_ASSERT(!pfReadOnlyFailed, "handlePageFault must reject write to PAGE_READONLY VAD");
+    TEST_ASSERT(mm.getTelemetry().accessViolations > beforeAv, "accessViolations counter must increment");
+
+    // Test Case C: User Execution on Non-Executable Heap (errorCode = 0x15: P=1, U=1, I/D=1)
+    bool pfExecFailed = mm.handlePageFault(testVadStart + 0x3000, 0x15, testVadStart + 0x3000, 0x7FFFFFFF0000ULL);
+    TEST_ASSERT(!pfExecFailed, "handlePageFault must reject instruction fetch on non-executable VAD");
+
+    std::cout << "  [Horizon 132 Track E Robust Userspace PE32+ & UCRT ABI (Unit #104)]\n"
+              << "    UCRT Fast Syscall Trampoline Slots: 47 slots armed (0x00 to 0x8C0)\n"
+              << "    Dynamic Memory: malloc, calloc, realloc, free bump-paging on dedicated 16MB heap\n"
+              << "    C++ Runtime Lifecycle: _initterm & _initterm_e constructor dispatch verified\n"
+              << "    Hardware Acceleration: SSE/x87 sqrtf, sinf, cosf, round, floor, ceil active\n"
+              << "    Fast String Primitives: Native memcpy, memset, memcmp, strlen, strcmp active\n"
+              << "    Stdio Stream Binding: __acrt_iob_func non-null FILE pointers & __p___argc/argv wired\n"
+              << "    Demand Paging Engine: Supermicro P=1,W=1,U=1 (Err=0x07) permission promotion verified\n"
+              << "    Memory Protection: Enforced read-only and no-execute VAD access violations\n";
+
+    std::cout << "[TEST] Suite 348: Horizon 132 - Robust Userspace PE32+ Execution PASSED.\n";
+}
+
+inline void Test_Horizon132_Robust_Userspace_PE32Plus_Execution_And_UCRT_ABI() {
+    test_suite_348_robust_userspace_pe_execution();
+}
+

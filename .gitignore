@@ -49,6 +49,9 @@ scripts/deploy_*.sh
 credentials*
 secrets*
 server_config*
+ssh_access*
+*ssh_access*
+*passwords*
 *.local.*
 scratch/
 telemetry/*.png

@@ -895,7 +895,9 @@ public:
         uint32_t pid,
         uint32_t parentPid,
         const char* imageName,
-        UserLoadedImageInfo& outInfo
+        UserLoadedImageInfo& outInfo,
+        uint64_t userHeapVa = 0,
+        size_t userHeapSize = 0
     ) noexcept {
         outInfo = UserLoadedImageInfo{};
         outInfo.pid = pid;
@@ -963,6 +965,12 @@ public:
                 std::memcpy(destinationBuffer + sec.virtualAddress,
                             rawPeBytes.data() + sec.pointerToRawData,
                             sec.sizeOfRawData);
+            }
+            if (sec.misc.virtualSize > sec.sizeOfRawData) {
+                size_t bssLen = sec.misc.virtualSize - sec.sizeOfRawData;
+                if (sec.virtualAddress + sec.sizeOfRawData + bssLen <= destinationBufferSize) {
+                    std::memset(destinationBuffer + sec.virtualAddress + sec.sizeOfRawData, 0, bssLen);
+                }
             }
         }
         outInfo.sectionsMapped = true;
@@ -1166,9 +1174,272 @@ public:
             const char16_t wideCmd[] = u"surshell_app.exe";
             std::memcpy(trampolineBuffer + 0x3A0, wideCmd, sizeof(wideCmd));
 
-            // 0x3F8: Initial bump pointer address (4MB into user buffer if 0x140000000, else 0x800)
-            uint64_t initialBump = (targetBaseVa == 0x140000000ULL) ? (targetBaseVa + 0x400000ULL) : (trampolineBaseVa + 0x800ULL);
+            // 0x3F8: Initial bump pointer address (4MB into user buffer if 0x140000000, else 0x1000)
+            uint64_t initialBump = (userHeapVa != 0) ? userHeapVa :
+                                   ((targetBaseVa == 0x140000000ULL) ? (targetBaseVa + 0x400000ULL) : (trampolineBaseVa + 0x1000ULL));
             std::memcpy(trampolineBuffer + 0x3F8, &initialBump, sizeof(initialBump));
+
+            // Slot 27 (0x400): malloc / _aligned_malloc (RCX = size)
+            uint8_t s27[] = {
+                0x48, 0x85, 0xC9,                         // test %rcx, %rcx
+                0x75, 0x04,                               // jnz 1f
+                0x48, 0xFF, 0xC1,                         // inc %rcx
+                0x48, 0x89, 0xC8,                         // 1: mov %rcx, %rax
+                0x48, 0x83, 0xC0, 0x0F,                   // add $15, %rax
+                0x48, 0x83, 0xE0, 0xF0,                   // and $-16, %rax
+                0x48, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $bumpAddr, %rdx
+                0xF0, 0x48, 0x0F, 0xC1, 0x02,             // lock xadd %rax, (%rdx)
+                0xC3                                      // ret
+            };
+            std::memcpy(s27 + 16, &bumpAddr, sizeof(bumpAddr));
+            std::memcpy(trampolineBuffer + 0x400, s27, sizeof(s27));
+
+            // Slot 28 (0x440): calloc (RCX = num, RDX = size)
+            uint8_t s28[49] = {
+                0x48, 0x0F, 0xAF, 0xCA,                   // imul %rdx, %rcx
+                0x48, 0x85, 0xC9,                         // test %rcx, %rcx
+                0x75, 0x04,                               // jnz 1f
+                0x48, 0xFF, 0xC1,                         // inc %rcx
+                0x48, 0x89, 0xC8,                         // 1: mov %rcx, %rax
+                0x48, 0x83, 0xC0, 0x0F,                   // add $15, %rax
+                0x48, 0x83, 0xE0, 0xF0,                   // and $-16, %rax
+                0x48, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $bumpAddr, %rdx
+                0xF0, 0x48, 0x0F, 0xC1, 0x02,             // lock xadd %rax, (%rdx)
+                0x50,                                     // push %rax
+                0x48, 0x89, 0xC7,                         // mov %rax, %rdi
+                0x31, 0xC0,                               // xor %eax, %eax
+                0xFC,                                     // cld
+                0xF3, 0xAA,                               // rep stosb
+                0x58,                                     // pop %rax
+                0xC3                                      // ret
+            };
+            std::memcpy(s28 + 20, &bumpAddr, sizeof(bumpAddr));
+            std::memcpy(trampolineBuffer + 0x440, s28, sizeof(s28));
+
+            // Slot 29 (0x480): realloc (RCX = ptr, RDX = size)
+            uint8_t s29[] = {
+                0x48, 0x85, 0xC9,                         // test %rcx, %rcx
+                0x75, 0x03,                               // jnz 1f
+                0x48, 0x89, 0xD1,                         // mov %rdx, %rcx
+                0x48, 0x89, 0xC8,                         // 1: mov %rcx, %rax
+                0x48, 0x83, 0xC0, 0x0F,                   // add $15, %rax
+                0x48, 0x83, 0xE0, 0xF0,                   // and $-16, %rax
+                0x48, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $bumpAddr, %rdx
+                0xF0, 0x48, 0x0F, 0xC1, 0x02,             // lock xadd %rax, (%rdx)
+                0xC3                                      // ret
+            };
+            std::memcpy(s29 + 16, &bumpAddr, sizeof(bumpAddr));
+            std::memcpy(trampolineBuffer + 0x480, s29, sizeof(s29));
+
+            // Slot 30 (0x4C0): _initterm (RCX = first, RDX = last)
+            const uint8_t s30[] = {
+                0x48, 0x39, 0xD1,                         // 1: cmp %rdx, %rcx
+                0x73, 0x1A,                               // jae 2f (+26)
+                0x48, 0x8B, 0x01,                         // mov (%rcx), %rax
+                0x48, 0x85, 0xC0,                         // test %rax, %rax
+                0x74, 0x0D,                               // jz 3f (+13)
+                0x51,                                     // push %rcx
+                0x52,                                     // push %rdx
+                0x48, 0x83, 0xEC, 0x20,                   // sub $32, %rsp
+                0xFF, 0xD0,                               // call *%rax
+                0x48, 0x83, 0xC4, 0x20,                   // add $32, %rsp
+                0x5A,                                     // pop %rdx
+                0x59,                                     // pop %rcx
+                0x48, 0x83, 0xC1, 0x08,                   // 3: add $8, %rcx
+                0xEB, 0xDF,                               // jmp 1b (-33)
+                0xC3                                      // 2: ret
+            };
+            std::memcpy(trampolineBuffer + 0x4C0, s30, sizeof(s30));
+
+            // Slot 31 (0x500): _initterm_e (RCX = first, RDX = last)
+            const uint8_t s31[] = {
+                0x48, 0x39, 0xD1,                         // 1: cmp %rdx, %rcx
+                0x73, 0x24,                               // jae 2f (+36)
+                0x48, 0x8B, 0x01,                         // mov (%rcx), %rax
+                0x48, 0x85, 0xC0,                         // test %rax, %rax
+                0x74, 0x17,                               // jz 3f (+23)
+                0x51,                                     // push %rcx
+                0x52,                                     // push %rdx
+                0x48, 0x83, 0xEC, 0x20,                   // sub $32, %rsp
+                0xFF, 0xD0,                               // call *%rax
+                0x48, 0x83, 0xC4, 0x20,                   // add $32, %rsp
+                0x5A,                                     // pop %rdx
+                0x59,                                     // pop %rcx
+                0x85, 0xC0,                               // test %eax, %eax
+                0x75, 0x09,                               // jne 4f (+9)
+                0x48, 0x83, 0xC1, 0x08,                   // 3: add $8, %rcx
+                0xEB, 0xD5,                               // jmp 1b (-43)
+                0x31, 0xC0,                               // 2: xor %eax, %eax
+                0xC3,                                     // ret
+                0xC3                                      // 4: ret
+            };
+            std::memcpy(trampolineBuffer + 0x500, s31, sizeof(s31));
+
+            // Slot 32 (0x540): memcpy / memmove (RCX = dst, RDX = src, R8 = count)
+            const uint8_t s32[] = {
+                0x48, 0x89, 0xC8,                         // mov %rcx, %rax
+                0x49, 0x89, 0xC9,                         // mov %r8, %rcx
+                0x48, 0x89, 0xC7,                         // mov %rax, %rdi
+                0x48, 0x89, 0xD6,                         // mov %rdx, %rsi
+                0xFC,                                     // cld
+                0xF3, 0xA4,                               // rep movsb
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x540, s32, sizeof(s32));
+
+            // Slot 33 (0x580): memset (RCX = dst, RDX = val, R8 = count)
+            const uint8_t s33[] = {
+                0x49, 0x89, 0xC9,                         // mov %rcx, %r9 (save dst)
+                0x49, 0x89, 0xC1,                         // mov %r8, %rcx (count)
+                0x4C, 0x89, 0xCF,                         // mov %r9, %rdi (dst)
+                0x88, 0xD0,                               // mov %dl, %al
+                0xFC,                                     // cld
+                0xF3, 0xAA,                               // rep stosb
+                0x4C, 0x89, 0xC8,                         // mov %r9, %rax (return dst)
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x580, s33, sizeof(s33));
+
+            // Slot 34 (0x5C0): memcmp (RCX = s1, RDX = s2, R8 = count)
+            const uint8_t s34[] = {
+                0x31, 0xC0,                               // xor %eax, %eax
+                0x4D, 0x85, 0xC0,                         // test %r8, %r8
+                0x74, 0x15,                               // jz 2f
+                0x44, 0x0F, 0xB6, 0x09,                   // 1: movzbl (%rcx), %r9d
+                0x44, 0x0F, 0xB6, 0x12,                   // movzbl (%rdx), %r10d
+                0x45, 0x39, 0xD1,                         // cmp %r10d, %r9d
+                0x75, 0x08,                               // jne 3f
+                0x48, 0xFF, 0xC1,                         // inc %rcx
+                0x48, 0xFF, 0xC2,                         // inc %rdx
+                0x49, 0xFF, 0xC8,                         // dec %r8
+                0x75, 0xEB,                               // jnz 1b
+                0xC3,                                     // 2: ret
+                0x45, 0x29, 0xD1,                         // 3: subl %r10d, %r9d
+                0x44, 0x89, 0xC8,                         // mov %r9d, %eax
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x5C0, s34, sizeof(s34));
+
+            // Slot 35 (0x600): strlen (RCX = str)
+            const uint8_t s35[] = {
+                0x48, 0x31, 0xC0,                         // xor %rax, %rax
+                0x80, 0x3C, 0x01, 0x00,                   // 1: cmpb $0, (%rcx, %rax)
+                0x74, 0x04,                               // jz 2f
+                0x48, 0xFF, 0xC0,                         // inc %rax
+                0xEB, 0xF6,                               // jmp 1b
+                0xC3                                      // 2: ret
+            };
+            std::memcpy(trampolineBuffer + 0x600, s35, sizeof(s35));
+
+            // Slot 36 (0x640): strcmp (RCX = s1, RDX = s2)
+            const uint8_t s36[] = {
+                0x0F, 0xB6, 0x01,                         // 1: movzbl (%rcx), %eax
+                0x44, 0x0F, 0xB6, 0x02,                   // movzbl (%rdx), %r8d
+                0x41, 0x38, 0xC0,                         // cmp %al, %r8b
+                0x75, 0x08,                               // jne 2f
+                0x84, 0xC0,                               // test %al, %al
+                0x74, 0x08,                               // jz 3f
+                0x48, 0xFF, 0xC1,                         // inc %rcx
+                0x48, 0xFF, 0xC2,                         // inc %rdx
+                0xEB, 0xED,                               // jmp 1b
+                0x44, 0x29, 0xC0,                         // 2: subl %r8d, %eax
+                0xC3,                                     // ret
+                0x31, 0xC0,                               // 3: xor %eax, %eax
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x640, s36, sizeof(s36));
+
+            // Slot 37 (0x680): __p___argc
+            uint64_t argcAddr = trampolineBaseVa + 0x700;
+            uint8_t s37[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(s37 + 2, &argcAddr, sizeof(argcAddr));
+            std::memcpy(trampolineBuffer + 0x680, s37, sizeof(s37));
+
+            // Slot 38 (0x6C0): __p___argv
+            uint64_t argvAddr = trampolineBaseVa + 0x708;
+            uint8_t s38[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(s38 + 2, &argvAddr, sizeof(argvAddr));
+            std::memcpy(trampolineBuffer + 0x6C0, s38, sizeof(s38));
+
+            // Slot 39 (0x700): __p__commode / __p__fmode / __p__environ / _errno
+            uint64_t dataAddr = trampolineBaseVa + 0x720;
+            uint8_t s39[11] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+            std::memcpy(s39 + 2, &dataAddr, sizeof(dataAddr));
+            std::memcpy(trampolineBuffer + 0x700, s39, sizeof(s39));
+
+            // Slot 40 (0x740): __acrt_iob_func (RCX = index)
+            uint64_t streamsAddr = trampolineBaseVa + 0x740;
+            uint8_t s40[18] = {
+                0x48, 0xC1, 0xE1, 0x06,                   // shl $6, %rcx (rcx * 64)
+                0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov $streamsAddr, %rax
+                0x48, 0x01, 0xC8,                         // add %rcx, %rax
+                0xC3                                      // ret
+            };
+            std::memcpy(s40 + 6, &streamsAddr, sizeof(streamsAddr));
+            std::memcpy(trampolineBuffer + 0x740, s40, sizeof(s40));
+
+            // Slot 41 (0x780): sqrtf / sqrt
+            const uint8_t s41[] = { 0xF3, 0x0F, 0x51, 0xC0, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x780, s41, sizeof(s41));
+
+            // Slot 42 (0x7C0): sinf / sin
+            const uint8_t s42[] = {
+                0x48, 0x83, 0xEC, 0x08,                   // sub $8, %rsp
+                0xF3, 0x0F, 0x11, 0x04, 0x24,             // movss %xmm0, (%rsp)
+                0xD9, 0x04, 0x24,                         // flds (%rsp)
+                0xD9, 0xFE,                               // fsin
+                0xD9, 0x1C, 0x24,                         // fstps (%rsp)
+                0xF3, 0x0F, 0x10, 0x04, 0x24,             // movss (%rsp), %xmm0
+                0x48, 0x83, 0xC4, 0x08,                   // add $8, %rsp
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x7C0, s42, sizeof(s42));
+
+            // Slot 43 (0x800): cosf / cos
+            const uint8_t s43[] = {
+                0x48, 0x83, 0xEC, 0x08,                   // sub $8, %rsp
+                0xF3, 0x0F, 0x11, 0x04, 0x24,             // movss %xmm0, (%rsp)
+                0xD9, 0x04, 0x24,                         // flds (%rsp)
+                0xD9, 0xFF,                               // fcos
+                0xD9, 0x1C, 0x24,                         // fstps (%rsp)
+                0xF3, 0x0F, 0x10, 0x04, 0x24,             // movss (%rsp), %xmm0
+                0x48, 0x83, 0xC4, 0x08,                   // add $8, %rsp
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x800, s43, sizeof(s43));
+
+            // Slot 44 (0x840): round / roundf
+            const uint8_t s44[] = { 0x66, 0x0F, 0x3A, 0x0A, 0xC0, 0x00, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x840, s44, sizeof(s44));
+
+            // Slot 45 (0x880): floorf / ceilf
+            const uint8_t s45[] = { 0x66, 0x0F, 0x3A, 0x0A, 0xC0, 0x01, 0xC3 };
+            std::memcpy(trampolineBuffer + 0x880, s45, sizeof(s45));
+
+            // Slot 46 (0x8C0): fwrite / puts / fputc
+            const uint8_t s46[] = {
+                0x49, 0x0F, 0xAF, 0xD0,                   // imul %r8, %rdx
+                0x48, 0x89, 0xCA,                         // mov %rcx, %rdx (arg1 = buf)
+                0x49, 0x89, 0xD0,                         // mov %rdx, %r8 (arg2 = len)
+                0xB8, 0x25, 0x00, 0x00, 0x00,             // mov $0x25, %eax
+                0x0F, 0x05,                               // syscall
+                0xC3                                      // ret
+            };
+            std::memcpy(trampolineBuffer + 0x8C0, s46, sizeof(s46));
+
+            // Data Area initialization
+            int initArgc = 1;
+            std::memcpy(trampolineBuffer + 0x700, &initArgc, sizeof(initArgc));
+
+            uint64_t arg0Ptr = trampolineBaseVa + 0x360;
+            uint64_t arg1Null = 0;
+            std::memcpy(trampolineBuffer + 0x708, &arg0Ptr, sizeof(arg0Ptr));
+            std::memcpy(trampolineBuffer + 0x710, &arg1Null, sizeof(arg1Null));
+
+            int initZero = 0;
+            std::memcpy(trampolineBuffer + 0x720, &initZero, sizeof(initZero));
+            std::memcpy(trampolineBuffer + 0x724, &initZero, sizeof(initZero));
+            std::memcpy(trampolineBuffer + 0x728, &initZero, sizeof(initZero));
         }
 
         // 8. Parse and Bind Imports
@@ -1197,7 +1468,7 @@ public:
                                 const auto* ibn = reinterpret_cast<const pe::ImageImportByName*>(destinationBuffer + nameRva);
                                 const char* symName = ibn->name;
 
-                                if (streq(symName, "ExitProcess") || streq(symName, "NtTerminateProcess") || streq(symName, "abort") || streq(symName, "_exit")) {
+                                if (streq(symName, "ExitProcess") || streq(symName, "NtTerminateProcess") || streq(symName, "abort") || streq(symName, "_exit") || streq(symName, "exit")) {
                                     targetTrampoline = trampolineBaseVa + 0x00;
                                 } else if (streq(symName, "NtQuerySystemInformation")) {
                                     targetTrampoline = trampolineBaseVa + 0x20;
@@ -1219,21 +1490,25 @@ public:
                                     targetTrampoline = trampolineBaseVa + 0x120;
                                 } else if (streq(symName, "QueryPerformanceFrequency")) {
                                     targetTrampoline = trampolineBaseVa + 0x140;
-                                } else if (streq(symName, "GetCurrentProcessId") || streq(symName, "GetCurrentThreadId")) {
+                                } else if (streq(symName, "GetCurrentProcessId") || streq(symName, "GetCurrentThreadId") || streq(symName, "GetThreadId")) {
                                     targetTrampoline = trampolineBaseVa + 0x160;
                                 } else if (streq(symName, "GetLastError")) {
                                     targetTrampoline = trampolineBaseVa + 0x180;
                                 } else if (streq(symName, "SetLastError") || streq(symName, "InitializeCriticalSection") ||
                                            streq(symName, "DeleteCriticalSection") || streq(symName, "EnterCriticalSection") ||
                                            streq(symName, "LeaveCriticalSection") || streq(symName, "InitializeCriticalSectionAndSpinCount") ||
-                                           streq(symName, "InitializeCriticalSectionEx")) {
+                                           streq(symName, "InitializeCriticalSectionEx") || streq(symName, "AcquireSRWLockExclusive") ||
+                                           streq(symName, "ReleaseSRWLockExclusive") || streq(symName, "TryAcquireSRWLockExclusive") ||
+                                           streq(symName, "TryEnterCriticalSection") || streq(symName, "WakeConditionVariable") ||
+                                           streq(symName, "WakeAllConditionVariable") || streq(symName, "SleepConditionVariableSRW")) {
                                     targetTrampoline = trampolineBaseVa + 0x1A0;
                                 } else if (streq(symName, "GetModuleHandleW") || streq(symName, "GetModuleHandleA") || streq(symName, "GetModuleHandleExW")) {
                                     targetTrampoline = trampolineBaseVa + 0x1C0;
                                 } else if (streq(symName, "VirtualFree") || streq(symName, "SetEvent") || streq(symName, "ResetEvent") ||
                                            streq(symName, "TlsSetValue") || streq(symName, "TlsFree") || streq(symName, "IsNetworkAlive") ||
                                            streq(symName, "IsDestinationReachableW") || streq(symName, "IsProcessorFeaturePresent") ||
-                                           streq(symName, "HeapFree")) {
+                                           streq(symName, "HeapFree") || streq(symName, "free") || streq(symName, "_aligned_free") ||
+                                           streq(symName, "LocalFree")) {
                                     targetTrampoline = trampolineBaseVa + 0x1E0;
                                 } else if (streq(symName, "GetCurrentPackageFullName")) {
                                     targetTrampoline = trampolineBaseVa + 0x220;
@@ -1253,9 +1528,58 @@ public:
                                     targetTrampoline = trampolineBaseVa + 0x300;
                                 } else if (streq(symName, "GetConsoleMode") || streq(symName, "GetConsoleCP") || streq(symName, "GetConsoleOutputCP")) {
                                     targetTrampoline = trampolineBaseVa + 0x320;
-                                } else if (streq(symName, "TlsAlloc")) {
+                                } else if (streq(symName, "TlsAlloc") || streq(symName, "FlsAlloc")) {
                                     targetTrampoline = trampolineBaseVa + 0x340;
-                                } else if (streq(symName, "TlsGetValue") || streq(symName, "IsDebuggerPresent")) {
+                                } else if (streq(symName, "malloc") || streq(symName, "_aligned_malloc")) {
+                                    targetTrampoline = trampolineBaseVa + 0x400;
+                                } else if (streq(symName, "calloc")) {
+                                    targetTrampoline = trampolineBaseVa + 0x440;
+                                } else if (streq(symName, "realloc")) {
+                                    targetTrampoline = trampolineBaseVa + 0x480;
+                                } else if (streq(symName, "_initterm")) {
+                                    targetTrampoline = trampolineBaseVa + 0x4C0;
+                                } else if (streq(symName, "_initterm_e")) {
+                                    targetTrampoline = trampolineBaseVa + 0x500;
+                                } else if (streq(symName, "memcpy") || streq(symName, "memmove")) {
+                                    targetTrampoline = trampolineBaseVa + 0x540;
+                                } else if (streq(symName, "memset")) {
+                                    targetTrampoline = trampolineBaseVa + 0x580;
+                                } else if (streq(symName, "memcmp") || streq(symName, "memchr")) {
+                                    targetTrampoline = trampolineBaseVa + 0x5C0;
+                                } else if (streq(symName, "strlen") || streq(symName, "strnlen") || streq(symName, "wcslen") || streq(symName, "wcsnlen")) {
+                                    targetTrampoline = trampolineBaseVa + 0x600;
+                                } else if (streq(symName, "strcmp") || streq(symName, "strncmp") || streq(symName, "_strcoll_l") || streq(symName, "_wcscoll_l")) {
+                                    targetTrampoline = trampolineBaseVa + 0x640;
+                                } else if (streq(symName, "__p___argc")) {
+                                    targetTrampoline = trampolineBaseVa + 0x680;
+                                } else if (streq(symName, "__p___argv") || streq(symName, "__p___wargv")) {
+                                    targetTrampoline = trampolineBaseVa + 0x6C0;
+                                } else if (streq(symName, "__p__commode") || streq(symName, "__p__fmode") || streq(symName, "__p__environ") ||
+                                           streq(symName, "__p___initenv") || streq(symName, "_errno") || streq(symName, "__sys_nerr")) {
+                                    targetTrampoline = trampolineBaseVa + 0x700;
+                                } else if (streq(symName, "__acrt_iob_func")) {
+                                    targetTrampoline = trampolineBaseVa + 0x740;
+                                } else if (streq(symName, "sqrtf") || streq(symName, "sqrt")) {
+                                    targetTrampoline = trampolineBaseVa + 0x780;
+                                } else if (streq(symName, "sinf") || streq(symName, "sin")) {
+                                    targetTrampoline = trampolineBaseVa + 0x7C0;
+                                } else if (streq(symName, "cosf") || streq(symName, "cos")) {
+                                    targetTrampoline = trampolineBaseVa + 0x800;
+                                } else if (streq(symName, "round") || streq(symName, "roundf")) {
+                                    targetTrampoline = trampolineBaseVa + 0x840;
+                                } else if (streq(symName, "floorf") || streq(symName, "floor") || streq(symName, "ceilf") || streq(symName, "ceil")) {
+                                    targetTrampoline = trampolineBaseVa + 0x880;
+                                } else if (streq(symName, "fwrite") || streq(symName, "puts") || streq(symName, "fputc") || streq(symName, "fputwc")) {
+                                    targetTrampoline = trampolineBaseVa + 0x8C0;
+                                } else if (streq(symName, "TlsGetValue") || streq(symName, "FlsGetValue") || streq(symName, "IsDebuggerPresent") ||
+                                           streq(symName, "_set_app_type") || streq(symName, "_configure_narrow_argv") ||
+                                           streq(symName, "_initialize_narrow_environment") || streq(symName, "_seh_filter_exe") ||
+                                           streq(symName, "_crt_atexit") || streq(symName, "_set_invalid_parameter_handler") ||
+                                           streq(symName, "_set_new_mode") || streq(symName, "fpreset") || streq(symName, "setvbuf") ||
+                                           streq(symName, "setbuf") || streq(symName, "fflush") || streq(symName, "fclose") ||
+                                           streq(symName, "_lock_file") || streq(symName, "_unlock_file") ||
+                                           streq(symName, "SetUnhandledExceptionFilter") || streq(symName, "VirtualProtect") ||
+                                           streq(symName, "VirtualQuery") || streq(symName, "InitOnceExecuteOnce")) {
                                     targetTrampoline = trampolineBaseVa + 0x200;
                                 }
                             }
