@@ -39,6 +39,7 @@
 #include "micant/km/executive/lookaside.hpp"
 #include "micant/km/executive/po.hpp"
 #include "micant/km/executive/bms.hpp"
+#include "micant/km/executive/ppm.hpp"
 #include "micant/km/core/ipi.hpp"
 #include "micant/km/executive/heap.hpp"
 #include "micant/um/native/ldr.hpp"
@@ -387,6 +388,7 @@ int main(int argc, char* argv[]) {
     if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite344")) {
         RUN_TEST(Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter_And_GdiPresentPipeline);
     RUN_TEST(Test_Horizon129_BatteryManagementSystem_Bms_ClassDriver_And_CellBalancing);
+    RUN_TEST(Test_Horizon130_ProcessorPowerManagement_IntelSpeedShift_Hwp_And_CoreParking);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {

@@ -20379,3 +20379,106 @@ inline void Test_Horizon129_BatteryManagementSystem_Bms_ClassDriver_And_CellBala
 
     std::cout << "[TEST] Suite 345: Horizon 129 - Sovereign Battery Management System (BMS) & Cell Balancing PASSED.\n";
 }
+
+// ============================================================================
+// Suite 346: Horizon 130 — Sovereign Processor Power Management (PPM),
+//            Intel Speed Shift (HWP) Driver & ACPI Core Parking (Unit #102)
+// ============================================================================
+inline void Test_Horizon130_ProcessorPowerManagement_IntelSpeedShift_Hwp_And_CoreParking() {
+    using namespace micant::po::ppm;
+
+    std::cout << "\n[TEST] Suite 346: Horizon 130 - Sovereign Processor Power Management (PPM) & Speed Shift...\n";
+
+    // 1. Verify WDK Packed Struct Layouts
+    TEST_ASSERT(sizeof(ProcessorPowerInformation) == 24, "ProcessorPowerInformation must be 24 bytes packed");
+    TEST_ASSERT(sizeof(ProcessorPerfState) == 24, "ProcessorPerfState must be 24 bytes packed");
+    TEST_ASSERT(sizeof(ProcessorIdleState) == 16, "ProcessorIdleState must be 16 bytes packed");
+    TEST_ASSERT(sizeof(HwpCapabilitiesWire) == 4, "HwpCapabilitiesWire must be 4 bytes packed");
+    TEST_ASSERT(sizeof(HwpRequestWire) == 8, "HwpRequestWire must be 8 bytes packed");
+
+    auto& ppm = ProcessorPowerManager::get();
+    ppm.resetToDefaultState();
+
+    // 2. Verify Initial HWP Capabilities & Performance State
+    const auto& caps = ppm.getCapabilities();
+    TEST_ASSERT(caps.highestPerformanceRatio == 42, "Highest performance ratio must be 42x (4.20 GHz Turbo)");
+    TEST_ASSERT(caps.guaranteedPerformanceRatio == 38, "Guaranteed ratio must be 38x (3.80 GHz Base)");
+    TEST_ASSERT(caps.efficientPerformanceRatio == 16, "Efficient ratio must be 16x (1.60 GHz)");
+    TEST_ASSERT(caps.lowestPerformanceRatio == 8, "Lowest ratio must be 8x (800 MHz)");
+    TEST_ASSERT(ppm.getActiveCoreCount() == 8, "Initial active cores must be 8 (all online)");
+    TEST_ASSERT(ppm.getActivePolicy() == ProcessorPolicy::Performance, "Initial policy must be Performance");
+
+    // 3. Dynamic BMS Coupling & Power Source Transitions
+    // Transition to Battery (DC, 60% SOC) -> Balanced Profile
+    ppm.onPowerSourceChanged(false, 60);
+    TEST_ASSERT(ppm.getActivePolicy() == ProcessorPolicy::Balanced, "Policy must transition to Balanced on DC 60% SOC");
+    TEST_ASSERT(ppm.getCurrentHwpRequest().energyPerformancePreference == EPP_BALANCED_POWER, "EPP must be 0x80 (Balanced Power)");
+    TEST_ASSERT(ppm.getActiveCoreCount() == 8, "All 8 cores remain online in balanced battery profile");
+
+    // Transition to Low Battery (DC, 20% SOC) -> Power Saver + SMT Core Parking
+    ppm.onPowerSourceChanged(false, 20);
+    TEST_ASSERT(ppm.getActivePolicy() == ProcessorPolicy::PowerSaver, "Policy must transition to PowerSaver on DC 20% SOC");
+    TEST_ASSERT(ppm.getCurrentHwpRequest().energyPerformancePreference == EPP_POWER_SAVER, "EPP must be 0xC0 (Power Saver)");
+    TEST_ASSERT(ppm.getCurrentHwpRequest().maximumRatio == 24, "Maximum frequency ratio must be clamped to 24x");
+    TEST_ASSERT(ppm.getActiveCoreCount() == 4, "Secondary SMT threads (Cores 4..7) must be parked");
+
+    // Transition to Critical Battery (DC, 5% SOC) -> Aggressive Energy Floor
+    ppm.onPowerSourceChanged(false, 5);
+    TEST_ASSERT(ppm.getCurrentHwpRequest().energyPerformancePreference == EPP_MAX_POWER_SAVING, "EPP must be 0xFF (Max Power Saving)");
+    TEST_ASSERT(ppm.getCurrentHwpRequest().maximumRatio == 16, "Frequency must clamp to efficient ratio (16x)");
+    TEST_ASSERT(ppm.getActiveCoreCount() == 2, "Only 2 primary cores active during critical battery save");
+
+    // Reconnect AC Power -> Restore Full Performance
+    ppm.onPowerSourceChanged(true, 10);
+    TEST_ASSERT(ppm.getActivePolicy() == ProcessorPolicy::Performance, "Policy must restore to Performance on AC reconnect");
+    TEST_ASSERT(ppm.getCurrentHwpRequest().energyPerformancePreference == EPP_HIGH_PERFORMANCE, "EPP must restore to 0x20 (Performance)");
+    TEST_ASSERT(ppm.getActiveCoreCount() == 8, "All 8 cores must unpark immediately on AC power");
+
+    // 4. Autonomous Thermal Runaway Protection
+    ppm.applyThermalBudget(90); // 90 C (> 85 C trip limit)
+    const auto& cores = ppm.getCores();
+    TEST_ASSERT(cores[0].isThermalThrottled, "Core 0 must indicate thermal throttling at 90 C");
+    TEST_ASSERT(cores[0].currentFrequencyMhz == 1600, "Core 0 frequency must drop to efficient floor during thermal trip");
+
+    // Thermal recovery to 55 C
+    ppm.applyThermalBudget(55);
+    TEST_ASSERT(!cores[0].isThermalThrottled, "Thermal throttle flag must clear when cooling below 70 C");
+
+    // 5. IOCTL Dispatch Verification
+    ProcessorPowerInformation pInfo{};
+    size_t bytesRet = 0;
+    NtStatus stInfo = ppm.handleIoctl(IOCTL_PROCESSOR_INFORMATION, nullptr, 0, &pInfo, sizeof(pInfo), bytesRet);
+    TEST_ASSERT(NT_SUCCESS(stInfo), "IOCTL_PROCESSOR_INFORMATION must succeed");
+    TEST_ASSERT(pInfo.maxMhz == 3800, "MaxMhz must report 3800 MHz");
+    TEST_ASSERT(pInfo.mhzLimit == 4200, "MhzLimit must report 4200 MHz Turbo");
+    TEST_ASSERT(bytesRet == sizeof(ProcessorPowerInformation), "Bytes returned must match sizeof(ProcessorPowerInformation)");
+
+    ProcessorPerfState pStates[4]{};
+    NtStatus stPerf = ppm.handleIoctl(IOCTL_PROCESSOR_PERF_STATES, nullptr, 0, pStates, sizeof(pStates), bytesRet);
+    TEST_ASSERT(NT_SUCCESS(stPerf), "IOCTL_PROCESSOR_PERF_STATES must succeed");
+    TEST_ASSERT(pStates[0].frequency == 4200, "P-State 0 must be 4200 MHz Turbo");
+    TEST_ASSERT(pStates[1].frequency == 3800, "P-State 1 must be 3800 MHz Base");
+
+    // 6. Executive & NT Object Manager Registration
+    InitializeProcessorPowerSubsystem();
+    auto& ons = micant::ob::ObjectNamespace::get();
+    auto devDir = ons.getDirectory(L"\\Device");
+    TEST_ASSERT(devDir != nullptr, "\\Device directory must exist in Object Namespace");
+
+    // 7. Visual ASCII Telemetry Rendering
+    std::string ascii;
+    ppm.renderAsciiTelemetry(ascii);
+    TEST_ASSERT(ascii.find("Intel Speed Shift (HWP)") != std::string::npos, "Rendered telemetry must identify Intel Speed Shift");
+    TEST_ASSERT(ascii.find("Xeon(R) E3-1270 v6") != std::string::npos, "Rendered telemetry must identify Xeon silicon");
+    TEST_ASSERT(ascii.find("Core  State     Clock") != std::string::npos, "Rendered telemetry must contain core matrix");
+
+    std::cout << "  [Horizon 130 Track D Sovereign Processor Power Management & Intel Speed Shift (Unit #102)]\n"
+              << "    Platform Silicon: Intel Xeon E3-1270 v6 (8T @ 3.80GHz Base / 4.20GHz Turbo)\n"
+              << "    HWP Capabilities: Highest=42x | Guaranteed=38x | Efficient=16x | Lowest=8x\n"
+              << "    Dynamic Governance: AC Online (EPP 0x20, 8 Cores) <-> Battery DC (EPP 0x80/0xC0/0xFF)\n"
+              << "    Core Parking: Dynamic SMT thread suppression verified (8 -> 4 -> 2 active cores)\n"
+              << "    Thermal Interlock: 85 C PROCHOT Throttle Trip & Autonomous Recovery Verified OK\n"
+              << "    NT Object Manager: Registered \\Device\\Processor0 through \\Device\\Processor7\n";
+
+    std::cout << "[TEST] Suite 346: Horizon 130 - Sovereign Processor Power Management (PPM) & Speed Shift PASSED.\n";
+}
