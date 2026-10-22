@@ -3094,13 +3094,23 @@ extern "C" micant::NtStatus KiSystemStartup(
             copyStr(lastResultLine1, "Local APIC: MMIO Base=0xFEE00000 | SVR=0x1FF | TPR=0x00 | Spurious Vector=0xFF", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Preemption Timer: 100 Hz Periodic (Vector 0x30, InitialCount=62500, Divide 16)", sizeof(lastResultLine2));
             LogKernel("Shell: Local APIC Base=0xFEE00000 | SVR=0x1FF | TPR=0x00 | Timer: 100Hz Periodic (Vector 0x30)");
-        } else if (cmd[0] == 'i' && cmd[1] == 'd') {
-            copyStr(lastResultLine1, "IDT64: 256 Gates Configured (LIDT Active) | 16-Byte Descriptors (IST0/IST1)", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "Hardware Handlers: Vector 0x30 (LAPIC Clock), Vector 0x31 (PS/2 Keyboard)", sizeof(lastResultLine2));
+        } else if (cmd[0] == 'i' && cmd[1] == 'd' && cmd[2] == 't') {
+            ShellClearOutput();
+            ShellAddLine("Interrupt Descriptor Table (IDT64 / LIDT Architecture):", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine("  Descriptor Base:   64-bit IDT Base (256 Vector Gates Configured)", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  Exception Vectors: Vector 0x0E (#PF Demand Paging), Vector 0x0D (#GP Trap)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("  Hardware Vectors:  Vector 0x30 (LAPIC 100Hz Timer), Vector 0x31 (PS/2 Keyboard)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  IPI Vectors:       Vector 0x3E (Inter-Processor Reschedule / TLB Shootdown)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  Spurious Vector:   Vector 0xFF (APIC SVR Mask Armed)", micant::bootvid::Color{180, 200, 230});
             LogKernel("Shell: IDT64: 256 Gates (Base=LIDT active) | Clock=0x30, KB=0x31, Spurious=0xFF");
-        } else if (cmd[0] == 'h' && cmd[1] == 'i') {
-            copyStr(lastResultLine1, "High-Half Canonical Paging: PML4[496]=0xFFFFF800... | PML4[510]=0xFFFFFF00...", sizeof(lastResultLine1));
-            copyStr(lastResultLine2, "PML4[511]=0xFFFFFF80... | CR3 Mirrored OK | Zero Physical Allocations", sizeof(lastResultLine2));
+        } else if (cmd[0] == 'h' && cmd[1] == 'i' && cmd[2] == 'g') {
+            ShellClearOutput();
+            ShellAddLine("High-Half Canonical Paging Engine (AMD64 48-bit Virtual Addressing):", micant::bootvid::Color{255, 215, 0});
+            ShellAddLine("  Kernel VA Base:    0xFFFFF800'00000000 (PML4[496] Canonical Root)", micant::bootvid::Color{0, 229, 255});
+            ShellAddLine("  HAL Window:        0xFFFFFF00'00000000 (PML4[510] Self-Ref Mirror)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("  APIC / VRAM Map:   0xFFFFFF80'00000000 (PML4[511] Hardware MMIO)", micant::bootvid::Color{200, 220, 245});
+            ShellAddLine("  Paging Mode:       4-Level Long Mode (CR0.PG=1, CR4.PAE=1, EFER.LMA=1)", micant::bootvid::Color{100, 240, 160});
+            ShellAddLine("  Status:            Zero Low-Half Identity Maps in Executive Mode", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: High-Half Canonical: Base=0xFFFFF800'00000000 (PML4[496]) | CR3 Mirrored OK");
         } else if ((cmd[0] == 'o' && cmd[1] == 'b' && cmd[2] == 'j') || (cmd[0] == 'o' && cmd[1] == 'b' && (cmd[2] == '\0' || cmd[2] == ' '))) {
             char obBuf[2048]{};
