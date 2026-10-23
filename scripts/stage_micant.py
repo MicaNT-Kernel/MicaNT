@@ -163,6 +163,21 @@ SYSTEM32_TOOLS = [
     ("tools/wevtutil_app.cpp", "build/wevtutil.exe", "wevtutil.exe"),
     ("tools/fondue_app.cpp", "build/fondue.exe", "fondue.exe"),
     ("tools/certreq_app.cpp", "build/certreq.exe", "certreq.exe"),
+    ("tools/wscript_app.cpp", "build/wscript.exe", "wscript.exe"),
+    ("tools/cscript_app.cpp", "build/cscript.exe", "cscript.exe"),
+    ("tools/print_app.cpp", "build/print.exe", "print.exe"),
+    ("tools/prnport_app.cpp", "build/prnport.exe", "prnport.exe"),
+    ("tools/prnmngr_app.cpp", "build/prnmngr.exe", "prnmngr.exe"),
+    ("tools/prnjobs_app.cpp", "build/prnjobs.exe", "prnjobs.exe"),
+    ("tools/shadow_app.cpp", "build/shadow.exe", "shadow.exe"),
+    ("tools/qwinsta_app.cpp", "build/qwinsta.exe", "qwinsta.exe"),
+    ("tools/rwinsta_app.cpp", "build/rwinsta.exe", "rwinsta.exe"),
+    ("tools/tsdiscon_app.cpp", "build/tsdiscon.exe", "tsdiscon.exe"),
+    ("tools/msg_app.cpp", "build/msg.exe", "msg.exe"),
+    ("tools/change_app.cpp", "build/change.exe", "change.exe"),
+    ("tools/reset_app.cpp", "build/reset.exe", "reset.exe"),
+    ("tools/lodctr_app.cpp", "build/lodctr.exe", "lodctr.exe"),
+    ("tools/unlodctr_app.cpp", "build/unlodctr.exe", "unlodctr.exe"),
 ]
 
 SYSTEM32_SERVICES = [
