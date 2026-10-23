@@ -34,9 +34,29 @@ int main(void) {
         NULL
     );
 
+    // Fallback: If \\.\HmbControl wasn't found due to Session 0 namespace isolation,
+    // open the NT kernel device object directly via \\.\GLOBALROOT\Device\HmbControl
     if (hDev == INVALID_HANDLE_VALUE) {
-        printf("[HMB] Error: Unable to open \\\\.\\HmbControl (Error %lu).\n", GetLastError());
-        printf("[HMB] Ensure the 'hmb' kernel driver service is installed and started.\n");
+        hDev = CreateFileW(
+            L"\\\\.\\GLOBALROOT\\Device\\HmbControl",
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL
+        );
+    }
+
+    if (hDev == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+        printf("[HMB] Error: Unable to open \\\\.\\HmbControl (Error %lu).\n", err);
+        if (err == ERROR_FILE_NOT_FOUND) {
+            printf("[HMB] Reason: Kernel device or symbolic link not found.\n");
+            printf("[HMB] Ensure the 'hmb' kernel driver service is installed and started.\n");
+        } else if (err == ERROR_ACCESS_DENIED) {
+            printf("[HMB] Reason: Access Denied. Please run this command as Administrator!\n");
+        }
         return 1;
     }
 

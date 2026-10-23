@@ -371,8 +371,8 @@ static NTSTATUS HmbCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
 // Driver Unload Handler
 VOID DriverUnload(PDRIVER_OBJECT DriverObject) {
     UNICODE_STRING pLink, cLink;
-    RtlInitUnicodeString(&pLink, L"\\DosDevices\\P:");
-    RtlInitUnicodeString(&cLink, L"\\DosDevices\\HmbControl");
+    RtlInitUnicodeString(&pLink, L"\\DosDevices\\Global\\P:");
+    RtlInitUnicodeString(&cLink, L"\\DosDevices\\Global\\HmbControl");
     IoDeleteSymbolicLink(&pLink);
     IoDeleteSymbolicLink(&cLink);
 
@@ -413,10 +413,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
     DriverObject->MajorFunction[IRP_MJ_WRITE] = HmbReadWrite;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = HmbDeviceControl;
 
-    // 1. Create HMB Paging Volume Device (\Device\HmbPagingVolume -> \DosDevices\P:)
+    // 1. Create HMB Paging Volume Device (\Device\HmbPagingVolume -> \DosDevices\Global\P:)
     UNICODE_STRING devName, symLink;
     RtlInitUnicodeString(&devName, L"\\Device\\HmbPagingVolume");
-    RtlInitUnicodeString(&symLink, L"\\DosDevices\\P:");
+    RtlInitUnicodeString(&symLink, L"\\DosDevices\\Global\\P:");
 
     status = IoCreateDevice(
         DriverObject,
@@ -460,10 +460,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "[HMB] Warning: Could not create P: symlink (status 0x%08X)\n", status);
     }
 
-    // 2. Create HMB Control & Telemetry Device (\Device\HmbControl -> \DosDevices\HmbControl)
+    // 2. Create HMB Control & Telemetry Device (\Device\HmbControl -> \DosDevices\Global\HmbControl)
     UNICODE_STRING cDevName, cSymLink;
     RtlInitUnicodeString(&cDevName, L"\\Device\\HmbControl");
-    RtlInitUnicodeString(&cSymLink, L"\\DosDevices\\HmbControl");
+    RtlInitUnicodeString(&cSymLink, L"\\DosDevices\\Global\\HmbControl");
 
     status = IoCreateDevice(
         DriverObject,
@@ -483,7 +483,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
         cExt->IsControlDevice = TRUE;
         KeInitializeSpinLock(&cExt->Lock);
         g_ControlDevice->Flags &= ~DO_DEVICE_INITIALIZING;
-        IoCreateSymbolicLink(&cSymLink, &cDevName);
+        NTSTATUS symStatus = IoCreateSymbolicLink(&cSymLink, &cDevName);
+        if (!NT_SUCCESS(symStatus)) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "[HMB] Warning: Could not create HmbControl symlink (status 0x%08X)\n", symStatus);
+        }
+    } else {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[HMB] Failed to create Control Device: 0x%08X\n", status);
     }
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, 
