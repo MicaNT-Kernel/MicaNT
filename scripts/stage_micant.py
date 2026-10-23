@@ -133,6 +133,21 @@ SYSTEM32_TOOLS = [
     ("tools/wscui_app.cpp", "build/wscui.exe", "wscui.exe"),
     ("tools/hdwwiz_app.cpp", "build/hdwwiz.exe", "hdwwiz.exe"),
     ("tools/tftp_app.cpp", "build/tftp.exe", "tftp.exe"),
+    ("tools/ftp_app.cpp", "build/ftp.exe", "ftp.exe"),
+    ("tools/telnet_app.cpp", "build/telnet.exe", "telnet.exe"),
+    ("tools/whois_app.cpp", "build/whois.exe", "whois.exe"),
+    ("tools/finger_app.cpp", "build/finger.exe", "finger.exe"),
+    ("tools/pathping_app.cpp", "build/pathping.exe", "pathping.exe"),
+    ("tools/bitsadmin_app.cpp", "build/bitsadmin.exe", "bitsadmin.exe"),
+    ("tools/dsquery_app.cpp", "build/dsquery.exe", "dsquery.exe"),
+    ("tools/dsget_app.cpp", "build/dsget.exe", "dsget.exe"),
+    ("tools/nltest_app.cpp", "build/nltest.exe", "nltest.exe"),
+    ("tools/ksetup_app.cpp", "build/ksetup.exe", "ksetup.exe"),
+    ("tools/tzutil_app.cpp", "build/tzutil.exe", "tzutil.exe"),
+    ("tools/chcp_app.cpp", "build/chcp.exe", "chcp.exe"),
+    ("tools/mode_app.cpp", "build/mode.exe", "mode.exe"),
+    ("tools/doskey_app.cpp", "build/doskey.exe", "doskey.exe"),
+    ("tools/comp_app.cpp", "build/comp.exe", "comp.exe"),
 ]
 
 SYSTEM32_SERVICES = [
@@ -561,6 +576,10 @@ cp -v /mnt/micasys/MicaNT/System32/wscui.exe /mnt/micasys/MicaNT/System32/wscui.
 cp -v /mnt/micasys/MicaNT/System32/wscui.exe /mnt/micasys/wscui.cpl || true
 cp -v /mnt/micasys/MicaNT/System32/hdwwiz.exe /mnt/micasys/MicaNT/System32/hdwwiz.cpl || true
 cp -v /mnt/micasys/MicaNT/System32/hdwwiz.exe /mnt/micasys/hdwwiz.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/chcp.exe /mnt/micasys/MicaNT/System32/chcp.com || true
+cp -v /mnt/micasys/MicaNT/System32/chcp.exe /mnt/micasys/chcp.com || true
+cp -v /mnt/micasys/MicaNT/System32/mode.exe /mnt/micasys/MicaNT/System32/mode.com || true
+cp -v /mnt/micasys/MicaNT/System32/mode.exe /mnt/micasys/mode.com || true
 
 echo "--- Copying Known DLLs ---"
 for f in /tmp/*.dll; do
