@@ -372,44 +372,92 @@ def main():
         if os.path.exists(p):
             sftp.put(p, f"/tmp/{name}")
 
+    stage_script = """#!/bin/bash
+set -e
+echo "--- Unmounting and Checking Filesystems ---"
+umount /mnt/micasys 2>/dev/null || true
+umount /mnt/micaesp 2>/dev/null || true
+mkdir -p /mnt/micasys /mnt/micaesp
+
+# Clear any dirty bits or FAT discrepancies
+fsck.vfat -a -w /dev/disk/by-partuuid/b6457ee0-ed3e-4d78-b82c-a08971cc1b52 || true
+fsck.vfat -a -w /dev/disk/by-partuuid/0fb58002-611e-491c-829d-1d7c669fdef2 || true
+
+echo "--- Mounting Target Partitions ---"
+mount -o rw,umask=000 /dev/disk/by-partuuid/b6457ee0-ed3e-4d78-b82c-a08971cc1b52 /mnt/micasys
+mount -o rw,umask=000 /dev/disk/by-partuuid/0fb58002-611e-491c-829d-1d7c669fdef2 /mnt/micaesp
+
+mkdir -p /mnt/micasys/MicaNT/System32/drivers/etc
+mkdir -p /mnt/micasys/MicaNT/System32/config
+mkdir -p /mnt/micasys/MicaNT/System32/LogFiles
+
+echo "--- Copying Kernel and Userland Executables ---"
+cp -v /tmp/ntoskrnl.exe /mnt/micasys/MicaNT/System32/
+cp -v /tmp/ntoskrnl.exe /mnt/micasys/
+cp -v /tmp/app.exe /mnt/micasys/MicaNT/System32/
+cp -v /tmp/bench.exe /mnt/micasys/MicaNT/System32/
+[ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/ || true
+
+for f in /tmp/*.exe; do
+    if [ -f "$f" ]; then
+        cp -v "$f" /mnt/micasys/MicaNT/System32/
+        cp -v "$f" /mnt/micasys/
+    fi
+done
+
+echo "--- Copying Known DLLs ---"
+for f in /tmp/*.dll; do
+    if [ -f "$f" ]; then
+        cp -v "$f" /mnt/micasys/MicaNT/System32/
+    fi
+done
+
+echo "--- Copying Kernel Drivers (.sys) ---"
+for f in /tmp/*.sys; do
+    if [ -f "$f" ]; then
+        cp -v "$f" /mnt/micasys/MicaNT/System32/drivers/
+    fi
+done
+
+echo "--- Copying Network Tables ---"
+for f in hosts services networks protocol; do
+    if [ -f "/tmp/$f" ]; then
+        cp -v "/tmp/$f" /mnt/micasys/MicaNT/System32/drivers/etc/
+    fi
+done
+
+echo "--- Copying Registry Hives ---"
+for f in SYSTEM SOFTWARE SAM SECURITY DEFAULT; do
+    if [ -f "/tmp/$f" ]; then
+        cp -v "/tmp/$f" /mnt/micasys/MicaNT/System32/config/
+    fi
+done
+
+echo "--- Mirroring Bootloader to ESP ---"
+mkdir -p /mnt/micaesp/EFI/BOOT /mnt/micaesp/EFI/MicaNT
+cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/BOOT/BOOTX64.EFI
+cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/MicaNT/BOOTX64.EFI
+cp -v /tmp/ntoskrnl.exe /mnt/micaesp/EFI/MicaNT/
+cp -v /tmp/ntoskrnl.exe /mnt/micaesp/
+rm -f /mnt/micaesp/EFI/MicaNT/boot.ini /mnt/micaesp/boot.ini /mnt/micasys/boot.ini /mnt/micasys/EFI/MicaNT/boot.ini 2>/dev/null || true
+
+mkdir -p /boot/efi/EFI/MicaNT
+cp -v /tmp/BOOTX64.EFI /boot/efi/EFI/MicaNT/BOOTX64.EFI
+cp -v /tmp/ntoskrnl.exe /boot/efi/EFI/MicaNT/
+cp -v /tmp/ntoskrnl.exe /boot/efi/
+rm -f /boot/efi/EFI/MicaNT/boot.ini /boot/efi/boot.ini 2>/dev/null || true
+
+sync
+umount /mnt/micasys /mnt/micaesp
+echo "--- Staging Script Completed Successfully ---"
+"""
+    with sftp.open("/tmp/stage.sh", "w") as sf:
+        sf.write(stage_script)
     sftp.close()
 
     print("      Staging files strictly to sovereign MicaNT partitions by PARTUUID...")
-    # PARTUUID 0fb58002-611e-491c-829d-1d7c669fdef2 = MICA_ESP (1 GB FAT32)
-    # PARTUUID b6457ee0-ed3e-4d78-b82c-a08971cc1b52 = MICA_SYS (128 GB FAT32)
-    stage_cmd = (
-        'mkdir -p /mnt/micasys /mnt/micaesp && '
-        'umount /mnt/micasys 2>/dev/null || true; '
-        'umount /mnt/micaesp 2>/dev/null || true; '
-        'mount /dev/disk/by-partuuid/b6457ee0-ed3e-4d78-b82c-a08971cc1b52 /mnt/micasys && '
-        'mount /dev/disk/by-partuuid/0fb58002-611e-491c-829d-1d7c669fdef2 /mnt/micaesp && '
-        'mkdir -p /mnt/micasys/MicaNT/System32/drivers/etc '
-        '/mnt/micasys/MicaNT/System32/config '
-        '/mnt/micasys/MicaNT/System32/LogFiles && '
-        'cp -v /tmp/ntoskrnl.exe /mnt/micasys/MicaNT/System32/ && '
-        'cp -v /tmp/ntoskrnl.exe /mnt/micasys/ && '
-        'cp -v /tmp/app.exe /mnt/micasys/MicaNT/System32/ && '
-        'cp -v /tmp/bench.exe /mnt/micasys/MicaNT/System32/ && '
-        '([ -f /tmp/prismx_3d_cube_app.exe ] && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/MicaNT/System32/ && cp -v /tmp/prismx_3d_cube_app.exe /mnt/micasys/ || true); '
-        'for f in /tmp/*.exe; do [ -f "$f" ] && cp -v "$f" /mnt/micasys/MicaNT/System32/ && cp -v "$f" /mnt/micasys/; done; '
-        'for f in /tmp/*.dll; do [ -f "$f" ] && cp -v "$f" /mnt/micasys/MicaNT/System32/; done; '
-        'for f in /tmp/*.sys; do [ -f "$f" ] && cp -v "$f" /mnt/micasys/MicaNT/System32/drivers/; done; '
-        'for f in hosts services networks protocol; do [ -f "/tmp/$f" ] && cp -v "/tmp/$f" /mnt/micasys/MicaNT/System32/drivers/etc/; done; '
-        'for f in SYSTEM SOFTWARE SAM SECURITY DEFAULT; do [ -f "/tmp/$f" ] && cp -v "/tmp/$f" /mnt/micasys/MicaNT/System32/config/; done; '
-        'mkdir -p /mnt/micaesp/EFI/BOOT /mnt/micaesp/EFI/MicaNT && '
-        'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/BOOT/BOOTX64.EFI && '
-        'cp -v /tmp/BOOTX64.EFI /mnt/micaesp/EFI/MicaNT/BOOTX64.EFI && '
-        'cp -v /tmp/ntoskrnl.exe /mnt/micaesp/EFI/MicaNT/ && '
-        'cp -v /tmp/ntoskrnl.exe /mnt/micaesp/ && '
-        'rm -f /mnt/micaesp/EFI/MicaNT/boot.ini /mnt/micaesp/boot.ini /mnt/micasys/boot.ini /mnt/micasys/EFI/MicaNT/boot.ini 2>/dev/null || true; '
-        'mkdir -p /boot/efi/EFI/MicaNT && '
-        'cp -v /tmp/BOOTX64.EFI /boot/efi/EFI/MicaNT/BOOTX64.EFI && '
-        'cp -v /tmp/ntoskrnl.exe /boot/efi/EFI/MicaNT/ && '
-        'cp -v /tmp/ntoskrnl.exe /boot/efi/ && '
-        'rm -f /boot/efi/EFI/MicaNT/boot.ini /boot/efi/boot.ini 2>/dev/null || true; '
-        'sync && umount /mnt/micasys /mnt/micaesp'
-    )
-    rc, out, err = exec_sudo(ssh, stage_cmd)
+    exec_sudo(ssh, "chmod +x /tmp/stage.sh")
+    rc, out, err = exec_sudo(ssh, "/tmp/stage.sh")
     if rc != 0:
         print(f"[FATAL] Copy failed:\nSTDOUT: {out}\nSTDERR: {err}")
         sys.exit(1)

@@ -3119,7 +3119,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             static float s_prismRot = 0.61f;
             s_prismRot += 0.52f;
             DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp, s_prismRot);
-        } else if (cmd[0] == 's' && cmd[1] == 'm') {
+        } else if (cmd[0] == 's' && cmd[1] == 'm' && cmd[2] == 'p' && (cmd[3] == '\0' || cmd[3] == ' ')) {
             ShellClearOutput();
             ShellAddLine("SMP Topology: 8/8 Logical Processors Online & Synchronized", micant::bootvid::Color{100, 240, 160});
             ShellAddLine("Processor:    Intel(R) Xeon(R) CPU E3-1270 v6 @ 3.80GHz (Kaby Lake-S)", micant::bootvid::Color{220, 235, 255});
