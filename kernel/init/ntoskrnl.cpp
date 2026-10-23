@@ -3439,11 +3439,23 @@ extern "C" micant::NtStatus KiSystemStartup(
                 LogKernel("Shell: boot status displayed.");
             }
         } else if (cmd[0] == 'n' && cmd[1] == 'e' && cmd[2] == 't' && (cmd[3] == ' ' || cmd[3] == '\0')) {
-            const char* arg = cmd + 3;
-            while (*arg == ' ') ++arg;
-            auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
+            auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
+            size_t bytesRead = 0;
+            bool readOk = fs.readFile("\\MicaNT\\System32\\net.exe", s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+            if (readOk && bytesRead > 0) {
+                ShellClearOutput();
+                LogKernel("Shell: Executing standalone \\MicaNT\\System32\\net.exe in Ring 3...");
+                const char* sArgs = "";
+                size_t si = 0;
+                while (cmd[si] && cmd[si] != ' ') si++;
+                if (cmd[si] == ' ') { sArgs = cmd + si + 1; while (*sArgs == ' ') sArgs++; }
+                transitionToRing3(s_diskAppBuffer, bytesRead, true, &videoDriver, "net.exe", sArgs);
+            } else {
+                const char* arg = cmd + 3;
+                while (*arg == ' ') ++arg;
+                auto& nic = micant::km::i210_baremetal::BareMetalI210Driver::get();
 
-            ShellClearOutput();
+                ShellClearOutput();
             if (arg[0] == 'p' && arg[1] == 'i' && arg[2] == 'n' && arg[3] == 'g') {
                 const char* ipStr = arg + 4;
                 while (*ipStr == ' ') ++ipStr;
@@ -3503,7 +3515,8 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine(srvStr, micant::bootvid::Color{140, 255, 180});
                 LogKernel("Shell: Network status and hardware diagnostics queried.");
             }
-        } else if (cmd[0] == 'c' && cmd[1] == 'd' && (cmd[2] == '\0' || cmd[2] == ' ' || cmd[2] == '\\' || cmd[2] == '.')) {
+        }
+    } else if (cmd[0] == 'c' && cmd[1] == 'd' && (cmd[2] == '\0' || cmd[2] == ' ' || cmd[2] == '\\' || cmd[2] == '.')) {
             ShellClearOutput();
             const char* arg = getCommandArgs(cmd);
             char* curDir = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;

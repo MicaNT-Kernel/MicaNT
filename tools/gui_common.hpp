@@ -63,6 +63,10 @@ inline void PrintLine(const char* s) noexcept {
     DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
 }
 
+inline void PrintStr(const char* s) noexcept {
+    DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
+}
+
 inline bool HasSubstr(const char* s, const char* sub) noexcept {
     if (!s || !sub) return false;
     for (size_t i = 0; s[i] != '\0'; ++i) {

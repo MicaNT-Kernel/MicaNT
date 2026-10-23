@@ -76,6 +76,28 @@ SYSTEM32_TOOLS = [
     ("tools/nslookup_app.cpp", "build/nslookup.exe", "nslookup.exe"),
     ("tools/nbtstat_app.cpp", "build/nbtstat.exe", "nbtstat.exe"),
     ("tools/query_app.cpp", "build/query.exe", "query.exe"),
+    ("tools/run_app.cpp", "build/run.exe", "run.exe"),
+    ("tools/cleanmgr_app.cpp", "build/cleanmgr.exe", "cleanmgr.exe"),
+    ("tools/charmap_app.cpp", "build/charmap.exe", "charmap.exe"),
+    ("tools/photo_app.cpp", "build/photo.exe", "photo.exe"),
+    ("tools/search_app.cpp", "build/searchui.exe", "searchui.exe"),
+    ("tools/logonui_app.cpp", "build/logonui.exe", "logonui.exe"),
+    ("tools/net_app.cpp", "build/net.exe", "net.exe"),
+    ("tools/netsh_app.cpp", "build/netsh.exe", "netsh.exe"),
+    ("tools/fsutil_app.cpp", "build/fsutil.exe", "fsutil.exe"),
+    ("tools/wmic_app.cpp", "build/wmic.exe", "wmic.exe"),
+    ("tools/powershell_app.cpp", "build/powershell.exe", "powershell.exe"),
+    ("tools/where_app.cpp", "build/where.exe", "where.exe"),
+    ("tools/clip_app.cpp", "build/clip.exe", "clip.exe"),
+    ("tools/timeout_app.cpp", "build/timeout.exe", "timeout.exe"),
+    ("tools/choice_app.cpp", "build/choice.exe", "choice.exe"),
+    ("tools/powercfg_app.cpp", "build/powercfg.exe", "powercfg.exe"),
+    ("tools/appwiz_app.cpp", "build/appwiz.exe", "appwiz.exe"),
+    ("tools/desk_app.cpp", "build/desk.exe", "desk.exe"),
+    ("tools/mmsys_app.cpp", "build/mmsys.exe", "mmsys.exe"),
+    ("tools/powercfg_cpl_app.cpp", "build/powercfg_cpl.exe", "powercfg_cpl.exe"),
+    ("tools/timedate_app.cpp", "build/timedate.exe", "timedate.exe"),
+    ("tools/firewall_app.cpp", "build/firewall.exe", "firewall.exe"),
 ]
 
 SYSTEM32_SERVICES = [
@@ -462,6 +484,18 @@ cp -v /mnt/micasys/MicaNT/System32/sysdm.exe /mnt/micasys/MicaNT/System32/sysdm.
 cp -v /mnt/micasys/MicaNT/System32/sysdm.exe /mnt/micasys/sysdm.cpl || true
 cp -v /mnt/micasys/MicaNT/System32/ncpa.exe /mnt/micasys/MicaNT/System32/ncpa.cpl || true
 cp -v /mnt/micasys/MicaNT/System32/ncpa.exe /mnt/micasys/ncpa.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/appwiz.exe /mnt/micasys/MicaNT/System32/appwiz.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/appwiz.exe /mnt/micasys/appwiz.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/desk.exe /mnt/micasys/MicaNT/System32/desk.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/desk.exe /mnt/micasys/desk.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/mmsys.exe /mnt/micasys/MicaNT/System32/mmsys.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/mmsys.exe /mnt/micasys/mmsys.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/powercfg_cpl.exe /mnt/micasys/MicaNT/System32/powercfg.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/powercfg_cpl.exe /mnt/micasys/powercfg.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/timedate.exe /mnt/micasys/MicaNT/System32/timedate.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/timedate.exe /mnt/micasys/timedate.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/firewall.exe /mnt/micasys/MicaNT/System32/firewall.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/firewall.exe /mnt/micasys/firewall.cpl || true
 
 echo "--- Copying Known DLLs ---"
 for f in /tmp/*.dll; do
