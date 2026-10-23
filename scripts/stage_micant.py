@@ -98,6 +98,26 @@ SYSTEM32_TOOLS = [
     ("tools/powercfg_cpl_app.cpp", "build/powercfg_cpl.exe", "powercfg_cpl.exe"),
     ("tools/timedate_app.cpp", "build/timedate.exe", "timedate.exe"),
     ("tools/firewall_app.cpp", "build/firewall.exe", "firewall.exe"),
+    ("tools/write_app.cpp", "build/write.exe", "write.exe"),
+    ("tools/snippingtool_app.cpp", "build/snippingtool.exe", "snippingtool.exe"),
+    ("tools/mstsc_app.cpp", "build/mstsc.exe", "mstsc.exe"),
+    ("tools/magnify_app.cpp", "build/magnify.exe", "magnify.exe"),
+    ("tools/osk_app.cpp", "build/osk.exe", "osk.exe"),
+    ("tools/sndrec_app.cpp", "build/sndrec32.exe", "sndrec32.exe"),
+    ("tools/icacls_app.cpp", "build/icacls.exe", "icacls.exe"),
+    ("tools/takeown_app.cpp", "build/takeown.exe", "takeown.exe"),
+    ("tools/openfiles_app.cpp", "build/openfiles.exe", "openfiles.exe"),
+    ("tools/logman_app.cpp", "build/logman.exe", "logman.exe"),
+    ("tools/typeperf_app.cpp", "build/typeperf.exe", "typeperf.exe"),
+    ("tools/reagentc_app.cpp", "build/reagentc.exe", "reagentc.exe"),
+    ("tools/gpupdate_app.cpp", "build/gpupdate.exe", "gpupdate.exe"),
+    ("tools/gpresult_app.cpp", "build/gpresult.exe", "gpresult.exe"),
+    ("tools/diskperf_app.cpp", "build/diskperf.exe", "diskperf.exe"),
+    ("tools/main_cpl_app.cpp", "build/main.exe", "main.exe"),
+    ("tools/inetcpl_app.cpp", "build/inetcpl.exe", "inetcpl.exe"),
+    ("tools/joy_cpl_app.cpp", "build/joy.exe", "joy.exe"),
+    ("tools/intl_cpl_app.cpp", "build/intl.exe", "intl.exe"),
+    ("tools/telephon_cpl_app.cpp", "build/telephon.exe", "telephon.exe"),
 ]
 
 SYSTEM32_SERVICES = [
@@ -496,6 +516,20 @@ cp -v /mnt/micasys/MicaNT/System32/timedate.exe /mnt/micasys/MicaNT/System32/tim
 cp -v /mnt/micasys/MicaNT/System32/timedate.exe /mnt/micasys/timedate.cpl || true
 cp -v /mnt/micasys/MicaNT/System32/firewall.exe /mnt/micasys/MicaNT/System32/firewall.cpl || true
 cp -v /mnt/micasys/MicaNT/System32/firewall.exe /mnt/micasys/firewall.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/main.exe /mnt/micasys/MicaNT/System32/main.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/main.exe /mnt/micasys/main.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/inetcpl.exe /mnt/micasys/MicaNT/System32/inetcpl.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/inetcpl.exe /mnt/micasys/inetcpl.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/joy.exe /mnt/micasys/MicaNT/System32/joy.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/joy.exe /mnt/micasys/joy.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/intl.exe /mnt/micasys/MicaNT/System32/intl.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/intl.exe /mnt/micasys/intl.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/telephon.exe /mnt/micasys/MicaNT/System32/telephon.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/telephon.exe /mnt/micasys/telephon.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/write.exe /mnt/micasys/MicaNT/System32/wordpad.exe || true
+cp -v /mnt/micasys/MicaNT/System32/write.exe /mnt/micasys/wordpad.exe || true
+cp -v /mnt/micasys/MicaNT/System32/sndrec32.exe /mnt/micasys/MicaNT/System32/soundrecorder.exe || true
+cp -v /mnt/micasys/MicaNT/System32/sndrec32.exe /mnt/micasys/soundrecorder.exe || true
 
 echo "--- Copying Known DLLs ---"
 for f in /tmp/*.dll; do
