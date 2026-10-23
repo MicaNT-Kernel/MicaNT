@@ -20828,10 +20828,10 @@ inline void test_suite_349_hmb_paging_engine() {
     TEST_ASSERT(hmbEngine.getTelemetry().zswapHits > 0, "zswapHits must increment");
 
     // 4. Test Transition PTE Encoding and Decoding in BareMetalPaging
-    uint64_t mockCr3[512]{0};
-    uint64_t mockPdpt[512]{0};
-    uint64_t mockPd[512]{0};
-    uint64_t mockPt[512]{0};
+    alignas(4096) uint64_t mockCr3[512]{0};
+    alignas(4096) uint64_t mockPdpt[512]{0};
+    alignas(4096) uint64_t mockPd[512]{0};
+    alignas(4096) uint64_t mockPt[512]{0};
 
     uint64_t mockCr3Phys  = reinterpret_cast<uint64_t>(&mockCr3[0]);
     uint64_t mockPdptPhys = reinterpret_cast<uint64_t>(&mockPdpt[0]);

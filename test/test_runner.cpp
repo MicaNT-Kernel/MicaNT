@@ -321,7 +321,7 @@
 #include "micant/km/executive/mm_baremetal.hpp"
 #include "micant/km/executive/hmb_paging.hpp"
 #include "micant/um/subsystems/winbase/muicache.hpp"
-#include "micant/um/subsystems/posix/wsl_bridge.hpp"
+#include "micant/um/subsystems/winbase/wsl_bridge.hpp"
 #include "micant/um/subsystems/net/mpr.hpp"
 #include "micant/um/subsystems/mgmt/dbghelp.hpp"
 #include "micant/um/subsystems/winbase/cfgmgr32.hpp"
