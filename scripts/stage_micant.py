@@ -208,6 +208,21 @@ SYSTEM32_TOOLS = [
     ("tools/vol_app.cpp", "build/vol.exe", "vol.exe"),
     ("tools/subst_app.cpp", "build/subst.exe", "subst.exe"),
     ("tools/tree_app.cpp", "build/tree.exe", "tree.exe"),
+    ("tools/rc_app.cpp", "build/rc.exe", "rc.exe"),
+    ("tools/cvtres_app.cpp", "build/cvtres.exe", "cvtres.exe"),
+    ("tools/mc_app.cpp", "build/mc.exe", "mc.exe"),
+    ("tools/muicache_app.cpp", "build/muicache.exe", "muicache.exe"),
+    ("tools/netmsg_app.cpp", "build/netmsg.exe", "netmsg.exe"),
+    ("tools/help_app.cpp", "build/help.exe", "help.exe"),
+    ("tools/replace_app.cpp", "build/replace.exe", "replace.exe"),
+    ("tools/recover_app.cpp", "build/recover.exe", "recover.exe"),
+    ("tools/append_app.cpp", "build/append.exe", "append.exe"),
+    ("tools/graftabl_app.cpp", "build/graftabl.exe", "graftabl.exe"),
+    ("tools/ktmutil_app.cpp", "build/ktmutil.exe", "ktmutil.exe"),
+    ("tools/fsquirt_app.cpp", "build/fsquirt.exe", "fsquirt.exe"),
+    ("tools/eudcedit_app.cpp", "build/eudcedit.exe", "eudcedit.exe"),
+    ("tools/narrator_app.cpp", "build/narrator.exe", "narrator.exe"),
+    ("tools/setx_app.cpp", "build/setx.exe", "setx.exe"),
 ]
 
 SYSTEM32_SERVICES = [
@@ -640,6 +655,8 @@ cp -v /mnt/micasys/MicaNT/System32/chcp.exe /mnt/micasys/MicaNT/System32/chcp.co
 cp -v /mnt/micasys/MicaNT/System32/chcp.exe /mnt/micasys/chcp.com || true
 cp -v /mnt/micasys/MicaNT/System32/mode.exe /mnt/micasys/MicaNT/System32/mode.com || true
 cp -v /mnt/micasys/MicaNT/System32/mode.exe /mnt/micasys/mode.com || true
+cp -v /mnt/micasys/MicaNT/System32/graftabl.exe /mnt/micasys/MicaNT/System32/graftabl.com || true
+cp -v /mnt/micasys/MicaNT/System32/graftabl.exe /mnt/micasys/graftabl.com || true
 
 echo "--- Copying Known DLLs ---"
 for f in /tmp/*.dll; do
