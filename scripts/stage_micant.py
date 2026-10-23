@@ -223,6 +223,21 @@ SYSTEM32_TOOLS = [
     ("tools/eudcedit_app.cpp", "build/eudcedit.exe", "eudcedit.exe"),
     ("tools/narrator_app.cpp", "build/narrator.exe", "narrator.exe"),
     ("tools/setx_app.cpp", "build/setx.exe", "setx.exe"),
+    ("tools/wsl_app.cpp", "build/wsl.exe", "wsl.exe"),
+    ("tools/bash_app.cpp", "build/bash.exe", "bash.exe"),
+    ("tools/curl_app.cpp", "build/curl.exe", "curl.exe"),
+    ("tools/tar_app.cpp", "build/tar.exe", "tar.exe"),
+    ("tools/ssh_app.cpp", "build/ssh.exe", "ssh.exe"),
+    ("tools/scp_app.cpp", "build/scp.exe", "scp.exe"),
+    ("tools/sftp_app.cpp", "build/sftp.exe", "sftp.exe"),
+    ("tools/ssh_keygen_app.cpp", "build/ssh-keygen.exe", "ssh-keygen.exe"),
+    ("tools/winget_app.cpp", "build/winget.exe", "winget.exe"),
+    ("tools/quser_app.cpp", "build/quser.exe", "quser.exe"),
+    ("tools/qprocess_app.cpp", "build/qprocess.exe", "qprocess.exe"),
+    ("tools/clipbrd_app.cpp", "build/clipbrd.exe", "clipbrd.exe"),
+    ("tools/displayswitch_app.cpp", "build/displayswitch.exe", "displayswitch.exe"),
+    ("tools/tabcal_app.cpp", "build/tabcal.exe", "tabcal.exe"),
+    ("tools/stikynot_app.cpp", "build/stikynot.exe", "stikynot.exe"),
 ]
 
 SYSTEM32_SERVICES = [

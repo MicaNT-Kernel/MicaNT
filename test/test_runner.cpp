@@ -321,6 +321,7 @@
 #include "micant/km/executive/mm_baremetal.hpp"
 #include "micant/km/executive/hmb_paging.hpp"
 #include "micant/um/subsystems/winbase/muicache.hpp"
+#include "micant/um/subsystems/posix/wsl_bridge.hpp"
 #include "micant/um/subsystems/net/mpr.hpp"
 #include "micant/um/subsystems/mgmt/dbghelp.hpp"
 #include "micant/um/subsystems/winbase/cfgmgr32.hpp"
@@ -389,7 +390,7 @@ int main(int argc, char* argv[]) {
         std::cout << "------------------------------------------------------------------------\n";
         return g_FailedTests;
     }
-    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite350" || std::string(argv[1]) == "--suite349" || std::string(argv[1]) == "--suite348" || std::string(argv[1]) == "--suite347")) {
+    if (argc > 1 && (std::string(argv[1]) == "--last" || std::string(argv[1]) == "--suite351" || std::string(argv[1]) == "--suite350" || std::string(argv[1]) == "--suite349" || std::string(argv[1]) == "--suite348" || std::string(argv[1]) == "--suite347")) {
         RUN_TEST(Test_Horizon128_KernelGraphics_GopLinearFramebuffer_Userland_Blitter_And_GdiPresentPipeline);
         RUN_TEST(Test_Horizon129_BatteryManagementSystem_Bms_ClassDriver_And_CellBalancing);
         RUN_TEST(Test_Horizon130_ProcessorPowerManagement_IntelSpeedShift_Hwp_And_CoreParking);
@@ -397,6 +398,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon132_Robust_Userspace_PE32Plus_Execution_And_UCRT_ABI);
         RUN_TEST(Test_Horizon133_HavenMemoryBus_Hmb20_PagingEngine_And_DemandSwap);
         RUN_TEST(Test_Horizon134_MuiResourceCompilers_And_InternationalizationCatalogs);
+        RUN_TEST(Test_Horizon135_WslPosixBridge_OpenSsh_And_WinGetPackageManager);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1675,6 +1677,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon132_Robust_Userspace_PE32Plus_Execution_And_UCRT_ABI);
     RUN_TEST(Test_Horizon133_HavenMemoryBus_Hmb20_PagingEngine_And_DemandSwap);
     RUN_TEST(Test_Horizon134_MuiResourceCompilers_And_InternationalizationCatalogs);
+    RUN_TEST(Test_Horizon135_WslPosixBridge_OpenSsh_And_WinGetPackageManager);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";
