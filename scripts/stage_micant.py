@@ -51,6 +51,17 @@ SYSTEM32_TOOLS = [
     ("tools/certutil_app.cpp", "build/certutil.exe", "certutil.exe"),
     ("tools/klist_app.cpp", "build/klist.exe", "klist.exe"),
     ("tools/fltmc.cpp", "build/fltmc.exe", "fltmc.exe"),
+    ("tools/calc_app.cpp", "build/calc.exe", "calc.exe"),
+    ("tools/notepad_app.cpp", "build/notepad.exe", "notepad.exe"),
+    ("tools/taskmgr_app.cpp", "build/taskmgr.exe", "taskmgr.exe"),
+    ("tools/regedit_app.cpp", "build/regedit.exe", "regedit.exe"),
+    ("tools/explorer_app.cpp", "build/explorer.exe", "explorer.exe"),
+    ("tools/paint_app.cpp", "build/mspaint.exe", "mspaint.exe"),
+    ("tools/devmgmt_app.cpp", "build/devmgmt.exe", "devmgmt.exe"),
+    ("tools/diskmgmt_app.cpp", "build/diskmgmt.exe", "diskmgmt.exe"),
+    ("tools/services_mgmt_app.cpp", "build/services_mgmt.exe", "services_mgmt.exe"),
+    ("tools/eventvwr_app.cpp", "build/eventvwr.exe", "eventvwr.exe"),
+    ("tools/msinfo32_app.cpp", "build/msinfo32.exe", "msinfo32.exe"),
 ]
 
 SYSTEM32_SERVICES = [
@@ -209,7 +220,7 @@ def run_local_build():
     print(f"      bench.exe Compiled OK ({sz_b:,} bytes)")
 
     # Compile System32 Standalone Ring 3 Utilities
-    print("      Compiling 21 System32 Utilities...")
+    print(f"      Compiling {len(SYSTEM32_TOOLS)} System32 Utilities & Desktop Apps...")
     for src, out_path, name in SYSTEM32_TOOLS:
         c_cmd = [
             "clang++",
@@ -348,6 +359,14 @@ def main():
     sftp.put(BENCH_SOURCE, "/tmp/bench.exe")
     if os.path.exists(CUBE_SOURCE):
         sftp.put(CUBE_SOURCE, "/tmp/prismx_3d_cube_app.exe")
+    surshell_path = os.path.join(REPO_ROOT, r"build\surshell.exe")
+    if not os.path.exists(surshell_path):
+        alt_surshell = r"C:\Users\admin\source\SurShell\build\bin\surshell_app.exe"
+        if os.path.exists(alt_surshell):
+            import shutil
+            shutil.copy2(alt_surshell, surshell_path)
+    if os.path.exists(surshell_path):
+        sftp.put(surshell_path, "/tmp/surshell.exe")
 
     for _, out_path, name in SYSTEM32_TOOLS:
         p = os.path.join(REPO_ROOT, out_path)
@@ -411,6 +430,16 @@ for f in /tmp/*.exe; do
         cp -v "$f" /mnt/micasys/
     fi
 done
+
+echo "--- Generating MMC Snap-in Consoles (.msc) ---"
+cp -v /mnt/micasys/MicaNT/System32/devmgmt.exe /mnt/micasys/MicaNT/System32/devmgmt.msc || true
+cp -v /mnt/micasys/MicaNT/System32/devmgmt.exe /mnt/micasys/devmgmt.msc || true
+cp -v /mnt/micasys/MicaNT/System32/diskmgmt.exe /mnt/micasys/MicaNT/System32/diskmgmt.msc || true
+cp -v /mnt/micasys/MicaNT/System32/diskmgmt.exe /mnt/micasys/diskmgmt.msc || true
+cp -v /mnt/micasys/MicaNT/System32/services_mgmt.exe /mnt/micasys/MicaNT/System32/services.msc || true
+cp -v /mnt/micasys/MicaNT/System32/services_mgmt.exe /mnt/micasys/services.msc || true
+cp -v /mnt/micasys/MicaNT/System32/eventvwr.exe /mnt/micasys/MicaNT/System32/eventvwr.msc || true
+cp -v /mnt/micasys/MicaNT/System32/eventvwr.exe /mnt/micasys/eventvwr.msc || true
 
 echo "--- Copying Known DLLs ---"
 for f in /tmp/*.dll; do

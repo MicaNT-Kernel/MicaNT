@@ -4097,26 +4097,47 @@ extern "C" micant::NtStatus KiSystemStartup(
             }
 
             char targetExe[128]{};
-            copyStr(targetExe, "\\MicaNT\\System32\\", sizeof(targetExe));
-            concatStr(targetExe, exeBase, sizeof(targetExe));
             size_t cmdStrLen = strLen(exeBase);
             bool hasExeExt = (cmdStrLen > 4 && 
                 (exeBase[cmdStrLen - 4] == '.') && 
                 (exeBase[cmdStrLen - 3] == 'e' || exeBase[cmdStrLen - 3] == 'E') &&
                 (exeBase[cmdStrLen - 2] == 'x' || exeBase[cmdStrLen - 2] == 'X') &&
                 (exeBase[cmdStrLen - 1] == 'e' || exeBase[cmdStrLen - 1] == 'E'));
-            if (!hasExeExt) concatStr(targetExe, ".exe", sizeof(targetExe));
+            bool hasMscExt = (cmdStrLen > 4 && 
+                (exeBase[cmdStrLen - 4] == '.') && 
+                (exeBase[cmdStrLen - 3] == 'm' || exeBase[cmdStrLen - 3] == 'M') &&
+                (exeBase[cmdStrLen - 2] == 's' || exeBase[cmdStrLen - 2] == 'S') &&
+                (exeBase[cmdStrLen - 1] == 'c' || exeBase[cmdStrLen - 1] == 'C'));
 
             auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
             size_t bytesRead = 0;
-            bool readOk = fs.readFile(targetExe, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
-            if (!readOk) {
+            bool readOk = false;
+
+            const char* extList[2] = { ".exe", ".msc" };
+            int maxExts = (hasExeExt || hasMscExt) ? 1 : 2;
+
+            for (int e = 0; e < maxExts && !readOk; ++e) {
+                // 1. Try System32 first
+                copyStr(targetExe, "\\MicaNT\\System32\\", sizeof(targetExe));
+                concatStr(targetExe, exeBase, sizeof(targetExe));
+                if (!hasExeExt && !hasMscExt) {
+                    concatStr(targetExe, extList[e], sizeof(targetExe));
+                }
+                readOk = fs.readFile(targetExe, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
+                if (readOk && bytesRead > 0) break;
+
+                // 2. Try volume root
                 char altExe[128]{};
                 altExe[0] = '\\'; altExe[1] = '\0';
                 concatStr(altExe, exeBase, sizeof(altExe));
-                if (!hasExeExt) concatStr(altExe, ".exe", sizeof(altExe));
+                if (!hasExeExt && !hasMscExt) {
+                    concatStr(altExe, extList[e], sizeof(altExe));
+                }
                 readOk = fs.readFile(altExe, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
-                if (readOk) copyStr(targetExe, altExe, sizeof(targetExe));
+                if (readOk && bytesRead > 0) {
+                    copyStr(targetExe, altExe, sizeof(targetExe));
+                    break;
+                }
             }
 
             if (readOk && bytesRead > 0) {
