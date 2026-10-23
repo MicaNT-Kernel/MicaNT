@@ -178,6 +178,21 @@ SYSTEM32_TOOLS = [
     ("tools/reset_app.cpp", "build/reset.exe", "reset.exe"),
     ("tools/lodctr_app.cpp", "build/lodctr.exe", "lodctr.exe"),
     ("tools/unlodctr_app.cpp", "build/unlodctr.exe", "unlodctr.exe"),
+    ("tools/mount_app.cpp", "build/mount.exe", "mount.exe"),
+    ("tools/umount_app.cpp", "build/umount.exe", "umount.exe"),
+    ("tools/nfsstat_app.cpp", "build/nfsstat.exe", "nfsstat.exe"),
+    ("tools/showmount_app.cpp", "build/showmount.exe", "showmount.exe"),
+    ("tools/rpcinfo_app.cpp", "build/rpcinfo.exe", "rpcinfo.exe"),
+    ("tools/rasdial_app.cpp", "build/rasdial.exe", "rasdial.exe"),
+    ("tools/rasphone_app.cpp", "build/rasphone.exe", "rasphone.exe"),
+    ("tools/pnputil_app.cpp", "build/pnputil.exe", "pnputil.exe"),
+    ("tools/recdisc_app.cpp", "build/recdisc.exe", "recdisc.exe"),
+    ("tools/slmgr_app.cpp", "build/slmgr.exe", "slmgr.exe"),
+    ("tools/licensingdiag_app.cpp", "build/licensingdiag.exe", "licensingdiag.exe"),
+    ("tools/secedit_app.cpp", "build/secedit.exe", "secedit.exe"),
+    ("tools/ktpass_app.cpp", "build/ktpass.exe", "ktpass.exe"),
+    ("tools/ntdsutil_app.cpp", "build/ntdsutil.exe", "ntdsutil.exe"),
+    ("tools/rendom_app.cpp", "build/rendom.exe", "rendom.exe"),
 ]
 
 SYSTEM32_SERVICES = [
