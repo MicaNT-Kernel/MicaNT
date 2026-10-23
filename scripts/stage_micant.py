@@ -148,6 +148,21 @@ SYSTEM32_TOOLS = [
     ("tools/mode_app.cpp", "build/mode.exe", "mode.exe"),
     ("tools/doskey_app.cpp", "build/doskey.exe", "doskey.exe"),
     ("tools/comp_app.cpp", "build/comp.exe", "comp.exe"),
+    ("tools/compact_app.cpp", "build/compact.exe", "compact.exe"),
+    ("tools/cipher_app.cpp", "build/cipher.exe", "cipher.exe"),
+    ("tools/expand_app.cpp", "build/expand.exe", "expand.exe"),
+    ("tools/makecab_app.cpp", "build/makecab.exe", "makecab.exe"),
+    ("tools/extrac32_app.cpp", "build/extrac32.exe", "extrac32.exe"),
+    ("tools/manage_bde_app.cpp", "build/manage-bde.exe", "manage-bde.exe"),
+    ("tools/chkntfs_app.cpp", "build/chkntfs.exe", "chkntfs.exe"),
+    ("tools/defrag_app.cpp", "build/defrag.exe", "defrag.exe"),
+    ("tools/relog_app.cpp", "build/relog.exe", "relog.exe"),
+    ("tools/tracerpt_app.cpp", "build/tracerpt.exe", "tracerpt.exe"),
+    ("tools/dism_app.cpp", "build/dism.exe", "dism.exe"),
+    ("tools/auditpol_app.cpp", "build/auditpol.exe", "auditpol.exe"),
+    ("tools/wevtutil_app.cpp", "build/wevtutil.exe", "wevtutil.exe"),
+    ("tools/fondue_app.cpp", "build/fondue.exe", "fondue.exe"),
+    ("tools/certreq_app.cpp", "build/certreq.exe", "certreq.exe"),
 ]
 
 SYSTEM32_SERVICES = [
