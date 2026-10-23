@@ -118,6 +118,21 @@ SYSTEM32_TOOLS = [
     ("tools/joy_cpl_app.cpp", "build/joy.exe", "joy.exe"),
     ("tools/intl_cpl_app.cpp", "build/intl.exe", "intl.exe"),
     ("tools/telephon_cpl_app.cpp", "build/telephon.exe", "telephon.exe"),
+    ("tools/rundll32_app.cpp", "build/rundll32.exe", "rundll32.exe"),
+    ("tools/regsvr32_app.cpp", "build/regsvr32.exe", "regsvr32.exe"),
+    ("tools/sigverif_app.cpp", "build/sigverif.exe", "sigverif.exe"),
+    ("tools/verifier_app.cpp", "build/verifier.exe", "verifier.exe"),
+    ("tools/gpedit_app.cpp", "build/gpedit.exe", "gpedit.exe"),
+    ("tools/lusrmgr_app.cpp", "build/lusrmgr.exe", "lusrmgr.exe"),
+    ("tools/certmgr_app.cpp", "build/certmgr.exe", "certmgr.exe"),
+    ("tools/fsmgmt_app.cpp", "build/fsmgmt.exe", "fsmgmt.exe"),
+    ("tools/secpol_app.cpp", "build/secpol.exe", "secpol.exe"),
+    ("tools/tpm_app.cpp", "build/tpm.exe", "tpm.exe"),
+    ("tools/winver_app.cpp", "build/winver.exe", "winver.exe"),
+    ("tools/sysprep_app.cpp", "build/sysprep.exe", "sysprep.exe"),
+    ("tools/wscui_app.cpp", "build/wscui.exe", "wscui.exe"),
+    ("tools/hdwwiz_app.cpp", "build/hdwwiz.exe", "hdwwiz.exe"),
+    ("tools/tftp_app.cpp", "build/tftp.exe", "tftp.exe"),
 ]
 
 SYSTEM32_SERVICES = [
@@ -530,6 +545,22 @@ cp -v /mnt/micasys/MicaNT/System32/write.exe /mnt/micasys/MicaNT/System32/wordpa
 cp -v /mnt/micasys/MicaNT/System32/write.exe /mnt/micasys/wordpad.exe || true
 cp -v /mnt/micasys/MicaNT/System32/sndrec32.exe /mnt/micasys/MicaNT/System32/soundrecorder.exe || true
 cp -v /mnt/micasys/MicaNT/System32/sndrec32.exe /mnt/micasys/soundrecorder.exe || true
+cp -v /mnt/micasys/MicaNT/System32/gpedit.exe /mnt/micasys/MicaNT/System32/gpedit.msc || true
+cp -v /mnt/micasys/MicaNT/System32/gpedit.exe /mnt/micasys/gpedit.msc || true
+cp -v /mnt/micasys/MicaNT/System32/lusrmgr.exe /mnt/micasys/MicaNT/System32/lusrmgr.msc || true
+cp -v /mnt/micasys/MicaNT/System32/lusrmgr.exe /mnt/micasys/lusrmgr.msc || true
+cp -v /mnt/micasys/MicaNT/System32/certmgr.exe /mnt/micasys/MicaNT/System32/certmgr.msc || true
+cp -v /mnt/micasys/MicaNT/System32/certmgr.exe /mnt/micasys/certmgr.msc || true
+cp -v /mnt/micasys/MicaNT/System32/fsmgmt.exe /mnt/micasys/MicaNT/System32/fsmgmt.msc || true
+cp -v /mnt/micasys/MicaNT/System32/fsmgmt.exe /mnt/micasys/fsmgmt.msc || true
+cp -v /mnt/micasys/MicaNT/System32/secpol.exe /mnt/micasys/MicaNT/System32/secpol.msc || true
+cp -v /mnt/micasys/MicaNT/System32/secpol.exe /mnt/micasys/secpol.msc || true
+cp -v /mnt/micasys/MicaNT/System32/tpm.exe /mnt/micasys/MicaNT/System32/tpm.msc || true
+cp -v /mnt/micasys/MicaNT/System32/tpm.exe /mnt/micasys/tpm.msc || true
+cp -v /mnt/micasys/MicaNT/System32/wscui.exe /mnt/micasys/MicaNT/System32/wscui.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/wscui.exe /mnt/micasys/wscui.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/hdwwiz.exe /mnt/micasys/MicaNT/System32/hdwwiz.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/hdwwiz.exe /mnt/micasys/hdwwiz.cpl || true
 
 echo "--- Copying Known DLLs ---"
 for f in /tmp/*.dll; do
