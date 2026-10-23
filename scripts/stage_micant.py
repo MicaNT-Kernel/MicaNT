@@ -44,6 +44,13 @@ SYSTEM32_TOOLS = [
     ("tools/attrib_app.cpp", "build/attrib.exe", "attrib.exe"),
     ("tools/more_app.cpp", "build/more.exe", "more.exe"),
     ("tools/format_app.cpp", "build/format.exe", "format.exe"),
+    ("tools/taskkill_app.cpp", "build/taskkill.exe", "taskkill.exe"),
+    ("tools/shutdown_app.cpp", "build/shutdown.exe", "shutdown.exe"),
+    ("tools/robocopy_app.cpp", "build/robocopy.exe", "robocopy.exe"),
+    ("tools/mountvol_app.cpp", "build/mountvol.exe", "mountvol.exe"),
+    ("tools/certutil_app.cpp", "build/certutil.exe", "certutil.exe"),
+    ("tools/klist_app.cpp", "build/klist.exe", "klist.exe"),
+    ("tools/fltmc.cpp", "build/fltmc.exe", "fltmc.exe"),
 ]
 
 SYSTEM32_SERVICES = [

@@ -552,6 +552,14 @@ extern "C" uint64_t KiSystemCall64Dispatcher(uint64_t ssn, uint64_t arg1, uint64
     UartSerial::print("\r\n");
 
     switch (ssn) {
+        case 0x08: { // NtShutdownSystem (0=Shutdown, 1=Reboot, 2=PowerOff)
+            UartSerial::print("  -> NtShutdownSystem: Action=");
+            UartSerial::printDec(static_cast<uint32_t>(arg1));
+            UartSerial::print("\r\n");
+            LogKernel("[Syscall] NtShutdownSystem: Hardware reboot requested via Port 0xCF9...");
+            HalpColdResetServer();
+            return 0;
+        }
         case 0x11: { // NtQuerySystemInformation
             s_ring3Telemetry.verifiedUserCs = arg1;
             s_ring3Telemetry.verifiedCpl = arg2;
@@ -1497,7 +1505,8 @@ static bool transitionToRing3(
             fromDisk ? (appName ? appName : "app.exe") : "unmodified_sample.exe",
             s_loadedPeInfo,
             reinterpret_cast<uint64_t>(s_userHeapBuffer),
-            sizeof(s_userHeapBuffer)
+            sizeof(s_userHeapBuffer),
+            userCmdLine
         );
 
         if (st == micant::NtStatus::Success && s_loadedPeInfo.headersValid) {
@@ -2822,8 +2831,8 @@ extern "C" micant::NtStatus KiSystemStartup(
                     ShellAddLine("Check filename spelling or use 'dir' to list active files.", micant::bootvid::Color{200, 220, 245});
                 }
             }
-        } else if ((cmd[0] == 'd' && cmd[1] == 'i' && cmd[2] == 'r') ||
-                   (cmd[0] == 'l' && cmd[1] == 's')) {
+        } else if ((cmd[0] == 'd' && cmd[1] == 'i' && cmd[2] == 'r' && (cmd[3] == '\0' || cmd[3] == ' ')) ||
+                   (cmd[0] == 'l' && cmd[1] == 's' && (cmd[2] == '\0' || cmd[2] == ' '))) {
             ShellClearOutput();
             const char* arg = cmd + ((cmd[0] == 'd') ? 3 : 2);
             while (*arg == ' ') ++arg;
@@ -3279,7 +3288,9 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine("Integration:       Vector 0x0E #PF Page Fault Demand Pager & Transition PTEs", micant::bootvid::Color{140, 255, 180});
                 LogKernel("Shell: hmb -> Dumped Haven Memory Bus (HMB) Pagefile Telemetry.");
             }
-        } else if (cmd[0] == 't' && cmd[1] == 'a' && cmd[2] == 's' && cmd[3] == 'k') {
+        } else if (cmd[0] == 't' && cmd[1] == 'a' && cmd[2] == 's' && cmd[3] == 'k' &&
+                   (cmd[4] == '\0' || cmd[4] == ' ' || (cmd[4] == 's' && (cmd[5] == '\0' || cmd[5] == ' ')) ||
+                    (cmd[4] == 'l' && cmd[5] == 'i' && cmd[6] == 's' && cmd[7] == 't' && (cmd[8] == '\0' || cmd[8] == ' ')))) {
             auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
             size_t bytesRead = 0;
             bool readOk = fs.readFile("\\MicaNT\\System32\\tasklist.exe", s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
@@ -3297,7 +3308,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                 auto& sched = micant::um::UserThreadScheduler64::get();
                 // [built-in fallback logic]
             }
-        } else if (cmd[0] == 'p' && cmd[1] == 's') {
+        } else if (cmd[0] == 'p' && cmd[1] == 's' && (cmd[2] == '\0' || cmd[2] == ' ')) {
             ShellClearOutput();
             ShellAddLine("Active NT Executive Processes & Subsystems:", micant::bootvid::Color{100, 240, 160});
             ShellAddLine("PID   Image Name            State         Base VA             Syscalls", micant::bootvid::Color{120, 170, 230});
@@ -3385,7 +3396,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("Paging Hierarchy:  High-Half VA Mirror PML4[496] -> 0xFFFF800000000000", micant::bootvid::Color{200, 220, 245});
             ShellAddLine("Paging Subsystem:  Vector 0x0E #PF Demand-Paging & Transition PTEs OK", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: Physical RAM 32,768 MB Total | NonPagedPool 64 KB Active");
-        } else if (cmd[0] == 'e' && cmd[1] == 'x') {
+        } else if (cmd[0] == 'e' && cmd[1] == 'x' && cmd[2] == 't' && (cmd[3] == '\0' || cmd[3] == ' ' || (cmd[3] == '4' && (cmd[4] == '\0' || cmd[4] == ' ')))) {
             ShellClearOutput();
             ShellAddLine("Ext4 Linux VFS Subsystem (Read-Only Safety Guardrail):", micant::bootvid::Color{100, 240, 160});
             ShellAddLine("Device Binding:    \\DosDevices\\E: mounted from /dev/sda2", micant::bootvid::Color{220, 235, 255});
@@ -3492,7 +3503,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                 ShellAddLine(srvStr, micant::bootvid::Color{140, 255, 180});
                 LogKernel("Shell: Network status and hardware diagnostics queried.");
             }
-        } else if (cmd[0] == 'c' && cmd[1] == 'd') {
+        } else if (cmd[0] == 'c' && cmd[1] == 'd' && (cmd[2] == '\0' || cmd[2] == ' ' || cmd[2] == '\\' || cmd[2] == '.')) {
             ShellClearOutput();
             const char* arg = getCommandArgs(cmd);
             char* curDir = (s_currentDrive == 'D') ? s_currentDirD : s_currentDirC;

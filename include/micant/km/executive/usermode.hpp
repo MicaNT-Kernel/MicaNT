@@ -897,7 +897,8 @@ public:
         const char* imageName,
         UserLoadedImageInfo& outInfo,
         uint64_t userHeapVa = 0,
-        size_t userHeapSize = 0
+        size_t userHeapSize = 0,
+        const char* cmdLine = nullptr
     ) noexcept {
         outInfo = UserLoadedImageInfo{};
         outInfo.pid = pid;
@@ -1184,12 +1185,25 @@ public:
             std::memcpy(trampolineBuffer + 0x340, s26, sizeof(s26));
 
             // 0x360: ASCII command line string
-            const char asciiCmd[] = "surshell_app.exe";
-            std::memcpy(trampolineBuffer + 0x360, asciiCmd, sizeof(asciiCmd));
+            const char* effectiveCmd = (cmdLine && *cmdLine) ? cmdLine : (imageName ? imageName : "micant_app.exe");
+            size_t cLen = 0;
+            while (effectiveCmd[cLen] && cLen < 63) {
+                trampolineBuffer[0x360 + cLen] = static_cast<uint8_t>(effectiveCmd[cLen]);
+                cLen++;
+            }
+            trampolineBuffer[0x360 + cLen] = 0;
+
 
             // 0x3A0: Wide command line string
-            const char16_t wideCmd[] = u"surshell_app.exe";
-            std::memcpy(trampolineBuffer + 0x3A0, wideCmd, sizeof(wideCmd));
+            size_t wLen = 0;
+            while (effectiveCmd[wLen] && wLen < 63) {
+                char16_t wc = static_cast<char16_t>(effectiveCmd[wLen]);
+                std::memcpy(trampolineBuffer + 0x3A0 + wLen * 2, &wc, 2);
+                wLen++;
+            }
+            char16_t zero16 = 0;
+            std::memcpy(trampolineBuffer + 0x3A0 + wLen * 2, &zero16, 2);
+
 
             // 0x3F8: Initial bump pointer address (4MB into user buffer if 0x140000000, else 0x1000)
             uint64_t initialBump = (userHeapVa != 0) ? userHeapVa :
