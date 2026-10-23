@@ -1887,7 +1887,7 @@ static void RemoteShellDispatcher(const char* cmd, char* reply, size_t maxReply)
         } else {
             copyStr(reply, "Copy failed: check source and destination paths.\r\n", maxReply);
         }
-    } else if (cmd[0] == 'd' && cmd[1] == 'e' && cmd[2] == 'l') { // del <file>
+    } else if (cmd[0] == 'd' && cmd[1] == 'e' && cmd[2] == 'l' && (cmd[3] == ' ' || cmd[3] == '\0' || cmd[3] == '\r')) { // del <file>
         const char* arg = cmd + 3;
         while (*arg == ' ') ++arg;
         char pathBuf[64]{};
@@ -2796,7 +2796,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                     ShellAddLine(info2, micant::bootvid::Color{200, 220, 245});
                 }
             }
-        } else if (cmd[0] == 'd' && cmd[1] == 'e' && cmd[2] == 'l') {
+        } else if (cmd[0] == 'd' && cmd[1] == 'e' && cmd[2] == 'l' && (cmd[3] == ' ' || cmd[3] == '\0')) {
             ShellClearOutput();
             const char* arg = cmd + 3;
             while (*arg == ' ') ++arg;
@@ -3114,13 +3114,13 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine("Driver Model:   TitanXhciControllerDriver asynchronous event ring polling", micant::bootvid::Color{200, 220, 245});
             ShellAddLine("KVM Input:      JViewer IPMI Java & HTML5 keystrokes verified OK", micant::bootvid::Color{140, 255, 180});
             LogKernel("Shell: USB xHCI -> AMI Virtual Keyboard (0x046B:0xFF10) Slot 1 DCI 3 Online");
-        } else if (cmd[0] == 'd' && cmd[1] == 'e') {
+        } else if (cmd[0] == 'd' && cmd[1] == 'e' && cmd[2] == 's' && cmd[3] == 'k' && (cmd[4] == 't' || cmd[4] == 'o' || cmd[4] == '\0' || cmd[4] == ' ')) {
             copyStr(lastResultLine1, "SurShell Desktop: 32-bpp BGRA composite active on physical GOP display!", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "GDI Present: NtGdiPresentSurface (SSN 0x81) blitted desktop. Press TAB to toggle.", sizeof(lastResultLine2));
             LogKernel("Shell: Switching to SurShell 32-bpp Sovereign Desktop...");
             s_showDesktop = true;
             DrawSurShellDesktop(videoDriver, width, height, lastDtsTemp);
-        } else if ((cmd[0] == '3' && cmd[1] == 'd') || (cmd[0] == 'p' && cmd[1] == 'r')) {
+        } else if ((cmd[0] == '3' && cmd[1] == 'd' && (cmd[2] == '\0' || cmd[2] == ' ')) || (cmd[0] == 'p' && cmd[1] == 'r' && cmd[2] == 'i' && cmd[3] == 's' && cmd[4] == 'm' && (cmd[5] == '\0' || cmd[5] == ' '))) {
             copyStr(lastResultLine1, "PrismX 3D Viewport: Direct3D 12 / Vulkan 1.3 Octahedron Frame Graph active!", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Rendering: 5-Pass Frame Graph | Neon Horizon Grid | DXR 1.1 Floor Reflection", sizeof(lastResultLine2));
             LogKernel("Shell: Activating PrismX 3D Live Viewport on physical GOP scanout...");
