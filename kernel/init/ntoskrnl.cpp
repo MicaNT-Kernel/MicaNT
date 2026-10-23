@@ -2752,7 +2752,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine(pMsg, micant::bootvid::Color{255, 215, 80});
             ShellAddLine("Commands and 'dir' will now target Drive D: by default.", micant::bootvid::Color{200, 220, 245});
             LogKernel("Shell: Active volume set to D:");
-        } else if (cmd[0] == 'c' && cmd[1] == 'o' && cmd[2] == 'p') {
+        } else if (cmd[0] == 'c' && cmd[1] == 'o' && cmd[2] == 'p' && (cmd[3] == 'y' || cmd[3] == '\0' || cmd[3] == ' ') && (cmd[3] == '\0' || cmd[4] == '\0' || cmd[4] == ' ')) {
             ShellClearOutput();
             const char* arg = cmd + 4;
             while (*arg == ' ') ++arg;
@@ -3983,7 +3983,7 @@ extern "C" micant::NtStatus KiSystemStartup(
             ShellAddLine(" Allocation Unit:    4,096 bytes per cluster (8 sectors)", micant::bootvid::Color{180, 220, 255});
             ShellAddLine(" Physical Drive:     HGST Ultrastar 2TB SATA (Port 1)", micant::bootvid::Color{180, 220, 255});
             LogKernel("Shell: vol -> Displayed active volume label and filesystem serial.");
-        } else if (cmd[0] == 's' && cmd[1] == 'y' && cmd[2] == 's') {
+        } else if (cmd[0] == 's' && cmd[1] == 'y' && cmd[2] == 's' && (cmd[3] == '\0' || cmd[3] == ' ' || (cmd[3] == 't' && cmd[4] == 'e' && cmd[5] == 'm'))) {
             auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
             size_t bytesRead = 0;
             bool readOk = fs.readFile("\\MicaNT\\System32\\systeminfo.exe", s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
@@ -4070,13 +4070,13 @@ extern "C" micant::NtStatus KiSystemStartup(
                 }
             }
             LogKernel("Shell: attrib executed.");
-        } else if (cmd[0] == 'p' && cmd[1] == 'a' && cmd[2] == 'u') {
+        } else if (cmd[0] == 'p' && cmd[1] == 'a' && cmd[2] == 'u' && cmd[3] == 's' && cmd[4] == 'e' && (cmd[5] == '\0' || cmd[5] == ' ')) {
             ShellClearOutput();
             ShellAddLine("Press any key to continue . . .", micant::bootvid::Color{200, 220, 245});
             LogKernel("Shell: pause executed.");
         } else if (cmd[0] == 'r' && cmd[1] == 'e' && cmd[2] == 'm' && (cmd[3] == ' ' || cmd[3] == '\0')) {
             LogKernel("Shell: rem (remark/comment ignored)");
-        } else if (cmd[0] == 'r' && cmd[1] == 'e' && (cmd[2] == 'b' || cmd[2] == '\0' || cmd[2] == ' ')) {
+        } else if (cmd[0] == 'r' && cmd[1] == 'e' && (cmd[2] == '\0' || cmd[2] == ' ' || (cmd[2] == 'b' && cmd[3] == 'o' && cmd[4] == 'o' && cmd[5] == 't'))) {
             copyStr(lastResultLine1, "Reboot: Initiating hardware CPU reset via Port 0xCF9...", sizeof(lastResultLine1));
             copyStr(lastResultLine2, "Hardware resetting now...", sizeof(lastResultLine2));
             LogKernel("Shell: Initiating hardware CPU reboot...");
@@ -4108,19 +4108,24 @@ extern "C" micant::NtStatus KiSystemStartup(
                 (exeBase[cmdStrLen - 3] == 'm' || exeBase[cmdStrLen - 3] == 'M') &&
                 (exeBase[cmdStrLen - 2] == 's' || exeBase[cmdStrLen - 2] == 'S') &&
                 (exeBase[cmdStrLen - 1] == 'c' || exeBase[cmdStrLen - 1] == 'C'));
+            bool hasCplExt = (cmdStrLen > 4 && 
+                (exeBase[cmdStrLen - 4] == '.') && 
+                (exeBase[cmdStrLen - 3] == 'c' || exeBase[cmdStrLen - 3] == 'C') &&
+                (exeBase[cmdStrLen - 2] == 'p' || exeBase[cmdStrLen - 2] == 'P') &&
+                (exeBase[cmdStrLen - 1] == 'l' || exeBase[cmdStrLen - 1] == 'L'));
 
             auto& fs = micant::km::ahci_baremetal::Fat32FileSystem::getVolumeC();
             size_t bytesRead = 0;
             bool readOk = false;
 
-            const char* extList[2] = { ".exe", ".msc" };
-            int maxExts = (hasExeExt || hasMscExt) ? 1 : 2;
+            const char* extList[3] = { ".exe", ".msc", ".cpl" };
+            int maxExts = (hasExeExt || hasMscExt || hasCplExt) ? 1 : 3;
 
             for (int e = 0; e < maxExts && !readOk; ++e) {
                 // 1. Try System32 first
                 copyStr(targetExe, "\\MicaNT\\System32\\", sizeof(targetExe));
                 concatStr(targetExe, exeBase, sizeof(targetExe));
-                if (!hasExeExt && !hasMscExt) {
+                if (!hasExeExt && !hasMscExt && !hasCplExt) {
                     concatStr(targetExe, extList[e], sizeof(targetExe));
                 }
                 readOk = fs.readFile(targetExe, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);
@@ -4130,7 +4135,7 @@ extern "C" micant::NtStatus KiSystemStartup(
                 char altExe[128]{};
                 altExe[0] = '\\'; altExe[1] = '\0';
                 concatStr(altExe, exeBase, sizeof(altExe));
-                if (!hasExeExt && !hasMscExt) {
+                if (!hasExeExt && !hasMscExt && !hasCplExt) {
                     concatStr(altExe, extList[e], sizeof(altExe));
                 }
                 readOk = fs.readFile(altExe, s_diskAppBuffer, sizeof(s_diskAppBuffer), bytesRead);

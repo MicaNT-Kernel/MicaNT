@@ -195,6 +195,38 @@ inline void DrawRect(uint32_t* buf, uint32_t bufW, uint32_t x, uint32_t y, uint3
     FillRect(buf, bufW, x + w - thick, y, thick, h, color);
 }
 
+inline void DrawLine(uint32_t* buf, uint32_t bufW, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t color) noexcept {
+    int32_t dx = (x1 >= x0) ? (x1 - x0) : (x0 - x1);
+    int32_t dy = (y1 >= y0) ? (y1 - y0) : (y0 - y1);
+    int32_t sx = (x0 < x1) ? 1 : -1;
+    int32_t sy = (y0 < y1) ? 1 : -1;
+    int32_t err = dx - dy;
+
+    while (true) {
+        if (x0 >= 0 && static_cast<uint32_t>(x0) < bufW && y0 >= 0) {
+            buf[y0 * bufW + x0] = color;
+        }
+        if (x0 == x1 && y0 == y1) break;
+        int32_t e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 < dx) { err += dx; y0 += sy; }
+    }
+}
+
+inline void DrawCircle(uint32_t* buf, uint32_t bufW, int32_t cx, int32_t cy, int32_t r, uint32_t color) noexcept {
+    for (int32_t dy = -r; dy <= r; ++dy) {
+        for (int32_t dx = -r; dx <= r; ++dx) {
+            if (dx * dx + dy * dy <= r * r) {
+                int32_t px = cx + dx;
+                int32_t py = cy + dy;
+                if (px >= 0 && static_cast<uint32_t>(px) < bufW && py >= 0) {
+                    buf[py * bufW + px] = color;
+                }
+            }
+        }
+    }
+}
+
 inline void DrawChar(uint32_t* buf, uint32_t bufW, uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg = 0) noexcept {
     if (c < 32 || c > 126) c = '?';
     const uint8_t* glyph = FONT_8X8[c - 32];

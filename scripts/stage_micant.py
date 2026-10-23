@@ -62,6 +62,20 @@ SYSTEM32_TOOLS = [
     ("tools/services_mgmt_app.cpp", "build/services_mgmt.exe", "services_mgmt.exe"),
     ("tools/eventvwr_app.cpp", "build/eventvwr.exe", "eventvwr.exe"),
     ("tools/msinfo32_app.cpp", "build/msinfo32.exe", "msinfo32.exe"),
+    ("tools/control_app.cpp", "build/control.exe", "control.exe"),
+    ("tools/sysdm_app.cpp", "build/sysdm.exe", "sysdm.exe"),
+    ("tools/ncpa_app.cpp", "build/ncpa.exe", "ncpa.exe"),
+    ("tools/dxdiag_app.cpp", "build/dxdiag.exe", "dxdiag.exe"),
+    ("tools/msconfig_app.cpp", "build/msconfig.exe", "msconfig.exe"),
+    ("tools/resmon_app.cpp", "build/resmon.exe", "resmon.exe"),
+    ("tools/compmgmt_app.cpp", "build/compmgmt.exe", "compmgmt.exe"),
+    ("tools/perfmon_app.cpp", "build/perfmon.exe", "perfmon.exe"),
+    ("tools/sfc_app.cpp", "build/sfc.exe", "sfc.exe"),
+    ("tools/bcdedit_app.cpp", "build/bcdedit.exe", "bcdedit.exe"),
+    ("tools/tracert_app.cpp", "build/tracert.exe", "tracert.exe"),
+    ("tools/nslookup_app.cpp", "build/nslookup.exe", "nslookup.exe"),
+    ("tools/nbtstat_app.cpp", "build/nbtstat.exe", "nbtstat.exe"),
+    ("tools/query_app.cpp", "build/query.exe", "query.exe"),
 ]
 
 SYSTEM32_SERVICES = [
@@ -431,7 +445,7 @@ for f in /tmp/*.exe; do
     fi
 done
 
-echo "--- Generating MMC Snap-in Consoles (.msc) ---"
+echo "--- Generating MMC Snap-in Consoles (.msc) & Control Panel Applets (.cpl) ---"
 cp -v /mnt/micasys/MicaNT/System32/devmgmt.exe /mnt/micasys/MicaNT/System32/devmgmt.msc || true
 cp -v /mnt/micasys/MicaNT/System32/devmgmt.exe /mnt/micasys/devmgmt.msc || true
 cp -v /mnt/micasys/MicaNT/System32/diskmgmt.exe /mnt/micasys/MicaNT/System32/diskmgmt.msc || true
@@ -440,6 +454,14 @@ cp -v /mnt/micasys/MicaNT/System32/services_mgmt.exe /mnt/micasys/MicaNT/System3
 cp -v /mnt/micasys/MicaNT/System32/services_mgmt.exe /mnt/micasys/services.msc || true
 cp -v /mnt/micasys/MicaNT/System32/eventvwr.exe /mnt/micasys/MicaNT/System32/eventvwr.msc || true
 cp -v /mnt/micasys/MicaNT/System32/eventvwr.exe /mnt/micasys/eventvwr.msc || true
+cp -v /mnt/micasys/MicaNT/System32/compmgmt.exe /mnt/micasys/MicaNT/System32/compmgmt.msc || true
+cp -v /mnt/micasys/MicaNT/System32/compmgmt.exe /mnt/micasys/compmgmt.msc || true
+cp -v /mnt/micasys/MicaNT/System32/perfmon.exe /mnt/micasys/MicaNT/System32/perfmon.msc || true
+cp -v /mnt/micasys/MicaNT/System32/perfmon.exe /mnt/micasys/perfmon.msc || true
+cp -v /mnt/micasys/MicaNT/System32/sysdm.exe /mnt/micasys/MicaNT/System32/sysdm.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/sysdm.exe /mnt/micasys/sysdm.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/ncpa.exe /mnt/micasys/MicaNT/System32/ncpa.cpl || true
+cp -v /mnt/micasys/MicaNT/System32/ncpa.exe /mnt/micasys/ncpa.cpl || true
 
 echo "--- Copying Known DLLs ---"
 for f in /tmp/*.dll; do
