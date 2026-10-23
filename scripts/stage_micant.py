@@ -193,6 +193,21 @@ SYSTEM32_TOOLS = [
     ("tools/ktpass_app.cpp", "build/ktpass.exe", "ktpass.exe"),
     ("tools/ntdsutil_app.cpp", "build/ntdsutil.exe", "ntdsutil.exe"),
     ("tools/rendom_app.cpp", "build/rendom.exe", "rendom.exe"),
+    ("tools/wpr_app.cpp", "build/wpr.exe", "wpr.exe"),
+    ("tools/xperf_app.cpp", "build/xperf.exe", "xperf.exe"),
+    ("tools/schtasks_app.cpp", "build/schtasks.exe", "schtasks.exe"),
+    ("tools/at_app.cpp", "build/at.exe", "at.exe"),
+    ("tools/wbadmin_app.cpp", "build/wbadmin.exe", "wbadmin.exe"),
+    ("tools/vssadmin_app.cpp", "build/vssadmin.exe", "vssadmin.exe"),
+    ("tools/diskshadow_app.cpp", "build/diskshadow.exe", "diskshadow.exe"),
+    ("tools/bdehdcfg_app.cpp", "build/bdehdcfg.exe", "bdehdcfg.exe"),
+    ("tools/repair_bde_app.cpp", "build/repair-bde.exe", "repair-bde.exe"),
+    ("tools/bootsect_app.cpp", "build/bootsect.exe", "bootsect.exe"),
+    ("tools/bootcfg_app.cpp", "build/bootcfg.exe", "bootcfg.exe"),
+    ("tools/label_app.cpp", "build/label.exe", "label.exe"),
+    ("tools/vol_app.cpp", "build/vol.exe", "vol.exe"),
+    ("tools/subst_app.cpp", "build/subst.exe", "subst.exe"),
+    ("tools/tree_app.cpp", "build/tree.exe", "tree.exe"),
 ]
 
 SYSTEM32_SERVICES = [
