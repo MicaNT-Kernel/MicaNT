@@ -21,7 +21,7 @@ void ShowSampleLicenseInfo() noexcept {
         "License Status: Licensed (Permanent Autonomous License)\n"
         "Activation Type: Digital Sovereign Entitlement\n"
         "Hardware ID Binding: Supermicro X11SSH-F / Intel Xeon E3-1270 v6\n"
-        "Remaining Windows rearm count: 1001\n"
+        "Remaining MicaNT rearm count: 1001\n"
         "Trusted Time: 10/23/2026 10:15:00 UTC\n\n";
     PrintStr(out);
 }
@@ -34,7 +34,7 @@ extern "C" void _start() noexcept {
         "Usage: slmgr.vbs [MachineName [User Password]] [<Option>]\n\n"
         "Global Options:\n"
         "  /ipk <ProductKey>    Install product key (replaces existing key)\n"
-        "  /ato [ActivationID]  Activate Windows\n"
+        "  /ato [ActivationID]  Activate MicaNT\n"
         "  /dli [ActivationID]  Display license information (default: current license)\n"
         "  /dlv [ActivationID]  Display detailed license information\n"
         "  /xpr [ActivationID]  Expiration date for current license state\n"

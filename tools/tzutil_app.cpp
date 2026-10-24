@@ -38,7 +38,7 @@ void ShowCommonTimeZones() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Windows Time Zone Utility\n\n"
+        "MicaNT Time Zone Utility\n\n"
         "Usage:\n"
         "  tzutil [/?] [/g] [/s <TimeZoneID>[_dstoff]] [/l]\n\n"
         "Parameters:\n"

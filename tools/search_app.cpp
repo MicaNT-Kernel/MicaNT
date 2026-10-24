@@ -48,7 +48,7 @@ void RenderSearchHubWindow() noexcept {
     const AppItem topApps[5] = {
         { "Command Prompt", "\\MicaNT\\System32\\cmd.exe", PackBGRA(20, 20, 20) },
         { "File Explorer", "\\MicaNT\\explorer.exe", PackBGRA(255, 185, 0) },
-        { "Windows PowerShell", "\\MicaNT\\System32\\powershell.exe", PackBGRA(1, 36, 86) },
+        { "MicaNT PowerShell", "\\MicaNT\\System32\\powershell.exe", PackBGRA(1, 36, 86) },
         { "Registry Editor", "\\MicaNT\\System32\\regedit.exe", PackBGRA(0, 120, 215) },
         { "Task Manager", "\\MicaNT\\System32\\taskmgr.exe", PackBGRA(16, 124, 65) }
     };
@@ -84,8 +84,8 @@ void RenderSearchHubWindow() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "MicaNT Windows Search Subsystem [Version 10.0.26040]\n"
-        "(C) Sovereign MicaNT Systems. All rights reserved.\n\n"
+        "MicaNT Search Subsystem [Version 10.0.26040]\n"
+        "(C) 2026 MicaNT Foundation. All rights reserved.\n\n"
         "Search Indexer Status  : Active (WSearch Service Running)\n"
         "Indexed Catalog Items  : 14,290 files, tools, and registry keys\n"
         "Query Scope            : \\MicaNT\\System32; \\Users\\Default; HKLM\\Software\n"

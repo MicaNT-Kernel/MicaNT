@@ -33,7 +33,7 @@ void ShowSampleMacros() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Edits command lines, recalls Windows commands, and creates macros.\n\n"
+        "Edits command lines, recalls MicaNT commands, and creates macros.\n\n"
         "DOSKEY [/REINSTALL] [/LISTSIZE=size] [/MACROS[:ALL | :exe-name]]\n"
         "  [/HISTORY] [/INSERT | /OVERSTRIKE] [/EXENAME=exe-name]\n"
         "  [/MACROFILE=filename] [macroname=[text]]\n\n"

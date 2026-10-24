@@ -46,7 +46,7 @@ void RenderSecPolWindow() noexcept {
     DrawString(s_secBuffer, WIN_W, 36, paneY + 86, "  User Rights Assignment", PackBGRA(200, 215, 235));
     DrawString(s_secBuffer, WIN_W, 36, paneY + 104, "  Security Options", PackBGRA(100, 200, 255));
 
-    DrawString(s_secBuffer, WIN_W, 20, paneY + 126, "> Windows Defender Firewall", PackBGRA(200, 215, 235));
+    DrawString(s_secBuffer, WIN_W, 20, paneY + 126, "> MicaNT Sovereign Firewall", PackBGRA(200, 215, 235));
     DrawString(s_secBuffer, WIN_W, 20, paneY + 144, "> Application Control", PackBGRA(200, 215, 235));
 
     // 4. Right Details Pane (Security Options List)

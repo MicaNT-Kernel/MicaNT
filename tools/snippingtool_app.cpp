@@ -69,7 +69,7 @@ void RenderSnippingToolWindow() noexcept {
     // 4. Status Bar
     FillRect(s_snipBuffer, WIN_W, 1, WIN_H - 24, WIN_W - 2, 23, PackBGRA(18, 24, 36));
     FillRect(s_snipBuffer, WIN_W, 1, WIN_H - 24, WIN_W - 2, 1, PackBGRA(35, 48, 70));
-    DrawString(s_snipBuffer, WIN_W, 16, WIN_H - 17, "Ready to capture. Shortcut: Windows Logo + Shift + S", PackBGRA(100, 240, 160));
+    DrawString(s_snipBuffer, WIN_W, 16, WIN_H - 17, "Ready to capture. Shortcut: MicaNT Key + Shift + S", PackBGRA(100, 240, 160));
 }
 
 } // namespace

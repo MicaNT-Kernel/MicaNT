@@ -48,7 +48,7 @@ extern "C" void _start(const char* = nullptr) {
 #endif
     DoSyscall(0x11, csVal & 3, 0);
 
-    PrintLine("Windows Logon Process (winlogon.exe) [PID 680]");
+    PrintLine("MicaNT Logon Process (winlogon.exe) [PID 680]");
     PrintLine("=============================================");
     PrintLine("Station:            WinSta0 (Interactive Window Station)");
     PrintLine("Desktop:            Winlogon -> Default (Desktop Active)");

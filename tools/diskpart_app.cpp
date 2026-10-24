@@ -81,13 +81,13 @@ extern "C" void _start(const char* cmdLine = nullptr) {
 #endif
     DoSyscall(0x11, csVal & 3, 0);
 
-    PrintLine("Microsoft DiskPart version 10.0.26040.1000");
-    PrintLine("Copyright (C) 1999-2026 Microsoft Corporation / MicaNT Sovereign Systems.");
+    PrintLine("MicaNT DiskPart version 10.0.26040.1000");
+    PrintLine("Copyright (C) 2026 MicaNT Foundation / Sovereign Cutler Authority. All rights reserved.");
     PrintLine("On computer: MICANT-XEON");
     PrintLine("");
 
     if (cmdLine && (HasSubstr(cmdLine, "/?") || HasSubstr(cmdLine, "-?"))) {
-        PrintLine("Microsoft DiskPart syntax:");
+        PrintLine("MicaNT DiskPart syntax:");
         PrintLine("  LIST DISK        - Display a list of disks.");
         PrintLine("  LIST VOLUME      - Display a list of volumes.");
         PrintLine("  LIST PARTITION   - Display a list of partitions.");

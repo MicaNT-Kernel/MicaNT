@@ -4,7 +4,7 @@
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Packages and compresses files into Microsoft Cabinet (.cab) format.
+ * Packages and compresses files into Sovereign Cabinet (.cab) format.
  */
 
 #include "gui_common.hpp"
@@ -17,8 +17,8 @@ using namespace micant_gui;
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Cabinet Maker (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (c) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Cabinet Maker (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (c) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "MAKECAB [/V[n]] [/D var=value ...] [/L dir] source [destination]\n"
         "MAKECAB [/V[n]] [/D var=value ...] /F directive_file [...]\n\n"
         "  source         File to compress.\n"

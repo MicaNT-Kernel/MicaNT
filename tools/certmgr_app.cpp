@@ -71,7 +71,7 @@ void RenderCertMgrWindow() noexcept {
     const CertRow certs[4] = {
         { "MicaNT Root CA", "MicaNT Root CA", "10/22/2046" },
         { "Dave Cutler Code Seal", "MicaNT Root CA", "10/22/2036" },
-        { "Microsoft Root CA 2026", "Microsoft Root CA", "12/31/2035" },
+        { "Sovereign Root CA 2026", "Sovereign Root CA", "12/31/2035" },
         { "ISRG Root X1 (Let's Encrypt)", "ISRG Root X1", "06/04/2035" }
     };
 

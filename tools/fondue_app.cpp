@@ -27,7 +27,7 @@ extern "C" void _start() noexcept {
         "Available Features on Demand:\n"
         "  - DirectPlay (Legacy DirectX 9/DirectDraw gaming layer)\n"
         "  - OpenSSH Client & Server\n"
-        "  - Windows Subsystem for Linux (WSL2 Sovereign Guest)\n"
+        "  - MicaNT Subsystem for Linux (WSL2 Sovereign Guest)\n"
         "  - RSAT Active Directory Tools\n"
         "  - Graphics Tools (D3D12 SDK & PIX Capture Layer)\n\n";
 

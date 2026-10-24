@@ -17,8 +17,8 @@ using namespace micant_gui;
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Windows Script Host Version 5.812 (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority. All rights reserved.\n\n"
+        "MicaNT (R) Script Host Version 5.812 (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: CScript scriptname.extension [option...] [arguments...]\n\n"
         "Options:\n"
         " //B         Batch mode: Suppresses script errors and prompts from displaying\n"

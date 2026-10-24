@@ -28,7 +28,7 @@ void RenderEventViewerWindow() noexcept {
     DrawRect(s_evBuffer, WIN_W, treeW + 1, 49, 1, WIN_H - 71, PackBGRA(35, 48, 70));
 
     DrawString(s_evBuffer, WIN_W, 10, 56, "v Event Viewer", PackBGRA(0, 210, 255));
-    DrawString(s_evBuffer, WIN_W, 20, 72, "v Windows Logs", PackBGRA(180, 200, 230));
+    DrawString(s_evBuffer, WIN_W, 20, 72, "v MicaNT Logs", PackBGRA(180, 200, 230));
     DrawString(s_evBuffer, WIN_W, 30, 88, "- Application", PackBGRA(160, 180, 210));
     DrawString(s_evBuffer, WIN_W, 30, 104, "- Security", PackBGRA(160, 180, 210));
 

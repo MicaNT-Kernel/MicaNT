@@ -35,7 +35,7 @@ void ShowSampleWslStatus() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Windows Subsystem for Linux (WSL) Version 2.2.4 (MicaNT Sovereign Cutler Edition)\n"
+        "MicaNT Subsystem for Linux (WSL) Version 2.2.4 (MicaNT Sovereign Cutler Edition)\n"
         "Copyright (C) MicaNT Operating System Authority.\n\n"
         "Usage: wsl.exe [Argument] [Options...] [CommandLine]\n\n"
         "Arguments for running Linux commands:\n"
@@ -44,11 +44,11 @@ extern "C" void _start() noexcept {
         "        Run the specified distribution.\n\n"
         "    --user, -u <UserName>\n"
         "        Run as the specified user.\n\n"
-        "Arguments for managing Windows Subsystem for Linux:\n"
+        "Arguments for managing MicaNT Subsystem for Linux:\n"
         "    --list, -l [Options]\n"
         "        Lists distributions. Options: --all, --running, --quiet, --verbose\n\n"
         "    --status\n"
-        "        Show the status of Windows Subsystem for Linux.\n\n"
+        "        Show the status of MicaNT Subsystem for Linux.\n\n"
         "    --set-default, -s <Distro>\n"
         "        Sets the distribution as the default.\n\n"
         "    --set-version <Distro> <Version>\n"

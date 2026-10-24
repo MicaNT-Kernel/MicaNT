@@ -76,7 +76,7 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
         PrintLine("Stage 4: Looking for bad clusters in user file data...");
         PrintLine("Stage 5: Looking for bad, unallocated clusters...");
     } else {
-        PrintLine("Windows is verifying files and folders...");
+        PrintLine("MicaNT is verifying files and folders...");
     }
 
     if (verbose) {
@@ -89,9 +89,9 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
 
     PrintLine("File and folder verification is complete.");
     if (fix) {
-        PrintLine("Windows has verified the file system. No adjustments were necessary.");
+        PrintLine("MicaNT has verified the file system. No adjustments were necessary.");
     } else {
-        PrintLine("Windows has scanned the file system and found no problems.");
+        PrintLine("MicaNT has scanned the file system and found no problems.");
         PrintLine("No further action is required.");
     }
     PrintLine("");

@@ -15,7 +15,7 @@ using namespace micant_gui;
 
 void ShowSampleDrivers() noexcept {
     const char* out =
-        "Microsoft PnP Utility (MicaNT Sovereign Cutler Edition)\n\n"
+        "MicaNT PnP Utility (MicaNT Sovereign Cutler Edition)\n\n"
         "Published Name:     oem0.inf\n"
         "Original Name:      ahci.inf\n"
         "Provider Name:      MicaNT Sovereign Storage Authority\n"
@@ -37,7 +37,7 @@ void ShowSampleDrivers() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft PnP Utility\n\n"
+        "MicaNT PnP Utility\n\n"
         "Usage:\n"
         "  pnputil.exe <command> [options]\n\n"
         "Commands:\n"

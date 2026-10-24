@@ -36,9 +36,9 @@ inline constexpr const char* SAMPLE_BOOT_INI_LINES[] = {
 };
 
 inline constexpr const char* SAMPLE_HOSTS_LINES[] = {
-    "# Copyright (c) 1993-2009 Microsoft Corp.",
+    "# Sovereign HOSTS file for MicaNT TCP/IP Subsystem.",
     "#",
-    "# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.",
+    "# This is a sample HOSTS file used by MicaNT TCP/IP Stack.",
     "#",
     "127.0.0.1       localhost",
     "::1             localhost",

@@ -35,8 +35,8 @@ void ShowSampleEudcState() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Windows (R) Private Character Editor (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Private Character Editor (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: eudcedit [options]\n\n"
         "Options:\n"
         "   /grid              Display 64x64 interactive glyph drafting canvas\n"

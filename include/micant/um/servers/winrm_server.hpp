@@ -594,7 +594,7 @@ private:
             cmd.state = CommandState::Completed;
         } else if (raw == "ipconfig" || raw == "ipconfig /all") {
             cmd.stdoutBuffer = 
-                "\r\nWindows IP Configuration\r\n\r\n"
+                "\r\nMicaNT IP Configuration\r\n\r\n"
                 "Ethernet adapter vEthernet (Enterprise):\r\n"
                 "   Connection-specific DNS Suffix  . : micant.internal\r\n"
                 "   IPv4 Address. . . . . . . . . . . : 10.0.0.10\r\n"
@@ -603,7 +603,7 @@ private:
             cmd.exitCode = 0;
             cmd.state = CommandState::Completed;
         } else if (raw == "ver") {
-            cmd.stdoutBuffer = "\r\nMicrosoft Windows [Version 10.0.26100.1]\r\n";
+            cmd.stdoutBuffer = "\r\nMicaNT [Version 10.0.26100.1]\r\n";
             cmd.exitCode = 0;
             cmd.state = CommandState::Completed;
         } else if (raw.rfind("Get-Process", 0) == 0 || raw.rfind("ps", 0) == 0) {

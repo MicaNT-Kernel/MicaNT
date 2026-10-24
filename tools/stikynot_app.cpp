@@ -17,7 +17,7 @@ void ShowSampleStickyNotes() noexcept {
     const char* out =
         "[stikynot /list]\n"
         "MicaNT Sticky Notes Desktop Applet\n"
-        "Persistent Store: \\DosDevices\\C:\\Users\\admin\\AppData\\Roaming\\Microsoft\\Sticky Notes\\StickyNotes.snt\n"
+        "Persistent Store: \\DosDevices\\C:\\Users\\admin\\AppData\\Roaming\\MicaNT\\Sticky Notes\\StickyNotes.snt\n"
         "====================================================================================\n"
         "ID   Color     Position (X, Y)  Dimensions (W, H) Content Preview\n"
         "---- --------- ---------------- ----------------- ---------------------------------\n"
@@ -33,8 +33,8 @@ void ShowSampleStickyNotes() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Sticky Notes (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Sticky Notes (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: stikynot.exe [options]\n\n"
         "Options:\n"
         "   /new               Create a new sticky note on the primary desktop\n"

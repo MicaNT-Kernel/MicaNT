@@ -32,8 +32,8 @@ void ShowSampleDisplaySwitch() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Presentation Display Switcher (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Presentation Display Switcher (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: displayswitch.exe [/internal | /clone | /extend | /external | /status]\n\n"
         "Switches:\n"
         "   /internal          Disconnect secondary outputs; display on primary screen only\n"

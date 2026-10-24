@@ -32,7 +32,7 @@ void ShowTelnetCommands() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft Telnet Client (MicaNT Sovereign Cutler Edition)\n\n"
+        "MicaNT Telnet Client (MicaNT Sovereign Cutler Edition)\n\n"
         "Syntax:\n"
         "  telnet [-a][-e escape_char][-f log_file][-l user][-t term_type][host [port]]\n\n"
         "  -a          Attempt automatic logon.\n"

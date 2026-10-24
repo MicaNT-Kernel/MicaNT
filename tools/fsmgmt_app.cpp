@@ -65,9 +65,9 @@ void RenderFsMgmtWindow() noexcept {
     };
 
     const ShareRow shares[3] = {
-        { "ADMIN$", "C:\\MicaNT", "Windows (Remote Admin)" },
-        { "C$", "C:\\", "Windows (Default Share)" },
-        { "IPC$", "", "Windows (Remote IPC)" }
+        { "ADMIN$", "C:\\MicaNT", "MicaNT (Remote Admin)" },
+        { "C$", "C:\\", "MicaNT (Default Share)" },
+        { "IPC$", "", "MicaNT (Remote IPC)" }
     };
 
     uint32_t rowY = paneY + 28;

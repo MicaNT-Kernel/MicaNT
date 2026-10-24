@@ -63,7 +63,7 @@ void RenderControlPanel() noexcept {
     DrawString(s_cplBuffer, WIN_W, 28, 274, "P", PackBGRA(220, 160, 255));
     DrawString(s_cplBuffer, WIN_W, 58, 266, "Programs and Features", PackBGRA(0, 210, 255));
     DrawString(s_cplBuffer, WIN_W, 58, 280, "Uninstall a program (appwiz.cpl)", PackBGRA(160, 180, 210));
-    DrawString(s_cplBuffer, WIN_W, 58, 292, "Turn Windows features on or off", PackBGRA(120, 140, 170));
+    DrawString(s_cplBuffer, WIN_W, 58, 292, "Turn MicaNT features on or off", PackBGRA(120, 140, 170));
 
     // Right Column Categories
     uint32_t rightColX = 350;

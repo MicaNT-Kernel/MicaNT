@@ -3851,7 +3851,7 @@
         };
 
         if (tokens.size() > 1 && (tokens[1] == "/?" || tokens[1] == "-?" || tokens[1] == "/h" || tokens[1] == "--help")) {
-            out << "Microsoft Defender Antimalware Command Line Utility (MpCmdRun.exe Parity)\n"
+            out << "MicaNT AegisDefender Antimalware Command Line Utility (MpCmdRun.exe Parity)\n"
                 << "AegisDefender Engine Subsystem (mpclient.dll / mpengine.dll)\n"
                 << "Copyright (C) 2026 MicaNT Sovereign Project. All rights reserved.\n\n"
                 << "Usage:\n"
@@ -3912,7 +3912,7 @@
 
         if (tokens.size() > 1 && (toLower(tokens[1]) == "status" || toLower(tokens[1]) == "-status")) {
             auto& eng = SovereignDefenderEngine::get();
-            out << "Microsoft Defender Antimalware Engine (AegisDefender Subsystem):\n"
+            out << "MicaNT AegisDefender Antimalware Engine (AegisDefender Subsystem):\n"
                 << "  Engine Core:                  mpengine.dll (10.0.26100.1 Sovereign Build)\n"
                 << "  Client Interface:             mpclient.dll (Win32 C ABI Parity)\n"
                 << "  Heuristic Entropy Analyzer:   Active (Executable Threshold > 7.2 bits/byte)\n"
@@ -4097,7 +4097,7 @@
             return;
         }
 
-        out << "Microsoft Defender Antimalware Command Line Utility (MpCmdRun.exe Parity)\n"
+        out << "MicaNT AegisDefender Antimalware Command Line Utility (MpCmdRun.exe Parity)\n"
             << "Type 'defender /?' or 'defender -?' for a complete list of options.\n";
     }
 

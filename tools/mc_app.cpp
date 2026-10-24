@@ -16,8 +16,8 @@ using namespace micant_gui;
 void ShowSampleMcOutput() noexcept {
     const char* out =
         "[mc -u -U -h .\\inc -r .\\res MicaNT_Events.mc]\n"
-        "Microsoft (R) Message Compiler Version 10.0.26100\n"
-        "Copyright (C) Microsoft Corporation / MicaNT Sovereign Cutler Authority.\n\n"
+        "MicaNT (R) Message Compiler Version 10.0.26100\n"
+        "Copyright (C) 2026 MicaNT Sovereign Cutler Authority. All rights reserved.\n\n"
         "Compiling 'MicaNT_Events.mc'...\n"
         "  Facility Definitions: FACILITY_SYSTEM (0x0), FACILITY_KERNEL (0x1), FACILITY_STORAGE (0x4)\n"
         "  Severity Definitions: STATUS_SEVERITY_SUCCESS (0x0), STATUS_SEVERITY_INFORMATIONAL (0x1),\n"
@@ -40,8 +40,8 @@ void ShowSampleMcOutput() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Message Compiler Version 10.0.26100 (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Message Compiler Version 10.0.26100 (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: mc [options] filename.mc\n\n"
         "Options:\n"
         "   -a              Input file is ANSI\n"

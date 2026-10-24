@@ -60,7 +60,7 @@ extern "C" void _start(const char* cmdLine = nullptr) {
     DoSyscall(0x11, csVal & 3, 0);
 
     if (cmdLine && (HasSubstr(cmdLine, "/?") || HasSubstr(cmdLine, "-?"))) {
-        PrintLine("Formats a disk for use with Windows / MicaNT.");
+        PrintLine("Formats a disk for use with MicaNT.");
         PrintLine("");
         PrintLine("FORMAT volume [/FS:file-system] [/V:label] [/Q] [/A:size]");
         PrintLine("  volume          Specifies the drive letter (e.g. C:)");

@@ -43,7 +43,7 @@ void RenderServicesWindow() noexcept {
         const char* status;
         const char* startup;
     } srows[] = {
-        {"EventLog",      "Windows Event Log Service",    "Running", "Automatic"},
+        {"EventLog",      "MicaNT Event Log Service",     "Running", "Automatic"},
         {"LanmanServer",  "Server File Sharing Driver",   "Running", "Automatic"},
         {"LanmanWorkstn", "Workstation Client Service",   "Running", "Automatic"},
         {"PlugPlay",      "User-Mode Plug and Play Host", "Running", "Automatic"},

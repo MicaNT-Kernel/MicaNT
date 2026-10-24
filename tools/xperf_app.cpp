@@ -30,7 +30,7 @@ void ShowSampleXperfStatus() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft Windows Performance Analyzer / Trace Controller (xperf.exe)\n\n"
+        "MicaNT Performance Analyzer / Trace Controller (xperf.exe)\n\n"
         "Usage: xperf [options]\n\n"
         "Commands:\n"
         "  -on <flags>         Starts the kernel trace session with specified event flags.\n"

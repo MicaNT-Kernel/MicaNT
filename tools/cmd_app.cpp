@@ -18,7 +18,7 @@ namespace {
 using namespace micant_cli;
 
 void ShowHelp() noexcept {
-    PrintLine("Starts a new instance of the Windows command interpreter.");
+    PrintLine("Starts a new instance of the MicaNT command interpreter.");
     PrintLine("");
     PrintLine("CMD [/A | /U] [/Q] [/D] [/E:ON | /E:OFF] [/F:ON | /F:OFF] [/V:ON | /V:OFF]");
     PrintLine("    [[/S] [/C | /K] string]");
@@ -38,8 +38,8 @@ void ShowHelp() noexcept {
 }
 
 void PrintBanner() noexcept {
-    PrintLine("Microsoft Windows [Version 10.0.26100.1]");
-    PrintLine("(c) Microsoft Corporation. All rights reserved.");
+    PrintLine("MicaNT [Version 10.0.26100.1]");
+    PrintLine("(c) 2026 MicaNT Foundation. All rights reserved.");
     PrintLine("");
 }
 
@@ -115,7 +115,7 @@ void ExecuteInternal(const char* cmd) noexcept {
     if (*cmd == '\0') return;
 
     if (StrCaseEqual(cmd, "ver")) {
-        PrintLine("Microsoft Windows [Version 10.0.26100.1]");
+        PrintLine("MicaNT [Version 10.0.26100.1]");
     } else if (StrCaseStartsWith(cmd, "echo")) {
         const char* text = cmd + 4;
         while (*text == ' ' || *text == '\t') ++text;
@@ -149,23 +149,23 @@ void ExecuteInternal(const char* cmd) noexcept {
         PrintLine("CD       Displays the name of or changes the current directory.");
         PrintLine("CHKDSK   Checks a disk and displays a status report.");
         PrintLine("CLS      Clears the screen.");
-        PrintLine("CMD      Starts a new instance of the Windows command interpreter.");
+        PrintLine("CMD      Starts a new instance of the MicaNT command interpreter.");
         PrintLine("COPY     Copies one or more files to another location.");
         PrintLine("DATE     Displays or sets the date.");
         PrintLine("DEL      Deletes one or more files.");
         PrintLine("DIR      Displays a list of files and subdirectories in a directory.");
         PrintLine("ECHO     Displays messages, or turns command echoing on or off.");
         PrintLine("EXIT     Quits the CMD.EXE program (command interpreter).");
-        PrintLine("HELP     Provides Help information for Windows commands.");
+        PrintLine("HELP     Provides Help information for MicaNT commands.");
         PrintLine("HOSTNAME Displays current host name.");
         PrintLine("MD       Creates a directory.");
         PrintLine("MOVE     Moves one or more files from one directory to another directory.");
         PrintLine("RD       Removes a directory.");
         PrintLine("REN      Renames a file or files.");
-        PrintLine("SET      Displays, sets, or removes Windows environment variables.");
+        PrintLine("SET      Displays, sets, or removes MicaNT environment variables.");
         PrintLine("TIME     Displays or sets the system time.");
         PrintLine("TYPE     Displays the contents of a text file.");
-        PrintLine("VER      Displays the Windows version.");
+        PrintLine("VER      Displays the MicaNT version.");
         PrintLine("WHOAMI   Displays user, group and privileges information.");
     } else if (StrCaseEqual(cmd, "exit")) {
         ExitProcess(0);

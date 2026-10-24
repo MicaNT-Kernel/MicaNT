@@ -121,23 +121,23 @@ int main() {
         conBuf.writeString(L"MicaNT Clean-Room Architecture | MIT License | Dave Cutler Design Heritage\r\n");
         conBuf.writeString(L"Zero Telemetry | 4 SMP Cores | Sub-32MB Footprint | NonPagedPool: 64 KB\r\n\r\n");
 
-        conBuf.writeString(L"C:\\Windows\\System32> smss.exe\r\n");
+        conBuf.writeString(L"C:\\MicaNT\\System32> smss.exe\r\n");
         conBuf.writeString(L"[SMSS] Session Manager initializing Win32 subsystem runtime...\r\n");
         conBuf.writeString(L"[CSRSS] Subsystem server listening on \\RPC Control\\WindowsSubsystem\r\n");
         conBuf.writeString(L"[CONHOST] Allocated interactive console session for PID 1000\r\n\r\n");
 
-        conBuf.writeString(L"C:\\Windows\\System32> win32_app.exe --status\r\n");
+        conBuf.writeString(L"C:\\MicaNT\\System32> win32_app.exe --status\r\n");
         conBuf.writeString(L"[Win32 App] Initializing Win32 Console via AllocConsole()... [OK]\r\n");
         conBuf.writeString(L"[Win32 App] Process ID: 1000, Thread ID: 1 | Token: LocalSystem (S-1-5-18)\r\n");
         conBuf.writeString(L"[Win32 App] All 213 Subsystem verification suites PASSED (100%)!\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> sshd status\r\n");
+        conBuf.writeString(L"C:\\MicaNT\\System32> sshd status\r\n");
         conBuf.writeString(L"[OpenSSH] Daemon: TitanSSH | Status: RUNNING (Port 22 TCP) [OK]\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> winrm status\r\n");
+        conBuf.writeString(L"C:\\MicaNT\\System32> winrm status\r\n");
         conBuf.writeString(L"[WinRM] WSMAN 3.0: RUNNING | HTTP: 5985, HTTPS: 5986 [OK]\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> wsa status\r\n");
+        conBuf.writeString(L"C:\\MicaNT\\System32> wsa status\r\n");
         conBuf.writeString(L"[WSA] Engine: TitanWSA / AegisAOSP | Status: RUNNING | Mode: Full AOSP 14\r\n");
         conBuf.writeString(L"[WSA] Wayland Display :0 -> DirectComposition / DWM Visual Window [OK]\r\n\r\n");
-        conBuf.writeString(L"C:\\Windows\\System32> _");
+        conBuf.writeString(L"C:\\MicaNT\\System32> _");
 
         // Blit ConHost terminal buffer to the inner window client area
         conBuf.renderToFramebuffer(driver, winX + BORDER, winY + BORDER + TITLE_H, CHAR_SCALE);

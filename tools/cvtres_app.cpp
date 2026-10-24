@@ -16,8 +16,8 @@ using namespace micant_gui;
 void ShowSampleConversion() noexcept {
     const char* out =
         "[cvtres /MACHINE:X64 /OUT:MicaNT_Shell.res.obj /VERBOSE MicaNT_Shell.res]\n"
-        "Microsoft (R) Windows (R) Resource To Object Converter Version 14.40.33810\n"
-        "Copyright (C) Microsoft Corporation / MicaNT Sovereign Cutler Authority.\n\n"
+        "MicaNT (R) Resource To Object Converter Version 14.40.33810\n"
+        "Copyright (C) 2026 MicaNT Sovereign Cutler Authority. All rights reserved.\n\n"
         "Opening input file: 'MicaNT_Shell.res'...\n"
         "Parsing Resource Directory Tree:\n"
         "  Type: RT_ICON (3)              -> 1 ID -> Lang: 1033 (Offset: 0x00A0)\n"
@@ -41,8 +41,8 @@ void ShowSampleConversion() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Windows (R) Resource To Object Converter Version 14.40.33810\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Resource To Object Converter Version 14.40.33810\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: cvtres [options] #resfile\n\n"
         "Options:\n"
         "   /MACHINE:{ARM|ARM64|ARM64EC|ARM64X|EBC|X64|X86} Target processor architecture\n"

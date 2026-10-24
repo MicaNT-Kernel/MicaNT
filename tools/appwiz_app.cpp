@@ -29,7 +29,7 @@ void RenderAppWizWindow() noexcept {
 
     DrawString(s_appwizBuffer, WIN_W, 12, 60, "Control Panel Home", PackBGRA(100, 200, 255));
     DrawString(s_appwizBuffer, WIN_W, 12, 84, "View installed updates", PackBGRA(180, 200, 230));
-    DrawString(s_appwizBuffer, WIN_W, 12, 108, "Turn Windows features", PackBGRA(180, 200, 230));
+    DrawString(s_appwizBuffer, WIN_W, 12, 108, "Turn MicaNT features", PackBGRA(180, 200, 230));
     DrawString(s_appwizBuffer, WIN_W, 12, 122, "on or off", PackBGRA(180, 200, 230));
 
     // 3. Main Area: Action Bar & Search

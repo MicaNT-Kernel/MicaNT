@@ -27,8 +27,8 @@ void ShowSampleQuser() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Windows (R) Query User Utility (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Query User Utility (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Display information about users logged on to the system.\n\n"
         "QUERY USER [username | sessionname | sessionid] [/SERVER:servername]\n\n"
         "  username            Identifies the user whose sessions you want to query.\n"

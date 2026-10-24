@@ -102,7 +102,7 @@ void HandleNetUse() noexcept {
         "\nNew connections will be remembered.\n\n"
         "Status       Local     Remote                    Network\n"
         "-------------------------------------------------------------------------------\n"
-        "OK           Z:        \\\\MICANT-XEON\\C$          Microsoft Windows Network\n"
+        "OK           Z:        \\\\MICANT-XEON\\C$          MicaNT Sovereign Network\n"
         "The command completed successfully.\n\n";
     PrintStr(out);
 }

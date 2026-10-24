@@ -55,7 +55,7 @@ void RenderSecurityMaintenanceWindow() noexcept {
     DrawRect(s_wscBuffer, WIN_W, mainX, sY + 18, mainW, 100, PackBGRA(35, 48, 70), 1);
 
     DrawString(s_wscBuffer, WIN_W, mainX + 12, sY + 28, "Network firewall:", PackBGRA(180, 200, 230));
-    DrawString(s_wscBuffer, WIN_W, mainX + 160, sY + 28, "Windows Defender Firewall is active (On)", PackBGRA(100, 240, 160));
+    DrawString(s_wscBuffer, WIN_W, mainX + 160, sY + 28, "MicaNT Sovereign Firewall is active (On)", PackBGRA(100, 240, 160));
 
     DrawString(s_wscBuffer, WIN_W, mainX + 12, sY + 46, "Virus protection:", PackBGRA(180, 200, 230));
     DrawString(s_wscBuffer, WIN_W, mainX + 160, sY + 46, "Sovereign Code Integrity (CI.DLL) is active (On)", PackBGRA(100, 240, 160));
@@ -82,7 +82,7 @@ void RenderSecurityMaintenanceWindow() noexcept {
     // 6. Status Bar
     FillRect(s_wscBuffer, WIN_W, 1, WIN_H - 24, WIN_W - 2, 23, PackBGRA(18, 24, 36));
     FillRect(s_wscBuffer, WIN_W, 1, WIN_H - 24, WIN_W - 2, 1, PackBGRA(35, 48, 70));
-    DrawString(s_wscBuffer, WIN_W, 16, WIN_H - 17, "Windows Security Center Service (wscsvc) Active | Platform Health: 100%", PackBGRA(160, 180, 210));
+    DrawString(s_wscBuffer, WIN_W, 16, WIN_H - 17, "MicaNT Security Center Service (wscsvc) Active | Platform Health: 100%", PackBGRA(160, 180, 210));
 }
 
 } // namespace

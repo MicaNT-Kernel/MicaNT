@@ -17,8 +17,8 @@ using namespace micant_gui;
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Cabinet Extraction Tool (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (c) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Cabinet Extraction Tool (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (c) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "EXTRAC32 [/Y] [/A] [/D | /E] [/L dir] cabinet [filename ...]\n"
         "EXTRAC32 [/Y] source [newname]\n"
         "EXTRAC32 [/Y] /C source destination\n\n"

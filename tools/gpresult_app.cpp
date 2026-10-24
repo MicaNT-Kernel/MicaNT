@@ -15,8 +15,8 @@ using namespace micant_gui;
 
 void ShowGpResult() noexcept {
     const char* out =
-        "Microsoft (R) Windows (R) Operating System Group Policy Result tool v2.0\n"
-        "(C) Sovereign MicaNT Systems. All rights reserved.\n\n"
+        "MicaNT (R) Group Policy Result tool v2.0\n"
+        "(C) 2026 MicaNT Foundation / Sovereign Systems. All rights reserved.\n\n"
         "Created on 10/23/2026 at 12:00:00 PM\n\n"
         "RSOP data for MICANT\\MicaAdmin on MICANT-XEON : Logging Mode\n"
         "------------------------------------------------------------------\n\n"

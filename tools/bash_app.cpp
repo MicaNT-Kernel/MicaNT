@@ -33,8 +33,8 @@ void ShowSampleBashSession() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Windows (R) Bash Compatibility Forwarder (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Bash Compatibility Forwarder (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: bash.exe [-c \"command\" | -i | -l | --version | --help]\n\n"
         "Options:\n"
         "   -c string   Execute specified command string in POSIX environment\n"

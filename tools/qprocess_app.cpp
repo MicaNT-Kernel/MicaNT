@@ -32,8 +32,8 @@ void ShowSampleQprocess() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Windows (R) Query Process Utility (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Query Process Utility (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Display information about processes.\n\n"
         "QUERY PROCESS [* | processid | username | sessionname] [/SYSTEM] [/SERVER:servername]\n\n"
         "  *                   Lists all processes.\n"

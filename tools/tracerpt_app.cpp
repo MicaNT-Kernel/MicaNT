@@ -17,8 +17,8 @@ using namespace micant_gui;
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) TraceRpt.exe (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) TraceRpt.exe (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage:\n"
         "  tracerpt <filename [filename ...]> [options]\n\n"
         "Options:\n"
@@ -27,7 +27,7 @@ extern "C" void _start() noexcept {
         "  -summary [filename]      Output summary file. Default is workload_summary.txt.\n"
         "  -report [filename]       Output report file. Default is workload_report.html.\n"
         "  -rt <session_name>       Real-time Event Trace Session data source.\n"
-        "  -df <filename>           Create a Microsoft-specific counting schema file.\n\n"
+        "  -df <filename>           Create a counting schema file.\n\n"
         "Kernel Event Trace Parser: Online.\n\n";
 
     PrintStr(banner);

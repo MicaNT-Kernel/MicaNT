@@ -38,7 +38,7 @@ void ShowGeneralCatalog() noexcept {
     PrintLine("FIND           Searches for a text string in a file or files.");
     PrintLine("FORMAT         Formats a disk for use with MicaNT (NTFS / FAT32 / ExtFS).");
     PrintLine("FSUTIL         Performs tasks related to file systems and volumes.");
-    PrintLine("HELP           Provides Help information for Windows commands.");
+    PrintLine("HELP           Provides Help information for MicaNT commands.");
     PrintLine("HOSTNAME       Prints the name of the current host.");
     PrintLine("IPCONFIG       Displays all current TCP/IP network configuration values.");
     PrintLine("LABEL          Creates, changes, or deletes the volume label of a disk.");
@@ -64,13 +64,13 @@ void ShowGeneralCatalog() noexcept {
     PrintLine("TASKLIST       Displays all currently running tasks including services.");
     PrintLine("TREE           Graphically displays the directory structure of a drive or path.");
     PrintLine("TYPE           Displays the contents of a text file.");
-    PrintLine("VER            Displays the Windows version.");
+    PrintLine("VER            Displays the MicaNT version.");
     PrintLine("VOL            Displays a disk volume label and serial number.");
     PrintLine("VSSADMIN       Volume Shadow Copy Service administrative tool.");
-    PrintLine("WBADMIN        Windows Backup command-line tool.");
+    PrintLine("WBADMIN        MicaNT Backup command-line tool.");
     PrintLine("WHOAMI         Displays user, group and privileges information.");
-    PrintLine("WPR            Windows Performance Recorder for Event Tracing (ETW).");
-    PrintLine("XPERF          Windows Performance Analyzer trace capture and processing.");
+    PrintLine("WPR            MicaNT Performance Recorder for Event Tracing (ETW).");
+    PrintLine("XPERF          MicaNT Performance Analyzer trace capture and processing.");
     PrintLine("");
     PrintLine("Total Built-in Commands: 244 Sovereign Executables Registered.");
 }
@@ -151,7 +151,7 @@ bool ShowCommandHelp(const char* cmd) noexcept {
         return true;
     }
     if (StrCaseEqual(cmd, "format")) {
-        PrintLine("Formats a disk for use with Windows.");
+        PrintLine("Formats a disk for use with MicaNT.");
         PrintLine("");
         PrintLine("FORMAT volume [/FS:file-system] [/V:label] [/Q] [/L[:state]] [/A:size] [/C] [/I:enable]");
         return true;
@@ -173,7 +173,7 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     CommandLineParser parser(rawCmdLine, "help.exe");
 
     if (parser.HasSwitch("?")) {
-        PrintLine("Provides Help information for Windows commands.");
+        PrintLine("Provides Help information for MicaNT commands.");
         PrintLine("");
         PrintLine("HELP [command]");
         PrintLine("");

@@ -17,8 +17,8 @@ using namespace micant_gui;
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) File Expansion Utility (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (c) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) File Expansion Utility (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (c) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "EXPAND [-r] Source Destination\n"
         "EXPAND -r Source [Destination]\n"
         "EXPAND -D Source.cab [-f:Files]\n"

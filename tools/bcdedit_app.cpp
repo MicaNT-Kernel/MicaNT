@@ -53,7 +53,7 @@ extern "C" void _start(const char* /*cmdLine*/ = nullptr) {
 #endif
     DoSyscall(0x11, csVal & 3, 0);
 
-    PrintLine("Windows Boot Manager");
+    PrintLine("MicaNT Boot Manager");
     PrintLine("--------------------");
     PrintLine("identifier              {bootmgr}");
     PrintLine("device                  partition=\\Device\\HarddiskVolume1");
@@ -68,7 +68,7 @@ extern "C" void _start(const char* /*cmdLine*/ = nullptr) {
     PrintLine("toolsdisplayorder       {memdiag}");
     PrintLine("timeout                 5\r\n");
 
-    PrintLine("Windows Boot Loader");
+    PrintLine("MicaNT Boot Loader");
     PrintLine("-------------------");
     PrintLine("identifier              {current}");
     PrintLine("device                  partition=C:");

@@ -15,8 +15,8 @@ using namespace micant_gui;
 
 void ShowSampleDefragAnalysis() noexcept {
     const char* out =
-        "Microsoft Drive Optimizer (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (c) MicaNT Operating System Authority.\n\n"
+        "MicaNT Drive Optimizer (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (c) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Invoking defragmentation on Local Disk (C:)...\n\n"
         "    Analysis Report:\n"
         "        Total volume size          = 465.76 GB\n"

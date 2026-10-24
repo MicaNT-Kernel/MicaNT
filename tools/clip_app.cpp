@@ -22,15 +22,15 @@ extern "C" void _start() noexcept {
     const char* banner =
         "CLIP\n\n"
         "Description:\n"
-        "    Redirects output of command line tools to the Windows clipboard.\n"
+        "    Redirects output of command line tools to the MicaNT clipboard.\n"
         "    This text output can then be pasted into other programs.\n\n"
         "Parameter List:\n"
         "    /?                  Displays this help message.\n\n"
         "Examples:\n"
         "    DIR | CLIP          Places a copy of the current directory listing\n"
-        "                        into the Windows clipboard.\n\n"
+        "                        into the MicaNT clipboard.\n\n"
         "    CLIP < README.TXT   Places a copy of the text from readme.txt on to\n"
-        "                        the Windows clipboard.\n\n";
+        "                        the MicaNT clipboard.\n\n";
 
     PrintStr(banner);
 

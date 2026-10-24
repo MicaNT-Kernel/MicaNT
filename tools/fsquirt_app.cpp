@@ -16,7 +16,7 @@ using namespace micant_gui;
 void ShowSampleBluetoothState() noexcept {
     const char* out =
         "[fsquirt /status]\n"
-        "Bluetooth Radio Stack: Microsoft / MicaNT Sovereign BTHPORT\n"
+        "Bluetooth Radio Stack: MicaNT Sovereign BTHPORT\n"
         "Radio Hardware: Intel Wireless Bluetooth 5.4 HCI Controller (USB\\VID_8087&PID_0033)\n"
         "Radio State: ONLINE (Discoverable, Pairing Allowed)\n"
         "Local MAC Address: 00:1A:7D:DA:71:13\n"
@@ -34,8 +34,8 @@ void ShowSampleBluetoothState() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Bluetooth File Transfer Wizard (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Bluetooth File Transfer Wizard (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: fsquirt [/send | /receive | /devices | /pair <mac> | /status]\n\n"
         "Options:\n"
         "   /send              Send files to a Bluetooth device using OBEX Object Push\n"

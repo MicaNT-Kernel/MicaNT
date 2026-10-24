@@ -34,9 +34,9 @@ void ShowReagentcInfo() noexcept {
 extern "C" void _start() noexcept {
     const char* banner =
         "REAGENTC.EXE <command> <arguments>\n\n"
-        "  /enable           - Enables the local Windows RE.\n"
-        "  /disable          - Disables the local Windows RE.\n"
-        "  /info             - Displays Windows RE status.\n"
+        "  /enable           - Enables the local MicaNT RE.\n"
+        "  /disable          - Disables the local MicaNT RE.\n"
+        "  /info             - Displays MicaNT RE status.\n"
         "  /setreimage       - Sets location of the recovery image.\n"
         "  /bootshell        - Initiates failover boot into recovery shell.\n\n"
         "[reagentc /info]\n";

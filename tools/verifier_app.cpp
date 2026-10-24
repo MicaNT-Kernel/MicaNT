@@ -24,7 +24,7 @@ void RenderVerifierWindow() noexcept {
 
     // 2. Banner
     DrawString(s_verBuffer, WIN_W, 20, 42, "Select a task", PackBGRA(255, 255, 255));
-    DrawString(s_verBuffer, WIN_W, 20, 58, "Driver Verifier monitors Windows kernel-mode drivers to detect illegal", PackBGRA(160, 180, 210));
+    DrawString(s_verBuffer, WIN_W, 20, 58, "Driver Verifier monitors MicaNT kernel-mode drivers to detect illegal", PackBGRA(160, 180, 210));
     DrawString(s_verBuffer, WIN_W, 20, 72, "function calls or actions that might corrupt the system.", PackBGRA(160, 180, 210));
 
     // Separator line

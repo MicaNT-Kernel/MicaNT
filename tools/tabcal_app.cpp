@@ -24,7 +24,7 @@ void ShowSampleTabcalStatus() noexcept {
         "------------------------------------------------------------------------------------\n"
         "Linear Calibration Matrix: 16-point Crosshair Sampled\n"
         "  Affine Transform: [X' = 1.0002*X - 0.0001*Y + 0.12] [Y' = 0.0001*X + 0.9998*Y - 0.08]\n"
-        "  Parallax Deviation: 0.11 mm (Exceeds Windows Hardware Lab Kit WHLK standard)\n"
+        "  Parallax Deviation: 0.11 mm (Exceeds Sovereign Hardware Quality Lab standard)\n"
         "  Calibration Status: STORED (HKLM\\SYSTEM\\CurrentControlSet\\Control\\TabletPC)\n\n";
     PrintStr(out);
 }
@@ -33,8 +33,8 @@ void ShowSampleTabcalStatus() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Digitizer & Touch Screen Calibration Tool (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Digitizer & Touch Screen Calibration Tool (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: tabcal [options]\n\n"
         "Options:\n"
         "   devicekind=pen     Calibrate electromagnetic stylus or active pen digitizer\n"

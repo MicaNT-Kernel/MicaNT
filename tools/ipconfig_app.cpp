@@ -44,7 +44,7 @@ void ShowHelp() noexcept {
 }
 
 void PrintDefaultConfig() noexcept {
-    PrintLine("Windows IP Configuration");
+    PrintLine("MicaNT IP Configuration");
     PrintLine("");
     PrintLine("Ethernet adapter Ethernet0:");
     PrintLine("");
@@ -56,7 +56,7 @@ void PrintDefaultConfig() noexcept {
 }
 
 void PrintAllConfig() noexcept {
-    PrintLine("Windows IP Configuration");
+    PrintLine("MicaNT IP Configuration");
     PrintLine("");
     PrintLine("   Host Name . . . . . . . . . . . . : MICANT-XEON");
     PrintLine("   Primary Dns Suffix  . . . . . . . : titan.local");

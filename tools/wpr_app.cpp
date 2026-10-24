@@ -32,7 +32,7 @@ void ShowSampleWprProfiles() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Windows Performance Recorder Version 10.0.26100 (MicaNT Sovereign Cutler Edition)\n"
+        "MicaNT Performance Recorder Version 10.0.26100 (MicaNT Sovereign Cutler Edition)\n"
         "Usage: wpr <option> [parameters...]\n\n"
         "Options:\n"
         "  -start <profile>      Starts performance recording using specified profile.\n"

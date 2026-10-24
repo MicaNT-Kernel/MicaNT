@@ -41,12 +41,12 @@ void RenderGpeditWindow() noexcept {
 
     DrawString(s_gpeBuffer, WIN_W, 22, paneY + 28, "v Computer Configuration", PackBGRA(220, 235, 255));
     DrawString(s_gpeBuffer, WIN_W, 36, paneY + 44, "> Software Settings", PackBGRA(160, 180, 210));
-    DrawString(s_gpeBuffer, WIN_W, 36, paneY + 60, "> Windows Settings", PackBGRA(160, 180, 210));
+    DrawString(s_gpeBuffer, WIN_W, 36, paneY + 60, "> MicaNT Settings", PackBGRA(160, 180, 210));
     DrawString(s_gpeBuffer, WIN_W, 36, paneY + 76, "v Administrative Templates", PackBGRA(100, 200, 255));
     DrawString(s_gpeBuffer, WIN_W, 48, paneY + 92, "> Control Panel", PackBGRA(160, 180, 210));
     DrawString(s_gpeBuffer, WIN_W, 48, paneY + 108, "> Network", PackBGRA(160, 180, 210));
     DrawString(s_gpeBuffer, WIN_W, 48, paneY + 124, "> System", PackBGRA(160, 180, 210));
-    DrawString(s_gpeBuffer, WIN_W, 48, paneY + 140, "> Windows Components", PackBGRA(160, 180, 210));
+    DrawString(s_gpeBuffer, WIN_W, 48, paneY + 140, "> MicaNT Components", PackBGRA(160, 180, 210));
 
     DrawString(s_gpeBuffer, WIN_W, 22, paneY + 162, "> User Configuration", PackBGRA(220, 235, 255));
 

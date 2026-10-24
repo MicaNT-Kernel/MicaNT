@@ -17,8 +17,8 @@ using namespace micant_gui;
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Licensing Diagnostic Tool (licensingdiag.exe)\n"
-        "Copyright (C) MicaNT Operating System Authority. All rights reserved.\n\n"
+        "MicaNT (R) Licensing Diagnostic Tool (licensingdiag.exe)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage:\n"
         "  licensingdiag.exe [-cab <path>] [-log <path>] [-extended]\n\n"
         "Parameters:\n"

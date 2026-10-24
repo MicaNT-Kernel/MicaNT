@@ -27,7 +27,7 @@ void ShowSampleWinGet() noexcept {
         "-------------------------------- ------------------------ ----------- --------- -------\n"
         "MicaNT Operating System Core     MicaNT.Kernel.Sovereign  10.0.26100  <latest>  sovereign\n"
         "Dave Cutler C++23 Standalone     MicaNT.Toolchain.Clang   18.1.8      <latest>  sovereign\n"
-        "OpenSSH for Windows              OpenSSH.Client           9.6.1       <latest>  winget\n"
+        "OpenSSH for MicaNT              OpenSSH.Client           9.6.1       <latest>  winget\n"
         "cURL HTTP/HTTPS Client           cURL.cURL                8.8.0       <latest>  winget\n\n";
     PrintStr(out);
 }
@@ -36,8 +36,8 @@ void ShowSampleWinGet() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Windows Package Manager v1.7.10690 (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (c) Microsoft Corporation / MicaNT Operating System Authority.\n\n"
+        "MicaNT Package Manager v1.7.10690 (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (c) 2026 MicaNT Foundation / Operating System Authority. All rights reserved.\n\n"
         "usage: winget [<command>] [<options>]\n\n"
         "The following commands are available:\n"
         "  install       Installs the given package\n"

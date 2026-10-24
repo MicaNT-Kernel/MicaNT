@@ -35,18 +35,18 @@ void CmdletGetService() noexcept {
     const char* out =
         "\nStatus   Name               DisplayName\n"
         "------   ----               -----------\n"
-        "Running  AudioSrv           Windows Audio (WaveRT / XAudio2)\n"
+        "Running  AudioSrv           MicaNT Audio (WaveRT / XAudio2)\n"
         "Running  BFE                Base Filtering Engine\n"
         "Running  CryptSvc           Cryptographic Services\n"
         "Running  Dhcp               DHCP Client\n"
         "Running  Dnscache           DNS Client\n"
-        "Running  EventLog           Windows Event Log\n"
+        "Running  EventLog           MicaNT Event Log\n"
         "Running  LanmanServer       Server\n"
         "Running  LanmanWorkstation  Workstation\n"
         "Running  PlugPlay           Plug and Play\n"
         "Running  RpcSs              Remote Procedure Call (RPC)\n"
         "Running  Schedule           Task Scheduler\n"
-        "Running  W32Time            Windows Time\n\n";
+        "Running  W32Time            MicaNT Time\n\n";
     PrintStr(out);
 }
 
@@ -73,9 +73,9 @@ void CmdletGetDate() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Windows PowerShell\n"
-        "Copyright (C) Microsoft Corporation / Sovereign MicaNT Systems. All rights reserved.\n\n"
-        "Try the new cross-platform PowerShell (https://aka.ms/pscore6)\n\n"
+        "MicaNT PowerShell\n"
+        "Copyright (C) 2026 MicaNT Foundation. All rights reserved.\n\n"
+        "MicaNT Object Automation Engine (Version 7.4.2-micant)\n\n"
         "PS C:\\MicaNT\\System32> $PSVersionTable\n";
 
     PrintStr(banner);

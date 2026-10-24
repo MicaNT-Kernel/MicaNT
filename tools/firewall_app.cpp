@@ -20,7 +20,7 @@ alignas(4096) uint32_t s_firewallBuffer[WIN_W * WIN_H];
 
 void RenderFirewallWindow() noexcept {
     // 1. Frame
-    DrawWindowFrame(s_firewallBuffer, WIN_W, WIN_H, "Windows Defender Firewall", "File  Action  View  Help");
+    DrawWindowFrame(s_firewallBuffer, WIN_W, WIN_H, "MicaNT Sovereign Firewall", "File  Action  View  Help");
 
     // 2. Left Sidebar (Navigation Tasks)
     const uint32_t sideW = 145;
@@ -31,7 +31,7 @@ void RenderFirewallWindow() noexcept {
     DrawString(s_firewallBuffer, WIN_W, 12, 84, "Allow an app or feature", PackBGRA(180, 200, 230));
     DrawString(s_firewallBuffer, WIN_W, 12, 108, "Change notification", PackBGRA(180, 200, 230));
     DrawString(s_firewallBuffer, WIN_W, 12, 122, "settings", PackBGRA(180, 200, 230));
-    DrawString(s_firewallBuffer, WIN_W, 12, 146, "Turn Windows Firewall", PackBGRA(180, 200, 230));
+    DrawString(s_firewallBuffer, WIN_W, 12, 146, "Turn MicaNT Firewall", PackBGRA(180, 200, 230));
     DrawString(s_firewallBuffer, WIN_W, 12, 160, "on or off", PackBGRA(180, 200, 230));
     DrawString(s_firewallBuffer, WIN_W, 12, 184, "Advanced settings", PackBGRA(100, 200, 255));
 
@@ -43,8 +43,8 @@ void RenderFirewallWindow() noexcept {
     DrawRect(s_firewallBuffer, WIN_W, mainX, 58, 28, 32, PackBGRA(255, 255, 255), 1);
     DrawString(s_firewallBuffer, WIN_W, mainX + 9, 66, "v", PackBGRA(255, 255, 255));
 
-    DrawString(s_firewallBuffer, WIN_W, mainX + 38, 58, "Windows Defender Firewall", PackBGRA(255, 255, 255));
-    DrawString(s_firewallBuffer, WIN_W, mainX + 38, 74, "Help protect your PC with Windows Defender Firewall", PackBGRA(160, 180, 210));
+    DrawString(s_firewallBuffer, WIN_W, mainX + 38, 58, "MicaNT Sovereign Firewall", PackBGRA(255, 255, 255));
+    DrawString(s_firewallBuffer, WIN_W, mainX + 38, 74, "Help protect your PC with MicaNT Sovereign Firewall", PackBGRA(160, 180, 210));
 
     // Separator line
     FillRect(s_firewallBuffer, WIN_W, mainX, 98, WIN_W - mainX - 10, 1, PackBGRA(40, 55, 80));
@@ -57,7 +57,7 @@ void RenderFirewallWindow() noexcept {
     FillRect(s_firewallBuffer, WIN_W, mainX, secY + 18, WIN_W - mainX - 10, 86, PackBGRA(10, 14, 22));
     DrawRect(s_firewallBuffer, WIN_W, mainX, secY + 18, WIN_W - mainX - 10, 86, PackBGRA(35, 48, 70), 1);
 
-    DrawString(s_firewallBuffer, WIN_W, mainX + 10, secY + 26, "Windows Defender Firewall state:", PackBGRA(200, 215, 235));
+    DrawString(s_firewallBuffer, WIN_W, mainX + 10, secY + 26, "MicaNT Sovereign Firewall state:", PackBGRA(200, 215, 235));
     DrawString(s_firewallBuffer, WIN_W, mainX + 260, secY + 26, "On", PackBGRA(100, 240, 160));
 
     DrawString(s_firewallBuffer, WIN_W, mainX + 10, secY + 44, "Incoming connections:", PackBGRA(200, 215, 235));
@@ -77,7 +77,7 @@ void RenderFirewallWindow() noexcept {
     FillRect(s_firewallBuffer, WIN_W, mainX, secY + 18, WIN_W - mainX - 10, 48, PackBGRA(10, 14, 22));
     DrawRect(s_firewallBuffer, WIN_W, mainX, secY + 18, WIN_W - mainX - 10, 48, PackBGRA(35, 48, 70), 1);
 
-    DrawString(s_firewallBuffer, WIN_W, mainX + 10, secY + 26, "Windows Defender Firewall state:", PackBGRA(200, 215, 235));
+    DrawString(s_firewallBuffer, WIN_W, mainX + 10, secY + 26, "MicaNT Sovereign Firewall state:", PackBGRA(200, 215, 235));
     DrawString(s_firewallBuffer, WIN_W, mainX + 260, secY + 26, "On", PackBGRA(100, 240, 160));
     DrawString(s_firewallBuffer, WIN_W, mainX + 10, secY + 44, "Incoming connections:", PackBGRA(200, 215, 235));
     DrawString(s_firewallBuffer, WIN_W, mainX + 175, secY + 44, "Block all connections to apps not listed", PackBGRA(160, 180, 210));
@@ -93,8 +93,8 @@ void RenderFirewallWindow() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Windows Defender Firewall Subsystem [firewall.cpl / firewall.exe]\n"
-        "(C) Sovereign MicaNT Systems. All rights reserved.\n\n"
+        "MicaNT Sovereign Firewall Subsystem [firewall.cpl / firewall.exe]\n"
+        "(C) 2026 MicaNT Foundation. All rights reserved.\n\n"
         "Firewall Engine        : Sovereign Base Filtering Engine (BFE / WFP)\n"
         "Hardware NIC Binding   : Intel I210 Gigabit Ethernet (147.135.1.229)\n"
         "Active Profiles        : Domain=ON, Private=ON, Public=ON\n"

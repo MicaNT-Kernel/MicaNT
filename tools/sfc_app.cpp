@@ -56,8 +56,8 @@ extern "C" void _start(const char* cmdLine = nullptr) {
     bool scanNow = true;
     if (cmdLine && *cmdLine) {
         if (cmdLine[0] == '/' && (cmdLine[1] == '?' || cmdLine[1] == 'h')) {
-            PrintLine("Microsoft Windows [Version 10.0.26040.1000]");
-            PrintLine("(c) Microsoft Corporation. All rights reserved.\r\n");
+            PrintLine("MicaNT [Version 10.0.26040.1000]");
+            PrintLine("(c) 2026 MicaNT Foundation. All rights reserved.\r\n");
             PrintLine("Scans the integrity of all protected system files and replaces incorrect versions.");
             PrintLine("SFC [/SCANNOW] [/VERIFYONLY] [/SCANFILE=<file>] [/OFFBOOTDIR=<boot>]");
             PrintLine("  /SCANNOW        Scans integrity of all protected system files and repairs files.");
@@ -78,7 +78,7 @@ extern "C" void _start(const char* cmdLine = nullptr) {
     PrintLine("Verification  80% complete: \\MicaNT\\System32\\drivers\\*.sys [9 DRIVERS OK]");
     PrintLine("Verification 100% complete.\r\n");
 
-    PrintLine("Windows Resource Protection did not find any integrity violations.");
+    PrintLine("MicaNT Resource Protection did not find any integrity violations.");
     PrintLine("All 39 PE32+ executables, DLLs, and kernel drivers match sovereign cryptographic seals.");
 
     DoSyscall(0x01, 0, 0);

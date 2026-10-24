@@ -18,7 +18,7 @@ void ShowSampleNarratorStatus() noexcept {
         "[narrator /status]\n"
         "MicaNT Ease of Access - Narrator Screen Reader Engine\n"
         "Speech Synthesizer:   Sovereign Text-to-Speech (TTS) WaveRT Audio Bridge\n"
-        "Active Voice Profile: Microsoft David (English - United States, 48 kHz 16-bit stereo)\n"
+        "Active Voice Profile: MicaNT Cutler Sovereign (English - United States, 48 kHz 16-bit stereo)\n"
         "Speech Parameters:    Rate: 0 (Normal) | Volume: 100% | Pitch: 0\n"
         "UI Automation Hub:    Connected to Desktop Window Manager (DWM / Csrss)\n"
         "------------------------------------------------------------------------------------\n"
@@ -28,7 +28,7 @@ void ShowSampleNarratorStatus() noexcept {
         "  Scan Mode:          ON (Caps Lock + Space toggles)\n"
         "  Audio Glitch Guard: WaveRT lockless ring buffer (0 ms latency, 0 underruns)\n"
         "------------------------------------------------------------------------------------\n"
-        "Narrator output: 'Windows Command Prompt. Current directory C:\\MicaNT\\System32. Ready.'\n\n";
+        "Narrator output: 'MicaNT Command Interpreter. Current directory C:\\MicaNT\\System32. Ready.'\n\n";
     PrintStr(out);
 }
 
@@ -36,8 +36,8 @@ void ShowSampleNarratorStatus() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Narrator (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Narrator (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: narrator [options]\n\n"
         "Options:\n"
         "   /voice <name>      Select synthetic voice profile (e.g. David, Zira, Mark)\n"

@@ -39,8 +39,8 @@ void ShowSampleClipboard() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Windows (R) Clipboard Viewer (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Clipboard Viewer (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage: clipbrd [options]\n\n"
         "Options:\n"
         "   /status            Display clipboard metadata, lock state, and format enumeration\n"

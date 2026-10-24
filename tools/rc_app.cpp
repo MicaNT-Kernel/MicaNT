@@ -16,8 +16,8 @@ using namespace micant_gui;
 void ShowSampleCompilation() noexcept {
     const char* out =
         "[rc MicaNT_Shell.rc /fo MicaNT_Shell.res /v /l 0x0409]\n"
-        "Microsoft (R) Windows (R) Resource Compiler Version 10.0.26100\n"
-        "Copyright (C) Microsoft Corporation / MicaNT Sovereign Cutler Authority.\n"
+        "MicaNT (R) Resource Compiler Version 10.0.26100\n"
+        "Copyright (C) 2026 MicaNT Sovereign Cutler Authority.\n"
         "All rights reserved.\n\n"
         "Parsing 'MicaNT_Shell.rc'...\n"
         "  Writing RT_MANIFEST:1 (1033) [784 bytes]\n"
@@ -40,8 +40,8 @@ void ShowSampleCompilation() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Microsoft (R) Windows (R) Resource Compiler Version 10.0.26100 (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (C) MicaNT Operating System Authority.\n\n"
+        "MicaNT (R) Resource Compiler Version 10.0.26100 (MicaNT Sovereign Cutler Edition)\n"
+        "Copyright (C) 2026 MicaNT Operating System Authority. All rights reserved.\n\n"
         "Usage:  rc [options] .rc-file\n\n"
         "Switches:\n"
         "   /r          Compile only; do not link (default)\n"

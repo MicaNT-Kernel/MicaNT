@@ -20,9 +20,9 @@ void ShowSampleLogs() noexcept {
         "System\n"
         "Setup\n"
         "ForwardedEvents\n"
-        "Microsoft-Windows-Kernel-General/Operational\n"
-        "Microsoft-Windows-Kernel-Power/Operational\n"
-        "Microsoft-Windows-DriverFrameworks-UserMode/Operational\n\n";
+        "MicaNT-Kernel-General/Operational\n"
+        "MicaNT-Kernel-Power/Operational\n"
+        "MicaNT-DriverFrameworks-UserMode/Operational\n\n";
     PrintStr(out);
 }
 
@@ -30,7 +30,7 @@ void ShowSampleLogs() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "Windows Events Command Line Utility.\n\n"
+        "MicaNT Events Command Line Utility.\n\n"
         "Usage:\n"
         "  wevtutil [{command}] [/option:value ...]\n\n"
         "Commands:\n"

@@ -49,9 +49,9 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     }
 
     if (StrCaseContains(filePath, "hosts")) {
-        PrintLine("# Copyright (c) 1993-2009 Microsoft Corp.");
+        PrintLine("# Sovereign HOSTS file for MicaNT TCP/IP Subsystem.");
         PrintLine("#");
-        PrintLine("# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.");
+        PrintLine("# This is a sample HOSTS file used by MicaNT TCP/IP Stack.");
         PrintLine("#");
         PrintLine("127.0.0.1       localhost");
         PrintLine("::1             localhost");

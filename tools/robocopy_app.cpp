@@ -52,7 +52,7 @@ bool HasSubstr(const char* s, const char* sub) noexcept {
 
 void PrintUsage() noexcept {
     PrintLine("-------------------------------------------------------------------------------");
-    PrintLine("   ROBOCOPY     ::     Robust File Copy for Windows NT");
+    PrintLine("   ROBOCOPY     ::     Robust File Copy for MicaNT");
     PrintLine("-------------------------------------------------------------------------------");
     PrintLine("");
     PrintLine("  Usage :: ROBOCOPY source destination [file [file]...] [options]");
@@ -76,7 +76,7 @@ void PrintUsage() noexcept {
 
 void PrintExecutionReport(const char* src, const char* dst) noexcept {
     PrintLine("-------------------------------------------------------------------------------");
-    PrintLine("   ROBOCOPY     ::     Robust File Copy for Windows NT");
+    PrintLine("   ROBOCOPY     ::     Robust File Copy for MicaNT");
     PrintLine("-------------------------------------------------------------------------------");
     PrintLine("");
     PrintLine("  Started : Thu Oct 22 17:55:00 2026");

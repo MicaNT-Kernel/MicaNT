@@ -26,7 +26,7 @@ extern "C" void _start() noexcept {
         "  rundll32.exe powrprof.dll,SetSuspendState\n\n"
         "Active Subsystem Host Status:\n"
         "  Target Architecture : AMD64 / x86_64 PE32+\n"
-        "  Calling Convention  : Microsoft x64 FastCall (RCX, RDX, R8, R9)\n"
+        "  Calling Convention  : x64 FastCall ABI (RCX, RDX, R8, R9)\n"
         "  Known DLLs Directory: \\KnownDlls (12 Mapped Modules Active)\n"
         "  Security Context    : Ring 3 User-Mode (CPL=3), SeChangeNotifyPrivilege\n\n"
         "[RUNDLL32] Ready for DLL entrypoint dispatch. Exiting with code 0.\n";
