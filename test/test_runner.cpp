@@ -121,6 +121,7 @@
 #include "micant/um/subsystems/net/ring3_fiber_net_apps_tunnel.hpp"
 #include "micant/um/subsystems/winuser/ring3_workstation_apps_tunnel.hpp"
 #include "micant/um/servers/ring3_wsl2_hyperv_enterprise_closure.hpp"
+#include "micant/um/subsystems/winbase/cli_common.hpp"
 #include "micant/um/subsystems/graphics/prismx_directx_headers_kmt_runtime.hpp"
 #include "micant/um/subsystems/graphics/prismx_dxmath_dxtex_dxmesh_tk12.hpp"
 #include "micant/um/subsystems/graphics/prismx_d3d12_translation_layer_on12.hpp"
@@ -399,6 +400,7 @@ int main(int argc, char* argv[]) {
         RUN_TEST(Test_Horizon133_HavenMemoryBus_Hmb20_PagingEngine_And_DemandSwap);
         RUN_TEST(Test_Horizon134_MuiResourceCompilers_And_InternationalizationCatalogs);
         RUN_TEST(Test_Horizon135_WslPosixBridge_OpenSsh_And_WinGetPackageManager);
+        RUN_TEST(Test_Horizon136_CliCommon_CommandInterpreter_And_System32ExecutionParity);
         return g_FailedTests;
     }
     if (argc > 1 && std::string(argv[1]) == "--suite343") {
@@ -1678,6 +1680,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(Test_Horizon133_HavenMemoryBus_Hmb20_PagingEngine_And_DemandSwap);
     RUN_TEST(Test_Horizon134_MuiResourceCompilers_And_InternationalizationCatalogs);
     RUN_TEST(Test_Horizon135_WslPosixBridge_OpenSsh_And_WinGetPackageManager);
+    RUN_TEST(Test_Horizon136_CliCommon_CommandInterpreter_And_System32ExecutionParity);
 
     std::cout << "\n------------------------------------------------------------------------\n";
     std::cout << "Summary: " << g_PassedTests << " Passed, " << g_FailedTests << " Failed\n";

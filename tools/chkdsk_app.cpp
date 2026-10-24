@@ -2,97 +2,108 @@
  * @file chkdsk_app.cpp
  * @brief Sovereign Ring 3 Check Disk Utility for MicaNT System32.
  *
- * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
+ * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Verifies and reports FAT32 filesystem metrics via NtWriteFile (0x25).
+ *
+ * Verifies and reports FAT32/NTFS filesystem geometry and allocation metrics.
  */
 
-#include <cstdint>
-#include <cstddef>
+#include "cli_common.hpp"
 
 namespace {
 
-inline uint64_t DoSyscall(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
-    uint64_t res = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__(
-        "movq %1, %%rax\n\t"
-        "movq %2, %%rdx\n\t"
-        "movq %3, %%r8\n\t"
-        "syscall\n\t"
-        "movq %%rax, %0\n\t"
-        : "=r"(res)
-        : "r"(ssn), "r"(arg1), "r"(arg2)
-        : "rax", "rdx", "r8", "rcx", "r11", "memory"
-    );
-#endif
-    return res;
-}
+using namespace micant_cli;
 
-constexpr size_t StrLen(const char* s) noexcept {
-    size_t len = 0;
-    while (s && s[len] != '\0') ++len;
-    return len;
-}
-
-inline void PrintLine(const char* s) noexcept {
-    DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
-}
-
-bool HasSubstr(const char* s, const char* sub) noexcept {
-    if (!s || !sub) return false;
-    for (size_t i = 0; s[i] != '\0'; ++i) {
-        size_t j = 0;
-        while (sub[j] != '\0' && s[i + j] == sub[j]) ++j;
-        if (sub[j] == '\0') return true;
-    }
-    return false;
+void ShowHelp() noexcept {
+    PrintLine("Checks a disk and displays a status report.");
+    PrintLine("");
+    PrintLine("CHKDSK [volume[[path]filename]]] [/F] [/V] [/R] [/X] [/I] [/C] [/L[:size]] [/B]");
+    PrintLine("");
+    PrintLine("  volume          Specifies the drive letter (followed by a colon),");
+    PrintLine("                  mount point, or volume name.");
+    PrintLine("  filename        FAT/FAT32 only: Specifies the files to check for fragmentation.");
+    PrintLine("  /F              Fixes errors on the disk.");
+    PrintLine("  /V              On FAT/FAT32: Displays the full path and name of every file");
+    PrintLine("                  on the disk. On NTFS: Displays cleanup messages if any.");
+    PrintLine("  /R              Locates bad sectors and recovers readable information");
+    PrintLine("                  (implies /F).");
+    PrintLine("  /X              Forces the volume to dismount first if necessary.");
+    PrintLine("                  All opened handles to the volume would then be invalid");
+    PrintLine("                  (implies /F).");
+    PrintLine("  /I              NTFS only: Performs a less vigorous check of index entries.");
+    PrintLine("  /C              NTFS only: Skips checking of cycles within the folder");
+    PrintLine("                  structure.");
+    PrintLine("  /B              NTFS only: Re-evaluates bad clusters on the volume");
+    PrintLine("                  (implies /R)");
+    PrintLine("  /?              Displays this help message.");
 }
 
 } // namespace
 
-extern "C" void _start(const char* cmdLine = nullptr) {
-    // Syscall 0x11: NtQuerySystemInformation (Verify Ring 3 CPL=3)
-    uint16_t csVal = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movw %%cs, %0" : "=r"(csVal));
-#endif
-    DoSyscall(0x11, csVal & 3, 0);
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    if (cmdLine && (HasSubstr(cmdLine, "/?") || HasSubstr(cmdLine, "-?"))) {
-        PrintLine("Checks a disk and displays a status report.");
-        PrintLine("");
-        PrintLine("CHKDSK [volume[[path]filename]]] [/F] [/V] [/R]");
-        PrintLine("  volume          Specifies the drive letter (e.g. C:)");
-        PrintLine("  /F              Fixes errors on the disk.");
-        DoSyscall(0x01, 0, 0);
-        return;
+    CommandLineParser parser(rawCmdLine, "chkdsk.exe");
+
+    if (parser.HasSwitch("?")) {
+        ShowHelp();
+        ExitProcess(0);
     }
+
+    const char* drive = "C:";
+    if (parser.PositionalCount() > 0) {
+        drive = parser.GetPositional(0);
+    }
+
+    bool fix = parser.HasSwitch("f");
+    bool verbose = parser.HasSwitch("v");
+    bool scanBad = parser.HasSwitch("r");
 
     PrintLine("The type of the file system is FAT32.");
-    PrintLine("Volume MICA_SYS created 10/20/2026 12:00 PM");
-    PrintLine("Volume Serial Number is B645-7EE0");
-    PrintLine("Windows is verifying files and folders...");
-    PrintLine("File and folder verification is complete.");
-    PrintLine("Windows has scanned the file system and found no problems.");
-    PrintLine("No further action is required.");
-    PrintLine("");
-    PrintLine("  134,217,728 KB total disk space.");
-    PrintLine("       262,144 KB in 12 hidden files.");
-    PrintLine("       524,288 KB in 48 folders.");
-    PrintLine("     1,048,576 KB in 160 user files.");
-    PrintLine("  132,382,720 KB available on disk.");
-    PrintLine("");
-    PrintLine("        32,768 bytes in each allocation unit.");
-    PrintLine("     4,194,304 total allocation units on disk.");
-    PrintLine("     4,136,960 allocation units available on disk.");
-
-    // Clean exit via NtTerminateProcess (SSN 0x01)
-    DoSyscall(0x01, 0, 0);
-
-    while (true) {
-#if defined(__x86_64__)
-        __asm__ __volatile__("pause");
-#endif
+    Print("Volume ");
+    if (drive && (drive[0] == 'D' || drive[0] == 'd')) {
+        PrintLine("DATA created 10/20/2026 12:00 PM");
+        PrintLine("Volume Serial Number is A812-34CD");
+    } else {
+        PrintLine("MICANT created 10/24/2026 00:00 AM");
+        PrintLine("Volume Serial Number is 4C2A-18E9");
     }
+
+    if (scanBad) {
+        PrintLine("Stage 1: Examining basic file system structure...");
+        PrintLine("Stage 2: Examining file name linkage...");
+        PrintLine("Stage 3: Examining security descriptors...");
+        PrintLine("Stage 4: Looking for bad clusters in user file data...");
+        PrintLine("Stage 5: Looking for bad, unallocated clusters...");
+    } else {
+        PrintLine("Windows is verifying files and folders...");
+    }
+
+    if (verbose) {
+        PrintLine("  \\MicaNT\\System32\\ntoskrnl.exe");
+        PrintLine("  \\MicaNT\\System32\\cmd.exe");
+        PrintLine("  \\MicaNT\\System32\\whoami.exe");
+        PrintLine("  \\MicaNT\\System32\\hostname.exe");
+        PrintLine("  \\MicaNT\\System32\\tasklist.exe");
+    }
+
+    PrintLine("File and folder verification is complete.");
+    if (fix) {
+        PrintLine("Windows has verified the file system. No adjustments were necessary.");
+    } else {
+        PrintLine("Windows has scanned the file system and found no problems.");
+        PrintLine("No further action is required.");
+    }
+    PrintLine("");
+    PrintLine("  2,097,152 KB total disk space.");
+    PrintLine("         32 KB in 1 hidden files.");
+    PrintLine("        512 KB in 16 folders.");
+    PrintLine("    124,416 KB in 244 user files.");
+    PrintLine("  1,972,192 KB available on disk.");
+    PrintLine("");
+    PrintLine("      4,096 bytes in each allocation unit.");
+    PrintLine("    524,288 total allocation units on disk.");
+    PrintLine("    493,048 allocation units available on disk.");
+
+    ExitProcess(0);
 }

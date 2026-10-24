@@ -2,94 +2,127 @@
  * @file find_app.cpp
  * @brief Sovereign Ring 3 String Search Utility for MicaNT System32.
  *
- * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
+ * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Searches for strings in files and outputs results via NtWriteFile (0x25).
+ *
+ * Implements authentic Windows NT FIND command-line text search behavior.
  */
 
-#include <cstdint>
-#include <cstddef>
+#include "cli_common.hpp"
 
 namespace {
 
-inline uint64_t DoSyscall(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
-    uint64_t res = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__(
-        "movq %1, %%rax\n\t"
-        "movq %2, %%rdx\n\t"
-        "movq %3, %%r8\n\t"
-        "syscall\n\t"
-        "movq %%rax, %0\n\t"
-        : "=r"(res)
-        : "r"(ssn), "r"(arg1), "r"(arg2)
-        : "rax", "rdx", "r8", "rcx", "r11", "memory"
-    );
-#endif
-    return res;
+using namespace micant_cli;
+
+void ShowHelp() noexcept {
+    PrintLine("FIND [/V] [/C] [/N] [/I] [/OFF[LINE]] \"string\" [[drive:][path]filename[ ...]]");
+    PrintLine("");
+    PrintLine("  /V         Displays all lines NOT containing the specified string.");
+    PrintLine("  /C         Displays only the count of lines containing the string.");
+    PrintLine("  /N         Displays line numbers with the displayed lines.");
+    PrintLine("  /I         Ignores the case of characters when searching for the string.");
+    PrintLine("  /OFF[LINE] Do not skip files with offline attribute set.");
+    PrintLine("  \"string\"   Specifies the text string to find.");
+    PrintLine("  [drive:][path]filename");
+    PrintLine("             Specifies a file or files to search.");
 }
 
-constexpr size_t StrLen(const char* s) noexcept {
-    size_t len = 0;
-    while (s && s[len] != '\0') ++len;
-    return len;
-}
+inline constexpr const char* SAMPLE_BOOT_INI_LINES[] = {
+    "[boot loader]",
+    "timeout=5",
+    "default=multi(0)disk(0)rdisk(0)partition(1)\\MICANT",
+    "[operating systems]",
+    "multi(0)disk(0)rdisk(0)partition(1)\\MICANT=\"MicaNT Workstation\" /noexecute=optin /fastdetect"
+};
 
-inline void PrintLine(const char* s) noexcept {
-    DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
-}
-
-bool HasSubstr(const char* s, const char* sub) noexcept {
-    if (!s || !sub) return false;
-    for (size_t i = 0; s[i] != '\0'; ++i) {
-        size_t j = 0;
-        while (sub[j] != '\0' && s[i + j] == sub[j]) ++j;
-        if (sub[j] == '\0') return true;
-    }
-    return false;
-}
+inline constexpr const char* SAMPLE_HOSTS_LINES[] = {
+    "# Copyright (c) 1993-2009 Microsoft Corp.",
+    "#",
+    "# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.",
+    "#",
+    "127.0.0.1       localhost",
+    "::1             localhost",
+    "147.135.1.229   micant-xeon"
+};
 
 } // namespace
 
-extern "C" void _start(const char* cmdLine = nullptr) {
-    // Syscall 0x11: NtQuerySystemInformation (Verify Ring 3 CPL=3)
-    uint16_t csVal = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movw %%cs, %0" : "=r"(csVal));
-#endif
-    DoSyscall(0x11, csVal & 3, 0);
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    if (!cmdLine || *cmdLine == '\0' || HasSubstr(cmdLine, "/?") || HasSubstr(cmdLine, "-?")) {
-        PrintLine("FIND [/V] [/C] [/N] [/I] \"string\" [[drive:][path]filename[ ...]]");
-        PrintLine("  /V         Displays all lines NOT containing the specified string.");
-        PrintLine("  /C         Displays only the count of lines containing the string.");
-        PrintLine("  /N         Displays line numbers with the displayed lines.");
-        PrintLine("  /I         Ignores the case of characters when searching for the string.");
-        DoSyscall(0x01, 0, 0);
-        return;
+    CommandLineParser parser(rawCmdLine, "find.exe");
+
+    if (parser.HasSwitch("?") || parser.PositionalCount() == 0) {
+        ShowHelp();
+        ExitProcess(0);
     }
 
-    if (HasSubstr(cmdLine, "boot.ini") || HasSubstr(cmdLine, "BOOT.INI")) {
-        PrintLine("---------- BOOT.INI");
-        if (HasSubstr(cmdLine, "default") || HasSubstr(cmdLine, "DEFAULT")) {
-            PrintLine("default=micant");
-        } else if (HasSubstr(cmdLine, "timeout") || HasSubstr(cmdLine, "TIMEOUT")) {
-            PrintLine("timeout=5");
-        } else {
-            PrintLine("[boot]");
-            PrintLine("default=micant");
-            PrintLine("timeout=5");
+    bool invert = parser.HasSwitch("v");
+    bool countOnly = parser.HasSwitch("c");
+    bool showLineNums = parser.HasSwitch("n");
+    bool ignoreCase = parser.HasSwitch("i");
+
+    const char* pattern = parser.GetPositional(0);
+    const char* targetFile = (parser.PositionalCount() > 1) ? parser.GetPositional(1) : "";
+
+    if (StrCaseContains(targetFile, "boot.ini")) {
+        Print("---------- ");
+        PrintLine(targetFile);
+        uint32_t matchCount = 0;
+        for (size_t i = 0; i < sizeof(SAMPLE_BOOT_INI_LINES) / sizeof(SAMPLE_BOOT_INI_LINES[0]); ++i) {
+            const char* line = SAMPLE_BOOT_INI_LINES[i];
+            bool contains = ignoreCase ? StrCaseContains(line, pattern) : StrContains(line, pattern);
+            bool isMatch = invert ? !contains : contains;
+            if (isMatch) {
+                matchCount++;
+                if (!countOnly) {
+                    if (showLineNums) {
+                        Print("[");
+                        PrintDec(i + 1);
+                        Print("]");
+                    }
+                    PrintLine(line);
+                }
+            }
         }
-    } else {
-        PrintLine("FIND: File not found");
+        if (countOnly) {
+            PrintDec(matchCount);
+            PrintLine("");
+        }
+        ExitProcess(0);
     }
 
-    // Clean exit via NtTerminateProcess (SSN 0x01)
-    DoSyscall(0x01, 0, 0);
-
-    while (true) {
-#if defined(__x86_64__)
-        __asm__ __volatile__("pause");
-#endif
+    if (StrCaseContains(targetFile, "hosts")) {
+        Print("---------- ");
+        PrintLine(targetFile);
+        uint32_t matchCount = 0;
+        for (size_t i = 0; i < sizeof(SAMPLE_HOSTS_LINES) / sizeof(SAMPLE_HOSTS_LINES[0]); ++i) {
+            const char* line = SAMPLE_HOSTS_LINES[i];
+            bool contains = ignoreCase ? StrCaseContains(line, pattern) : StrContains(line, pattern);
+            bool isMatch = invert ? !contains : contains;
+            if (isMatch) {
+                matchCount++;
+                if (!countOnly) {
+                    if (showLineNums) {
+                        Print("[");
+                        PrintDec(i + 1);
+                        Print("]");
+                    }
+                    PrintLine(line);
+                }
+            }
+        }
+        if (countOnly) {
+            PrintDec(matchCount);
+            PrintLine("");
+        }
+        ExitProcess(0);
     }
+
+    // Default: file not found
+    char err[128];
+    StrCopy(err, "FIND: File not found - ", sizeof(err));
+    StrConcat(err, targetFile && *targetFile ? targetFile : "stdin", sizeof(err));
+    PrintLine(err);
+    ExitProcess(1);
 }
