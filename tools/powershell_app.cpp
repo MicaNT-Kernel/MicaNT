@@ -73,9 +73,9 @@ void CmdletGetDate() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "MicaNT PowerShell\n"
-        "Copyright (C) 2026 MicaNT Foundation. All rights reserved.\n\n"
-        "MicaNT Object Automation Engine (Version 7.4.2-micant)\n\n"
+        "PowerShell 7.4.2 (MicaNT Sovereign Cutler Edition)\n"
+        "Built using PowerShell from Microsoft's GitHub repository (PowerShell/PowerShell, MIT License).\n"
+        "All copyright to names belong to Microsoft Corporation.\n\n"
         "PS C:\\MicaNT\\System32> $PSVersionTable\n";
 
     PrintStr(banner);

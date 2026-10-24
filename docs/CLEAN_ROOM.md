@@ -85,3 +85,11 @@ To facilitate seamless collaboration while upholding pristine legal boundaries:
    - First-party technical declarations, internal structures, and NT architectural definitions contributed through this channel are recognized as authorized contributions and exempted from "unauthorized leak" heuristic flags.
    - Core quality and security checks remain active: code must still be written in clean C++23, follow RAII principles, and be free of raw disassembler scrapings (e.g. IDA Pro / Ghidra labels).
 
+---
+
+## 6. Open-Source Component Attribution Standard
+
+Whenever an open-source tool, compiler, or interface created by Microsoft on GitHub (e.g. PowerShell, Windows Terminal, WinGet, win32metadata) is ported, integrated, or referenced within MicaNT, the source code and CLI banner must strictly follow the attribution formula defined in [docs/LEGAL.md § 9](LEGAL.md#9-open-source-ingestion--copyright-attribution-policy):
+> *"Built using [Component] from Microsoft's GitHub repository ([repo], MIT License). All copyright to names belong to Microsoft Corporation."*
+
+

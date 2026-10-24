@@ -238,6 +238,7 @@ SYSTEM32_TOOLS = [
     ("tools/displayswitch_app.cpp", "build/displayswitch.exe", "displayswitch.exe"),
     ("tools/tabcal_app.cpp", "build/tabcal.exe", "tabcal.exe"),
     ("tools/stikynot_app.cpp", "build/stikynot.exe", "stikynot.exe"),
+    ("tools/wt_app.cpp", "build/wt.exe", "wt.exe"),
 ]
 
 SYSTEM32_SERVICES = [

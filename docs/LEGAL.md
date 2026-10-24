@@ -117,3 +117,19 @@ We believe in open source, mutual respect, and intellectual property compliance.
 - **Authorized Microsoft OSPO Contribution Channel**: We have established an official OSPO clearance channel within our automated Clean-Room Sentinel CI. If Microsoft engineers contribute code with OSPO and legal clearance (e.g. from an `@microsoft.com` email or with an `MS-OSPO-Approved` commit trailer), our sentinel automatically recognizes the first-party open-source authorization and waives generic leak heuristics for official Microsoft technical structures. See [docs/CLEAN_ROOM.md § 5](CLEAN_ROOM.md#5-authorized-microsoft-employee--ospo-contribution-channel).
 
 Our goal is simple and sincere: **to honor a timeless architectural masterwork and build a faster, cleaner, more respectful computing foundation for everyone.**
+
+---
+
+## 9. Open-Source Ingestion & Copyright Attribution Policy
+
+MicaNT strictly adheres to a clean-room sovereign identity model across all executive kernel, userland runtime, and System32 administrative utilities:
+
+1. **Sovereign System32 Standard**: Built-in administrative tools, volume/filesystem utilities, diagnostic commands, and shell hosts (e.g., `cmd.exe`, `chkdsk.exe`, `sfc.exe`, `diskpart.exe`, `winver.exe`, `ipconfig.exe`, `net.exe`, `help.exe`) execute under 100% sovereign MicaNT Foundation identity and never display or simulate proprietary "Microsoft Windows" or "(c) Microsoft Corporation" branding.
+2. **Authorized Open-Source Ingestion**: The only time Microsoft copyright notices or references appear in MicaNT is when directly integrating, porting, or referencing an open-source project released by Microsoft on GitHub under permissive open-source licenses (MIT or Apache 2.0). These authorized components include:
+   - **Windows Terminal (`wt.exe`)**: Ported/built using the `microsoft/terminal` repository (MIT License).
+   - **PowerShell (`powershell.exe`)**: Interfaced/built using the `PowerShell/PowerShell` repository (MIT License).
+   - **WinGet (`winget.exe`)**: Package manager CLI based on the `microsoft/winget-cli` repository (MIT License).
+   - **Win32 Metadata (`win32metadata`)**: Interface schemas from the `microsoft/win32metadata` repository (MIT License).
+3. **Mandatory Attribution Formula**: Whenever referencing or using code or schemas from Microsoft's open-source GitHub repositories, MicaNT components must include the standard attribution notice:
+   > *"Built using [Component Name] from Microsoft's GitHub repository ([Repository URL or Path], MIT License). All copyright to names belong to Microsoft Corporation."*
+

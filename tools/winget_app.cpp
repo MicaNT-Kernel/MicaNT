@@ -36,8 +36,9 @@ void ShowSampleWinGet() noexcept {
 
 extern "C" void _start() noexcept {
     const char* banner =
-        "MicaNT Package Manager v1.7.10690 (MicaNT Sovereign Cutler Edition)\n"
-        "Copyright (c) 2026 MicaNT Foundation / Operating System Authority. All rights reserved.\n\n"
+        "Windows Package Manager v1.7.10690 (MicaNT Sovereign Cutler Edition)\n"
+        "Built using WinGet from Microsoft's GitHub repository (microsoft/winget-cli, MIT License).\n"
+        "All copyright to names belong to Microsoft Corporation.\n\n"
         "usage: winget [<command>] [<options>]\n\n"
         "The following commands are available:\n"
         "  install       Installs the given package\n"

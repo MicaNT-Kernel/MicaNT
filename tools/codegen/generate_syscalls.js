@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * MicaNT Metadata Ingestion & Code Generator
- * Parses Microsoft's win32metadata repository to extract NT system call interfaces,
- * types, and mappings into modern C++23 declarations.
+ * Built using win32metadata from Microsoft's GitHub repository (microsoft/win32metadata, MIT License).
+ * All copyright to names belong to Microsoft Corporation.
  */
 
 const fs = require('fs');
