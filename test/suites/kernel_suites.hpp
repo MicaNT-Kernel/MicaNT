@@ -21084,9 +21084,42 @@ inline void test_suite_352_cli_common_and_cmd_parity() {
         TEST_ASSERT(std::string(wgAttr).find("All copyright to names belong to Microsoft Corporation") != std::string::npos, "WinGet attribution must match standard format");
     }
 
+    // 5. Extended System32 CLI Parity & Multi-Switch Parsing
+    {
+        // driverquery /fo csv /nh
+        micant_cli::CommandLineParser pDq("driverquery /fo csv /nh", "driverquery.exe");
+        TEST_ASSERT(pDq.HasSwitch("nh"), "driverquery must parse /nh");
+        TEST_ASSERT(std::string(pDq.GetSwitchValue("fo")) == "csv", "driverquery /fo must equal csv");
+
+        // netstat -ano
+        micant_cli::CommandLineParser pNs("netstat -ano", "netstat.exe");
+        TEST_ASSERT(pNs.argc() == 2, "netstat -ano must tokenize into 2 args");
+
+        // sc qc RpcSs
+        micant_cli::CommandLineParser pSc("sc qc RpcSs", "sc.exe");
+        TEST_ASSERT(std::string(pSc.argv()[1]) == "qc", "sc verb must be qc");
+        TEST_ASSERT(std::string(pSc.argv()[2]) == "RpcSs", "sc target service must be RpcSs");
+
+        // robocopy C:\src D:\dst *.* /mir /r:3 /w:10
+        micant_cli::CommandLineParser pRc("robocopy C:\\src D:\\dst *.* /mir /r:3 /w:10", "robocopy.exe");
+        TEST_ASSERT(pRc.PositionalCount() == 3, "robocopy must have 3 positional arguments");
+        TEST_ASSERT(std::string(pRc.GetPositional(0)) == "C:\\src", "robocopy src must match");
+        TEST_ASSERT(std::string(pRc.GetPositional(1)) == "D:\\dst", "robocopy dst must match");
+        TEST_ASSERT(pRc.HasSwitch("mir"), "robocopy /mir must be detected");
+        TEST_ASSERT(std::string(pRc.GetSwitchValue("r")) == "3", "robocopy /r value must be 3");
+        TEST_ASSERT(std::string(pRc.GetSwitchValue("w")) == "10", "robocopy /w value must be 10");
+
+        // certutil -hashfile C:\boot.ini SHA256
+        micant_cli::CommandLineParser pCu("certutil -hashfile C:\\boot.ini SHA256", "certutil.exe");
+        TEST_ASSERT(pCu.HasSwitch("hashfile"), "certutil -hashfile must be detected");
+        TEST_ASSERT(std::string(pCu.argv()[2]) == "C:\\boot.ini", "certutil target file must match");
+        TEST_ASSERT(std::string(pCu.argv()[3]) == "SHA256", "certutil algorithm must match");
+    }
+
     std::cout << "  [Horizon 136 Track I Sovereign CLI Common & System32 Execution Parity (Unit #108)]\n"
               << "    CommandLineParser: Clean-Room Freestanding Argc/Argv Tokenization Verified OK\n"
               << "    Switch Extraction: /c, /k, /user, /priv, /svc, /pid, /fo:{TABLE|LIST|CSV} OK\n"
+              << "    Extended Parity: driverquery, netstat, sc, robocopy, certutil CLI verified OK\n"
               << "    Remaining Stream: cmd /c <string> Remaining Command Passing Verified OK\n"
               << "    Attribution Formula: Open-Source Component Attribution (PowerShell, wt, WinGet) Verified OK\n"
               << "    Error Catalog Resolution: Win32 & NTSTATUS Error Messages Parity (netmsg) OK\n"

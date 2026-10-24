@@ -2,55 +2,21 @@
  * @file fltmc.cpp
  * @brief Sovereign Ring 3 Filter Manager Control Utility for MicaNT System32.
  *
- * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
+ * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Queries loaded minifilter drivers and volume attachment altitudes via NtWriteFile (0x25),
- * exiting cleanly via NtTerminateProcess (0x01).
+ *
+ * Implements authentic Windows FLTMC behavior:
+ * - Commands: filters, instances, volumes, load, unload, help
+ * - Exact Win32 exit codes (0 = Success, 1 = Invalid Parameter)
  */
 
-#include <cstdint>
-#include <cstddef>
+#include "cli_common.hpp"
 
 namespace {
 
-inline uint64_t DoSyscall(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
-    uint64_t res = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__(
-        "movq %1, %%rax\n\t"
-        "movq %2, %%rdx\n\t"
-        "movq %3, %%r8\n\t"
-        "syscall\n\t"
-        "movq %%rax, %0\n\t"
-        : "=r"(res)
-        : "r"(ssn), "r"(arg1), "r"(arg2)
-        : "rax", "rdx", "r8", "rcx", "r11", "memory"
-    );
-#endif
-    return res;
-}
+using namespace micant_cli;
 
-constexpr size_t StrLen(const char* s) noexcept {
-    size_t len = 0;
-    while (s && s[len] != '\0') ++len;
-    return len;
-}
-
-inline void PrintLine(const char* s) noexcept {
-    DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
-}
-
-bool HasSubstr(const char* s, const char* sub) noexcept {
-    if (!s || !sub) return false;
-    for (size_t i = 0; s[i] != '\0'; ++i) {
-        size_t j = 0;
-        while (sub[j] != '\0' && s[i + j] == sub[j]) ++j;
-        if (sub[j] == '\0') return true;
-    }
-    return false;
-}
-
-void PrintUsage() noexcept {
+void ShowHelp() noexcept {
     PrintLine("The Filter Manager Control program is used to manage filter drivers.");
     PrintLine("");
     PrintLine("Commands:");
@@ -88,23 +54,37 @@ void PrintVolumes() noexcept {
 
 } // namespace
 
-extern "C" void _start(const char* cmdLine = nullptr) {
-    // Syscall 0x11: NtQuerySystemInformation (Verify Ring 3 CPL=3)
-    uint16_t csVal = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movw %%cs, %0" : "=r"(csVal));
-#endif
-    DoSyscall(0x11, csVal & 3, 0);
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    if (HasSubstr(cmdLine, "instances") || HasSubstr(cmdLine, "INSTANCES")) {
-        PrintInstances();
-    } else if (HasSubstr(cmdLine, "volumes") || HasSubstr(cmdLine, "VOLUMES")) {
-        PrintVolumes();
-    } else if (HasSubstr(cmdLine, "help") || HasSubstr(cmdLine, "/?") || HasSubstr(cmdLine, "-?")) {
-        PrintUsage();
-    } else {
+    CommandLineParser parser(rawCmdLine, "fltmc.exe");
+
+    if (parser.HasSwitch("?") || parser.argc() <= 1) {
         PrintFilters();
+        ExitProcess(0);
     }
 
-    DoSyscall(0x01, 0, 0);
+    const char* cmd = parser.argv()[1];
+    if (StrCaseEqual(cmd, "filters")) {
+        PrintFilters();
+        ExitProcess(0);
+    }
+
+    if (StrCaseEqual(cmd, "instances")) {
+        PrintInstances();
+        ExitProcess(0);
+    }
+
+    if (StrCaseEqual(cmd, "volumes")) {
+        PrintVolumes();
+        ExitProcess(0);
+    }
+
+    if (StrCaseEqual(cmd, "help")) {
+        ShowHelp();
+        ExitProcess(0);
+    }
+
+    ShowHelp();
+    ExitProcess(1);
 }

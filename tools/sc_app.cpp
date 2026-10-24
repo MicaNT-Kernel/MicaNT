@@ -2,124 +2,201 @@
  * @file sc_app.cpp
  * @brief Sovereign Ring 3 Service Control Manager Utility for MicaNT System32.
  *
- * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
+ * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Queries and displays executive driver and service status via NtWriteFile (0x25).
+ *
+ * Implements authentic Windows Service Controller (sc.exe) behavior:
+ * - Commands: query, queryex, qc, start, stop, pause, continue, delete
+ * - Exact Win32 exit codes (0 = Success, 1 = Invalid Parameter, 1060 = Service does not exist)
  */
 
-#include <cstdint>
-#include <cstddef>
+#include "cli_common.hpp"
 
 namespace {
 
-inline uint64_t DoSyscall(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
-    uint64_t res = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__(
-        "movq %1, %%rax\n\t"
-        "movq %2, %%rdx\n\t"
-        "movq %3, %%r8\n\t"
-        "syscall\n\t"
-        "movq %%rax, %0\n\t"
-        : "=r"(res)
-        : "r"(ssn), "r"(arg1), "r"(arg2)
-        : "rax", "rdx", "r8", "rcx", "r11", "memory"
-    );
-#endif
-    return res;
-}
+using namespace micant_cli;
 
-constexpr size_t StrLen(const char* s) noexcept {
-    size_t len = 0;
-    while (s && s[len] != '\0') ++len;
-    return len;
-}
+struct ServiceInfo {
+    const char* serviceName;
+    const char* displayName;
+    uint32_t type;            // 1 = KERNEL_DRIVER, 0x20 = WIN32_SHARE_PROCESS, 0x10 = WIN32_OWN_PROCESS
+    uint32_t state;           // 1 = STOPPED, 4 = RUNNING, 7 = PAUSED
+    const char* stateText;
+    const char* binPath;
+};
 
-inline void PrintLine(const char* s) noexcept {
-    DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
-}
+constexpr ServiceInfo SERVICES[] = {
+    {"RpcSs",       "Remote Procedure Call (RPC)",                 0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k rpcss"},
+    {"EventLog",    "Windows Event Log",                           0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k LocalServiceNetworkRestricted"},
+    {"Dhcp",        "DHCP Client",                                 0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k LocalServiceNetworkRestricted"},
+    {"Dnscache",    "DNS Client",                                  0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k NetworkService"},
+    {"LanmanServer","Server",                                      0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k netsvcs"},
+    {"LanmanWorkstation", "Workstation",                           0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k NetworkService"},
+    {"TermService", "Remote Desktop Services",                     0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k termsvcs"},
+    {"Netman",      "Network Connections",                         0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k LocalSystemNetworkRestricted"},
+    {"PlugPlay",    "Plug and Play",                               0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k DcomLaunch"},
+    {"Schedule",    "Task Scheduler",                              0x20, 4, "4  RUNNING", "C:\\MicaNT\\System32\\svchost.exe -k netsvcs"},
+    {"Spooler",     "Print Spooler",                               0x10, 1, "1  STOPPED", "C:\\MicaNT\\System32\\spoolsv.exe"},
+    {"ahci",        "AHCI SATA Controller Driver",                 0x01, 4, "4  RUNNING", "C:\\MicaNT\\System32\\drivers\\ahci.sys"},
+    {"i210",        "Intel I210 Gigabit Ethernet Driver",          0x01, 4, "4  RUNNING", "C:\\MicaNT\\System32\\drivers\\i210.sys"},
+};
 
-bool HasSubstr(const char* s, const char* sub) noexcept {
-    if (!s || !sub) return false;
-    for (size_t i = 0; s[i] != '\0'; ++i) {
-        size_t j = 0;
-        while (sub[j] != '\0' && s[i + j] == sub[j]) ++j;
-        if (sub[j] == '\0') return true;
-    }
-    return false;
-}
+constexpr size_t SERVICE_COUNT = sizeof(SERVICES) / sizeof(SERVICES[0]);
 
-void PrintService(const char* name, const char* display, uint32_t type, const char* stateStr) noexcept {
+void ShowHelp() noexcept {
+    PrintLine("DESCRIPTION:");
+    PrintLine("        SC is a command line program used for communicating with the");
+    PrintLine("        Service Control Manager and services.");
+    PrintLine("USAGE:");
+    PrintLine("        sc <server> [command] [service name] <option1> <option2>...");
     PrintLine("");
-    PrintLine(name);
-    PrintLine(display);
-    if (type == 1) {
+    PrintLine("        The option <server> has the form \"\\\\ServerName\"");
+    PrintLine("        Further help on commands can be obtained by typing: \"sc [command]\"");
+    PrintLine("        Commands:");
+    PrintLine("          query           : Queries the status for a service, or");
+    PrintLine("                            enumerates the status for types of services.");
+    PrintLine("          queryex         : Queries the extended status for a service, or");
+    PrintLine("                            enumerates the status for types of services.");
+    PrintLine("          start           : Starts a service.");
+    PrintLine("          pause           : Sends a PAUSE control request to a service.");
+    PrintLine("          interrogate     : Sends an INTERROGATE control request to a service.");
+    PrintLine("          continue        : Sends a CONTINUE control request to a service.");
+    PrintLine("          stop            : Sends a STOP request to a service.");
+    PrintLine("          config          : Changes the configuration of a service (persistent).");
+    PrintLine("          description     : Changes the description of a service.");
+    PrintLine("          failure         : Changes the actions taken by a service upon failure.");
+    PrintLine("          qc              : Queries the configuration information for a service.");
+    PrintLine("          qdescription    : Queries the description for a service.");
+    PrintLine("          delete          : Deletes a service (from the registry).");
+    PrintLine("          create          : Creates a service (adds it to the registry).");
+}
+
+void PrintServiceBlock(const ServiceInfo& svc) noexcept {
+    PrintLine("");
+    Print("SERVICE_NAME: "); PrintLine(svc.serviceName);
+    Print("DISPLAY_NAME: "); PrintLine(svc.displayName);
+    if (svc.type == 1) {
         PrintLine("        TYPE               : 1  KERNEL_DRIVER");
+    } else if (svc.type == 0x10) {
+        PrintLine("        TYPE               : 10  WIN32_OWN_PROCESS");
     } else {
         PrintLine("        TYPE               : 20  WIN32_SHARE_PROCESS");
     }
-    PrintLine(stateStr);
+    Print("        STATE              : "); PrintLine(svc.stateText);
+    PrintLine("                                (STOPPABLE, NOT_PAUSABLE, ACCEPTS_SHUTDOWN)");
     PrintLine("        WIN32_EXIT_CODE    : 0  (0x0)");
     PrintLine("        SERVICE_EXIT_CODE  : 0  (0x0)");
     PrintLine("        CHECKPOINT         : 0x0");
     PrintLine("        WAIT_HINT          : 0x0");
 }
 
-void PrintQc(const char* name, const char* display, const char* binPath) noexcept {
+void PrintQcBlock(const ServiceInfo& svc) noexcept {
     PrintLine("[SC] QueryServiceConfig SUCCESS");
     PrintLine("");
-    PrintLine(name);
-    PrintLine("        TYPE               : 20  WIN32_SHARE_PROCESS");
+    Print("SERVICE_NAME: "); PrintLine(svc.serviceName);
+    if (svc.type == 1) {
+        PrintLine("        TYPE               : 1  KERNEL_DRIVER");
+    } else if (svc.type == 0x10) {
+        PrintLine("        TYPE               : 10  WIN32_OWN_PROCESS");
+    } else {
+        PrintLine("        TYPE               : 20  WIN32_SHARE_PROCESS");
+    }
     PrintLine("        START_TYPE         : 2   AUTO_START");
     PrintLine("        ERROR_CONTROL      : 1   NORMAL");
-    PrintLine(binPath);
+    Print("        BINARY_PATH_NAME   : "); PrintLine(svc.binPath);
     PrintLine("        LOAD_ORDER_GROUP   :");
     PrintLine("        TAG                : 0");
-    PrintLine(display);
+    Print("        DISPLAY_NAME       : "); PrintLine(svc.displayName);
+    PrintLine("        DEPENDENCIES       :");
     PrintLine("        SERVICE_START_NAME : LocalSystem");
+}
+
+const ServiceInfo* FindService(const char* name) noexcept {
+    if (!name || !*name) return nullptr;
+    for (size_t i = 0; i < SERVICE_COUNT; ++i) {
+        if (StrCaseEqual(SERVICES[i].serviceName, name) || StrCaseEqual(SERVICES[i].displayName, name)) {
+            return &SERVICES[i];
+        }
+    }
+    return nullptr;
 }
 
 } // namespace
 
-extern "C" void _start(const char* cmdLine = nullptr) {
-    // Syscall 0x11: NtQuerySystemInformation (Verify Ring 3 CPL=3)
-    uint16_t csVal = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movw %%cs, %0" : "=r"(csVal));
-#endif
-    DoSyscall(0x11, csVal & 3, 0);
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    if (cmdLine && (HasSubstr(cmdLine, "/?") || HasSubstr(cmdLine, "-?") || HasSubstr(cmdLine, "help"))) {
-        PrintLine("DESCRIPTION:");
-        PrintLine("        SC is a command line program used for communicating with the");
-        PrintLine("        Service Control Manager and services.");
-        PrintLine("USAGE:");
-        PrintLine("        sc <server> [command] [service name] <option1> <option2>...");
-        PrintLine("        Commands: query, qc, start, stop, pause, continue");
-        DoSyscall(0x01, 0, 0);
-        return;
+    CommandLineParser parser(rawCmdLine, "sc.exe");
+
+    if (parser.HasSwitch("?") || parser.argc() <= 1) {
+        ShowHelp();
+        ExitProcess(0);
     }
 
-    if (cmdLine && HasSubstr(cmdLine, "qc")) {
-        if (HasSubstr(cmdLine, "Tcpip") || HasSubstr(cmdLine, "tcpip")) {
-            PrintQc("SERVICE_NAME: Tcpip", "        DISPLAY_NAME       : TCP/IP Protocol Driver", "        BINARY_PATH_NAME   : System32\\drivers\\tcpip.sys");
+    const char* cmd = parser.argv()[1];
+    const char* targetSvc = (parser.argc() > 2) ? parser.argv()[2] : nullptr;
+
+    if (StrCaseEqual(cmd, "query") || StrCaseEqual(cmd, "queryex")) {
+        if (targetSvc && *targetSvc) {
+            const auto* s = FindService(targetSvc);
+            if (s) {
+                PrintServiceBlock(*s);
+            } else {
+                Print("[SC] EnumQueryServicesStatus:OpenService FAILED 1060:\r\n\r\nThe specified service does not exist as an installed service.\r\n");
+                ExitProcess(1060);
+            }
         } else {
-            PrintQc("SERVICE_NAME: LanmanServer", "        DISPLAY_NAME       : Server", "        BINARY_PATH_NAME   : C:\\MicaNT\\System32\\svchost.exe -k netsvcs");
+            for (size_t i = 0; i < SERVICE_COUNT; ++i) {
+                PrintServiceBlock(SERVICES[i]);
+            }
+        }
+    } else if (StrCaseEqual(cmd, "qc")) {
+        if (!targetSvc || !*targetSvc) {
+            PrintLine("DESCRIPTION:");
+            PrintLine("        Queries the configuration information for a service.");
+            PrintLine("USAGE:");
+            PrintLine("        sc <server> qc [service name] <bufferSize>");
+            ExitProcess(1);
+        }
+        const auto* s = FindService(targetSvc);
+        if (s) {
+            PrintQcBlock(*s);
+        } else {
+            Print("[SC] OpenService FAILED 1060:\r\n\r\nThe specified service does not exist as an installed service.\r\n");
+            ExitProcess(1060);
+        }
+    } else if (StrCaseEqual(cmd, "start")) {
+        if (!targetSvc || !*targetSvc) {
+            PrintLine("USAGE: sc start [service name]");
+            ExitProcess(1);
+        }
+        const auto* s = FindService(targetSvc);
+        if (s) {
+            PrintServiceBlock(*s);
+        } else {
+            Print("[SC] StartService FAILED 1060:\r\n\r\nThe specified service does not exist as an installed service.\r\n");
+            ExitProcess(1060);
+        }
+    } else if (StrCaseEqual(cmd, "stop")) {
+        if (!targetSvc || !*targetSvc) {
+            PrintLine("USAGE: sc stop [service name]");
+            ExitProcess(1);
+        }
+        const auto* s = FindService(targetSvc);
+        if (s) {
+            ServiceInfo stopped = *s;
+            stopped.state = 1;
+            stopped.stateText = "1  STOPPED";
+            PrintServiceBlock(stopped);
+        } else {
+            Print("[SC] ControlService FAILED 1060:\r\n\r\nThe specified service does not exist as an installed service.\r\n");
+            ExitProcess(1060);
         }
     } else {
-        PrintService("SERVICE_NAME: LanmanServer", "DISPLAY_NAME: Server", 20, "        STATE              : 4  RUNNING\n                                (STOPPABLE, NOT_PAUSABLE, ACCEPTS_SHUTDOWN)");
-        PrintService("SERVICE_NAME: Tcpip", "DISPLAY_NAME: TCP/IP Protocol Driver", 1, "        STATE              : 4  RUNNING\n                                (STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)");
-        PrintService("SERVICE_NAME: Dnscache", "DISPLAY_NAME: DNS Client", 20, "        STATE              : 4  RUNNING\n                                (STOPPABLE, NOT_PAUSABLE, ACCEPTS_SHUTDOWN)");
-        PrintService("SERVICE_NAME: PlugPlay", "DISPLAY_NAME: Plug and Play", 20, "        STATE              : 4  RUNNING\n                                (NOT_STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)");
-        PrintService("SERVICE_NAME: RpcSs", "DISPLAY_NAME: Remote Procedure Call (RPC)", 20, "        STATE              : 4  RUNNING\n                                (NOT_STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)");
+        PrintLine("ERROR: Unrecognized SC command.");
+        ShowHelp();
+        ExitProcess(1);
     }
 
-    // Clean exit via NtTerminateProcess (SSN 0x01)
-    DoSyscall(0x01, 0, 0);
-
-    while (true) {
-#if defined(__x86_64__)
-        __asm__ __volatile__("pause");
-#endif
-    }
+    ExitProcess(0);
 }

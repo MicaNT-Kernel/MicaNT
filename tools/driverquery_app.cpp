@@ -2,112 +2,187 @@
  * @file driverquery_app.cpp
  * @brief Sovereign Ring 3 Loaded Executive Driver Query Utility for MicaNT System32.
  *
- * Freestanding ISO C++23. Clean-Room design. Zero proprietary headers.
+ * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Queries and formats executive driver tables via NtWriteFile (0x25).
+ *
+ * Implements authentic Windows driverquery behavior:
+ * - Switches: /FO {TABLE|LIST|CSV}, /NH, /V, /SI, /?
+ * - Exact Win32 exit codes (0 = Success, 1 = Invalid Parameter)
  */
 
-#include <cstdint>
-#include <cstddef>
+#include "cli_common.hpp"
 
 namespace {
 
-inline uint64_t DoSyscall(uint64_t ssn, uint64_t arg1 = 0, uint64_t arg2 = 0) noexcept {
-    uint64_t res = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__(
-        "movq %1, %%rax\n\t"
-        "movq %2, %%rdx\n\t"
-        "movq %3, %%r8\n\t"
-        "syscall\n\t"
-        "movq %%rax, %0\n\t"
-        : "=r"(res)
-        : "r"(ssn), "r"(arg1), "r"(arg2)
-        : "rax", "rdx", "r8", "rcx", "r11", "memory"
-    );
-#endif
-    return res;
+using namespace micant_cli;
+
+struct DriverEntry {
+    const char* moduleName;
+    const char* displayName;
+    const char* description;
+    const char* driverType;
+    const char* startMode;
+    const char* status;
+    const char* linkDate;
+};
+
+constexpr DriverEntry DRIVERS[] = {
+    {"ntoskrnl", "NT Kernel & System",     "NT Kernel & System",     "Kernel",      "Boot",   "Running", "10/22/2026 12:00:00 PM"},
+    {"hal",      "Hardware Abstraction L", "Hardware Abstraction L", "Kernel",      "Boot",   "Running", "10/22/2026 12:00:00 PM"},
+    {"bootvid",  "Boot Video Driver",      "Boot Video Driver",      "Kernel",      "Boot",   "Running", "10/22/2026 12:00:00 PM"},
+    {"ahci",     "AHCI SATA Controller",   "AHCI SATA Controller",   "Kernel",      "Boot",   "Running", "10/22/2026 12:00:00 PM"},
+    {"i210",     "Intel I210 Gigabit Net", "Intel I210 Gigabit Net", "Kernel",      "System", "Running", "10/22/2026 12:00:00 PM"},
+    {"extfs",    "Ext4 Filesystem Filter", "Ext4 Filesystem Filter", "File System", "System", "Running", "10/22/2026 12:00:00 PM"},
+    {"fltmgr",   "Filter Manager",         "Filter Manager",         "File System", "Boot",   "Running", "10/22/2026 12:00:00 PM"},
+    {"xhci",     "xHCI USB Host Controll", "xHCI USB Host Controll", "Kernel",      "Boot",   "Running", "10/22/2026 12:00:00 PM"},
+    {"usbhub",   "USB Hub Driver",         "USB Hub Driver",         "Kernel",      "Boot",   "Running", "10/22/2026 12:00:00 PM"},
+};
+
+constexpr size_t DRIVER_COUNT = sizeof(DRIVERS) / sizeof(DRIVERS[0]);
+
+void ShowHelp() noexcept {
+    PrintLine("DRIVERQUERY [/S system [/U username [/P [password]]]]");
+    PrintLine("            [/FO format] [/NH] [/SI] [/V]");
+    PrintLine("Description:");
+    PrintLine("    Enables an administrator to enumerate and display the list of");
+    PrintLine("    installed device drivers along with their properties.");
+    PrintLine("");
+    PrintLine("Parameter List:");
+    PrintLine("      /S     system           Specifies the remote system to connect to.");
+    PrintLine("      /U     [domain\\]user    Specifies the user context under which the");
+    PrintLine("                              command should execute.");
+    PrintLine("      /P     [password]       Specifies the password for the given user context.");
+    PrintLine("      /FO    format           Specifies the type of output to display.");
+    PrintLine("                              Valid values are \"TABLE\", \"LIST\", \"CSV\".");
+    PrintLine("      /NH                     Specifies that the \"Column Header\" should");
+    PrintLine("                              not be displayed. Valid for \"TABLE\" and \"CSV\".");
+    PrintLine("      /SI                     Provides information about signed drivers.");
+    PrintLine("      /V                      Displays verbose output.");
+    PrintLine("      /?                      Displays this help message.");
+    PrintLine("");
+    PrintLine("Examples:");
+    PrintLine("    DRIVERQUERY");
+    PrintLine("    DRIVERQUERY /FO CSV /SI");
+    PrintLine("    DRIVERQUERY /NH /V");
 }
 
-constexpr size_t StrLen(const char* s) noexcept {
-    size_t len = 0;
-    while (s && s[len] != '\0') ++len;
-    return len;
-}
-
-inline void PrintLine(const char* s) noexcept {
-    DoSyscall(0x25, reinterpret_cast<uint64_t>(s), StrLen(s));
-}
-
-bool HasSubstr(const char* s, const char* sub) noexcept {
-    if (!s || !sub) return false;
-    for (size_t i = 0; s[i] != '\0'; ++i) {
-        size_t j = 0;
-        while (sub[j] != '\0' && s[i + j] == sub[j]) ++j;
-        if (sub[j] == '\0') return true;
+void PrintTable(bool verbose, bool noHeader) noexcept {
+    if (!noHeader) {
+        if (verbose) {
+            PrintLine("Module Name Display Name           Description            Driver Type Start Mode Status   Accept Stop Accept Pause");
+            PrintLine("=========== ====================== ====================== =========== ========== ======== =========== ============");
+        } else {
+            PrintLine("Module Name  Display Name           Driver Type   Link Date");
+            PrintLine("===========  ====================== ============= ======================");
+        }
     }
-    return false;
+
+    for (size_t i = 0; i < DRIVER_COUNT; ++i) {
+        const auto& d = DRIVERS[i];
+        if (verbose) {
+            Print(d.moduleName);
+            for (size_t k = StrLen(d.moduleName); k < 12; ++k) PrintChar(' ');
+            Print(d.displayName);
+            for (size_t k = StrLen(d.displayName); k < 23; ++k) PrintChar(' ');
+            Print(d.description);
+            for (size_t k = StrLen(d.description); k < 23; ++k) PrintChar(' ');
+            Print(d.driverType);
+            for (size_t k = StrLen(d.driverType); k < 12; ++k) PrintChar(' ');
+            Print(d.startMode);
+            for (size_t k = StrLen(d.startMode); k < 11; ++k) PrintChar(' ');
+            Print(d.status);
+            for (size_t k = StrLen(d.status); k < 9; ++k) PrintChar(' ');
+            PrintLine("TRUE        FALSE       ");
+        } else {
+            Print(d.moduleName);
+            for (size_t k = StrLen(d.moduleName); k < 13; ++k) PrintChar(' ');
+            Print(d.displayName);
+            for (size_t k = StrLen(d.displayName); k < 23; ++k) PrintChar(' ');
+            Print(d.driverType);
+            for (size_t k = StrLen(d.driverType); k < 14; ++k) PrintChar(' ');
+            PrintLine(d.linkDate);
+        }
+    }
 }
 
-void PrintStandardTable() noexcept {
-    PrintLine("Module Name  Display Name           Driver Type   Link Date");
-    PrintLine("===========  ====================== ============= ======================");
-    PrintLine("ntoskrnl     NT Kernel & System     Kernel        10/22/2026 12:00:00 PM");
-    PrintLine("hal          Hardware Abstraction L Kernel        10/22/2026 12:00:00 PM");
-    PrintLine("bootvid      Boot Video Driver      Kernel        10/22/2026 12:00:00 PM");
-    PrintLine("ahci         AHCI SATA Controller   Kernel        10/22/2026 12:00:00 PM");
-    PrintLine("i210         Intel I210 Gigabit Net Kernel        10/22/2026 12:00:00 PM");
-    PrintLine("extfs        Ext4 Filesystem Filter File System   10/22/2026 12:00:00 PM");
-    PrintLine("fltmgr       Filter Manager         File System   10/22/2026 12:00:00 PM");
-    PrintLine("xhci         xHCI USB Host Controll Kernel        10/22/2026 12:00:00 PM");
-    PrintLine("usbhub       USB Hub Driver         Kernel        10/22/2026 12:00:00 PM");
+void PrintCsv(bool verbose, bool noHeader) noexcept {
+    if (!noHeader) {
+        if (verbose) {
+            PrintLine("\"Module Name\",\"Display Name\",\"Description\",\"Driver Type\",\"Start Mode\",\"Status\",\"Accept Stop\",\"Accept Pause\"");
+        } else {
+            PrintLine("\"Module Name\",\"Display Name\",\"Driver Type\",\"Link Date\"");
+        }
+    }
+
+    for (size_t i = 0; i < DRIVER_COUNT; ++i) {
+        const auto& d = DRIVERS[i];
+        PrintChar('"'); Print(d.moduleName); Print("\",\"");
+        Print(d.displayName); Print("\",\"");
+        if (verbose) {
+            Print(d.description); Print("\",\"");
+            Print(d.driverType); Print("\",\"");
+            Print(d.startMode); Print("\",\"");
+            Print(d.status); Print("\",\"TRUE\",\"FALSE\"");
+        } else {
+            Print(d.driverType); Print("\",\"");
+            Print(d.linkDate); PrintChar('"');
+        }
+        PrintLine("");
+    }
 }
 
-void PrintVerboseTable() noexcept {
-    PrintLine("Module Name Display Name           Description            Driver Type Start Mode Status   Accept Stop Accept Pause");
-    PrintLine("=========== ====================== ====================== =========== ========== ======== =========== ============");
-    PrintLine("ntoskrnl    NT Kernel & System     NT Kernel & System     Kernel      Boot       Running  FALSE       FALSE       ");
-    PrintLine("hal         Hardware Abstraction L Hardware Abstraction L Kernel      Boot       Running  FALSE       FALSE       ");
-    PrintLine("bootvid     Boot Video Driver      Boot Video Driver      Kernel      Boot       Running  FALSE       FALSE       ");
-    PrintLine("ahci        AHCI SATA Controller   AHCI SATA Controller   Kernel      Boot       Running  TRUE        FALSE       ");
-    PrintLine("i210        Intel I210 Gigabit Net Intel I210 Gigabit Net Kernel      System     Running  TRUE        FALSE       ");
-    PrintLine("extfs       Ext4 Filesystem Filter Ext4 Filesystem Filter File System System     Running  TRUE        FALSE       ");
-    PrintLine("fltmgr      Filter Manager         Filter Manager         File System Boot       Running  TRUE        FALSE       ");
-    PrintLine("xhci        xHCI USB Host Controll xHCI USB Host Controll Kernel      Boot       Running  TRUE        FALSE       ");
-    PrintLine("usbhub      USB Hub Driver         USB Hub Driver         Kernel      Boot       Running  TRUE        FALSE       ");
+void PrintList(bool verbose) noexcept {
+    for (size_t i = 0; i < DRIVER_COUNT; ++i) {
+        const auto& d = DRIVERS[i];
+        Print("Module Name:  "); PrintLine(d.moduleName);
+        Print("Display Name: "); PrintLine(d.displayName);
+        if (verbose) {
+            Print("Description:  "); PrintLine(d.description);
+        }
+        Print("Driver Type:  "); PrintLine(d.driverType);
+        if (verbose) {
+            Print("Start Mode:   "); PrintLine(d.startMode);
+            Print("Status:       "); PrintLine(d.status);
+            Print("Accept Stop:  "); PrintLine("TRUE");
+            Print("Accept Pause: "); PrintLine("FALSE");
+        } else {
+            Print("Link Date:    "); PrintLine(d.linkDate);
+        }
+        PrintLine("");
+    }
 }
 
 } // namespace
 
-extern "C" void _start(const char* cmdLine = nullptr) {
-    // Syscall 0x11: NtQuerySystemInformation (Verify Ring 3 CPL=3)
-    uint16_t csVal = 0;
-#if defined(__x86_64__)
-    __asm__ __volatile__("movw %%cs, %0" : "=r"(csVal));
-#endif
-    DoSyscall(0x11, csVal & 3, 0);
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    if (cmdLine && (HasSubstr(cmdLine, "/?") || HasSubstr(cmdLine, "-?"))) {
-        PrintLine("DRIVERQUERY [/S system [/U username [/P [password]]]] [/FO format] [/V]");
-        PrintLine("Description:");
-        PrintLine("    Enables an administrator to enumerate and display the list of");
-        PrintLine("    installed device drivers along with their properties.");
-        DoSyscall(0x01, 0, 0);
-        return;
+    CommandLineParser parser(rawCmdLine, "driverquery.exe");
+
+    if (parser.HasSwitch("?")) {
+        ShowHelp();
+        ExitProcess(0);
     }
 
-    if (cmdLine && (HasSubstr(cmdLine, "/v") || HasSubstr(cmdLine, "/V") || HasSubstr(cmdLine, "-v"))) {
-        PrintVerboseTable();
+    bool verbose = parser.HasSwitch("v");
+    bool noHeader = parser.HasSwitch("nh");
+
+    const char* fo = parser.GetSwitchValue("fo");
+    if (!fo) {
+        PrintTable(verbose, noHeader);
+        ExitProcess(0);
+    }
+
+    if (StrCaseEqual(fo, "table")) {
+        PrintTable(verbose, noHeader);
+    } else if (StrCaseEqual(fo, "csv")) {
+        PrintCsv(verbose, noHeader);
+    } else if (StrCaseEqual(fo, "list")) {
+        PrintList(verbose);
     } else {
-        PrintStandardTable();
+        PrintLine("ERROR: Invalid format value. Valid values are \"TABLE\", \"LIST\", and \"CSV\".");
+        ExitProcess(1);
     }
 
-    // Clean exit via NtTerminateProcess (SSN 0x01)
-    DoSyscall(0x01, 0, 0);
-
-    while (true) {
-#if defined(__x86_64__)
-        __asm__ __volatile__("pause");
-#endif
-    }
+    ExitProcess(0);
 }
