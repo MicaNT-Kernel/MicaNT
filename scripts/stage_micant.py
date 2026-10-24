@@ -396,9 +396,20 @@ def run_local_build():
     sz_b = os.path.getsize(BENCH_SOURCE)
     print(f"      bench.exe Compiled OK ({sz_b:,} bytes)")
 
-    # Compile System32 Standalone Ring 3 Utilities
+    cli_common_path = os.path.join(REPO_ROOT, "tools/cli_common.hpp")
+    cli_mtime = os.path.getmtime(cli_common_path) if os.path.exists(cli_common_path) else 0
+
+    # Compile System32 Standalone Ring 3 Utilities (Incremental)
     print(f"      Compiling {len(SYSTEM32_TOOLS)} System32 Utilities & Desktop Apps...")
     for src, out_path, name in SYSTEM32_TOOLS:
+        full_src = os.path.join(REPO_ROOT, src)
+        full_out = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(full_out) and os.path.exists(full_src):
+            src_mtime = os.path.getmtime(full_src)
+            out_mtime = os.path.getmtime(full_out)
+            if out_mtime >= max(src_mtime, cli_mtime):
+                continue
+
         c_cmd = [
             "clang++",
             "-target", "x86_64-w64-mingw32",
@@ -423,9 +434,15 @@ def run_local_build():
             print(f"[FATAL] {name} build failed:\n{r.stderr}")
             sys.exit(1)
 
-    # Compile System32 Subsystem Services
+    # Compile System32 Subsystem Services (Incremental)
     print("      Compiling 7 System32 Subsystem Services...")
     for src, out_path, name in SYSTEM32_SERVICES:
+        full_src = os.path.join(REPO_ROOT, src)
+        full_out = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(full_out) and os.path.exists(full_src):
+            if os.path.getmtime(full_out) >= os.path.getmtime(full_src):
+                continue
+
         c_cmd = [
             "clang++",
             "-target", "x86_64-w64-mingw32",
@@ -450,9 +467,15 @@ def run_local_build():
             print(f"[FATAL] {name} build failed:\n{r.stderr}")
             sys.exit(1)
 
-    # Compile 12 Known DLLs (PE32+ Shared Libraries)
+    # Compile 12 Known DLLs (PE32+ Shared Libraries, Incremental)
     print("      Compiling 12 Known DLLs...")
     for src, out_path, name in KNOWN_DLLS:
+        full_src = os.path.join(REPO_ROOT, src)
+        full_out = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(full_out) and os.path.exists(full_src):
+            if os.path.getmtime(full_out) >= os.path.getmtime(full_src):
+                continue
+
         c_cmd = [
             "clang++",
             "-target", "x86_64-w64-mingw32",
@@ -469,9 +492,15 @@ def run_local_build():
             print(f"[FATAL] {name} build failed:\n{r.stderr}")
             sys.exit(1)
 
-    # Compile Kernel Driver Stubs (PE32+ Native Drivers)
+    # Compile Kernel Driver Stubs (PE32+ Native Drivers, Incremental)
     print("      Compiling 9 Kernel Driver Stubs (.sys)...")
     for src, out_path, name in DRIVER_STUBS:
+        full_src = os.path.join(REPO_ROOT, src)
+        full_out = os.path.join(REPO_ROOT, out_path)
+        if os.path.exists(full_out) and os.path.exists(full_src):
+            if os.path.getmtime(full_out) >= os.path.getmtime(full_src):
+                continue
+
         c_cmd = [
             "clang++",
             "-target", "x86_64-w64-mingw32",
