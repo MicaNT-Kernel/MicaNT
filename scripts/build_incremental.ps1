@@ -121,7 +121,8 @@ try {
         @{ Src = "kernel/ps/winnt_ucrtbase_runtime_abi.cpp";           Obj = "ps_winnt_ucrtbase_runtime_abi.o" },
         @{ Src = "kernel/ps/winnt_vcruntime140_eh_abi.cpp";            Obj = "ps_winnt_vcruntime140_eh_abi.o" },
         @{ Src = "kernel/ps/winnt_msvcp140_pdata_unwind_44dll_seal.cpp"; Obj = "ps_winnt_msvcp140_pdata_unwind_44dll_seal.o" },
-        @{ Src = "kernel/fsrtl/extfs.cpp";                             Obj = "fsrtl_extfs.o" }
+        @{ Src = "kernel/fsrtl/extfs.cpp";                             Obj = "fsrtl_extfs.o" },
+        @{ Src = "kernel/fsrtl/ntfs.cpp";                              Obj = "fsrtl_ntfs.o" }
     )
 
     $staleUnits = @()

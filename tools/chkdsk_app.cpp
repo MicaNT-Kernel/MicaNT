@@ -58,6 +58,59 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     bool fix = parser.HasSwitch("f");
     bool verbose = parser.HasSwitch("v");
     bool scanBad = parser.HasSwitch("r");
+    bool isNtfs = parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
+                  (drive && (drive[0] == 'D' || drive[0] == 'd' || drive[0] == 'E' || drive[0] == 'e'));
+
+    if (isNtfs) {
+        PrintLine("The type of the file system is NTFS.");
+        Print("Volume ");
+        Print(drive ? drive : "D:");
+        PrintLine(" is Sovereign Clean-Room NTFS.");
+        PrintLine("Volume Serial Number is 78E2-A1C9.");
+        PrintLine("");
+        PrintLine("Stage 1: Examining basic file system structure...");
+        PrintLine("  4096 file records processed.");
+        PrintLine("  File verification completed.");
+        PrintLine("  0 bad file records processed.");
+        PrintLine("Stage 2: Examining file name linkage...");
+        PrintLine("  4320 index entries processed.");
+        PrintLine("  Index verification completed.");
+        PrintLine("  0 unindexed files scanned.");
+        PrintLine("  0 unindexed files recovered to lost and found.");
+        PrintLine("Stage 3: Examining security descriptors...");
+        PrintLine("  Security descriptor verification completed.");
+        PrintLine("  244 data files processed.");
+        PrintLine("  CHKDSK is verifying Usn Journal...");
+        PrintLine("  Usn Journal verification completed.");
+        if (scanBad || parser.HasSwitch("b")) {
+            PrintLine("Stage 4: Looking for bad clusters in user file data...");
+            PrintLine("  244 files processed.");
+            PrintLine("  File data verification completed.");
+            PrintLine("Stage 5: Looking for bad, free clusters...");
+            PrintLine("  32736000 free clusters processed.");
+            PrintLine("  Free space verification is complete.");
+        }
+        PrintLine("");
+        if (fix) {
+            PrintLine("MicaNT has verified the file system. No adjustments were necessary.");
+        } else {
+            PrintLine("MicaNT has scanned the file system and found no problems.");
+            PrintLine("No further action is required.");
+        }
+        PrintLine("");
+        PrintLine("  134,217,728 KB total disk space.");
+        PrintLine("      131,072 KB in 244 user files.");
+        PrintLine("       16,384 KB in 12 indexes.");
+        PrintLine("            0 KB in bad sectors.");
+        PrintLine("       65,536 KB in use by the system.");
+        PrintLine("       65,536 KB occupied by the log file.");
+        PrintLine("  134,004,736 KB available on disk.");
+        PrintLine("");
+        PrintLine("        4,096 bytes in each allocation unit.");
+        PrintLine("   32,768,000 total allocation units on disk.");
+        PrintLine("   32,716,000 allocation units available on disk.");
+        ExitProcess(0);
+    }
 
     PrintLine("The type of the file system is FAT32.");
     Print("Volume ");

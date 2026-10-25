@@ -276,6 +276,7 @@ DRIVER_STUBS = [
     ("tools/drivers/driver_template.cpp", "build/extfs.sys", "extfs.sys"),
     ("tools/drivers/driver_template.cpp", "build/null.sys", "null.sys"),
     ("tools/drivers/driver_template.cpp", "build/beep.sys", "beep.sys"),
+    ("tools/drivers/ntfs_driver.cpp", "build/ntfs.sys", "ntfs.sys"),
 ]
 
 NETWORK_FILES = [
@@ -493,7 +494,7 @@ def run_local_build():
             sys.exit(1)
 
     # Compile Kernel Driver Stubs (PE32+ Native Drivers, Incremental)
-    print("      Compiling 9 Kernel Driver Stubs (.sys)...")
+    print("      Compiling 10 Kernel Driver Stubs (.sys)...")
     for src, out_path, name in DRIVER_STUBS:
         full_src = os.path.join(REPO_ROOT, src)
         full_out = os.path.join(REPO_ROOT, out_path)

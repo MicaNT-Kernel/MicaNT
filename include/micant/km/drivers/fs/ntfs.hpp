@@ -31,6 +31,7 @@
 #include "micant/shared/ntdef.hpp"
 #include "micant/shared/ntstatus.hpp"
 #include "micant/km/drivers/storage/storage.hpp"
+#include "micant/km/executive/io.hpp"
 
 namespace micant::ntfs {
 
@@ -538,6 +539,25 @@ struct NtfsFileRecord {
     std::vector<uint64_t> childRecords;
 };
 
+#pragma pack(push, 1)
+struct NTFS_VOLUME_DATA_BUFFER {
+    uint64_t volumeSerialNumber{0};
+    uint64_t numberSectors{0};
+    uint64_t totalClusters{0};
+    uint64_t freeClusters{0};
+    uint64_t totalReserved{0};
+    uint32_t bytesPerSector{NTFS_SECTOR_SIZE};
+    uint32_t bytesPerCluster{DEFAULT_CLUSTER_SIZE};
+    uint32_t bytesPerFileRecordSegment{MFT_RECORD_SIZE};
+    uint32_t clustersPerFileRecordSegment{0};
+    uint64_t mftValidDataLength{0};
+    uint64_t mftStartLcn{4};
+    uint64_t mft2StartLcn{16};
+    uint64_t mftZoneStart{4};
+    uint64_t mftZoneEnd{0};
+};
+#pragma pack(pop)
+
 class NtfsFileSystem {
 public:
     NtfsFileSystem() = default;
@@ -587,6 +607,8 @@ public:
             return stWrite;
         }
 
+        totalSectors_ = totalSectors;
+
         // Initialize Internal MFT
         records_.clear();
         nextRecordNum_ = MFT_REC_USER_START;
@@ -608,14 +630,43 @@ public:
         auto recVol = createRecordInternal(MFT_REC_VOLUME, std::wstring(volumeLabel), 0);
         (void)recVol;
 
+        // System Record 4: $AttrDef
+        auto recAttrDef = createRecordInternal(MFT_REC_ATTRDEF, L"$AttrDef", 0);
+        (void)recAttrDef;
+
         // System Record 5: Root Directory "\"
         auto recRoot = createRecordInternal(MFT_REC_ROOT, L".", MFT_RECORD_DIRECTORY);
         recRoot->parentRecord = MFT_REC_ROOT;
+
+        // System Record 6: $Bitmap
+        auto recBitmap = createRecordInternal(MFT_REC_BITMAP, L"$Bitmap", 0);
+        (void)recBitmap;
+
+        // System Record 7: $Boot
+        auto recBoot = createRecordInternal(MFT_REC_BOOT, L"$Boot", 0);
+        (void)recBoot;
+
+        // System Record 8: $BadClus
+        auto recBadClus = createRecordInternal(MFT_REC_BADCLUST, L"$BadClus", 0);
+        (void)recBadClus;
+
+        // System Record 9: $Secure
+        auto recSecure = createRecordInternal(MFT_REC_SECURE, L"$Secure", 0);
+        (void)recSecure;
+
+        // System Record 10: $UpCase
+        auto recUpCase = createRecordInternal(MFT_REC_UPCASE, L"$UpCase", 0);
+        (void)recUpCase;
+
+        // System Record 11: $Extend
+        auto recExtend = createRecordInternal(MFT_REC_EXTEND, L"$Extend", MFT_RECORD_DIRECTORY);
+        (void)recExtend;
 
         journal_->logAction(LogOperation::CreateFileRecord, MFT_REC_ROOT);
         journal_->checkpoint();
 
         formatted_ = true;
+        dirty_ = false;
         return NtStatus::Success;
     }
 
@@ -641,6 +692,7 @@ public:
         volumeSerialNumber_ = boot->volumeSerialNumber;
         clusterSize_ = boot->sectorsPerCluster * boot->bytesPerSector;
         mftStartLcn_ = boot->mftStartLcn;
+        totalSectors_ = boot->totalSectors64;
 
         if (!journal_) {
             journal_ = std::make_unique<LogFileJournal>();
@@ -651,13 +703,21 @@ public:
             createRecordInternal(MFT_REC_MFTMIRR, L"$MFTMirr", 0);
             createRecordInternal(MFT_REC_LOGFILE, L"$LogFile", 0);
             createRecordInternal(MFT_REC_VOLUME, L"MicaNT_System", 0);
+            createRecordInternal(MFT_REC_ATTRDEF, L"$AttrDef", 0);
             auto recRoot = createRecordInternal(MFT_REC_ROOT, L".", MFT_RECORD_DIRECTORY);
             recRoot->parentRecord = MFT_REC_ROOT;
+            createRecordInternal(MFT_REC_BITMAP, L"$Bitmap", 0);
+            createRecordInternal(MFT_REC_BOOT, L"$Boot", 0);
+            createRecordInternal(MFT_REC_BADCLUST, L"$BadClus", 0);
+            createRecordInternal(MFT_REC_SECURE, L"$Secure", 0);
+            createRecordInternal(MFT_REC_UPCASE, L"$UpCase", 0);
+            createRecordInternal(MFT_REC_EXTEND, L"$Extend", MFT_RECORD_DIRECTORY);
             journal_->logAction(LogOperation::CreateFileRecord, MFT_REC_ROOT);
             journal_->checkpoint();
         }
 
         mounted_ = true;
+        dirty_ = false;
         return NtStatus::Success;
     }
 
@@ -913,6 +973,34 @@ public:
         return records_.size();
     }
 
+    [[nodiscard]] bool isDirty() const noexcept {
+        return dirty_;
+    }
+
+    void setDirty(bool dirty) noexcept {
+        dirty_ = dirty;
+    }
+
+    [[nodiscard]] NTFS_VOLUME_DATA_BUFFER getVolumeData() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        NTFS_VOLUME_DATA_BUFFER data{};
+        data.volumeSerialNumber = volumeSerialNumber_;
+        data.numberSectors = totalSectors_;
+        data.totalClusters = clusterSize_ ? (totalSectors_ / (clusterSize_ / NTFS_SECTOR_SIZE)) : 0;
+        data.freeClusters = data.totalClusters > 1024 ? data.totalClusters - 1024 : data.totalClusters;
+        data.totalReserved = 2048;
+        data.bytesPerSector = NTFS_SECTOR_SIZE;
+        data.bytesPerCluster = clusterSize_;
+        data.bytesPerFileRecordSegment = MFT_RECORD_SIZE;
+        data.clustersPerFileRecordSegment = 0;
+        data.mftValidDataLength = records_.size() * MFT_RECORD_SIZE;
+        data.mftStartLcn = mftStartLcn_;
+        data.mft2StartLcn = 16;
+        data.mftZoneStart = mftStartLcn_;
+        data.mftZoneEnd = data.totalClusters / 8;
+        return data;
+    }
+
     [[nodiscard]] const NtfsFileRecord* getRecord(uint64_t num) const {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = records_.find(num);
@@ -955,6 +1043,8 @@ private:
     uint32_t clusterSize_{DEFAULT_CLUSTER_SIZE};
     uint64_t mftStartLcn_{4};
     uint64_t nextRecordNum_{MFT_REC_USER_START};
+    uint64_t totalSectors_{268435456ULL};
+    bool dirty_{false};
 
     std::unique_ptr<LogFileJournal> journal_;
     std::unordered_map<uint64_t, NtfsFileRecord> records_;
@@ -964,10 +1054,24 @@ private:
 // 6. Direct MFT Record Query & USN Journal Traverser (FSCTL_GET_NTFS_FILE_RECORD)
 // ============================================================================
 
-inline constexpr uint32_t FSCTL_GET_NTFS_FILE_RECORD = 0x00090068;
-inline constexpr uint32_t FSCTL_ENUM_USN_DATA        = 0x000900B3;
+inline constexpr uint32_t FSCTL_LOCK_VOLUME              = 0x00090018;
+inline constexpr uint32_t FSCTL_UNLOCK_VOLUME            = 0x0009001C;
+inline constexpr uint32_t FSCTL_DISMOUNT_VOLUME          = 0x00090020;
+inline constexpr uint32_t FSCTL_GET_NTFS_VOLUME_DATA     = 0x00090064;
+inline constexpr uint32_t FSCTL_GET_NTFS_FILE_RECORD     = 0x00090068;
+inline constexpr uint32_t FSCTL_GET_VOLUME_BITMAP        = 0x0009006F;
+inline constexpr uint32_t FSCTL_GET_RETRIEVAL_POINTERS   = 0x00090073;
+inline constexpr uint32_t FSCTL_MOVE_FILE                = 0x00090074;
+inline constexpr uint32_t FSCTL_IS_VOLUME_DIRTY          = 0x00090078;
+inline constexpr uint32_t FSCTL_MARK_VOLUME_DIRTY        = 0x0009007C;
+inline constexpr uint32_t FSCTL_ENUM_USN_DATA            = 0x000900B3;
+inline constexpr uint32_t FSCTL_READ_USN_JOURNAL         = 0x000900BB;
+inline constexpr uint32_t FSCTL_CREATE_USN_JOURNAL       = 0x000900E7;
+inline constexpr uint32_t FSCTL_QUERY_USN_JOURNAL        = 0x000900F4;
+inline constexpr uint32_t FSCTL_DELETE_USN_JOURNAL       = 0x000900F8;
 
 #pragma pack(push, 1)
+
 struct NTFS_FILE_RECORD_INPUT_BUFFER {
     uint64_t fileReferenceNumber{0};
 };
@@ -1038,6 +1142,49 @@ public:
         stats.scanDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
         return stats;
     }
+};
+
+// ============================================================================
+// 7. NT Installable File System (IFS) Driver Wrapper (ntfs.sys / NtfsDriver)
+// ============================================================================
+
+class NtfsDriver {
+public:
+    static NtfsDriver& get() noexcept {
+        static NtfsDriver s_instance;
+        return s_instance;
+    }
+
+    void initialize();
+    [[nodiscard]] bool isInitialized() const noexcept { return initialized_; }
+
+    NtStatus registerVolume(std::shared_ptr<NtfsFileSystem> ntfsFs, std::wstring_view volumeName = L"\\Device\\Ntfs0");
+    NtStatus mountDrive(std::wstring_view driveLetter, std::shared_ptr<NtfsFileSystem> ntfsFs);
+    [[nodiscard]] std::shared_ptr<NtfsFileSystem> getFileSystem(std::wstring_view driveLetter) const;
+
+    // Dispatch routines for NT IRPs
+    static NtStatus dispatchCreate(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchRead(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchWrite(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchClose(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchDirectoryControl(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchQueryInformation(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchSetInformation(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchFileSystemControl(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchDeviceControl(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchShutdown(io::DeviceObject* device, io::Irp* irp);
+    static NtStatus dispatchCleanup(io::DeviceObject* device, io::Irp* irp);
+
+    [[nodiscard]] io::DriverObject* getDriverObject() const noexcept { return driverObject_.get(); }
+    [[nodiscard]] io::FastIoDispatch* getFastIoDispatch() noexcept { return &fastIoTable_; }
+
+private:
+    NtfsDriver() = default;
+    bool initialized_{false};
+    std::unique_ptr<io::DriverObject> driverObject_{nullptr};
+    io::FastIoDispatch fastIoTable_{};
+    std::unordered_map<std::wstring, std::shared_ptr<NtfsFileSystem>> mountedDrives_;
+    mutable std::mutex driverMutex_;
 };
 
 } // namespace micant::ntfs

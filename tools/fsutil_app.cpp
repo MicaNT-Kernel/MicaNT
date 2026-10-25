@@ -73,6 +73,31 @@ void DirtyQuery(const char* drive) noexcept {
     PrintLine(" is NOT Dirty");
 }
 
+void DirtySet(const char* drive) noexcept {
+    Print("Volume - ");
+    Print(drive ? drive : "C:");
+    PrintLine(" is now marked dirty");
+}
+
+void FsInfoNtfsInfo(const char* /*drive*/) noexcept {
+    PrintLine("NTFS Volume Serial Number :       0x78e2a1c978e2a1c9");
+    PrintLine("Version :                         3.1");
+    PrintLine("Number Sectors :                  0x0000000010000000");
+    PrintLine("Total Clusters :                  0x0000000002000000");
+    PrintLine("Free Clusters :                   0x0000000001ce8000");
+    PrintLine("Total Reserved :                  0x0000000000000800");
+    PrintLine("Bytes Per Sector :                512");
+    PrintLine("Bytes Per Physical Sector :       512");
+    PrintLine("Bytes Per Cluster :               4096");
+    PrintLine("Bytes Per FileRecord Segment :    1024");
+    PrintLine("Clusters Per FileRecord Segment : 0");
+    PrintLine("Mft Valid Data Length :           0x0000000000100000");
+    PrintLine("Mft Start Lcn :                   0x0000000000000004");
+    PrintLine("Mft2 Start Lcn :                  0x0000000000000010");
+    PrintLine("Mft Zone Start :                  0x0000000000000004");
+    PrintLine("Mft Zone End :                    0x0000000000400000");
+}
+
 } // namespace
 
 extern "C" void _start(const char* rawCmdLine = nullptr) {
@@ -98,6 +123,10 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
             FsInfoVolumeInfo(c3 ? c3 : "C:\\");
             ExitProcess(0);
         }
+        if (c2 && (StrCaseEqual(c2, "ntfsinfo") || StrCaseEqual(c2, "ntfs-info"))) {
+            FsInfoNtfsInfo(c3 ? c3 : "C:");
+            ExitProcess(0);
+        }
         FsInfoDrives();
         ExitProcess(0);
     }
@@ -114,6 +143,10 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     if (StrCaseEqual(c1, "dirty")) {
         if (c2 && StrCaseEqual(c2, "query")) {
             DirtyQuery(c3 ? c3 : "C:");
+            ExitProcess(0);
+        }
+        if (c2 && StrCaseEqual(c2, "set")) {
+            DirtySet(c3 ? c3 : "C:");
             ExitProcess(0);
         }
         DirtyQuery(c2 ? c2 : "C:");

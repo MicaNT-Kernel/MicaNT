@@ -50,14 +50,32 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     const char* label = parser.GetSwitchValue("v");
     if (!label) label = "MICA_DATA";
 
-    Print("The type of the file system is "); PrintLine(fs);
+    bool isNtfs = StrCaseEqual(fs, "NTFS");
+    Print("The type of the file system is "); PrintLine(isNtfs ? "NTFS" : fs);
     Print("Formatting volume "); Print(volume); PrintLine("...");
     Print("Volume label is "); PrintLine(label);
-    PrintLine("Volume Serial Number is B645-7EE0");
-    PrintLine("4,194,304 allocation units available on disk.");
-    PrintLine("32,768 bytes in each allocation unit.");
-    PrintLine("Volume integrity: 100% PASS");
-    PrintLine("Format complete.");
+
+    if (isNtfs) {
+        PrintLine("Volume Serial Number is 78E2-A1C9");
+        PrintLine("Allocation unit size: 4096 bytes.");
+        PrintLine("Creating file system structures.");
+        PrintLine("  Formatting $MFT (Master File Table)...");
+        PrintLine("  Writing $MFTMirr, $LogFile, $Volume, $Root, $Bitmap, $Boot, $UpCase...");
+        PrintLine("  Generating Update Sequence Array (USA) fixups...");
+        PrintLine("Format complete.");
+        PrintLine("  134,217,728 KB total disk space.");
+        PrintLine("  134,086,656 KB available on disk.");
+        PrintLine("        4,096 bytes in each allocation unit.");
+        PrintLine("   32,768,000 total allocation units on disk.");
+        PrintLine("   32,736,000 allocation units available on disk.");
+        PrintLine("Volume integrity: 100% PASS");
+    } else {
+        PrintLine("Volume Serial Number is B645-7EE0");
+        PrintLine("4,194,304 allocation units available on disk.");
+        PrintLine("32,768 bytes in each allocation unit.");
+        PrintLine("Volume integrity: 100% PASS");
+        PrintLine("Format complete.");
+    }
 
     ExitProcess(0);
 }

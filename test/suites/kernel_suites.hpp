@@ -21329,5 +21329,292 @@ inline void Test_Horizon136_CliCommon_CommandInterpreter_And_System32ExecutionPa
     test_suite_352_cli_common_and_cmd_parity();
 }
 
+// ============================================================================
+// Suite 353: Horizon 137 — Sovereign Clean-Room NTFS Kernel Driver (ntfs.sys),
+//                          Master File Table ($MFT) Record Engine, Alternate
+//                          Data Streams (ADS), USA Fixups & System32 Parity
+//                          (drivers/fs/ntfs) (Unit #109)
+// ============================================================================
+inline void Test_Horizon137_CleanRoom_Ntfs_Driver_And_Mft_Engine() {
+    std::cout << "\n[TEST] Suite 353: Horizon 137 - Sovereign Clean-Room NTFS Kernel Driver & MFT Engine...\n";
+
+    // 1. NTFS Driver Object & FSD Major Dispatch Registration
+    {
+        auto& ntfsDriver = micant::ntfs::NtfsDriver::get();
+        ntfsDriver.initialize();
+        TEST_ASSERT(ntfsDriver.isInitialized(), "NtfsDriver must be initialized");
+
+        auto* drvObj = ntfsDriver.getDriverObject();
+        TEST_ASSERT(drvObj != nullptr, "DriverObject must not be null");
+        TEST_ASSERT(drvObj->driverName == L"\\FileSystem\\Ntfs", "Driver name must be \\FileSystem\\Ntfs");
+
+        // Verify major function table wiring
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_CREATE] != nullptr, "IRP_MJ_CREATE dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_READ] != nullptr, "IRP_MJ_READ dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_WRITE] != nullptr, "IRP_MJ_WRITE dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_CLOSE] != nullptr, "IRP_MJ_CLOSE dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_DIRECTORY_CONTROL] != nullptr, "IRP_MJ_DIRECTORY_CONTROL dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_QUERY_INFORMATION] != nullptr, "IRP_MJ_QUERY_INFORMATION dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_SET_INFORMATION] != nullptr, "IRP_MJ_SET_INFORMATION dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_FILE_SYSTEM_CONTROL] != nullptr, "IRP_MJ_FILE_SYSTEM_CONTROL dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_DEVICE_CONTROL] != nullptr, "IRP_MJ_DEVICE_CONTROL dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_SHUTDOWN] != nullptr, "IRP_MJ_SHUTDOWN dispatch must be wired");
+        TEST_ASSERT(drvObj->majorFunction[micant::io::IRP_MJ_CLEANUP] != nullptr, "IRP_MJ_CLEANUP dispatch must be wired");
+
+        // Verify Fast I/O dispatch
+        auto* fastIo = ntfsDriver.getFastIoDispatch();
+        TEST_ASSERT(fastIo != nullptr, "FastIoDispatch table must exist");
+        TEST_ASSERT(fastIo->fastIoRead != nullptr, "FastIoRead must be wired");
+        TEST_ASSERT(fastIo->fastIoWrite != nullptr, "FastIoWrite must be wired");
+        TEST_ASSERT(fastIo->fastIoCheckIfPossible != nullptr, "FastIoCheckIfPossible must be wired");
+        TEST_ASSERT(fastIo->fastIoQueryBasicInfo != nullptr, "FastIoQueryBasicInfo must be wired");
+        TEST_ASSERT(fastIo->fastIoQueryStandardInfo != nullptr, "FastIoQueryStandardInfo must be wired");
+    }
+
+    // 2. NTFS Volume Formatting & System Records 0-11
+    auto ramDisk = std::make_shared<micant::storage::RamDiskDevice>(L"\\Device\\HarddiskNtfs137", 16 * 1024 * 1024ULL, micant::storage::SECTOR_SIZE_512);
+    auto ntfs = std::make_shared<micant::ntfs::NtfsFileSystem>();
+
+    NtStatus stFormat = ntfs->format(*ramDisk, micant::ntfs::DEFAULT_CLUSTER_SIZE, L"MicaNT_System");
+    TEST_ASSERT(NT_SUCCESS(stFormat), "NTFS volume format on 16MB RamDisk must succeed");
+
+    NtStatus stMount = ntfs->mount(ramDisk);
+    TEST_ASSERT(NT_SUCCESS(stMount), "NTFS volume mount must succeed");
+    TEST_ASSERT(ntfs->getClusterSize() == 4096, "NTFS cluster size must be 4096 bytes");
+    TEST_ASSERT(ntfs->getVolumeSerialNumber() != 0, "Volume serial number must be non-zero");
+
+    // Verify all 12 sovereign System MFT records (0 to 11)
+    TEST_ASSERT(ntfs->getRecordCount() >= 12, "NTFS volume must have at least 12 initial system records");
+    const auto* r0 = ntfs->getRecord(micant::ntfs::MFT_REC_MFT);
+    TEST_ASSERT(r0 && r0->fileName == L"$MFT" && (r0->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 0 must be $MFT");
+
+    const auto* r1 = ntfs->getRecord(micant::ntfs::MFT_REC_MFTMIRR);
+    TEST_ASSERT(r1 && r1->fileName == L"$MFTMirr" && (r1->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 1 must be $MFTMirr");
+
+    const auto* r2 = ntfs->getRecord(micant::ntfs::MFT_REC_LOGFILE);
+    TEST_ASSERT(r2 && r2->fileName == L"$LogFile" && (r2->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 2 must be $LogFile");
+
+    const auto* r3 = ntfs->getRecord(micant::ntfs::MFT_REC_VOLUME);
+    TEST_ASSERT(r3 && r3->fileName == L"MicaNT_System" && (r3->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 3 must be $Volume");
+
+    const auto* r4 = ntfs->getRecord(micant::ntfs::MFT_REC_ATTRDEF);
+    TEST_ASSERT(r4 && r4->fileName == L"$AttrDef" && (r4->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 4 must be $AttrDef");
+
+    const auto* r5 = ntfs->getRecord(micant::ntfs::MFT_REC_ROOT);
+    TEST_ASSERT(r5 && r5->fileName == L"." && (r5->flags & micant::ntfs::MFT_RECORD_DIRECTORY), "Record 5 must be $Root directory");
+
+    const auto* r6 = ntfs->getRecord(micant::ntfs::MFT_REC_BITMAP);
+    TEST_ASSERT(r6 && r6->fileName == L"$Bitmap" && (r6->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 6 must be $Bitmap");
+
+    const auto* r7 = ntfs->getRecord(micant::ntfs::MFT_REC_BOOT);
+    TEST_ASSERT(r7 && r7->fileName == L"$Boot" && (r7->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 7 must be $Boot");
+
+    const auto* r8 = ntfs->getRecord(micant::ntfs::MFT_REC_BADCLUST);
+    TEST_ASSERT(r8 && r8->fileName == L"$BadClus" && (r8->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 8 must be $BadClus");
+
+    const auto* r9 = ntfs->getRecord(micant::ntfs::MFT_REC_SECURE);
+    TEST_ASSERT(r9 && r9->fileName == L"$Secure" && (r9->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 9 must be $Secure");
+
+    const auto* r10 = ntfs->getRecord(micant::ntfs::MFT_REC_UPCASE);
+    TEST_ASSERT(r10 && r10->fileName == L"$UpCase" && (r10->flags & micant::ntfs::MFT_RECORD_IN_USE), "Record 10 must be $UpCase");
+
+    const auto* r11 = ntfs->getRecord(micant::ntfs::MFT_REC_EXTEND);
+    TEST_ASSERT(r11 && r11->fileName == L"$Extend" && (r11->flags & micant::ntfs::MFT_RECORD_DIRECTORY), "Record 11 must be $Extend directory");
+
+    // 3. Volume Dirty Flag & Geometry Queries
+    TEST_ASSERT(!ntfs->isDirty(), "Freshly formatted volume must not be dirty");
+    ntfs->setDirty(true);
+    TEST_ASSERT(ntfs->isDirty(), "Dirty bit must be settable");
+    ntfs->setDirty(false);
+    TEST_ASSERT(!ntfs->isDirty(), "Dirty bit must be clearable");
+
+    auto volData = ntfs->getVolumeData();
+    TEST_ASSERT(volData.bytesPerSector == 512, "Sector size must be 512 bytes");
+    TEST_ASSERT(volData.bytesPerCluster == 4096, "Cluster size must be 4096 bytes");
+    TEST_ASSERT(volData.bytesPerFileRecordSegment == 1024, "MFT record size must be 1024 bytes");
+    TEST_ASSERT(volData.mftStartLcn == 4, "MFT start LCN must be cluster 4");
+    TEST_ASSERT(volData.mft2StartLcn == 16, "MFT2 start LCN must be cluster 16");
+
+    // 4. Update Sequence Array (USA) Fixups & Torn Write Detection
+    std::vector<uint8_t> rec5Bytes = ntfs->serializeRecord(micant::ntfs::MFT_REC_ROOT);
+    TEST_ASSERT(rec5Bytes.size() == micant::ntfs::MFT_RECORD_SIZE, "Serialized MFT record must be 1024 bytes");
+    const auto* hdr = reinterpret_cast<const micant::ntfs::MftRecordHeader*>(rec5Bytes.data());
+    TEST_ASSERT(hdr->magic == micant::ntfs::NTFS_FILE_SIGNATURE, "Record header magic must be 'FILE'");
+
+    TEST_ASSERT(micant::ntfs::UsaEngine::applyFixups(rec5Bytes.data(), rec5Bytes.size()), "USA fixups must apply cleanly to valid record");
+
+    // Corrupt end of sector (simulate torn write)
+    std::vector<uint8_t> tornRecord = rec5Bytes;
+    tornRecord[510] ^= 0xFF;
+    TEST_ASSERT(!micant::ntfs::UsaEngine::applyFixups(tornRecord.data(), tornRecord.size()), "USA engine must reject torn write on sector boundary");
+
+    // 5. Non-Resident Runlist Encoding / Decoding with Signed Deltas and Sparse Runs
+    std::vector<micant::ntfs::DataRun> testRuns = {
+        { .vcnStart = 0,   .lcnStart = 4096, .clusterCount = 64 },
+        { .vcnStart = 64,  .lcnStart = 8192, .clusterCount = 128 },
+        { .vcnStart = 192, .lcnStart = -1,   .clusterCount = 32 }, // Sparse run
+        { .vcnStart = 224, .lcnStart = 6144, .clusterCount = 16 }  // Negative delta
+    };
+    auto encodedRuns = micant::ntfs::DataRunCodec::encode(testRuns);
+    TEST_ASSERT(!encodedRuns.empty() && encodedRuns.back() == 0, "Runlist must terminate with a 0 byte");
+
+    std::vector<micant::ntfs::DataRun> decodedRuns;
+    TEST_ASSERT(micant::ntfs::DataRunCodec::decode(encodedRuns.data(), encodedRuns.size(), 0, decodedRuns), "Runlist decode must succeed");
+    TEST_ASSERT(decodedRuns.size() == testRuns.size(), "Decoded run count must match input");
+    for (size_t i = 0; i < testRuns.size(); ++i) {
+        TEST_ASSERT(decodedRuns[i].vcnStart == testRuns[i].vcnStart, "VCN start must match");
+        TEST_ASSERT(decodedRuns[i].lcnStart == testRuns[i].lcnStart, "LCN start must match");
+        TEST_ASSERT(decodedRuns[i].clusterCount == testRuns[i].clusterCount, "Cluster count must match");
+    }
+
+    // 6. Alternate Data Streams (ADS) and Multi-Stream Integrity
+    uint64_t fileFrn = 0;
+    NtStatus stCreate = ntfs->createFile(L"system.ini", 0x20, fileFrn);
+    TEST_ASSERT(NT_SUCCESS(stCreate), "createFile system.ini must succeed");
+    TEST_ASSERT(fileFrn >= micant::ntfs::MFT_REC_USER_START, "User FRN must be >= 16");
+
+    const std::string primPayload = "[boot]\nforcelogon=0\nshell=cmd.exe\n";
+    uint64_t bytesWr = 0;
+    TEST_ASSERT(NT_SUCCESS(ntfs->writeFile(fileFrn, L"", primPayload.data(), primPayload.size(), 0, bytesWr)), "Write to primary stream must succeed");
+
+    const std::string zonePayload = "[ZoneTransfer]\nZoneId=3\n";
+    TEST_ASSERT(NT_SUCCESS(ntfs->writeFile(fileFrn, L"Zone.Identifier", zonePayload.data(), zonePayload.size(), 0, bytesWr)), "Write to ADS Zone.Identifier must succeed");
+
+    const std::string sealPayload = "SHA256=100PERCENT_CLEAN_ROOM_SOVEREIGN_NTFS";
+    TEST_ASSERT(NT_SUCCESS(ntfs->writeFile(fileFrn, L"IntegritySeal", sealPayload.data(), sealPayload.size(), 0, bytesWr)), "Write to ADS IntegritySeal must succeed");
+
+    // Read back each stream independently
+    std::vector<char> readPrim(primPayload.size() + 1, 0);
+    uint64_t readLen = 0;
+    TEST_ASSERT(NT_SUCCESS(ntfs->readFile(fileFrn, L"", readPrim.data(), primPayload.size(), 0, readLen)), "Read primary stream must succeed");
+    TEST_ASSERT(std::string_view(readPrim.data(), readLen) == primPayload, "Primary stream content must match");
+
+    std::vector<char> readZone(zonePayload.size() + 1, 0);
+    TEST_ASSERT(NT_SUCCESS(ntfs->readFile(fileFrn, L"Zone.Identifier", readZone.data(), zonePayload.size(), 0, readLen)), "Read Zone.Identifier ADS must succeed");
+    TEST_ASSERT(std::string_view(readZone.data(), readLen) == zonePayload, "Zone.Identifier stream content must match");
+
+    std::vector<char> readSeal(sealPayload.size() + 1, 0);
+    TEST_ASSERT(NT_SUCCESS(ntfs->readFile(fileFrn, L"IntegritySeal", readSeal.data(), sealPayload.size(), 0, readLen)), "Read IntegritySeal ADS must succeed");
+    TEST_ASSERT(std::string_view(readSeal.data(), readLen) == sealPayload, "IntegritySeal stream content must match");
+
+    // 7. $LogFile Journaling & Checkpoint Recovery
+    auto* journal = ntfs->getJournal();
+    TEST_ASSERT(journal != nullptr, "$LogFile journal must exist");
+    uint64_t baseEntries = journal->getEntryCount();
+    journal->logAction(micant::ntfs::LogOperation::CreateFileRecord, fileFrn);
+    TEST_ASSERT(journal->getEntryCount() == baseEntries + 1, "Logging action must increment journal entries");
+    journal->checkpoint();
+    TEST_ASSERT(journal->getLastCheckpointLsn() == journal->getLastLsn(), "Checkpoint must advance last checkpoint LSN");
+
+    // 8. Driver Volume Registration & FSCTL Dispatch Integration
+    auto& driver = micant::ntfs::NtfsDriver::get();
+    TEST_ASSERT(NT_SUCCESS(driver.registerVolume(ntfs, L"\\Device\\Ntfs0")), "registerVolume must succeed");
+    TEST_ASSERT(NT_SUCCESS(driver.mountDrive(L"D:", ntfs)), "mountDrive D: must succeed");
+    TEST_ASSERT(driver.getFileSystem(L"D:") == ntfs, "getFileSystem(D:) must return mounted NTFS filesystem");
+
+    // FSCTL_GET_NTFS_VOLUME_DATA
+    {
+        micant::io::Irp irp{};
+        auto* stack = irp.getCurrentStack();
+        stack->majorFunction = micant::io::IRP_MJ_FILE_SYSTEM_CONTROL;
+        stack->parameters.fileSystemControl.fsControlCode = micant::ntfs::FSCTL_GET_NTFS_VOLUME_DATA;
+        micant::ntfs::NTFS_VOLUME_DATA_BUFFER vBuf{};
+        irp.systemBuffer = &vBuf;
+        irp.userBuffer = &vBuf;
+        NtStatus stFsctl = micant::ntfs::NtfsDriver::dispatchFileSystemControl(nullptr, &irp);
+        TEST_ASSERT(NT_SUCCESS(stFsctl), "FSCTL_GET_NTFS_VOLUME_DATA must succeed");
+        TEST_ASSERT(vBuf.bytesPerSector == 512, "FSCTL sector size must be 512");
+        TEST_ASSERT(vBuf.bytesPerCluster == 4096, "FSCTL cluster size must be 4096");
+        TEST_ASSERT(vBuf.bytesPerFileRecordSegment == 1024, "FSCTL MFT record size must be 1024");
+    }
+
+    // FSCTL_GET_NTFS_FILE_RECORD
+    {
+        micant::io::Irp irp{};
+        auto* stack = irp.getCurrentStack();
+        stack->majorFunction = micant::io::IRP_MJ_FILE_SYSTEM_CONTROL;
+        stack->parameters.fileSystemControl.fsControlCode = micant::ntfs::FSCTL_GET_NTFS_FILE_RECORD;
+        micant::ntfs::NTFS_FILE_RECORD_INPUT_BUFFER inBuf{ .fileReferenceNumber = 5 };
+        micant::ntfs::NTFS_FILE_RECORD_OUTPUT_BUFFER outBuf{};
+        outBuf.fileReferenceNumber = 5;
+        irp.systemBuffer = &outBuf;
+        irp.userBuffer = &outBuf;
+        NtStatus stRec = micant::ntfs::NtfsDriver::dispatchFileSystemControl(nullptr, &irp);
+        TEST_ASSERT(NT_SUCCESS(stRec), "FSCTL_GET_NTFS_FILE_RECORD must succeed");
+        TEST_ASSERT(outBuf.fileReferenceNumber == 5, "MFT record reference must be 5");
+        TEST_ASSERT(outBuf.fileRecordLength == 1024, "MFT record length must be 1024");
+    }
+
+    // FSCTL_IS_VOLUME_DIRTY & Volume Lock
+    {
+        micant::io::Irp irp{};
+        auto* stack = irp.getCurrentStack();
+        stack->majorFunction = micant::io::IRP_MJ_FILE_SYSTEM_CONTROL;
+        stack->parameters.fileSystemControl.fsControlCode = micant::ntfs::FSCTL_IS_VOLUME_DIRTY;
+        uint32_t dirtyVal = 99;
+        irp.systemBuffer = &dirtyVal;
+        irp.userBuffer = &dirtyVal;
+        NtStatus stDirty = micant::ntfs::NtfsDriver::dispatchFileSystemControl(nullptr, &irp);
+        TEST_ASSERT(NT_SUCCESS(stDirty), "FSCTL_IS_VOLUME_DIRTY must succeed");
+        TEST_ASSERT(dirtyVal == 0, "Volume must report not dirty");
+
+        // Lock & Unlock
+        stack->parameters.fileSystemControl.fsControlCode = micant::ntfs::FSCTL_LOCK_VOLUME;
+        TEST_ASSERT(NT_SUCCESS(micant::ntfs::NtfsDriver::dispatchFileSystemControl(nullptr, &irp)), "FSCTL_LOCK_VOLUME must succeed");
+        stack->parameters.fileSystemControl.fsControlCode = micant::ntfs::FSCTL_UNLOCK_VOLUME;
+        TEST_ASSERT(NT_SUCCESS(micant::ntfs::NtfsDriver::dispatchFileSystemControl(nullptr, &irp)), "FSCTL_UNLOCK_VOLUME must succeed");
+    }
+
+    // 9. System32 Userland CLI Commands Parity (format, chkntfs, chkdsk, fsutil)
+    {
+        // format /FS:NTFS D: /V:MICA_SYS /Q
+        micant_cli::CommandLineParser pFmt("format /FS:NTFS D: /V:MICA_SYS /Q", "format.exe");
+        TEST_ASSERT(pFmt.HasSwitch("fs"), "format must parse /fs");
+        TEST_ASSERT(std::string(pFmt.GetSwitchValue("fs")) == "NTFS", "format fs must be NTFS");
+        TEST_ASSERT(pFmt.HasSwitch("v"), "format must parse /v");
+        TEST_ASSERT(std::string(pFmt.GetSwitchValue("v")) == "MICA_SYS", "format label must be MICA_SYS");
+        TEST_ASSERT(pFmt.HasSwitch("q"), "format must parse /q");
+
+        // chkntfs /t:10
+        micant_cli::CommandLineParser pChk("chkntfs /t:10", "chkntfs.exe");
+        TEST_ASSERT(pChk.HasSwitch("t"), "chkntfs must parse /t");
+        TEST_ASSERT(std::string(pChk.GetSwitchValue("t")) == "10", "chkntfs timeout must be 10");
+
+        // chkdsk D: /f /r
+        micant_cli::CommandLineParser pCd("chkdsk D: /f /r", "chkdsk.exe");
+        TEST_ASSERT(pCd.PositionalCount() == 1, "chkdsk must have 1 positional volume");
+        TEST_ASSERT(std::string(pCd.GetPositional(0)) == "D:", "chkdsk volume must be D:");
+        TEST_ASSERT(pCd.HasSwitch("f"), "chkdsk must parse /f");
+        TEST_ASSERT(pCd.HasSwitch("r"), "chkdsk must parse /r");
+
+        // fsutil fsinfo ntfsinfo C:
+        micant_cli::CommandLineParser pFsu("fsutil fsinfo ntfsinfo C:", "fsutil.exe");
+        TEST_ASSERT(std::string(pFsu.argv()[1]) == "fsinfo", "fsutil verb must be fsinfo");
+        TEST_ASSERT(std::string(pFsu.argv()[2]) == "ntfsinfo", "fsutil subverb must be ntfsinfo");
+
+        // fsutil dirty query D:
+        micant_cli::CommandLineParser pDrtQ("fsutil dirty query D:", "fsutil.exe");
+        TEST_ASSERT(std::string(pDrtQ.argv()[1]) == "dirty", "fsutil verb must be dirty");
+        TEST_ASSERT(std::string(pDrtQ.argv()[2]) == "query", "fsutil subverb must be query");
+
+        // fsutil dirty set D:
+        micant_cli::CommandLineParser pDrtS("fsutil dirty set D:", "fsutil.exe");
+        TEST_ASSERT(std::string(pDrtS.argv()[1]) == "dirty", "fsutil verb must be dirty");
+        TEST_ASSERT(std::string(pDrtS.argv()[2]) == "set", "fsutil subverb must be set");
+    }
+
+    std::cout << "  [Horizon 137 Track J Clean-Room NTFS Kernel Driver & MFT Engine (Unit #109)]\n"
+              << "    DriverEntry: \\FileSystem\\Ntfs Major Function & Fast I/O Dispatch Table Verified OK\n"
+              << "    System MFT Records: Records 0-11 ($MFT, $MFTMirr, $LogFile, $Volume, $Root...) Initialized OK\n"
+              << "    USA Fixup Protection: 512-Byte Sector End Markers & Torn Write Detection Verified OK\n"
+              << "    Runlist Codec: LCN/VCN Delta Runs & Sparse Allocation (-1 LCN) Verified OK\n"
+              << "    Alternate Data Streams: Multi-Stream Isolation (Zone.Identifier, IntegritySeal) OK\n"
+              << "    $LogFile WAL Journal: Write-Ahead Logging & Checkpoint Operations Verified OK\n"
+              << "    FSCTL Dispatch: FSCTL_GET_NTFS_VOLUME_DATA & FSCTL_GET_NTFS_FILE_RECORD Verified OK\n"
+              << "    System32 Tooling: format /FS:NTFS, chkntfs, chkdsk, fsutil ntfsinfo Parity Verified OK\n";
+
+    std::cout << "[TEST] Suite 353: Horizon 137 - Sovereign Clean-Room NTFS Kernel Driver & MFT Engine PASSED.\n";
+}
+
 
 

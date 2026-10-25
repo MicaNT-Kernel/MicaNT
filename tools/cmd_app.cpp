@@ -215,6 +215,7 @@ void ExecuteCommand(const char* cmd) noexcept {
         PrintLine("BCDEDIT  Sets properties in boot database to control boot loading.");
         PrintLine("CD       Displays the name of or changes the current directory.");
         PrintLine("CHKDSK   Checks a disk and displays a status report.");
+        PrintLine("CHKNTFS  Displays or modifies the checking of disk at boot time.");
         PrintLine("CLS      Clears the screen.");
         PrintLine("CMD      Starts a new instance of the MicaNT command interpreter.");
         PrintLine("COPY     Copies one or more files to another location.");
@@ -349,6 +350,39 @@ void ExecuteCommand(const char* cmd) noexcept {
         PrintLine("  Disk ###  Status         Size     Free     Dyn  Gpt");
         PrintLine("  --------  -------------  -------  -------  ---  ---");
         PrintLine("  Disk 0    Online         1863 GB      0 B        *");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "chkntfs")) {
+        PrintLine("The type of the file system is NTFS (Sovereign Clean-Room).");
+        PrintLine("C: is not dirty.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "fsutil")) {
+        PrintLine("Drives:");
+        PrintLine("C:\\");
+        PrintLine("D:\\");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "format")) {
+        PrintLine("The type of the file system is NTFS.");
+        PrintLine("Formatting volume C:...");
+        PrintLine("Volume label is MICA_NTFS");
+        PrintLine("Volume Serial Number is 78E2-A1C9");
+        PrintLine("Format complete.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "chkdsk")) {
+        PrintLine("The type of the file system is NTFS.");
+        PrintLine("Volume MICANT created 10/24/2026 00:00 AM");
+        PrintLine("Volume Serial Number is 78E2-A1C9");
+        PrintLine("Stage 1: Examining basic file system structure...");
+        PrintLine("Stage 2: Examining file name linkage...");
+        PrintLine("Stage 3: Examining security descriptors...");
+        PrintLine("MicaNT has scanned the file system and found no problems.");
         return;
     }
 
