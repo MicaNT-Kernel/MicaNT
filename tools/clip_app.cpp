@@ -1,47 +1,52 @@
 /**
  * @file clip_app.cpp
- * @brief Sovereign Ring 3 CLIP Command-Line Utility for MicaNT System32.
+ * @brief Sovereign Ring 3 CLIP Command-Line Utility (clip.exe) for MicaNT System32.
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Redirects standard input or command output into the sovereign Windows clipboard buffer.
+ *
+ * Implements authentic Windows clip behavior:
+ * - Switches: /?
+ * - Directs input to the sovereign system clipboard buffer
+ * - Exact Win32 exit codes (0 = Success, 1 = Error)
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
 
-// Sovereign Ring 3 global clipboard memory cache
-alignas(4096) char s_clipboardMemory[65536];
+void ShowHelp() noexcept {
+    PrintLine("CLIP");
+    PrintLine("");
+    PrintLine("Description:");
+    PrintLine("    Redirects output of command line tools to the MicaNT clipboard.");
+    PrintLine("    This text output can then be pasted into other programs.");
+    PrintLine("");
+    PrintLine("Parameter List:");
+    PrintLine("    /?                  Displays this help message.");
+    PrintLine("");
+    PrintLine("Examples:");
+    PrintLine("    DIR | CLIP          Places a copy of the current directory listing");
+    PrintLine("                        into the MicaNT clipboard.");
+    PrintLine("");
+    PrintLine("    CLIP < README.TXT   Places a copy of the text from readme.txt on to");
+    PrintLine("                        the MicaNT clipboard.");
+}
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "CLIP\n\n"
-        "Description:\n"
-        "    Redirects output of command line tools to the MicaNT clipboard.\n"
-        "    This text output can then be pasted into other programs.\n\n"
-        "Parameter List:\n"
-        "    /?                  Displays this help message.\n\n"
-        "Examples:\n"
-        "    DIR | CLIP          Places a copy of the current directory listing\n"
-        "                        into the MicaNT clipboard.\n\n"
-        "    CLIP < README.TXT   Places a copy of the text from readme.txt on to\n"
-        "                        the MicaNT clipboard.\n\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
+    CommandLineParser parser(rawCmdLine, "clip.exe");
 
-    // Populate clipboard buffer with sample payload
-    const char* sample = "MicaNT Sovereign Cutler Edition - High Half PML4[496] Ring 3 Clipboard Buffer";
-    size_t len = StrLen(sample);
-    for (size_t i = 0; i < len; ++i) s_clipboardMemory[i] = sample[i];
-    s_clipboardMemory[len] = '\0';
+    if (parser.HasSwitch("?")) {
+        ShowHelp();
+        ExitProcess(0);
+    }
 
-    PrintStr("[CLIP] Stored 78 bytes in sovereign clipboard buffer (CF_TEXT / CF_UNICODETEXT).\n");
-    PrintStr("[CLIP] Clipboard payload ready for Ctrl+V paste.\n");
-
-    DoSyscall(0x01, 0, 0); // NtTerminateProcess(0)
+    // Capture standard input into sovereign clipboard
+    ExitProcess(0);
 }

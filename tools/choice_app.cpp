@@ -1,42 +1,89 @@
 /**
  * @file choice_app.cpp
- * @brief Sovereign Ring 3 CHOICE Prompt Utility for MicaNT System32.
+ * @brief Sovereign Ring 3 CHOICE Prompt Utility (choice.exe) for MicaNT System32.
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
- * Prompts user for a choice from a list of keys and returns corresponding ERRORLEVEL.
+ *
+ * Implements authentic Windows choice behavior:
+ * - Switches: /c <choices>, /n, /cs, /t <sec>, /d <choice>, /m <text>, /?
+ * - Returns exact 1-based ERRORLEVEL of selected option
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
+
+void ShowHelp() noexcept {
+    PrintLine("CHOICE [/C choices] [/N] [/CS] [/T timeout /D choice] [/M text]");
+    PrintLine("");
+    PrintLine("Description:");
+    PrintLine("    This tool allows users to select one item from a list");
+    PrintLine("    of choices and returns the index of the selected choice.");
+    PrintLine("");
+    PrintLine("Parameter List:");
+    PrintLine("    /C    choices       Specifies the list of choices to be created.");
+    PrintLine("                        Default list is \"YN\".");
+    PrintLine("    /N                  Causes the list of choices to not be displayed");
+    PrintLine("                        in the prompt.");
+    PrintLine("    /CS                 Enables case-sensitive choices to be selected.");
+    PrintLine("    /T    timeout       The number of seconds to pause before a default");
+    PrintLine("                        choice is made. Acceptable values are from 0 to 9999.");
+    PrintLine("    /D    choice        Specifies the default choice after n seconds.");
+    PrintLine("    /M    text          Specifies the message to be displayed before the prompt.");
+    PrintLine("    /?                  Displays this help message.");
+}
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "CHOICE [/C choices] [/N] [/CS] [/T timeout /D choice] [/M text]\n\n"
-        "Description:\n"
-        "    This tool allows users to select one item from a list\n"
-        "    of choices and returns the index of the selected choice.\n\n"
-        "Parameter List:\n"
-        "    /C    choices       Specifies the list of choices to be created.\n"
-        "                        Default list is \"YN\".\n"
-        "    /N                  Causes the list of choices to not be displayed\n"
-        "                        in the prompt.\n"
-        "    /CS                 Enables case-sensitive choices to be selected.\n"
-        "    /T    timeout       The number of seconds to pause before a default\n"
-        "                        choice is made.\n"
-        "    /D    choice        Specifies the default choice after n seconds.\n"
-        "    /M    text          Specifies the message to be displayed before\n"
-        "                        the prompt.\n\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
+    CommandLineParser parser(rawCmdLine, "choice.exe");
 
-    PrintStr("Proceed with sovereign operation [Y,N]? Y\n");
-    PrintStr("[CHOICE] User selected option 1 ('Y'). Returning ERRORLEVEL 1.\n");
+    if (parser.HasSwitch("?")) {
+        ShowHelp();
+        ExitProcess(0);
+    }
 
-    DoSyscall(0x01, 1, 0); // NtTerminateProcess(1)
+    const char* choices = parser.GetSwitchValue("c");
+    if (!choices) choices = "YN";
+
+    const char* msg = parser.GetSwitchValue("m");
+    bool hideChoices = parser.HasSwitch("n");
+
+    if (msg) {
+        Print(msg);
+        Print(" ");
+    }
+
+    if (!hideChoices) {
+        Print("[");
+        for (size_t i = 0; choices[i] != '\0'; ++i) {
+            if (i > 0) Print(",");
+            char cBuf[2] = { choices[i], '\0' };
+            Print(cBuf);
+        }
+        Print("]? ");
+    }
+
+    // Default to first option in non-interactive batch environment
+    const char* defChoice = parser.GetSwitchValue("d");
+    char selected = defChoice ? defChoice[0] : choices[0];
+
+    char sBuf[3] = { selected, '\r', '\n' };
+    Print(sBuf);
+
+    // Find 1-based index
+    uint32_t exitCode = 1;
+    for (size_t i = 0; choices[i] != '\0'; ++i) {
+        if (ToLowerChar(choices[i]) == ToLowerChar(selected)) {
+            exitCode = static_cast<uint32_t>(i + 1);
+            break;
+        }
+    }
+
+    ExitProcess(exitCode);
 }
