@@ -420,12 +420,15 @@ public:
                     const char* prev = m_argv[i - 1] + 1;
                     if (*prev == '-') prev++;
                     if (!StrContains(prev, ":") && !StrContains(prev, "=")) {
-                        // Check common value switches: pid, im, u, p, s, fo, fi, n, l, w
+                        // Check common value switches: pid, im, u, p, s, fo, fi, n, l, w, h, t, r, c, m, d
                         if (StrCaseEqual(prev, "pid") || StrCaseEqual(prev, "im") ||
                             StrCaseEqual(prev, "u") || StrCaseEqual(prev, "p") ||
                             StrCaseEqual(prev, "s") || StrCaseEqual(prev, "fo") ||
                             StrCaseEqual(prev, "fi") || StrCaseEqual(prev, "n") ||
-                            StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w")) {
+                            StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w") ||
+                            StrCaseEqual(prev, "h") || StrCaseEqual(prev, "t") ||
+                            StrCaseEqual(prev, "r") || StrCaseEqual(prev, "c") ||
+                            StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d")) {
                             continue;
                         }
                     }
@@ -453,7 +456,10 @@ public:
                             StrCaseEqual(prev, "u") || StrCaseEqual(prev, "p") ||
                             StrCaseEqual(prev, "s") || StrCaseEqual(prev, "fo") ||
                             StrCaseEqual(prev, "fi") || StrCaseEqual(prev, "n") ||
-                            StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w")) {
+                            StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w") ||
+                            StrCaseEqual(prev, "h") || StrCaseEqual(prev, "t") ||
+                            StrCaseEqual(prev, "r") || StrCaseEqual(prev, "c") ||
+                            StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d")) {
                             continue;
                         }
                     }
