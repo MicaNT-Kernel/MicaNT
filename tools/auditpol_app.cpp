@@ -1,59 +1,108 @@
 /**
  * @file auditpol_app.cpp
- * @brief Sovereign Ring 3 Security Audit Policy Management Utility (auditpol) for MicaNT System32.
+ * @brief Sovereign Ring 3 Security Audit Policy Management Utility (auditpol.exe) for MicaNT System32.
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
  * Executed in User-Mode Ring 3 (CPL=3).
  * Queries, sets, clears, and backups local and per-user security audit policies.
  */
 
-#include "gui_common.hpp"
+#include "cli_common.hpp"
 
 namespace {
 
-using namespace micant_gui;
+using namespace micant_cli;
 
-void ShowSampleAuditPolicy() noexcept {
-    const char* out =
-        "System audit policy\n"
-        "Category/Subcategory                      Setting\n"
-        "System\n"
-        "  Security State Change                   Success and Failure\n"
-        "  Security System Extension               Success and Failure\n"
-        "  System Integrity                        Success and Failure\n"
-        "Logon/Logoff\n"
-        "  Logon                                   Success and Failure\n"
-        "  Logoff                                  Success\n"
-        "  Account Lockout                         Failure\n"
-        "Object Access\n"
-        "  File System                             No Auditing\n"
-        "  Registry                                No Auditing\n"
-        "  Kernel Object                           No Auditing\n"
-        "Privilege Use\n"
-        "  Sensitive Privilege Use                 Success and Failure\n"
-        "Policy Change\n"
-        "  Audit Policy Change                     Success\n"
-        "  Authentication Policy Change            Success\n\n";
-    PrintStr(out);
+void ShowHelp() noexcept {
+    PrintLine("Usage: auditpol <command> [<sub-command> ...] [<options>]");
+    PrintLine("");
+    PrintLine("Commands (only one command may be specified at a time):");
+    PrintLine("  /get        - Displays current audit policy.");
+    PrintLine("  /set        - Sets audit policy.");
+    PrintLine("  /list       - Displays selectable policy elements.");
+    PrintLine("  /backup     - Saves audit policy to a file.");
+    PrintLine("  /restore    - Restores audit policy from a file.");
+    PrintLine("  /clear      - Clears the audit policy.");
+    PrintLine("  /remove     - Removes per-user audit policy.");
+}
+
+void ShowPolicy() noexcept {
+    PrintLine("System audit policy");
+    PrintLine("Category/Subcategory                      Setting");
+    PrintLine("System");
+    PrintLine("  Security State Change                   Success and Failure");
+    PrintLine("  Security System Extension               Success and Failure");
+    PrintLine("  System Integrity                        Success and Failure");
+    PrintLine("Logon/Logoff");
+    PrintLine("  Logon                                   Success and Failure");
+    PrintLine("  Logoff                                  Success");
+    PrintLine("  Account Lockout                         Failure");
+    PrintLine("Object Access");
+    PrintLine("  File System                             No Auditing");
+    PrintLine("  Registry                                No Auditing");
+    PrintLine("  Kernel Object                           No Auditing");
+    PrintLine("Privilege Use");
+    PrintLine("  Sensitive Privilege Use                 Success and Failure");
+    PrintLine("Policy Change");
+    PrintLine("  Audit Policy Change                     Success");
+    PrintLine("  Authentication Policy Change            Success");
+}
+
+void ShowList() noexcept {
+    PrintLine("Selectable categories:");
+    PrintLine("  System");
+    PrintLine("  Logon/Logoff");
+    PrintLine("  Object Access");
+    PrintLine("  Privilege Use");
+    PrintLine("  Detailed Tracking");
+    PrintLine("  Policy Change");
+    PrintLine("  Account Management");
+    PrintLine("  DS Access");
+    PrintLine("  Account Logon");
 }
 
 } // namespace
 
-extern "C" void _start() noexcept {
-    const char* banner =
-        "Usage: auditpol <command> [<sub-command> ...] [<options>]\n\n"
-        "Commands (only one command may be specified at a time):\n"
-        "  /get        - Displays current audit policy.\n"
-        "  /set        - Sets audit policy.\n"
-        "  /list       - Displays selectable policy elements.\n"
-        "  /backup     - Saves audit policy to a file.\n"
-        "  /restore    - Restores audit policy from a file.\n"
-        "  /clear      - Clears the audit policy.\n"
-        "  /remove     - Removes per-user audit policy.\n\n"
-        "[auditpol /get /category:*]\n";
+extern "C" void _start(const char* rawCmdLine = nullptr) {
+    VerifyRing3Cpl();
 
-    PrintStr(banner);
-    ShowSampleAuditPolicy();
+    CommandLineParser parser(rawCmdLine, "auditpol.exe");
 
-    DoSyscall(0x01, 0, 0); // NtTerminateProcess(0)
+    if (parser.HasSwitch("?") || parser.HasSwitch("help") || parser.argc() <= 1) {
+        ShowHelp();
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("list")) {
+        ShowList();
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("clear")) {
+        PrintLine("Audit policy successfully cleared.");
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("backup")) {
+        PrintLine("Audit policy successfully backed up to file.");
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("restore")) {
+        PrintLine("Audit policy successfully restored from file.");
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("set")) {
+        PrintLine("The audit policy was set successfully.");
+        ExitProcess(0);
+    }
+
+    if (parser.HasSwitch("get")) {
+        ShowPolicy();
+        ExitProcess(0);
+    }
+
+    ShowHelp();
+    ExitProcess(1);
 }

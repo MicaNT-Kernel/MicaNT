@@ -21121,8 +21121,8 @@ inline void test_suite_352_cli_common_and_cmd_parity() {
         // bcdedit /timeout 10
         micant_cli::CommandLineParser pBcd("bcdedit /timeout 10", "bcdedit.exe");
         TEST_ASSERT(pBcd.HasSwitch("timeout"), "bcdedit must parse /timeout");
-        TEST_ASSERT(pBcd.PositionalCount() == 1, "bcdedit must have 1 positional arg");
-        TEST_ASSERT(std::string(pBcd.GetPositional(0)) == "10", "bcdedit timeout value must be 10");
+        TEST_ASSERT(pBcd.GetSwitchValue("timeout") != nullptr, "bcdedit /timeout value must be present");
+        TEST_ASSERT(std::string(pBcd.GetSwitchValue("timeout")) == "10", "bcdedit timeout value must be 10");
 
         // sfc /scannow
         micant_cli::CommandLineParser pSfc("sfc /scannow", "sfc.exe");
@@ -21193,6 +21193,124 @@ inline void test_suite_352_cli_common_and_cmd_parity() {
         micant_cli::CommandLineParser pPwr("powercfg /q", "powercfg.exe");
         TEST_ASSERT(pPwr.HasSwitch("q"), "powercfg must parse /q");
         TEST_ASSERT(!pPwr.HasSwitch("l"), "powercfg /q must not set /l");
+    }
+
+    // 8. Batch 4 System32 CLI Parity (compact, cipher, chkntfs, choice, timeout, clip, where)
+    {
+        // compact /compactos:query
+        micant_cli::CommandLineParser pCmp("compact /compactos:query", "compact.exe");
+        TEST_ASSERT(pCmp.HasSwitch("compactos"), "compact must parse /compactos");
+        TEST_ASSERT(std::string(pCmp.GetSwitchValue("compactos")) == "query", "compact /compactos value must be query");
+
+        // cipher /w:C:\ - wipe unused space
+        micant_cli::CommandLineParser pCph("cipher /w:C:\\", "cipher.exe");
+        TEST_ASSERT(pCph.HasSwitch("w"), "cipher must parse /w");
+        TEST_ASSERT(std::string(pCph.GetSwitchValue("w")) == "C:\\", "cipher /w value must match target path");
+
+        // chkntfs /t:10
+        micant_cli::CommandLineParser pChk("chkntfs /t:10", "chkntfs.exe");
+        TEST_ASSERT(pChk.HasSwitch("t"), "chkntfs must parse /t");
+        TEST_ASSERT(std::string(pChk.GetSwitchValue("t")) == "10", "chkntfs /t value must be 10");
+
+        // choice /c YNC /n /d Y /t 5
+        micant_cli::CommandLineParser pChc("choice /c YNC /n /d Y /t 5", "choice.exe");
+        TEST_ASSERT(pChc.HasSwitch("c"), "choice must parse /c");
+        TEST_ASSERT(pChc.HasSwitch("n"), "choice must parse /n");
+        TEST_ASSERT(std::string(pChc.GetSwitchValue("c")) == "YNC", "choice /c value must be YNC");
+        TEST_ASSERT(std::string(pChc.GetSwitchValue("d")) == "Y", "choice /d value must be Y");
+        TEST_ASSERT(std::string(pChc.GetSwitchValue("t")) == "5", "choice /t value must be 5");
+
+        // timeout /t 10 /nobreak
+        micant_cli::CommandLineParser pTo("timeout /t 10 /nobreak", "timeout.exe");
+        TEST_ASSERT(pTo.HasSwitch("t"), "timeout must parse /t");
+        TEST_ASSERT(pTo.HasSwitch("nobreak"), "timeout must parse /nobreak");
+        TEST_ASSERT(std::string(pTo.GetSwitchValue("t")) == "10", "timeout /t value must be 10");
+
+        // where /r C:\Windows notepad.exe
+        micant_cli::CommandLineParser pWh("where /r C:\\Windows notepad.exe", "where.exe");
+        TEST_ASSERT(pWh.HasSwitch("r"), "where must parse /r");
+        TEST_ASSERT(std::string(pWh.GetSwitchValue("r")) == "C:\\Windows", "where /r path must match");
+        TEST_ASSERT(pWh.PositionalCount() == 1, "where must have 1 positional arg");
+        TEST_ASSERT(std::string(pWh.GetPositional(0)) == "notepad.exe", "where target pattern must be notepad.exe");
+    }
+
+    // 9. Batch 5 System32 CLI Parity (chcp, defrag, bootsect, bootcfg, auditpol, bitsadmin, at, comp, bdehdcfg, change)
+    {
+        // chcp 65001
+        micant_cli::CommandLineParser pCp("chcp 65001", "chcp.exe");
+        TEST_ASSERT(pCp.PositionalCount() == 1, "chcp must have 1 positional arg");
+        TEST_ASSERT(std::string(pCp.GetPositional(0)) == "65001", "chcp code page must be 65001");
+
+        // defrag C: /a /v
+        micant_cli::CommandLineParser pDf("defrag C: /a /v", "defrag.exe");
+        TEST_ASSERT(pDf.HasSwitch("a"), "defrag must parse /a");
+        TEST_ASSERT(pDf.HasSwitch("v"), "defrag must parse /v");
+        TEST_ASSERT(pDf.PositionalCount() == 1, "defrag must have 1 positional target volume");
+        TEST_ASSERT(std::string(pDf.GetPositional(0)) == "C:", "defrag volume must be C:");
+
+        // bootsect /nt60 C: /mbr
+        micant_cli::CommandLineParser pBs("bootsect /nt60 C: /mbr", "bootsect.exe");
+        TEST_ASSERT(pBs.HasSwitch("nt60"), "bootsect must parse /nt60");
+        TEST_ASSERT(pBs.HasSwitch("mbr"), "bootsect must parse /mbr");
+        TEST_ASSERT(pBs.PositionalCount() == 1, "bootsect must have 1 positional arg");
+        TEST_ASSERT(std::string(pBs.GetPositional(0)) == "C:", "bootsect target volume must be C:");
+
+        // bootcfg /timeout 10
+        micant_cli::CommandLineParser pBc("bootcfg /timeout 10", "bootcfg.exe");
+        TEST_ASSERT(pBc.HasSwitch("timeout"), "bootcfg must parse /timeout");
+        TEST_ASSERT(std::string(pBc.GetSwitchValue("timeout")) == "10", "bootcfg timeout must be 10");
+
+        // auditpol /get /category:*
+        micant_cli::CommandLineParser pAp("auditpol /get /category:*", "auditpol.exe");
+        TEST_ASSERT(pAp.HasSwitch("get"), "auditpol must parse /get");
+        TEST_ASSERT(pAp.HasSwitch("category"), "auditpol must parse /category");
+        TEST_ASSERT(std::string(pAp.GetSwitchValue("category")) == "*", "auditpol category must be *");
+
+        // bitsadmin /list /allusers
+        micant_cli::CommandLineParser pBa("bitsadmin /list /allusers", "bitsadmin.exe");
+        TEST_ASSERT(pBa.HasSwitch("list"), "bitsadmin must parse /list");
+        TEST_ASSERT(pBa.HasSwitch("allusers"), "bitsadmin must parse /allusers");
+
+        // at 1 /delete
+        micant_cli::CommandLineParser pAt("at 1 /delete", "at.exe");
+        TEST_ASSERT(pAt.HasSwitch("delete"), "at must parse /delete");
+        TEST_ASSERT(pAt.PositionalCount() == 1, "at must have 1 positional arg");
+        TEST_ASSERT(std::string(pAt.GetPositional(0)) == "1", "at target job id must be 1");
+
+        // comp C:\file1.txt C:\file2.txt /c
+        micant_cli::CommandLineParser pCm("comp C:\\file1.txt C:\\file2.txt /c", "comp.exe");
+        TEST_ASSERT(pCm.PositionalCount() == 2, "comp must have 2 positional files");
+        TEST_ASSERT(std::string(pCm.GetPositional(0)) == "C:\\file1.txt", "comp file 1 must match");
+        TEST_ASSERT(std::string(pCm.GetPositional(1)) == "C:\\file2.txt", "comp file 2 must match");
+        TEST_ASSERT(pCm.HasSwitch("c"), "comp must parse /c");
+
+        // bdehdcfg -target default -size 500
+        micant_cli::CommandLineParser pBde("bdehdcfg -target default -size 500", "bdehdcfg.exe");
+        TEST_ASSERT(pBde.HasSwitch("target"), "bdehdcfg must parse -target");
+        TEST_ASSERT(std::string(pBde.GetSwitchValue("target")) == "default", "bdehdcfg target must be default");
+        TEST_ASSERT(pBde.HasSwitch("size"), "bdehdcfg must parse -size");
+        TEST_ASSERT(std::string(pBde.GetSwitchValue("size")) == "500", "bdehdcfg size must be 500");
+
+        // change logon /enable
+        micant_cli::CommandLineParser pChg("change logon /enable", "change.exe");
+        TEST_ASSERT(pChg.PositionalCount() == 1, "change must have 1 positional subcommand");
+        TEST_ASSERT(std::string(pChg.GetPositional(0)) == "logon", "change subcommand must be logon");
+        TEST_ASSERT(pChg.HasSwitch("enable"), "change must parse /enable");
+    }
+
+    // 10. Pillar I Sovereign PE32+ Export Table & Native Syscall Trampoline Verification
+    {
+        TEST_ASSERT(micant_cli::SSN_TERMINATE_PROCESS == 0x01, "SSN_TERMINATE_PROCESS must be 0x01");
+        TEST_ASSERT(micant_cli::SSN_SHUTDOWN_SYSTEM == 0x08, "SSN_SHUTDOWN_SYSTEM must be 0x08");
+        TEST_ASSERT(micant_cli::SSN_QUERY_SYS_INFO == 0x11, "SSN_QUERY_SYS_INFO must be 0x11");
+        TEST_ASSERT(micant_cli::SSN_ALLOCATE_VM == 0x18, "SSN_ALLOCATE_VM must be 0x18");
+        TEST_ASSERT(micant_cli::SSN_FREE_VM == 0x1B, "SSN_FREE_VM must be 0x1B");
+        TEST_ASSERT(micant_cli::SSN_READ_FILE == 0x24, "SSN_READ_FILE must be 0x24");
+        TEST_ASSERT(micant_cli::SSN_WRITE_FILE == 0x25, "SSN_WRITE_FILE must be 0x25");
+        TEST_ASSERT(micant_cli::SSN_ICMP_ECHO == 0x26, "SSN_ICMP_ECHO must be 0x26");
+        TEST_ASSERT(micant_cli::SSN_YIELD_EXEC == 0x46, "SSN_YIELD_EXEC must be 0x46");
+        TEST_ASSERT(micant_cli::SSN_GDI_GET_VIDEO_INFO == 0x80, "SSN_GDI_GET_VIDEO_INFO must be 0x80");
+        TEST_ASSERT(micant_cli::SSN_GDI_PRESENT_SURF == 0x81, "SSN_GDI_PRESENT_SURF must be 0x81");
     }
 
     std::cout << "  [Horizon 136 Track I Sovereign CLI Common & System32 Execution Parity (Unit #108)]\n"

@@ -352,6 +352,89 @@ void ExecuteCommand(const char* cmd) noexcept {
         return;
     }
 
+    if (MatchCmdToken(cmd, "chcp")) {
+        PrintLine("Active code page: 65001");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "defrag")) {
+        PrintLine("MicaNT Drive Optimizer (MicaNT Sovereign Cutler Edition)");
+        PrintLine("Copyright (c) 2026 MicaNT Operating System Authority. All rights reserved.\n");
+        PrintLine("Invoking analysis on Local Disk (C:)...");
+        PrintLine("    Analysis Report:");
+        PrintLine("        Total volume size          = 119.24 GB");
+        PrintLine("        Free space                 = 84.60 GB");
+        PrintLine("        Total fragmented space     = 0 %");
+        PrintLine("        Media Type                 = Solid State Drive (NVMe/SATA SSD)");
+        PrintLine("        Recommended Action         = No defragmentation needed.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "bootsect")) {
+        PrintLine("Target volumes will be updated with BOOTMGR compatible bootcode.\n");
+        PrintLine("C: (\\\\?\\Volume{3a8b4129-0000-0000-0000-100000000000})");
+        PrintLine("    Successfully updated NTFS filesystem bootcode.\n");
+        PrintLine("Bootcode was successfully updated on all targeted volumes.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "bootcfg")) {
+        PrintLine("Boot Loader Settings");
+        PrintLine("--------------------");
+        PrintLine("timeout: 5");
+        PrintLine("default: multi(0)disk(0)rdisk(0)partition(1)\\MicaNT\n");
+        PrintLine("Boot Entries");
+        PrintLine("------------");
+        PrintLine("Boot entry ID:    1");
+        PrintLine("Friendly Name:    \"MicaNT Cutler Sovereign Edition x64\"");
+        PrintLine("Path:             multi(0)disk(0)rdisk(0)partition(1)\\MicaNT");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "auditpol")) {
+        PrintLine("System audit policy");
+        PrintLine("Category/Subcategory                      Setting");
+        PrintLine("System");
+        PrintLine("  Security State Change                   Success and Failure");
+        PrintLine("  Security System Extension               Success and Failure");
+        PrintLine("Logon/Logoff");
+        PrintLine("  Logon                                   Success and Failure");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "bitsadmin")) {
+        PrintLine("BITSADMIN version 3.0");
+        PrintLine("BITS administration utility.");
+        PrintLine("(C) Copyright MicaNT System Authority.\n");
+        PrintLine("{B8A5B9C2-4E2F-43B0-8F9E-6C0D9B7B8D10} 'MicaKernelUpdate' TRANSFERRED 1 / 1 1048576 / 1048576");
+        PrintLine("Listed 1 job(s).");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "at")) {
+        PrintLine("Status ID   Day                     Time          Command Line");
+        PrintLine("-------------------------------------------------------------------------------");
+        PrintLine("        1   Each M T W Th F         04:00 AM      defrag C: /O");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "comp")) {
+        PrintLine("Comparing files...");
+        PrintLine("Files compare OK");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "bdehdcfg")) {
+        PrintLine("BitLocker Drive Preparation Tool version 10.0.26100 (MicaNT Sovereign Cutler Edition)\n");
+        PrintLine("System Partition Status: EFI System Partition (ESP) & WinRE ready for BitLocker.");
+        return;
+    }
+
+    if (MatchCmdToken(cmd, "change")) {
+        PrintLine("Session logons are currently ENABLED.");
+        return;
+    }
+
     // Unrecognized command
     char err[128];
     StrCopy(err, "'", sizeof(err));

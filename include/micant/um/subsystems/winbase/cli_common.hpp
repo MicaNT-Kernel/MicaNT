@@ -420,7 +420,7 @@ public:
                     const char* prev = m_argv[i - 1] + 1;
                     if (*prev == '-') prev++;
                     if (!StrContains(prev, ":") && !StrContains(prev, "=")) {
-                        // Check common value switches: pid, im, u, p, s, fo, fi, n, l, w, h, t, r, c, m, d
+                        // Check common value switches: pid, im, u, p, s, fo, fi, n, l, w, h, t, r, c, m, d, target, size, timeout, id
                         if (StrCaseEqual(prev, "pid") || StrCaseEqual(prev, "im") ||
                             StrCaseEqual(prev, "u") || StrCaseEqual(prev, "p") ||
                             StrCaseEqual(prev, "s") || StrCaseEqual(prev, "fo") ||
@@ -428,7 +428,9 @@ public:
                             StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w") ||
                             StrCaseEqual(prev, "h") || StrCaseEqual(prev, "t") ||
                             StrCaseEqual(prev, "r") || StrCaseEqual(prev, "c") ||
-                            StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d")) {
+                            StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d") ||
+                            StrCaseEqual(prev, "target") || StrCaseEqual(prev, "size") ||
+                            StrCaseEqual(prev, "timeout") || StrCaseEqual(prev, "id")) {
                             continue;
                         }
                     }
@@ -459,7 +461,9 @@ public:
                             StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w") ||
                             StrCaseEqual(prev, "h") || StrCaseEqual(prev, "t") ||
                             StrCaseEqual(prev, "r") || StrCaseEqual(prev, "c") ||
-                            StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d")) {
+                            StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d") ||
+                            StrCaseEqual(prev, "target") || StrCaseEqual(prev, "size") ||
+                            StrCaseEqual(prev, "timeout") || StrCaseEqual(prev, "id")) {
                             continue;
                         }
                     }
