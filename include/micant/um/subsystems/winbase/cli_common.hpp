@@ -3,7 +3,6 @@
  * @brief Sovereign Ring 3 Command-Line Argument Parser & Console I/O Primitives.
  *
  * Clean-Room ISO C++23. Freestanding. Zero CRT dependencies.
- * Canonical Subsystem: include/micant/um/subsystems/winbase/
  * Executed in User-Mode Ring 3 (CPL=3).
  *
  * Provides standard argc/argv tokenization, case-insensitive switch extraction,
@@ -362,7 +361,8 @@ public:
             if (!arg) continue;
             if (*arg == '/' || *arg == '-') {
                 const char* cur = arg + 1;
-                if (*cur == '-') cur++;
+                if (*cur == '-') cur++; // handle --switch
+                // Check exact match or match before ':' or '='
                 size_t swLen = StrLen(swName);
                 if (StrCaseStartsWith(cur, swName)) {
                     char nextC = cur[swLen];
@@ -393,6 +393,7 @@ public:
                         return cur + swLen + 1;
                     }
                     if (sep == '\0') {
+                        // Check if next arg is value
                         if (i + 1 < m_argc && m_argv[i + 1] && m_argv[i + 1][0] != '/' && m_argv[i + 1][0] != '-') {
                             return m_argv[i + 1];
                         }
@@ -413,15 +414,21 @@ public:
             const char* arg = m_argv[i];
             if (!arg) continue;
             if (*arg != '/' && *arg != '-') {
+                // Check if previous was a switch requiring a separate value
                 if (i > 1 && (m_argv[i - 1][0] == '/' || m_argv[i - 1][0] == '-')) {
+                    // Check if previous switch consumed this token
                     const char* prev = m_argv[i - 1] + 1;
                     if (*prev == '-') prev++;
                     if (!StrContains(prev, ":") && !StrContains(prev, "=")) {
+                        // Check common value switches: pid, im, u, p, s, fo, fi, n, l, w, h, t, r, c, m, d
                         if (StrCaseEqual(prev, "pid") || StrCaseEqual(prev, "im") ||
                             StrCaseEqual(prev, "u") || StrCaseEqual(prev, "p") ||
                             StrCaseEqual(prev, "s") || StrCaseEqual(prev, "fo") ||
                             StrCaseEqual(prev, "fi") || StrCaseEqual(prev, "n") ||
-                            StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w")) {
+                            StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w") ||
+                            StrCaseEqual(prev, "h") || StrCaseEqual(prev, "t") ||
+                            StrCaseEqual(prev, "r") || StrCaseEqual(prev, "c") ||
+                            StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d")) {
                             continue;
                         }
                     }
@@ -449,7 +456,10 @@ public:
                             StrCaseEqual(prev, "u") || StrCaseEqual(prev, "p") ||
                             StrCaseEqual(prev, "s") || StrCaseEqual(prev, "fo") ||
                             StrCaseEqual(prev, "fi") || StrCaseEqual(prev, "n") ||
-                            StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w")) {
+                            StrCaseEqual(prev, "l") || StrCaseEqual(prev, "w") ||
+                            StrCaseEqual(prev, "h") || StrCaseEqual(prev, "t") ||
+                            StrCaseEqual(prev, "r") || StrCaseEqual(prev, "c") ||
+                            StrCaseEqual(prev, "m") || StrCaseEqual(prev, "d")) {
                             continue;
                         }
                     }
@@ -493,17 +503,20 @@ private:
         m_argc = 0;
         for (size_t i = 0; i < MAX_ARGS; ++i) m_argv[i] = nullptr;
 
+        // Copy raw command line to internal buffer
         StrCopy(m_buffer, m_rawCmdLine, BUFFER_SIZE);
 
         char* p = m_buffer;
         while (*p == ' ' || *p == '\t') ++p;
 
         if (*p == '\0') {
+            // Empty command line: argv[0] = defaultAppName
             m_argv[0] = const_cast<char*>(m_defaultAppName);
             m_argc = 1;
             return;
         }
 
+        // Temporary array of tokens parsed from the buffer
         char* tokens[MAX_ARGS]{};
         int tokenCount = 0;
 
@@ -512,6 +525,7 @@ private:
             if (*p == '\0') break;
 
             if (*p == '"') {
+                // Quoted token
                 p++;
                 tokens[tokenCount++] = p;
                 while (*p && *p != '"') ++p;
@@ -535,6 +549,7 @@ private:
             return;
         }
 
+        // Check if first token is the application name or an argument
         const char* firstTok = tokens[0];
         bool firstIsAppName = false;
         size_t tokLen = StrLen(firstTok);
@@ -558,6 +573,7 @@ private:
             }
             m_argc = tokenCount;
         } else {
+            // Synthesize argv[0] = defaultAppName, and shift tokens
             m_argv[0] = const_cast<char*>(m_defaultAppName);
             m_argc = 1;
             for (int i = 0; i < tokenCount && (m_argc < static_cast<int>(MAX_ARGS)); ++i) {
