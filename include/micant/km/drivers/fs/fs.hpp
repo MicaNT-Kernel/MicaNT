@@ -18,6 +18,7 @@
 #include "micant/km/drivers/fs/fat32.hpp"
 #include "micant/km/drivers/fs/npfs.hpp"
 #include "micant/km/drivers/fs/ntfs.hpp"
+#include "micant/km/drivers/fs/exfat.hpp"
 
 namespace micant::fs {
 
@@ -272,6 +273,27 @@ public:
         return ntfsFs_;
     }
 
+    NtStatus mountExfat(std::shared_ptr<storage::IBlockDevice> device) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!device) return NtStatus::InvalidParameter;
+        exfatFs_ = std::make_shared<exfat::ExfatFileSystem>();
+        NtStatus st = exfatFs_->mount(device);
+        if (!NT_SUCCESS(st)) {
+            exfatFs_.reset();
+            return st;
+        }
+        return NtStatus::Success;
+    }
+
+    void setMountedExfat(std::shared_ptr<exfat::ExfatFileSystem> exfat) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        exfatFs_ = exfat;
+    }
+
+    [[nodiscard]] std::shared_ptr<exfat::ExfatFileSystem> getMountedExfat() const noexcept {
+        return exfatFs_;
+    }
+
     NtStatus createOrOpenFile(
         std::wstring_view path,
         uint32_t desiredAccess,
@@ -354,6 +376,31 @@ public:
 
             outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
             openNtfsFiles_[outFileObj.get()] = { recNum, streamName };
+            return NtStatus::Success;
+        }
+
+        // 0.3 Check for exFAT Volume
+        if (exfatFs_ && (path.starts_with(L"E:") || path.starts_with(L"e:") ||
+                         path.starts_with(L"\\DosDevices\\E:") || path.starts_with(L"\\??\\E:") ||
+                         path.starts_with(L"\\Device\\Harddisk0\\Partition3") ||
+                         path.starts_with(L"\\Device\\ExFat0") || path.starts_with(L"\\Device\\ExFat_E"))) {
+            std::wstring normExfat = normalizePath(sPath);
+            if (normExfat.starts_with(L"E:\\") || normExfat.starts_with(L"e:\\")) {
+                normExfat = normExfat.substr(3);
+            }
+            uint32_t firstClus = 0;
+            NtStatus lookupSt = exfatFs_->lookupPath(normExfat, firstClus);
+            if (!NT_SUCCESS(lookupSt)) {
+                if (disposition == FILE_CREATE || disposition == FILE_OPEN_IF || disposition == FILE_OVERWRITE_IF) {
+                    NtStatus crSt = exfatFs_->createFile(normExfat, FILE_ATTRIBUTE_NORMAL, firstClus);
+                    if (!NT_SUCCESS(crSt)) return crSt;
+                } else {
+                    return NtStatus::NoSuchFile;
+                }
+            }
+
+            outFileObj = std::make_shared<FileObject>(partitionDevice_.get(), path, desiredAccess);
+            openExfatFiles_[outFileObj.get()] = normExfat;
             return NtStatus::Success;
         }
 
@@ -443,6 +490,19 @@ public:
             return st;
         }
 
+        auto itExfat = openExfatFiles_.find(fileObj);
+        if (itExfat != openExfatFiles_.end() && exfatFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t exBytes = 0;
+            NtStatus st = exfatFs_->readFile(itExfat->second, buffer, length, static_cast<uint64_t>(offset), exBytes);
+            bytesRead = static_cast<uint32_t>(exBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesRead);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp readIrp{};
@@ -521,6 +581,19 @@ public:
             return st;
         }
 
+        auto itExfat = openExfatFiles_.find(fileObj);
+        if (itExfat != openExfatFiles_.end() && exfatFs_) {
+            int64_t offset = byteOffset ? byteOffset->quadPart : fileObj->getCurrentByteOffset();
+            if (offset < 0) offset = 0;
+            uint64_t exBytes = 0;
+            NtStatus st = exfatFs_->writeFile(itExfat->second, buffer, length, static_cast<uint64_t>(offset), exBytes);
+            bytesWritten = static_cast<uint32_t>(exBytes);
+            if (NT_SUCCESS(st) && !byteOffset) {
+                fileObj->advanceByteOffset(bytesWritten);
+            }
+            return st;
+        }
+
         // Direct device I/O (e.g. \Device\Harddisk0, \Device\Null)
         if (fileObj->getDeviceObject() && fileObj->getDeviceObject() != partitionDevice_.get()) {
             io::Irp writeIrp{};
@@ -582,6 +655,7 @@ public:
         }
         openMailslots_.erase(fileObj);
         openNtfsFiles_.erase(fileObj);
+        openExfatFiles_.erase(fileObj);
         openFiles_.erase(fileObj);
     }
 
@@ -870,6 +944,8 @@ private:
     std::shared_ptr<fat32::Fat32FileSystem> fat32Fs_;
     std::shared_ptr<ntfs::NtfsFileSystem> ntfsFs_;
     std::unordered_map<FileObject*, std::pair<uint64_t, std::wstring>> openNtfsFiles_;
+    std::shared_ptr<exfat::ExfatFileSystem> exfatFs_;
+    std::unordered_map<FileObject*, std::wstring> openExfatFiles_;
     io::FastIoDispatch fastIoTable_{};
     std::unique_ptr<io::Vpb> vpb_;
 };

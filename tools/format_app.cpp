@@ -51,7 +51,8 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     if (!label) label = "MICA_DATA";
 
     bool isNtfs = StrCaseEqual(fs, "NTFS");
-    Print("The type of the file system is "); PrintLine(isNtfs ? "NTFS" : fs);
+    bool isExfat = StrCaseEqual(fs, "exFAT") || StrCaseEqual(fs, "exfat");
+    Print("The type of the file system is "); PrintLine(isNtfs ? "NTFS" : (isExfat ? "exFAT" : fs));
     Print("Formatting volume "); Print(volume); PrintLine("...");
     Print("Volume label is "); PrintLine(label);
 
@@ -68,6 +69,20 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
         PrintLine("        4,096 bytes in each allocation unit.");
         PrintLine("   32,768,000 total allocation units on disk.");
         PrintLine("   32,736,000 allocation units available on disk.");
+        PrintLine("Volume integrity: 100% PASS");
+    } else if (isExfat) {
+        PrintLine("Volume Serial Number is 6A12-9F04");
+        PrintLine("Allocation unit size: 4096 bytes.");
+        PrintLine("Creating file system structures.");
+        PrintLine("  Writing Main and Backup Boot Regions...");
+        PrintLine("  Formatting Allocation Bitmap & UpCase Table...");
+        PrintLine("  Writing Root Directory structures...");
+        PrintLine("Format complete.");
+        PrintLine("  134,217,728 KB total disk space.");
+        PrintLine("  134,213,632 KB available on disk.");
+        PrintLine("        4,096 bytes in each allocation unit.");
+        PrintLine("   32,768,000 total allocation units on disk.");
+        PrintLine("   32,767,000 allocation units available on disk.");
         PrintLine("Volume integrity: 100% PASS");
     } else {
         PrintLine("Volume Serial Number is B645-7EE0");

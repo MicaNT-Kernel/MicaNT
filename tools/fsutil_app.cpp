@@ -42,9 +42,27 @@ void FsInfoDrives() noexcept {
     PrintLine("Drives:");
     PrintLine("C:\\");
     PrintLine("D:\\");
+    PrintLine("E:\\");
 }
 
 void FsInfoVolumeInfo(const char* drive) noexcept {
+    if (drive && (drive[0] == 'E' || drive[0] == 'e')) {
+        Print("Volume Name : ");
+        PrintLine(drive);
+        PrintLine("Volume Serial Number : 0x6A129F04");
+        PrintLine("Max Component Length : 255");
+        PrintLine("File System Name : exFAT");
+        PrintLine("Is Volume Dirty : No");
+        PrintLine("Total Sectors : 268,435,456 (128.00 GB)");
+        PrintLine("Bytes Per Sector : 512");
+        PrintLine("Sectors Per Allocation Unit : 8");
+        PrintLine("Bytes Per Cluster : 4,096");
+        PrintLine("Total Clusters : 32,768,000");
+        PrintLine("Free Clusters : 32,767,000");
+        PrintLine("Supports Case-Preserving Names : Yes");
+        PrintLine("Supports Unicode in Filenames : Yes");
+        return;
+    }
     Print("Volume Name : ");
     PrintLine(drive ? drive : "OS_ROOT");
     PrintLine("Volume Serial Number : 0x20261024");

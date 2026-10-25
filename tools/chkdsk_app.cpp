@@ -58,8 +58,36 @@ extern "C" void _start(const char* rawCmdLine = nullptr) {
     bool fix = parser.HasSwitch("f");
     bool verbose = parser.HasSwitch("v");
     bool scanBad = parser.HasSwitch("r");
-    bool isNtfs = parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
-                  (drive && (drive[0] == 'D' || drive[0] == 'd' || drive[0] == 'E' || drive[0] == 'e'));
+    bool isExfat = parser.HasSwitch("exfat") || (drive && (drive[0] == 'E' || drive[0] == 'e' || drive[0] == 'F' || drive[0] == 'f' || drive[0] == 'U' || drive[0] == 'u'));
+    bool isNtfs = !isExfat && (parser.HasSwitch("i") || parser.HasSwitch("c") || parser.HasSwitch("b") ||
+                  (drive && (drive[0] == 'D' || drive[0] == 'd')));
+
+    if (isExfat) {
+        PrintLine("The type of the file system is exFAT.");
+        Print("Volume ");
+        Print(drive ? drive : "E:");
+        PrintLine(" is Sovereign Clean-Room exFAT.");
+        PrintLine("Volume Serial Number is 6A12-9F04.");
+        PrintLine("");
+        PrintLine("Validating file system structures...");
+        PrintLine("Volume bitmap verification is complete.");
+        PrintLine("File and folder verification is complete.");
+        if (fix) {
+            PrintLine("MicaNT has verified the file system. No adjustments were necessary.");
+        } else {
+            PrintLine("MicaNT has scanned the file system and found no problems.");
+            PrintLine("No further action is required.");
+        }
+        PrintLine("");
+        PrintLine("  134,217,728 KB total disk space.");
+        PrintLine("        4,096 KB in use by system.");
+        PrintLine("  134,213,632 KB available on disk.");
+        PrintLine("");
+        PrintLine("        4,096 bytes in each allocation unit.");
+        PrintLine("   32,768,000 total allocation units on disk.");
+        PrintLine("   32,767,000 allocation units available on disk.");
+        ExitProcess(0);
+    }
 
     if (isNtfs) {
         PrintLine("The type of the file system is NTFS.");

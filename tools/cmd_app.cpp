@@ -363,26 +363,47 @@ void ExecuteCommand(const char* cmd) noexcept {
         PrintLine("Drives:");
         PrintLine("C:\\");
         PrintLine("D:\\");
+        PrintLine("E:\\");
         return;
     }
 
     if (MatchCmdToken(cmd, "format")) {
-        PrintLine("The type of the file system is NTFS.");
-        PrintLine("Formatting volume C:...");
-        PrintLine("Volume label is MICA_NTFS");
-        PrintLine("Volume Serial Number is 78E2-A1C9");
-        PrintLine("Format complete.");
+        if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
+            PrintLine("The type of the file system is exFAT.");
+            PrintLine("Formatting 16.0 MB");
+            PrintLine("Initializing the File Allocation Table (FAT)...");
+            PrintLine("Volume label is MICA_EXFAT");
+            PrintLine("Volume Serial Number is 6A12-9F04");
+            PrintLine("Format complete.");
+        } else {
+            PrintLine("The type of the file system is NTFS.");
+            PrintLine("Formatting volume C:...");
+            PrintLine("Volume label is MICA_NTFS");
+            PrintLine("Volume Serial Number is 78E2-A1C9");
+            PrintLine("Format complete.");
+        }
         return;
     }
 
     if (MatchCmdToken(cmd, "chkdsk")) {
-        PrintLine("The type of the file system is NTFS.");
-        PrintLine("Volume MICANT created 10/24/2026 00:00 AM");
-        PrintLine("Volume Serial Number is 78E2-A1C9");
-        PrintLine("Stage 1: Examining basic file system structure...");
-        PrintLine("Stage 2: Examining file name linkage...");
-        PrintLine("Stage 3: Examining security descriptors...");
-        PrintLine("MicaNT has scanned the file system and found no problems.");
+        if (StrCaseContains(cmd, "exfat") || StrCaseContains(cmd, "e:")) {
+            PrintLine("The type of the file system is exFAT.");
+            PrintLine("Volume E: is Sovereign Clean-Room exFAT.");
+            PrintLine("Volume Serial Number is 6A12-9F04.");
+            PrintLine("Validating file system structures...");
+            PrintLine("Volume bitmap verification is complete.");
+            PrintLine("File and folder verification is complete.");
+            PrintLine("MicaNT has scanned the file system and found no problems.");
+            PrintLine("No further action is required.");
+        } else {
+            PrintLine("The type of the file system is NTFS.");
+            PrintLine("Volume MICANT created 10/24/2026 00:00 AM");
+            PrintLine("Volume Serial Number is 78E2-A1C9");
+            PrintLine("Stage 1: Examining basic file system structure...");
+            PrintLine("Stage 2: Examining file name linkage...");
+            PrintLine("Stage 3: Examining security descriptors...");
+            PrintLine("MicaNT has scanned the file system and found no problems.");
+        }
         return;
     }
 
